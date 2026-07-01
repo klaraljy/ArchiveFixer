@@ -1,0 +1,323 @@
+<Window x:Class="ArchiveFixer.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置"
+        Width="760"
+        Height="680"
+        MinWidth="680"
+        MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        Background="#F5F5F5">
+
+	<DockPanel Margin="10">
+
+		<Border DockPanel.Dock="Top"
+                Background="White"
+                BorderBrush="#DDDDDD"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10"
+                Margin="0,0,0,8">
+			<StackPanel>
+				<TextBlock Text="设置"
+                           FontSize="18"
+                           FontWeight="Bold"
+                           Foreground="#333333" />
+
+				<TextBlock Text="修改扫描、识别、改名、解压、密码和日志相关选项。点击保存后生效。"
+                           Margin="0,4,0,0"
+                           Foreground="#666666" />
+			</StackPanel>
+		</Border>
+
+		<Border DockPanel.Dock="Bottom"
+                Background="White"
+                BorderBrush="#DDDDDD"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10"
+                Margin="0,8,0,0">
+			<Grid>
+				<Grid.ColumnDefinitions>
+					<ColumnDefinition Width="*" />
+					<ColumnDefinition Width="Auto" />
+				</Grid.ColumnDefinitions>
+
+				<TextBlock Text="{Binding Message}"
+                           VerticalAlignment="Center"
+                           Foreground="#555555"
+                           TextTrimming="CharacterEllipsis" />
+
+				<StackPanel Grid.Column="1"
+                            Orientation="Horizontal">
+					<Button Content="恢复默认"
+                            Width="90"
+                            Margin="0,0,12,0"
+                            Command="{Binding ResetDefaultCommand}" />
+
+					<Button Content="保存"
+                            Width="90"
+                            Margin="0,0,6,0"
+                            FontWeight="Bold"
+                            Command="{Binding SaveCommand}" />
+
+					<Button Content="取消"
+                            Width="90"
+                            IsCancel="True"
+                            Command="{Binding CancelCommand}" />
+				</StackPanel>
+			</Grid>
+		</Border>
+
+		<ScrollViewer VerticalScrollBarVisibility="Auto">
+			<StackPanel>
+
+				<!-- 扫描设置 -->
+				<GroupBox Header="扫描设置"
+                          Margin="0,0,0,8"
+                          Padding="10"
+                          Background="White">
+					<StackPanel>
+						<CheckBox Content="递归扫描文件夹"
+                                  IsChecked="{Binding Settings.RecursiveScan, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<CheckBox Content="拖拽导入后自动扫描"
+                                  IsChecked="{Binding Settings.AutoScanAfterDrop, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<Grid Margin="0,0,0,4">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="扫描模式："
+                                       VerticalAlignment="Center" />
+
+							<ComboBox Grid.Column="1"
+                                      SelectedValue="{Binding Settings.ScanMode, Mode=TwoWay}"
+                                      SelectedValuePath="Tag">
+								<ComboBoxItem Content="扫描全部文件"
+                                              Tag="ScanAllFiles" />
+								<ComboBoxItem Content="只扫描常见压缩后缀"
+                                              Tag="ScanKnownArchiveExtensions" />
+								<ComboBoxItem Content="扫描可疑文件"
+                                              Tag="ScanSuspiciousFiles" />
+							</ComboBox>
+						</Grid>
+					</StackPanel>
+				</GroupBox>
+
+				<!-- 识别设置 -->
+				<GroupBox Header="识别设置"
+                          Margin="0,0,0,8"
+                          Padding="10"
+                          Background="White">
+					<StackPanel>
+						<Grid Margin="0,0,0,8">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="未知格式处理："
+                                       VerticalAlignment="Center" />
+
+							<ComboBox Grid.Column="1"
+                                      SelectedValue="{Binding Settings.UnknownFormatAction, Mode=TwoWay}"
+                                      SelectedValuePath="Tag">
+								<ComboBoxItem Content="加入列表并标记未知"
+                                              Tag="MarkUnknown" />
+								<ComboBoxItem Content="跳过"
+                                              Tag="Skip" />
+								<ComboBoxItem Content="仍尝试解压"
+                                              Tag="TryExtract" />
+							</ComboBox>
+						</Grid>
+
+						<Grid>
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="默认补充后缀："
+                                       VerticalAlignment="Center" />
+
+							<TextBox Grid.Column="1"
+                                     Text="{Binding Settings.DefaultExtension, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Height="28"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="例如 .7z、.zip、.rar" />
+						</Grid>
+					</StackPanel>
+				</GroupBox>
+
+				<!-- 后缀修正设置 -->
+				<GroupBox Header="后缀修正设置"
+                          Margin="0,0,0,8"
+                          Padding="10"
+                          Background="White">
+					<StackPanel>
+						<CheckBox Content="改名前显示预览"
+                                  IsChecked="{Binding Settings.PreviewBeforeRename, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<Grid>
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="改名冲突处理："
+                                       VerticalAlignment="Center" />
+
+							<ComboBox Grid.Column="1"
+                                      SelectedValue="{Binding Settings.ConflictAction, Mode=TwoWay}"
+                                      SelectedValuePath="Tag">
+								<ComboBoxItem Content="跳过"
+                                              Tag="Skip" />
+								<ComboBoxItem Content="覆盖"
+                                              Tag="Overwrite" />
+								<ComboBoxItem Content="自动重命名"
+                                              Tag="AutoRename" />
+								<ComboBoxItem Content="询问"
+                                              Tag="Ask" />
+							</ComboBox>
+						</Grid>
+					</StackPanel>
+				</GroupBox>
+
+				<!-- 解压设置 -->
+				<GroupBox Header="解压设置"
+                          Margin="0,0,0,8"
+                          Padding="10"
+                          Background="White">
+					<StackPanel>
+						<CheckBox Content="解压到压缩包所在目录"
+                                  IsChecked="{Binding Settings.ExtractToOriginalDirectory, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<CheckBox Content="保留压缩包同名文件夹"
+                                  IsChecked="{Binding Settings.KeepArchiveNameFolder, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<CheckBox Content="解压前测试完整性"
+                                  IsChecked="{Binding Settings.TestBeforeExtract, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<Grid Margin="0,0,0,8">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+								<ColumnDefinition Width="Auto" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="自定义输出目录："
+                                       VerticalAlignment="Center" />
+
+							<TextBox Grid.Column="1"
+                                     Text="{Binding Settings.CustomOutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Height="28"
+                                     VerticalContentAlignment="Center" />
+
+							<Button Grid.Column="2"
+                                    Content="选择"
+                                    Width="70"
+                                    Margin="8,0,0,0"
+                                    Command="{Binding SelectOutputDirectoryCommand}" />
+						</Grid>
+
+						<Grid Margin="0,0,0,8">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="解压覆盖策略："
+                                       VerticalAlignment="Center" />
+
+							<ComboBox Grid.Column="1"
+                                      SelectedValue="{Binding Settings.OverwriteMode, Mode=TwoWay}"
+                                      SelectedValuePath="Tag">
+								<ComboBoxItem Content="跳过已存在文件"
+                                              Tag="SkipExisting" />
+								<ComboBoxItem Content="覆盖全部"
+                                              Tag="OverwriteAll" />
+								<ComboBoxItem Content="自动重命名解压出的文件"
+                                              Tag="AutoRenameExtracted" />
+								<ComboBoxItem Content="自动重命名已存在文件"
+                                              Tag="AutoRenameExisting" />
+							</ComboBox>
+						</Grid>
+
+						<Grid>
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="120" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="最大并发解压数："
+                                       VerticalAlignment="Center" />
+
+							<TextBox Grid.Column="1"
+                                     Text="{Binding Settings.MaxParallelExtractCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Height="28"
+                                     VerticalContentAlignment="Center" />
+
+							<TextBlock Grid.Column="2"
+                                       Text="默认建议为 1，串行更稳定。"
+                                       Margin="8,0,0,0"
+                                       Foreground="#777777"
+                                       VerticalAlignment="Center" />
+						</Grid>
+					</StackPanel>
+				</GroupBox>
+
+				<!-- 密码设置 -->
+				<GroupBox Header="密码设置"
+                          Margin="0,0,0,8"
+                          Padding="10"
+                          Background="White">
+					<StackPanel>
+						<CheckBox Content="优先尝试空密码"
+                                  IsChecked="{Binding Settings.TryEmptyPasswordFirst, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<CheckBox Content="对所有任务使用统一密码"
+                                  IsChecked="{Binding Settings.UseGlobalPasswordForAllTasks, Mode=TwoWay}" />
+					</StackPanel>
+				</GroupBox>
+
+				<!-- 日志设置 -->
+				<GroupBox Header="日志设置"
+                          Margin="0,0,0,8"
+                          Padding="10"
+                          Background="White">
+					<StackPanel>
+						<CheckBox Content="启用日志文件"
+                                  IsChecked="{Binding Settings.EnableLog, Mode=TwoWay}" />
+					</StackPanel>
+				</GroupBox>
+
+				<!-- 高级设置 -->
+				<GroupBox Header="高级设置"
+                          Margin="0,0,0,8"
+                          Padding="10"
+                          Background="White">
+					<StackPanel>
+						<CheckBox Content="记住上次输出目录"
+                                  IsChecked="{Binding Settings.RememberLastOutputDirectory, Mode=TwoWay}" />
+
+						<TextBlock Text="安全提示：默认不覆盖用户文件，Unknown 默认跳过，改名前应显示预览。"
+                                   Margin="0,8,0,0"
+                                   Foreground="#777777" />
+					</StackPanel>
+				</GroupBox>
+
+			</StackPanel>
+		</ScrollViewer>
+	</DockPanel>
+</Window>

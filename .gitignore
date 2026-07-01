@@ -1,0 +1,22 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+**/bin/
+**/obj/
+
+# Logs and temp files
+**/logs/
+**/temp/
+
+# C# / .NET / WPF artifacts
+*.pdb
+*.exe
+*.dll
+
+# Optional
+*.log
