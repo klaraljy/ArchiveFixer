@@ -229,6 +229,16 @@ namespace ArchiveFixer.ViewModels
         private void ApplyEngineSettings()
         {
             ToolLocator.Default.CustomSevenZipExePath = _settings?.CustomSevenZipExePath ?? string.Empty;
+
+            /*
+             * 缓存根目录：留空就用程序目录下的 data。
+             * 绝不能默认回落到 %AppData%（C 盘）—— 用户明确要求绿色软件跟着安装位置走。
+             */
+            string cacheRoot = _settings?.CacheRootDirectory ?? string.Empty;
+
+            _pathService.DataRootDirectory = string.IsNullOrWhiteSpace(cacheRoot)
+                ? PathService.DefaultDataRootDirectory
+                : cacheRoot;
             ToolLocator.Default.Invalidate();
         }
 
@@ -395,6 +405,7 @@ namespace ArchiveFixer.ViewModels
             _oneClickCoordinator = new OneClickCoordinator(this, _scanCoordinator, _renameCoordinator, _extractionCoordinator, dialogService);
 
             _settings = _settingsService.Load();
+            ApplyEngineSettings();
             SelectedOutputDirectory = _settings.CustomOutputDirectory ?? string.Empty;
 
             AddFilesCommand = new AsyncRelayCommand(_scanCoordinator.AddFilesAsync, CanRunNormalCommand);

@@ -78,6 +78,15 @@ namespace ArchiveFixer.Models
         /// <summary>递归最大层数。到顶就停并报告，不做无限展开。</summary>
         public int MaxRecursionDepth { get; set; } = 3;
 
+        /// <summary>
+        /// 缓存根目录（日志 / 临时 / 递归工作区 / 配置文件都放这里）。
+        ///
+        /// 默认留空 = 用**程序目录下的 data**。
+        /// 用户明确要求：缓存绝不能默认写到 C 盘（%AppData%），绿色软件跟着安装位置走；
+        /// 要换盘就在这里填绝对路径。
+        /// </summary>
+        public string CacheRootDirectory { get; set; } = string.Empty;
+
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
@@ -111,6 +120,7 @@ namespace ArchiveFixer.Models
                 DeleteSourceAfterExtract = false,
                 CollectResultsToDirectory = false,
                 CollectTargetDirectory = string.Empty,
+                CacheRootDirectory = string.Empty,
                 RecursionMode = "SingleChain",
                 MaxRecursionDepth = 3
             };
@@ -166,6 +176,7 @@ namespace ArchiveFixer.Models
             CustomOutputDirectory ??= string.Empty;
             CustomSevenZipExePath ??= string.Empty;
             CollectTargetDirectory ??= string.Empty;
+            CacheRootDirectory ??= string.Empty;
 
             if (string.IsNullOrWhiteSpace(RecursionMode))
             {

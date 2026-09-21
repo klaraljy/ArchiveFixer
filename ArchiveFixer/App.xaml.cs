@@ -13,22 +13,21 @@ namespace ArchiveFixer
         /// 用户数据目录（%AppData%\ArchiveFixer）。
         /// 配置、日志、临时文件放在这里，避免程序目录不可写时静默失败。
         /// </summary>
-        public static string AppDataDirectory { get; private set; } = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "ArchiveFixer");
+        public static string DataRootDirectory { get; private set; } =
+            Path.Combine(AppContext.BaseDirectory, "data");
 
         public static string SettingsFilePath =>
-            Path.Combine(AppDataDirectory, "appsettings.json");
+            Path.Combine(DataRootDirectory, "appsettings.json");
 
         public static string LogsDirectory =>
-            Path.Combine(AppDataDirectory, "logs");
+            Path.Combine(DataRootDirectory, "logs");
 
         public static string TempDirectory =>
-            Path.Combine(AppDataDirectory, "temp");
+            Path.Combine(DataRootDirectory, "temp");
 
         /// <summary>递归解压的工作区根目录（中间产物，不写用户最终目录）。</summary>
         public static string WorkDirectory =>
-            Path.Combine(AppDataDirectory, "work");
+            Path.Combine(DataRootDirectory, "work");
 
         public static string ToolsDirectory =>
             Path.Combine(AppBaseDirectory, "tools");
@@ -63,7 +62,7 @@ namespace ArchiveFixer
 
         private static void EnsureApplicationDirectories()
         {
-            SafeCreateDirectory(AppDataDirectory);
+            SafeCreateDirectory(DataRootDirectory);
             SafeCreateDirectory(LogsDirectory);
             SafeCreateDirectory(TempDirectory);
             SafeCreateDirectory(WorkDirectory);
@@ -80,11 +79,24 @@ namespace ArchiveFixer
         {
             try
             {
-                string legacySettingsPath = Path.Combine(AppBaseDirectory, "appsettings.json");
+                // 两个历史位置都要看一眼：
+                //   1) 最老的一版放在程序目录；
+                //   2) 8 月那版放在 %AppData%\ArchiveFixer（C 盘，已被用户否掉）。
+                // 找到就先搬过来，别让用户重新配一遍。
+                string[] legacyPaths =
+                {
+                    Path.Combine(AppBaseDirectory, "appsettings.json"),
+                    Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "ArchiveFixer",
+                        "appsettings.json")
+                };
+
+                string legacySettingsPath = legacyPaths.FirstOrDefault(File.Exists) ?? legacyPaths[0];
 
                 if (File.Exists(legacySettingsPath) && !File.Exists(SettingsFilePath))
                 {
-                    SafeCreateDirectory(AppDataDirectory);
+                    SafeCreateDirectory(DataRootDirectory);
                     File.Copy(legacySettingsPath, SettingsFilePath, overwrite: false);
                 }
             }

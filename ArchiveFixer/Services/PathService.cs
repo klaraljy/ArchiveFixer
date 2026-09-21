@@ -21,26 +21,28 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 用户数据目录（%AppData%\ArchiveFixer）。
         /// </summary>
-        public string AppDataDirectory => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "ArchiveFixer");
+        public string DataRootDirectory { get; set; } = DefaultDataRootDirectory;
+
+        /// <summary>默认数据根目录：程序目录下的 data。缓存绝不默认写 C 盘。</summary>
+        public static string DefaultDataRootDirectory =>
+            Path.Combine(AppContext.BaseDirectory, "data");
 
         /// <summary>
         /// 日志目录。
         /// </summary>
-        public string LogsDirectory => Path.Combine(AppDataDirectory, "logs");
+        public string LogsDirectory => Path.Combine(DataRootDirectory, "logs");
 
         /// <summary>
         /// 临时目录。
         /// </summary>
-        public string TempDirectory => Path.Combine(AppDataDirectory, "temp");
+        public string TempDirectory => Path.Combine(DataRootDirectory, "temp");
 
         /// <summary>
         /// 递归解压的工作区根目录。
         /// 中间产物放这里，避免直接写用户的最终目录（AGENTS.md §6 第 12 条、设计.md §十三）。
         /// 放在 %AppData% 而不是源目录旁边：源目录可能只读、可能是别人的共享、也可能是 U 盘。
         /// </summary>
-        public string WorkDirectory => Path.Combine(AppDataDirectory, "work");
+        public string WorkDirectory => Path.Combine(DataRootDirectory, "work");
 
         /// <summary>
         /// 7-Zip 工具目录。
@@ -60,12 +62,12 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// appsettings.json 路径。
         /// </summary>
-        public string SettingsFilePath => Path.Combine(AppDataDirectory, "appsettings.json");
+        public string SettingsFilePath => Path.Combine(DataRootDirectory, "appsettings.json");
 
         /// <summary>
         /// 损坏配置备份路径。
         /// </summary>
-        public string BrokenSettingsFilePath => Path.Combine(AppDataDirectory, "appsettings.broken.json");
+        public string BrokenSettingsFilePath => Path.Combine(DataRootDirectory, "appsettings.broken.json");
 
         /// <summary>
         /// 生成任务输出目录。
