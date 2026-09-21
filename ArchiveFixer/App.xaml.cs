@@ -47,6 +47,24 @@ namespace ArchiveFixer
 
             AppBaseDirectory = AppContext.BaseDirectory;
 
+            /*
+             * 整机被拖死的问题：批量解压会连着读几百 MB、写几百 MB，再交给 7-Zip 解一层，
+             * 期间磁盘与 Defender 实时扫描同时被打满，桌面会卡到连任务栏都点不动。
+             *
+             * 降到 BelowNormal：本程序让出优先级给前台程序，用户还能正常操作电脑。
+             * 子进程（7z.exe）继承这个优先级，所以解压也不再和桌面抢资源。
+             * 代价是纯后台跑时慢一点，这个取舍对"批量工具"是对的。
+             */
+            try
+            {
+                System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
+                    System.Diagnostics.ProcessPriorityClass.BelowNormal;
+            }
+            catch
+            {
+                // 改优先级失败不影响功能，最多是抢资源。
+            }
+
             MigrateLegacyData();
             EnsureApplicationDirectories();
 
