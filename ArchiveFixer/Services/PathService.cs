@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using ArchiveFixer.Engines;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 
@@ -37,17 +38,17 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 7-Zip 工具目录。
         /// </summary>
-        public string SevenZipDirectory => Path.Combine(AppBaseDirectory, "tools", "7zip");
+        public string SevenZipDirectory => ToolLocator.Default.BundledDirectory;
 
         /// <summary>
         /// 7z.exe 路径。
         /// </summary>
-        public string SevenZipExePath => Path.Combine(SevenZipDirectory, "7z.exe");
+        public string SevenZipExePath => ToolLocator.Default.SevenZipExePath;
 
         /// <summary>
         /// 7z.dll 路径。
         /// </summary>
-        public string SevenZipDllPath => Path.Combine(SevenZipDirectory, "7z.dll");
+        public string SevenZipDllPath => ToolLocator.Default.SevenZipDllPath;
 
         /// <summary>
         /// appsettings.json 路径。

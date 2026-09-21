@@ -100,7 +100,7 @@ namespace ArchiveFixer
             catch
             {
                 // 这里不弹窗，避免程序启动阶段因为目录权限问题直接崩溃。
-                // 后续 LogService / ExtractService 会给出更明确的错误。
+                // 后续 LogService / 归档引擎会给出更明确的错误。
             }
         }
 

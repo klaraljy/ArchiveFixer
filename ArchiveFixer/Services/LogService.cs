@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Password;
 using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Services
@@ -243,7 +244,7 @@ namespace ArchiveFixer.Services
 
             string result = message;
 
-            result = ProcessOutputHelper.SanitizePasswordText(result);
+            result = PasswordMasker.Sanitize(result);
 
             // -p明文密码
             result = Regex.Replace(

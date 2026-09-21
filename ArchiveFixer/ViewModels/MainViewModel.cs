@@ -1,4 +1,6 @@
-﻿using ArchiveFixer.Models;
+using ArchiveFixer.Engines;
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Views;
 using System;
@@ -178,7 +180,7 @@ namespace ArchiveFixer.ViewModels
         private readonly FileScanService _fileScanService;
         private readonly ArchiveDetectService _archiveDetectService;
         private readonly RenameService _renameService;
-        private readonly ExtractService _extractService;
+        private readonly IArchiveEngine _archiveEngine;
         private readonly PasswordService _passwordService;
         private readonly LogService _logService;
         private readonly SettingsService _settingsService;
@@ -205,10 +207,26 @@ namespace ArchiveFixer.ViewModels
         public ObservableCollection<OperationLogItem> Logs { get; } = new();
 
         public AppSettings Settings
+{
+    get => _settings;
+    set
+    {
+        if (SetProperty(ref _settings, value))
         {
-            get => _settings;
-            set => SetProperty(ref _settings, value);
+            ApplyEngineSettings();
         }
+    }
+}
+
+/// <summary>
+/// 把设置里与归档引擎有关的项推给 ToolLocator。
+/// 7z.exe 的路径**只**通过这里生效，别处不许再拼路径（AGENTS.md §3.1）。
+/// </summary>
+private void ApplyEngineSettings()
+{
+    ToolLocator.Default.CustomSevenZipExePath = _settings?.CustomSevenZipExePath ?? string.Empty;
+    ToolLocator.Default.Invalidate();
+}
 
         public string GlobalPassword
         {
@@ -322,7 +340,7 @@ namespace ArchiveFixer.ViewModels
                   new FileScanService(),
                   new ArchiveDetectService(),
                   new RenameService(),
-                  new ExtractService(),
+                  new SevenZipEngine(),
                   new PasswordService(),
                   new LogService(),
                   new SettingsService(),
@@ -337,7 +355,7 @@ namespace ArchiveFixer.ViewModels
             FileScanService fileScanService,
             ArchiveDetectService archiveDetectService,
             RenameService renameService,
-            ExtractService extractService,
+            IArchiveEngine archiveEngine,
             PasswordService passwordService,
             LogService logService,
             SettingsService settingsService,
@@ -349,7 +367,7 @@ namespace ArchiveFixer.ViewModels
             _fileScanService = fileScanService;
             _archiveDetectService = archiveDetectService;
             _renameService = renameService;
-            _extractService = extractService;
+            _archiveEngine = archiveEngine;
             _passwordService = passwordService;
             _logService = logService;
             _settingsService = settingsService;
@@ -360,7 +378,7 @@ namespace ArchiveFixer.ViewModels
 
             _scanCoordinator = new ScanCoordinator(this, fileScanService, archiveDetectService, dialogService);
             _renameCoordinator = new RenameCoordinator(this, _scanCoordinator, renameService, dialogService);
-            _extractionCoordinator = new ExtractionCoordinator(this, extractService, passwordService, pathService, dialogService);
+            _extractionCoordinator = new ExtractionCoordinator(this, archiveEngine, passwordService, pathService, dialogService);
 
             _settings = _settingsService.Load();
             SelectedOutputDirectory = _settings.CustomOutputDirectory ?? string.Empty;
@@ -421,12 +439,12 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog("INFO", "软件启动");
 
-            if (!_extractService.CheckSevenZipExists())
+            if (!_archiveEngine.IsAvailable)
             {
                 AppendLog("WARN", "未找到 tools\\7zip\\7z.exe，软件可启动，但解压时会失败。");
             }
 
-            if (!_extractService.CheckSevenZipDllExists())
+            if (!ToolLocator.Default.SevenZipDllExists)
             {
                 AppendLog("WARN", "未找到 tools\\7zip\\7z.dll，请确认 7-Zip 命令行文件完整。");
             }

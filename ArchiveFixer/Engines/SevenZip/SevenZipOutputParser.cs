@@ -1,11 +1,13 @@
 using System;
 using System.Linq;
 using System.Text.RegularExpressions;
+using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
+using ArchiveFixer.Password;
 
-namespace ArchiveFixer.Helpers
+namespace ArchiveFixer.Engines.SevenZip
 {
-    public static class ProcessOutputHelper
+    public static class SevenZipOutputParser
     {
         public static string DetectSevenZipErrorType(int exitCode, string? output, string? error)
         {
@@ -257,42 +259,8 @@ namespace ArchiveFixer.Helpers
             return false;
         }
 
-        public static string SanitizePasswordText(string? text)
-        {
-            if (string.IsNullOrEmpty(text))
-            {
-                return string.Empty;
-            }
-
-            string result = text;
-
-            result = Regex.Replace(
-                result,
-                @"(?i)(^|\s)-p(?:[^\s]*)",
-                m =>
-                {
-                    string prefix = m.Value.StartsWith(" ") ? " " : string.Empty;
-                    return prefix + "-p******";
-                });
-
-            result = Regex.Replace(result, @"(?i)(password\s*=\s*)([^\s;]+)", "$1******");
-            result = Regex.Replace(result, @"(?i)(password\s*:\s*)([^\r\n]+)", "$1******");
-            result = Regex.Replace(result, @"使用密码\s*[^\r\n]+", "使用密码 ******");
-            result = Regex.Replace(result, @"尝试密码\s*[^\r\n]+", "尝试密码 ******");
-            result = Regex.Replace(result, @"密码\s*[:：]\s*[^\r\n]+", "密码：******");
-
-            return result;
-        }
-
-        public static string MaskPassword(string? password)
-        {
-            if (string.IsNullOrEmpty(password))
-            {
-                return "空密码";
-            }
-
-            return "******";
-        }
+        // 注意：原先这里的 SanitizePasswordText / MaskPassword 已经搬到 ArchiveFixer.Password.PasswordMasker。
+        // 理由：脱敏是跨模块的硬约束，不是 7-Zip 的私事 —— 放在这里会让"日志脱敏"依赖一个归档引擎的工具类。
 
         public static bool LooksLikePasswordRequired(string? output, string? error)
         {
@@ -333,7 +301,7 @@ namespace ArchiveFixer.Helpers
 
         public static string ExtractImportantMessage(string? text)
         {
-            text = SanitizePasswordText(text);
+            text = PasswordMasker.Sanitize(text);
 
             if (string.IsNullOrWhiteSpace(text))
             {

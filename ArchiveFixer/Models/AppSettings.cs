@@ -50,6 +50,27 @@ namespace ArchiveFixer.Models
 
         public bool PreservePasswordLeadingTrailingSpaces { get; set; } = true;
 
+        /// <summary>
+        /// 从归档同目录的说明文件（.txt/.bat/…）里提取密码候选。
+        /// **默认关闭**：这是"猜"出来的候选，必须由用户显式开启（AGENTS.md §9.4）。
+        /// </summary>
+        public bool EnableSidecarPassword { get; set; } = false;
+
+        /// <summary>用户自定义的 7z.exe 路径；空表示用程序目录内置的。路径只由 ToolLocator 解析（AGENTS.md §3.1）。</summary>
+        public string CustomSevenZipExePath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 解压成功且校验通过后删除源压缩包/源分卷。
+        /// **默认关闭**：删除不可逆，必须用户显式开启（AGENTS.md §9.5、用户 2026-09-21 指示）。
+        /// </summary>
+        public bool DeleteSourceAfterExtract { get; set; } = false;
+
+        /// <summary>把多个包的产物归集（移动）到一个目标目录（AGENTS.md §9.5）。</summary>
+        public bool CollectResultsToDirectory { get; set; } = false;
+
+        /// <summary>归集目标目录。</summary>
+        public string CollectTargetDirectory { get; set; } = string.Empty;
+
         public static AppSettings CreateDefault()
         {
             return new AppSettings
@@ -74,7 +95,12 @@ namespace ArchiveFixer.Models
                 IncludeHiddenFiles = false,
                 IncludeSystemFiles = false,
                 MaxFileSizeLimit = 0,
-                PreservePasswordLeadingTrailingSpaces = true
+                PreservePasswordLeadingTrailingSpaces = true,
+                EnableSidecarPassword = false,
+                CustomSevenZipExePath = string.Empty,
+                DeleteSourceAfterExtract = false,
+                CollectResultsToDirectory = false,
+                CollectTargetDirectory = string.Empty
             };
         }
 
@@ -126,6 +152,14 @@ namespace ArchiveFixer.Models
             }
 
             CustomOutputDirectory ??= string.Empty;
+            CustomSevenZipExePath ??= string.Empty;
+            CollectTargetDirectory ??= string.Empty;
+
+            // 自定义 7z 路径要么是有效文件，要么当没填 —— 留一个失效路径会让整个程序找不到引擎。
+            if (!string.IsNullOrWhiteSpace(CustomSevenZipExePath) && !System.IO.File.Exists(CustomSevenZipExePath))
+            {
+                CustomSevenZipExePath = string.Empty;
+            }
         }
     }
 }

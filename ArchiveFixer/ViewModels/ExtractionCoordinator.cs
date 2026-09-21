@@ -1,4 +1,5 @@
-﻿using ArchiveFixer.Models;
+using ArchiveFixer.Engines;
+using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using System;
 using System.Collections.Generic;
@@ -18,7 +19,7 @@ namespace ArchiveFixer.ViewModels
     internal sealed class ExtractionCoordinator
     {
         private readonly MainViewModel _vm;
-        private readonly ExtractService _extractService;
+        private readonly IArchiveEngine _archiveEngine;
         private readonly PasswordService _passwordService;
         private readonly PathService _pathService;
         private readonly DialogService _dialogService;
@@ -29,13 +30,13 @@ namespace ArchiveFixer.ViewModels
 
         public ExtractionCoordinator(
             MainViewModel vm,
-            ExtractService extractService,
+            IArchiveEngine archiveEngine,
             PasswordService passwordService,
             PathService pathService,
             DialogService dialogService)
         {
             _vm = vm;
-            _extractService = extractService;
+            _archiveEngine = archiveEngine;
             _passwordService = passwordService;
             _pathService = pathService;
             _dialogService = dialogService;
@@ -67,7 +68,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            if (!_extractService.CheckSevenZipExists())
+            if (!_archiveEngine.IsAvailable)
             {
                 _dialogService.ShowError("未找到 tools\\7zip\\7z.exe，无法解压。");
                 AppendLog("ERROR", StatusText.SevenZipMissing);
@@ -294,7 +295,8 @@ namespace ArchiveFixer.ViewModels
                 task,
                 Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
                 _passwordService.Passwords,
-                Settings.TryEmptyPasswordFirst);
+                Settings.TryEmptyPasswordFirst,
+                Settings.EnableSidecarPassword);
 
             if (candidates.Count == 0)
             {
@@ -307,7 +309,7 @@ namespace ArchiveFixer.ViewModels
                 });
             }
 
-            SevenZipResult? lastResult = null;
+            ArchiveOperationResult? lastResult = null;
             string selectedPassword = string.Empty;
             bool passwordConfirmed = false;
 
@@ -346,9 +348,8 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog("INFO", $"{task.FileName}：测试密码候选 {i + 1}/{candidates.Count}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
-                    SevenZipResult testResult = await _extractService.TestArchiveAsync(
-                        task.CurrentPath,
-                        password,
+                    ArchiveOperationResult testResult = await _archiveEngine.TestAsync(
+                        ArchiveRequest.For(task.CurrentPath, password),
                         cancellationToken);
 
                     lastResult = testResult;
@@ -441,12 +442,15 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog("INFO", $"{task.FileName}：测试通过，开始正式解压。");
 
-                SevenZipResult extractResult = await _extractService.ExtractArchiveAsync(
-                    task.CurrentPath,
-                    outputPath,
-                    selectedPassword,
-                    extractOptions,
-                    cancellationToken);
+                ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
+     new ArchiveRequest
+     {
+         ArchivePath = task.CurrentPath,
+         OutputPath = outputPath,
+         Password = selectedPassword
+     },
+     extractOptions,
+     cancellationToken);
 
                 lastResult = extractResult;
 
@@ -462,6 +466,10 @@ namespace ArchiveFixer.ViewModels
                     task.Status = StatusText.ExtractSuccess;
                     task.PasswordStatus = string.IsNullOrEmpty(selectedPassword) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
                     task.ErrorMessage = string.Empty;
+
+                    _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
+
+
 
                     AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
                 }
@@ -510,12 +518,15 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog("INFO", $"{task.FileName}：开始解压，密码候选 {i + 1}/{candidates.Count}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
-                    SevenZipResult extractResult = await _extractService.ExtractArchiveAsync(
-                        task.CurrentPath,
-                        outputPath,
-                        selectedPassword,
-                        extractOptions,
-                        cancellationToken);
+                    ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
+     new ArchiveRequest
+     {
+         ArchivePath = task.CurrentPath,
+         OutputPath = outputPath,
+         Password = selectedPassword
+     },
+     extractOptions,
+     cancellationToken);
 
                     lastResult = extractResult;
 
@@ -533,6 +544,10 @@ namespace ArchiveFixer.ViewModels
                         task.Status = StatusText.ExtractSuccess;
                         task.PasswordStatus = string.IsNullOrEmpty(selectedPassword) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
                         task.ErrorMessage = string.Empty;
+
+                        _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
+
+
 
                         AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
                         break;

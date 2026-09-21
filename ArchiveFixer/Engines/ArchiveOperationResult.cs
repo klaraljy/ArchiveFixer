@@ -1,8 +1,18 @@
+using ArchiveFixer.Models;
 using System;
 
-namespace ArchiveFixer.Models
+namespace ArchiveFixer.Engines
 {
-    public class SevenZipResult
+    /// <summary>
+    /// 引擎操作的统一结果（成功/失败、可读原因、错误分类、耗时）。
+    ///
+    /// 为什么放在 Engines 而不是 Models：
+    /// 它是"引擎调用"的返回类型，GUI / 调度 / 递归只应该看到这个，而不是 7-Zip 的私有结果对象。
+    /// 新增引擎时复用同一个结果类型，核心模块就不用改。
+    ///
+    /// 注意：<see cref="UsedPasswordMasked"/> 只允许放脱敏后的占位符，**绝不能放明文密码**。
+    /// </summary>
+    public class ArchiveOperationResult
     {
         public bool Success { get; set; }
 
@@ -52,14 +62,14 @@ namespace ArchiveFixer.Models
 
         public bool IsTimedOut => DetectedErrorType == "TimedOut";
 
-        public static SevenZipResult CreateSuccess(
+        public static ArchiveOperationResult CreateSuccess(
             int exitCode,
             string output,
             string error,
             TimeSpan elapsed,
             string usedPasswordMasked = "")
         {
-            return new SevenZipResult
+            return new ArchiveOperationResult
             {
                 Success = true,
                 ExitCode = exitCode,
@@ -73,7 +83,7 @@ namespace ArchiveFixer.Models
             };
         }
 
-        public static SevenZipResult CreateFailure(
+        public static ArchiveOperationResult CreateFailure(
             int exitCode,
             string output,
             string error,
@@ -83,7 +93,7 @@ namespace ArchiveFixer.Models
             TimeSpan elapsed,
             string usedPasswordMasked = "")
         {
-            return new SevenZipResult
+            return new ArchiveOperationResult
             {
                 Success = false,
                 ExitCode = exitCode,
@@ -99,9 +109,9 @@ namespace ArchiveFixer.Models
             };
         }
 
-        public static SevenZipResult CreateSevenZipMissing(string path)
+        public static ArchiveOperationResult CreateEngineMissing(string path)
         {
-            return new SevenZipResult
+            return new ArchiveOperationResult
             {
                 Success = false,
                 ExitCode = -1,
@@ -115,9 +125,9 @@ namespace ArchiveFixer.Models
             };
         }
 
-        public static SevenZipResult CreateCancelled(TimeSpan elapsed)
+        public static ArchiveOperationResult CreateCancelled(TimeSpan elapsed)
         {
-            return new SevenZipResult
+            return new ArchiveOperationResult
             {
                 Success = false,
                 ExitCode = 255,
@@ -131,9 +141,9 @@ namespace ArchiveFixer.Models
             };
         }
 
-        public static SevenZipResult CreateTimedOut(TimeSpan elapsed)
+        public static ArchiveOperationResult CreateTimedOut(TimeSpan elapsed)
         {
-            return new SevenZipResult
+            return new ArchiveOperationResult
             {
                 Success = false,
                 ExitCode = -3,

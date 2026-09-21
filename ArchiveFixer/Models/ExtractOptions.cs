@@ -2,7 +2,7 @@ namespace ArchiveFixer.Models
 {
     /// <summary>
     /// 解压选项。
-    /// 由 AppSettings 和界面选项转换而来，传给 ExtractService 使用。
+    /// 由 AppSettings 和界面选项转换而来，传给归档引擎（IArchiveEngine.ExtractAsync）使用。
     /// </summary>
     public class ExtractOptions
     {

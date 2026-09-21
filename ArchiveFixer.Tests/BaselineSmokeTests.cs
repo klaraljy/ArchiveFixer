@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using ArchiveFixer.Engines;
+using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using Xunit;
@@ -212,7 +214,7 @@ namespace ArchiveFixer.Tests
         public void BuiltinSevenZipExists()
         {
             Assert.True(File.Exists(_fx.SevenZipPath), $"内置 7z.exe 不存在：{_fx.SevenZipPath}");
-            Assert.True(new ExtractService().CheckSevenZipExists(), "ExtractService 找不到 7z.exe");
+            Assert.True(new SevenZipEngine().IsAvailable, "SevenZipEngine 找不到 7z.exe");
         }
 
         // ---------------- 识别 ----------------
@@ -323,7 +325,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 解压_普通zip_无密码()
         {
-            SevenZipResult r = await Extract("01_normal/normal.zip", "out_zip", password: string.Empty);
+            ArchiveOperationResult r = await Extract("01_normal/normal.zip", "out_zip", password: string.Empty);
 
             Assert.True(r.Success, $"解压失败：{r.Status} / {r.Message} / {r.DetectedErrorType}");
             Assert.True(File.Exists(_fx.P("out_zip/hello.txt")), "解压产物缺少 hello.txt");
@@ -333,7 +335,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 解压_普通7z_无密码()
         {
-            SevenZipResult r = await Extract("01_normal/normal.7z", "out_7z", password: string.Empty);
+            ArchiveOperationResult r = await Extract("01_normal/normal.7z", "out_7z", password: string.Empty);
 
             Assert.True(r.Success, $"解压失败：{r.Status} / {r.Message} / {r.DetectedErrorType}");
             Assert.True(File.Exists(_fx.P("out_7z/中文内容.txt")), "Unicode 文件名解压后丢失");
@@ -342,7 +344,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 解压_加密7z_正确密码()
         {
-            SevenZipResult r = await Extract("02_encrypted/encrypted.7z", "out_enc_ok", SampleSetFixture.SamplePassword);
+            ArchiveOperationResult r = await Extract("02_encrypted/encrypted.7z", "out_enc_ok", SampleSetFixture.SamplePassword);
 
             Assert.True(r.Success, $"正确密码应解压成功：{r.Status} / {r.Message} / {r.DetectedErrorType}");
             Assert.True(File.Exists(_fx.P("out_enc_ok/hello.txt")));
@@ -351,7 +353,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 解压_加密7z_空密码必须失败且分类为密码问题()
         {
-            SevenZipResult r = await Extract("02_encrypted/encrypted.7z", "out_enc_bad", password: string.Empty);
+            ArchiveOperationResult r = await Extract("02_encrypted/encrypted.7z", "out_enc_bad", password: string.Empty);
 
             Assert.False(r.Success, "加密包用空密码不应成功");
             Assert.True(
@@ -362,7 +364,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 解压_分卷7z_只给001即可()
         {
-            SevenZipResult r = await Extract("03_volume/volume.7z.001", "out_vol", password: string.Empty);
+            ArchiveOperationResult r = await Extract("03_volume/volume.7z.001", "out_vol", password: string.Empty);
 
             Assert.True(r.Success, $"分卷解压失败：{r.Status} / {r.Message} / {r.DetectedErrorType}");
             Assert.True(File.Exists(_fx.P("out_vol/big.bin")), "分卷解压产物缺少 big.bin");
@@ -371,7 +373,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 解压_损坏包_必须失败()
         {
-            SevenZipResult r = await Extract("05_broken/corrupted.7z", "out_broken", password: string.Empty);
+            ArchiveOperationResult r = await Extract("05_broken/corrupted.7z", "out_broken", password: string.Empty);
 
             Assert.False(r.Success, "截断的包不应解压成功");
             Assert.False(string.IsNullOrWhiteSpace(r.Message), "失败必须带可读原因");
@@ -380,21 +382,24 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 解压_非归档_必须失败且不产生垃圾文件()
         {
-            SevenZipResult r = await Extract("06_notarchive/text.7z", "out_notarchive", password: string.Empty);
+            ArchiveOperationResult r = await Extract("06_notarchive/text.7z", "out_notarchive", password: string.Empty);
 
             Assert.False(r.Success, "纯文本改名成 .7z 不应解压成功");
             Assert.Equal("UnsupportedFormat", r.DetectedErrorType);
         }
 
-        private async Task<SevenZipResult> Extract(string relative, string outDirName, string password)
+        private async Task<ArchiveOperationResult> Extract(string relative, string outDirName, string password)
         {
             string archive = _fx.P(relative);
             string outDir = _fx.P(outDirName);
 
-            return await new ExtractService().ExtractArchiveAsync(
-                archive,
-                outDir,
-                password,
+            return await new SevenZipEngine().ExtractAsync(
+                new ArchiveRequest
+                {
+                    ArchivePath = archive,
+                    OutputPath = outDir,
+                    Password = password
+                },
                 new ExtractOptions(),
                 CancellationToken.None);
         }

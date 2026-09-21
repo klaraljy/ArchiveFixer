@@ -1,4 +1,5 @@
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Password;
 using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
@@ -8,61 +9,60 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ArchiveFixer.Services
+namespace ArchiveFixer.Engines.SevenZip
 {
-    public class ExtractService
+    /// <summary>
+    /// 7-Zip 命令行进程的调用器：只负责"怎么起进程、怎么收输出、怎么收尸"。
+    ///
+    /// 边界（AGENTS.md §3.1 的四条禁止项）：
+    /// 参数拼接、7-Zip 文本输出解析、退出码到错误的映射，**全部只能存在于本命名空间内**。
+    /// 核心模块（ViewModel / 调度 / 递归）一律通过 <see cref="IArchiveEngine"/> 调用，不得直接碰 7z.exe。
+    /// </summary>
+    public sealed class SevenZipProcessRunner
     {
         private static readonly TimeSpan DefaultSevenZipTimeout = TimeSpan.FromMinutes(30);
 
-        public string GetSevenZipPath()
+        private readonly ToolLocator _tools;
+
+        public SevenZipProcessRunner()
+            : this(ToolLocator.Default)
         {
-            string localPath = Path.Combine(AppContext.BaseDirectory, "tools", "7zip", "7z.exe");
-
-            if (File.Exists(localPath))
-            {
-                return localPath;
-            }
-
-            string testPath = @"D:\7-Zip\7z.exe";
-
-            if (File.Exists(testPath))
-            {
-                return testPath;
-            }
-
-            return localPath;
         }
 
-        public string GetSevenZipDllPath()
+        public SevenZipProcessRunner(ToolLocator tools)
         {
-            string localPath = Path.Combine(AppContext.BaseDirectory, "tools", "7zip", "7z.dll");
-
-            if (File.Exists(localPath))
-            {
-                return localPath;
-            }
-
-            string testPath = @"D:\7-Zip\7z.dll";
-
-            if (File.Exists(testPath))
-            {
-                return testPath;
-            }
-
-            return localPath;
+            _tools = tools ?? ToolLocator.Default;
         }
+
+        /// <summary>
+        /// 外部工具路径统一由 <see cref="ToolLocator"/> 解析。
+        /// 这里不再自己拼路径 —— 以前 App.xaml.cs / PathService / ExtractService 各自拼一遍，
+        /// 还带一个写死的 D:\7-Zip 回退，属于必须还的债（AGENTS.md §3.1）。
+        /// </summary>
+        public ToolLocator Tools => _tools;
 
         public bool CheckSevenZipExists()
         {
-            return File.Exists(GetSevenZipPath());
+            return _tools.SevenZipExists;
         }
 
         public bool CheckSevenZipDllExists()
         {
-            return File.Exists(GetSevenZipDllPath());
+            return _tools.SevenZipDllExists;
         }
 
-        public async Task<SevenZipResult> TestArchiveAsync(
+        public string GetSevenZipPath()
+        {
+            return _tools.SevenZipExePath;
+        }
+
+        public string GetSevenZipDllPath()
+        {
+            return _tools.SevenZipDllPath;
+        }
+
+
+        public async Task<ArchiveOperationResult> TestArchiveAsync(
             string archivePath,
             string password,
             CancellationToken cancellationToken = default)
@@ -74,7 +74,7 @@ namespace ArchiveFixer.Services
 
             if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath))
             {
-                return SevenZipResult.CreateFailure(
+                return ArchiveOperationResult.CreateFailure(
                     -1,
                     string.Empty,
                     string.Empty,
@@ -87,7 +87,7 @@ namespace ArchiveFixer.Services
 
             List<string> arguments = BuildTestArguments(archivePath, password);
 
-            SevenZipResult result = await RunSevenZipAsync(arguments, password, cancellationToken);
+            ArchiveOperationResult result = await RunSevenZipAsync(arguments, password, cancellationToken);
 
             if (result.Success)
             {
@@ -97,7 +97,7 @@ namespace ArchiveFixer.Services
             }
             else
             {
-                string mappedStatus = ProcessOutputHelper.ErrorTypeToTaskStatus(result.DetectedErrorType);
+                string mappedStatus = SevenZipOutputParser.ErrorTypeToTaskStatus(result.DetectedErrorType);
 
                 result.Status = mappedStatus switch
                 {
@@ -110,7 +110,7 @@ namespace ArchiveFixer.Services
                     result.Message == "操作失败" ||
                     result.Message == "未知错误，请查看日志")
                 {
-                    result.Message = ProcessOutputHelper.ErrorTypeToMessage(
+                    result.Message = SevenZipOutputParser.ErrorTypeToMessage(
                         result.DetectedErrorType,
                         result.CombinedOutput);
                 }
@@ -119,7 +119,7 @@ namespace ArchiveFixer.Services
             return result;
         }
 
-        public async Task<SevenZipResult> ExtractArchiveAsync(
+        public async Task<ArchiveOperationResult> ExtractArchiveAsync(
             string archivePath,
             string outputPath,
             string password,
@@ -136,7 +136,7 @@ namespace ArchiveFixer.Services
 
             if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath))
             {
-                return SevenZipResult.CreateFailure(
+                return ArchiveOperationResult.CreateFailure(
                     -1,
                     string.Empty,
                     string.Empty,
@@ -149,7 +149,7 @@ namespace ArchiveFixer.Services
 
             if (string.IsNullOrWhiteSpace(outputPath))
             {
-                return SevenZipResult.CreateFailure(
+                return ArchiveOperationResult.CreateFailure(
                     -1,
                     string.Empty,
                     string.Empty,
@@ -166,9 +166,9 @@ namespace ArchiveFixer.Services
             }
             catch (Exception ex)
             {
-                string safeMessage = ProcessOutputHelper.SanitizePasswordText(ex.Message);
+                string safeMessage = PasswordMasker.Sanitize(ex.Message);
 
-                return SevenZipResult.CreateFailure(
+                return ArchiveOperationResult.CreateFailure(
                     -1,
                     string.Empty,
                     safeMessage,
@@ -181,7 +181,7 @@ namespace ArchiveFixer.Services
 
             List<string> arguments = BuildExtractArguments(archivePath, outputPath, password, options);
 
-            SevenZipResult result = await RunSevenZipAsync(arguments, password, cancellationToken);
+            ArchiveOperationResult result = await RunSevenZipAsync(arguments, password, cancellationToken);
 
             if (result.Success)
             {
@@ -191,13 +191,13 @@ namespace ArchiveFixer.Services
             }
             else
             {
-                result.Status = ProcessOutputHelper.ErrorTypeToTaskStatus(result.DetectedErrorType);
+                result.Status = SevenZipOutputParser.ErrorTypeToTaskStatus(result.DetectedErrorType);
 
                 if (string.IsNullOrWhiteSpace(result.Message) ||
                     result.Message == "操作失败" ||
                     result.Message == "未知错误，请查看日志")
                 {
-                    result.Message = ProcessOutputHelper.ErrorTypeToMessage(
+                    result.Message = SevenZipOutputParser.ErrorTypeToMessage(
                         result.DetectedErrorType,
                         result.CombinedOutput);
                 }
@@ -206,14 +206,14 @@ namespace ArchiveFixer.Services
             return result;
         }
 
-        public async Task<SevenZipResult> RunSevenZipAsync(
+        public async Task<ArchiveOperationResult> RunSevenZipAsync(
             IEnumerable<string> arguments,
             CancellationToken cancellationToken = default)
         {
             return await RunSevenZipAsync(arguments, string.Empty, cancellationToken);
         }
 
-        public async Task<SevenZipResult> RunSevenZipAsync(
+        public async Task<ArchiveOperationResult> RunSevenZipAsync(
             IEnumerable<string> arguments,
             string usedPassword,
             CancellationToken cancellationToken = default)
@@ -296,7 +296,7 @@ namespace ArchiveFixer.Services
                 {
                     stopwatch.Stop();
 
-                    return SevenZipResult.CreateFailure(
+                    return ArchiveOperationResult.CreateFailure(
                         -1,
                         string.Empty,
                         string.Empty,
@@ -344,10 +344,10 @@ namespace ArchiveFixer.Services
                         errorOnCancel = errorBuilder.ToString();
                     }
 
-                    outputOnCancel = ProcessOutputHelper.SanitizePasswordText(outputOnCancel);
-                    errorOnCancel = ProcessOutputHelper.SanitizePasswordText(errorOnCancel);
+                    outputOnCancel = PasswordMasker.Sanitize(outputOnCancel);
+                    errorOnCancel = PasswordMasker.Sanitize(errorOnCancel);
 
-                    return new SevenZipResult
+                    return new ArchiveOperationResult
                     {
                         Success = false,
                         ExitCode = isTimeout ? -3 : -2,
@@ -386,8 +386,8 @@ namespace ArchiveFixer.Services
                     error = errorBuilder.ToString();
                 }
 
-                output = ProcessOutputHelper.SanitizePasswordText(output);
-                error = ProcessOutputHelper.SanitizePasswordText(error);
+                output = PasswordMasker.Sanitize(output);
+                error = PasswordMasker.Sanitize(error);
 
                 int exitCode;
 
@@ -421,7 +421,7 @@ namespace ArchiveFixer.Services
                     errorText = errorBuilder.ToString();
                 }
 
-                string exceptionMessage = ProcessOutputHelper.SanitizePasswordText(ex.Message);
+                string exceptionMessage = PasswordMasker.Sanitize(ex.Message);
 
                 if (!string.IsNullOrWhiteSpace(errorText))
                 {
@@ -430,17 +430,17 @@ namespace ArchiveFixer.Services
 
                 errorText += exceptionMessage;
 
-                string combined = ProcessOutputHelper.CombineOutput(output, errorText);
-                string detectedErrorType = ProcessOutputHelper.DetectSevenZipErrorType(-1, output, errorText);
+                string combined = SevenZipOutputParser.CombineOutput(output, errorText);
+                string detectedErrorType = SevenZipOutputParser.DetectSevenZipErrorType(-1, output, errorText);
 
-                return new SevenZipResult
+                return new ArchiveOperationResult
                 {
                     Success = false,
                     ExitCode = -1,
-                    StandardOutput = ProcessOutputHelper.SanitizePasswordText(output),
-                    StandardError = ProcessOutputHelper.SanitizePasswordText(errorText),
-                    Status = ProcessOutputHelper.ErrorTypeToTaskStatus(detectedErrorType),
-                    Message = ProcessOutputHelper.ErrorTypeToMessage(detectedErrorType, combined),
+                    StandardOutput = PasswordMasker.Sanitize(output),
+                    StandardError = PasswordMasker.Sanitize(errorText),
+                    Status = SevenZipOutputParser.ErrorTypeToTaskStatus(detectedErrorType),
+                    Message = SevenZipOutputParser.ErrorTypeToMessage(detectedErrorType, combined),
                     DetectedErrorType = detectedErrorType,
                     UsedPasswordMasked = MaskPassword(usedPassword),
                     Elapsed = stopwatch.Elapsed
@@ -477,34 +477,34 @@ namespace ArchiveFixer.Services
             }
         }
 
-        public SevenZipResult AnalyzeResult(int exitCode, string output, string error)
+        public ArchiveOperationResult AnalyzeResult(int exitCode, string output, string error)
         {
             return AnalyzeResult(exitCode, output, error, string.Empty, TimeSpan.Zero);
         }
 
-        public SevenZipResult AnalyzeResult(
+        public ArchiveOperationResult AnalyzeResult(
             int exitCode,
             string output,
             string error,
             string usedPassword,
             TimeSpan elapsed)
         {
-            output = ProcessOutputHelper.SanitizePasswordText(output);
-            error = ProcessOutputHelper.SanitizePasswordText(error);
+            output = PasswordMasker.Sanitize(output);
+            error = PasswordMasker.Sanitize(error);
 
-            string combined = ProcessOutputHelper.CombineOutput(output, error);
-            bool success = ProcessOutputHelper.LooksLikeSuccess(exitCode, output, error);
+            string combined = SevenZipOutputParser.CombineOutput(output, error);
+            bool success = SevenZipOutputParser.LooksLikeSuccess(exitCode, output, error);
 
             string errorType = success
                 ? "None"
-                : ProcessOutputHelper.DetectSevenZipErrorType(exitCode, output, error);
+                : SevenZipOutputParser.DetectSevenZipErrorType(exitCode, output, error);
 
-            string status = ProcessOutputHelper.ErrorTypeToTaskStatus(errorType);
+            string status = SevenZipOutputParser.ErrorTypeToTaskStatus(errorType);
             string message = success
                 ? "操作成功"
-                : ProcessOutputHelper.ErrorTypeToMessage(errorType, combined);
+                : SevenZipOutputParser.ErrorTypeToMessage(errorType, combined);
 
-            return new SevenZipResult
+            return new ArchiveOperationResult
             {
                 Success = success,
                 ExitCode = exitCode,
@@ -576,18 +576,17 @@ namespace ArchiveFixer.Services
             };
         }
 
-        private SevenZipResult CreateSevenZipMissingResult()
+        private ArchiveOperationResult CreateSevenZipMissingResult()
         {
-            string expectedPath = Path.Combine(AppContext.BaseDirectory, "tools", "7zip", "7z.exe");
-
-            return new SevenZipResult
+            // 路径由 ToolLocator 统一解析，不再在这里拼、也不再猜 D:\7-Zip（AGENTS.md §3.1）。
+            return new ArchiveOperationResult
             {
                 Success = false,
                 ExitCode = -1,
                 StandardOutput = string.Empty,
                 StandardError = string.Empty,
                 Status = StatusText.SevenZipMissing,
-                Message = $"未找到 7-Zip 程序。已检查：{expectedPath} 和 D:\\7-Zip\\7z.exe",
+                Message = $"未找到 7-Zip 程序：{_tools.SevenZipExePath}",
                 DetectedErrorType = "SevenZipMissing",
                 UsedPasswordMasked = string.Empty,
                 Elapsed = TimeSpan.Zero
@@ -701,7 +700,7 @@ namespace ArchiveFixer.Services
 
         private static string MaskPassword(string password)
         {
-            return ProcessOutputHelper.MaskPassword(password);
+            return PasswordMasker.Mask(password);
         }
     }
 }
