@@ -55,6 +55,12 @@ namespace ArchiveFixer.Models
         public const string Success = "成功";
         public const string NotArchive = "非压缩包";
 
+        /// <summary>
+        /// 部分完成：解出来了一部分，但因为上限 / 密码 / 损坏停在中途。
+        /// **不得当成成功**（AGENTS.md §6 第 6 条），单独一类用户才知道还要不要接着弄。
+        /// </summary>
+        public const string PartiallyCompleted = "部分完成";
+
         // 后缀状态
         public const string NotChecked = "未检测";
         public const string ExtensionNormal = "后缀正常";

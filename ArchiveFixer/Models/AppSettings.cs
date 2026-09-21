@@ -68,6 +68,16 @@ namespace ArchiveFixer.Models
         /// <summary>把多个包的产物归集（移动）到一个目标目录（AGENTS.md §9.5）。</summary>
         public bool CollectResultsToDirectory { get; set; } = false;
 
+        /// <summary>
+        /// 递归解压模式（AGENTS.md §6 第 8 条、设计.md §十）：
+        /// SingleLayer = 只解当前层；SingleChain = 只有一个主要内层归档时自动继续（默认）；
+        /// AllBranches = 展开所有内层归档（必须由用户显式选择）。
+        /// </summary>
+        public string RecursionMode { get; set; } = "SingleChain";
+
+        /// <summary>递归最大层数。到顶就停并报告，不做无限展开。</summary>
+        public int MaxRecursionDepth { get; set; } = 3;
+
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
@@ -100,7 +110,9 @@ namespace ArchiveFixer.Models
                 CustomSevenZipExePath = string.Empty,
                 DeleteSourceAfterExtract = false,
                 CollectResultsToDirectory = false,
-                CollectTargetDirectory = string.Empty
+                CollectTargetDirectory = string.Empty,
+                RecursionMode = "SingleChain",
+                MaxRecursionDepth = 3
             };
         }
 
@@ -154,6 +166,22 @@ namespace ArchiveFixer.Models
             CustomOutputDirectory ??= string.Empty;
             CustomSevenZipExePath ??= string.Empty;
             CollectTargetDirectory ??= string.Empty;
+
+            if (string.IsNullOrWhiteSpace(RecursionMode))
+            {
+                RecursionMode = "SingleChain";
+            }
+
+            // 层数下限 1（只解当前层），上限 10：再深就不是"帮用户省事"而是失控了。
+            if (MaxRecursionDepth < 1)
+            {
+                MaxRecursionDepth = 1;
+            }
+
+            if (MaxRecursionDepth > 10)
+            {
+                MaxRecursionDepth = 10;
+            }
 
             // 自定义 7z 路径要么是有效文件，要么当没填 —— 留一个失效路径会让整个程序找不到引擎。
             if (!string.IsNullOrWhiteSpace(CustomSevenZipExePath) && !System.IO.File.Exists(CustomSevenZipExePath))

@@ -26,6 +26,10 @@ namespace ArchiveFixer
         public static string TempDirectory =>
             Path.Combine(AppDataDirectory, "temp");
 
+        /// <summary>递归解压的工作区根目录（中间产物，不写用户最终目录）。</summary>
+        public static string WorkDirectory =>
+            Path.Combine(AppDataDirectory, "work");
+
         public static string ToolsDirectory =>
             Path.Combine(AppBaseDirectory, "tools");
 
@@ -62,6 +66,8 @@ namespace ArchiveFixer
             SafeCreateDirectory(AppDataDirectory);
             SafeCreateDirectory(LogsDirectory);
             SafeCreateDirectory(TempDirectory);
+            SafeCreateDirectory(WorkDirectory);
+            SafeCreateDirectory(WorkDirectory);
             SafeCreateDirectory(ToolsDirectory);
             SafeCreateDirectory(SevenZipDirectory);
         }

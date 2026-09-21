@@ -157,14 +157,19 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 把最终产物"发布"到 <paramref name="targetDirectory"/>（**移动**，绝不覆盖）。
         ///
-        /// 发布内容 = 最后一层 output 目录里的东西；但如果它里面**恰好只有一个子目录、没有任何同级文件**，
-        /// 那一层就是这个包自带的"无意义外壳"（典型：<c>out\pack\pack\文件</c>），
-        /// 只去掉这一层外壳再发布，避免用户拿到 out\pack\pack\ 这种套娃目录。
-        /// 摊平最多 <see cref="MaxWrapperStripDepth"/> 层，且**每层都要重新满足**
-        /// "只有一个子目录、没有文件、不是符号链接"才继续摊 —— 有文件说明这一层本身就是有内容的产物层。
+        /// 发布内容 = **所有叶子层**的产物，即"没有别的层是从它里面解出来的"那些层：
+        /// 单链包只有最深那一层是叶子（所以中间层的 inner.7z 不会被搬出去），多分支包每个分支
+        /// 各是一层叶子（所以 a.txt 与 b.txt 会一起落到目标目录）。
+        /// 只发布叶子、不发布全部层，是为了不让"已经被展开掉的中间归档"混进最终产物 ——
+        /// 用户要的是解到底的东西，不是半路的压缩包。
+        ///
+        /// 每一层在发布前都会去掉自己的"无意义外壳"：如果它里面**恰好只有一个子目录、
+        /// 没有任何同级文件**，那一层就是这个包自带的壳（典型：<c>out\pack\pack\文件</c>），
+        /// 去掉它再发布，避免用户拿到 out\pack\pack\ 这种套娃目录。摊平最多
+        /// <see cref="MaxWrapperStripDepth"/> 层，且**每层都要重新满足**上述条件才继续摊。
         ///
         /// <paramref name="targetDirectory"/> 必须由调用方给出**完整目标位置**
-        /// （本方法不会替它再拼一层包名）：递归模式下"最后一层 output"与"统一目标目录"的关系
+        /// （本方法不会替它再拼一层包名）：递归模式下"叶子层产物"与"统一目标目录"的关系
         /// 由调用方决定，工作区不替用户拍板。
         /// </summary>
         public WorkspacePublishResult Publish(string targetDirectory)
@@ -179,18 +184,24 @@ namespace ArchiveFixer.Extraction
                 return PublishFailure(string.Empty, "工作区里还没有任何一层，没有可发布的产物");
             }
 
-            string sourceDirectory = _layers[^1].OutputPath;
             string destination = SafePathHelper.GetFullPathSafe(targetDirectory);
+            IReadOnlyList<WorkspaceLayer> leaves = ResolveLeafLayers();
 
-            if (!SafeDirectoryExists(sourceDirectory))
+            /*
+             * 目标落在产物目录内部要立刻停手，而且要在**建目录之前**判断（任意一层命中就整体停）：
+             * 那样会一边搬一边往自己里面塞，轻则无限套娃、重则丢文件；
+             * 提前判断还能保证"目标不合法"时连空目录都不会留下。
+             */
+            foreach (WorkspaceLayer leaf in leaves)
             {
-                return PublishFailure(destination, $"最后一层的产物目录不存在：{sourceDirectory}");
+                if (IsSameOrChildPath(destination, leaf.OutputPath))
+                {
+                    return PublishFailure(destination, "发布目标目录不能位于工作区产物目录内部，已停止发布");
+                }
             }
 
             try
             {
-                string contentRoot = ResolveContentRoot(sourceDirectory);
-
                 // 目标不存在就建；建不出来就没必要继续，否则每个文件都要失败一遍。
                 if (!SafePathHelper.EnsureDirectoryExists(destination))
                 {
@@ -200,7 +211,23 @@ namespace ArchiveFixer.Extraction
                 var renamed = new List<string>();
                 var errors = new List<string>();
 
-                int movedCount = MoveContent(contentRoot, destination, renamed, errors);
+                int movedCount = 0;
+
+                // 按层号升序搬：同名的"谁先落位"因此是稳定的（先解出来的先落位，后来的改名）。
+                foreach (WorkspaceLayer leaf in leaves)
+                {
+                    if (!SafeDirectoryExists(leaf.OutputPath))
+                    {
+                        errors.Add($"第 {leaf.Depth} 层的产物目录不存在（{leaf.OutputPath}）");
+                        continue;
+                    }
+
+                    movedCount += MoveContent(
+                        ResolveContentRoot(leaf.OutputPath),
+                        destination,
+                        renamed,
+                        errors);
+                }
 
                 return new WorkspacePublishResult
                 {
@@ -316,6 +343,54 @@ namespace ArchiveFixer.Extraction
             }
 
             return fullCandidate.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>candidate 与 parent 相同、或位于 parent 之下时返回 true（Windows 下忽略大小写）。</summary>
+        private static bool IsSameOrChildPath(string? candidate, string? parent)
+        {
+            string fullCandidate = NormalizeForCompare(candidate);
+            string fullParent = NormalizeForCompare(parent);
+
+            if (fullCandidate.Length == 0 || fullParent.Length == 0)
+            {
+                return false;
+            }
+
+            if (string.Equals(fullCandidate, fullParent, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return fullCandidate.StartsWith(fullParent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 要发布的层 = **叶子层**：没有任何别的层是从它的产物里解出来的。
+        ///
+        /// 父子关系不额外记一份，而是从 <see cref="WorkspaceLayer.InputPath"/> 反推：
+        /// 每一层解的那个归档一定位于"解出它的那一层"的产物目录里。这样"谁是叶子"就只有一个
+        /// 事实来源（层自己记的输入路径），不会出现"递归那边记一棵树、发布这边又算一遍"的漂移。
+        ///
+        /// 返回值按层号升序（<see cref="_layers"/> 本来就是按创建顺序排的），
+        /// 让同名文件的落位顺序稳定、可复现。
+        /// </summary>
+        private IReadOnlyList<WorkspaceLayer> ResolveLeafLayers()
+        {
+            var leaves = new List<WorkspaceLayer>();
+
+            foreach (WorkspaceLayer layer in _layers)
+            {
+                bool hasChild = _layers.Any(other =>
+                    !ReferenceEquals(other, layer) &&
+                    IsSameOrChildPath(other.InputPath, layer.OutputPath));
+
+                if (!hasChild)
+                {
+                    leaves.Add(layer);
+                }
+            }
+
+            return leaves;
         }
 
         /// <summary>

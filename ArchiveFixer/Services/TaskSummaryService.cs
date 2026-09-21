@@ -70,7 +70,12 @@ namespace ArchiveFixer.Services
 
                 CancelledCount = list.Count(x => x.Status == StatusText.Cancelled),
 
+                /*
+                 * "部分完成"计入失败侧：它确实没做完，用户还要处理。
+                 * 宁可让统计显得悲观，也不能让"部分完成"混进成功数里 —— 那正是设计.md 不变量 9 要防的事。
+                 */
                 OtherFailedCount = list.Count(x =>
+                    x.Status == StatusText.PartiallyCompleted) + list.Count(x =>
                     IsFailedStatus(x.Status) &&
                     x.Status != StatusText.ExtractFailed &&
                     x.Status != StatusText.WrongPassword &&

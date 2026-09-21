@@ -267,6 +267,46 @@
                                    TextWrapping="Wrap"
                                    Margin="24,0,0,8" />
 
+						<!-- M4：递归解压。多分支默认不展开，必须问（AGENTS.md §6 第 8 条）。 -->
+						<Grid Margin="0,0,0,8">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="嵌套压缩包："
+                                       VerticalAlignment="Center" />
+
+							<ComboBox Grid.Column="1"
+                                      SelectedValue="{Binding Settings.RecursionMode, Mode=TwoWay}"
+                                      SelectedValuePath="Tag">
+								<ComboBoxItem Content="只解当前这一层"
+                                              Tag="SingleLayer" />
+								<ComboBoxItem Content="单链自动展开（推荐：只有一个内层包时才继续）"
+                                              Tag="SingleChain" />
+								<ComboBoxItem Content="展开所有分支（内层有多个包时全部解开）"
+                                              Tag="AllBranches" />
+							</ComboBox>
+						</Grid>
+
+						<Grid Margin="0,0,0,8">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="最大嵌套层数："
+                                       VerticalAlignment="Center" />
+
+							<TextBox Grid.Column="1"
+                                     Text="{Binding Settings.MaxRecursionDepth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="80"
+                                     HorizontalAlignment="Left"
+                                     Height="28"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="1~10。到达上限会安全停下并报告停在哪一层，不会无限展开。" />
+						</Grid>
+
 						<Grid Margin="0,0,0,8">
 							<Grid.ColumnDefinitions>
 								<ColumnDefinition Width="130" />

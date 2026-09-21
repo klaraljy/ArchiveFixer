@@ -1,5 +1,6 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Security;
 using ArchiveFixer.Storage;
 using ArchiveFixer.Models;
@@ -27,6 +28,9 @@ namespace ArchiveFixer.ViewModels
         private readonly PathService _pathService;
         private readonly DialogService _dialogService;
 
+        /// <summary>递归解压（M4）。引擎、探测器、密码来源全部注入，递归层自己不碰密码本。</summary>
+        private readonly RecursiveExtractor _recursiveExtractor;
+
         /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
         private const int MaxPreflightPasswordAttempts = 3;
 
@@ -46,6 +50,11 @@ namespace ArchiveFixer.ViewModels
             _passwordService = passwordService;
             _pathService = pathService;
             _dialogService = dialogService;
+
+            _recursiveExtractor = new RecursiveExtractor(
+                archiveEngine,
+                new MagicArchiveProber(),
+                BuildRecursionPasswordCandidates);
         }
 
         private AppSettings Settings => _vm.Settings;
@@ -61,6 +70,187 @@ namespace ArchiveFixer.ViewModels
         /// 任何一步失败都**不改变**"解压成功"这个结论，只是把结论写进日志与任务字段；
         /// 不要因为归集或清理失败就把任务标成失败 —— 用户的文件确实解出来了。
         /// </summary>
+        /// <summary>
+        /// 给递归层提供密码候选（只给值，不给来源说明）。
+        /// 顺序与单层解压完全一致 —— 递归的内层包同样是"用户的包"，不该用另一套规则。
+        /// </summary>
+        private IReadOnlyList<string> BuildRecursionPasswordCandidates(string archivePath)
+        {
+            var probe = new ArchiveTask(archivePath);
+
+            return _passwordService
+                .GetPasswordCandidates(
+                    probe,
+                    Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
+                    _passwordService.Passwords,
+                    Settings.TryEmptyPasswordFirst,
+                    Settings.EnableSidecarPassword)
+                .Select(p => p.Value ?? string.Empty)
+                .ToList();
+        }
+
+        /// <summary>
+        /// 递归解压一个任务，并把结果落到任务状态上。
+        /// 多分支时**必须问用户**（不变量 8），问完只处理用户确认的那批候选。
+        /// </summary>
+        private async Task RunRecursiveAsync(ArchiveTask task, string outputPath, CancellationToken cancellationToken)
+        {
+            RecursionMode mode = string.Equals(Settings.RecursionMode, "AllBranches", StringComparison.OrdinalIgnoreCase)
+                ? RecursionMode.AllBranches
+                : RecursionMode.SingleChain;
+
+            var limits = new RecursionLimits
+            {
+                MaxDepth = Math.Max(1, Settings.MaxRecursionDepth)
+            };
+
+            task.Status = StatusText.Extracting;
+            task.ProgressText = StatusText.ProgressProcessing;
+            task.LastUpdatedTime = DateTime.Now;
+
+            AppendLog("INFO", $"{task.FileName}：开始递归解压（模式 {mode}，最大 {limits.MaxDepth} 层）。");
+
+            RecursionResult result = await _recursiveExtractor.ExtractAsync(
+                task, outputPath, mode, previousDecision: null, cancellationToken);
+
+            if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
+            {
+                bool expandAll = _dialogService.ShowConfirm(
+                    result.Decision.Prompt + Environment.NewLine + Environment.NewLine +
+                    "选“确定”：把这些内层归档也解开。选“取消”：只保留当前这一层的结果。");
+
+                if (expandAll)
+                {
+                    result = await _recursiveExtractor.ExtractAsync(
+                        task, outputPath, mode, result.Decision, cancellationToken);
+                }
+                else
+                {
+                    /*
+                     * 用户只想保留当前这一层。
+                     *
+                     * 这里**不能**就这样返回 NeedsDecision：那会让用户以为"东西已经解到输出目录了"，
+                     * 而按不变量 12，需要决定时产物还留在工作区里 —— 文案与实现不符等于骗人。
+                     *
+                     * 做法：把已经解好的第 0 层产物从工作区搬到输出目录，并把它当成 Completed 继续走
+                     * "校验 → 归集 → 清理"。不重新解压一遍：大包重解代价太大，而产物本来就在工作区里。
+                     */
+                    string? layerZeroOutput = result.Layers
+                        .FirstOrDefault(l => l.Depth == 0 && l.Success)?.OutputPath;
+
+                    if (!string.IsNullOrWhiteSpace(layerZeroOutput) && Directory.Exists(layerZeroOutput))
+                    {
+                        int moved = MoveDirectoryContent(layerZeroOutput, outputPath);
+
+                        result = new RecursionResult
+                        {
+                            StopReason = RecursionStopReason.Completed,
+                            Completed = true,
+                            PartiallyCompleted = false,
+                            Layers = result.Layers,
+                            FinalOutputPath = outputPath,
+                            Summary = $"按你的选择只解开了当前这一层，已输出 {moved} 个文件。"
+                        };
+                    }
+                    else
+                    {
+                        // 第 0 层本身就没成功：保持原结论（部分完成），让它如实报告。
+                        AppendLog("WARN", $"{task.FileName}：当前这一层没有可用产物，保留原结论。");
+                    }
+                }
+            }
+
+            ApplyRecursionResult(task, result);
+        }
+
+        /// <summary>
+        /// 把递归结论翻译成任务状态。
+        /// 规则：完成 = 成功；部分完成 = **绝不显示成功**；需要用户决定 = 等用户；
+        /// 其余（上限 / 密码 / 损坏 / 取消）都要说清停在哪一层、为什么。
+        /// </summary>
+        private void ApplyRecursionResult(ArchiveTask task, RecursionResult result)
+        {
+            foreach (RecursionLayerReport layer in result.Layers)
+            {
+                AppendLog(
+                    layer.Success ? "INFO" : "WARN",
+                    $"  ├ 第 {layer.Depth} 层：{Path.GetFileName(layer.ArchivePath)} → {layer.Status}" +
+                    (string.IsNullOrWhiteSpace(layer.Message) ? string.Empty : $"，{layer.Message}"));
+            }
+
+            task.ErrorMessage = result.Summary;
+
+            switch (result.StopReason)
+            {
+                case RecursionStopReason.Completed:
+                    task.Status = StatusText.ExtractSuccess;
+                    task.ProgressText = StatusText.ProgressCompleted;
+                    break;
+
+                case RecursionStopReason.NeedsDecision:
+                    task.Status = StatusText.PartiallyCompleted;
+                    task.ProgressText = StatusText.ProgressCompleted;
+                    break;
+
+                case RecursionStopReason.UserCancelled:
+                    task.Status = StatusText.Cancelled;
+                    task.ProgressText = StatusText.Cancelled;
+                    break;
+
+                default:
+                    task.Status = StatusText.PartiallyCompleted;
+                    task.ProgressText = StatusText.ProgressFailed;
+                    break;
+            }
+
+            task.LastUpdatedTime = DateTime.Now;
+
+            AppendLog(result.Completed ? "INFO" : "WARN", $"{task.FileName}：{result.Summary}");
+
+            // 递归产物同样要走"校验 → 归集 → 可选清理"；这里传 recursive=true，
+            // 因为外层归档的条目数和最终产物根本不是一回事，不能拿它当预期值。
+            if (result.Completed)
+            {
+                task.OutputPath = string.IsNullOrWhiteSpace(result.FinalOutputPath) ? task.OutputPath : result.FinalOutputPath;
+            }
+        }
+
+        /// <summary>
+        /// 把目录内容（保持子目录结构）移动到目标目录，同名自动改名**绝不覆盖**，返回移动的文件数。
+        /// 只在"用户选择只保留当前一层"这条路径上用。
+        /// </summary>
+        private static int MoveDirectoryContent(string sourceDirectory, string targetDirectory)
+        {
+            int moved = 0;
+
+            SafePathHelper.EnsureDirectoryExists(targetDirectory);
+
+            foreach (string file in Directory.EnumerateFiles(sourceDirectory, "*", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    string relative = Path.GetRelativePath(sourceDirectory, file);
+                    string destination = Path.Combine(targetDirectory, relative);
+
+                    SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(destination) ?? targetDirectory);
+
+                    if (File.Exists(destination))
+                    {
+                        destination = SafePathHelper.AutoRenameFilePath(destination);
+                    }
+
+                    File.Move(file, destination);
+                    moved++;
+                }
+                catch
+                {
+                    // 单个文件搬不动不该让整件事失败：日志里已经能看出解压本身是成功的。
+                }
+            }
+
+            return moved;
+        }
+
         private async Task PostProcessSuccessAsync(ArchiveTask task, string password, CancellationToken cancellationToken)
         {
             // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
@@ -82,6 +272,30 @@ namespace ArchiveFixer.ViewModels
                         AppendLog("ERROR", $"{task.FileName}：产物落点异常 —— {landReason}");
                     }
                 }
+            }
+
+            /*
+             * 运行时预算的事后判定。
+             *
+             * 7z 写盘的时候我们拦不住（外部进程，我们看不到它的写入），所以"超限就停"只能在事后做：
+             * 量一遍产物，超了就**停止后续任务**并把这一单标出来 —— 至少不会让整盘被一个包吃掉。
+             * 这条只在引擎给不出清单时才真正有意义，但事后量一遍很便宜，就一直做。
+             */
+            (int producedFiles, long producedSize) = OutputVerifier.Measure(task.OutputPath);
+            ResourceBudgetOptions budgetLimits = ResourceBudgetOptions.Default;
+
+            if (producedSize > budgetLimits.MaxTotalSize || producedFiles > budgetLimits.MaxFileCount)
+            {
+                task.Status = StatusText.ExtractFailed;
+                task.ErrorMessage =
+                    $"解压产物超出资源预算：{producedFiles} 个文件 / {producedSize} 字节" +
+                    $"（上限 {budgetLimits.MaxFileCount} 个 / {budgetLimits.MaxTotalSize} 字节）。已停止后续任务。";
+
+                AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+
+                // 不发布、不清理：产物留在原地让用户自己判断，源文件更不能删。
+                StopAfterCurrent();
+                return;
             }
 
             task.IsOutputVerified = verification.Verified;
@@ -471,6 +685,17 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog("WARN", $"{task.FileName}：资源预算提示 —— {budget.Reason}");
                 }
+            }
+
+            /*
+             * 递归模式（M4）：不是"只解当前层"时，整条解压交给 RecursiveExtractor。
+             * 它自己会解第 0 层、探测内层、按模式决定继续还是问用户，并受硬上限约束。
+             * 放在预检之后：预检已经把 outputPath 算好，而且非归档 / 格式未知在前面已经分流走了。
+             */
+            if (!string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase))
+            {
+                await RunRecursiveAsync(task, outputPath, cancellationToken);
+                return;
             }
 
             ArchiveOperationResult? lastResult = null;

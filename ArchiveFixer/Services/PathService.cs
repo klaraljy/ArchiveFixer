@@ -36,6 +36,13 @@ namespace ArchiveFixer.Services
         public string TempDirectory => Path.Combine(AppDataDirectory, "temp");
 
         /// <summary>
+        /// 递归解压的工作区根目录。
+        /// 中间产物放这里，避免直接写用户的最终目录（AGENTS.md §6 第 12 条、设计.md §十三）。
+        /// 放在 %AppData% 而不是源目录旁边：源目录可能只读、可能是别人的共享、也可能是 U 盘。
+        /// </summary>
+        public string WorkDirectory => Path.Combine(AppDataDirectory, "work");
+
+        /// <summary>
         /// 7-Zip 工具目录。
         /// </summary>
         public string SevenZipDirectory => ToolLocator.Default.BundledDirectory;
@@ -140,6 +147,8 @@ namespace ArchiveFixer.Services
         {
             SafePathHelper.EnsureDirectoryExists(LogsDirectory);
             SafePathHelper.EnsureDirectoryExists(TempDirectory);
+            SafePathHelper.EnsureDirectoryExists(WorkDirectory);
+            SafePathHelper.EnsureDirectoryExists(WorkDirectory);
             SafePathHelper.EnsureDirectoryExists(SevenZipDirectory);
         }
 

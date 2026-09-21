@@ -116,6 +116,8 @@ namespace ArchiveFixer.Converters
                 StatusText.TargetExists or
                 StatusText.WillAutoRename or
                 StatusText.PasswordNeed or
+                // 部分完成是"要人看一眼"的状态：不是失败（东西解出来了一些），也绝不是成功。
+                StatusText.PartiallyCompleted or
                 "WARN";
         }
 

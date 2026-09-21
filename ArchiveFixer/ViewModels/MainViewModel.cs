@@ -1,4 +1,5 @@
 using ArchiveFixer.Engines;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
@@ -331,6 +332,9 @@ private void ApplyEngineSettings()
         public ICommand SelectOutputDirectoryCommand { get; }
         public ICommand OpenLogDirectoryCommand { get; }
 
+        /// <summary>打开递归解压的工作区目录（中断后残留的中间产物在这里）。</summary>
+        public ICommand OpenWorkDirectoryCommand { get; }
+
         public ICommand RemoveTaskCommand { get; }
         public ICommand RescanTaskCommand { get; }
         public ICommand CopyTaskInfoCommand { get; }
@@ -419,6 +423,7 @@ private void ApplyEngineSettings()
             OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory, CanRunNormalCommand);
             OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
+            OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
 
 
             RemoveTaskCommand = new RelayCommand(RemoveTask);
@@ -462,6 +467,8 @@ private void ApplyEngineSettings()
                 AppendLog("WARN", "未找到 tools\\7zip\\7z.dll，请确认 7-Zip 命令行文件完整。");
             }
 
+            LogLeftoverWorkspaces();
+
             UpdateSummary();
         }
 
@@ -471,6 +478,39 @@ private void ApplyEngineSettings()
         public Task AddPathsAsync(IEnumerable<string> paths)
         {
             return _scanCoordinator.AddPathsAsync(paths);
+        }
+
+        /// <summary>
+        /// 启动时报告上次没做完的工作区。
+        ///
+        /// 递归解压被中断或取消时，产物会留在工作区（刻意不发布、不清理，见不变量 12）。
+        /// 启动时不提醒一句，用户永远不会知道这些东西还在占磁盘。
+        /// 这里只报告，**不自动删**：删工作区必须先经用户确认（不变量 13）。
+        /// </summary>
+        private void LogLeftoverWorkspaces()
+        {
+            try
+            {
+                string workRoot = _pathService.WorkDirectory;
+
+                if (!Directory.Exists(workRoot))
+                {
+                    return;
+                }
+
+                string[] leftovers = Directory.GetDirectories(workRoot);
+
+                if (leftovers.Length == 0)
+                {
+                    return;
+                }
+
+                AppendLog("WARN", $"发现 {leftovers.Length} 个未完成的工作区（上次中断或取消留下的），位置：{workRoot}");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "检查工作区失败：" + ex.Message);
+            }
         }
 
         private bool CanRunNormalCommand()
@@ -498,6 +538,8 @@ private void ApplyEngineSettings()
             }
 
             Tasks.Clear();
+            LogLeftoverWorkspaces();
+
             UpdateSummary();
             AppendLog("INFO", "已清空任务列表");
         }
@@ -512,6 +554,8 @@ private void ApplyEngineSettings()
             }
 
             RebuildTaskIndex();
+            LogLeftoverWorkspaces();
+
             UpdateSummary();
             AppendLog("INFO", $"已移除选中任务 {selected.Count} 个");
         }
@@ -621,7 +665,9 @@ private void ApplyEngineSettings()
                     _settingsService.Save(Settings);
 
                     RefreshOutputPaths();
-                    UpdateSummary();
+                    LogLeftoverWorkspaces();
+
+            UpdateSummary();
 
                     AppendLog("INFO", "设置已保存");
                 }
@@ -752,6 +798,19 @@ private void ApplyEngineSettings()
             _pathService.OpenDirectory(directory);
         }
 
+        private void OpenWorkDirectory()
+        {
+            try
+            {
+                SafePathHelper.EnsureDirectoryExists(_pathService.WorkDirectory);
+                _pathService.OpenDirectory(_pathService.WorkDirectory);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", "打开工作区目录失败：" + ex.Message);
+            }
+        }
+
         private void OpenLogDirectory()
         {
             try
@@ -817,6 +876,8 @@ private void ApplyEngineSettings()
 
             Tasks.Remove(task);
             RebuildTaskIndex();
+            LogLeftoverWorkspaces();
+
             UpdateSummary();
         }
 
