@@ -1,4 +1,5 @@
 using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using System;
@@ -43,6 +44,65 @@ namespace ArchiveFixer.ViewModels
         }
 
         private AppSettings Settings => _vm.Settings;
+
+        /// <summary>
+        /// 解压成功之后的收尾：校验落盘结果 → 归集 → 视开关清理源包（M3）。
+        ///
+        /// 顺序不能换：
+        /// 1. 先校验 —— 没有校验就没有"删除源包"的资格（AGENTS.md §9.5）；
+        /// 2. 再归集 —— 归集是移动；先归集再校验会算不准（文件已经不在原输出目录）；
+        /// 3. 最后清理源包 —— 它依赖前两步的结论。
+        ///
+        /// 任何一步失败都**不改变**"解压成功"这个结论，只是把结论写进日志与任务字段；
+        /// 不要因为归集或清理失败就把任务标成失败 —— 用户的文件确实解出来了。
+        /// </summary>
+        private async Task PostProcessSuccessAsync(ArchiveTask task, string password, CancellationToken cancellationToken)
+        {
+            // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
+            ArchiveListResult expected = await _archiveEngine.ListAsync(
+                ArchiveRequest.For(task.CurrentPath, password),
+                cancellationToken);
+
+            OutputVerificationResult verification = OutputVerifier.Verify(
+                task.OutputPath,
+                expected.Success ? expected : null);
+
+            task.IsOutputVerified = verification.Verified;
+            task.VerifyMessage = verification.Message;
+
+            AppendLog(verification.Verified ? "INFO" : "WARN", $"{task.FileName}：结果校验 —— {verification.Message}");
+
+            // 2) 归集（可选）
+            if (Settings.CollectResultsToDirectory)
+            {
+                if (!verification.Verified)
+                {
+                    AppendLog("WARN", $"{task.FileName}：校验未通过，已跳过结果归集。");
+                }
+                else
+                {
+                    CollectResult collected = new ResultCollector().Collect(task, Settings.CollectTargetDirectory);
+
+                    AppendLog(collected.Success ? "INFO" : "WARN", $"{task.FileName}：结果归集 —— {collected.Message}");
+
+                    if (collected.Success)
+                    {
+                        task.CollectedPath = collected.DestinationPath;
+                    }
+                }
+            }
+
+            // 3) 清理源包（默认关闭；未通过校验时服务内部会拒绝执行）
+            SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
+                task,
+                verification,
+                Settings.DeleteSourceAfterExtract);
+
+            if (cleanup.Attempted)
+            {
+                AppendLog(cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：清理源包 —— {cleanup.Message}");
+            }
+        }
         private string GlobalPassword => _vm.GlobalPassword;
         private string SelectedOutputDirectory => _vm.SelectedOutputDirectory;
         private ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
@@ -486,6 +546,8 @@ namespace ArchiveFixer.ViewModels
 
                     _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
+                    await PostProcessSuccessAsync(task, selectedPassword, cancellationToken);
+
 
 
                     AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
@@ -563,6 +625,8 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = string.Empty;
 
                         _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
+
+                    await PostProcessSuccessAsync(task, selectedPassword, cancellationToken);
 
 
 

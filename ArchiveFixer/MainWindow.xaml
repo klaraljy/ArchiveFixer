@@ -207,6 +207,12 @@
                                 Height="26"
                                 Command="{Binding CopyFailedListCommand}" />
 
+                        <Button Content="导出失败清单"
+                                Height="26"
+                                Margin="8,0,0,0"
+                                ToolTip="把失败任务与原因导出成 txt，便于逐条处理或留档"
+                                Command="{Binding ExportFailedListCommand}" />
+
                         <Button Content="打开输出目录"
                                 Height="26"
                                 Command="{Binding OpenOutputDirectoryCommand}" />

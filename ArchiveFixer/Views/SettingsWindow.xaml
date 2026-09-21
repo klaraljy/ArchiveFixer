@@ -229,6 +229,44 @@
                                     Command="{Binding SelectOutputDirectoryCommand}" />
 						</Grid>
 
+						<!-- M3：结果归集。把每个包的产物移动到一个统一目录，方便一次性整理走。 -->
+						<CheckBox Content="把解压结果归集到统一目录"
+                                  IsChecked="{Binding Settings.CollectResultsToDirectory, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<Grid Margin="0,0,0,8">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+								<ColumnDefinition Width="Auto" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="归集目标目录："
+                                       VerticalAlignment="Center" />
+
+							<TextBox Grid.Column="1"
+                                     Text="{Binding Settings.CollectTargetDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Height="28"
+                                     VerticalContentAlignment="Center" />
+
+							<Button Grid.Column="2"
+                                    Content="选择"
+                                    Width="70"
+                                    Margin="8,0,0,0"
+                                    Command="{Binding SelectCollectTargetDirectoryCommand}" />
+						</Grid>
+
+						<!-- M3：清理源包。不可逆操作，因此默认关闭，并且只有"解压成功 + 校验通过"才删。 -->
+						<CheckBox Content="解压成功且校验通过后删除源压缩包／源分卷"
+                                  IsChecked="{Binding Settings.DeleteSourceAfterExtract, Mode=TwoWay}"
+                                  Margin="0,0,0,4" />
+
+						<TextBlock Text="⚠ 删除不可逆：校验不通过、被取消、只完成一部分时一律不删。默认关闭。"
+                                   Foreground="#B25E00"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="24,0,0,8" />
+
 						<Grid Margin="0,0,0,8">
 							<Grid.ColumnDefinitions>
 								<ColumnDefinition Width="130" />
@@ -287,7 +325,19 @@
                                   Margin="0,0,0,8" />
 
 						<CheckBox Content="对所有任务使用统一密码"
-                                  IsChecked="{Binding Settings.UseGlobalPasswordForAllTasks, Mode=TwoWay}" />
+                                  IsChecked="{Binding Settings.UseGlobalPasswordForAllTasks, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<!-- M2：旁路说明文件。这是"猜"出来的候选，默认关闭（AGENTS.md §9.4）。 -->
+						<CheckBox Content="从压缩包同目录的说明文件里提取密码候选（.txt/.bat 等）"
+                                  IsChecked="{Binding Settings.EnableSidecarPassword, Mode=TwoWay}"
+                                  Margin="0,0,0,4" />
+
+						<TextBlock Text="开启后会把同目录说明文件里像密码的内容当作候选；候选排在用户明确给的密码之后。默认关闭。"
+                                   Foreground="#777777"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="24,0,0,0" />
 					</StackPanel>
 				</GroupBox>
 
@@ -309,7 +359,25 @@
                           Background="White">
 					<StackPanel>
 						<CheckBox Content="记住上次输出目录"
-                                  IsChecked="{Binding Settings.RememberLastOutputDirectory, Mode=TwoWay}" />
+                                  IsChecked="{Binding Settings.RememberLastOutputDirectory, Mode=TwoWay}"
+                                  Margin="0,0,0,8" />
+
+						<!-- 7z.exe 路径只有这一个入口，程序不再猜 D:\7-Zip（AGENTS.md §3.1）。 -->
+						<Grid Margin="0,0,0,8">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="7z.exe 路径："
+                                       VerticalAlignment="Center" />
+
+							<TextBox Grid.Column="1"
+                                     Text="{Binding Settings.CustomSevenZipExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Height="28"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="留空表示使用程序目录下的 tools\7zip\7z.exe" />
+						</Grid>
 
 						<TextBlock Text="安全提示：默认不覆盖用户文件，Unknown 默认跳过，改名前应显示预览。"
                                    Margin="0,8,0,0"

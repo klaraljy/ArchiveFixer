@@ -332,6 +332,18 @@ namespace ArchiveFixer.Models
         public string VolumeInfoText { get; set; } = string.Empty;
 
         /// <summary>
+        /// 解压后的落盘结果是否通过校验（条目数 / 总大小）。
+        /// **清理源包必须以此为前置条件**：没校验通过就不许删（AGENTS.md §9.5）。
+        /// </summary>
+        public bool IsOutputVerified { get; set; }
+
+        /// <summary>校验结论的一句话说明。</summary>
+        public string VerifyMessage { get; set; } = string.Empty;
+
+        /// <summary>结果归集后的最终位置（没有归集时为空，表示还是 OutputPath）。</summary>
+        public string CollectedPath { get; set; } = string.Empty;
+
+        /// <summary>
         /// 创建任务。
         /// </summary>
         public ArchiveTask()

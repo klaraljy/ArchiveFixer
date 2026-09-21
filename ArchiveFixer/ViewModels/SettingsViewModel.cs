@@ -42,6 +42,9 @@ namespace ArchiveFixer.ViewModels
         public ICommand ResetDefaultCommand { get; }
         public ICommand SelectOutputDirectoryCommand { get; }
 
+        /// <summary>选择"结果归集"的目标目录（M3）。</summary>
+        public ICommand SelectCollectTargetDirectoryCommand { get; }
+
         public SettingsViewModel()
             : this(new AppSettings(), new SettingsService())
         {
@@ -57,6 +60,7 @@ namespace ArchiveFixer.ViewModels
             CancelCommand = new RelayCommand(Cancel);
             ResetDefaultCommand = new RelayCommand(ResetDefault);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory);
+            SelectCollectTargetDirectoryCommand = new RelayCommand(SelectCollectTargetDirectory);
 
             Message = "设置已加载。";
         }
@@ -111,8 +115,35 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private static AppSettings CloneSettings(AppSettings source)
+        /// <summary>
+        /// 选择结果归集的目标目录。
+        /// 这里**不**动"解压到压缩包所在目录"开关 —— 归集是解压之后的一步，
+        /// 和"解压到哪里"是两件事，顺手改掉会让用户莫名其妙地换了输出位置。
+        /// </summary>
+        private void SelectCollectTargetDirectory()
         {
+            try
+            {
+                string folder = _dialogService.ShowFolderBrowserDialog();
+
+                if (string.IsNullOrWhiteSpace(folder))
+                {
+                    Message = "已取消选择归集目录。";
+                    return;
+                }
+
+                Settings.CollectTargetDirectory = folder;
+
+                OnPropertyChanged(nameof(Settings));
+                Message = "已选择归集目标目录。";
+            }
+            catch (Exception ex)
+            {
+                Message = "选择归集目录失败：" + ex.Message;
+            }
+        }
+
+        private static AppSettings CloneSettings(AppSettings source)        {
             string json = JsonSerializer.Serialize(source);
             AppSettings? cloned = JsonSerializer.Deserialize<AppSettings>(json);
 

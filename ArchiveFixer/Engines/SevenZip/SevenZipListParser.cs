@@ -116,8 +116,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 return;
             }
 
-            bool isDirectory = block.TryGetValue("Folder", out string? folder)
-                && string.Equals(folder, "+", StringComparison.Ordinal);
+            bool isDirectory = IsDirectoryBlock(block);
 
             bool encrypted = IsEncryptedBlock(block);
 
@@ -156,6 +155,34 @@ namespace ArchiveFixer.Engines.SevenZip
         {
             return block.TryGetValue("Encrypted", out string? value)
                 && string.Equals(value, "+", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 判断一个条目是不是目录。
+        ///
+        /// 为什么要看两处：<c>7z l -slt</c> 的目录条目在不同格式下长得不一样 ——
+        /// - ZIP / RAR 会给 <c>Folder = +</c>
+        /// - **7z 自己的格式没有 Folder 键**，只有 <c>Attributes = D</c>
+        /// 早先只认 <c>Folder = +</c>，结果 7z 包里的目录被当成文件计数，
+        /// 导致"解压后校验"的预期文件数比实际多一个 —— 而那是**清理源包的前置条件**，
+        /// 数错的直接后果是该删的不删（或反过来误判通过）。
+        /// </summary>
+        private static bool IsDirectoryBlock(Dictionary<string, string> block)
+        {
+            if (block.TryGetValue("Folder", out string? folder)
+                && string.Equals(folder, "+", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (block.TryGetValue("Attributes", out string? attributes)
+                && !string.IsNullOrEmpty(attributes)
+                && (attributes[0] == 'D' || attributes[0] == 'd'))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private static bool IsAesMethod(Dictionary<string, string> block)

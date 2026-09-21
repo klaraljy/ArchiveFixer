@@ -1,6 +1,7 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
+using ArchiveFixer.Password;
 using ArchiveFixer.Services;
 using ArchiveFixer.Views;
 using System;
@@ -8,6 +9,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Text;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -322,6 +324,9 @@ private void ApplyEngineSettings()
         public ICommand OpenPasswordListCommand { get; }
         public ICommand ExportLogCommand { get; }
         public ICommand CopyFailedListCommand { get; }
+
+        /// <summary>把失败清单导出成 txt（M3：能说清每个失败为什么失败，且能带走）。</summary>
+        public ICommand ExportFailedListCommand { get; }
         public ICommand OpenOutputDirectoryCommand { get; }
         public ICommand SelectOutputDirectoryCommand { get; }
         public ICommand OpenLogDirectoryCommand { get; }
@@ -410,6 +415,7 @@ private void ApplyEngineSettings()
             OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
             ExportLogCommand = new RelayCommand(ExportLog);
             CopyFailedListCommand = new RelayCommand(CopyFailedList);
+            ExportFailedListCommand = new RelayCommand(ExportFailedList);
             OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory, CanRunNormalCommand);
             OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
@@ -683,6 +689,42 @@ private void ApplyEngineSettings()
             catch (Exception ex)
             {
                 _dialogService.ShowError("导出日志失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 导出失败清单。
+        /// 不弹两个窗口：没选路径就什么都不做（用户取消不该被当成错误）。
+        /// </summary>
+        private void ExportFailedList()
+        {
+            try
+            {
+                string path = _dialogService.ShowSaveFileDialog(
+                    "导出失败清单",
+                    "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
+                    "ArchiveFixer-失败清单.txt");
+
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    return;
+                }
+
+                string text = _taskSummaryService.BuildFailedListText(Tasks);
+
+                // 清单里不能有明文密码：服务层已经做过脱敏，这里再兜一道，避免以后有人改坏。
+                File.WriteAllText(path, PasswordMasker.Sanitize(text), new UTF8Encoding(false));
+
+                AppendLog("INFO", $"失败清单已导出：{path}");
+                _dialogService.ShowInfo("失败清单已导出："
+
+
+                    + Environment.NewLine + path);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", "导出失败清单失败：" + ex.Message);
+                _dialogService.ShowException(ex, "导出失败清单失败");
             }
         }
 
