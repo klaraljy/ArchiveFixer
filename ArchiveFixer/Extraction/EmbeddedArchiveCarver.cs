@@ -1,6 +1,7 @@
 using ArchiveFixer.Helpers;
 using System;
 using System.IO;
+using System.Threading;
 
 namespace ArchiveFixer.Extraction
 {
@@ -48,7 +49,7 @@ namespace ArchiveFixer.Extraction
         /// 异常一律吞成失败结果（不抛）：调用方在解压管线上，需要的是"这一单失败了、原因是什么"，
         /// 而不是一个把整批任务带下水的异常。
         /// </summary>
-        public static CarveResult Carve(string sourcePath, long offset, string targetPath)
+        public static CarveResult Carve(string sourcePath, long offset, string targetPath, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
         {
             string finalPath = targetPath ?? string.Empty;
 
@@ -87,7 +88,7 @@ namespace ArchiveFixer.Extraction
 
                 finalPath = File.Exists(targetPath) ? SafePathHelper.AutoRenameFilePath(targetPath) : targetPath;
 
-                long written = CopyRange(sourcePath, offset, finalPath);
+                long written = CopyRange(sourcePath, offset, finalPath, progress, cancellationToken);
 
                 return new CarveResult
                 {
@@ -104,7 +105,7 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>顺序流式复制，返回写出的字节数。</summary>
-        private static long CopyRange(string sourcePath, long offset, string targetPath)
+        private static long CopyRange(string sourcePath, long offset, string targetPath, IProgress<int>? progress, CancellationToken cancellationToken)
         {
             /*
              * 源文件用 FileShare.Read（而不是识别时用的 ReadWrite）：
@@ -137,12 +138,23 @@ namespace ArchiveFixer.Extraction
             {
                 byte[] buffer = new byte[CopyBufferSize];
                 long written = 0;
+                long totalBytes = source.Length - offset;
+                long nextReportAt = 16L * 1024 * 1024;
                 int read;
 
                 while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
                 {
+                    // 几百 MB 的拷贝要几十秒，必须能中途取消，否则用户只能强杀进程。
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     target.Write(buffer, 0, read);
                     written += read;
+
+                    if (progress != null && (written >= nextReportAt || written >= totalBytes))
+                    {
+                        nextReportAt = written + (16L * 1024 * 1024);
+                        progress.Report(totalBytes <= 0 ? 0 : (int)(written * 100 / totalBytes));
+                    }
                 }
 
                 return written;

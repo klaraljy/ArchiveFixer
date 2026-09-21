@@ -712,6 +712,18 @@ namespace ArchiveFixer.ViewModels
                  * 表现就是"点了一键处理之后程序卡死、窗口未响应"，只能强杀进程
                  * （实测：780MB 的双面文件拷 763MB，界面全程无响应）。
                  */
+                int lastPercent = -1;
+
+                // 每前进 20% 报一次：够密到能看出在动，又不至于把日志刷爆。
+                var carveProgress = new Progress<int>(percent =>
+                {
+                    if (percent >= lastPercent + 20 || percent >= 100)
+                    {
+                        lastPercent = percent;
+                        AppendLog("INFO", $"{task.FileName}：取出内嵌归档 {percent}%");
+                    }
+                });
+
                 CarveResult carve = await Task.Run(
                     () => EmbeddedArchiveCarver.Carve(
                         task.CurrentPath,
