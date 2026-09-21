@@ -340,6 +340,12 @@ namespace ArchiveFixer.Models
         /// <summary>校验结论的一句话说明。</summary>
         public string VerifyMessage { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 引擎对"这到底是不是能解的容器"下的结论（例如"7-Zip 命令行 26.01 能打开：16 个文件"）。
+        /// 魔数说不认识时，以引擎的结论为准 —— 这也是"结果可追溯"的一部分（不变量 14）。
+        /// </summary>
+        public string EngineVerdict { get; set; } = string.Empty;
+
         /// <summary>结果归集后的最终位置（没有归集时为空，表示还是 OutputPath）。</summary>
         public string CollectedPath { get; set; } = string.Empty;
 

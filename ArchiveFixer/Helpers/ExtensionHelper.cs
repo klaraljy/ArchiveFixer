@@ -58,14 +58,59 @@ namespace ArchiveFixer.Helpers
                 ".wav",
                 ".txt",
                 ".doc",
-                ".docx",
+                // .docx / .xlsx / .pptx 已从伪装表移除：它们本身就是 ZIP 容器（Office Open XML），
+                // 把"文件是 ZIP"当成伪装属于误报 —— 一份正常 Word 文档会被判成"疑似伪装"。
                 ".xls",
-                ".xlsx",
                 ".ppt",
-                ".pptx",
                 ".html",
                 ".htm"
             };
+
+        /// <summary>
+        /// "本身就是 ZIP 容器"的合法扩展名。
+        ///
+        /// 为什么必须单独列一张表：
+        /// 这些格式（APK / JAR / Office Open XML / EPUB / VSIX / NuGet 包…）的内容就是 ZIP，
+        /// 但它们的后缀**本来就是对的**。如果按"检测到 ZIP 但后缀不是 .zip"判成"后缀不匹配"，
+        /// 「智能修正后缀」就会把 `xxx.apk` 改成 `xxx.zip` —— 把安装包变成一个打不开的压缩包。
+        /// 所以它们一律视为"后缀正常"。
+        ///
+        /// 真实踩到：`rar-android-722.132.apk`（Android 版 RAR）被判"后缀不匹配"、建议改成 .zip。
+        /// </summary>
+        public static readonly HashSet<string> ZipContainerExtensions =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ".apk",     // Android 应用包
+                ".aab",     // Android App Bundle
+                ".jar",     // Java 归档
+                ".war",
+                ".ear",
+                ".docx",    // Office Open XML
+                ".docm",
+                ".xlsx",
+                ".xlsm",
+                ".pptx",
+                ".pptm",
+                ".odt",     // OpenDocument
+                ".ods",
+                ".odp",
+                ".epub",    // 电子书
+                ".vsix",    // VS 扩展
+                ".nupkg",   // NuGet 包
+                ".ipa",     // iOS 应用包
+                ".xpi",     // Firefox 扩展
+                ".kmz",     // Google Earth
+                ".cbz"      // 漫画包
+            };
+
+        /// <summary>是不是"本身就是 ZIP 容器"的合法扩展名（后缀不该被改）。</summary>
+        public static bool IsZipContainerExtension(string? extension)
+        {
+            extension = NormalizeExtension(extension);
+
+            return !string.IsNullOrWhiteSpace(extension)
+                   && ZipContainerExtensions.Contains(extension);
+        }
 
         /// <summary>
         /// 判断是否是常见压缩包后缀。

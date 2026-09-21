@@ -531,12 +531,37 @@ namespace ArchiveFixer.ViewModels
                 }
                 else
                 {
-                    task.Status = StatusText.Skipped;
-                    task.Operation = StatusText.OpSkip;
-                    task.ProgressText = StatusText.ProgressCompleted;
-                    task.ErrorMessage = "格式未知，默认跳过";
-                    AppendLog("WARN", $"跳过未知格式：{task.FileName}");
-                    return;
+                    /*
+                     * 魔数说不认识，**不等于"它不是压缩包"** —— 只说明文件头不在我的签名表里。
+                     * 基线里早就写下了正确原则：最终以 7-Zip 的结论为准。
+                     *
+                     * 所以这里让引擎亲自试一次列目录（只对用户勾选的任务做，代价是一次进程调用）：
+                     *   · 列得出来 → 就是能解的容器（自解压安装器、签名表里没有的格式都算），继续处理；
+                     *   · 列不出来 → 才跳过，并把"7-Zip 也打不开"写进原因，而不是含糊的"格式未知"。
+                     */
+                    ArchiveListResult probe = await _archiveEngine.ListAsync(
+                        ArchiveRequest.For(task.CurrentPath, string.Empty),
+                        cancellationToken);
+
+                    if (probe.Success && probe.FileCount > 0)
+                    {
+                        task.IsArchive = true;
+                        task.EngineVerdict = $"{_archiveEngine.DisplayName} {_archiveEngine.Version} 能打开：{probe.FileCount} 个文件";
+
+                        AppendLog("INFO", $"{task.FileName}：文件头不在签名表里，但 7-Zip 能打开（{probe.FileCount} 个文件），继续处理。");
+                    }
+                    else
+                    {
+                        task.Status = StatusText.Skipped;
+                        task.Operation = StatusText.OpSkip;
+                        task.ProgressText = StatusText.ProgressCompleted;
+                        task.ErrorMessage = string.IsNullOrWhiteSpace(probe.Message)
+                            ? "不是压缩包：7-Zip 也打不开"
+                            : $"不是压缩包：7-Zip 打不开（{probe.Message}）";
+
+                        AppendLog("WARN", $"跳过：{task.FileName} —— {task.ErrorMessage}");
+                        return;
+                    }
                 }
             }
 

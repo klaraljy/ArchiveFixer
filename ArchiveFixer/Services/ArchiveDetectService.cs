@@ -174,6 +174,17 @@ namespace ArchiveFixer.Services
 
             currentExtension = ExtensionHelper.NormalizeExtension(currentExtension);
 
+            /*
+             * 本身就是 ZIP 容器的合法后缀（.apk / .jar / .docx / .xlsx / .epub …）：
+             * 内容是 ZIP，但后缀本来就是对的 —— 不许判成"后缀不匹配"。
+             * 否则「智能修正后缀」会把 xxx.apk 改成 xxx.zip，把安装包变成打不开的压缩包。
+             */
+            if (IsZipFamilyFormat(result.Format) &&
+                ExtensionHelper.IsZipContainerExtension(currentExtension))
+            {
+                return StatusText.ExtensionNormal;
+            }
+
             if (string.Equals(
                     currentExtension,
                     suggestedExtension,
@@ -188,6 +199,12 @@ namespace ArchiveFixer.Services
             }
 
             return StatusText.ExtensionMismatch;
+        }
+
+        /// <summary>ZIP 家族（含空 ZIP 与分卷 ZIP）—— 它们的容器都是 ZIP 结构。</summary>
+        private static bool IsZipFamilyFormat(string? format)
+        {
+            return format is "ZIP" or "ZIP_EMPTY" or "ZIP_SPANNED";
         }
 
         /// <summary>

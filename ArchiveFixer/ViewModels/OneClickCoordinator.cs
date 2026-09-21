@@ -55,12 +55,20 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            List<ArchiveTask> selected = Tasks.Where(t => t.IsSelected).ToList();
-            List<ArchiveTask> targets = selected.Count > 0 ? selected : Tasks.ToList();
+            /*
+             * 只处理**勾选**的任务。
+             * 以前是"选了就处理选中的、没选就处理全部"，看起来贴心，实际是灾难：
+             * 用户以为只动自己挑的那几个，结果整列表都被解压；日志里的任务数还会前后对不上。
+             * 明确一点更好：没勾就提示去勾。
+             */
+            List<ArchiveTask> targets = Tasks.Where(t => t.IsSelected).ToList();
 
             if (targets.Count == 0)
             {
-                _dialogService.ShowInfo("任务列表是空的。先把文件或文件夹拖进来，或点“添加文件夹”。");
+                _dialogService.ShowInfo(Tasks.Count == 0
+                    ? "任务列表是空的。先把文件或文件夹拖进来，或点“添加文件夹”。"
+                    : $"请先勾选要处理的任务。{Environment.NewLine}{Environment.NewLine}" +
+                      $"列表里有 {Tasks.Count} 个任务，当前一个都没勾。在列表上按 Ctrl+A 可以全选。");
                 return;
             }
 
@@ -96,7 +104,7 @@ namespace ArchiveFixer.ViewModels
 
                 // 第四步：一行汇总。
                 UpdateSummary();
-                string summary = BuildSummaryLine();
+                string summary = BuildSummaryLine(targets);
                 AppendLog("INFO", summary);
                 _dialogService.ShowInfo(summary);
             }
@@ -138,36 +146,98 @@ namespace ArchiveFixer.ViewModels
                 task.ExtensionStatus == StatusText.ExtensionMultiFake;
         }
 
-        private string BuildSummaryLine()
+        /// <summary>
+        /// 一行汇总。
+        ///
+        /// 硬要求：各分项加起来**必须等于本次处理的任务数**。
+        /// 以前这里统计整个列表，还把"扫描过但从没被处理"的任务算成失败 ——
+        /// 于是出现过 `成功 0 / 失败 1 / 跳过 2（共 4 个任务）`：0+1+2=3≠4，
+        /// 用户根本没法判断到底发生了什么。汇总如果自己都对不上，还不如不显示。
+        /// </summary>
+        private string BuildSummaryLine(IReadOnlyList<ArchiveTask> targets)
         {
-            TaskSummary summary = _vm.Summary;
+            int success = targets.Count(t =>
+                t.Status == StatusText.ExtractSuccess ||
+                t.Status == StatusText.Overwritten);
 
-            var parts = new List<string>
+            int partial = targets.Count(t => t.Status == StatusText.PartiallyCompleted);
+            int cancelled = targets.Count(t => t.Status == StatusText.Cancelled);
+            int skipped = targets.Count(t => t.Status == StatusText.Skipped);
+            int failed = targets.Count(IsFailureStatus);
+
+            // 剩下的就是"既没成功也没失败、也没跳过"的：没轮到它（例如格式未知却没被处理）。
+            int untouched = targets.Count - success - partial - cancelled - skipped - failed;
+
+            var parts = new List<string> { $"成功 {success}", $"失败 {failed}", $"跳过 {skipped}" };
+
+            if (partial > 0)
             {
-                $"成功 {summary.ExtractSuccessCount}",
-                $"失败 {summary.ExtractFailedCount + summary.PasswordErrorCount + summary.CorruptedCount + summary.OtherFailedCount}",
-                $"跳过 {summary.SkippedCount}",
-                $"取消 {summary.CancelledCount}"
-            };
-
-            string line = $"一键处理完成：{string.Join(" / ", parts)}（共 {summary.TotalCount} 个任务）。";
-
-            if (summary.RenameSuccessCount > 0)
-            {
-                line += $" 已修正后缀 {summary.RenameSuccessCount} 个。";
+                parts.Add($"部分完成 {partial}");
             }
 
-            if (summary.PasswordErrorCount > 0)
+            if (cancelled > 0)
             {
-                line += $" 其中密码错误 {summary.PasswordErrorCount} 个：检查密码本是否包含这些包的密码。";
+                parts.Add($"取消 {cancelled}");
             }
 
-            if (summary.CorruptedCount > 0)
+            if (untouched > 0)
             {
-                line += $" 其中文件损坏 {summary.CorruptedCount} 个：这类只能重新下载。";
+                parts.Add($"未处理 {untouched}");
+            }
+
+            string scope = targets.Count == Tasks.Count
+                ? $"本次 {targets.Count} 个任务"
+                : $"本次 {targets.Count} 个 / 列表共 {Tasks.Count} 个";
+
+            string line = $"一键处理完成：{string.Join(" / ", parts)}（{scope}）。";
+
+            int renameSuccess = targets.Count(t => t.Status == StatusText.RenameSuccess);
+
+            if (renameSuccess > 0)
+            {
+                line += $" 已修正后缀 {renameSuccess} 个。";
+            }
+
+            // 跳过必须说清为什么，否则"跳过 2"等于没说
+            int notArchive = targets.Count(t => t.Status == StatusText.Skipped && !t.IsArchive);
+
+            if (notArchive > 0)
+            {
+                line += $" 跳过的 {notArchive} 个已由 7-Zip 确认不是压缩包。";
+            }
+
+            int passwordError = targets.Count(t => t.Status == StatusText.WrongPassword);
+
+            if (passwordError > 0)
+            {
+                line += $" 密码错误 {passwordError} 个：检查密码本里是否包含这些包的密码。";
+            }
+
+            int corrupted = targets.Count(t => t.Status == StatusText.Corrupted);
+
+            if (corrupted > 0)
+            {
+                line += $" 文件损坏 {corrupted} 个：这类只能重新下载。";
             }
 
             return line;
+        }
+
+        /// <summary>真正"处理过并且失败了"的状态。</summary>
+        private static bool IsFailureStatus(ArchiveTask task)
+        {
+            return task.Status is
+                StatusText.ExtractFailed or
+                StatusText.WrongPassword or
+                StatusText.Corrupted or
+                StatusText.AccessDenied or
+                StatusText.OutputConflict or
+                StatusText.VolumeMissing or
+                StatusText.PathTooLong or
+                StatusText.SevenZipMissing or
+                StatusText.UnknownError or
+                StatusText.RenameFailed or
+                StatusText.TestFailed;
         }
     }
 }

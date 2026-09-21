@@ -584,6 +584,20 @@ namespace ArchiveFixer.Services
                 return fileName;
             }
 
+            /*
+             * 后缀本来就正常 → 没有可修正的东西，原样返回。
+             *
+             * 光比"当前后缀 == 建议后缀"是不够的：`xxx.apk` 的内容也是 ZIP，建议后缀是 .zip，
+             * 按那个比法它就会被改成 `xxx.zip` —— 把 Android 安装包变成一个打不开的压缩包。
+             * 同一类还有 .jar / .docx / .xlsx / .pptx / .epub / .vsix / .nupkg …（ExtensionHelper.ZipContainerExtensions）。
+             * 判定统一由 ArchiveDetectService 给（后缀正常 / 分卷后缀 / 不匹配 / …），这里只认结论，不自己再推一遍。
+             */
+            if (task.ExtensionStatus == StatusText.ExtensionNormal ||
+                task.ExtensionStatus == StatusText.ExtensionVolume)
+            {
+                return fileName;
+            }
+
             string suggestedExtension = task.SuggestedExtension;
 
             if (string.IsNullOrWhiteSpace(suggestedExtension))
