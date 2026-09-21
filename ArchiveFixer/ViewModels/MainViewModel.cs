@@ -200,6 +200,8 @@ namespace ArchiveFixer.ViewModels
 
         private AppSettings _settings;
         private string _globalPassword = string.Empty;
+        private string _passwordBookSummary = string.Empty;
+        private string _passwordBookTooltip = string.Empty;
         private bool _showPassword;
         private bool _isBusy;
         private bool _isStopping;
@@ -243,6 +245,9 @@ namespace ArchiveFixer.ViewModels
 
             // 递归工作区也必须跟着走：它动辄几百 MB，不能落到 %TEMP%（C 盘）。
             RecursiveExtractor.ConfiguredWorkspaceRoot = _pathService.WorkDirectory;
+
+            // 密码本侧车文件跟着同一个根走，否则"导入记住了"和"启动读取"会看两个目录。
+            _passwordService.DataRootDirectory = _pathService.DataRootDirectory;
             ToolLocator.Default.Invalidate();
         }
 
@@ -250,6 +255,48 @@ namespace ArchiveFixer.ViewModels
         {
             get => _globalPassword;
             set => SetProperty(ref _globalPassword, value);
+        }
+
+        /// <summary>
+        /// 主界面上"当前密码本"的常驻显示。
+        ///
+        /// 为什么必须有它：用户导入过密码本，但界面上没有任何地方能看出"到底加载了几个密码、来自哪个文件"，
+        /// 于是"导入 → 关掉重开 → 什么都没有"这种感受无从判断真假。
+        /// 这里常驻一行摘要，导入/自动加载/窗口关闭后都会刷新，看一眼就知道生效没有。
+        /// 日志里只写文件名（§8 隐私红线：个人路径不入日志），界面上显示全路径方便核对。
+        /// </summary>
+        public string PasswordBookSummary
+        {
+            get => _passwordBookSummary;
+            set => SetProperty(ref _passwordBookSummary, value ?? string.Empty);
+        }
+
+        public string PasswordBookTooltip
+        {
+            get => _passwordBookTooltip;
+            set => SetProperty(ref _passwordBookTooltip, value ?? string.Empty);
+        }
+
+        /// <summary>把"当前密码本"摘要刷新成 PasswordService 的真实状态（不猜、不缓存）。</summary>
+        public void RefreshPasswordBookSummary()
+        {
+            int count = _passwordService.Passwords.Count;
+            int enabled = _passwordService.Passwords.Count(p => p.IsEnabled);
+            string book = _passwordService.LastImportedBookPath;
+
+            if (count == 0)
+            {
+                PasswordBookSummary = "密码本：未加载（0 条）——点「密码列表管理」或菜单「工具 → 导入密码本...」";
+                PasswordBookTooltip = "空密码仍会按设置尝试；密码本里的密码只存在内存里，不落盘。";
+                return;
+            }
+
+            string name = string.IsNullOrWhiteSpace(book) ? "（手动添加）" : System.IO.Path.GetFileName(book);
+
+            PasswordBookSummary = $"密码本：{name} — {count} 条（启用 {enabled} 条）";
+            PasswordBookTooltip = string.IsNullOrWhiteSpace(book)
+                ? "密码只存在内存里；本文件未记录来源路径。"
+                : book;
         }
 
         public bool ShowPassword
@@ -539,17 +586,22 @@ namespace ArchiveFixer.ViewModels
 
                 if (string.IsNullOrWhiteSpace(path))
                 {
+                    // 从没配过：摘要要如实显示"未加载"，不能让用户以为已经加载过了。
+                    RefreshPasswordBookSummary();
                     return;
                 }
 
                 if (!File.Exists(path))
                 {
-                    AppendLog("WARN", $"上次的密码本找不到了，已跳过自动加载：{path}");
+                    // §8 隐私红线：日志只写文件名，个人路径不入日志。
+                    AppendLog("WARN", $"上次的密码本找不到了，已跳过自动加载：{System.IO.Path.GetFileName(path)}");
+                    RefreshPasswordBookSummary();
                     return;
                 }
 
                 int count = _passwordService.ImportPasswordList(path).Count;
-                AppendLog("INFO", $"已自动加载密码本：{path}（{count} 条）");
+                AppendLog("INFO", $"已自动加载密码本：{System.IO.Path.GetFileName(path)}（{count} 条）");
+                RefreshPasswordBookSummary();
             }
             catch (Exception ex)
             {
@@ -568,6 +620,9 @@ namespace ArchiveFixer.ViewModels
 
                 if (string.IsNullOrWhiteSpace(path))
                 {
+                    // 取消也要留痕：用户点了导入又取消，日志里什么都不写的话，
+                    // 事后完全分不清"没导"和"导了没生效"。
+                    AppendLog("INFO", "已取消导入密码本（没有选择文件）。");
                     return;
                 }
 
@@ -576,8 +631,14 @@ namespace ArchiveFixer.ViewModels
                 Settings.PasswordBookPath = path;
                 _settingsService.Save(Settings);
 
-                AppendLog("INFO", $"已导入密码本：{path}（{count} 条），下次启动会自动加载。");
-                _dialogService.ShowInfo($"已导入 {count} 条密码，并记住了这个文件，下次启动会自动加载。");
+                RefreshPasswordBookSummary();
+
+                string warnings = _passwordService.LastImportWarnings.Count > 0
+                    ? $"{Environment.NewLine}{Environment.NewLine}提示：{string.Join(Environment.NewLine, _passwordService.LastImportWarnings)}"
+                    : string.Empty;
+
+                AppendLog("INFO", $"已导入密码本：{System.IO.Path.GetFileName(path)}（{count} 条），下次启动会自动加载。");
+                _dialogService.ShowInfo($"已导入 {count} 条密码，并记住了这个文件，下次启动会自动加载。{warnings}");
             }
             catch (Exception ex)
             {
@@ -766,7 +827,7 @@ namespace ArchiveFixer.ViewModels
 
                     RefreshOutputPaths();
                     LogLeftoverWorkspaces();
-            AutoLoadPasswordBook();
+                    AutoLoadPasswordBook();
 
                     UpdateSummary();
 
@@ -811,7 +872,18 @@ namespace ArchiveFixer.ViewModels
 
             window.ShowDialog();
 
-            AppendLog("INFO", "密码列表管理窗口已关闭");
+            /*
+             * 关窗口时把结果落到日志和主界面摘要上。
+             * 以前这里只写"窗口已关闭"一句：用户在窗口里导入了密码本、点关闭之后，
+             * 日志和界面都没留下任何痕迹，看起来就像"白导了"。
+             */
+            RefreshPasswordBookSummary();
+
+            string bookName = _passwordService.LastImportedBookPath.Length == 0
+                ? "无"
+                : System.IO.Path.GetFileName(_passwordService.LastImportedBookPath);
+
+            AppendLog("INFO", $"密码列表管理窗口已关闭（当前 {_passwordService.Passwords.Count} 条密码，密码本：{bookName}）。");
         }
 
 

@@ -480,9 +480,14 @@
                             MinWidth="110"
                             Command="{Binding OpenPasswordListCommand}" />
 
+                    <!--
+                        常驻显示"当前密码本加载了几条、来自哪个文件"。
+                        之前界面上完全没有这个信息，用户导入完关掉窗口就无从判断到底生效没有。
+                    -->
                     <TextBlock Grid.Column="5"
-                               Text="日志不会记录明文密码；密码包含空格、中文和特殊符号时会通过 ArgumentList 安全传递。"
-                               Foreground="#777777"
+                               Text="{Binding PasswordBookSummary}"
+                               ToolTip="{Binding PasswordBookTooltip}"
+                               Foreground="#555555"
                                VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis"
                                Margin="8,0,0,0" />

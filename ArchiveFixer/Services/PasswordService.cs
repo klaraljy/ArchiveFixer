@@ -28,6 +28,15 @@ namespace ArchiveFixer.Services
         /// <summary>最后一次成功导入的密码本文件路径（用于记住它、下次启动自动加载）。</summary>
         public string LastImportedBookPath { get; private set; } = string.Empty;
 
+        /// <summary>
+        /// "记住上次导入的密码本"这个侧车文件写在哪个目录。
+        ///
+        /// 必须与 <see cref="PathService.DataRootDirectory"/> 保持一致：
+        /// 之前在导入这边写死 <c>AppContext.BaseDirectory\data</c>，读取那边却看用户配置的缓存根目录，
+        /// 用户一旦把缓存挪到别的盘（本项目要求缓存不能落 C 盘），就会"导入了、下次启动又说没配过"。
+        /// </summary>
+        public string DataRootDirectory { get; set; } = PathService.DefaultDataRootDirectory;
+
         /// <summary>记录某个归档刚刚用哪个密码成功过（只在内存里，不落盘）。</summary>
         public void RecordPasswordSuccess(string? archivePath, string? password)
         {
@@ -214,7 +223,7 @@ namespace ArchiveFixer.Services
              */
             try
             {
-                string dataRoot = Path.Combine(AppContext.BaseDirectory, "data");
+                string dataRoot = DataRootDirectory;
                 Directory.CreateDirectory(dataRoot);
                 File.WriteAllText(Path.Combine(dataRoot, "password-book.path"), txtPath, new UTF8Encoding(false));
             }

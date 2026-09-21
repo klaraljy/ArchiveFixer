@@ -17,7 +17,7 @@ namespace ArchiveFixer.Models
     /// </summary>
     public class ArchiveTask : INotifyPropertyChanged
     {
-                private bool _isSelected = true;
+        private bool _isSelected = true;
         private int _index;
         private string _originalPath = string.Empty;
         private string _currentPath = string.Empty;
