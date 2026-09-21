@@ -7,13 +7,27 @@
         MinWidth="680"
         MinHeight="560"
         WindowStartupLocation="CenterOwner"
-        Background="#F5F5F5">
+        Background="#F5F5F5"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
+
+	<Window.Resources>
+		<!-- 本窗口色板：把原先散落的 #RRGGBB 字面量收敛到一处。 -->
+		<SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
+		<SolidColorBrush x:Key="PanelBorderBrush" Color="#DDDDDD" />
+		<SolidColorBrush x:Key="TextPrimaryBrush" Color="#333333" />
+		<SolidColorBrush x:Key="TextSecondaryBrush" Color="#555555" />
+		<SolidColorBrush x:Key="TextMutedBrush" Color="#666666" />
+		<SolidColorBrush x:Key="TextHintBrush" Color="#777777" />
+		<SolidColorBrush x:Key="WarningTextBrush" Color="#B25E00" />
+	</Window.Resources>
 
 	<DockPanel Margin="10">
 
 		<Border DockPanel.Dock="Top"
-                Background="White"
-                BorderBrush="#DDDDDD"
+                Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource PanelBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="10"
@@ -22,17 +36,17 @@
 				<TextBlock Text="设置"
                            FontSize="18"
                            FontWeight="Bold"
-                           Foreground="#333333" />
+                           Foreground="{StaticResource TextPrimaryBrush}" />
 
 				<TextBlock Text="修改扫描、识别、改名、解压、密码和日志相关选项。点击保存后生效。"
                            Margin="0,4,0,0"
-                           Foreground="#666666" />
+                           Foreground="{StaticResource TextMutedBrush}" />
 			</StackPanel>
 		</Border>
 
 		<Border DockPanel.Dock="Bottom"
-                Background="White"
-                BorderBrush="#DDDDDD"
+                Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource PanelBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="10"
@@ -45,7 +59,7 @@
 
 				<TextBlock Text="{Binding Message}"
                            VerticalAlignment="Center"
-                           Foreground="#555555"
+                           Foreground="{StaticResource TextSecondaryBrush}"
                            TextTrimming="CharacterEllipsis" />
 
 				<StackPanel Grid.Column="1"
@@ -76,7 +90,7 @@
 				<GroupBox Header="扫描设置"
                           Margin="0,0,0,8"
                           Padding="10"
-                          Background="White">
+                          Background="{StaticResource PanelBrush}">
 					<StackPanel>
 						<CheckBox Content="递归扫描文件夹"
                                   IsChecked="{Binding Settings.RecursiveScan, Mode=TwoWay}"
@@ -113,7 +127,7 @@
 				<GroupBox Header="识别设置"
                           Margin="0,0,0,8"
                           Padding="10"
-                          Background="White">
+                          Background="{StaticResource PanelBrush}">
 					<StackPanel>
 						<Grid Margin="0,0,0,8">
 							<Grid.ColumnDefinitions>
@@ -158,7 +172,7 @@
 				<GroupBox Header="后缀修正设置"
                           Margin="0,0,0,8"
                           Padding="10"
-                          Background="White">
+                          Background="{StaticResource PanelBrush}">
 					<StackPanel>
 						<CheckBox Content="改名前显示预览"
                                   IsChecked="{Binding Settings.PreviewBeforeRename, Mode=TwoWay}"
@@ -193,7 +207,7 @@
 				<GroupBox Header="解压设置"
                           Margin="0,0,0,8"
                           Padding="10"
-                          Background="White">
+                          Background="{StaticResource PanelBrush}">
 					<StackPanel>
 						<CheckBox Content="解压到压缩包所在目录"
                                   IsChecked="{Binding Settings.ExtractToOriginalDirectory, Mode=TwoWay}"
@@ -262,7 +276,7 @@
                                   Margin="0,0,0,4" />
 
 						<TextBlock Text="⚠ 删除不可逆：校验不通过、被取消、只完成一部分时一律不删。默认关闭。"
-                                   Foreground="#B25E00"
+                                   Foreground="{StaticResource WarningTextBrush}"
                                    FontSize="11"
                                    TextWrapping="Wrap"
                                    Margin="24,0,0,8" />
@@ -348,7 +362,7 @@
 							<TextBlock Grid.Column="2"
                                        Text="默认建议为 1，串行更稳定。"
                                        Margin="8,0,0,0"
-                                       Foreground="#777777"
+                                       Foreground="{StaticResource TextHintBrush}"
                                        VerticalAlignment="Center" />
 						</Grid>
 					</StackPanel>
@@ -358,7 +372,7 @@
 				<GroupBox Header="密码设置"
                           Margin="0,0,0,8"
                           Padding="10"
-                          Background="White">
+                          Background="{StaticResource PanelBrush}">
 					<StackPanel>
 						<CheckBox Content="优先尝试空密码"
                                   IsChecked="{Binding Settings.TryEmptyPasswordFirst, Mode=TwoWay}"
@@ -374,10 +388,35 @@
                                   Margin="0,0,0,4" />
 
 						<TextBlock Text="开启后会把同目录说明文件里像密码的内容当作候选；候选排在用户明确给的密码之后。默认关闭。"
-                                   Foreground="#777777"
+                                   Foreground="{StaticResource TextHintBrush}"
                                    FontSize="11"
                                    TextWrapping="Wrap"
-                                   Margin="24,0,0,0" />
+                                   Margin="24,0,0,8" />
+
+						<!-- 每层的密码尝试上限（AGENTS.md §9.2）：到上限时状态是「达到密码尝试上限」，不是"密码错误"。 -->
+						<Grid>
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="130" />
+								<ColumnDefinition Width="120" />
+								<ColumnDefinition Width="*" />
+							</Grid.ColumnDefinitions>
+
+							<TextBlock Text="每层密码尝试上限："
+                                       VerticalAlignment="Center" />
+
+							<TextBox Grid.Column="1"
+                                     Text="{Binding Settings.MaxPasswordAttemptsPerLayer, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Height="28"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="1~1000。每个包最多真的试这么多条候选；到上限会明确报「达到密码尝试上限」，不会报成密码错误。" />
+
+							<TextBlock Grid.Column="2"
+                                       Text="默认 10。密码本很长时调大才会试更多，但每个包都会更慢。"
+                                       Margin="8,0,0,0"
+                                       Foreground="{StaticResource TextHintBrush}"
+                                       VerticalAlignment="Center"
+                                       TextWrapping="Wrap" />
+						</Grid>
 					</StackPanel>
 				</GroupBox>
 
@@ -385,7 +424,7 @@
 				<GroupBox Header="日志设置"
                           Margin="0,0,0,8"
                           Padding="10"
-                          Background="White">
+                          Background="{StaticResource PanelBrush}">
 					<StackPanel>
 						<CheckBox Content="启用日志文件"
                                   IsChecked="{Binding Settings.EnableLog, Mode=TwoWay}" />
@@ -396,7 +435,7 @@
 				<GroupBox Header="高级设置"
                           Margin="0,0,0,8"
                           Padding="10"
-                          Background="White">
+                          Background="{StaticResource PanelBrush}">
 					<StackPanel>
 						<CheckBox Content="记住上次输出目录"
                                   IsChecked="{Binding Settings.RememberLastOutputDirectory, Mode=TwoWay}"
@@ -421,7 +460,7 @@
 
 						<TextBlock Text="安全提示：默认不覆盖用户文件，Unknown 默认跳过，改名前应显示预览。"
                                    Margin="0,8,0,0"
-                                   Foreground="#777777" />
+                                   Foreground="{StaticResource TextHintBrush}" />
 					</StackPanel>
 				</GroupBox>
 

@@ -117,28 +117,26 @@ namespace ArchiveFixer.Services
 
                     if (File.Exists(newPath))
                     {
-                        string resolvedPath = ResolveConflict(newPath, options.ConflictAction);
-
-                        if (string.IsNullOrWhiteSpace(resolvedPath))
+                        /*
+                         * 预览期的冲突结论必须和真正执行时的结论一致，否则用户看到的 NewPath
+                         * 与落盘结果会对不上。所以两边共用同一套判定：
+                         * - Skip      → 跳过；
+                         * - Overwrite → 目标保持 NewPath，状态 TargetExists（执行阶段走"先移开再落位"）；
+                         * - 其余（AutoRename / Ask）→ 换成自动改名后的路径。
+                         */
+                        if (string.Equals(options.ConflictAction, "Skip", StringComparison.OrdinalIgnoreCase))
                         {
                             item.MarkSkip("目标文件已存在，已跳过");
                         }
-                        else if (!string.Equals(resolvedPath, newPath, StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(options.ConflictAction, "Overwrite", StringComparison.OrdinalIgnoreCase))
                         {
-                            item.NewPath = resolvedPath;
-                            item.MarkAutoRename("目标文件已存在，将自动重命名");
+                            item.Status = StatusText.TargetExists;
+                            item.ErrorMessage = "确认后将覆盖目标文件（先移开旧文件再落位，中途失败不丢文件）";
                         }
                         else
                         {
-                            if (string.Equals(options.ConflictAction, "Overwrite", StringComparison.OrdinalIgnoreCase))
-                            {
-                                item.Status = StatusText.TargetExists;
-                                item.ErrorMessage = "确认后将覆盖目标文件";
-                            }
-                            else
-                            {
-                                item.MarkConflict("目标文件已存在");
-                            }
+                            item.NewPath = AutoRenamePath(newPath);
+                            item.MarkAutoRename("目标文件已存在，将自动重命名");
                         }
                     }
 
@@ -248,159 +246,453 @@ namespace ArchiveFixer.Services
             List<RenamePreviewItem> itemList = previewItems.ToList();
             List<ArchiveTask> taskList = tasks?.ToList() ?? new List<ArchiveTask>();
 
+            /*
+             * 一次改名请求 = 一个批次，必须先定计划再一起动手。
+             *
+             * 为什么不能"一项一项来"（不变量 3）：名称交换 A.zip ↔ B.zip 天生是两项之间的关系，
+             * 逐项处理时无论谁先动，都会先把对方当成"目标已存在"而删掉它 —— 那正是丢文件的写法。
+             * 只有把整批的落点先算清、一起撤到临时名、再一起落位，交换才可能成立。
+             *
+             * 计划里存的是**源路径 → 最终落点**：执行与结果回填都查它，不会两处各判一次。
+             */
+            RenamePlan plan = RenamePlan.Build(itemList);
+            RenameExecution execution = RenameExecution.Run(plan);
+
             foreach (RenamePreviewItem item in itemList)
             {
-                if (item == null)
+                if (item == null || !plan.ShouldExecute(item))
                 {
                     continue;
                 }
 
-                if (!item.IsSelected)
-                {
-                    continue;
-                }
+                ArchiveTask? matchedTask = FindTaskByPath(taskList, item.OriginalPath);
 
-                if (item.Status == StatusText.RenameCannot || item.Status == StatusText.RenameWillSkip)
-                {
-                    continue;
-                }
+                string sourcePath = item.OriginalPath;
+                string finalPath = plan.GetFinalPath(sourcePath);
+                string failure = execution.GetFailure(sourcePath);
 
-                string oldPath = item.OriginalPath;
-                string newPath = item.NewPath;
-
-                if (string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newPath))
+                if (!string.IsNullOrWhiteSpace(failure) || string.IsNullOrWhiteSpace(finalPath))
                 {
                     item.Status = StatusText.RenameCannot;
-                    item.ErrorMessage = "源路径或目标路径为空";
-                    continue;
-                }
-
-                ArchiveTask? matchedTask = FindTaskByPath(taskList, oldPath);
-
-                bool moveSucceeded = false;
-                string finalPath = newPath;
-
-                try
-                {
-                    item.Status = StatusText.Renaming;
-                    item.ErrorMessage = string.Empty;
-
-                    if (!File.Exists(oldPath))
-                    {
-                        item.Status = StatusText.RenameCannot;
-                        item.ErrorMessage = "源文件不存在";
-                        UpdateTaskRenameFailed(matchedTask, item.ErrorMessage);
-                        continue;
-                    }
-
-                    if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        item.Status = StatusText.RenameWillSkip;
-                        item.ErrorMessage = "新路径与原路径相同";
-                        continue;
-                    }
-
-                    string? targetDirectory = Path.GetDirectoryName(newPath);
-
-                    if (string.IsNullOrWhiteSpace(targetDirectory))
-                    {
-                        item.Status = StatusText.RenameCannot;
-                        item.ErrorMessage = "无法确定目标目录";
-                        UpdateTaskRenameFailed(matchedTask, item.ErrorMessage);
-                        continue;
-                    }
-
-                    if (!Directory.Exists(targetDirectory))
-                    {
-                        item.Status = StatusText.RenameCannot;
-                        item.ErrorMessage = "目标目录不存在";
-                        UpdateTaskRenameFailed(matchedTask, item.ErrorMessage);
-                        continue;
-                    }
-
-                    if (File.Exists(newPath))
-                    {
-                        string conflictAction = item.ConflictAction;
-
-                        if (string.IsNullOrWhiteSpace(conflictAction))
-                        {
-                            conflictAction = "AutoRename";
-                        }
-
-                        if (string.Equals(conflictAction, "Skip", StringComparison.OrdinalIgnoreCase))
-                        {
-                            item.Status = StatusText.RenameWillSkip;
-                            item.ErrorMessage = "目标文件已存在";
-                            UpdateTaskSkipped(matchedTask, item.ErrorMessage);
-                            continue;
-                        }
-
-                        if (string.Equals(conflictAction, "Overwrite", StringComparison.OrdinalIgnoreCase))
-                        {
-                            try
-                            {
-                                await Task.Run(() => File.Delete(newPath));
-                                finalPath = newPath;
-                            }
-                            catch (Exception ex)
-                            {
-                                item.Status = StatusText.RenameCannot;
-                                item.ErrorMessage = "无法覆盖目标文件：" + ex.Message;
-                                UpdateTaskRenameFailed(matchedTask, item.ErrorMessage);
-                                continue;
-                            }
-                        }
-                        else
-                        {
-                            finalPath = await Task.Run(() => AutoRenamePath(newPath));
-                            item.NewPath = finalPath;
-                            item.NewFileName = Path.GetFileName(finalPath);
-                        }
-                    }
-
-                    await Task.Run(() => File.Move(oldPath, finalPath));
-
-                    moveSucceeded = true;
-                    item.Status = StatusText.RenameSuccess;
-                    item.ErrorMessage = string.Empty;
-                }
-                catch (Exception ex)
-                {
-                    if (moveSucceeded || File.Exists(finalPath))
-                    {
-                        item.Status = StatusText.RenameSuccess;
-                        item.ErrorMessage = string.Empty;
-
-                        try
-                        {
-                            UpdateTaskRenameSuccess(matchedTask, finalPath);
-                        }
-                        catch
-                        {
-                            // 文件已经改名成功，不能因为更新任务失败再误报失败。
-                        }
-
-                        continue;
-                    }
-
-                    item.Status = StatusText.RenameCannot;
-                    item.ErrorMessage = "改名失败：" + ex.Message;
+                    item.ErrorMessage = string.IsNullOrWhiteSpace(failure)
+                        ? "改名未执行（目标路径为空）"
+                        : failure;
                     UpdateTaskRenameFailed(matchedTask, item.ErrorMessage);
                     continue;
                 }
 
-                if (moveSucceeded)
+                item.NewPath = finalPath;
+                item.NewFileName = Path.GetFileName(finalPath);
+
+                if (plan.IsSkipped(sourcePath))
+                {
+                    item.Status = StatusText.RenameWillSkip;
+                    item.ErrorMessage = plan.GetSkipReason(sourcePath);
+                    UpdateTaskSkipped(matchedTask, item.ErrorMessage);
+                    continue;
+                }
+
+                item.Status = StatusText.RenameSuccess;
+                item.ErrorMessage = string.Empty;
+
+                try
+                {
+                    UpdateTaskRenameSuccess(matchedTask, finalPath);
+                }
+                catch
+                {
+                    // 这里故意吞掉异常。
+                    // 原因：文件已经改名成功，不能因为 UI/任务对象更新异常再弹“改名失败”。
+                    // 后续重新扫描时会以文件系统真实路径为准。
+                }
+            }
+        }
+
+        /// <summary>
+        /// 一次改名批次的落点计划：谁要动、各自动到哪个路径、谁不用动。
+        /// 只回答"落到哪"，除读一次"目标是否存在"外不碰文件系统。
+        /// </summary>
+        private sealed class RenamePlan
+        {
+            private readonly List<RenamePreviewItem> _items;
+            private readonly Dictionary<string, string> _finalPaths = new(StringComparer.OrdinalIgnoreCase);
+            private readonly Dictionary<string, string> _skipReasons = new(StringComparer.OrdinalIgnoreCase);
+
+            private RenamePlan(List<RenamePreviewItem> items)
+            {
+                _items = items;
+            }
+
+            /// <summary>源路径 → 最终落点。执行阶段与结果回填都查它。</summary>
+            public IReadOnlyDictionary<string, string> FinalPaths => _finalPaths;
+
+            public static RenamePlan Build(List<RenamePreviewItem> items)
+            {
+                var plan = new RenamePlan(items);
+
+                plan.PlanCore();
+
+                return plan;
+            }
+
+            public bool ShouldExecute(RenamePreviewItem? item)
+            {
+                return item != null
+                    && item.IsSelected
+                    && !string.IsNullOrWhiteSpace(item.OriginalPath)
+                    && !string.IsNullOrWhiteSpace(item.NewPath)
+                    && !string.Equals(item.Status, StatusText.RenameCannot, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(item.Status, StatusText.RenameWillSkip, StringComparison.OrdinalIgnoreCase);
+            }
+
+            public string GetFinalPath(string sourcePath) =>
+                _finalPaths.TryGetValue(sourcePath, out string? value) ? value : string.Empty;
+
+            public bool IsSkipped(string sourcePath) => _skipReasons.ContainsKey(sourcePath);
+
+            public string GetSkipReason(string sourcePath) =>
+                _skipReasons.TryGetValue(sourcePath, out string? value) ? value : string.Empty;
+
+            /// <summary>
+            /// 定落点。顺序有意为之：先把"谁要占哪个名字"整批登记完，再逐个看冲突 ——
+            /// 因为 <see cref="File.Exists(string)"/> 问的是磁盘现状，而本批次会先把名字腾出来，
+            /// 只有计划表才知道"这个名字其实马上就是空的"（名称交换就靠它）。
+            /// </summary>
+            private void PlanCore()
+            {
+                foreach (RenamePreviewItem item in _items)
+                {
+                    if (!ShouldExecute(item))
+                    {
+                        continue;
+                    }
+
+                    _finalPaths[item.OriginalPath] = item.NewPath;
+                }
+
+                foreach (KeyValuePair<string, string> pair in _finalPaths.ToList())
+                {
+                    string source = pair.Key;
+                    string destination = pair.Value;
+
+                    // 这个名字上是本批次另一个"要腾出去"的源 → 不是冲突，交给两阶段。
+                    if (_finalPaths.TryGetValue(destination, out string? occupant) &&
+                        !string.Equals(occupant, source, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!File.Exists(destination))
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * 预览期已经判定"目标是别人的文件、且要覆盖"的项：最终落点就是预览给的那个路径，
+                     * 执行时不再问一次文件系统。
+                     *
+                     * 为什么：本批次前面的项可能已经把这个名字腾出来了（名称交换），
+                     * 这时 File.Exists 会说"不存在"，这一项就会退化成普通移动 ——
+                     * 而它本该顶掉的那个文件正躺在临时名下，落点判断与计划对不上。
+                     */
+                    RenamePreviewItem? owner = Find(source);
+
+                    if (string.Equals(owner?.Status, StatusText.TargetExists, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    string conflictAction = string.IsNullOrWhiteSpace(owner?.ConflictAction)
+                        ? "AutoRename"
+                        : owner!.ConflictAction;
+
+                    if (string.Equals(conflictAction, "Skip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _finalPaths.Remove(source);
+                        _skipReasons[source] = "目标文件已存在";
+                        continue;
+                    }
+
+                    if (string.Equals(conflictAction, "Overwrite", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 明确要覆盖：旧文件会在"腾名字"阶段被挪走，落位成功后才删。
+                        continue;
+                    }
+
+                    // AutoRename / Ask：执行前按当前文件系统重算一次落地名。
+                    _finalPaths[source] = SafePathHelper.AutoRenameFilePath(destination);
+                }
+            }
+
+            private RenamePreviewItem? Find(string source)
+            {
+                return _items.FirstOrDefault(x =>
+                    x != null && string.Equals(x.OriginalPath, source, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        /// <summary>一次批次执行的结果：总体成败 + 每条源路径各自的失败原因。</summary>
+        private sealed class RenameExecution
+        {
+            private readonly Dictionary<string, string> _failures = new(StringComparer.OrdinalIgnoreCase);
+
+            public string GetFailure(string sourcePath) =>
+                _failures.TryGetValue(sourcePath, out string? value) ? value : string.Empty;
+
+            private static RenameExecution Failed(string message, IEnumerable<string> sources)
+            {
+                var execution = new RenameExecution();
+
+                foreach (string source in sources)
+                {
+                    execution._failures[source] = message;
+                }
+
+                return execution;
+            }
+
+            /// <summary>
+            /// 执行改名：**整批先撤到临时名，再一起落位**（不变量 3）。
+            ///
+            /// 顺序不能颠倒，也不能逐项做：
+            /// 1. 撤名字：把本批次每一个源文件都改成临时名（同一目录内的改名，原子且便宜）；
+            /// 2. 腾位（少见）：落点上还留着别人的文件（就是要被覆盖的那个）时，把它也挪成临时名；
+            /// 3. 落位：临时名 → 最终名。到这一步所有名字都是空的，<c>File.Move</c> 不会撞名。
+            ///
+            /// 为什么"逐项做"是错的：名称交换 <c>A.zip ↔ B.zip</c> 里，处理到第二项时第一项已经
+            /// 落到了它的目标名上，于是第二项找不到自己的源文件（它已经被挪走了）——
+            /// 结果是交换做了一半、还留下一个临时文件。
+            /// 为什么不能"先 <c>File.Delete(目标)</c> 再 <c>File.Move(源, 目标)</c>"（旧写法）：
+            /// 中间任何失败（跨卷、权限、被占用）都会让**被覆盖的那个文件永久消失**，
+            /// 而源文件还在原处 —— 用户丢的正是他本来想保留的那一份。
+            ///
+            /// 任何一步失败都整体回滚：结果只可能是"全是旧名字"或"全是新名字"，绝不会少文件。
+            /// </summary>
+            public static RenameExecution Run(RenamePlan plan)
+            {
+                List<string> sources = plan.FinalPaths
+                    .Where(pair => !plan.IsSkipped(pair.Key))
+                    .Select(pair => pair.Key)
+                    .ToList();
+
+                var staged = new List<(string OriginalPath, string TemporaryPath, string FinalPath)>();
+
+                // ── 阶段 1：撤名字 ──────────────────────────────────────────────
+                foreach (string source in sources)
+                {
+                    string finalPath = plan.GetFinalPath(source);
+
+                    string? directory = Path.GetDirectoryName(finalPath);
+
+                    if (string.IsNullOrWhiteSpace(directory))
+                    {
+                        return Failed($"无法确定目标目录（{finalPath}），本次没有文件被改动", sources);
+                    }
+
+                    if (!Directory.Exists(directory))
+                    {
+                        return Failed($"目标目录不存在（{directory}），本次没有文件被改动", sources);
+                    }
+
+                    if (!File.Exists(source))
+                    {
+                        return Failed("源文件不存在", new[] { source });
+                    }
+
+                    if (SafePathHelper.PathEquals(source, finalPath))
+                    {
+                        continue;
+                    }
+
+                    string temporaryPath;
+
+                    try
+                    {
+                        temporaryPath = BuildStagingPath(finalPath);
+
+                        File.Move(source, temporaryPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        RollBackStaged(staged);
+
+                        return Failed(
+                            $"改名失败（已回滚，所有文件保持原名）：撤走 {Path.GetFileName(source)} 时出错 —— {ex.Message}",
+                            sources);
+                    }
+
+                    staged.Add((source, temporaryPath, finalPath));
+                }
+
+                // ── 阶段 2：腾位 ────────────────────────────────────────────────
+                var vacated = new List<(string OccupiedPath, string TemporaryPath)>();
+
+                foreach ((string _, string _, string finalPath) in staged)
+                {
+                    if (!File.Exists(finalPath))
+                    {
+                        continue;
+                    }
+
+                    string temporaryPath;
+
+                    try
+                    {
+                        temporaryPath = BuildVacatingPath(finalPath);
+
+                        // 占着这个名字的是外来的文件（要覆盖的目标）：挪成临时名，落位成功后才删。
+                        File.Move(finalPath, temporaryPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        RollBackStaged(staged);
+                        RollBackVacated(vacated);
+
+                        return Failed(
+                            $"无法为 {Path.GetFileName(finalPath)} 腾出名字（已回滚，所有文件保持原名）：{ex.Message}",
+                            sources);
+                    }
+
+                    vacated.Add((finalPath, temporaryPath));
+                }
+
+                // ── 阶段 3：一起落位 ────────────────────────────────────────────
+                var landed = new List<(string TemporaryPath, string FinalPath)>();
+
+                foreach ((string _, string temporaryPath, string finalPath) in staged)
                 {
                     try
                     {
-                        UpdateTaskRenameSuccess(matchedTask, finalPath);
+                        // 两参数 File.Move：目标已存在会直接抛异常，绝不静默覆盖。
+                        File.Move(temporaryPath, finalPath);
+                        landed.Add((temporaryPath, finalPath));
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        // 这里故意吞掉异常。
-                        // 原因：File.Move 已经成功，不能因为 UI/任务对象更新异常再弹“改名失败”。
-                        // 后续重新扫描时会以文件系统真实路径为准。
+                        RollBackLanded(landed);
+                        RollBackStaged(staged);
+                        RollBackVacated(vacated);
+
+                        return Failed(
+                            $"改名失败（已回滚，所有文件保持原名）：落位 {Path.GetFileName(finalPath)} 时出错 —— {ex.Message}",
+                            sources);
                     }
+                }
+
+                // ── 阶段 4：清场 ────────────────────────────────────────────────
+                foreach ((string _, string temporaryPath) in vacated)
+                {
+                    TryDelete(temporaryPath);
+                }
+
+                return new RenameExecution();
+            }
+
+            /// <summary>
+            /// 临时（staging）路径：跟**最终落点**同一个目录。
+            ///
+            /// 为什么必须在同一个目录：换了目录就可能是换卷，跨卷的 <c>File.Move</c> 不再是原子操作，
+            /// 半途失败会留下半个文件 —— 那就正好违反我们要守的那条不变量。
+            /// </summary>
+            private static string BuildStagingPath(string finalPath)
+            {
+                string directory = Path.GetDirectoryName(finalPath) ?? string.Empty;
+                string fileName = Path.GetFileNameWithoutExtension(finalPath);
+                string extension = Path.GetExtension(finalPath);
+
+                for (int i = 0; i < 10000; i++)
+                {
+                    string candidate = i == 0
+                        ? Path.Combine(directory, fileName + ".af-staging" + extension)
+                        : Path.Combine(directory, $"{fileName}.af-staging{i}{extension}");
+
+                    if (!File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+
+                return Path.Combine(directory, $"{fileName}.af-staging-{Guid.NewGuid():N}{extension}");
+            }
+
+            /// <summary>腾名字用的临时路径：一定还没被占用（占用就退到带序号的候选）。</summary>
+            private static string BuildVacatingPath(string path)
+            {
+                string directory = Path.GetDirectoryName(path) ?? string.Empty;
+                string fileName = Path.GetFileNameWithoutExtension(path);
+                string extension = Path.GetExtension(path);
+
+                for (int i = 0; i < 10000; i++)
+                {
+                    string candidate = i == 0
+                        ? Path.Combine(directory, fileName + ".af-vacating" + extension)
+                        : Path.Combine(directory, $"{fileName}.af-vacating{i}{extension}");
+
+                    if (!File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+
+                return Path.Combine(directory, $"{fileName}.af-vacating-{Guid.NewGuid():N}{extension}");
+            }
+
+            /// <summary>回滚"撤名字"：临时名挪回源路径。挪不动时保留临时文件（名字带 .af-staging，数据不丢）。</summary>
+            private static void RollBackStaged(
+                List<(string OriginalPath, string TemporaryPath, string FinalPath)> staged)
+            {
+                for (int i = staged.Count - 1; i >= 0; i--)
+                {
+                    TryMove(staged[i].TemporaryPath, staged[i].OriginalPath);
+                }
+            }
+
+            /// <summary>回滚"腾位"：临时名挪回它占着的那个名字。</summary>
+            private static void RollBackVacated(List<(string OccupiedPath, string TemporaryPath)> vacated)
+            {
+                for (int i = vacated.Count - 1; i >= 0; i--)
+                {
+                    TryMove(vacated[i].TemporaryPath, vacated[i].OccupiedPath);
+                }
+            }
+
+            /// <summary>回滚"落位"：已经落到最终名的文件挪回临时名（随后由 RollBackStaged 送回源路径）。</summary>
+            private static void RollBackLanded(List<(string TemporaryPath, string FinalPath)> landed)
+            {
+                for (int i = landed.Count - 1; i >= 0; i--)
+                {
+                    TryMove(landed[i].FinalPath, landed[i].TemporaryPath);
+                }
+            }
+
+            private static void TryMove(string from, string to)
+            {
+                try
+                {
+                    if (File.Exists(from) && !File.Exists(to))
+                    {
+                        File.Move(from, to);
+                    }
+                }
+                catch
+                {
+                    // 回滚本身失败只能到此为止：调用方会把失败原因如实报给用户，
+                    // 数据不会丢 —— 文件就在原目录里，名字里带 .af-vacating。
+                }
+            }
+
+            private static void TryDelete(string path)
+            {
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+                }
+                catch
+                {
+                    // 删不掉被覆盖的旧文件不影响"改名成功"这个结论，留给用户自己处理。
                 }
             }
         }

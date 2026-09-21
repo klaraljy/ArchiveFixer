@@ -113,6 +113,29 @@ namespace ArchiveFixer.Views
         {
             DataContextChanged -= PasswordListWindow_DataContextChanged;
             DetachViewModel(_viewModel);
+
+            /*
+             * 关窗时刷新主界面的密码本摘要（「密码本：x 条（启用 y 条）」那一行）。
+             *
+             * 为什么由窗口来推这一下：主 ViewModel 只在**关窗之后**才刷新摘要
+             * （MainViewModel.OpenPasswordList 里 ShowDialog 之后那一句），
+             * 而窗口里刚导入完、密码列表已经变了的时候，主界面那一行还是旧的。
+             * 这里主动推一次，用户一关窗就能看到新数字，不必再等一次开关窗口。
+             *
+             * 只调"刷新显示"这一个公开方法，不碰主 ViewModel 的任何状态。
+             */
+            try
+            {
+                if (Application.Current?.MainWindow?.DataContext is MainViewModel mainViewModel)
+                {
+                    mainViewModel.RefreshPasswordBookSummary();
+                }
+            }
+            catch
+            {
+                // 主窗口还没建好等边缘情况：刷新失败不影响关窗。
+            }
+
             base.OnClosed(e);
         }
     }

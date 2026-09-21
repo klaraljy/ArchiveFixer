@@ -49,6 +49,16 @@ namespace ArchiveFixer.Models
         public const string PathTooLong = "路径过长";
         public const string UnknownError = "未知错误";
         public const string SevenZipMissing = "7z不存在";
+
+        /// <summary>
+        /// 达到密码尝试上限（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
+        ///
+        /// **不是"密码错误"**：候选密码根本还没试完就按硬上限停了，
+        /// 包本身可能完全正常，只是正确密码排在候选表更靠后的位置。
+        /// 两者混为一谈时，用户会去反复核对密码本，而真正该做的是补上密码或调大上限。
+        /// </summary>
+        public const string PasswordAttemptLimitReached = "达到密码尝试上限";
+
         public const string Cancelled = "已取消";
         public const string Skipped = "已跳过";
         public const string Overwritten = "已覆盖";

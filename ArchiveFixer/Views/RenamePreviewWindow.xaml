@@ -4,17 +4,30 @@
         Title="改名预览"
         Width="1100"
         Height="640"
-        MinWidth="900"
+        MinWidth="1020"
         MinHeight="520"
         WindowStartupLocation="CenterOwner"
-        Background="#F5F5F5">
+        Background="#F5F5F5"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <Window.Resources>
+        <!-- 本窗口色板：把原先散落的 #RRGGBB 字面量收敛到一处。 -->
+        <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="PanelAltBrush" Color="#FAFAFA" />
+        <SolidColorBrush x:Key="PanelBorderBrush" Color="#DDDDDD" />
+        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#333333" />
+        <SolidColorBrush x:Key="TextMutedBrush" Color="#666666" />
+        <SolidColorBrush x:Key="TextHintBrush" Color="#777777" />
+    </Window.Resources>
 
     <DockPanel Margin="10">
 
         <!-- 顶部说明 -->
         <Border DockPanel.Dock="Top"
-                Background="White"
-                BorderBrush="#DDDDDD"
+                Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource PanelBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="10"
@@ -23,7 +36,7 @@
                 <TextBlock Text="请确认以下改名操作。新文件名可以手动编辑，只有选中的项目会被改名。"
                            FontSize="15"
                            FontWeight="Bold"
-                           Foreground="#333333"
+                           Foreground="{StaticResource TextPrimaryBrush}"
                            Margin="0,0,0,8" />
 
                 <WrapPanel>
@@ -53,7 +66,7 @@
                                Margin="0,0,16,0" />
 
                     <TextBlock Text="{Binding Message}"
-                               Foreground="#666666"
+                               Foreground="{StaticResource TextMutedBrush}"
                                Margin="20,0,0,0" />
                 </WrapPanel>
             </StackPanel>
@@ -61,15 +74,15 @@
 
         <!-- 底部按钮 -->
         <Border DockPanel.Dock="Bottom"
-                Background="White"
-                BorderBrush="#DDDDDD"
+                Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource PanelBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="8"
                 Margin="0,8,0,0">
             <DockPanel>
                 <TextBlock Text="提示：确认前请仔细检查新文件名和新路径。改名操作会真实修改文件名。"
-                           Foreground="#777777"
+                           Foreground="{StaticResource TextHintBrush}"
                            VerticalAlignment="Center" />
 
                 <StackPanel DockPanel.Dock="Right"
@@ -129,14 +142,20 @@
                   SelectionUnit="FullRow"
                   GridLinesVisibility="Horizontal"
                   HeadersVisibility="Column"
-                  Background="White"
-                  BorderBrush="#DDDDDD"
+                  Background="{StaticResource PanelBrush}"
+                  BorderBrush="{StaticResource PanelBorderBrush}"
                   BorderThickness="1"
                   RowHeaderWidth="0"
-                  AlternatingRowBackground="#FAFAFA"
+                  AlternatingRowBackground="{StaticResource PanelAltBrush}"
                   HorizontalScrollBarVisibility="Auto"
                   VerticalScrollBarVisibility="Auto">
 
+            <!--
+                列宽精简：原来 10 列写死合计 1970px，而窗口 1100（MinWidth 900）可用约 1060px
+                → 最后两列「原路径」「新路径」共 780px 常态看不见，可底部提示偏偏写着
+                "确认前请仔细检查新文件名和新路径"。现在删掉「原路径」（NewPath 已含目录信息），
+                「新路径」改 * 吃掉剩余宽度，剩下的列略微收窄。
+            -->
             <DataGrid.Columns>
 
                 <DataGridCheckBoxColumn Header="选择"
@@ -145,48 +164,65 @@
 
                 <DataGridTextColumn Header="原文件名"
                                     Binding="{Binding OriginalFileName}"
-                                    Width="180"
-                                    IsReadOnly="True" />
+                                    Width="170"
+                                    IsReadOnly="True">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                            <Setter Property="ToolTip" Value="{Binding OriginalPath}" />
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
 
                 <DataGridTextColumn Header="检测格式"
                                     Binding="{Binding DetectedFormat}"
-                                    Width="90"
+                                    Width="80"
                                     IsReadOnly="True" />
 
                 <DataGridTextColumn Header="操作"
                                     Binding="{Binding Operation}"
-                                    Width="140"
+                                    Width="120"
                                     IsReadOnly="True" />
 
                 <DataGridTextColumn Header="新文件名，可编辑"
                                     Binding="{Binding NewFileName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                    Width="230"
+                                    Width="200"
                                     IsReadOnly="False" />
 
                 <DataGridTextColumn Header="冲突处理"
                                     Binding="{Binding ConflictAction}"
-                                    Width="120"
+                                    Width="110"
                                     IsReadOnly="True" />
 
                 <DataGridTextColumn Header="状态"
                                     Binding="{Binding Status}"
-                                    Width="130"
+                                    Width="110"
                                     IsReadOnly="True" />
 
                 <DataGridTextColumn Header="错误信息"
                                     Binding="{Binding ErrorMessage}"
-                                    Width="240"
-                                    IsReadOnly="True" />
-
-                <DataGridTextColumn Header="原路径"
-                                    Binding="{Binding OriginalPath}"
-                                    Width="360"
-                                    IsReadOnly="True" />
+                                    Width="180"
+                                    IsReadOnly="True">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                            <Setter Property="ToolTip" Value="{Binding ErrorMessage}" />
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
 
                 <DataGridTextColumn Header="新路径"
                                     Binding="{Binding NewPath}"
-                                    Width="420"
-                                    IsReadOnly="True" />
+                                    Width="*"
+                                    MinWidth="200"
+                                    IsReadOnly="True">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                            <Setter Property="ToolTip" Value="{Binding NewPath}" />
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
 
             </DataGrid.Columns>
         </DataGrid>

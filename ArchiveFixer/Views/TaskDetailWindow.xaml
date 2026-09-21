@@ -7,26 +7,38 @@
         MinWidth="680"
         MinHeight="520"
         WindowStartupLocation="CenterOwner"
-        Background="#F5F5F5">
+        Background="#F5F5F5"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
 
 	<Window.Resources>
+		<!-- 本窗口色板：把原先散落的 #RRGGBB 字面量收敛到一处，配色只在这里定义。 -->
+		<SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
+		<SolidColorBrush x:Key="PanelBorderBrush" Color="#DDDDDD" />
+		<SolidColorBrush x:Key="TextPrimaryBrush" Color="#333333" />
+		<SolidColorBrush x:Key="TextSecondaryBrush" Color="#555555" />
+		<SolidColorBrush x:Key="TextMutedBrush" Color="#666666" />
+		<SolidColorBrush x:Key="TextValueBrush" Color="#222222" />
+		<SolidColorBrush x:Key="DangerTextBrush" Color="#AA0000" />
+
 		<Style TargetType="GroupBox">
 			<Setter Property="Margin" Value="0,0,0,8" />
 			<Setter Property="Padding" Value="10" />
-			<Setter Property="Background" Value="White" />
-			<Setter Property="BorderBrush" Value="#DDDDDD" />
+			<Setter Property="Background" Value="{StaticResource PanelBrush}" />
+			<Setter Property="BorderBrush" Value="{StaticResource PanelBorderBrush}" />
 		</Style>
 
 		<Style x:Key="LabelTextStyle"
                TargetType="TextBlock">
-			<Setter Property="Foreground" Value="#555555" />
+			<Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
 			<Setter Property="Margin" Value="0,0,8,8" />
 			<Setter Property="VerticalAlignment" Value="Top" />
 		</Style>
 
 		<Style x:Key="ValueTextStyle"
                TargetType="TextBlock">
-			<Setter Property="Foreground" Value="#222222" />
+			<Setter Property="Foreground" Value="{StaticResource TextValueBrush}" />
 			<Setter Property="Margin" Value="0,0,0,8" />
 			<Setter Property="TextWrapping" Value="Wrap" />
 			<Setter Property="VerticalAlignment" Value="Top" />
@@ -48,8 +60,8 @@
 
 		<!-- 顶部标题 -->
 		<Border DockPanel.Dock="Top"
-                Background="White"
-                BorderBrush="#DDDDDD"
+                Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource PanelBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="10"
@@ -58,25 +70,25 @@
 				<TextBlock Text="任务详情"
                            FontSize="18"
                            FontWeight="Bold"
-                           Foreground="#333333" />
+                           Foreground="{StaticResource TextPrimaryBrush}" />
 
 				<TextBlock Text="查看单个任务的完整信息。此窗口不会显示明文密码。"
                            Margin="0,4,0,0"
-                           Foreground="#666666" />
+                           Foreground="{StaticResource TextMutedBrush}" />
 			</StackPanel>
 		</Border>
 
 		<!-- 底部按钮 -->
 		<Border DockPanel.Dock="Bottom"
-                Background="White"
-                BorderBrush="#DDDDDD"
+                Background="{StaticResource PanelBrush}"
+                BorderBrush="{StaticResource PanelBorderBrush}"
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="10"
                 Margin="0,8,0,0">
 			<DockPanel>
 				<TextBlock Text="{Binding FileName}"
-                           Foreground="#666666"
+                           Foreground="{StaticResource TextMutedBrush}"
                            VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
 
@@ -162,7 +174,7 @@
                                    Grid.Column="0"
                                    Text="所在目录："
                                    Margin="0,0,8,0"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
 						<TextBox Grid.Row="4"
                                  Grid.Column="1"
@@ -206,7 +218,7 @@
                                    Grid.Column="2"
                                    Text="检测格式："
                                    Margin="16,0,8,8"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
 						<TextBlock Grid.Row="0"
                                    Grid.Column="3"
@@ -227,7 +239,7 @@
                                    Grid.Column="2"
                                    Text="后缀状态："
                                    Margin="16,0,8,8"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
 						<TextBlock Grid.Row="1"
                                    Grid.Column="3"
@@ -238,25 +250,25 @@
                                    Grid.Column="0"
                                    Text="是否压缩包："
                                    Margin="0,0,8,0"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
 						<TextBlock Grid.Row="2"
                                    Grid.Column="1"
                                    Text="{Binding IsArchive}"
                                    Margin="0"
-                                   Foreground="#222222" />
+                                   Foreground="{StaticResource TextValueBrush}" />
 
 						<TextBlock Grid.Row="2"
                                    Grid.Column="2"
                                    Text="是否加密："
                                    Margin="16,0,8,0"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
 						<TextBlock Grid.Row="2"
                                    Grid.Column="3"
                                    Text="{Binding IsEncrypted}"
                                    Margin="0"
-                                   Foreground="#222222" />
+                                   Foreground="{StaticResource TextValueBrush}" />
 					</Grid>
 				</GroupBox>
 
@@ -269,6 +281,7 @@
 						</Grid.ColumnDefinitions>
 
 						<Grid.RowDefinitions>
+							<RowDefinition Height="Auto" />
 							<RowDefinition Height="Auto" />
 							<RowDefinition Height="Auto" />
 							<RowDefinition Height="Auto" />
@@ -297,46 +310,60 @@
                                    Text="{Binding PasswordStatus}"
                                    Style="{StaticResource ValueTextStyle}" />
 
+						<!--
+							分卷情况。主界面 DataGrid 的「分卷」列默认隐藏（只有分卷组那一行有内容），
+							所以这里必须常驻显示，否则"缺哪几卷"就没地方看了（AGENTS.md §9.3）。
+						-->
 						<TextBlock Grid.Row="2"
+                                   Grid.Column="0"
+                                   Text="分卷："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="2"
+                                   Grid.Column="1"
+                                   Text="{Binding VolumeInfoText}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="3"
                                    Grid.Column="0"
                                    Text="当前操作："
                                    Style="{StaticResource LabelTextStyle}" />
 
-						<TextBlock Grid.Row="2"
+						<TextBlock Grid.Row="3"
                                    Grid.Column="1"
                                    Text="{Binding Operation}"
                                    Style="{StaticResource ValueTextStyle}" />
 
-						<TextBlock Grid.Row="3"
+						<TextBlock Grid.Row="4"
                                    Grid.Column="0"
                                    Text="状态："
                                    Style="{StaticResource LabelTextStyle}" />
 
-						<TextBlock Grid.Row="3"
+						<TextBlock Grid.Row="4"
                                    Grid.Column="1"
                                    Text="{Binding Status}"
                                    FontWeight="Bold"
-                                   Foreground="#333333"
+                                   Foreground="{StaticResource TextPrimaryBrush}"
                                    Margin="0,0,0,8"
                                    TextWrapping="Wrap" />
 
-						<TextBlock Grid.Row="4"
+						<TextBlock Grid.Row="5"
                                    Grid.Column="0"
                                    Text="进度："
                                    Style="{StaticResource LabelTextStyle}" />
 
-						<TextBlock Grid.Row="4"
+						<TextBlock Grid.Row="5"
                                    Grid.Column="1"
                                    Text="{Binding ProgressText}"
                                    Style="{StaticResource ValueTextStyle}" />
 
-						<TextBlock Grid.Row="5"
+						<TextBlock Grid.Row="6"
                                    Grid.Column="0"
                                    Text="错误信息："
                                    Margin="0,0,8,0"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
-						<TextBox Grid.Row="5"
+						<TextBox Grid.Row="6"
                                  Grid.Column="1"
                                  Text="{Binding ErrorMessage}"
                                  IsReadOnly="True"
@@ -344,7 +371,7 @@
                                  Background="Transparent"
                                  TextWrapping="Wrap"
                                  Padding="0"
-                                 Foreground="#AA0000" />
+                                 Foreground="{StaticResource DangerTextBrush}" />
 					</Grid>
 				</GroupBox>
 
@@ -377,7 +404,7 @@
                                    Grid.Column="2"
                                    Text="结束时间："
                                    Margin="16,0,8,8"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
 						<TextBlock Grid.Row="0"
                                    Grid.Column="3"
@@ -388,25 +415,25 @@
                                    Grid.Column="0"
                                    Text="耗时："
                                    Margin="0,0,8,0"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
 						<TextBlock Grid.Row="1"
                                    Grid.Column="1"
                                    Text="{Binding ElapsedText}"
                                    Margin="0"
-                                   Foreground="#222222" />
+                                   Foreground="{StaticResource TextValueBrush}" />
 
 						<TextBlock Grid.Row="1"
                                    Grid.Column="2"
                                    Text="最后更新："
                                    Margin="16,0,8,0"
-                                   Foreground="#555555" />
+                                   Foreground="{StaticResource TextSecondaryBrush}" />
 
 						<TextBlock Grid.Row="1"
                                    Grid.Column="3"
                                    Text="{Binding LastUpdatedTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
                                    Margin="0"
-                                   Foreground="#222222" />
+                                   Foreground="{StaticResource TextValueBrush}" />
 					</Grid>
 				</GroupBox>
 

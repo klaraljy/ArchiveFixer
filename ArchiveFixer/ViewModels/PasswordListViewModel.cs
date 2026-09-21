@@ -304,12 +304,55 @@ namespace ArchiveFixer.ViewModels
 
                 ReloadFromService();
 
-                Message = $"已导入 {imported.Count} 个新密码。";
+                RememberPasswordBookPath(path);
+
+                // 与主界面「工具 → 导入密码本…」同一套文案：条数 + 已记住 + 下次启动自动加载。
+                // 以前这里只有"已导入 N 个新密码"，用户看不出到底记住没有，也是"导入又关掉重开什么都没有"的来源。
+                Message = $"已导入 {imported.Count} 条密码，并记住了这个文件，下次启动会自动加载。";
+
+                if (_passwordService.LastImportWarnings.Count > 0)
+                {
+                    Message += "　提示：" + string.Join("；", _passwordService.LastImportWarnings);
+                }
             }
             catch (Exception ex)
             {
                 Message = "导入密码失败：" + ex.Message;
                 _dialogService.ShowError("导入密码失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 记住密码本路径。
+        ///
+        /// 两个地方都要写，少一个就会出现"这次导了、下次启动不认"：
+        /// 1. <c>appsettings.json</c> 的 <c>PasswordBookPath</c> —— 与主界面导入走的是同一个设置项；
+        /// 2. 侧车文件 <c>password-book.path</c> —— 由 <see cref="PasswordService.ImportPasswordList"/> 自己写。
+        ///
+        /// 设置文件按"数据根目录"定位：PasswordService.DataRootDirectory 与
+        /// PathService.DataRootDirectory 被主界面刻意同步成同一个值（MainViewModel.ApplyEngineSettings），
+        /// 所以这里用前者构造 PathService，才不会出现用户改过缓存根目录后写到另一个盘去。
+        /// </summary>
+        private void RememberPasswordBookPath(string path)
+        {
+            try
+            {
+                var pathService = new PathService
+                {
+                    DataRootDirectory = _passwordService.DataRootDirectory
+                };
+
+                var settingsService = new SettingsService(pathService);
+
+                // 先 Load 再改：不能拿一份全新的默认设置整体覆盖用户的 appsettings.json。
+                AppSettings settings = settingsService.Load();
+                settings.PasswordBookPath = path;
+                settingsService.Save(settings);
+            }
+            catch (Exception ex)
+            {
+                // 记不住路径不该让导入本身失败，但要说清楚 —— 否则用户下次启动发现密码本没自动加载会以为是 bug。
+                Message += "（提示：路径没能记进设置，下次启动可能不会自动加载：" + ex.Message + "）";
             }
         }
 

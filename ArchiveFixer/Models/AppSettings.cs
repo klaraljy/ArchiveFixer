@@ -83,6 +83,18 @@ namespace ArchiveFixer.Models
         public int MaxRecursionDepth { get; set; } = 3;
 
         /// <summary>
+        /// 每一层（每个归档）最多真的试几个密码候选。
+        ///
+        /// 为什么必须有上限（不变量 8）：密码本可能有几百条，一个包逐条试过去会烧掉整晚；
+        /// 到上限时状态是「达到密码尝试上限」，**不是**"密码错误"（AGENTS.md §9.2）——
+        /// 前者是"还没试完就停了"，后者是"试过的都不对"，两者的处置方式完全不同。
+        ///
+        /// 范围 1–1000：下限 1 保证至少试一个候选（否则等于不解压），
+        /// 上限 1000 是兜底 —— 再大就不是"帮用户省事"，而是把时间烧在一个可能失败的包上。
+        /// </summary>
+        public int MaxPasswordAttemptsPerLayer { get; set; } = 10;
+
+        /// <summary>
         /// 缓存根目录（日志 / 临时 / 递归工作区 / 配置文件都放这里）。
         ///
         /// 默认留空 = 用**程序目录下的 data**。
@@ -132,7 +144,8 @@ namespace ArchiveFixer.Models
                 CacheRootDirectory = string.Empty,
                 PasswordBookPath = string.Empty,
                 RecursionMode = "SingleLayer",
-                MaxRecursionDepth = 3
+                MaxRecursionDepth = 3,
+                MaxPasswordAttemptsPerLayer = 10
             };
         }
 
@@ -203,6 +216,18 @@ namespace ArchiveFixer.Models
             if (MaxRecursionDepth > 10)
             {
                 MaxRecursionDepth = 10;
+            }
+
+            // 密码尝试上限：下限 1（至少试一个候选），上限 1000（再大就不是省事而是烧时间）。
+            // 旧配置文件里没有这一项 → 反序列化后拿到的是默认值 10，不需要额外兼容分支。
+            if (MaxPasswordAttemptsPerLayer < 1)
+            {
+                MaxPasswordAttemptsPerLayer = 1;
+            }
+
+            if (MaxPasswordAttemptsPerLayer > 1000)
+            {
+                MaxPasswordAttemptsPerLayer = 1000;
             }
 
             // 自定义 7z 路径要么是有效文件，要么当没填 —— 留一个失效路径会让整个程序找不到引擎。

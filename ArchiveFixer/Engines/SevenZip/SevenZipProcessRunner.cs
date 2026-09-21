@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Password;
 using ArchiveFixer.Models;
@@ -87,7 +88,8 @@ namespace ArchiveFixer.Engines.SevenZip
 
             List<string> arguments = BuildTestArguments(archivePath, password);
 
-            ArchiveOperationResult result = await RunSevenZipAsync(arguments, password, cancellationToken);
+            ArchiveOperationResult result = await RunSevenZipAsync(arguments, password, cancellationToken)
+                .ConfigureAwait(false);
 
             if (result.Success)
             {
@@ -97,6 +99,11 @@ namespace ArchiveFixer.Engines.SevenZip
             }
             else
             {
+                result.DetectedErrorType = ResolveVolumeMissingErrorType(
+                    result.DetectedErrorType,
+                    archivePath,
+                    arguments);
+
                 string mappedStatus = SevenZipOutputParser.ErrorTypeToTaskStatus(result.DetectedErrorType);
 
                 result.Status = mappedStatus switch
@@ -106,7 +113,15 @@ namespace ArchiveFixer.Engines.SevenZip
                     _ => mappedStatus
                 };
 
-                if (string.IsNullOrWhiteSpace(result.Message) ||
+                if (result.DetectedErrorType == "VolumeMissing")
+                {
+                    /*
+                     * 这个结果不是"AnalyzeResult 直接产出"的（上面刚改过分类），
+                     * 所以"缺哪几卷"要在这里补上，否则用户看到的还是那句笼统的"缺少必要分卷"。
+                     */
+                    result.Message = BuildVolumeMissingMessage(archivePath);
+                }
+                else if (string.IsNullOrWhiteSpace(result.Message) ||
                     result.Message == "操作失败" ||
                     result.Message == "未知错误，请查看日志")
                 {
@@ -181,7 +196,8 @@ namespace ArchiveFixer.Engines.SevenZip
 
             List<string> arguments = BuildExtractArguments(archivePath, outputPath, password, options);
 
-            ArchiveOperationResult result = await RunSevenZipAsync(arguments, password, cancellationToken);
+            ArchiveOperationResult result = await RunSevenZipAsync(arguments, password, cancellationToken)
+                .ConfigureAwait(false);
 
             if (result.Success)
             {
@@ -210,7 +226,7 @@ namespace ArchiveFixer.Engines.SevenZip
             IEnumerable<string> arguments,
             CancellationToken cancellationToken = default)
         {
-            return await RunSevenZipAsync(arguments, string.Empty, cancellationToken);
+            return await RunSevenZipAsync(arguments, string.Empty, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<ArchiveOperationResult> RunSevenZipAsync(
@@ -320,14 +336,14 @@ namespace ArchiveFixer.Engines.SevenZip
 
                 try
                 {
-                    await process.WaitForExitAsync(linkedCts.Token);
+                    await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     bool isTimeout = timeoutCts.IsCancellationRequested &&
                                      !cancellationToken.IsCancellationRequested;
 
-                    await KillProcessTreeSafeAsync(process);
+                    await KillProcessTreeSafeAsync(process).ConfigureAwait(false);
 
                     stopwatch.Stop();
 
@@ -400,11 +416,17 @@ namespace ArchiveFixer.Engines.SevenZip
                     exitCode = -1;
                 }
 
-                return AnalyzeResult(exitCode, output, error, usedPassword, stopwatch.Elapsed);
+                return AnalyzeResult(
+                    exitCode,
+                    output,
+                    error,
+                    usedPassword,
+                    stopwatch.Elapsed,
+                    FindArchiveArgument(arguments));
             }
             catch (Exception ex)
             {
-                await KillProcessTreeSafeAsync(process);
+                await KillProcessTreeSafeAsync(process).ConfigureAwait(false);
 
                 stopwatch.Stop();
 
@@ -489,6 +511,24 @@ namespace ArchiveFixer.Engines.SevenZip
             string usedPassword,
             TimeSpan elapsed)
         {
+            return AnalyzeResult(exitCode, output, error, usedPassword, elapsed, archivePath: null);
+        }
+
+        /// <summary>
+        /// 分析一次 7z 调用的结果。
+        ///
+        /// <paramref name="archivePath"/> 非空时，分卷缺失会被判得更准（见
+        /// <see cref="ResolveVolumeMissingErrorType"/>）：只给 <c>xxx.7z.002</c> 时 7-Zip 报的是
+        /// "Cannot open the file as archive"，字面与"这不是归档"一样，只能靠文件名与目录内容区分。
+        /// </summary>
+        private ArchiveOperationResult AnalyzeResult(
+            int exitCode,
+            string output,
+            string error,
+            string usedPassword,
+            TimeSpan elapsed,
+            string? archivePath)
+        {
             output = PasswordMasker.Sanitize(output);
             error = PasswordMasker.Sanitize(error);
 
@@ -497,12 +537,20 @@ namespace ArchiveFixer.Engines.SevenZip
 
             string errorType = success
                 ? "None"
-                : SevenZipOutputParser.DetectSevenZipErrorType(exitCode, output, error);
+                : SevenZipOutputParser.DetectSevenZipErrorType(exitCode, output, error, archivePath);
+
+            errorType = ResolveVolumeMissingErrorType(errorType, archivePath);
 
             string status = SevenZipOutputParser.ErrorTypeToTaskStatus(errorType);
+
             string message = success
                 ? "操作成功"
-                : SevenZipOutputParser.ErrorTypeToMessage(errorType, combined);
+                : errorType switch
+                {
+                    SevenZipOutputParser.MissingFirstVolumeErrorType => SevenZipOutputParser.ErrorTypeToMessage(errorType),
+                    "VolumeMissing" => BuildVolumeMissingMessage(archivePath),
+                    _ => SevenZipOutputParser.ErrorTypeToMessage(errorType, combined)
+                };
 
             return new ArchiveOperationResult
             {
@@ -516,6 +564,233 @@ namespace ArchiveFixer.Engines.SevenZip
                 UsedPasswordMasked = MaskPassword(usedPassword),
                 Elapsed = elapsed
             };
+        }
+
+        /// <summary>
+        /// 把"字段上像'非归档'"的结果修正成缺卷/缺首卷（不变量 7）。
+        ///
+        /// 为什么需要二次判定：7-Zip 对"只给非首卷"和"给了一个纯文本文件"报的是同一句
+        /// <c>Cannot open the file as archive</c>（26.01 实测，退出码 2），
+        /// 纯关键字分类一定会把缺卷误报成"不支持该格式"，用户就会以为文件坏了。
+        /// 唯一可靠的判据是**文件名 + 同目录里有没有这一组的其它卷**：
+        /// 目录里数出缺号 → 缺卷；数不出缺号但文件本身就叫 .001/.002/… → 缺首卷。
+        /// </summary>
+        private static string ResolveVolumeMissingErrorType(
+            string errorType,
+            string? archivePath,
+            IEnumerable<string>? arguments = null)
+        {
+            if (string.Equals(errorType, "VolumeMissing", StringComparison.Ordinal))
+            {
+                return errorType;
+            }
+
+            /*
+             * 纯文本分类（没有文件系统可用）只会说"这是分卷，少了首卷"。
+             * 走到这里说明我们在运行器里、磁盘就在手边 —— 那就去数一遍缺哪几卷，
+             * 把结论落到上层认识的 VolumeMissing 上（不变量 7 要的是"缺哪几个"）。
+             */
+            if (string.Equals(errorType, SevenZipOutputParser.MissingFirstVolumeErrorType, StringComparison.Ordinal))
+            {
+                string? volumePath = ResolveArchivePath(archivePath, arguments);
+
+                return string.IsNullOrWhiteSpace(volumePath) || FindMissingVolumeParts(volumePath).Count == 0
+                    ? errorType
+                    : "VolumeMissing";
+            }
+
+            /*
+             * 只在"看起来像打不开这个文件"的分类上做二次判定。
+             * 密码错误、权限不足、磁盘满这些各有明确原因，不能被这条吞掉。
+             */
+            if (!string.Equals(errorType, "UnsupportedFormat", StringComparison.Ordinal) &&
+                !string.Equals(errorType, "CorruptedArchive", StringComparison.Ordinal) &&
+                !string.Equals(errorType, "UnknownError", StringComparison.Ordinal))
+            {
+                return errorType;
+            }
+
+            string? path = ResolveArchivePath(archivePath, arguments);
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return errorType;
+            }
+
+            string fileName = Path.GetFileName(path);
+
+            if (VolumeGroupDetector.TryGetVolumeIndex(fileName) == null)
+            {
+                // 文件名不是分卷 → 原来的分类是对的（纯文本改名成 .7z 走的就是这一支）。
+                return errorType;
+            }
+
+            /*
+             * 这个文件本身就是分卷名：
+             * 同目录里能数出缺号 → 缺卷（消息里会列出缺哪几个）；
+             * 数不出缺号 → 首卷不在同目录（用户的真实现场：两个 mp4 各藏一段分卷，解到两个目录里去了），
+             * 消息里点名首卷名 —— 分卷总数在命名里没有答案，不编造。
+             *
+             * 对外统一报 VolumeMissing：它已经映射到"分卷缺失"状态与正确的用户动作，
+             * 不新造一个上层代码不认识的状态码。MissingFirstVolume 只留给
+             * 纯文本分类（DetectSevenZipErrorType）那一条没有文件系统可查的路径。
+             */
+            return "VolumeMissing";
+        }
+
+        /// <summary>
+        /// "缺哪几个卷"是用户在缺卷时唯一能行动的信息（不变量 7），所以这句提示要去磁盘上数一遍：
+        /// 已经找到哪几卷、按命名推出来的缺号是哪些。数不出来时退回通用文案，绝不编造名字。
+        /// </summary>
+        private static string BuildVolumeMissingMessage(string? archivePath)
+        {
+            List<string> missing = FindMissingVolumeParts(archivePath);
+
+            if (missing.Count == 0)
+            {
+                return SevenZipOutputParser.ErrorTypeToMessage("VolumeMissing");
+            }
+
+            return $"分卷压缩包缺少必要分卷，缺少：{string.Join('、', missing)}" +
+                   "。请把同一组分卷放在同一目录后重试。";
+        }
+
+        /// <summary>
+        /// 拿这次调用真正用的归档路径：优先用调用方直接给的，没有才去参数表里翻。
+        /// </summary>
+        private static string? ResolveArchivePath(string? archivePath, IEnumerable<string>? arguments)
+        {
+            return string.IsNullOrWhiteSpace(archivePath)
+                ? FindArchiveArgument(arguments)
+                : archivePath;
+        }
+
+        /// <summary>
+        /// 从参数表里找出归档路径（用于"缺卷 / 缺首卷"的二次判定）。
+        ///
+        /// ⚠ 第一个参数是**命令**（<c>x</c> / <c>t</c> / <c>l</c>），它不以 <c>-</c> 开头、
+        /// 也不是路径 —— 必须显式跳过。曾经的写法是"跳过以 - 开头的，返回第一个别的"，
+        /// 结果返回的是命令字 <c>x</c>，于是二次判定永远在判一个叫 "x" 的文件，
+        /// 缺卷被静默判成"不支持该格式"（实测：诊断里 path=x）。
+        /// </summary>
+        private static string? FindArchiveArgument(IEnumerable<string>? arguments)
+        {
+            if (arguments == null)
+            {
+                return null;
+            }
+
+            bool isFirst = true;
+
+            foreach (string argument in arguments)
+            {
+                if (isFirst)
+                {
+                    // 命令本身不是路径。
+                    isFirst = false;
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(argument) ||
+                    argument.StartsWith("-", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                return argument;
+            }
+
+            return null;
+        }
+        /// <summary>
+        /// 在归档所在目录里找分卷缺号。
+        ///
+        /// 这些命名（.001 / .z01 / .r00 / .partN）**都没有"共几卷"这个信息**，
+        /// 所以只能报 [第 1 卷, 命中过的最大卷号] 之间的缺号；最大卷号之后再有没有卷，
+        /// 命名里没有答案，不猜（与 VolumeGroupDetector 的口径一致）。
+        /// </summary>
+        private static List<string> FindMissingVolumeParts(string? archivePath)
+        {
+            var missing = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(archivePath))
+            {
+                return missing;
+            }
+
+            try
+            {
+                string directory = Path.GetDirectoryName(archivePath) ?? string.Empty;
+
+                if (directory.Length == 0 || !Directory.Exists(directory))
+                {
+                    return missing;
+                }
+
+                // 只扫同目录，不递归、不跟链接：与"一组分卷 = 一个任务"的口径一致。
+                var candidates = new List<VolumeCandidate>();
+                var foundInline = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                string archiveFileName = Path.GetFileName(archivePath);
+
+                foreach (string file in Directory.EnumerateFiles(directory))
+                {
+                    candidates.Add(new VolumeCandidate { Path = file });
+                }
+
+                foreach (VolumeGroup group in VolumeGroupDetector.Group(candidates))
+                {
+                    if (!group.Volumes.Any(volume => SafePathHelper.PathEquals(volume.Path, archivePath)))
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * 首卷不在时**必须单独点名**，而且名字要跟用户手上的文件同风格：
+                     * 用 VolumeGroupDetector 按"基名 + 卷号"补出来的名字是 volume.001，
+                     * 而用户磁盘上那一组叫 volume.7z.001 —— 报一个用户找不到的名字等于没报。
+                     * 所以缺第 1 卷时，名字取"当前这个分卷的文件名 + 推出来的首卷名"。
+                     */
+                    if (!string.Equals(
+                            SafePathHelper.GetFullPathSafe(group.FirstVolumePath),
+                            SafePathHelper.GetFullPathSafe(archivePath),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        string? firstVolumeName = VolumeGroupDetector.TryGetFirstVolumeName(archiveFileName);
+
+                        if (!string.IsNullOrWhiteSpace(firstVolumeName))
+                        {
+                            int suffixIndex = archiveFileName.Length - Path.GetExtension(archiveFileName).Length;
+                            string styledName = string.Equals(
+                                    Path.GetExtension(firstVolumeName),
+                                    Path.GetExtension(archiveFileName),
+                                    StringComparison.OrdinalIgnoreCase)
+                                ? firstVolumeName
+                                : (suffixIndex > 0 ? archiveFileName[..suffixIndex] : archiveFileName) + firstVolumeName;
+
+                            if (foundInline.Add(styledName))
+                            {
+                                missing.Add(styledName);
+                            }
+                        }
+                    }
+
+                    foreach (string name in group.MissingVolumeNames)
+                    {
+                        if (foundInline.Add(name))
+                        {
+                            missing.Add(name);
+                        }
+                    }
+
+                    break;
+                }
+            }
+            catch
+            {
+                // 数不出来就退回通用文案：报"缺卷"这件事本身已经做对了，清单是加分项。
+            }
+
+            return missing;
         }
 
         public List<string> BuildExtractArguments(
@@ -532,6 +807,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 "x",
                 "-bsp0",
                 "-bd",
+                "-sccUTF-8",
                 archivePath,
                 "-o" + outputPath,
                 "-y"
@@ -556,6 +832,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 "t",
                 "-bsp0",
                 "-bd",
+                "-sccUTF-8",
                 archivePath,
                 "-y",
                 "-p" + (password ?? string.Empty)
@@ -664,7 +941,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 RunTaskKillByPid(pid.Value);
             }
 
-            await Task.Delay(800);
+            await Task.Delay(800).ConfigureAwait(false);
         }
 
         private static void RunTaskKillByPid(int pid)

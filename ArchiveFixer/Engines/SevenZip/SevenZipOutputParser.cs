@@ -1,6 +1,8 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
@@ -9,7 +11,41 @@ namespace ArchiveFixer.Engines.SevenZip
 {
     public static class SevenZipOutputParser
     {
-        public static string DetectSevenZipErrorType(int exitCode, string? output, string? error)
+        /// <summary>
+        /// "文件名本身就是分卷、但首卷不在"时的错误类型。
+        ///
+        /// 与 <c>VolumeMissing</c> 分开的理由（不变量 7："必须报缺哪几个"）：
+        /// <c>VolumeMissing</c> 表示调用方**已经确知缺了哪几卷**（同目录里数出了缺号），
+        /// 而这一条是"看上去像缺卷，但目录里没有任何可见的缺号"——
+        /// 只能告诉用户"这是分卷，先找齐第一卷"，不能编一个缺卷清单出来。
+        /// </summary>
+        public const string MissingFirstVolumeErrorType = "MissingFirstVolume";
+
+        /// <summary>
+        /// 判定"文件名是分卷、且首卷看不到"。
+        ///
+        /// <paramref name="archivePath"/> 为 null 时不做这个判定（老调用方按纯文本分类，行为不变）；
+        /// 分卷的头信息在**最后一卷**里，缺后续卷时连列目录都会失败 ——
+        /// 宁可判成缺卷，也不要误报成"不支持该格式"（不变量 7 要求报缺哪几个）。
+        ///
+        /// 注意：这里只按**文件名**判定，判不出"首卷到底在不在"。真正的二次判定（数目录里的缺号）
+        /// 在 <c>SevenZipProcessRunner.ResolveVolumeMissingErrorType</c>，那里才有文件系统可用。
+        /// </summary>
+        public static bool LooksLikeMissingVolumePart(string? archivePath)
+        {
+            if (string.IsNullOrWhiteSpace(archivePath))
+            {
+                return false;
+            }
+
+            return VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(archivePath)) != null;
+        }
+
+        public static string DetectSevenZipErrorType(
+            int exitCode,
+            string? output,
+            string? error,
+            string? archivePath = null)
         {
             string text = CombineOutput(output, error);
 
@@ -97,6 +133,16 @@ namespace ArchiveFixer.Engines.SevenZip
                 }
             }
 
+            /*
+             * 只给非首卷时报的是 "Cannot open the file as archive"（26.01 实测，退出码 2），
+             * 字面上与"这不是归档"完全一样。判据不能用关键字，只能用**文件名是不是分卷**：
+             * 一个本身就叫 .001/.002/… 的文件打不开，最可能的原因是同组的卷不在同目录里。
+             */
+            if (LooksLikeMissingVolumePart(archivePath))
+            {
+                return MissingFirstVolumeErrorType;
+            }
+
             if (ContainsAny(text,
                     "Access is denied",
                     "Permission denied",
@@ -177,6 +223,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 "AccessDenied" => StatusText.AccessDenied,
                 "OutputConflict" => StatusText.OutputConflict,
                 "VolumeMissing" => StatusText.VolumeMissing,
+                MissingFirstVolumeErrorType => StatusText.VolumeMissing,
                 "PathTooLong" => StatusText.PathTooLong,
                 "SevenZipMissing" => StatusText.SevenZipMissing,
                 "CommandLineError" => StatusText.ExtractFailed,
@@ -205,6 +252,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 "AccessDenied" => "权限不足，无法读取文件或写入输出目录",
                 "OutputConflict" => "输出路径存在冲突",
                 "VolumeMissing" => "分卷压缩包缺少必要分卷",
+                MissingFirstVolumeErrorType => "这是分卷压缩包的后续卷，缺少首卷（.001 / 第 1 卷）——请把同一组分卷放在同一目录后再解压",
                 "PathTooLong" => "路径过长，请缩短文件名或输出目录",
                 "SevenZipMissing" => "未找到 tools\\7zip\\7z.exe",
                 "CommandLineError" => string.IsNullOrWhiteSpace(detail)

@@ -204,6 +204,7 @@ namespace ArchiveFixer.ViewModels
         private string _passwordBookTooltip = string.Empty;
         private bool _showPassword;
         private bool _isBusy;
+        private int _busyNesting;
         private bool _isStopping;
         private string _selectedOutputDirectory = string.Empty;
         private TaskSummary _summary = new();
@@ -305,15 +306,76 @@ namespace ArchiveFixer.ViewModels
             set => SetProperty(ref _showPassword, value);
         }
 
+        /// <summary>
+        /// 是否有操作正在进行（驱动命令可用性：忙的时候「停止后续 / 取消当前」可点、其它入口变灰）。
+        ///
+        /// ⚠ 这是**嵌套计数**的对外视图，不是普通开关：写入 `true` 进入一层、写入 `false` 退出一层，
+        /// 只有最外层退出时才真的变成 false（见 <see cref="EnterBusy"/> / <see cref="ExitBusy"/>）。
+        ///
+        /// 为什么必须这样：三个协调器各自在 finally 里复位标志，而"一键处理"会在中途调用
+        /// 改名协调器与解压协调器 —— 内层的 finally 会把外层还没结束的忙碌状态清掉，
+        /// 于是「停止后续 / 取消当前」按钮在一键处理跑一半时变灰（它们只看 IsBusy）、
+        /// 守卫失效，用户还能在间隙里再点一次解压，同一个包被解两遍。
+        ///
+        /// 保留 set 写法并让它参与计数，是为了让负责内层的协调器（本轮不在授权文件清单里）
+        /// 无需改动就自动获得嵌套语义：它们的 true/finally false 天然成对。
+        /// </summary>
         public bool IsBusy
         {
             get => _isBusy;
             set
             {
-                if (SetProperty(ref _isBusy, value))
+                if (value)
                 {
-                    RaiseAllCommandCanExecuteChanged();
+                    EnterBusy();
                 }
+                else
+                {
+                    ExitBusy();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 进入"忙"的一层。只处理嵌套深度，不改变别的状态。
+        /// </summary>
+        public void EnterBusy()
+        {
+            _busyNesting++;
+
+            if (_busyNesting == 1)
+            {
+                SetBusyFlag(true);
+            }
+        }
+
+        /// <summary>
+        /// 退出"忙"的一层。只有深度回到 0 才真的把标志复位。
+        ///
+        /// 多退一次（没有对应的 EnterBusy）会被夹住在 0：宁可当成"不忙"，
+        /// 也绝不能让计数变成负数 —— 那样之后所有 Enter/Exit 都配不平，界面会**永久灰掉**。
+        /// </summary>
+        public void ExitBusy()
+        {
+            if (_busyNesting <= 0)
+            {
+                _busyNesting = 0;
+                return;
+            }
+
+            _busyNesting--;
+
+            if (_busyNesting == 0)
+            {
+                SetBusyFlag(false);
+            }
+        }
+
+        private void SetBusyFlag(bool value)
+        {
+            if (SetProperty(ref _isBusy, value, nameof(IsBusy)))
+            {
+                RaiseAllCommandCanExecuteChanged();
             }
         }
 
@@ -759,7 +821,16 @@ namespace ArchiveFixer.ViewModels
                 // 文件日志失败不影响屏幕日志。
             }
 
-            Application.Current?.Dispatcher?.Invoke(() =>
+            /*
+             * 屏幕日志走 BeginInvoke（排队），不是 Invoke（同步等待）。
+             *
+             * Invoke 在界面线程上会**就地执行**（不需要泵消息），看起来更"实时"；代价是：
+             * 从后台线程调用时它会阻塞那条线程直到界面线程空出来 —— 一键处理跑一批包时
+             * 每条日志都要和界面上的其它活抢一次，日志一多就变成"界面卡住"的一部分。
+             * BeginInvoke 只入队立刻返回，界面按自己的节奏消费；顺序仍是 FIFO，
+             * 界面日志的先后不会乱（文件日志本来就先在 _logService 里落好了）。
+             */
+            Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
             {
                 Logs.Add(new OperationLogItem
                 {
@@ -772,7 +843,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     Logs.RemoveAt(0);
                 }
-            });
+            }));
         }
 
         internal void RefreshOutputPaths()
@@ -794,6 +865,21 @@ namespace ArchiveFixer.ViewModels
 
             foreach (ArchiveTask task in Tasks)
             {
+                /*
+                 * 已经解压完的任务**不再重算**。
+                 *
+                 * 它们的 OutputPath 是解压管线回写的**实际落点**（输出目录已存在时可能是 xxx(1)），
+                 * 按"打算输出到哪"重算会把它写回原定目录：界面"输出目录"列与「打开输出目录」
+                 * 都会指向一个空目录，报告里的落点也不再是产物真正所在的地方。
+                 * 实测路径：第 2 轮的一键处理会重扫新加进来的内层包，而重扫会对**整个列表**
+                 * 调一次这里，把第 1 轮任务刚写回的实际落点冲掉（用户再也看不到 xxx(1)）。
+                 * 只有还没产出结果的任务才该跟着设置走。
+                 */
+                if (HasExtractionResult(task))
+                {
+                    continue;
+                }
+
                 try
                 {
                     task.OutputPath = _pathService.BuildOutputPath(task, options);
@@ -803,6 +889,18 @@ namespace ArchiveFixer.ViewModels
                     task.OutputPath = string.Empty;
                 }
             }
+        }
+
+        /// <summary>
+        /// 这个任务是否已经有解压产物（落点已由解压管线写回，不能再按设置重算）。
+        /// 「部分完成」也算：产物确实落在那个目录里，只是不完整。
+        /// </summary>
+        private static bool HasExtractionResult(ArchiveTask task)
+        {
+            return task.Status is
+                StatusText.ExtractSuccess or
+                StatusText.Overwritten or
+                StatusText.PartiallyCompleted;
         }
 
         private void OpenSettings()
@@ -865,12 +963,31 @@ namespace ArchiveFixer.ViewModels
         {
             var vm = new PasswordListViewModel(_passwordService, _dialogService);
 
-            var window = new PasswordListWindow(vm)
-            {
-                Owner = Application.Current.MainWindow
-            };
+            /*
+             * 窗口**还开着**的时候，主界面摘要就要跟着变。
+             *
+             * 以前只在 ShowDialog() 返回后刷新一次：用户在密码列表窗口里导入完密码本，
+             * 后面的主界面还是旧条数，必须先关窗才看得见 —— 看起来就像"导入没生效"，
+             * 而这恰恰是用户反复抱怨的那个现象。
+             *
+             * 这里订阅窗口 ViewModel 的密码集合：导入（ReloadFromService）、添加、删除、清空
+             * 都会触发它，口径与关窗后那次刷新完全一致。关窗时退订，别让窗口对象挂住主 ViewModel。
+             */
+            Action unhook = HookPasswordBookSummaryRefresh(vm, RefreshPasswordBookSummary);
 
-            window.ShowDialog();
+            try
+            {
+                var window = new PasswordListWindow(vm)
+                {
+                    Owner = Application.Current.MainWindow
+                };
+
+                window.ShowDialog();
+            }
+            finally
+            {
+                unhook();
+            }
 
             /*
              * 关窗口时把结果落到日志和主界面摘要上。
@@ -884,6 +1001,29 @@ namespace ArchiveFixer.ViewModels
                 : System.IO.Path.GetFileName(_passwordService.LastImportedBookPath);
 
             AppendLog("INFO", $"密码列表管理窗口已关闭（当前 {_passwordService.Passwords.Count} 条密码，密码本：{bookName}）。");
+        }
+
+        /// <summary>
+        /// 把"密码列表窗口的密码集合发生变化"接到主界面摘要刷新上，返回退订用的回调。
+        ///
+        /// 单独一个方法是为了能测：窗口本身要 ShowDialog（测试里没人点），但这条接线完全不需要窗口
+        /// —— 测试可以拿一个 PasswordListViewModel 直接验证"集合一变、摘要就变"。
+        /// </summary>
+        internal static Action HookPasswordBookSummaryRefresh(PasswordListViewModel listViewModel, Action refresh)
+        {
+            if (listViewModel == null || refresh == null)
+            {
+                return () => { };
+            }
+
+            void OnPasswordsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+            {
+                refresh();
+            }
+
+            listViewModel.Passwords.CollectionChanged += OnPasswordsChanged;
+
+            return () => listViewModel.Passwords.CollectionChanged -= OnPasswordsChanged;
         }
 
 
@@ -949,8 +1089,31 @@ namespace ArchiveFixer.ViewModels
 
         private void CopyFailedList()
         {
-            bool ok = _clipboardService.CopyFailedList(Tasks);
+            bool ok = CopySanitizedToClipboard(_taskSummaryService.BuildFailedListText(Tasks));
             _dialogService.ShowInfo(ok ? "失败列表已复制。" : "复制失败。");
+        }
+
+        /// <summary>
+        /// 剪贴板**唯一出口**：任何文本上剪贴板之前都必须先过脱敏
+        /// （AGENTS.md §6 第 5 条：密码只存内存，日志、报告、剪贴板、详情窗口一律脱敏）。
+        /// 四个入口（失败列表 / 任务信息 / 任务路径 / 错误信息）全部走这里，
+        /// 口径与「导出日志」「导出失败清单」一致。
+        /// </summary>
+        private bool CopySanitizedToClipboard(string? text)
+        {
+            return WriteClipboardText(PasswordMasker.Sanitize(text));
+        }
+
+        /// <summary>
+        /// 把**已经脱敏**的文本交给剪贴板服务。
+        ///
+        /// 做成 virtual 只是为了能在测试里截住实际写出的文本：无头进程里 <c>Clipboard.SetText</c>
+        /// 必然不可用（没有 STA / OLE 消息泵），测试无法从系统剪贴板读回内容，只能从这个出口观察。
+        /// ⚠ 不要在别处直接调它 —— 那会绕过 <see cref="CopySanitizedToClipboard"/> 里的脱敏。
+        /// </summary>
+        internal virtual bool WriteClipboardText(string sanitizedText)
+        {
+            return _clipboardService.CopyText(sanitizedText);
         }
 
         private void OpenOutputDirectory()
@@ -1059,7 +1222,7 @@ namespace ArchiveFixer.ViewModels
         {
             if (parameter is ArchiveTask task)
             {
-                _clipboardService.CopyTaskInfo(task);
+                CopySanitizedToClipboard(BuildTaskInfoText(task));
             }
         }
 
@@ -1067,7 +1230,7 @@ namespace ArchiveFixer.ViewModels
         {
             if (parameter is ArchiveTask task)
             {
-                _clipboardService.CopyTaskPath(task);
+                CopySanitizedToClipboard(task.CurrentPath);
             }
         }
 
@@ -1075,8 +1238,46 @@ namespace ArchiveFixer.ViewModels
         {
             if (parameter is ArchiveTask task)
             {
-                _clipboardService.CopyErrorMessage(task);
+                CopySanitizedToClipboard(task.ErrorMessage);
             }
+        }
+
+        /// <summary>
+        /// 任务信息文本。
+        ///
+        /// ⚠ 字段清单与 <see cref="ClipboardService.CopyTaskInfo"/> 刻意保持一致 ——
+        /// 为什么不用那个方法：它直接把文本塞进系统剪贴板，中间没有脱敏的位置，
+        /// 而 ClipboardService 本轮不在授权文件清单里（不能给它加脱敏重载）。
+        /// 这里自己拼文本再交给 <see cref="CopySanitizedToClipboard"/>，四个剪贴板入口就统一了口径
+        /// （与「导出日志 / 导出失败清单」一样都过 PasswordMasker）。
+        /// 那边加/减字段时，这里必须同步改，否则复制出来的内容会和菜单里的"复制任务信息"不一致。
+        /// </summary>
+        internal static string BuildTaskInfoText(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder();
+
+            builder.AppendLine("序号：" + task.Index);
+            builder.AppendLine("文件名：" + (task.FileName ?? string.Empty));
+            builder.AppendLine("原始路径：" + (task.OriginalPath ?? string.Empty));
+            builder.AppendLine("当前路径：" + (task.CurrentPath ?? string.Empty));
+            builder.AppendLine("当前后缀：" + (task.CurrentExtension ?? string.Empty));
+            builder.AppendLine("检测格式：" + (task.DetectedFormat ?? string.Empty));
+            builder.AppendLine("建议后缀：" + (task.SuggestedExtension ?? string.Empty));
+            builder.AppendLine("后缀状态：" + (task.ExtensionStatus ?? string.Empty));
+            builder.AppendLine("密码状态：" + (task.PasswordStatus ?? string.Empty));
+            builder.AppendLine("输出目录：" + (task.OutputPath ?? string.Empty));
+            builder.AppendLine("操作：" + (task.Operation ?? string.Empty));
+            builder.AppendLine("状态：" + (task.Status ?? string.Empty));
+            builder.AppendLine("进度：" + (task.ProgressText ?? string.Empty));
+            builder.AppendLine("错误信息：" + (task.ErrorMessage ?? string.Empty));
+            builder.AppendLine("耗时：" + (task.ElapsedText ?? string.Empty));
+
+            return builder.ToString().TrimEnd();
         }
 
         private void OpenTaskDirectory(object? parameter)

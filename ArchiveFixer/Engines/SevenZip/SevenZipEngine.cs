@@ -113,6 +113,11 @@ namespace ArchiveFixer.Engines.SevenZip
 
         public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
         {
+            /*
+             * 引擎层一律 ConfigureAwait(false)（见 SevenZipProcessRunner 的同名注释）：
+             * 我们不需要回到调用方的同步上下文，续体回到 UI 线程反而会把
+             * "谁在等谁"变成一条隐形的依赖 —— 历史卡死就是这么来的。
+             */
             return _runner.TestArchiveAsync(
                 request.ArchivePath,
                 request.Password ?? string.Empty,
@@ -133,9 +138,14 @@ namespace ArchiveFixer.Engines.SevenZip
         }
 
         /// <summary>
-        /// 探测参数与测试参数都只在这里拼。
+        /// 列目录参数只在这里拼。
         /// 用 <c>-slt</c> 拿稳定键值；<c>-bd</c> 关进度条（免得日志里全是百分比刷屏）；
         /// 密码只在本层拼进参数，且**不写进任何日志**。
+        ///
+        /// <c>-sccUTF-8</c> 是必须的（实测缺陷）：7-Zip 的控制台输出默认跟随系统 OEM 代码页
+        /// （中文系统 = 936/GBK），而 <see cref="SevenZipProcessRunner"/> 按 UTF-8 解码输出流，
+        /// 不加这个开关，中文路径与中文条目名会全部变成 <c>01_��ͨ</c> 这种乱码 ——
+        /// 路径预检摘要、超限文件名、失败清单都会跟着不可核对（26.01 实测：加上即正常）。
         /// </summary>
         private static List<string> BuildListArguments(string archivePath, string? password)
         {
@@ -144,6 +154,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 "l",
                 "-slt",
                 "-bd",
+                "-sccUTF-8",
                 "-y",
                 archivePath
             };

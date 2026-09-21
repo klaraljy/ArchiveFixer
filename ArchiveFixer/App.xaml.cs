@@ -10,8 +10,9 @@ namespace ArchiveFixer
         public static string AppBaseDirectory { get; private set; } = AppContext.BaseDirectory;
 
         /// <summary>
-        /// 用户数据目录（%AppData%\ArchiveFixer）。
-        /// 配置、日志、临时文件放在这里，避免程序目录不可写时静默失败。
+        /// 用户数据目录（<c>&lt;程序目录&gt;\data</c>）。
+        /// 配置、日志、临时文件、工作区都放在这里 —— 绿色软件跟着安装位置走，
+        /// 缓存绝不写进 C 盘的 %AppData%（用户明确要求）。
         /// </summary>
         public static string DataRootDirectory { get; private set; } =
             Path.Combine(AppContext.BaseDirectory, "data");
@@ -32,14 +33,15 @@ namespace ArchiveFixer
         public static string ToolsDirectory =>
             Path.Combine(AppBaseDirectory, "tools");
 
+        /// <summary>
+        /// 内置 7-Zip 目录。**只用来在启动时把目录建出来**，路径本身由
+        /// <see cref="ArchiveFixer.Engines.ToolLocator.BundledDirectory"/> 提供 —— 7z 路径只允许有一个来源。
+        ///
+        /// 历史：这里曾经还有 SevenZipExePath / SevenZipDllPath 两个属性，与 ToolLocator 里那份拼装重复
+        /// （当时都没有调用方）。一旦被谁顺手用起来，"到底用的哪个 7z"就再也说不清了，故删除。
+        /// </summary>
         public static string SevenZipDirectory =>
-            Path.Combine(ToolsDirectory, "7zip");
-
-        public static string SevenZipExePath =>
-            Path.Combine(SevenZipDirectory, "7z.exe");
-
-        public static string SevenZipDllPath =>
-            Path.Combine(SevenZipDirectory, "7z.dll");
+            ArchiveFixer.Engines.ToolLocator.Default.BundledDirectory;
 
         protected override void OnStartup(StartupEventArgs e)
         {

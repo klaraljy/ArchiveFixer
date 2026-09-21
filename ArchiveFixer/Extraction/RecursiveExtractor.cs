@@ -3,6 +3,7 @@ using ArchiveFixer.Engines;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
+using ArchiveFixer.Security;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -127,6 +128,15 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>出现多个内层归档，等用户拍板。</summary>
         NeedsDecision,
+
+        /// <summary>
+        /// 第 1 层起出现多分支：不再问第二遍（问过一次了），停在这一层。
+        ///
+        /// 与 <see cref="NeedsDecision"/> 分开、而不复用它的理由：两者的用户动作不同 ——
+        /// NeedsDecision 是"等你回答"，这一条是"已经按你的选择做完了，剩下的分支没展开"。
+        /// 混成一个会让"已完成"和"等你决定"分不清，用户会以为拿到的是最终数据。
+        /// </summary>
+        BranchNotExpanded,
 
         MaxDepthReached,
 
@@ -255,6 +265,9 @@ namespace ArchiveFixer.Extraction
             int totalFiles = 0;
             long totalSize = 0;
 
+            // 第 1 层起停下来时要能说清"还有多少个内层归档没展开"（不变量 8：多分支默认不展开，必须问）。
+            int unexpandedCount = 0;
+
             // 参数校验放在建工作区之前：路径都没有就没什么可展开的，
             // 这里也**不抛异常**（递归核心对外的约定是"用返回值说清楚"，不是"炸给调用方"）。
             if (task == null || string.IsNullOrWhiteSpace(task.CurrentPath))
@@ -318,12 +331,24 @@ namespace ArchiveFixer.Extraction
                      * 层数 → 累计文件数 → 累计大小 → 展开比。
                      * 顺序固定是为了让"命中哪一条"可预期、可复现、可写进测试；
                      * 密码尝试上限不在这里查，它是**每层内部**的事（见 ExtractLayerAsync）。
+                     *
+                     * 展开比要问引擎"这个包解压后多大"（第 0 层）或量磁盘（内层），
+                     * 两者都可能要等 I/O —— 所以它是 async 的，**绝不在这里同步等待**：
+                     * 同步 GetResult() 会把 UI 线程占住，而 7z 的续体要回到同一个线程，
+                     * 两边互等就是历史"界面永久无响应"的真凶（无弹窗、无子进程、CPU 不忙）。
                      */
                     RecursionStopReason blocked = CheckLimitsBeforeLayer(item, layers, totalFiles, totalSize);
 
                     if (blocked != RecursionStopReason.None)
                     {
                         stopReason = blocked;
+                        break;
+                    }
+
+                    if (layers.Count < MaxExpansionRatioChecks &&
+                        await IsExpansionRatioExceededAsync(item, layers, pending).ConfigureAwait(false))
+                    {
+                        stopReason = RecursionStopReason.ExpansionRatioExceeded;
                         break;
                     }
 
@@ -346,15 +371,23 @@ namespace ArchiveFixer.Extraction
                     totalFiles += report.OutputFileCount;
                     totalSize += report.OutputSize;
 
+                    var enqueueState = new EnqueueState
+                    {
+                        Pending = pending,
+                        UnexpandedCount = 0
+                    };
+
                     if (!TryEnqueueNextLayers(
                             item,
                             report,
                             workspace,
-                            pending,
                             mode,
+                            enqueueState,
                             out RecursionDecisionRequest? askUser,
                             out RecursionStopReason enqueueStopReason))
                     {
+                        unexpandedCount = enqueueState.UnexpandedCount;
+
                         if (askUser != null)
                         {
                             decision = askUser;
@@ -384,7 +417,8 @@ namespace ArchiveFixer.Extraction
                     workspace,
                     finalOutputDirectory,
                     string.Empty,
-                    publish);
+                    publish,
+                    unexpandedCount);
             }
             catch (OperationCanceledException)
             {
@@ -399,7 +433,8 @@ namespace ArchiveFixer.Extraction
                     workspace,
                     finalOutputDirectory,
                     string.Empty,
-                    published: false);
+                    published: false,
+                    unexpandedCount);
             }
             catch (Exception ex)
             {
@@ -411,7 +446,8 @@ namespace ArchiveFixer.Extraction
                     workspace,
                     finalOutputDirectory,
                     PasswordMasker.Sanitize(ex.Message),
-                    published: false);
+                    published: false,
+                    unexpandedCount);
             }
         }
 
@@ -451,6 +487,28 @@ namespace ArchiveFixer.Extraction
 
                 attempts++;
                 triedAny = true;
+
+                /*
+                 * 第一道防线（不变量 4）：解压前先列目录，把危险条目名挑出来。
+                 *
+                 * 递归展开的内层包过去**完全绕过** Security 层（预检与落点校验都只接在单层 GUI 路径上），
+                 * 于是一个带 `..\` 的内层包会被原样解开、产物落到目标根之外，而报告里一个字都不提。
+                 * 这里按"当前这个密码候选"列一次目录：能列出来就顺手做预检，
+                 * 列不出来（加密头 -mhe、损坏）**不拦** —— 拦下来会让正常包也解不开，
+                 * 那道兜底是解压后的落点校验。
+                 */
+                string? unsafeSummary = await CheckEntriesBeforeExtractAsync(
+                        item.ArchivePath,
+                        candidate,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (unsafeSummary != null)
+                {
+                    return LayerOutcome.Stop(
+                        BuildLayerReport(item, lastFailure, succeededPassword: null, unsafeSummary),
+                        RecursionStopReason.UnsafeEntry);
+                }
 
                 ArchiveOperationResult result = await _engine.ExtractAsync(
                         new ArchiveRequest
@@ -511,6 +569,35 @@ namespace ArchiveFixer.Extraction
 
             (int fileCount, long outputSize) = OutputVerifier.Measure(item.Layer.OutputPath);
 
+            /*
+             * 第二道防线（不变量 4）：解压后校验真实落点。
+             *
+             * 7z.exe 是外部进程，第一道预检挡不住它自己拼出来的落点（符号链接条目、引擎自身的
+             * 路径处理都在预检视野之外）。越界必须成为**失败结论**：不发布、不清理源包，
+             * 报告里写清越界的是哪个产物、落在哪 —— 只写一行日志而结论仍是"解压成功"，
+             * 等于把不变量 4 降级成一条没人看的提示。
+             */
+            string? landingViolation = FindLandingViolation(item.Layer.OutputPath);
+
+            if (landingViolation != null)
+            {
+                var violatedReport = new RecursionLayerReport
+                {
+                    Depth = item.Depth,
+                    ArchivePath = item.ArchivePath,
+                    OutputPath = item.Layer.OutputPath,
+                    Success = false,
+                    Status = StatusText.ExtractFailed,
+                    Message = "产物越出本层产物目录，已拒绝承认本次解压：" + landingViolation,
+                    InnerArchives = Array.Empty<string>(),
+                    OutputFileCount = fileCount,
+                    OutputSize = outputSize,
+                    UsedPasswordMasked = PasswordMasker.Mask(succeededPassword)
+                };
+
+                return LayerOutcome.Stop(violatedReport, RecursionStopReason.UnsafeEntry);
+            }
+
             IReadOnlyList<string> innerArchives = await ProbeInnerArchivesAsync(
                     item.Layer.OutputPath,
                     cancellationToken)
@@ -535,6 +622,105 @@ namespace ArchiveFixer.Extraction
             };
 
             return LayerOutcome.Ok(report);
+        }
+
+        /// <summary>
+        /// 第一道防线：解压前预检条目名。
+        /// 返回 null = 没有发现问题、或者**列不出目录**（加密头 / 损坏，这种情况下不拦）；
+        /// 返回非空字符串 = 发现了危险条目，内容是可以直接给用户看的一句话。
+        /// </summary>
+        private async Task<string?> CheckEntriesBeforeExtractAsync(
+            string archivePath,
+            string password,
+            CancellationToken cancellationToken)
+        {
+            ArchiveListResult list;
+
+            try
+            {
+                list = await _engine
+                    .ListAsync(ArchiveRequest.For(archivePath, password), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                // 引擎抛异常时按"列不出来"处理：真正的兜底是解压后的落点校验。
+                return null;
+            }
+
+            if (!list.Success)
+            {
+                return null;
+            }
+
+            PathSafetyReport report = ArchivePathGuard.CheckEntries(list.Entries);
+
+            return report.IsSafe ? null : report.Summary;
+        }
+
+        /// <summary>
+        /// 第二道防线：逐个核对产物真实落点是否都在本层产物目录之内。
+        /// 返回 null = 都老实待在该待的地方；否则返回第一条越界说明（给用户看的）。
+        ///
+        /// 判两件事：
+        /// ① 路径规范化后必须落在产物目录之内（`..` / 绝对路径 / 盘符这类一眼可见的越界）；
+        /// ② 产物里出现**目录联接点 / 符号链接**也算越界 —— 它的名字在目录里，写进去的内容却在别处。
+        ///    （`OutputVerifier.Measure` 出于"不跟随链接"的考虑会跳过它们，所以这一条只能在这里拦。）
+        ///
+        /// ⚠ <b>能力边界</b>：这个方法只看得见产物目录**里面**的东西。
+        /// 绕过我们直接写到别的目录去的引擎行为它发现不了 —— 那种情况靠
+        /// <see cref="CheckEntriesBeforeExtractAsync"/> 的第一道预检拦。两道一起才是不变量 4。
+        /// </summary>
+        internal static string? FindLandingViolation(string outputRoot)
+        {
+            if (string.IsNullOrWhiteSpace(outputRoot) || !Directory.Exists(outputRoot))
+            {
+                return null;
+            }
+
+            var pending = new Stack<string>();
+            pending.Push(outputRoot);
+
+            while (pending.Count > 0)
+            {
+                string current = pending.Pop();
+                string[] entries;
+
+                try
+                {
+                    entries = Directory.GetFileSystemEntries(current);
+                }
+                catch
+                {
+                    // 读不了就跳过；漏看一个目录只是少查一层，不构成"越界"结论。
+                    continue;
+                }
+
+                foreach (string entry in entries)
+                {
+                    if (!ArchivePathGuard.IsInsideRoot(outputRoot, entry, out string reason))
+                    {
+                        return $"{entry}（{reason}）";
+                    }
+
+                    if (!TryGetAttributes(entry, out FileAttributes attributes))
+                    {
+                        continue;
+                    }
+
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        return $"{entry}（是目录联接点或符号链接：它在产物目录里的名字看不出真实落点，可能把内容写到目录之外）";
+                    }
+
+                    if ((attributes & FileAttributes.Directory) != 0)
+                    {
+                        pending.Push(entry);
+                    }
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -674,8 +860,8 @@ namespace ArchiveFixer.Extraction
             WorkItem item,
             RecursionLayerReport report,
             ExtractionWorkspace workspace,
-            Queue<WorkItem> pending,
             RecursionMode mode,
+            EnqueueState state,
             out RecursionDecisionRequest? decision,
             out RecursionStopReason stopReason)
         {
@@ -729,6 +915,7 @@ namespace ArchiveFixer.Extraction
              */
             if (toProcess.Count > _limits.MaxInnerArchivesPerLayer)
             {
+                state.UnexpandedCount = toProcess.Count;
                 stopReason = RecursionStopReason.TooManyInnerArchives;
                 return false;
             }
@@ -748,13 +935,20 @@ namespace ArchiveFixer.Extraction
                     if (item.Depth > 0)
                     {
                         /*
-                         * 更深的层里出现多分支：不再问第二遍，就停在这一层。
-                         * 这不算失败 —— 该层的产物已经解出来了，只是没有继续往里钻。
+                         * 更深的层里出现多分支：不再问第二遍，停在这一层。
+                         *
+                         * 但**不能悄悄停**：过去的写法是 return true 让流程自然收尾，
+                         * 于是停因变成 Completed、产物照常发布、用户看到"已完成 N 层递归解压"，
+                         * 而这一层里其实还有 K 个内层包没展开 —— 他以为拿到的是最终数据。
+                         * 这里是明确的停因 + 明确的数量，Summary 里会写"第 N 层还有 K 个内层包未展开"。
                          */
-                        return true;
+                        state.UnexpandedCount = innerArchives.Count;
+                        stopReason = RecursionStopReason.BranchNotExpanded;
+                        return false;
                     }
 
                     decision = BuildDecision(item, innerArchives);
+                    state.UnexpandedCount = innerArchives.Count;
                     return false;
                 }
             }
@@ -771,11 +965,12 @@ namespace ArchiveFixer.Extraction
                  */
                 if (item.Depth + 1 >= _limits.MaxDepth)
                 {
+                    state.UnexpandedCount = toProcess.Count;
                     stopReason = RecursionStopReason.MaxDepthReached;
                     return false;
                 }
 
-                pending.Enqueue(new WorkItem
+                state.Pending.Enqueue(new WorkItem
                 {
                     Depth = item.Depth + 1,
                     ArchivePath = innerArchivePath,
@@ -867,6 +1062,10 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>
         /// 每次要继续之前检查的硬上限（规则 5）。这里的每一项命中都必须**停止**，没有例外。
+        ///
+        /// ⚠ 这里**不再**包含展开比：展开比要知道"这个包解压后多大"，那是一次引擎调用或一次磁盘遍历，
+        /// 是异步的（见 <see cref="IsExpansionRatioExceededAsync"/>）。把一个 async 操作塞进同步判定，
+        /// 只能靠 <c>GetAwaiter().GetResult()</c>，而那正是历史卡死的原因。调用方按顺序查完这里，再 await 展开比。
         /// </summary>
         private RecursionStopReason CheckLimitsBeforeLayer(
             WorkItem item,
@@ -900,11 +1099,6 @@ namespace ArchiveFixer.Extraction
                 return RecursionStopReason.MaxTotalSizeReached;
             }
 
-            if (layers.Count < MaxExpansionRatioChecks && IsExpansionRatioExceeded(item, layers))
-            {
-                return RecursionStopReason.ExpansionRatioExceeded;
-            }
-
             return RecursionStopReason.None;
         }
 
@@ -912,8 +1106,14 @@ namespace ArchiveFixer.Extraction
         /// 单层展开比检查：本层归档解压后的总大小 / 该归档文件大小，超限即"疑似压缩炸弹"。
         /// 取不到可信数值（文件不在、list 失败、被压缩成 0 字节）时**不拦**：
         /// 拿不准的时候拦下来会把正常包也误伤，而真正的兜底是 MaxTotalSize / MaxTotalFiles 这两条硬线。
+        ///
+        /// ⚠ **全程 async，绝不同步等待**：这里要问引擎"解压后多大"（第 0 层）或遍历磁盘（内层），
+        /// 在 UI 线程上同步等它就是死锁（7z 的续体要回到同一个被阻塞的线程）。
         /// </summary>
-        private bool IsExpansionRatioExceeded(WorkItem item, List<RecursionLayerReport> layers)
+        private async Task<bool> IsExpansionRatioExceededAsync(
+            WorkItem item,
+            List<RecursionLayerReport> layers,
+            Queue<WorkItem> pending)
         {
             long archiveSize = SafeFileLength(item.ArchivePath);
 
@@ -926,43 +1126,24 @@ namespace ArchiveFixer.Extraction
 
             if (item.IsRoot)
             {
-                ArchiveListResult list;
-
-                try
-                {
-                    /*
-                     * 只有第 0 层需要问引擎"解压后多大"：那时的归档还是用户给的原始文件，
-                     * 磁盘上还没有任何产物可量。
-                     *
-                     * 这里是**同步等待**一个本该异步的引擎调用，属于刻意取舍：
-                     * ① 本次调用是即时返回的元数据查询（7z l），不是长任务；
-                     * ② 它挂在一个同步的"上限判定"函数上，判定结果决定后面整条分支，
-                     *    写成异步会把 async 渗透到主循环的每一处上限检查里，得不偿失。
-                     * 用 GetAwaiter().GetResult() 而不是 .Result：前者保留原始异常类型，
-                     * 不会被包成 AggregateException；异常本身由外层 catch 兜住，不会外泄。
-                     */
-                    list = _engine
-                        .ListAsync(ArchiveRequest.For(item.ArchivePath), CancellationToken.None)
-                        .GetAwaiter()
-                        .GetResult();
-                }
-                catch
-                {
-                    // 引擎抛异常时按"拿不准"处理，不拦。
-                    return false;
-                }
-
-                if (!list.Success)
-                {
-                    return false;
-                }
-
-                uncompressedSize = list.TotalUncompressedSize;
+                /*
+                 * 只有第 0 层需要问引擎"解压后多大"：那时的归档还是用户给的原始文件，
+                 * 磁盘上还没有任何产物可量。
+                 */
+                uncompressedSize = await GetRootUncompressedSizeAsync(item.ArchivePath).ConfigureAwait(false);
             }
             else
             {
-                // 内层归档已经在磁盘上了：它所在那一层的产物实测大小就是它的解压后大小，比 list 更可信。
-                uncompressedSize = layers.Count > 0 ? layers[^1].OutputSize : 0;
+                /*
+                 * 内层归档已经在磁盘上了：它自己所在那一层的产物实测大小就是它的解压后大小，
+                 * 比 list 更可信。
+                 *
+                 * 这里必须**定位到它自己那一层**。旧写法取 layers[^1]（最近完成的那一层），
+                 * 而主循环是宽度优先的：同一层排了多个分支时，处理第二个分支时 layers[^1] 是
+                 * **第一个分支**的产物。两个不相干的数相除，结果就是"随便一个正常小包被误报成
+                 * 压缩炸弹并拒绝发布"（例：第 0 层解出 2 GB 文件 + 一个 1 MB 的内层 zip → 2000 倍）。
+                 */
+                uncompressedSize = ResolveLayerOutputSize(item.ArchivePath, layers, pending);
             }
 
             if (uncompressedSize <= 0)
@@ -971,6 +1152,80 @@ namespace ArchiveFixer.Extraction
             }
 
             return uncompressedSize / (double)archiveSize > _limits.MaxExpansionRatio;
+        }
+
+        /// <summary>
+        /// 问引擎"第 0 层的包解压后多大"。失败按"拿不准"处理（返回 0 = 不拦）。
+        /// </summary>
+        private async Task<long> GetRootUncompressedSizeAsync(string archivePath)
+        {
+            try
+            {
+                ArchiveListResult list = await _engine
+                    .ListAsync(ArchiveRequest.For(archivePath), CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                return list.Success ? list.TotalUncompressedSize : 0;
+            }
+            catch
+            {
+                // 引擎抛异常时按"拿不准"处理，不拦。
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 找出"这个内层归档所属那一层"的产物总大小。
+        ///
+        /// 反查链：<see cref="WorkspaceLayer.Layers"/> 的每一层都记着 InputPath（它解的是哪个归档），
+        /// 于是能唯一确定这个内层归档属于哪一层；该层的 OutputSize 就是它解压后的大小。
+        /// 只有那一层已经解完（在 <paramref name="layers"/> 里有报告）时才拿得到。
+        /// </summary>
+        private long ResolveLayerOutputSize(
+            string innerArchivePath,
+            List<RecursionLayerReport> layers,
+            Queue<WorkItem> pending)
+        {
+            string target = SafePathHelper.GetFullPathSafe(innerArchivePath);
+
+            if (target.Length == 0)
+            {
+                return 0;
+            }
+
+            foreach (WorkItem queued in pending)
+            {
+                if (queued.Layer.InputPath.Length == 0)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(
+                        SafePathHelper.GetFullPathSafe(queued.Layer.InputPath),
+                        target,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string outputPath = SafePathHelper.GetFullPathSafe(queued.Layer.OutputPath);
+
+                RecursionLayerReport? owner = layers.FirstOrDefault(layer =>
+                    string.Equals(
+                        SafePathHelper.GetFullPathSafe(layer.OutputPath),
+                        outputPath,
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (owner != null)
+                {
+                    return owner.OutputSize;
+                }
+
+                // 那一层还没解（理论上到不了这里）：拿不准就不拦。
+                return 0;
+            }
+
+            return 0;
         }
 
         /// <summary>
@@ -1031,9 +1286,25 @@ namespace ArchiveFixer.Extraction
             ArchiveOperationResult? result,
             string? succeededPassword)
         {
-            string message = result == null
-                ? "引擎没有返回结果"
-                : PasswordMasker.Sanitize(result.Message);
+            return BuildLayerReport(
+                item,
+                result,
+                succeededPassword,
+                PasswordMasker.Sanitize(result?.Message));
+        }
+
+        /// <summary>
+        /// 带"失败原因覆盖"的层报告：预检/落点校验这类**不是引擎给出**的失败，
+        /// 原因来自安全检查，必须原样写进报告（Message 会被 PasswordMasker 再洗一遍，防密码泄漏）。
+        /// </summary>
+        private RecursionLayerReport BuildLayerReport(
+            WorkItem item,
+            ArchiveOperationResult? result,
+            string? succeededPassword,
+            string? overrideMessage)
+        {
+            string message = overrideMessage
+                ?? (result == null ? "引擎没有返回结果" : PasswordMasker.Sanitize(result.Message));
 
             return new RecursionLayerReport
             {
@@ -1042,7 +1313,7 @@ namespace ArchiveFixer.Extraction
                 OutputPath = item.Layer.OutputPath,
                 Success = false,
                 Status = result?.Status ?? StatusText.ExtractFailed,
-                Message = message,
+                Message = PasswordMasker.Sanitize(message),
                 InnerArchives = Array.Empty<string>(),
                 OutputFileCount = 0,
                 OutputSize = 0,
@@ -1119,7 +1390,8 @@ namespace ArchiveFixer.Extraction
             ExtractionWorkspace workspace,
             string finalOutputDirectory,
             string extraMessage,
-            bool published)
+            bool published,
+            int unexpandedCount = 0)
         {
             bool completed = stopReason == RecursionStopReason.Completed;
             bool partiallyCompleted = !completed && layers.Any(layer => layer.Success);
@@ -1170,7 +1442,8 @@ namespace ArchiveFixer.Extraction
                     finalOutputPath,
                     completed,
                     publishMessage,
-                    extraMessage)
+                    extraMessage,
+                    unexpandedCount)
             };
         }
 
@@ -1181,7 +1454,8 @@ namespace ArchiveFixer.Extraction
             string finalOutputPath,
             bool completed,
             string publishMessage,
-            string extraMessage)
+            string extraMessage,
+            int unexpandedCount)
         {
             int done = layers.Count(layer => layer.Success);
 
@@ -1197,6 +1471,16 @@ namespace ArchiveFixer.Extraction
             };
 
             var parts = new List<string> { head };
+
+            /*
+             * "还有多少内层包没展开"必须写出来（不变量 8）。
+             * 只报"已完成"而把没展开的分支咽下去，用户会以为这就是最终数据 ——
+             * 这与"部分成功不得显示为成功"是同一类问题。
+             */
+            if (unexpandedCount > 0)
+            {
+                parts.Add($"该层还有 {unexpandedCount} 个内层包未展开，需要时可对它们单独发起解压");
+            }
 
             if (completed && !string.IsNullOrWhiteSpace(finalOutputPath))
             {
@@ -1235,6 +1519,7 @@ namespace ArchiveFixer.Extraction
             {
                 RecursionStopReason.Completed => "没有更多内层归档",
                 RecursionStopReason.NeedsDecision => "检测到多个内层归档，等待用户决定是否继续展开",
+                RecursionStopReason.BranchNotExpanded => "更深的层里还有多个内层归档未展开（多分支默认不展开）",
                 RecursionStopReason.MaxDepthReached => "已达到最大递归层数",
                 RecursionStopReason.MaxTotalFilesReached => "已达到累计输出文件数上限",
                 RecursionStopReason.MaxTotalSizeReached => "已达到累计输出总大小上限",
@@ -1347,6 +1632,19 @@ namespace ArchiveFixer.Extraction
                 attributes = default;
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 入队这一步的可变状态。用一个对象而不是三个 out 参数，
+        /// 是为了让"这一层还有几个内层包没展开"在每条提前返回的分支上都必须显式写一次 ——
+        /// 忘了写就是 0，而 0 会让 Summary 少掉那句提示，所以每处都写清楚。
+        /// </summary>
+        private sealed class EnqueueState
+        {
+            public Queue<WorkItem> Pending { get; init; } = new();
+
+            /// <summary>本层没有入队的内层归档数量（停因是"多分支不展开"时才有意义）。</summary>
+            public int UnexpandedCount { get; set; }
         }
 
         /// <summary>队列里的一项：一个待解的归档 + 它在第几层 + 它的工作区目录。</summary>

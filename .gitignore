@@ -8,10 +8,16 @@ obj/
 .vs/
 .idea/
 
-# 运行期产物（日志与临时目录实际位于 %AppData%\ArchiveFixer）
+# 运行期产物
+# 实际位置是 <程序目录>\data\{logs,temp,work}（用户明确要求缓存不许落 C 盘，见 AGENTS.md §8/§12），
+# 它整体位于 bin/ 之下，已被上面的 bin/ 规则覆盖。这里再列一遍是为了防止有人把缓存根目录
+# （CacheRootDirectory）指到仓库根目录时把日志提交进来。
 logs/
 temp/
+work/
+data/
 *.log
+password-book.path
 
 # 测试结果
 TestResults/

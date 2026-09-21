@@ -122,6 +122,9 @@ namespace ArchiveFixer.Views
             // 注意：这里只显示密码状态，不显示 task.Password。
             builder.AppendLine("密码状态：" + Safe(task.PasswordStatus));
 
+            // 主界面 DataGrid 的「分卷」列默认隐藏，这里补上，保证"缺哪几卷"始终看得到。
+            builder.AppendLine("分卷：" + Safe(task.VolumeInfoText));
+
             builder.AppendLine("当前操作：" + Safe(task.Operation));
             builder.AppendLine("状态：" + Safe(task.Status));
             builder.AppendLine("进度：" + Safe(task.ProgressText));

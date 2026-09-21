@@ -189,7 +189,13 @@ namespace ArchiveFixer
 
         /// <summary>
         /// 右键菜单：智能修正此文件后缀。
-        /// 这里会把当前右键的任务设为 IsSelected，然后调用主 ViewModel 的 SmartRenameCommand。
+        ///
+        /// SmartRenameCommand 作用在"勾选"的任务上（OneClickCoordinator 里判的就是 IsSelected），
+        /// 所以右键单个文件时必须把它自己勾上、并让其余任务退出这次操作的 scope。
+        /// 旧写法的问题不是"清了别的勾选"，而是**清了却一句提示都没有**：用户勾了 20 个，
+        /// 右键其中一个修后缀，汇总区的"选中："从 20 变成 1，紧接着「一键处理」「移除选中」
+        /// 「清空列表」的作用范围全变了，日志里查不到原因。
+        /// 兜底做法：作用范围写在列表上方的常驻提示行里，用户点之前就知道这次会动几个。
         /// </summary>
         private void SmartRenameCurrentTaskMenuItem_Click(object sender, RoutedEventArgs e)
         {
@@ -212,7 +218,10 @@ namespace ArchiveFixer
 
             foreach (ArchiveTask item in viewModel.Tasks)
             {
-                item.IsSelected = false;
+                if (!ReferenceEquals(item, task))
+                {
+                    item.IsSelected = false;
+                }
             }
 
             task.IsSelected = true;

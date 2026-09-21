@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -34,9 +35,37 @@ namespace ArchiveFixer.ViewModels
         /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
         private const int MaxPreflightPasswordAttempts = 3;
 
+        /// <summary>
+        /// 每个归档（**每一层**）最多真的试几个密码候选（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
+        ///
+        /// 为什么必须有：解压模式下一个候选 = **一次完整解压**。用户那两个 mp4 的第二层是加密分卷，
+        /// 几百条密码本的包会被逐个候选整包重解一遍（几百 MB 起、磁盘一直在写），
+        /// 表现就是"几十分钟不动"，最后还可能把"没试完"报成"密码错误"。
+        ///
+        /// 到上限时的状态是 <see cref="StatusText.PasswordAttemptLimitReached"/>，**不是**"密码错误"。
+        ///
+        /// 说明：这里目前是常量而不是设置项 —— 本轮改动不允许碰 <c>Models/AppSettings.cs</c> 与设置窗口，
+        /// 把它做成 `MaxPasswordAttemptsPerLayer` 设置项是后续动作（见报告里的移交项）。
+        /// </summary>
+        internal const int MaxPasswordAttemptsPerLayer = 10;
+
+        /// <summary>合并提示里最多列几个文件名（再多就让用户去看失败清单），别弹一个占满屏幕的框。</summary>
+        private const int MaxPasswordFailureNamesInDialog = 10;
+
         private CancellationTokenSource? _operationCts;
         private readonly List<CancellationTokenSource> _runningTaskCts = new();
         private bool _isExtracting;
+
+        /*
+         * 本批因密码没通过而失败的任务（密码错误 / 达到密码尝试上限）。
+         *
+         * 旧逻辑在每个任务的循环体里各弹一次模态框，而且用的是**同步** Dispatcher.Invoke：
+         * 50 个错包 = 50 次阻塞点击，批量跑不动。现在只在这里登记，
+         * 批次结束后由 ShowPasswordFailuresSummaryAsync 合并成一次提示。
+         * 并发解压时多个任务会同时写它，所以必须加锁（而不是靠"反正都在 UI 线程上"）。
+         */
+        private readonly List<(string FileName, string Status)> _passwordFailures = new();
+        private readonly object _passwordFailuresLock = new();
 
         public ExtractionCoordinator(
             MainViewModel vm,
@@ -60,6 +89,23 @@ namespace ArchiveFixer.ViewModels
         private AppSettings Settings => _vm.Settings;
 
         /// <summary>
+        /// 收尾重活的产物：后台线程只负责碰文件系统，结论与日志都通过它回传给 UI 线程，
+        /// 免得后台线程去动界面集合 / 任务状态。
+        /// </summary>
+        private sealed class PostProcessWorkResult
+        {
+            public OutputVerificationResult Verification { get; init; } = new();
+
+            public List<(string Level, string Message)> LogEntries { get; init; } = new();
+
+            public bool BudgetExceeded { get; init; }
+
+            public string BudgetMessage { get; init; } = string.Empty;
+
+            public CollectResult? Collected { get; init; }
+        }
+
+        /// <summary>
         /// 解压成功之后的收尾：校验落盘结果 → 归集 → 视开关清理源包（M3）。
         ///
         /// 顺序不能换：
@@ -69,10 +115,194 @@ namespace ArchiveFixer.ViewModels
         ///
         /// 任何一步失败都**不改变**"解压成功"这个结论，只是把结论写进日志与任务字段；
         /// 不要因为归集或清理失败就把任务标成失败 —— 用户的文件确实解出来了。
+        ///
+        /// 线程规则（这是 P0 修复的关键）：
+        /// 收尾里的"全目录枚举 / 二次遍历 / 归集移动 / 删除源包"**全是同步磁盘活**，
+        /// 之前整段跑在 UI 线程上（整条管线没有 ConfigureAwait(false)，await 的续体全回 Dispatcher），
+        /// 780MB 的包解出几千个文件时窗口彻底无响应 —— 与"抠出内嵌归档"是同一个坑，
+        /// 那边已经改成 Task.Run 并写了注释，收尾这段是漏改。
+        /// 现在重活统一进 <see cref="RunPostProcessWork"/> 交给 Task.Run，
+        /// await 回来（没有 ConfigureAwait(false)，续体仍在 UI 上下文）才写任务状态与日志。
+        ///
+        /// 取消规则（P1）：收尾每一步之前都查令牌。用户按了「取消当前」就不许再移动产物、更不许删源包
+        /// （AGENTS.md §9.5：取消、部分完成、校验失败一律不删）。取消由上层 catch 落成"已取消"，不得显示成功。
         /// </summary>
+        private async Task PostProcessSuccessAsync(
+            ArchiveTask task,
+            string engineArchivePath,
+            string password,
+            string outputRedirectNote,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
+            // 清单同样取自**真正解开的那份归档**：内嵌归档要拿抠出来的文件去列，源文件 7z 根本打不开。
+            ArchiveListResult expected = await _archiveEngine.ListAsync(
+                ArchiveRequest.For(engineArchivePath, password),
+                cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 开关在进后台之前读一次：设置是用户可改的，别让后台线程读到半路改掉的值。
+            bool collectResults = Settings.CollectResultsToDirectory;
+            string collectTargetDirectory = Settings.CollectTargetDirectory;
+            bool deleteSource = Settings.DeleteSourceAfterExtract;
+
+            PostProcessWorkResult work = await Task.Run(
+                () => RunPostProcessWork(
+                    task,
+                    expected,
+                    collectResults,
+                    collectTargetDirectory,
+                    deleteSource,
+                    cancellationToken),
+                cancellationToken);
+
+            // 回到 UI 线程：只做状态与日志，不再碰大盘。
+            foreach ((string level, string message) in work.LogEntries)
+            {
+                AppendLog(level, message);
+            }
+
+            if (work.BudgetExceeded)
+            {
+                task.Status = StatusText.ExtractFailed;
+                task.ErrorMessage = work.BudgetMessage;
+
+                // 不发布、不清理：产物留在原地让用户自己判断，源文件更不能删。
+                StopAfterCurrent();
+                return;
+            }
+
+            task.IsOutputVerified = work.Verification.Verified;
+
+            // 把"实际输出到别处"这件事写进任务对象：输出目录被自动改名时，用户必须在任务上看得见，
+            // 不能只在日志里留一句就过去（AGENTS.md 不变量 6 的同一精神：结论不能静默）。
+            task.VerifyMessage = string.IsNullOrWhiteSpace(outputRedirectNote)
+                ? work.Verification.Message
+                : $"{work.Verification.Message}；{outputRedirectNote}";
+
+            if (work.Collected != null && work.Collected.Success)
+            {
+                task.CollectedPath = work.Collected.DestinationPath;
+            }
+        }
+
+        /// <summary>
+        /// 收尾重活本体：落点校验 → 结果校验 → 预算事后判定 → 归集 → 清理源包。
+        ///
+        /// **只允许在后台线程上跑**（见 <see cref="PostProcessSuccessAsync"/> 的线程规则）：
+        /// 这里只碰文件系统，不写任务状态、不写界面日志集合，要说的都放进 LogEntries 回传。
+        /// </summary>
+        private PostProcessWorkResult RunPostProcessWork(
+            ArchiveTask task,
+            ArchiveListResult expected,
+            bool collectResults,
+            string collectTargetDirectory,
+            bool deleteSource,
+            CancellationToken cancellationToken)
+        {
+            var logEntries = new List<(string Level, string Message)>();
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            OutputVerificationResult verification = OutputVerifier.Verify(
+                task.OutputPath,
+                expected.Success ? expected : null);
+
+            // 解压后落点校验（第二道防线）：产物必须都在目标根目录之内。
+            if (Directory.Exists(task.OutputPath))
+            {
+                foreach (string produced in Directory.EnumerateFiles(task.OutputPath, "*", SearchOption.AllDirectories))
+                {
+                    if (!ArchivePathGuard.IsInsideRoot(task.OutputPath, produced, out string landReason))
+                    {
+                        logEntries.Add(("ERROR", $"{task.FileName}：产物落点异常 —— {landReason}"));
+                    }
+                }
+            }
+
+            /*
+             * 运行时预算的事后判定。
+             *
+             * 7z 写盘的时候我们拦不住（外部进程，我们看不到它的写入），所以"超限就停"只能在事后做：
+             * 量一遍产物，超了就**停止后续任务**并把这一单标出来 —— 至少不会让整盘被一个包吃掉。
+             * 这条只在引擎给不出清单时才真正有意义，但事后量一遍很便宜，就一直做。
+             */
+            (int producedFiles, long producedSize) = OutputVerifier.Measure(task.OutputPath);
+            ResourceBudgetOptions budgetLimits = ResourceBudgetOptions.Default;
+
+            if (producedSize > budgetLimits.MaxTotalSize || producedFiles > budgetLimits.MaxFileCount)
+            {
+                string budgetMessage =
+                    $"解压产物超出资源预算：{producedFiles} 个文件 / {producedSize} 字节" +
+                    $"（上限 {budgetLimits.MaxFileCount} 个 / {budgetLimits.MaxTotalSize} 字节）。已停止后续任务。";
+
+                logEntries.Add(("ERROR", $"{task.FileName}：{budgetMessage}"));
+
+                return new PostProcessWorkResult
+                {
+                    Verification = verification,
+                    LogEntries = logEntries,
+                    BudgetExceeded = true,
+                    BudgetMessage = budgetMessage
+                };
+            }
+
+            logEntries.Add((verification.Verified ? "INFO" : "WARN", $"{task.FileName}：结果校验 —— {verification.Message}"));
+
+            // 归集是**移动**产物，动手之前再查一次令牌（取消就不再移动）。
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 2) 归集（可选）
+            CollectResult? collected = null;
+
+            if (collectResults)
+            {
+                if (!verification.Verified)
+                {
+                    logEntries.Add(("WARN", $"{task.FileName}：校验未通过，已跳过结果归集。"));
+                }
+                else
+                {
+                    collected = new ResultCollector().Collect(task, collectTargetDirectory);
+
+                    logEntries.Add((collected.Success ? "INFO" : "WARN", $"{task.FileName}：结果归集 —— {collected.Message}"));
+                }
+            }
+
+            /*
+             * 删除是**不可逆**的，AGENTS.md §9.5 明确要求"取消、部分完成、校验失败时一律不删"，
+             * 所以清理源包之前单独再查一次令牌 —— 用户刚按下「取消当前」时最不该发生的就是删源包。
+             */
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 3) 清理源包（默认关闭；未通过校验时服务内部会拒绝执行）
+            SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
+                task,
+                verification,
+                deleteSource);
+
+            if (cleanup.Attempted)
+            {
+                logEntries.Add((cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：清理源包 —— {cleanup.Message}"));
+            }
+
+            return new PostProcessWorkResult
+            {
+                Verification = verification,
+                LogEntries = logEntries,
+                Collected = collected
+            };
+        }
+
         /// <summary>
         /// 给递归层提供密码候选（只给值，不给来源说明）。
         /// 顺序与单层解压完全一致 —— 递归的内层包同样是"用户的包"，不该用另一套规则。
+        ///
+        /// 这里就截到每层上限：递归里每个候选同样是一次完整解压尝试，
+        /// 让几百个候选排着队进去等于把"一键处理"变成没人看得懂的长时间等待（AGENTS.md §9.2）。
         /// </summary>
         private IReadOnlyList<string> BuildRecursionPasswordCandidates(string archivePath)
         {
@@ -85,6 +315,7 @@ namespace ArchiveFixer.ViewModels
                     _passwordService.Passwords,
                     Settings.TryEmptyPasswordFirst,
                     Settings.EnableSidecarPassword)
+                .Take(MaxPasswordAttemptsPerLayer)
                 .Select(p => p.Value ?? string.Empty)
                 .ToList();
         }
@@ -161,7 +392,13 @@ namespace ArchiveFixer.ViewModels
 
                     if (!string.IsNullOrWhiteSpace(layerZeroOutput) && Directory.Exists(layerZeroOutput))
                     {
-                        int moved = MoveDirectoryContent(layerZeroOutput, outputPath);
+                        /*
+                         * 搬运是同步磁盘活（递归枚举 + File.Move），同样必须离开 UI 线程 ——
+                         * 理由与收尾那一段完全相同（见 PostProcessSuccessAsync 的线程规则）。
+                         */
+                        int moved = await Task.Run(
+                            () => MoveDirectoryContent(layerZeroOutput, outputPath),
+                            cancellationToken);
 
                         result = new RecursionResult
                         {
@@ -294,94 +531,133 @@ namespace ArchiveFixer.ViewModels
             return dispatcher.InvokeAsync(() => _dialogService.ShowConfirm(message)).Task;
         }
 
-        private async Task PostProcessSuccessAsync(
-            ArchiveTask task,
-            string engineArchivePath,
-            string password,
-            CancellationToken cancellationToken)
+        /// <summary>
+        /// 在 UI 线程上弹警告（**异步**，不阻塞调用线程）。
+        ///
+        /// 与 <see cref="ShowConfirmOnUiThreadAsync"/> 同一套做法，取代原先任务循环里的
+        /// 同步 <c>Application.Current.Dispatcher.Invoke</c>：
+        /// ① 同步 Invoke 会让调用线程一直等模态框关掉（将来从后台线程调用时就是死等）；
+        /// ② <c>Application.Current</c> 为 null 时（单元测试 / 无界面宿主）它会直接 NRE。
+        /// </summary>
+        private Task ShowWarningOnUiThreadAsync(string message)
         {
-            // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
-            // 清单同样取自**真正解开的那份归档**：内嵌归档要拿抠出来的文件去列，源文件 7z 根本打不开。
-            ArchiveListResult expected = await _archiveEngine.ListAsync(
-                ArchiveRequest.For(engineArchivePath, password),
-                cancellationToken);
+            System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
 
-            OutputVerificationResult verification = OutputVerifier.Verify(
-                task.OutputPath,
-                expected.Success ? expected : null);
-
-            // 解压后落点校验（第二道防线）：产物必须都在目标根目录之内。
-            if (Directory.Exists(task.OutputPath))
+            if (dispatcher == null)
             {
-                foreach (string produced in Directory.EnumerateFiles(task.OutputPath, "*", SearchOption.AllDirectories))
-                {
-                    if (!ArchivePathGuard.IsInsideRoot(task.OutputPath, produced, out string landReason))
-                    {
-                        AppendLog("ERROR", $"{task.FileName}：产物落点异常 —— {landReason}");
-                    }
-                }
+                // 没有 WPF 应用：只留日志（调用方已经写过），绝不在这里弹模态框 —— 那会阻塞调用方且没人点得掉。
+                return Task.CompletedTask;
             }
 
-            /*
-             * 运行时预算的事后判定。
-             *
-             * 7z 写盘的时候我们拦不住（外部进程，我们看不到它的写入），所以"超限就停"只能在事后做：
-             * 量一遍产物，超了就**停止后续任务**并把这一单标出来 —— 至少不会让整盘被一个包吃掉。
-             * 这条只在引擎给不出清单时才真正有意义，但事后量一遍很便宜，就一直做。
-             */
-            (int producedFiles, long producedSize) = OutputVerifier.Measure(task.OutputPath);
-            ResourceBudgetOptions budgetLimits = ResourceBudgetOptions.Default;
-
-            if (producedSize > budgetLimits.MaxTotalSize || producedFiles > budgetLimits.MaxFileCount)
+            if (dispatcher.CheckAccess())
             {
-                task.Status = StatusText.ExtractFailed;
-                task.ErrorMessage =
-                    $"解压产物超出资源预算：{producedFiles} 个文件 / {producedSize} 字节" +
-                    $"（上限 {budgetLimits.MaxFileCount} 个 / {budgetLimits.MaxTotalSize} 字节）。已停止后续任务。";
+                _dialogService.ShowWarning(message);
+                return Task.CompletedTask;
+            }
 
-                AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+            return dispatcher.InvokeAsync(() => _dialogService.ShowWarning(message)).Task;
+        }
 
-                // 不发布、不清理：产物留在原地让用户自己判断，源文件更不能删。
-                StopAfterCurrent();
+        /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
+        private void RecordPasswordFailure(ArchiveTask task)
+        {
+            if (task == null)
+            {
                 return;
             }
 
-            task.IsOutputVerified = verification.Verified;
-            task.VerifyMessage = verification.Message;
-
-            AppendLog(verification.Verified ? "INFO" : "WARN", $"{task.FileName}：结果校验 —— {verification.Message}");
-
-            // 2) 归集（可选）
-            if (Settings.CollectResultsToDirectory)
+            if (task.Status != StatusText.WrongPassword &&
+                task.Status != StatusText.PasswordAttemptLimitReached)
             {
-                if (!verification.Verified)
-                {
-                    AppendLog("WARN", $"{task.FileName}：校验未通过，已跳过结果归集。");
-                }
-                else
-                {
-                    CollectResult collected = new ResultCollector().Collect(task, Settings.CollectTargetDirectory);
-
-                    AppendLog(collected.Success ? "INFO" : "WARN", $"{task.FileName}：结果归集 —— {collected.Message}");
-
-                    if (collected.Success)
-                    {
-                        task.CollectedPath = collected.DestinationPath;
-                    }
-                }
+                return;
             }
 
-            // 3) 清理源包（默认关闭；未通过校验时服务内部会拒绝执行）
-            SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
-                task,
-                verification,
-                Settings.DeleteSourceAfterExtract);
+            string fileName = string.IsNullOrWhiteSpace(task.FileName)
+                ? Path.GetFileName(task.CurrentPath)
+                : task.FileName;
 
-            if (cleanup.Attempted)
+            lock (_passwordFailuresLock)
             {
-                AppendLog(cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：清理源包 —— {cleanup.Message}");
+                _passwordFailures.Add((fileName, task.Status));
             }
         }
+
+        private void ClearPasswordFailures()
+        {
+            lock (_passwordFailuresLock)
+            {
+                _passwordFailures.Clear();
+            }
+        }
+
+        /// <summary>
+        /// 把本批"密码错误 / 达到密码尝试上限"的任务**合并成一次**提示。
+        ///
+        /// 旧做法：在每个任务内部各弹一次模态框，50 个错包 = 50 次阻塞点击 ——
+        /// 批量处理根本跑不动，用户看到的就是"点了没反应"。
+        /// 新做法：循环里只登记（<see cref="RecordPasswordFailure"/>），批次结束后在这里一次说清：
+        /// 有几个、都是谁、其中几个是"到上限"（不是密码错误）。
+        /// 日志与弹窗是同一句话，所以没有界面时（无头宿主）也留得下证据。
+        /// </summary>
+        private async Task ShowPasswordFailuresSummaryAsync()
+        {
+            List<(string FileName, string Status)> failures;
+
+            lock (_passwordFailuresLock)
+            {
+                if (_passwordFailures.Count == 0)
+                {
+                    return;
+                }
+
+                failures = _passwordFailures.ToList();
+                _passwordFailures.Clear();
+            }
+
+            int wrongPasswordCount = failures.Count(f => f.Status == StatusText.WrongPassword);
+            int attemptLimitCount = failures.Count - wrongPasswordCount;
+
+            /*
+             * 措辞有个坑：日志会被 PasswordMasker 兜底脱敏，规则是"密码 + 冒号 → 本行剩余全部打码"。
+             * 所以这里**不要在"密码"后面直接跟冒号**，否则用户看到的是"本批 3 个包…密码：******"，
+             * 文件名与原因全被吃掉（实测踩过）。原因写成"原因：密码错误…"这种形态是安全的。
+             */
+            string reason = attemptLimitCount == 0
+                ? "密码错误或缺少正确密码"
+                : wrongPasswordCount == 0
+                    ? $"{StatusText.PasswordAttemptLimitReached}（候选还没试完就按上限停了，不等于密码错误）"
+                    : $"密码错误 {wrongPasswordCount} 个 / {StatusText.PasswordAttemptLimitReached} {attemptLimitCount} 个" +
+                      "（后者只是候选没试完，不等于密码错误）";
+
+            var builder = new StringBuilder();
+
+            builder.Append(failures.Count == 1
+                ? "有 1 个包没能解开"
+                : $"本批 {failures.Count} 个包没能解开");
+
+            builder.Append("，原因：");
+            builder.Append(reason);
+            builder.AppendLine();
+
+            foreach (string name in failures.Select(f => f.FileName).Take(MaxPasswordFailureNamesInDialog))
+            {
+                builder.AppendLine(name);
+            }
+
+            if (failures.Count > MaxPasswordFailureNamesInDialog)
+            {
+                builder.AppendLine($"…等共 {failures.Count} 个（完整清单见「复制失败列表 / 导出失败清单」）。");
+            }
+
+            string message = builder.ToString().TrimEnd();
+
+            // 日志与弹窗同源：日志一定写（无界面宿主也留得下证据），弹窗只在真的有界面时弹。
+            // 这里把换行换成"；"是为了让日志一行看完 —— 换行后的内容不会被脱敏规则吃掉。
+            AppendLog("WARN", message.Replace(Environment.NewLine, "；"));
+
+            await ShowWarningOnUiThreadAsync(message);
+        }
+
         private string GlobalPassword => _vm.GlobalPassword;
         private string SelectedOutputDirectory => _vm.SelectedOutputDirectory;
         private ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
@@ -417,6 +693,9 @@ namespace ArchiveFixer.ViewModels
             IsBusy = true;
             IsStopping = false;
             _isExtracting = true;
+
+            // 本批的密码失败登记从零开始：上一批的残留不能让这一批多弹一次提示。
+            ClearPasswordFailures();
 
             try
             {
@@ -457,6 +736,18 @@ namespace ArchiveFixer.ViewModels
                         }
                     }
 
+                    /*
+                     * 关键修复（实测复现）：上面的 break 只跳出了"等并发位"的 while，
+                     * 落到这里仍会把当前任务 Add 进去 —— 表现为"点了停止后续，另一个包照样跑成功了"，
+                     * 违反不变量 9（停止后续只阻止**启动后续**，绝不能再启动新任务）。
+                     * 所以在真正启动之前必须再查一次。
+                     */
+                    if (IsStopping || _operationCts.IsCancellationRequested)
+                    {
+                        AppendLog("WARN", "已停止后续任务，不再启动新的解压任务。");
+                        break;
+                    }
+
                     runningTasks.Add(ProcessExtractTaskAsync(task));
                 }
 
@@ -469,6 +760,13 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 AppendLog("INFO", "批量解压完成");
+
+                /*
+                 * 密码错误**合并成一次提示**（P0）。
+                 * 逐个任务弹模态框时，50 个错包就是 50 次阻塞点击 —— 批量处理根本跑不动。
+                 * 放在批次结束后：此时才谈得上"本批 N 个包"，也不会挡住正在跑的任务。
+                 */
+                await ShowPasswordFailuresSummaryAsync();
             }
             finally
             {
@@ -650,7 +948,10 @@ namespace ArchiveFixer.ViewModels
 
             extractOptions.Normalize();
 
-            string outputPath = _pathService.BuildOutputPath(task, extractOptions);
+            // 解压前算出来的"打算输出到哪"。它只是一个提议：下面可能因为目录已存在被改名。
+            string requestedOutputPath = _pathService.BuildOutputPath(task, extractOptions);
+            string outputPath = requestedOutputPath;
+            string outputRedirectNote = string.Empty;
 
             try
             {
@@ -662,6 +963,18 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog("WARN", $"输出目录已存在且非空，为避免混入旧文件，自动改用新目录：{newOutputPath}");
 
+                    /*
+                     * 实际落点与"打算的落点"不一致这件事**不许静默**：
+                     * ① 下面会把实际落点写回 task.OutputPath（界面"输出目录"列看得见）；
+                     * ② 校验结论里也带一句（task.VerifyMessage）；
+                     * ③ 日志里额外提醒续解的影响 —— 一键处理的续解是按**解压前**的目录快照找内层包的，
+                     *    内层包落进新目录时它找不到，用户看到的现象就是"第二层没解"。
+                     *    这里的提示是让人一眼知道该去哪找，而不是让程序假装没发生。
+                     */
+                    outputRedirectNote = $"原定输出目录 {requestedOutputPath} 已存在且非空，本次实际输出到 {newOutputPath}";
+
+                    AppendLog("WARN", $"{task.FileName}：{outputRedirectNote}。自动续解按解压前的目录查找内层包，若内层包落在新目录里可能不会被继续解开。");
+
                     outputPath = newOutputPath;
                 }
             }
@@ -670,7 +983,18 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("WARN", $"检查输出目录失败，将继续使用原输出目录：{ex.Message}");
             }
 
+            /*
+             * 回写**实际最终输出目录**（P1）。
+             *
+             * 这是"产物到底在哪"的唯一权威来源：上面可能刚把目录从 xxx 改成了 xxx(1)，
+             * 解压后校验、结果归集、清理源包、界面"输出目录"列、以及一键处理的续解全都以它为准
+             * （续解那边要读的就是这个值，见报告里的移交项）。
+             * 绝不允许只把改名写进日志、却让 task.OutputPath 停在"打算输出到哪"。
+             */
             task.OutputPath = outputPath;
+
+            // 每个任务都明确说一次实际落点：目录被改名时用户必须能立刻看出产物去了哪。
+            AppendLog("INFO", $"{task.FileName}：本次实际输出目录 {outputPath}");
 
             /*
              * 内嵌归档（双面文件）：先按偏移把尾部那段真正的 ZIP 抠出来，
@@ -794,6 +1118,25 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * 密码候选的**硬上限**（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
+             *
+             * 解压模式下一个候选 = 一次完整解压：几百条密码本的包会被逐个候选整包重解一遍，
+             * 用户看到的是"几十分钟不动、磁盘一直在写"。所以本层只试前 N 个，
+             * 到上限时状态说"达到密码尝试上限"（**不是**"密码错误"）——
+             * 包可能完全没问题，只是密码不在这批候选里。
+             */
+            int maxPasswordAttempts = Math.Min(candidates.Count, MaxPasswordAttemptsPerLayer);
+            bool candidatesTruncated = candidates.Count > maxPasswordAttempts;
+
+            if (candidatesTruncated)
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：密码候选共 {candidates.Count} 个，超过单层上限 {MaxPasswordAttemptsPerLayer} 个，" +
+                    $"本层只试前 {maxPasswordAttempts} 个（到上限会明确报“{StatusText.PasswordAttemptLimitReached}”，不会报成密码错误）。");
+            }
+
+            /*
              * M5 解压前预检：路径安全 + 资源预算。
              *
              * 为什么必须先"列目录"再解压：真正写盘的是外部 7z.exe，进程外拦不住 Zip Slip。
@@ -906,14 +1249,14 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog("INFO", $"{task.FileName}：开始解压前测试。");
 
-                for (int i = 0; i < candidates.Count; i++)
+                for (int i = 0; i < maxPasswordAttempts; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
                     PasswordItem candidate = candidates[i];
                     string password = candidate.Value ?? string.Empty;
 
-                    AppendLog("INFO", $"{task.FileName}：测试密码候选 {i + 1}/{candidates.Count}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
+                    AppendLog("INFO", $"{task.FileName}：测试密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
                     ArchiveOperationResult testResult = await _archiveEngine.TestAsync(
                         ArchiveRequest.For(engineArchivePath, password),
@@ -961,7 +1304,22 @@ namespace ArchiveFixer.ViewModels
 
                 if (!passwordConfirmed)
                 {
-                    if (lastResult != null && lastResult.DetectedErrorType == "WrongPassword")
+                    /*
+                     * "试到上限停了"和"候选全都试过、都说密码错"是两件事（AGENTS.md §9.2）：
+                     * 前者的状态是"达到密码尝试上限"，不能让用户以为密码本里就一定没有正确密码。
+                     * lastResult 不是 WrongPassword 时说明停因另有其人（损坏/权限…），照旧原样上报。
+                     */
+                    bool stoppedByAttemptLimit = candidatesTruncated &&
+                        (lastResult == null || lastResult.DetectedErrorType == "WrongPassword");
+
+                    if (stoppedByAttemptLimit)
+                    {
+                        task.Status = StatusText.PasswordAttemptLimitReached;
+                        task.PasswordStatus = StatusText.PasswordNeed;
+                        task.ErrorMessage =
+                            $"已达到密码尝试上限：本层试了 {maxPasswordAttempts} 个候选（共 {candidates.Count} 个），未能确认密码。";
+                    }
+                    else if (lastResult != null && lastResult.DetectedErrorType == "WrongPassword")
                     {
                         task.Status = StatusText.WrongPassword;
                         task.PasswordStatus = StatusText.WrongPassword;
@@ -989,13 +1347,12 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog("ERROR", $"解压前测试失败：{task.FileName}，原因：{task.ErrorMessage}");
 
-                    if (task.Status == StatusText.WrongPassword)
-                    {
-                        Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            _dialogService.ShowWarning($"文件密码错误或缺少正确密码：\n{task.FileName}");
-                        });
-                    }
+                    /*
+                     * 密码类失败**登记到批次**，由 ShowPasswordFailuresSummaryAsync 合并成一次提示。
+                     * 原来这里（以及下面的直接解压分支）各弹一次模态框、而且用的是同步 Dispatcher.Invoke：
+                     * 一批几十个错包就要点几十次，还会阻塞调用线程。
+                     */
+                    RecordPasswordFailure(task);
 
                     return;
                 }
@@ -1038,7 +1395,7 @@ namespace ArchiveFixer.ViewModels
                     // 而工作区里抠出来的临时文件活不过这次任务。
                     _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                    await PostProcessSuccessAsync(task, engineArchivePath, selectedPassword, cancellationToken);
+                    await PostProcessSuccessAsync(task, engineArchivePath, selectedPassword, outputRedirectNote, cancellationToken);
 
 
 
@@ -1073,7 +1430,7 @@ namespace ArchiveFixer.ViewModels
                 bool extractSuccess = false;
                 bool hasWrongPassword = false;
 
-                for (int i = 0; i < candidates.Count; i++)
+                for (int i = 0; i < maxPasswordAttempts; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
@@ -1087,7 +1444,7 @@ namespace ArchiveFixer.ViewModels
                     task.ProgressText = StatusText.ProgressProcessing;
                     task.LastUpdatedTime = DateTime.Now;
 
-                    AppendLog("INFO", $"{task.FileName}：开始解压，密码候选 {i + 1}/{candidates.Count}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
+                    AppendLog("INFO", $"{task.FileName}：开始解压，密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
                     ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
      new ArchiveRequest
@@ -1119,7 +1476,7 @@ namespace ArchiveFixer.ViewModels
                         // 同"先测试再解压"那条分支：密码成功记录挂源文件，不挂工作区里的临时文件。
                         _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                        await PostProcessSuccessAsync(task, engineArchivePath, selectedPassword, cancellationToken);
+                        await PostProcessSuccessAsync(task, engineArchivePath, selectedPassword, outputRedirectNote, cancellationToken);
 
 
 
@@ -1146,7 +1503,17 @@ namespace ArchiveFixer.ViewModels
 
                 if (!extractSuccess)
                 {
-                    if (hasWrongPassword)
+                    // 与"先测试再解压"分支同一条规则：试到上限 ≠ 候选全都试过、更 ≠ 密码错误（AGENTS.md §9.2）。
+                    bool stoppedByAttemptLimit = candidatesTruncated && hasWrongPassword;
+
+                    if (stoppedByAttemptLimit)
+                    {
+                        task.Status = StatusText.PasswordAttemptLimitReached;
+                        task.PasswordStatus = StatusText.PasswordNeed;
+                        task.ErrorMessage =
+                            $"已达到密码尝试上限：本层试了 {maxPasswordAttempts} 个候选（共 {candidates.Count} 个），未能确认密码。";
+                    }
+                    else if (hasWrongPassword)
                     {
                         task.Status = StatusText.WrongPassword;
                         task.PasswordStatus = StatusText.WrongPassword;
@@ -1163,17 +1530,15 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = "未知解压失败";
                     }
 
-                    if (task.Status == StatusText.WrongPassword)
+                    if (task.Status == StatusText.WrongPassword || task.Status == StatusText.PasswordAttemptLimitReached)
                     {
-                        AppendLog("ERROR", $"解压失败：{task.FileName}，原因：密码错误或缺少正确密码");
-
-                        Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            _dialogService.ShowWarning($"文件密码错误或缺少正确密码：\n{task.FileName}");
-                        });
+                        AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
                     }
                 }
             }
+
+            // 密码类失败登记到本批，批次结束后合并成一次提示（不再在任务循环里逐个弹模态框）。
+            RecordPasswordFailure(task);
 
             task.EndTime = DateTime.Now;
             task.ElapsedText = task.StartTime.HasValue

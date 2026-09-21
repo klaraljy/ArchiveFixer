@@ -108,20 +108,14 @@ namespace ArchiveFixer.Models
             };
         }
 
-        /// <summary>
-        /// 获取 7-Zip 覆盖参数。
-        /// </summary>
-        public string GetOverwriteArgument()
-        {
-            return OverwriteMode switch
-            {
-                "OverwriteAll" => "-aoa",
-                "AutoRenameExtracted" => "-aou",
-                "AutoRenameExisting" => "-aot",
-                "SkipExisting" => "-aos",
-                _ => "-aos"
-            };
-        }
+        /*
+         * 这里**不允许**再出现"覆盖策略 → 7z 参数"的映射（-aos/-aoa/-aou/-aot）。
+         *
+         * 历史：本类曾经有一个 GetOverwriteArgument()，与 Engines\SevenZip\SevenZipProcessRunner
+         * 里的同名映射是同一张表的两次实现（当时两处都没有调用方，属潜伏债）。
+         * 7z 参数只允许存在于 Engines\SevenZip\ 内部（AGENTS.md §3.1 四条禁止项①、铁律 2），
+         * 所以那个方法已删除，OverwriteMode 只作为"策略名"往上传。
+         */
 
         /// <summary>
         /// 修正非法配置。

@@ -69,8 +69,19 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
+                /*
+                 * Normalize() 会把超范围的数字夹回合法区间（例如密码尝试上限 5000 → 1000）。
+                 * 静默改掉用户填的数字是"我以为我设成了 5000"的经典来源，所以这里比一下前后值，
+                 * 被夹过就在底栏说清楚 —— 用户填错的数字必须看得见。
+                 */
+                int requestedPasswordAttempts = Settings.MaxPasswordAttemptsPerLayer;
+
                 Settings.Normalize();
-                Message = "设置已保存。";
+
+                Message = requestedPasswordAttempts != Settings.MaxPasswordAttemptsPerLayer
+                    ? $"设置已保存（每层密码尝试上限 {requestedPasswordAttempts} 超出 1~1000，已按 {Settings.MaxPasswordAttemptsPerLayer} 生效）。"
+                    : "设置已保存。";
+
                 DialogResult = true;
             }
             catch (Exception ex)

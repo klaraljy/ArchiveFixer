@@ -1,0 +1,758 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Models;
+using ArchiveFixer.Services;
+using ArchiveFixer.ViewModels;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace ArchiveFixer.Tests
+{
+    /// <summary>
+    /// 解压管线（<see cref="ExtractionCoordinator"/>）的五个修复点的回归测试。
+    ///
+    /// 全部走**真 MainViewModel + 真解压管线**，只把归档引擎换成可控的假引擎：
+    /// 这样能精确摆出"大产物目录"、"密码候选几百条"、"收尾时按下取消"这些现场，
+    /// 而不用去读用户机器上的任何真实文件（AGENTS.md §8 隐私红线）。
+    ///
+    /// 和 InnerLayerContinuationTests 同一组：MainViewModel 的构造会写进程级静态
+    /// （7z 路径 / 递归工作区根目录），必须和其他测试集串行，并在装配后立刻还原。
+    /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
+    public class ExtractionPipelineFixTests : IDisposable
+    {
+        private readonly ITestOutputHelper _output;
+        private readonly string _root;
+
+        public ExtractionPipelineFixTests(ITestOutputHelper output)
+        {
+            _output = output;
+            _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerExtractFix", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(_root);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(_root))
+                {
+                    Directory.Delete(_root, recursive: true);
+                }
+            }
+            catch
+            {
+                // 临时目录清不掉不影响结论（句柄可能还在释放中）。
+            }
+        }
+
+        // ================================================================ P0-1：收尾不许占住 UI 线程
+
+        /// <summary>
+        /// 解压收尾（全目录枚举 / 二次遍历 / 归集移动 / 删除源包）以前整段同步跑在 UI 线程上，
+        /// 780MB 的包解出几千个文件时窗口完全无响应。
+        ///
+        /// 这里用"专用单线程 + 消息泵"模拟 WPF 的 UI 线程：管线跑在这条线程上，
+        /// 心跳回调也只能在这条线程空闲时被处理。
+        ///
+        /// 判据刻意用**收尾窗口**（假引擎的收尾列目录 → 管线结束）内的最长心跳间隔，与窗口本身比较：
+        /// · 收尾在后台线程（现在的实现） → 窗口内 UI 线程照常跳心跳，最长间隔远小于窗口；
+        /// · 收尾在 UI 线程（旧实现）     → 整个收尾窗口内一次心跳都跑不了，最长间隔≈窗口，断言必红
+        ///   （实测：把 Task.Run 去掉后最长间隔 ≈ 窗口的 9 成）。
+        ///
+        /// 不用"整条管线耗时"作分母：那一大截是**测试自己造文件**的时间，
+        /// 与被测代码无关，用它会把阈值放得太松（第一版就是这样，负向对照没抓住旧实现）。
+        /// </summary>
+        [Fact]
+        public async Task 大目录收尾时_UI线程没有被长活占住()
+        {
+            const int fileCount = 4000;
+
+            string collectRoot = Path.Combine(_root, "collect");
+
+            Harness harness = CreateHarness(configure: settings =>
+            {
+                settings.CollectResultsToDirectory = true;
+                settings.CollectTargetDirectory = collectRoot;
+            });
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("big.7z"));
+
+            // 假引擎 = 真实引擎的替身：在**后台线程**里写出几千个产物文件（真实 7z 也是这样，不在 UI 线程写盘）。
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, fileCount);
+                harness.Engine.Extracted = true;
+                return Succeeded();
+            });
+
+            var pump = new MessagePumpContext();
+            long postProcessStartTicks = 0;
+            long maxGapDuringPostProcessTicks = 0;
+            long lastPulseTicks = Stopwatch.GetTimestamp();
+            long pipelineEndTicks = 0;
+            int pulsesDuringPostProcess = 0;
+            Task? pipeline = null;
+
+            // 收尾的第一次列目录 = 收尾窗口的起点（这一刻起，后面就是校验/归集/清理）。
+            harness.Engine.OnListAsync = _ =>
+            {
+                if (harness.Engine.Extracted)
+                {
+                    Interlocked.CompareExchange(ref postProcessStartTicks, Stopwatch.GetTimestamp(), 0);
+                }
+
+                return Task.FromResult(ListResult(fileCount));
+            };
+
+            var uiThread = new Thread(() =>
+            {
+                SynchronizationContext.SetSynchronizationContext(pump);
+
+                void Pulse(object? _)
+                {
+                    long now = Stopwatch.GetTimestamp();
+
+                    if (postProcessStartTicks != 0)
+                    {
+                        long gap = now - lastPulseTicks;
+
+                        if (gap > maxGapDuringPostProcessTicks)
+                        {
+                            maxGapDuringPostProcessTicks = gap;
+                        }
+
+                        pulsesDuringPostProcess++;
+                    }
+
+                    lastPulseTicks = now;
+
+                    // 处理完就重新排队：只要 UI 线程有空，心跳就一直在跳。
+                    pump.Post(Pulse, null);
+                }
+
+                pump.Post(Pulse, null);
+
+                pipeline = harness.Coordinator.StartExtractAsync();
+
+                pump.RunUntil(() => pipeline!.IsCompleted);
+
+                pipelineEndTicks = Stopwatch.GetTimestamp();
+            });
+
+            uiThread.Start();
+
+            Assert.True(uiThread.Join(TimeSpan.FromMinutes(3)), "解压管线没有在 3 分钟内结束");
+
+            Assert.NotNull(pipeline);
+            await pipeline!;
+
+            double toMs = 1000.0 / Stopwatch.Frequency;
+            double postProcessMs = (pipelineEndTicks - postProcessStartTicks) * toMs;
+            double maxGapMs = maxGapDuringPostProcessTicks * toMs;
+
+            _output.WriteLine(
+                $"收尾窗口 {postProcessMs:F0} ms，窗口内心跳 {pulsesDuringPostProcess} 次，最长间隔 {maxGapMs:F0} ms（任务 {task.Status}）");
+
+            // 先证明"重活真的干了"，否则这条测试证明不了任何事：
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.Equal(fileCount, CountFiles(collectRoot));   // 归集把 4000 个文件搬走了
+            Assert.Equal(0, CountFiles(task.OutputPath));       // 产物目录已经搬空
+
+            // 结果写回（P1-6 的第二半）：输出目录 == 引擎真正写进去的那个目录；归集目录也记在任务上。
+            Assert.Equal(harness.Engine.LastExtractOutputPath, task.OutputPath);
+            Assert.StartsWith(collectRoot, task.CollectedPath, StringComparison.OrdinalIgnoreCase);
+            Assert.True(task.IsOutputVerified, "产物数量与清单一致，校验应该通过");
+
+            Assert.True(postProcessStartTicks != 0, "没有观察到收尾窗口的起点");
+            Assert.True(postProcessMs > 50, $"收尾阶段只花了 {postProcessMs:F0} ms，这条测试证明不了什么");
+            Assert.True(pulsesDuringPostProcess > 10, $"收尾期间心跳只跳了 {pulsesDuringPostProcess} 次");
+
+            Assert.True(
+                maxGapMs < postProcessMs / 3.0,
+                $"UI 线程在收尾期间被占住了：最长无响应 {maxGapMs:F0} ms，收尾窗口共 {postProcessMs:F0} ms");
+        }
+
+        // ================================================================ P1-3：取消之后不移动、不清理
+
+        /// <summary>
+        /// 收尾阶段以前从不检查取消令牌：用户按了「取消当前」，产物照样被移动、源包照样被删。
+        /// 现在每一步之前都查令牌，且状态必须落成"已取消"（不得显示成功）。
+        /// </summary>
+        [Fact]
+        public async Task 收尾时按下取消_不移动产物_不删源包_状态是已取消()
+        {
+            string collectRoot = Path.Combine(_root, "collect");
+
+            Harness harness = CreateHarness(configure: settings =>
+            {
+                settings.CollectResultsToDirectory = true;
+                settings.CollectTargetDirectory = collectRoot;
+
+                // 开着"清理源包"才有意义：取消之后一个源文件都不许少。
+                settings.DeleteSourceAfterExtract = true;
+            });
+
+            string source = CreateSourceFile("cancel.7z");
+            ArchiveTask task = AddTask(harness, source);
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 5);
+                harness.Engine.Extracted = true;
+                return Succeeded();
+            });
+
+            // 收尾第一件事就是列目录；在这里按下「取消当前」——正是旧实现漏检的那个窗口。
+            harness.Engine.OnListAsync = _ =>
+            {
+                if (harness.Engine.Extracted)
+                {
+                    harness.Coordinator.CancelCurrentTask();
+                }
+
+                return Task.FromResult(ListResult(5));
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.Cancelled, task.Status);
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+
+            // 源包一个都不许删（AGENTS.md §9.5：取消时一律不删）。
+            Assert.True(File.Exists(source), "取消之后源包被删了");
+
+            // 产物一个都不许移动。
+            Assert.False(Directory.Exists(collectRoot), "取消之后产物被归集走了");
+            Assert.Equal(5, CountFiles(task.OutputPath));
+            Assert.Equal(string.Empty, task.CollectedPath);
+        }
+
+        // ================================================================ P0-2：密码错误只提示一次
+
+        /// <summary>
+        /// 旧实现：每个任务内部各弹一次模态框（50 个错包 = 50 次阻塞点击），而且用的是同步 Dispatcher.Invoke。
+        /// 新实现：循环里只登记，批次结束后合并成**一次**提示；日志与弹窗同源。
+        ///
+        /// 说明：单元测试里没有 WPF Application（下面显式断言这一点），
+        /// 所以"弹窗"这一步退化成只写日志 —— 而日志正是可断言的证据：
+        /// 只允许出现**一条**"本批 N 个包没能解开密码"，不允许出现按任务重复的提示。
+        /// </summary>
+        [Fact]
+        public async Task 一批密码错误_只合并提示一次()
+        {
+            Assert.Null(System.Windows.Application.Current);   // 前提：测试进程里没有 WPF 应用
+
+            Harness harness = CreateHarness(passwords: new[] { "候选密码1", "候选密码2" });
+
+            for (int i = 1; i <= 3; i++)
+            {
+                AddTask(harness, CreateSourceFile($"wrong-{i}.7z"));
+            }
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.All(harness.Vm.Tasks, t => Assert.Equal(StatusText.WrongPassword, t.Status));
+
+            string[] aggregated = harness.Log.Logs
+                .Where(x => x.Message.Contains("个包没能解开", StringComparison.Ordinal))
+                .Select(x => x.Message)
+                .ToArray();
+
+            Assert.Single(aggregated);
+            Assert.Contains("本批 3 个包没能解开", aggregated[0], StringComparison.Ordinal);
+            Assert.Contains("原因：密码错误或缺少正确密码", aggregated[0], StringComparison.Ordinal);
+
+            // 脱敏兜底不许把提示吃掉（"密码"后面直接跟冒号会被 PasswordMasker 整行打码）。
+            Assert.DoesNotContain("******", aggregated[0], StringComparison.Ordinal);
+
+            foreach (ArchiveTask task in harness.Vm.Tasks)
+            {
+                Assert.Contains(task.FileName, aggregated[0], StringComparison.Ordinal);
+            }
+        }
+
+        // ================================================================ P1-4：密码尝试上限
+
+        /// <summary>
+        /// 密码候选没有上限时，几百条密码本的包会被逐个候选整包重解一遍（每个候选一次完整解压）。
+        /// 现在每层最多试 <see cref="ExtractionCoordinator.MaxPasswordAttemptsPerLayer"/> 个。
+        /// </summary>
+        [Fact]
+        public async Task 密码候选超过上限时_只试到上限且状态是达到上限而不是密码错误()
+        {
+            var passwords = Enumerable.Range(1, 40).Select(i => $"候选密码{i}").ToArray();
+
+            Harness harness = CreateHarness(passwords: passwords);
+            ArchiveTask task = AddTask(harness, CreateSourceFile("many-passwords.7z"));
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            // 空密码 + 40 条候选 = 41 个，必须被截到上限。
+            Assert.Equal(ExtractionCoordinator.MaxPasswordAttemptsPerLayer, harness.Engine.ExtractCalls.Count);
+            Assert.True(harness.Engine.ExtractCalls.Count < passwords.Length + 1, "候选没有被截断");
+
+            Assert.Equal(StatusText.PasswordAttemptLimitReached, task.Status);
+            Assert.NotEqual(StatusText.WrongPassword, task.Status);
+            Assert.Contains("上限", task.ErrorMessage, StringComparison.Ordinal);
+        }
+
+        /// <summary>候选本来就不超过上限时，试完全部仍失败 —— 这时才该报"密码错误"。</summary>
+        [Fact]
+        public async Task 候选没到上限且全部错误_仍然报密码错误()
+        {
+            Harness harness = CreateHarness(passwords: new[] { "候选密码1", "候选密码2" });
+            ArchiveTask task = AddTask(harness, CreateSourceFile("few-passwords.7z"));
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(3, harness.Engine.ExtractCalls.Count);   // 空密码 + 2 条候选，全试过
+            Assert.Equal(StatusText.WrongPassword, task.Status);
+        }
+
+        // ================================================================ P1-6：实际输出目录写回任务
+
+        /// <summary>
+        /// 输出目录已存在且非空时会自动改用 <c>xxx(1)</c>。
+        /// 旧行为只把这件事写进日志，任务对象上的 <see cref="ArchiveTask.OutputPath"/> 是"打算输出到哪"；
+        /// 一键处理的续解就按解压前的目录快照找内层包，于是第二层静默不跑，汇总却还写"完成"。
+        ///
+        /// 现在：实际落点写回 <see cref="ArchiveTask.OutputPath"/>（界面"输出目录"列直接看得见），
+        /// 校验结论里带一句 <see cref="ArchiveTask.VerifyMessage"/>，日志里也明说一次。
+        /// </summary>
+        [Fact]
+        public async Task 输出目录冲突自动改名_实际落点写回任务且看得见()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
+
+            string requested = harness.PathService.BuildOutputPath(task, DefaultOptions(harness));
+
+            // 现场：目标目录已存在且非空（重跑一次、上次失败留下的目录都会这样）。
+            Directory.CreateDirectory(requested);
+            File.WriteAllText(Path.Combine(requested, "上次留下的旧文件.txt"), "old");
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 2);
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(2));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // ① 写回的是**实际**落点（引擎真正写文件的那个目录），不是解压前算出来的那个。
+            Assert.NotEqual(requested, task.OutputPath);
+            Assert.Equal(harness.Engine.LastExtractOutputPath, task.OutputPath);
+            Assert.True(Directory.Exists(task.OutputPath));
+            Assert.Equal(2, CountFiles(task.OutputPath));
+
+            // ② 旧目录里的东西一个都没动（绝不覆盖/清空既有文件）。
+            Assert.True(File.Exists(Path.Combine(requested, "上次留下的旧文件.txt")));
+
+            // ③ "输出到别处"这件事在任务与日志里都看得见，不许静默。
+            Assert.Contains("实际输出到", task.VerifyMessage, StringComparison.Ordinal);
+            Assert.Contains(
+                harness.Log.Logs.Select(x => x.Message),
+                message => message.Contains("本次实际输出目录", StringComparison.Ordinal) &&
+                           message.Contains(task.OutputPath, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // ================================================================ 停止后续：不许再启动新任务
+
+        /// <summary>
+        /// 实测复现的缺陷：「停止后续」的 <c>break</c> 只跳出了"等并发位"的 while，
+        /// 之后照样 <c>runningTasks.Add(...)</c> 把当前任务启动起来 ——
+        /// 用户点完停止，另一个包还是跑成功了（违反不变量 9）。
+        ///
+        /// 现场：并发 2、3 个任务。前两个占满并发位，第 3 个在"等位"时用户按下停止后续，
+        /// 然后让第 1 个结束 —— 第 3 个**一个字节都不许动**。
+        /// </summary>
+        [Fact]
+        public async Task 等并发位时点了停止后续_不再启动新任务()
+        {
+            Harness harness = CreateHarness(configure: settings => settings.MaxParallelExtractCount = 2);
+
+            ArchiveTask first = AddTask(harness, CreateSourceFile("stop-1.7z"));
+            ArchiveTask second = AddTask(harness, CreateSourceFile("stop-2.7z"));
+            ArchiveTask third = AddTask(harness, CreateSourceFile("stop-3.7z"));
+
+            var firstStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            harness.Engine.OnExtractAsync = request =>
+            {
+                if (string.Equals(request.ArchivePath, first.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    firstStarted.TrySetResult(true);
+                    return releaseFirst.Task.ContinueWith(_ => Succeeded(), TaskScheduler.Default);
+                }
+
+                if (string.Equals(request.ArchivePath, second.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    secondStarted.TrySetResult(true);
+
+                    // 第 2 个任务一直不结束：让第 3 个卡在"等并发位"上。
+                    return new TaskCompletionSource<ArchiveOperationResult>(
+                        TaskCreationOptions.RunContinuationsAsynchronously).Task;
+                }
+
+                // 任何其它解压调用（尤其是第 3 个任务）都记下来。
+                return Task.FromResult(Succeeded());
+            };
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(0));
+
+            Task pipeline = harness.Coordinator.StartExtractAsync();
+
+            await WaitAsync(() => firstStarted.Task.IsCompleted && secondStarted.Task.IsCompleted, TimeSpan.FromSeconds(10), "前两个任务没有起来");
+
+            // 用户按下「停止后续」，然后第 1 个任务结束 → 第 3 个从"等位"里出来。
+            harness.Coordinator.StopAfterCurrent();
+            releaseFirst.TrySetResult(true);
+
+            // 等到"停止后续"这件事被循环处理掉（旧实现在这里会先去启动第 3 个任务）。
+            await WaitAsync(
+                () => harness.Engine.ExtractCalls.Any(p => string.Equals(p, third.CurrentPath, StringComparison.OrdinalIgnoreCase)) ||
+                      harness.Log.Logs.Any(x => x.Message.Contains("不再启动新的解压任务", StringComparison.Ordinal)),
+                TimeSpan.FromSeconds(10),
+                "停止后续没有被处理");
+
+            Assert.DoesNotContain(
+                harness.Engine.ExtractCalls,
+                p => string.Equals(p, third.CurrentPath, StringComparison.OrdinalIgnoreCase));
+
+            Assert.NotEqual(StatusText.ExtractSuccess, third.Status);
+            Assert.NotEqual(StatusText.Extracting, third.Status);
+
+            _ = pipeline;   // 第 2 个任务故意不结束，管线会一直挂着；测试不 await 它。
+        }
+
+        // ================================================================ 装配
+
+        private sealed class Harness
+        {
+            public Harness(
+                MainViewModel vm,
+                FakeEngine engine,
+                ExtractionCoordinator coordinator,
+                LogService log,
+                PathService pathService)
+            {
+                Vm = vm;
+                Engine = engine;
+                Coordinator = coordinator;
+                Log = log;
+                PathService = pathService;
+            }
+
+            public MainViewModel Vm { get; }
+
+            public FakeEngine Engine { get; }
+
+            public ExtractionCoordinator Coordinator { get; }
+
+            public LogService Log { get; }
+
+            public PathService PathService { get; }
+        }
+
+        private Harness CreateHarness(IEnumerable<string>? passwords = null, Action<AppSettings>? configure = null)
+        {
+            string dataRoot = Path.Combine(_root, "data");
+            string outputRoot = Path.Combine(_root, "out");
+
+            Directory.CreateDirectory(dataRoot);
+            Directory.CreateDirectory(outputRoot);
+
+            var pathService = new PathService { DataRootDirectory = dataRoot };
+            var settingsService = new SettingsService(pathService);
+
+            AppSettings settings = AppSettings.CreateDefault();
+            settings.CacheRootDirectory = dataRoot;
+            settings.CustomOutputDirectory = outputRoot;
+            settings.ExtractToOriginalDirectory = false;
+            settings.KeepArchiveNameFolder = true;
+            settings.RecursionMode = "SingleLayer";
+            settings.AutoScanAfterDrop = false;
+
+            configure?.Invoke(settings);
+            settingsService.Save(settings);
+
+            var engine = new FakeEngine();
+            var passwordService = new PasswordService();
+            var logService = new LogService(pathService);
+
+            if (passwords != null)
+            {
+                foreach (string password in passwords)
+                {
+                    passwordService.Passwords.Add(new PasswordItem
+                    {
+                        Value = password,
+                        Source = "ImportedList",
+                        IsEnabled = true,
+                        Remark = "测试候选"
+                    });
+                }
+            }
+
+            // MainViewModel 的构造会顺手写两个进程级静态（7z 路径、递归工作区根目录）：
+            // 先存后还原，免得别的测试拿到我这边马上要删的临时目录。
+            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+            string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
+
+            var vm = new MainViewModel(
+                new FileScanService(),
+                new ArchiveDetectService(),
+                new RenameService(),
+                engine,
+                passwordService,
+                logService,
+                settingsService,
+                pathService,
+                new TaskSummaryService(),
+                new ClipboardService(),
+                new DialogService());
+
+            RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            ToolLocator.Default.CustomSevenZipExePath = previousSevenZipPath;
+
+            var coordinator = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
+
+            return new Harness(vm, engine, coordinator, logService, pathService);
+        }
+
+        private ArchiveTask AddTask(Harness harness, string sourcePath)
+        {
+            var task = new ArchiveTask(sourcePath, harness.Vm.Tasks.Count + 1)
+            {
+                IsArchive = true,
+                DetectedFormat = "7Z",
+                ExtensionStatus = StatusText.ExtensionNormal,
+                Status = StatusText.Recognized,
+                IsSelected = true
+            };
+
+            harness.Vm.Tasks.Add(task);
+            return task;
+        }
+
+        private string CreateSourceFile(string fileName)
+        {
+            string directory = Path.Combine(_root, "src");
+            Directory.CreateDirectory(directory);
+
+            string path = Path.Combine(directory, fileName);
+            File.WriteAllText(path, "not a real archive - the engine is faked in these tests");
+            return path;
+        }
+
+        private static ExtractOptions DefaultOptions(Harness harness)
+        {
+            var options = new ExtractOptions
+            {
+                ExtractToOriginalDirectory = harness.Vm.Settings.ExtractToOriginalDirectory,
+                CustomOutputDirectory = harness.Vm.Settings.CustomOutputDirectory,
+                KeepArchiveNameFolder = harness.Vm.Settings.KeepArchiveNameFolder
+            };
+
+            options.Normalize();
+            return options;
+        }
+
+        private static void WriteFiles(string directory, int count)
+        {
+            Directory.CreateDirectory(directory);
+
+            for (int i = 0; i < count; i++)
+            {
+                File.WriteAllText(Path.Combine(directory, $"payload-{i:D5}.bin"), "x");
+            }
+        }
+
+        private static int CountFiles(string? directory)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
+                    ? 0
+                    : Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private static ArchiveOperationResult Succeeded()
+        {
+            return new ArchiveOperationResult
+            {
+                Success = true,
+                Status = StatusText.ExtractSuccess,
+                Message = "解压成功",
+                DetectedErrorType = "None"
+            };
+        }
+
+        private static ArchiveOperationResult WrongPassword()
+        {
+            return new ArchiveOperationResult
+            {
+                Success = false,
+                Status = StatusText.WrongPassword,
+                Message = "密码错误",
+                DetectedErrorType = "WrongPassword"
+            };
+        }
+
+        private static ArchiveListResult ListResult(int fileCount)
+        {
+            return new ArchiveListResult
+            {
+                Success = true,
+                FileCount = fileCount,
+                TotalUncompressedSize = 0,
+                Entries = Enumerable.Range(0, fileCount)
+                    .Select(i => new ArchiveEntry { Path = $"payload-{i:D5}.bin", Size = 1 })
+                    .ToList(),
+                EngineId = "fake",
+                EngineVersion = "1.0"
+            };
+        }
+
+        private static async Task WaitAsync(Func<bool> condition, TimeSpan timeout, string failureMessage)
+        {
+            var watch = Stopwatch.StartNew();
+
+            while (watch.Elapsed < timeout)
+            {
+                if (condition())
+                {
+                    return;
+                }
+
+                await Task.Delay(25);
+            }
+
+            Assert.Fail($"{failureMessage}（等了 {timeout.TotalSeconds:F0} 秒）");
+        }
+
+        /// <summary>
+        /// 模拟 WPF 的 UI 线程：一条专用线程 + 一个消息队列，回调只在这条线程上执行。
+        /// </summary>
+        private sealed class MessagePumpContext : SynchronizationContext
+        {
+            private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = new();
+
+            public override void Post(SendOrPostCallback d, object? state)
+            {
+                _queue.Add((d, state));
+            }
+
+            public void RunUntil(Func<bool> stop)
+            {
+                while (!stop())
+                {
+                    if (_queue.TryTake(out (SendOrPostCallback Callback, object? State) item, 20))
+                    {
+                        item.Callback(item.State);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 可控的假引擎：调用记录 + 每个方法都可以被测试替换实现。
+        /// 它是"外部进程"的替身，所以测试里可以放心让它返回密码错误、慢、或者永不结束。
+        /// </summary>
+        private sealed class FakeEngine : IArchiveEngine
+        {
+            public List<string> ExtractCalls { get; } = new();
+
+            public string LastExtractOutputPath { get; set; } = string.Empty;
+
+            /// <summary>解压是否真的成功过一次（用来只对"收尾那次列目录"下手）。</summary>
+            public bool Extracted { get; set; }
+
+            public Func<ArchiveRequest, Task<ArchiveOperationResult>>? OnExtractAsync { get; set; }
+
+            public Func<ArchiveRequest, Task<ArchiveListResult>>? OnListAsync { get; set; }
+
+            public string Id => "fake";
+
+            public string DisplayName => "假引擎";
+
+            public string Version => "1.0";
+
+            public bool IsAvailable => true;
+
+            public EngineCapabilities Capabilities { get; } = new()
+            {
+                CanProbe = true,
+                CanList = true,
+                CanTest = true,
+                CanExtract = true,
+                SupportsPassword = true
+            };
+
+            public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            {
+                return Task.FromResult(new ArchiveProbeResult { IsArchive = true, Format = "7Z" });
+            }
+
+            public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            {
+                return OnListAsync != null
+                    ? OnListAsync(request)
+                    : Task.FromResult(ListResult(0));
+            }
+
+            public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            {
+                return Task.FromResult(Succeeded());
+            }
+
+            public Task<ArchiveOperationResult> ExtractAsync(
+                ArchiveRequest request,
+                ExtractOptions options,
+                CancellationToken cancellationToken = default)
+            {
+                ExtractCalls.Add(request.ArchivePath);
+
+                if (OnExtractAsync != null)
+                {
+                    return OnExtractAsync(request);
+                }
+
+                LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                return Task.FromResult(Succeeded());
+            }
+        }
+    }
+}

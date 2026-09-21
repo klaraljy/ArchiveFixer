@@ -195,4 +195,130 @@ public class RenameServiceTests
             Directory.Delete(dir, true);
         }
     }
+
+    // ─────────────── 覆盖不丢文件 / 名称交换两阶段（不变量 3） ───────────────
+
+    [Fact]
+    public async Task ExecuteRenameAsync_覆盖模式_目标文件被新内容取代且源文件不再存在()
+    {
+        string dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(dir);
+
+            string source = Path.Combine(dir, "a.jpg");
+            string target = Path.Combine(dir, "a.zip");
+            File.WriteAllText(source, "新内容");
+            File.WriteAllText(target, "旧内容");
+
+            var task = CreateTask(source, "ZIP", ".zip");
+            var service = new RenameService();
+            var preview = service.BuildPreview(new[] { task }, CreateOverwriteOptions());
+
+            Assert.Equal("目标已存在", preview[0].Status);
+
+            await service.ExecuteRenameAsync(preview, new[] { task });
+
+            Assert.Equal("改名成功", preview[0].Status);
+            Assert.False(File.Exists(source), "源文件应当已经改名，不再存在于旧路径");
+            Assert.Equal("新内容", File.ReadAllText(target));
+            Assert.Empty(Directory.GetFiles(dir, "*.af-vacating*"));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteRenameAsync_名称交换_两个文件互换且内容都不丢()
+    {
+        string dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(dir);
+
+            string pathA = Path.Combine(dir, "A.zip");
+            string pathB = Path.Combine(dir, "B.zip");
+            File.WriteAllText(pathA, "内容A");
+            File.WriteAllText(pathB, "内容B");
+
+            // 直接构造"改名后互为对方名字"的预览项（BuildPreview 不会生成这种落点）。
+            var itemA = new RenamePreviewItem(pathA, "ZIP", "按真实格式修正", pathB, "Overwrite")
+            {
+                Status = "目标已存在"
+            };
+            var itemB = new RenamePreviewItem(pathB, "ZIP", "按真实格式修正", pathA, "Overwrite")
+            {
+                Status = "目标已存在"
+            };
+
+            var taskA = CreateTask(pathA, "ZIP", ".zip");
+            var taskB = CreateTask(pathB, "ZIP", ".zip");
+
+            var service = new RenameService();
+
+            await service.ExecuteRenameAsync(new[] { itemA, itemB }, new[] { taskA, taskB });
+
+            Assert.Equal("改名成功", itemA.Status);
+            Assert.Equal("改名成功", itemB.Status);
+
+            // 交换成功：两个文件都还在，只是内容换了位置 —— 一个都不能丢。
+            Assert.True(File.Exists(pathA), "交换后 A.zip 必须存在");
+            Assert.True(File.Exists(pathB), "交换后 B.zip 必须存在");
+            Assert.Equal("内容B", File.ReadAllText(pathA));
+            Assert.Equal("内容A", File.ReadAllText(pathB));
+            Assert.Empty(Directory.GetFiles(dir, "*.af-vacating*"));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteRenameAsync_覆盖模式_落位失败时源文件与目标文件都必须还在()
+    {
+        string dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(dir);
+
+            string source = Path.Combine(dir, "a.jpg");
+            string target = Path.Combine(dir, "a.zip");
+            File.WriteAllText(source, "新内容");
+            File.WriteAllText(target, "旧内容");
+
+            var task = CreateTask(source, "ZIP", ".zip");
+            var service = new RenameService();
+            var preview = service.BuildPreview(new[] { task }, CreateOverwriteOptions());
+
+            // 让本次改名必然失败：目标目录在执行前被删掉。
+            // 旧写法此时已经 File.Delete(a.zip)，两个文件都会消失。
+            Directory.Delete(dir, recursive: true);
+
+            await service.ExecuteRenameAsync(preview, new[] { task });
+
+            Assert.Equal("无法改名", preview[0].Status);
+            Assert.False(string.IsNullOrWhiteSpace(preview[0].ErrorMessage), "失败必须给出明确原因");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, true);
+            }
+        }
+    }
+
+    private static RenameOptions CreateOverwriteOptions()
+    {
+        return new RenameOptions
+        {
+            OperationType = "FixByDetectedFormat",
+            TargetExtension = ".zip",
+            ConflictAction = "Overwrite",
+            UnknownFormatAction = "MarkUnknown"
+        };
+    }
 }
