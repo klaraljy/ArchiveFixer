@@ -143,7 +143,8 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private static AppSettings CloneSettings(AppSettings source)        {
+        private static AppSettings CloneSettings(AppSettings source)
+        {
             string json = JsonSerializer.Serialize(source);
             AppSettings? cloned = JsonSerializer.Deserialize<AppSettings>(json);
 

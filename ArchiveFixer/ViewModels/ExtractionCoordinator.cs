@@ -938,7 +938,7 @@ namespace ArchiveFixer.ViewModels
 
                         _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                    await PostProcessSuccessAsync(task, selectedPassword, cancellationToken);
+                        await PostProcessSuccessAsync(task, selectedPassword, cancellationToken);
 
 
 

@@ -155,7 +155,10 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 
 **代码风格**：沿用既有风格（4 空格缩进、私有字段 `_camelCase`、`Nullable` + `ImplicitUsings` 开启）。
 注释写**为什么**（尤其"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
-本机 `dotnet format` 尚未实际跑过基线，**第一次跑通前不得声称代码符合规范**。
+
+**验证状态（2026-09-21）**：`dotnet build` 0 错误（4 个既有 `CS8600` 警告）；
+`dotnet test` 343 通过 / 0 失败；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
+改动代码后这三条都要重新跑；格式差异用 `dotnet format whitespace ArchiveFixer.slnx` 修，不要手工对齐。
 
 ---
 

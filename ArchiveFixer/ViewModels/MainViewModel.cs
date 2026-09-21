@@ -211,26 +211,26 @@ namespace ArchiveFixer.ViewModels
         public ObservableCollection<OperationLogItem> Logs { get; } = new();
 
         public AppSettings Settings
-{
-    get => _settings;
-    set
-    {
-        if (SetProperty(ref _settings, value))
         {
-            ApplyEngineSettings();
+            get => _settings;
+            set
+            {
+                if (SetProperty(ref _settings, value))
+                {
+                    ApplyEngineSettings();
+                }
+            }
         }
-    }
-}
 
-/// <summary>
-/// 把设置里与归档引擎有关的项推给 ToolLocator。
-/// 7z.exe 的路径**只**通过这里生效，别处不许再拼路径（AGENTS.md §3.1）。
-/// </summary>
-private void ApplyEngineSettings()
-{
-    ToolLocator.Default.CustomSevenZipExePath = _settings?.CustomSevenZipExePath ?? string.Empty;
-    ToolLocator.Default.Invalidate();
-}
+        /// <summary>
+        /// 把设置里与归档引擎有关的项推给 ToolLocator。
+        /// 7z.exe 的路径**只**通过这里生效，别处不许再拼路径（AGENTS.md §3.1）。
+        /// </summary>
+        private void ApplyEngineSettings()
+        {
+            ToolLocator.Default.CustomSevenZipExePath = _settings?.CustomSevenZipExePath ?? string.Empty;
+            ToolLocator.Default.Invalidate();
+        }
 
         public string GlobalPassword
         {
@@ -667,7 +667,7 @@ private void ApplyEngineSettings()
                     RefreshOutputPaths();
                     LogLeftoverWorkspaces();
 
-            UpdateSummary();
+                    UpdateSummary();
 
                     AppendLog("INFO", "设置已保存");
                 }
