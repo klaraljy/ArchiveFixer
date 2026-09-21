@@ -207,6 +207,22 @@ namespace ArchiveFixer.Services
 
             LastImportedBookPath = txtPath;
 
+            /*
+             * 把路径写盘 —— 挂在"导入"这个动作上，而不是挂在某个窗口上。
+             * 用户从「密码列表」窗口导入、还是从「工具 → 导入密码本…」导入，都要记住；
+             * 之前只在菜单那条路上存了设置，用户走窗口那条路就白导了。
+             */
+            try
+            {
+                string dataRoot = Path.Combine(AppContext.BaseDirectory, "data");
+                Directory.CreateDirectory(dataRoot);
+                File.WriteAllText(Path.Combine(dataRoot, "password-book.path"), txtPath, new UTF8Encoding(false));
+            }
+            catch
+            {
+                // 记不住路径不该让导入本身失败。
+            }
+
             _bookEntries.Clear();
             _bookEntries.AddRange(parsed.Entries);
 

@@ -518,6 +518,25 @@ namespace ArchiveFixer.ViewModels
             {
                 string path = Settings?.PasswordBookPath ?? string.Empty;
 
+                // 设置里没有就退回 sidecar：用户可能是从「密码列表」窗口导入的，
+                // 那条路以前不写设置。两处都看，才不会"导了等于没导"。
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    try
+                    {
+                        string sidecar = Path.Combine(_pathService.DataRootDirectory, "password-book.path");
+
+                        if (File.Exists(sidecar))
+                        {
+                            path = File.ReadAllText(sidecar).Trim();
+                        }
+                    }
+                    catch
+                    {
+                        // 读不到当作没配过。
+                    }
+                }
+
                 if (string.IsNullOrWhiteSpace(path))
                 {
                     return;
