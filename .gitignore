@@ -1,0 +1,27 @@
+# 构建结果
+bin/
+obj/
+*.user
+*.suo
+
+# Visual Studio / Rider
+.vs/
+.idea/
+
+# 运行期产物（日志与临时目录实际位于 %AppData%\ArchiveFixer）
+logs/
+temp/
+*.log
+
+# 测试结果
+TestResults/
+
+# 本地 AI / 代理目录
+.codex/
+.agents/
+
+# 样本本体不入库（只提交生成脚本与清单，见 AGENTS.md §4、samples/MANIFEST.md）
+samples/generated/
+
+# 本地临时（全局约定：E:\DeepSeekProjects\_tmp\<项目名>，不入仓库）
+_tmp/

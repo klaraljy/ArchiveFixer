@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="ArchiveFixer/ArchiveFixer.csproj" />
+  <Project Path="ArchiveFixer.Tests/ArchiveFixer.Tests.csproj" />
+</Solution>

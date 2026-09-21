@@ -1,0 +1,429 @@
+<Window x:Class="ArchiveFixer.Views.TaskDetailWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="任务详情"
+        Width="760"
+        Height="620"
+        MinWidth="680"
+        MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        Background="#F5F5F5">
+
+	<Window.Resources>
+		<Style TargetType="GroupBox">
+			<Setter Property="Margin" Value="0,0,0,8" />
+			<Setter Property="Padding" Value="10" />
+			<Setter Property="Background" Value="White" />
+			<Setter Property="BorderBrush" Value="#DDDDDD" />
+		</Style>
+
+		<Style x:Key="LabelTextStyle"
+               TargetType="TextBlock">
+			<Setter Property="Foreground" Value="#555555" />
+			<Setter Property="Margin" Value="0,0,8,8" />
+			<Setter Property="VerticalAlignment" Value="Top" />
+		</Style>
+
+		<Style x:Key="ValueTextStyle"
+               TargetType="TextBlock">
+			<Setter Property="Foreground" Value="#222222" />
+			<Setter Property="Margin" Value="0,0,0,8" />
+			<Setter Property="TextWrapping" Value="Wrap" />
+			<Setter Property="VerticalAlignment" Value="Top" />
+		</Style>
+
+		<Style x:Key="ReadonlyPathTextBoxStyle"
+               TargetType="TextBox">
+			<Setter Property="IsReadOnly" Value="True" />
+			<Setter Property="BorderThickness" Value="0" />
+			<Setter Property="Background" Value="Transparent" />
+			<Setter Property="TextWrapping" Value="Wrap" />
+			<Setter Property="VerticalContentAlignment" Value="Top" />
+			<Setter Property="Padding" Value="0" />
+			<Setter Property="Margin" Value="0,0,0,8" />
+		</Style>
+	</Window.Resources>
+
+	<DockPanel Margin="10">
+
+		<!-- 顶部标题 -->
+		<Border DockPanel.Dock="Top"
+                Background="White"
+                BorderBrush="#DDDDDD"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10"
+                Margin="0,0,0,8">
+			<StackPanel>
+				<TextBlock Text="任务详情"
+                           FontSize="18"
+                           FontWeight="Bold"
+                           Foreground="#333333" />
+
+				<TextBlock Text="查看单个任务的完整信息。此窗口不会显示明文密码。"
+                           Margin="0,4,0,0"
+                           Foreground="#666666" />
+			</StackPanel>
+		</Border>
+
+		<!-- 底部按钮 -->
+		<Border DockPanel.Dock="Bottom"
+                Background="White"
+                BorderBrush="#DDDDDD"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10"
+                Margin="0,8,0,0">
+			<DockPanel>
+				<TextBlock Text="{Binding FileName}"
+                           Foreground="#666666"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+
+				<StackPanel DockPanel.Dock="Right"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Right">
+					<Button Content="复制全部信息"
+                            Width="110"
+                            Height="30"
+                            Margin="0,0,6,0"
+                            Click="CopyAllButton_Click" />
+
+					<Button Content="关闭"
+                            Width="90"
+                            Height="30"
+                            IsCancel="True"
+                            Click="CloseButton_Click" />
+				</StackPanel>
+			</DockPanel>
+		</Border>
+
+		<ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+			<StackPanel>
+
+				<!-- 基本信息 -->
+				<GroupBox Header="基本信息">
+					<Grid>
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="130" />
+							<ColumnDefinition Width="*" />
+						</Grid.ColumnDefinitions>
+
+						<Grid.RowDefinitions>
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+						</Grid.RowDefinitions>
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="0"
+                                   Text="序号："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="1"
+                                   Text="{Binding Index}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Text="文件名："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="1"
+                                   Text="{Binding FileName}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="2"
+                                   Grid.Column="0"
+                                   Text="原始路径："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBox Grid.Row="2"
+                                 Grid.Column="1"
+                                 Text="{Binding OriginalPath}"
+                                 Style="{StaticResource ReadonlyPathTextBoxStyle}" />
+
+						<TextBlock Grid.Row="3"
+                                   Grid.Column="0"
+                                   Text="当前路径："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBox Grid.Row="3"
+                                 Grid.Column="1"
+                                 Text="{Binding CurrentPath}"
+                                 Style="{StaticResource ReadonlyPathTextBoxStyle}" />
+
+						<TextBlock Grid.Row="4"
+                                   Grid.Column="0"
+                                   Text="所在目录："
+                                   Margin="0,0,8,0"
+                                   Foreground="#555555" />
+
+						<TextBox Grid.Row="4"
+                                 Grid.Column="1"
+                                 Text="{Binding DirectoryPath}"
+                                 IsReadOnly="True"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 TextWrapping="Wrap"
+                                 Padding="0"
+                                 Margin="0" />
+					</Grid>
+				</GroupBox>
+
+				<!-- 识别与后缀 -->
+				<GroupBox Header="识别与后缀">
+					<Grid>
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="130" />
+							<ColumnDefinition Width="*" />
+							<ColumnDefinition Width="130" />
+							<ColumnDefinition Width="*" />
+						</Grid.ColumnDefinitions>
+
+						<Grid.RowDefinitions>
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+						</Grid.RowDefinitions>
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="0"
+                                   Text="当前后缀："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="1"
+                                   Text="{Binding CurrentExtension}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="2"
+                                   Text="检测格式："
+                                   Margin="16,0,8,8"
+                                   Foreground="#555555" />
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="3"
+                                   Text="{Binding DetectedFormat}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Text="建议后缀："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="1"
+                                   Text="{Binding SuggestedExtension}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="2"
+                                   Text="后缀状态："
+                                   Margin="16,0,8,8"
+                                   Foreground="#555555" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="3"
+                                   Text="{Binding ExtensionStatus}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="2"
+                                   Grid.Column="0"
+                                   Text="是否压缩包："
+                                   Margin="0,0,8,0"
+                                   Foreground="#555555" />
+
+						<TextBlock Grid.Row="2"
+                                   Grid.Column="1"
+                                   Text="{Binding IsArchive}"
+                                   Margin="0"
+                                   Foreground="#222222" />
+
+						<TextBlock Grid.Row="2"
+                                   Grid.Column="2"
+                                   Text="是否加密："
+                                   Margin="16,0,8,0"
+                                   Foreground="#555555" />
+
+						<TextBlock Grid.Row="2"
+                                   Grid.Column="3"
+                                   Text="{Binding IsEncrypted}"
+                                   Margin="0"
+                                   Foreground="#222222" />
+					</Grid>
+				</GroupBox>
+
+				<!-- 解压与状态 -->
+				<GroupBox Header="解压与状态">
+					<Grid>
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="130" />
+							<ColumnDefinition Width="*" />
+						</Grid.ColumnDefinitions>
+
+						<Grid.RowDefinitions>
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+						</Grid.RowDefinitions>
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="0"
+                                   Text="输出目录："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBox Grid.Row="0"
+                                 Grid.Column="1"
+                                 Text="{Binding OutputPath}"
+                                 Style="{StaticResource ReadonlyPathTextBoxStyle}" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Text="密码状态："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="1"
+                                   Text="{Binding PasswordStatus}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="2"
+                                   Grid.Column="0"
+                                   Text="当前操作："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="2"
+                                   Grid.Column="1"
+                                   Text="{Binding Operation}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="3"
+                                   Grid.Column="0"
+                                   Text="状态："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="3"
+                                   Grid.Column="1"
+                                   Text="{Binding Status}"
+                                   FontWeight="Bold"
+                                   Foreground="#333333"
+                                   Margin="0,0,0,8"
+                                   TextWrapping="Wrap" />
+
+						<TextBlock Grid.Row="4"
+                                   Grid.Column="0"
+                                   Text="进度："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="4"
+                                   Grid.Column="1"
+                                   Text="{Binding ProgressText}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="5"
+                                   Grid.Column="0"
+                                   Text="错误信息："
+                                   Margin="0,0,8,0"
+                                   Foreground="#555555" />
+
+						<TextBox Grid.Row="5"
+                                 Grid.Column="1"
+                                 Text="{Binding ErrorMessage}"
+                                 IsReadOnly="True"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 TextWrapping="Wrap"
+                                 Padding="0"
+                                 Foreground="#AA0000" />
+					</Grid>
+				</GroupBox>
+
+				<!-- 时间信息 -->
+				<GroupBox Header="时间信息">
+					<Grid>
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="130" />
+							<ColumnDefinition Width="*" />
+							<ColumnDefinition Width="130" />
+							<ColumnDefinition Width="*" />
+						</Grid.ColumnDefinitions>
+
+						<Grid.RowDefinitions>
+							<RowDefinition Height="Auto" />
+							<RowDefinition Height="Auto" />
+						</Grid.RowDefinitions>
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="0"
+                                   Text="开始时间："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="1"
+                                   Text="{Binding StartTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="2"
+                                   Text="结束时间："
+                                   Margin="16,0,8,8"
+                                   Foreground="#555555" />
+
+						<TextBlock Grid.Row="0"
+                                   Grid.Column="3"
+                                   Text="{Binding EndTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
+                                   Style="{StaticResource ValueTextStyle}" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Text="耗时："
+                                   Margin="0,0,8,0"
+                                   Foreground="#555555" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="1"
+                                   Text="{Binding ElapsedText}"
+                                   Margin="0"
+                                   Foreground="#222222" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="2"
+                                   Text="最后更新："
+                                   Margin="16,0,8,0"
+                                   Foreground="#555555" />
+
+						<TextBlock Grid.Row="1"
+                                   Grid.Column="3"
+                                   Text="{Binding LastUpdatedTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}"
+                                   Margin="0"
+                                   Foreground="#222222" />
+					</Grid>
+				</GroupBox>
+
+				<!-- 任务日志摘要 -->
+				<GroupBox Header="任务日志">
+					<TextBox x:Name="TaskLogTextBox"
+                             MinHeight="130"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas"
+                             FontSize="13"
+                             Text="当前版本任务日志主要记录在主界面日志区和 logs 目录。此处显示任务详情摘要。" />
+				</GroupBox>
+
+			</StackPanel>
+		</ScrollViewer>
+	</DockPanel>
+</Window>
