@@ -45,11 +45,26 @@ Windows 桌面工具：批量识别**被改坏后缀**的归档文件、按真�
 ## 构建 / 运行 / 测试
 
 ```powershell
-dotnet build ArchiveFixer.slnx                          # 构建
+dotnet build ArchiveFixer.slnx                          # 构建（Debug）
+dotnet build ArchiveFixer.slnx -c Release               # 构建（Release，桌面快捷方式指向这个）
 dotnet run --project ArchiveFixer/ArchiveFixer.csproj   # 运行 GUI
 dotnet test ArchiveFixer.Tests/ArchiveFixer.Tests.csproj # 单元测试 + 基线冒烟测试
 dotnet format ArchiveFixer.slnx --verify-no-changes      # 格式检查（只看差异）
 ```
+
+### 桌面一键启动
+
+桌面上有一个 `ArchiveFixer` 快捷方式，直接指向：
+
+```
+ArchiveFixer\bin\Release\net8.0-windows\ArchiveFixer.exe
+```
+
+- **改了代码之后**要重新 `dotnet build ArchiveFixer.slnx -c Release`，快捷方式才会启动到新版本
+  （它指向构建产物，不是源码）。
+- 程序图标是 `ArchiveFixer/Assets/ArchiveFixer.ico`（多尺寸 16–256，`ArchiveFixer.csproj` 里用
+  `<ApplicationIcon>` 嵌进 exe），快捷方式直接复用 exe 的图标。
+- 配置、日志、工作区都写 `%AppData%\ArchiveFixer\`，**不需要以管理员身份运行**。
 
 ## 配置
 
