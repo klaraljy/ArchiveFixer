@@ -91,6 +91,11 @@ namespace ArchiveFixer.Models
         /// </summary>
         public string CacheRootDirectory { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 上次导入的密码本文件路径（用户 2026-09-21 反复要求：导入一次就够了，不要每次重导）。
+        /// 启动时若文件仍在就自动加载；文件没了就只写一条 WARN，不打扰用户。
+        /// </summary>
+        public string PasswordBookPath { get; set; } = string.Empty;
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
@@ -125,6 +130,7 @@ namespace ArchiveFixer.Models
                 CollectResultsToDirectory = false,
                 CollectTargetDirectory = string.Empty,
                 CacheRootDirectory = string.Empty,
+                PasswordBookPath = string.Empty,
                 RecursionMode = "SingleLayer",
                 MaxRecursionDepth = 3
             };
@@ -181,6 +187,7 @@ namespace ArchiveFixer.Models
             CustomSevenZipExePath ??= string.Empty;
             CollectTargetDirectory ??= string.Empty;
             CacheRootDirectory ??= string.Empty;
+            PasswordBookPath ??= string.Empty;
 
             if (string.IsNullOrWhiteSpace(RecursionMode))
             {

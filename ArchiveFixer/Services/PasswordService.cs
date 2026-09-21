@@ -25,6 +25,9 @@ namespace ArchiveFixer.Services
 
         public IReadOnlyList<PasswordEntry> BookEntries => _bookEntries;
 
+        /// <summary>最后一次成功导入的密码本文件路径（用于记住它、下次启动自动加载）。</summary>
+        public string LastImportedBookPath { get; private set; } = string.Empty;
+
         /// <summary>记录某个归档刚刚用哪个密码成功过（只在内存里，不落盘）。</summary>
         public void RecordPasswordSuccess(string? archivePath, string? password)
         {
@@ -201,6 +204,8 @@ namespace ArchiveFixer.Services
             PasswordBookParseResult parsed = PasswordBookParser.ParseFile(txtPath);
 
             LastImportWarnings = parsed.Warnings;
+
+            LastImportedBookPath = txtPath;
 
             _bookEntries.Clear();
             _bookEntries.AddRange(parsed.Entries);

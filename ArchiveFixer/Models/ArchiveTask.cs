@@ -17,7 +17,12 @@ namespace ArchiveFixer.Models
     /// </summary>
     public class ArchiveTask : INotifyPropertyChanged
     {
-        private bool _isSelected = true;
+        /*
+         * 默认 **不勾选**（用户 2026-09-21 明确要求）。
+         * 以前导入一个文件夹会把它里面所有文件都勾上，用户想只处理其中几个，
+         * 就得一个个点掉 —— 每次都要点好几遍。默认不勾，让用户只勾自己要的。
+         */
+        private bool _isSelected = false;
         private int _index;
         private string _originalPath = string.Empty;
         private string _currentPath = string.Empty;

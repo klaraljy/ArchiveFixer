@@ -337,6 +337,9 @@ namespace ArchiveFixer.ViewModels
 
         public ICommand OpenSettingsCommand { get; }
         public ICommand OpenPasswordListCommand { get; }
+
+        /// <summary>导入密码本（记住路径，下次启动自动加载）。用户已多次要求：导入一次就够。</summary>
+        public ICommand ImportPasswordBookCommand { get; }
         public ICommand ExportLogCommand { get; }
         public ICommand CopyFailedListCommand { get; }
 
@@ -432,6 +435,7 @@ namespace ArchiveFixer.ViewModels
 
             OpenSettingsCommand = new RelayCommand(OpenSettings, CanRunNormalCommand);
             OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
+            ImportPasswordBookCommand = new RelayCommand(ImportPasswordBook, CanRunNormalCommand);
             ExportLogCommand = new RelayCommand(ExportLog);
             CopyFailedListCommand = new RelayCommand(CopyFailedList);
             ExportFailedListCommand = new RelayCommand(ExportFailedList);
@@ -483,6 +487,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             LogLeftoverWorkspaces();
+            AutoLoadPasswordBook();
 
             UpdateSummary();
         }
@@ -502,6 +507,65 @@ namespace ArchiveFixer.ViewModels
         /// 启动时不提醒一句，用户永远不会知道这些东西还在占磁盘。
         /// 这里只报告，**不自动删**：删工作区必须先经用户确认（不变量 13）。
         /// </summary>
+        /// <summary>
+        /// 启动时自动加载上次的密码本。
+        /// 用户反复强调过：导入一次就该一直有效，不该每次重导。
+        /// 文件不在了只写一条 WARN，不弹窗打扰。
+        /// </summary>
+        private void AutoLoadPasswordBook()
+        {
+            try
+            {
+                string path = Settings?.PasswordBookPath ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    return;
+                }
+
+                if (!File.Exists(path))
+                {
+                    AppendLog("WARN", $"上次的密码本找不到了，已跳过自动加载：{path}");
+                    return;
+                }
+
+                int count = _passwordService.ImportPasswordList(path).Count;
+                AppendLog("INFO", $"已自动加载密码本：{path}（{count} 条）");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "自动加载密码本失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>导入密码本，并把路径记进设置，下次启动自动加载。</summary>
+        private void ImportPasswordBook()
+        {
+            try
+            {
+                string path = _dialogService.ShowOpenSingleFileDialog(
+                    "选择密码本文件（一行一个密码；也支持 名称:密码）",
+                    "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*");
+
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    return;
+                }
+
+                int count = _passwordService.ImportPasswordList(path).Count;
+
+                Settings.PasswordBookPath = path;
+                _settingsService.Save(Settings);
+
+                AppendLog("INFO", $"已导入密码本：{path}（{count} 条），下次启动会自动加载。");
+                _dialogService.ShowInfo($"已导入 {count} 条密码，并记住了这个文件，下次启动会自动加载。");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", "导入密码本失败：" + ex.Message);
+            }
+        }
+
         private void LogLeftoverWorkspaces()
         {
             try
@@ -554,6 +618,7 @@ namespace ArchiveFixer.ViewModels
 
             Tasks.Clear();
             LogLeftoverWorkspaces();
+            AutoLoadPasswordBook();
 
             UpdateSummary();
             AppendLog("INFO", "已清空任务列表");
@@ -570,6 +635,7 @@ namespace ArchiveFixer.ViewModels
 
             RebuildTaskIndex();
             LogLeftoverWorkspaces();
+            AutoLoadPasswordBook();
 
             UpdateSummary();
             AppendLog("INFO", $"已移除选中任务 {selected.Count} 个");
@@ -681,6 +747,7 @@ namespace ArchiveFixer.ViewModels
 
                     RefreshOutputPaths();
                     LogLeftoverWorkspaces();
+            AutoLoadPasswordBook();
 
                     UpdateSummary();
 
@@ -892,6 +959,7 @@ namespace ArchiveFixer.ViewModels
             Tasks.Remove(task);
             RebuildTaskIndex();
             LogLeftoverWorkspaces();
+            AutoLoadPasswordBook();
 
             UpdateSummary();
         }

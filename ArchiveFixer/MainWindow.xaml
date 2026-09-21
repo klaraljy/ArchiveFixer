@@ -69,6 +69,7 @@
             </MenuItem>
             <MenuItem Header="工具">
                 <MenuItem Header="设置..." Command="{Binding OpenSettingsCommand}" />
+                <MenuItem Header="导入密码本..." Command="{Binding ImportPasswordBookCommand}" />
                 <MenuItem Header="密码列表..." Command="{Binding OpenPasswordListCommand}" />
 
                 <MenuItem Header="打开输出目录" Command="{Binding OpenOutputDirectoryCommand}" />
