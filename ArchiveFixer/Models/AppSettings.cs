@@ -73,7 +73,11 @@ namespace ArchiveFixer.Models
         /// SingleLayer = 只解当前层；SingleChain = 只有一个主要内层归档时自动继续（默认）；
         /// AllBranches = 展开所有内层归档（必须由用户显式选择）。
         /// </summary>
-        public string RecursionMode { get; set; } = "SingleChain";
+        /// 注意：**默认已改成 SingleLayer**。
+        /// 递归解压在 2026-09-21 出现"点了就整机无响应"的故障，
+        /// 排查期间先让默认流程走单层（单层已用真实文件验证通过），
+        /// 递归修好后再改回来 —— 不能让用户替我的 bug 买单。
+        public string RecursionMode { get; set; } = "SingleLayer";
 
         /// <summary>递归最大层数。到顶就停并报告，不做无限展开。</summary>
         public int MaxRecursionDepth { get; set; } = 3;
@@ -121,7 +125,7 @@ namespace ArchiveFixer.Models
                 CollectResultsToDirectory = false,
                 CollectTargetDirectory = string.Empty,
                 CacheRootDirectory = string.Empty,
-                RecursionMode = "SingleChain",
+                RecursionMode = "SingleLayer",
                 MaxRecursionDepth = 3
             };
         }
@@ -180,7 +184,7 @@ namespace ArchiveFixer.Models
 
             if (string.IsNullOrWhiteSpace(RecursionMode))
             {
-                RecursionMode = "SingleChain";
+                RecursionMode = "SingleLayer";
             }
 
             // 层数下限 1（只解当前层），上限 10：再深就不是"帮用户省事"而是失控了。
