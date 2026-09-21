@@ -270,8 +270,7 @@ namespace ArchiveFixer.Services
 
             var task = new ArchiveTask
             {
-                // 新导入的任务默认不勾选：只处理用户明确选中的那些。
-                IsSelected = false,
+                IsSelected = true,
                 Index = 0,
 
                 OriginalPath = fullPath,
