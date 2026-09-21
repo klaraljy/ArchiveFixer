@@ -29,7 +29,8 @@ namespace ArchiveFixer.Services
                     x.ExtensionStatus == StatusText.ExtensionNormal ||
                     x.ExtensionStatus == StatusText.ExtensionMissing ||
                     x.ExtensionStatus == StatusText.ExtensionMismatch ||
-                    x.ExtensionStatus == StatusText.ExtensionMultiFake),
+                    x.ExtensionStatus == StatusText.ExtensionMultiFake ||
+                    x.ExtensionStatus == StatusText.ExtensionVolume),
 
                 UnknownCount = list.Count(x =>
                     x.DetectedFormat == "Unknown" ||

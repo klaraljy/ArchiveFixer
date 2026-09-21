@@ -149,6 +149,16 @@ namespace ArchiveFixer.Services
                 return StatusText.UnknownFormat;
             }
 
+            /*
+             * 分卷文件的"后缀"是 .001 / .z01 / .part1 这类卷标记，不是伪装，也不是漏写后缀。
+             * 设计.md §七 要求把它单独归一类；报成"多重后缀疑似伪装"会误导用户去"修正"它，
+             * 而修正分卷名会直接切断分卷链。
+             */
+            if (FileNameHelper.IsVolumePartFileName(fileName))
+            {
+                return StatusText.ExtensionVolume;
+            }
+
             string suggestedExtension = ExtensionHelper.NormalizeExtension(result.SuggestedExtension);
 
             if (string.IsNullOrWhiteSpace(suggestedExtension))

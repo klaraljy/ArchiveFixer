@@ -192,6 +192,7 @@ namespace ArchiveFixer.ViewModels
         private readonly ScanCoordinator _scanCoordinator;
         private readonly RenameCoordinator _renameCoordinator;
         private readonly ExtractionCoordinator _extractionCoordinator;
+        private readonly OneClickCoordinator _oneClickCoordinator;
 
         private AppSettings _settings;
         private string _globalPassword = string.Empty;
@@ -333,6 +334,9 @@ private void ApplyEngineSettings()
         public ICommand OpenTaskDirectoryCommand { get; }
         public ICommand OpenTaskOutputDirectoryCommand { get; }
         public ICommand ToggleShowPasswordCommand { get; }
+        /// <summary>一键处理：识别 → 修正伪装后缀（一次预览确认）→ 按密码本解压 → 一行汇总。</summary>
+        public ICommand OneClickProcessCommand { get; }
+
         public ICommand ResetSettingsCommand { get; }
 
         public MainViewModel()
@@ -379,6 +383,7 @@ private void ApplyEngineSettings()
             _scanCoordinator = new ScanCoordinator(this, fileScanService, archiveDetectService, dialogService);
             _renameCoordinator = new RenameCoordinator(this, _scanCoordinator, renameService, dialogService);
             _extractionCoordinator = new ExtractionCoordinator(this, archiveEngine, passwordService, pathService, dialogService);
+            _oneClickCoordinator = new OneClickCoordinator(this, _scanCoordinator, _renameCoordinator, _extractionCoordinator, dialogService);
 
             _settings = _settingsService.Load();
             SelectedOutputDirectory = _settings.CustomOutputDirectory ?? string.Empty;
@@ -394,6 +399,8 @@ private void ApplyEngineSettings()
             ReplaceExtensionCommand = new AsyncRelayCommand(_renameCoordinator.ReplaceExtensionAsync, CanRunNormalCommand);
             DeleteLastExtensionCommand = new AsyncRelayCommand(_renameCoordinator.DeleteLastExtensionAsync, CanRunNormalCommand);
             DeleteMultipleExtensionsCommand = new AsyncRelayCommand(_renameCoordinator.DeleteMultipleExtensionsAsync, CanRunNormalCommand);
+
+            OneClickProcessCommand = new AsyncRelayCommand(_oneClickCoordinator.RunAsync, CanRunNormalCommand);
 
             StartExtractCommand = new AsyncRelayCommand(_extractionCoordinator.StartExtractAsync, CanStartExtract);
             StopCommand = new RelayCommand(_extractionCoordinator.StopAfterCurrent, () => IsBusy);
@@ -837,6 +844,7 @@ private void ApplyEngineSettings()
                  RemoveSelectedCommand,
 
                  SmartRenameCommand,
+                OneClickProcessCommand,
                  AddExtensionCommand,
                  ReplaceExtensionCommand,
                  DeleteLastExtensionCommand,

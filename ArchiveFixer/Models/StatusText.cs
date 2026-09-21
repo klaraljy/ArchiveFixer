@@ -62,6 +62,9 @@ namespace ArchiveFixer.Models
         public const string ExtensionMismatch = "后缀不匹配";
         public const string ExtensionMultiFake = "多重后缀疑似伪装";
 
+        /// <summary>分卷文件的后缀：<c>xxx.7z.001</c>。它不是伪装，单独一类（设计.md §七）。</summary>
+        public const string ExtensionVolume = "分卷后缀";
+
         // 密码状态
         public const string PasswordCorrect = "密码正确";
         public const string PasswordNotNeeded = "不需要密码";

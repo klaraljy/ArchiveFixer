@@ -133,7 +133,9 @@ namespace ArchiveFixer.Converters
                 StatusText.OpScan or
                 StatusText.OpRename or
                 StatusText.OpTest or
-                StatusText.OpExtract;
+                StatusText.OpExtract or
+                // 分卷后缀是"正常的一类"，不是伪装、也不是漏写后缀：给中性色，别引导用户去改它。
+                StatusText.ExtensionVolume;
         }
 
         private static bool IsDisabledStatus(string status)

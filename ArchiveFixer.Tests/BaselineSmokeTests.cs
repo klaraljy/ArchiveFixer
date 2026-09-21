@@ -227,7 +227,7 @@ namespace ArchiveFixer.Tests
         [InlineData("04_fakeext/fake.jpg", "7Z", "后缀不匹配")]
         [InlineData("04_fakeext/fake.7z.pdf.jpg", "7Z", "多重后缀疑似伪装")]
         [InlineData("04_fakeext/noextension", "7Z", "后缀缺失")]
-        [InlineData("03_volume/volume.7z.001", "7Z", "后缀不匹配")]
+        [InlineData("03_volume/volume.7z.001", "7Z", "分卷后缀")]
         public async Task 识别真实格式与后缀状态(string relative, string expectedFormat, string expectedExtensionStatus)
         {
             ArchiveTask task = await ScanAsync(_fx.P(relative));

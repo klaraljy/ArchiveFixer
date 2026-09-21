@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -306,6 +307,29 @@ namespace ArchiveFixer.Models
         /// 是否存在错误信息。
         /// </summary>
         public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
+        /// <summary>
+        /// 本任务是否代表"一组分卷"（AGENTS.md §9.3）。
+        /// 一组分卷 = 一个任务：只从第一卷启动解压，其余卷不作为独立任务出现。
+        /// </summary>
+        public bool IsVolumeGroup { get; set; }
+
+        /// <summary>分卷组的归组键（目录 + 基名）。失败重试与清理源包时靠它找回同一组。</summary>
+        public string VolumeGroupKey { get; set; } = string.Empty;
+
+        /// <summary>这一组已找到的分卷文件（含第一卷），按卷序排列。</summary>
+        public List<string> VolumePaths { get; } = new();
+
+        /// <summary>已找到的卷数。</summary>
+        public int VolumeCount => VolumePaths.Count;
+
+        /// <summary>卷序是否从 1 连续、无缺口。</summary>
+        public bool IsVolumeComplete { get; set; } = true;
+
+        /// <summary>缺失的卷文件名（总数无法确定时为空）。</summary>
+        public List<string> MissingVolumeNames { get; } = new();
+
+        /// <summary>分卷情况的一句话说明，直接显示给用户。</summary>
+        public string VolumeInfoText { get; set; } = string.Empty;
 
         /// <summary>
         /// 创建任务。

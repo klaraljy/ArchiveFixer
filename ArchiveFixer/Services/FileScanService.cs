@@ -96,6 +96,9 @@ namespace ArchiveFixer.Services
                     }
                 }
 
+                // 一组分卷 = 一个任务（AGENTS.md §9.3）：在这里归组，后面的识别/解压只看到代表任务。
+                result = new VolumeGroupingService().ApplyVolumeGrouping(result);
+
                 RebuildIndex(result);
                 return result;
             }, cancellationToken);

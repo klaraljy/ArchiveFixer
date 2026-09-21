@@ -232,7 +232,7 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(2, group.KnownVolumeCount);
             Assert.True(group.IsComplete);
-            Assert.False(group.Volumes.Any(v => v.Path.EndsWith("volume.7z.003.txt", StringComparison.OrdinalIgnoreCase)));
+            Assert.DoesNotContain(group.Volumes, v => v.Path.EndsWith("volume.7z.003.txt", StringComparison.OrdinalIgnoreCase));
         }
 
         [Fact]

@@ -213,6 +213,23 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            /*
+             * 分卷缺失时**不许开始**（AGENTS.md §6 第 7 条）。
+             * 理由：分卷包里每一卷都是必需的数据片，缺一卷 7z 必然失败，
+             * 让它跑一遍只会浪费用户时间、还可能留下半截输出目录；
+             * 直接说清"缺哪几个卷"才是用户能行动的信息。
+             */
+            if (task.IsVolumeGroup && !task.IsVolumeComplete)
+            {
+                task.Status = StatusText.VolumeMissing;
+                task.ErrorMessage = string.IsNullOrWhiteSpace(task.VolumeInfoText)
+                    ? "分卷不完整，缺少分卷"
+                    : task.VolumeInfoText;
+
+                AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{task.ErrorMessage}");
+                return;
+            }
+
             bool tryExtractUnknown = Settings.UnknownFormatAction == "TryExtract";
 
             if (!task.IsArchive || task.DetectedFormat == "Unknown")
