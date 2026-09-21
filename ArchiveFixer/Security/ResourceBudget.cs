@@ -97,14 +97,14 @@ namespace ArchiveFixer.Security
              */
             if (list == null || !list.Success)
             {
-                string? spaceShortage = CheckFreeSpace(freeSpaceBytes, 0);
+                string? unknownListSpaceShortage = CheckFreeSpace(freeSpaceBytes, 0);
 
-                if (spaceShortage != null)
+                if (unknownListSpaceShortage != null)
                 {
                     return new BudgetCheckResult
                     {
                         Allowed = false,
-                        Reason = $"引擎未能提供条目清单（本应改为运行时预算），但{spaceShortage}",
+                        Reason = $"引擎未能提供条目清单（本应改为运行时预算），但{unknownListSpaceShortage}",
                         EstimatedTotalSize = 0,
                         ExpansionRatio = 0d,
                         FreeSpaceBytes = freeSpaceBytes

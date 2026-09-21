@@ -362,10 +362,17 @@ namespace ArchiveFixer.Security
         /// <summary>判断单个路径段的风险；返回 false 表示这一段没问题。</summary>
         private static bool TryGetSegmentRisk(string segment, out PathRiskKind kind, out string reason)
         {
+            /*
+             * 先剥掉结尾的空格再判定".."：Windows 解析路径时会静默丢掉每段结尾的空格与点，
+             * 于是 ".. " 的实际含义和 ".." 一模一样（剥完就是父目录）。
+             * 只按逐字符相等判 ".."，会被一个尾随空格绕过去。
+             */
+            string withoutTrailingSpaces = segment.TrimEnd(' ');
+
             // 规则 1：任何一段是 ".." 都危险 —— 不只看开头。"a/../../b" 开头看着人畜无害，
             // 一样能跳出去（这是"只检查前两个字符"的实现最常漏的形态）。
             // 优先级高过设备名 / 冒号 / 控制字符：它是最直接、最该先说的那条。
-            if (string.Equals(segment, "..", StringComparison.Ordinal))
+            if (string.Equals(withoutTrailingSpaces, "..", StringComparison.Ordinal))
             {
                 kind = PathRiskKind.ParentTraversal;
                 reason = "包含 .. 片段，试图跳出目标目录";
@@ -410,9 +417,24 @@ namespace ArchiveFixer.Security
                 }
             }
 
-            // 规则 5：结尾的点或空格。Windows 解析时会静默丢弃 / 改名，
+            /*
+             * 规则 5：". " / "." 单独成段（"当前目录"）不报。
+             * 依据：危险条目定义在 ".." / 绝对路径 / 盘符 / UNC / 保留名 / 备用数据流这些形态上，
+             * "." 自己逃不出目标目录；而 tar 用 "./" 前缀存条目极其常见，把它报成危险
+             * 会把一整个正常的 tar 判成"不安全"、进而被整包拒绝。
+             * 代价说清楚："./a/b.txt" 的实际落点（a\b.txt）与朴素拼接的结果不一致，
+             * 所以解压后的落点校验（IsInsideRoot）不能因为这里放行就省掉。
+             */
+            if (string.Equals(withoutTrailingSpaces, ".", StringComparison.Ordinal))
+            {
+                kind = PathRiskKind.None;
+                reason = string.Empty;
+                return false;
+            }
+
+            // 规则 6：结尾的点或空格。Windows 解析时会静默丢弃 / 改名，
             // 于是"预期落点"和"实际落点"分叉 —— 落点校验也会跟着对不上。
-            // 整段只有点或空格的写法（"." / "..." / "   "）一并落在这里，问题同源。
+            // 整段只有点或空格的写法（"..." / "   "）一并落在这里，问题同源。
             char last = segment[segment.Length - 1];
 
             if (last == '.' || last == ' ')

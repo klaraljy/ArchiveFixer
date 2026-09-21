@@ -1,5 +1,7 @@
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Security;
+using ArchiveFixer.Storage;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using System;
@@ -24,6 +26,9 @@ namespace ArchiveFixer.ViewModels
         private readonly PasswordService _passwordService;
         private readonly PathService _pathService;
         private readonly DialogService _dialogService;
+
+        /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
+        private const int MaxPreflightPasswordAttempts = 3;
 
         private CancellationTokenSource? _operationCts;
         private readonly List<CancellationTokenSource> _runningTaskCts = new();
@@ -66,6 +71,18 @@ namespace ArchiveFixer.ViewModels
             OutputVerificationResult verification = OutputVerifier.Verify(
                 task.OutputPath,
                 expected.Success ? expected : null);
+
+            // 解压后落点校验（第二道防线）：产物必须都在目标根目录之内。
+            if (Directory.Exists(task.OutputPath))
+            {
+                foreach (string produced in Directory.EnumerateFiles(task.OutputPath, "*", SearchOption.AllDirectories))
+                {
+                    if (!ArchivePathGuard.IsInsideRoot(task.OutputPath, produced, out string landReason))
+                    {
+                        AppendLog("ERROR", $"{task.FileName}：产物落点异常 —— {landReason}");
+                    }
+                }
+            }
 
             task.IsOutputVerified = verification.Verified;
             task.VerifyMessage = verification.Message;
@@ -384,6 +401,76 @@ namespace ArchiveFixer.ViewModels
                     IsEnabled = true,
                     Remark = "空密码"
                 });
+            }
+
+            /*
+             * M5 解压前预检：路径安全 + 资源预算。
+             *
+             * 为什么必须先"列目录"再解压：真正写盘的是外部 7z.exe，进程外拦不住 Zip Slip。
+             * 能做的只有两件事 —— ①解压前把危险条目挑出来，拒绝这一单；
+             * ②解压后再校验落点（见 PostProcessSuccessAsync）。这里做的是 ①。
+             *
+             * 加密头（-mhe）的包不给密码是列不出目录的，所以先拿密码候选去试列表：
+             * 试成功的那一个同时也是最可能的解压密码，后面解压循环还会再用一遍。
+             */
+            ArchiveListResult? preflightList = null;
+
+            foreach (PasswordItem candidate in candidates.Take(MaxPreflightPasswordAttempts))
+            {
+                ArchiveListResult attempt = await _archiveEngine.ListAsync(
+                    ArchiveRequest.For(task.CurrentPath, candidate.Value),
+                    cancellationToken);
+
+                if (attempt.Success)
+                {
+                    preflightList = attempt;
+                    break;
+                }
+            }
+
+            if (preflightList == null)
+            {
+                AppendLog("WARN", $"{task.FileName}：没能列出归档内容（可能是加密头或文件损坏），本次跳过路径预检与资源预算，解压后仍会校验落点。");
+            }
+            else
+            {
+                PathSafetyReport pathReport = ArchivePathGuard.CheckEntries(preflightList.Entries);
+
+                if (!pathReport.IsSafe)
+                {
+                    task.Status = StatusText.ExtractFailed;
+                    task.ErrorMessage = "归档里有不安全的条目，已拒绝解压：" + pathReport.Summary;
+
+                    AppendLog("ERROR", $"{task.FileName}：路径预检未通过 —— {pathReport.Summary}");
+                    return;
+                }
+
+                long archiveSize = 0;
+
+                try
+                {
+                    archiveSize = new FileInfo(task.CurrentPath).Length;
+                }
+                catch
+                {
+                    // 取不到大小就不做展开比判断，其余预算照常。
+                }
+
+                BudgetCheckResult budget = new ResourceBudget().CheckBeforeExtract(preflightList, archiveSize, outputPath);
+
+                if (!budget.Allowed)
+                {
+                    task.Status = StatusText.ExtractFailed;
+                    task.ErrorMessage = "资源预算未通过：" + budget.Reason;
+
+                    AppendLog("ERROR", $"{task.FileName}：资源预算未通过 —— {budget.Reason}");
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(budget.Reason))
+                {
+                    AppendLog("WARN", $"{task.FileName}：资源预算提示 —— {budget.Reason}");
+                }
             }
 
             ArchiveOperationResult? lastResult = null;
