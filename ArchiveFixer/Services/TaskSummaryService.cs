@@ -30,7 +30,10 @@ namespace ArchiveFixer.Services
                     x.ExtensionStatus == StatusText.ExtensionMissing ||
                     x.ExtensionStatus == StatusText.ExtensionMismatch ||
                     x.ExtensionStatus == StatusText.ExtensionMultiFake ||
-                    x.ExtensionStatus == StatusText.ExtensionVolume),
+                    x.ExtensionStatus == StatusText.ExtensionVolume ||
+                    // 内嵌归档也算"已识别"：它的格式是确定的（ZIP，只是藏在文件尾部），
+                    // 归到"未知"会让用户以为识别失败，从而去改一个根本不该改的后缀。
+                    x.ExtensionStatus == StatusText.ExtensionEmbedded),
 
                 UnknownCount = list.Count(x =>
                     x.DetectedFormat == "Unknown" ||

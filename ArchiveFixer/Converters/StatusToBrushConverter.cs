@@ -137,7 +137,10 @@ namespace ArchiveFixer.Converters
                 StatusText.OpTest or
                 StatusText.OpExtract or
                 // 分卷后缀是"正常的一类"，不是伪装、也不是漏写后缀：给中性色，别引导用户去改它。
-                StatusText.ExtensionVolume;
+                StatusText.ExtensionVolume or
+                // 内嵌归档同理：它是"已识别、且不该改名"的一类（改成 .zip 后 7z 照样打不开），
+                // 给中性色，不要用"后缀异常"的警告色把人引去改名。
+                StatusText.ExtensionEmbedded;
         }
 
         private static bool IsDisabledStatus(string status)

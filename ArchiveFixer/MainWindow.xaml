@@ -55,129 +55,155 @@
 
     <DockPanel Margin="10">
 
-        <!-- 顶部工具栏 -->
+        <!-- 顶部菜单：低频操作收进菜单，主界面不再堆一排按钮 -->
+        <Menu DockPanel.Dock="Top"
+              Margin="0,0,0,6"
+              Background="Transparent">
+            <MenuItem Header="文件">
+                <MenuItem Header="添加文件..." Command="{Binding AddFilesCommand}" />
+                <MenuItem Header="添加文件夹..." Command="{Binding AddFolderCommand}" />
+
+                <MenuItem Header="重新扫描" Command="{Binding ScanCommand}" />
+                <MenuItem Header="移除选中" Command="{Binding RemoveSelectedCommand}" />
+                <MenuItem Header="清空列表" Command="{Binding ClearCommand}" />
+            </MenuItem>
+            <MenuItem Header="工具">
+                <MenuItem Header="设置..." Command="{Binding OpenSettingsCommand}" />
+                <MenuItem Header="密码列表..." Command="{Binding OpenPasswordListCommand}" />
+
+                <MenuItem Header="打开输出目录" Command="{Binding OpenOutputDirectoryCommand}" />
+                <MenuItem Header="打开工作区目录" Command="{Binding OpenWorkDirectoryCommand}" />
+
+
+
+
+                <MenuItem Header="导出日志" Command="{Binding ExportLogCommand}" />
+                <MenuItem Header="打开日志目录" Command="{Binding OpenLogDirectoryCommand}" />
+            </MenuItem>
+        </Menu>
+
+        <!-- 主操作条：只留真正常用的三件事 —— 导入、选输出目录、一键处理 -->
         <Border DockPanel.Dock="Top"
-        Background="White"
-        BorderBrush="#DDDDDD"
-        BorderThickness="1"
-        CornerRadius="4"
-        Padding="8"
-        Margin="0,0,0,8">
+                Background="White"
+                BorderBrush="#DDDDDD"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="10,8"
+                Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-            <!-- 用 WrapPanel，避免按钮太多时被遮挡 -->
-            <WrapPanel Orientation="Horizontal"
-               VerticalAlignment="Center">
+                <StackPanel Grid.Column="0"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Content="添加文件"
+                            MinWidth="88"
+                            Command="{Binding AddFilesCommand}" />
 
-                <TextBlock Text="文件："
-                   FontWeight="Bold"
-                   VerticalAlignment="Center"
-                   Margin="0,0,6,0" />
+                    <Button Content="添加文件夹"
+                            MinWidth="96"
+                            Margin="6,0,0,0"
+                            Command="{Binding AddFolderCommand}" />
+                </StackPanel>
 
-                <Button Content="添加文件"
-                Command="{Binding AddFilesCommand}" />
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Margin="16,0">
+                    <TextBlock Text="输出到："
+                               VerticalAlignment="Center"
+                               Foreground="#555555" />
 
-                <Button Content="添加文件夹"
-                Command="{Binding AddFolderCommand}" />
+                    <TextBox Text="{Binding SelectedOutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             Width="300"
+                             Height="26"
+                             VerticalContentAlignment="Center"
+                             ToolTip="留空表示解压到压缩包所在目录" />
 
-                <Button Content="重新扫描"
-                Command="{Binding ScanCommand}" />
+                    <Button Content="选择"
+                            Margin="6,0,0,0"
+                            Command="{Binding SelectOutputDirectoryCommand}" />
+                </StackPanel>
 
-                <Button Content="清空列表"
-                Command="{Binding ClearCommand}" />
+                <StackPanel Grid.Column="2"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Content="停止后续"
+                            Margin="0,0,6,0"
+                            ToolTip="当前任务继续跑完，但不再启动新任务"
+                            Command="{Binding StopCommand}" />
 
-                <Button Content="移除选中"
-                Command="{Binding RemoveSelectedCommand}" />
+                    <Button Content="取消当前"
+                            Margin="0,0,12,0"
+                            ToolTip="强制结束当前任务的 7-Zip 进程（保留工作区与日志）"
+                            Command="{Binding CancelCurrentCommand}" />
 
-                <Border Width="1"
-                Height="24"
-                Background="#DDDDDD"
-                Margin="8,0,10,0" />
-
-                <!-- 一键处理：识别 → 修正伪装后缀（出一次预览确认）→ 按密码本解压 → 一行汇总。
-                     没有需要改名的任务时，改名这步会自动跳过。 -->
-                <Button Content="一键处理"
-                MinWidth="110"
-                Height="30"
-                FontWeight="Bold"
-                FontSize="14"
-                Background="#FFE8F4FF"
-                ToolTip="对选中任务（没选就全部）依次做：识别格式 → 修正伪装后缀（会先给你看预览）→ 按密码本解压 → 汇总结果"
-                Command="{Binding OneClickProcessCommand}" />
-
-                <Border Width="1"
-                Height="24"
-                Background="#DDDDDD"
-                Margin="8,0,10,0" />
-
-                <TextBlock Text="后缀："
-                   FontWeight="Bold"
-                   VerticalAlignment="Center"
-                   Margin="0,0,6,0" />
-
-                <Button Content="智能修正后缀"
-                MinWidth="110"
-                FontWeight="Bold"
-                Command="{Binding SmartRenameCommand}" />
-
-                <Button Content="添加后缀"
-                Command="{Binding AddExtensionCommand}" />
-
-                <Button Content="替换后缀"
-                Command="{Binding ReplaceExtensionCommand}" />
-
-                <Button Content="删除后缀"
-                Command="{Binding DeleteLastExtensionCommand}" />
-
-                <Button Content="删除多个后缀"
-                MinWidth="110"
-                Command="{Binding DeleteMultipleExtensionsCommand}" />
-
-                <Border Width="1"
-                Height="24"
-                Background="#DDDDDD"
-                Margin="8,0,10,0" />
-
-                <TextBlock Text="解压："
-                   FontWeight="Bold"
-                   VerticalAlignment="Center"
-                   Margin="0,0,6,0" />
-
-                <Button Content="开始解压"
-                MinWidth="90"
-                FontWeight="Bold"
-                Command="{Binding StartExtractCommand}" />
-
-                <Button Content="停止后续"
-                Command="{Binding StopCommand}" />
-
-                <Button Content="取消当前"
-                Command="{Binding CancelCurrentCommand}" />
-
-                <Border Width="1"
-                Height="24"
-                Background="#DDDDDD"
-                Margin="8,0,10,0" />
-
-                <TextBlock Text="工具："
-                   FontWeight="Bold"
-                   VerticalAlignment="Center"
-                   Margin="0,0,6,0" />
-
-                <Button Content="设置"
-                Command="{Binding OpenSettingsCommand}" />
-
-                <Button Content="密码列表"
-                Command="{Binding OpenPasswordListCommand}" />
-
-                <Button Content="导出日志"
-                Command="{Binding ExportLogCommand}" />
-
-                <Button Content="日志目录"
-                Command="{Binding OpenLogDirectoryCommand}" />
-
-            </WrapPanel>
+                    <!-- 主按钮：对勾选的任务走完 识别 → 修正后缀 → 按密码本解压 → 汇总 -->
+                    <Button Content="一键处理"
+                            MinWidth="120"
+                            Height="34"
+                            FontWeight="Bold"
+                            FontSize="15"
+                            Background="#FFE8F4FF"
+                            ToolTip="对勾选的任务依次做：识别格式 → 修正伪装后缀（先给你看预览）→ 按密码本解压 → 汇总结果"
+                            Command="{Binding OneClickProcessCommand}" />
+                </StackPanel>
+            </Grid>
         </Border>
 
+        <!-- 手动操作：默认收起。不常用，但需要时就在那儿，不必记快捷键 -->
+        <Expander DockPanel.Dock="Top"
+                  Header="手动操作（单独改后缀 / 单独解压 / 重新扫描）"
+                  Margin="0,0,0,8"
+                  Padding="10,8"
+                  Background="White"
+                  BorderBrush="#DDDDDD"
+                  BorderThickness="1">
+            <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Content="智能修正后缀"
+                        MinWidth="110"
+                        FontWeight="Bold"
+                        Command="{Binding SmartRenameCommand}" />
+
+                <Button Content="添加后缀"
+                        Command="{Binding AddExtensionCommand}" />
+
+                <Button Content="替换后缀"
+                        Command="{Binding ReplaceExtensionCommand}" />
+
+                <Button Content="删除后缀"
+                        Command="{Binding DeleteLastExtensionCommand}" />
+
+                <Button Content="删除多个后缀"
+                        MinWidth="110"
+                        Command="{Binding DeleteMultipleExtensionsCommand}" />
+
+                <Border Width="1"
+                        Height="24"
+                        Background="#DDDDDD"
+                        Margin="10,0" />
+
+                <Button Content="开始解压"
+                        MinWidth="90"
+                        FontWeight="Bold"
+                        Command="{Binding StartExtractCommand}" />
+
+                <Button Content="重新扫描"
+                        Margin="10,0,0,0"
+                        Command="{Binding ScanCommand}" />
+
+                <Button Content="移除选中"
+                        Command="{Binding RemoveSelectedCommand}" />
+
+                <Button Content="清空列表"
+                        Command="{Binding ClearCommand}" />
+            </WrapPanel>
+        </Expander>
 
         <!-- 底部日志区 -->
         <Grid DockPanel.Dock="Bottom"
@@ -495,7 +521,7 @@
                                       Command="{Binding PlacementTarget.DataContext.OpenTaskOutputDirectoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                       CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
-                            <Separator />
+            
 
                             <MenuItem Header="复制文件路径"
                                       Command="{Binding PlacementTarget.DataContext.CopyTaskPathCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
@@ -509,7 +535,7 @@
                                       Command="{Binding PlacementTarget.DataContext.CopyTaskInfoCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                       CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
-                            <Separator />
+            
 
                             <MenuItem Header="重新扫描此文件"
                                       Command="{Binding PlacementTarget.DataContext.RescanTaskCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
@@ -518,7 +544,7 @@
                             <MenuItem Header="智能修正此文件后缀"
                                       Click="SmartRenameCurrentTaskMenuItem_Click" />
 
-                            <Separator />
+            
 
                             <MenuItem Header="从列表移除"
                                       Command="{Binding PlacementTarget.DataContext.RemoveTaskCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"

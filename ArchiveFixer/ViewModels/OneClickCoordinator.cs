@@ -141,6 +141,19 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private static bool NeedsRename(ArchiveTask task)
         {
+            /*
+             * 内嵌归档（文件尾部藏着 ZIP 的双面文件）**不改名**。
+             *
+             * 它看起来最像"该改名"的那一类（`xxx.mp4` 里明明有 ZIP），但改名是纯粹的误导：
+             * ZIP 的内部偏移相对它自己，而前置数据远超 7-Zip 的容忍上限（实测 8 MiB），
+             * 所以 `xxx.zip` 交到 7z 手里仍然打不开。
+             * 该做的事是解压管线里按偏移把尾部那段取出来，不是动后缀。
+             */
+            if (task.ExtensionStatus == StatusText.ExtensionEmbedded)
+            {
+                return false;
+            }
+
             return task.ExtensionStatus == StatusText.ExtensionMissing ||
                 task.ExtensionStatus == StatusText.ExtensionMismatch ||
                 task.ExtensionStatus == StatusText.ExtensionMultiFake;

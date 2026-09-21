@@ -346,6 +346,16 @@ namespace ArchiveFixer.Models
         /// </summary>
         public string EngineVerdict { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 内嵌归档在 <see cref="CurrentPath"/> 里的起始偏移，**0 表示没有内嵌归档**。
+        ///
+        /// 由识别阶段写进来，解压阶段据此把 <c>[偏移, EOF)</c> 抠出来再交给引擎：
+        /// 这种文件的 ZIP 内部偏移相对它自己，前置数据超过 7-Zip 的容忍上限（实测 8 MiB）时就报
+        /// "Cannot open the file as archive"，而真实文件前面垫了 17 MB 级的数据，必然落在拒绝区。
+        /// **不要**用它去改 <see cref="CurrentPath"/> —— 源文件路径是改名、清理、统计的共同依据。
+        /// </summary>
+        public long EmbeddedArchiveOffset { get; set; }
+
         /// <summary>结果归集后的最终位置（没有归集时为空，表示还是 OutputPath）。</summary>
         public string CollectedPath { get; set; } = string.Empty;
 
@@ -485,6 +495,7 @@ namespace ArchiveFixer.Models
                 SuggestedExtension = string.Empty;
                 IsArchive = false;
                 IsEncrypted = false;
+                EmbeddedArchiveOffset = 0;
                 ExtensionStatus = StatusText.UnknownFormat;
                 Status = StatusText.UnknownFormat;
                 Operation = StatusText.OpScan;
@@ -497,6 +508,9 @@ namespace ArchiveFixer.Models
             SuggestedExtension = result.SuggestedExtension;
             IsArchive = result.IsArchive;
             IsEncrypted = result.IsProbablyEncrypted;
+
+            // 重扫时也要跟着刷新：上一次的偏移对新文件没有意义（识别结果是会被覆盖的）。
+            EmbeddedArchiveOffset = result.EmbeddedArchiveOffset;
             ExtensionStatus = extensionStatus;
 
             if (result.IsArchive)

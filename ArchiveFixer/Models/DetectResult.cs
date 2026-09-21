@@ -83,6 +83,22 @@ namespace ArchiveFixer.Models
         public int Confidence { get; set; }
 
         /// <summary>
+        /// 内嵌归档（"双面文件"）在源文件中的起始偏移，**0 表示没有内嵌归档**。
+        ///
+        /// 什么情况下会有值：文件头是不认识的格式，但尾部藏着一个完整的 ZIP
+        /// （典型：网盘下载的 .mp4 前面是视频、后面拼了一整个 ZIP）。此时
+        /// <see cref="Format"/> 为 ZIP、<see cref="SuggestedExtension"/> 为 .zip，
+        /// 而 <see cref="Confidence"/> 只有 80 —— 因为它不是"文件开头就是 ZIP"，而是尾部推断出来的。
+        ///
+        /// 用途（两处，缺一不可）：
+        /// 1. 后缀状态判成"内嵌归档"：这种文件**不该改名**（改成 .zip 之后 7z 照样打不开 ——
+        ///    前置数据超过了它的容忍上限，改名只会让用户以为问题解决了）；
+        /// 2. 解压管线按这个偏移把 [offset, EOF) 抠出来当真正的归档用
+        ///    （ZIP 内部偏移相对它自己，抠出来偏移才对得齐）。
+        /// </summary>
+        public long EmbeddedArchiveOffset { get; init; }
+
+        /// <summary>
         /// 创建 Unknown 结果。
         /// </summary>
         public static DetectResult Unknown(string message = "未知格式", string headerHex = "")

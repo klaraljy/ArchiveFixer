@@ -71,6 +71,16 @@ namespace ArchiveFixer.Models
         /// <summary>分卷文件的后缀：<c>xxx.7z.001</c>。它不是伪装，单独一类（设计.md §七）。</summary>
         public const string ExtensionVolume = "分卷后缀";
 
+        /// <summary>
+        /// 内嵌归档：文件本身不是压缩包，尾部却拼着一整个 ZIP（前面是视频等正常数据）。
+        ///
+        /// 后缀一栏给这一类，是为了让用户一眼看出"**不要改后缀**"：
+        /// ZIP 的内部偏移相对它自己，而前置数据远超 7-Zip 的容忍上限（实测 8 MiB），
+        /// 所以改成 <c>.zip</c> 之后 7z 仍然打不开，改名的唯一效果是让用户以为已经修好了。
+        /// 真正要做的是按偏移把尾部那段取出来。
+        /// </summary>
+        public const string ExtensionEmbedded = "内嵌归档";
+
         // 密码状态
         public const string PasswordCorrect = "密码正确";
         public const string PasswordNotNeeded = "不需要密码";

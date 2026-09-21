@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using System;
@@ -14,12 +15,14 @@ namespace ArchiveFixer.Services
     /// 职责：
     /// 1. 读取文件头。
     /// 2. 通过魔数判断真实格式。
-    /// 3. 返回 DetectResult。
-    /// 4. 判断后缀状态。
-    /// 5. 将识别结果应用到 ArchiveTask。
+    /// 3. 文件头不认识时，再读文件尾部找"内嵌归档"（双面文件）。
+    /// 4. 返回 DetectResult。
+    /// 5. 判断后缀状态。
+    /// 6. 将识别结果应用到 ArchiveTask。
     /// 
     /// 注意：
-    /// 这里只读取文件头，不读取整个大文件。
+    /// 这里只读取文件头（34 KB）和"认识不出来时"的文件尾部（128 KB），
+    /// 不读取整个大文件。
     /// </summary>
     public class ArchiveDetectService
     {
@@ -52,7 +55,32 @@ namespace ArchiveFixer.Services
                     return CreateUnknownResult("文件为空");
                 }
 
-                return DetectByHeader(header);
+                DetectResult headerResult = DetectByHeader(header);
+
+                /*
+                 * 只有文件头"不认识"时才去看文件尾部。
+                 *
+                 * 为什么必须加这个条件：尾部检测要多读 128 KB，而它对已经认出来的格式毫无意义 ——
+                 * 给每个正常包都多读一次纯属浪费（一批几百个包就是几十 MB 的无用 IO）。
+                 * 更关键的是**不许**给已识别的格式也去读尾部：自解压安装器（PE 头 + 尾部归档）、
+                 * 可执行文件后面接数据的形态都很常见，一律去尾部找 ZIP 会大面积误报。
+                 * 判据用"文件头是否认识"而不是逐个排除格式，所以以后新增魔数也自动受这条保护。
+                 *
+                 * 反过来，尾部检测正是"只读文件头"这个设计的补丁：
+                 * 真实案例里 ZIP 在 17 MB 之后，前 34 KB 全是 MP4 的 ftyp 头，
+                 * 只看文件头永远得不出结论，这种文件就被判成"格式未知"了。
+                 */
+                if (headerResult.Format == "Unknown")
+                {
+                    DetectResult? embeddedResult = DetectEmbeddedArchive(filePath, headerResult);
+
+                    if (embeddedResult != null)
+                    {
+                        return embeddedResult;
+                    }
+                }
+
+                return headerResult;
             }
             catch (UnauthorizedAccessException)
             {
@@ -66,6 +94,39 @@ namespace ArchiveFixer.Services
             {
                 return CreateUnknownResult("识别失败：" + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 文件头不认识时，再看一眼文件尾部有没有"内嵌归档"（双面文件）。
+        ///
+        /// 命中时返回的置信度是 80 而不是 100：结论不是"文件开头就是 ZIP"这种直接证据，
+        /// 而是"尾部 EOCD 与中央目录位置自洽、算出来的起点处确实是 PK 03 04"的推断。
+        /// 80 也是给后续流程的信号 —— 这种文件要按偏移抠出来才能解压。
+        ///
+        /// 不命中返回 null（而不是一个 IsArchive=false 的结果）：调用方要保留原文件头的 HeaderHex
+        /// 与消息，不能被一个"空结果"覆盖掉。
+        /// </summary>
+        private static DetectResult? DetectEmbeddedArchive(string filePath, DetectResult headerResult)
+        {
+            EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(filePath);
+
+            if (!info.Found)
+            {
+                return null;
+            }
+
+            return new DetectResult
+            {
+                Format = "ZIP",
+                SuggestedExtension = ".zip",
+                IsArchive = true,
+                IsKnownFormat = true,
+                IsProbablyEncrypted = false,
+                Message = info.Message,
+                HeaderHex = headerResult.HeaderHex,
+                Confidence = 80,
+                EmbeddedArchiveOffset = info.Offset
+            };
         }
 
         /// <summary>
@@ -104,6 +165,9 @@ namespace ArchiveFixer.Services
             task.IsArchive = result.IsArchive;
             task.IsEncrypted = result.IsProbablyEncrypted;
 
+            // 内嵌归档偏移必须落到任务上：解压管线靠它决定"要不要先抠出来"。
+            task.EmbeddedArchiveOffset = result.EmbeddedArchiveOffset;
+
             if (result.IsArchive)
             {
                 task.Status = StatusText.Recognized;
@@ -128,6 +192,8 @@ namespace ArchiveFixer.Services
         /// 获取后缀状态。
         /// 
         /// 规则：
+        /// 如果是内嵌归档（尾部藏着 ZIP）：
+        ///     内嵌归档（**这一条最先判**：这种文件不该改名）
         /// 如果 Unknown：
         ///     格式未知
         /// 如果没有后缀：
@@ -144,6 +210,19 @@ namespace ArchiveFixer.Services
             string currentExtension,
             DetectResult result)
         {
+            /*
+             * 内嵌归档排在最前面判，而且**优先于一切后缀结论**。
+             *
+             * 理由：这种文件"没有可修正的后缀"。它的 ZIP 内部偏移相对它自己，前置数据又远超
+             * 7-Zip 的容忍上限（实测 8 MiB），所以改成 .zip 之后 7z 依然打不开；
+             * 报成"后缀缺失 / 不匹配 / 多重伪装"都会把用户引向改名这条路 —— 那是一条死路。
+             * 它该看到的是"内嵌归档：需要按偏移取出"，所以这一条必须在其它判断之前返回。
+             */
+            if (result != null && result.EmbeddedArchiveOffset > 0)
+            {
+                return StatusText.ExtensionEmbedded;
+            }
+
             if (result == null || !result.IsArchive || !result.IsKnownFormat)
             {
                 return StatusText.UnknownFormat;

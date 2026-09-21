@@ -93,7 +93,14 @@ namespace ArchiveFixer.ViewModels
         /// 递归解压一个任务，并把结果落到任务状态上。
         /// 多分支时**必须问用户**（不变量 8），问完只处理用户确认的那批候选。
         /// </summary>
-        private async Task RunRecursiveAsync(ArchiveTask task, string outputPath, CancellationToken cancellationToken)
+        /// <param name="engineArchivePath">
+        /// 真正交给引擎的归档路径。内嵌归档时它是工作区里抠出来的那个文件（不是 <c>task.CurrentPath</c>）。
+        /// </param>
+        private async Task RunRecursiveAsync(
+            ArchiveTask task,
+            string engineArchivePath,
+            string outputPath,
+            CancellationToken cancellationToken)
         {
             RecursionMode mode = string.Equals(Settings.RecursionMode, "AllBranches", StringComparison.OrdinalIgnoreCase)
                 ? RecursionMode.AllBranches
@@ -108,10 +115,24 @@ namespace ArchiveFixer.ViewModels
             task.ProgressText = StatusText.ProgressProcessing;
             task.LastUpdatedTime = DateTime.Now;
 
+            /*
+             * 递归核心（RecursiveExtractor）从 task.CurrentPath 取"第 0 层要解哪个归档"。
+             * 内嵌归档真正的归档是抠出来的那个文件，所以这里给它一个只带正确路径的**探针任务**，
+             * 而不是把 task.CurrentPath 临时改掉 —— 源文件路径是改名 / 清理 / 统计的依据，
+             * 任何"改了再改回来"的写法都会在这些地方留下一个窗口期（异常时更是永远改不回来）。
+             * 递归结论仍然应用在真正的 task 上（ApplyRecursionResult(task, result)）。
+             */
+            ArchiveTask recursionTask = string.Equals(
+                    engineArchivePath,
+                    task.CurrentPath,
+                    StringComparison.OrdinalIgnoreCase)
+                ? task
+                : new ArchiveTask(engineArchivePath);
+
             AppendLog("INFO", $"{task.FileName}：开始递归解压（模式 {mode}，最大 {limits.MaxDepth} 层）。");
 
             RecursionResult result = await _recursiveExtractor.ExtractAsync(
-                task, outputPath, mode, previousDecision: null, cancellationToken);
+                recursionTask, outputPath, mode, previousDecision: null, cancellationToken);
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
@@ -122,7 +143,7 @@ namespace ArchiveFixer.ViewModels
                 if (expandAll)
                 {
                     result = await _recursiveExtractor.ExtractAsync(
-                        task, outputPath, mode, result.Decision, cancellationToken);
+                        recursionTask, outputPath, mode, result.Decision, cancellationToken);
                 }
                 else
                 {
@@ -251,11 +272,16 @@ namespace ArchiveFixer.ViewModels
             return moved;
         }
 
-        private async Task PostProcessSuccessAsync(ArchiveTask task, string password, CancellationToken cancellationToken)
+        private async Task PostProcessSuccessAsync(
+            ArchiveTask task,
+            string engineArchivePath,
+            string password,
+            CancellationToken cancellationToken)
         {
             // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
+            // 清单同样取自**真正解开的那份归档**：内嵌归档要拿抠出来的文件去列，源文件 7z 根本打不开。
             ArchiveListResult expected = await _archiveEngine.ListAsync(
-                ArchiveRequest.For(task.CurrentPath, password),
+                ArchiveRequest.For(engineArchivePath, password),
                 cancellationToken);
 
             OutputVerificationResult verification = OutputVerifier.Verify(
@@ -624,6 +650,55 @@ namespace ArchiveFixer.ViewModels
 
             task.OutputPath = outputPath;
 
+            /*
+             * 内嵌归档（双面文件）：先按偏移把尾部那段真正的 ZIP 抠出来，
+             * 再拿它去列目录 / 预检 / 解压 / 解压后校验。
+             *
+             * 为什么不能直接把源文件交给 7z：这种文件的 ZIP 内部偏移是**相对 ZIP 自己**的。
+             * 7-Zip 会尝试用"文件末尾 EOCD 反推的基准偏移"容忍这种错位，但只容忍 8 MiB 以内
+             * （本机 26.01 实测：前置 8,388,608 字节可以，8,388,609 字节就报
+             * "Cannot open the file as archive"）；用户那个文件垫了 17,031,321 字节，必然被拒。
+             * 改后缀也没用（资源管理器能打开，只是因为它的 ZIP 读取器容忍这种整体错位）。
+             * 把 [偏移, EOF) 原样复制出来是唯一可靠、且完全不改源文件的做法。
+             *
+             * 换成局部变量 engineArchivePath，而**不去改 task.CurrentPath**：
+             * 后者是源文件路径，改名、清理源包、结果统计、报告全都依赖它 ——
+             * 一旦被换成工作区里的临时文件，"清理源包"会去删我们自己的中间产物，
+             * 而真正的源文件永远得不到处理，报告里指向的也不再是用户给的那个文件。
+             */
+            string engineArchivePath = task.CurrentPath;
+
+            if (task.EmbeddedArchiveOffset > 0)
+            {
+                string carveTarget = BuildEmbeddedArchivePath(task);
+
+                CarveResult carve = EmbeddedArchiveCarver.Carve(
+                    task.CurrentPath,
+                    task.EmbeddedArchiveOffset,
+                    carveTarget);
+
+                if (!carve.Success || !File.Exists(carve.OutputPath))
+                {
+                    task.Status = StatusText.ExtractFailed;
+                    task.Operation = StatusText.OpWaiting;
+                    task.ProgressText = StatusText.ProgressFailed;
+                    task.ErrorMessage = string.IsNullOrWhiteSpace(carve.Message)
+                        ? "取出内嵌归档失败"
+                        : "取出内嵌归档失败：" + carve.Message;
+                    task.LastUpdatedTime = DateTime.Now;
+
+                    AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                    return;
+                }
+
+                engineArchivePath = carve.OutputPath;
+
+                AppendLog(
+                    "INFO",
+                    $"检测到内嵌归档：已从偏移 {task.EmbeddedArchiveOffset} 处取出 {carve.BytesWritten} 字节，" +
+                    $"实际使用 {engineArchivePath} 解压。");
+            }
+
             List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
                 task,
                 Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
@@ -657,7 +732,7 @@ namespace ArchiveFixer.ViewModels
             foreach (PasswordItem candidate in candidates.Take(MaxPreflightPasswordAttempts))
             {
                 ArchiveListResult attempt = await _archiveEngine.ListAsync(
-                    ArchiveRequest.For(task.CurrentPath, candidate.Value),
+                    ArchiveRequest.For(engineArchivePath, candidate.Value),
                     cancellationToken);
 
                 if (attempt.Success)
@@ -688,7 +763,9 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
-                    archiveSize = new FileInfo(task.CurrentPath).Length;
+                    // 量的是**真正交给引擎的那个文件**：内嵌归档抠出来之后它比源文件小得多，
+                    // 拿源文件大小当分母会把展开比算小，压缩炸弹就更容易蒙混过关。
+                    archiveSize = new FileInfo(engineArchivePath).Length;
                 }
                 catch
                 {
@@ -719,7 +796,7 @@ namespace ArchiveFixer.ViewModels
              */
             if (!string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase))
             {
-                await RunRecursiveAsync(task, outputPath, cancellationToken);
+                await RunRecursiveAsync(task, engineArchivePath, outputPath, cancellationToken);
                 return;
             }
 
@@ -763,7 +840,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog("INFO", $"{task.FileName}：测试密码候选 {i + 1}/{candidates.Count}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
                     ArchiveOperationResult testResult = await _archiveEngine.TestAsync(
-                        ArchiveRequest.For(task.CurrentPath, password),
+                        ArchiveRequest.For(engineArchivePath, password),
                         cancellationToken);
 
                     lastResult = testResult;
@@ -859,7 +936,7 @@ namespace ArchiveFixer.ViewModels
                 ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
      new ArchiveRequest
      {
-         ArchivePath = task.CurrentPath,
+         ArchivePath = engineArchivePath,
          OutputPath = outputPath,
          Password = selectedPassword
      },
@@ -881,9 +958,11 @@ namespace ArchiveFixer.ViewModels
                     task.PasswordStatus = string.IsNullOrEmpty(selectedPassword) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
                     task.ErrorMessage = string.Empty;
 
+                    // 密码成功记录仍然挂在**源文件**上：下次用户再导入这个文件时要能直接命中，
+                    // 而工作区里抠出来的临时文件活不过这次任务。
                     _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                    await PostProcessSuccessAsync(task, selectedPassword, cancellationToken);
+                    await PostProcessSuccessAsync(task, engineArchivePath, selectedPassword, cancellationToken);
 
 
 
@@ -937,7 +1016,7 @@ namespace ArchiveFixer.ViewModels
                     ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
      new ArchiveRequest
      {
-         ArchivePath = task.CurrentPath,
+         ArchivePath = engineArchivePath,
          OutputPath = outputPath,
          Password = selectedPassword
      },
@@ -961,9 +1040,10 @@ namespace ArchiveFixer.ViewModels
                         task.PasswordStatus = string.IsNullOrEmpty(selectedPassword) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
                         task.ErrorMessage = string.Empty;
 
+                        // 同"先测试再解压"那条分支：密码成功记录挂源文件，不挂工作区里的临时文件。
                         _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                        await PostProcessSuccessAsync(task, selectedPassword, cancellationToken);
+                        await PostProcessSuccessAsync(task, engineArchivePath, selectedPassword, cancellationToken);
 
 
 
@@ -1027,6 +1107,25 @@ namespace ArchiveFixer.ViewModels
             task.Operation = StatusText.OpWaiting;
             task.ProgressText = StatusText.ProgressCompleted;
             task.LastUpdatedTime = DateTime.Now;
+        }
+
+        /// <summary>
+        /// 内嵌归档抠出来之后落在哪：<c>%AppData%\ArchiveFixer\work\&lt;任务名&gt;\&lt;包基名&gt;.zip</c>。
+        ///
+        /// 两条刻意的选择：
+        /// ① 放工作区（<see cref="PathService.WorkDirectory"/>）而不是源目录旁边 ——
+        ///    中间产物不得写进源目录（AGENTS.md §6 第 12 条）。抠出来的这一段只是为了能解压，
+        ///    不是用户要的东西，任务结束留在工作区由用户自己清；
+        /// ② 文件名沿用**源文件的包基名**，不改成随机临时名 ——
+        ///    密码本"名称:密码"的映射匹配用的就是包基名，随机名会让本来能命中的密码全部落空，
+        ///    用户看到的现象会是"同一个包以前能解开，现在说密码错误"。
+        /// </summary>
+        private string BuildEmbeddedArchivePath(ArchiveTask task)
+        {
+            string taskId = FileNameHelper.SanitizeFileName(task.FileName);
+            string baseName = FileNameHelper.SanitizeFileName(FileNameHelper.GetArchiveBaseName(task.CurrentPath));
+
+            return Path.Combine(_pathService.WorkDirectory, taskId, baseName + ".zip");
         }
 
         public void StopAfterCurrent()
