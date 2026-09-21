@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
@@ -289,7 +290,7 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 密码候选没有上限时，几百条密码本的包会被逐个候选整包重解一遍（每个候选一次完整解压）。
-        /// 现在每层最多试 <see cref="ExtractionCoordinator.MaxPasswordAttemptsPerLayer"/> 个。
+        /// 现在每层最多试 <c>Settings.MaxPasswordAttemptsPerLayer</c> 个（缺省 10）。
         /// </summary>
         [Fact]
         public async Task 密码候选超过上限时_只试到上限且状态是达到上限而不是密码错误()
@@ -304,13 +305,41 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            // 空密码 + 40 条候选 = 41 个，必须被截到上限。
-            Assert.Equal(ExtractionCoordinator.MaxPasswordAttemptsPerLayer, harness.Engine.ExtractCalls.Count);
+            // 空密码 + 40 条候选 = 41 个，必须被截到上限（缺省 10）。
+            Assert.Equal(harness.Vm.Settings.MaxPasswordAttemptsPerLayer, harness.Engine.ExtractCalls.Count);
             Assert.True(harness.Engine.ExtractCalls.Count < passwords.Length + 1, "候选没有被截断");
 
             Assert.Equal(StatusText.PasswordAttemptLimitReached, task.Status);
             Assert.NotEqual(StatusText.WrongPassword, task.Status);
             Assert.Contains("上限", task.ErrorMessage, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 上限是**设置项**，不是写死的常量：用户在设置界面改成 3，就必须只试 3 个候选。
+        /// （旧实现里它是 <c>ExtractionCoordinator</c> 的常量，界面改了不生效 —— 等于设置项是摆设。）
+        /// </summary>
+        [Fact]
+        public async Task 密码尝试上限改成设置值后_真的只试那么多个()
+        {
+            var passwords = Enumerable.Range(1, 40).Select(i => $"候选密码{i}").ToArray();
+
+            Harness harness = CreateHarness(
+                passwords: passwords,
+                configure: settings => settings.MaxPasswordAttemptsPerLayer = 3);
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("limit-3.7z"));
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(3, harness.Engine.ExtractCalls.Count);
+
+            // 到上限 ≠ 密码错误（AGENTS.md §9.2）：候选还剩 38 个，不能说"密码本里没有正确密码"。
+            Assert.Equal(StatusText.PasswordAttemptLimitReached, task.Status);
+            Assert.NotEqual(StatusText.WrongPassword, task.Status);
+            Assert.Contains("3 个候选", task.ErrorMessage, StringComparison.Ordinal);
         }
 
         /// <summary>候选本来就不超过上限时，试完全部仍失败 —— 这时才该报"密码错误"。</summary>
@@ -327,6 +356,53 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(3, harness.Engine.ExtractCalls.Count);   // 空密码 + 2 条候选，全试过
             Assert.Equal(StatusText.WrongPassword, task.Status);
+        }
+
+        /// <summary>
+        /// 上限这个设置项也要管到**递归内层**，而且必须是同一个值。
+        ///
+        /// 真实的坑：候选表按设置截断，而递归核心（<c>RecursionLimits</c>）另有自己的默认值 8。
+        /// 用户把上限改成 20 时，如果只有候选表跟着改，递归里仍然在第 8 个候选上停手 ——
+        /// 设置项看着生效、实际半生效（而且状态还报"达到密码尝试上限"，让人以为已经试到底了）。
+        /// 这里用 20 做钉子：旧接线只会有 8 次解压调用。
+        /// </summary>
+        [Fact]
+        public async Task 递归内层也按设置里的密码尝试上限停手()
+        {
+            var passwords = Enumerable.Range(1, 40).Select(i => $"候选密码{i}").ToArray();
+
+            Harness harness = CreateHarness(
+                passwords: passwords,
+                configure: settings =>
+                {
+                    settings.RecursionMode = "SingleChain";
+                    settings.MaxPasswordAttemptsPerLayer = 20;
+                });
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("recursive-limit.7z"));
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            // 递归的工作区根目录是进程级静态（见 CreateHarness 的说明），用完必须还原。
+            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+
+            try
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = Path.Combine(_root, "work");
+
+                await harness.Coordinator.StartExtractAsync();
+            }
+            finally
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            }
+
+            // 空密码 + 40 条候选，上限 20 → 恰好 20 次解压尝试（旧接线是 8 次）。
+            Assert.Equal(20, harness.Engine.ExtractCalls.Count);
+
+            // 一个候选都没成功：绝不能显示成功（不变量 6），最多"部分完成"。
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
         }
 
         // ================================================================ P1-6：实际输出目录写回任务
@@ -452,6 +528,203 @@ namespace ArchiveFixer.Tests
             _ = pipeline;   // 第 2 个任务故意不结束，管线会一直挂着；测试不 await 它。
         }
 
+        // ================================================================ 不变量 4：单层落点越界 = 失败结论
+        /// <summary>
+        /// 单层解压的"解压后落点校验"以前只写一行 ERROR 日志：任务照样是**解压成功**，
+        /// 产物照样被归集走、源包照样被删 —— 越界的产物已经落在目标根之外，程序却报一切正常，
+        /// 等于把不变量 4 降级成一条没人看的提示。
+        ///
+        /// 现场：产物目录里有个**指向目录外的目录联接点**（名字干干净净，第一道"条目名预检"看不出问题，
+        /// 真实落点却在外面）—— 这正是第二道落点校验存在的理由。用联接点而不是符号链接：
+        /// 前者（mklink /J）不需要管理员权限。
+        ///
+        /// 判据（三条一起才说明口径改对了）：①不是成功状态 ②没有归集 ③没有清理源包。
+        /// 这里刻意让结果校验**通过**（产物数量对得上）——否则"跳过归集/清理"是校验失败的副作用，
+        /// 测不到本次修的那条路。
+        /// </summary>
+        [Fact]
+        public async Task 单层产物越出目标根目录_不算成功且不归集不清理()
+        {
+            string collectRoot = Path.Combine(_root, "collect");
+
+            Harness harness = CreateHarness(configure: settings =>
+            {
+                settings.CollectResultsToDirectory = true;
+                settings.CollectTargetDirectory = collectRoot;
+
+                // 开着"清理源包"才有意义：越界结论下源文件一个都不许少。
+                settings.DeleteSourceAfterExtract = true;
+            });
+
+            string source = CreateSourceFile("escape.7z");
+            ArchiveTask task = AddTask(harness, source);
+
+            string outside = Path.Combine(_root, "outside");
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                string output = request.OutputPath ?? string.Empty;
+                harness.Engine.LastExtractOutputPath = output;
+
+                Directory.CreateDirectory(output);
+                File.WriteAllText(Path.Combine(output, "innocent.txt"), "正常产物");
+
+                Directory.CreateDirectory(outside);
+
+                string link = Path.Combine(output, "link-out");
+
+                if (!Directory.Exists(link))
+                {
+                    CreateJunction(link, outside);
+                }
+
+                File.WriteAllText(Path.Combine(link, "escaped.txt"), "越界产物");
+
+                harness.Engine.Extracted = true;
+                return Succeeded();
+            });
+
+            // 清单说 1 个文件 → 结果校验会通过（innocent.txt 1 个，联接点里的那份按"不跟随链接"不计）。
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(1));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            // ① 结论：不是成功，而是失败，且原因写在任务上（不是只躺在日志里）。
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+            Assert.Equal(StatusText.ExtractFailed, task.Status);
+            Assert.Contains("越出目标根目录", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.False(task.IsOutputVerified, "结论不成立时不许显示「输出校验通过」");
+
+            // 日志里也要有证据（无界面宿主时日志是唯一线索），而且不许再出现"解压成功：xxx"。
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("越出目标根目录", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                x => x.Message.Contains("解压成功：", StringComparison.Ordinal));
+
+            // ② 不清理源包（AGENTS.md §9.5：校验失败/结论不成立一律不删）。
+            Assert.True(File.Exists(source), "越界结论下源包被删了");
+
+            // ③ 不归集：目标目录连建都不该建，产物留在原地。
+            Assert.False(Directory.Exists(collectRoot), "越界结论下产物被归集走了");
+            Assert.Equal(string.Empty, task.CollectedPath);
+            Assert.True(File.Exists(Path.Combine(task.OutputPath, "innocent.txt")), "产物应当留在原地");
+            Assert.True(Directory.Exists(outside), "越界落点的目录本身不该被我们删掉");
+        }
+
+        // ================================================================ 中间工作区清理（成功后不留 1 GB 垃圾）
+
+        /// <summary>
+        /// 双面文件（内嵌归档）要先按偏移把尾部那段 ZIP 抠进 <c>work\&lt;任务名&gt;\</c> 再解压。
+        /// 端到端验收实测：一次**成功**的一键处理在那里留下近 1 GB 中间件（733 MB + 167 MB）。
+        /// 这些是从源文件可再生的派生数据 —— 成功且校验通过后必须清掉。
+        /// </summary>
+        [Fact]
+        public async Task 成功解压且校验通过后_本任务的中间工作区被清理()
+        {
+            Harness harness = CreateHarness();
+            string source = CreateEmbeddedSourceFile("embedded-ok.7z");
+
+            ArchiveTask task = AddTask(harness, source);
+            task.EmbeddedArchiveOffset = EmbeddedPaddingBytes;
+
+            string taskWorkDirectory = TaskWorkDirectory(harness, task);
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 1);
+                harness.Engine.Extracted = true;
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(1));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // 抠包是真的发生了（否则这条测试证明不了任何事）：引擎拿到的是工作区里那个抠出来的文件。
+            Assert.StartsWith(
+                harness.PathService.WorkDirectory,
+                harness.Engine.ExtractCalls.Single(),
+                StringComparison.OrdinalIgnoreCase);
+
+            Assert.False(Directory.Exists(taskWorkDirectory), $"成功之后中间工作区还在：{taskWorkDirectory}");
+
+            // 源文件一个字节都不许动（AGENTS.md 不变量 1）。
+            Assert.True(File.Exists(source), "清理中间工作区时把源文件删了");
+
+            // 删什么、为什么，日志里必须留得下（不可逆操作要留证据）。
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("清理本任务的中间工作区", StringComparison.Ordinal) &&
+                     x.Message.Contains("校验通过", StringComparison.Ordinal));
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("中间工作区已清理", StringComparison.Ordinal));
+        }
+
+        /// <summary>取消：中间工作区是用户唯一还能看的东西，一律留着（与 §9.5 的清理语义对齐）。</summary>
+        [Fact]
+        public async Task 取消后_中间工作区不清理()
+        {
+            Harness harness = CreateHarness();
+            string source = CreateEmbeddedSourceFile("embedded-cancel.7z");
+
+            ArchiveTask task = AddTask(harness, source);
+            task.EmbeddedArchiveOffset = EmbeddedPaddingBytes;
+
+            string taskWorkDirectory = TaskWorkDirectory(harness, task);
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 5);
+                harness.Engine.Extracted = true;
+                return Succeeded();
+            });
+
+            // 收尾第一件事就是列目录：在这里按下「取消当前」。
+            harness.Engine.OnListAsync = _ =>
+            {
+                if (harness.Engine.Extracted)
+                {
+                    harness.Coordinator.CancelCurrentTask();
+                }
+
+                return Task.FromResult(ListResult(5));
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.Cancelled, task.Status);
+            Assert.True(Directory.Exists(taskWorkDirectory), "取消之后中间工作区被清掉了");
+        }
+
+        /// <summary>失败（密码不对）：同样不许清理 —— 用户可能要靠抠出来的中间件自己再试。</summary>
+        [Fact]
+        public async Task 解压失败后_中间工作区不清理()
+        {
+            Harness harness = CreateHarness();
+            string source = CreateEmbeddedSourceFile("embedded-fail.7z");
+
+            ArchiveTask task = AddTask(harness, source);
+            task.EmbeddedArchiveOffset = EmbeddedPaddingBytes;
+
+            string taskWorkDirectory = TaskWorkDirectory(harness, task);
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.WrongPassword, task.Status);
+            Assert.True(Directory.Exists(taskWorkDirectory), "解压失败之后中间工作区被清掉了");
+            Assert.True(File.Exists(source), "失败时源文件必须原样保留");
+        }
+
         // ================================================================ 装配
 
         private sealed class Harness
@@ -572,6 +845,35 @@ namespace ArchiveFixer.Tests
             return path;
         }
 
+        /// <summary>造双面文件时前面垫多少字节（"内嵌归档"就是它后面的那一段）。</summary>
+        private const int EmbeddedPaddingBytes = 4096;
+
+        /// <summary>
+        /// 造一个"双面文件"：前面垫一段数据，偏移之后才是"真正的归档"。
+        ///
+        /// 抠包（<see cref="EmbeddedArchiveCarver"/>）是**真实的字节拷贝**，不需要那一段真的能被解开
+        /// —— 解压由假引擎负责。要的只是"任务确实往工作区里写了中间件"这个事实。
+        /// </summary>
+        private string CreateEmbeddedSourceFile(string fileName)
+        {
+            string path = Path.Combine(_root, "src", fileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+            byte[] bytes = new byte[EmbeddedPaddingBytes + 512];
+
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                bytes[i] = (byte)(i % 251);
+            }
+
+            File.WriteAllBytes(path, bytes);
+            return path;
+        }
+
+        /// <summary>本任务的中间件落点目录（布局与 ExtractionCoordinator.BuildEmbeddedArchivePath 一致）。</summary>
+        private static string TaskWorkDirectory(Harness harness, ArchiveTask task) =>
+            Path.Combine(harness.PathService.WorkDirectory, FileNameHelper.SanitizeFileName(task.FileName));
+
         private static ExtractOptions DefaultOptions(Harness harness)
         {
             var options = new ExtractOptions
@@ -607,6 +909,55 @@ namespace ArchiveFixer.Tests
             {
                 return -1;
             }
+        }
+
+        /// <summary>
+        /// 用 <c>mklink /J</c> 造目录联接点：不需要管理员权限，也不改注册表
+        /// （符号链接要 SeCreateSymbolicLinkPrivilege，普通开发机上跑不了）。
+        ///
+        /// 造完再确认一次：mklink 失败的返回码在这里没法直接拿到，而上层断言依赖"联接点真的存在"——
+        /// 静默失败会让测试变成"什么都没测到却是绿的"。
+        /// </summary>
+        private static void CreateJunction(string linkPath, string targetPath)
+        {
+            var psi = new ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add("mklink");
+            psi.ArgumentList.Add("/J");
+            psi.ArgumentList.Add(linkPath);
+            psi.ArgumentList.Add(targetPath);
+
+            using Process process = Process.Start(psi)
+                ?? throw new InvalidOperationException("无法启动 cmd.exe 建联接点");
+
+            string stdout = process.StandardOutput.ReadToEnd();
+            string stderr = process.StandardError.ReadToEnd();
+
+            if (!process.WaitForExit(30_000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // 已经退了就无所谓。
+                }
+
+                throw new InvalidOperationException("mklink 建联接点超时");
+            }
+
+            Assert.True(
+                Directory.Exists(linkPath) &&
+                (File.GetAttributes(linkPath) & FileAttributes.ReparsePoint) != 0,
+                $"没能造出目录联接点（mklink 输出：{stdout}{stderr}）");
         }
 
         private static ArchiveOperationResult Succeeded()

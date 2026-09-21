@@ -29,8 +29,29 @@ namespace ArchiveFixer.ViewModels
         private readonly PathService _pathService;
         private readonly DialogService _dialogService;
 
-        /// <summary>递归解压（M4）。引擎、探测器、密码来源全部注入，递归层自己不碰密码本。</summary>
-        private readonly RecursiveExtractor _recursiveExtractor;
+        /// <summary>
+        /// 递归解压（M4）。引擎、探测器、密码来源全部注入，递归层自己不碰密码本。
+        ///
+        /// 注意：**不在这里留一个构造时就固定上限的实例** ——
+        /// <see cref="RecursiveExtractor"/> 的上限是构造参数，构造一次就再也改不了，
+        /// 而这里是 ViewModel 层的单例：用户改完设置（层数 / 每层密码上限）不重启程序就不生效。
+        /// 所以每次任务现建一个（见 <see cref="CreateRecursiveExtractor"/>），上限当场从设置里取。
+        /// </summary>
+        private RecursiveExtractor CreateRecursiveExtractor() =>
+            new(_archiveEngine, new MagicArchiveProber(), BuildRecursionPasswordCandidates, BuildRecursionLimits());
+
+        /// <summary>
+        /// 递归的硬上限（不变量 8）：层数与每层密码尝试次数都取用户的设置项。
+        ///
+        /// 旧实现的坑：调用方 new 的时候没传 limits，递归核心一直用 <c>RecursionLimits.Default</c> ——
+        /// 于是"最大嵌套层数"改成 5 也照样只解 3 层，而每层密码上限被悄悄压到 8
+        /// （设置项缺省是 10，用户调大更是不生效）。设置项必须真的管用，不能只是界面上的数字。
+        /// </summary>
+        private RecursionLimits BuildRecursionLimits() => new()
+        {
+            MaxDepth = Math.Clamp(Settings.MaxRecursionDepth, 1, 10),
+            MaxPasswordAttemptsPerLayer = MaxPasswordAttemptsPerLayer
+        };
 
         /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
         private const int MaxPreflightPasswordAttempts = 3;
@@ -38,16 +59,19 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 每个归档（**每一层**）最多真的试几个密码候选（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
         ///
-        /// 为什么必须有：解压模式下一个候选 = **一次完整解压**。用户那两个 mp4 的第二层是加密分卷，
+        /// 为什么必须有：解压模式下一个候选 = **一次完整解压**。加密分卷的第二层，
         /// 几百条密码本的包会被逐个候选整包重解一遍（几百 MB 起、磁盘一直在写），
         /// 表现就是"几十分钟不动"，最后还可能把"没试完"报成"密码错误"。
         ///
         /// 到上限时的状态是 <see cref="StatusText.PasswordAttemptLimitReached"/>，**不是**"密码错误"。
         ///
-        /// 说明：这里目前是常量而不是设置项 —— 本轮改动不允许碰 <c>Models/AppSettings.cs</c> 与设置窗口，
-        /// 把它做成 `MaxPasswordAttemptsPerLayer` 设置项是后续动作（见报告里的移交项）。
+        /// 值取自设置项 <see cref="AppSettings.MaxPasswordAttemptsPerLayer"/>（界面可改、能落盘）。
+        /// 这里再夹一次只是兜底：设置对象不一定走过 <see cref="AppSettings.Normalize"/>（例如测试里直接
+        /// <c>new AppSettings()</c>），而 0 或负数会让"一个候选都不试"直接变成密码错误 —— 那是最误导人的结论。
+        /// （旧写法：这里是个常量 10，用户在设置界面改了不生效。）
         /// </summary>
-        internal const int MaxPasswordAttemptsPerLayer = 10;
+        private int MaxPasswordAttemptsPerLayer =>
+            Math.Clamp(Settings.MaxPasswordAttemptsPerLayer, 1, 1000);
 
         /// <summary>合并提示里最多列几个文件名（再多就让用户去看失败清单），别弹一个占满屏幕的框。</summary>
         private const int MaxPasswordFailureNamesInDialog = 10;
@@ -79,11 +103,6 @@ namespace ArchiveFixer.ViewModels
             _passwordService = passwordService;
             _pathService = pathService;
             _dialogService = dialogService;
-
-            _recursiveExtractor = new RecursiveExtractor(
-                archiveEngine,
-                new MagicArchiveProber(),
-                BuildRecursionPasswordCandidates);
         }
 
         private AppSettings Settings => _vm.Settings;
@@ -102,6 +121,12 @@ namespace ArchiveFixer.ViewModels
 
             public string BudgetMessage { get; init; } = string.Empty;
 
+            /// <summary>
+            /// 产物越出目标根目录的说明（非 null = **不承认**这次解压：不归集、不清理源包）。
+            /// 它必须走"结论"这条路回传，而不是像旧实现那样只往日志里塞一行 ERROR。
+            /// </summary>
+            public string? LandingViolation { get; init; }
+
             public CollectResult? Collected { get; init; }
         }
 
@@ -116,6 +141,13 @@ namespace ArchiveFixer.ViewModels
         /// 任何一步失败都**不改变**"解压成功"这个结论，只是把结论写进日志与任务字段；
         /// 不要因为归集或清理失败就把任务标成失败 —— 用户的文件确实解出来了。
         ///
+        /// 两个例外（它们不是"收尾失败"，而是**解压结论本身不成立**，必须顶掉"解压成功"）：
+        /// ① 产物越出目标根目录（不变量 4）—— 不归集、不清理，状态落成失败；
+        /// ② 产物超出资源预算 —— 同样是失败，并停止后续任务。
+        ///
+        /// 返回值就是这个语义：<c>true</c> = "解压成功"仍然成立；<c>false</c> = 已被上面两条否掉，
+        /// 调用方**不许**再补一句"解压成功：xxx"（那会与任务状态自相矛盾，等于骗人）。
+        ///
         /// 线程规则（这是 P0 修复的关键）：
         /// 收尾里的"全目录枚举 / 二次遍历 / 归集移动 / 删除源包"**全是同步磁盘活**，
         /// 之前整段跑在 UI 线程上（整条管线没有 ConfigureAwait(false)，await 的续体全回 Dispatcher），
@@ -127,7 +159,7 @@ namespace ArchiveFixer.ViewModels
         /// 取消规则（P1）：收尾每一步之前都查令牌。用户按了「取消当前」就不许再移动产物、更不许删源包
         /// （AGENTS.md §9.5：取消、部分完成、校验失败一律不删）。取消由上层 catch 落成"已取消"，不得显示成功。
         /// </summary>
-        private async Task PostProcessSuccessAsync(
+        private async Task<bool> PostProcessSuccessAsync(
             ArchiveTask task,
             string engineArchivePath,
             string password,
@@ -172,7 +204,28 @@ namespace ArchiveFixer.ViewModels
 
                 // 不发布、不清理：产物留在原地让用户自己判断，源文件更不能删。
                 StopAfterCurrent();
-                return;
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(work.LandingViolation))
+            {
+                /*
+                 * 产物越界（不变量 4）：这不是"收尾出的小问题"，而是**这次解压的结果不能承认**。
+                 *
+                 * 旧实现只写了一行 ERROR 日志：任务照样是"解压成功"，产物照样被归集走、源包照样被删 ——
+                 * 用户的文件已经写到目标根之外了，程序却报告一切正常。现在与递归路径同一口径：
+                 * 状态落成失败、原因写进 ErrorMessage，归集与清理在 RunPostProcessWork 里就已经不做了
+                 * （它在越界处直接 return，这里也**不允许**补做任何一步）。
+                 */
+                task.Status = StatusText.ExtractFailed;
+                task.ProgressText = StatusText.ProgressFailed;
+                task.ErrorMessage = work.LandingViolation;
+
+                // 结论不成立时不许在详情里显示"输出校验通过"。
+                task.IsOutputVerified = false;
+                task.LastUpdatedTime = DateTime.Now;
+
+                return false;
             }
 
             task.IsOutputVerified = work.Verification.Verified;
@@ -187,6 +240,21 @@ namespace ArchiveFixer.ViewModels
             {
                 task.CollectedPath = work.Collected.DestinationPath;
             }
+
+            /*
+             * 中间工作区清理（P1，端到端验收实测一次成功就留下近 1 GB 垃圾）。
+             *
+             * 位置与条件都在这里定死：**解压成功 + 输出校验通过 + 没被取消**。
+             * 越界 / 超预算在上面已经 return（结论不成立）；取消会让上面的 await 抛 OperationCanceledException；
+             * 校验没过时产物可能不全，工作区里的中间件是用户唯一的线索 —— 一律不删。
+             */
+            if (work.Verification.Verified && !cancellationToken.IsCancellationRequested)
+            {
+                CleanupTaskWorkspaceDirectory(task);
+            }
+
+            // 走到这里说明"解压成功"这个结论没有被越界 / 超预算顶掉。
+            return true;
         }
 
         /// <summary>
@@ -211,16 +279,35 @@ namespace ArchiveFixer.ViewModels
                 task.OutputPath,
                 expected.Success ? expected : null);
 
-            // 解压后落点校验（第二道防线）：产物必须都在目标根目录之内。
-            if (Directory.Exists(task.OutputPath))
+            /*
+             * 解压后落点校验（第二道防线，不变量 4）：产物必须都落在目标根目录之内。
+             *
+             * 旧写法（本轮修掉）：越界时只写一行 ERROR 日志，**结论照样是"解压成功"**，
+             * 而且照样归集产物、照样清理源包 —— 等于把不变量 4 降级成一条没人看的提示：
+             * 越界的产物被搬进结果目录、源包被删掉，程序却报一切正常。
+             *
+             * 现在与递归路径（RecursiveExtractor 的第二道防线）同一口径：
+             * 越界 = **失败结论**，不归集、不清理，原因写回任务状态与错误信息。
+             * 这里直接 return，让"不归集不清理"由控制流保证 —— 不依赖后面每一步都记得查这个标志。
+             *
+             * 复用 RecursiveExtractor.FindLandingViolation 而不是就地再枚举一遍：
+             * 两条路径的口径必须一样，复制一份迟早分叉；而且它还能发现目录联接点 / 符号链接
+             * （名字在产物目录里、内容却写到目录外）—— 旧写法只枚举文件，看不出这一类。
+             */
+            string? landingViolation = RecursiveExtractor.FindLandingViolation(task.OutputPath);
+
+            if (landingViolation != null)
             {
-                foreach (string produced in Directory.EnumerateFiles(task.OutputPath, "*", SearchOption.AllDirectories))
+                string landingMessage = "产物越出目标根目录，已拒绝承认本次解压：" + landingViolation;
+
+                logEntries.Add(("ERROR", $"{task.FileName}：{landingMessage}"));
+
+                return new PostProcessWorkResult
                 {
-                    if (!ArchivePathGuard.IsInsideRoot(task.OutputPath, produced, out string landReason))
-                    {
-                        logEntries.Add(("ERROR", $"{task.FileName}：产物落点异常 —— {landReason}"));
-                    }
-                }
+                    Verification = verification,
+                    LogEntries = logEntries,
+                    LandingViolation = landingMessage
+                };
             }
 
             /*
@@ -301,8 +388,9 @@ namespace ArchiveFixer.ViewModels
         /// 给递归层提供密码候选（只给值，不给来源说明）。
         /// 顺序与单层解压完全一致 —— 递归的内层包同样是"用户的包"，不该用另一套规则。
         ///
-        /// 这里就截到每层上限：递归里每个候选同样是一次完整解压尝试，
-        /// 让几百个候选排着队进去等于把"一键处理"变成没人看得懂的长时间等待（AGENTS.md §9.2）。
+        /// 这里就截到每层上限（同 <see cref="MaxPasswordAttemptsPerLayer"/> 这个设置项）：
+        /// 递归里每个候选同样是一次完整解压尝试，让几百个候选排着队进去
+        /// 等于把"一键处理"变成没人看得懂的长时间等待（AGENTS.md §9.2）。
         /// </summary>
         private IReadOnlyList<string> BuildRecursionPasswordCandidates(string archivePath)
         {
@@ -337,10 +425,10 @@ namespace ArchiveFixer.ViewModels
                 ? RecursionMode.AllBranches
                 : RecursionMode.SingleChain;
 
-            var limits = new RecursionLimits
-            {
-                MaxDepth = Math.Max(1, Settings.MaxRecursionDepth)
-            };
+            // 上限（层数 / 每层密码尝试次数）当场从设置里取，并交给**本次**的递归核心：
+            // 构造时固定一份的话，用户改完设置不重启就不生效（见字段上的说明）。
+            RecursionLimits limits = BuildRecursionLimits();
+            RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor();
 
             task.Status = StatusText.Extracting;
             task.ProgressText = StatusText.ProgressProcessing;
@@ -362,7 +450,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog("INFO", $"{task.FileName}：开始递归解压（模式 {mode}，最大 {limits.MaxDepth} 层）。");
 
-            RecursionResult result = await _recursiveExtractor.ExtractAsync(
+            RecursionResult result = await recursiveExtractor.ExtractAsync(
                 recursionTask, outputPath, mode, previousDecision: null, cancellationToken);
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
@@ -373,7 +461,8 @@ namespace ArchiveFixer.ViewModels
 
                 if (expandAll)
                 {
-                    result = await _recursiveExtractor.ExtractAsync(
+                    // 同一个实例接着跑（上限不变）：续跑用的是用户刚确认的那批候选，不是重新扫一遍。
+                    result = await recursiveExtractor.ExtractAsync(
                         recursionTask, outputPath, mode, result.Decision, cancellationToken);
                 }
                 else
@@ -1030,9 +1119,9 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * 临时空间预检：抠出来的中间文件落在 %AppData%（系统盘）。
-                 * 一个 780MB 的双面文件要在系统盘上占掉 760MB —— 空间不够会写到一半失败，
-                 * 还会把系统盘挤满。取不到空间就不拦（宁可试也不误拒），取到了才判。
+                 * 临时空间预检：抠出来的中间文件落在工作区（<c>&lt;程序目录&gt;\data\work</c>，即程序所在的那个盘）。
+                 * 一个 780MB 的双面文件要在那里占掉 760MB —— 空间不够会写到一半失败，
+                 * 还会把那个盘挤满。取不到空间就不拦（宁可试也不误拒），取到了才判。
                  */
                 long? carveFree = SpaceChecker.GetAvailableFreeSpace(Path.GetDirectoryName(carveTarget));
 
@@ -1125,14 +1214,16 @@ namespace ArchiveFixer.ViewModels
              * 到上限时状态说"达到密码尝试上限"（**不是**"密码错误"）——
              * 包可能完全没问题，只是密码不在这批候选里。
              */
-            int maxPasswordAttempts = Math.Min(candidates.Count, MaxPasswordAttemptsPerLayer);
+            // 上限读一次就定住：设置是用户随时可改的，同一单任务里不许"前半段按一个上限、后半段按另一个"。
+            int attemptLimit = MaxPasswordAttemptsPerLayer;
+            int maxPasswordAttempts = Math.Min(candidates.Count, attemptLimit);
             bool candidatesTruncated = candidates.Count > maxPasswordAttempts;
 
             if (candidatesTruncated)
             {
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：密码候选共 {candidates.Count} 个，超过单层上限 {MaxPasswordAttemptsPerLayer} 个，" +
+                    $"{task.FileName}：密码候选共 {candidates.Count} 个，超过单层上限 {attemptLimit} 个，" +
                     $"本层只试前 {maxPasswordAttempts} 个（到上限会明确报“{StatusText.PasswordAttemptLimitReached}”，不会报成密码错误）。");
             }
 
@@ -1395,11 +1486,14 @@ namespace ArchiveFixer.ViewModels
                     // 而工作区里抠出来的临时文件活不过这次任务。
                     _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                    await PostProcessSuccessAsync(task, engineArchivePath, selectedPassword, outputRedirectNote, cancellationToken);
+                    // 收尾可能把"解压成功"顶掉（产物越界 / 超预算）：只有结论仍然成立时才敢这么写日志。
+                    bool conclusionStands = await PostProcessSuccessAsync(
+                        task, engineArchivePath, selectedPassword, outputRedirectNote, cancellationToken);
 
-
-
-                    AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
+                    if (conclusionStands)
+                    {
+                        AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
+                    }
                 }
                 else
                 {
@@ -1476,11 +1570,15 @@ namespace ArchiveFixer.ViewModels
                         // 同"先测试再解压"那条分支：密码成功记录挂源文件，不挂工作区里的临时文件。
                         _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                        await PostProcessSuccessAsync(task, engineArchivePath, selectedPassword, outputRedirectNote, cancellationToken);
+                        // 同"先测试再解压"那条分支：收尾否掉结论（越界 / 超预算）时不许写"解压成功"。
+                        bool conclusionStands = await PostProcessSuccessAsync(
+                            task, engineArchivePath, selectedPassword, outputRedirectNote, cancellationToken);
 
+                        if (conclusionStands)
+                        {
+                            AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
+                        }
 
-
-                        AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
                         break;
                     }
 
@@ -1546,12 +1644,23 @@ namespace ArchiveFixer.ViewModels
                 : "-";
 
             task.Operation = StatusText.OpWaiting;
-            task.ProgressText = StatusText.ProgressCompleted;
+
+            /*
+             * 进度文案只在"这一单没有失败 / 取消结论"时才写"完成"。
+             * 越界、超预算、递归部分完成这些分支自己写了 ProgressFailed，取消写的是"已取消"，
+             * 无条件覆盖会让任务详情窗口出现"状态：解压失败 / 进度：完成"这种自相矛盾的显示。
+             */
+            if (task.ProgressText != StatusText.ProgressFailed &&
+                task.ProgressText != StatusText.ProgressCancelled)
+            {
+                task.ProgressText = StatusText.ProgressCompleted;
+            }
+
             task.LastUpdatedTime = DateTime.Now;
         }
 
         /// <summary>
-        /// 内嵌归档抠出来之后落在哪：<c>%AppData%\ArchiveFixer\work\&lt;任务名&gt;\&lt;包基名&gt;.zip</c>。
+        /// 内嵌归档抠出来之后落在哪：<c>&lt;程序目录&gt;\data\work\&lt;任务名&gt;\&lt;包基名&gt;.zip</c>。
         ///
         /// 两条刻意的选择：
         /// ① 放工作区（<see cref="PathService.WorkDirectory"/>）而不是源目录旁边 ——
@@ -1567,6 +1676,82 @@ namespace ArchiveFixer.ViewModels
             string baseName = FileNameHelper.SanitizeFileName(FileNameHelper.GetArchiveBaseName(task.CurrentPath));
 
             return Path.Combine(_pathService.WorkDirectory, taskId, baseName + ".zip");
+        }
+
+        /// <summary>
+        /// 清理**本任务自己**的中间工作区目录：<c>&lt;程序目录&gt;\data\work\&lt;任务名&gt;\</c>。
+        ///
+        /// 为什么必须有（端到端验收实测）：双面文件要先按偏移把它尾部那段真正的 ZIP 抠进工作区再解压，
+        /// 一次**成功**的一键处理就在那个目录里留下近 1 GB 中间件（实测 733 MB + 167 MB 两个包）。
+        /// 这些是从源文件按偏移可再生的派生数据，成功后留着纯属垃圾：跑几批就把盘吃掉，
+        /// 而且 MainViewModel 启动时会把工作区根下的每个子目录都报成"未完成的工作区"，留着还会造成假警报。
+        ///
+        /// 只在这三件事同时成立时才删（与 AGENTS.md §9.5 的清理语义对齐）：
+        /// ① 解压成功；② 输出校验通过；③ 没有被取消、没有越界结论、没有超预算。
+        /// 取消 / 部分完成 / 校验失败 / 越界一律不删 —— 产物可能没落全，工作区里的中间件是用户唯一的线索。
+        ///
+        /// 安全边界（这是"删目录"，每一条都要有）：
+        /// · 只有**真的抠过内嵌归档**的任务才会在这里留下东西（<see cref="ArchiveTask.EmbeddedArchiveOffset"/> &gt; 0），
+        ///   没抠过就一个字节都不碰；
+        /// · 目录按 <see cref="BuildEmbeddedArchivePath"/> 的同一套 <c>&lt;root&gt;\&lt;任务名&gt;</c> 布局算出，
+        ///   再规范化确认它确实在工作区根**之下**（容器内校验，越界就什么都不删）；
+        /// · 目录里出现子目录就放弃：抠出来的中间件只会是文件，有子目录说明这不是我们造的那个目录
+        ///   （最典型：任务名恰好叫 <c>recursive</c>，撞上了递归工作区的容器目录）；
+        /// · 删失败（被占用 / 权限不足）只写日志，绝不让已经成功的任务变成失败。
+        /// </summary>
+        private void CleanupTaskWorkspaceDirectory(ArchiveTask task)
+        {
+            if (task == null || task.EmbeddedArchiveOffset <= 0)
+            {
+                return;
+            }
+
+            string workRoot = _pathService.WorkDirectory;
+            string taskDirectory = Path.Combine(workRoot, FileNameHelper.SanitizeFileName(task.FileName));
+
+            if (!ArchivePathGuard.IsInsideRoot(workRoot, taskDirectory, out string reason))
+            {
+                AppendLog("WARN", $"{task.FileName}：中间工作区目录不在工作区根目录之下，已跳过清理 —— {reason}");
+                return;
+            }
+
+            if (!Directory.Exists(taskDirectory))
+            {
+                return;
+            }
+
+            try
+            {
+                if (Directory.GetDirectories(taskDirectory).Length > 0)
+                {
+                    AppendLog("WARN", $"{task.FileName}：中间工作区目录里有子目录（不是本任务抠出来的中间件），为安全起见不清理：{taskDirectory}");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{task.FileName}：读不了中间工作区目录（{ex.Message}），已跳过清理：{taskDirectory}");
+                return;
+            }
+
+            (int fileCount, long totalSize) = OutputVerifier.Measure(taskDirectory);
+
+            try
+            {
+                // 删除是**不可逆**的：动手之前先把"删什么、为什么"写进日志（AGENTS.md §9.5 的同一要求）。
+                AppendLog(
+                    "INFO",
+                    $"{task.FileName}：解压成功且输出校验通过，清理本任务的中间工作区（{fileCount} 个文件 / {totalSize} 字节）：{taskDirectory}");
+
+                Directory.Delete(taskDirectory, recursive: true);
+
+                AppendLog("INFO", $"{task.FileName}：中间工作区已清理：{taskDirectory}");
+            }
+            catch (Exception ex)
+            {
+                // 删不掉只是"垃圾多留一会儿"，不影响任务结论（同 ExtractionWorkspace.Cleanup 的口径）。
+                AppendLog("WARN", $"{task.FileName}：清理中间工作区失败（{ex.Message}），目录保留：{taskDirectory}");
+            }
         }
 
         public void StopAfterCurrent()
