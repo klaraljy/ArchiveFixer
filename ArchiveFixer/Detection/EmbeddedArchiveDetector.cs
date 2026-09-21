@@ -150,6 +150,9 @@ namespace ArchiveFixer.Detection
                  * 少了这一句，尾部之后的任何字节（例如另一次拼接、下载残留）都会让下面的算术整体偏移，
                  * 算出来的 delta 就成了"偏移量 + 尾部垃圾长度"，接着会去错误的位置找签名；
                  * 与其靠后面的签名校验去兜，不如在这里就把"算术前提不成立"的情况判掉。
+                 *
+                 * 代价是"ZIP 后面还跟着别的数据"的文件会被判成不命中 —— 那类文件本来就说不清
+                 * 归档到哪儿结束，保守错过比误报一个偏移安全。
                  */
                 long eocdFromTail = fileLength - EndOfCentralDirectoryLength - commentLength;
 
@@ -162,6 +165,11 @@ namespace ArchiveFixer.Detection
                  * 核心一步：中央目录的**实际**位置 = 它的**声明**位置 + ZIP 自己的起点。
                  * 这里的 eocdPosition - declaredCentralDirectorySize 就是中央目录实际从哪开始，
                  * 与声明值相减得到的 delta 即"ZIP 前面垫了多少字节"。
+                 *
+                 * 已知边界：ZIP64 归档（单条 > 4 GB 或条目数 > 65535）在 EOCD 里放的是 0xFFFFFFFF 占位符，
+                 * 真实数值在它前面的 ZIP64 EOCD 里 —— 那种情况下这里算出来的 delta 会变成负数，
+                 * 于是判成"不命中"。这是**有意保守**：宁可漏报（结果还是"格式未知"），
+                 * 也不要拿占位符算出一个乱指的偏移去抠一段没用的字节出来。
                  */
                 long delta = eocdPosition - declaredCentralDirectorySize - declaredCentralDirectoryOffset;
 

@@ -245,6 +245,30 @@ namespace ArchiveFixer.Tests
             return broken;
         }
 
+        /// <summary>给"双面文件"追加一个合法的 ZIP 注释：写 EOCD 偏移 20 的注释长度（2 字节 LE），再补上注释字节。</summary>
+        private string BuildWithZipComment(string disguisedPath, int commentLength)
+        {
+            byte[] bytes = File.ReadAllBytes(disguisedPath);
+            int eocdIndex = FindLastEndOfCentralDirectory(bytes);
+
+            Assert.True(eocdIndex > 0, "样本里应该能找到 EOCD");
+
+            byte[] withComment = new byte[bytes.Length + commentLength];
+
+            Array.Copy(bytes, withComment, bytes.Length);
+            BitConverter.GetBytes((ushort)commentLength).CopyTo(withComment, eocdIndex + 20);
+
+            for (int i = 0; i < commentLength; i++)
+            {
+                withComment[bytes.Length + i] = (byte)'C';
+            }
+
+            string path = Path.Combine(_root, "commented_" + Guid.NewGuid().ToString("N") + ".mp4");
+            File.WriteAllBytes(path, withComment);
+
+            return path;
+        }
+
         private SevenZipEngine CreateEngine()
         {
             var engine = new SevenZipEngine();
@@ -290,6 +314,24 @@ namespace ArchiveFixer.Tests
             Assert.True(info.Found);
             Assert.Equal(FakeVideoPrefixLength, info.Offset);
             Assert.Equal(2, info.EntryCount);
+        }
+
+        [Fact]
+        public void 双面文件_只读尾部窗口的边界()
+        {
+            string disguised = BuildDisguisedFile(BuildPlainPackZip(BuildInner7z()));
+
+            // 带 2000 字节 ZIP 注释：EOCD 因此离文件末尾有 2022 字节。
+            string commented = BuildWithZipComment(disguised, 2000);
+
+            // 注释长度必须被算进去，否则"EOCD 是不是文件收尾"这一条会误判，命中整条丢。
+            EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(commented);
+            Assert.True(info.Found);
+            Assert.Equal(FakeVideoPrefixLength, info.Offset);
+
+            // 窗口比 22 + 注释长度还小：尾部这段里根本没有 EOCD 签名，只能报不命中。
+            // 这也说明默认 128 KB 的来由（22 + 注释上限 65535），窗口不是一个随便定的数。
+            Assert.False(EmbeddedArchiveDetector.Detect(commented, tailBytes: 64).Found);
         }
 
         // ---------------------------------------------------------------- 正向：识别 + 后缀状态 + 改名

@@ -672,10 +672,52 @@ namespace ArchiveFixer.ViewModels
             {
                 string carveTarget = BuildEmbeddedArchivePath(task);
 
-                CarveResult carve = EmbeddedArchiveCarver.Carve(
-                    task.CurrentPath,
-                    task.EmbeddedArchiveOffset,
-                    carveTarget);
+                long carveBytes = 0;
+
+                try
+                {
+                    carveBytes = new FileInfo(task.CurrentPath).Length - task.EmbeddedArchiveOffset;
+                }
+                catch
+                {
+                    // 量不出大小不影响能不能抠，只是日志与空间预检里少个数字。
+                }
+
+                /*
+                 * 临时空间预检：抠出来的中间文件落在 %AppData%（系统盘）。
+                 * 一个 780MB 的双面文件要在系统盘上占掉 760MB —— 空间不够会写到一半失败，
+                 * 还会把系统盘挤满。取不到空间就不拦（宁可试也不误拒），取到了才判。
+                 */
+                long? carveFree = SpaceChecker.GetAvailableFreeSpace(Path.GetDirectoryName(carveTarget));
+
+                if (carveFree.HasValue && carveBytes > 0 && carveFree.Value < carveBytes + (256L * 1024 * 1024))
+                {
+                    task.Status = StatusText.ExtractFailed;
+                    task.ErrorMessage =
+                        $"取出内嵌归档需要约 {carveBytes / 1024 / 1024} MB 临时空间，" +
+                        $"但系统盘只剩 {carveFree.Value / 1024 / 1024} MB。请先清理空间再试。";
+                    task.LastUpdatedTime = DateTime.Now;
+
+                    AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                    return;
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"{task.FileName}：正在取出内嵌归档（约 {carveBytes / 1024 / 1024} MB），这一步在后台做，界面不会卡住。");
+
+                /*
+                 * 关键修复：抠出是**同步磁盘拷贝**（几百 MB 量级），必须扔到后台线程。
+                 * 之前直接在这里同步调用，拷贝期间整个界面线程被占住 ——
+                 * 表现就是"点了一键处理之后程序卡死、窗口未响应"，只能强杀进程
+                 * （实测：780MB 的双面文件拷 763MB，界面全程无响应）。
+                 */
+                CarveResult carve = await Task.Run(
+                    () => EmbeddedArchiveCarver.Carve(
+                        task.CurrentPath,
+                        task.EmbeddedArchiveOffset,
+                        carveTarget),
+                    cancellationToken);
 
                 if (!carve.Success || !File.Exists(carve.OutputPath))
                 {
