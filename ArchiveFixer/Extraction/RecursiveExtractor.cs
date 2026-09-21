@@ -1075,11 +1075,28 @@ namespace ArchiveFixer.Extraction
         /// 用系统临时目录而不是源目录旁边（AGENTS.md §6 第 12 条：中间产物不得写进源目录），
         /// 也不写死在某个盘符上（非目标：不写死盘符）。
         /// </summary>
+        /// <summary>
+        /// 递归工作区的根目录，由调用方在启动时指定（通常是 PathService.WorkDirectory）。
+        /// null/空 = 回落到系统临时目录（只给单元测试用，正式流程不会走这一支）。
+        /// </summary>
+        public static string? ConfiguredWorkspaceRoot { get; set; }
         private static string WorkspaceRootDirectory
         {
             get
             {
-                string root = Path.Combine(Path.GetTempPath(), "ArchiveFixer", "recursive");
+                /*
+                 * 工作区根目录由调用方指定（PathService.WorkDirectory = <程序目录>\data\work）。
+                 *
+                 * 原来这里写的是 Path.GetTempPath()，也就是 %TEMP% —— 那是 **C 盘**。
+                 * 用户明确要求：缓存绝不能进 C 盘，绿色软件跟着安装位置走；
+                 * 而且递归工作区动辄几百 MB，塞系统盘既占空间又拖慢整机。
+                 * 没指定时（例如单元测试直接 new）才回落到临时目录。
+                 */
+                string? configuredRoot = ConfiguredWorkspaceRoot;
+
+                string root = string.IsNullOrWhiteSpace(configuredRoot)
+                    ? Path.Combine(Path.GetTempPath(), "ArchiveFixer", "recursive")
+                    : Path.Combine(configuredRoot, "recursive");
 
                 SafePathHelper.EnsureDirectoryExists(root);
 

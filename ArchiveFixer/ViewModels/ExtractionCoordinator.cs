@@ -136,7 +136,7 @@ namespace ArchiveFixer.ViewModels
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
-                bool expandAll = _dialogService.ShowConfirm(
+                bool expandAll = await ShowConfirmOnUiThreadAsync(
                     result.Decision.Prompt + Environment.NewLine + Environment.NewLine +
                     "选“确定”：把这些内层归档也解开。选“取消”：只保留当前这一层的结果。");
 
@@ -270,6 +270,28 @@ namespace ArchiveFixer.ViewModels
             }
 
             return moved;
+        }
+
+        /// <summary>
+        /// 在 **UI 线程** 上弹确认框。
+        ///
+        /// 为什么必须显式调度（这是实测出来的卡死原因）：
+        /// 引擎调用与抠出分别用了 ConfigureAwait(false) 和 Task.Run，管线拿到递归结论时
+        /// **已经不在 UI 线程上**。此时直接 MessageBox.Show 会创建出一个没人泵消息的窗口 ——
+        /// 用户看到的现象是"点了按钮之后什么都动不了、没有弹窗、连 X 都点不掉"，
+        /// 而进程既不占 CPU、也没有子进程、磁盘也没在忙，看着像死锁。
+        /// 命令行直接调 RecursiveExtractor 会秒回 NeedsDecision，卡的就是这一步弹窗。
+        /// </summary>
+        private Task<bool> ShowConfirmOnUiThreadAsync(string message)
+        {
+            System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+            if (dispatcher == null || dispatcher.CheckAccess())
+            {
+                return Task.FromResult(_dialogService.ShowConfirm(message));
+            }
+
+            return dispatcher.InvokeAsync(() => _dialogService.ShowConfirm(message)).Task;
         }
 
         private async Task PostProcessSuccessAsync(

@@ -239,6 +239,9 @@ namespace ArchiveFixer.ViewModels
             _pathService.DataRootDirectory = string.IsNullOrWhiteSpace(cacheRoot)
                 ? PathService.DefaultDataRootDirectory
                 : cacheRoot;
+
+            // 递归工作区也必须跟着走：它动辄几百 MB，不能落到 %TEMP%（C 盘）。
+            RecursiveExtractor.ConfiguredWorkspaceRoot = _pathService.WorkDirectory;
             ToolLocator.Default.Invalidate();
         }
 
