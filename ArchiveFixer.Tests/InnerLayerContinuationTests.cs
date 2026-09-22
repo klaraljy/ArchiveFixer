@@ -123,8 +123,90 @@ namespace ArchiveFixer.Tests
             // 临时关掉的"导入后自动扫描"必须还原（不能把用户的设置改坏了）
             Assert.True(harness.Vm.Settings.AutoScanAfterDrop);
 
-            // 源文件一个都不许动（不变量 1）
-            Assert.True(File.Exists(outer));
+            /*
+             * 源包（一键处理默认档 MoveToRest）：**链结束之后**被补搬进其余物。
+             *
+             * 这是 2026-09-22 修掉的那个缺陷的判据：本样本第一层只有内层分卷（0 个内容物），
+             * 修复前 `commit.MovedContentCount == 0` 会让源包搬运彻底不发生；
+             * 现在最外层那一轮把它记账成"留到链结束后补搬"，链尾补做。
+             */
+            string rest = Path.Combine(harness.OutputRoot, "outer", "其余物");
+
+            Assert.False(File.Exists(outer), "源包应该已经被搬进其余物（用户 2026-09-22 的新规则）");
+            Assert.True(File.Exists(Path.Combine(rest, "outer.7z")), $"源包没有落到 {rest}");
+            Assert.True(File.Exists(Path.Combine(rest, "inner.7z.001")), "内层分卷也应该在同一个其余物里");
+
+            // 日志必须能分清"链结束后的补搬"（而不是本轮直接搬），并说清它凭什么搬。
+            Assert.Contains(
+                harness.Log.Logs,
+                item => item.Message.Contains("链结束后的补搬", StringComparison.Ordinal) &&
+                        item.Message.Contains("内容物", StringComparison.Ordinal));
+
+            // 任务对象跟着改到新位置（续解扫描靠它把刚搬走的源包排除掉）。
+            Assert.Equal(Path.Combine(rest, "outer.7z"), outerTask.CurrentPath);
+        }
+
+        // ---------------------------------------------------------------- 形状 A：第一层直接出内容物
+
+        /// <summary>
+        /// <b>形状 A（正向对照）</b>：真正的 7z 分卷组，第一层直接解出内容物
+        /// （对应 flowe2e 里那个 <c>444.7z.001/.002/.003</c> 的现场）。
+        ///
+        /// <para>
+        /// 这条形状在修复前就是好的，必须继续成立：源包**整组**（3 卷一个都不许落下）
+        /// 当场搬进其余物，内容物不受影响。
+        /// </para>
+        /// </summary>
+        [Fact]
+        public async Task 形状A_第一层直接出内容物_真7z分卷组整组移入其余物()
+        {
+            string packageDirectory = BuildVolumeGroupWithContent("444");
+            string first = Path.Combine(packageDirectory, "444.7z.001");
+
+            Assert.True(File.Exists(first), "样本没造出来");
+
+            List<string> volumes = Directory.GetFiles(packageDirectory, "444.7z.*")
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            Harness harness = CreateHarness($"444:{OuterPassword}\n");
+
+            // 整组一起导入：VolumeGroupingService 只用**已导入的任务**喂分组器。
+            await harness.AddPathsAsync(volumes.ToArray());
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+
+            Assert.True(task.IsVolumeGroup, "3 卷应该被认成一组分卷");
+            Assert.Equal(volumes.Count, task.VolumePaths.Count);
+            Assert.True(task.IsVolumeComplete, $"分卷应该完整：{task.VolumeInfoText}");
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            Assert.Equal(1, outcome.Rounds);
+            Assert.Equal(0, outcome.ContinuationLayers);
+            Assert.False(outcome.Stopped);
+
+            string rest = Path.Combine(harness.OutputRoot, "444", "其余物");
+
+            // 整组源包一个都不许落下（决策 D-12）。
+            foreach (string volume in volumes)
+            {
+                Assert.False(File.Exists(volume), $"源包分卷没有被搬走：{volume}");
+                Assert.True(
+                    File.Exists(Path.Combine(rest, Path.GetFileName(volume))),
+                    $"源包分卷没有落进其余物：{Path.GetFileName(volume)}");
+            }
+
+            // 分卷清单跟着改到新位置（后续清理 / 续解都读它）。
+            Assert.All(
+                task.VolumePaths,
+                path => Assert.StartsWith(rest, path, StringComparison.OrdinalIgnoreCase));
+
+            // 内容物照常，而且是**当场**搬的（日志里不该出现"链结束后的补搬"）。
+            Assert.True(File.Exists(Path.Combine(harness.OutputRoot, "444", "content.txt")));
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                item => item.Message.Contains("链结束后的补搬", StringComparison.Ordinal));
         }
 
         // ---------------------------------------------------------------- 第二步：不重复解压已处理的任务
@@ -253,8 +335,12 @@ namespace ArchiveFixer.Tests
                     OneClickCoordinator.IsArchiveStartPoint(name) || name.EndsWith(".002", StringComparison.OrdinalIgnoreCase),
                     $"中间件漏到内容物一层了：{name}"));
 
-            // ④ 源文件一个字节都不许动（不变量 1）
-            Assert.True(File.Exists(outer));
+            /*
+             * ④ 源包（含它的中间件）都进了那**一个**目录的 其余物 里 —— 用户 2026-09-22 的规则：
+             * 成功 + 校验通过就把源包放进其余物；本样本第一层没有内容物，所以发生在链结束之后。
+             */
+            Assert.False(File.Exists(outer), "源包应该已经被搬进其余物");
+            Assert.True(File.Exists(Path.Combine(processDirectory, "outer.7z")));
         }
 
         // ---------------------------------------------------------------- 第四步：没有内层包 = 回归
@@ -444,6 +530,7 @@ namespace ArchiveFixer.Tests
         public async Task 双面文件真实现场_抠出尾部ZIP后继续解内层加密分卷()
         {
             string userFile = BuildPolyglotUserFile();
+            long sourceLength = new FileInfo(userFile).Length;
 
             Harness harness = CreateHarness($"inner:{InnerPassword}\n");
             await harness.AddPathsAsync(userFile);
@@ -463,8 +550,19 @@ namespace ArchiveFixer.Tests
             Assert.True(payloads.Length == 1, $"应该只有第 2 层产出一份 payload.txt，实际 {payloads.Length} 份");
             Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
 
-            // 源文件（双面文件）一个字节都不该动
-            Assert.True(File.Exists(userFile));
+            /*
+             * 源文件（双面文件）**内容一个字节都没变**，但按用户 2026-09-22 的规则被搬进了其余物：
+             * 它第一层只出内层分卷，所以搬运发生在整条续解链结束之后。
+             */
+            string rest = Path.Combine(harness.OutputRoot, "user", "其余物");
+            string movedUserFile = Path.Combine(rest, "user.mp4");
+
+            Assert.False(File.Exists(userFile), "源包应该已经被搬进其余物");
+            Assert.True(File.Exists(movedUserFile), $"源包没有落到 {movedUserFile}");
+
+            // "搬"不是"重写"：字节数与内容必须与原件逐位一致。
+            Assert.Equal(sourceLength, new FileInfo(movedUserFile).Length);
+            Assert.True(File.Exists(Path.Combine(rest, "inner.7z.001")), "内层分卷也应该在同一个其余物里");
         }
 
         // ---------------------------------------------------------------- 归档起点判定（纯函数）
@@ -682,6 +780,45 @@ namespace ArchiveFixer.Tests
             }
 
             return userFile;
+        }
+
+        /// <summary>
+        /// 造一组**第一层直接出内容物**的加密 7z 分卷（形状 A 的样本，对应 flowe2e 里的
+        /// <c>444.7z.001/.002/.003</c>）：<c>&lt;root&gt;/packages/&lt;baseName&gt;.7z.001/.002…</c>。
+        ///
+        /// 40 KB 一卷，保证真的切得开；内容物是一个 <c>content.txt</c> 加一个随机大文件。
+        /// </summary>
+        private string BuildVolumeGroupWithContent(string baseName)
+        {
+            string stage = Path.Combine(_root, baseName + "-stage");
+            Directory.CreateDirectory(stage);
+
+            WriteText(Path.Combine(stage, "content.txt"), InnerPayloadText);
+
+            byte[] filler = new byte[150 * 1024];
+            new Random(20260922).NextBytes(filler);
+            File.WriteAllBytes(Path.Combine(stage, "big.bin"), filler);
+
+            string packageDirectory = Path.Combine(_root, "packages");
+            Directory.CreateDirectory(packageDirectory);
+
+            // 文件名用相对形式传给 7z（工作目录就是 stage），归档里的条目名才稳定。
+            Run7z(
+                stage,
+                "a",
+                "-t7z",
+                Path.Combine(packageDirectory, baseName + ".7z"),
+                "-v40k",
+                "-p" + OuterPassword,
+                "-mhe=on",
+                "content.txt",
+                "big.bin");
+
+            Assert.True(
+                Directory.GetFiles(packageDirectory, baseName + ".7z.*").Length >= 2,
+                "样本没有切成多个分卷");
+
+            return packageDirectory;
         }
 
         /// <summary>假 MP4 头：前 12 字节是真格式的 ftyp box，后面填随机字节（固定种子，样本可复现）。</summary>

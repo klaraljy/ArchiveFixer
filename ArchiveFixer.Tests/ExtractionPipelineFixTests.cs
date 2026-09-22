@@ -802,6 +802,18 @@ namespace ArchiveFixer.Tests
             settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 
+            /*
+             * 源包档位固定成"留在原地"。
+             *
+             * 理由：这一组测的是**解压管线本身**（入仓/定稿、校验、落点、归集、取消、UI 线程不被占住），
+             * 断言里到处是"输出目录里有几个文件""源文件还在不在"。用户 2026-09-22 的新规则是
+             * "成功就把源包也移进其余物"，照默认档跑会让源包混进这些计数，把管线测试变成
+             * 一半在测源包搬运 —— 那种失败看不出管线坏没坏。
+             * 源包搬运（两条路径 + 幂等 + 失败/取消）另有专测：SourcePackageRestMoveTests
+             * 与 InnerLayerContinuationTests。
+             */
+            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+
             configure?.Invoke(settings);
             settingsService.Save(settings);
 

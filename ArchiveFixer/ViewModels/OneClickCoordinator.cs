@@ -370,6 +370,22 @@ namespace ArchiveFixer.ViewModels
                 _vm.PropertyChanged -= OnViewModelPropertyChanged;
             }
 
+            /*
+             * 链结束后的**源包补搬**（2026-09-22 修掉的真实缺陷）。
+             *
+             * 用户的真实文件（222.mp4 = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）第一层只出内层分卷，
+             * 一个内容物都没有 —— 最外层那一轮因此没法按"内容物已定稿"把源包搬进其余物，
+             * 而真正产出内容物的是续解子任务，子任务按设计跳过源包处理。
+             * 于是最外层那一轮把源包记账成"留到链结束后补搬"（SourcePackageMoveState.DeferredToChainEnd），
+             * 由这里 —— **只有这里知道链什么时候结束** —— 补做一次。
+             *
+             * 链没跑完时一律不补搬（源包留在原地）：
+             * · 被「停止后续」打断 / 有任务没轮到：这是取消语义，不该再动用户的源文件；
+             * · 撞到轮数上限：更深的包还没解，内容物可能不全，不能在此时把源包搬走。
+             * 两种情况都写 WARN 说明原因，绝不静默。
+             */
+            await CompleteRootSourcePackagesAsync(firstRoundTargets, processed, stopped || stopRequested, hitRoundLimit);
+
             string summary = BuildSummaryLine(processed, stopped, continuationLayers, hitRoundLimit);
 
             AppendLog("INFO", summary);
@@ -382,6 +398,55 @@ namespace ArchiveFixer.ViewModels
                 HitRoundLimit = hitRoundLimit,
                 Summary = summary
             };
+        }
+
+        /// <summary>
+        /// 续解链跑完之后，对"本轮没有内容物、记账成待补搬"的**最外层源包**再给一次机会
+        /// （2026-09-22 修复的真实缺陷，见调用点的说明）。
+        ///
+        /// <para>
+        /// 三条不补搬的情况（都写日志，不静默）：
+        /// ① 链没跑完（停止后续 / 撞轮数上限）→ 取消语义，源包留在原地；
+        /// ② 没有一个源包需要补搬 → 什么都不做（连日志都不写，免得每批都刷一行废话）；
+        /// ③ 具体的判据不成立（根任务没成功 / 校验没过 / 分卷不完整 / 那个目录里没有内容物）→
+        ///    由 <see cref="ExtractionCoordinator.CompleteRootSourcePackagesAfterChainAsync"/> 逐条说清原因。
+        /// </para>
+        /// </summary>
+        private async Task CompleteRootSourcePackagesAsync(
+            IReadOnlyList<ArchiveTask> rootTasks,
+            IReadOnlyList<ArchiveTask> chainTasks,
+            bool stopped,
+            bool hitRoundLimit)
+        {
+            int pending = rootTasks.Count(task => task.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd);
+
+            if (pending == 0)
+            {
+                return;
+            }
+
+            if (stopped)
+            {
+                AppendLog(
+                    "WARN",
+                    $"一键处理：被「停止后续」中断，{pending} 个源包的补搬（移入其余物）没有执行，源包留在原地。");
+                return;
+            }
+
+            if (hitRoundLimit)
+            {
+                AppendLog(
+                    "WARN",
+                    $"一键处理：还有更深的包没解（已达到 {MaxRounds} 轮上限），" +
+                    $"{pending} 个源包的补搬没有执行 —— 内容物可能还不全，此时不动源包。");
+                return;
+            }
+
+            AppendLog(
+                "INFO",
+                $"一键处理：续解链已结束，对 {pending} 个「本轮没有内容物」的最外层源包做一次补搬（按源包处理档位）。");
+
+            await _extractionCoordinator.CompleteRootSourcePackagesAfterChainAsync(rootTasks, chainTasks);
         }
 
         /// <summary>
@@ -975,8 +1040,14 @@ namespace ArchiveFixer.ViewModels
             return line;
         }
 
-        /// <summary>解压成功（含"已覆盖"）。</summary>
-        private static bool IsSuccessStatus(ArchiveTask task)
+        /// <summary>
+        /// 解压成功（含"已覆盖"）。
+        ///
+        /// internal 是为了让 <see cref="ExtractionCoordinator.CompleteRootSourcePackagesAfterChainAsync"/>
+        /// 复用同一份判定：链结束后补搬源包的前提之一就是"根任务以解压成功收尾"，
+        /// 两处各写一遍迟早分叉（同类先例：<see cref="IsHandled"/>）。
+        /// </summary>
+        internal static bool IsSuccessStatus(ArchiveTask task)
         {
             return task.Status == StatusText.ExtractSuccess ||
                    task.Status == StatusText.Overwritten;

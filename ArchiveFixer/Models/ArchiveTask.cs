@@ -7,6 +7,41 @@ using System.Runtime.CompilerServices;
 namespace ArchiveFixer.Models
 {
     /// <summary>
+    /// 源包搬运（一键处理的"移入其余物"，决策 D-9/D-11/D-12）在**本任务**上的记账状态。
+    ///
+    /// <para>
+    /// 为什么必须是一个显式状态，而不是"看源文件还在不在"：
+    /// </para>
+    /// <list type="number">
+    /// <item><description><b>幂等</b>：源包搬运有两条路径 —— 本轮定稿完内容物就搬（原有路径），
+    /// 以及"最外层那一轮没有内容物、留到整条续解链跑完之后再补搬"（2026-09-22 修复的真实缺陷）。
+    /// 两条路径必须互相看得见，否则同一个源包会被搬两次（第二次会落进 <c>其余物\222(1).mp4</c>）。
+    /// 靠"文件还在不在"猜是不行的：搬运失败、被跳过、半途放弃都会让文件"还在原地"，
+    /// 于是每次都会再试一遍，用户看到的是"每次运行都多一份"。</description></item>
+    /// <item><description><b>延期</b>：用户那个真实文件（<c>222.mp4</c> = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）
+    /// 第一层解出来的**只有待续解的中间件**，此时没有任何"内容物已定稿"的事实，不能搬；
+    /// 要记下"留到链结束后"，否则补搬没有触发点。</description></item>
+    /// </list>
+    /// </summary>
+    public enum SourcePackageMoveState
+    {
+        /// <summary>还没轮到（也没有延期语义）：两条路径都可以按自己的判据处理。</summary>
+        NotAttempted = 0,
+
+        /// <summary>本轮没有内容物可定稿：源包搬运**留到整条续解链跑完之后补做**。</summary>
+        DeferredToChainEnd = 1,
+
+        /// <summary>
+        /// 源包**已经搬进其余物**（或压根没有可搬的）：两条路径都不许再动它。
+        ///
+        /// ⚠ 搬失败时**不落成这一档**（保持原状态）：那说明源包还完整地留在原地，
+        /// 任务已经标成「部分完成」并写明原因，下一次运行还有机会补上。
+        /// 把"尝试过"也记成"搬过了"，用户就再也修不好那一次失败。
+        /// </summary>
+        Done = 2
+    }
+
+    /// <summary>
     /// 一个待处理压缩包任务。
     /// 
     /// 注意：
@@ -358,6 +393,32 @@ namespace ArchiveFixer.Models
 
         /// <summary>结果归集后的最终位置（没有归集时为空，表示还是 OutputPath）。</summary>
         public string CollectedPath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 源包搬运（一键处理 / 手动「只解压」把整组源包移入 <c>其余物</c>）在**本任务**上的记账。
+        ///
+        /// <para>
+        /// 两个用途，缺一不可（见 <see cref="SourcePackageMoveState"/> 的说明）：
+        /// <b>幂等</b>（搬过就绝不再搬第二次，不靠"文件还在不在"猜）与
+        /// <b>延期</b>（第一层只出中间件时，把搬运留到整条续解链跑完之后补做）。
+        /// </para>
+        ///
+        /// 它**不参与任何界面显示**：只是流水线的记账字段（与 <see cref="OutputPath"/> /
+        /// <see cref="CollectedPath"/> 同一类），所以刻意不做成通知属性。
+        /// </summary>
+        public SourcePackageMoveState SourcePackageMove { get; set; } = SourcePackageMoveState.NotAttempted;
+
+        /// <summary>
+        /// 本任务**这一轮定稿实际使用的「其余物」目录**（归集之后的位置）——链结束后补搬源包时的目标根。
+        ///
+        /// <para>
+        /// 为什么要记下来而不是到时候重算：定稿计划算出来的其余物目录在三种情况下都算不出来 ——
+        /// 内容物那一层正好也叫「其余物」（会退让成 <c>其余物(1)</c>）、共用输出根模式下按包名分的那一层、
+        /// 以及结果归集把整个产物目录搬走之后的落点。重算出来的路径一旦不准，
+        /// 源包就会被搬到一个用户找不到的地方（或者凭空多出一个 <c>其余物</c> 目录）。
+        /// </para>
+        /// </summary>
+        public string RestDirectoryPath { get; set; } = string.Empty;
 
         /// <summary>
         /// 本任务**所属的输出根**，即把它解出来的那个父任务的最终输出目录。

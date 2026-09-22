@@ -283,8 +283,14 @@ namespace ArchiveFixer.ViewModels
         /// </param>
         /// <param name="oneClickRun">
         /// 这一批是不是「一键处理」发起的整理路径（决策 D-9）。
-        /// <c>false</c> = 地基路径（只解压）：**永远不动源包**，连 <see cref="AppSettings.SourceHandling"/>
-        /// 都不读 —— 这是不变量 1 的例外范围之外。
+        ///
+        /// <para>
+        /// ⚠ <b>它已经不再决定"要不要动源包"</b>（用户 2026-09-22 的新规则：两条路径一致，
+        /// 成功 + 校验通过就把源包移入 <c>其余物</c>；见下方源包处理那一段）。
+        /// 现在它只剩一个用处：**一键处理有续解链、手动「只解压」没有** ——
+        /// 真实文件常常"第一层只出中间件"，那时一键处理要把源包搬运留到链结束后补做，
+        /// 而单层的「只解压」当场就能按"定稿 + 校验通过"处理掉。
+        /// </para>
         /// </param>
         private async Task<bool> PostProcessSuccessAsync(
             ArchiveTask task,
@@ -314,23 +320,29 @@ namespace ArchiveFixer.ViewModels
             /*
              * 源包处理（决策 D-9，一次读清、三档互斥）。
              *
-             * · 一键处理：按设置的三档走 —— 移入其余物（默认）/ 留在原地 / 校验通过后删除。
-             * · 地基路径（手动「只解压」）：**永远不动源包**，连 SourceHandling 都不读，
-             *   一律 KeepInPlace；它沿用 §9.5 的老开关 DeleteSourceAfterExtract
-             *   （默认关，且只有"解压成功 + 校验通过"才删），行为与本轮改造前一个字都不差。
+             * **两条路径一致**（用户 2026-09-22 拍板，推翻上一版"地基路径永远不动源包"）：
+             * 不论是一键处理还是手动「只解压」，源包档位都取自 SourceHandling，
+             * 三条前提（内容物已定稿 + 输出校验通过 + 未取消 + 属于本任务分卷组）由
+             * MoveSourcePackageIntoRest 统一把关。用户原话：
+             * 「如果成功了你就直接将源包放在其余物里面」「地基路径也照这条走」。
              *
-             * 为什么 deleteSource 在两条路径上取不同来源：
-             * 旧的那个布尔开关是给地基路径用的；一键处理现在有自己的三档，
-             * 其中 DeleteAfterVerify 才是"删"，MoveToRest 只"移"——两者绝不能同时生效，
-             * 否则刚搬进其余物的源包会被下一步清理掉，用户看到的就成了"源包没了"。
+             * 档位语义：
+             * · MoveToRest（默认）—— 成功 + 校验通过就把整组源包移入其余物；
+             * · KeepInPlace —— 一个字节都不搬（"传统解压器"语义的出口）；
+             * · DeleteAfterVerify —— 沿用 §9.5：校验通过后删源包（回收站/彻底删除按既有设置）。
+             *
+             * 为什么 deleteSource 要按档位算，而不是照抄一个布尔：
+             * "移"和"删"绝不能同时生效 —— 刚搬进其余物的源包会被下一步清理掉，
+             * 用户看到的就成了"源包没了"（这句踩坑记录从上一版保留）。
+             * 另外地基路径上那个更老的 §9.5 开关 DeleteSourceAfterExtract（默认关）仍然算数，
+             * 但**只在 KeepInPlace 档**：那是"传统解压器 + 解压后清理源包"的既有组合，
+             * 上一版就是这么用的，不该被这次改动悄悄改掉；MoveToRest 档下它不参与，
+             * 否则用户开过这个老开关就会在"移入其余物"之后立刻被删掉。
              */
-            SourceHandlingMode sourceHandling = oneClickRun
-                ? AppSettings.ParseSourceHandling(Settings.SourceHandling)
-                : SourceHandlingMode.KeepInPlace;
+            SourceHandlingMode sourceHandling = AppSettings.ParseSourceHandling(Settings.SourceHandling);
 
-            bool deleteSource = oneClickRun
-                ? sourceHandling == SourceHandlingMode.DeleteAfterVerify
-                : Settings.DeleteSourceAfterExtract;
+            bool deleteSource = sourceHandling == SourceHandlingMode.DeleteAfterVerify ||
+                (!oneClickRun && sourceHandling == SourceHandlingMode.KeepInPlace && Settings.DeleteSourceAfterExtract);
 
             /*
              * 终端落法（规格 §3.1 / 设置项 TerminalLayoutMode）同样在这里读一次并解析：
@@ -350,6 +362,7 @@ namespace ArchiveFixer.ViewModels
                     sourceHandling,
                     placementMode,
                     terminalLayout,
+                    oneClickRun,
                     cancellationToken),
                 cancellationToken);
 
@@ -448,6 +461,25 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * 记下**这一轮定稿实际使用的其余物目录**。
+             *
+             * 为什么必须记：真实文件（222.mp4 = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）第一层只出中间件，
+             * 源包搬运要留到整条续解链跑完之后补做 —— 那一刻已经不在这一轮的收尾里了，
+             * 而"其余物到底在哪"这个事实只有定稿计划知道（归集之后还会整体平移一次）。
+             * 现场重算路径会在三处出错：内容物层正好也叫「其余物」时的 `其余物(1)`、
+             * 共用输出根模式下按包名分的那一层、以及归集把整个目录搬走之后的落点。
+             */
+            if (work.Commit != null)
+            {
+                string restDirectory = ResolveRestDirectoryAfterCollect(work.Commit, work.Collected);
+
+                if (!string.IsNullOrWhiteSpace(restDirectory))
+                {
+                    task.RestDirectoryPath = restDirectory;
+                }
+            }
+
+            /*
              * 中间工作区清理（P1，端到端验收实测一次成功就留下近 1 GB 垃圾）。
              *
              * 位置与条件都在这里定死：**解压成功 + 输出校验通过 + 没被取消**。
@@ -467,7 +499,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 收尾重活本体：落点校验 → 结果校验 → 预算事后判定 → **定稿搬运** → 归集 → 清理源包。
+        /// 收尾重活本体：落点校验 → 结果校验 → 预算事后判定 → **定稿搬运** → 归集 → 处理源包。
         ///
         /// 校验与预算量的都是**暂存区**：那才是引擎真正写盘的地方（契约 §2.1）。
         /// 最终目录此时还是干净的，只有定稿那一步会往里面写东西。
@@ -475,6 +507,11 @@ namespace ArchiveFixer.ViewModels
         /// **只允许在后台线程上跑**（见 <see cref="PostProcessSuccessAsync"/> 的线程规则）：
         /// 这里只碰文件系统，不写任务状态、不写界面日志集合，要说的都放进 LogEntries 回传。
         /// </summary>
+        /// <param name="oneClickRun">
+        /// 是不是「一键处理」发起的整理路径。**只影响一件事**：一键处理有续解链，
+        /// 所以"本轮没有内容物"时源包搬运要记成"留到链结束后补搬"；
+        /// 手动「只解压」是单层路径，没有链可等，当场按"定稿 + 校验通过"处理。
+        /// </param>
         private PostProcessWorkResult RunPostProcessWork(
             ArchiveTask task,
             string stageDirectory,
@@ -485,6 +522,7 @@ namespace ArchiveFixer.ViewModels
             SourceHandlingMode sourceHandling,
             OutputPlacementMode placementMode,
             TerminalLayoutMode terminalLayout,
+            bool oneClickRun,
             CancellationToken cancellationToken)
         {
             var logEntries = new List<(string Level, string Message)>();
@@ -661,6 +699,9 @@ namespace ArchiveFixer.ViewModels
              * （verification.Verified，不在下面每个分支里重查会漏，所以这里统一把门）、未取消（刚查过）。
              * 第四个条件是"属于本任务分卷组"——清单只来自任务自身（见 SourcePackageMover.ResolveSourceGroup）。
              *
+             * 两条路径都走这里（用户 2026-09-22 的新规则：手动「只解压」不再例外），
+             * 唯一的差别是"本轮没有内容物"时怎么办，见 MoveSourcePackageIntoRest。
+             *
              * 只对**最外层源包**做：续解出来的内层包，它的"源文件"是我们自己产出的中间件
              * （现在就在 <c>其余物</c> 里），既不是用户给的包，也不该被搬走/删掉 ——
              * 用户按下"解压后删除源包"时想删的是他拖进来的那个包，不是其余物里的中间件。
@@ -678,7 +719,7 @@ namespace ArchiveFixer.ViewModels
             else if (sourceHandling == SourceHandlingMode.MoveToRest)
             {
                 sourceMove = MoveSourcePackageIntoRest(
-                    task, verification, commit, collected, stageDirectory, sourceHandling, logEntries);
+                    task, verification, commit, collected, oneClickRun, logEntries);
 
                 if (sourceMove.FailedCount > 0)
                 {
@@ -711,13 +752,30 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 把本任务的**整组源包**搬进其余物（决策 D-9/D-11/D-12）。
+        /// 把本任务的**整组源包**搬进其余物（决策 D-9/D-11/D-12；用户 2026-09-22 起两条路径一致）。
         ///
         /// <para>
-        /// 四个前置条件缺一不可（D-11）：① 内容物已定稿（<paramref name="commit"/> 搬过内容物、
-        /// 没有任何搬运失败）；② 输出校验通过；③ 未取消（调用方刚查过令牌）；④ 属于本任务分卷组。
-        /// 任何一个不成立就**一个字节都不动**，并且不生成 <c>其余物</c> 目录。
+        /// 四个前置条件缺一不可（D-11）：① 内容物已定稿；② 输出校验通过；③ 未取消（调用方刚查过令牌）；
+        /// ④ 属于本任务分卷组。任何一个不成立就**一个字节都不动**，并且不生成 <c>其余物</c> 目录。
         /// </para>
+        /// <para>
+        /// <b>2026-09-22 修掉的那个真实缺陷</b>：条件 ① 原来死认"本轮搬过内容物"
+        /// （<c>commit.MovedContentCount &gt; 0</c>），而用户的真实文件
+        /// （<c>222.mp4</c> = 假 MP4 头 + 尾部完整 ZIP + ZIP 里是头加密的 7z 分卷）**第一层只出中间件**，
+        /// 内容物是续解出来的子任务产出的 —— 子任务按设计跳过源包处理（它的"源文件"是我们自己的中间件），
+        /// 于是整条一键处理流水线跑完，源包还躺在原地、其余物里只有 4 个内层分卷。
+        /// 现在把它分成三种情况：
+        /// </para>
+        /// <list type="number">
+        /// <item><description><b>本轮有内容物、且没有任何搬运失败</b> → 当场搬（原有路径）。</description></item>
+        /// <item><description><b>本轮没有内容物、但也没有任何搬运失败</b>（典型：第一层只出中间件）：
+        /// 一键处理记成"留到链结束后补搬"（<see cref="SourcePackageMoveState.DeferredToChainEnd"/>，
+        /// 由 <see cref="OneClickCoordinator"/> 在整条续解链跑完之后调
+        /// <see cref="CompleteRootSourcePackagesAfterChainAsync"/>）；手动「只解压」是单层路径、
+        /// 没有链可等，**当场就按"定稿 + 校验通过"处理**（用户新规则：成功就把源包放进其余物）。</description></item>
+        /// <item><description><b>定稿根本没发生、或部分搬运失败</b> → 维持原判：一个字节都不动，
+        /// 也不延期（这种情况连"这一轮的内容物已定稿"都不成立，延后也等不到）。</description></item>
+        /// </list>
         /// <para>
         /// 目标目录的算法（这里有个坑）：其余物目录是**定稿计划**里算出来的那个，
         /// 但归集（Collect）会把整个产物目录搬走 —— 搬走之后计划里的路径已经不存在了。
@@ -729,22 +787,18 @@ namespace ArchiveFixer.ViewModels
         /// **只允许在后台线程上跑**（跨盘时是整包拷贝，几百 MB 到几十 GB）。
         /// </para>
         /// </summary>
+        /// <param name="oneClickRun">
+        /// 是不是「一键处理」发起的整理路径 —— 决定"本轮没有内容物"时是延期补搬还是当场搬
+        /// （见上面的情况 ②）。
+        /// </param>
         private SourcePackageMoveResult MoveSourcePackageIntoRest(
             ArchiveTask task,
             OutputVerificationResult verification,
             StageCommitResult commit,
             CollectResult? collected,
-            string stageDirectory,
-            SourceHandlingMode sourceHandling,
+            bool oneClickRun,
             List<(string Level, string Message)> logEntries)
         {
-            var skipped = new SourcePackageMoveResult { Attempted = false, Message = "未执行" };
-
-            if (sourceHandling != SourceHandlingMode.MoveToRest)
-            {
-                return skipped;
-            }
-
             if (!verification.Verified)
             {
                 // 校验没过就没有"这次整理完成了"这回事，源包一律不动（D-11 第 2 条）。
@@ -752,11 +806,46 @@ namespace ArchiveFixer.ViewModels
                 return new SourcePackageMoveResult { Attempted = false, Message = "输出校验未通过，源包留在原地" };
             }
 
-            if (!commit.Attempted || commit.MovedContentCount == 0 || commit.FailedCount > 0)
+            if (task.SourcePackageMove == SourcePackageMoveState.Done)
             {
-                // 内容物没定稿成功（或只是部分搬进去）：源包不动，其余物也不生成（D-11 第 1 条）。
+                /*
+                 * 幂等（硬要求）：这个源包**已经搬进其余物**了（上次运行搬的），绝不许再搬第二次。
+                 *
+                 * 不查这一步会怎样：用户对同一个包再点一次「一键处理」时，源文件已经在
+                 * 上一轮的 <c>其余物</c> 里了，而新一轮的输出目录是自动改名后的 <c>pack(1)</c> ——
+                 * 于是"计划里的其余物"变成 <c>pack(1)\其余物</c>，源包会被从它已经安顿好的位置
+                 * **再搬一次**，用户看到的是"源包又跑回来了 / 凭空多一份"。
+                 * 判据只认这个显式标记，不认"文件还在不在"：文件不在时同样可能什么都没搬成过。
+                 */
+                logEntries.Add(("INFO", $"{task.FileName}：源包已经搬进其余物，本次不再搬（幂等）。"));
+                return new SourcePackageMoveResult { Attempted = false, Message = "源包已经搬进其余物，不再搬第二次" };
+            }
+
+            if (!commit.Attempted || commit.FailedCount > 0)
+            {
+                // 定稿没发生 / 有搬运失败：内容物没定稿成功，源包不动，其余物也不生成（D-11 第 1 条）。
                 logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，源包留在原地（未移入其余物）。"));
                 return new SourcePackageMoveResult { Attempted = false, Message = "内容物未全部定稿，源包留在原地" };
+            }
+
+            if (oneClickRun && commit.MovedContentCount == 0)
+            {
+                /*
+                 * 一键处理 + 本轮没有内容物：真实文件的常见形状（第一层只出待续解的中间件）。
+                 * 此刻"内容物已定稿"这个事实还不存在，但它**马上会由续解子任务产生** ——
+                 * 所以不能像原来那样直接放弃，而要记成"留到链结束后补搬"。
+                 *
+                 * 为什么只延期、不当场搬：这一轮产物全是中间件，内容物还没出现；
+                 * 一键处理的链可能还要跑两层，链没跑完就动源包＝在"内容物可能不全"时动用户唯一无法再生的东西。
+                 */
+                task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
+
+                logEntries.Add((
+                    "INFO",
+                    $"{task.FileName}：本轮产出的都是待续解的中间件（没有内容物定稿），" +
+                    $"源包先留在原地，等整条续解链跑完后再按设置搬进其余物。"));
+
+                return new SourcePackageMoveResult { Attempted = false, Message = "本轮没有内容物，源包搬运留到链结束后补搬" };
             }
 
             string artifactRoot = ResolveRestDirectoryAfterCollect(commit, collected);
@@ -767,6 +856,42 @@ namespace ArchiveFixer.ViewModels
                 return new SourcePackageMoveResult { Attempted = false, Message = "其余物目录算不出来" };
             }
 
+            return ExecuteSourcePackageMove(task, artifactRoot, SourceMoveTrigger.DirectInRound, logEntries);
+        }
+
+        /// <summary>
+        /// 源包搬运的**触发点**：两条路径共用同一个执行体，但日志必须能分清是哪一次搬的
+        /// （用户要求：链结束后的补搬与本轮直接搬要在日志里区分开）。
+        /// </summary>
+        private enum SourceMoveTrigger
+        {
+            /// <summary>本轮定稿搬完内容物之后直接搬（原有路径）。</summary>
+            DirectInRound,
+
+            /// <summary>整条续解链跑完之后对"本轮没有内容物"的源包补搬（2026-09-22 修复的落点）。</summary>
+            AfterChain
+        }
+
+        /// <summary>
+        /// 源包搬运的执行体（规划 → 执行 → 记账 → 日志 → 回写任务路径）。两条触发路径共用一份，
+        /// 免得"本轮直接搬"和"链结束后的补搬"在幂等、日志、跨盘规则上各写一套、迟早分叉。
+        ///
+        /// <para>
+        /// **幂等记账在这里**（硬要求）：搬成（或压根没有可搬的）之后就把
+        /// <see cref="ArchiveTask.SourcePackageMove"/> 落成 <see cref="SourcePackageMoveState.Done"/> ——
+        /// 同一个源包绝不允许被搬第二次，而且这个判断只认标记，不认"文件还在不在"
+        /// （搬运失败时文件当然还在原地，靠它猜会导致每次运行都再试一遍、多出一份 <c>222(1).mp4</c>）。
+        /// 失败时保持原状态，让下一次运行还有机会补上（见方法里那段说明）。
+        /// </para>
+        ///
+        /// **只允许在后台线程上跑**（跨盘时是整包拷贝）。
+        /// </summary>
+        private SourcePackageMoveResult ExecuteSourcePackageMove(
+            ArchiveTask task,
+            string artifactRoot,
+            SourceMoveTrigger trigger,
+            List<(string Level, string Message)> logEntries)
+        {
             /*
              * 搬运本体（SourcePackageMover，纯 Extraction 层、可脱离 WPF 单测）：
              * 整组一起移、绝不覆盖、跨盘先复制成功再删原件、单个失败不影响其余。
@@ -776,18 +901,44 @@ namespace ArchiveFixer.ViewModels
             SourcePackageMovePlan plan = mover.Plan(task, artifactRoot);
             SourcePackageMoveResult result = mover.Execute(plan);
 
+            /*
+             * 幂等记账（硬要求）：**只有确实搬成了、或压根没有可搬的**（源包已经在其余物里、
+             * 清单里的文件都已不存在）才落成 <see cref="SourcePackageMoveState.Done"/>，
+             * 之后任何路径都不许再动这个源包。
+             *
+             * 搬失败（只读 / 被占用 / 跨盘复制失败）时**保持原状态**：那说明源包还原封不动地
+             * 留在原地（D-12：整组一起移、绝不先删后移），任务已经标成「部分完成」并写明原因；
+             * 下一次运行还有机会把它补上 —— 把"尝试过"也记成"搬过了"，用户就再也修不好这一次失败。
+             */
+            if (result.FailedCount == 0)
+            {
+                task.SourcePackageMove = SourcePackageMoveState.Done;
+            }
+
             foreach (string line in result.LogLines)
             {
                 logEntries.Add(("INFO", $"{task.FileName}：{line}"));
             }
 
+            // 日志口径要能区分"本轮直接搬"与"链结束后的补搬"（用户明确要求）。
+            string label = trigger == SourceMoveTrigger.AfterChain ? "链结束后的补搬" : "源包处理";
+
             if (result.Attempted)
             {
-                logEntries.Add((result.FailedCount == 0 ? "INFO" : "WARN", $"{task.FileName}：源包处理 —— {result.Message}"));
+                logEntries.Add((result.FailedCount == 0 ? "INFO" : "WARN", $"{task.FileName}：{label} —— {result.Message}"));
+
+                if (result.FailedCount > 0)
+                {
+                    // 失败必须写 WARN 并说清原因（不许只留一句汇总）。
+                    logEntries.Add((
+                        "WARN",
+                        $"{task.FileName}：{label}没能完成 —— {string.Join("；", result.Failures)}" +
+                        $"（源包仍在原处，内容物不受影响）"));
+                }
             }
             else
             {
-                logEntries.Add(("INFO", $"{task.FileName}：源包处理 —— {plan.Message}"));
+                logEntries.Add(("INFO", $"{task.FileName}：{label} —— {plan.Message}"));
 
                 foreach (ArtifactSkip skip in plan.Skipped)
                 {
@@ -810,6 +961,357 @@ namespace ArchiveFixer.ViewModels
             }
 
             return result;
+        }
+
+        /// <summary>链结束后补搬的一次后台作业结论（日志与"要不要把任务标成部分完成"都从这里回传）。</summary>
+        private sealed class DeferredSourceMoveWork
+        {
+            public DeferredSourceMoveWork(List<(string Level, string Message)> logEntries, string? failure = null)
+            {
+                LogEntries = logEntries;
+                Failure = failure;
+            }
+
+            public List<(string Level, string Message)> LogEntries { get; }
+
+            /// <summary>非 null = 源包没能搬成（任务要标「部分完成」，内容物结论不受影响）。</summary>
+            public string? Failure { get; }
+        }
+
+        /// <summary>
+        /// **链结束后的补搬**（2026-09-22 修掉的真实缺陷的落点）。
+        ///
+        /// <para>
+        /// 场景：<c>222.mp4</c> = 假 MP4 头 + 尾部完整 ZIP + ZIP 里是头加密的 7z 分卷。
+        /// 第一层只解出 4 个内层分卷（都是"其余物"），内容物要到第 2 层续解才出现；
+        /// 而续解子任务按设计**跳过源包处理**（它的"源文件"是我们自己产出的中间件）。
+        /// 于是最外层那一轮既没有内容物、又是唯一有资格处理源包的任务 —— 整条链跑完，源包还躺在原地。
+        /// 修法：最外层那一轮把源包记账成"留到链结束后补搬"，由
+        /// <see cref="OneClickCoordinator"/> 在**整条续解链跑完之后**（它才知道链什么时候结束）
+        /// 调这里补做一次。
+        /// </para>
+        ///
+        /// <para>
+        /// 判据全部是**明确的事实**，不拿"本轮搬了几条"当唯一依据（用户明确要求）：
+        /// </para>
+        /// <list type="number">
+        /// <item><description>链已结束 —— 调用方只在没被「停止后续」打断、也没撞轮数上限时才调（它在链尾）；</description></item>
+        /// <item><description>根任务以「解压成功」收尾、且输出校验通过，且**分卷组完整**（不完整就不动源包）；</description></item>
+        /// <item><description>链里**每一个**把那个最终目录当落点的任务都通过了输出校验，而且至少有一个确实落在那里
+        /// （内容物是它们共同定稿的；只看根任务会漏掉"第二层校验没过却照样搬"）；</description></item>
+        /// <item><description>那个目录里**确实有内容物文件** —— 排除 <c>其余物</c> 里的东西、排除归档/分卷这类中间件；
+        /// 这就是"内容物已定稿"的事实依据；</description></item>
+        /// <item><description>未取消（调用方与本方法各查一次令牌）；</description></item>
+        /// <item><description><see cref="ArchiveTask.SourcePackageMove"/> 记账：只有被标记成"待补搬"且没搬过的才做，
+        /// 搬过（<see cref="SourcePackageMoveState.Done"/>）的一律跳过 —— 同一个源包绝不搬第二次。</description></item>
+        /// </list>
+        ///
+        /// <para>
+        /// 任何一条不成立：**源包原地不动**，并写一行说清原因（WARN/INFO），绝不让它静默失败。
+        /// </para>
+        /// </summary>
+        /// <param name="rootTasks">本批的**最外层**任务（一键处理第一轮的输入）。</param>
+        /// <param name="chainTasks">整条链上的全部任务（根 + 续解子任务）：用来找"谁把内容物定稿到了那个目录"。</param>
+        internal async Task CompleteRootSourcePackagesAfterChainAsync(
+            IReadOnlyList<ArchiveTask>? rootTasks,
+            IReadOnlyList<ArchiveTask>? chainTasks,
+            CancellationToken cancellationToken = default)
+        {
+            if (rootTasks == null || rootTasks.Count == 0)
+            {
+                return;
+            }
+
+            // 设置在进后台之前读一次：设置是用户随时可改的，别让后台线程读到半路改掉的值。
+            SourceHandlingMode sourceHandling = AppSettings.ParseSourceHandling(Settings.SourceHandling);
+
+            foreach (ArchiveTask rootTask in rootTasks)
+            {
+                if (rootTask == null || rootTask.SourcePackageMove != SourcePackageMoveState.DeferredToChainEnd)
+                {
+                    continue;
+                }
+
+                // 后台重活（目录遍历 + 可能的整包跨盘拷贝），日志先收集、回到 UI 线程再写。
+                DeferredSourceMoveWork work = await Task.Run(
+                    () => RunDeferredSourceMoveWork(rootTask, chainTasks, sourceHandling, cancellationToken),
+                    CancellationToken.None);
+
+                foreach ((string level, string message) in work.LogEntries)
+                {
+                    AppendLog(level, message);
+                }
+
+                if (!string.IsNullOrWhiteSpace(work.Failure))
+                {
+                    /*
+                     * 与"本轮直接搬"同一口径（决策 D-12）：内容物已经好了，所以**不**顶掉"解压成功"，
+                     * 但任务整体没做完 —— 标成「部分完成」并写明原因（不变量 6 的反面同样成立）。
+                     */
+                    rootTask.Status = StatusText.PartiallyCompleted;
+                    rootTask.ErrorMessage = work.Failure;
+
+                    rootTask.VerifyMessage = string.IsNullOrWhiteSpace(rootTask.VerifyMessage)
+                        ? work.Failure
+                        : $"{rootTask.VerifyMessage}；{work.Failure}";
+                }
+            }
+        }
+
+        /// <summary>
+        /// 链结束后补搬的后台本体：判据 → 执行 → 结论。**只允许在后台线程上跑**。
+        /// </summary>
+        private DeferredSourceMoveWork RunDeferredSourceMoveWork(
+            ArchiveTask rootTask,
+            IReadOnlyList<ArchiveTask>? chainTasks,
+            SourceHandlingMode sourceHandling,
+            CancellationToken cancellationToken)
+        {
+            var logEntries = new List<(string Level, string Message)>();
+
+            // 幂等（硬要求）：已经搬成的一律跳过 —— 不靠"文件还在不在"猜。
+            if (rootTask.SourcePackageMove == SourcePackageMoveState.Done)
+            {
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            if (sourceHandling != SourceHandlingMode.MoveToRest)
+            {
+                logEntries.Add((
+                    "INFO",
+                    $"{rootTask.FileName}：源包处理档是「{sourceHandling}」，链结束后的补搬按该档不搬源包。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            if (rootTask.IsContinuationTask)
+            {
+                // 只处理最外层源包：内层包的"源文件"是其余物里的中间件（与本轮直接搬同一口径）。
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的补搬被取消，源包留在原地（其余物不生成）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            if (!OneClickCoordinator.IsSuccessStatus(rootTask))
+            {
+                logEntries.Add((
+                    "WARN",
+                    $"{rootTask.FileName}：根任务没有以「解压成功」收尾（当前状态：{rootTask.Status}），" +
+                    $"链结束后不补搬源包（源包留在原地）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            if (!rootTask.IsOutputVerified)
+            {
+                logEntries.Add((
+                    "WARN",
+                    $"{rootTask.FileName}：根任务的输出校验没有通过，链结束后不补搬源包（源包留在原地）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            if (rootTask.IsVolumeGroup && !rootTask.IsVolumeComplete)
+            {
+                logEntries.Add((
+                    "WARN",
+                    $"{rootTask.FileName}：分卷组不完整" +
+                    (string.IsNullOrWhiteSpace(rootTask.VolumeInfoText) ? string.Empty : $"（{rootTask.VolumeInfoText}）") +
+                    "，链结束后不补搬源包（源包留在原地）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            string destinationDirectory = ResolveContinuationOutputDirectory(rootTask);
+
+            if (string.IsNullOrWhiteSpace(destinationDirectory))
+            {
+                logEntries.Add(("WARN", $"{rootTask.FileName}：算不出根任务的最终输出目录，链结束后不补搬源包。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            string? verificationGap = DescribeChainVerificationGap(destinationDirectory, rootTask, chainTasks);
+
+            if (verificationGap != null)
+            {
+                logEntries.Add((
+                    "WARN",
+                    $"{rootTask.FileName}：链里的输出校验没有全部通过（{verificationGap}），" +
+                    $"链结束后不补搬源包（源包留在原地）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            int contentFiles = CountContentFiles(destinationDirectory);
+
+            if (contentFiles == 0)
+            {
+                // 内容物压根没出现（例如第二层解压失败 / 密码不对）：源包留在原地，其余物不为它生成。
+                logEntries.Add((
+                    "WARN",
+                    $"{rootTask.FileName}：{destinationDirectory} 里没有内容物（只有中间件），" +
+                    $"链结束后不补搬源包（源包留在原地）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            string artifactRoot = rootTask.RestDirectoryPath;
+
+            if (string.IsNullOrWhiteSpace(artifactRoot))
+            {
+                // 定稿计划没留下其余物目录：宁可不搬，也不要把用户的源包扔到一个猜出来的位置。
+                logEntries.Add((
+                    "WARN",
+                    $"{rootTask.FileName}：这一轮的其余物目录没有被记下来，为避免把源包搬到别处，" +
+                    $"链结束后不补搬（源包留在原地）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的补搬被取消，源包留在原地（其余物不生成）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            logEntries.Add((
+                "INFO",
+                $"{rootTask.FileName}：链结束后的补搬 —— 整条续解链已跑完，{destinationDirectory} 里有 " +
+                $"{contentFiles} 个内容物且输出校验通过；本轮没有内容物可定稿、留到现在的源包按设置移入其余物。"));
+
+            SourcePackageMoveResult result = ExecuteSourcePackageMove(
+                rootTask, artifactRoot, SourceMoveTrigger.AfterChain, logEntries);
+
+            /*
+             * 搬成功后记账已经是 Done（见 ExecuteSourcePackageMove）；搬失败时**保持"待补搬"**，
+             * 让下一次运行还有机会补上（这一次的失败已经写进任务状态，不会被静默吞掉）。
+             */
+            string? failure = result.FailedCount > 0
+                ? $"内容物已好，源包未能移入其余物：{result.Message}（源包仍在原处，内容物不受影响）"
+                : null;
+
+            return new DeferredSourceMoveWork(logEntries, failure);
+        }
+
+        /// <summary>
+        /// 本任务的**最终输出目录**：归集开启时产物整棵被搬到归集目录，权威落点就是它。
+        ///
+        /// 转发到 <see cref="OneClickCoordinator.ResolveContinuationOutputDirectory"/>，
+        /// 不在这里重写一遍 —— 续解、归集、源包补搬必须用同一个"内容物最终在哪"的口径。
+        /// </summary>
+        private static string ResolveContinuationOutputDirectory(ArchiveTask task) =>
+            OneClickCoordinator.ResolveContinuationOutputDirectory(task);
+
+        /// <summary>
+        /// 链里的输出校验有没有缺口：**每一个**把这个目录当落点的任务都必须通过输出校验。
+        ///
+        /// <para>
+        /// 为什么要看**整条链**而不是只看根任务：用户那个形状里内容物是**续解子任务**产出的，
+        /// 根任务那一轮的校验只覆盖了"中间件都搬进去了"。只看根任务，就会出现
+        /// "第二层校验没过（比如声明的条目数与落盘不符）却照样把源包搬走"。
+        /// </para>
+        /// <para>
+        /// 为什么是"每一个都必须过"而不是"有一个过就行"：同一个最终目录是链上所有任务共同产出的，
+        /// 其中任何一个没通过校验，就没有"内容物已定稿并校验通过"这个事实 ——
+        /// 这与"本轮直接搬"那条路径的口径一致（它也要求 <c>verification.Verified</c>）。
+        /// </para>
+        /// </summary>
+        /// <returns>
+        /// null = 这条链在这个目录上校验齐了（且至少有一个任务确实落在这里）；
+        /// 非 null = 说给用户听的原因（哪个任务没通过 / 压根没有任务落在这里）。
+        /// </returns>
+        private static string? DescribeChainVerificationGap(
+            string destinationDirectory,
+            ArchiveTask rootTask,
+            IReadOnlyList<ArchiveTask>? chainTasks)
+        {
+            bool anyLanding = false;
+
+            foreach (ArchiveTask? candidate in EnumerateChainTasks(rootTask, chainTasks))
+            {
+                if (!SafePathHelper.PathEquals(
+                        ResolveContinuationOutputDirectory(candidate), destinationDirectory))
+                {
+                    continue;
+                }
+
+                anyLanding = true;
+
+                if (!candidate.IsOutputVerified)
+                {
+                    return $"{candidate.FileName} 的输出校验没通过";
+                }
+            }
+
+            return anyLanding
+                ? null
+                : $"链里没有一个任务把 {destinationDirectory} 当落点（没有产物被定稿到那里）";
+        }
+
+        /// <summary>
+        /// 链上的任务集合（调用方传进来的续解子任务 + 根任务自己），去重后逐个产出。
+        /// 根任务单独兜一层：调用方可能只传了子任务，而"根任务也是链上的一员"这件事不能漏。
+        /// </summary>
+        private static IEnumerable<ArchiveTask> EnumerateChainTasks(
+            ArchiveTask rootTask,
+            IReadOnlyList<ArchiveTask>? chainTasks)
+        {
+            var seen = new HashSet<ArchiveTask>();
+
+            if (chainTasks != null)
+            {
+                foreach (ArchiveTask? candidate in chainTasks)
+                {
+                    if (candidate != null && seen.Add(candidate))
+                    {
+                        yield return candidate;
+                    }
+                }
+            }
+
+            if (seen.Add(rootTask))
+            {
+                yield return rootTask;
+            }
+        }
+
+        /// <summary>
+        /// 数一个最终目录里**真正的内容物文件**：排除 <c>其余物</c>（含旧名 <c>过程物</c>）里的东西，
+        /// 排除归档与分卷这类"待续解的中间件"。
+        ///
+        /// 这是"内容物确实已定稿"的事实依据 —— 不用"本轮搬了几条"这种过程数字
+        /// （用户明确要求：别拿 move 计数当唯一判据）。
+        /// 读不了目录时返回 0：宁可判定"没有内容物"而不动源包。
+        /// </summary>
+        private static int CountContentFiles(string destinationDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(destinationDirectory) || !Directory.Exists(destinationDirectory))
+            {
+                return 0;
+            }
+
+            try
+            {
+                int count = 0;
+
+                foreach (string file in Directory.EnumerateFiles(destinationDirectory, "*", SearchOption.AllDirectories))
+                {
+                    if (ProcessArtifactLayout.IsInsideArtifactDirectory(file, destinationDirectory))
+                    {
+                        continue;
+                    }
+
+                    if (IsProcessArtifactFile(file))
+                    {
+                        continue;
+                    }
+
+                    count++;
+                }
+
+                return count;
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         /// <summary>
@@ -1792,25 +2294,30 @@ namespace ArchiveFixer.ViewModels
         /// 批量解压入口 —— **地基路径**（界面「只解压（不改后缀）」走的就是它）。
         ///
         /// <para>
-        /// 源包处理按**发起方**分流（决策 D-9，用户 2026-09-22 拍板）：
+        /// 源包处理（决策 D-9；用户 2026-09-22 的最新规则）：
         /// </para>
         /// <list type="bullet">
-        /// <item><description>「一键处理」= 整理路径 → 走 <see cref="StartExtractForOneClickAsync"/>，按 <see cref="AppSettings.SourceHandling"/> 处理源包（默认移入其余物）；</description></item>
-        /// <item><description>本方法 = **地基路径：永远不动源包**，与设置值无关
-        /// （不变量 1 的例外范围被用户显式限定在"一键处理 + MoveToRest/DeleteAfterVerify"这一条路径上）。</description></item>
+        /// <item><description>「一键处理」= 整理路径 → 走 <see cref="StartExtractForOneClickAsync"/>；</description></item>
+        /// <item><description>本方法 = 地基路径（单层「只解压」）。</description></item>
         /// </list>
         /// <para>
-        /// ⚠ 两条路径的差别**只在这一件事**上（回写 <c>oneClickRun</c> 一路传到底）；
-        /// 定稿、校验、归集、工作区清理的行为完全一致。
-        /// 新增入口时必须自己选一边：拿不准就选地基语义（什么都不动），
-        /// 绝不能让"要不要搬走用户的源文件"变成一件靠猜的事。
+        /// ⚠ <b>两条路径的源包规则现在是同一个</b>：都读 <see cref="AppSettings.SourceHandling"/>，
+        /// 都在"内容物已定稿 + 输出校验通过 + 未取消 + 分卷组完整"之后把整组源包移入 <c>其余物</c>。
+        /// 用户原话：「如果成功了你就直接将源包放在其余物里面」，并明确"地基路径也照这条走"
+        /// （这推翻了更早那版"地基路径永远不动源包"的约定）。<c>KeepInPlace</c> 档仍是"永不搬"的出口。
+        /// </para>
+        /// <para>
+        /// 两条路径真正的差别只剩一处（回写 <c>oneClickRun</c> 一路传到底）：**一键处理有续解链**，
+        /// 所以"第一层只出中间件"时它把源包搬运留到链结束后补做（<see cref="CompleteRootSourcePackagesAfterChainAsync"/>）；
+        /// 单层的「只解压」没有链可等，当场按"定稿 + 校验通过"处理。
+        /// 定稿、校验、归集、工作区清理的行为两条路径完全一致。
         /// </para>
         /// </summary>
         public Task StartExtractAsync() => StartExtractCoreAsync(oneClickRun: false);
 
         /// <summary>
-        /// 「一键处理」的显式入口：源包按设置处理（决策 D-9）。
-        /// 与 <see cref="StartExtractAsync"/> 是同一个本体，只是把"这是整理路径"这件事说死。
+        /// 「一键处理」的显式入口：与 <see cref="StartExtractAsync"/> 同一个本体，
+        /// 差别只在"有续解链"这件事上（见 <see cref="StartExtractAsync"/> 的说明）。
         /// </summary>
         public Task StartExtractForOneClickAsync() => StartExtractCoreAsync(oneClickRun: true);
 
