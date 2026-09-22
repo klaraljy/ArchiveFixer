@@ -1,230 +1,274 @@
 <Window x:Class="ArchiveFixer.Views.RenamePreviewWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource AppWindowStyle}"
         Title="改名预览"
-        Width="1100"
-        Height="640"
-        MinWidth="1020"
+        Width="1180"
+        Height="680"
+        MinWidth="980"
         MinHeight="520"
-        WindowStartupLocation="CenterOwner"
-        Background="#F5F5F5"
-        UseLayoutRounding="True"
-        SnapsToDevicePixels="True"
-        TextOptions.TextFormattingMode="Display">
+        WindowStartupLocation="CenterOwner">
 
-    <Window.Resources>
-        <!-- 本窗口色板：把原先散落的 #RRGGBB 字面量收敛到一处。 -->
-        <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="PanelAltBrush" Color="#FAFAFA" />
-        <SolidColorBrush x:Key="PanelBorderBrush" Color="#DDDDDD" />
-        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#333333" />
-        <SolidColorBrush x:Key="TextMutedBrush" Color="#666666" />
-        <SolidColorBrush x:Key="TextHintBrush" Color="#777777" />
-    </Window.Resources>
+    <!--
+        改名预览（UI v2）。
+        改之前：标题挤在统计行里、底部一排 6 个同权重按钮、空列表时只有一张白表格。
+        现在：标题独立、统计做成小卡片、确认/取消与"选择辅助"分成两级，空列表给引导文案。
+    -->
 
-    <DockPanel Margin="10">
+    <DockPanel Margin="12">
 
-        <!-- 顶部说明 -->
-        <Border DockPanel.Dock="Top"
-                Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource PanelBorderBrush}"
-                BorderThickness="1"
-                CornerRadius="4"
-                Padding="10"
-                Margin="0,0,0,8">
-            <StackPanel>
-                <TextBlock Text="请确认以下改名操作。新文件名可以手动编辑，只有选中的项目会被改名。"
-                           FontSize="15"
-                           FontWeight="Bold"
-                           Foreground="{StaticResource TextPrimaryBrush}"
-                           Margin="0,0,0,8" />
+        <!-- ============ 标题 + 统计 ============ -->
+        <Border DockPanel.Dock="Top" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-                <WrapPanel>
-                    <TextBlock Text="总数："
-                               FontWeight="Bold" />
-                    <TextBlock Text="{Binding TotalCount}"
-                               Margin="0,0,16,0" />
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="请确认以下改名操作" Style="{StaticResource PageTitleTextStyle}" />
 
-                    <TextBlock Text="已选："
-                               FontWeight="Bold" />
-                    <TextBlock Text="{Binding SelectedCount}"
-                               Margin="0,0,16,0" />
+                    <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,5,0,0"
+                               Text="只有勾选、且状态为「可改名」的项目会被改。「新文件名」一列可以直接双击修改；改名会真实修改磁盘上的文件名。" />
+                </StackPanel>
 
-                    <TextBlock Text="可改名："
-                               FontWeight="Bold" />
-                    <TextBlock Text="{Binding CanRenameCount}"
-                               Margin="0,0,16,0" />
+                <WrapPanel Grid.Column="1" VerticalAlignment="Top" Margin="16,2,0,0">
+                    <Border Style="{StaticResource CardStyle}" Padding="10,5" Margin="0,0,6,0"
+                            Background="{StaticResource PanelSunkenBrush}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="总数" Style="{StaticResource StatLabelTextStyle}" Margin="0,0,5,0" />
+                            <TextBlock Text="{Binding TotalCount}" Style="{StaticResource StatValueTextStyle}" />
+                        </StackPanel>
+                    </Border>
 
-                    <TextBlock Text="冲突："
-                               FontWeight="Bold" />
-                    <TextBlock Text="{Binding ConflictCount}"
-                               Margin="0,0,16,0" />
+                    <Border Style="{StaticResource CardStyle}" Padding="10,5" Margin="0,0,6,0"
+                            Background="{StaticResource InfoSoftBrush}" BorderBrush="{StaticResource InfoBorderBrush}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="已选" Style="{StaticResource StatLabelTextStyle}" Margin="0,0,5,0"
+                                       Foreground="{StaticResource InfoTextBrush}" />
+                            <TextBlock Text="{Binding SelectedCount}" Style="{StaticResource StatValueTextStyle}"
+                                       Foreground="{StaticResource InfoTextBrush}" />
+                        </StackPanel>
+                    </Border>
 
-                    <TextBlock Text="跳过："
-                               FontWeight="Bold" />
-                    <TextBlock Text="{Binding SkipCount}"
-                               Margin="0,0,16,0" />
+                    <Border Style="{StaticResource CardStyle}" Padding="10,5" Margin="0,0,6,0"
+                            Background="{StaticResource SuccessSoftBrush}" BorderBrush="{StaticResource SuccessBorderBrush}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="可改名" Style="{StaticResource StatLabelTextStyle}" Margin="0,0,5,0"
+                                       Foreground="{StaticResource SuccessTextBrush}" />
+                            <TextBlock Text="{Binding CanRenameCount}" Style="{StaticResource StatValueTextStyle}"
+                                       Foreground="{StaticResource SuccessTextBrush}" />
+                        </StackPanel>
+                    </Border>
 
-                    <TextBlock Text="{Binding Message}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               Margin="20,0,0,0" />
+                    <Border Style="{StaticResource CardStyle}" Padding="10,5" Margin="0,0,6,0"
+                            Background="{StaticResource WarningSoftBrush}" BorderBrush="{StaticResource WarningBorderBrush}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="冲突" Style="{StaticResource StatLabelTextStyle}" Margin="0,0,5,0"
+                                       Foreground="{StaticResource WarningTextBrush}" />
+                            <TextBlock Text="{Binding ConflictCount}" Style="{StaticResource StatValueTextStyle}"
+                                       Foreground="{StaticResource WarningTextBrush}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardStyle}" Padding="10,5"
+                            Background="{StaticResource PanelSunkenBrush}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="跳过" Style="{StaticResource StatLabelTextStyle}" Margin="0,0,5,0" />
+                            <TextBlock Text="{Binding SkipCount}" Style="{StaticResource StatValueTextStyle}" />
+                        </StackPanel>
+                    </Border>
                 </WrapPanel>
-            </StackPanel>
+            </Grid>
         </Border>
 
-        <!-- 底部按钮 -->
-        <Border DockPanel.Dock="Bottom"
-                Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource PanelBorderBrush}"
-                BorderThickness="1"
-                CornerRadius="4"
-                Padding="8"
-                Margin="0,8,0,0">
+        <!-- ============ 底部按钮区 ============ -->
+        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Margin="0,8,0,0">
             <DockPanel>
-                <TextBlock Text="提示：确认前请仔细检查新文件名和新路径。改名操作会真实修改文件名。"
-                           Foreground="{StaticResource TextHintBrush}"
-                           VerticalAlignment="Center" />
-
-                <StackPanel DockPanel.Dock="Right"
-                            Orientation="Horizontal"
-                            HorizontalAlignment="Right">
-
+                <!-- 选择辅助：次要操作，靠左、工具按钮样式 -->
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
                     <Button Content="全选"
-                            Width="90"
-                            Height="32"
-                            Margin="0,0,8,0"
+                            MinWidth="64"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Margin="0,0,6,0"
                             Command="{Binding SelectAllCommand}" />
 
                     <Button Content="全不选"
-                            Width="90"
-                            Height="32"
-                            Margin="0,0,8,0"
+                            MinWidth="72"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Margin="0,0,6,0"
                             Command="{Binding SelectNoneCommand}" />
 
                     <Button Content="反选"
-                            Width="90"
-                            Height="32"
-                            Margin="0,0,8,0"
+                            MinWidth="64"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Margin="0,0,6,0"
                             Command="{Binding InvertSelectionCommand}" />
 
                     <Button Content="仅选可改名"
-                            Width="110"
-                            Height="32"
-                            Margin="0,0,20,0"
+                            MinWidth="96"
+                            Style="{StaticResource ToolbarButtonStyle}"
                             Command="{Binding SelectCanRenameCommand}" />
+                </StackPanel>
 
-                    <Button Content="确认改名"
-                            Width="110"
-                            Height="34"
-                            Margin="0,0,8,0"
-                            FontWeight="Bold"
-                            IsEnabled="{Binding HasExecutableItems}"
-                            Click="ConfirmButton_Click" />
-
+                <!-- 主操作在最右：确认改名（主色）> 取消 -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button Content="取消"
-                            Width="90"
-                            Height="34"
+                            MinWidth="88"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Margin="0,0,8,0"
                             IsCancel="True"
                             Command="{Binding CancelCommand}" />
+
+                    <Button Content="确认改名"
+                            MinWidth="112"
+                            Style="{StaticResource PrimaryButtonStyle}"
+                            IsEnabled="{Binding HasExecutableItems}"
+                            ToolTip="对勾选且可改名的项目执行改名"
+                            Click="ConfirmButton_Click" />
                 </StackPanel>
+
+                <TextBlock Text="{Binding Message}"
+                           Style="{StaticResource HintTextStyle}"
+                           VerticalAlignment="Center"
+                           Margin="12,0"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding Message}" />
             </DockPanel>
         </Border>
 
-        <!-- 预览表格 -->
-        <DataGrid x:Name="RenamePreviewGrid"
-                  ItemsSource="{Binding Items}"
-                  SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
-                  AutoGenerateColumns="False"
-                  CanUserAddRows="False"
-                  CanUserDeleteRows="False"
-                  IsReadOnly="False"
-                  SelectionMode="Extended"
-                  SelectionUnit="FullRow"
-                  GridLinesVisibility="Horizontal"
-                  HeadersVisibility="Column"
-                  Background="{StaticResource PanelBrush}"
-                  BorderBrush="{StaticResource PanelBorderBrush}"
-                  BorderThickness="1"
-                  RowHeaderWidth="0"
-                  AlternatingRowBackground="{StaticResource PanelAltBrush}"
-                  HorizontalScrollBarVisibility="Auto"
-                  VerticalScrollBarVisibility="Auto">
+        <!-- ============ 预览表格 ============ -->
+        <Border Style="{StaticResource CardStyle}" Padding="0">
+            <Grid>
+                <DataGrid x:Name="RenamePreviewGrid"
+                          ItemsSource="{Binding Items}"
+                          SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+                          IsReadOnly="False"
+                          SelectionMode="Extended"
+                          GridLinesVisibility="Horizontal"
+                          BorderThickness="0"
+                          Margin="0"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Auto">
 
-            <!--
-                列宽精简：原来 10 列写死合计 1970px，而窗口 1100（MinWidth 900）可用约 1060px
-                → 最后两列「原路径」「新路径」共 780px 常态看不见，可底部提示偏偏写着
-                "确认前请仔细检查新文件名和新路径"。现在删掉「原路径」（NewPath 已含目录信息），
-                「新路径」改 * 吃掉剩余宽度，剩下的列略微收窄。
-            -->
-            <DataGrid.Columns>
-
-                <DataGridCheckBoxColumn Header="选择"
-                                        Binding="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                        Width="60" />
-
-                <DataGridTextColumn Header="原文件名"
-                                    Binding="{Binding OriginalFileName}"
-                                    Width="170"
-                                    IsReadOnly="True">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                            <Setter Property="ToolTip" Value="{Binding OriginalPath}" />
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow" BasedOn="{StaticResource AppDataGridRowStyle}">
+                            <Style.Triggers>
+                                <!-- 不改名的行整行压暗：一眼看出这次会动哪些 -->
+                                <DataTrigger Binding="{Binding IsSelected}" Value="False">
+                                    <Setter Property="Foreground" Value="{StaticResource DisabledTextBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
                         </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
+                    </DataGrid.RowStyle>
 
-                <DataGridTextColumn Header="检测格式"
-                                    Binding="{Binding DetectedFormat}"
-                                    Width="80"
-                                    IsReadOnly="True" />
+                    <DataGrid.Columns>
+                        <!-- 模板列：DataGridCheckBoxColumn 要点两次才勾得上 -->
+                        <DataGridTemplateColumn Header="选择" Width="60">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              HorizontalAlignment="Center"
+                                              Margin="0" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
 
-                <DataGridTextColumn Header="操作"
-                                    Binding="{Binding Operation}"
-                                    Width="120"
-                                    IsReadOnly="True" />
+                        <DataGridTextColumn Header="原文件名"
+                                            Binding="{Binding OriginalFileName}"
+                                            Width="150"
+                                            IsReadOnly="True">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                    <Setter Property="ToolTip" Value="{Binding OriginalPath}" />
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
 
-                <DataGridTextColumn Header="新文件名，可编辑"
-                                    Binding="{Binding NewFileName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                    Width="200"
-                                    IsReadOnly="False" />
+                        <DataGridTextColumn Header="检测格式"
+                                            Binding="{Binding DetectedFormat}"
+                                            Width="78"
+                                            IsReadOnly="True" />
 
-                <DataGridTextColumn Header="冲突处理"
-                                    Binding="{Binding ConflictAction}"
-                                    Width="110"
-                                    IsReadOnly="True" />
+                        <DataGridTextColumn Header="操作"
+                                            Binding="{Binding Operation}"
+                                            Width="132"
+                                            IsReadOnly="True" />
 
-                <DataGridTextColumn Header="状态"
-                                    Binding="{Binding Status}"
-                                    Width="110"
-                                    IsReadOnly="True" />
+                        <DataGridTextColumn Header="新文件名（可编辑）"
+                                            Binding="{Binding NewFileName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                            Width="190"
+                                            IsReadOnly="False" />
 
-                <DataGridTextColumn Header="错误信息"
-                                    Binding="{Binding ErrorMessage}"
-                                    Width="180"
-                                    IsReadOnly="True">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                            <Setter Property="ToolTip" Value="{Binding ErrorMessage}" />
+                        <DataGridTextColumn Header="冲突处理"
+                                            Binding="{Binding ConflictAction, Converter={StaticResource ConflictActionTextConverter}}"
+                                            Width="112"
+                                            IsReadOnly="True" />
+
+                        <DataGridTextColumn Header="状态"
+                                            Binding="{Binding Status}"
+                                            Width="88"
+                                            IsReadOnly="True">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+
+                        <DataGridTextColumn Header="错误信息"
+                                            Binding="{Binding ErrorMessage}"
+                                            Width="130"
+                                            IsReadOnly="True">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                    <Setter Property="ToolTip" Value="{Binding ErrorMessage}" />
+                                    <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+
+                        <DataGridTextColumn Header="新路径"
+                                            Binding="{Binding NewPath}"
+                                            Width="*"
+                                            MinWidth="180"
+                                            IsReadOnly="True">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                    <Setter Property="ToolTip" Value="{Binding NewPath}" />
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <!-- 空状态 -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding TotalCount}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
                         </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
+                    </StackPanel.Style>
 
-                <DataGridTextColumn Header="新路径"
-                                    Binding="{Binding NewPath}"
-                                    Width="*"
-                                    MinWidth="200"
-                                    IsReadOnly="True">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                            <Setter Property="ToolTip" Value="{Binding NewPath}" />
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
+                    <TextBlock Text="没有需要改名的项目"
+                               Style="{StaticResource SectionTitleTextStyle}"
+                               HorizontalAlignment="Center" />
 
-            </DataGrid.Columns>
-        </DataGrid>
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,6,0,0"
+                               TextAlignment="Center"
+                               MaxWidth="460"
+                               Text="当前选中的任务后缀都正常，或还没有扫描出可改名的项目。可以先在主界面点「添加文件 / 添加文件夹」并扫描后再来。" />
+                </StackPanel>
+            </Grid>
+        </Border>
     </DockPanel>
 </Window>

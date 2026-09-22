@@ -1,0 +1,145 @@
+using System;
+using System.Globalization;
+using System.Windows.Data;
+
+namespace ArchiveFixer.Helpers
+{
+    /// <summary>
+    /// 单选按钮 ↔ 枚举属性。
+    ///
+    /// 用途：一组"四选一"（例如输出位置），每个 RadioButton 绑同一个枚举属性、
+    /// 用 <c>ConverterParameter</c> 指明自己代表哪一项。
+    ///
+    /// 为什么不用四个布尔：模式必须是**互斥**的，四个布尔能表达出 16 种组合，
+    /// 其中 12 种是非法的（"既是 A 又是 B"）。用一个枚举从数据上就不可能出错。
+    /// </summary>
+    public sealed class EnumOptionConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value == null || parameter == null)
+            {
+                return false;
+            }
+
+            return string.Equals(value.ToString(), parameter.ToString(), StringComparison.Ordinal);
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            // 取消勾选（被同组别的项顶掉）时不写回：写回会把刚选中的那一项又改掉。
+            if (value is not bool isChecked || !isChecked || parameter == null)
+            {
+                return Binding.DoNothing;
+            }
+
+            Type enumType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+            if (!enumType.IsEnum)
+            {
+                return Binding.DoNothing;
+            }
+
+            try
+            {
+                return Enum.Parse(enumType, parameter.ToString()!, ignoreCase: false);
+            }
+            catch (ArgumentException)
+            {
+                return Binding.DoNothing;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 改名冲突策略 → 中文显示。
+    ///
+    /// <c>RenamePreviewItem.ConflictAction</c> 里存的是 <c>AutoRename</c> / <c>Skip</c> 这类
+    /// 枚举名（默认 AutoRename）：本程序是中文单语，界面上直接出现英文枚举名不合适，
+    /// 而模型不归本次改动管，所以只在显示层翻译一次。未知取值原样显示（不猜）。
+    /// </summary>
+    public sealed class ConflictActionTextConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            string raw = value?.ToString() ?? string.Empty;
+
+            return raw switch
+            {
+                "AutoRename" => "自动重命名",
+                "Skip" => "跳过",
+                "Overwrite" => "覆盖",
+                "Ask" => "询问",
+                _ => raw
+            };
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new NotSupportedException("冲突处理列是只读的。");
+        }
+    }
+
+    /// <summary>
+    /// 输出位置摘要：两个布尔（解压到原目录 / 保留同名文件夹）+ 自定义路径 → 一句人话。
+    ///
+    /// 为什么需要它：主窗口只有 <c>Settings</c> 与 <c>SelectedOutputDirectory</c> 可以绑定
+    /// （主 ViewModel 不归本改动管），而"当前解压到哪"以前要用户自己把两个开关在脑子里
+    /// 组合出来 —— 这正是用户抱怨"根本看不懂输出的哪"的来源。这里把组合结果直接写出来。
+    /// </summary>
+    public sealed class OutputPlacementSummaryConverter : IMultiValueConverter
+    {
+        public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+        {
+            bool extractToSourceDirectory = ToBool(values, 0);
+            bool keepArchiveNameFolder = ToBool(values, 1);
+            string customRoot = values.Length > 2 ? values[2]?.ToString() ?? string.Empty : string.Empty;
+
+            return Describe(extractToSourceDirectory, keepArchiveNameFolder, customRoot);
+        }
+
+        public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+        {
+            throw new NotSupportedException("输出位置摘要是只读的。");
+        }
+
+        /// <summary>
+        /// 四种落点各写一句：先给"落在哪"，再给一个具体例子。
+        /// </summary>
+        public static string Describe(bool extractToSourceDirectory, bool keepArchiveNameFolder, string customRoot)
+        {
+            if (extractToSourceDirectory)
+            {
+                return keepArchiveNameFolder
+                    ? "压缩包同目录 · 以压缩包名命名的子文件夹（111\\222.rar → 111\\222\\内容物）"
+                    : "压缩包所在目录（111\\222.rar → 111\\内容物）";
+            }
+
+            if (string.IsNullOrWhiteSpace(customRoot))
+            {
+                return "指定位置（尚未选择）· 暂按压缩包所在目录处理";
+            }
+
+            string root = customRoot.TrimEnd('\\', '/');
+
+            return keepArchiveNameFolder
+                ? $"{root} · 以压缩包名命名的子文件夹（{root}\\222\\内容物）"
+                : $"{root} · 直接放在该目录下（{root}\\内容物）";
+        }
+
+        private static bool ToBool(object[] values, int index)
+        {
+            if (values == null || index >= values.Length || values[index] == null)
+            {
+                return false;
+            }
+
+            if (values[index] is bool boolValue)
+            {
+                return boolValue;
+            }
+
+            return bool.TryParse(values[index].ToString(), out bool parsed) && parsed;
+        }
+    }
+}

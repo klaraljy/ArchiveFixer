@@ -10,6 +10,30 @@ using System.Windows.Input;
 namespace ArchiveFixer.ViewModels
 {
     /// <summary>
+    /// 窗口内提示条的类别。决定提示条的底色/边框/文字色（样式在 App.xaml 里）。
+    ///
+    /// 为什么要有它：导入结果、解析警告以前只写在窗口底部的一行小字里，
+    /// 那一行又和按钮同宽、会被挤掉 —— 用户"导入了却像没导入"的观感就是这么来的。
+    /// </summary>
+    public enum PasswordNoticeKind
+    {
+        /// <summary>无提示。</summary>
+        None,
+
+        /// <summary>一般信息。</summary>
+        Info,
+
+        /// <summary>操作成功。</summary>
+        Success,
+
+        /// <summary>需要注意（解析警告、正在显示明文等）。</summary>
+        Warning,
+
+        /// <summary>失败。</summary>
+        Error
+    }
+
+    /// <summary>
     /// 密码列表管理窗口 ViewModel。
     /// 
     /// 职责：
@@ -30,8 +54,60 @@ namespace ArchiveFixer.ViewModels
         private string _newPassword = string.Empty;
         private bool _showPasswords;
         private string _message = string.Empty;
+        private PasswordNoticeKind _noticeKind = PasswordNoticeKind.None;
+        private string _noticeText = string.Empty;
+
+        /// <summary>
+        /// "空密码"这一次会话里不再询问。
+        /// 只存内存、不落盘：下次启动仍然会问一次（写进设置反而会让用户忘了自己关过确认）。
+        /// </summary>
+        private bool _skipEmptyPasswordConfirm;
 
         public ObservableCollection<PasswordItem> Passwords { get; } = new();
+
+        /// <summary>列表里一条密码都没有（窗口显示空状态引导）。</summary>
+        public bool IsEmpty => Passwords.Count == 0;
+
+        /// <summary>提示条类别。</summary>
+        public PasswordNoticeKind NoticeKind
+        {
+            get => _noticeKind;
+            private set
+            {
+                if (SetProperty(ref _noticeKind, value))
+                {
+                    OnPropertyChanged(nameof(HasNotice));
+                    OnPropertyChanged(nameof(NoticeGlyph));
+                }
+            }
+        }
+
+        /// <summary>提示条左侧的小图标字符（由类别决定，XAML 只管显示）。</summary>
+        public string NoticeGlyph => NoticeKind switch
+        {
+            PasswordNoticeKind.Success => "✓",
+            PasswordNoticeKind.Warning => "!",
+            PasswordNoticeKind.Error => "×",
+            PasswordNoticeKind.Info => "i",
+            _ => string.Empty
+        };
+
+        /// <summary>提示条文字。</summary>
+        public string NoticeText
+        {
+            get => _noticeText;
+            private set
+            {
+                if (SetProperty(ref _noticeText, value ?? string.Empty))
+                {
+                    OnPropertyChanged(nameof(HasNotice));
+                }
+            }
+        }
+
+        /// <summary>是否显示提示条。</summary>
+        public bool HasNotice =>
+            NoticeKind != PasswordNoticeKind.None && !string.IsNullOrWhiteSpace(NoticeText);
 
         public PasswordItem? SelectedPassword
         {
@@ -115,6 +191,9 @@ namespace ArchiveFixer.ViewModels
         public ICommand EnableAllCommand { get; }
         public ICommand DisableAllCommand { get; }
 
+        /// <summary>关掉窗口内的提示条。</summary>
+        public ICommand DismissNoticeCommand { get; }
+
         public PasswordListViewModel()
             : this(new PasswordService(), new DialogService())
         {
@@ -138,10 +217,31 @@ namespace ArchiveFixer.ViewModels
             ToggleShowPasswordsCommand = new RelayCommand(ToggleShowPasswords);
             EnableAllCommand = new RelayCommand(EnableAll, () => Passwords.Count > 0);
             DisableAllCommand = new RelayCommand(DisableAll, () => Passwords.Count > 0);
+            DismissNoticeCommand = new RelayCommand(DismissNotice, () => HasNotice);
 
             ReloadFromService();
 
             Message = "密码列表已加载。";
+        }
+
+        /// <summary>
+        /// 设置窗口内提示条。提示文字与底部状态行分开：
+        /// 底部那行是"刚才做了什么"，提示条是"结果是什么、要不要处理"。
+        /// </summary>
+        private void SetNotice(PasswordNoticeKind kind, string text)
+        {
+            NoticeKind = kind;
+            NoticeText = text;
+
+            RaiseCommandStates();
+        }
+
+        private void DismissNotice()
+        {
+            NoticeKind = PasswordNoticeKind.None;
+            NoticeText = string.Empty;
+
+            RaiseCommandStates();
         }
 
         public void ReloadFromService()
@@ -180,13 +280,25 @@ namespace ArchiveFixer.ViewModels
             {
                 string password = NewPassword ?? string.Empty;
 
-                if (password.Length == 0)
+                if (password.Length == 0 && !_skipEmptyPasswordConfirm)
                 {
-                    bool confirmEmpty = _dialogService.ShowConfirm("你输入的是空密码，确定要加入密码列表吗？");
+                    // 用带可选项位的确认框：勾上"本次运行内不再询问"后，这一次会话就不再打断。
+                    // 只记在内存里，重启后恢复询问 —— 免得用户忘了自己关过确认。
+                    bool confirmEmpty = _dialogService.ShowConfirm(
+                        "你输入的是空密码，确定要加入密码列表吗？",
+                        "本次运行内不再询问空密码",
+                        optionCheckedByDefault: false,
+                        out bool skipNextTime);
+
+                    if (skipNextTime)
+                    {
+                        _skipEmptyPasswordConfirm = true;
+                    }
 
                     if (!confirmEmpty)
                     {
                         Message = "已取消添加空密码。";
+                        SetNotice(PasswordNoticeKind.Info, "已取消添加空密码。");
                         return;
                     }
                 }
@@ -198,15 +310,22 @@ namespace ArchiveFixer.ViewModels
                     NewPassword = string.Empty;
                     ReloadFromService();
                     Message = "密码已添加。";
+                    SetNotice(
+                        PasswordNoticeKind.Success,
+                        password.Length == 0
+                            ? "已加入一条空密码（排在最前面尝试）。"
+                            : "已加入 1 条密码，排在列表末尾。");
                 }
                 else
                 {
                     Message = "密码已存在，未重复添加。";
+                    SetNotice(PasswordNoticeKind.Info, "这条密码已经在列表里了，没有重复添加。");
                 }
             }
             catch (Exception ex)
             {
                 Message = "添加密码失败：" + ex.Message;
+                SetNotice(PasswordNoticeKind.Error, "添加密码失败：" + ex.Message);
                 _dialogService.ShowError("添加密码失败：" + ex.Message);
             }
         }
@@ -221,6 +340,7 @@ namespace ArchiveFixer.ViewModels
             if (SelectedPassword == null)
             {
                 Message = "请先选择密码。";
+                SetNotice(PasswordNoticeKind.Info, "请先在列表里选中一条密码。");
                 return;
             }
 
@@ -243,15 +363,18 @@ namespace ArchiveFixer.ViewModels
                     SelectedPassword = null;
                     ReloadFromService();
                     Message = "密码已删除。";
+                    SetNotice(PasswordNoticeKind.Success, "已删除 1 条密码。");
                 }
                 else
                 {
                     Message = "删除失败，密码项不存在。";
+                    SetNotice(PasswordNoticeKind.Error, "删除失败：密码项不存在。");
                 }
             }
             catch (Exception ex)
             {
                 Message = "删除密码失败：" + ex.Message;
+                SetNotice(PasswordNoticeKind.Error, "删除密码失败：" + ex.Message);
                 _dialogService.ShowError("删除密码失败：" + ex.Message);
             }
         }
@@ -261,10 +384,14 @@ namespace ArchiveFixer.ViewModels
             if (Passwords.Count == 0)
             {
                 Message = "密码列表为空。";
+                SetNotice(PasswordNoticeKind.Info, "密码列表本来就是空的。");
                 return;
             }
 
-            bool confirm = _dialogService.ShowConfirm("确定要清空密码列表吗？");
+            // 危险操作：用警示样式的对话框，按钮文案写清"清空"而不是"是"（没有"不再询问"这一档）。
+            bool confirm = _dialogService.ShowDestructiveConfirm(
+                $"确定要清空密码列表吗？\n\n列表里现有的 {Passwords.Count} 条密码都会被移除，且无法撤销。",
+                "清空");
 
             if (!confirm)
             {
@@ -274,14 +401,18 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
+                int removedCount = Passwords.Count;
+
                 _passwordService.ClearPasswords();
                 SelectedPassword = null;
                 ReloadFromService();
                 Message = "密码列表已清空。";
+                SetNotice(PasswordNoticeKind.Success, $"已清空 {removedCount} 条密码。");
             }
             catch (Exception ex)
             {
                 Message = "清空密码失败：" + ex.Message;
+                SetNotice(PasswordNoticeKind.Error, "清空密码失败：" + ex.Message);
                 _dialogService.ShowError("清空密码失败：" + ex.Message);
             }
         }
@@ -307,17 +438,33 @@ namespace ArchiveFixer.ViewModels
                 RememberPasswordBookPath(path);
 
                 // 与主界面「工具 → 导入密码本…」同一套文案：条数 + 已记住 + 下次启动自动加载。
-                // 以前这里只有"已导入 N 个新密码"，用户看不出到底记住没有，也是"导入又关掉重开什么都没有"的来源。
-                Message = $"已导入 {imported.Count} 条密码，并记住了这个文件，下次启动会自动加载。";
+                // 以前这里只有"已导入 N 个新密码"，用户看不出到底记住没有，
+                // 而且只写在底部一行小字里 —— 现在改成窗口内的提示条，不容易被忽略。
+                int warningCount = _passwordService.LastImportWarnings.Count;
 
-                if (_passwordService.LastImportWarnings.Count > 0)
+                string summary =
+                    $"已从「{System.IO.Path.GetFileName(path)}」导入 {imported.Count} 条新密码，" +
+                    $"当前共 {TotalCount} 条（启用 {EnabledCount} 条）。" +
+                    "已记住这个文件，下次启动会自动加载。";
+
+                if (warningCount > 0)
                 {
-                    Message += "　提示：" + string.Join("；", _passwordService.LastImportWarnings);
+                    summary += Environment.NewLine + "解析警告（这些行被跳过，密码本身没有丢）："
+                        + Environment.NewLine + "· " + string.Join(Environment.NewLine + "· ", _passwordService.LastImportWarnings);
+
+                    Message = $"已导入 {imported.Count} 条密码，有 {warningCount} 条解析警告。";
+                    SetNotice(PasswordNoticeKind.Warning, summary);
+                }
+                else
+                {
+                    Message = $"已导入 {imported.Count} 条密码，并记住了这个文件，下次启动会自动加载。";
+                    SetNotice(PasswordNoticeKind.Success, summary);
                 }
             }
             catch (Exception ex)
             {
                 Message = "导入密码失败：" + ex.Message;
+                SetNotice(PasswordNoticeKind.Error, "导入密码失败：" + ex.Message);
                 _dialogService.ShowError("导入密码失败：" + ex.Message);
             }
         }
@@ -372,6 +519,7 @@ namespace ArchiveFixer.ViewModels
             if (SelectedPassword == null)
             {
                 Message = "请先选择密码。";
+                SetNotice(PasswordNoticeKind.Info, "请先在列表里选中一条密码。");
                 return;
             }
 
@@ -384,11 +532,13 @@ namespace ArchiveFixer.ViewModels
                     ReloadFromService();
                     SelectedPassword = item;
                     Message = "已上移。";
+                    SetNotice(PasswordNoticeKind.Info, "已上移一位：越靠前的密码越先被尝试。");
                 }
             }
             catch (Exception ex)
             {
                 Message = "上移失败：" + ex.Message;
+                SetNotice(PasswordNoticeKind.Error, "上移失败：" + ex.Message);
             }
         }
 
@@ -408,6 +558,7 @@ namespace ArchiveFixer.ViewModels
             if (SelectedPassword == null)
             {
                 Message = "请先选择密码。";
+                SetNotice(PasswordNoticeKind.Info, "请先在列表里选中一条密码。");
                 return;
             }
 
@@ -420,11 +571,13 @@ namespace ArchiveFixer.ViewModels
                     ReloadFromService();
                     SelectedPassword = item;
                     Message = "已下移。";
+                    SetNotice(PasswordNoticeKind.Info, "已下移一位：越靠后的密码越晚被尝试。");
                 }
             }
             catch (Exception ex)
             {
                 Message = "下移失败：" + ex.Message;
+                SetNotice(PasswordNoticeKind.Error, "下移失败：" + ex.Message);
             }
         }
 
@@ -432,6 +585,17 @@ namespace ArchiveFixer.ViewModels
         {
             ShowPasswords = !ShowPasswords;
             Message = ShowPasswords ? "已显示明文密码。" : "已隐藏明文密码。";
+
+            if (ShowPasswords)
+            {
+                SetNotice(
+                    PasswordNoticeKind.Warning,
+                    "正在显示明文密码。注意旁人视线，不需要看时请点「隐藏明文」或直接关窗。");
+            }
+            else
+            {
+                SetNotice(PasswordNoticeKind.Info, "已恢复隐藏，密码列重新显示为圆点。");
+            }
         }
 
         private void EnableAll()
@@ -443,6 +607,7 @@ namespace ArchiveFixer.ViewModels
 
             RefreshStatistics();
             Message = "已启用全部密码。";
+            SetNotice(PasswordNoticeKind.Success, $"已启用全部 {TotalCount} 条密码，它们都会参与尝试。");
         }
 
         private void DisableAll()
@@ -454,6 +619,7 @@ namespace ArchiveFixer.ViewModels
 
             RefreshStatistics();
             Message = "已禁用全部密码。";
+            SetNotice(PasswordNoticeKind.Warning, "已禁用全部密码：列表保留，但一条都不会被尝试。");
         }
 
         public string GetPasswordDisplayText(PasswordItem item)
@@ -505,6 +671,7 @@ namespace ArchiveFixer.ViewModels
         {
             OnPropertyChanged(nameof(TotalCount));
             OnPropertyChanged(nameof(EnabledCount));
+            OnPropertyChanged(nameof(IsEmpty));
             RaiseCommandStates();
         }
 
@@ -517,6 +684,7 @@ namespace ArchiveFixer.ViewModels
             RaiseCanExecuteChanged(MoveDownCommand);
             RaiseCanExecuteChanged(EnableAllCommand);
             RaiseCanExecuteChanged(DisableAllCommand);
+            RaiseCanExecuteChanged(DismissNoticeCommand);
         }
 
         private static void RaiseCanExecuteChanged(ICommand command)

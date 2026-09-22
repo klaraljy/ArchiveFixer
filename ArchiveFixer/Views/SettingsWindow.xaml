@@ -1,470 +1,482 @@
 <Window x:Class="ArchiveFixer.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource AppWindowStyle}"
         Title="设置"
-        Width="760"
-        Height="680"
-        MinWidth="680"
+        Width="840"
+        Height="720"
+        MinWidth="780"
         MinHeight="560"
-        WindowStartupLocation="CenterOwner"
-        Background="#F5F5F5"
-        UseLayoutRounding="True"
-        SnapsToDevicePixels="True"
-        TextOptions.TextFormattingMode="Display">
+        WindowStartupLocation="CenterOwner">
 
-	<Window.Resources>
-		<!-- 本窗口色板：把原先散落的 #RRGGBB 字面量收敛到一处。 -->
-		<SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
-		<SolidColorBrush x:Key="PanelBorderBrush" Color="#DDDDDD" />
-		<SolidColorBrush x:Key="TextPrimaryBrush" Color="#333333" />
-		<SolidColorBrush x:Key="TextSecondaryBrush" Color="#555555" />
-		<SolidColorBrush x:Key="TextMutedBrush" Color="#666666" />
-		<SolidColorBrush x:Key="TextHintBrush" Color="#777777" />
-		<SolidColorBrush x:Key="WarningTextBrush" Color="#B25E00" />
-	</Window.Resources>
+    <!--
+        设置窗口（UI v2）。
+        改之前：8 个分组框挤在一起、字号只有一档、主次不分，而且"解压到哪"要靠
+        「解压到压缩包所在目录」+「保留压缩包同名文件夹」两个开关自己组合。
+        现在：分组标题独立成行、说明文字统一小字灰、输出位置改成四选一 + 实时示例，
+        底部按钮按"危险在左、主操作在最右"排列。
+    -->
 
-	<DockPanel Margin="10">
+    <DockPanel Margin="12">
 
-		<Border DockPanel.Dock="Top"
-                Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource PanelBorderBrush}"
-                BorderThickness="1"
-                CornerRadius="4"
-                Padding="10"
-                Margin="0,0,0,8">
-			<StackPanel>
-				<TextBlock Text="设置"
-                           FontSize="18"
-                           FontWeight="Bold"
-                           Foreground="{StaticResource TextPrimaryBrush}" />
+        <!-- ============ 标题区 ============ -->
+        <Border DockPanel.Dock="Top" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
+            <StackPanel>
+                <TextBlock Text="设置" Style="{StaticResource PageTitleTextStyle}" />
 
-				<TextBlock Text="修改扫描、识别、改名、解压、密码和日志相关选项。点击保存后生效。"
-                           Margin="0,4,0,0"
-                           Foreground="{StaticResource TextMutedBrush}" />
-			</StackPanel>
-		</Border>
+                <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,5,0,0"
+                           Text="修改扫描、识别、改名、解压、密码和日志相关选项。改完点右下角「保存」才生效；点「取消」不写入。" />
+            </StackPanel>
+        </Border>
 
-		<Border DockPanel.Dock="Bottom"
-                Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource PanelBorderBrush}"
-                BorderThickness="1"
-                CornerRadius="4"
-                Padding="10"
-                Margin="0,8,0,0">
-			<Grid>
-				<Grid.ColumnDefinitions>
-					<ColumnDefinition Width="*" />
-					<ColumnDefinition Width="Auto" />
-				</Grid.ColumnDefinitions>
+        <!-- ============ 底部按钮区：危险操作在左，主操作在最右 ============ -->
+        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Margin="0,8,0,0">
+            <DockPanel>
+                <Button DockPanel.Dock="Left"
+                        Content="恢复默认"
+                        MinWidth="96"
+                        Style="{StaticResource DangerOutlineButtonStyle}"
+                        ToolTip="把这一页恢复成默认值（不会马上写盘，仍需点「保存」）"
+                        Command="{Binding ResetDefaultCommand}" />
 
-				<TextBlock Text="{Binding Message}"
-                           VerticalAlignment="Center"
-                           Foreground="{StaticResource TextSecondaryBrush}"
-                           TextTrimming="CharacterEllipsis" />
-
-				<StackPanel Grid.Column="1"
-                            Orientation="Horizontal">
-					<Button Content="恢复默认"
-                            Width="90"
-                            Margin="0,0,12,0"
-                            Command="{Binding ResetDefaultCommand}" />
-
-					<Button Content="保存"
-                            Width="90"
-                            Margin="0,0,6,0"
-                            FontWeight="Bold"
-                            Command="{Binding SaveCommand}" />
-
-					<Button Content="取消"
-                            Width="90"
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="取消"
+                            MinWidth="88"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Margin="0,0,8,0"
                             IsCancel="True"
                             Command="{Binding CancelCommand}" />
-				</StackPanel>
-			</Grid>
-		</Border>
 
-		<ScrollViewer VerticalScrollBarVisibility="Auto">
-			<StackPanel>
+                    <Button Content="保存"
+                            MinWidth="96"
+                            Style="{StaticResource PrimaryButtonStyle}"
+                            ToolTip="写入 appsettings.json 并立即生效"
+                            Command="{Binding SaveCommand}" />
+                </StackPanel>
 
-				<!-- 扫描设置 -->
-				<GroupBox Header="扫描设置"
-                          Margin="0,0,0,8"
-                          Padding="10"
-                          Background="{StaticResource PanelBrush}">
-					<StackPanel>
-						<CheckBox Content="递归扫描文件夹"
-                                  IsChecked="{Binding Settings.RecursiveScan, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
+                <TextBlock Text="{Binding Message}"
+                           Style="{StaticResource HintTextStyle}"
+                           VerticalAlignment="Center"
+                           Margin="16,0"
+                           TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+        </Border>
 
-						<CheckBox Content="拖拽导入后自动扫描"
-                                  IsChecked="{Binding Settings.AutoScanAfterDrop, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+            <StackPanel>
 
-						<Grid Margin="0,0,0,4">
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                <!-- ==================== 输出位置（四选一） ==================== -->
+                <GroupBox Header="输出位置（解压到哪）">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,0,0,8"
+                                   Text="四选一，互斥。下面写的就是这一档的实际落点，括号里是例子。" />
 
-							<TextBlock Text="扫描模式："
-                                       VerticalAlignment="Center" />
+                        <RadioButton GroupName="OutputPlacement"
+                                     IsChecked="{Binding OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=ArchiveNamedSubfolder, Mode=TwoWay}">
+                            <StackPanel>
+                                <TextBlock Text="解压到以压缩包名命名的子文件夹（默认）" Style="{StaticResource BodyTextStyle}" />
+                                <TextBlock Text="111\222.rar → 111\222\内容物　（与 WinRAR 默认一致，不会和同目录其它文件混在一起）"
+                                           Style="{StaticResource HintTextStyle}" />
+                            </StackPanel>
+                        </RadioButton>
 
-							<ComboBox Grid.Column="1"
+                        <RadioButton GroupName="OutputPlacement"
+                                     IsChecked="{Binding OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=SourceDirectory, Mode=TwoWay}">
+                            <StackPanel>
+                                <TextBlock Text="解压到压缩包所在目录" Style="{StaticResource BodyTextStyle}" />
+                                <TextBlock Text="111\222.rar → 111\内容物　（产物直接落在包旁边）"
+                                           Style="{StaticResource HintTextStyle}" />
+                            </StackPanel>
+                        </RadioButton>
+
+                        <RadioButton GroupName="OutputPlacement"
+                                     IsChecked="{Binding OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=CustomNamedSubfolder, Mode=TwoWay}">
+                            <StackPanel>
+                                <TextBlock Text="解压到指定位置，并建立同名子文件夹" Style="{StaticResource BodyTextStyle}" />
+                                <TextBlock Text="111\222.rar → 333\222\内容物　（多个包各占一个文件夹，适合归集整理）"
+                                           Style="{StaticResource HintTextStyle}" />
+                            </StackPanel>
+                        </RadioButton>
+
+                        <RadioButton GroupName="OutputPlacement"
+                                     IsChecked="{Binding OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=CustomFlat, Mode=TwoWay}">
+                            <StackPanel>
+                                <TextBlock Text="解压到指定位置，直接放在该目录下" Style="{StaticResource BodyTextStyle}" />
+                                <TextBlock Text="111\222.rar → 333\内容物　（所有包的内容物摊在同一个目录里）"
+                                           Style="{StaticResource HintTextStyle}" />
+                            </StackPanel>
+                        </RadioButton>
+
+                        <!-- 实时示例：切换单选后马上能看出落点 -->
+                        <Border Style="{StaticResource InfoBannerStyle}" Margin="0,10,0,10">
+                            <StackPanel>
+                                <TextBlock Text="当前落点" Style="{StaticResource CardTitleTextStyle}"
+                                           Foreground="{StaticResource InfoTextBrush}" />
+                                <TextBlock Text="{Binding OutputPlacementSummary}"
+                                           Style="{StaticResource BannerTextStyle}"
+                                           Foreground="{StaticResource InfoTextBrush}"
+                                           FontFamily="{StaticResource MonoFontFamily}"
+                                           Margin="0,3,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                                       Text="指定位置："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding CustomOutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding IsCustomOutputEnabled}"
+                                     ToolTip="只有上面选了「解压到指定位置」的两档才用得上；留空时按压缩包所在目录处理。" />
+
+                            <Button Grid.Column="2"
+                                    Content="选择"
+                                    MinWidth="72"
+                                    Margin="8,0,0,0"
+                                    IsEnabled="{Binding IsCustomOutputEnabled}"
+                                    Command="{Binding SelectOutputDirectoryCommand}" />
+
+                            <TextBlock Grid.Column="3"
+                                       Text="（不适用）"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsCustomOutputEnabled}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,8,0,0"
+                                   Text="说明：改这里只影响之后启动的解压；已经解压过的任务保持原落点。" />
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- ==================== 扫描设置 ==================== -->
+                <GroupBox Header="扫描设置">
+                    <StackPanel>
+                        <CheckBox Content="递归扫描文件夹"
+                                  IsChecked="{Binding Settings.RecursiveScan, Mode=TwoWay}" />
+
+                        <CheckBox Content="拖拽导入后自动扫描"
+                                  IsChecked="{Binding Settings.AutoScanAfterDrop, Mode=TwoWay}" />
+
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Text="扫描模式："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <ComboBox Grid.Column="1"
                                       SelectedValue="{Binding Settings.ScanMode, Mode=TwoWay}"
                                       SelectedValuePath="Tag">
-								<ComboBoxItem Content="扫描全部文件"
-                                              Tag="ScanAllFiles" />
-								<ComboBoxItem Content="只扫描常见压缩后缀"
-                                              Tag="ScanKnownArchiveExtensions" />
-								<ComboBoxItem Content="扫描可疑文件"
-                                              Tag="ScanSuspiciousFiles" />
-							</ComboBox>
-						</Grid>
-					</StackPanel>
-				</GroupBox>
+                                <ComboBoxItem Content="扫描全部文件" Tag="ScanAllFiles" />
+                                <ComboBoxItem Content="只扫描常见压缩后缀" Tag="ScanKnownArchiveExtensions" />
+                                <ComboBoxItem Content="扫描可疑文件" Tag="ScanSuspiciousFiles" />
+                            </ComboBox>
+                        </Grid>
 
-				<!-- 识别设置 -->
-				<GroupBox Header="识别设置"
-                          Margin="0,0,0,8"
-                          Padding="10"
-                          Background="{StaticResource PanelBrush}">
-					<StackPanel>
-						<Grid Margin="0,0,0,8">
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,8,0,0"
+                                   Text="格式靠文件头识别，不靠后缀 —— 后缀被改坏的包也能认出来。" />
+                    </StackPanel>
+                </GroupBox>
 
-							<TextBlock Text="未知格式处理："
-                                       VerticalAlignment="Center" />
+                <!-- ==================== 识别设置 ==================== -->
+                <GroupBox Header="识别设置">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-							<ComboBox Grid.Column="1"
+                            <TextBlock Text="未知格式处理："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <ComboBox Grid.Column="1"
                                       SelectedValue="{Binding Settings.UnknownFormatAction, Mode=TwoWay}"
                                       SelectedValuePath="Tag">
-								<ComboBoxItem Content="加入列表并标记未知"
-                                              Tag="MarkUnknown" />
-								<ComboBoxItem Content="跳过"
-                                              Tag="Skip" />
-								<ComboBoxItem Content="仍尝试解压"
-                                              Tag="TryExtract" />
-							</ComboBox>
-						</Grid>
+                                <ComboBoxItem Content="加入列表并标记未知" Tag="MarkUnknown" />
+                                <ComboBoxItem Content="跳过" Tag="Skip" />
+                                <ComboBoxItem Content="仍尝试解压" Tag="TryExtract" />
+                            </ComboBox>
+                        </Grid>
 
-						<Grid>
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-							<TextBlock Text="默认补充后缀："
-                                       VerticalAlignment="Center" />
+                            <TextBlock Text="默认补充后缀："
+                                       Style="{StaticResource LabelTextStyle}" />
 
-							<TextBox Grid.Column="1"
+                            <TextBox Grid.Column="1"
                                      Text="{Binding Settings.DefaultExtension, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     Height="28"
-                                     VerticalContentAlignment="Center"
                                      ToolTip="例如 .7z、.zip、.rar" />
-						</Grid>
-					</StackPanel>
-				</GroupBox>
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
 
-				<!-- 后缀修正设置 -->
-				<GroupBox Header="后缀修正设置"
-                          Margin="0,0,0,8"
-                          Padding="10"
-                          Background="{StaticResource PanelBrush}">
-					<StackPanel>
-						<CheckBox Content="改名前显示预览"
-                                  IsChecked="{Binding Settings.PreviewBeforeRename, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
+                <!-- ==================== 后缀与改名 ==================== -->
+                <GroupBox Header="后缀与改名">
+                    <StackPanel>
+                        <CheckBox Content="改名前显示预览"
+                                  IsChecked="{Binding Settings.PreviewBeforeRename, Mode=TwoWay}" />
 
-						<Grid>
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,8"
+                                   Text="当前版本改名一定会先弹预览（安全约束），所以取消勾选也不会跳过预览。" />
 
-							<TextBlock Text="改名冲突处理："
-                                       VerticalAlignment="Center" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-							<ComboBox Grid.Column="1"
+                            <TextBlock Text="改名冲突处理："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <ComboBox Grid.Column="1"
                                       SelectedValue="{Binding Settings.ConflictAction, Mode=TwoWay}"
                                       SelectedValuePath="Tag">
-								<ComboBoxItem Content="跳过"
-                                              Tag="Skip" />
-								<ComboBoxItem Content="覆盖"
-                                              Tag="Overwrite" />
-								<ComboBoxItem Content="自动重命名"
-                                              Tag="AutoRename" />
-								<ComboBoxItem Content="询问"
-                                              Tag="Ask" />
-							</ComboBox>
-						</Grid>
-					</StackPanel>
-				</GroupBox>
+                                <ComboBoxItem Content="跳过" Tag="Skip" />
+                                <ComboBoxItem Content="覆盖" Tag="Overwrite" />
+                                <ComboBoxItem Content="自动重命名" Tag="AutoRename" />
+                                <ComboBoxItem Content="询问" Tag="Ask" />
+                            </ComboBox>
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
 
-				<!-- 解压设置 -->
-				<GroupBox Header="解压设置"
-                          Margin="0,0,0,8"
-                          Padding="10"
-                          Background="{StaticResource PanelBrush}">
-					<StackPanel>
-						<CheckBox Content="解压到压缩包所在目录"
-                                  IsChecked="{Binding Settings.ExtractToOriginalDirectory, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
+                <!-- ==================== 解压与整理 ==================== -->
+                <GroupBox Header="解压与整理">
+                    <StackPanel>
+                        <CheckBox Content="解压前测试完整性"
+                                  IsChecked="{Binding Settings.TestBeforeExtract, Mode=TwoWay}" />
 
-						<CheckBox Content="保留压缩包同名文件夹"
-                                  IsChecked="{Binding Settings.KeepArchiveNameFolder, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
-
-						<CheckBox Content="解压前测试完整性"
-                                  IsChecked="{Binding Settings.TestBeforeExtract, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
-
-						<Grid Margin="0,0,0,8">
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-								<ColumnDefinition Width="Auto" />
-							</Grid.ColumnDefinitions>
-
-							<TextBlock Text="自定义输出目录："
-                                       VerticalAlignment="Center" />
-
-							<TextBox Grid.Column="1"
-                                     Text="{Binding Settings.CustomOutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     Height="28"
-                                     VerticalContentAlignment="Center" />
-
-							<Button Grid.Column="2"
-                                    Content="选择"
-                                    Width="70"
-                                    Margin="8,0,0,0"
-                                    Command="{Binding SelectOutputDirectoryCommand}" />
-						</Grid>
-
-						<!-- M3：结果归集。把每个包的产物移动到一个统一目录，方便一次性整理走。 -->
-						<CheckBox Content="把解压结果归集到统一目录"
+                        <!-- M3：结果归集。把每个包的产物移动到一个统一目录，方便一次性整理走。 -->
+                        <CheckBox Content="把解压结果归集到统一目录"
                                   IsChecked="{Binding Settings.CollectResultsToDirectory, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
+                                  Margin="0,8,0,4" />
 
-						<Grid Margin="0,0,0,8">
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-								<ColumnDefinition Width="Auto" />
-							</Grid.ColumnDefinitions>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
 
-							<TextBlock Text="归集目标目录："
-                                       VerticalAlignment="Center" />
+                            <TextBlock Text="归集目标目录："
+                                       Style="{StaticResource LabelTextStyle}" />
 
-							<TextBox Grid.Column="1"
-                                     Text="{Binding Settings.CollectTargetDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     Height="28"
-                                     VerticalContentAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding Settings.CollectTargetDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-							<Button Grid.Column="2"
+                            <Button Grid.Column="2"
                                     Content="选择"
-                                    Width="70"
+                                    MinWidth="72"
                                     Margin="8,0,0,0"
                                     Command="{Binding SelectCollectTargetDirectoryCommand}" />
-						</Grid>
+                        </Grid>
 
-						<!-- M3：清理源包。不可逆操作，因此默认关闭，并且只有"解压成功 + 校验通过"才删。 -->
-						<CheckBox Content="解压成功且校验通过后删除源压缩包／源分卷"
-                                  IsChecked="{Binding Settings.DeleteSourceAfterExtract, Mode=TwoWay}"
-                                  Margin="0,0,0,4" />
+                        <Separator Margin="0,4,0,10" />
 
-						<TextBlock Text="⚠ 删除不可逆：校验不通过、被取消、只完成一部分时一律不删。默认关闭。"
-                                   Foreground="{StaticResource WarningTextBrush}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="24,0,0,8" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-						<!-- M4：递归解压。多分支默认不展开，必须问（AGENTS.md §6 第 8 条）。 -->
-						<Grid Margin="0,0,0,8">
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                            <TextBlock Text="嵌套压缩包："
+                                       Style="{StaticResource LabelTextStyle}" />
 
-							<TextBlock Text="嵌套压缩包："
-                                       VerticalAlignment="Center" />
-
-							<ComboBox Grid.Column="1"
+                            <ComboBox Grid.Column="1"
                                       SelectedValue="{Binding Settings.RecursionMode, Mode=TwoWay}"
                                       SelectedValuePath="Tag">
-								<ComboBoxItem Content="只解当前这一层"
-                                              Tag="SingleLayer" />
-								<ComboBoxItem Content="单链自动展开（推荐：只有一个内层包时才继续）"
-                                              Tag="SingleChain" />
-								<ComboBoxItem Content="展开所有分支（内层有多个包时全部解开）"
-                                              Tag="AllBranches" />
-							</ComboBox>
-						</Grid>
+                                <ComboBoxItem Content="只解当前这一层" Tag="SingleLayer" />
+                                <ComboBoxItem Content="单链自动展开（推荐：只有一个内层包时才继续）" Tag="SingleChain" />
+                                <ComboBoxItem Content="展开所有分支（内层有多个包时全部解开）" Tag="AllBranches" />
+                            </ComboBox>
+                        </Grid>
 
-						<Grid Margin="0,0,0,8">
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-							<TextBlock Text="最大嵌套层数："
-                                       VerticalAlignment="Center" />
+                            <TextBlock Text="最大嵌套层数："
+                                       Style="{StaticResource LabelTextStyle}" />
 
-							<TextBox Grid.Column="1"
+                            <TextBox Grid.Column="1"
                                      Text="{Binding Settings.MaxRecursionDepth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     Width="80"
-                                     HorizontalAlignment="Left"
-                                     Height="28"
-                                     VerticalContentAlignment="Center"
                                      ToolTip="1~10。到达上限会安全停下并报告停在哪一层，不会无限展开。" />
-						</Grid>
 
-						<Grid Margin="0,0,0,8">
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="2"
+                                       Style="{StaticResource HintTextStyle}"
+                                       Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Text="1~10。到上限会停下并报告，不会无限展开。" />
+                        </Grid>
 
-							<TextBlock Text="解压覆盖策略："
-                                       VerticalAlignment="Center" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-							<ComboBox Grid.Column="1"
+                            <TextBlock Text="解压覆盖策略："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <ComboBox Grid.Column="1"
                                       SelectedValue="{Binding Settings.OverwriteMode, Mode=TwoWay}"
                                       SelectedValuePath="Tag">
-								<ComboBoxItem Content="跳过已存在文件"
-                                              Tag="SkipExisting" />
-								<ComboBoxItem Content="覆盖全部"
-                                              Tag="OverwriteAll" />
-								<ComboBoxItem Content="自动重命名解压出的文件"
-                                              Tag="AutoRenameExtracted" />
-								<ComboBoxItem Content="自动重命名已存在文件"
-                                              Tag="AutoRenameExisting" />
-							</ComboBox>
-						</Grid>
+                                <ComboBoxItem Content="跳过已存在文件" Tag="SkipExisting" />
+                                <ComboBoxItem Content="覆盖全部" Tag="OverwriteAll" />
+                                <ComboBoxItem Content="自动重命名解压出的文件" Tag="AutoRenameExtracted" />
+                                <ComboBoxItem Content="自动重命名已存在文件" Tag="AutoRenameExisting" />
+                            </ComboBox>
+                        </Grid>
 
-						<Grid>
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="120" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-							<TextBlock Text="最大并发解压数："
-                                       VerticalAlignment="Center" />
+                            <TextBlock Text="最大并发解压数："
+                                       Style="{StaticResource LabelTextStyle}" />
 
-							<TextBox Grid.Column="1"
-                                     Text="{Binding Settings.MaxParallelExtractCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     Height="28"
-                                     VerticalContentAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding Settings.MaxParallelExtractCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
-							<TextBlock Grid.Column="2"
-                                       Text="默认建议为 1，串行更稳定。"
+                            <TextBlock Grid.Column="2"
+                                       Style="{StaticResource HintTextStyle}"
                                        Margin="8,0,0,0"
-                                       Foreground="{StaticResource TextHintBrush}"
-                                       VerticalAlignment="Center" />
-						</Grid>
-					</StackPanel>
-				</GroupBox>
+                                       VerticalAlignment="Center"
+                                       Text="默认 1（串行）更稳定。" />
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
 
-				<!-- 密码设置 -->
-				<GroupBox Header="密码设置"
-                          Margin="0,0,0,8"
-                          Padding="10"
-                          Background="{StaticResource PanelBrush}">
-					<StackPanel>
-						<CheckBox Content="优先尝试空密码"
-                                  IsChecked="{Binding Settings.TryEmptyPasswordFirst, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
+                <!-- ==================== 清理源包（不可逆） ==================== -->
+                <GroupBox Header="清理源包（不可逆）">
+                    <StackPanel>
+                        <CheckBox Content="解压成功且校验通过后删除源压缩包／源分卷"
+                                  IsChecked="{Binding Settings.DeleteSourceAfterExtract, Mode=TwoWay}" />
 
-						<CheckBox Content="对所有任务使用统一密码"
-                                  IsChecked="{Binding Settings.UseGlobalPasswordForAllTasks, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
+                        <Border Style="{StaticResource WarningBannerStyle}" Margin="0,8,0,0">
+                            <TextBlock Style="{StaticResource BannerTextStyle}"
+                                       Foreground="{StaticResource WarningTextBrush}"
+                                       Text="⚠ 删除不可逆。只有「解压成功 + 输出校验通过」才会删；校验不通过、被取消、只完成一部分时一律不删。默认关闭。" />
+                        </Border>
+                    </StackPanel>
+                </GroupBox>
 
-						<!-- M2：旁路说明文件。这是"猜"出来的候选，默认关闭（AGENTS.md §9.4）。 -->
-						<CheckBox Content="从压缩包同目录的说明文件里提取密码候选（.txt/.bat 等）"
+                <!-- ==================== 密码设置 ==================== -->
+                <GroupBox Header="密码设置">
+                    <StackPanel>
+                        <CheckBox Content="优先尝试空密码"
+                                  IsChecked="{Binding Settings.TryEmptyPasswordFirst, Mode=TwoWay}" />
+
+                        <CheckBox Content="对所有任务使用统一密码"
+                                  IsChecked="{Binding Settings.UseGlobalPasswordForAllTasks, Mode=TwoWay}" />
+
+                        <!-- M2：旁路说明文件。这是"猜"出来的候选，默认关闭（AGENTS.md §9.4）。 -->
+                        <CheckBox Content="从压缩包同目录的说明文件里提取密码候选（.txt/.bat 等）"
                                   IsChecked="{Binding Settings.EnableSidecarPassword, Mode=TwoWay}"
-                                  Margin="0,0,0,4" />
+                                  Margin="0,8,0,2" />
 
-						<TextBlock Text="开启后会把同目录说明文件里像密码的内容当作候选；候选排在用户明确给的密码之后。默认关闭。"
-                                   Foreground="{StaticResource TextHintBrush}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="24,0,0,8" />
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,8"
+                                   Text="开启后会把同目录说明文件里像密码的内容当作候选；候选排在用户明确给的密码之后。默认关闭。" />
 
-						<!-- 每层的密码尝试上限（AGENTS.md §9.2）：到上限时状态是「达到密码尝试上限」，不是"密码错误"。 -->
-						<Grid>
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="120" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-							<TextBlock Text="每层密码尝试上限："
-                                       VerticalAlignment="Center" />
+                            <TextBlock Text="每层尝试上限："
+                                       Style="{StaticResource LabelTextStyle}" />
 
-							<TextBox Grid.Column="1"
+                            <TextBox Grid.Column="1"
                                      Text="{Binding Settings.MaxPasswordAttemptsPerLayer, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     Height="28"
-                                     VerticalContentAlignment="Center"
                                      ToolTip="1~1000。每个包最多真的试这么多条候选；到上限会明确报「达到密码尝试上限」，不会报成密码错误。" />
 
-							<TextBlock Grid.Column="2"
-                                       Text="默认 10。密码本很长时调大才会试更多，但每个包都会更慢。"
+                            <TextBlock Grid.Column="2"
+                                       Style="{StaticResource HintTextStyle}"
                                        Margin="8,0,0,0"
-                                       Foreground="{StaticResource TextHintBrush}"
                                        VerticalAlignment="Center"
-                                       TextWrapping="Wrap" />
-						</Grid>
-					</StackPanel>
-				</GroupBox>
+                                       Text="默认 10。密码本很长时调大才会试更多，但每个包都会更慢。" />
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
 
-				<!-- 日志设置 -->
-				<GroupBox Header="日志设置"
-                          Margin="0,0,0,8"
-                          Padding="10"
-                          Background="{StaticResource PanelBrush}">
-					<StackPanel>
-						<CheckBox Content="启用日志文件"
+                <!-- ==================== 日志设置 ==================== -->
+                <GroupBox Header="日志设置">
+                    <StackPanel>
+                        <CheckBox Content="启用日志文件"
                                   IsChecked="{Binding Settings.EnableLog, Mode=TwoWay}" />
-					</StackPanel>
-				</GroupBox>
 
-				<!-- 高级设置 -->
-				<GroupBox Header="高级设置"
-                          Margin="0,0,0,8"
-                          Padding="10"
-                          Background="{StaticResource PanelBrush}">
-					<StackPanel>
-						<CheckBox Content="记住上次输出目录"
-                                  IsChecked="{Binding Settings.RememberLastOutputDirectory, Mode=TwoWay}"
-                                  Margin="0,0,0,8" />
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,0"
+                                   Text="当前版本的日志文件始终写在 data\logs 下，这个开关暂不影响它（见「已知限制」）。" />
+                    </StackPanel>
+                </GroupBox>
 
-						<!-- 7z.exe 路径只有这一个入口，程序不再猜 D:\7-Zip（AGENTS.md §3.1）。 -->
-						<Grid Margin="0,0,0,8">
-							<Grid.ColumnDefinitions>
-								<ColumnDefinition Width="130" />
-								<ColumnDefinition Width="*" />
-							</Grid.ColumnDefinitions>
+                <!-- ==================== 高级设置 ==================== -->
+                <GroupBox Header="高级设置">
+                    <StackPanel>
+                        <CheckBox Content="记住上次输出目录"
+                                  IsChecked="{Binding Settings.RememberLastOutputDirectory, Mode=TwoWay}" />
 
-							<TextBlock Text="7z.exe 路径："
-                                       VerticalAlignment="Center" />
+                        <!-- 7z.exe 路径只有这一个入口，程序不再猜 D:\7-Zip（AGENTS.md §3.1）。 -->
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-							<TextBox Grid.Column="1"
+                            <TextBlock Text="7z.exe 路径："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <TextBox Grid.Column="1"
                                      Text="{Binding Settings.CustomSevenZipExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                     Height="28"
-                                     VerticalContentAlignment="Center"
                                      ToolTip="留空表示使用程序目录下的 tools\7zip\7z.exe" />
-						</Grid>
+                        </Grid>
 
-						<TextBlock Text="安全提示：默认不覆盖用户文件，Unknown 默认跳过，改名前应显示预览。"
+                        <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="0,8,0,0"
-                                   Foreground="{StaticResource TextHintBrush}" />
-					</StackPanel>
-				</GroupBox>
+                                   Text="安全提示：默认不覆盖用户文件；未知格式默认跳过；改名一定会先给预览。" />
+                    </StackPanel>
+                </GroupBox>
 
-			</StackPanel>
-		</ScrollViewer>
-	</DockPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
 </Window>

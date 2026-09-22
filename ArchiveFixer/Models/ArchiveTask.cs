@@ -360,6 +360,32 @@ namespace ArchiveFixer.Models
         public string CollectedPath { get; set; } = string.Empty;
 
         /// <summary>
+        /// 本任务**所属的输出根**，即把它解出来的那个父任务的最终输出目录。
+        ///
+        /// 为什么要有这个字段（用户诉求"一个源包 = 一个最终目录"）：
+        /// 一键处理会续解内层包，旧的续解方式把内层包当成**新任务**，于是它按自己的路径算落点
+        /// （<c>22569473.7z.001</c> → <c>&lt;id&gt;.7z\内容物</c>），源目录旁边就多出好几个平级目录 ——
+        /// 用户的原话是"多弄了四个文件夹、分卷文件你居然又解压到外面来了、文件一多根本分不清"。
+        ///
+        /// 现在内层包带着父任务的落点走：<see cref="Services.PathService.BuildOutputPath"/> 见到它
+        /// 就直接返回这个目录，**不再套一层**。链上所有任务的产物因此归到同一个目录里。
+        ///
+        /// 空 = 最外层源包（落点由设置与源包路径算出来）。
+        /// </summary>
+        public string ParentOutputDirectory { get; set; } = string.Empty;
+
+        /// <summary>父任务的名字（只为日志与报告里说清"这个内层包属于谁"，不参与任何路径计算）。</summary>
+        public string ParentTaskName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 是不是"续解出来的内层包"（而不是用户直接给的源包）。
+        ///
+        /// 区分这两类很关键：内层包的源文件是**我们自己产出的中间件**（已经归到
+        /// <c>过程物</c> 里），既不是用户的源包、也不该被当成"输出目录冲突"重新起一个目录。
+        /// </summary>
+        public bool IsContinuationTask => !string.IsNullOrWhiteSpace(ParentOutputDirectory);
+
+        /// <summary>
         /// 创建任务。
         /// </summary>
         public ArchiveTask()

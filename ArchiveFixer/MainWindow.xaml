@@ -2,18 +2,14 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:viewModels="clr-namespace:ArchiveFixer.ViewModels"
-        xmlns:converters="clr-namespace:ArchiveFixer.Converters"
         xmlns:models="clr-namespace:ArchiveFixer.Models"
+        Style="{StaticResource AppWindowStyle}"
         Title="ArchiveFixer 第十一版 - 批量压缩包识别与解压工具"
         Width="1380"
-        Height="860"
+        Height="880"
         MinWidth="1180"
         MinHeight="720"
         WindowStartupLocation="CenterScreen"
-        Background="#F5F5F5"
-        UseLayoutRounding="True"
-        SnapsToDevicePixels="True"
-        TextOptions.TextFormattingMode="Display"
         AllowDrop="True"
         PreviewDragOver="Window_PreviewDragOver"
         Drop="Window_Drop">
@@ -22,73 +18,27 @@
         <viewModels:MainViewModel />
     </Window.DataContext>
 
-    <Window.Resources>
-        <converters:StatusToBrushConverter x:Key="StatusToBrushConverter" />
+    <!--
+        主窗口（UI v2）。
+        这一版只做"观感统一"，不动布局结构：
+        · 颜色/字号/间距/控件样式全部改引 App.xaml 的统一资源 —— 以前主窗口自带一套私有色板
+          和隐式样式（WPF 隐式样式不合并，会把 App.xaml 那份整个顶掉，于是同一类按钮在主窗口
+          和对话框里手感不同）；
+        · 「输出到：输入框 + 选择」换成只读的"当前输出位置"摘要 + 「改…」，
+          输出位置的设置只有设置窗口一处入口（四选一），主窗口不再有第二个选择按钮。
+    -->
 
-        <!--
-            本窗口的色板。
-            以前这里是 80 处散落的 #RRGGBB 字面量（同一个"灰"有 #DDDDDD/#D1D5DB 两个值、
-            文字灰有 5 档），改一处要全文件搜。收敛成这几个 Brush 后配色只在一个地方定义。
-            ⚠ App.xaml 里还有一套同名色板：那份是另一个代理负责的文件，这里不动它。
-        -->
-        <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="PanelAltBrush" Color="#FAFAFA" />
-        <SolidColorBrush x:Key="PanelBorderBrush" Color="#DDDDDD" />
-        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#333333" />
-        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#555555" />
-        <SolidColorBrush x:Key="TextMutedBrush" Color="#666666" />
-        <SolidColorBrush x:Key="TextHintBrush" Color="#777777" />
-        <SolidColorBrush x:Key="DangerTextBrush" Color="#AA0000" />
-        <SolidColorBrush x:Key="WarningTextBrush" Color="#B25E00" />
-        <SolidColorBrush x:Key="PrimarySoftBrush" Color="#E8F4FF" />
+    <DockPanel Margin="12">
 
-        <!--
-            隐式样式会「整个顶掉」App.xaml 的同类型隐式样式（WPF 不合并），
-            所以 App.xaml 里那条 Cursor="Hand" 在主窗口内一直无效 —— 主窗口按钮没有手型光标，
-            而设置/密码列表等对话框有。这里把 Cursor 补回来，两处手感才一致。
-        -->
-        <Style TargetType="Button">
-            <Setter Property="Height" Value="30" />
-            <Setter Property="MinWidth" Value="78" />
-            <Setter Property="Margin" Value="0,0,6,0" />
-            <Setter Property="Padding" Value="10,0" />
-            <Setter Property="Cursor" Value="Hand" />
-        </Style>
-
-        <Style TargetType="TextBox">
-            <Setter Property="Height" Value="28" />
-            <Setter Property="Padding" Value="5,2" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-        </Style>
-
-        <Style TargetType="ComboBox">
-            <Setter Property="Height" Value="28" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-        </Style>
-
-        <Style TargetType="CheckBox">
-            <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="Margin" Value="0,0,12,0" />
-        </Style>
-
-        <Style TargetType="GroupBox">
-            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource PanelBorderBrush}" />
-            <Setter Property="Padding" Value="8" />
-            <Setter Property="Margin" Value="0,0,0,8" />
-        </Style>
-    </Window.Resources>
-
-    <DockPanel Margin="10">
-
-        <!-- 顶部菜单：低频操作收进菜单，主界面不再堆一排按钮 -->
+        <!-- 顶部菜单：低频操作收进菜单 -->
         <Menu DockPanel.Dock="Top"
-              Margin="0,0,0,6"
+              Margin="0,0,0,8"
+              Padding="2"
               Background="Transparent">
             <MenuItem Header="文件">
                 <MenuItem Header="添加文件..." Command="{Binding AddFilesCommand}" />
                 <MenuItem Header="添加文件夹..." Command="{Binding AddFolderCommand}" />
-
+                <Separator />
                 <MenuItem Header="重新扫描" Command="{Binding ScanCommand}" />
                 <MenuItem Header="移除选中" Command="{Binding RemoveSelectedCommand}" />
                 <MenuItem Header="清空列表" Command="{Binding ClearCommand}" />
@@ -96,179 +46,206 @@
             <MenuItem Header="工具">
                 <MenuItem Header="设置..." Command="{Binding OpenSettingsCommand}" />
                 <MenuItem Header="导入密码本..." Command="{Binding ImportPasswordBookCommand}" />
-                <MenuItem Header="密码列表..." Command="{Binding OpenPasswordListCommand}" />
-
+                <Separator />
                 <MenuItem Header="打开输出目录" Command="{Binding OpenOutputDirectoryCommand}" />
                 <MenuItem Header="打开工作区目录" Command="{Binding OpenWorkDirectoryCommand}" />
-
+                <Separator />
                 <MenuItem Header="导出日志" Command="{Binding ExportLogCommand}" />
                 <MenuItem Header="打开日志目录" Command="{Binding OpenLogDirectoryCommand}" />
             </MenuItem>
         </Menu>
 
-        <!--
-            主操作条：只留真正常用的三件事 —— 导入、选输出目录、一键处理。
-            「输出到：」这一组是唯一的输出目录入口：以前设置区里还有一份一模一样的
-            输入框 + 「选择」按钮（同一个 SelectedOutputDirectory 双向绑定），打字时两框实时同步，
-            看着像两个设置其实是一个 —— 已经删掉，原来那句说明挪到本框的 ToolTip。
-        -->
-        <Border DockPanel.Dock="Top"
-                Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource PanelBorderBrush}"
-                BorderThickness="1"
-                CornerRadius="4"
-                Padding="10,8"
-                Margin="0,0,0,8">
+        <!-- ============ 主操作条 ============ -->
+        <Border DockPanel.Dock="Top" Style="{StaticResource CardStyle}" Padding="12,10" Margin="0,0,0,8">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-                <StackPanel Grid.Column="0"
-                            Orientation="Horizontal"
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="添加文件"
+                                MinWidth="92"
+                                Command="{Binding AddFilesCommand}" />
+
+                        <Button Content="添加文件夹"
+                                MinWidth="100"
+                                Margin="8,0,0,0"
+                                Command="{Binding AddFolderCommand}" />
+                    </StackPanel>
+
+                    <!--
+                        当前输出位置：只读。
+                        以前这里是"输出到：输入框 + 选择"按钮，和设置窗口里的同一项重复，
+                        而且"到底解压到哪"还要用户自己把两个开关组合出来（用户抱怨"看不懂输出在哪"）。
+                        现在只显示一句人话 + 一个「改…」跳到设置窗口。
+                    -->
+                    <Border Grid.Column="1"
+                            Background="{StaticResource PanelSunkenBrush}"
+                            BorderBrush="{StaticResource PanelBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="10,5"
+                            Margin="16,0"
                             VerticalAlignment="Center">
-                    <Button Content="添加文件"
-                            MinWidth="88"
-                            Command="{Binding AddFilesCommand}" />
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left"
+                                       Text="当前输出位置："
+                                       Style="{StaticResource LabelTextStyle}"
+                                       Margin="0,0,4,0" />
 
-                    <Button Content="添加文件夹"
-                            MinWidth="96"
-                            Margin="6,0,0,0"
-                            Command="{Binding AddFolderCommand}" />
-                </StackPanel>
+                            <Button DockPanel.Dock="Right"
+                                    Content="改…"
+                                    MinWidth="56"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    Margin="10,0,0,0"
+                                    ToolTip="打开设置窗口的「输出位置」（四选一）"
+                                    Command="{Binding OpenSettingsCommand}" />
 
-                <StackPanel Grid.Column="1"
+                            <TextBlock TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                       ToolTip="{Binding SelectedOutputDirectory}">
+                                <TextBlock.Text>
+                                    <MultiBinding Converter="{StaticResource OutputPlacementSummaryConverter}">
+                                        <Binding Path="Settings.ExtractToOriginalDirectory" />
+                                        <Binding Path="Settings.KeepArchiveNameFolder" />
+                                        <Binding Path="SelectedOutputDirectory" />
+                                    </MultiBinding>
+                                </TextBlock.Text>
+                            </TextBlock>
+                        </DockPanel>
+                    </Border>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- 忙的时候才出现：空闲时是两个永远按不动的灰按钮，占位又误导 -->
+                        <Button Content="停止后续"
+                                Margin="0,0,8,0"
+                                ToolTip="当前任务继续跑完，但不再启动新任务"
+                                Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}"
+                                Command="{Binding StopCommand}" />
+
+                        <Button Content="取消当前"
+                                Margin="0,0,12,0"
+                                ToolTip="强制结束当前任务的 7-Zip 进程（保留工作区与日志）"
+                                Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}"
+                                Command="{Binding CancelCurrentCommand}" />
+
+                        <!-- 主按钮：对勾选的任务走完 识别 → 修正后缀 → 按密码本解压 → 汇总 -->
+                        <Button Content="一键处理"
+                                MinWidth="128"
+                                MinHeight="36"
+                                FontSize="15"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                ToolTip="对勾选的任务依次做：识别格式 → 修正伪装后缀（先给你看预览）→ 按密码本解压 → 汇总结果"
+                                Command="{Binding OneClickProcessCommand}" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- 忙碌反馈：以前跑起来界面唯一的变化是按钮变灰，看着像卡死 -->
+                <StackPanel Grid.Row="1"
                             Orientation="Horizontal"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center"
-                            Margin="16,0">
-                    <TextBlock Text="输出到："
-                               VerticalAlignment="Center"
-                               Foreground="{StaticResource TextSecondaryBrush}" />
+                            Margin="0,10,0,0"
+                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <ProgressBar IsIndeterminate="True"
+                                 Height="4"
+                                 Width="180"
+                                 VerticalAlignment="Center"
+                                 Foreground="{StaticResource PrimaryBrush}"
+                                 Background="{StaticResource PrimarySoftBrush}"
+                                 BorderThickness="0" />
 
-                    <TextBox Text="{Binding SelectedOutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                             MinWidth="240"
-                             Height="26"
-                             VerticalContentAlignment="Center"
-                             ToolTip="留空表示解压到压缩包所在目录。如果启用“原目录”，此处可为空；如果在这里选了自定义输出目录，会自动关闭原目录模式。" />
-
-                    <Button Content="选择"
-                            Margin="6,0,0,0"
-                            Command="{Binding SelectOutputDirectoryCommand}" />
-                </StackPanel>
-
-                <StackPanel Grid.Column="2"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center">
-                    <!-- 这两个平时按不动（CanExecute 要求正在处理），但保留常驻位置，避免忙起来时按钮位置跳变。 -->
-                    <Button Content="停止后续"
-                            Margin="0,0,6,0"
-                            ToolTip="当前任务继续跑完，但不再启动新任务"
-                            Command="{Binding StopCommand}" />
-
-                    <Button Content="取消当前"
-                            Margin="0,0,12,0"
-                            ToolTip="强制结束当前任务的 7-Zip 进程（保留工作区与日志）"
-                            Command="{Binding CancelCurrentCommand}" />
-
-                    <!-- 主按钮：对勾选的任务走完 识别 → 修正后缀 → 按密码本解压 → 汇总 -->
-                    <Button Content="一键处理"
-                            MinWidth="120"
-                            Height="34"
-                            FontWeight="Bold"
-                            FontSize="15"
-                            Background="{StaticResource PrimarySoftBrush}"
-                            ToolTip="对勾选的任务依次做：识别格式 → 修正伪装后缀（先给你看预览）→ 按密码本解压 → 汇总结果"
-                            Command="{Binding OneClickProcessCommand}" />
+                    <TextBlock Text="正在处理…（界面在干活，长任务请耐心等；随时可以「停止后续」）"
+                               Style="{StaticResource HintTextStyle}"
+                               Margin="10,0,0,0"
+                               VerticalAlignment="Center" />
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!--
-            手动操作：默认收起。只放「菜单里没有的」单项操作。
-            原来这里还有「重新扫描 / 移除选中 / 清空列表」三个按钮，与「文件」菜单逐字重复，
-            已经删掉（菜单里仍在，入口一个没少）。「智能修正后缀」菜单里没有，保留。
-        -->
+        <!-- ============ 手动操作（默认收起） ============ -->
         <Expander DockPanel.Dock="Top"
                   Header="手动操作（单独改后缀 / 单独解压）"
                   Margin="0,0,0,8"
-                  Padding="10,8"
+                  Padding="12,10"
                   Background="{StaticResource PanelBrush}"
                   BorderBrush="{StaticResource PanelBorderBrush}"
                   BorderThickness="1">
             <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Button Content="智能修正选中后缀"
-                        MinWidth="132"
-                        FontWeight="Bold"
+                        MinWidth="136"
+                        FontWeight="SemiBold"
                         ToolTip="对勾选的任务修正伪装后缀（会先弹出改名预览让你确认）"
                         Command="{Binding SmartRenameCommand}" />
 
                 <Button Content="添加后缀"
+                        Margin="8,0,0,0"
                         Command="{Binding AddExtensionCommand}" />
 
                 <Button Content="替换后缀"
+                        Margin="8,0,0,0"
                         Command="{Binding ReplaceExtensionCommand}" />
 
                 <Button Content="删除最后一个后缀"
-                        MinWidth="120"
+                        MinWidth="124"
+                        Margin="8,0,0,0"
                         Command="{Binding DeleteLastExtensionCommand}" />
 
                 <Button Content="删除多个后缀"
-                        MinWidth="110"
+                        MinWidth="114"
+                        Margin="8,0,0,0"
                         Command="{Binding DeleteMultipleExtensionsCommand}" />
 
-                <Border Width="1"
-                        Height="24"
-                        Background="{StaticResource PanelBorderBrush}"
-                        Margin="10,0" />
+                <Border Style="{StaticResource DividerStyle}" Height="24" />
 
                 <!-- 与「一键处理」区分开：这条只解压，不改后缀。 -->
                 <Button Content="只解压（不改后缀）"
-                        MinWidth="130"
-                        FontWeight="Bold"
+                        MinWidth="136"
+                        FontWeight="SemiBold"
                         ToolTip="跳过改后缀这一步，直接对勾选的任务按密码本解压"
                         Command="{Binding StartExtractCommand}" />
             </WrapPanel>
         </Expander>
 
-        <!-- 底部日志区 -->
-        <Grid DockPanel.Dock="Bottom"
-              Height="180"
-              Margin="0,8,0,0">
+        <!-- ============ 底部日志区 ============ -->
+        <Grid DockPanel.Dock="Bottom" Height="190" Margin="0,8,0,0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
             <Border Grid.Row="0"
-                    Background="{StaticResource PanelBrush}"
+                    Background="{StaticResource GroupHeaderBackgroundBrush}"
                     BorderBrush="{StaticResource PanelBorderBrush}"
                     BorderThickness="1,1,1,0"
-                    CornerRadius="4,4,0,0"
-                    Padding="8,6">
+                    CornerRadius="{StaticResource CardCornerRadiusTop}"
+                    Padding="12,7">
                 <DockPanel>
                     <TextBlock Text="日志"
-                               FontWeight="Bold"
-                               Foreground="{StaticResource TextPrimaryBrush}"
+                               Style="{StaticResource CardTitleTextStyle}"
                                VerticalAlignment="Center" />
 
-                    <StackPanel DockPanel.Dock="Right"
-                                Orientation="Horizontal"
-                                HorizontalAlignment="Right">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="复制失败列表"
-                                Height="26"
+                                Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding CopyFailedListCommand}" />
 
                         <Button Content="导出失败清单"
-                                Height="26"
+                                Style="{StaticResource ToolbarButtonStyle}"
                                 Margin="8,0,0,0"
                                 ToolTip="把失败任务与原因导出成 txt，便于逐条处理或留档"
                                 Command="{Binding ExportFailedListCommand}" />
 
                         <Button Content="打开输出目录"
-                                Height="26"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Margin="8,0,0,0"
                                 Command="{Binding OpenOutputDirectoryCommand}" />
                     </StackPanel>
                 </DockPanel>
@@ -278,10 +255,10 @@
                     Background="{StaticResource PanelBrush}"
                     BorderBrush="{StaticResource PanelBorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="0,0,4,4">
+                    CornerRadius="{StaticResource CardCornerRadiusBottom}"
+                    Padding="4">
                 <ListBox ItemsSource="{Binding Logs}"
                          BorderThickness="0"
-                         Background="{StaticResource PanelBrush}"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
                     <ListBox.ItemTemplate>
@@ -299,7 +276,7 @@
             </Border>
         </Grid>
 
-        <!-- 主体区域 -->
+        <!-- ============ 主体区域 ============ -->
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -307,13 +284,8 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0"
-                    Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource PanelBorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Padding="8"
-                    Margin="0,0,0,8">
+            <!-- 密码区 -->
+            <Border Grid.Row="0" Style="{StaticResource CardStyle}" Padding="12,10" Margin="0,0,0,8">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -326,20 +298,17 @@
 
                     <TextBlock Grid.Column="0"
                                Text="统一密码："
-                               FontWeight="Bold"
+                               Style="{StaticResource CardTitleTextStyle}"
                                VerticalAlignment="Center"
-                               Margin="0,0,6,0" />
+                               Margin="0,0,8,0" />
 
                     <Grid Grid.Column="1">
                         <!-- 明文显示时使用 TextBox -->
-                        <TextBox x:Name="GlobalPasswordTextBox"
-             Text="{Binding GlobalPassword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-             ToolTip="输入统一密码">
+                        <TextBox Text="{Binding GlobalPassword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="输入统一密码">
                             <TextBox.Style>
-                                <Style TargetType="TextBox">
+                                <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
                                     <Setter Property="Visibility" Value="Collapsed" />
-                                    <Setter Property="Height" Value="28" />
-                                    <Setter Property="VerticalContentAlignment" Value="Center" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding ShowPassword}" Value="True">
                                             <Setter Property="Visibility" Value="Visible" />
@@ -351,13 +320,11 @@
 
                         <!-- 隐藏显示时使用 PasswordBox，仍然可以正常输入 -->
                         <PasswordBox x:Name="GlobalPasswordBox"
-                 PasswordChanged="GlobalPasswordBox_PasswordChanged"
-                 ToolTip="输入统一密码">
+                                     PasswordChanged="GlobalPasswordBox_PasswordChanged"
+                                     ToolTip="输入统一密码">
                             <PasswordBox.Style>
-                                <Style TargetType="PasswordBox">
+                                <Style TargetType="PasswordBox" BasedOn="{StaticResource {x:Type PasswordBox}}">
                                     <Setter Property="Visibility" Value="Visible" />
-                                    <Setter Property="Height" Value="28" />
-                                    <Setter Property="VerticalContentAlignment" Value="Center" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding ShowPassword}" Value="True">
                                             <Setter Property="Visibility" Value="Collapsed" />
@@ -368,10 +335,9 @@
                         </PasswordBox>
                     </Grid>
 
-
                     <Button Grid.Column="2"
                             Content="显示/隐藏"
-                            Margin="6,0,6,0"
+                            Margin="8,0,8,0"
                             Command="{Binding ToggleShowPasswordCommand}" />
 
                     <CheckBox Grid.Column="3"
@@ -380,7 +346,8 @@
 
                     <Button Grid.Column="4"
                             Content="密码列表管理"
-                            MinWidth="110"
+                            MinWidth="116"
+                            ToolTip="查看/导入/编辑密码本（密码只存在内存里）"
                             Command="{Binding OpenPasswordListCommand}" />
 
                     <!--
@@ -390,350 +357,293 @@
                     <TextBlock Grid.Column="5"
                                Text="{Binding PasswordBookSummary}"
                                ToolTip="{Binding PasswordBookTooltip}"
-                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Style="{StaticResource HintTextStyle}"
                                VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis"
-                               Margin="8,0,0,0" />
+                               Margin="12,0,0,0" />
                 </Grid>
             </Border>
 
             <!-- 任务列表 -->
-            <Border Grid.Row="1"
-                    Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource PanelBorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="4">
+            <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="0">
                 <DockPanel>
                     <!--
                         作用范围提示。界面上同时存在两套"选中"：行高亮（右键菜单用）和勾选框（按钮用）。
-                        「按钮点了没用」的主要来源就是用户高亮了 20 行、却没勾任何一个，于是收到
-                        「请先勾选要处理的任务」。这里常驻一行说清楚，不用再去猜。
+                        「按钮点了没用」的主要来源就是用户高亮了 20 行、却没勾任何一个。
                     -->
-                    <TextBlock DockPanel.Dock="Top"
-                               Margin="8,6,8,0"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               TextWrapping="Wrap"
-                               Text="「一键处理 / 智能修正 / 移除选中 / 清空列表」都只作用于已勾选的任务（最左侧一列）；右键菜单只作用于当前这一行。" />
+                    <Border DockPanel.Dock="Top"
+                            Background="{StaticResource InfoSoftBrush}"
+                            BorderBrush="{StaticResource InfoBorderBrush}"
+                            BorderThickness="0,0,0,1"
+                            CornerRadius="{StaticResource CardCornerRadiusTop}"
+                            Padding="12,7">
+                        <TextBlock Foreground="{StaticResource InfoTextBrush}"
+                                   FontSize="11.5"
+                                   TextWrapping="Wrap"
+                                   Text="「一键处理 / 智能修正 / 移除选中 / 清空列表」都只作用于已勾选的任务（最左侧一列）；右键菜单只作用于当前这一行。" />
+                    </Border>
 
-                    <DataGrid x:Name="TaskDataGrid"
-                    ItemsSource="{Binding Tasks}"
-                    SelectedItem="{Binding SelectedTask, Mode=TwoWay}"
-                    AutoGenerateColumns="False"
-                    CanUserAddRows="False"
-                    CanUserDeleteRows="False"
-                    GridLinesVisibility="Horizontal"
-                    HeadersVisibility="Column"
-                    SelectionMode="Extended"
-                    SelectionUnit="FullRow"
-                    RowHeaderWidth="0"
-                    AlternatingRowBackground="{StaticResource PanelAltBrush}"
-                    HorizontalScrollBarVisibility="Auto"
-                    VerticalScrollBarVisibility="Auto"
-                    PreviewMouseRightButtonDown="TaskDataGrid_PreviewMouseRightButtonDown">
+                    <Grid>
+                        <DataGrid x:Name="TaskDataGrid"
+                              ItemsSource="{Binding Tasks}"
+                              SelectedItem="{Binding SelectedTask, Mode=TwoWay}"
+                              SelectionMode="Extended"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Auto"
+                              Margin="8,4,8,8"
+                              PreviewMouseRightButtonDown="TaskDataGrid_PreviewMouseRightButtonDown">
 
-                    <DataGrid.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem Header="打开文件所在目录"
-                                      Command="{Binding PlacementTarget.DataContext.OpenTaskDirectoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                      CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                        <DataGrid.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="打开文件所在目录"
+                                          Command="{Binding PlacementTarget.DataContext.OpenTaskDirectoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
-                            <MenuItem Header="打开输出目录"
-                                      Command="{Binding PlacementTarget.DataContext.OpenTaskOutputDirectoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                      CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                <MenuItem Header="打开输出目录"
+                                          Command="{Binding PlacementTarget.DataContext.OpenTaskOutputDirectoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
-                            <MenuItem Header="复制文件路径"
-                                      Command="{Binding PlacementTarget.DataContext.CopyTaskPathCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                      CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                <Separator />
 
-                            <MenuItem Header="复制错误信息"
-                                      Command="{Binding PlacementTarget.DataContext.CopyTaskErrorCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                      CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                <MenuItem Header="复制文件路径"
+                                          Command="{Binding PlacementTarget.DataContext.CopyTaskPathCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
-                            <MenuItem Header="复制任务信息"
-                                      Command="{Binding PlacementTarget.DataContext.CopyTaskInfoCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                      CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                <MenuItem Header="复制错误信息"
+                                          Command="{Binding PlacementTarget.DataContext.CopyTaskErrorCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
-                            <MenuItem Header="重新扫描此文件"
-                                      Command="{Binding PlacementTarget.DataContext.RescanTaskCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                      CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                <MenuItem Header="复制任务信息"
+                                          Command="{Binding PlacementTarget.DataContext.CopyTaskInfoCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
-                            <MenuItem Header="智能修正此文件后缀"
-                                      Click="SmartRenameCurrentTaskMenuItem_Click" />
+                                <Separator />
 
-                            <MenuItem Header="从列表移除"
-                                      Command="{Binding PlacementTarget.DataContext.RemoveTaskCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                      CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                <MenuItem Header="重新扫描此文件"
+                                          Command="{Binding PlacementTarget.DataContext.RescanTaskCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
-                            <MenuItem Header="查看任务详情"
-                                      Click="TaskDetailMenuItem_Click" />
-                        </ContextMenu>
-                    </DataGrid.ContextMenu>
+                                <MenuItem Header="智能修正此文件后缀"
+                                          Click="SmartRenameCurrentTaskMenuItem_Click" />
 
-                    <!--
-                        列精简（用户实测：16 列写死宽度合计 2280px，右侧约 950px 常态在视野外，
-                        而「状态 / 错误信息 / 耗时」恰恰是"这包到底成没成"要看的）。
+                                <MenuItem Header="查看任务详情"
+                                          Click="TaskDetailMenuItem_Click" />
 
-                        现在：可见 9 列合计约 1030px，默认窗口（1380 宽，可用约 1331px）无需横向滚动。
-                        · 删「序号」「操作」「进度」—— 序号在表格行序与任务详情里；操作与进度是
-                          「状态」同一件事的另两个切面（等待/－/等待扫描），任务详情里仍有原文。
-                        · 「当前后缀 + 建议后缀」并入「后缀状态」：状态文字本身就说清了后缀问题，
-                          详细三项放进该列的 ToolTip，一眼能扫完。
-                        · 「完整路径」默认隐藏（文件名列 ToolTip 有全文，右键「复制文件路径」与
-                          任务详情窗口都有），需要时可在列头上右键勾选显示。
-                        · 「分卷」默认隐藏（只对分卷组那一行有内容）—— 任务详情窗口新增了「分卷」一行。
-                        · 「输出目录」默认隐藏（多数任务同值）—— 右键「打开输出目录」与任务详情窗口都有。
-                        ⚠ 列宽全部写死：留出滑动余量，避免行内出现横向滚动条。
-                    -->
-                    <DataGrid.Columns>
-                        <DataGridCheckBoxColumn Header="选择"
-                                                Binding="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                Width="60" />
+                                <Separator />
 
-                        <DataGridTextColumn Header="文件名"
-                                            Binding="{Binding FileName}"
-                                            Width="180"
-                                            IsReadOnly="True">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                    <Setter Property="ToolTip" Value="{Binding CurrentPath}" />
+                                <MenuItem Header="从列表移除"
+                                          Command="{Binding PlacementTarget.DataContext.RemoveTaskCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
+
+                        <!--
+                            列精简（用户实测：16 列写死宽度合计 2280px，右侧约 950px 常态在视野外）。
+                            现在可见 9 列，默认窗口下不需要横向滚动；3 列默认隐藏（表头右键可勾回来）。
+                        -->
+                        <DataGrid.Columns>
+                            <!-- 模板列：DataGridCheckBoxColumn 要点两次才勾得上 -->
+                            <DataGridTemplateColumn Header="选择" Width="60">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  HorizontalAlignment="Center"
+                                                  Margin="0"
+                                                  ToolTip="勾选后才会被「一键处理 / 智能修正」等按钮处理" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+
+                            <DataGridTextColumn Header="文件名"
+                                                Binding="{Binding FileName}"
+                                                Width="180"
+                                                IsReadOnly="True">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                        <Setter Property="ToolTip" Value="{Binding CurrentPath}" />
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+
+                            <!-- 默认隐藏：文件名 ToolTip / 右键「复制文件路径」/ 任务详情窗口都能看到全文 -->
+                            <DataGridTextColumn Header="完整路径"
+                                                Binding="{Binding CurrentPath}"
+                                                Width="200"
+                                                Visibility="Collapsed"
+                                                IsReadOnly="True" />
+
+                            <DataGridTextColumn Header="当前后缀"
+                                                Binding="{Binding CurrentExtension}"
+                                                Width="100"
+                                                IsReadOnly="True" />
+
+                            <DataGridTextColumn Header="检测格式"
+                                                Binding="{Binding DetectedFormat}"
+                                                Width="90"
+                                                IsReadOnly="True" />
+
+                            <DataGridTextColumn Header="后缀状态"
+                                                Binding="{Binding ExtensionStatus}"
+                                                Width="190"
+                                                IsReadOnly="True">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                        <Setter Property="ToolTip">
+                                            <Setter.Value>
+                                                <TextBlock>
+                                                    <Run Text="当前后缀：" /><Run Text="{Binding CurrentExtension}" /><LineBreak />
+                                                    <Run Text="检测格式：" /><Run Text="{Binding DetectedFormat}" /><LineBreak />
+                                                    <Run Text="建议后缀：" /><Run Text="{Binding SuggestedExtension}" /><LineBreak />
+                                                    <Run Text="分卷：" /><Run Text="{Binding VolumeInfoText}" />
+                                                </TextBlock>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+
+                            <!-- 分卷情况：一组分卷只占一行（AGENTS.md §9.3）。默认隐藏，任务详情里有常驻的一行。 -->
+                            <DataGridTextColumn Header="分卷"
+                                                Binding="{Binding VolumeInfoText}"
+                                                Width="200"
+                                                Visibility="Collapsed"
+                                                IsReadOnly="True" />
+
+                            <DataGridTextColumn Header="密码状态"
+                                                Binding="{Binding PasswordStatus}"
+                                                Width="110"
+                                                IsReadOnly="True" />
+
+                            <!-- 默认隐藏：右键「打开输出目录」与任务详情窗口都有 -->
+                            <DataGridTextColumn Header="输出目录"
+                                                Binding="{Binding OutputPath}"
+                                                Width="240"
+                                                Visibility="Collapsed"
+                                                IsReadOnly="True" />
+
+                            <DataGridTemplateColumn Header="状态" Width="150">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Status}"
+                                                   Foreground="{Binding Status, Converter={StaticResource StatusToBrushConverter}}"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Status}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+
+                            <DataGridTextColumn Header="错误信息"
+                                                Binding="{Binding ErrorMessage}"
+                                                Width="*"
+                                                MinWidth="200"
+                                                IsReadOnly="True">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                        <Setter Property="ToolTip" Value="{Binding ErrorMessage}" />
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+
+                            <DataGridTextColumn Header="耗时"
+                                                Binding="{Binding ElapsedText}"
+                                                Width="80"
+                                                IsReadOnly="True" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                        <!-- 空状态：不要给用户一张空白表格 -->
+                        <StackPanel HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Margin="24">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Tasks.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
                                 </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
+                            </StackPanel.Style>
 
-                        <!-- 默认隐藏：文件名 ToolTip / 右键「复制文件路径」/ 任务详情窗口都能看到全文 -->
-                        <DataGridTextColumn Header="完整路径"
-                                            Binding="{Binding CurrentPath}"
-                                            Width="200"
-                                            Visibility="Collapsed"
-                                            IsReadOnly="True" />
+                            <TextBlock Text="还没有任务"
+                                       Style="{StaticResource SectionTitleTextStyle}"
+                                       HorizontalAlignment="Center" />
 
-                        <DataGridTextColumn Header="当前后缀"
-                                            Binding="{Binding CurrentExtension}"
-                                            Width="100"
-                                            IsReadOnly="True" />
-
-                        <DataGridTextColumn Header="检测格式"
-                                            Binding="{Binding DetectedFormat}"
-                                            Width="90"
-                                            IsReadOnly="True" />
-
-                        <DataGridTextColumn Header="后缀状态"
-                                            Binding="{Binding ExtensionStatus}"
-                                            Width="190"
-                                            IsReadOnly="True">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                    <Setter Property="ToolTip">
-                                        <Setter.Value>
-                                            <TextBlock>
-                                                <Run Text="当前后缀：" /><Run Text="{Binding CurrentExtension}" /><LineBreak />
-                                                <Run Text="检测格式：" /><Run Text="{Binding DetectedFormat}" /><LineBreak />
-                                                <Run Text="建议后缀：" /><Run Text="{Binding SuggestedExtension}" /><LineBreak />
-                                                <Run Text="分卷：" /><Run Text="{Binding VolumeInfoText}" />
-                                            </TextBlock>
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
-
-                        <!-- 分卷情况：一组分卷只占一行，这里说明有几卷、缺不缺（AGENTS.md §9.3）。
-                             默认隐藏（绝大多数行是空的），任务详情窗口的「分卷」一行常驻可见。 -->
-                        <DataGridTextColumn Header="分卷"
-                                            Binding="{Binding VolumeInfoText}"
-                                            Width="200"
-                                            Visibility="Collapsed"
-                                            IsReadOnly="True" />
-
-                        <DataGridTextColumn Header="密码状态"
-                                            Binding="{Binding PasswordStatus}"
-                                            Width="110"
-                                            IsReadOnly="True" />
-
-                        <!-- 默认隐藏：右键「打开输出目录」与任务详情窗口都有 -->
-                        <DataGridTextColumn Header="输出目录"
-                                            Binding="{Binding OutputPath}"
-                                            Width="240"
-                                            Visibility="Collapsed"
-                                            IsReadOnly="True" />
-
-                        <DataGridTemplateColumn Header="状态"
-                                                Width="150">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Status}"
-                                               Foreground="{Binding Status, Converter={StaticResource StatusToBrushConverter}}"
-                                               FontWeight="SemiBold"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"
-                                               ToolTip="{Binding Status}" />
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
-
-                        <DataGridTextColumn Header="错误信息"
-                                            Binding="{Binding ErrorMessage}"
-                                            Width="*"
-                                            MinWidth="200"
-                                            IsReadOnly="True">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                    <Setter Property="ToolTip" Value="{Binding ErrorMessage}" />
-                                </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
-
-                        <DataGridTextColumn Header="耗时"
-                                            Binding="{Binding ElapsedText}"
-                                            Width="80"
-                                            IsReadOnly="True" />
-                    </DataGrid.Columns>
-                </DataGrid>
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       Margin="0,6,0,0"
+                                       TextAlignment="Center"
+                                       MaxWidth="460"
+                                       Text="点左上角「添加文件 / 添加文件夹」，或把文件、文件夹直接拖进这个窗口。识别不靠后缀，伪装过的包也能认出来。" />
+                        </StackPanel>
+                    </Grid>
                 </DockPanel>
             </Border>
 
-            <!-- 汇总区 -->
-            <Border Grid.Row="2"
-                    Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource PanelBorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Padding="8"
-                    Margin="0,8,0,0">
+            <!-- ============ 汇总区 ============ -->
+            <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="12,9" Margin="0,8,0,0">
                 <WrapPanel VerticalAlignment="Center">
 
                     <TextBlock Text="汇总："
-                               FontWeight="Bold"
-                               Margin="0,0,12,0"
+                               Style="{StaticResource CardTitleTextStyle}"
+                               Margin="0,0,10,0"
                                VerticalAlignment="Center" />
 
                     <!--
                         下面这些标签全部引用 Models\StatusText.cs 的常量（AGENTS.md §7）。
-                        以前是 12 处手写中文：一旦 StatusText 改字，DataGrid 的状态列会跟着变、
-                        这里的标签不会，同一个词在同一屏出现两种写法。
                         XAML 里不能直接绑 const，所以用 x:Static。
                     -->
-                    <TextBlock Text="总数："
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.TotalCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="总数：" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.TotalCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="选中："
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.SelectedCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="选中：" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.SelectedCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.Recognized}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.RecognizedCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.Recognized}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.RecognizedCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.UnknownFormat}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.UnknownCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.UnknownFormat}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.UnknownCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.RenameSuccess}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.RenameSuccessCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.RenameSuccess}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.RenameSuccessCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.RenameFailed}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.RenameFailedCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.RenameFailed}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.RenameFailedCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.TestPassed}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.TestSuccessCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.TestPassed}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.TestSuccessCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.TestFailed}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.TestFailedCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.TestFailed}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.TestFailedCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.ExtractSuccess}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.ExtractSuccessCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.ExtractSuccess}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.ExtractSuccessCount}" Style="{StaticResource StatValueTextStyle}"
+                               Foreground="{StaticResource SuccessTextBrush}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.ExtractFailed}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.ExtractFailedCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.ExtractFailed}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.ExtractFailedCount}" Style="{StaticResource StatValueTextStyle}"
+                               Foreground="{StaticResource DangerTextBrush}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.WrongPassword}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.PasswordErrorCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.WrongPassword}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.PasswordErrorCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.Corrupted}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.CorruptedCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.Corrupted}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.CorruptedCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.Skipped}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.SkippedCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.Skipped}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.SkippedCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="{x:Static models:StatusText.Cancelled}"
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.CancelledCount}"
-                               FontWeight="Bold"
-                               Margin="0,0,14,0"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="{x:Static models:StatusText.Cancelled}" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.CancelledCount}" Style="{StaticResource StatValueTextStyle}" Margin="0,0,14,0" />
 
-                    <TextBlock Text="其他失败："
-                               Foreground="{StaticResource TextMutedBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Summary.OtherFailedCount}"
-                               FontWeight="Bold"
-                               VerticalAlignment="Center" />
+                    <TextBlock Text="其他失败：" Style="{StaticResource StatLabelTextStyle}" />
+                    <TextBlock Text="{Binding Summary.OtherFailedCount}" Style="{StaticResource StatValueTextStyle}" />
                 </WrapPanel>
             </Border>
         </Grid>

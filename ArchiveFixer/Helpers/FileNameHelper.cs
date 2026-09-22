@@ -179,7 +179,24 @@ namespace ArchiveFixer.Helpers
 
         /// <summary>
         /// 生成压缩包基础名。
-        /// 会处理 .tar.gz / .tar.bz2 / .tar.xz。
+        /// 会处理 .tar.gz / .tar.bz2 / .tar.xz，以及**分卷标记**
+        /// （<c>222.7z.001</c> / <c>222.zip.001</c> / <c>222.part1.rar</c> / <c>222.z01</c> / <c>222.r00</c>
+        /// 一律得到 <c>222</c>）。
+        ///
+        /// <para>
+        /// ⚠️ 分卷这一步是**必修**（2026-09-21 用户在真实产物里看到的目录就是 <c>17274362.7z\</c>）。
+        /// 旧实现只剥**一层**后缀：<c>222.7z.001</c> → <c>222.7z</c>、<c>222.part1.rar</c> → <c>222.part1</c>，
+        /// 于是分卷包的落点变成 <c>111\222.7z\</c>，分卷组里每一卷还会各建一个目录 ——
+        /// 用户的原话是"你给我多弄了四个文件夹、文件一多根本就分不清"。
+        /// </para>
+        ///
+        /// <para>
+        /// "什么算分卷标记"只有一份定义（<see cref="ExtensionHelper.IsVolumePartExtension"/>），
+        /// 本方法只负责把它从名字尾部摘掉，然后照旧剥一层普通后缀。
+        /// （<c>Extraction.OutputPlacement.ResolveArchiveBaseName</c> 有一份更严格的同类实现：
+        /// 它只剥**已知归档后缀**，用于落点公式；两者对分卷的判定完全一致。
+        /// 更彻底的做法是让它转调本方法，但那属于那一侧的接线。）
+        /// </para>
         /// </summary>
         public static string GetArchiveBaseName(string filePath)
         {
@@ -189,6 +206,8 @@ namespace ArchiveFixer.Helpers
             {
                 return "未命名";
             }
+
+            fileName = StripVolumeMarkers(fileName);
 
             string lower = fileName.ToLowerInvariant();
 
@@ -230,6 +249,56 @@ namespace ArchiveFixer.Helpers
             }
 
             return withoutExt;
+        }
+
+        /// <summary>
+        /// 剥掉文件名末尾的**分卷标记**：<c>222.7z.001</c> → <c>222.7z</c>、
+        /// <c>222.part1.rar</c> → <c>222</c>、<c>222.z01</c> → <c>222</c>、<c>222.r00</c> → <c>222</c>。
+        ///
+        /// 判据只有一份：<see cref="ExtensionHelper.IsVolumePartExtension"/>（.001~.999 / .z01 / .r00 / .partN）。
+        /// 循环有守卫（最多 3 轮）：<c>.part1.rar</c> 这种"分卷段后面还挂着 .rar"的名字要连剥两次，
+        /// 同时保证不会在 <c>222.rar</c> 上把 <c>222</c> 当成三位数字分卷段吃光整个名字。
+        /// </summary>
+        private static string StripVolumeMarkers(string fileName)
+        {
+            string current = fileName;
+
+            for (int guard = 0; guard < 3; guard++)
+            {
+                int lastDot = current.LastIndexOf('.');
+
+                if (lastDot <= 0)
+                {
+                    break;
+                }
+
+                string tail = current[(lastDot + 1)..];
+
+                if (ExtensionHelper.IsVolumePartExtension("." + tail))
+                {
+                    current = current[..lastDot];
+                    continue;
+                }
+
+                // xxx.part1.rar：分卷段在倒数第二段上，光看最后一段（.rar）看不出来。
+                // ⚠ 必须要求分卷段**前面还有内容**（previousDot > 0），否则 "222.rar" 里的 "222"
+                // 会被当成三位数字分卷段，整个名字被吃光。
+                if (tail.Equals("rar", StringComparison.OrdinalIgnoreCase))
+                {
+                    int previousDot = current.LastIndexOf('.', lastDot - 1);
+
+                    if (previousDot > 0 &&
+                        ExtensionHelper.IsVolumePartExtension("." + current[(previousDot + 1)..lastDot]))
+                    {
+                        current = current[..previousDot];
+                        continue;
+                    }
+                }
+
+                break;
+            }
+
+            return current;
         }
 
         /// <summary>

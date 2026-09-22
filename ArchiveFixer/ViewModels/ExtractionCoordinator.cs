@@ -23,6 +23,15 @@ namespace ArchiveFixer.ViewModels
     /// </summary>
     internal sealed class ExtractionCoordinator
     {
+        /// <summary>
+        /// 「过程物」目录名（契约 §3.2）：为得到内容物而产生、用户不需要的东西 ——
+        /// 内层归档、分卷、抠出来的中间 ZIP、纯壳文件夹。
+        ///
+        /// 名字的**唯一来源**是 <see cref="ProcessArtifactLayout.ArtifactDirectoryName"/>，
+        /// 这里只是给本类内部一个短名字用（别在别处再写一遍字面量）。
+        /// </summary>
+        internal const string ProcessArtifactDirectoryName = ProcessArtifactLayout.ArtifactDirectoryName;
+
         private readonly MainViewModel _vm;
         private readonly IArchiveEngine _archiveEngine;
         private readonly PasswordService _passwordService;
@@ -128,28 +137,113 @@ namespace ArchiveFixer.ViewModels
             public string? LandingViolation { get; init; }
 
             public CollectResult? Collected { get; init; }
+
+            /// <summary>定稿（暂存区 → 最终目录）的结果；没走到定稿这一步时为 null。</summary>
+            public StageCommitResult? Commit { get; init; }
+
+            /// <summary>
+            /// 定稿**整体失败**（一个内容物都没能搬进最终目录）：与越界同一口径 —— 结论不成立。
+            /// 与 <see cref="LandingViolation"/> 分开写，是为了让状态与原因各自说自己的事，
+            /// 别让"越界"这个词出现在一句讲搬运失败的提示里。
+            /// </summary>
+            public bool CommitFailed { get; init; }
+
+            public string CommitFailureMessage { get; init; } = string.Empty;
+        }
+
+        /// <summary>定稿搬运的一句话结论（给日志与任务字段用）。</summary>
+        internal sealed class StageCommitResult
+        {
+            public bool Attempted { get; init; }
+
+            /// <summary>搬运过程中被取消（已把搬过去的搬回来，最终目录不留半成品）。</summary>
+            public bool Cancelled { get; init; }
+
+            /// <summary>计划里的内容物搬运条数（一条可能是一整个目录）。</summary>
+            public int PlannedContentCount { get; init; }
+
+            /// <summary>真的搬过去的内容物条数。</summary>
+            public int MovedContentCount { get; init; }
+
+            /// <summary>真的搬过去的过程物条数。</summary>
+            public int MovedProcessCount { get; init; }
+
+            /// <summary>内容物文件数（来自定稿计划，不是"搬了几条"）。</summary>
+            public int ContentFileCount { get; init; }
+
+            public long ProcessArtifactBytes { get; init; }
+
+            public int RenamedCount { get; init; }
+
+            public int FailedCount { get; init; }
+
+            public IReadOnlyList<string> Failures { get; init; } = Array.Empty<string>();
+
+            public string Message { get; init; } = string.Empty;
+
+            /// <summary>要带回 UI 线程写日志的行（后台线程不许直接写界面集合）。</summary>
+            public List<(string Level, string Message)> LogEntries { get; init; } = new();
         }
 
         /// <summary>
-        /// 解压成功之后的收尾：校验落盘结果 → 归集 → 视开关清理源包（M3）。
+        /// 定稿布局计划：直接包住 <see cref="ResultFinalizer"/> 的结论，只加三样执行阶段要用的东西 ——
+        /// 过程物源路径的集合（执行时判断一条移动属于哪一类）与"这是不是一次失败的规划"。
+        ///
+        /// 为什么不再自己算一套相对路径：判定表（契约 §3.1：终端单文件直接放 / 多文件套一层 /
+        /// 多重空目录提上来 / 单链塌缩）**只有一份实现**，就在 <see cref="ResultFinalizer"/> 里。
+        /// 本类只负责"把暂存树描述给它、把它的计划执行掉"。
+        /// </summary>
+        internal sealed class FinalLayoutPlan
+        {
+            public bool Failed { get; init; }
+
+            public string FailureReason { get; init; } = string.Empty;
+
+            public FinalizeLayoutKind Layout { get; init; } = FinalizeLayoutKind.Empty;
+
+            /// <summary>全部移动（**内容物在前、过程物在后**，按这个顺序执行）。</summary>
+            public IReadOnlyList<PlannedMove> Moves { get; init; } = Array.Empty<PlannedMove>();
+
+            /// <summary>计划里的内容物条数。</summary>
+            public int PlannedContentCount { get; init; }
+
+            /// <summary>哪几条是过程物（按 From 查，执行时用）。</summary>
+            public HashSet<string> ProcessArtifactSources { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+            public string ProcessArtifactDirectory { get; init; } = string.Empty;
+
+            public long ProcessArtifactTotalSize { get; init; }
+
+            public int ContentFileCount { get; init; }
+
+            public string Summary { get; init; } = string.Empty;
+
+            public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+        }
+
+        /// <summary>
+        /// 解压成功之后的收尾：**定稿搬运** → 校验 → 归集 → 视开关清理源包（M3/契约 §2）。
         ///
         /// 顺序不能换：
-        /// 1. 先校验 —— 没有校验就没有"删除源包"的资格（AGENTS.md §9.5）；
+        /// 0. 先定稿 —— 暂存区里的产物只有搬到最终目录才算"结果"，校验也必须以搬完之后的落点为对象
+        ///    （契约 §2.2：定稿是搬运，不是"原地解压"）；
+        /// 1. 再校验 —— 没有校验就没有"删除源包"的资格（AGENTS.md §9.5）；
         /// 2. 再归集 —— 归集是移动；先归集再校验会算不准（文件已经不在原输出目录）；
         /// 3. 最后清理源包 —— 它依赖前两步的结论。
         ///
         /// 任何一步失败都**不改变**"解压成功"这个结论，只是把结论写进日志与任务字段；
         /// 不要因为归集或清理失败就把任务标成失败 —— 用户的文件确实解出来了。
         ///
-        /// 两个例外（它们不是"收尾失败"，而是**解压结论本身不成立**，必须顶掉"解压成功"）：
+        /// 三个例外（它们不是"收尾失败"，而是**解压结论本身不成立**，必须顶掉"解压成功"）：
         /// ① 产物越出目标根目录（不变量 4）—— 不归集、不清理，状态落成失败；
-        /// ② 产物超出资源预算 —— 同样是失败，并停止后续任务。
+        /// ② 产物超出资源预算 —— 同样是失败，并停止后续任务；
+        /// ③ 定稿时被取消 —— 已经搬过去的会搬回来，最终目录不留半成品，状态落成"已取消"。
         ///
-        /// 返回值就是这个语义：<c>true</c> = "解压成功"仍然成立；<c>false</c> = 已被上面两条否掉，
+        /// 返回值就是这个语义：<c>true</c> = "解压成功"仍然成立；<c>false</c> = 已被上面三条否掉，
         /// 调用方**不许**再补一句"解压成功：xxx"（那会与任务状态自相矛盾，等于骗人）。
         ///
         /// 线程规则（这是 P0 修复的关键）：
-        /// 收尾里的"全目录枚举 / 二次遍历 / 归集移动 / 删除源包"**全是同步磁盘活**，
+        /// 收尾里的"全目录枚举 / 二次遍历 / 定稿搬运 / 归集移动 / 删除源包"**全是同步磁盘活**，
         /// 之前整段跑在 UI 线程上（整条管线没有 ConfigureAwait(false)，await 的续体全回 Dispatcher），
         /// 780MB 的包解出几千个文件时窗口彻底无响应 —— 与"抠出内嵌归档"是同一个坑，
         /// 那边已经改成 Task.Run 并写了注释，收尾这段是漏改。
@@ -159,17 +253,23 @@ namespace ArchiveFixer.ViewModels
         /// 取消规则（P1）：收尾每一步之前都查令牌。用户按了「取消当前」就不许再移动产物、更不许删源包
         /// （AGENTS.md §9.5：取消、部分完成、校验失败一律不删）。取消由上层 catch 落成"已取消"，不得显示成功。
         /// </summary>
+        /// <param name="stageDirectory">
+        /// 本任务的暂存目录（入仓阶段的产物在这里，最终目录此时还是干净的）。
+        /// </param>
         private async Task<bool> PostProcessSuccessAsync(
             ArchiveTask task,
             string engineArchivePath,
             string password,
+            string stageDirectory,
             string outputRedirectNote,
+            OutputPlacementMode placementMode,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
             // 清单同样取自**真正解开的那份归档**：内嵌归档要拿抠出来的文件去列，源文件 7z 根本打不开。
+            // 密码照旧传进去：加密头（-mhe）的包不给密码根本列不出清单，校验会直接退化成"没法比"。
             ArchiveListResult expected = await _archiveEngine.ListAsync(
                 ArchiveRequest.For(engineArchivePath, password),
                 cancellationToken);
@@ -184,10 +284,12 @@ namespace ArchiveFixer.ViewModels
             PostProcessWorkResult work = await Task.Run(
                 () => RunPostProcessWork(
                     task,
+                    stageDirectory,
                     expected,
                     collectResults,
                     collectTargetDirectory,
                     deleteSource,
+                    placementMode,
                     cancellationToken),
                 cancellationToken);
 
@@ -195,6 +297,17 @@ namespace ArchiveFixer.ViewModels
             foreach ((string level, string message) in work.LogEntries)
             {
                 AppendLog(level, message);
+            }
+
+            /*
+             * 定稿被取消：产物已经搬回暂存区，最终目录里没有半成品。
+             * 这里必须抛出去让上层落成"已取消"（不变量 6：取消不得显示成功），
+             * 而不是 return false —— 那会被上层当成"结论不成立"，任务变成"解压失败"，
+             * 用户看到的原因就成了"失败"，但他的操作其实是取消。
+             */
+            if (work.Commit?.Cancelled == true)
+            {
+                throw new OperationCanceledException(cancellationToken);
             }
 
             if (work.BudgetExceeded)
@@ -228,13 +341,34 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
+            if (work.CommitFailed)
+            {
+                // 定稿一个内容物都没搬过去：产物还在暂存区，最终目录是空的 —— 不能报成功（不变量 6）。
+                task.Status = StatusText.ExtractFailed;
+                task.ProgressText = StatusText.ProgressFailed;
+                task.ErrorMessage = work.CommitFailureMessage;
+                task.IsOutputVerified = false;
+                task.LastUpdatedTime = DateTime.Now;
+
+                return false;
+            }
+
             task.IsOutputVerified = work.Verification.Verified;
 
             // 把"实际输出到别处"这件事写进任务对象：输出目录被自动改名时，用户必须在任务上看得见，
             // 不能只在日志里留一句就过去（AGENTS.md 不变量 6 的同一精神：结论不能静默）。
-            task.VerifyMessage = string.IsNullOrWhiteSpace(outputRedirectNote)
+            string verifyMessage = string.IsNullOrWhiteSpace(outputRedirectNote)
                 ? work.Verification.Message
                 : $"{work.Verification.Message}；{outputRedirectNote}";
+
+            // 定稿里搬不动的文件也必须让用户看得见：产物还在暂存区，不在他打开的那个目录里。
+            if (work.Commit is { FailedCount: > 0 })
+            {
+                verifyMessage += $"；定稿时有 {work.Commit.FailedCount} 个文件没能搬到最终目录" +
+                                 $"（{string.Join("、", work.Commit.Failures.Take(5))}），它们仍在暂存区。";
+            }
+
+            task.VerifyMessage = verifyMessage;
 
             if (work.Collected != null && work.Collected.Success)
             {
@@ -247,6 +381,9 @@ namespace ArchiveFixer.ViewModels
              * 位置与条件都在这里定死：**解压成功 + 输出校验通过 + 没被取消**。
              * 越界 / 超预算在上面已经 return（结论不成立）；取消会让上面的 await 抛 OperationCanceledException；
              * 校验没过时产物可能不全，工作区里的中间件是用户唯一的线索 —— 一律不删。
+             *
+             * 入仓（stage）之后这里更要紧了：暂存目录就在本任务的工作区里，产物已经定稿搬走，
+             * 剩下的全是可再生的中间件。
              */
             if (work.Verification.Verified && !cancellationToken.IsCancellationRequested)
             {
@@ -258,17 +395,22 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 收尾重活本体：落点校验 → 结果校验 → 预算事后判定 → 归集 → 清理源包。
+        /// 收尾重活本体：落点校验 → 结果校验 → 预算事后判定 → **定稿搬运** → 归集 → 清理源包。
+        ///
+        /// 校验与预算量的都是**暂存区**：那才是引擎真正写盘的地方（契约 §2.1）。
+        /// 最终目录此时还是干净的，只有定稿那一步会往里面写东西。
         ///
         /// **只允许在后台线程上跑**（见 <see cref="PostProcessSuccessAsync"/> 的线程规则）：
         /// 这里只碰文件系统，不写任务状态、不写界面日志集合，要说的都放进 LogEntries 回传。
         /// </summary>
         private PostProcessWorkResult RunPostProcessWork(
             ArchiveTask task,
+            string stageDirectory,
             ArchiveListResult expected,
             bool collectResults,
             string collectTargetDirectory,
             bool deleteSource,
+            OutputPlacementMode placementMode,
             CancellationToken cancellationToken)
         {
             var logEntries = new List<(string Level, string Message)>();
@@ -276,25 +418,28 @@ namespace ArchiveFixer.ViewModels
             cancellationToken.ThrowIfCancellationRequested();
 
             OutputVerificationResult verification = OutputVerifier.Verify(
-                task.OutputPath,
+                stageDirectory,
                 expected.Success ? expected : null);
 
             /*
              * 解压后落点校验（第二道防线，不变量 4）：产物必须都落在目标根目录之内。
+             *
+             * 量的是**暂存区**：引擎写盘的地方就是它（契约 §2.1）。落点校验必须在定稿**之前**做，
+             * 否则越界的产物已经被搬进最终目录，再报"拒绝承认"就晚了 —— 用户目录里已经多了东西。
              *
              * 旧写法（本轮修掉）：越界时只写一行 ERROR 日志，**结论照样是"解压成功"**，
              * 而且照样归集产物、照样清理源包 —— 等于把不变量 4 降级成一条没人看的提示：
              * 越界的产物被搬进结果目录、源包被删掉，程序却报一切正常。
              *
              * 现在与递归路径（RecursiveExtractor 的第二道防线）同一口径：
-             * 越界 = **失败结论**，不归集、不清理，原因写回任务状态与错误信息。
-             * 这里直接 return，让"不归集不清理"由控制流保证 —— 不依赖后面每一步都记得查这个标志。
+             * 越界 = **失败结论**，不定稿、不归集、不清理，原因写回任务状态与错误信息。
+             * 这里直接 return，让"不定稿不归集不清理"由控制流保证 —— 不依赖后面每一步都记得查这个标志。
              *
              * 复用 RecursiveExtractor.FindLandingViolation 而不是就地再枚举一遍：
              * 两条路径的口径必须一样，复制一份迟早分叉；而且它还能发现目录联接点 / 符号链接
              * （名字在产物目录里、内容却写到目录外）—— 旧写法只枚举文件，看不出这一类。
              */
-            string? landingViolation = RecursiveExtractor.FindLandingViolation(task.OutputPath);
+            string? landingViolation = RecursiveExtractor.FindLandingViolation(stageDirectory);
 
             if (landingViolation != null)
             {
@@ -317,7 +462,7 @@ namespace ArchiveFixer.ViewModels
              * 量一遍产物，超了就**停止后续任务**并把这一单标出来 —— 至少不会让整盘被一个包吃掉。
              * 这条只在引擎给不出清单时才真正有意义，但事后量一遍很便宜，就一直做。
              */
-            (int producedFiles, long producedSize) = OutputVerifier.Measure(task.OutputPath);
+            (int producedFiles, long producedSize) = OutputVerifier.Measure(stageDirectory);
             ResourceBudgetOptions budgetLimits = ResourceBudgetOptions.Default;
 
             if (producedSize > budgetLimits.MaxTotalSize || producedFiles > budgetLimits.MaxFileCount)
@@ -339,13 +484,81 @@ namespace ArchiveFixer.ViewModels
 
             logEntries.Add((verification.Verified ? "INFO" : "WARN", $"{task.FileName}：结果校验 —— {verification.Message}"));
 
+            /*
+             * 2) 定稿（契约 §2.2）：把暂存产物**一次性**搬到最终目录，中间件归入 <c>过程物</c>。
+             *
+             * 只在这一刻、只有这一条路径会往最终目录写东西。之前的所有动作（抠内嵌归档、解第一层、
+             * 解内层分卷）都在私有暂存目录里完成 —— 这就是用户那句"分卷文件你居然又解压到外面来了"
+             * 的根治点：源目录与最终目录在入仓阶段一个字节都不会被写。
+             *
+             * 搬运本身是**同步磁盘活**（几千个文件的 File.Move、跨盘还是拷贝），
+             * 所以它跟着本方法一起跑在后台线程上（见 PostProcessSuccessAsync 的线程规则）。
+             */
+            StageCommitResult? commit = ExecuteFinalLayout(
+                task,
+                stageDirectory,
+                task.OutputPath,
+                placementMode,
+                cancellationToken);
+
+            if (commit.Attempted)
+            {
+                foreach ((string level, string message) in commit.LogEntries)
+                {
+                    logEntries.Add((level, message));
+                }
+            }
+
+            if (commit.Cancelled)
+            {
+                // 取消：搬过去的已经搬回暂存区，最终目录没有半成品。结论由上层落成"已取消"。
+                logEntries.Add(("WARN", $"{task.FileName}：定稿被取消，产物已退回暂存目录，未写入最终目录。"));
+
+                return new PostProcessWorkResult
+                {
+                    Verification = verification,
+                    LogEntries = logEntries,
+                    Commit = commit
+                };
+            }
+
+            if (commit.Attempted && commit.PlannedContentCount > 0 && commit.MovedContentCount == 0 && commit.FailedCount > 0)
+            {
+                /*
+                 * 计划里的内容物一条都没搬过去、而且全是失败：这次"定稿"等于没发生。
+                 * 不能再报成功（不变量 6 的反面：跑完了不许说成成功，跑失败了也不许）——
+                 * 结论落成失败，产物留在暂存区供用户自己取。
+                 */
+                string failureMessage = "定稿搬运失败，产物没能写进输出目录：" + commit.Message;
+
+                logEntries.Add(("ERROR", $"{task.FileName}：{failureMessage}"));
+
+                return new PostProcessWorkResult
+                {
+                    Verification = verification,
+                    LogEntries = logEntries,
+                    Commit = commit,
+                    CommitFailed = true,
+                    CommitFailureMessage = failureMessage
+                };
+            }
+
             // 归集是**移动**产物，动手之前再查一次令牌（取消就不再移动）。
             cancellationToken.ThrowIfCancellationRequested();
 
-            // 2) 归集（可选）
+            // 3) 归集（可选）
             CollectResult? collected = null;
 
-            if (collectResults)
+            /*
+             * 续解出来的内层包**不参与归集**：它的落点就是父任务那一个最终目录，
+             * 而归集会把那个目录整个搬走 —— 第二轮再搬一次，内容物就会被搬进 "名字(1)" 里，
+             * 用户看到的还是"多了一个文件夹"。归集只由最外层源包做一次。
+             */
+            if (collectResults && task.IsContinuationTask)
+            {
+                logEntries.Add(("INFO", $"{task.FileName}：内层包，产物与父任务同一个目录，跳过结果归集。"));
+            }
+            else if (collectResults)
             {
                 if (!verification.Verified)
                 {
@@ -365,23 +578,528 @@ namespace ArchiveFixer.ViewModels
              */
             cancellationToken.ThrowIfCancellationRequested();
 
-            // 3) 清理源包（默认关闭；未通过校验时服务内部会拒绝执行）
-            SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
-                task,
-                verification,
-                deleteSource);
-
-            if (cleanup.Attempted)
+            /*
+             * 4) 清理源包（默认关闭；未通过校验时服务内部会拒绝执行）。
+             *
+             * 只对**最外层源包**做：续解出来的内层包，它的"源文件"是我们自己产出的中间件
+             * （现在就在 <c>过程物</c> 里），既不是用户给的包，也不该被这条开关删掉 ——
+             * 用户按下"解压后删除源包"时想删的是他拖进来的那个包，不是过程物。
+             */
+            if (task.IsContinuationTask)
             {
-                logEntries.Add((cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：清理源包 —— {cleanup.Message}"));
+                if (deleteSource)
+                {
+                    logEntries.Add(("INFO", $"{task.FileName}：内层包，源文件属于过程物，已跳过清理源包。"));
+                }
+            }
+            else
+            {
+                SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
+                    task,
+                    verification,
+                    deleteSource);
+
+                if (cleanup.Attempted)
+                {
+                    logEntries.Add((cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：清理源包 —— {cleanup.Message}"));
+                }
             }
 
             return new PostProcessWorkResult
             {
                 Verification = verification,
                 LogEntries = logEntries,
-                Collected = collected
+                Collected = collected,
+                Commit = commit
             };
+        }
+
+        /// <summary>
+        /// 抠出来的内嵌归档（双面文件尾部那一段）在定稿后是否搬进 <c>过程物</c>。
+        ///
+        /// 契约 §3.2 把"抠出来的中间 ZIP"列为过程物，本来是**该搬**的 —— 但实测下来不能搬，
+        /// 因为它不是"解出来的产物"，而是**解压的输入**（用户那个源文件的一段副本）：
+        ///
+        /// · 双面文件 <c>user.mp4</c> 的 ZIP 里就是内层分卷 <c>inner.7z.001/.002</c>；
+        ///   把它搬进 <c>过程物\user.zip</c> 之后，一键处理的续解扫描（它只看"本轮新出现的归档起点"）
+        ///   会把这个 ZIP 也当成一个**新的内层包**，于是又解一遍、又产出 <c>inner.7z.001</c>、
+        ///   再多续解一轮 —— 实测就是这个结果（回归测试"双面文件真实现场"从 2 轮变成 3 轮）。
+        /// · 而且它往往很大（双面文件能到 760MB 量级），搬进用户目录等于凭空多一份大副本。
+        ///
+        /// 所以默认 **false**：它留在工作区（<c>&lt;work&gt;\&lt;taskId&gt;\</c>），
+        /// 成功且校验通过后随工作区一起清掉，失败/取消时留着供排查。
+        /// 如果将来判定表/ResultFinalizer 能把它标注成"输入而非产物"（续解扫描据此跳过），
+        /// 把这里改成 true 即可，其余代码不用动。
+        /// </summary>
+        private const bool MoveCarvedArtifactIntoProcessDirectory = false;
+
+        /// <summary>
+        /// 定稿布局规划：把暂存产物树描述成 <see cref="StagedEntry"/>，交给
+        /// <see cref="ResultFinalizer.Plan"/>（契约 §3.1 判定表的**唯一实现处**），
+        /// 再把它的话翻译成本类执行阶段用的形状。
+        ///
+        /// 分工要说清楚：
+        /// · 本方法负责"**哪些是过程物**" —— 这一步只有跑过暂存阶段的人知道。
+        ///   判据用后缀（分卷段 + 归档本体）：解压出来的归档就是**待续解的内层包**，
+        ///   按流水线语义它属于过程物（一键处理下一轮会去解它，成功的话它的内容物自会落进内容物一层）；
+        ///   判定失败/到轮数上限时它留在 <c>过程物</c> 里可回收，比混在内容物里强。
+        ///   （ResultFinalizer 的注释建议"由调用方显式标"，这里就是那个调用方。）
+        /// · <see cref="ResultFinalizer"/> 负责"摆成什么样" —— 终端单文件直接放、多文件套一层、
+        ///   多重空目录提上来、单链塌缩，以及 D-2 的 <c>&lt;源目录&gt;\过程物\&lt;包基名&gt;\</c>。
+        ///
+        /// 纯函数：只读目录、只返回计划，一个字节都不动，所以能脱离管线被测。
+        /// </summary>
+        /// <param name="stageDirectory">暂存目录（入仓阶段的产物树）。</param>
+        /// <param name="destinationDirectory">最终目录（落点由 <see cref="PathService.BuildOutputPath"/> 算）。</param>
+        /// <param name="placementMode">落点模式；只影响过程物集中到哪（D-2 依赖它）。</param>
+        /// <param name="archiveBaseName">
+        /// 终端归档基名（"没有最外层文件夹名"时给那一层取名用）。传空则退回 destDir 自己的末段名。
+        /// </param>
+        internal static FinalLayoutPlan PlanFinalLayout(
+            string stageDirectory,
+            string destinationDirectory,
+            OutputPlacementMode placementMode,
+            string? archiveBaseName)
+        {
+            if (string.IsNullOrWhiteSpace(stageDirectory) ||
+                string.IsNullOrWhiteSpace(destinationDirectory) ||
+                !Directory.Exists(stageDirectory))
+            {
+                return new FinalLayoutPlan();
+            }
+
+            string stageRoot = SafePathHelper.GetFullPathSafe(stageDirectory);
+            var staged = new List<StagedEntry>();
+
+            foreach (string file in Directory.EnumerateFiles(stageRoot, "*", SearchOption.AllDirectories))
+            {
+                long size = 0;
+
+                try
+                {
+                    size = new FileInfo(file).Length;
+                }
+                catch
+                {
+                    // 量不出大小只影响"过程物总共多大"这个数字，不影响布局。
+                }
+
+                staged.Add(new StagedEntry
+                {
+                    RelativePath = Path.GetRelativePath(stageRoot, file),
+                    Size = size,
+                    IsProcessArtifact = IsProcessArtifactFile(file)
+                });
+            }
+
+            // 目录条目也要给：判定表要认"自带一层文件夹""多重空目录嵌套""单链"这些形态，
+            // 光有文件路径推不出"这一层是不是空的"。
+            foreach (string directory in Directory.EnumerateDirectories(stageRoot, "*", SearchOption.AllDirectories))
+            {
+                staged.Add(new StagedEntry
+                {
+                    RelativePath = Path.GetRelativePath(stageRoot, directory),
+                    IsDirectory = true
+                });
+            }
+
+            if (staged.Count == 0)
+            {
+                return new FinalLayoutPlan();
+            }
+
+            FinalizePlan finalize = ResultFinalizer.Plan(
+                staged,
+                destinationDirectory,
+                TerminalLayoutMode.KeepLastFolder,
+                archiveBaseName,
+                contentRoot: null,
+                stagingRoot: stageRoot,
+                placementMode: placementMode);
+
+            var processSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (PlannedMove move in finalize.ProcessArtifactMoves)
+            {
+                processSources.Add(move.From);
+            }
+
+            return new FinalLayoutPlan
+            {
+                Failed = finalize.Layout == FinalizeLayoutKind.Failed,
+                FailureReason = finalize.FailureReason,
+                Layout = finalize.Layout,
+                Moves = finalize.Moves,
+                PlannedContentCount = finalize.ContentMoves.Count,
+                ProcessArtifactSources = processSources,
+                ProcessArtifactDirectory = finalize.ProcessArtifactDirectory,
+                ProcessArtifactTotalSize = finalize.ProcessArtifactTotalSize,
+                ContentFileCount = finalize.ContentFileCount,
+                Summary = finalize.Summary,
+                Warnings = finalize.Warnings
+            };
+        }
+
+        /// <summary>
+        /// 这条路是不是"过程物"（契约 §3.2）：分卷段（<c>.001</c>/<c>.z01</c>/<c>.r00</c>/<c>.part1</c>）
+        /// 与归档本体（<c>.7z</c>/<c>.zip</c>/<c>.rar</c>/…）。抠出来的中间 ZIP 也落在这一条里。
+        /// </summary>
+        internal static bool IsProcessArtifactFile(string filePath)
+        {
+            string extension = Path.GetExtension(filePath);
+
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                return false;
+            }
+
+            return ExtensionHelper.IsVolumePartExtension(extension) ||
+                   ExtensionHelper.IsKnownArchiveExtension(extension);
+        }
+
+        /// <summary>
+        /// 执行定稿：按 <see cref="PlanFinalLayout"/> 的计划把暂存产物搬进最终目录。
+        ///
+        /// **只允许在后台线程上跑**（几千个 File.Move、跨盘还是拷贝）。
+        /// 三条硬要求：
+        /// ① 取消时把已经搬过去的**搬回来**（最终目录不许留半成品，契约 §6 第 2 条）；
+        /// ② 同名绝不覆盖（AutoRename 改名，记进 <see cref="StageCommitResult.RenamedCount"/>）；
+        /// ③ 单个文件搬不动只记一笔，不拖垮其余文件（与 <see cref="ExtractionWorkspace"/> 的搬运口径一致）。
+        /// </summary>
+        private StageCommitResult ExecuteFinalLayout(
+            ArchiveTask task,
+            string stageDirectory,
+            string destinationDirectory,
+            OutputPlacementMode placementMode,
+            CancellationToken cancellationToken)
+        {
+            var logEntries = new List<(string Level, string Message)>();
+
+            // 给"没有最外层文件夹名"时那一层取名用（判定表 2）。取的是**终端归档**的基名：
+            // 续解出来的内层包，它的 CurrentPath 就是最后解的那一卷，基名正是用户认得出的那个名字。
+            string archiveBaseName = OutputPlacement.ResolveArchiveBaseName(task.CurrentPath);
+
+            if (string.IsNullOrWhiteSpace(stageDirectory) ||
+                string.IsNullOrWhiteSpace(destinationDirectory) ||
+                !Directory.Exists(stageDirectory))
+            {
+                return new StageCommitResult { Attempted = false };
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return new StageCommitResult
+                {
+                    Attempted = true,
+                    Cancelled = true,
+                    Message = "定稿开始前已取消"
+                };
+            }
+
+            FinalLayoutPlan plan;
+
+            try
+            {
+                plan = PlanFinalLayout(stageDirectory, destinationDirectory, placementMode, archiveBaseName);
+            }
+            catch (Exception ex)
+            {
+                string readFailure = $"读取暂存目录失败：{ex.Message}";
+
+                logEntries.Add(("ERROR", $"{task.FileName}：{readFailure}"));
+
+                return new StageCommitResult
+                {
+                    Attempted = true,
+                    FailedCount = 1,
+                    Failures = new[] { readFailure },
+                    Message = readFailure,
+                    LogEntries = logEntries
+                };
+            }
+
+            if (plan.Failed)
+            {
+                string planFailure = "定稿布局规划失败：" + plan.FailureReason;
+
+                logEntries.Add(("ERROR", $"{task.FileName}：{planFailure}"));
+
+                return new StageCommitResult
+                {
+                    Attempted = true,
+                    FailedCount = 1,
+                    Failures = new[] { planFailure },
+                    Message = planFailure,
+                    LogEntries = logEntries
+                };
+            }
+
+            foreach (string warning in plan.Warnings)
+            {
+                logEntries.Add(("WARN", $"{task.FileName}：定稿提醒 —— {warning}"));
+            }
+
+            if (plan.Moves.Count == 0)
+            {
+                // 引擎什么都没写出来（空包）：没有可定稿的东西，也不该凭空造一个空目录给用户。
+                logEntries.Add(("WARN", $"{task.FileName}：暂存目录里没有产物，没有需要定稿的内容。"));
+
+                return new StageCommitResult
+                {
+                    Attempted = true,
+                    Message = "暂存目录里没有产物",
+                    LogEntries = logEntries
+                };
+            }
+
+            bool destinationExisted = Directory.Exists(destinationDirectory);
+
+            if (!SafePathHelper.EnsureDirectoryExists(destinationDirectory))
+            {
+                string createFailure = $"最终目录不存在且创建失败：{destinationDirectory}";
+
+                logEntries.Add(("ERROR", $"{task.FileName}：{createFailure}"));
+
+                return new StageCommitResult
+                {
+                    Attempted = true,
+                    FailedCount = plan.Moves.Count,
+                    Failures = new[] { createFailure },
+                    Message = createFailure,
+                    LogEntries = logEntries
+                };
+            }
+
+            var moved = new List<(string From, string To)>();
+            var failures = new List<string>();
+
+            int movedContent = 0;
+            int movedProcess = 0;
+            int renamed = 0;
+
+            // 计划里 **内容物在前、过程物在后**：先让用户要的东西落位，再收拾中间件。
+            foreach (PlannedMove move in plan.Moves)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    RollBackFinalLayout(moved, destinationDirectory, destinationExisted);
+
+                    logEntries.Add(("WARN", $"{task.FileName}：定稿被取消，已把 {moved.Count} 项退回暂存目录。"));
+
+                    return new StageCommitResult
+                    {
+                        Attempted = true,
+                        Cancelled = true,
+                        Message = "定稿被取消，产物已退回暂存目录",
+                        LogEntries = logEntries
+                    };
+                }
+
+                bool isProcessArtifact = plan.ProcessArtifactSources.Contains(move.From);
+
+                try
+                {
+                    // 计划里的一条可能是**文件**，也可能是**整个目录**（判定表 2/3/4 会整棵搬）。
+                    bool isDirectory = Directory.Exists(move.From) && !File.Exists(move.From);
+
+                    if (!SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(move.To)))
+                    {
+                        failures.Add($"{Path.GetFileName(move.To)}（无法创建目标目录）");
+                        continue;
+                    }
+
+                    string target = move.To;
+
+                    if (File.Exists(target) || Directory.Exists(target))
+                    {
+                        // 目标同名：换成 名字(1)，**绝不覆盖**（AGENTS.md §6 第 3 条）。
+                        string renamedTarget = isDirectory
+                            ? SafePathHelper.AutoRenameDirectoryPath(target)
+                            : SafePathHelper.AutoRenameFilePath(target);
+
+                        if (!string.Equals(renamedTarget, target, StringComparison.OrdinalIgnoreCase))
+                        {
+                            renamed++;
+                        }
+
+                        target = renamedTarget;
+                    }
+
+                    if (isDirectory)
+                    {
+                        Directory.Move(move.From, target);
+                    }
+                    else
+                    {
+                        File.Move(move.From, target);
+                    }
+
+                    moved.Add((move.From, target));
+
+                    if (isProcessArtifact)
+                    {
+                        movedProcess++;
+                    }
+                    else
+                    {
+                        movedContent++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{Path.GetFileName(move.From)}（{ex.Message}）");
+                }
+            }
+
+            /*
+             * 抠出来的内嵌归档：它是从源文件按偏移再生出来的派生数据，契约 §3.2 把它列为过程物。
+             * 它**不在暂存区里**（在任务工作区根下，是解压的输入），所以不在上面的计划里，单独搬一次。
+             * 为什么默认不搬：见 MoveCarvedArtifactIntoProcessDirectory 的说明。
+             */
+            if (MoveCarvedArtifactIntoProcessDirectory && task.EmbeddedArchiveOffset > 0)
+            {
+                string carvedPath = BuildEmbeddedArchivePath(task);
+
+                if (File.Exists(carvedPath))
+                {
+                    try
+                    {
+                        string processRoot = string.IsNullOrWhiteSpace(plan.ProcessArtifactDirectory)
+                            ? Path.Combine(destinationDirectory, ProcessArtifactDirectoryName)
+                            : plan.ProcessArtifactDirectory;
+
+                        string carvedTarget = Path.Combine(processRoot, Path.GetFileName(carvedPath));
+
+                        SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(carvedTarget));
+
+                        if (File.Exists(carvedTarget))
+                        {
+                            carvedTarget = SafePathHelper.AutoRenameFilePath(carvedTarget);
+                            renamed++;
+                        }
+
+                        File.Move(carvedPath, carvedTarget);
+
+                        movedProcess++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add($"{Path.GetFileName(carvedPath)}（抠出的中间归档：{ex.Message}）");
+                    }
+                }
+            }
+
+            string processDirectory = string.IsNullOrWhiteSpace(plan.ProcessArtifactDirectory)
+                ? Path.Combine(destinationDirectory, ProcessArtifactDirectoryName)
+                : plan.ProcessArtifactDirectory;
+
+            string summary =
+                $"内容物 {plan.ContentFileCount} 个文件 → {destinationDirectory}" +
+                (movedProcess > 0
+                    ? $"；过程物 {movedProcess} 项（{plan.ProcessArtifactTotalSize} 字节）→ {processDirectory}"
+                    : string.Empty) +
+                (renamed > 0 ? $"；{renamed} 项同名，已改名未覆盖" : string.Empty) +
+                (failures.Count > 0 ? $"；{failures.Count} 项没能搬运" : string.Empty);
+
+            logEntries.Add((failures.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：定稿完成 —— {summary}"));
+
+            return new StageCommitResult
+            {
+                Attempted = true,
+                PlannedContentCount = plan.PlannedContentCount,
+                MovedContentCount = movedContent,
+                MovedProcessCount = movedProcess,
+                ContentFileCount = plan.ContentFileCount,
+                ProcessArtifactBytes = plan.ProcessArtifactTotalSize,
+                RenamedCount = renamed,
+                FailedCount = failures.Count,
+                Failures = failures,
+                Message = summary,
+                LogEntries = logEntries
+            };
+        }
+
+        /// <summary>
+        /// 定稿的回滚：把已经搬过去的条目按**相反顺序**搬回暂存区原路径。
+        ///
+        /// 为什么必须回滚（契约 §6 第 2 条"定稿前 destDir 不得出现半成品"）：
+        /// 用户按下「取消当前」时，搬运可能已经做了一半 —— 只把最终目录里那一半留下，
+        /// 用户看到的就是一个"解压到一半"的目录，正是这次改造要根治的观感问题。
+        /// 回滚失败（文件被别的程序锁住等）只吞掉：那是更小的问题，而且日志里已经有取消记录。
+        ///
+        /// 条目可能是**整个目录**（判定表 2/3/4 会整棵搬），所以这里也要按类型分开搬回去。
+        /// </summary>
+        private static void RollBackFinalLayout(
+            List<(string From, string To)> moved,
+            string destinationDirectory,
+            bool destinationExisted)
+        {
+            for (int i = moved.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(moved[i].From));
+
+                    if (Directory.Exists(moved[i].To) && !File.Exists(moved[i].To))
+                    {
+                        Directory.Move(moved[i].To, moved[i].From);
+                    }
+                    else
+                    {
+                        File.Move(moved[i].To, moved[i].From);
+                    }
+                }
+                catch
+                {
+                    // 回滚不掉的单个条目不影响"已经尽量退回"这个结论。
+                }
+            }
+
+            if (destinationExisted)
+            {
+                // 目录本来就在（续解内层包时它装着上一轮的内容物），绝不能删。
+                return;
+            }
+
+            TryDeleteEmptyDirectoryTree(destinationDirectory);
+        }
+
+        /// <summary>由深到浅删掉空目录（只删空的；非空一律不碰）。定稿回滚后收拾自己造出来的目录壳。</summary>
+        private static void TryDeleteEmptyDirectoryTree(string root)
+        {
+            try
+            {
+                if (!Directory.Exists(root))
+                {
+                    return;
+                }
+
+                string[] directories = Directory.GetDirectories(root, "*", SearchOption.AllDirectories);
+
+                foreach (string directory in directories.OrderByDescending(d => d.Length))
+                {
+                    try
+                    {
+                        if (Directory.GetFileSystemEntries(directory).Length == 0)
+                        {
+                            Directory.Delete(directory, recursive: false);
+                        }
+                    }
+                    catch
+                    {
+                        // 删不掉就留着，不影响结论。
+                    }
+                }
+
+                if (Directory.GetFileSystemEntries(root).Length == 0)
+                {
+                    Directory.Delete(root, recursive: false);
+                }
+            }
+            catch
+            {
+                // 见方法注释：收拾目录壳是尽力而为。
+            }
         }
 
         /// <summary>
@@ -415,10 +1133,14 @@ namespace ArchiveFixer.ViewModels
         /// <param name="engineArchivePath">
         /// 真正交给引擎的归档路径。内嵌归档时它是工作区里抠出来的那个文件（不是 <c>task.CurrentPath</c>）。
         /// </param>
+        /// <param name="stageDirectory">
+        /// 暂存目录（入仓阶段）。递归核心把叶子层产物发布到**这里**，不直接写最终目录 ——
+        /// 定稿那一步才把它们搬进 <see cref="ArchiveTask.OutputPath"/>。
+        /// </param>
         private async Task RunRecursiveAsync(
             ArchiveTask task,
             string engineArchivePath,
-            string outputPath,
+            string stageDirectory,
             CancellationToken cancellationToken)
         {
             RecursionMode mode = string.Equals(Settings.RecursionMode, "AllBranches", StringComparison.OrdinalIgnoreCase)
@@ -451,7 +1173,7 @@ namespace ArchiveFixer.ViewModels
             AppendLog("INFO", $"{task.FileName}：开始递归解压（模式 {mode}，最大 {limits.MaxDepth} 层）。");
 
             RecursionResult result = await recursiveExtractor.ExtractAsync(
-                recursionTask, outputPath, mode, previousDecision: null, cancellationToken);
+                recursionTask, stageDirectory, mode, previousDecision: null, cancellationToken);
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
@@ -463,7 +1185,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     // 同一个实例接着跑（上限不变）：续跑用的是用户刚确认的那批候选，不是重新扫一遍。
                     result = await recursiveExtractor.ExtractAsync(
-                        recursionTask, outputPath, mode, result.Decision, cancellationToken);
+                        recursionTask, stageDirectory, mode, result.Decision, cancellationToken);
                 }
                 else
                 {
@@ -473,8 +1195,9 @@ namespace ArchiveFixer.ViewModels
                      * 这里**不能**就这样返回 NeedsDecision：那会让用户以为"东西已经解到输出目录了"，
                      * 而按不变量 12，需要决定时产物还留在工作区里 —— 文案与实现不符等于骗人。
                      *
-                     * 做法：把已经解好的第 0 层产物从工作区搬到输出目录，并把它当成 Completed 继续走
-                     * "校验 → 归集 → 清理"。不重新解压一遍：大包重解代价太大，而产物本来就在工作区里。
+                     * 做法：把已经解好的第 0 层产物从递归工作区搬进**暂存目录**（它照样是入仓阶段的一部分），
+                     * 并把它当成 Completed 继续走"校验 → 定稿 → 归集 → 清理"。
+                     * 不重新解压一遍：大包重解代价太大，而产物本来就在工作区里。
                      */
                     string? layerZeroOutput = result.Layers
                         .FirstOrDefault(l => l.Depth == 0 && l.Success)?.OutputPath;
@@ -486,7 +1209,7 @@ namespace ArchiveFixer.ViewModels
                          * 理由与收尾那一段完全相同（见 PostProcessSuccessAsync 的线程规则）。
                          */
                         int moved = await Task.Run(
-                            () => MoveDirectoryContent(layerZeroOutput, outputPath),
+                            () => MoveDirectoryContent(layerZeroOutput, stageDirectory),
                             cancellationToken);
 
                         result = new RecursionResult
@@ -495,8 +1218,8 @@ namespace ArchiveFixer.ViewModels
                             Completed = true,
                             PartiallyCompleted = false,
                             Layers = result.Layers,
-                            FinalOutputPath = outputPath,
-                            Summary = $"按你的选择只解开了当前这一层，已输出 {moved} 个文件。"
+                            FinalOutputPath = stageDirectory,
+                            Summary = $"按你的选择只解开了当前这一层，已取回 {moved} 个文件（定稿后进输出目录）。"
                         };
                     }
                     else
@@ -554,11 +1277,20 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(result.Completed ? "INFO" : "WARN", $"{task.FileName}：{result.Summary}");
 
-            // 递归产物同样要走"校验 → 归集 → 可选清理"；这里传 recursive=true，
-            // 因为外层归档的条目数和最终产物根本不是一回事，不能拿它当预期值。
-            if (result.Completed)
+            /*
+             * task.OutputPath **不跟着递归结论走**。
+             *
+             * 它必须始终指向**最终目录**（一键处理的续解、界面"输出目录"列、清理源包都读它），
+             * 而现在递归的产物先落在**暂存目录**里（调用方传的就是 stage），要等定稿那一步才搬出去。
+             * 旧写法 `task.OutputPath = result.FinalOutputPath` 在这里会把任务指向暂存区：
+             * 用户点"打开输出目录"会看到工作区里的中间件，续解也会去暂存区里找内层包。
+             */
+            if (!result.Completed)
             {
-                task.OutputPath = string.IsNullOrWhiteSpace(result.FinalOutputPath) ? task.OutputPath : result.FinalOutputPath;
+                // 没走完（上限 / 密码 / 需要决定）：产物留在暂存区，如实说清它在哪。
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：这次没有走完，产物仍在暂存目录，未搬进输出目录：{result.FinalOutputPath}");
             }
         }
 
@@ -1037,14 +1769,57 @@ namespace ArchiveFixer.ViewModels
 
             extractOptions.Normalize();
 
+            /*
+             * 落点模式（契约 §1.1 的四种，由旧的三个设置项翻译过来）。
+             * 定稿时要靠它决定过程物集中到哪：模式 B（解压到当前目录）下目标目录就是源目录本身，
+             * 一个目录里几十上百个包会共用它，所以过程物再套一层包基名（决策 D-2，由 ResultFinalizer 实现）。
+             */
+            OutputPlacementMode placementMode = OutputPlacement.FromLegacyFlags(
+                extractOptions.ExtractToOriginalDirectory,
+                extractOptions.KeepArchiveNameFolder,
+                extractOptions.CustomOutputDirectory);
+
             // 解压前算出来的"打算输出到哪"。它只是一个提议：下面可能因为目录已存在被改名。
+            // 续解出来的内层包由 PathService.BuildOutputPath 直接给出**父任务那一个**最终目录（不再套一层）。
             string requestedOutputPath = _pathService.BuildOutputPath(task, extractOptions);
             string outputPath = requestedOutputPath;
             string outputRedirectNote = string.Empty;
 
+            /*
+             * 落点算不出来时必须**当场停下**（必修项，2026-09-21）。
+             *
+             * 旧实现会把空的"自定义输出目录"回落成程序安装目录，于是用户的文件被解进 exe 所在的那个目录 ——
+             * 既找不到、又可能污染程序自己的 data。现在 BuildOutputPath 返回空串，
+             * 这里给出明确状态与一句话原因，让用户去设置里选一个输出目录。
+             */
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                task.Status = StatusText.ExtractFailed;
+                task.ProgressText = StatusText.ProgressFailed;
+                task.ErrorMessage = "输出目录无效（未设置或不可用），请在设置里选择输出目录后重试";
+                task.LastUpdatedTime = DateTime.Now;
+
+                AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                return;
+            }
+
             try
             {
-                if (!string.IsNullOrWhiteSpace(outputPath) &&
+                /*
+                 * 「输出目录已存在且非空 → 自动改名成 xxx(1)」只对**最外层源包**做。
+                 *
+                 * 为什么续解出来的内层包必须跳过这一步：它的落点是父任务**正在用**的那个目录
+                 * （内容物 + 过程物都在里面），对它改名等于把第二层解到旁边的 xxx(1) 去 ——
+                 * 那正是用户抱怨的"多弄了四个文件夹、文件一多根本分不清"。
+                 * 同名冲突也不会因此丢东西：内层产物进目录时由定稿搬运的 AutoRename 兜住（绝不覆盖）。
+                 */
+                if (task.IsContinuationTask)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：内层包，产物归入父任务输出目录 {outputPath}（不再另建目录）。");
+                }
+                else if (!string.IsNullOrWhiteSpace(outputPath) &&
                     Directory.Exists(outputPath) &&
                     Directory.EnumerateFileSystemEntries(outputPath).Any())
                 {
@@ -1079,11 +1854,52 @@ namespace ArchiveFixer.ViewModels
              * 解压后校验、结果归集、清理源包、界面"输出目录"列、以及一键处理的续解全都以它为准
              * （续解那边要读的就是这个值，见报告里的移交项）。
              * 绝不允许只把改名写进日志、却让 task.OutputPath 停在"打算输出到哪"。
+             *
+             * ⚠ 它**始终指向最终目录**，不指向暂存目录：暂存区只是过程，
+             * 续解逻辑（OneClickCoordinator）读的必须是"内容物最终在哪"。
              */
             task.OutputPath = outputPath;
 
             // 每个任务都明确说一次实际落点：目录被改名时用户必须能立刻看出产物去了哪。
             AppendLog("INFO", $"{task.FileName}：本次实际输出目录 {outputPath}");
+
+            /*
+             * ===== 阶段一：入仓（stage，契约 §2.1）=====
+             *
+             * 从这一刻起，本任务**所有**中间动作（抠内嵌归档之后的解压、第一层、内层分卷、递归）
+             * 都在私有暂存目录 <c>&lt;work&gt;\&lt;taskId&gt;\stage</c> 里完成，
+             * 源目录与最终目录一个字节都不会被写。
+             *
+             * 这条就是用户那句"分卷文件你居然又解压到外面来了"的根治点：
+             * 旧实现把引擎的输出目录直接设成 destDir，内层分卷于是和内容物一起躺在用户目录里；
+             * 一旦失败，用户目录里还留着半成品。
+             */
+            string stageDirectory = _pathService.BuildTaskStageDirectory(task);
+
+            if (string.IsNullOrWhiteSpace(stageDirectory))
+            {
+                task.Status = StatusText.ExtractFailed;
+                task.ProgressText = StatusText.ProgressFailed;
+                task.ErrorMessage = "无法确定暂存目录（工作区不可用）";
+                AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                return;
+            }
+
+            string? stageFailure = await PrepareStageDirectoryAsync(task, stageDirectory, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(stageFailure))
+            {
+                task.Status = StatusText.ExtractFailed;
+                task.ProgressText = StatusText.ProgressFailed;
+                task.ErrorMessage = stageFailure;
+                AppendLog("ERROR", $"{task.FileName}：{stageFailure}");
+                return;
+            }
+
+            // 引擎写盘的地方 = 暂存目录。**不是** outputPath —— 那是定稿的目标。
+            string engineOutputPath = stageDirectory;
+
+            AppendLog("INFO", $"{task.FileName}：入仓目录 {stageDirectory}（中间产物先落这里，定稿时才搬进 {outputPath}）");
 
             /*
              * 内嵌归档（双面文件）：先按偏移把尾部那段真正的 ZIP 抠出来，
@@ -1282,7 +2098,8 @@ namespace ArchiveFixer.ViewModels
                     // 取不到大小就不做展开比判断，其余预算照常。
                 }
 
-                BudgetCheckResult budget = new ResourceBudget().CheckBeforeExtract(preflightList, archiveSize, outputPath);
+                // 预算里的"落点"用暂存目录：引擎真正写盘的地方是它，最终目录此时还不存在。
+                BudgetCheckResult budget = new ResourceBudget().CheckBeforeExtract(preflightList, archiveSize, engineOutputPath);
 
                 if (!budget.Allowed)
                 {
@@ -1302,11 +2119,28 @@ namespace ArchiveFixer.ViewModels
             /*
              * 递归模式（M4）：不是"只解当前层"时，整条解压交给 RecursiveExtractor。
              * 它自己会解第 0 层、探测内层、按模式决定继续还是问用户，并受硬上限约束。
-             * 放在预检之后：预检已经把 outputPath 算好，而且非归档 / 格式未知在前面已经分流走了。
+             * 放在预检之后：预检已经把暂存目录算好，而且非归档 / 格式未知在前面已经分流走了。
+             *
+             * 落点传的是**暂存目录**：递归核心本来就在自己的工作区里逐层解、最后才 Publish，
+             * 让它直接 Publish 到最终目录等于跳过了"入仓 → 定稿"这道门（失败时还会在用户目录里留下半成品）。
+             * 现在它发布进暂存区，再由下面的定稿一次性搬进最终目录 —— 与单层路径同一口径。
              */
             if (!string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase))
             {
-                await RunRecursiveAsync(task, engineArchivePath, outputPath, cancellationToken);
+                await RunRecursiveAsync(task, engineArchivePath, engineOutputPath, cancellationToken);
+
+                if (task.Status == StatusText.ExtractSuccess)
+                {
+                    // 递归产物同样要走"校验 → 定稿 → 归集 → 可选清理"，与单层路径一个字都不差。
+                    bool recursionConclusionStands = await PostProcessSuccessAsync(
+                        task, engineArchivePath, string.Empty, engineOutputPath, outputRedirectNote, placementMode, cancellationToken);
+
+                    if (recursionConclusionStands)
+                    {
+                        AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
+                    }
+                }
+
                 return;
             }
 
@@ -1461,7 +2295,7 @@ namespace ArchiveFixer.ViewModels
      new ArchiveRequest
      {
          ArchivePath = engineArchivePath,
-         OutputPath = outputPath,
+         OutputPath = engineOutputPath,
          Password = selectedPassword
      },
      extractOptions,
@@ -1486,9 +2320,9 @@ namespace ArchiveFixer.ViewModels
                     // 而工作区里抠出来的临时文件活不过这次任务。
                     _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                    // 收尾可能把"解压成功"顶掉（产物越界 / 超预算）：只有结论仍然成立时才敢这么写日志。
+                    // 收尾可能把"解压成功"顶掉（产物越界 / 超预算 / 定稿失败）：只有结论仍然成立时才敢这么写日志。
                     bool conclusionStands = await PostProcessSuccessAsync(
-                        task, engineArchivePath, selectedPassword, outputRedirectNote, cancellationToken);
+                        task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, cancellationToken);
 
                     if (conclusionStands)
                     {
@@ -1544,7 +2378,7 @@ namespace ArchiveFixer.ViewModels
      new ArchiveRequest
      {
          ArchivePath = engineArchivePath,
-         OutputPath = outputPath,
+         OutputPath = engineOutputPath,
          Password = selectedPassword
      },
      extractOptions,
@@ -1570,9 +2404,9 @@ namespace ArchiveFixer.ViewModels
                         // 同"先测试再解压"那条分支：密码成功记录挂源文件，不挂工作区里的临时文件。
                         _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                        // 同"先测试再解压"那条分支：收尾否掉结论（越界 / 超预算）时不许写"解压成功"。
+                        // 同"先测试再解压"那条分支：收尾否掉结论（越界 / 超预算 / 定稿失败）时不许写"解压成功"。
                         bool conclusionStands = await PostProcessSuccessAsync(
-                            task, engineArchivePath, selectedPassword, outputRedirectNote, cancellationToken);
+                            task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, cancellationToken);
 
                         if (conclusionStands)
                         {
@@ -1660,54 +2494,123 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 内嵌归档抠出来之后落在哪：<c>&lt;程序目录&gt;\data\work\&lt;任务名&gt;\&lt;包基名&gt;.zip</c>。
+        /// 准备本任务的暂存目录（入仓的第一步）：建出来，并把**上一次留下的残留**清掉。
         ///
-        /// 两条刻意的选择：
-        /// ① 放工作区（<see cref="PathService.WorkDirectory"/>）而不是源目录旁边 ——
-        ///    中间产物不得写进源目录（AGENTS.md §6 第 12 条）。抠出来的这一段只是为了能解压，
-        ///    不是用户要的东西，任务结束留在工作区由用户自己清；
-        /// ② 文件名沿用**源文件的包基名**，不改成随机临时名 ——
-        ///    密码本"名称:密码"的映射匹配用的就是包基名，随机名会让本来能命中的密码全部落空，
-        ///    用户看到的现象会是"同一个包以前能解开，现在说密码错误"。
+        /// 为什么要清残留：暂存目录的 taskId 带源路径哈希，所以同一个包重试时落回同一个目录。
+        /// 上一次失败/取消留下的产物如果不清，这一次的定稿会把它们一起当成"本次产物"搬进最终目录 ——
+        /// 用户会看到上一轮的垃圾文件混进结果里（比"多几个文件夹"更难查）。
+        ///
+        /// 为什么必须在后台线程：<see cref="Directory.Delete(string, bool)"/> 删的是几十万个文件的树时
+        /// 是秒级到分钟级的同步磁盘活，放在 UI 线程上就是"点了没反应"。
+        ///
+        /// 返回 null = 准备好了；返回非空字符串 = 失败原因（调用方落成失败状态并把原因写给用户）。
         /// </summary>
-        private string BuildEmbeddedArchivePath(ArchiveTask task)
+        private async Task<string?> PrepareStageDirectoryAsync(
+            ArchiveTask task,
+            string stageDirectory,
+            CancellationToken cancellationToken)
         {
-            string taskId = FileNameHelper.SanitizeFileName(task.FileName);
-            string baseName = FileNameHelper.SanitizeFileName(FileNameHelper.GetArchiveBaseName(task.CurrentPath));
+            try
+            {
+                return await Task.Run(
+                    () =>
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
 
-            return Path.Combine(_pathService.WorkDirectory, taskId, baseName + ".zip");
+                        if (Directory.Exists(stageDirectory))
+                        {
+                            bool hasLeftover = false;
+
+                            try
+                            {
+                                hasLeftover = Directory.EnumerateFileSystemEntries(stageDirectory).Any();
+                            }
+                            catch
+                            {
+                                hasLeftover = true;
+                            }
+
+                            if (hasLeftover)
+                            {
+                                // 上一轮的残留：先清掉再解。清不掉就如实失败，绝不"接着往里解"。
+                                Directory.Delete(stageDirectory, recursive: true);
+                            }
+                        }
+
+                        return SafePathHelper.EnsureDirectoryExists(stageDirectory)
+                            ? null
+                            : $"暂存目录不存在且创建失败：{stageDirectory}";
+                    },
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return $"准备暂存目录失败（{ex.Message}）：{stageDirectory}";
+            }
         }
 
         /// <summary>
-        /// 清理**本任务自己**的中间工作区目录：<c>&lt;程序目录&gt;\data\work\&lt;任务名&gt;\</c>。
+        /// 内嵌归档抠出来之后落在哪：<c>&lt;work&gt;\&lt;taskId&gt;\&lt;包基名&gt;.zip</c>。
+        ///
+        /// 三条刻意的选择：
+        /// ① 放工作区（<see cref="PathService.WorkDirectory"/>）而不是源目录旁边 ——
+        ///    中间产物不得写进源目录（AGENTS.md §6 第 12 条）。抠出来的这一段只是为了能解压，
+        ///    不是用户要的东西；定稿时它会被归入 <c>过程物</c>（契约 §3.2），取消/失败时留在工作区；
+        /// ② 文件名沿用**源文件的包基名**，不改成随机临时名 ——
+        ///    密码本"名称:密码"的映射匹配用的就是包基名，随机名会让本来能命中的密码全部落空，
+        ///    用户看到的现象会是"同一个包以前能解开，现在说密码错误"；
+        /// ③ 它是**暂存目录的兄弟**（不在 stage 里面）：stage 里的东西会被整体定稿搬走，
+        ///    而它是解压的输入，不该被自己搬走。
+        /// </summary>
+        private string BuildEmbeddedArchivePath(ArchiveTask task)
+        {
+            string baseName = FileNameHelper.SanitizeFileName(FileNameHelper.GetArchiveBaseName(task.CurrentPath));
+
+            return Path.Combine(_pathService.BuildTaskWorkDirectory(task), baseName + ".zip");
+        }
+
+        /// <summary>
+        /// 清理**本任务自己**的中间工作区目录：<c>&lt;work&gt;\&lt;taskId&gt;\</c>。
         ///
         /// 为什么必须有（端到端验收实测）：双面文件要先按偏移把它尾部那段真正的 ZIP 抠进工作区再解压，
         /// 一次**成功**的一键处理就在那个目录里留下近 1 GB 中间件（实测 733 MB + 167 MB 两个包）。
         /// 这些是从源文件按偏移可再生的派生数据，成功后留着纯属垃圾：跑几批就把盘吃掉，
         /// 而且 MainViewModel 启动时会把工作区根下的每个子目录都报成"未完成的工作区"，留着还会造成假警报。
         ///
+        /// 入仓（stage）之后这一条覆盖的范围变大了：暂存目录也在这个工作区里，
+        /// 所以**每个任务**（不只是抠过内嵌归档的）成功后都要清 —— 条件反而更简单：
+        /// 定稿把内容物搬走之后，这里剩下的全是可再生的中间件。
+        ///
         /// 只在这三件事同时成立时才删（与 AGENTS.md §9.5 的清理语义对齐）：
-        /// ① 解压成功；② 输出校验通过；③ 没有被取消、没有越界结论、没有超预算。
+        /// ① 解压成功；② 输出校验通过；③ 没有被取消、没有越界结论、没有超预算、没有定稿失败。
         /// 取消 / 部分完成 / 校验失败 / 越界一律不删 —— 产物可能没落全，工作区里的中间件是用户唯一的线索。
         ///
         /// 安全边界（这是"删目录"，每一条都要有）：
-        /// · 只有**真的抠过内嵌归档**的任务才会在这里留下东西（<see cref="ArchiveTask.EmbeddedArchiveOffset"/> &gt; 0），
-        ///   没抠过就一个字节都不碰；
-        /// · 目录按 <see cref="BuildEmbeddedArchivePath"/> 的同一套 <c>&lt;root&gt;\&lt;任务名&gt;</c> 布局算出，
+        /// · 目录按 <see cref="PathService.BuildTaskWorkDirectory"/> 的同一套布局算出，
         ///   再规范化确认它确实在工作区根**之下**（容器内校验，越界就什么都不删）；
-        /// · 目录里出现子目录就放弃：抠出来的中间件只会是文件，有子目录说明这不是我们造的那个目录
-        ///   （最典型：任务名恰好叫 <c>recursive</c>，撞上了递归工作区的容器目录）；
+        /// · 目录里只允许出现 <c>stage</c> 这一个子目录（我们自己造的）与本任务的中间件文件；
+        ///   出现别的子目录说明这不是我们造的那个目录（最典型：任务名撞上了递归工作区的 <c>recursive</c>），
+        ///   为安全起见一个字节都不碰；
         /// · 删失败（被占用 / 权限不足）只写日志，绝不让已经成功的任务变成失败。
         /// </summary>
         private void CleanupTaskWorkspaceDirectory(ArchiveTask task)
         {
-            if (task == null || task.EmbeddedArchiveOffset <= 0)
+            if (task == null)
             {
                 return;
             }
 
             string workRoot = _pathService.WorkDirectory;
-            string taskDirectory = Path.Combine(workRoot, FileNameHelper.SanitizeFileName(task.FileName));
+            string taskDirectory = _pathService.BuildTaskWorkDirectory(task);
+
+            if (string.IsNullOrWhiteSpace(taskDirectory))
+            {
+                return;
+            }
 
             if (!ArchivePathGuard.IsInsideRoot(workRoot, taskDirectory, out string reason))
             {
@@ -1722,9 +2625,17 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                if (Directory.GetDirectories(taskDirectory).Length > 0)
+                string[] subdirectories = Directory.GetDirectories(taskDirectory);
+
+                string? foreign = subdirectories.FirstOrDefault(
+                    directory => !string.Equals(
+                        Path.GetFileName(directory),
+                        PathService.StageDirectoryName,
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (foreign != null)
                 {
-                    AppendLog("WARN", $"{task.FileName}：中间工作区目录里有子目录（不是本任务抠出来的中间件），为安全起见不清理：{taskDirectory}");
+                    AppendLog("WARN", $"{task.FileName}：中间工作区目录里有非本任务造的子目录（{foreign}），为安全起见不清理：{taskDirectory}");
                     return;
                 }
             }

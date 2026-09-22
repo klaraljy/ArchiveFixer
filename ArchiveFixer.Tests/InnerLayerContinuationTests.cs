@@ -154,7 +154,12 @@ namespace ArchiveFixer.Tests
             Assert.True(calls <= 2, $"第 1 轮的任务被重复解压了：ExtractAsync 一共被调了 {calls} 次");
 
             Assert.False(outerTask.IsSelected, "处理过的任务必须取消勾选，否则下一轮会重新解压、产出 (1) 垃圾副本");
-            Assert.True(File.Exists(Path.Combine(harness.OutputRoot, "outer", "inner.7z.001")));
+
+            /*
+             * 内层分卷落进**过程物**（契约 §3.2）：用户看到的是"一个源包 = 一个目录"，
+             * 中间件集中在 过程物 里，不再和内容物混在同一层。
+             */
+            Assert.True(File.Exists(Path.Combine(harness.OutputRoot, "outer", "过程物", "inner.7z.001")));
 
             // 没有多出"(1)"这种自动改名副本目录
             Assert.False(Directory.Exists(Path.Combine(harness.OutputRoot, "outer (1)")), "不该出现重复解压留下的副本目录");
@@ -188,6 +193,68 @@ namespace ArchiveFixer.Tests
             (int sum, int scope) = ParseSummaryCounts(outcome.Summary);
             Assert.Equal(scope, sum);
             Assert.Equal(3, scope);
+        }
+
+        // ---------------------------------------------------------------- 用户的验收判据：一个源包 = 一个目录
+
+        /// <summary>
+        /// 用户的原始抱怨（必须被这条测试钉死）：
+        /// <i>"这次的一键处理给我弄的相当糟糕，你给我多弄了四个文件夹，分卷文件你居然又解压到外面来了，
+        /// 文件一多根本就分不清"</i>。
+        ///
+        /// 期望：处理完一个源包之后，**最终只有 <c>&lt;输出根&gt;\&lt;包名&gt;\</c> 这一个目录**，
+        /// 里面是内容物 + 一个集中的 <c>过程物</c>；中间件（内层分卷、抠出的 ZIP）一个都不许漏到外面。
+        ///
+        /// 这里用的是最像真实现场的那条链：`outer.7z` →（第一层就是内层加密分卷）→ 分卷 → 内容物。
+        /// 旧实现会额外产出 <c>inner.7z\</c> 这类平级目录，而且分卷本身还和内容物躺在同一层。
+        /// </summary>
+        [Fact]
+        public async Task 一个源包处理完_输出根下只有一个目录()
+        {
+            BuildInnerVolumeGroup();
+            string outer = BuildPackageFromInnerStage("outer.7z");
+
+            Harness harness = CreateHarness($"outer:{OuterPassword}\ninner:{InnerPassword}\n");
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            Assert.Equal(2, outcome.Rounds);
+
+            // ① 输出根下只有那**一个**目录（源包名）
+            string[] directories = Directory.GetDirectories(harness.OutputRoot);
+            Assert.True(
+                directories.Length == 1,
+                $"输出根下应该只有一个目录，实际 {directories.Length} 个：{string.Join("、", directories.Select(Path.GetFileName))}");
+            Assert.Equal(Path.Combine(harness.OutputRoot, "outer"), directories[0]);
+
+            string outputDirectory = directories[0];
+
+            // ② 内容物在这个目录里，而且只有一份
+            string[] payloads = Directory.GetFiles(outputDirectory, "payload.txt", SearchOption.AllDirectories);
+            Assert.Single(payloads);
+            Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
+
+            // ③ 中间件全部集中在 过程物 里，一个都不许漏在外面
+            string processDirectory = Path.Combine(outputDirectory, "过程物");
+            Assert.True(Directory.Exists(processDirectory), $"过程物目录不存在：{processDirectory}");
+            Assert.True(File.Exists(Path.Combine(processDirectory, "inner.7z.001")));
+
+            // 除 过程物 之外的顶层条目只能有内容物（这里就是 payload.txt / big.bin）
+            string[] topLevel = Directory.GetFileSystemEntries(outputDirectory)
+                .Select(Path.GetFileName)
+                .Where(name => !string.Equals(name, "过程物", StringComparison.Ordinal))
+                .Select(name => name ?? string.Empty)
+                .ToArray();
+
+            Assert.All(
+                topLevel,
+                name => Assert.False(
+                    OneClickCoordinator.IsArchiveStartPoint(name) || name.EndsWith(".002", StringComparison.OrdinalIgnoreCase),
+                    $"中间件漏到内容物一层了：{name}"));
+
+            // ④ 源文件一个字节都不许动（不变量 1）
+            Assert.True(File.Exists(outer));
         }
 
         // ---------------------------------------------------------------- 第四步：没有内层包 = 回归
@@ -273,10 +340,10 @@ namespace ArchiveFixer.Tests
             Assert.True(payloads.Length == 1, $"第 2 层应该产出一份 payload.txt，实际 {payloads.Length} 份（目录：{harness.OutputRoot}）");
             Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
 
-            // 内层包确实是落在"实际落点"里的那一批
+            // 内层包确实是落在"实际落点"里的那一批（过程物 是它的集中处，契约 §3.2）
             Assert.True(
-                File.Exists(Path.Combine(outerTask.OutputPath, "inner.7z.001")),
-                $"内层分卷应该落在实际输出目录里：{outerTask.OutputPath}");
+                File.Exists(Path.Combine(outerTask.OutputPath, "过程物", "inner.7z.001")),
+                $"内层分卷应该落在实际输出目录的过程物里：{outerTask.OutputPath}");
 
             // 用户原来放在同名目录里的文件一个字节都不许动（不变量 1）
             Assert.True(File.Exists(staleFile));

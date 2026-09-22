@@ -13,6 +13,7 @@ namespace ArchiveFixer.Views
     public partial class TaskDetailWindow : Window
     {
         private readonly ClipboardService _clipboardService;
+        private readonly DialogService _dialogService;
 
         public ArchiveTask? TaskItem { get; private set; }
 
@@ -21,6 +22,7 @@ namespace ArchiveFixer.Views
             InitializeComponent();
 
             _clipboardService = new ClipboardService();
+            _dialogService = new DialogService();
 
             TaskLogTextBox.Text = "未传入任务。";
         }
@@ -30,6 +32,7 @@ namespace ArchiveFixer.Views
             InitializeComponent();
 
             _clipboardService = new ClipboardService();
+            _dialogService = new DialogService();
 
             SetTask(task);
         }
@@ -52,13 +55,7 @@ namespace ArchiveFixer.Views
         {
             if (TaskItem == null)
             {
-                MessageBox.Show(
-                    this,
-                    "没有可复制的任务信息。",
-                    "提示",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-
+                _dialogService.ShowInfo("没有可复制的任务信息。");
                 return;
             }
 
@@ -67,21 +64,11 @@ namespace ArchiveFixer.Views
                 string text = BuildDetailText(TaskItem);
                 _clipboardService.CopyText(text);
 
-                MessageBox.Show(
-                    this,
-                    "任务信息已复制到剪贴板。",
-                    "提示",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                _dialogService.ShowInfo("任务信息已复制到剪贴板（不含明文密码）。");
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    this,
-                    "复制失败：" + ex.Message,
-                    "错误",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                _dialogService.ShowException(ex, "复制失败");
             }
         }
 

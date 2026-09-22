@@ -1,0 +1,145 @@
+<Window x:Class="ArchiveFixer.Views.AppDialogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource AppWindowStyle}"
+        Title="提示"
+        Width="520"
+        MinWidth="420"
+        MaxWidth="760"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource PanelBrush}"
+        TextOptions.TextFormattingMode="Display">
+
+    <!--
+        统一自绘对话框（UI v2）。
+
+        为什么不用 MessageBox：
+        系统 MessageBox 是灰底、图标是系统位图、正文不能选中复制、按钮顺序与配色都无法控制，
+        和本程序其它窗口放在一起"看不下去"（用户原话）。这里提供：
+        · 四类图标（信息/警告/错误/确认），颜色走 App.xaml 的统一资源；
+        · 正文用只读 TextBox —— 可选中、可 Ctrl+C（MessageBox 做不到）；
+        · 按钮区右对齐、主操作在最右、危险操作给警示样式；
+        · 可选"不再提示"一类的勾选项位。
+    -->
+
+    <Grid Margin="18,16,18,14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 标题区：图标 + 标题（+ 可选副标题） -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border x:Name="IconBadge"
+                    Grid.Column="0"
+                    Width="34"
+                    Height="34"
+                    CornerRadius="{StaticResource BadgeCornerRadius}"
+                    Background="{StaticResource PrimaryBrush}"
+                    VerticalAlignment="Top"
+                    Margin="0,0,12,0">
+                <TextBlock x:Name="IconGlyph"
+                           Text="i"
+                           Foreground="{StaticResource TextOnAccentBrush}"
+                           FontSize="18"
+                           FontWeight="Bold"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+            </Border>
+
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock x:Name="TitleTextBlock"
+                           Text="提示"
+                           FontSize="15.5"
+                           FontWeight="SemiBold"
+                           Foreground="{StaticResource TextPrimaryBrush}"
+                           TextWrapping="Wrap" />
+
+                <TextBlock x:Name="SubtitleTextBlock"
+                           Style="{StaticResource HintTextStyle}"
+                           Margin="0,3,0,0"
+                           Visibility="Collapsed" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 正文：可选中复制 -->
+        <!-- AcceptsReturn=False：否则只读框会吃掉回车，Enter 就打不到默认按钮上 -->
+        <TextBox x:Name="MessageTextBox"
+                 Grid.Row="1"
+                 Style="{StaticResource SelectableBodyTextBoxStyle}"
+                 Margin="0,14,0,0"
+                 MaxHeight="320"
+                 MinHeight="24"
+                 AcceptsReturn="False"
+                 VerticalScrollBarVisibility="Auto" />
+
+        <!-- 附加细节（异常类型等），默认隐藏 -->
+        <Border x:Name="DetailPanel"
+                Grid.Row="2"
+                Style="{StaticResource WarningBannerStyle}"
+                Margin="0,10,0,0"
+                Visibility="Collapsed">
+            <TextBox x:Name="DetailTextBox"
+                     Style="{StaticResource SelectableBodyTextBoxStyle}"
+                     FontFamily="{StaticResource MonoFontFamily}"
+                     FontSize="11.5"
+                     Foreground="{StaticResource WarningTextBrush}"
+                     Background="Transparent"
+                     AcceptsReturn="False"
+                     MaxHeight="120" />
+        </Border>
+
+        <!-- 可选项位（"不再提示"这类） -->
+        <CheckBox x:Name="OptionCheckBox"
+                  Grid.Row="3"
+                  Margin="0,12,0,0"
+                  Visibility="Collapsed" />
+
+        <!-- 按钮区：右对齐；主操作最右，危险操作给警示样式。默认全部收起，由 AppDialogWindow.ApplyButtons 按组合放出来 -->
+        <StackPanel Grid.Row="4"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,18,0,0">
+            <Button x:Name="CancelButton"
+                    Content="取消"
+                    MinWidth="88"
+                    Margin="0,0,8,0"
+                    Visibility="Collapsed"
+                    Style="{StaticResource SecondaryButtonStyle}"
+                    Click="CancelButton_Click" />
+
+            <Button x:Name="NoButton"
+                    Content="否"
+                    MinWidth="88"
+                    Margin="0,0,8,0"
+                    Visibility="Collapsed"
+                    Style="{StaticResource SecondaryButtonStyle}"
+                    Click="NoButton_Click" />
+
+            <Button x:Name="YesButton"
+                    Content="是"
+                    MinWidth="96"
+                    Margin="0,0,8,0"
+                    Visibility="Collapsed"
+                    Click="YesButton_Click" />
+
+            <Button x:Name="OkButton"
+                    Content="确定"
+                    MinWidth="96"
+                    Margin="0"
+                    Visibility="Collapsed"
+                    Click="OkButton_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

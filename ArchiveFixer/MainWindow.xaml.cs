@@ -1,4 +1,5 @@
 using ArchiveFixer.Models;
+using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using ArchiveFixer.Views;
 using System;
@@ -13,6 +14,7 @@ namespace ArchiveFixer
     public partial class MainWindow : Window
     {
         private bool _syncingPassword;
+        private readonly DialogService _dialogService = new();
 
         public MainWindow()
         {
@@ -146,12 +148,8 @@ namespace ArchiveFixer
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    this,
-                    "拖拽导入失败：" + ex.Message,
-                    "错误",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                // 拖拽导入失败也要走统一对话框（系统 MessageBox 与本程序的观感不搭）
+                _dialogService.ShowException(ex, "拖拽导入失败");
             }
         }
 
@@ -206,13 +204,7 @@ namespace ArchiveFixer
 
             if (TaskDataGrid?.SelectedItem is not ArchiveTask task)
             {
-                MessageBox.Show(
-                    this,
-                    "请先选择一个任务。",
-                    "提示",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-
+                _dialogService.ShowInfo("请先选择一个任务。");
                 return;
             }
 
@@ -236,13 +228,7 @@ namespace ArchiveFixer
         {
             if (TaskDataGrid?.SelectedItem is not ArchiveTask task)
             {
-                MessageBox.Show(
-                    this,
-                    "请先选择一个任务。",
-                    "提示",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-
+                _dialogService.ShowInfo("请先选择一个任务。");
                 return;
             }
 

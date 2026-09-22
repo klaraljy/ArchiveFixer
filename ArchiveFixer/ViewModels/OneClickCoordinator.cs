@@ -36,6 +36,26 @@ namespace ArchiveFixer.ViewModels
     }
 
     /// <summary>
+    /// 本轮找到的一个内层归档，以及**它属于哪个父任务**。
+    ///
+    /// 为什么要带父任务（本轮改造的核心之一）：内层包不再被当成"另一个独立的任务"，
+    /// 而是父任务这条流水线的一部分 —— 它的产物最终必须归到**父任务那一个**最终目录里。
+    /// 只传文件路径的话，内层包会按自己的路径算落点（<c>&lt;id&gt;.7z\内容物</c>），
+    /// 源目录旁边就又多一个平级目录 —— 正是用户抱怨的那个现象。
+    /// </summary>
+    internal sealed class InnerArchiveCandidate
+    {
+        /// <summary>内层归档的起点（分卷组的第一卷，或者单文件归档）。</summary>
+        public string Path { get; init; } = string.Empty;
+
+        /// <summary>父任务的最终目录（归集之后的落点）；内层任务的产物就落在这里。</summary>
+        public string ParentOutputDirectory { get; init; } = string.Empty;
+
+        /// <summary>父任务的名字（只用于日志与报告）。</summary>
+        public string ParentTaskName { get; init; } = string.Empty;
+    }
+
+    /// <summary>
     /// 「一个包一次搞定」：把 识别 → 修正伪装后缀 → 按密码本试密码解压 → 一行汇总 串成一次操作
     /// （AGENTS.md §10 的 M2 验收）。
     ///
@@ -92,6 +112,25 @@ namespace ArchiveFixer.ViewModels
         private ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
         private AppSettings Settings => _vm.Settings;
         private bool IsBusy => _vm.IsBusy;
+
+        /// <summary>
+        /// 内层包的落点 = **父任务的最终目录**（归集之后就是归集目录，没归集就是输出目录）。
+        ///
+        /// 归集是"把产物目录整个搬走"，所以开了归集时父任务的 OutputPath 已经不存在了，
+        /// 权威落点是 CollectedPath。内层包必须跟着搬过去的那一个目录走，否则第二层会落到
+        /// 一个空目录里，用户看到的还是"东西散在两个地方"。
+        /// </summary>
+        internal static string ResolveContinuationOutputDirectory(ArchiveTask parentTask)
+        {
+            if (parentTask == null)
+            {
+                return string.Empty;
+            }
+
+            return string.IsNullOrWhiteSpace(parentTask.CollectedPath)
+                ? parentTask.OutputPath
+                : parentTask.CollectedPath;
+        }
 
         /*
          * 忙碌标志必须**成对进出**（MainViewModel.EnterBusy/ExitBusy 是嵌套计数）。
@@ -226,8 +265,12 @@ namespace ArchiveFixer.ViewModels
                      * 续解只认"这一轮新出现的"归档起点，不能把目录里本来就有的压缩包当成产物：
                      * 输出目录可以就是源目录（设置里的"解压到原目录 + 不建包名文件夹"），
                      * 那样一来用户自己放在旁边的包会被当成内层包重新解一遍 —— 等于偷偷处理了没勾选的文件。
+                     *
+                     * 目录枚举（可能几万个文件）在后台线程上做：一键处理跑在 UI 线程上，
+                     * 收尾阶段任何一次全目录遍历都会让窗口卡住（本项目最容易出卡死的一块）。
                      */
-                    (HashSet<string> existingFiles, HashSet<string> unreadableDirectories) = SnapshotCandidateDirectories(roundTargets);
+                    (HashSet<string> existingFiles, HashSet<string> unreadableDirectories) =
+                        await SnapshotCandidateDirectoriesAsync(roundTargets);
 
                     // 第三步：解压（密码本、旁路说明文件、分卷守卫都在解压流程里生效）。
                     AppendLog("INFO", round == 1 ? "一键处理：开始解压。" : $"一键处理：第 {round} 层开始解压。");
@@ -243,9 +286,10 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     // 从本轮成功任务的产物里找内层包。找不到就结束，但**不许静默**（见下面的日志）。
-                    List<string> innerPaths = CollectInnerLayers(roundTargets, existingFiles, unreadableDirectories, sourcePaths);
+                    List<InnerArchiveCandidate> innerArchives =
+                        await CollectInnerLayersAsync(roundTargets, existingFiles, unreadableDirectories, sourcePaths);
 
-                    if (innerPaths.Count == 0)
+                    if (innerArchives.Count == 0)
                     {
                         /*
                          * 这一句是必须的，不是噪音。
@@ -263,7 +307,7 @@ namespace ArchiveFixer.ViewModels
                     if (round >= MaxRounds)
                     {
                         hitRoundLimit = true;
-                        AppendLog("WARN", $"一键处理：第 {round + 1} 层还有 {innerPaths.Count} 个内层包，但已达到 {MaxRounds} 轮上限，停止续解。");
+                        AppendLog("WARN", $"一键处理：第 {round + 1} 层还有 {innerArchives.Count} 个内层包，但已达到 {MaxRounds} 轮上限，停止续解。");
                         break;
                     }
 
@@ -281,7 +325,7 @@ namespace ArchiveFixer.ViewModels
                             task.IsSelected = false;
                         }
 
-                        nextRound = await AddInnerTasksAsync(innerPaths);
+                        nextRound = await AddInnerTasksAsync(innerArchives);
                     }
                     catch (Exception ex)
                     {
@@ -292,13 +336,26 @@ namespace ArchiveFixer.ViewModels
                     if (nextRound.Count == 0)
                     {
                         // 内层包全都已经在任务列表里了（路径重复）：再跑一轮只会空转。
-                        AppendLog("WARN", $"一键处理：第 {round + 1} 层的 {innerPaths.Count} 个内层包没能加进任务列表，停止续解。");
+                        AppendLog("WARN", $"一键处理：第 {round + 1} 层的 {innerArchives.Count} 个内层包没能加进任务列表，停止续解。");
                         break;
                     }
 
                     continuationLayers++;
 
-                    AppendLog("INFO", $"一键处理：第 {round + 1} 层发现 {innerPaths.Count} 个内层包，继续解。");
+                    /*
+                     * 说清"第二层解到哪去"：内层包**不另建目录**，
+                     * 它的产物与父任务归到同一个最终目录（用户诉求：一个源包 = 一个目录）。
+                     */
+                    string continuationTarget = innerArchives
+                        .Select(candidate => candidate.ParentOutputDirectory)
+                        .FirstOrDefault(directory => !string.IsNullOrWhiteSpace(directory)) ?? string.Empty;
+
+                    AppendLog(
+                        "INFO",
+                        $"一键处理：第 {round + 1} 层发现 {innerArchives.Count} 个内层包，继续解" +
+                        (string.IsNullOrWhiteSpace(continuationTarget)
+                            ? "。"
+                            : $"（产物归入同一个输出目录：{continuationTarget}，不再另建文件夹）。"));
 
                     processed.AddRange(nextRound);
                     sourcePaths.UnionWith(BuildSourcePathSet(nextRound));
@@ -357,14 +414,19 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 把内层包加进任务列表，返回新加进来的任务（已显式勾选）。
+        /// 把内层包加进任务列表，返回新加进来的任务（已显式勾选），并给每个内层任务挂上
+        /// **父任务的最终目录**（<see cref="ArchiveTask.ParentOutputDirectory"/>）。
+        ///
+        /// 挂父目录这一步是"一个源包 = 一个最终目录"的接线点：
+        /// <see cref="PathService.BuildOutputPath"/> 见到这个字段就直接返回它，
+        /// 于是内层包不会再算出 <c>&lt;id&gt;.7z\内容物</c> 这种自己的目录。
         ///
         /// 为什么临时关掉 <see cref="AppSettings.AutoScanAfterDrop"/>：
         /// AddPathsAsync 在它开启时会顺手对整个列表做一次重新识别，同样会把已经解压完的任务状态冲回
         /// "已识别"（第 1 层的结果在界面上就没了）。这里只要"把新文件变成任务"，
         /// 识别由本轮自己按任务做（见 <see cref="ScanRoundAsync"/>），所以临时关掉、用完立刻还原。
         /// </summary>
-        private async Task<List<ArchiveTask>> AddInnerTasksAsync(IReadOnlyList<string> paths)
+        private async Task<List<ArchiveTask>> AddInnerTasksAsync(IReadOnlyList<InnerArchiveCandidate> candidates)
         {
             int before = Tasks.Count;
             bool autoScanAfterDrop = Settings.AutoScanAfterDrop;
@@ -373,11 +435,23 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                await _scanCoordinator.AddPathsAsync(paths);
+                await _scanCoordinator.AddPathsAsync(candidates.Select(c => c.Path).ToList());
             }
             finally
             {
                 Settings.AutoScanAfterDrop = autoScanAfterDrop;
+            }
+
+            // 按完整路径找回"这个任务对应哪个内层候选"：AddPathsAsync 可能改写路径大小写，
+            // 也可能因为重复而少加几个，所以用查表而不是按下标一一对应。
+            var byPath = new Dictionary<string, InnerArchiveCandidate>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (InnerArchiveCandidate candidate in candidates)
+            {
+                if (!string.IsNullOrWhiteSpace(candidate.Path))
+                {
+                    byPath[NormalizePath(candidate.Path)] = candidate;
+                }
             }
 
             var added = new List<ArchiveTask>();
@@ -390,10 +464,44 @@ namespace ArchiveFixer.ViewModels
                  * 但这条是"续解能不能继续"的命门，显式写一遍，免得以后有人改默认值时静默失效。
                  */
                 Tasks[i].IsSelected = true;
+
+                if (byPath.TryGetValue(NormalizePath(Tasks[i].CurrentPath), out InnerArchiveCandidate? candidate))
+                {
+                    Tasks[i].ParentOutputDirectory = candidate.ParentOutputDirectory;
+                    Tasks[i].ParentTaskName = candidate.ParentTaskName;
+
+                    /*
+                     * 落点当场写一遍，别等界面刷新：续解下一轮要读 task.OutputPath 找内层包，
+                     * 中间任何一次时序错位都会让第二层静默不跑（历史事故）。
+                     */
+                    if (!string.IsNullOrWhiteSpace(candidate.ParentOutputDirectory))
+                    {
+                        Tasks[i].OutputPath = candidate.ParentOutputDirectory;
+                    }
+                }
+
                 added.Add(Tasks[i]);
             }
 
             return added;
+        }
+
+        /// <summary>路径比较用的规范化形式（全路径 + 统一分隔符；大小写在 Windows 上不敏感）。</summary>
+        private static string NormalizePath(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return Path.GetFullPath(path);
+            }
+            catch
+            {
+                return path;
+            }
         }
 
         /// <summary>
@@ -469,8 +577,11 @@ namespace ArchiveFixer.ViewModels
         /// 第二层静默不跑，汇总仍然打印"一键处理完成：成功 N"。
         /// 换成"黑名单"之后，<c>xxx(1)</c> 这种本轮新建的目录天然被放行，
         /// 新旧之分仍然由 <c>existingFiles</c> 把关。
+        ///
+        /// 线程规则：目录集合与设置读取在调用线程（UI）上做，**枚举（可能几万个文件）放后台**。
+        /// 一键处理整条流程跑在 UI 线程上，任何一次全目录遍历都会让窗口卡住。
         /// </summary>
-        private (HashSet<string> ExistingFiles, HashSet<string> UnreadableDirectories) SnapshotCandidateDirectories(
+        private async Task<(HashSet<string> ExistingFiles, HashSet<string> UnreadableDirectories)> SnapshotCandidateDirectoriesAsync(
             IReadOnlyList<ArchiveTask> roundTargets)
         {
             // 没有输出目录就没法做"解压前后对比"。补算一次（与界面刷新输出目录用的是同一套规则）。
@@ -492,41 +603,66 @@ namespace ArchiveFixer.ViewModels
                 directories.Add(Settings.CollectTargetDirectory);
             }
 
-            var existingFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var unreadableDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> targets = directories
+                .Where(directory => !string.IsNullOrWhiteSpace(directory))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
-            foreach (string directory in directories.Distinct(StringComparer.OrdinalIgnoreCase))
+            (HashSet<string> existingFiles, List<(string Directory, string Message)> unreadable) = await Task.Run(() =>
             {
-                if (!Directory.Exists(directory))
-                {
-                    // 目录还不存在：解压之后出现在里面的都算新产物，不需要记任何东西。
-                    continue;
-                }
+                var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var failures = new List<(string, string)>();
 
-                try
+                foreach (string directory in targets)
                 {
-                    foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                    if (!Directory.Exists(directory))
                     {
-                        existingFiles.Add(file);
+                        // 目录还不存在：解压之后出现在里面的都算新产物，不需要记任何东西。
+                        continue;
+                    }
+
+                    try
+                    {
+                        foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                        {
+                            files.Add(file);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add((directory, ex.Message));
                     }
                 }
-                catch (Exception ex)
-                {
-                    unreadableDirectories.Add(directory);
-                    AppendLog("WARN", $"一键处理：读不了产物目录 {directory}（{ex.Message}），本轮不看这个目录。");
-                }
+
+                return (files, failures);
+            });
+
+            var unreadableDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // 日志回到 UI 线程再写（后台线程不许碰界面集合）。
+            foreach ((string directory, string message) in unreadable)
+            {
+                unreadableDirectories.Add(directory);
+                AppendLog("WARN", $"一键处理：读不了产物目录 {directory}（{message}），本轮不看这个目录。");
             }
 
             return (existingFiles, unreadableDirectories);
         }
 
         /// <summary>
-        /// 从本轮**成功任务**的产物目录里找内层包，只取"归档的起点"。
+        /// 从本轮**成功任务**的产物目录里找内层包，只取"归档的起点"，并带上**它属于哪个父任务**。
         ///
         /// 只取起点：把 <c>.002</c> / <c>.z01</c> / <c>.r00</c> / <c>part2</c> 这些后续段也加进任务列表，
         /// 只会造出一批假任务（它们自己不是完整归档，也不是组的开头）。
+        ///
+        /// 为什么每个候选都要带父任务：内层包不是独立任务，它的产物要归到**父任务那一个**最终目录里
+        /// （用户诉求：一个源包 = 一个最终目录）。父目录由
+        /// <see cref="ResolveContinuationOutputDirectory"/> 给出（归集开了就是归集目录）。
+        ///
+        /// 线程规则：目录枚举在后台（见 <see cref="SnapshotCandidateDirectoriesAsync"/> 的说明），
+        /// 过滤是纯内存哈希查表，留在调用线程上做。
         /// </summary>
-        private List<string> CollectInnerLayers(
+        private async Task<List<InnerArchiveCandidate>> CollectInnerLayersAsync(
             IReadOnlyList<ArchiveTask> roundTargets,
             HashSet<string> existingFiles,
             HashSet<string> unreadableDirectories,
@@ -537,7 +673,14 @@ namespace ArchiveFixer.ViewModels
                 Tasks.Select(t => t.CurrentPath).Where(p => !string.IsNullOrWhiteSpace(p)),
                 StringComparer.OrdinalIgnoreCase);
 
-            var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            /*
+             * task.OutputPath / task.CollectedPath 是解压管线回写的**实际落点**（唯一权威来源），
+             * 不是"打算输出到哪"。所以这里无条件按它去找内层包：
+             * 目录已经存在时它可能是自动改名后的 xxx(1)，绝不是快照里那个原定目录。
+             * 是不是"这一轮新产物"由下面的 existingFiles 继续把关 ——
+             * 解压前就有的文件会被过滤掉，不会把用户自己放在旁边的包重新解一遍。
+             */
+            var parents = new List<(ArchiveTask Task, string OutputDirectory)>();
 
             foreach (ArchiveTask task in roundTargets)
             {
@@ -547,68 +690,103 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                /*
-                 * task.OutputPath / task.CollectedPath 是解压管线回写的**实际落点**（唯一权威来源），
-                 * 不是"打算输出到哪"。所以这里无条件按它去找内层包：
-                 * 目录已经存在时它可能是自动改名后的 xxx(1)，绝不是快照里那个原定目录。
-                 * 是不是"这一轮新产物"由下面的 existingFiles 继续把关 ——
-                 * 解压前就有的文件会被过滤掉，不会把用户自己放在旁边的包重新解一遍。
-                 */
                 foreach (string directory in CandidateDirectories(task))
                 {
-                    if (!Directory.Exists(directory))
+                    if (!string.IsNullOrWhiteSpace(directory) && !unreadableDirectories.Contains(directory))
                     {
-                        continue;
-                    }
-
-                    // 解压前读不到内容的目录：新旧混在一起分不出来，整个跳过（见 SnapshotCandidateDirectories）。
-                    if (unreadableDirectories.Contains(directory))
-                    {
-                        continue;
-                    }
-
-                    List<string> files;
-
-                    try
-                    {
-                        files = Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).ToList();
-                    }
-                    catch (Exception ex)
-                    {
-                        AppendLog("WARN", $"{task.FileName}：查找内层包时读不了 {directory} —— {ex.Message}");
-                        continue;
-                    }
-
-                    foreach (string file in files)
-                    {
-                        // 只认"这一轮新出现"的：解压前就在那里的文件不是这一轮的产物。
-                        if (existingFiles.Contains(file))
-                        {
-                            continue;
-                        }
-
-                        // 源文件本身（含分卷各卷）不算内层包。
-                        if (sourcePaths.Contains(file))
-                        {
-                            continue;
-                        }
-
-                        if (knownTaskPaths.Contains(file))
-                        {
-                            continue;
-                        }
-
-                        if (!IsArchiveStartPoint(file))
-                        {
-                            continue;
-                        }
-
-                        found.Add(file);
+                        parents.Add((task, directory));
                     }
                 }
             }
 
-            return found.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+            if (parents.Count == 0)
+            {
+                return new List<InnerArchiveCandidate>();
+            }
+
+            List<(string OutputDirectory, List<string> Files)> scanned = await Task.Run(() =>
+            {
+                var results = new List<(string, List<string>)>();
+
+                foreach ((ArchiveTask _, string outputDirectory) in parents)
+                {
+                    if (!Directory.Exists(outputDirectory))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        results.Add((
+                            outputDirectory,
+                            Directory.EnumerateFiles(outputDirectory, "*", SearchOption.AllDirectories).ToList()));
+                    }
+                    catch
+                    {
+                        // 读不了这个目录：跳过（快照阶段已经写过一条 WARN，不重复打扰用户）。
+                    }
+                }
+
+                return results;
+            });
+
+            var found = new Dictionary<string, InnerArchiveCandidate>(StringComparer.OrdinalIgnoreCase);
+
+            foreach ((ArchiveTask task, string outputDirectory) in parents)
+            {
+                List<string>? files = scanned
+                    .Where(entry => string.Equals(entry.OutputDirectory, outputDirectory, StringComparison.OrdinalIgnoreCase))
+                    .Select(entry => entry.Files)
+                    .FirstOrDefault();
+
+                if (files == null)
+                {
+                    continue;
+                }
+
+                string parentName = string.IsNullOrWhiteSpace(task.FileName)
+                    ? Path.GetFileName(task.CurrentPath)
+                    : task.FileName;
+
+                string continuationOutput = ResolveContinuationOutputDirectory(task);
+
+                foreach (string file in files)
+                {
+                    // 只认"这一轮新出现"的：解压前就在那里的文件不是这一轮的产物。
+                    if (existingFiles.Contains(file))
+                    {
+                        continue;
+                    }
+
+                    // 源文件本身（含分卷各卷）不算内层包。
+                    if (sourcePaths.Contains(file))
+                    {
+                        continue;
+                    }
+
+                    if (knownTaskPaths.Contains(file))
+                    {
+                        continue;
+                    }
+
+                    if (!IsArchiveStartPoint(file))
+                    {
+                        continue;
+                    }
+
+                    if (!found.ContainsKey(file))
+                    {
+                        found[file] = new InnerArchiveCandidate
+                        {
+                            Path = file,
+                            ParentOutputDirectory = continuationOutput,
+                            ParentTaskName = parentName
+                        };
+                    }
+                }
+            }
+
+            return found.Values.OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         /// <summary>
@@ -781,7 +959,9 @@ namespace ArchiveFixer.ViewModels
             }
             else if (continuationLayers > 0)
             {
-                line += $" 自动续解 {continuationLayers} 层。";
+                // 续解出来的内层包**不另建目录**：产物全部归到源包那一个输出目录里
+                // （用户诉求："一个源包 = 一个最终目录"）。这句话就是给用户对账用的。
+                line += $" 自动续解 {continuationLayers} 层（产物归入同一个输出目录，不再另建文件夹）。";
             }
 
             if (hitRoundLimit)

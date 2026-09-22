@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 
@@ -70,7 +71,29 @@ namespace ArchiveFixer.Services
         public string BrokenSettingsFilePath => Path.Combine(DataRootDirectory, "appsettings.broken.json");
 
         /// <summary>
-        /// 生成任务输出目录。
+        /// 暂存子目录名：<c>&lt;任务工作区&gt;\stage</c>。
+        /// 入仓（stage）阶段所有中间动作都在这里做，**一个字节都不写源目录、也不写最终目录**（契约 §2.1）。
+        /// </summary>
+        public const string StageDirectoryName = "stage";
+
+        /// <summary>
+        /// 生成任务输出目录（契约 §1.2 的落点公式）。
+        ///
+        /// <para>
+        /// 公式的**唯一实现处**是 <see cref="OutputPlacement.ResolveDestinationDirectory"/>，本方法只做三件事：
+        /// ① 续解出来的内层包优先用父任务的落点（见下）；
+        /// ② 把旧的三个布尔/字符串设置翻译成落点模式（<see cref="OutputPlacement.FromLegacyFlags"/>），
+        ///    旧配置的行为不变（契约 §1.3：不得让用户升级后行为突变）；
+        /// ③ 解不出来时返回**空串**，绝不回落到程序安装目录。
+        /// </para>
+        ///
+        /// <para>
+        /// 为什么解不出来必须返回空（父代理 2026-09-21 明确要求的必修项）：
+        /// 旧实现在"自定义位置"模式下把空的 <c>CustomOutputDirectory</c> 回落成 <c>AppBaseDirectory</c>，
+        /// 于是用户没设输出目录时，内容物会被解进**程序自己的安装目录**（data 旁边、和 exe 混在一起）。
+        /// 返回空串之后由调用方给出"输出目录无效"的明确状态，用户重新选一个目录即可 ——
+        /// 少一个产物目录，好过多一堆没人找得到的文件。
+        /// </para>
         /// </summary>
         public string BuildOutputPath(ArchiveTask task, ExtractOptions options)
         {
@@ -81,6 +104,18 @@ namespace ArchiveFixer.Services
 
             options ??= new ExtractOptions();
             options.Normalize();
+
+            /*
+             * 续解出来的内层包：落点就是**父任务那一个**最终目录，绝不再套一层。
+             *
+             * 这是"一个源包 = 一个最终目录"的第一道闸（用户诉求）。
+             * 放在这里而不是调用方：MainViewModel.RefreshOutputPaths（界面"输出目录"列）、
+             * 解压管线的落点计算全都走这一个方法，谁都不会算出第二个答案。
+             */
+            if (!string.IsNullOrWhiteSpace(task.ParentOutputDirectory))
+            {
+                return task.ParentOutputDirectory;
+            }
 
             string archivePath = task.CurrentPath;
 
@@ -94,28 +129,17 @@ namespace ArchiveFixer.Services
                 return string.Empty;
             }
 
-            string baseDirectory;
+            OutputPlacementMode mode = OutputPlacement.FromLegacyFlags(
+                options.ExtractToOriginalDirectory,
+                options.KeepArchiveNameFolder,
+                options.CustomOutputDirectory);
 
-            if (options.ExtractToOriginalDirectory)
-            {
-                baseDirectory = Path.GetDirectoryName(archivePath) ?? AppBaseDirectory;
-            }
-            else
-            {
-                baseDirectory = string.IsNullOrWhiteSpace(options.CustomOutputDirectory)
-                    ? AppBaseDirectory
-                    : options.CustomOutputDirectory;
-            }
+            OutputPlacementResult placement = OutputPlacement.ResolveDestinationDirectory(
+                archivePath,
+                mode,
+                options.CustomOutputDirectory);
 
-            if (!options.KeepArchiveNameFolder)
-            {
-                return baseDirectory;
-            }
-
-            string archiveBaseName = GetArchiveBaseName(archivePath);
-            archiveBaseName = SanitizeFileName(archiveBaseName);
-
-            return Path.Combine(baseDirectory, archiveBaseName);
+            return placement.Success ? placement.DestinationDirectory : string.Empty;
         }
 
         /// <summary>
@@ -124,6 +148,74 @@ namespace ArchiveFixer.Services
         public string GetArchiveBaseName(string filePath)
         {
             return FileNameHelper.GetArchiveBaseName(filePath);
+        }
+
+        /// <summary>
+        /// 本任务的私有工作区目录：<c>&lt;work&gt;\&lt;任务名&gt;-&lt;源路径短哈希&gt;</c>。
+        ///
+        /// 沿用既有工作区规范（<c>.data\work\&lt;taskId&gt;\</c>，绝不落 C 盘），只加了一段源路径哈希：
+        /// 两个**同名但不同目录**的包（<c>111\222\1.rar</c> 与 <c>333\1.rar</c>）在批量处理里很常见，
+        /// 只用文件名当 taskId 会让它们共用同一个暂存目录 —— 并发解压时互相踩，
+        /// 串行时前一个失败留下的产物会被后一个当成自己的产物搬运出去。
+        /// 哈希只取决于**源文件全路径**，所以同一个包的多次尝试仍然落在同一个目录（失败后接着看、接着清）。
+        /// </summary>
+        public string BuildTaskWorkDirectory(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return string.Empty;
+            }
+
+            string name = string.IsNullOrWhiteSpace(task.FileName)
+                ? FileNameHelper.GetFileName(task.CurrentPath)
+                : task.FileName;
+
+            string safeName = FileNameHelper.SanitizeFileName(name);
+
+            if (string.IsNullOrWhiteSpace(safeName))
+            {
+                safeName = "task";
+            }
+
+            string identity = string.IsNullOrWhiteSpace(task.CurrentPath)
+                ? task.OriginalPath
+                : task.CurrentPath;
+
+            return Path.Combine(WorkDirectory, $"{safeName}-{BuildPathIdentityHash(identity)}");
+        }
+
+        /// <summary>
+        /// 本任务的暂存目录：<c>&lt;work&gt;\&lt;taskId&gt;\stage</c>（契约 §2.1）。
+        /// 所有中间动作（抠内嵌归档之后的解压、第一层、内层分卷、递归）都落在这里。
+        /// </summary>
+        public string BuildTaskStageDirectory(ArchiveTask task)
+        {
+            string taskDirectory = BuildTaskWorkDirectory(task);
+
+            return string.IsNullOrWhiteSpace(taskDirectory)
+                ? string.Empty
+                : Path.Combine(taskDirectory, StageDirectoryName);
+        }
+
+        /// <summary>
+        /// 源文件全路径的稳定短哈希（FNV-1a，8 位十六进制）。
+        /// 不用 <c>string.GetHashCode()</c>：它跨进程不稳定，而工作区目录要能被"下一次启动"
+        /// 认出来（失败留下的暂存区、启动时的未完成工作区提示都依赖这个稳定性）。
+        /// </summary>
+        private static string BuildPathIdentityHash(string path)
+        {
+            unchecked
+            {
+                uint hash = 2166136261;
+
+                foreach (char c in path.ToUpperInvariant())
+                {
+                    hash ^= c;
+                    hash *= 16777619;
+                }
+
+                return hash.ToString("x8");
+            }
         }
 
         /// <summary>

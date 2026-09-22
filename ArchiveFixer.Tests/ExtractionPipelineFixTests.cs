@@ -169,8 +169,17 @@ namespace ArchiveFixer.Tests
             Assert.Equal(fileCount, CountFiles(collectRoot));   // 归集把 4000 个文件搬走了
             Assert.Equal(0, CountFiles(task.OutputPath));       // 产物目录已经搬空
 
-            // 结果写回（P1-6 的第二半）：输出目录 == 引擎真正写进去的那个目录；归集目录也记在任务上。
-            Assert.Equal(harness.Engine.LastExtractOutputPath, task.OutputPath);
+            /*
+             * 阶段化（入仓 → 定稿）之后，落点的口径变了，这里改成三条一起断言：
+             * ① 引擎写盘的地方是**暂存目录**（工作区里），不是最终目录；
+             * ② 任务的 OutputPath 仍然是**最终目录**（界面"输出目录"列、续解都读它）；
+             * ③ 归集把最终目录整个搬到了归集目标下（所以最终目录现在是空的，不是没产物）。
+             */
+            Assert.StartsWith(
+                harness.PathService.WorkDirectory,
+                harness.Engine.LastExtractOutputPath,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(Path.Combine(_root, "out", "big"), task.OutputPath);
             Assert.StartsWith(collectRoot, task.CollectedPath, StringComparison.OrdinalIgnoreCase);
             Assert.True(task.IsOutputVerified, "产物数量与清单一致，校验应该通过");
 
@@ -233,9 +242,14 @@ namespace ArchiveFixer.Tests
             // 源包一个都不许删（AGENTS.md §9.5：取消时一律不删）。
             Assert.True(File.Exists(source), "取消之后源包被删了");
 
-            // 产物一个都不许移动。
+            /*
+             * 产物一个都不许移动。
+             * 入仓之后产物在**暂存目录**里（这是取消时唯一还能看的地方），
+             * 最终目录**连建都不该建** —— 定稿没跑，它就不该存在（契约 §6 第 2 条）。
+             */
             Assert.False(Directory.Exists(collectRoot), "取消之后产物被归集走了");
-            Assert.Equal(5, CountFiles(task.OutputPath));
+            Assert.Equal(5, CountFiles(TaskStageDirectory(harness, task)));
+            Assert.False(Directory.Exists(task.OutputPath), $"取消之后最终目录被建出来了：{task.OutputPath}");
             Assert.Equal(string.Empty, task.CollectedPath);
         }
 
@@ -440,11 +454,18 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
-            // ① 写回的是**实际**落点（引擎真正写文件的那个目录），不是解压前算出来的那个。
+            /*
+             * ① 写回的是**实际**落点（用户看得见的那个目录），不是解压前算出来的那个。
+             * 入仓之后引擎写的是暂存目录，产物由定稿搬进最终目录 —— 所以这两件事要分开断言：
+             * 引擎的落点在工作区里，任务的落点是改名后的 out\pack(1)。
+             */
             Assert.NotEqual(requested, task.OutputPath);
-            Assert.Equal(harness.Engine.LastExtractOutputPath, task.OutputPath);
             Assert.True(Directory.Exists(task.OutputPath));
             Assert.Equal(2, CountFiles(task.OutputPath));
+            Assert.StartsWith(
+                harness.PathService.WorkDirectory,
+                harness.Engine.LastExtractOutputPath,
+                StringComparison.OrdinalIgnoreCase);
 
             // ② 旧目录里的东西一个都没动（绝不覆盖/清空既有文件）。
             Assert.True(File.Exists(Path.Combine(requested, "上次留下的旧文件.txt")));
@@ -609,7 +630,15 @@ namespace ArchiveFixer.Tests
             // ③ 不归集：目标目录连建都不该建，产物留在原地。
             Assert.False(Directory.Exists(collectRoot), "越界结论下产物被归集走了");
             Assert.Equal(string.Empty, task.CollectedPath);
-            Assert.True(File.Exists(Path.Combine(task.OutputPath, "innocent.txt")), "产物应当留在原地");
+
+            /*
+             * 产物应当留在**暂存目录**里（那是引擎真正写盘的地方），而且最终目录连建都不该建 ——
+             * 越界结论下定稿根本不跑，最终目录里一个字节都不许有（契约 §6 第 2 条）。
+             */
+            Assert.True(
+                File.Exists(Path.Combine(TaskStageDirectory(harness, task), "innocent.txt")),
+                "产物应当留在暂存目录里");
+            Assert.False(Directory.Exists(task.OutputPath), $"越界结论下最终目录被建出来了：{task.OutputPath}");
             Assert.True(Directory.Exists(outside), "越界落点的目录本身不该被我们删掉");
         }
 
@@ -870,9 +899,18 @@ namespace ArchiveFixer.Tests
             return path;
         }
 
-        /// <summary>本任务的中间件落点目录（布局与 ExtractionCoordinator.BuildEmbeddedArchivePath 一致）。</summary>
+        /// <summary>
+        /// 本任务的中间件落点目录（布局由 <see cref="PathService.BuildTaskWorkDirectory"/> 给出，
+        /// 测试**不自己拼规则** —— 拼一份迟早与实现分叉）。
+        /// </summary>
         private static string TaskWorkDirectory(Harness harness, ArchiveTask task) =>
-            Path.Combine(harness.PathService.WorkDirectory, FileNameHelper.SanitizeFileName(task.FileName));
+            harness.PathService.BuildTaskWorkDirectory(task);
+
+        /// <summary>
+        /// 本任务的**暂存目录**（入仓阶段的产物在这里，定稿之后才进最终目录）。
+        /// </summary>
+        private static string TaskStageDirectory(Harness harness, ArchiveTask task) =>
+            harness.PathService.BuildTaskStageDirectory(task);
 
         private static ExtractOptions DefaultOptions(Harness harness)
         {
