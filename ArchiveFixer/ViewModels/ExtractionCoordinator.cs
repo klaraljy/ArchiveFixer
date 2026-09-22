@@ -1,4 +1,6 @@
 using ArchiveFixer.Engines;
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Security;
@@ -128,6 +130,40 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>本批已经真的弹过几次询问（日志与排障用；正常情况下 ≤ 1）。</summary>
         private int _conflictPromptCount;
+
+        /*
+         * ===== 本批的"完成后打开输出目录"记账（设置项 OpenOutputFolderWhenDone，默认关）=====
+         *
+         * 为什么必须记账：设置开着的时候，如果每个任务成功都开一次资源管理器，
+         * 一批 50–200 个包就会在用户桌面上炸出几十个窗口 —— 那不是"看一眼结果"，是骚扰。
+         * 所以整批**只开一次**（第一个成功收尾的最外层任务），批开始时清零。
+         *
+         * 并发下多个任务会同时走到判断处，所以必须加锁（与 _passwordFailures 同一个理由）。
+         */
+        private readonly object _outputFolderLock = new();
+        private bool _outputFolderOpenedThisBatch;
+
+        /*
+         * ===== 手动输入的密码（WinRAR 参考 §3 附注 / §2 H 组采纳项）=====
+         *
+         * 不变量 5 的红线：**只对本次运行有效、绝不落盘**。所以它只是一个字段 ——
+         * 不进 AppSettings、不进密码列表、不进日志、不进报告，进程一退就没了。
+         *
+         * 为什么需要它：密码本没命中、统一密码也不对时，用户以前只能"改设置再重跑整批"。
+         * 现在整批**一次性**问一次，输入的值当成本批所有任务的候选（排在空密码之后、
+         * 密码本之前 —— 它比密码本更"新"，是用户刚给出的信息）。
+         */
+        private string? _manualBatchPassword;
+
+        /// <summary>本批是否已经问过手动密码（一次性：问过就不再问，无论用户填没填）。</summary>
+        private bool _manualPasswordPrompted;
+
+        /// <summary>
+        /// 本批是否出现过密码类失败（密码错误 / 达到尝试上限）。
+        /// 批次结束后的合并提示据此换一句话：出过密码问题时指引"再点一次、把密码输进去"，
+        /// 没出过就不提（免得每次跑完都念一遍）。
+        /// </summary>
+        private bool _batchHadPasswordFailures;
 
         public ExtractionCoordinator(
             MainViewModel vm,
@@ -615,6 +651,35 @@ namespace ArchiveFixer.ViewModels
                 CleanupTaskWorkspaceDirectory(task, stageDirectory);
             }
 
+            /*
+             * 「定稿完成后打开输出目录」（设置项 OpenOutputFolderWhenDone，**默认关**）。
+             *
+             * 触发条件刻意收得最紧（四条全中才开）：
+             * ① 这一批还没开过（TryOpenOutputFolderOnce 里的批记账 —— 50–200 个包每个都开一次是骚扰）；
+             * ② 不是续解出来的内层包（它们与父任务共用同一个目录，反复打开就是刷屏）；
+             * ③ 内容物已定稿（走到这一行说明定稿分支都没 return，见上面的越界/超预算/定稿失败早退）；
+             * ④ 输出校验通过 + 没被取消。
+             *
+             * 失败 / 取消 / 部分完成一律不开：打开一个空目录只会误导用户（他以为东西在里面）。
+             * 打开动作本身**只开文件夹，不置前、不最大化、不抢焦点**（AGENTS.md §13）。
+             *
+             * 整段包着 try/catch：这是收尾的最后一步，一个"打开资源管理器失败"绝不允许
+             * 把已经成功的解压拖成异常（结论已经写在任务上了）。
+             */
+            try
+            {
+                if (work.Verification.Verified &&
+                    !cancellationToken.IsCancellationRequested &&
+                    task.Status == StatusText.ExtractSuccess)
+                {
+                    TryOpenOutputFolderOnce(task);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{task.FileName}：打开输出目录失败（不影响解压结论）：{ex.Message}");
+            }
+
             // 走到这里说明"解压成功"这个结论没有被越界 / 超预算顶掉。
             return true;
         }
@@ -678,7 +743,19 @@ namespace ArchiveFixer.ViewModels
 
             if (landingViolation != null)
             {
-                string landingMessage = "产物越出目标根目录，已拒绝承认本次解压：" + landingViolation;
+                /*
+                 * 这一句就是"产物越界即整包失败"在界面上的口径（README「设计边界」已声明，
+                 * 以前界面上只有一行日志，用户看不到）。所以它必须一次说清四件事：
+                 * ① 越到哪里去了；② 这是**整包失败**，不是"少解了几个文件"；
+                 * ③ 因此**不归集、不清理源包、其余物不生成**（不变量 4）；
+                 * ④ 已经写出去的那一次拦不住（诚实边界，别让用户以为我们拦住了）。
+                 * 落进 task.ErrorMessage（任务行 + 详情 + 失败清单都看得到），不是只进日志。
+                 */
+                string landingMessage =
+                    "产物越出目标根目录 —— 按既定口径**整包判定失败**（不归集产物、不处理源包、其余物不生成）：" +
+                    landingViolation +
+                    "。⚠ 解压是外部 7-Zip 进程写的盘，越界的那一次写入拦不住；" +
+                    "这次的结果不能承认，产物留在暂存目录里供你自行判断，请先确认包里有没有异常条目。";
 
                 logEntries.Add(("ERROR", $"{task.FileName}：{landingMessage}"));
 
@@ -2714,6 +2791,9 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            // 本批出现过"密码类失败"这个事实：批次结束后据此在合并提示里带上"手动输入密码"的出口。
+            _batchHadPasswordFailures = true;
+
             string fileName = string.IsNullOrWhiteSpace(task.FileName)
                 ? Path.GetFileName(task.CurrentPath)
                 : task.FileName;
@@ -2730,6 +2810,777 @@ namespace ArchiveFixer.ViewModels
             {
                 _passwordFailures.Clear();
             }
+        }
+
+        // ================================================================ 缺卷补救（手动指定缺失卷所在目录）
+
+        /// <summary>本批已经为哪几个任务问过"缺失卷在哪"（同一个包重试时不再重复打扰）。</summary>
+        private readonly HashSet<ArchiveTask> _volumeRepairAsked = new();
+
+        /// <summary>
+        /// 「我手动指定缺失卷所在目录」——WinRAR 参考 §2 G 组 / §3 第 2 条的采纳项。
+        ///
+        /// <para>
+        /// 用户痛点很实在：真实分卷包常常"主体在这一层、后几卷在隔壁文件夹或另一个盘"，
+        /// 而现在的行为是直接拒绝启动并报"缺 A、B"，用户只能自己去找、去挪，毫无下手的地方。
+        /// </para>
+        /// <para>
+        /// ⛔ <b>不变量 7 一个字都不放松</b>：这里只做"帮你把卷找齐"，**绝不允许缺卷启动**。
+        /// 重新归组之后仍然缺 → 返回 false，调用方照旧落成"分卷缺失"并拒绝开始。
+        /// </para>
+        /// <para>
+        /// 归组**复用既有实现**（<see cref="VolumeGroupDetector.Group"/> +
+        /// <see cref="VolumeGroupingService.ApplyGroupInfo"/>），不另写一套分卷命名规则 ——
+        /// 那种规则一旦分叉，就会出现"界面上说齐了、7z 却说缺卷"。
+        /// </para>
+        /// </summary>
+        /// <returns>true = 这一组现在齐了（可以开始）；false = 仍然不能开始。</returns>
+        private async Task<bool> TryRepairMissingVolumesAsync(ArchiveTask task, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            lock (_volumeRepairAsked)
+            {
+                if (!_volumeRepairAsked.Add(task))
+                {
+                    // 同一个任务这一批已经问过一次了：再问就是骚扰（用户已经说了"没有"或"找过还是不够"）。
+                    return false;
+                }
+            }
+
+            string missing = task.MissingVolumeNames.Count > 0
+                ? string.Join("、", task.MissingVolumeNames)
+                : "（引擎没给出具体缺哪几个）";
+
+            string question =
+                $"「{task.FileName}」的分卷不完整，现在缺：{missing}。{Environment.NewLine}{Environment.NewLine}" +
+                $"分卷包里每一卷都是必需的数据片，缺一卷就一定解不开 —— 所以程序**不会**在缺卷时开始。" +
+                $"{Environment.NewLine}{Environment.NewLine}" +
+                "如果你的卷散在别的文件夹（或者另一个盘），可以现在指定那个目录：" +
+                "程序会在那里找齐这一组，找齐了就继续；找不齐仍然不会开始。";
+
+            // 确认框走既有实现：无 UI 宿主时它返回 false（保守档），绝不弹窗、绝不死等。
+            bool wantPick = await DispatcherSafeConfirmAsync(question);
+
+            if (!wantPick)
+            {
+                AppendLog("INFO", $"{task.FileName}：没有手动指定缺失卷所在目录，按缺卷处理（不启动）。");
+                return false;
+            }
+
+            string directory = ShowFolderBrowserOnUiThread();
+
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                AppendLog("INFO", $"{task.FileName}：没有选择目录，按缺卷处理（不启动）。");
+                return false;
+            }
+
+            /*
+             * 目录枚举（可能几万个文件）放后台：它跑在解压管线里，而这条路径的 await 续体在 UI 上下文。
+             * 只在**指定的那一个目录**里找，不递归、不扫全盘（AGENTS.md §8 隐私红线：不读工作区以外的个人目录）。
+             */
+            List<string> volumeFiles = await Task.Run(
+                () => CollectVolumeFilesInDirectory(directory),
+                cancellationToken);
+
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：在 {directory} 里找到 {volumeFiles.Count} 个分卷文件，正在重新归组判定。");
+
+            VolumeGroup? group = RebuildVolumeGroup(task, volumeFiles);
+
+            if (group == null || !group.IsComplete)
+            {
+                string stillMissing = group != null && group.MissingVolumeNames.Count > 0
+                    ? string.Join("、", group.MissingVolumeNames)
+                    : missing;
+
+                // 如实说清"找过哪儿、还是缺什么"——用户下一步就是拿着这句话去别处找。
+                string summary = group == null
+                    ? "在那个目录里没找到属于这一组的分卷（或目录读不了）"
+                    : group.MissingVolumeNames.Count > 0
+                        ? $"重新归组后仍缺 {stillMissing}"
+                        : "重新归组后仍然不完整";
+
+                task.Status = StatusText.VolumeMissing;
+                task.ErrorMessage =
+                    $"分卷仍然不完整：{summary}。已找过：{directory}（{volumeFiles.Count} 个候选分卷）。";
+
+                AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage} 仍然不启动（不变量 7）。");
+                return false;
+            }
+
+            /*
+             * 找齐了：把任务切到**这一组所在的那个目录**。
+             *
+             * 为什么必须切：分卷组必须整体在一处才能解（7-Zip 从第一卷顺着往后读），
+             * 组里各卷分散在两个目录时，光"知道它们在哪儿"是解不开的。
+             * 这里挑中的那个组，它的每一卷都真实存在于同一个目录里 —— 要么全在用户指定的目录，
+             * 要么全在原目录（那种情况本来就不缺卷，走不到这里）。
+             *
+             * 切路径是安全的：CurrentPath 是"现在拿哪个文件去解压"，而 OriginalPath 仍然记着用户最初给的那个；
+             * 改名、清理、报告都以 CurrentPath 为准，所以后续一切照常。
+             */
+            string firstVolume = group.FirstVolumePath;
+            string previousPath = task.CurrentPath;
+
+            if (!File.Exists(firstVolume))
+            {
+                AppendLog("ERROR", $"{task.FileName}：归组给出的第一卷不存在（{firstVolume}），按缺卷处理（不启动）。");
+                return false;
+            }
+
+            new VolumeGroupingService().ApplyGroupInfo(task, group);
+
+            task.CurrentPath = firstVolume;
+            task.FileName = Path.GetFileName(firstVolume);
+            task.CurrentExtension = Path.GetExtension(firstVolume);
+
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：分卷已找齐（{task.VolumeCount} 卷，起点 {firstVolume}）" +
+                (string.Equals(previousPath, firstVolume, StringComparison.OrdinalIgnoreCase)
+                    ? "，开始解压。"
+                    : $"，起点由 {previousPath} 改为它（OriginalPath 仍指向你最初给的那个文件），开始解压。"));
+
+            return true;
+        }
+
+        /// <summary>
+        /// 在**指定的一个目录**里列出候选分卷文件（顶层，不递归）。
+        ///
+        /// 只按命名筛（能不能归组由 <see cref="VolumeGroupDetector"/> 说了算），
+        /// 不读内容、不碰别的目录。
+        /// </summary>
+        private static List<string> CollectVolumeFilesInDirectory(string directory)
+        {
+            var found = new List<string>();
+
+            try
+            {
+                if (!Directory.Exists(directory))
+                {
+                    return found;
+                }
+
+                foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    string fileName = Path.GetFileName(file);
+
+                    if (VolumeGroupDetector.TryGetVolumeIndex(fileName).HasValue ||
+                        VolumeGroupDetector.TryGetFirstVolumeName(fileName) != null)
+                    {
+                        found.Add(file);
+                    }
+                }
+            }
+            catch
+            {
+                // 目录读不了：返回空集合，调用方按"没找到"如实报告。
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// 把"任务现有各卷 + 用户指定目录里找到的卷"合成一份候选去重新归组，返回**可能已经补齐**的那一组。
+        ///
+        /// 判据：优先按原来的 <see cref="ArchiveTask.VolumeGroupKey"/> 找；找不到就退回
+        /// "哪一组包含本任务的第一卷"。两条都对不上就返回 null（如实说"没找到属于这一组的"）。
+        /// </summary>
+        private static VolumeGroup? RebuildVolumeGroup(ArchiveTask task, IEnumerable<string> extraFiles)
+        {
+            var candidates = new List<VolumeCandidate>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void AddCandidate(string path)
+            {
+                if (string.IsNullOrWhiteSpace(path) || !seen.Add(path))
+                {
+                    return;
+                }
+
+                long size = -1;
+
+                try
+                {
+                    size = new FileInfo(path).Length;
+                }
+                catch
+                {
+                    // 量不出大小不影响归组（大小只用于"同名不同组"的复核）。
+                }
+
+                candidates.Add(new VolumeCandidate { Path = path, Size = size });
+            }
+
+            foreach (string path in task.VolumePaths)
+            {
+                AddCandidate(path);
+            }
+
+            AddCandidate(task.CurrentPath);
+
+            foreach (string path in extraFiles ?? Enumerable.Empty<string>())
+            {
+                AddCandidate(path);
+            }
+
+            IReadOnlyList<VolumeGroup> groups = VolumeGroupDetector.Group(candidates);
+
+            if (groups.Count == 0)
+            {
+                return null;
+            }
+
+            string currentPath = SafePathHelper.GetFullPathSafe(task.CurrentPath);
+
+            VolumeGroup? byKey = groups.FirstOrDefault(
+                g => !string.IsNullOrWhiteSpace(task.VolumeGroupKey) &&
+                     string.Equals(g.GroupKey, task.VolumeGroupKey, StringComparison.OrdinalIgnoreCase));
+
+            if (byKey != null)
+            {
+                return byKey;
+            }
+
+            return groups.FirstOrDefault(g => g.Volumes.Any(
+                v => string.Equals(SafePathHelper.GetFullPathSafe(v.Path), currentPath, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        /// <summary>
+        /// 在 UI 线程上弹一个"是 / 否"确认框（**无 UI 宿主返回 false**，不弹窗口也不死等）。
+        ///
+        /// 与 <see cref="ShowConfirmOnUiThreadAsync"/> 的区别只有降级行为：那个走
+        /// <see cref="DialogService.ShowConfirm(string)"/>，无界面宿主时返回 false 已是保守档，
+        /// 但它仍然要求调用方在 UI 上下文里；这里显式调度，后台线程调用也安全。
+        /// </summary>
+        private Task<bool> DispatcherSafeConfirmAsync(string message)
+        {
+            System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+            if (dispatcher == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            if (dispatcher.CheckAccess())
+            {
+                return Task.FromResult(_dialogService.ShowConfirm(message));
+            }
+
+            return dispatcher.InvokeAsync(() => _dialogService.ShowConfirm(message)).Task;
+        }
+
+        /// <summary>
+        /// 在 UI 线程上打开"选择文件夹"对话框（**无 UI 宿主返回空串**）。
+        ///
+        /// 只挑目录、不扫盘：真正的枚举在调用方丢给后台线程做（UI 线程纪律）。
+        /// </summary>
+        private string ShowFolderBrowserOnUiThread()
+        {
+            System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+            if (dispatcher == null)
+            {
+                return string.Empty;
+            }
+
+            if (dispatcher.CheckAccess())
+            {
+                return _dialogService.ShowFolderBrowserDialog();
+            }
+
+            return dispatcher.InvokeAsync(() => _dialogService.ShowFolderBrowserDialog()).Result;
+        }
+
+
+        /// <summary>
+        /// 本批允许同时跑几个任务（并发上限）。
+        ///
+        /// <para>
+        /// 「全速」开着时返回本批的任务数（= 不节流）—— 这是"自动等待/节流必须配一个立即继续的出口"
+        /// 那条采纳项的落地（<c>docs/WinRAR功能参考.md</c> §2 D 组）。它有意的取舍：
+        /// **不管磁盘、不管别的程序**，跑成什么样由用户自己负责；界面上的勾选框文案把这一点写明了。
+        /// </para>
+        /// <para>
+        /// 关着时读设置项 <see cref="AppSettings.MaxParallelExtractCount"/>（1–8，默认 1 = 串行）。
+        /// 夹一次是兜底：设置对象不一定走过 <c>AppSettings.Normalize</c>（测试里直接 new），
+        /// 0 或负数会让"等并发位"的循环条件永远成立 —— 那个任务会永远等下去。
+        /// </para>
+        /// </summary>
+        private int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)
+        {
+            fullSpeed = _vm.RunAtFullSpeed;
+
+            if (fullSpeed)
+            {
+                return Math.Max(1, tasks?.Count ?? 1);
+            }
+
+            return Math.Clamp(Settings.MaxParallelExtractCount, 1, MaxParallelExtractCountCeiling);
+        }
+
+        /// <summary>并发上限的硬顶（与设置界面的 1–8 一致；这里只做兜底夹取）。</summary>
+        private const int MaxParallelExtractCountCeiling = 8;
+
+
+        /// <summary>
+        /// 本批的"完成后打开输出目录"记账清零（设置项 <see cref="AppSettings.OpenOutputFolderWhenDone"/>）。
+        /// </summary>
+        private void ResetBatchOutputFolderState()
+        {
+            lock (_outputFolderLock)
+            {
+                _outputFolderOpenedThisBatch = false;
+            }
+        }
+
+        /// <summary>
+        /// 试着打开"这一批的"输出目录，**整批只成功打开一次**。
+        ///
+        /// 只允许在"最外层任务 + 内容物已定稿 + 输出校验通过 + 未取消"的收尾处调用
+        /// （判定在 <see cref="PostProcessSuccessAsync"/> 里，那里才知道结论是否成立）。
+        /// 内层包（续解出来的）一律不触发：它们与父任务共用同一个目录，反复打开就是刷屏。
+        /// </summary>
+        /// <returns>真的打开了返回 true；关着开关 / 已经开过 / 目录不存在返回 false。</returns>
+        private bool TryOpenOutputFolderOnce(ArchiveTask task)
+        {
+            if (!Settings.OpenOutputFolderWhenDone)
+            {
+                return false;
+            }
+
+            if (task.IsContinuationTask)
+            {
+                return false;
+            }
+
+            lock (_outputFolderLock)
+            {
+                if (_outputFolderOpenedThisBatch)
+                {
+                    return false;
+                }
+
+                _outputFolderOpenedThisBatch = true;
+            }
+
+            /*
+             * ⚠ 顺序有意：先"占位"再打开。
+             *
+             * 并发下两个任务可能同时走到这里，先占位保证只有一个真的去开资源管理器；
+             * 万一打开失败（目录被删了之类），这一批也不会再补开一次 —— 用户看到一句 WARN 就够，
+             * 反复尝试开一个不存在的目录只会刷日志。
+             *
+             * 调用**只打开文件夹**的实现（不置前、不最大化、不抢焦点，见 MainViewModel 的说明）。
+             */
+            return _vm.OpenCompletedOutputDirectory(task.OutputPath);
+        }
+
+        /// <summary>
+        /// 批开始时把手动密码清干净：**只对本次运行有效**（不变量 5）。
+        ///
+        /// 不是"记住上次输的密码"—— 那是持久化，红线。上一批输过什么，这一批重新问。
+        /// </summary>
+        private void ResetManualBatchPassword()
+        {
+            _manualBatchPassword = null;
+            _manualPasswordPrompted = false;
+            _batchHadPasswordFailures = false;
+        }
+
+        /// <summary>
+        /// 整批**一次性**地问"要不要手动给一个密码"（WinRAR 参考 §2 H 组 / §3 附注采纳项）。
+        ///
+        /// <para>
+        /// 什么时候问：本批里有任何任务"可能带密码"时才问 —— 判据是既有的两个任务字段
+        /// （<see cref="ArchiveTask.IsEncrypted"/> 或 <see cref="ArchiveTask.PasswordStatus"/> 为"需要密码"）。
+        /// 都没有的批次一个字都不问，免得每次解一堆无密码的包都被挡一下。
+        /// </para>
+        /// <para>
+        /// <b>无 UI 宿主（单测 / 控制台宿主）：不弹窗、不死等</b>，直接返回并写一条降级日志 ——
+        /// 与 <c>DialogService.ShowConflictDecisionAsync</c> 同一口径。
+        /// </para>
+        /// <para>
+        /// 用户答"不用"也一样记 <see cref="_manualPasswordPrompted"/>：一次性就是一次性，
+        /// 不能因为"没填"就每次遇到觉得需要密码的包再问一遍。
+        /// </para>
+        /// </summary>
+        private async Task PromptForManualBatchPasswordAsync(IReadOnlyList<ArchiveTask> tasks)
+        {
+            if (_manualPasswordPrompted)
+            {
+                return;
+            }
+
+            bool mayNeedPassword = tasks.Any(task =>
+                task != null &&
+                (task.IsEncrypted ||
+                 string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)));
+
+            if (!mayNeedPassword)
+            {
+                return;
+            }
+
+            _manualPasswordPrompted = true;
+
+            List<ArchiveTask> suspects = tasks
+                .Where(task => task != null && (task.IsEncrypted ||
+                    string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)))
+                .Take(MaxPasswordFailureNamesInDialog)
+                .ToList();
+
+            string message =
+                $"本批有 {tasks.Count(t => t != null && (t.IsEncrypted || string.Equals(t.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)))} 个包可能带密码。" +
+                Environment.NewLine + Environment.NewLine +
+                string.Join(Environment.NewLine, suspects.Select(t => t.FileName)) +
+                Environment.NewLine + Environment.NewLine +
+                "如果密码本里没有它们的密码，可以现在手动给一个：本批所有任务都会把它当候选试一遍。" +
+                Environment.NewLine +
+                "⚠ 只对本次运行有效，**不会写进任何文件、也不会进密码列表**（关掉程序就没了）。";
+
+            string? entered = await ShowPasswordPromptOnUiThreadAsync(message);
+
+            if (string.IsNullOrEmpty(entered))
+            {
+                AppendLog("INFO", "没有手动输入密码（或当前宿主没有界面），本批按密码本与统一密码继续。");
+                return;
+            }
+
+            _manualBatchPassword = entered;
+
+            /*
+             * 日志只说"收到一个手动密码"，**绝不记录内容**（不变量 5）。
+             * 措辞上不给"密码"配冒号：PasswordMasker 的兜底规则是"密码 + 冒号 → 本行剩余全部打码"，
+             * 那样这一行的后半句会被吃掉（旧版实测踩过这个坑）。
+             */
+            AppendLog(
+                "INFO",
+                $"已收到一个手动密码（{entered.Length} 个字符），只对本次运行有效，不落盘；" +
+                "本批所有任务都会试它。");
+
+            if (entered.Length > MaxSupportedPasswordLength)
+            {
+                /*
+                 * 抄 WinRAR 6.10 才补上的那个坑：超长密码会被**静默截断**，
+                 * 用户输对了却看到"密码错误"是最难查的一类现象，所以当场说清。
+                 */
+                AppendLog(
+                    "WARN",
+                    $"⚠ 你输入的手动密码有 {entered.Length} 个字符，超过 7-Zip 支持的 {MaxSupportedPasswordLength} 个，" +
+                    "更长的部分会被截断 —— 如果解不开，先确认密码本身有没有这么长。");
+            }
+        }
+
+        /// <summary>
+        /// 手动密码的候选位置：插在**空密码之后**（<paramref name="insertAfterEmpty"/> 为 true 时），
+        /// 否则追加到末尾。
+        ///
+        /// <para>
+        /// 为什么不是最前：空密码是"无密码包"的必经一步，而且它是零成本的一次尝试（不进密码循环也不亏）。
+        /// 为什么排在密码本之前：手动输入是用户**刚刚**给出的信息，比密码本里的历史条目更"新"；
+        /// 而且它通常就是那个包真正需要的密码，早点试能省掉一大圈无谓试错。
+        /// </para>
+        /// <para>
+        /// 传 null / 空串时什么都不做（空密码已经由调用方自己保证了）。
+        /// </para>
+        /// </summary>
+        private static void InsertManualPasswordCandidate(List<PasswordItem> candidates, string? manualPassword)
+        {
+            if (string.IsNullOrEmpty(manualPassword) || candidates == null)
+            {
+                return;
+            }
+
+            if (candidates.Any(item => string.Equals(item?.Value, manualPassword, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            var candidate = new PasswordItem
+            {
+                Value = manualPassword,
+                Source = ManualPasswordSource,
+                IsEnabled = true,
+                Remark = "本次运行手动输入（不落盘）"
+            };
+
+            int index = candidates.FindIndex(
+                item => string.Equals(item?.Source, "Empty", StringComparison.Ordinal));
+
+            if (index >= 0 && index < candidates.Count - 1)
+            {
+                candidates.Insert(index + 1, candidate);
+                return;
+            }
+
+            candidates.Add(candidate);
+        }
+
+        /// <summary>手动密码候选的来源标记（只在这里出现一次，别在别处再写字面量）。</summary>
+        internal const string ManualPasswordSource = "ManualBatch";
+
+        /// <summary>
+        /// 7-Zip 支持的密码长度上限（超过会被截断）。抄 WinRAR 参考里"6.10 才补上截断警告"那条教训：
+        /// 我们**当场提示**，不静默截断。
+        /// </summary>
+        private const int MaxSupportedPasswordLength = 127;
+
+        /// <summary>
+        /// 在 UI 线程上要一个密码。**无 UI 宿主返回 null（不弹窗、不死等）**。
+        ///
+        /// <para>
+        /// 为什么自己建一个小窗口而不是复用 <c>DialogService</c>：它的自绘对话框
+        /// （<c>Views/AppDialogWindow</c>）没有输入框，而"改一个通用对话框控件"不在本次授权范围内
+        /// （任务书明确要求"需要什么就写进报告"）。这里用 <see cref="PasswordBox"/> 而不是 TextBox：
+        /// 手动密码同样不许明文显示在屏幕上（不变量 5 的同一精神），而且 <c>PasswordBox.Password</c>
+        /// 不会进 WPF 的绑定/日志路径。
+        /// </para>
+        /// <para>
+        /// 返回 null 的两种情况（都不算失败）：当前宿主没有 WPF 界面；用户点了"跳过"或直接关窗口。
+        /// </para>
+        /// </summary>
+        private Task<string?> ShowPasswordPromptOnUiThreadAsync(string message)
+        {
+            System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+            if (dispatcher == null)
+            {
+                // 无界面宿主（单测 / 控制台）：只写日志，绝不弹模态框 —— 那会阻塞调用方且没人点得掉。
+                AppendLog("INFO", "当前宿主没有 WPF 界面，跳过「手动输入密码」这一步（不影响其它流程）。");
+                return Task.FromResult<string?>(null);
+            }
+
+            if (dispatcher.CheckAccess())
+            {
+                return Task.FromResult(ShowPasswordPromptModal(message));
+            }
+
+            return dispatcher.InvokeAsync(() => ShowPasswordPromptModal(message)).Task;
+        }
+
+        /// <summary>
+        /// 密码输入小窗口本体（**只允许在 UI 线程上调用**）。
+        ///
+        /// 刻意**不设** <c>WindowStartupLocation</c> 以外的任何窗口行为：不置前、不最大化、不改尺寸。
+        /// 默认按钮是「跳过」而不是「确定」——回车不该把可能错的密码当真（同 Ask 档"默认不能是危险动作"）。
+        /// </summary>
+        private static string? ShowPasswordPromptModal(string message)
+        {
+            var window = new System.Windows.Window
+            {
+                Title = "手动输入密码（只对本次运行有效）",
+                Width = 520,
+                Height = 300,
+                MinWidth = 460,
+                MinHeight = 280,
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner,
+                ResizeMode = System.Windows.ResizeMode.NoResize,
+                Owner = System.Windows.Application.Current?.MainWindow,
+                Background = System.Windows.Media.Brushes.White
+            };
+
+            var root = new System.Windows.Controls.Grid { Margin = new System.Windows.Thickness(16) };
+
+            for (int i = 0; i < 3; i++)
+            {
+                root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
+                {
+                    Height = i == 1 ? new System.Windows.GridLength(1, System.Windows.GridUnitType.Star)
+                                    : System.Windows.GridLength.Auto
+                });
+            }
+
+            var messageBlock = new System.Windows.Controls.TextBlock
+            {
+                Text = message,
+                TextWrapping = System.Windows.TextWrapping.Wrap,
+                Margin = new System.Windows.Thickness(0, 0, 0, 12)
+            };
+
+            System.Windows.Controls.Grid.SetRow(messageBlock, 0);
+            root.Children.Add(messageBlock);
+
+            var passwordBox = new System.Windows.Controls.PasswordBox
+            {
+                Height = 30,
+                VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
+                Margin = new System.Windows.Thickness(0, 0, 0, 12)
+            };
+
+            System.Windows.Controls.Grid.SetRow(passwordBox, 1);
+            root.Children.Add(passwordBox);
+
+            var buttonPanel = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right
+            };
+
+            var okButton = new System.Windows.Controls.Button
+            {
+                Content = "用这个密码",
+                MinWidth = 110,
+                Height = 30,
+                Margin = new System.Windows.Thickness(0, 0, 8, 0)
+            };
+
+            var skipButton = new System.Windows.Controls.Button
+            {
+                Content = "跳过",
+                MinWidth = 86,
+                Height = 30,
+                IsDefault = true,
+                IsCancel = true
+            };
+
+            string? result = null;
+
+            okButton.Click += (_, _) =>
+            {
+                result = passwordBox.Password;
+                window.DialogResult = true;
+                window.Close();
+            };
+
+            skipButton.Click += (_, _) =>
+            {
+                result = null;
+                window.DialogResult = false;
+                window.Close();
+            };
+
+            buttonPanel.Children.Add(okButton);
+            buttonPanel.Children.Add(skipButton);
+
+            System.Windows.Controls.Grid.SetRow(buttonPanel, 2);
+            root.Children.Add(buttonPanel);
+
+            window.Content = root;
+
+            // 焦点给输入框，但**不**调用 Activate()/Topmost 之类抢前台的手段（AGENTS.md §13）。
+            window.Loaded += (_, _) => passwordBox.Focus();
+
+            window.ShowDialog();
+
+            return result;
+        }
+
+        // ================================================================ 危险条目提示（只提示不阻断）
+
+        /// <summary>
+        /// 可执行 / 脚本类后缀 —— 判据只有这一份（别在别处再列一遍）。
+        ///
+        /// 取自 WinRAR 的"解压时排除的文件类型"示例（<c>*.scr *.pif *.exe</c>），
+        /// 再加上脚本类与快捷方式。**只用于统计提示**，不做任何过滤（见 <see cref="AnalyzeDangerousEntries"/>）。
+        /// </summary>
+        private static readonly string[] DangerousEntryExtensions =
+        {
+            ".exe", ".scr", ".pif", ".com", ".msi", ".msp", ".cpl",
+            ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+            ".hta", ".lnk", ".reg", ".jar", ".inf"
+        };
+
+        /// <summary>提示里最多列几个条目名（列太多会把详情刷屏，用户反而不看）。</summary>
+        private const int MaxDangerousEntriesInHint = 5;
+
+        /// <summary>
+        /// 「危险条目提示」的展示前缀。它**不是**任务状态（不进 StatusText / 配色 / 统计），
+        /// 只是一句提示文本的前缀，所以按 §7 的要求用常量收在这里，不散落字面量。
+        /// </summary>
+        internal const string DangerousEntriesHintPrefix = "可疑条目提示：";
+
+        /// <summary>
+        /// 在**已有的那一遍 list 结果**里统计"可执行 / 脚本类条目"，产出给用户看的一句话。
+        ///
+        /// <para>
+        /// 三条纪律（<c>docs/WinRAR功能参考.md</c> §3 第 4/5 条）：
+        /// ① **绝不为此再 list 一遍** —— 只吃调用方已经拿到手的那份清单（加密包每多列一次目录就多一次失败机会）；
+        /// ② **只提示，绝不阻断** —— 真实资源包里安装器 / 补丁经常就是内容物，不做全局硬排除掩码；
+        /// ③ 关掉设置项时返回空串，调用方据此不写任务字段、也不打日志。
+        /// </para>
+        ///
+        /// 返回空串 = "没统计" 或 "统计了但没有可疑条目"，两种情况调用方都不必区分：
+        /// 提示的意义只在"有东西要说"的时候。
+        /// </summary>
+        internal static string AnalyzeDangerousEntries(IEnumerable<ArchiveEntry>? entries, bool enabled)
+        {
+            if (!enabled || entries == null)
+            {
+                return string.Empty;
+            }
+
+            var found = new List<string>();
+            int dangerousCount = 0;
+
+            foreach (ArchiveEntry? entry in entries)
+            {
+                if (entry == null || entry.IsDirectory)
+                {
+                    continue;
+                }
+
+                string path = entry.Path ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
+                string extension = Path.GetExtension(path);
+
+                if (string.IsNullOrWhiteSpace(extension))
+                {
+                    continue;
+                }
+
+                if (!DangerousEntryExtensions.Any(
+                        known => string.Equals(known, extension, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                dangerousCount++;
+
+                if (found.Count < MaxDangerousEntriesInHint)
+                {
+                    found.Add(Path.GetFileName(path));
+                }
+            }
+
+            if (dangerousCount == 0 || found.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            string samples = string.Join("、", found);
+
+            if (dangerousCount > found.Count)
+            {
+                samples += $"…等 {dangerousCount} 个";
+            }
+
+            return $"{DangerousEntriesHintPrefix}本包含 {dangerousCount} 个可执行 / 脚本类条目（{samples}）。" +
+                   "这不是错误，只是提醒你先看清楚再打开；程序不会因此阻断解压。";
+        }
+
+        /// <summary>
+        /// 这条提示去哪儿显示：任务字段（失败清单里逐归档的第二级会原样带出）＋ 界面日志。
+        ///
+        /// 与"文件名已加密"/"路径过长"同一处产出（同一次 list），保证三个结论口径一致。
+        /// </summary>
+        private void PublishDangerousEntriesHint(ArchiveTask task, string hint, string level = "WARN")
+        {
+            if (string.IsNullOrWhiteSpace(hint))
+            {
+                return;
+            }
+
+            task.DangerousEntriesWarning = hint;
+            AppendLog(level, $"{task.FileName}：{hint}");
         }
 
         /// <summary>
@@ -2790,6 +3641,22 @@ namespace ArchiveFixer.ViewModels
             {
                 builder.AppendLine($"…等共 {failures.Count} 个（完整清单见「复制失败列表 / 导出失败清单」）。");
             }
+
+            /*
+             * 手动输入密码的**出口指引**（WinRAR 参考 §2 H 组采纳项）。
+             *
+             * 关键的一句是"重跑这一批会自动再问一次"：用户在这里看到"密码错误"时，
+             * 下一步该做什么不是"去设置里改密码本"，而是"再点一次、把密码输进去"。
+             * 只写"可以用手动密码"而不说怎么再触发，等于没说。
+             */
+            builder.AppendLine();
+            builder.AppendLine(
+                _manualBatchPassword != null
+                    ? "本次运行你已经手动输入过一个密码；如果还是解不开，说明它不是这些包的密码 —— 换一个再试，或者去核对密码本。"
+                    : _batchHadPasswordFailures
+                        ? "下一步：再点一次「一键处理 / 只解压」，程序会在开始前问你要不要手动输一个密码" +
+                          "（只对那次运行有效，不会存盘）。"
+                        : "如果这些包需要密码：再点一次「一键处理 / 只解压」，程序会在开始前问你要不要手动输一个密码。");
 
             string message = builder.ToString().TrimEnd();
 
@@ -2873,6 +3740,12 @@ namespace ArchiveFixer.ViewModels
             // 同名冲突的记账同样从零开始：上一批答过的「全部覆盖」绝不许延续到这一批。
             ResetBatchConflictState();
 
+            // 「完成后打开输出目录」整批只开一次；上一批开过不算这一批的（见 _outputFolderOpenedThisBatch）。
+            ResetBatchOutputFolderState();
+
+            // 手动密码只对**本次运行**有效（不变量 5：绝不落盘）：批开始时重新问一次、重新记一次。
+            ResetManualBatchPassword();
+
             try
             {
                 try
@@ -2887,7 +3760,22 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog("INFO", "开始批量解压");
 
-                int maxParallel = Math.Clamp(Settings.MaxParallelExtractCount, 1, 8);
+                /*
+                 * 手动密码出口（WinRAR 参考 §2 H 组 / §3 附注采纳项）。
+                 *
+                 * 位置：**动手之前**问一次。理由很实在 —— 密码本没命中、统一密码也不对时，
+                 * 用户以前只能"改设置 → 重跑整批"，而重跑意味着已经解过的包再解一遍。
+                 * 现在这一步先问，答了就当成本批所有任务的候选（排在空密码之后、密码本之前：
+                 * 它是用户刚刚给出的信息，比密码本里的历史条目更"新"）。
+                 *
+                 * 三条纪律：
+                 * ① **整批一次性**（_manualPasswordPrompted）—— 不做成每个包问一次，那正是 D-4 要避免的；
+                 * ② **只对本次运行有效、绝不落盘**（不变量 5）—— 只是一个字段，不进设置、不进密码列表、不进日志；
+                 * ③ **无 UI 宿主不弹窗、不死等** —— 判定见 PromptForManualBatchPasswordAsync。
+                 */
+                await PromptForManualBatchPasswordAsync(selectedTasks);
+
+                int maxParallel = ResolveMaxParallel(selectedTasks, out bool fullSpeed);
 
                 var runningTasks = new List<Task>();
 
@@ -2899,9 +3787,33 @@ namespace ArchiveFixer.ViewModels
                         break;
                     }
 
+                    // 每个任务各自的"已经在队列里等过"标记（只写一次等待日志，不刷屏）。
+                    bool queuedLogged = false;
+
                     // 等待有空闲并发位；期间若用户点了“停止后续”，不再为后面的任务等位。
                     while (runningTasks.Count >= maxParallel)
                     {
+                        /*
+                         * 「等待状态必须可见」（WinRAR 参考 §2 D 组采纳项）。
+                         *
+                         * 没有这一行时，被节流挡住的任务在界面上**完全看不出在等** ——
+                         * 用户看到的是"点了开始，一半任务纹丝不动"，然后怀疑程序卡死
+                         * （这正是本机历史上被投诉过的那类现象）。
+                         * 一次等待只写一行，不刷屏；这一行同时是"该开全速了"的提示。
+                         */
+                        if (!queuedLogged)
+                        {
+                            queuedLogged = true;
+
+                            AppendLog(
+                                "INFO",
+                                $"并发已满（{runningTasks.Count}/{maxParallel} 个任务正在跑），" +
+                                $"「{task.FileName}」在队列里等一个空位。" +
+                                (fullSpeed
+                                    ? "（已开「全速」，本批不再节流。）"
+                                    : "想让它立刻开跑：勾上主界面的「全速」；或点「停止后续」不再启动后面的任务。"));
+                        }
+
                         Task finished = await Task.WhenAny(runningTasks);
                         runningTasks.Remove(finished);
                         await finished;
@@ -2922,6 +3834,12 @@ namespace ArchiveFixer.ViewModels
                     {
                         AppendLog("WARN", "已停止后续任务，不再启动新的解压任务。");
                         break;
+                    }
+
+                    if (queuedLogged)
+                    {
+                        // 队列里等过了：说一句"轮到它了"，否则用户只看到"等待"没有下文。
+                        AppendLog("INFO", $"「{task.FileName}」等到空位，开始解压。");
                     }
 
                     runningTasks.Add(ProcessExtractTaskAsync(task, oneClickRun));
@@ -3048,20 +3966,42 @@ namespace ArchiveFixer.ViewModels
             ResetTaskConflictState();
 
             /*
+             * 上一轮的"提示类"结论先清掉。
+             *
+             * 为什么必须清：任务对象是**复用**的（同一个包重试、或用户再点一次），
+             * 上一轮算出来的"本包含 N 个可执行文件""路径过长"如果不擦掉，
+             * 这一轮换了密码/换了输出目录之后会继续挂着 —— 用户看到的是一句**已经不成立**的结论。
+             * 它们是"提示"不是状态，所以只重置这两个字段，不碰 Status / ErrorMessage（那是下面按流程写的）。
+             */
+            task.DangerousEntriesWarning = string.Empty;
+            task.PathLengthWarning = string.Empty;
+
+            /*
              * 分卷缺失时**不许开始**（AGENTS.md §6 第 7 条）。
              * 理由：分卷包里每一卷都是必需的数据片，缺一卷 7z 必然失败，
              * 让它跑一遍只会浪费用户时间、还可能留下半截输出目录；
              * 直接说清"缺哪几个卷"才是用户能行动的信息。
+             *
+             * 「我手动指定缺失卷所在目录」（WinRAR 参考 §2 G 组 / §3 第 2 条采纳项）：
+             * 先给用户**一次**补救机会 —— 卷常常就散在隔壁文件夹或另一个盘，
+             * 选中那个目录后重新归组再判定。
+             * ⛔ 不变量 7 **一个字都不放松**：重新归组之后仍然缺，就仍然**不启动**。
+             * 出口只是"帮你把卷找齐"，绝不是"缺卷也允许开始"。
              */
             if (task.IsVolumeGroup && !task.IsVolumeComplete)
             {
-                task.Status = StatusText.VolumeMissing;
-                task.ErrorMessage = string.IsNullOrWhiteSpace(task.VolumeInfoText)
-                    ? "分卷不完整，缺少分卷"
-                    : task.VolumeInfoText;
+                bool repaired = await TryRepairMissingVolumesAsync(task, cancellationToken);
 
-                AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{task.ErrorMessage}");
-                return;
+                if (!repaired)
+                {
+                    task.Status = StatusText.VolumeMissing;
+                    task.ErrorMessage = string.IsNullOrWhiteSpace(task.VolumeInfoText)
+                        ? "分卷不完整，缺少分卷"
+                        : task.VolumeInfoText;
+
+                    AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{task.ErrorMessage}");
+                    return;
+                }
             }
 
             bool tryExtractUnknown = Settings.UnknownFormatAction == "TryExtract";
@@ -3517,6 +4457,14 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * 本批手动输入的密码（如果用户答过）插进候选里。
+             *
+             * 位置：空密码之后、密码本之前 —— 见 InsertManualPasswordCandidate 的说明。
+             * 它天然参与下面的"每层尝试上限"，所以不会让加密分卷的候选循环变成无限循环（不变量 8）。
+             */
+            InsertManualPasswordCandidate(candidates, _manualBatchPassword);
+
+            /*
              * 密码候选的**硬上限**（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
              *
              * 解压模式下一个候选 = 一次完整解压：几百条密码本的包会被逐个候选整包重解一遍，
@@ -3549,6 +4497,15 @@ namespace ArchiveFixer.ViewModels
              */
             ArchiveListResult? preflightList = null;
 
+            // 最后一次 list 失败的结构化原因（成功时用不到）。下面两个"只 list 失败的 WARN 分支"要靠它出结论：
+            // 加密文件名与"文件损坏"的文本**分不开**，能分开的是错误类型（见 SevenZipOutputParser 的实测记录）。
+            string lastListErrorType = string.Empty;
+            string lastListMessage = string.Empty;
+
+            // 预检给出的"文件名已加密"结论（含给用户的那句话）。null = 预检没下这个结论。
+            // 它必须活到这一层结束，见下面 preflightSaidEncryptedHeaders 的恢复。
+            string? encryptedHeadersMessage = null;
+
             foreach (PasswordItem candidate in candidates.Take(MaxPreflightPasswordAttempts))
             {
                 ArchiveListResult attempt = await _archiveEngine.ListAsync(
@@ -3560,11 +4517,51 @@ namespace ArchiveFixer.ViewModels
                     preflightList = attempt;
                     break;
                 }
+
+                lastListErrorType = attempt.ErrorType ?? string.Empty;
+                lastListMessage = attempt.Message ?? string.Empty;
             }
 
             if (preflightList == null)
             {
-                AppendLog("WARN", $"{task.FileName}：没能列出归档内容（可能是加密头或文件损坏），本次跳过路径预检与资源预算，解压后仍会校验落点。");
+                /*
+                 * 列不出内容：要么加密头（RAR -hp / 7z -mhe），要么归档真的坏了。
+                 *
+                 * ⚠ 这里**只认引擎给的错误类型**，绝不在这条路径上"猜"：
+                 * 解压 / 测试路径上的 WrongPassword 是**密码候选循环的驱动信号**
+                 * （循环见到非 WrongPassword 就 break），在那里把它改成"文件名已加密"
+                 * 会让第一个候选（常是空密码）就打断循环 —— 我们自己 -mhe 的内层分卷会全部解不开。
+                 * 判定本身只在 SevenZipOutputParser.LooksLikeEncryptedHeaders 里，而且只在列目录操作上成立
+                 * （有反向回归测试钉着），这里只是把那个结论落到任务状态上。
+                 */
+                if (string.Equals(
+                        lastListErrorType,
+                        SevenZipOutputParser.EncryptedHeadersErrorType,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    task.Status = StatusText.EncryptedHeaders;
+                    task.PasswordStatus = StatusText.PasswordNeed;
+
+                    /*
+                     * 这份文案要**留到这一层结束**（见下面 preflightSaidEncryptedHeaders 的恢复）：
+                     * 密码候选循环会把 task.ErrorMessage 覆盖成泛泛的"密码错误或缺少正确密码"，
+                     * 而用户真正需要知道的是"这个包连文件列表都读不出来，得先给对密码"。
+                     */
+                    encryptedHeadersMessage =
+                        $"这个包可能加密了文件名（RAR -hp / 7z -mhe），所以连内容清单都读不出来，" +
+                        $"需要正确密码才能列出内容。{lastListMessage}";
+
+                    task.ErrorMessage = encryptedHeadersMessage;
+
+                    AppendLog(
+                        "WARN",
+                        $"{task.FileName}：{StatusText.EncryptedHeaders} —— 连内容清单都读不出来（需要正确密码），" +
+                        $"本次跳过路径预检与资源预算，解压后仍会校验落点。原因：{lastListMessage}");
+                }
+                else
+                {
+                    AppendLog("WARN", $"{task.FileName}：没能列出归档内容（可能是加密头或文件损坏），本次跳过路径预检与资源预算，解压后仍会校验落点。");
+                }
             }
             else
             {
@@ -3608,7 +4605,46 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog("WARN", $"{task.FileName}：资源预算提示 —— {budget.Reason}");
                 }
+
+                /*
+                 * 长路径提示落地（WinRAR 参考 §2 I 组采纳项）。
+                 *
+                 * 以前它只在上面那行日志里（ResourceBudget 已经把它拼进 Reason），任务详情里看不到 ——
+                 * 而"路径过长导致少了几个文件"恰恰是用户事后才来查的问题。落到任务字段之后，
+                 * 失败清单逐归档的第二级（TaskSummaryService）也会带上这一行。
+                 * 数字与文案都由 Security/PathLengthPreflight 备好，这里只搬运，不重算。
+                 */
+                if (!string.IsNullOrWhiteSpace(budget.PathLengthWarning))
+                {
+                    task.PathLengthWarning = budget.PathLengthWarning;
+                }
+
+                /*
+                 * 危险条目统计（WinRAR 参考 §2 F 组 / §3 第 5 条采纳项，设置项 ReportDangerousEntries 默认开）。
+                 *
+                 * ⚠ 复用**手上这一份** list（preflightList），绝不为它再跑一次 7z：
+                 * 加密包每多列一次目录就多一次失败机会，重复 list 是把失败概率成倍放大。
+                 * **只提示不阻断**：安装器 / 补丁经常就是内容物，不做全局硬排除掩码。
+                 */
+                PublishDangerousEntriesHint(
+                    task,
+                    AnalyzeDangerousEntries(preflightList.Entries, Settings.ReportDangerousEntries),
+                    "INFO");
             }
+
+            /*
+             * 预检给出的"文件名已加密"结论必须**留住**。
+             *
+             * 为什么不能只写在预检那一支里：后面的密码候选循环无论如何都会覆盖 task.Status
+             * （解压失败 → WrongPassword）。于是预检算出来的那个**更具体**的结论会被一句泛泛的
+             * "密码错误"吃掉 —— 用户拿到的还是错的那句话，这一处接线就等于白做。
+             *
+             * 只在"这一层最后仍然只是密码没通过"时把它恢复：
+             * · 解压成功（有的包加密头也能解）→ 不动；
+             * · 达到尝试上限 → 那是更具体的结论，不动；
+             * · 文件损坏 / 权限不足这类别的失败 → 更具体的结论，不动。
+             */
+            bool preflightSaidEncryptedHeaders = task.Status == StatusText.EncryptedHeaders;
 
             /*
              * 递归模式（M4）：不是"只解当前层"时，整条解压交给 RecursiveExtractor。
@@ -3962,6 +4998,29 @@ namespace ArchiveFixer.ViewModels
                         AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
                     }
                 }
+            }
+
+            /*
+             * 把预检的"文件名已加密"结论恢复回来（见上面 preflightSaidEncryptedHeaders 的说明）。
+             * 条件收得最紧：预检说过、而且这一层最后得到的**只是**"密码没通过"。
+             */
+            if (preflightSaidEncryptedHeaders &&
+                (task.Status == StatusText.WrongPassword || task.Status == StatusText.ExtractFailed))
+            {
+                task.Status = StatusText.EncryptedHeaders;
+                task.PasswordStatus = StatusText.PasswordNeed;
+
+                if (!string.IsNullOrWhiteSpace(encryptedHeadersMessage))
+                {
+                    // 连原因也一起恢复：泛泛的"密码错误"会让用户去翻密码本，
+                    // 而这里的结论是"先给它一个密码，它才肯把内容清单给你看"。
+                    task.ErrorMessage = encryptedHeadersMessage;
+                }
+
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：这次拿到的是「{StatusText.EncryptedHeaders}」的结论" +
+                    "（不是泛泛的密码错误）—— 连内容清单都读不出来，需要正确密码才能列出内容。");
             }
 
             // 密码类失败登记到本批，批次结束后合并成一次提示（不再在任务循环里逐个弹模态框）。

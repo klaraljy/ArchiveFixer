@@ -31,4 +31,18 @@
     </None>
   </ItemGroup>
 
+  <!--
+      RAR 侧的第二引擎：RARLAB 官方的免费件 UnRAR.exe（+ 其许可文本）。
+      照 tools\7zip\ 的同一套写法复制到输出目录，不新造机制。
+      来源、版本、SHA256 与许可要点见 tools\unrar\README.md（AGENTS.md §3.1）。
+  -->
+  <ItemGroup>
+    <None Include="tools\unrar\UnRAR.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="tools\unrar\license.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

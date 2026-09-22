@@ -1,4 +1,4 @@
-﻿using ArchiveFixer.Models;
+using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Views;
 using System;
@@ -254,11 +254,44 @@ namespace ArchiveFixer.ViewModels
 
             RenamePreviewViewModel vm = window.ViewModel;
 
+            /*
+             * 「询问」档在改名路径上的落地（真实缺陷修正，2026-09-22）。
+             *
+             * 以前 Ask 被并进"其余 → 自动重命名"分支，于是预览表里会出现
+             * 「询问」+「将自动重命名」并列 —— 界面说一套、代码做一套。
+             * 现在预览会给撞名的行一个下拉框（覆盖 / 跳过 / 自动重命名），用户在预览里**逐条**选；
+             * 这里把选定的结论写死到 NewPath 上，于是"预览里显示的那个路径"就是"执行时会落的那个路径"。
+             *
+             * ⛔ 不变量 3：**没选 = 自动重命名，绝不覆盖**（ApplyConflictChoice 的兜底分支）。
+             * 不再弹第二个对话框 —— 预览本来就是"先给你看"的那个地方，再问一遍纯属多余。
+             *
+             * 对**预览里的每一条**都算一遍，而不是只算勾选的：用户在预览里明确选了「跳过」的那一条
+             * 会被 MarkSkip 顺手取消勾选，如果这里只看勾选项，他的选择就既没被执行也没留痕。
+             */
+            int conflictChoices = 0;
+
+            foreach (RenamePreviewItem item in vm.Items)
+            {
+                if (_renameService.ApplyConflictChoice(item))
+                {
+                    conflictChoices++;
+                }
+            }
+
+            if (conflictChoices > 0)
+            {
+                AppendLog("INFO", $"同名冲突：按你在预览里的选择处理了 {conflictChoices} 项（没选的按保守档自动重命名，绝不覆盖）。");
+            }
+
+            // 冲突结论写完再取勾选项：选了「跳过」的那些到这里已经被取消勾选，不会进执行。
             List<RenamePreviewItem> selectedPreviewItems = vm.GetSelectedItems();
 
             if (selectedPreviewItems.Count == 0)
             {
-                _dialogService.ShowInfo("当前没有可执行的改名项，请查看改名预览中的状态和错误信息。");
+                _dialogService.ShowInfo(
+                    conflictChoices > 0
+                        ? "冲突处理之后没有可执行的改名项了（可能都选了「跳过」）。"
+                        : "当前没有可执行的改名项，请查看改名预览中的状态和错误信息。");
                 return;
             }
 

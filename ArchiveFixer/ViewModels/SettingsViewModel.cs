@@ -1,9 +1,13 @@
+using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Windows.Input;
 
@@ -33,6 +37,57 @@ namespace ArchiveFixer.ViewModels
     }
 
     /// <summary>
+    /// 设置窗口里的**一行引擎**（检测状态 + 路径 + 版本 + 是不是当前在用）。
+    ///
+    /// 为什么要显示这三样（AGENTS.md §3.1：界面显示当前是否在用）：
+    /// 用户机器上可能有**两份** UnRAR —— 自己装的 WinRAR 里那份（本机实测 6.11），
+    /// 以及我们内置的 <c>tools\unrar\</c>（7.23）。"到底用的哪一个、哪个版本"决定了
+    /// 遇到格式支持问题时报什么，也在报告里作为溯源依据（不变量 14）。
+    /// 只写一句"已启用"是不够的。
+    /// </summary>
+    public sealed class EngineOptionItem
+    {
+        /// <summary>检测状态文案。**不是任务状态**（不进 StatusText / 不参与统计与配色），只是这一页的说明文字。</summary>
+        public const string DetectedText = "已检测到";
+
+        /// <summary>没检测到。</summary>
+        public const string NotDetectedText = "未检测到";
+
+        public string Id { get; init; } = string.Empty;
+
+        public string DisplayName { get; init; } = string.Empty;
+
+        public string Version { get; init; } = string.Empty;
+
+        public string Path { get; init; } = string.Empty;
+
+        /// <summary>这个文件是从哪一档找到的（用户自选 / 已装 WinRAR 目录 / 内置）。</summary>
+        public string SourceText { get; init; } = string.Empty;
+
+        public bool IsAvailable { get; init; }
+
+        public string StatusText => IsAvailable ? DetectedText : NotDetectedText;
+
+        /// <summary>排在第几位（1 基，给人看）。</summary>
+        public int Order { get; init; }
+
+        /// <summary>是不是"当前会真正被用上"的那一个（依据能力 + 优先级算出来，见 EngineSelectionSummary）。</summary>
+        public bool IsInUse { get; init; }
+
+        /// <summary>"当前在用"的说明（为空表示这一行当前用不上）。</summary>
+        public string UsageText { get; init; } = string.Empty;
+
+        public bool CanMoveUp { get; init; }
+
+        public bool CanMoveDown { get; init; }
+
+        /// <summary>一句话：名字 + 版本 + 状态（列表里第一行文字）。</summary>
+        public string HeaderText => IsAvailable
+            ? $"{Order}. {DisplayName}　{Version}　{StatusText}"
+            : $"{Order}. {DisplayName}　{StatusText}";
+    }
+
+    /// <summary>
     /// 设置窗口 ViewModel。
     /// 负责展示、修改和恢复默认设置。
     /// </summary>
@@ -44,6 +99,7 @@ namespace ArchiveFixer.ViewModels
         private AppSettings _settings;
         private bool? _dialogResult;
         private string _message = string.Empty;
+        private string _engineSelectionSummary = string.Empty;
 
         public AppSettings Settings
         {
@@ -268,6 +324,56 @@ namespace ArchiveFixer.ViewModels
             Settings.KeepArchiveNameFolder,
             Settings.CustomOutputDirectory ?? string.Empty);
 
+        /// <summary>
+        /// 引擎优先级列表（界面上的顺序 = 落盘的顺序，见 <see cref="AppSettings.EnginePriority"/>）。
+        ///
+        /// 每行带检测状态、路径、版本与"当前在用"标记 —— 排第一但没装时，
+        /// 用户要能一眼看出"它没被用上是因为没检测到，不是因为程序坏了"。
+        /// </summary>
+        public ObservableCollection<EngineOptionItem> Engines { get; } = new();
+
+        /// <summary>"当前在用哪个引擎"的一句话（按能力 + 优先级算出来的，与真正执行时同一份逻辑）。</summary>
+        public string EngineSelectionSummary
+        {
+            get => _engineSelectionSummary;
+            private set => SetProperty(ref _engineSelectionSummary, value ?? string.Empty);
+        }
+
+        /// <summary>用户自选的 UnRAR.exe 路径；留空 = 自动（已装 WinRAR 目录 → 内置 tools\unrar）。</summary>
+        public string CustomUnRarExePath
+        {
+            get => Settings.CustomUnRarExePath ?? string.Empty;
+            set
+            {
+                string normalized = value ?? string.Empty;
+
+                if (string.Equals(Settings.CustomUnRarExePath, normalized, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                Settings.CustomUnRarExePath = normalized;
+                OnPropertyChanged();
+                RefreshEngineList();
+            }
+        }
+
+        /// <summary>保留受损文件（-kb，默认关）。只影响半成品留不留，绝不影响成败判定。</summary>
+        public bool KeepBrokenFiles
+        {
+            get => Settings.KeepBrokenFiles;
+            set
+            {
+                if (Settings.KeepBrokenFiles == value)
+                {
+                    return;
+                }
+
+                Settings.KeepBrokenFiles = value;
+                OnPropertyChanged();
+            }
+        }
+
         public bool? DialogResult
         {
             get => _dialogResult;
@@ -284,6 +390,12 @@ namespace ArchiveFixer.ViewModels
         public ICommand CancelCommand { get; }
         public ICommand ResetDefaultCommand { get; }
         public ICommand SelectOutputDirectoryCommand { get; }
+
+        /// <summary>把某个引擎在优先级列表里上移一位。</summary>
+        public ICommand MoveEngineUpCommand { get; }
+
+        /// <summary>把某个引擎在优先级列表里下移一位。</summary>
+        public ICommand MoveEngineDownCommand { get; }
 
         /// <summary>选择"结果归集"的目标目录（M3）。</summary>
         public ICommand SelectCollectTargetDirectoryCommand { get; }
@@ -308,6 +420,10 @@ namespace ArchiveFixer.ViewModels
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory);
             SelectCollectTargetDirectoryCommand = new RelayCommand(SelectCollectTargetDirectory);
             SelectCacheRootDirectoryCommand = new RelayCommand(SelectCacheRootDirectory);
+            MoveEngineUpCommand = new RelayCommand(parameter => MoveEngine(parameter, -1));
+            MoveEngineDownCommand = new RelayCommand(parameter => MoveEngine(parameter, +1));
+
+            RefreshEngineList();
 
             Message = "设置已加载。";
         }
@@ -337,6 +453,17 @@ namespace ArchiveFixer.ViewModels
                 int requestedPasswordAttempts = Settings.MaxPasswordAttemptsPerLayer;
 
                 Settings.Normalize();
+
+                /*
+                 * 保存的**同时**把引擎相关的项推给引擎层（优先级 / 两条工具路径 / 保留受损文件）。
+                 *
+                 * 为什么在这里推：设置窗口是用户改这些值的唯一入口，而引擎选择发生在
+                 * "下一次点击处理"那一刻 —— 不推的话，用户改完顺序、关掉窗口、立刻处理一个包，
+                 * 用的还是旧顺序（"改了没反应"）。这条推送与主窗口的
+                 * ApplyEngineSettings 幂等，谁先谁后都不会打架。
+                 */
+                EngineRuntimeSettings.Apply(Settings);
+                RefreshEngineList();
 
                 Message = requestedPasswordAttempts != Settings.MaxPasswordAttemptsPerLayer
                     ? $"设置已保存（每层密码尝试上限 {requestedPasswordAttempts} 超出 1~1000，已按 {Settings.MaxPasswordAttemptsPerLayer} 生效）。"
@@ -449,6 +576,185 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(CollapseRepeatedFolderLayer));
             OnPropertyChanged(nameof(SourceHandling));
             OnPropertyChanged(nameof(CacheRootDirectory));
+            OnPropertyChanged(nameof(CustomUnRarExePath));
+            OnPropertyChanged(nameof(KeepBrokenFiles));
+
+            RefreshEngineList();
+        }
+
+        /// <summary>
+        /// 重算引擎列表（顺序、检测状态、路径、版本、当前在用）。
+        ///
+        /// ⚠ 刻意**不**用 <c>ToolLocator.Default</c> 去探测：那是运行时的全局解析结果。
+        /// 用户在设置窗口里改路径、还没点保存时，界面必须显示"改完之后会怎样"，
+        /// 而点「取消」时又不能把这个改动漏到运行时（那正是"取消了却生效了"的经典缺陷）。
+        /// 所以这里用一个**临时**的 ToolLocator + 注册表 + 选择器，只做预览，不产生副作用。
+        /// </summary>
+        private void RefreshEngineList()
+        {
+            try
+            {
+                Settings.EnginePriority = EngineIds.Normalize(Settings.EnginePriority);
+
+                var previewTools = new ToolLocator
+                {
+                    CustomSevenZipExePath = Settings.CustomSevenZipExePath ?? string.Empty,
+                    CustomUnRarExePath = Settings.CustomUnRarExePath ?? string.Empty
+                };
+
+                EngineRegistry registry = EngineRegistry.CreateDefault(previewTools);
+                var selector = new EngineSelector(registry, Settings.EnginePriority);
+
+                EngineSelection forRar = selector.Explain("RAR5", EngineOperation.Extract);
+                EngineSelection forGeneric = selector.Explain("ZIP", EngineOperation.Extract);
+
+                /*
+                 * ⚠ 列表顺序必须用**设置里那份**优先级，不能用全局运行时那份：
+                 * 用户点了「下移」之后、还没点「保存」之前，界面要立刻反映新顺序；
+                 * 而全局设置此刻不能动（点「取消」不能生效）。
+                 * 实测踩过：这里原来读的是全局 → 点「下移」看着毫无反应。
+                 */
+                IReadOnlyList<IArchiveEngine> ordered = registry.EnginesInPriorityOrder(Settings.EnginePriority);
+
+                Engines.Clear();
+
+                for (int i = 0; i < ordered.Count; i++)
+                {
+                    IArchiveEngine engine = ordered[i];
+
+                    bool inUse = (forRar.Selected != null &&
+                                  string.Equals(forRar.Selected.Id, engine.Id, StringComparison.OrdinalIgnoreCase))
+                                 || (forGeneric.Selected != null &&
+                                     string.Equals(forGeneric.Selected.Id, engine.Id, StringComparison.OrdinalIgnoreCase));
+
+                    Engines.Add(new EngineOptionItem
+                    {
+                        Id = engine.Id,
+                        DisplayName = engine.DisplayName,
+                        Version = engine.Version,
+                        Path = DescribeEnginePath(engine.Id, previewTools),
+                        SourceText = DescribeEngineSource(engine.Id, previewTools),
+                        IsAvailable = engine.IsAvailable,
+                        Order = i + 1,
+                        IsInUse = inUse,
+                        UsageText = BuildUsageText(engine.Id, forRar, forGeneric),
+                        CanMoveUp = i > 0,
+                        CanMoveDown = i < ordered.Count - 1
+                    });
+                }
+
+                EngineSelectionSummary = BuildEngineSelectionSummary(forRar, forGeneric);
+            }
+            catch (Exception ex)
+            {
+                // 设置页不该因为"探测引擎"整个打不开：报一句就够，其余设置照常可改。
+                EngineSelectionSummary = "引擎检测失败：" + ex.Message;
+            }
+        }
+
+        private static string DescribeEnginePath(string engineId, ToolLocator tools)
+        {
+            return string.Equals(engineId, EngineIds.WinRar, StringComparison.OrdinalIgnoreCase)
+                ? tools.UnRarExePath
+                : tools.SevenZipExePath;
+        }
+
+        private static string DescribeEngineSource(string engineId, ToolLocator tools)
+        {
+            if (string.Equals(engineId, EngineIds.WinRar, StringComparison.OrdinalIgnoreCase))
+            {
+                if (tools.IsUsingCustomUnRarPath)
+                {
+                    return "用户自选路径";
+                }
+
+                return tools.IsUsingWinRarInstallation ? "本机已装 WinRAR 目录" : "程序内置 tools\\unrar";
+            }
+
+            return tools.IsUsingCustomPath ? "用户自选路径" : "程序内置 tools\\7zip";
+        }
+
+        private static string BuildUsageText(string engineId, EngineSelection forRar, EngineSelection forGeneric)
+        {
+            bool rar = forRar.Selected != null &&
+                       string.Equals(forRar.Selected.Id, engineId, StringComparison.OrdinalIgnoreCase);
+
+            bool generic = forGeneric.Selected != null &&
+                           string.Equals(forGeneric.Selected.Id, engineId, StringComparison.OrdinalIgnoreCase);
+
+            if (rar && generic)
+            {
+                return "当前在用：所有格式";
+            }
+
+            if (rar)
+            {
+                return "当前在用：RAR 包";
+            }
+
+            if (generic)
+            {
+                return "当前在用：zip / 7z 等其它格式";
+            }
+
+            return "当前未参与（能力或优先级排在后面）";
+        }
+
+        private static string BuildEngineSelectionSummary(EngineSelection forRar, EngineSelection forGeneric)
+        {
+            string rar = forRar.Selected == null ? "没有可用引擎" : forRar.Describe();
+            string generic = forGeneric.Selected == null ? "没有可用引擎" : forGeneric.Describe();
+
+            string text = $"当前在用：RAR 包 → {rar}；zip / 7z 等其它格式 → {generic}。";
+
+            if (forRar.SkippedUnavailable.Count > 0 || forGeneric.SkippedUnavailable.Count > 0)
+            {
+                text += " 排在前面的引擎没检测到时会被自动跳过，不会因此打不开包。";
+            }
+
+            return text;
+        }
+
+        /// <summary>
+        /// 上移 / 下移一位。<paramref name="delta"/> 为 -1 上移、+1 下移。
+        /// 只改顺序，不增删引擎（列表里没有"删掉某个引擎"这一档）。
+        /// </summary>
+        private void MoveEngine(object? parameter, int delta)
+        {
+            if (parameter is not EngineOptionItem item)
+            {
+                return;
+            }
+
+            List<string> priority = EngineIds.Normalize(Settings.EnginePriority);
+
+            int index = priority.FindIndex(id => string.Equals(id, item.Id, StringComparison.OrdinalIgnoreCase));
+            int target = index + delta;
+
+            if (index < 0 || target < 0 || target >= priority.Count)
+            {
+                return;
+            }
+
+            string moved = priority[index];
+            priority[index] = priority[target];
+            priority[target] = moved;
+
+            Settings.EnginePriority = priority;
+
+            RefreshEngineList();
+
+            Message = $"引擎顺序已调整：{string.Join(" → ", priority.Select(DescribeEngineIdForMessage))}（点「保存」后生效）";
+        }
+
+        private static string DescribeEngineIdForMessage(string id)
+        {
+            if (string.Equals(id, EngineIds.WinRar, StringComparison.OrdinalIgnoreCase))
+            {
+                return "UnRAR";
+            }
+
+            return string.Equals(id, EngineIds.SevenZip, StringComparison.OrdinalIgnoreCase) ? "7-Zip" : id;
         }
 
         /// <summary>选择缓存根目录（日志 / 临时 / 工作区都放它下面）。</summary>

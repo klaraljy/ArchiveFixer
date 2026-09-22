@@ -3,9 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Style="{StaticResource AppWindowStyle}"
         Title="改名预览"
-        Width="1180"
+        Width="1330"
         Height="680"
-        MinWidth="980"
+        MinWidth="1000"
         MinHeight="520"
         WindowStartupLocation="CenterOwner">
 
@@ -13,6 +13,8 @@
         改名预览（UI v2）。
         改之前：标题挤在统计行里、底部一排 6 个同权重按钮、空列表时只有一张白表格。
         现在：标题独立、统计做成小卡片、确认/取消与"选择辅助"分成两级，空列表给引导文案。
+        窗口宽度按"新增了「冲突选择（询问档）」一列"重新算过：默认宽度下 9 列刚好放得下，
+        不必横向滚动（原来 1180 宽，加上新列会把最后一列挤出视野）。
     -->
 
     <DockPanel Margin="12">
@@ -30,6 +32,13 @@
 
                     <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,5,0,0"
                                Text="只有勾选、且状态为「可改名」的项目会被改。「新文件名」一列可以直接双击修改；改名会真实修改磁盘上的文件名。" />
+
+                    <!--
+                        同名冲突（设置里选了「询问」时）：**在预览里逐条确认**，不再另弹对话框。
+                        没选就不放行；不选默认是自动重命名 —— 绝不覆盖（不变量 3）。
+                    -->
+                    <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,3,0,0"
+                               Text="若「同名冲突处理」档位是「询问」：撞名的行会在「冲突选择（询问档）」列里出现下拉框，请逐条选（不选不放行；默认档是自动重命名，绝不覆盖）。" />
                 </StackPanel>
 
                 <WrapPanel Grid.Column="1" VerticalAlignment="Top" Margin="16,2,0,0">
@@ -109,6 +118,17 @@
                             MinWidth="96"
                             Style="{StaticResource ToolbarButtonStyle}"
                             Command="{Binding SelectCanRenameCommand}" />
+
+                    <!--
+                        「询问」档的批量出口（等价 WinRAR 覆盖询问里的「全部重命名」那一档）：
+                        撞名多的时候逐个点下拉框太烦，一次全设成自动重命名 —— 这也是最安全的那一档（绝不覆盖）。
+                    -->
+                    <Button Content="冲突全部自动重命名"
+                            MinWidth="150"
+                            Margin="8,0,0,0"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            ToolTip="把所有「同名冲突」一次设为自动重命名：产物落成 名字(1)，已有文件一个字节都不动。"
+                            Click="ConflictAllAutoRenameButton_Click" />
                 </StackPanel>
 
                 <!-- 主操作在最右：确认改名（主色）> 取消 -->
@@ -203,8 +223,62 @@
 
                         <DataGridTextColumn Header="冲突处理"
                                             Binding="{Binding ConflictAction, Converter={StaticResource ConflictActionTextConverter}}"
-                                            Width="112"
+                                            Width="88"
                                             IsReadOnly="True" />
+
+                        <!--
+                            「询问」档的逐条确认（真实缺陷修正）：
+                            以前这一档在改名路径上被静默当成"自动重命名"，预览里会出现
+                            「询问」+「将自动重命名」并列（界面自相矛盾）。
+                            现在撞名的行在这里给一个下拉框，用户在**预览里**逐条选；
+                            没选的一律按保守档自动重命名 —— 绝不覆盖（不变量 3）。
+                            只有 NeedsConflictChoice 为真的行才出现下拉框，其余行是一片空白。
+                        -->
+                        <DataGridTemplateColumn Header="冲突选择（询问档）" Width="180">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <TextBlock Text="{Binding ConflictChoiceHint}"
+                                                   VerticalAlignment="Center"
+                                                   Margin="4,0"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding ConflictChoiceHint}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <!-- 需要选择时那一格留给下拉框，这里只负责"不需要选"的行（一片空白）。 -->
+                                                        <DataTrigger Binding="{Binding NeedsConflictChoice}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <ComboBox SelectedValue="{Binding ConflictChoice, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  SelectedValuePath="Tag"
+                                                  Margin="0"
+                                                  ToolTip="目标文件已存在 —— 选怎么办。不选 = 自动重命名（不会覆盖）。">
+                                            <ComboBox.Style>
+                                                <Style TargetType="ComboBox">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding NeedsConflictChoice}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ComboBox.Style>
+
+                                            <ComboBoxItem Content="自动重命名（默认，不覆盖）" Tag="AutoRename" />
+                                            <ComboBoxItem Content="跳过（已有文件不动）" Tag="Skip" />
+                                            <ComboBoxItem Content="覆盖（先移开旧文件）" Tag="Overwrite" />
+                                        </ComboBox>
+                                    </Grid>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
 
                         <DataGridTextColumn Header="状态"
                                             Binding="{Binding Status}"

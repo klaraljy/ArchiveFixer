@@ -1,4 +1,6 @@
+using ArchiveFixer.Engines;
 using System;
+using System.Collections.Generic;
 
 namespace ArchiveFixer.Models
 {
@@ -298,6 +300,56 @@ namespace ArchiveFixer.Models
         public string CustomSevenZipExePath { get; set; } = string.Empty;
 
         /// <summary>
+        /// 用户自定义的 UnRAR.exe 路径；空表示按"**已装的 WinRAR 目录 → 内置 tools\unrar**"自动解析。
+        ///
+        /// 与 <see cref="CustomSevenZipExePath"/> 同一口径：路径**只**由 <c>ToolLocator</c> 解析，
+        /// 别的文件里不许再拼一遍（AGENTS.md §3.1）。
+        /// </summary>
+        public string CustomUnRarExePath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// **引擎优先级**（用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"）。
+        ///
+        /// <para>
+        /// 存的是引擎 id 的**有序列表**（<c>winrar</c> = RARLAB UnRAR，<c>sevenzip</c> = 7-Zip 命令行，
+        /// 词表见 <see cref="EngineIds"/>）。默认 <c>["winrar", "sevenzip"]</c>。
+        /// </para>
+        ///
+        /// <para>
+        /// ⚠ 它是**同能力时的先后**，不是"只能用第一个"：选择规则是
+        /// **先按能力筛（谁能干这活），再用优先级做 tiebreaker**，不可用的引擎直接跳过 ——
+        /// 不许因为"排第一但没装"就打不开包（AGENTS.md §3.1）。
+        /// 所以 zip/7z 包永远走 7-Zip（UnRAR 不支持这些格式），RAR 包默认先走 UnRAR。
+        /// </para>
+        ///
+        /// <para>
+        /// 旧配置里没有这个字段 → 反序列化后是 null → <see cref="Normalize"/> 补成默认值，
+        /// 不需要额外的兼容分支（与 MaxPasswordAttemptsPerLayer 同一套容错口径）。
+        /// </para>
+        /// </summary>
+        public List<string>? EnginePriority { get; set; }
+
+        /// <summary>
+        /// 保留受损的文件（**默认关**）：解压时给**RAR 引擎**加"保留校验和不符的半成品"的开关
+        /// （UnRAR 的 <c>-kb</c>，来源 <c>docs/WinRAR功能参考.md</c> §2 C 组）。
+        ///
+        /// <para>
+        /// ⚠ <b>它只对 UnRAR 生效</b>，对本机 7-Zip 26.01 **不加任何参数**，依据是实测：
+        /// <c>7z x -kb</c> 直接报 <c>Command Line Error: Unknown switch: -kb</c>（退出码 7）——
+        /// <c>-kb</c> 是 RAR / UnRAR 的开关；而 7-Zip **本来就保留**校验失败的半成品
+        /// （实测截断包里被截断的文件仍留在输出目录），也就不需要这个开关。
+        /// 若照文档建议给 7-Zip 加上，用户一开这项，**所有解压都会以命令行错误失败**。
+        /// </para>
+        ///
+        /// <para>
+        /// ⚠ <b>它绝不改变任务成败的判定</b>（AGENTS.md §6 不变量 6）：
+        /// 校验和不符的包仍然是**失败 / 部分完成**，只是磁盘上会留下那个半成品，
+        /// 让用户还能试着抢救半个视频 / 半张图。状态由引擎退出码与错误分类决定，与本开关无关。
+        /// </para>
+        /// </summary>
+        public bool KeepBrokenFiles { get; set; } = false;
+
+        /// <summary>
         /// 解压成功且校验通过后删除源压缩包/源分卷。
         /// **默认关闭**：删除不可逆，必须用户显式开启（AGENTS.md §9.5、用户 2026-09-21 指示）。
         /// </summary>
@@ -445,6 +497,11 @@ namespace ArchiveFixer.Models
                 PreservePasswordLeadingTrailingSpaces = true,
                 EnableSidecarPassword = false,
                 CustomSevenZipExePath = string.Empty,
+                CustomUnRarExePath = string.Empty,
+
+                // 用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"。
+                EnginePriority = new List<string>(EngineIds.DefaultPriority),
+                KeepBrokenFiles = false,
                 DeleteSourceAfterExtract = false,
                 CollectResultsToDirectory = false,
                 CollectTargetDirectory = string.Empty,
@@ -522,9 +579,19 @@ namespace ArchiveFixer.Models
 
             CustomOutputDirectory ??= string.Empty;
             CustomSevenZipExePath ??= string.Empty;
+            CustomUnRarExePath ??= string.Empty;
             CollectTargetDirectory ??= string.Empty;
             CacheRootDirectory ??= string.Empty;
             PasswordBookPath ??= string.Empty;
+
+            /*
+             * 引擎优先级：空 / 缺字段 / 手改坏的值一律收拾成"规范写法 + 补全所有已知引擎"。
+             *
+             * 归一化放在设置层，与其它设置项同一口径：到引擎选择那一刻才发现"这个列表读不懂"
+             * 是最糟的 —— 用户已经点了处理，程序却要临时猜用哪个引擎。
+             * 判定只有一处实现（EngineIds.Normalize），这里不另写一套字符串比较。
+             */
+            EnginePriority = EngineIds.Normalize(EnginePriority);
 
             if (string.IsNullOrWhiteSpace(RecursionMode))
             {
@@ -582,6 +649,15 @@ namespace ArchiveFixer.Models
             if (!string.IsNullOrWhiteSpace(CustomSevenZipExePath) && !System.IO.File.Exists(CustomSevenZipExePath))
             {
                 CustomSevenZipExePath = string.Empty;
+            }
+
+            /*
+             * 自定义 UnRAR 路径同理；但**兜底方向不同**：UnRAR 还有"已装 WinRAR 目录"与"内置"两档，
+             * 所以清空它只是回到"自动解析"，不会让引擎不可用（ToolLocator 里两级回落）。
+             */
+            if (!string.IsNullOrWhiteSpace(CustomUnRarExePath) && !System.IO.File.Exists(CustomUnRarExePath))
+            {
+                CustomUnRarExePath = string.Empty;
             }
         }
     }

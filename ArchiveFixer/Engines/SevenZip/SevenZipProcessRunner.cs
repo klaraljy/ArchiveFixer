@@ -834,6 +834,22 @@ namespace ArchiveFixer.Engines.SevenZip
             return missing;
         }
 
+        /// <summary>
+        /// 解压参数。
+        ///
+        /// <para>
+        /// ⚠ <b>这里刻意**不**加 <c>-kb</c></b>（"保留受损的文件"）。这一点与
+        /// <c>docs/WinRAR功能参考.md</c> §2 C 组的建议**相反**，依据是本机实测：
+        /// <list type="bullet">
+        /// <item><description><c>7z x -kb …</c> → <c>Command Line Error: Unknown switch: -kb</c>，退出码 <b>7</b>
+        /// （26.01 实测，开关放前放后都一样）—— <c>-kb</c> 是 RAR / UnRAR 的开关，7-Zip **没有**它；</description></item>
+        /// <item><description>7-Zip 本来**就保留**校验失败的半成品（实测：截断包里第二个文件被截到 29888 字节，
+        /// 仍然留在输出目录里），也就是说"保留受损文件"这一档在 7-Zip 上**本来就是开着的**，没有对应开关可切。</description></item>
+        /// </list>
+        /// 所以那一档只作用于 RAR 引擎（<c>UnRarEngine</c> 的 <c>-kb</c>）；
+        /// 真按建议给 7-Zip 加上，用户一开这个设置，**所有解压都会以命令行错误失败**。
+        /// </para>
+        /// </summary>
         public List<string> BuildExtractArguments(
             string archivePath,
             string outputPath,

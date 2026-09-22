@@ -215,6 +215,7 @@ namespace ArchiveFixer.ViewModels
         private bool _isBusy;
         private int _busyNesting;
         private bool _isStopping;
+        private bool _runAtFullSpeed;
         private string _selectedOutputDirectory = string.Empty;
         private TaskSummary _summary = new();
         private ArchiveTask? _selectedTask;
@@ -407,6 +408,33 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /*
+         * 「全速」开关 —— 并发队列的"立即继续"出口
+         * （docs/WinRAR功能参考.md §2 D 组采纳项：任何"自动等待/节流"都必须配一个"立即继续"的出口）。
+         *
+         * 为什么需要它：设置里的「最大并发解压数」是个节流旋钮（默认 1 = 串行），
+         * 但用户临时想让这一批快点跑完时，以前只能进设置改数字、再回来重跑 ——
+         * 而 WinRAR 那边的教训正是"让用户干等却无从干预"。
+         *
+         * 语义刻意保持最窄：**只看这一次运行**，不写回设置（设置仍是唯一的持久来源）。
+         * 关掉它就回到「最大并发解压数」那一档。
+         */
+        public bool RunAtFullSpeed
+        {
+            get => _runAtFullSpeed;
+            set
+            {
+                if (SetProperty(ref _runAtFullSpeed, value))
+                {
+                    AppendLog(
+                        "INFO",
+                        value
+                            ? "已开启「全速」：本批忽略「最大并发解压数」的节流，能并行多少就并行多少。"
+                            : "已关闭「全速」：本批按设置里的「最大并发解压数」节流。");
+                }
+            }
+        }
+
         public string SelectedOutputDirectory
         {
             get => _selectedOutputDirectory;
@@ -558,6 +586,34 @@ namespace ArchiveFixer.ViewModels
             _renameCoordinator = new RenameCoordinator(this, _scanCoordinator, renameService, dialogService);
             _extractionCoordinator = new ExtractionCoordinator(this, archiveEngine, passwordService, pathService, dialogService);
             _oneClickCoordinator = new OneClickCoordinator(this, _scanCoordinator, _renameCoordinator, _extractionCoordinator, dialogService);
+
+            /*
+             * 把"解压前那一遍 list 顺带算出来的提示"接进失败清单的第二级（逐归档缩进行）。
+             *
+             * 为什么走这个注入口而不是改 TaskSummaryService：那个文件不在本次授权范围内
+             * （任务书明确要求"需要什么就写进报告"）。TaskSummaryService 早就留了这个可选钩子
+             * （EntryDetailProvider），这里挂上就等价于改了它的输出，而且不改它的代码。
+             *
+             * 两条提示都是"只提示不阻断"的结论，所以措辞上不写成错误，也不影响任何状态判定：
+             * · 可疑条目（可执行 / 脚本类）—— 设置项 ReportDangerousEntries，默认开；
+             * · 路径过长预警 —— 7z 报的是英文错，这里给一句中文。
+             */
+            _taskSummaryService.EntryDetailProvider = task =>
+            {
+                var lines = new List<string>();
+
+                if (!string.IsNullOrWhiteSpace(task.DangerousEntriesWarning))
+                {
+                    lines.Add(task.DangerousEntriesWarning);
+                }
+
+                if (!string.IsNullOrWhiteSpace(task.PathLengthWarning))
+                {
+                    lines.Add(task.PathLengthWarning);
+                }
+
+                return lines.Count == 0 ? null : lines;
+            };
 
             _settings = _settingsService.Load();
             ApplyEngineSettings();
@@ -1204,6 +1260,62 @@ namespace ArchiveFixer.ViewModels
             _pathService.OpenDirectory(directory);
         }
 
+        /// <summary>
+        /// 「定稿完成后打开输出目录」的落地（设置项 <see cref="AppSettings.OpenOutputFolderWhenDone"/>，**默认关**）。
+        ///
+        /// <para>
+        /// 由解压管线在"**最外层任务** + 内容物已定稿 + 输出校验通过 + 未取消"的收尾处调用，
+        /// 而且**整批只调一次**（记账在 <see cref="ExtractionCoordinator"/> 那一侧）：
+        /// 一批 50–200 个包每个都开一次资源管理器，那不是"看一眼结果"，是骚扰。
+        /// </para>
+        /// <para>
+        /// <b>只打开文件夹</b>：走既有的 <see cref="PathService.OpenDirectory"/> →
+        /// <c>explorer.exe &lt;目录&gt;</c>，**不**调用 <c>SetForegroundWindow</c>、
+        /// **不**最大化、**不**抢焦点（AGENTS.md §13 的同一精神）。
+        /// 绝不为了"确保用户看到"再加置前逻辑。
+        /// </para>
+        /// <para>
+        /// 失败 / 取消 / 部分完成一律不走这里（打开一个空目录只会误导用户）——
+        /// 那条判断在调用点，见 <see cref="ExtractionCoordinator.PostProcessSuccessAsync"/>。
+        /// </para>
+        /// <para>
+        /// <c>virtual</c> 只为单元测试：真实现会 <c>Process.Start("explorer.exe", 目录)</c>，
+        /// 测试既不该真的弹资源管理器（AGENTS.md §13），也没法断言"到底开了几次"。
+        /// 测试替身把它换成记录器，于是"整批只开一次"变成可断言的事实。
+        /// </para>
+        /// </summary>
+        /// <param name="directory">实际落点（<c>task.OutputPath</c>，归集之后就是归集目录）。</param>
+        /// <returns>真的打开了目录返回 true；关着开关或目录不存在返回 false。</returns>
+        public virtual bool OpenCompletedOutputDirectory(string directory)
+        {
+            if (Settings == null || !Settings.OpenOutputFolderWhenDone)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return false;
+            }
+
+            // 先确认它真的在：否则 explorer.exe 会弹一个"找不到"的系统框 —— 那是另一种抢焦点。
+            if (!SafePathHelper.DirectoryExists(directory))
+            {
+                AppendLog("WARN", $"定稿完成，但输出目录已不存在，没有打开：{directory}");
+                return false;
+            }
+
+            bool opened = _pathService.OpenDirectory(directory);
+
+            AppendLog(
+                opened ? "INFO" : "WARN",
+                opened
+                    ? $"定稿完成，已打开输出目录：{directory}"
+                    : $"定稿完成，但输出目录打不开：{directory}");
+
+            return opened;
+        }
+
         private void OpenWorkDirectory()
         {
             try
@@ -1274,20 +1386,31 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * ② 确认（红色）。默认档就是**移入回收站**，勾选框才是切换到激进档 ——
-                 * 默认动作与"最不意外"一致，危险的那一档必须用户主动勾选（规格 §3.2 清理表）。
+                 * ② 确认（红色）。默认档取自设置项「其余物清理默认档」（<see cref="AppSettings.RestRemovalDefaultMode"/>），
+                 * 勾选框是"切到另一档"的开关 —— 默认动作与"最不意外"一致，另一档必须用户主动勾选
+                 * （规格 §3.2 清理表）。
                  *
                  * ⚠ 必须用 ShowDestructiveConfirmWithOption（**不勾也能确认**）：
-                 * 勾选框在这里是"档位选择"而不是"必须承认才能继续"，用错方法会让默认的回收站档走不下去。
+                 * 勾选框在这里是"档位选择"而不是"必须承认才能继续"，用错方法会让默认档走不下去。
+                 *
+                 * ⚠⚠ 默认档 = Permanent 时，勾选框的**语义要反过来**（文案变成"改为移入回收站（可恢复）"）：
+                 * 否则会出现"默认档是彻底删除、但勾选框写着改为彻底删除"的自相矛盾 ——
+                 * 用户不勾反而得到更危险的那一档。这就是 <see cref="DeriveCleanupDecision"/> 存在的理由。
                  */
                 string scopeNote = BuildSharedScopeNote(scope, task, preview);
 
+                CleanupDecision decision = DeriveCleanupDecision(
+                    Settings.RestRemovalDefaultMode,
+                    preview,
+                    title,
+                    scopeNote);
+
                 bool confirmed = _dialogService.ShowDestructiveConfirmWithOption(
-                    BuildCleanupConfirmText(title, preview, DeleteMode.RecycleBin, scopeNote),
-                    "移入回收站",
-                    "改为彻底删除，不进回收站",
-                    optionCheckedByDefault: false,
-                    out bool permanentRequested);
+                    decision.ConfirmText,
+                    decision.ConfirmButtonText,
+                    decision.OptionText,
+                    optionCheckedByDefault: decision.OptionCheckedByDefault,
+                    out bool optionChecked);
 
                 if (!confirmed)
                 {
@@ -1295,13 +1418,16 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                DeleteMode mode = DeleteMode.RecycleBin;
+                DeleteMode mode = decision.Resolve(optionChecked);
 
-                if (permanentRequested)
+                if (mode == DeleteMode.Permanent)
                 {
                     /*
                      * ③ 激进档的**二次确认**：红色 + 必须勾选"我知道不可恢复"。
                      * 只弹一次红色框是不够的 —— 规格 §3.2 要求"红色标识"与"二次确认"两件事同时满足。
+                     *
+                     * 这一条**无论默认档是什么都保留**：把默认档设成"彻底删除"是"少点一次勾"，
+                     * 不是"免掉二次确认"（不变量：不可逆操作必须显式确认）。
                      */
                     bool acknowledged = _dialogService.ShowDestructiveConfirm(
                         BuildCleanupConfirmText(title, preview, DeleteMode.Permanent, scopeNote),
@@ -1314,8 +1440,6 @@ namespace ArchiveFixer.ViewModels
                         AppendLog("INFO", $"{title}：没有通过彻底删除的二次确认，没有删除任何东西。");
                         return;
                     }
-
-                    mode = DeleteMode.Permanent;
                 }
 
                 // ④ 执行（后台）：删除本身绝不在 UI 线程上跑；作用域用预览算出来的那一份，不重算。
@@ -1349,6 +1473,80 @@ namespace ArchiveFixer.ViewModels
             {
                 ExitBusy();
             }
+        }
+
+        /// <summary>
+        /// 一次清理确认框的"档位设计"：主按钮文案、勾选框文案、勾选框的默认状态，以及
+        /// "用户最终勾没勾 → 到底用哪一档"的唯一推导。
+        ///
+        /// <para>
+        /// 为什么需要它（真实的自相矛盾风险）：设置项「其余物清理默认档」可以是<em>彻底删除</em>，
+        /// 而确认框里那个勾选框原来的文案固定是"改为彻底删除，不进回收站"、默认不勾 ——
+        /// 于是默认档是彻底删除时，界面会同时说"默认彻底删除"和"勾上才彻底删除"，
+        /// 用户不勾反而得到了更危险的那一档。把"档位 ↔ 文案 ↔ 勾选语义"三件事绑在一个对象上，
+        /// 就不可能再各写各的。
+        /// </para>
+        /// </summary>
+        internal sealed class CleanupDecision
+        {
+            public required DeleteMode DefaultMode { get; init; }
+
+            /// <summary>确认框正文（已带上默认档的说明）。</summary>
+            public required string ConfirmText { get; init; }
+
+            /// <summary>主按钮文案：就是默认档本身。</summary>
+            public required string ConfirmButtonText { get; init; }
+
+            /// <summary>勾选框文案：**永远是"切到另一档"**，所以默认档不同时文案也不同。</summary>
+            public required string OptionText { get; init; }
+
+            /// <summary>勾选框初始状态：永远不勾（默认档就是"不勾"的那一档）。</summary>
+            public bool OptionCheckedByDefault { get; init; }
+
+            /// <summary>勾选框勾上时的档位（= 另一档）。</summary>
+            public required DeleteMode OptionMode { get; init; }
+
+            /// <summary>用户最终勾没勾 → 实际执行哪一档。</summary>
+            public DeleteMode Resolve(bool optionChecked) => optionChecked ? OptionMode : DefaultMode;
+        }
+
+        /// <summary>
+        /// 由设置项「其余物清理默认档」推出确认框的档位设计（唯一判定处）。
+        ///
+        /// <para>
+        /// 判定只有一处实现：<see cref="RestRemovalModes.IsPermanent"/> —— 别在别处再写
+        /// <c>== "Permanent"</c>，那种字符串比较散落两处迟早分叉（一个认大小写、一个不认）。
+        /// </para>
+        /// <para>
+        /// ⛔ 两条红线在这里**不受默认档影响**：
+        /// ① 二次确认保留 —— 只要最终要彻底删除，调用方仍会再弹一次"我知道不可恢复"，见 RunCleanupAsync；
+        /// ② 回收站不可用绝不降级为永久删除 —— 那条在 RecycleBinService 里，跟这里的档位无关。
+        /// </para>
+        /// </summary>
+        internal static CleanupDecision DeriveCleanupDecision(
+            string? restRemovalDefaultMode,
+            CleanupPreview preview,
+            string title,
+            string? scopeNote)
+        {
+            bool defaultIsPermanent = RestRemovalModes.IsPermanent(restRemovalDefaultMode);
+
+            DeleteMode defaultMode = defaultIsPermanent ? DeleteMode.Permanent : DeleteMode.RecycleBin;
+            DeleteMode optionMode = defaultIsPermanent ? DeleteMode.RecycleBin : DeleteMode.Permanent;
+
+            return new CleanupDecision
+            {
+                DefaultMode = defaultMode,
+                OptionMode = optionMode,
+                ConfirmText = BuildCleanupConfirmText(title, preview, defaultMode, scopeNote),
+                ConfirmButtonText = defaultIsPermanent ? "彻底删除" : "移入回收站",
+
+                // 勾选框永远表示"切到另一档"：默认档是彻底删除时，勾上 = 改为可恢复的那一档。
+                OptionText = defaultIsPermanent
+                    ? "改为移入回收站（可恢复）"
+                    : "改为彻底删除，不进回收站",
+                OptionCheckedByDefault = false
+            };
         }
 
         /// <summary>
@@ -1666,6 +1864,21 @@ namespace ArchiveFixer.ViewModels
             builder.AppendLine("进度：" + (task.ProgressText ?? string.Empty));
             builder.AppendLine("错误信息：" + (task.ErrorMessage ?? string.Empty));
             builder.AppendLine("耗时：" + (task.ElapsedText ?? string.Empty));
+
+            /*
+             * 解压前那一遍 list 顺带算出来的两条提示也要复制得出来（与失败清单的第二级同一份来源）：
+             * 用户把任务信息贴给我们排障时，这两句往往是"为什么少了几个文件"的关键线索。
+             * 空着就不写行，免得每次复制都带两行没内容的标签。
+             */
+            if (!string.IsNullOrWhiteSpace(task.DangerousEntriesWarning))
+            {
+                builder.AppendLine("可疑条目：" + task.DangerousEntriesWarning);
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.PathLengthWarning))
+            {
+                builder.AppendLine("路径预警：" + task.PathLengthWarning);
+            }
 
             return builder.ToString().TrimEnd();
         }

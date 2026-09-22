@@ -144,6 +144,20 @@
                     </Border>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!--
+                            「全速」开关 —— 并发队列的"立即继续"出口。
+                            设置里的「最大并发解压数」是个节流旋钮（默认 1 = 串行）；被节流挡住的任务
+                            以前在界面上完全看不出在等，用户只能怀疑程序卡死。现在：
+                            ① 日志会明确写出"并发已满 N/M，某个包在队列里等一个空位"；
+                            ② 这里给一个"立即继续"的出口 —— 勾上就本批不节流。
+                            只对**本次运行**有效，不写回设置（设置仍是唯一的持久来源）。
+                        -->
+                        <CheckBox Content="全速"
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,12,0"
+                                  IsChecked="{Binding RunAtFullSpeed, Mode=TwoWay}"
+                                  ToolTip="本批忽略设置里的「最大并发解压数」，能并行多少就并行多少（只对本次运行有效，不改设置）。慢盘上会让磁盘更忙。" />
+
                         <!-- 忙的时候才出现：空闲时是两个永远按不动的灰按钮，占位又误导 -->
                         <Button Content="停止后续"
                                 Margin="0,0,8,0"
@@ -284,7 +298,13 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <TextBlock TextWrapping="NoWrap">
-                                <Run Text="{Binding Time, StringFormat=[{0:yyyy-MM-dd HH:mm:ss}]}" />
+                                <!--
+                                    时间走 OperationLogItem.TimeText（内部是 LogService.FormatTimestamp，
+                                    固定 InvariantCulture）。以前这里写 StringFormat={0:yyyy-MM-dd HH:mm:ss}，
+                                    那个 yyyy 跟当前区域的日历走 —— 泰历下屏幕日志会显示 2569 年，
+                                    与 data\logs 里的文件日志对不上号。
+                                -->
+                                <Run Text="{Binding TimeText, StringFormat=[{0}]}" />
                                 <Run Text=" [" />
                                 <Run Text="{Binding Level}" />
                                 <Run Text="] " />

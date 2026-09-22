@@ -30,6 +30,54 @@ namespace ArchiveFixer.Engines
 
         public string UsedPasswordMasked { get; set; } = string.Empty;
 
+        /// <summary>
+        /// **这次到底是哪个引擎干的活**（不变量 14：结果必须能追到具体任务与具体引擎）。
+        ///
+        /// <para>
+        /// 为什么要落在结果对象上，而不是"报告时再去问一遍注册表"：
+        /// 报告那一刻的注册表可能已经变了（用户改了优先级、卸载了 WinRAR、换了自选路径），
+        /// 而"这个包是被谁解开的"是**已经发生的事实**。由真正执行的那个引擎在返回前盖戳，
+        /// 才是可信的溯源；失败清单与正常路径读的是同一份信息。
+        /// </para>
+        ///
+        /// <para>两个字段由引擎自己填（见 <c>SevenZipEngine</c> / <c>UnRarEngine</c>），
+        /// 手写 <c>ArchiveOperationResult</c> 的地方（含测试的假引擎）留空即为"未知引擎"。</para>
+        /// </summary>
+        public string EngineId { get; set; } = string.Empty;
+
+        /// <summary>执行这次操作的引擎版本；取不到时是 <c>unknown</c>，**不编造**。</summary>
+        public string EngineVersion { get; set; } = string.Empty;
+
+        /// <summary>执行这次操作的引擎显示名（报告里用；为空时不显示名字）。</summary>
+        public string EngineDisplayName { get; set; } = string.Empty;
+
+        /// <summary>把三个引擎字段整理成报告口径的 <see cref="EngineIdentity"/>。</summary>
+        public EngineIdentity ToEngineIdentity()
+        {
+            if (string.IsNullOrWhiteSpace(EngineId))
+            {
+                return EngineIdentityResolver.Unavailable;
+            }
+
+            return new EngineIdentity
+            {
+                EngineId = EngineId,
+                DisplayName = EngineDisplayName ?? string.Empty,
+                Version = EngineVersion ?? string.Empty,
+                IsAvailable = true
+            };
+        }
+
+        /// <summary>把"这次是哪个引擎干的"盖到结果上（引擎在返回前调用一次）。</summary>
+        public ArchiveOperationResult StampEngine(string? engineId, string? displayName, string? version)
+        {
+            EngineId = engineId ?? string.Empty;
+            EngineDisplayName = displayName ?? string.Empty;
+            EngineVersion = version ?? string.Empty;
+
+            return this;
+        }
+
         public TimeSpan Elapsed { get; set; } = TimeSpan.Zero;
 
         public string CombinedOutput

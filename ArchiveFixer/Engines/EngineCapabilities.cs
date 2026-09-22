@@ -74,6 +74,23 @@ namespace ArchiveFixer.Engines
         /// <summary>按格式的细粒度能力；没有列出的格式按"不支持"处理，不要猜。</summary>
         public IReadOnlyList<EngineFormatCapability> Formats { get; init; } = new List<EngineFormatCapability>();
 
+        /// <summary>
+        /// <see cref="Formats"/> 是不是**白名单**（未登记的格式一律"不支持"）。
+        ///
+        /// <para>
+        /// 为什么必须有这个开关（实测踩到的坑，验收第 3 条）：选择器原来的兜底是
+        /// "没登记具体格式时退回总体能力位，宁可让引擎去试一把"。
+        /// 这条对**通用引擎**（7-Zip）是对的 —— 它确实还能处理不少没逐条登记的格式；
+        /// 但对**专用引擎**（RARLAB UnRAR，只认 RAR 系列）就是灾难：
+        /// 实测 zip / 7z / tar **全被路由到了 UnRAR 上**（它没登记这些格式，
+        /// 于是"退回总体 CanExtract = true"），结果是"本来能打开的包反而打不开"。
+        /// </para>
+        ///
+        /// <para>所以：<b>专用引擎必须打开它</b>（<c>UnRarEngine</c> 打开），
+        /// 通用引擎保持 false（<c>SevenZipEngine</c> 不打开，行为与以前完全一致）。</para>
+        /// </summary>
+        public bool FormatsAreWhitelist { get; init; }
+
         public EngineVersionInfo VersionInfo { get; init; } = new EngineVersionInfo();
 
         /// <summary>取某个格式的能力；没有登记就返回 null（调用方据此判定"这个引擎干不了"）。</summary>
@@ -95,6 +112,12 @@ namespace ArchiveFixer.Engines
             if (capability != null)
             {
                 return capability.CanExtract;
+            }
+
+            // 白名单引擎：没登记就是"干不了"，不许退回总体能力位。
+            if (FormatsAreWhitelist)
+            {
+                return false;
             }
 
             // 没登记具体格式时，退回总体能力位：宁可让引擎去试一把，也不要因为"没登记"就拒绝。

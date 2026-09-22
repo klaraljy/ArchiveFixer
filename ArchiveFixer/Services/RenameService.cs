@@ -122,7 +122,13 @@ namespace ArchiveFixer.Services
                          * 与落盘结果会对不上。所以两边共用同一套判定：
                          * - Skip      → 跳过；
                          * - Overwrite → 目标保持 NewPath，状态 TargetExists（执行阶段走"先移开再落位"）；
-                         * - 其余（AutoRename / Ask）→ 换成自动改名后的路径。
+                         * - Ask       → **在预览里逐条让用户选**（本方法只标"待选择"，落点由
+                         *               RenameCoordinator 在窗口关掉之后按用户的选择写回）；
+                         * - 其余       → 换成自动改名后的路径。
+                         *
+                         * Ask 以前被并进"其余"分支，于是预览表里出现「询问」+「将自动重命名」并列
+                         * —— 界面在自相矛盾（真实缺陷，见 fix-ask.md §6 第 1 条）。现在它真的会问，
+                         * 而且问在预览里（改名本来就必须先预览，不变量 3），不额外弹第二个对话框。
                          */
                         if (string.Equals(options.ConflictAction, "Skip", StringComparison.OrdinalIgnoreCase))
                         {
@@ -133,8 +139,13 @@ namespace ArchiveFixer.Services
                             item.Status = StatusText.TargetExists;
                             item.ErrorMessage = "确认后将覆盖目标文件（先移开旧文件再落位，中途失败不丢文件）";
                         }
+                        else if (ConflictActions.IsAsk(options.ConflictAction))
+                        {
+                            item.MarkNeedsConflictChoice();
+                        }
                         else
                         {
+                            // 默认档（AutoRename）：**绝不覆盖**，只改目标侧的名字。
                             item.NewPath = AutoRenamePath(newPath);
                             item.MarkAutoRename("目标文件已存在，将自动重命名");
                         }
@@ -230,6 +241,76 @@ namespace ArchiveFixer.Services
             }
 
             return Path.Combine(directory, newFileName);
+        }
+
+        /// <summary>
+        /// 把用户在预览里为某一条选定的冲突处理方式落到 <see cref="RenamePreviewItem.NewPath"/> 上。
+        ///
+        /// <para>
+        /// 「询问」档（<see cref="AppSettings.ConflictAction"/> = <c>Ask</c>）在改名路径上的落地就是它：
+        /// 预览把撞名的条目标成 <see cref="RenamePreviewItem.NeedsConflictChoice"/>，
+        /// 用户在预览表的「冲突处理」列里逐条选；预览窗口关掉之后由
+        /// <c>RenameCoordinator</c> 对每一条调用本方法，把结论写死到 NewPath 上 ——
+        /// 于是预览里显示的那个路径**就是**执行时会落的那个路径（两边不会各判一次）。
+        /// </para>
+        /// <para>
+        /// ⛔ 不变量 3：**没选 / 选不出来一律落到"自动重命名"，绝不覆盖**。
+        /// 用户直接关掉预览窗口时走的也是这条 —— 内容不丢、已有文件一个字节不动。
+        /// </para>
+        /// </summary>
+        /// <returns>真的改写了落点返回 true（用于日志里说清"这一条按你选的办了"）。</returns>
+        public bool ApplyConflictChoice(RenamePreviewItem? item)
+        {
+            if (item == null || !item.NeedsConflictChoice)
+            {
+                return false;
+            }
+
+            string choice = string.IsNullOrWhiteSpace(item.ConflictChoice)
+                ? "AutoRename"
+                : item.ConflictChoice.Trim();
+
+            // 判定表只有一处实现（PathService.ResolveConflict），这里不另写一套 switch。
+            var pathService = new PathService();
+            ConflictResolution resolution = pathService.ResolveConflict(
+                item.NewPath,
+                ConflictTargetKind.File,
+                ConflictActions.Ask,
+                ConflictDecision.Once(choice switch
+                {
+                    "Overwrite" => ConflictChoice.Overwrite,
+                    "Skip" => ConflictChoice.Skip,
+                    _ => ConflictChoice.AutoRename
+                }));
+
+            if (resolution.Choice == ConflictChoice.Overwrite)
+            {
+                // 覆盖：落点不变，执行阶段走"先移到临时名 → 落位 → 再删"两阶段（不变量 3）。
+                item.Status = StatusText.TargetExists;
+                item.ErrorMessage = "按你的选择：覆盖目标文件（先移开旧文件再落位，中途失败不丢文件）";
+                item.NeedsConflictChoice = false;
+                return true;
+            }
+
+            if (resolution.Choice == ConflictChoice.Skip)
+            {
+                item.MarkSkip("按你的选择：跳过（目标文件已存在，一个字节都不动）");
+                item.NeedsConflictChoice = false;
+                return true;
+            }
+
+            // 兜底（含"没选"）：自动重命名 —— 绝不覆盖。
+            item.NewPath = string.IsNullOrWhiteSpace(resolution.TargetPath)
+                ? AutoRenamePath(item.NewPath)
+                : resolution.TargetPath;
+
+            item.MarkAutoRename(
+                string.IsNullOrWhiteSpace(item.ConflictChoice)
+                    ? "你没选，按保守档自动重命名（绝不覆盖）"
+                    : "按你的选择：自动重命名");
+
+            item.NeedsConflictChoice = false;
+            return true;
         }
 
         public async Task ExecuteRenameAsync(

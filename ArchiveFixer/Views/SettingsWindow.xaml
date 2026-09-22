@@ -206,6 +206,155 @@
                     </StackPanel>
                 </GroupBox>
 
+                <!--
+                    ==================== 引擎（用哪个程序解压） ====================
+                    用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"。
+                    选择规则是**先按能力筛（谁能干这活），再用这个顺序做 tiebreaker**；
+                    不可用的引擎自动跳过 —— 排第一但没装的引擎不会让包打不开。
+                    AGENTS.md §3.1 还要求"界面显示当前是否在用"，所以每行都带：
+                    检测状态 + 路径 + 版本 + 它当前负责哪些格式。
+                -->
+                <GroupBox Header="引擎（用哪个程序解压）">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,0,0,8"
+                                   TextWrapping="Wrap"
+                                   Text="顺序 = 优先级（默认：UnRAR → 7-Zip）。规则是「先看谁能干这活（能力），再按这个顺序挑」：RAR 包优先用 UnRAR，zip / 7z / tar 等格式只有 7-Zip 能做，永远走 7-Zip。排在前面的引擎没检测到会自动跳到下一个，不会因此打不开包。" />
+
+                        <ItemsControl ItemsSource="{Binding Engines}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource OptionRowStyle}"
+                                            Background="{StaticResource PanelSunkenBrush}"
+                                            BorderBrush="{StaticResource PanelBorderBrush}"
+                                            Margin="0,0,0,6"
+                                            Padding="8,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="{Binding HeaderText}"
+                                                           Style="{StaticResource BodyTextStyle}" />
+
+                                                <TextBlock Style="{StaticResource HintTextStyle}"
+                                                           Margin="0,2,0,0"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Path}"
+                                                           Text="{Binding Path, StringFormat=路径：{0}}" />
+
+                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                    <TextBlock Style="{StaticResource HintTextStyle}"
+                                                               Text="{Binding SourceText, StringFormat=来源：{0}}" />
+
+                                                    <TextBlock Margin="10,0,0,0"
+                                                               Text="{Binding UsageText}">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+                                                                <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsInUse}" Value="True">
+                                                                        <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                            </StackPanel>
+
+                                            <TextBlock Grid.Column="1"
+                                                       VerticalAlignment="Center"
+                                                       Margin="10,0"
+                                                       FontWeight="SemiBold"
+                                                       Text="{Binding StatusText}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource BodyTextStyle}">
+                                                        <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsAvailable}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+
+                                            <Button Grid.Column="2"
+                                                    Content="上移"
+                                                    MinWidth="56"
+                                                    Margin="0,0,6,0"
+                                                    Style="{StaticResource ToolbarButtonStyle}"
+                                                    VerticalAlignment="Center"
+                                                    IsEnabled="{Binding CanMoveUp}"
+                                                    ToolTip="把它的优先级提前一位（排在前面的优先被选上）"
+                                                    Command="{Binding DataContext.MoveEngineUpCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+
+                                            <Button Grid.Column="3"
+                                                    Content="下移"
+                                                    MinWidth="56"
+                                                    Style="{StaticResource ToolbarButtonStyle}"
+                                                    VerticalAlignment="Center"
+                                                    IsEnabled="{Binding CanMoveDown}"
+                                                    ToolTip="把它的优先级推后一位"
+                                                    Command="{Binding DataContext.MoveEngineDownCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <Border Style="{StaticResource InfoBannerStyle}" Margin="0,4,0,10">
+                            <TextBlock Style="{StaticResource BannerTextStyle}"
+                                       Foreground="{StaticResource InfoTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding EngineSelectionSummary}" />
+                        </Border>
+
+                        <!-- UnRAR.exe 路径：留空 = 本机已装的 WinRAR 目录 → 程序内置 tools\unrar -->
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="140" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Text="UnRAR.exe 路径："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding CustomUnRarExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="留空表示自动：先找本机已装 WinRAR 目录里的 UnRAR.exe，再退回程序内置的 tools\unrar\UnRAR.exe。" />
+                        </Grid>
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="140,0,0,10"
+                                   TextWrapping="Wrap"
+                                   Text="留空 = 自动（已装的 WinRAR 目录 → 程序内置 tools\unrar）。只解压、不改包：程序不会调用建包 / 修包命令。7z.exe 的路径在下方「高级设置」里改。" />
+
+                        <!--
+                            保留受损文件（-kb，默认关）。依据 docs/WinRAR功能参考.md §2 C 组。
+                            ⚠ 它只对 RAR 引擎（UnRAR）生效：7-Zip 26.01 **没有** -kb 这个开关
+                            （实测 `7z x -kb` → "Unknown switch: -kb"，退出码 7），
+                            而且 7-Zip 本来就保留校验失败的半成品 —— 两种情况下行为都已经是对的。
+                            它也**绝不**把失败变成成功：损坏的包仍然是「失败 / 部分完成」（不变量 6）。
+                        -->
+                        <CheckBox Content="保留受损的文件（校验和不符的半成品留在磁盘上，默认关）"
+                                  IsChecked="{Binding KeepBrokenFiles, Mode=TwoWay}"
+                                  Margin="0,0,0,2" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,0"
+                                   TextWrapping="Wrap"
+                                   Text="开着只是让 RAR 引擎（UnRAR）别把校验失败的半成品删掉（-kb）。7-Zip 没有这个开关、本来就保留半成品，所以这一项对它不加任何参数。任务状态仍然是「失败 / 部分完成」—— 校验和不符就是失败，不会因为这个开关显示成功。" />
+                    </StackPanel>
+                </GroupBox>
+
                 <!-- ==================== 扫描设置 ==================== -->
                 <GroupBox Header="扫描设置">
                     <StackPanel>

@@ -18,7 +18,8 @@ namespace ArchiveFixer.Engines.SevenZip
     /// </summary>
     public sealed class SevenZipEngine : IArchiveEngine
     {
-        private const string EngineId = "sevenzip";
+        /// <summary>机器标识取自全仓唯一词表（<see cref="EngineIds"/>），别处不许再写字面量。</summary>
+        private const string EngineId = EngineIds.SevenZip;
 
         private readonly SevenZipProcessRunner _runner;
         private readonly ToolLocator _tools;
@@ -111,30 +112,37 @@ namespace ArchiveFixer.Engines.SevenZip
             return SevenZipListParser.Parse(result.StandardOutput, request.ArchivePath, Id, Version);
         }
 
-        public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+        public async Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
         {
             /*
              * 引擎层一律 ConfigureAwait(false)（见 SevenZipProcessRunner 的同名注释）：
              * 我们不需要回到调用方的同步上下文，续体回到 UI 线程反而会把
              * "谁在等谁"变成一条隐形的依赖 —— 历史卡死就是这么来的。
+             *
+             * StampEngine 是"结果可追溯"的落点（不变量 14）：报告与失败清单读的是
+             * **这次真正执行的那个引擎**，而不是报告时刻注册表里排第一的引擎。
              */
-            return _runner.TestArchiveAsync(
+            ArchiveOperationResult result = await _runner.TestArchiveAsync(
                 request.ArchivePath,
                 request.Password ?? string.Empty,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
+
+            return result.StampEngine(Id, DisplayName, Version);
         }
 
-        public Task<ArchiveOperationResult> ExtractAsync(
+        public async Task<ArchiveOperationResult> ExtractAsync(
             ArchiveRequest request,
             ExtractOptions options,
             CancellationToken cancellationToken = default)
         {
-            return _runner.ExtractArchiveAsync(
+            ArchiveOperationResult result = await _runner.ExtractArchiveAsync(
                 request.ArchivePath,
                 request.OutputPath ?? string.Empty,
                 request.Password ?? string.Empty,
                 options,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
+
+            return result.StampEngine(Id, DisplayName, Version);
         }
 
         /// <summary>

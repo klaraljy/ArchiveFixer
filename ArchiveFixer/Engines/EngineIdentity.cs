@@ -56,7 +56,11 @@ namespace ArchiveFixer.Engines
     public static class EngineIdentityResolver
     {
         /// <summary>
-        /// 按当前注册表解析（优先可用的引擎）。代价只有一次文件版本查询 —— 不会起进程。
+        /// 按当前注册表解析"通用引擎"（能处理格式最多的那个可用引擎）。
+        ///
+        /// ⚠ 它**不是**"优先级第一名"：优先级只在**具体格式**上决定分派
+        /// （RAR→UnRAR、zip→7-Zip）。这里回答的是"不知道格式时该报谁"，
+        /// 所以取通用引擎，免得把 RAR 专用引擎写到 zip 任务的报告里。
         /// </summary>
         public static EngineIdentity ResolveDefault()
         {
@@ -71,7 +75,10 @@ namespace ArchiveFixer.Engines
             }
         }
 
-        /// <summary>按格式挑一个能处理它的引擎（挑不到时退回默认引擎）。</summary>
+        /// <summary>
+        /// 按格式挑一个能处理它的引擎（**能力优先 + 优先级 tiebreaker**，与真正执行时同一份选择逻辑）；
+        /// 挑不到时退回通用引擎。
+        /// </summary>
         public static EngineIdentity ResolveFor(string? detectedFormat)
         {
             try
@@ -86,6 +93,14 @@ namespace ArchiveFixer.Engines
             {
                 return Unavailable;
             }
+        }
+
+        /// <summary>
+        /// 把一个引擎实例翻成身份（给"结果里已经带了引擎"的路径用：不猜、不查表，直接用事实）。
+        /// </summary>
+        public static EngineIdentity From(IArchiveEngine? engine)
+        {
+            return FromEngine(engine);
         }
 
         /// <summary>解析不出引擎时的常量实例。</summary>

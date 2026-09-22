@@ -439,6 +439,38 @@ namespace ArchiveFixer.Models
         public string ParentTaskName { get; set; } = string.Empty;
 
         /// <summary>
+        /// 解压前**那一遍 list** 里顺带统计出来的"可执行 / 脚本类条目"提示（设置项
+        /// <c>ReportDangerousEntries</c>，默认开）。没有可疑条目时为空字符串。
+        ///
+        /// <para>
+        /// <b>只提示，绝不阻断</b>（<c>docs/WinRAR功能参考.md</c> §2 F 组）：真实资源包里安装器 / 补丁
+        /// 经常**就是**内容物，所以不做全局硬排除掩码；这条只是让用户知道"这个包里有 N 个可执行文件"。
+        /// </para>
+        /// <para>
+        /// 为什么是一个独立字段而不是塞进 <see cref="EngineVerdict"/> 或 <see cref="VerifyMessage"/>：
+        /// 那两处各有明确的语义（引擎对"能不能打开"的结论、输出校验的结论），
+        /// 而且 <see cref="VerifyMessage"/> 会在收尾时被校验结论覆盖（提示会被静默吃掉）。
+        /// 独立字段还能让统计它的那一遍 list 与显示它的地方各自演进，互不干扰。
+        /// </para>
+        /// </summary>
+        public string DangerousEntriesWarning { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 解压前的**路径长度**预警（<c>Security/PathLengthPreflight</c> 算出来的结构化结论）。
+        ///
+        /// <para>
+        /// 为什么要落到任务上而不是只写一行日志：7-Zip 报的是英文错（<c>The filename or extension is too long</c>），
+        /// 而且往往解到一半才报 —— 用户回头查"为什么少了几个文件"时，任务详情里得有这一句中文解释。
+        /// </para>
+        /// <para>
+        /// 它是**预警不是拒绝**：路径过长时 7z 可能只解出一部分，但"要不要继续"仍由解压结果决定
+        /// （部分成功会落到 <c>PartiallyCompleted</c>，不会显示成成功）。
+        /// 与 <see cref="DangerousEntriesWarning"/> 一样，它取自**同一次** list，绝不为此再 list 一遍。
+        /// </para>
+        /// </summary>
+        public string PathLengthWarning { get; set; } = string.Empty;
+
+        /// <summary>
         /// 是不是"续解出来的内层包"（而不是用户直接给的源包）。
         ///
         /// 区分这两类很关键：内层包的源文件是**我们自己产出的中间件**（已经归到
