@@ -57,6 +57,23 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+
+        <!--
+            "长时间无响应"提示（设置：引擎超过 90 秒没有任何输出）。
+            与上面两条提示同一套做法：没有内容时整行收起。
+            它**不是**状态 —— 任务的成败结论一点没变，只是把"多久没有输出了"这件事说出来，
+            让用户知道"程序还在跑、只是引擎暂时没吭声"，而不是以为卡死了。
+        -->
+        <Style x:Key="ResponsivenessHintTextStyle" TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{StaticResource WarningTextBrush}" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ResponsivenessHint}" Value="">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <DockPanel Margin="12">
@@ -188,6 +205,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="输出目录：" Style="{StaticResource DetailLabelStyle}" />
@@ -208,13 +226,20 @@
 
                         <TextBlock Grid.Row="4" Grid.Column="0" Text="状态：" Style="{StaticResource DetailLabelStyle}" />
                         <TextBlock Grid.Row="4" Grid.Column="1"
-                                   Text="{Binding Status}"
+                                   Text="{Binding StatusDisplayText}"
                                    Style="{StaticResource DetailValueStyle}"
                                    FontWeight="SemiBold"
                                    Foreground="{Binding Status, Converter={StaticResource StatusToBrushConverter}}" />
 
+                        <!--
+                            进度：**百分比 + 当前条目**（引擎层节流后每 250ms 一次）。
+                            已用时间不在这里重复拼 —— 下面「时间信息」组的「耗时」会被进度一起刷新（协调器负责），
+                            所以任务在跑的时候它也是活的。
+                            任务收尾后 ProgressDetail 会退回既有的进度文案（"完成"/"失败"），
+                            绝不会出现"状态：解压失败 / 进度：87%"这种自相矛盾的显示。
+                        -->
                         <TextBlock Grid.Row="5" Grid.Column="0" Text="进度：" Style="{StaticResource DetailLabelStyle}" />
-                        <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding ProgressText}" Style="{StaticResource DetailValueStyle}" />
+                        <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding ProgressDetail}" Style="{StaticResource DetailValueStyle}" />
 
                         <TextBlock Grid.Row="6" Grid.Column="0" Text="错误信息：" Style="{StaticResource DetailLabelStyle}" Margin="0,0,10,10" />
                         <TextBox Grid.Row="6" Grid.Column="1"
@@ -244,6 +269,10 @@
                         <TextBlock Grid.Row="8" Grid.ColumnSpan="2"
                                    Style="{StaticResource PathLengthHintTextStyle}"
                                    Text="{Binding PathLengthWarning}" />
+
+                        <TextBlock Grid.Row="9" Grid.ColumnSpan="2"
+                                   Style="{StaticResource ResponsivenessHintTextStyle}"
+                                   Text="{Binding ResponsivenessHint}" />
                     </Grid>
                 </GroupBox>
 

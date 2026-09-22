@@ -125,7 +125,8 @@ namespace ArchiveFixer.Engines.SevenZip
             ArchiveOperationResult result = await _runner.TestArchiveAsync(
                 request.ArchivePath,
                 request.Password ?? string.Empty,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                EngineProgressContext.From(request)).ConfigureAwait(false);
 
             return result.StampEngine(Id, DisplayName, Version);
         }
@@ -140,7 +141,8 @@ namespace ArchiveFixer.Engines.SevenZip
                 request.OutputPath ?? string.Empty,
                 request.Password ?? string.Empty,
                 options,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                EngineProgressContext.From(request)).ConfigureAwait(false);
 
             return result.StampEngine(Id, DisplayName, Version);
         }

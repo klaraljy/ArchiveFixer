@@ -571,15 +571,21 @@
                                                 Visibility="Collapsed"
                                                 IsReadOnly="True" />
 
+                            <!--
+                                状态列：**不新增列**（目前 9 列刚好放下，再加就要横向滚动）。
+                                百分比以紧凑形式并进状态文案（"解压中 45%"），见 ArchiveTask.StatusDisplayText。
+                                配色仍按 Status（不是拼出来的那一串），所以状态统计与配色一点没变。
+                                已收尾的任务不会有百分比 —— StatusDisplayText 内部按 EndTime 判（不变量 6）。
+                            -->
                             <DataGridTemplateColumn Header="状态" Width="150">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Status}"
+                                        <TextBlock Text="{Binding StatusDisplayText}"
                                                    Foreground="{Binding Status, Converter={StaticResource StatusToBrushConverter}}"
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding Status}" />
+                                                   ToolTip="{Binding StatusDisplayText}" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>

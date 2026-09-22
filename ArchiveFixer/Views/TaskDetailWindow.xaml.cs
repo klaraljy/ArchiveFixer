@@ -113,8 +113,14 @@ namespace ArchiveFixer.Views
             builder.AppendLine("分卷：" + Safe(task.VolumeInfoText));
 
             builder.AppendLine("当前操作：" + Safe(task.Operation));
-            builder.AppendLine("状态：" + Safe(task.Status));
-            builder.AppendLine("进度：" + Safe(task.ProgressText));
+
+            /*
+             * 状态 / 进度都用**界面上真正显示的那一份**（StatusDisplayText / ProgressDetail）。
+             * 复制出去的那份文本是用户贴回来排障用的，跟屏幕上看的不一致等于白贴 ——
+             * 而任务在跑的时候屏幕上就是"解压中 45%"，这里也必须是"解压中 45%"。
+             */
+            builder.AppendLine("状态：" + Safe(task.StatusDisplayText));
+            builder.AppendLine("进度：" + Safe(task.ProgressDetail));
             builder.AppendLine("错误信息：" + Safe(task.ErrorMessage));
 
             /*
@@ -134,6 +140,13 @@ namespace ArchiveFixer.Views
             if (!string.IsNullOrWhiteSpace(task.PathLengthWarning))
             {
                 builder.AppendLine(task.PathLengthWarning);
+            }
+
+            // "长时间无响应"提示：同样"空着就不写"，复制出去的那一份要带上（它正是
+            // 用户问"是不是卡死了"时最需要的那条信息）。
+            if (!string.IsNullOrWhiteSpace(task.ResponsivenessHint))
+            {
+                builder.AppendLine(task.ResponsivenessHint);
             }
 
             builder.AppendLine();

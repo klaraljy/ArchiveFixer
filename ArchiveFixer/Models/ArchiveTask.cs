@@ -52,6 +52,19 @@ namespace ArchiveFixer.Models
     /// </summary>
     public class ArchiveTask : INotifyPropertyChanged
     {
+        /// <summary>
+        /// "长时间无响应"提示的文案。
+        ///
+        /// <para>
+        /// ⚠ <b>它是本次改动新增的界面文案，暂时落在这里</b>：按 AGENTS.md §7，
+        /// 界面状态字符串的统一归属是 <c>Models/StatusText.cs</c>，而那个文件不在本次授权范围内
+        /// （另一个代理在改）。**待转派**：把它连同 <c>StatusToBrushConverter</c> / <c>TaskSummaryService</c>
+        /// 的关系一起收进 <c>StatusText</c>。它刻意**不是**一个 <c>Status</c> 值 ——
+        /// "很久没输出"只是提示，不改变任务的成败结论（不变量 6）。
+        /// </para>
+        /// </summary>
+        public const string NoResponseHintText = "长时间无响应";
+
         private bool _isSelected = true;
         private int _index;
         private string _originalPath = string.Empty;
@@ -76,6 +89,12 @@ namespace ArchiveFixer.Models
         private DateTime? _endTime;
         private string _elapsedText = "-";
         private DateTime _lastUpdatedTime = DateTime.Now;
+        private int _progressPercent = NoProgress;
+        private string _progressEntry = string.Empty;
+        private string _responsivenessHint = string.Empty;
+
+        /// <summary>"还没有进度"的哨兵值。<b>不要</b>用 0 —— 0% 是"确实刚开始解"。</summary>
+        public const int NoProgress = -1;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -242,7 +261,13 @@ namespace ArchiveFixer.Models
         public string Status
         {
             get => _status;
-            set => SetProperty(ref _status, string.IsNullOrWhiteSpace(value) ? StatusText.WaitingScan : value);
+            set
+            {
+                if (SetProperty(ref _status, string.IsNullOrWhiteSpace(value) ? StatusText.WaitingScan : value))
+                {
+                    OnPropertyChanged(nameof(StatusDisplayText));
+                }
+            }
         }
 
         /// <summary>
@@ -254,6 +279,171 @@ namespace ArchiveFixer.Models
         {
             get => _progressText;
             set => SetProperty(ref _progressText, string.IsNullOrWhiteSpace(value) ? "-" : value);
+        }
+
+        /// <summary>
+        /// 引擎报上来的**百分比**（0–100）；<see cref="NoProgress"/> = 当前没有可见进度。
+        ///
+        /// <para>
+        /// 由 <c>ExtractionCoordinator</c> 把引擎层节流后的 <c>ArchiveProgress</c> 落到这里
+        /// （节流在引擎层做，见 <c>ArchiveProgressReporter</c>：最多 250ms 一次）。
+        /// 它是**瞬时状态**：任务一收尾就必须清掉，否则已完成/失败的任务还会挂着"解压中 45%"
+        /// （不变量 6：失败 / 部分完成不得显示成成功，反过来也不许把收尾后的进度留在界面上）。
+        /// </para>
+        /// </summary>
+        public int ProgressPercent
+        {
+            get => _progressPercent;
+            set
+            {
+                if (SetProperty(ref _progressPercent, value))
+                {
+                    OnPropertyChanged(nameof(HasLiveProgress));
+                    OnPropertyChanged(nameof(StatusDisplayText));
+                    OnPropertyChanged(nameof(ProgressDetail));
+                }
+            }
+        }
+
+        /// <summary>当前正在处理的条目名（引擎给的；未知时为空串）。</summary>
+        public string ProgressEntry
+        {
+            get => _progressEntry;
+            set
+            {
+                if (SetProperty(ref _progressEntry, value ?? string.Empty))
+                {
+                    OnPropertyChanged(nameof(ProgressDetail));
+                }
+            }
+        }
+
+        /// <summary>
+        /// "很长时间没有收到任何引擎输出"的提示（默认空 = 没有这条提示）。
+        ///
+        /// <para>
+        /// 它对应的是用户反复抱怨的"卡死"：界面只有"处理中/完成"两态时，长时间零输出看起来就是死了。
+        /// 这里只**提示**，不改变任务状态、不杀进程 —— 要不要中止由用户点「取消当前」决定（不变量 9）。
+        /// 有新的进度 / 输出时由协调器清回空串。
+        /// </para>
+        /// </summary>
+        public string ResponsivenessHint
+        {
+            get => _responsivenessHint;
+            set
+            {
+                if (SetProperty(ref _responsivenessHint, value ?? string.Empty))
+                {
+                    OnPropertyChanged(nameof(HasResponsivenessHint));
+                    OnPropertyChanged(nameof(StatusDisplayText));
+                    OnPropertyChanged(nameof(ProgressDetail));
+                }
+            }
+        }
+
+        /// <summary>是否有"长时间无响应"这条提示。</summary>
+        public bool HasResponsivenessHint => !string.IsNullOrWhiteSpace(_responsivenessHint);
+
+        /// <summary>
+        /// 现在是不是**真的在跑并且有进度可看**。
+        ///
+        /// <para>
+        /// 判据是"有百分比" **且** "任务还没结束"（<see cref="EndTime"/> 为空）。
+        /// 用 <see cref="EndTime"/> 而不是枚举状态，是因为所有收尾路径
+        /// （成功 / 失败 / 取消 / 跳过 / 部分完成）都会写它 —— 一条判据盖住全部，
+        /// 不会因为将来新增一种失败状态就漏掉一处"失败任务还显示着 45%"。
+        /// </para>
+        /// </summary>
+        public bool HasLiveProgress => _progressPercent >= 0 && _endTime == null;
+
+        /// <summary>
+        /// 主界面「状态」列显示的那一格：**不新增列**，把百分比紧凑地并进状态文案。
+        ///
+        /// <para>
+        /// 例：<c>解压中 45%</c>；有长时间无响应提示时是 <c>解压中 45% · 长时间无响应</c>。
+        /// 任务一收尾就退回纯状态文案（见 <see cref="HasLiveProgress"/>）。
+        /// </para>
+        /// <para>
+        /// ⚠ 它**不新造任何状态字符串**：前缀永远是既有的 <see cref="Status"/> 值（来自
+        /// <c>StatusText</c> 常量），这里只做拼接，所以统计与配色（都看 <see cref="Status"/>）完全不受影响。
+        /// </para>
+        /// </summary>
+        public string StatusDisplayText
+        {
+            get
+            {
+                string text = Status;
+
+                if (HasLiveProgress)
+                {
+                    text += $" {_progressPercent}%";
+                }
+
+                if (HasResponsivenessHint)
+                {
+                    text += $" · {_responsivenessHint}";
+                }
+
+                return text;
+            }
+        }
+
+        /// <summary>
+        /// 任务详情窗口「进度」那一行：**百分比 + 当前条目**（没有实时进度时退回既有的进度文案）。
+        ///
+        /// 已用时间不在这里拼 —— 详情窗口本来就有「耗时」一行，协调器在每次进度上报时
+        /// 顺带刷新 <see cref="ElapsedText"/>，于是它也会跟着实时走。
+        /// </summary>
+        public string ProgressDetail
+        {
+            get
+            {
+                if (!HasLiveProgress)
+                {
+                    return ProgressText;
+                }
+
+                string percent = $"{_progressPercent}%";
+
+                if (string.IsNullOrWhiteSpace(_progressEntry))
+                {
+                    return HasResponsivenessHint ? $"{percent} · {_responsivenessHint}" : percent;
+                }
+
+                return HasResponsivenessHint
+                    ? $"{percent} · {_progressEntry} · {_responsivenessHint}"
+                    : $"{percent} · {_progressEntry}";
+            }
+        }
+
+        /// <summary>
+        /// 把引擎报上来的进度落到任务上（只允许在 UI 线程调用 —— 协调器负责投递）。
+        /// </summary>
+        public void ApplyProgress(int percent, string? entry)
+        {
+            if (percent >= 0)
+            {
+                ProgressPercent = percent > 100 ? 100 : percent;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry))
+            {
+                ProgressEntry = entry.Trim();
+            }
+
+            // 有进度就说明引擎还活着：把上一次的"长时间无响应"提示撤掉。
+            if (HasResponsivenessHint)
+            {
+                ResponsivenessHint = string.Empty;
+            }
+        }
+
+        /// <summary>清掉实时进度（任务收尾 / 重跑之前调用）。</summary>
+        public void ClearProgress()
+        {
+            ProgressPercent = NoProgress;
+            ProgressEntry = string.Empty;
+            ResponsivenessHint = string.Empty;
         }
 
         /// <summary>
@@ -310,6 +500,12 @@ namespace ArchiveFixer.Models
                 if (SetProperty(ref _endTime, value))
                 {
                     UpdateElapsedText();
+
+                    // 任务一收尾就再也没有"实时进度"这回事（不变量 6 的反面同样成立：
+                    // 跑完的任务不该还挂着"解压中 45%"）。
+                    OnPropertyChanged(nameof(HasLiveProgress));
+                    OnPropertyChanged(nameof(StatusDisplayText));
+                    OnPropertyChanged(nameof(ProgressDetail));
                 }
             }
         }
@@ -515,6 +711,11 @@ namespace ArchiveFixer.Models
             ErrorMessage = string.Empty;
             StartTime = DateTime.Now;
             EndTime = null;
+
+            // 重跑一个任务时，上一次留下的百分比与"长时间无响应"必须清干净，
+            // 否则新的一轮会从"上一轮的 87%"开始显示。
+            ClearProgress();
+
             LastUpdatedTime = DateTime.Now;
         }
 
@@ -529,6 +730,7 @@ namespace ArchiveFixer.Models
             ErrorMessage = string.Empty;
             EndTime = DateTime.Now;
             LastUpdatedTime = DateTime.Now;
+            ClearProgress();
             UpdateElapsedText();
         }
 
@@ -543,6 +745,7 @@ namespace ArchiveFixer.Models
             ErrorMessage = errorMessage ?? string.Empty;
             EndTime = DateTime.Now;
             LastUpdatedTime = DateTime.Now;
+            ClearProgress();
             UpdateElapsedText();
         }
 
@@ -557,6 +760,7 @@ namespace ArchiveFixer.Models
             ErrorMessage = reason ?? string.Empty;
             EndTime = DateTime.Now;
             LastUpdatedTime = DateTime.Now;
+            ClearProgress();
             UpdateElapsedText();
         }
 
@@ -571,6 +775,7 @@ namespace ArchiveFixer.Models
             ErrorMessage = reason;
             EndTime = DateTime.Now;
             LastUpdatedTime = DateTime.Now;
+            ClearProgress();
             UpdateElapsedText();
         }
 

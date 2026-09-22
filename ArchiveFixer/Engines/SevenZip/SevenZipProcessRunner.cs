@@ -23,6 +23,9 @@ namespace ArchiveFixer.Engines.SevenZip
     {
         private static readonly TimeSpan DefaultSevenZipTimeout = TimeSpan.FromMinutes(30);
 
+        /// <summary>等两路输出泵收完的上限（进程已经退出，正常情况下是毫秒级）。</summary>
+        private static readonly TimeSpan PumpDrainTimeout = TimeSpan.FromSeconds(3);
+
         private readonly ToolLocator _tools;
 
         public SevenZipProcessRunner()
@@ -68,6 +71,16 @@ namespace ArchiveFixer.Engines.SevenZip
             string password,
             CancellationToken cancellationToken = default)
         {
+            return await TestArchiveAsync(archivePath, password, cancellationToken, null).ConfigureAwait(false);
+        }
+
+        /// <summary>带进度 / 卡住提示的测试（<paramref name="progressContext"/> 可空）。</summary>
+        public async Task<ArchiveOperationResult> TestArchiveAsync(
+            string archivePath,
+            string password,
+            CancellationToken cancellationToken,
+            EngineProgressContext? progressContext)
+        {
             if (!CheckSevenZipExists())
             {
                 return CreateSevenZipMissingResult();
@@ -88,7 +101,11 @@ namespace ArchiveFixer.Engines.SevenZip
 
             List<string> arguments = BuildTestArguments(archivePath, password);
 
-            ArchiveOperationResult result = await RunSevenZipAsync(arguments, password, cancellationToken)
+            ArchiveOperationResult result = await RunSevenZipAsync(
+                    arguments,
+                    password,
+                    cancellationToken,
+                    progressContext)
                 .ConfigureAwait(false);
 
             if (result.Success)
@@ -140,6 +157,25 @@ namespace ArchiveFixer.Engines.SevenZip
             string password,
             ExtractOptions options,
             CancellationToken cancellationToken = default)
+        {
+            return await ExtractArchiveAsync(
+                    archivePath,
+                    outputPath,
+                    password,
+                    options,
+                    cancellationToken,
+                    null)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>带进度 / 卡住提示的解压（<paramref name="progressContext"/> 可空）。</summary>
+        public async Task<ArchiveOperationResult> ExtractArchiveAsync(
+            string archivePath,
+            string outputPath,
+            string password,
+            ExtractOptions options,
+            CancellationToken cancellationToken,
+            EngineProgressContext? progressContext)
         {
             options ??= new ExtractOptions();
             options.Normalize();
@@ -196,7 +232,11 @@ namespace ArchiveFixer.Engines.SevenZip
 
             List<string> arguments = BuildExtractArguments(archivePath, outputPath, password, options);
 
-            ArchiveOperationResult result = await RunSevenZipAsync(arguments, password, cancellationToken)
+            ArchiveOperationResult result = await RunSevenZipAsync(
+                    arguments,
+                    password,
+                    cancellationToken,
+                    progressContext)
                 .ConfigureAwait(false);
 
             if (result.Success)
@@ -234,6 +274,27 @@ namespace ArchiveFixer.Engines.SevenZip
             string usedPassword,
             CancellationToken cancellationToken = default)
         {
+            return await RunSevenZipAsync(arguments, usedPassword, cancellationToken, null).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 起进程、收输出、按退出码与输出分类。
+        ///
+        /// <para>
+        /// <b>进度与卡住提示的接线（2026-09-22 新增）</b>：
+        /// <paramref name="progressContext"/> 非空时，本方法会把 7-Zip 的进度行解析成统一进度
+        /// （<see cref="SevenZipProgressParser"/>，只在本命名空间内）经**节流后**投递给上层，
+        /// 并在"很久没有任何输出"时回调 <see cref="EngineProgressContext.Stalled"/>。
+        /// 两条通道的生命周期都绑在本方法上：返回之前必定 <c>Complete</c>，
+        /// 所以进程退出 / 取消 / 超时之后**不可能**再有迟到回调。
+        /// </para>
+        /// </summary>
+        public async Task<ArchiveOperationResult> RunSevenZipAsync(
+            IEnumerable<string> arguments,
+            string usedPassword,
+            CancellationToken cancellationToken,
+            EngineProgressContext? progressContext)
+        {
             if (!CheckSevenZipExists())
             {
                 return CreateSevenZipMissingResult();
@@ -248,10 +309,40 @@ namespace ArchiveFixer.Engines.SevenZip
 
             Process? process = null;
 
+            /*
+             * 进度解析只在"这次真的打开了进度开关"时才启用。
+             *
+             * 为什么要这个条件：RunSevenZipAsync 是通用的（列目录 / 测试 / 解压都走它），
+             * 而 l -slt 的输出是要被逐行解析的。只有带 -bsp1 的调用才可能产出进度行，
+             * 这样列目录那条路径上"7-Zip 文本"的解析面一点都没变宽。
+             */
+            EngineProgressParser? progressParser = HasProgressSwitch(arguments)
+                ? SevenZipProgressParser.TryParse
+                : null;
+
+            ArchiveProgressReporter reporter = new(progressContext?.Progress);
+
+            /*
+             * 卡住监视器：只有上层要求提示时才建（没有接收端时它什么都不做，没必要每 5 秒醒一次）。
+             * ⛔ 它**没有杀进程的能力**，只把一个事实报出去（见 EngineOutputActivityMonitor）。
+             */
+            EngineOutputActivityMonitor? monitor = progressContext?.Stalled != null
+                ? new EngineOutputActivityMonitor(progressContext.StallThreshold, progressContext.Stalled)
+                : null;
+
+            var outputCollector = new EngineOutputCollector(outputBuilder, outputLock, progressParser, reporter, monitor);
+            var errorCollector = new EngineOutputCollector(errorBuilder, errorLock, progressParser, reporter, monitor);
+
             using var timeoutCts = new CancellationTokenSource(DefaultSevenZipTimeout);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
                 timeoutCts.Token);
+
+            using var watchdogCts = new CancellationTokenSource();
+
+            Task outputPump = Task.CompletedTask;
+            Task errorPump = Task.CompletedTask;
+            Task watchdog = Task.CompletedTask;
 
             try
             {
@@ -282,32 +373,6 @@ namespace ArchiveFixer.Engines.SevenZip
                     EnableRaisingEvents = true
                 };
 
-                process.OutputDataReceived += (_, e) =>
-                {
-                    if (e.Data == null)
-                    {
-                        return;
-                    }
-
-                    lock (outputLock)
-                    {
-                        outputBuilder.AppendLine(e.Data);
-                    }
-                };
-
-                process.ErrorDataReceived += (_, e) =>
-                {
-                    if (e.Data == null)
-                    {
-                        return;
-                    }
-
-                    lock (errorLock)
-                    {
-                        errorBuilder.AppendLine(e.Data);
-                    }
-                };
-
                 if (!process.Start())
                 {
                     stopwatch.Stop();
@@ -323,8 +388,26 @@ namespace ArchiveFixer.Engines.SevenZip
                         MaskPassword(usedPassword));
                 }
 
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
+                /*
+                 * 旧写法是 BeginOutputReadLine / OutputDataReceived。换成自己按 \r / \n / \b 切流
+                 * 的理由见 ProcessOutputPump 的类注释：7-Zip 的进度是 \r 分隔的，UnRAR 的百分比
+                 * 是同一行内用退格回写的 —— 按行读会把"实时进度"退化成"解完才有"。
+                 */
+                outputPump = ProcessOutputPump.PumpAsync(
+                    process.StandardOutput,
+                    outputCollector.Handle,
+                    linkedCts.Token);
+
+                errorPump = ProcessOutputPump.PumpAsync(
+                    process.StandardError,
+                    errorCollector.Handle,
+                    linkedCts.Token);
+
+                watchdog = EngineOutputActivityMonitor.WatchAsync(
+                    monitor!,
+                    EngineOutputActivityMonitor.ResolvePollInterval(
+                        progressContext?.StallThreshold ?? EngineOutputActivityMonitor.DefaultStallThreshold),
+                    watchdogCts.Token);
 
                 try
                 {
@@ -347,21 +430,11 @@ namespace ArchiveFixer.Engines.SevenZip
 
                     stopwatch.Stop();
 
-                    string outputOnCancel;
-                    string errorOnCancel;
-
-                    lock (outputLock)
-                    {
-                        outputOnCancel = outputBuilder.ToString();
-                    }
-
-                    lock (errorLock)
-                    {
-                        errorOnCancel = errorBuilder.ToString();
-                    }
-
-                    outputOnCancel = PasswordMasker.Sanitize(outputOnCancel);
-                    errorOnCancel = PasswordMasker.Sanitize(errorOnCancel);
+                    (string outputOnCancel, string errorOnCancel) = ReadBuffers(
+                        outputBuilder,
+                        errorBuilder,
+                        outputLock,
+                        errorLock);
 
                     return new ArchiveOperationResult
                     {
@@ -387,23 +460,13 @@ namespace ArchiveFixer.Engines.SevenZip
                 {
                 }
 
+                // 进程已经退出，但两路输出可能还有尾巴在管道里 —— 必须等泵读完再取缓冲区，
+                // 否则最后几行（常常正是结论那几行）会丢。
+                await DrainPumpsAsync(outputPump, errorPump).ConfigureAwait(false);
+
                 stopwatch.Stop();
 
-                string output;
-                string error;
-
-                lock (outputLock)
-                {
-                    output = outputBuilder.ToString();
-                }
-
-                lock (errorLock)
-                {
-                    error = errorBuilder.ToString();
-                }
-
-                output = PasswordMasker.Sanitize(output);
-                error = PasswordMasker.Sanitize(error);
+                (string output, string error) = ReadBuffers(outputBuilder, errorBuilder, outputLock, errorLock);
 
                 int exitCode;
 
@@ -429,20 +492,13 @@ namespace ArchiveFixer.Engines.SevenZip
             {
                 await KillProcessTreeSafeAsync(process).ConfigureAwait(false);
 
+                // 先把两路输出收干净再读缓冲区，否则异常路径上会丢掉最后几行
+                //（那几行往往正是"为什么失败"的答案）。
+                await DrainPumpsAsync(outputPump, errorPump).ConfigureAwait(false);
+
                 stopwatch.Stop();
 
-                string output;
-                string errorText;
-
-                lock (outputLock)
-                {
-                    output = outputBuilder.ToString();
-                }
-
-                lock (errorLock)
-                {
-                    errorText = errorBuilder.ToString();
-                }
+                (string output, string errorText) = ReadBuffers(outputBuilder, errorBuilder, outputLock, errorLock);
 
                 string exceptionMessage = PasswordMasker.Sanitize(ex.Message);
 
@@ -471,6 +527,33 @@ namespace ArchiveFixer.Engines.SevenZip
             }
             finally
             {
+                /*
+                 * 收口顺序不能换（这是"不得再有迟到回调"那条红线的落点）：
+                 * ① 停看门狗 → ② 收完两路输出泵 → ③ 关掉进度与卡住提示的出口 → ④ 才处置进程。
+                 * 走到这里说明这一次运行已经彻底结束，之后任何回调都只会打到已经收尾的任务上，
+                 * 所以第 ③ 步之后所有上报都会被丢弃。
+                 */
+                try
+                {
+                    watchdogCts.Cancel();
+                }
+                catch
+                {
+                }
+
+                await DrainPumpsAsync(outputPump, errorPump).ConfigureAwait(false);
+
+                reporter.Complete();
+                monitor?.Complete();
+
+                try
+                {
+                    await watchdog.ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+
                 if (process != null)
                 {
                     try
@@ -498,6 +581,68 @@ namespace ArchiveFixer.Engines.SevenZip
                     }
                 }
             }
+        }
+
+        /// <summary>这次调用是不是打开了进度开关（<c>-bsp1</c> / <c>-bsp2</c>）。</summary>
+        private static bool HasProgressSwitch(IEnumerable<string>? arguments)
+        {
+            if (arguments == null)
+            {
+                return false;
+            }
+
+            foreach (string argument in arguments)
+            {
+                if (string.Equals(argument, "-bsp1", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(argument, "-bsp2", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 等两路输出泵收完，**有上限**。
+        ///
+        /// 为什么必须有上限：泵读的是子进程的管道；万一有别的进程继承了写端，EOF 可能永远不来。
+        /// 那时宁可丢一点尾巴输出，也不能把整个任务挂在这里（AGENTS.md §9：禁止无界等待）。
+        /// </summary>
+        private static async Task DrainPumpsAsync(Task outputPump, Task errorPump)
+        {
+            try
+            {
+                Task all = Task.WhenAll(outputPump, errorPump);
+
+                await Task.WhenAny(all, Task.Delay(PumpDrainTimeout)).ConfigureAwait(false);
+            }
+            catch
+            {
+                // 泵内部已经把取消 / 管道关闭都吞掉了，这里只是兜底。
+            }
+        }
+
+        private static (string Output, string Error) ReadBuffers(
+            StringBuilder outputBuilder,
+            StringBuilder errorBuilder,
+            object outputLock,
+            object errorLock)
+        {
+            string output;
+            string error;
+
+            lock (outputLock)
+            {
+                output = outputBuilder.ToString();
+            }
+
+            lock (errorLock)
+            {
+                error = errorBuilder.ToString();
+            }
+
+            return (PasswordMasker.Sanitize(output), PasswordMasker.Sanitize(error));
         }
 
         public ArchiveOperationResult AnalyzeResult(int exitCode, string output, string error)
@@ -838,6 +983,16 @@ namespace ArchiveFixer.Engines.SevenZip
         /// 解压参数。
         ///
         /// <para>
+        /// <b>进度开关（2026-09-22 改）</b>：原来是 <c>-bsp0 -bd</c>，等于**主动把 7-Zip 的进度关掉** ——
+        /// 界面因此只剩"处理中/完成"两态，长时间零输出看起来就是卡死（用户反复抱怨的那件事）。
+        /// 现在改成 <c>-bsp1</c>（进度打到 stdout），并**必须去掉 <c>-bd</c>**：
+        /// 本机 26.03 实测 <c>-bsp1 -bd</c> 一条进度都不出，<c>-bd</c> 会压掉进度指示器；
+        /// 去掉之后同一命令能稳定刷出 <c> 67% 8 - payload 08 数据.bin</c> 这样的行。
+        /// 解析在 <see cref="SevenZipProgressParser"/>（只允许待在本命名空间内），
+        /// 进度行本身会被 <see cref="EngineOutputCollector"/> 从日志缓冲区里剔掉。
+        /// </para>
+        ///
+        /// <para>
         /// ⚠ <b>这里刻意**不**加 <c>-kb</c></b>（"保留受损的文件"）。这一点与
         /// <c>docs/WinRAR功能参考.md</c> §2 C 组的建议**相反**，依据是本机实测：
         /// <list type="bullet">
@@ -862,8 +1017,7 @@ namespace ArchiveFixer.Engines.SevenZip
             var args = new List<string>
             {
                 "x",
-                "-bsp0",
-                "-bd",
+                "-bsp1",
                 "-sccUTF-8",
                 archivePath,
                 "-o" + outputPath,
@@ -882,13 +1036,16 @@ namespace ArchiveFixer.Engines.SevenZip
             return args;
         }
 
+        /// <summary>
+        /// 测试参数。进度开关与解压同一口径（见 <see cref="BuildExtractArguments"/>）：
+        /// <c>t</c> 在大包上同样会跑几十秒，没有进度就还是"看起来死了"。
+        /// </summary>
         public List<string> BuildTestArguments(string archivePath, string password)
         {
             var args = new List<string>
             {
                 "t",
-                "-bsp0",
-                "-bd",
+                "-bsp1",
                 "-sccUTF-8",
                 archivePath,
                 "-y",

@@ -34,6 +34,11 @@ namespace ArchiveFixer.Engines.WinRar
     /// 覆盖怎么处理由显式的 <c>-o+ / -o- / -or</c> 决定，不用"全答是"这种粗开关。</description></item>
     /// <item><description><b>输出目录走 <c>-op&lt;路径&gt;</c></b>：它接受不带尾随分隔符的路径，
     /// 不像位置参数那样必须写成 <c>dest\</c>（RAR 6.10 起的行为，7.23 实测可用）。</description></item>
+    /// <item><description><b>⛔ 不加 <c>-idq</c> / <c>-idp</c></b>：<c>-idq</c>（安静模式）实测**连进度一起关掉**
+    /// （成功时输出 0 字节），<c>-idp</c> 关的正是百分比指示器。
+    /// 这两个开关一加，界面就退回"处理中/完成"两态 —— 正是用户抱怨"卡死"的成因。
+    /// 实测 UnRAR **默认**就带百分比进度，所以这里什么都不用加（见
+    /// <see cref="UnRarProgressParser"/>）。</description></item>
     /// </list>
     /// </para>
     /// </summary>
@@ -41,6 +46,9 @@ namespace ArchiveFixer.Engines.WinRar
     {
         /// <summary>与 7-Zip 侧同一个口径：30 分钟。RAR 的固实大包可能很慢，给足时间；超时会被明确报出来。</summary>
         private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(30);
+
+        /// <summary>等两路输出泵收完的上限（进程已经退出，正常情况下是毫秒级）。</summary>
+        private static readonly TimeSpan PumpDrainTimeout = TimeSpan.FromSeconds(3);
 
         private readonly ToolLocator _tools;
 
@@ -170,6 +178,16 @@ namespace ArchiveFixer.Engines.WinRar
             string? password,
             CancellationToken cancellationToken = default)
         {
+            return await TestArchiveAsync(archivePath, password, cancellationToken, null).ConfigureAwait(false);
+        }
+
+        /// <summary>带进度 / 卡住提示的测试（<paramref name="progressContext"/> 可空）。</summary>
+        public async Task<ArchiveOperationResult> TestArchiveAsync(
+            string archivePath,
+            string? password,
+            CancellationToken cancellationToken,
+            EngineProgressContext? progressContext)
+        {
             if (!CheckUnRarExists())
             {
                 return CreateEngineMissingResult();
@@ -190,7 +208,7 @@ namespace ArchiveFixer.Engines.WinRar
 
             List<string> arguments = BuildTestArguments(archivePath, password);
 
-            ArchiveOperationResult result = await RunAsync(arguments, password, cancellationToken)
+            ArchiveOperationResult result = await RunAsync(arguments, password, cancellationToken, progressContext)
                 .ConfigureAwait(false);
 
             if (result.Success)
@@ -223,6 +241,27 @@ namespace ArchiveFixer.Engines.WinRar
             ExtractOptions options,
             bool keepBrokenFiles,
             CancellationToken cancellationToken = default)
+        {
+            return await ExtractArchiveAsync(
+                    archivePath,
+                    outputPath,
+                    password,
+                    options,
+                    keepBrokenFiles,
+                    cancellationToken,
+                    null)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>带进度 / 卡住提示的解压（<paramref name="progressContext"/> 可空）。</summary>
+        public async Task<ArchiveOperationResult> ExtractArchiveAsync(
+            string archivePath,
+            string outputPath,
+            string? password,
+            ExtractOptions options,
+            bool keepBrokenFiles,
+            CancellationToken cancellationToken,
+            EngineProgressContext? progressContext)
         {
             options ??= new ExtractOptions();
             options.Normalize();
@@ -279,7 +318,7 @@ namespace ArchiveFixer.Engines.WinRar
 
             List<string> arguments = BuildExtractArguments(archivePath, outputPath, password, options, keepBrokenFiles);
 
-            ArchiveOperationResult result = await RunAsync(arguments, password, cancellationToken)
+            ArchiveOperationResult result = await RunAsync(arguments, password, cancellationToken, progressContext)
                 .ConfigureAwait(false);
 
             if (result.Success)
@@ -317,6 +356,28 @@ namespace ArchiveFixer.Engines.WinRar
             string? usedPassword,
             CancellationToken cancellationToken = default)
         {
+            return await RunAsync(arguments, usedPassword, cancellationToken, null).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 起进程、收输出、按退出码与输出分类。
+        ///
+        /// 外部进程的 8 条纪律（不变量 10）逐条对应：
+        /// <see cref="ProcessStartInfo.ArgumentList"/> 安全传参（不拼 cmd 字符串）、重定向 stdout/stderr、
+        /// 超时、取消、正确关句柄、只终止自己起的 PID 及其子进程。
+        ///
+        /// <para>
+        /// <b>进度与卡住提示的接线</b>与 7-Zip 那一侧完全对称（见
+        /// <c>SevenZipProcessRunner.RunSevenZipAsync</c>）：解析器只在本命名空间内
+        /// （<see cref="UnRarProgressParser"/>），经节流后投递；返回之前必定收口，不会有迟到回调。
+        /// </para>
+        /// </summary>
+        public async Task<ArchiveOperationResult> RunAsync(
+            IEnumerable<string> arguments,
+            string? usedPassword,
+            CancellationToken cancellationToken,
+            EngineProgressContext? progressContext)
+        {
             if (!CheckUnRarExists())
             {
                 return CreateEngineMissingResult();
@@ -331,14 +392,36 @@ namespace ArchiveFixer.Engines.WinRar
 
             Process? process = null;
 
+            /*
+             * UnRAR **默认就带百分比进度**（实测），所以没有"开关要不要打开"这一说；
+             * 但列目录（lt）的输出是要被逐行解析的，那边绝不能把进度解析面引进来 ——
+             * 只有"会长时间跑"的三件事才解析：解压 / 测试 / 更新。
+             */
+            EngineOperation? operation = ResolveOperation(arguments);
+            string? archivePath = FindArchiveArgument(arguments);
+
+            bool progressExpected = operation == EngineOperation.Extract || operation == EngineOperation.Test;
+            EngineProgressParser? progressParser = progressExpected ? UnRarProgressParser.TryParse : null;
+
+            ArchiveProgressReporter reporter = new(progressContext?.Progress);
+
+            EngineOutputActivityMonitor? monitor = progressContext?.Stalled != null
+                ? new EngineOutputActivityMonitor(progressContext.StallThreshold, progressContext.Stalled)
+                : null;
+
+            var outputCollector = new EngineOutputCollector(outputBuilder, outputLock, progressParser, reporter, monitor);
+            var errorCollector = new EngineOutputCollector(errorBuilder, errorLock, progressParser, reporter, monitor);
+
             using var timeoutCts = new CancellationTokenSource(DefaultTimeout);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
                 timeoutCts.Token);
 
-            // 认命令（l / t / x）：加密文件名的判定只允许发生在"列目录"上（见 UnRarOutputParser）。
-            EngineOperation? operation = ResolveOperation(arguments);
-            string? archivePath = FindArchiveArgument(arguments);
+            using var watchdogCts = new CancellationTokenSource();
+
+            Task outputPump = Task.CompletedTask;
+            Task errorPump = Task.CompletedTask;
+            Task watchdog = Task.CompletedTask;
 
             try
             {
@@ -369,32 +452,6 @@ namespace ArchiveFixer.Engines.WinRar
                     EnableRaisingEvents = true
                 };
 
-                process.OutputDataReceived += (_, e) =>
-                {
-                    if (e.Data == null)
-                    {
-                        return;
-                    }
-
-                    lock (outputLock)
-                    {
-                        outputBuilder.AppendLine(e.Data);
-                    }
-                };
-
-                process.ErrorDataReceived += (_, e) =>
-                {
-                    if (e.Data == null)
-                    {
-                        return;
-                    }
-
-                    lock (errorLock)
-                    {
-                        errorBuilder.AppendLine(e.Data);
-                    }
-                };
-
                 if (!process.Start())
                 {
                     stopwatch.Stop();
@@ -410,8 +467,25 @@ namespace ArchiveFixer.Engines.WinRar
                         MaskPassword(usedPassword));
                 }
 
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
+                /*
+                 * 旧写法是 BeginOutputReadLine：UnRAR 的百分比是**同一个文件那一行内用退格回写**的，
+                 * 按行读意味着"一个 5GB 的单文件在解完之前一条进度都看不到"（见 ProcessOutputPump）。
+                 */
+                outputPump = ProcessOutputPump.PumpAsync(
+                    process.StandardOutput,
+                    outputCollector.Handle,
+                    linkedCts.Token);
+
+                errorPump = ProcessOutputPump.PumpAsync(
+                    process.StandardError,
+                    errorCollector.Handle,
+                    linkedCts.Token);
+
+                watchdog = EngineOutputActivityMonitor.WatchAsync(
+                    monitor!,
+                    EngineOutputActivityMonitor.ResolvePollInterval(
+                        progressContext?.StallThreshold ?? EngineOutputActivityMonitor.DefaultStallThreshold),
+                    watchdogCts.Token);
 
                 // 立刻关掉标准输入：UnRAR 一旦想"问密码"就拿到 EOF 立刻失败，
                 // 而不是把整个任务挂在那里等一个永远不会来的输入（我们一律用 -p/-p- 避免它问）。
@@ -462,6 +536,9 @@ namespace ArchiveFixer.Engines.WinRar
                 {
                 }
 
+                // 进程已退出，但两路输出的尾巴还在管道里：等泵读完再取缓冲区。
+                await DrainPumpsAsync(outputPump, errorPump).ConfigureAwait(false);
+
                 stopwatch.Stop();
 
                 (string output, string error) = ReadBuffers(outputBuilder, errorBuilder, outputLock, errorLock);
@@ -482,6 +559,9 @@ namespace ArchiveFixer.Engines.WinRar
             catch (Exception ex)
             {
                 await KillProcessTreeSafeAsync(process).ConfigureAwait(false);
+
+                // 先把两路输出收干净再读缓冲区（与 7-Zip 侧同一理由：异常路径上别丢最后几行）。
+                await DrainPumpsAsync(outputPump, errorPump).ConfigureAwait(false);
 
                 stopwatch.Stop();
 
@@ -514,6 +594,28 @@ namespace ArchiveFixer.Engines.WinRar
             }
             finally
             {
+                // 收口顺序与 7-Zip 侧一致（见那边的说明）：停看门狗 → 收完输出泵 → 掐断回调出口 → 处置进程。
+                try
+                {
+                    watchdogCts.Cancel();
+                }
+                catch
+                {
+                }
+
+                await DrainPumpsAsync(outputPump, errorPump).ConfigureAwait(false);
+
+                reporter.Complete();
+                monitor?.Complete();
+
+                try
+                {
+                    await watchdog.ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+
                 if (process != null)
                 {
                     try
@@ -540,6 +642,22 @@ namespace ArchiveFixer.Engines.WinRar
                     {
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// 等两路输出泵收完，**有上限**（与 7-Zip 侧同一个理由：禁止无界等待，AGENTS.md §9）。
+        /// </summary>
+        private static async Task DrainPumpsAsync(Task outputPump, Task errorPump)
+        {
+            try
+            {
+                Task all = Task.WhenAll(outputPump, errorPump);
+
+                await Task.WhenAny(all, Task.Delay(PumpDrainTimeout)).ConfigureAwait(false);
+            }
+            catch
+            {
             }
         }
 

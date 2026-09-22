@@ -2470,6 +2470,218 @@ namespace ArchiveFixer.ViewModels
             return dispatcher.InvokeAsync(() => _dialogService.ShowWarning(message)).Task;
         }
 
+        // ================================================================ 进度可见（D5）/ 长时间无响应
+
+        /// <summary>
+        /// 把一段动作投递到 UI 线程执行（**异步、不阻塞、无界面宿主也不抛**）。
+        ///
+        /// <para>
+        /// 三条纪律（每一条都对应一次踩过的坑）：
+        /// </para>
+        /// <list type="number">
+        /// <item><description>用 <c>BeginInvoke</c> 而不是同步 <c>Dispatcher.Invoke</c>：
+        /// 进度回调是从**读进程输出那条循环**里发出来的，同步 Invoke 会让"读输出"等"UI 处理完"，
+        /// 一旦 UI 线程正忙（正是本项目卡死过的那个场景）就会互相拖住。</description></item>
+        /// <item><description><c>Application.Current</c> 为 null（单元测试 / 控制台宿主）时就地执行：
+        /// 既不抛异常也不死等，而且测试仍然能观察到结果。</description></item>
+        /// <item><description>动作本身抛异常一律吞掉：进度显示出问题绝不允许影响解压结论。</description></item>
+        /// </list>
+        /// </summary>
+        private static void PostToUiThread(Action action)
+        {
+            if (action == null)
+            {
+                return;
+            }
+
+            System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+            if (dispatcher == null || dispatcher.CheckAccess())
+            {
+                TryRunSafely(action);
+                return;
+            }
+
+            try
+            {
+                dispatcher.BeginInvoke(action);
+            }
+            catch
+            {
+                // 调度器正在关闭（关窗口时）：丢弃这一次进度，绝不影响引擎调用。
+            }
+        }
+
+        private static void TryRunSafely(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch
+            {
+                // 界面侧的进度显示失败与解压结论无关。
+            }
+        }
+
+        /// <summary>
+        /// 跨 10% 档位的进度日志行数上限（10 个档位 = 最多 10 行）。
+        ///
+        /// 为什么必须限：引擎的进度是**每 250ms 一条**，一次 10 分钟的解压有 2400 条 ——
+        /// 每条都写日志会把日志彻底淹掉，用户反而看不到真正重要的那几行（密码、失败原因）。
+        /// </summary>
+        private const int ProgressLogDecileStep = 10;
+
+        /// <summary>进度日志里当前条目名最多留几个字符（再长就截断，免得一行日志比屏幕还宽）。</summary>
+        private const int ProgressLogEntryMaxLength = 60;
+
+        /// <summary>
+        /// 一个任务的进度接收端。
+        ///
+        /// <para>
+        /// 它接的是引擎层**节流之后**的进度（最多 250ms 一次，见 <c>ArchiveProgressReporter</c>），
+        /// 所以这里不需要再去重；它只负责把结论落到任务上、按档位写日志。
+        /// </para>
+        ///
+        /// <para>
+        /// 线程：<see cref="Report"/> 可能来自读管道的线程，实际落地一律经
+        /// <see cref="PostToUiThread"/> 回到 UI 线程（无界面宿主时就地执行）。
+        /// </para>
+        /// </summary>
+        private sealed class TaskProgressSink : IProgress<ArchiveProgress>
+        {
+            private readonly ExtractionCoordinator _owner;
+            private int _lastLoggedDecile = -1;
+
+            public TaskProgressSink(ExtractionCoordinator owner, ArchiveTask task)
+            {
+                _owner = owner;
+                Task = task;
+            }
+
+            public ArchiveTask Task { get; }
+
+            public void Report(ArchiveProgress? value)
+            {
+                if (value == null)
+                {
+                    return;
+                }
+
+                PostToUiThread(() => Apply(value));
+            }
+
+            private void Apply(ArchiveProgress progress)
+            {
+                /*
+                 * 任务已经收尾时，迟到的进度一律不落到界面上。
+                 *
+                 * 引擎层已经把"进程退出后不再回调"做到了（reporter.Complete()），这里是第二道：
+                 * 批量解压里上一个任务的最后一帧进度完全可能在它标成"解压成功"之后才排到 UI 队列，
+                 * 那一帧如果照写，用户就会看到"解压成功 87%"（不变量 6：收尾后不许再显示进度）。
+                 */
+                if (Task.EndTime != null)
+                {
+                    return;
+                }
+
+                Task.ApplyProgress(progress.Percent, progress.CurrentEntry);
+
+                // 详情窗口的「耗时」也跟着走：不然任务在跑的时候那一格一直停在 00:00:00。
+                Task.UpdateElapsedText();
+
+                if (progress.Percent < 0)
+                {
+                    // "只知道在动"（扫描阶段）：不写档位日志，免得开头连写好几行没信息量的东西。
+                    return;
+                }
+
+                int decile = progress.Percent / ProgressLogDecileStep;
+
+                if (decile <= _lastLoggedDecile)
+                {
+                    return;
+                }
+
+                _lastLoggedDecile = decile;
+
+                string entry = progress.CurrentEntry ?? string.Empty;
+
+                if (entry.Length > ProgressLogEntryMaxLength)
+                {
+                    entry = entry[..ProgressLogEntryMaxLength] + "…";
+                }
+
+                _owner.AppendLog(
+                    "INFO",
+                    string.IsNullOrWhiteSpace(entry)
+                        ? $"{Task.FileName}：进度 {progress.Percent}%"
+                        : $"{Task.FileName}：进度 {progress.Percent}%（当前：{entry}）");
+            }
+        }
+
+        /// <summary>
+        /// 造一个带进度 / 卡住提示的引擎请求（本次改动的接线点）。
+        ///
+        /// 阈值用引擎层的默认值（90 秒）：它**不是**设置项 —— 这一条只提示、不阻断，
+        /// 不需要用户去调；用户真正要做的动作是「取消当前」，界面上已经有了。
+        /// </summary>
+        private ArchiveRequest BuildTrackedRequest(
+            string archivePath,
+            string password,
+            string? outputPath,
+            TaskProgressSink progressSink)
+        {
+            return new ArchiveRequest
+            {
+                ArchivePath = archivePath,
+                Password = password,
+                OutputPath = outputPath,
+                Progress = progressSink,
+                Stalled = notice => OnEngineStalled(progressSink.Task, notice),
+                StallThreshold = EngineOutputActivityMonitor.DefaultStallThreshold
+            };
+        }
+
+        /// <summary>
+        /// 引擎超过阈值没有任何输出时的处理：**写一条 WARN + 在任务上挂提示，绝不杀进程**。
+        ///
+        /// <para>
+        /// 为什么只提示不处理：用户点「取消当前」才是唯一的中止语义（不变量 9）。
+        /// 自动杀进程会把"慢"误判成"死"，而真实场景里几十秒不输出（固实块、慢盘、杀毒软件扫描）
+        /// 完全正常 —— 那正是这个功能存在的理由，不能反过来用它去打断正常任务。
+        /// </para>
+        /// </summary>
+        private void OnEngineStalled(ArchiveTask task, ArchiveStallNotice notice)
+        {
+            if (notice == null)
+            {
+                return;
+            }
+
+            PostToUiThread(() =>
+            {
+                if (task.EndTime != null)
+                {
+                    // 任务已经收尾，这条提示已经过时（迟到的看门狗巡查）。
+                    return;
+                }
+
+                int idleSeconds = (int)Math.Round(notice.Idle.TotalSeconds);
+                int thresholdSeconds = (int)Math.Round(notice.Threshold.TotalSeconds);
+
+                task.ResponsivenessHint =
+                    $"{ArchiveTask.NoResponseHintText}：已 {idleSeconds} 秒没有任何引擎输出，" +
+                    "进程仍在运行；需要中止请点「取消当前」。";
+
+                // WARN 只写一次（引擎层对同一段沉默只报一次），所以不会刷屏。
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：{ArchiveTask.NoResponseHintText} —— 已 {idleSeconds} 秒没有任何引擎输出" +
+                    $"（阈值 {thresholdSeconds} 秒），进程仍在运行。程序不会自动结束它；需要中止请点「取消当前」。");
+            });
+        }
+
         // ================================================================ 同名冲突（ConflictAction = Ask）
 
         /// <summary>同名冲突处理档（唯一来源；空 / 非法回落 AutoRename，见 <see cref="ConflictActions"/>）。</summary>
@@ -4679,6 +4891,19 @@ namespace ArchiveFixer.ViewModels
             bool passwordConfirmed = false;
 
             /*
+             * 进度可见（D5）的接线点：**每个任务一个接收端**。
+             *
+             * 为什么一个任务只建一个：它记着"上一个写进日志的 10% 档位"，
+             * 每换一次密码候选就新建一个的话，"达到 10% 就写一行"这条限制会失效
+             * （每个候选都从头数一遍档位）。
+             *
+             * 清一次残留：同一个任务可能被重跑（换密码候选、用户再点一次），
+             * 上一轮的百分比绝不能带到这一轮来。
+             */
+            TaskProgressSink progressSink = new(this, task);
+            task.ClearProgress();
+
+            /*
              * 关键修复：
              *
              * 旧逻辑：
@@ -4714,7 +4939,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog("INFO", $"{task.FileName}：测试密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
                     ArchiveOperationResult testResult = await _archiveEngine.TestAsync(
-                        ArchiveRequest.For(engineArchivePath, password),
+                        BuildTrackedRequest(engineArchivePath, password, null, progressSink),
                         cancellationToken);
 
                     lastResult = testResult;
@@ -4822,12 +5047,7 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("INFO", $"{task.FileName}：测试通过，开始正式解压。");
 
                 ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
-     new ArchiveRequest
-     {
-         ArchivePath = engineArchivePath,
-         OutputPath = engineOutputPath,
-         Password = selectedPassword
-     },
+     BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),
      extractOptions,
      cancellationToken);
 
@@ -4905,12 +5125,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog("INFO", $"{task.FileName}：开始解压，密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
                     ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
-     new ArchiveRequest
-     {
-         ArchivePath = engineArchivePath,
-         OutputPath = engineOutputPath,
-         Password = selectedPassword
-     },
+     BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),
      extractOptions,
      cancellationToken);
 
@@ -5030,6 +5245,15 @@ namespace ArchiveFixer.ViewModels
             task.ElapsedText = task.StartTime.HasValue
                 ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                 : "-";
+
+            /*
+             * 实时进度到此为止：把百分比与"长时间无响应"提示一起清掉。
+             *
+             * 光靠 EndTime 已经能让 HasLiveProgress 判否（界面上不会再显示百分比），
+             * 但字段本身留着会变成一颗定时炸弹：将来任何一处把 EndTime 清空（重跑、重置），
+             * 上一轮的 87% 就会莫名其妙地重新出现在界面上。收尾时清干净是唯一稳妥的做法。
+             */
+            task.ClearProgress();
 
             task.Operation = StatusText.OpWaiting;
 

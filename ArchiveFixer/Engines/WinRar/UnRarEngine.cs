@@ -163,7 +163,8 @@ namespace ArchiveFixer.Engines.WinRar
             ArchiveOperationResult result = await _runner.TestArchiveAsync(
                 request.ArchivePath,
                 request.Password,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                EngineProgressContext.From(request)).ConfigureAwait(false);
 
             // 结果可追溯（不变量 14）：报告读的是**这次真正执行的那个引擎**，不是报告时刻的注册表。
             return result.StampEngine(Id, DisplayName, Version);
@@ -180,7 +181,8 @@ namespace ArchiveFixer.Engines.WinRar
                 request.Password,
                 options,
                 EngineRuntimeSettings.KeepBrokenFiles,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                EngineProgressContext.From(request)).ConfigureAwait(false);
 
             return result.StampEngine(Id, DisplayName, Version);
         }
