@@ -144,5 +144,35 @@ namespace ArchiveFixer.Models
         /// </para>
         /// </summary>
         public const string LongTimeNoResponse = "长时间无响应";
+
+        /// <summary>
+        /// 任务列表上方那条蓝色提示的正文：**界面与命令提示共用的唯一一句话**。
+        ///
+        /// <para>
+        /// 为什么必须共用：2026-09-22 真机验收抓到的缺陷是"提示说一套、代码做一套" ——
+        /// 蓝字写着「移除选中」等命令只作用于**勾选**，而清理类命令（删除其余物 / 清理空文件夹）
+        /// 实际看的是 DataGrid 的**当前行**（<c>MainViewModel.SelectedTask</c>）：
+        /// 用户明明勾了任务，点「删除其余物…」却收到"请先在列表里选中一个任务"，
+        /// 只能靠手动点一下那一行才work。把这句话放进唯一的文案来源，XAML 用
+        /// <c>{x:Static}</c> 引用、命令提示由 <see cref="PickTaskPromptFormat"/> 构造，
+        /// 两边就不可能再各写一套。
+        /// </para>
+        /// <para>
+        /// 作用域口径（与 <c>MainViewModel.ResolveCleanupTargets</c> 的实际行为一一对应）：
+        /// 勾选为准 → 一个都没勾时退化为当前行 → 两者都没有才提示。
+        /// </para>
+        /// </summary>
+        public const string SelectionScopeHint =
+            "「一键处理 / 智能修正 / 移除选中 / 删除其余物 / 清理空文件夹」以勾选为准（最左侧一列）；" +
+            "一个都没勾时按当前点中的那一行办；两者都没有会提示你先选一个。" +
+            "右键菜单只作用于当前这一行；「清空列表」是整表操作（与勾选无关）。";
+
+        /// <summary>
+        /// "两者都没有"时的提示模板（<c>{0}</c> = 命令名，例如「删除其余物」）。
+        ///
+        /// 措辞必须与 <see cref="SelectionScopeHint"/> 同一套词（"勾选" / "点中"），
+        /// 否则用户会以为勾选没用 —— 那正是这次要修的缺陷。
+        /// </summary>
+        public const string PickTaskPromptFormat = "请先勾选或点中一个任务，再执行「{0}」。";
     }
 }

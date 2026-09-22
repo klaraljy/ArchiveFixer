@@ -141,6 +141,21 @@ namespace ArchiveFixer.Services
         /// <summary>源包文件个数（<see cref="SourcePackageNames"/> 可能被截断，计数以它为准）。</summary>
         public int SourcePackageCount { get; init; }
 
+        /// <summary>
+        /// 「删除本目录全部其余物」会影响到**几个包**（其余物根下按包基名分的子目录数）。
+        ///
+        /// <para>
+        /// 为什么要有它：这个入口的作用域是**整个共享输出目录**，用户点之前必须知道
+        /// "会有几个包一起被清掉"。以前确认框只说"会影响同目录里的所有包" —— 是一句形容词，
+        /// 用户没法判断这次到底动了 2 个还是 20 个（2026-09-22 验收的口径：作用域越大越要点名）。
+        /// 非整目录档恒为 0（此时作用域只有一个包，用不着点名单）。
+        /// </para>
+        /// </summary>
+        public int AffectedPackageCount { get; init; }
+
+        /// <summary>受影响的包名清单（最多列 <see cref="MaxListedItems"/> 个；计数以 <see cref="AffectedPackageCount"/> 为准）。</summary>
+        public IReadOnlyList<string> AffectedPackageNames { get; init; } = Array.Empty<string>();
+
         /// <summary>一句话结论，可直接进日志 / 确认框。</summary>
         public string Message { get; init; } = string.Empty;
 
@@ -587,6 +602,21 @@ namespace ArchiveFixer.Services
                 message += $"；⚠ 其中含 {sourcePackages.Count} 个源包文件（删掉后需要重新下载）";
             }
 
+            /*
+             * 「删除本目录全部其余物」要点名"影响几个包"：其余物根下的**子目录**就是各个包的那一份
+             * （共享根布局是 <共享根>\其余物\<包基名>\）。数不出名字时保持 0 —— 调用方会改用
+             * "整个目录"的说法，绝不编一个数字出来（预览里的数字宁可没有，也不能是猜的）。
+             */
+            (int affectedPackageCount, IReadOnlyList<string> affectedPackageNames) =
+                scope.DeletesEverythingInDirectory
+                    ? CountAffectedPackages(scope.ArtifactDirectories)
+                    : (0, (IReadOnlyList<string>)Array.Empty<string>());
+
+            if (affectedPackageCount > 0)
+            {
+                message += $"；⚠ 本次是「删除本目录全部其余物」，会影响该目录下 {affectedPackageCount} 个包";
+            }
+
             return new CleanupPreview
             {
                 Scope = CleanupScope.Artifacts,
@@ -603,8 +633,54 @@ namespace ArchiveFixer.Services
                 Items = items.Take(CleanupPreview.MaxListedItems).ToList(),
                 SourcePackageNames = sourcePackages.Take(CleanupPreview.MaxListedItems).ToList(),
                 SourcePackageCount = sourcePackages.Count,
+                AffectedPackageCount = affectedPackageCount,
+                AffectedPackageNames = affectedPackageNames,
                 Message = message
             };
+        }
+
+        /// <summary>
+        /// 数一数这次整目录删除会波及几个包：其余物根下的每一个子目录算一个包。
+        ///
+        /// <para>
+        /// 只在「删除本目录全部其余物」这一档调用。读不了目录时返回 0（= 数不出来），
+        /// **不抛异常、不中断预览** —— 预览已经拿到了"有多少项、多少字节"这些硬数字，
+        /// 包名清单只是补充说明，不该因为它读不到就让整次删除失败。
+        /// </para>
+        /// </summary>
+        private static (int Count, IReadOnlyList<string> Names) CountAffectedPackages(
+            IReadOnlyList<string> artifactDirectories)
+        {
+            var names = new List<string>();
+
+            foreach (string directory in artifactDirectories)
+            {
+                try
+                {
+                    if (!Directory.Exists(directory))
+                    {
+                        continue;
+                    }
+
+                    foreach (string sub in Directory.GetDirectories(directory))
+                    {
+                        string name = Path.GetFileName(sub);
+
+                        if (!string.IsNullOrWhiteSpace(name) && !names.Contains(name, StringComparer.OrdinalIgnoreCase))
+                        {
+                            names.Add(name);
+                        }
+                    }
+                }
+                catch
+                {
+                    return (0, Array.Empty<string>());
+                }
+            }
+
+            names.Sort(StringComparer.OrdinalIgnoreCase);
+
+            return (names.Count, names.Take(CleanupPreview.MaxListedItems).ToList());
         }
 
         /// <summary>

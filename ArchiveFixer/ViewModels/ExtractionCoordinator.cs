@@ -4065,7 +4065,16 @@ namespace ArchiveFixer.ViewModels
 
             if (selectedTasks.Count == 0)
             {
-                _dialogService.ShowWarning("请先选择需要解压的任务。");
+                /*
+                 * 措辞与界面蓝字（StatusText.SelectionScopeHint）同一套词："勾选"。
+                 *
+                 * 旧文案"请先选择需要解压的任务"是含糊的 —— 用户高亮了一行、心里已经算"选择了"，
+                 * 而这条命令只认最左侧那一列的勾选（同一个误读 2026-09-22 在清理类命令上被抓过一次，
+                 * 见 MainViewModel.ResolveCleanupTargets 的注释）。
+                 */
+                _dialogService.ShowWarning(
+                    $"请先勾选要解压的任务（最左侧一列）。{Environment.NewLine}{Environment.NewLine}"
+                    + $"列表里有 {Tasks.Count} 个任务，当前一个都没勾。在列表上按 Ctrl+A 可以全选。");
                 return;
             }
 

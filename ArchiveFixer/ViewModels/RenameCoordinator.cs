@@ -211,31 +211,10 @@ namespace ArchiveFixer.ViewModels
 
         private async Task RenameByOptionsAsync(RenameOptions options)
         {
-            var selectedTasks = Tasks.Where(x => x.IsSelected).ToList();
+            List<RenamePreviewItem>? previewItems = await BuildPreviewAsync(options);
 
-            if (selectedTasks.Count == 0)
+            if (previewItems == null)
             {
-                _dialogService.ShowWarning("请先选择需要改名的任务。");
-                return;
-            }
-
-            if (options == null)
-            {
-                _dialogService.ShowWarning("改名参数为空。");
-                return;
-            }
-
-            options.Normalize();
-
-            AppendLog("INFO",
-                $"生成改名预览：操作={options.OperationType}，目标后缀={options.TargetExtension}，删除数量={options.DeleteExtensionCount}");
-
-            List<RenamePreviewItem> previewItems = await Task.Run(
-                () => _renameService.BuildPreview(selectedTasks, options));
-
-            if (previewItems.Count == 0)
-            {
-                _dialogService.ShowInfo("没有生成任何改名预览项。");
                 return;
             }
 
@@ -337,6 +316,143 @@ namespace ArchiveFixer.ViewModels
             {
                 IsBusy = false;
             }
+        }
+
+        /// <summary>
+        /// 选中检查 → 参数归一 → 生成预览 → **写一条"真实目标"日志**。
+        ///
+        /// <para>
+        /// 单独抽出来有两个理由：
+        /// ① 让"日志里那个目标后缀"能被**直接测到**（缺陷 2 就是这一行写错了）；
+        /// ② 窗口那一段（<see cref="RenameByOptionsAsync"/> 的后半）在本测试进程里没有 UI 宿主，
+        ///    抽开之后"预览与日志"这条路可以脱离窗口单测。
+        /// </para>
+        /// </summary>
+        /// <returns>预览项；被参数/勾选挡下时为 null（此时已经提示过，调用方直接返回）。</returns>
+        internal async Task<List<RenamePreviewItem>?> BuildPreviewAsync(RenameOptions options)
+        {
+            var selectedTasks = Tasks.Where(x => x.IsSelected).ToList();
+
+            if (selectedTasks.Count == 0)
+            {
+                // 与界面蓝字同一套词（"勾选"）：旧文案"请先选择需要改名的任务"容易被读成"点中一行也算"。
+                _dialogService.ShowWarning($"请先勾选要改名的任务（最左侧一列）。{Environment.NewLine}{Environment.NewLine}"
+                                           + $"列表里有 {Tasks.Count} 个任务，当前一个都没勾。");
+                return null;
+            }
+
+            if (options == null)
+            {
+                _dialogService.ShowWarning("改名参数为空。");
+                return null;
+            }
+
+            options.Normalize();
+
+            List<RenamePreviewItem> previewItems = await Task.Run(
+                () => _renameService.BuildPreview(selectedTasks, options));
+
+            /*
+             * ⚠ 这一行必须打**真实目标**（缺陷 2）。
+             *
+             * 原实现打的是 options.TargetExtension，也就是设置里的 DefaultExtension（例如 .7z）——
+             * 而 FixByDetectedFormat 走的是"识别结果"给出的后缀（检测到 ZIP → .zip），
+             * options.TargetExtension 只是"格式未知"时的兜底。于是日志写着「目标后缀=.7z」、
+             * 预览窗口里那一行却是 `整包.mp4 → 整包.zip`，排查的人会一路去怀疑设置项。
+             * 现在改为从**新文件名**里取真实目标（多条不同目标就按项数汇总成一句）。
+             */
+            AppendLog("INFO", BuildRenamePreviewLog(options, previewItems));
+
+            if (previewItems.Count == 0)
+            {
+                _dialogService.ShowInfo("没有生成任何改名预览项。");
+                return null;
+            }
+
+            return previewItems;
+        }
+
+        /// <summary>
+        /// 「生成改名预览」那条日志的正文（**唯一构造处**，纯函数便于直接断言）。
+        ///
+        /// <para>形态：</para>
+        /// <list type="bullet">
+        /// <item><description>一条：<c>生成改名预览：操作=FixByDetectedFormat，目标后缀=.zip（1 项：整包.mp4 → 整包.zip），删除数量=1</c></description></item>
+        /// <item><description>多条同目标：<c>…目标后缀=.zip（3 项），删除数量=1</c></description></item>
+        /// <item><description>多条不同目标：<c>…目标后缀=.zip（2 项）、.rar（1 项），删除数量=1</c></description></item>
+        /// <item><description>一条都没有：<c>…没有生成任何预览项（删除数量=1）</c></description></item>
+        /// </list>
+        ///
+        /// <para>
+        /// 后缀一律取自 <see cref="RenamePreviewItem.NewFileName"/>：那才是执行时会落到磁盘上的东西。
+        /// 生成失败 / 认不出目标的那一条写「（未知）」而不是拿原后缀冒充（日志里的数字宁可没有，
+        /// 也不能是编的 —— 与预览统计的同一口径）。
+        /// </para>
+        /// </summary>
+        internal static string BuildRenamePreviewLog(
+            RenameOptions? options,
+            IReadOnlyList<RenamePreviewItem>? items)
+        {
+            string operation = options?.OperationType ?? string.Empty;
+            int deleteCount = options?.DeleteExtensionCount ?? 0;
+
+            if (items == null || items.Count == 0)
+            {
+                return $"生成改名预览：操作={operation}，没有生成任何预览项（删除数量={deleteCount}）";
+            }
+
+            // 按"出现的先后顺序"分组：日志读起来与预览表的顺序一致（先看到的那一类排前面）。
+            var extensionCounts = new List<KeyValuePair<string, int>>();
+
+            foreach (RenamePreviewItem item in items)
+            {
+                string extension = ResolveTargetExtension(item);
+                int index = extensionCounts.FindIndex(pair =>
+                    string.Equals(pair.Key, extension, StringComparison.OrdinalIgnoreCase));
+
+                if (index >= 0)
+                {
+                    extensionCounts[index] = new KeyValuePair<string, int>(
+                        extensionCounts[index].Key,
+                        extensionCounts[index].Value + 1);
+                }
+                else
+                {
+                    extensionCounts.Add(new KeyValuePair<string, int>(extension, 1));
+                }
+            }
+
+            string targets = string.Join(
+                "、",
+                extensionCounts.Select(pair => $"{pair.Key}（{pair.Value} 项）"));
+
+            // 只有一条时顺手把"谁改成谁"写出来：这正是用户在真机上想看到的那一句。
+            string detail = items.Count == 1
+                ? $"（1 项：{items[0].OriginalFileName} → {items[0].NewFileName}）"
+                : string.Empty;
+
+            string targetText = items.Count == 1
+                ? targets.Replace("（1 项）", detail, StringComparison.Ordinal)
+                : targets;
+
+            return $"生成改名预览：操作={operation}，目标后缀={targetText}，删除数量={deleteCount}";
+        }
+
+        /// <summary>
+        /// 一条预览项的**真实目标后缀**（缺陷 2 的判据）：从新文件名里取，取不到就说取不到。
+        /// </summary>
+        private static string ResolveTargetExtension(RenamePreviewItem item)
+        {
+            string newName = item.NewFileName;
+
+            if (string.IsNullOrWhiteSpace(newName))
+            {
+                return "（未知）";
+            }
+
+            string extension = Path.GetExtension(newName);
+
+            return string.IsNullOrWhiteSpace(extension) ? "（无后缀）" : extension;
         }
 
         private static string NormalizeUserExtension(string? extension)
