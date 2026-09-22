@@ -213,7 +213,25 @@ namespace ArchiveFixer.Tests
 
         public const string AppDialogWindowName = "自绘对话框 AppDialogWindow";
 
-        public static UiProbeReport Run(Action<string> log, string workRoot)
+        /// <param name="onProbeThread">
+        /// 可选前置钩子，**在探针那条 STA 线程上**、创建任何窗口之前执行。
+        ///
+        /// <para>
+        /// 为什么必须在这条线程上：WPF 的绑定跟踪（<c>PresentationTraceSources</c>）是**按线程**生效的，
+        /// 想收集"某个绑定路径找不到成员"这类**运行时**错误，监听器必须装在真正创建窗口的那条线程上
+        /// （见 <c>UiBindingReachabilityTests</c>）。钩子抛异常只记一行，不影响本用例既有结论。
+        /// </para>
+        /// </param>
+        /// <param name="inspectMain">
+        /// 可选：主窗口**显示完成之后**在探针线程上执行的检查（勾选框的单击行为、
+        /// 汇总是否跟着变之类只能对着真实可视树验的事）。抛异常即为用例失败（会被记进
+        /// <see cref="UiProbeReport.FailureText"/>）。
+        /// </param>
+        public static UiProbeReport Run(
+            Action<string> log,
+            string workRoot,
+            Action? onProbeThread = null,
+            Action<MainWindow, MainViewModel>? inspectMain = null)
         {
             var report = new UiProbeReport();
             var finished = new ManualResetEventSlim(false);
@@ -226,7 +244,7 @@ namespace ArchiveFixer.Tests
                     {
                         try
                         {
-                            ShowEverything(report, log, workRoot);
+                            ShowEverything(report, log, workRoot, onProbeThread, inspectMain);
                         }
                         catch (Exception ex)
                         {
@@ -268,7 +286,12 @@ namespace ArchiveFixer.Tests
             return report;
         }
 
-        private static void ShowEverything(UiProbeReport report, Action<string> log, string workRoot)
+        private static void ShowEverything(
+            UiProbeReport report,
+            Action<string> log,
+            string workRoot,
+            Action? onProbeThread = null,
+            Action<MainWindow, MainViewModel>? inspectMain = null)
         {
             /*
              * 同一进程里再建一个 Application 会抛"只能有一个 Application 实例"。
@@ -276,6 +299,16 @@ namespace ArchiveFixer.Tests
              * 免得某个断言中途失败留下半死状态，把后面所有用例都带崩。
              */
             ApplicationStash.RestoreNull();
+
+            if (ApplicationStash.LiveInstanceFieldCount() > 0)
+            {
+                report.SkipReason =
+                    "上一轮 WPF 宿主没有收干净（Application 静态字段仍非空），本轮不再重复创建 —— "
+                    + "避免把「宿主残留」误报成「窗口显示不了」。";
+
+                log("· " + report.SkipReason);
+                return;
+            }
 
             // 与真实启动同一套资源：App.xaml 里的画刷/样式/转换器都挂在 Application.Resources 上，
             // 没有它连 MainWindow 都解析不出来（StaticResource 找不到）。
@@ -287,6 +320,19 @@ namespace ArchiveFixer.Tests
 
             try
             {
+                /*
+                 * 前置钩子（可选）：给"绑定可达性"用例一个在**本线程**、**任何窗口之前**装监听器的位置。
+                 * 它抛异常只记一行 —— 别的用例的结论不该被它带崩。
+                 */
+                try
+                {
+                    onProbeThread?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    log("· 探针前置钩子失败（不影响本用例结论）：" + ex.Message);
+                }
+
                 // ① 对照组：空白窗口。连它都显示不出来 → 这台机器（当前会话）显示不了窗口，跳过而不是误报。
                 if (!TryShowControlWindow(log, out string controlFailure))
                 {
@@ -310,6 +356,9 @@ namespace ArchiveFixer.Tests
 
                 ShowAndRecord(main, MainWindowName, report, owner: null);
 
+                // 主窗口已经在屏幕上（离屏）并且布局跑完了：这时才轮到"对着真实可视树"的检查。
+                inspectMain?.Invoke(main, viewModel);
+
                 try
                 {
                     /*
@@ -326,9 +375,7 @@ namespace ArchiveFixer.Tests
                         main);
 
                     ShowAndRecord(
-                        new PasswordListWindow(new PasswordListViewModel(
-                            new PasswordService { DataRootDirectory = Path.Combine(workRoot, "data") },
-                            new DialogService())),
+                        new PasswordListWindow(BuildPasswordListViewModel(workRoot)),
                         PasswordListWindowName,
                         report,
                         main);
@@ -485,7 +532,48 @@ namespace ArchiveFixer.Tests
             };
 
             viewModel.Tasks.Add(task);
+
+            /*
+             * 再多两行：勾选框的"一次点击即生效"、以及全选 / 全不选 / 反选
+             * （用户 2026-09-22 追加需求）都只有在**多行**时才验得动 ——
+             * 一行时"全选"和"全不选"看起来永远是对的。
+             */
+            for (int i = 2; i <= 3; i++)
+            {
+                string extraPath = Path.Combine(sourceDirectory, $"整包{i}.7z");
+
+                File.WriteAllBytes(extraPath, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C });
+
+                viewModel.Tasks.Add(new ArchiveTask(extraPath, i)
+                {
+                    IsSelected = true,
+                    IsArchive = true,
+                    DetectedFormat = "7Z",
+                    SuggestedExtension = ".7z",
+                    ExtensionStatus = StatusText.ExtensionNormal,
+                    Status = StatusText.Recognized,
+                    OutputPath = Path.Combine(workRoot, "out")
+                });
+            }
+
             viewModel.UpdateSummary();
+        }
+
+        /// <summary>
+        /// 密码列表窗口的 ViewModel，**带一条真密码**。
+        ///
+        /// 为什么必须带数据：密码表格只有存在行的时候才会实例化单元格模板 ——
+        /// 空列表下 <c>MaskedValue</c> / <c>LengthText</c> / <c>Source</c> / <c>Remark</c>
+        /// 这几条绑定根本不会被求值，"绑定名写错了"就永远抓不到（正是本文件注释里
+        /// 说的"没有内容时模板不会被实例化"那件事）。
+        /// </summary>
+        private static PasswordListViewModel BuildPasswordListViewModel(string workRoot)
+        {
+            var service = new PasswordService { DataRootDirectory = Path.Combine(workRoot, "data") };
+
+            service.AddPassword("探针占位密码");
+
+            return new PasswordListViewModel(service, new DialogService());
         }
 
         /// <summary>用真 <see cref="RenameService"/> 生成两条预览项（改名预览窗口的模板要有东西可显示）。</summary>
@@ -549,24 +637,97 @@ namespace ArchiveFixer.Tests
     /// </summary>
     internal static class ApplicationStash
     {
+        /// <summary>
+        /// "本 AppDomain 已经创建过 Application"那个守卫字段的名字（<c>static bool</c>）。
+        ///
+        /// <para>
+        /// 怎么找到它的：把 <c>Application</c> 无参构造函数的 IL 打出来看 <c>ldsfld</c>/<c>stsfld</c>，
+        /// 结论是 —— 唯一性守卫看的是 <b><c>_appCreatedInThisAppDomain</c></b>（创建时置 true、**从不复位**），
+        /// 而不是 <c>_appInstance</c>。所以"把 <c>Application.Current</c> 置空"永远不可能让
+        /// 第二个 <c>new Application()</c> 成功 —— 这正是"单跑全绿、全量跑就报
+        /// 『不能在同一 AppDomain 中创建多个 Application 实例』"的根因。
+        /// </para>
+        /// </summary>
+        private const string AppCreatedFlagName = "_appCreatedInThisAppDomain";
+
+        /// <summary>
+        /// 把 <c>Application</c> 的进程级静态状态还原成"这个进程还没建过 Application"。
+        ///
+        /// <para>
+        /// 两件事都要做，缺一不可：
+        /// ① 置空全部 <c>Application</c> 类型的私有静态字段（<c>_appInstance</c>）——
+        ///    否则 <c>Application.Current</c> 一直是那个已经关掉的实例；
+        /// ② 把"本 AppDomain 建过 Application"的布尔守卫复位 —— 否则**第二个**要离屏显示窗口的
+        ///    用例必然抛"不能在同一 AppDomain 中创建多个 Application 实例"。
+        /// </para>
+        /// <para>
+        /// ⚠ 不许写"已经是 null 就直接返回"这种提前退出：实测存在
+        /// <c>Application.Current == null</c> 而守卫字段仍为 true 的状态，提前退出会把它原样留下。
+        /// </para>
+        /// <para>
+        /// 这一段是**测试宿主**的事，与产品代码无关（真实进程里本来也只建一次 Application）。
+        /// </para>
+        /// </summary>
         public static void RestoreNull()
         {
-            if (Application.Current == null)
+            IEnumerable<FieldInfo> fields = typeof(Application)
+                .GetFields(BindingFlags.NonPublic | BindingFlags.Static);
+
+            foreach (FieldInfo field in fields)
             {
-                return;
+                try
+                {
+                    if (field.FieldType == typeof(Application))
+                    {
+                        field.SetValue(null, null);
+                    }
+                    else if (field.FieldType == typeof(bool) &&
+                             string.Equals(field.Name, AppCreatedFlagName, StringComparison.Ordinal))
+                    {
+                        field.SetValue(null, false);
+                    }
+                }
+                catch
+                {
+                    // readonly / 置空失败就交给调用方的断言去报（不在这里吞掉结论）。
+                }
+            }
+        }
+
+        /// <summary>
+        /// 宿主是否还有残留（诊断用：任何 Application 静态字段非空、或"建过 Application"的守卫仍为 true）。
+        /// </summary>
+        public static int LiveInstanceFieldCount()
+        {
+            int count = 0;
+
+            foreach (FieldInfo field in typeof(Application)
+                         .GetFields(BindingFlags.NonPublic | BindingFlags.Static))
+            {
+                if (field.FieldType == typeof(Application) && SafeGet(field) != null)
+                {
+                    count++;
+                }
+                else if (field.FieldType == typeof(bool) &&
+                         string.Equals(field.Name, AppCreatedFlagName, StringComparison.Ordinal) &&
+                         SafeGet(field) is true)
+                {
+                    count++;
+                }
             }
 
-            FieldInfo? field = typeof(Application)
-                .GetFields(BindingFlags.NonPublic | BindingFlags.Static)
-                .FirstOrDefault(candidate => candidate.FieldType == typeof(Application));
+            return count;
+        }
 
+        private static object? SafeGet(FieldInfo field)
+        {
             try
             {
-                field?.SetValue(null, null);
+                return field.GetValue(null);
             }
             catch
             {
-                // 置空失败就交给调用方的断言去报（不在这里吞掉结论）。
+                return null;
             }
         }
     }

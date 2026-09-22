@@ -318,6 +318,40 @@ namespace ArchiveFixer.ViewModels
             return true;
         }
 
+        /// <summary>
+        /// 外部工具路径的校验（**必须在保存前过这一关**）。
+        ///
+        /// <para>
+        /// 为什么不能"先存下来再警告"：<see cref="AppSettings.Normalize"/> 对**不存在的**工具路径
+        /// 的处理是**直接清空**（以免留一个失效路径让整个程序找不到引擎）。于是"填了一个不存在的路径
+        /// → 点保存 → 看到『设置已保存』→ 关窗"这条路上，用户填的路径被静默丢掉了：
+        /// 下次打开设置那一格是空的、真正用的是内置的那一份，而用户以为自己在用自己的那个版本。
+        /// </para>
+        /// <para>
+        /// 校验口径与缓存根目录一致：**拦在保存之前**，停在设置窗口里说清"填的这个文件不存在"
+        /// 以及"留空是什么行为"，改完再保存。检验的是"文件存不存在"，不是"它是不是 7z" ——
+        /// 后者由 <c>ToolLocator</c> / 引擎自己判定，这里越权猜只会误伤。
+        /// </para>
+        /// </summary>
+        public static bool ValidateToolExePath(string? path, string label, string emptyHint, out string message)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                message = string.Empty;
+                return true;
+            }
+
+            if (File.Exists(path.Trim()))
+            {
+                message = string.Empty;
+                return true;
+            }
+
+            message = $"{label}指向的文件不存在：{path.Trim()}。" +
+                      $"请改成一个真实存在的文件，或者清空这一格 —— {emptyHint}";
+            return false;
+        }
+
         /// <summary>当前落点的一句话说明 + 具体例子。</summary>
         public string OutputPlacementSummary => OutputPlacementSummaryConverter.Describe(
             Settings.ExtractToOriginalDirectory,
@@ -442,6 +476,33 @@ namespace ArchiveFixer.ViewModels
                 if (!ValidateCacheRootDirectory(Settings.CacheRootDirectory, out string cacheMessage))
                 {
                     Message = "设置未保存：" + cacheMessage;
+                    return;
+                }
+
+                /*
+                 * 两条外部工具路径同样**拦在保存之前**。
+                 *
+                 * 为什么必须拦：Normalize() 会把"文件不存在"的工具路径直接清空，
+                 * 于是"填错路径 → 保存 → 看到『设置已保存』"是一条**静默丢弃用户输入**的路
+                 * （见 ValidateToolExePath 的注释）。宁可停在窗口里说清楚，也不要假装保存成功。
+                 */
+                if (!ValidateToolExePath(
+                        Settings.CustomSevenZipExePath,
+                        "7z.exe 路径",
+                        "留空表示用程序目录下内置的 tools\\7zip\\7z.exe。",
+                        out string sevenZipMessage))
+                {
+                    Message = "设置未保存：" + sevenZipMessage;
+                    return;
+                }
+
+                if (!ValidateToolExePath(
+                        Settings.CustomUnRarExePath,
+                        "UnRAR.exe 路径",
+                        "留空表示自动解析：先找本机已装 WinRAR 目录里的 UnRAR.exe，再退回程序内置的 tools\\unrar\\UnRAR.exe。",
+                        out string unRarMessage))
+                {
+                    Message = "设置未保存：" + unRarMessage;
                     return;
                 }
 

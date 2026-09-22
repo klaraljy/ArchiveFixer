@@ -276,7 +276,10 @@ namespace ArchiveFixer.Engines
                     -1,
                     string.Empty,
                     string.Empty,
-                    IsAvailable ? StatusText.ExtractFailed : StatusText.SevenZipMissing,
+                    // ⚠ 这里**不是**"7z 不存在"：判据是"任一引擎都不可用"（IsAvailable = 任一可用）。
+                    // 默认优先级 UnRAR → 7-Zip，用户完全可能只缺 UnRAR；写「7z不存在」会把人引去
+                    // 修一个本来没问题的 7z 目录。两种状态分开见 Models/StatusText.cs（§7 三处同改）。
+                    IsAvailable ? StatusText.ExtractFailed : StatusText.NoEngineAvailable,
                     message,
                     EngineErrorTypes.EngineUnavailable,
                     TimeSpan.Zero);

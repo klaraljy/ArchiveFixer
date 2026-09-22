@@ -169,9 +169,11 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 **代码风格**：沿用既有风格（4 空格缩进、私有字段 `_camelCase`、`Nullable` + `ImplicitUsings` 开启）。
 注释写**为什么**（尤其"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
 
-**验证状态（2026-09-21）**：`dotnet build` 0 错误（4 个既有 `CS8600` 警告）；
-`dotnet test` 343 通过 / 0 失败；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
-改动代码后这三条都要重新跑；格式差异用 `dotnet format whitespace ArchiveFixer.slnx` 修，不要手工对齐。
+**验证状态（2026-09-22）**：`dotnet build` **0 错误 0 警告**；
+`dotnet test` **1174 通过 / 0 失败 / 0 跳过**（连续 4 次全量一致）；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
+改动代码后这三条都要重新跑；**长活（构建/全量测试）放后台任务**，别阻塞干等（全局 §作业模式 规矩 23）；
+格式差异用 `dotnet format whitespace ArchiveFixer.slnx` 修，不要手工对齐。
+> ⚠️ 这条数字**只在这里写一次**：README 等项目文档要报数字就从这里抄，别再各写一份（历史上因此互相矛盾过）。
 
 ---
 
@@ -211,7 +213,9 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 
 - 所有界面状态字符串统一引用 `Models/StatusText.cs` 常量，**禁止手写中文字面量**
   （08-09 已收敛 277 处；再散落回去会让统计/配色/状态机静默不一致）。
-- 失败分类沿用既有中文口径：`密码错误 / 文件损坏 / 权限不足 / 输出路径冲突 / 分卷缺失 / 路径过长 / 7z不存在 / 已取消 / 未知错误`。
+- 失败分类沿用既有中文口径：`密码错误 / 文件损坏 / 权限不足 / 输出路径冲突 / 分卷缺失 / 路径过长 / 已取消 / 未知错误`，
+  以及引擎与密码相关的：`7z不存在` / **`没有可用的解压引擎`**（7z 与 UnRAR 都不可用时用它；**别再用「7z不存在」表示"一个引擎都没有"**）、
+  `文件名已加密` / `达到密码尝试上限` / `长时间无响应`（最后一条是**提示文案不是状态**）。
 - 新增状态必须同时更新 `StatusText` + `StatusToBrushConverter` + `TaskSummaryService`，三处缺一不可。
 - **统计不得依赖中文文案比较**：`Status` 需要能被机器判定（新增 `TaskState` 枚举并把中文留给显示层）。
 

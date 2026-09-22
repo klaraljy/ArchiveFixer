@@ -371,6 +371,9 @@ namespace ArchiveFixer.Services
                 StatusText.VolumeMissing or
                 StatusText.PathTooLong or
                 StatusText.SevenZipMissing or
+                // "一个引擎都没找到"：与"7z不存在"同一侧（这一单没拿到产物），但**文案不同** ——
+                // 默认优先级是 UnRAR → 7-Zip，用户可能只缺其中一个，提示里要说"任装其一"。
+                StatusText.NoEngineAvailable or
                 StatusText.UnknownError or
                 StatusText.PasswordAttemptLimitReached;
         }
@@ -648,6 +651,8 @@ namespace ArchiveFixer.Services
                 StatusText.VolumeMissing or
                 StatusText.PathTooLong or
                 StatusText.SevenZipMissing or
+                // 一个引擎都没找到：必须进失败清单（用户唯一的行动线索就在这里）。
+                StatusText.NoEngineAvailable or
                 StatusText.PasswordAttemptLimitReached or
                 // 部分完成是"没做完"，必须进失败清单（不变量 6：不得显示成成功）。
                 StatusText.PartiallyCompleted or

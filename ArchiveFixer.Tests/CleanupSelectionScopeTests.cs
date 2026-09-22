@@ -25,8 +25,13 @@ namespace ArchiveFixer.Tests
     /// 日志还写着"没有选中任务，已取消" —— 把人往"是不是没勾上"的方向带。手动点中那一行它才工作。</para>
     ///
     /// <para><b>现在的语义</b>（<c>MainViewModel.ResolveCleanupTargets</c> 是唯一判定处）：
-    /// 有勾选 → 作用于勾选的那些（多任务逐个处理）；一个都没勾 → 退化为当前点中的那一行；
+    /// 有勾选 → 作用于勾选的那些；一个都没勾 → 退化为当前点中的那一行；
     /// 两者都没有 → 提示"请先勾选或点中一个任务"（与蓝字同一套词，且**用了哪一种必须写进日志**）。</para>
+    ///
+    /// <para><b>多任务合并确认（用户 2026-09-22 追加拍板）</b>：勾了 N 个任务时
+    /// **只弹一次确认**（以前每个任务各弹一次预览 + 一次确认，勾 5 个就是 5 次点击 ——
+    /// 用户原话"要合并成 1 次确认，不要有冗余操作"）。所以下面的等待条件从
+    /// "N 条『用户取消』"改成了"1 条『用户取消』+ 一个都没动"。</para>
     ///
     /// <para><b>安全</b>：删除执行器换成只记账、绝不碰磁盘的假件；而且本进程没有 WPF 宿主，
     /// 确认框一律降级成"未确认" → 流程停在删除之前。所以这一组用例**不会删掉任何东西**
@@ -64,7 +69,7 @@ namespace ArchiveFixer.Tests
         // ================================================================ ① 删除其余物
 
         [Fact]
-        public async Task 删除其余物_以勾选为准_勾选两个就逐个处理两个()
+        public async Task 删除其余物_以勾选为准_勾选两个只弹一次确认且两个都在范围里()
         {
             Harness harness = CreateHarness();
 
@@ -75,7 +80,11 @@ namespace ArchiveFixer.Tests
             // 当前行**故意**停在没勾选的那个上：必须以勾选为准，而不是被当前行带跑。
             harness.Vm.SelectedTask = notChecked;
 
-            await RunCleanupAsync(harness, harness.Vm.CleanProcessArtifactsCommand, expectedTaskCount: 2);
+            // ⚠ 相对计数：DialogService.FallbackLog 是**进程级**的，跨用例从不清空 ——
+            // 用绝对值断言"只弹了一次"会被前面任何一条用例污染（全量跑才红）。
+            int confirmDialogsBefore = CountFallbackEntries("ShowDestructiveConfirmWithOption");
+
+            await RunCleanupAsync(harness, harness.Vm.CleanProcessArtifactsCommand);
 
             List<string> logs = Snapshot(harness);
 
@@ -84,6 +93,19 @@ namespace ArchiveFixer.Tests
             Assert.Contains(logs, line => line.Contains("（222.7z）", StringComparison.Ordinal));
             Assert.Contains(logs, line => line.Contains("（333.7z）", StringComparison.Ordinal));
             Assert.DoesNotContain(logs, line => line.Contains("444.7z", StringComparison.Ordinal));
+
+            /*
+             * 合并确认（用户 2026-09-22 的口径）：整批**只弹一次**确认框，
+             * 而且那一次里要同时看得到两个任务各自的作用范围。
+             */
+            Assert.Equal(confirmDialogsBefore + 1, CountFallbackEntries("ShowDestructiveConfirmWithOption"));
+
+            string confirm = LastFallbackEntry("ShowDestructiveConfirmWithOption");
+
+            Assert.Contains("2 个任务", confirm, StringComparison.Ordinal);
+            Assert.Contains("222.7z", confirm, StringComparison.Ordinal);
+            Assert.Contains("333.7z", confirm, StringComparison.Ordinal);
+            Assert.DoesNotContain("444.7z", confirm, StringComparison.Ordinal);
 
             // 没通过确认 → 一个字节都没动（假执行器连调用都不该收到）。
             Assert.Empty(harness.Executor.RecycleCalls);
@@ -100,13 +122,23 @@ namespace ArchiveFixer.Tests
 
             harness.Vm.SelectedTask = currentRow;
 
-            await RunCleanupAsync(harness, harness.Vm.CleanProcessArtifactsCommand, expectedTaskCount: 1);
+            int confirmDialogsBefore = CountFallbackEntries("ShowDestructiveConfirmWithOption");
+
+            await RunCleanupAsync(harness, harness.Vm.CleanProcessArtifactsCommand);
 
             List<string> logs = Snapshot(harness);
 
             Assert.Contains(logs, line => line.Contains("没有勾选任何任务，按当前点中的那一行处理", StringComparison.Ordinal)
                                           && line.Contains("222.7z", StringComparison.Ordinal));
             Assert.DoesNotContain(logs, line => line.Contains("333.7z", StringComparison.Ordinal));
+
+            // 单个任务时确认框仍然只有一次，而且格式与合并之前逐字节一致
+            //（同样是相对计数：FallbackLog 是进程级共享的）。
+            Assert.Equal(confirmDialogsBefore + 1, CountFallbackEntries("ShowDestructiveConfirmWithOption"));
+            Assert.DoesNotContain(
+                "本次只确认这一次",
+                LastFallbackEntry("ShowDestructiveConfirmWithOption"),
+                StringComparison.Ordinal);
         }
 
         [Fact]
@@ -119,7 +151,9 @@ namespace ArchiveFixer.Tests
 
             DialogService.ClearFallbackLog();
 
-            await RunCleanupAsync(harness, harness.Vm.CleanProcessArtifactsCommand, expectedTaskCount: 0);
+            int confirmDialogsBefore = CountFallbackEntries("ShowDestructiveConfirmWithOption");
+
+            await RunCleanupAsync(harness, harness.Vm.CleanProcessArtifactsCommand, expectConfirmDialog: false);
 
             List<string> logs = Snapshot(harness);
 
@@ -132,6 +166,9 @@ namespace ArchiveFixer.Tests
 
             // 旧文案"请先在列表里选中一个任务"会让人以为勾选没用 —— 它必须消失。
             Assert.DoesNotContain("请在列表里选中", warning, StringComparison.Ordinal);
+
+            // 根本不该走到确认框（没有目标）。
+            Assert.Equal(confirmDialogsBefore, CountFallbackEntries("ShowDestructiveConfirmWithOption"));
 
             Assert.Empty(harness.Executor.RecycleCalls);
         }
@@ -149,7 +186,7 @@ namespace ArchiveFixer.Tests
 
             DialogService.ClearFallbackLog();
 
-            await RunCleanupAsync(harness, harness.Vm.CleanAllProcessArtifactsCommand, expectedTaskCount: 1);
+            await RunCleanupAsync(harness, harness.Vm.CleanAllProcessArtifactsCommand);
 
             List<string> logs = Snapshot(harness);
 
@@ -213,7 +250,7 @@ namespace ArchiveFixer.Tests
 
             harness.Vm.SelectedTask = third;
 
-            await RunCleanupAsync(harness, harness.Vm.CleanEmptyFoldersCommand, expectedTaskCount: 2);
+            await RunCleanupAsync(harness, harness.Vm.CleanEmptyFoldersCommand);
 
             List<string> logs = Snapshot(harness);
 
@@ -237,7 +274,7 @@ namespace ArchiveFixer.Tests
 
             harness.Vm.SelectedTask = second;
 
-            await RunCleanupAsync(harness, harness.Vm.CleanEmptyFoldersCommand, expectedTaskCount: 1);
+            await RunCleanupAsync(harness, harness.Vm.CleanEmptyFoldersCommand);
 
             List<string> logs = Snapshot(harness);
 
@@ -417,6 +454,156 @@ namespace ArchiveFixer.Tests
             Assert.Equal(3, MainViewModel.ExpandCleanupTargets(selection, everythingInDirectory: false).Count);
         }
 
+        // ================================================================ ⑥ 合并确认（用户 2026-09-22 拍板）
+
+        [Fact]
+        public void 多任务合并成一次确认_正文逐个列出作用范围与合计()
+        {
+            var first = new ArchiveTask(@"C:\t\222.7z", 1) { OutputPath = @"C:\t\out\222" };
+            var second = new ArchiveTask(@"C:\t\333.7z", 2) { OutputPath = @"C:\t\out\333" };
+
+            var plans = new List<MainViewModel.CleanupTaskPlan>
+            {
+                new()
+                {
+                    Task = first,
+                    Preview = new CleanupPreview
+                    {
+                        Scope = CleanupScope.Artifacts,
+                        ScopePath = @"C:\t\out\222\其余物",
+                        HasTarget = true,
+                        ItemCount = 2,
+                        EntryCount = 5,
+                        TotalBytes = 1000,
+                        Determined = true,
+                        SourcePackageCount = 1,
+                        SourcePackageNames = new[] { "222.7z" }
+                    }
+                },
+                new()
+                {
+                    Task = second,
+                    Preview = new CleanupPreview
+                    {
+                        Scope = CleanupScope.Artifacts,
+                        ScopePath = @"C:\t\out\333\其余物",
+                        HasTarget = true,
+                        ItemCount = 3,
+                        EntryCount = 7,
+                        TotalBytes = 2000,
+                        Determined = true
+                    }
+                }
+            };
+
+            CleanupPreview merged = MainViewModel.MergeCleanupPreviews(CleanupScope.Artifacts, plans);
+
+            // 合计：条目数与字节数相加；作用范围不止一个目录时不再假装是一个。
+            Assert.Equal(5, merged.ItemCount);
+            Assert.Equal(12, merged.EntryCount);
+            Assert.Equal(3000, merged.TotalBytes);
+            Assert.Equal(1, merged.SourcePackageCount);
+
+            string text = MainViewModel.BuildCleanupConfirmText(
+                "删除其余物",
+                plans,
+                merged,
+                DeleteMode.RecycleBin);
+
+            // 一次性说清：哪几个任务、各自删哪个目录、合计多少、谁含源包（删了要重新下载）。
+            Assert.Contains("只确认这一次", text, StringComparison.Ordinal);
+            Assert.Contains("2 个任务", text, StringComparison.Ordinal);
+            Assert.Contains("222.7z", text, StringComparison.Ordinal);
+            Assert.Contains(@"C:\t\out\222\其余物", text, StringComparison.Ordinal);
+            Assert.Contains("333.7z", text, StringComparison.Ordinal);
+            Assert.Contains(@"C:\t\out\333\其余物", text, StringComparison.Ordinal);
+            Assert.Contains("顶层 5 项", text, StringComparison.Ordinal);
+            Assert.Contains("12 个条目", text, StringComparison.Ordinal);
+            Assert.Contains("3000 字节", text, StringComparison.Ordinal);
+            Assert.Contains("需要重新下载", text, StringComparison.Ordinal);
+
+            // 单个任务时保持旧格式（不多出一段清单）—— 老用户看到的字不该因为批处理而变。
+            string single = MainViewModel.BuildCleanupConfirmText(
+                "删除其余物",
+                new[] { plans[0] },
+                plans[0].Preview!,
+                DeleteMode.RecycleBin);
+
+            Assert.DoesNotContain("只确认这一次", single, StringComparison.Ordinal);
+            Assert.Contains("作用范围：", single, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 整批里单个任务失败_汇总如实分列成功与失败且不说全部成功()
+        {
+            var first = new ArchiveTask(@"C:\t\222.7z", 1);
+            var second = new ArchiveTask(@"C:\t\333.7z", 2);
+
+            var tally = new MainViewModel.BatchCleanupTally();
+
+            tally.Record(first, new CleanupOutcome
+            {
+                Attempted = true,
+                SuccessCount = 3,
+                FailureCount = 0,
+                FreedBytes = 0,
+                RecycledBytes = 4096,
+                Message = "移入回收站成功 3 项"
+            });
+
+            tally.Record(second, new CleanupOutcome
+            {
+                Attempted = true,
+                SuccessCount = 1,
+                FailureCount = 2,
+                FailureReasons = new[] { "文件被占用", "权限不足" },
+                Message = "移入回收站成功 1 项，失败 2 项"
+            });
+
+            // 有一项没删掉 → 整批不得显示成"全部成功"。
+            Assert.True(tally.HasAnyFailure);
+            Assert.Equal(1, tally.SucceededTaskCount);
+            Assert.Equal(1, tally.FailedTaskCount);
+            Assert.Equal(2, tally.FailedItemCount);
+
+            string summary = MainViewModel.BuildBatchCleanupSummary("删除其余物", DeleteMode.RecycleBin, 2, tally);
+
+            Assert.Contains("成功 1 个", summary, StringComparison.Ordinal);
+            Assert.Contains("失败 1 个", summary, StringComparison.Ordinal);
+            Assert.Contains("文件被占用", summary, StringComparison.Ordinal);
+            Assert.Contains("333.7z", summary, StringComparison.Ordinal);
+
+            // 只跑一个任务成功时：没有失败就不列"没删掉的原因"。
+            var clean = new MainViewModel.BatchCleanupTally();
+            clean.Record(first, new CleanupOutcome { Attempted = true, SuccessCount = 3, Message = "OK" });
+
+            Assert.False(clean.HasAnyFailure);
+            Assert.DoesNotContain(
+                "没删掉的原因",
+                MainViewModel.BuildBatchCleanupSummary("删除其余物", DeleteMode.RecycleBin, 1, clean),
+                StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 没有可删的目标时_合并成一条说明而不是每个任务弹一次()
+        {
+            var first = new ArchiveTask(@"C:\t\222.7z", 1);
+            var second = new ArchiveTask(@"C:\t\333.7z", 2);
+
+            var plans = new List<MainViewModel.CleanupTaskPlan>
+            {
+                new() { Task = first, SkipReason = "还没有输出目录（先解压一次）" },
+                new() { Task = second, SkipReason = "其余物目录里没有可删的东西" }
+            };
+
+            string text = MainViewModel.BuildNothingToCleanText("删除其余物", plans);
+
+            Assert.Contains("2 个任务都没有可删的东西", text, StringComparison.Ordinal);
+            Assert.Contains("222.7z", text, StringComparison.Ordinal);
+            Assert.Contains("333.7z", text, StringComparison.Ordinal);
+            Assert.Contains("先解压一次", text, StringComparison.Ordinal);
+        }
+
         // ================================================================ 装配
 
         private sealed class Harness
@@ -559,12 +746,18 @@ namespace ArchiveFixer.Tests
         /// 跑一次清理命令并等它结束。
         ///
         /// <c>AsyncRelayCommand.Execute</c> 是 <c>async void</c>，拿不到 Task，所以按日志等：
-        /// 每个被处理的任务走到确认框都会留一条"用户取消"（本进程没有 WPF 宿主，确认一律降级为未确认）。
+        /// 走到（唯一那一次）确认框时就会留一条"用户取消"（本进程没有 WPF 宿主，确认一律降级为未确认）。
+        ///
+        /// <para>
+        /// ⚠ 多任务现在是**一次**确认，所以这里不再按"处理了几个任务"计数 ——
+        /// 改成等"出现了取消日志 + 不再忙"。<paramref name="expectConfirmDialog"/> 为 false 时
+        /// 表示这次根本不该走到确认框（没有可删的目标），只等"不忙 + 有一条结果日志"。
+        /// </para>
         /// </summary>
         private static async Task RunCleanupAsync(
             Harness harness,
             System.Windows.Input.ICommand command,
-            int expectedTaskCount)
+            bool expectConfirmDialog = true)
         {
             Assert.True(command.CanExecute(null), "命令在空闲状态下必须可点");
 
@@ -573,11 +766,20 @@ namespace ArchiveFixer.Tests
             await WaitUntilAsync(
                 () =>
                 {
+                    if (harness.Vm.IsBusy)
+                    {
+                        return false;
+                    }
+
+                    if (!expectConfirmDialog)
+                    {
+                        // 没有目标时：应当出现"请先勾选或点中"或"都没有可删的"这一类结论。
+                        return CountFallbackEntries("ShowWarning") + CountFallbackEntries("ShowInfo") > 0;
+                    }
+
                     List<string> logs = Snapshot(harness);
 
-                    int confirmed = logs.Count(line => line.Contains("用户取消，没有删除任何东西", StringComparison.Ordinal));
-
-                    return confirmed >= expectedTaskCount && !harness.Vm.IsBusy;
+                    return logs.Any(line => line.Contains("用户取消", StringComparison.Ordinal));
                 },
                 TimeSpan.FromSeconds(10));
         }
@@ -605,6 +807,12 @@ namespace ArchiveFixer.Tests
             {
                 return harness.Logs.ToList();
             }
+        }
+
+        /// <summary>某个对话框类型的降级记录条数（"只弹了一次"这类断言就靠它）。</summary>
+        private static int CountFallbackEntries(string context)
+        {
+            return DialogService.FallbackLog.Count(item => item.Contains("[" + context + "]", StringComparison.Ordinal));
         }
 
         /// <summary>取最近一条某个对话框的降级记录（无 UI 宿主时，提示正文就落在那里）。</summary>

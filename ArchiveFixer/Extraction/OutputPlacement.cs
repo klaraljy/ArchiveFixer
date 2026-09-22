@@ -452,57 +452,12 @@ namespace ArchiveFixer.Extraction
                 return string.Empty;
             }
 
-            return StripArchiveExtensions(StripVolumeMarkers(fileName));
-        }
-
-        /// <summary>
-        /// 剥掉末尾的分卷标记：<c>222.7z.001</c> → <c>222.7z</c>、<c>222.z01</c> → <c>222</c>、
-        /// <c>222.r00</c> → <c>222</c>、<c>222.part1.rar</c> → <c>222</c>。
-        ///
-        /// "什么算分卷标记"只留一份定义（<see cref="ExtensionHelper.IsVolumePartExtension"/>），
-        /// 这里只负责把它从名字尾部摘掉。
-        /// </summary>
-        private static string StripVolumeMarkers(string fileName)
-        {
-            string current = fileName;
-
-            // 连续的标记理论上只有 ".rar" 那一种组合，给 3 次机会足够，同时天然防死循环。
-            for (int guard = 0; guard < 3; guard++)
-            {
-                int lastDot = current.LastIndexOf('.');
-
-                if (lastDot <= 0)
-                {
-                    break;
-                }
-
-                string tail = current[(lastDot + 1)..];
-
-                if (ExtensionHelper.IsVolumePartExtension("." + tail))
-                {
-                    current = current[..lastDot];
-                    continue;
-                }
-
-                // xxx.part1.rar / xxx.001.rar：分卷段后面还挂着一个 .rar 尾巴。
-                // ⚠️ 这里必须要求分卷段前面**还有内容**（prevDot > 0）：否则 "222.rar" 里的 "222"
-                // 会被当成三位数字分卷段，整个名字被吃光。
-                if (tail.Equals("rar", StringComparison.OrdinalIgnoreCase))
-                {
-                    int previousDot = current.LastIndexOf('.', lastDot - 1);
-
-                    if (previousDot > 0
-                        && ExtensionHelper.IsVolumePartExtension("." + current[(previousDot + 1)..lastDot]))
-                    {
-                        current = current[..previousDot];
-                        continue;
-                    }
-                }
-
-                break;
-            }
-
-            return current;
+            /*
+             * 分卷标记这一层**转调 FileNameHelper.StripVolumeMarkers**（体检报告 §2 第 2 条）：
+             * 这里原来有一份与它逐字相同的 40 行副本。两份必须永远剥得一样 ——
+             * 归档基名与包基名对同一个包算出不同的名字，落点就会指到两个不同的目录。
+             */
+            return StripArchiveExtensions(FileNameHelper.StripVolumeMarkers(fileName));
         }
 
         /// <summary>

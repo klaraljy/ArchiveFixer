@@ -102,6 +102,9 @@ namespace ArchiveFixer.Converters
                 StatusText.PathTooLong or
                 StatusText.UnknownError or
                 StatusText.SevenZipMissing or
+                // "一个引擎都没找到"与"7z 不存在"分开：文案不同，但都是**这一单拿不到产物**，
+                // 所以同用错误色（与 TaskSummaryService 的"解压失败"桶一致，§7 三处同改）。
+                StatusText.NoEngineAvailable or
                 // 达到密码尝试上限也是"这一单没拿到产物"，和它的统计分桶（解压失败）保持一致用错误色；
                 // 与"密码错误"的区别写在状态文字里（上限 = 还没试完，别让用户以为密码本错了）。
                 StatusText.PasswordAttemptLimitReached or

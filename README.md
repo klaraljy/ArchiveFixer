@@ -9,7 +9,7 @@ Windows 桌面工具：批量识别**被改坏后缀**的归档文件、按真�
 |---|---|
 | 当前状态 | **M1–M5 全部里程碑完成**（里程碑定义见 `AGENTS.md` §10） |
 | 代码基线 | 2026-08-09 快照（原"第十一版"），2026-09-21 迁入本仓库 |
-| 验证 | `dotnet build ArchiveFixer.slnx`（Debug）**0 错误**；`dotnet test` **1065 通过 / 0 失败**；`dotnet format ArchiveFixer.slnx --verify-no-changes` 通过（本机最近一次实测；编译警告见「已知限制」最后一行） |
+| 验证 | `dotnet build ArchiveFixer.slnx`（Debug）**0 错误 0 警告**；`dotnet test` **1174 通过 / 0 失败**（本机最近一次实测，连续三次全量一致） |
 | 规则 | `AGENTS.md`（含用户明确指示，与其它文档冲突时以它为准） |
 | 需求 | `docs/需求书.md`（长期愿景，已冻结）/ `docs/需求变更.md`（只追加的变更日志） |
 
@@ -20,6 +20,11 @@ Windows 桌面工具：批量识别**被改坏后缀**的归档文件、按真�
 - **后缀分析**：后缀正常 / 缺失 / 不匹配 / 多重后缀疑似伪装 / **分卷后缀**（分卷单独归类，不会被误当成伪装）。
 - **批量改名**：智能修正、添加、替换、删除最后一个、删除多个 —— **一律先生成预览**，预览里可手工改新文件名。
   分卷文件受保护，不会被"智能修正"切断分卷链。
+- **任务列表的勾选（2026-09-22 按用户要求重做）**：**一次点击即切换**（勾选框铺满整格，点击这一列的任何地方都算；
+  以前点在格子空白处只会选中行，看起来"点了没反应"，得再点一次）；**全选 / 全不选 / 反选**按钮就在列表正上方，
+  菜单「文件」里也有一份，键盘是 `Ctrl+A` / `Ctrl+D` / `Ctrl+I`；右键还有「**只勾选这一个**」——
+  "一整个文件夹都被勾上了、这次只想解其中一个"从"逐个点掉"变成**一个动作**。
+  勾选一变，汇总里的「选中：N」与「只解压」的可用性立刻跟着走。
 - **分卷**：**一组分卷 = 一个任务**，只从第一卷启动；缺卷时直接报"缺哪几个"并拒绝开始。
   认五种命名：`.001` / `.z01` / `.r00` / `.partN.rar` / 本体（`x.zip`、`x.rar` 就是第一卷）。
 - **密码**：统一密码、单任务密码、密码本（**列表式**一行一个 + **映射式** `名称:密码`，按归档名命中）、
@@ -63,6 +68,12 @@ Windows 桌面工具：批量识别**被改坏后缀**的归档文件、按真�
   它只在「源包处理」选了 `KeepInPlace` 时的手动「只解压」路径上参与 —— 那是"传统解压器 + 解压后清理"
   的老组合，默认的 `MoveToRest` 档下它不参与，否则刚搬进 `其余物` 的源包会被立刻删掉；
   且只有"解压成功 + 校验通过"才删）；失败清单可复制或导出成 txt。
+- **其余物 / 空文件夹清理（多任务只问一次）**：勾了 N 个任务时**不再逐个弹预览 + 逐个确认**
+  （勾 5 个 = 5 次点击，用户明确说这是冗余）——先一次预览**全部**目标，合成**一个**确认框：
+  逐个列出**每个任务的作用范围（哪个目录）**、**合计**条目数 / 字节数、以及**哪些任务含源包**
+  （含就点名，删了要重新下载）；确认**一次**，默认移入回收站，勾「改为彻底删除」走激进档
+  （红色 + 二次确认，整批也只来这一次）；之后**逐个执行**，**单个任务失败不中断整批**，
+  最后给**一次**汇总：成功 N / 失败 M（各自原因）/ 释放字节数 —— 有任何一项没删掉就**不会**显示成全部成功。
 - **一键处理**：识别 → 修正伪装后缀（出一次预览确认）→ 按密码本解压 → **自动续解本轮新出现的内层包**
   （最多 3 轮；达到上限会明说"还有更深的内层包没解"）→ 一行汇总
   （成功 / 失败 / 跳过等分项**互斥且可加**，合计恒等于任务总数，不会一个任务被算两次）。
@@ -151,31 +162,45 @@ ArchiveFixer\bin\Release\net8.0-windows\ArchiveFixer.exe
 
 主要配置项：
 
-| 配置 | 说明 |
-|---|---|
-| `RecursiveScan` | 文件夹扫描是否递归 |
-| `ScanMode` | `ScanAllFiles` / `ScanKnownArchiveExtensions` / `ScanSuspiciousFiles` |
-| `UnknownFormatAction` | 未知格式：`MarkUnknown` / `Skip` / `TryExtract` |
-| `DefaultExtension` | 智能修正的默认目标后缀 |
-| `ExtractToOriginalDirectory` / `CustomOutputDirectory` / `KeepArchiveNameFolder` | 输出位置 |
-| **一键处理的「本次选项」面板**（不是配置键，是运行期覆盖） | 点「一键处理」时先弹**一次**：本次落点四选一 / 指定位置 / 终端落法 / 源包处理，四项默认值都取下面这些设置项的当前值。**不勾「把本次选择存为默认」时 `appsettings.json` 一个字节都不改**；勾了才写回（落点→上面三个键，终端落法→`TerminalLayoutMode`，源包处理→`SourceHandling`）。勾「以后不再询问」只在**本次运行**内生效（不写设置文件）。面板值只是运行期覆盖，路径仍由 `OutputPlacement` 唯一实现推导 |
-| `ConflictAction` / `OverwriteMode` | `ConflictAction` 管同名冲突（`Skip` / `Overwrite` / `AutoRename`（默认）/ `Ask`，解压落位与改名共用一档）。`Ask` 真的会问，而且两条路径都问：**解压落位**弹一次聚合询问；**改名冲突在预览表里逐条确认**（撞名的行出现「冲突选择（询问档）」下拉，没选不放行，也可点「冲突全部自动重命名」），**不选或直接关掉预览窗口都按保守档自动重命名，绝不覆盖**。`OverwriteMode` 是引擎侧的 7z 覆盖策略 |
-| `TestBeforeExtract` | 解压前是否先跑 `7z t`（默认关：开着会让"无密码的包"看起来像卡住） |
-| `TryEmptyPasswordFirst` / `UseGlobalPasswordForAllTasks` | 密码尝试策略 |
-| `MaxPasswordAttemptsPerLayer` | 每层最多试几个密码候选（默认 10，1~1000）；单层与递归内层共用同一个值，改完当场生效 |
-| `MaxParallelExtractCount` | 并发解压数（1~8，默认 1 = 串行）；**真的生效**，不是摆设。⚠ 它与 `LowProcessPriority` 是**两个互相独立的旋钮**，改一个不会动另一个 |
-| `LowProcessPriority` | **低运行优先级**（默认开）：让本程序与它启动的解压进程（`7z.exe`）让出 CPU / 磁盘优先级，解压时还让得开手；关掉跑得更快但更容易把桌面拖卡。**改完重启程序才生效**（启动时读一次） |
-| `OpenOutputFolderWhenDone` | **定稿完成后在资源管理器里打开输出目录**（默认关）。只在"定稿成功 + 输出校验通过"后打开；失败 / 取消不打开，整批只开一次。只打开文件夹，**不会**把程序窗口置前或最大化（`AGENTS.md` §13 同精神） |
-| `RestRemovalDefaultMode` | 「其余物 / 空文件夹」清理的**默认档**：`RecycleBin`（默认，可从回收站还原）/ `Permanent`（彻底删除）。只是确认框里那个勾选框的默认状态 —— 删除前**永远**先预览 + 确认，`Permanent` 还要二次确认；回收站不可用时一律不删 |
-| `ReportDangerousEntries` | **危险条目统计**（默认开）：在解压前那一遍条目预检里顺便数出 22 种可执行 / 脚本类后缀（`.exe/.scr/.com/.msi/.cpl/.bat/.cmd/.ps1/.vbs/.js/.hta/.lnk/.reg/.jar/.inf` 等），把"本包含 N 个可执行 / 脚本类条目（前几个列出名字，最多 5 个）"写进**任务详情窗口与失败清单**。**只提示、绝不阻断**（不跳过任何条目，落盘结果不变） |
-| `EnginePriority` | **引擎优先级**（默认 `["winrar","sevenzip"]`）。规则是**先按能力筛、再用优先级做 tiebreaker**，不可用的引擎直接跳过 —— 排第一但没装不会导致打不开包。界面只能上移/下移，不能在列表里删掉某个引擎；落盘的顺序就是生效顺序（设置窗口「保存」时立刻推给引擎层，不必重启） |
-| `CustomUnRarExePath` | 用户自选的 `UnRAR.exe` 路径（默认空 = 自动）。留空时的解析顺序：**用户自选 → 用户已装的 WinRAR 目录（只读其中的免费件 `UnRAR.exe`）→ 内置 `tools\unrar\`**。填了一个不存在的路径**不会**把后面两档吃掉（会如实回落到下一档并在设置窗口显示用的是哪一个） |
-| `KeepBrokenFiles` | **保留受损的文件**（默认关）：校验和错误的半成品**留不留**。⚠ 只对 RAR 引擎（UnRAR）生效 —— 7-Zip **没有** `-kb` 这个开关（实测 `Unknown switch: -kb`，退出码 7），它本来就保留半成品。⚠ 它与成败判定**无关**：留着半个文件仍然是"失败 / 部分完成"，绝不显示成功 |
-| `RecursionMode` / `MaxRecursionDepth` | 递归模式（默认 `SingleLayer`）与最大层数（1~10）；改完当场生效，不必重启 |
-| `CollectResultsToDirectory` / `CollectTargetDirectory` | 结果归集开关与目标目录 |
-| `SourceHandling` | 怎么处理源包：`MoveToRest`（默认，移入其余物）/ `KeepInPlace`（不动）/ `DeleteAfterVerify`（校验通过后删）。**一键处理与手动「只解压」读的是同一档**（用户 2026-09-22 版本二） |
-| `DeleteSourceAfterExtract` | 老的地基清理开关（默认关）：**只在 `SourceHandling = KeepInPlace` 的手动「只解压」路径上参与**，且只有"解压成功 + 校验通过"才删 |
-| `EnableSidecarPassword` | 从压缩包同目录的说明文件里提取密码候选（默认关） |
+> ⚠ **这张表是"配置 ↔ 界面 ↔ 行为"的对照**：每一项都标了**界面上有没有入口**。
+> 标「只能手改」的项在设置窗口里**没有**控件 —— 想调就得自己编辑 `data\appsettings.json`（改完重启程序）。
+> 反过来，界面上能改的每一项都**真的接了线**（2026-09-22 专项体检逐项核对过，见 `_tmp\ArchiveFixer\audit-ui.md`）。
+
+| 配置 | 界面入口 | 说明 |
+|---|---|---|
+| `RecursiveScan` | ✅ 扫描设置 | 文件夹扫描是否递归 |
+| `AutoScanAfterDrop` | ✅ 扫描设置 | 导入后是否**自动识别**。判据是**所有导入入口**（拖拽 / 添加文件 / 添加文件夹），不只拖拽；关掉后用菜单「文件 → 重新扫描」手动触发 |
+| `ScanMode` | ✅ 扫描设置 | `ScanAllFiles` / `ScanKnownArchiveExtensions` / `ScanSuspiciousFiles` |
+| `IncludeHiddenFiles` / `IncludeSystemFiles` | ⚠ 只能手改 | 是否把隐藏 / 系统属性的文件也纳入扫描（默认都不包含）。设置窗口没有这两项 |
+| `MaxFileSizeLimit` | ⚠ 只能手改 | 单文件大小上限，单位 **MB**（`0` = 不限制，默认）。超过上限的文件不进任务列表。设置窗口没有这一项 |
+| `UnknownFormatAction` | ✅ 识别设置 | 未知格式：`MarkUnknown` / `Skip` / `TryExtract` |
+| `DefaultExtension` | ✅ 识别设置 | 智能修正的默认目标后缀 |
+| `ExtractToOriginalDirectory` / `CustomOutputDirectory` / `KeepArchiveNameFolder` | ✅ 输出位置（四选一） | 输出位置。界面上是四选一的单选，落到设置里仍是这三个键（没有新增设置项） |
+| `TerminalLayoutMode` | ✅ 内容物最后那一层 | `KeepLastFolder`（默认）/ `UseArchiveName` |
+| `CollapseRepeatedFolderLayer` | ✅ 内容物最后那一层 | 场景 B 塌缩：`111\222\名字\名字.rar` → 产物落 `111\222\名字\`（默认开） |
+| **一键处理的「本次选项」面板**（不是配置键，是运行期覆盖） | ✅ 点「一键处理」时 | 点「一键处理」时先弹**一次**：本次落点四选一 / 指定位置 / 终端落法 / 源包处理，四项默认值都取下面这些设置项的当前值。**不勾「把本次选择存为默认」时 `appsettings.json` 一个字节都不改**；勾了才写回（落点→上面三个键，终端落法→`TerminalLayoutMode`，源包处理→`SourceHandling`）。勾「以后不再询问」只在**本次运行**内生效（不写设置文件）。面板值只是运行期覆盖，路径仍由 `OutputPlacement` 唯一实现推导 |
+| `ConflictAction` / `OverwriteMode` | ✅ 后缀与改名 / 解压与整理 | `ConflictAction` 管**同名冲突**（`Skip` / `Overwrite` / `AutoRename`（默认）/ `Ask`，解压落位与改名共用一档）。`Ask` 真的会问，而且两条路径都问：**解压落位**弹一次聚合询问；**改名冲突在预览表里逐条确认**（撞名的行出现「冲突选择（询问档）」下拉，没选不放行，也可点「冲突全部自动重命名」），**不选或直接关掉预览窗口都按保守档自动重命名，绝不覆盖**。`OverwriteMode` 是**引擎侧**的覆盖策略：`SkipExisting`（默认，7z `-aos` / UnRAR `-o-`）/ `OverwriteAll`（`-aoa` / `-o+`）/ `AutoRenameExtracted`（`-aou` / `-or`）/ `AutoRenameExisting`（**只有 7-Zip 有 `-aot`**；RAR 包默认走 UnRAR，它没有这一档，实际行为是「跳过已存在文件」—— 界面上已如实标注） |
+| `TestBeforeExtract` | ✅ 解压与整理 | 解压前是否先跑 `7z t`（默认关：开着会让"无密码的包"看起来像卡住） |
+| `TryEmptyPasswordFirst` / `UseGlobalPasswordForAllTasks` | ✅ 密码设置 / 主界面 | 密码尝试策略 |
+| `MaxPasswordAttemptsPerLayer` | ✅ 密码设置 | 每层最多试几个密码候选（默认 10，1~1000）；单层与递归内层共用同一个值，改完当场生效 |
+| `MaxParallelExtractCount` | ✅ 解压与整理 | 并发解压数（1~8，默认 1 = 串行）；**真的生效**，不是摆设。⚠ 它与 `LowProcessPriority` 是**两个互相独立的旋钮**，改一个不会动另一个 |
+| `LowProcessPriority` | ✅ 常规与性能 | **低运行优先级**（默认开）：让本程序与它启动的解压进程让出 CPU / 磁盘优先级。**改完重启程序才生效**（启动时读一次） |
+| `OpenOutputFolderWhenDone` | ✅ 解压与整理 | **定稿完成后在资源管理器里打开输出目录**（默认关）。只在"定稿成功 + 输出校验通过"后打开；失败 / 取消不打开，整批只开一次。只打开文件夹，**不会**把程序窗口置前或最大化（`AGENTS.md` §13 同精神） |
+| `RestRemovalDefaultMode` | ✅ 清理（不可逆） | 「其余物 / 空文件夹」清理的**默认档**：`RecycleBin`（默认，可从回收站还原）/ `Permanent`（彻底删除）。只是确认框里那个勾选框的默认状态 —— 删除前**永远**先预览 + 确认 |
+| `ReportDangerousEntries` | ✅ 解压与整理 | **危险条目统计**（默认开）：在解压前那一遍条目预检里顺便数出 **22 种**可执行 / 脚本类后缀，把"本包含 N 个可执行 / 脚本类条目"写进**任务详情窗口与失败清单**。**只提示、绝不阻断** |
+| `EnginePriority` | ✅ 引擎 | **引擎优先级**（默认 `["winrar","sevenzip"]`）。规则是**先按能力筛、再用优先级做 tiebreaker**，不可用的引擎直接跳过 —— 排第一但没装不会导致打不开包。界面只能上移/下移；落盘的顺序就是生效顺序（设置窗口「保存」时立刻推给引擎层，不必重启） |
+| `CustomSevenZipExePath` / `CustomUnRarExePath` | ✅ 高级设置 / 引擎 | 自选外部工具路径。**留空 = 自动**（7z：程序内置 `tools\7zip`；UnRAR：用户自选 → 已装 WinRAR 目录 → 内置 `tools\unrar`）。⚠ 填了一个**不存在**的文件时，保存会被拦下并说明改法（以前是"设置已保存"+ 静默丢弃这一格 —— 有测试钉住现在不会） |
+| `KeepBrokenFiles` | ✅ 引擎 | **保留受损的文件**（默认关）：校验和错误的半成品**留不留**。⚠ 只对 RAR 引擎（UnRAR）生效 —— 7-Zip **没有** `-kb` 这个开关（实测 `Unknown switch: -kb`，退出码 7），它本来就保留半成品。⚠ 它与成败判定**无关**：留着半个文件仍然是"失败 / 部分完成" |
+| `RecursionMode` / `MaxRecursionDepth` | ✅ 解压与整理 | 递归模式（默认 `SingleLayer`）与最大层数（1~10）；改完当场生效，不必重启 |
+| `CollectResultsToDirectory` / `CollectTargetDirectory` | ✅ 解压与整理 | 结果归集开关与目标目录 |
+| `SourceHandling` | ✅ 解压与整理 | 怎么处理源包：`MoveToRest`（默认，移入其余物）/ `KeepInPlace`（不动）/ `DeleteAfterVerify`（校验通过后删）。**一键处理与手动「只解压」读的是同一档**（用户 2026-09-22 版本二） |
+| `DeleteSourceAfterExtract` | ✅ 清理（不可逆） | 老的地基清理开关（默认关）：**只在 `SourceHandling = KeepInPlace` 的手动「只解压」路径上参与**，且只有"解压成功 + 校验通过"才删 |
+| `EnableSidecarPassword` | ✅ 密码设置 | 从压缩包同目录的说明文件里提取密码候选（默认关） |
+| `EnableLog` | ✅ 日志设置 | 是否往 `data\logs` 追加文件日志（默认开；屏幕日志不受影响） |
+| `RememberLastOutputDirectory` | ✅ 高级设置 | 启动时是否把上次的输出目录填回「当前输出位置」。⚠ 主窗口**没有**临时改输出目录的入口（输出位置只在设置里四选一），所以它的实际作用就是"要不要沿用上次那个自定义根" |
+| `CacheRootDirectory` | ✅ 高级设置 | 日志 / 临时 / 递归工作区 / 配置的根目录。留空 = 程序目录下的 `data`；**填了不能是 C 盘**（保存时会被拦下并说明改法） |
+| `PasswordBookPath` | ✅ 工具 → 导入密码本 | 上次导入的密码本路径，启动时若文件仍在就自动加载 |
+| `PreviewBeforeRename` | ⚠ 无（已从界面移除） | ⚠ **这个键不产生任何行为差异**：改名**永远**先预览（不变量 3），主流程恒为 `true`。留着只是因为 `RenameOptions.FromSettings` 还会读它；将来连同它一起删 |
 
 ## 目录结构
 
@@ -234,7 +259,7 @@ pwsh -File samples/generate-samples.ps1        # 生成到 samples/generated/（
 | 无源文件变化检测 | 任务开始时记录快照、处理中比对，尚未实现（`AGENTS.md` §6 第 11 条） |
 | 符号链接条目看不出来 | 归档条目列表里没有链接目标，名字干净的链接条目仍可能把内容写到别处；现在靠"解压后落点校验"发现（**发现即判失败，不归集、不清理**），但拦不住那一次写入 |
 | 外接盘 / 网络路径未专门适配 | 是非目标（`AGENTS.md` §2）：只保证不写死盘符、不在源目录建工作区 |
-| 少量既有可空性编译警告 | `Converters/EmptyStringToTextConverter.cs` 的 `CS8600`（可空性推断），行为不受影响；数量随该文件的改动浮动，所以这里不写死数字（`dotnet build` 在"项目已是最新"时不重新编译，也不会重复报这些警告） |
+| `ResetSettingsCommand` 没有任何界面入口 | 命令定义了但**没有 XAML 绑定**（设置窗口里的「恢复默认」是真正能用的那条路）。留着是因为删它会牵动 `RaiseAllCommandCanExecuteChanged` 的清单，留待与其它死代码一起清 |
 | LICENSE 未定 | 对外分发前必须确定，并一并核对内置 7-Zip 的 LGPL + unRAR 条款（要点与结论见 `docs/引擎与外部工具.md`） |
 | `Rar.exe` / `WinRAR.exe` 不能随包分发 | 共享软件，**绝不捆绑、绝不复制**；只保留"用户自装、我们检测与调用"这个位置（`AGENTS.md` §3.1）。程序会**只读地**看用户已装的 WinRAR 目录里有没有免费件 `UnRAR.exe` 并调用它，**绝不**调用 / 复制 `Rar.exe`、`WinRAR.exe`、`7zxa.dll`（边界见 `docs/引擎与外部工具.md` §4） |
 | RAR 侧引擎也不是万能的 | UnRAR 与 7-Zip 对同一批畸形包的容忍度不同，两个引擎都解不开的包仍然会失败（这时报的是**失败**，不会显示成功）。⚠ 已实测更正一条旧说法：7-Zip 26.01/26.03 **能**用正确密码解 RAR5/RAR4 的 `-hp`（含分卷），所以第二引擎的价值在"报错更准"（缺卷点名、加密头显式标志），不在"7-Zip 完全不能" |

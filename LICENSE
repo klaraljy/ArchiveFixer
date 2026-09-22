@@ -1,0 +1,36 @@
+MIT License
+
+Copyright (c) 2026 klaraljy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## 第三方组件（不在上述 MIT 授权范围内，各自遵循自己的许可）
+
+本软件**分发时内置**以下第三方命令行工具，它们的许可**独立于**上面的 MIT：
+
+| 组件 | 位置 | 许可 | 说明 |
+|---|---|---|---|
+| 7-Zip（`7z.exe` / `7z.dll`） | `tools/7zip/`，原文见 `tools/7zip/License.txt` | **GNU LGPL** + **unRAR 限制条款** | 主体 LGPL；其中的 unRAR 代码**不得**用于重建 RAR 压缩算法（本软件只解压，不压缩） |
+| UnRAR（`UnRAR.exe`） | `tools/unrar/`，原文见 `tools/unrar/license.txt` | **RARLAB UnRAR freeware 许可** | 第 2 条**明确允许**"随其它软件包一起分发"；第 4 条禁止用它重建 RAR 压缩算法 |
+
+- **不内置**、只在用户自行安装时检测与调用的组件：`Rar.exe` / `WinRAR.exe`（**共享软件，绝不分发**）。
+- 各组件的确切版本、来源 URL 与文件 SHA256 记录在 `tools/7zip/README.md` 与 `tools/unrar/README.md`；
+  许可证边界的完整说明见 `docs/引擎与外部工具.md`。

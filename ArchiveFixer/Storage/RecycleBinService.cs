@@ -221,22 +221,6 @@ namespace ArchiveFixer.Storage
         void Write(DeleteLogEntry entry);
     }
 
-    /// <summary>把日志转成一个委托的适配器，方便把 <c>LogService.WriteInfo</c> 之类接进来。</summary>
-    public sealed class DelegateDeleteLogSink : IDeleteLogSink
-    {
-        private readonly Action<DeleteLogEntry> _handler;
-
-        public DelegateDeleteLogSink(Action<DeleteLogEntry> handler)
-        {
-            _handler = handler ?? throw new ArgumentNullException(nameof(handler));
-        }
-
-        public void Write(DeleteLogEntry entry)
-        {
-            _handler(entry);
-        }
-    }
-
     /// <summary>
     /// 删除前的安全检查所需要的文件系统信息。
     ///

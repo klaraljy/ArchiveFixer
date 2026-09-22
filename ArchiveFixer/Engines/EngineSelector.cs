@@ -141,38 +141,27 @@ namespace ArchiveFixer.Engines
                 .Select(x => x.engine);
         }
 
+        /// <summary>
+        /// 谁能干这活：**能力判定只有一处实现**（<see cref="EngineCapabilities.CanFormat"/>）。
+        ///
+        /// <para>
+        /// 这里以前内联写了一遍同样的规则，包括那条"白名单引擎没登记 = 不支持"的实测教训
+        /// （体检报告 §2 第 4 条）。两份实现里改错一处，未登记的 zip / 7z / tar 就会退回总体能力位、
+        /// 被全路由到只认 RAR 的 UnRAR 上 —— "本来能打开的包反而打不开"。
+        /// 现在选择器只负责**问**，判据归 <c>EngineCapabilities</c>。
+        /// </para>
+        /// </summary>
         private static bool CanHandle(IArchiveEngine engine, string? detectedFormat, EngineOperation operation)
         {
             EngineCapabilities capabilities = engine.Capabilities;
 
-            EngineFormatCapability? format = capabilities.ForFormat(detectedFormat);
-
-            /*
-             * 专用引擎（FormatsAreWhitelist）没登记这个格式 = **明确不支持**。
-             *
-             * 实测教训（验收第 3 条）：不加这一条时，未登记的 zip / 7z / tar 会退回"总体能力位"，
-             * 于是全被路由到只认 RAR 的 UnRAR 上，本来能打开的包反而打不开。
-             * 通用引擎（7-Zip）不打开这个开关，行为与以前一致：未登记的格式仍让它去试一把。
-             */
-            if (format == null && capabilities.FormatsAreWhitelist)
+            return operation switch
             {
-                return false;
-            }
-
-            switch (operation)
-            {
-                case EngineOperation.List:
-                    return format?.CanList ?? capabilities.CanList;
-
-                case EngineOperation.Test:
-                    return format?.CanTest ?? capabilities.CanTest;
-
-                case EngineOperation.Extract:
-                    return format?.CanExtract ?? capabilities.CanExtract;
-
-                default:
-                    return false;
-            }
+                EngineOperation.Extract => capabilities.CanExtractFormat(detectedFormat),
+                EngineOperation.List => capabilities.CanListFormat(detectedFormat),
+                EngineOperation.Test => capabilities.CanTestFormat(detectedFormat),
+                _ => false
+            };
         }
     }
 

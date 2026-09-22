@@ -4080,8 +4080,15 @@ namespace ArchiveFixer.ViewModels
 
             if (!_archiveEngine.IsAvailable)
             {
-                _dialogService.ShowError("未找到 tools\\7zip\\7z.exe，无法解压。");
+                /*
+                 * 提示由 ToolLocator 现算（体检报告 §4 第 1 条）：
+                 * 这条判定的口径是"**任一**引擎可用"，而默认优先级是 WinRAR(UnRAR) → 7-Zip ——
+                 * 写死 7z 路径会把"其实只缺 UnRAR"的用户引去修一个没问题的目录。
+                 * 两条期望路径与当前优先级顺序都由 ToolLocator 给出（外部工具路径只有它一个来源）。
+                 */
+                _dialogService.ShowError(ToolLocator.Default.DescribeNoEngineAvailable());
                 AppendLog("ERROR", StatusText.SevenZipMissing);
+                AppendLog("ERROR", ToolLocator.Default.DescribeAvailability());
                 return;
             }
 

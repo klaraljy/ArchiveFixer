@@ -24,7 +24,14 @@ namespace ArchiveFixer.Converters
             object parameter,
             CultureInfo culture)
         {
-            string emptyText = parameter?.ToString();
+            /*
+             * ⚠ 这里必须是 string?（可空）：parameter?.ToString() 真的可能是 null。
+             * 以前写成不可空的 string，编译期就会报 CS8600（"将 null 文本转换到不可为 null 类型"），
+             * 而这条警告一直挂在 README 的「已知限制」里 —— 行为虽然没错（下面立刻兜底），
+             * 但它让"0 警告"这个更硬的判据永远达不到。
+             * 下面的 IsNullOrEmpty 判定带 [NotNullWhen(false)]，所以过了那个 if 之后这里就是非空的。
+             */
+            string? emptyText = parameter?.ToString();
 
             if (string.IsNullOrEmpty(emptyText))
             {
@@ -52,7 +59,8 @@ namespace ArchiveFixer.Converters
             object parameter,
             CultureInfo culture)
         {
-            string emptyText = parameter?.ToString();
+            // 同上：parameter?.ToString() 可能为 null，先按可空接住再兜底（否则是 CS8600）。
+            string? emptyText = parameter?.ToString();
 
             if (string.IsNullOrEmpty(emptyText))
             {

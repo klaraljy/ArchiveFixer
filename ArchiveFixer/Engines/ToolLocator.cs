@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace ArchiveFixer.Engines
 {
@@ -289,6 +290,76 @@ namespace ArchiveFixer.Engines
                     : "使用内置 UnRAR";
 
             return $"{source}：{UnRarExePath}（版本 {UnRarVersion}）";
+        }
+
+        /// <summary>
+        /// 两个引擎"在哪、能不能用"的一句话（写日志、排障用）。
+        ///
+        /// 为什么不在这里另造一套"可用 / 不可用"的说法：<see cref="DescribeResolution"/> 与
+        /// <see cref="DescribeUnRarResolution"/> 早就把两种事实各自的措辞定死了，这里只把它们并成一行。
+        /// </summary>
+        public string DescribeAvailability()
+        {
+            return $"{DescribeResolution()}；{DescribeUnRarResolution()}；当前引擎优先级：{DescribePriority()}";
+        }
+
+        /// <summary>
+        /// "没有可用解压引擎"时给用户看的那段提示 —— **唯一来源**。
+        ///
+        /// <para>
+        /// 为什么必须由本类现算（体检报告《audit-code.md》§2 第 5 条 / §4 第 1 条）：
+        /// 判定用的是 <c>EngineRouter.IsAvailable</c> = <b>任一</b>引擎可用，而默认优先级是
+        /// <c>WinRAR(UnRAR) → 7-Zip</c>。旧提示写死"未找到 <c>tools\7zip\7z.exe</c>"，后果是
+        /// 真正缺 UnRAR（甚至只是没排上队）的用户被引去修一个本来没问题的 7z 目录；
+        /// 自己配了外部 7z 的用户更是被指向一个他根本没在用的路径。
+        /// </para>
+        ///
+        /// <para>
+        /// 所以这里把**两条期望路径都列出来**、写明"任装其一即可"，并给出当前优先级顺序 ——
+        /// 用户看一眼就知道该往哪儿放文件。路径全部现算，全文不写死任何文件名
+        /// （外部工具路径只有本类一个来源，AGENTS.md §3.1）。
+        /// </para>
+        /// </summary>
+        public string DescribeNoEngineAvailable()
+        {
+            return "未找到可用的解压引擎：7-Zip 与 UnRAR 都没有找到，两者任装其一即可。"
+                 + $"7-Zip 期望位置：{SevenZipExePath}；"
+                 + $"UnRAR 期望位置：{UnRarExePath}。"
+                 + $"当前引擎优先级：{DescribePriority()}（不可用的引擎会自动跳过，顺序可在设置里调整）。";
+        }
+
+        /// <summary>
+        /// 当前优先级的人读写法（引擎 id → 外部工具名）。
+        ///
+        /// 映射为什么放在这里而不是 <c>EngineIds</c>：这句话回答的是"**外部工具**按什么顺序找"，
+        /// 而本类正是外部工具的唯一定位者，"引擎 id ↔ 工具名"的对应关系只有在这件事上才有意义。
+        /// 认不出的 id 原样列出，绝不悄悄丢掉 —— 将来加第三个引擎时，提示里要能看见它。
+        /// </summary>
+        public static string DescribePriority()
+        {
+            IReadOnlyList<string> priority = EngineRuntimeSettings.EnginePriority;
+
+            if (priority == null || priority.Count == 0)
+            {
+                return DescribeEngineId(EngineIds.SevenZip);
+            }
+
+            return string.Join(" → ", priority.Select(DescribeEngineId));
+        }
+
+        private static string DescribeEngineId(string id)
+        {
+            if (string.Equals(id, EngineIds.WinRar, StringComparison.OrdinalIgnoreCase))
+            {
+                return "UnRAR（RAR 系）";
+            }
+
+            if (string.Equals(id, EngineIds.SevenZip, StringComparison.OrdinalIgnoreCase))
+            {
+                return "7-Zip";
+            }
+
+            return id;
         }
 
         /// <summary>

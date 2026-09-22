@@ -19,6 +19,17 @@
     </Window.DataContext>
 
     <!--
+        勾选的键盘入口（用户 2026-09-22 追加需求："像文件夹选中一样，有一个全选的选项"）。
+        Ctrl+A 的**可靠实现**在 MainWindow.xaml.cs 的 PreviewKeyDown 里：DataGrid 自己吃掉 Ctrl+A
+        （它选的是"行高亮"，与勾选框是两套东西），窗口级 InputBinding 抢不过它。
+        这里只挂两个没人抢的键。
+    -->
+    <Window.InputBindings>
+        <KeyBinding Key="D" Modifiers="Control" Command="{Binding SelectNoneTasksCommand}" />
+        <KeyBinding Key="I" Modifiers="Control" Command="{Binding InvertTaskSelectionCommand}" />
+    </Window.InputBindings>
+
+    <!--
         主窗口（UI v2）。
         这一版只做"观感统一"，不动布局结构：
         · 颜色/字号/间距/控件样式全部改引 App.xaml 的统一资源 —— 以前主窗口自带一套私有色板
@@ -40,6 +51,12 @@
                 <MenuItem Header="添加文件夹..." Command="{Binding AddFolderCommand}" />
                 <Separator />
                 <MenuItem Header="重新扫描" Command="{Binding ScanCommand}" />
+                <Separator />
+                <!-- 勾选的批量入口（与列表上方那三个按钮、与 Ctrl+A / Ctrl+D / Ctrl+I 是同一批命令） -->
+                <MenuItem Header="全选（Ctrl+A）" Command="{Binding SelectAllTasksCommand}" />
+                <MenuItem Header="全不选（Ctrl+D）" Command="{Binding SelectNoneTasksCommand}" />
+                <MenuItem Header="反选（Ctrl+I）" Command="{Binding InvertTaskSelectionCommand}" />
+                <Separator />
                 <MenuItem Header="移除选中" Command="{Binding RemoveSelectedCommand}" />
                 <MenuItem Header="清空列表" Command="{Binding ClearCommand}" />
             </MenuItem>
@@ -430,10 +447,42 @@
                             BorderThickness="0,0,0,1"
                             CornerRadius="{StaticResource CardCornerRadiusTop}"
                             Padding="12,7">
-                        <TextBlock Foreground="{StaticResource InfoTextBrush}"
-                                   FontSize="11.5"
-                                   TextWrapping="Wrap"
-                                   Text="{x:Static models:StatusText.SelectionScopeHint}" />
+                        <DockPanel>
+                            <!--
+                                勾选的批量入口。放在**列表正上方**而不是塞进菜单里：
+                                用户的痛点是"一整个文件夹都被勾上了，只想解其中一个却要一个个点掉"，
+                                所以"全不选"必须一眼看得见（用户原话："有一个全选的选项"）。
+                            -->
+                            <StackPanel DockPanel.Dock="Right"
+                                        Orientation="Horizontal"
+                                        Margin="12,0,0,0"
+                                        VerticalAlignment="Center">
+                                <Button Content="全选"
+                                        MinWidth="60"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        ToolTip="勾选列表里的全部任务（Ctrl+A）"
+                                        Command="{Binding SelectAllTasksCommand}" />
+
+                                <Button Content="全不选"
+                                        MinWidth="68"
+                                        Margin="6,0,0,0"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        ToolTip="取消全部勾选（Ctrl+D）—— 想只解其中一个时，先点这里再点那一行"
+                                        Command="{Binding SelectNoneTasksCommand}" />
+
+                                <Button Content="反选"
+                                        MinWidth="60"
+                                        Margin="6,0,0,0"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        ToolTip="勾上的取消、没勾的勾上（Ctrl+I）"
+                                        Command="{Binding InvertTaskSelectionCommand}" />
+                            </StackPanel>
+
+                            <TextBlock Foreground="{StaticResource InfoTextBrush}"
+                                       FontSize="11.5"
+                                       TextWrapping="Wrap"
+                                       Text="{x:Static models:StatusText.SelectionScopeHint}" />
+                        </DockPanel>
                     </Border>
 
                     <Grid>
@@ -463,6 +512,23 @@
                                 <MenuItem Header="打开其余物目录"
                                           Command="{Binding PlacementTarget.DataContext.OpenTaskArtifactDirectoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                           CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+
+                                <Separator />
+
+                                <!--
+                                    用户点名的那条最短路径："一整个文件夹都被勾上了，这次只想解其中一个"。
+                                    一个动作就够 —— 不必先「全不选」再回来找那一行。
+                                -->
+                                <MenuItem Header="只勾选这一个"
+                                          ToolTip="取消其它任务的勾选，只留下当前这一行"
+                                          Command="{Binding PlacementTarget.DataContext.SelectSoleTaskCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+
+                                <MenuItem Header="全选（Ctrl+A）"
+                                          Command="{Binding PlacementTarget.DataContext.SelectAllTasksCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+
+                                <MenuItem Header="全不选（Ctrl+D）"
+                                          Command="{Binding PlacementTarget.DataContext.SelectNoneTasksCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
                                 <Separator />
 
@@ -504,13 +570,26 @@
                         -->
                         <DataGrid.Columns>
                             <!-- 模板列：DataGridCheckBoxColumn 要点两次才勾得上 -->
-                            <DataGridTemplateColumn Header="选择" Width="60">
+                            <DataGridTemplateColumn Header="选择" Width="64">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
+                                        <!--
+                                            勾选框必须**铺满整格**（HorizontalAlignment=Stretch）：
+                                            CheckBox 是 ToggleButton，点它范围内的任何一处都会切换，
+                                            所以铺满之后"点这一列的任何地方"都是一次点击即生效；
+                                            只占中间那一小块时，点在格子空白处只会选中行 ——
+                                            用户看到的就是"点了没反应，得再点一次"（用户 2026-09-22 的抱怨）。
+
+                                            UpdateSourceTrigger=PropertyChanged：默认（LostFocus）下
+                                            勾选要等焦点离开才写回模型，汇总里的「选中：N」会跟着卡住。
+                                        -->
                                         <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  HorizontalAlignment="Center"
+                                                  HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Center"
+                                                  VerticalAlignment="Stretch"
+                                                  VerticalContentAlignment="Center"
                                                   Margin="0"
-                                                  ToolTip="勾选后才会被「一键处理 / 智能修正」等按钮处理" />
+                                                  ToolTip="一次点击即勾选 / 取消勾选。勾选后才会被「一键处理 / 智能修正」等按钮处理" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>

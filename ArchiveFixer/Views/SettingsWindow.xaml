@@ -361,8 +361,14 @@
                         <CheckBox Content="递归扫描文件夹"
                                   IsChecked="{Binding Settings.RecursiveScan, Mode=TwoWay}" />
 
-                        <CheckBox Content="拖拽导入后自动扫描"
-                                  IsChecked="{Binding Settings.AutoScanAfterDrop, Mode=TwoWay}" />
+                        <!--
+                            ⚠ 文案必须写全"导入"的三种入口：这个开关在 ScanCoordinator.AddPathsAsync 里判，
+                            它同时管着「添加文件」「添加文件夹」与拖拽导入 —— 旧文案只写"拖拽导入后自动扫描"，
+                            关掉它的人会以为"用按钮添加还会自动扫描"，结果加进来的包一直是「等待扫描」。
+                        -->
+                        <CheckBox Content="导入后自动扫描（拖拽 / 添加文件 / 添加文件夹）"
+                                  IsChecked="{Binding Settings.AutoScanAfterDrop, Mode=TwoWay}"
+                                  ToolTip="关掉之后导入只加进列表、不自动识别；需要识别时用菜单「文件 → 重新扫描」。" />
 
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
@@ -588,9 +594,19 @@
                                 <ComboBoxItem Content="跳过已存在文件" Tag="SkipExisting" />
                                 <ComboBoxItem Content="覆盖全部" Tag="OverwriteAll" />
                                 <ComboBoxItem Content="自动重命名解压出的文件" Tag="AutoRenameExtracted" />
-                                <ComboBoxItem Content="自动重命名已存在文件" Tag="AutoRenameExisting" />
+                                <ComboBoxItem Content="自动重命名已存在文件（仅 7-Zip 支持）" Tag="AutoRenameExisting" />
                             </ComboBox>
                         </Grid>
+
+                        <!--
+                            ⚠ 这里必须说清引擎差异：UnRAR 没有"把已存在文件改名让位"的开关，
+                            它落到 -o-（不覆盖）。不说的话，用户在 RAR 包上选「自动重命名已存在文件」
+                            会得到"跳过"—— 界面说一套、实际做另一套（UnRarEngine 的"已知问题"里也登记了这一条）。
+                        -->
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="110,4,0,0"
+                                   TextWrapping="Wrap"
+                                   Text="覆盖策略是引擎侧的开关。「自动重命名已存在文件」只有 7-Zip 有对应参数（-aot）；RAR 包默认走 UnRAR，而它没有这一档 —— 那里的实际行为是「跳过已存在文件」（不覆盖、也不改名）。要覆盖就选「覆盖全部」，要两边都安全就选「自动重命名解压出的文件」。" />
 
                         <!--
                             D-9（用户 2026-09-22 拍板）：源包处理的默认档 = 移入「其余物」。
@@ -777,7 +793,8 @@
 
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="22,0,0,0"
-                                   Text="关掉之后：下次启动不再把上次的输出目录填回来，主窗口里临时选的目录也不会写进设置。" />
+                                   TextWrapping="Wrap"
+                                   Text="关掉之后：下次启动不再把上次的输出目录填回「当前输出位置」。注意主窗口里没有临时选输出目录的入口了（输出位置只在上面四选一里改），所以这一项的实际作用就是「启动时要不要沿用上次那个自定义根」。" />
 
                         <!--
                             缓存根目录（日志 / 临时 / 递归工作区都放它下面）。

@@ -201,6 +201,22 @@ namespace ArchiveFixer.Models
 
         public bool AutoScanAfterDrop { get; set; } = true;
 
+        /// <summary>
+        /// 改名前是否先弹预览。
+        ///
+        /// <para>
+        /// ⚠ <b>这个配置键对本程序的行为没有任何影响，而且这是刻意的</b>（AGENTS.md §6 不变量 3）：
+        /// 「改名必须先预览」是红线，主流程 <c>RenameCoordinator</c> 的五个入口**一律硬编码**
+        /// <c>PreviewBeforeRename = true</c>，<c>RenameOptions.Normalize</c> 也会把它强制回 true。
+        /// 设置窗口里那个复选框早已删除（留着就是"改了没用"的开关）。
+        /// </para>
+        /// <para>
+        /// 之所以还留着这个属性：<c>Models/RenameOptions.cs</c>（本次不在授权文件清单里）
+        /// 的 <c>FromSettings</c> 仍会读它，删掉属性会编译不过。
+        /// **将来能一并改的时候，正确做法是连属性带 <c>RenameOptions</c> 那一行一起删掉**，
+        /// 而不是让它变成"看起来能关掉预览"的假开关。
+        /// </para>
+        /// </summary>
         public bool PreviewBeforeRename { get; set; } = true;
 
         public string OverwriteMode { get; set; } = "SkipExisting";
@@ -282,13 +298,33 @@ namespace ArchiveFixer.Models
 
         public bool RememberLastOutputDirectory { get; set; } = true;
 
+        /// <summary>
+        /// 扫描时是否包含隐藏文件（默认否）。**只能手改配置文件** —— 设置窗口没有这一项。
+        /// </summary>
         public bool IncludeHiddenFiles { get; set; } = false;
 
+        /// <summary>
+        /// 扫描时是否包含系统文件（默认否）。**只能手改配置文件** —— 设置窗口没有这一项。
+        /// </summary>
         public bool IncludeSystemFiles { get; set; } = false;
 
+        /// <summary>
+        /// 扫描时的单文件大小上限，单位 **MB**（0 = 不限制，默认）。
+        /// **只能手改配置文件** —— 设置窗口没有这一项。超过上限的文件不进任务列表。
+        /// </summary>
         public long MaxFileSizeLimit { get; set; } = 0;
 
-        public bool PreservePasswordLeadingTrailingSpaces { get; set; } = true;
+        /*
+         * 这里曾经有一个 PreservePasswordLeadingTrailingSpaces（默认 true）。
+         *
+         * 它 2026-09-22 被**删除**了，原因是它是一句谎话：全项目**没有任何一处读它**，
+         * 而界面上也没有这一项 —— 用户（或将来接手的人）在 appsettings.json 里把它改成 false，
+         * 以为密码会被 Trim，实际一个字节的行为都不会变。
+         *
+         * "密码不 Trim"本来就已经是硬行为（AGENTS.md §9.1：密码可能就带首尾空格），
+         * 需要的是"想 Trim 就得先想清楚为什么"，不需要一个做不到的开关。
+         * 旧配置里若还留着这个键，System.Text.Json 会**忽略**未知成员，不影响启动。
+         */
 
         /// <summary>
         /// 从归档同目录的说明文件（.txt/.bat/…）里提取密码候选。
@@ -494,7 +530,6 @@ namespace ArchiveFixer.Models
                 IncludeHiddenFiles = false,
                 IncludeSystemFiles = false,
                 MaxFileSizeLimit = 0,
-                PreservePasswordLeadingTrailingSpaces = true,
                 EnableSidecarPassword = false,
                 CustomSevenZipExePath = string.Empty,
                 CustomUnRarExePath = string.Empty,

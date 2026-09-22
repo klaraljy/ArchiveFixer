@@ -192,10 +192,10 @@ namespace ArchiveFixer.Helpers
         ///
         /// <para>
         /// "什么算分卷标记"只有一份定义（<see cref="ExtensionHelper.IsVolumePartExtension"/>），
-        /// 本方法只负责把它从名字尾部摘掉，然后照旧剥一层普通后缀。
+        /// 剥法也只有一份实现（<see cref="StripVolumeMarkers"/>），本方法只负责在剥完之后照旧剥一层普通后缀。
         /// （<c>Extraction.OutputPlacement.ResolveArchiveBaseName</c> 有一份更严格的同类实现：
-        /// 它只剥**已知归档后缀**，用于落点公式；两者对分卷的判定完全一致。
-        /// 更彻底的做法是让它转调本方法，但那属于那一侧的接线。）
+        /// 它只剥**已知归档后缀**，用于落点公式；它现在也转调 <see cref="StripVolumeMarkers"/>，
+        /// 两者对分卷的剥法**是同一段代码**。）
         /// </para>
         /// </summary>
         public static string GetArchiveBaseName(string filePath)
@@ -258,8 +258,15 @@ namespace ArchiveFixer.Helpers
         /// 判据只有一份：<see cref="ExtensionHelper.IsVolumePartExtension"/>（.001~.999 / .z01 / .r00 / .partN）。
         /// 循环有守卫（最多 3 轮）：<c>.part1.rar</c> 这种"分卷段后面还挂着 .rar"的名字要连剥两次，
         /// 同时保证不会在 <c>222.rar</c> 上把 <c>222</c> 当成三位数字分卷段吃光整个名字。
+        ///
+        /// <para>
+        /// ⚠ <b>实现只有这一处</b>（体检报告 §2 第 2 条）：<c>Extraction.OutputPlacement</c> 的包基名
+        /// 也转调本方法，不再自带一份逐字相同的副本。理由不是"省 40 行"，而是两条路必须**永远**剥得一样 ——
+        /// 归档基名与包基名对同一个包算出不同的名字，落点公式就会指向两个不同的目录。
+        /// 改这里之前先想清楚两边的用途，别只改一半。
+        /// </para>
         /// </summary>
-        private static string StripVolumeMarkers(string fileName)
+        public static string StripVolumeMarkers(string fileName)
         {
             string current = fileName;
 

@@ -27,6 +27,70 @@ namespace ArchiveFixer
 
             Loaded += MainWindow_Loaded;
             DataContextChanged += MainWindow_DataContextChanged;
+
+            /*
+             * Ctrl+A 的可靠入口（用户 2026-09-22 追加需求："有一个全选的选项"）。
+             *
+             * 为什么不用 Window.InputBindings 里的 KeyBinding：DataGrid **自己**注册了 Ctrl+A
+             * （它选的是"行高亮"，跟勾选框是两套东西），焦点在表格里时那条键轮不到窗口级绑定。
+             * PreviewKeyDown 是**隧道**事件，在 DataGrid 看到之前就到达窗口 —— 于是
+             * "Ctrl+A = 勾选全部"这件事在本窗口里是确定的。
+             */
+            PreviewKeyDown += MainWindow_PreviewKeyDown;
+        }
+
+        /// <summary>
+        /// Ctrl+A / Ctrl+D / Ctrl+I：全选 / 全不选 / 反选（都作用在**勾选框**上）。
+        ///
+        /// <para>
+        /// Ctrl+D 与 Ctrl+I 走 <c>Window.InputBindings</c> 就够了（DataGrid 没用这两个键），
+        /// 只有 Ctrl+A 需要在这里抢下来 —— 见构造函数的注释。
+        /// </para>
+        /// </summary>
+        private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.A || (Keyboard.Modifiers & ModifierKeys.Control) != ModifierKeys.Control)
+            {
+                return;
+            }
+
+            if (DataContext is not MainViewModel viewModel)
+            {
+                return;
+            }
+
+            // 只在焦点还在任务列表（或窗口本体）时接管：别把密码框等处的 Ctrl+A
+            //（"全选文本"）也吃掉 —— 那会变成另一种"点了没用"。
+            if (Keyboard.FocusedElement is DependencyObject focused && !IsWithinTaskGrid(focused))
+            {
+                return;
+            }
+
+            if (!viewModel.SelectAllTasksCommand.CanExecute(null))
+            {
+                return;
+            }
+
+            viewModel.SelectAllTasksCommand.Execute(null);
+            e.Handled = true;
+        }
+
+        /// <summary>焦点是不是落在任务表格里（表格自身、行、单元格、勾选框都算）。</summary>
+        private bool IsWithinTaskGrid(DependencyObject? focused)
+        {
+            while (focused != null)
+            {
+                if (ReferenceEquals(focused, TaskDataGrid))
+                {
+                    return true;
+                }
+
+                focused = focused is Visual or System.Windows.Media.Media3D.Visual3D
+                    ? VisualTreeHelper.GetParent(focused)
+                    : LogicalTreeHelper.GetParent(focused);
+            }
+
+            return false;
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)

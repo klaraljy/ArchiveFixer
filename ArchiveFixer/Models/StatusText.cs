@@ -51,6 +51,23 @@ namespace ArchiveFixer.Models
         public const string SevenZipMissing = "7z不存在";
 
         /// <summary>
+        /// **没有可用的解压引擎**（7-Zip 与 UnRAR 一个都没找到）。
+        ///
+        /// <para>
+        /// 为什么要与 <see cref="SevenZipMissing"/>（「7z不存在」）分开：后者的判据是"某个具体引擎/文件
+        /// 不在"，而这一条是"<b>任一引擎都不可用</b>"（<c>EngineRouter.IsAvailable</c>）。
+        /// 默认优先级是 UnRAR → 7-Zip，用户完全可能只是缺 UnRAR、或者把内置件关掉了 ——
+        /// 这时给他看「7z不存在」是**指错方向**：他会去修一个本来没问题的 7z 目录，
+        /// 而真正该做的是"两者任装其一"。
+        /// </para>
+        /// <para>
+        /// 失败类状态：配色与统计必须与既有失败口径一致（见 <c>StatusToBrushConverter</c> 的错误色、
+        /// <c>TaskSummaryService</c> 的"解压失败"桶）——按 AGENTS.md §7 三处同改。
+        /// </para>
+        /// </summary>
+        public const string NoEngineAvailable = "没有可用的解压引擎";
+
+        /// <summary>
         /// 达到密码尝试上限（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
         ///
         /// **不是"密码错误"**：候选密码根本还没试完就按硬上限停了，

@@ -1,4 +1,5 @@
 using ArchiveFixer.Models;
+using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
@@ -10,6 +11,8 @@ namespace ArchiveFixer.Views
 {
     public partial class RenamePreviewWindow : Window
     {
+        private readonly DialogService _dialogService = new();
+
         public RenamePreviewViewModel ViewModel { get; }
 
         public RenamePreviewWindow()
@@ -55,17 +58,19 @@ namespace ArchiveFixer.Views
             {
                 ViewModel.Message = $"还有 {pending} 个同名冲突没选怎么办（在「冲突选择（询问档）」列里选，或点下面的「冲突全部自动重命名」）。";
 
-                MessageBox.Show(
-                    this,
-                    $"有 {pending} 个目标文件已经存在，请先在「冲突选择（询问档）」那一列里选择怎么办。\n\n" +
-                    "· 自动重命名：产物落成 名字(1)，已有文件一个字节都不动（默认，不覆盖）\n" +
-                    "· 跳过：这一条不改名\n" +
-                    "· 覆盖：先移开旧文件再落位，中途失败不丢文件\n\n" +
-                    "嫌麻烦可以直接点「冲突全部自动重命名」。",
-                    "还有冲突没选",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning,
-                    MessageBoxResult.OK);
+                /*
+                 * ⚠ 走自绘对话框，**不用系统 MessageBox**：
+                 * ① 全项目其它提示都已经收敛到 AppDialogWindow（用户点名批评过系统框"灰底、字挤、正文不能复制"），
+                 *    只有这里是漏网的一处；
+                 * ② MessageBox 会**抢焦点**并且正文不可复制 —— 用户想把这段说明贴回来问人时只能手抄
+                 *    （AGENTS.md §13 的同一精神：能不抢焦点就不抢）。
+                 */
+                _dialogService.ShowWarning(
+                    $"有 {pending} 个目标文件已经存在，请先在「冲突选择（询问档）」那一列里选择怎么办。{Environment.NewLine}{Environment.NewLine}"
+                    + $"· 自动重命名：产物落成 名字(1)，已有文件一个字节都不动（默认，不覆盖）{Environment.NewLine}"
+                    + $"· 跳过：这一条不改名{Environment.NewLine}"
+                    + $"· 覆盖：先移开旧文件再落位，中途失败不丢文件{Environment.NewLine}{Environment.NewLine}"
+                    + "嫌麻烦可以直接点「冲突全部自动重命名」。");
 
                 return;
             }

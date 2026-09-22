@@ -778,48 +778,6 @@ namespace ArchiveFixer.Services
             }
         }
 
-        public string ResolveConflict(string targetPath, string conflictAction)
-        {
-            if (string.IsNullOrWhiteSpace(targetPath))
-            {
-                return string.Empty;
-            }
-
-            if (!File.Exists(targetPath))
-            {
-                return targetPath;
-            }
-
-            if (string.IsNullOrWhiteSpace(conflictAction))
-            {
-                conflictAction = "AutoRename";
-            }
-
-            if (string.Equals(conflictAction, "Skip", StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Empty;
-            }
-
-            if (string.Equals(conflictAction, "Overwrite", StringComparison.OrdinalIgnoreCase))
-            {
-                return targetPath;
-            }
-
-            if (string.Equals(conflictAction, "AutoRename", StringComparison.OrdinalIgnoreCase))
-            {
-                return AutoRenamePath(targetPath);
-            }
-
-            if (string.Equals(conflictAction, "Ask", StringComparison.OrdinalIgnoreCase))
-            {
-                // Service 不弹窗。
-                // Ask 在这里按 AutoRename 处理，避免卡死。
-                return AutoRenamePath(targetPath);
-            }
-
-            return AutoRenamePath(targetPath);
-        }
-
         public string AutoRenamePath(string targetPath)
         {
             if (string.IsNullOrWhiteSpace(targetPath))

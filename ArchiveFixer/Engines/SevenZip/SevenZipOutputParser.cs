@@ -37,6 +37,23 @@ namespace ArchiveFixer.Engines.SevenZip
         public const string OutOfMemoryErrorType = "OutOfMemory";
 
         /// <summary>
+        /// 退出码 <c>-2</c>：**我们自己的哨兵值**（不是 7-Zip 的码）—— 这次调用被取消了。
+        ///
+        /// 由运行器的收尸路径写入（<c>SevenZipProcessRunner</c> 强制结束进程时
+        /// <c>ExitCode = isTimeout ? -3 : -2</c>）。判"取消 / 超时"必须靠这个**结构化**的信号。
+        /// </summary>
+        public const int CancelledExitCode = -2;
+
+        /// <summary>
+        /// 退出码 <c>-3</c>：**我们自己的哨兵值** —— 这次调用超时、进程已被强制结束。
+        ///
+        /// ⚠ 这里曾经靠匹配我们自己产出的中文超时提示来判超时。那是拿
+        /// **用户可见文案当接口**：文案改一个字（哪怕只是加个空格/换个词）判定就静默失效，
+        /// 超时会被归到"未知错误"。现在只认哨兵值与外部程序自己的英文输出。
+        /// </summary>
+        public const int TimedOutExitCode = -3;
+
+        /// <summary>
         /// 文件名（头部）被加密：RAR <c>-hp</c> / 7z <c>-mhe</c>。
         ///
         /// 这类包**连文件列表都读不出来**，所以它落到"密码错误 / 文件损坏"里给出的结论是错的。
@@ -80,19 +97,24 @@ namespace ArchiveFixer.Engines.SevenZip
                 return "None";
             }
 
-            if (exitCode == -2)
+            if (exitCode == CancelledExitCode)
             {
-                return "Cancelled";
+                return EngineErrorTypes.Cancelled;
             }
 
-            if (exitCode == -3)
+            /*
+             * 超时是**结构化**判定：进程被我们强制结束时运行器写哨兵退出码 -3。
+             * 旧实现在这里还匹配了一次我们自己产出的中文超时提示 —— 那是拿用户可见文案当接口，已删除。
+             * 下面这条英文关键字留着：它匹配的是**外部程序**的输出（7-Zip 或系统错误文本），不是我们的文案。
+             */
+            if (exitCode == TimedOutExitCode)
             {
-                return "TimedOut";
+                return EngineErrorTypes.TimedOut;
             }
 
-            if (ContainsAny(text, "7-Zip 执行超时", "执行超时", "timed out", "timeout"))
+            if (ContainsAny(text, "timed out", "timeout"))
             {
-                return "TimedOut";
+                return EngineErrorTypes.TimedOut;
             }
 
             if (exitCode == 7)
@@ -378,7 +400,10 @@ namespace ArchiveFixer.Engines.SevenZip
                 "VolumeMissing" => "分卷压缩包缺少必要分卷",
                 MissingFirstVolumeErrorType => "这是分卷压缩包的后续卷，缺少首卷（.001 / 第 1 卷）——请把同一组分卷放在同一目录后再解压",
                 "PathTooLong" => "路径过长，请缩短文件名或输出目录",
-                "SevenZipMissing" => "未找到 tools\\7zip\\7z.exe",
+
+                // 引擎不可用的提示不能写死某一个文件名：判定是"任一引擎可用"，默认优先级是
+                // WinRAR(UnRAR) → 7-Zip，真正缺的可能（或同时）是 UnRAR。两条期望路径与优先级顺序现算。
+                "SevenZipMissing" => ToolLocator.Default.DescribeNoEngineAvailable(),
                 "CommandLineError" => string.IsNullOrWhiteSpace(detail)
                     ? "7-Zip 命令行参数错误"
                     : "7-Zip 命令行参数错误：" + detail,
@@ -491,6 +516,11 @@ namespace ArchiveFixer.Engines.SevenZip
                 return string.Empty;
             }
 
+            /*
+             * 这一份的关键字只描述"**7-Zip 自己**可能打出来的行"，全是英文。
+             * ⛔ 不许往这里加我们自己产出的中文文案：那种行只存在于 ArchiveOperationResult.Message 里，
+             * 永远不会出现在本方法的入参上，改一个字还会静默失效。
+             */
             string[] importantKeywords =
             {
                 "ERROR",
@@ -525,8 +555,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 "Operation canceled",
                 "Operation cancelled",
                 "timed out",
-                "timeout",
-                "执行超时"
+                "timeout"
             };
 
             foreach (string line in lines)

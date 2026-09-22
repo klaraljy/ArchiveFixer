@@ -105,13 +105,33 @@ namespace ArchiveFixer.Engines
                 f => string.Equals(f.Format, format, System.StringComparison.OrdinalIgnoreCase));
         }
 
-        public bool CanExtractFormat(string? format)
+        /// <summary>
+        /// 这个引擎干得了"这个格式的这件事"吗 —— 三种问法（list / test / extract）共用这一份实现。
+        ///
+        /// <para><b>规则只有一条，但两个分叉都必须在这里</b>：
+        /// ① 登记过该格式 → 看它自己那几位；
+        /// ② 没登记 → <b>白名单引擎（<see cref="FormatsAreWhitelist"/>）一律"干不了"</b>，
+        ///    只有非白名单的通用引擎才退回总体能力位（"宁可让它去试一把"）。</para>
+        ///
+        /// <para>
+        /// ⚠ 这段规则以前在 <c>EngineSelector.CanHandle</c> 里**又写了一遍**，而带名字的这份反而是死代码
+        /// （体检报告 §2 第 4 条）。现在选择器只调这里 —— 那条"改错就会把 zip / 7z 全路由到 UnRAR"
+        /// 的实测教训（见 <see cref="FormatsAreWhitelist"/>）因此只可能在一处被改错。
+        /// </para>
+        /// </summary>
+        public bool CanFormat(string? format, EngineOperation operation)
         {
             EngineFormatCapability? capability = ForFormat(format);
 
             if (capability != null)
             {
-                return capability.CanExtract;
+                return operation switch
+                {
+                    EngineOperation.List => capability.CanList,
+                    EngineOperation.Test => capability.CanTest,
+                    EngineOperation.Extract => capability.CanExtract,
+                    _ => false
+                };
             }
 
             // 白名单引擎：没登记就是"干不了"，不许退回总体能力位。
@@ -121,8 +141,23 @@ namespace ArchiveFixer.Engines
             }
 
             // 没登记具体格式时，退回总体能力位：宁可让引擎去试一把，也不要因为"没登记"就拒绝。
-            return CanExtract;
+            return operation switch
+            {
+                EngineOperation.List => CanList,
+                EngineOperation.Test => CanTest,
+                EngineOperation.Extract => CanExtract,
+                _ => false
+            };
         }
+
+        /// <summary>解压这一件事的同名问法（选择器的 <c>EngineOperation.Extract</c> 档走它）。</summary>
+        public bool CanExtractFormat(string? format) => CanFormat(format, EngineOperation.Extract);
+
+        /// <summary>列目录这一件事的同名问法。</summary>
+        public bool CanListFormat(string? format) => CanFormat(format, EngineOperation.List);
+
+        /// <summary>测试这一件事的同名问法。</summary>
+        public bool CanTestFormat(string? format) => CanFormat(format, EngineOperation.Test);
 
         /// <summary>给人看的一句话（写进日志与任务报告）。</summary>
         public string Describe()
