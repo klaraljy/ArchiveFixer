@@ -303,12 +303,19 @@
                                     固定 InvariantCulture）。以前这里写 StringFormat={0:yyyy-MM-dd HH:mm:ss}，
                                     那个 yyyy 跟当前区域的日历走 —— 泰历下屏幕日志会显示 2569 年，
                                     与 data\logs 里的文件日志对不上号。
+
+                                    ⚠ 必须显式写 Mode=OneWay：`Run.Text` 在 WPF 里**默认是 TwoWay**，
+                                    而 TimeText 是计算出来的只读属性 —— 不写就会在**模板实例化时**抛
+                                    XamlParseException("无法对只读属性进行 TwoWay 绑定")，
+                                    表现为「程序一启动就崩、只剩一个标题为『错误』的对话框」。
+                                    （2026-09-22 真机验收抓到；当时的"无界面 XAML 校验宿主"因为不 Show 窗口而漏掉。）
+                                    同模板其余几项也一并标 OneWay：全是只读展示，别给将来留同样的坑。
                                 -->
-                                <Run Text="{Binding TimeText, StringFormat=[{0}]}" />
+                                <Run Text="{Binding TimeText, Mode=OneWay, StringFormat=[{0}]}" />
                                 <Run Text=" [" />
-                                <Run Text="{Binding Level}" />
+                                <Run Text="{Binding Level, Mode=OneWay}" />
                                 <Run Text="] " />
-                                <Run Text="{Binding Message}" />
+                                <Run Text="{Binding Message, Mode=OneWay}" />
                             </TextBlock>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -541,10 +548,11 @@
                                         <Setter Property="ToolTip">
                                             <Setter.Value>
                                                 <TextBlock>
-                                                    <Run Text="当前后缀：" /><Run Text="{Binding CurrentExtension}" /><LineBreak />
-                                                    <Run Text="检测格式：" /><Run Text="{Binding DetectedFormat}" /><LineBreak />
-                                                    <Run Text="建议后缀：" /><Run Text="{Binding SuggestedExtension}" /><LineBreak />
-                                                    <Run Text="分卷：" /><Run Text="{Binding VolumeInfoText}" />
+                                                    <!-- 同样是纯展示：Run.Text 默认 TwoWay，绑到只读属性会在模板实例化时崩（见日志模板那段注释） -->
+                                                    <Run Text="当前后缀：" /><Run Text="{Binding CurrentExtension, Mode=OneWay}" /><LineBreak />
+                                                    <Run Text="检测格式：" /><Run Text="{Binding DetectedFormat, Mode=OneWay}" /><LineBreak />
+                                                    <Run Text="建议后缀：" /><Run Text="{Binding SuggestedExtension, Mode=OneWay}" /><LineBreak />
+                                                    <Run Text="分卷：" /><Run Text="{Binding VolumeInfoText, Mode=OneWay}" />
                                                 </TextBlock>
                                             </Setter.Value>
                                         </Setter>
