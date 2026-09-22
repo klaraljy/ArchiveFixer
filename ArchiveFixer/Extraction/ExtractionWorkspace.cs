@@ -50,6 +50,28 @@ namespace ArchiveFixer.Extraction
     }
 
     /// <summary>
+    /// 清理工作区（<see cref="ExtractionWorkspace.Cleanup"/>）的结果。
+    ///
+    /// 为什么不返回 <c>void</c>：调用方必须能在日志里区分"真的删掉了"和"因为安全校验 / 占用而没删"。
+    /// 后者用户需要知道 —— 数据还在盘上、为什么还在（AGENTS.md §9.5 对不可逆操作留证据的同一要求）。
+    /// 把结论丢掉等于让日志只剩一半信息，而删目录是不可逆的。
+    /// </summary>
+    public sealed class WorkspaceCleanupResult
+    {
+        /// <summary>被判定为"本任务工作区"的那个目录（即使没删也带回来，方便日志与用户指认）。</summary>
+        public string TaskDirectory { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 动完之后工作区是不是**真的不在了**：本次删掉、或本来就已经不存在都算 true。
+        /// false = 还留在盘上（路径越界没动手 / 删除失败），调用方应当按 WARN 留证据。
+        /// </summary>
+        public bool Cleaned { get; init; }
+
+        /// <summary>可以直接写进日志的一句话（含路径与原因，不含任务名）。</summary>
+        public string Message { get; init; } = string.Empty;
+    }
+
+    /// <summary>
     /// 递归解压的工作区：所有中间产物先落在这里，确认无误后再"发布"到最终目录。
     ///
     /// 为什么要这么一层（设计.md §十三/§十四、AGENTS.md §6 第 12 条）：
@@ -245,38 +267,70 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 删除工作区。
+        /// 删除工作区，并如实回答"删了没有、为什么"。
         ///
         /// 只在调用方**确认后**调用（AGENTS.md §6 第 13 条：清工作区必须先经用户确认）。
-        /// 两道防线：
+        /// 对"本次任务自己造出来的中间产物"来说，那个确认点就是"任务已成功、产物已经发布出去"；
+        /// 失败 / 取消 / 部分完成时**不许**调用（此时工作区里的东西是用户唯一的线索）。
+        ///
+        /// 三道防线：
         /// ① 删之前用规范化的完整路径确认 <see cref="TaskDirectory"/> 确实位于 <see cref="RootDirectory"/> 之下
-        ///    （相等也不行 —— 那等于把整个 root 端掉），不满足就**什么都不删**直接返回；
-        /// ② 目录不存在时直接返回，不去"顺手"删父目录。
-        /// 删非空目录用递归删除（工作区本来就是自己造的，里面全是本任务的中间产物）；
-        /// 删不掉（占用 / 权限）只吞掉不抛 —— 清工作区失败不该让已经成功的任务变成失败。
+        ///    （相等也不行 —— 那等于把整个 root 端掉），不满足就**什么都不删**；
+        /// ② 目录不存在时直接返回，不去"顺手"删父目录；
+        /// ③ 删非空目录用递归删除（工作区本来就是自己造的，里面全是本任务的中间产物）；
+        ///    删不掉（占用 / 权限）只如实报告，**不抛异常** —— 清工作区失败不该让已经成功的任务变成失败。
+        ///
+        /// 删除失败时**不清空** <see cref="Layers"/>：那些层目录还在盘上，层清单必须继续如实描述现状。
         /// </summary>
-        public void Cleanup()
+        public WorkspaceCleanupResult Cleanup()
         {
             if (!IsInsideRoot(TaskDirectory))
             {
                 // 注意：这里**不抛异常**。路径越界意味着工作区的身份本身可疑，
                 // 此时最有价值的动作就是"一个字节都不动"，让用户自己去看。
-                return;
+                return new WorkspaceCleanupResult
+                {
+                    TaskDirectory = TaskDirectory,
+                    Cleaned = false,
+                    Message = $"工作区目录不在工作区根目录之下，未删除任何东西：{TaskDirectory}"
+                };
+            }
+
+            if (!SafeDirectoryExists(TaskDirectory))
+            {
+                _layers.Clear();
+
+                return new WorkspaceCleanupResult
+                {
+                    TaskDirectory = TaskDirectory,
+                    Cleaned = true,
+                    Message = $"工作区目录已不存在（可能已经被清理过）：{TaskDirectory}"
+                };
             }
 
             try
             {
-                if (Directory.Exists(TaskDirectory))
+                Directory.Delete(TaskDirectory, recursive: true);
+
+                _layers.Clear();
+
+                return new WorkspaceCleanupResult
                 {
-                    Directory.Delete(TaskDirectory, recursive: true);
-                }
+                    TaskDirectory = TaskDirectory,
+                    Cleaned = true,
+                    Message = $"工作区已清理：{TaskDirectory}"
+                };
             }
-            catch
+            catch (Exception ex)
             {
                 // 目录里有文件被占用、权限不足等等：留着就是了，不影响任务结论。
+                return new WorkspaceCleanupResult
+                {
+                    TaskDirectory = TaskDirectory,
+                    Cleaned = false,
+                    Message = $"清理工作区失败（{ex.Message}），目录保留：{TaskDirectory}"
+                };
             }
-
-            _layers.Clear();
         }
 
         /// <summary>

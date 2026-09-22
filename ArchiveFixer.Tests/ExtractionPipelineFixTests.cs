@@ -754,6 +754,163 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(source), "失败时源文件必须原样保留");
         }
 
+        // ================================================================ 递归路径的工作区（data\work\recursive）
+
+        /// <summary>
+        /// 递归模式（<c>RecursionMode != SingleLayer</c>）的这一路同样不许漏垃圾，而且**有两处**：
+        /// ① 递归核心自己的逐层工作区（<c>data\work\recursive\&lt;taskId&gt;\</c>，动辄几百 MB）；
+        /// ② 双面文件抠出来的中间件所在的 <c>work\&lt;任务名&gt;\</c>。
+        /// 递归成功后两处都必须清掉 —— 否则"解压成功"就是一次几百 MB 的泄漏。
+        /// </summary>
+        [Fact]
+        public async Task 递归成功且产物发布后_抠出来的中间件与递归工作区一起被清理()
+        {
+            Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
+            string source = CreateEmbeddedSourceFile("embedded-recursive.7z");
+
+            ArchiveTask task = AddTask(harness, source);
+            task.EmbeddedArchiveOffset = EmbeddedPaddingBytes;
+
+            string taskWorkDirectory = TaskWorkDirectory(harness, task);
+            string recursiveRoot = Path.Combine(harness.PathService.WorkDirectory, "recursive");
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 1);
+                harness.Engine.Extracted = true;
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(1));
+
+            // 递归工作区根目录是**进程级静态**（见 CreateHarness 的说明），用完必须还原。
+            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+
+            try
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = harness.PathService.WorkDirectory;
+
+                await harness.Coordinator.StartExtractAsync();
+            }
+            finally
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            }
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // 抠包真的发生了，而且这一单确实走的递归核心（引擎拿到的是工作区里抠出来的那个文件）。
+            Assert.StartsWith(
+                harness.PathService.WorkDirectory,
+                harness.Engine.ExtractCalls.Single(),
+                StringComparison.OrdinalIgnoreCase);
+
+            // 产物已经被递归核心发布出去 —— 清理工作区不能连产物一起清掉。
+            Assert.True(
+                File.Exists(Path.Combine(task.OutputPath, "payload-00000.bin")),
+                $"递归产物应当已经发布：{task.OutputPath}");
+
+            Assert.False(Directory.Exists(taskWorkDirectory), $"递归成功之后中间工作区还在：{taskWorkDirectory}");
+
+            // 递归核心自己的逐层工作区也必须清干净（这一条就是"几百 MB 泄漏"的钉子）。
+            Assert.Equal(0, CountSubdirectories(recursiveRoot));
+
+            // 源文件一个字节都不许动（AGENTS.md 不变量 1）。
+            Assert.True(File.Exists(source), "清理中间工作区时把源文件删了");
+        }
+
+        /// <summary>
+        /// 递归失败（第一层就没解开）：两处工作区**都**要留着 —— 产物还没发布，
+        /// 这些中间件与逐层产物是用户唯一的线索（与不变量 6/7 的保留口径一致）。
+        /// </summary>
+        [Fact]
+        public async Task 递归失败后_抠出来的中间件不清理()
+        {
+            Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
+            string source = CreateEmbeddedSourceFile("embedded-recursive-fail.7z");
+
+            ArchiveTask task = AddTask(harness, source);
+            task.EmbeddedArchiveOffset = EmbeddedPaddingBytes;
+
+            string taskWorkDirectory = TaskWorkDirectory(harness, task);
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+
+            try
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = harness.PathService.WorkDirectory;
+
+                await harness.Coordinator.StartExtractAsync();
+            }
+            finally
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            }
+
+            // 递归没走完 → 部分完成（绝不显示成功）。
+            Assert.Equal(StatusText.PartiallyCompleted, task.Status);
+            Assert.True(Directory.Exists(taskWorkDirectory), "递归失败之后中间工作区被清掉了");
+            Assert.True(File.Exists(source), "失败时源文件必须原样保留");
+        }
+
+        /// <summary>
+        /// 多分支询问里用户选"只保留当前这一层"（无界面宿主下 ShowConfirm 返回 false，正好走这一支）。
+        ///
+        /// 这条路的结论是在协调器里被**改写成 Completed** 的：递归核心当时以 NeedsDecision 收尾、
+        /// 按规则没清工作区；产物被取回暂存目录之后那份工作区就是纯垃圾，
+        /// 不清的话每次"只保留当前一层"都会在 <c>data\work\recursive</c> 留一份。
+        /// </summary>
+        [Fact]
+        public async Task 用户选择只保留当前一层_递归工作区随成功一起清理()
+        {
+            Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
+            string source = CreateSourceFile("multi-branch.7z");
+
+            ArchiveTask task = AddTask(harness, source);
+
+            string recursiveRoot = Path.Combine(harness.PathService.WorkDirectory, "recursive");
+
+            // 第 0 层解出两个"内层归档"（魔数就是 PK 03 04，递归探测只认魔数）→ 触发多分支询问。
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFakeZipFiles(request.OutputPath!, "inner-a.zip", "inner-b.zip");
+                harness.Engine.Extracted = true;
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(2));
+
+            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+
+            try
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = harness.PathService.WorkDirectory;
+
+                await harness.Coordinator.StartExtractAsync();
+            }
+            finally
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            }
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // 第 0 层产物被取回并定稿：清理没有连产物一起删。
+            // （内层归档按契约是"中间件"，会在输出目录下的「其余物」里，所以按名递归找，
+            //   不假设它躺在输出目录根上。）
+            Assert.True(
+                Directory.Exists(task.OutputPath) &&
+                Directory.GetFiles(task.OutputPath, "inner-a.zip", SearchOption.AllDirectories).Length == 1,
+                $"第 0 层产物应当被取回并定稿：{task.OutputPath}");
+
+            Assert.Equal(0, CountSubdirectories(recursiveRoot));
+        }
+
         // ================================================================ 装配
 
         private sealed class Harness
@@ -958,6 +1115,41 @@ namespace ArchiveFixer.Tests
             catch
             {
                 return -1;
+            }
+        }
+
+        /// <summary>目录下第一层子目录的个数；目录不存在算 0，读不了算 -1（断言会因此红掉，不静默通过）。</summary>
+        private static int CountSubdirectories(string? directory)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
+                    ? 0
+                    : Directory.GetDirectories(directory).Length;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// 写几个"看起来像 ZIP"的产物：递归探测内层归档靠的是**魔数**（PK 03 04），
+        /// 内容真假无所谓 —— 这里要的是"探测出两个内层归档"这个确定的局面。
+        /// </summary>
+        private static void WriteFakeZipFiles(string directory, params string[] fileNames)
+        {
+            Directory.CreateDirectory(directory);
+
+            foreach (string fileName in fileNames)
+            {
+                byte[] bytes = new byte[512];
+                bytes[0] = 0x50;
+                bytes[1] = 0x4B;
+                bytes[2] = 0x03;
+                bytes[3] = 0x04;
+
+                File.WriteAllBytes(Path.Combine(directory, fileName), bytes);
             }
         }
 

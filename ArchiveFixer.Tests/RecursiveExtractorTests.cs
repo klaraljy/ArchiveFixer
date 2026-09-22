@@ -766,6 +766,394 @@ namespace ArchiveFixer.Tests
             Assert.False(Directory.Exists(Path.Combine(target, "pack")), "无意义外壳应当被去掉");
         }
 
+        // ─────────────────── 工作区清理（成功后不留 data\work\recursive 垃圾） ───────────────────
+        //
+        // 这一组盯的是**磁盘泄漏**：递归工作区动辄几百 MB，成功后必须清掉；失败 / 取消 / 部分完成
+        // 必须原样保留（那时的中间产物是用户唯一的线索）。清理只许针对**本实例自己持有的那个**工作区，
+        // 绝不能按目录名或"最新目录"去扫 —— 那会删掉并发任务正在用的工作区。
+
+        [SevenZipFact]
+        public async Task 递归成功_工作区被清理且产物仍在()
+        {
+            RequireSevenZip();
+
+            string source = BuildSourceDir(("readme.txt", "成功之后不该留工作区\n"));
+            string archive = Path.Combine(_root, "cleanup-ok.zip");
+            Run7z("a", "-tzip", archive, Path.Combine(source, "*"));
+
+            string output = Path.Combine(_root, "out", "cleanup-ok");
+            var log = new List<(string Level, string Message)>();
+
+            var task = new ArchiveTask(archive);
+            var extractor = new RecursiveExtractor(
+                new SevenZipEngine(),
+                new MagicAwareProber(),
+                _ => new[] { string.Empty },
+                limits: null,
+                log: (level, message) => log.Add((level, message)));
+
+            RecursionResult result = await extractor.ExtractAsync(
+                task,
+                output,
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.True(result.Completed, result.Summary);
+
+            // 产物必须真的在最终目录里：清工作区不能把产物一起清掉。
+            Assert.True(File.Exists(Path.Combine(output, "readme.txt")), result.Summary);
+
+            string workspaceDirectory = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
+
+            Assert.False(Directory.Exists(workspaceDirectory), $"成功之后工作区不该还在：{workspaceDirectory}");
+
+            // 删什么、为什么：删前一条 INFO（带路径）、删后一条 INFO；本次不该有 WARN。
+            Assert.Contains(
+                log,
+                x => x.Level == "INFO" &&
+                     x.Message.Contains("清理本次任务的工作区", StringComparison.Ordinal) &&
+                     x.Message.Contains(workspaceDirectory, StringComparison.Ordinal));
+            Assert.Contains(
+                log,
+                x => x.Level == "INFO" &&
+                     x.Message.Contains("工作区已清理", StringComparison.Ordinal) &&
+                     x.Message.Contains(workspaceDirectory, StringComparison.Ordinal));
+            Assert.DoesNotContain(log, x => x.Level == "WARN");
+        }
+
+        [SevenZipFact]
+        public async Task 递归失败_工作区保留()
+        {
+            RequireSevenZip();
+
+            // 外层没加密能解开、内层加密只给错密码 → 停在第 1 层（部分完成），这一份工作区必须留着。
+            string outer = BuildEncryptedInnerPackage();
+
+            var task = new ArchiveTask(outer);
+            var extractor = new RecursiveExtractor(
+                new SevenZipEngine(),
+                new MagicAwareProber(),
+                _ => new[] { string.Empty, "wrong-pass" });
+
+            RecursionResult result = await extractor.ExtractAsync(
+                task,
+                Path.Combine(_root, "out", "keep-on-failure"),
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.Equal(RecursionStopReason.WrongPassword, result.StopReason);
+            Assert.False(result.Completed);
+
+            string workspaceDirectory = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
+
+            Assert.True(Directory.Exists(workspaceDirectory), "失败之后工作区必须保留：中间产物是用户唯一的线索");
+            Assert.True(
+                File.Exists(Path.Combine(workspaceDirectory, "report.json")),
+                "失败之后崩溃恢复报告也该留着");
+        }
+
+        [Fact]
+        public async Task 递归取消_工作区保留()
+        {
+            string archive = Path.Combine(_root, "cancel-mid.zip");
+            File.WriteAllBytes(archive, new byte[200]);
+
+            using var cts = new CancellationTokenSource();
+
+            var engine = new FakeEngine();
+            engine.OnExtractAsync = (request, _) =>
+            {
+                // 解压途中用户按下取消：引擎这一单以"已取消"收场（真实 7z 被杀掉也是这样）。
+                cts.Cancel();
+
+                WritePayload(request.OutputPath);
+
+                return Task.FromResult(new ArchiveOperationResult
+                {
+                    Success = false,
+                    Status = StatusText.Cancelled,
+                    Message = "已取消",
+                    DetectedErrorType = "Cancelled"
+                });
+            };
+
+            var task = new ArchiveTask(archive);
+            var extractor = new RecursiveExtractor(engine, new MagicAwareProber(), _ => new[] { string.Empty });
+
+            RecursionResult result = await extractor.ExtractAsync(
+                task,
+                Path.Combine(_root, "out", "cancel-mid"),
+                RecursionMode.SingleChain,
+                null,
+                cts.Token);
+
+            Assert.Equal(RecursionStopReason.UserCancelled, result.StopReason);
+            Assert.False(result.Completed);
+
+            string workspaceDirectory = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
+
+            Assert.True(Directory.Exists(workspaceDirectory), "取消之后工作区必须保留（半截产物是用户唯一的线索）");
+        }
+
+        /// <summary>
+        /// 工作区删不掉（被占用 / 权限）时：只写一条 WARN，**绝不让已经成功的任务变成失败**
+        /// （与单层路径的 CleanupTaskWorkspaceDirectory 同一口径）。产物该发布的照样发布。
+        /// </summary>
+        [Fact]
+        public async Task 工作区删不掉_只写WARN且任务仍然成功()
+        {
+            string archivePath = Path.Combine(_root, "locked-ws.zip");
+            File.WriteAllBytes(archivePath, new byte[200]);
+
+            string output = Path.Combine(_root, "out", "locked-ws");
+            var log = new List<(string Level, string Message)>();
+
+            /*
+             * 一定要让"解压"先停住：假引擎返回的是**已完成**的 Task，整条递归会同步跑到底，
+             * 那时工作区已经被删掉了，测试根本没机会往里面放东西（第一次写这条用例就是这么红的）。
+             */
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var engine = new FakeEngine();
+            engine.OnExtractAsync = async (request, _) =>
+            {
+                await gate.Task.ConfigureAwait(false);
+
+                WritePayload(request.OutputPath);
+
+                return Succeeded();
+            };
+
+            var extractor = new RecursiveExtractor(
+                engine,
+                new MagicAwareProber(),
+                _ => new[] { string.Empty },
+                limits: null,
+                log: (level, message) => log.Add((level, message)));
+
+            Task<RecursionResult> run = extractor.ExtractAsync(
+                new ArchiveTask(archivePath),
+                output,
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            string workspaceDirectory = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
+
+            /*
+             * 在本次任务自己的工作区根上放一个**被独占打开**的文件（发布只搬各层产物，不碰它），
+             * 于是收尾那次 Directory.Delete(recursive: true) 必然失败。
+             */
+            string lockedPath = Path.Combine(workspaceDirectory, "locked.bin");
+            File.WriteAllBytes(lockedPath, new byte[16]);
+
+            RecursionResult result;
+
+            using (new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                // 放好之后才放行：收尾那次删除必然撞上这个句柄。
+                gate.TrySetResult(true);
+
+                result = await run;
+            }
+
+            Assert.True(result.Completed, result.Summary);
+            Assert.True(Directory.Exists(workspaceDirectory), "删不掉时目录应当原样保留，不能假装删了");
+            Assert.Contains(
+                log,
+                x => x.Level == "WARN" && x.Message.Contains("清理工作区失败", StringComparison.Ordinal));
+
+            // 删不掉工作区不影响任务结论与产物发布。
+            Assert.True(File.Exists(Path.Combine(output, "payload.bin")), result.Summary);
+
+            // 断言做完了，顺手把这条用例自己占出来的目录收掉（句柄已释放，现在删得掉）。
+            try
+            {
+                Directory.Delete(workspaceDirectory, recursive: true);
+            }
+            catch
+            {
+                // 收不掉就留给临时目录，不影响结论。
+            }
+        }
+
+        /// <summary>
+        /// 并发这条是**本组的重点**：清理只认"本实例自己建的那个目录"，
+        /// 不许按目录名 / "最新的那个"去扫工作区根 —— 那种实现会把正在跑的那个任务的工作区端掉。
+        /// </summary>
+        [Fact]
+        public async Task 并发两个递归任务_完成的那一个不会删掉另一个的工作区()
+        {
+            string slowArchive = Path.Combine(_root, "concurrent-slow.zip");
+            string fastArchive = Path.Combine(_root, "concurrent-fast.zip");
+            File.WriteAllBytes(slowArchive, new byte[200]);
+            File.WriteAllBytes(fastArchive, new byte[200]);
+
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var slowEngine = new FakeEngine();
+            slowEngine.OnExtractAsync = async (request, _) =>
+            {
+                started.TrySetResult(true);
+
+                // 卡在"解压中"：此刻它的工作区正在被写，另一个任务收尾时的清理绝不能碰它。
+                await release.Task.ConfigureAwait(false);
+
+                WritePayload(request.OutputPath);
+
+                return Succeeded();
+            };
+
+            var slowExtractor = new RecursiveExtractor(slowEngine, new MagicAwareProber(), _ => new[] { string.Empty });
+            var fastExtractor = new RecursiveExtractor(new FakeEngine(), new MagicAwareProber(), _ => new[] { string.Empty });
+
+            string slowOutput = Path.Combine(_root, "out", "concurrent-slow");
+            string fastOutput = Path.Combine(_root, "out", "concurrent-fast");
+
+            Task<RecursionResult> slowRun = slowExtractor.ExtractAsync(
+                new ArchiveTask(slowArchive),
+                slowOutput,
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            string slowWorkspace = Assert.IsType<ExtractionWorkspace>(slowExtractor.CurrentWorkspace).TaskDirectory;
+            File.WriteAllText(Path.Combine(slowWorkspace, "still-mine.txt"), "另一个任务不许删我", Utf8NoBom);
+
+            // 第二个任务（同一个工作区根目录、另一个 taskId）完整跑完 → 它会清掉**自己**的工作区。
+            RecursionResult fastResult = await fastExtractor.ExtractAsync(
+                new ArchiveTask(fastArchive),
+                fastOutput,
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.True(fastResult.Completed, fastResult.Summary);
+            Assert.False(
+                Directory.Exists(Assert.IsType<ExtractionWorkspace>(fastExtractor.CurrentWorkspace).TaskDirectory),
+                "完成的任务应当清掉自己的工作区");
+
+            // 关键断言：清理只动自己那一个目录 —— 正在跑的那个任务的工作区（含刚写进去的文件）必须原封不动。
+            Assert.True(Directory.Exists(slowWorkspace), "并发任务的清理把对方正在用的工作区删掉了");
+            Assert.True(File.Exists(Path.Combine(slowWorkspace, "still-mine.txt")), "对方工作区里的文件被删了");
+
+            release.TrySetResult(true);
+
+            RecursionResult slowResult = await slowRun;
+
+            Assert.True(slowResult.Completed, slowResult.Summary);
+            Assert.True(File.Exists(Path.Combine(slowOutput, "payload.bin")), slowResult.Summary);
+            Assert.False(Directory.Exists(slowWorkspace), "自己成功之后也没清掉工作区");
+        }
+
+        /// <summary>
+        /// 多分支询问 → 用户点"继续"：续跑会把第 0 层在**新工作区**里重解一遍，
+        /// 上一次那份被取代的产物（往往几百 MB）必须跟着本次成功一起清掉，否则每确认一次就多留一份。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用户确认继续后_上一次运行的工作区也随本次成功一起清理()
+        {
+            RequireSevenZip();
+
+            (string outer, _) = BuildTwoBranchPackage();
+
+            string output = Path.Combine(_root, "out", "superseded");
+
+            var task = new ArchiveTask(outer);
+            var extractor = new RecursiveExtractor(
+                new SevenZipEngine(),
+                new MagicAwareProber(),
+                _ => new[] { string.Empty });
+
+            RecursionResult first = await extractor.ExtractAsync(
+                task,
+                output,
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.Equal(RecursionStopReason.NeedsDecision, first.StopReason);
+
+            string firstWorkspace = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
+
+            Assert.True(Directory.Exists(firstWorkspace), "等用户决定时工作区必须保留（产物还在这里）");
+
+            // 用户点"继续"：同一个实例、同一个归档、带着上一次的询问再跑一遍。
+            RecursionResult second = await extractor.ExtractAsync(
+                task,
+                output,
+                RecursionMode.SingleChain,
+                first.Decision,
+                CancellationToken.None);
+
+            Assert.True(second.Completed, second.Summary);
+            Assert.True(File.Exists(Path.Combine(output, "a.txt")), second.Summary);
+            Assert.True(File.Exists(Path.Combine(output, "b.txt")), second.Summary);
+
+            Assert.False(
+                Directory.Exists(Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory),
+                "本次运行的工作区应当被清理");
+
+            // 被续跑取代的那一份也要清：续跑会把第 0 层重解一遍，旧的那份是纯垃圾（几百 MB 量级）。
+            Assert.False(
+                Directory.Exists(firstWorkspace),
+                "被本次续跑取代的工作区也该清掉，否则每确认一次多分支就多留一份重复产物");
+        }
+
+        /// <summary>
+        /// 同一个实例被拿去跑**另一个**归档时（不是续跑），上一个任务的工作区不能被连带清掉 ——
+        /// 那个任务停在"等你决定"，状态是部分完成，它的产物是用户唯一的线索。
+        /// 判据是归档路径，不是"实例上有没有记着东西"。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 同一个实例换归档_不清理上一个任务的工作区()
+        {
+            RequireSevenZip();
+
+            (string firstOuter, _) = BuildTwoBranchPackage();
+
+            string otherSource = BuildSourceDir(new[] { ("data.txt", "另一个包\n") }, "_other");
+            string secondArchive = Path.Combine(_root, "other.zip");
+            Run7z("a", "-tzip", secondArchive, Path.Combine(otherSource, "*"));
+
+            var extractor = new RecursiveExtractor(
+                new SevenZipEngine(),
+                new MagicAwareProber(),
+                _ => new[] { string.Empty });
+
+            RecursionResult first = await extractor.ExtractAsync(
+                new ArchiveTask(firstOuter),
+                Path.Combine(_root, "out", "swap-first"),
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.Equal(RecursionStopReason.NeedsDecision, first.StopReason);
+
+            string firstWorkspace = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
+
+            // 换成另一个包（不是续跑）：这一次真的成功了，也只许清它自己的那一份。
+            RecursionResult second = await extractor.ExtractAsync(
+                new ArchiveTask(secondArchive),
+                Path.Combine(_root, "out", "swap-second"),
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.True(second.Completed, second.Summary);
+            Assert.False(
+                Directory.Exists(Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory),
+                "本次运行的工作区应当被清理");
+            Assert.True(
+                Directory.Exists(firstWorkspace),
+                "上一个任务（等用户决定）的工作区被别的任务连带清掉了");
+        }
+
         // ────────────────────────────── 测试基础设施 ──────────────────────────────
 
         private async Task<RecursionResult> ExtractAsync(string archivePath, string outputDirectory, RecursionMode mode)
@@ -1049,15 +1437,21 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// 只用于"展开比超限"这条：真压缩包很难天然造出 500 倍展开比。
         /// 其余行为（成功判定、错误分类）都尽量走真引擎，不用这个。
+        ///
+        /// 另外也用于"并发 / 取消"这两条：它们要控制"解压到一半"的时机，
+        /// 真 7z 跑得太快、卡不住，用假引擎才能把竞态摆成确定的局面。
         /// </summary>
         private sealed class FakeEngine : IArchiveEngine
         {
             private readonly long _uncompressedSize;
 
-            public FakeEngine(long uncompressedSize)
+            public FakeEngine(long uncompressedSize = 0)
             {
                 _uncompressedSize = uncompressedSize;
             }
+
+            /// <summary>非 null 时接管解压：并发 / 取消用例靠它决定"什么时候返回、返回什么"。</summary>
+            public Func<ArchiveRequest, ExtractOptions, Task<ArchiveOperationResult>>? OnExtractAsync { get; set; }
 
             public string Id => "fake";
 
@@ -1094,7 +1488,7 @@ namespace ArchiveFixer.Tests
                 ArchiveRequest request,
                 CancellationToken cancellationToken = default)
             {
-                return Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
+                return Task.FromResult(Succeeded());
             }
 
             public Task<ArchiveOperationResult> ExtractAsync(
@@ -1102,17 +1496,33 @@ namespace ArchiveFixer.Tests
                 ExtractOptions options,
                 CancellationToken cancellationToken = default)
             {
-                // 假引擎也要产出真实文件：否则后面"量产物"的代码路径根本没跑到。
-                string outputPath = request.OutputPath ?? string.Empty;
-
-                if (!string.IsNullOrWhiteSpace(outputPath))
+                if (OnExtractAsync != null)
                 {
-                    Directory.CreateDirectory(outputPath);
-                    File.WriteAllText(Path.Combine(outputPath, "payload.bin"), "假引擎产物", Utf8NoBom);
+                    return OnExtractAsync(request, options);
                 }
 
-                return Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
+                // 假引擎也要产出真实文件：否则后面"量产物"的代码路径根本没跑到。
+                WritePayload(request.OutputPath);
+
+                return Task.FromResult(Succeeded());
             }
+        }
+
+        /// <summary>假引擎的产物：一个普通文件（不是归档，所以不会被探测成"内层包"）。</summary>
+        private static void WritePayload(string? outputPath)
+        {
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(outputPath);
+            File.WriteAllText(Path.Combine(outputPath, "payload.bin"), "假引擎产物", Utf8NoBom);
+        }
+
+        private static ArchiveOperationResult Succeeded()
+        {
+            return ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero);
         }
     }
 }

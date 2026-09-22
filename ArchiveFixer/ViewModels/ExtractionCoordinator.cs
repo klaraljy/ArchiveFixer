@@ -56,9 +56,22 @@ namespace ArchiveFixer.ViewModels
         /// <see cref="RecursiveExtractor"/> 的上限是构造参数，构造一次就再也改不了，
         /// 而这里是 ViewModel 层的单例：用户改完设置（层数 / 每层密码上限）不重启程序就不生效。
         /// 所以每次任务现建一个（见 <see cref="CreateRecursiveExtractor"/>），上限当场从设置里取。
+        ///
+        /// 日志出口也接在这里：递归核心要把它清工作区（删目录，**不可逆**）的"删什么、为什么"
+        /// 写出来，而它自己不认识 GUI、也不引用 LogService（与引擎、探测器同一套注入方式，
+        /// AGENTS.md §4 分层铁律）。<see cref="MainViewModel.AppendLog(string, string)"/> 走的是
+        /// BeginInvoke，从后台线程调用是安全的。
+        ///
+        /// ⚠ 一个任务一个实例：递归核心把"本次任务的工作区"记在实例上（<c>CurrentWorkspace</c>），
+        /// 清理只认那一个目录。共用实例会让并发任务互相覆盖这个字段。
         /// </summary>
         private RecursiveExtractor CreateRecursiveExtractor() =>
-            new(_archiveEngine, new MagicArchiveProber(), BuildRecursionPasswordCandidates, BuildRecursionLimits());
+            new(
+                _archiveEngine,
+                new MagicArchiveProber(),
+                BuildRecursionPasswordCandidates,
+                BuildRecursionLimits(),
+                AppendLog);
 
         /// <summary>
         /// 递归的硬上限（不变量 8）：层数与每层密码尝试次数都取用户的设置项。
@@ -2372,6 +2385,26 @@ namespace ArchiveFixer.ViewModels
                             FinalOutputPath = stageDirectory,
                             Summary = $"按你的选择只解开了当前这一层，已取回 {moved} 个文件（定稿后进输出目录）。"
                         };
+
+                        /*
+                         * 产物已经取回暂存目录 → 那份递归工作区（含 report.json）从此是纯垃圾，
+                         * 留着还会在下次启动时被算进"未完成的工作区"报告。
+                         *
+                         * 为什么得在这里补一刀：递归核心是以 NeedsDecision 收的尾，按规则**没有**清工作区
+                         * （"等你决定"属于部分完成）；结论是在**这里**被改写成 Completed 的 ——
+                         * 谁改写结论，谁负责把"这次算成功"的收尾补上（递归成功那一支的清理在
+                         * RecursiveExtractor.FinalizeRun 里，走的是同一个 Cleanup()）。
+                         *
+                         * ⚠ 只有"一个文件都没漏下"才清：MoveDirectoryContent 是尽力而为
+                         * （单个文件搬不动就跳过、只记进返回的文件数），漏下的那些还在工作区里，
+                         * 删掉它们等于丢用户的产物（不变量 1 的精神）。
+                         */
+                        if (HasNoFiles(layerZeroOutput))
+                        {
+                            recursiveExtractor.TryCleanupCurrentWorkspace(
+                                task.FileName,
+                                "用户选择只保留当前这一层，第 0 层产物已取回暂存目录");
+                        }
                     }
                     else
                     {
@@ -2479,6 +2512,26 @@ namespace ArchiveFixer.ViewModels
             }
 
             return moved;
+        }
+
+        /// <summary>
+        /// 目录里（含各级子目录）**一个文件都没有**时返回 true；目录不存在或读不了返回 false。
+        ///
+        /// 只给"用户选择只保留当前这一层"那条路用：它是"现在能不能安全清掉这份工作区"的判据 ——
+        /// 读不了就按"还有东西"处理，宁可不清理，也不能把没搬走的产物删掉。
+        /// </summary>
+        private static bool HasNoFiles(string? directory)
+        {
+            try
+            {
+                return !string.IsNullOrWhiteSpace(directory) &&
+                       Directory.Exists(directory) &&
+                       Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length == 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>

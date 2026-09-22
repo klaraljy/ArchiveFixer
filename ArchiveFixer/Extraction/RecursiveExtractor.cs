@@ -196,8 +196,14 @@ namespace ArchiveFixer.Extraction
     ///    不许直接拼 7z 参数、不许认识 GUI（AGENTS.md §3.1 四条禁止项）。这样才能脱离 GUI 被测。
     /// 2. 它只**解压**：不删源文件（那是 SourceCleanupService 的事）、不改名、不写最终目录
     ///    （中间产物一律先落工作区，完成后再发布）。
+    ///    它唯一会删的东西是**它自己造出来的那个工作区目录**（<see cref="CurrentWorkspace"/>），
+    ///    而且只在"解完 + 产物发布成功 + 没被取消"时删（见 <see cref="FinalizeRun"/>）；
+    ///    失败 / 取消 / 部分完成一律保留，那些目录是用户唯一的线索。
     /// 3. 密码候选由 <c>passwordProvider</c> 给，本类不碰密码本、不记明文；
     ///    对外只暴露 "空密码" / "******"。
+    /// 4. 日志由 <c>log</c> 委托注入（可空）：本类不认识 GUI，也不引用具体日志实现 ——
+    ///    与引擎 / 探测器 / 密码来源全部注入同一个理由（AGENTS.md §4 分层铁律）。
+    ///    清理工作区是**不可逆操作**，删前删后各要一条 INFO、删失败一条 WARN（§9.5 同一要求）。
     ///
     /// 主循环是**一趟宽度优先**的：队列里每一项 = "一个待解的归档 + 它在第几层"，
     /// 解一层、探一层、再决定要不要把探测到的内层归档入队。
@@ -221,19 +227,64 @@ namespace ArchiveFixer.Extraction
         private readonly RecursionLimits _limits;
 
         /// <summary>
+        /// 日志出口（level, message）。为 null 时只做事、不写日志（单元测试直接 new 的场合）。
+        ///
+        /// 用委托而不是引用具体日志实现：递归核心不认识 GUI，也不该依赖 LogService ——
+        /// 与引擎 / 探测器 / 密码来源全部注入是同一个理由。调用方若是多线程宿主，
+        /// 得保证这个委托本身线程安全（<c>MainViewModel.AppendLog</c> 走 BeginInvoke，是安全的）。
+        /// </summary>
+        private readonly Action<string, string>? _log;
+
+        /// <summary>
+        /// **本实例自己持有的**本次（最近一次）运行的工作区。
+        ///
+        /// 清理永远只针对这个对象，绝不按目录名或"最新目录"去扫 <c>data\work\recursive</c> ——
+        /// 并发跑两个递归任务时，那种扫描式删除会把对方正在写的工作区端掉。
+        /// 真正被删的是**本次运行**建出来的那一个（<see cref="ExtractAsync"/> 里的局部变量，
+        /// 见 <see cref="FinalizeRun"/>），这个属性只是把同一个对象暴露出来给诊断 / 测试 /
+        /// "结论被调用方改写"的那条路（<see cref="TryCleanupCurrentWorkspace"/>）用。
+        ///
+        /// ⚠ 同一个实例**不适合并发跑两次 ExtractAsync**：这个属性会被后一次覆盖。
+        /// 协调器是"一个任务一个实例"（<c>ExtractionCoordinator.CreateRecursiveExtractor</c>），
+        /// 并发任务各有各的实例，所以互不影响。
+        /// </summary>
+        public ExtractionWorkspace? CurrentWorkspace { get; private set; }
+
+        /// <summary>
+        /// 上一次运行留下、已被本次续跑取代的工作区（多分支询问 → 用户确认继续这一条路）。
+        ///
+        /// 为什么是**列表**而不是一个槽位：一个实例上可能出现"询问 → 续跑"这样的多次运行，
+        /// 单槽位会在后一次续跑时把前一份**悄悄忘掉**——而那一份往往就是几百 MB。
+        /// 这里只负责"记着"；清理时机只有一个：某次运行**成功**收尾时（见 FinalizeRun）。
+        ///
+        /// 换归档（不是同一个包的续跑）时整份清空：那些工作区属于**别的**任务，
+        /// 不能因为后来某个任务成功就被删掉 —— 它们的状态是"部分完成，要保留"。
+        /// </summary>
+        private readonly List<ExtractionWorkspace> _supersededWorkspaces = new();
+
+        /// <summary>最近一次运行解的是哪个归档。用来判断"这一次是不是同一个归档的续跑"。</summary>
+        private string _lastRunArchivePath = string.Empty;
+
+        /// <summary>
         /// passwordProvider：给定归档路径，返回按优先级排好的密码候选（**空字符串代表试空密码**）。
         /// 它由调用方注入，递归层自己不碰密码本，也不记明文。
         /// </summary>
+        /// <param name="log">
+        /// 日志出口（level, message），可空。清理工作区是**不可逆操作**，删前删后各要一条 INFO、
+        /// 删失败要一条 WARN（AGENTS.md §9.5 同一要求）—— 所以本类需要一个写日志的地方。
+        /// </param>
         public RecursiveExtractor(
             IArchiveEngine engine,
             IArchiveProber prober,
             Func<string, IReadOnlyList<string>> passwordProvider,
-            RecursionLimits? limits = null)
+            RecursionLimits? limits = null,
+            Action<string, string>? log = null)
         {
             _engine = engine ?? throw new ArgumentNullException(nameof(engine));
             _prober = prober ?? throw new ArgumentNullException(nameof(prober));
             _passwordProvider = passwordProvider ?? (_ => Array.Empty<string>());
             _limits = limits ?? RecursionLimits.Default;
+            _log = log;
         }
 
         /// <summary>
@@ -303,6 +354,41 @@ namespace ArchiveFixer.Extraction
 
             // 工作区必须在循环之前就建出来：取消 / 立刻失败时也要留下"产物在哪"的线索。
             ExtractionWorkspace workspace = CreateWorkspace(task);
+
+            /*
+             * 本次运行的工作区由**本实例自己持有**（见 CurrentWorkspace 的说明）：
+             * 无论后面是清理还是发布，用的都是这一个对象 —— 不去扫目录、不去按名字猜，
+             * 所以并发跑的两个任务永远碰不到对方的目录。
+             *
+             * 顺带判断"这一次是不是同一个归档的续跑"（多分支询问 → 用户确认继续）：
+             * 续跑会把第 0 层在新工作区里**重解一遍**，上一次那份产物因此变成纯垃圾
+             * （往往是几百 MB）。它当时没被清是对的（"等用户决定"属于部分完成，线索要留住）；
+             * 现在用户已经决定、整条递归也真的走完了，那个理由不再成立 —— 见 CleanupSupersededWorkspaces。
+             *
+             * 判据里必须比对**归档路径**：调用方若把同一个实例拿去跑另一个任务，
+             * 上一个任务的工作区属于"部分完成"，不能因为别的任务成功就被删掉。
+             */
+            string runArchivePath = SafePathHelper.GetFullPathSafe(task.CurrentPath);
+            ExtractionWorkspace? previousWorkspace = CurrentWorkspace;
+
+            bool continuesSameArchive = previousDecision != null &&
+                previousWorkspace != null &&
+                runArchivePath.Length > 0 &&
+                SafePathHelper.PathEquals(_lastRunArchivePath, runArchivePath);
+
+            if (continuesSameArchive)
+            {
+                _supersededWorkspaces.Add(previousWorkspace!);
+            }
+            else
+            {
+                // 不是同一个包的续跑：上一轮攒下的那几份属于**别的**任务（部分完成、要保留），
+                // 不能再由本次的成功去清它们。
+                _supersededWorkspaces.Clear();
+            }
+
+            CurrentWorkspace = workspace;
+            _lastRunArchivePath = runArchivePath;
 
             try
             {
@@ -427,15 +513,19 @@ namespace ArchiveFixer.Extraction
 
                 bool publish = stopReason == RecursionStopReason.Completed;
 
-                return BuildResult(
-                    stopReason,
-                    layers,
-                    decision,
+                return FinalizeRun(
+                    BuildResult(
+                        stopReason,
+                        layers,
+                        decision,
+                        workspace,
+                        finalOutputDirectory,
+                        string.Empty,
+                        publish,
+                        unexpandedCount),
                     workspace,
-                    finalOutputDirectory,
-                    string.Empty,
-                    publish,
-                    unexpandedCount);
+                    task.FileName,
+                    cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -443,28 +533,36 @@ namespace ArchiveFixer.Extraction
                  * 取消不是失败（AGENTS.md §6 第 6 条）：保留工作区，让用户能看到已经解出来的部分，
                  * 也能从那里接着处理。绝不在这里抛异常给上层。
                  */
-                return BuildResult(
-                    RecursionStopReason.UserCancelled,
-                    layers,
-                    decision,
+                return FinalizeRun(
+                    BuildResult(
+                        RecursionStopReason.UserCancelled,
+                        layers,
+                        decision,
+                        workspace,
+                        finalOutputDirectory,
+                        string.Empty,
+                        published: false,
+                        unexpandedCount),
                     workspace,
-                    finalOutputDirectory,
-                    string.Empty,
-                    published: false,
-                    unexpandedCount);
+                    task.FileName,
+                    cancellationToken);
             }
             catch (Exception ex)
             {
                 // 兜底：一个包炸了不能把整批任务带下水（AGENTS.md §6 第 9 条）。
-                return BuildResult(
-                    RecursionStopReason.EngineFailed,
-                    layers,
-                    decision,
+                return FinalizeRun(
+                    BuildResult(
+                        RecursionStopReason.EngineFailed,
+                        layers,
+                        decision,
+                        workspace,
+                        finalOutputDirectory,
+                        PasswordMasker.Sanitize(ex.Message),
+                        published: false,
+                        unexpandedCount),
                     workspace,
-                    finalOutputDirectory,
-                    PasswordMasker.Sanitize(ex.Message),
-                    published: false,
-                    unexpandedCount);
+                    task.FileName,
+                    cancellationToken);
             }
         }
 
@@ -1421,6 +1519,10 @@ namespace ArchiveFixer.Extraction
         /// ① <see cref="RecursionResult.Completed"/> 只在真正走完时为 true；
         /// ② 部分完成时产物**留在工作区**、Summary 里必须写清工作区在哪；
         /// ③ 全完成时才发布，且发布失败要如实说出来，不能因为"层都解完了"就假装成功。
+        ///
+        /// ⚠ 工作区清理**不在这里**：本方法只负责给出结论（删东西要看结论 + 取消令牌，
+        /// 见 <see cref="FinalizeRun"/>）。发布失败时它会把 Completed 降成 false，
+        /// 那个 false 正是"产物还压在工作区里、绝不能删"的判据。
         /// </summary>
         private RecursionResult BuildResult(
             RecursionStopReason stopReason,
@@ -1484,6 +1586,147 @@ namespace ArchiveFixer.Extraction
                     extraMessage,
                     unexpandedCount)
             };
+        }
+
+        /// <summary>
+        /// 一次运行的收尾：把结论交回调用方之前，按结论决定要不要清掉**本次运行自己建的那个**工作区。
+        ///
+        /// 只有"真的走完 + 没被取消"才清（AGENTS.md §6 第 13 条与单层路径
+        /// <c>ExtractionCoordinator.CleanupTaskWorkspaceDirectory</c> 同一口径）：
+        /// · <see cref="RecursionResult.Completed"/> 已经蕴含"产物发布成功"（发布失败时
+        ///   <see cref="BuildResult"/> 会把它降成 false），所以这一条同时覆盖"产物已出去"这个前提；
+        /// · 取消可能在最后一层解完之后才到（队列已经空了），那时结论仍是 Completed ——
+        ///   按规则**不许清**，所以要在这里再看一眼令牌；
+        /// · 失败 / 部分完成 / 等用户决定一律保留：那些目录里的中间产物是用户唯一的线索，
+        ///   "失败能定位到层、能从那一层重试"这条能力本身就依赖它们还在（见类注释）。
+        ///
+        /// 为什么这条线放在本类而不是调用方：工作区是本类建出来的，谁来建谁负责收 ——
+        /// 调用方（协调器）只拿到一个结论对象，它无从知道这次到底建了哪个目录。
+        /// </summary>
+        private RecursionResult FinalizeRun(
+            RecursionResult result,
+            ExtractionWorkspace workspace,
+            string taskLabel,
+            CancellationToken cancellationToken)
+        {
+            if (result.Completed && !cancellationToken.IsCancellationRequested)
+            {
+                CleanupWorkspace(workspace, taskLabel, "递归解压已完成且产物已发布");
+                CleanupSupersededWorkspaces(taskLabel);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 由调用方在**接管了本次运行的结论**之后调用：把最近一次运行留下的工作区按"任务成功"清掉。
+        ///
+        /// 目前只有一个地方用得上（<c>ExtractionCoordinator</c> 的"用户选择只保留当前这一层"）：
+        /// 递归核心是以 NeedsDecision 收的尾，按规则**没有**清工作区；而调用方随后把第 0 层产物
+        /// 取回暂存目录、把结论改写成 Completed —— 那份工作区（含 report.json）从此是纯垃圾，
+        /// 留着还会在下次启动时被算进"未完成的工作区"报告。
+        ///
+        /// ⚠ 调用方必须先确认**产物已经不在工作区里**（拿走之后）再调；否则这就是在丢用户的产物。
+        /// 只认本实例持有的那一个目录，不做任何目录扫描。
+        /// </summary>
+        /// <returns>工作区确实不在了（本次删掉 / 本来就不在）返回 true。</returns>
+        public bool TryCleanupCurrentWorkspace(string taskLabel, string reason)
+        {
+            ExtractionWorkspace? workspace = CurrentWorkspace;
+
+            if (workspace == null)
+            {
+                return false;
+            }
+
+            return CleanupWorkspace(workspace, taskLabel, reason);
+        }
+
+        /// <summary>
+        /// 清理**本实例持有的那个**工作区目录。
+        ///
+        /// 安全性（这是删目录，每一条都写死在这里）：
+        /// · 删的是本实例手上的那个工作区对象（本次运行开头建出来的那一个），**不按目录名、
+        ///   也不按"最新目录"去扫** <c>data\work\recursive</c> —— 并发跑两个递归任务时，
+        ///   扫描式删除会把对方正在写的工作区端掉；
+        /// · 容器内校验先在这里做一遍（必须在工作区根目录之下），
+        ///   <see cref="ExtractionWorkspace.Cleanup"/> 内部还会再独立校验一遍，越界时一个字节都不动；
+        /// · 删不掉只写 WARN：清工作区失败绝不该让**已经成功**的任务变成失败
+        ///   （与 AGENTS.md §6 第 9 条同一精神）。
+        ///
+        /// 生产环境里工作区根目录是 <c>&lt;程序目录&gt;\data\work\recursive</c>
+        /// （<see cref="ConfiguredWorkspaceRoot"/> 由 MainViewModel 设成 PathService.WorkDirectory），
+        /// 所以"在工作区根之下"同时就是"在 data\work 之下"。
+        /// </summary>
+        private bool CleanupWorkspace(ExtractionWorkspace workspace, string taskLabel, string reason)
+        {
+            if (!ArchivePathGuard.IsInsideRoot(workspace.RootDirectory, workspace.TaskDirectory, out string guardReason))
+            {
+                // 越界＝工作区的身份本身可疑：一个字节都不动，但必须留下证据（这是失败，不是静默跳过）。
+                Log(
+                    "WARN",
+                    $"{taskLabel}：工作区不在工作区根目录之下，已跳过清理 —— {guardReason}：{workspace.TaskDirectory}");
+
+                return false;
+            }
+
+            // 删除是**不可逆**的：动手之前先把"删什么、为什么、多大"写进日志（AGENTS.md §9.5 同一要求）。
+            (int fileCount, long totalSize) = OutputVerifier.Measure(workspace.TaskDirectory);
+
+            Log(
+                "INFO",
+                $"{taskLabel}：{reason}，清理本次任务的工作区（{fileCount} 个文件 / {totalSize} 字节）：{workspace.TaskDirectory}");
+
+            WorkspaceCleanupResult cleanup = workspace.Cleanup();
+
+            // 删成了是 INFO，没删成（占用 / 权限 / 越界）是 WARN —— 两种都要留证据。
+            Log(cleanup.Cleaned ? "INFO" : "WARN", $"{taskLabel}：{cleanup.Message}");
+
+            return cleanup.Cleaned;
+        }
+
+        /// <summary>
+        /// 清理"上一次运行留下、已被本次续跑取代"的工作区（多分支询问 → 用户确认继续这一条路）。
+        ///
+        /// 为什么它必须跟着一起清：用户点"继续"之后，续跑会把第 0 层在**新工作区**里重解一遍，
+        /// 上一次那份产物因此变成纯垃圾 —— 而它往往就是几百 MB。它当时没被清是对的
+        /// （"等用户决定"属于部分完成，规则 7 要求保留）；现在用户已经决定、整条递归也真的走完了，
+        /// 那个理由不再成立，两份都留着才是泄漏。
+        ///
+        /// 只在本次**成功**时清（失败 / 取消 / 部分完成时两份都留着），而且只认"同一个归档的续跑"
+        /// （判据在 <see cref="ExtractAsync"/> 里）—— 免得调用方拿同一个实例去跑另一个任务时误删。
+        /// </summary>
+        private void CleanupSupersededWorkspaces(string taskLabel)
+        {
+            if (_supersededWorkspaces.Count == 0)
+            {
+                return;
+            }
+
+            // 先清账再动手：万一清理过程里抛了（它自己不抛），也不会在下次成功时重复删同一个目录。
+            ExtractionWorkspace[] superseded = _supersededWorkspaces.ToArray();
+            _supersededWorkspaces.Clear();
+
+            foreach (ExtractionWorkspace workspace in superseded)
+            {
+                CleanupWorkspace(workspace, taskLabel, "上一次运行（等待用户决定多分支）的工作区已被本次续跑取代");
+            }
+        }
+
+        /// <summary>
+        /// 写一条日志。没有日志出口时（单元测试直接 new）什么也不做；
+        /// 日志出口自己抛异常时也吞掉 —— 写日志失败绝不该影响任务结论。
+        /// </summary>
+        private void Log(string level, string message)
+        {
+            try
+            {
+                _log?.Invoke(level, message);
+            }
+            catch
+            {
+                // 见方法注释。
+            }
         }
 
         private static string BuildSummary(
