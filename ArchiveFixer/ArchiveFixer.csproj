@@ -29,6 +29,16 @@
     <None Include="tools\7zip\7z.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!--
+        许可文本必须随分发（7-Zip 主体 LGPL + unRAR 限制条款）。
+        2026-09-22 升级到 26.03 时才补上 —— 之前内置了 7z 却没有许可文本，是分发合规缺口。
+    -->
+    <None Include="tools\7zip\License.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="tools\7zip\README.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <!--
