@@ -104,4 +104,33 @@ public class PasswordServiceTests
 
         Assert.False(moved);
     }
+
+    /// <summary>
+    /// 日志文案要说清密码**是哪来的** —— 只对本次运行有效的手动密码（一键处理/批量开始前问的那一次）
+    /// 以前走 default 分支，日志里写成"密码候选第 N 项"，事后完全看不出这个密码是用户当场给的。
+    /// 同时钉住：任何分支都只出脱敏占位符，绝不出明文（AGENTS.md §6 第 5 条）。
+    /// </summary>
+    [Fact]
+    public void BuildTryPasswordLogText_ManualBatch_SaysWhereItCameFromAndStaysMasked()
+    {
+        var service = new PasswordService();
+
+        var manual = new PasswordItem
+        {
+            Value = "<示例密码>",
+            Source = "ManualBatch",
+            IsEnabled = true
+        };
+
+        string text = service.BuildTryPasswordLogText(manual, 2);
+
+        Assert.Equal("尝试本次运行手动输入的密码：******", text);
+        Assert.DoesNotContain(manual.Value, text, System.StringComparison.Ordinal);
+
+        // 别的来源不动（这条只补 ManualBatch 那一个分支）。
+        Assert.Equal("尝试空密码", service.BuildTryPasswordLogText(
+            new PasswordItem { Value = string.Empty, Source = "Empty" }, 1));
+        Assert.Equal("尝试密码候选第 3 项：******", service.BuildTryPasswordLogText(
+            new PasswordItem { Value = "x", Source = "别的来源" }, 3));
+    }
 }

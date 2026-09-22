@@ -572,10 +572,13 @@ namespace ArchiveFixer.Extraction
             /*
              * 第二道防线（不变量 4）：解压后校验真实落点。
              *
-             * 7z.exe 是外部进程，第一道预检挡不住它自己拼出来的落点（符号链接条目、引擎自身的
-             * 路径处理都在预检视野之外）。越界必须成为**失败结论**：不发布、不清理源包，
-             * 报告里写清越界的是哪个产物、落在哪 —— 只写一行日志而结论仍是"解压成功"，
-             * 等于把不变量 4 降级成一条没人看的提示。
+             * 外部引擎（7z.exe / UnRAR.exe）是独立进程，第一道预检挡不住它自己拼出来的落点
+             * （符号链接条目、引擎自身的路径处理都在预检视野之外）。越界必须成为**失败结论**：
+             * 不发布、不清理源包，报告里写清越界的是哪个产物、落在哪 —— 只写一行日志而结论仍是
+             * "解压成功"，等于把不变量 4 降级成一条没人看的提示。
+             *
+             * ⚠ 措辞与单层路径（ExtractionCoordinator 的落点校验）**逐字对齐**：
+             * 同一个口径在两条路径上各说一套，用户会以为是两件事。
              */
             string? landingViolation = FindLandingViolation(item.Layer.OutputPath);
 
@@ -588,7 +591,9 @@ namespace ArchiveFixer.Extraction
                     OutputPath = item.Layer.OutputPath,
                     Success = false,
                     Status = StatusText.ExtractFailed,
-                    Message = "产物越出本层产物目录，已拒绝承认本次解压：" + landingViolation,
+                    Message = "产物越出本层产物目录 —— 按既定口径**整包判定失败**（不归集产物、不处理源包、其余物不生成）：" +
+                              landingViolation +
+                              "。⚠ 解压是外部引擎进程写的盘，越界的那一次写入拦不住；本层产物留在工作区、未发布。",
                     InnerArchives = Array.Empty<string>(),
                     OutputFileCount = fileCount,
                     OutputSize = outputSize,

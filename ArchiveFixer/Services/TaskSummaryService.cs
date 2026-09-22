@@ -144,6 +144,23 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 某个任务**实际**用的引擎（可选来源）。
+        ///
+        /// <para>
+        /// 为什么要留这个口子：<see cref="EngineIdentity"/> 回答的是"这个程序的通用引擎是谁"，
+        /// 而多引擎接进流程之后，一个 RAR 走 UnRAR、一个 zip 走 7-Zip 是**常态** ——
+        /// 报告里逐个任务都写"7-Zip"就把溯源写错了（不变量 14 要求追到**具体**引擎）。
+        /// 真正干活的引擎会在结果上盖戳（<c>ArchiveOperationResult.EngineId/EngineVersion</c>），
+        /// 由调用方（主窗口）按归档路径取回，这里只管用。
+        /// </para>
+        /// <para>
+        /// 返回 null / 不接这个口子时，逐任务那一行退回 <see cref="EngineIdentity"/> ——
+        /// 也就是说**引擎名 + 版本在任何情况下都不会缺**（不变量 14 的底线）。
+        /// </para>
+        /// </summary>
+        public Func<ArchiveTask, EngineIdentity?>? EngineIdentityProvider { get; set; }
+
+        /// <summary>
         /// "归档内条目 / 失败层"明细的**外部来源**（可选）。
         ///
         /// 为什么留这个口子：任务模型本身只记到"这个包失败了"这一层，
@@ -372,6 +389,8 @@ namespace ArchiveFixer.Services
         ///
         /// 表头三行是"结果可追溯"的落点（不变量 14）：生成时间（**固定格式**，见 LogService）
         /// 与引擎名 + 版本。以前失败清单里一个字都没有，事后无法回答"这是哪个版本跑出来的"。
+        /// 多引擎接进流程之后，表头列的是**本次实际用过的引擎**（可能不止一个），
+        /// 而逐个归档那一行写的是**它自己**用的那个（见 <see cref="EngineIdentityProvider"/>）。
         /// </summary>
         public string BuildFailedListText(IEnumerable<ArchiveTask> tasks)
         {
@@ -382,7 +401,7 @@ namespace ArchiveFixer.Services
 
             builder.AppendLine(FailedListTitle);
             builder.AppendLine(GeneratedAtLabel + LogService.FormatTimestamp(DateTime.Now));
-            builder.AppendLine(EngineLabel + EngineIdentity.Describe());
+            builder.AppendLine(EngineLabel + DescribeRunEngines(allTasks));
 
             if (failedTasks.Count == 0)
             {
@@ -422,7 +441,8 @@ namespace ArchiveFixer.Services
         /// 失败清单的第二级：这个归档内部到底怎么了（"归档内条目 / 失败层"）。
         ///
         /// 只发布**结构化的既有字段**，不解析中文文案（AGENTS.md §7：统计与判定不得依赖文案比较）：
-        /// · 引擎名 + 版本 —— 不变量 14，逐任务一行；
+        /// · 引擎名 + 版本 —— 不变量 14，逐任务一行（**优先写这个任务实际用的那个引擎**，
+        ///   见 <see cref="EngineIdentityProvider"/>；问不到才退回通用引擎身份）；
         /// · 层级 —— 是用户给的源包，还是续解出来的内层包（含父包名）；
         /// · 引擎结论 / 校验结论 —— 原样带出（里面有 7-Zip 报的条目数、预期与实际的文件数落差）；
         /// · 分卷缺哪几个 —— 不变量 7 要求"报缺哪几个"，失败清单里同样要说清；
@@ -438,7 +458,7 @@ namespace ArchiveFixer.Services
                 return lines;
             }
 
-            lines.Add(EngineLabel + EngineIdentity.Describe());
+            lines.Add(EngineLabel + (ResolveTaskEngine(task) ?? EngineIdentity).Describe());
 
             lines.Add(task.IsContinuationTask
                 ? LayerLabel + $"内层包（父包：{ResolveParentName(task)}）"
@@ -485,6 +505,71 @@ namespace ArchiveFixer.Services
             }
 
             return lines;
+        }
+
+        /// <summary>
+        /// 某个任务**实际**用的引擎；问不到（没接口子、或这个任务根本没跑过引擎）返回 null。
+        ///
+        /// 与 <see cref="EntryDetailProvider"/> 同一口径：外部来源抛异常**不能**把整份报告带崩 ——
+        /// 失败清单是用户失败后唯一能读到的产物。
+        /// </summary>
+        public EngineIdentity? ResolveTaskEngine(ArchiveTask? task)
+        {
+            if (task == null || EngineIdentityProvider == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return EngineIdentityProvider(task);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 报告表头那一行的引擎信息。
+        ///
+        /// 优先列**本次这些任务实际用过的**引擎（多引擎分派之下可能不止一个：
+        /// RAR 走 UnRAR、zip 走 7-Zip；如实列全，不挑一个当代表）；
+        /// 一个都问不到时退回通用引擎身份 —— 两种写法都**一定**带引擎名 + 版本（不变量 14）。
+        /// </summary>
+        private string DescribeRunEngines(IEnumerable<ArchiveTask>? tasks)
+        {
+            var used = new List<EngineIdentity>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ArchiveTask task in tasks ?? Enumerable.Empty<ArchiveTask>())
+            {
+                EngineIdentity? identity = ResolveTaskEngine(task);
+
+                if (identity == null)
+                {
+                    continue;
+                }
+
+                if (seen.Add((identity.EngineId ?? string.Empty) + "|" + (identity.Version ?? string.Empty)))
+                {
+                    used.Add(identity);
+                }
+            }
+
+            if (used.Count == 0)
+            {
+                return EngineIdentity.Describe();
+            }
+
+            // 只有一个、且就是通用引擎时保持既有口径（"引擎：7-Zip 命令行 26.01"），不加注解。
+            if (used.Count == 1 &&
+                string.Equals(used[0].EngineId, EngineIdentity.EngineId, StringComparison.OrdinalIgnoreCase))
+            {
+                return used[0].Describe();
+            }
+
+            return string.Join(" / ", used.Select(x => x.Describe())) + "（本次实际使用）";
         }
 
         private static string ResolveParentName(ArchiveTask task)

@@ -455,7 +455,8 @@ WinRAR 在这件事上有**四个互相独立的机制**，值得分开看：
   "不做"必须给理由（引用 `AGENTS.md §2 非目标` 或说明技术/安全理由）。
 - 标 ⚠ 的行是**与我们已决策项冲突**的 WinRAR 做法（§2 末单列一表汇总）。
 
-**建议先做的 5 条**（其余采纳项都是低优先）：C2（`-kb`）、D1（优先级升设置项）、
+**建议先做的 5 条**（其余采纳项都是低优先）：C2（`-kb`，⚠ **已落地但口径被实测更正**：只对 UnRAR 加，
+7-Zip 没有这个开关 —— 见 §6 更正记录第 1 条）、D1（优先级升设置项）、
 G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1 的映射核对）。
 进度可见（D5）价值最高但改动面最大，单列在 §3。
 
@@ -487,7 +488,7 @@ G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1
 | WinRAR 的做法 | ArchiveFixer 现状 | 建议 |
 |---|---|---|
 | **解压前不测试**：`t` 是独立命令、`-t` 是"压缩后测试"；校验和是在解压过程中顺带验的 | **已有**：`TestBeforeExtract`（`AppSettings.cs:50`，默认关）；开关点 `ViewModels/ExtractionCoordinator.cs:3053`，测试循环 `:3065-3116`；状态常量 `TestPassed`/`TestFailed`/`Testing` 齐全 | **已覆盖·更好**：这一项我们**本来就有**，WinRAR 反而没有。默认关是对的（`README.md:109` 的理由很实在："开着会让'无密码的包'看起来像卡住"）。**建议**：在帮助/README 里明确它与 WinRAR 的语义差 —— 我们的是"解压前跑 `7z t`"，WinRAR 的是"边解边验 + 失败产物删掉" |
-| `-kb` / "保留受损的文件"：默认**删掉**校验和错误的产物，`-kb` 关掉删除 | **没有**：未传 `-kb`，grep `保留损坏/KeepBroken` 零命中 | **采纳**：加 `AppSettings.KeepBrokenFiles`（**默认关**）+ `SevenZipProcessRunner.BuildExtractArguments:807` 里条件加 `-kb`。**边界（必须同时做）**：保留损坏文件时任务状态必须是 `ExtractFailed` / `PartiallyCompleted`，**绝不允许**因此显示成功（不变量 6）。理由：资源包损坏时用户往往宁愿留下半个视频/半张图，这正是 WinRAR 这条存在的意义 |
+| `-kb` / "保留受损的文件"：默认**删掉**校验和错误的产物，`-kb` 关掉删除 | **已落地（口径见 §6 更正记录第 1 条）**：`AppSettings.KeepBrokenFiles`（**默认关**）+ 设置界面一行；参数侧**只对 UnRAR 加** `-kb`（`UnRarProcessRunner.BuildExtractArguments`），**7-Zip 一个字都不加** | **采纳（已修正）**：⚠ **本行原建议"在 `SevenZipProcessRunner.BuildExtractArguments` 里条件加 `-kb`"被实测推翻** —— `7z x -kb` 报 `Command Line Error: Unknown switch: -kb`（退出码 7），那是 RAR / UnRAR 的开关；用户一开这个设置，**所有 7-Zip 解压都会失败**。而且 7-Zip 本来就保留校验失败的半成品，所以它对 7-Zip 是"无事可做"，不是"漏了"。**边界不变**：保留损坏文件时任务状态必须是 `ExtractFailed` / `PartiallyCompleted`，**绝不允许**因此显示成功（不变量 6）—— 状态由退出码与错误分类决定，与本开关无关（有回归测试钉住） |
 | 完成后可**关机 / 休眠 / 睡眠 / 重启**（`-ioff1..4`，"完成时"选项组） | **没有**（业务代码无 `Shutdown/Hibernate/ExitWindows`） | **不做**：① 这是**系统级不可逆副作用**，批量场景下一次误触发代价远大于收益；② WinRAR 自己都要加"诊断窗口里有错误就忽略这个选项"的门槛，说明它也知道危险；③ `AGENTS.md §2` 已把设计.md 的 P4"便利功能"整类降级为非目标 |
 | 解压完成后"在资源管理器中显示"目标文件夹 | **部分**：有**手动**命令"打开输出目录"（`ViewModels/MainViewModel.cs:1189`）、"打开工作区"、右键"打开其余物"；**没有**"完成后自动打开"的设置项 | **采纳**：加 `AppSettings.OpenOutputFolderWhenDone`（**默认关**）+ 在定稿成功后调用既有"打开输出目录"逻辑。改动面很小（复用现成命令），而"整理完就想看一眼结果"是这个产品的自然下一步动作 |
 | `-ac` 清存档属性 / `-ai` 忽略属性 / `-ao` 只加带存档属性的文件 / `-e<属性>` 按属性排除 | **没有**（`FileAttributes` 只用于判目录/重解析点） | **不做**：全是**备份**语义（"存档"属性就是给增量备份用的）。我们的场景是"把一批来源不明的包变成干净的内容物"，与增量备份无关；引入属性处理还要在 Windows 之外处理 Unix 权限位（WinRAR 自己就要分平台说明），成本高、场景无 |
@@ -634,10 +635,12 @@ G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1
 
 1. **捆绑、默认依赖、自动探测安装、安装包、自更新**
    即 `AGENTS.md §2` 的"WinRAR 特指捆绑/默认依赖/自动探测安装这种适配不做"与"安装包 / 自动更新"。
-   我们的位置是"用户自装、自选路径、只检测与调用"（§3.1），且**第一版连这个位置都还是空的**
-   （`Engines/ToolLocator.cs` 只认 7z，源码里没有任何 rar/unrar 探测）。
+   我们的位置是"用户自装、自选路径、只检测与调用"（§3.1）——
+   **这个位置已经落地了**：`Engines/ToolLocator.cs` 会探测用户已装的 WinRAR 目录
+   （`%ProgramFiles%\WinRAR\UnRAR.exe` 等），但**只取其中的免费件 `UnRAR.exe`**，
+   绝不复制、绝不调用同目录的 `Rar.exe` / `WinRAR.exe`（共享软件，见 §5）。
    额外一层理由：WinRAR 的许可证**本身就禁止捆绑**（§5 第 6 条），
-   所以"想捆也捆不了"—— 这条不是取舍，是硬边界。
+   所以"想捆也捆不了"—— 这条不是取舍，是硬边界。RAR 侧的第二引擎见 §6 更正记录第 2 条。
 
 2. **资源管理器右键菜单 / "发送到"菜单 / 下载目录监控 / 任务模板 / 文件清单导出**
    `AGENTS.md §2` 的整条非目标，逐字对应 WinRAR 的"集成设置 / 关联菜单 / 配置文件进右键菜单 /
@@ -728,12 +731,15 @@ G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1
 
 补充三句，供 LICENSE 定稿时使用（`AGENTS.md §12` 第 3 条：LICENSE 仍未定）：
 
-1. 我们的架构位置本来就避开了这份协议：**不复制、不分发其任何文件**，
-   `Engines/ToolLocator.cs` 目前甚至还没有 rar/unrar 的探测位置（源码 grep 零命中），
-   第一版**连调用都还没做**；将来做也只是"读用户自己装的路径 + 传参调用"。
-   这既符合协议（我们不参与其分发），也符合它自己对捆绑的禁止。
+1. 我们的架构位置本来就避开了这份协议：**不复制、不分发其任何文件**。
+   `Engines/ToolLocator.cs` 会探测用户自己装的 WinRAR 目录，但**只读其中的免费件 `UnRAR.exe`**
+   （许可第 2 条明确允许随其它软件包分发它），**绝不碰** `Rar.exe` / `WinRAR.exe` / `7zxa.dll`；
+   UI 与报告提到它时只做事实性说明（见第 3 条）。这既符合协议（我们不参与其分发），
+   也符合它自己对捆绑的禁止。
 2. 真正需要单独核对的仍是 `README.md:166-170` 已经记下的那两件：
-   **内置 7-Zip（`7z.exe` / `7z.dll`，26.01）的 LGPL + unRAR restriction**。
+   **内置 7-Zip（`7z.exe` / `7z.dll`，26.03）的 LGPL + unRAR restriction**，以及
+   **内置 `tools\unrar\UnRAR.exe`（RARLAB 免费件，7.23 稳定版）要随包带它的 `license.txt`**
+   （来源、SHA256 与许可摘录见 `ArchiveFixer/tools/unrar/README.md`）。
    一个有用的旁证：WinRAR 自己在闭源产品里使用 7-Zip 的 `7zxa.dll`（LGPL 2.1+）来解压 7z ——
    说明"未修改地使用 7-Zip 的解压组件"在 LGPL 下是被接受的做法。
    但我们的形态不同（内置的是**独立可执行文件**，且含 unRAR restriction 的 RAR 解码）→
@@ -756,9 +762,74 @@ G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1
 | ArchiveFixer 侧 | `E:\DeepSeekProjects\ArchiveFixer` | — | `AGENTS.md`（全）、`docs/输出与整理模型.md`（全）、`README.md`（全）、`Models/AppSettings.cs`（全）、`Models/StatusText.cs`、`Extraction/OutputPlacement.cs`、`Helpers/FileNameHelper.cs`、`Helpers/SafePathHelper.cs`、`Engines/ArchiveOperationResult.cs`、`Security/ArchivePathGuard.cs` 等，另加一次 18 项只读代码核查（`Profile/掩码/时间判据/PriorityClass` 等关键项均以 grep 零命中确认"没有"） |
 
 **核实纪律**：§2 的"现状"列每一行都能落到具体文件/设置项或一条"grep 零命中"的负面证据；
-拿不准的（"自定义根本身不存在时的行为"、"`-kb` 与 `ConflictAction=Ask` 的接线"、
-"7z 退出码 1 的映射"、"失败清单是否已带候选来源"、"`longPathAware` 是否要加"）
-一律写成**需确认**，没有猜。
+拿不准的一律写成**需确认**，没有猜。当初拿不准的 5 项现在都有了结论，
+其中 3 项由实现批次落地、1 项被实测推翻 —— 逐条见 §6 更正记录：
+
+| 当初的"需确认" | 现在的结论 |
+|---|---|
+| 自定义根本身不存在时的行为 | 已明确：`OutputPlacement.ResolveCustomRoot` 显式失败，**不回落程序目录**（落点唯一实现） |
+| `-kb` 的接线 | ⚠ **原建议被实测推翻**：只对 UnRAR 加，7-Zip 没有这个开关（§6 第 1 条） |
+| `ConflictAction=Ask` 的接线 | 已接通：解压落位弹一次聚合询问；改名冲突在预览里逐条确认；不选 = 保守档自动重命名，绝不覆盖 |
+| 7z 退出码 1 的映射 | 已实现（`SevenZipExitCode` + 部分完成口径），有回归测试钉住"部分完成绝不显示成功" |
+| `longPathAware` 是否要加 | 仍**未加**（清单里没有这一项）；长路径走"解压前预判 + 7z 实际报错"两条，见 README 已知限制 |
 
 **未做**：没有启动 WinRAR 界面、没有改动仓库任何源码、没有 build/test、没有 git 操作。
-本文件是本次任务唯一新增的文件。
+本文件是当初那次研究唯一新增的文件。
+
+---
+
+## 6. 更正记录（后续批次用实测推翻 / 补全本文的地方）
+
+> 只记**被实测推翻或改写**的结论，以及"当初写'将来做'、现在真的做了"的落点。
+> 之所以单列：本文是研究笔记，读者会当事实用 —— 过期的那几句必须留下更正痕迹，
+> 而不是悄悄改掉（那样下一个人还会照着旧的写法再犯一次）。
+
+### 6.1 ⚠ `-kb` 只对 UnRAR 加，7-Zip 没有这个开关（**原建议被实测推翻**）
+
+- **原文建议**（§2 C 组，本文件早期版本）：*"加 `AppSettings.KeepBrokenFiles`（默认关）+
+  `SevenZipProcessRunner.BuildExtractArguments:807` 里条件加 `-kb`"*。
+- **实测结果**（2026-09-22，随包内置的 7-Zip **26.03**）：
+
+  ```
+  > 7z x -kb a.zip -o<目录>
+  Command Line Error:
+  Unknown switch:
+  -kb
+  （退出码 7 = 错误的命令行选项）
+  ```
+
+  → `-kb` 是 **RAR / UnRAR** 的开关（"保留受损的文件"），7-Zip 不认。
+  按原建议接线的话，用户一打开这个设置，**每一次 7-Zip 解压都会失败**（而且是命令行错误，
+  看起来像程序坏了）。
+- **落地口径**：`AppSettings.KeepBrokenFiles`（默认关）+ 设置界面一行；
+  参数侧只在 `UnRarProcessRunner.BuildExtractArguments` 里条件加 `-kb`，
+  `SevenZipProcessRunner` **永远不加**。7-Zip 本来就保留校验失败的半成品，
+  所以这一档对它是"无事可做"，不是"漏了"。
+- **边界（未变）**：保留受损文件**只决定半成品留不留**，任务状态仍由退出码与错误分类决定，
+  仍然是"失败 / 部分完成"，绝不显示成功（不变量 6）。回归测试：
+  `保留受损文件默认关_只对RAR引擎加_kb` + `保留受损文件不影响成败判定`。
+- **顺带更正本文一处措辞**：§1.4 里"解压前测试：WinRAR 没有这个开关"仍然成立；
+  我们自己的 `TestBeforeExtract`（解压前跑 `7z t`）是**我们多出来的**能力，不是照抄它。
+
+### 6.2 `ToolLocator` 不再"只认 7z"：第二引擎（RARLAB UnRAR）已内置并接线
+
+- **原文写法**（§4 第 1 条、§5.3 补充第 1 条、§2 的几处"现状"）：*"`Engines/ToolLocator.cs`
+  只认 7z，源码里没有任何 rar/unrar 探测"*、*"第一版连调用都还没做"*。
+- **现在的事实**（2026-09-22 落地）：
+  1. **已内置** `ArchiveFixer/tools/unrar/UnRAR.exe`（RARLAB 免费件，**7.23 稳定版**，
+     SHA256 / 来源 / 许可摘录见 `ArchiveFixer/tools/unrar/README.md`；许可第 2 条明确允许随包分发）；
+  2. **已实现** `Engines/WinRar/UnRarEngine`（`IArchiveEngine` 的 probe / list / test / extract），
+     能力位**如实只登记 RAR**（zip / 7z / tar 一律声明不支持，交给 7-Zip）；
+  3. **引擎优先级** `AppSettings.EnginePriority` 默认 `winrar → sevenzip`
+     （用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"）；
+     规则是**先按能力筛、再用优先级做 tiebreaker**，不可用的引擎直接跳过；
+  4. **UnRAR 来源顺序**：用户自选路径 → 用户已装的 WinRAR 目录 → 内置 `tools\unrar\`；
+  5. **已接进真实流程**：`MainViewModel` 交给流水线的不再是裸的 `SevenZipEngine`，
+     而是按格式与优先级分派的门面（`ViewModels/MainViewModel.cs` 的 `EngineRouter`）。
+- **未变的两条硬边界**：⛔ `Rar.exe` / `WinRAR.exe`（共享软件）**绝不分发、绝不复制**，
+  只允许"用户自装、我们检测与调用"；⛔ 只解压、绝不改包（许可第 4 条禁止用其重建 RAR 压缩算法）。
+- **诚实交代一处**：本文件 §2 C 组之外，早期版本还有一句"7-Zip 解不开 `-hp`"的期盼 ——
+  实测（7-Zip 26.01/26.03）**不成立**：带正确密码它能解 RAR4/RAR5 的 `-hp`（含分卷）。
+  第二引擎的价值因此落在"**分类与报错更准**"（缺卷时点名缺哪一卷、加密头有显式标志）
+  以及"将来 RAR 7.x 新格式"上，不在"7-Zip 完全不能"。证据与原始输出见交付报告
+  `E:\DeepSeekProjects\_tmp\ArchiveFixer\fix-unrar.md`。

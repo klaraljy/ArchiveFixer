@@ -357,6 +357,10 @@ namespace ArchiveFixer.Services
                 "GlobalPassword" => "尝试统一密码：******",
                 "ImportedList" => $"尝试密码列表第 {index} 项：******",
                 "ManualList" => $"尝试手动密码第 {index} 项：******",
+                // 一键处理/批量开始前那一次询问得到的密码（ExtractionCoordinator.ManualPasswordSource）：
+                // 以前它走 default 分支，日志里写成"密码候选第 N 项"，看不出这个密码是用户当场给的
+                // （只对本次运行有效、不落盘）。文案里说清来源，排障时才知道该去哪儿改。
+                "ManualBatch" => "尝试本次运行手动输入的密码：******",
                 "Sidecar" => "尝试同目录说明文件里的密码：******",
                 _ => $"尝试密码候选第 {index} 项：******"
             };

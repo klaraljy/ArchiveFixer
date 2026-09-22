@@ -88,7 +88,9 @@ Windows 桌面工具：把一批**来源不明、后缀被改坏、加密、分�
   - `EngineRegistry` / `EngineSelector` / `ToolLocator`（**唯一**的外部工具路径来源）/ 统一错误码 / 统一进度 / 统一取消
   - `ArchiveRequest` / `ArchiveDescriptor` / `ProbeResult` / `ListResult` / `TestResult` / `ExtractResult`
     按设计.md 的名字建，**不要改名**
-- **当前引擎**：7-Zip 命令行（`tools/7zip/7z.exe` + `7z.dll`，26.01），走 `SevenZipEngine`
+- **当前引擎**：7-Zip 命令行（`tools/7zip/7z.exe` + `7z.dll` + `License.txt`，**26.03**，2026-09-03 官方包，
+  来源/哈希/升级步骤见 `tools/7zip/README.md`），走 `SevenZipEngine`
+  - ⚠️ 升级 7z 后**必须跑全量测试**：`SevenZipOutputParser` 解析 7-Zip 的文本输出，版本变化可能改措辞
   - 程序目录优先，其次用户可配置的外部路径；**删除 `D:\7-Zip\...` 这类本机硬编码**
   - 7z 路径只能有**一个**来源（`ToolLocator`），禁止在多个文件里各拼一遍
   - `7z.dll` 进程内调用是**预留通道**（存在性检查已有），第一版不做

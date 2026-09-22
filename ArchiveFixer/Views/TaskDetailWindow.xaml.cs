@@ -116,6 +116,26 @@ namespace ArchiveFixer.Views
             builder.AppendLine("状态：" + Safe(task.Status));
             builder.AppendLine("进度：" + Safe(task.ProgressText));
             builder.AppendLine("错误信息：" + Safe(task.ErrorMessage));
+
+            /*
+             * 解压前那一遍条目预检算出来的两条提示（可疑条目 / 路径过长）。
+             * 窗口里空着就收起，但**复制出去的那一份要能带走完整的排障信息** ——
+             * 用户把详情粘给我时，"这个包里有 3 个 exe"往往就是关键线索。
+             *
+             * ⚠ 这里**不加**标签前缀：两个值本身就是完整的句子，且各自带前缀
+             * （"可疑条目提示：…" / "路径过长，可能失败：…"）—— 再加一层标签就会印成
+             * "路径过长：路径过长，可能失败：…"。没有内容时整行不写（不编"无"）。
+             */
+            if (!string.IsNullOrWhiteSpace(task.DangerousEntriesWarning))
+            {
+                builder.AppendLine(task.DangerousEntriesWarning);
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.PathLengthWarning))
+            {
+                builder.AppendLine(task.PathLengthWarning);
+            }
+
             builder.AppendLine();
 
             builder.AppendLine("【时间信息】");

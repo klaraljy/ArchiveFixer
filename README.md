@@ -9,7 +9,7 @@ Windows 桌面工具：批量识别**被改坏后缀**的归档文件、按真�
 |---|---|
 | 当前状态 | **M1–M5 全部里程碑完成**（里程碑定义见 `AGENTS.md` §10） |
 | 代码基线 | 2026-08-09 快照（原"第十一版"），2026-09-21 迁入本仓库 |
-| 验证 | `dotnet build ArchiveFixer.slnx`（Debug）**0 错误**；`dotnet test` **843 通过 / 0 失败**；`dotnet format ArchiveFixer.slnx --verify-no-changes` 通过（本机最近一次实测；编译警告见「已知限制」最后一行） |
+| 验证 | `dotnet build ArchiveFixer.slnx`（Debug）**0 错误**；`dotnet test` **1001 通过 / 0 失败**；`dotnet format ArchiveFixer.slnx --verify-no-changes` 通过（本机最近一次实测；编译警告见「已知限制」最后一行） |
 | 规则 | `AGENTS.md`（含用户明确指示，与其它文档冲突时以它为准） |
 | 需求 | `docs/需求书.md`（长期愿景，已冻结）/ `docs/需求变更.md`（只追加的变更日志） |
 
@@ -43,12 +43,22 @@ Windows 桌面工具：批量识别**被改坏后缀**的归档文件、按真�
   搬不动（只读 / 被占用）时任务标「部分完成」并写明"内容物已好，源包未能移入其余物"，内容物结论不受影响。
   ⚠ **手动「只解压」也照这一档走**（用户 2026-09-22 版本二：早先"地基路径永远不动源包"的说法已被推翻）；
   失败 / 部分完成 / 取消时源包一律原地不动、`其余物` 不生成。想要"传统解压器"语义就把档位设成 `KeepInPlace`。
+- **解压引擎（两个，按格式与优先级自动分派）**：RAR / RAR4 / RAR5 → **UnRAR**（RARLAB 官方免费件，
+  已内置 `tools\unrar\UnRAR.exe`，7.23 稳定版；缺卷时它直接点名缺哪一卷、加密文件名有显式标志）；
+  zip / 7z / tar / iso 等其余格式 → **7-Zip**（已内置 26.03）。
+  顺序由设置项 `EnginePriority` 决定（默认 `winrar → sevenzip`），规则是**先按能力筛、再用优先级做先后**，
+  **不可用的引擎直接跳过** —— 没装 UnRAR、把内置关掉、或把它从优先级里去掉，RAR 仍然由 7-Zip 正常解开。
+  每个任务在详情/失败清单里记的是**它实际用的**引擎名 + 版本（不是"当前设置里的第一个"）。
 - **同名冲突（`ConflictAction` 一处设置、两处生效）**：输出目录已存在且非空、定稿搬运时同名、以及改名预览里的同名，
   都按同一档处理 —— `Skip` / `Overwrite`（走"先挪到临时名 → 落位 → 再删旧的"两阶段，绝不先删后移）/
   `AutoRename`（**默认**，新产物落成 `名字(1)`，绝不覆盖）/ `Ask`。
-  `Ask` 是**真的会问**：第一次撞上同名时暂停该任务、弹一次聚合询问（覆盖 / 跳过 / 自动重命名，勾上
+  `Ask` 是**真的会问**，而且**两条路径都问**：
+  ① **解压落位**第一次撞上同名时暂停该任务、弹一次聚合询问（覆盖 / 跳过 / 自动重命名，勾上
   「对后面所有同名冲突都照此办理」就对整批生效，本批不再问第二次；关掉窗口 = 取消本批）；
-  真正覆盖前先写日志留痕（列出被顶掉的落点）；没有界面宿主时降级为"自动重命名 + 写日志"，**绝不默认覆盖**。
+  ② **改名冲突在改名预览表里逐条确认** —— 撞名的行出现「冲突选择（询问档）」下拉
+  （自动重命名 / 跳过 / 覆盖），没选就不放行（也可以点「冲突全部自动重命名」一次处理完）；
+  **不选或直接关掉预览窗口都按保守档自动重命名，绝不覆盖**。没有界面宿主时也降级为"自动重命名 + 写日志"。
+  真正覆盖前先写日志留痕（列出被顶掉的落点）。
 - **收尾**：结果可**归集**到统一目录（同名自动改名不覆盖）；可**可选清理源包**（默认关闭；
   它只在「源包处理」选了 `KeepInPlace` 时的手动「只解压」路径上参与 —— 那是"传统解压器 + 解压后清理"
   的老组合，默认的 `MoveToRest` 档下它不参与，否则刚搬进 `其余物` 的源包会被立刻删掉；
@@ -82,7 +92,9 @@ Windows 桌面工具：批量识别**被改坏后缀**的归档文件、按真�
 - Windows 10/11
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)（含 Windows Desktop 运行时）
   - 本机同时装了 .NET 10 SDK，但**项目固定 `net8.0-windows`**，不随 SDK 漂移
-- 7-Zip 命令行已内置在 `ArchiveFixer/tools/7zip/`（26.01），构建时自动复制到输出目录，**不需要另外安装**
+- **7-Zip 命令行已内置**在 `ArchiveFixer/tools/7zip/`（26.03），构建时自动复制到输出目录，**不需要另外安装**
+- **RAR 解压引擎（RARLAB 免费件 `UnRAR.exe`，7.23 稳定版）也已内置**在 `ArchiveFixer/tools/unrar/`，
+  同样随构建复制；想要用它自己的版本，可以在设置里指定路径（也可以完全不用它 —— 见「解压引擎」那一条）
 
 ## 构建 / 运行 / 测试
 
@@ -127,15 +139,18 @@ ArchiveFixer\bin\Release\net8.0-windows\ArchiveFixer.exe
 | `UnknownFormatAction` | 未知格式：`MarkUnknown` / `Skip` / `TryExtract` |
 | `DefaultExtension` | 智能修正的默认目标后缀 |
 | `ExtractToOriginalDirectory` / `CustomOutputDirectory` / `KeepArchiveNameFolder` | 输出位置 |
-| `ConflictAction` / `OverwriteMode` | `ConflictAction` 管同名冲突（`Skip` / `Overwrite` / `AutoRename`（默认）/ `Ask`，解压落位与改名共用一档；`Ask` 真的会问，见「现在能做什么」）；`OverwriteMode` 是引擎侧的 7z 覆盖策略 |
+| `ConflictAction` / `OverwriteMode` | `ConflictAction` 管同名冲突（`Skip` / `Overwrite` / `AutoRename`（默认）/ `Ask`，解压落位与改名共用一档）。`Ask` 真的会问，而且两条路径都问：**解压落位**弹一次聚合询问；**改名冲突在预览表里逐条确认**（撞名的行出现「冲突选择（询问档）」下拉，没选不放行，也可点「冲突全部自动重命名」），**不选或直接关掉预览窗口都按保守档自动重命名，绝不覆盖**。`OverwriteMode` 是引擎侧的 7z 覆盖策略 |
 | `TestBeforeExtract` | 解压前是否先跑 `7z t`（默认关：开着会让"无密码的包"看起来像卡住） |
 | `TryEmptyPasswordFirst` / `UseGlobalPasswordForAllTasks` | 密码尝试策略 |
 | `MaxPasswordAttemptsPerLayer` | 每层最多试几个密码候选（默认 10，1~1000）；单层与递归内层共用同一个值，改完当场生效 |
 | `MaxParallelExtractCount` | 并发解压数（1~8，默认 1 = 串行）；**真的生效**，不是摆设。⚠ 它与 `LowProcessPriority` 是**两个互相独立的旋钮**，改一个不会动另一个 |
 | `LowProcessPriority` | **低运行优先级**（默认开）：让本程序与它启动的解压进程（`7z.exe`）让出 CPU / 磁盘优先级，解压时还让得开手；关掉跑得更快但更容易把桌面拖卡。**改完重启程序才生效**（启动时读一次） |
-| `OpenOutputFolderWhenDone` | **定稿完成后在资源管理器里打开输出目录**（默认关）。只在"定稿成功 + 输出校验通过"后打开；失败 / 取消不打开。只打开文件夹，**不会**把程序窗口置前或最大化（`AGENTS.md` §13 同精神）。⚠ **动作尚未接线**：设置项与界面已就位，定稿成功那一处调用还没接上 |
-| `RestRemovalDefaultMode` | 「其余物 / 空文件夹」清理的**默认档**：`RecycleBin`（默认，可从回收站还原）/ `Permanent`（彻底删除）。只是确认框里那个勾选框的默认状态 —— 删除前**永远**先预览 + 确认，`Permanent` 还要二次确认；回收站不可用时一律不删。⚠ **尚未接线**：设置项与界面已就位，当前删除确认框仍固定以回收站为默认档 |
-| `ReportDangerousEntries` | **危险条目统计**（默认开）：在解压前那一遍条目预检里顺便数出 `.exe/.scr/.lnk/.bat/.cmd/.ps1/.vbs`，把"本包含 N 个可执行文件"写进任务详情与失败清单。**只提示、绝不阻断**（不跳过任何条目，落盘结果不变）。⚠ **尚未接线**：设置项与界面已就位，统计本身还没实现（已知限制里仍记着这一条） |
+| `OpenOutputFolderWhenDone` | **定稿完成后在资源管理器里打开输出目录**（默认关）。只在"定稿成功 + 输出校验通过"后打开；失败 / 取消不打开，整批只开一次。只打开文件夹，**不会**把程序窗口置前或最大化（`AGENTS.md` §13 同精神） |
+| `RestRemovalDefaultMode` | 「其余物 / 空文件夹」清理的**默认档**：`RecycleBin`（默认，可从回收站还原）/ `Permanent`（彻底删除）。只是确认框里那个勾选框的默认状态 —— 删除前**永远**先预览 + 确认，`Permanent` 还要二次确认；回收站不可用时一律不删 |
+| `ReportDangerousEntries` | **危险条目统计**（默认开）：在解压前那一遍条目预检里顺便数出 22 种可执行 / 脚本类后缀（`.exe/.scr/.com/.msi/.cpl/.bat/.cmd/.ps1/.vbs/.js/.hta/.lnk/.reg/.jar/.inf` 等），把"本包含 N 个可执行 / 脚本类条目（前几个列出名字，最多 5 个）"写进**任务详情窗口与失败清单**。**只提示、绝不阻断**（不跳过任何条目，落盘结果不变） |
+| `EnginePriority` | **引擎优先级**（默认 `["winrar","sevenzip"]`）。规则是**先按能力筛、再用优先级做 tiebreaker**，不可用的引擎直接跳过 —— 排第一但没装不会导致打不开包。界面只能上移/下移，不能在列表里删掉某个引擎；落盘的顺序就是生效顺序（设置窗口「保存」时立刻推给引擎层，不必重启） |
+| `CustomUnRarExePath` | 用户自选的 `UnRAR.exe` 路径（默认空 = 自动）。留空时的解析顺序：**用户自选 → 用户已装的 WinRAR 目录（只读其中的免费件 `UnRAR.exe`）→ 内置 `tools\unrar\`**。填了一个不存在的路径**不会**把后面两档吃掉（会如实回落到下一档并在设置窗口显示用的是哪一个） |
+| `KeepBrokenFiles` | **保留受损的文件**（默认关）：校验和错误的半成品**留不留**。⚠ 只对 RAR 引擎（UnRAR）生效 —— 7-Zip **没有** `-kb` 这个开关（实测 `Unknown switch: -kb`，退出码 7），它本来就保留半成品。⚠ 它与成败判定**无关**：留着半个文件仍然是"失败 / 部分完成"，绝不显示成功 |
 | `RecursionMode` / `MaxRecursionDepth` | 递归模式（默认 `SingleLayer`）与最大层数（1~10）；改完当场生效，不必重启 |
 | `CollectResultsToDirectory` / `CollectTargetDirectory` | 结果归集开关与目标目录 |
 | `SourceHandling` | 怎么处理源包：`MoveToRest`（默认，移入其余物）/ `KeepInPlace`（不动）/ `DeleteAfterVerify`（校验通过后删）。**一键处理与手动「只解压」读的是同一档**（用户 2026-09-22 版本二） |
@@ -148,7 +163,8 @@ ArchiveFixer\bin\Release\net8.0-windows\ArchiveFixer.exe
 ArchiveFixer/               WPF 主程序
   Models/ Services/ ViewModels/ Views/ Converters/ Helpers/     模型、服务与界面
   Detection/ Engines/ Extraction/ Password/ Security/ Storage/   核心分层（不得引用 WPF）
-  tools/7zip/               内置 7-Zip 命令行
+  tools/7zip/               内置 7-Zip 命令行（26.03）
+  tools/unrar/              内置 RAR 解压引擎 UnRAR（RARLAB 免费件 7.23）+ 许可文本
   appsettings.json          默认配置模板（运行时实际读 <程序目录>\data\appsettings.json）
 ArchiveFixer.Tests/         xUnit：单元测试 + BaselineSmokeTests（M1 验收）
 docs/                       需求书 / 需求评审与考古 / 需求变更 / 输出与整理模型 / WinRAR功能参考 / 引擎与外部工具
@@ -160,11 +176,14 @@ AGENTS.md                   项目规则与里程碑
 
 - `docs/输出与整理模型.md`：输出落点、其余物、源包处理的实现契约（写代码前先看它）。
 - `docs/WinRAR功能参考.md`：**WinRAR 功能设计参考** —— 逐条对照 WinRAR 的做法与我们的现状，
-  每条给出"已覆盖 / 采纳 / 不做"的结论与理由（含本轮的 `ConflictAction=Ask` 缺陷修正、
-  低运行优先级升设置项、`-kb` / 危险条目提示 / 缺卷补救等采纳项）。
-- `docs/引擎与外部工具.md`：**我们能用哪些外部工具、以及许可证边界**（内置 7-Zip 的 LGPL + unRAR 条款、
-  RARLAB 官方 `UnRAR` 可作"用户自装的第二引擎"、`Rar.exe` / `WinRAR.exe` 是共享软件**绝不分发**、
-  `C:\Program Files\WinRAR\7zxa.dll` 是 7-Zip 的只解压 DLL 因而不需要）。分发 / 接第二引擎前先看它。
+  每条给出"已覆盖 / 采纳 / 不做"的结论与理由（含 `ConflictAction=Ask` 缺陷修正、
+  低运行优先级升设置项、危险条目提示 / 缺卷补救等采纳项）。
+  ⚠ **§6 是更正记录**：被实测推翻或改写的结论都留在那里（`-kb` 只对 UnRAR 加、
+  `ToolLocator` 不再"只认 7z"），别只看前面的对照表。
+- `docs/引擎与外部工具.md`：**我们能用哪些外部工具、以及许可证边界** ——
+  **已内置** 7-Zip（LGPL + unRAR 条款）与 RARLAB 免费件 `UnRAR.exe`（其许可第 2 条允许随包分发，
+  必须带 `license.txt`）、引擎优先级与 UnRAR 来源顺序、`Rar.exe` / `WinRAR.exe` 是共享软件**绝不分发**、
+  `C:\Program Files\WinRAR\7zxa.dll` 是 7-Zip 的只解压 DLL 因而不需要。分发前先看它 §6 清单。
 
 分层规则见 `AGENTS.md` §4：`Detection/ Engines/ Extraction/ Password/ Security/ Storage/`
 **不得引用 WPF**（纯模型仍在 `Models/`），GUI 只通过 ViewModel 调用它们。
@@ -187,28 +206,33 @@ pwsh -File samples/generate-samples.ps1        # 生成到 samples/generated/（
 
 | 限制 | 说明 / 计划 |
 |---|---|
-| 密码明文出现在进程命令行 | 7z 命令行的固有限制（`-p<密码>`）；日志/报告/清单层已脱敏，但进程列表能看到。**不假装解决了** |
+| 密码明文出现在进程命令行 | **命令行引擎的固有限制**（7-Zip 与 UnRAR 都是 `-p<密码>`，会出现在进程列表里）；日志/报告/清单层已脱敏，但进程列表能看到。**不假装解决了** |
 | 无解压进度百分比 | `-bsp0` 关掉了 7z 进度输出，界面只有"处理中/完成"两态 |
 | 压缩炸弹**拦不住已写出的那一次** | 只能"解压前按清单拦 + 解压后按实测量拦并停止后续"；7z 写盘时我们看不到它的写入 |
 | 落点校验只看得见目标目录**里面** | 引擎绕过我们直接写到别的目录去，进程外发现不了。两道防线（解压前条目预检 + 解压后落点校验）也只能覆盖"产物目录内可观察"的越界；已经写出去的那一次同样拦不住 |
-| 无危险文件检测 | `.exe` / `.scr` / `.lnk` 之类**只做展示**，没有专门的识别与提示。已决策的形态是"**只统计提示、不阻断**"（设置项 `ReportDangerousEntries` 默认开，把"本包含 N 个可执行文件"写进任务详情与失败清单）；**不做** WinRAR 那种全局硬排除掩码 —— 我们的场景里安装器 / 补丁经常就是内容物。⚠ 统计本身**尚未接线**（设置项与界面已就位），所以现在这条限制仍然成立 |
+| 无危险文件检测 | `.exe` / `.scr` / `.lnk` 之类**只统计提示、绝不阻断**（设置项 `ReportDangerousEntries` 默认开，把"本包含 N 个可执行 / 脚本类条目"写进**任务详情窗口与失败清单**）；**不做** WinRAR 那种全局硬排除掩码 —— 我们的场景里安装器 / 补丁经常就是内容物。⚠ 它只是"数出来告诉你"，**不是**恶意软件判定 |
 | 无源文件变化检测 | 任务开始时记录快照、处理中比对，尚未实现（`AGENTS.md` §6 第 11 条） |
 | 递归模式的工作区**成功后不自动清理** | 只有走单层收尾（`RecursionMode = SingleLayer`，含一键处理的每一轮）的任务会在成功后清掉自己抠出来的内嵌归档工作区；递归解压的中间产物（`data\work\recursive\`）成功后仍留在工作区，启动时会被算进"未完成的工作区"报告。`ExtractionWorkspace.Cleanup()` 已实现但递归路径还没调用（后续项） |
 | 符号链接条目看不出来 | 归档条目列表里没有链接目标，名字干净的链接条目仍可能把内容写到别处；现在靠"解压后落点校验"发现（**发现即判失败，不归集、不清理**），但拦不住那一次写入 |
 | 外接盘 / 网络路径未专门适配 | 是非目标（`AGENTS.md` §2）：只保证不写死盘符、不在源目录建工作区 |
 | 少量既有可空性编译警告 | `Converters/EmptyStringToTextConverter.cs` 的 `CS8600`（可空性推断），行为不受影响；数量随该文件的改动浮动，所以这里不写死数字（`dotnet build` 在"项目已是最新"时不重新编译，也不会重复报这些警告） |
 | LICENSE 未定 | 对外分发前必须确定，并一并核对内置 7-Zip 的 LGPL + unRAR 条款（要点与结论见 `docs/引擎与外部工具.md`） |
-| `Rar.exe` / `WinRAR.exe` 不能随包分发 | 共享软件，**绝不捆绑**；只允许"用户自装、我们检测与调用"这个位置（`AGENTS.md` §3.1）。第一版连检测都还没做 —— 边界与替代方案见 `docs/引擎与外部工具.md` |
+| `Rar.exe` / `WinRAR.exe` 不能随包分发 | 共享软件，**绝不捆绑、绝不复制**；只保留"用户自装、我们检测与调用"这个位置（`AGENTS.md` §3.1）。程序会**只读地**看用户已装的 WinRAR 目录里有没有免费件 `UnRAR.exe` 并调用它，**绝不**调用 / 复制 `Rar.exe`、`WinRAR.exe`、`7zxa.dll`（边界见 `docs/引擎与外部工具.md` §4） |
+| RAR 侧引擎也不是万能的 | UnRAR 与 7-Zip 对同一批畸形包的容忍度不同，两个引擎都解不开的包仍然会失败（这时报的是**失败**，不会显示成功）。⚠ 已实测更正一条旧说法：7-Zip 26.01/26.03 **能**用正确密码解 RAR5/RAR4 的 `-hp`（含分卷），所以第二引擎的价值在"报错更准"（缺卷点名、加密头显式标志），不在"7-Zip 完全不能" |
 
 ## 许可与第三方
 
-> 完整的许可证边界（含"哪些能随包分发、哪些绝不能"与将来的第二引擎）见 **`docs/引擎与外部工具.md`**。
+> 完整的许可证边界（含"哪些能随包分发、哪些绝不能"与内置第二引擎的义务）见 **`docs/引擎与外部工具.md`**。
 
-- 内置的 7-Zip（`7z.exe` / `7z.dll`，26.01）版权归 7-Zip 作者，采用 **LGPL + unRAR restriction**；
-  本仓库内置它只是为了这个工具能直接调用，未做任何修改。对外分发前需核对许可证条款
+- 内置的 7-Zip（`7z.exe` / `7z.dll`，**26.03**）版权归 7-Zip 作者，采用 **LGPL + unRAR restriction**；
+  本仓库内置它只是为了这个工具能直接调用，未做任何修改（来源、SHA256 与升级步骤见
+  `ArchiveFixer/tools/7zip/README.md`）。对外分发前需核对许可证条款
   （LGPL 要求随包带许可文本；`unRAR restriction` 约束的是其中 RAR 解码部分的再分发）。
-- **RARLAB 的 `UnRAR.exe` / `UnRAR.dll` 免费可用于解压**，可作为"用户自装"的第二引擎；
-  将来若随包分发要带它的许可文本。**`Rar.exe` / `WinRAR.exe` 是共享软件，绝不分发、绝不捆绑** ——
+- **内置的 RAR 解压引擎是 RARLAB 的免费件 `UnRAR.exe`（7.23 稳定版）**，在
+  `ArchiveFixer/tools/unrar/`（连同 `license.txt`）—— 其许可第 2 条**明确允许随其它软件包分发**，
+  分发时必须带上那份许可文本（来源、SHA256 见 `ArchiveFixer/tools/unrar/README.md`）。
+  ⛔ 许可第 4 条是红线：**绝不用它建包 / 改包，更不拿它重建 RAR 压缩算法**（我们只解压）。
+- **`Rar.exe` / `WinRAR.exe` 是共享软件，绝不分发、绝不捆绑**，也不复制 `UnRAR.dll` / `7zxa.dll` ——
   只保留"用户自装、我们检测与调用"这个位置（`AGENTS.md` §3.1、`docs/引擎与外部工具.md`）。
 - 本仓库**尚无 LICENSE**（未定，见 `AGENTS.md` §12）；未定之前不创建空许可证文件。
 

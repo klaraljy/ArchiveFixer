@@ -32,6 +32,31 @@
             <Setter Property="FontSize" Value="12.5" />
             <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
         </Style>
+
+        <!--
+            两条预检提示（可疑条目 / 路径过长）：没有内容时整行收起。
+            用提示样式 + 换行，因为它们本来就是"只提示不阻断"的说明，不是字段。
+        -->
+        <Style x:Key="DangerousHintTextStyle" TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{StaticResource WarningTextBrush}" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding DangerousEntriesWarning}" Value="">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="PathLengthHintTextStyle" TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{StaticResource WarningTextBrush}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding PathLengthWarning}" Value="">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <DockPanel Margin="12">
@@ -161,6 +186,8 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="输出目录：" Style="{StaticResource DetailLabelStyle}" />
@@ -189,12 +216,34 @@
                         <TextBlock Grid.Row="5" Grid.Column="0" Text="进度：" Style="{StaticResource DetailLabelStyle}" />
                         <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding ProgressText}" Style="{StaticResource DetailValueStyle}" />
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="错误信息：" Style="{StaticResource DetailLabelStyle}" Margin="0,0,10,0" />
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="错误信息：" Style="{StaticResource DetailLabelStyle}" Margin="0,0,10,10" />
                         <TextBox Grid.Row="6" Grid.Column="1"
                                  Text="{Binding ErrorMessage}"
                                  Style="{StaticResource DetailPathTextBoxStyle}"
-                                 Foreground="{StaticResource DangerTextBrush}"
-                                 Margin="0" />
+                                 Foreground="{StaticResource DangerTextBrush}" />
+
+                        <!--
+                            解压前那一遍条目预检顺手算出来的两条提示（A3 可疑条目 / A5 路径过长）。
+                            以前它们只进失败清单的第二级 —— 一个**成功**的任务在详情窗口里看不到
+                            "这个包里有 3 个可执行文件""有几条路径太长"，而这两条恰恰是
+                            "解出来的东西该不该直接点开""为什么少了几个文件"的答案。
+
+                            两条都是**只提示不阻断**的结论（不影响任何状态判定），所以用提示样式而不是
+                            "错误信息"那种红色字段；没有内容时整行收起（空串 = 这一次没有这条提示）。
+
+                            ⚠ 这里**不加**"可疑条目：""路径过长："这类标签前缀：两个值本身就是带前缀的完整句子
+                            （"可疑条目提示：本包含…" / "路径过长，可能失败：…"），再加一层就成了
+                            "路径过长：路径过长，可能失败：…"（实测在无界面 XAML 宿主里看到的）。
+                            ⚠ 收起用的是 DataTrigger，不是新写一个转换器：`Converters/**` 是共用资产，
+                            本次授权范围不含它，而"空串 → 收起"用触发器就够。
+                        -->
+                        <TextBlock Grid.Row="7" Grid.ColumnSpan="2"
+                                   Style="{StaticResource DangerousHintTextStyle}"
+                                   Text="{Binding DangerousEntriesWarning}" />
+
+                        <TextBlock Grid.Row="8" Grid.ColumnSpan="2"
+                                   Style="{StaticResource PathLengthHintTextStyle}"
+                                   Text="{Binding PathLengthWarning}" />
                     </Grid>
                 </GroupBox>
 
