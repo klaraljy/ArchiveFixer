@@ -48,6 +48,18 @@ namespace ArchiveFixer.Services
         public string CurrentLogFilePath => _currentLogFilePath;
 
         /// <summary>
+        /// 是否往文件里写日志（对应设置项「启用日志文件」，默认开）。
+        ///
+        /// 关掉只影响**写盘**：屏幕日志照旧（用户还得看见程序在干什么），
+        /// 而且 <see cref="Initialize"/> 仍然把当前日志文件路径算好，重新打开就能接着写同一个文件。
+        /// </summary>
+        public bool EnableFileLog
+        {
+            get => _enableFileLog;
+            set => _enableFileLog = value;
+        }
+
+        /// <summary>
         /// 日志目录。
         /// </summary>
         public string LogDirectory => _pathService.LogsDirectory;

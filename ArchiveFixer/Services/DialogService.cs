@@ -288,6 +288,52 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 危险操作的**二次确认**（红色 + 勾选框）。
+        ///
+        /// 为什么需要它：规格 §3.2 的"彻底删除"档要求同时满足"界面红色标识"与"二次确认（勾选/输入）"，
+        /// 而这两件事在原来的两个 API 里各占一半（<see cref="ShowDestructiveConfirm"/> 只有红色，
+        /// <see cref="ShowConfirm(string, string, bool, out bool)"/> 只有勾选框）。
+        /// 少任何一半都不满足规格：只有红色 = 一次点掉就永久删除；只有勾选框 = 危险动作看起来像普通询问。
+        /// </summary>
+        /// <param name="message">正文，写清"会发生什么、能不能撤销"。</param>
+        /// <param name="confirmText">主按钮文案（写动作本身："彻底删除"）。</param>
+        /// <param name="optionText">勾选框文案（"我知道不可恢复"）。</param>
+        /// <param name="optionChecked">用户最终是否勾选（返回 false 时它恒为 false）。</param>
+        /// <returns>用户是否确认（返回值与 <see cref="ShowConfirm(string, string, bool, out bool)"/> 同一口径）。</returns>
+        public bool ShowDestructiveConfirm(
+            string message,
+            string confirmText,
+            string optionText,
+            out bool optionChecked)
+        {
+            bool checkedState = false;
+
+            bool confirmed = ShowValueDialog(
+                new AppDialogRequest
+                {
+                    Title = "危险操作确认",
+                    Message = message,
+                    Icon = AppDialogIcon.Warning,
+                    Buttons = AppDialogButtons.YesNo,
+                    Destructive = true,
+                    YesText = string.IsNullOrWhiteSpace(confirmText) ? "确定" : confirmText,
+                    NoText = "取消",
+                    OptionText = optionText ?? string.Empty,
+                    OptionChecked = false
+                },
+                window =>
+                {
+                    checkedState = window.IsOptionChecked;
+                    return window.Result == MessageBoxResult.Yes;
+                },
+                "ShowDestructiveConfirm",
+                fallback: false);
+
+            optionChecked = confirmed && checkedState;
+            return confirmed;
+        }
+
+        /// <summary>
         /// 信息提示。
         /// </summary>
         public void ShowInfo(string message)
@@ -337,6 +383,10 @@ namespace ArchiveFixer.Services
 
         /// <summary>
         /// 异常提示。
+        ///
+        /// ⚠ 正文过 <see cref="PasswordMasker.Sanitize"/>：异常文本可能夹带命令行片段
+        /// （7z 的 <c>-p&lt;明文密码&gt;</c> 就写在参数里，异常消息经常把整条命令带出来），
+        /// 弹窗与日志同一口径 —— 密码只存内存，任何出口都不得出现明文（AGENTS.md §6 第 5 条）。
         /// </summary>
         public void ShowException(Exception ex, string prefix = "发生异常")
         {
@@ -354,8 +404,8 @@ namespace ArchiveFixer.Services
                 new AppDialogRequest
                 {
                     Title = "错误",
-                    Message = message,
-                    Detail = detail,
+                    Message = PasswordMasker.Sanitize(message),
+                    Detail = PasswordMasker.Sanitize(detail),
                     Icon = AppDialogIcon.Error,
                     Buttons = AppDialogButtons.Ok
                 },

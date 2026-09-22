@@ -52,6 +52,19 @@
                 <Separator />
                 <MenuItem Header="导出日志" Command="{Binding ExportLogCommand}" />
                 <MenuItem Header="打开日志目录" Command="{Binding OpenLogDirectoryCommand}" />
+                <Separator />
+                <!--
+                    清理入口（规格 §3.2 / §5）。两个动作**互相独立**，不合并成一个开关：
+                    过程物只作用于当前任务输出目录下的「过程物」，空文件夹只作用于当前任务的输出根。
+                    流程固定为：预览（条目数 + 总大小）→ 红色确认 → 默认移入回收站；
+                    勾选"改为彻底删除"后还要再来一次红色 + 勾选框的二次确认。
+                -->
+                <MenuItem Header="清理过程物..."
+                          Command="{Binding CleanProcessArtifactsCommand}"
+                          ToolTip="清理当前选中任务输出目录下的「过程物」（内层归档 / 分卷 / 中间件）。先预览条目数与总大小，默认移入回收站。" />
+                <MenuItem Header="清理空文件夹..."
+                          Command="{Binding CleanEmptyFoldersCommand}"
+                          ToolTip="清理当前选中任务输出根下“任意层级都没有文件”的子目录。先预览，默认移入回收站。" />
             </MenuItem>
         </Menu>
 

@@ -111,6 +111,28 @@ namespace ArchiveFixer.Models
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 终端落法（规格 <c>docs/输出与整理模型.md</c> §3.1 的可选项）：内容物最里面那一层文件夹叫什么。
+        ///
+        /// 存的是 <see cref="ArchiveFixer.Extraction.TerminalLayoutMode"/> 的**枚举名**
+        /// （<c>KeepLastFolder</c> / <c>UseArchiveName</c>），与其它设置项（RecursionMode / OverwriteMode）
+        /// 一样用字符串落盘 —— 枚举名字比数字抗改，用户手改配置文件也能看懂。
+        ///
+        /// 默认 <c>KeepLastFolder</c>：保留归档内最后一层文件夹名（<c>111\222\666\内容物</c>），
+        /// 更保守、不丢信息（规格 §7 决策 D-1）。
+        /// </summary>
+        public string TerminalLayoutMode { get; set; } = "KeepLastFolder";
+
+        /// <summary>
+        /// 场景 B 塌缩（规格 §3.3）：<c>111\222\名字\名字.rar</c> 且该目录下只有这一个包时，
+        /// 产物直接落在 <c>111\222\名字\</c>，不再套一层重复的 <c>名字</c>。
+        ///
+        /// **默认开**（规格 §3.3 明确"此规则必须可关（设置项），默认开"）。
+        /// 只在"包基名 == 所在目录名"且目录里没有别的归档时才生效，其余情况一律不动 ——
+        /// 否则同一个目录里两个包的产物会并在一起，用户再也分不清哪份内容来自哪个包。
+        /// </summary>
+        public bool CollapseRepeatedFolderLayer { get; set; } = true;
+
         public static AppSettings CreateDefault()
         {
             return new AppSettings
@@ -145,7 +167,9 @@ namespace ArchiveFixer.Models
                 PasswordBookPath = string.Empty,
                 RecursionMode = "SingleLayer",
                 MaxRecursionDepth = 3,
-                MaxPasswordAttemptsPerLayer = 10
+                MaxPasswordAttemptsPerLayer = 10,
+                TerminalLayoutMode = "KeepLastFolder",
+                CollapseRepeatedFolderLayer = true
             };
         }
 
@@ -206,6 +230,20 @@ namespace ArchiveFixer.Models
             {
                 RecursionMode = "SingleLayer";
             }
+
+            /*
+             * 终端落法：非法值一律回落默认。
+             *
+             * 为什么放在设置层做容错（而不是等到解压时再判）：
+             * 这个字符串可能来自旧配置（缺字段）、用户手改的 json，或将来改名后的枚举。
+             * 到解压那一刻才发现"读不懂"是最糟的 —— 用户已经点了一键处理，落点却是猜出来的。
+             *
+             * 判断口径与运行时解析完全一致（都走 OutputPlacement.ParseTerminalLayoutMode），
+             * 不在这里另写一套字符串比较，免得两处对"什么算合法"产生分歧。
+             */
+            TerminalLayoutMode = ArchiveFixer.Extraction.OutputPlacement
+                .ParseTerminalLayoutMode(TerminalLayoutMode)
+                .ToString();
 
             // 层数下限 1（只解当前层），上限 10：再深就不是"帮用户省事"而是失控了。
             if (MaxRecursionDepth < 1)

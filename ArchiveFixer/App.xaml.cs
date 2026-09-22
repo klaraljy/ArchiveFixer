@@ -147,13 +147,7 @@ namespace ArchiveFixer
             try
             {
                 WriteFatalErrorLog(e.Exception);
-
-                MessageBox.Show(
-                    "程序发生未处理的界面异常，但已尝试记录日志。\n\n" +
-                    e.Exception.Message,
-                    "ArchiveFixer 异常",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                ShowExceptionDialog(e.Exception);
             }
             catch
             {
@@ -161,6 +155,59 @@ namespace ArchiveFixer
             }
 
             e.Handled = true;
+        }
+
+        /// <summary>
+        /// 界面未处理异常的统一出口：走**自绘**对话框（<see cref="DialogService.ShowException"/>），
+        /// 不再用系统 <c>MessageBox</c>。
+        ///
+        /// <para>
+        /// 为什么换掉 MessageBox（用户点名批评过）：灰底、字挤、正文不能复制，
+        /// 用户想把异常文本发回来时只能手抄；自绘对话框能选中复制，观感也与程序其它提示一致。
+        /// </para>
+        /// <para>
+        /// 三条兜底（异常处理器本身**绝不允许**再抛，否则一次异常会变成崩溃循环）：
+        /// ① 启动早期（主窗口还没显示）与正在关闭时**只写日志、不弹窗** ——
+        ///    这两个时刻没有可用的消息泵，弹窗要么没人点得掉、要么把关闭流程卡住；
+        /// ② 没有 UI 宿主时不动弹窗（<see cref="ArchiveFixer.Services.DialogService"/> 内部本来就会降级，
+        ///    这里再挡一道，免得在无界面环境里创建窗口）；
+        /// ③ 整段包在 try 里，任何失败都吞掉 —— 日志里已经有 FATAL 记录，用户不会丢信息。
+        /// </para>
+        /// <para>
+        /// 脱敏：异常文本可能夹带命令行（7z 的 <c>-p&lt;密码&gt;</c> 就在其中），
+        /// 所以对话框与日志两条路都过 <c>PasswordMasker.Sanitize</c>（AGENTS.md §6 第 5 条）。
+        /// </para>
+        /// </summary>
+        private static void ShowExceptionDialog(Exception? ex)
+        {
+            try
+            {
+                Application? app = Application.Current;
+
+                if (app?.Dispatcher == null
+                    || app.Dispatcher.HasShutdownStarted
+                    || app.Dispatcher.HasShutdownFinished)
+                {
+                    // 启动早期 / 正在关闭：没有可靠的消息泵，只留日志。
+                    return;
+                }
+
+                Window? main = app.MainWindow;
+
+                if (main == null || !main.IsVisible)
+                {
+                    // 主窗口还没显示出来：此刻弹模态框会盖在启动画面上，用户只会更慌。
+                    return;
+                }
+
+                new ArchiveFixer.Services.DialogService().ShowException(
+                    ex ?? new Exception("未知异常"),
+                    "程序发生未处理的界面异常（已记录日志）");
+            }
+            catch
+            {
+                // 见方法注释第 ③ 条：兜底就是"日志里已经有 FATAL"。
+            }
         }
 
         private static void OnCurrentDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
@@ -190,7 +237,7 @@ namespace ArchiveFixer
 
                 string text =
                     $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [FATAL]\r\n" +
-                    ex + "\r\n\r\n";
+                    ArchiveFixer.Password.PasswordMasker.Sanitize(ex.ToString()) + "\r\n\r\n";
 
                 File.AppendAllText(logFile, text);
             }
@@ -231,7 +278,7 @@ namespace ArchiveFixer
 
                     string text =
                         $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [UNOBSERVED_TASK_EXCEPTION]\r\n" +
-                        e.Exception + "\r\n\r\n";
+                        ArchiveFixer.Password.PasswordMasker.Sanitize(e.Exception.ToString()) + "\r\n\r\n";
 
                     File.AppendAllText(logFile, text);
                 }

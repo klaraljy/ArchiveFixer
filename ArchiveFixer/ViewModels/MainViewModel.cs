@@ -5,6 +5,7 @@ using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Services;
+using ArchiveFixer.Storage;
 using ArchiveFixer.Views;
 using System;
 using System.Collections.Generic;
@@ -193,6 +194,14 @@ namespace ArchiveFixer.ViewModels
         private readonly ClipboardService _clipboardService;
         private readonly DialogService _dialogService;
 
+        /// <summary>
+        /// 清理过程物 / 空文件夹的本体（服务层早就实现且测过，本轮把它接到界面上）。
+        ///
+        /// ⚠ 它里面的每一步都是磁盘活（扫目录、量大小、执行删除），**只允许在后台线程上调用**
+        /// （见 <see cref="RunCleanupAsync"/> 里的 Task.Run）。
+        /// </summary>
+        private readonly MaintenanceCleanupService _cleanupService;
+
         private readonly ScanCoordinator _scanCoordinator;
         private readonly RenameCoordinator _renameCoordinator;
         private readonly ExtractionCoordinator _extractionCoordinator;
@@ -246,6 +255,13 @@ namespace ArchiveFixer.ViewModels
 
             // 递归工作区也必须跟着走：它动辄几百 MB，不能落到 %TEMP%（C 盘）。
             RecursiveExtractor.ConfiguredWorkspaceRoot = _pathService.WorkDirectory;
+
+            /*
+             * 「启用日志文件」真正生效的地方：关掉之后只留屏幕日志，不再往 data\logs 追加。
+             * 之前这个开关在设置窗口里躺着，勾不勾都不影响写盘 —— 属于"改了没用"的开关。
+             * LogService 内部对写失败也会自行降级（置 false），这里只管用户的选择。
+             */
+            _logService.EnableFileLog = _settings?.EnableLog ?? true;
 
             // 密码本侧车文件跟着同一个根走，否则"导入记住了"和"启动读取"会看两个目录。
             _passwordService.DataRootDirectory = _pathService.DataRootDirectory;
@@ -461,6 +477,12 @@ namespace ArchiveFixer.ViewModels
         /// <summary>打开递归解压的工作区目录（中断后残留的中间产物在这里）。</summary>
         public ICommand OpenWorkDirectoryCommand { get; }
 
+        /// <summary>清理当前任务输出目录下的「过程物」（默认移入回收站，激进档彻底删除）。</summary>
+        public ICommand CleanProcessArtifactsCommand { get; }
+
+        /// <summary>清理当前任务输出根下"任意层级都没有文件"的空文件夹。</summary>
+        public ICommand CleanEmptyFoldersCommand { get; }
+
         public ICommand RemoveTaskCommand { get; }
         public ICommand RescanTaskCommand { get; }
         public ICommand CopyTaskInfoCommand { get; }
@@ -501,7 +523,8 @@ namespace ArchiveFixer.ViewModels
             PathService pathService,
             TaskSummaryService taskSummaryService,
             ClipboardService clipboardService,
-            DialogService dialogService)
+            DialogService dialogService,
+            MaintenanceCleanupService? cleanupService = null)
         {
             _fileScanService = fileScanService;
             _archiveDetectService = archiveDetectService;
@@ -515,6 +538,9 @@ namespace ArchiveFixer.ViewModels
             _clipboardService = clipboardService;
             _dialogService = dialogService;
 
+            // 清理服务可注入（测试里换掉执行器，绝不碰真实回收站）；不传就用真实实现。
+            _cleanupService = cleanupService ?? new MaintenanceCleanupService();
+
             _scanCoordinator = new ScanCoordinator(this, fileScanService, archiveDetectService, dialogService);
             _renameCoordinator = new RenameCoordinator(this, _scanCoordinator, renameService, dialogService);
             _extractionCoordinator = new ExtractionCoordinator(this, archiveEngine, passwordService, pathService, dialogService);
@@ -522,7 +548,16 @@ namespace ArchiveFixer.ViewModels
 
             _settings = _settingsService.Load();
             ApplyEngineSettings();
-            SelectedOutputDirectory = _settings.CustomOutputDirectory ?? string.Empty;
+
+            /*
+             * 「记住上次输出目录」真正生效的地方（不是留着好看的开关）：
+             * 关掉之后，启动时**不**把上次的输出目录填回 SelectedOutputDirectory，
+             * 这一次运行按"输出位置"那一档的规则算落点（默认 = 压缩包同目录）。
+             * 之前这个开关只存在于界面上，改了什么都不会发生。
+             */
+            SelectedOutputDirectory = _settings.RememberLastOutputDirectory
+                ? _settings.CustomOutputDirectory ?? string.Empty
+                : string.Empty;
 
             AddFilesCommand = new AsyncRelayCommand(_scanCoordinator.AddFilesAsync, CanRunNormalCommand);
             AddFolderCommand = new AsyncRelayCommand(_scanCoordinator.AddFolderAsync, CanRunNormalCommand);
@@ -553,6 +588,15 @@ namespace ArchiveFixer.ViewModels
             OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
             OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
 
+            // 清理入口（菜单「工具」里的两项）：预览 → 确认 → 后台执行，全程不阻塞界面。
+            CleanProcessArtifactsCommand = new AsyncRelayCommand(
+                () => RunCleanupAsync(CleanupScope.ProcessArtifacts),
+                CanRunNormalCommand);
+
+            CleanEmptyFoldersCommand = new AsyncRelayCommand(
+                () => RunCleanupAsync(CleanupScope.EmptyFolders),
+                CanRunNormalCommand);
+
 
             RemoveTaskCommand = new RelayCommand(RemoveTask);
             RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync);
@@ -576,7 +620,8 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
-                _logService.Initialize();
+                // 文件日志开关跟着设置走（默认开）。用户关掉它时不该再产生新日志文件。
+                _logService.Initialize(Settings.EnableLog);
             }
             catch
             {
@@ -882,6 +927,12 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
+                    /*
+                     * 这里**不扫目录**（不传 collapseRepeatedFolderLayer / containsOnly）：
+                     * 本方法跑在 UI 线程上，而"目录里是不是只有这一个包"要枚举目录（大目录会卡界面）。
+                     * 场景 B 的塌缩由解压管线在后台线程上判定，跑完会把真实落点回写进 task.OutputPath，
+                     * 所以界面上最终显示的就是实际落点。
+                     */
                     task.OutputPath = _pathService.BuildOutputPath(task, options);
                 }
                 catch
@@ -1147,6 +1198,257 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 清理流程（菜单「工具 → 清理过程物… / 清理空文件夹…」）：
+        /// **预览 → 红色确认 →（激进档）二次确认 → 后台执行 → 写日志**。
+        ///
+        /// 线程纪律（本项目历史上因 UI 线程干重活卡死过）：
+        /// 预览统计与删除执行全部在 <see cref="Task.Run(System.Action)"/> 里；
+        /// 界面线程只做两件事 —— 弹确认框、把结论写进日志/提示。
+        ///
+        /// 取消的语义：任何一步没确认，就**什么都不做**（一个字节都不动），只留一条日志。
+        /// </summary>
+        private async Task RunCleanupAsync(CleanupScope scope)
+        {
+            string title = scope == CleanupScope.ProcessArtifacts ? "清理过程物" : "清理空文件夹";
+
+            ArchiveTask? task = SelectedTask;
+
+            if (task == null)
+            {
+                AppendLog("WARN", $"{title}：没有选中任务，已取消（清理只作用于当前选中的那一个任务）。");
+                _dialogService.ShowWarning($"请先在列表里选中一个任务，再执行「{title}」。");
+                return;
+            }
+
+            string outputDirectory = task.OutputPath ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                AppendLog("WARN", $"{title}：任务「{task.FileName}」还没有输出目录（先解压一次），已取消。");
+                _dialogService.ShowWarning($"任务「{task.FileName}」还没有输出目录，无法清理。");
+                return;
+            }
+
+            EnterBusy();
+
+            try
+            {
+                // ① 预览（后台）：列出将删除的条目数与总大小；没有可清理的就到此为止。
+                CleanupPreview preview = await Task.Run(() => scope == CleanupScope.ProcessArtifacts
+                    ? _cleanupService.PreviewProcessArtifacts(outputDirectory)
+                    : _cleanupService.PreviewEmptyFolders(outputDirectory));
+
+                AppendLog(preview.HasTarget ? "INFO" : "WARN", $"{title}（{task.FileName}）：{preview.Message}");
+
+                if (!preview.HasTarget)
+                {
+                    _dialogService.ShowInfo(preview.Message);
+                    return;
+                }
+
+                /*
+                 * ② 确认（红色）。默认档就是**移入回收站**，勾选框才是切换到激进档 ——
+                 * 默认动作与"最不意外"一致，危险的那一档必须用户主动勾选（规格 §3.2 清理表）。
+                 */
+                string sharedScopeNote = BuildSharedScopeNote(scope, task);
+
+                bool confirmed = _dialogService.ShowDestructiveConfirm(
+                    BuildCleanupConfirmText(title, preview, DeleteMode.RecycleBin, sharedScopeNote),
+                    "移入回收站",
+                    "改为彻底删除（不可恢复，不进回收站）",
+                    out bool permanentRequested);
+
+                if (!confirmed)
+                {
+                    AppendLog("INFO", $"{title}：用户取消，没有删除任何东西。");
+                    return;
+                }
+
+                DeleteMode mode = DeleteMode.RecycleBin;
+
+                if (permanentRequested)
+                {
+                    /*
+                     * ③ 激进档的**二次确认**：红色 + 必须勾选"我知道不可恢复"。
+                     * 只弹一次红色框是不够的 —— 规格 §3.2 要求"红色标识"与"二次确认"两件事同时满足。
+                     */
+                    bool acknowledged = _dialogService.ShowDestructiveConfirm(
+                        BuildCleanupConfirmText(title, preview, DeleteMode.Permanent, sharedScopeNote),
+                        "彻底删除",
+                        "我知道彻底删除不可恢复，这些内容不会进回收站",
+                        out bool irreversibleAcknowledged);
+
+                    if (!acknowledged || !irreversibleAcknowledged)
+                    {
+                        AppendLog("INFO", $"{title}：没有通过彻底删除的二次确认，没有删除任何东西。");
+                        return;
+                    }
+
+                    mode = DeleteMode.Permanent;
+                }
+
+                // ④ 执行（后台）：删除本身绝不在 UI 线程上跑。
+                CleanupOutcome outcome = await Task.Run(() => scope == CleanupScope.ProcessArtifacts
+                    ? _cleanupService.CleanProcessArtifacts(outputDirectory, mode)
+                    : _cleanupService.CleanEmptyFolders(outputDirectory, mode));
+
+                WriteCleanupOutcomeLog(title, task, preview, outcome);
+
+                string summary = BuildCleanupSummary(title, outcome);
+
+                if (outcome.SuccessCount > 0)
+                {
+                    _dialogService.ShowInfo(summary);
+                }
+                else
+                {
+                    _dialogService.ShowWarning(summary);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", $"{title}失败：" + ex.Message);
+                _dialogService.ShowException(ex, $"{title}失败");
+            }
+            finally
+            {
+                ExitBusy();
+            }
+        }
+
+        /// <summary>
+        /// 确认框正文：写清"删什么、多少、能不能撤销"，并把作用域路径原文列出来
+        /// （作用域越大越要让用户看见，例如模式 B 下 过程物 目录可能被多个包共用）。
+        /// </summary>
+        internal static string BuildCleanupConfirmText(
+            string title,
+            CleanupPreview preview,
+            DeleteMode mode,
+            string? scopeNote = null)
+        {
+            var builder = new StringBuilder();
+
+            builder.AppendLine(title);
+            builder.AppendLine();
+
+            builder.AppendLine($"作用范围：{preview.ScopePath}");
+            builder.AppendLine($"顶层 {preview.ItemCount} 项，共 {preview.EntryCount} 个条目 / {preview.TotalBytes} 字节"
+                               + (preview.Determined ? string.Empty : "（部分内容读不到，数字可能不全）"));
+
+            if (!string.IsNullOrWhiteSpace(scopeNote))
+            {
+                builder.AppendLine();
+                builder.AppendLine("⚠ " + scopeNote);
+            }
+
+            if (preview.Items.Count > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("将删除（最多列 " + CleanupPreview.MaxListedItems + " 项）：");
+
+                foreach (string item in preview.Items)
+                {
+                    builder.AppendLine("· " + item);
+                }
+
+                if (preview.ItemCount > preview.Items.Count)
+                {
+                    builder.AppendLine($"…等共 {preview.ItemCount} 项");
+                }
+            }
+
+            builder.AppendLine();
+
+            builder.AppendLine(mode == DeleteMode.Permanent
+                ? "⚠ 彻底删除：内容不会进回收站，**无法恢复**。"
+                : "默认档：移入回收站，之后可以从回收站还原。回收站不可用时程序不会改删，会直接报错并放弃。");
+
+            return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 作用域提醒：当任务的目标目录**就是源包所在目录**时（落点模式 B：解压到压缩包所在目录），
+        /// 两个清理作用域都会覆盖到同目录里其它包留下的东西 —— 这必须在确认框里说明白。
+        ///
+        /// <para>
+        /// 为什么不去"只删本任务那一份"：模式 B 下过程物本来就集中在一个
+        /// <c>&lt;源目录&gt;\过程物\</c> 里（规格 §7 决策 D-2 只加了按包名分的子目录），
+        /// 而空文件夹清理按定义就是"扫这个根"（规格 §5）。
+        /// 作用域按规格保持不变，但**用户必须知道自己确认的是什么范围** ——
+        /// 这是"删除不可逆"这条红线下唯一诚实的做法。
+        /// </para>
+        /// </summary>
+        internal static string BuildSharedScopeNote(CleanupScope scope, ArchiveTask? task)
+        {
+            if (task == null || !IsOutputDirectorySharedWithSource(task.OutputPath, task.CurrentPath))
+            {
+                return string.Empty;
+            }
+
+            return scope == CleanupScope.ProcessArtifacts
+                ? "当前任务是「解压到压缩包所在目录」模式，这个 过程物 目录与同目录的其它包共用，"
+                  + "本次会一并清掉它们的过程物（都是可再生的中间件）。"
+                : "当前任务是「解压到压缩包所在目录」模式，输出根就是源包所在目录，"
+                  + "本次会清掉这个目录下所有“任意层级都没有文件”的子目录（不只是本任务产出的）。";
+        }
+
+        /// <summary>任务的输出目录是不是就是源包所在目录（模式 B 的判据）。</summary>
+        internal static bool IsOutputDirectorySharedWithSource(string? outputDirectory, string? sourceArchivePath)
+        {
+            // 判据只有一处实现（OutputPlacement.LandsInSourceDirectory），这里只是把参数顺序转过来。
+            return OutputPlacement.LandsInSourceDirectory(sourceArchivePath, outputDirectory);
+        }
+
+        private static string BuildCleanupSummary(string title, CleanupOutcome outcome)
+        {
+            string modeText = outcome.Mode == DeleteMode.Permanent ? "彻底删除" : "移入回收站";
+
+            string summary = outcome.Attempted
+                ? $"{title}：{modeText}成功 {outcome.SuccessCount} 项，失败 {outcome.FailureCount} 项。"
+                  + (outcome.Mode == DeleteMode.Permanent
+                      ? $"释放 {outcome.FreedBytes} 字节。"
+                      : $"移入回收站 {outcome.RecycledBytes} 字节（回收站里的内容未真正释放空间）。")
+                : $"{title}：没有执行删除。";
+
+            if (outcome.FailureCount > 0 && outcome.FailureReasons.Count > 0)
+            {
+                summary += Environment.NewLine + "失败原因：" + Environment.NewLine
+                           + string.Join(Environment.NewLine, outcome.FailureReasons.Take(CleanupPreview.MaxListedItems));
+            }
+
+            return summary;
+        }
+
+        /// <summary>
+        /// 结果写日志（规格 §3.2 要求每条删除都留"路径 + 理由 + 条目数 + 总大小"）。
+        ///
+        /// 服务层已经把每一步整理成 <see cref="CleanupOutcome.LogLines"/>，这里原样落到界面/文件日志，
+        /// 不在界面层重写一遍格式 —— 免得两个地方对"一条删除记录长什么样"产生分歧。
+        /// </summary>
+        private void WriteCleanupOutcomeLog(string title, ArchiveTask task, CleanupPreview preview, CleanupOutcome outcome)
+        {
+            AppendLog(
+                outcome.FailureCount > 0 ? "WARN" : "INFO",
+                $"{title}（{task.FileName}）：{outcome.Message}");
+
+            foreach (string line in outcome.LogLines)
+            {
+                AppendLog(outcome.FailureCount > 0 ? "WARN" : "INFO", line);
+            }
+
+            if (!outcome.Attempted)
+            {
+                return;
+            }
+
+            // 预览里报的数字与实际删除的数字可能不同（期间有程序在写），两个都留痕便于核对。
+            AppendLog(
+                "INFO",
+                $"{title}：预览时顶层 {preview.ItemCount} 项 / {preview.EntryCount} 个条目 / {preview.TotalBytes} 字节；" +
+                $"实际成功 {outcome.SuccessCount} 项、失败 {outcome.FailureCount} 项。");
+        }
+
         private void OpenLogDirectory()
         {
             try
@@ -1181,13 +1483,24 @@ namespace ArchiveFixer.ViewModels
                     Settings.ExtractToOriginalDirectory = false;
                     OnPropertyChanged(nameof(Settings));
 
-                    try
+                    /*
+                     * 「记住上次输出目录」：关掉时**不落盘** —— 这一次运行照用，
+                     * 但下次启动不会再把这次的目录填回来。开着（默认）时行为和以前一样。
+                     */
+                    if (Settings.RememberLastOutputDirectory)
                     {
-                        _settingsService.Save(Settings);
+                        try
+                        {
+                            _settingsService.Save(Settings);
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog("WARN", "保存输出目录设置失败：" + ex.Message);
+                        }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        AppendLog("WARN", "保存输出目录设置失败：" + ex.Message);
+                        AppendLog("INFO", "「记住上次输出目录」已关闭：本次选择不会写入设置。");
                     }
                 }
 
@@ -1340,6 +1653,8 @@ namespace ArchiveFixer.ViewModels
                  SelectOutputDirectoryCommand,
                  OpenLogDirectoryCommand,
                  ResetSettingsCommand,
+                 CleanProcessArtifactsCommand,
+                 CleanEmptyFoldersCommand,
 
                  RemoveTaskCommand,
                  RescanTaskCommand,

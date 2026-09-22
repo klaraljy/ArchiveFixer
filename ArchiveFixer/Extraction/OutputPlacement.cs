@@ -120,6 +120,72 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public static class OutputPlacement
     {
+        /// <summary>终端落法的设置默认值（<see cref="AppSettings.TerminalLayoutMode"/> 的默认字符串）。</summary>
+        public const string DefaultTerminalLayoutSetting = "KeepLastFolder";
+
+        /// <summary>
+        /// 设置里的终端落法字符串 → 枚举（**唯一解析处**）。
+        ///
+        /// 为什么解析要放这里而不是 ViewModel / 设置层各写一份：落点解析是本类的事，
+        /// "什么算合法的终端落法"只应该有一个答案。设置加载时（<c>AppSettings.Normalize</c>）
+        /// 与解压时（<c>ExtractionCoordinator</c>）都调它，两处口径不会分叉。
+        ///
+        /// 容错规则：空 / 非法 / 大小写不符 / 旧配置缺字段（反序列化后为 null）一律回落
+        /// <see cref="TerminalLayoutMode.KeepLastFolder"/> —— 这是"最不意外"的那一档（规格 §4），
+        /// 绝不因为一个读不懂的字符串就把落点算成别的东西。
+        /// </summary>
+        public static TerminalLayoutMode ParseTerminalLayoutMode(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return TerminalLayoutMode.KeepLastFolder;
+            }
+
+            return Enum.TryParse(value.Trim(), ignoreCase: true, out TerminalLayoutMode parsed)
+                   && Enum.IsDefined(parsed)
+                ? parsed
+                : TerminalLayoutMode.KeepLastFolder;
+        }
+
+        /// <summary>枚举 → 设置字符串（与 <see cref="ParseTerminalLayoutMode"/> 严格互逆）。</summary>
+        public static string ToSettingValue(TerminalLayoutMode mode)
+        {
+            return mode.ToString();
+        }
+
+        /// <summary>
+        /// 落点是不是**源包自己所在的那个目录**。
+        ///
+        /// <para>
+        /// 两种情形会成立：模式 B（<see cref="OutputPlacementMode.SourceDirectoryFlat"/>：解压到压缩包所在目录）
+        /// 与场景 B 塌缩之后（<c>111\222\名字\名字.rar</c> → 落点 <c>111\222\名字</c>）。
+        /// </para>
+        /// <para>
+        /// 为什么需要这个判断：解压管线有一条"输出目录已存在且非空 → 自动改名成 <c>xxx(1)</c>"的规则
+        /// （避免把产物倒进一个已有内容的目录）。而源包所在目录**必然非空** —— 源包自己就躺在里面。
+        /// 不留这个例外，用户选的"就地整理"和场景 B 的塌缩会当场被抵消，
+        /// 产物落到旁边的 <c>名字(1)\</c>，正是要根治的"凭空多一层"。
+        /// </para>
+        /// </summary>
+        public static bool LandsInSourceDirectory(string? sourceArchivePath, string? destinationDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(sourceArchivePath) || string.IsNullOrWhiteSpace(destinationDirectory))
+            {
+                return false;
+            }
+
+            string sourceDirectory = FileNameHelper.GetDirectoryName(GetFullPathSafe(sourceArchivePath));
+
+            return !string.IsNullOrWhiteSpace(sourceDirectory)
+                   && SafePathHelper.PathEquals(sourceDirectory, destinationDirectory);
+        }
+
+        /// <summary><c>Path.GetFullPath</c> 的安全版（取不到就返回空串，绝不抛）。</summary>
+        private static string GetFullPathSafe(string? path)
+        {
+            return SafePathHelper.GetFullPathSafe(path);
+        }
+
         /// <summary>是不是"以自定义根为目标"的模式。</summary>
         public static bool UsesCustomRoot(OutputPlacementMode mode)
         {

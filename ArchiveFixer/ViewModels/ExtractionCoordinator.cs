@@ -281,6 +281,13 @@ namespace ArchiveFixer.ViewModels
             string collectTargetDirectory = Settings.CollectTargetDirectory;
             bool deleteSource = Settings.DeleteSourceAfterExtract;
 
+            /*
+             * 终端落法（规格 §3.1 / 设置项 TerminalLayoutMode）同样在这里读一次并解析：
+             * 解析口径唯一（OutputPlacement.ParseTerminalLayoutMode），非法值回落 KeepLastFolder，
+             * 所以一个读不懂的配置只会退到"最不意外"的那一档，不会把落点算成别的东西。
+             */
+            TerminalLayoutMode terminalLayout = OutputPlacement.ParseTerminalLayoutMode(Settings.TerminalLayoutMode);
+
             PostProcessWorkResult work = await Task.Run(
                 () => RunPostProcessWork(
                     task,
@@ -290,6 +297,7 @@ namespace ArchiveFixer.ViewModels
                     collectTargetDirectory,
                     deleteSource,
                     placementMode,
+                    terminalLayout,
                     cancellationToken),
                 cancellationToken);
 
@@ -411,6 +419,7 @@ namespace ArchiveFixer.ViewModels
             string collectTargetDirectory,
             bool deleteSource,
             OutputPlacementMode placementMode,
+            TerminalLayoutMode terminalLayout,
             CancellationToken cancellationToken)
         {
             var logEntries = new List<(string Level, string Message)>();
@@ -499,6 +508,7 @@ namespace ArchiveFixer.ViewModels
                 stageDirectory,
                 task.OutputPath,
                 placementMode,
+                terminalLayout,
                 cancellationToken);
 
             if (commit.Attempted)
@@ -655,11 +665,19 @@ namespace ArchiveFixer.ViewModels
         /// <param name="archiveBaseName">
         /// 终端归档基名（"没有最外层文件夹名"时给那一层取名用）。传空则退回 destDir 自己的末段名。
         /// </param>
+        /// <param name="terminalLayout">
+        /// 终端落法（规格 §3.1 的可选项，来自设置项 <see cref="AppSettings.TerminalLayoutMode"/>）。
+        ///
+        /// ⚠ 这里**必须由调用方传**：本方法以前把 <see cref="TerminalLayoutMode.KeepLastFolder"/> 写死，
+        /// 于是用户在设置里选"用压缩包名当最后一层"完全不生效 —— 界面上的选项与真实行为不一致，
+        /// 是本项目明令禁止的那一类（"改了没用"的开关）。
+        /// </param>
         internal static FinalLayoutPlan PlanFinalLayout(
             string stageDirectory,
             string destinationDirectory,
             OutputPlacementMode placementMode,
-            string? archiveBaseName)
+            string? archiveBaseName,
+            TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder)
         {
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -711,7 +729,7 @@ namespace ArchiveFixer.ViewModels
             FinalizePlan finalize = ResultFinalizer.Plan(
                 staged,
                 destinationDirectory,
-                TerminalLayoutMode.KeepLastFolder,
+                terminalLayout,
                 archiveBaseName,
                 contentRoot: null,
                 stagingRoot: stageRoot,
@@ -771,6 +789,7 @@ namespace ArchiveFixer.ViewModels
             string stageDirectory,
             string destinationDirectory,
             OutputPlacementMode placementMode,
+            TerminalLayoutMode terminalLayout,
             CancellationToken cancellationToken)
         {
             var logEntries = new List<(string Level, string Message)>();
@@ -800,7 +819,12 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                plan = PlanFinalLayout(stageDirectory, destinationDirectory, placementMode, archiveBaseName);
+                plan = PlanFinalLayout(
+                    stageDirectory,
+                    destinationDirectory,
+                    placementMode,
+                    archiveBaseName,
+                    terminalLayout);
             }
             catch (Exception ex)
             {
@@ -1779,9 +1803,40 @@ namespace ArchiveFixer.ViewModels
                 extractOptions.KeepArchiveNameFolder,
                 extractOptions.CustomOutputDirectory);
 
+            /*
+             * 场景 B 塌缩（规格 §3.3）：111\222\名字\名字.rar → 产物落 111\222\名字\内容物。
+             *
+             * 「包基名 == 所在目录名」是纯字符串判断（不碰磁盘）；成立之后才需要**扫一次目录**，
+             * 确认里面没有别的包。扫描是磁盘活：用户场景里一个目录可能有几百个条目、网络盘更慢，
+             * 所以必须在后台线程上跑（AGENTS.md / 任务硬约束：UI 线程只更新状态）。
+             *
+             * 只对**最外层源包**做：续解出来的内层包落点由父任务给定（见 BuildOutputPath 的早退分支），
+             * 这层规则对它没有意义。
+             */
+            bool collapseRepeatedFolderLayer = Settings.CollapseRepeatedFolderLayer;
+            bool sourceDirectoryContainsOnlyThisArchive = false;
+
+            if (collapseRepeatedFolderLayer
+                && !task.IsContinuationTask
+                && SourceFolderScanService.IsRepeatedFolderNameCandidate(task.CurrentPath))
+            {
+                SourceFolderScanResult scan = await Task.Run(
+                    () => SourceFolderScanService.Inspect(task.CurrentPath),
+                    cancellationToken);
+
+                sourceDirectoryContainsOnlyThisArchive = scan.ContainsOnlyThisArchive;
+
+                // 塌缩会少一层目录，这件事必须让用户看得见（日志里说清为什么）。
+                AppendLog(scan.ContainsOnlyThisArchive ? "INFO" : "WARN", $"{task.FileName}：{scan.Message}");
+            }
+
             // 解压前算出来的"打算输出到哪"。它只是一个提议：下面可能因为目录已存在被改名。
             // 续解出来的内层包由 PathService.BuildOutputPath 直接给出**父任务那一个**最终目录（不再套一层）。
-            string requestedOutputPath = _pathService.BuildOutputPath(task, extractOptions);
+            string requestedOutputPath = _pathService.BuildOutputPath(
+                task,
+                extractOptions,
+                collapseRepeatedFolderLayer,
+                sourceDirectoryContainsOnlyThisArchive);
             string outputPath = requestedOutputPath;
             string outputRedirectNote = string.Empty;
 
@@ -1803,6 +1858,13 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            /*
+             * 落点是不是"源包自己的目录"（模式 B「解压到压缩包所在目录」/ 场景 B 塌缩后的
+             * 111\222\名字）。这条事实决定"目录已存在且非空就改名 xxx(1)"要不要让开，
+             * 理由见下面那个分支上的说明；判定本身只有一处实现（OutputPlacement）。
+             */
+            bool landsInSourceDirectory = OutputPlacement.LandsInSourceDirectory(task.CurrentPath, outputPath);
+
             try
             {
                 /*
@@ -1818,6 +1880,24 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         $"{task.FileName}：内层包，产物归入父任务输出目录 {outputPath}（不再另建目录）。");
+                }
+                else if (landsInSourceDirectory)
+                {
+                    /*
+                     * 落点就是**源包所在目录**（模式 B「解压到压缩包所在目录」，或场景 B 塌缩后的
+                     * 111\222\名字）→ 上面那条"已存在且非空就改名 xxx(1)"必须让开。
+                     *
+                     * 为什么：那个目录**必然非空** —— 源包自己就躺在里面。照旧规则一改名，
+                     * 用户选的就地整理 / 塌缩当场被抵消，产物落到旁边的 名字(1)\，
+                     * 正是这一轮要根治的"凭空多一层目录"。
+                     *
+                     * 让开之后会不会和既有文件混在一起：不会丢东西。定稿搬运对同名条目一律
+                     * AutoRename（绝不覆盖），而且这条规则的本意是"别把产物倒进一个已有内容的目录"，
+                     * 可这里那个目录**本来就是这次要整理的目标**。
+                     */
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：落点就是源包所在目录 {outputPath}（就地整理 / 已塌缩重复层），不套用“目录已存在就改名”的规则。");
                 }
                 else if (!string.IsNullOrWhiteSpace(outputPath) &&
                     Directory.Exists(outputPath) &&

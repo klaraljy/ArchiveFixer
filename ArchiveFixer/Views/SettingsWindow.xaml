@@ -168,6 +168,44 @@
                     </StackPanel>
                 </GroupBox>
 
+                <!-- ==================== 内容物最后一层（终端落法） ==================== -->
+                <GroupBox Header="内容物最后那一层（终端落法）">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,0,0,8"
+                                   Text="二选一。只影响“多文件 / 自带一层文件夹”时套出来的那一层叫什么；终端只有一个文件时本来就没有这一层，两种取值结果相同。" />
+
+                        <RadioButton GroupName="TerminalLayout"
+                                     IsChecked="{Binding TerminalLayout, Converter={StaticResource EnumOptionConverter}, ConverterParameter=KeepLastFolder, Mode=TwoWay}">
+                            <StackPanel>
+                                <TextBlock Text="多文件时保留最后一层文件夹名（默认）" Style="{StaticResource BodyTextStyle}" />
+                                <TextBlock Text="111\222.rar → 111\222\666\内容物　（保留包内那一层名字，不丢信息）"
+                                           Style="{StaticResource HintTextStyle}" />
+                            </StackPanel>
+                        </RadioButton>
+
+                        <RadioButton GroupName="TerminalLayout"
+                                     Margin="0,6,0,0"
+                                     IsChecked="{Binding TerminalLayout, Converter={StaticResource EnumOptionConverter}, ConverterParameter=UseArchiveName, Mode=TwoWay}">
+                            <StackPanel>
+                                <TextBlock Text="多文件时用压缩包名当最后一层" Style="{StaticResource BodyTextStyle}" />
+                                <TextBlock Text="111\222.rar → 111\222\内容物　（少一层点击，但丢掉了包内那层名字）"
+                                           Style="{StaticResource HintTextStyle}" />
+                            </StackPanel>
+                        </RadioButton>
+
+                        <Separator Margin="0,10,0,8" />
+
+                        <!-- 场景 B 塌缩（规格 §3.3，默认开） -->
+                        <CheckBox Content="包名与所在文件夹同名时，去掉重复的那一层"
+                                  IsChecked="{Binding CollapseRepeatedFolderLayer, Mode=TwoWay}" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,0"
+                                   Text="111\222\名字\名字.rar → 111\222\名字\内容物（默认开）。仅当该文件夹下没有别的包时才生效；还有别的包时保留完整一层，免得两个包的产物混在一起。" />
+                    </StackPanel>
+                </GroupBox>
+
                 <!-- ==================== 扫描设置 ==================== -->
                 <GroupBox Header="扫描设置">
                     <StackPanel>
@@ -241,14 +279,15 @@
                 <!-- ==================== 后缀与改名 ==================== -->
                 <GroupBox Header="后缀与改名">
                     <StackPanel>
-                        <CheckBox Content="改名前显示预览"
-                                  IsChecked="{Binding Settings.PreviewBeforeRename, Mode=TwoWay}" />
-
+                        <!--
+                            这里以前有一个「改名前显示预览」复选框，但改名**永远**会先弹预览
+                            （不变量 §6 第 3 条：PreviewBeforeRename 不得被任何代码旁路），
+                            勾不勾都不影响行为 —— 属于"改了没用"的开关，所以直接删掉，只留说明。
+                        -->
                         <TextBlock Style="{StaticResource HintTextStyle}"
-                                   Margin="22,0,0,8"
-                                   Text="当前版本改名一定会先弹预览（安全约束），所以取消勾选也不会跳过预览。" />
+                                   Text="改名一定会先弹预览，改完由你确认才落盘（安全约束，没有开关可以跳过）。" />
 
-                        <Grid>
+                        <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="110" />
                                 <ColumnDefinition Width="*" />
@@ -445,7 +484,7 @@
 
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="22,0,0,0"
-                                   Text="当前版本的日志文件始终写在 data\logs 下，这个开关暂不影响它（见「已知限制」）。" />
+                                   Text="关掉之后不再往 data\logs 追加文件日志（屏幕上的日志照旧显示）；日志里的密码一律脱敏。" />
                     </StackPanel>
                 </GroupBox>
 
@@ -455,8 +494,41 @@
                         <CheckBox Content="记住上次输出目录"
                                   IsChecked="{Binding Settings.RememberLastOutputDirectory, Mode=TwoWay}" />
 
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,0"
+                                   Text="关掉之后：下次启动不再把上次的输出目录填回来，主窗口里临时选的目录也不会写进设置。" />
+
+                        <!--
+                            缓存根目录（日志 / 临时 / 递归工作区都放它下面）。
+                            留空 = 程序目录下的 data；填了必须在**非 C 盘**上，保存时会拦住 C 盘并说明原因。
+                        -->
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Text="缓存根目录："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding CacheRootDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="留空表示用程序目录下的 data。日志、临时文件、递归工作区都放它下面；不能填 C 盘。" />
+
+                            <Button Grid.Column="2"
+                                    Content="选择"
+                                    MinWidth="72"
+                                    Margin="8,0,0,0"
+                                    Command="{Binding SelectCacheRootDirectoryCommand}" />
+                        </Grid>
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,6,0,0"
+                                   Text="留空 = 程序目录下的 data（默认，跟着安装位置走）。缓存不能落 C 盘：填了系统盘会拒绝保存并说明原因。" />
+
                         <!-- 7z.exe 路径只有这一个入口，程序不再猜 D:\7-Zip（AGENTS.md §3.1）。 -->
-                        <Grid Margin="0,8,0,0">
+                        <Grid Margin="0,10,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="110" />
                                 <ColumnDefinition Width="*" />

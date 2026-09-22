@@ -1,7 +1,9 @@
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using System;
+using System.IO;
 using System.Text.Json;
 using System.Windows.Input;
 
@@ -101,6 +103,135 @@ namespace ArchiveFixer.ViewModels
         /// <summary>只有"解压到指定位置"两种模式才用得上路径输入框。</summary>
         public bool IsCustomOutputEnabled => !Settings.ExtractToOriginalDirectory;
 
+        /// <summary>
+        /// 终端落法（规格 §3.1 的可选项）：内容物最里面那一层文件夹叫什么。
+        ///
+        /// 读写的是设置里的字符串（<see cref="AppSettings.TerminalLayoutMode"/>），
+        /// 解析/序列化都走 <see cref="OutputPlacement.ParseTerminalLayoutMode"/> /
+        /// <see cref="OutputPlacement.ToSettingValue"/> —— 与解压时的口径是同一份实现。
+        ///
+        /// 之前这一档**在界面上根本不存在**，解压管线把 KeepLastFolder 写死，
+        /// 于是"用压缩包名当最后一层"这个用户可选的行为完全没法选。
+        /// </summary>
+        public TerminalLayoutMode TerminalLayout
+        {
+            // ⚠ 必须写全限定名：本类有一个同名的属性 OutputPlacement，写 OutputPlacement.X 会被
+            // 解析成"访问那个属性上的成员"（C# 的 color-color 规则），编译期就报错。
+            get => ArchiveFixer.Extraction.OutputPlacement.ParseTerminalLayoutMode(Settings.TerminalLayoutMode);
+            set
+            {
+                string stored = ArchiveFixer.Extraction.OutputPlacement.ToSettingValue(value);
+
+                if (string.Equals(Settings.TerminalLayoutMode, stored, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                Settings.TerminalLayoutMode = stored;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// 场景 B 塌缩（规格 §3.3，默认**开**）：包基名与所在目录同名、且目录下只有这一个包时，
+        /// 去掉重复的一层（<c>111\222\名字\名字.rar</c> → 产物落 <c>111\222\名字\</c>）。
+        /// </summary>
+        public bool CollapseRepeatedFolderLayer
+        {
+            get => Settings.CollapseRepeatedFolderLayer;
+            set
+            {
+                if (Settings.CollapseRepeatedFolderLayer == value)
+                {
+                    return;
+                }
+
+                Settings.CollapseRepeatedFolderLayer = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// 缓存根目录（日志 / 临时 / 工作区都放它下面）。
+        /// 留空 = 程序目录下的 <c>data</c>（默认，跟着安装位置走）；填了必须是绝对路径且**不能是 C 盘**。
+        /// </summary>
+        public string CacheRootDirectory
+        {
+            get => Settings.CacheRootDirectory ?? string.Empty;
+            set
+            {
+                string normalized = value ?? string.Empty;
+
+                if (string.Equals(Settings.CacheRootDirectory, normalized, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                Settings.CacheRootDirectory = normalized;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// 缓存根目录的校验（**必须在保存前过这一关**）。
+        ///
+        /// 规则来自用户明确要求与规格 §7 决策 D-7：缓存绝不落 C 盘（%AppData% / 系统盘），
+        /// 绿色软件跟着安装位置走。留空是允许的（= 程序目录下的 data）。
+        ///
+        /// 返回 false 时 <paramref name="message"/> 是给用户看的原因与改法 ——
+        /// 只说"不合法"用户没法行动，必须说清"该改成什么样"。
+        /// </summary>
+        public static bool ValidateCacheRootDirectory(string? path, out string message)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                message = string.Empty;
+                return true;
+            }
+
+            string trimmed = path.Trim();
+
+            if (!Path.IsPathRooted(trimmed))
+            {
+                message = "缓存根目录必须是绝对路径（例如 D:\\ArchiveFixer-cache）；留空表示用程序目录下的 data。";
+                return false;
+            }
+
+            // UNC（\\server\share）没有盘符，按"不是 C 盘"处理。
+            if (trimmed.StartsWith(@"\\", StringComparison.Ordinal))
+            {
+                message = string.Empty;
+                return true;
+            }
+
+            string? root = null;
+
+            try
+            {
+                root = Path.GetPathRoot(Path.GetFullPath(trimmed));
+            }
+            catch
+            {
+                // 取不到盘根 → 由下面的统一提示拦下。
+            }
+
+            if (string.IsNullOrWhiteSpace(root) || root.Length < 1)
+            {
+                message = $"缓存根目录认不出盘符：{trimmed}。请用形如 D:\\ArchiveFixer-cache 的绝对路径。";
+                return false;
+            }
+
+            if (char.ToUpperInvariant(root[0]) == 'C')
+            {
+                message = "缓存不能放在 C 盘（系统盘）：%AppData% 与系统盘都已被明确否掉，缓存要跟着安装位置走。" +
+                          "请换一个盘，例如 D:\\ArchiveFixer-cache；留空则用程序目录下的 data。";
+                return false;
+            }
+
+            message = string.Empty;
+            return true;
+        }
+
         /// <summary>当前落点的一句话说明 + 具体例子。</summary>
         public string OutputPlacementSummary => OutputPlacementSummaryConverter.Describe(
             Settings.ExtractToOriginalDirectory,
@@ -127,6 +258,9 @@ namespace ArchiveFixer.ViewModels
         /// <summary>选择"结果归集"的目标目录（M3）。</summary>
         public ICommand SelectCollectTargetDirectoryCommand { get; }
 
+        /// <summary>选择缓存根目录。</summary>
+        public ICommand SelectCacheRootDirectoryCommand { get; }
+
         public SettingsViewModel()
             : this(new AppSettings(), new SettingsService())
         {
@@ -143,6 +277,7 @@ namespace ArchiveFixer.ViewModels
             ResetDefaultCommand = new RelayCommand(ResetDefault);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory);
             SelectCollectTargetDirectoryCommand = new RelayCommand(SelectCollectTargetDirectory);
+            SelectCacheRootDirectoryCommand = new RelayCommand(SelectCacheRootDirectory);
 
             Message = "设置已加载。";
         }
@@ -151,6 +286,19 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
+                /*
+                 * 缓存根目录先校验再保存（不能落到 C 盘）。
+                 *
+                 * 为什么在这里**拦住**而不是"存下来再警告"：缓存根目录决定工作区落点，
+                 * 存进配置之后下一次启动就会照它建目录 —— 用户看到警告时目录已经建好了，
+                 * "提示"就变成了既成事实。校验不过就停在设置窗口里，改完再保存。
+                 */
+                if (!ValidateCacheRootDirectory(Settings.CacheRootDirectory, out string cacheMessage))
+                {
+                    Message = "设置未保存：" + cacheMessage;
+                    return;
+                }
+
                 /*
                  * Normalize() 会把超范围的数字夹回合法区间（例如密码尝试上限 5000 → 1000）。
                  * 静默改掉用户填的数字是"我以为我设成了 5000"的经典来源，所以这里比一下前后值，
@@ -264,6 +412,37 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(IsCustomOutputEnabled));
             OnPropertyChanged(nameof(OutputPlacementSummary));
             OnPropertyChanged(nameof(CustomOutputDirectory));
+
+            // 这几个属性是"包在 Settings 外面"的（AppSettings 不实现 INotifyPropertyChanged），
+            // 恢复默认 / 重新加载设置之后必须显式通知，否则界面还显示旧值。
+            OnPropertyChanged(nameof(TerminalLayout));
+            OnPropertyChanged(nameof(CollapseRepeatedFolderLayer));
+            OnPropertyChanged(nameof(CacheRootDirectory));
+        }
+
+        /// <summary>选择缓存根目录（日志 / 临时 / 工作区都放它下面）。</summary>
+        private void SelectCacheRootDirectory()
+        {
+            try
+            {
+                string folder = _dialogService.ShowFolderBrowserDialog();
+
+                if (string.IsNullOrWhiteSpace(folder))
+                {
+                    Message = "已取消选择缓存根目录。";
+                    return;
+                }
+
+                CacheRootDirectory = folder;
+
+                Message = ValidateCacheRootDirectory(folder, out string reason)
+                    ? "已选择缓存根目录；点「保存」后生效。"
+                    : "这个位置不能用：" + reason;
+            }
+            catch (Exception ex)
+            {
+                Message = "选择缓存根目录失败：" + ex.Message;
+            }
         }
 
         /// <summary>

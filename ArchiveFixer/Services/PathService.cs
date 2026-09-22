@@ -95,7 +95,24 @@ namespace ArchiveFixer.Services
         /// 少一个产物目录，好过多一堆没人找得到的文件。
         /// </para>
         /// </summary>
-        public string BuildOutputPath(ArchiveTask task, ExtractOptions options)
+        /// <param name="collapseRepeatedFolderLayer">
+        /// 场景 B 塌缩开关（规格 §3.3，设置项 <see cref="AppSettings.CollapseRepeatedFolderLayer"/>，默认开）。
+        /// </param>
+        /// <param name="sourceDirectoryContainsOnlyThisArchive">
+        /// "这个目录下只有这一个包"这个事实**必须由调用方查出来再告知**（目录扫描是磁盘活，
+        /// 见 <see cref="SourceFolderScanService.Inspect"/>，由解压管线在后台线程上跑）。
+        /// 默认 false = 不塌缩：宁可多一层，也不把多个包的产物混到一个目录里。
+        ///
+        /// ⚠ 界面刷新落点（<c>MainViewModel.RefreshOutputPaths</c>）走的是默认值 +
+        /// <paramref name="collapseRepeatedFolderLayer"/> = false，**不扫目录** ——
+        /// 那条路在 UI 线程上（AGENTS.md：UI 线程不许做目录扫描）；解压管线跑完会把
+        /// 真实的实际落点回写进 <c>task.OutputPath</c>，所以界面最终显示的是真值。
+        /// </param>
+        public string BuildOutputPath(
+            ArchiveTask task,
+            ExtractOptions options,
+            bool collapseRepeatedFolderLayer = false,
+            bool sourceDirectoryContainsOnlyThisArchive = false)
         {
             if (task == null)
             {
@@ -137,7 +154,9 @@ namespace ArchiveFixer.Services
             OutputPlacementResult placement = OutputPlacement.ResolveDestinationDirectory(
                 archivePath,
                 mode,
-                options.CustomOutputDirectory);
+                options.CustomOutputDirectory,
+                collapseRepeatedFolderLayer,
+                sourceDirectoryContainsOnlyThisArchive);
 
             return placement.Success ? placement.DestinationDirectory : string.Empty;
         }
