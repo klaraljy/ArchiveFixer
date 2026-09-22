@@ -121,6 +121,9 @@ namespace ArchiveFixer.Converters
                 StatusText.PasswordNeed or
                 // 部分完成是"要人看一眼"的状态：不是失败（东西解出来了一些），也绝不是成功。
                 StatusText.PartiallyCompleted or
+                // 文件名已加密同理：包本身可能没问题，只是内容无法判定、需要正确密码 ——
+                // 给警告色（与"部分完成"同分桶同色），不要用"文件损坏"的错误色把人引去重下。
+                StatusText.EncryptedHeaders or
                 "WARN";
         }
 

@@ -133,14 +133,17 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 源包处理档（决策 D-9，三选一）：一键处理里源包是移入其余物 / 留在原地 / 校验通过后删除。
+        /// 源包处理档（决策 D-9，三选一）：源包是移入其余物 / 留在原地 / 校验通过后删除。
         ///
         /// 读写的是设置里的字符串（<see cref="AppSettings.SourceHandling"/>），
         /// 解析/序列化都走 <see cref="AppSettings.ParseSourceHandling"/> /
         /// <see cref="AppSettings.ToSourceHandlingValue"/> —— 与解压时的口径是同一份实现
         /// （与 <see cref="TerminalLayout"/> 同一套写法，避免"界面上选了这个、跑起来是那个"）。
         ///
-        /// ⚠ 这一档**只影响一键处理**；手动「只解压」是地基路径，永远不动源包。
+        /// ⚠ <b>两条路径读的是同一档</b>（用户 2026-09-22 版本二，**推翻**早先
+        /// "这一档只影响一键处理、地基路径永远不动源包"的说法）：
+        /// 一键处理与手动「只解压」都按它处理源包 —— "成功 + 校验通过 + 未取消 + 属于本任务分卷组"
+        /// 四条同时成立才动源包（见 <c>Models/AppSettings.cs</c> 与 <c>docs/输出与整理模型.md</c> §3.4）。
         /// </summary>
         public SourceHandlingMode SourceHandling
         {

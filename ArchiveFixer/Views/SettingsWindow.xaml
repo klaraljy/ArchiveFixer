@@ -287,24 +287,37 @@
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Text="改名一定会先弹预览，改完由你确认才落盘（安全约束，没有开关可以跳过）。" />
 
+                        <!--
+                            同名冲突处理（ConflictAction）：**一处设置，两处生效** ——
+                            ① 解压落位（输出目录已存在且非空、定稿搬运时同名）；② 改名冲突（预览里逐条列出）。
+                            「询问」以前是典型的"界面说一套、代码做一套"：选了询问却被静默自动重命名
+                            （PathService 把它和 AutoRename 并到同一个分支）。现在它真的会暂停任务问一次，
+                            语义写在下面的提示行里 —— 界面上的每一档都必须能在行为里找到对应。
+                        -->
                         <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="110" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Text="改名冲突处理："
-                                       Style="{StaticResource LabelTextStyle}" />
+                            <TextBlock Text="同名冲突处理："
+                                       Style="{StaticResource LabelTextStyle}"
+                                       ToolTip="解压落位与改名遇到同名时的处置方式（默认自动重命名，绝不覆盖）。" />
 
                             <ComboBox Grid.Column="1"
                                       SelectedValue="{Binding Settings.ConflictAction, Mode=TwoWay}"
-                                      SelectedValuePath="Tag">
-                                <ComboBoxItem Content="跳过" Tag="Skip" />
-                                <ComboBoxItem Content="覆盖" Tag="Overwrite" />
-                                <ComboBoxItem Content="自动重命名" Tag="AutoRename" />
-                                <ComboBoxItem Content="询问" Tag="Ask" />
+                                      SelectedValuePath="Tag"
+                                      ToolTip="默认「自动重命名」：新产物落成 名字(1)，不动已存在的文件。">
+                                <ComboBoxItem Content="跳过（不动已存在的文件）" Tag="Skip" />
+                                <ComboBoxItem Content="覆盖（先挪到临时名，落位成功后才删旧的）" Tag="Overwrite" />
+                                <ComboBoxItem Content="自动重命名（默认，绝不覆盖）" Tag="AutoRename" />
+                                <ComboBoxItem Content="询问（第一次冲突时暂停任务问一次）" Tag="Ask" />
                             </ComboBox>
                         </Grid>
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="110,4,0,0"
+                                   Text="「询问」作用于解压落位（输出目录已存在且非空 / 定稿时同名）：第一次撞上时暂停该任务，弹一次聚合询问 —— 覆盖 / 跳过 / 自动重命名，勾上「对后面所有同名冲突都照此办理」就对整批生效（本批不会再问第二次，50~200 个包也只打断你一次）；直接关掉那个窗口 = 取消本批。没有界面宿主时（命令行 / 测试）按「自动重命名」保守落位，绝不覆盖。改名冲突在预览表里逐条列出、点确认才落盘，那一步没有询问弹窗（预览本身就是确认）。" />
                     </StackPanel>
                 </GroupBox>
 
@@ -313,6 +326,37 @@
                     <StackPanel>
                         <CheckBox Content="解压前测试完整性"
                                   IsChecked="{Binding Settings.TestBeforeExtract, Mode=TwoWay}" />
+
+                        <!--
+                            定稿完成后打开输出目录（**默认关**）。
+                            依据 docs/WinRAR功能参考.md §2 C 组 / §3 第 7 条：「整理完就想看一眼结果」
+                            是这个产品的自然下一步动作，但它**会动用户桌面**，所以必须由用户显式开启。
+                            ⚠ 打开时只开文件夹（复用 SafePathHelper.OpenDirectory → explorer.exe <目录>），
+                            **不置前、不最大化、不抢焦点**（AGENTS.md §13 同精神）。
+                        -->
+                        <CheckBox Content="定稿完成后在资源管理器里打开输出目录（默认关）"
+                                  IsChecked="{Binding Settings.OpenOutputFolderWhenDone, Mode=TwoWay}"
+                                  Margin="0,8,0,2" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,8"
+                                   TextWrapping="Wrap"
+                                   Text="只在任务真正定稿成功（内容物已落盘 + 输出校验通过）之后打开；失败 / 部分完成 / 取消时一律不打开（那时打开一个空目录只会误导你）。只打开文件夹，不会把本程序窗口置前或最大化。" />
+
+                        <!--
+                            危险条目统计（默认开，**只提示不阻断**）。
+                            docs/WinRAR功能参考.md §2 F 组 / §3 第 5 条：我们的场景里安装器 / 补丁
+                            经常就是内容物，所以**不做**它的全局硬排除掩码，只把「本包含 N 个可执行文件」
+                            写进任务详情与失败清单（复用既有那一遍解压前条目预检，不额外扫一遍）。
+                        -->
+                        <CheckBox Content="统计并提示可疑条目（可执行文件 / 脚本，默认开）"
+                                  IsChecked="{Binding Settings.ReportDangerousEntries, Mode=TwoWay}"
+                                  Margin="0,0,0,2" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,8"
+                                   TextWrapping="Wrap"
+                                   Text="在既有那一遍解压前条目预检里顺便统计 .exe/.scr/.lnk/.bat/.cmd/.ps1/.vbs，把「本包含 N 个可执行文件（前几个列出名字）」写进任务详情与失败清单。只提示、绝不阻断：不会因此跳过任何条目，也不会改变落盘结果；关掉只是不统计。" />
 
                         <!-- M3：结果归集。把每个包的产物移动到一个统一目录，方便一次性整理走。 -->
                         <CheckBox Content="把解压结果归集到统一目录"
@@ -417,7 +461,7 @@
                             <ComboBox Grid.Column="1"
                                       SelectedValue="{Binding SourceHandling, Mode=TwoWay}"
                                       SelectedValuePath="Tag"
-                                      ToolTip="只影响「一键处理」；手动「只解压」永远不动源包。">
+                                      ToolTip="一键处理与手动「只解压」读的是同一档（用户 2026-09-22 版本二）。">
                                 <ComboBoxItem Content="留在原地（不动源包）" Tag="KeepInPlace" />
                                 <ComboBoxItem Content="移入「其余物」（默认，推荐）" Tag="MoveToRest" />
                                 <ComboBoxItem Content="校验通过后删除（不可逆）" Tag="DeleteAfterVerify" />
@@ -426,7 +470,8 @@
 
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="110,0,0,8"
-                                   Text="只影响「一键处理」：默认把源包（含分卷整组）移进输出目录里的「其余物」，整理完删一个目录就干净了。手动「只解压」这条路径永远不动源包。" />
+                                   TextWrapping="Wrap"
+                                   Text="两条路径（一键处理与手动「只解压」）读的是同一档：默认把源包（含分卷整组）移进输出目录里的「其余物」，整理完删一个目录就干净了。只有「内容物已定稿 + 输出校验通过 + 未取消 + 属于本任务分卷组」四条同时成立才动源包；失败 / 部分完成 / 取消时源包一律原地不动、其余物不生成。想要「传统解压器」语义就选「留在原地」。" />
 
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -450,16 +495,47 @@
                     </StackPanel>
                 </GroupBox>
 
-                <!-- ==================== 清理源包（不可逆） ==================== -->
-                <GroupBox Header="清理源包（不可逆）">
+                <!--
+                    ==================== 清理（不可逆） ====================
+                    两件事同组：①「其余物 / 空文件夹」清理的**默认档**；② 地基路径上更老的清理源包开关。
+                    两者的默认值都取最保守的那一侧：回收站 / 不删。
+                -->
+                <GroupBox Header="清理（不可逆）">
                     <StackPanel>
-                        <CheckBox Content="解压成功且校验通过后删除源压缩包／源分卷（只影响手动「只解压」）"
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="140" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Text="其余物清理默认档："
+                                       Style="{StaticResource LabelTextStyle}"
+                                       ToolTip="只决定删除确认框里那个「改为彻底删除」勾选框的默认状态。" />
+
+                            <ComboBox Grid.Column="1"
+                                      SelectedValue="{Binding Settings.RestRemovalDefaultMode, Mode=TwoWay}"
+                                      SelectedValuePath="Tag"
+                                      ToolTip="无论哪一档，删除前都先预览 + 确认；彻底删除还要二次确认。">
+                                <ComboBoxItem Content="移入回收站（默认，可从回收站还原）" Tag="RecycleBin" />
+                                <ComboBoxItem Content="彻底删除（不可恢复，仍要二次确认）" Tag="Permanent" />
+                            </ComboBox>
+                        </Grid>
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="140,0,0,8"
+                                   TextWrapping="Wrap"
+                                   Text="只是确认框的默认档，不是「跳过确认」：删除前一定先列出条目数与总大小让你确认；选「彻底删除」还要勾一次「我知道不可恢复」。回收站不可用时（网络盘 / 策略禁用 / 卷没回收站）一律不删并说明原因，绝不会因为这一项就降级成彻底删除。" />
+
+                        <Separator Margin="0,4,0,10" />
+
+                        <CheckBox Content="手动「只解压」：解压成功且校验通过后删除源压缩包／源分卷"
                                   IsChecked="{Binding Settings.DeleteSourceAfterExtract, Mode=TwoWay}" />
 
                         <Border Style="{StaticResource WarningBannerStyle}" Margin="0,8,0,0">
                             <TextBlock Style="{StaticResource BannerTextStyle}"
                                        Foreground="{StaticResource WarningTextBrush}"
-                                       Text="⚠ 删除不可逆。只有「解压成功 + 输出校验通过」才会删；校验不通过、被取消、只完成一部分时一律不删。默认关闭。这一项只管手动「只解压」；「一键处理」的源包处理在上面「解压与整理」里单独设置（默认移入「其余物」）。" />
+                                       TextWrapping="Wrap"
+                                       Text="⚠ 删除不可逆。默认关闭。它只在上面「源包处理」选了「留在原地」时的手动「只解压」路径上参与（那是「传统解压器 + 解压后清理源包」的老组合）；默认的「移入其余物」档下它不参与 —— 否则刚搬进其余物的源包会被立刻删掉。只有「解压成功 + 输出校验通过」才会删；校验不通过、被取消、只完成一部分时一律不删。" />
                         </Border>
                     </StackPanel>
                 </GroupBox>
@@ -514,6 +590,33 @@
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="22,0,0,0"
                                    Text="关掉之后不再往 data\logs 追加文件日志（屏幕上的日志照旧显示）；日志里的密码一律脱敏。" />
+                    </StackPanel>
+                </GroupBox>
+
+                <!--
+                    ==================== 常规与性能 ====================
+                    低运行优先级（**默认开**）。依据 docs/WinRAR功能参考.md §2 D 组 / §3 第 9 条：
+                    这一段以前硬编码在 App.xaml.cs 里，用户觉得"卡 / 慢"时**没有任何可调项**。
+                    ⚠ 它与上面「最大并发解压数」是两个**互相独立**的旋钮，界面上必须说清
+                    （抄的是 WinRAR 6.02 修过的坑：两个调节项互相覆盖）。
+                -->
+                <GroupBox Header="常规与性能">
+                    <StackPanel>
+                        <CheckBox Content="低运行优先级运行（默认开）"
+                                  IsChecked="{Binding Settings.LowProcessPriority, Mode=TwoWay}"
+                                  ToolTip="让本程序与它启动的解压进程（7z.exe）让出 CPU / 磁盘优先级。" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,6"
+                                   TextWrapping="Wrap"
+                                   Text="开着：批量解压时还让得开手，前台程序不会被拖卡（代价是纯后台跑时慢一点）。关掉：跑得更快，但更容易把你正在用的桌面拖住。重启程序后生效。" />
+
+                        <Border Style="{StaticResource InfoBannerStyle}" Margin="0,4,0,0">
+                            <TextBlock Style="{StaticResource BannerTextStyle}"
+                                       Foreground="{StaticResource InfoTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="「低运行优先级」与上面「最大并发解压数」是两个互相独立的旋钮：这一项决定让不让出 CPU / 磁盘优先级，并发数决定同时跑几个包。改其中一个不会顺手改另一个（WinRAR 6.02 修过「两个调节项互相覆盖」这个坑，我们不重蹈）。" />
+                        </Border>
                     </StackPanel>
                 </GroupBox>
 

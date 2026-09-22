@@ -52,6 +52,7 @@ namespace ArchiveFixer.Tests
                 Make(StatusText.PasswordAttemptLimitReached),  // 新增状态：算"解压失败"，不算"密码错误"
                 Make(StatusText.Cancelled),
                 Make(StatusText.PartiallyCompleted),
+                Make(StatusText.EncryptedHeaders),            // 新增状态：算"其他失败"，不算"密码错误"、更不算成功
                 Make(StatusText.Skipped),
                 Make(StatusText.RenameSuccess),
                 Make(StatusText.TestPassed),
@@ -90,11 +91,11 @@ namespace ArchiveFixer.Tests
             Assert.Equal(1, summary.RenameFailedCount);
             Assert.Equal(1, summary.TestSuccessCount);
             Assert.Equal(1, summary.TestFailedCount);
-            Assert.Equal(1, summary.PasswordErrorCount);                   // 只有"密码错误"
+            Assert.Equal(1, summary.PasswordErrorCount);                   // 只有"密码错误"（文件名已加密不算它）
             Assert.Equal(1, summary.CorruptedCount);
             Assert.Equal(8, summary.ExtractFailedCount);                   // 解压失败/未知错误/权限/输出冲突/分卷缺失/路径过长/7z不存在/达到上限
             Assert.Equal(1, summary.CancelledCount);
-            Assert.Equal(2, summary.OtherFailedCount);                     // 部分完成 + 格式未知
+            Assert.Equal(3, summary.OtherFailedCount);                     // 部分完成 + 格式未知 + 文件名已加密
             Assert.Equal(1, summary.SkippedCount);
 
             // 待处理（分桶里有、界面上没有单项）也要算进去，否则"分项之和 == 任务数"是假的。

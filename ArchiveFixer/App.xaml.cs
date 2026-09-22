@@ -49,30 +49,83 @@ namespace ArchiveFixer
 
             AppBaseDirectory = AppContext.BaseDirectory;
 
+            MigrateLegacyData();
+            EnsureApplicationDirectories();
+
             /*
              * 整机被拖死的问题：批量解压会连着读几百 MB、写几百 MB，再交给 7-Zip 解一层，
              * 期间磁盘与 Defender 实时扫描同时被打满，桌面会卡到连任务栏都点不动。
              *
              * 降到 BelowNormal：本程序让出优先级给前台程序，用户还能正常操作电脑。
              * 子进程（7z.exe）继承这个优先级，所以解压也不再和桌面抢资源。
-             * 代价是纯后台跑时慢一点，这个取舍对"批量工具"是对的。
+             * 代价是纯后台跑时慢一点，这个取舍对"批量工具"是对的 —— 而"觉得慢"的用户
+             * 现在有出口了：设置 → 常规与性能 → 低运行优先级（默认开），关掉就是常规优先级。
+             *
+             * ⚠ 触发时机：必须在读完配置之后。以前这里是硬编码（用户觉得慢时无从下手），
+             * 现在读 AppSettings.LowProcessPriority —— 所以这一段的**唯一来源是配置**，
+             * 不在这里再写一个"默认降级"的分支（两处都决定优先级就是 WinRAR `-ri` 被 `-ibck`
+             * 覆盖那个坑的翻版，见 Models/AppSettings.cs 的注释）。
              */
-            try
-            {
-                System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
-                    System.Diagnostics.ProcessPriorityClass.BelowNormal;
-            }
-            catch
-            {
-                // 改优先级失败不影响功能，最多是抢资源。
-            }
-
-            MigrateLegacyData();
-            EnsureApplicationDirectories();
+            ApplyConfiguredProcessPriority();
 
             DispatcherUnhandledException += OnDispatcherUnhandledException;
             AppDomain.CurrentDomain.UnhandledException += OnCurrentDomainUnhandledException;
             TaskSchedulerUnobservedExceptionHelper.Register();
+        }
+
+        /// <summary>
+        /// 按设置里的"低运行优先级"决定本进程的优先级。
+        ///
+        /// <para>
+        /// 读配置失败时**按默认（低优先级）**办：读不到配置的场合（首次启动、配置文件损坏）
+        /// 正是"什么都还没设好"的时候，此时去和桌面抢资源只会让用户以为程序卡死了。
+        /// </para>
+        /// </summary>
+        private static void ApplyConfiguredProcessPriority()
+        {
+            bool lowProcessPriority = true;
+
+            try
+            {
+                lowProcessPriority = new ArchiveFixer.Services.SettingsService().Load().LowProcessPriority;
+            }
+            catch
+            {
+                // 读不到就用默认值：低优先级这个默认本身是保守的那一侧。
+            }
+
+            ApplyProcessPriority(lowProcessPriority);
+        }
+
+        /// <summary>
+        /// 设置项 → 进程优先级类的**唯一映射处**（纯函数，便于测试）。
+        /// </summary>
+        public static System.Diagnostics.ProcessPriorityClass ResolveProcessPriorityClass(bool lowProcessPriority) =>
+            lowProcessPriority
+                ? System.Diagnostics.ProcessPriorityClass.BelowNormal
+                : System.Diagnostics.ProcessPriorityClass.Normal;
+
+        /// <summary>
+        /// 真正设置本进程优先级。"关掉低优先级"= 显式恢复 <c>Normal</c>（系统给新进程的默认值），
+        /// 而不是"什么都不做" —— 否则从低优先级启动器里拉起来的进程会继续低着，
+        /// 用户关掉开关却看不到任何变化。
+        ///
+        /// 失败不影响功能（最多是抢资源），返回 false 只用于日志与排障。
+        /// </summary>
+        public static bool ApplyProcessPriority(bool lowProcessPriority)
+        {
+            try
+            {
+                System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
+                    ResolveProcessPriorityClass(lowProcessPriority);
+
+                return true;
+            }
+            catch
+            {
+                // 改优先级失败不影响功能，最多是抢资源。
+                return false;
+            }
         }
 
         protected override void OnExit(ExitEventArgs e)

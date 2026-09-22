@@ -109,6 +109,26 @@ namespace ArchiveFixer.ViewModels
         private readonly List<(string FileName, string Status)> _passwordFailures = new();
         private readonly object _passwordFailuresLock = new();
 
+        /*
+         * ===== 同名冲突（ConflictAction = Ask）的批内状态 =====
+         *
+         * 决策 D-4：用户的真实场景是 50–200+ 个包，逐个弹窗等于不可用。所以"询问"这一档必须做到
+         * **本批只问一次**：用户答了「覆盖全部 / 跳过全部 / 全部自动重命名」之后，后面的冲突一律照办，
+         * 一个字都不许再问。这三条状态就是这件事的全部记账（批内重置、并发下加锁）。
+         *
+         * · _batchConflictDecision —— "全部 X"：本批后续所有冲突的答案；
+         * · _taskConflictDecision  —— "这一个"：同一个任务内后面的冲突沿用（一次聚合询问管整任务）；
+         * · _conflictPromptUnavailable —— 无界面宿主（单元测试 / 控制台宿主）或问不出答案：
+         *   记下来，后面的冲突不再尝试弹窗，直接走保守档并只写一次日志。
+         */
+        private readonly object _conflictDecisionLock = new();
+        private ConflictDecision? _batchConflictDecision;
+        private ConflictDecision? _taskConflictDecision;
+        private bool _conflictPromptUnavailable;
+
+        /// <summary>本批已经真的弹过几次询问（日志与排障用；正常情况下 ≤ 1）。</summary>
+        private int _conflictPromptCount;
+
         public ExtractionCoordinator(
             MainViewModel vm,
             IArchiveEngine archiveEngine,
@@ -189,6 +209,23 @@ namespace ArchiveFixer.ViewModels
 
             /// <summary>真的搬过去的其余物条数。</summary>
             public int MovedProcessCount { get; init; }
+
+            /// <summary>
+            /// 因为同名冲突被**跳过**的条数（用户选了「跳过」/「跳过全部」）。
+            ///
+            /// 与"没能搬运"分开记：跳过是用户的选择，不是失败；但"一条内容物都没落位"时
+            /// 必须靠它把任务落成「已跳过」而不是「解压成功」（不变量 6 的反面同样成立）。
+            /// </summary>
+            public int SkippedCount { get; init; }
+
+            /// <summary>其中被跳过的是内容物的条数。</summary>
+            public int SkippedContentCount { get; init; }
+
+            /// <summary>因为用户选了「覆盖」而被顶掉的同名条目数。</summary>
+            public int OverwrittenCount { get; init; }
+
+            /// <summary>被顶掉的落点（写日志用：**哪些文件被覆盖**必须留痕）。</summary>
+            public IReadOnlyList<string> OverwrittenPaths { get; init; } = Array.Empty<string>();
 
             /// <summary>内容物文件数（来自定稿计划，不是"搬了几条"）。</summary>
             public int ContentFileCount { get; init; }
@@ -351,6 +388,56 @@ namespace ArchiveFixer.ViewModels
              */
             TerminalLayoutMode terminalLayout = OutputPlacement.ParseTerminalLayoutMode(Settings.TerminalLayoutMode);
 
+            /*
+             * 同名冲突的决定：Ask 档**必须在动最终目录之前**拿到答案（"暂停该任务"就发生在这里）。
+             *
+             * 位置刻意放在收尾重活之前、并且只在本任务第一次撞上冲突时问：
+             * · 预检是磁盘活（要算一遍定稿计划 + 判每个落点是否存在）→ 走 Task.Run，UI 线程不碰盘；
+             * · 询问本身是 UI 活 → 走 DialogService 的异步重载（可取消、无界面宿主不弹窗、不用同步 Invoke）；
+             * · 非 Ask 档一个字都不问，直接由档位推出结论（默认 AutoRename，与既有行为一致）。
+             *
+             * 已经答过"全部 X"或是本任务已经答过"这一个"时（GetEffectiveConflictDecision 非空），
+             * 连预检都不做 —— 决策 D-4：50–200+ 个包逐个问等于不可用。
+             */
+            string conflictAction = ConflictActionValue;
+            ConflictDecision? conflictDecision = null;
+
+            if (ConflictActions.IsAsk(conflictAction))
+            {
+                ConflictDecision? decided = GetEffectiveConflictDecision();
+
+                if (decided == null && !IsConflictPromptUnavailable)
+                {
+                    ConflictPrecheck precheck = await Task.Run(
+                        () => PrecheckFinalLayoutConflicts(
+                            task,
+                            stageDirectory,
+                            task.OutputPath,
+                            placementMode,
+                            terminalLayout),
+                        cancellationToken);
+
+                    if (precheck.TotalCount > 0)
+                    {
+                        string message =
+                            $"定稿时发现 {precheck.TotalCount} 个同名冲突（目标已经存在），" +
+                            (precheck.ContentCount > 0
+                                ? $"其中 {precheck.ContentCount} 个是内容物。"
+                                : "都在其余物里。") +
+                            "请选择同名时怎么处理。";
+
+                        decided = await AskConflictAsync(
+                            task,
+                            message,
+                            BuildConflictDetail(precheck),
+                            cancellationToken);
+                    }
+                }
+
+                // 问不到答案（无界面宿主 / 超时）→ 保守档：自动重命名落位，绝不覆盖（不变量 3）。
+                conflictDecision = decided ?? ConflictDecision.Conservative;
+            }
+
             PostProcessWorkResult work = await Task.Run(
                 () => RunPostProcessWork(
                     task,
@@ -363,6 +450,8 @@ namespace ArchiveFixer.ViewModels
                     placementMode,
                     terminalLayout,
                     oneClickRun,
+                    conflictAction,
+                    conflictDecision,
                     cancellationToken),
                 cancellationToken);
 
@@ -426,6 +515,26 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
+            /*
+             * 同名冲突全部选了「跳过」：一个内容物都没落位。
+             *
+             * 这是"用户的选择"，不是失败，但**绝不能报成功**（不变量 6 的反面同样成立：跑完了没产物，
+             * 说成"解压成功"就是骗人 —— 用户会去那个目录里找一份根本不存在的产物）。
+             * 同时也不能清理工作区：产物还在暂存目录里，那是用户唯一的一份。
+             */
+            if (work.Commit is { Attempted: true, MovedContentCount: 0, FailedCount: 0, SkippedContentCount: > 0 } skipped
+                && skipped.PlannedContentCount > 0)
+            {
+                task.Status = StatusText.Skipped;
+                task.Operation = StatusText.OpSkip;
+                task.ProgressText = StatusText.ProgressSkipped;
+                task.ErrorMessage = "同名冲突按你的选择跳过：产物仍留在暂存目录，未写入输出目录。";
+                task.IsOutputVerified = false;
+                task.LastUpdatedTime = DateTime.Now;
+
+                return false;
+            }
+
             task.IsOutputVerified = work.Verification.Verified;
 
             // 把"实际输出到别处"这件事写进任务对象：输出目录被自动改名时，用户必须在任务上看得见，
@@ -439,6 +548,18 @@ namespace ArchiveFixer.ViewModels
             {
                 verifyMessage += $"；定稿时有 {work.Commit.FailedCount} 个文件没能搬到最终目录" +
                                  $"（{string.Join("、", work.Commit.Failures.Take(5))}），它们仍在暂存区。";
+            }
+
+            /*
+             * 覆盖了哪些落点也要写进任务结论（不只写日志）。
+             *
+             * 覆盖是不可逆的（旧文件按两阶段落位删掉了），用户回头找"我原来那份去哪了"时，
+             * 日志与任务详情必须都能给出答案 —— 这就是"真正覆盖前要留痕"的落点。
+             */
+            if (work.Commit is { OverwrittenCount: > 0 } overwriteCommit)
+            {
+                verifyMessage += $"；同名冲突按你的选择覆盖了 {overwriteCommit.OverwrittenCount} 项" +
+                                 $"（{string.Join("、", overwriteCommit.OverwrittenPaths.Take(5))}）";
             }
 
             task.VerifyMessage = verifyMessage;
@@ -523,6 +644,8 @@ namespace ArchiveFixer.ViewModels
             OutputPlacementMode placementMode,
             TerminalLayoutMode terminalLayout,
             bool oneClickRun,
+            string conflictAction,
+            ConflictDecision? conflictDecision,
             CancellationToken cancellationToken)
         {
             var logEntries = new List<(string Level, string Message)>();
@@ -612,6 +735,8 @@ namespace ArchiveFixer.ViewModels
                 task.OutputPath,
                 placementMode,
                 terminalLayout,
+                conflictAction,
+                conflictDecision,
                 cancellationToken);
 
             if (commit.Attempted)
@@ -1556,24 +1681,29 @@ namespace ArchiveFixer.ViewModels
         /// 执行定稿：按 <see cref="PlanFinalLayout"/> 的计划把暂存产物搬进最终目录。
         ///
         /// **只允许在后台线程上跑**（几千个 File.Move、跨盘还是拷贝）。
-        /// 三条硬要求：
+        /// 四条硬要求：
         /// ① 取消时把已经搬过去的**搬回来**（最终目录不许留半成品，契约 §6 第 2 条）；
-        /// ② 同名绝不覆盖（AutoRename 改名，记进 <see cref="StageCommitResult.RenamedCount"/>）；
-        /// ③ 单个文件搬不动只记一笔，不拖垮其余文件（与 <see cref="ExtractionWorkspace"/> 的搬运口径一致）。
+        /// ② 同名绝不**默认**覆盖（AutoRename 改名，记进 <see cref="StageCommitResult.RenamedCount"/>）；
+        /// ③ 单个文件搬不动只记一笔，不拖垮其余文件（与 <see cref="ExtractionWorkspace"/> 的搬运口径一致）；
+        /// ④ 用户明确选了「覆盖」时才覆盖，而且必须走 <see cref="PathService.TryOverwriteLanding"/>
+        ///    的两阶段（先挪到临时名 → 落位 → 再删），并逐个落点写日志留痕。
         /// </summary>
+        /// <param name="conflictAction">同名冲突档（<see cref="ConflictActions"/> 的值）。</param>
+        /// <param name="conflictDecision">
+        /// 用户对同名冲突的答案（Ask 档；非 Ask 档为 null）。为 null 且档位是 Ask 时，
+        /// <see cref="PathService.ResolveConflict"/> 会退回保守档（跳过）—— 绝不替用户决定成覆盖。
+        /// </param>
         private StageCommitResult ExecuteFinalLayout(
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
             OutputPlacementMode placementMode,
             TerminalLayoutMode terminalLayout,
+            string conflictAction,
+            ConflictDecision? conflictDecision,
             CancellationToken cancellationToken)
         {
             var logEntries = new List<(string Level, string Message)>();
-
-            // 给"没有最外层文件夹名"时那一层取名用（判定表 2）。取的是**终端归档**的基名：
-            // 续解出来的内层包，它的 CurrentPath 就是最后解的那一卷，基名正是用户认得出的那个名字。
-            string archiveBaseName = OutputPlacement.ResolveArchiveBaseName(task.CurrentPath);
 
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -1596,11 +1726,11 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                plan = PlanFinalLayout(
+                plan = PlanFinalLayoutForTask(
+                    task,
                     stageDirectory,
                     destinationDirectory,
                     placementMode,
-                    archiveBaseName,
                     terminalLayout);
             }
             catch (Exception ex)
@@ -1673,10 +1803,13 @@ namespace ArchiveFixer.ViewModels
 
             var moved = new List<(string From, string To)>();
             var failures = new List<string>();
+            var overwritten = new List<string>();
 
             int movedContent = 0;
             int movedProcess = 0;
             int renamed = 0;
+            int skippedContent = 0;
+            int skippedProcess = 0;
 
             // 计划里 **内容物在前、其余物在后**：先让用户要的东西落位，再收拾中间件。
             foreach (PlannedMove move in plan.Moves)
@@ -1711,28 +1844,95 @@ namespace ArchiveFixer.ViewModels
 
                     string target = move.To;
 
+                    // 覆盖档由 TryOverwriteLanding 自己把新条目搬过去（它要先腾位），这里不再搬第二次。
+                    bool landed = false;
+
                     if (File.Exists(target) || Directory.Exists(target))
                     {
-                        // 目标同名：换成 名字(1)，**绝不覆盖**（AGENTS.md §6 第 3 条）。
-                        string renamedTarget = isDirectory
-                            ? SafePathHelper.AutoRenameDirectoryPath(target)
-                            : SafePathHelper.AutoRenameFilePath(target);
+                        /*
+                         * 目标是**最终目录自己**时不许覆盖：那等于把刚落位的产物连同目录一起顶掉，
+                         * 而且是用户完全没预期的一次删除。规划器现在不会给出这种条目
+                         * （计划里永远是 destDir\子项），这里是最后一道保险。
+                         */
+                        bool isDestinationRoot = SafePathHelper.PathEquals(target, destinationDirectory);
 
-                        if (!string.Equals(renamedTarget, target, StringComparison.OrdinalIgnoreCase))
+                        ConflictResolution resolution = isDestinationRoot
+                            ? new ConflictResolution(ConflictChoice.AutoRename, target, true, false)
+                            : _pathService.ResolveConflict(
+                                target,
+                                isDirectory ? ConflictTargetKind.Directory : ConflictTargetKind.File,
+                                conflictAction,
+                                conflictDecision);
+
+                        if (resolution.Choice == ConflictChoice.Skip)
                         {
-                            renamed++;
+                            // 「跳过」：这一项不动，已有文件一个字节都不改（新产物留在暂存目录）。
+                            if (isProcessArtifact)
+                            {
+                                skippedProcess++;
+                            }
+                            else
+                            {
+                                skippedContent++;
+                            }
+
+                            logEntries.Add(("WARN", $"{task.FileName}：同名冲突，按你的选择跳过：{target}"));
+                            continue;
                         }
 
-                        target = renamedTarget;
+                        if (resolution.Choice == ConflictChoice.Overwrite && !isDestinationRoot)
+                        {
+                            /*
+                             * 「覆盖」= 两阶段落位（AGENTS.md §6 第 3 条）：
+                             * 先把占位者挪到临时名 → 新条目落位 → 落位成功后才删掉那个临时名。
+                             * **禁止"先 File.Delete 再 Move"**：中间任何失败都会让用户想保留的那一份
+                             * 永久消失，而新条目还没到位。
+                             */
+                            if (!_pathService.TryOverwriteLanding(
+                                    move.From,
+                                    target,
+                                    isDirectory,
+                                    out string overwriteError,
+                                    out string overwriteNote))
+                            {
+                                failures.Add($"{Path.GetFileName(move.From)}（{overwriteError}）");
+                                continue;
+                            }
+
+                            // 真正覆盖前要留痕：哪个落点被顶掉了必须写进日志（AGENTS.md §6 第 3 条 / 用户要求）。
+                            overwritten.Add(target);
+                            landed = true;
+
+                            logEntries.Add((
+                                "WARN",
+                                $"{task.FileName}：同名冲突，按你的选择覆盖：{target}（{overwriteNote}）"));
+                        }
+                        else
+                        {
+                            // 自动重命名：换成 名字(1)，**绝不覆盖**（AGENTS.md §6 第 3 条）。
+                            string renamedTarget = resolution.TargetPath;
+
+                            if (!string.Equals(renamedTarget, target, StringComparison.OrdinalIgnoreCase))
+                            {
+                                renamed++;
+                            }
+
+                            logEntries.Add(("INFO", $"{task.FileName}：同名冲突，改名落位（绝不覆盖）：{renamedTarget}"));
+
+                            target = renamedTarget;
+                        }
                     }
 
-                    if (isDirectory)
+                    if (!landed)
                     {
-                        Directory.Move(move.From, target);
-                    }
-                    else
-                    {
-                        File.Move(move.From, target);
+                        if (isDirectory)
+                        {
+                            Directory.Move(move.From, target);
+                        }
+                        else
+                        {
+                            File.Move(move.From, target);
+                        }
                     }
 
                     moved.Add((move.From, target));
@@ -1800,9 +2000,17 @@ namespace ArchiveFixer.ViewModels
                     ? $"；其余物 {movedProcess} 项（{plan.ProcessArtifactTotalSize} 字节）→ {processDirectory}"
                     : string.Empty) +
                 (renamed > 0 ? $"；{renamed} 项同名，已改名未覆盖" : string.Empty) +
+                (overwritten.Count > 0 ? $"；{overwritten.Count} 项同名，按你的选择覆盖（已写日志）" : string.Empty) +
+                (skippedContent + skippedProcess > 0 ? $"；{skippedContent + skippedProcess} 项同名，按你的选择跳过" : string.Empty) +
                 (failures.Count > 0 ? $"；{failures.Count} 项没能搬运" : string.Empty);
 
             logEntries.Add((failures.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：定稿完成 —— {summary}"));
+
+            // 覆盖留痕：被顶掉的落点单独再写一条，用户事后追查"我原来那份去哪了"时有据可依。
+            foreach (string overwrittenPath in overwritten)
+            {
+                logEntries.Add(("WARN", $"{task.FileName}：已覆盖（原文件按两阶段落位删除）：{overwrittenPath}"));
+            }
 
             return new StageCommitResult
             {
@@ -1814,6 +2022,10 @@ namespace ArchiveFixer.ViewModels
                 ProcessArtifactDirectory = processDirectory,
                 ProcessArtifactBytes = plan.ProcessArtifactTotalSize,
                 RenamedCount = renamed,
+                SkippedCount = skippedContent + skippedProcess,
+                SkippedContentCount = skippedContent,
+                OverwrittenCount = overwritten.Count,
+                OverwrittenPaths = overwritten,
                 FailedCount = failures.Count,
                 Failures = failures,
                 Message = summary,
@@ -2181,6 +2393,313 @@ namespace ArchiveFixer.ViewModels
             return dispatcher.InvokeAsync(() => _dialogService.ShowWarning(message)).Task;
         }
 
+        // ================================================================ 同名冲突（ConflictAction = Ask）
+
+        /// <summary>同名冲突处理档（唯一来源；空 / 非法回落 AutoRename，见 <see cref="ConflictActions"/>）。</summary>
+        private string ConflictActionValue => ConflictActions.Normalize(Settings.ConflictAction);
+
+        /// <summary>预检里最多列几条冲突给用户看（再多就让他去看日志，别弹一个占满屏幕的框）。</summary>
+        private const int MaxConflictSamplesInDialog = 5;
+
+        /// <summary>定稿前的冲突预检结论（Ask 档要在动最终目录之前先问完）。</summary>
+        private sealed class ConflictPrecheck
+        {
+            /// <summary>计划里"落点已经被占着"的条目总数。</summary>
+            public int TotalCount { get; set; }
+
+            /// <summary>其中属于**内容物**的条数（其余物撞名不算用户的内容被顶掉）。</summary>
+            public int ContentCount { get; set; }
+
+            /// <summary>给用户看的样例（最多 <see cref="MaxConflictSamplesInDialog"/> 条）。</summary>
+            public List<(string Path, ConflictTargetKind Kind)> Samples { get; } = new();
+        }
+
+        /// <summary>本批开始时把冲突记账清零（上一批的"全部 X"绝不许影响这一批）。</summary>
+        private void ResetBatchConflictState()
+        {
+            lock (_conflictDecisionLock)
+            {
+                _batchConflictDecision = null;
+                _taskConflictDecision = null;
+                _conflictPromptUnavailable = false;
+                _conflictPromptCount = 0;
+            }
+        }
+
+        /// <summary>每个任务开始时清掉"这一个"的记账（批量档位不受影响）。</summary>
+        private void ResetTaskConflictState()
+        {
+            lock (_conflictDecisionLock)
+            {
+                _taskConflictDecision = null;
+            }
+        }
+
+        /// <summary>本批 / 本任务已经定下的答案（"全部 X"优先于"这一个"）；没有就是 null。</summary>
+        private ConflictDecision? GetEffectiveConflictDecision()
+        {
+            lock (_conflictDecisionLock)
+            {
+                return _batchConflictDecision ?? _taskConflictDecision;
+            }
+        }
+
+        private bool IsConflictPromptUnavailable
+        {
+            get
+            {
+                lock (_conflictDecisionLock)
+                {
+                    return _conflictPromptUnavailable;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 问一次同名冲突并记账（**本批最多真正弹一次**）。
+        ///
+        /// <para>
+        /// 返回值 <c>null</c> = 没问到答案（无界面宿主 / 等待超时）：调用方按保守档处理，**绝不覆盖**。
+        /// 选择「取消本批」时本方法直接抛出取消，由上层把任务落成「已取消」（不变量 6）。
+        /// </para>
+        /// <para>
+        /// 只允许在 UI 线程的上下文里调用（管线的那条 <c>await</c> 续体就在 UI 上下文）：
+        /// 弹框本身走 <see cref="DialogService.ShowConflictDecisionAsync"/>，它自己负责
+        /// "无界面宿主不弹窗、不阻塞"以及"后台线程用 InvokeAsync 而不是同步 Invoke"。
+        /// </para>
+        /// </summary>
+        private async Task<ConflictDecision?> AskConflictAsync(
+            ArchiveTask task,
+            string message,
+            string detail,
+            CancellationToken cancellationToken)
+        {
+            lock (_conflictDecisionLock)
+            {
+                _conflictPromptCount++;
+            }
+
+            ConflictDecision? decision = await _dialogService.ShowConflictDecisionAsync(
+                new DialogService.ConflictPrompt
+                {
+                    Message = message,
+                    Subtitle = "同名冲突在本批只会问你这一次；勾上「对后面所有同名冲突都照此办理」就不会再打断你。",
+                    Detail = detail,
+                    Destructive = true
+                },
+                cancellationToken);
+
+            /*
+             * 询问期间被取消（用户点了「取消当前」）：不覆盖、不落位，把取消照原样抛上去，
+             * 由 ProcessExtractTaskAsync 落成「已取消」—— 询问期间点了取消却报成功是最不能接受的。
+             */
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (decision == null)
+            {
+                /*
+                 * 问不到答案：**绝不代用户拍板成「覆盖」**（不变量 3：默认不得覆盖）。
+                 * 记下"问不了"，后面的冲突不再尝试弹窗（否则一次批量会刷满降级日志）。
+                 */
+                lock (_conflictDecisionLock)
+                {
+                    _conflictPromptUnavailable = true;
+                }
+
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：同名冲突问不到答案（当前宿主没有界面或等待超时），已按保守档继续 —— " +
+                    "同名条目自动重命名落位，已有文件一个字节都不动。");
+
+                return null;
+            }
+
+            ConflictDecision answered = decision.Value;
+
+            if (answered.IsCancel)
+            {
+                // 「取消本批」= 既有的两套取消语义一起用：停止后续（不再启动新任务）+ 取消当前（正在跑的这个）。
+                AppendLog("WARN", $"{task.FileName}：你在同名冲突询问里选择了「取消本批」，停止后续并取消当前任务。");
+
+                StopAfterCurrent();
+                CancelCurrentTask();
+
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new OperationCanceledException();
+            }
+
+            lock (_conflictDecisionLock)
+            {
+                if (answered.ApplyToAll)
+                {
+                    _batchConflictDecision = answered;
+                }
+                else
+                {
+                    _taskConflictDecision = answered;
+                }
+            }
+
+            AppendLog("INFO", $"{task.FileName}：同名冲突 —— 你的选择：{answered.Describe()}");
+
+            if (answered.ApplyToAll)
+            {
+                AppendLog("INFO", "本批后续的同名冲突一律照此办理，不再询问。");
+            }
+
+            return answered;
+        }
+
+        /// <summary>
+        /// 解析一次同名冲突：按档位（或用户的答案）给出"怎么办 + 落到哪"。
+        ///
+        /// Ask 档在这里才真的去问 —— 第一次遇到"目标已存在"时聚合问一次；
+        /// 用户选了"全部 X"之后本批不再问，选了"这一个"则本任务内不再问（一次询问管一个任务）。
+        /// 非 Ask 档一个字都不问，直接由档位推出结论（默认 AutoRename：绝不覆盖）。
+        /// 落点的算法只有一处实现（<see cref="PathService.ResolveConflict"/>）。
+        /// </summary>
+        private async Task<ConflictResolution> ResolveConflictAsync(
+            ArchiveTask task,
+            ConflictTargetKind kind,
+            string targetPath,
+            string message,
+            string detail,
+            CancellationToken cancellationToken)
+        {
+            string action = ConflictActionValue;
+            ConflictDecision? decision = GetEffectiveConflictDecision();
+
+            if (ConflictActions.IsAsk(action) && decision == null && !IsConflictPromptUnavailable)
+            {
+                decision = await AskConflictAsync(task, message, detail, cancellationToken);
+            }
+
+            if (ConflictActions.IsAsk(action))
+            {
+                // decision 仍可能为 null —— 那就是"问不到"，走保守档（自动重命名，绝不覆盖）。
+                return _pathService.ResolveConflict(
+                    targetPath,
+                    kind,
+                    action,
+                    decision ?? ConflictDecision.Conservative);
+            }
+
+            return _pathService.ResolveConflict(targetPath, kind, action);
+        }
+
+        /// <summary>把预检结论拼成给用户看的冲突清单（等宽小字那一栏）。</summary>
+        private static string BuildConflictDetail(ConflictPrecheck precheck)
+        {
+            if (precheck.Samples.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder();
+
+            foreach ((string path, ConflictTargetKind kind) in precheck.Samples)
+            {
+                builder.Append(kind == ConflictTargetKind.Directory ? "［目录］" : "［文件］");
+                builder.AppendLine(path);
+            }
+
+            if (precheck.TotalCount > precheck.Samples.Count)
+            {
+                builder.Append($"… 另有 {precheck.TotalCount - precheck.Samples.Count} 项同名（完整清单见日志）");
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 定稿冲突预检：**只读**地算出"计划里哪些落点已经被占着"。
+        ///
+        /// 为什么要先算一遍：Ask 档必须**在动最终目录之前**拿到答案（也就是"暂停该任务"），
+        /// 而落位那一刻已经在后台搬运的中途，边搬边问会让最终目录进退两难
+        /// （一部分已经落位、剩下的在等一个还没出现的答案）。
+        /// 本方法只读目录、只判存在，一个字节都不写；**只允许在后台线程上跑**。
+        /// </summary>
+        private ConflictPrecheck PrecheckFinalLayoutConflicts(
+            ArchiveTask task,
+            string stageDirectory,
+            string destinationDirectory,
+            OutputPlacementMode placementMode,
+            TerminalLayoutMode terminalLayout)
+        {
+            var precheck = new ConflictPrecheck();
+
+            if (string.IsNullOrWhiteSpace(stageDirectory) ||
+                string.IsNullOrWhiteSpace(destinationDirectory) ||
+                !Directory.Exists(stageDirectory))
+            {
+                return precheck;
+            }
+
+            FinalLayoutPlan plan;
+
+            try
+            {
+                plan = PlanFinalLayoutForTask(task, stageDirectory, destinationDirectory, placementMode, terminalLayout);
+            }
+            catch
+            {
+                // 预检失败不改变任何结论：真正的失败会在定稿那一步如实报出来（这里只当"没有冲突"）。
+                return precheck;
+            }
+
+            if (plan.Failed || plan.Moves.Count == 0)
+            {
+                return precheck;
+            }
+
+            foreach (PlannedMove move in plan.Moves)
+            {
+                if (!File.Exists(move.To) && !Directory.Exists(move.To))
+                {
+                    continue;
+                }
+
+                ConflictTargetKind kind = Directory.Exists(move.To) && !File.Exists(move.To)
+                    ? ConflictTargetKind.Directory
+                    : ConflictTargetKind.File;
+
+                precheck.TotalCount++;
+
+                if (!plan.ProcessArtifactSources.Contains(move.From))
+                {
+                    precheck.ContentCount++;
+                }
+
+                if (precheck.Samples.Count < MaxConflictSamplesInDialog)
+                {
+                    precheck.Samples.Add((move.To, kind));
+                }
+            }
+
+            return precheck;
+        }
+
+        /// <summary>
+        /// 定稿布局规划的统一入口：算"终端归档基名"这件事只在这里做一次，
+        /// 预检与真正的定稿走**同一份输入**（否则预检说有冲突、定稿却按另一套计划落位）。
+        /// </summary>
+        private static FinalLayoutPlan PlanFinalLayoutForTask(
+            ArchiveTask task,
+            string stageDirectory,
+            string destinationDirectory,
+            OutputPlacementMode placementMode,
+            TerminalLayoutMode terminalLayout)
+        {
+            string archiveBaseName = OutputPlacement.ResolveArchiveBaseName(task.CurrentPath);
+
+            return PlanFinalLayout(
+                stageDirectory,
+                destinationDirectory,
+                placementMode,
+                archiveBaseName,
+                terminalLayout);
+        }
+
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
         private void RecordPasswordFailure(ArchiveTask task)
         {
@@ -2351,6 +2870,9 @@ namespace ArchiveFixer.ViewModels
             // 本批的密码失败登记从零开始：上一批的残留不能让这一批多弹一次提示。
             ClearPasswordFailures();
 
+            // 同名冲突的记账同样从零开始：上一批答过的「全部覆盖」绝不许延续到这一批。
+            ResetBatchConflictState();
+
             try
             {
                 try
@@ -2414,6 +2936,24 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 AppendLog("INFO", "批量解压完成");
+
+                /*
+                 * 询问次数写进日志：决策 D-4 要求"本批只问一次"，这一行就是它的证据 ——
+                 * 用户与排障都能看到"这一批到底打断了几次"（选了「全部 X」之后不该再涨）。
+                 */
+                int conflictPrompts;
+
+                lock (_conflictDecisionLock)
+                {
+                    conflictPrompts = _conflictPromptCount;
+                }
+
+                if (conflictPrompts > 0)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"本批同名冲突询问共 {conflictPrompts} 次（选了「全部 X」之后不再询问）。");
+                }
 
                 /*
                  * 密码错误**合并成一次提示**（P0）。
@@ -2503,6 +3043,9 @@ namespace ArchiveFixer.ViewModels
             {
                 return;
             }
+
+            // 每个任务开始：清掉"这一个"的冲突记账（"全部 X"是本批级的，不清）。
+            ResetTaskConflictState();
 
             /*
              * 分卷缺失时**不许开始**（AGENTS.md §6 第 7 条）。
@@ -2712,24 +3255,86 @@ namespace ArchiveFixer.ViewModels
                     Directory.Exists(outputPath) &&
                     Directory.EnumerateFileSystemEntries(outputPath).Any())
                 {
-                    string newOutputPath = _pathService.AutoRenameDirectoryPath(outputPath);
-
-                    AppendLog("WARN", $"输出目录已存在且非空，为避免混入旧文件，自动改用新目录：{newOutputPath}");
-
                     /*
-                     * 实际落点与"打算的落点"不一致这件事**不许静默**：
-                     * ① 下面会把实际落点写回 task.OutputPath（界面"输出目录"列看得见）；
-                     * ② 校验结论里也带一句（task.VerifyMessage）；
-                     * ③ 日志里额外提醒续解的影响 —— 一键处理的续解是按**解压前**的目录快照找内层包的，
-                     *    内层包落进新目录时它找不到，用户看到的现象就是"第二层没解"。
-                     *    这里的提示是让人一眼知道该去哪找，而不是让程序假装没发生。
+                     * 目标目录已存在且非空 = 第一次撞上"目标已存在"的冲突。
+                     *
+                     * ⚠ 这里以前**无条件**自动改名成 xxx(1) —— 于是设置里那一档「询问」在落点上
+                     * 从来没有兑现过：用户选了询问，程序静默改名。现在一律走 ResolveConflictAsync：
+                     * · 非 Ask 档：按档位直接算（默认 AutoRename = 老行为，绝不覆盖）；
+                     * · Ask 档：第一次冲突时暂停该任务、聚合问一次（覆盖 / 跳过 / 自动重命名，可对整批生效）。
                      */
-                    outputRedirectNote = $"原定输出目录 {requestedOutputPath} 已存在且非空，本次实际输出到 {newOutputPath}";
+                    ConflictResolution resolution = await ResolveConflictAsync(
+                        task,
+                        ConflictTargetKind.Directory,
+                        outputPath,
+                        $"输出目录已存在且非空，{task.FileName} 的产物会落进一个已经有内容的目录里。" +
+                        "请选择同名时怎么处理。",
+                        "落点：" + outputPath,
+                        cancellationToken);
 
-                    AppendLog("WARN", $"{task.FileName}：{outputRedirectNote}。自动续解按解压前的目录查找内层包，若内层包落在新目录里可能不会被继续解开。");
+                    if (resolution.Choice == ConflictChoice.Skip)
+                    {
+                        // 「跳过」= 这个包这次不处理：一个字节都不写，也不动目录里已有的东西。
+                        task.Status = StatusText.Skipped;
+                        task.Operation = StatusText.OpSkip;
+                        task.ProgressText = StatusText.ProgressSkipped;
+                        task.ErrorMessage = $"输出目录已存在且非空，按你的选择跳过：{outputPath}";
+                        task.EndTime = DateTime.Now;
+                        task.ElapsedText = task.StartTime.HasValue
+                            ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
+                            : "-";
+                        task.LastUpdatedTime = DateTime.Now;
 
-                    outputPath = newOutputPath;
+                        AppendLog("WARN", $"{task.FileName}：同名冲突按你的选择跳过，本任务不解压（输出目录：{outputPath}）。");
+                        return;
+                    }
+
+                    if (resolution.Choice == ConflictChoice.Overwrite)
+                    {
+                        /*
+                         * 「覆盖」= 沿用这个已有目录（把产物合并进去）。
+                         *
+                         * 目录本身不会被删：同名条目在**定稿搬运**那一步才真正相撞，
+                         * 到那一刻仍然按同一个决定处理（覆盖走"先挪到临时名 → 落位 → 再删"两阶段）。
+                         */
+                        AppendLog(
+                            "WARN",
+                            $"{task.FileName}：输出目录已存在且非空，按你的选择「覆盖」沿用该目录：{outputPath}" +
+                            "（目录里已有的同名条目会在定稿时按同一决定处理）。");
+
+                        outputRedirectNote = $"原定输出目录 {outputPath} 已存在且非空，按你的选择覆盖进该目录";
+                    }
+                    else
+                    {
+                        string newOutputPath = resolution.TargetPath;
+
+                        AppendLog("WARN", $"输出目录已存在且非空，为避免混入旧文件，自动改用新目录：{newOutputPath}");
+
+                        /*
+                         * 实际落点与"打算的落点"不一致这件事**不许静默**：
+                         * ① 下面会把实际落点写回 task.OutputPath（界面"输出目录"列看得见）；
+                         * ② 校验结论里也带一句（task.VerifyMessage）；
+                         * ③ 日志里额外提醒续解的影响 —— 一键处理的续解是按**解压前**的目录快照找内层包的，
+                         *    内层包落进新目录时它找不到，用户看到的现象就是"第二层没解"。
+                         *    这里的提示是让人一眼知道该去哪找，而不是让程序假装没发生。
+                         */
+                        outputRedirectNote = $"原定输出目录 {requestedOutputPath} 已存在且非空，本次实际输出到 {newOutputPath}";
+
+                        AppendLog("WARN", $"{task.FileName}：{outputRedirectNote}。自动续解按解压前的目录查找内层包，若内层包落在新目录里可能不会被继续解开。");
+
+                        outputPath = newOutputPath;
+                    }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                /*
+                 * 取消必须原样抛上去（落成「已取消」，不变量 6）。
+                 *
+                 * 同名冲突询问里的「取消本批」也走这条路：下面的兜底 catch 会把任何异常变成
+                 * 一句"检查输出目录失败，继续使用原输出目录"—— 那会让取消被吞掉、任务接着跑。
+                 */
+                throw;
             }
             catch (Exception ex)
             {

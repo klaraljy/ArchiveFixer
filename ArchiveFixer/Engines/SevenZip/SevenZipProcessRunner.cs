@@ -422,7 +422,8 @@ namespace ArchiveFixer.Engines.SevenZip
                     error,
                     usedPassword,
                     stopwatch.Elapsed,
-                    FindArchiveArgument(arguments));
+                    FindArchiveArgument(arguments),
+                    ResolveOperation(arguments));
             }
             catch (Exception ex)
             {
@@ -520,6 +521,9 @@ namespace ArchiveFixer.Engines.SevenZip
         /// <paramref name="archivePath"/> 非空时，分卷缺失会被判得更准（见
         /// <see cref="ResolveVolumeMissingErrorType"/>）：只给 <c>xxx.7z.002</c> 时 7-Zip 报的是
         /// "Cannot open the file as archive"，字面与"这不是归档"一样，只能靠文件名与目录内容区分。
+        ///
+        /// <paramref name="operation"/> 说明这次跑的是哪个命令（l / t / x）：<b>只有列目录</b>才允许
+        /// 下"加密了文件名"的结论（见 <see cref="SevenZipOutputParser.LooksLikeEncryptedHeaders"/>）。
         /// </summary>
         private ArchiveOperationResult AnalyzeResult(
             int exitCode,
@@ -527,7 +531,8 @@ namespace ArchiveFixer.Engines.SevenZip
             string error,
             string usedPassword,
             TimeSpan elapsed,
-            string? archivePath)
+            string? archivePath,
+            EngineOperation? operation = null)
         {
             output = PasswordMasker.Sanitize(output);
             error = PasswordMasker.Sanitize(error);
@@ -537,7 +542,7 @@ namespace ArchiveFixer.Engines.SevenZip
 
             string errorType = success
                 ? "None"
-                : SevenZipOutputParser.DetectSevenZipErrorType(exitCode, output, error, archivePath);
+                : SevenZipOutputParser.DetectSevenZipErrorType(exitCode, output, error, archivePath, operation);
 
             errorType = ResolveVolumeMissingErrorType(errorType, archivePath);
 
@@ -698,6 +703,42 @@ namespace ArchiveFixer.Engines.SevenZip
                 }
 
                 return argument;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 从参数表里认出这次跑的是哪个命令（<c>l</c> / <c>t</c> / <c>x</c> / <c>e</c>）。
+        ///
+        /// 为什么要它：**同一段输出在不同命令下的含义不同**。加密头（-mhe）的包用 `l` 列目录失败
+        /// 说明"名字读不出来"，而在 `x` 上失败只说明"这个候选密码不对"（还要接着试下一个）。
+        /// 认不出来时返回 null = "这层不下结论"，与旧行为一致。
+        /// </summary>
+        internal static EngineOperation? ResolveOperation(IEnumerable<string>? arguments)
+        {
+            if (arguments == null)
+            {
+                return null;
+            }
+
+            foreach (string argument in arguments)
+            {
+                if (argument == null)
+                {
+                    continue;
+                }
+
+                string command = argument.Trim().ToLowerInvariant();
+
+                return command switch
+                {
+                    "l" => EngineOperation.List,
+                    "t" => EngineOperation.Test,
+                    "x" => EngineOperation.Extract,
+                    "e" => EngineOperation.Extract,
+                    _ => null
+                };
             }
 
             return null;

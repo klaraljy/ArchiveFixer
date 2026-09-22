@@ -71,6 +71,19 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string PartiallyCompleted = "部分完成";
 
+        /// <summary>
+        /// 归档**加密了文件名**（RAR <c>-hp</c> / 7z <c>-mhe</c>）：连条目名都读不出来，
+        /// 所以"里面有什么、缺没缺"当前**无法判定**。
+        ///
+        /// 为什么必须单独一类：这种包以前会落到"密码错误 / 文件损坏"里，给用户的结论是**错的** ——
+        /// 包可能完全正常，只是需要正确密码。反过来它也**不能算成功**（不变量 6）。
+        ///
+        /// 判定只在"列目录失败"时成立（见 <c>SevenZipOutputParser.LooksLikeEncryptedHeaders</c>）：
+        /// 我们自己产出的内层 <c>-mhe</c> 分卷在给了正确密码时列目录是成功的，
+        /// 所以正常可解的加密包不会被误判成这个状态。
+        /// </summary>
+        public const string EncryptedHeaders = "文件名已加密";
+
         // 后缀状态
         public const string NotChecked = "未检测";
         public const string ExtensionNormal = "后缀正常";

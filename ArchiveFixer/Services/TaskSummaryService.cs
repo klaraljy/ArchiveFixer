@@ -1,4 +1,6 @@
+using ArchiveFixer.Engines;
 using ArchiveFixer.Models;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -37,7 +39,7 @@ namespace ArchiveFixer.Services
         Skipped,
         Cancelled,
 
-        /// <summary>部分完成、格式未知，以及将来新增但还没归类的失败状态。</summary>
+        /// <summary>部分完成、格式未知、文件名已加密，以及将来新增但还没归类的失败状态。</summary>
         OtherFailed
     }
 
@@ -110,6 +112,48 @@ namespace ArchiveFixer.Services
     /// </summary>
     public class TaskSummaryService
     {
+        /// <summary>失败清单里第二级（"归档内条目 / 失败层"）的缩进。</summary>
+        public const string DetailIndent = "  ";
+
+        private const string ArchiveLinePrefix = "[归档] ";
+        private const string FailedListTitle = "ArchiveFixer 失败清单";
+        private const string GeneratedAtLabel = "生成时间：";
+        private const string EngineLabel = "引擎：";
+        private const string EngineVerdictLabel = "引擎结论：";
+        private const string LayerLabel = "层级：";
+        private const string VerifyLabel = "校验：";
+        private const string VolumeLabel = "分卷：缺少 ";
+        private const string EntryLabel = "条目：";
+        private const string LocationLabel = "位置：";
+        private const string FailedCountLabel = "失败：";
+        private const string NoFailedTaskText = "没有失败任务。";
+
+        private EngineIdentity? _engineIdentity;
+
+        /// <summary>
+        /// 本次运行实际使用的引擎（失败清单里必须带引擎名 + 版本，AGENTS.md §6 第 14 条）。
+        ///
+        /// 默认按<b>引擎注册表</b>解析（不是在这里写死 7-Zip），并且是**惰性**的：
+        /// 只有真的要出报告时才去查版本，构造服务本身不碰文件系统。
+        /// 可注入，测试与将来"多个引擎各报各的"都从这里替换。
+        /// </summary>
+        public EngineIdentity EngineIdentity
+        {
+            get => _engineIdentity ??= EngineIdentityResolver.ResolveDefault();
+            set => _engineIdentity = value ?? EngineIdentityResolver.Unavailable;
+        }
+
+        /// <summary>
+        /// "归档内条目 / 失败层"明细的**外部来源**（可选）。
+        ///
+        /// 为什么留这个口子：任务模型本身只记到"这个包失败了"这一层，
+        /// 而当一个包里有 3 个条目失败、另 200 个成功时，用户要看的正是那 3 个条目的名字。
+        /// 逐条目结果在解压流程里（流水线手上），所以由调用方把行喂进来 ——
+        /// 没接这个口子时，第二级仍由任务自身的结构化字段（引擎 / 层级 / 校验 / 分卷 / 位置）组成，
+        /// **不会**凭空编条目名。
+        /// </summary>
+        public Func<ArchiveTask, IEnumerable<string>?>? EntryDetailProvider { get; set; }
+
         /// <summary>
         /// 把一个任务归到唯一的结果分桶。
         ///
@@ -178,6 +222,17 @@ namespace ArchiveFixer.Services
             }
 
             if (status == StatusText.PartiallyCompleted || status == StatusText.UnknownFormat)
+            {
+                return SummaryBucket.OtherFailed;
+            }
+
+            /*
+             * 文件名已加密（RAR -hp / 7z -mhe）单独判，且**不能**并进"密码错误"分桶：
+             * 汇总行上那一格叫"密码错误"，把"内容无法判定"的包数进去，
+             * 等于在汇总层面重新给出了那个错误结论（用户会以为密码本错了）。
+             * 它归"其他失败"，与"部分完成"同一档：要人看一眼，绝不是成功。
+             */
+            if (status == StatusText.EncryptedHeaders)
             {
                 return SummaryBucket.OtherFailed;
             }
@@ -309,18 +364,34 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 构建失败列表文本。
-        /// 
-        /// 格式：
-        /// 333.7z - 密码错误
-        /// 444.rar - 文件损坏
-        /// 555.jpg - 格式未知
+        /// 构建失败列表文本（导出与复制共用同一份，格式是 txt）。
+        ///
+        /// 抄的是 WinRAR <c>-log[AF]</c> 的**两级分组**：一级一行"归档"，二级缩进写
+        /// "引擎 / 层级 / 校验 / 分卷 / 条目 / 位置"。旧实现只有一行 <c>文件名 - 原因</c>，
+        /// 一个包里有 3 个条目失败、另 200 个成功时根本说不清（M3 的验收判据就是"能说清每个为什么失败"）。
+        ///
+        /// 表头三行是"结果可追溯"的落点（不变量 14）：生成时间（**固定格式**，见 LogService）
+        /// 与引擎名 + 版本。以前失败清单里一个字都没有，事后无法回答"这是哪个版本跑出来的"。
         /// </summary>
         public string BuildFailedListText(IEnumerable<ArchiveTask> tasks)
         {
-            List<ArchiveTask> failedTasks = GetFailedTasks(tasks);
+            var allTasks = tasks?.Where(x => x != null).ToList() ?? new List<ArchiveTask>();
+            List<ArchiveTask> failedTasks = GetFailedTasks(allTasks);
 
             var builder = new StringBuilder();
+
+            builder.AppendLine(FailedListTitle);
+            builder.AppendLine(GeneratedAtLabel + LogService.FormatTimestamp(DateTime.Now));
+            builder.AppendLine(EngineLabel + EngineIdentity.Describe());
+
+            if (failedTasks.Count == 0)
+            {
+                builder.Append(NoFailedTaskText);
+                return builder.ToString().TrimEnd();
+            }
+
+            builder.AppendLine($"{FailedCountLabel}{failedTasks.Count} 个任务（共 {allTasks.Count} 个）");
+            builder.AppendLine();
 
             foreach (ArchiveTask task in failedTasks)
             {
@@ -330,13 +401,106 @@ namespace ArchiveFixer.Services
 
                 string reason = GetFailureReason(task);
 
+                builder.Append(ArchiveLinePrefix);
                 builder.Append(fileName);
                 builder.Append(" - ");
-                builder.Append(reason);
+                builder.AppendLine(reason);
+
+                foreach (string line in BuildFailureDetailLines(task))
+                {
+                    builder.Append(DetailIndent);
+                    builder.AppendLine(line);
+                }
+
                 builder.AppendLine();
             }
 
             return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 失败清单的第二级：这个归档内部到底怎么了（"归档内条目 / 失败层"）。
+        ///
+        /// 只发布**结构化的既有字段**，不解析中文文案（AGENTS.md §7：统计与判定不得依赖文案比较）：
+        /// · 引擎名 + 版本 —— 不变量 14，逐任务一行；
+        /// · 层级 —— 是用户给的源包，还是续解出来的内层包（含父包名）；
+        /// · 引擎结论 / 校验结论 —— 原样带出（里面有 7-Zip 报的条目数、预期与实际的文件数落差）；
+        /// · 分卷缺哪几个 —— 不变量 7 要求"报缺哪几个"，失败清单里同样要说清；
+        /// · 条目 —— 由 <see cref="EntryDetailProvider"/> 提供（有就写，没有就不编）；
+        /// · 位置 —— 完整路径，用户要能直接找到那个包。
+        /// </summary>
+        public IReadOnlyList<string> BuildFailureDetailLines(ArchiveTask? task)
+        {
+            var lines = new List<string>();
+
+            if (task == null)
+            {
+                return lines;
+            }
+
+            lines.Add(EngineLabel + EngineIdentity.Describe());
+
+            lines.Add(task.IsContinuationTask
+                ? LayerLabel + $"内层包（父包：{ResolveParentName(task)}）"
+                : LayerLabel + "第 0 层（用户给的源包）");
+
+            if (!string.IsNullOrWhiteSpace(task.EngineVerdict))
+            {
+                lines.Add(EngineVerdictLabel + task.EngineVerdict);
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.VerifyMessage))
+            {
+                lines.Add(VerifyLabel + task.VerifyMessage);
+            }
+
+            if (task.IsVolumeGroup && task.MissingVolumeNames.Count > 0)
+            {
+                lines.Add(VolumeLabel + string.Join('、', task.MissingVolumeNames));
+            }
+
+            IEnumerable<string>? entryLines = null;
+
+            try
+            {
+                entryLines = EntryDetailProvider?.Invoke(task);
+            }
+            catch
+            {
+                // 明细来源坏了不能把整份失败清单带崩：清单是失败后唯一的可读产物。
+                entryLines = null;
+            }
+
+            foreach (string entryLine in entryLines ?? Enumerable.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(entryLine))
+                {
+                    lines.Add(EntryLabel + entryLine.Trim());
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.CurrentPath))
+            {
+                lines.Add(LocationLabel + task.CurrentPath);
+            }
+
+            return lines;
+        }
+
+        private static string ResolveParentName(ArchiveTask task)
+        {
+            if (!string.IsNullOrWhiteSpace(task.ParentTaskName))
+            {
+                return task.ParentTaskName;
+            }
+
+            // 父包名字没记下来时用父输出目录兜底 —— 宁可给一个能定位的路径，也不要写"未知"。
+            string parentFromPath = Path.GetFileName(
+                (task.ParentOutputDirectory ?? string.Empty).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+            return string.IsNullOrWhiteSpace(parentFromPath)
+                ? task.ParentOutputDirectory ?? string.Empty
+                : parentFromPath;
         }
 
         /// <summary>
@@ -385,6 +549,10 @@ namespace ArchiveFixer.Services
                 StatusText.PathTooLong or
                 StatusText.SevenZipMissing or
                 StatusText.PasswordAttemptLimitReached or
+                // 部分完成是"没做完"，必须进失败清单（不变量 6：不得显示成成功）。
+                StatusText.PartiallyCompleted or
+                // 文件名已加密：这一单没拿到可用结论，用户必须看见（否则它就消失在"处理完了"里）。
+                StatusText.EncryptedHeaders or
                 StatusText.UnknownError;
         }
 

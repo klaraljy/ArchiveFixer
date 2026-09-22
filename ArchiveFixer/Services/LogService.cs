@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -15,6 +16,38 @@ namespace ArchiveFixer.Services
     /// </summary>
     public class LogService
     {
+        /// <summary>
+        /// 日志 / 报告里时间戳的**固定格式**（不随系统区域设置、也不随系统日历变）。
+        ///
+        /// 为什么必须显式带上 <see cref="CultureInfo.InvariantCulture"/>：
+        /// <c>DateTime.ToString("yyyy-MM-dd HH:mm:ss")</c> 里的 <c>yyyy</c> 用的是**当前区域的日历** ——
+        /// 在泰历（th-TH）这类区域里同一个时刻会写成 2569 年，日志立刻变成对不上号的文本。
+        /// 日志和报告是要被解析、被比对、被贴进问题反馈的文本，格式必须与用户机器设置无关
+        /// （WinRAR 的"生成报告"同样固定成 <c>YYYY-MM-DD hh:mm</c>，理由一样）。
+        ///
+        /// ⚠ 与 <c>Models/OperationLogItem.TimeText</c> 用的是**同一个格式**：屏幕日志那一行也是
+        /// <c>yyyy-MM-dd HH:mm:ss</c>。既有日志解析按这个格式写的，改这里必须连着看那里（口径只能有一份）。
+        /// </summary>
+        public const string TimestampFormat = "yyyy-MM-dd HH:mm:ss";
+
+        /// <summary>日志文件名里的紧凑时间戳格式（同样固定文化，避免区域日历换出别的年份）。</summary>
+        public const string FileNameTimestampFormat = "yyyyMMdd_HHmmss";
+
+        /// <summary>
+        /// 把时间按 <see cref="TimestampFormat"/> 格式化。全仓的日志/报告时间戳都走这里，
+        /// **不要**再写 <c>DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")</c>（那样会各自跟随区域日历）。
+        /// </summary>
+        public static string FormatTimestamp(DateTime value)
+        {
+            return value.ToString(TimestampFormat, CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>把时间按 <see cref="FileNameTimestampFormat"/> 格式化（日志文件名用）。</summary>
+        public static string FormatFileTimestamp(DateTime value)
+        {
+            return value.ToString(FileNameTimestampFormat, CultureInfo.InvariantCulture);
+        }
+
         private readonly PathService _pathService;
         private readonly object _lockObj = new();
 
@@ -75,14 +108,15 @@ namespace ArchiveFixer.Services
             {
                 _pathService.EnsureBaseDirectories();
 
-                string fileName = $"ArchiveFixer_{DateTime.Now:yyyyMMdd_HHmmss}.log";
+                string fileName = $"ArchiveFixer_{FormatFileTimestamp(DateTime.Now)}.log";
                 _currentLogFilePath = Path.Combine(LogDirectory, fileName);
 
                 if (_enableFileLog)
                 {
+                    // 首行时间戳同样走固定格式：这一行是既有日志解析的锚点，别让它随区域设置漂。
                     File.WriteAllText(
                         _currentLogFilePath,
-                        $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [INFO] 日志初始化{Environment.NewLine}",
+                        $"[{FormatTimestamp(DateTime.Now)}] [INFO] 日志初始化{Environment.NewLine}",
                         Encoding.UTF8);
                 }
             }
@@ -218,6 +252,22 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 写入文件日志。
         /// </summary>
+        /// <summary>
+        /// 日志文件里一行的完整文本：<c>[时间] [级别] 消息</c>。
+        ///
+        /// 形态与屏幕日志（<c>OperationLogItem.DisplayText</c>）**一模一样**，差别只在时间戳走
+        /// <see cref="FormatTimestamp"/>（固定文化）。为什么不直接用 <c>item.DisplayText</c>：
+        /// 它内部是 <c>Time.ToString("yyyy-MM-dd HH:mm:ss")</c>，用的是**当前区域的日历** ——
+        /// 在泰历这类区域里写进文件的就是 2569 年，而日志文件是要被解析、被比对的那一份。
+        /// 屏幕那一行由视图直接绑定，改不到（在 Models 里），所以文件这一份先钉死。
+        /// </summary>
+        public static string FormatLogLine(DateTime time, string? level, string? message)
+        {
+            string normalizedLevel = string.IsNullOrWhiteSpace(level) ? "INFO" : level;
+
+            return $"[{FormatTimestamp(time)}] [{normalizedLevel}] {message}";
+        }
+
         private void WriteFileLog(OperationLogItem item)
         {
             if (!_enableFileLog)
@@ -234,7 +284,7 @@ namespace ArchiveFixer.Services
             {
                 File.AppendAllText(
                     _currentLogFilePath,
-                    item.DisplayText + Environment.NewLine,
+                    FormatLogLine(item.Time, item.Level, item.Message) + Environment.NewLine,
                     Encoding.UTF8);
             }
             catch

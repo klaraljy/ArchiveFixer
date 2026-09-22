@@ -6,8 +6,10 @@ namespace ArchiveFixer.Models
     /// 源包处理档（决策 D-9，2026-09-22 用户拍板）。
     ///
     /// <para>
-    /// ⚠ **只作用于「一键处理」这条整理路径**。手动「只解压」是地基路径，
-    /// **永远不动源包**（不变量 1 的例外范围被用户显式限定在这两条里，见 AGENTS.md §6 第 1 条）。
+    /// ⚠ <b>两条路径都照这一档走</b>（用户 2026-09-22 的版本二指示，**推翻**了早先"地基路径永远不动源包"的说法）：
+    /// 「一键处理」与手动「只解压」都在"成功 + 输出校验通过 + 未取消 + 属于本任务分卷组"之后
+    /// 按本档处理源包（见 AGENTS.md §0 / §6 第 1 条的例外、`docs/输出与整理模型.md` §3.4）。
+    /// <see cref="SourceHandlingMode.KeepInPlace"/> 才是"一个字节都不搬"的出口。
     /// </para>
     /// </summary>
     public enum SourceHandlingMode
@@ -23,6 +25,140 @@ namespace ArchiveFixer.Models
         /// 回收站 / 彻底删除按既有设置走。
         /// </summary>
         DeleteAfterVerify = 2
+    }
+
+    /// <summary>
+    /// 同名冲突处理档（设置项 <see cref="AppSettings.ConflictAction"/>）的**唯一词表**。
+    ///
+    /// <para>
+    /// 为什么要有这个词表：这四个字符串同时出现在三个地方 —— 设置界面的 <c>ComboBox</c> Tag、
+    /// appsettings.json 里的字符串、以及冲突处理的分支判断。以前它们是各写各的字面量，
+    /// 于是出现了本项目最不能接受的那类缺陷：界面给了「询问」这一档，
+    /// 而 <c>PathService</c> 把它和 <c>AutoRename</c> 并到同一个分支 —— **用户选了询问，程序静默自动重命名**。
+    /// 现在四处都引用这里的常量，字面量只允许在这里出现一次。
+    /// </para>
+    ///
+    /// <para>
+    /// 四档语义（<c>docs/WinRAR功能参考.md</c> §B：照 WinRAR 的六档精神裁剪到我们的批量场景）：
+    /// <list type="bullet">
+    /// <item><description><see cref="Skip"/>：同名就不动，已存在的文件一个字节都不改（产物留在暂存目录）。</description></item>
+    /// <item><description><see cref="Overwrite"/>：顶掉已存在的同名项；走"先挪到临时名 → 落位 → 再删"两阶段（不变量 3）。</description></item>
+    /// <item><description><see cref="AutoRename"/>：新产物落成 <c>名字(1)</c>，**绝不覆盖**。默认档。</description></item>
+    /// <item><description><see cref="Ask"/>：第一次遇到同名冲突时**暂停该任务**弹一次聚合询问
+    /// （覆盖 / 跳过 / 自动重命名，可升级成"整批都照此办理"）；无界面宿主时降级为自动重命名并写日志。</description></item>
+    /// </list>
+    /// </para>
+    /// </summary>
+    public static class ConflictActions
+    {
+        /// <summary>跳过（不动已存在的文件）。</summary>
+        public const string Skip = "Skip";
+
+        /// <summary>覆盖（两阶段落位，先挪开旧的再落位）。</summary>
+        public const string Overwrite = "Overwrite";
+
+        /// <summary>自动重命名（<c>名字(1)</c>）。**默认档**：不丢产物、不动旧文件。</summary>
+        public const string AutoRename = "AutoRename";
+
+        /// <summary>询问（第一次冲突时暂停该任务，弹一次聚合询问）。</summary>
+        public const string Ask = "Ask";
+
+        /// <summary>这个档是不是"询问"（唯一判定处，禁止在别处再写 <c>== "Ask"</c>）。</summary>
+        public static bool IsAsk(string? value) =>
+            string.Equals(Normalize(value), Ask, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 归一化：空 / 非法一律回落 <see cref="AutoRename"/>。
+        ///
+        /// 容错口径与 <c>ParseSourceHandling</c> / <c>ParseTerminalLayoutMode</c> 一致：
+        /// 这个字符串可能来自旧配置（缺字段）、用户手改的 json，或将来改名的枚举。
+        /// 读不懂时**退回最不意外、也最不可能丢数据的那一档**，而不是到解压那一刻才报错或猜一个别的行为。
+        /// </summary>
+        public static string Normalize(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return AutoRename;
+            }
+
+            string trimmed = value.Trim();
+
+            if (string.Equals(trimmed, Skip, StringComparison.OrdinalIgnoreCase))
+            {
+                return Skip;
+            }
+
+            if (string.Equals(trimmed, Overwrite, StringComparison.OrdinalIgnoreCase))
+            {
+                return Overwrite;
+            }
+
+            if (string.Equals(trimmed, AutoRename, StringComparison.OrdinalIgnoreCase))
+            {
+                return AutoRename;
+            }
+
+            if (string.Equals(trimmed, Ask, StringComparison.OrdinalIgnoreCase))
+            {
+                return Ask;
+            }
+
+            return AutoRename;
+        }
+    }
+
+    /// <summary>
+    /// 「其余物」清理默认档（设置项 <see cref="AppSettings.RestRemovalDefaultMode"/>）的**唯一词表**。
+    ///
+    /// <para>
+    /// 语义：它只是删除确认框里那个勾选框的**默认状态**，不是"跳过确认直接删"。
+    /// 无论哪一档，都照 <c>docs/输出与整理模型.md</c> §3.2 的清理表办 ——
+    /// 先预览条目数与总大小 → 红色确认 → 彻底删除还要**二次确认**（勾"我知道不可恢复"）；
+    /// 回收站不可用时**一律不删**，绝不因为这一项就降级成永久删除。
+    /// </para>
+    ///
+    /// <para>
+    /// 为什么用字符串词表而不是直接存 <c>Storage.DeleteMode</c> 的枚举：与
+    /// <see cref="ConflictActions"/> 同一口径 —— 落盘的是**枚举名**（用户手改 json 也看得懂），
+    /// 空 / 非法一律回落最保守的 <see cref="RecycleBin"/>，旧配置缺字段不报错。
+    /// </para>
+    /// </summary>
+    public static class RestRemovalModes
+    {
+        /// <summary>移入回收站（**默认档**）：可恢复；回收站不可用时一律不删。</summary>
+        public const string RecycleBin = "RecycleBin";
+
+        /// <summary>彻底删除（激进档）：不可恢复，界面上必须红色标识 + 二次确认。</summary>
+        public const string Permanent = "Permanent";
+
+        /// <summary>这一档是不是"彻底删除"（唯一判定处，禁止在别处再写 <c>== "Permanent"</c>）。</summary>
+        public static bool IsPermanent(string? value) =>
+            string.Equals(Normalize(value), Permanent, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 归一化：空 / 非法一律回落 <see cref="RecycleBin"/>。
+        ///
+        /// 容错口径与 <c>ConflictActions.Normalize</c> / <c>ParseSourceHandling</c> 一致：
+        /// 这个字符串可能来自旧配置（缺字段）、用户手改的 json，或将来改名后的枚举。
+        /// 读不懂时**退回最保守的那一档**（回收站），而不是到确认框那一刻才报错，
+        /// 更不是"读不懂就按激进档办"。
+        /// </summary>
+        public static string Normalize(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return RecycleBin;
+            }
+
+            string trimmed = value.Trim();
+
+            if (string.Equals(trimmed, Permanent, StringComparison.OrdinalIgnoreCase))
+            {
+                return Permanent;
+            }
+
+            return RecycleBin;
+        }
     }
 
     /// <summary>
@@ -45,7 +181,17 @@ namespace ArchiveFixer.Models
 
         public bool KeepArchiveNameFolder { get; set; } = true;
 
-        public string ConflictAction { get; set; } = "AutoRename";
+        /// <summary>
+        /// 同名冲突处理档（<see cref="ConflictActions"/> 的四个值之一）。
+        ///
+        /// **默认 <c>AutoRename</c>**：同名时把新产物落成 <c>名字(1)</c>，不丢产物、不动旧文件，
+        /// 也绝不默认覆盖（AGENTS.md §6 第 3 条）。
+        ///
+        /// 它管两处：**解压落位**（输出目录已存在且非空 / 定稿搬运时同名）与**改名冲突**
+        /// （改名预览里逐条显示、确认后才落盘）。<c>Ask</c> 档在解压落位时真的会问
+        /// （<c>Services/DialogService.ShowConflictDecisionAsync</c>），不再是"写着一个询问、跑起来自动改名"。
+        /// </summary>
+        public string ConflictAction { get; set; } = ConflictActions.AutoRename;
 
         public bool TestBeforeExtract { get; set; } = false;
 
@@ -62,6 +208,75 @@ namespace ArchiveFixer.Models
         public bool UseGlobalPasswordForAllTasks { get; set; } = true;
 
         public int MaxParallelExtractCount { get; set; } = 1;
+
+        /// <summary>
+        /// 低运行优先级（**默认开**）：启动时把本进程设成 <c>BelowNormal</c>，
+        /// 解压子进程（7z.exe）继承这个优先级，于是批量解压不再和桌面抢 CPU / 磁盘。
+        ///
+        /// <para>
+        /// 为什么升成设置项（依据 <c>docs/WinRAR功能参考.md</c> §2 D 组 / §3 第 9 条）：
+        /// 这一段以前是 <c>App.xaml.cs</c> 里的**硬编码**，用户觉得慢的时候**没有任何可调项**
+        /// （WinRAR 把它放在"设置 / 常规 / 系统"里，并且写明"通常常规优先级是最优选择"）。
+        /// </para>
+        ///
+        /// <para>
+        /// ⚠ <b>它与 <see cref="MaxParallelExtractCount"/> 是两个互相独立的旋钮</b>：
+        /// 这一项决定"让不让出 CPU / 磁盘优先级"（快慢与是否拖慢别的程序），
+        /// 并发数决定"同时跑几个包"（吞吐与内存/磁盘压力）。
+        /// 改其中一个**绝不会**顺手改另一个 —— 抄的正是 WinRAR 6.02 修过的那个坑
+        /// （"以前版本忽略了 <c>-ri</c>，并在存在 <c>-ibck</c> 时设置了较低优先级"：
+        /// 两个调节项互相覆盖，用户调了 A 却被 B 决定）。
+        /// </para>
+        /// </summary>
+        public bool LowProcessPriority { get; set; } = true;
+
+        /// <summary>
+        /// 定稿完成后在资源管理器里打开输出目录（**默认关**）。
+        ///
+        /// <para>
+        /// ⚠ 这是"**会动用户桌面**"的行为（依据 <c>docs/WinRAR功能参考.md</c> §2 C 组 / §3 第 7 条）：
+        /// ① 只有用户**显式打开**这一项才执行，绝不做成默认；
+        /// ② 打开时**只打开文件夹** —— 复用既有 <c>SafePathHelper.OpenDirectory</c>
+        ///    （<c>explorer.exe &lt;目录&gt;</c>），**不得**把主窗口置前 / 最大化 / 抢焦点，
+        ///    也不得切换前台窗口（AGENTS.md §13 同精神：只打开文件夹，不抢焦点）。
+        /// </para>
+        ///
+        /// <para>
+        /// 只在本任务**真正定稿成功**（内容物已落 <c>destDir</c>、输出校验通过）之后触发；
+        /// 失败 / 部分完成 / 取消时一律不打开 —— 那时候打开一个空的或半截的目录只会误导用户。
+        /// </para>
+        /// </summary>
+        public bool OpenOutputFolderWhenDone { get; set; } = false;
+
+        /// <summary>
+        /// 「其余物」清理的默认档（取值见 <see cref="RestRemovalModes"/>）：<c>RecycleBin</c>（**默认**）
+        /// 或 <c>Permanent</c>。
+        ///
+        /// <para>
+        /// 与 WinRAR"删除压缩包"那一组的"永不 / 询问确认 / 总是 / 移动到回收站"（<c>docs/WinRAR功能参考.md</c> §1.4）
+        /// 对齐的是**默认值思路**，不是"不问就删"：我们**永远**先预览 + 确认，
+        /// 这一项只决定确认框里那个"改为彻底删除"勾选框**默认勾不勾**。
+        /// 默认档 = <see cref="RestRemovalModes.RecycleBin"/>（可恢复），
+        /// 危险的那一档必须用户主动勾选，勾了还有二次确认（规格 §3.2 清理表）。
+        /// </para>
+        /// </summary>
+        public string RestRemovalDefaultMode { get; set; } = RestRemovalModes.RecycleBin;
+
+        /// <summary>
+        /// 危险条目统计（**默认开**）：在**既有那一遍**解压前条目预检里顺便数出可执行 / 脚本类条目
+        /// （<c>.exe/.scr/.lnk/.bat/.cmd/.ps1/.vbs</c>），把"本包含 N 个可执行文件"写进任务详情与失败清单。
+        ///
+        /// <para>
+        /// **只提示、绝不阻断**（依据 <c>docs/WinRAR功能参考.md</c> §2 F 组 / §3 第 5 条）：
+        /// 我们的场景里安装器 / 补丁**经常就是内容物**，所以**不做** WinRAR 那种全局硬排除掩码
+        /// —— 那会把内容物一起丢掉，而且全局开关容易被遗忘、排障时变成隐形行为。
+        /// </para>
+        ///
+        /// <para>
+        /// 关掉它只是"不统计、不提示"，**落盘行为一模一样**（不变量 4 的路径清洗与落点校验与它无关，照旧执行）。
+        /// </para>
+        /// </summary>
+        public bool ReportDangerousEntries { get; set; } = true;
 
         public bool RememberLastOutputDirectory { get; set; } = true;
 
@@ -166,8 +381,11 @@ namespace ArchiveFixer.Models
         /// 默认 <c>MoveToRest</c>：源包跟着进其余物，用户在那个目录里一次删掉就干净了
         /// （用户原话："其余物/源包+过程物，这样删除对用户就更方便一点"）。可关。
         ///
-        /// ⚠ **不影响手动「只解压」**（地基路径永远不动源包）；
-        /// 也不影响 <see cref="DeleteSourceAfterExtract"/> —— 那个开关管的是地基路径的清理。
+        /// ⚠ **两条路径行为一致**（用户 2026-09-22 版本二，推翻早先"地基路径永远不动源包"）：
+        /// 手动「只解压」与一键处理读的是同一个档位，成功后同样把源包移入其余物；
+        /// <c>KeepInPlace</c> 档才是"一个字节都不搬"的出口。
+        /// <see cref="DeleteSourceAfterExtract"/> 仍然只管 <c>KeepInPlace</c> 档下"传统解压器 + 解压后清理"
+        /// 那个老组合（见 <c>ExtractionCoordinator</c> 里 deleteSource 的算法）。
         /// </summary>
         public string SourceHandling { get; set; } = nameof(SourceHandlingMode.MoveToRest);
 
@@ -207,7 +425,7 @@ namespace ArchiveFixer.Models
                 ExtractToOriginalDirectory = true,
                 CustomOutputDirectory = string.Empty,
                 KeepArchiveNameFolder = true,
-                ConflictAction = "AutoRename",
+                ConflictAction = ConflictActions.AutoRename,
                 TestBeforeExtract = false,
                 EnableLog = true,
                 AutoScanAfterDrop = true,
@@ -216,6 +434,10 @@ namespace ArchiveFixer.Models
                 TryEmptyPasswordFirst = true,
                 UseGlobalPasswordForAllTasks = true,
                 MaxParallelExtractCount = 1,
+                LowProcessPriority = true,
+                OpenOutputFolderWhenDone = false,
+                RestRemovalDefaultMode = RestRemovalModes.RecycleBin,
+                ReportDangerousEntries = true,
                 RememberLastOutputDirectory = true,
                 IncludeHiddenFiles = false,
                 IncludeSystemFiles = false,
@@ -259,10 +481,14 @@ namespace ArchiveFixer.Models
                 DefaultExtension = "." + DefaultExtension;
             }
 
-            if (string.IsNullOrWhiteSpace(ConflictAction))
-            {
-                ConflictAction = "AutoRename";
-            }
+            /*
+             * 同名冲突处理档：空 / 非法一律回落 AutoRename（**绝不默认覆盖**，不变量 3）。
+             *
+             * 归一化放在设置层，与 RecursionMode / TerminalLayoutMode / SourceHandling 同一口径：
+             * 到了冲突那一刻才发现"这个档读不懂"是最糟的 —— 用户已经点了解压，程序却要临时猜一个处置方式。
+             * 判定本身只有一处实现（ConflictActions.Normalize），这里不另写一套字符串比较。
+             */
+            ConflictAction = ConflictActions.Normalize(ConflictAction);
 
             if (string.IsNullOrWhiteSpace(OverwriteMode))
             {
@@ -278,6 +504,16 @@ namespace ArchiveFixer.Models
             {
                 MaxParallelExtractCount = 8;
             }
+
+            /*
+             * 「其余物」清理默认档：空 / 非法一律回落 RecycleBin（**可恢复的那一档**），旧配置不报错。
+             *
+             * 归一化必须放在设置层，与 ConflictAction / SourceHandling 同一口径：
+             * 到用户点下"删除其余物"的那一刻才发现"这个档读不懂"是最糟的 ——
+             * 那时程序要么临时猜一个处置方式，要么把用户晾在确认框前。
+             * 判定只有一处实现（RestRemovalModes.Normalize），这里不另写一套字符串比较。
+             */
+            RestRemovalDefaultMode = RestRemovalModes.Normalize(RestRemovalDefaultMode);
 
             if (MaxFileSizeLimit < 0)
             {
