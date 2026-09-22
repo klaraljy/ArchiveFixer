@@ -158,6 +158,20 @@ namespace ArchiveFixer.ViewModels
         /// <summary>本批是否已经问过手动密码（一次性：问过就不再问，无论用户填没填）。</summary>
         private bool _manualPasswordPrompted;
 
+        /*
+         * ===== 「一键处理 · 本次选项」的运行期覆盖（规格 docs/输出与整理模型.md §9）=====
+         *
+         * 面板选的落点 / 终端落法 / 源包处理**只对这一次一键处理有效**：
+         * · 它是一个**每批一份、批结束就置空**的字段（不是静态、不进设置、不落盘）——
+         *   「不勾存为默认就不许改设置文件」这条硬要求靠的就是"这里根本没有写设置的路径"；
+         * · 同时只有一批能在跑（_isExtracting 守着），所以字段不会被两批同时用到；
+         * · 手动「只解压」（地基路径）**不带**它：那条路径照旧完全按设置走。
+         */
+        private OneClickRunOptions? _runOptions;
+
+        /// <summary>本批的"本次选项"（没有就是 null —— 地基路径、或没弹面板时的降级）。</summary>
+        private OneClickRunOptions? RunOptions => _runOptions;
+
         /// <summary>
         /// 本批是否出现过密码类失败（密码错误 / 达到尝试上限）。
         /// 批次结束后的合并提示据此换一句话：出过密码问题时指引"再点一次、把密码输进去"，
@@ -411,8 +425,12 @@ namespace ArchiveFixer.ViewModels
              * 但**只在 KeepInPlace 档**：那是"传统解压器 + 解压后清理源包"的既有组合，
              * 上一版就是这么用的，不该被这次改动悄悄改掉；MoveToRest 档下它不参与，
              * 否则用户开过这个老开关就会在"移入其余物"之后立刻被删掉。
+             *
+             * ⚠ 「本次选项」里选过源包处理时**以它为准**（规格 §9.2 硬要求①：覆盖只对本次有效）：
+             * RunOptions 只在"一键处理这一批"里非空，地基路径永远是 null → 照旧读设置。
              */
-            SourceHandlingMode sourceHandling = AppSettings.ParseSourceHandling(Settings.SourceHandling);
+            SourceHandlingMode sourceHandling = RunOptions?.SourceHandling
+                ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
 
             bool deleteSource = sourceHandling == SourceHandlingMode.DeleteAfterVerify ||
                 (!oneClickRun && sourceHandling == SourceHandlingMode.KeepInPlace && Settings.DeleteSourceAfterExtract);
@@ -421,8 +439,10 @@ namespace ArchiveFixer.ViewModels
              * 终端落法（规格 §3.1 / 设置项 TerminalLayoutMode）同样在这里读一次并解析：
              * 解析口径唯一（OutputPlacement.ParseTerminalLayoutMode），非法值回落 KeepLastFolder，
              * 所以一个读不懂的配置只会退到"最不意外"的那一档，不会把落点算成别的东西。
+             * 「本次选项」里选过就以它为准（同上，只对本次一键处理有效）。
              */
-            TerminalLayoutMode terminalLayout = OutputPlacement.ParseTerminalLayoutMode(Settings.TerminalLayoutMode);
+            TerminalLayoutMode terminalLayout = RunOptions?.TerminalLayout
+                ?? OutputPlacement.ParseTerminalLayoutMode(Settings.TerminalLayoutMode);
 
             /*
              * 同名冲突的决定：Ask 档**必须在动最终目录之前**拿到答案（"暂停该任务"就发生在这里）。
@@ -1214,10 +1234,26 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         /// <param name="rootTasks">本批的**最外层**任务（一键处理第一轮的输入）。</param>
         /// <param name="chainTasks">整条链上的全部任务（根 + 续解子任务）：用来找"谁把内容物定稿到了那个目录"。</param>
+        /// <param name="cancellationToken">取消令牌（既有调用点按位置传它，所以它必须留在原位置）。</param>
+        /// <param name="runOptions">
+        /// 本批的「本次选项」快照（规格 §9）。
+        ///
+        /// <para>
+        /// ⚠ 必须**显式传进来**，不能读 <see cref="RunOptions"/> 字段：本方法是在整条续解链跑完之后
+        /// 由 <c>OneClickCoordinator</c> 调用的，那时批量解压本体早就退出、字段已经置空
+        /// （见 <c>StartExtractCoreAsync</c> 的 finally）—— 读字段会静默退回设置值，
+        /// 于是"本次选了留在原地"的源包在链结束后被照设置搬走（正是最不该发生的静默行为）。
+        /// </para>
+        /// <para>
+        /// 参数排在 <paramref name="cancellationToken"/> **之后**：既有调用点（含测试）按位置传令牌，
+        /// 插在它前面会让那些调用点编译不过 —— 加可选参数不该改动别人的调用形状。
+        /// </para>
+        /// </param>
         internal async Task CompleteRootSourcePackagesAfterChainAsync(
             IReadOnlyList<ArchiveTask>? rootTasks,
             IReadOnlyList<ArchiveTask>? chainTasks,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            OneClickRunOptions? runOptions = null)
         {
             if (rootTasks == null || rootTasks.Count == 0)
             {
@@ -1225,7 +1261,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             // 设置在进后台之前读一次：设置是用户随时可改的，别让后台线程读到半路改掉的值。
-            SourceHandlingMode sourceHandling = AppSettings.ParseSourceHandling(Settings.SourceHandling);
+            // 本次选项优先（同上：只对这一次生效）。
+            SourceHandlingMode sourceHandling = runOptions?.SourceHandling
+                ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
 
             foreach (ArchiveTask rootTask in rootTasks)
             {
@@ -2263,8 +2301,24 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog("INFO", $"{task.FileName}：开始递归解压（模式 {mode}，最大 {limits.MaxDepth} 层）。");
 
+            /*
+             * 递归内层的进度（2026-09-22 补）：复用**同一个** TaskProgressSink，
+             * 于是界面上的百分比 / 当前条目、详情窗口的耗时、以及"跨 10% 写一行"的日志
+             * 与单层路径完全是同一套行为 —— 递归核心只负责把 sink 转发给引擎。
+             *
+             * 卡住提示同理：一层套一层时最容易出现"几十秒没有任何输出"，
+             * 那一段过去在界面上就是死等（整条递归连一条 WARN 都不会有）。
+             */
+            TaskProgressSink recursionProgressSink = new(this, task);
+
             RecursionResult result = await recursiveExtractor.ExtractAsync(
-                recursionTask, stageDirectory, mode, previousDecision: null, cancellationToken);
+                recursionTask,
+                stageDirectory,
+                mode,
+                previousDecision: null,
+                cancellationToken,
+                recursionProgressSink,
+                notice => OnEngineStalled(task, notice));
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
@@ -2276,7 +2330,13 @@ namespace ArchiveFixer.ViewModels
                 {
                     // 同一个实例接着跑（上限不变）：续跑用的是用户刚确认的那批候选，不是重新扫一遍。
                     result = await recursiveExtractor.ExtractAsync(
-                        recursionTask, stageDirectory, mode, result.Decision, cancellationToken);
+                        recursionTask,
+                        stageDirectory,
+                        mode,
+                        result.Decision,
+                        cancellationToken,
+                        recursionProgressSink,
+                        notice => OnEngineStalled(task, notice));
                 }
                 else
                 {
@@ -2598,6 +2658,16 @@ namespace ArchiveFixer.ViewModels
 
                 int decile = progress.Percent / ProgressLogDecileStep;
 
+                /*
+                 * 进度**回退**（或从"未知"回到具体值）＝ 新的一轮：换一个密码候选重试、或者递归解到了下一层。
+                 * 档位计数必须跟着重来，否则后面每一轮都因为"decile 没超过上一轮"而一行日志都写不出来
+                 * （实测形态：递归第 2 层开始日志里再也没有进度行，看起来像卡住了）。
+                 */
+                if (decile < _lastLoggedDecile)
+                {
+                    _lastLoggedDecile = -1;
+                }
+
                 if (decile <= _lastLoggedDecile)
                 {
                     return;
@@ -2671,13 +2741,13 @@ namespace ArchiveFixer.ViewModels
                 int thresholdSeconds = (int)Math.Round(notice.Threshold.TotalSeconds);
 
                 task.ResponsivenessHint =
-                    $"{ArchiveTask.NoResponseHintText}：已 {idleSeconds} 秒没有任何引擎输出，" +
+                    $"{StatusText.LongTimeNoResponse}：已 {idleSeconds} 秒没有任何引擎输出，" +
                     "进程仍在运行；需要中止请点「取消当前」。";
 
                 // WARN 只写一次（引擎层对同一段沉默只报一次），所以不会刷屏。
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：{ArchiveTask.NoResponseHintText} —— 已 {idleSeconds} 秒没有任何引擎输出" +
+                    $"{task.FileName}：{StatusText.LongTimeNoResponse} —— 已 {idleSeconds} 秒没有任何引擎输出" +
                     $"（阈值 {thresholdSeconds} 秒），进程仍在运行。程序不会自动结束它；需要中止请点「取消当前」。");
             });
         }
@@ -3911,15 +3981,26 @@ namespace ArchiveFixer.ViewModels
         /// 定稿、校验、归集、工作区清理的行为两条路径完全一致。
         /// </para>
         /// </summary>
-        public Task StartExtractAsync() => StartExtractCoreAsync(oneClickRun: false);
+        public Task StartExtractAsync() => StartExtractCoreAsync(oneClickRun: false, runOptions: null);
 
         /// <summary>
         /// 「一键处理」的显式入口：与 <see cref="StartExtractAsync"/> 同一个本体，
         /// 差别只在"有续解链"这件事上（见 <see cref="StartExtractAsync"/> 的说明）。
         /// </summary>
-        public Task StartExtractForOneClickAsync() => StartExtractCoreAsync(oneClickRun: true);
+        /// <param name="runOptions">
+        /// 本次选项面板选出来的**运行期快照**（规格 §9；null = 没弹面板 / 无界面宿主，按设置走）。
+        ///
+        /// <para>
+        /// 它只活在这一批里：进方法时记下、<c>finally</c> 里置空。落点经它翻译成
+        /// <see cref="ExtractOptions"/> 上那三个既有字段（唯一实现仍是 <c>OutputPlacement</c>），
+        /// 终端落法与源包处理则在收尾处优先取它的值 ——
+        /// **不勾"存为默认"时设置文件一个字节都不会被写**，因为这条路径上没有任何写设置的代码。
+        /// </para>
+        /// </param>
+        public Task StartExtractForOneClickAsync(OneClickRunOptions? runOptions = null) =>
+            StartExtractCoreAsync(oneClickRun: true, runOptions);
 
-        private async Task StartExtractCoreAsync(bool oneClickRun)
+        private async Task StartExtractCoreAsync(bool oneClickRun, OneClickRunOptions? runOptions = null)
         {
             if (_isExtracting)
             {
@@ -3940,6 +4021,25 @@ namespace ArchiveFixer.ViewModels
                 _dialogService.ShowError("未找到 tools\\7zip\\7z.exe，无法解压。");
                 AppendLog("ERROR", StatusText.SevenZipMissing);
                 return;
+            }
+
+            _runOptions = runOptions;
+
+            if (runOptions != null)
+            {
+                /*
+                 * 本次选项进日志（规格 §9.2 硬要求⑥）：用户事后要能回答"这次为什么解到这里"。
+                 * 逐任务那一行在 ExtractSingleTaskAsync 里写（带实际落点），这一行是本批的总纲。
+                 */
+                AppendLog("INFO", $"本次一键处理按「本次选项」执行（不写回设置）：{runOptions.Describe()}");
+
+                if (!runOptions.IsPlacementValid)
+                {
+                    AppendLog(
+                        "WARN",
+                        "本次选项里选了「指定位置」但没填路径 —— 为了避免它被解释成「解压到压缩包所在目录」，" +
+                        "本次落点**回落设置里的值**（其余两项照常生效）。");
+                }
             }
 
             IsBusy = true;
@@ -4107,6 +4207,10 @@ namespace ArchiveFixer.ViewModels
                 _isExtracting = false;
                 IsBusy = false;
                 IsStopping = false;
+
+                // 本次选项**只活这一批**：批结束就丢掉，下一批（哪怕是同一次运行里的下一轮续解）
+                // 由调用方重新给一份 —— 这样"覆盖"永远不会悄悄延续到别的批次上。
+                _runOptions = null;
 
                 UpdateSummary();
             }
@@ -4296,6 +4400,22 @@ namespace ArchiveFixer.ViewModels
             };
 
             extractOptions.Normalize();
+
+            /*
+             * 「本次选项」的运行期覆盖（规格 §9.2 硬要求①/⑥）。
+             *
+             * 位置刻意放在**这里**：ExtractOptions 是落点推导的入口，覆盖写在它上面，
+             * 下面那条唯一的推导链（BuildOutputPath → OutputPlacement.FromLegacyFlags →
+             * ResolveDestinationDirectory）一个字都不用改 —— 面板不新增第二条拼路径的实现。
+             * 内层包（IsContinuationTask）的落点由父任务给定，覆盖对它没有影响。
+             */
+            if (RunOptions != null)
+            {
+                RunOptions.ApplyTo(extractOptions);
+
+                // 任务上留一份"为什么落这儿"（§9.2 硬要求⑥）：失败清单第二级与「复制任务信息」读它。
+                task.RunOptionsNote = RunOptions.Describe();
+            }
 
             /*
              * 落点模式（契约 §1.1 的四种，由旧的三个设置项翻译过来）。
@@ -4507,7 +4627,12 @@ namespace ArchiveFixer.ViewModels
             task.OutputPath = outputPath;
 
             // 每个任务都明确说一次实际落点：目录被改名时用户必须能立刻看出产物去了哪。
-            AppendLog("INFO", $"{task.FileName}：本次实际输出目录 {outputPath}");
+            // 有「本次选项」时带上依据（§9.2 硬要求⑥）：光有落点回答不了"这次为什么解到这里"。
+            AppendLog(
+                "INFO",
+                RunOptions == null
+                    ? $"{task.FileName}：本次实际输出目录 {outputPath}"
+                    : $"{task.FileName}：本次实际输出目录 {outputPath}（依据 → {RunOptions.Describe()}）");
 
             /*
              * ===== 阶段一：入仓（stage，契约 §2.1）=====

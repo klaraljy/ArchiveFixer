@@ -115,5 +115,34 @@ namespace ArchiveFixer.Models
         public const string RenameWillSkip = "将跳过";
         public const string TargetExists = "目标已存在";
         public const string WillAutoRename = "将自动重命名";
+
+        // ================================================================
+        // 提示文案（**不是状态**）
+        // ================================================================
+        //
+        // ⚠ 下面这一档是**提示文案**，不是 Status 值 —— 别按 AGENTS.md §7 的"三件套"照搬：
+        //    · 它**不进状态机**：没有任何代码拿它跟 task.Status 比；
+        //    · 它**不参与配色**：StatusToBrushConverter 一行都不用改；
+        //    · 它**不参与统计**：TaskSummaryService 的分桶（成功/失败/跳过…）与它无关。
+        //    新增一条真正的**状态**（例如"疑似卡住"）才需要同时改那三处；
+        //    这里只是"把一句话放进唯一的文案来源里"，免得又散落回中文字面量。
+
+        /// <summary>
+        /// 引擎很久没有任何输出时的提示语（默认阈值 90 秒，见
+        /// <c>EngineOutputActivityMonitor.DefaultStallThreshold</c>）。
+        ///
+        /// <para>
+        /// 它对应的是用户反复抱怨的"卡死"：界面只有"处理中/完成"两态时，长时间零输出看起来就是死了。
+        /// 落在任务上时**只提示、绝不改结论** —— 任务的成败仍由引擎退出码与错误分类决定，
+        /// 也不杀进程（要不要中止由用户点「取消当前」决定，不变量 9 / 6）。
+        /// 有新的进度或引擎输出时，协调器会把它清回空串。
+        /// </para>
+        ///
+        /// <para>
+        /// 它原来临时住在 <c>ArchiveTask.NoResponseHintText</c>（上一批"不许改 StatusText"授权下的权宜之计），
+        /// 2026-09-22 归位到这里：<c>ArchiveTask</c> 只保留字段本身。
+        /// </para>
+        /// </summary>
+        public const string LongTimeNoResponse = "长时间无响应";
     }
 }

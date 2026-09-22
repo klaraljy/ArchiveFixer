@@ -125,6 +125,12 @@ namespace ArchiveFixer.Services
         private const string VolumeLabel = "分卷：缺少 ";
         private const string EntryLabel = "条目：";
         private const string LocationLabel = "位置：";
+
+        /// <summary>
+        /// 本次选项那一行（规格 <c>docs/输出与整理模型.md</c> §9.2 硬要求⑥）。
+        /// 只在任务上有值时才写行，所以既有清单的格式（与钉住格式的用例）一个字都没变。
+        /// </summary>
+        private const string RunOptionsLabel = "本次选项：";
         private const string FailedCountLabel = "失败：";
         private const string NoFailedTaskText = "没有失败任务。";
 
@@ -502,6 +508,15 @@ namespace ArchiveFixer.Services
             if (!string.IsNullOrWhiteSpace(task.CurrentPath))
             {
                 lines.Add(LocationLabel + task.CurrentPath);
+            }
+
+            /*
+             * 「本次为什么解到这里」（规格 §9.2 硬要求⑥）：一键处理带着"本次选项"跑过时才有值。
+             * 放在最后一行 —— 用户顺着读下来是"引擎 → 层级 → 结论 → 条目 → 在哪 → 为什么在那"。
+             */
+            if (!string.IsNullOrWhiteSpace(task.RunOptionsNote))
+            {
+                lines.Add(RunOptionsLabel + task.RunOptionsNote);
             }
 
             return lines;

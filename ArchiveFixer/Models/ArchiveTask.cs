@@ -52,19 +52,6 @@ namespace ArchiveFixer.Models
     /// </summary>
     public class ArchiveTask : INotifyPropertyChanged
     {
-        /// <summary>
-        /// "长时间无响应"提示的文案。
-        ///
-        /// <para>
-        /// ⚠ <b>它是本次改动新增的界面文案，暂时落在这里</b>：按 AGENTS.md §7，
-        /// 界面状态字符串的统一归属是 <c>Models/StatusText.cs</c>，而那个文件不在本次授权范围内
-        /// （另一个代理在改）。**待转派**：把它连同 <c>StatusToBrushConverter</c> / <c>TaskSummaryService</c>
-        /// 的关系一起收进 <c>StatusText</c>。它刻意**不是**一个 <c>Status</c> 值 ——
-        /// "很久没输出"只是提示，不改变任务的成败结论（不变量 6）。
-        /// </para>
-        /// </summary>
-        public const string NoResponseHintText = "长时间无响应";
-
         private bool _isSelected = true;
         private int _index;
         private string _originalPath = string.Empty;
@@ -633,6 +620,24 @@ namespace ArchiveFixer.Models
 
         /// <summary>父任务的名字（只为日志与报告里说清"这个内层包属于谁"，不参与任何路径计算）。</summary>
         public string ParentTaskName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 本任务**这一次实际用的「本次选项」**（一键处理面板选的那一组：落点 / 终端落法 / 源包处理），
+        /// 一句话形式，由 <c>OneClickRunOptions.Describe()</c> 给出；空 = 这一次没走过一键处理。
+        ///
+        /// <para>
+        /// 为什么要在任务上留一份（规格 <c>docs/输出与整理模型.md</c> §9.2 硬要求⑥）：
+        /// 用户要能回答"**这次为什么解到这里**"。日志里有一行，但日志会被后面的批次冲走；
+        /// 任务上的这一份会跟着任务走到失败清单第二级与「复制任务信息」里，
+        /// 事后回头看也能立刻知道当时用的是哪一档。
+        /// </para>
+        /// <para>
+        /// 与 <see cref="OutputPath"/> 的分工：那个是"**落到哪**"（实际值，可能是 <c>xxx(1)</c>），
+        /// 这个是"**为什么落那儿**"（选项依据）。两者都要有，缺一个都答不全。
+        /// 它不参与任何界面绑定，所以刻意不做成通知属性（与 <see cref="SourcePackageMove"/> 同一类）。
+        /// </para>
+        /// </summary>
+        public string RunOptionsNote { get; set; } = string.Empty;
 
         /// <summary>
         /// 解压前**那一遍 list** 里顺带统计出来的"可执行 / 脚本类条目"提示（设置项

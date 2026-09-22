@@ -757,14 +757,14 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.Contains(ArchiveTask.NoResponseHintText, hintAtStall, StringComparison.Ordinal);
+            Assert.Contains(StatusText.LongTimeNoResponse, hintAtStall, StringComparison.Ordinal);
             Assert.False(tokenCancelledAtStall);
 
             // WARN 一条，且说清了"不会自动结束它"。
             string[] warnings = harness.Log.Logs
                 .Where(x => x.Level == "WARN")
                 .Select(x => x.Message)
-                .Where(x => x.Contains(ArchiveTask.NoResponseHintText, StringComparison.Ordinal))
+                .Where(x => x.Contains(StatusText.LongTimeNoResponse, StringComparison.Ordinal))
                 .ToArray();
 
             Assert.Single(warnings);
@@ -835,9 +835,9 @@ namespace ArchiveFixer.Tests
 
             var task = new ArchiveTask(@"C:\samples\a.7z") { Status = StatusText.Extracting };
             task.ApplyProgress(12, "x.bin");
-            task.ResponsivenessHint = ArchiveTask.NoResponseHintText;
+            task.ResponsivenessHint = StatusText.LongTimeNoResponse;
 
-            Assert.Equal($"{StatusText.Extracting} 12% · {ArchiveTask.NoResponseHintText}", task.StatusDisplayText);
+            Assert.Equal($"{StatusText.Extracting} 12% · {StatusText.LongTimeNoResponse}", task.StatusDisplayText);
         }
 
         // ================================================================ 装配

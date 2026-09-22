@@ -244,12 +244,29 @@ namespace ArchiveFixer.Extraction
         /// 这时只处理 <see cref="RecursionDecisionRequest.CandidateArchives"/> 里那几个归档，
         /// **不重新全盘扫描** —— 用户看到的候选清单可能已经被别的东西改过，重扫等于偷偷扩大范围。
         /// </param>
+        /// <param name="progress">
+        /// 进度接收端（可空）。**直接转发给引擎**（写进每层的 <see cref="ArchiveRequest.Progress"/>），
+        /// 节流由引擎层的 <see cref="ArchiveProgressReporter"/> 负责 —— 递归核心**不自己再节流一次**，
+        /// 也不自己造一套进度类型（AGENTS.md §3.1：统一进度只有 <see cref="ArchiveProgress"/> 一个）。
+        ///
+        /// <para>
+        /// 为什么补这个口子（2026-09-22）：递归内层包过去完全没挂进度，界面上那一段是"处理中"死等，
+        /// 而递归恰恰是最容易久的一段（一层套一层）。挂上之后每层的百分比 / 当前条目都会照常上报，
+        /// 于是"当前解的是哪一层里的哪个文件"用户看得见。
+        /// </para>
+        /// </param>
+        /// <param name="stalled">
+        /// "长时间没有任何引擎输出"的通知（可空，默认阈值 90 秒）。与 <paramref name="progress"/> 同一个口径：
+        /// 只提示、不杀进程，由上层决定怎么显示（不变量 9）。
+        /// </param>
         public async Task<RecursionResult> ExtractAsync(
             ArchiveTask task,
             string finalOutputDirectory,
             RecursionMode mode,
             RecursionDecisionRequest? previousDecision = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            IProgress<ArchiveProgress>? progress = null,
+            Action<ArchiveStallNotice>? stalled = null)
         {
             var layers = new List<RecursionLayerReport>();
             var stopReason = RecursionStopReason.None;
@@ -352,7 +369,7 @@ namespace ArchiveFixer.Extraction
                         break;
                     }
 
-                    LayerOutcome outcome = await ExtractLayerAsync(item, cancellationToken)
+                    LayerOutcome outcome = await ExtractLayerAsync(item, cancellationToken, progress, stalled)
                         .ConfigureAwait(false);
 
                     if (outcome.Report != null)
@@ -454,9 +471,16 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 解一层：逐个密码候选试，直到成功或确定停因。
         /// </summary>
+        /// <param name="progress">
+        /// 进度接收端（可空）：原样挂到本层每一次引擎调用上。
+        /// ⚠ 一次"解一层"可能真的跑好几遍引擎（每个密码候选一次），进度因此会**从 0 重新开始** ——
+        /// 这是如实反映（上一遍确实白跑了），上层按"进度回退 = 新的一轮"处理（见 TaskProgressSink）。
+        /// </param>
         private async Task<LayerOutcome> ExtractLayerAsync(
             WorkItem item,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            IProgress<ArchiveProgress>? progress = null,
+            Action<ArchiveStallNotice>? stalled = null)
         {
             var options = new ExtractOptions
             {
@@ -515,7 +539,17 @@ namespace ArchiveFixer.Extraction
                         {
                             ArchivePath = item.ArchivePath,
                             OutputPath = item.Layer.OutputPath,
-                            Password = candidate
+                            Password = candidate,
+
+                            /*
+                             * 进度与"长时间无响应"提示（2026-09-22 补，本批之前递归内层完全没有进度）。
+                             *
+                             * 只**转发**，不在这里做任何加工：节流在引擎层（ArchiveProgressReporter，
+                             * 最多 250ms 一条），落地在协调器的 TaskProgressSink。
+                             * 参数为 null 时引擎侧一个字都不报 —— 既有调用点（测试、CLI 式用法）行为不变。
+                             */
+                            Progress = progress,
+                            Stalled = stalled
                         },
                         options,
                         cancellationToken)

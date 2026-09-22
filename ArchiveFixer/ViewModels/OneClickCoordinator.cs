@@ -1,6 +1,7 @@
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using ArchiveFixer.Views;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -33,6 +34,52 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>一行汇总（已经写进日志，GUI 用它弹提示）。</summary>
         public string Summary { get; init; } = string.Empty;
+    }
+
+    /// <summary>
+    /// 「本次选项」面板的询问结果（规格 <c>docs/输出与整理模型.md</c> §9）。
+    ///
+    /// <para>
+    /// 为什么要区分"没弹"和"用户取消"：两者的正确行为**相反** ——
+    /// 没弹（无 UI 宿主 / 勾过"不再询问"）要"按设置走、继续跑"；
+    /// 用户明确取消则**这一次不许开跑**。把它们都压成 <c>null</c> 就会出现
+    /// "用户在面板上点了取消，结果整批照跑"这种最不该有的形态。
+    /// </para>
+    /// </summary>
+    internal enum OneClickOptionsOutcome
+    {
+        /// <summary>没弹面板：无 UI 宿主，或本次运行里已经勾过"以后不再询问"。**按设置走，继续跑**。</summary>
+        NotShown = 0,
+
+        /// <summary>用户确认了本次选项。</summary>
+        Confirmed = 1,
+
+        /// <summary>用户取消（点「取消」或直接关掉面板）。**这一次一键处理不执行**。</summary>
+        Cancelled = 2
+    }
+
+    /// <summary>一次「本次选项」询问的结果：结论 + （确认时的）快照。</summary>
+    internal readonly struct OneClickOptionsPrompt
+    {
+        private OneClickOptionsPrompt(OneClickOptionsOutcome outcome, OneClickRunOptions? options)
+        {
+            Outcome = outcome;
+            Options = options;
+        }
+
+        public OneClickOptionsOutcome Outcome { get; }
+
+        /// <summary>只有 <see cref="OneClickOptionsOutcome.Confirmed"/> 时非 null。</summary>
+        public OneClickRunOptions? Options { get; }
+
+        public static OneClickOptionsPrompt NotShown() =>
+            new(OneClickOptionsOutcome.NotShown, null);
+
+        public static OneClickOptionsPrompt Confirmed(OneClickRunOptions options) =>
+            new(OneClickOptionsOutcome.Confirmed, options);
+
+        public static OneClickOptionsPrompt Cancelled() =>
+            new(OneClickOptionsOutcome.Cancelled, null);
     }
 
     /// <summary>
@@ -95,6 +142,29 @@ namespace ArchiveFixer.ViewModels
         private readonly ExtractionCoordinator _extractionCoordinator;
         private readonly DialogService _dialogService;
 
+        /// <summary>
+        /// 本次运行里用户勾过「以后不再询问」——之后的一键处理直接按设置走，不再弹面板。
+        ///
+        /// <para>
+        /// 刻意**只存内存、不落盘**：<c>Models/AppSettings.cs</c> 不在本次授权文件清单里，
+        /// 没地方持久化它。功能上也不亏 —— 勾上之后的行为就是"按设置走"，那本来就是默认行为，
+        /// 下次启动重新弹一次面板只是多一次确认（而不是少一个能力）。
+        /// </para>
+        /// </summary>
+        private bool _suppressOptionsPanel;
+
+        /// <summary>
+        /// 「本次选项」面板的询问入口（**可注入**；默认 = 真窗口 <c>Views/OneClickOptionsWindow</c>）。
+        ///
+        /// <para>
+        /// 为什么必须留这个注入点：无 UI 宿主（单元测试 / 控制台宿主）下面板根本不弹，
+        /// 于是"不勾「存为默认」时设置文件一个字节都不改"（规格 §9.2 硬要求②）
+        /// 这条**永远走不到**，也就永远无法被证明。注入一个假面板之后，
+        /// 两条分支（勾 / 不勾）都能在测试里跑到，并且能对着真实的设置文件断言。
+        /// </para>
+        /// </summary>
+        internal Func<OneClickRunOptions, OneClickOptionsPrompt>? OptionsPromptOverride { get; set; }
+
         public OneClickCoordinator(
             MainViewModel vm,
             ScanCoordinator scanCoordinator,
@@ -107,6 +177,29 @@ namespace ArchiveFixer.ViewModels
             _renameCoordinator = renameCoordinator;
             _extractionCoordinator = extractionCoordinator;
             _dialogService = dialogService;
+        }
+
+        /// <summary>
+        /// 问一次本次选项（**一次一键处理只问一次**，规格 §9.2 硬要求③）。
+        ///
+        /// <para>
+        /// 之所以能"只问一次"，是因为这个方法是**整条一键处理流水线上唯一**的询问点：
+        /// 续解的第 2/3 轮复用同一个快照，不重新问（50–200 个包的场景下逐个问等于不可用，决策 D-4）。
+        /// </para>
+        /// </summary>
+        private OneClickOptionsPrompt AskRunOptionsOnce(OneClickRunOptions seed)
+        {
+            if (OptionsPromptOverride != null)
+            {
+                return OptionsPromptOverride(seed);
+            }
+
+            if (_suppressOptionsPanel)
+            {
+                return OneClickOptionsPrompt.NotShown();
+            }
+
+            return OneClickOptionsWindow.Show(seed, Settings);
         }
 
         private ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
@@ -175,7 +268,63 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                OneClickOutcome outcome = await RunPipelineAsync(targets);
+                /*
+                 * ===== 「本次选项」面板：一次一键处理**只弹一次**（规格 §9，硬要求③）=====
+                 *
+                 * 位置：选完任务、进入忙碌之前 —— 用户这时还没开始跑，取消一次什么代价都没有。
+                 * 后面整条流水线（含续解的第 2/3 轮）用的都是问出来的这**一个快照**，不会每个包问一次。
+                 *
+                 * 三条分支各有明确行为（规格 §9.2 硬要求②/④/⑤）：
+                 * · Confirmed  → 用面板的值；勾了「存为默认」才写设置，没勾就一个字节都不改；
+                 * · NotShown   → 无 UI 宿主 / 本次运行里勾过「不再询问」：不弹窗、不死等，直接按设置走；
+                 * · Cancelled  → 用户明确取消这一次，不许"照跑不误"。
+                 */
+                OneClickOptionsPrompt prompt = AskRunOptionsOnce(
+                    OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory));
+
+                OneClickRunOptions? runOptions = null;
+
+                if (prompt.Outcome == OneClickOptionsOutcome.Cancelled)
+                {
+                    /*
+                     * 面板上点「取消」= 这一次不跑。
+                     * 只写日志、**不再弹一个"已取消"的提示框**：用户刚刚才在面板上点过取消，
+                     * 再弹一次等于把"取消"变成"两步操作"。
+                     */
+                    AppendLog("INFO", "一键处理已取消（本次选项面板没有确认，什么都没做）。");
+                    return;
+                }
+
+                if (prompt.Outcome == OneClickOptionsOutcome.Confirmed && prompt.Options != null)
+                {
+                    runOptions = prompt.Options;
+
+                    if (runOptions.SuppressPanelNextTime)
+                    {
+                        _suppressOptionsPanel = true;
+                        AppendLog("INFO", "本次选项：以后不再询问（只对本次运行有效，没写进设置文件）。");
+                    }
+
+                    /*
+                     * 「把本次选择存为默认」是**唯一**允许写 appsettings.json 的分支（硬要求②）。
+                     * 写设置这件事只发生在用户显式勾选之后 —— 没勾时这条路上没有任何写盘代码。
+                     */
+                    if (runOptions.SaveAsDefault)
+                    {
+                        _vm.SaveOneClickOptionsAsDefaults(runOptions);
+                        AppendLog("INFO", $"本次选项已存为默认（写入设置）：{runOptions.Describe()}");
+                    }
+                }
+                else
+                {
+                    // 没弹面板（无 UI 宿主 / 已勾「不再询问」）：行为与加面板之前**完全一致**（硬要求⑤）。
+                    AppendLog(
+                        "INFO",
+                        "一键处理：没有本次选项面板（无界面宿主，或已勾「以后不再询问」），本次按设置走：" +
+                        OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory).Describe());
+                }
+
+                OneClickOutcome outcome = await RunPipelineAsync(targets, runOptions);
 
                 _dialogService.ShowInfo(outcome.Summary);
             }
@@ -200,7 +349,18 @@ namespace ArchiveFixer.ViewModels
         /// 为什么要单独一个入口：GUI 的 MessageBox 会真的弹出来（自动测试里没人点，就挂在那里了），
         /// 把"跑流程"和"弹窗"分开，流程本身才测得动。
         /// </summary>
-        internal async Task<OneClickOutcome> RunPipelineAsync(IReadOnlyList<ArchiveTask> firstRoundTargets)
+        /// <param name="runOptions">
+        /// 本次选项快照（规格 §9；null = 按设置走）。
+        ///
+        /// <para>
+        /// ⚠ 它必须**一路传到最后一轮**：盘问只在 <see cref="RunAsync"/> 里做一次，
+        /// 续解的第 2/3 轮、以及链结束后的源包补搬都用同一个快照 —— 中途重新问一次
+        /// 或者中途退回设置值，都会让"这一次选的落点"在链的后半段静默变掉。
+        /// </para>
+        /// </param>
+        internal async Task<OneClickOutcome> RunPipelineAsync(
+            IReadOnlyList<ArchiveTask> firstRoundTargets,
+            OneClickRunOptions? runOptions = null)
         {
             AppendLog("INFO", $"一键处理开始，共 {firstRoundTargets.Count} 个任务。");
 
@@ -277,7 +437,7 @@ namespace ArchiveFixer.ViewModels
                     // （默认移入其余物，决策 D-9/D-11/D-12）。手动「只解压」按钮走的
                     // StartExtractAsync 是地基路径，永远不动源包 —— 两者只在这一件事上不同。
                     AppendLog("INFO", round == 1 ? "一键处理：开始解压。" : $"一键处理：第 {round} 层开始解压。");
-                    await _extractionCoordinator.StartExtractForOneClickAsync();
+                    await _extractionCoordinator.StartExtractForOneClickAsync(runOptions);
 
                     UpdateSummary();
 
@@ -384,7 +544,12 @@ namespace ArchiveFixer.ViewModels
              * · 撞到轮数上限：更深的包还没解，内容物可能不全，不能在此时把源包搬走。
              * 两种情况都写 WARN 说明原因，绝不静默。
              */
-            await CompleteRootSourcePackagesAsync(firstRoundTargets, processed, stopped || stopRequested, hitRoundLimit);
+            await CompleteRootSourcePackagesAsync(
+                firstRoundTargets,
+                processed,
+                stopped || stopRequested,
+                hitRoundLimit,
+                runOptions);
 
             string summary = BuildSummaryLine(processed, stopped, continuationLayers, hitRoundLimit);
 
@@ -416,7 +581,8 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyList<ArchiveTask> rootTasks,
             IReadOnlyList<ArchiveTask> chainTasks,
             bool stopped,
-            bool hitRoundLimit)
+            bool hitRoundLimit,
+            OneClickRunOptions? runOptions = null)
         {
             int pending = rootTasks.Count(task => task.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd);
 
@@ -446,7 +612,11 @@ namespace ArchiveFixer.ViewModels
                 "INFO",
                 $"一键处理：续解链已结束，对 {pending} 个「本轮没有内容物」的最外层源包做一次补搬（按源包处理档位）。");
 
-            await _extractionCoordinator.CompleteRootSourcePackagesAfterChainAsync(rootTasks, chainTasks);
+            await _extractionCoordinator.CompleteRootSourcePackagesAfterChainAsync(
+                rootTasks,
+                chainTasks,
+                cancellationToken: default,
+                runOptions);
         }
 
         /// <summary>
