@@ -7,11 +7,11 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 过程物命名与归置规则的测试（docs/输出与整理模型.md §3.2 / 需求变更 R6）。
+    /// 其余物命名与归置规则的测试（docs/输出与整理模型.md §3.2 / 需求变更 R6）。
     ///
     /// 两条主线：
-    /// ① **命名只有一个来源** —— 过程物目录名只能来自 <see cref="ProcessArtifactLayout.ArtifactDirectoryName"/>，
-    ///    落点只能是 <c>D\过程物\…</c>；
+    /// ① **命名只有一个来源** —— 其余物目录名只能来自 <see cref="ProcessArtifactLayout.ArtifactDirectoryName"/>，
+    ///    落点只能是 <c>D\其余物\…</c>；
     /// ② <see cref="ProcessArtifactLayout.Plan"/> 是**纯规划**：只算"从哪搬到哪"，
     ///    不建目录、不移动、不删除、不覆盖 —— 每个用例都顺手断言这一点。
     ///
@@ -82,17 +82,17 @@ namespace ArchiveFixer.Tests
         // ---------- 命名常量与解析 ----------
 
         [Fact]
-        public void 过程物目录名_就是规格里的过程物()
+        public void 其余物目录名_就是规格里的其余物()
         {
-            Assert.Equal("过程物", ProcessArtifactLayout.ArtifactDirectoryName);
+            Assert.Equal("其余物", ProcessArtifactLayout.ArtifactDirectoryName);
         }
 
         [Fact]
-        public void 解析_过程物目录位于目标目录之下()
+        public void 解析_其余物目录位于目标目录之下()
         {
             Assert.Equal(ArtifactDirectory, ProcessArtifactLayout.ResolveArtifactDirectory(_root));
             Assert.Equal(
-                "过程物",
+                "其余物",
                 Path.GetFileName(ProcessArtifactLayout.ResolveArtifactDirectory(_root)));
         }
 
@@ -123,7 +123,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal("内层分卷", move.Reason);
             Assert.False(move.Renamed);
 
-            // 只规划：源还在原地，过程物目录也没被建出来。
+            // 只规划：源还在原地，其余物目录也没被建出来。
             Assert.True(File.Exists(source));
             Assert.False(Directory.Exists(ArtifactDirectory));
         }
@@ -154,7 +154,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_目标位置已有同名时也不覆盖()
         {
-            string existing = WriteFile(@"过程物\a.txt", "EXISTING");
+            string existing = WriteFile(@"其余物\a.txt", "EXISTING");
             string source = WriteFile(@"src\a.txt", "NEW");
 
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(Request(
@@ -175,7 +175,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_源是目录时重名整名加序号不拆扩展名()
         {
-            string existing = MakeDirectory(@"过程物\v1.2");
+            string existing = MakeDirectory(@"其余物\v1.2");
             string source = MakeDirectory(@"src\v1.2");
 
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(Request(
@@ -195,7 +195,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_批内序号与磁盘上已有名字都不会撞()
         {
-            WriteFile(@"过程物\pack(1).7z", "EXISTING");
+            WriteFile(@"其余物\pack(1).7z", "EXISTING");
             string first = WriteFile(@"a\pack.7z", "A");
             string second = WriteFile(@"b\pack.7z", "B");
             string third = WriteFile(@"c\pack.7z", "C");
@@ -211,7 +211,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(Path.Combine(ArtifactDirectory, "pack.7z"), plan.Moves[0].TargetPath);
             Assert.Equal(Path.Combine(ArtifactDirectory, "pack(2).7z"), plan.Moves[1].TargetPath);
             Assert.Equal(Path.Combine(ArtifactDirectory, "pack(3).7z"), plan.Moves[2].TargetPath);
-            Assert.Equal("EXISTING", File.ReadAllText(PathOf(@"过程物\pack(1).7z")));
+            Assert.Equal("EXISTING", File.ReadAllText(PathOf(@"其余物\pack(1).7z")));
         }
 
         // ---------- 纯规划：相对路径推算 ----------
@@ -324,9 +324,9 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 规划_源已经在过程物目录里时跳过()
+        public void 规划_源已经在其余物目录里时跳过()
         {
-            string source = WriteFile(@"过程物\inner\pack.7z", "P");
+            string source = WriteFile(@"其余物\inner\pack.7z", "P");
 
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(Request(
                 _root,
@@ -342,7 +342,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_目标落在源内部时跳过()
         {
-            // 源就是目标目录本身：把 D 搬进 D\过程物 会自己套自己。
+            // 源就是目标目录本身：把 D 搬进 D\其余物 会自己套自己。
             ArtifactMovePlan plan = ProcessArtifactLayout.Plan(Request(
                 _root,
                 string.Empty,
@@ -421,7 +421,7 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(2, plan.Moves.Count);
 
-            // 源一个都没动，过程物目录也没有被创建 —— 执行是调用方的事。
+            // 源一个都没动，其余物目录也没有被创建 —— 执行是调用方的事。
             Assert.True(File.Exists(first));
             Assert.True(File.Exists(second));
             Assert.False(Directory.Exists(ArtifactDirectory));
@@ -430,7 +430,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 规划_说明里报出改名与跳过数量()
         {
-            WriteFile(@"过程物\pack.7z", "EXISTING");
+            WriteFile(@"其余物\pack.7z", "EXISTING");
             string source = WriteFile(@"a\pack.7z", "A");
             string escaping = WriteFile(@"b\x.txt", "X");
 

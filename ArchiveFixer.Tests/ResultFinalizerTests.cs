@@ -7,7 +7,7 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 定稿布局规划的纯逻辑测试（规格 §3.1 判定表 + §3.2 过程物集中 + §3.3 批量场景）。
+    /// 定稿布局规划的纯逻辑测试（规格 §3.1 判定表 + §3.2 其余物集中 + §3.3 批量场景）。
     ///
     /// <para>
     /// 全部用 <see cref="StagedEntry"/> 假路径构造，**不碰真实文件系统**（规划本来就不该碰）。
@@ -34,7 +34,7 @@ namespace ArchiveFixer.Tests
             return new StagedEntry { RelativePath = relativePath, Size = size, IsProcessArtifact = true };
         }
 
-        /// <summary>默认：暂存树里 <c>out\</c> 是内容物，别的都是过程物。</summary>
+        /// <summary>默认：暂存树里 <c>out\</c> 是内容物，别的都是其余物。</summary>
         private static FinalizePlan Plan(params StagedEntry[] entries)
         {
             return ResultFinalizer.Plan(entries, Dest, stagingRoot: Staging, contentRoot: "out");
@@ -161,11 +161,11 @@ namespace ArchiveFixer.Tests
                 File(@"out\999\b.mp4"));
 
             Assert.Equal(2, plan.ProcessArtifactMoves.Count);
-            Assert.Equal(@"C:\out\222\过程物\out\empty1", plan.ProcessArtifactMoves[0].To);
-            Assert.Equal(@"C:\out\222\过程物\out\empty2", plan.ProcessArtifactMoves[1].To);
+            Assert.Equal(@"C:\out\222\其余物\out\empty1", plan.ProcessArtifactMoves[0].To);
+            Assert.Equal(@"C:\out\222\其余物\out\empty2", plan.ProcessArtifactMoves[1].To);
 
-            // 过程物绝不与内容物同层：一个在 过程物\ 下，一个在 999\ 下。
-            Assert.Equal(@"C:\out\222\过程物", plan.ProcessArtifactDirectory);
+            // 其余物绝不与内容物同层：一个在 其余物\ 下，一个在 999\ 下。
+            Assert.Equal(@"C:\out\222\其余物", plan.ProcessArtifactDirectory);
         }
 
         // ── 判定表 4：单链 → 塌缩为最深层那个文件夹名 ──────────────────────────
@@ -270,7 +270,7 @@ namespace ArchiveFixer.Tests
         public void Plan_ContentRootNestedDeeper_DoesNotSweepItsAncestorsIntoProcessArtifacts()
         {
             // 暂存区常见两级结构：<stage>\out。内容物根指到 out 上时，stage 只是路径容器，
-            // 绝不能把 stage 整棵当过程物搬走（那会连内容物一起搬）。
+            // 绝不能把 stage 整棵当其余物搬走（那会连内容物一起搬）。
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { File(@"stage\out\666\a.mp4", 10), File(@"stage\out\666\b.mp4", 20) },
                 Dest,
@@ -304,7 +304,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void Plan_MarkedStagingAreaWithContentRootInside_KeepsContentOut()
         {
-            // "把 stage 整个标成过程物、又把内容物根指到 stage\out"：内容物根的祖先标记不外溢。
+            // "把 stage 整个标成其余物、又把内容物根指到 stage\out"：内容物根的祖先标记不外溢。
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[]
                 {
@@ -321,16 +321,16 @@ namespace ArchiveFixer.Tests
             Assert.Equal(2, plan.Moves.Count);
             Assert.Equal((@"C:\work\t1\stage\out\666", @"C:\out\222\666"), (plan.Moves[0].From, plan.Moves[0].To));
             Assert.Equal(
-                (@"C:\work\t1\stage\volumes", @"C:\out\222\过程物\stage\volumes"),
+                (@"C:\work\t1\stage\volumes", @"C:\out\222\其余物\stage\volumes"),
                 (plan.ProcessArtifactMoves[0].From, plan.ProcessArtifactMoves[0].To));
         }
 
-        // ── 决策 D-2：模式 B 的过程物要按包基名隔离 ────────────────────────────
+        // ── 决策 D-2：模式 B 的其余物要按包基名隔离 ────────────────────────────
 
         [Fact]
         public void Plan_SourceDirectoryFlat_NestsProcessArtifactsUnderArchiveName()
         {
-            // 当前目录模式：一个源目录里几十上百个包共用它 → 过程物必须按包名隔离。
+            // 当前目录模式：一个源目录里几十上百个包共用它 → 其余物必须按包名隔离。
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { File(@"out\666\a.mp4"), Artifact(@"inner.7z", 10) },
                 @"C:\111",
@@ -340,9 +340,9 @@ namespace ArchiveFixer.Tests
                 Staging,
                 OutputPlacementMode.SourceDirectoryFlat);
 
-            Assert.Equal(@"C:\111\过程物\222", plan.ProcessArtifactDirectory);
+            Assert.Equal(@"C:\111\其余物\222", plan.ProcessArtifactDirectory);
             Assert.Equal(
-                (@"C:\work\t1\inner.7z", @"C:\111\过程物\222\inner.7z"),
+                (@"C:\work\t1\inner.7z", @"C:\111\其余物\222\inner.7z"),
                 (plan.ProcessArtifactMoves[0].From, plan.ProcessArtifactMoves[0].To));
         }
 
@@ -359,8 +359,8 @@ namespace ArchiveFixer.Tests
                 Staging,
                 OutputPlacementMode.PerArchiveSubfolder);
 
-            Assert.Equal(@"C:\out\222\过程物", plan.ProcessArtifactDirectory);
-            Assert.Equal(@"C:\out\222\过程物\inner.7z", plan.ProcessArtifactMoves[0].To);
+            Assert.Equal(@"C:\out\222\其余物", plan.ProcessArtifactDirectory);
+            Assert.Equal(@"C:\out\222\其余物\inner.7z", plan.ProcessArtifactMoves[0].To);
         }
 
         [Fact]
@@ -373,11 +373,11 @@ namespace ArchiveFixer.Tests
                 contentRoot: "out",
                 placementMode: OutputPlacementMode.SourceDirectoryFlat);
 
-            Assert.Equal(@"C:\111\过程物", plan.ProcessArtifactDirectory);
-            Assert.Contains(plan.Warnings, warning => warning.Contains("过程物"));
+            Assert.Equal(@"C:\111\其余物", plan.ProcessArtifactDirectory);
+            Assert.Contains(plan.Warnings, warning => warning.Contains("其余物"));
         }
 
-        // ── §3.2 过程物集中 ───────────────────────────────────────────────────
+        // ── §3.2 其余物集中 ───────────────────────────────────────────────────
 
         [Fact]
         public void Plan_ProcessArtifacts_AreCollectedUnderOneFolderKeepingStructure()
@@ -388,30 +388,30 @@ namespace ArchiveFixer.Tests
                 Artifact(@"volumes\222.7z.001", 20),
                 Artifact(@"volumes\222.7z.002", 20));
 
-            Assert.Equal(@"C:\out\222\过程物", plan.ProcessArtifactDirectory);
+            Assert.Equal(@"C:\out\222\其余物", plan.ProcessArtifactDirectory);
             Assert.Equal(2, plan.ProcessArtifactMoves.Count);
             Assert.Equal(
-                (@"C:\work\t1\inner.7z", @"C:\out\222\过程物\inner.7z"),
+                (@"C:\work\t1\inner.7z", @"C:\out\222\其余物\inner.7z"),
                 (plan.ProcessArtifactMoves[0].From, plan.ProcessArtifactMoves[0].To));
 
-            // 分卷那一组保持自己的相对结构：整目录搬，不在过程物里摊平。
+            // 分卷那一组保持自己的相对结构：整目录搬，不在其余物里摊平。
             Assert.Equal(
-                (@"C:\work\t1\volumes", @"C:\out\222\过程物\volumes"),
+                (@"C:\work\t1\volumes", @"C:\out\222\其余物\volumes"),
                 (plan.ProcessArtifactMoves[1].From, plan.ProcessArtifactMoves[1].To));
 
             Assert.Equal(50, plan.ProcessArtifactTotalSize);
-            Assert.All(plan.ProcessArtifactMoves, m => Assert.StartsWith(@"C:\out\222\过程物", m.To));
+            Assert.All(plan.ProcessArtifactMoves, m => Assert.StartsWith(@"C:\out\222\其余物", m.To));
         }
 
         [Fact]
         public void Plan_ContentRootOutsideEntries_AreTreatedAsProcessArtifacts()
         {
-            // 不显式标也行：内容物根（out）之外的一切都算过程物。
+            // 不显式标也行：内容物根（out）之外的一切都算其余物。
             FinalizePlan plan = Plan(File(@"out\666\a.mp4"), File(@"carved\inner.7z", 7), File(@"volumes\222.7z.001", 8));
 
             Assert.Equal(2, plan.ProcessArtifactMoves.Count);
-            Assert.Equal(@"C:\out\222\过程物\carved", plan.ProcessArtifactMoves[0].To);
-            Assert.Equal(@"C:\out\222\过程物\volumes", plan.ProcessArtifactMoves[1].To);
+            Assert.Equal(@"C:\out\222\其余物\carved", plan.ProcessArtifactMoves[0].To);
+            Assert.Equal(@"C:\out\222\其余物\volumes", plan.ProcessArtifactMoves[1].To);
             Assert.Equal(15, plan.ProcessArtifactTotalSize);
         }
 
@@ -425,11 +425,11 @@ namespace ArchiveFixer.Tests
 
             // 计划内顺序是稳定的（按暂存相对路径序数排序）：'*' < '?'，所以 e* 在前。
             Assert.Equal(
-                (@"C:\work\t1\out\e*", @"C:\out\222\过程物\out\e_"),
+                (@"C:\work\t1\out\e*", @"C:\out\222\其余物\out\e_"),
                 (plan.ProcessArtifactMoves[0].From, plan.ProcessArtifactMoves[0].To));
 
             Assert.Equal(
-                (@"C:\work\t1\out\e?", @"C:\out\222\过程物\out\e_(1)"),
+                (@"C:\work\t1\out\e?", @"C:\out\222\其余物\out\e_(1)"),
                 (plan.ProcessArtifactMoves[1].From, plan.ProcessArtifactMoves[1].To));
         }
 
@@ -446,11 +446,11 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void Plan_ContentFolderNamedProcessArtifact_MovesArtifactsAsideInstead()
         {
-            FinalizePlan plan = Plan(File(@"out\过程物\a.mp4"), Artifact(@"carved\inner.7z", 10));
+            FinalizePlan plan = Plan(File(@"out\其余物\a.mp4"), Artifact(@"carved\inner.7z", 10));
 
-            Assert.Equal(@"C:\out\222\过程物", plan.ContentParentDirectory);
-            Assert.Equal(@"C:\out\222\过程物(1)", plan.ProcessArtifactDirectory);
-            Assert.Equal(@"C:\out\222\过程物(1)\carved", plan.ProcessArtifactMoves[0].To);
+            Assert.Equal(@"C:\out\222\其余物", plan.ContentParentDirectory);
+            Assert.Equal(@"C:\out\222\其余物(1)", plan.ProcessArtifactDirectory);
+            Assert.Equal(@"C:\out\222\其余物(1)\carved", plan.ProcessArtifactMoves[0].To);
         }
 
         [Fact]
@@ -548,14 +548,14 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void Plan_OnlyEmptyFolders_IsProcessArtifactsOnly()
         {
-            // 只有纯空壳：内容物根整棵都算过程物，一次搬走。
+            // 只有纯空壳：内容物根整棵都算其余物，一次搬走。
             FinalizePlan plan = Plan(Dir(@"out\empty1"), Dir(@"out\empty2"));
 
             Assert.Equal(FinalizeLayoutKind.ProcessArtifactsOnly, plan.Layout);
             Assert.Empty(plan.ContentMoves);
             Assert.Single(plan.ProcessArtifactMoves);
             Assert.Equal(
-                (@"C:\work\t1\out", @"C:\out\222\过程物\out"),
+                (@"C:\work\t1\out", @"C:\out\222\其余物\out"),
                 (plan.ProcessArtifactMoves[0].From, plan.ProcessArtifactMoves[0].To));
         }
 
@@ -578,7 +578,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(FinalizeLayoutKind.ProcessArtifactsOnly, plan.Layout);
             Assert.Empty(plan.ContentMoves);
             Assert.Single(plan.ProcessArtifactMoves);
-            Assert.Equal(@"C:\out\222\过程物\other", plan.ProcessArtifactMoves[0].To);
+            Assert.Equal(@"C:\out\222\其余物\other", plan.ProcessArtifactMoves[0].To);
             Assert.Contains(plan.Warnings, warning => warning.Contains("找不到内容物根"));
         }
 

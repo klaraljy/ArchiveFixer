@@ -70,6 +70,19 @@ namespace ArchiveFixer.Tests
             return path;
         }
 
+        /// <summary>
+        /// 造一个"包有自己的输出目录"的任务（默认模式）：源包在别处，输出目录就是 <c>out</c>。
+        ///
+        /// 源包路径刻意放在 <c>src</c> 下 —— 源包不在输出目录里，判定就是"非共享目录"，
+        /// 这也是最普通、最该只删自己那一份的情形。
+        /// </summary>
+        private ArchiveTask OutputOnlyTask(string outputRelativePath)
+        {
+            string sourceArchive = WriteFile(@"src\111.rar", "rar");
+
+            return new ArchiveTask(sourceArchive) { OutputPath = PathOf(outputRelativePath) };
+        }
+
         // ================================================================ ① 终端落法
 
         [Fact]
@@ -345,49 +358,65 @@ namespace ArchiveFixer.Tests
                 pathService.BuildOutputPath(new ArchiveTask(other), options)));
         }
 
-        // ================================================================ ③ 清理入口（过程物）
+        // ================================================================ ③ 删除入口（其余物）
+
+        /// <summary>
+        /// 其余物目录名有两个合法来源：布局层给的规范名（<c>其余物</c>）
+        /// 与老版本留下的历史名（<c>过程物</c>）。测试用例统一用规范名建目录，
+        /// 于是**布局改名时这些用例跟着变**，不会各写一份字面量。
+        /// </summary>
+        private static string ArtifactName => ProcessArtifactLayout.ArtifactDirectoryName;
+
+        /// <summary>老版本留下的目录名：显式测"老名字也认"时用它。</summary>
+        private static string LegacyArtifactName => ProcessArtifactLayout.LegacyArtifactDirectoryName;
+
         [Fact]
-        public void 过程物预览_报顶层项数与总大小且不删任何东西()
+        public void 其余物预览_报顶层项数与总大小且不删任何东西()
         {
-            MakeDirectory(@"out\过程物\sub");
-            WriteFile(@"out\过程物\inner.7z.001", "12345");        // 5 字节
-            WriteFile(@"out\过程物\sub\middle.zip", "1234567890"); // 10 字节
+            MakeDirectory($@"out\{ArtifactName}\sub");
+            WriteFile($@"out\{ArtifactName}\inner.7z.001", "12345");        // 5 字节
+            WriteFile($@"out\{ArtifactName}\sub\middle.zip", "1234567890"); // 10 字节
 
             MaintenanceCleanupService service = CreateCleanupService(out _);
-            CleanupPreview preview = service.PreviewProcessArtifacts(PathOf("out"));
+            CleanupPreview preview = service.PreviewProcessArtifacts(OutputOnlyTask("out"));
 
             Assert.True(preview.HasTarget);
-            Assert.Equal(PathOf(@"out\过程物"), preview.ScopePath);
+            Assert.Equal(PathOf($@"out\{ArtifactName}"), preview.ScopePath);
             Assert.Equal(2, preview.ItemCount);
             Assert.Equal(15L, preview.TotalBytes);
             Assert.True(preview.Determined);
             Assert.Contains("inner.7z.001", preview.Items);
 
             // 预览不删除：目录还在，文件也还在。
-            Assert.True(Directory.Exists(PathOf(@"out\过程物")));
-            Assert.True(File.Exists(PathOf(@"out\过程物\inner.7z.001")));
+            Assert.True(Directory.Exists(PathOf($@"out\{ArtifactName}")));
+            Assert.True(File.Exists(PathOf($@"out\{ArtifactName}\inner.7z.001")));
         }
 
         [Fact]
-        public void 过程物预览_没有过程物目录时不进确认流程()
+        public void 其余物预览_没有其余物目录时不进确认流程()
         {
             MakeDirectory(@"out");
 
-            CleanupPreview preview = CreateCleanupService(out _).PreviewProcessArtifacts(PathOf("out"));
+            CleanupPreview preview = CreateCleanupService(out _).PreviewProcessArtifacts(OutputOnlyTask("out"));
 
             Assert.False(preview.HasTarget);
-            Assert.Contains("不存在", preview.Message, StringComparison.Ordinal);
+
+            // 文案只说"没有可删的"，不能让人以为路径算错了（路径就在最后）。
+            Assert.Contains("没有可删除的其余物", preview.Message, StringComparison.Ordinal);
+            Assert.Contains(ArtifactName, preview.Message, StringComparison.Ordinal);
         }
 
         [Fact]
-        public void 过程物执行_默认档走回收站并留下路径理由条目数总大小()
+        public void 其余物执行_默认档走回收站并留下路径理由条目数总大小()
         {
-            MakeDirectory(@"out\过程物\sub");
-            WriteFile(@"out\过程物\inner.7z.001", "12345");
-            WriteFile(@"out\过程物\sub\middle.zip", "1234567890");
+            MakeDirectory($@"out\{ArtifactName}\sub");
+            WriteFile($@"out\{ArtifactName}\inner.7z.001", "12345");
+            WriteFile($@"out\{ArtifactName}\sub\middle.zip", "1234567890");
 
             MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
-            CleanupOutcome outcome = service.CleanProcessArtifacts(PathOf("out"), DeleteMode.RecycleBin);
+            ArchiveTask task = OutputOnlyTask("out");
+            CleanupPreview preview = service.PreviewProcessArtifacts(task);
+            CleanupOutcome outcome = service.CleanProcessArtifacts(task, DeleteMode.RecycleBin, preview);
 
             Assert.True(outcome.Attempted);
             Assert.Equal(1, outcome.SuccessCount);
@@ -395,54 +424,380 @@ namespace ArchiveFixer.Tests
             Assert.Equal(15L, outcome.RecycledBytes);
             Assert.Equal(0L, outcome.FreedBytes);
             Assert.Empty(executor.PermanentCalls);
-            Assert.Equal(PathOf(@"out\过程物"), Assert.Single(executor.RecycleCalls));
-            Assert.False(Directory.Exists(PathOf(@"out\过程物")));
+            Assert.Equal(PathOf($@"out\{ArtifactName}"), Assert.Single(executor.RecycleCalls));
+            Assert.False(Directory.Exists(PathOf($@"out\{ArtifactName}")));
 
             // 日志四要素：路径 + 理由 + 条目数 + 总大小。
             string log = Assert.Single(outcome.LogLines);
-            Assert.Contains(PathOf(@"out\过程物"), log, StringComparison.Ordinal);
+            Assert.Contains(PathOf($@"out\{ArtifactName}"), log, StringComparison.Ordinal);
             Assert.Contains(MaintenanceCleanupService.ProcessArtifactReason, log, StringComparison.Ordinal);
             Assert.Contains("条目数=3", log, StringComparison.Ordinal);
             Assert.Contains("总大小=15 字节", log, StringComparison.Ordinal);
         }
 
         [Fact]
-        public void 过程物执行_激进档彻底删除并报释放字节数()
+        public void 其余物执行_激进档彻底删除并报释放字节数()
         {
-            MakeDirectory(@"out\过程物");
-            WriteFile(@"out\过程物\inner.7z.001", "12345");
+            MakeDirectory($@"out\{ArtifactName}");
+            WriteFile($@"out\{ArtifactName}\inner.7z.001", "12345");
 
             MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
-            CleanupOutcome outcome = service.CleanProcessArtifacts(PathOf("out"), DeleteMode.Permanent);
+            ArchiveTask task = OutputOnlyTask("out");
+            CleanupOutcome outcome = service.CleanProcessArtifacts(task, DeleteMode.Permanent);
 
             Assert.True(outcome.Attempted);
             Assert.Equal(1, outcome.SuccessCount);
             Assert.Equal(5L, outcome.FreedBytes);
             Assert.Equal(0L, outcome.RecycledBytes);
             Assert.Empty(executor.RecycleCalls);
-            Assert.Equal(PathOf(@"out\过程物"), Assert.Single(executor.PermanentCalls));
+            Assert.Equal(PathOf($@"out\{ArtifactName}"), Assert.Single(executor.PermanentCalls));
         }
 
         [Fact]
-        public void 过程物执行_回收站不可用时不降级为永久删除()
+        public void 其余物执行_回收站不可用时不降级为永久删除()
         {
-            MakeDirectory(@"out\过程物");
-            WriteFile(@"out\过程物\inner.7z.001", "12345");
+            MakeDirectory($@"out\{ArtifactName}");
+            WriteFile($@"out\{ArtifactName}\inner.7z.001", "12345");
 
             MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
             executor.RecycleResult = RecycleAttemptResult.Unavailable;
 
-            CleanupOutcome outcome = service.CleanProcessArtifacts(PathOf("out"), DeleteMode.RecycleBin);
+            CleanupOutcome outcome = service.CleanProcessArtifacts(OutputOnlyTask("out"), DeleteMode.RecycleBin);
 
             Assert.True(outcome.Attempted);
             Assert.Equal(0, outcome.SuccessCount);
             Assert.Equal(1, outcome.FailureCount);
             Assert.Empty(executor.PermanentCalls);
-            Assert.True(Directory.Exists(PathOf(@"out\过程物")), "拒绝删除时目标必须原样留在原处");
+            Assert.True(Directory.Exists(PathOf($@"out\{ArtifactName}")), "拒绝删除时目标必须原样留在原处");
             Assert.Contains(outcome.FailureReasons, reason => reason.Contains("回收站", StringComparison.Ordinal));
         }
 
-        // ================================================================ ④ 清理入口（空文件夹）
+        // ================================================================ ③-b 作用域收窄（本次修复的核心）
+
+        /// <summary>
+        /// 本次修复的**核心回归判据**（用户 2026-09-21 报的真实缺陷）：
+        /// 同一个共享输出目录下有 <c>其余物\222\</c> 与 <c>其余物\333\</c> 两份，
+        /// 只对 222 执行删除 → <b>333 那一份一个条目都不能被删</b>。
+        ///
+        /// <para>
+        /// 旧实现的作用域是 <c>&lt;任务输出目录&gt;\其余物</c>。模式 B（解压到当前目录）下所有任务的
+        /// 输出目录都是同一个（源目录），于是"只勾选 222 去清理"会连带清掉 333、444 的其余物。
+        /// </para>
+        /// <para>
+        /// 断言分三层，缺一不可：① 删除调用里只有 222 那一条路径；② 333 的目录与文件在磁盘上原样存在；
+        /// ③ 内容逐字未变（"没被删"不等于"没被动过"）。
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void 共享目录下只删本任务的其余物_333那一份一个条目都不动()
+        {
+            // 共享根 = 源目录（模式 B：输出目录就是源包所在目录）。
+            string sourceArchive = WriteFile(@"111\222.rar", "rar");
+            MakeDirectory($@"111\{ArtifactName}\222\volumes");
+            WriteFile($@"111\{ArtifactName}\222\volumes\222.7z.001", "222222");
+            WriteFile($@"111\{ArtifactName}\222\222.rar", "source-of-222");
+            MakeDirectory($@"111\{ArtifactName}\333");
+            WriteFile($@"111\{ArtifactName}\333\333.rar", "source-of-333");
+            WriteFile($@"111\{ArtifactName}\333\outer.7z.001", "333333");
+
+            // 只勾选 222：输出目录落在源目录里 → 共享模式。
+            var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
+
+            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
+            CleanupPreview preview = service.PreviewProcessArtifacts(task222);
+
+            Assert.True(preview.HasTarget);
+            Assert.Equal(PathOf($@"111\{ArtifactName}\222"), preview.ScopePath);
+            Assert.True(preview.ResolvedScope!.OutputDirectoryIsShared);
+            Assert.False(preview.ResolvedScope.DeletesEverythingInDirectory);
+
+            CleanupOutcome outcome = service.CleanProcessArtifacts(task222, DeleteMode.RecycleBin, preview);
+
+            Assert.True(outcome.Attempted);
+            Assert.Equal(1, outcome.SuccessCount);
+            Assert.Equal(0, outcome.FailureCount);
+
+            // ① 删除调用里只有 222 那一条路径：333 的目录名一次都没出现在删除请求里。
+            string recycled = Assert.Single(executor.RecycleCalls);
+            Assert.Equal(PathOf($@"111\{ArtifactName}\222"), recycled);
+            Assert.DoesNotContain(@"\333", recycled, StringComparison.Ordinal);
+            Assert.Empty(executor.PermanentCalls);
+
+            // ② 333 那一份原样存在。
+            Assert.False(Directory.Exists(PathOf($@"111\{ArtifactName}\222")));
+            Assert.True(Directory.Exists(PathOf($@"111\{ArtifactName}\333")));
+            Assert.True(File.Exists(PathOf($@"111\{ArtifactName}\333\333.rar")));
+            Assert.True(File.Exists(PathOf($@"111\{ArtifactName}\333\outer.7z.001")));
+
+            // ③ 内容逐字未变。
+            Assert.Equal("source-of-333", File.ReadAllText(PathOf($@"111\{ArtifactName}\333\333.rar")));
+            Assert.Equal("333333", File.ReadAllText(PathOf($@"111\{ArtifactName}\333\outer.7z.001")));
+
+            // 共享根自己（源目录）与它里面的别的包也不能被动。
+            Assert.True(Directory.Exists(PathOf("111")));
+            Assert.True(File.Exists(PathOf(@"111\222.rar")));
+        }
+
+        /// <summary>
+        /// 反面对着照：共享目录下**没有**本任务那一份时，绝不退到上一层去删整个其余物。
+        /// （这正是旧缺陷的形态："找不到窄的就去删宽的"。）
+        /// </summary>
+        [Fact]
+        public void 共享目录下没有本任务那一份时_拒绝删除而不是退到上一层()
+        {
+            string sourceArchive = WriteFile(@"111\222.rar", "rar");
+            MakeDirectory($@"111\{ArtifactName}\333");
+            WriteFile($@"111\{ArtifactName}\333\333.rar", "source-of-333");
+
+            var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
+
+            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
+            CleanupPreview preview = service.PreviewProcessArtifacts(task222);
+
+            Assert.False(preview.HasTarget);
+            Assert.Contains("已拒绝删除其余物", preview.Message, StringComparison.Ordinal);
+            Assert.Contains("只允许删本任务那一份", preview.Message, StringComparison.Ordinal);
+            Assert.Contains("不会退到上一层", preview.Message, StringComparison.Ordinal);
+
+            CleanupOutcome outcome = service.CleanProcessArtifacts(task222, DeleteMode.RecycleBin, preview);
+
+            Assert.False(outcome.Attempted);
+            Assert.Empty(executor.RecycleCalls);
+            Assert.Empty(executor.PermanentCalls);
+            Assert.True(Directory.Exists(PathOf($@"111\{ArtifactName}\333")));
+        }
+
+        /// <summary>
+        /// 老版本留下的 <c>过程物</c> 目录必须也能被删掉（不能变成清不掉的历史垃圾）；
+        /// 新版 <c>其余物</c> 与老版 <c>过程物</c> 同时存在时，两份都属于本任务，一起删。
+        /// </summary>
+        [Fact]
+        public void 老名字过程物也要能被删_与新名字同时存在时一起删()
+        {
+            string sourceArchive = WriteFile(@"111\222.rar", "rar");
+            MakeDirectory($@"111\{LegacyArtifactName}\222");
+            WriteFile($@"111\{LegacyArtifactName}\222\legacy.7z.001", "legacy");
+            MakeDirectory($@"111\{ArtifactName}\222");
+            WriteFile($@"111\{ArtifactName}\222\current.7z.001", "current");
+
+            var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
+
+            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
+            CleanupPreview preview = service.PreviewProcessArtifacts(task222);
+
+            Assert.True(preview.HasTarget);
+            Assert.Equal(2, preview.ResolvedScope!.ArtifactDirectories.Count);
+
+            CleanupOutcome outcome = service.CleanProcessArtifacts(task222, DeleteMode.RecycleBin, preview);
+
+            Assert.True(outcome.Attempted);
+            Assert.Equal(2, outcome.SuccessCount);
+            Assert.False(Directory.Exists(PathOf($@"111\{LegacyArtifactName}\222")));
+            Assert.False(Directory.Exists(PathOf($@"111\{ArtifactName}\222")));
+            Assert.Equal(2, executor.RecycleCalls.Count);
+        }
+
+        /// <summary>只有老名字存在时（升级上来的用户目录）照样能删干净。</summary>
+        [Fact]
+        public void 只有老名字过程物时也能删掉()
+        {
+            string sourceArchive = WriteFile(@"111\222.rar", "rar");
+            MakeDirectory($@"111\{LegacyArtifactName}\222");
+            WriteFile($@"111\{LegacyArtifactName}\222\legacy.7z.001", "legacy");
+
+            var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
+
+            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
+            CleanupPreview preview = service.PreviewProcessArtifacts(task222);
+
+            Assert.True(preview.HasTarget);
+            Assert.Equal(PathOf($@"111\{LegacyArtifactName}\222"), preview.ScopePath);
+
+            CleanupOutcome outcome = service.CleanProcessArtifacts(task222, DeleteMode.RecycleBin, preview);
+
+            Assert.True(outcome.Attempted);
+            Assert.Equal(1, outcome.SuccessCount);
+            Assert.False(Directory.Exists(PathOf($@"111\{LegacyArtifactName}\222")));
+        }
+
+        /// <summary>
+        /// 另一个包（333）自己那条删除路径必须只删 333：对称地证明收窄不是"碰巧只删了一个"。
+        /// </summary>
+        [Fact]
+        public void 共享目录下勾选333时只删333那一份()
+        {
+            string sourceArchive = WriteFile(@"111\333.rar", "rar");
+            MakeDirectory($@"111\{ArtifactName}\222");
+            WriteFile($@"111\{ArtifactName}\222\222.rar", "source-of-222");
+            MakeDirectory($@"111\{ArtifactName}\333");
+            WriteFile($@"111\{ArtifactName}\333\333.rar", "source-of-333");
+
+            var task333 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
+
+            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
+            CleanupPreview preview = service.PreviewProcessArtifacts(task333);
+            CleanupOutcome outcome = service.CleanProcessArtifacts(task333, DeleteMode.RecycleBin, preview);
+
+            Assert.True(outcome.Attempted);
+            Assert.Equal(PathOf($@"111\{ArtifactName}\333"), Assert.Single(executor.RecycleCalls));
+            Assert.True(File.Exists(PathOf($@"111\{ArtifactName}\222\222.rar")), "222 那一份一个条目都不能被删");
+        }
+
+        /// <summary>
+        /// 「删除本目录全部其余物」是**显式**入口：它才会覆盖整个共享目录（文案里写明影响范围）。
+        /// </summary>
+        [Fact]
+        public void 删除本目录全部其余物_才覆盖整个共享目录()
+        {
+            string sourceArchive = WriteFile(@"111\222.rar", "rar");
+            MakeDirectory($@"111\{ArtifactName}\222");
+            MakeDirectory($@"111\{ArtifactName}\333");
+
+            var task222 = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
+
+            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
+            CleanupPreview preview = service.PreviewProcessArtifacts(task222, ArtifactDeleteScope.EverythingInDirectory);
+
+            Assert.True(preview.HasTarget);
+            Assert.True(preview.ResolvedScope!.DeletesEverythingInDirectory);
+            Assert.Equal(PathOf($@"111\{ArtifactName}"), preview.ScopePath);
+
+            CleanupOutcome outcome = service.CleanProcessArtifacts(
+                task222,
+                DeleteMode.RecycleBin,
+                preview,
+                ArtifactDeleteScope.EverythingInDirectory);
+
+            Assert.True(outcome.Attempted);
+            Assert.Equal(1, outcome.SuccessCount);
+            Assert.Equal(PathOf($@"111\{ArtifactName}"), Assert.Single(executor.RecycleCalls));
+            Assert.Contains(MaintenanceCleanupService.AllArtifactsReason, Assert.Single(outcome.LogLines), StringComparison.Ordinal);
+        }
+
+        /// <summary>包有自己的输出目录（默认模式）时，其余物就在它自己的目录里，边界就是它。</summary>
+        [Fact]
+        public void 默认模式下只删任务自己目录里的其余物()
+        {
+            string sourceArchive = WriteFile(@"111\222.rar", "rar");
+            MakeDirectory($@"111\222\{ArtifactName}");
+            WriteFile($@"111\222\{ArtifactName}\inner.7z", "inner");
+            MakeDirectory($@"111\333\{ArtifactName}");
+            WriteFile($@"111\333\{ArtifactName}\other.7z", "other");
+
+            var task = new ArchiveTask(sourceArchive) { OutputPath = PathOf(@"111\222") };
+
+            MaintenanceCleanupService service = CreateCleanupService(out FakeDeleteExecutor executor);
+            CleanupPreview preview = service.PreviewProcessArtifacts(task);
+
+            Assert.True(preview.HasTarget);
+            Assert.False(preview.ResolvedScope!.OutputDirectoryIsShared);
+            Assert.Equal(PathOf($@"111\222\{ArtifactName}"), preview.ScopePath);
+
+            service.CleanProcessArtifacts(task, DeleteMode.RecycleBin, preview);
+
+            Assert.Equal(PathOf($@"111\222\{ArtifactName}"), Assert.Single(executor.RecycleCalls));
+            Assert.True(File.Exists(PathOf($@"111\333\{ArtifactName}\other.7z")), "别的包的其余物一个条目都不能被删");
+        }
+
+        /// <summary>
+        /// 预览里含源包（压缩包本身）时必须明确标出个数 —— 删掉它意味着要重新下载。
+        ///
+        /// <para>
+        /// 判据是"任务自己登记过的源文件"：内层归档与分卷（由源包生成、删了还能再解出来）
+        /// 不能被算成源包，否则警告天天误报。
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void 预览里含源包时明确标出个数()
+        {
+            string sourceArchive = WriteFile(@"111\222.rar", "source");
+            MakeDirectory($@"111\{ArtifactName}\222\volumes");
+            WriteFile($@"111\{ArtifactName}\222\inner.7z.001", "12345");
+
+            // 源包被移到其余物里（新布局），任务的 CurrentPath 仍然指着它原来那个位置。
+            File.Move(sourceArchive, PathOf($@"111\{ArtifactName}\222\222.rar"));
+
+            var task = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
+
+            CleanupPreview preview = CreateCleanupService(out _).PreviewProcessArtifacts(task);
+
+            Assert.True(preview.HasTarget);
+
+            // 只有任务登记过的 222.rar 算源包；同为顶层文件的内层 222.7z.001 不算（它由源包生成）。
+            Assert.Equal(1, preview.SourcePackageCount);
+            Assert.Contains("222.rar", preview.SourcePackageNames);
+            Assert.Contains("1 个源包文件", preview.Message, StringComparison.Ordinal);
+
+            string confirmText = MainViewModel.BuildCleanupConfirmText("删除其余物", preview, DeleteMode.RecycleBin);
+
+            Assert.Contains("含 1 个源包文件", confirmText, StringComparison.Ordinal);
+            Assert.Contains("需要重新下载", confirmText, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 任务没有任何源文件登记时退到扩展名兜底（例如任务来自更早的会话、清单已经拿不到）。
+        /// 兜底只在这种情况下生效：登记清单非空时**只认清单**，不再按扩展名猜 ——
+        /// 否则其余物里的内层归档天天被误报成"源包"。
+        /// </summary>
+        [Fact]
+        public void 没有登记源文件时按扩展名兜底认源包()
+        {
+            MakeDirectory($@"out\{ArtifactName}");
+            WriteFile($@"out\{ArtifactName}\222.rar", "source");
+            WriteFile($@"out\{ArtifactName}\readme.txt", "not-archive");
+
+            // 空任务：没有任何源文件登记（CurrentPath 为空）。
+            var task = new ArchiveTask { OutputPath = PathOf("out") };
+
+            CleanupPreview preview = CreateCleanupService(out _).PreviewProcessArtifacts(task);
+
+            Assert.True(preview.HasTarget);
+            Assert.Equal(1, preview.SourcePackageCount);
+            Assert.Contains("222.rar", preview.SourcePackageNames);
+        }
+
+        /// <summary>内层归档与分卷不是"源包"：它们由源包生成，删掉还能再解出来，不该被算进警告。</summary>
+        [Fact]
+        public void 预览里只有内层归档与分卷时不误报源包()
+        {
+            string sourceArchive = WriteFile(@"111\222.7z.001", "volume-1");
+            MakeDirectory($@"111\{ArtifactName}\222\volumes");
+            WriteFile($@"111\{ArtifactName}\222\inner.7z.001", "inner");
+
+            // 内层归档（由源包生成，删了还能再解出来）也要留在其余物里。
+            WriteFile($@"111\{ArtifactName}\222\volumes\carved.zip", "carved");
+
+            var task = new ArchiveTask(sourceArchive) { OutputPath = PathOf("111") };
+
+            CleanupPreview preview = CreateCleanupService(out _).PreviewProcessArtifacts(task);
+
+            Assert.True(preview.HasTarget);
+            Assert.Equal(0, preview.SourcePackageCount);
+            Assert.DoesNotContain("源包", preview.Message, StringComparison.Ordinal);
+        }
+
+        /// <summary>作用域解析拿不到可信边界时一律拒绝（删除不可逆：宁可不删，不可错删）。</summary>
+        [Theory]
+        [InlineData(null, null)]
+        [InlineData("", null)]
+        [InlineData("   ", null)]
+        public void 作用域解析_拿不到输出目录时拒绝(string? outputPath, string? sourcePath)
+        {
+            ArtifactCleanupScope scope = MaintenanceCleanupService.ResolveArtifactScope(outputPath, sourcePath);
+
+            Assert.False(scope.IsResolved);
+            Assert.Equal(string.Empty, scope.ArtifactDirectory);
+            Assert.False(string.IsNullOrWhiteSpace(scope.BlockReason));
+        }
+
+        [Fact]
+        public void 作用域解析_没有任务时拒绝()
+        {
+            ArtifactCleanupScope scope = MaintenanceCleanupService.ResolveArtifactScope((ArchiveTask?)null);
+
+            Assert.False(scope.IsResolved);
+            Assert.Contains("没有选中的任务", scope.BlockReason, StringComparison.Ordinal);
+        }
 
         [Fact]
         public void 空文件夹预览_只列任意层级都没有文件的子目录()
@@ -476,28 +831,40 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 清理作用域_过程物目录由ProcessArtifactLayout给出()
+        public void 清理作用域_其余物目录由ProcessArtifactLayout唯一来源给出()
         {
+            MakeDirectory($@"out\{ArtifactName}");
+
+            var task = OutputOnlyTask("out");
+
             Assert.Equal(
-                PathOf(@"out\过程物"),
-                MaintenanceCleanupService.ResolveProcessArtifactScope(PathOf("out")));
+                PathOf($@"out\{ArtifactName}"),
+                MaintenanceCleanupService.ResolveProcessArtifactScope(task));
+
+            // 布局层给的规范名 + 历史名，两个都要认（老目录不能清不掉）。
+            Assert.Equal("其余物", ProcessArtifactLayout.ArtifactDirectoryName);
+            Assert.Equal("过程物", ProcessArtifactLayout.LegacyArtifactDirectoryName);
+            Assert.Equal("其余物", MaintenanceCleanupService.ArtifactDirectoryName);
 
             Assert.Equal(string.Empty, MaintenanceCleanupService.ResolveProcessArtifactScope(null));
         }
 
         [Fact]
-        public void 作用域提醒_模式B下说清作用域与别的包共用()
+        public void 作用域提醒_共享模式下说清只删本任务那一份()
         {
             // 模式 B：输出目录 = 源包所在目录。
             var task = new ArchiveTask(PathOf(@"111\222\333.rar")) { OutputPath = PathOf(@"111\222") };
 
-            Assert.Contains("共用", MainViewModel.BuildSharedScopeNote(CleanupScope.ProcessArtifacts, task));
+            string artifactNote = MainViewModel.BuildSharedScopeNote(CleanupScope.Artifacts, task);
+
+            Assert.Contains("只删本任务那一份", artifactNote, StringComparison.Ordinal);
+            Assert.Contains("不会碰其它包", artifactNote, StringComparison.Ordinal);
             Assert.Contains("源包所在目录", MainViewModel.BuildSharedScopeNote(CleanupScope.EmptyFolders, task));
 
             // 普通模式（输出目录是包子目录）：不提这句。
             task.OutputPath = PathOf(@"111\222\333");
 
-            Assert.Equal(string.Empty, MainViewModel.BuildSharedScopeNote(CleanupScope.ProcessArtifacts, task));
+            Assert.Equal(string.Empty, MainViewModel.BuildSharedScopeNote(CleanupScope.Artifacts, task));
             Assert.Equal(string.Empty, MainViewModel.BuildSharedScopeNote(CleanupScope.EmptyFolders, task));
         }
 
@@ -506,8 +873,8 @@ namespace ArchiveFixer.Tests
         {
             var preview = new CleanupPreview
             {
-                Scope = CleanupScope.ProcessArtifacts,
-                ScopePath = @"D:\out\过程物",
+                Scope = CleanupScope.Artifacts,
+                ScopePath = @"D:\out\其余物",
                 HasTarget = true,
                 ItemCount = 3,
                 EntryCount = 9,
@@ -516,19 +883,30 @@ namespace ArchiveFixer.Tests
                 Items = new[] { "a.7z", "b.7z" }
             };
 
-            string recycleText = MainViewModel.BuildCleanupConfirmText("清理过程物", preview, DeleteMode.RecycleBin);
+            string recycleText = MainViewModel.BuildCleanupConfirmText("删除其余物", preview, DeleteMode.RecycleBin);
 
-            Assert.Contains(@"D:\out\过程物", recycleText, StringComparison.Ordinal);
+            Assert.Contains(@"D:\out\其余物", recycleText, StringComparison.Ordinal);
             Assert.Contains("顶层 3 项", recycleText, StringComparison.Ordinal);
             Assert.Contains("1024 字节", recycleText, StringComparison.Ordinal);
             Assert.Contains("回收站", recycleText, StringComparison.Ordinal);
             Assert.DoesNotContain("无法恢复", recycleText, StringComparison.Ordinal);
 
             string permanentText = MainViewModel.BuildCleanupConfirmText(
-                "清理过程物", preview, DeleteMode.Permanent, "作用域共用提醒");
+                "删除其余物", preview, DeleteMode.Permanent, "作用域共用提醒");
 
             Assert.Contains("无法恢复", permanentText, StringComparison.Ordinal);
             Assert.Contains("作用域共用提醒", permanentText, StringComparison.Ordinal);
+        }
+
+        /// <summary>任务详情文本里补上"其余物目录"，便于用户手动去看（与删除入口同一份解析）。</summary>
+        [Fact]
+        public void 任务详情文本_带上其余物路径()
+        {
+            MakeDirectory($@"out\{ArtifactName}");
+
+            string text = MainViewModel.BuildTaskInfoText(OutputOnlyTask("out"));
+
+            Assert.Contains("其余物目录：" + PathOf($@"out\{ArtifactName}"), text, StringComparison.Ordinal);
         }
 
         // ================================================================ ⑤ 设置项真正生效

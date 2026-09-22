@@ -399,6 +399,35 @@
                             </ComboBox>
                         </Grid>
 
+                        <!--
+                            D-9（用户 2026-09-22 拍板）：源包处理的默认档 = 移入「其余物」。
+                            三档互斥，只有这一处设置；列表顺序按"从最保守到最激进"排，
+                            所以默认的第二项是「移入其余物」。
+                        -->
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Text="源包处理："
+                                       Style="{StaticResource LabelTextStyle}"
+                                       ToolTip="「一键处理」里怎么处理你给的那个源包（含分卷整组）。" />
+
+                            <ComboBox Grid.Column="1"
+                                      SelectedValue="{Binding SourceHandling, Mode=TwoWay}"
+                                      SelectedValuePath="Tag"
+                                      ToolTip="只影响「一键处理」；手动「只解压」永远不动源包。">
+                                <ComboBoxItem Content="留在原地（不动源包）" Tag="KeepInPlace" />
+                                <ComboBoxItem Content="移入「其余物」（默认，推荐）" Tag="MoveToRest" />
+                                <ComboBoxItem Content="校验通过后删除（不可逆）" Tag="DeleteAfterVerify" />
+                            </ComboBox>
+                        </Grid>
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="110,0,0,8"
+                                   Text="只影响「一键处理」：默认把源包（含分卷整组）移进输出目录里的「其余物」，整理完删一个目录就干净了。手动「只解压」这条路径永远不动源包。" />
+
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="110" />
@@ -424,13 +453,13 @@
                 <!-- ==================== 清理源包（不可逆） ==================== -->
                 <GroupBox Header="清理源包（不可逆）">
                     <StackPanel>
-                        <CheckBox Content="解压成功且校验通过后删除源压缩包／源分卷"
+                        <CheckBox Content="解压成功且校验通过后删除源压缩包／源分卷（只影响手动「只解压」）"
                                   IsChecked="{Binding Settings.DeleteSourceAfterExtract, Mode=TwoWay}" />
 
                         <Border Style="{StaticResource WarningBannerStyle}" Margin="0,8,0,0">
                             <TextBlock Style="{StaticResource BannerTextStyle}"
                                        Foreground="{StaticResource WarningTextBrush}"
-                                       Text="⚠ 删除不可逆。只有「解压成功 + 输出校验通过」才会删；校验不通过、被取消、只完成一部分时一律不删。默认关闭。" />
+                                       Text="⚠ 删除不可逆。只有「解压成功 + 输出校验通过」才会删；校验不通过、被取消、只完成一部分时一律不删。默认关闭。这一项只管手动「只解压」；「一键处理」的源包处理在上面「解压与整理」里单独设置（默认移入「其余物」）。" />
                         </Border>
                     </StackPanel>
                 </GroupBox>

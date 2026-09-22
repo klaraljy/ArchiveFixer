@@ -3,6 +3,29 @@ using System;
 namespace ArchiveFixer.Models
 {
     /// <summary>
+    /// 源包处理档（决策 D-9，2026-09-22 用户拍板）。
+    ///
+    /// <para>
+    /// ⚠ **只作用于「一键处理」这条整理路径**。手动「只解压」是地基路径，
+    /// **永远不动源包**（不变量 1 的例外范围被用户显式限定在这两条里，见 AGENTS.md §6 第 1 条）。
+    /// </para>
+    /// </summary>
+    public enum SourceHandlingMode
+    {
+        /// <summary>把整组源包（分卷组 = 全部卷）移入其余物。**默认档**：整理完删一个目录就干净了。</summary>
+        MoveToRest = 0,
+
+        /// <summary>源包留在原地，一个字节都不动。</summary>
+        KeepInPlace = 1,
+
+        /// <summary>
+        /// 沿用既有 §9.5 的清理（不可逆）：只有"解压成功 + 输出校验通过 + 属于本任务分卷组"才删，
+        /// 回收站 / 彻底删除按既有设置走。
+        /// </summary>
+        DeleteAfterVerify = 2
+    }
+
+    /// <summary>
     /// 应用程序设置。
     /// 对应 appsettings.json。
     /// </summary>
@@ -133,6 +156,46 @@ namespace ArchiveFixer.Models
         /// </summary>
         public bool CollapseRepeatedFolderLayer { get; set; } = true;
 
+        /// <summary>
+        /// 「一键处理」里怎么处理源包（决策 D-9，2026-09-22 用户拍板）。
+        ///
+        /// 存的是 <see cref="SourceHandlingMode"/> 的**枚举名**（<c>MoveToRest</c> / <c>KeepInPlace</c> /
+        /// <c>DeleteAfterVerify</c>），与其它设置项（RecursionMode / OverwriteMode / TerminalLayoutMode）
+        /// 一样用字符串落盘 —— 枚举名比数字抗改，用户手改配置文件也看得懂。
+        ///
+        /// 默认 <c>MoveToRest</c>：源包跟着进其余物，用户在那个目录里一次删掉就干净了
+        /// （用户原话："其余物/源包+过程物，这样删除对用户就更方便一点"）。可关。
+        ///
+        /// ⚠ **不影响手动「只解压」**（地基路径永远不动源包）；
+        /// 也不影响 <see cref="DeleteSourceAfterExtract"/> —— 那个开关管的是地基路径的清理。
+        /// </summary>
+        public string SourceHandling { get; set; } = nameof(SourceHandlingMode.MoveToRest);
+
+        /// <summary>
+        /// 解析源包处理档：空 / 非法一律回落 <see cref="SourceHandlingMode.MoveToRest"/>。
+        ///
+        /// 容错放在这里（与 <c>ParseTerminalLayoutMode</c> 同一口径）：这个字符串可能来自
+        /// 旧配置（缺字段 → 反序列化后是默认值）、用户手改的 json，或将来改名后的枚举。
+        /// 读不懂时**退回最不意外的那一档**，而不是到解压那一刻才报错或猜一个别的行为。
+        /// </summary>
+        public static SourceHandlingMode ParseSourceHandling(string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value) &&
+                Enum.TryParse(value.Trim(), ignoreCase: true, out SourceHandlingMode mode) &&
+                Enum.IsDefined(mode))
+            {
+                return mode;
+            }
+
+            return SourceHandlingMode.MoveToRest;
+        }
+
+        /// <summary>反解成落盘字符串（界面 ↔ 解压管线共用同一份口径）。</summary>
+        public static string ToSourceHandlingValue(SourceHandlingMode mode)
+        {
+            return mode.ToString();
+        }
+
         public static AppSettings CreateDefault()
         {
             return new AppSettings
@@ -169,7 +232,8 @@ namespace ArchiveFixer.Models
                 MaxRecursionDepth = 3,
                 MaxPasswordAttemptsPerLayer = 10,
                 TerminalLayoutMode = "KeepLastFolder",
-                CollapseRepeatedFolderLayer = true
+                CollapseRepeatedFolderLayer = true,
+                SourceHandling = nameof(SourceHandlingMode.MoveToRest)
             };
         }
 
@@ -244,6 +308,16 @@ namespace ArchiveFixer.Models
             TerminalLayoutMode = ArchiveFixer.Extraction.OutputPlacement
                 .ParseTerminalLayoutMode(TerminalLayoutMode)
                 .ToString();
+
+            /*
+             * 源包处理档（决策 D-9）：空 / 非法一律回落默认档 MoveToRest，**旧配置不报错**。
+             *
+             * 这里刻意**不**把旧的 DeleteSourceAfterExtract=true 迁移成 DeleteAfterVerify：
+             * 那个布尔管的是"手动只解压"这条地基路径的清理，与一键处理的整理档是两件事；
+             * 迁移它会让升级后的一键处理从"移动"变成"不可逆删除"，方向正好反了。
+             * （一键处理的新默认值是"移动"——比删除保守，用户随时可以在设置里改成删除。）
+             */
+            SourceHandling = ParseSourceHandling(SourceHandling).ToString();
 
             // 层数下限 1（只解当前层），上限 10：再深就不是"帮用户省事"而是失控了。
             if (MaxRecursionDepth < 1)

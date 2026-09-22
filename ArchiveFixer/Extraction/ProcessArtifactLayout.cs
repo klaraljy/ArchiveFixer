@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 
 namespace ArchiveFixer.Extraction
@@ -19,7 +20,7 @@ namespace ArchiveFixer.Extraction
         /// <summary>同一个源被规划了两次。</summary>
         DuplicateSource,
 
-        /// <summary>源本来就在过程物目录里（已经归置过，不需要再搬）。</summary>
+        /// <summary>源本来就在其余物目录里（已经归置过，不需要再搬）。</summary>
         SourceInsideArtifactDirectory,
 
         /// <summary>相对路径不合法（越界 <c>..</c> / 绝对路径 / 盘符 / UNC / 保留名 / 结尾点空格等）。</summary>
@@ -30,6 +31,9 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>目标落在源目录内部（会自己套自己）。</summary>
         TargetInsideSource,
+
+        /// <summary>源文件已经不存在（用户在批次中途删了 / 上一轮已经搬走）。</summary>
+        SourceMissing,
 
         /// <summary>没有给出目标目录，整批无法规划。</summary>
         TargetDirectoryMissing
@@ -47,7 +51,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public string RelativePath { get; init; } = string.Empty;
 
-        /// <summary>为什么算过程物（写报告 / 日志用，例："内层归档"）。</summary>
+        /// <summary>为什么算其余物（写报告 / 日志用，例："内层归档"）。</summary>
         public string Reason { get; init; } = string.Empty;
 
         public ArtifactPlacementItem()
@@ -65,11 +69,23 @@ namespace ArchiveFixer.Extraction
     /// <summary>一次归置规划请求。</summary>
     public sealed class ArtifactPlacementRequest
     {
-        /// <summary>目标目录 <c>D</c>（内容物目录）；过程物目录 = <c>D\过程物</c>。</summary>
+        /// <summary>目标目录 <c>D</c>（内容物目录）；其余物目录 = <c>D\其余物</c>（决策 D-10 见 <see cref="ProcessArtifactLayout.ResolveArtifactDirectory(string?, string?, bool)"/>）。</summary>
         public string TargetDirectory { get; init; } = string.Empty;
 
         /// <summary>相对路径的基准目录（例：本层产物目录）。留空时按文件名归置。</summary>
         public string BaseDirectory { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 归档基名（决策 D-10）：**多个包共用同一个目标目录**时，其余物下按它再分一层。
+        /// 留空 = 不分（退回"集中一处"，与旧行为一致）。
+        /// </summary>
+        public string ArchiveBaseName { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 目标目录是不是"多个包共用的根"（模式 B <c>SourceDirectoryFlat</c> / 模式 D <c>CustomRootFlat</c>）。
+        /// 默认 false：包本来就有自己目录的模式**不再多套一层**（决策 D-10）。
+        /// </summary>
+        public bool SharedRoot { get; init; }
 
         public IReadOnlyList<ArtifactPlacementItem> Items { get; init; } = Array.Empty<ArtifactPlacementItem>();
 
@@ -84,10 +100,10 @@ namespace ArchiveFixer.Extraction
 
         public string TargetPath { get; init; } = string.Empty;
 
-        /// <summary>落点相对过程物目录的相对路径。</summary>
+        /// <summary>落点相对其余物目录的相对路径。</summary>
         public string RelativePath { get; init; } = string.Empty;
 
-        /// <summary>为什么算过程物。</summary>
+        /// <summary>为什么算其余物。</summary>
         public string Reason { get; init; } = string.Empty;
 
         /// <summary>是否因为重名被加了序号（加过序号的要写进报告，让用户知道名字变了）。</summary>
@@ -108,7 +124,7 @@ namespace ArchiveFixer.Extraction
     /// <summary>归置计划。<b>只是计划</b>：本类型不代表磁盘上已经发生了任何移动。</summary>
     public sealed class ArtifactMovePlan
     {
-        /// <summary>过程物目录的完整路径（<c>D\过程物</c>）；目标目录不合法时为空。</summary>
+        /// <summary>其余物目录的完整路径（<c>D\其余物</c>）；目标目录不合法时为空。</summary>
         public string ArtifactDirectory { get; init; } = string.Empty;
 
         public IReadOnlyList<ArtifactMove> Moves { get; init; } = Array.Empty<ArtifactMove>();
@@ -173,11 +189,21 @@ namespace ArchiveFixer.Extraction
     }
 
     /// <summary>
-    /// 过程物的**唯一命名来源与唯一归置规则来源**（docs/输出与整理模型.md §3.2、需求变更 R6）。
+    /// 「其余物」的**唯一命名来源与唯一归置规则来源**
+    /// （docs/输出与整理模型.md §3.2、需求变更 R6、决策 D-8/D-10）。
     ///
-    /// 两条硬要求，本类之外不许再出现：
-    /// ① 过程物目录名固定叫 <see cref="ArtifactDirectoryName"/>（"过程物"），字面量只在这里写一次；
-    /// ② 过程物的落点只有 <c>D\过程物\…</c> 一处（不变量 3：不得东放西放、不得和内容物混在同一层）。
+    /// 三条硬要求，本类之外不许再出现：
+    /// ① 其余物目录名固定叫 <see cref="ArtifactDirectoryName"/>（"其余物"），字面量只在这里写一次；
+    /// ② 其余物的落点只有 <c>D\其余物\…</c> 一处（不变量 3：不得东放西放、不得和内容物混在同一层）；
+    /// ③ 旧名 <see cref="LegacyArtifactDirectoryName"/>（"过程物"）**只用于识别**，绝不用于新建 ——
+    ///    老版本已经在用户目录里留下了 <c>过程物\</c>，删除功能必须还能清掉它们（决策 D-8）。
+    ///
+    /// <para>
+    /// 2026-09-22 用户拍板：这层目录由「过程物」改名「其余物」，**并且源包也移进来**。
+    /// 改名理由很直白：源包进来之后，"过程物"这个词就不准确了 —— 这一层装的是"除内容物之外剩下的东西"。
+    /// 源包本身由协调器在定稿 + 校验通过之后单独搬（决策 D-9/D-11/D-12，见 <see cref="SourcePackageMover"/>），
+    /// **不是**过程物规划的一部分：<see cref="ResultFinalizer"/> 只负责"别把源包当成内容物"。
+    /// </para>
     ///
     /// <see cref="Plan"/> 是**纯规划**：只算"从哪搬到哪"，不建目录、不移动、不删除 ——
     /// 真正的搬运由调用方接线（失败回滚、跨盘 copy+delete 之类都属于执行层）。
@@ -189,16 +215,52 @@ namespace ArchiveFixer.Extraction
     public static class ProcessArtifactLayout
     {
         /// <summary>
-        /// 过程物目录名。**全项目唯一来源** —— 任何其它地方要用这三个字，都必须引用这里。
+        /// 其余物目录名。**全项目唯一来源** —— 任何其它地方要用这三个字，都必须引用这里。
         /// </summary>
-        public const string ArtifactDirectoryName = "过程物";
+        public const string ArtifactDirectoryName = "其余物";
+
+        /// <summary>
+        /// 旧目录名（2026-09-22 之前叫「过程物」）。**只用于识别**：新建一律用
+        /// <see cref="ArtifactDirectoryName"/>；<see cref="FindExistingArtifactDirectories"/> 与
+        /// <see cref="IsArtifactDirectoryName"/> 靠它清掉/认出老版本留下的目录（决策 D-8）。
+        /// </summary>
+        public const string LegacyArtifactDirectoryName = "过程物";
 
         /// <summary>加序号时的最大尝试次数（与 SafePathHelper 里的自动改名同一量级）。</summary>
         private const int MaxRenameAttempts = 10000;
 
         /// <summary>
-        /// 给定目标目录 → 过程物目录的完整路径（<c>D\过程物</c>）。
+        /// 这个名字算不算"其余物目录"：**新旧两个名字都算**（决策 D-8）。
+        /// 传名字或完整路径都行（只比较最后一段）—— 调用方手上往往是 <c>D\其余物</c> 这种完整路径。
+        /// </summary>
+        public static bool IsArtifactDirectoryName(string? nameOrPath)
+        {
+            string name = LastSegment(nameOrPath);
+
+            return string.Equals(name, ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(name, LegacyArtifactDirectoryName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 其余物目录该叫什么：正常就是 <see cref="ArtifactDirectoryName"/>；
+        /// 只有**内容物那一层正好也叫这个名字**时才让位成 <c>其余物(1)</c> ——
+        /// 否则内容物与其余物会叠进同一个目录，用户再也分不清哪个是哪个。
+        /// 新旧两个名字都算重名（老版本留下的内容物目录也可能叫 <c>过程物</c>）。
+        /// </summary>
+        /// <param name="contentLayerName">内容物那一层的名字（不是路径也可以，只取最后一段）。</param>
+        public static string ResolveArtifactDirectoryName(string? contentLayerName)
+        {
+            return IsArtifactDirectoryName(contentLayerName)
+                ? ArtifactDirectoryName + "(1)"
+                : ArtifactDirectoryName;
+        }
+
+        /// <summary>
+        /// 给定目标目录 → 其余物目录的完整路径（<c>D\其余物</c>）。
         /// 目标目录为空时返回空串（不抛异常：规划阶段拿不到目标目录是调用方的常见状态）。
+        ///
+        /// ⚠ 这是"集中一处"的那一档；**多个包共用同一个目标目录**时要走三参数重载，
+        /// 否则几十个包的中间件会在同一个 <c>其余物\</c> 里互相撞名（决策 D-10 / D-2）。
         /// </summary>
         public static string ResolveArtifactDirectory(string? targetDirectory)
         {
@@ -209,7 +271,9 @@ namespace ArchiveFixer.Extraction
 
             try
             {
-                return Path.Combine(SafePathHelper.GetFullPathSafe(targetDirectory), ArtifactDirectoryName);
+                string root = SafePathHelper.GetFullPathSafe(targetDirectory);
+
+                return Path.Combine(root, ResolveArtifactDirectoryName(root));
             }
             catch
             {
@@ -218,7 +282,189 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 规划"把这一批路径归置进过程物目录"。
+        /// 其余物目录的完整路径（**决策 D-10 的唯一实现处**）。
+        ///
+        /// <list type="table">
+        /// <item><description>包本来就有自己目录（<c>PerArchiveSubfolder</c> / <c>CustomRootPerArchive</c>）→ <c>D\其余物\</c>，例：<c>111\222\其余物\</c></description></item>
+        /// <item><description>多个包共用根（<c>SourceDirectoryFlat</c> / <c>CustomRootFlat</c>）→ <c>D\其余物\包基名\</c>，例：<c>111\其余物\222\</c></description></item>
+        /// </list>
+        ///
+        /// <para>
+        /// 为什么要分这两档：共用根时一个目录里有几十上百个包，其余物再不按包名分一层，
+        /// 分卷和中间件就会互相撞名、也分不清是谁的（决策 D-2 的老理由）；
+        /// 而包本来就有自己目录时再按包名分一层，就是用户最反感的"凭空多弄一个文件夹"（决策 D-10）。
+        /// </para>
+        /// </summary>
+        /// <param name="contentRoot">内容物根（= 落点公式算出来的 destDir）。</param>
+        /// <param name="archiveBaseName">包基名（分卷组取整个组，例 <c>222.7z.001</c> → <c>222</c>）。</param>
+        /// <param name="sharedRoot">是不是"多个包共用同一个内容物根"的模式。</param>
+        public static string ResolveArtifactDirectory(
+            string? contentRoot,
+            string? archiveBaseName,
+            bool sharedRoot)
+        {
+            string directory = ResolveArtifactDirectory(contentRoot);
+
+            if (directory.Length == 0 || !sharedRoot)
+            {
+                return directory;
+            }
+
+            // 没有包基名就没法隔离：退回"集中一处"。调用方应当补一条提醒（见 ResultFinalizer）。
+            return AppendArchiveBaseName(directory, archiveBaseName);
+        }
+
+        /// <summary>
+        /// 其余物目录的完整路径，**目录名由调用方指定**（决策 D-10）。
+        ///
+        /// 只有 <see cref="ResultFinalizer"/> 需要这一档：它知道"内容物那一层"最终叫什么
+        /// （可能是套出来的那一层文件夹），能给出比"目标目录自己的名字"更准的重名判断，
+        /// 于是由它算好名字（<see cref="ResolveArtifactDirectoryName"/>）再传进来。
+        /// 其余调用方一律走三参数重载，别自己拼这个路径。
+        /// </summary>
+        public static string ResolveArtifactDirectoryWithName(
+            string? contentRoot,
+            string? artifactDirectoryName,
+            string? archiveBaseName,
+            bool sharedRoot)
+        {
+            if (string.IsNullOrWhiteSpace(contentRoot))
+            {
+                return string.Empty;
+            }
+
+            string name = string.IsNullOrWhiteSpace(artifactDirectoryName)
+                ? ArtifactDirectoryName
+                : artifactDirectoryName!;
+
+            try
+            {
+                string directory = Path.Combine(SafePathHelper.GetFullPathSafe(contentRoot), name);
+
+                if (!sharedRoot)
+                {
+                    return directory;
+                }
+
+                return AppendArchiveBaseName(directory, archiveBaseName);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 在其余物目录下再按包基名分一层（共享根模式，决策 D-10）。
+        ///
+        /// ⚠ 空 / 只有空白的基名**不加这一层**：<see cref="FileNameHelper.SanitizeFileName"/> 对空名字
+        /// 返回的是占位符"未命名"，直接拿它当目录名会造出 <c>其余物\未命名\</c> 这种谁也看不懂的目录。
+        /// </summary>
+        private static string AppendArchiveBaseName(string directory, string? archiveBaseName)
+        {
+            if (string.IsNullOrWhiteSpace(archiveBaseName))
+            {
+                return directory;
+            }
+
+            string safeBaseName = FileNameHelper.SanitizeFileName(archiveBaseName);
+
+            return string.IsNullOrWhiteSpace(safeBaseName)
+                ? directory
+                : Path.Combine(directory, safeBaseName);
+        }
+
+        /// <summary>
+        /// 给定一个其余物目录，返回**旧名对应的那一个**（决策 D-8：老版本留下的 <c>过程物\</c>）。
+        ///
+        /// 只换最后一段里出现的 <c>其余物</c>（共享根模式下是 <c>…\其余物\222</c> 的中间那一段，
+        /// 所以按"最后一段等于其余物的那一段"去找）。认不出来时返回空串。
+        /// </summary>
+        public static string ResolveLegacyArtifactDirectory(string? artifactDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(artifactDirectory))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                string full = SafePathHelper.GetFullPathSafe(artifactDirectory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+                string[] segments = full.Split(
+                    new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                    StringSplitOptions.None);
+
+                for (int i = segments.Length - 1; i >= 0; i--)
+                {
+                    if (string.Equals(segments[i], ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        segments[i] = LegacyArtifactDirectoryName;
+                        return string.Join(Path.DirectorySeparatorChar, segments);
+                    }
+                }
+
+                return string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 目标目录下**已经存在**的其余物目录（新名优先，其次旧名）；一个都没有时返回空列表。
+        ///
+        /// 用途是删除功能（决策 D-8）：老版本在用户目录里留下了 <c>过程物\</c>，
+        /// 升级之后它既不会被新建、也不该永远清不掉 —— 新名与旧名同时存在时两个都返回。
+        /// </summary>
+        public static IReadOnlyList<string> FindExistingArtifactDirectories(string? targetDirectory)
+        {
+            var found = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(targetDirectory))
+            {
+                return found;
+            }
+
+            foreach (string name in new[] { ArtifactDirectoryName, LegacyArtifactDirectoryName })
+            {
+                try
+                {
+                    string candidate = Path.Combine(SafePathHelper.GetFullPathSafe(targetDirectory), name);
+
+                    if (SafePathHelper.DirectoryExists(candidate))
+                    {
+                        found.Add(candidate);
+                    }
+                }
+                catch
+                {
+                    // 单个名字算不出来不影响另一个。
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>路径的最后一段（<c>D\其余物</c> → <c>其余物</c>；空/只有分隔符 → 空串）。</summary>
+        private static string LastSegment(string? nameOrPath)
+        {
+            string value = (nameOrPath ?? string.Empty).Trim().TrimEnd('\\', '/');
+
+            if (value.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            int separator = value.LastIndexOfAny(new[] { '\\', '/' });
+
+            return separator >= 0 ? value[(separator + 1)..] : value;
+        }
+
+        /// <summary>
+        /// 规划"把这一批路径归置进其余物目录"。
         ///
         /// 相对路径保持原结构（§3.2："保持它们之间的相对结构"），每一段都走
         /// <see cref="FileNameHelper.SanitizeFileName"/>；相对路径本身先过
@@ -232,19 +478,22 @@ namespace ArchiveFixer.Extraction
                 return new ArtifactMovePlan
                 {
                     ArtifactDirectory = string.Empty,
-                    Skipped = SkipAll(request, ArtifactSkipReason.TargetDirectoryMissing, "未指定目标目录，无法规划过程物归置"),
+                    Skipped = SkipAll(request, ArtifactSkipReason.TargetDirectoryMissing, "未指定目标目录，无法规划其余物归置"),
                     Message = "未指定目标目录，没有规划任何移动"
                 };
             }
 
-            string artifactDirectory = ResolveArtifactDirectory(request.TargetDirectory);
+            string artifactDirectory = ResolveArtifactDirectory(
+                request.TargetDirectory,
+                request.ArchiveBaseName,
+                request.SharedRoot);
 
             if (string.IsNullOrWhiteSpace(artifactDirectory))
             {
                 return new ArtifactMovePlan
                 {
                     ArtifactDirectory = string.Empty,
-                    Skipped = SkipAll(request, ArtifactSkipReason.TargetDirectoryMissing, "目标目录无法规范化，无法规划过程物归置"),
+                    Skipped = SkipAll(request, ArtifactSkipReason.TargetDirectoryMissing, "目标目录无法规范化，无法规划其余物归置"),
                     Message = "目标目录无法规范化，没有规划任何移动"
                 };
             }
@@ -287,13 +536,13 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                if (IsSameOrInside(sourceFull, artifactDirectory))
+                if (IsInsideArtifactDirectory(sourceFull, request.TargetDirectory))
                 {
                     skipped.Add(new ArtifactSkip
                     {
                         SourcePath = sourceFull,
                         Reason = ArtifactSkipReason.SourceInsideArtifactDirectory,
-                        Message = $"源已经在过程物目录里（{artifactDirectory}），不需要再归置"
+                        Message = $"源已经在其余物目录里（{artifactDirectory}），不需要再归置"
                     });
 
                     continue;
@@ -454,7 +703,7 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>给目标位置找一个不冲突的名字：<c>名字(1).ext</c>、<c>名字(2).ext</c>…</summary>
-        private static string MakeUniqueTarget(
+        internal static string MakeUniqueTarget(
             string candidate,
             bool isDirectory,
             HashSet<string> reserved,
@@ -535,6 +784,37 @@ namespace ArchiveFixer.Extraction
                 StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// 这个路径是不是已经在"某个名字的其余物目录"里了 —— <b>新旧两个名字都查</b>
+        /// （决策 D-8：老版本留下的 <c>过程物\</c> 里躺着的东西，同样不该再被归置一遍）。
+        /// </summary>
+        internal static bool IsInsideArtifactDirectory(string? path, string? targetDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(targetDirectory))
+            {
+                return false;
+            }
+
+            foreach (string name in new[] { ArtifactDirectoryName, LegacyArtifactDirectoryName })
+            {
+                try
+                {
+                    string directory = Path.Combine(SafePathHelper.GetFullPathSafe(targetDirectory), name);
+
+                    if (IsSameOrInside(path, directory))
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // 单个名字算不出来不影响另一个。
+                }
+            }
+
+            return false;
+        }
+
         private static string NormalizeForCompare(string? path)
         {
             return SafePathHelper.GetFullPathSafe(path)
@@ -549,8 +829,8 @@ namespace ArchiveFixer.Extraction
             var parts = new List<string>
             {
                 moves.Count > 0
-                    ? $"计划把 {moves.Count} 项过程物归置到 {artifactDirectory}"
-                    : "没有可归置的过程物"
+                    ? $"计划把 {moves.Count} 项其余物归置到 {artifactDirectory}"
+                    : "没有可归置的其余物"
             };
 
             int renamedCount = moves.Count(move => move.Renamed);
@@ -563,6 +843,625 @@ namespace ArchiveFixer.Extraction
             if (skipped.Count > 0)
             {
                 parts.Add($"{skipped.Count} 项被跳过（原因见跳过清单）");
+            }
+
+            return string.Join("；", parts);
+        }
+    }
+
+    /// <summary>一条源包搬运计划（纯数据：不代表磁盘上已经发生任何事）。</summary>
+    public sealed class SourcePackageMove
+    {
+        public string SourcePath { get; init; } = string.Empty;
+
+        public string TargetPath { get; init; } = string.Empty;
+
+        /// <summary>源文件字节数（写日志 / 报总大小用）。</summary>
+        public long Size { get; init; }
+
+        /// <summary>目标同名，已加序号（<b>绝不覆盖</b>）。</summary>
+        public bool Renamed { get; init; }
+    }
+
+    /// <summary>源包搬运计划。<b>只是计划</b>。</summary>
+    public sealed class SourcePackageMovePlan
+    {
+        /// <summary>其余物目录（源包搬进去的目标根）；算不出来时为空。</summary>
+        public string ArtifactDirectory { get; init; } = string.Empty;
+
+        public IReadOnlyList<SourcePackageMove> Moves { get; init; } = Array.Empty<SourcePackageMove>();
+
+        public IReadOnlyList<ArtifactSkip> Skipped { get; init; } = Array.Empty<ArtifactSkip>();
+
+        /// <summary>整组源包的总字节数。</summary>
+        public long TotalSize { get; init; }
+
+        public string Message { get; init; } = string.Empty;
+    }
+
+    /// <summary>源包搬运的结论。</summary>
+    public sealed class SourcePackageMoveResult
+    {
+        /// <summary>是否真的动过手（没有可搬的、被跳过时为 false，此时一个字节都没动）。</summary>
+        public bool Attempted { get; init; }
+
+        public int MovedCount { get; init; }
+
+        /// <summary>搬失败的个数（**源包原地不动**）。</summary>
+        public int FailedCount { get; init; }
+
+        public int SkippedCount { get; init; }
+
+        /// <summary>其中几个走了"跨盘：复制成功后再删原件"这条路。</summary>
+        public int CrossVolumeCount { get; init; }
+
+        /// <summary>真的搬走的字节数。</summary>
+        public long MovedBytes { get; init; }
+
+        /// <summary>成功的搬运（旧 → 新）。任务对象要靠它更新 CurrentPath 与分卷清单。</summary>
+        public IReadOnlyList<SourcePackageMove> Moved { get; init; } = Array.Empty<SourcePackageMove>();
+
+        public IReadOnlyList<string> Failures { get; init; } = Array.Empty<string>();
+
+        /// <summary>逐条搬运日志（含从哪到哪 + 总大小），调用方原样写进界面/文件日志。</summary>
+        public IReadOnlyList<string> LogLines { get; init; } = Array.Empty<string>();
+
+        public string Message { get; init; } = string.Empty;
+    }
+
+    /// <summary>
+    /// 源包搬运要碰的那几件文件系统操作。
+    ///
+    /// <para>
+    /// 抽出来只为一件事：**跨盘那条路必须能被验证**。真机上很难临时造出第二个卷，
+    /// 而"跨盘 = 复制成功后再删原件、复制失败源包一个字节都不动"是决策 D-12 的红线，
+    /// 不能只靠肉眼读代码（单测注入假实现就能把这条路走一遍，见 SourcePackageMoverTests）。
+    /// </para>
+    /// </summary>
+    public interface ISourceMoveFileSystem
+    {
+        bool FileExists(string path);
+
+        bool DirectoryExists(string path);
+
+        /// <summary>建目录；建不出来返回 false（调用方据此报失败，绝不当成"搬成功了"）。</summary>
+        bool CreateDirectory(string path);
+
+        long GetFileSize(string path);
+
+        /// <summary>两个路径是不是同一个卷（同卷才能用原子改名）。</summary>
+        bool IsSameVolume(string sourcePath, string targetPath);
+
+        /// <summary>同卷：原子改名。<b>目标已存在必须抛异常，绝不覆盖</b>。</summary>
+        void MoveFile(string source, string target);
+
+        /// <summary>跨卷：复制。<b>目标已存在必须抛异常，绝不覆盖</b>。</summary>
+        void CopyFile(string source, string target);
+
+        void DeleteFile(string path);
+    }
+
+    /// <summary>真实文件系统实现。</summary>
+    public sealed class FileSystemSourceMoveFileSystem : ISourceMoveFileSystem
+    {
+        public static FileSystemSourceMoveFileSystem Instance { get; } = new();
+
+        public bool FileExists(string path) => SafePathHelper.FileExists(path);
+
+        public bool DirectoryExists(string path) => SafePathHelper.DirectoryExists(path);
+
+        public bool CreateDirectory(string path) => SafePathHelper.EnsureDirectoryExists(path);
+
+        public long GetFileSize(string path)
+        {
+            try
+            {
+                return new FileInfo(path).Length;
+            }
+            catch
+            {
+                // 量不出大小只影响日志里的数字，不影响搬不搬。
+                return 0;
+            }
+        }
+
+        public bool IsSameVolume(string sourcePath, string targetPath)
+        {
+            try
+            {
+                string? sourceRoot = Path.GetPathRoot(SafePathHelper.GetFullPathSafe(sourcePath));
+                string? targetRoot = Path.GetPathRoot(SafePathHelper.GetFullPathSafe(targetPath));
+
+                if (string.IsNullOrWhiteSpace(sourceRoot) || string.IsNullOrWhiteSpace(targetRoot))
+                {
+                    // 判不出来时**保守地当成跨盘**：那条件更严（先复制成功再删原件），
+                    // 代价只是多拷一次，而判错成同盘会走 rename —— 跨盘 rename 必然失败。
+                    return false;
+                }
+
+                return string.Equals(sourceRoot, targetRoot, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // 两参数版本：目标已存在直接抛 IOException，**不会覆盖**（AGENTS.md §6 第 3 条）。
+        public void MoveFile(string source, string target) => File.Move(source, target);
+
+        public void CopyFile(string source, string target) => File.Copy(source, target, overwrite: false);
+
+        public void DeleteFile(string path) => File.Delete(path);
+    }
+
+
+
+    /// <summary>
+    /// 把**本任务的源包（整组）**搬进其余物目录（决策 D-9/D-11/D-12，2026-09-22 用户拍板）。
+    ///
+    /// <para>
+    /// 为什么源包也算「其余物」：用户在"其余物"里一次删掉就干净了 ——
+    /// 内容物留在原地，源包和中间件一起进同一层，整理完只需删一个目录。
+    /// </para>
+    /// <para>
+    /// 四条硬约束（都在这里落地，调用方不许绕过）：
+    /// ① **整组一起移**：分卷组取 <see cref="ArchiveTask.VolumePaths"/> 全卷，单文件任务取它自己；
+    ///    清单只来自任务自身，**不扫目录**（与 <c>SourceCleanupService</c> 同一口径）；
+    /// ② **绝不覆盖**：目标同名加 <c>(1)(2)</c>；
+    /// ③ **跨盘 = 先复制成功、再删原件**：复制失败源包一个字节都不动，绝不"先删后移"；
+    /// ④ **搬不动就如实报失败**（只读 / 被占用），由调用方把任务标成"部分完成"——
+    ///    内容物已经好了，这件事不该影响内容物的结论。
+    /// </para>
+    /// <para>
+    /// 本类**不判断该不该搬**：那由 <c>ExtractionCoordinator</c> 按"内容物已定稿 + 校验通过 + 未取消 + 一键处理路径"决定（D-11）。
+    /// </para>
+    /// </summary>
+    public sealed class SourcePackageMover
+    {
+        private readonly ISourceMoveFileSystem _fileSystem;
+
+        public SourcePackageMover(ISourceMoveFileSystem? fileSystem = null)
+        {
+            _fileSystem = fileSystem ?? FileSystemSourceMoveFileSystem.Instance;
+        }
+
+        /// <summary>
+        /// 本任务的源包清单：分卷组 = 整组各卷；单文件任务 = 它自己。
+        ///
+        /// 与 <c>SourceCleanupService.BuildTargetList</c> 同一口径（那边是删、这边是移，清单必须一致）：
+        /// 分卷组只认 <see cref="ArchiveTask.VolumePaths"/>，为空时**不回退**到 CurrentPath ——
+        /// 那说明分组信息不完整，少搬一卷比"整组散在两个目录里"更糟，所以宁可什么都不搬。
+        /// </summary>
+        public static IReadOnlyList<string> ResolveSourceGroup(ArchiveTask? task)
+        {
+            var targets = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (task == null)
+            {
+                return targets;
+            }
+
+            IEnumerable<string> candidates = task.IsVolumeGroup
+                ? task.VolumePaths
+                : new[] { task.CurrentPath };
+
+            foreach (string path in candidates)
+            {
+                if (!string.IsNullOrWhiteSpace(path) && seen.Add(path))
+                {
+                    targets.Add(path);
+                }
+            }
+
+            return targets;
+        }
+
+        /// <summary>
+        /// 规划"把这一组源包搬进其余物目录"。纯规划：一个字节都不动。
+        /// </summary>
+        /// <param name="task">要处理的源包任务。</param>
+        /// <param name="artifactDirectory">其余物目录（决策 D-10 算出来的那个）。</param>
+        /// <param name="probe">目标占用探测；不传时查真实文件系统。</param>
+        public SourcePackageMovePlan Plan(
+            ArchiveTask? task,
+            string? artifactDirectory,
+            IArtifactTargetProbe? probe = null)
+        {
+            IArtifactTargetProbe targetProbe = probe ?? FileSystemArtifactTargetProbe.Instance;
+
+            if (task == null)
+            {
+                return new SourcePackageMovePlan { Message = "任务为空，没有规划任何源包搬运" };
+            }
+
+            IReadOnlyList<string> sources = ResolveSourceGroup(task);
+
+            if (sources.Count == 0)
+            {
+                return new SourcePackageMovePlan
+                {
+                    ArtifactDirectory = artifactDirectory ?? string.Empty,
+                    Message = "任务没有可搬运的源包路径（分卷清单可能不完整），源包一律不动"
+                };
+            }
+
+            if (string.IsNullOrWhiteSpace(artifactDirectory))
+            {
+                return new SourcePackageMovePlan
+                {
+                    Skipped = SkipAll(sources, ArtifactSkipReason.TargetDirectoryMissing, "其余物目录算不出来，源包留在原地"),
+                    Message = "其余物目录算不出来，没有规划任何源包搬运"
+                };
+            }
+
+            string artifactRoot = artifactDirectory!;
+            var moves = new List<SourcePackageMove>();
+            var skipped = new List<ArtifactSkip>();
+            var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            long totalSize = 0;
+
+            foreach (string source in sources)
+            {
+                if (!_fileSystem.FileExists(source))
+                {
+                    skipped.Add(new ArtifactSkip
+                    {
+                        SourcePath = source,
+                        Reason = ArtifactSkipReason.SourceMissing,
+                        Message = "源文件不存在（可能已被移动或删除），跳过"
+                    });
+
+                    continue;
+                }
+
+                if (IsAlreadyInsideRest(source, artifactRoot, out string restDirectory))
+                {
+                    skipped.Add(new ArtifactSkip
+                    {
+                        SourcePath = source,
+                        Reason = ArtifactSkipReason.SourceInsideArtifactDirectory,
+                        Message = $"源已经在其余物目录里（{restDirectory}），不需要再搬"
+                    });
+
+                    continue;
+                }
+
+                string candidate = Path.Combine(artifactRoot, FileNameHelper.SanitizeFileName(Path.GetFileName(source)));
+                bool renamed = false;
+
+                if (reserved.Contains(candidate) || targetProbe.Exists(candidate))
+                {
+                    string unique = ProcessArtifactLayout.MakeUniqueTarget(
+                        candidate,
+                        false,
+                        reserved,
+                        targetProbe);
+
+                    renamed = !string.Equals(unique, candidate, StringComparison.OrdinalIgnoreCase);
+                    candidate = unique;
+                }
+
+                reserved.Add(candidate);
+
+                long size = _fileSystem.GetFileSize(source);
+                totalSize += size;
+
+                moves.Add(new SourcePackageMove
+                {
+                    SourcePath = source,
+                    TargetPath = candidate,
+                    Size = size,
+                    Renamed = renamed
+                });
+            }
+
+            return new SourcePackageMovePlan
+            {
+                ArtifactDirectory = artifactRoot,
+                Moves = moves,
+                Skipped = skipped,
+                TotalSize = totalSize,
+                Message = BuildPlanMessage(artifactRoot, moves, skipped)
+            };
+        }
+
+        /// <summary>
+        /// 执行搬运。**只允许在后台线程上跑**（跨盘时是整包拷贝）。
+        ///
+        /// 取消：调用方应当在**开始之前**查一次令牌；这里一旦开始搬这一组就把它搬完 ——
+        /// 半组卷散在两个目录里，比"晚几百毫秒才停下来"糟得多（决策 D-12"整组一起移"）。
+        /// </summary>
+        public SourcePackageMoveResult Execute(SourcePackageMovePlan? plan)
+        {
+            if (plan == null || plan.Moves.Count == 0)
+            {
+                return new SourcePackageMoveResult
+                {
+                    Attempted = false,
+                    SkippedCount = plan?.Skipped.Count ?? 0,
+                    Message = plan?.Message ?? "没有可搬运的源包"
+                };
+            }
+
+            var moved = new List<SourcePackageMove>();
+            var failures = new List<string>();
+            var logLines = new List<string>();
+            long movedBytes = 0;
+            int crossVolume = 0;
+            bool createdArtifactDirectory = false;
+
+            foreach (SourcePackageMove move in plan.Moves)
+            {
+                string from = move.SourcePath;
+                string to = move.TargetPath;
+
+                try
+                {
+                    if (!_fileSystem.DirectoryExists(plan.ArtifactDirectory))
+                    {
+                        if (!_fileSystem.CreateDirectory(plan.ArtifactDirectory))
+                        {
+                            failures.Add($"{Path.GetFileName(from)}（其余物目录创建失败：{plan.ArtifactDirectory}）");
+                            continue;
+                        }
+
+                        createdArtifactDirectory = true;
+                    }
+
+                    if (_fileSystem.FileExists(to) || _fileSystem.DirectoryExists(to))
+                    {
+                        /*
+                         * 计划之后目标被别人占了（并发解压 / 用户手动放了东西进来）。
+                         * 计划阶段已经避过一次，这里是最后一道：**重新让名字，绝不覆盖**。
+                         */
+                        to = MakeFallbackTarget(to);
+                    }
+
+                    bool sameVolume = _fileSystem.IsSameVolume(from, to);
+
+                    if (sameVolume)
+                    {
+                        // 同卷：原子改名。目标已存在时底层直接抛，绝不会覆盖。
+                        _fileSystem.MoveFile(from, to);
+                    }
+                    else
+                    {
+                        /*
+                         * 跨盘：**先复制成功、再删原件**（决策 D-12）。
+                         * 顺序绝不能反 —— "先删后移"在复制失败的瞬间就把用户的源包弄丢了。
+                         */
+                        _fileSystem.CopyFile(from, to);
+                        crossVolume++;
+
+                        try
+                        {
+                            _fileSystem.DeleteFile(from);
+                        }
+                        catch (Exception deleteError)
+                        {
+                            // 复制成功但原件删不掉：把副本清掉，宁可"源包没搬成"，也不要凭空多一份。
+                            TryDeleteCopy(to, logLines);
+                            failures.Add($"{Path.GetFileName(from)}（复制成功但原件删不掉：{deleteError.Message}）");
+                            continue;
+                        }
+                    }
+
+                    moved.Add(new SourcePackageMove
+                    {
+                        SourcePath = from,
+                        TargetPath = to,
+                        Size = move.Size,
+                        Renamed = move.Renamed
+                    });
+
+                    movedBytes += move.Size;
+
+                    // 每次搬运都写日志：从哪到哪 + 这个文件多大（决策 D-12）。
+                    logLines.Add($"源包移入其余物（{move.Size} 字节）：{from} → {to}"
+                                 + (move.Renamed ? "（目标同名，已加序号，未覆盖）" : string.Empty));
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{Path.GetFileName(from)}（{ex.Message}）");
+                }
+            }
+
+            /*
+             * 一个都没搬成、而且这个目录是我们刚建出来的 → 把空壳收掉。
+             *
+             * 用户的抱怨原话是"多弄了文件夹"：搬失败时（只读 / 被占用）留下一个空的
+             * <c>其余物\</c> 正是这一类 —— 它里面一个字节都没有，用户却看到多了一层目录。
+             * 只删**空**目录，而且只删我们这一次建的（非空 / 别人建的都不碰）。
+             */
+            if (moved.Count == 0 && createdArtifactDirectory)
+            {
+                TryDeleteEmptyArtifactDirectory(plan.ArtifactDirectory, logLines);
+            }
+
+            return new SourcePackageMoveResult
+            {
+                Attempted = true,
+                MovedCount = moved.Count,
+                FailedCount = failures.Count,
+                SkippedCount = plan.Skipped.Count,
+                CrossVolumeCount = crossVolume,
+                MovedBytes = movedBytes,
+                Moved = moved,
+                Failures = failures,
+                LogLines = logLines,
+                Message = BuildResultMessage(plan.ArtifactDirectory, moved.Count, movedBytes, crossVolume, failures)
+            };
+        }
+
+        /// <summary>尽力删掉"我们刚建出来、里面一个字节都没有"的其余物目录（非空一律不碰）。</summary>
+        private void TryDeleteEmptyArtifactDirectory(string directory, List<string> logLines)
+        {
+            try
+            {
+                if (!_fileSystem.DirectoryExists(directory))
+                {
+                    return;
+                }
+
+                if (Directory.EnumerateFileSystemEntries(directory).Any())
+                {
+                    return;
+                }
+
+                Directory.Delete(directory, recursive: false);
+                logLines.Add($"源包一个都没搬成，已收掉空目录：{directory}");
+            }
+            catch (Exception ex)
+            {
+                logLines.Add($"警告：没能收掉空的其余物目录（{directory}）：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 源是不是**已经躺在其余物里**了（新旧两个名字都算，决策 D-8）。
+        ///
+        /// 判据有三条，缺一不可：
+        /// ① 在其余物目录**之内或就是它**（共享根模式下源包会落在 <c>其余物\包名\</c>，
+        ///    而这里传进来的就是那一层）；
+        /// ② 在"同一个位置的旧名目录"里（<c>其余物</c> ↔ <c>过程物</c>）；
+        /// ③ 在其余物目录下的 <c>过程物\</c> 子目录里（老版本把中间件又套了一层的情况）。
+        /// </summary>
+        /// <param name="restDirectory">命中的那个其余物目录（写日志用）。</param>
+        private static bool IsAlreadyInsideRest(string source, string artifactRoot, out string restDirectory)
+        {
+            if (SafePathHelper.PathEquals(source, artifactRoot) ||
+                source.StartsWith(artifactRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                source.StartsWith(artifactRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                restDirectory = artifactRoot;
+                return true;
+            }
+
+            string legacy = ProcessArtifactLayout.ResolveLegacyArtifactDirectory(artifactRoot);
+
+            if (legacy.Length > 0 && IsInside(legacy))
+            {
+                restDirectory = legacy;
+                return true;
+            }
+
+            if (ProcessArtifactLayout.IsInsideArtifactDirectory(source, artifactRoot))
+            {
+                restDirectory = artifactRoot;
+                return true;
+            }
+
+            restDirectory = string.Empty;
+            return false;
+
+            bool IsInside(string directory)
+            {
+                return source.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                       source.StartsWith(directory + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        /// <summary>目标被临时占用时的兜底改名（<c>名字(1).ext</c>，绝不覆盖）。</summary>
+        private static string MakeFallbackTarget(string target)
+        {
+            for (int index = 1; index < 10000; index++)
+            {
+                string candidate = Path.Combine(
+                    Path.GetDirectoryName(target) ?? string.Empty,
+                    $"{Path.GetFileNameWithoutExtension(target)}({index}){Path.GetExtension(target)}");
+
+                if (!SafePathHelper.FileExists(candidate) && !SafePathHelper.DirectoryExists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return Path.Combine(
+                Path.GetDirectoryName(target) ?? string.Empty,
+                $"{Path.GetFileNameWithoutExtension(target)}_{Guid.NewGuid():N}{Path.GetExtension(target)}");
+        }
+
+        /// <summary>副本清不掉也要说清楚：用户目录里会多出一份，那件事不能被静默吞掉。</summary>
+        private void TryDeleteCopy(string copyPath, List<string> logLines)
+        {
+            try
+            {
+                _fileSystem.DeleteFile(copyPath);
+                logLines.Add($"已回滚跨盘复制出来的副本：{copyPath}");
+            }
+            catch (Exception ex)
+            {
+                logLines.Add($"警告：跨盘复制出来的副本没能回滚（{copyPath}）：{ex.Message}；原源包仍在原处，请自行核对");
+            }
+        }
+
+        private static List<ArtifactSkip> SkipAll(
+            IEnumerable<string> sources,
+            ArtifactSkipReason reason,
+            string message)
+        {
+            return sources
+                .Select(source => new ArtifactSkip { SourcePath = source, Reason = reason, Message = message })
+                .ToList();
+        }
+
+        private static string BuildPlanMessage(
+            string artifactDirectory,
+            List<SourcePackageMove> moves,
+            List<ArtifactSkip> skipped)
+        {
+            var parts = new List<string>
+            {
+                moves.Count > 0
+                    ? $"计划把 {moves.Count} 个源包搬进 {artifactDirectory}"
+                    : "没有可搬运的源包"
+            };
+
+            int renamed = moves.Count(move => move.Renamed);
+
+            if (renamed > 0)
+            {
+                parts.Add($"其中 {renamed} 个重名，将加序号（不覆盖）");
+            }
+
+            if (skipped.Count > 0)
+            {
+                parts.Add($"{skipped.Count} 个被跳过（原因见跳过清单）");
+            }
+
+            return string.Join("；", parts);
+        }
+
+        private static string BuildResultMessage(
+            string artifactDirectory,
+            int movedCount,
+            long movedBytes,
+            int crossVolumeCount,
+            List<string> failures)
+        {
+            var parts = new List<string>();
+
+            if (movedCount > 0)
+            {
+                parts.Add($"已把 {movedCount} 个源包移入其余物：{artifactDirectory}（共 {movedBytes} 字节）");
+
+                if (crossVolumeCount > 0)
+                {
+                    parts.Add($"其中 {crossVolumeCount} 个跨盘，已按“复制成功后再删原件”完成");
+                }
+            }
+            else
+            {
+                parts.Add("没有源包被搬走");
+            }
+
+            if (failures.Count > 0)
+            {
+                parts.Add(failures.Count > 3
+                    ? $"{failures.Count} 个没能搬入其余物，前 3 个：{string.Join("；", failures.Take(3))}"
+                    : $"{failures.Count} 个没能搬入其余物：{string.Join("；", failures)}");
             }
 
             return string.Join("；", parts);

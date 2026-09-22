@@ -30,23 +30,23 @@ namespace ArchiveFixer.Extraction
         /// <summary>相对暂存根的路径，<c>\</c> 或 <c>/</c> 都认（例：<c>out\666\a.mp4</c>）。</summary>
         public string RelativePath { get; init; } = string.Empty;
 
-        /// <summary>文件字节数；目录填 0（只用来统计"过程物总大小"，契约 §3.2）。</summary>
+        /// <summary>文件字节数；目录填 0（只用来统计"其余物总大小"，契约 §3.2）。</summary>
         public long Size { get; init; }
 
         /// <summary>是不是目录。</summary>
         public bool IsDirectory { get; init; }
 
         /// <summary>
-        /// 是不是"过程物"（内层归档、分卷、抠出来的中间件……）。
+        /// 是不是"其余物"（内层归档、分卷、抠出来的中间件……）。
         ///
         /// <para>
         /// **必须由调用方显式标**：只有跑过暂存阶段的人知道哪些是中间产物。
         /// 规划器按后缀猜是不行的 —— 内容物里本来就可能有一个用户要的 <c>.zip</c>，
-        /// 猜错就把用户的东西扔进了 <c>过程物</c>。
+        /// 猜错就把用户的东西扔进了 <c>其余物</c>。
         /// </para>
         /// <para>
         /// 另一种等价办法是不标、改用 <c>Plan(..., contentRoot: "out")</c>：
-        /// 内容物根之外的一切都算过程物。
+        /// 内容物根之外的一切都算其余物。
         /// </para>
         /// </summary>
         public bool IsProcessArtifact { get; init; }
@@ -60,7 +60,7 @@ namespace ArchiveFixer.Extraction
         /// <summary>输入不合法（没有目标目录等），没有任何计划。</summary>
         Failed = 0,
 
-        /// <summary>暂存区里既没有内容物、也没有过程物：没什么可定稿的。</summary>
+        /// <summary>暂存区里既没有内容物、也没有其余物：没什么可定稿的。</summary>
         Empty,
 
         /// <summary>判定表 1：终端只有一个文件 → 直接放 <c>destDir\</c> 下。</summary>
@@ -75,7 +75,7 @@ namespace ArchiveFixer.Extraction
         /// <summary>判定表 4：单链（每层只有一个文件夹、没有别的文件）→ 塌缩为最深层那个文件夹名。</summary>
         CollapseSingleChain,
 
-        /// <summary>只剩过程物（没有任何内容物）：只做过程物集中，目标目录下不会有内容物。</summary>
+        /// <summary>只剩其余物（没有任何内容物）：只做其余物集中，目标目录下不会有内容物。</summary>
         ProcessArtifactsOnly
     }
 
@@ -100,7 +100,7 @@ namespace ArchiveFixer.Extraction
         public string ContentDirectoryName { get; init; } = string.Empty;
 
         /// <summary>
-        /// 全部移动计划（**内容物在前、过程物在后**）。
+        /// 全部移动计划（**内容物在前、其余物在后**）。
         ///
         /// 只有"顶层项"：绝不会同时出现某个目录和它里面的东西 —— 那样执行时会先搬父再搬子，子项必然失败。
         /// </summary>
@@ -109,13 +109,13 @@ namespace ArchiveFixer.Extraction
         /// <summary>只属于内容物的移动。</summary>
         public IReadOnlyList<PlannedMove> ContentMoves { get; init; } = Array.Empty<PlannedMove>();
 
-        /// <summary>只属于过程物的移动（都已归到 <see cref="ProcessArtifactDirectory"/> 下）。</summary>
+        /// <summary>只属于其余物的移动（都已归到 <see cref="ProcessArtifactDirectory"/> 下）。</summary>
         public IReadOnlyList<PlannedMove> ProcessArtifactMoves { get; init; } = Array.Empty<PlannedMove>();
 
-        /// <summary>过程物集中目录（<c>destDir\过程物</c>）。契约 §3.2：过程物只允许出现在这一处。</summary>
+        /// <summary>其余物集中目录（<c>destDir\其余物</c>）。契约 §3.2：其余物只允许出现在这一处。</summary>
         public string ProcessArtifactDirectory { get; init; } = string.Empty;
 
-        /// <summary>过程物总字节数（契约 §3.2 要求详情里报出来）。</summary>
+        /// <summary>其余物总字节数（契约 §3.2 要求详情里报出来）。</summary>
         public long ProcessArtifactTotalSize { get; init; }
 
         /// <summary>内容物文件数。</summary>
@@ -147,7 +147,7 @@ namespace ArchiveFixer.Extraction
     ///
     /// <para>
     /// 输入：暂存产物树的抽象描述 + <c>destDir</c> + 终端落法 +（可选）归档基名。
-    /// 输出：移动计划 + 过程物清单 + 一个结论枚举。**不执行移动、不删任何东西**——执行由调用方接线。
+    /// 输出：移动计划 + 其余物清单 + 一个结论枚举。**不执行移动、不删任何东西**——执行由调用方接线。
     /// </para>
     /// <para>
     /// 判定表（规格 §3.1，**按顺序判、先命中先返回**）：
@@ -161,18 +161,23 @@ namespace ArchiveFixer.Extraction
     /// 区别只在触发条件：③ 路上跳过了纯空壳目录，④ 纯属一层套一层的单链。分开报是为了让用户看得懂
     /// "为什么这一层没了"。判定表 4 种形态的**结果路径**在测试里逐条钉死。
     /// </para>
+    /// <para>
+    /// ⚠ **源包不在这里规划**：它既不是内容物、也不是"解压产生的东西"，而是用户给的输入。
+    /// 把它搬进其余物是**定稿 + 校验通过 + 未取消**之后由 <c>ExtractionCoordinator</c> 单独做的事
+    /// （决策 D-9/D-11/D-12，搬运本体见 <see cref="SourcePackageMover"/>）。
+    /// 规划器只需保证一件事：**别把源包当成内容物**（它本来就不在暂存树里，天然满足）。
+    /// </para>
     /// </summary>
     public static class ResultFinalizer
     {
         /// <summary>
-        /// 过程物集中目录名（契约 §3.2：固定叫"过程物"，不许散落字面量）。
+        /// 其余物集中目录名（契约 §3.2：固定叫"其余物"，不许散落字面量）。
         ///
-        /// <para>
-        /// ⚠️ **改名时同步**：另一个代理正在新建 <c>Extraction.ProcessArtifactLayout</c>，
-        /// 它落地后这里应改成引用它（保持"目录名只有一处定义"）。在它出现之前，这个常量就是唯一来源。
-        /// </para>
+        /// 2026-09-22 用户把这一层由「过程物」改名「其余物」（源包也移进来，决策 D-8/D-9）。
+        /// 名字的**唯一来源**是 <see cref="ProcessArtifactLayout.ArtifactDirectoryName"/>，
+        /// 这里只是保留一个旧名字的转发常量，免得外面还有引用它的人各写一份字面量。
         /// </summary>
-        public const string ProcessArtifactDirectoryName = "过程物";
+        public const string ProcessArtifactDirectoryName = ProcessArtifactLayout.ArtifactDirectoryName;
 
         /// <summary>规划一次定稿布局。</summary>
         /// <param name="stagedEntries">暂存树的全部条目（相对 <paramref name="stagingRoot"/>）。</param>
@@ -183,18 +188,21 @@ namespace ArchiveFixer.Extraction
         /// 传空则在需要时退回 <c>destDir</c> 自己的末段名并给出提醒。
         /// </param>
         /// <param name="contentRoot">
-        /// 内容物在暂存树里的相对根（例：<c>out</c>）。给了它，根之外的一切都算过程物；
-        /// 不给则整棵树都是内容物，过程物只能靠 <see cref="StagedEntry.IsProcessArtifact"/> 显式标。
+        /// 内容物在暂存树里的相对根（例：<c>out</c>）。给了它，根之外的一切都算其余物；
+        /// 不给则整棵树都是内容物，其余物只能靠 <see cref="StagedEntry.IsProcessArtifact"/> 显式标。
         /// </param>
         /// <param name="stagingRoot">
         /// 暂存根绝对路径。给了，计划里的 <c>From</c> 就是可直接执行的绝对路径；不给就只有相对路径。
         /// </param>
         /// <param name="placementMode">
-        /// 落点模式（可选）。只影响**过程物**放在哪：模式 B（<see cref="OutputPlacementMode.SourceDirectoryFlat"/>）
-        /// 的目标目录就是源目录本身，一个目录里几十上百个包会共用它，
-        /// 所以过程物再套一层包基名（<c>&lt;源目录&gt;\过程物\&lt;包基名&gt;\</c>，决策 D-2），
-        /// 否则多个包的分卷和中间件会在 <c>过程物\</c> 里互相撞名。
-        /// 其余模式的目标目录本来就是"一个包一个目录"，直接用 <c>destDir\过程物\</c>。
+        /// 落点模式（可选）。只影响**其余物**放在哪（决策 D-10）：
+        /// **多个包共用一个目标目录**的模式（模式 B <see cref="OutputPlacementMode.SourceDirectoryFlat"/>、
+        /// 模式 D <see cref="OutputPlacementMode.CustomRootFlat"/>）下，其余物再套一层包基名
+        /// （<c>&lt;共用根&gt;\其余物\&lt;包基名&gt;\</c>），否则几十上百个包的分卷和中间件会在
+        /// <c>其余物\</c> 里互相撞名、也分不清是谁的。
+        /// 包本来就有自己目录的模式（默认的 <see cref="OutputPlacementMode.PerArchiveSubfolder"/> /
+        /// <see cref="OutputPlacementMode.CustomRootPerArchive"/>）直接用 <c>destDir\其余物\</c>，
+        /// **不再多套一层** —— 用户最反感"凭空多弄一个文件夹"。
         /// </param>
         public static FinalizePlan Plan(
             IReadOnlyList<StagedEntry>? stagedEntries,
@@ -260,7 +268,7 @@ namespace ArchiveFixer.Extraction
 
                 /*
                  * 内容物根的**祖先**只是路径上的容器（暂存区常见 <stage>\out 这种两级结构）。
-                 * 把它当过程物搬走，等于连内容物一起搬走 —— 所以这一条优先于"显式标了过程物"。
+                 * 把它当其余物搬走，等于连内容物一起搬走 —— 所以这一条优先于"显式标了其余物"。
                  */
                 if (contentScope != null && IsDescendantOf(contentScope, node))
                 {
@@ -284,7 +292,7 @@ namespace ArchiveFixer.Extraction
             if (!shape.HasContent && contentScope != null && contentScope.Parent != null)
             {
                 /*
-                 * 内容物根里一个文件都没有（解压出来全是空壳/杂物）：整棵都当过程物，一次搬走。
+                 * 内容物根里一个文件都没有（解压出来全是空壳/杂物）：整棵都当其余物，一次搬走。
                  * 比"逐个空壳搬"完整得多 —— 那样会把内容物根里的非空杂物落在暂存区没人管。
                  * 虚拟根（没指定内容物根时）不能这么干，所以上面要求 contentScope.Parent != null。
                  */
@@ -354,7 +362,7 @@ namespace ArchiveFixer.Extraction
                 }
             }
 
-            // ── 过程物归置：全部进 destDir\过程物\，保持相对结构 ────────────────
+            // ── 其余物归置：全部进 destDir\其余物\，保持相对结构 ────────────────
             var artifactNodes = new List<Node>(artifactRoots);
             var seenArtifacts = new HashSet<Node>(artifactNodes);
 
@@ -372,26 +380,40 @@ namespace ArchiveFixer.Extraction
             // 已经被内容物整棵搬走的子树里的东西不能再单独规划一次（执行时那个源路径已经不在暂存区了）。
             var contentSources = contentMoves.Select(m => m.From).ToList();
 
-            string artifactDirectoryName = ResolveArtifactDirectoryName(
-                contentMoves, destDir, artifactNodes.Count > 0, warnings);
-            string artifactRootDirectory = SafeCombine(destDir, artifactDirectoryName);
-
             /*
-             * 决策 D-2：模式 B（解压到当前目录）的目标目录是**源目录本身**，几十上百个包共用它。
-             * 过程物只放在 <源目录>\过程物\ 会让这些包的中间件、分卷互相撞名（还分不清是谁的），
-             * 所以再套一层包基名。其余模式 destDir 本来就是"一个包一个目录"，不需要这层。
+             * 其余物目录名与落点（决策 D-8/D-10，唯一实现在 ProcessArtifactLayout）：
+             * 名字默认「其余物」，只有内容物那一层正好也叫这个名时才让位成「其余物(1)」；
+             * 落点分两档 —— 多个包共用根的两种模式（B/D）按包基名再分一层，
+             * 包本来就有自己目录的模式直接 <c>destDir\其余物\</c>，不再多套一层。
+             *
+             * 重名判断用的是 **wrapperName**（内容物那一层真正叫什么），不是 destDir 自己的名字：
+             * 会和 <c>destDir\其余物</c> 撞的正是前者。
              */
-            if (placementMode == OutputPlacementMode.SourceDirectoryFlat)
+            string artifactDirectoryName = ProcessArtifactLayout.ResolveArtifactDirectoryName(wrapperName);
+
+            if (ProcessArtifactLayout.IsArtifactDirectoryName(wrapperName))
             {
-                if (hasArchiveName)
-                {
-                    artifactRootDirectory = SafeCombine(artifactRootDirectory, safeArchiveBaseName);
-                }
-                else
-                {
-                    warnings.Add("模式 B（解压到当前目录）下没有提供归档基名，过程物无法按包名隔离，"
-                                 + "同一个目录里的多个包会共用一个 过程物 目录");
-                }
+                warnings.Add($"内容物那一层与其余物目录重名，其余物目录改用 “{artifactDirectoryName}”");
+            }
+
+            bool sharedRoot = placementMode is
+                OutputPlacementMode.SourceDirectoryFlat or OutputPlacementMode.CustomRootFlat;
+
+            if (sharedRoot && !hasArchiveName)
+            {
+                warnings.Add("多个包共用同一个输出根（解压到当前目录 / 直接解到指定目录）时没有提供归档基名，"
+                             + $"其余物无法按包名隔离，同一个目录里的多个包会共用一个 {ProcessArtifactLayout.ArtifactDirectoryName} 目录");
+            }
+
+            string artifactRootDirectory = ProcessArtifactLayout.ResolveArtifactDirectoryWithName(
+                destDir,
+                artifactDirectoryName,
+                hasArchiveName ? archiveBaseName : null,
+                sharedRoot);
+
+            if (string.IsNullOrWhiteSpace(artifactRootDirectory))
+            {
+                return FinalizePlan.Failure("其余物目录算不出来（目标目录无法规范化）");
             }
 
             var artifactMoves = new List<PlannedMove>();
@@ -414,7 +436,7 @@ namespace ArchiveFixer.Extraction
                     relative = stripped;
                 }
 
-                // 落点名字必须清洗：过程物里也会有 Windows 非法名（解压出来的东西什么都可能有），
+                // 落点名字必须清洗：其余物里也会有 Windows 非法名（解压出来的东西什么都可能有），
                 // 不清洗的话执行阶段会直接在 File.Move 上炸掉。
                 relative = SanitizeRelativePath(relative);
 
@@ -552,39 +574,6 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 过程物目录名：正常情况下就是 <see cref="ProcessArtifactDirectoryName"/>；
-        /// 只有真要搬过程物、且内容物那一层正好也叫这个名字时才让位
-        /// （否则内容物和过程物会叠在同一个目录里）。
-        /// </summary>
-        private static string ResolveArtifactDirectoryName(
-            IReadOnlyList<PlannedMove> contentMoves,
-            string destDir,
-            bool hasArtifacts,
-            List<string> warnings)
-        {
-            if (!hasArtifacts)
-            {
-                return ProcessArtifactDirectoryName;
-            }
-
-            foreach (PlannedMove move in contentMoves)
-            {
-                if (IsSameOrChildPath(move.To, destDir)
-                    && string.Equals(
-                        FileNameHelper.GetFileName(move.To),
-                        ProcessArtifactDirectoryName,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    string alternative = ProcessArtifactDirectoryName + "(1)";
-                    warnings.Add($"内容物那一层与过程物目录重名，过程物目录改用 \"{alternative}\"");
-                    return alternative;
-                }
-            }
-
-            return ProcessArtifactDirectoryName;
-        }
-
-        /// <summary>
         /// 从内容物根往下走：跳过纯空壳目录，沿着"这一层没有文件、只有一个子目录"的链一路到底，
         /// 停在"东西真正待着的那一层"。
         ///
@@ -610,7 +599,7 @@ namespace ArchiveFixer.Extraction
             if (!startScope.IsDirectory)
             {
                 // 内容物根指向一个**文件**（调用方直接点名了产物文件）：它本身就是终端内容物。
-                // 不这么判的话它的 Children 为空，会被当成"没有内容物"，然后连人带文件被扫进过程物。
+                // 不这么判的话它的 Children 为空，会被当成"没有内容物"，然后连人带文件被扫进其余物。
                 shape.HasContent = true;
                 shape.Items.Add(startScope);
                 return shape;
@@ -677,7 +666,7 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 去掉"父亲已经在列表里"的过程物节点：只要顶层项，否则计划里会同时出现目录和它里面的东西。
+        /// 去掉"父亲已经在列表里"的其余物节点：只要顶层项，否则计划里会同时出现目录和它里面的东西。
         /// 按深度从浅到深处理，浅的自然先被保留；返回时**恢复调用方给的顺序**（按暂存路径），
         /// 保证计划顺序稳定、可预期。
         /// </summary>
@@ -719,7 +708,7 @@ namespace ArchiveFixer.Extraction
             return depth;
         }
 
-        /// <summary>收集"最上层"的过程物节点：它自己是过程物、而它父亲不是。</summary>
+        /// <summary>收集"最上层"的其余物节点：它自己是其余物、而它父亲不是。</summary>
         private static List<Node> CollectArtifactRoots(Node root, Func<Node, bool> isArtifact)
         {
             var result = new List<Node>();
@@ -825,12 +814,12 @@ namespace ArchiveFixer.Extraction
                 FinalizeLayoutKind.WrapInFolder => "判定表 2：在目标目录下套一层",
                 FinalizeLayoutKind.PromoteInnermostFolder => "判定表 3：提上来的是最后那个有意义的文件夹（路上有纯空壳目录）",
                 FinalizeLayoutKind.CollapseSingleChain => "判定表 4：单链塌缩到最深层那个文件夹名",
-                FinalizeLayoutKind.ProcessArtifactsOnly => "只有过程物，没有内容物",
+                FinalizeLayoutKind.ProcessArtifactsOnly => "只有其余物，没有内容物",
                 FinalizeLayoutKind.Empty => "暂存区里没有可定稿的东西",
                 _ => "定稿布局规划失败"
             };
 
-            string summary = $"{layout}；共 {moveCount} 项移动（其中过程物 {artifactMoveCount} 项）";
+            string summary = $"{layout}；共 {moveCount} 项移动（其中其余物 {artifactMoveCount} 项）";
 
             if (!string.IsNullOrWhiteSpace(contentParent))
             {
@@ -845,7 +834,10 @@ namespace ArchiveFixer.Extraction
             return summary;
         }
 
-        /// <summary>把 <c>过程物\xxx</c> 的开头那段摘掉：已经在过程物目录里的东西不要再套一层。</summary>
+        /// <summary>
+        /// 把 <c>其余物\xxx</c> 的开头那段摘掉：已经在其余物目录里的东西不要再套一层。
+        /// 旧名 <c>过程物</c> 同样认（决策 D-8：老版本留下的目录还在用户的盘上）。
+        /// </summary>
         private static string StripLeadingArtifactSegment(string relativePath)
         {
             int separator = relativePath.IndexOf('\\');
@@ -857,7 +849,7 @@ namespace ArchiveFixer.Extraction
 
             string first = relativePath[..separator];
 
-            return string.Equals(first, ProcessArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
+            return ProcessArtifactLayout.IsArtifactDirectoryName(first)
                 ? relativePath[(separator + 1)..]
                 : string.Empty;
         }
@@ -922,12 +914,12 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 自己或祖先里有没有"显式标的过程物"。
+        /// 自己或祖先里有没有"显式标的其余物"。
         ///
         /// <para>
         /// 走到内容物根就停（<paramref name="contentScope"/> 这一层的标记仍然算数）：
-        /// 内容物根**之上**的标记不外溢到内容物里 —— 否则"把暂存区整个标成过程物、再把内容物根指到它里面"
-        /// 这种写法会把用户的内容物一起扫进 <c>过程物</c>。
+        /// 内容物根**之上**的标记不外溢到内容物里 —— 否则"把暂存区整个标成其余物、再把内容物根指到它里面"
+        /// 这种写法会把用户的内容物一起扫进 <c>其余物</c>。
         /// </para>
         /// </summary>
         private static bool HasMarkedArtifact(Node node, Node? contentScope)
@@ -1108,7 +1100,7 @@ namespace ArchiveFixer.Extraction
             /// <summary>沿路跳过的纯空壳目录（子树里一个文件都没有）。</summary>
             public List<Node> Shells { get; } = new();
 
-            /// <summary>那一层的活条目（文件 + 目录，已排除过程物与纯空壳）。</summary>
+            /// <summary>那一层的活条目（文件 + 目录，已排除其余物与纯空壳）。</summary>
             public List<Node> Items { get; } = new();
 
             public bool HasContent { get; set; }
@@ -1140,7 +1132,7 @@ namespace ArchiveFixer.Extraction
             /// <summary>文件字节数（目录恒为 0）。</summary>
             public long Size { get; set; }
 
-            /// <summary>调用方显式标的过程物。</summary>
+            /// <summary>调用方显式标的其余物。</summary>
             public bool MarkedArtifact { get; set; }
 
             public List<Node> Children { get; } = new();

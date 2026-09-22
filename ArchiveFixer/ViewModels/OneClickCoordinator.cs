@@ -273,8 +273,11 @@ namespace ArchiveFixer.ViewModels
                         await SnapshotCandidateDirectoriesAsync(roundTargets);
 
                     // 第三步：解压（密码本、旁路说明文件、分卷守卫都在解压流程里生效）。
+                    // 走**整理路径**的入口：定稿 + 校验通过 + 未取消之后按设置处理源包
+                    // （默认移入其余物，决策 D-9/D-11/D-12）。手动「只解压」按钮走的
+                    // StartExtractAsync 是地基路径，永远不动源包 —— 两者只在这一件事上不同。
                     AppendLog("INFO", round == 1 ? "一键处理：开始解压。" : $"一键处理：第 {round} 层开始解压。");
-                    await _extractionCoordinator.StartExtractAsync();
+                    await _extractionCoordinator.StartExtractForOneClickAsync();
 
                     UpdateSummary();
 

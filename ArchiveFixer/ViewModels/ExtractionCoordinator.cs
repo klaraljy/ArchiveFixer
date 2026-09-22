@@ -24,8 +24,9 @@ namespace ArchiveFixer.ViewModels
     internal sealed class ExtractionCoordinator
     {
         /// <summary>
-        /// 「过程物」目录名（契约 §3.2）：为得到内容物而产生、用户不需要的东西 ——
-        /// 内层归档、分卷、抠出来的中间 ZIP、纯壳文件夹。
+        /// 「其余物」目录名（契约 §3.2，2026-09-22 由「过程物」改名）：为得到内容物而产生、
+        /// 用户不需要的东西 —— 内层归档、分卷、抠出来的中间 ZIP、纯壳文件夹；**以及源包本身**
+        /// （决策 D-9：一键处理默认把源包也移进来，用户在那个目录里一次删掉就干净了）。
         ///
         /// 名字的**唯一来源**是 <see cref="ProcessArtifactLayout.ArtifactDirectoryName"/>，
         /// 这里只是给本类内部一个短名字用（别在别处再写一遍字面量）。
@@ -37,6 +38,14 @@ namespace ArchiveFixer.ViewModels
         private readonly PasswordService _passwordService;
         private readonly PathService _pathService;
         private readonly DialogService _dialogService;
+
+        /// <summary>
+        /// 源包搬运要碰的文件系统（决策 D-12）。
+        ///
+        /// 默认走真实文件系统；单测注入假实现来验证**跨盘那条路**（真机上很难临时造第二个卷）：
+        /// "复制成功后再删原件、复制失败源包一个字节都不动"是红线，不能只靠读代码。
+        /// </summary>
+        private readonly ISourceMoveFileSystem _sourceMoveFileSystem;
 
         /// <summary>
         /// 递归解压（M4）。引擎、探测器、密码来源全部注入，递归层自己不碰密码本。
@@ -105,14 +114,19 @@ namespace ArchiveFixer.ViewModels
             IArchiveEngine archiveEngine,
             PasswordService passwordService,
             PathService pathService,
-            DialogService dialogService)
+            DialogService dialogService,
+            ISourceMoveFileSystem? sourceMoveFileSystem = null)
         {
             _vm = vm;
             _archiveEngine = archiveEngine;
             _passwordService = passwordService;
             _pathService = pathService;
             _dialogService = dialogService;
+            _sourceMoveFileSystem = sourceMoveFileSystem ?? FileSystemSourceMoveFileSystem.Instance;
         }
+
+        /// <summary>源包搬运用的文件系统（真实实现或测试注入的假实现）。</summary>
+        private ISourceMoveFileSystem SourceMoveFileSystem => _sourceMoveFileSystem;
 
         private AppSettings Settings => _vm.Settings;
 
@@ -149,6 +163,14 @@ namespace ArchiveFixer.ViewModels
             public bool CommitFailed { get; init; }
 
             public string CommitFailureMessage { get; init; } = string.Empty;
+
+            /// <summary>
+            /// 源包没能移入其余物（非 null = **任务要标成"部分完成"**）。
+            ///
+            /// 与越界/预算同一口径地走"结论"这条路回传：内容物已经好了，这件事只影响任务的完成度，
+            /// 所以它**不**顶掉"解压成功"，但也绝不允许被静默吞掉（D-12：移动失败要写明原因）。
+            /// </summary>
+            public string? SourceMoveFailure { get; init; }
         }
 
         /// <summary>定稿搬运的一句话结论（给日志与任务字段用）。</summary>
@@ -165,11 +187,14 @@ namespace ArchiveFixer.ViewModels
             /// <summary>真的搬过去的内容物条数。</summary>
             public int MovedContentCount { get; init; }
 
-            /// <summary>真的搬过去的过程物条数。</summary>
+            /// <summary>真的搬过去的其余物条数。</summary>
             public int MovedProcessCount { get; init; }
 
             /// <summary>内容物文件数（来自定稿计划，不是"搬了几条"）。</summary>
             public int ContentFileCount { get; init; }
+
+            /// <summary>其余物目录（定稿计划算出来的那个）。源包搬运要用它当目标根（决策 D-10/D-12）。</summary>
+            public string ProcessArtifactDirectory { get; init; } = string.Empty;
 
             public long ProcessArtifactBytes { get; init; }
 
@@ -187,7 +212,7 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 定稿布局计划：直接包住 <see cref="ResultFinalizer"/> 的结论，只加三样执行阶段要用的东西 ——
-        /// 过程物源路径的集合（执行时判断一条移动属于哪一类）与"这是不是一次失败的规划"。
+        /// 其余物源路径的集合（执行时判断一条移动属于哪一类）与"这是不是一次失败的规划"。
         ///
         /// 为什么不再自己算一套相对路径：判定表（契约 §3.1：终端单文件直接放 / 多文件套一层 /
         /// 多重空目录提上来 / 单链塌缩）**只有一份实现**，就在 <see cref="ResultFinalizer"/> 里。
@@ -201,13 +226,13 @@ namespace ArchiveFixer.ViewModels
 
             public FinalizeLayoutKind Layout { get; init; } = FinalizeLayoutKind.Empty;
 
-            /// <summary>全部移动（**内容物在前、过程物在后**，按这个顺序执行）。</summary>
+            /// <summary>全部移动（**内容物在前、其余物在后**，按这个顺序执行）。</summary>
             public IReadOnlyList<PlannedMove> Moves { get; init; } = Array.Empty<PlannedMove>();
 
             /// <summary>计划里的内容物条数。</summary>
             public int PlannedContentCount { get; init; }
 
-            /// <summary>哪几条是过程物（按 From 查，执行时用）。</summary>
+            /// <summary>哪几条是其余物（按 From 查，执行时用）。</summary>
             public HashSet<string> ProcessArtifactSources { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
             public string ProcessArtifactDirectory { get; init; } = string.Empty;
@@ -256,6 +281,11 @@ namespace ArchiveFixer.ViewModels
         /// <param name="stageDirectory">
         /// 本任务的暂存目录（入仓阶段的产物在这里，最终目录此时还是干净的）。
         /// </param>
+        /// <param name="oneClickRun">
+        /// 这一批是不是「一键处理」发起的整理路径（决策 D-9）。
+        /// <c>false</c> = 地基路径（只解压）：**永远不动源包**，连 <see cref="AppSettings.SourceHandling"/>
+        /// 都不读 —— 这是不变量 1 的例外范围之外。
+        /// </param>
         private async Task<bool> PostProcessSuccessAsync(
             ArchiveTask task,
             string engineArchivePath,
@@ -263,6 +293,7 @@ namespace ArchiveFixer.ViewModels
             string stageDirectory,
             string outputRedirectNote,
             OutputPlacementMode placementMode,
+            bool oneClickRun,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -279,7 +310,27 @@ namespace ArchiveFixer.ViewModels
             // 开关在进后台之前读一次：设置是用户可改的，别让后台线程读到半路改掉的值。
             bool collectResults = Settings.CollectResultsToDirectory;
             string collectTargetDirectory = Settings.CollectTargetDirectory;
-            bool deleteSource = Settings.DeleteSourceAfterExtract;
+
+            /*
+             * 源包处理（决策 D-9，一次读清、三档互斥）。
+             *
+             * · 一键处理：按设置的三档走 —— 移入其余物（默认）/ 留在原地 / 校验通过后删除。
+             * · 地基路径（手动「只解压」）：**永远不动源包**，连 SourceHandling 都不读，
+             *   一律 KeepInPlace；它沿用 §9.5 的老开关 DeleteSourceAfterExtract
+             *   （默认关，且只有"解压成功 + 校验通过"才删），行为与本轮改造前一个字都不差。
+             *
+             * 为什么 deleteSource 在两条路径上取不同来源：
+             * 旧的那个布尔开关是给地基路径用的；一键处理现在有自己的三档，
+             * 其中 DeleteAfterVerify 才是"删"，MoveToRest 只"移"——两者绝不能同时生效，
+             * 否则刚搬进其余物的源包会被下一步清理掉，用户看到的就成了"源包没了"。
+             */
+            SourceHandlingMode sourceHandling = oneClickRun
+                ? AppSettings.ParseSourceHandling(Settings.SourceHandling)
+                : SourceHandlingMode.KeepInPlace;
+
+            bool deleteSource = oneClickRun
+                ? sourceHandling == SourceHandlingMode.DeleteAfterVerify
+                : Settings.DeleteSourceAfterExtract;
 
             /*
              * 终端落法（规格 §3.1 / 设置项 TerminalLayoutMode）同样在这里读一次并解析：
@@ -296,6 +347,7 @@ namespace ArchiveFixer.ViewModels
                     collectResults,
                     collectTargetDirectory,
                     deleteSource,
+                    sourceHandling,
                     placementMode,
                     terminalLayout,
                     cancellationToken),
@@ -378,6 +430,18 @@ namespace ArchiveFixer.ViewModels
 
             task.VerifyMessage = verifyMessage;
 
+            /*
+             * 源包没能移入其余物（决策 D-12）：内容物已经好了，所以**不**改"解压成功"这个结论，
+             * 但任务整体没做完 —— 按用户明确要求标成「部分完成」并写明原因。
+             * 不变量 6 的反面同样成立：跑了一半的事不许只报成功。
+             */
+            if (!string.IsNullOrWhiteSpace(work.SourceMoveFailure))
+            {
+                task.Status = StatusText.PartiallyCompleted;
+                task.ErrorMessage = work.SourceMoveFailure;
+                task.VerifyMessage = $"{verifyMessage}；{work.SourceMoveFailure}";
+            }
+
             if (work.Collected != null && work.Collected.Success)
             {
                 task.CollectedPath = work.Collected.DestinationPath;
@@ -395,7 +459,7 @@ namespace ArchiveFixer.ViewModels
              */
             if (work.Verification.Verified && !cancellationToken.IsCancellationRequested)
             {
-                CleanupTaskWorkspaceDirectory(task);
+                CleanupTaskWorkspaceDirectory(task, stageDirectory);
             }
 
             // 走到这里说明"解压成功"这个结论没有被越界 / 超预算顶掉。
@@ -418,6 +482,7 @@ namespace ArchiveFixer.ViewModels
             bool collectResults,
             string collectTargetDirectory,
             bool deleteSource,
+            SourceHandlingMode sourceHandling,
             OutputPlacementMode placementMode,
             TerminalLayoutMode terminalLayout,
             CancellationToken cancellationToken)
@@ -494,7 +559,7 @@ namespace ArchiveFixer.ViewModels
             logEntries.Add((verification.Verified ? "INFO" : "WARN", $"{task.FileName}：结果校验 —— {verification.Message}"));
 
             /*
-             * 2) 定稿（契约 §2.2）：把暂存产物**一次性**搬到最终目录，中间件归入 <c>过程物</c>。
+             * 2) 定稿（契约 §2.2）：把暂存产物**一次性**搬到最终目录，中间件归入 <c>其余物</c>。
              *
              * 只在这一刻、只有这一条路径会往最终目录写东西。之前的所有动作（抠内嵌归档、解第一层、
              * 解内层分卷）都在私有暂存目录里完成 —— 这就是用户那句"分卷文件你居然又解压到外面来了"
@@ -584,25 +649,45 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 删除是**不可逆**的，AGENTS.md §9.5 明确要求"取消、部分完成、校验失败时一律不删"，
-             * 所以清理源包之前单独再查一次令牌 —— 用户刚按下「取消当前」时最不该发生的就是删源包。
+             * 所以处理源包之前单独再查一次令牌 —— 用户刚按下「取消当前」时最不该发生的就是删源包。
+             * 搬运（MoveToRest）也走这一个检查点：D-11 要求"未取消"才动源包。
              */
             cancellationToken.ThrowIfCancellationRequested();
 
             /*
-             * 4) 清理源包（默认关闭；未通过校验时服务内部会拒绝执行）。
+             * 4) 源包处理（决策 D-9/D-11/D-12，三档互斥）。
+             *
+             * 走到这里已经满足 D-11 的前三个条件：内容物已定稿（上面的 commit）、输出校验通过
+             * （verification.Verified，不在下面每个分支里重查会漏，所以这里统一把门）、未取消（刚查过）。
+             * 第四个条件是"属于本任务分卷组"——清单只来自任务自身（见 SourcePackageMover.ResolveSourceGroup）。
              *
              * 只对**最外层源包**做：续解出来的内层包，它的"源文件"是我们自己产出的中间件
-             * （现在就在 <c>过程物</c> 里），既不是用户给的包，也不该被这条开关删掉 ——
-             * 用户按下"解压后删除源包"时想删的是他拖进来的那个包，不是过程物。
+             * （现在就在 <c>其余物</c> 里），既不是用户给的包，也不该被搬走/删掉 ——
+             * 用户按下"解压后删除源包"时想删的是他拖进来的那个包，不是其余物里的中间件。
              */
+            SourcePackageMoveResult? sourceMove = null;
+            string? sourceMoveFailure = null;
+
             if (task.IsContinuationTask)
             {
-                if (deleteSource)
+                if (sourceHandling != SourceHandlingMode.KeepInPlace)
                 {
-                    logEntries.Add(("INFO", $"{task.FileName}：内层包，源文件属于过程物，已跳过清理源包。"));
+                    logEntries.Add(("INFO", $"{task.FileName}：内层包，源文件属于其余物里的中间件，已跳过源包处理。"));
                 }
             }
-            else
+            else if (sourceHandling == SourceHandlingMode.MoveToRest)
+            {
+                sourceMove = MoveSourcePackageIntoRest(
+                    task, verification, commit, collected, stageDirectory, sourceHandling, logEntries);
+
+                if (sourceMove.FailedCount > 0)
+                {
+                    // 内容物已经好了，只有源包没搬成 —— 这不是"解压失败"，而是"这件事没做完"。
+                    sourceMoveFailure =
+                        $"内容物已好，源包未能移入其余物：{sourceMove.Message}（源包仍在原处，内容物不受影响）";
+                }
+            }
+            else if (sourceHandling == SourceHandlingMode.DeleteAfterVerify)
             {
                 SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
                     task,
@@ -620,18 +705,208 @@ namespace ArchiveFixer.ViewModels
                 Verification = verification,
                 LogEntries = logEntries,
                 Collected = collected,
-                Commit = commit
+                Commit = commit,
+                SourceMoveFailure = sourceMoveFailure
             };
         }
 
         /// <summary>
-        /// 抠出来的内嵌归档（双面文件尾部那一段）在定稿后是否搬进 <c>过程物</c>。
+        /// 把本任务的**整组源包**搬进其余物（决策 D-9/D-11/D-12）。
         ///
-        /// 契约 §3.2 把"抠出来的中间 ZIP"列为过程物，本来是**该搬**的 —— 但实测下来不能搬，
+        /// <para>
+        /// 四个前置条件缺一不可（D-11）：① 内容物已定稿（<paramref name="commit"/> 搬过内容物、
+        /// 没有任何搬运失败）；② 输出校验通过；③ 未取消（调用方刚查过令牌）；④ 属于本任务分卷组。
+        /// 任何一个不成立就**一个字节都不动**，并且不生成 <c>其余物</c> 目录。
+        /// </para>
+        /// <para>
+        /// 目标目录的算法（这里有个坑）：其余物目录是**定稿计划**里算出来的那个，
+        /// 但归集（Collect）会把整个产物目录搬走 —— 搬走之后计划里的路径已经不存在了。
+        /// 归集成功时其余物跟着落到 <c>归集目录\&lt;相对路径&gt;</c>（归集保留目录结构），
+        /// 所以按"计划路径相对 destDir 的那一段"平移过去即可；平移后的位置不存在就退回计划路径
+        /// （归集部分失败时其余物可能只搬走了一半，留在原地的那些才是真的）。
+        /// </para>
+        /// <para>
+        /// **只允许在后台线程上跑**（跨盘时是整包拷贝，几百 MB 到几十 GB）。
+        /// </para>
+        /// </summary>
+        private SourcePackageMoveResult MoveSourcePackageIntoRest(
+            ArchiveTask task,
+            OutputVerificationResult verification,
+            StageCommitResult commit,
+            CollectResult? collected,
+            string stageDirectory,
+            SourceHandlingMode sourceHandling,
+            List<(string Level, string Message)> logEntries)
+        {
+            var skipped = new SourcePackageMoveResult { Attempted = false, Message = "未执行" };
+
+            if (sourceHandling != SourceHandlingMode.MoveToRest)
+            {
+                return skipped;
+            }
+
+            if (!verification.Verified)
+            {
+                // 校验没过就没有"这次整理完成了"这回事，源包一律不动（D-11 第 2 条）。
+                logEntries.Add(("WARN", $"{task.FileName}：输出校验未通过，源包留在原地（未移入其余物）。"));
+                return new SourcePackageMoveResult { Attempted = false, Message = "输出校验未通过，源包留在原地" };
+            }
+
+            if (!commit.Attempted || commit.MovedContentCount == 0 || commit.FailedCount > 0)
+            {
+                // 内容物没定稿成功（或只是部分搬进去）：源包不动，其余物也不生成（D-11 第 1 条）。
+                logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，源包留在原地（未移入其余物）。"));
+                return new SourcePackageMoveResult { Attempted = false, Message = "内容物未全部定稿，源包留在原地" };
+            }
+
+            string artifactRoot = ResolveRestDirectoryAfterCollect(commit, collected);
+
+            if (string.IsNullOrWhiteSpace(artifactRoot))
+            {
+                logEntries.Add(("WARN", $"{task.FileName}：其余物目录算不出来，源包留在原地。"));
+                return new SourcePackageMoveResult { Attempted = false, Message = "其余物目录算不出来" };
+            }
+
+            /*
+             * 搬运本体（SourcePackageMover，纯 Extraction 层、可脱离 WPF 单测）：
+             * 整组一起移、绝不覆盖、跨盘先复制成功再删原件、单个失败不影响其余。
+             */
+            var mover = new SourcePackageMover(SourceMoveFileSystem);
+
+            SourcePackageMovePlan plan = mover.Plan(task, artifactRoot);
+            SourcePackageMoveResult result = mover.Execute(plan);
+
+            foreach (string line in result.LogLines)
+            {
+                logEntries.Add(("INFO", $"{task.FileName}：{line}"));
+            }
+
+            if (result.Attempted)
+            {
+                logEntries.Add((result.FailedCount == 0 ? "INFO" : "WARN", $"{task.FileName}：源包处理 —— {result.Message}"));
+            }
+            else
+            {
+                logEntries.Add(("INFO", $"{task.FileName}：源包处理 —— {plan.Message}"));
+
+                foreach (ArtifactSkip skip in plan.Skipped)
+                {
+                    logEntries.Add(("WARN", $"{task.FileName}：{skip.Message}：{skip.SourcePath}"));
+                }
+            }
+
+            if (result.MovedCount > 0)
+            {
+                /*
+                 * 源文件换了地方，任务对象必须跟着改（ArchiveTask.CurrentPath 的语义就是"当前真实路径"）。
+                 * 不改的后果是具体的：一键处理的续解扫描按"解压后新出现的归档起点"找内层包，
+                 * 而它排除"源文件"用的正是任务的 CurrentPath / VolumePaths ——
+                 * 于是刚搬进其余物的源包会被当成一个**新的内层包**再解一遍，
+                 * 内容物被重复写进同一个输出目录（实测过的那种"凭空多一份"）。
+                 *
+                 * 仍然把 OriginalPath 留着（它表示"最初导入路径"，详情窗口与报告都读它）。
+                 */
+                ApplySourceMoveResult(task, result);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 归集之后其余物目录到底在哪。
+        ///
+        /// 归集把 <c>destDir</c> 整棵搬到 <c>归集目标\包名\</c>（**保留目录结构**），
+        /// 所以"计划路径相对 destDir 的那一段"就是它在新位置下的相对路径。三种情况：
+        /// ① 归集之后的位置已经存在（其余物真的被搬过去了）→ 用它；
+        /// ② 它还不存在、而计划路径还在（归集只搬走了一部分）→ 用计划路径；
+        /// ③ 两边都不存在（本次根本没有中间件）→ **跟着内容物走**，在归集目录里新建。
+        ///
+        /// ③ 是最容易写错的一档：没有中间件时 <c>destDir\其余物</c> 压根不存在，
+        /// 只看"存在与否"就会退回那个**已经不存在**的旧位置，源包被扔进一个空目录（用户找不到）。
+        /// </summary>
+        private static string ResolveRestDirectoryAfterCollect(
+            StageCommitResult commit,
+            CollectResult? collected)
+        {
+            string planned = commit.ProcessArtifactDirectory;
+
+            if (string.IsNullOrWhiteSpace(planned))
+            {
+                return string.Empty;
+            }
+
+            if (collected is not { Success: true } || string.IsNullOrWhiteSpace(collected.DestinationPath))
+            {
+                return planned;
+            }
+
+            try
+            {
+                // destDir 从计划里的路径反推：其余物目录永远在它下面（计划就是这么算的）。
+                string destDir = Path.GetDirectoryName(planned) ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(destDir))
+                {
+                    return planned;
+                }
+
+                string moved = Path.Combine(
+                    collected.DestinationPath,
+                    Path.GetRelativePath(destDir, planned));
+
+                if (SafePathHelper.DirectoryExists(moved))
+                {
+                    return moved;
+                }
+
+                return SafePathHelper.DirectoryExists(planned) ? planned : moved;
+            }
+            catch
+            {
+                return planned;
+            }
+        }
+
+        /// <summary>
+        /// 搬运成功后把任务对象上的源路径改到新位置（CurrentPath 与分卷清单）。
+        ///
+        /// <c>task.FileName</c> 不变（只是换目录），所以界面上的名字照旧，路径列会显示新位置 ——
+        /// 这是诚实的：源包确实已经在其余物里了。
+        /// </summary>
+        private static void ApplySourceMoveResult(ArchiveTask task, SourcePackageMoveResult result)
+        {
+            var byOldPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (SourcePackageMove move in result.Moved)
+            {
+                byOldPath[move.SourcePath] = move.TargetPath;
+            }
+
+            if (task.VolumePaths.Count > 0)
+            {
+                for (int i = 0; i < task.VolumePaths.Count; i++)
+                {
+                    if (byOldPath.TryGetValue(task.VolumePaths[i], out string? movedVolume))
+                    {
+                        task.VolumePaths[i] = movedVolume;
+                    }
+                }
+            }
+
+            if (byOldPath.TryGetValue(task.CurrentPath, out string? movedCurrent))
+            {
+                task.CurrentPath = movedCurrent;
+            }
+        }
+
+        /// <summary>
+        /// 抠出来的内嵌归档（双面文件尾部那一段）在定稿后是否搬进 <c>其余物</c>。
+        ///
+        /// 契约 §3.2 把"抠出来的中间 ZIP"列为其余物，本来是**该搬**的 —— 但实测下来不能搬，
         /// 因为它不是"解出来的产物"，而是**解压的输入**（用户那个源文件的一段副本）：
         ///
         /// · 双面文件 <c>user.mp4</c> 的 ZIP 里就是内层分卷 <c>inner.7z.001/.002</c>；
-        ///   把它搬进 <c>过程物\user.zip</c> 之后，一键处理的续解扫描（它只看"本轮新出现的归档起点"）
+        ///   把它搬进 <c>其余物\user.zip</c> 之后，一键处理的续解扫描（它只看"本轮新出现的归档起点"）
         ///   会把这个 ZIP 也当成一个**新的内层包**，于是又解一遍、又产出 <c>inner.7z.001</c>、
         ///   再多续解一轮 —— 实测就是这个结果（回归测试"双面文件真实现场"从 2 轮变成 3 轮）。
         /// · 而且它往往很大（双面文件能到 760MB 量级），搬进用户目录等于凭空多一份大副本。
@@ -649,19 +924,19 @@ namespace ArchiveFixer.ViewModels
         /// 再把它的话翻译成本类执行阶段用的形状。
         ///
         /// 分工要说清楚：
-        /// · 本方法负责"**哪些是过程物**" —— 这一步只有跑过暂存阶段的人知道。
+        /// · 本方法负责"**哪些是其余物**" —— 这一步只有跑过暂存阶段的人知道。
         ///   判据用后缀（分卷段 + 归档本体）：解压出来的归档就是**待续解的内层包**，
-        ///   按流水线语义它属于过程物（一键处理下一轮会去解它，成功的话它的内容物自会落进内容物一层）；
-        ///   判定失败/到轮数上限时它留在 <c>过程物</c> 里可回收，比混在内容物里强。
+        ///   按流水线语义它属于其余物（一键处理下一轮会去解它，成功的话它的内容物自会落进内容物一层）；
+        ///   判定失败/到轮数上限时它留在 <c>其余物</c> 里可回收，比混在内容物里强。
         ///   （ResultFinalizer 的注释建议"由调用方显式标"，这里就是那个调用方。）
         /// · <see cref="ResultFinalizer"/> 负责"摆成什么样" —— 终端单文件直接放、多文件套一层、
-        ///   多重空目录提上来、单链塌缩，以及 D-2 的 <c>&lt;源目录&gt;\过程物\&lt;包基名&gt;\</c>。
+        ///   多重空目录提上来、单链塌缩，以及 D-2 的 <c>&lt;源目录&gt;\其余物\&lt;包基名&gt;\</c>。
         ///
         /// 纯函数：只读目录、只返回计划，一个字节都不动，所以能脱离管线被测。
         /// </summary>
         /// <param name="stageDirectory">暂存目录（入仓阶段的产物树）。</param>
         /// <param name="destinationDirectory">最终目录（落点由 <see cref="PathService.BuildOutputPath"/> 算）。</param>
-        /// <param name="placementMode">落点模式；只影响过程物集中到哪（D-2 依赖它）。</param>
+        /// <param name="placementMode">落点模式；只影响其余物集中到哪（D-2 依赖它）。</param>
         /// <param name="archiveBaseName">
         /// 终端归档基名（"没有最外层文件夹名"时给那一层取名用）。传空则退回 destDir 自己的末段名。
         /// </param>
@@ -699,7 +974,7 @@ namespace ArchiveFixer.ViewModels
                 }
                 catch
                 {
-                    // 量不出大小只影响"过程物总共多大"这个数字，不影响布局。
+                    // 量不出大小只影响"其余物总共多大"这个数字，不影响布局。
                 }
 
                 staged.Add(new StagedEntry
@@ -759,7 +1034,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这条路是不是"过程物"（契约 §3.2）：分卷段（<c>.001</c>/<c>.z01</c>/<c>.r00</c>/<c>.part1</c>）
+        /// 这条路是不是"其余物"（契约 §3.2）：分卷段（<c>.001</c>/<c>.z01</c>/<c>.r00</c>/<c>.part1</c>）
         /// 与归档本体（<c>.7z</c>/<c>.zip</c>/<c>.rar</c>/…）。抠出来的中间 ZIP 也落在这一条里。
         /// </summary>
         internal static bool IsProcessArtifactFile(string filePath)
@@ -901,7 +1176,7 @@ namespace ArchiveFixer.ViewModels
             int movedProcess = 0;
             int renamed = 0;
 
-            // 计划里 **内容物在前、过程物在后**：先让用户要的东西落位，再收拾中间件。
+            // 计划里 **内容物在前、其余物在后**：先让用户要的东西落位，再收拾中间件。
             foreach (PlannedMove move in plan.Moves)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -976,7 +1251,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 抠出来的内嵌归档：它是从源文件按偏移再生出来的派生数据，契约 §3.2 把它列为过程物。
+             * 抠出来的内嵌归档：它是从源文件按偏移再生出来的派生数据，契约 §3.2 把它列为其余物。
              * 它**不在暂存区里**（在任务工作区根下，是解压的输入），所以不在上面的计划里，单独搬一次。
              * 为什么默认不搬：见 MoveCarvedArtifactIntoProcessDirectory 的说明。
              */
@@ -1020,7 +1295,7 @@ namespace ArchiveFixer.ViewModels
             string summary =
                 $"内容物 {plan.ContentFileCount} 个文件 → {destinationDirectory}" +
                 (movedProcess > 0
-                    ? $"；过程物 {movedProcess} 项（{plan.ProcessArtifactTotalSize} 字节）→ {processDirectory}"
+                    ? $"；其余物 {movedProcess} 项（{plan.ProcessArtifactTotalSize} 字节）→ {processDirectory}"
                     : string.Empty) +
                 (renamed > 0 ? $"；{renamed} 项同名，已改名未覆盖" : string.Empty) +
                 (failures.Count > 0 ? $"；{failures.Count} 项没能搬运" : string.Empty);
@@ -1034,6 +1309,7 @@ namespace ArchiveFixer.ViewModels
                 MovedContentCount = movedContent,
                 MovedProcessCount = movedProcess,
                 ContentFileCount = plan.ContentFileCount,
+                ProcessArtifactDirectory = processDirectory,
                 ProcessArtifactBytes = plan.ProcessArtifactTotalSize,
                 RenamedCount = renamed,
                 FailedCount = failures.Count,
@@ -1512,7 +1788,33 @@ namespace ArchiveFixer.ViewModels
         private void AppendLog(string level, string message) => _vm.AppendLog(level, message);
         private void UpdateSummary() => _vm.UpdateSummary();
 
-        public async Task StartExtractAsync()
+        /// <summary>
+        /// 批量解压入口 —— **地基路径**（界面「只解压（不改后缀）」走的就是它）。
+        ///
+        /// <para>
+        /// 源包处理按**发起方**分流（决策 D-9，用户 2026-09-22 拍板）：
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description>「一键处理」= 整理路径 → 走 <see cref="StartExtractForOneClickAsync"/>，按 <see cref="AppSettings.SourceHandling"/> 处理源包（默认移入其余物）；</description></item>
+        /// <item><description>本方法 = **地基路径：永远不动源包**，与设置值无关
+        /// （不变量 1 的例外范围被用户显式限定在"一键处理 + MoveToRest/DeleteAfterVerify"这一条路径上）。</description></item>
+        /// </list>
+        /// <para>
+        /// ⚠ 两条路径的差别**只在这一件事**上（回写 <c>oneClickRun</c> 一路传到底）；
+        /// 定稿、校验、归集、工作区清理的行为完全一致。
+        /// 新增入口时必须自己选一边：拿不准就选地基语义（什么都不动），
+        /// 绝不能让"要不要搬走用户的源文件"变成一件靠猜的事。
+        /// </para>
+        /// </summary>
+        public Task StartExtractAsync() => StartExtractCoreAsync(oneClickRun: false);
+
+        /// <summary>
+        /// 「一键处理」的显式入口：源包按设置处理（决策 D-9）。
+        /// 与 <see cref="StartExtractAsync"/> 是同一个本体，只是把"这是整理路径"这件事说死。
+        /// </summary>
+        public Task StartExtractForOneClickAsync() => StartExtractCoreAsync(oneClickRun: true);
+
+        private async Task StartExtractCoreAsync(bool oneClickRun)
         {
             if (_isExtracting)
             {
@@ -1593,7 +1895,7 @@ namespace ArchiveFixer.ViewModels
                         break;
                     }
 
-                    runningTasks.Add(ProcessExtractTaskAsync(task));
+                    runningTasks.Add(ProcessExtractTaskAsync(task, oneClickRun));
                 }
 
                 // 等待所有已启动的任务结束（包括“停止后续”后仍在运行的任务）。
@@ -1633,14 +1935,14 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private async Task ProcessExtractTaskAsync(ArchiveTask task)
+        private async Task ProcessExtractTaskAsync(ArchiveTask task, bool oneClickRun)
         {
             var taskCts = new CancellationTokenSource();
             _runningTaskCts.Add(taskCts);
 
             try
             {
-                await ExtractSingleTaskAsync(task, taskCts.Token);
+                await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
             }
             catch (OperationCanceledException)
             {
@@ -1686,7 +1988,7 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private async Task ExtractSingleTaskAsync(ArchiveTask task, CancellationToken cancellationToken)
+        private async Task ExtractSingleTaskAsync(ArchiveTask task, CancellationToken cancellationToken, bool oneClickRun)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1795,8 +2097,8 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 落点模式（契约 §1.1 的四种，由旧的三个设置项翻译过来）。
-             * 定稿时要靠它决定过程物集中到哪：模式 B（解压到当前目录）下目标目录就是源目录本身，
-             * 一个目录里几十上百个包会共用它，所以过程物再套一层包基名（决策 D-2，由 ResultFinalizer 实现）。
+             * 定稿时要靠它决定其余物集中到哪：模式 B（解压到当前目录）下目标目录就是源目录本身，
+             * 一个目录里几十上百个包会共用它，所以其余物再套一层包基名（决策 D-2，由 ResultFinalizer 实现）。
              */
             OutputPlacementMode placementMode = OutputPlacement.FromLegacyFlags(
                 extractOptions.ExtractToOriginalDirectory,
@@ -1871,7 +2173,7 @@ namespace ArchiveFixer.ViewModels
                  * 「输出目录已存在且非空 → 自动改名成 xxx(1)」只对**最外层源包**做。
                  *
                  * 为什么续解出来的内层包必须跳过这一步：它的落点是父任务**正在用**的那个目录
-                 * （内容物 + 过程物都在里面），对它改名等于把第二层解到旁边的 xxx(1) 去 ——
+                 * （内容物 + 其余物都在里面），对它改名等于把第二层解到旁边的 xxx(1) 去 ——
                  * 那正是用户抱怨的"多弄了四个文件夹、文件一多根本分不清"。
                  * 同名冲突也不会因此丢东西：内层产物进目录时由定稿搬运的 AutoRename 兜住（绝不覆盖）。
                  */
@@ -2211,11 +2513,11 @@ namespace ArchiveFixer.ViewModels
 
                 if (task.Status == StatusText.ExtractSuccess)
                 {
-                    // 递归产物同样要走"校验 → 定稿 → 归集 → 可选清理"，与单层路径一个字都不差。
+                    // 递归产物同样要走"校验 → 定稿 → 归集 → 源包处理"，与单层路径一个字都不差。
                     bool recursionConclusionStands = await PostProcessSuccessAsync(
-                        task, engineArchivePath, string.Empty, engineOutputPath, outputRedirectNote, placementMode, cancellationToken);
+                        task, engineArchivePath, string.Empty, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken);
 
-                    if (recursionConclusionStands)
+                    if (recursionConclusionStands && task.Status == StatusText.ExtractSuccess)
                     {
                         AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
                     }
@@ -2402,7 +2704,7 @@ namespace ArchiveFixer.ViewModels
 
                     // 收尾可能把"解压成功"顶掉（产物越界 / 超预算 / 定稿失败）：只有结论仍然成立时才敢这么写日志。
                     bool conclusionStands = await PostProcessSuccessAsync(
-                        task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, cancellationToken);
+                        task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken);
 
                     if (conclusionStands)
                     {
@@ -2484,11 +2786,12 @@ namespace ArchiveFixer.ViewModels
                         // 同"先测试再解压"那条分支：密码成功记录挂源文件，不挂工作区里的临时文件。
                         _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
 
-                        // 同"先测试再解压"那条分支：收尾否掉结论（越界 / 超预算 / 定稿失败）时不许写"解压成功"。
+                        // 同"先测试再解压"那条分支：收尾否掉结论（越界 / 超预算 / 定稿失败 / 源包没有搬成）时
+                        // 不许写"解压成功" —— 源包没搬成的任务状态是"部分完成"，写"解压成功"就是自相矛盾。
                         bool conclusionStands = await PostProcessSuccessAsync(
-                            task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, cancellationToken);
+                            task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken);
 
-                        if (conclusionStands)
+                        if (conclusionStands && task.Status == StatusText.ExtractSuccess)
                         {
                             AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
                         }
@@ -2639,7 +2942,7 @@ namespace ArchiveFixer.ViewModels
         /// 三条刻意的选择：
         /// ① 放工作区（<see cref="PathService.WorkDirectory"/>）而不是源目录旁边 ——
         ///    中间产物不得写进源目录（AGENTS.md §6 第 12 条）。抠出来的这一段只是为了能解压，
-        ///    不是用户要的东西；定稿时它会被归入 <c>过程物</c>（契约 §3.2），取消/失败时留在工作区；
+        ///    不是用户要的东西；定稿时它会被归入 <c>其余物</c>（契约 §3.2），取消/失败时留在工作区；
         /// ② 文件名沿用**源文件的包基名**，不改成随机临时名 ——
         ///    密码本"名称:密码"的映射匹配用的就是包基名，随机名会让本来能命中的密码全部落空，
         ///    用户看到的现象会是"同一个包以前能解开，现在说密码错误"；
@@ -2670,14 +2973,19 @@ namespace ArchiveFixer.ViewModels
         /// 取消 / 部分完成 / 校验失败 / 越界一律不删 —— 产物可能没落全，工作区里的中间件是用户唯一的线索。
         ///
         /// 安全边界（这是"删目录"，每一条都要有）：
-        /// · 目录按 <see cref="PathService.BuildTaskWorkDirectory"/> 的同一套布局算出，
+        /// · 目录按**暂存目录的父目录**算出（不再按 CurrentPath 重算，见下），
         ///   再规范化确认它确实在工作区根**之下**（容器内校验，越界就什么都不删）；
         /// · 目录里只允许出现 <c>stage</c> 这一个子目录（我们自己造的）与本任务的中间件文件；
         ///   出现别的子目录说明这不是我们造的那个目录（最典型：任务名撞上了递归工作区的 <c>recursive</c>），
         ///   为安全起见一个字节都不碰；
         /// · 删失败（被占用 / 权限不足）只写日志，绝不让已经成功的任务变成失败。
+        ///
+        /// ⚠ 目录**必须**由 <paramref name="stageDirectory"/> 反推，不能再调
+        /// <see cref="PathService.BuildTaskWorkDirectory"/> 重算：它的 taskId 含源路径哈希，
+        /// 而一键处理成功后会按设置把源包搬进其余物并回写 <c>task.CurrentPath</c> ——
+        /// 重算出来的就是另一个目录，清理会静默地什么都不做（实测口径：近 1 GB 中间件留在工作区）。
         /// </summary>
-        private void CleanupTaskWorkspaceDirectory(ArchiveTask task)
+        private void CleanupTaskWorkspaceDirectory(ArchiveTask task, string stageDirectory)
         {
             if (task == null)
             {
@@ -2685,7 +2993,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             string workRoot = _pathService.WorkDirectory;
-            string taskDirectory = _pathService.BuildTaskWorkDirectory(task);
+            string taskDirectory = string.IsNullOrWhiteSpace(stageDirectory)
+                ? _pathService.BuildTaskWorkDirectory(task)
+                : Path.GetDirectoryName(stageDirectory.TrimEnd('\\', '/')) ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(taskDirectory))
             {

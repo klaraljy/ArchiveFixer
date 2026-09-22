@@ -195,7 +195,7 @@ namespace ArchiveFixer.ViewModels
         private readonly DialogService _dialogService;
 
         /// <summary>
-        /// 清理过程物 / 空文件夹的本体（服务层早就实现且测过，本轮把它接到界面上）。
+        /// 删除其余物 / 清理空文件夹的本体（服务层早就实现且测过，本轮把它接到界面上）。
         ///
         /// ⚠ 它里面的每一步都是磁盘活（扫目录、量大小、执行删除），**只允许在后台线程上调用**
         /// （见 <see cref="RunCleanupAsync"/> 里的 Task.Run）。
@@ -477,8 +477,18 @@ namespace ArchiveFixer.ViewModels
         /// <summary>打开递归解压的工作区目录（中断后残留的中间产物在这里）。</summary>
         public ICommand OpenWorkDirectoryCommand { get; }
 
-        /// <summary>清理当前任务输出目录下的「过程物」（默认移入回收站，激进档彻底删除）。</summary>
+        /// <summary>
+        /// 删除当前勾选任务自己那一份「其余物」（默认移入回收站，激进档彻底删除）。
+        ///
+        /// ⚠ 作用域只到本任务那一份：包有自己的目录时是 <c>&lt;输出目录&gt;\其余物\</c>，
+        /// 共享输出目录时是 <c>&lt;共享根&gt;\其余物\&lt;本任务包基名&gt;\</c> —— 绝不碰别的包的目录。
+        /// </summary>
         public ICommand CleanProcessArtifactsCommand { get; }
+
+        /// <summary>
+        /// 删除当前输出目录下的**全部**其余物（会影响同目录里的所有包，确认框里写明个数）。
+        /// </summary>
+        public ICommand CleanAllProcessArtifactsCommand { get; }
 
         /// <summary>清理当前任务输出根下"任意层级都没有文件"的空文件夹。</summary>
         public ICommand CleanEmptyFoldersCommand { get; }
@@ -490,6 +500,9 @@ namespace ArchiveFixer.ViewModels
         public ICommand CopyTaskErrorCommand { get; }
         public ICommand OpenTaskDirectoryCommand { get; }
         public ICommand OpenTaskOutputDirectoryCommand { get; }
+
+        /// <summary>打开当前任务的其余物目录（旧名"过程物"）；没有就提示一句。</summary>
+        public ICommand OpenTaskArtifactDirectoryCommand { get; }
         public ICommand ToggleShowPasswordCommand { get; }
         /// <summary>一键处理：识别 → 修正伪装后缀（一次预览确认）→ 按密码本解压 → 一行汇总。</summary>
         public ICommand OneClickProcessCommand { get; }
@@ -588,13 +601,18 @@ namespace ArchiveFixer.ViewModels
             OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
             OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
 
-            // 清理入口（菜单「工具」里的两项）：预览 → 确认 → 后台执行，全程不阻塞界面。
+            // 其余物删除入口（菜单「工具」）：预览 → 确认 → 后台执行，全程不阻塞界面。
+            // 第一个只作用于**当前勾选任务自己那一份**；第二个是显式的"整个目录"入口（默认不选）。
             CleanProcessArtifactsCommand = new AsyncRelayCommand(
-                () => RunCleanupAsync(CleanupScope.ProcessArtifacts),
+                () => RunCleanupAsync(CleanupScope.Artifacts, ArtifactDeleteScope.SelectedTask),
+                CanRunNormalCommand);
+
+            CleanAllProcessArtifactsCommand = new AsyncRelayCommand(
+                () => RunCleanupAsync(CleanupScope.Artifacts, ArtifactDeleteScope.EverythingInDirectory),
                 CanRunNormalCommand);
 
             CleanEmptyFoldersCommand = new AsyncRelayCommand(
-                () => RunCleanupAsync(CleanupScope.EmptyFolders),
+                () => RunCleanupAsync(CleanupScope.EmptyFolders, ArtifactDeleteScope.SelectedTask),
                 CanRunNormalCommand);
 
 
@@ -605,6 +623,7 @@ namespace ArchiveFixer.ViewModels
             CopyTaskErrorCommand = new RelayCommand(CopyTaskError);
             OpenTaskDirectoryCommand = new RelayCommand(OpenTaskDirectory);
             OpenTaskOutputDirectoryCommand = new RelayCommand(OpenTaskOutputDirectory);
+            OpenTaskArtifactDirectoryCommand = new RelayCommand(OpenTaskArtifactDirectory);
             ToggleShowPasswordCommand = new RelayCommand(() =>
             {
                 ShowPassword = !ShowPassword;
@@ -1199,8 +1218,8 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 清理流程（菜单「工具 → 清理过程物… / 清理空文件夹…」）：
-        /// **预览 → 红色确认 →（激进档）二次确认 → 后台执行 → 写日志**。
+        /// 其余物/空文件夹的删除流程（菜单「工具 → 删除其余物… / 删除本目录全部其余物… / 清理空文件夹…」）：
+        /// **预览 → 红色确认（默认回收站，勾选框切激进档）→（激进档）二次确认 → 后台执行 → 写日志**。
         ///
         /// 线程纪律（本项目历史上因 UI 线程干重活卡死过）：
         /// 预览统计与删除执行全部在 <see cref="Task.Run(System.Action)"/> 里；
@@ -1208,25 +1227,32 @@ namespace ArchiveFixer.ViewModels
         ///
         /// 取消的语义：任何一步没确认，就**什么都不做**（一个字节都不动），只留一条日志。
         /// </summary>
-        private async Task RunCleanupAsync(CleanupScope scope)
+        /// <param name="scope">作用域类型（其余物 / 空文件夹）。</param>
+        /// <param name="deleteScope">
+        /// 作用域大小：只删当前勾选任务那一份（默认），还是删整个共享目录下的全部。
+        /// 后者只由「删除本目录全部其余物…」这个显式入口传进来。
+        /// </param>
+        private async Task RunCleanupAsync(CleanupScope scope, ArtifactDeleteScope deleteScope)
         {
-            string title = scope == CleanupScope.ProcessArtifacts ? "清理过程物" : "清理空文件夹";
+            bool everything = deleteScope == ArtifactDeleteScope.EverythingInDirectory;
+
+            string title = scope == CleanupScope.EmptyFolders
+                ? "清理空文件夹"
+                : everything ? "删除本目录全部其余物" : "删除其余物";
 
             ArchiveTask? task = SelectedTask;
 
             if (task == null)
             {
-                AppendLog("WARN", $"{title}：没有选中任务，已取消（清理只作用于当前选中的那一个任务）。");
+                AppendLog("WARN", $"{title}：没有选中任务，已取消（删除只作用于当前选中的那一个任务）。");
                 _dialogService.ShowWarning($"请先在列表里选中一个任务，再执行「{title}」。");
                 return;
             }
 
-            string outputDirectory = task.OutputPath ?? string.Empty;
-
-            if (string.IsNullOrWhiteSpace(outputDirectory))
+            if (string.IsNullOrWhiteSpace(task.OutputPath))
             {
                 AppendLog("WARN", $"{title}：任务「{task.FileName}」还没有输出目录（先解压一次），已取消。");
-                _dialogService.ShowWarning($"任务「{task.FileName}」还没有输出目录，无法清理。");
+                _dialogService.ShowWarning($"任务「{task.FileName}」还没有输出目录，无法删除。");
                 return;
             }
 
@@ -1234,10 +1260,10 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                // ① 预览（后台）：列出将删除的条目数与总大小；没有可清理的就到此为止。
-                CleanupPreview preview = await Task.Run(() => scope == CleanupScope.ProcessArtifacts
-                    ? _cleanupService.PreviewProcessArtifacts(outputDirectory)
-                    : _cleanupService.PreviewEmptyFolders(outputDirectory));
+                // ① 预览（后台）：列出将删除的条目数与总大小；没有可删的就到此为止。
+                CleanupPreview preview = await Task.Run(() => scope == CleanupScope.EmptyFolders
+                    ? _cleanupService.PreviewEmptyFolders(task.OutputPath)
+                    : _cleanupService.PreviewProcessArtifacts(task, deleteScope));
 
                 AppendLog(preview.HasTarget ? "INFO" : "WARN", $"{title}（{task.FileName}）：{preview.Message}");
 
@@ -1250,13 +1276,17 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * ② 确认（红色）。默认档就是**移入回收站**，勾选框才是切换到激进档 ——
                  * 默认动作与"最不意外"一致，危险的那一档必须用户主动勾选（规格 §3.2 清理表）。
+                 *
+                 * ⚠ 必须用 ShowDestructiveConfirmWithOption（**不勾也能确认**）：
+                 * 勾选框在这里是"档位选择"而不是"必须承认才能继续"，用错方法会让默认的回收站档走不下去。
                  */
-                string sharedScopeNote = BuildSharedScopeNote(scope, task);
+                string scopeNote = BuildSharedScopeNote(scope, task, preview);
 
-                bool confirmed = _dialogService.ShowDestructiveConfirm(
-                    BuildCleanupConfirmText(title, preview, DeleteMode.RecycleBin, sharedScopeNote),
+                bool confirmed = _dialogService.ShowDestructiveConfirmWithOption(
+                    BuildCleanupConfirmText(title, preview, DeleteMode.RecycleBin, scopeNote),
                     "移入回收站",
-                    "改为彻底删除（不可恢复，不进回收站）",
+                    "改为彻底删除，不进回收站",
+                    optionCheckedByDefault: false,
                     out bool permanentRequested);
 
                 if (!confirmed)
@@ -1274,7 +1304,7 @@ namespace ArchiveFixer.ViewModels
                      * 只弹一次红色框是不够的 —— 规格 §3.2 要求"红色标识"与"二次确认"两件事同时满足。
                      */
                     bool acknowledged = _dialogService.ShowDestructiveConfirm(
-                        BuildCleanupConfirmText(title, preview, DeleteMode.Permanent, sharedScopeNote),
+                        BuildCleanupConfirmText(title, preview, DeleteMode.Permanent, scopeNote),
                         "彻底删除",
                         "我知道彻底删除不可恢复，这些内容不会进回收站",
                         out bool irreversibleAcknowledged);
@@ -1288,22 +1318,26 @@ namespace ArchiveFixer.ViewModels
                     mode = DeleteMode.Permanent;
                 }
 
-                // ④ 执行（后台）：删除本身绝不在 UI 线程上跑。
-                CleanupOutcome outcome = await Task.Run(() => scope == CleanupScope.ProcessArtifacts
-                    ? _cleanupService.CleanProcessArtifacts(outputDirectory, mode)
-                    : _cleanupService.CleanEmptyFolders(outputDirectory, mode));
+                // ④ 执行（后台）：删除本身绝不在 UI 线程上跑；作用域用预览算出来的那一份，不重算。
+                CleanupOutcome outcome = await Task.Run(() => scope == CleanupScope.EmptyFolders
+                    ? _cleanupService.CleanEmptyFolders(task.OutputPath, mode)
+                    : _cleanupService.CleanProcessArtifacts(task, mode, preview, deleteScope));
 
                 WriteCleanupOutcomeLog(title, task, preview, outcome);
 
                 string summary = BuildCleanupSummary(title, outcome);
 
-                if (outcome.SuccessCount > 0)
+                /*
+                 * 有失败就绝不能显示成"全部成功"（不变量 6 的同一口径）：
+                 * 只要有任何一个条目没删掉，就用警告框把原因列出来。
+                 */
+                if (outcome.FailureCount > 0 || outcome.SucceededNothing)
                 {
-                    _dialogService.ShowInfo(summary);
+                    _dialogService.ShowWarning(summary);
                 }
                 else
                 {
-                    _dialogService.ShowWarning(summary);
+                    _dialogService.ShowInfo(summary);
                 }
             }
             catch (Exception ex)
@@ -1319,7 +1353,8 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 确认框正文：写清"删什么、多少、能不能撤销"，并把作用域路径原文列出来
-        /// （作用域越大越要让用户看见，例如模式 B 下 过程物 目录可能被多个包共用）。
+        /// （作用域越大越要让用户看见，例如共享输出目录下 其余物 会被多个包共用；
+        /// 含源包时还要说清"删掉后需要重新下载"）。
         /// </summary>
         internal static string BuildCleanupConfirmText(
             string title,
@@ -1335,6 +1370,26 @@ namespace ArchiveFixer.ViewModels
             builder.AppendLine($"作用范围：{preview.ScopePath}");
             builder.AppendLine($"顶层 {preview.ItemCount} 项，共 {preview.EntryCount} 个条目 / {preview.TotalBytes} 字节"
                                + (preview.Determined ? string.Empty : "（部分内容读不到，数字可能不全）"));
+
+            /*
+             * 源包提示必须**显著**：其余物里现在也有源包本身（用户 2026-09-22 的新布局），
+             * 删掉它意味着要重新下载 —— 这是用户最容易忽略的一个后果。
+             */
+            if (preview.SourcePackageCount > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine($"⚠ 含 {preview.SourcePackageCount} 个源包文件（压缩包本身），删掉后需要重新下载：");
+
+                foreach (string name in preview.SourcePackageNames)
+                {
+                    builder.AppendLine("· " + name);
+                }
+
+                if (preview.SourcePackageCount > preview.SourcePackageNames.Count)
+                {
+                    builder.AppendLine($"…等共 {preview.SourcePackageCount} 个源包");
+                }
+            }
 
             if (!string.IsNullOrWhiteSpace(scopeNote))
             {
@@ -1368,29 +1423,43 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 作用域提醒：当任务的目标目录**就是源包所在目录**时（落点模式 B：解压到压缩包所在目录），
-        /// 两个清理作用域都会覆盖到同目录里其它包留下的东西 —— 这必须在确认框里说明白。
+        /// 作用域提醒：这次删除覆盖的范围是"只有本任务那一份"还是"整个共享目录"。
         ///
         /// <para>
-        /// 为什么不去"只删本任务那一份"：模式 B 下过程物本来就集中在一个
-        /// <c>&lt;源目录&gt;\过程物\</c> 里（规格 §7 决策 D-2 只加了按包名分的子目录），
-        /// 而空文件夹清理按定义就是"扫这个根"（规格 §5）。
-        /// 作用域按规格保持不变，但**用户必须知道自己确认的是什么范围** ——
-        /// 这是"删除不可逆"这条红线下唯一诚实的做法。
+        /// 其余物（<see cref="CleanupScope.Artifacts"/>）：共享输出目录（模式 B / 指定位置直接放）下
+        /// **只删本任务包基名那一份**，所以这里说清"不会碰到别的包的其余物"；
+        /// 走「删除本目录全部其余物…」这个显式入口时反过来强调"会影响同目录的所有包"。
+        /// </para>
+        /// <para>
+        /// 空文件夹（<see cref="CleanupScope.EmptyFolders"/>）：按规格 §5 作用域就是"扫这个根"，
+        /// 共享模式下会覆盖到同目录里其它包留下的空壳 —— 这必须让用户看见
+        /// （它删的只是"任意层级都没有文件"的目录，不含任何文件）。
         /// </para>
         /// </summary>
-        internal static string BuildSharedScopeNote(CleanupScope scope, ArchiveTask? task)
+        internal static string BuildSharedScopeNote(
+            CleanupScope scope,
+            ArchiveTask? task,
+            CleanupPreview? preview = null)
         {
             if (task == null || !IsOutputDirectorySharedWithSource(task.OutputPath, task.CurrentPath))
             {
                 return string.Empty;
             }
 
-            return scope == CleanupScope.ProcessArtifacts
-                ? "当前任务是「解压到压缩包所在目录」模式，这个 过程物 目录与同目录的其它包共用，"
-                  + "本次会一并清掉它们的过程物（都是可再生的中间件）。"
-                : "当前任务是「解压到压缩包所在目录」模式，输出根就是源包所在目录，"
-                  + "本次会清掉这个目录下所有“任意层级都没有文件”的子目录（不只是本任务产出的）。";
+            if (scope == CleanupScope.EmptyFolders)
+            {
+                return "当前任务是「解压到压缩包所在目录」模式，输出根就是源包所在目录，"
+                       + "本次会清掉这个目录下所有“任意层级都没有文件”的子目录（不只是本任务产出的；不含任何文件）。";
+            }
+
+            if (preview?.ResolvedScope?.DeletesEverythingInDirectory == true)
+            {
+                return "这是「删除本目录全部其余物」：输出目录与同目录的其它包共用，"
+                       + "本次会一并删掉它们的其余物（含各自的源包文件），删掉后都需要重新下载。";
+            }
+
+            return "当前任务是「解压到压缩包所在目录」模式（多个包共用这个输出目录），"
+                   + "本次只删本任务那一份其余物（按包基名分开的子目录），不会碰其它包的其余物。";
         }
 
         /// <summary>任务的输出目录是不是就是源包所在目录（模式 B 的判据）。</summary>
@@ -1584,6 +1653,14 @@ namespace ArchiveFixer.ViewModels
             builder.AppendLine("后缀状态：" + (task.ExtensionStatus ?? string.Empty));
             builder.AppendLine("密码状态：" + (task.PasswordStatus ?? string.Empty));
             builder.AppendLine("输出目录：" + (task.OutputPath ?? string.Empty));
+
+            /*
+             * 其余物路径也带上（用户要求）：用户想手动去看/去删时不必自己拼路径。
+             * 用与删除入口同一份作用域解析，"看到的"和"会删的"永远是同一个目录。
+             */
+            ArtifactCleanupScope artifactScope = MaintenanceCleanupService.ResolveArtifactScope(task);
+            builder.AppendLine("其余物目录：" + (artifactScope.ArtifactDirectory ?? string.Empty));
+
             builder.AppendLine("操作：" + (task.Operation ?? string.Empty));
             builder.AppendLine("状态：" + (task.Status ?? string.Empty));
             builder.AppendLine("进度：" + (task.ProgressText ?? string.Empty));
@@ -1614,6 +1691,36 @@ namespace ArchiveFixer.ViewModels
             {
                 _pathService.OpenDirectory(task.OutputPath);
             }
+        }
+
+        /// <summary>
+        /// 打开其余物目录（右键菜单入口）。
+        ///
+        /// 路径用与「删除其余物」**同一份解析**（<see cref="MaintenanceCleanupService.ResolveArtifactScope"/>）：
+        /// 用户在这里看到的目录，就是那条删除入口会动的那一个 —— 两个入口给出不同答案是最容易出事的形态。
+        /// </summary>
+        private void OpenTaskArtifactDirectory(object? parameter)
+        {
+            if (parameter is not ArchiveTask task)
+            {
+                return;
+            }
+
+            ArtifactCleanupScope scope = MaintenanceCleanupService.ResolveArtifactScope(task);
+
+            if (!scope.IsResolved && string.IsNullOrWhiteSpace(scope.ArtifactDirectory))
+            {
+                _dialogService.ShowInfo("这个任务还没有其余物目录（还没解压，或已经被删掉了）。");
+                return;
+            }
+
+            if (SafePathHelper.DirectoryExists(scope.ArtifactDirectory))
+            {
+                _pathService.OpenDirectory(scope.ArtifactDirectory);
+                return;
+            }
+
+            _dialogService.ShowInfo("其余物目录不存在（可能已经被删掉了）：" + scope.ArtifactDirectory);
         }
 
         internal void RebuildTaskIndex()
@@ -1654,6 +1761,7 @@ namespace ArchiveFixer.ViewModels
                  OpenLogDirectoryCommand,
                  ResetSettingsCommand,
                  CleanProcessArtifactsCommand,
+                 CleanAllProcessArtifactsCommand,
                  CleanEmptyFoldersCommand,
 
                  RemoveTaskCommand,

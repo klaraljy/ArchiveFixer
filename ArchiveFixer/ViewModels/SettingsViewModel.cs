@@ -133,6 +133,33 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 源包处理档（决策 D-9，三选一）：一键处理里源包是移入其余物 / 留在原地 / 校验通过后删除。
+        ///
+        /// 读写的是设置里的字符串（<see cref="AppSettings.SourceHandling"/>），
+        /// 解析/序列化都走 <see cref="AppSettings.ParseSourceHandling"/> /
+        /// <see cref="AppSettings.ToSourceHandlingValue"/> —— 与解压时的口径是同一份实现
+        /// （与 <see cref="TerminalLayout"/> 同一套写法，避免"界面上选了这个、跑起来是那个"）。
+        ///
+        /// ⚠ 这一档**只影响一键处理**；手动「只解压」是地基路径，永远不动源包。
+        /// </summary>
+        public SourceHandlingMode SourceHandling
+        {
+            get => AppSettings.ParseSourceHandling(Settings.SourceHandling);
+            set
+            {
+                string stored = AppSettings.ToSourceHandlingValue(value);
+
+                if (string.Equals(Settings.SourceHandling, stored, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                Settings.SourceHandling = stored;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
         /// 场景 B 塌缩（规格 §3.3，默认**开**）：包基名与所在目录同名、且目录下只有这一个包时，
         /// 去掉重复的一层（<c>111\222\名字\名字.rar</c> → 产物落 <c>111\222\名字\</c>）。
         /// </summary>
@@ -417,6 +444,7 @@ namespace ArchiveFixer.ViewModels
             // 恢复默认 / 重新加载设置之后必须显式通知，否则界面还显示旧值。
             OnPropertyChanged(nameof(TerminalLayout));
             OnPropertyChanged(nameof(CollapseRepeatedFolderLayer));
+            OnPropertyChanged(nameof(SourceHandling));
             OnPropertyChanged(nameof(CacheRootDirectory));
         }
 

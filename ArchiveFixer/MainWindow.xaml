@@ -54,14 +54,20 @@
                 <MenuItem Header="打开日志目录" Command="{Binding OpenLogDirectoryCommand}" />
                 <Separator />
                 <!--
-                    清理入口（规格 §3.2 / §5）。两个动作**互相独立**，不合并成一个开关：
-                    过程物只作用于当前任务输出目录下的「过程物」，空文件夹只作用于当前任务的输出根。
-                    流程固定为：预览（条目数 + 总大小）→ 红色确认 → 默认移入回收站；
-                    勾选"改为彻底删除"后还要再来一次红色 + 勾选框的二次确认。
+                    删除入口（规格 §3.2 / §5）。三个动作**互相独立**，不合并成一个开关：
+                    「删除其余物」只作用于**当前勾选任务自己那一份**（包有自己的目录时是
+                    <任务输出目录>\其余物\，共享输出目录时是 <共享根>\其余物\<本任务包基名>\，
+                    绝不碰别的包的目录）；「删除本目录全部其余物」是显式的整目录入口，默认不选；
+                    「清理空文件夹」只作用于当前任务的输出根。
+                    流程固定为：预览（条目数 + 总大小 + 源包提示）→ 红色确认 → 默认移入回收站；
+                    勾选"改为彻底删除，不进回收站"后还要再来一次红色 + 勾选框的二次确认。
                 -->
-                <MenuItem Header="清理过程物..."
+                <MenuItem Header="删除其余物..."
                           Command="{Binding CleanProcessArtifactsCommand}"
-                          ToolTip="清理当前选中任务输出目录下的「过程物」（内层归档 / 分卷 / 中间件）。先预览条目数与总大小，默认移入回收站。" />
+                          ToolTip="删除当前选中任务自己那一份「其余物」（内层归档 / 分卷 / 中间件 / 源包）。先预览条目数、总大小与源包个数，默认移入回收站，不会碰同一个目录下其它包的其余物。" />
+                <MenuItem Header="删除本目录全部其余物..."
+                          Command="{Binding CleanAllProcessArtifactsCommand}"
+                          ToolTip="删除当前任务输出目录（共享目录模式下就是源包所在目录）下的**全部**其余物，会影响同目录里的所有包。先预览并写明影响范围，默认不选。" />
                 <MenuItem Header="清理空文件夹..."
                           Command="{Binding CleanEmptyFoldersCommand}"
                           ToolTip="清理当前选中任务输出根下“任意层级都没有文件”的子目录。先预览，默认移入回收站。" />
@@ -414,6 +420,14 @@
 
                                 <MenuItem Header="打开输出目录"
                                           Command="{Binding PlacementTarget.DataContext.OpenTaskOutputDirectoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+
+                                <!--
+                                    其余物（旧名"过程物"）：为得到内容物而产生的中间件 + 源包本身。
+                                    给一个"打开它"的入口，用户想手动看一眼时不必自己拼路径。
+                                -->
+                                <MenuItem Header="打开其余物目录"
+                                          Command="{Binding PlacementTarget.DataContext.OpenTaskArtifactDirectoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                           CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
 
                                 <Separator />

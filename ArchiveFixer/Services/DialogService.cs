@@ -334,6 +334,55 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 危险操作确认 + **可选的**危险档勾选框（用户 2026-09-22 拍板的"其余物删除确认用勾选"）。
+        ///
+        /// <para>
+        /// 与 <see cref="ShowDestructiveConfirm(string, string, string, out bool)"/> 的区别只有一处，
+        /// 但很关键：<b>不勾选也能确认</b>。语义是"默认走安全档（移入回收站），勾上才切到激进档"——
+        /// 勾选框在这里是**档位选择**，不是"必须承认才能继续"的确认位。
+        /// 上一版把两者混用，导致用户不勾就没法走默认的回收站档。
+        /// </para>
+        /// <para>
+        /// 激进档自己的二次确认（红色 + "我知道不可恢复"必勾）由调用方在拿到
+        /// <paramref name="optionChecked"/> == true 之后再弹一次，本方法不代劳。
+        /// </para>
+        /// </summary>
+        /// <param name="optionChecked">用户最终是否勾选（未确认时恒为 false）。</param>
+        public bool ShowDestructiveConfirmWithOption(
+            string message,
+            string confirmText,
+            string optionText,
+            bool optionCheckedByDefault,
+            out bool optionChecked)
+        {
+            bool checkedState = optionCheckedByDefault;
+
+            bool confirmed = ShowValueDialog(
+                new AppDialogRequest
+                {
+                    Title = "危险操作确认",
+                    Message = message,
+                    Icon = AppDialogIcon.Warning,
+                    Buttons = AppDialogButtons.YesNo,
+                    Destructive = true,
+                    YesText = string.IsNullOrWhiteSpace(confirmText) ? "确定" : confirmText,
+                    NoText = "取消",
+                    OptionText = optionText ?? string.Empty,
+                    OptionChecked = optionCheckedByDefault
+                },
+                window =>
+                {
+                    checkedState = window.IsOptionChecked;
+                    return window.Result == MessageBoxResult.Yes;
+                },
+                "ShowDestructiveConfirmWithOption",
+                fallback: false);
+
+            optionChecked = confirmed && checkedState;
+            return confirmed;
+        }
+
+        /// <summary>
         /// 信息提示。
         /// </summary>
         public void ShowInfo(string message)
