@@ -31,3 +31,11 @@ samples/generated/
 
 # 本地临时（全局约定：E:\DeepSeekProjects\_tmp\<项目名>，不入仓库）
 _tmp/
+
+# 打包产物（scripts/package.ps1 产出：分发的 zip + 解压出来的分发目录）
+# ⚠ 是否把 zip 提交进仓库**待用户拍板**，所以这里先整体忽略。
+#   定了"要提交"就把下面这行换成两行（注意必须用 dist/*，不能写 dist/ ——
+#   父目录被整体排除后，! 放行规则不生效，git check-ignore -v <路径> 可以验证）：
+#     dist/*
+#     !dist/ArchiveFixer-<版本>-框架依赖.zip
+dist/

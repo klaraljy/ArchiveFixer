@@ -117,11 +117,61 @@ Windows 桌面工具：批量识别**被改坏后缀**的归档文件、按真�
 | **绝不默认覆盖** | 同名一律走"跳过或自动重命名"（默认 `AutoRename` → `名字(1)`）；即使选了覆盖，也是"先挪到临时名 → 落位成功 → 再删旧的"，不做"先删后移" |
 | **不联网、不写系统盘** | 不自动下载任何引擎、不上传任何东西；配置 / 日志 / 临时文件 / 工作区都在 **`<程序目录>\data\`**（`%AppData%` 与 C 盘缓存都已被明确否掉） |
 
+## 怎么拿到（打包命令 + 产物位置）
+
+```powershell
+pwsh -File scripts/package.ps1                 # 框架依赖版（默认，体积小）
+pwsh -File scripts/package.ps1 -SelfContained   # 独立版（自带 .NET 运行时，体积大）
+```
+
+| 产物 | 位置 |
+|---|---|
+| 分发目录（解压即用） | `dist\ArchiveFixer-<版本>\`；独立版另开一个目录 `dist\ArchiveFixer-<版本>-独立\`（两档互不覆盖） |
+| 分发的 zip | `dist\ArchiveFixer-<版本>-框架依赖.zip` / `dist\ArchiveFixer-<版本>-独立.zip`（zip 里带一层同名顶层文件夹，解压即得一个现成目录） |
+| 发布中间产物与 publish 日志 | `E:\DeepSeekProjects\_tmp\ArchiveFixer\package\`（临时目录，不入仓库） |
+
+脚本做五件事：`dotnet publish -c Release` 到临时目录 → 组装分发目录（exe 与运行时文件 +
+`tools\7zip\`（含 `License.txt` / `README.md`）+ `tools\unrar\`（含 `license.txt` / `README.md`）+
+`LICENSE` + `README.md` + `使用说明.md`）→ 打 zip → **自检** → 汇总。
+
+硬要求（脚本里都实现了，别绕过它手工打包）：
+
+- **版本号从 `ArchiveFixer/ArchiveFixer.csproj` 的 `<Version>` 读**，**不写死**在脚本里；
+- **幂等**：同一档重复跑先清掉自己那一份（同名分发目录 + 同名 zip）再重建；另一档的产物不受影响；
+- **自检**：zip 里必须能找到 `ArchiveFixer.exe`、`tools/7zip/7z.exe`、`tools/unrar/UnRAR.exe`、`LICENSE`
+  四样（另加两份第三方许可文本与 `README.md` / `使用说明.md` —— 它们是分发合规项），
+  并断言包里**没有** `data\` / 密码本 / 日志 / 样本 / 测试文件；
+  **缺任何一样就删掉这个 zip 并非零退出**，绝不产出半成品；
+- **被占用就明确报错**：分发目录里的程序正在运行（或被别的进程占着）时，脚本直接报错让你先关程序，
+  **不静默失败、也不替你去杀进程**；
+- 分发目录里**没有** `.pdb`（分发包只需要能跑；要连调试符号一起发就加 `-IncludeSymbols`）。
+
+## 怎么跑（框架依赖版 / 独立版）
+
+解压 zip → 得到一个目录 → **双击 `ArchiveFixer.exe`**。不需要安装、不写注册表、不需要管理员权限
+（但要放在**你自己可写**的目录里，别放 `C:\Program Files\`）。
+
+| 档 | 怎么产出 | 目标机需要什么 | zip 体积（11.0.0 实测） |
+|---|---|---|---|
+| **框架依赖版**（默认） | `pwsh -File scripts/package.ps1` | Windows 10/11 x64 + [**.NET 8 桌面运行时**（Desktop Runtime，x64）](https://dotnet.microsoft.com/download/dotnet/8.0) | 约 1.8 MB |
+| **独立版** | `pwsh -File scripts/package.ps1 -SelfContained` | 什么都不用装 | 约 70 MB（解开约 164 MB） |
+
+- 缺运行时的表现：双击 exe 会弹一个英文对话框，要求装 "Microsoft Windows Desktop Runtime"。
+  认准 **Desktop** Runtime（不是 Console / ASP.NET），装上即可。
+- 独立版**体积大但免装运行时** —— 要给不确定环境的机器（或帮忙测试的人）时用它。
+- 从源码直接跑（开发用，不是分发方式）：`dotnet run --project ArchiveFixer/ArchiveFixer.csproj`。
+
+> 面向使用者的完整说明（怎么用、每一项是什么意思、常见问题、已知限制）在
+> **`docs/使用说明.md`**，它也会被一起打进分发包；人工验收照着
+> **`docs/人工测试清单.md`** 逐条点。
+
 ## 环境要求
 
-- Windows 10/11
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)（含 Windows Desktop 运行时）
+- Windows 10/11（**64 位**：内置的 `7z.exe` / `UnRAR.exe` 都是 x64）
+- **要自己构建/开发**：[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)（含 Windows Desktop 运行时）
   - 本机同时装了 .NET 10 SDK，但**项目固定 `net8.0-windows`**，不随 SDK 漂移
+- **只是运行分发包**：**不需要 SDK** —— 框架依赖版要 [.NET 8 **桌面运行时**（x64）](https://dotnet.microsoft.com/download/dotnet/8.0)，
+  独立版什么都不用装（见上一节）
 - **7-Zip 命令行已内置**在 `ArchiveFixer/tools/7zip/`（26.03），构建时自动复制到输出目录，**不需要另外安装**
 - **RAR 解压引擎（RARLAB 免费件 `UnRAR.exe`，7.23 稳定版）也已内置**在 `ArchiveFixer/tools/unrar/`，
   同样随构建复制；想要用它自己的版本，可以在设置里指定路径（也可以完全不用它 —— 见「解压引擎」那一条）
@@ -212,13 +262,21 @@ ArchiveFixer/               WPF 主程序
   tools/unrar/              内置 RAR 解压引擎 UnRAR（RARLAB 免费件 7.23）+ 许可文本
   appsettings.json          默认配置模板（运行时实际读 <程序目录>\data\appsettings.json）
 ArchiveFixer.Tests/         xUnit：单元测试 + BaselineSmokeTests（M1 验收）
-docs/                       需求书 / 需求评审与考古 / 需求变更 / 输出与整理模型 / WinRAR功能参考 / 引擎与外部工具
+docs/                       需求书 / 需求评审与考古 / 需求变更 / 输出与整理模型 / WinRAR功能参考 /
+                            引擎与外部工具 / **使用说明（面向使用者）** / **人工测试清单（验收照着点）**
 samples/                    样本生成脚本 + 清单（样本本体不入库）
+scripts/                    package.ps1 —— 打绿色分发包（框架依赖版 / 独立版）+ 自检
+dist/                       打包产物（分发目录 + zip；不入库，见 .gitignore）
 AGENTS.md                   项目规则与里程碑
+LICENSE                     MIT（含第三方组件表）
 ```
 
-`docs/` 里除需求类文档外还有三份**实现契约/参考**：
+`docs/` 里除需求类文档外还有几份**面向使用/交付**的：
 
+- `docs/使用说明.md`：**给使用者和帮忙测试的人看的**（怎么跑、四种输出位置、其余物、密码本、
+  引擎、常见问题、已知限制）；会被打进分发包（根目录一份 + `docs\` 一份）。
+- `docs/人工测试清单.md`：**人工验收照着点**的清单，按 A/B/C 三级优先级排，每条写清
+  "做什么 → 看到什么算通过 → 不通过时记什么"。
 - `docs/输出与整理模型.md`：输出落点、其余物、源包处理的实现契约（写代码前先看它）。
 - `docs/WinRAR功能参考.md`：**WinRAR 功能设计参考** —— 逐条对照 WinRAR 的做法与我们的现状，
   每条给出"已覆盖 / 采纳 / 不做"的结论与理由（含 `ConflictAction=Ask` 缺陷修正、
@@ -260,25 +318,36 @@ pwsh -File samples/generate-samples.ps1        # 生成到 samples/generated/（
 | 符号链接条目看不出来 | 归档条目列表里没有链接目标，名字干净的链接条目仍可能把内容写到别处；现在靠"解压后落点校验"发现（**发现即判失败，不归集、不清理**），但拦不住那一次写入 |
 | 外接盘 / 网络路径未专门适配 | 是非目标（`AGENTS.md` §2）：只保证不写死盘符、不在源目录建工作区 |
 | `ResetSettingsCommand` 没有任何界面入口 | 命令定义了但**没有 XAML 绑定**（设置窗口里的「恢复默认」是真正能用的那条路）。留着是因为删它会牵动 `RaiseAllCommandCanExecuteChanged` 的清单，留待与其它死代码一起清 |
-| LICENSE 未定 | 对外分发前必须确定，并一并核对内置 7-Zip 的 LGPL + unRAR 条款（要点与结论见 `docs/引擎与外部工具.md`） |
+| LICENSE 已定（MIT） | 本仓库是 **MIT**（见 `LICENSE`）；其中的第三方组件表 + `tools\` 下两份许可原文覆盖了内置 7-Zip（LGPL + unRAR restriction）与 UnRAR（RARLAB freeware）的分发义务，`scripts/package.ps1` 的自检会强制这两份文本进包。分发前仍建议按 `docs/引擎与外部工具.md` §6 复核一遍 |
 | `Rar.exe` / `WinRAR.exe` 不能随包分发 | 共享软件，**绝不捆绑、绝不复制**；只保留"用户自装、我们检测与调用"这个位置（`AGENTS.md` §3.1）。程序会**只读地**看用户已装的 WinRAR 目录里有没有免费件 `UnRAR.exe` 并调用它，**绝不**调用 / 复制 `Rar.exe`、`WinRAR.exe`、`7zxa.dll`（边界见 `docs/引擎与外部工具.md` §4） |
 | RAR 侧引擎也不是万能的 | UnRAR 与 7-Zip 对同一批畸形包的容忍度不同，两个引擎都解不开的包仍然会失败（这时报的是**失败**，不会显示成功）。⚠ 已实测更正一条旧说法：7-Zip 26.01/26.03 **能**用正确密码解 RAR5/RAR4 的 `-hp`（含分卷），所以第二引擎的价值在"报错更准"（缺卷点名、加密头显式标志），不在"7-Zip 完全不能" |
 
-## 许可与第三方
+## 许可证（MIT + 内置第三方组件）
 
-> 完整的许可证边界（含"哪些能随包分发、哪些绝不能"与内置第二引擎的义务）见 **`docs/引擎与外部工具.md`**。
+**ArchiveFixer 本身是 MIT 许可**：版权归 `klaraljy`，全文见仓库根的 **[`LICENSE`](LICENSE)**。
+你可以自由使用、修改、再分发，条件是保留版权与许可声明；软件**按"现状"提供，不含任何担保**。
 
-- 内置的 7-Zip（`7z.exe` / `7z.dll`，**26.03**）版权归 7-Zip 作者，采用 **LGPL + unRAR restriction**；
-  本仓库内置它只是为了这个工具能直接调用，未做任何修改（来源、SHA256 与升级步骤见
-  `ArchiveFixer/tools/7zip/README.md`）。对外分发前需核对许可证条款
-  （LGPL 要求随包带许可文本；`unRAR restriction` 约束的是其中 RAR 解码部分的再分发）。
-- **内置的 RAR 解压引擎是 RARLAB 的免费件 `UnRAR.exe`（7.23 稳定版）**，在
-  `ArchiveFixer/tools/unrar/`（连同 `license.txt`）—— 其许可第 2 条**明确允许随其它软件包分发**，
-  分发时必须带上那份许可文本（来源、SHA256 见 `ArchiveFixer/tools/unrar/README.md`）。
-  ⛔ 许可第 4 条是红线：**绝不用它建包 / 改包，更不拿它重建 RAR 压缩算法**（我们只解压）。
-- **`Rar.exe` / `WinRAR.exe` 是共享软件，绝不分发、绝不捆绑**，也不复制 `UnRAR.dll` / `7zxa.dll` ——
-  只保留"用户自装、我们检测与调用"这个位置（`AGENTS.md` §3.1、`docs/引擎与外部工具.md`）。
-- 本仓库**尚无 LICENSE**（未定，见 `AGENTS.md` §12）；未定之前不创建空许可证文件。
+`LICENSE` 的末尾还有一张**第三方组件表**，因为分发包里内置了两个外部命令行工具，
+它们的许可**独立于**上面的 MIT：
+
+| 内置组件 | 在哪 | 它的许可 | **许可原文** |
+|---|---|---|---|
+| 7-Zip（`7z.exe` / `7z.dll`，26.03，未做任何修改） | 仓库 `ArchiveFixer/tools/7zip/`；分发包里 `tools\7zip\` | **GNU LGPL** + **unRAR 限制条款** | **`tools\7zip\License.txt`**（来源 / SHA256 / 升级步骤见 `tools\7zip\README.md`） |
+| UnRAR（`UnRAR.exe`，7.23，RARLAB 官方免费件） | 仓库 `ArchiveFixer/tools/unrar/`；分发包里 `tools\unrar\` | **RARLAB UnRAR freeware 许可**（第 2 条允许随其它软件包分发） | **`tools\unrar\license.txt`**（来源 / SHA256 见 `tools\unrar\README.md`） |
+
+三条边界（分发时逐条守住）：
+
+1. **两份许可文本必须随包**：`tools\7zip\License.txt` 与 `tools\unrar\license.txt` ——
+   后者是"允许随其它软件包分发"的**前提条件，缺了它不许分发**。
+   `scripts/package.ps1` 的自检把这两份文件列为**必须存在**，缺了直接报错并不产出 zip。
+2. **7-Zip 的 `unRAR restriction`**：约束的是其中 RAR 解码部分的再分发 ——
+   允许在任何软件里免费处理 RAR 归档，但**不得**拿它做 RAR 兼容的压缩器。我们**只解压**，正落在允许里。
+3. ⛔ **`Rar.exe` / `WinRAR.exe` 是共享软件，绝不分发、绝不捆绑**，也不复制 `UnRAR.dll` / `7zxa.dll` ——
+   只保留"用户自装、我们检测与调用"这个位置（`AGENTS.md` §3.1、`docs/引擎与外部工具.md`）。
+   程序只会**只读地**看用户已装的 WinRAR 目录里有没有免费件 `UnRAR.exe`。
+
+> 完整的许可证边界（含"哪些能随包分发、哪些绝不能"与分发前核对清单）见
+> **`docs/引擎与外部工具.md`** §0 与 §6。⚠ 那是工程判断，正式对外分发前仍须逐条复核许可原文。
 
 ## 开发约定（摘要）
 
