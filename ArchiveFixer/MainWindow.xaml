@@ -276,7 +276,8 @@
                     BorderThickness="1"
                     CornerRadius="{StaticResource CardCornerRadiusBottom}"
                     Padding="4">
-                <ListBox ItemsSource="{Binding Logs}"
+                <ListBox x:Name="LogList"
+                         ItemsSource="{Binding Logs}"
                          BorderThickness="0"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          ScrollViewer.HorizontalScrollBarVisibility="Auto">

@@ -3,6 +3,7 @@ using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using ArchiveFixer.Views;
 using System;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
@@ -16,6 +17,10 @@ namespace ArchiveFixer
         private bool _syncingPassword;
         private readonly DialogService _dialogService = new();
 
+        private INotifyCollectionChanged? _hookedLogs;
+        private ScrollViewer? _logScrollViewer;
+        private bool _logPinnedToBottom = true;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -28,6 +33,7 @@ namespace ArchiveFixer
         {
             HookViewModelPropertyChanged();
             SyncPasswordBoxFromViewModel();
+            HookLogAutoScroll();
         }
 
         private void MainWindow_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
@@ -39,6 +45,104 @@ namespace ArchiveFixer
 
             HookViewModelPropertyChanged();
             SyncPasswordBoxFromViewModel();
+            HookLogAutoScroll();
+        }
+
+        /// <summary>
+        /// 日志区跟随最新一行。
+        ///
+        /// 为什么要有它：以前追加日志**不滚动**，跑完一批之后日志区还停在最早那几行，
+        /// 用户看到的是"什么都没发生 / 卡住了"（端到端验收时实测到这个问题）。
+        ///
+        /// 但也不能无条件滚：用户往上翻看历史时被一直拽回底部同样难受。
+        /// 所以用"当前是否贴底"作为开关 —— 贴底才跟随，翻上去就尊重用户。
+        /// </summary>
+        private void HookLogAutoScroll()
+        {
+            if (_hookedLogs != null)
+            {
+                _hookedLogs.CollectionChanged -= Logs_CollectionChanged;
+                _hookedLogs = null;
+            }
+
+            if (_logScrollViewer != null)
+            {
+                _logScrollViewer.ScrollChanged -= LogScrollViewer_ScrollChanged;
+                _logScrollViewer = null;
+            }
+
+            if (DataContext is MainViewModel vm && vm.Logs is INotifyCollectionChanged notifier)
+            {
+                _hookedLogs = notifier;
+                _hookedLogs.CollectionChanged += Logs_CollectionChanged;
+            }
+
+            // ListBox 的 ScrollViewer 要等模板应用后才在可视树里，Loaded 时取一次即可。
+            _logScrollViewer = FindDescendant<ScrollViewer>(LogList);
+
+            if (_logScrollViewer != null)
+            {
+                _logScrollViewer.ScrollChanged += LogScrollViewer_ScrollChanged;
+            }
+
+            _logPinnedToBottom = true;
+        }
+
+        private void LogScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+        {
+            /*
+             * 只认"用户真的滚了"（VerticalChange != 0）。
+             * 内容变多也会触发 ScrollChanged，但那时 VerticalChange 为 0 ——
+             * 若把它也算进来，刚追加一行就会因为"底部变远了"而被判成"没贴底"，
+             * 后续日志再也不会跟随（这正是这类实现最常见的坑）。
+             */
+            if (Math.Abs(e.VerticalChange) < 0.1)
+            {
+                return;
+            }
+
+            // 8px 容差：滚动偏移是浮点，正好到底时未必严格相等。
+            _logPinnedToBottom = e.ExtentHeight <= e.ViewportHeight ||
+                                 e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 8;
+        }
+
+        private void Logs_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (e.Action != NotifyCollectionChangedAction.Add || LogList.Items.Count == 0)
+            {
+                return;
+            }
+
+            if (!_logPinnedToBottom)
+            {
+                return;
+            }
+
+            LogList.ScrollIntoView(LogList.Items[LogList.Items.Count - 1]);
+        }
+
+        private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+        {
+            int count = VisualTreeHelper.GetChildrenCount(root);
+
+            for (int i = 0; i < count; i++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(root, i);
+
+                if (child is T hit)
+                {
+                    return hit;
+                }
+
+                T? deeper = FindDescendant<T>(child);
+
+                if (deeper != null)
+                {
+                    return deeper;
+                }
+            }
+
+            return null;
         }
 
         private void HookViewModelPropertyChanged()
