@@ -160,6 +160,15 @@ namespace ArchiveFixer.Extraction
         /// <summary>条目路径不安全（预检拦下），本层不落盘。</summary>
         UnsafeEntry,
 
+        /// <summary>
+        /// 源文件发生了变化（不变量 11）：本层**一个字节都没解**，本批到此为止。
+        ///
+        /// <para>与 <see cref="EngineFailed"/> 分开：引擎压根没被调用，这不是"引擎解不开"，
+        /// 而是"手上这份识别结果已经不对应这个文件了"。用户要做的事也不同 ——
+        /// 重新扫描后再处理，而不是去怀疑包坏了或换个引擎。</para>
+        /// </summary>
+        SourceChanged,
+
         UserCancelled,
 
         EngineFailed
@@ -266,6 +275,26 @@ namespace ArchiveFixer.Extraction
         private string _lastRunArchivePath = string.Empty;
 
         /// <summary>
+        /// **不变量 11 的检查口**（AGENTS.md §6 第 11 条），可空。
+        ///
+        /// <para>
+        /// 每一层**开工之前**问一次："这一层要解的那个源文件还是原来那一份吗？"
+        /// 返回非 null = 已经拦下，本层不解、整条递归停下，那句话就是这次的结论。
+        /// </para>
+        /// <para>
+        /// 为什么由调用方注入而不是递归核心自己判：快照挂在 <see cref="ArchiveTask"/> 上、
+        /// 判据与状态落法都在协调器（同一句话要同时出现在任务状态、失败清单与日志里）。
+        /// 递归核心只知道"要解哪个归档"，它不认识快照，也不该认识 ——
+        /// 与引擎 / 探测器 / 密码来源全部注入是同一个理由。
+        /// </para>
+        /// <para>
+        /// ⚠ 注入方要**自己判断是不是第 0 层**：第 1 层起解的是工作区里的中间件，
+        /// 拿源包的快照去比它们只会得出一句必然错误的结论（见 ExtractionCoordinator）。
+        /// </para>
+        /// </summary>
+        private readonly Func<ArchiveTask, Task<string?>>? _sourceCheck;
+
+        /// <summary>
         /// passwordProvider：给定归档路径，返回按优先级排好的密码候选（**空字符串代表试空密码**）。
         /// 它由调用方注入，递归层自己不碰密码本，也不记明文。
         /// </summary>
@@ -273,18 +302,24 @@ namespace ArchiveFixer.Extraction
         /// 日志出口（level, message），可空。清理工作区是**不可逆操作**，删前删后各要一条 INFO、
         /// 删失败要一条 WARN（AGENTS.md §9.5 同一要求）—— 所以本类需要一个写日志的地方。
         /// </param>
+        /// <param name="sourceCheck">
+        /// 每层开工前的"源文件有没有变"检查（不变量 11），可空（不传 = 不做这件事，
+        /// 既有调用点与单测的行为因此一个字都不变）。
+        /// </param>
         public RecursiveExtractor(
             IArchiveEngine engine,
             IArchiveProber prober,
             Func<string, IReadOnlyList<string>> passwordProvider,
             RecursionLimits? limits = null,
-            Action<string, string>? log = null)
+            Action<string, string>? log = null,
+            Func<ArchiveTask, Task<string?>>? sourceCheck = null)
         {
             _engine = engine ?? throw new ArgumentNullException(nameof(engine));
             _prober = prober ?? throw new ArgumentNullException(nameof(prober));
             _passwordProvider = passwordProvider ?? (_ => Array.Empty<string>());
             _limits = limits ?? RecursionLimits.Default;
             _log = log;
+            _sourceCheck = sourceCheck;
         }
 
         /// <summary>
@@ -335,6 +370,13 @@ namespace ArchiveFixer.Extraction
 
             // 第 1 层起停下来时要能说清"还有多少个内层归档没展开"（不变量 8：多分支默认不展开，必须问）。
             int unexpandedCount = 0;
+
+            /*
+             * 因"源文件已变化"停下时，那句话就是本次的结论（不变量 11）。
+             * 与别的停因分开记：它的**理由来自调用方**（快照与状态都在协调器那边），
+             * 这里只负责原样带进 RecursionResult.Summary，不许在这里自己编一句。
+             */
+            string sourceChangedReason = string.Empty;
 
             // 参数校验放在建工作区之前：路径都没有就没什么可展开的，
             // 这里也**不抛异常**（递归核心对外的约定是"用返回值说清楚"，不是"炸给调用方"）。
@@ -455,6 +497,29 @@ namespace ArchiveFixer.Extraction
                         break;
                     }
 
+                    /*
+                     * 不变量 11：**本层开工之前**再问一次"源文件还是原来那一份吗"。
+                     *
+                     * 位置就在上限检查之后、真正动手（列目录 / 调引擎）之前：
+                     * 上限检查只算数、展开比那一步虽然会问引擎"这个包解压后多大"、
+                     * 但那是只读的探查；真正的写盘发生在 ExtractLayerAsync 里面，
+                     * 所以拦在这里 = 一个字节都没写过。
+                     *
+                     * 只对第 0 层问（见 _sourceCheck 的说明）：第 1 层起解的是我们自己
+                     * 从内层抠出来的中间件，拿源包的快照去比它们只会得出一句错误的结论。
+                     */
+                    if (item.IsRoot && _sourceCheck != null)
+                    {
+                        string? sourceChanged = await _sourceCheck(task).ConfigureAwait(false);
+
+                        if (!string.IsNullOrWhiteSpace(sourceChanged))
+                        {
+                            stopReason = RecursionStopReason.SourceChanged;
+                            sourceChangedReason = sourceChanged;
+                            break;
+                        }
+                    }
+
                     LayerOutcome outcome = await ExtractLayerAsync(item, cancellationToken, progress, stalled)
                         .ConfigureAwait(false);
 
@@ -520,7 +585,8 @@ namespace ArchiveFixer.Extraction
                         decision,
                         workspace,
                         finalOutputDirectory,
-                        string.Empty,
+                        // "源文件已变化"那句话由调用方给（快照与状态都在协调器那边），原样带进结论。
+                        sourceChangedReason,
                         publish,
                         unexpandedCount),
                     workspace,
@@ -1747,6 +1813,9 @@ namespace ArchiveFixer.Extraction
             {
                 RecursionStopReason.Completed => $"已完成 {done} 层递归解压（{reason}）",
                 RecursionStopReason.NeedsDecision => $"已完成 {done} 层，停在第 {done + 1} 层，原因：{reason}",
+                // "源文件已变化"时一层都没解是**常态**（拦在第 0 层开工之前），
+                // 所以它不走下面那句"第 1 层就没能解开" —— 那句话会让人以为解压失败。
+                RecursionStopReason.SourceChanged => $"未开始解压，原因：{reason}",
                 _ => done > 0
                     ? $"已完成 {done} 层，停在第 {done + 1} 层，原因：{reason}"
                     : $"第 1 层就没能解开，原因：{reason}"
@@ -1811,6 +1880,9 @@ namespace ArchiveFixer.Extraction
                 RecursionStopReason.WrongPassword => "密码错误：所有候选都试过了",
                 RecursionStopReason.Corrupted => "压缩包损坏",
                 RecursionStopReason.UnsafeEntry => "归档内存在不安全路径，已拒绝解压",
+                // 不变量 11：这一条**不是"解不开"**，而是"手上这份识别结果已经不对应这个文件了"。
+                // 措辞必须让用户知道该做什么（重新扫描），而不是去怀疑包坏了或换个引擎。
+                RecursionStopReason.SourceChanged => "源文件已变化：识别结果作废，本层没有开始解压（引擎未被调用）",
                 RecursionStopReason.UserCancelled => "用户取消",
                 RecursionStopReason.EngineFailed => "引擎操作失败",
                 _ => "未知原因"

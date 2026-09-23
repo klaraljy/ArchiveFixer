@@ -1,3 +1,4 @@
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -670,6 +671,79 @@ namespace ArchiveFixer.Models
         /// </para>
         /// </summary>
         public string PathLengthWarning { get; set; } = string.Empty;
+
+        /// <summary>
+        /// **识别那一刻**的源文件快照（大小 + 修改时间 + 当时在不在），分卷组覆盖整组
+        /// —— 不变量 11 的基准（AGENTS.md §6 第 11 条）。
+        ///
+        /// <para>
+        /// 为什么挂在这里而不是一个 <c>Dictionary&lt;任务, 快照&gt;</c>：任务本身是长命的
+        /// （识别 → 改名 → 解压可以隔很久、用户还可以中间去泡杯茶），而协调器上的字段是**批级**的；
+        /// 挂错地方会让"换了一批之后基准丢了"，那时就只剩"没有基准就补拍一次"这条退路 ——
+        /// 于是不变量 11 在最需要它的那条路上静默失效。
+        /// </para>
+        /// <para>
+        /// <b>null = 没有基准</b>（老任务 / 测试直接 <c>new</c> 出来的任务 / 从没扫描过）：
+        /// 这时**不拦任务**，而是在开工前补拍一次（见协调器的 <c>EnsureSourceSnapshot</c>）。
+        /// 类型在 <c>Storage/</c>：Disk stat 归 Storage 层，Models 只放纯模型（AGENTS.md §4）。
+        /// </para>
+        /// </summary>
+        public SourceFileSnapshot? SourceSnapshot { get; set; }
+
+        /// <summary>
+        /// 上面那份快照是什么时候拍的（<b>本地时间</b>，给人看 / 写日志用；快照内部按 UTC 存）。
+        /// 为 null 表示从来没拍过。
+        /// </summary>
+        public DateTime? SourceSnapshotTime { get; set; }
+
+        /// <summary>有没有可用的基准（没有就该在开工前补拍，而不是判"变了"）。</summary>
+        public bool HasSourceSnapshot => SourceSnapshot != null;
+
+        /// <summary>
+        /// 本任务要记进快照的那一组路径：**主文件在前，分卷整组在后**（顺序即比对顺序）。
+        ///
+        /// 顺序稳定是刚需：比对是**按位**做的，这样"改名了 / 源包被搬进其余物了"
+        /// 这种"路径变了、文件没变"的情形不会被误判成"源文件被换了" ——
+        /// 路径不是不变量 11 要保护的东西，大小与修改时间才是。
+        /// </summary>
+        public List<string> GetSnapshotPaths()
+        {
+            var paths = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(CurrentPath))
+            {
+                paths.Add(CurrentPath);
+            }
+
+            foreach (string volume in VolumePaths)
+            {
+                if (!string.IsNullOrWhiteSpace(volume))
+                {
+                    paths.Add(volume);
+                }
+            }
+
+            return paths;
+        }
+
+        /// <summary>
+        /// 现在就拍一份快照并挂在任务上（<b>只 stat，不读内容</b>）。
+        ///
+        /// 调用时机只有两个：识别完成之后（正常基准），以及开工前发现"没有基准"时补拍。
+        /// </summary>
+        public SourceFileSnapshot CaptureSourceSnapshot()
+        {
+            SourceFileSnapshot snapshot = SourceFileSnapshot.Capture(GetSnapshotPaths());
+            SourceSnapshot = snapshot;
+            SourceSnapshotTime = snapshot.CapturedAt.ToLocalTime();
+            return snapshot;
+        }
+
+        /// <summary>
+        /// 与当前磁盘状况比一遍；<b>没有基准时返回 <c>null</c></b>（调用方补拍，不许当成"变了"）。
+        /// </summary>
+        public SourceChangeResult? CompareWithSourceSnapshot() =>
+            SourceSnapshot?.Compare(GetSnapshotPaths());
 
         /// <summary>
         /// 是不是"续解出来的内层包"（而不是用户直接给的源包）。

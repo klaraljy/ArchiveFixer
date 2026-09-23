@@ -71,7 +71,12 @@ namespace ArchiveFixer.ViewModels
                 new MagicArchiveProber(),
                 BuildRecursionPasswordCandidates,
                 BuildRecursionLimits(),
-                AppendLog);
+                AppendLog,
+                // 不变量 11 在**每一层**上的落点：递归核心每解一层之前都会问一次
+                // "这一层要解的那个源文件还是原来那一份吗"。只有第 0 层（用户给的源包）
+                // 会真的比对 —— 第 1 层起解的是工作区里我们自己产出的中间件，
+                // 它们本来就不在快照里（详见 CheckRootSourceUnchangedAsync）。
+                CheckRootSourceUnchangedAsync);
 
         /// <summary>
         /// 递归的硬上限（不变量 8）：层数与每层密码尝试次数都取用户的设置项。
@@ -88,6 +93,107 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
         private const int MaxPreflightPasswordAttempts = 3;
+
+        // ================================================================
+        // 不变量 11：源文件变化（AGENTS.md §6 第 11 条）
+        // ================================================================
+
+        /// <summary>
+        /// **开工前**保证手上有一份基准：没有就现在补拍一次。
+        ///
+        /// <para>
+        /// 为什么是补拍而不是拦下（"判据缺失 ≠ 判据不通过"）：老任务（这个功能落地之前建的任务）、
+        /// 测试直接 <c>new</c> 出来的任务、以及用户手改过列表的情形，都可能没有快照。
+        /// 把"我们没记录"说成"你的文件变了"，会把一个本来能正常跑的任务拦死，
+        /// 而用户完全无从理解（他什么都没做过）。正确做法是把基准补上，从这一刻起开始保护。
+        /// </para>
+        /// </summary>
+        public void EnsureSourceSnapshot(ArchiveTask task)
+        {
+            if (task == null || task.HasSourceSnapshot)
+            {
+                return;
+            }
+
+            task.CaptureSourceSnapshot();
+
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：开工前补拍源文件快照（这份任务过去没有基准），"
+                + "从这一刻起按源文件大小 / 修改时间判断它有没有被改动。");
+        }
+
+        /// <summary>
+        /// **真正调引擎之前**比一次：变了就当场停下（不变量 11）。
+        ///
+        /// <para><b>为什么落在这里</b>：<see cref="ExtractSingleTaskAsync"/> 是**所有**解压入口的
+        /// 唯一收口 —— 一键处理、手动「只解压」、单包重试、危险模式自测走的都是它；
+        /// 而"引擎"这条路只有它下游会走。放在这里，等于任何一个入口都不可能绕过去。</para>
+        ///
+        /// <para><b>停下来意味着什么（不变量 1 的红线照旧）</b>：引擎**一次都不会被调用**、
+        /// 源包一个字节都不动、<c>其余物</c> 不生成、不发布任何产物、不留任何中间品。
+        /// 状态落「源文件已变化」，<c>ErrorMessage</c> 里点名"哪一个文件、哪一项变了"并给出出路。</para>
+        /// </summary>
+        /// <returns>true = 已经拦下（调用方必须立刻 return，什么都不许做）。</returns>
+        private bool StopIfSourceChanged(ArchiveTask task) => StopIfSourceChanged(task, out _);
+
+        /// <summary>
+        /// 与上面同一个判据，只是把"为什么"也交回给调用方（递归核心要拿它当停止理由）。
+        /// <paramref name="reason"/> 为空串 = 没有变化，任务照常继续。
+        /// </summary>
+        private bool StopIfSourceChanged(ArchiveTask task, out string reason)
+        {
+            reason = string.Empty;
+
+            if (task == null || !task.HasSourceSnapshot)
+            {
+                // 没有基准：不拦（调用方会先 EnsureSourceSnapshot 补上）。
+                return false;
+            }
+
+            SourceChangeResult? comparison = task.CompareWithSourceSnapshot();
+
+            if (comparison == null || !comparison.Changed)
+            {
+                return false;
+            }
+
+            reason = SourceFileSnapshot.DescribeChange(comparison);
+
+            /*
+             * 状态 / 进度 / 原因三件事一起落（不变量 6 的反面同样成立：
+             * 一件没做成的事不许看起来像做成了）。这里刻意**不碰** task.OutputPath：
+             * 它可能还停在上一次的值，但对一个"压根没开工"的任务来说没有意义，
+             * 而失败清单里的"位置"一行读的是 CurrentPath（源包在哪），那才是用户要去找的东西。
+             */
+            task.Status = StatusText.SourceChanged;
+            task.Operation = StatusText.OpWaiting;
+            task.ProgressText = StatusText.ProgressFailed;
+            task.ErrorMessage = reason;
+            task.IsOutputVerified = false;
+            task.EndTime = DateTime.Now;
+            task.LastUpdatedTime = DateTime.Now;
+            task.ClearProgress();
+            task.UpdateElapsedText();
+
+            AppendLog("ERROR", $"源文件已变化，未开始解压：{task.FileName} —— {reason}");
+
+            return true;
+        }
+
+        /// <summary>
+        /// 递归核心那一侧的检查口（不变量 11 覆盖到每一层）。
+        ///
+        /// <para><b>只认第 0 层</b>，也就是用户给的源包：第 1 层起解的是**我们自己**从内层抠出来的
+        /// 中间件（工作区里的文件），它们既不在源文件快照里、也不该被源文件的变化牵连 ——
+        /// 拿源包的快照去比内层包，只会得出一句必然错误的"源文件已变化"。</para>
+        ///
+        /// <para>返回非 null = 已经拦下，递归核心会停止展开并把这句话当成本次的结论。</para>
+        /// </summary>
+        private Task<string?> CheckRootSourceUnchangedAsync(ArchiveTask task)
+        {
+            return Task.FromResult(StopIfSourceChanged(task, out string reason) ? reason : null);
+        }
 
         /// <summary>
         /// 每个归档（**每一层**）最多真的试几个密码候选（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
@@ -2587,6 +2693,28 @@ namespace ArchiveFixer.ViewModels
                     task.Status = StatusText.Cancelled;
                     task.ProgressText = StatusText.Cancelled;
                     break;
+
+                /*
+                 * 源文件已变化（不变量 11）：**状态与原因都已经落好了**（拦下那一刻由
+                 * StopIfSourceChanged 一次写全），这里只补一句"产物在哪"就收尾。
+                 *
+                 * 单独一支的理由：它落到下面 default 那一支会被改写成「部分完成」——
+                 * 那是**另一个错误结论**：这个任务一个字节都没解（引擎压根没被调用），
+                 * 说成"部分完成"会让用户去暂存目录里找根本不存在的产物；
+                 * 而 ErrorMessage 若被 result.Summary 覆盖，用户就看不到**哪一个文件、哪一项变了**
+                 * 这条唯一能行动的信息。两者都必须原样保住。
+                 */
+                case RecursionStopReason.SourceChanged:
+                    task.Operation = StatusText.OpWaiting;
+                    task.ProgressText = StatusText.ProgressFailed;
+                    task.EndTime = DateTime.Now;
+                    task.LastUpdatedTime = DateTime.Now;
+                    task.ClearProgress();
+                    task.UpdateElapsedText();
+
+                    AppendLog("ERROR", $"{task.FileName}：{result.Summary}");
+                    AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                    return;
 
                 default:
                     task.Status = StatusText.PartiallyCompleted;
@@ -5665,6 +5793,26 @@ namespace ArchiveFixer.ViewModels
             task.PathLengthWarning = string.Empty;
 
             /*
+             * ===== 不变量 11 的**第一道**（也是唯一收口的那一道）：源文件变化 = 立刻停下 =====
+             *
+             * 位置刻意放在本方法**最前面**，理由有三条，缺一条都会漏：
+             * ① 这里是所有解压入口的唯一收口（一键处理 / 手动「只解压」/ 单包重试 / 危险模式自测）；
+             * ② 必须在**任何引擎调用之前** —— 下面的"分卷缺失"里会请引擎帮忙列目录、
+             *    "格式未知"那条路也会让引擎试列一次，一旦引擎碰过这个包，
+             *    后面再拦就已经"用过旧识别结果"了（不变量 11 要防的正是这个）；
+             * ③ 必须在**任何写盘之前**：此刻还没有暂存目录、没有输出目录、没有其余物，
+             *    拦下来就是"什么都没发生"（不变量 1 的红线在这种情形下照旧成立）。
+             *
+             * 没有基准的老任务在这里补拍（见 EnsureSourceSnapshot），不会被误拦。
+             */
+            EnsureSourceSnapshot(task);
+
+            if (StopIfSourceChanged(task))
+            {
+                return;
+            }
+
+            /*
              * 分卷缺失时**不许开始**（AGENTS.md §6 第 7 条）。
              * 理由：分卷包里每一卷都是必需的数据片，缺一卷 7z 必然失败，
              * 让它跑一遍只会浪费用户时间、还可能留下半截输出目录；
@@ -5690,6 +5838,18 @@ namespace ArchiveFixer.ViewModels
                     AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{task.ErrorMessage}");
                     return;
                 }
+
+                /*
+                 * 用户刚把缺的卷找回来了：基准必须**跟着重拍**（不变量 11 与这条补救出口的和解）。
+                 *
+                 * 不重拍的话，新找回来的那一卷不在快照里，比对时它会被算成"新出现的文件" →
+                 * 用户按提示把卷补齐了，反而被"源文件已变化"拦下，而且再补多少次都一样 ——
+                 * 那句提示就成了死循环。补齐分卷是**改变源文件组**的正当操作，
+                 * 所以基准从这里重新开始（与"重新扫描"同一条道理）。
+                 */
+                task.CaptureSourceSnapshot();
+
+                AppendLog("INFO", $"{task.FileName}：分卷已补齐，源文件快照重新记录（{task.VolumeCount} 卷）。");
             }
 
             bool tryExtractUnknown = Settings.UnknownFormatAction == "TryExtract";
@@ -6446,6 +6606,22 @@ namespace ArchiveFixer.ViewModels
             bool preflightSaidEncryptedHeaders = task.Status == StatusText.EncryptedHeaders;
 
             /*
+             * ===== 不变量 11 的**第二道**：就在引擎真正开工之前再比一次 =====
+             *
+             * 第一道在本方法开头（挡住"扫描之后就被改过"的包）。这一道挡的是**中间那段窗口**：
+             * 从第一道到这里，程序已经做过冲突询问、目录占位、坍缩扫描、暂存目录准备
+             * —— 弹窗可以停在屏幕上等用户点，一秒到几分钟都正常，
+             * 而这期间用户完全可能自己把那个包换掉（"我先看看里面是什么"→ 解压 → 覆盖回去）。
+             *
+             * 两道之间只做 stat（不读内容、不写任何东西），所以代价可以忽略；
+             * 而漏掉这一道的代价是**拿旧识别结果解新文件**，那正是不变量 11 要防的事。
+             */
+            if (StopIfSourceChanged(task))
+            {
+                return;
+            }
+
+            /*
              * 递归模式（M4）：不是"只解当前层"时，整条解压交给 RecursiveExtractor。
              * 它自己会解第 0 层、探测内层、按模式决定继续还是问用户，并受硬上限约束。
              * 放在预检之后：预检已经把暂存目录算好，而且非归档 / 格式未知在前面已经分流走了。
@@ -6453,6 +6629,9 @@ namespace ArchiveFixer.ViewModels
              * 落点传的是**暂存目录**：递归核心本来就在自己的工作区里逐层解、最后才 Publish，
              * 让它直接 Publish 到最终目录等于跳过了"入仓 → 定稿"这道门（失败时还会在用户目录里留下半成品）。
              * 现在它发布进暂存区，再由下面的定稿一次性搬进最终目录 —— 与单层路径同一口径。
+             *
+             * ⚠ 这条分支里的第 0 层同样受不变量 11 保护：递归核心**每一层**开工之前都会回头问一次
+             * "源文件还是原来那一份吗"（见 CheckRootSourceUnchangedAsync），不必在这里再写一遍。
              */
             if (!string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase))
             {

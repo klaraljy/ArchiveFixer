@@ -93,7 +93,17 @@ namespace ArchiveFixer.Engines.WinRar
 
             string text = CombineOutput(output, error);
 
-            if (ContainsAny(text, "执行超时", "timed out", "timeout"))
+            /*
+             * 超时**只按退出码认**（上面那条 -3）：-3 是我们自己的运行器在超时强杀后写的
+             * （见 UnRarProcessRunner 里 isTimeout 那一段）。
+             *
+             * ⚠ 这里曾经还匹配过一个中文字面量"执行超时" —— 那是**我们自己**的消息文案，
+             * 永远不可能出现在 UnRAR 的 stdout/stderr 里（它不会说中文）。留着它有两个害处：
+             * ① 读代码的人以为"超时是靠文本认的"，于是去改文案时不敢动；
+             * ② 文案一改（比如加个空格）判定就静默失效，而测试还是绿的。
+             * 引擎自己的英文措辞仍然认（不同版本可能换词），但不再认我们自己的中文。
+             */
+            if (ContainsAny(text, "timed out", "timeout"))
             {
                 return EngineErrorTypes.TimedOut;
             }

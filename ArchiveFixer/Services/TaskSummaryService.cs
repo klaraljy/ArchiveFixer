@@ -380,7 +380,11 @@ namespace ArchiveFixer.Services
                 // 归档本身没有任何问题 —— 但它同样是"这一单没拿到产物"，与"解压失败"同桶。
                 // 归到"解压失败"这一格是刻意的：用户要处理的事（清空间 / 换盘 / 用危险模式）
                 // 属于解压侧的动作，而不是"这个包坏了"。
-                StatusText.DiskSpaceInsufficient;
+                StatusText.DiskSpaceInsufficient or
+                // 源文件已变化（不变量 11）：同样在解压之前就拦下了、引擎一次都没被调用，
+                // 归档本身也可能完全正常。归这一桶的理由与上面那条一样 ——
+                // 用户要处理的事是**解压侧的动作**（重新扫描后再处理），不是"这个包坏了"。
+                StatusText.SourceChanged;
         }
 
         /// <summary>
@@ -662,6 +666,9 @@ namespace ArchiveFixer.Services
                 // 磁盘空间不足：必须出现在失败清单里（不变量 6 的同一精神：没做成的事不许消失）。
                 // 逐任务第二级里会带上"需要 X / 可用 Y / 差 Z"与建议动作（写进 ErrorMessage）。
                 StatusText.DiskSpaceInsufficient or
+                // 源文件已变化（不变量 11）：同样必须进失败清单 —— 这一条是用户唯一的行动线索
+                // （"右键 → 重新扫描此文件"），ErrorMessage 里已经点名是哪个文件、哪一项变了。
+                StatusText.SourceChanged or
                 // 部分完成是"没做完"，必须进失败清单（不变量 6：不得显示成成功）。
                 StatusText.PartiallyCompleted or
                 // 文件名已加密：这一单没拿到可用结论，用户必须看见（否则它就消失在"处理完了"里）。

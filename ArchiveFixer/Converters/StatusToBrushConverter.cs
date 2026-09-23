@@ -111,6 +111,10 @@ namespace ArchiveFixer.Converters
                 // 磁盘空间不足：连开始都没开始（空间门在解压前就拦下了），但它同样是**这一单拿不到产物**，
                 // 用错误色与"解压失败"同桶（§7 三处同改）；具体该怎么办写在 ErrorMessage 的数字与建议里。
                 StatusText.DiskSpaceInsufficient or
+                // 源文件已变化（不变量 11）：引擎一次都没被调用，但用户手上这份识别结果已经作废、
+                // 这一单同样没拿到产物 —— 与"分卷缺失"同一档：**必须先修好源文件才能继续**，
+                // 所以给错误色（与它的统计分桶"解压失败"一致，§7 三处同改）。
+                StatusText.SourceChanged or
                 StatusText.RenameCannot or
                 "ERROR";
         }

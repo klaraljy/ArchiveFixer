@@ -426,8 +426,14 @@ namespace ArchiveFixer.Packing
 
             try
             {
-                // .NET Core 默认只带 Unicode 系编码；GBK 这类要显式注册（程序集随运行时分发，不加包）。
-                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+                /*
+                 * .NET Core 默认只带 Unicode 系编码；GBK 这类代码页编码要显式注册（程序集随运行时分发，不加包）。
+                 *
+                 * ⚠ 注册走 Helpers.CodePageEncodingBootstrap（幂等的一次性初始化），**不在这里就地注册**：
+                 * 注册是进程级全局动作，散在某个 runner 里会让"谁先跑到"决定别处能不能用 GB18030 ——
+                 * 测试里真的因此出现过顺序相关的偶发失败（见 PasswordBookTests 那条的注释）。
+                 */
+                Helpers.CodePageEncodingBootstrap.EnsureRegistered();
 
                 int codePage = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
 

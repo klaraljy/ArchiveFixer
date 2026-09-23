@@ -49,6 +49,14 @@ namespace ArchiveFixer
 
             AppBaseDirectory = AppContext.BaseDirectory;
 
+            /*
+             * 代码页编码（GBK / GB18030）在 .NET Core 上要先注册才拿得到 ——
+             * 不注册的话密码本那条"不是 UTF-8 就按 GB18030 重读"的回退会**静默降级**成 UTF-8，
+             * 中文 Windows 下记事本存的 GBK 密码本会读成乱码（用户只会看到"密码全都不对"）。
+             * 放在这里（进程启动的第一步、任何解析之前）只做一次，幂等。
+             */
+            Helpers.CodePageEncodingBootstrap.EnsureRegistered();
+
             MigrateLegacyData();
             EnsureApplicationDirectories();
 

@@ -253,7 +253,15 @@ namespace ArchiveFixer.Tests
                 "OverwriteMode", "MaxParallelExtractCount", "RestRemovalDefaultMode", "DeleteSourceAfterExtract",
                 "TryEmptyPasswordFirst", "UseGlobalPasswordForAllTasks", "EnableSidecarPassword",
                 "MaxPasswordAttemptsPerLayer", "EnableLog", "LowProcessPriority", "RememberLastOutputDirectory",
-                "CustomSevenZipExePath"
+                "CustomSevenZipExePath",
+
+                /*
+                 * 扫描侧的三项（2026-09-23 补的界面入口）。
+                 *
+                 * 它们本来就有实现（FileScanService 真的按它们过滤），但设置窗口里一直没有入口 ——
+                 * "配置里能改、界面里找不到"对用户就是一句谎。列进这份清单，防止以后被顺手删掉。
+                 */
+                "IncludeHiddenFiles", "IncludeSystemFiles", "MaxFileSizeLimit"
             };
 
             foreach (string name in appSettingsBound)

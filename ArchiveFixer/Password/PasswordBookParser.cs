@@ -214,9 +214,12 @@ namespace ArchiveFixer.Password
         /// 若解码结果里出现替换字符 U+FFFD，说明不是 UTF-8，再用 GB18030 重读一次
         /// （中文 Windows 下的 txt 常见 GBK/GB18030）。
         ///
-        /// 本项目没有引入 System.Text.Encoding.CodePages 包，GB18030 不一定注册得上，
-        /// 因此 <see cref="Encoding.GetEncoding(string)"/> 必须包在 try/catch 里，
-        /// 取不到就退回 <see cref="Encoding.Default"/> 并把这件事写进 Warnings —— 不静默丢行。
+        /// ⚠ 代码页编码（GB18030）在 .NET Core 上**必须先注册**才拿得到，否则
+        /// <see cref="Encoding.GetEncoding(string)"/> 直接抛异常、这条回退会**静默降级**成
+        /// "按系统默认编码读"（= UTF-8），中文 Windows 的 GBK 密码本会被读成乱码，用户只会看到"密码全不对"。
+        /// 所以这里先调一次 <see cref="CodePageEncodingBootstrap.EnsureRegistered"/>（幂等）——
+        /// 不依赖"启动路径恰好注册过"，单测/未来的 CLI 直接调本方法也是对的。
+        /// 取不到时仍然退回 <see cref="Encoding.Default"/> 并把这件事写进 Warnings —— 不静默丢行。
         /// </summary>
         /// <param name="filePath">密码本文件路径。文件不存在、路径为空都不抛异常，只返回空结果 + 警告。</param>
         public static PasswordBookParseResult ParseFile(string filePath)
@@ -251,6 +254,9 @@ namespace ArchiveFixer.Password
 
             Encoding fallbackEncoding;
             var extraWarnings = new List<string> { Gb18030FallbackWarning };
+
+            // 先确保代码页编码可用（幂等）：拿不到时下面那条 catch 仍然会把降级写进警告。
+            Helpers.CodePageEncodingBootstrap.EnsureRegistered();
 
             try
             {

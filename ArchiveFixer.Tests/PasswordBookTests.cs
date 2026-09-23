@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Password;
+using Xunit;
 
 namespace ArchiveFixer.Tests
 {
@@ -14,6 +16,45 @@ namespace ArchiveFixer.Tests
     /// </summary>
     public sealed class PasswordBookTests
     {
+        /// <summary>
+        /// 代码页编码的注册必须是**幂等的一次性初始化**，而且解析器自己会确保它。
+        ///
+        /// <para>钉住这件事的原因是一次真的偶发失败：注册原来散在打包的进程读取器里，
+        /// 于是"哪个测试先跑"决定了 GB18030 能不能用，密码本那条回退路径时好时坏。
+        /// 现在注册收敛到 <see cref="CodePageEncodingBootstrap"/>，解析前自己确保一次 ——
+        /// 不依赖"启动路径恰好注册过"，单测与未来的 CLI 直接调也照样对。</para>
+        /// </summary>
+        [Fact]
+        public void 代码页编码注册是幂等的_而且解析器自己会确保它()
+        {
+            // 重复调用不许抛、状态不许来回翻。
+            CodePageEncodingBootstrap.EnsureRegistered();
+            bool first = CodePageEncodingBootstrap.IsRegistered;
+
+            CodePageEncodingBootstrap.EnsureRegistered();
+
+            Assert.Equal(first, CodePageEncodingBootstrap.IsRegistered);
+
+            if (!CodePageEncodingBootstrap.IsRegistered)
+            {
+                // 这台机器缺代码页支持：如实跳过（解析器那边有回退 + 警告，另有测试覆盖）。
+                return;
+            }
+
+            // 注册好之后，GBK 存的密码本必须**真的读得对**（不是靠警告糊过去）。
+            using var dir = new TempDir();
+            string path = Path.Combine(dir.Path, "book.txt");
+
+            File.WriteAllText(path, "包A：TestPass123!\n", Encoding.GetEncoding("GB18030"));
+
+            var result = PasswordBookParser.ParseFile(path);
+
+            var entry = Assert.Single(result.Entries);
+            Assert.Equal("包A", entry.Name);
+            Assert.Equal("TestPass123!", entry.Password);
+            Assert.Contains(result.Warnings, w => w.Contains("GB18030", StringComparison.Ordinal));
+        }
+
         // ---------------- 列表式 ----------------
 
         [Fact]
@@ -415,11 +456,32 @@ namespace ArchiveFixer.Tests
             using var dir = new TempDir();
             string path = Path.Combine(dir.Path, "book.txt");
 
+            /*
+             * ⚠ 这一条曾经是**顺序相关**的（会偶发红），根因有两处，现在都钉住了：
+             *
+             * ① GB18030 需要 CodePagesEncodingProvider，而它是**进程级、一次性**注册的：
+             *    生产代码在打包那条路径上（PackProcessRunner 读进程输出编码）会注册它。
+             *    于是"这个测试跑在打包测试之前还是之后"决定了下面这个 GetEncoding 成功还是抛异常 ——
+             *    成功时走进真正的断言，失败时整条直接 return（等于没测）。
+             *    这里显式注册一次（拿不到就跳过），让**分支固定**：要么每次都真测，要么每次都明说跳过。
+             * ② 回退警告的原文是"密码本文件不是有效的 UTF-8，已按 GB18030（GBK 超集）重新读取。"
+             *    —— 里面**没有"编码"两个字**。原来断言 `w.Contains("编码")` 就是把"我看错了文案"
+             *    写进了测试：真走到这条分支时它必然红。现在按**这条警告要表达的事实**断言
+             *    （说了"不是 UTF-8"或说了回退到什么编码），措辞改了也不会假红。
+             */
+            try
+            {
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            }
+            catch
+            {
+                // 拿不到就跳过（与下面 GetEncoding 失败同一处理）。
+            }
+
             Encoding encoding;
 
             try
             {
-                // GB18030 需要 CodePagesEncodingProvider，本机取不到就跳过这条断言。
                 encoding = Encoding.GetEncoding("GB18030");
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
@@ -431,13 +493,18 @@ namespace ArchiveFixer.Tests
 
             var result = PasswordBookParser.ParseFile(path);
 
-            // 关键：要么成功按 GB18030 读出来（带一条已回退的警告），要么至少不静默丢行——
+            // 关键：要么成功按 GB18030 读出来（带一条"已回退"的警告），要么至少不静默丢行——
             // 绝不允许"解析出 0 条、也没有任何警告"。
             if (result.Entries.Count == 1)
             {
                 Assert.Equal("TestPass123!", result.Entries[0].Password);
                 Assert.Equal("包A", result.Entries[0].Name);
-                Assert.Contains(result.Warnings, w => w.Contains("编码", StringComparison.Ordinal));
+
+                Assert.Contains(
+                    result.Warnings,
+                    w => w.Contains("UTF-8", StringComparison.Ordinal) ||
+                         w.Contains("GB18030", StringComparison.Ordinal) ||
+                         w.Contains("编码", StringComparison.Ordinal));
             }
             else
             {

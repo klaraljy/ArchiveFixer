@@ -393,6 +393,40 @@
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="0,8,0,0"
                                    Text="格式靠文件头识别，不靠后缀 —— 后缀被改坏的包也能认出来。" />
+
+                        <!--
+                            下面三项**本来就有实现**（FileScanService 真的按它们过滤），只是设置窗口里一直没有入口 ——
+                            "配置里能改、界面里找不到"是一句谎：用户按文档去界面上找，只会以为功能不存在。
+                            补在这里，与它们生效的位置（扫描）放在同一组。
+                        -->
+                        <CheckBox Content="包含隐藏文件"
+                                  Margin="0,8,0,0"
+                                  IsChecked="{Binding Settings.IncludeHiddenFiles, Mode=TwoWay}"
+                                  ToolTip="默认不扫隐藏文件（属性里带「隐藏」的）。打开后它们也会进列表。" />
+
+                        <CheckBox Content="包含系统文件"
+                                  Margin="0,4,0,0"
+                                  IsChecked="{Binding Settings.IncludeSystemFiles, Mode=TwoWay}"
+                                  ToolTip="默认跳过系统文件（属性里带「系统」的，如 desktop.ini、Thumbs.db）。一般不要打开。" />
+
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Text="单文件上限："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <StackPanel Grid.Column="1">
+                                <TextBox Text="{Binding Settings.MaxFileSizeLimit, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="单位 MB；0 = 不限。超过上限的文件在扫描阶段就被跳过（避免把几十 GB 的镜像文件当压缩包读）。" />
+
+                                <TextBlock Style="{StaticResource HintTextStyle}"
+                                           Margin="0,4,0,0"
+                                           Text="单位 MB，0 = 不限。超限的文件在扫描阶段直接跳过。" />
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
                 </GroupBox>
 

@@ -1252,6 +1252,11 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal static bool IsFailureStatus(ArchiveTask task)
         {
+            /*
+             * 「源文件已变化」（不变量 11）也在这个名单里：引擎一次都没被调用，
+             * 但它是一次**正常的失败终态** —— 用户重新扫描之后还要接着处理，汇总里必须算进"失败"，
+             * 否则分项之和与任务数对不上、IsHandled 还会把它当成"没轮到"。
+             */
             return task.Status is
                 StatusText.ExtractFailed or
                 StatusText.WrongPassword or
@@ -1264,7 +1269,8 @@ namespace ArchiveFixer.ViewModels
                 StatusText.UnknownError or
                 StatusText.RenameFailed or
                 StatusText.TestFailed or
-                StatusText.PasswordAttemptLimitReached;
+                StatusText.PasswordAttemptLimitReached or
+                StatusText.SourceChanged;
         }
     }
 }

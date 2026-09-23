@@ -91,6 +91,61 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string DiskSpaceInsufficient = "磁盘空间不足";
 
+        /// <summary>
+        /// **源文件已变化**（AGENTS.md §6 不变量 11：源文件变化后不得继续使用旧识别结果）。
+        ///
+        /// <para>
+        /// 识别（扫描）那一刻记下的大小 / 修改时间，在**真正调引擎之前**对不上了：
+        /// 文件被改过、被换过、被删了，或者分卷组里动了任意一卷。这时手上那份识别结果
+        /// **已经不是这个文件的结果**，继续解压等于拿旧结论处理新文件 ——
+        /// 结局通常是"密码错误 / 文件损坏"这种**指错方向**的结论，用户会去反复核对密码本。
+        /// </para>
+        /// <para>
+        /// 它与"解压失败"分开的理由：解压失败是"这个包有问题"，而它连**开始都没开始** ——
+        /// 引擎一次都没被调用、源包原地不动、<c>其余物</c> 不生成、没有任何中间品。
+        /// <c>ErrorMessage</c> 里一定点名"哪一个文件、哪一项变了"并给出一条出路
+        /// （右键 →「重新扫描此文件」）。
+        /// </para>
+        /// <para>
+        /// 失败类状态：配色与统计必须与既有失败口径一致（见 <c>StatusToBrushConverter</c> 的错误色、
+        /// <c>TaskSummaryService</c> 的"解压失败"桶、<c>OneClickCoordinator.IsFailureStatus</c> 的
+        /// 汇总分项）——按 AGENTS.md §7 同改。
+        /// </para>
+        /// </summary>
+        public const string SourceChanged = "源文件已变化";
+
+        /// <summary>差异里"大小变了"那一项（<c>{0}</c> = 当时，<c>{1}</c> = 现在）。</summary>
+        public const string SourceChangeSizeFormat = "大小 {0} → {1}";
+
+        /// <summary>差异里"修改时间变了"那一项（<c>{0}</c> = 当时，<c>{1}</c> = 现在）。</summary>
+        public const string SourceChangeTimeFormat = "修改时间 {0} → {1}";
+
+        /// <summary>差异里"文件不见了"那一项（文件都没了，不再说"大小也变了"）。</summary>
+        public const string SourceChangeMissingText = "文件不见了";
+
+        /// <summary>分卷的"文件不见了"：**先点名这是分卷**，免得用户以为整个包没了。</summary>
+        public const string SourceChangeVolumeMissingText = "分卷 · 文件不见了";
+
+        /// <summary>分卷的其它差异前缀（大小 / 修改时间）：报出**是哪个卷**变了。</summary>
+        public const string SourceChangeVolumePrefix = "分卷 · ";
+
+        /// <summary>时间显示格式：写清到秒（只写 <c>12:03</c> 时，同一天改了两次看不出先后）。</summary>
+        public const string SourceChangeTimeDisplayFormat = "yyyy-MM-dd HH:mm:ss";
+
+        /// <summary>拿不到时间（快照里那一项本来就不存在）时的占位文案。</summary>
+        public const string SourceChangeUnknownTimeText = "（没有记录）";
+
+        /// <summary>多项差异之间的分隔符。</summary>
+        public const string SourceChangeItemSeparator = "；";
+
+        /// <summary>
+        /// 结论那句话的模板（<c>{0}</c> = 逐个文件的差异清单）。
+        /// 与「分卷缺失」同一口径：说清"是什么"之后紧跟"怎么办"。
+        /// </summary>
+        public const string SourceChangeMessageFormat =
+            "源文件已变化：{0}。识别结果作废，本次没有开始解压（引擎没有被调用，源包一个字节都没动）。"
+            + "请右键该任务 →「重新扫描此文件」重新识别后再处理。";
+
         public const string Cancelled = "已取消";
         public const string Skipped = "已跳过";
         public const string Overwritten = "已覆盖";
