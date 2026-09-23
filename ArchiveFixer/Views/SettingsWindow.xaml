@@ -904,6 +904,101 @@
                                        VerticalAlignment="Center"
                                        Text="默认 10。密码本很长时调大才会试更多，但每个包都会更慢。" />
                         </Grid>
+
+                        <!--
+                            ==================== 记住密码列表（用户 2026-09-24 拍板） ====================
+                            用户真机反馈：手动加的密码 + 手动调的顺序，关掉程序就没了。
+                            他选的方案是 DPAPI **机器范围**加密存在程序目录下（跟 Windows 账号无关）。
+                            ⚠ 代价必须写在界面上（同机任何本机用户都能解开、换机器解不开 → 忽略并提示），
+                            文案一律从 StatusText 取（AGENTS.md §7），这里不写第二份中文字面量。
+                        -->
+                        <CheckBox Content="{x:Static models:StatusText.SettingsRememberPasswordListLabel}"
+                                  IsChecked="{Binding IsRememberingPasswordList, Mode=TwoWay}"
+                                  Margin="0,12,0,2" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,0,0,10"
+                                   TextWrapping="Wrap"
+                                   Text="{x:Static models:StatusText.SettingsRememberPasswordListHint}" />
+
+                        <TextBlock Text="{x:Static models:StatusText.SettingsRememberedBooksTitle}"
+                                   Style="{StaticResource LabelTextStyle}"
+                                   TextWrapping="Wrap" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,2,0,6"
+                                   TextWrapping="Wrap"
+                                   Text="{x:Static models:StatusText.SettingsRememberedBooksHint}" />
+
+                        <!-- 关着「记住密码列表」时这一组不生效（说清楚，别让清单看起来像坏了） -->
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,0,0,6"
+                                   TextWrapping="Wrap"
+                                   Foreground="{StaticResource WarningTextBrush}"
+                                   Text="{x:Static models:StatusText.SettingsRememberedBooksDisabledText}"
+                                   Visibility="{Binding ShowRememberedBooksDisabledHint, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                        <!-- 一本都没记住：给一句说明，不给用户一个空白框 -->
+                        <TextBlock Margin="0,0,0,6"
+                                   TextWrapping="Wrap"
+                                   Text="{x:Static models:StatusText.SettingsRememberedBooksEmptyText}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasRememberedBooks}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+
+                        <ItemsControl ItemsSource="{Binding RememberedBooks}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource OptionRowStyle}"
+                                            Background="{StaticResource PanelSunkenBrush}"
+                                            BorderBrush="{StaticResource PanelBorderBrush}"
+                                            Margin="0,0,0,6"
+                                            Padding="8,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="{Binding DisplayName}"
+                                                           Style="{StaticResource BodyTextStyle}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Path}" />
+
+                                                <TextBlock Style="{StaticResource HintTextStyle}"
+                                                           Margin="0,2,0,0"
+                                                           TextWrapping="Wrap"
+                                                           Text="{Binding Path, StringFormat=路径：{0}}" />
+
+                                                <TextBlock Style="{StaticResource HintTextStyle}"
+                                                           Margin="0,2,0,0"
+                                                           Foreground="{StaticResource WarningTextBrush}"
+                                                           Text="{Binding Note}" />
+                                            </StackPanel>
+
+                                            <Button Grid.Column="1"
+                                                    MinWidth="64"
+                                                    VerticalAlignment="Center"
+                                                    Margin="10,0,0,0"
+                                                    Style="{StaticResource ToolbarButtonStyle}"
+                                                    Content="{x:Static models:StatusText.SettingsRememberedBooksRemoveButtonText}"
+                                                    ToolTip="{x:Static models:StatusText.SettingsRememberedBooksRemoveButtonHint}"
+                                                    Command="{Binding DataContext.RemoveRememberedBookCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </StackPanel>
                 </GroupBox>
 

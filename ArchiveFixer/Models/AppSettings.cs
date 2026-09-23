@@ -508,8 +508,43 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 上次导入的密码本文件路径（用户 2026-09-21 反复要求：导入一次就够了，不要每次重导）。
         /// 启动时若文件仍在就自动加载；文件没了就只写一条 WARN，不打扰用户。
+        ///
+        /// <para>⚠ 2026-09-24 起它**不再承载"记住哪一本"**：那件事改由**有序的**
+        /// <see cref="PasswordBookPaths"/> 承担（用户要求多本密码本）。
+        /// 这个老字段刻意**保留、不清空**（见 <see cref="Normalize"/> 的迁移）：
+        /// ① 旧的 <c>appsettings.json</c> 里只有它，要能迁进列表；
+        /// ② 用户回退到旧版本时，那一边还认得它（保留 = 回退不会炸）。</para>
         /// </summary>
         public string PasswordBookPath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// **记住的密码本路径（有序，可多本）**，启动时按这个顺序逐本合并 —— 用户 2026-09-24 要求。
+        ///
+        /// <para>为什么顺序重要：合并是"只补列表里还没有的值、各本的新条目按书顺序追加"，
+        /// 所以书的先后会影响新增条目的落位。列表本身也是设置界面上"已记住的密码本"
+        /// 那一组的唯一数据源（可逐项移除）。</para>
+        ///
+        /// <para>旧配置里没有这个字段 → 反序列化后是 null → <see cref="Normalize"/> 用老的
+        /// <see cref="PasswordBookPath"/> 补一条（迁移），老用户升级后行为不变。</para>
+        /// </summary>
+        public List<string>? PasswordBookPaths { get; set; }
+
+        /// <summary>
+        /// **记住密码列表**（默认 **开**，用户 2026-09-24 拍板）。
+        ///
+        /// <para>开着：列表的内容 / 顺序 / 启用状态 / 手工条目 / 记住的密码本一起被
+        /// **机器范围 DPAPI 加密**存进 <c>&lt;程序目录&gt;\data\password-list.dat</c>，
+        /// 重启后原样恢复（哪些密码本已经加载过也不再是"C 盘还是 D 盘"那种一次性状态）。</para>
+        ///
+        /// <para>关掉：**既不写、也不读**那个文件（一个字节都不动，旧文件留在原地不删），
+        /// 列表退回"只在本次运行内有效"的老行为 —— 界面上必须把这句话说清楚，
+        /// 否则用户会以为"关掉只是不加密"。</para>
+        ///
+        /// <para>⚠ 代价（用户已知并接受，实现与文档都必须如实写明）：机器范围 = 同机任何本机用户
+        /// 都可能解开；换机器 / 重装系统解不开，那时程序**忽略并提示**（不崩、不覆盖、不删），
+        /// 用户可以点「写回密码本」把列表带走。</para>
+        /// </summary>
+        public bool RememberPasswordList { get; set; } = true;
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
@@ -578,6 +613,50 @@ namespace ArchiveFixer.Models
             return mode.ToString();
         }
 
+        /// <summary>
+        /// 把"记住的密码本清单"收拾干净：去掉空项、去掉重复（大小写不敏感，Windows 路径口径），
+        /// 并把老字段 <paramref name="legacyBookPath"/> 里那一本**补进清单**（迁移）。
+        ///
+        /// <para>顺序保留（第一本在最前）：合并密码本时"各本书的新条目按书顺序追加"依赖它。</para>
+        /// </summary>
+        public static List<string> NormalizeBookPaths(IEnumerable<string>? paths, string? legacyBookPath)
+        {
+            var result = new List<string>();
+
+            void TryAdd(string? candidate)
+            {
+                if (string.IsNullOrWhiteSpace(candidate))
+                {
+                    return;
+                }
+
+                string trimmed = candidate.Trim();
+
+                foreach (string existing in result)
+                {
+                    if (string.Equals(existing, trimmed, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+                }
+
+                result.Add(trimmed);
+            }
+
+            if (paths != null)
+            {
+                foreach (string path in paths)
+                {
+                    TryAdd(path);
+                }
+            }
+
+            // 迁移：旧配置只有 PasswordBookPath 一个字段（清空它会让用户回退版本后"没配过"）。
+            TryAdd(legacyBookPath);
+
+            return result;
+        }
+
         public static AppSettings CreateDefault()
         {
             return new AppSettings
@@ -621,6 +700,8 @@ namespace ArchiveFixer.Models
                 CollectTargetDirectory = string.Empty,
                 CacheRootDirectory = string.Empty,
                 PasswordBookPath = string.Empty,
+                PasswordBookPaths = new List<string>(),
+                RememberPasswordList = true,
                 RecursionMode = "SingleLayer",
                 MaxRecursionDepth = 3,
                 MaxPasswordAttemptsPerLayer = 10,
@@ -716,6 +797,19 @@ namespace ArchiveFixer.Models
             CollectTargetDirectory ??= string.Empty;
             CacheRootDirectory ??= string.Empty;
             PasswordBookPath ??= string.Empty;
+
+            /*
+             * 密码本清单（用户 2026-09-24：多本密码本）。
+             *
+             * 迁移放在这里，与其它设置项的容错同一口径：旧配置里只有单个 PasswordBookPath，
+             * 读出来是个 null 列表 —— 这里把它补进去，老用户升级后的"自动加载哪一本"行为不变。
+             *
+             * ⚠ 刻意**不清空老字段** PasswordBookPath：用户回退到旧版本时，那一边仍然靠它认路
+             *（清空 = 回退后"密码本没配过"，等于把用户的配置吃掉一次）。
+             * 于是这份清单在每次 Normalize 时都会把老字段的值并进来 —— 用 Contains 去重，幂等。
+             */
+            PasswordBookPaths = NormalizeBookPaths(PasswordBookPaths, PasswordBookPath);
+            PasswordBookPath = PasswordBookPaths.Count > 0 ? PasswordBookPaths[PasswordBookPaths.Count - 1] : string.Empty;
 
             /*
              * 引擎优先级：空 / 缺字段 / 手改坏的值一律收拾成"规范写法 + 补全所有已知引擎"。

@@ -124,6 +124,12 @@ namespace ArchiveFixer.Views
             DetachViewModel(_viewModel);
 
             /*
+             * 退订密码服务上的事件（那个服务与主界面同寿命，不退订就把这个 ViewModel 一直拽住）。
+             * 只调"退订"这一个公开方法，不碰主 ViewModel 的任何状态。
+             */
+            _viewModel?.Detach();
+
+            /*
              * 关窗时刷新主界面的密码本摘要（「密码本：x 条（启用 y 条）」那一行）。
              *
              * 为什么由窗口来推这一下：主 ViewModel 只在**关窗之后**才刷新摘要

@@ -551,20 +551,26 @@ namespace ArchiveFixer.Models
         //    都从这里引，别在 XAML 或 ViewModel 里另写一份中文字面量。
         //
         // 起因（用户真机反馈）：他在「密码列表管理」里手动加了一条密码、又调了上移/下移，
-        // 关掉程序就没了。机制是 PasswordService.Passwords **只在内存里**
-        //（不落盘是红线，§6 不变量 5），启动时由密码本 txt 重新加载 ——
-        // 所以手工条目与手工调的顺序重启即丢。长期载体只能是**用户自己的密码本 txt**。
+        // 关掉程序就没了。机制是 PasswordService.Passwords **只在内存里**，
+        // 启动时由密码本 txt 重新加载 —— 所以手工条目与手工调的顺序重启即丢。
+        //
+        // ⚠ 2026-09-24 用户拍板后，不变量 5 已经改了：列表**可以**按本机 DPAPI（机器范围）加密落盘，
+        //    重启会原样恢复（见 AGENTS.md §6 不变量 5）。但「写回密码本…」这条路**照旧重要** ——
+        //    加密记忆换机器就解不开，只有用户自己的 txt 才是真正带得走的长期载体。
 
         /// <summary>按钮文案。</summary>
         public const string PasswordWriteBackButtonText = "写回密码本…";
 
         /// <summary>
-        /// 按钮的 ToolTip。**必须写明"手动添加的密码只在本次运行内有效"** ——
-        /// 用户就是因为不知道这件事，才会觉得"我刚加的密码怎么没了"。
+        /// 按钮的 ToolTip。
+        ///
+        /// <para>⚠ 2026-09-24 起措辞改了：以前这里写"密码只存在内存里，关掉程序就没了" ——
+        /// 现在列表本身是**按本机加密保存**的，那句话已经不准确了。真正需要写回的理由变成了
+        /// "只有你自己的 txt 才带得走"（换机器 / 重装系统 / 关掉记忆开关时，加密记忆都靠不住）。</para>
         /// </summary>
         public const string PasswordWriteBackButtonHint =
-            "把列表里手动添加的密码追加进你自己的密码本 txt（写前自动备份），下次启动才能再读到。"
-            + "密码只存在内存里，关掉程序就没了。";
+            "把列表里手动添加的密码追加进你自己的密码本 txt（写前自动备份）。"
+            + "列表本身按本机加密保存，但它换机器 / 重装系统就解不开了 —— 写回你自己的文件才真正带得走。";
 
         /// <summary>没有待写条目时的说明（按钮置灰时用户能看懂为什么）。</summary>
         public const string PasswordWriteBackNothingToWrite = "没有需要写回的条目。";
@@ -610,10 +616,14 @@ namespace ArchiveFixer.Models
 
         /// <summary>
         /// 未写回条目的 ToolTip 第二行：一句短的"为什么" + 该改什么（与确认框那条同一个意思）。
+        ///
+        /// <para>⚠ 2026-09-24 起"只存在内存里"这句不再准确：列表本身按本机加密保存。
+        /// 这里说的是它真正的短板 —— 记忆解不开的那些场合（换机器 / 关掉开关），只有用户自己的 txt 靠得住。</para>
         /// </summary>
         public const string PasswordWriteBackPendingHint =
-            "这条只存在内存里，关掉程序就没了 —— 点「" + PasswordWriteBackButtonText
-            + "」才会长期保留。写回是追加到密码本末尾，条目多时要留意「每层密码尝试上限」会把后面的候选截断"
+            "这条还没写进你自己的密码本 txt —— 列表按本机加密保存，但换机器、重装系统或关掉「记住密码列表」就没了，"
+            + "点「" + PasswordWriteBackButtonText + "」才会长期保留在你自己的文件里。"
+            + "写回是追加到密码本末尾，条目多时要留意「每层密码尝试上限」会把后面的候选截断"
             + "（建议调大上限，或改用「名称:密码」的映射式写法）。";
 
         /// <summary>写回成功后给手动条目写的备注（标记消失后，这里留一句"已经安全了"）。</summary>
@@ -683,5 +693,112 @@ namespace ArchiveFixer.Models
 
         /// <summary>用户取消了确认框。</summary>
         public const string PasswordWriteBackStatusCancelled = "已取消写回密码本。";
+
+        // ================================================================
+        // 密码列表的**本机加密记忆**（DPAPI 机器范围）—— 用户 2026-09-24 拍板
+        // ================================================================
+        //
+        // ⚠ 这一组同样是**唯一来源**（AGENTS.md §7）：设置窗口的开关与说明、密码列表窗口顶部那句、
+        //    记忆摘要、读不出来的提示、以及日志文案都从这里引，别在 XAML / ViewModel 里另写一份。
+        //
+        // 用户选定的是 Windows 自带的 DPAPI **机器范围**（CryptProtectData + CRYPTPROTECT_LOCAL_MACHINE）：
+        // 跟 Windows 账号无关（同机换谁登录都能用、不弹框），文件放 <程序目录>\data\。
+        // **代价必须如实写在界面上**：同机任何本机用户都可能解开；换机器 / 重装系统解不开。
+
+        /// <summary>
+        /// 密码列表窗口顶部那句（**必须与事实一致**）。
+        ///
+        /// <para>改之前写的是"密码只存在内存里" —— 那是 2026-09-24 之前的实话，现在已经不准确了；
+        /// 界面上留着一句过期的话，比没有那句话更糟（用户会照着它做判断）。</para>
+        /// </summary>
+        public const string PasswordListPrivacyHint =
+            "列表按本机加密保存（机器范围 DPAPI，跟 Windows 账号无关；关掉「记住密码列表」则只在本次运行内有效）；"
+            + "日志不记明文。导入时保留密码中的空格；列表自上而下就是尝试顺序。";
+
+        /// <summary>密码列表窗口顶部的"当前列表"摘要：总数 / 启动时由记忆恢复的条数 / 记住的密码本本数。</summary>
+        public const string PasswordListMemorySummaryFormat =
+            "当前列表：{0} 条（其中启动时由记忆恢复 {1} 条）＋ 记住的密码本 {2} 本";
+
+        /// <summary>「记住密码列表」关着时的摘要（一句话说清"这次关掉程序就回到纯内存"）。</summary>
+        public const string PasswordListMemoryDisabledSummary =
+            "「记住密码列表」已关闭：这份列表只在本次运行内有效，关掉程序就没了（磁盘上已记住的那份不会被删）。";
+
+        /// <summary>
+        /// 读不出记忆时给用户看的那一句（**不弹错误框、不阻断**）。
+        ///
+        /// <para>为什么要有"可用「写回密码本」把它带走"这半句：换机器之后那份记忆确实解不开了，
+        /// 但用户的列表并没有"被程序弄丢"—— 出路是把列表写回他自己的密码本 txt，人肉搬过去。</para>
+        /// </summary>
+        public const string PasswordListMemoryUnavailableFormat =
+            "上次的密码列表无法读取，已忽略（{0}）。这不会影响你的密码本文件：程序没有覆盖、也没有删除那份记忆。"
+            + "如果是换了机器或重装了系统，可以用「写回密码本…」把当前列表带走。";
+
+        /// <summary>记忆保存失败时的提示（不弹框、不阻断，只在提示条上说一句）。</summary>
+        public const string PasswordListMemorySaveFailedFormat = "这次的密码列表没能存下来（{0}）；列表本身照常可用。";
+
+        /// <summary>主界面摘要那一行挂的短提示（明细在密码列表窗口的提示条上）。</summary>
+        public const string PasswordListMemoryUnavailableShort =
+            "上次的密码列表读不出来（已忽略，文件没被动；明细见「密码列表管理」）";
+
+        /// <summary>
+        /// 启动时那条 INFO：一句话说清"记忆恢复了几条 + 几本密码本补了几条"（**只有条数与文件名**）。
+        /// </summary>
+        public const string PasswordListMemoryRestoreLogFormat =
+            "密码列表记忆：恢复 {0} 条；按记住的 {1} 本密码本（{2}）补充 {3} 条。";
+
+        /// <summary>上面那句里"一本都没有"时占位用的词。</summary>
+        public const string PasswordListMemoryNoBooksText = "无";
+
+        /// <summary>某本密码本找不到时的 WARN（**只写文件名**，§8：个人路径不入日志）。</summary>
+        public const string PasswordListMemoryBookMissingLogFormat =
+            "上次记住的密码本找不到了，已跳过自动加载：{0}";
+
+        /// <summary>读记忆失败时的 WARN（原因已经脱敏，见 <c>PasswordListStore</c>）。</summary>
+        public const string PasswordListMemoryLoadFailedLogFormat =
+            "读取密码列表记忆失败，已忽略（{0}）；那份文件没有被覆盖也没有被删除。";
+
+        /// <summary>写记忆失败时的 WARN。</summary>
+        public const string PasswordListMemorySaveFailedLogFormat =
+            "保存密码列表记忆失败（{0}）；列表只在本次运行内有效。";
+
+        /// <summary>关掉「记住密码列表」时那条 INFO：说清"不写也不读"。</summary>
+        public const string PasswordListMemoryDisabledLog =
+            "「记住密码列表」已关闭：不写也不读密码列表记忆（磁盘上已有的那份不会被删除）。";
+
+        // ── 设置窗口：记住密码列表 + 已记住的密码本 ──
+
+        /// <summary>设置里那个开关的文案。**必须写明"加密存在程序目录 + 跟 Windows 账号无关"**。</summary>
+        public const string SettingsRememberPasswordListLabel = "记住密码列表（加密保存在程序目录，跟 Windows 账号无关）";
+
+        /// <summary>
+        /// 开关下面那行副作用说明（用户 2026-09-24 要求：代价与关闭后的行为都要写在界面上）。
+        /// </summary>
+        public const string SettingsRememberPasswordListHint =
+            "开：列表的内容、顺序、启用状态、手动添加的条目会一起加密存到 程序目录\\data\\password-list.dat，"
+            + "下次启动原样恢复。用的是 Windows 自带的 DPAPI 机器范围加密 —— 跟 Windows 账号无关（同机换谁登录都能用、不弹框），"
+            + "代价是：同机任何本机用户都可能解开它；换机器或重装系统解不开，那时程序会忽略并提示，"
+            + "可以用「写回密码本…」把列表带走。关：既不写也不读这个文件，重启回到纯内存（磁盘上已有的那份不会被删）。";
+
+        /// <summary>"已记住的密码本"那一组的标题。</summary>
+        public const string SettingsRememberedBooksTitle = "已记住的密码本（启动时按这个顺序逐本合并）";
+
+        /// <summary>一本都没记住时的说明。</summary>
+        public const string SettingsRememberedBooksEmptyText = "还没有记住任何密码本 —— 启动时不会自动加载任何密码本。";
+
+        /// <summary>"已记住的密码本"那一组的说明。</summary>
+        public const string SettingsRememberedBooksHint =
+            "这些文件是你自己点过「导入密码本」的那些。启动时按这个顺序逐本读取，只补列表里还没有的密码；"
+            + "移除一项只是不再自动加载它，磁盘上的文件一个字节都不会动。";
+
+        /// <summary>移除一本的按钮文案。</summary>
+        public const string SettingsRememberedBooksRemoveButtonText = "移除";
+
+        /// <summary>移除一本的按钮提示。</summary>
+        public const string SettingsRememberedBooksRemoveButtonHint =
+            "不再自动加载这一本（文件本身不会被删、不会被改）。";
+
+        /// <summary>设置里"记住密码列表"关着时，这一组的降级说明。</summary>
+        public const string SettingsRememberedBooksDisabledText =
+            "「记住密码列表」关着：这份清单这次不生效（密码列表窗口里的改动不会跨重启保留）。";
     }
 }

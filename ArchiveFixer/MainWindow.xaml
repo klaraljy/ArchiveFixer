@@ -508,7 +508,7 @@
                     <Button Grid.Column="4"
                             Content="密码列表管理"
                             MinWidth="116"
-                            ToolTip="查看/导入/编辑密码本（密码只存在内存里）"
+                            ToolTip="查看/导入/编辑密码列表（内容按本机加密保存，可关；日志不记明文）"
                             Command="{Binding OpenPasswordListCommand}" />
 
                     <!--

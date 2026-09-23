@@ -367,6 +367,60 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         public ObservableCollection<EngineOptionItem> Engines { get; } = new();
 
+        /// <summary>
+        /// 设置 → 密码设置 →「已记住的密码本」的一行。
+        ///
+        /// <para>界面上显示**文件名**（可读），完整路径放在 ToolTip 里（用户要核对时才看）——
+        /// 与主界面密码本摘要同一口径；而日志里永远只有文件名（§8：个人路径不入日志）。</para>
+        /// </summary>
+        public sealed class RememberedBookItem
+        {
+            public string Path { get; init; } = string.Empty;
+
+            public string FileName => System.IO.Path.GetFileName(Path);
+
+            /// <summary>这个文件现在还在不在（不在了也要列出来 —— 静默丢掉一项比列着更让人困惑）。</summary>
+            public bool Exists => System.IO.File.Exists(Path);
+
+            public string DisplayName => FileName;
+
+            /// <summary>文件不在了时的补充说明。</summary>
+            public string Note => Exists ? string.Empty : "（这个文件现在不在了）";
+        }
+
+        /// <summary>"已记住的密码本"列表（顺序 = 启动时的合并顺序）。</summary>
+        public ObservableCollection<RememberedBookItem> RememberedBooks { get; } = new();
+
+        /// <summary>记住的密码本一本都没有（界面显示空状态说明，不给用户一个空白框）。</summary>
+        public bool HasRememberedBooks => RememberedBooks.Count > 0;
+
+        /// <summary>
+        /// 「记住密码列表」开关（读写的是设置里那一个布尔）。
+        ///
+        /// <para>为什么要绕一层：<see cref="AppSettings"/> 是普通对象（没有 INotifyPropertyChanged），
+        /// 直接绑 <c>Settings.RememberPasswordList</c> 的话，勾选不会让下面那段"关掉之后会怎样"的
+        /// 说明跟着变 —— 而那句话恰恰是用户最需要看清楚的。走属性就能把通知发出来。</para>
+        /// </summary>
+        public bool IsRememberingPasswordList
+        {
+            get => Settings?.RememberPasswordList ?? true;
+            set
+            {
+                if (Settings == null || Settings.RememberPasswordList == value)
+                {
+                    return;
+                }
+
+                Settings.RememberPasswordList = value;
+
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(ShowRememberedBooksDisabledHint));
+            }
+        }
+
+        /// <summary>「记住密码列表」关着时要显示那句"这份清单这次不生效"。</summary>
+        public bool ShowRememberedBooksDisabledHint => !IsRememberingPasswordList;
+
         /// <summary>"当前在用哪个引擎"的一句话（按能力 + 优先级算出来的，与真正执行时同一份逻辑）。</summary>
         public string EngineSelectionSummary
         {
@@ -487,6 +541,9 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         public ICommand SelectRarExeCommand { get; }
 
+        /// <summary>把一本"已记住的密码本"从清单里移除（**只影响自动加载，磁盘上的文件一个字节都不动**）。</summary>
+        public ICommand RemoveRememberedBookCommand { get; }
+
         public SettingsViewModel()
             : this(new AppSettings(), new SettingsService())
         {
@@ -505,11 +562,13 @@ namespace ArchiveFixer.ViewModels
             SelectCollectTargetDirectoryCommand = new RelayCommand(SelectCollectTargetDirectory);
             SelectCacheRootDirectoryCommand = new RelayCommand(SelectCacheRootDirectory);
             SelectRarExeCommand = new RelayCommand(SelectRarExe);
+            RemoveRememberedBookCommand = new RelayCommand(RemoveRememberedBook);
             MoveEngineUpCommand = new RelayCommand(parameter => MoveEngine(parameter, -1));
             MoveEngineDownCommand = new RelayCommand(parameter => MoveEngine(parameter, +1));
 
             RefreshEngineList();
             RefreshRarStatus();
+            RefreshRememberedBooks();
 
             Message = "设置已加载。";
         }
@@ -643,7 +702,74 @@ namespace ArchiveFixer.ViewModels
         private void ResetDefault()
         {
             Settings = _settingsService.CreateDefault();
+            RefreshRememberedBooks();
             Message = "已恢复默认设置，点击保存后生效。";
+        }
+
+        /// <summary>
+        /// 把「已记住的密码本」那一组刷成设置里的真实内容（不猜、不缓存）。
+        /// 恢复默认设置、以及移除一项之后都要重来一遍，否则界面上会留着已经移除的项。
+        /// </summary>
+        private void RefreshRememberedBooks()
+        {
+            RememberedBooks.Clear();
+
+            foreach (string path in Settings?.PasswordBookPaths ?? new List<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    RememberedBooks.Add(new RememberedBookItem { Path = path });
+                }
+            }
+
+            OnPropertyChanged(nameof(HasRememberedBooks));
+            OnPropertyChanged(nameof(IsRememberingPasswordList));
+            OnPropertyChanged(nameof(ShowRememberedBooksDisabledHint));
+        }
+
+        /// <summary>
+        /// 从清单里移除一本（用户 2026-09-24 要求：已记住的密码本能逐项移除）。
+        ///
+        /// <para>⚠ 只改**清单**：磁盘上的密码本文件一个字节都不动，界面上的文案也这么写
+        /// （用户会担心"移除"是不是把文件删了）。</para>
+        /// </summary>
+        private void RemoveRememberedBook(object? parameter)
+        {
+            string path = parameter switch
+            {
+                RememberedBookItem item => item.Path,
+                string text => text,
+                _ => string.Empty
+            };
+
+            if (string.IsNullOrWhiteSpace(path) || Settings == null)
+            {
+                return;
+            }
+
+            var remaining = new List<string>();
+
+            foreach (string existing in Settings.PasswordBookPaths ?? new List<string>())
+            {
+                if (!string.Equals(existing, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    remaining.Add(existing);
+                }
+            }
+
+            Settings.PasswordBookPaths = remaining;
+
+            /*
+             * 老字段跟着走：Normalize() 会把 PasswordBookPath 并回清单（那是给"回退到旧版本"用的迁移），
+             * 不更新它的话，刚移除的这本会在保存时**被迁移逻辑加回来** —— 用户点了移除却还在。
+             * 清单空了就一并清空（保存时 Normalize 也不会再补出东西来）。
+             */
+            Settings.PasswordBookPath = remaining.Count > 0 ? remaining[remaining.Count - 1] : string.Empty;
+
+            RefreshRememberedBooks();
+
+            Message = $"已从「已记住的密码本」里移除「{System.IO.Path.GetFileName(path)}」；点「保存」后生效。"
+                      + "磁盘上的那个文件不会被删除，也不会被修改。";
         }
 
         private void SelectOutputDirectory()

@@ -213,6 +213,15 @@ namespace ArchiveFixer.ViewModels
         private string _globalPassword = string.Empty;
         private string _passwordBookSummary = string.Empty;
         private string _passwordBookTooltip = string.Empty;
+
+        /// <summary>
+        /// 这次运行里"启动读记忆"是否已经做过了。
+        ///
+        /// <para><see cref="AutoLoadPasswordBook"/> 有五个调用点（启动、清空列表、移除选中、
+        /// 移除单个任务、保存设置），其中只有启动那一次该读记忆 —— 读记忆会**重建整个列表**，
+        /// 反复读会把用户刚做的改动冲掉。后来的调用只做"合并密码本"这件幂等的事。</para>
+        /// </summary>
+        private bool _rememberedListLoaded;
         private bool _showPassword;
         private bool _isBusy;
         private int _busyNesting;
@@ -382,19 +391,82 @@ namespace ArchiveFixer.ViewModels
             int enabled = _passwordService.Passwords.Count(p => p.IsEnabled);
             string book = _passwordService.LastImportedBookPath;
 
+            IReadOnlyList<string> books = _passwordService.RememberedBookPaths;
+
             if (count == 0)
             {
                 PasswordBookSummary = "密码本：未加载（0 条）——点「密码列表管理」或菜单「工具 → 导入密码本...」";
-                PasswordBookTooltip = "空密码仍会按设置尝试；密码本里的密码只存在内存里，不落盘。";
+                PasswordBookTooltip = "空密码仍会按设置尝试；密码列表按本机加密保存（可在设置里关掉），日志不记明文。";
+
+                AppendRememberedListWarningToSummary();
                 return;
             }
 
-            string name = string.IsNullOrWhiteSpace(book) ? "（手动添加）" : System.IO.Path.GetFileName(book);
+            string name;
+
+            if (books.Count > 1)
+            {
+                // 多本密码本（用户 2026-09-24 要求）：主界面这一行只报本数与总条数，明细在窗口里看。
+                name = $"{books.Count} 本密码本";
+            }
+            else if (books.Count == 1)
+            {
+                name = System.IO.Path.GetFileName(books[0]);
+            }
+            else
+            {
+                name = string.IsNullOrWhiteSpace(book) ? "（手动添加）" : System.IO.Path.GetFileName(book);
+            }
 
             PasswordBookSummary = $"密码本：{name} — {count} 条（启用 {enabled} 条）";
-            PasswordBookTooltip = string.IsNullOrWhiteSpace(book)
-                ? "密码只存在内存里；本文件未记录来源路径。"
-                : book;
+            PasswordBookTooltip = BuildPasswordBookTooltip(book, books);
+
+            AppendRememberedListWarningToSummary();
+        }
+
+        /// <summary>
+        /// 记忆读不出来时，在摘要那一行后面挂一句**短**提示（明细在密码列表窗口的提示条上）。
+        ///
+        /// <para>为什么要挂：解不开时列表是空的，主界面会显示"未加载（0 条）"——
+        /// 用户很容易理解成"程序把我密码弄丢了"。这里必须说清"是读不出来、已忽略、文件没被动"。</para>
+        /// </summary>
+        private void AppendRememberedListWarningToSummary()
+        {
+            if (_passwordService.LastListWarning.Length == 0)
+            {
+                return;
+            }
+
+            PasswordBookSummary += "　⚠ " + StatusText.PasswordListMemoryUnavailableShort;
+
+            PasswordBookTooltip = PasswordBookTooltip.Length == 0
+                ? _passwordService.LastListWarning
+                : PasswordBookTooltip + Environment.NewLine + Environment.NewLine + _passwordService.LastListWarning;
+        }
+
+        /// <summary>
+        /// 摘要那一行的 ToolTip：**可以写完整路径**（界面是给用户自己核对的），
+        /// 但它只显示、绝不进日志（§8：个人路径不入日志）。
+        /// </summary>
+        private static string BuildPasswordBookTooltip(string lastImported, IReadOnlyList<string> books)
+        {
+            if (books.Count == 0)
+            {
+                return string.IsNullOrWhiteSpace(lastImported)
+                    ? "列表按本机加密保存（可在设置里关掉）；本文件未记录来源路径。"
+                    : lastImported;
+            }
+
+            var builder = new System.Text.StringBuilder();
+            builder.Append("已记住的密码本（启动时按这个顺序逐本合并）：");
+
+            foreach (string path in books)
+            {
+                builder.AppendLine();
+                builder.Append(path);
+            }
+
+            return builder.ToString();
         }
 
         public bool ShowPassword
@@ -1359,58 +1431,266 @@ namespace ArchiveFixer.ViewModels
         /// 这里只报告，**不自动删**：删工作区必须先经用户确认（不变量 13）。
         /// </summary>
         /// <summary>
-        /// 启动时自动加载上次的密码本。
+        /// 启动时自动加载密码本。
         /// 用户反复强调过：导入一次就该一直有效，不该每次重导。
         /// 文件不在了只写一条 WARN，不弹窗打扰。
+        ///
+        /// <para><b>2026-09-24 起顺序改了（用户真机反馈）</b>：以前是"直接从密码本 txt 重建列表"，
+        /// 于是手工加的条目与手工调的顺序重启即丢，而且导入第二本会把"自动加载哪一本"换成第二本
+        /// （第一本的条目全不见）。现在的顺序是：</para>
+        /// <list type="number">
+        /// <item><description><b>先加载记忆</b>（列表内容 / 顺序 / 启用状态 / 手工条目 / 墓碑 / 记住的密码本）；</description></item>
+        /// <item><description><b>再按记住的顺序逐本合并</b>密码本：只补"列表里还没有的值"，跳过墓碑。</description></item>
+        /// </list>
+        /// <para>日志只写条数与文件名（§8：个人路径不入日志；明文任何情况下都不写）。</para>
         /// </summary>
-        private void AutoLoadPasswordBook()
+        internal void AutoLoadPasswordBook()
         {
             try
             {
-                string path = Settings?.PasswordBookPath ?? string.Empty;
+                /*
+                 * 开关随设置走（默认开）。关掉 = 既不写也不读记忆文件 ——
+                 * 用户明确要求"关掉后重启回到纯内存"，所以这里连读都不读，不能"关了还偷偷读一下"。
+                 */
+                _passwordService.RememberPasswordList = Settings?.RememberPasswordList ?? true;
 
-                // 设置里没有就退回 sidecar：用户可能是从「密码列表」窗口导入的，
-                // 那条路以前不写设置。两处都看，才不会"导了等于没导"。
-                if (string.IsNullOrWhiteSpace(path))
+                if (!_rememberedListLoaded)
                 {
-                    try
+                    _rememberedListLoaded = true;
+                    LoadRememberedPasswordListAtStartup();
+                }
+
+                // 本次要按顺序合并的书：服务里那份（记忆 + 设置 + 导入共同维护）。
+                IReadOnlyList<string> books = _passwordService.RememberedBookPaths;
+
+                var mergedNames = new List<string>();
+                int addedTotal = 0;
+
+                foreach (string book in books)
+                {
+                    if (!File.Exists(book))
                     {
-                        string sidecar = Path.Combine(_pathService.DataRootDirectory, "password-book.path");
+                        // §8 隐私红线：日志只写文件名，个人路径不入日志。
+                        AppendLog(
+                            "WARN",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.PasswordListMemoryBookMissingLogFormat,
+                                System.IO.Path.GetFileName(book)));
 
-                        if (File.Exists(sidecar))
-                        {
-                            path = File.ReadAllText(sidecar).Trim();
-                        }
+                        continue;
                     }
-                    catch
-                    {
-                        // 读不到当作没配过。
-                    }
+
+                    int added = _passwordService.MergePasswordBook(
+                        book,
+                        out int _,
+                        out int _,
+                        out IReadOnlyList<string> _);
+
+                    addedTotal += added;
+                    mergedNames.Add(System.IO.Path.GetFileName(book));
                 }
 
-                if (string.IsNullOrWhiteSpace(path))
+                if (books.Count > 0 || _passwordService.RememberedEntryCount > 0)
                 {
-                    // 从没配过：摘要要如实显示"未加载"，不能让用户以为已经加载过了。
-                    RefreshPasswordBookSummary();
-                    return;
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.PasswordListMemoryRestoreLogFormat,
+                            _passwordService.RememberedEntryCount,
+                            mergedNames.Count,
+                            mergedNames.Count == 0
+                                ? StatusText.PasswordListMemoryNoBooksText
+                                : string.Join("、", mergedNames),
+                            addedTotal));
                 }
 
-                if (!File.Exists(path))
-                {
-                    // §8 隐私红线：日志只写文件名，个人路径不入日志。
-                    AppendLog("WARN", $"上次的密码本找不到了，已跳过自动加载：{System.IO.Path.GetFileName(path)}");
-                    RefreshPasswordBookSummary();
-                    return;
-                }
-
-                int count = _passwordService.ImportPasswordList(path).Count;
-                AppendLog("INFO", $"已自动加载密码本：{System.IO.Path.GetFileName(path)}（{count} 条）");
                 RefreshPasswordBookSummary();
             }
             catch (Exception ex)
             {
                 AppendLog("WARN", "自动加载密码本失败：" + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 启动时那一次"读记忆"（**只做一次**）。
+        ///
+        /// <para>为什么只做一次：<see cref="AutoLoadPasswordBook"/> 在清空任务列表、移除任务、
+        /// 保存设置之后都会被调一次，而"读记忆"是会**重建整个列表**的动作 ——
+        /// 每次触发都重来一遍，用户在该窗口里刚做的改动就会被记忆里的旧版本覆盖回去。
+        /// 后面那些调用只需要"把（新记住的）密码本再合并一次"，那是幂等的。</para>
+        /// </summary>
+        private void LoadRememberedPasswordListAtStartup()
+        {
+            IReadOnlyList<string> settingsBooks = Settings?.PasswordBookPaths ?? new List<string>();
+
+            if (!_passwordService.RememberPasswordList)
+            {
+                AppendLog("INFO", StatusText.PasswordListMemoryDisabledLog);
+
+                // 关掉记忆只是"不落盘"：设置里记住的密码本照样要自动加载（那是另一件事）。
+                _passwordService.SetRememberedBookPaths(settingsBooks);
+                return;
+            }
+
+            PasswordListLoadStatus status = _passwordService.LoadRememberedList();
+
+            if (status == PasswordListLoadStatus.Loaded)
+            {
+                /*
+                 * 书的清单两边都有，合并顺序按"记忆优先、设置兜底"：
+                 * ① 记忆里的顺序是用户实际用出来的顺序，要保留；
+                 * ② 设置里那份是权威（用户在设置窗口能逐项移除），所以**以设置的集合为准**，
+                 *    只是顺序尽量沿用记忆 —— 移除过的书不许因为记忆里还有就被加回来；
+                 * ③ 设置里一本都没有（被清掉 / 换了一份配置）而记忆里有：按记忆恢复，等于自愈一次。
+                 */
+                _passwordService.SetRememberedBookPaths(
+                    OrderBookPaths(_passwordService.RememberedBookPaths, settingsBooks));
+
+                return;
+            }
+
+            if (status != PasswordListLoadStatus.NoFile)
+            {
+                // 解不开 / 半截 / 不是我们的格式：**忽略并提示**，不崩、不覆盖、不删（用户 2026-09-24 定的）。
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PasswordListMemoryLoadFailedLogFormat,
+                        _passwordService.LastListWarning));
+            }
+
+            /*
+             * 没有可用记忆（第一次运行，或刚被忽略）时，清单只能来自设置：
+             * 设置里一本都没有才退回老的侧车文件 password-book.path ——
+             * 用户可能是从「密码列表」窗口导入的，那条路以前只写侧车、不写设置列表。
+             * 这一步保证老用户的"导入一次就一直有效"不因为这次改动而失效。
+             */
+            var paths = new List<string>(settingsBooks);
+
+            if (paths.Count == 0)
+            {
+                string sidecarBook = ReadPasswordBookSidecar();
+
+                if (sidecarBook.Length > 0)
+                {
+                    paths.Add(sidecarBook);
+                }
+            }
+
+            _passwordService.SetRememberedBookPaths(paths);
+        }
+
+        /// <summary>
+        /// 合并两份"记住的密码本"清单：**集合以设置那份为准，顺序尽量沿用记忆那份**。
+        ///
+        /// <para>设置里是空的时候按记忆恢复（appsettings.json 被重置 / 手改坏时的自愈）。</para>
+        /// </summary>
+        internal static List<string> OrderBookPaths(
+            IReadOnlyList<string> remembered,
+            IReadOnlyList<string> fromSettings)
+        {
+            var result = new List<string>();
+
+            if (fromSettings == null || fromSettings.Count == 0)
+            {
+                foreach (string path in remembered ?? (IReadOnlyList<string>)Array.Empty<string>())
+                {
+                    AddIfNew(result, path);
+                }
+
+                return result;
+            }
+
+            foreach (string path in remembered ?? (IReadOnlyList<string>)Array.Empty<string>())
+            {
+                if (ContainsBook(fromSettings, path))
+                {
+                    AddIfNew(result, path);
+                }
+            }
+
+            foreach (string path in fromSettings)
+            {
+                AddIfNew(result, path);
+            }
+
+            return result;
+        }
+
+        private static void AddIfNew(List<string> target, string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            foreach (string existing in target)
+            {
+                if (string.Equals(existing, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            target.Add(path);
+        }
+
+        private static bool ContainsBook(IReadOnlyList<string> paths, string? path)
+        {
+            if (path == null)
+            {
+                return false;
+            }
+
+            foreach (string existing in paths)
+            {
+                if (string.Equals(existing, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 读老侧车文件 <c>password-book.path</c>（只读，**不写**）。
+        /// 读不到就当作没有 —— 这个文件是历史遗留，丢了不影响。
+        /// </summary>
+        private string ReadPasswordBookSidecar()
+        {
+            try
+            {
+                string sidecar = Path.Combine(_pathService.DataRootDirectory, "password-book.path");
+
+                return File.Exists(sidecar) ? File.ReadAllText(sidecar).Trim() : string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 把"记住的密码本"从设置推给密码服务（用户在设置窗口里增删过之后由 <see cref="OpenSettings"/> 调它）。
+        /// </summary>
+        private void ApplyRememberedBookPathsFromSettings()
+        {
+            /*
+             * 开关也要跟着设置走，而且**必须在这里先落定**：
+             * 用户刚把「记住密码列表」关掉时，下面的 SetRememberedBookPaths 会走一次落盘 ——
+             * 开关还是旧值（开）的话，这一下会在他关掉之后**又写一份**记忆。
+             * 关掉 = 不写也不读，一次都不该写。
+             */
+            _passwordService.RememberPasswordList = Settings?.RememberPasswordList ?? true;
+
+            IReadOnlyList<string> settingsBooks = Settings?.PasswordBookPaths ?? new List<string>();
+
+            _passwordService.SetRememberedBookPaths(settingsBooks);
         }
 
         /// <summary>导入密码本，并把路径记进设置，下次启动自动加载。</summary>
@@ -2017,6 +2297,13 @@ namespace ArchiveFixer.ViewModels
 
                     _settingsService.Save(Settings);
 
+                    /*
+                     * 设置里那份"记住的密码本"是权威清单（用户能逐项移除），保存后立刻推给密码服务：
+                     * 推完记忆文件里那份也跟着变成同一份 —— 下一轮启动的合并就不会把用户刚移除的书
+                     * 又从记忆里翻出来（那样"移除"这个按钮就是句空话）。
+                     */
+                    ApplyRememberedBookPathsFromSettings();
+
                     RefreshOutputPaths();
                     LogLeftoverWorkspaces();
                     AutoLoadPasswordBook();
@@ -2119,11 +2406,69 @@ namespace ArchiveFixer.ViewModels
              */
             RefreshPasswordBookSummary();
 
+            /*
+             * 窗口里导入过的书要同步回设置（**两处口径必须一致**）：
+             * 那个窗口自己写的是 appsettings.json，而主 ViewModel 手里这份 Settings 是旧的 ——
+             * 不同步的话，下次保存设置就会用旧清单把新导入的书覆盖掉（用户看到"导入了、重启又没了"）。
+             */
+            SyncRememberedBookPathsToSettings();
+
             string bookName = _passwordService.LastImportedBookPath.Length == 0
                 ? "无"
                 : System.IO.Path.GetFileName(_passwordService.LastImportedBookPath);
 
             AppendLog("INFO", $"密码列表管理窗口已关闭（当前 {_passwordService.Passwords.Count} 条密码，密码本：{bookName}）。");
+        }
+
+        /// <summary>
+        /// 把密码服务里那份"记住的密码本"同步回设置并落盘（窗口里导入之后由 <see cref="OpenPasswordList"/> 调它）。
+        ///
+        /// <para>判据是"服务里有多出来的一本"：服务那份是**并集**（导入会追加、设置保存会整份替换），
+        /// 所以只在它确实带了新东西时才写设置 —— 不做无谓的文件写入。</para>
+        /// </summary>
+        private void SyncRememberedBookPathsToSettings()
+        {
+            if (Settings == null)
+            {
+                return;
+            }
+
+            IReadOnlyList<string> fromService = _passwordService.RememberedBookPaths;
+
+            if (fromService.Count == 0)
+            {
+                return;
+            }
+
+            var merged = OrderBookPaths(fromService, Settings.PasswordBookPaths ?? new List<string>());
+
+            if (merged.Count == (Settings.PasswordBookPaths?.Count ?? 0))
+            {
+                bool same = true;
+
+                for (int i = 0; i < merged.Count && same; i++)
+                {
+                    same = string.Equals(merged[i], Settings.PasswordBookPaths![i], StringComparison.OrdinalIgnoreCase);
+                }
+
+                if (same)
+                {
+                    return;
+                }
+            }
+
+            Settings.PasswordBookPaths = merged;
+            Settings.PasswordBookPath = merged.Count > 0 ? merged[merged.Count - 1] : string.Empty;
+
+            try
+            {
+                _settingsService.Save(Settings);
+            }
+            catch (Exception ex)
+            {
+                // 记不住路径不该让关窗这个动作失败，但要说清楚（否则用户下次启动发现没自动加载会以为是 bug）。
+                AppendLog("WARN", "把记住的密码本写进设置失败：" + ex.Message);
+            }
         }
 
         /// <summary>
@@ -2221,7 +2566,8 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 剪贴板**唯一出口**：任何文本上剪贴板之前都必须先过脱敏
-        /// （AGENTS.md §6 第 5 条：密码只存内存，日志、报告、剪贴板、详情窗口一律脱敏）。
+        /// （AGENTS.md §6 第 5 条：密码默认只存内存，日志、报告、剪贴板、详情窗口一律脱敏；
+        /// 密码列表那条加密落盘的路也绝不放明文进来）。
         /// 四个入口（失败列表 / 任务信息 / 任务路径 / 错误信息）全部走这里，
         /// 口径与「导出日志」「导出失败清单」一致。
         /// </summary>

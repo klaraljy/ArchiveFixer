@@ -73,7 +73,8 @@ namespace ArchiveFixer.ViewModels
         /// 按值记天然就有这个行为，而改来源标记会把这件事掩盖过去；而且来源改成别的值以后，
         /// 那条目就再也不算"手动添加"了，语义上是错的。</para>
         ///
-        /// <para>它只在内存里：重启后密码本重新加载，手工条目本来也就不在了。</para>
+        /// <para>它只在内存里：重启后按记忆 + 密码本重建，这份"已写回"的账本来也就不在了
+        /// （重建出来的内容不跟着它走，所以不需要它跨重启）。</para>
         /// </summary>
         private readonly HashSet<string> _writtenBackValues = new(StringComparer.Ordinal);
 
@@ -202,6 +203,33 @@ namespace ArchiveFixer.ViewModels
 
         public int EnabledCount => Passwords.Count(x => x.IsEnabled);
 
+        /// <summary>「记住密码列表」当前是不是开着（窗口顶部那句摘要与设置里的开关是同一个事实）。</summary>
+        public bool IsRememberingEnabled => _passwordService.RememberPasswordList;
+
+        /// <summary>
+        /// 窗口顶部那句"当前列表：N 条（其中启动时由记忆恢复 M 条）＋ 记住的密码本 K 本"。
+        ///
+        /// <para>用户 2026-09-24 要求窗口上能一眼看出"列表现在到底靠什么活着"：
+        /// 是记忆恢复来的、还是这轮从密码本里合并出来的、又记住几本书。</para>
+        /// </summary>
+        public string MemorySummary
+        {
+            get
+            {
+                if (!IsRememberingEnabled)
+                {
+                    return Models.StatusText.PasswordListMemoryDisabledSummary;
+                }
+
+                return string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordListMemorySummaryFormat,
+                    TotalCount,
+                    _passwordService.RememberedEntryCount,
+                    _passwordService.RememberedBookPaths.Count);
+            }
+        }
+
         /// <summary>
         /// 还没写回密码本的**手工条目**条数（<c>Source == "ManualList"</c> 且本次运行里没写回成功过）。
         ///
@@ -271,9 +299,45 @@ namespace ArchiveFixer.ViewModels
             DisableAllCommand = new RelayCommand(DisableAll, () => Passwords.Count > 0);
             DismissNoticeCommand = new RelayCommand(DismissNotice, () => HasNotice);
 
+            /*
+             * 记忆出问题（读不出来 / 存不下去）时，服务会喊一声 —— 这里把它变成提示条。
+             *
+             * 用户 2026-09-24 明确要求：**不弹错误框、不阻断**，只在界面上给一句明确的话。
+             * 订阅挂在服务上（不是窗口上），所以只要这个 ViewModel 活着就一直有效。
+             */
+            _passwordService.RememberedListWarning += PasswordService_RememberedListWarning;
+
             ReloadFromService();
 
             Message = "密码列表已加载。";
+
+            /*
+             * 启动时如果已经带着一条"读不出来"的原因（启动那一次读记忆发生在窗口打开之前），
+             * 打开窗口的第一眼就要看见它 —— 否则列表是空的，用户只会以为密码被弄丢了。
+             */
+            if (_passwordService.LastListWarning.Length > 0)
+            {
+                SetNotice(PasswordNoticeKind.Warning, _passwordService.LastListWarning);
+            }
+        }
+
+        private void PasswordService_RememberedListWarning(string warning)
+        {
+            if (!string.IsNullOrWhiteSpace(warning))
+            {
+                SetNotice(PasswordNoticeKind.Warning, warning);
+            }
+        }
+
+        /// <summary>
+        /// 退订密码服务上的事件（窗口关闭时由 <c>PasswordListWindow.OnClosed</c> 调）。
+        ///
+        /// <para>为什么必须退订：那个服务与主界面同寿命，而窗口每次打开都会新建一个 ViewModel ——
+        /// 不退订的话，服务会把每一个开过的窗口 ViewModel 一直拽住（关窗也回收不掉）。</para>
+        /// </summary>
+        public void Detach()
+        {
+            _passwordService.RememberedListWarning -= PasswordService_RememberedListWarning;
         }
 
         /// <summary>
@@ -543,7 +607,17 @@ namespace ArchiveFixer.ViewModels
 
                 // 先 Load 再改：不能拿一份全新的默认设置整体覆盖用户的 appsettings.json。
                 AppSettings settings = settingsService.Load();
+
+                /*
+                 * 2026-09-24 起"记住哪一本"是**有序清单**（多本密码本）：这里是**追加**，
+                 * 不是在清单上覆盖 —— 覆盖的后果正是用户报的那个现象"导入第二本，第一本不见了"。
+                 * 去重按 Windows 路径口径（大小写不敏感），重复导入同一本不会长出第二项。
+                 */
+                settings.PasswordBookPaths = AppendBookPath(settings.PasswordBookPaths, path);
+
+                // 老字段一起维护（回退到旧版本时那边只认它）。
                 settings.PasswordBookPath = path;
+
                 settingsService.Save(settings);
 
                 /*
@@ -558,6 +632,38 @@ namespace ArchiveFixer.ViewModels
                 // 记不住路径不该让导入本身失败，但要说清楚 —— 否则用户下次启动发现密码本没自动加载会以为是 bug。
                 Message += "（提示：路径没能记进设置，下次启动可能不会自动加载：" + ex.Message + "）";
             }
+        }
+
+        /// <summary>把一本密码本追加进清单（已存在则原样返回，顺序不动）。</summary>
+        private static List<string> AppendBookPath(IEnumerable<string>? existing, string path)
+        {
+            var result = new List<string>();
+
+            if (existing != null)
+            {
+                foreach (string item in existing)
+                {
+                    if (!string.IsNullOrWhiteSpace(item))
+                    {
+                        result.Add(item);
+                    }
+                }
+            }
+
+            foreach (string item in result)
+            {
+                if (string.Equals(item, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return result;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                result.Add(path);
+            }
+
+            return result;
         }
 
         /// <summary>把密码本路径写进侧车文件（与 <see cref="PasswordService"/> 同一份口径与位置）。</summary>
@@ -583,10 +689,10 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 把列表里**手动添加**的密码追加进用户自己的密码本 txt。
         ///
-        /// <para>为什么只能是"追加到用户那份 txt"：手动加的条目<b>只在内存里</b>
-        /// （不落盘是红线，AGENTS.md §6 不变量 5），重启就没了。要长期保留，
-        /// 唯一正当的落点是用户自己点的那份密码本文件 —— ⛔ 绝不写进 <c>appsettings.json</c>、
-        /// 也绝不写进程序自己的 <c>data\</c> 下任何文件。</para>
+        /// <para>为什么只能是"追加到用户那份 txt"：列表本身虽然按本机加密保存（AGENTS.md §6 不变量 5，
+        /// 用户 2026-09-24 拍板），但那份记忆**换机器 / 重装系统就解不开**、关掉「记住密码列表」也没有 ——
+        /// 真正带得走、也永远不会被程序碰的载体，只有用户自己的密码本文件。
+        /// ⛔ 绝不写进 <c>appsettings.json</c>、也绝不写进程序自己的 <c>data\</c> 下任何文件。</para>
         ///
         /// <para>整条流程：挑出待写条目 → 解析目标文件（没有就问一次）→ 确认框里逐条列出明文
         /// （界面上给他看是应该的；<b>日志里绝不出现明文</b>，见 §8）→ 追加 + 备份 + 自检 →
@@ -1204,6 +1310,10 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(TotalCount));
             OnPropertyChanged(nameof(EnabledCount));
             OnPropertyChanged(nameof(IsEmpty));
+
+            // 顶部那句"当前列表：N 条 + 记住的密码本 K 本"跟着条数走。
+            OnPropertyChanged(nameof(MemorySummary));
+            OnPropertyChanged(nameof(IsRememberingEnabled));
 
             // "未写回的手工条目"是按钮可用性 + 列表标记的共同判据，统计一变就一起重算。
             OnPropertyChanged(nameof(UnwrittenManualCount));
