@@ -277,8 +277,11 @@ namespace ArchiveFixer.Storage
         }
 
         /// <summary>
-        /// 内嵌归档抠出来会多占多少字节：源文件里 <c>[偏移, EOF)</c> 那一段的副本。
+        /// 内嵌归档抠出来会多占多少字节：源文件里 <c>[偏移, 归档终点)</c> 那一段的副本。
         /// 偏移为 0（不是内嵌归档）时返回 0 —— 绝不凭空加一份。
+        ///
+        /// 终点缺失（0 或 ≤ 偏移）时按"抠到文件末尾"算，与抠取侧的回落完全同口径；
+        /// 真实资源包在 EOCD 之后还有十几 KB 正常数据，那截不会被抠出来，所以这里也**不能**算进去。
         /// </summary>
         public static long EstimateCarvedBytes(ArchiveTask? task, long sourceBytes)
         {
@@ -292,7 +295,11 @@ namespace ArchiveFixer.Storage
             try
             {
                 long length = new FileInfo(task.CurrentPath).Length;
-                tail = length - task.EmbeddedArchiveOffset;
+
+                tail = task.EmbeddedArchiveEnd > task.EmbeddedArchiveOffset &&
+                       task.EmbeddedArchiveEnd <= length
+                    ? task.EmbeddedArchiveEnd - task.EmbeddedArchiveOffset
+                    : length - task.EmbeddedArchiveOffset;
             }
             catch
             {

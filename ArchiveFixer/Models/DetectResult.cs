@@ -99,6 +99,16 @@ namespace ArchiveFixer.Models
         public long EmbeddedArchiveOffset { get; init; }
 
         /// <summary>
+        /// 内嵌归档的**结束位置（不含）**：<c>EOCD + 22 + 注释长度</c>；0 = 不知道，按文件末尾算。
+        ///
+        /// 与 <see cref="EmbeddedArchiveOffset"/> 成对使用：抠取范围是
+        /// <c>[EmbeddedArchiveOffset, EmbeddedArchiveEnd)</c>。真实资源包在 EOCD 之后还有
+        /// 十几 KB 正常数据（实测 14,350–17,424 字节），所以终点必须显式记下来，
+        /// 不能再拿"文件末尾"当终点（那会把尾巴上的别的数据混进产物）。
+        /// </summary>
+        public long EmbeddedArchiveEnd { get; init; }
+
+        /// <summary>
         /// 创建 Unknown 结果。
         /// </summary>
         public static DetectResult Unknown(string message = "未知格式", string headerHex = "")

@@ -6239,7 +6239,9 @@ namespace ArchiveFixer.ViewModels
              * （本机 26.01 实测：前置 8,388,608 字节可以，8,388,609 字节就报
              * "Cannot open the file as archive"）；用户那个文件垫了 17,031,321 字节，必然被拒。
              * 改后缀也没用（资源管理器能打开，只是因为它的 ZIP 读取器容忍这种整体错位）。
-             * 把 [偏移, EOF) 原样复制出来是唯一可靠、且完全不改源文件的做法。
+             * 把 [偏移, 归档终点) 原样复制出来是唯一可靠、且完全不改源文件的做法。
+             * 终点是识别阶段算出来的 EOCD + 22 + 注释长度 —— 真实文件在 EOCD 之后还有十几 KB
+             * 正常数据（实测 14,350–17,424 字节），那截不属于归档，抠取时按终点截断。
              *
              * 换成局部变量 engineArchivePath，而**不去改 task.CurrentPath**：
              * 后者是源文件路径，改名、清理源包、结果统计、报告全都依赖它 ——
@@ -6256,7 +6258,17 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
-                    carveBytes = new FileInfo(task.CurrentPath).Length - task.EmbeddedArchiveOffset;
+                    /*
+                     * 区间长度 = 终点 − 起点，**不是**"文件长度 − 起点"。
+                     * 真实资源包在 EOCD 之后还有十几 KB 正常数据（实测 14,350–17,424 字节），
+                     * 那截不属于归档；终点缺失（0 或 ≤ 起点）时退回文件末尾，与旧行为一致。
+                     */
+                    long sourceLength = new FileInfo(task.CurrentPath).Length;
+
+                    carveBytes = task.EmbeddedArchiveEnd > task.EmbeddedArchiveOffset &&
+                                 task.EmbeddedArchiveEnd <= sourceLength
+                        ? task.EmbeddedArchiveEnd - task.EmbeddedArchiveOffset
+                        : sourceLength - task.EmbeddedArchiveOffset;
                 }
                 catch
                 {
@@ -6308,7 +6320,8 @@ namespace ArchiveFixer.ViewModels
                     () => EmbeddedArchiveCarver.Carve(
                         task.CurrentPath,
                         task.EmbeddedArchiveOffset,
-                        carveTarget),
+                        carveTarget,
+                        task.EmbeddedArchiveEnd),
                     cancellationToken);
 
                 if (!carve.Success || !File.Exists(carve.OutputPath))
@@ -6329,7 +6342,8 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog(
                     "INFO",
-                    $"检测到内嵌归档：已从偏移 {task.EmbeddedArchiveOffset} 处取出 {carve.BytesWritten} 字节，" +
+                    $"检测到内嵌归档：已从偏移 {task.EmbeddedArchiveOffset} 处取出 {carve.BytesWritten} 字节" +
+                    $"（区间 {task.EmbeddedArchiveOffset}–{task.EmbeddedArchiveOffset + carve.BytesWritten}），" +
                     $"实际使用 {engineArchivePath} 解压。");
             }
 

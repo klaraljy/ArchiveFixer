@@ -125,7 +125,8 @@ namespace ArchiveFixer.Services
                 Message = info.Message,
                 HeaderHex = headerResult.HeaderHex,
                 Confidence = 80,
-                EmbeddedArchiveOffset = info.Offset
+                EmbeddedArchiveOffset = info.Offset,
+                EmbeddedArchiveEnd = info.ArchiveEnd
             };
         }
 
@@ -166,7 +167,10 @@ namespace ArchiveFixer.Services
             task.IsEncrypted = result.IsProbablyEncrypted;
 
             // 内嵌归档偏移必须落到任务上：解压管线靠它决定"要不要先抠出来"。
+            // 终点（EOCD + 22 + 注释长度）同样要落：真实文件在 EOCD 之后还有十几 KB 正常数据，
+            // 抠取按终点截断，不能拿"文件末尾"当终点。
             task.EmbeddedArchiveOffset = result.EmbeddedArchiveOffset;
+            task.EmbeddedArchiveEnd = result.EmbeddedArchiveEnd;
 
             if (result.IsArchive)
             {

@@ -575,6 +575,20 @@ namespace ArchiveFixer.Models
         /// </summary>
         public long EmbeddedArchiveOffset { get; set; }
 
+        /// <summary>
+        /// 内嵌归档在 <see cref="CurrentPath"/> 里的**结束位置（不含）**：<c>EOCD + 22 + 注释长度</c>。
+        ///
+        /// <para>
+        /// 为什么偏移之外还要记一个终点：真实资源包是"视频 + 完整 ZIP **+ 十几 KB 正常数据**"，
+        /// EOCD 并不在文件末尾（2026-09-24 用户机器上 5 个真文件实测 14,350–17,424 字节）。
+        /// 抠取范围是 <c>[<see cref="EmbeddedArchiveOffset"/>, EmbeddedArchiveEnd)</c> ——
+        /// EOCD 之后那些字节属于别的东西，不该混进产物。
+        /// </para>
+        ///
+        /// **0（或 ≤ 起点）表示"不知道，按文件末尾算"**：这条默认值保证老路径与旧行为逐字节一致。
+        /// </summary>
+        public long EmbeddedArchiveEnd { get; set; }
+
         /// <summary>结果归集后的最终位置（没有归集时为空，表示还是 OutputPath）。</summary>
         public string CollectedPath { get; set; } = string.Empty;
 
@@ -899,6 +913,7 @@ namespace ArchiveFixer.Models
                 IsArchive = false;
                 IsEncrypted = false;
                 EmbeddedArchiveOffset = 0;
+                EmbeddedArchiveEnd = 0;
                 ExtensionStatus = StatusText.UnknownFormat;
                 Status = StatusText.UnknownFormat;
                 Operation = StatusText.OpScan;
@@ -914,6 +929,7 @@ namespace ArchiveFixer.Models
 
             // 重扫时也要跟着刷新：上一次的偏移对新文件没有意义（识别结果是会被覆盖的）。
             EmbeddedArchiveOffset = result.EmbeddedArchiveOffset;
+            EmbeddedArchiveEnd = result.EmbeddedArchiveEnd;
             ExtensionStatus = extensionStatus;
 
             if (result.IsArchive)

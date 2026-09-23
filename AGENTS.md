@@ -175,8 +175,8 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 **代码风格**：沿用既有风格（4 空格缩进、私有字段 `_camelCase`、`Nullable` + `ImplicitUsings` 开启）。
 注释写**为什么**（尤其"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
 
-**验证状态（2026-09-23）**：`dotnet build` **0 错误 0 警告**；
-`dotnet test` **1312 通过 / 0 失败 / 0 跳过**；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
+**验证状态（2026-09-24）**：`dotnet build` **0 错误 0 警告**；
+`dotnet test` **1321 通过 / 0 失败 / 0 跳过**；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
 改动代码后这三条都要重新跑；**长活（构建/全量测试）放后台任务**，别阻塞干等（全局 §作业模式 规矩 23）；
 格式差异用 `dotnet format whitespace ArchiveFixer.slnx` 修，不要手工对齐。
 > ⚠️ 这条数字**只在这里写一次**：README 等项目文档要报数字就从这里抄，别再各写一份（历史上因此互相矛盾过）。
