@@ -373,6 +373,28 @@ namespace ArchiveFixer.Engines
         }
 
         /// <summary>
+        /// 记下"这个归档这一次是**内置 ZIP 直读器**干的活"（不变量 14）。
+        ///
+        /// <para>为什么不干脆不记：报告里那一行"引擎：7-Zip 26.03"回答的是"谁解开的"。
+        /// 内嵌 ZIP 直读全程没调用任何外部引擎（源文件 7z 根本打不开），
+        /// 照旧写 7-Zip 就是把溯源写错了 —— 事后追查"这个包当时是怎么解出来的"会得到错误答案。
+        /// 显示名与版本都来自程序集自身（读取器随程序一起发布，程序集版本就是它的真实版本）。</para>
+        /// </summary>
+        internal void RememberEmbeddedZipDirectRead(string? archivePath)
+        {
+            RememberUsed(archivePath, EmbeddedZipDirectReaderIdentity);
+        }
+
+        /// <summary>内置 ZIP 直读器的引擎身份（机器标识 <c>embedded-zip-direct</c>，不进引擎优先级表）。</summary>
+        internal static EngineIdentity EmbeddedZipDirectReaderIdentity { get; } = new EngineIdentity
+        {
+            EngineId = "embedded-zip-direct",
+            DisplayName = "内置 ZIP 直读",
+            Version = typeof(EngineRouter).Assembly.GetName().Version?.ToString() ?? string.Empty,
+            IsAvailable = true
+        };
+
+        /// <summary>
         /// 记下"这个归档这一次是谁干的"。每次尝试都写，于是：
         /// 成功时留下的是成功那个引擎，全失败时留下的是**最后尝试**的那个 ——
         /// 正是任务上那条错误信息来自的引擎。

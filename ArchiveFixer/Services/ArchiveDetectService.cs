@@ -1,4 +1,5 @@
 using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using System;
@@ -115,6 +116,19 @@ namespace ArchiveFixer.Services
                 return null;
             }
 
+            /*
+             * 顺手做一次**只读**的直读探查（用户 2026-09-24 需求第 7 条）。
+             *
+             * 为什么要在这里探：空间核算必须在**排任务之前**就知道"这一次要不要那份等大的临时副本"，
+             * 否则账面上会一边说"直读省了副本"、一边把它预留出来（用户明确不许）。
+             * 代价只有一次尾部读 + 一次中央目录读，而且只对**识别成内嵌归档**的文件做 ——
+             * 普通包一个字节都不多读。
+             *
+             * 探查失败 / 抛异常一律按"不支持"处理（返回 false + 原因），绝不因此让识别失败：
+             * 那时解压侧会照旧回落到抠取 + 7z，一切与今天一样。
+             */
+            EmbeddedZipProbeResult directRead = EmbeddedZipStreamExtractor.Probe(filePath, info.Offset, info.ArchiveEnd);
+
             return new DetectResult
             {
                 Format = "ZIP",
@@ -126,7 +140,11 @@ namespace ArchiveFixer.Services
                 HeaderHex = headerResult.HeaderHex,
                 Confidence = 80,
                 EmbeddedArchiveOffset = info.Offset,
-                EmbeddedArchiveEnd = info.ArchiveEnd
+                EmbeddedArchiveEnd = info.ArchiveEnd,
+                EmbeddedDirectReadSupported = directRead.Supported,
+                EmbeddedDirectReadReason = directRead.Supported
+                    ? string.Empty
+                    : (directRead.PathRejected ? directRead.Message : directRead.Reason)
             };
         }
 
@@ -169,8 +187,11 @@ namespace ArchiveFixer.Services
             // 内嵌归档偏移必须落到任务上：解压管线靠它决定"要不要先抠出来"。
             // 终点（EOCD + 22 + 注释长度）同样要落：真实文件在 EOCD 之后还有十几 KB 正常数据，
             // 抠取按终点截断，不能拿"文件末尾"当终点。
+            // 直读探查结论一并落下来：**只用于空间核算**（直读时那笔抠取副本不预留）。
             task.EmbeddedArchiveOffset = result.EmbeddedArchiveOffset;
             task.EmbeddedArchiveEnd = result.EmbeddedArchiveEnd;
+            task.EmbeddedDirectReadSupported = result.EmbeddedDirectReadSupported;
+            task.EmbeddedDirectReadReason = result.EmbeddedDirectReadReason ?? string.Empty;
 
             if (result.IsArchive)
             {

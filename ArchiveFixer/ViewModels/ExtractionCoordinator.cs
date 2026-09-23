@@ -635,6 +635,11 @@ namespace ArchiveFixer.ViewModels
         /// 而单层的「只解压」当场就能按"定稿 + 校验通过"处理掉。
         /// </para>
         /// </param>
+        /// <param name="knownList">
+        /// 已经拿在手上的条目清单（可选）。给定时**不再问引擎列目录** ——
+        /// 内嵌 ZIP 直读那条路就是这样：清单是解析出来的，而源文件 7z 根本打不开
+        /// （前缀远超 8 MiB 的容忍上限）。留 null 时行为与以前逐字节一致。
+        /// </param>
         private async Task<bool> PostProcessSuccessAsync(
             ArchiveTask task,
             string engineArchivePath,
@@ -643,16 +648,22 @@ namespace ArchiveFixer.ViewModels
             string outputRedirectNote,
             OutputPlacementMode placementMode,
             bool oneClickRun,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ArchiveListResult? knownList = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
             // 清单同样取自**真正解开的那份归档**：内嵌归档要拿抠出来的文件去列，源文件 7z 根本打不开。
             // 密码照旧传进去：加密头（-mhe）的包不给密码根本列不出清单，校验会直接退化成"没法比"。
-            ArchiveListResult expected = await _archiveEngine.ListAsync(
-                ArchiveRequest.For(engineArchivePath, password),
-                cancellationToken);
+            //
+            // 直读路线把清单直接带进来（见 knownList）：它必须与真正解出来的东西是同一份，
+            // 不然"校验通过"就变成了拿两个不同来源的数字互相点头。
+            ArchiveListResult expected = knownList != null && knownList.Success
+                ? knownList
+                : await _archiveEngine.ListAsync(
+                    ArchiveRequest.For(engineArchivePath, password),
+                    cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -5181,11 +5192,41 @@ namespace ArchiveFixer.ViewModels
 
             return ExtractionScheduler.Build(
                 tasks,
-                SpaceEstimator.FromSourceFiles,
+                task => SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task)),
                 ProbeAvailableSpace(_spaceProbePath),
                 ReserveSpaceBytes,
                 requestedParallel);
         }
+
+        /// <summary>
+        /// 这个任务的**内嵌归档**这次会不会走直读（<c>Extraction/EmbeddedZipStreamExtractor</c>）。
+        ///
+        /// <para>两个条件缺一不可：</para>
+        /// <list type="number">
+        /// <item><description>识别阶段探过、结论是"能直读"（<see cref="ArchiveTask.EmbeddedDirectReadSupported"/>）；</description></item>
+        /// <item><description>这一批是**单层模式**：递归模式下第 0 层必须交给引擎逐层展开
+        /// （<c>RecursiveExtractor</c> 拿的是"一个归档路径"，直读解出来的是散文件，没有对应的入口），
+        /// 所以那条路上照旧抠取 —— 空间核算也必须跟着记那笔副本，否则账面就是假的。</description></item>
+        /// </list>
+        ///
+        /// <para>它只回答"空间账面上要不要预留那份副本"，不决定解压怎么做；解压那一刻会再探一次，
+        /// 探不通就原地回落到抠取（见 <c>ExtractSingleTaskAsync</c> 里内嵌归档那一段）。</para>
+        /// </summary>
+        private bool DirectReadAppliesTo(ArchiveTask? task)
+        {
+            if (task == null ||
+                task.EmbeddedArchiveOffset <= 0 ||
+                !task.EmbeddedDirectReadSupported)
+            {
+                return false;
+            }
+
+            return IsSingleLayerRecursion();
+        }
+
+        /// <summary>这一批是不是单层模式（递归模式下第 0 层要交给引擎，见 <see cref="DirectReadAppliesTo"/>）。</summary>
+        private bool IsSingleLayerRecursion() =>
+            string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 本批探测哪块盘：优先归集目标目录（开了归集时产物最终都落那儿），
@@ -6250,10 +6291,17 @@ namespace ArchiveFixer.ViewModels
              */
             string engineArchivePath = task.CurrentPath;
 
+            /*
+             * 内嵌 ZIP 的**直读**结论（非 null = 这一次走直读，不产生那份等大的临时副本）。
+             *
+             * 用户 2026-09-24 拍板：这条路先试直读，直读说"不支持"就**原地回落到今天的"抠取 + 7z"**。
+             * 两条路的结论口径完全一致 —— 用的都是既有那套 ArchivePathGuard / ResourceBudget /
+             * OutputVerifier / 定稿 / 其余物 / 源包处理，只是"谁来把字节解出来"换了个人。
+             */
+            EmbeddedZipProbeResult? directZip = null;
+
             if (task.EmbeddedArchiveOffset > 0)
             {
-                string carveTarget = BuildEmbeddedArchivePath(task);
-
                 long carveBytes = 0;
 
                 try
@@ -6275,76 +6323,152 @@ namespace ArchiveFixer.ViewModels
                     // 量不出大小不影响能不能抠，只是日志与空间预检里少个数字。
                 }
 
-                /*
-                 * 临时空间预检：抠出来的中间文件落在工作区（<c>&lt;程序目录&gt;\data\work</c>，即程序所在的那个盘）。
-                 * 一个 780MB 的双面文件要在那里占掉 760MB —— 空间不够会写到一半失败，
-                 * 还会把那个盘挤满。取不到空间就不拦（宁可试也不误拒），取到了才判。
-                 */
-                long? carveFree = SpaceChecker.GetAvailableFreeSpace(Path.GetDirectoryName(carveTarget));
-
-                if (carveFree.HasValue && carveBytes > 0 && carveFree.Value < carveBytes + (256L * 1024 * 1024))
+                if (!IsSingleLayerRecursion())
                 {
-                    task.Status = StatusText.ExtractFailed;
-                    task.ErrorMessage =
-                        $"取出内嵌归档需要约 {carveBytes / 1024 / 1024} MB 临时空间，" +
-                        $"但系统盘只剩 {carveFree.Value / 1024 / 1024} MB。请先清理空间再试。";
-                    task.LastUpdatedTime = DateTime.Now;
-
-                    AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
-                    return;
+                    /*
+                     * 递归模式：第 0 层必须交给引擎（见 DirectReadAppliesTo 的说明），照旧抠取。
+                     * 这一行是**如实说明**，免得用户看到"直读"两个字却发现空间没省下来。
+                     */
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：递归模式（{Settings.RecursionMode}）下第 0 层要交给 7-Zip 逐层展开，" +
+                        $"本次不走 ZIP 直读，仍按偏移取出内嵌归档（需要约 {carveBytes / 1024 / 1024} MB 临时空间）。");
                 }
-
-                AppendLog(
-                    "INFO",
-                    $"{task.FileName}：正在取出内嵌归档（约 {carveBytes / 1024 / 1024} MB），这一步在后台做，界面不会卡住。");
-
-                /*
-                 * 关键修复：抠出是**同步磁盘拷贝**（几百 MB 量级），必须扔到后台线程。
-                 * 之前直接在这里同步调用，拷贝期间整个界面线程被占住 ——
-                 * 表现就是"点了一键处理之后程序卡死、窗口未响应"，只能强杀进程
-                 * （实测：780MB 的双面文件拷 763MB，界面全程无响应）。
-                 */
-                int lastPercent = -1;
-
-                // 每前进 20% 报一次：够密到能看出在动，又不至于把日志刷爆。
-                var carveProgress = new Progress<int>(percent =>
+                else
                 {
-                    if (percent >= lastPercent + 20 || percent >= 100)
-                    {
-                        lastPercent = percent;
-                        AppendLog("INFO", $"{task.FileName}：取出内嵌归档 {percent}%");
-                    }
-                });
-
-                CarveResult carve = await Task.Run(
-                    () => EmbeddedArchiveCarver.Carve(
+                    /*
+                     * 只读探查（一个字节都不写）：结构、压缩方法、加密位、ZIP64 字段、条目名一次问清。
+                     *
+                     * 为什么在这里再探一次、而不是信识别阶段那个标记：中间隔着冲突询问、占位、暂存目录准备，
+                     * 源文件完全可能已经换了一份（不变量 11 的快照只挡"大小/修改时间变了"）。
+                     * 真正拍板必须用**此刻**这一份的结论。
+                     */
+                    directZip = EmbeddedZipStreamExtractor.Probe(
                         task.CurrentPath,
                         task.EmbeddedArchiveOffset,
-                        carveTarget,
-                        task.EmbeddedArchiveEnd),
-                    cancellationToken);
+                        task.EmbeddedArchiveEnd,
+                        engineOutputPath);
 
-                if (!carve.Success || !File.Exists(carve.OutputPath))
-                {
-                    task.Status = StatusText.ExtractFailed;
-                    task.Operation = StatusText.OpWaiting;
-                    task.ProgressText = StatusText.ProgressFailed;
-                    task.ErrorMessage = string.IsNullOrWhiteSpace(carve.Message)
-                        ? "取出内嵌归档失败"
-                        : "取出内嵌归档失败：" + carve.Message;
-                    task.LastUpdatedTime = DateTime.Now;
+                    if (directZip.Supported)
+                    {
+                        // 上一次回落留下的抠取副本：本次直读用不到它，先清掉（见方法说明）。
+                        DiscardStaleCarvedArtifact(task);
 
-                    AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
-                    return;
+                        AppendLog(
+                            "INFO",
+                            $"{task.FileName}：内嵌归档可以 ZIP 直读（{directZip.List?.FileCount ?? 0} 个文件 / " +
+                            $"{TaskSpaceEstimate.FormatSize(directZip.TotalBytes)}）—— 本次**不需要**那份等大的临时副本" +
+                            $"（原本要抠 {TaskSpaceEstimate.FormatSize(directZip.ArchiveLength)}）。");
+
+                        // 直读的"引擎"是内置读取器：结果可追溯（不变量 14）里不能写成 7-Zip。
+                        if (_archiveEngine is EngineRouter directReadRouter)
+                        {
+                            directReadRouter.RememberEmbeddedZipDirectRead(task.CurrentPath);
+                        }
+                    }
+                    else if (directZip.PathRejected)
+                    {
+                        /*
+                         * 条目名越界：这是**硬失败**，不是回落信号。
+                         * 抠出来交给 7z 会被同一套路径预检拒掉（AGENTS.md §6 第 4 条），
+                         * 白白拷一份等大的副本没有任何意义。文案与既有那条逐字一致。
+                         */
+                        task.Status = StatusText.ExtractFailed;
+                        task.ErrorMessage = directZip.Message;
+                        task.LastUpdatedTime = DateTime.Now;
+
+                        AppendLog("ERROR", $"{task.FileName}：{directZip.Message}");
+                        return;
+                    }
+                    else
+                    {
+                        AppendLog("INFO", $"{task.FileName}：内嵌归档直读不支持（{directZip.Reason}），已回落到抠取。");
+                        directZip = null;
+                    }
                 }
 
-                engineArchivePath = carve.OutputPath;
+                /*
+                 * 直读不通（不支持 / 递归模式）才走抠取。抠取那一整套原样保留 ——
+                 * 它仍是所有"直读覆盖不到的形态"的唯一出路（加密条目、bzip2、分卷 ZIP…）。
+                 */
+                if (directZip == null)
+                {
+                    string carveTarget = BuildEmbeddedArchivePath(task);
 
-                AppendLog(
-                    "INFO",
-                    $"检测到内嵌归档：已从偏移 {task.EmbeddedArchiveOffset} 处取出 {carve.BytesWritten} 字节" +
-                    $"（区间 {task.EmbeddedArchiveOffset}–{task.EmbeddedArchiveOffset + carve.BytesWritten}），" +
-                    $"实际使用 {engineArchivePath} 解压。");
+                    /*
+                     * 临时空间预检：抠出来的中间文件落在工作区（<c>&lt;程序目录&gt;\data\work</c>，即程序所在的那个盘）。
+                     * 一个 780MB 的双面文件要在那里占掉 760MB —— 空间不够会写到一半失败，
+                     * 还会把那个盘挤满。取不到空间就不拦（宁可试也不误拒），取到了才判。
+                     *
+                     * 这也是"空间核算里乐观地不记那笔副本"的兜底：真回落时由这一道把关，
+                     * 所以账面省掉的那一笔不会变成"写到一半盘满"。
+                     */
+                    long? carveFree = SpaceChecker.GetAvailableFreeSpace(Path.GetDirectoryName(carveTarget));
+
+                    if (carveFree.HasValue && carveBytes > 0 && carveFree.Value < carveBytes + (256L * 1024 * 1024))
+                    {
+                        task.Status = StatusText.ExtractFailed;
+                        task.ErrorMessage =
+                            $"取出内嵌归档需要约 {carveBytes / 1024 / 1024} MB 临时空间，" +
+                            $"但系统盘只剩 {carveFree.Value / 1024 / 1024} MB。请先清理空间再试。";
+                        task.LastUpdatedTime = DateTime.Now;
+
+                        AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                        return;
+                    }
+
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：正在取出内嵌归档（约 {carveBytes / 1024 / 1024} MB），这一步在后台做，界面不会卡住。");
+
+                    /*
+                     * 关键修复：抠出是**同步磁盘拷贝**（几百 MB 量级），必须扔到后台线程。
+                     * 之前直接在这里同步调用，拷贝期间整个界面线程被占住 ——
+                     * 表现就是"点了一键处理之后程序卡死、窗口未响应"，只能强杀进程
+                     * （实测：780MB 的双面文件拷 763MB，界面全程无响应）。
+                     */
+                    int lastPercent = -1;
+
+                    // 每前进 20% 报一次：够密到能看出在动，又不至于把日志刷爆。
+                    var carveProgress = new Progress<int>(percent =>
+                    {
+                        if (percent >= lastPercent + 20 || percent >= 100)
+                        {
+                            lastPercent = percent;
+                            AppendLog("INFO", $"{task.FileName}：取出内嵌归档 {percent}%");
+                        }
+                    });
+
+                    CarveResult carve = await Task.Run(
+                        () => EmbeddedArchiveCarver.Carve(
+                            task.CurrentPath,
+                            task.EmbeddedArchiveOffset,
+                            carveTarget,
+                            task.EmbeddedArchiveEnd),
+                        cancellationToken);
+
+                    if (!carve.Success || !File.Exists(carve.OutputPath))
+                    {
+                        task.Status = StatusText.ExtractFailed;
+                        task.Operation = StatusText.OpWaiting;
+                        task.ProgressText = StatusText.ProgressFailed;
+                        task.ErrorMessage = string.IsNullOrWhiteSpace(carve.Message)
+                            ? "取出内嵌归档失败"
+                            : "取出内嵌归档失败：" + carve.Message;
+                        task.LastUpdatedTime = DateTime.Now;
+
+                        AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                        return;
+                    }
+
+                    engineArchivePath = carve.OutputPath;
+
+                    AppendLog(
+                        "INFO",
+                        $"检测到内嵌归档：已从偏移 {task.EmbeddedArchiveOffset} 处取出 {carve.BytesWritten} 字节" +
+                        $"（区间 {task.EmbeddedArchiveOffset}–{task.EmbeddedArchiveOffset + carve.BytesWritten}），" +
+                        $"实际使用 {engineArchivePath} 解压。");
+                }
             }
 
             List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
@@ -6415,20 +6539,37 @@ namespace ArchiveFixer.ViewModels
             // 它必须活到这一层结束，见下面 preflightSaidEncryptedHeaders 的恢复。
             string? encryptedHeadersMessage = null;
 
-            foreach (PasswordItem candidate in candidates.Take(MaxPreflightPasswordAttempts))
+            if (directZip != null)
             {
-                ArchiveListResult attempt = await _archiveEngine.ListAsync(
-                    ArchiveRequest.For(engineArchivePath, candidate.Value),
-                    cancellationToken);
+                /*
+                 * 直读路线：清单是**刚解析出来的**，不再问引擎 ——
+                 * 源文件 7z 根本打不开（前缀远超 8 MiB 的容忍上限），问它只会得到一次失败。
+                 * 更关键的是：这份清单必须与真正解出来的东西是同一份，否则后面的校验就是两套口径。
+                 */
+                preflightList = directZip.List;
 
-                if (attempt.Success)
+                AppendLog(
+                    "INFO",
+                    $"{task.FileName}：直读清单 {preflightList?.FileCount ?? 0} 个文件 / " +
+                    $"{TaskSpaceEstimate.FormatSize(preflightList?.TotalUncompressedSize ?? 0)}（未调用 7-Zip 列目录）。");
+            }
+            else
+            {
+                foreach (PasswordItem candidate in candidates.Take(MaxPreflightPasswordAttempts))
                 {
-                    preflightList = attempt;
-                    break;
-                }
+                    ArchiveListResult attempt = await _archiveEngine.ListAsync(
+                        ArchiveRequest.For(engineArchivePath, candidate.Value),
+                        cancellationToken);
 
-                lastListErrorType = attempt.ErrorType ?? string.Empty;
-                lastListMessage = attempt.Message ?? string.Empty;
+                    if (attempt.Success)
+                    {
+                        preflightList = attempt;
+                        break;
+                    }
+
+                    lastListErrorType = attempt.ErrorType ?? string.Empty;
+                    lastListMessage = attempt.Message ?? string.Empty;
+                }
             }
 
             if (preflightList == null)
@@ -6489,9 +6630,16 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
-                    // 量的是**真正交给引擎的那个文件**：内嵌归档抠出来之后它比源文件小得多，
-                    // 拿源文件大小当分母会把展开比算小，压缩炸弹就更容易蒙混过关。
-                    archiveSize = new FileInfo(engineArchivePath).Length;
+                    /*
+                     * 量的是**真正交给引擎的那个文件**：内嵌归档抠出来之后它比源文件小得多，
+                     * 拿源文件大小当分母会把展开比算小，压缩炸弹就更容易蒙混过关。
+                     *
+                     * 直读路线没有"那个文件"：归档就是虚拟区间 [Offset, ArchiveEnd)，
+                     * 分母取它的长度（源文件含几百 MB 视频前缀，拿它当分母同样会把展开比算小）。
+                     */
+                    archiveSize = directZip != null
+                        ? directZip.ArchiveLength
+                        : new FileInfo(engineArchivePath).Length;
                 }
                 catch
                 {
@@ -6509,9 +6657,10 @@ namespace ArchiveFixer.ViewModels
                  * 内层包再展开的增量、以及并发下别的任务已经占下的份额，都要在这一步一起算进来。
                  */
                 TaskSpaceEstimate refined = SpaceEstimator.RefineWithListing(
-                    SpaceEstimator.FromSourceFiles(task),
+                    SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task)),
                     preflightList,
-                    SpaceEstimator.EstimateCarvedBytes(task, archiveSize));
+                    directZip != null ? 0 : SpaceEstimator.EstimateCarvedBytes(task, archiveSize),
+                    carvedBytesNotNeeded: directZip != null);
 
                 RecordRefinedEstimate(task, refined);
 
@@ -6700,7 +6849,28 @@ namespace ArchiveFixer.ViewModels
             bool shouldTestPasswordBeforeExtract =
                 Settings.TestBeforeExtract;
 
-            if (shouldTestPasswordBeforeExtract)
+            if (directZip != null)
+            {
+                /*
+                 * 直读路线：不走密码候选循环、不调引擎。
+                 *
+                 * 为什么可以完全跳过密码：能走到这里就说明探查已经确认"没有加密条目"
+                 * （通用位标志 bit0 的检查在 EmbeddedZipStreamExtractor 里，一处定义）。
+                 * 收尾仍然走**同一个** PostProcessSuccessAsync（校验 → 定稿 → 归集 → 其余物 → 源包处理），
+                 * 绝不另起一条收尾路径 —— 两条路的结论口径必须一致。
+                 */
+                await RunEmbeddedZipDirectExtractionAsync(
+                    task,
+                    directZip,
+                    preflightList,
+                    engineOutputPath,
+                    outputRedirectNote,
+                    placementMode,
+                    oneClickRun,
+                    progressSink,
+                    cancellationToken);
+            }
+            else if (shouldTestPasswordBeforeExtract)
             {
                 task.Operation = StatusText.OpTest;
                 task.Status = StatusText.Testing;
@@ -7108,6 +7278,165 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 return $"准备暂存目录失败（{ex.Message}）：{stageDirectory}";
+            }
+        }
+
+        /// <summary>
+        /// 直读路线开跑之前，把**上一次回落**留下的抠取副本清掉。
+        ///
+        /// <para><b>为什么必须有这一条</b>：抠取副本的落点是
+        /// <c>&lt;work&gt;\&lt;taskId&gt;\&lt;包基名&gt;.zip</c>，而 taskId 只取决于**源文件全路径** ——
+        /// 所以"上一次走到回落、抠出来了一份，这一次直读成功"时，那份**等大**的旧副本还留在工作区里。
+        /// 定稿那一步会把它当成本任务的其余物搬进用户目录，等于把这次省下来的空间又还回去了
+        /// （用户要的正是"别再有这份副本"）。</para>
+        ///
+        /// <para>它是本任务**私有工作区**里的派生中间件（不是源文件，也不是别人的东西），
+        /// 而本次已经确定不用它 —— 删掉是唯一不误导的做法。边界与
+        /// <see cref="CleanupTaskWorkspaceDirectory"/> 同一口径：只在"确实在工作区根之下"时动手，
+        /// 删不掉只记 WARN（绝不让一次清理失败影响解压结论）。</para>
+        /// </summary>
+        private void DiscardStaleCarvedArtifact(ArchiveTask task)
+        {
+            string carvedPath = BuildEmbeddedArchivePath(task);
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(carvedPath) || !File.Exists(carvedPath))
+                {
+                    return;
+                }
+
+                if (!ArchivePathGuard.IsInsideRoot(_pathService.WorkDirectory, carvedPath, out string reason))
+                {
+                    AppendLog("WARN", $"{task.FileName}：上次留下的抠取副本不在工作区根之下，已跳过清理 —— {reason}");
+                    return;
+                }
+
+                File.Delete(carvedPath);
+
+                AppendLog(
+                    "INFO",
+                    $"{task.FileName}：已清掉上一次回落留下的抠取副本（本次走直读，不需要它）：{Path.GetFileName(carvedPath)}");
+            }
+            catch (Exception ex)
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：上次留下的抠取副本没清掉（{ex.Message}），它会在定稿时被当成其余物搬走。");
+            }
+        }
+
+        /// <summary>
+        /// 内嵌 ZIP 直读的**执行**那一步（用户 2026-09-24 需求第 6 条）。
+        ///
+        /// <para>只做三件事：把状态标成"解压中"、在后台线程流式解出条目、把结论交给
+        /// <see cref="PostProcessSuccessAsync"/>（**同一个**收尾：校验 / 定稿 / 归集 / 其余物 / 源包处理）。
+        /// 所以直读与"抠取 + 7z"两条路在用户眼里是同一套状态与同一套结论。</para>
+        ///
+        /// <para>取消原样抛出去：<c>ProcessExtractTaskAsync</c> 会落成「已取消」（不变量 6），
+        /// 而直读器在抛之前已经把它写出去的东西全删掉了 —— 不留半成品、也不发布。</para>
+        /// </summary>
+        private async Task RunEmbeddedZipDirectExtractionAsync(
+            ArchiveTask task,
+            EmbeddedZipProbeResult plan,
+            ArchiveListResult? knownList,
+            string stageDirectory,
+            string outputRedirectNote,
+            OutputPlacementMode placementMode,
+            bool oneClickRun,
+            TaskProgressSink progressSink,
+            CancellationToken cancellationToken)
+        {
+            task.Operation = StatusText.OpExtract;
+            task.Status = StatusText.Extracting;
+            task.ProgressText = StatusText.ProgressProcessing;
+            task.LastUpdatedTime = DateTime.Now;
+
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：开始 ZIP 直读解压（{plan.List?.FileCount ?? 0} 个文件 / " +
+                $"{TaskSpaceEstimate.FormatSize(plan.TotalBytes)}，不生成等大临时副本）。");
+
+            var progress = new DirectReadProgressBridge(progressSink);
+
+            EmbeddedZipExtractResult extract = await Task.Run(
+                () => EmbeddedZipStreamExtractor.Extract(
+                    task.CurrentPath,
+                    task.EmbeddedArchiveOffset,
+                    task.EmbeddedArchiveEnd,
+                    stageDirectory,
+                    progress,
+                    cancellationToken),
+                cancellationToken);
+
+            if (!extract.Success)
+            {
+                /*
+                 * 直读失败（结构在两次探查之间变了 / 盘写不进去 / 解出来的字节数与清单不符）：
+                 * **不回落**。回落要把几百 MB 到 2 GB 再拷一份，而失败原因（磁盘、权限、数据损坏）
+                 * 拷一遍照样存在 —— 那只会让用户多等一场、还多占一份空间。如实报失败。
+                 */
+                task.Status = StatusText.ExtractFailed;
+                task.ErrorMessage = extract.Message;
+                task.LastUpdatedTime = DateTime.Now;
+
+                AppendLog("ERROR", $"{task.FileName}：ZIP 直读失败 —— {extract.Message}");
+                return;
+            }
+
+            AppendLog("INFO", $"{task.FileName}：ZIP 直读完成 —— {extract.Message}");
+
+            task.Status = StatusText.ExtractSuccess;
+            task.PasswordStatus = StatusText.PasswordNotNeeded;
+            task.ErrorMessage = string.Empty;
+
+            /*
+             * 溯源（不变量 14）：这一单不是 7-Zip 解的，报告里不能写成 7-Zip。
+             * 身份已经在探查那一步盖进引擎门面（RememberEmbeddedZipDirectRead），
+             * 这里再把"谁干的、干出多少"落到任务自己的字段上。
+             */
+            task.EngineVerdict =
+                $"{EmbeddedZipStreamExtractor.ReaderDisplayName} 读出 {extract.FileCount} 个文件 / {extract.WrittenBytes} 字节" +
+                "（未调用 7-Zip，未生成临时副本）";
+
+            bool conclusionStands = await PostProcessSuccessAsync(
+                task,
+                task.CurrentPath,
+                string.Empty,
+                stageDirectory,
+                outputRedirectNote,
+                placementMode,
+                oneClickRun,
+                cancellationToken,
+                knownList);
+
+            if (conclusionStands && task.Status == StatusText.ExtractSuccess)
+            {
+                AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
+            }
+        }
+
+        /// <summary>
+        /// 直读的百分比 → 既有进度口径的桥（<see cref="TaskProgressSink"/>）。
+        ///
+        /// <para>为什么要桥：直读器是纯逻辑、不认识 <c>ArchiveProgress</c>（那是引擎层类型），
+        /// 而界面上的百分比 / "当前条目" / "跨 10% 写一行日志" 全都由 sink 统一处理 ——
+        /// 桥过来之后，直读那条路在界面上的表现与 7z 那条**完全一样**（同样能看出在动、同样能取消）。</para>
+        /// </summary>
+        private sealed class DirectReadProgressBridge : IProgress<int>
+        {
+            private readonly TaskProgressSink _sink;
+
+            public DirectReadProgressBridge(TaskProgressSink sink)
+            {
+                _sink = sink;
+            }
+
+            public void Report(int percent)
+            {
+                // 不带"当前条目"：日志里"xxx.mp4：进度 20%"已经说清了是哪个任务，
+                // 再挂一遍文件名只是噪声（引擎路径给的是**归档内**的条目名，这里没有对应物）。
+                _sink.Report(new ArchiveProgress { Percent = percent });
             }
         }
 

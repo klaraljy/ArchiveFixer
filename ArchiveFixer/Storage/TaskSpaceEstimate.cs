@@ -171,7 +171,17 @@ namespace ArchiveFixer.Storage
         /// <summary>
         /// 粗估：只读文件大小，不碰引擎。分卷组按 <see cref="ArchiveTask.VolumePaths"/> 求和（路径去重）。
         /// </summary>
-        public static TaskSpaceEstimate FromSourceFiles(ArchiveTask? task)
+        /// <param name="directReadAvailable">
+        /// 这个任务的内嵌归档能不能走**直读**（<c>Extraction/EmbeddedZipStreamExtractor</c>）。
+        ///
+        /// <para>为 true 时**不记**那笔抠取副本 —— 直读路线一个字节的中间件都不产生
+        /// （用户 2026-09-24 需求第 7 条：账面上必须与真实发生的动作一致，
+        /// 不许一边说"省了副本"一边又把它预留出来）。判别由调用方给
+        /// （<c>ArchiveTask.EmbeddedDirectReadSupported</c> + 这一批会不会走递归模式），
+        /// 估算器本身不碰文件、不读设置。真回落时由抠取器自己那道空间预检兜底：
+        /// 那一刻会如实报"取出内嵌归档需要约 X MB 临时空间"，而不是把盘写满。</para>
+        /// </param>
+        public static TaskSpaceEstimate FromSourceFiles(ArchiveTask? task, bool directReadAvailable = false)
         {
             if (task == null)
             {
@@ -189,13 +199,13 @@ namespace ArchiveFixer.Storage
                 long.MaxValue,
                 sourceBytes * UnknownListingContentAllowance);
 
-            long carvedBytes = EstimateCarvedBytes(task, sourceBytes);
+            long carvedBytes = EstimateCarvedBytes(task, sourceBytes, directReadAvailable);
 
             string basis =
                 $"扫到 {measuredCount} 个源文件（{TaskSpaceEstimate.FormatSize(sourceBytes)}）"
                 + (missingCount > 0 ? $"，其中 {missingCount} 个读不到大小" : string.Empty)
                 + $"，内容物按源包 {UnknownListingContentAllowance:0.##} 倍估（清单还没读，属于下界）"
-                + (carvedBytes > 0 ? $"，内嵌归档中间件 {TaskSpaceEstimate.FormatSize(carvedBytes)}" : string.Empty);
+                + DescribeCarvedBytes(carvedBytes, task, directReadAvailable);
 
             return new TaskSpaceEstimate
             {
@@ -221,7 +231,8 @@ namespace ArchiveFixer.Storage
         public static TaskSpaceEstimate RefineWithListing(
             TaskSpaceEstimate? cheap,
             ArchiveListResult? list,
-            long carvedBytes = 0)
+            long carvedBytes = 0,
+            bool carvedBytesNotNeeded = false)
         {
             TaskSpaceEstimate basis = cheap ?? new TaskSpaceEstimate();
 
@@ -261,7 +272,7 @@ namespace ArchiveFixer.Storage
                 + (innerArchiveBytes > 0
                     ? $"，其中内层包 {TaskSpaceEstimate.FormatSize(innerArchiveBytes)}（再展开按 {NestedExpansionAllowance:0.##} 倍估增量）"
                     : "，没有内层包")
-                + (carvedBytes > 0 ? $"，内嵌归档中间件 {TaskSpaceEstimate.FormatSize(carvedBytes)}" : string.Empty);
+                + DescribeCarvedBytes(carvedBytes, null, carvedBytesNotNeeded);
 
             return new TaskSpaceEstimate
             {
@@ -282,10 +293,18 @@ namespace ArchiveFixer.Storage
         ///
         /// 终点缺失（0 或 ≤ 偏移）时按"抠到文件末尾"算，与抠取侧的回落完全同口径；
         /// 真实资源包在 EOCD 之后还有十几 KB 正常数据，那截不会被抠出来，所以这里也**不能**算进去。
+        ///
+        /// <para><paramref name="directReadAvailable"/> 为 true 时返回 0：
+        /// 这个任务会走 ZIP 直读，**不会**产生那份等大的临时副本（用户 2026-09-24 需求第 7 条）。</para>
         /// </summary>
-        public static long EstimateCarvedBytes(ArchiveTask? task, long sourceBytes)
+        public static long EstimateCarvedBytes(ArchiveTask? task, long sourceBytes, bool directReadAvailable = false)
         {
             if (task == null || task.EmbeddedArchiveOffset <= 0)
+            {
+                return 0;
+            }
+
+            if (directReadAvailable)
             {
                 return 0;
             }
@@ -308,6 +327,31 @@ namespace ArchiveFixer.Storage
             }
 
             return tail > 0 ? tail : 0;
+        }
+
+        /// <summary>
+        /// 空间账面上"那份临时副本"的一句话。**口径必须与真实发生的动作一致**（用户 2026-09-24 需求第 7 条）：
+        /// 直读时明说"不需要副本"，抠取时给出字节数 —— 不许一边说省了、一边又预留。
+        /// </summary>
+        private static string DescribeCarvedBytes(long carvedBytes, ArchiveTask? task, bool directReadAvailable)
+        {
+            bool isEmbedded = task == null
+                ? carvedBytes > 0 || directReadAvailable
+                : task.EmbeddedArchiveOffset > 0;
+
+            if (!isEmbedded)
+            {
+                return string.Empty;
+            }
+
+            if (directReadAvailable)
+            {
+                return "，内嵌归档走 ZIP 直读（**不需要**那份等大的临时副本，不记这一笔）";
+            }
+
+            return carvedBytes > 0
+                ? $"，内嵌归档中间件（抠取副本）{TaskSpaceEstimate.FormatSize(carvedBytes)}"
+                : string.Empty;
         }
 
         /// <summary>逐条累加清单（与 <c>ResourceBudget.CheckBeforeExtract</c> 同一口径），顺便挑出内层包条目。</summary>

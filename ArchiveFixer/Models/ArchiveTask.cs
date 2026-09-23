@@ -589,6 +589,18 @@ namespace ArchiveFixer.Models
         /// </summary>
         public long EmbeddedArchiveEnd { get; set; }
 
+        /// <summary>
+        /// 这个内嵌归档能不能**直读**（识别阶段用 <c>Extraction/EmbeddedZipStreamExtractor</c> 只读探过一次）。
+        ///
+        /// <para><b>它只用于空间核算</b>：直读不产生那份等大的临时副本，估算就不该预留它
+        /// （用户 2026-09-24 需求第 7 条：账面必须与真实动作一致）。真正解压之前会再探一次，
+        /// 以那一刻的结论为准 —— 所以这个字段为 false 也**不会**让一个本来能直读的包失去直读机会。</para>
+        /// </summary>
+        public bool EmbeddedDirectReadSupported { get; set; }
+
+        /// <summary>直读不支持时的原因（进日志与任务详情，说明"为什么要抠那一份副本"）。</summary>
+        public string EmbeddedDirectReadReason { get; set; } = string.Empty;
+
         /// <summary>结果归集后的最终位置（没有归集时为空，表示还是 OutputPath）。</summary>
         public string CollectedPath { get; set; } = string.Empty;
 
@@ -914,6 +926,8 @@ namespace ArchiveFixer.Models
                 IsEncrypted = false;
                 EmbeddedArchiveOffset = 0;
                 EmbeddedArchiveEnd = 0;
+                EmbeddedDirectReadSupported = false;
+                EmbeddedDirectReadReason = string.Empty;
                 ExtensionStatus = StatusText.UnknownFormat;
                 Status = StatusText.UnknownFormat;
                 Operation = StatusText.OpScan;
@@ -930,6 +944,8 @@ namespace ArchiveFixer.Models
             // 重扫时也要跟着刷新：上一次的偏移对新文件没有意义（识别结果是会被覆盖的）。
             EmbeddedArchiveOffset = result.EmbeddedArchiveOffset;
             EmbeddedArchiveEnd = result.EmbeddedArchiveEnd;
+            EmbeddedDirectReadSupported = result.EmbeddedDirectReadSupported;
+            EmbeddedDirectReadReason = result.EmbeddedDirectReadReason ?? string.Empty;
             ExtensionStatus = extensionStatus;
 
             if (result.IsArchive)

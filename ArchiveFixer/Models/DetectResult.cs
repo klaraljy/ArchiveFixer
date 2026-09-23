@@ -109,6 +109,20 @@ namespace ArchiveFixer.Models
         public long EmbeddedArchiveEnd { get; init; }
 
         /// <summary>
+        /// 这个内嵌归档能不能**直读**（<c>Extraction/EmbeddedZipStreamExtractor</c> 的只读探查结论）。
+        ///
+        /// <para>识别阶段顺手探一次（只读、不写、不改源文件），结论供**空间核算**用：
+        /// 直读不产生那份等大的临时副本，账面上就不该预留它（用户 2026-09-24 需求第 7 条）。</para>
+        ///
+        /// <para>⚠ 它只是**估算依据**，不是解压时的判据：真正解压前还会用同一个探查再问一次
+        /// （源文件在两次动作之间可能变过），以那一刻的结论为准。</para>
+        /// </summary>
+        public bool EmbeddedDirectReadSupported { get; init; }
+
+        /// <summary>直读不支持时的原因（<see cref="EmbeddedDirectReadSupported"/> 为 true 时为空）。</summary>
+        public string EmbeddedDirectReadReason { get; init; } = string.Empty;
+
+        /// <summary>
         /// 创建 Unknown 结果。
         /// </summary>
         public static DetectResult Unknown(string message = "未知格式", string headerHex = "")
