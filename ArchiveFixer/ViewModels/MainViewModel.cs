@@ -996,6 +996,12 @@ namespace ArchiveFixer.ViewModels
         public ICommand OpenSettingsCommand { get; }
         public ICommand OpenPasswordListCommand { get; }
 
+        /// <summary>
+        /// 打包入口（菜单「工具 → 打包文件夹为加密分卷…」，**唯一**入口；用户 2026-09-22 需求第 10 条）。
+        /// 打包是独立的一条流水线（7z 分卷 → 外层加密 rar），不依赖任务列表，所以没有勾选之类的前置条件。
+        /// </summary>
+        public ICommand OpenPackingCommand { get; }
+
         /// <summary>导入密码本（记住路径，下次启动自动加载）。用户已多次要求：导入一次就够。</summary>
         public ICommand ImportPasswordBookCommand { get; }
         public ICommand ExportLogCommand { get; }
@@ -1222,6 +1228,7 @@ namespace ArchiveFixer.ViewModels
 
             OpenSettingsCommand = new RelayCommand(OpenSettings, CanRunNormalCommand);
             OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
+            OpenPackingCommand = new RelayCommand(OpenPacking, CanRunNormalCommand);
             ImportPasswordBookCommand = new RelayCommand(ImportPasswordBook, CanRunNormalCommand);
             ExportLogCommand = new RelayCommand(ExportLog);
             CopyFailedListCommand = new RelayCommand(CopyFailedList);
@@ -2044,6 +2051,35 @@ namespace ArchiveFixer.ViewModels
             SelectedOutputDirectory = Settings.CustomOutputDirectory ?? string.Empty;
             RefreshOutputPaths();
             AppendLog("INFO", "已恢复默认设置");
+        }
+
+        /// <summary>
+        /// 打开打包窗口（菜单「工具 → 打包文件夹为加密分卷…」）。
+        ///
+        /// <para>与解压那条流水线**完全独立**：不碰任务列表、不碰勾选、不读源包所在目录。
+        /// 每一步的日志通过 <c>LogSink</c> 接到主日志上 —— 打包结果要能追到引擎名与版本
+        /// （不变量 14），窗口关掉之后日志里还得查得到。</para>
+        /// </summary>
+        private void OpenPacking()
+        {
+            try
+            {
+                var viewModel = new PackingViewModel { LogSink = line => AppendLog("INFO", line) };
+
+                var window = new PackingWindow(viewModel)
+                {
+                    Owner = Application.Current?.MainWindow
+                };
+
+                window.ShowDialog();
+
+                AppendLog("INFO", StatusText.PackName + "窗口已关闭。");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", "打开打包窗口失败：" + ex.Message);
+                _dialogService.ShowError("打开打包窗口失败：" + ex.Message);
+            }
         }
 
         private void OpenPasswordList()
@@ -3592,6 +3628,7 @@ namespace ArchiveFixer.ViewModels
 
                  OpenSettingsCommand,
                  OpenPasswordListCommand,
+                 OpenPackingCommand,
                  ExportLogCommand,
                  CopyFailedListCommand,
                  OpenOutputDirectoryCommand,

@@ -278,5 +278,154 @@ namespace ArchiveFixer.Models
             "危险模式当前不生效：自测凭证只覆盖它跑过的那一档并发。" +
             "要么把「最大并发解压数」调回不超过凭证里的档位（本批立刻恢复生效），" +
             "要么在新档位下重新跑一次自测（会再永久删除一批样本源包，不可撤销）。";
+
+        // ================================================================
+        // 解压前的提醒（无用物 / 无可用密码）—— 用户 2026-09-22 需求第 8 条
+        // ================================================================
+        //
+        // ⚠ 这一组是**弹窗正文 + 日志行 + 文档**的唯一措辞来源，而且三段话的顺序不能改：
+        //    ① 这些文件是什么（打包者附带的说明 / 网址 / 工具 / 广告）→
+        //    ② 本程序不会动它们（不删、不改名、不搬走）→
+        //    ③ 解压完成后由用户自己判断要不要删。
+        //    漏掉 ② 就会出现"程序要去删我的文件"这种与事实相反的暗示；
+        //    漏掉 ③ 用户会以为必须当场做决定。
+
+        /// <summary>提醒框的标题。</summary>
+        public const string JunkReminderTitle = "解压前的提醒";
+
+        /// <summary>主按钮：照常处理这一批。</summary>
+        public const string JunkReminderYesText = "继续处理";
+
+        /// <summary>次按钮：先不处理（回到列表，任务与源包一个字节都不会动）。</summary>
+        public const string JunkReminderNoText = "先不处理";
+
+        /// <summary>
+        /// 可选项位：本次运行内不再弹这个提醒。
+        /// **只存在内存里的一个标记**（<c>ExtractionCoordinator</c> 的实例字段），
+        /// 绝不写进设置文件 —— 用户勾的是"这次别再烦我"，不是"以后永远别提醒"。
+        /// </summary>
+        public const string JunkReminderOptionText = "本次运行不再提示这类提醒";
+
+        /// <summary>开场一句：先把性质说清（不是错误），免得用户以为出事了。</summary>
+        public const string JunkReminderIntro = "这次解压动手之前，先说两件事（都不是错误，也不影响解压本身）：";
+
+        /// <summary>① 段标题：源目录里那些"可能是打包者附带的文件"。</summary>
+        public const string JunkReminderJunkHeader =
+            "① 这些源目录里有一些文件，很可能是打包者附带的说明 / 网址 / 工具 / 广告之类的诱饵"
+            + "（本程序只按文件名 + 魔数判了个大概，**不保证**它们真的没用）：";
+
+        /// <summary>① 段结尾：**程序不会动它们** + 解压完由用户自己判断（用户点名要写清的两件事）。</summary>
+        public const string JunkReminderJunkFooter =
+            "上面这些文件本程序**一个都不会动**（不删、不改名、不搬走）；"
+            + "解压完成后你可以自己看一眼，再决定要不要删。";
+
+        /// <summary>① 段：这次一共认出多少个（列出来的最多 10 条，其余只报个数）。</summary>
+        public const string JunkReminderJunkCountFormat = "这次一共认出 {0} 个：";
+
+        /// <summary>无用物还有多少个没列出来（上限见 <c>SourceJunkScanner.MaxReportedItems</c>）。</summary>
+        public const string JunkReminderJunkMoreFormat = "  …还有 {0} 个（无用物最多列 10 条）";
+
+        /// <summary>撞到扫描上限（每个目录 2000 个文件 / 魔数体检预算）时如实说明，不假装扫全了。</summary>
+        public const string JunkReminderTruncatedNote = "  （源目录里的文件太多，本次只核对了前一部分）";
+
+        /// <summary>② 段标题：需要密码、但当前一个可用候选都没有的包。</summary>
+        public const string JunkReminderPasswordHeaderFormat =
+            "② 本批有 {0} 个包需要密码，但当前**一个可用候选都没有**"
+            + "（密码本为空 / 映射式没命中 / 没设统一密码）：";
+
+        /// <summary>② 段：说清继续会发生什么（"即使密码本已预加载也可能没覆盖到"的那种包）。</summary>
+        public const string JunkReminderPasswordOutcome =
+            "它们大概率会以「密码错误」或「达到密码尝试上限」结束 —— 既不是成功，也不是文件损坏。";
+
+        /// <summary>② 段：没列出来的包还有多少个（列表最长 10 个）。</summary>
+        public const string JunkReminderPasswordMoreFormat = "  …还有 {0} 个（最多列 10 个）";
+
+        /// <summary>② 段：给出口（两个按钮各自会怎样 + 去哪儿补密码）。</summary>
+        public const string JunkReminderPasswordExit =
+            "两条路：① 点「" + JunkReminderNoText + "」回到列表，把它们从勾选里去掉（或者先补好密码）再重跑；"
+            + "② 点「" + JunkReminderYesText + "」照常开始 —— 程序紧接着还会问你要不要手动输一个密码，"
+            + "也可以先去菜单「导入密码本…」把它补进去。";
+
+        /// <summary>批首那条日志的骨架：**两段结论都落进日志**（数量 + 前几条名字）。</summary>
+        public const string JunkReminderLogFormat = "解压前提醒：① 无用物 {0}；② 无可用密码的包 {1}。";
+
+        /// <summary>某一段"有 N 个，例如 …"的写法（喂给 <see cref="JunkReminderLogFormat"/>）。</summary>
+        public const string JunkReminderLogFoundFormat = "{0} 个（例如 {1}）";
+
+        /// <summary>某一段一个都没有。</summary>
+        public const string JunkReminderLogNoneText = "无";
+
+        /// <summary>
+        /// 无界面宿主（单测 / 控制台宿主）时的那条日志。
+        ///
+        /// <para>它解释的是"为什么没人点过、这一批却照常跑了"：这条提醒的降级方向是
+        /// **继续**（见 <c>DialogService.ShowReminderConfirm</c>），与破坏性确认的降级方向
+        /// （false = 取消）正好相反 —— 否则所有无界面管线都会被这条纯提示拦住。</para>
+        /// </summary>
+        public const string JunkReminderNoHostLog =
+            "当前宿主没有界面：解压前的提醒不弹窗、按「" + JunkReminderYesText + "」放行（只写日志）。";
+
+        /// <summary>用户勾了「本次运行不再提示」。</summary>
+        public const string JunkReminderOptionLog =
+            "已记下「" + JunkReminderOptionText + "」：本次运行内不再弹这个提醒（只在内存里，不写设置文件）。";
+
+        /// <summary>用户在提醒里选了「先不处理」：这一批没有开始。</summary>
+        public const string JunkReminderDeclinedLog =
+            "已按「" + JunkReminderNoText + "」处理：这一批没有开始（任务、源包、输出目录一个字节都没动）。";
+
+        // ================================================================
+        // 打包（菜单「工具 → 打包文件夹为加密分卷…」）
+        // ================================================================
+        //
+        // ⚠ 这一组是**打包功能的文案唯一来源**（AGENTS.md §7）：窗口标题 / 步骤行 / 结论 /
+        //    没有 Rar.exe 时的那段话都从这儿引，日志与失败原因也引同一份，
+        //    免得"界面说一套、日志记一套"。
+        //
+        // 用户 2026-09-22 需求第 10 条：文件夹 A 的内容 → 7z 加密分卷 → 放进文件夹 B →
+        //    B 压成带密码的 rar → 结果 = 压缩包 B。设计见 docs/打包功能.md。
+
+        /// <summary>功能名（菜单项、窗口标题、日志里都用它）。</summary>
+        public const string PackName = "打包文件夹为加密分卷";
+
+        /// <summary>第一步之前的那一步：校验落点、算空间。</summary>
+        public const string PackStepPreparing = "准备：校验落点、核算空间";
+
+        /// <summary>第一步：7z 加密分卷。</summary>
+        public const string PackStepVolumes = "步骤 1/2：生成 7z 加密分卷";
+
+        /// <summary>第二步：外层加密 rar。</summary>
+        public const string PackStepRar = "步骤 2/2：生成外层加密 rar";
+
+        /// <summary>第三步：核对产物。</summary>
+        public const string PackStepVerify = "校验产物：列出 rar 条目、核对分卷数";
+
+        /// <summary>成功（外层 rar 做成了）。</summary>
+        public const string PackSuccess = "打包成功";
+
+        /// <summary>失败。</summary>
+        public const string PackFailed = "打包失败";
+
+        /// <summary>取消。</summary>
+        public const string PackCancelled = "打包已取消";
+
+        /// <summary>产物校验不通过（不变量 6：对不上就不显示成功）。</summary>
+        public const string PackVerifyFailed = "产物校验不通过";
+
+        /// <summary>按要求只做了 7z 分卷（本机没装 WinRAR 时的那条出路）。</summary>
+        public const string PackPartialVolumesOnly = "只做了 7z 分卷（按要求跳过外层 rar）";
+
+        /// <summary>
+        /// 没有 Rar.exe 时的那句话。**必须包含"需要本机已安装 WinRAR"**（验收判据点名的字串），
+        /// 并且紧跟着给两条出路（可点的"只做 7z 分卷"就是第二条）。
+        /// </summary>
+        public const string PackNeedRar =
+            "这一步需要本机已安装 WinRAR（要 Rar.exe / WinRAR.exe）：程序不会替你装、也不会随包分发它。";
+
+        /// <summary>"只做 7z 分卷"那个勾选项的文案（界面与日志共用同一句）。</summary>
+        public const string PackSkipRarOption = "只做 7z 分卷（跳过外层 rar）";
+
+        /// <summary>结果区提醒：B 可以自己删（用户可能要先检查分卷）。</summary>
+        public const string PackKeepFolderHint =
+            "文件夹 B 会保留下来（你可以先检查分卷）；确认结果没问题之后，B 可以自己删掉。";
     }
 }

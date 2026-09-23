@@ -1,0 +1,422 @@
+<Window x:Class="ArchiveFixer.Views.PackingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource AppWindowStyle}"
+        Title="打包文件夹为加密分卷"
+        Width="1000"
+        Height="760"
+        MinWidth="880"
+        MinHeight="620"
+        WindowStartupLocation="CenterOwner">
+
+    <!--
+        打包窗口（用户 2026-09-22 需求第 10 条；设计见 docs/打包功能.md）。
+
+        一屏到底，没有向导：
+          源文件夹 A → 输出文件夹 B → 分卷大小 → 密码（+ 可选的外层独立密码）
+          → 摘要行 → 「开始打包」 → 进度 + 当前步骤 → 结果区。
+
+        两条界面规矩：
+        · 没有 Rar.exe 时**开始按钮不禁用**，而是把「只做 7z 分卷」摆出来（勾了就不做外层 rar）——
+          让用户看得见发生了什么，而不是一个灰着不解释的按钮；
+        · 密码框用 PasswordBox（不是 TextBox）：明文不进可视树，也不进绑定日志。
+    -->
+
+    <DockPanel Margin="12">
+
+        <!-- ============ 标题区 ============ -->
+        <Border DockPanel.Dock="Top" Style="{StaticResource CardStyle}" Margin="0,0,0,8">
+            <StackPanel>
+                <TextBlock Text="打包文件夹为加密分卷" Style="{StaticResource PageTitleTextStyle}" />
+
+                <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,5,0,0" TextWrapping="Wrap"
+                           Text="把一个文件夹变成「带密码的 rar」：① 里面的内容先切成 7z 加密分卷（连文件名一起加密）→ ② 分卷落进一个新建的文件夹 B → ③ B 整个压成带密码的 rar。结果就是「压缩包 B」。密码只存在内存里，不写设置、不记日志。" />
+            </StackPanel>
+        </Border>
+
+        <!-- ============ 提示条：校验不过 / 结果提示 ============ -->
+        <Border DockPanel.Dock="Top"
+                Margin="0,0,0,8"
+                Visibility="{Binding HasNotice, Converter={StaticResource BoolToVisibilityConverter}}">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource InfoBannerStyle}">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding NoticeKind}" Value="Success">
+                            <Setter Property="Background" Value="{StaticResource SuccessSoftBrush}" />
+                            <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding NoticeKind}" Value="Warning">
+                            <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                            <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding NoticeKind}" Value="Error">
+                            <Setter Property="Background" Value="{StaticResource DangerSoftBrush}" />
+                            <Setter Property="BorderBrush" Value="{StaticResource DangerBorderBrush}" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+
+            <TextBlock Text="{Binding NoticeText}" TextWrapping="Wrap">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource BannerTextStyle}">
+                        <Setter Property="Foreground" Value="{StaticResource InfoTextBrush}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding NoticeKind}" Value="Success">
+                                <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding NoticeKind}" Value="Warning">
+                                <Setter Property="Foreground" Value="{StaticResource WarningTextBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding NoticeKind}" Value="Error">
+                                <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </Border>
+
+        <!-- ============ 底部操作栏 ============ -->
+        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Margin="0,8,0,0">
+            <StackPanel>
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
+                        <Button Content="开始打包"
+                                MinWidth="104"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Command="{Binding StartCommand}"
+                                ToolTip="先校验落点与空间，再开始切分卷、做外层 rar" />
+
+                        <Button Content="取消"
+                                MinWidth="80"
+                                Margin="8,0,0,0"
+                                Command="{Binding CancelCommand}"
+                                ToolTip="取消当前打包：只结束本程序启动的那个进程及其子进程；已经切出来的分卷保留" />
+                    </StackPanel>
+
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="复制密码"
+                                MinWidth="88"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Margin="0,0,8,0"
+                                Command="{Binding CopyPasswordCommand}"
+                                ToolTip="把这次用的密码复制到剪贴板（程序自己不保存密码）" />
+
+                        <Button Content="打开输出目录"
+                                MinWidth="104"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Margin="0,0,12,0"
+                                Command="{Binding OpenOutputFolderCommand}" />
+
+                        <Button Content="关闭"
+                                MinWidth="88"
+                                IsCancel="True"
+                                Click="CloseButton_Click" />
+                    </StackPanel>
+
+                    <Border />
+                </DockPanel>
+
+                <!-- 进度 + 当前步骤 -->
+                <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="进度"
+                               Style="{StaticResource LabelTextStyle}"
+                               Margin="0,0,8,0" />
+
+                    <ProgressBar Grid.Column="1"
+                                 Height="16"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding ProgressPercent, Mode=OneWay}"
+                                 VerticalAlignment="Center" />
+
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding ProgressPercent, Mode=OneWay, StringFormat={}{0}%}"
+                               Style="{StaticResource HintTextStyle}"
+                               MinWidth="44"
+                               TextAlignment="Right"
+                               Margin="8,0,0,0" />
+                </Grid>
+
+                <TextBlock Text="{Binding CurrentStepText}"
+                           Style="{StaticResource HintTextStyle}"
+                           Margin="0,6,0,0"
+                           TextWrapping="Wrap" />
+
+                <TextBlock Text="{Binding ProgressDetailText}"
+                           Style="{StaticResource HintTextStyle}"
+                           Margin="0,2,0,0"
+                           TextTrimming="CharacterEllipsis"
+                           Visibility="{Binding IsRunning, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <!-- 结果区 -->
+                <Border Margin="0,10,0,0"
+                        Padding="10"
+                        CornerRadius="4"
+                        BorderThickness="1"
+                        Visibility="{Binding HasResult, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="{StaticResource InfoSoftBrush}" />
+                            <Setter Property="BorderBrush" Value="{StaticResource InfoBorderBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ResultKind}" Value="Success">
+                                    <Setter Property="Background" Value="{StaticResource SuccessSoftBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding ResultKind}" Value="Warning">
+                                    <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding ResultKind}" Value="Error">
+                                    <Setter Property="Background" Value="{StaticResource DangerSoftBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource DangerBorderBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+
+                    <StackPanel>
+                        <TextBlock Text="{Binding ResultTitle}" Style="{StaticResource SectionTitleTextStyle}" />
+
+                        <TextBlock Text="{Binding ResultText}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap" />
+
+                        <TextBlock Text="{Binding ResultRarPath}"
+                                   FontFamily="{StaticResource MonoFontFamily}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,6,0,0"
+                                   Visibility="{Binding HasRarResult, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                        <DataGrid ItemsSource="{Binding Volumes}"
+                                  AutoGenerateColumns="False"
+                                  IsReadOnly="True"
+                                  MaxHeight="130"
+                                  Margin="0,8,0,0"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column"
+                                  VerticalScrollBarVisibility="Auto"
+                                  RowStyle="{StaticResource AppDataGridRowStyle}"
+                                  Visibility="{Binding HasResult, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="分卷" Binding="{Binding FileName}" Width="*" />
+                                <DataGridTextColumn Header="大小" Binding="{Binding SizeText}" Width="110" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <TextBlock Text="{Binding KeepFolderHint}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="0,6,0,0"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- ============ 表单（中间，可滚动） ============ -->
+        <Border Style="{StaticResource CardStyle}" Padding="0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="14">
+                <StackPanel>
+
+                    <!-- 源文件夹 A -->
+                    <TextBlock Text="源文件夹 A（里面的内容会被打包）" Style="{StaticResource LabelTextStyle}" />
+
+                    <Grid Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBox Grid.Column="0"
+                                 Text="{Binding SourceFolder, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                 ToolTip="要打包的文件夹。只打包它里面的内容（不含它自己这一层）" />
+
+                        <Button Grid.Column="1"
+                                Content="选择…"
+                                MinWidth="80"
+                                Margin="8,0,0,0"
+                                Command="{Binding BrowseSourceCommand}" />
+                    </Grid>
+
+                    <!-- 输出文件夹 B -->
+                    <TextBlock Text="输出文件夹 B（分卷落在这里；最后整个压进 rar）"
+                               Style="{StaticResource LabelTextStyle}"
+                               Margin="0,12,0,0" />
+
+                    <Grid Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBox Grid.Column="0"
+                                 Text="{Binding OutputFolder, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                 ToolTip="默认与 A 同级：&lt;A 的父目录&gt;\&lt;A 名&gt;_打包。必须是空文件夹或还不存在" />
+
+                        <Button Grid.Column="1"
+                                Content="选择…"
+                                MinWidth="80"
+                                Margin="8,0,0,0"
+                                Command="{Binding BrowseOutputCommand}" />
+                    </Grid>
+
+                    <!-- 分卷大小 -->
+                    <TextBlock Text="分卷大小" Style="{StaticResource LabelTextStyle}" Margin="0,12,0,0" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <TextBox Width="110"
+                                 Text="{Binding VolumeSizeMiB, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                 ToolTip="每个分卷的体积上限，单位 MiB。默认 512（＝1 GB 切成 2 卷、1.5 GB 切成 3 卷）" />
+
+                        <TextBlock Text="MiB"
+                                   Style="{StaticResource LabelTextStyle}"
+                                   VerticalAlignment="Center"
+                                   Margin="8,0,0,0" />
+
+                        <TextBlock Text="（64 – 4096；默认 512）"
+                                   Style="{StaticResource HintTextStyle}"
+                                   VerticalAlignment="Center"
+                                   Margin="8,0,0,0" />
+
+                        <Button Content="重算摘要"
+                                MinWidth="96"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Margin="12,0,0,0"
+                                Command="{Binding RefreshSummaryCommand}"
+                                ToolTip="扫一遍 A 的文件数与总大小，重算下面的摘要（大文件夹需要几秒）" />
+                    </StackPanel>
+
+                    <!-- 密码 -->
+                    <TextBlock Text="密码（必填；两层默认用同一个）" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
+
+                    <Grid Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <PasswordBox Grid.Column="0"
+                                     x:Name="PasswordInput"
+                                     PasswordChanged="PasswordInput_PasswordChanged"
+                                     ToolTip="7z 分卷与外层 rar 都用它（连文件名一起加密）。密码只存在内存里" />
+
+                        <PasswordBox Grid.Column="1"
+                                     x:Name="ConfirmPasswordInput"
+                                     Margin="8,0,0,0"
+                                     PasswordChanged="ConfirmPasswordInput_PasswordChanged"
+                                     ToolTip="再输一遍，防止打错" />
+                    </Grid>
+
+                    <TextBlock Text="左边是密码，右边是确认密码。密码里可以有空格，首尾空格也算数。"
+                               Style="{StaticResource HintTextStyle}"
+                               Margin="0,4,0,0"
+                               TextWrapping="Wrap" />
+
+                    <CheckBox Content="外层 rar 用另一个密码"
+                              Margin="0,8,0,0"
+                              IsChecked="{Binding UseSeparateOuterPassword, Mode=TwoWay}"
+                              ToolTip="不勾就是两层同一个密码（默认）" />
+
+                    <Grid Margin="0,4,0,0"
+                          IsEnabled="{Binding OuterPasswordEnabled}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <PasswordBox Grid.Column="0"
+                                     x:Name="OuterPasswordInput"
+                                     PasswordChanged="OuterPasswordInput_PasswordChanged" />
+
+                        <PasswordBox Grid.Column="1"
+                                     x:Name="OuterConfirmPasswordInput"
+                                     Margin="8,0,0,0"
+                                     PasswordChanged="OuterConfirmPasswordInput_PasswordChanged" />
+                    </Grid>
+
+                    <!-- 外层 rar 这一步能不能做 -->
+                    <Border Margin="0,14,0,0" Padding="10" CornerRadius="4" BorderThickness="1">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="{StaticResource SuccessSoftBrush}" />
+                                <Setter Property="BorderBrush" Value="{StaticResource SuccessBorderBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasNoRar}" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource WarningBorderBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+
+                        <StackPanel>
+                            <TextBlock Text="外层 rar 这一步需要本机已装的 WinRAR（Rar.exe）"
+                                       Style="{StaticResource SectionTitleTextStyle}" />
+
+                            <TextBlock Text="{Binding RarStatusText}"
+                                       Style="{StaticResource HintTextStyle}"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap" />
+
+                            <!-- 没有 Rar.exe 时：把两条出路摆出来（开始按钮**不**禁用） -->
+                            <StackPanel Visibility="{Binding HasNoRar, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <TextBlock Text="{Binding RarMissingText}"
+                                           Foreground="{StaticResource WarningTextBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,6,0,0" />
+
+                                <TextBlock Style="{StaticResource HintTextStyle}"
+                                           Margin="0,4,0,0"
+                                           TextWrapping="Wrap"
+                                           Text="出路①：装好 WinRAR（带 Rar.exe）后回到这里重试。出路②：勾上下面的选项，这次只做 7z 分卷 —— 结果就是 B 里的那几个 .7z.001/.002/…（没有外层 rar）。程序绝不会拿 7-Zip 假装做出一个 .rar 给你。" />
+                            </StackPanel>
+
+                            <CheckBox Content="只做 7z 分卷（跳过外层 rar）"
+                                      Margin="0,6,0,0"
+                                      IsChecked="{Binding SkipOuterRar, Mode=TwoWay}"
+                                      ToolTip="勾了就不做外层 rar，结果直接是 B 里的 7z 加密分卷" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 摘要 -->
+                    <TextBlock Text="摘要" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
+
+                    <Border Background="{StaticResource PanelSunkenBrush}"
+                            BorderBrush="{StaticResource PanelBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="10,8"
+                            Margin="0,4,0,0">
+                        <StackPanel>
+                            <TextBlock Text="{Binding SummaryText}"
+                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                       TextWrapping="Wrap" />
+
+                            <TextBlock Text="{Binding PlacementText}"
+                                       Style="{StaticResource HintTextStyle}"
+                                       Margin="0,6,0,0"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,8,0,0"
+                               TextWrapping="Wrap"
+                               Text="开始之前会先查一遍目标盘的可用空间；不够就不会开始（会告诉你需要多少、可用多少、差多少）。源文件夹里不会写入任何东西；输出文件夹里也不会混进旧文件（B 必须是空的或还不存在）。" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</Window>

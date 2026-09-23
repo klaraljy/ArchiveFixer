@@ -196,7 +196,8 @@ namespace ArchiveFixer.Tests
             SettingsWindowName,
             TaskDetailWindowName,
             OneClickOptionsWindowName,
-            AppDialogWindowName
+            AppDialogWindowName,
+            PackingWindowName
         };
 
         public const string MainWindowName = "主窗口 MainWindow";
@@ -212,6 +213,8 @@ namespace ArchiveFixer.Tests
         public const string OneClickOptionsWindowName = "本次选项面板 OneClickOptionsWindow";
 
         public const string AppDialogWindowName = "自绘对话框 AppDialogWindow";
+
+        public const string PackingWindowName = "打包窗口 PackingWindow";
 
         /// <param name="onProbeThread">
         /// 可选前置钩子，**在探针那条 STA 线程上**、创建任何窗口之前执行。
@@ -407,6 +410,17 @@ namespace ArchiveFixer.Tests
                             OptionText = "探针选项位"
                         }),
                         AppDialogWindowName,
+                        report,
+                        main);
+
+                    /*
+                     * 打包窗口（用户 2026-09-22 需求第 10 条）：带真实 ViewModel 显示一遍，
+                     * 让它那套"输入框 + 勾选 + 进度条 + 结果区"的模板真的被实例化。
+                     * 默认 ViewModel 不碰盘（没有源文件夹时不扫任何目录），所以探针里是安全的。
+                     */
+                    ShowAndRecord(
+                        new PackingWindow(new PackingViewModel()),
+                        PackingWindowName,
                         report,
                         main);
                 }

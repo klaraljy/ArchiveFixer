@@ -249,6 +249,65 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 「解压前的提醒」专用确认框：标题 / 两个按钮 / 勾选项的文案全部由调用方给
+        /// （文案的唯一来源是 <c>StatusText</c>），而且**无 UI 宿主时按「继续」处理**
+        /// （<c>fallback: true</c>）。
+        ///
+        /// <para><b>为什么降级方向与上面那个 <see cref="ShowConfirm(string, string, bool, out bool)"/>
+        /// 正好相反</b>：那一个的语义是"要不要执行一个**有副作用**的动作"，没人点就必须按"不做"处理；
+        /// 而这里只是一条**纯提示**，它拦住的是一整批解压。降级成"取消"的后果是所有无界面宿主
+        /// （单元测试、控制台宿主、被别的程序调起的管线）一启动就被这条提醒拦死，而且没人看得到原因 ——
+        /// 那才是真正的事故。所以这里显式定义成"没人点 = 继续"。</para>
+        ///
+        /// <para>勾选项在无界面宿主下恒为 false（<c>confirmed &amp;&amp; checkedState</c>，而 checkedState
+        /// 就是传进来的默认值）："本次运行不再提示"是一个**用户意图**，程序不许替用户勾上。</para>
+        /// </summary>
+        /// <param name="title">标题（空 = 用 <see cref="AppDialogRequest"/> 的默认标题）。</param>
+        /// <param name="yesText">主按钮文案（写动作本身："继续处理"）。</param>
+        /// <param name="noText">次按钮文案（"先不处理"）。</param>
+        /// <param name="optionChecked">用户最终是否勾选（未确认 / 无界面宿主时恒为 false）。</param>
+        public bool ShowReminderConfirm(
+            string title,
+            string message,
+            string yesText,
+            string noText,
+            string optionText,
+            bool optionCheckedByDefault,
+            out bool optionChecked)
+        {
+            bool checkedState = optionCheckedByDefault;
+
+            var request = new AppDialogRequest
+            {
+                Message = message,
+                Icon = AppDialogIcon.Question,
+                Buttons = AppDialogButtons.YesNo,
+                YesText = yesText,
+                NoText = noText,
+                OptionText = optionText ?? string.Empty,
+                OptionChecked = optionCheckedByDefault
+            };
+
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                request.Title = title;
+            }
+
+            bool confirmed = ShowValueDialog(
+                request,
+                window =>
+                {
+                    checkedState = window.IsOptionChecked;
+                    return window.Result == MessageBoxResult.Yes;
+                },
+                "ShowReminderConfirm",
+                fallback: true);
+
+            optionChecked = confirmed && checkedState;
+            return confirmed;
+        }
+
+        /// <summary>
         /// 是 / 否 / 取消对话框。
         /// 无 UI 宿主时返回 <see cref="MessageBoxResult.Cancel"/>（最保守的一档）。
         /// </summary>

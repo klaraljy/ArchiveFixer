@@ -3664,6 +3664,297 @@ namespace ArchiveFixer.ViewModels
             _batchHadPasswordFailures = false;
         }
 
+        // ================================================================ 解压前的提醒（无用物 / 无可用密码）
+
+        /*
+         * 用户 2026-09-22 需求第 8 条原话：
+         * 「无用物提醒 —— 源文件夹里可能有打包者的工具/诱饵文件，我们识别不出来；每次解压前弹一个提醒，
+         *   列出可能的无用物；同时提醒那些没有可用密码的压缩包（即使密码本已经预加载）。」
+         *
+         * 两段合并成**一个**弹窗（项目先例：多任务清理合并成 1 次确认）。四条纪律（都有测试钉住）：
+         * ① **无界面宿主按「继续处理」放行** —— 与 ShowConfirm 的 fallback=false（=取消）方向相反，
+         *    理由见 DialogService.ShowReminderConfirm：这是一条纯提示，把整批解压拦死才是事故；
+         * ② **「本次运行不再提示」只记在内存里**（下面那个字段），绝不写设置文件；
+         * ③ **两段都为空时不弹**（不许弹空对话框）；
+         * ④ 判据**窄**：无用物只看文件名 + 魔数体检，宁可漏报不可误报。
+         */
+
+        /// <summary>
+        /// 本次运行内不再弹"解压前的提醒"（用户在弹窗里勾了那个勾选项）。
+        ///
+        /// <para>它是**实例字段**，不是静态、更不是设置项：用户勾的是"这次运行别再烦我"，
+        /// 关掉程序重开就该再提醒一次（用户点名："只在本次运行内记忆，绝不写设置文件"）。
+        /// 也因此**没有**任何把它写盘 / 读盘的代码 —— 测试直接断言设置文件一个字节都没变。</para>
+        /// </summary>
+        private bool _remindersSuppressedThisRun;
+
+        /// <summary>
+        /// "无用物"魔数体检用的识别器：**复用现有那一套**
+        /// （<see cref="MagicArchiveProber"/> → <c>ArchiveDetectService</c>：文件头魔数 + 认不出来时再看尾部内嵌归档），
+        /// 绝不另写一份魔数表 —— 两份必然会漂移，而漂移的后果是把用户的真包（伪装后缀 / 双面文件）
+        /// 叫成"无用物"，正好砸在本程序最拿手的场景上。
+        /// </summary>
+        private readonly IArchiveProber _reminderProber = new MagicArchiveProber();
+
+        /// <summary>
+        /// 解压前提醒的"用户答案"（可注入；单测用它模拟"点了继续 / 点了先不处理 / 勾了不再提示"）。
+        ///
+        /// <para>为什么需要它：无界面宿主里那个框根本不会显示，而"勾了不再提示之后到底还会不会再弹"
+        /// 只有让调用方答一次才测得出来。正式路径永远是 null（走真弹窗）。</para>
+        /// </summary>
+        internal Func<string, ReminderAnswer>? ReminderAnswerOverride { get; set; }
+
+        /// <summary>一次"解压前的提醒"的用户答案。</summary>
+        internal sealed class ReminderAnswer
+        {
+            /// <summary>true = 继续处理；false = 先不处理（这一批不开始，一个字节都不动）。</summary>
+            public bool Confirmed { get; init; }
+
+            /// <summary>是否勾了「本次运行不再提示这类提醒」。</summary>
+            public bool OptionChecked { get; init; }
+        }
+
+        /// <summary>
+        /// 解压前的合并提醒。
+        /// </summary>
+        /// <returns><c>false</c> = 用户在提醒里选了「先不处理」，调用方**直接返回**（这一批不开始）。</returns>
+        private async Task<bool> ConfirmBatchRemindersAsync(IReadOnlyList<ArchiveTask> selectedTasks)
+        {
+            if (_remindersSuppressedThisRun)
+            {
+                return true;
+            }
+
+            SourceJunkScanResult junk = await SourceJunkScanner
+                .ScanAsync(selectedTasks, _reminderProber, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            List<ArchiveTask> noPassword = FindTasksWithoutUsablePassword(selectedTasks);
+
+            if (!junk.HasAnything && noPassword.Count == 0)
+            {
+                // 两段都为空：不弹、也不写日志（没有结论可写）。空对话框是纯噪声。
+                return true;
+            }
+
+            LogReminderFindings(junk, noPassword);
+
+            ReminderAnswer answer = await AskReminderAsync(BuildReminderMessage(junk, noPassword))
+                .ConfigureAwait(false);
+
+            if (answer.OptionChecked)
+            {
+                _remindersSuppressedThisRun = true;
+                AppendLog("INFO", StatusText.JunkReminderOptionLog);
+            }
+
+            if (!answer.Confirmed)
+            {
+                AppendLog("INFO", StatusText.JunkReminderDeclinedLog);
+            }
+
+            return answer.Confirmed;
+        }
+
+        /// <summary>
+        /// B 段：需要密码、但当前**一个可用候选都没有**的包（"即使密码本已经预加载"的那种）。
+        ///
+        /// <para>判据与真正解压时**完全同一套参数**（同一个 <c>GetPasswordCandidates</c>、同一个统一密码开关、
+        /// 同一个旁路说明文件开关）：判据不一样就会出现"提醒说没有密码、结果它解开了"这种自相矛盾。</para>
+        ///
+        /// <para>⚠ 只判"有没有候选"，不判"到底加没加密" —— 后者是 <see cref="ArchiveTask.IsEncrypted"/>
+        /// （识别阶段的结论）。没有密码的普通包不在这一段范围内。</para>
+        /// </summary>
+        private List<ArchiveTask> FindTasksWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks)
+        {
+            var result = new List<ArchiveTask>();
+
+            foreach (ArchiveTask? task in tasks)
+            {
+                if (task == null || !task.IsEncrypted)
+                {
+                    continue;
+                }
+
+                List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
+                    task,
+                    Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
+                    _passwordService.Passwords,
+                    Settings.TryEmptyPasswordFirst,
+                    Settings.EnableSidecarPassword);
+
+                if (!SourceJunkScanner.HasUsablePasswordCandidate(candidates))
+                {
+                    result.Add(task);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>批首写一条 WARN，把两段的结论都落进日志（数量 + 前几条名字）。</summary>
+        private void LogReminderFindings(SourceJunkScanResult junk, IReadOnlyList<ArchiveTask> noPassword)
+        {
+            string junkPart = junk.HasAnything
+                ? string.Format(
+                    StatusText.JunkReminderLogFoundFormat,
+                    junk.TotalCount,
+                    string.Join("、", junk.SampleNames))
+                : StatusText.JunkReminderLogNoneText;
+
+            string passwordPart = noPassword.Count > 0
+                ? string.Format(
+                    StatusText.JunkReminderLogFoundFormat,
+                    noPassword.Count,
+                    string.Join(
+                        "、",
+                        noPassword.Take(MaxPasswordFailureNamesInDialog).Select(DisplayNameOf)))
+                : StatusText.JunkReminderLogNoneText;
+
+            AppendLog("WARN", string.Format(StatusText.JunkReminderLogFormat, junkPart, passwordPart));
+        }
+
+        /// <summary>
+        /// 拼提醒正文。三段话的顺序见 <see cref="StatusText"/> 里那一组的说明（**不要重排**）：
+        /// ① 这些文件是什么 → ② 本程序不会动它们 → ③ 解压完你自己判断要不要删。
+        /// </summary>
+        private static string BuildReminderMessage(SourceJunkScanResult junk, IReadOnlyList<ArchiveTask> noPassword)
+        {
+            var builder = new StringBuilder();
+
+            builder.AppendLine(StatusText.JunkReminderIntro);
+
+            if (junk.HasAnything)
+            {
+                builder.AppendLine();
+                builder.AppendLine(StatusText.JunkReminderJunkHeader);
+                builder.AppendLine(string.Format(StatusText.JunkReminderJunkCountFormat, junk.TotalCount));
+
+                foreach (IGrouping<string, SourceJunkItem> group in
+                         junk.Items.GroupBy(item => item.DirectoryPath, StringComparer.OrdinalIgnoreCase))
+                {
+                    builder.AppendLine("  " + group.Key);
+
+                    foreach (SourceJunkItem item in group)
+                    {
+                        builder.AppendLine("    " + item.FileName);
+                    }
+                }
+
+                if (junk.ExtraCount > 0)
+                {
+                    builder.AppendLine(string.Format(StatusText.JunkReminderJunkMoreFormat, junk.ExtraCount));
+                }
+
+                if (junk.Truncated)
+                {
+                    builder.AppendLine(StatusText.JunkReminderTruncatedNote);
+                }
+
+                builder.AppendLine(StatusText.JunkReminderJunkFooter);
+            }
+
+            if (noPassword.Count > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine(string.Format(StatusText.JunkReminderPasswordHeaderFormat, noPassword.Count));
+
+                foreach (ArchiveTask task in noPassword.Take(MaxPasswordFailureNamesInDialog))
+                {
+                    builder.AppendLine("    " + DisplayNameOf(task));
+                }
+
+                if (noPassword.Count > MaxPasswordFailureNamesInDialog)
+                {
+                    builder.AppendLine(string.Format(
+                        StatusText.JunkReminderPasswordMoreFormat,
+                        noPassword.Count - MaxPasswordFailureNamesInDialog));
+                }
+
+                builder.AppendLine(StatusText.JunkReminderPasswordOutcome);
+                builder.AppendLine(StatusText.JunkReminderPasswordExit);
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>任务在提示里的显示名（文件名优先，退回完整路径）。</summary>
+        private static string DisplayNameOf(ArchiveTask task) =>
+            string.IsNullOrWhiteSpace(task.FileName) ? task.CurrentPath : task.FileName;
+
+        /// <summary>
+        /// 拿用户的答案。
+        ///
+        /// <para><b>无界面宿主（单测 / 控制台宿主）在这里按「继续处理」返回</b>，而且**连弹窗都不尝试**：
+        /// 既不产生 DialogService 的降级记录（那会让"这个宿主没有界面"的既有断言被这条纯提示污染），
+        /// 也不会有任何等待。整批解压因此照常跑完 —— 这一点由管线测试证明。</para>
+        /// </summary>
+        private async Task<ReminderAnswer> AskReminderAsync(string message)
+        {
+            if (ReminderAnswerOverride != null)
+            {
+                return ReminderAnswerOverride(message);
+            }
+
+            if (System.Windows.Application.Current == null)
+            {
+                AppendLog("WARN", StatusText.JunkReminderNoHostLog);
+
+                return new ReminderAnswer { Confirmed = true, OptionChecked = false };
+            }
+
+            return await ShowReminderConfirmOnUiThreadAsync(message).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 在 UI 线程上弹提醒（与 <see cref="ShowConfirmOnUiThreadAsync"/> 同一套调度纪律：
+        /// 管线可能已经不在 UI 线程上，直接弹会造出一个没人泵消息的窗口）。
+        ///
+        /// <para>降级方向由 <see cref="DialogService.ShowReminderConfirm"/> 定义成"继续"，
+        /// 所以这里即使调度器已经关掉也只是放行，不会把整批拦下。</para>
+        /// </summary>
+        private async Task<ReminderAnswer> ShowReminderConfirmOnUiThreadAsync(string message)
+        {
+            System.Windows.Threading.Dispatcher? dispatcher = System.Windows.Application.Current?.Dispatcher;
+
+            bool confirmed;
+            bool optionChecked = false;
+
+            if (dispatcher == null || dispatcher.CheckAccess())
+            {
+                confirmed = _dialogService.ShowReminderConfirm(
+                    StatusText.JunkReminderTitle,
+                    message,
+                    StatusText.JunkReminderYesText,
+                    StatusText.JunkReminderNoText,
+                    StatusText.JunkReminderOptionText,
+                    optionCheckedByDefault: false,
+                    out optionChecked);
+            }
+            else
+            {
+                confirmed = await dispatcher.InvokeAsync(() =>
+                {
+                    bool checkedNow;
+
+                    bool result = _dialogService.ShowReminderConfirm(
+                        StatusText.JunkReminderTitle,
+                        message,
+                        StatusText.JunkReminderYesText,
+                        StatusText.JunkReminderNoText,
+                        StatusText.JunkReminderOptionText,
+                        optionCheckedByDefault: false,
+                        out checkedNow);
+
+                    optionChecked = checkedNow;
+
+                    return result;
+                }).Task.ConfigureAwait(false);
+            }
+
+            return new ReminderAnswer { Confirmed = confirmed, OptionChecked = optionChecked };
+        }
+
         /// <summary>
         /// 整批**一次性**地问"要不要手动给一个密码"（WinRAR 参考 §2 H 组 / §3 附注采纳项）。
         ///
@@ -4258,6 +4549,21 @@ namespace ArchiveFixer.ViewModels
                         "本次选项里选了「指定位置」但没填路径 —— 为了避免它被解释成「解压到压缩包所在目录」，" +
                         "本次落点**回落设置里的值**（其余两项照常生效）。");
                 }
+            }
+
+            /*
+             * ===== 解压前的提醒（用户 2026-09-22 需求第 8 条）=====
+             *
+             * 位置：**引擎可用性检查之后**（一个引擎都没有时该报的是「没有可用的解压引擎」，
+             * 而不是"源目录里有些说明文件"）、**IsBusy = true 之前**（这是"还没动手"的最后一步：
+             * 用户在这里选「先不处理」，这一批就是一个字节都没动过的干净状态）。
+             *
+             * 整批只弹一次，两段合并成同一个框（项目先例：多任务清理合并成 1 次确认）；
+             * 两段都为空时**不弹** —— 空对话框只会训练用户闭眼点确定。
+             */
+            if (!await ConfirmBatchRemindersAsync(selectedTasks))
+            {
+                return;
             }
 
             IsBusy = true;

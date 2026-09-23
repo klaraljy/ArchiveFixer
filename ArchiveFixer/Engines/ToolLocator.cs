@@ -6,12 +6,12 @@ using System.Linq;
 namespace ArchiveFixer.Engines
 {
     /// <summary>
-    /// 外部归档工具路径的**唯一**来源（7-Zip 与 RARLAB UnRAR 两条都在这里）。
+    /// 外部归档工具路径的**唯一**来源（7-Zip、RARLAB UnRAR、以及打包要用的 Rar.exe 三条都在这里）。
     ///
     /// 为什么要单独一个类（AGENTS.md §3.1）：
     /// 以前 7z.exe 的路径在 App.xaml.cs、PathService、ExtractService 三个文件里各拼了一遍，
     /// 而且还写死了开发机的 <c>D:\7-Zip\7z.exe</c> 回退 —— 换台机器、换个安装位置就会行为不一致，
-    /// 排查时也说不清"到底用的是哪一个 7z"。现在只允许从这里取，UnRAR 同理。
+    /// 排查时也说不清"到底用的是哪一个 7z"。现在只允许从这里取，UnRAR 与 Rar.exe 同理。
     ///
     /// <para><b>7-Zip 解析顺序</b>：
     /// 1. 用户在设置里指定的路径（<see cref="CustomSevenZipExePath"/>）
@@ -24,8 +24,16 @@ namespace ArchiveFixer.Engines
     /// 3. 随程序分发的内置路径 <c>&lt;程序目录&gt;\tools\unrar\UnRAR.exe</c>
     /// 4. 都没有 → 返回"本来应该在的位置"，由引擎报"不可用"，选择器自动跳过它</para>
     ///
-    /// ⚠ 第 2 档只找 RARLAB 的**免费件** <c>UnRAR.exe</c>，绝不碰同一目录里的
-    /// <c>Rar.exe</c> / <c>WinRAR.exe</c>（共享软件，见 docs/引擎与外部工具.md §4）。
+    /// <para><b>Rar.exe 解析顺序</b>（打包功能，docs/打包功能.md §5）：
+    /// 1. 用户指定的路径（<see cref="CustomRarExePath"/>，本版还没有设置界面）
+    /// 2. 用户**已装**的 WinRAR 目录里的 <c>Rar.exe</c>，再退 <c>WinRAR.exe</c>
+    /// 3. 都没有 → <see cref="RarExists"/> = false，打包侧**明确报错**并给出"只做 7z 分卷"的出路。
+    /// ⛔ <c>Rar.exe</c> / <c>WinRAR.exe</c> 是**共享软件**：只检测、只调用，**绝不打包、绝不复制**
+    /// （AGENTS.md §3.1）。</para>
+    ///
+    /// ⚠ 第 2 档只找 RARLAB 的**免费件** <c>UnRAR.exe</c>（解压引擎）；同一目录里的
+    /// <c>Rar.exe</c> / <c>WinRAR.exe</c> 只在**打包**这一条路上被调用（见
+    /// docs/引擎与外部工具.md §4）。
     /// </summary>
     public sealed class ToolLocator
     {
@@ -34,6 +42,7 @@ namespace ArchiveFixer.Engines
 
         private string _customSevenZipExePath = string.Empty;
         private string _customUnRarExePath = string.Empty;
+        private string _customRarExePath = string.Empty;
 
         private string? _resolvedExePath;
         private string? _resolvedDllPath;
@@ -44,13 +53,21 @@ namespace ArchiveFixer.Engines
         private bool _usingCustomUnRarPath;
         private bool _usingWinRarInstallation;
 
+        private string? _resolvedRarPath;
+        private bool _rarResolved;
+        private bool _usingCustomRarPath;
+        private bool _usingWinRarGuiForRar;
+
         /// <summary>
         /// 要不要探测"用户已装的 WinRAR 目录"这一档（默认 true）。
         ///
-        /// 存在这个开关不是为了给用户看，而是为了让**"没装 UnRAR 时会怎样"这件事可被验证**：
+        /// 存在这个开关不是为了给用户看，而是为了让**"没装 WinRAR 时会怎样"这件事可被验证**：
         /// 验收要求模拟"机器上没有 UnRAR"，只把自定义路径指向一个不存在的文件是不够的 ——
         /// 那样下一档（已装 WinRAR 目录 / 内置）会把它救回来，测的就不是回落路径了。
         /// 关掉这两档（本项与 <see cref="UseBundledUnRar"/>）才是真正的"这台机器上没有 UnRAR"。
+        ///
+        /// 打包用的 <c>Rar.exe</c> 同样读这一档：关掉它就等于"这台机器上没有 Rar.exe"
+        /// （打包侧据此走"明确报错 + 只做 7z 分卷"那条路）。
         /// </summary>
         public bool UseWinRarInstallation { get; set; } = true;
 
@@ -101,6 +118,27 @@ namespace ArchiveFixer.Engines
 
         /// <summary>随程序分发的内置 UnRAR 目录。</summary>
         public string BundledUnRarDirectory => Path.Combine(AppContext.BaseDirectory, "tools", "unrar");
+
+        /// <summary>
+        /// 用户指定的 <c>Rar.exe</c> 路径（来自设置；本版还没有这一项界面，留给"自装到别处"的用户）。
+        /// 赋值后自动失效缓存。
+        /// </summary>
+        public string CustomRarExePath
+        {
+            get => _customRarExePath;
+            set
+            {
+                string normalized = value?.Trim() ?? string.Empty;
+
+                if (string.Equals(_customRarExePath, normalized, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _customRarExePath = normalized;
+                Invalidate();
+            }
+        }
 
         /// <summary>实际使用的 7z.exe 路径（即使文件不存在也会返回"应该在哪"）。</summary>
         public string SevenZipExePath
@@ -257,6 +295,238 @@ namespace ArchiveFixer.Engines
             _resolvedDllPath = null;
             _resolvedUnRarPath = null;
             _unRarResolved = false;
+            _resolvedRarPath = null;
+            _rarResolved = false;
+        }
+
+        // ================================================================
+        // Rar.exe（**只给打包用**）
+        // ================================================================
+        //
+        // ⛔ 与 UnRAR.exe 的性质完全不同：UnRAR 是 freeware，许可明确允许随包分发；
+        //    Rar.exe / WinRAR.exe 是**共享软件**，绝不允许再分发（AGENTS.md §3.1）。
+        //    所以这里只做"用户在不在本机装了它、装在哪"的只读探测，
+        //    绝不把找到的文件复制进程序目录，也不随程序分发。
+
+        /// <summary>
+        /// "本来应该在的位置"（只用于"未找到"的提示，不参与可用性判定）：
+        /// 用户没自选时就是已装 WinRAR 目录里的 <c>Rar.exe</c>。
+        /// </summary>
+        public string RarExpectedPath
+        {
+            get
+            {
+                IReadOnlyList<string> directories = WinRarInstallationDirectories();
+
+                return directories.Count > 0
+                    ? Path.Combine(directories[0], "Rar.exe")
+                    : Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                        "WinRAR",
+                        "Rar.exe");
+            }
+        }
+
+        /// <summary>
+        /// 实际使用的 <c>Rar.exe</c>（或退一档的 <c>WinRAR.exe</c>）；没有时返回
+        /// <see cref="RarExpectedPath"/>，由 <see cref="RarExists"/> 判否。
+        /// </summary>
+        public string RarExePath
+        {
+            get
+            {
+                EnsureRarResolved();
+                return _resolvedRarPath ?? RarExpectedPath;
+            }
+        }
+
+        /// <summary>
+        /// 这台机器上有没有可用的打包命令行工具。
+        ///
+        /// ⚠ 与 <see cref="UnRarExists"/> 同一个写法：不能拿 <c>File.Exists(RarExePath)</c> 代替 ——
+        /// <see cref="RarExePath"/> 在"没找到"时会回落到"本来应该在的位置"，那个文件在那台机器上
+        /// 可能恰好存在（只是被显式关掉了那一档）。
+        /// </summary>
+        public bool RarExists
+        {
+            get
+            {
+                EnsureRarResolved();
+                return _resolvedRarPath != null && File.Exists(_resolvedRarPath);
+            }
+        }
+
+        /// <summary>用的是用户自选的路径。</summary>
+        public bool IsUsingCustomRarPath
+        {
+            get
+            {
+                EnsureRarResolved();
+                return _usingCustomRarPath;
+            }
+        }
+
+        /// <summary>
+        /// 退到了 GUI 版 <c>WinRAR.exe</c>（而不是命令行版 <c>Rar.exe</c>）。
+        /// 打包侧据此补 <c>-ibck</c>：不加它，那个 GUI 程序会弹出进度窗口并抢焦点。
+        /// </summary>
+        public bool IsUsingWinRarGuiForRar
+        {
+            get
+            {
+                EnsureRarResolved();
+                return _usingWinRarGuiForRar;
+            }
+        }
+
+        /// <summary>Rar.exe 的文件版本（取不到返回 "unknown"）。</summary>
+        public string RarVersion
+        {
+            get
+            {
+                try
+                {
+                    string path = RarExePath;
+
+                    if (!File.Exists(path))
+                    {
+                        return "unknown";
+                    }
+
+                    string? version = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileVersion;
+
+                    return string.IsNullOrWhiteSpace(version) ? "unknown" : version;
+                }
+                catch
+                {
+                    return "unknown";
+                }
+            }
+        }
+
+        /// <summary>
+        /// Rar.exe 的同一句话（界面与报告共用）。
+        /// 出问题时这句话要能回答"到底用的哪一个、从哪来的"（不变量 14）。
+        /// </summary>
+        public string DescribeRarResolution()
+        {
+            if (!RarExists)
+            {
+                return DescribeNoRarAvailable();
+            }
+
+            string source = IsUsingCustomRarPath
+                ? "使用自选的 Rar"
+                : IsUsingWinRarGuiForRar
+                    ? "使用本机已装 WinRAR 目录中的 WinRAR.exe（命令行版 Rar.exe 没找到）"
+                    : "使用本机已装 WinRAR 目录中的 Rar.exe";
+
+            return $"{source}：{RarExePath}（版本 {RarVersion}）";
+        }
+
+        /// <summary>
+        /// 没有 Rar.exe 时给用户看的那段话 —— **唯一来源**（界面、日志、失败原因都引它）。
+        ///
+        /// <para>为什么不内置一个：<c>Rar.exe</c> 是共享软件，许可不允许再分发（AGENTS.md §3.1）。
+        /// 也**不会**拿 7-Zip 假装做出一个 <c>.rar</c>：7-Zip 建不了 RAR（算法是专有的），
+        /// 改名成 <c>.rar</c> 是伪造，用户拿去用时会直接坏掉。</para>
+        /// </summary>
+        public string DescribeNoRarAvailable()
+        {
+            return "这一步需要本机已安装 WinRAR（要 Rar.exe / WinRAR.exe）—— 程序不会替你装、也不会随包分发它"
+                 + "（WinRAR 是共享软件）。"
+                 + $"期望位置：{RarExpectedPath}。";
+        }
+
+        /// <summary>
+        /// "用户已装的 WinRAR 目录"（目录形态；从 <see cref="WinRarInstallationCandidates"/> 推出来，
+        /// 不另写一套探测逻辑）。
+        /// </summary>
+        public IReadOnlyList<string> WinRarInstallationDirectories()
+        {
+            var directories = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string candidate in WinRarInstallationCandidates())
+            {
+                string? directory = null;
+
+                try
+                {
+                    directory = Path.GetDirectoryName(candidate);
+                }
+                catch
+                {
+                    directory = null;
+                }
+
+                if (!string.IsNullOrWhiteSpace(directory) && seen.Add(directory))
+                {
+                    directories.Add(directory);
+                }
+            }
+
+            return directories;
+        }
+
+        /// <summary>
+        /// Rar 的两级解析（自选 → 已装 WinRAR 目录里的 Rar.exe，再退 WinRAR.exe）。
+        ///
+        /// 与 UnRAR 那一段同一口径：**自选路径填了但文件不存在时不吃掉后面的档位**，
+        /// 而是回落到下一档并如实说明用的是哪一个。
+        /// </summary>
+        private void EnsureRarResolved()
+        {
+            if (_rarResolved)
+            {
+                return;
+            }
+
+            _usingCustomRarPath = false;
+            _usingWinRarGuiForRar = false;
+
+            if (!string.IsNullOrWhiteSpace(_customRarExePath) && File.Exists(_customRarExePath))
+            {
+                _resolvedRarPath = _customRarExePath;
+                _usingCustomRarPath = true;
+                _rarResolved = true;
+                return;
+            }
+
+            if (UseWinRarInstallation)
+            {
+                foreach (string directory in WinRarInstallationDirectories())
+                {
+                    string rar = Path.Combine(directory, "Rar.exe");
+
+                    if (File.Exists(rar))
+                    {
+                        _resolvedRarPath = rar;
+                        _rarResolved = true;
+                        return;
+                    }
+                }
+
+                foreach (string directory in WinRarInstallationDirectories())
+                {
+                    string winRar = Path.Combine(directory, "WinRAR.exe");
+
+                    if (File.Exists(winRar))
+                    {
+                        _resolvedRarPath = winRar;
+                        _usingWinRarGuiForRar = true;
+                        _rarResolved = true;
+                        return;
+                    }
+                }
+            }
+
+            /*
+             * 两档都没命中：显式"没找到"。绝不悄悄回落到一个存在的路径上 ——
+             * 那会让打包以为能做外层 rar，然后在真正开跑时才炸。
+             */
+            _resolvedRarPath = null;
+            _rarResolved = true;
         }
 
         /// <summary>

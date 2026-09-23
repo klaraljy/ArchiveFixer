@@ -32,6 +32,8 @@ namespace ArchiveFixer.Password
         ///
         /// 覆盖的形态都是实际踩过的：
         /// - 7-Zip 命令行里的 <c>-p&lt;密码&gt;</c>
+        /// - RAR 命令行里的 <c>-hp&lt;密码&gt;</c>（打包功能要用；它**不匹配** <c>-p</c> 那条规则，
+        ///   因为 <c>-</c> 后面跟的是 <c>h</c> —— 少了这一条，rar 的命令行会原样进日志）
         /// - <c>password=xxx</c> / <c>password: xxx</c>（脚本与配置文件风格）
         /// - 本项目自己写的中文日志口径"使用密码 / 尝试密码 / 密码："
         /// </summary>
@@ -51,6 +53,15 @@ namespace ArchiveFixer.Password
                 {
                     string prefix = m.Value.StartsWith(" ", StringComparison.Ordinal) ? " " : string.Empty;
                     return prefix + "-p******";
+                });
+
+            result = System.Text.RegularExpressions.Regex.Replace(
+                result,
+                @"(?i)(^|\s)-hp(?:[^\s]*)",
+                m =>
+                {
+                    string prefix = m.Value.StartsWith(" ", StringComparison.Ordinal) ? " " : string.Empty;
+                    return prefix + "-hp******";
                 });
 
             result = System.Text.RegularExpressions.Regex.Replace(result, @"(?i)(password\s*=\s*)([^\s;]+)", "$1******");

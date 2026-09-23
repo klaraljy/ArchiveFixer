@@ -64,6 +64,15 @@
                 <MenuItem Header="设置..." Command="{Binding OpenSettingsCommand}" />
                 <MenuItem Header="导入密码本..." Command="{Binding ImportPasswordBookCommand}" />
                 <Separator />
+                <!--
+                    打包（用户 2026-09-22 需求第 10 条）：**唯一**入口，只有这一个窗口、没有向导。
+                    独立于任务列表与勾选 —— 它做的事是"把一个文件夹变成带密码的 rar"，
+                    与"解压一批包"是两条互不相干的流水线（docs/打包功能.md §7）。
+                -->
+                <MenuItem Header="打包文件夹为加密分卷..."
+                          Command="{Binding OpenPackingCommand}"
+                          ToolTip="把一个文件夹打包成「带密码的 rar」：内容先切成 7z 加密分卷（默认每个 512 MiB），分卷落进一个新建的文件夹 B，再把 B 整个压成带密码的 rar。外层 rar 用本机已装的 WinRAR（Rar.exe），程序不捆绑它。" />
+                <Separator />
                 <MenuItem Header="打开输出目录" Command="{Binding OpenOutputDirectoryCommand}" />
                 <MenuItem Header="打开工作区目录" Command="{Binding OpenWorkDirectoryCommand}" />
                 <Separator />
