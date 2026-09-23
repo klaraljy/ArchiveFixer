@@ -17,8 +17,8 @@
           → 摘要行 → 「开始打包」 → 进度 + 当前步骤 → 结果区。
 
         两条界面规矩：
-        · 没有 Rar.exe 时**开始按钮不禁用**，而是把「只做 7z 分卷」摆出来（勾了就不做外层 rar）——
-          让用户看得见发生了什么，而不是一个灰着不解释的按钮；
+        · 外层容器是**三选一**（rar / 7z / 不做外层），**三个选项都一直可点**；没有 Rar.exe 时
+          开始按钮也不禁用，而是把三条出路摆出来 —— 让用户看得见发生了什么，而不是一个灰着不解释的按钮；
         · 密码框用 PasswordBox（不是 TextBox）：明文不进可视树，也不进绑定日志。
     -->
 
@@ -30,7 +30,7 @@
                 <TextBlock Text="打包文件夹为加密分卷" Style="{StaticResource PageTitleTextStyle}" />
 
                 <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,5,0,0" TextWrapping="Wrap"
-                           Text="把一个文件夹变成「带密码的 rar」：① 里面的内容先切成 7z 加密分卷（连文件名一起加密）→ ② 分卷落进一个新建的文件夹 B → ③ B 整个压成带密码的 rar。结果就是「压缩包 B」。密码只存在内存里，不写设置、不记日志。" />
+                           Text="把一个文件夹变成「带密码的压缩包」：① 里面的内容先切成 7z 加密分卷（连文件名一起加密）→ ② 分卷落进一个新建的文件夹 B → ③ 按你选的外层容器压成一个带密码的文件（rar / 7z / 不做外层）。密码只存在内存里，不写设置、不记日志。" />
             </StackPanel>
         </Border>
 
@@ -192,11 +192,11 @@
                                    Margin="0,4,0,0"
                                    TextWrapping="Wrap" />
 
-                        <TextBlock Text="{Binding ResultRarPath}"
+                        <TextBlock Text="{Binding ResultOuterPath}"
                                    FontFamily="{StaticResource MonoFontFamily}"
                                    TextWrapping="Wrap"
                                    Margin="0,6,0,0"
-                                   Visibility="{Binding HasRarResult, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                   Visibility="{Binding HasOuterResult, Converter={StaticResource BoolToVisibilityConverter}}" />
 
                         <DataGrid ItemsSource="{Binding Volumes}"
                                   AutoGenerateColumns="False"
@@ -346,8 +346,33 @@
                                      PasswordChanged="OuterConfirmPasswordInput_PasswordChanged" />
                     </Grid>
 
-                    <!-- 外层 rar 这一步能不能做 -->
-                    <Border Margin="0,14,0,0" Padding="10" CornerRadius="4" BorderThickness="1">
+                    <!-- 外层容器（三选一；用户 2026-09-23 决定） -->
+                    <TextBlock Text="外层容器（B 最后压成什么）" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
+
+                    <RadioButton GroupName="OuterContainer"
+                                 Margin="0,6,0,0"
+                                 IsChecked="{Binding OuterContainerIsRar, Mode=TwoWay}"
+                                 Content="{Binding OuterRarOptionText}"
+                                 ToolTip="默认。需要本机已安装的 WinRAR（Rar.exe）—— 程序只检测与调用，绝不随包分发（WinRAR 是共享软件）" />
+
+                    <!--
+                        7z 外层这一项**一直可点**（与有没有装 WinRAR 无关）：它是"不需要额外安装"那条出路，
+                        灰掉它就等于把用户唯一的低成本选择拿走了（用户 2026-09-23 明确要求）。
+                    -->
+                    <RadioButton GroupName="OuterContainer"
+                                 Margin="0,4,0,0"
+                                 IsChecked="{Binding OuterContainerIsSevenZip, Mode=TwoWay}"
+                                 Content="{Binding OuterSevenZipOptionText}"
+                                 ToolTip="用随程序分发的 7-Zip 做外层容器（连文件名一起加密）—— 不需要额外安装任何东西" />
+
+                    <RadioButton GroupName="OuterContainer"
+                                 Margin="0,4,0,0"
+                                 IsChecked="{Binding OuterContainerIsNone, Mode=TwoWay}"
+                                 Content="{Binding OuterNoneOptionText}"
+                                 ToolTip="不做外层容器：结果直接是 B 里的 .7z.001/.002/…（最省空间，适合本机没装 WinRAR 又想立刻出结果）" />
+
+                    <!-- 外层 rar 这一步能不能做（没有 Rar.exe 时说清三条出路；开始按钮**不**禁用） -->
+                    <Border Margin="0,12,0,0" Padding="10" CornerRadius="4" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
                                 <Setter Property="Background" Value="{StaticResource SuccessSoftBrush}" />
@@ -370,23 +395,28 @@
                                        Margin="0,4,0,0"
                                        TextWrapping="Wrap" />
 
-                            <!-- 没有 Rar.exe 时：把两条出路摆出来（开始按钮**不**禁用） -->
+                            <!-- 没有 Rar.exe 时：把**三条**出路摆出来（开始按钮**不**禁用） -->
                             <StackPanel Visibility="{Binding HasNoRar, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <TextBlock Text="{Binding RarMissingText}"
                                            Foreground="{StaticResource WarningTextBrush}"
                                            TextWrapping="Wrap"
                                            Margin="0,6,0,0" />
 
+                                <TextBlock Text="{Binding RarMissingWaysText}"
+                                           Style="{StaticResource HintTextStyle}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,4,0,0" />
+
                                 <TextBlock Style="{StaticResource HintTextStyle}"
                                            Margin="0,4,0,0"
                                            TextWrapping="Wrap"
-                                           Text="出路①：装好 WinRAR（带 Rar.exe）后回到这里重试。出路②：勾上下面的选项，这次只做 7z 分卷 —— 结果就是 B 里的那几个 .7z.001/.002/…（没有外层 rar）。程序绝不会拿 7-Zip 假装做出一个 .rar 给你。" />
+                                           Text="程序绝不会拿 7-Zip 假装做出一个 .rar 给你（RAR 的算法是专有的，改后缀是伪造），也不会替你偷偷换成别的容器 —— 换哪一种是上面那个三选一里你自己点的。" />
                             </StackPanel>
 
-                            <CheckBox Content="只做 7z 分卷（跳过外层 rar）"
-                                      Margin="0,6,0,0"
-                                      IsChecked="{Binding SkipOuterRar, Mode=TwoWay}"
-                                      ToolTip="勾了就不做外层 rar，结果直接是 B 里的 7z 加密分卷" />
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       Margin="0,6,0,0"
+                                       TextWrapping="Wrap"
+                                       Text="「7z 外层」与「不做外层」都用随程序分发的 7-Zip（LGPL），不需要额外安装任何东西；只有「rar 外层」需要你自己装的 WinRAR。" />
                         </StackPanel>
                     </Border>
 

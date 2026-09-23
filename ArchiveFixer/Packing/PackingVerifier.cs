@@ -64,6 +64,62 @@ namespace ArchiveFixer.Packing
             return entries;
         }
 
+        /// <summary>
+        /// 把 <c>7z l -slt</c>（技术信息）的输出切成条目名。
+        ///
+        /// <para><b>为什么只取分隔线之后的那一段</b>：<c>-slt</c> 的输出分两块 ——
+        /// 第一块描述**归档自己**（以 <c>Path = &lt;归档路径&gt;</c> 开头，本机 7-Zip 26.03 实测），
+        /// 第二块才是条目。分隔线（十个 <c>-</c>）之后才是条目块；不切掉第一块的话，
+        /// 归档路径本身会被当成一条"计划外条目"，产物校验会**永远不通过**。</para>
+        ///
+        /// <para>只认 <c>Path = </c> 这一种键：条目名可能含空格、<c>=</c>、中文，
+        /// 按"键 = 值"切成两段正好（值与名字都是原样的）。</para>
+        /// </summary>
+        public static IReadOnlyList<string> ParseSevenZipSltList(string? output)
+        {
+            var entries = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                return entries;
+            }
+
+            bool insideEntries = false;
+
+            foreach (string raw in output.Split('\n'))
+            {
+                string line = raw.Trim('\r', ' ', '\t');
+
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                if (!insideEntries)
+                {
+                    // 分隔线：一串 '-'（归档块的 "--" 只有两段，条目分隔线是十个，所以要求至少 5 个）。
+                    if (line.Length >= 5 && line.All(c => c == '-'))
+                    {
+                        insideEntries = true;
+                    }
+
+                    continue;
+                }
+
+                if (line.StartsWith("Path = ", StringComparison.Ordinal))
+                {
+                    string name = line["Path = ".Length..].Trim();
+
+                    if (name.Length > 0)
+                    {
+                        entries.Add(name);
+                    }
+                }
+            }
+
+            return entries;
+        }
+
         /// <summary>条目名是不是"在 <paramref name="folderName"/> 这一层下面"（含这一层目录自己）。</summary>
         public static bool IsWithinFolder(string? entry, string folderName)
         {
@@ -96,22 +152,33 @@ namespace ArchiveFixer.Packing
             return index >= 0 ? normalized[(index + 1)..] : normalized;
         }
 
-        /// <summary>核对：<paramref name="entries"/> 是 rar 里的条目，<paramref name="volumes"/> 是 B 里的分卷。</summary>
+        /// <summary>
+        /// 核对：<paramref name="entries"/> 是外层容器里的条目，<paramref name="volumes"/> 是 B 里的分卷。
+        /// </summary>
+        /// <param name="entries">条目名（rar 用 <c>ParseBareList</c>，7z 用 <c>ParseSevenZipSltList</c>）。</param>
+        /// <param name="folderName">B 的目录名（归档里该有的那一层）。</param>
+        /// <param name="volumes">B 里实际切出来的分卷。</param>
+        /// <param name="artifactName">
+        /// 外层产物在句子里的名字（<c>rar</c> / <c>7z</c>）。外层容器三选一之后，"rar 里少了…"这种话
+        /// 在 7z 容器下就是错的 —— 结论与失败原因会原样给用户看，所以名字必须跟着容器走。
+        /// </param>
         public static PackingVerification Verify(
             IReadOnlyList<string>? entries,
             string folderName,
-            IReadOnlyList<PackingVolume>? volumes)
+            IReadOnlyList<PackingVolume>? volumes,
+            string artifactName = "rar")
         {
             var problems = new List<string>();
             IReadOnlyList<string> list = entries ?? Array.Empty<string>();
             IReadOnlyList<PackingVolume> expected = volumes ?? Array.Empty<PackingVolume>();
+            string artifact = string.IsNullOrWhiteSpace(artifactName) ? "外层容器" : artifactName;
 
             if (list.Count == 0)
             {
                 return new PackingVerification
                 {
                     Ok = false,
-                    Detail = "rar 里一条条目都读不出来，没法确认它装的是什么。",
+                    Detail = $"{artifact} 里一条条目都读不出来，没法确认它装的是什么。",
                     Problems = new[] { "条目表为空" }
                 };
             }
@@ -156,12 +223,12 @@ namespace ArchiveFixer.Packing
 
             if (missing.Count > 0)
             {
-                problems.Add("rar 里少了这些分卷：" + string.Join('、', missing));
+                problems.Add($"{artifact} 里少了这些分卷：" + string.Join('、', missing));
             }
 
             if (outsideFolder.Count > 0)
             {
-                problems.Add("rar 里有 B 这一层之外的东西：" + string.Join('、', outsideFolder.Take(5)));
+                problems.Add($"{artifact} 里有 B 这一层之外的东西：" + string.Join('、', outsideFolder.Take(5)));
             }
 
             if (problems.Count > 0)
@@ -177,7 +244,7 @@ namespace ArchiveFixer.Packing
             return new PackingVerification
             {
                 Ok = true,
-                Detail = $"rar 里数出 {seenNames.Count} 个分卷，与 B 里的 {expected.Count} 个一致，且都在「{folderName}」这一层下",
+                Detail = $"{artifact} 里数出 {seenNames.Count} 个分卷，与 B 里的 {expected.Count} 个一致，且都在「{folderName}」这一层下",
                 Problems = Array.Empty<string>()
             };
         }

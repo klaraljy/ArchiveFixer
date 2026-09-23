@@ -14,27 +14,35 @@ namespace ArchiveFixer.Packing
 {
     /// <summary>
     /// 打包（用户 2026-09-22 需求第 10 条）：文件夹 A 的内容 → 7z 加密分卷 → 放进文件夹 B →
-    /// B 整个压成带密码的 rar → 结果 = 压缩包 B。
+    /// B 整个压成一个带密码的**外层容器** → 结果 = 压缩包 B。
+    ///
+    /// <para><b>外层容器三选一</b>（用户 2026-09-23 决定，取代早先的 <c>bool SkipOuterRar</c>）：
+    /// <c>rar</c>（默认）/ <c>7z</c> / <c>不做外层</c>。为什么必须有三条：
+    /// <c>Rar.exe</c> / <c>WinRAR.exe</c> 是**共享软件**，RARLAB 的 EULA 禁止随任何软件包分发
+    /// （AGENTS.md §3.1），所以"本机没装 WinRAR"是常态 —— 那时除了"去装一个"和"什么都不做"，
+    /// 还必须有第三条不需要额外安装的路（7-Zip 是 LGPL、本来就随程序分发）。</para>
     ///
     /// <para><b>两步 + 一次校验</b>（命令行的参数模板**只允许出现在本目录内**，
     /// docs/打包功能.md §5）：</para>
     /// <code>
-    /// ① 7z.exe  a -t7z -mx=5 -mhe=on -bsp1 -p&lt;密码&gt; -v512m "&lt;B&gt;\&lt;A名&gt;.7z" "&lt;A&gt;\*"
-    /// ② Rar.exe a -hp&lt;密码&gt; -r -ep1 "&lt;B&gt;.rar" "&lt;B&gt;"
-    /// ③ 核对：Rar.exe lb -p&lt;密码&gt; "&lt;B&gt;.rar&gt;" → 分卷数对得上、且在 B 这一层下
+    /// ① 7z.exe  a -t7z -mx=5 -mhe=on -bsp1 -sccUTF-8 -y -p&lt;密码&gt; -v512m "&lt;B&gt;\&lt;A名&gt;.7z" "&lt;A&gt;\*"
+    /// ②a Rar.exe a -hp&lt;密码&gt; -r -ep1 "&lt;B&gt;.rar" "&lt;B&gt;"          ← 外层容器 = rar
+    /// ②b 7z.exe  a -t7z -mhe=on -mx=5 -bsp1 -sccUTF-8 -y -p&lt;密码&gt; "&lt;B&gt;.7z" "&lt;B&gt;"   ← 外层容器 = 7z
+    /// ③a Rar.exe lb -p&lt;密码&gt; "&lt;B&gt;.rar"                            ← 按容器校验
+    /// ③b 7z.exe  l -slt -p&lt;密码&gt; "&lt;B&gt;.7z"
     /// </code>
     ///
     /// <para><b>几条不肯让步的规矩</b>：</para>
     /// <list type="bullet">
-    /// <item><description>7z **不能**建 rar（RAR 算法是专有的）。本机没有 <c>Rar.exe</c> 时
-    /// **明确报错**并给出两条出路，⛔ 绝不把 7z 的产物改名成 <c>.rar</c> 糊过去；</description></item>
+    /// <item><description>7z **不能**建 rar（RAR 算法是专有的）。选了 rar 而本机没有 <c>Rar.exe</c> 时
+    /// **明确报错**并给出**三条**出路，⛔ 绝不静默换成别的容器、也绝不把 7z 的产物改名成 <c>.rar</c> 糊过去；</description></item>
     /// <item><description><c>Rar.exe</c> 是共享软件：**只检测、只调用，绝不打包、绝不复制**（AGENTS.md §3.1）；</description></item>
     /// <item><description>取消只杀**自己启动的那个 PID 及其子进程**（在 <see cref="PackProcessRunner"/> 里）；</description></item>
-    /// <item><description>失败 / 取消**不留半个 rar**；分卷保留（重试前要用户自己清空 B —— 见下）；</description></item>
-    /// <item><description>完成之后核对产物，对不上**不显示成功**（不变量 6）。</description></item>
+    /// <item><description>失败 / 取消**不留半个外层容器**；分卷保留（重试前要用户自己清空 B —— 见下）；</description></item>
+    /// <item><description>完成之后**按容器**核对产物，对不上**不显示成功**（不变量 6）。</description></item>
     /// </list>
     ///
-    /// <para><b>为什么 B 必须不存在或为空</b>：B 会被整个装进 rar，混进旧文件就会让"结果 = 压缩包 B"
+    /// <para><b>为什么 B 必须不存在或为空</b>：B 会被整个装进外层容器，混进旧文件就会让"结果 = 压缩包 B"
     /// 这句话不成立；而"把上一次失败留下的半成品静默删掉再重来"又是另一种不打招呼的破坏。
     /// 所以规则是**明说 + 让用户自己决定**：B 非空就拒绝并告诉他清空或换一个。</para>
     /// </summary>
@@ -114,14 +122,14 @@ namespace ArchiveFixer.Packing
                     State = PackingState.Failed,
                     Message = message,
                     FailureReason = reason,
+                    OuterContainer = request?.OuterContainer ?? PackOuterContainer.Rar,
                     Volumes = volumes ?? Array.Empty<PackingVolume>(),
                     LogLines = lines,
-                    Elapsed = stopwatch.Elapsed,
-                    SkippedOuterRar = request?.SkipOuterRar ?? false
+                    Elapsed = stopwatch.Elapsed
                 };
             }
 
-            PackingResult Cancelled(string reason, string? rarPath, IReadOnlyList<PackingVolume>? volumes = null)
+            PackingResult Cancelled(string reason, string? outerPath, IReadOnlyList<PackingVolume>? volumes = null)
             {
                 stopwatch.Stop();
                 Write(StatusText.PackCancelled + "：" + reason);
@@ -131,11 +139,11 @@ namespace ArchiveFixer.Packing
                     State = PackingState.Cancelled,
                     Message = StatusText.PackCancelled,
                     FailureReason = reason,
-                    RarPath = rarPath,
+                    OuterContainer = request?.OuterContainer ?? PackOuterContainer.Rar,
+                    OuterPath = outerPath,
                     Volumes = volumes ?? Array.Empty<PackingVolume>(),
                     LogLines = lines,
-                    Elapsed = stopwatch.Elapsed,
-                    SkippedOuterRar = request?.SkipOuterRar ?? false
+                    Elapsed = stopwatch.Elapsed
                 };
             }
 
@@ -156,29 +164,49 @@ namespace ArchiveFixer.Packing
             Write("7-Zip：" + _tools.DescribeResolution());
 
             /*
-             * 没有 Rar.exe 时**在切分卷之前**就停下（用户原话的那条出路要立刻能给）：
+             * 外层容器的可用性检查，全部**在切分卷之前**做完（三条路各查各的）：
+             *
              * 先花十几分钟切出几十个分卷、再告诉他"外层做不了"，等于让他在最贵的步骤上白等。
-             * 这一步只是**检测**，绝不复制、绝不内置（共享软件，AGENTS.md §3.1）。
+             * 这一步只是**检测**，绝不复制、绝不内置 Rar.exe（共享软件，AGENTS.md §3.1）。
+             *
+             * ⚠ 选了 rar 而没有 Rar.exe 时**不静默换容器**（那是替用户改主意）：
+             * 明确报错 + 三条出路（其中"换 7z 外层"与"不做外层"都是界面上可点的选项）。
              */
-            if (!request.SkipOuterRar)
+            switch (request.OuterContainer)
             {
-                if (!_tools.RarExists)
-                {
-                    Write("Rar.exe：" + _tools.DescribeNoRarAvailable());
+                case PackOuterContainer.Rar:
+                    if (!_tools.RarExists)
+                    {
+                        Write("Rar.exe：" + _tools.DescribeNoRarAvailable());
 
-                    return Fail(
-                        StatusText.PackNeedRar + Environment.NewLine
-                        + "两条出路：① 装好 WinRAR（带 Rar.exe）后重试；"
-                        + "② 勾上「" + StatusText.PackSkipRarOption + "」，这次就只做 7z 分卷。",
-                        StatusText.PackFailed);
-                }
+                        return Fail(
+                            StatusText.PackNeedRar + Environment.NewLine + StatusText.PackThreeWaysOut,
+                            StatusText.PackFailed);
+                    }
 
-                Write("Rar.exe：" + _tools.DescribeRarResolution());
+                    Write("外层容器 rar：" + _tools.DescribeRarResolution());
+                    break;
+
+                case PackOuterContainer.SevenZip:
+                    if (!_tools.SevenZipExists)
+                    {
+                        Write("7-Zip：" + _tools.DescribeResolution());
+
+                        return Fail(
+                            $"外层容器选了 7z，但没找到 7-Zip 程序：{_tools.SevenZipExePath}。"
+                            + "它是随程序分发的（tools\\7zip），请检查这一格设置或重新解压一份程序。",
+                            StatusText.PackFailed);
+                    }
+
+                    Write("外层容器 7z：" + _tools.DescribeResolution() + "（无需额外安装）");
+                    break;
+
+                default:
+                    Write("按要求不做外层容器：" + StatusText.PackOuterNoneText);
+                    break;
             }
-            else
-            {
-                Write("按要求跳过外层 rar：" + StatusText.PackSkipRarOption);
-            }
+
+            Write(plan.DescribeOuterContainer());
 
             // ───────── ② 空间门（与解压侧同一套 SpaceGate 口径） ─────────
             long? available = _availableSpaceProbe(plan.OutputFolder);
@@ -265,8 +293,8 @@ namespace ArchiveFixer.Packing
             Write($"7z 分卷完成：{volumes.Count} 个（共 {TaskSpaceEstimate.FormatSize(volumes.Sum(v => v.Bytes))}）"
                   + $"；预计 {plan.PlannedVolumeCount} 卷");
 
-            // ───────── 只做 7z 分卷这条路（本机没装 WinRAR 时的出路） ─────────
-            if (request.SkipOuterRar)
+            // ───────── 不做外层容器这条路（本机没装 WinRAR 时最省的出路） ─────────
+            if (!request.OuterContainer.HasOuterArtifact())
             {
                 Report(PackingStep.Finished, StatusText.PackSuccess, 100);
 
@@ -276,9 +304,9 @@ namespace ArchiveFixer.Packing
                 {
                     State = PackingState.Succeeded,
                     Message = StatusText.PackPartialVolumesOnly,
-                    SkippedOuterRar = true,
+                    OuterContainer = PackOuterContainer.None,
                     Volumes = volumes,
-                    VerificationDetail = "只做了 7z 分卷（按要求跳过外层 rar）",
+                    VerificationDetail = "只做了 7z 分卷（按要求不做外层容器）",
                     LogLines = lines,
                     Elapsed = stopwatch.Elapsed
                 };
@@ -288,57 +316,70 @@ namespace ArchiveFixer.Packing
                 return volumesOnly;
             }
 
-            // ───────── ⑤ 第二步：外层加密 rar ─────────
-            Report(PackingStep.OuterRar, StatusText.PackStepRar);
+            // ───────── ⑤ 第二步：外层容器（rar 或 7z） ─────────
+            string outerPath = plan.OuterPath;
+            bool outerIsRar = request.OuterContainer == PackOuterContainer.Rar;
+            string outerName = outerIsRar ? "外层 rar" : "外层 7z";
+            string outerTool = outerIsRar ? "Rar.exe" : "7-Zip";
+            PackToolKind outerToolKind = outerIsRar ? PackToolKind.Rar : PackToolKind.SevenZip;
+            string outerStepText = outerIsRar ? StatusText.PackStepRar : StatusText.PackStepSevenZipOuter;
 
-            PackStepResult rarStep;
+            Report(PackingStep.OuterContainer, outerStepText);
+
+            PackStepResult outerStep;
 
             try
             {
-                rarStep = await _runner.RunAsync(
-                        PackToolKind.Rar,
-                        BuildRarArguments(plan, request.EffectiveOuterPassword),
+                outerStep = await _runner.RunAsync(
+                        outerToolKind,
+                        outerIsRar
+                            ? BuildRarArguments(plan, request.EffectiveOuterPassword)
+                            : BuildSevenZipOuterArguments(plan, request.EffectiveOuterPassword),
                         request.EffectiveOuterPassword,
-                        WrapProgress(progress, PackingStep.OuterRar, StatusText.PackStepRar),
+                        WrapProgress(progress, PackingStep.OuterContainer, outerStepText),
                         cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                DeleteIncompleteRar(plan.RarPath, Write);
+                DeleteIncompleteOuter(outerPath, outerName, Write);
 
-                return Cancelled("生成外层 rar 时被取消", null, volumes);
+                return Cancelled($"生成{outerName}时被取消", null, volumes);
             }
 
-            if (rarStep.Cancelled)
+            if (outerStep.Cancelled)
             {
-                DeleteIncompleteRar(plan.RarPath, Write);
+                DeleteIncompleteOuter(outerPath, outerName, Write);
 
-                return Cancelled("生成外层 rar 时被取消（分卷还在 B 里）", null, volumes);
+                return Cancelled($"生成{outerName}时被取消（分卷还在 B 里）", null, volumes);
             }
 
-            if (!rarStep.Success)
+            if (!outerStep.Success)
             {
-                DeleteIncompleteRar(plan.RarPath, Write);
+                DeleteIncompleteOuter(outerPath, outerName, Write);
 
                 return Fail(
-                    $"外层 rar 没做成（Rar.exe 退出码 {rarStep.ExitCode}）。" + DescribeOutputTail(rarStep)
+                    $"{outerName}没做成（{outerTool} 退出码 {outerStep.ExitCode}）。" + DescribeOutputTail(outerStep)
                     + $"7z 分卷还在：{plan.OutputFolder}（{volumes.Count} 个）—— 修好原因后可以重试，"
                     + "重试前请先清空 B，让程序从干净状态重建。",
                     StatusText.PackFailed,
                     volumes);
             }
 
-            // ───────── ⑥ 核对产物（对不上就不显示成功） ─────────
-            Report(PackingStep.Verifying, StatusText.PackStepVerify);
+            // ───────── ⑥ 核对产物（**按容器**读一遍；对不上就不显示成功） ─────────
+            string verifyStepText = outerIsRar ? StatusText.PackStepVerify : StatusText.PackStepVerifySevenZip;
+
+            Report(PackingStep.Verifying, verifyStepText);
 
             PackingVerification verification;
 
             try
             {
                 PackStepResult listing = await _runner.RunAsync(
-                        PackToolKind.Rar,
-                        BuildRarListArguments(plan, request.EffectiveOuterPassword),
+                        outerToolKind,
+                        outerIsRar
+                            ? BuildRarListArguments(plan, request.EffectiveOuterPassword)
+                            : BuildSevenZipListArguments(plan, request.EffectiveOuterPassword),
                         request.EffectiveOuterPassword,
                         null,
                         cancellationToken)
@@ -346,7 +387,7 @@ namespace ArchiveFixer.Packing
 
                 if (listing.Cancelled)
                 {
-                    return Cancelled("校验产物时被取消（rar 已经生成，但没核对过）", plan.RarPath, volumes);
+                    return Cancelled($"校验产物时被取消（{outerName}已经生成，但没核对过）", outerPath, volumes);
                 }
 
                 if (!listing.Success)
@@ -354,7 +395,7 @@ namespace ArchiveFixer.Packing
                     verification = new PackingVerification
                     {
                         Ok = false,
-                        Detail = $"列不出 rar 的条目（Rar.exe 退出码 {listing.ExitCode}），没法确认它装的是什么。"
+                        Detail = $"列不出{outerName}的条目（{outerTool} 退出码 {listing.ExitCode}），没法确认它装的是什么。"
                                  + DescribeOutputTail(listing),
                         Problems = new[] { "列条目失败" }
                     };
@@ -362,14 +403,17 @@ namespace ArchiveFixer.Packing
                 else
                 {
                     verification = PackingVerifier.Verify(
-                        PackingVerifier.ParseBareList(listing.StandardOutput),
+                        outerIsRar
+                            ? PackingVerifier.ParseBareList(listing.StandardOutput)
+                            : PackingVerifier.ParseSevenZipSltList(listing.StandardOutput),
                         Path.GetFileName(plan.OutputFolder),
-                        volumes);
+                        volumes,
+                        outerIsRar ? "rar" : "7z");
                 }
             }
             catch (OperationCanceledException)
             {
-                return Cancelled("校验产物时被取消（rar 已经生成，但没核对过）", plan.RarPath, volumes);
+                return Cancelled($"校验产物时被取消（{outerName}已经生成，但没核对过）", outerPath, volumes);
             }
 
             Write("产物校验：" + verification.Detail);
@@ -378,7 +422,7 @@ namespace ArchiveFixer.Packing
             {
                 /*
                  * 不变量 6：**产物对不上就不是成功**。
-                 * 这里刻意不删 rar：它确实存在、也可能对用户有用（比如条目名与预期不同），
+                 * 这里刻意不删外层容器：它确实存在、也可能对用户有用（比如条目名与预期不同），
                  * 删掉是不可逆的；用户看到这句话之后自己决定。
                  */
                 return Fail(
@@ -387,15 +431,15 @@ namespace ArchiveFixer.Packing
                     volumes);
             }
 
-            long rarBytes = 0;
+            long outerBytes = 0;
 
             try
             {
-                rarBytes = new FileInfo(plan.RarPath).Length;
+                outerBytes = new FileInfo(outerPath).Length;
             }
             catch
             {
-                rarBytes = 0;
+                outerBytes = 0;
             }
 
             Report(PackingStep.Finished, StatusText.PackSuccess, 100);
@@ -406,8 +450,9 @@ namespace ArchiveFixer.Packing
             {
                 State = PackingState.Succeeded,
                 Message = StatusText.PackSuccess,
-                RarPath = plan.RarPath,
-                RarBytes = rarBytes,
+                OuterContainer = request.OuterContainer,
+                OuterPath = outerPath,
+                OuterBytes = outerBytes,
                 Volumes = volumes,
                 VerificationDetail = verification.Detail,
                 LogLines = lines,
@@ -445,6 +490,56 @@ namespace ArchiveFixer.Packing
                 "-v" + volumeMegabytes + "m",
                 Path.Combine(plan.OutputFolder, plan.VolumeBaseName),
                 Path.Combine(plan.SourceFolder, "*")
+            };
+        }
+
+        /// <summary>
+        /// 第二步（外层容器 = 7z）的命令行：
+        /// <c>a -t7z -mhe=on -mx=5 -bsp1 -sccUTF-8 -y -p&lt;密码&gt; "&lt;B&gt;.7z" "&lt;B&gt;"</c>。
+        ///
+        /// <para>与第一步同一套安全传参 / 进度 / 取消做法（<c>-bsp1</c> 进度、<c>-sccUTF-8</c> 输出编码、
+        /// <c>-y</c> 无人值守），差别只有两条：不分卷（外层就是一个文件），以及
+        /// <c>-mhe=on</c> 让**文件名也加密**（与 rar 那边的 <c>-hp</c> 对齐）。</para>
+        ///
+        /// <para>为什么参数里给的是 <c>B</c> 而不是 <c>B\*</c>：<c>7z a out.7z &lt;B&gt;</c> 会把 <c>B</c>
+        /// 这一层目录名带进归档（条目是 <c>B\x.7z.001</c>），与 <c>Rar.exe -ep1</c> 的形态一一对应 ——
+        /// 用户解出来看到的都是一个文件夹，而不是一堆散着的分卷（docs/打包功能.md §4）。</para>
+        /// </summary>
+        internal static List<string> BuildSevenZipOuterArguments(PackingPlan plan, string outerPassword)
+        {
+            return new List<string>
+            {
+                "a",
+                "-t7z",
+                "-mx=5",
+                "-mhe=on",
+                "-bsp1",
+                "-sccUTF-8",
+                "-y",
+                "-p" + outerPassword,
+                plan.SevenZipOuterPath,
+                plan.OutputFolder
+            };
+        }
+
+        /// <summary>
+        /// 核对 7z 外层容器时的列条目命令：<c>l -slt -sccUTF-8 -y -p&lt;密码&gt; "&lt;B&gt;.7z"</c>。
+        ///
+        /// <para>为什么用 <c>-slt</c>（技术信息）而不是默认的表格排版：默认输出是给人看的表格，
+        /// 列宽随内容变、还带汇总行，把它钉进代码等于把"某一版 7-Zip 的排版"当成契约；
+        /// <c>-slt</c> 是一行一个 <c>键 = 值</c> 的机器格式（见 <see cref="PackingVerifier.ParseSevenZipSltList"/>）。
+        /// 代价是它一开始会多出一段描述**归档自己**的块，那个由解析函数按分隔线切掉。</para>
+        /// </summary>
+        internal static List<string> BuildSevenZipListArguments(PackingPlan plan, string outerPassword)
+        {
+            return new List<string>
+            {
+                "l",
+                "-slt",
+                "-sccUTF-8",
+                "-y",
+                "-p" + outerPassword,
+                plan.SevenZipOuterPath
             };
         }
 
@@ -600,22 +695,22 @@ namespace ArchiveFixer.Packing
                   + "产物不完整，这次不算成功。";
         }
 
-        /// <summary>删掉本次没做完的 rar（**只在本次真的创建过它之后**调）。</summary>
-        private static void DeleteIncompleteRar(string rarPath, Action<string> write)
+        /// <summary>删掉本次没做完的外层容器（**只在本次真的创建过它之后**调）。</summary>
+        private static void DeleteIncompleteOuter(string outerPath, string outerName, Action<string> write)
         {
             try
             {
-                if (!File.Exists(rarPath))
+                if (!File.Exists(outerPath))
                 {
                     return;
                 }
 
-                File.Delete(rarPath);
-                write($"已清理没做完的 rar：{rarPath}");
+                File.Delete(outerPath);
+                write($"已清理没做完的{outerName}：{outerPath}");
             }
             catch (Exception ex)
             {
-                write($"没做完的 rar 删不掉（请自己删）：{rarPath} —— {PackPasswordGuard.Sanitize(ex.Message, null)}");
+                write($"没做完的{outerName}删不掉（请自己删）：{outerPath} —— {PackPasswordGuard.Sanitize(ex.Message, null)}");
             }
         }
 

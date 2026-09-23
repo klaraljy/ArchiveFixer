@@ -406,6 +406,20 @@ namespace ArchiveFixer.Models
         public string CustomUnRarExePath { get; set; } = string.Empty;
 
         /// <summary>
+        /// 用户自定义的 <c>Rar.exe</c> 路径（**打包**功能做外层 rar 时用；用户 2026-09-23 决定加这一格）。
+        ///
+        /// <para>空表示按 <c>ToolLocator</c> 的解析链自动找：本机已装 WinRAR 目录里的 <c>Rar.exe</c>，
+        /// 再退 <c>WinRAR.exe</c>。</para>
+        ///
+        /// <para>⚠ <b>许可边界（AGENTS.md §3.1）</b>：<c>Rar.exe</c> / <c>WinRAR.exe</c> 是**共享软件**，
+        /// RARLAB 的 EULA 明确禁止随其它软件包分发（§3.1 / §3.2 / §3.3 / §10），所以这一格指向的
+        /// 只能是**用户自己安装 / 下载的**那一份 —— 程序只检测与调用，绝不复制、绝不内置、绝不随包分发。
+        /// 这也正是这一格存在的理由：不提供自选路径，用户把 WinRAR 装到非默认目录时就只能去改
+        /// 系统环境变量。</para>
+        /// </summary>
+        public string CustomRarExePath { get; set; } = string.Empty;
+
+        /// <summary>
         /// **引擎优先级**（用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"）。
         ///
         /// <para>
@@ -597,6 +611,7 @@ namespace ArchiveFixer.Models
                 EnableSidecarPassword = false,
                 CustomSevenZipExePath = string.Empty,
                 CustomUnRarExePath = string.Empty,
+                CustomRarExePath = string.Empty,
 
                 // 用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"。
                 EnginePriority = new List<string>(EngineIds.DefaultPriority),
@@ -697,6 +712,7 @@ namespace ArchiveFixer.Models
             CustomOutputDirectory ??= string.Empty;
             CustomSevenZipExePath ??= string.Empty;
             CustomUnRarExePath ??= string.Empty;
+            CustomRarExePath ??= string.Empty;
             CollectTargetDirectory ??= string.Empty;
             CacheRootDirectory ??= string.Empty;
             PasswordBookPath ??= string.Empty;
@@ -775,6 +791,18 @@ namespace ArchiveFixer.Models
             if (!string.IsNullOrWhiteSpace(CustomUnRarExePath) && !System.IO.File.Exists(CustomUnRarExePath))
             {
                 CustomUnRarExePath = string.Empty;
+            }
+
+            /*
+             * 自定义 Rar.exe 路径同理（打包的外层 rar 用）。清空它只是回到"自动解析"，
+             * 不会让打包不可用 —— 界面上还可以把外层容器改成 7z 或"不做外层"。
+             *
+             * ⚠ 这里**不做任何"帮用户找一份 Rar.exe 塞进来"的事**：那是分发共享软件的第一步
+             * （AGENTS.md §3.1）。这一格永远是用户自己填的。
+             */
+            if (!string.IsNullOrWhiteSpace(CustomRarExePath) && !System.IO.File.Exists(CustomRarExePath))
+            {
+                CustomRarExePath = string.Empty;
             }
         }
     }

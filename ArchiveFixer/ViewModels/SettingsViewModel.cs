@@ -100,6 +100,7 @@ namespace ArchiveFixer.ViewModels
         private bool? _dialogResult;
         private string _message = string.Empty;
         private string _engineSelectionSummary = string.Empty;
+        private string _rarToolStatusText = string.Empty;
 
         public AppSettings Settings
         {
@@ -392,6 +393,48 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 用户自选的 <c>Rar.exe</c> 路径（**打包**功能做外层 rar 时用；用户 2026-09-23 决定加这一格）。
+        ///
+        /// <para>留空 = 自动：本机已装 WinRAR 目录里的 <c>Rar.exe</c>，再退 <c>WinRAR.exe</c>。</para>
+        ///
+        /// <para>⚠ 它**只**填用户自己安装 / 下载的那一份：<c>Rar.exe</c> 是共享软件，
+        /// RARLAB 的 EULA 禁止随其它软件包分发（AGENTS.md §3.1），所以程序绝不内置、绝不复制它。
+        /// 这一格存在的意义是"用户把 WinRAR 装在非默认目录"时不必去改系统环境变量。</para>
+        /// </summary>
+        public string CustomRarExePath
+        {
+            get => Settings.CustomRarExePath ?? string.Empty;
+            set
+            {
+                string normalized = value ?? string.Empty;
+
+                if (string.Equals(Settings.CustomRarExePath, normalized, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                Settings.CustomRarExePath = normalized;
+                OnPropertyChanged();
+                RefreshRarStatus();
+            }
+        }
+
+        /// <summary>
+        /// 工具状态那一行："当前用的是自选的那一份，还是本机已装目录里的那一份"（不变量 14）。
+        ///
+        /// <para>与 <see cref="RefreshEngineList"/> 同一套做法：拿一个**临时** ToolLocator 预览
+        /// "改完之后会怎样"，不碰运行时的全局解析结果（点「取消」不能生效）。</para>
+        /// </summary>
+        public string RarToolStatusText
+        {
+            get => _rarToolStatusText;
+            private set => SetProperty(ref _rarToolStatusText, value ?? string.Empty);
+        }
+
+        /// <summary>那一格的完整说明（**许可边界**写在这里；界面提示与校验失败共用同一份措辞）。</summary>
+        public string RarExePathHint => StatusText.SettingsRarExePathHint;
+
         /// <summary>保留受损文件（-kb，默认关）。只影响半成品留不留，绝不影响成败判定。</summary>
         public bool KeepBrokenFiles
         {
@@ -437,6 +480,13 @@ namespace ArchiveFixer.ViewModels
         /// <summary>选择缓存根目录。</summary>
         public ICommand SelectCacheRootDirectoryCommand { get; }
 
+        /// <summary>
+        /// 浏览选择用户自己装的 <c>Rar.exe</c>（打包做外层 rar 时用）。
+        /// 7z / UnRAR 那两格是纯文本框（历史如此），这一格按用户要求配一个"浏览"按钮 ——
+        /// WinRAR 常常装在非默认目录，手打路径最容易出错。
+        /// </summary>
+        public ICommand SelectRarExeCommand { get; }
+
         public SettingsViewModel()
             : this(new AppSettings(), new SettingsService())
         {
@@ -454,10 +504,12 @@ namespace ArchiveFixer.ViewModels
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory);
             SelectCollectTargetDirectoryCommand = new RelayCommand(SelectCollectTargetDirectory);
             SelectCacheRootDirectoryCommand = new RelayCommand(SelectCacheRootDirectory);
+            SelectRarExeCommand = new RelayCommand(SelectRarExe);
             MoveEngineUpCommand = new RelayCommand(parameter => MoveEngine(parameter, -1));
             MoveEngineDownCommand = new RelayCommand(parameter => MoveEngine(parameter, +1));
 
             RefreshEngineList();
+            RefreshRarStatus();
 
             Message = "设置已加载。";
         }
@@ -507,6 +559,22 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
+                 * 打包用的 Rar.exe 路径：校验口径与上面两条**完全一致**（同一处实现），
+                 * 但"留空"的说明必须把那句话带上 —— 这一格是许可边界最容易被误解的地方：
+                 * 它要的是**用户自己安装的** WinRAR 里的那一份，程序只检测与调用、绝不随包分发
+                 * （AGENTS.md §3.1）。空白提示直接引 StatusText 的同一份措辞，免得两处各说一套。
+                 */
+                if (!ValidateToolExePath(
+                        Settings.CustomRarExePath,
+                        "Rar.exe 路径",
+                        StatusText.SettingsRarExePathEmptyHint,
+                        out string rarMessage))
+                {
+                    Message = "设置未保存：" + rarMessage;
+                    return;
+                }
+
+                /*
                  * 危险模式：**没有自测凭证（或凭证盖不住当前并发档）就不许在设置里打开**
                  * （用户 2026-09-22 的协议）。
                  *
@@ -552,6 +620,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 EngineRuntimeSettings.Apply(Settings);
                 RefreshEngineList();
+                RefreshRarStatus();
 
                 Message = requestedPasswordAttempts != Settings.MaxPasswordAttemptsPerLayer
                     ? $"设置已保存（每层密码尝试上限 {requestedPasswordAttempts} 超出 1~1000，已按 {Settings.MaxPasswordAttemptsPerLayer} 生效）。"
@@ -665,9 +734,11 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(SourceHandling));
             OnPropertyChanged(nameof(CacheRootDirectory));
             OnPropertyChanged(nameof(CustomUnRarExePath));
+            OnPropertyChanged(nameof(CustomRarExePath));
             OnPropertyChanged(nameof(KeepBrokenFiles));
 
             RefreshEngineList();
+            RefreshRarStatus();
         }
 
         /// <summary>
@@ -737,6 +808,56 @@ namespace ArchiveFixer.ViewModels
             {
                 // 设置页不该因为"探测引擎"整个打不开：报一句就够，其余设置照常可改。
                 EngineSelectionSummary = "引擎检测失败：" + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// 重算"外层 rar 这一步用的是哪一份 Rar.exe"那一行（用户 2026-09-23 要求能看出
+        /// **用的是自选的那份还是已装目录那份**）。
+        ///
+        /// 与 <see cref="RefreshEngineList"/> 同一口径：临时 ToolLocator，只预览、不产生副作用
+        /// （改完路径还没点保存时界面要显示"改完之后会怎样"，点「取消」不能生效）。
+        /// </summary>
+        private void RefreshRarStatus()
+        {
+            try
+            {
+                var previewTools = new ToolLocator
+                {
+                    CustomRarExePath = Settings.CustomRarExePath ?? string.Empty
+                };
+
+                RarToolStatusText = StatusText.SettingsRarExePathStatusPrefix + previewTools.DescribeRarResolution();
+            }
+            catch (Exception ex)
+            {
+                // 设置页不该因为探测失败整个打不开：报一句就够，其余设置照常可改。
+                RarToolStatusText = StatusText.SettingsRarExePathStatusPrefix + "检测失败：" + ex.Message;
+            }
+        }
+
+        /// <summary>浏览选择自己装的 <c>Rar.exe</c>。</summary>
+        private void SelectRarExe()
+        {
+            try
+            {
+                string picked = _dialogService.ShowOpenSingleFileDialog(
+                    "选择你自己安装的 WinRAR 里的 Rar.exe",
+                    "Rar.exe (Rar.exe)|Rar.exe|可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*");
+
+                if (string.IsNullOrWhiteSpace(picked))
+                {
+                    Message = "已取消选择 Rar.exe。";
+                    return;
+                }
+
+                CustomRarExePath = picked;
+
+                Message = "已选择 Rar.exe；点「保存」后生效。" + StatusText.SettingsRarExePathHint;
+            }
+            catch (Exception ex)
+            {
+                Message = "选择 Rar.exe 失败：" + ex.Message;
             }
         }
 

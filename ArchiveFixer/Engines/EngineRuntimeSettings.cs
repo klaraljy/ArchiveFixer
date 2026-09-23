@@ -13,7 +13,7 @@ namespace ArchiveFixer.Engines
     /// <c>Services/SettingsService</c> 与 ViewModel 上。历史做法是"谁有设置谁往
     /// <c>ToolLocator.Default</c> 里推"（<c>MainViewModel.ApplyEngineSettings</c> 推 7z 路径）。
     /// 本类把这条路收敛成**一次调用**：<see cref="Apply"/> 同时把
-    /// ①两条外部工具路径推给 <see cref="ToolLocator.Default"/>、
+    /// ①**三条**外部工具路径（7z / UnRAR / 打包用的 Rar.exe）推给 <see cref="ToolLocator.Default"/>、
     /// ②引擎优先级、③保留损坏文件 落到引擎层。
     /// </para>
     ///
@@ -71,6 +71,15 @@ namespace ArchiveFixer.Engines
         {
             ToolLocator.Default.CustomSevenZipExePath = settings?.CustomSevenZipExePath ?? string.Empty;
             ToolLocator.Default.CustomUnRarExePath = settings?.CustomUnRarExePath ?? string.Empty;
+
+            /*
+             * 打包用的 Rar.exe 也在这里推。为什么不另开一个入口：它同样是"外部工具路径"，
+             * 而 ToolLocator 是这些东西的**唯一**来源（AGENTS.md §3.1）—— 两条路径由两个地方推，
+             * 迟早会出现"设置里改了、打包还用旧的"。
+             *
+             * ⚠ 推的只是**用户自己填的路径**，不是一份 Rar.exe：共享软件绝不分发（§3.1）。
+             */
+            ToolLocator.Default.CustomRarExePath = settings?.CustomRarExePath ?? string.Empty;
 
             SetPriority(settings?.EnginePriority);
             SetKeepBrokenFiles(settings?.KeepBrokenFiles ?? false);

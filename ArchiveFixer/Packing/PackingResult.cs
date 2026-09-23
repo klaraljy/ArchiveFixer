@@ -15,7 +15,7 @@ namespace ArchiveFixer.Packing
         /// <summary>用户取消。</summary>
         Cancelled = 1,
 
-        /// <summary>成功（外层 rar 做成了，或者明确按"只做 7z 分卷"完成）。</summary>
+        /// <summary>成功（外层容器做成了，或者按要求"不做外层"只出了 7z 分卷）。</summary>
         Succeeded = 2
     }
 
@@ -31,8 +31,8 @@ namespace ArchiveFixer.Packing
         /// <summary>第一步：7z 加密分卷。</summary>
         Volumes = 2,
 
-        /// <summary>第二步：外层加密 rar。</summary>
-        OuterRar = 3,
+        /// <summary>第二步：外层容器（rar 或 7z）。</summary>
+        OuterContainer = 3,
 
         /// <summary>第三步：校验产物。</summary>
         Verifying = 4,
@@ -86,15 +86,20 @@ namespace ArchiveFixer.Packing
         /// <summary>失败 / 取消时给用户看的那句更具体的话（成功时为空）。</summary>
         public string FailureReason { get; init; } = string.Empty;
 
-        /// <summary>结果 rar 的全路径；没做外层（或失败 / 取消）时为 null。</summary>
-        public string? RarPath { get; init; }
+        /// <summary>本次用的外层容器（<see cref="PackOuterContainer.None"/> = 按要求没做外层）。</summary>
+        public PackOuterContainer OuterContainer { get; init; } = PackOuterContainer.Rar;
 
-        /// <summary>rar 的字节数（拿不到时 0）。</summary>
-        public long RarBytes { get; init; }
+        /// <summary>
+        /// 外层产物的全路径（rar 或 7z）—— **实际**产出的那一个；
+        /// 不做外层（或失败 / 取消）时为 null。
+        /// </summary>
+        public string? OuterPath { get; init; }
 
-        /// <summary>本次是否跳过了外层 rar（用户勾了"只做 7z 分卷"）。</summary>
-        public bool SkippedOuterRar { get; init; }
+        /// <summary>外层产物的字节数（拿不到时 0）。</summary>
+        public long OuterBytes { get; init; }
 
+        /// <summary>有没有外层产物（界面据此决定显不显示那一行路径）。</summary>
+        public bool HasOuterArtifact => !string.IsNullOrWhiteSpace(OuterPath);
         /// <summary>产物校验的说明（列了几条、对不对得上）。</summary>
         public string VerificationDetail { get; init; } = string.Empty;
 
@@ -110,21 +115,29 @@ namespace ArchiveFixer.Packing
         /// <summary>分卷总字节数。</summary>
         public long TotalVolumeBytes => Volumes.Sum(v => v.Bytes);
 
+        /// <summary>第一个分卷的全路径（用来在结论里给出"实际产物在哪"）；没有分卷时是空串。</summary>
+        public string FirstVolumePath => Volumes.Count > 0 ? Volumes[0].Path : string.Empty;
+
         /// <summary>
-        /// 结果区那一句话（成功时给出 rar 路径 + 大小 + 分卷数；失败时给出原因）。
+        /// 结果区那一句话：**实际产物路径 + 容器类型** + 分卷数（失败时给出原因）。
+        ///
+        /// <para>为什么把容器类型写进结论：用户 2026-09-23 之后外层有 rar / 7z / 不做三种，
+        /// 只说一句"完成"会让他分不清拿到的是 <c>.rar</c> 还是 <c>.7z</c>，也分不清"没做外层"
+        /// 是按要求做的还是出错了 —— 结论必须能被机器与人都一眼判定（不变量 6、14）。</para>
         /// </summary>
         public string Describe()
         {
             if (State == PackingState.Succeeded)
             {
-                if (SkippedOuterRar)
+                if (!OuterContainer.HasOuterArtifact())
                 {
-                    return $"已生成 {Volumes.Count} 个 7z 加密分卷（{TaskSpaceEstimate.FormatSize(TotalVolumeBytes)}），"
-                         + "按要求没有做外层 rar。";
+                    return $"打包成功（外层容器：{OuterContainer.ShortName()}）：结果就是 B 里的 {Volumes.Count} 个 7z 加密分卷"
+                         + $"（共 {TaskSpaceEstimate.FormatSize(TotalVolumeBytes)}），第一个是 {FirstVolumePath}；"
+                         + "按要求没有外层容器文件。";
                 }
 
-                return $"打包成功：{RarPath}（{TaskSpaceEstimate.FormatSize(RarBytes)}），"
-                     + $"里面是 {Volumes.Count} 个 7z 加密分卷"
+                return $"打包成功（外层容器：{OuterContainer.ShortName()}）：{OuterPath}"
+                     + $"（{TaskSpaceEstimate.FormatSize(OuterBytes)}），里面是 {Volumes.Count} 个 7z 加密分卷"
                      + (string.IsNullOrWhiteSpace(VerificationDetail) ? "。" : $"；{VerificationDetail}");
             }
 

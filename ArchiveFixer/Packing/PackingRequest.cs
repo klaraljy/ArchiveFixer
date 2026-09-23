@@ -1,7 +1,78 @@
+using ArchiveFixer.Models;
 using System;
 
 namespace ArchiveFixer.Packing
 {
+    /// <summary>
+    /// 外层容器三选一（用户 2026-09-23 决定）。
+    ///
+    /// <para>它取代了早先的 <c>bool SkipOuterRar</c>：那句布尔只有两种状态，而用户要的是三选一，
+    /// 于是"外层用 7z 容器"这条路根本没有位置（勾了 = 不做外层，不勾 = 必须 rar）。
+    /// <b>默认仍是 <see cref="Rar"/></b>（用户 2026-09-22 的原始要求：结果是一个带密码的 rar）。</para>
+    ///
+    /// <para>为什么"外层 7z"必须存在：<c>Rar.exe</c> / <c>WinRAR.exe</c> 是**共享软件**，
+    /// RARLAB 的 EULA 明确禁止随其它软件包分发（AGENTS.md §3.1），所以"本机没装 WinRAR"是一种
+    /// 常态而不是异常。此时除了"装 WinRAR"与"什么都不做"，还必须有第三条**不需要额外安装**的路
+    /// —— 7-Zip 是 LGPL、本来就随程序分发。</para>
+    /// </summary>
+    public enum PackOuterContainer
+    {
+        /// <summary>外层做 <c>B.rar</c>（<b>默认</b>）—— 需要本机**已装**的 <c>Rar.exe</c>，程序绝不分发它。</summary>
+        Rar = 0,
+
+        /// <summary>外层做 <c>B.7z</c>（<c>-mhe=on</c>：连文件名一起加密）—— 用内置 7-Zip，**无需额外安装**。</summary>
+        SevenZip = 1,
+
+        /// <summary>不做外层：结果就是 B 里的那组 7z 加密分卷（本机没装 WinRAR 时最省的出路）。</summary>
+        None = 2
+    }
+
+    /// <summary>外层容器的文案与派生规则（**唯一来源**；界面、日志、失败原因都引这里）。</summary>
+    public static class PackOuterContainers
+    {
+        /// <summary>会不会产出一个外层容器文件（<see cref="PackOuterContainer.None"/> 不会）。</summary>
+        public static bool HasOuterArtifact(this PackOuterContainer container)
+        {
+            return container != PackOuterContainer.None;
+        }
+
+        /// <summary>界面选项上的完整说法（含"要不要额外安装"这句关键信息）。</summary>
+        public static string Describe(this PackOuterContainer container)
+        {
+            return container switch
+            {
+                PackOuterContainer.SevenZip => StatusText.PackOuterSevenZipText,
+                PackOuterContainer.None => StatusText.PackOuterNoneText,
+                _ => StatusText.PackOuterRarText
+            };
+        }
+
+        /// <summary>日志 / 摘要里的短名（<c>rar</c> / <c>7z</c> / <c>不做外层</c>）。</summary>
+        public static string ShortName(this PackOuterContainer container)
+        {
+            return container switch
+            {
+                PackOuterContainer.SevenZip => StatusText.PackOuterSevenZipShort,
+                PackOuterContainer.None => StatusText.PackOuterNoneShort,
+                _ => StatusText.PackOuterRarShort
+            };
+        }
+
+        /// <summary>
+        /// 句子里指代外层产物时的名词（"结果 rar 不能放在…" / "外层 7z 不能放在…"）。
+        /// 不留空：调用方都是"确实有外层产物"的分支。
+        /// </summary>
+        public static string Noun(this PackOuterContainer container)
+        {
+            return container switch
+            {
+                PackOuterContainer.SevenZip => "外层 7z",
+                PackOuterContainer.None => "外层容器",
+                _ => "结果 rar"
+            };
+        }
+    }
+
     /// <summary>
     /// 一次打包请求（用户 2026-09-22 需求第 10 条）。
     ///
@@ -18,7 +89,7 @@ namespace ArchiveFixer.Packing
         /// <summary>输出文件夹 B（分卷落在这里；留空时按 A 同级推导）。</summary>
         public string OutputFolder { get; init; } = string.Empty;
 
-        /// <summary>结果 rar 的路径（留空时按 <c>&lt;B&gt;.rar</c> 推导）。</summary>
+        /// <summary>结果 rar 的路径（留空时按 <c>&lt;B&gt;.rar</c> 推导）；只在外层容器是 rar 时有意义。</summary>
         public string RarPath { get; init; } = string.Empty;
 
         /// <summary>分卷大小（字节，整数 MiB）。默认 512 MiB。</summary>
@@ -27,11 +98,17 @@ namespace ArchiveFixer.Packing
         /// <summary>内层 7z 分卷的密码（**必填**）。</summary>
         public string Password { get; init; } = string.Empty;
 
-        /// <summary>外层 rar 的密码；留空 = 与内层同一个（默认就是同一个）。</summary>
+        /// <summary>外层容器的密码；留空 = 与内层同一个（默认就是同一个）。</summary>
         public string OuterPassword { get; init; } = string.Empty;
 
-        /// <summary>只做 7z 分卷、跳过外层 rar（本机没装 WinRAR 时的那条出路）。</summary>
-        public bool SkipOuterRar { get; init; }
+        /// <summary>
+        /// 外层容器（用户 2026-09-23 决定：三选一）。**默认 <see cref="PackOuterContainer.Rar"/>**。
+        ///
+        /// <para>本机没有 <c>Rar.exe</c> 时**不静默换容器**：默认选了 rar 就在切分卷之前明确报错，
+        /// 并给出三条出路（装 WinRAR / 换成 7z 外层 / 不做外层）。换成 7z 是**用户自己改**的一步，
+        /// 不是程序替他决定的。</para>
+        /// </summary>
+        public PackOuterContainer OuterContainer { get; init; } = PackOuterContainer.Rar;
 
         /// <summary>外层实际用的密码：单独填了就用它，没填就与内层一致。</summary>
         public string EffectiveOuterPassword =>
@@ -47,9 +124,8 @@ namespace ArchiveFixer.Packing
         /// </summary>
         public string DescribeForLog()
         {
-            return $"源：{SourceFolder}；输出：{OutputFolder}；rar：{RarPath}；"
+            return $"源：{SourceFolder}；输出：{OutputFolder}；外层容器：{OuterContainer.Describe()}；"
                  + $"分卷上限：{PackingPlan.FormatVolumeSize(VolumeSizeBytes)}；"
-                 + (SkipOuterRar ? "只做 7z 分卷（跳过外层 rar）；" : "两层都做；")
                  + PackingPasswordPolicy.SetLogLine;
         }
     }

@@ -448,13 +448,19 @@ namespace ArchiveFixer.Models
         /// <summary>第一步：7z 加密分卷。</summary>
         public const string PackStepVolumes = "步骤 1/2：生成 7z 加密分卷";
 
-        /// <summary>第二步：外层加密 rar。</summary>
+        /// <summary>第二步（外层容器 = rar）：生成外层加密 rar。</summary>
         public const string PackStepRar = "步骤 2/2：生成外层加密 rar";
 
-        /// <summary>第三步：核对产物。</summary>
+        /// <summary>第二步（外层容器 = 7z）：生成外层加密 7z。</summary>
+        public const string PackStepSevenZipOuter = "步骤 2/2：生成外层加密 7z";
+
+        /// <summary>第三步（外层容器 = rar）：核对产物。</summary>
         public const string PackStepVerify = "校验产物：列出 rar 条目、核对分卷数";
 
-        /// <summary>成功（外层 rar 做成了）。</summary>
+        /// <summary>第三步（外层容器 = 7z）：核对产物。</summary>
+        public const string PackStepVerifySevenZip = "校验产物：列出 7z 条目、核对分卷数";
+
+        /// <summary>成功（外层容器做成了）。</summary>
         public const string PackSuccess = "打包成功";
 
         /// <summary>失败。</summary>
@@ -466,21 +472,75 @@ namespace ArchiveFixer.Models
         /// <summary>产物校验不通过（不变量 6：对不上就不显示成功）。</summary>
         public const string PackVerifyFailed = "产物校验不通过";
 
-        /// <summary>按要求只做了 7z 分卷（本机没装 WinRAR 时的那条出路）。</summary>
-        public const string PackPartialVolumesOnly = "只做了 7z 分卷（按要求跳过外层 rar）";
+        /// <summary>按要求没有做外层容器（结果就是 B 里的 7z 分卷）。</summary>
+        public const string PackPartialVolumesOnly = "只做了 7z 分卷（按要求不做外层容器）";
 
         /// <summary>
-        /// 没有 Rar.exe 时的那句话。**必须包含"需要本机已安装 WinRAR"**（验收判据点名的字串），
-        /// 并且紧跟着给两条出路（可点的"只做 7z 分卷"就是第二条）。
+        /// 没有 Rar.exe 时的那句话。**必须包含"需要本机已安装 WinRAR"**（验收判据点名的字串）。
         /// </summary>
         public const string PackNeedRar =
             "这一步需要本机已安装 WinRAR（要 Rar.exe / WinRAR.exe）：程序不会替你装、也不会随包分发它。";
 
-        /// <summary>"只做 7z 分卷"那个勾选项的文案（界面与日志共用同一句）。</summary>
-        public const string PackSkipRarOption = "只做 7z 分卷（跳过外层 rar）";
+        /// <summary>
+        /// 没有 Rar.exe 时的**三条出路**（用户 2026-09-23 决定）。
+        ///
+        /// <para>为什么是三条而不是两条：RARLAB 的 EULA（§3.1 / §3.2 / §3.3 / §10）明确禁止把
+        /// <c>Rar.exe</c> 随任何软件包分发，所以"本机没装 WinRAR"是常态而不是异常；
+        /// 只有"装 WinRAR"与"什么都不做"两条出路时，用户就只剩下"为了打包去装一个共享软件"这一条路。</para>
+        /// </summary>
+        public const string PackThreeWaysOut =
+            "三条出路：① 装好 WinRAR（带 Rar.exe）后重试；"
+            + "② 把「外层容器」改成 7z —— 无需额外安装（7-Zip 是 LGPL，随程序分发）；"
+            + "③ 选「不做外层容器」，这次就只出 B 里的 7z 加密分卷。";
+
+        // ── 外层容器三选一（用户 2026-09-23 决定；界面、日志、失败原因共用同一份说法） ──
+
+        /// <summary>外层容器 = rar 的完整说法（含许可边界）。</summary>
+        public const string PackOuterRarText =
+            "外层容器 rar：把 B 压成一个带密码的 .rar（需要本机已安装的 WinRAR：程序只检测与调用它，绝不随包分发）";
+
+        /// <summary>外层容器 = 7z 的完整说法（**无需额外安装**这句是关键信息）。</summary>
+        public const string PackOuterSevenZipText =
+            "外层容器 7z：把 B 压成一个带密码的 .7z（-mhe 连文件名一起加密）—— 无需额外安装（7-Zip 是 LGPL，随程序分发）";
+
+        /// <summary>外层容器 = 不做。</summary>
+        public const string PackOuterNoneText =
+            "不做外层容器：结果就是 B 里的 7z 加密分卷（不需要 Rar.exe，也不需要多一份空间）";
+
+        /// <summary>外层容器 rar 的短名（日志 / 摘要行）。</summary>
+        public const string PackOuterRarShort = "rar";
+
+        /// <summary>外层容器 7z 的短名。</summary>
+        public const string PackOuterSevenZipShort = "7z";
+
+        /// <summary>不做外层的短名。</summary>
+        public const string PackOuterNoneShort = "不做外层";
 
         /// <summary>结果区提醒：B 可以自己删（用户可能要先检查分卷）。</summary>
         public const string PackKeepFolderHint =
             "文件夹 B 会保留下来（你可以先检查分卷）；确认结果没问题之后，B 可以自己删掉。";
+
+        // ── 设置界面：自选 Rar.exe 路径（用户 2026-09-23 决定） ──
+
+        /// <summary>
+        /// 设置里那一格的标签。**必须写明许可边界**：这是用户自己装的 WinRAR 里的那一份，
+        /// 程序只检测与调用，绝不随包分发（WinRAR 是共享软件）。
+        /// </summary>
+        public const string SettingsRarExePathLabel = "Rar.exe 路径：";
+
+        /// <summary>设置里那一格留空时的含义（提示文案的后半句）。</summary>
+        public const string SettingsRarExePathEmptyHint =
+            "留空 = 自动用本机已装 WinRAR 目录里的那一份。";
+
+        /// <summary>
+        /// 设置里那一格的完整说明（**许可边界写在这里，不写"路径"了事**）。
+        /// 界面提示、校验失败时的"改法"、以及日志都引它。
+        /// </summary>
+        public const string SettingsRarExePathHint =
+            "这是你自己安装 / 下载的 WinRAR 里的 Rar.exe；本程序只检测与调用，绝不随包分发（WinRAR 是共享软件）。"
+            + SettingsRarExePathEmptyHint;
+
+        /// <summary>工具状态那一行的前缀（说明"当前用的是哪一份"）。</summary>
+        public const string SettingsRarExePathStatusPrefix = "当前 Rar.exe：";
     }
 }

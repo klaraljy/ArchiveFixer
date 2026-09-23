@@ -75,6 +75,12 @@ namespace ArchiveFixer.Packing
         /// </summary>
         public const double SpaceFactor = 2.02d;
 
+        /// <summary>
+        /// 不做外层容器时的系数：只算分卷那一份（内容 × 1.02）。
+        /// 与 <see cref="SpaceFactor"/> 同一个 1.02 的由来（容器头 + 分卷边界可能略大于内容）。
+        /// </summary>
+        public const double ContentOnlySpaceFactor = 1.02d;
+
         /// <summary>额外的固定余量（外层 rar 的头、目录项、以及别处同时在写的零碎）。</summary>
         public const long SpaceMarginBytes = 32L * 1024 * 1024;
 
@@ -87,8 +93,25 @@ namespace ArchiveFixer.Packing
         /// <summary>输出文件夹 B（全路径）。</summary>
         public string OutputFolder { get; init; } = string.Empty;
 
-        /// <summary>结果 rar 的全路径（默认与 B 同级：<c>&lt;B&gt;.rar</c>）。</summary>
+        /// <summary>结果 rar 的全路径（默认与 B 同级：<c>&lt;B&gt;.rar</c>）；外层容器是 7z / 不做外层时不参与。</summary>
         public string RarPath { get; init; } = string.Empty;
+
+        /// <summary>外层 7z 容器的全路径（默认与 B 同级：<c>&lt;B&gt;.7z</c>）；外层容器是 rar / 不做外层时不参与。</summary>
+        public string SevenZipOuterPath { get; init; } = string.Empty;
+
+        /// <summary>外层容器（用户 2026-09-23 决定：三选一；默认 rar）。</summary>
+        public PackOuterContainer OuterContainer { get; init; } = PackOuterContainer.Rar;
+
+        /// <summary>
+        /// 本次**实际会产出**的外层容器路径（不做外层时是空串）。
+        /// 界面摘要、落点提示、校验与失败正文都读这一个 —— 免得三处各推一遍、推歪了没人发现。
+        /// </summary>
+        public string OuterPath => OuterContainer switch
+        {
+            PackOuterContainer.SevenZip => SevenZipOuterPath,
+            PackOuterContainer.None => string.Empty,
+            _ => RarPath
+        };
 
         /// <summary>分卷的基名（<c>&lt;A 名&gt;.7z</c>）；实际的卷名由 7z 在它后面加 <c>.001</c>。</summary>
         public string VolumeBaseName => string.IsNullOrWhiteSpace(SourceFolderName)
@@ -110,8 +133,12 @@ namespace ArchiveFixer.Packing
         /// <summary>预计分卷数（<c>ceil(内容 / 分卷大小)</c>，内容为 0 时是 0 —— 那种请求会被拒）。</summary>
         public long PlannedVolumeCount => ComputeVolumeCount(ContentBytes, VolumeSizeBytes);
 
-        /// <summary>需要多少空余空间（内容 × 2.02 + 32 MiB 余量）。</summary>
-        public long RequiredSpaceBytes => ComputeRequiredSpace(ContentBytes);
+        /// <summary>
+        /// 需要多少空余空间。**按外层容器算**：有外层时是"分卷一份 + 外层再存一份"（×2.02），
+        /// 不做外层时只有分卷那一份（×1.02）—— 后者正是"不做外层"这条出路省空间的地方，
+        /// 摘要行里写"不需要多一份空间"就必须真的不按两份要。
+        /// </summary>
+        public long RequiredSpaceBytes => ComputeRequiredSpace(ContentBytes, OuterContainer.HasOuterArtifact());
 
         /// <summary>分卷大小的人读写法（<c>512 MiB</c>）。</summary>
         public string VolumeSizeText => FormatVolumeSize(VolumeSizeBytes);
@@ -121,6 +148,14 @@ namespace ArchiveFixer.Packing
         {
             return $"按每个分卷上限 {VolumeSizeText} 估算，会切出约 {PlannedVolumeCount} 卷"
                  + $"（内容 {TaskSpaceEstimate.FormatSize(ContentBytes)}；实际卷数取决于压缩后的体积）";
+        }
+
+        /// <summary>外层容器的人读一句话（日志 / 摘要行用；把"落在哪个文件"一起说清）。</summary>
+        public string DescribeOuterContainer()
+        {
+            return OuterContainer.HasOuterArtifact()
+                ? $"外层容器：{OuterContainer.Describe()} → {OuterPath}"
+                : $"外层容器：{OuterContainer.Describe()} → 不产出外层文件，结果就是 B 里的分卷";
         }
 
         /// <summary>
@@ -168,12 +203,23 @@ namespace ArchiveFixer.Packing
         /// <summary>空间需求：内容 × 2.02 + 32 MiB（饱和加法，绝不回绕成负数）。</summary>
         public static long ComputeRequiredSpace(long contentBytes)
         {
+            return ComputeRequiredSpace(contentBytes, includeOuterCopy: true);
+        }
+
+        /// <summary>
+        /// 空间需求：内容 ×（1.02 或 2.02）+ 32 MiB。
+        /// <paramref name="includeOuterCopy"/> = false 表示"不做外层容器"，只算分卷那一份。
+        /// </summary>
+        public static long ComputeRequiredSpace(long contentBytes, bool includeOuterCopy)
+        {
             if (contentBytes <= 0)
             {
                 return SpaceMarginBytes;
             }
 
-            double scaled = contentBytes * SpaceFactor;
+            double factor = includeOuterCopy ? SpaceFactor : ContentOnlySpaceFactor;
+
+            double scaled = contentBytes * factor;
 
             long content = scaled >= long.MaxValue ? long.MaxValue : (long)Math.Ceiling(scaled);
 
@@ -210,6 +256,19 @@ namespace ArchiveFixer.Packing
         /// <summary>默认的结果 rar：与 B 同级，<c>&lt;B 名&gt;.rar</c>（B 是 <c>X_打包</c> 时就是 <c>X_打包.rar</c>）。</summary>
         public static string DefaultRarPath(string outputFolder)
         {
+            return DefaultOuterPath(outputFolder, ".rar");
+        }
+
+        /// <summary>
+        /// 默认的外层 7z 容器：与 B 同级，<c>&lt;B 名&gt;.7z</c>（与 <see cref="DefaultRarPath"/> 一一对应）。
+        /// </summary>
+        public static string DefaultSevenZipOuterPath(string outputFolder)
+        {
+            return DefaultOuterPath(outputFolder, ".7z");
+        }
+
+        private static string DefaultOuterPath(string outputFolder, string extension)
+        {
             if (string.IsNullOrWhiteSpace(outputFolder))
             {
                 return string.Empty;
@@ -224,7 +283,7 @@ namespace ArchiveFixer.Packing
                 return string.Empty;
             }
 
-            return Path.Combine(parent, name + ".rar");
+            return Path.Combine(parent, name + extension);
         }
 
         /// <summary>
@@ -295,6 +354,16 @@ namespace ArchiveFixer.Packing
                 return false;
             }
 
+            // 外层 7z 容器与 rar 一一对应（同一个 B、同一个位置），不给用户第二个输入框：
+            // 落点规则两条容器完全一样，多一个框只会多一处能填错的地方。
+            string sevenZipOuterPath = DefaultSevenZipOuterPath(output);
+
+            if (request.OuterContainer == PackOuterContainer.SevenZip && string.IsNullOrWhiteSpace(sevenZipOuterPath))
+            {
+                error = "推不出外层 7z 容器的路径，请手动指定一个输出文件夹。";
+                return false;
+            }
+
             string name = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
             if (string.IsNullOrWhiteSpace(name))
@@ -303,7 +372,8 @@ namespace ArchiveFixer.Packing
                 return false;
             }
 
-            string? reject = ValidatePlacement(source, output, rarPath);
+            string outerPath = request.OuterContainer == PackOuterContainer.SevenZip ? sevenZipOuterPath : rarPath;
+            string? reject = ValidatePlacement(source, output, outerPath, request.OuterContainer);
 
             if (reject != null)
             {
@@ -317,6 +387,8 @@ namespace ArchiveFixer.Packing
                 SourceFolderName = name,
                 OutputFolder = output,
                 RarPath = rarPath,
+                SevenZipOuterPath = sevenZipOuterPath,
+                OuterContainer = request.OuterContainer,
                 VolumeSizeBytes = request.VolumeSizeBytes,
                 ContentBytes = scan.Bytes,
                 FileCount = scan.FileCount,
@@ -333,21 +405,41 @@ namespace ArchiveFixer.Packing
         /// <list type="number">
         /// <item><description><b>B 在 A 里面</b>：分卷会落进被扫描的源文件夹里 —— 越打越多，
         /// 而且 7z 正在读的目录正在被自己写（用户点名要拒的那一条）。</description></item>
-        /// <item><description><b>rar 在 B 里面</b>：外层 rar 会把自己装进去（用户点名要拒的那一条）。</description></item>
-        /// <item><description><b>rar 在 A 里面</b>：不变量 12 —— 源目录里一个字节都不许写。</description></item>
-        /// <item><description><b>A 在 B 里面</b>：rar 装的是整个 B，于是源文件被原样再存一份
+        /// <item><description><b>外层容器在 B 里面</b>：外层容器会把自己装进去（用户点名要拒的那一条）。</description></item>
+        /// <item><description><b>外层容器在 A 里面</b>：不变量 12 —— 源目录里一个字节都不许写。</description></item>
+        /// <item><description><b>A 在 B 里面</b>：外层容器装的是整个 B，于是源文件被原样再存一份
         /// （结果比预期大一倍，且"结果 = 压缩包 B"这句话就不成立了）。</description></item>
         /// </list>
+        ///
+        /// <para><b>按容器分岔</b>：不做外层（<see cref="PackOuterContainer.None"/>）时没有外层产物，
+        /// 那三条"外层容器落在哪"的判据自然都不适用 —— 但"B 在 A 里面"与"A 在 B 里面"照旧拒绝：
+        /// 前者让源目录越打越多，后者让源文件与产物混在同一个目录里（不变量 12：源目录、工作区、
+        /// 最终输出三者相互独立）。</para>
         /// </summary>
-        public static string? ValidatePlacement(string sourceFolder, string outputFolder, string rarPath)
+        /// <param name="sourceFolder">源文件夹 A。</param>
+        /// <param name="outputFolder">输出文件夹 B。</param>
+        /// <param name="outerPath">外层产物路径（不做外层时传空串）。</param>
+        /// <param name="container">外层容器（默认 rar，与早先只有 rar 时的口径一致）。</param>
+        public static string? ValidatePlacement(
+            string sourceFolder,
+            string outputFolder,
+            string outerPath,
+            PackOuterContainer container = PackOuterContainer.Rar)
         {
             string source = SafeGetFullPath(sourceFolder);
             string output = SafeGetFullPath(outputFolder);
-            string rar = SafeGetFullPath(rarPath);
+            bool hasOuter = container.HasOuterArtifact();
+            string outer = hasOuter ? SafeGetFullPath(outerPath) : string.Empty;
+            string noun = container.Noun();
 
-            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(output) || string.IsNullOrWhiteSpace(rar))
+            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(output))
             {
-                return "路径推不出来（源文件夹 / 输出文件夹 / 结果 rar 三样都要有）。";
+                return "路径推不出来（源文件夹 / 输出文件夹两样都要有）。";
+            }
+
+            if (hasOuter && string.IsNullOrWhiteSpace(outer))
+            {
+                return $"推不出外层容器的路径（{container.Describe()}），请手动指定一个。";
             }
 
             if (PathEquals(source, output))
@@ -361,39 +453,42 @@ namespace ArchiveFixer.Packing
                      + "分卷会落进正在打包的目录，越打越多。请把 B 放到 A 外面（默认位置就在 A 的同级）。";
             }
 
-            if (IsInside(rar, output))
+            if (hasOuter && IsInside(outer, output))
             {
-                return $"结果 rar 不能放在输出文件夹 B 里面（B：{output}；rar：{rar}）——"
-                     + "外层 rar 会把自己装进去。默认位置是 B 的同级。";
+                return $"{noun}不能放在输出文件夹 B 里面（B：{output}；{noun}：{outer}）——"
+                     + "外层容器会把自己装进去。默认位置是 B 的同级。";
             }
 
-            if (IsInside(rar, source))
+            if (hasOuter && IsInside(outer, source))
             {
-                return $"结果 rar 不能放在源文件夹 A 里面（A：{source}；rar：{rar}）——"
+                return $"{noun}不能放在源文件夹 A 里面（A：{source}；{noun}：{outer}）——"
                      + "源目录里不写任何东西（避免把打包结果又打进去一次）。";
             }
 
             if (IsInside(source, output))
             {
-                return $"源文件夹 A 在输出文件夹 B 里面（A：{source}；B：{output}）——"
-                     + "外层 rar 装的是整个 B，会把源文件原样再存一份。请把 B 放到 A 外面。";
+                return hasOuter
+                    ? $"源文件夹 A 在输出文件夹 B 里面（A：{source}；B：{output}）——"
+                      + $"外层容器（{noun}）装的是整个 B，会把源文件原样再存一份。请把 B 放到 A 外面。"
+                    : $"源文件夹 A 在输出文件夹 B 里面（A：{source}；B：{output}）——"
+                      + "源文件与打包产物会混在同一个目录里（两者必须相互独立）。请把 B 放到 A 外面。";
             }
 
-            if (Directory.Exists(rar))
+            if (hasOuter && Directory.Exists(outer))
             {
-                return $"结果 rar 的路径被一个同名文件夹占着：{rar}。请换一个名字。";
+                return $"{noun}的路径被一个同名文件夹占着：{outer}。请换一个名字。";
             }
 
-            if (File.Exists(rar))
+            if (hasOuter && File.Exists(outer))
             {
                 // 与不变量 3 同一口径：冲突**不默认覆盖**。
-                return $"结果文件已存在（不会默认覆盖）：{rar}。请先把旧的改名 / 移走，或换一个输出文件夹。";
+                return $"结果文件已存在（不会默认覆盖）：{outer}。请先把旧的改名 / 移走，或换一个输出文件夹。";
             }
 
             if (Directory.Exists(output) && !IsDirectoryEmpty(output))
             {
                 return $"输出文件夹已存在且不为空：{output}。"
-                     + "打包只往**空文件夹**里写（B 里的东西最后会被整个装进 rar，混进旧文件会让结果不对）。"
+                     + "打包只往**空文件夹**里写（B 里的东西最后会被整个装进外层容器，混进旧文件会让结果不对）。"
                      + "请先清空它、或另选一个文件夹。";
             }
 

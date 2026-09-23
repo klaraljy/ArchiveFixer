@@ -39,9 +39,9 @@ namespace ArchiveFixer.ViewModels
     /// <para><b>一屏、没有向导</b>（docs/打包功能.md §7）：源文件夹 A → 输出文件夹 B →
     /// 分卷大小 → 密码（+ 可选的外层独立密码）→ 摘要行 → 开始 → 进度 + 当前步骤 → 结果区。</para>
     ///
-    /// <para><b>没有 Rar.exe 时开始按钮不禁用</b>：给一个可勾的「只做 7z 分卷」，
-    /// 让用户看得见发生了什么，而不是一个灰着不解释的按钮。勾了就不做外层 rar，
-    /// 结果直接是 B 里的分卷。</para>
+    /// <para><b>没有 Rar.exe 时开始按钮不禁用</b>：外层容器是**三选一**（rar / 7z / 不做外层），
+    /// 让用户看得见发生了什么、并且有一条**不需要额外安装**的路（外层 7z），
+    /// 而不是一个灰着不解释的按钮、也不是程序替他换容器。</para>
     ///
     /// <para><b>密码只存内存</b>：不写设置、不进日志（日志只写"已设置密码"）。界面上的
     /// 「复制密码」是给用户自己用的出口。</para>
@@ -62,7 +62,7 @@ namespace ArchiveFixer.ViewModels
         private string _outerPassword = string.Empty;
         private string _outerConfirmPassword = string.Empty;
         private bool _useSeparateOuterPassword;
-        private bool _skipOuterRar;
+        private PackOuterContainer _outerContainer = PackOuterContainer.Rar;
 
         private string _summaryText = string.Empty;
         private string _placementText = string.Empty;
@@ -76,7 +76,7 @@ namespace ArchiveFixer.ViewModels
         private string _resultTitle = string.Empty;
         private string _resultText = string.Empty;
         private string _resultKind = string.Empty;
-        private string _resultRarPath = string.Empty;
+        private string _resultOuterPath = string.Empty;
 
         private PackingNoticeKind _noticeKind = PackingNoticeKind.None;
         private string _noticeText = string.Empty;
@@ -222,18 +222,74 @@ namespace ArchiveFixer.ViewModels
         /// <summary>外层密码输入框可用（勾了上面那个才有意义）。</summary>
         public bool OuterPasswordEnabled => UseSeparateOuterPassword;
 
-        /// <summary>只做 7z 分卷、跳过外层 rar（没有 Rar.exe 时的那条出路）。</summary>
-        public bool SkipOuterRar
+        /// <summary>
+        /// 外层容器（用户 2026-09-23 决定：三选一）。**默认 rar**（用户 2026-09-22 的原始要求）。
+        ///
+        /// <para>界面用三个单选按钮绑下面的 bool 属性；这里是真正的值，建请求时只读它。</para>
+        /// </summary>
+        public PackOuterContainer OuterContainer
         {
-            get => _skipOuterRar;
-            set
+            get => _outerContainer;
+            private set
             {
-                if (SetProperty(ref _skipOuterRar, value))
+                if (SetProperty(ref _outerContainer, value))
                 {
+                    OnPropertyChanged(nameof(OuterContainerIsRar));
+                    OnPropertyChanged(nameof(OuterContainerIsSevenZip));
+                    OnPropertyChanged(nameof(OuterContainerIsNone));
+
                     RefreshSummary();
                 }
             }
         }
+
+        /// <summary>外层容器 = rar（默认；需要本机已装的 WinRAR）。</summary>
+        public bool OuterContainerIsRar
+        {
+            get => OuterContainer == PackOuterContainer.Rar;
+            set
+            {
+                if (value)
+                {
+                    OuterContainer = PackOuterContainer.Rar;
+                }
+            }
+        }
+
+        /// <summary>外层容器 = 7z（**无需额外安装**：7-Zip 是 LGPL，随程序分发）。</summary>
+        public bool OuterContainerIsSevenZip
+        {
+            get => OuterContainer == PackOuterContainer.SevenZip;
+            set
+            {
+                if (value)
+                {
+                    OuterContainer = PackOuterContainer.SevenZip;
+                }
+            }
+        }
+
+        /// <summary>不做外层容器（只出 B 里的 7z 分卷）。</summary>
+        public bool OuterContainerIsNone
+        {
+            get => OuterContainer == PackOuterContainer.None;
+            set
+            {
+                if (value)
+                {
+                    OuterContainer = PackOuterContainer.None;
+                }
+            }
+        }
+
+        /// <summary>外层容器 rar 那一项现在的说法（含"需要本机已装的 WinRAR"与许可边界）。</summary>
+        public string OuterRarOptionText => PackOuterContainer.Rar.Describe();
+
+        /// <summary>外层容器 7z 那一项现在的说法（含"无需额外安装（7-Zip 是 LGPL，随程序分发）"）。</summary>
+        public string OuterSevenZipOptionText => PackOuterContainer.SevenZip.Describe();
+
+        /// <summary>不做外层那一项现在的说法。</summary>
+        public string OuterNoneOptionText => PackOuterContainer.None.Describe();
 
         // ────────────────────────── 摘要与外部工具状态 ──────────────────────────
 
@@ -283,8 +339,14 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>没有 Rar.exe 时要显眼说出来的那段话（含两条出路）。</summary>
+        /// <summary>没有 Rar.exe 时要显眼说出来的那段话（正文）。</summary>
         public string RarMissingText => StatusText.PackNeedRar;
+
+        /// <summary>
+        /// 没有 Rar.exe 时的**三条出路**（用户 2026-09-23 决定：加"外层容器改 7z"这条）。
+        /// 界面与失败原因引的是同一份措辞（<see cref="StatusText.PackThreeWaysOut"/>）。
+        /// </summary>
+        public string RarMissingWaysText => StatusText.PackThreeWaysOut;
 
         /// <summary>没有 Rar.exe（界面据此把"只做 7z 分卷"这一段显示出来）。</summary>
         public bool HasNoRar => !RarAvailable;
@@ -354,21 +416,21 @@ namespace ArchiveFixer.ViewModels
             private set => SetProperty(ref _resultKind, value ?? string.Empty);
         }
 
-        /// <summary>结果 rar 的路径（没做外层 / 失败时为空）。</summary>
-        public string ResultRarPath
+        /// <summary>外层产物的路径（"不做外层" / 失败时为空的）。</summary>
+        public string ResultOuterPath
         {
-            get => _resultRarPath;
+            get => _resultOuterPath;
             private set
             {
-                if (SetProperty(ref _resultRarPath, value ?? string.Empty))
+                if (SetProperty(ref _resultOuterPath, value ?? string.Empty))
                 {
-                    OnPropertyChanged(nameof(HasRarResult));
+                    OnPropertyChanged(nameof(HasOuterResult));
                 }
             }
         }
 
-        /// <summary>有结果 rar（结果区显示出路径与「打开输出目录」）。</summary>
-        public bool HasRarResult => !string.IsNullOrWhiteSpace(ResultRarPath);
+        /// <summary>有外层产物（结果区显示出路径与「打开输出目录」）。</summary>
+        public bool HasOuterResult => !string.IsNullOrWhiteSpace(ResultOuterPath);
 
         /// <summary>分卷清单（名字 + 各自大小）。</summary>
         public ObservableCollection<PackingVolumeRow> Volumes { get; } = new();
@@ -472,7 +534,7 @@ namespace ArchiveFixer.ViewModels
                 OutputFolder = OutputFolder,
                 VolumeSizeBytes = volumeBytes,
                 Password = Password,
-                SkipOuterRar = SkipOuterRar
+                OuterContainer = OuterContainer
             };
 
             if (volumeError.Length > 0)
@@ -494,12 +556,21 @@ namespace ArchiveFixer.ViewModels
                 + (plan.UnreadableCount > 0 ? $"（其中 {plan.UnreadableCount} 个条目读不到大小）" : string.Empty)
                 + $"；每个分卷上限 {plan.VolumeSizeText}，预计 {plan.PlannedVolumeCount} 卷"
                 + Environment.NewLine
-                + $"需要空余空间：约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}"
-                + "（分卷一份 + 外层 rar 再存一份）";
+                + $"外层容器：{plan.OuterContainer.ShortName()}"
+                + $"；需要空余空间：约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}"
+                + (plan.OuterContainer.HasOuterArtifact()
+                    ? "（分卷一份 + 外层容器再存一份）"
+                    : "（不做外层容器：只有分卷这一份，不需要再多一份空间）");
 
-            PlacementText = SkipOuterRar
-                ? $"分卷落在：{plan.OutputFolder}"
-                : $"分卷落在：{plan.OutputFolder}" + Environment.NewLine + $"结果 rar：{plan.RarPath}";
+            /*
+             * 落点必须把"**实际**产物是什么、在哪"写清楚：外层有 rar / 7z / 不做三种，
+             * 只说"分卷落在 B"会让用户分不清到底会不会多出一个 .rar。
+             */
+            PlacementText = plan.OuterContainer.HasOuterArtifact()
+                ? $"分卷落在：{plan.OutputFolder}" + Environment.NewLine
+                  + $"外层容器（{plan.OuterContainer.ShortName()}）：{plan.OuterPath}"
+                : $"分卷落在：{plan.OutputFolder}" + Environment.NewLine
+                  + "不做外层容器：结果就是上面这些 .7z.001/.002/…（没有 .rar / .7z 外层文件）";
         }
 
         /// <summary>
@@ -558,7 +629,7 @@ namespace ArchiveFixer.ViewModels
                 VolumeSizeBytes = volumeBytes,
                 Password = Password,
                 OuterPassword = UseSeparateOuterPassword ? OuterPassword : string.Empty,
-                SkipOuterRar = SkipOuterRar
+                OuterContainer = OuterContainer
             };
 
             if (!PackingPlan.TryCreate(request, out PackingPlan? plan, out string planError) || plan == null)
@@ -661,9 +732,9 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                if (!string.IsNullOrWhiteSpace(ResultRarPath))
+                if (!string.IsNullOrWhiteSpace(ResultOuterPath))
                 {
-                    directory = Path.GetDirectoryName(ResultRarPath);
+                    directory = Path.GetDirectoryName(ResultOuterPath);
                 }
 
                 if (string.IsNullOrWhiteSpace(directory))
@@ -721,13 +792,15 @@ namespace ArchiveFixer.ViewModels
             }
 
             HasResult = true;
-            ResultRarPath = result.RarPath ?? string.Empty;
+            ResultOuterPath = result.OuterPath ?? string.Empty;
 
             switch (result.State)
             {
                 case PackingState.Succeeded:
                     ResultKind = "Success";
-                    ResultTitle = result.SkippedOuterRar ? StatusText.PackPartialVolumesOnly : StatusText.PackSuccess;
+                    ResultTitle = result.OuterContainer.HasOuterArtifact()
+                        ? StatusText.PackSuccess
+                        : StatusText.PackPartialVolumesOnly;
                     Info(result.Describe());
                     break;
 
@@ -744,7 +817,27 @@ namespace ArchiveFixer.ViewModels
                     break;
             }
 
+            /*
+             * 结果区要把**实际产物**说全：外层是什么容器、落在哪个文件；不做外层时也要说清
+             * "就是 B 里这几个分卷"，失败时更要说清"外层没生成"—— 而不是留一个空白的路径行让用户猜。
+             */
+            string outerLine;
+
+            if (!string.IsNullOrWhiteSpace(result.OuterPath))
+            {
+                outerLine = $"外层产物（{result.OuterContainer.ShortName()}）：{result.OuterPath}";
+            }
+            else if (result.OuterContainer.HasOuterArtifact())
+            {
+                outerLine = $"外层产物：没有生成（这次选的容器是「{result.OuterContainer.ShortName()}」）。";
+            }
+            else
+            {
+                outerLine = "没有外层容器文件（选的是「不做外层容器」）。";
+            }
+
             ResultText = result.Describe() + Environment.NewLine
+                + outerLine + Environment.NewLine
                 + $"分卷在：{plan.OutputFolder}（{result.Volumes.Count} 个）" + Environment.NewLine
                 + StatusText.PackKeepFolderHint;
 
@@ -758,7 +851,7 @@ namespace ArchiveFixer.ViewModels
             ResultTitle = string.Empty;
             ResultText = string.Empty;
             ResultKind = string.Empty;
-            ResultRarPath = string.Empty;
+            ResultOuterPath = string.Empty;
             Volumes.Clear();
         }
 

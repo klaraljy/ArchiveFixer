@@ -337,7 +337,47 @@
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="140,0,0,10"
                                    TextWrapping="Wrap"
-                                   Text="留空 = 自动（已装的 WinRAR 目录 → 程序内置 tools\unrar）。只解压、不改包：程序不会调用建包 / 修包命令。7z.exe 的路径在下方「高级设置」里改。" />
+                                   Text="留空 = 自动（已装的 WinRAR 目录 → 程序内置 tools\unrar）。UnRAR 只用来解压：程序不会拿它建包 / 修包。7z.exe 的路径在下方「高级设置」里改；打包要用的 Rar.exe 是下面单独那一格。" />
+
+                        <!--
+                            Rar.exe 路径（**打包**做外层 rar 时用；用户 2026-09-23 决定加这一格）。
+                            ⚠ 文案必须写明许可边界：这是用户自己装的 WinRAR 里的那一份，
+                              程序只检测与调用，绝不随包分发（WinRAR 是共享软件，RARLAB 的 EULA
+                              §3.1/§3.2/§3.3/§10 禁止随其它软件包分发）。留空 = 自动用已装目录里那份。
+                        -->
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="140" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Text="Rar.exe 路径："
+                                       Style="{StaticResource LabelTextStyle}" />
+
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding CustomRarExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="{Binding RarExePathHint}" />
+
+                            <Button Grid.Column="2"
+                                    Content="浏览…"
+                                    MinWidth="72"
+                                    Margin="8,0,0,0"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    Command="{Binding SelectRarExeCommand}"
+                                    ToolTip="选你自己安装 / 下载的 WinRAR 里的 Rar.exe（程序不会复制、也不会随包分发它）" />
+                        </Grid>
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="140,0,0,4"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding RarExePathHint}" />
+
+                        <!-- 工具状态那一行：用的是自选的那份还是已装目录那份（不变量 14）。 -->
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="140,0,0,10"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding RarToolStatusText}" />
 
                         <!--
                             保留受损文件（-kb，默认关）。依据 docs/WinRAR功能参考.md §2 C 组（§6 更正记录第 1 条）。
