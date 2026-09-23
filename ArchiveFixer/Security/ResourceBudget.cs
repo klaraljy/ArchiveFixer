@@ -60,6 +60,17 @@ namespace ArchiveFixer.Security
 
         /// <summary>最长条目的完整路径字符数；没有清单时为 0。</summary>
         public int LongestPathLength { get; init; }
+
+        /// <summary>
+        /// 这次拒绝是不是**因为目标盘空间不足**（而不是单文件 / 文件数 / 总量 / 展开比超限）。
+        ///
+        /// <para>
+        /// 为什么要单独标出来：两者对用户的含义完全不同 —— 空间不足是"清一下盘 / 换个盘就能继续"，
+        /// 而"超出预算上限"是"这个包本身太大 / 疑似压缩炸弹"。调用方据此落成不同的状态
+        /// （<c>StatusText.DiskSpaceInsufficient</c> 而不是「解压失败」），用户才知道该去动什么。
+        /// </para>
+        /// </summary>
+        public bool IsSpaceShortage { get; init; }
     }
 
     /// <summary>
@@ -109,7 +120,7 @@ namespace ArchiveFixer.Security
              */
             if (list == null || !list.Success)
             {
-                string? unknownListSpaceShortage = CheckFreeSpace(freeSpaceBytes, 0);
+                (string? unknownListSpaceShortage, bool unknownSpaceShortage) = CheckFreeSpace(freeSpaceBytes, 0);
 
                 if (unknownListSpaceShortage != null)
                 {
@@ -119,7 +130,8 @@ namespace ArchiveFixer.Security
                         Reason = $"引擎未能提供条目清单（本应改为运行时预算），但{unknownListSpaceShortage}",
                         EstimatedTotalSize = 0,
                         ExpansionRatio = 0d,
-                        FreeSpaceBytes = freeSpaceBytes
+                        FreeSpaceBytes = freeSpaceBytes,
+                        IsSpaceShortage = unknownSpaceShortage
                     };
                 }
 
@@ -235,11 +247,23 @@ namespace ArchiveFixer.Security
             }
 
             // 规则 4：目标盘空间。
-            string? spaceShortage = CheckFreeSpace(freeSpaceBytes, totalSize);
+            (string? spaceShortage, bool isSpaceShortage) = CheckFreeSpace(freeSpaceBytes, totalSize);
 
             if (spaceShortage != null)
             {
-                return Reject(spaceShortage, totalSize, expansionRatio, freeSpaceBytes, pathLength);
+                BudgetCheckResult rejected = Reject(spaceShortage, totalSize, expansionRatio, freeSpaceBytes, pathLength);
+
+                return new BudgetCheckResult
+                {
+                    Allowed = false,
+                    Reason = rejected.Reason,
+                    EstimatedTotalSize = rejected.EstimatedTotalSize,
+                    ExpansionRatio = rejected.ExpansionRatio,
+                    FreeSpaceBytes = rejected.FreeSpaceBytes,
+                    PathLengthWarning = rejected.PathLengthWarning,
+                    LongestPathLength = rejected.LongestPathLength,
+                    IsSpaceShortage = isSpaceShortage
+                };
             }
 
             string ratioText = archiveSizeBytes > 0
@@ -304,12 +328,15 @@ namespace ArchiveFixer.Security
         /// <summary>
         /// 空间判断：<c>可用 - 预计需要 &lt; 需要保留</c> 就拒绝。
         /// 取不到可用空间（null）时不判定 —— 不知道就不说"不够"，也不说"够"。
+        ///
+        /// <para>返回的第二个值标出"这次拒绝是空间原因"：调用方据此落
+        /// 「磁盘空间不足」而不是泛泛的「解压失败」（两者的处置办法完全不同）。</para>
         /// </summary>
-        private string? CheckFreeSpace(long? freeSpaceBytes, long estimatedTotalSize)
+        private (string? Reason, bool IsSpaceShortage) CheckFreeSpace(long? freeSpaceBytes, long estimatedTotalSize)
         {
             if (!freeSpaceBytes.HasValue)
             {
-                return null;
+                return (null, false);
             }
 
             long available = freeSpaceBytes.Value;
@@ -318,12 +345,16 @@ namespace ArchiveFixer.Security
             // 两个数都是非负，减法不会溢出（最坏也只是到 -long.MaxValue）。
             if (available - required >= _options.MinFreeSpaceReserveBytes)
             {
-                return null;
+                return (null, false);
             }
 
-            return $"目标盘可用空间不足：可用 {available} 字节（{FormatSize(available)}），" +
-                   $"解压预计需要 {required} 字节（{FormatSize(required)}），" +
-                   $"且需要保留 {_options.MinFreeSpaceReserveBytes} 字节（{FormatSize(_options.MinFreeSpaceReserveBytes)}）";
+            return (
+                $"目标盘可用空间不足：可用 {available} 字节（{FormatSize(available)}），" +
+                $"解压预计需要 {required} 字节（{FormatSize(required)}），" +
+                $"且需要保留 {_options.MinFreeSpaceReserveBytes} 字节（{FormatSize(_options.MinFreeSpaceReserveBytes)}），" +
+                $"按此计算还差 {_options.MinFreeSpaceReserveBytes - (available - required)} 字节" +
+                $"（{FormatSize(_options.MinFreeSpaceReserveBytes - (available - required))}）",
+                true);
         }
 
         /// <summary>

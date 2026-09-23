@@ -110,7 +110,44 @@ namespace ArchiveFixer.ViewModels
         private const int MaxPasswordFailureNamesInDialog = 10;
 
         private CancellationTokenSource? _operationCts;
+        /// <summary>
+        /// 正在跑的任务各自的取消源。
+        ///
+        /// <para>⚠ <b>必须加锁访问</b>（2026-09-22：默认并发由 1 提到 4 之后暴露的真缺陷）：
+        /// 每个任务在**自己的线程**上加/删这个列表，而 <see cref="CancelCurrentTask"/> 在 UI 线程上读它。
+        /// 旧的裸 <c>List</c> 写法在并发下会直接把内部数组搞坏 ——
+        /// 实测到的现象是收尾时抛 <c>ArgumentOutOfRangeException</c>（<c>List.RemoveAt</c> 越界），
+        /// 一个任务因此变成「未知错误」，而不是它本来的结论。</para>
+        /// </summary>
         private readonly List<CancellationTokenSource> _runningTaskCts = new();
+
+        private readonly object _runningTaskCtsLock = new();
+
+        private void TrackRunningTask(CancellationTokenSource cts)
+        {
+            lock (_runningTaskCtsLock)
+            {
+                _runningTaskCts.Add(cts);
+            }
+        }
+
+        private void UntrackRunningTask(CancellationTokenSource cts)
+        {
+            lock (_runningTaskCtsLock)
+            {
+                _runningTaskCts.Remove(cts);
+            }
+        }
+
+        /// <summary>取一份快照（取消时**在锁外**逐个 Cancel：Cancel 会触发回调，不能拿着锁做）。</summary>
+        private List<CancellationTokenSource> SnapshotRunningTasks()
+        {
+            lock (_runningTaskCtsLock)
+            {
+                return _runningTaskCts.ToList();
+            }
+        }
+
         private bool _isExtracting;
 
         /*
@@ -191,6 +228,106 @@ namespace ArchiveFixer.ViewModels
         /// 没出过就不提（免得每次跑完都念一遍）。
         /// </summary>
         private bool _batchHadPasswordFailures;
+
+        /*
+         * ===== 空间规划 + 危险模式（用户 2026-09-22 需求）=====
+         *
+         * 三件互相咬合的东西，都在这一批里活着：
+         * · _ledger         —— 空间预留账本：并发时"已经许出去多少空间"的唯一记账处。
+         *                      没有它，5G 与 6G 两个包会各自看到"还剩 10G"然后一起开跑。
+         * · _runtime        —— 逐任务的运行期记录（预留了多少、开工前的可用空间、危险模式删了多少）。
+         *                      自测证据与"跳过报告"都从这里取数；key 是任务路径。
+         * · _refinedEstimates —— 解压前那一遍 list 算出来的**精确**空间需求（按任务路径存）。
+         *                      自测的空间曲线要用它的"内容物"那一项，而任务对象上没有这个字段
+         *                      （Models\ArchiveTask.cs 不在本批授权范围内，也就不去动它）。
+         */
+
+        /// <summary>本批的空间预留账本（串行时也建，只是永远只有一个任务在账上）。</summary>
+        private SpaceReservationLedger? _spaceLedger;
+
+        private readonly object _spaceRuntimeLock = new();
+
+        /*
+         * ⚠ 两张表都用**任务对象本身**做键，不用路径 —— 这一点有实际后果：
+         * 源包搬进其余物之后，协调器会把 task.CurrentPath 改写到新位置（决策 D-12 要求的回写）。
+         * 用路径当键的话，同一个任务在"搬之前"与"搬之后"会落进两个不同的格子：
+         * 自测读证据时拿到的是全新的一份（RestPurged=false、可用空间 -1），于是"明明删掉了却报没删"。
+         * ArchiveTask 没有重写 Equals，字典默认就是引用相等 —— 正是这里要的语义。
+         */
+        private readonly Dictionary<ArchiveTask, ScheduledTaskRuntime> _spaceRuntime = new();
+
+        private readonly Dictionary<ArchiveTask, TaskSpaceEstimate> _refinedEstimates = new();
+
+        /// <summary>
+        /// 危险模式：本批因为"空间不足"被跳过（没启动）的任务。
+        /// 批末要**如实报告**它们各自需要多少 —— 静默跳过是明令禁止的。
+        /// </summary>
+        private readonly List<(string Name, long RequiredBytes, long AvailableBytes, long ShortfallBytes)> _spaceBlockedTasks = new();
+
+        /*
+         * 自测期间把危险模式**临时**打开（用户 2026-09-22 要求的协议：先拿 2×并发数 个文件真跑一遍）。
+         *
+         * 为什么是一个运行期开关而不是"先把设置改成 true 再跑"：
+         * ① 自测没通过时设置必须**保持原样**（一个字节都不许被写）；
+         * ② 设置是落盘的，而自测是一个可能中途失败的动作 —— 写到盘上的 true 会留在那里。
+         */
+        private bool _dangerModeArmedForSelfTest;
+
+        /// <summary>正在跑的自测证据收集器（不在自测时为 null）。</summary>
+        private DangerModeSelfTestRecorder? _selfTestRecorder;
+
+        /// <summary>
+        /// 本批实际生效的危险模式。
+        ///
+        /// <para>⚠ 它是**批首定一次**的（<see cref="PrepareDangerModeForBatch"/>），不是每次读设置现算：
+        /// 自测期间要强制开（<c>_dangerModeArmedForSelfTest</c>），平时还要求"自测凭证盖得住本批的并发档"。
+        /// 默认 false —— 没经过批首的路径（例如单独解压一个包）永远按普通档走，不会顺手删东西。</para>
+        /// </summary>
+        private bool IsDangerModeActive => _dangerModeActiveThisBatch;
+
+        /// <summary>本批危险模式是否真的生效（批首定一次）。</summary>
+        private bool _dangerModeActiveThisBatch;
+
+        /// <summary>本批"开着但自测凭证盖不住"的说明（空 = 没有这种情况）。</summary>
+        private string _dangerModeNotCoveredReason = string.Empty;
+
+        /// <summary>逐任务的运行期记账（并发下多个任务同时写，所以全部走锁）。</summary>
+        private sealed class ScheduledTaskRuntime
+        {
+            /// <summary>当前账上给这个任务预留的字节数（开工时是粗估，拿到清单后可能被调整）。</summary>
+            public long ReservedBytes;
+
+            /// <summary>它开工前的可用空间（-1 = 取不到）——自测的空间曲线要它。</summary>
+            public long AvailableBeforeStart = -1;
+
+            /// <summary>它收尾（含危险模式删除）之后的可用空间（-1 = 取不到）。</summary>
+            public long AvailableAfterFinish = -1;
+
+            /// <summary>其余物是不是被彻底删掉了。</summary>
+            public bool RestPurged;
+
+            /// <summary>彻底删除释放的字节数。</summary>
+            public long PurgedBytes;
+
+            /// <summary>危险模式动作没做成时的原因（空 = 没出问题）。</summary>
+            public string PurgeNote = string.Empty;
+        }
+
+        /// <summary>
+        /// 自测的进度与样本台账。
+        ///
+        /// <para>它只记"这一批自测在处理哪几个文件、并发几" —— 逐文件的结果在
+        /// <see cref="_spaceRuntime"/> 里（那是所有任务共用的运行期记账，不专为自测而生）。
+        /// 两处分开的好处：自测中断（用户点取消）时，已经跑完的那几个文件的结果照样是完整的。</para>
+        /// </summary>
+        private sealed class DangerModeSelfTestRecorder
+        {
+            public int ParallelCount { get; init; }
+
+            public int RequiredSampleSize { get; init; }
+
+            public List<ArchiveTask> Samples { get; } = new();
+        }
 
         public ExtractionCoordinator(
             MainViewModel vm,
@@ -3440,7 +3577,8 @@ namespace ArchiveFixer.ViewModels
         /// **不管磁盘、不管别的程序**，跑成什么样由用户自己负责；界面上的勾选框文案把这一点写明了。
         /// </para>
         /// <para>
-        /// 关着时读设置项 <see cref="AppSettings.MaxParallelExtractCount"/>（1–8，默认 1 = 串行）。
+        /// 关着时读设置项 <see cref="AppSettings.MaxParallelExtractCount"/>（1–8，默认 4 ——
+        /// 2026-09-22 的并行实测：并发 1→4 是 3.08×，4→8 只再快 1.9% 却把单包耗时拉长一倍）。
         /// 夹一次是兜底：设置对象不一定走过 <c>AppSettings.Normalize</c>（测试里直接 new），
         /// 0 或负数会让"等并发位"的循环条件永远成立 —— 那个任务会永远等下去。
         /// </para>
@@ -3796,7 +3934,18 @@ namespace ArchiveFixer.ViewModels
 
             window.Content = root;
 
-            // 焦点给输入框，但**不**调用 Activate()/Topmost 之类抢前台的手段（AGENTS.md §13）。
+            /*
+             * 提醒（用户 2026-09-22 反馈的原话：「密码本那个窗口弹出来之后躲到主窗口后面了，
+             * 只有声音、没有闪烁，声音还很轻」）。
+             *
+             * ⚠ 这一条**修正**了本方法早先那句"不置前、不 Topmost"的注释：那个口径来自 AGENTS.md §13，
+             * 而 §13 管的是**代理脚本不许抢用户前台**（免得用户没法干别的事）。这里是**程序自己**
+             * 在"整批卡在等密码"时把输入框拎出来 —— 用户明确要求这个行为，两者不冲突。
+             * 强度是 Strong：一直闪任务栏（闪到被点）+ 连响三声。
+             */
+            ArchiveFixer.Helpers.WindowAttention.Attach(window, ArchiveFixer.Helpers.AttentionStrength.Strong);
+
+            // 焦点给输入框（窗口被激活之后才拿得到键盘焦点）。
             window.Loaded += (_, _) => passwordBox.Focus();
 
             window.ShowDialog();
@@ -4127,6 +4276,9 @@ namespace ArchiveFixer.ViewModels
             // 手动密码只对**本次运行**有效（不变量 5：绝不落盘）：批开始时重新问一次、重新记一次。
             ResetManualBatchPassword();
 
+            // 空间规划与本批记账清零（见 finally 里的说明：清在**批首**，自测才读得到这一批的证据）。
+            ResetSpacePlanningState();
+
             try
             {
                 try
@@ -4158,10 +4310,48 @@ namespace ArchiveFixer.ViewModels
 
                 int maxParallel = ResolveMaxParallel(selectedTasks, out bool fullSpeed);
 
+                /*
+                 * ===== 空间规划 + 空间门（用户 2026-09-22 需求第 1 / 2 条）=====
+                 *
+                 * 顺序：
+                 * ① 按空间需求**从小到大**排序（用户点名的反例：一开始就去解 5G+6G，两个都跑不动）；
+                 * ② 算出"按当前可用空间，最多能并行几个"，与用户选的档位一起写进日志；
+                 * ③ 每个任务**启动之前**再判一次空间（不是只在计划时判一次）——
+                 *    空间是随跑随变的，计划时的数字只能当建议（见 SpaceReservationLedger 的说明）。
+                 *
+                 * ⚠ 排序只影响**执行顺序**，不动任务列表本身：用户在列表里看到的顺序、
+                 * 任务的 Index 都不变（改列表顺序会让"我刚才是第 3 个"这种对照失效）。
+                 */
+                ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, maxParallel);
+
+                PrepareDangerModeForBatch(maxParallel);
+
+                foreach (string line in plan.DescribeLines())
+                {
+                    AppendLog("INFO", line);
+                }
+
+                if (IsDangerModeActive)
+                {
+                    LogDangerModeArmed();
+                }
+                else if (!string.IsNullOrWhiteSpace(_dangerModeNotCoveredReason))
+                {
+                    LogDangerModeNotCovered();
+                }
+
+                _spaceLedger = new SpaceReservationLedger(
+                    ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)),
+                    ReserveSpaceBytes);
+
+                AppendLog("INFO", "空间账面：" + _spaceLedger.Describe());
+
                 var runningTasks = new List<Task>();
 
-                foreach (ArchiveTask task in selectedTasks)
+                foreach (ScheduledExtractionItem item in plan.Ordered)
                 {
+                    ArchiveTask task = item.Task;
+
                     if (IsStopping || _operationCts.IsCancellationRequested)
                     {
                         AppendLog("WARN", "已停止后续任务，不再启动新的解压任务。");
@@ -4223,7 +4413,30 @@ namespace ArchiveFixer.ViewModels
                         AppendLog("INFO", $"「{task.FileName}」等到空位，开始解压。");
                     }
 
-                    runningTasks.Add(ProcessExtractTaskAsync(task, oneClickRun));
+                    /*
+                     * 空间门（**启动之前**判，用户 2026-09-22 需求第 1 条）。
+                     *
+                     * 判据里含"已经在跑的任务预留了多少"（账本），所以 5G+6G 这种组合里
+                     * 第二个大包会在启动前就被拦下，而不是等它写到一半才报磁盘满。
+                     * 拦下时**跳过它、继续看后面的**（后面的包可能更小、正好塞得下）——
+                     * 全部排完再一次性报告哪些被跳过、各需要多少。
+                     */
+                    ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
+
+                    SpaceGateDecision gate = _spaceLedger.TryReserve(
+                        item.RequiredBytes,
+                        item.Estimate.ReclaimableBytes);
+
+                    if (!gate.Allowed)
+                    {
+                        MarkSpaceBlocked(task, item, gate);
+                        continue;
+                    }
+
+                    runtime.ReservedBytes = gate.ProbeFailed ? 0L : item.RequiredBytes;
+                    runtime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
+
+                    runningTasks.Add(RunScheduledTaskAsync(task, oneClickRun, runtime));
                 }
 
                 // 等待所有已启动的任务结束（包括“停止后续”后仍在运行的任务）。
@@ -4235,6 +4448,14 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 AppendLog("INFO", "批量解压完成");
+
+                /*
+                 * **如实报告**被空间门跳过的任务（用户 2026-09-22 需求第 2 条：
+                 * "全部排不下时如实报告哪些包因为空间不足被跳过、各自需要多少，不要静默跳过"）。
+                 *
+                 * 每一条都带具体数字与建议动作 —— 这一行往往是用户唯一能拿到的行动线索。
+                 */
+                ReportSpaceBlockedTasks();
 
                 /*
                  * 询问次数写进日志：决策 D-4 要求"本批只问一次"，这一行就是它的证据 ——
@@ -4281,14 +4502,786 @@ namespace ArchiveFixer.ViewModels
                 // 由调用方重新给一份 —— 这样"覆盖"永远不会悄悄延续到别的批次上。
                 _runOptions = null;
 
+                /*
+                 * 空间规划与本批记账同样"只活这一批"：
+                 * 上一批的账本必须丢掉（下一批的可用空间与任务集都变了）；
+                 * 自测的临时开关也必须落回原状 —— 它只在一次自测里有效。
+                 *
+                 * ⚠ **_spaceRuntime / _refinedEstimates 刻意不在这里清**：自测要在这条批跑完之后
+                 * 才去读逐任务的记账（删了多少、空间曲线怎么走），在这里清掉等于让自测永远拿不到证据。
+                 * 它们由批**开始时**的 ResetSpacePlanningState 清 —— 与其它批级记账同一套时机。
+                 */
+                _spaceLedger = null;
+                _dangerModeArmedForSelfTest = false;
+
+                // 批级开关也要落回原状：它只对这一批有效（下一批会重新按当时的档位与凭证判定）。
+                _dangerModeActiveThisBatch = false;
+                _dangerModeNotCoveredReason = string.Empty;
+
                 UpdateSummary();
             }
+        }
+
+        // ================================================================ 空间规划 + 危险模式
+
+        /// <summary>
+        /// 给界面算一次"按当前可用空间，最多能并行几个"（用户 2026-09-22 需求第 2 条）。
+        ///
+        /// <para>它与真正开跑时用的是**同一段实现**（<see cref="BuildSchedulePlan"/>），
+        /// 所以界面上显示的建议与日志里那一刻的调度口径不会分叉 ——
+        /// "界面写一个数、跑起来按另一个数"正是本项目最不能接受的那类形态。</para>
+        ///
+        /// <para>⚠ 它会 stat 每个源包（以及分卷的每一卷），所以调用方要放后台线程。</para>
+        /// </summary>
+        internal ExtractionSchedulePlan BuildSpaceAdvice(IReadOnlyList<ArchiveTask> tasks)
+        {
+            int requested = Math.Clamp(Settings.MaxParallelExtractCount, 1, ExtractionScheduler.ParallelCeiling);
+
+            return BuildSchedulePlan(tasks ?? Array.Empty<ArchiveTask>(), requested);
+        }
+
+        /// <summary>
+        /// 供界面显示的"当前空间档位"一句话（危险模式是否生效也在这句里说清）。
+        /// </summary>
+        internal string DescribeSpaceMode()
+        {
+            string danger = Settings.DangerousSpaceModeEnabled
+                ? "危险模式：**已开启**（每个任务成功后立刻彻底删它的其余物，源包不可还原）"
+                : "危险模式：关闭（其余物按默认档处理）";
+
+            string stamp = DangerModeSelfTestStamp.Describe(Settings.DangerModeSelfTestStamp);
+
+            /*
+             * 开着但凭证盖不住当前档位时，这句话必须说出来 —— 它是界面上"当前空间档位"的权威一句，
+             * 只写"已开启"会让人以为边解边删正在起作用。
+             */
+            string coverage = Settings.DangerousSpaceModeEnabled &&
+                              !DangerModeSelfTestStamp.Covers(Settings.DangerModeSelfTestStamp, ResolveParallelCountForDisplay())
+                ? "；⚠ 但自测凭证盖不住当前并发档，本批不生效（" + StatusText.DangerModeNotCoveredBySelfTest + "）"
+                : string.Empty;
+
+            return danger + (string.IsNullOrWhiteSpace(stamp) ? "；还没有自测凭证" : "；" + stamp) + coverage;
+        }
+
+        /// <summary>界面上那句"当前档位"用的并发数（与真正开跑时同一个口径：设置项 1–8）。</summary>
+        private int ResolveParallelCountForDisplay()
+        {
+            return Math.Clamp(Settings.MaxParallelExtractCount, 1, MaxParallelExtractCountCeiling);
+        }
+        /// <summary>本批探测可用空间用的路径（一次定住：同一批里所有判断都对着同一块盘，数字才可比）。</summary>
+        private string _spaceProbePath = string.Empty;
+
+        /// <summary>
+        /// 可用空间探测（可注入）。
+        ///
+        /// <para>为什么必须留这个口子：真机上没法把盘写成只剩 3 MiB，而"空间不足就不启动"这条
+        /// 是本批最核心的行为之一 —— 只靠读代码是证明不了的。单测用它造一块假盘。</para>
+        /// </summary>
+        internal Func<string, long?>? SpaceProbeOverride { get; set; }
+
+        /// <summary>
+        /// 要保留的余量（可注入）。默认取 <see cref="SpaceGate.DefaultReserveBytes"/>（512 MiB）。
+        /// 单测里不调小它，任何几十字节的样本都会被那 512 MiB 拦下 —— 那样测的就不是被测逻辑了。
+        /// </summary>
+        internal long? SpaceReserveOverride { get; set; }
+
+        private long? ProbeAvailableSpace(string path)
+        {
+            return SpaceProbeOverride != null
+                ? SpaceProbeOverride(path)
+                : SpaceChecker.GetAvailableFreeSpace(path);
+        }
+
+        private long ReserveSpaceBytes => SpaceReserveOverride ?? SpaceGate.DefaultReserveBytes;
+
+        /*
+         * ===== 并发下的最终目录占位（见 ExtractSingleTaskAsync 里的调用点）=====
+         *
+         * 只记"还没落盘、但已经被某个正在跑的任务要用"的目录。任务收尾即释放 ——
+         * 那一刻目录要么已经带着产物存在（后来的任务走既有的"已存在"冲突档），
+         * 要么根本没建起来（后来的任务就该用它）。
+         */
+        private readonly HashSet<string> _claimedOutputDirectories = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _outputClaimLock = new();
+
+        /// <summary>占位失败时的兜底尝试上限（与 <c>SafePathHelper.AutoRenameDirectoryPath</c> 同一个量级）。</summary>
+        private const int MaxOutputClaimAttempts = 10000;
+
+        /// <summary>
+        /// 把一个"还不存在的最终目录"在进程内占下来；被别的正在跑的任务占了就换 <c>名字(1)</c>。
+        ///
+        /// <para><c>(i)</c> 的命名规则与 <see cref="SafePathHelper.AutoRenameDirectoryPath"/> 一致
+        /// （同一个用户可见约定），区别只有一个：那里判"磁盘上有没有"，这里还要判"有没有被并发任务占下"——
+        /// 被占下的目录此刻在磁盘上还不存在，所以那个方法看不见它。</para>
+        /// </summary>
+        private string ClaimOutputDirectory(string requestedPath, ArchiveTask task, ref string outputRedirectNote)
+        {
+            lock (_outputClaimLock)
+            {
+                string candidate = requestedPath;
+
+                for (int attempt = 1; attempt <= MaxOutputClaimAttempts; attempt++)
+                {
+                    string full = SafePathHelper.GetFullPathSafe(candidate);
+
+                    if (string.IsNullOrWhiteSpace(full))
+                    {
+                        return candidate;
+                    }
+
+                    bool claimedByAnotherTask = _claimedOutputDirectories.Contains(full);
+
+                    // 磁盘上真出现了也算"占不到"（TOCTOU 的温和版本：两次系统调用之间别人建了）。
+                    bool existsOnDisk = Directory.Exists(candidate);
+
+                    if (!claimedByAnotherTask && !existsOnDisk)
+                    {
+                        _claimedOutputDirectories.Add(full);
+
+                        if (!string.Equals(candidate, requestedPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            /*
+                             * 与"目录已存在"那条路同一口径：实际落点与打算的落点不一致**不许静默**。
+                             * 日志 + outputRedirectNote（会进任务详情的校验结论）+ task.OutputPath 回写，三处都要有。
+                             */
+                            string note =
+                                $"原定输出目录 {requestedPath} 正被另一个正在解压的任务使用，本次实际输出到 {candidate}";
+
+                            outputRedirectNote = string.IsNullOrWhiteSpace(outputRedirectNote)
+                                ? note
+                                : outputRedirectNote + "；" + note;
+
+                            AppendLog(
+                                "WARN",
+                                $"{task.FileName}：同一个名字的包正在并行解压，为避免两个任务写进同一个目录，" +
+                                $"本次落成 {candidate}（绝不合并、绝不覆盖）。");
+                        }
+
+                        return candidate;
+                    }
+
+                    try
+                    {
+                        string? parent = Path.GetDirectoryName(requestedPath);
+                        string name = Path.GetFileName(requestedPath);
+
+                        if (string.IsNullOrWhiteSpace(parent) || string.IsNullOrWhiteSpace(name))
+                        {
+                            return candidate;
+                        }
+
+                        candidate = Path.Combine(parent, $"{name}({attempt})");
+                    }
+                    catch
+                    {
+                        return candidate;
+                    }
+                }
+
+                return candidate;
+            }
+        }
+
+        /// <summary>释放最终目录占位（任务收尾时调；没占过就是一次空操作）。</summary>
+        private void ReleaseOutputDirectoryClaim(string? outputPath)
+        {
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                return;
+            }
+
+            string full = SafePathHelper.GetFullPathSafe(outputPath);
+
+            if (string.IsNullOrWhiteSpace(full))
+            {
+                return;
+            }
+
+            lock (_outputClaimLock)
+            {
+                _claimedOutputDirectories.Remove(full);
+            }
+        }
+
+        /// <summary>
+        /// 批首清零空间规划与本批记账（账本、逐任务运行期记录、精确估算、被跳过的清单）。
+        /// </summary>
+        private void ResetSpacePlanningState()
+        {
+            _spaceLedger = null;
+            _spaceProbePath = string.Empty;
+
+            lock (_spaceRuntimeLock)
+            {
+                _spaceRuntime.Clear();
+                _refinedEstimates.Clear();
+            }
+
+            _spaceBlockedTasks.Clear();
+        }
+
+        private ScheduledTaskRuntime GetOrCreateRuntime(ArchiveTask task)
+        {
+            lock (_spaceRuntimeLock)
+            {
+                if (!_spaceRuntime.TryGetValue(task, out ScheduledTaskRuntime? runtime))
+                {
+                    runtime = new ScheduledTaskRuntime();
+                    _spaceRuntime[task] = runtime;
+                }
+
+                return runtime;
+            }
+        }
+
+        /// <summary>
+        /// 排一次执行计划：按空间需求从小到大排序 + 算建议并行数。
+        ///
+        /// <para>估算用**粗估**（只 stat 文件）而不是逐个列目录：50–200 个包的场景下，
+        /// 为了排序去把每个包的目录都列一遍，等于在"还没开始解"之前先跑一遍整批。
+        /// 真正的精确值在解压前的预检里算（那时本来就要列目录），并会在开工后调整预留。</para>
+        /// </summary>
+        private ExtractionSchedulePlan BuildSchedulePlan(IReadOnlyList<ArchiveTask> tasks, int requestedParallel)
+        {
+            _spaceProbePath = ResolveSpaceProbePath(tasks);
+
+            return ExtractionScheduler.Build(
+                tasks,
+                SpaceEstimator.FromSourceFiles,
+                ProbeAvailableSpace(_spaceProbePath),
+                ReserveSpaceBytes,
+                requestedParallel);
+        }
+
+        /// <summary>
+        /// 本批探测哪块盘：优先归集目标目录（开了归集时产物最终都落那儿），
+        /// 其次是第一个任务的输出目录，最后退回源包所在目录。
+        /// </summary>
+        private string ResolveSpaceProbePath(IReadOnlyList<ArchiveTask> tasks)
+        {
+            if (Settings.CollectResultsToDirectory && !string.IsNullOrWhiteSpace(Settings.CollectTargetDirectory))
+            {
+                return Settings.CollectTargetDirectory;
+            }
+
+            foreach (ArchiveTask task in tasks ?? Array.Empty<ArchiveTask>())
+            {
+                string path = ResolveSpaceProbePathForTask(task);
+
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    return path;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string ResolveSpaceProbePathForTask(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return string.Empty;
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.OutputPath))
+            {
+                return task.OutputPath;
+            }
+
+            return task.DirectoryPath;
+        }
+
+        private string ResolveSpaceProbePathOrBatch(ArchiveTask task)
+        {
+            string path = ResolveSpaceProbePathForTask(task);
+
+            return string.IsNullOrWhiteSpace(path) ? _spaceProbePath : path;
+        }
+
+        /// <summary>
+        /// 空间门拦下：任务**不启动**，状态落「磁盘空间不足」，原因里带具体数字与建议动作。
+        ///
+        /// <para>为什么用这个状态而不是「解压失败」：归档本身没有任何问题，连开始都没开始 ——
+        /// 用户要做的是清空间 / 换盘 / 用危险模式，而不是去怀疑包坏了。</para>
+        /// </summary>
+        private void MarkSpaceBlocked(ArchiveTask task, ScheduledExtractionItem item, SpaceGateDecision gate)
+        {
+            MarkSpaceBlockedCore(
+                task,
+                gate.ToLogLine() + $"（{item.Estimate.Describe()}；依据：{item.Estimate.Basis}）",
+                item.RequiredBytes,
+                gate.AvailableBytes,
+                gate.ShortfallBytes);
+        }
+
+        /// <summary>
+        /// 空间门拦下的共用落点（启动前与解压前预检两条路都走它）：
+        /// 状态、错误信息、日志、批末报告清单**一次写全**。
+        /// </summary>
+        private void MarkSpaceBlockedCore(
+            ArchiveTask task,
+            string message,
+            long requiredBytes,
+            long availableBytes,
+            long shortfallBytes)
+        {
+            task.Status = StatusText.DiskSpaceInsufficient;
+            task.ProgressText = StatusText.ProgressFailed;
+            task.Operation = StatusText.OpExtract;
+            task.ErrorMessage = message;
+            task.EndTime = DateTime.Now;
+            task.LastUpdatedTime = DateTime.Now;
+
+            // 措辞用"未解压"而不是"未启动"：这一条同时覆盖两条路 —— 批调度里根本没开跑的那些，
+            // 以及跑起来之后在解压前预检里被拦下的那些（那时引擎一个字节都还没写）。
+            AppendLog("ERROR", $"空间不足，未解压：{task.FileName} —— {message}");
+
+            _spaceBlockedTasks.Add((
+                string.IsNullOrWhiteSpace(task.FileName) ? task.CurrentPath : task.FileName,
+                requiredBytes,
+                availableBytes,
+                shortfallBytes));
+        }
+
+        /// <summary>
+        /// 批末如实报告被空间门跳过的任务（不变量：不许静默跳过）。
+        /// 一条汇总 + 逐个点名"需要多少、差多少、当时可用多少"。
+        /// </summary>
+        private void ReportSpaceBlockedTasks()
+        {
+            if (_spaceBlockedTasks.Count == 0)
+            {
+                return;
+            }
+
+            AppendLog(
+                "WARN",
+                $"空间不足，本批跳过 {_spaceBlockedTasks.Count} 个任务（一个字节都没动过）：");
+
+            foreach ((string name, long required, long available, long shortfall) in _spaceBlockedTasks)
+            {
+                AppendLog(
+                    "WARN",
+                    $"  跳过：{name} —— 需要 {TaskSpaceEstimate.FormatSize(required)}，"
+                    + $"当时可用 {(available < 0 ? "未知" : TaskSpaceEstimate.FormatSize(available))}，"
+                    + $"差 {TaskSpaceEstimate.FormatSize(shortfall)}");
+            }
+
+            AppendLog(
+                "WARN",
+                "处理办法：清理「其余物」腾空间 / 换一个空间更大的输出盘 / "
+                + "把「最大并发解压数」调小，或在通过自测后改用危险模式（边解边彻底删其余物）。");
+        }
+
+        /// <summary>
+        /// 跑一个任务：解压 → （危险模式）立刻彻底删其余物 → 释放预留 + 刷新可用空间。
+        ///
+        /// <para>⚠ 顺序是刻意的：删除发生在**任务收尾之后、释放预留之前**。
+        /// 这样"危险模式回收回来的空间"会出现在下一个任务的空间门判断里（这正是它能解决空间不够的原因），
+        /// 而账本上的预留仍然按"这些字节还在盘上"来算，绝不会提前把它许给别的任务。</para>
+        /// </summary>
+        private async Task RunScheduledTaskAsync(ArchiveTask task, bool oneClickRun, ScheduledTaskRuntime runtime)
+        {
+            try
+            {
+                await ProcessExtractTaskAsync(task, oneClickRun);
+
+                await RunDangerModePurgeAsync(task, runtime);
+            }
+            finally
+            {
+                runtime.AvailableAfterFinish = ProbeAvailableSpace(ResolveSpaceProbePathOrBatch(task))
+                                               ?? SpaceReservationLedger.UnknownAvailable;
+
+                SpaceReservationLedger? ledger = _spaceLedger;
+
+                if (ledger != null)
+                {
+                    ledger.Release(runtime.ReservedBytes);
+                    ledger.RefreshAvailable(runtime.AvailableAfterFinish >= 0 ? runtime.AvailableAfterFinish : null);
+                    runtime.ReservedBytes = 0;
+                }
+
+                LogSelfTestProgress(task);
+
+                UpdateSummary();
+            }
+        }
+
+        /// <summary>
+        /// 自测的**逐文件进度**（用户明确要求"自测要有进度与结果：哪个文件、通过/失败、为什么"）。
+        /// 每跑完一个样本就写一行，而不是憋到最后一次性吐出十条。
+        /// </summary>
+        private void LogSelfTestProgress(ArchiveTask task)
+        {
+            DangerModeSelfTestRecorder? recorder = _selfTestRecorder;
+
+            if (recorder == null)
+            {
+                return;
+            }
+
+            int total = recorder.Samples.Count;
+            int done = recorder.Samples.Count(sample => !string.IsNullOrWhiteSpace(sample.Status) &&
+                                                        sample.EndTime != null);
+
+            ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
+
+            AppendLog(
+                "INFO",
+                $"自测进度 {Math.Min(done, total)}/{total}：{task.FileName} —— "
+                + $"终态「{task.Status}」，输出校验{(task.IsOutputVerified ? "通过" : "未通过")}，"
+                + $"其余物{(runtime.RestPurged ? $"已彻底删除（释放 {TaskSpaceEstimate.FormatSize(runtime.PurgedBytes)}）" : "未删除")}"
+                + (string.IsNullOrWhiteSpace(runtime.PurgeNote) ? string.Empty : $"，说明：{runtime.PurgeNote}"));
+        }
+
+        /// <summary>
+        /// 危险模式的**唯一触发点**：任务成功了就立刻把它自己的其余物彻底删掉。
+        ///
+        /// <para>门槛全在 <see cref="RestItemPurger"/> 里（终态必须是「解压成功」+ 校验通过 + 未取消 +
+        /// 路径是本次记下来的那一条 + 落在自己的输出根之内）——这里只负责"什么时候试"和"怎么记账"。
+        /// **失败 / 部分完成 / 取消的任务一个字节都不会被删**（不变量 1 的红线）。</para>
+        /// </summary>
+        private async Task RunDangerModePurgeAsync(ArchiveTask task, ScheduledTaskRuntime runtime)
+        {
+            if (!IsDangerModeActive)
+            {
+                return;
+            }
+
+            bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
+
+            RestPurgeOutcome outcome;
+
+            try
+            {
+                // 磁盘活（量大小 + 删目录）→ 放后台，别占住 UI 线程。
+                outcome = await Task.Run(() => new RestItemPurger().Purge(task, cancelled));
+            }
+            catch (Exception ex)
+            {
+                // 这一层不该抛（RestItemPurger 内部全部收敛成结论），但"删东西"这件事
+                // 绝不允许把已经成功的解压拖成异常：结论落成"没删成"，内容物不受影响。
+                outcome = new RestPurgeOutcome
+                {
+                    Message = $"{task.FileName}：危险模式删除其余物时出现意外错误：{ex.Message}"
+                };
+            }
+
+            foreach (string line in outcome.LogLines)
+            {
+                AppendLog("INFO", line);
+            }
+
+            if (outcome.Succeeded)
+            {
+                runtime.RestPurged = true;
+                runtime.PurgedBytes = outcome.FreedBytes;
+
+                AppendLog("WARN", outcome.Message + "（这一步不可逆：源包与本任务的中间件已经不在回收站里）");
+                return;
+            }
+
+            runtime.PurgeNote = outcome.Message;
+
+            AppendLog(outcome.Attempted ? "ERROR" : "INFO", outcome.Message);
+        }
+
+        /// <summary>
+        /// 批首定一次"本批危险模式到底生不生效"。
+        ///
+        /// <para>两条独立条件：开关开着（或正在自测），**并且**自测凭证盖得住本批的并发档。
+        /// 后者是用户那条协议的直接推论 —— 自测是"拿并发数 × 2 个文件真跑一遍"，
+        /// 结论只对它跑过的那一档成立；档位调高之后拿旧凭证开这个模式等于**没测过就用了**，
+        /// 而这条路上源包会被永久删除，代价不可逆。</para>
+        ///
+        /// <para>盖不住时**不是**偷偷关掉开关，而是本批不生效 + 在日志与界面横幅上说明白：
+        /// 静默降级会让人以为"边解边删"在起作用，于是放心把盘塞满 —— 那才是真正的危险。</para>
+        /// </summary>
+        private void PrepareDangerModeForBatch(int maxParallel)
+        {
+            _dangerModeActiveThisBatch = false;
+            _dangerModeNotCoveredReason = string.Empty;
+
+            // 自测本身就是那次"证明"：它按自己的档位跑，不再要凭证（凭证正是它要产出的东西）。
+            if (_dangerModeArmedForSelfTest)
+            {
+                _dangerModeActiveThisBatch = true;
+                return;
+            }
+
+            if (!Settings.DangerousSpaceModeEnabled)
+            {
+                return;
+            }
+
+            string? stamp = Settings.DangerModeSelfTestStamp;
+
+            if (!DangerModeSelfTestStamp.Covers(stamp, maxParallel))
+            {
+                _dangerModeNotCoveredReason = DangerModeSelfTestStamp.DescribeCoverage(stamp, maxParallel);
+                return;
+            }
+
+            _dangerModeActiveThisBatch = true;
+        }
+
+        /// <summary>危险模式开着、但凭证盖不住本批并发档时的那条日志（本批一个字节都不删）。</summary>
+        private void LogDangerModeNotCovered()
+        {
+            AppendLog(
+                "WARN",
+                "⚠ " + StatusText.DangerModeNotCoveredBySelfTest
+                + " 本批所有任务按**普通档**执行：其余物照常生成（进回收站，可还原）。");
+
+            AppendLog("WARN", "原因：" + _dangerModeNotCoveredReason);
+        }
+
+        /// <summary>危险模式开启时在批首写一条"当前处于什么档位"的日志（可追溯）。</summary>
+        private void LogDangerModeArmed()
+        {
+            bool selfTest = _dangerModeArmedForSelfTest;
+
+            AppendLog(
+                "WARN",
+                $"⚠ {StatusText.DangerModeName} 已生效"
+                + (selfTest ? "（**自测**：这一批是为了验证协议，跑完就恢复原状）" : string.Empty)
+                + "：每个任务在「内容物定稿 + 输出校验通过 + 未取消」之后，会立刻把它自己的其余物"
+                + "（源包 + 中间件）**彻底删除**，不进回收站、无法还原。"
+                + "失败 / 部分完成 / 取消的任务一个字节都不删。");
+
+            foreach (string risk in StatusText.DangerModeRiskLines)
+            {
+                AppendLog("WARN", "危险模式风险：" + risk);
+            }
+
+            string stamp = DangerModeSelfTestStamp.Describe(Settings.DangerModeSelfTestStamp);
+
+            AppendLog(
+                "INFO",
+                string.IsNullOrWhiteSpace(stamp)
+                    ? "危险模式当前**没有**自测凭证（设置里手改开的会被自动关回去）。"
+                    : "危险模式自测凭证：" + stamp);
+        }
+
+        /// <summary>把解压前那一遍 list 算出来的**精确**空间需求记下来（自测的空间曲线要用）。</summary>
+        private void RecordRefinedEstimate(ArchiveTask task, TaskSpaceEstimate estimate)
+        {
+            if (task == null || estimate == null)
+            {
+                return;
+            }
+
+            lock (_spaceRuntimeLock)
+            {
+                _refinedEstimates[task] = estimate;
+            }
+        }
+
+        private TaskSpaceEstimate? TryGetRefinedEstimate(ArchiveTask task)
+        {
+            lock (_spaceRuntimeLock)
+            {
+                return _refinedEstimates.TryGetValue(task, out TaskSpaceEstimate? estimate)
+                    ? estimate
+                    : null;
+            }
+        }
+
+        /// <summary>
+        /// 拿开工时申请的预留与精确峰值对一次账：不够就加、多了就还。
+        /// 加不上（盘已经不够了）时按「磁盘空间不足」处理 —— **这一步必须在真正写盘之前**。
+        /// </summary>
+        private SpaceGateDecision ReconcileReservation(ArchiveTask task, TaskSpaceEstimate refined)
+        {
+            SpaceReservationLedger? ledger = _spaceLedger;
+
+            if (ledger == null)
+            {
+                // 没有账本（例如从别处直接调解压管线）：退化成一次直接判断，不假装知道并发情况。
+                return SpaceGate.Check(
+                    refined.PeakBytes,
+                    ProbeAvailableSpace(ResolveSpaceProbePathOrBatch(task)),
+                    ReserveSpaceBytes,
+                    0,
+                    refined.ReclaimableBytes);
+            }
+
+            ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
+            SpaceGateDecision decision = ledger.Adjust(
+                runtime.ReservedBytes,
+                refined.PeakBytes,
+                refined.ReclaimableBytes);
+
+            if (decision.Allowed && !decision.ProbeFailed)
+            {
+                runtime.ReservedBytes = refined.PeakBytes;
+            }
+
+            return decision;
+        }
+
+        /// <summary>
+        /// **危险模式自测**（用户 2026-09-22 明确要求的协议）。
+        ///
+        /// <para>「拿 2×并发数 个文件跑一次，自测通过才允许开启」——这里就是那个"跑一次"：
+        /// 真的走一遍解压管线（含空间门、定稿、校验、危险模式删除），
+        /// 然后把证据交给 <see cref="DangerModeSelfTestProtocol.Evaluate"/> 判定。</para>
+        ///
+        /// <para><b>为什么用它自己那条批而不是另写一条精简流程</b>：自测要证明的正是"真跑起来会怎样"。
+        /// 另写一条"简化版"只能证明简化版没问题 —— 那是最典型的自欺。</para>
+        ///
+        /// <para>三件事保证不越界：① 只对传进来的候选（= 用户勾选的任务）动手；
+        /// ② 跑完把勾选状态**原样还原**；③ 危险模式只是**临时**打开（<c>_dangerModeArmedForSelfTest</c>），
+        /// 设置文件一个字节都不写。</para>
+        /// </summary>
+        /// <param name="candidates">候选任务（调用方传"当前勾选的任务"）。</param>
+        internal async Task<DangerModeSelfTestVerdict> RunDangerModeSelfTestAsync(IReadOnlyList<ArchiveTask> candidates)
+        {
+            if (_isExtracting)
+            {
+                return DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
+                {
+                    BlockedReason = "当前正在批量解压，先等它跑完再自测"
+                });
+            }
+
+            int parallel = Math.Clamp(Settings.MaxParallelExtractCount, 1, ExtractionScheduler.ParallelCeiling);
+            int required = DangerModeSelfTestProtocol.RequiredSampleSize(parallel);
+
+            if (!DangerModeSelfTestProtocol.CheckPreconditions(Settings, out string precondition))
+            {
+                AppendLog("ERROR", "危险模式自测未开始：" + precondition);
+
+                return DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
+                {
+                    ParallelCount = parallel,
+                    RequiredSampleSize = required,
+                    BlockedReason = precondition
+                });
+            }
+
+            IReadOnlyList<ArchiveTask> samples =
+                DangerModeSelfTestProtocol.SelectSamples(candidates, required);
+
+            if (samples.Count < required)
+            {
+                string why =
+                    $"自测需要 {required} 个可解压的任务（当前并发档 {parallel} × {DangerModeSelfTestProtocol.SampleMultiplier}），"
+                    + $"当前勾选的任务里只凑得出 {samples.Count} 个 —— 先多勾几个，"
+                    + "或者把「最大并发解压数」调小（并发越小，要求的样本越少）。";
+
+                AppendLog("ERROR", "危险模式自测未开始：" + why);
+
+                return DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
+                {
+                    ParallelCount = parallel,
+                    RequiredSampleSize = required,
+                    BlockedReason = why
+                });
+            }
+
+            AppendLog(
+                "INFO",
+                $"危险模式自测开始：并发 {parallel}，按协议要跑 {required} 个文件，实际挑了 {samples.Count} 个"
+                + "（从需求最小的开始）。" + StatusText.DangerModeSelfTestWarning);
+
+            var recorder = new DangerModeSelfTestRecorder
+            {
+                ParallelCount = parallel,
+                RequiredSampleSize = required
+            };
+
+            recorder.Samples.AddRange(samples);
+
+            // 勾选状态快照：自测只处理样本，跑完**原样还原**（绝不顺手改用户的勾选）。
+            var selectionSnapshot = Tasks.ToDictionary(task => task, task => task.IsSelected);
+
+            _selfTestRecorder = recorder;
+            _dangerModeArmedForSelfTest = true;
+
+            try
+            {
+                foreach (ArchiveTask task in Tasks)
+                {
+                    task.IsSelected = samples.Contains(task);
+                }
+
+                // 自测走**地基路径**（oneClickRun = false）：源包处理在定稿那一刻就做，
+                // 不牵扯"续解链结束再补搬"那套延期语义 —— 自测要验的是危险模式本身。
+                await StartExtractCoreAsync(oneClickRun: false, runOptions: null);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", $"危险模式自测执行时出现意外错误：{ex.Message}");
+            }
+            finally
+            {
+                foreach (KeyValuePair<ArchiveTask, bool> pair in selectionSnapshot)
+                {
+                    pair.Key.IsSelected = pair.Value;
+                }
+
+                _dangerModeArmedForSelfTest = false;
+                _selfTestRecorder = null;
+            }
+
+            DangerModeSelfTestVerdict verdict = DangerModeSelfTestProtocol.Evaluate(BuildSelfTestEvidence(recorder));
+
+            foreach (string line in verdict.StepLines)
+            {
+                AppendLog("INFO", "自测结果 —— " + line);
+            }
+
+            foreach (string reason in verdict.FailureReasons)
+            {
+                AppendLog("ERROR", "自测不通过：" + reason);
+            }
+
+            AppendLog(verdict.Passed ? "WARN" : "ERROR", verdict.Summary);
+
+            return verdict;
+        }
+
+        /// <summary>把运行期记账翻成自测证据（逐文件：成功 / 校验 / 其余物已删 / 空间曲线）。</summary>
+        private DangerModeSelfTestEvidence BuildSelfTestEvidence(DangerModeSelfTestRecorder recorder)
+        {
+            var steps = new List<DangerModeSelfTestStep>();
+
+            foreach (ArchiveTask task in recorder.Samples)
+            {
+                ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
+                TaskSpaceEstimate? refined = TryGetRefinedEstimate(task);
+
+                steps.Add(new DangerModeSelfTestStep
+                {
+                    DisplayName = string.IsNullOrWhiteSpace(task.FileName) ? task.CurrentPath : task.FileName,
+                    TaskPath = task.CurrentPath,
+                    ExtractSucceeded = string.Equals(task.Status, StatusText.ExtractSuccess, StringComparison.Ordinal),
+                    Verified = task.IsOutputVerified,
+                    RestPurged = runtime.RestPurged,
+                    PurgedBytes = runtime.PurgedBytes,
+                    AvailableBeforeStart = runtime.AvailableBeforeStart,
+                    AvailableAfterFinish = runtime.AvailableAfterFinish,
+                    RequiredBytes = refined?.PeakBytes ?? 0L,
+                    ContentBytes = refined?.ContentBytes ?? 0L,
+                    FailureReason = string.IsNullOrWhiteSpace(runtime.PurgeNote) ? string.Empty : runtime.PurgeNote
+                });
+            }
+
+            return new DangerModeSelfTestEvidence
+            {
+                ParallelCount = recorder.ParallelCount,
+                RequiredSampleSize = recorder.RequiredSampleSize,
+                Steps = steps
+            };
         }
 
         private async Task ProcessExtractTaskAsync(ArchiveTask task, bool oneClickRun)
         {
             var taskCts = new CancellationTokenSource();
-            _runningTaskCts.Add(taskCts);
+            TrackRunningTask(taskCts);
 
             try
             {
@@ -4324,7 +5317,7 @@ namespace ArchiveFixer.ViewModels
             }
             finally
             {
-                _runningTaskCts.Remove(taskCts);
+                UntrackRunningTask(taskCts);
 
                 try
                 {
@@ -4333,6 +5326,10 @@ namespace ArchiveFixer.ViewModels
                 catch
                 {
                 }
+
+                // 释放"最终目录占位"：这一刻目录要么已经带着产物存在（后来的任务走既有的冲突档），
+                // 要么根本没建起来（后来的任务就该用它）。
+                ReleaseOutputDirectoryClaim(task.OutputPath);
 
                 UpdateSummary();
             }
@@ -4683,6 +5680,32 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * ===== 并发下的"最终目录"占位（2026-09-22：默认并发提到 4 之后暴露的竞态）=====
+             *
+             * 场景：同一个目录里 `pipe.rar` 与 `pipe.zip` 的**包基名都是 `pipe`**，
+             * 默认落点都是 `<out>\pipe`。串行时第二个会看到目录已存在、按冲突档落成 `pipe(1)`；
+             * 并发时两个任务会在同一瞬间认定"这个目录还不存在"，于是双双往同一个新目录里定稿 ——
+             * 后到的那个 `File.Move` 撞上已存在的目标，整条内容物都没搬成，任务报「解压失败」。
+             * 用户什么错都没犯，却因为并发丢了一次解压。
+             *
+             * 修法：把"这个还不存在的最终目录"在**进程内先占下来**（只占不建，用户目录里不留空壳），
+             * 占不到就按同一套 `名字(1)` 约定换一个。等这个任务收尾时释放（见 ProcessExtractTaskAsync）。
+             *
+             * 只对"目录还不存在"的情况占位：
+             * · 目录已存在时，上面的冲突档已经基于一个**看得见的事实**做完了决定（沿用 / 改名 / 跳过），
+             *   再插一手会把用户显式选的「覆盖」变成"改名"，那是另一回事；
+             * · 落点就是源目录（模式 B）时**绝不占位**：那个目录本来就是这次要整理的目标，
+             *   给它改名等于把用户的就地整理甩到旁边的 `名字(1)` 去。
+             */
+            if (!task.IsContinuationTask &&
+                !landsInSourceDirectory &&
+                !string.IsNullOrWhiteSpace(outputPath) &&
+                !Directory.Exists(outputPath))
+            {
+                outputPath = ClaimOutputDirectory(outputPath, task, ref outputRedirectNote);
+            }
+
+            /*
              * 回写**实际最终输出目录**（P1）。
              *
              * 这是"产物到底在哪"的唯一权威来源：上面可能刚把目录从 xxx 改成了 xxx(1)，
@@ -4998,13 +6021,77 @@ namespace ArchiveFixer.ViewModels
                 // 预算里的"落点"用暂存目录：引擎真正写盘的地方是它，最终目录此时还不存在。
                 BudgetCheckResult budget = new ResourceBudget().CheckBeforeExtract(preflightList, archiveSize, engineOutputPath);
 
+                /*
+                 * 精确空间需求（用户 2026-09-22 需求第 1 条：核算必须含内容物 + 过程物 + 去重后的峰值）。
+                 *
+                 * 用的是**手上这一份 list**（绝不为此再跑一次 7z：加密包每多列一次目录就多一次失败机会），
+                 * 而流程预算只算了"内容物"那一项 —— 源包在盘上还没走、抠出来的内嵌中间件、
+                 * 内层包再展开的增量、以及并发下别的任务已经占下的份额，都要在这一步一起算进来。
+                 */
+                TaskSpaceEstimate refined = SpaceEstimator.RefineWithListing(
+                    SpaceEstimator.FromSourceFiles(task),
+                    preflightList,
+                    SpaceEstimator.EstimateCarvedBytes(task, archiveSize));
+
+                RecordRefinedEstimate(task, refined);
+
                 if (!budget.Allowed)
                 {
+                    if (budget.IsSpaceShortage)
+                    {
+                        /*
+                         * 空间不够（精确值算出来的）：**不启动**，报具体数字与建议动作。
+                         * 顺手用 ReconcileReservation 把账本调准 —— 它给出的信息比预算那句话更全
+                         * （含"差多少"与三条建议）；万一它反而放行（两边估算口径不同），
+                         * 就退回预算那句话，绝不把"放行"当结论（宁可保守）。
+                         */
+                        SpaceGateDecision spaceGate = ReconcileReservation(task, refined);
+                        string spaceReason = spaceGate.Allowed ? budget.Reason : spaceGate.ToLogLine();
+
+                        MarkSpaceBlockedCore(
+                            task,
+                            spaceReason + $"（{refined.Describe()}；依据：{refined.Basis}）",
+                            refined.PeakBytes,
+                            budget.FreeSpaceBytes ?? SpaceReservationLedger.UnknownAvailable,
+                            spaceGate.Allowed ? 0L : spaceGate.ShortfallBytes);
+
+                        return;
+                    }
+
                     task.Status = StatusText.ExtractFailed;
                     task.ErrorMessage = "资源预算未通过：" + budget.Reason;
 
                     AppendLog("ERROR", $"{task.FileName}：资源预算未通过 —— {budget.Reason}");
                     return;
+                }
+
+                /*
+                 * 空间门（精确值）：够了就放行、不够就**在这里停下**（引擎一个字节都还没写）。
+                 * 它同时把本任务的预留从"粗估"调整成精确峰值 —— 并发下这一步很关键：
+                 * 估小了会让几个任务一起把盘写满，估大了会白白拦下本来能跑的任务。
+                 */
+                SpaceGateDecision preciseGate = ReconcileReservation(task, refined);
+
+                if (!preciseGate.Allowed)
+                {
+                    MarkSpaceBlockedCore(
+                        task,
+                        preciseGate.ToLogLine() + $"（{refined.Describe()}；依据：{refined.Basis}）",
+                        refined.PeakBytes,
+                        preciseGate.AvailableBytes,
+                        preciseGate.ShortfallBytes);
+
+                    return;
+                }
+
+                AppendLog("INFO", $"{task.FileName}：空间门通过（精确） —— {preciseGate.Reason}；{refined.Basis}");
+
+                if (IsDangerModeActive)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：危险模式会在定稿 + 校验通过之后彻底删除它的其余物"
+                        + $"（预计可回收 {TaskSpaceEstimate.FormatSize(refined.ReclaimableBytes)}）");
                 }
 
                 if (!string.IsNullOrWhiteSpace(budget.Reason))
@@ -5674,13 +6761,16 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
-                if (_runningTaskCts.Count == 0)
+                // 先取快照再逐个 Cancel：Cancel 会同步触发回调，不能拿着列表的锁做这件事。
+                List<CancellationTokenSource> running = SnapshotRunningTasks();
+
+                if (running.Count == 0)
                 {
                     AppendLog("WARN", "当前没有正在执行的任务可取消。");
                     return;
                 }
 
-                foreach (CancellationTokenSource cts in _runningTaskCts.ToList())
+                foreach (CancellationTokenSource cts in running)
                 {
                     try
                     {

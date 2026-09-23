@@ -108,6 +108,9 @@ namespace ArchiveFixer.Converters
                 // 达到密码尝试上限也是"这一单没拿到产物"，和它的统计分桶（解压失败）保持一致用错误色；
                 // 与"密码错误"的区别写在状态文字里（上限 = 还没试完，别让用户以为密码本错了）。
                 StatusText.PasswordAttemptLimitReached or
+                // 磁盘空间不足：连开始都没开始（空间门在解压前就拦下了），但它同样是**这一单拿不到产物**，
+                // 用错误色与"解压失败"同桶（§7 三处同改）；具体该怎么办写在 ErrorMessage 的数字与建议里。
+                StatusText.DiskSpaceInsufficient or
                 StatusText.RenameCannot or
                 "ERROR";
         }

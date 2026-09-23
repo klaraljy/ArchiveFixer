@@ -76,6 +76,21 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string PasswordAttemptLimitReached = "达到密码尝试上限";
 
+        /// <summary>
+        /// **磁盘空间不足**（用户 2026-09-22 需求第 1 条：空间不够就**不启动**该任务）。
+        ///
+        /// <para>
+        /// 它与"解压失败"分开的理由：解压失败是"这个包有问题"，而它连**开始都没开始** ——
+        /// 用户要做的事完全不同（清空间 / 换盘 / 用危险模式），把两者混在一起，
+        /// 用户会先去怀疑包坏了。<c>ErrorMessage</c> 里一定带具体数字（需要 X、可用 Y、差 Z）与建议动作。
+        /// </para>
+        /// <para>
+        /// 失败类状态：配色与统计必须与既有失败口径一致（见 <c>StatusToBrushConverter</c> 的错误色、
+        /// <c>TaskSummaryService</c> 的"解压失败"桶）——按 AGENTS.md §7 三处同改。
+        /// </para>
+        /// </summary>
+        public const string DiskSpaceInsufficient = "磁盘空间不足";
+
         public const string Cancelled = "已取消";
         public const string Skipped = "已跳过";
         public const string Overwritten = "已覆盖";
@@ -191,5 +206,77 @@ namespace ArchiveFixer.Models
         /// 否则用户会以为勾选没用 —— 那正是这次要修的缺陷。
         /// </summary>
         public const string PickTaskPromptFormat = "请先勾选或点中一个任务，再执行「{0}」。";
+
+        // ================================================================
+        // 危险模式（红按钮）：文案与风险描述
+        // ================================================================
+        //
+        // ⚠ 这一组是**界面文案的唯一来源**：确认框正文、设置窗口的开关说明、
+        //    自测通过后的提示都引用它，`docs/使用说明.md` 的「空间不够怎么办」一节照抄这份措辞。
+        //    以前那种"确认框写一套、设置里写一套、文档里再写一套"的形态，改一处漏两处，
+        //    而这里漏掉的每一句都是**用户拿不可逆操作换来的知情权**。
+
+        /// <summary>这个模式在界面上的名字（按钮 / 开关 / 日志里都用它）。</summary>
+        public const string DangerModeName = "危险模式 · 边解边彻底删其余物";
+
+        /// <summary>确认框里"这是什么"的那一段。</summary>
+        public const string DangerModeSummary =
+            "并行解压，每个任务在「内容物已定稿并按落点策略排好 + 输出校验通过 + 未取消」之后，" +
+            "立刻把它自己的「其余物」（源包 + 中间件）彻底删除（不进回收站），于是净占用基本不变 —— " +
+            "这就是它能解决「空间不够」的原因。";
+
+        /// <summary>
+        /// 风险四条（用户 2026-09-22 逐条要求写清）。顺序就是他给的顺序，**不要重排**。
+        /// </summary>
+        public static readonly string[] DangerModeRiskLines =
+        {
+            "① 源包会被永久删除（不进回收站、无法还原，只能重新下载）。",
+
+            "② 删除发生在「内容物已排好且校验通过」之后，但校验不等于你确认过内容 —— "
+            + "程序只保证该解出来的都解出来了，不保证内容就是你想要的那一份。",
+
+            "③ 中途断电 / 蓝屏 / 程序被强杀时，可能停在「源包已删、内容物未完成」的状态："
+            + "那时这一份只能重新下载。",
+
+            "④ 只在你确实没有空间时才用它；正常情况请用默认档（其余物移入回收站，可还原）。"
+        };
+
+        /// <summary>风险四条连成一段（确认框正文用）。</summary>
+        public static readonly string DangerModeRisks = string.Join(Environment.NewLine, DangerModeRiskLines);
+
+        /// <summary>
+        /// 自测协议（用户原话：「拿几个文件先测试一遍，比如并行解压是五个，你就要拿十个文件做这样的测试，
+        /// 测试成功才能告知用户可以一试，但风险还是有的」）。
+        /// </summary>
+        public const string DangerModeSelfTestProtocolText =
+            "开启之前会先跑一次自测：拿「并发数 × 2」个文件（并发 5 → 10 个文件）真的跑一遍这个模式，" +
+            "逐个检查「解压成功 + 输出校验通过 + 其余物按预期被彻底删除 + 空间曲线符合预期」。";
+
+        /// <summary>自测自己也是不可逆的：它删的就是那几个文件的源包 —— 必须提前说清。</summary>
+        public const string DangerModeSelfTestWarning =
+            "⚠ 自测本身就会永久删除这几个文件的源包（这正是要验证的动作），不可撤销。" +
+            "自测会从需求最小的文件开始挑样本。";
+
+        /// <summary>自测通过之后才说这句话（用户原话的落点）。</summary>
+        public const string DangerModeCanTry =
+            "自测通过：可以一试，但风险还是有的 —— 源包会被永久删除，无法还原。";
+
+        /// <summary>没有自测凭证时不许开启。</summary>
+        public const string DangerModeNeedsSelfTest =
+            "危险模式必须先通过一次自测才能开启（在设置里点「跑自测并开启…」）。" +
+            "跳过自测就等于跳过了唯一一次「先拿几个文件试试」的机会。";
+
+        /// <summary>
+        /// 自测凭证**盖不住当前并发档**时的说明（凭证是并发 N 的，现在调到 M &gt; N）。
+        ///
+        /// <para>为什么要有这一条：协议要求"拿并发数 × 2 个文件真跑一遍"，
+        /// 跑出来的结论只对它跑过的那一档成立。档位调高之后再拿旧凭证开这个模式，
+        /// 等于**没测过就用了**，而这条路上的代价是不可逆的（源包永久删除）。
+        /// 所以档位超出凭证覆盖范围时**本批不生效**（一个字节都不删），并在这里说清两条出路。</para>
+        /// </summary>
+        public const string DangerModeNotCoveredBySelfTest =
+            "危险模式当前不生效：自测凭证只覆盖它跑过的那一档并发。" +
+            "要么把「最大并发解压数」调回不超过凭证里的档位（本批立刻恢复生效），" +
+            "要么在新档位下重新跑一次自测（会再永久删除一批样本源包，不可撤销）。";
     }
 }

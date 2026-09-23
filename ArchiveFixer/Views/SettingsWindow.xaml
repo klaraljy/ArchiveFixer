@@ -1,6 +1,8 @@
 <Window x:Class="ArchiveFixer.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:ArchiveFixer.Models"
+        xmlns:storage="clr-namespace:ArchiveFixer.Storage"
         Style="{StaticResource AppWindowStyle}"
         Title="设置"
         Width="840"
@@ -649,13 +651,17 @@
                                        Style="{StaticResource LabelTextStyle}" />
 
                             <TextBox Grid.Column="1"
-                                     Text="{Binding Settings.MaxParallelExtractCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                     Text="{Binding Settings.MaxParallelExtractCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="1~8。主界面上也有一份同样的下拉（1 / 2 / 3 / 4 / 8），两处改的是同一个值。" />
 
                             <TextBlock Grid.Column="2"
                                        Style="{StaticResource HintTextStyle}"
                                        Margin="8,0,0,0"
                                        VerticalAlignment="Center"
-                                       Text="默认 1（串行）更稳定。" />
+                                       TextWrapping="Wrap">
+                                <Run Text="默认 4（实测：并发 1→4 吞吐 3.08×，4→8 只再快 1.9% 却把单包耗时拉长一倍）—— " />
+                                <Run Text="{x:Static storage:ProcessorTopology.ConcurrencyAdvice}" /><Run Text="。" /><LineBreak />                                <Run Text="主界面可选 1 / 2 / 3 / 4 / 8，并能按当前可用空间算出「建议并行几个」。注意：**并发越高，同时在盘上的峰值越大** —— 空间不够时程序会在启动前拦下装不下的任务（状态显示「磁盘空间不足」，并写明需要多少、差多少）。" />
+                            </TextBlock>
                         </Grid>
                     </StackPanel>
                 </GroupBox>
@@ -701,6 +707,87 @@
                                        Foreground="{StaticResource WarningTextBrush}"
                                        TextWrapping="Wrap"
                                        Text="⚠ 删除不可逆。默认关闭。它只在上面「源包处理」选了「留在原地」时的手动「只解压」路径上参与（那是「传统解压器 + 解压后清理源包」的老组合）；默认的「移入其余物」档下它不参与 —— 否则刚搬进其余物的源包会被立刻删掉。只有「解压成功 + 输出校验通过」才会删；校验不通过、被取消、只完成一部分时一律不删。" />
+                        </Border>
+
+                        <Separator Margin="0,10,0,10" />
+
+                        <!--
+                            ==================== 危险模式（红按钮） ====================
+                            这一组每个控件都要**写明副作用**（用户 2026-09-22 需求第 4 条）。
+                            风险四条的文案来源是 StatusText.DangerModeRiskLines：
+                            确认框、这里、docs\使用说明.md 共用同一份措辞（在 XAML 里绑 X=Static 拿不到数组，
+                            所以下面是逐条抄的**同一份文本**，改动时必须一起改 —— 测试里钉住了这两处一致）。
+                        -->
+                        <TextBlock Text="危险模式 · 边解边彻底删其余物"
+                                   Style="{StaticResource CardTitleTextStyle}"
+                                   Foreground="{StaticResource DangerTextBrush}"
+                                   Margin="0,0,0,4" />
+
+                        <CheckBox Content="开启危险模式（并行解压，每个任务成功后立刻彻底删除它自己的其余物）"
+                                  IsChecked="{Binding Settings.DangerousSpaceModeEnabled, Mode=TwoWay}"
+                                  Foreground="{StaticResource DangerTextBrush}"
+                                  ToolTip="开启后：任务在「内容物已定稿并按落点策略排好 + 输出校验通过 + 未取消」之后，它的其余物（源包 + 中间件）会被永久删除，不进回收站。净占用因此基本不变 —— 这是它唯一能解决「空间不够」的原因。" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="22,2,0,4"
+                                   TextWrapping="Wrap"
+                                   Text="副作用：① 只影响**成功**的任务 —— 失败 / 部分完成 / 取消的任务一个字节都不删（源包原地不动）；② 删除是**彻底删除**，不进回收站、无法还原，只能重新下载；③ 它同时会删掉本次解压产生的中间件（分卷、内层包），所以「其余物」目录会消失；④ 关闭它不会把已经删掉的东西找回来。" />
+
+                        <Border Background="{StaticResource DangerSoftBrush}"
+                                BorderBrush="{StaticResource DangerBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{StaticResource CardCornerRadius}"
+                                Padding="{StaticResource BannerPadding}"
+                                Margin="0,4,0,4">
+                            <StackPanel>
+                                <TextBlock Text="风险（必须知道这四条）"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource DangerTextBrush}" />
+
+                                <TextBlock Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Margin="0,3,0,0"
+                                           Text="① 源包会被永久删除（不进回收站、无法还原，只能重新下载）。" />
+
+                                <TextBlock Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Text="② 删除发生在「内容物已排好且校验通过」之后，但校验不等于你确认过内容 —— 程序只保证该解出来的都解出来了，不保证内容就是你想要的那一份。" />
+
+                                <TextBlock Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Text="③ 中途断电 / 蓝屏 / 程序被强杀时，可能停在「源包已删、内容物未完成」的状态：那时这一份只能重新下载。" />
+
+                                <TextBlock Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Text="④ 只在你确实没有空间时才用它；正常情况请用默认档（其余物移入回收站，可还原）。" />
+
+                                <TextBlock Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Margin="0,3,0,0"
+                                           Text="开启之前必须先跑一次自测（主界面的红色「⚠ 危险模式」按钮）：拿「并发数 × 2」个文件真的跑一遍，逐个检查解压成功 + 校验通过 + 其余物按预期被删 + 空间曲线符合预期；自测不过就拒绝开启。自测本身也会永久删除那几个样本文件的源包。" />
+
+                                <TextBlock Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Margin="0,3,0,0"
+                                           Text="{x:Static models:StatusText.DangerModeSelfTestWarning}" />
+
+                                <TextBlock Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Margin="0,3,0,0"
+                                           Text="{Binding Settings.DangerModeSelfTestStamp, StringFormat={}自测凭证：{0}}" />
+
+                                <TextBlock Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap"
+                                           Text="凭证为空 = 没自测过：这时**开关会被自动关回去**（手改配置文件也一样），必须在主界面点红色按钮跑一次自测。" />
+                            </StackPanel>
                         </Border>
                     </StackPanel>
                 </GroupBox>

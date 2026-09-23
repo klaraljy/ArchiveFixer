@@ -225,7 +225,69 @@ namespace ArchiveFixer.Models
 
         public bool UseGlobalPasswordForAllTasks { get; set; } = true;
 
-        public int MaxParallelExtractCount { get; set; } = 1;
+        /// <summary>
+        /// 同时解压几个包（1~8，**默认 4**）。
+        ///
+        /// <para>
+        /// 默认值 2026-09-22 由 1 改成 4，依据是**并行实测**（真样本、三档、逐字节校验）：
+        /// 并发 1→4 的吞吐是 **3.08×**（保守口径 2.70×），而 4→8 只再快 **1.9%** ——
+        /// 但单包耗时从 6.63 s 涨到 10.91 s（+108%）、整机 CPU 均值从 48.7% 涨到 72.7%。
+        /// 根因是**6 物理核超订**：第 1 波 8 个并发的单包耗时 11.9–14.2 s，降到 4 个立刻回到 5.9–6.8 s。
+        /// 所以"4"是这台机器上的拐点：拿满了并行收益，又不把机器拖到超订。
+        /// 正确性三档 **36/36 逐字节一致**，界面心跳三档都没有 &gt;400 ms 的卡顿，取消语义 6/6 通过。
+        /// </para>
+        ///
+        /// <para>
+        /// ⚠ 它与空间无关：**并发越高，同时在盘上的峰值越大** —— 空间不够时仍由空间门在启动前拦下
+        /// （见 <c>Storage/SpaceGate.cs</c> 与 <c>Storage/SpaceReservationLedger.cs</c>）。
+        /// 设置界面在它旁边给一句"建议不超过物理核心数（当前检测到 N 核）"。
+        /// </para>
+        /// </summary>
+        public int MaxParallelExtractCount { get; set; } = DefaultMaxParallelExtractCount;
+
+        /// <summary>
+        /// 并发数的出厂默认值（**4**，见 <see cref="MaxParallelExtractCount"/> 的实测依据）。
+        ///
+        /// <para>单独提出来是为了让"默认值"在代码里只有一个来源：
+        /// <see cref="CreateDefault"/> 与属性初始化器都引用它，改一处就够了。</para>
+        /// </summary>
+        public const int DefaultMaxParallelExtractCount = 4;
+
+        /// <summary>
+        /// **危险模式**开关（用户 2026-09-22 需求第 3 条：红色警告按钮）。
+        ///
+        /// <para>
+        /// 语义：并行解压，每个任务在「内容物已定稿并按落点策略排好 + 输出校验通过 + 未取消」之后，
+        /// 立刻把它自己的「其余物」（源包 + 中间件）**彻底删除**（不进回收站），于是净占用基本不变 ——
+        /// 这就是它能解决"空间不够"的原因。
+        /// </para>
+        ///
+        /// <para>⚠ <b>三条硬约束</b>（违反任何一条都等于把红线拆了）：</para>
+        /// <list type="number">
+        /// <item><description><b>默认关</b>，且**没有自测凭证时不许开**
+        /// （<see cref="DangerModeSelfTestStamp"/> 为空 → <see cref="Normalize"/> 强制关回来）。</description></item>
+        /// <item><description>每个任务的删除都走 <c>Storage/RestItemPurger</c> 的五条门槛：
+        /// 终态必须是「解压成功」+ 输出校验通过 + 未取消 + 路径是本次记下来的那一条 +
+        /// 落在自己的输出根之内。**失败 / 部分完成 / 取消的任务一个字节都不删**（不变量 1 的红线）。</description></item>
+        /// <item><description>风险四条写在界面上（<c>StatusText.DangerModeRisks</c>），
+        /// 确认框 + 设置说明 + <c>docs/使用说明.md</c> 共用同一份措辞。</description></item>
+        /// </list>
+        /// </summary>
+        public bool DangerousSpaceModeEnabled { get; set; } = false;
+
+        /// <summary>
+        /// 「危险模式自测通过」的凭证（见 <c>Storage/DangerModeSelfTestStamp</c>）。
+        ///
+        /// <para>
+        /// 空 = **没自测过**：这时 <see cref="DangerousSpaceModeEnabled"/> 无论怎么改都开不起来
+        /// （<see cref="Normalize"/> 会把它关回去）。它挡的正是"手改 json 绕过整条自测协议"这条路。
+        /// </para>
+        /// <para>
+        /// 内容形如 <c>自测通过|2026-09-22 21:30:00|并发=2|样本=4</c>：一行可读文本，
+        /// 用户自己看得懂，排障时也能一眼看出"这次自测是在什么档位下做的"。
+        /// </para>
+        /// </summary>
+        public string DangerModeSelfTestStamp { get; set; } = string.Empty;
 
         /// <summary>
         /// 低运行优先级（**默认开**）：启动时把本进程设成 <c>BelowNormal</c>，
@@ -521,7 +583,9 @@ namespace ArchiveFixer.Models
                 OverwriteMode = "SkipExisting",
                 TryEmptyPasswordFirst = true,
                 UseGlobalPasswordForAllTasks = true,
-                MaxParallelExtractCount = 1,
+                MaxParallelExtractCount = DefaultMaxParallelExtractCount,
+                DangerousSpaceModeEnabled = false,
+                DangerModeSelfTestStamp = string.Empty,
                 LowProcessPriority = true,
                 OpenOutputFolderWhenDone = false,
                 RestRemovalDefaultMode = RestRemovalModes.RecycleBin,
@@ -595,6 +659,24 @@ namespace ArchiveFixer.Models
             if (MaxParallelExtractCount > 8)
             {
                 MaxParallelExtractCount = 8;
+            }
+
+            /*
+             * 危险模式：**没有自测凭证就不许开着**。
+             *
+             * 这是那条自测协议唯一能"自动执行"的地方：用户手改 appsettings.json 把
+             * DangerousSpaceModeEnabled 写成 true，或者凭证字段被清掉、写坏 —— 读取时一律关回去。
+             * 协议本身（拿 2×并发数 个文件真跑一遍）没法在这里做（要跑引擎、要几分钟），
+             * 所以这里的判据只能是"凭证在不在"，而凭证只可能由自测通过那条路径写出来。
+             *
+             * ⚠ 刻意**不**顺手清掉凭证：凭证是"这台机器上这个用户做过自测"的事实记录，
+             * 清掉它只会逼用户再删一批源包（自测本身也是不可逆的）。
+             */
+            DangerModeSelfTestStamp ??= string.Empty;
+
+            if (DangerousSpaceModeEnabled && !ArchiveFixer.Storage.DangerModeSelfTestStamp.IsValid(DangerModeSelfTestStamp))
+            {
+                DangerousSpaceModeEnabled = false;
             }
 
             /*

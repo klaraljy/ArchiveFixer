@@ -99,6 +99,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <Grid Grid.Row="0">
@@ -171,6 +172,38 @@
                             ② 这里给一个"立即继续"的出口 —— 勾上就本批不节流。
                             只对**本次运行**有效，不写回设置（设置仍是唯一的持久来源）。
                         -->
+                        <TextBlock Text="并发："
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,4,0"
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <ComboBox Width="56"
+                                  VerticalAlignment="Center"
+                                  ItemsSource="{Binding MaxParallelChoices}"
+                                  SelectedItem="{Binding MaxParallelChoice, Mode=TwoWay}"
+                                  ToolTip="同时解压几个包（1 / 2 / 3 / 4 / 8）。装不下当前可用空间的任务仍然会在启动前被拦下，并如实报告各自需要多少。" />
+
+                        <Button Content="按空间算建议"
+                                Margin="6,0,0,0"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTip="按当前可用空间算出最多能并行几个（要读每个源包的大小，可能要一两秒）"
+                                Command="{Binding RefreshParallelAdviceCommand}" />
+
+                        <TextBlock Text="{Binding ParallelAdviceText}"
+                                   MaxWidth="320"
+                                   Margin="8,0,12,0"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding ParallelAdviceText}"
+                                   Style="{StaticResource HintTextStyle}" />
+
+                        <Button Content="⚠ 危险模式"
+                                Margin="0,0,12,0"
+                                MinHeight="36"
+                                Style="{StaticResource DangerButtonStyle}"
+                                Command="{Binding ToggleDangerModeCommand}"
+                                ToolTip="{Binding DangerModeSummaryText}" />
+
                         <CheckBox Content="全速"
                                   VerticalAlignment="Center"
                                   Margin="0,0,12,0"
@@ -219,6 +252,59 @@
                                Margin="10,0,0,0"
                                VerticalAlignment="Center" />
                 </StackPanel>
+
+                <!--
+                    ⚠ 危险模式开启时的**常驻红色横幅**（用户 2026-09-22 需求第 3 条：
+                    "风险描述必须写在界面上"）。它一直在，直到用户关掉那个模式 ——
+                    "不可逆的档位必须在界面上一直看得见"是这一条的全部意思。
+                    四句话的唯一来源是 StatusText.DangerModeRiskLines（绑定，不在这里抄一遍）。
+                -->
+                <Border Grid.Row="2"
+                        Background="{StaticResource DangerSoftBrush}"
+                        BorderBrush="{StaticResource DangerBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="{StaticResource CardCornerRadius}"
+                        Padding="{StaticResource BannerPadding}"
+                        Margin="0,10,0,0"
+                        Visibility="{Binding DangerModeEnabled, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <StackPanel>
+                        <TextBlock Text="⚠ 危险模式已开启：任务成功后，它的源包与中间件会被永久删除（不进回收站）"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource DangerTextBrush}"
+                                   TextWrapping="Wrap" />
+
+                        <ItemsControl ItemsSource="{Binding DangerModeRiskLines}"
+                                      Margin="0,4,0,0"
+                                      Focusable="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Mode=OneWay}"
+                                               Foreground="{StaticResource DangerTextBrush}"
+                                               FontSize="11.5"
+                                               TextWrapping="Wrap" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Text="{Binding DangerModeSelfTestText}"
+                                   Margin="0,4,0,0"
+                                   Foreground="{StaticResource DangerTextBrush}"
+                                   FontSize="11.5"
+                                   TextWrapping="Wrap" />
+
+                        <!--
+                            凭证盖不住当前并发档：**用户以为在用它、其实一个字节都没删** ——
+                            这种静默降级必须写在明面上，所以额外给一行加粗红字（不在上面那句里混着说）。
+                        -->
+                        <TextBlock Text="{Binding DangerModeCoverageText}"
+                                   Margin="0,4,0,0"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource DangerTextBrush}"
+                                   FontSize="11.5"
+                                   TextWrapping="Wrap"
+                                   Visibility="{Binding DangerModeNotCovered, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </StackPanel>
+                </Border>
             </Grid>
         </Border>
 

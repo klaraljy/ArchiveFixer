@@ -222,6 +222,18 @@ namespace ArchiveFixer.ViewModels
         private TaskSummary _summary = new();
         private ArchiveTask? _selectedTask;
 
+        /*
+         * ===== 空间规划 + 危险模式的界面状态（用户 2026-09-22 需求）=====
+         *
+         * 三样东西：
+         * · _parallelAdviceText —— "当前可用 X，建议并行 N 个"（按空间算出来的，不是编的）；
+         * · _dangerModeBusy    —— 自测/开启过程中禁用入口（自测要跑几分钟，期间再点一次会撞车）；
+         * · _spaceModeText     —— 当前档位的一句话（危险模式开没开、有没有自测凭证）。
+         */
+        private string _parallelAdviceText = "点「按空间算建议」可以算出当前可用空间能并行几个";
+        private bool _dangerModeBusy;
+        private string _spaceModeText = string.Empty;
+
         public ObservableCollection<ArchiveTask> Tasks { get; } = new();
 
         public ObservableCollection<OperationLogItem> Logs { get; } = new();
@@ -480,8 +492,10 @@ namespace ArchiveFixer.ViewModels
          * 「全速」开关 —— 并发队列的"立即继续"出口
          * （docs/WinRAR功能参考.md §2 D 组采纳项：任何"自动等待/节流"都必须配一个"立即继续"的出口）。
          *
-         * 为什么需要它：设置里的「最大并发解压数」是个节流旋钮（默认 1 = 串行），
-         * 但用户临时想让这一批快点跑完时，以前只能进设置改数字、再回来重跑 ——
+         * 为什么需要它：设置里的「最大并发解压数」是个节流旋钮（默认 4；
+         * 2026-09-22 的并行实测把默认值从 1 提到 4 —— 并发 1→4 是 3.08×，4→8 只再快 1.9%
+         * 却把单包耗时拉长一倍，根因是 6 物理核超订）。
+         * 用户临时想让这一批快点跑完时，以前只能进设置改数字、再回来重跑 ——
          * 而 WinRAR 那边的教训正是"让用户干等却无从干预"。
          *
          * 语义刻意保持最窄：**只看这一次运行**，不写回设置（设置仍是唯一的持久来源）。
@@ -524,6 +538,429 @@ namespace ArchiveFixer.ViewModels
                     RefreshOutputPaths();
                 }
             }
+        }
+
+        // ================================================================ 空间规划 + 危险模式
+
+        /// <summary>
+        /// "按当前可用空间，最多能并行几个"那句话（用户 2026-09-22 需求第 2 条：界面上算出并显示）。
+        ///
+        /// <para>数字来自 <see cref="ExtractionCoordinator.BuildSpaceAdvice"/> —— 与真正开跑时的调度
+        /// 同一段实现，所以界面上显示的建议与日志里那一刻的实际口径永远不会分叉。</para>
+        /// </summary>
+        public string ParallelAdviceText
+        {
+            get => _parallelAdviceText;
+            private set => SetProperty(ref _parallelAdviceText, value ?? string.Empty);
+        }
+
+        /// <summary>
+        /// 并发档位（用户 2026-09-22 需求：可选 1 / 2 / 3 / 4 / 8）。
+        ///
+        /// <para>它是设置项 <see cref="AppSettings.MaxParallelExtractCount"/> 的界面形态：
+        /// 读时夹到合法档位（设置里手改成 7 也能正常显示），写时落盘 —— 与其他设置项同一口径，
+        /// 不藏在内存里（用户上次选的档位下次启动还在）。</para>
+        /// </summary>
+        public int MaxParallelChoice
+        {
+            get => ExtractionScheduler.NormalizeParallelCount(Settings?.MaxParallelExtractCount ?? 1);
+            set
+            {
+                int normalized = ExtractionScheduler.NormalizeParallelCount(value);
+
+                if (Settings == null || Settings.MaxParallelExtractCount == normalized)
+                {
+                    return;
+                }
+
+                Settings.MaxParallelExtractCount = normalized;
+
+                try
+                {
+                    _settingsService.Save(Settings);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("WARN", $"保存并发档位失败（本次仍生效）：{ex.Message}");
+                }
+
+                OnPropertyChanged();
+                AppendLog(
+                    "INFO",
+                    $"最大并发解压数已改成 {normalized}。"
+                    + "空间不够时程序仍会在启动前拦下装不下的任务（见「按空间算建议」）。");
+
+                // 档位一动，"自测凭证还盖不盖得住"就可能翻转（4 → 8 直接失效）→ 立刻刷新界面那句话。
+                RefreshSpaceModeText();
+            }
+        }
+
+        /// <summary>并发档位的候选（界面的下拉框直接绑它；1 / 2 / 3 / 4 / 8）。</summary>
+        public IReadOnlyList<int> MaxParallelChoices => ExtractionScheduler.AllowedParallelCounts;
+
+        /// <summary>危险模式当前是否开启（界面上那个红色按钮的状态）。</summary>
+        public bool DangerModeEnabled => Settings?.DangerousSpaceModeEnabled ?? false;
+
+        /// <summary>当前档位的一句话说明（含自测凭证），显示在红色按钮旁边。</summary>
+        public string SpaceModeText
+        {
+            get => _spaceModeText;
+            private set => SetProperty(ref _spaceModeText, value ?? string.Empty);
+        }
+
+        /// <summary>自测 / 开启过程中为 true：入口按钮暂时禁用（自测要跑几分钟，重复点会撞车）。</summary>
+        public bool DangerModeBusy
+        {
+            get => _dangerModeBusy;
+            private set
+            {
+                if (SetProperty(ref _dangerModeBusy, value))
+                {
+                    RaiseAllCommandCanExecuteChanged();
+                }
+            }
+        }
+
+        /// <summary>风险四条（界面上的红色提示区直接绑它 —— 一份措辞，三处引用）。</summary>
+        public IReadOnlyList<string> DangerModeRiskLines => StatusText.DangerModeRiskLines;
+
+        /// <summary>这个模式是什么（界面上那一段说明）。</summary>
+        public string DangerModeSummaryText => StatusText.DangerModeSummary;
+
+        /// <summary>当前有没有自测凭证（没有就不许开）。</summary>
+        public bool HasDangerModeSelfTest => DangerModeSelfTestStamp.IsValid(Settings?.DangerModeSelfTestStamp);
+
+        /// <summary>
+        /// 自家自测凭证**盖不住当前并发档**时为 true（凭证是并发 2 的，现在调到 8）。
+        ///
+        /// <para>盖不住不是"关掉开关"，而是"本批不生效"：界面必须把这件事说在明面上
+        /// （常驻红横幅里多一行），因为那时用户以为在用它、其实一个字节都没删 —— 静默降级是不能接受的。</para>
+        /// </summary>
+        public bool DangerModeNotCovered =>
+            DangerModeEnabled && !DangerModeSelfTestStamp.Covers(Settings?.DangerModeSelfTestStamp, CurrentParallelCount);
+
+        /// <summary>盖不住时的整句说明（盖得住时为空串）。</summary>
+        public string DangerModeCoverageText =>
+            DangerModeNotCovered
+                ? StatusText.DangerModeNotCoveredBySelfTest + " "
+                  + DangerModeSelfTestStamp.DescribeCoverage(Settings?.DangerModeSelfTestStamp, CurrentParallelCount)
+                : string.Empty;
+
+        /// <summary>
+        /// 当前生效的并发档（自测凭证的覆盖判定与协调器用的是同一个口径）。
+        ///
+        /// <para>「全速」开着时本批的并行度是**勾选任务数**（协调器就是这么算的）——
+        /// 那句"凭证盖不盖得住"必须跟着一起变，否则界面会说"生效"而批子里其实拒绝生效。</para>
+        /// </summary>
+        private int CurrentParallelCount
+        {
+            get
+            {
+                if (RunAtFullSpeed)
+                {
+                    return Math.Max(1, Tasks.Count(task => task.IsSelected));
+                }
+
+                return Math.Clamp(Settings?.MaxParallelExtractCount ?? 1, 1, 8);
+            }
+        }
+
+        /// <summary>自测凭证的一句话（没有时给一句"怎么做"）。</summary>
+        public string DangerModeSelfTestText
+        {
+            get
+            {
+                string stamp = DangerModeSelfTestStamp.Describe(Settings?.DangerModeSelfTestStamp);
+
+                return string.IsNullOrWhiteSpace(stamp)
+                    ? "还没有自测凭证：" + StatusText.DangerModeNeedsSelfTest
+                    : "已自测：" + stamp;
+            }
+        }
+
+        /// <summary>
+        /// 算一次并行建议（后台 stat 每个源包，界面不卡）。
+        /// 没勾任务时给出提示而不是算一个空结论。
+        /// </summary>
+        private async Task RefreshParallelAdviceAsync()
+        {
+            List<ArchiveTask> selected = Tasks.Where(task => task.IsSelected).ToList();
+
+            if (selected.Count == 0)
+            {
+                ParallelAdviceText = Tasks.Count == 0
+                    ? "任务列表是空的：先添加文件，再算并行建议"
+                    : "一个任务都没勾：先勾选要处理的任务，再算并行建议";
+
+                AppendLog("WARN", ParallelAdviceText);
+                return;
+            }
+
+            try
+            {
+                ExtractionSchedulePlan plan = await Task.Run(
+                    () => _extractionCoordinator.BuildSpaceAdvice(selected));
+
+                /*
+                 * 建议里同时给出**两个约束**（用户 2026-09-22 追加：并行实测的结论）：
+                 * ① 空间侧："当前可用 X，建议并行 N 个"（来自调度器，与真正开跑同一段实现）；
+                 * ② 硬件侧："建议不超过物理核心数（当前检测到 N 核）"——
+                 *    实测并发 1→4 是 3.08×，4→8 只再快 1.9% 却把单包耗时拉长一倍（6 物理核超订）。
+                 * 两个都是**建议**：程序不会因此悄悄改掉用户选的档位，装不下的任务照旧在启动前被拦下。
+                 */
+                ParallelAdviceText = plan.ParallelAdviceText() + "；" + ProcessorTopology.DescribeConcurrencyAdvice();
+
+                AppendLog("INFO", $"并行建议（按空间）：{ParallelAdviceText}");
+                AppendLog("INFO", "依据：" + plan.Basis);
+
+                foreach (ScheduledExtractionItem blocked in plan.BlockedAtPlanTime)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"按当前可用空间，这个任务排不上：{blocked.Estimate.DisplayName} —— "
+                        + $"需要 {TaskSpaceEstimate.FormatSize(blocked.RequiredBytes)}，"
+                        + $"差 {TaskSpaceEstimate.FormatSize(blocked.ShortfallBytes)}");
+                }
+            }
+            catch (Exception ex)
+            {
+                ParallelAdviceText = "算并行建议失败：" + ex.Message;
+                AppendLog("ERROR", "算并行建议失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 危险模式按钮的本体：开着就关（安全方向），关着就走"确认 → 自测 → 开启"。
+        /// </summary>
+        private async Task ToggleDangerModeAsync()
+        {
+            if (DangerModeEnabled)
+            {
+                bool off = _dialogService.ShowConfirm(
+                    $"确定关闭「{StatusText.DangerModeName}」吗？{Environment.NewLine}{Environment.NewLine}"
+                    + "关闭之后，其余物回到默认档（移入回收站，可还原），源包不会再被自动永久删除。"
+                    + "已经删掉的东西**不会**回来。");
+
+                if (off)
+                {
+                    SetDangerModeEnabled(false, "用户手动关闭" + StatusText.DangerModeName);
+                }
+
+                return;
+            }
+
+            /*
+             * 第一步：红色确认 + 必勾"我知道不可恢复"。
+             *
+             * 这一段是**自测本身的**知情同意：自测会真的永久删除样本文件的源包
+             * （那正是要验证的动作）。不把它说清就开跑，等于拿用户的文件做实验还不告诉他。
+             */
+            string message =
+                StatusText.DangerModeSummary
+                + Environment.NewLine + Environment.NewLine
+                + StatusText.DangerModeSelfTestProtocolText
+                + Environment.NewLine
+                + StatusText.DangerModeSelfTestWarning
+                + Environment.NewLine + Environment.NewLine
+                + "开启后的风险：" + Environment.NewLine + StatusText.DangerModeRisks;
+
+            bool confirmed = _dialogService.ShowDestructiveConfirm(
+                message,
+                "开始自测",
+                "我知道不可恢复：自测会永久删除这几个文件的源包",
+                out bool acknowledged);
+
+            await EnableDangerModeAsync(confirmed, acknowledged);
+        }
+
+        /// <summary>
+        /// 开启危险模式：**先自测，通过才写入设置**。
+        ///
+        /// <para>拆成独立方法（而不是塞在命令里）的理由与其它对话框一样：无界面宿主下确认框恒为 false，
+        /// 走不到自测那一段 —— 把"确认结果"作为参数传进来，测试才能直接验"自测通过才开启"这条规则。</para>
+        /// </summary>
+        /// <param name="confirmed">用户是否点了确认。</param>
+        /// <param name="acknowledged">用户是否勾了"我知道不可恢复"。</param>
+        /// <param name="skipConfirmToEnable">
+        /// 自测通过之后是否**不再问第二次**。默认 false（界面上要再确认一次：自测是拿样本试，
+        /// 开启是把整批都交出去，两件事的后果不同）。测试里传 true 以便一次跑完。
+        /// </param>
+        internal async Task<bool> EnableDangerModeAsync(
+            bool confirmed,
+            bool acknowledged,
+            bool skipConfirmToEnable = false)
+        {
+            if (!confirmed || !acknowledged)
+            {
+                AppendLog(
+                    "INFO",
+                    "危险模式：没有通过红色的二次确认（或没勾「我知道不可恢复」），什么都没有做"
+                    + "（一个字节都没删，设置也没改）。");
+
+                return false;
+            }
+
+            if (DangerModeBusy)
+            {
+                AppendLog("WARN", "危险模式自测正在跑，忽略重复点击。");
+                return false;
+            }
+
+            List<ArchiveTask> candidates = Tasks.Where(task => task.IsSelected).ToList();
+
+            if (candidates.Count == 0)
+            {
+                ParallelAdviceText = "自测需要先勾选任务";
+                _dialogService.ShowWarning(
+                    "危险模式的自测要拿「并发数 × 2」个文件真的跑一遍，现在一个任务都没勾。"
+                    + Environment.NewLine + Environment.NewLine
+                    + "先勾选要处理的包，再点这个按钮。");
+
+                return false;
+            }
+
+            DangerModeBusy = true;
+
+            try
+            {
+                AppendLog("WARN", $"开始危险模式自测：{StatusText.DangerModeSelfTestWarning}");
+
+                DangerModeSelfTestVerdict verdict =
+                    await _extractionCoordinator.RunDangerModeSelfTestAsync(candidates);
+
+                if (!verdict.Passed)
+                {
+                    string text =
+                        "自测**没有通过**，危险模式没有被开启（设置一个字节都没改）。"
+                        + Environment.NewLine + Environment.NewLine
+                        + verdict.Summary
+                        + Environment.NewLine + Environment.NewLine
+                        + string.Join(Environment.NewLine, verdict.FailureReasons.Select(reason => "· " + reason))
+                        + Environment.NewLine + Environment.NewLine
+                        + "这说明在你这台机器 / 这批文件上，这个模式现在还不可靠 —— 请先用默认档（其余物移入回收站）。";
+
+                    _dialogService.ShowError(text);
+                    AppendLog("ERROR", "危险模式自测未通过，已拒绝开启：" + verdict.Summary);
+
+                    return false;
+                }
+
+                if (!skipConfirmToEnable)
+                {
+                    /*
+                     * 第二步：自测通过之后再确认一次。两次确认不是冗余 ——
+                     * 前一次同意的是"拿这几个文件试"，这一次同意的是"以后整批都这么干"。
+                     */
+                    bool enable = _dialogService.ShowDestructiveConfirm(
+                        StatusText.DangerModeCanTry
+                        + Environment.NewLine + Environment.NewLine
+                        + verdict.Summary
+                        + Environment.NewLine + Environment.NewLine
+                        + StatusText.DangerModeSummary
+                        + Environment.NewLine + Environment.NewLine
+                        + "开启后的风险：" + Environment.NewLine + StatusText.DangerModeRisks,
+                        "开启危险模式",
+                        "我知道不可恢复：开启后源包会被永久删除",
+                        out bool enableAcknowledged);
+
+                    if (!enable || !enableAcknowledged)
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"危险模式：自测通过，但用户没有确认开启 —— 保持关闭（自测删掉的那几个样本不会回来）。"
+                            + $"自测结论：{verdict.Summary}");
+
+                        return false;
+                    }
+                }
+
+                /*
+                 * 写凭证 + 开开关：**凭证只能由这里写出来**（自测通过这条路径），
+                 * 而 AppSettings.Normalize 会把手改配置开出来的 true 关回去 —— 两头一夹，
+                 * "没自测就能开"这条路就堵死了。
+                 */
+                Settings.DangerModeSelfTestStamp = DangerModeSelfTestStamp.Create(verdict, DateTime.Now);
+                Settings.DangerousSpaceModeEnabled = true;
+
+                try
+                {
+                    _settingsService.Save(Settings);
+                }
+                catch (Exception ex)
+                {
+                    // 保存失败也保持内存里的开启状态（本次运行照常生效），但必须如实说。
+                    AppendLog("WARN", "危险模式已开启，但写入设置文件失败（重启后会回到关闭）：" + ex.Message);
+                }
+
+                OnPropertyChanged(nameof(DangerModeEnabled));
+                OnPropertyChanged(nameof(HasDangerModeSelfTest));
+                OnPropertyChanged(nameof(DangerModeSelfTestText));
+                RefreshSpaceModeText();
+
+                AppendLog("WARN", StatusText.DangerModeCanTry + " " + verdict.Summary);
+
+                _dialogService.ShowWarning(StatusText.DangerModeCanTry + Environment.NewLine + Environment.NewLine + verdict.Summary);
+
+                return true;
+            }
+            finally
+            {
+                DangerModeBusy = false;
+            }
+        }
+
+        /// <summary>关闭 / 开启危险模式并刷新界面状态（**唯一的开关落点**）。</summary>
+        private void SetDangerModeEnabled(bool enabled, string reason)
+        {
+            if (Settings == null)
+            {
+                return;
+            }
+
+            Settings.DangerousSpaceModeEnabled = enabled;
+
+            if (!enabled)
+            {
+                // 关闭时**保留凭证**：它记录的是"这台机器上做过自测"这个事实，
+                // 清掉它只会逼用户再删一批源包（自测本身也是不可逆的）。
+            }
+
+            try
+            {
+                _settingsService.Save(Settings);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "保存危险模式开关失败（本次仍生效）：" + ex.Message);
+            }
+
+            OnPropertyChanged(nameof(DangerModeEnabled));
+            OnPropertyChanged(nameof(DangerModeSelfTestText));
+            RefreshSpaceModeText();
+
+            AppendLog(enabled ? "WARN" : "INFO", $"{StatusText.DangerModeName}：{(enabled ? "已开启" : "已关闭")}（{reason}）");
+        }
+
+        /// <summary>把"当前档位"那句话刷新一遍（界面绑定它）。</summary>
+        internal void RefreshSpaceModeText()
+        {
+            if (Settings == null)
+            {
+                return;
+            }
+
+            SpaceModeText = DangerModeNotCovered
+                ? "⚠ 已开启，但当前并发档超出凭证覆盖范围 —— 本批不生效（详见下方红字）"
+                : DangerModeEnabled
+                    ? "红色按钮 = 已开启；再点一次可关闭"
+                    : HasDangerModeSelfTest
+                        ? "已自测过（可以直接开启）"
+                        : "还没自测：点红色按钮会先跑一次自测";
+
+            OnPropertyChanged(nameof(DangerModeNotCovered));
+            OnPropertyChanged(nameof(DangerModeCoverageText));
+
+            ParallelAdviceText = "点「按空间算建议」可以算出当前可用空间能并行几个";
         }
 
 
@@ -604,6 +1041,18 @@ namespace ArchiveFixer.ViewModels
         public ICommand OneClickProcessCommand { get; }
 
         public ICommand ResetSettingsCommand { get; }
+
+        /// <summary>
+        /// 按当前可用空间算一次"建议并行几个"（用户 2026-09-22 需求第 2 条）。
+        /// 结果落在 <see cref="ParallelAdviceText"/> 上 —— 界面直接显示那句话。
+        /// </summary>
+        public ICommand RefreshParallelAdviceCommand { get; }
+
+        /// <summary>
+        /// **危险模式**入口（红色按钮）：确认 → 自测（并发数 × 2 个文件）→ 通过才开启。
+        /// 已经开着时点它 = 关闭（关闭是安全方向，不需要二次确认）。
+        /// </summary>
+        public ICommand ToggleDangerModeCommand { get; }
 
         /*
          * ============================ 勾选的批量操作（用户 2026-09-22 追加需求） ============================
@@ -812,6 +1261,18 @@ namespace ArchiveFixer.ViewModels
             });
 
             ResetSettingsCommand = new RelayCommand(ResetSettings, CanRunNormalCommand);
+
+            /*
+             * ===== 空间规划 + 危险模式（用户 2026-09-22 需求）=====
+             *
+             * 两个入口：
+             * · RefreshParallelAdviceCommand —— 按当前可用空间算出"建议并行几个"（纯计算 + stat，放后台）；
+             * · ToggleDangerModeCommand      —— 那个**红色**的危险模式按钮：
+             *   先红色确认（含风险四条 + 必勾"我知道不可恢复"）→ 跑自测（2×并发数 个文件）→
+             *   自测通过才写入设置开启；自测不过就拒绝并说明。
+             */
+            RefreshParallelAdviceCommand = new AsyncRelayCommand(RefreshParallelAdviceAsync, CanRunNormalCommand);
+            ToggleDangerModeCommand = new AsyncRelayCommand(ToggleDangerModeAsync, CanRunNormalCommand);
 
             SelectAllTasksCommand = new RelayCommand(SelectAllTasks, CanChangeTaskSelection);
             SelectNoneTasksCommand = new RelayCommand(SelectNoneTasks, CanChangeTaskSelection);

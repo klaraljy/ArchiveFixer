@@ -507,6 +507,33 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
+                 * 危险模式：**没有自测凭证（或凭证盖不住当前并发档）就不许在设置里打开**
+                 * （用户 2026-09-22 的协议）。
+                 *
+                 * 拦在保存之前而不是"存下来再关回去"：Normalize() 会把"开着但没凭证"的状态静默关掉，
+                 * 于是"勾上 → 保存 → 看到『设置已保存』"会变成一条**静默丢弃用户选择**的路
+                 * （与工具路径那条同一个口径）。这里直接说清该怎么做，并让用户留在窗口里。
+                 *
+                 * 为什么连并发档一起判：自测是"拿并发数 × 2 个文件真跑一遍"，凭证只对它跑过的那一档成立。
+                 * 把并发调到 8 再勾这个开关，存下来的是一个**开不起来**的组合 ——
+                 * 当场说清，比让用户到跑批时才发现"以为在删、其实没删"要好。
+                 */
+                if (Settings.DangerousSpaceModeEnabled &&
+                    !ArchiveFixer.Storage.DangerModeSelfTestStamp.Covers(
+                        Settings.DangerModeSelfTestStamp,
+                        Settings.MaxParallelExtractCount))
+                {
+                    string coverage = ArchiveFixer.Storage.DangerModeSelfTestStamp.DescribeCoverage(
+                        Settings.DangerModeSelfTestStamp,
+                        Settings.MaxParallelExtractCount);
+
+                    Message = "设置未保存："
+                              + (string.IsNullOrWhiteSpace(coverage) ? StatusText.DangerModeNeedsSelfTest : coverage);
+
+                    return;
+                }
+
+                /*
                  * Normalize() 会把超范围的数字夹回合法区间（例如密码尝试上限 5000 → 1000）。
                  * 静默改掉用户填的数字是"我以为我设成了 5000"的经典来源，所以这里比一下前后值，
                  * 被夹过就在底栏说清楚 —— 用户填错的数字必须看得见。

@@ -375,7 +375,12 @@ namespace ArchiveFixer.Services
                 // 默认优先级是 UnRAR → 7-Zip，用户可能只缺其中一个，提示里要说"任装其一"。
                 StatusText.NoEngineAvailable or
                 StatusText.UnknownError or
-                StatusText.PasswordAttemptLimitReached;
+                StatusText.PasswordAttemptLimitReached or
+                // 磁盘空间不足：空间门在解压**之前**就拦下了（用户 2026-09-22 需求第 1 条），
+                // 归档本身没有任何问题 —— 但它同样是"这一单没拿到产物"，与"解压失败"同桶。
+                // 归到"解压失败"这一格是刻意的：用户要处理的事（清空间 / 换盘 / 用危险模式）
+                // 属于解压侧的动作，而不是"这个包坏了"。
+                StatusText.DiskSpaceInsufficient;
         }
 
         /// <summary>
@@ -654,6 +659,9 @@ namespace ArchiveFixer.Services
                 // 一个引擎都没找到：必须进失败清单（用户唯一的行动线索就在这里）。
                 StatusText.NoEngineAvailable or
                 StatusText.PasswordAttemptLimitReached or
+                // 磁盘空间不足：必须出现在失败清单里（不变量 6 的同一精神：没做成的事不许消失）。
+                // 逐任务第二级里会带上"需要 X / 可用 Y / 差 Z"与建议动作（写进 ErrorMessage）。
+                StatusText.DiskSpaceInsufficient or
                 // 部分完成是"没做完"，必须进失败清单（不变量 6：不得显示成成功）。
                 StatusText.PartiallyCompleted or
                 // 文件名已加密：这一单没拿到可用结论，用户必须看见（否则它就消失在"处理完了"里）。

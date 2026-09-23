@@ -106,12 +106,48 @@ namespace ArchiveFixer.Views
 
             Apply(_request);
 
+            /*
+             * 让它真的被看见（用户 2026-09-22 反馈："弹出来之后躲到主窗口后面了，只有声音、没有闪烁"）。
+             * 强度按图标/是否危险操作定：警告 / 错误 / 询问 / 危险操作 = 强提醒（一直闪到被点 + 连响三声）。
+             */
+            ArchiveFixer.Helpers.WindowAttention.Attach(this, ResolveAttention(_request));
+
             Loaded += (_, _) =>
             {
                 // 焦点给正文：一进来就能 Ctrl+A / Ctrl+C 复制（MessageBox 做不到这一点）。
                 MessageTextBox.Focus();
                 MessageTextBox.CaretIndex = 0;
             };
+        }
+
+        /// <summary>
+        /// 这个对话框该用多强的提醒。
+        ///
+        /// <para>判据是"它需不需要有人来处理"：信息提示（"完成了"这类）响一声就够；
+        /// 警告 / 错误 / 询问 / 危险操作必须把人叫过来 —— 那几种没人看着就会出事或卡住整批。</para>
+        /// </summary>
+        internal static ArchiveFixer.Helpers.AttentionStrength ResolveAttention(AppDialogRequest? request)
+        {
+            if (request == null)
+            {
+                return ArchiveFixer.Helpers.AttentionStrength.Normal;
+            }
+
+            if (request.Destructive)
+            {
+                return ArchiveFixer.Helpers.AttentionStrength.Strong;
+            }
+
+            switch (request.Icon)
+            {
+                case AppDialogIcon.Warning:
+                case AppDialogIcon.Error:
+                case AppDialogIcon.Question:
+                    return ArchiveFixer.Helpers.AttentionStrength.Strong;
+
+                default:
+                    return ArchiveFixer.Helpers.AttentionStrength.Normal;
+            }
         }
 
         private void Apply(AppDialogRequest request)
