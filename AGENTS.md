@@ -176,9 +176,13 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 注释写**为什么**（尤其"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
 
 **验证状态（2026-09-24）**：`dotnet build` **0 错误 0 警告**；
-`dotnet test` **1337 通过 / 0 失败 / 0 跳过**；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
+`dotnet test` **1358 通过 / 0 失败 / 0 跳过**；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
 改动代码后这三条都要重新跑；**长活（构建/全量测试）放后台任务**，别阻塞干等（全局 §作业模式 规矩 23）；
 格式差异用 `dotnet format whitespace ArchiveFixer.slnx` 修，不要手工对齐。
+> ⚠️ **同一个 checkout 里不许并发跑构建/测试**（2026-09-24 实测教训）：`--no-incremental` 的构建会重建
+> `bin\Debug`，此刻正在跑的测试会看到"内置 7z 忽然不在"而**假红**（`DisguiseCoverageTests` 12 例全挂在
+> `engine.IsAvailable` 上，单跑 20/20 全过）；两个进程同时写 `obj\` 还会报 `MSB3021/MSB3027 文件被 testhost 锁定`。
+> 同一时间只允许一个构建/测试在跑（多代理并行时用 `git worktree` 或排队）。
 > ⚠️ 这条数字**只在这里写一次**：README 等项目文档要报数字就从这里抄，别再各写一份（历史上因此互相矛盾过）。
 
 ---

@@ -104,6 +104,8 @@
         <helpers:OutputPlacementSummaryConverter x:Key="OutputPlacementSummaryConverter" />
         <!-- 改名冲突策略的中文显示（模型里存的是 AutoRename 这类枚举名） -->
         <helpers:ConflictActionTextConverter x:Key="ConflictActionTextConverter" />
+        <!-- 布尔 → 固定文案（「未写回」这类小标记；文案仍从 StatusText 取，见 PasswordListWindow） -->
+        <helpers:BoolToTextConverter x:Key="BoolToTextConverter" />
 
         <!-- ============ 文字样式 ============ -->
 

@@ -542,5 +542,146 @@ namespace ArchiveFixer.Models
 
         /// <summary>工具状态那一行的前缀（说明"当前用的是哪一份"）。</summary>
         public const string SettingsRarExePathStatusPrefix = "当前 Rar.exe：";
+
+        // ================================================================
+        // 「写回密码本…」（密码列表管理窗口）—— 用户 2026-09-24 反馈
+        // ================================================================
+        //
+        // ⚠ 这一组是**这个功能的文案唯一来源**（AGENTS.md §7）：按钮 / 确认框 / 提示条 / 未写回标记
+        //    都从这里引，别在 XAML 或 ViewModel 里另写一份中文字面量。
+        //
+        // 起因（用户真机反馈）：他在「密码列表管理」里手动加了一条密码、又调了上移/下移，
+        // 关掉程序就没了。机制是 PasswordService.Passwords **只在内存里**
+        //（不落盘是红线，§6 不变量 5），启动时由密码本 txt 重新加载 ——
+        // 所以手工条目与手工调的顺序重启即丢。长期载体只能是**用户自己的密码本 txt**。
+
+        /// <summary>按钮文案。</summary>
+        public const string PasswordWriteBackButtonText = "写回密码本…";
+
+        /// <summary>
+        /// 按钮的 ToolTip。**必须写明"手动添加的密码只在本次运行内有效"** ——
+        /// 用户就是因为不知道这件事，才会觉得"我刚加的密码怎么没了"。
+        /// </summary>
+        public const string PasswordWriteBackButtonHint =
+            "把列表里手动添加的密码追加进你自己的密码本 txt（写前自动备份），下次启动才能再读到。"
+            + "密码只存在内存里，关掉程序就没了。";
+
+        /// <summary>没有待写条目时的说明（按钮置灰时用户能看懂为什么）。</summary>
+        public const string PasswordWriteBackNothingToWrite = "没有需要写回的条目。";
+
+        /// <summary>
+        /// 确认框正文（**只有数量与文件名，不含任何密码原文**）。
+        ///
+        /// <para>为什么数量与文件名要在这里：用户是在对"一个具体文件"动手，
+        /// 文件名是他唯一能核对的线索；而密码本身放在 Detail 区（明文，
+        /// 界面上给他看是应该的），不进 Message —— Message 会被无界面宿主的降级日志记下来。</para>
+        /// </summary>
+        public const string PasswordWriteBackConfirmFormat =
+            "要把 {0} 条密码追加到「{1}」吗？";
+
+        /// <summary>确认框正文的第二段：写前备份 + 只追加（不重写、不重排）。</summary>
+        public const string PasswordWriteBackConfirmNote =
+            "只追加到文件末尾，已有的内容一个字节都不会改；写之前会先把原文件备份成同目录下的 .bak-日期时间。";
+
+        /// <summary>确认框 Detail 区的表头（下面是**明文**密码清单）。</summary>
+        public const string PasswordWriteBackConfirmDetailHeader = "将要写入的密码（明文）：";
+
+        /// <summary>明文清单里的一条。</summary>
+        public const string PasswordWriteBackConfirmDetailItemFormat = "{0}. {1}";
+
+        /// <summary>
+        /// 确认框里的那条提醒：**候选顺序 + 每层尝试上限**。
+        ///
+        /// <para>写回是追加到**末尾**，而候选顺序里密码列表排在映射式命中与统一密码之后 ——
+        /// 密码本条目一多，排在后面的候选会被上限截断（状态是「达到密码尝试上限」，不是「密码错误」），
+        /// 用户看到的现象就是"我明明加了密码，它却像没识别到"。这条提醒把该改什么说清。</para>
+        /// </summary>
+        public const string PasswordWriteBackAttemptLimitHintFormat =
+            "提醒：写回是追加到密码本**末尾**，而尝试顺序是「空密码 → 最近成功 → 映射式命中 → 统一密码 → 密码列表」。"
+            + "你当前的「每层密码尝试上限」是 {0} 条 —— 密码本条目一多，排在后面的候选会被这个上限截断"
+            + "（那时状态显示「达到密码尝试上限」，不是「密码错误」）。"
+            + "想让它一定被试到：把上限调大（设置 → 密码设置），或者改用「名称:密码」的映射式写法（映射命中排在列表遍历之前）。";
+
+        /// <summary>
+        /// 未写回标记的**短文案**（备注列 / ToolTip 都用它）。
+        /// 用户一眼能看出"哪些条重启会没"。
+        /// </summary>
+        public const string PasswordWriteBackPendingMarker = "手动添加 · 未写回";
+
+        /// <summary>
+        /// 未写回条目的 ToolTip 第二行：一句短的"为什么" + 该改什么（与确认框那条同一个意思）。
+        /// </summary>
+        public const string PasswordWriteBackPendingHint =
+            "这条只存在内存里，关掉程序就没了 —— 点「" + PasswordWriteBackButtonText
+            + "」才会长期保留。写回是追加到密码本末尾，条目多时要留意「每层密码尝试上限」会把后面的候选截断"
+            + "（建议调大上限，或改用「名称:密码」的映射式写法）。";
+
+        /// <summary>写回成功后给手动条目写的备注（标记消失后，这里留一句"已经安全了"）。</summary>
+        public const string PasswordWriteBackDoneRemark = "手动添加 · 已写回密码本";
+
+        /// <summary>成功后的提示条格式：写了几条 / 跳过几条 / 写到哪个文件 / 备份在哪。</summary>
+        public const string PasswordWriteBackSucceededFormat =
+            "已把 {0} 条密码写回密码本「{1}」。{2}";
+
+        /// <summary>备份那一行的格式（给用户一个能自己去核对的路径）。</summary>
+        public const string PasswordWriteBackBackupLineFormat = "写前已备份为：{0}。";
+
+        /// <summary>成功但有跳过时追加的说明（空密码 / 文件里已经有 / 本次重复）。</summary>
+        public const string PasswordWriteBackSkippedFormat = "另外 {0} 条没有写：{1}。";
+
+        /// <summary>跳过原因之一：空密码（写进去没有意义，而且容易被误用）。</summary>
+        public const string PasswordWriteBackSkippedEmptyText = "{0} 条是空密码";
+
+        /// <summary>
+        /// 跳过原因之一：只由空白字符组成。
+        /// 密码本解析器把"只有空白字符的行"当排版空行跳过，写进去等于写一条读不回来的内容。
+        /// </summary>
+        public const string PasswordWriteBackSkippedBlankText = "{0} 条只由空格组成（密码本读不回来，已跳过）";
+
+        /// <summary>跳过原因之一：文件里已经有同样的值。</summary>
+        public const string PasswordWriteBackSkippedExistingText = "{0} 条文件里已经有";
+
+        /// <summary>跳过原因之一：本次输入里重复出现。</summary>
+        public const string PasswordWriteBackSkippedDuplicateText = "{0} 条本次重复";
+
+        /// <summary>成功但一条都没写（全都是空密码或文件里已经有了）。</summary>
+        public const string PasswordWriteBackNothingWrittenFormat =
+            "没有可写的密码：{0} 条都不用写（密码本「{1}」一个字节都没有改动）。";
+
+        /// <summary>失败提示条的前缀。</summary>
+        public const string PasswordWriteBackFailedFormat = "写回密码本失败：{0}";
+
+        /// <summary>
+        /// 日志里唯一允许出现的那句（**只有数量与文件名，绝不出现明文密码** —— §8 隐私红线）。
+        /// </summary>
+        public const string PasswordWriteBackLogFormat = "已把 {0} 条密码写回密码本 {1}（写前已备份）。";
+
+        /// <summary>日志：一条都没写。</summary>
+        public const string PasswordWriteBackLogNoOpFormat =
+            "写回密码本 {0}：没有可写的条目（{1} 条被跳过），文件一个字节都没有改动。";
+
+        /// <summary>日志：用户取消了确认框。</summary>
+        public const string PasswordWriteBackLogCancelled = "已取消「写回密码本」：没有写任何东西。";
+
+        /// <summary>日志：失败（原因里不含密码原文）。</summary>
+        public const string PasswordWriteBackLogFailedFormat = "写回密码本失败：{0}";
+
+        /// <summary>日志：目标密码本文件不存在。</summary>
+        public const string PasswordWriteBackLogTargetMissingFormat = "写回密码本失败：目标文件不存在（{0}）。";
+
+        /// <summary>
+        /// 目标密码本文件不存在时的提示（写回的目标是"他本来就有的那份密码本"，不新建一个空文件）。
+        /// </summary>
+        public const string PasswordWriteBackTargetMissingFormat =
+            "设置里记的密码本文件已经不在了：「{0}」。请重新选一个 txt，或者先用「导入 txt」导入你的密码本。";
+
+        /// <summary>窗口底部那一行的成功文案（与提示条同一口径的短句）。</summary>
+        public const string PasswordWriteBackStatusFormat = "已把 {0} 条密码写回密码本「{1}」。";
+
+        /// <summary>窗口底部那一行的"一条都没写"文案。</summary>
+        public const string PasswordWriteBackStatusNoOp = "没有需要写回的条目。";
+
+        /// <summary>用户取消了确认框。</summary>
+        public const string PasswordWriteBackStatusCancelled = "已取消写回密码本。";
     }
 }

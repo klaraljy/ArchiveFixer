@@ -19,6 +19,7 @@ namespace ArchiveFixer.Models
         private string _source = "ManualList";
         private bool _isEnabled = true;
         private string _remark = string.Empty;
+        private bool _showUnwrittenMarker = true;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -103,6 +104,22 @@ namespace ArchiveFixer.Models
         /// 默认隐藏密码。
         /// </summary>
         public string DisplayValue => MaskedValue;
+
+        /// <summary>
+        /// 这一条是不是"手动添加、还没写回密码本"（列表里要给它一个小标记）。
+        ///
+        /// <para>为什么需要它：手动添加的密码**只在本次运行内有效**（不落盘是红线，
+        /// AGENTS.md §6 不变量 5），关掉程序就没了。用户 2026-09-24 就是因为看不见这件事，
+        /// 才会觉得"我刚加的密码怎么没了"。标记让他一眼看出"哪些条重启会没"。</para>
+        ///
+        /// <para>它是**显示状态**，由 <c>PasswordListViewModel</c> 维护（按值记账：写回成功后置 false；
+        /// 写回之后又改了这条密码的值，会重新置回 true —— 新值并不在文件里）。</para>
+        /// </summary>
+        public bool ShowUnwrittenMarker
+        {
+            get => _showUnwrittenMarker;
+            set => SetProperty(ref _showUnwrittenMarker, value);
+        }
 
         public PasswordItem()
         {

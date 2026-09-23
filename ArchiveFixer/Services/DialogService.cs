@@ -106,8 +106,11 @@ namespace ArchiveFixer.Services
 
         /// <summary>
         /// 打开单文件选择对话框。
+        ///
+        /// <para><c>virtual</c> 是为了让测试注入"用户选好了哪个文件"：无界面宿主下本方法一律返回空串
+        /// （等于用户没选），「没有配置密码本路径 → 问一次选哪个 txt」这条分支就永远走不下去。</para>
         /// </summary>
-        public string ShowOpenSingleFileDialog(
+        public virtual string ShowOpenSingleFileDialog(
             string title = "选择文件",
             string filter = "所有文件 (*.*)|*.*")
         {
@@ -222,20 +225,52 @@ namespace ArchiveFixer.Services
             bool optionCheckedByDefault,
             out bool optionChecked)
         {
+            return ShowConfirm(
+                message,
+                optionText,
+                optionCheckedByDefault,
+                detail: string.Empty,
+                out optionChecked);
+        }
+
+        /// <summary>
+        /// 与上一个重载同一件事，但可以多带一段 <b>Detail</b>（对话框里那块等宽、可滚动、可复制的区域）。
+        ///
+        /// <para><b>为什么需要它</b>：「写回密码本…」的确认框必须**逐条列出将要写入的密码明文**
+        /// （用户 2026-09-24 明确要求，界面上给他看是应该的），但正文 <c>Message</c> 会被无界面宿主的
+        /// 降级日志原样记下来（见 <see cref="LogFallback"/>）。明文密码只能走 Detail —— 它只显示、不记日志。
+        /// 顺带的好处是长清单不撑高对话框（Detail 区有自己的高度上限 + 滚动条）。</para>
+        ///
+        /// <para><c>virtual</c> 是为了让测试能注入"用户点了确定 / 点了取消"的假对话框：
+        /// 无界面宿主下本方法一律返回 false（没人点过 = 不执行），写回那条路就永远走不到真正写入，
+        /// 端到端也就无从验证。</para>
+        /// </summary>
+        /// <param name="detail">附加明细（明文密码清单等）。空 = 与上一个重载完全一致。</param>
+        /// <param name="optionChecked">用户最终是否勾选。</param>
+        public virtual bool ShowConfirm(
+            string message,
+            string optionText,
+            bool optionCheckedByDefault,
+            string detail,
+            out bool optionChecked)
+        {
             bool checkedState = optionCheckedByDefault;
 
+            var request = new AppDialogRequest
+            {
+                Title = "确认",
+                Message = message,
+                Detail = detail ?? string.Empty,
+                Icon = AppDialogIcon.Question,
+                Buttons = AppDialogButtons.YesNo,
+                YesText = "确定",
+                NoText = "取消",
+                OptionText = optionText,
+                OptionChecked = optionCheckedByDefault
+            };
+
             bool confirmed = ShowValueDialog(
-                new AppDialogRequest
-                {
-                    Title = "确认",
-                    Message = message,
-                    Icon = AppDialogIcon.Question,
-                    Buttons = AppDialogButtons.YesNo,
-                    YesText = "确定",
-                    NoText = "取消",
-                    OptionText = optionText,
-                    OptionChecked = optionCheckedByDefault
-                },
+                request,
                 window =>
                 {
                     checkedState = window.IsOptionChecked;
@@ -745,8 +780,11 @@ namespace ArchiveFixer.Services
 
         /// <summary>
         /// 错误提示。
+        ///
+        /// <para><c>virtual</c> 与 <see cref="ShowConfirm(string, string, bool, string, out bool)"/> 同理：
+        /// 让测试能看见"到底报了哪一条错"，而不是只能看降级日志。</para>
         /// </summary>
-        public void ShowError(string message)
+        public virtual void ShowError(string message)
         {
             ShowNotification(
                 new AppDialogRequest

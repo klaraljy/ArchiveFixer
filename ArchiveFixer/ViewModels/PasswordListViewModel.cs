@@ -1,10 +1,13 @@
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Windows.Input;
 
 namespace ArchiveFixer.ViewModels
@@ -47,8 +50,32 @@ namespace ArchiveFixer.ViewModels
     /// </summary>
     public class PasswordListViewModel : ViewModelBase
     {
+        /// <summary>
+        /// 手动添加的条目在内存里就是这个来源（<see cref="PasswordService.AddPassword"/> 写的）。
+        /// 只认这一个值 = 只对"手动加的"提供写回，导入进来的本来就在密码本文件里。
+        /// </summary>
+        private const string ManualSource = "ManualList";
+
+        /// <summary><see cref="PasswordService.AddPassword"/> 给手动条目的默认备注（只在没被用户改过时才更新它）。</summary>
+        private const string DefaultManualRemark = "手动添加";
+
         private readonly PasswordService _passwordService;
         private readonly DialogService _dialogService;
+
+        /// <summary>把手工条目追加进用户自己的密码本 txt（写前备份、只追加、写完自检）。</summary>
+        private readonly PasswordBookWriter _passwordBookWriter;
+
+        /// <summary>
+        /// 本次运行里**已经写回成功**的值。
+        ///
+        /// <para>为什么要单独记一份（而不是改 <see cref="PasswordItem.Source"/>）：写回是"按值"的 ——
+        /// 用户写完回又把某条密码改了，那条就**重新变成未写回**（新值并不在文件里）。
+        /// 按值记天然就有这个行为，而改来源标记会把这件事掩盖过去；而且来源改成别的值以后，
+        /// 那条目就再也不算"手动添加"了，语义上是错的。</para>
+        ///
+        /// <para>它只在内存里：重启后密码本重新加载，手工条目本来也就不在了。</para>
+        /// </summary>
+        private readonly HashSet<string> _writtenBackValues = new(StringComparer.Ordinal);
 
         private PasswordItem? _selectedPassword;
         private string _newPassword = string.Empty;
@@ -175,10 +202,25 @@ namespace ArchiveFixer.ViewModels
 
         public int EnabledCount => Passwords.Count(x => x.IsEnabled);
 
+        /// <summary>
+        /// 还没写回密码本的**手工条目**条数（<c>Source == "ManualList"</c> 且本次运行里没写回成功过）。
+        ///
+        /// <para>它就是「写回密码本…」按钮的可用性判据 —— 一条都没有时按钮置灰，
+        /// 用户点不动，也就不会产生"点了一下什么都没发生"的困惑。</para>
+        /// </summary>
+        public int UnwrittenManualCount => CollectUnwrittenManualValues().Count;
+
+        /// <summary>有没有待写回的手工条目。</summary>
+        public bool HasUnwrittenManualPasswords => UnwrittenManualCount > 0;
+
         public ICommand AddPasswordCommand { get; }
         public ICommand RemovePasswordCommand { get; }
         public ICommand ClearPasswordsCommand { get; }
         public ICommand ImportPasswordsCommand { get; }
+
+        /// <summary>把手工添加的密码追加进用户自己的密码本 txt（写前自动备份）。</summary>
+        public ICommand WriteBackPasswordsCommand { get; }
+
         public ICommand MoveUpCommand { get; }
         public ICommand MoveDownCommand { get; }
         public ICommand ToggleShowPasswordsCommand { get; }
@@ -202,9 +244,18 @@ namespace ArchiveFixer.ViewModels
         public PasswordListViewModel(
             PasswordService passwordService,
             DialogService dialogService)
+            : this(passwordService, dialogService, new PasswordBookWriter())
+        {
+        }
+
+        public PasswordListViewModel(
+            PasswordService passwordService,
+            DialogService dialogService,
+            PasswordBookWriter passwordBookWriter)
         {
             _passwordService = passwordService ?? new PasswordService();
             _dialogService = dialogService ?? new DialogService();
+            _passwordBookWriter = passwordBookWriter ?? new PasswordBookWriter();
 
             Passwords.CollectionChanged += Passwords_CollectionChanged;
 
@@ -212,6 +263,7 @@ namespace ArchiveFixer.ViewModels
             RemovePasswordCommand = new RelayCommand(RemovePassword, CanRemoveSelected);
             ClearPasswordsCommand = new RelayCommand(ClearPasswords, () => Passwords.Count > 0);
             ImportPasswordsCommand = new RelayCommand(ImportPasswords);
+            WriteBackPasswordsCommand = new RelayCommand(WriteBackPasswords, CanWriteBackPasswords);
             MoveUpCommand = new RelayCommand(MoveUp, CanMoveUp);
             MoveDownCommand = new RelayCommand(MoveDown, CanMoveDown);
             ToggleShowPasswordsCommand = new RelayCommand(ToggleShowPasswords);
@@ -264,6 +316,9 @@ namespace ArchiveFixer.ViewModels
             {
                 SelectedPassword = null;
             }
+
+            // 标记是"当前事实"的显示状态，列表重建后必须跟着重算（否则新加的条目不会亮标记）。
+            RefreshUnwrittenMarkers();
 
             RefreshStatistics();
         }
@@ -484,22 +539,493 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
-                var pathService = new PathService
-                {
-                    DataRootDirectory = _passwordService.DataRootDirectory
-                };
-
-                var settingsService = new SettingsService(pathService);
+                SettingsService settingsService = CreateSettingsService();
 
                 // 先 Load 再改：不能拿一份全新的默认设置整体覆盖用户的 appsettings.json。
                 AppSettings settings = settingsService.Load();
                 settings.PasswordBookPath = path;
                 settingsService.Save(settings);
+
+                /*
+                 * 侧车文件：ImportPasswordList 顺手写的那一份在这里补上。
+                 * 用户如果是"先写回、再首次导入"这个顺序，少了这一笔主界面就会说"没配过密码本"。
+                 * 只写路径，绝不碰密码本内容本身。
+                 */
+                WritePasswordBookSidecar(path);
             }
             catch (Exception ex)
             {
                 // 记不住路径不该让导入本身失败，但要说清楚 —— 否则用户下次启动发现密码本没自动加载会以为是 bug。
                 Message += "（提示：路径没能记进设置，下次启动可能不会自动加载：" + ex.Message + "）";
+            }
+        }
+
+        /// <summary>把密码本路径写进侧车文件（与 <see cref="PasswordService"/> 同一份口径与位置）。</summary>
+        private void WritePasswordBookSidecar(string path)
+        {
+            string dataRoot = _passwordService.DataRootDirectory;
+
+            Directory.CreateDirectory(dataRoot);
+
+            File.WriteAllText(
+                Path.Combine(dataRoot, "password-book.path"),
+                path,
+                new UTF8Encoding(false));
+        }
+
+        // ------------------------------------------------------------------ 写回密码本（用户 2026-09-24）
+
+        private bool CanWriteBackPasswords()
+        {
+            return UnwrittenManualCount > 0;
+        }
+
+        /// <summary>
+        /// 把列表里**手动添加**的密码追加进用户自己的密码本 txt。
+        ///
+        /// <para>为什么只能是"追加到用户那份 txt"：手动加的条目<b>只在内存里</b>
+        /// （不落盘是红线，AGENTS.md §6 不变量 5），重启就没了。要长期保留，
+        /// 唯一正当的落点是用户自己点的那份密码本文件 —— ⛔ 绝不写进 <c>appsettings.json</c>、
+        /// 也绝不写进程序自己的 <c>data\</c> 下任何文件。</para>
+        ///
+        /// <para>整条流程：挑出待写条目 → 解析目标文件（没有就问一次）→ 确认框里逐条列出明文
+        /// （界面上给他看是应该的；<b>日志里绝不出现明文</b>，见 §8）→ 追加 + 备份 + 自检 →
+        /// 如实显示"写了几条 / 跳过几条 / 写到哪 / 备份在哪"。</para>
+        /// </summary>
+        private void WriteBackPasswords()
+        {
+            try
+            {
+                IReadOnlyList<string> pending = CollectUnwrittenManualValues();
+
+                if (pending.Count == 0)
+                {
+                    Message = Models.StatusText.PasswordWriteBackStatusNoOp;
+                    SetNotice(PasswordNoticeKind.Info, Models.StatusText.PasswordWriteBackNothingToWrite);
+                    return;
+                }
+
+                string targetPath = ResolveWriteBackTargetPath();
+
+                if (targetPath.Length == 0)
+                {
+                    Message = Models.StatusText.PasswordWriteBackStatusCancelled;
+                    return;
+                }
+
+                string confirmMessage = BuildWriteBackConfirmMessage(pending.Count, targetPath);
+
+                bool confirmed = _dialogService.ShowConfirm(
+                    confirmMessage,
+                    optionText: string.Empty,
+                    optionCheckedByDefault: false,
+                    detail: BuildWriteBackConfirmDetail(pending),
+                    out _);
+
+                if (!confirmed)
+                {
+                    // 取消则什么都不做：不备份、不打开文件、一个字节都不动。
+                    Message = Models.StatusText.PasswordWriteBackStatusCancelled;
+                    WriteWriteBackLog(Models.StatusText.PasswordWriteBackLogCancelled);
+                    return;
+                }
+
+                PasswordBookWriteBackResult result = _passwordBookWriter.WriteBack(targetPath, pending);
+
+                ReportWriteBackResult(result, pending);
+            }
+            catch (Exception ex)
+            {
+                // 兜底：真正会出事的地方（文件、对话框）各自都有明确的失败分支，
+                // 走到这里说明是没预料到的异常。如实显示，绝不假装成功。
+                string reason = ex.GetType().Name + "：" + ex.Message;
+
+                Message = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackFailedFormat,
+                    reason);
+
+                SetNotice(PasswordNoticeKind.Error, Message);
+                _dialogService.ShowError(Message);
+            }
+        }
+
+        /// <summary>
+        /// 挑出待写回的值：手动添加、且**这一条**本次运行里还没写回成功过。
+        /// 列表顺序原样保留（写回后文件里的先后就是用户看到的先后）。
+        ///
+        /// <para>判据必须是"按值"的，不能只看来源：用户写回之后又把某条密码改了，新值并不在文件里，
+        /// 那一条就要**重新变回未写回**（标记重新出现）。所以这里比对的是
+        /// "这一条现在的值，是不是就是当初写进去的那个值"。</para>
+        /// </summary>
+        private List<string> CollectUnwrittenManualValues()
+        {
+            return Passwords
+                .Where(IsUnwrittenManual)
+                .Select(item => item.Value ?? string.Empty)
+                .ToList();
+        }
+
+        /// <summary>
+        /// 这一条是不是"手动添加、还没写回"。
+        ///
+        /// <para>判据两条：来源是手动 ⨯ 它的值不是"当初写进去的那个值"。
+        /// 后者用一个**按值的账**比对（<see cref="IsWrittenBack"/>），而不是"这个值在文件里出现过没有" ——
+        /// 后者会在"用户先把 A 写回、又新增一条同样等于 A 的手动条目"时把新条目误判成已写回。</para>
+        /// </summary>
+        private bool IsUnwrittenManual(PasswordItem? item)
+        {
+            return item != null
+                && string.Equals(item.Source, ManualSource, StringComparison.Ordinal)
+                && !IsWrittenBack(item);
+        }
+
+        /// <summary>空值不算"已写回"（空密码从来不会被写进去，标记也就不该消失）。</summary>
+        private bool IsWrittenBack(PasswordItem item)
+        {
+            string value = item.Value ?? string.Empty;
+
+            return value.Length > 0 && _writtenBackValues.Contains(value);
+        }
+
+        /// <summary>
+        /// 把列表里每一条的「未写回」标记刷新成当前事实（列表重建后、以及某条的密码值被改过之后都要刷新）。
+        /// </summary>
+        private void RefreshUnwrittenMarkers()
+        {
+            foreach (PasswordItem item in Passwords)
+            {
+                if (item != null)
+                {
+                    item.ShowUnwrittenMarker = IsUnwrittenManual(item);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 写回成功后把这些值记成"已经在文件里"，对应条目的标记随之消失。
+        ///
+        /// <para>刻意**不改 <c>Source</c>、也不改 <c>Value</c>**：来源仍是"手动添加"（它就是手动加的），
+        /// 标记消失靠的是这份按值的账；而密码本体一个字符都不许动（含首尾空格）。
+        /// 备注仍停在"手动添加"时才顺手更新一下，免得覆盖掉用户自己写的备注。</para>
+        /// </summary>
+        private void MarkAsWrittenBack(IReadOnlyList<string> writtenValues)
+        {
+            var written = new HashSet<string>(writtenValues, StringComparer.Ordinal);
+
+            foreach (string value in written)
+            {
+                if (value.Length > 0)
+                {
+                    _writtenBackValues.Add(value);
+                }
+            }
+
+            foreach (PasswordItem item in Passwords)
+            {
+                if (item == null ||
+                    !string.Equals(item.Source, ManualSource, StringComparison.Ordinal) ||
+                    !written.Contains(item.Value ?? string.Empty))
+                {
+                    continue;
+                }
+
+                if (string.Equals(item.Remark, DefaultManualRemark, StringComparison.Ordinal))
+                {
+                    item.Remark = Models.StatusText.PasswordWriteBackDoneRemark;
+                }
+            }
+
+            RefreshUnwrittenMarkers();
+            RefreshStatistics();
+        }
+
+        /// <summary>
+        /// 定下这次写哪个文件：优先设置里的 <c>PasswordBookPath</c>；
+        /// 没有（或那个文件已经不在了）就问一次 —— 用既有的文件对话框服务，不另造一个。
+        /// 选完沿「导入 txt」同一条路记住路径，下次启动不必再问。
+        /// </summary>
+        private string ResolveWriteBackTargetPath()
+        {
+            AppSettings settings = LoadSettings();
+            string configured = settings.PasswordBookPath ?? string.Empty;
+
+            if (configured.Length > 0 && File.Exists(configured))
+            {
+                return configured;
+            }
+
+            if (configured.Length > 0)
+            {
+                // 路径记着、文件没了（用户搬走/改名了）。说清这件事再问他选哪个，
+                // 否则他会以为自己上次根本没选成功。
+                SetNotice(
+                    PasswordNoticeKind.Warning,
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        Models.StatusText.PasswordWriteBackTargetMissingFormat,
+                        Path.GetFileName(configured)));
+            }
+
+            string chosen = _dialogService.ShowOpenSingleFileDialog(
+                "选择要写回的密码本文件",
+                "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*");
+
+            if (string.IsNullOrWhiteSpace(chosen))
+            {
+                return string.Empty;
+            }
+
+            // 与「导入 txt」同一条路：写进 appsettings.json 的 PasswordBookPath + 侧车文件。
+            RememberPasswordBookPath(chosen);
+
+            return chosen;
+        }
+
+        /// <summary>
+        /// 确认框正文：**只有数量与文件名**（正文会被无界面宿主的降级日志记下来）。
+        /// 明文清单走 <see cref="BuildWriteBackConfirmDetail"/> 的 Detail 区。
+        /// </summary>
+        private string BuildWriteBackConfirmMessage(int count, string targetPath)
+        {
+            var builder = new StringBuilder();
+
+            builder.Append(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                Models.StatusText.PasswordWriteBackConfirmFormat,
+                count,
+                Path.GetFileName(targetPath)));
+
+            builder.AppendLine();
+            builder.Append(Models.StatusText.PasswordWriteBackConfirmNote);
+
+            builder.AppendLine();
+            builder.Append(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                Models.StatusText.PasswordWriteBackAttemptLimitHintFormat,
+                LoadSettings().MaxPasswordAttemptsPerLayer));
+
+            return builder.ToString();
+        }
+
+        /// <summary>
+        /// 确认框 Detail 区：**逐条列出将要写入的密码明文**（用户明确要求，界面上给他看是应该的）。
+        /// 它只显示、不进日志；对话框里那块是等宽、可滚动、可复制的。
+        /// </summary>
+        private static string BuildWriteBackConfirmDetail(IReadOnlyList<string> pending)
+        {
+            var builder = new StringBuilder();
+
+            builder.AppendLine(Models.StatusText.PasswordWriteBackConfirmDetailHeader);
+
+            for (int i = 0; i < pending.Count; i++)
+            {
+                builder.AppendLine(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackConfirmDetailItemFormat,
+                    i + 1,
+                    pending[i]));
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 把写回结论**如实**显示出来：写了几条 / 跳过几条 / 写到哪个文件 / 备份在哪。
+        /// 日志里只有数量与文件名 —— <b>绝不出现明文密码</b>（§8 隐私红线）。
+        /// </summary>
+        private void ReportWriteBackResult(PasswordBookWriteBackResult result, IReadOnlyList<string> pending)
+        {
+            string fileName = Path.GetFileName(result.TargetPath);
+
+            if (!result.Success)
+            {
+                Message = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackFailedFormat,
+                    result.FailureReason);
+
+                SetNotice(PasswordNoticeKind.Error, Message);
+                WriteWriteBackLog(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackLogFailedFormat,
+                    result.FailureReason));
+
+                _dialogService.ShowError(Message);
+                return;
+            }
+
+            if (result.AppendedCount == 0)
+            {
+                Message = Models.StatusText.PasswordWriteBackStatusNoOp;
+
+                SetNotice(
+                    PasswordNoticeKind.Info,
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        Models.StatusText.PasswordWriteBackNothingWrittenFormat,
+                        result.SkippedCount,
+                        fileName));
+
+                WriteWriteBackLog(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackLogNoOpFormat,
+                    fileName,
+                    result.SkippedCount));
+
+                return;
+            }
+
+            // 写回成功：这些值从此"已经在文件里"，标记消失（用户一眼能看出"哪些条重启会没"）。
+            MarkAsWrittenBack(pending);
+
+            var detail = new StringBuilder();
+
+            detail.Append(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                Models.StatusText.PasswordWriteBackBackupLineFormat,
+                result.BackupPath));
+
+            string skipped = BuildSkippedSummary(result);
+
+            if (skipped.Length > 0)
+            {
+                detail.Append(' ').Append(skipped);
+            }
+
+            Message = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                Models.StatusText.PasswordWriteBackStatusFormat,
+                result.AppendedCount,
+                fileName);
+
+            SetNotice(
+                result.SkippedCount > 0 ? PasswordNoticeKind.Warning : PasswordNoticeKind.Success,
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackSucceededFormat,
+                    result.AppendedCount,
+                    fileName,
+                    detail.ToString()));
+
+            WriteWriteBackLog(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                Models.StatusText.PasswordWriteBackLogFormat,
+                result.AppendedCount,
+                fileName));
+
+            RefreshStatistics();
+        }
+
+        /// <summary>把"跳过了几条、为什么跳"拼成一句（逐项只在真的有数时才出现）。</summary>
+        private static string BuildSkippedSummary(PasswordBookWriteBackResult result)
+        {
+            if (result.SkippedCount == 0)
+            {
+                return string.Empty;
+            }
+
+            var reasons = new List<string>();
+
+            if (result.SkippedEmptyCount > 0)
+            {
+                reasons.Add(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackSkippedEmptyText,
+                    result.SkippedEmptyCount));
+            }
+
+            if (result.SkippedBlankCount > 0)
+            {
+                reasons.Add(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackSkippedBlankText,
+                    result.SkippedBlankCount));
+            }
+
+            if (result.AlreadyPresentCount > 0)
+            {
+                reasons.Add(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackSkippedExistingText,
+                    result.AlreadyPresentCount));
+            }
+
+            if (result.SkippedDuplicateCount > 0)
+            {
+                reasons.Add(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    Models.StatusText.PasswordWriteBackSkippedDuplicateText,
+                    result.SkippedDuplicateCount));
+            }
+
+            return string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                Models.StatusText.PasswordWriteBackSkippedFormat,
+                result.SkippedCount,
+                string.Join("、", reasons));
+        }
+
+        /// <summary>
+        /// 读设置（只读，不保存）。定位口径与 <see cref="RememberPasswordBookPath"/> 完全一致，见那里的说明。
+        /// </summary>
+        private AppSettings LoadSettings()
+        {
+            try
+            {
+                return CreateSettingsService().Load();
+            }
+            catch (Exception ex)
+            {
+                // 设置读不出来不该让写回整条路瘫掉：用一份默认设置继续（它会走"问一次选文件"那条分支）。
+                Message += "（提示：设置读取失败，已按默认设置继续：" + ex.Message + "）";
+
+                return AppSettings.CreateDefault();
+            }
+        }
+
+        /// <summary>构造设置服务（写回与"记住路径"共用，保证两处定位到同一个文件）。</summary>
+        private SettingsService CreateSettingsService()
+        {
+            var pathService = new PathService
+            {
+                DataRootDirectory = _passwordService.DataRootDirectory
+            };
+
+            return new SettingsService(pathService);
+        }
+
+        /// <summary>
+        /// 写一条写回日志。
+        ///
+        /// <para>落点与主界面同一个数据根目录（<see cref="PasswordService.DataRootDirectory"/>，
+        /// 主界面刻意把它与 <c>PathService.DataRootDirectory</c> 同步成同一个值）。
+        /// 传进来的文案**只有数量与文件名**，绝不含密码明文（§8 隐私红线）。</para>
+        /// </summary>
+        private void WriteWriteBackLog(string message)
+        {
+            try
+            {
+                var pathService = new PathService
+                {
+                    DataRootDirectory = _passwordService.DataRootDirectory
+                };
+
+                var logService = new LogService(pathService);
+
+                /*
+                 * Initialize 在这里的作用只有一个：把这个 LogService 的"当前日志文件"算出来。
+                 * 传 enableFileLog: false 是故意的 —— 不带时间戳的文件名会**把主界面这一天已经写下的日志清空**
+                 * （Initialize 首行是 WriteAllText），那等于为了记一条日志毁掉当天的日志。
+                 * 关掉它，Write 就走"追加到那个按时间戳命名的文件"，与主界面同一个落点、不互相覆盖。
+                 */
+                logService.Initialize(enableFileLog: false);
+
+                logService.WriteInfo(message);
+            }
+            catch
+            {
+                // 写不出日志不该让"写回"这个动作失败：日志是附带的，文件才是结果。
             }
         }
 
@@ -663,6 +1189,12 @@ namespace ArchiveFixer.ViewModels
                 or nameof(PasswordItem.Remark)
                 or nameof(PasswordItem.Source))
             {
+                /*
+                 * 密码的值被改过：这条是否"还没写回"要重新算。
+                 * 按值的账没变，但比对的对象变了 —— 写回后改成新密码，标记必须重新亮起来
+                 * （新值并不在密码本文件里，重启照样丢）。
+                 */
+                RefreshUnwrittenMarkers();
                 RefreshStatistics();
             }
         }
@@ -672,6 +1204,11 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(TotalCount));
             OnPropertyChanged(nameof(EnabledCount));
             OnPropertyChanged(nameof(IsEmpty));
+
+            // "未写回的手工条目"是按钮可用性 + 列表标记的共同判据，统计一变就一起重算。
+            OnPropertyChanged(nameof(UnwrittenManualCount));
+            OnPropertyChanged(nameof(HasUnwrittenManualPasswords));
+
             RaiseCommandStates();
         }
 
@@ -680,6 +1217,7 @@ namespace ArchiveFixer.ViewModels
             RaiseCanExecuteChanged(AddPasswordCommand);
             RaiseCanExecuteChanged(RemovePasswordCommand);
             RaiseCanExecuteChanged(ClearPasswordsCommand);
+            RaiseCanExecuteChanged(WriteBackPasswordsCommand);
             RaiseCanExecuteChanged(MoveUpCommand);
             RaiseCanExecuteChanged(MoveDownCommand);
             RaiseCanExecuteChanged(EnableAllCommand);
