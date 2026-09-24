@@ -4,19 +4,26 @@ using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using System;
 using System.ComponentModel;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 
 namespace ArchiveFixer.Views
 {
     /// <summary>
-    /// 一键处理的「本次选项」面板（规格 <c>docs/输出与整理模型.md</c> §9）。
+    /// 一键处理的**那一个**确认框（用户 2026-09-24 第 17 条；旧名字叫「本次选项」面板）。
     ///
-    /// <para><b>它做什么</b>：点「一键处理」时先问一次"这一次按什么落点 / 终端落法 / 源包处理跑"，
-    /// 用户确认后产出一个 <see cref="OneClickRunOptions"/> **运行期快照**交给解压管线。
-    /// 面板自己**不写任何设置** —— 只有用户勾了「把本次选择存为默认」，
-    /// 才由 <c>MainViewModel.SaveOneClickOptionsAsDefaults</c> 写一次 <c>appsettings.json</c>
-    /// （§9.2 硬要求②：不勾就一个字节都不改）。</para>
+    /// <para><b>它做什么</b>：点「一键处理」时先说清两件事 —— **内容物会生成在什么地方**、
+    /// **其余物会不会被自动删掉**（用户点名要的正文），外加需要时的两行提醒（疑似无用物 /
+    /// 没有可用密码的包）。用户确认后产出一个 <see cref="OneClickRunOptions"/> **运行期快照**交给解压管线；
+    /// 要临时改落点 / 终端落法 / 源包处理，展开下面那个折叠区（默认收起 —— 旧版把这一整套摊在正文里，
+    /// 用户原话："这么的啰嗦"）。</para>
+    ///
+    /// <para><b>它绝不写设置</b>：只有用户勾了「把本次选择存为默认」，才由
+    /// <c>MainViewModel.SaveOneClickOptionsAsDefaults</c> 写一次 <c>appsettings.json</c>
+    /// （§9.2 硬要求②：不勾就一个字节都不改）。唯一的例外是那个「以后不再询问」勾选项 ——
+    /// 它按用户要求（"这个可以选中以后不弹出"）由调用方写进
+    /// <see cref="AppSettings.SkipOneClickConfirm"/>，而且界面上留了开关能再打开。</para>
     ///
     /// <para><b>线程与降级</b>（与 <c>DialogService</c> 同一口径，历史"卡死"就出在这一段）：</para>
     /// <list type="bullet">
@@ -35,7 +42,7 @@ namespace ArchiveFixer.Views
     public partial class OneClickOptionsWindow : Window, INotifyPropertyChanged
     {
         /// <summary>
-        /// 后台线程等待用户点面板的上限（与 <c>DialogService.BackgroundWaitTimeout</c> 同一量级）。
+        /// 后台线程等待用户点确认框的上限（与 <c>DialogService.BackgroundWaitTimeout</c> 同一量级）。
         /// 之所以要有上限：这个 API 是同步的（要拿用户的答案），**不能无限等** ——
         /// 超时按"没弹面板"处理，于是行为退回"按设置走"（既有行为），而不是把整批卡住。
         /// </summary>
@@ -43,10 +50,25 @@ namespace ArchiveFixer.Views
 
         private readonly AppSettings _settings;
 
-        private string _summary = string.Empty;
+        /// <summary>
+        /// 折叠区里改了落点之后重算"内容物会生成在…"那一行（可空：没有它就只显示调用方给的那一句）。
+        ///
+        /// <para>为什么必须能重算：那一行是用户点名要看的东西，他改了落点却还看着旧路径，
+        /// 比不显示更糟。重算走**调用方**（它手里有 <c>PathService</c> 与真实任务），
+        /// 这里一个字都不拼路径 —— 落点仍然只有一处实现。</para>
+        /// </summary>
+        private readonly Func<OneClickRunOptions, Task<string>>? _destinationEchoFactory;
 
-        /// <summary>初始化期间不刷新界面：避免在控件还没填完时把半成品状态写进摘要。</summary>
+        private string _destinationEcho = string.Empty;
+        private string _restEcho = string.Empty;
+        private string _sourceEcho = string.Empty;
+        private string _noticeEcho = string.Empty;
+
+        /// <summary>初始化期间不刷新界面：避免在控件还没填完时把半成品状态写进正文。</summary>
         private bool _initializing = true;
+
+        /// <summary>重算落点那一行的并发编号（连点几下时只认最后一次算出来的结果）。</summary>
+        private int _echoRevision;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -62,6 +84,26 @@ namespace ArchiveFixer.Views
         /// "默认档行为与现在完全一致"）。
         /// </param>
         public OneClickOptionsWindow(AppSettings? settings, OneClickRunOptions? seed)
+            : this(settings, seed, null, null, null)
+        {
+        }
+
+        /// <summary>
+        /// 正式路径：正文里的两件事（内容物落点 / 其余物）由调用方算好传进来，外加可选的提醒两行。
+        /// </summary>
+        /// <param name="destinationEcho">「内容物会生成在…」那一行（调用方用落点唯一实现算出来的）。</param>
+        /// <param name="restEcho">「其余物…」那一行（自动删除 / 不自动删除）。</param>
+        /// <param name="sourceEcho">「源包…」那一行。</param>
+        /// <param name="noticeEcho">需要时的提醒（疑似无用物 / 没有可用密码）；空 = 不显示。</param>
+        /// <param name="destinationEchoFactory">折叠区改了落点之后重算第一行（可空）。</param>
+        public OneClickOptionsWindow(
+            AppSettings? settings,
+            OneClickRunOptions? seed,
+            string? destinationEcho,
+            string? restEcho,
+            string? sourceEcho,
+            string? noticeEcho = null,
+            Func<OneClickRunOptions, Task<string>>? destinationEchoFactory = null)
         {
             InitializeComponent();
 
@@ -70,25 +112,51 @@ namespace ArchiveFixer.Views
 
             DataContext = this;
 
+            _destinationEcho = destinationEcho ?? string.Empty;
+            _restEcho = restEcho ?? string.Empty;
+            _sourceEcho = sourceEcho ?? string.Empty;
+            _noticeEcho = noticeEcho ?? string.Empty;
+            _destinationEchoFactory = destinationEchoFactory;
+
             ApplySeed(seed ?? OneClickRunOptions.FromSettings(_settings));
 
             _initializing = false;
             RefreshUi();
         }
 
-        /// <summary>「这一次按什么跑」的摘要（绑定到窗口顶部那一行；随选择实时变化）。</summary>
-        public string Summary
+        /// <summary>「内容物会生成在…」（用户点名要看的第一件事）。</summary>
+        public string DestinationEcho
         {
-            get => _summary;
+            get => _destinationEcho;
+            private set => SetEcho(ref _destinationEcho, value, nameof(DestinationEcho));
+        }
+
+        /// <summary>「其余物…」（用户点名要看的第二件事）。</summary>
+        public string RestEcho
+        {
+            get => _restEcho;
+            private set => SetEcho(ref _restEcho, value, nameof(RestEcho));
+        }
+
+        /// <summary>「源包…」。</summary>
+        public string SourceEcho
+        {
+            get => _sourceEcho;
+            private set => SetEcho(ref _sourceEcho, value, nameof(SourceEcho));
+        }
+
+        /// <summary>需要时才出现的那段提醒（空 = 整块收起）。</summary>
+        public string NoticeEcho
+        {
+            get => _noticeEcho;
             private set
             {
-                if (string.Equals(_summary, value, StringComparison.Ordinal))
+                if (SetEcho(ref _noticeEcho, value, nameof(NoticeEcho)))
                 {
-                    return;
+                    NoticeText.Visibility = string.IsNullOrWhiteSpace(_noticeEcho)
+                        ? Visibility.Collapsed
+                        : Visibility.Visible;
                 }
-
-                _summary = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Summary)));
             }
         }
 
@@ -107,7 +175,7 @@ namespace ArchiveFixer.Views
         ///
         /// 勾选项的语义：
         /// · <see cref="OneClickRunOptions.SaveAsDefault"/> —— 是否写设置（调用方负责写，本窗口不写）；
-        /// · <see cref="OneClickRunOptions.SuppressPanelNextTime"/> —— 本次运行内不再问。
+        /// · <see cref="OneClickRunOptions.SuppressPanelNextTime"/> —— 以后不再问（**调用方负责落盘**）。
         /// </summary>
         public OneClickRunOptions ReadResult()
         {
@@ -125,10 +193,14 @@ namespace ArchiveFixer.Views
         }
 
         /// <summary>
-        /// 显示面板并拿结果（**唯一的入口**）。任何"弹不出来 / 问不到"的情况都返回
+        /// 显示确认框并拿结果（**唯一的入口**）。任何"弹不出来 / 问不到"的情况都返回
         /// <see cref="OneClickOptionsOutcome.NotShown"/>，由调用方按设置继续。
         /// </summary>
-        internal static OneClickOptionsPrompt Show(OneClickRunOptions seed, AppSettings? settings = null)
+        internal static OneClickOptionsPrompt Show(
+            OneClickRunOptions seed,
+            AppSettings? settings = null,
+            OneClickConfirmFacts? facts = null,
+            Func<OneClickRunOptions, Task<string>>? destinationEchoFactory = null)
         {
             Application? app = Application.Current;
 
@@ -150,11 +222,11 @@ namespace ArchiveFixer.Views
             {
                 if (dispatcher.CheckAccess())
                 {
-                    return ShowModal(seed, settings);
+                    return ShowModal(seed, settings, facts, destinationEchoFactory);
                 }
 
                 DispatcherOperation<OneClickOptionsPrompt> operation =
-                    dispatcher.InvokeAsync(() => ShowModal(seed, settings));
+                    dispatcher.InvokeAsync(() => ShowModal(seed, settings, facts, destinationEchoFactory));
 
                 if (operation.Task.Wait(BackgroundWaitTimeout))
                 {
@@ -166,14 +238,25 @@ namespace ArchiveFixer.Views
             }
             catch
             {
-                // 面板自己出问题绝不允许变成"一键处理失败"：退回按设置走。
+                // 确认框自己出问题绝不允许变成"一键处理失败"：退回按设置走。
                 return OneClickOptionsPrompt.NotShown();
             }
         }
 
-        private static OneClickOptionsPrompt ShowModal(OneClickRunOptions seed, AppSettings? settings)
+        private static OneClickOptionsPrompt ShowModal(
+            OneClickRunOptions seed,
+            AppSettings? settings,
+            OneClickConfirmFacts? facts,
+            Func<OneClickRunOptions, Task<string>>? destinationEchoFactory)
         {
-            var window = new OneClickOptionsWindow(settings, seed);
+            var window = new OneClickOptionsWindow(
+                settings,
+                seed,
+                facts?.DestinationEcho,
+                facts?.RestEcho,
+                facts?.SourceEcho,
+                facts?.NoticeEcho,
+                destinationEchoFactory);
 
             Window? owner = Application.Current?.MainWindow;
 
@@ -221,13 +304,14 @@ namespace ArchiveFixer.Views
                 seed.SourceHandling != SourceHandlingMode.DeleteAfterVerify;
 
             /*
-             * ⚠ 这两个勾选框**刻意不预置**：
-             * · 「存为默认」不预置 = 不写设置文件（默认档行为与加面板之前一致）；
-             * · 「以后不再询问」不预置 = 下次仍然问（面板是本功能的主体，默认不该把自己关掉）。
-             * 预置任何一个都会让"默认档"偏离既有行为（§9.2 硬要求⑤）。
+             * 两个勾选项的预置口径（2026-09-24 第 17 条之后）：
+             * · 「存为默认」**不预置** = 默认不写设置文件（§9.2 硬要求②）；
+             * · 「以后不再询问」预置成**设置里的当前值**：用户上次勾过就还是勾着的
+             *   （他明确要的是"选中以后不弹出"，而不是"每次重新勾一遍"），
+             *   但它只在用户真的按了「开始处理」时才由调用方写回设置 —— 打开又关掉不留痕迹。
              */
             SaveAsDefaultBox.IsChecked = false;
-            SuppressPanelBox.IsChecked = false;
+            SuppressPanelBox.IsChecked = _settings.SkipOneClickConfirm;
         }
 
         private OutputPlacementMode CurrentPlacementMode
@@ -259,10 +343,10 @@ namespace ArchiveFixer.Views
         }
 
         /// <summary>
-        /// 界面随选择刷新（摘要 / 「指定位置」可用性 / 能不能点「开始处理」）。
+        /// 界面随选择刷新（源包那一行 / 「指定位置」可用性 / 能不能点「开始处理」）。
         ///
         /// "选了指定位置却没填路径"必须在**点按钮之前**就看出来：
-        /// 空根会被落点实现解释成"解压到压缩包所在目录"，静默换个地方落盘是最不该有的形态
+        /// 空根会被落点实现解释成"未指定位置"那一档，静默换个地方落盘是最不该有的形态
         /// （见 <see cref="OneClickRunOptions.IsPlacementValid"/>）。
         /// </summary>
         private void RefreshUi()
@@ -274,17 +358,77 @@ namespace ArchiveFixer.Views
             CustomRootBox.IsEnabled = customMode;
             BrowseButton.IsEnabled = customMode;
 
-            CustomRootHint.Text = customMode
-                ? "这一档会把内容物解到你选的目录里（再建一层同名子文件夹；选中文件夹时用该文件夹的名字）；目录不存在会自动创建。"
-                : "只对上面「解压到指定位置」那一档生效；当前这一档用不到它。";
-
             StartButton.IsEnabled = placementValid;
 
             ValidationText.Text = placementValid
                 ? string.Empty
                 : "选了「指定位置」但还没填路径：点「浏览…」选一个目录，或改用上面那一档。";
 
-            Summary = current.Describe();
+            // 源包那一行跟着折叠区里的选择实时变（它是"这次会不会动我的源包"的答案）。
+            SourceEcho = StatusText.OneClickConfirmSourceLabel + OneClickRunOptions.DescribeSourceHandling(current.SourceHandling);
+
+            RefreshDestinationEcho();
+        }
+
+        /// <summary>
+        /// 重算「内容物会生成在…」那一行。
+        ///
+        /// <para>挂起条件：初始化期间不算（控件还没填完）；没有工厂时保持调用方给的那一句
+        /// （无界面宿主与单测走这条，绝不在这里现拼路径）。</para>
+        /// </summary>
+        private void RefreshDestinationEcho()
+        {
+            if (_initializing || _destinationEchoFactory == null)
+            {
+                return;
+            }
+
+            int revision = ++_echoRevision;
+            OneClickRunOptions current = ReadResult();
+
+            _ = Task.Run(async () =>
+            {
+                string text;
+
+                try
+                {
+                    text = await _destinationEchoFactory(current).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // 算不出来就保留上一句：绝不在这里编一个假路径出来。
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return;
+                }
+
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    // 连点几下时只认最后一次（旧结果回来晚了会覆盖新结果）。
+                    if (revision == _echoRevision)
+                    {
+                        DestinationEcho = text;
+                    }
+                });
+            });
+        }
+
+        private bool SetEcho(ref string field, string value, string propertyName)
+        {
+            string normalized = value ?? string.Empty;
+
+            if (string.Equals(field, normalized, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            field = normalized;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+
+            return true;
         }
 
         // ------------------------------------------------------------------ 事件

@@ -492,6 +492,187 @@ namespace ArchiveFixer.Models
             "已按「" + JunkReminderNoText + "」处理：这一批没有开始（任务、源包、输出目录一个字节都没动）。";
 
         // ================================================================
+        // 一键处理的**那一个**确认框（用户 2026-09-24 第 17 条）
+        // ================================================================
+        //
+        // 用户原话："现在规定点击完一键处理，就只能有一个弹窗提醒，而且这个可以选中以后不弹出……
+        // 弹窗里面的东西改为『内容物会生成在什么地方，而且其余物是否自动删除』……
+        // 为什么我一键处理还没有开始确认，你的进度条就开始动了"
+        //
+        // ⚠ 这一组是那个框的**唯一措辞来源**（AGENTS.md §7）。三条纪律：
+        //    ① 正文只回答他点名的那两件事（内容物落点 / 其余物是否自动删除），其余进折叠区；
+        //    ② 「以后不再询问」是**落盘的**设置（SkipOneClickConfirm），界面上留开关能再打开；
+        //    ③ 无用物与"没有可用密码"两段**并进这一个框**（不再弹第二个），措辞仍引用
+        //       上面 JunkReminder* 那一组里的事实，不另写一套判据。
+
+        /// <summary>确认框标题（← 旧面板叫「一键处理 · 本次选项」）。</summary>
+        public const string OneClickConfirmTitle = "一键处理 · 确认";
+
+        /// <summary>第一件事：内容物会生成在什么地方。</summary>
+        public const string OneClickConfirmDestinationLabel = "内容物会生成在：";
+
+        /// <summary>第二件事：其余物。</summary>
+        public const string OneClickConfirmRestLabel = "其余物：";
+
+        /// <summary>其余物这一档：危险模式已开 → 解压成功后自动彻底删掉。</summary>
+        public const string OneClickConfirmRestAutoDelete = "解压成功后自动彻底删除（危险模式已开启）";
+
+        /// <summary>其余物这一档：默认 → 留在输出目录的「其余物」里，不自动删。</summary>
+        public const string OneClickConfirmRestKeep = "不自动删除，留在输出目录的「其余物」里";
+
+        /// <summary>第三行（短）：源包怎么处理。</summary>
+        public const string OneClickConfirmSourceLabel = "源包：";
+
+        /// <summary>可选项位：以后不再询问。</summary>
+        public const string OneClickConfirmSuppressText = "以后不再询问，按当前设置直接开始（可在「解压方式」页再打开）";
+
+        /// <summary>折叠区标题：要改就展开（默认收起 —— 用户嫌旧面板啰嗦）。</summary>
+        public const string OneClickConfirmExpanderHeader = "本次改一下（落点 / 终端落法 / 源包处理）";
+
+        /// <summary>多包时那一行的后缀：每个包各建一个同名子文件夹。</summary>
+        public const string OneClickConfirmMultiPerArchiveFormat = "（本批 {0} 个包，每个包各建一个同名子文件夹）";
+
+        /// <summary>多包时那一行的后缀：所有包都落进同一层。</summary>
+        public const string OneClickConfirmMultiSharedFormat = "（本批 {0} 个包都落在这里）";
+
+        /// <summary>落点算不出来时的那一行（**不许**静默显示一个假路径）。</summary>
+        public const string OneClickConfirmDestinationUnknownFormat = "暂时算不出来：{0}";
+
+        /// <summary>B 段（没有可用密码）并进确认框的那一行。</summary>
+        public const string OneClickConfirmNoPasswordFormat =
+            "注意：本批有 {0} 个包没有可用密码（例如 {1}）—— 继续大概率以「密码错误」或「达到密码尝试上限」结束。";
+
+        /// <summary>A 段（疑似无用物）并进确认框的那一行。</summary>
+        public const string OneClickConfirmJunkFormat =
+            "另外：源目录里认出 {0} 个疑似无用物（例如 {1}），本程序一个都不会动它们。";
+
+        /// <summary>勾了「以后不再询问」并写进设置之后的日志。</summary>
+        public const string OneClickConfirmSuppressSavedLog =
+            "已记下「以后不再询问」：一键处理的确认框不再弹（可在「解压方式」页把开关打开）。";
+
+        /// <summary>这一批的提醒已经并进确认框（解压协调器只写日志、不再弹第二个框）。</summary>
+        public const string BatchReminderMergedLog =
+            "解压前的提醒已并入一键处理的确认框（用户 2026-09-24 第 17 条：一键处理只允许一个弹窗），这里只写日志。";
+
+        /// <summary>确认框里的两个按钮（与旧面板同一口径的措辞）。</summary>
+        public const string OneClickConfirmStartText = "开始处理";
+
+        public const string OneClickConfirmCancelText = "取消";
+
+        // ================================================================
+        // 工作区残留（用户 2026-09-24 第 22 条）
+        // ================================================================
+        //
+        // 起因：用户实测在 <程序目录>\data\work 下攒了 10 个目录 / 5.7 GB，问"为什么失败后你会留下这个残留"。
+        // 答案有两半，两半都要写进界面文案：
+        //   ① **保留是故意的**：失败 / 取消时工作区里是用户唯一的一份产物线索（不变量 12/13），
+        //      自动删掉是不可逆的错误；
+        //   ② **但以前只写一行日志**（没体积、没入口），等于没告诉用户 —— 这一组文案把它补成"看得见、点得动"。
+
+        /// <summary>启动 / 刷新时那条日志（几个 + 共多大 + 在哪）。</summary>
+        public const string WorkspaceLeftoverLogFormat = "发现 {0} 个工作区残留（上次失败 / 取消留下的，共 {1}），位置：{2}";
+
+        /// <summary>紧跟其后的一句：为什么不自动删、去哪儿清。</summary>
+        public const string WorkspaceLeftoverHintLog =
+            "程序**不会自动删**它们（里面可能是那批唯一解出来的一份产物）；要清就在「清理与删除」页点「清理工作区」，删前会再确认一次。";
+
+        /// <summary>界面上那一行（常驻提示；没有残留时整行不显示）。</summary>
+        public const string WorkspaceLeftoverBannerFormat = "工作区残留：{0} 个目录，共 {1}";
+
+        /// <summary>清理确认框的标题。</summary>
+        public const string WorkspaceCleanupConfirmTitle = "清理工作区";
+
+        /// <summary>确认框正文（几个 + 共多大）。</summary>
+        public const string WorkspaceCleanupConfirmFormat = "要删掉这 {0} 个工作区目录（共 {1}）吗？";
+
+        /// <summary>确认框明细区的小标题。</summary>
+        public const string WorkspaceCleanupConfirmDetailHeader = "会被删掉的目录（都在工作区根目录之下）：";
+
+        /// <summary>确认框明细区的收尾：说清不动什么 + 不可还原。</summary>
+        public const string WorkspaceCleanupConfirmDetailFooter =
+            "删掉之后无法还原；工作区根目录下的散文件、日志、密码列表、设置一律不碰。";
+
+        /// <summary>清理之后的日志（删掉几个 / 失败几个 / 释放多少）。</summary>
+        public const string WorkspaceCleanupResultLogFormat = "工作区清理：删掉 {0} 个、失败 {1} 个，释放 {2}。";
+
+        /// <summary>没有可清理的残留时的提示（用户点了按钮但确实没什么可清）。</summary>
+        public const string WorkspaceCleanupNothingText = "现在没有可清理的工作区残留。";
+
+        // ================================================================
+        // 「继续解」（用户 2026-09-24 第 16 条追加：一键解到尽头 + 硬上限 10 层 + 到顶一键继续）
+        // ================================================================
+
+        /// <summary>到顶时那个按钮的文案（带还剩几个内层包）。</summary>
+        public const string ContinueOneClickTextFormat = "继续解（还有 {0} 个内层包）";
+
+        /// <summary>到顶时列表上方那一行提示（与按钮同一份事实）。</summary>
+        public const string ContinueOneClickHintFormat =
+            "已达到每批 {0} 层的上限，还剩 {1} 个内层包没解（已经勾好）—— 点「继续解」接着解。";
+
+        // ================================================================
+        // 导入后的无用物提醒 + 列表里删无用物（用户 2026-09-24 第 15 条）
+        // ================================================================
+        //
+        // 用户原话："列表要能删无用物；每次操作的选完文件夹，就要出一个无用物提醒，
+        // 用户可以选中关闭以后就不用触发了。"
+        //
+        // 与 §9.7「解压前的提醒」是**同一个判据**（SourceJunkScanner），只是时机提前到导入之后：
+        // 选完文件夹立刻告诉他"这里有这些东西"，而不是等他点了处理才说。
+        // 程序对无用物依旧**一个都不动**（不删/不改名/不搬）；"从列表里移除"只动任务列表。
+
+        /// <summary>提醒框标题。</summary>
+        public const string ImportJunkReminderTitle = "无用物提醒";
+
+        /// <summary>开场：这些是什么 + 判据有多窄。</summary>
+        public const string ImportJunkReminderIntro =
+            "这次导入的文件夹里有一些文件，很可能是打包者附带的说明 / 网址 / 工具 / 广告之类的诱饵"
+            + "（本程序只按文件名 + 魔数判了个大概，**不保证**它们真的没用）：";
+
+        /// <summary>最多列这么多条（其余只报个数）。</summary>
+        public const string ImportJunkReminderCountFormat = "这次一共认出 {0} 个：";
+
+        /// <summary>还有多少个没列出来。</summary>
+        public const string ImportJunkReminderMoreFormat = "  …还有 {0} 个（最多列 10 条）";
+
+        /// <summary>撞到扫描上限时如实说明。</summary>
+        public const string ImportJunkReminderTruncatedNote = "  （文件太多，本次只核对了前一部分）";
+
+        /// <summary>收尾：程序不动它们 + "从列表里移除"动的只是列表。</summary>
+        public const string ImportJunkReminderFooter =
+            "本程序对上面这些文件**一个都不会动**（不删、不改名、不搬走）；"
+            + "点「从列表里移除这些」只是把它们从任务列表里去掉，源文件照样留在原地。";
+
+        /// <summary>主按钮：知道了（什么都不做）。</summary>
+        public const string ImportJunkReminderKeepText = "知道了";
+
+        /// <summary>次按钮：只把它们从任务列表里移除。</summary>
+        public const string ImportJunkReminderRemoveText = "从列表里移除这些";
+
+        /// <summary>可选项位：以后不再提醒（写进设置，界面上有开关能再打开）。</summary>
+        public const string ImportJunkReminderOptionText = "以后不再提醒（可在「清理与删除」页把开关打开）";
+
+        /// <summary>导入后提醒的日志（数量 + 前几个名字）。</summary>
+        public const string ImportJunkReminderLogFormat = "导入后提醒：源目录里有 {0} 个疑似无用物（例如 {1}）。";
+
+        /// <summary>无界面宿主：不弹窗、只写日志（与 §9.7 同一口径）。</summary>
+        public const string ImportJunkReminderNoHostLog =
+            "当前宿主没有界面：导入后的无用物提醒不弹窗、只写日志（什么都不删）。";
+
+        /// <summary>用户勾了"以后不再提醒"并写进设置。</summary>
+        public const string ImportJunkReminderSuppressedLog =
+            "已记下「以后不再提醒无用物」：写进设置，可在「清理与删除」页把开关打开。";
+
+        /// <summary>用户选了"从列表里移除这些"。</summary>
+        public const string ImportJunkReminderRemovedLogFormat =
+            "已按提醒里的选择，把 {0} 个无用物从任务列表里移除（源文件一个字节都没动）。";
+
+        /// <summary>列表里手动移除任务（右键 / 「移除勾选的」）。</summary>
+        public const string RemoveTasksLogFormat = "已从任务列表里移除 {0} 个（源文件一个字节都没动）。";
+
+        /// <summary>一个都没勾时点「移除勾选的」。</summary>
+        public const string RemoveCheckedTasksNoneText = "没有勾选任何任务，没有可移除的。";
+
+        // ================================================================
         // 打包（⑤「打包」选项卡）
         // ================================================================
         //

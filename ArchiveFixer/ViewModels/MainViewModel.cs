@@ -225,6 +225,16 @@ namespace ArchiveFixer.ViewModels
         private bool _rememberedListLoaded;
         private bool _showPassword;
         private bool _isBusy;
+
+        /// <summary>工作区残留那一行提示的文本（空 = 没有残留）。见 <see cref="LogLeftoverWorkspaces"/>。</summary>
+        private string _workspaceLeftoverBanner = string.Empty;
+
+        private bool _hasWorkspaceLeftovers;
+
+        private long _workspaceLeftoverTotalBytes;
+
+        /// <summary>上一批撞到层数上限后还剩多少个内层包没解（见 <see cref="PendingContinuationCount"/>）。</summary>
+        private int _pendingContinuationCount;
         private int _busyNesting;
         private bool _isStopping;
         private bool _runAtFullSpeed;
@@ -1204,6 +1214,14 @@ namespace ArchiveFixer.ViewModels
         public ICommand OpenWorkDirectoryCommand { get; }
 
         /// <summary>
+        /// 清理工作区残留（用户 2026-09-24 第 22 条）：列出每个残留的名字 / 体积，**确认之后**才删。
+        ///
+        /// <para>为什么值得单开一条：残留是刻意保留的（失败 / 取消时那是用户唯一的一份产物线索），
+        /// 但以前只有一行日志、没有入口，用户实测攒到 5.7 GB 才发现。</para>
+        /// </summary>
+        public ICommand ClearWorkspaceLeftoversCommand { get; }
+
+        /// <summary>
         /// 删除当前勾选任务自己那一份「其余物」（默认移入回收站，激进档彻底删除）。
         ///
         /// ⚠ 作用域只到本任务那一份：包有自己的目录时是 <c>&lt;输出目录&gt;\其余物\</c>，
@@ -1220,6 +1238,12 @@ namespace ArchiveFixer.ViewModels
         public ICommand CleanEmptyFoldersCommand { get; }
 
         public ICommand RemoveTaskCommand { get; }
+
+        /// <summary>
+        /// 移除**勾选的**任务（用户 2026-09-24 第 15 条："列表要能删无用物"）。
+        /// 只动列表，源文件不动；移除错了再添加一次就回来，所以不做二次确认。
+        /// </summary>
+        public ICommand RemoveCheckedTasksCommand { get; }
         public ICommand RescanTaskCommand { get; }
         public ICommand CopyTaskInfoCommand { get; }
         public ICommand CopyTaskPathCommand { get; }
@@ -1232,6 +1256,14 @@ namespace ArchiveFixer.ViewModels
         public ICommand ToggleShowPasswordCommand { get; }
         /// <summary>一键处理：识别 → 修正伪装后缀（一次预览确认）→ 按密码本解压 → 一行汇总。</summary>
         public ICommand OneClickProcessCommand { get; }
+
+        /// <summary>
+        /// 「继续解」：上一批撞到 10 层硬上限时，接着把剩下那些内层包解下去（用户 2026-09-24 第 16 条追加）。
+        ///
+        /// <para>它复用的就是一键处理本身（<see cref="OneClickCoordinator.RunAsync"/>）——
+        /// 剩下的内层包在上一批结束时已经加进列表并勾好，所以"继续解"不需要另一条流水线。</para>
+        /// </summary>
+        public ICommand ContinueOneClickCommand { get; }
 
         public ICommand ResetSettingsCommand { get; }
 
@@ -1425,6 +1457,12 @@ namespace ArchiveFixer.ViewModels
 
             OneClickProcessCommand = new AsyncRelayCommand(_oneClickCoordinator.RunAsync, CanRunNormalCommand);
 
+            /*
+             * 「继续解」（第 16 条追加）：只在"上一批撞到层数上限、还剩内层包没解"时可点。
+             * 与一键处理同一道忙碌守卫（CanRunNormalCommand）——两者不能同时跑。
+             */
+            ContinueOneClickCommand = new AsyncRelayCommand(_oneClickCoordinator.RunAsync, CanContinueOneClick);
+
             StartExtractCommand = new AsyncRelayCommand(_extractionCoordinator.StartExtractAsync, CanStartExtract);
             StopCommand = new RelayCommand(_extractionCoordinator.StopAfterCurrent, () => IsBusy);
             CancelCurrentCommand = new RelayCommand(_extractionCoordinator.CancelCurrentTask, () => IsBusy);
@@ -1442,6 +1480,12 @@ namespace ArchiveFixer.ViewModels
             OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
             OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
 
+            /*
+             * 工作区清理：只在"确实有残留"时可点（CanExecute 读扫描出来的那个布尔）。
+             * 扫描发生在启动与每次批末（LogLeftoverWorkspaces），所以按钮的可用性跟着真实情况走。
+             */
+            ClearWorkspaceLeftoversCommand = new RelayCommand(ClearWorkspaceLeftovers, () => HasWorkspaceLeftovers);
+
             // 其余物删除入口（③「清理与删除」页）：预览 → 确认 → 后台执行，全程不阻塞界面。
             // 第一个只作用于**当前勾选任务自己那一份**；第二个是显式的"整个目录"入口（默认不选）。
             CleanProcessArtifactsCommand = new AsyncRelayCommand(
@@ -1458,6 +1502,11 @@ namespace ArchiveFixer.ViewModels
 
 
             RemoveTaskCommand = new RelayCommand(RemoveTask);
+
+            // 「移除勾选的」：没有勾选就没有可移除的（CanExecute 跟着选择状态走）。
+            RemoveCheckedTasksCommand = new RelayCommand(
+                RemoveCheckedTasks,
+                () => !IsBusy && Tasks.Any(task => task.IsSelected));
             RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync);
             CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo);
             CopyTaskPathCommand = new RelayCommand(CopyTaskPath);
@@ -1887,23 +1936,217 @@ namespace ArchiveFixer.ViewModels
             {
                 string workRoot = _pathService.WorkDirectory;
 
-                if (!Directory.Exists(workRoot))
+                IReadOnlyList<WorkspaceLeftover> leftovers = WorkspaceCleanupService.Scan(workRoot);
+
+                /*
+                 * 用户 2026-09-24 第 22 条：他实测攒了 10 个目录 / 5.7 GB，问"为什么失败后你会留下这个残留"。
+                 * 保留本身是**故意的**（失败 / 取消时工作区里是他唯一的一份产物线索，不变量 12/13），
+                 * 但以前只写一句"发现 N 个" —— 没体积、界面上也没有清理入口，等于没告诉他。
+                 * 现在：① 日志带上体积；② 界面上留一行常驻提示 + 一条清理命令（删前二次确认）。
+                 */
+                WorkspaceLeftoverTotalBytes = WorkspaceCleanupService.TotalBytesOf(leftovers);
+                HasWorkspaceLeftovers = leftovers.Count > 0;
+                WorkspaceLeftoverBanner = leftovers.Count > 0
+                    ? string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.WorkspaceLeftoverBannerFormat,
+                        leftovers.Count,
+                        WorkspaceCleanupService.FormatSize(WorkspaceLeftoverTotalBytes))
+                    : string.Empty;
+
+                // 「清理工作区」的可用性跟着真实扫描结果走（没有残留就点不动）。
+                RaiseAllCommandCanExecuteChanged();
+
+                if (leftovers.Count == 0)
                 {
                     return;
                 }
 
-                string[] leftovers = Directory.GetDirectories(workRoot);
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.WorkspaceLeftoverLogFormat,
+                        leftovers.Count,
+                        WorkspaceCleanupService.FormatSize(WorkspaceLeftoverTotalBytes),
+                        workRoot));
 
-                if (leftovers.Length == 0)
-                {
-                    return;
-                }
-
-                AppendLog("WARN", $"发现 {leftovers.Length} 个未完成的工作区（上次中断或取消留下的），位置：{workRoot}");
+                AppendLog("INFO", StatusText.WorkspaceLeftoverHintLog);
             }
             catch (Exception ex)
             {
                 AppendLog("WARN", "检查工作区失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 界面上那一行"工作区残留：N 个目录，共 X"（空 = 没有残留，整行不显示）。
+        /// </summary>
+        public string WorkspaceLeftoverBanner
+        {
+            get => _workspaceLeftoverBanner;
+            private set => SetProperty(ref _workspaceLeftoverBanner, value);
+        }
+
+        /// <summary>有没有工作区残留（界面据此显示/隐藏那一行与「清理工作区」）。</summary>
+        public bool HasWorkspaceLeftovers
+        {
+            get => _hasWorkspaceLeftovers;
+            private set => SetProperty(ref _hasWorkspaceLeftovers, value);
+        }
+
+        /// <summary>残留一共占多少字节（界面提示用）。</summary>
+        public long WorkspaceLeftoverTotalBytes
+        {
+            get => _workspaceLeftoverTotalBytes;
+            private set => SetProperty(ref _workspaceLeftoverTotalBytes, value);
+        }
+
+        /// <summary>
+        /// 上一批一键处理撞到层数上限、还剩多少内层包没解（用户 2026-09-24 第 16 条追加）。
+        ///
+        /// <para>值来自 <c>OneClickCoordinator</c> 的结论（<c>OneClickOutcome.PendingContinuationCount</c>）：
+        /// 到顶时那些内层包已经加进任务列表并勾好，界面上给一行提示 + 一个「继续解」按钮。
+        /// 到顶**必须提示**（他要的就是这个）——静默停下正是他抱怨的那件事。</para>
+        /// </summary>
+        public int PendingContinuationCount => _pendingContinuationCount;
+
+        /// <summary>要不要显示「继续解」那一行 / 那个按钮。</summary>
+        public bool HasPendingContinuation => _pendingContinuationCount > 0;
+
+        /// <summary>「继续解」那一行的文案（按钮与提示共用一份措辞：<c>StatusText.ContinueOneClick*</c>）。</summary>
+        public string PendingContinuationText => !HasPendingContinuation
+            ? string.Empty
+            : string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.ContinueOneClickHintFormat,
+                OneClickCoordinator.MaxRounds,
+                _pendingContinuationCount);
+
+        /// <summary>「继续解」按钮上的文案。</summary>
+        public string ContinueOneClickButtonText => !HasPendingContinuation
+            ? string.Empty
+            : string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.ContinueOneClickTextFormat,
+                _pendingContinuationCount);
+
+        /// <summary>一键处理收尾时把"还剩几个内层包"报进来（0 = 没有待续解的）。</summary>
+        internal void ReportPendingContinuation(int count)
+        {
+            int normalized = Math.Max(0, count);
+
+            if (_pendingContinuationCount == normalized)
+            {
+                return;
+            }
+
+            _pendingContinuationCount = normalized;
+
+            OnPropertyChanged(nameof(PendingContinuationCount));
+            OnPropertyChanged(nameof(HasPendingContinuation));
+            OnPropertyChanged(nameof(PendingContinuationText));
+            OnPropertyChanged(nameof(ContinueOneClickButtonText));
+
+            RaiseAllCommandCanExecuteChanged();
+        }
+
+        /// <summary>「继续解」能不能点：有剩下的内层包，而且现在不忙。</summary>
+        private bool CanContinueOneClick() => !IsBusy && HasPendingContinuation;
+
+        /// <summary>
+        /// 清理工作区残留（用户 2026-09-24 第 22 条）：**先确认、再删**，而且只删工作区根目录的直属子目录。
+        ///
+        /// <para>为什么必须有这一步确认（不变量 13）：工作区里可能是那一批唯一解出来的一份产物，
+        /// 删掉不可逆。所以这里把要删的目录**逐条列进确认框的明细区**，用户点确定才动手。</para>
+        ///
+        /// <para>没有任何残留时只提示一句，不弹确认框（空确认框只会训练用户闭眼点确定）。</para>
+        /// </summary>
+        private void ClearWorkspaceLeftovers()
+        {
+            string workRoot = _pathService.WorkDirectory;
+
+            IReadOnlyList<WorkspaceLeftover> leftovers = WorkspaceCleanupService.Scan(workRoot);
+
+            if (leftovers.Count == 0)
+            {
+                WorkspaceLeftoverTotalBytes = 0;
+                HasWorkspaceLeftovers = false;
+                WorkspaceLeftoverBanner = string.Empty;
+
+                _dialogService.ShowInfo(StatusText.WorkspaceCleanupNothingText);
+
+                return;
+            }
+
+            long totalBytes = WorkspaceCleanupService.TotalBytesOf(leftovers);
+
+            string detail = StatusText.WorkspaceCleanupConfirmDetailHeader + Environment.NewLine
+                            + string.Join(
+                                Environment.NewLine,
+                                leftovers.Select(item =>
+                                    "  " + item.Name
+                                    + "（" + WorkspaceCleanupService.FormatSize(item.TotalBytes)
+                                    + "，" + item.FileCount + " 个文件）"))
+                            + Environment.NewLine + Environment.NewLine
+                            + StatusText.WorkspaceCleanupConfirmDetailFooter;
+
+            bool confirmed = _dialogService.ShowConfirm(
+                StatusText.WorkspaceCleanupConfirmTitle
+                + "："
+                + string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.WorkspaceCleanupConfirmFormat,
+                    leftovers.Count,
+                    WorkspaceCleanupService.FormatSize(totalBytes)),
+                optionText: string.Empty,
+                optionCheckedByDefault: false,
+                detail: detail,
+                out _);
+
+            if (!confirmed)
+            {
+                AppendLog("INFO", "工作区清理已取消：一个目录都没删。");
+
+                return;
+            }
+
+            IReadOnlyList<WorkspaceCleanupOutcome> outcomes = WorkspaceCleanupService.Cleanup(
+                workRoot,
+                leftovers.Select(item => item.DirectoryPath));
+
+            int deleted = outcomes.Count(item => item.Deleted);
+            int failed = outcomes.Count - deleted;
+
+            foreach (WorkspaceCleanupOutcome outcome in outcomes)
+            {
+                if (!outcome.Deleted)
+                {
+                    AppendLog("WARN", "工作区：" + outcome.Message);
+                }
+            }
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.WorkspaceCleanupResultLogFormat,
+                    deleted,
+                    failed,
+                    WorkspaceCleanupService.FormatSize(totalBytes)));
+
+            // 删完重新扫一遍（失败的那几个会留在提示里，不假装清空了）。
+            LogLeftoverWorkspaces();
+
+            if (failed == 0)
+            {
+                _dialogService.ShowInfo(
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.WorkspaceCleanupResultLogFormat,
+                        deleted,
+                        failed,
+                        WorkspaceCleanupService.FormatSize(totalBytes)));
             }
         }
 
@@ -2390,6 +2633,66 @@ namespace ArchiveFixer.ViewModels
             UpdateSummary();
 
             AppendLog("INFO", $"本次选项已写入设置（{_settingsService.SettingsFilePath}）。");
+        }
+
+        /// <summary>
+        /// 记下"一键处理的确认框以后不再弹"（用户 2026-09-24 第 17 条："这个可以选中以后不弹出"）。
+        ///
+        /// <para>与 <see cref="SaveOneClickOptionsAsDefaults"/> 是两条独立的写设置路径：
+        /// 那一条写的是落点 / 终端落法 / 源包处理，这一条只写
+        /// <see cref="AppSettings.SkipOneClickConfirm"/> 一个布尔。两者都**只在用户显式勾选之后**执行。</para>
+        ///
+        /// <para>写失败不让流程停：确认框已经点过「开始处理」，用户要的是把这一批跑完 ——
+        /// 记不下"不再问"最多让他下次再点一次确认，不该变成"一键处理失败"。</para>
+        /// </summary>
+        internal void SaveSkipOneClickConfirm(bool skip)
+        {
+            if (Settings == null || Settings.SkipOneClickConfirm == skip)
+            {
+                return;
+            }
+
+            Settings.SkipOneClickConfirm = skip;
+
+            try
+            {
+                _settingsService.Save(Settings);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "「以后不再询问」没能写进设置：" + ex.Message);
+                return;
+            }
+
+            OnPropertyChanged(nameof(Settings));
+        }
+
+        /// <summary>
+        /// 记下"导入之后不再弹无用物提醒"（用户 2026-09-24 第 15 条："用户可以选中关闭以后就不用触发了"）。
+        ///
+        /// <para>写失败只写 WARN：导入本身已经成功，不该因为记不住一个偏好就变成失败；
+        /// 界面上（③ 清理与删除 页）留着一个开关可以再打开。</para>
+        /// </summary>
+        internal void SaveRemindJunkAfterImport(bool remind)
+        {
+            if (Settings == null || Settings.RemindJunkAfterImport == remind)
+            {
+                return;
+            }
+
+            Settings.RemindJunkAfterImport = remind;
+
+            try
+            {
+                _settingsService.Save(Settings);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "「无用物提醒」开关没能写进设置：" + ex.Message);
+                return;
+            }
+
+            OnPropertyChanged(nameof(Settings));
         }
 
         internal void RefreshOutputPaths()
@@ -3937,6 +4240,88 @@ namespace ArchiveFixer.ViewModels
             AutoLoadPasswordBook();
 
             UpdateSummary();
+        }
+
+        /// <summary>
+        /// 导入后无用物提醒的替身入口（**只给测试**；正式路径永远是 null = 走真弹窗）。
+        /// 见 <see cref="ScanCoordinator.JunkReminderOverride"/>。
+        /// </summary>
+        internal Func<string, ImportJunkAnswer>? JunkReminderOverride
+        {
+            get => _scanCoordinator.JunkReminderOverride;
+            set => _scanCoordinator.JunkReminderOverride = value;
+        }
+
+        /// <summary>
+        /// 移除**勾选的**任务（用户 2026-09-24 第 15 条："列表要能删无用物"）。
+        ///
+        /// <para>只动任务列表：源文件、输出目录、日志一个字节都不碰 —— 移除错了再"添加"一次就回来了，
+        /// 所以这里**不做二次确认**（确认框留给真正不可逆的事：删源、清工作区、清其余物）。</para>
+        /// </summary>
+        private void RemoveCheckedTasks()
+        {
+            List<ArchiveTask> checkedTasks = Tasks.Where(task => task.IsSelected).ToList();
+
+            if (checkedTasks.Count == 0)
+            {
+                _dialogService.ShowInfo(StatusText.RemoveCheckedTasksNoneText);
+                return;
+            }
+
+            RemoveTasksCore(checkedTasks);
+        }
+
+        /// <summary>
+        /// 按源路径移除任务（导入后的无用物提醒里点"从列表里移除这些"走这条）。
+        /// </summary>
+        /// <returns>真的移掉了几个（路径对不上的不算）。</returns>
+        internal int RemoveTasksBySourcePaths(IEnumerable<string>? paths)
+        {
+            if (paths == null)
+            {
+                return 0;
+            }
+
+            var wanted = new HashSet<string>(
+                paths.Where(path => !string.IsNullOrWhiteSpace(path)),
+                StringComparer.OrdinalIgnoreCase);
+
+            if (wanted.Count == 0)
+            {
+                return 0;
+            }
+
+            List<ArchiveTask> matched = Tasks
+                .Where(task => wanted.Contains(task.CurrentPath ?? string.Empty))
+                .ToList();
+
+            if (matched.Count == 0)
+            {
+                return 0;
+            }
+
+            RemoveTasksCore(matched);
+
+            return matched.Count;
+        }
+
+        /// <summary>移除一批任务并收尾（顺序、索引、汇总、日志一处收口）。</summary>
+        private void RemoveTasksCore(IReadOnlyList<ArchiveTask> toRemove)
+        {
+            foreach (ArchiveTask task in toRemove)
+            {
+                Tasks.Remove(task);
+            }
+
+            RebuildTaskIndex();
+            UpdateSummary();
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.RemoveTasksLogFormat,
+                    toRemove.Count));
         }
 
         private void CopyTaskInfo(object? parameter)

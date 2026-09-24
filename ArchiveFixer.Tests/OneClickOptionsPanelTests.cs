@@ -361,13 +361,17 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 勾了「以后不再询问」之后：本次运行内再点一键处理不再弹面板，行为退回"按设置走"（硬要求⑤）。
+        /// 勾了「以后不再询问」之后：本次运行内再点一键处理不再弹确认框，行为退回"按设置走"（硬要求⑤）。
+        ///
+        /// <para>⚠ 2026-09-24 第 17 条之后这个勾选项**会落盘**（用户原话："这个可以选中以后不弹出"，
+        /// 而"以后"不止这一次运行），所以这里同时钉住两件事：设置里真的记下了，
+        /// 以及下一次运行连框都不弹、直接开跑。</para>
         /// </summary>
         [Fact]
-        public async Task 勾了以后不再询问_第二次不再弹面板()
+        public async Task 勾了以后不再询问_写进设置且第二次不再弹框()
         {
             Harness harness = CreateHarness();
-            AddTask(harness, CreateSourceFile("first.7z"));
+            ArchiveTask first = AddTask(harness, CreateSourceFile("first.7z"));
 
             string flatRoot = Path.Combine(_root, "panel-flat-suppress");
             int prompts = 0;
@@ -388,19 +392,29 @@ namespace ArchiveFixer.Tests
             await harness.OneClick.RunAsync();
             Assert.Equal(1, prompts);
 
-            // 第二次：注入的替身仍然会被调用（注入点优先于"不再询问"），
-            // 所以这里验的是**真实分支**：清掉注入点，走 AskRunOptionsOnce 自己的判断。
+            // ① 落盘了：重新从磁盘读一遍设置，那个布尔必须是 true（第 17 条要的"以后不弹出"）
+            AppSettings reloaded = new SettingsService(harness.PathService).Load();
+            Assert.True(reloaded.SkipOneClickConfirm, "勾了「以后不再询问」要写进设置，否则重启又弹回来");
+
+            // ② 第二次：注入的替身仍然会被调用（注入点优先于"不再询问"），
+            //    所以这里验的是**真实分支**：清掉注入点，走 AskRunOptionsOnce 自己的判断。
             harness.OneClick.OptionsPromptOverride = null;
 
             harness.Vm.Tasks[0].IsSelected = true;
             await harness.OneClick.RunAsync();
 
+            // 一个框都没弹，而且**直接按设置开跑**（不是"被静默跳过"）：引擎真的被调用了
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("没有本次选项面板", StringComparison.Ordinal));
+                line => line.Contains("已勾「以后不再询问」", StringComparison.Ordinal));
+
+            Assert.True(harness.Engine.ExtractCallCount >= 1, "勾了不再询问之后必须照常开始，而不是什么都不做");
+
+            // 源包留在原地（第一次那批选的档位）：第二次按设置走，不该把第一次的源包搬掉
+            Assert.True(File.Exists(first.CurrentPath));
         }
 
-        /// <summary>用户在面板上点「取消」：这一次不许开跑（不是"照跑不误"）。</summary>
+        /// <summary>用户在框上点「取消」：这一次不许开跑（不是"照跑不误"），而且不许写设置。</summary>
         [Fact]
         public async Task 面板取消_这一次一键处理什么都不做()
         {
@@ -409,13 +423,17 @@ namespace ArchiveFixer.Tests
 
             harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Cancelled();
 
+            string before = HashFile(harness.SettingsFilePath);
+
             await harness.OneClick.RunAsync();
 
             Assert.Equal(0, harness.Engine.ExtractCallCount);
             Assert.Equal(StatusText.Recognized, task.Status);
+            Assert.False(harness.Vm.IsBusy, "取消之后不许留在忙碌状态");
+            Assert.Equal(before, HashFile(harness.SettingsFilePath));
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("本次选项面板没有确认", StringComparison.Ordinal));
+                line => line.Contains("确认框没有确认", StringComparison.Ordinal));
         }
 
         // ================================================================ ⑥ 可追溯

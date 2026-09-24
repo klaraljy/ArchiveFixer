@@ -250,9 +250,11 @@ namespace ArchiveFixer.Tests
         // ---------------------------------------------------------------- 第三步：轮数硬上限
 
         [Fact]
-        public async Task 一直产出新包时_最多只续解到三轮()
+        public async Task 一直产出新包时_最多只续解到MaxRounds轮_到顶提示还剩几个()
         {
-            string outer = BuildFourLevelChain();
+            // 链比上限多一层：跑满 MaxRounds 轮之后，正好还剩最后那一层没解。
+            int lastLevel = OneClickCoordinator.MaxRounds + 1;
+            string outer = BuildChain(lastLevel);
 
             Harness harness = CreateHarness(ChainPassword + "\n");
             await harness.AddPathsAsync(outer);
@@ -261,20 +263,71 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(OneClickCoordinator.MaxRounds, outcome.Rounds);
             Assert.Equal(OneClickCoordinator.MaxRounds - 1, outcome.ContinuationLayers);
-            Assert.True(outcome.HitRoundLimit, "第 4 层还有包，应该报到上限");
+            Assert.True(outcome.HitRoundLimit, $"第 {lastLevel} 层还有包，应该报到上限");
             Assert.Contains("轮上限", outcome.Summary, StringComparison.Ordinal);
             Assert.False(outcome.Stopped);
 
-            // 第 4 层的包没有被解压：既没有引擎调用，也没有产物目录
-            Assert.DoesNotContain(harness.Engine.ExtractCalls, p => p.EndsWith("level4.7z", StringComparison.OrdinalIgnoreCase));
-            Assert.False(Directory.Exists(Path.Combine(harness.OutputRoot, "level4")), "到上限就不该再往下解");
-            Assert.DoesNotContain(harness.Vm.Tasks, t => t.CurrentPath.EndsWith("level4.7z", StringComparison.OrdinalIgnoreCase));
+            // 最后那一层的包**没有被解压**：既没有引擎调用，也没有产物目录
+            string lastPackage = $"level{lastLevel}.7z";
+            Assert.DoesNotContain(harness.Engine.ExtractCalls, p => p.EndsWith(lastPackage, StringComparison.OrdinalIgnoreCase));
+            Assert.False(Directory.Exists(Path.Combine(harness.OutputRoot, $"level{lastLevel}")), "到上限就不该再往下解");
 
-            Assert.Equal(3, harness.Vm.Tasks.Count);
+            /*
+             * 用户 2026-09-24 第 16 条追加：到顶**不许静默停下**。
+             * 剩下那一层要① 报个数、② 已经加进列表并勾好（等「继续解」接着解）。
+             */
+            Assert.Equal(1, outcome.PendingContinuationCount);
+            Assert.Contains("还剩 1 个内层包", outcome.Summary, StringComparison.Ordinal);
+
+            ArchiveTask pending = Assert.Single(
+                harness.Vm.Tasks,
+                t => t.CurrentPath.EndsWith(lastPackage, StringComparison.OrdinalIgnoreCase));
+
+            Assert.True(pending.IsSelected, "剩下的内层包要勾好，否则「继续解」点下去什么都不做");
+
+            // 已经处理过的那些 + 剩下这一个（= 上限轮数 + 1）
+            Assert.Equal(OneClickCoordinator.MaxRounds + 1, harness.Vm.Tasks.Count);
 
             (int sum, int scope) = ParseSummaryCounts(outcome.Summary);
             Assert.Equal(scope, sum);
-            Assert.Equal(3, scope);
+            Assert.Equal(OneClickCoordinator.MaxRounds, scope);
+        }
+
+        /// <summary>
+        /// 「继续解」：到顶之后把剩下那些内层包接着解下去，直到解完（用户 2026-09-24 第 16 条追加）。
+        ///
+        /// <para>它跑的就是一键处理本身（界面上的「继续解」按钮绑的是同一个入口），
+        /// 所以这一条同时证明了：剩下的包确实**能**被接着解，而不是只报了个数。</para>
+        /// </summary>
+        [Fact]
+        public async Task 到上限之后继续解_把剩下的解完()
+        {
+            int lastLevel = OneClickCoordinator.MaxRounds + 1;
+            string outer = BuildChain(lastLevel);
+
+            Harness harness = CreateHarness(ChainPassword + "\n");
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome first = await harness.RunOneClickAsync();
+
+            Assert.True(first.HitRoundLimit);
+            Assert.Equal(1, first.PendingContinuationCount);
+
+            // 第二次：接着解剩下那一层（界面上就是点「继续解」）
+            OneClickOutcome second = await harness.RunOneClickAsync();
+
+            Assert.False(second.HitRoundLimit, "剩下那一层解完就到底了，不该再报上限");
+            Assert.Equal(0, second.PendingContinuationCount);
+
+            // 最深处的内容物出来了
+            Assert.Contains(
+                Directory.GetFiles(harness.OutputRoot, "final.txt", SearchOption.AllDirectories),
+                path => File.ReadAllText(path).Contains("最深一层的内容", StringComparison.Ordinal));
+
+            // 而且最后那一层真的被引擎解过（不是"报了个数就算完"）
+            Assert.Contains(
+                harness.Engine.ExtractCalls,
+                p => p.EndsWith($"level{lastLevel}.7z", StringComparison.OrdinalIgnoreCase));
         }
 
         // ---------------------------------------------------------------- 用户的验收判据：一个源包 = 一个目录
@@ -724,19 +777,37 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 造一条四层的嵌套链：<c>outer.7z → level2.7z → level3.7z → level4.7z → final.txt</c>。
-        /// 每一层的产物里都有一个**新包**，所以它会一直想往下解 —— 正好用来验证轮数硬上限。
+        /// 造一条嵌套链：<c>outer.7z → level2.7z → … → levelN.7z → final.txt</c>。
+        /// 每一层的产物里都有一个**新包**，所以它会一直想往下解 ——
+        /// 正好用来验证轮数硬上限（不变量 8）与「继续解」（用户 2026-09-24 第 16 条追加）。
+        ///
+        /// <para>层数由调用方给，而且**必须跟着 <see cref="OneClickCoordinator.MaxRounds"/> 走**：
+        /// 上限从 3 提到 10 之后，写死"四层链"的那种样本会**跑到底**、根本碰不到上限，
+        /// 测试就从"验证上限"悄悄变成"验证能跑完"（假绿）。</para>
         /// </summary>
-        private string BuildFourLevelChain()
+        private string BuildChain(int levelCount)
         {
-            string build = Path.Combine(_root, "chain");
+            Assert.True(levelCount >= 2, "至少要有 outer + 一层内层包");
+
+            string build = Path.Combine(_root, "chain-" + levelCount);
             Directory.CreateDirectory(build);
 
             WriteText(Path.Combine(build, "final.txt"), "最深一层的内容\n");
 
-            Run7z(build, "a", "-t7z", "level4.7z", "-p" + ChainPassword, "-mhe=on", "final.txt");
-            Run7z(build, "a", "-t7z", "level3.7z", "-p" + ChainPassword, "-mhe=on", "level4.7z");
-            Run7z(build, "a", "-t7z", "level2.7z", "-p" + ChainPassword, "-mhe=on", "level3.7z");
+            // 从最深一层往外套：levelN 里是内容物，levelN-1 里是 levelN，……，outer 里是 level2。
+            Run7z(build, "a", "-t7z", $"level{levelCount}.7z", "-p" + ChainPassword, "-mhe=on", "final.txt");
+
+            for (int level = levelCount - 1; level >= 2; level--)
+            {
+                Run7z(
+                    build,
+                    "a",
+                    "-t7z",
+                    $"level{level}.7z",
+                    "-p" + ChainPassword,
+                    "-mhe=on",
+                    $"level{level + 1}.7z");
+            }
 
             string packageDirectory = Path.Combine(_root, "packages");
             Directory.CreateDirectory(packageDirectory);
@@ -918,7 +989,12 @@ namespace ArchiveFixer.Tests
                 sum += int.Parse(match.Groups[2].Value);
             }
 
-            Match scope = Regex.Match(summary, @"本次 (\d+) 个任务");
+            /*
+             * 两种 scope 写法都要认：全部处理过时是"本次 N 个任务"，
+             * 列表里还有没轮到的时候是"本次 N 个 / 列表共 M 个"（第 16 条追加之后，
+             * 撞上限那一批的列表里会多出"已加进列表、等继续解"的内层包，正好走后一种）。
+             */
+            Match scope = Regex.Match(summary, @"本次 (\d+) 个");
 
             Assert.True(scope.Success, $"汇总里没有本次 N 个任务：{summary}");
 
