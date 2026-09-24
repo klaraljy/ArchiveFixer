@@ -231,6 +231,9 @@ namespace ArchiveFixer.ViewModels
         private bool _hasWorkspaceLeftovers;
 
         private long _workspaceLeftoverTotalBytes;
+
+        /// <summary>上一批撞到层数上限后还剩多少个内层包没解（见 <see cref="PendingContinuationCount"/>）。</summary>
+        private int _pendingContinuationCount;
         private int _busyNesting;
         private bool _isStopping;
         private bool _runAtFullSpeed;
@@ -1154,6 +1157,14 @@ namespace ArchiveFixer.ViewModels
         /// <summary>一键处理：识别 → 修正伪装后缀（一次预览确认）→ 按密码本解压 → 一行汇总。</summary>
         public ICommand OneClickProcessCommand { get; }
 
+        /// <summary>
+        /// 「继续解」：上一批撞到 10 层硬上限时，接着把剩下那些内层包解下去（用户 2026-09-24 第 16 条追加）。
+        ///
+        /// <para>它复用的就是一键处理本身（<see cref="OneClickCoordinator.RunAsync"/>）——
+        /// 剩下的内层包在上一批结束时已经加进列表并勾好，所以"继续解"不需要另一条流水线。</para>
+        /// </summary>
+        public ICommand ContinueOneClickCommand { get; }
+
         public ICommand ResetSettingsCommand { get; }
 
         /// <summary>
@@ -1332,6 +1343,12 @@ namespace ArchiveFixer.ViewModels
             DeleteMultipleExtensionsCommand = new AsyncRelayCommand(_renameCoordinator.DeleteMultipleExtensionsAsync, CanRunNormalCommand);
 
             OneClickProcessCommand = new AsyncRelayCommand(_oneClickCoordinator.RunAsync, CanRunNormalCommand);
+
+            /*
+             * 「继续解」（第 16 条追加）：只在"上一批撞到层数上限、还剩内层包没解"时可点。
+             * 与一键处理同一道忙碌守卫（CanRunNormalCommand）——两者不能同时跑。
+             */
+            ContinueOneClickCommand = new AsyncRelayCommand(_oneClickCoordinator.RunAsync, CanContinueOneClick);
 
             StartExtractCommand = new AsyncRelayCommand(_extractionCoordinator.StartExtractAsync, CanStartExtract);
             StopCommand = new RelayCommand(_extractionCoordinator.StopAfterCurrent, () => IsBusy);
@@ -1864,6 +1881,58 @@ namespace ArchiveFixer.ViewModels
             get => _workspaceLeftoverTotalBytes;
             private set => SetProperty(ref _workspaceLeftoverTotalBytes, value);
         }
+
+        /// <summary>
+        /// 上一批一键处理撞到层数上限、还剩多少内层包没解（用户 2026-09-24 第 16 条追加）。
+        ///
+        /// <para>值来自 <c>OneClickCoordinator</c> 的结论（<c>OneClickOutcome.PendingContinuationCount</c>）：
+        /// 到顶时那些内层包已经加进任务列表并勾好，界面上给一行提示 + 一个「继续解」按钮。
+        /// 到顶**必须提示**（他要的就是这个）——静默停下正是他抱怨的那件事。</para>
+        /// </summary>
+        public int PendingContinuationCount => _pendingContinuationCount;
+
+        /// <summary>要不要显示「继续解」那一行 / 那个按钮。</summary>
+        public bool HasPendingContinuation => _pendingContinuationCount > 0;
+
+        /// <summary>「继续解」那一行的文案（按钮与提示共用一份措辞：<c>StatusText.ContinueOneClick*</c>）。</summary>
+        public string PendingContinuationText => !HasPendingContinuation
+            ? string.Empty
+            : string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.ContinueOneClickHintFormat,
+                OneClickCoordinator.MaxRounds,
+                _pendingContinuationCount);
+
+        /// <summary>「继续解」按钮上的文案。</summary>
+        public string ContinueOneClickButtonText => !HasPendingContinuation
+            ? string.Empty
+            : string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.ContinueOneClickTextFormat,
+                _pendingContinuationCount);
+
+        /// <summary>一键处理收尾时把"还剩几个内层包"报进来（0 = 没有待续解的）。</summary>
+        internal void ReportPendingContinuation(int count)
+        {
+            int normalized = Math.Max(0, count);
+
+            if (_pendingContinuationCount == normalized)
+            {
+                return;
+            }
+
+            _pendingContinuationCount = normalized;
+
+            OnPropertyChanged(nameof(PendingContinuationCount));
+            OnPropertyChanged(nameof(HasPendingContinuation));
+            OnPropertyChanged(nameof(PendingContinuationText));
+            OnPropertyChanged(nameof(ContinueOneClickButtonText));
+
+            RaiseAllCommandCanExecuteChanged();
+        }
+
+        /// <summary>「继续解」能不能点：有剩下的内层包，而且现在不忙。</summary>
+        private bool CanContinueOneClick() => !IsBusy && HasPendingContinuation;
 
         /// <summary>
         /// 清理工作区残留（用户 2026-09-24 第 22 条）：**先确认、再删**，而且只删工作区根目录的直属子目录。

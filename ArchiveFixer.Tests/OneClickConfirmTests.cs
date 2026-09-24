@@ -346,6 +346,39 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("没有可用密码", quiet.NoticeEcho, StringComparison.Ordinal);
         }
 
+        // ================================================================ ④ 「继续解」（第 16 条追加）
+
+        /// <summary>
+        /// 撞到层数上限之后，界面上要出现「继续解（还有 N 个内层包）」并可以点；
+        /// 新的一批一开始就把它清掉（结论按本次重设），免得上一批的提示赖在那儿。
+        /// </summary>
+        [Fact]
+        public async Task 继续解_跟着上一批的结论出现_新的一批开始时清掉()
+        {
+            Harness harness = CreateHarness();
+            AddTask(harness, CreateSourceFile("pack.7z"));
+
+            // "上一批撞到上限、还剩 3 个内层包"这件事由 OneClickOutcome 报进来（这里直接喂同样的值）。
+            harness.Vm.ReportPendingContinuation(3);
+
+            Assert.True(harness.Vm.HasPendingContinuation);
+            Assert.Contains("3", harness.Vm.ContinueOneClickButtonText, StringComparison.Ordinal);
+            Assert.Contains(
+                OneClickCoordinator.MaxRounds.ToString(System.Globalization.CultureInfo.CurrentCulture),
+                harness.Vm.PendingContinuationText,
+                StringComparison.Ordinal);
+            Assert.True(harness.Vm.ContinueOneClickCommand.CanExecute(null));
+
+            harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(
+                OneClickRunOptions.FromSettings(harness.Vm.Settings, harness.OutputRoot));
+
+            await harness.OneClick.RunAsync();
+
+            // 这一批没有撞上限 → 提示清掉、按钮点不动
+            Assert.False(harness.Vm.HasPendingContinuation);
+            Assert.False(harness.Vm.ContinueOneClickCommand.CanExecute(null));
+        }
+
         // ================================================================ 装配
 
         private Harness CreateHarness(Action<AppSettings>? configure = null)

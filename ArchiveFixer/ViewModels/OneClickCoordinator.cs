@@ -33,6 +33,14 @@ namespace ArchiveFixer.ViewModels
         /// <summary>是不是撞到轮数硬上限、还有更深的内层包没解。</summary>
         public bool HitRoundLimit { get; init; }
 
+        /// <summary>
+        /// 撞上限时**还剩多少个内层包没解**（已经加进任务列表并勾好，等用户点「继续解」）。
+        ///
+        /// <para>用户 2026-09-24 第 16 条追加："你为什么只弄了两层，我要的一键解压时多重解压……都到最后一步了还没成功"。
+        /// 到顶**必须提示还剩多少 + 给一键继续**，不许静默停下 —— 这个数字就是那句提示与那个按钮的依据。</para>
+        /// </summary>
+        public int PendingContinuationCount { get; init; }
+
         /// <summary>一行汇总（已经写进日志，GUI 用它弹提示）。</summary>
         public string Summary { get; init; } = string.Empty;
     }
@@ -131,11 +139,18 @@ namespace ArchiveFixer.ViewModels
     internal sealed class OneClickCoordinator
     {
         /// <summary>
-        /// 轮数硬上限（不变量 8）：含第一层在内一共 3 轮。
-        /// 真实资源包极少超过两层；再深通常意味着包里套了不该自动展开的东西，
-        /// 继续往下解只会把时间和磁盘烧在一个可能失控的展开上 —— 到顶就停并如实报告。
+        /// 轮数硬上限（不变量 8）：含第一层在内一共 **10 轮**。
+        ///
+        /// <para>⚠ 2026-09-24 第 16 条追加由用户拍板从 3 提到 10：他要的是**一键解到尽头**
+        /// （原话："你为什么只弄了两层，我要的一键解压时多重解压……都到最后一步了还没成功"）。
+        /// 但硬上限这件事本身不许取消（不变量 8）：真遇到"套了几十层"的包，继续无脑往下解
+        /// 只会把时间和磁盘烧在一个可能失控的展开上。</para>
+        ///
+        /// <para>到顶**不是静默停下**：剩下的内层包会被加进任务列表并勾好，汇总与弹窗里写明
+        /// "还剩 N 个内层包没解"，界面给一个「继续解」按钮接着跑下一批 10 轮
+        /// （见 <see cref="OneClickOutcome.PendingContinuationCount"/>）。</para>
         /// </summary>
-        internal const int MaxRounds = 3;
+        internal const int MaxRounds = 10;
 
         private readonly MainViewModel _vm;
         private readonly ScanCoordinator _scanCoordinator;
@@ -407,7 +422,12 @@ namespace ArchiveFixer.ViewModels
 
                 try
                 {
+                    // 新的一批开始：上一次留下的"还剩 N 个内层包"提示先清掉（跑完按本次结论重设）。
+                    _vm.ReportPendingContinuation(0);
+
                     OneClickOutcome outcome = await RunPipelineAsync(targets, runOptions);
+
+                    _vm.ReportPendingContinuation(outcome.PendingContinuationCount);
 
                     _dialogService.ShowInfo(outcome.Summary);
                 }
@@ -465,6 +485,9 @@ namespace ArchiveFixer.ViewModels
             int continuationLayers = 0;
             bool stopped = false;
             bool hitRoundLimit = false;
+
+            // 撞到轮数上限时那几个"已经加进列表、这一批没解"的内层包（第 16 条追加：到顶要能一键继续）。
+            var pendingContinuation = new List<ArchiveTask>();
 
             /*
              * 「用户按过停止后续」这件事必须单独记一笔。
@@ -559,7 +582,31 @@ namespace ArchiveFixer.ViewModels
                     if (round >= MaxRounds)
                     {
                         hitRoundLimit = true;
-                        AppendLog("WARN", $"一键处理：第 {round + 1} 层还有 {innerArchives.Count} 个内层包，但已达到 {MaxRounds} 轮上限，停止续解。");
+
+                        /*
+                         * 用户 2026-09-24 第 16 条追加：到顶**不能静默停下**。
+                         *
+                         * 把这一层发现的内层包**照样加进任务列表并勾好**（走与正常续解同一条路），
+                         * 只是这一批不再解它们：于是用户看到的列表里就摆着"还没解的那些包"，
+                         * 汇总与弹窗写明还剩几个，界面给「继续解」接着跑下一批 10 轮。
+                         *
+                         * 为什么不直接继续解完：硬上限就是不变量 8 的那道闸（见 MaxRounds 的说明）。
+                         */
+                        try
+                        {
+                            pendingContinuation = await AddInnerTasksAsync(innerArchives);
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog("ERROR", $"一键处理：把剩下的内层包加进任务列表失败 —— {ex.Message}（它们在产物目录里，可以自己添加）");
+                        }
+
+                        AppendLog(
+                            "WARN",
+                            $"一键处理：第 {round + 1} 层还有 {innerArchives.Count} 个内层包，"
+                            + $"但已达到 {MaxRounds} 轮上限，本批先停在这里 —— "
+                            + $"{pendingContinuation.Count} 个内层包已加进列表并勾好，点「继续解」接着解（每次最多再解 {MaxRounds} 轮）。");
+
                         break;
                     }
 
@@ -647,7 +694,7 @@ namespace ArchiveFixer.ViewModels
                 hitRoundLimit,
                 runOptions);
 
-            string summary = BuildSummaryLine(processed, stopped, continuationLayers, hitRoundLimit);
+            string summary = BuildSummaryLine(processed, stopped, continuationLayers, hitRoundLimit, pendingContinuation.Count);
 
             AppendLog("INFO", summary);
 
@@ -657,6 +704,7 @@ namespace ArchiveFixer.ViewModels
                 ContinuationLayers = continuationLayers,
                 Stopped = stopped,
                 HitRoundLimit = hitRoundLimit,
+                PendingContinuationCount = pendingContinuation.Count,
                 Summary = summary
             };
         }
@@ -1304,11 +1352,16 @@ namespace ArchiveFixer.ViewModels
         ///
         /// 续解加进来的任务同样计入"本次处理的任务数"（它们确实被处理了），口径写在 scope 里。
         /// </summary>
+        /// <param name="pendingContinuation">
+        /// 撞到轮数上限时"已加进列表、这一批没解"的内层包个数（用户 2026-09-24 第 16 条追加）。
+        /// 大于 0 时汇总里必须写出**还剩多少 + 怎么继续** —— 到顶静默停下正是他要修的那件事。
+        /// </param>
         private string BuildSummaryLine(
             IReadOnlyList<ArchiveTask> targets,
             bool stopped = false,
             int continuationLayers = 0,
-            bool hitRoundLimit = false)
+            bool hitRoundLimit = false,
+            int pendingContinuation = 0)
         {
             int success = targets.Count(IsSuccessStatus);
             int partial = targets.Count(t => t.Status == StatusText.PartiallyCompleted);
@@ -1390,7 +1443,14 @@ namespace ArchiveFixer.ViewModels
 
             if (hitRoundLimit)
             {
-                line += $" 还有更深的内层包，但已达到 {MaxRounds} 轮上限，没有继续。";
+                /*
+                 * 用户 2026-09-24 第 16 条追加：到顶必须"提示还剩多少 + 怎么继续"。
+                 * 只有"已达到 N 轮上限，没有继续"这句话时，用户看到的就是"又只解了两层"——
+                 * 他不知道还剩什么、也不知道下一步点哪里。
+                 */
+                line += pendingContinuation > 0
+                    ? $" 已达到 {MaxRounds} 轮上限，还剩 {pendingContinuation} 个内层包没解（已加进列表并勾好，点「继续解」接着解）。"
+                    : $" 还有更深的内层包，但已达到 {MaxRounds} 轮上限，没有继续。";
             }
 
             return line;
