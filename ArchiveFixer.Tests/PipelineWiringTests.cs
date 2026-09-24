@@ -455,7 +455,14 @@ namespace ArchiveFixer.Tests
                     triedPasswords.Add(request.Password ?? string.Empty);
                 }
 
-                WriteContent(request.OutputPath!, "content.txt", "ok");
+                /*
+                 * 落盘内容必须与清单声明的字节数对得上（这里是 `"content.txt".Length` = 11）。
+                 *
+                 * ⚠ 2026-09-24：以前这里写的是 "ok"（2 字节），而校验判否原本**不影响状态**，
+                 * 所以"声明 11 实际 2"一直没被发现；现在校验判否会直接顶掉「解压成功」，
+                 * 这种自相矛盾的现场就会挂在与被测行为（候选顺序）无关的地方。
+                 */
+                WriteContent(request.OutputPath!, "content.txt", "okokokokoko");
                 return Task.FromResult(Succeeded());
             };
 

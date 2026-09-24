@@ -1,4 +1,5 @@
 using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
@@ -216,7 +217,19 @@ namespace ArchiveFixer.Services
 
             if (status == StatusText.ExtractSuccess || status == StatusText.Overwritten)
             {
-                return SummaryBucket.ExtractSuccess;
+                /*
+                 * ⚠ 光看状态**不够**：产物校验判否时一律算失败（用户 2026-09-24 铁证，不变量 6）。
+                 *
+                 * 现场：7z 用错密码"半成功"写出 0 字节的桩文件，校验已经判否，
+                 * 而任务状态仍然是「解压成功」—— 汇总于是把它算进了成功数，
+                 * 用户看到的"成功 N 个"里混着一个什么都没解出来的包。
+                 *
+                 * 这里读的是**机器可判的字段**（<see cref="ArchiveTask.OutputVerification"/>），
+                 * ⛔ 不是拿校验那句中文文案去做比较（AGENTS.md §7：统计不得依赖中文文案比较）。
+                 */
+                return task.OutputVerification == OutputVerificationOutcome.Failed
+                    ? SummaryBucket.ExtractFailed
+                    : SummaryBucket.ExtractSuccess;
             }
 
             if (status == StatusText.WrongPassword)
@@ -684,6 +697,16 @@ namespace ArchiveFixer.Services
             if (task == null)
             {
                 return false;
+            }
+
+            /*
+             * 产物校验判否的必须进失败清单（用户 2026-09-24 要求），**无论状态写着什么**：
+             * 那一行"校验：…"正是用户事后唯一能看懂"到底差在哪"的地方（预期与实际三个数字都在里面）。
+             * 判据是机器可判的枚举，不是中文文案。
+             */
+            if (task.OutputVerification == OutputVerificationOutcome.Failed)
+            {
+                return true;
             }
 
             if (IsFailedStatus(task.Status))

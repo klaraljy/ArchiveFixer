@@ -25,6 +25,33 @@ namespace ArchiveFixer.Extraction
     }
 
     /// <summary>
+    /// 删除动作的唯一出口（用户 2026-09-24 要求：删除裁决要能被测试钉死）。
+    ///
+    /// <para>
+    /// 为什么要留这个接缝：那条红线是"该不删的时候**一次都不能调用删除**"，
+    /// 而"有没有调用"只有把执行体换成记账的假实现才能断言（源码里看 <c>File.Delete</c> 看不出运行时走没走到）。
+    /// 与 <c>ISourceMoveFileSystem</c>（源包搬运）同一套做法，产品代码一行都不需要知道它存在。
+    /// </para>
+    /// </summary>
+    public interface ISourceDeleteFileSystem
+    {
+        bool FileExists(string path);
+
+        /// <summary>删除**一个**文件（不递归、不跟随联接点）。失败时抛异常，由调用方记成"删不掉"。</summary>
+        void DeleteFile(string path);
+    }
+
+    /// <summary>真实文件系统（产品代码用这一个）。</summary>
+    public sealed class FileSystemSourceDeleteFileSystem : ISourceDeleteFileSystem
+    {
+        public static FileSystemSourceDeleteFileSystem Instance { get; } = new();
+
+        public bool FileExists(string path) => SourceCleanupService.SafeFileExists(path);
+
+        public void DeleteFile(string path) => File.Delete(path);
+    }
+
+    /// <summary>
     /// 可选清理源包（AGENTS.md §9.5，用户 2026-09-21 指示：默认关闭，只有解压成功 + 校验通过才删）。
     ///
     /// 这个类是整个项目里**唯一**会删用户源文件的地方，因此所有安全边界都写死在这里：
@@ -33,10 +60,68 @@ namespace ArchiveFixer.Extraction
     /// 3. 要删的清单只能来自任务自身（分卷组 = 这一组的分卷，单文件任务 = 它自己），
     ///    **不扫描目录**、**不删目录**、**不递归**；
     /// 4. 单个文件删不掉（占用 / 权限）只记录并继续，不让整批任务因为一个文件失败。
+    ///
+    /// <para>
+    /// ⚠ <b>判据只准看事实（用户 2026-09-24 要求）</b>：删除条件就是「输出校验通过 + 未取消 + 属于本任务来源」，
+    /// ⛔ <b>不许</b>写 <c>task.Status == "解压成功"</c> 之类的字符串判断 ——
+    /// 真机日志里出现过"状态写着解压成功、校验却已判否"，拿状态字符串当判据迟早会删错东西。
+    /// 本类因此**完全不读** <see cref="ArchiveTask.Status"/>。
+    /// </para>
     /// </summary>
     public sealed class SourceCleanupService
     {
+        private readonly ISourceDeleteFileSystem _fileSystem;
+
+        /// <summary>
+        /// <paramref name="fileSystem"/> 只给测试用（注入一个记账的假执行器，断言"该不删时一次都没被调用"）；
+        /// 产品代码一律用默认的 <see cref="FileSystemSourceDeleteFileSystem"/>。
+        /// </summary>
+        public SourceCleanupService(ISourceDeleteFileSystem? fileSystem = null)
+        {
+            _fileSystem = fileSystem ?? FileSystemSourceDeleteFileSystem.Instance;
+        }
+
+        /// <summary>
+        /// 解压收尾那条路用的入口（判据是**这一次真的跑过的那份校验结果**）。
+        /// </summary>
         public SourceCleanupResult Cleanup(ArchiveTask? task, OutputVerificationResult? verification, bool enabled)
+        {
+            return CleanupCore(
+                task,
+                enabled,
+                verified: verification != null && verification.Verified,
+                verificationNote: verification == null ? "没有校验结果" : verification.Message);
+        }
+
+        /// <summary>
+        /// 续解链跑完之后那条路用的入口（判据由调用方按**明确的既有事实**给出）。
+        ///
+        /// <para>
+        /// 为什么要单独一个入口：链结束时的"内容物已好"不是一个 <see cref="OutputVerificationResult"/> 对象
+        /// （那是**整条链**的结论：根任务校验通过、链里每个落在同一目录的任务都校验通过、目录里确实有内容物），
+        /// 硬造一个假的校验结果对象反而更危险（数字是编的）。
+        /// 所以这里要求调用方把<strong>事实</strong>作为参数传进来，而"不满足就不删"这条判断仍然在本类里，
+        /// 一处定义 —— 与 <see cref="Cleanup"/> 共用同一段执行体。
+        /// </para>
+        /// </summary>
+        /// <param name="verified">
+        /// 输出校验是否通过。⛔ 只有调用方逐条查过"根任务校验通过 + 全链校验通过 + 那个目录里有内容物"之后才允许传 true。
+        /// </param>
+        /// <param name="verificationNote">这一条事实的说明（进日志与结论，便于事后对账）。</param>
+        public SourceCleanupResult CleanupVerified(
+            ArchiveTask? task,
+            bool verified,
+            string verificationNote,
+            bool enabled)
+        {
+            return CleanupCore(task, enabled, verified, verificationNote);
+        }
+
+        private SourceCleanupResult CleanupCore(
+            ArchiveTask? task,
+            bool enabled,
+            bool verified,
+            string verificationNote)
         {
             /*
              * 规则 1：开关没开就什么都不做。
@@ -65,11 +150,9 @@ namespace ArchiveFixer.Extraction
              * 规则 2：校验没过（或压根没校验）就不删。
              * 宁可留下一个已经没用的源包，也不能把没解压全的包删掉 —— 后者无法恢复。
              */
-            if (verification == null || !verification.Verified)
+            if (!verified)
             {
-                string reason = verification == null
-                    ? "没有校验结果"
-                    : verification.Message;
+                string reason = string.IsNullOrWhiteSpace(verificationNote) ? "没有校验结果" : verificationNote;
 
                 return new SourceCleanupResult
                 {
@@ -95,7 +178,7 @@ namespace ArchiveFixer.Extraction
 
             foreach (string targetPath in targets)
             {
-                if (!SafeFileExists(targetPath))
+                if (!_fileSystem.FileExists(targetPath))
                 {
                     // 已经不在了（用户手动删了 / 上一轮已经清过）：跳过，**不算失败**，
                     // 否则每次重跑都会报一堆假的"删除失败"。
@@ -137,7 +220,7 @@ namespace ArchiveFixer.Extraction
                 try
                 {
                     // File.Delete 不递归、不跟随 reparse point，删的就是清单里这一个文件。
-                    File.Delete(targetPath);
+                    _fileSystem.DeleteFile(targetPath);
 
                     deletedFiles.Add(targetPath);
                     freedBytes += size;
@@ -231,7 +314,7 @@ namespace ArchiveFixer.Extraction
             return $"部分失败：{failedCount} 个文件被占用未删除；已删除 {deletedCount} {unit}，释放 {freedBytes} 字节";
         }
 
-        private static bool SafeFileExists(string? path)
+        internal static bool SafeFileExists(string? path)
         {
             try
             {

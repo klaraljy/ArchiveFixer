@@ -1,3 +1,4 @@
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
@@ -141,6 +142,12 @@ namespace ArchiveFixer.ViewModels
         private readonly RenameCoordinator _renameCoordinator;
         private readonly ExtractionCoordinator _extractionCoordinator;
         private readonly DialogService _dialogService;
+
+        /// <summary>
+        /// 内层包候选的"这真的是包吗"探针（只读文件头；用户 2026-09-24 要求加的下限）。
+        /// 用 <see cref="MagicArchiveProber"/> 而不是另造一套签名表 —— 与递归展开同一口径。
+        /// </summary>
+        private readonly MagicArchiveProber _magicProber = new();
 
         /// <summary>
         /// 本次运行里用户勾过「以后不再询问」——之后的一键处理直接按设置走，不再弹面板。
@@ -922,8 +929,15 @@ namespace ArchiveFixer.ViewModels
 
             foreach (ArchiveTask task in roundTargets)
             {
-                // 只有解压成功的任务才有"产物"可言；失败/跳过/取消的目录里没有可信的东西。
-                if (!IsSuccessStatus(task))
+                /*
+                 * 只有**产物校验通过**的任务才有"产物"可言（用户 2026-09-24 要求：判据只准看事实）。
+                 *
+                 * 老写法是 `IsSuccessStatus(task)`，也就是拿 `task.Status == "解压成功"` 这个**字符串**去决定
+                 * "要不要继续往下解"。真机日志里恰好出现过"状态写着解压成功、校验却已判否"的那一刻 ——
+                 * 那种情况下续解链会在两个 0 字节的桩文件上继续解两层，全程在解空气。
+                 * 现在读的是校验那一刻的事实；失败/取消的任务在这里天然被排除（它们的结论不是 Passed）。
+                 */
+                if (task.OutputVerification != OutputVerificationOutcome.Passed)
                 {
                     continue;
                 }
@@ -1012,6 +1026,29 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
+                    /*
+                     * ===== 内层包候选的**下限**（用户 2026-09-24 铁证，两条缺一不可）=====
+                     *
+                     * 现场：外层 ZIP 是加密条目 → 7z 半成功写出 **0 字节**的 `2部轻熟1.7z.001/.002` →
+                     * 老逻辑只看后缀，把那个 0 字节的 `.001` 当成"包"继续往下解，一路解到 `2部轻熟1.7z`
+                     * 才被 7-Zip 用"文件为空"打回来 —— 用户看到的是连解两层空气、任务列表里多出两条
+                     * "文件为空"的失败记录。用户明确要求：**0 字节的文件绝不许进入续解链**。
+                     *
+                     * ① 非零字节：0 字节的记录不可能是任何归档（连头都没有）；
+                     * ② 魔数认得出来：真读一次文件头，认不出就不是包（后缀可以骗人，7z 写出来的桩文件
+                     *    也可以是任意名字）。②比①贵一点（一次头部读），但只对**过了后缀筛**的那些文件做，
+                     *    量级与"这一轮新出现的包"同阶。
+                     */
+                    if (!TryGetCandidateLength(file, out long candidateLength) || candidateLength <= 0)
+                    {
+                        continue;
+                    }
+
+                    if (!await IsRecognizedArchiveFileAsync(file))
+                    {
+                        continue;
+                    }
+
                     if (!found.ContainsKey(file))
                     {
                         found[file] = new InnerArchiveCandidate
@@ -1025,6 +1062,49 @@ namespace ArchiveFixer.ViewModels
             }
 
             return found.Values.OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        /// <summary>
+        /// 取候选文件的字节数；读不到（文件刚好被删 / 权限）返回 false = 不算候选。
+        ///
+        /// <para>0 字节的 `*.7z.001` **不是包**（用户 2026-09-24 铁证）：7z 用错密码"半成功"时
+        /// 就会写出这种桩文件，把它当内层包继续解等于连解两层空气。</para>
+        /// </summary>
+        private static bool TryGetCandidateLength(string filePath, out long length)
+        {
+            length = 0;
+
+            try
+            {
+                length = new FileInfo(filePath).Length;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 魔数认不认得出来这是归档（只读文件头，认不出就不是包）。
+        ///
+        /// <para>
+        /// 判据来自 <see cref="MagicArchiveProber"/>（它只认"已知格式的归档"，
+        /// <c>Unknown</c> 不算 —— 与递归展开同一口径，不在这里另造一套）。读头部是真异步 I/O，
+        /// 不会占住 UI 线程；调用点已经先用后缀筛过一遍，所以代价只与"这一轮新出现的包"同阶。
+        /// </para>
+        /// </summary>
+        private async Task<bool> IsRecognizedArchiveFileAsync(string filePath)
+        {
+            try
+            {
+                return await _magicProber.IsArchiveAsync(filePath);
+            }
+            catch
+            {
+                // 读不了（被独占 / 刚好被删）：当作"认不出来"，不把它当包 —— 宁可不续解，也不解空气。
+                return false;
+            }
         }
 
         /// <summary>
@@ -1211,14 +1291,27 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 解压成功（含"已覆盖"）。
+        /// 解压成功（含"已覆盖"）**且产物校验没有判否**。
         ///
-        /// internal 是为了让 <see cref="ExtractionCoordinator.CompleteRootSourcePackagesAfterChainAsync"/>
-        /// 复用同一份判定：链结束后补搬源包的前提之一就是"根任务以解压成功收尾"，
-        /// 两处各写一遍迟早分叉（同类先例：<see cref="IsHandled"/>）。
+        /// <para>
+        /// ⚠ 2026-09-24 起加上了后半句（不变量 6 的真机违反）：用户机器上出现过
+        /// "状态写着解压成功、校验却已判否"的那一帧。**统计口径不许把那种任务算成成功**，
+        /// 所以这里读一次校验事实 —— 这是**机器可判的字段**，不是中文文案比较
+        /// （用户 2026-09-24 明确要求：统计与裁决不许依赖状态字符串）。
+        /// </para>
+        /// <para>
+        /// ⛔ 它只用于**统计与显示**。凡是"要不要删源 / 搬源 / 继续往下解"的裁决，
+        /// 一律读 <see cref="ArchiveTask.OutputVerification"/> 与 <see cref="ArchiveTask.Outcome"/>，
+        /// 不许调这个方法（那是本次修复的另一半）。
+        /// </para>
         /// </summary>
         internal static bool IsSuccessStatus(ArchiveTask task)
         {
+            if (task == null || task.OutputVerification == OutputVerificationOutcome.Failed)
+            {
+                return false;
+            }
+
             return task.Status == StatusText.ExtractSuccess ||
                    task.Status == StatusText.Overwritten;
         }

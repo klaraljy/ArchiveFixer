@@ -39,9 +39,11 @@ namespace ArchiveFixer.Storage
     ///
     /// <para><b>门槛（五条，缺一不可 —— 这是那条红线"失败不删任何东西"的落点）</b>：</para>
     /// <list type="number">
-    /// <item><description>任务终态是「解压成功」（<see cref="StatusText.ExtractSuccess"/>）——
-    /// 「部分完成」「解压失败」「已取消」「已跳过」一律不动；</description></item>
-    /// <item><description>输出校验通过（<see cref="ArchiveTask.IsOutputVerified"/>）；</description></item>
+    /// <item><description>任务的**机器终态**是「完成」（<see cref="TaskOutcome.Succeeded"/>，也就是产物已定稿 +
+    /// 校验通过 + 源包处理没出问题）——「部分完成」「解压失败」「已取消」「已跳过」一律不动。
+    /// ⚠ 判据是**枚举**，不是 <c>Status</c> 那个中文文案（用户 2026-09-24 要求：删除的裁决只准看事实）；</description></item>
+    /// <item><description>输出校验通过（<see cref="ArchiveTask.OutputVerification"/> ==
+    /// <see cref="OutputVerificationOutcome.Passed"/>，同样读事实而不是文案）；</description></item>
     /// <item><description>没被取消（调用方传进来的 <c>cancelled</c>）；</description></item>
     /// <item><description>`其余物` 目录**是本次真的记下来的那一个**（<see cref="ArchiveTask.RestDirectoryPath"/>）——
     /// 现场重算会在三处算错（内容物那层也叫「其余物」时的 `其余物(1)`、共享根下按包名分的那层、归集把目录整体搬走之后的落点），
@@ -95,14 +97,22 @@ namespace ArchiveFixer.Storage
                 return Skip($"{name}：已取消 —— 其余物一个字节都不删（失败 / 取消 / 校验不通过一律不动）");
             }
 
-            if (!string.Equals(task.Status, StatusText.ExtractSuccess, StringComparison.Ordinal))
+            if (task.Outcome != TaskOutcome.Succeeded)
             {
-                return Skip($"{name}：任务终态是「{task.Status}」而不是「{StatusText.ExtractSuccess}」，其余物一个字节都不删");
+                return Skip(
+                    $"{name}：任务的**机器终态**不是「完成」（当前：{task.Outcome}）—— " +
+                    $"其余物一个字节都不删（部分完成 / 失败 / 取消 / 跳过一律不动）");
             }
 
-            if (!task.IsOutputVerified)
+            /*
+             * ⚠ 判据只准看**事实**（用户 2026-09-24 要求）：这里读的是校验那一刻写下的枚举，
+             * ⛔ 不再用 `task.Status == "解压成功"` 这种中文状态字符串 ——
+             * 真机日志里出现过"状态写着解压成功、校验却已判否"的那一帧，
+             * 万一那种任务走到这里，用户的源包就会被永久删掉。
+             */
+            if (task.OutputVerification != OutputVerificationOutcome.Passed || !task.IsOutputVerified)
             {
-                return Skip($"{name}：输出校验没有通过，其余物一个字节都不删");
+                return Skip($"{name}：输出校验没有通过（机器结论：{task.OutputVerification}），其余物一个字节都不删");
             }
 
             if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))

@@ -701,6 +701,7 @@ namespace ArchiveFixer.Tests
                 OutputPath = outputRoot,
                 Status = StatusText.ExtractSuccess,
                 IsOutputVerified = true,
+                Outcome = TaskOutcome.Succeeded,
                 RestDirectoryPath = restDirectory
             };
 
@@ -731,6 +732,7 @@ namespace ArchiveFixer.Tests
                 OutputPath = outputRoot,
                 Status = StatusText.ExtractSuccess,
                 IsOutputVerified = true,
+                Outcome = TaskOutcome.Succeeded,
                 RestDirectoryPath = mine
             };
 
@@ -1347,6 +1349,13 @@ namespace ArchiveFixer.Tests
                 OutputPath = outputPath,
                 Status = StatusText.ExtractSuccess,
                 IsOutputVerified = true,
+
+                /*
+                 * 机器终态也要一起给（2026-09-24 起删除裁决读它，不再读 Status 那个中文文案）：
+                 * 光有"状态写着解压成功 + 校验通过"还不够 —— 那两样都可能被别处改掉，
+                 * 而危险模式删的是**永久删除**，判据必须是管线在结论成立那一刻写下的枚举。
+                 */
+                Outcome = TaskOutcome.Succeeded,
                 RestDirectoryPath = restDirectory,
                 VolumeGroupKey = "222"
             };

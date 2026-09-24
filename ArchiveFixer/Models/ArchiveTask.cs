@@ -1,3 +1,4 @@
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
@@ -40,6 +41,35 @@ namespace ArchiveFixer.Models
         /// 把"尝试过"也记成"搬过了"，用户就再也修不好那一次失败。
         /// </summary>
         Done = 2
+    }
+
+    /// <summary>
+    /// 任务的**机器可判终态**（见 <see cref="ArchiveTask.Outcome"/>）。
+    ///
+    /// <para>
+    /// 只有"删源 / 搬源 / 续解下一层 / 危险模式删其余物"这几条**不可逆或会放大**的裁决读它。
+    /// 中文文案（<c>StatusText</c>）继续只做显示，两套东西各管一头，谁也不许拿另一头当判据。
+    /// </para>
+    /// </summary>
+    public enum TaskOutcome
+    {
+        /// <summary>还没有结论（含"在定稿之前就结束"的那些分支）。所有门都不放行这一档。</summary>
+        Pending = 0,
+
+        /// <summary>产物已定稿、输出校验通过、源包处理也没出问题：**唯一**允许继续/删除的档。</summary>
+        Succeeded = 1,
+
+        /// <summary>做了一部分（源包没能搬进其余物 / 递归停在需要用户决定的层）。不得当成成功。</summary>
+        PartiallyCompleted = 2,
+
+        /// <summary>失败（含校验未通过 / 越界 / 超预算 / 密码试完）。</summary>
+        Failed = 3,
+
+        /// <summary>用户取消。</summary>
+        Cancelled = 4,
+
+        /// <summary>跳过（不是压缩包 / 同名冲突按用户选择跳过）。</summary>
+        Skipped = 5
     }
 
     /// <summary>
@@ -553,8 +583,52 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 解压后的落盘结果是否通过校验（条目数 / 总大小）。
         /// **清理源包必须以此为前置条件**：没校验通过就不许删（AGENTS.md §9.5）。
+        ///
+        /// <para>
+        /// 它现在只是 <see cref="OutputVerification"/> 的布尔视图（写法保持兼容），
+        /// **机器判定一律读枚举**：字符串/布尔都能被后来某一行代码改掉，枚举不会。
+        /// </para>
         /// </summary>
-        public bool IsOutputVerified { get; set; }
+        public bool IsOutputVerified
+        {
+            get => OutputVerification == OutputVerificationOutcome.Passed;
+
+            /*
+             * 写 false 时落成 NotAttempted（"没有通过校验"），**不是** Failed：
+             * 那些 false 来自"越界 / 超预算 / 定稿失败 / 跳过"这类**定稿之前的结论**，
+             * 说成"校验未通过"会给用户一个错的理由（他该看的是那一句真正的原因）。
+             */
+            set => OutputVerification = value
+                ? OutputVerificationOutcome.Passed
+                : OutputVerificationOutcome.NotAttempted;
+        }
+
+        /// <summary>
+        /// 产物校验的**机器可判**结论（AGENTS.md §7）。
+        ///
+        /// <para>
+        /// 为什么必须落在任务上：用户 2026-09-24 的真机日志里，校验已经判否、状态却仍是「解压成功」——
+        /// 那一刻"删源 / 搬源 / 续解下一层 / 危险模式删其余物"四条裁决全都会误判。
+        /// 现在这四条一律读它（<c>== Passed</c>），读的是**校验那一刻的事实**。
+        /// </para>
+        /// </summary>
+        public OutputVerificationOutcome OutputVerification { get; set; } = OutputVerificationOutcome.NotAttempted;
+
+        /// <summary>
+        /// 任务的**机器可判终态**（AGENTS.md §7 要求的那类"能被机器判定"的状态）。
+        ///
+        /// <para>
+        /// 与 <see cref="Status"/> 的分工：那个是**给人看的**中文文案（配色、列表显示、汇总文案），
+        /// 这个是给代码判的。凡是"要不要删用户的源文件 / 要不要继续往下解"这种不可逆或会放大的决定，
+        /// 一律读这个枚举，⛔ **不许**再写 <c>task.Status == "解压成功"</c> 这类字符串比较
+        /// （用户 2026-09-24 明确要求：删除的裁决只准看事实，不准看状态字符串）。
+        /// </para>
+        /// <para>
+        /// 默认 <see cref="TaskOutcome.Pending"/> = "还没有结论"，而所有门都要求
+        /// <see cref="TaskOutcome.Succeeded"/>，所以**漏设时的方向是保守的**（宁可不删、不续解）。
+        /// </para>
+        /// </summary>
+        public TaskOutcome Outcome { get; set; } = TaskOutcome.Pending;
 
         /// <summary>校验结论的一句话说明。</summary>
         public string VerifyMessage { get; set; } = string.Empty;

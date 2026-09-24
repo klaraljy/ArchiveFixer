@@ -829,15 +829,27 @@ namespace ArchiveFixer.Tests
             File.WriteAllText(Path.Combine(directory, fileName), content);
         }
 
+        /// <summary>
+        /// 假清单：只声明"有哪些条目"，**不声明字节数**（0 = 清单没给出确定大小 ——
+        /// 真实 7z 对 `-mhe` / 读不出大小的清单就是这么报的，用户日志里出现过「清单 0 个文件 / 解压后 0 字节」）。
+        ///
+        /// <para>
+        /// ⚠ 2026-09-24 改：以前这里拿**文件名长度**当字节数（<c>"content.txt".Length</c> = 11），
+        /// 而 <see cref="WriteContent"/> 真写出去的是 3 个字节 —— 两者对不上，产物校验判否。
+        /// 判否本身没错，但**校验判否现在会直接顶掉「解压成功」**（用户 2026-09-24 的铁证修复），
+        /// 于是这一组"同名冲突要不要问、覆盖要不要留痕"的用例全都会挂在与被测行为无关的地方。
+        /// 声明"不知道大小"才是这批假引擎真正想表达的东西。
+        /// </para>
+        /// </summary>
         private static ArchiveListResult ListResult(params string[] fileNames)
         {
             return new ArchiveListResult
             {
                 Success = true,
                 FileCount = fileNames.Length,
-                TotalUncompressedSize = fileNames.Sum(name => (long)name.Length),
+                TotalUncompressedSize = 0,
                 Entries = fileNames
-                    .Select(name => new ArchiveEntry { Path = name, Size = name.Length })
+                    .Select(name => new ArchiveEntry { Path = name, Size = 0 })
                     .ToList(),
                 EngineId = "fake",
                 EngineVersion = "1.0"

@@ -6,11 +6,47 @@ using ArchiveFixer.Engines;
 namespace ArchiveFixer.Extraction
 {
     /// <summary>
+    /// 产物校验的**机器可判**结论（AGENTS.md §7：统计与判定不得依赖中文文案比较）。
+    ///
+    /// <para>
+    /// 为什么一定要有它：清理源包 / 危险模式删其余物 / 续解下一层 / 汇总分桶全都以"这一单到底算出东西了吗"
+    /// 为前提，而这个前提以前只能靠 <c>task.Status</c> 的中文字符串去猜。用户 2026-09-24 的真机日志里
+    /// 恰好出现了最坏那种情形：**校验已经判否，状态却仍是「解压成功」** ——
+    /// 于是"删源 / 搬源 / 续解"三条路会一起误判（那一次源包侥幸没被删，是因为另有一条碰巧的守卫）。
+    /// 现在这些裁决一律读这个枚举，读的是**校验那一刻的事实**，与后来谁改了状态字符串无关。
+    /// </para>
+    /// </summary>
+    public enum OutputVerificationOutcome
+    {
+        /// <summary>还没做过校验（没解压 / 越界这类在定稿之前就结束的情形）。</summary>
+        NotAttempted = 0,
+
+        /// <summary>校验通过：产物非空，且与引擎声明的条目数 / 总字节数对得上。</summary>
+        Passed = 1,
+
+        /// <summary>校验**判否**：产物为空、或少于预期。这一档永远不许被当成成功（不变量 6）。</summary>
+        Failed = 2
+    }
+
+    /// <summary>
     /// 解压产物校验结果（M3「一批包一键搞定」）。
     /// </summary>
     public sealed class OutputVerificationResult
     {
         public bool Verified { get; init; }
+
+        /// <summary>机器可判的结论（<see cref="Verified"/> 的枚举形态；二者恒一致）。</summary>
+        public OutputVerificationOutcome Outcome =>
+            Verified ? OutputVerificationOutcome.Passed : OutputVerificationOutcome.Failed;
+
+        /// <summary>
+        /// 用户可读的失败结论（**只在判否时用**）：一句话说清"产物校验未通过 + 预期与实际"。
+        /// 任务状态与失败清单都写它 —— 用户 2026-09-24 要求错误信息里必须带这三个数字。
+        /// </summary>
+        public string FailureMessage =>
+            Message.StartsWith("校验未通过", StringComparison.Ordinal)
+                ? "产物" + Message
+                : "产物校验未通过：" + Message;
 
         public int ExpectedFileCount { get; init; }
 
@@ -30,6 +66,11 @@ namespace ArchiveFixer.Extraction
     /// 定位：它是**清理源包（不可逆操作）的唯一前置门槛**，所以刻意做得很保守 ——
     /// 只比"文件数 + 总字节数"，且一律用 &gt;= 比较；宁可判定不通过（源包留着），
     /// 也不要把没解压全的包当成成功、进而删掉用户的源文件。
+    ///
+    /// <para>
+    /// <b>产物为空（0 个文件 / 全是 0 字节 / 总字节为 0）一律判否</b>（用户 2026-09-24 铁证）：
+    /// "预期 0 个文件 / 0 字节、实际也 0 字节"不是"校验通过"，而是"什么都没解出来"。
+    /// </para>
     /// </summary>
     public static class OutputVerifier
     {
@@ -146,8 +187,35 @@ namespace ArchiveFixer.Extraction
                     ExpectedTotalSize = expectedTotalSize,
                     ActualTotalSize = actualTotalSize,
                     Message = directoryExists
-                        ? "输出目录是空目录，没有产物"
-                        : "输出目录不存在，没有产物"
+                        ? "校验未通过：输出目录是空目录，没有产物"
+                        : "校验未通过：输出目录不存在，没有产物"
+                };
+            }
+
+            /*
+             * 规则 2：**产物总字节为 0** —— 一律判否（用户 2026-09-24 真机铁证，本条是新增的）。
+             *
+             * 现场：外层 ZIP 里有加密条目，7z 半成功，写出两个 **0 字节**的 `*.7z.001/.002`；
+             * 老口径下"文件数够、字节数也够（拿 0 比 0）"居然判了**通过**，于是
+             * ① 任务落「解压成功」② 0 字节的 `*.7z.001` 被当成内层包继续解 ③ 那 2 项还进了 `其余物`。
+             * 一条 0 字节的记录根本不是产物：它既不能看、也不能再解，把它算成"解出来了"就是骗人。
+             *
+             * 位置刻意放在"没有可信预期"那条**之前**：预期拿不到（列目录失败 / `-mhe` 读不出清单）时
+             * 老口径只做"目录非空"的底线校验 —— 一堆 0 字节垃圾照样能把那个底线混过去。
+             */
+            if (actualTotalSize <= 0)
+            {
+                return new OutputVerificationResult
+                {
+                    Verified = false,
+                    ExpectedFileCount = expectedFileCount,
+                    ActualFileCount = actualFileCount,
+                    ExpectedTotalSize = expectedTotalSize,
+                    ActualTotalSize = actualTotalSize,
+                    Message = expected == null || !expected.Success
+                        ? $"校验未通过：产物为空 —— 输出目录里有 {actualFileCount} 个文件，但全是 0 字节（没有解出任何内容）"
+                        : $"校验未通过：产物为空 —— 预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，" +
+                          $"实际 {actualFileCount} 个 / {actualTotalSize} 字节（解出来的全是 0 字节文件）"
                 };
             }
 

@@ -329,6 +329,17 @@ namespace ArchiveFixer.ViewModels
         private OneClickRunOptions? RunOptions => _runOptions;
 
         /// <summary>
+        /// "清理源包"的删除执行体（**只给测试注入**；产品代码留空 = 真文件系统）。
+        ///
+        /// <para>
+        /// 为什么必须留这个接缝（用户 2026-09-24 要求）：那条红线是"校验没通过时**一次都不许调用删除**"，
+        /// 而"有没有调用"只有把执行体换成记账的假实现才断言得出来（看源码里的 <c>File.Delete</c> 看不出运行时走没走到）。
+        /// 与既有的 <c>SpaceProbeOverride</c> / <c>OptionsPromptOverride</c> 同一类测试接缝。
+        /// </para>
+        /// </summary>
+        internal ISourceDeleteFileSystem? SourceDeleteFileSystemOverride { get; set; }
+
+        /// <summary>
         /// 本批是否出现过密码类失败（密码错误 / 达到尝试上限）。
         /// 批次结束后的合并提示据此换一句话：出过密码问题时指引"再点一次、把密码输进去"，
         /// 没出过就不提（免得每次跑完都念一遍）。
@@ -586,6 +597,17 @@ namespace ArchiveFixer.ViewModels
 
             public string Summary { get; init; } = string.Empty;
 
+            /// <summary>
+            /// 暂存区里**只有 0 字节产物**（用户 2026-09-24 铁证：密码不对时 7z 会写出 0 字节的桩文件）。
+            ///
+            /// <para>
+            /// 这一档下 <see cref="Moves"/> 一定是空的（0 字节的东西不算产物，见
+            /// <see cref="PlanFinalLayout"/>），所以"不定稿 / 不生成其余物 / 不搬源包"由控制流保证；
+            /// 这个标志只用来把日志与结论说得更准（别让人读成"这个包本来就是空的"）。
+            /// </para>
+            /// </summary>
+            public bool ZeroByteProductsOnly { get; init; }
+
             public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
         }
 
@@ -799,6 +821,7 @@ namespace ArchiveFixer.ViewModels
             {
                 task.Status = StatusText.ExtractFailed;
                 task.ErrorMessage = work.BudgetMessage;
+                task.Outcome = TaskOutcome.Failed;
 
                 // 不发布、不清理：产物留在原地让用户自己判断，源文件更不能删。
                 StopAfterCurrent();
@@ -821,6 +844,7 @@ namespace ArchiveFixer.ViewModels
 
                 // 结论不成立时不许在详情里显示"输出校验通过"。
                 task.IsOutputVerified = false;
+                task.Outcome = TaskOutcome.Failed;
                 task.LastUpdatedTime = DateTime.Now;
 
                 return false;
@@ -833,6 +857,7 @@ namespace ArchiveFixer.ViewModels
                 task.ProgressText = StatusText.ProgressFailed;
                 task.ErrorMessage = work.CommitFailureMessage;
                 task.IsOutputVerified = false;
+                task.Outcome = TaskOutcome.Failed;
                 task.LastUpdatedTime = DateTime.Now;
 
                 return false;
@@ -853,12 +878,48 @@ namespace ArchiveFixer.ViewModels
                 task.ProgressText = StatusText.ProgressSkipped;
                 task.ErrorMessage = "同名冲突按你的选择跳过：产物仍留在暂存目录，未写入输出目录。";
                 task.IsOutputVerified = false;
+                task.Outcome = TaskOutcome.Skipped;
                 task.LastUpdatedTime = DateTime.Now;
 
                 return false;
             }
 
             task.IsOutputVerified = work.Verification.Verified;
+
+            /*
+             * ===== 产物校验未通过 = **结论本身不成立**（用户 2026-09-24 铁证，不变量 6）=====
+             *
+             * 这是本次修复的第二道闸（第一道在候选循环里：判否就地换下一个候选密码）。
+             * 它管的是**绕不过去的那几条路**：递归、内嵌 ZIP 直读、以及"先测试再解压"那一支 ——
+             * 那些路都不会经过候选循环，所以判否必须在这里落地。
+             *
+             * 旧行为（本轮修掉）：校验判否只写进 `IsOutputVerified` 与 `VerifyMessage`，
+             * 任务状态**照样是「解压成功」**，日志照样打印"解压成功：xxx"，
+             * 汇总照样把它算进成功数 —— 用户看到的是一句彻头彻尾的假话。
+             *
+             * 现在的口径与"越界 / 超预算 / 定稿失败"完全一致：状态落失败、原因带上预期与实际的三个数字、
+             * 不定稿之外的任何一步都不补做（源包在 RunPostProcessWork 里已经因为校验没过没被动过），
+             * 机器终态落 Failed（删源 / 搬源 / 续解 / 危险模式删除四条路都会读它）。
+             */
+            if (!work.Verification.Verified)
+            {
+                task.Status = StatusText.ExtractFailed;
+                task.ProgressText = StatusText.ProgressFailed;
+                task.ErrorMessage = work.Verification.FailureMessage;
+                task.VerifyMessage = work.Verification.FailureMessage;
+
+                /*
+                 * 机器事实要落成 **Failed**，不能停在"没通过校验"的含糊档：
+                 * 调用方（候选循环收尾）与汇总都靠"这一档"区分"校验判否"与
+                 * "越界 / 超预算 / 定稿失败"那些**其它**失败（它们的字段是 NotAttempted）。
+                 */
+                task.OutputVerification = OutputVerificationOutcome.Failed;
+                task.Outcome = TaskOutcome.Failed;
+                task.LastUpdatedTime = DateTime.Now;
+
+                AppendLog("ERROR", $"{task.FileName}：{work.Verification.FailureMessage}；不落「解压成功」，源包一个字节都不动。");
+                return false;
+            }
 
             // 把"实际输出到别处"这件事写进任务对象：输出目录被自动改名时，用户必须在任务上看得见，
             // 不能只在日志里留一句就过去（AGENTS.md 不变量 6 的同一精神：结论不能静默）。
@@ -897,6 +958,7 @@ namespace ArchiveFixer.ViewModels
                 task.Status = StatusText.PartiallyCompleted;
                 task.ErrorMessage = work.SourceMoveFailure;
                 task.VerifyMessage = $"{verifyMessage}；{work.SourceMoveFailure}";
+                task.Outcome = TaskOutcome.PartiallyCompleted;
             }
 
             if (work.Collected != null && work.Collected.Success)
@@ -967,7 +1029,17 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("WARN", $"{task.FileName}：打开输出目录失败（不影响解压结论）：{ex.Message}");
             }
 
-            // 走到这里说明"解压成功"这个结论没有被越界 / 超预算顶掉。
+            // 走到这里说明"解压成功"这个结论没有被越界 / 超预算 / 校验未通过顶掉。
+            //
+            // 机器终态在这里定稿：`Succeeded` 是**唯一**允许"删源 / 搬源 / 续解 / 危险模式删其余物"的档，
+            // 而它只在"产物已定稿 + 输出校验通过 + 没有被上面任何一条顶掉"时才写 ——
+            // 也就是说那四条路从此读的是**事实**，不是后来可能被人改掉的 `Status` 字符串。
+            //
+            // 判据是**上面的结论字段**本身（源包没搬成就不是完成），不是拿 Status 去比字符串。
+            task.Outcome = string.IsNullOrWhiteSpace(work.SourceMoveFailure)
+                ? TaskOutcome.Succeeded
+                : TaskOutcome.PartiallyCompleted;
+
             return true;
         }
 
@@ -1101,7 +1173,8 @@ namespace ArchiveFixer.ViewModels
                 terminalLayout,
                 conflictAction,
                 conflictDecision,
-                cancellationToken);
+                cancellationToken,
+                verification.Verified);
 
             if (commit.Attempted)
             {
@@ -1219,14 +1292,42 @@ namespace ArchiveFixer.ViewModels
             }
             else if (sourceHandling == SourceHandlingMode.DeleteAfterVerify)
             {
-                SourceCleanupResult cleanup = new SourceCleanupService().Cleanup(
-                    task,
-                    verification,
-                    deleteSource);
-
-                if (cleanup.Attempted)
+                /*
+                 * 一键处理 + **本轮只有待续解的中间件**（内容物是续解子任务产出的）→ 现在绝不能删。
+                 *
+                 * 用户 2026-09-24 的第 19.4 条：他把设置定成「校验通过后删除」，选中**文件夹**时
+                 * 里面那些包一个都没被删，而选中**单个文件**时删了 —— 差别就在这里。
+                 * 一个文件夹里的包绝大多数是"第一层只出内层包"的形状（假 MP4 + 尾部 ZIP + 内层加密分卷），
+                 * 内容物要等第二、第三层才出现；而老代码在 DeleteAfterVerify 档上**当场就删**，
+                 * 于是源包在内容物还没出来之前就没了（比"没删"更糟，只是他还没碰上那一次）。
+                 *
+                 * 现在与 MoveToRest 完全同一口径：记账成"留到链结束后补做"，
+                 * 由 <see cref="CompleteRootSourcePackagesAfterChainAsync"/> 在**整条链跑完 + 全链校验通过 +
+                 * 那个目录里确实有内容物**之后按档位删（见 RunDeferredSourceMoveWork）。
+                 * 链没跑完 / 撞轮数上限 / 任何一层校验没过 → 一个字节都不删。
+                 */
+                if (oneClickRun && commit.Attempted && commit.FailedCount == 0 && commit.MovedContentCount == 0)
                 {
-                    logEntries.Add((cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：清理源包 —— {cleanup.Message}"));
+                    task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
+
+                    logEntries.Add((
+                        "INFO",
+                        $"{task.FileName}：本轮产出的都是待续解的中间件（没有内容物定稿），" +
+                        $"按「校验通过后删除」档先留着源包，等整条续解链跑完、全链校验通过之后再删。"));
+                }
+                else
+                {
+                    SourceCleanupResult cleanup = new SourceCleanupService(SourceDeleteFileSystemOverride).Cleanup(task, verification, deleteSource);
+
+                    /*
+                     * 这句日志**不再只写"真的删了"那一次**（用户 2026-09-24 诊断出来的静默口）：
+                     * Attempted=false 有两种情形（输出校验未通过 / 任务没有可删的源文件路径），
+                     * 老写法一声不吭 —— 用户看到的现象就是"设置成删除档，源包却没删，日志里一个字都没有"。
+                     * 现在跳过也要说明原因（WARN），做成了就写 INFO。
+                     */
+                    logEntries.Add((
+                        cleanup.Attempted && cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
+                        $"{task.FileName}：清理源包 —— {cleanup.Message}"));
                 }
             }
 
@@ -1582,11 +1683,11 @@ namespace ArchiveFixer.ViewModels
                 return new DeferredSourceMoveWork(logEntries);
             }
 
-            if (sourceHandling != SourceHandlingMode.MoveToRest)
+            if (sourceHandling == SourceHandlingMode.KeepInPlace)
             {
                 logEntries.Add((
                     "INFO",
-                    $"{rootTask.FileName}：源包处理档是「{sourceHandling}」，链结束后的补搬按该档不搬源包。"));
+                    $"{rootTask.FileName}：源包处理档是「留在原地」，链结束后的补做按该档不动源包。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -1598,24 +1699,40 @@ namespace ArchiveFixer.ViewModels
 
             if (cancellationToken.IsCancellationRequested)
             {
-                logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的补搬被取消，源包留在原地（其余物不生成）。"));
+                // 措辞跟着档位走（读日志的人要能一眼看出"这一次本来要做的是哪件事"）。
+                string action = sourceHandling == SourceHandlingMode.DeleteAfterVerify ? "清理" : "补搬";
+
+                logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的{action}被取消，源包留在原地（其余物不生成）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
-            if (!OneClickCoordinator.IsSuccessStatus(rootTask))
+            /*
+             * ===== 判据一律读**事实**，⛔ 不读状态字符串（用户 2026-09-24 明确要求）=====
+             *
+             * 老写法是 `OneClickCoordinator.IsSuccessStatus(rootTask)`，也就是拿
+             * `task.Status == "解压成功"` 去决定"要不要动用户唯一无法再生的那份源包"。
+             * 那个字符串**证明不了**产物是好的 —— 真机日志里恰好出现过"状态写着解压成功、校验却已判否"，
+             * 万一那条路走到这儿，用户的源包就会被删掉。
+             *
+             * 现在读的是**校验那一刻的事实**（`OutputVerification == Passed`，只有"产物非空且与引擎清单对得上"
+             * 才会被置成它），加上"机器终态不是部分完成/失败/取消"（<see cref="TaskOutcome.Succeeded"/>）。
+             * 两个字段都由管线在结论成立的那一刻写、之后没有任何地方会为了显示去改它们。
+             */
+            if (rootTask.OutputVerification != OutputVerificationOutcome.Passed)
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：根任务没有以「解压成功」收尾（当前状态：{rootTask.Status}），" +
-                    $"链结束后不补搬源包（源包留在原地）。"));
+                    $"{rootTask.FileName}：根任务的**输出校验没有通过**（机器结论：{rootTask.OutputVerification}），" +
+                    $"链结束后不动源包（源包留在原地）。校验结论：{rootTask.VerifyMessage}"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
-            if (!rootTask.IsOutputVerified)
+            if (rootTask.Outcome != TaskOutcome.Succeeded)
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：根任务的输出校验没有通过，链结束后不补搬源包（源包留在原地）。"));
+                    $"{rootTask.FileName}：根任务的机器终态不是「完成」（当前：{rootTask.Outcome}），" +
+                    $"链结束后不动源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -1625,7 +1742,7 @@ namespace ArchiveFixer.ViewModels
                     "WARN",
                     $"{rootTask.FileName}：分卷组不完整" +
                     (string.IsNullOrWhiteSpace(rootTask.VolumeInfoText) ? string.Empty : $"（{rootTask.VolumeInfoText}）") +
-                    "，链结束后不补搬源包（源包留在原地）。"));
+                    "，链结束后不动源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -1657,6 +1774,55 @@ namespace ArchiveFixer.ViewModels
                     "WARN",
                     $"{rootTask.FileName}：{destinationDirectory} 里没有内容物（只有中间件），" +
                     $"链结束后不补搬源包（源包留在原地）。"));
+                return new DeferredSourceMoveWork(logEntries);
+            }
+
+            /*
+             * ===== 按档位收尾：删 or 搬（**这一支以前只实现了"搬"**）=====
+             *
+             * 用户 2026-09-24 的第 19.4 条：设置=「校验通过后删除」时，选中**文件夹**里那些包一个都没被删，
+             * 而单个文件会被删。诊断结论就落在这里 ——
+             * 文件夹里的包绝大多数是"第一层只出内层包"的形状（假 MP4 + 尾部 ZIP + 内层加密分卷），
+             * 于是它们全被记账成"留到链结束后补做"；而链结束后的这一段老代码写着
+             * `if (sourceHandling != MoveToRest) { 写一句"按该档不搬源包"; return; }` ——
+             * **DeleteAfterVerify 走到这里等于什么都没做**，源包自然而然留在了原地。
+             *
+             * 现在两种档位共用上面那同一套判据（内容物已定稿 + 全链校验通过 + 那个目录里确实有内容物 +
+             * 未取消 + 不是内层包），只是最后的动作不同：一个搬进其余物、一个按 §9.5 删掉。
+             * 失败 / 取消 / 校验未通过 → 上面每一条都已经 return，一个字节都不会动（红线不变）。
+             */
+            if (sourceHandling == SourceHandlingMode.DeleteAfterVerify)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的清理被取消，源包留在原地（一个字节都不删）。"));
+                    return new DeferredSourceMoveWork(logEntries);
+                }
+
+                /*
+                 * 删除判据只给**事实**：`verified: true` 的依据就是上面逐条查过的那些 ——
+                 * 根任务校验通过（OutputVerification == Passed）、全链每一个落在这个目录的任务都校验通过、
+                 * 目录里确实有内容物、且没被取消。它**不是**从状态字符串推出来的（用户 2026-09-24 要求）。
+                 */
+                SourceCleanupResult cleanup = new SourceCleanupService(SourceDeleteFileSystemOverride).CleanupVerified(
+                    rootTask,
+                    verified: true,
+                    verificationNote:
+                        $"整条续解链已跑完，{destinationDirectory} 里有 {contentFiles} 个内容物且全链输出校验通过",
+                    enabled: true);
+
+                logEntries.Add((
+                    cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
+                    $"{rootTask.FileName}：链结束后的清理（「校验通过后删除」档） —— {cleanup.Message}"));
+
+                if (cleanup.FailedFiles.Count > 0)
+                {
+                    string cleanupFailure =
+                        $"内容物已好，但源包没能删掉：{cleanup.Message}（源包仍在原处，内容物不受影响）";
+
+                    return new DeferredSourceMoveWork(logEntries, cleanupFailure);
+                }
+
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -1972,6 +2138,9 @@ namespace ArchiveFixer.ViewModels
 
             string stageRoot = SafePathHelper.GetFullPathSafe(stageDirectory);
             var staged = new List<StagedEntry>();
+            var warnings = new List<string>();
+            long totalStageBytes = 0;
+            int zeroByteArtifacts = 0;
 
             foreach (string file in Directory.EnumerateFiles(stageRoot, "*", SearchOption.AllDirectories))
             {
@@ -1986,12 +2155,62 @@ namespace ArchiveFixer.ViewModels
                     // 量不出大小只影响"其余物总共多大"这个数字，不影响布局。
                 }
 
+                totalStageBytes += size;
+
+                bool isProcessArtifact = IsProcessArtifactFile(file);
+
+                /*
+                 * 0 字节的**归档 / 分卷**不是有效的其余物（用户 2026-09-24 要求）。
+                 *
+                 * 依据：任何真实归档都不可能只有 0 字节（连文件头都放不下）——
+                 * 这种文件只有一个来源：7z 用错密码 / 数据不全时写出的**桩文件**
+                 * （真机现场就是 `2部轻熟1.7z.001/.002` 两个 0 字节）。
+                 * 把它搬进 `其余物` 等于把垃圾当成"用户以后可能还要的东西"收起来，
+                 * 而且下一轮还会被当成内层包去解 —— 用户明确要求"不得搬进其余物"。
+                 *
+                 * ⚠ 只对**归档 / 分卷后缀**生效：内容物里本来就有 0 字节文件是正常情形
+                 * （说明文件、占位文件），那些照常定稿（见下面 totalStageBytes 那条的说明）。
+                 */
+                if (isProcessArtifact && size <= 0)
+                {
+                    zeroByteArtifacts++;
+                    continue;
+                }
+
                 staged.Add(new StagedEntry
                 {
                     RelativePath = Path.GetRelativePath(stageRoot, file),
                     Size = size,
-                    IsProcessArtifact = IsProcessArtifactFile(file)
+                    IsProcessArtifact = isProcessArtifact
                 });
+            }
+
+            if (zeroByteArtifacts > 0)
+            {
+                warnings.Add(
+                    $"{zeroByteArtifacts} 个 0 字节的归档 / 分卷文件不算其余物（它们不是压缩包，留在暂存目录里）");
+            }
+
+            /*
+             * 暂存区里**全是 0 字节产物** → 一律不定稿（用户 2026-09-24 铁证，不变量 6 的同一口径）。
+             *
+             * 现场：外层 ZIP 里有加密条目，7z 用错密码时"半成功"地写出两个 **0 字节**的
+             * `*.7z.001/.002`。这些桩文件既不是内容物、也不是"内层包"（0 字节的 `*.7z.001` 不是包），
+             * 更不该被搬进 `其余物` —— 用户明确要求的三条，全都在这里落地：
+             * 计划为空 ⇒ 不定稿、不建最终目录、不建 `其余物`、源包一个字节都不动。
+             *
+             * 为什么以"整棵树的总字节"为判据（而不是逐个文件丢掉 0 字节的那些）：
+             * 归档里**本来就有空文件**是正常情形（说明文件、占位文件），那种包必须照常定稿；
+             * 0 字节桩的问题只出现在"整个产物全是 0 字节"这种"什么都没解出来"的形状上。
+             * 这个取舍写在 docs/需求变更.md 的边界里，不假装覆盖了第一种情形。
+             */
+            if (totalStageBytes <= 0 && staged.Count > 0)
+            {
+                return new FinalLayoutPlan
+                {
+                    ZeroByteProductsOnly = true,
+                    Summary = "暂存区里只有 0 字节产物（没有解出任何内容）"
+                };
             }
 
             // 目录条目也要给：判定表要认"自带一层文件夹""多重空目录嵌套""单链"这些形态，
@@ -2038,7 +2257,7 @@ namespace ArchiveFixer.ViewModels
                 ProcessArtifactTotalSize = finalize.ProcessArtifactTotalSize,
                 ContentFileCount = finalize.ContentFileCount,
                 Summary = finalize.Summary,
-                Warnings = finalize.Warnings
+                Warnings = finalize.Warnings.Concat(warnings).ToList()
             };
         }
 
@@ -2083,7 +2302,8 @@ namespace ArchiveFixer.ViewModels
             TerminalLayoutMode terminalLayout,
             string conflictAction,
             ConflictDecision? conflictDecision,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool verificationPassed = true)
         {
             var logEntries = new List<(string Level, string Message)>();
 
@@ -2154,13 +2374,23 @@ namespace ArchiveFixer.ViewModels
 
             if (plan.Moves.Count == 0)
             {
-                // 引擎什么都没写出来（空包）：没有可定稿的东西，也不该凭空造一个空目录给用户。
-                logEntries.Add(("WARN", $"{task.FileName}：暂存目录里没有产物，没有需要定稿的内容。"));
+                /*
+                 * 引擎什么都没写出来（空包）：没有可定稿的东西，也不该凭空造一个空目录给用户。
+                 *
+                 * ⚠ "只有 0 字节产物"要单独说清楚（用户 2026-09-24 要求）：它看起来也是"没有产物"，
+                 * 但成因完全不同（密码不对 / 数据不全时 7z 会写 0 字节的桩文件），
+                 * 写成"这个包本来就是空的"会把人引到错的方向 —— 那句话必须带上"校验未通过，产物视为无效"。
+                 */
+                string emptyMessage = plan.ZeroByteProductsOnly
+                    ? "暂存目录里只有 0 字节产物 —— 校验未通过，产物视为无效：不定稿、不生成其余物、源包留在原地。"
+                    : "暂存目录里没有产物，没有需要定稿的内容。";
+
+                logEntries.Add(("WARN", $"{task.FileName}：{emptyMessage}"));
 
                 return new StageCommitResult
                 {
                     Attempted = true,
-                    Message = "暂存目录里没有产物",
+                    Message = emptyMessage,
                     LogEntries = logEntries
                 };
             }
@@ -2386,7 +2616,22 @@ namespace ArchiveFixer.ViewModels
                 (skippedContent + skippedProcess > 0 ? $"；{skippedContent + skippedProcess} 项同名，按你的选择跳过" : string.Empty) +
                 (failures.Count > 0 ? $"；{failures.Count} 项没能搬运" : string.Empty);
 
-            logEntries.Add((failures.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：定稿完成 —— {summary}"));
+            /*
+             * 「定稿完成」这句话**不许在"没解出东西"时读成正常完成**（用户 2026-09-24 要求）。
+             *
+             * 现场误读：日志写着"定稿完成 —— 内容物 0 个文件 → …；其余物 2 项（0 字节）→ …"，
+             * 而实际上校验早已判否、那 2 项是 0 字节垃圾 —— 用户看到"定稿完成"就以为流程正常走完了。
+             * 现在两种情况各挂一句明确的结论：
+             * · 校验未通过 → "⚠ 校验未通过，产物视为无效"；
+             * · 校验通过但一个内容物都没有 → 如实说"这次没有内容物"（那是合法的，例如只出中间件）。
+             */
+            string contentNote = plan.ContentFileCount > 0
+                ? string.Empty
+                : verificationPassed
+                    ? "（⚠ 这次没有内容物，只有其余物）"
+                    : "（⚠ 校验未通过，产物视为无效；不定稿有效内容、不搬源包）";
+
+            logEntries.Add((failures.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：定稿完成{contentNote} —— {summary}"));
 
             // 覆盖留痕：被顶掉的落点单独再写一条，用户事后追查"我原来那份去哪了"时有据可依。
             foreach (string overwrittenPath in overwritten)
@@ -5954,6 +6199,19 @@ namespace ArchiveFixer.ViewModels
             task.Status = StatusText.WaitingExtract;
             task.ProgressText = StatusText.ProgressProcessing;
             task.ErrorMessage = string.Empty;
+
+            /*
+             * 上一轮的**校验结论与机器终态**也必须清干净（任务对象是复用的：重试 / 再点一次）。
+             *
+             * 为什么不能只清 ErrorMessage：它们现在是"删源 / 搬源 / 续解 / 危险模式删除"的判据。
+             * 一个上一轮成功过的任务，如果这一轮在开工前就被拦下（分卷缺失 / 源文件变化），
+             * 留着上一轮的 `Passed` + `Succeeded` 会让那四条裁决读到一个**已经不成立的事实** ——
+             * 那正是本次要根治的那类错误（拿旧结论决定不可逆动作）。
+             */
+            task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+            task.Outcome = TaskOutcome.Pending;
+            task.VerifyMessage = string.Empty;
+
             task.LastUpdatedTime = DateTime.Now;
 
             var extractOptions = new ExtractOptions
@@ -7012,17 +7270,42 @@ namespace ArchiveFixer.ViewModels
 
                 if (extractResult.Success)
                 {
-                    task.Status = StatusText.ExtractSuccess;
-                    task.PasswordStatus = string.IsNullOrEmpty(selectedPassword) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
-                    task.ErrorMessage = string.Empty;
+                    /*
+                     * 引擎说成功 ≠ 产物是好的（同"普通模式"那条分支的真机铁证）：先校验。
+                     *
+                     * 这一支没有"下一个候选"可试 —— 密码是 7z t 亲自确认过的，
+                     * 产物不完整只可能是盘满 / 权限 / 数据本身的问题。校验判否时**不落成功**，
+                     * 但仍然走一次收尾：半截产物落在用户看得见的地方，0 字节产物什么都不会搬，
+                     * 源包一个字节都不动（收尾里的校验闸门负责把结论落成失败）。
+                     */
+                    StageProductVerification stage = await VerifyStageProductsAsync(
+                        task,
+                        engineArchivePath,
+                        selectedPassword,
+                        engineOutputPath,
+                        cancellationToken);
 
-                    // 密码成功记录仍然挂在**源文件**上：下次用户再导入这个文件时要能直接命中，
-                    // 而工作区里抠出来的临时文件活不过这次任务。
-                    _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
+                    if (stage.Verification.Verified)
+                    {
+                        task.Status = StatusText.ExtractSuccess;
+                        task.PasswordStatus = string.IsNullOrEmpty(selectedPassword) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
+                        task.ErrorMessage = string.Empty;
 
-                    // 收尾可能把"解压成功"顶掉（产物越界 / 超预算 / 定稿失败）：只有结论仍然成立时才敢这么写日志。
+                        // 密码成功记录仍然挂在**源文件**上：下次用户再导入这个文件时要能直接命中，
+                        // 而工作区里抠出来的临时文件活不过这次任务。
+                        _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
+                    }
+                    else
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{task.FileName}：结果校验 —— {stage.Verification.Message}" +
+                            "（密码是对的，但产物不完整，按失败收场）");
+                    }
+
+                    // 收尾可能把"解压成功"顶掉（产物越界 / 超预算 / 定稿失败 / 校验未通过）：只有结论仍然成立时才敢这么写日志。
                     bool conclusionStands = await PostProcessSuccessAsync(
-                        task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken);
+                        task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken, stage.List);
 
                     if (conclusionStands)
                     {
@@ -7058,6 +7341,15 @@ namespace ArchiveFixer.ViewModels
                 bool extractSuccess = false;
                 bool hasWrongPassword = false;
 
+                /*
+                 * 本轮候选循环的两笔账（用户 2026-09-24 要求，缺一不可）：
+                 * · lastVerification —— 最后一个"解出来了但产物没通过校验"的结论。
+                 *   循环跑完还没成功时，它就是**最准确**的失败理由（比泛泛的"密码错误"多出三个数字）；
+                 * · attemptedCandidates —— 到底试了几个候选，写进最终原因（"已试 N 个候选，产物始终不完整"）。
+                 */
+                OutputVerificationResult? lastVerification = null;
+                int attemptedCandidates = 0;
+
                 for (int i = 0; i < maxPasswordAttempts; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -7066,6 +7358,7 @@ namespace ArchiveFixer.ViewModels
                     string password = candidate.Value ?? string.Empty;
 
                     selectedPassword = password;
+                    attemptedCandidates++;
 
                     task.Operation = StatusText.OpExtract;
                     task.Status = StatusText.Extracting;
@@ -7090,19 +7383,81 @@ namespace ArchiveFixer.ViewModels
 
                     if (extractResult.Success)
                     {
-                        extractSuccess = true;
+                        /*
+                         * ===== 关键修复（用户 2026-09-24 真机铁证）======
+                         *
+                         * 引擎说"成功"**不等于**产物是好的：7z 会在密码不对 / 数据不全时写出 0 字节的桩文件，
+                         * 而退出码仍然是 0。老逻辑拿到 Success 就直接落「解压成功」并 break ——
+                         * 用户看到的是一句"解压成功"，目录里却什么都没有，而且剩下的候选密码再也没被试过。
+                         *
+                         * 现在：**先校验，再决定这个候选算不算数**。
+                         * 判否 → 当成"这个候选不行"：清掉它的垃圾产物、continue 试下一个候选。
+                         * 只有真的校验通过，才落成功；无论哪种情况，收尾都走同一个 PostProcessSuccessAsync
+                         * （校验未通过时它会**顶掉成功结论**、不动源包、也不会把 0 字节产物搬出去）。
+                         */
+                        StageProductVerification stage = await VerifyStageProductsAsync(
+                            task,
+                            engineArchivePath,
+                            selectedPassword,
+                            engineOutputPath,
+                            cancellationToken);
 
-                        task.Status = StatusText.ExtractSuccess;
-                        task.PasswordStatus = string.IsNullOrEmpty(selectedPassword) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
-                        task.ErrorMessage = string.Empty;
+                        if (stage.Verification.Verified)
+                        {
+                            extractSuccess = true;
 
-                        // 同"先测试再解压"那条分支：密码成功记录挂源文件，不挂工作区里的临时文件。
-                        _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
+                            task.Status = StatusText.ExtractSuccess;
+                            task.PasswordStatus = string.IsNullOrEmpty(selectedPassword) ? StatusText.PasswordNotNeeded : StatusText.PasswordCorrect;
+                            task.ErrorMessage = string.Empty;
 
-                        // 同"先测试再解压"那条分支：收尾否掉结论（越界 / 超预算 / 定稿失败 / 源包没有搬成）时
-                        // 不许写"解压成功" —— 源包没搬成的任务状态是"部分完成"，写"解压成功"就是自相矛盾。
+                            // 同"先测试再解压"那条分支：密码成功记录挂源文件，不挂工作区里的临时文件。
+                            _passwordService.RecordPasswordSuccess(task.CurrentPath, selectedPassword);
+                        }
+                        else
+                        {
+                            lastVerification = stage.Verification;
+                            task.PasswordStatus = StatusText.WrongPassword;
+
+                            /*
+                             * 还有候选可试吗？有 → 这个候选不算数，清掉它的产物接着试。
+                             *
+                             * 例外一（**产物越界**，不变量 4）：它比"候选不行"更具体，交给收尾去说。
+                             * 越界的现场往往"暂存目录里什么都没有"（产物被写到了目标根之外），
+                             * 在这里判成"这个候选不行"会把真正的原因换成一句泛泛的"没有产物"，
+                             * 用户就看不到那条唯一能行动的信息。
+                             *
+                             * 例外二（**最后一个候选**）：没有下一个可试了，此时走收尾而不是把产物删掉 ——
+                             * 半截产物（真的解出了一部分的那种）能落在用户看得见的地方，
+                             * 而 0 字节产物在那一步天然什么都不会搬（PlanFinalLayout 的零字节规则）。
+                             * 两种情况的结论都一样：**不许成功**（收尾里的校验闸门会落成失败）。
+                             */
+                            string? landingViolation = await Task.Run(
+                                () => RecursiveExtractor.FindLandingViolation(engineOutputPath),
+                                cancellationToken);
+
+                            bool hasMoreCandidates = i < maxPasswordAttempts - 1;
+
+                            if (landingViolation == null && hasMoreCandidates)
+                            {
+                                AppendLog(
+                                    "WARN",
+                                    $"{task.FileName}：结果校验 —— {stage.Verification.Message}" +
+                                    "（这个候选不算数，继续尝试下一个候选密码）");
+
+                                await DiscardStageProductsAsync(task, engineOutputPath, cancellationToken);
+                                continue;
+                            }
+
+                            AppendLog(
+                                "WARN",
+                                $"{task.FileName}：结果校验 —— {stage.Verification.Message}" +
+                                "（没有更多候选可试，按失败收场）");
+                        }
+
+                        // 收尾否掉结论（越界 / 超预算 / 定稿失败 / 校验未通过 / 源包没有搬成）时不许写"解压成功"。
+                        // knownList 传刚校验过的那份清单：定稿那一步用**同一份**再校验，两条路不许各列一次目录。
                         bool conclusionStands = await PostProcessSuccessAsync(
-                            task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken);
+                            task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken, stage.List);
 
                         if (conclusionStands && task.Status == StatusText.ExtractSuccess)
                         {
@@ -7131,36 +7486,86 @@ namespace ArchiveFixer.ViewModels
 
                 if (!extractSuccess)
                 {
-                    // 与"先测试再解压"分支同一条规则：试到上限 ≠ 候选全都试过、更 ≠ 密码错误（AGENTS.md §9.2）。
-                    bool stoppedByAttemptLimit = candidatesTruncated && hasWrongPassword;
+                    /*
+                     * 产物校验始终没过的收场（用户 2026-09-24 要求）：
+                     * 状态取**更准确**的那一个 —— 试过密码的用「密码错误」语义（用户会先去核对密码本），
+                     * 原因里必须同时给出三件事：校验的数字、试了几个候选、以及"产物始终不完整"。
+                     *
+                     * 判据里的第二个条件（`task.OutputVerification == Failed`）是**结构化**的，不是比对文案：
+                     * 收尾可能给出了**更具体**的原因（产物越界 / 超预算 / 定稿失败 / 同名冲突跳过），
+                     * 那些分支都会把校验结论落回 NotAttempted —— 只有"收尾的结论就是校验未通过"这一种，
+                     * 才该在这里被换成带候选数量的那版措辞。否则"越界"那句唯一能行动的信息会被吃掉。
+                     *
+                     * ⛔ 绝不允许落到成功：这是不变量 6 在这一条路上的落点。
+                     */
+                    if (lastVerification is { Verified: false } failedVerification &&
+                        task.OutputVerification == OutputVerificationOutcome.Failed)
+                    {
+                        bool triedPasswords = hasWrongPassword || attemptedCandidates > 1;
 
-                    if (stoppedByAttemptLimit)
-                    {
-                        task.Status = StatusText.PasswordAttemptLimitReached;
-                        task.PasswordStatus = StatusText.PasswordNeed;
+                        task.Status = triedPasswords ? StatusText.WrongPassword : StatusText.ExtractFailed;
+                        task.PasswordStatus = triedPasswords ? StatusText.WrongPassword : task.PasswordStatus;
                         task.ErrorMessage =
-                            $"已达到密码尝试上限：本层试了 {maxPasswordAttempts} 个候选（共 {candidates.Count} 个），未能确认密码。";
+                            $"{failedVerification.FailureMessage}" +
+                            $"（已试 {attemptedCandidates} 个候选，产物始终不完整）";
+
+                        /*
+                         * 机器可判的两个事实必须一起落（用户 2026-09-24 要求）：
+                         * · OutputVerification = Failed —— 汇总/失败清单据此把它算进失败侧
+                         *   （⛔ 不是靠比对"校验未通过"这句中文）；
+                         * · Outcome = Failed —— 删源 / 搬源 / 续解 / 危险模式删除四条路都读它，
+                         *   这一档一律不放行。
+                         */
+                        task.OutputVerification = OutputVerificationOutcome.Failed;
+                        task.VerifyMessage = failedVerification.FailureMessage;
+                        task.Outcome = TaskOutcome.Failed;
+
+                        AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
                     }
-                    else if (hasWrongPassword)
+                    else if (task.Outcome is TaskOutcome.Failed or TaskOutcome.Skipped or TaskOutcome.PartiallyCompleted)
                     {
-                        task.Status = StatusText.WrongPassword;
-                        task.PasswordStatus = StatusText.WrongPassword;
-                        task.ErrorMessage = "密码错误或缺少正确密码";
-                    }
-                    else if (lastResult != null)
-                    {
-                        task.Status = lastResult.Status;
-                        task.ErrorMessage = lastResult.Message;
+                        /*
+                         * 收尾（或上面那条候选收尾）**已经给出了结论**：产物越界 / 超预算 / 定稿失败 /
+                         * 同名冲突按用户选择跳过 —— 那些分支各自写好了状态与原因，这里一个字都不许覆盖。
+                         *
+                         * 为什么必须挡这一下（实测踩到的坑）：不挡的话下面那支会拿 `lastResult`（**引擎**那次的
+                         * "成功"）把状态改回「解压成功」—— 引擎说成功、产物不行的那一整类结论就被抹掉了，
+                         * 那正是本次要修的 bug 在收尾处的翻版。判据是**机器终态枚举**，不是比对文案。
+                         */
                     }
                     else
                     {
-                        task.Status = StatusText.ExtractFailed;
-                        task.ErrorMessage = "未知解压失败";
-                    }
+                        // 与"先测试再解压"分支同一条规则：试到上限 ≠ 候选全都试过、更 ≠ 密码错误（AGENTS.md §9.2）。
+                        bool stoppedByAttemptLimit = candidatesTruncated && hasWrongPassword;
 
-                    if (task.Status == StatusText.WrongPassword || task.Status == StatusText.PasswordAttemptLimitReached)
-                    {
-                        AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                        if (stoppedByAttemptLimit)
+                        {
+                            task.Status = StatusText.PasswordAttemptLimitReached;
+                            task.PasswordStatus = StatusText.PasswordNeed;
+                            task.ErrorMessage =
+                                $"已达到密码尝试上限：本层试了 {maxPasswordAttempts} 个候选（共 {candidates.Count} 个），未能确认密码。";
+                        }
+                        else if (hasWrongPassword)
+                        {
+                            task.Status = StatusText.WrongPassword;
+                            task.PasswordStatus = StatusText.WrongPassword;
+                            task.ErrorMessage = "密码错误或缺少正确密码";
+                        }
+                        else if (lastResult != null)
+                        {
+                            task.Status = lastResult.Status;
+                            task.ErrorMessage = lastResult.Message;
+                        }
+                        else
+                        {
+                            task.Status = StatusText.ExtractFailed;
+                            task.ErrorMessage = "未知解压失败";
+                        }
+
+                        if (task.Status == StatusText.WrongPassword || task.Status == StatusText.PasswordAttemptLimitReached)
+                        {
+                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                        }
                     }
                 }
             }
@@ -7219,6 +7624,106 @@ namespace ArchiveFixer.ViewModels
             }
 
             task.LastUpdatedTime = DateTime.Now;
+        }
+
+        /// <summary>
+        /// 一个候选密码解出来的**产物校验**（进入定稿之前的那一道门）。
+        ///
+        /// <para>
+        /// 用户 2026-09-24 的真机铁证（本案的核心修复）：7z 用候选 2 解出来 **0 字节**的
+        /// <c>*.7z.001/.002</c>、校验当场判否，程序却①落「解压成功」②把 0 字节文件当内层包继续解
+        /// ③把它们搬进 <c>其余物</c> ④**候选循环就此收场**（候选 3–10 一个都没试）。
+        /// </para>
+        /// <para>
+        /// 所以校验必须在**候选循环内部**做，而且结论只有两种用法：
+        /// <list type="bullet">
+        /// <item><description>通过 → 才进定稿 / 归集 / 源包处理（<see cref="PostProcessSuccessAsync"/>）；</description></item>
+        /// <item><description>判否 → **这个候选不算数**：清掉它的垃圾产物、继续试下一个候选。</description></item>
+        /// </list>
+        /// 清单（<see cref="ArchiveListResult"/>）跟着一起回传：定稿那一步要用**同一份**清单再校验一次，
+        /// 不能让两条路各列一次目录各说各话（重复列目录还会成倍放大加密包的失败概率）。
+        /// </para>
+        ///
+        /// <para><b>只允许在后台线程上跑</b>：列目录是引擎进程调用，量产物是整棵目录树的磁盘活。</para>
+        /// </summary>
+        private async Task<StageProductVerification> VerifyStageProductsAsync(
+            ArchiveTask task,
+            string engineArchivePath,
+            string password,
+            string stageDirectory,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            ArchiveListResult list = await _archiveEngine.ListAsync(
+                ArchiveRequest.For(engineArchivePath, password),
+                cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            OutputVerificationResult verification = await Task.Run(
+                () => OutputVerifier.Verify(stageDirectory, list.Success ? list : null),
+                cancellationToken);
+
+            return new StageProductVerification(list, verification);
+        }
+
+        /// <summary>
+        /// 把上一轮候选留在暂存目录里的产物清干净，让下一个候选从零开始。
+        ///
+        /// <para>
+        /// 为什么必须清：不清的话下一轮的校验会把**上一个候选的残留**一起算进去
+        /// （0 字节桩 + 这一轮的产物 → 数字对不上，判出来的结论是错的），
+        /// 而定稿也可能把两份候选的东西一起搬进最终目录。
+        /// </para>
+        /// <para>
+        /// 清不掉时只写一行 WARN，**不打断候选循环**：最坏的结果是下一个候选校验不过，
+        /// 那也会被如实报出来；为了"清残留失败"把整单判死只会让用户更难办。
+        /// </para>
+        /// </summary>
+        private async Task DiscardStageProductsAsync(
+            ArchiveTask task,
+            string stageDirectory,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Run(
+                    () =>
+                    {
+                        if (Directory.Exists(stageDirectory))
+                        {
+                            Directory.Delete(stageDirectory, recursive: true);
+                        }
+
+                        Directory.CreateDirectory(stageDirectory);
+                    },
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{task.FileName}：清理候选产物失败（{ex.Message}），继续尝试下一个候选。");
+            }
+        }
+
+        /// <summary>一个候选的产物校验结论（清单 + 校验，见 <see cref="VerifyStageProductsAsync"/>）。</summary>
+        private sealed class StageProductVerification
+        {
+            public StageProductVerification(ArchiveListResult list, OutputVerificationResult verification)
+            {
+                List = list;
+                Verification = verification;
+            }
+
+            /// <summary>这一轮列目录拿到的清单（定稿那一步复用，避免再列一次）。</summary>
+            public ArchiveListResult List { get; }
+
+            /// <summary>产物校验结论（判否时 <c>FailureMessage</c> 里带着预期与实际的三个数字）。</summary>
+            public OutputVerificationResult Verification { get; }
         }
 
         /// <summary>
