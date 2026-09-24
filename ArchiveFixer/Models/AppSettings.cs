@@ -545,6 +545,31 @@ namespace ArchiveFixer.Models
         /// 用户可以点「写回密码本」把列表带走。</para>
         /// </summary>
         public bool RememberPasswordList { get; set; } = true;
+
+        /// <summary>
+        /// 一键处理的那**一个**确认框还要不要弹（用户 2026-09-24 第 17 条）。
+        ///
+        /// <para>用户原话：「点击完一键处理，就只能有一个弹窗提醒，**而且这个可以选中以后不弹出**」。
+        /// 勾上之后写进设置、跨重启有效，界面上（② 解压方式 页）留着一个开关可以再打开 ——
+        /// 存了却收不回来的开关等于把用户锁在"再也不问"里。</para>
+        ///
+        /// <para>它与 <see cref="RemindJunkAfterImport"/> 是两件事：这一条管**动手前的那一次确认**，
+        /// 那一条管**导入之后的无用物提醒**。两个都关掉才是"完全静默"（那时日志照样写清"本次按什么在跑"）。</para>
+        /// </summary>
+        public bool SkipOneClickConfirm { get; set; }
+
+        /// <summary>
+        /// 导入文件夹 / 文件之后要不要弹一次「无用物提醒」（用户 2026-09-24 第 15 条）。
+        ///
+        /// <para>用户原话：「每次操作的选完文件夹，就要出一个无用物提醒，**用户可以选中关闭以后就不用触发了**」。
+        /// 默认开（他要求的就是"每次选完文件夹就提醒"），关掉之后导入**一次都不弹**
+        /// （解压前那一次合并提醒里也不再出现无用物那一段 —— 说了不看还反复说就是噪声）。</para>
+        ///
+        /// <para>⚠ 这个开关爱**不**影响两件事：① 程序对无用物依旧**一个都不动**（不删/不改名/不搬）；
+        /// ② 无用物扫描的判据与上限一个字都不变。</para>
+        /// </summary>
+        public bool RemindJunkAfterImport { get; set; } = true;
+
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
@@ -702,6 +727,8 @@ namespace ArchiveFixer.Models
                 PasswordBookPath = string.Empty,
                 PasswordBookPaths = new List<string>(),
                 RememberPasswordList = true,
+                SkipOneClickConfirm = false,
+                RemindJunkAfterImport = true,
                 RecursionMode = "SingleLayer",
                 MaxRecursionDepth = 3,
                 MaxPasswordAttemptsPerLayer = 10,

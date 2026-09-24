@@ -150,18 +150,17 @@ namespace ArchiveFixer.ViewModels
         private readonly MagicArchiveProber _magicProber = new();
 
         /// <summary>
-        /// 本次运行里用户勾过「以后不再询问」——之后的一键处理直接按设置走，不再弹面板。
+        /// 本次运行里用户勾过「以后不再询问」——之后的一键处理直接按设置走，不再弹确认框。
         ///
-        /// <para>
-        /// 刻意**只存内存、不落盘**：<c>Models/AppSettings.cs</c> 不在本次授权文件清单里，
-        /// 没地方持久化它。功能上也不亏 —— 勾上之后的行为就是"按设置走"，那本来就是默认行为，
-        /// 下次启动重新弹一次面板只是多一次确认（而不是少一个能力）。
-        /// </para>
+        /// <para>⚠ 2026-09-24 第 17 条之后它还有一个**落盘**的孪生兄弟
+        /// （<see cref="AppSettings.SkipOneClickConfirm"/>，用户在框里勾了就由
+        /// <c>MainViewModel.SaveSkipOneClickConfirm</c> 写进设置，跨重启有效）。
+        /// 这个内存字段仍然要留着：本次运行内**立刻**生效，不用等下次读设置。</para>
         /// </summary>
         private bool _suppressOptionsPanel;
 
         /// <summary>
-        /// 「本次选项」面板的询问入口（**可注入**；默认 = 真窗口 <c>Views/OneClickOptionsWindow</c>）。
+        /// 「本次选项 / 确认框」的询问入口（**可注入**；默认 = 真窗口 <c>Views/OneClickOptionsWindow</c>）。
         ///
         /// <para>
         /// 为什么必须留这个注入点：无 UI 宿主（单元测试 / 控制台宿主）下面板根本不弹，
@@ -194,7 +193,14 @@ namespace ArchiveFixer.ViewModels
         /// 续解的第 2/3 轮复用同一个快照，不重新问（50–200 个包的场景下逐个问等于不可用，决策 D-4）。
         /// </para>
         /// </summary>
-        private OneClickOptionsPrompt AskRunOptionsOnce(OneClickRunOptions seed)
+        /// <param name="facts">
+        /// 正文那几行（内容物落点 / 其余物 / 提醒）；无 UI 宿主或注入替身时用不到它。
+        /// </param>
+        /// <param name="targets">这一批要处理的任务（用来在用户改了落点时重算正文第一行）。</param>
+        private OneClickOptionsPrompt AskRunOptionsOnce(
+            OneClickRunOptions seed,
+            OneClickConfirmFacts? facts = null,
+            IReadOnlyList<ArchiveTask>? targets = null)
         {
             if (OptionsPromptOverride != null)
             {
@@ -206,7 +212,24 @@ namespace ArchiveFixer.ViewModels
                 return OneClickOptionsPrompt.NotShown();
             }
 
-            return OneClickOptionsWindow.Show(seed, Settings);
+            return OneClickOptionsWindow.Show(seed, Settings, facts, BuildDestinationEchoFactory(targets));
+        }
+
+        /// <summary>
+        /// 确认框折叠区里改了落点之后，正文第一行要跟着重算。
+        ///
+        /// <para>重算这件事交给解压协调器（它手里有 <c>PathService</c> 与真实任务），
+        /// 本类与窗口都**不拼任何路径** —— 落点永远只有一处实现。</para>
+        /// </summary>
+        private Func<OneClickRunOptions, Task<string>>? BuildDestinationEchoFactory(
+            IReadOnlyList<ArchiveTask>? targets)
+        {
+            if (targets == null || targets.Count == 0)
+            {
+                return null;
+            }
+
+            return options => _extractionCoordinator.DescribePlannedDestinationAsync(targets, options);
         }
 
         private ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
@@ -285,69 +308,113 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            EnterBusy();
+            /*
+             * ===== 确认框的位置：**EnterBusy 之前**（用户 2026-09-24 第 17 条）=====
+             *
+             * 旧写法是「先 EnterBusy，再弹面板」，而主界面上那个进度条绑的正是 IsBusy
+             * （MainWindow.xaml 里的不确定进度条 + 「正在处理」那两行文字的可见性）——
+             * 于是用户还没点确认，进度条就已经在动了。用户原话：
+             * 「为什么我一键处理还没有开始确认，你的进度条就开始动了」。
+             *
+             * 换到 EnterBusy 之前以后，"没确认 = 什么都没发生"在**状态上**也是真的：
+             * IsBusy 还是 false、引擎一次都没被调用、输出目录一个字节都没写。
+             * ⛔ 别把它挪回 EnterBusy 后面 —— 那正是用户点名的那条 bug。
+             *
+             * 另外两件事也在这段里定下来：
+             * ① 提醒（无用物 / 没有可用密码）**并进这一个框**（PrepareBatchReminderForCallerAsync），
+             *    整条一键处理（含续解的第 2/3 轮）不再弹第二个框 —— 用户要的是"只能有一个弹窗"；
+             * ② 勾了「以后不再询问」就**一个框都不弹**（含那个提醒），直接按设置开始。
+             */
+            OneClickRunOptions? runOptions = null;
+            OneClickRunOptions seed = OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory);
 
             try
             {
-                /*
-                 * ===== 「本次选项」面板：一次一键处理**只弹一次**（规格 §9，硬要求③）=====
-                 *
-                 * 位置：选完任务、进入忙碌之前 —— 用户这时还没开始跑，取消一次什么代价都没有。
-                 * 后面整条流水线（含续解的第 2/3 轮）用的都是问出来的这**一个快照**，不会每个包问一次。
-                 *
-                 * 三条分支各有明确行为（规格 §9.2 硬要求②/④/⑤）：
-                 * · Confirmed  → 用面板的值；勾了「存为默认」才写设置，没勾就一个字节都不改；
-                 * · NotShown   → 无 UI 宿主 / 本次运行里勾过「不再询问」：不弹窗、不死等，直接按设置走；
-                 * · Cancelled  → 用户明确取消这一次，不许"照跑不误"。
-                 */
-                OneClickOptionsPrompt prompt = AskRunOptionsOnce(
-                    OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory));
+                bool askConfirm = OptionsPromptOverride != null
+                                  || (!_suppressOptionsPanel && !Settings.SkipOneClickConfirm);
 
-                OneClickRunOptions? runOptions = null;
-
-                if (prompt.Outcome == OneClickOptionsOutcome.Cancelled)
+                if (askConfirm)
                 {
-                    /*
-                     * 面板上点「取消」= 这一次不跑。
-                     * 只写日志、**不再弹一个"已取消"的提示框**：用户刚刚才在面板上点过取消，
-                     * 再弹一次等于把"取消"变成"两步操作"。
-                     */
-                    AppendLog("INFO", "一键处理已取消（本次选项面板没有确认，什么都没做）。");
-                    return;
-                }
+                    ExtractionCoordinator.BatchReminderFacts reminders = await _extractionCoordinator
+                        .PrepareBatchReminderForCallerAsync(targets)
+                        .ConfigureAwait(true);
 
-                if (prompt.Outcome == OneClickOptionsOutcome.Confirmed && prompt.Options != null)
-                {
-                    runOptions = prompt.Options;
+                    OneClickConfirmFacts facts = await _extractionCoordinator
+                        .BuildConfirmFactsAsync(targets, seed, reminders)
+                        .ConfigureAwait(true);
 
-                    if (runOptions.SuppressPanelNextTime)
+                    OneClickOptionsPrompt prompt = AskRunOptionsOnce(seed, facts, targets);
+
+                    if (prompt.Outcome == OneClickOptionsOutcome.Cancelled)
                     {
-                        _suppressOptionsPanel = true;
-                        AppendLog("INFO", "本次选项：以后不再询问（只对本次运行有效，没写进设置文件）。");
+                        /*
+                         * 确认框上点「取消」= 这一次不跑。
+                         * 只写日志、**不再弹一个"已取消"的提示框**：用户刚刚才点过取消，
+                         * 再弹一次等于把"取消"变成"两步操作"。
+                         */
+                        AppendLog("INFO", "一键处理已取消（确认框没有确认，什么都没做）。");
+                        return;
                     }
 
-                    /*
-                     * 「把本次选择存为默认」是**唯一**允许写 appsettings.json 的分支（硬要求②）。
-                     * 写设置这件事只发生在用户显式勾选之后 —— 没勾时这条路上没有任何写盘代码。
-                     */
-                    if (runOptions.SaveAsDefault)
+                    if (prompt.Outcome == OneClickOptionsOutcome.Confirmed && prompt.Options != null)
                     {
-                        _vm.SaveOneClickOptionsAsDefaults(runOptions);
-                        AppendLog("INFO", $"本次选项已存为默认（写入设置）：{runOptions.Describe()}");
+                        runOptions = prompt.Options;
+
+                        if (runOptions.SuppressPanelNextTime)
+                        {
+                            /*
+                             * 用户 2026-09-24 第 17 条："而且这个可以选中以后不弹出"。
+                             * 他说的"以后"不止这一次运行，所以写进设置（界面上 ② 解压方式 页
+                             * 留着一个开关可以再打开）；同时记在内存里，本次运行立刻生效。
+                             */
+                            _suppressOptionsPanel = true;
+                            _vm.SaveSkipOneClickConfirm(true);
+                            AppendLog("INFO", StatusText.OneClickConfirmSuppressSavedLog);
+                        }
+
+                        /*
+                         * 「把本次选择存为默认」是**唯一**允许写落点 / 终端落法 / 源包处理三个设置的分支
+                         * （硬要求②）。写设置这件事只发生在用户显式勾选之后 —— 没勾时这条路上没有写盘代码。
+                         */
+                        if (runOptions.SaveAsDefault)
+                        {
+                            _vm.SaveOneClickOptionsAsDefaults(runOptions);
+                            AppendLog("INFO", $"本次选项已存为默认（写入设置）：{runOptions.Describe()}");
+                        }
+                    }
+                    else
+                    {
+                        // 没弹框（无 UI 宿主）：行为与加确认框之前**完全一致**（硬要求⑤）。
+                        AppendLog(
+                            "INFO",
+                            "一键处理：没有本次选项面板（无界面宿主），本次按设置走：" + seed.Describe());
                     }
                 }
                 else
                 {
-                    // 没弹面板（无 UI 宿主 / 已勾「不再询问」）：行为与加面板之前**完全一致**（硬要求⑤）。
-                    AppendLog(
-                        "INFO",
-                        "一键处理：没有本次选项面板（无界面宿主，或已勾「以后不再询问」），本次按设置走：" +
-                        OneClickRunOptions.FromSettings(Settings, _vm.SelectedOutputDirectory).Describe());
+                    /*
+                     * 勾过「以后不再询问」：一个框都不弹。
+                     *
+                     * 这里同时把解压前那个提醒也压掉（SuppressBatchReminderDialogForThisRun）——
+                     * 用户勾的是"直接开始"，只留日志。判定与日志一条都没少，少的只是弹窗。
+                     */
+                    _extractionCoordinator.SuppressBatchReminderDialogForThisRun();
+
+                    AppendLog("INFO", "一键处理：已勾「以后不再询问」，本次直接按设置开始：" + seed.Describe());
                 }
 
-                OneClickOutcome outcome = await RunPipelineAsync(targets, runOptions);
+                EnterBusy();
 
-                _dialogService.ShowInfo(outcome.Summary);
+                try
+                {
+                    OneClickOutcome outcome = await RunPipelineAsync(targets, runOptions);
+
+                    _dialogService.ShowInfo(outcome.Summary);
+                }
+                finally
+                {
+                    ExitBusy();
+                }
             }
             catch (OperationCanceledException)
             {
@@ -360,7 +427,8 @@ namespace ArchiveFixer.ViewModels
             }
             finally
             {
-                ExitBusy();
+                // 「这一次由调用方负责弹框」只管这一次一键处理：跑完（含取消）就收回默认口径。
+                _extractionCoordinator.EndCallerHandledReminderBatch();
             }
         }
 

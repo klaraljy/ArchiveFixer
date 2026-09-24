@@ -4103,6 +4103,298 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 一次「解压前的提醒」扫描的结论（A 段无用物 + B 段无可用密码）。
+        ///
+        /// <para>为什么把"扫出事实"和"弹框问人"拆开（用户 2026-09-24 第 17 条）：一键处理那条路
+        /// 只允许有**一个**弹窗，所以它得在**动手之前**先拿到这两段事实、写进自己的确认框；
+        /// 手动「只解压」那条路仍然用同一个扫描结果去弹原来那个提醒框。两段判据因此只有一份实现
+        /// （<see cref="SourceJunkScanner"/> + <see cref="FindTasksWithoutUsablePassword"/>），
+        /// 不会出现"确认框里说没有、解压时又提醒有"这种自相矛盾。</para>
+        /// </summary>
+        internal sealed class BatchReminderFacts
+        {
+            /// <summary>A 段：源目录里疑似打包者附带的文件。</summary>
+            public SourceJunkScanResult Junk { get; init; } = new();
+
+            /// <summary>B 段：需要密码但当前一个可用候选都没有的包。</summary>
+            public IReadOnlyList<ArchiveTask> NoUsablePassword { get; init; } = Array.Empty<ArchiveTask>();
+
+            /// <summary>两段都空 = 没什么可提醒的（既不弹框、也不写日志）。</summary>
+            public bool HasAnything => Junk.HasAnything || NoUsablePassword.Count > 0;
+        }
+
+        /// <summary>
+        /// 这一批的「解压前提醒」已经并进调用方的确认框了（用户 2026-09-24 第 17 条）。
+        ///
+        /// <para>置上之后 <see cref="ConfirmBatchRemindersAsync"/> **只写日志、不再弹第二个框**。
+        /// 由 <c>OneClickCoordinator</c> 在问它那一个确认框前后设置，整条一键处理**全程有效**
+        /// （续解的第 2/3 轮也不再弹 —— 那正是"弹窗太多"的来源之一），跑完由它复位
+        /// （<see cref="EndCallerHandledReminderBatch"/>）。手动「只解压」不设它 —— 那条路本来就只有这一个框。</para>
+        /// </summary>
+        private bool _callerHandlesBatchReminderDialog;
+
+        /// <summary>
+        /// 已经替调用方扫好的那一次结论（见 <see cref="PrepareBatchReminderForCallerAsync"/>）。
+        ///
+        /// <para>为什么不直接让它再扫一遍：扫描要枚举源目录 + 做魔数体检（最坏 2000 次读文件），
+        /// 同一批扫两遍纯属白花时间。**只用一次**（用完即清），第 2/3 轮的内层包重新扫 ——
+        /// 那是新出现的包，本来就该重判。</para>
+        /// </summary>
+        private BatchReminderFacts? _prefetchedReminderFacts;
+
+        /// <summary>
+        /// 一键处理那条路在动手前调它：把两段事实拿走写进确认框，并声明"提醒已经并进去了"。
+        /// </summary>
+        internal async Task<BatchReminderFacts> PrepareBatchReminderForCallerAsync(
+            IReadOnlyList<ArchiveTask> selectedTasks)
+        {
+            _callerHandlesBatchReminderDialog = true;
+
+            BatchReminderFacts facts = await ScanBatchRemindersAsync(selectedTasks).ConfigureAwait(false);
+
+            _prefetchedReminderFacts = facts;
+
+            return facts;
+        }
+
+        /// <summary>
+        /// 调用方**不打算弹任何框**（用户勾过「以后不再询问」）：提醒也一并不弹。
+        ///
+        /// <para>为什么不是"退回原来的提醒框"：用户勾的意思是"直接开始"，再弹一个提醒等于没听他的。
+        /// 判定与日志一条都没少 —— 少的只是弹窗，而日志里照样写清"无用物 N 个 / 无可用密码 M 个"。</para>
+        /// </summary>
+        internal void SuppressBatchReminderDialogForThisRun()
+        {
+            _callerHandlesBatchReminderDialog = true;
+            _prefetchedReminderFacts = null;
+        }
+
+        /// <summary>这一批跑完了：把"由调用方负责弹框"的状态收回去（下一批回到默认口径）。</summary>
+        internal void EndCallerHandledReminderBatch()
+        {
+            _callerHandlesBatchReminderDialog = false;
+            _prefetchedReminderFacts = null;
+        }
+
+        /// <summary>扫一遍"解压前的提醒"的两段（**只读事实、不弹框**）。</summary>
+        internal async Task<BatchReminderFacts> ScanBatchRemindersAsync(
+            IReadOnlyList<ArchiveTask> selectedTasks)
+        {
+            SourceJunkScanResult junk = await SourceJunkScanner
+                .ScanAsync(selectedTasks, _reminderProber, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            return new BatchReminderFacts
+            {
+                Junk = junk,
+                NoUsablePassword = FindTasksWithoutUsablePassword(selectedTasks)
+            };
+        }
+
+        /// <summary>
+        /// 一键处理确认框的正文（用户 2026-09-24 第 17 条）：把三个结论汇总成四行文本。
+        ///
+        /// <para>三个结论各有**唯一来源**，这里只做汇总，绝不另算一遍：</para>
+        /// <list type="bullet">
+        /// <item><description>内容物落点 → <see cref="PathService.ResolveOutputPlacement"/>（与真正开跑同一条推导链）；</description></item>
+        /// <item><description>其余物会不会被自动删 → 本批危险模式是否真的生效（同一套凭证判据）；</description></item>
+        /// <item><description>两行提醒 → <see cref="BatchReminderFacts"/>（同一个无用物扫描器 + 同一套密码候选判据）。</description></item>
+        /// </list>
+        /// </summary>
+        internal async Task<OneClickConfirmFacts> BuildConfirmFactsAsync(
+            IReadOnlyList<ArchiveTask> targets,
+            OneClickRunOptions? pendingOptions,
+            BatchReminderFacts? reminders,
+            CancellationToken cancellationToken = default)
+        {
+            string destination = await DescribePlannedDestinationAsync(targets, pendingOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            /*
+             * 「其余物会不会被自动删掉」= 危险模式这一批到底生不生效。
+             * 判据与 PrepareDangerModeForBatch 完全同一套（开关 + 凭证盖得住本批并发档），
+             * 只是**不写**批内状态：这里还在"问用户"的阶段，任何批内记账都不该被这一次预览改掉。
+             */
+            bool dangerActive = Settings.DangerousSpaceModeEnabled
+                && DangerModeSelfTestStamp.Covers(
+                    Settings.DangerModeSelfTestStamp,
+                    ResolveParallelCountForDisplay());
+
+            SourceHandlingMode sourceHandling = pendingOptions?.SourceHandling
+                ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
+
+            return new OneClickConfirmFacts
+            {
+                DestinationEcho = destination,
+                RestEcho = StatusText.OneClickConfirmRestLabel
+                    + (dangerActive ? StatusText.OneClickConfirmRestAutoDelete : StatusText.OneClickConfirmRestKeep),
+                SourceEcho = StatusText.OneClickConfirmSourceLabel
+                    + OneClickRunOptions.DescribeSourceHandling(sourceHandling),
+                NoticeEcho = BuildConfirmNotice(reminders)
+            };
+        }
+
+        /// <summary>
+        /// 确认框里那段"要说一声"的提醒（无用物 / 没有可用密码）。
+        ///
+        /// <para>措辞与判定都沿用既有那一套（<c>StatusText.JunkReminder*</c> 的同源事实），
+        /// 这里只是**变短**：确认框正文要能一眼看完，所以各只给一行、最多举三个例子。
+        /// 详细清单仍然在日志里（<see cref="LogReminderFindings"/> 一字未改）。</para>
+        /// </summary>
+        private static string BuildConfirmNotice(BatchReminderFacts? reminders)
+        {
+            if (reminders == null || !reminders.HasAnything)
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder();
+
+            if (reminders.Junk.HasAnything)
+            {
+                builder.AppendLine(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.OneClickConfirmJunkFormat,
+                    reminders.Junk.TotalCount,
+                    string.Join("、", reminders.Junk.SampleNames.Take(3))));
+            }
+
+            if (reminders.NoUsablePassword.Count > 0)
+            {
+                builder.AppendLine(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.OneClickConfirmNoPasswordFormat,
+                    reminders.NoUsablePassword.Count,
+                    string.Join(
+                        "、",
+                        reminders.NoUsablePassword.Take(3).Select(DisplayNameOf))));
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 「内容物会生成在…」那一行（用户点名要看的第一件事）。
+        ///
+        /// <para>走**落点唯一实现**（<c>PathService.ResolveOutputPlacement</c> → <c>OutputPlacement</c>），
+        /// 与真正开跑时同一个 <c>ExtractOptions</c> 构造、同一套场景 B 塌缩判据 ——
+        /// 所以这一行说的就是"真会落到哪"，不是另写一套公式算出来的近似值。
+        /// 算不出来时**如实说明原因**（绝不编一个假路径让用户放心）。</para>
+        ///
+        /// <para>多包时补一句后缀，区分两种情况：所有包落进同一层（"添加文件夹 + 指定位置"）
+        /// 与每个包各建一层（其余档）—— 用户最恨的就是"东西挤在一起"或"凭空多一层"，
+        /// 这两种说法必须让他一眼看出来是哪一种。</para>
+        /// </summary>
+        internal async Task<string> DescribePlannedDestinationAsync(
+            IReadOnlyList<ArchiveTask> targets,
+            OneClickRunOptions? pendingOptions,
+            CancellationToken cancellationToken = default)
+        {
+            if (targets == null || targets.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            ExtractOptions extractOptions = BuildExtractOptions(tryExtractUnknownFormat: false);
+            pendingOptions?.ApplyTo(extractOptions);
+
+            ArchiveTask first = targets[0];
+
+            // 场景 B 塌缩的判据与真正开跑那一处逐字相同（只对最外层源包、且包名 == 目录名时才扫一次目录）。
+            bool collapse = Settings.CollapseRepeatedFolderLayer
+                            && !first.IsContinuationTask
+                            && SourceFolderScanService.IsRepeatedFolderNameCandidate(first.CurrentPath);
+
+            bool sourceDirectoryContainsOnlyThisArchive = false;
+
+            if (collapse)
+            {
+                SourceFolderScanResult scan = await Task.Run(
+                    () => SourceFolderScanService.Inspect(first.CurrentPath),
+                    cancellationToken).ConfigureAwait(false);
+
+                sourceDirectoryContainsOnlyThisArchive = scan.ContainsOnlyThisArchive;
+            }
+
+            OutputPlacementResult placement = _pathService.ResolveOutputPlacement(
+                first,
+                extractOptions,
+                collapse,
+                sourceDirectoryContainsOnlyThisArchive);
+
+            if (!placement.Success || string.IsNullOrWhiteSpace(placement.DestinationDirectory))
+            {
+                return string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.OneClickConfirmDestinationUnknownFormat,
+                    placement.Message);
+            }
+
+            string head = placement.DestinationDirectory;
+
+            if (targets.Count <= 1)
+            {
+                return head;
+            }
+
+            ArchiveTask? second = targets.FirstOrDefault(
+                task => !ReferenceEquals(task, first)
+                        && !string.Equals(task.CurrentPath, first.CurrentPath, StringComparison.OrdinalIgnoreCase));
+
+            if (second != null)
+            {
+                OutputPlacementResult other = _pathService.ResolveOutputPlacement(
+                    second,
+                    extractOptions,
+                    collapseRepeatedFolderLayer: false,
+                    sourceDirectoryContainsOnlyThisArchive: false);
+
+                if (other.Success
+                    && SafePathHelper.PathEquals(other.DestinationDirectory, placement.DestinationDirectory))
+                {
+                    return head + string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.OneClickConfirmMultiSharedFormat,
+                        targets.Count);
+                }
+            }
+
+            return head + string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.OneClickConfirmMultiPerArchiveFormat,
+                targets.Count);
+        }
+
+        /// <summary>
+        /// 造一份这一批用的解压选项（**唯一构造处**）。
+        ///
+        /// <para>为什么必须是一个方法：一键处理确认框要预告"内容物会落到哪"，而它必须与真正开跑时
+        /// 用**完全相同的字段**去算 —— 两处各抄一份字段清单，迟早会漂移成"预告说 A、实际落 B"。</para>
+        /// </summary>
+        private ExtractOptions BuildExtractOptions(bool tryExtractUnknownFormat)
+        {
+            var extractOptions = new ExtractOptions
+            {
+                ExtractToOriginalDirectory = Settings.ExtractToOriginalDirectory,
+                CustomOutputDirectory = SelectedOutputDirectory,
+                KeepArchiveNameFolder = Settings.KeepArchiveNameFolder,
+                TestBeforeExtract = Settings.TestBeforeExtract,
+                OverwriteMode = Settings.OverwriteMode,
+                UseGlobalPassword = Settings.UseGlobalPasswordForAllTasks,
+                GlobalPassword = GlobalPassword,
+                TryPasswordList = true,
+                TryEmptyPasswordFirst = Settings.TryEmptyPasswordFirst,
+                CancelOnFirstSuccess = true,
+                TryExtractUnknownFormat = tryExtractUnknownFormat,
+                MaxParallelExtractCount = Settings.MaxParallelExtractCount
+            };
+
+            extractOptions.Normalize();
+
+            return extractOptions;
+        }
+
+        /// <summary>
         /// 解压前的合并提醒。
         /// </summary>
         /// <returns><c>false</c> = 用户在提醒里选了「先不处理」，调用方**直接返回**（这一批不开始）。</returns>
@@ -4113,21 +4405,35 @@ namespace ArchiveFixer.ViewModels
                 return true;
             }
 
-            SourceJunkScanResult junk = await SourceJunkScanner
-                .ScanAsync(selectedTasks, _reminderProber, CancellationToken.None)
-                .ConfigureAwait(false);
+            // 调用方刚为确认框扫过一次就复用它（用完即清）；否则现在扫。
+            BatchReminderFacts? prefetched = _prefetchedReminderFacts;
+            _prefetchedReminderFacts = null;
 
-            List<ArchiveTask> noPassword = FindTasksWithoutUsablePassword(selectedTasks);
+            BatchReminderFacts facts = prefetched
+                ?? await ScanBatchRemindersAsync(selectedTasks).ConfigureAwait(false);
 
-            if (!junk.HasAnything && noPassword.Count == 0)
+            if (!facts.HasAnything)
             {
                 // 两段都为空：不弹、也不写日志（没有结论可写）。空对话框是纯噪声。
                 return true;
             }
 
-            LogReminderFindings(junk, noPassword);
+            LogReminderFindings(facts.Junk, facts.NoUsablePassword);
 
-            ReminderAnswer answer = await AskReminderAsync(BuildReminderMessage(junk, noPassword))
+            if (_callerHandlesBatchReminderDialog)
+            {
+                /*
+                 * 用户 2026-09-24 第 17 条："点击完一键处理，就只能有一个弹窗提醒"。
+                 * 这一批的确认框（OneClickOptionsWindow）已经把这两段写在正文里了 ——
+                 * 再弹一个就是把同一件事说两遍，正是他嫌啰嗦的那种。
+                 * 判定与日志一个都没少，少的只是第二个弹窗。
+                 */
+                AppendLog("INFO", StatusText.BatchReminderMergedLog);
+
+                return true;
+            }
+
+            ReminderAnswer answer = await AskReminderAsync(BuildReminderMessage(facts.Junk, facts.NoUsablePassword))
                 .ConfigureAwait(false);
 
             if (answer.OptionChecked)
@@ -6221,23 +6527,8 @@ namespace ArchiveFixer.ViewModels
 
             task.LastUpdatedTime = DateTime.Now;
 
-            var extractOptions = new ExtractOptions
-            {
-                ExtractToOriginalDirectory = Settings.ExtractToOriginalDirectory,
-                CustomOutputDirectory = SelectedOutputDirectory,
-                KeepArchiveNameFolder = Settings.KeepArchiveNameFolder,
-                TestBeforeExtract = Settings.TestBeforeExtract,
-                OverwriteMode = Settings.OverwriteMode,
-                UseGlobalPassword = Settings.UseGlobalPasswordForAllTasks,
-                GlobalPassword = GlobalPassword,
-                TryPasswordList = true,
-                TryEmptyPasswordFirst = Settings.TryEmptyPasswordFirst,
-                CancelOnFirstSuccess = true,
-                TryExtractUnknownFormat = tryExtractUnknown,
-                MaxParallelExtractCount = Settings.MaxParallelExtractCount
-            };
-
-            extractOptions.Normalize();
+            // 选项构造收口在 BuildExtractOptions：确认框的"内容物会生成在…"必须与这里用**同一份字段**算。
+            ExtractOptions extractOptions = BuildExtractOptions(tryExtractUnknown);
 
             /*
              * 「本次选项」的运行期覆盖（规格 §9.2 硬要求①/⑥）。

@@ -183,9 +183,11 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 面板上勾了「以后不再询问」。
         ///
-        /// ⚠ 它**只对本次运行有效**，不落盘：<see cref="AppSettings"/> 不在本次授权范围内，
-        /// 没地方存它；而且"按设置走"本来就是默认行为，所以不存也不丢功能。
-        /// 勾上之后，本次运行内再点一键处理不再弹面板。
+        /// <para>⚠ 2026-09-24 第 17 条之后**它会写进设置**（<see cref="AppSettings.SkipOneClickConfirm"/>）：
+        /// 用户原话是「这个可以选中以后不弹出」，而"以后"显然不止这一次运行。设置里留着一个开关
+        /// 可以再打开（存了却收不回来的开关等于把用户锁死）。</para>
+        ///
+        /// <para>勾上之后，本次运行内再点一键处理不再弹确认框（也不弹旧的面板）。</para>
         /// </summary>
         public bool SuppressPanelNextTime { get; init; }
 
@@ -321,5 +323,31 @@ namespace ArchiveFixer.Models
         {
             return string.IsNullOrWhiteSpace(customRoot) ? "<未指定>" : customRoot!.Trim();
         }
+    }
+
+    /// <summary>
+    /// 一键处理确认框正文里的那几行事实（用户 2026-09-24 第 17 条）。
+    ///
+    /// <para><b>为什么要单独一个类型</b>：确认框只负责**显示**，它既不算落点、也不扫无用物 ——
+    /// 这两个结论分别来自落点的唯一实现（<c>PathService.ResolveOutputPlacement</c>）与
+    /// 无用物的唯一实现（<c>SourceJunkScanner</c>）。把结论装在这里传进去，
+    /// 窗口就没有任何"自己再算一遍"的机会（§7：界面文案不许出现第二份判据）。</para>
+    ///
+    /// <para>四行都是**可空的纯文本**：空 = 那一行不显示（比如没有无用物、也没有缺密码的包时，
+    /// 提醒那一段整块收起，而不是显示一句"没有"）。</para>
+    /// </summary>
+    public sealed class OneClickConfirmFacts
+    {
+        /// <summary>「内容物会生成在…」——由落点唯一实现按本次快照算出来（含多包时的后缀说明）。</summary>
+        public string DestinationEcho { get; init; } = string.Empty;
+
+        /// <summary>「其余物…」——自动彻底删除 / 不自动删除（危险模式是否真的生效）。</summary>
+        public string RestEcho { get; init; } = string.Empty;
+
+        /// <summary>「源包…」——移入其余物 / 留在原地 / 校验通过后删除。</summary>
+        public string SourceEcho { get; init; } = string.Empty;
+
+        /// <summary>需要时的提醒两行（疑似无用物 / 没有可用密码的包）；空 = 不显示。</summary>
+        public string NoticeEcho { get; init; } = string.Empty;
     }
 }
