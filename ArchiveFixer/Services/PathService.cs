@@ -5,6 +5,7 @@ using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
+using ArchiveFixer.Storage;
 
 namespace ArchiveFixer.Services
 {
@@ -146,11 +147,41 @@ namespace ArchiveFixer.Services
         public string TempDirectory => Path.Combine(DataRootDirectory, "temp");
 
         /// <summary>
-        /// 递归解压的工作区根目录。
-        /// 中间产物放这里，避免直接写用户的最终目录（AGENTS.md §6 第 12 条、设计.md §十三）。
-        /// 放在 %AppData% 而不是源目录旁边：源目录可能只读、可能是别人的共享、也可能是 U 盘。
+        /// 递归解压的工作区根目录（**当前生效的那一个**）。
+        ///
+        /// <para>中间产物放这里，避免直接写用户的最终目录（AGENTS.md §6 第 12 条、设计.md §十三）。
+        /// 它也**不在源目录里**：源目录可能只读、可能是别人的共享、也可能是 U 盘。</para>
+        ///
+        /// <para><b>默认跟输出盘走</b>（用户 2026-09-24 拍板）：留空缓存根目录时，
+        /// 每批开工前由 <see cref="ArchiveFixer.Storage.WorkspaceRootResolver"/> 解析成
+        /// <c>&lt;输出盘&gt;\.ArchiveFixer.work</c> 并写进这个属性（见 <c>ExtractionCoordinator</c> 批首那一步）；
+        /// 用户**显式设过** <see cref="AppSettings.CacheRootDirectory"/> 时永远以它为准
+        /// （<c>&lt;它&gt;\work</c>，与改这一条之前的路径逐字相同）。</para>
+        ///
+        /// <para>没有解析过时的取值 = <c>&lt;数据根&gt;\work</c>，也就是**老行为**：
+        /// 它同时是"拿不到输出盘"时的回落目标，所以这条老路径不会被删掉。</para>
         /// </summary>
-        public string WorkDirectory => Path.Combine(DataRootDirectory, "work");
+        public string WorkDirectory
+        {
+            get => string.IsNullOrWhiteSpace(_workspaceRootOverride)
+                ? Path.Combine(DataRootDirectory, WorkspaceRootResolver.ConfiguredCacheWorkspaceSubDirectoryName)
+                : _workspaceRootOverride;
+            set => _workspaceRootOverride = value ?? string.Empty;
+        }
+
+        /// <summary>
+        /// 本批工作区根是否已经被解析过（解析发生在每批开工前；为 false 时 <see cref="WorkDirectory"/>
+        /// 取的是老位置 <c>&lt;数据根&gt;\work</c>）。
+        /// </summary>
+        public bool WorkspaceRootResolved => !string.IsNullOrWhiteSpace(_workspaceRootOverride);
+
+        private string _workspaceRootOverride = string.Empty;
+
+        /// <summary>
+        /// 默认工作区目录名（<c>.ArchiveFixer.work</c>，**点开头 = Windows 默认隐藏**）。
+        /// 唯一来源是 <see cref="WorkspaceRootResolver.DefaultWorkspaceDirectoryName"/>，这里只做转发。
+        /// </summary>
+        public const string DefaultWorkspaceDirectoryName = WorkspaceRootResolver.DefaultWorkspaceDirectoryName;
 
         /// <summary>
         /// 7-Zip 工具目录。
@@ -408,14 +439,17 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 确保基础目录存在。
+        /// 确保基础目录存在（日志 / 临时 / 内置工具）。
+        ///
+        /// <para>⚠ <b>工作区根刻意不在这里建</b>（用户 2026-09-24 拍板）：默认档下它跟着**输出盘**走，
+        /// 而"哪块盘"要等这一批的任务算完才知道 —— 启动时就无脑建一个，只会建在错的盘上
+        /// （那正是要改掉的老行为）。它在批首解析那一刻按需创建，建不出来时由解析器给出中文原因
+        /// （见 <see cref="WorkspaceRootResolver"/>）。</para>
         /// </summary>
         public void EnsureBaseDirectories()
         {
             SafePathHelper.EnsureDirectoryExists(LogsDirectory);
             SafePathHelper.EnsureDirectoryExists(TempDirectory);
-            SafePathHelper.EnsureDirectoryExists(WorkDirectory);
-            SafePathHelper.EnsureDirectoryExists(WorkDirectory);
             SafePathHelper.EnsureDirectoryExists(SevenZipDirectory);
         }
 

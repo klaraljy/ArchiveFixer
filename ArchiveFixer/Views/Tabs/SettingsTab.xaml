@@ -29,7 +29,7 @@
 
                         <TextBox Grid.Column="1"
                                  Text="{Binding SettingsEditor.CacheRootDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="留空表示用程序目录下的 data。日志、临时文件、递归工作区都放它下面；不能填 C 盘。" />
+                                 ToolTip="{x:Static models:StatusText.SettingsCacheRootHint}" />
 
                         <Button Grid.Column="2"
                                 Content="选择"
@@ -43,13 +43,13 @@
                                 Margin="8,0,0,0"
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Command="{Binding OpenWorkDirectoryCommand}"
-                                ToolTip="递归解压中断后残留的中间产物在这里" />
+                                ToolTip="{x:Static models:StatusText.SettingsWorkDirectoryButtonHint}" />
                     </Grid>
 
                     <TextBlock Style="{StaticResource HintTextStyle}"
                                Margin="110,6,0,0"
                                TextWrapping="Wrap"
-                               Text="留空 = 程序目录下的 data（默认，跟着安装位置走）。缓存不能落 C 盘：填了系统盘会拒绝保存并说明原因。" />
+                               Text="{x:Static models:StatusText.SettingsCacheRootHint}" />
                 </StackPanel>
             </GroupBox>
 

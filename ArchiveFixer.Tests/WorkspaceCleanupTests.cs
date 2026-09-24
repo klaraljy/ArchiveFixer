@@ -20,7 +20,14 @@ namespace ArchiveFixer.Tests
     ///
     /// <para>这一组钉两件事：① 残留**量得准**（体积 / 文件数 / 量不出来不假装 0）；
     /// ② 清理**只动它该动的**（工作区根目录的直属子目录，别的什么都不碰，删前必须确认）。</para>
+    ///
+    /// <para>⚠ 必须与其它同类用例**串行**跑（<c>ArchiveFixerGlobalState</c>，见
+    /// <c>InnerLayerContinuationTests</c> 顶部的 CollectionDefinition）：这一组要构造
+    /// <c>MainViewModel</c>，而它的构造函数会写进程级静态（7z 路径、递归工作区根，以及
+    /// 2026-09-24 第 23 条之后"当前生效的工作区根"），并行跑会互相抢 ——
+    /// 实测过一次全量里这条偶发翻红、单跑必过（就是少了这个特性）。</para>
     /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
     public class WorkspaceCleanupTests : IDisposable
     {
         private readonly string _root;

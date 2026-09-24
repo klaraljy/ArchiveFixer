@@ -560,6 +560,72 @@ namespace ArchiveFixer.Models
         public const string OneClickConfirmCancelText = "取消";
 
         // ================================================================
+        // 工作区根：默认跟着输出盘（用户 2026-09-24 拍板）
+        // ================================================================
+        //
+        // 用户原话："刚刚我就发现你会讲解压失败的残留放在安装包的位置，这次是小的 5G 左右，
+        // 那要是 40G 的东西，解压不小心失败了，你同样会放在安装位置吗"。
+        // 定为：默认根 = <输出盘>\.ArchiveFixer.work（既不在源目录里、也不在成品目录里，
+        // 不变量 12 照旧）；用户显式设过缓存根目录时**仍以它为准**；拿不到盘才回落程序目录。
+        // 名字里的点开头是刻意的：Windows 默认隐藏，用户翻输出盘时不会把它当成自己的东西。
+
+        /// <summary>默认档：本批工作区跟着输出盘走（含"为什么这么定"的一句话）。</summary>
+        public const string WorkspaceRootOnOutputDriveFormat =
+            "本批工作区在 {0} 盘：{1}（默认跟输出盘走：既不在源目录里、也不在成品目录里；"
+            + "暂存与成品同盘，定稿是改名而不是跨盘复制）";
+
+        /// <summary>跨盘时说清"跨了几个盘、工作区固定在哪个盘"——**不许假装它们同盘**。</summary>
+        public const string WorkspaceRootCrossDriveFormat =
+            "；注意：本批的落点跨 {0} 个盘（{1}），工作区固定在 {2} 盘 —— "
+            + "其它盘上的任务解压时中间产物落在这个盘上，定稿那一步是跨盘复制（比同盘改名慢，也不省空间）";
+
+        /// <summary>用户显式设过缓存根目录：以它为准，一个字都不改他的选择。</summary>
+        public const string WorkspaceRootConfiguredFormat =
+            "工作区 = {0}（设置里显式指定了缓存根目录，以它为准；留空才是「跟着输出盘」那一档）";
+
+        /// <summary>拿不到输出盘 → 回落程序目录（老行为），原因要写清，整批照常开工。</summary>
+        public const string WorkspaceRootFallbackFormat =
+            "输出盘用不了，工作区回落到程序目录：{0} —— 原因：{1}（老行为；整批照常开工，不会因此开不了工）";
+
+        /// <summary>工作区不在这批的输出盘上（用户设过缓存根目录 / 回落程序目录）：如实说明后果 + 已知限制。</summary>
+        public const string WorkspaceNotOnOutputDriveFormat =
+            "⚠ 工作区不在这批的输出盘上（工作区在 {0}，落点盘是 {1}）：定稿那一步会是跨盘复制（慢、也不省空间），"
+            + "而且空间门只按落点盘核算 —— 工作区那块盘还要另留得下「内容物 + 过程物」，"
+            + "这一半**不在账面上**（已知限制）。想让它跟着输出盘走：把「缓存根目录」留空。";
+
+        /// <summary>空壳工作区（一个文件都没解出来）当场清掉。</summary>
+        public const string WorkspaceEmptyShellRemovedFormat =
+            "{0}：这次没解出任何东西（工作区里一个文件都没有），空壳工作区已清掉：{1}";
+
+        /// <summary>空壳没清掉（被占用 / 权限）：只写 WARN，绝不因此改任务结论。</summary>
+        public const string WorkspaceEmptyShellRemoveFailedFormat =
+            "{0}：空壳工作区没清掉（{1}），目录保留：{2}";
+
+        /// <summary>失败 / 取消时工作区里**有东西** → 保留（那是那批唯一解出来的一份）。</summary>
+        public const string WorkspaceKeptOnFailureFormat =
+            "{0}：任务没成功，工作区里的 {1} 个文件 / {2} 保留在原处（那是这次唯一的一份产物线索）";
+
+        /// <summary>启动 / 刷新日志里那句"这些根都扫过了"（默认跟输出盘之后根会变，位置必须写全）。</summary>
+        public const string WorkspaceScannedRootsLogFormat = "本次扫描的工作区根目录：{0}";
+
+        /// <summary>
+        /// ⑥设置页「缓存根目录」下面那句说明（留空 = 跟输出盘，而不是跟程序目录）。
+        ///
+        /// <para>⚠ 这句话会经 <c>x:Static</c> 直接绑到 XAML 上，所以**不许出现尖括号**
+        /// （XML 属性值里的 <c>&lt;</c> 不是良构字符）—— 要写"输出盘"就直接写中文。</para>
+        /// </summary>
+        public const string SettingsCacheRootHint =
+            "留空（默认）= 工作区跟着**输出盘**走：在输出盘的根目录下建一个 .ArchiveFixer.work"
+            + "（点开头，Windows 默认隐藏）—— 中间产物不再堆在程序盘上，定稿也是同盘改名（快、不占双份）。"
+            + "日志 / 临时 / 设置仍在程序目录下的 data。填了就以它为准（工作区 = 它下面的 work 子目录）；"
+            + "缓存不能落 C 盘：填了系统盘会拒绝保存并说明原因。";
+
+        /// <summary>⑥设置页「打开工作区目录」按钮的提示（默认跟输出盘，所以要说清它会开到哪）。</summary>
+        public const string SettingsWorkDirectoryButtonHint =
+            "默认跟着输出盘：输出盘根目录下的 .ArchiveFixer.work（点开头，默认隐藏）。"
+            + "失败 / 取消留下的中间产物在这里（③「清理与删除」页可以看体积并清理）。";
+
+        // ================================================================
         // 工作区残留（用户 2026-09-24 第 22 条）
         // ================================================================
         //

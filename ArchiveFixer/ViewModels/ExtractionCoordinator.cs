@@ -376,6 +376,18 @@ namespace ArchiveFixer.ViewModels
         private readonly Dictionary<ArchiveTask, TaskSpaceEstimate> _refinedEstimates = new();
 
         /// <summary>
+        /// 本次运行里每个任务**真正用的**工作区目录（<c>&lt;work&gt;\&lt;taskId&gt;</c>，由暂存目录反推）。
+        ///
+        /// <para>为什么必须记、不能事后重算：<see cref="PathService.BuildTaskWorkDirectory"/> 的 taskId 含
+        /// **源路径哈希**，而任务收尾会把源包搬进 `其余物` 并回写 <c>task.CurrentPath</c> ——
+        /// 重算出来的是**另一个**目录（<see cref="CleanupTaskWorkspaceDirectory"/> 的注释里记着这个坑：
+        /// 实测近 1 GB 中间件因为重算而"清理"了个空）。空壳清理同样只能在**当时那个**目录上做。</para>
+        ///
+        /// <para>键用任务对象本身（理由与 <see cref="_spaceRuntime"/> 一样），条目在任务收尾时移除。</para>
+        /// </summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ArchiveTask, string> _taskWorkspaceDirectories = new();
+
+        /// <summary>
         /// 危险模式：本批因为"空间不足"被跳过（没启动）的任务。
         /// 批末要**如实报告**它们各自需要多少 —— 静默跳过是明令禁止的。
         /// </summary>
@@ -5323,6 +5335,14 @@ namespace ArchiveFixer.ViewModels
                  */
                 await PromptForManualBatchPasswordAsync(selectedTasks);
 
+                /*
+                 * ===== 工作区根：本批的中间产物放哪（用户 2026-09-24 拍板）=====
+                 *
+                 * 位置刻意在**空间规划之前**：空间账面要按"工作区与成品是不是同一块盘"给口径，
+                 * 而落点盘正是定工作区根时算出来的（两处必须看同一个事实，不能各算一遍）。
+                 */
+                ApplyBatchWorkspaceRoot(selectedTasks);
+
                 int maxParallel = ResolveMaxParallel(selectedTasks, out bool fullSpeed);
 
                 /*
@@ -5735,6 +5755,115 @@ namespace ArchiveFixer.ViewModels
             _spaceBlockedTasks.Clear();
         }
 
+        // ================================================================ 工作区根（默认跟输出盘）
+
+        /// <summary>
+        /// 单测注入：把"一个输出落点"映射到**假盘根**（默认 = <see cref="Path.GetPathRoot(string)"/>）。
+        ///
+        /// <para>为什么要留这个口子：默认档下工作区根落在输出盘上（<c>D:\.ArchiveFixer.work</c>），
+        /// 而单测的输出落点全在<b>临时目录</b>（C 盘）—— 不注入的话
+        /// "默认跟输出盘"这一条根本没法在测试里验证（真去建 <c>C:\.ArchiveFixer.work</c> 是绝不允许的）。
+        /// 与 <c>OutputPlacement.driveExists</c> / <see cref="SpaceProbeOverride"/> 同一套做法。</para>
+        /// </summary>
+        internal Func<string, string>? WorkspaceDriveOverride { get; set; }
+
+        /// <summary>单测注入：盘根存在性探针（默认 = <c>Directory.Exists</c>）。null 表示"盘不存在"。</summary>
+        internal Func<string, bool>? WorkspaceDriveExistsOverride { get; set; }
+
+        /// <summary>
+        /// 本批开工前定一次**工作区根**（用户 2026-09-24 拍板：默认跟着输出盘走）。
+        ///
+        /// <para>三档与理由都写在 <see cref="WorkspaceRootResolver"/> 里，这里只负责"什么时候定"与"怎么告诉用户"：</para>
+        /// <list type="number">
+        /// <item><description>落点全部由**唯一实现** <see cref="PathService.ResolveOutputPlacement"/> 算出来
+        /// （这里不自己拼路径），只从落点上取盘符；算不出落点的任务跳过 ——
+        /// 它本来就会在任务级被报"输出目录无效"，不该让整批的工作区跟着定不下来。</description></item>
+        /// <item><description>定完立刻写进 <see cref="PathService.WorkDirectory"/> 与
+        /// <c>RecursiveExtractor.ConfiguredWorkspaceRoot</c>：此后本批所有中间产物
+        /// （暂存、抠取副本、递归逐层）都在这一个根下面，**不会再有第二条拼路径的实现**。</description></item>
+        /// <item><description>日志里写清"在哪个盘、为什么、跨不跨盘"；回落档是 WARN 且带原因
+        /// （拿不到盘绝不让整批开不了工）。</description></item>
+        /// <item><description>跟着输出盘定出来的根要**记进小账本**（<see cref="WorkspaceRootIndex"/>）：
+        /// ③ 页与下次启动的残留扫描靠它才找得到（根会随输出盘变，不记住就等于漏报）。</description></item>
+        /// </list>
+        /// </summary>
+        private void ApplyBatchWorkspaceRoot(IReadOnlyList<ArchiveTask> tasks)
+        {
+            ExtractOptions options = BuildExtractOptions(tryExtractUnknownFormat: false);
+
+            // 本次选项面板选出来的落点也要算进去 —— 不然"这批落在 D 盘"会被算成设置里那个盘。
+            RunOptions?.ApplyTo(options);
+
+            var destinations = new List<string>();
+
+            foreach (ArchiveTask task in tasks ?? Array.Empty<ArchiveTask>())
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                OutputPlacementResult placement = _pathService.ResolveOutputPlacement(task, options);
+
+                if (placement.Success && !string.IsNullOrWhiteSpace(placement.DestinationDirectory))
+                {
+                    destinations.Add(placement.DestinationDirectory);
+                }
+            }
+
+            WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
+                Settings?.CacheRootDirectory,
+                _pathService.DataRootDirectory,
+                destinations,
+                WorkspaceDriveOverride,
+                WorkspaceDriveExistsOverride);
+
+            _pathService.WorkDirectory = resolution.RootDirectory;
+
+            // 递归核心的工作区根是进程级静态，且它自己会再挂一层 "recursive"（见 RecursiveExtractor）。
+            RecursiveExtractor.ConfiguredWorkspaceRoot = resolution.RootDirectory;
+
+            AppendLog(resolution.LogLevel, resolution.Reason);
+
+            /*
+             * 工作区不在这批的输出盘上（用户显式设过缓存根目录 / 拿不到盘回落程序目录）：
+             * **必须说出来**。这一档下空间门只按落点盘核算，工作区那块盘还要另留
+             * "内容物 + 过程物"（当前账本不核算它，是已知限制），而且定稿会退化成跨盘复制。
+             * 静默下去的结果就是用户看到"空间明明够，怎么还是写满了"。
+             */
+            if (resolution.BatchDrives.Count > 0)
+            {
+                string workspaceDrive = ResolveDriveOf(resolution.RootDirectory);
+
+                bool onBatchDrive = false;
+
+                foreach (string drive in resolution.BatchDrives)
+                {
+                    if (string.Equals(drive, workspaceDrive, StringComparison.OrdinalIgnoreCase))
+                    {
+                        onBatchDrive = true;
+                        break;
+                    }
+                }
+
+                if (!onBatchDrive)
+                {
+                    AppendLog(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.WorkspaceNotOnOutputDriveFormat,
+                            workspaceDrive,
+                            string.Join("、", resolution.BatchDrives)));
+                }
+            }
+
+            if (resolution.Origin == WorkspaceRootOrigin.OutputDrive)
+            {
+                WorkspaceRootIndex.Remember(_pathService.DataRootDirectory, resolution.RootDirectory);
+            }
+        }
+
         private ScheduledTaskRuntime GetOrCreateRuntime(ArchiveTask task)
         {
             lock (_spaceRuntimeLock)
@@ -5762,10 +5891,58 @@ namespace ArchiveFixer.ViewModels
 
             return ExtractionScheduler.Build(
                 tasks,
-                task => SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task)),
+                task => SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task))
+                    .WithVolumeLayout(ResolveWorkspaceVolumeShare(ResolveSpaceProbePathOrBatch(task))),
                 ProbeAvailableSpace(_spaceProbePath),
                 ReserveSpaceBytes,
                 requestedParallel);
+        }
+
+        /// <summary>
+        /// 工作区根与这个落点是不是**同一块盘**（空间口径用，见 <see cref="TaskSpaceEstimate"/> 的同卷 / 跨卷说明）。
+        ///
+        /// <para>取不到（工作区根还没定 / 落点为空 / 路径认不出盘符）一律返回 null ——
+        /// **绝不默认成同卷**：默认同卷等于把"工作区那块盘也要留一份"这件事从账面上抹掉，
+        /// 而那正是用户 2026-09-24 要求如实算进去的那一条。</para>
+        /// </summary>
+        private bool? ResolveWorkspaceVolumeShare(string? targetPath)
+        {
+            string workRoot = _pathService.WorkDirectory;
+
+            if (string.IsNullOrWhiteSpace(workRoot) || string.IsNullOrWhiteSpace(targetPath))
+            {
+                return null;
+            }
+
+            string workDrive = ResolveDriveOf(workRoot);
+            string targetDrive = ResolveDriveOf(targetPath);
+
+            if (string.IsNullOrWhiteSpace(workDrive) || string.IsNullOrWhiteSpace(targetDrive))
+            {
+                return null;
+            }
+
+            return string.Equals(workDrive, targetDrive, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>"这个路径在哪块盘上"：默认 <see cref="Path.GetPathRoot(string)"/>，单测可用假盘映射覆盖。</summary>
+        private string ResolveDriveOf(string path)
+        {
+            string full = SafePathHelper.GetFullPathSafe(path);
+
+            if (WorkspaceDriveOverride != null)
+            {
+                return WorkspaceDriveOverride(full);
+            }
+
+            try
+            {
+                return Path.GetPathRoot(full) ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         /// <summary>
@@ -6376,7 +6553,143 @@ namespace ArchiveFixer.ViewModels
                 // 要么根本没建起来（后来的任务就该用它）。
                 ReleaseOutputDirectoryClaim(task.OutputPath);
 
+                /*
+                 * 空壳工作区：失败 / 取消 / 部分完成时，**一个文件都没解出来**的那个任务工作区当场删掉
+                 * （用户 2026-09-24 拍板）。有文件的一律保留 —— 那是那批唯一解出来的一份（不变量 12/13）。
+                 * 放在 finally 里是因为三条收尾路径（正常返回、OperationCanceledException、异常）
+                 * 都要走到它 —— 尤其是取消那一条：用户点停之后留下的空壳正是他最不想看到的。
+                 */
+                CleanupEmptyWorkspaceShell(task);
+
                 UpdateSummary();
+            }
+        }
+
+        /// <summary>
+        /// 失败 / 取消 / 部分完成收尾时清理**空壳工作区**（用户 2026-09-24 拍板）。
+        ///
+        /// <para><b>判据只有一条，而且是事实</b>：这个任务的工作区目录里
+        /// <c>Directory.GetFiles(..., AllDirectories).Length == 0</c>（一个文件都没有，含各级子目录）。
+        /// 成立就删；<b>只要有文件就一律保留</b>（红线：失败 / 取消留下的那一份是用户唯一的产物线索，
+        /// 见不变量 12/13 与 <c>WorkspaceCleanupService</c> 那一组）——所以这条清理不会让
+        /// "③ 清理工作区"少一样东西：空目录本来就不占空间、也没有内容可看。</para>
+        ///
+        /// <para><b>四条边界</b>（这是删目录，每条都要有）：</para>
+        /// <list type="number">
+        /// <item><description>成功的任务不走这里（成功路径的清理是 <see cref="CleanupTaskWorkspaceDirectory"/>，
+        /// 它按"校验通过"删，口径不同，不许两处都插一脚）；</description></item>
+        /// <item><description>目录必须在**当前生效的工作区根**之下（容器内校验，越界只写 WARN、什么都不删）；</description></item>
+        /// <item><description>目录里除 <c>stage</c> 之外不许有别的子目录（与 <see cref="CleanupTaskWorkspaceDirectory"/>
+        /// 同一道边界：出现别的子目录说明它不是我们造的那个目录，一个字节都不碰）；</description></item>
+        /// <item><description>删不掉（被占用 / 权限）只写 WARN —— 一次清理失败绝不该改写任务结论。</description></item>
+        /// </list>
+        /// </summary>
+        private void CleanupEmptyWorkspaceShell(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            _taskWorkspaceDirectories.TryRemove(task, out string? recorded);
+
+            bool concludedSuccess =
+                string.Equals(task.Status, StatusText.ExtractSuccess, StringComparison.Ordinal) &&
+                task.Outcome != TaskOutcome.PartiallyCompleted;
+
+            if (concludedSuccess)
+            {
+                return;
+            }
+
+            string taskDirectory = string.IsNullOrWhiteSpace(recorded)
+                ? _pathService.BuildTaskWorkDirectory(task)
+                : recorded;
+
+            if (string.IsNullOrWhiteSpace(taskDirectory) || !Directory.Exists(taskDirectory))
+            {
+                return;
+            }
+
+            string workRoot = _pathService.WorkDirectory;
+
+            if (!ArchivePathGuard.IsInsideRoot(workRoot, taskDirectory, out string guardReason))
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：要清的工作区目录不在工作区根之下，已跳过 —— {guardReason}：{taskDirectory}");
+
+                return;
+            }
+
+            try
+            {
+                string[] subdirectories = Directory.GetDirectories(taskDirectory);
+
+                string? foreign = subdirectories.FirstOrDefault(
+                    directory => !string.Equals(
+                        Path.GetFileName(directory),
+                        PathService.StageDirectoryName,
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (foreign != null)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{task.FileName}：工作区目录里有非本任务造的子目录（{foreign}），为安全起见不清：{taskDirectory}");
+
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{task.FileName}：读不了工作区目录（{ex.Message}），已跳过空壳清理：{taskDirectory}");
+
+                return;
+            }
+
+            (int fileCount, long totalSize) = OutputVerifier.Measure(taskDirectory);
+
+            if (!HasNoFiles(taskDirectory))
+            {
+                /*
+                 * 有东西 → **保留**，并且说清它在哪、多大：这一行是用户"东西还在不在"的答案，
+                 * 也是 ③ 页那条"工作区残留"的来处。
+                 */
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.WorkspaceKeptOnFailureFormat,
+                        task.FileName,
+                        fileCount,
+                        TaskSpaceEstimate.FormatSize(totalSize)));
+
+                return;
+            }
+
+            try
+            {
+                Directory.Delete(taskDirectory, recursive: true);
+
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.WorkspaceEmptyShellRemovedFormat,
+                        task.FileName,
+                        taskDirectory));
+            }
+            catch (Exception ex)
+            {
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.WorkspaceEmptyShellRemoveFailedFormat,
+                        task.FileName,
+                        ex.Message,
+                        taskDirectory));
             }
         }
 
@@ -6844,6 +7157,10 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            // 记下"这个任务真正用的工作区目录"：收尾时的空壳清理要按它来，
+            // **不能事后重算**（taskId 含源路径哈希，而成功路径会回写 CurrentPath，见字段说明）。
+            _taskWorkspaceDirectories[task] = Path.GetDirectoryName(stageDirectory.TrimEnd('\\', '/')) ?? string.Empty;
+
             string? stageFailure = await PrepareStageDirectoryAsync(task, stageDirectory, cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(stageFailure))
@@ -7249,7 +7566,8 @@ namespace ArchiveFixer.ViewModels
                     SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task)),
                     preflightList,
                     directZip != null ? 0 : SpaceEstimator.EstimateCarvedBytes(task, archiveSize),
-                    carvedBytesNotNeeded: directZip != null);
+                    carvedBytesNotNeeded: directZip != null)
+                    .WithVolumeLayout(ResolveWorkspaceVolumeShare(outputPath));
 
                 RecordRefinedEstimate(task, refined);
 

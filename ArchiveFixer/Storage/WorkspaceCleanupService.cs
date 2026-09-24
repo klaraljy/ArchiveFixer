@@ -10,6 +10,12 @@ namespace ArchiveFixer.Storage
         /// <summary>目录全路径。</summary>
         public string DirectoryPath { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 这个目录属于**哪个工作区根**（默认跟输出盘之后根会随输出盘变，所以"它在哪"必须逐条记下来）。
+        /// 清理时按它对回各自的根做容器内校验（<see cref="WorkspaceCleanupService.Cleanup"/>）。
+        /// </summary>
+        public string RootDirectory { get; init; } = string.Empty;
+
         /// <summary>目录名（就是任务工作区的标识，形如 <c>包名-源路径短哈希</c>）。</summary>
         public string Name { get; init; } = string.Empty;
 
@@ -88,7 +94,39 @@ namespace ArchiveFixer.Storage
 
             foreach (string directory in directories)
             {
-                result.Add(Measure(directory));
+                result.Add(Measure(directory, workRoot));
+            }
+
+            result.Sort((left, right) => string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase));
+
+            return result;
+        }
+
+        /// <summary>
+        /// 扫**多个**工作区根（用户 2026-09-24 拍板之后的常态）。
+        ///
+        /// <para><b>为什么必须能扫多个</b>：工作区默认跟输出盘走，于是根会**随输出盘变**
+        /// （今天 <c>D:\.ArchiveFixer.work</c>、明天 <c>E:\.ArchiveFixer.work</c>），
+        /// 而老位置 <c>&lt;程序目录&gt;\data\work</c> 里可能还留着升级前那一批的残留。
+        /// 只扫"当前生效的那一个"会让换过盘的残留彻底看不见 —— 那正是用户抱怨过的那件事
+        /// （"你会讲解压失败的残留放在安装包的位置"）。每个条目都带上自己的
+        /// <see cref="WorkspaceLeftover.RootDirectory"/>，清理时按它各自回到自己的根做校验。</para>
+        ///
+        /// <para>重复的根只扫一次（调用方可能同时把"当前生效的根""老位置""账本里的根"都塞进来）。</para>
+        /// </summary>
+        public static IReadOnlyList<WorkspaceLeftover> ScanMany(IEnumerable<string>? workRoots)
+        {
+            var result = new List<WorkspaceLeftover>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string? root in workRoots ?? Array.Empty<string>())
+            {
+                if (string.IsNullOrWhiteSpace(root) || !seen.Add(SafeFullPath(root)))
+                {
+                    continue;
+                }
+
+                result.AddRange(Scan(root));
             }
 
             result.Sort((left, right) => string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase));
@@ -97,7 +135,7 @@ namespace ArchiveFixer.Storage
         }
 
         /// <summary>量一个残留目录的体积（量不出来就标记，不假装是 0）。</summary>
-        private static WorkspaceLeftover Measure(string directory)
+        private static WorkspaceLeftover Measure(string directory, string workRoot)
         {
             int fileCount = 0;
             long totalBytes = 0;
@@ -137,6 +175,7 @@ namespace ArchiveFixer.Storage
             return new WorkspaceLeftover
             {
                 DirectoryPath = directory,
+                RootDirectory = workRoot,
                 Name = Path.GetFileName(directory),
                 FileCount = fileCount,
                 TotalBytes = totalBytes,

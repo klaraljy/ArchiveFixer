@@ -26,7 +26,14 @@ namespace ArchiveFixer
         public static string TempDirectory =>
             Path.Combine(DataRootDirectory, "temp");
 
-        /// <summary>递归解压的工作区根目录（中间产物，不写用户最终目录）。</summary>
+        /// <summary>
+        /// 老位置的工作区目录（<c>&lt;程序目录&gt;\data\work</c>）。
+        ///
+        /// <para>⚠ 2026-09-24 起**工作区默认不在这儿**：它跟着**输出盘**走
+        /// （<c>&lt;输出盘&gt;\.ArchiveFixer.work</c>，见 <c>Storage/WorkspaceRootResolver</c>）。
+        /// 这个属性现在只表示"拿不到输出盘时的回落位置"，也**不在启动时创建** ——
+        /// 启动就建一个只会建在错的盘上（那正是要改掉的老行为）。</para>
+        /// </summary>
         public static string WorkDirectory =>
             Path.Combine(DataRootDirectory, "work");
 
@@ -146,8 +153,6 @@ namespace ArchiveFixer
             SafeCreateDirectory(DataRootDirectory);
             SafeCreateDirectory(LogsDirectory);
             SafeCreateDirectory(TempDirectory);
-            SafeCreateDirectory(WorkDirectory);
-            SafeCreateDirectory(WorkDirectory);
             SafeCreateDirectory(ToolsDirectory);
             SafeCreateDirectory(SevenZipDirectory);
         }

@@ -386,7 +386,21 @@ namespace ArchiveFixer.ViewModels
                 ? PathService.DefaultDataRootDirectory
                 : cacheRoot;
 
-            // 递归工作区也必须跟着走：它动辄几百 MB，不能落到 %TEMP%（C 盘）。
+            /*
+             * 工作区根（用户 2026-09-24 拍板：**默认跟着输出盘**走）。
+             *
+             * 三档，与 WorkspaceRootResolver 同一口径：
+             * ① 用户显式设过缓存根目录 → <它>\work（老行为，一个字都不改他的选择）；
+             * ② 留空 → 用**账本里记住的那个根**（上一批跟着输出盘定下来的那个，见 WorkspaceRootIndex），
+             *    没有记录时才是 <程序目录>\data\work（老位置＝拿不到盘时的回落档）；
+             * ③ 真正"跟着输出盘"的解析发生在**每批开工前**
+             *    （ExtractionCoordinator.ApplyBatchWorkspaceRoot）—— 只有那时才知道这一批会处理哪些包、
+             *    落点在哪块盘。启动 / 保存设置时根本还没有这一批的任务，所以这里只能是"上一批的根"。
+             *
+             * ⚠ 递归核心的工作区根是进程级静态（它自己会再挂一层 "recursive"），必须跟着一起换 ——
+             * 不换的话递归那几百 MB 又会回到程序盘（那正是这一条要改掉的老行为）。
+             */
+            _pathService.WorkDirectory = ResolveStartupWorkspaceRoot(cacheRoot);
             RecursiveExtractor.ConfiguredWorkspaceRoot = _pathService.WorkDirectory;
 
             /*
@@ -399,6 +413,81 @@ namespace ArchiveFixer.ViewModels
             // 密码本侧车文件跟着同一个根走，否则"导入记住了"和"启动读取"会看两个目录。
             _passwordService.DataRootDirectory = _pathService.DataRootDirectory;
             ToolLocator.Default.Invalidate();
+        }
+
+        /// <summary>
+        /// 启动 / 保存设置时那个"当前生效的工作区根"（详细口径见 <see cref="ApplyEngineSettings"/> 里的注释）。
+        ///
+        /// <para>它**不是**这一批真正会用的根 —— 那个要等批首按落点盘算（见
+        /// <c>ExtractionCoordinator.ApplyBatchWorkspaceRoot</c>）。这里取的是"上一批留下的那个"
+        /// （账本 <see cref="WorkspaceRootIndex"/>），这样 ③ 页与启动日志在**重启之后**
+        /// 照样列得出上次那批的残留（默认跟输出盘之后根会随盘变，不记住就等于漏报）。</para>
+        /// </summary>
+        private string ResolveStartupWorkspaceRoot(string cacheRoot)
+        {
+            // ① 用户显式设过缓存根目录：以它为准（老行为）。
+            if (!string.IsNullOrWhiteSpace(cacheRoot))
+            {
+                return Path.Combine(
+                    _pathService.DataRootDirectory,
+                    WorkspaceRootResolver.ConfiguredCacheWorkspaceSubDirectoryName);
+            }
+
+            // ② 留空：先看账本里记住的那个根，再退老位置 <数据根>\work。
+            foreach (string remembered in WorkspaceRootIndex.Load(_pathService.DataRootDirectory))
+            {
+                if (!string.IsNullOrWhiteSpace(remembered))
+                {
+                    return remembered;
+                }
+            }
+
+            return Path.Combine(
+                _pathService.DataRootDirectory,
+                WorkspaceRootResolver.ConfiguredCacheWorkspaceSubDirectoryName);
+        }
+
+        /// <summary>
+        /// ③「清理与删除」页与启动日志**实际要扫的**工作区根（**只给测试与排障读**）。
+        ///
+        /// <para>产品路径只用 <see cref="LogLeftoverWorkspaces"/> 与 <see cref="ClearWorkspaceLeftovers"/>；
+        /// 把这个清单露出来是因为"扫了哪些根"决定了界面上报几个残留、以及清理会动哪些目录 ——
+        /// 那是必须能被钉住的一条事实（默认跟输出盘之后根会变，多一个根就多一批会被删的目录）。</para>
+        /// </summary>
+        internal IReadOnlyList<string> WorkspaceScanRoots => ResolveWorkspaceScanRoots();
+
+        /// <summary>
+        /// ③「清理与删除」页 / 启动日志要扫的**所有**工作区根（去重、当前生效的排最前）。
+        ///
+        /// <para>三部分：① 当前生效的根；② 老位置 <c>&lt;数据根&gt;\work</c>（升级前那批残留还在那儿，
+        /// 用户实测攒过 5.7 GB）；③ 账本里用过的根（换了输出盘之后旧盘上的残留也要列得出来）。
+        /// 只扫其中一个是**不够**的 —— 那正是"东西明明在，界面却说没有"的来源。</para>
+        /// </summary>
+        private IReadOnlyList<string> ResolveWorkspaceScanRoots()
+        {
+            var roots = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void TryAdd(string? root)
+            {
+                if (!string.IsNullOrWhiteSpace(root) && seen.Add(root.Trim()))
+                {
+                    roots.Add(root.Trim());
+                }
+            }
+
+            TryAdd(_pathService.WorkDirectory);
+
+            TryAdd(Path.Combine(
+                _pathService.DataRootDirectory,
+                WorkspaceRootResolver.ConfiguredCacheWorkspaceSubDirectoryName));
+
+            foreach (string remembered in WorkspaceRootIndex.Load(_pathService.DataRootDirectory))
+            {
+                TryAdd(remembered);
+            }
+
+            return roots;
         }
 
         /// <summary>
@@ -1934,15 +2023,22 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
-                string workRoot = _pathService.WorkDirectory;
+                /*
+                 * 扫描根 = **当前生效的工作区根 + 老位置 + 账本里用过的根**（见 ResolveWorkspaceScanRoots）。
+                 *
+                 * 为什么不是一个根（用户 2026-09-24 拍板"工作区跟输出盘"之后的必然后果）：
+                 * 根会随输出盘变，而老位置里可能还压着升级前那批的残留 —— 只扫一个就会出现
+                 * "东西明明在盘上，界面却报没有"。每个残留条目自己带着它在哪个根下，清理时按它回到各自的根校验。
+                 */
+                IReadOnlyList<string> scanRoots = ResolveWorkspaceScanRoots();
 
-                IReadOnlyList<WorkspaceLeftover> leftovers = WorkspaceCleanupService.Scan(workRoot);
+                IReadOnlyList<WorkspaceLeftover> leftovers = WorkspaceCleanupService.ScanMany(scanRoots);
 
                 /*
                  * 用户 2026-09-24 第 22 条：他实测攒了 10 个目录 / 5.7 GB，问"为什么失败后你会留下这个残留"。
                  * 保留本身是**故意的**（失败 / 取消时工作区里是他唯一的一份产物线索，不变量 12/13），
                  * 但以前只写一句"发现 N 个" —— 没体积、界面上也没有清理入口，等于没告诉他。
-                 * 现在：① 日志带上体积；② 界面上留一行常驻提示 + 一条清理命令（删前二次确认）。
+                 * 现在：① 日志带上体积**与实际位置**；② 界面上留一行常驻提示 + 一条清理命令（删前二次确认）。
                  */
                 WorkspaceLeftoverTotalBytes = WorkspaceCleanupService.TotalBytesOf(leftovers);
                 HasWorkspaceLeftovers = leftovers.Count > 0;
@@ -1969,7 +2065,15 @@ namespace ArchiveFixer.ViewModels
                         StatusText.WorkspaceLeftoverLogFormat,
                         leftovers.Count,
                         WorkspaceCleanupService.FormatSize(WorkspaceLeftoverTotalBytes),
-                        workRoot));
+                        DescribeLeftoverLocations(leftovers)));
+
+                // 把"这次一共看了哪几个根"也写清楚：用户照着这一行就能自己去盘上核对。
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.WorkspaceScannedRootsLogFormat,
+                        string.Join("；", scanRoots)));
 
                 AppendLog("INFO", StatusText.WorkspaceLeftoverHintLog);
             }
@@ -1977,6 +2081,27 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog("WARN", "检查工作区失败：" + ex.Message);
             }
+        }
+
+        /// <summary>残留**实际**在哪些根下（去重，按首次出现顺序）—— 日志里那一格就是它。</summary>
+        private static string DescribeLeftoverLocations(IReadOnlyList<WorkspaceLeftover> leftovers)
+        {
+            var locations = new List<string>();
+
+            foreach (WorkspaceLeftover leftover in leftovers)
+            {
+                bool seen = locations.Any(existing => string.Equals(
+                    existing,
+                    leftover.RootDirectory,
+                    StringComparison.OrdinalIgnoreCase));
+
+                if (!seen && !string.IsNullOrWhiteSpace(leftover.RootDirectory))
+                {
+                    locations.Add(leftover.RootDirectory);
+                }
+            }
+
+            return locations.Count == 0 ? "（未知）" : string.Join("；", locations);
         }
 
         /// <summary>
@@ -2064,9 +2189,8 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void ClearWorkspaceLeftovers()
         {
-            string workRoot = _pathService.WorkDirectory;
-
-            IReadOnlyList<WorkspaceLeftover> leftovers = WorkspaceCleanupService.Scan(workRoot);
+            IReadOnlyList<WorkspaceLeftover> leftovers =
+                WorkspaceCleanupService.ScanMany(ResolveWorkspaceScanRoots());
 
             if (leftovers.Count == 0)
             {
@@ -2087,7 +2211,8 @@ namespace ArchiveFixer.ViewModels
                                 leftovers.Select(item =>
                                     "  " + item.Name
                                     + "（" + WorkspaceCleanupService.FormatSize(item.TotalBytes)
-                                    + "，" + item.FileCount + " 个文件）"))
+                                    + "，" + item.FileCount + " 个文件）"
+                                    + "　" + item.RootDirectory))
                             + Environment.NewLine + Environment.NewLine
                             + StatusText.WorkspaceCleanupConfirmDetailFooter;
 
@@ -2111,9 +2236,23 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            IReadOnlyList<WorkspaceCleanupOutcome> outcomes = WorkspaceCleanupService.Cleanup(
-                workRoot,
-                leftovers.Select(item => item.DirectoryPath));
+            /*
+             * 清理**按根分组**做：每个根各自做一次容器内校验（不变量 13）。
+             *
+             * 为什么不能把一堆路径丢给某一个根去做：默认跟输出盘之后残留可能散在多个根下
+             * （当前生效的根、老位置、账本里用过的根），拿 A 根去校验 B 根下面的目录
+             * 会被正确判成"越界"从而一个都删不掉 —— 那不是保守，是坏了。
+             */
+            var outcomes = new List<WorkspaceCleanupOutcome>();
+
+            foreach (IGrouping<string, WorkspaceLeftover> group in leftovers.GroupBy(
+                         item => item.RootDirectory,
+                         StringComparer.OrdinalIgnoreCase))
+            {
+                outcomes.AddRange(WorkspaceCleanupService.Cleanup(
+                    group.Key,
+                    group.Select(item => item.DirectoryPath)));
+            }
 
             int deleted = outcomes.Count(item => item.Deleted);
             int failed = outcomes.Count - deleted;
