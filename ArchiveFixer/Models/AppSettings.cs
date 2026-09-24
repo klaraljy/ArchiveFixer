@@ -502,6 +502,14 @@ namespace ArchiveFixer.Models
         public int MaxRecursionDepth { get; set; } = 10;
 
         /// <summary>
+        /// 一次性迁移标记：旧的"最大层数默认 3"已经统一成 10（用户 2026-09-24 拍板）。
+        ///
+        /// <para>为什么要标记而不是每次都判 <c>== 3</c>：用户完全可能在②页把 3 改回来当自己的选择，
+        /// 那时每次都"纠正"成 10 就变成了"设置改不动"。标记落盘之后迁移只发生一次。</para>
+        /// </summary>
+        public bool RecursionDefaultUnifiedToTen { get; set; }
+
+        /// <summary>
         /// 每一层（每个归档）最多真的试几个密码候选。
         ///
         /// 为什么必须有上限（不变量 8）：密码本可能有几百条，一个包逐条试过去会烧掉整晚；
@@ -749,6 +757,7 @@ namespace ArchiveFixer.Models
                 RemindJunkAfterImport = true,
                 RecursionMode = "SingleLayer",
                 MaxRecursionDepth = 10,
+                RecursionDefaultUnifiedToTen = true,
                 MaxPasswordAttemptsPerLayer = 10,
                 TerminalLayoutMode = "KeepLastFolder",
                 CollapseRepeatedFolderLayer = true,
@@ -907,6 +916,23 @@ namespace ArchiveFixer.Models
              * （一键处理的新默认值是"移动"——比删除保守，用户随时可以在设置里改成删除。）
              */
             SourceHandling = ParseSourceHandling(SourceHandling).ToString();
+
+            /*
+             * 一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）：
+             *
+             * 旧默认值是 3，而**从没主动选过 3** 的用户读到的那个 3 其实是"旧默认"，不是他的选择 ——
+             * 光把默认值改成 10 对他没用（他的设置文件里存着 3）。所以这里迁一次，并落一个标记：
+             * 迁移只发生一次，他之后在②页把 3 改回来就是他的选择，不会被再次顶掉。
+             */
+            if (!RecursionDefaultUnifiedToTen)
+            {
+                if (MaxRecursionDepth == 3)
+                {
+                    MaxRecursionDepth = 10;
+                }
+
+                RecursionDefaultUnifiedToTen = true;
+            }
 
             // 层数下限 1（只解当前层），上限 10：再深就不是"帮用户省事"而是失控了。
             if (MaxRecursionDepth < 1)

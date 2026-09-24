@@ -148,6 +148,38 @@ namespace ArchiveFixer.Tests
             Assert.True(loaded.CollapseRepeatedFolderLayer);
         }
 
+        /// <summary>
+        /// 最大层数的一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）。
+        ///
+        /// <para>旧设置文件里存着 3 的用户，那个 3 是**旧默认值**而不是他的选择 ——
+        /// 迁移一次；但他之后自己把 3 改回来时，**不许再被顶回去**（否则就是"设置改不动"）。</para>
+        /// </summary>
+        [Fact]
+        public void 旧的最大层数3_迁移成10只做一次()
+        {
+            var pathService = new PathService { DataRootDirectory = _root };
+            var service = new SettingsService(pathService);
+
+            Directory.CreateDirectory(_root);
+
+            // ① 旧设置文件：3 且没有迁移标记 → 读成 10
+            File.WriteAllText(
+                pathService.SettingsFilePath,
+                "{ \"MaxRecursionDepth\": 3 }",
+                new UTF8Encoding(false));
+
+            AppSettings migrated = service.Load();
+
+            Assert.Equal(10, migrated.MaxRecursionDepth);
+            Assert.True(migrated.RecursionDefaultUnifiedToTen);
+
+            // ② 用户明确改成 3 并存盘 → 再读一次仍然是 3（迁移只发生一次）
+            migrated.MaxRecursionDepth = 3;
+            service.Save(migrated);
+
+            Assert.Equal(3, service.Load().MaxRecursionDepth);
+        }
+
         [Fact]
         public void 设置里的终端落法_真的传到定稿规划()
         {
