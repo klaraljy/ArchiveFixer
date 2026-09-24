@@ -3641,7 +3641,7 @@ namespace ArchiveFixer.ViewModels
 
             if (scope == CleanupScope.EmptyFolders)
             {
-                return "当前任务是「解压到压缩包所在目录」模式，输出根就是源包所在目录，"
+                return "当前任务的输出目录就是源包所在目录（包名与目录同名时合并了重复的一层），"
                        + "本次会清掉这个目录下所有“任意层级都没有文件”的子目录（不只是本任务产出的；不含任何文件）。";
             }
 
@@ -3667,11 +3667,11 @@ namespace ArchiveFixer.ViewModels
                        + affected;
             }
 
-            return "当前任务是「解压到压缩包所在目录」模式（多个包共用这个输出目录），"
+            return "当前任务的输出目录与同目录的其它包共用（包名与目录同名时合并了重复的一层），"
                    + "本次只删本任务那一份其余物（按包基名分开的子目录），不会碰其它包的其余物。";
         }
 
-        /// <summary>任务的输出目录是不是就是源包所在目录（模式 B 的判据）。</summary>
+        /// <summary>任务的输出目录是不是就是源包所在目录（场景 B 塌缩之后的形态）。</summary>
         internal static bool IsOutputDirectorySharedWithSource(string? outputDirectory, string? sourceArchivePath)
         {
             // 判据只有一处实现（OutputPlacement.LandsInSourceDirectory），这里只是把参数顺序转过来。

@@ -668,7 +668,7 @@ namespace ArchiveFixer.ViewModels
             string password,
             string stageDirectory,
             string outputRedirectNote,
-            OutputPlacementMode placementMode,
+            bool sharedOutputRoot,
             bool oneClickRun,
             CancellationToken cancellationToken,
             ArchiveListResult? knownList = null)
@@ -758,7 +758,7 @@ namespace ArchiveFixer.ViewModels
                             task,
                             stageDirectory,
                             task.OutputPath,
-                            placementMode,
+                            sharedOutputRoot,
                             terminalLayout),
                         cancellationToken);
 
@@ -792,7 +792,7 @@ namespace ArchiveFixer.ViewModels
                     collectTargetDirectory,
                     deleteSource,
                     sourceHandling,
-                    placementMode,
+                    sharedOutputRoot,
                     terminalLayout,
                     oneClickRun,
                     conflictAction,
@@ -1065,7 +1065,7 @@ namespace ArchiveFixer.ViewModels
             string collectTargetDirectory,
             bool deleteSource,
             SourceHandlingMode sourceHandling,
-            OutputPlacementMode placementMode,
+            bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
             bool oneClickRun,
             string conflictAction,
@@ -1169,7 +1169,7 @@ namespace ArchiveFixer.ViewModels
                 task,
                 stageDirectory,
                 task.OutputPath,
-                placementMode,
+                sharedOutputRoot,
                 terminalLayout,
                 conflictAction,
                 conflictDecision,
@@ -2111,7 +2111,11 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         /// <param name="stageDirectory">暂存目录（入仓阶段的产物树）。</param>
         /// <param name="destinationDirectory">最终目录（落点由 <see cref="PathService.BuildOutputPath"/> 算）。</param>
-        /// <param name="placementMode">落点模式；只影响其余物集中到哪（D-2 依赖它）。</param>
+        /// <param name="sharedOutputRoot">
+        /// 这个落点目录是不是同一次导入里多个包共用的（落点解析给出的唯一事实，
+        /// 见 <see cref="OutputPlacementResult.SharesDestinationWithOtherPackages"/>）；
+        /// 只影响其余物集中到哪（决策 D-10 依赖它）。
+        /// </param>
         /// <param name="archiveBaseName">
         /// 终端归档基名（"没有最外层文件夹名"时给那一层取名用）。传空则退回 destDir 自己的末段名。
         /// </param>
@@ -2125,7 +2129,7 @@ namespace ArchiveFixer.ViewModels
         internal static FinalLayoutPlan PlanFinalLayout(
             string stageDirectory,
             string destinationDirectory,
-            OutputPlacementMode placementMode,
+            bool sharedOutputRoot,
             string? archiveBaseName,
             TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder)
         {
@@ -2236,7 +2240,7 @@ namespace ArchiveFixer.ViewModels
                 archiveBaseName,
                 contentRoot: null,
                 stagingRoot: stageRoot,
-                placementMode: placementMode);
+                sharedOutputRoot: sharedOutputRoot);
 
             var processSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -2298,7 +2302,7 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
-            OutputPlacementMode placementMode,
+            bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
             string conflictAction,
             ConflictDecision? conflictDecision,
@@ -2332,7 +2336,7 @@ namespace ArchiveFixer.ViewModels
                     task,
                     stageDirectory,
                     destinationDirectory,
-                    placementMode,
+                    sharedOutputRoot,
                     terminalLayout);
             }
             catch (Exception ex)
@@ -3556,7 +3560,7 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
-            OutputPlacementMode placementMode,
+            bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout)
         {
             var precheck = new ConflictPrecheck();
@@ -3572,7 +3576,7 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                plan = PlanFinalLayoutForTask(task, stageDirectory, destinationDirectory, placementMode, terminalLayout);
+                plan = PlanFinalLayoutForTask(task, stageDirectory, destinationDirectory, sharedOutputRoot, terminalLayout);
             }
             catch
             {
@@ -3620,7 +3624,7 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
-            OutputPlacementMode placementMode,
+            bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout)
         {
             string archiveBaseName = OutputPlacement.ResolveArchiveBaseName(task.CurrentPath);
@@ -3628,7 +3632,7 @@ namespace ArchiveFixer.ViewModels
             return PlanFinalLayout(
                 stageDirectory,
                 destinationDirectory,
-                placementMode,
+                sharedOutputRoot,
                 archiveBaseName,
                 terminalLayout);
         }
@@ -4933,7 +4937,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "WARN",
-                        "本次选项里选了「指定位置」但没填路径 —— 为了避免它被解释成「解压到压缩包所在目录」，" +
+                        "本次选项里选了「指定位置」但没填路径 —— 为了避免它被解释成「未指定位置」那一档，" +
                         "本次落点**回落设置里的值**（其余两项照常生效）。");
                 }
             }
@@ -6252,16 +6256,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 落点模式（契约 §1.1 的四种，由旧的三个设置项翻译过来）。
-             * 定稿时要靠它决定其余物集中到哪：模式 B（解压到当前目录）下目标目录就是源目录本身，
-             * 一个目录里几十上百个包会共用它，所以其余物再套一层包基名（决策 D-2，由 ResultFinalizer 实现）。
-             */
-            OutputPlacementMode placementMode = OutputPlacement.FromLegacyFlags(
-                extractOptions.ExtractToOriginalDirectory,
-                extractOptions.KeepArchiveNameFolder,
-                extractOptions.CustomOutputDirectory);
-
-            /*
              * 场景 B 塌缩（规格 §3.3）：111\222\名字\名字.rar → 产物落 111\222\名字\内容物。
              *
              * 「包基名 == 所在目录名」是纯字符串判断（不碰磁盘）；成立之后才需要**扫一次目录**，
@@ -6288,13 +6282,22 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(scan.ContainsOnlyThisArchive ? "INFO" : "WARN", $"{task.FileName}：{scan.Message}");
             }
 
-            // 解压前算出来的"打算输出到哪"。它只是一个提议：下面可能因为目录已存在被改名。
-            // 续解出来的内层包由 PathService.BuildOutputPath 直接给出**父任务那一个**最终目录（不再套一层）。
-            string requestedOutputPath = _pathService.BuildOutputPath(
+            /*
+             * 解压前算出来的落点。它只是一个提议：下面可能因为目录已存在被改名。
+             *
+             * ⚠ 落点走**唯一实现**（PathService.ResolveOutputPlacement → OutputPlacement），
+             * 这里一并拿到"这个目录是不是同一批里多个包共用"这条事实（用户 2026-09-24 第 13 条：
+             * "添加文件夹 + 指定位置"那一档，文件夹里每个包都落进同一个 BBB\222\）：
+             * 它决定下面"目录已存在且非空就改名 xxx(1)"要不要让开，以及定稿时其余物要不要按包名分层。
+             * 别在这里自己推一遍（旧写法是拿落点模式反推，模式只剩两档之后推不出来了）。
+             */
+            OutputPlacementResult placement = _pathService.ResolveOutputPlacement(
                 task,
                 extractOptions,
                 collapseRepeatedFolderLayer,
                 sourceDirectoryContainsOnlyThisArchive);
+
+            string requestedOutputPath = placement.DestinationDirectory;
             string outputPath = requestedOutputPath;
             string outputRedirectNote = string.Empty;
 
@@ -6317,11 +6320,14 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 落点是不是"源包自己的目录"（模式 B「解压到压缩包所在目录」/ 场景 B 塌缩后的
-             * 111\222\名字）。这条事实决定"目录已存在且非空就改名 xxx(1)"要不要让开，
+             * 落点是不是"源包自己的目录"（场景 B 塌缩后的 111\222\名字）。
+             * 这条事实决定"目录已存在且非空就改名 xxx(1)"要不要让开，
              * 理由见下面那个分支上的说明；判定本身只有一处实现（OutputPlacement）。
              */
             bool landsInSourceDirectory = OutputPlacement.LandsInSourceDirectory(task.CurrentPath, outputPath);
+
+            // 共用落点（"添加文件夹 + 指定位置"）：别的包也会落进这一层，所以两处"改名让开"都要算上它。
+            bool sharedOutputRoot = placement.SharesDestinationWithOtherPackages;
 
             try
             {
@@ -6342,11 +6348,11 @@ namespace ArchiveFixer.ViewModels
                 else if (landsInSourceDirectory)
                 {
                     /*
-                     * 落点就是**源包所在目录**（模式 B「解压到压缩包所在目录」，或场景 B 塌缩后的
-                     * 111\222\名字）→ 上面那条"已存在且非空就改名 xxx(1)"必须让开。
+                     * 落点就是**源包所在目录**（场景 B 塌缩后的 111\222\名字）
+                     * → 上面那条"已存在且非空就改名 xxx(1)"必须让开。
                      *
                      * 为什么：那个目录**必然非空** —— 源包自己就躺在里面。照旧规则一改名，
-                     * 用户选的就地整理 / 塌缩当场被抵消，产物落到旁边的 名字(1)\，
+                     * 用户的就地整理 / 塌缩当场被抵消，产物落到旁边的 名字(1)\，
                      * 正是这一轮要根治的"凭空多一层目录"。
                      *
                      * 让开之后会不会和既有文件混在一起：不会丢东西。定稿搬运对同名条目一律
@@ -6356,6 +6362,20 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         $"{task.FileName}：落点就是源包所在目录 {outputPath}（就地整理 / 已塌缩重复层），不套用“目录已存在就改名”的规则。");
+                }
+                else if (sharedOutputRoot)
+                {
+                    /*
+                     * 「添加文件夹 + 指定位置」那一档：同一个文件夹里的包都落进 BBB\222\（用户 2026-09-24 第 13 条）。
+                     *
+                     * 第一个包定稿之后这个目录就"存在且非空"了，照旧规则会把第二个包改名成 222(1)\ ——
+                     * 用户要的"都放进 BBB\222\"当场被拆开。所以这里同样让开：
+                     * 同名条目由定稿搬运的 AutoRename / 用户选的冲突档兜住，绝不覆盖（不变量 3）。
+                     */
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：落点是本次导入共用的目标目录 {outputPath}（添加文件夹 + 指定位置），" +
+                        "不套用“目录已存在就改名”的规则。");
                 }
                 else if (!string.IsNullOrWhiteSpace(outputPath) &&
                     Directory.Exists(outputPath) &&
@@ -6462,11 +6482,16 @@ namespace ArchiveFixer.ViewModels
              * 只对"目录还不存在"的情况占位：
              * · 目录已存在时，上面的冲突档已经基于一个**看得见的事实**做完了决定（沿用 / 改名 / 跳过），
              *   再插一手会把用户显式选的「覆盖」变成"改名"，那是另一回事；
-             * · 落点就是源目录（模式 B）时**绝不占位**：那个目录本来就是这次要整理的目标，
-             *   给它改名等于把用户的就地整理甩到旁边的 `名字(1)` 去。
+             * · 落点就是源目录（场景 B 塌缩）时**绝不占位**：那个目录本来就是这次要整理的目标，
+             *   给它改名等于把用户的就地整理甩到旁边的 `名字(1)` 去；
+             * · 落点是**本次导入共用的目标目录**时同样绝不占位（用户 2026-09-24 第 13 条）：
+             *   "添加文件夹 + 指定位置"下同一个文件夹里的包都落进 BBB\222\，
+             *   第一个包占了位，后面那些包就会各自换成 222(1)、222(2)… —— 用户要的"都放进 BBB\222\"
+             *   会被拆成一串目录（抢占只对"每包一个目录"的落点有意义）。
              */
             if (!task.IsContinuationTask &&
                 !landsInSourceDirectory &&
+                !sharedOutputRoot &&
                 !string.IsNullOrWhiteSpace(outputPath) &&
                 !Directory.Exists(outputPath))
             {
@@ -7065,7 +7090,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     // 递归产物同样要走"校验 → 定稿 → 归集 → 源包处理"，与单层路径一个字都不差。
                     bool recursionConclusionStands = await PostProcessSuccessAsync(
-                        task, engineArchivePath, string.Empty, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken);
+                        task, engineArchivePath, string.Empty, engineOutputPath, outputRedirectNote, sharedOutputRoot, oneClickRun, cancellationToken);
 
                     if (recursionConclusionStands && task.Status == StatusText.ExtractSuccess)
                     {
@@ -7126,7 +7151,7 @@ namespace ArchiveFixer.ViewModels
                     preflightList,
                     engineOutputPath,
                     outputRedirectNote,
-                    placementMode,
+                    sharedOutputRoot,
                     oneClickRun,
                     progressSink,
                     cancellationToken);
@@ -7308,7 +7333,7 @@ namespace ArchiveFixer.ViewModels
 
                     // 收尾可能把"解压成功"顶掉（产物越界 / 超预算 / 定稿失败 / 校验未通过）：只有结论仍然成立时才敢这么写日志。
                     bool conclusionStands = await PostProcessSuccessAsync(
-                        task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken, stage.List);
+                        task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, sharedOutputRoot, oneClickRun, cancellationToken, stage.List);
 
                     if (conclusionStands)
                     {
@@ -7460,7 +7485,7 @@ namespace ArchiveFixer.ViewModels
                         // 收尾否掉结论（越界 / 超预算 / 定稿失败 / 校验未通过 / 源包没有搬成）时不许写"解压成功"。
                         // knownList 传刚校验过的那份清单：定稿那一步用**同一份**再校验，两条路不许各列一次目录。
                         bool conclusionStands = await PostProcessSuccessAsync(
-                            task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, placementMode, oneClickRun, cancellationToken, stage.List);
+                            task, engineArchivePath, selectedPassword, engineOutputPath, outputRedirectNote, sharedOutputRoot, oneClickRun, cancellationToken, stage.List);
 
                         if (conclusionStands && task.Status == StatusText.ExtractSuccess)
                         {
@@ -7850,7 +7875,7 @@ namespace ArchiveFixer.ViewModels
             ArchiveListResult? knownList,
             string stageDirectory,
             string outputRedirectNote,
-            OutputPlacementMode placementMode,
+            bool sharedOutputRoot,
             bool oneClickRun,
             TaskProgressSink progressSink,
             CancellationToken cancellationToken)
@@ -7913,7 +7938,7 @@ namespace ArchiveFixer.ViewModels
                 string.Empty,
                 stageDirectory,
                 outputRedirectNote,
-                placementMode,
+                sharedOutputRoot,
                 oneClickRun,
                 cancellationToken,
                 knownList);

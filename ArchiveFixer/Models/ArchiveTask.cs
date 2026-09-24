@@ -180,6 +180,28 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
+        /// 这次导入时用户选中的是**文件**还是**文件夹**（用户 2026-09-24 第 13 条四条规则的第 1 个维度）。
+        ///
+        /// <para>
+        /// 为什么必须记在任务上：用户在「添加文件夹」里选的**不是这些包本身，而是一个容器**。
+        /// 指定位置时落点用那个文件夹的名字（<c>BBB\222\</c>），这从任务自己的路径里推不出来
+        /// （任务只是文件夹里的某一个包）。导入那一刻（<c>FileScanService</c>）把事实记下来，
+        /// 落点解析（<c>OutputPlacement</c>）只读它，不在别处猜。
+        /// </para>
+        /// <para>
+        /// 默认是 <see cref="Extraction.SourceSelectionKind.File"/>：单个文件 / 递归内层包 / 测试里手搓的任务
+        /// 都按"文件"这一档算，落点行为与用户第 1 条规则一致。
+        /// </para>
+        /// </summary>
+        public SourceSelectionKind SourceSelectionKind { get; set; } = SourceSelectionKind.File;
+
+        /// <summary>
+        /// 这次导入时用户选中的那个根：选文件时是文件全路径，选文件夹时是**文件夹全路径**
+        /// （同一个文件夹扫出来的任务共用它）。空 = 没记下（落点解析会回落到包基名，绝不落到别处）。
+        /// </summary>
+        public string SourceSelectionRoot { get; set; } = string.Empty;
+
+        /// <summary>
         /// 当前最后一个后缀。
         /// 没有后缀时为“无”。
         /// </summary>
@@ -875,6 +897,11 @@ namespace ArchiveFixer.Models
             ExtensionStatus = StatusText.NotChecked;
             DetectedFormat = "Unknown";
             LastUpdatedTime = DateTime.Now;
+
+            // 单文件构造 = "用户选中的就是这个文件"（第 13 条四条规则的第 1 条）。
+            // 「添加文件夹」扫出来的任务由 FileScanService 覆写成 Folder + 文件夹路径。
+            SourceSelectionKind = SourceSelectionKind.File;
+            SourceSelectionRoot = OriginalPath;
 
             RefreshPathRelatedProperties();
         }

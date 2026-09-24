@@ -163,7 +163,7 @@ namespace ArchiveFixer.Tests
             ExtractionCoordinator.FinalLayoutPlan keep = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 destination,
-                OutputPlacementMode.PerArchiveSubfolder,
+                sharedOutputRoot: false,
                 "555",
                 OutputPlacement.ParseTerminalLayoutMode(settings.TerminalLayoutMode));
 
@@ -172,7 +172,7 @@ namespace ArchiveFixer.Tests
             ExtractionCoordinator.FinalLayoutPlan useArchiveName = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 destination,
-                OutputPlacementMode.PerArchiveSubfolder,
+                sharedOutputRoot: false,
                 "555",
                 OutputPlacement.ParseTerminalLayoutMode(settings.TerminalLayoutMode));
 
@@ -339,16 +339,19 @@ namespace ArchiveFixer.Tests
 
             Assert.True(OutputPlacement.LandsInSourceDirectory(archive, output));
 
-            // 模式 B（解压到压缩包所在目录）同理：落点就是源目录。
-            var flatOptions = new ExtractOptions
+            /*
+             * 旧写法（"解压到压缩包所在目录"）已被用户 2026-09-24 第 13 条删除：同一对布尔现在
+             * 迁移到"同名子文件夹"那一档，落点不再等于源目录 —— 这条例外今天只有塌缩那一条路。
+             */
+            var legacyFlatOptions = new ExtractOptions
             {
                 ExtractToOriginalDirectory = true,
                 KeepArchiveNameFolder = false
             };
 
-            Assert.True(OutputPlacement.LandsInSourceDirectory(
+            Assert.False(OutputPlacement.LandsInSourceDirectory(
                 archive,
-                pathService.BuildOutputPath(task, flatOptions)));
+                pathService.BuildOutputPath(task, legacyFlatOptions)));
 
             // 普通的同名子文件夹落点（111\222\333）不适用这条例外，照旧走"已存在就改名"。
             string other = WriteFile(@"111\222\333.rar", "rar");

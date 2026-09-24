@@ -22,6 +22,37 @@ namespace ArchiveFixer.Services
         private readonly Dictionary<string, string> _recentSuccess = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 每条密码成功解开过多少次（用户 2026-09-24 第 14 条："密码本里面的优先级差不多就是
+        /// 使用次数的频繁程度"）。**大小写敏感**（与密码本解析 / 去重口径一致：密码就是字节）。
+        ///
+        /// <para>它有两处用处：① 同层级的候选按它**从多到少**排；② 「记住密码列表」开着时随列表
+        /// 一起加密落盘（<see cref="PasswordListSnapshot.SuccessCounts"/>），重启后优先级不丢。</para>
+        /// <para>⚠ 并行解压时多个任务会同时调 <see cref="RecordPasswordSuccess"/>，
+        /// 所以对它的读写一律在 <see cref="_passwordStatsLock"/> 里 —— <c>Dictionary</c> 不是线程安全的。</para>
+        /// </summary>
+        private readonly Dictionary<string, int> _successCounts = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// 本次运行里**已经成功试出来过**的密码（顺序 = 首次成功的先后）。
+        ///
+        /// <para>用户原话："如果测密码，只要测到一个成功了就不要去再尝试了，你现在每次都尝试，
+        /// 如果是密码本里面的第 5 个，如果是 200 个压缩包，那你岂不是要尝试 1000 遍"。
+        /// 这些值会被提到每个后续任务的候选**最前面**（空密码之后），于是 N 个同源包从 O(N×5)
+        /// 降到 O(N)。</para>
+        ///
+        /// <para>⛔ 只**提前**、绝不**删减**：不同包的密码可能不同，原来的候选链在后面原样保留
+        /// （用户 2026-09-24 第 14 条的要求）。只记内存、不落盘 —— 它是"本批"的事实，
+        /// 跨重启的优先级由成功次数承担。</para>
+        /// </summary>
+        private readonly List<string> _batchVerifiedPasswords = new();
+
+        /// <summary>成功次数与"本批已成功"清单的锁（并行解压会从多个线程记账）。</summary>
+        private readonly object _passwordStatsLock = new();
+
+        /// <summary>记忆文件写入的串行锁（见 <see cref="PersistPasswordList"/> 的说明）。</summary>
+        private readonly object _persistGate = new();
+
+        /// <summary>
         /// 记住的密码本路径（**有序**，可多本）—— 用户 2026-09-24 要求多本密码本。
         ///
         /// <para>它与 <see cref="AppSettings.PasswordBookPaths"/> 是一份事实的两处落点：
@@ -230,6 +261,20 @@ namespace ArchiveFixer.Services
 
                 _tombstones.Clear();
                 _tombstones.AddRange(result.Snapshot.Tombstones);
+
+                /*
+                 * 成功次数（v2 载荷）跟着记忆一起回来 —— 用户"按使用频率排序"的期望跨重启成立。
+                 * 旧版本写下的文件（v1）里没有这一项 → 空表，一切按原顺序（不报错、不猜）。
+                 */
+                lock (_passwordStatsLock)
+                {
+                    _successCounts.Clear();
+
+                    foreach (KeyValuePair<string, int> pair in result.Snapshot.SuccessCounts)
+                    {
+                        _successCounts[pair.Key] = pair.Value;
+                    }
+                }
             }
             finally
             {
@@ -583,12 +628,27 @@ namespace ArchiveFixer.Services
             snapshot.BookPaths.AddRange(_bookPaths);
             snapshot.Tombstones.AddRange(_tombstones);
 
+            // 成功次数（第 14 条的"按使用频率排序"）跟着列表一起落盘；并行解压会在别的线程记账，所以取副本要加锁。
+            lock (_passwordStatsLock)
+            {
+                foreach (KeyValuePair<string, int> pair in _successCounts)
+                {
+                    snapshot.SuccessCounts[pair.Key] = pair.Value;
+                }
+            }
+
             return snapshot;
         }
 
         /// <summary>
         /// 变更之后落盘。关掉开关时**一个字节都不写**；写失败时只留一句人话（界面提示条用），
         /// 绝不抛异常 —— 记不住密码列表不该让"加一条密码"这个动作失败。
+        ///
+        /// <para>
+        /// ⚠ 整个过程串行化（<see cref="_persistGate"/>）：并行解压时多个任务会同时
+        /// <see cref="RecordPasswordSuccess"/>，而记忆文件是**原子写 + 整体替换**的（同一个 <c>.tmp</c>），
+        /// 两个线程一起写会互相把临时文件搬走，一方报"写失败"（内容不会坏，但会平白多一句失败提示）。
+        /// </para>
         /// </summary>
         private void PersistPasswordList()
         {
@@ -602,7 +662,12 @@ namespace ArchiveFixer.Services
                 return;
             }
 
-            PasswordListSaveResult result = ListStore.Save(BuildSnapshot());
+            PasswordListSaveResult result;
+
+            lock (_persistGate)
+            {
+                result = ListStore.Save(BuildSnapshot());
+            }
 
             if (result.Success)
             {
@@ -663,7 +728,71 @@ namespace ArchiveFixer.Services
                 return;
             }
 
-            _recentSuccess[archivePath.Trim()] = password ?? string.Empty;
+            lock (_passwordStatsLock)
+            {
+                _recentSuccess[archivePath.Trim()] = password ?? string.Empty;
+            }
+
+            RecordVerifiedPassword(password);
+        }
+
+        /// <summary>
+        /// 一条密码刚刚被验证成功：记进"本批已成功"清单（供后续任务复用）并累加成功次数。
+        ///
+        /// <para>
+        /// ⚠ 空密码不算"一条密码"（它是 §9.2 的第一档"不需要密码"，本来就是每个包的第一步），
+        /// 所以不记账、也不进复用清单 —— 否则"复用"这一档会变成一句"再试一次空密码"。
+        /// </para>
+        /// </summary>
+        private void RecordVerifiedPassword(string? password)
+        {
+            if (string.IsNullOrEmpty(password))
+            {
+                return;
+            }
+
+            lock (_passwordStatsLock)
+            {
+                _successCounts[password] = _successCounts.TryGetValue(password, out int count) ? count + 1 : 1;
+
+                if (!_batchVerifiedPasswords.Contains(password, StringComparer.Ordinal))
+                {
+                    _batchVerifiedPasswords.Add(password);
+                }
+            }
+
+            // 成功次数要跨重启（用户要的"按使用频率排序"第二次启动仍然成立）。
+            // 关掉「记住密码列表」时这个方法自己会一个字节都不写。
+            PersistPasswordList();
+        }
+
+        /// <summary>这条密码成功解开过多少次（0 = 没有记录）。给测试与排障用。</summary>
+        public int GetSuccessCount(string? password)
+        {
+            if (string.IsNullOrEmpty(password))
+            {
+                return 0;
+            }
+
+            lock (_passwordStatsLock)
+            {
+                return _successCounts.TryGetValue(password, out int count) ? count : 0;
+            }
+        }
+
+        /// <summary>
+        /// 本次运行里已经成功过的密码（副本，顺序 = 首次成功的先后）。
+        /// 它们会被提到后续任务候选的最前面（空密码之后）。
+        /// </summary>
+        public IReadOnlyList<string> BatchVerifiedPasswords
+        {
+            get
+            {
+                lock (_passwordStatsLock)
+                {
+                    return _batchVerifiedPasswords.ToList();
+                }
+            }
         }
 
         /// <summary>按归档文件名匹配密码本里的映射式条目（命中优先于遍历整表）。</summary>
@@ -680,11 +809,26 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 组装某个任务的密码候选。
         ///
-        /// 顺序按 AGENTS.md §9.2 定死，不要随意调换：
-        /// 空密码 → 本任务最近成功 → 密码本映射命中 → 单任务密码 → 统一密码 → 密码列表 → 同目录说明文件
+        /// 顺序按 AGENTS.md §9.2 定死，**只有一处被用户明确要求调整过**（2026-09-24 第 14 条）：
+        /// 空密码 → **本批已成功的密码（复用）** → 本任务最近成功 → 密码本映射命中 → 单任务密码
+        /// → 统一密码 → 密码列表 → 同目录说明文件。
         ///
+        /// <para>
         /// 为什么要这个顺序：越靠前的越可能命中、也越"便宜"（不用用户等）；
         /// 旁路说明文件是猜的，放最后，避免把说明文件里的一句噪声排到用户明确给的密码前面。
+        /// </para>
+        /// <para>
+        /// <b>「本批已成功的密码」为什么能插到这么前</b>（用户原话："只要测到一个成功了就不要去再尝试了……
+        /// 如果是密码本里面的第 5 个，如果是 200 个压缩包，那你岂不是要尝试 1000 遍"）：
+        /// 同一个批次里的包**大多是同源的**（同一批资源、同一个打包者），第一个包试出来的密码
+        /// 极可能就是后面每个包的密码。把它提到最前，200 个包从 O(N×k) 降到 O(N)。
+        /// ⛔ 但它只是**提前**，不是**替换**：原来的候选链一条都不删（不同包的密码可能确实不同）。
+        /// </para>
+        /// <para>
+        /// 同层级的候选按**成功次数从多到少**排（次数相同保持原顺序）—— 用户第 14 条："密码本里面的
+        /// 优先级差不多就是使用次数的频繁程度"。排序是**稳定**的，所以"没记录过"的那些仍按原顺序，
+        /// 用户能解释"为什么这条排在前面"。
+        /// </para>
         /// </summary>
         public List<PasswordItem> GetPasswordCandidates(
             ArchiveTask task,
@@ -724,13 +868,24 @@ namespace ArchiveFixer.Services
                 AddCandidate(string.Empty, "Empty", "空密码");
             }
 
+            /*
+             * 本批已经成功过的密码：紧跟在空密码之后（用户 2026-09-24 第 14 条指定的位置），
+             * 排在"本任务最近成功 / 密码本命中 / 统一密码 / 密码列表"之前。
+             *
+             * 多条时按成功次数从多到少（次数相同按首次成功的先后）—— 与同层级排序同一口径。
+             */
+            foreach (string verified in OrderBySuccessCount(BatchVerifiedPasswords, value => value))
+            {
+                AddCandidate(verified, "BatchSuccess", "复用本批已成功的密码");
+            }
+
             if (!string.IsNullOrWhiteSpace(archivePath) &&
                 _recentSuccess.TryGetValue(archivePath.Trim(), out string? recentPassword))
             {
                 AddCandidate(recentPassword ?? string.Empty, "RecentSuccess", "本任务最近成功的密码");
             }
 
-            foreach (PasswordEntry entry in MatchMappedEntries(archiveFileName))
+            foreach (PasswordEntry entry in OrderBySuccessCount(MatchMappedEntries(archiveFileName), entry => entry.Password))
             {
                 string remark = string.IsNullOrWhiteSpace(entry.Name)
                     ? "密码本命中"
@@ -751,22 +906,32 @@ namespace ArchiveFixer.Services
 
             if (passwordList != null)
             {
+                /*
+                 * 密码列表这一层：先按**成功次数从多到少**排，再逐个加进候选。
+                 *
+                 * 原始序号（"密码列表第 N 项"）跟着一起带过去：备注里写的是它在**用户列表里**的位置，
+                 * 而不是排序后的位置 —— 用户拿着日志回列表里找那一条时才找得到。
+                 */
+                var indexed = new List<(PasswordItem Item, int Index)>();
+
                 int index = 0;
 
                 foreach (PasswordItem item in passwordList)
                 {
                     index++;
 
-                    if (item == null)
+                    if (item == null || !item.IsEnabled)
                     {
                         continue;
                     }
 
-                    if (!item.IsEnabled)
-                    {
-                        continue;
-                    }
+                    indexed.Add((item, index));
+                }
 
+                foreach ((PasswordItem item, int originalIndex) in OrderBySuccessCount(
+                    indexed,
+                    pair => pair.Item.Value))
+                {
                     /*
                      * 注意：
                      * 密码允许是空格开头、空格结尾。
@@ -774,7 +939,7 @@ namespace ArchiveFixer.Services
                      */
                     string value = item.Value ?? string.Empty;
 
-                    AddCandidate(value, "ImportedList", $"密码列表第 {index} 项");
+                    AddCandidate(value, "ImportedList", $"密码列表第 {originalIndex} 项");
                 }
             }
 
@@ -805,6 +970,27 @@ namespace ArchiveFixer.Services
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 按**成功次数从多到少**排（次数相同保持原顺序）。用户 2026-09-24 第 14 条：
+        /// "密码本里面的优先级差不多就是使用次数的频繁程度"。
+        ///
+        /// <para>
+        /// 用 <c>OrderByDescending</c>（LINQ 的排序是**稳定**的）：没记录过次数的那些（计 0）
+        /// 仍然保持用户排的顺序，所以"为什么这条在前"永远解释得清。
+        /// </para>
+        /// </summary>
+        private List<T> OrderBySuccessCount<T>(IEnumerable<T> items, Func<T, string?> valueSelector)
+        {
+            if (items == null)
+            {
+                return new List<T>();
+            }
+
+            return items
+                .OrderByDescending(item => GetSuccessCount(valueSelector(item)))
+                .ToList();
         }
 
         /// <summary>
@@ -1028,6 +1214,10 @@ namespace ArchiveFixer.Services
             return source switch
             {
                 "Empty" => "尝试空密码",
+
+                // 用户 2026-09-24 第 14 条：本批已经试出来的密码会被提到候选最前面。
+                // 日志必须能看出"这一条是复用来的"（否则排障时看不出顺序为什么变了）。
+                "BatchSuccess" => "复用本批已成功的密码：******",
                 "RecentSuccess" => "尝试本任务最近成功的密码：******",
                 "BookMapped" => "尝试密码本命中项：******",
                 "TaskPassword" => "尝试单任务密码：******",

@@ -127,27 +127,30 @@ namespace ArchiveFixer.Helpers
         }
 
         /// <summary>
-        /// 四种落点各写一句：先给"落在哪"，再给一个具体例子。
+        /// 两档各写一句：先给"落在哪"，再给一个具体例子。
+        ///
+        /// <para>
+        /// 用户 2026-09-24 第 13 条之后只剩这两档，"摊平"那两句已经删掉
+        /// （<paramref name="keepArchiveNameFolder"/> 只是为了不改旧绑定而留着，不再参与判断）。
+        /// </para>
         /// </summary>
         public static string Describe(bool extractToSourceDirectory, bool keepArchiveNameFolder, string customRoot)
         {
+            _ = keepArchiveNameFolder;
+
             if (extractToSourceDirectory)
             {
-                return keepArchiveNameFolder
-                    ? "压缩包同目录 · 以压缩包名命名的子文件夹（111\\222.rar → 111\\222\\内容物）"
-                    : "压缩包所在目录（111\\222.rar → 111\\内容物）";
+                return "压缩包同目录 · 以压缩包名命名的子文件夹（111\\222.rar → 111\\222\\内容物）";
             }
 
             if (string.IsNullOrWhiteSpace(customRoot))
             {
-                return "指定位置（尚未选择）· 暂按压缩包所在目录处理";
+                return "指定位置（尚未选择）· 暂按压缩包同目录处理";
             }
 
             string root = customRoot.TrimEnd('\\', '/');
 
-            return keepArchiveNameFolder
-                ? $"{root} · 以压缩包名命名的子文件夹（{root}\\222\\内容物）"
-                : $"{root} · 直接放在该目录下（{root}\\内容物）";
+            return $"{root} · 以压缩包名命名的子文件夹（{root}\\222\\内容物；选中文件夹时用该文件夹的名字）";
         }
 
         private static bool ToBool(object[] values, int index)

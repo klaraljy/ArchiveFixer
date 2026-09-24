@@ -194,15 +194,19 @@ namespace ArchiveFixer.Extraction
         /// <param name="stagingRoot">
         /// 暂存根绝对路径。给了，计划里的 <c>From</c> 就是可直接执行的绝对路径；不给就只有相对路径。
         /// </param>
-        /// <param name="placementMode">
-        /// 落点模式（可选）。只影响**其余物**放在哪（决策 D-10）：
-        /// **多个包共用一个目标目录**的模式（模式 B <see cref="OutputPlacementMode.SourceDirectoryFlat"/>、
-        /// 模式 D <see cref="OutputPlacementMode.CustomRootFlat"/>）下，其余物再套一层包基名
-        /// （<c>&lt;共用根&gt;\其余物\&lt;包基名&gt;\</c>），否则几十上百个包的分卷和中间件会在
-        /// <c>其余物\</c> 里互相撞名、也分不清是谁的。
-        /// 包本来就有自己目录的模式（默认的 <see cref="OutputPlacementMode.PerArchiveSubfolder"/> /
-        /// <see cref="OutputPlacementMode.CustomRootPerArchive"/>）直接用 <c>destDir\其余物\</c>，
-        /// **不再多套一层** —— 用户最反感"凭空多弄一个文件夹"。
+        /// <param name="sharedOutputRoot">
+        /// 这个落点目录是不是**同一次导入里的多个包共用**的（可选，默认 false）。
+        /// 只影响**其余物**放在哪（决策 D-10）：
+        /// 共用根时其余物再套一层包基名（<c>&lt;共用根&gt;\其余物\&lt;包基名&gt;\</c>），
+        /// 否则几十上百个包的分卷和中间件会在 <c>其余物\</c> 里互相撞名、也分不清是谁的。
+        /// 每包一个目录的落点直接用 <c>destDir\其余物\</c>，**不再多套一层** ——
+        /// 用户最反感"凭空多弄一个文件夹"。
+        ///
+        /// <para>
+        /// ⚠ 这个事实**只由落点解析给出**（<see cref="OutputPlacementResult.SharesDestinationWithOtherPackages"/>）：
+        /// 用户 2026-09-24 第 13 条之后唯一会共用根的是"添加文件夹 + 指定位置"那一档
+        /// （<c>BBB\222\</c>，文件夹里每个包都落进去）。调用方**不许**按模式自己再推一遍。
+        /// </para>
         /// </param>
         public static FinalizePlan Plan(
             IReadOnlyList<StagedEntry>? stagedEntries,
@@ -211,7 +215,7 @@ namespace ArchiveFixer.Extraction
             string? archiveBaseName = null,
             string? contentRoot = null,
             string? stagingRoot = null,
-            OutputPlacementMode? placementMode = null)
+            bool sharedOutputRoot = false)
         {
             if (string.IsNullOrWhiteSpace(destinationDirectory))
             {
@@ -396,12 +400,11 @@ namespace ArchiveFixer.Extraction
                 warnings.Add($"内容物那一层与其余物目录重名，其余物目录改用 “{artifactDirectoryName}”");
             }
 
-            bool sharedRoot = placementMode is
-                OutputPlacementMode.SourceDirectoryFlat or OutputPlacementMode.CustomRootFlat;
+            bool sharedRoot = sharedOutputRoot;
 
             if (sharedRoot && !hasArchiveName)
             {
-                warnings.Add("多个包共用同一个输出根（解压到当前目录 / 直接解到指定目录）时没有提供归档基名，"
+                warnings.Add("多个包共用同一个输出根（同一个文件夹里的包都落进这一层）时没有提供归档基名，"
                              + $"其余物无法按包名隔离，同一个目录里的多个包会共用一个 {ProcessArtifactLayout.ArtifactDirectoryName} 目录");
             }
 

@@ -9,7 +9,7 @@ namespace ArchiveFixer.Models
     public class ExtractOptions
     {
         /// <summary>
-        /// 是否解压到压缩包所在目录。
+        /// 是不是"未指定位置"那一档（落点在**源包同目录家族**：源包旁边建同名子文件夹）。
         /// true：使用压缩包当前所在目录。
         /// false：使用 CustomOutputDirectory。
         /// </summary>
@@ -165,10 +165,10 @@ namespace ArchiveFixer.Models
     /// </summary>
     public sealed class OneClickRunOptions
     {
-        /// <summary>本次落点（规格 §1.1 的四种模式，四选一）。</summary>
+        /// <summary>本次落点（规格 §1.1，**只剩两档**：以包名命名的子文件夹 / 指定位置 + 同名子文件夹）。</summary>
         public OutputPlacementMode PlacementMode { get; init; } = OutputPlacementMode.PerArchiveSubfolder;
 
-        /// <summary>指定位置（只有两种 <c>CustomRoot*</c> 模式用得上；其它模式下它是惰性的）。</summary>
+        /// <summary>指定位置（只有 <c>CustomRootPerArchive</c> 用得上；另一档下它是惰性的）。</summary>
         public string CustomRoot { get; init; } = string.Empty;
 
         /// <summary>终端落法（规格 §3.1 的那个可选项）。</summary>
@@ -195,7 +195,7 @@ namespace ArchiveFixer.Models
         /// <para>
         /// 为什么必须挡：<see cref="OutputPlacement.FromLegacyFlags"/> 对"空根"的口径是
         /// **回落源目录家族**（§1.3 的旧配置迁移规则）—— 也就是说，一个空根的"指定位置"
-        /// 会被静默解释成"解压到压缩包所在目录"。用户明确选了另一个位置却写进源目录，
+        /// 会被静默解释成"未指定位置"。用户明确选了另一个位置却写进源目录，
         /// 正是最不该发生的那种"悄悄改了落点"。所以空根时**整条落点不生效**（回落设置值），
         /// 并由调用方写一条 WARN 说明。
         /// </para>
@@ -289,18 +289,14 @@ namespace ArchiveFixer.Models
                    $"源包处理：{DescribeSourceHandling(SourceHandling)}";
         }
 
-        /// <summary>落点模式的中文说明（含一个例子；与设置窗口里那四档的措辞同一口径）。</summary>
+        /// <summary>落点模式的中文说明（含一个例子；与设置窗口里那两档的措辞同一口径）。</summary>
         public static string DescribePlacement(OutputPlacementMode mode, string? customRoot)
         {
-            return mode switch
+            return OutputPlacement.NormalizeLegacyMode(mode) switch
             {
-                OutputPlacementMode.PerArchiveSubfolder => "以包名命名的子文件夹（111\\222.rar → 111\\222\\内容物）",
-                OutputPlacementMode.SourceDirectoryFlat => "压缩包所在目录（111\\222.rar → 111\\内容物）",
                 OutputPlacementMode.CustomRootPerArchive =>
-                    $"指定位置 + 同名子文件夹（{DescribeRoot(customRoot)}\\222\\内容物）",
-                OutputPlacementMode.CustomRootFlat =>
-                    $"指定位置 + 直接放该目录下（{DescribeRoot(customRoot)}\\内容物）",
-                _ => "以包名命名的子文件夹（默认）"
+                    $"指定位置 + 同名子文件夹（{DescribeRoot(customRoot)}\\222\\内容物；选中文件夹时用该文件夹的名字）",
+                _ => "以包名命名的子文件夹（111\\222.rar → 111\\222\\内容物）"
             };
         }
 

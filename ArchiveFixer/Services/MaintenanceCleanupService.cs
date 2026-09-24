@@ -201,7 +201,7 @@ namespace ArchiveFixer.Services
     ///
     /// <para>
     /// ⚠️ **本次修复的核心**（上一版的真实缺陷）：旧实现的其余物作用域是
-    /// <c>&lt;任务输出目录&gt;其余物</c>。模式 B（解压到当前目录）下**所有任务的输出目录都是同一个**
+    /// <c>&lt;任务输出目录&gt;其余物</c>。共用落点（"添加文件夹 + 指定位置"）下**所有任务的输出目录都是同一个**
     /// （源目录本身），于是"只勾选 222 去清理"会连带清掉同一个源目录里 333、444 的其余物。
     /// 新模型按布局再分一层包基名（<c>&lt;共享根&gt;\其余物\222\</c>），清理也必须按同一层收窄。
     /// </para>
@@ -262,7 +262,7 @@ namespace ArchiveFixer.Services
         /// 任务输出目录：<see cref="ArchiveTask.OutputPath"/>（解压管线回写的**实际落点**）。
         /// </description></item>
         /// <item><description>
-        /// 共享目录判据：<see cref="OutputPlacement.LandsInSourceDirectory"/>（模式 B = 输出目录就是源包目录）。
+        /// 共享目录判据：<see cref="OutputPlacement.LandsInSourceDirectory"/>（输出目录就是源包自己的目录）。
         /// 这是本项目"多个任务共用一个输出目录"的唯一判据，本类不另写一套。
         /// </description></item>
         /// <item><description>

@@ -14,8 +14,8 @@
     <!--
         设置窗口（UI v2）。
         改之前：8 个分组框挤在一起、字号只有一档、主次不分，而且"解压到哪"要靠
-        「解压到压缩包所在目录」+「保留压缩包同名文件夹」两个开关自己组合。
-        现在：分组标题独立成行、说明文字统一小字灰、输出位置改成四选一 + 实时示例，
+        「解压到压缩包所在目录」+「保留压缩包同名文件夹」两个开关自己组合（这两档里"摊平"的那两种已被用户 2026-09-24 删除）。
+        现在：分组标题独立成行、说明文字统一小字灰、输出位置改成二选一 + 实时示例，
         底部按钮按"危险在左、主操作在最右"排列。
     -->
 
@@ -67,12 +67,12 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
             <StackPanel>
 
-                <!-- ==================== 输出位置（四选一） ==================== -->
+                <!-- ==================== 输出位置（二选一） ==================== -->
                 <GroupBox Header="输出位置（解压到哪）">
                     <StackPanel>
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="0,0,0,8"
-                                   Text="四选一，互斥。下面写的就是这一档的实际落点，括号里是例子。" />
+                                   Text="二选一，互斥。下面写的就是这一档的实际落点，括号里是例子。选中文件夹时，这一层用你选的那个文件夹的名字（BBB\222\）。" />
 
                         <RadioButton GroupName="OutputPlacement"
                                      IsChecked="{Binding OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=ArchiveNamedSubfolder, Mode=TwoWay}">
@@ -84,28 +84,10 @@
                         </RadioButton>
 
                         <RadioButton GroupName="OutputPlacement"
-                                     IsChecked="{Binding OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=SourceDirectory, Mode=TwoWay}">
-                            <StackPanel>
-                                <TextBlock Text="解压到压缩包所在目录" Style="{StaticResource BodyTextStyle}" />
-                                <TextBlock Text="111\222.rar → 111\内容物　（产物直接落在包旁边）"
-                                           Style="{StaticResource HintTextStyle}" />
-                            </StackPanel>
-                        </RadioButton>
-
-                        <RadioButton GroupName="OutputPlacement"
                                      IsChecked="{Binding OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=CustomNamedSubfolder, Mode=TwoWay}">
                             <StackPanel>
                                 <TextBlock Text="解压到指定位置，并建立同名子文件夹" Style="{StaticResource BodyTextStyle}" />
                                 <TextBlock Text="111\222.rar → 333\222\内容物　（多个包各占一个文件夹，适合归集整理）"
-                                           Style="{StaticResource HintTextStyle}" />
-                            </StackPanel>
-                        </RadioButton>
-
-                        <RadioButton GroupName="OutputPlacement"
-                                     IsChecked="{Binding OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=CustomFlat, Mode=TwoWay}">
-                            <StackPanel>
-                                <TextBlock Text="解压到指定位置，直接放在该目录下" Style="{StaticResource BodyTextStyle}" />
-                                <TextBlock Text="111\222.rar → 333\内容物　（所有包的内容物摊在同一个目录里）"
                                            Style="{StaticResource HintTextStyle}" />
                             </StackPanel>
                         </RadioButton>
@@ -138,7 +120,7 @@
                             <TextBox Grid.Column="1"
                                      Text="{Binding CustomOutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      IsEnabled="{Binding IsCustomOutputEnabled}"
-                                     ToolTip="只有上面选了「解压到指定位置」的两档才用得上；留空时按压缩包所在目录处理。" />
+                                     ToolTip="只有上面选了「解压到指定位置」那一档才用得上；留空时按压缩包同目录处理。" />
 
                             <Button Grid.Column="2"
                                     Content="选择"
@@ -1050,7 +1032,7 @@
                         <TextBlock Style="{StaticResource HintTextStyle}"
                                    Margin="22,0,0,0"
                                    TextWrapping="Wrap"
-                                   Text="关掉之后：下次启动不再把上次的输出目录填回「当前输出位置」。注意主窗口里没有临时选输出目录的入口了（输出位置只在上面四选一里改），所以这一项的实际作用就是「启动时要不要沿用上次那个自定义根」。" />
+                                   Text="关掉之后：下次启动不再把上次的输出目录填回「当前输出位置」。注意主窗口里没有临时选输出目录的入口了（输出位置只在上面二选一里改），所以这一项的实际作用就是「启动时要不要沿用上次那个自定义根」。" />
 
                         <!--
                             缓存根目录（日志 / 临时 / 递归工作区都放它下面）。

@@ -790,6 +790,20 @@ namespace ArchiveFixer.Models
                 MaxFileSizeLimit = 0;
             }
 
+            /*
+             * 落点旧配置迁移（用户 2026-09-24 第 13 条：删掉"解压到当前目录"与"直接解到指定目录"两档）。
+             *
+             * 落盘一直是**两个布尔**（ExtractToOriginalDirectory + KeepArchiveNameFolder），
+             * 旧的那两档就是 (true,false) 与 (false,false)。它们现在已经没有对应档位了，
+             * 所以这里把 KeepArchiveNameFolder 归一成 true：
+             * · 旧配置读进来**不炸**，行为落到用户要的四条规则上（源目录家族 → 111\222\；
+             *   指定位置 → 顺手保留那个根，但补上同名子文件夹）；
+             * · 归一化放在设置层，与 ConflictAction / SourceHandling 同一口径 ——
+             *   到解压那一刻才发现"这个组合读不懂"是最糟的，那时用户已经点了一键处理。
+             * ⚠ 刻意**不**动 ExtractToOriginalDirectory：它决定"有没有指定位置"，是两档的判据本身。
+             */
+            KeepArchiveNameFolder = true;
+
             CustomOutputDirectory ??= string.Empty;
             CustomSevenZipExePath ??= string.Empty;
             CustomUnRarExePath ??= string.Empty;

@@ -221,9 +221,43 @@ namespace ArchiveFixer.Services
             bool collapseRepeatedFolderLayer = false,
             bool sourceDirectoryContainsOnlyThisArchive = false)
         {
+            return ResolveOutputPlacement(task, options, collapseRepeatedFolderLayer, sourceDirectoryContainsOnlyThisArchive)
+                .DestinationDirectory;
+        }
+
+        /// <summary>
+        /// 落点解析的**唯一入口**（返回整份结论，不只是路径）。
+        ///
+        /// <para>
+        /// 与 <see cref="BuildOutputPath"/> 是同一件事的两半：后者只是取
+        /// <see cref="OutputPlacementResult.DestinationDirectory"/>。需要
+        /// <see cref="OutputPlacementResult.SharesDestinationWithOtherPackages"/> 的调用方
+        /// （解压管线：它决定"目录已存在且非空"要不要让开、其余物要不要按包名分层）
+        /// 必须走这一个，**不许**自己再推一遍落点。
+        /// </para>
+        ///
+        /// <para>
+        /// 用户 2026-09-24 第 13 条之后，"选中对象是文件还是文件夹"也在这里喂给
+        /// <see cref="OutputPlacement.ResolveDestinationDirectory"/>：事实记在
+        /// <see cref="ArchiveTask.SourceSelectionKind"/> / <see cref="ArchiveTask.SourceSelectionRoot"/> 上
+        /// （导入那一刻由 <c>FileScanService</c> 写下）。
+        /// </para>
+        /// </summary>
+        public OutputPlacementResult ResolveOutputPlacement(
+            ArchiveTask task,
+            ExtractOptions options,
+            bool collapseRepeatedFolderLayer = false,
+            bool sourceDirectoryContainsOnlyThisArchive = false,
+            string? volumeGroupBaseName = null)
+        {
             if (task == null)
             {
-                return string.Empty;
+                return new OutputPlacementResult
+                {
+                    Success = false,
+                    Error = OutputPlacementError.EmptySourcePath,
+                    Message = "没有任务，无法判断输出落点"
+                };
             }
 
             options ??= new ExtractOptions();
@@ -238,7 +272,13 @@ namespace ArchiveFixer.Services
              */
             if (!string.IsNullOrWhiteSpace(task.ParentOutputDirectory))
             {
-                return task.ParentOutputDirectory;
+                return new OutputPlacementResult
+                {
+                    Success = true,
+                    DestinationRoot = task.ParentOutputDirectory,
+                    DestinationDirectory = task.ParentOutputDirectory,
+                    Message = "内层包沿用父任务的落点：" + task.ParentOutputDirectory
+                };
             }
 
             string archivePath = task.CurrentPath;
@@ -250,7 +290,12 @@ namespace ArchiveFixer.Services
 
             if (string.IsNullOrWhiteSpace(archivePath))
             {
-                return string.Empty;
+                return new OutputPlacementResult
+                {
+                    Success = false,
+                    Error = OutputPlacementError.EmptySourcePath,
+                    Message = "源包路径为空，无法判断输出落点"
+                };
             }
 
             OutputPlacementMode mode = OutputPlacement.FromLegacyFlags(
@@ -258,14 +303,16 @@ namespace ArchiveFixer.Services
                 options.KeepArchiveNameFolder,
                 options.CustomOutputDirectory);
 
-            OutputPlacementResult placement = OutputPlacement.ResolveDestinationDirectory(
+            return OutputPlacement.ResolveDestinationDirectory(
                 archivePath,
                 mode,
                 options.CustomOutputDirectory,
                 collapseRepeatedFolderLayer,
-                sourceDirectoryContainsOnlyThisArchive);
-
-            return placement.Success ? placement.DestinationDirectory : string.Empty;
+                sourceDirectoryContainsOnlyThisArchive,
+                volumeGroupBaseName,
+                driveExists: null,
+                selectionKind: task.SourceSelectionKind,
+                selectionRoot: task.SourceSelectionRoot);
         }
 
         /// <summary>

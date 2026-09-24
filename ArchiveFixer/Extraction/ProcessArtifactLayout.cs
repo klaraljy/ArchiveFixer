@@ -82,7 +82,7 @@ namespace ArchiveFixer.Extraction
         public string ArchiveBaseName { get; init; } = string.Empty;
 
         /// <summary>
-        /// 目标目录是不是"多个包共用的根"（模式 B <c>SourceDirectoryFlat</c> / 模式 D <c>CustomRootFlat</c>）。
+        /// 目标目录是不是"多个包共用的根"（`OutputPlacementResult.SharesDestinationWithOtherPackages`：
         /// 默认 false：包本来就有自己目录的模式**不再多套一层**（决策 D-10）。
         /// </summary>
         public bool SharedRoot { get; init; }
@@ -286,7 +286,7 @@ namespace ArchiveFixer.Extraction
         ///
         /// <list type="table">
         /// <item><description>包本来就有自己目录（<c>PerArchiveSubfolder</c> / <c>CustomRootPerArchive</c>）→ <c>D\其余物\</c>，例：<c>111\222\其余物\</c></description></item>
-        /// <item><description>多个包共用根（<c>SourceDirectoryFlat</c> / <c>CustomRootFlat</c>）→ <c>D\其余物\包基名\</c>，例：<c>111\其余物\222\</c></description></item>
+        /// <item><description>多个包共用根（"添加文件夹 + 指定位置"那一档）→ <c>D\其余物\包基名\</c>，例：<c>BBB\222\其余物\222\</c></description></item>
         /// </list>
         ///
         /// <para>

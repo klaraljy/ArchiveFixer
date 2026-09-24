@@ -5,28 +5,61 @@ using ArchiveFixer.Helpers;
 namespace ArchiveFixer.Extraction
 {
     /// <summary>
-    /// 输出落点模式（规格 <c>docs/输出与整理模型.md</c> §1.1）。四种互斥。
+    /// 输出的落点模式（规格 <c>docs/输出与整理模型.md</c> §1.1）。**只剩两档**。
     ///
     /// <para>
-    /// <see cref="CustomRootPerArchive"/> 与 <see cref="CustomRootFlat"/> 必须是**两个独立可选项**
-    /// （用户原话："这个也要有单独的文件夹和解压到此目录之分"）。旧的
-    /// "布尔 <c>ExtractToOriginalDirectory</c> + 一个自定义路径"表达不了这四种组合，
-    /// 硬套的结果就是"想直接解到自定义目录"变成了"在自定义目录下再建一个包名文件夹"。
+    /// <b>用户 2026-09-24 第 13 条亲自拍板删掉两档</b>（原话："我们之前不是还有解压到当前目录吗，
+    /// 现在那条删掉了，因为我怕如果 222 里面有很多的子文件夹，我们 111 里面就彻底乱掉了"）：
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>删除 <c>SourceDirectoryFlat</c>（解压到压缩包所在目录 / 摊平到当前目录）→ 迁移到
+    /// <see cref="PerArchiveSubfolder"/>；</description></item>
+    /// <item><description>删除 <c>CustomRootFlat</c>（直接解到指定目录、不建子文件夹）→ 迁移到
+    /// <see cref="CustomRootPerArchive"/>。</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// 剩下的两档 + "选中对象是文件还是文件夹"（<see cref="SourceSelectionKind"/>）一起给出用户要的四条规则：
+    /// </para>
+    /// <list type="table">
+    /// <item><description>文件 <c>111\222.rar</c> + 未指定 → <c>111\222\</c>；</description></item>
+    /// <item><description>文件夹 <c>111\222\</c> + 未指定 → 就在 <c>222\</c> 里面，不新建同名层、不往外扔；</description></item>
+    /// <item><description>文件 <c>222.rar</c> + 指定 <c>BBB</c> → <c>BBB\222\</c>（名字 = 去掉后缀的包名）；</description></item>
+    /// <item><description>文件夹 <c>222\</c> + 指定 <c>BBB</c> → <c>BBB\222\</c>（名字 = 选中的文件夹名）。</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// ⚠ 枚举值**刻意保留 0 与 2**（不重新编号成 0/1）：旧版本、旧配置、序列化过的整数里
+    /// 1 = 摊平到当前目录、3 = 直接解到指定目录 —— 编号一变，那些值会**静默**对应到别的落点。
+    /// 迁移由 <see cref="OutputPlacement.NormalizeLegacyMode"/> 负责。
     /// </para>
     /// </summary>
     public enum OutputPlacementMode
     {
-        /// <summary>同名子文件夹（默认）：<c>111\222.rar</c> → <c>111\222\内容物</c>。WinRAR 式地基，不能少。</summary>
+        /// <summary>同名子文件夹（默认，未指定位置那一档）：<c>111\222.rar</c> → <c>111\222\内容物</c>。</summary>
         PerArchiveSubfolder = 0,
 
-        /// <summary>当前目录：<c>111\222.rar</c> → <c>111\内容物</c>。</summary>
-        SourceDirectoryFlat = 1,
+        /// <summary>指定位置 + 同名子文件夹：<c>&lt;指定位置&gt;\222\内容物</c>。</summary>
+        CustomRootPerArchive = 2
+    }
 
-        /// <summary>自定义位置 · 单独建文件夹：<c>&lt;自定义根&gt;\222\内容物</c>。</summary>
-        CustomRootPerArchive = 2,
+    /// <summary>
+    /// 这次导入时用户选中的是**文件**还是**文件夹**（用户 2026-09-24 第 13 条四条规则的第 1 个维度）。
+    ///
+    /// <para>
+    /// 为什么必须显式记在任务上：用户在"添加文件"里选的是一个个包，在"添加文件夹"里选的是**一个容器**。
+    /// 后者指定位置时，落点用的是**那个文件夹的名字**（<c>BBB\222\</c>），而不是里面每个包各自的名字；
+    /// 未指定位置时则要求产物全部留在所选文件夹**里面**。这两件事光看任务自己的路径是推不出来的
+    /// （任务只是文件夹里的某一个包），所以导入那一刻就把这个事实记下来。
+    /// </para>
+    /// </summary>
+    public enum SourceSelectionKind
+    {
+        /// <summary>用户直接选中的是文件（<c>添加文件…</c> / 拖放单个包）。</summary>
+        File = 0,
 
-        /// <summary>自定义位置 · 直接解到该目录：<c>&lt;自定义根&gt;\内容物</c>。</summary>
-        CustomRootFlat = 3
+        /// <summary>用户选中的是文件夹（<c>添加文件夹…</c>），任务来自这个文件夹里的包。</summary>
+        Folder = 1
     }
 
     /// <summary>
@@ -93,14 +126,35 @@ namespace ArchiveFixer.Extraction
         /// <summary>给用户看的一句话（失败原因 / 落点说明）。</summary>
         public string Message { get; init; } = string.Empty;
 
-        /// <summary>目标根：<c>PerArchiveSubfolder</c>/<c>SourceDirectoryFlat</c> 时是源包所在目录，否则是自定义根。</summary>
+        /// <summary>目标根：未指定位置那一档是源包所在目录，指定位置那一档是自定义根。</summary>
         public string DestinationRoot { get; init; } = string.Empty;
 
-        /// <summary>最终落点目录（规格 §1.2 的 <c>destDir</c>）。</summary>
+        /// <summary>最终落点目录（规格 §1.1 的 <c>destDir</c>）。</summary>
         public string DestinationDirectory { get; init; } = string.Empty;
 
         /// <summary>包基名（已清洗，可直接当文件夹名）。</summary>
         public string ArchiveBaseName { get; init; } = string.Empty;
+
+        /// <summary>最终落点那一层文件夹的名字（就是上面那条规则算出来的"包名"）。</summary>
+        public string PackageFolderName { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 落点那一层用的是**用户选中的文件夹名**（而不是包基名）—— 四条规则里的"文件夹 + 指定位置"。
+        /// </summary>
+        public bool UsesSelectedFolderName { get; init; }
+
+        /// <summary>
+        /// 这个落点目录是**同一次导入里的多个包共用**的（"文件夹 + 指定位置"那一档：
+        /// 文件夹里每个包都落进同一个 <c>BBB\222\</c>）。
+        ///
+        /// <para>
+        /// 调用方靠它决定两件事（都只有这一处判据，别在管线里再推一遍）：
+        /// ① 别的包刚往这个目录里定稿过，**不能**因为"目录已存在且非空"就改名成 <c>222(1)</c>
+        ///    —— 那会把用户要的"都放进 BBB\222\"当场拆开；
+        /// ② 定稿时其余物要按包基名再分一层（决策 D-10 的原判据是"多个包共用根"）。
+        /// </para>
+        /// </summary>
+        public bool SharesDestinationWithOtherPackages { get; init; }
 
         /// <summary>是否命中了场景 B 的"重复一层塌缩"（规格 §3.3）。</summary>
         public bool CollapsedRepeatedFolderLayer { get; init; }
@@ -108,6 +162,11 @@ namespace ArchiveFixer.Extraction
 
     /// <summary>
     /// 输出落点解析（规格 §1，**唯一实现处**；不变量 §6.6：禁止在别处再拼一遍输出路径）。
+    ///
+    /// <para>
+    /// 用户 2026-09-24 第 13 条之后只剩**四条规则**（<c>选文件/选文件夹</c> × <c>未指定/指定位置</c>），
+    /// 全部由 <see cref="ResolveDestinationDirectory"/> 一处实现；界面上再也选不到"摊平"那两档。
+    /// </para>
     ///
     /// <para>
     /// 三条设计约束：
@@ -157,8 +216,8 @@ namespace ArchiveFixer.Extraction
         /// 落点是不是**源包自己所在的那个目录**。
         ///
         /// <para>
-        /// 两种情形会成立：模式 B（<see cref="OutputPlacementMode.SourceDirectoryFlat"/>：解压到压缩包所在目录）
-        /// 与场景 B 塌缩之后（<c>111\222\名字\名字.rar</c> → 落点 <c>111\222\名字</c>）。
+        /// 现在只剩一种情形会成立：场景 B 塌缩之后（<c>111\222\名字\名字.rar</c> → 落点 <c>111\222\名字</c>）。
+        /// 旧版本还有"解压到压缩包所在目录"那一档会走这里，但它已被用户 2026-09-24 第 13 条删除。
         /// </para>
         /// <para>
         /// 为什么需要这个判断：解压管线有一条"输出目录已存在且非空 → 自动改名成 <c>xxx(1)</c>"的规则
@@ -186,18 +245,85 @@ namespace ArchiveFixer.Extraction
             return SafePathHelper.GetFullPathSafe(path);
         }
 
-        /// <summary>是不是"以自定义根为目标"的模式。</summary>
+        /// <summary>
+        /// 是不是"以自定义根为目标"的模式。
+        ///
+        /// ⚠ 先过一遍 <see cref="NormalizeLegacyMode"/>：被删掉的两档（旧编号 1/3）也可能被传进来，
+        /// 不能因为"读到的是旧值"就把它算成源目录那一档。
+        /// </summary>
         public static bool UsesCustomRoot(OutputPlacementMode mode)
         {
-            return mode == OutputPlacementMode.CustomRootPerArchive
-                   || mode == OutputPlacementMode.CustomRootFlat;
+            return NormalizeLegacyMode(mode) == OutputPlacementMode.CustomRootPerArchive;
         }
 
-        /// <summary>是不是"每个包单独建一个文件夹"的模式。</summary>
-        public static bool CreatesPerArchiveFolder(OutputPlacementMode mode)
+        /// <summary>
+        /// 旧枚举值 / 旧枚举名 → 现在这两档（**唯一迁移处**，用户 2026-09-24 第 13 条删掉两档之后）。
+        ///
+        /// <para>
+        /// 为什么要有它：删掉的两档在旧版本里是 1（摊平到当前目录）与 3（直接解到指定目录），
+        /// 枚举名是 <c>SourceDirectoryFlat</c> / <c>CustomRootFlat</c>。任何一个还留着旧值的配置、
+        /// 缓存体或手写的 json 读进来时**不许炸、也不许落到一个没人想过的目录**：
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description><c>SourceDirectoryFlat</c> / <c>1</c> → <see cref="OutputPlacementMode.PerArchiveSubfolder"/>
+        /// （摊平会让源目录乱掉，正是用户删它的理由）；</description></item>
+        /// <item><description><c>CustomRootFlat</c> / <c>3</c> → <see cref="OutputPlacementMode.CustomRootPerArchive"/>
+        /// （指定位置保留，但必须建同名子文件夹）；</description></item>
+        /// <item><description>读不懂的值 → 默认档。</description></item>
+        /// </list>
+        /// </summary>
+        public static OutputPlacementMode NormalizeLegacyMode(OutputPlacementMode mode)
         {
-            return mode == OutputPlacementMode.PerArchiveSubfolder
-                   || mode == OutputPlacementMode.CustomRootPerArchive;
+            return mode switch
+            {
+                OutputPlacementMode.PerArchiveSubfolder => OutputPlacementMode.PerArchiveSubfolder,
+                OutputPlacementMode.CustomRootPerArchive => OutputPlacementMode.CustomRootPerArchive,
+
+                // 旧值 1 = SourceDirectoryFlat（已删除）→ 回到"建同名子文件夹"。
+                (OutputPlacementMode)1 => OutputPlacementMode.PerArchiveSubfolder,
+
+                // 旧值 3 = CustomRootFlat（已删除）→ 保留"指定位置"，但补上同名子文件夹。
+                (OutputPlacementMode)3 => OutputPlacementMode.CustomRootPerArchive,
+
+                _ => OutputPlacementMode.PerArchiveSubfolder
+            };
+        }
+
+        /// <summary>
+        /// 旧枚举名（字符串）→ 现在这两档。空 / 非法 / 认不出的名字一律回落默认档，**不抛异常**。
+        /// </summary>
+        public static OutputPlacementMode ParsePlacementMode(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return OutputPlacementMode.PerArchiveSubfolder;
+            }
+
+            string trimmed = value.Trim();
+
+            // 认不出名字时**先按旧名字迁移**，再看是不是新名字：旧配置里存的正是那两个名字。
+            if (string.Equals(trimmed, "SourceDirectoryFlat", StringComparison.OrdinalIgnoreCase))
+            {
+                return OutputPlacementMode.PerArchiveSubfolder;
+            }
+
+            if (string.Equals(trimmed, "CustomRootFlat", StringComparison.OrdinalIgnoreCase))
+            {
+                return OutputPlacementMode.CustomRootPerArchive;
+            }
+
+            if (Enum.TryParse(trimmed, ignoreCase: true, out OutputPlacementMode parsed) && Enum.IsDefined(parsed))
+            {
+                return NormalizeLegacyMode(parsed);
+            }
+
+            // 纯数字（旧版本可能把它当整数存过）：按旧编号迁移。
+            if (int.TryParse(trimmed, out int numeric))
+            {
+                return NormalizeLegacyMode((OutputPlacementMode)numeric);
+            }
+
+            return OutputPlacementMode.PerArchiveSubfolder;
         }
 
         /// <summary>
@@ -206,37 +332,38 @@ namespace ArchiveFixer.Extraction
         ///
         /// <code>
         /// PerArchiveSubfolder  → (true,  true )
-        /// SourceDirectoryFlat  → (true,  false)
         /// CustomRootPerArchive → (false, true )
-        /// CustomRootFlat       → (false, false)
         /// </code>
         ///
-        /// ⚠️ 这是**单向的投影**：两个布尔带不回自定义根，反推要用
-        /// <see cref="FromLegacyFlags(bool, bool, string?)"/>。四个枚举值在这里互不撞车，
-        /// 所以只要自定义根不丢，往返转换是精确的。
+        /// ⚠ 第二个布尔**永远是 true**（用户 2026-09-24 第 13 条删掉了两档"不建子文件夹"的落点）。
+        /// 它仍然写出来，是为了让设置文件保持"旧版本也读得懂"的形状（回退旧版本不会炸）。
         /// </summary>
         public static (bool ExtractToOriginalDirectory, bool KeepArchiveNameFolder) ToLegacyFlags(OutputPlacementMode mode)
         {
-            bool toOriginalDirectory = !UsesCustomRoot(mode);
-            bool keepArchiveNameFolder = CreatesPerArchiveFolder(mode);
-
-            return (toOriginalDirectory, keepArchiveNameFolder);
+            // 先迁移：旧值 1/3 进来时也要得到"保留的那一档"对应的布尔，别把 3（指定位置）算成源目录。
+            return (!UsesCustomRoot(NormalizeLegacyMode(mode)), true);
         }
 
         /// <summary>
-        /// 旧的两个布尔 + 自定义根 → 新枚举（旧配置迁移，规格 §1.3）。
+        /// 旧的两个布尔 + 自定义根 → 新枚举（**旧配置迁移的唯一实现处**，规格 §1.3）。
         ///
         /// <para>
-        /// 唯一的判断题是"自定义根为空时算什么"。旧代码在这时会落到**程序目录**
-        /// （<c>PathService.BuildOutputPath</c> 的 <c>?? AppBaseDirectory</c>）—— 那是"用户从来没指定过"
-        /// 的兜底，不是用户要的位置，所以这里绝不把它当成一种落点：
-        /// 空根一律回到"源目录家族"（<c>KeepArchiveNameFolder</c> 决定是
-        /// <see cref="OutputPlacementMode.PerArchiveSubfolder"/> 还是 <see cref="OutputPlacementMode.SourceDirectoryFlat"/>）。
-        /// 这也正是规格 §1.3 要求的"`false` + 空根 → <c>PerArchiveSubfolder</c>"。
+        /// 用户 2026-09-24 第 13 条删掉"摊平"两档之后，这里只剩一个判断题：
+        /// **"是不是指定了位置"**（旧代码里就是 <c>ExtractToOriginalDirectory == false</c> + 自定义根非空）。
         /// </para>
+        /// <list type="table">
+        /// <item><description><c>(true, true)</c> → <see cref="OutputPlacementMode.PerArchiveSubfolder"/>；</description></item>
+        /// <item><description><c>(true, false)</c>（旧的"摊平到当前目录"）→ <see cref="OutputPlacementMode.PerArchiveSubfolder"/>；</description></item>
+        /// <item><description><c>(false, true, 根)</c> → <see cref="OutputPlacementMode.CustomRootPerArchive"/>；</description></item>
+        /// <item><description><c>(false, false, 根)</c>（旧的"直接解到指定目录"）→ <see cref="OutputPlacementMode.CustomRootPerArchive"/>；</description></item>
+        /// <item><description>空根 → 源目录家族（<see cref="OutputPlacementMode.PerArchiveSubfolder"/>）——
+        /// 旧代码在这种情形会落到**程序目录**（<c>PathService.BuildOutputPath</c> 的 <c>?? AppBaseDirectory</c>），
+        /// 那是"用户从来没指定过"的兜底，不是一种落点，绝不沿用。</description></item>
+        /// </list>
+        ///
         /// <para>
-        /// <c>ExtractToOriginalDirectory == true</c> 时自定义根本来就不参与运算（旧代码同样忽略它），
-        /// 所以这时传什么根都不影响结果。
+        /// <paramref name="keepArchiveNameFolder"/> 已经**不参与判断**（两档都没了），
+        /// 参数保留只为不改旧调用点的签名 —— 旧配置读进来照样得出新档，绝不抛异常。
         /// </para>
         /// </summary>
         public static OutputPlacementMode FromLegacyFlags(
@@ -244,18 +371,13 @@ namespace ArchiveFixer.Extraction
             bool keepArchiveNameFolder,
             string? customRoot = null)
         {
+            _ = keepArchiveNameFolder;
+
             bool hasCustomRoot = !string.IsNullOrWhiteSpace(customRoot);
 
-            if (!extractToOriginalDirectory && hasCustomRoot)
-            {
-                return keepArchiveNameFolder
-                    ? OutputPlacementMode.CustomRootPerArchive
-                    : OutputPlacementMode.CustomRootFlat;
-            }
-
-            return keepArchiveNameFolder
-                ? OutputPlacementMode.PerArchiveSubfolder
-                : OutputPlacementMode.SourceDirectoryFlat;
+            return !extractToOriginalDirectory && hasCustomRoot
+                ? OutputPlacementMode.CustomRootPerArchive
+                : OutputPlacementMode.PerArchiveSubfolder;
         }
 
         /// <summary>
@@ -305,22 +427,31 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 解析最终落点 <c>destDir</c>（规格 §1.2 公式 + §3.3 场景 B 塌缩）。
+        /// 解析最终落点 <c>destDir</c>（规格 §1.1 的四条规则 + §3.3 场景 B 塌缩）。
         ///
         /// <code>
-        /// destRoot = 模式 ∈ {PerArchiveSubfolder, SourceDirectoryFlat} ? dir(源包) : 自定义根
-        /// destDir  = 模式 ∈ {PerArchiveSubfolder, CustomRootPerArchive}
-        ///              ? destRoot \ SafeName(包基名)
-        ///              : destRoot
+        /// destRoot = 未指定位置 ? dir(源包) : 指定位置
+        /// 包名     = 指定位置 且 选中对象是文件夹 ? SafeName(选中的文件夹名)
+        ///            : SafeName(包基名)          // 分卷组 = 整组基名；伪装后缀/内嵌归档都剥对
+        /// destDir  = destRoot \ 包名              // 两档都建这一层（"摊平"两档已被用户删除）
         /// </code>
+        ///
+        /// <para>
+        /// <b>未指定位置 + 选中文件夹</b>那一条要特别看：这时 <c>destRoot</c> 是**源包自己的目录**
+        /// （它在所选文件夹里面），包名是**各个包自己的基名** —— 于是产物落在 <c>111\222\a\</c>，
+        /// 既没有凭空多出一层 <c>111\222\222\</c>（"不新建"），也没有把内容摊进 <c>222\</c> 或扔到 <c>111\</c>
+        /// （用户原话："我们就在 222 文件夹里面操作，不将东西往外面扔"）。
+        /// 所选文件夹里只有与它同名的那个包时（<c>111\222\222.7z.001</c>），下面的塌缩规则会让产物
+        /// 直接落进 <c>111\222\</c> 本身。
+        /// </para>
         /// </summary>
         /// <param name="sourceArchivePath">源包路径。</param>
-        /// <param name="mode">落点模式。</param>
-        /// <param name="customRoot">自定义根（仅自定义模式用得上）。</param>
+        /// <param name="mode">落点模式（只剩两档）。</param>
+        /// <param name="customRoot">自定义根（仅 <see cref="OutputPlacementMode.CustomRootPerArchive"/> 用得上）。</param>
         /// <param name="collapseRepeatedFolderLayer">
-        /// 场景 B 开关（规格 §3.3，默认开）："包基名 == 其所在目录名"且该目录下只有这一个包时，
+        /// 场景 B 开关（规格 §3.3，默认开）："包名 == 其所在目录名"且该目录下只有这一个包时，
         /// 塌缩掉重复的一层，产物直接落在该包自己的目录里（<c>111\222\名字\内容物</c>）。
-        /// 只在 <see cref="OutputPlacementMode.PerArchiveSubfolder"/> 下有意义 —— 别的模式本来就没有这一层。
+        /// 只在未指定位置那一档有意义 —— 指定位置时"所在目录名"根本不参与运算。
         /// </param>
         /// <param name="sourceDirectoryContainsOnlyThisArchive">
         /// "这个目录下只有这一个包"这个事实**由调用方告知**：
@@ -330,6 +461,13 @@ namespace ArchiveFixer.Extraction
         /// 分卷组基名（<see cref="Detection.VolumeGroupDetector"/> 的结果，如 <c>222.7z</c>）。
         /// 给了就用它替代"从文件名剥分卷标记"这一步 —— 上游已经算过就别再算一遍。
         /// </param>
+        /// <param name="selectionKind">
+        /// 这次导入用户选中的是文件还是文件夹（四条规则的第 1 个维度）。默认"文件"= 最保守的那一档。
+        /// </param>
+        /// <param name="selectionRoot">
+        /// 用户选中的那个根（文件夹选择时是文件夹全路径）。空的文件夹根**不参与运算**，
+        /// 免得把"某次没记全的导入"当成"用户选了一个叫空字符串的文件夹"。
+        /// </param>
         /// <param name="driveExists">盘符存在性探针，见 <see cref="ResolveDestinationRoot"/>。</param>
         public static OutputPlacementResult ResolveDestinationDirectory(
             string? sourceArchivePath,
@@ -338,8 +476,12 @@ namespace ArchiveFixer.Extraction
             bool collapseRepeatedFolderLayer = true,
             bool sourceDirectoryContainsOnlyThisArchive = false,
             string? volumeGroupBaseName = null,
-            Func<string, bool>? driveExists = null)
+            Func<string, bool>? driveExists = null,
+            SourceSelectionKind selectionKind = SourceSelectionKind.File,
+            string? selectionRoot = null)
         {
+            mode = NormalizeLegacyMode(mode);
+
             OutputPlacementResult root = ResolveDestinationRoot(sourceArchivePath, mode, customRoot, driveExists);
 
             if (!root.Success)
@@ -350,19 +492,23 @@ namespace ArchiveFixer.Extraction
             string rawBaseName = ComputeRawBaseName(sourceArchivePath, volumeGroupBaseName);
             string safeBaseName = FileNameHelper.SanitizeFileName(rawBaseName);
 
-            if (!CreatesPerArchiveFolder(mode))
+            /*
+             * "指定位置 + 添加文件夹"：落点那一层用**选中的文件夹名**（用户原话：
+             * "我们就在 BBB 里面创建一个和我们选中文件夹名字相同的子文件夹，然后再里面操作"）。
+             *
+             * 文件夹名取不到（没记下根 / 根是空的）时回落到包基名 —— 宁可多一层"包名"目录，
+             * 也绝不把产物摊进指定位置的根上（那正是被删掉的那一档）。
+             */
+            string selectedFolderName = ResolveSelectedFolderName(selectionKind, selectionRoot);
+            bool useSelectedFolderName = UsesCustomRoot(mode) && selectedFolderName.Length > 0;
+            string packageName = useSelectedFolderName ? selectedFolderName : safeBaseName;
+
+            if (packageName.Length == 0)
             {
-                return new OutputPlacementResult
-                {
-                    Success = true,
-                    DestinationRoot = root.DestinationRoot,
-                    DestinationDirectory = root.DestinationRoot,
-                    ArchiveBaseName = safeBaseName,
-                    Message = "落点：" + root.DestinationRoot
-                };
+                return Failure(OutputPlacementError.InvalidDestinationPath, "目标目录路径拼不出来：" + root.DestinationRoot);
             }
 
-            string perArchiveDirectory = SafeCombine(root.DestinationRoot, safeBaseName);
+            string perArchiveDirectory = SafeCombine(root.DestinationRoot, packageName);
 
             if (perArchiveDirectory.Length == 0)
             {
@@ -372,12 +518,14 @@ namespace ArchiveFixer.Extraction
             /*
              * 场景 B：111\222\名字\名字.rar。
              *
-             * 不塌缩时 destDir = dir(源包) + 包基名 = 111\222\名字\名字，比用户期望的
-             * 111\222\名字\内容物 多出重复的一层。判据是"包基名 == 它所在目录名"，
+             * 不塌缩时 destDir = dir(源包) + 包名 = 111\222\名字\名字，比用户期望的
+             * 111\222\名字\内容物 多出重复的一层。判据是"包名 == 它所在目录名"，
              * 但**还要**目录下只有这一个包 —— 否则同一个目录里两个包的产物会并在一起，
              * 用户再也分不清哪份内容来自哪个包（所以这一条由调用方告知，猜不得）。
              *
              * 塌缩就是把刚算出来的那一层去掉，即 destDir 回到"源包自己的目录"。
+             * ⚠ 用 rawBaseName 比，不拿 selectedFolderName 比：塌缩判的是"包自己的名字"，
+             * 而"添加文件夹 + 指定位置"那种落点跟源包所在目录名没有关系。
              */
             if (collapseRepeatedFolderLayer
                 && mode == OutputPlacementMode.PerArchiveSubfolder
@@ -403,6 +551,7 @@ namespace ArchiveFixer.Extraction
                             DestinationRoot = root.DestinationRoot,
                             DestinationDirectory = collapsed,
                             ArchiveBaseName = safeBaseName,
+                            PackageFolderName = packageName,
                             CollapsedRepeatedFolderLayer = true,
                             Message = $"包名与目录同名，已塌缩重复的一层，落点：{collapsed}"
                         };
@@ -416,6 +565,16 @@ namespace ArchiveFixer.Extraction
                 DestinationRoot = root.DestinationRoot,
                 DestinationDirectory = perArchiveDirectory,
                 ArchiveBaseName = safeBaseName,
+                PackageFolderName = packageName,
+                UsesSelectedFolderName = useSelectedFolderName,
+
+                /*
+                 * "多个包共用这个落点"只在**指定位置 + 添加文件夹**时成立：
+                 * 那个文件夹里可能有好几个包，它们都落进同一个 <c>BBB\222\</c>。
+                 * 其余三档的落点每包一个目录（同名包撞车由既有冲突档处理），不是"共用根"。
+                 */
+                SharesDestinationWithOtherPackages = useSelectedFolderName,
+
                 Message = "落点：" + perArchiveDirectory
             };
         }
@@ -438,6 +597,33 @@ namespace ArchiveFixer.Extraction
         public static string ResolveArchiveBaseName(string? sourceArchivePath, string? volumeGroupBaseName = null)
         {
             return FileNameHelper.SanitizeFileName(ComputeRawBaseName(sourceArchivePath, volumeGroupBaseName));
+        }
+
+        /// <summary>
+        /// "指定位置 + 添加文件夹"那一档落点那一层的名字：**用户选中的那个文件夹的名字**（已清洗）。
+        ///
+        /// <para>
+        /// 拿不到就返回空串（调用方回落到包基名）：这是"没记下这次导入的根"这种缺信息的情形，
+        /// 空串绝不能变成"一个叫空字符串的文件夹"或者"直接摊在根上"。
+        /// 名字清洗照样走既有的 <see cref="FileNameHelper.SanitizeFileName"/>（唯一实现，不新写一套）。
+        /// </para>
+        /// </summary>
+        public static string ResolveSelectedFolderName(SourceSelectionKind selectionKind, string? selectionRoot)
+        {
+            if (selectionKind != SourceSelectionKind.Folder || string.IsNullOrWhiteSpace(selectionRoot))
+            {
+                return string.Empty;
+            }
+
+            string full = SafePathHelper.GetFullPathSafe(selectionRoot);
+
+            if (string.IsNullOrWhiteSpace(full))
+            {
+                return string.Empty;
+            }
+
+            // 用户可能选了 D:\ 这种盘根："末段名"取不到，这时同样回落到包基名。
+            return FileNameHelper.SanitizeFileName(FileNameHelper.GetFileName(full));
         }
 
         /// <summary>清洗前的包基名（场景 B 的"包基名 == 目录名"要用原样名字比，不能拿清洗后的比）。</summary>

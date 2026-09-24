@@ -25,10 +25,15 @@ namespace ArchiveFixer.Storage
     }
 
     /// <summary>
-    /// 一次要落盘的密码列表全貌：条目（含顺序）+ 记住的密码本路径 + 墓碑。
+    /// 一次要落盘的密码列表全貌：条目（含顺序）+ 记住的密码本路径 + 墓碑 + **每条密码的成功次数**。
     ///
     /// <para><b>墓碑</b> = 用户删掉 / 清空过的那些值。启动时把密码本合并回来时会**跳过**它们，
     /// 否则"删掉一条、重启又从 txt 里复活"——那正是用户 2026-09-24 报的那类现象的另一半。</para>
+    ///
+    /// <para><b>成功次数</b>（用户 2026-09-24 第 14 条："密码本里面的优先级差不多就是使用次数的频繁程度"）
+    /// = 这条密码在这台机器上成功解开过多少次。它跟着列表一起加密落盘，用来给同层级的候选排序
+    /// （次数多的排前面；次数相同保持原顺序）。⚠ 空密码（<c>""</c>）不记账：它不是"一条密码"，
+    /// 而是"不需要密码"那一步。</para>
     /// </summary>
     public sealed class PasswordListSnapshot
     {
@@ -37,6 +42,9 @@ namespace ArchiveFixer.Storage
         public List<string> BookPaths { get; set; } = new();
 
         public List<string> Tombstones { get; set; } = new();
+
+        /// <summary>密码值 → 成功次数（明文值，只允许存在于内存与**加密后的**文件里，§8 红线）。</summary>
+        public Dictionary<string, int> SuccessCounts { get; set; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>读记忆的结论。**失败时条目一律为空**，调用方按"没有可用记忆"继续。</summary>
@@ -146,8 +154,28 @@ namespace ArchiveFixer.Storage
         /// </summary>
         public const string ApplicationEntropy = "ArchiveFixer.PasswordList.v1";
 
-        /// <summary>载荷版本号。读到不认识的版本一律当"不是我们的格式"，**绝不猜着解析**。</summary>
-        public const int CurrentVersion = 1;
+        /// <summary>
+        /// 载荷版本号。读到不认识的版本一律当"不是我们的格式"，**绝不猜着解析**。
+        ///
+        /// <para>
+        /// 版本历史：
+        /// <list type="bullet">
+        /// <item><description><b>1</b>：条目 / 密码本路径 / 墓碑。</description></item>
+        /// <item><description><b>2</b>（2026-09-24 第 14 条）：加 <c>SuccessCounts</c>（每条密码的成功次数）。
+        /// 旧文件（v1）**照样读得进来** —— 缺的字段按"没有成功记录"处理；
+        /// 读进来的旧文件下次保存时会自动升成 v2。</description></item>
+        /// </list>
+        /// </para>
+        /// </summary>
+        public const int CurrentVersion = 2;
+
+        /// <summary>
+        /// 还认的最老版本。低于它 = 不是我们的格式（绝不猜着解析）。
+        ///
+        /// <para>为什么不是"只认当前版本"：记忆文件是**用户跨重启的资产**，
+        /// 加一个字段就把它判成"读不懂"，用户看到的是"我的密码列表没了"。</para>
+        /// </summary>
+        public const int OldestSupportedVersion = 1;
 
         private const int CryptProtectUiForbidden = 0x1;
 
@@ -402,14 +430,21 @@ namespace ArchiveFixer.Storage
             };
         }
 
-        private static byte[] BuildPayloadBytes(PasswordListSnapshot snapshot)
+        /// <summary>
+        /// 把快照序列化成载荷字节（**加密之前**的明文 JSON）。
+        ///
+        /// <para><c>internal</c> 是为了让测试能直接验"旧版本载荷读得进来"（见 <see cref="TryParsePayload"/>）：
+        /// 载荷是加密落盘的，测试没法从外面造一份"版本 1"的文件出来，只能在这一层验。</para>
+        /// </summary>
+        internal static byte[] BuildPayloadBytes(PasswordListSnapshot snapshot)
         {
             var payload = new PayloadDto
             {
                 Version = CurrentVersion,
                 Entries = new List<EntryDto>(snapshot.Entries.Count),
                 BookPaths = new List<string>(snapshot.BookPaths),
-                Tombstones = new List<string>(snapshot.Tombstones)
+                Tombstones = new List<string>(snapshot.Tombstones),
+                SuccessCounts = new Dictionary<string, int>(snapshot.SuccessCounts, StringComparer.Ordinal)
             };
 
             foreach (PasswordListEntry entry in snapshot.Entries)
@@ -433,7 +468,14 @@ namespace ArchiveFixer.Storage
             return Encoding.UTF8.GetBytes(json);
         }
 
-        private static PasswordListSnapshot? TryParsePayload(byte[] plain, out string reason)
+        /// <summary>
+        /// 解析载荷（**解密之后**的明文 JSON）。
+        ///
+        /// <para>版本兼容在这里：<see cref="OldestSupportedVersion"/>～<see cref="CurrentVersion"/> 之间的
+        /// 版本都读得进来，缺的新字段按"没有"处理（v1 没有 <c>SuccessCounts</c> → 空表）。</para>
+        /// <para><c>internal</c> 的理由见 <see cref="BuildPayloadBytes"/>。</para>
+        /// </summary>
+        internal static PasswordListSnapshot? TryParsePayload(byte[] plain, out string reason)
         {
             reason = string.Empty;
 
@@ -468,7 +510,7 @@ namespace ArchiveFixer.Storage
                 return null;
             }
 
-            if (payload.Version != CurrentVersion)
+            if (payload.Version < OldestSupportedVersion || payload.Version > CurrentVersion)
             {
                 reason = $"记忆格式版本不认识（{payload.Version}）";
                 return null;
@@ -506,6 +548,20 @@ namespace ArchiveFixer.Storage
                 {
                     snapshot.Tombstones.Add(tombstone);
                 }
+            }
+
+            /*
+             * 成功次数（v2 才有的字段）：v1 的旧文件里没有它 → 反序列化后是 null → 空表。
+             * 空值 / 负数一律不当账（宁可"没有记录"，也不要让它参与排序时把别的条目压下去）。
+             */
+            foreach (KeyValuePair<string, int> pair in payload.SuccessCounts ?? new Dictionary<string, int>())
+            {
+                if (pair.Key == null || pair.Value <= 0)
+                {
+                    continue;
+                }
+
+                snapshot.SuccessCounts[pair.Key] = pair.Value;
             }
 
             return snapshot;
@@ -717,6 +773,9 @@ namespace ArchiveFixer.Storage
             public List<string>? BookPaths { get; set; }
 
             public List<string>? Tombstones { get; set; }
+
+            /// <summary>v2 起：密码值 → 成功次数（旧文件里没有这一项，读出来是 null）。</summary>
+            public Dictionary<string, int>? SuccessCounts { get; set; }
         }
 
         private sealed class EntryDto

@@ -12,7 +12,7 @@ namespace ArchiveFixer.Tests
     /// <summary>
     /// UI v2 的回归测试：
     /// ① 无 UI 宿主下 <see cref="DialogService"/> 必须"写日志 + 返回默认值"，绝不抛异常、绝不死等；
-    /// ② 设置窗口的"输出位置四选一"必须严格映射到原来那两个布尔（不新增设置项）。
+    /// ② 设置窗口的"输出位置二选一"必须严格映射到原来那两个布尔（不新增设置项）。
     /// </summary>
     public class UiV2Tests
     {
@@ -142,14 +142,28 @@ namespace ArchiveFixer.Tests
             Assert.Null(captured);
         }
 
-        // ------------------------------------------------------------------ ② 输出位置四选一
+        // ------------------------------------------------------------------ ② 输出位置二选一
 
         [Theory]
-        [InlineData(true, true, OutputPlacementOption.ArchiveNamedSubfolder)]
-        [InlineData(true, false, OutputPlacementOption.SourceDirectory)]
-        [InlineData(false, true, OutputPlacementOption.CustomNamedSubfolder)]
-        [InlineData(false, false, OutputPlacementOption.CustomFlat)]
-        public void 两个布尔到四选一的映射(
+        [InlineData(true, OutputPlacementOption.ArchiveNamedSubfolder)]
+        [InlineData(false, OutputPlacementOption.CustomNamedSubfolder)]
+        public void 两个布尔到二选一的映射(
+            bool extractToOriginalDirectory,
+            OutputPlacementOption expected)
+        {
+            Assert.Equal(
+                expected,
+                SettingsViewModel.ResolveOutputPlacement(extractToOriginalDirectory, keepArchiveNameFolder: true));
+        }
+
+        /// <summary>
+        /// 用户 2026-09-24 第 13 条删掉了"摊平"两档：旧的 <c>(true,false)</c> / <c>(false,false)</c>
+        /// 读进来必须仍然落在**保留的那两档**上，界面上再也选不出第三、第四种。
+        /// </summary>
+        [Theory]
+        [InlineData(true, false, OutputPlacementOption.ArchiveNamedSubfolder)]
+        [InlineData(false, false, OutputPlacementOption.CustomNamedSubfolder)]
+        public void 旧配置里被删掉的两档_按保留的两档显示(
             bool extractToOriginalDirectory,
             bool keepArchiveNameFolder,
             OutputPlacementOption expected)
@@ -164,12 +178,6 @@ namespace ArchiveFixer.Tests
         {
             SettingsViewModel viewModel = CreateSettingsViewModel();
 
-            viewModel.OutputPlacement = OutputPlacementOption.CustomFlat;
-
-            Assert.False(viewModel.Settings.ExtractToOriginalDirectory);
-            Assert.False(viewModel.Settings.KeepArchiveNameFolder);
-            Assert.True(viewModel.IsCustomOutputEnabled);
-
             viewModel.OutputPlacement = OutputPlacementOption.CustomNamedSubfolder;
 
             Assert.False(viewModel.Settings.ExtractToOriginalDirectory);
@@ -178,7 +186,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 选中压缩包所在位置档位_路径输入置灰不适用()
+        public void 选中压缩包同目录档位_路径输入置灰不适用()
         {
             SettingsViewModel viewModel = CreateSettingsViewModel();
 
@@ -186,12 +194,6 @@ namespace ArchiveFixer.Tests
 
             Assert.True(viewModel.Settings.ExtractToOriginalDirectory);
             Assert.True(viewModel.Settings.KeepArchiveNameFolder);
-            Assert.False(viewModel.IsCustomOutputEnabled);
-
-            viewModel.OutputPlacement = OutputPlacementOption.SourceDirectory;
-
-            Assert.True(viewModel.Settings.ExtractToOriginalDirectory);
-            Assert.False(viewModel.Settings.KeepArchiveNameFolder);
             Assert.False(viewModel.IsCustomOutputEnabled);
         }
 
@@ -203,23 +205,17 @@ namespace ArchiveFixer.Tests
             viewModel.OutputPlacement = OutputPlacementOption.ArchiveNamedSubfolder;
             Assert.Contains("111\\222\\内容物", viewModel.OutputPlacementSummary, StringComparison.Ordinal);
 
-            viewModel.OutputPlacement = OutputPlacementOption.SourceDirectory;
-            Assert.Contains("111\\内容物", viewModel.OutputPlacementSummary, StringComparison.Ordinal);
-
             viewModel.OutputPlacement = OutputPlacementOption.CustomNamedSubfolder;
             viewModel.CustomOutputDirectory = @"D:\输出";
             Assert.Contains(@"D:\输出\222\内容物", viewModel.OutputPlacementSummary, StringComparison.Ordinal);
-
-            viewModel.OutputPlacement = OutputPlacementOption.CustomFlat;
-            Assert.Contains(@"D:\输出\内容物", viewModel.OutputPlacementSummary, StringComparison.Ordinal);
         }
 
         [Fact]
-        public void 指定位置为空时摘要说明暂按压缩包所在目录处理()
+        public void 指定位置为空时摘要说明尚未选择()
         {
             SettingsViewModel viewModel = CreateSettingsViewModel();
 
-            viewModel.OutputPlacement = OutputPlacementOption.CustomFlat;
+            viewModel.OutputPlacement = OutputPlacementOption.CustomNamedSubfolder;
             viewModel.CustomOutputDirectory = string.Empty;
 
             Assert.Contains("尚未选择", viewModel.OutputPlacementSummary, StringComparison.Ordinal);
@@ -230,7 +226,7 @@ namespace ArchiveFixer.Tests
         {
             SettingsViewModel viewModel = CreateSettingsViewModel();
 
-            viewModel.OutputPlacement = OutputPlacementOption.CustomFlat;
+            viewModel.OutputPlacement = OutputPlacementOption.CustomNamedSubfolder;
 
             AppSettings defaults = new SettingsService().CreateDefault();
             viewModel.Settings = defaults;
@@ -240,6 +236,8 @@ namespace ArchiveFixer.Tests
                     defaults.ExtractToOriginalDirectory,
                     defaults.KeepArchiveNameFolder),
                 viewModel.OutputPlacement);
+
+            Assert.Equal(OutputPlacementOption.ArchiveNamedSubfolder, viewModel.OutputPlacement);
         }
 
         private static SettingsViewModel CreateSettingsViewModel()

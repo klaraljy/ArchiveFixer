@@ -325,12 +325,12 @@ namespace ArchiveFixer.Tests
                 (plan.ProcessArtifactMoves[0].From, plan.ProcessArtifactMoves[0].To));
         }
 
-        // ── 决策 D-2：模式 B 的其余物要按包基名隔离 ────────────────────────────
+        // ── 决策 D-10：共用根的落点要按包基名隔离其余物 ────────────────────────
 
         [Fact]
-        public void Plan_SourceDirectoryFlat_NestsProcessArtifactsUnderArchiveName()
+        public void Plan_SharedOutputRoot_NestsProcessArtifactsUnderArchiveName()
         {
-            // 当前目录模式：一个源目录里几十上百个包共用它 → 其余物必须按包名隔离。
+            // 共用根（"添加文件夹 + 指定位置"那一档：文件夹里的包都落进 BBB\222\）→ 其余物按包名隔离。
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { File(@"out\666\a.mp4"), Artifact(@"inner.7z", 10) },
                 @"C:\111",
@@ -338,7 +338,7 @@ namespace ArchiveFixer.Tests
                 "222",
                 "out",
                 Staging,
-                OutputPlacementMode.SourceDirectoryFlat);
+                sharedOutputRoot: true);
 
             Assert.Equal(@"C:\111\其余物\222", plan.ProcessArtifactDirectory);
             Assert.Equal(
@@ -349,7 +349,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void Plan_PerArchiveSubfolder_KeepsProcessArtifactsDirectlyUnderProcessFolder()
         {
-            // 同名子文件夹模式：destDir 本身就是"一个包一个目录"，不用再套一层。
+            // 每包一个目录的落点：destDir 本身就是"一个包一个目录"，不用再套一层。
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { File(@"out\666\a.mp4"), Artifact(@"inner.7z", 10) },
                 Dest,
@@ -357,21 +357,21 @@ namespace ArchiveFixer.Tests
                 "222",
                 "out",
                 Staging,
-                OutputPlacementMode.PerArchiveSubfolder);
+                sharedOutputRoot: false);
 
             Assert.Equal(@"C:\out\222\其余物", plan.ProcessArtifactDirectory);
             Assert.Equal(@"C:\out\222\其余物\inner.7z", plan.ProcessArtifactMoves[0].To);
         }
 
         [Fact]
-        public void Plan_SourceDirectoryFlatWithoutArchiveName_WarnsAboutSharedProcessFolder()
+        public void Plan_SharedOutputRootWithoutArchiveName_WarnsAboutSharedProcessFolder()
         {
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { File(@"out\666\a.mp4"), Artifact(@"inner.7z", 10) },
                 @"C:\111",
                 stagingRoot: Staging,
                 contentRoot: "out",
-                placementMode: OutputPlacementMode.SourceDirectoryFlat);
+                sharedOutputRoot: true);
 
             Assert.Equal(@"C:\111\其余物", plan.ProcessArtifactDirectory);
             Assert.Contains(plan.Warnings, warning => warning.Contains("其余物"));

@@ -197,23 +197,16 @@ namespace ArchiveFixer.Views
 
         private void ApplySeed(OneClickRunOptions seed)
         {
-            switch (seed.PlacementMode)
+            // 用户 2026-09-24 第 13 条之后只剩两档；旧快照里的两档由 NormalizeLegacyMode 迁过来。
+            OutputPlacementMode mode = OutputPlacement.NormalizeLegacyMode(seed.PlacementMode);
+
+            if (mode == OutputPlacementMode.CustomRootPerArchive)
             {
-                case OutputPlacementMode.SourceDirectoryFlat:
-                    PlacementSourceDirectoryOption.IsChecked = true;
-                    break;
-
-                case OutputPlacementMode.CustomRootPerArchive:
-                    PlacementCustomPerArchiveOption.IsChecked = true;
-                    break;
-
-                case OutputPlacementMode.CustomRootFlat:
-                    PlacementCustomFlatOption.IsChecked = true;
-                    break;
-
-                default:
-                    PlacementPerArchiveOption.IsChecked = true;
-                    break;
+                PlacementCustomPerArchiveOption.IsChecked = true;
+            }
+            else
+            {
+                PlacementPerArchiveOption.IsChecked = true;
             }
 
             CustomRootBox.Text = seed.CustomRoot ?? string.Empty;
@@ -241,19 +234,9 @@ namespace ArchiveFixer.Views
         {
             get
             {
-                if (PlacementSourceDirectoryOption.IsChecked == true)
-                {
-                    return OutputPlacementMode.SourceDirectoryFlat;
-                }
-
                 if (PlacementCustomPerArchiveOption.IsChecked == true)
                 {
                     return OutputPlacementMode.CustomRootPerArchive;
-                }
-
-                if (PlacementCustomFlatOption.IsChecked == true)
-                {
-                    return OutputPlacementMode.CustomRootFlat;
                 }
 
                 return OutputPlacementMode.PerArchiveSubfolder;
@@ -292,14 +275,14 @@ namespace ArchiveFixer.Views
             BrowseButton.IsEnabled = customMode;
 
             CustomRootHint.Text = customMode
-                ? "这两个模式会把内容物解到你选的目录里；目录不存在会自动创建。"
-                : "只对上面两种「指定位置」模式生效；当前这一档用不到它。";
+                ? "这一档会把内容物解到你选的目录里（再建一层同名子文件夹；选中文件夹时用该文件夹的名字）；目录不存在会自动创建。"
+                : "只对上面「解压到指定位置」那一档生效；当前这一档用不到它。";
 
             StartButton.IsEnabled = placementValid;
 
             ValidationText.Text = placementValid
                 ? string.Empty
-                : "选了「指定位置」但还没填路径：点「浏览…」选一个目录，或改用上面两种模式。";
+                : "选了「指定位置」但还没填路径：点「浏览…」选一个目录，或改用上面那一档。";
 
             Summary = current.Describe();
         }

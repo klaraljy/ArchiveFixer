@@ -18,68 +18,212 @@ namespace ArchiveFixer.Tests
         private static readonly Func<string, bool> DriveExists = _ => true;
         private static readonly Func<string, bool> DriveMissing = _ => false;
 
-        // ── §1.1 四种模式各自的落点 ─────────────────────────────────────────────
+        // ── 用户 2026-09-24 第 13 条：落点四条规则 ─────────────────────────────
+        //
+        // （选中的是文件还是文件夹）×（有没有指定位置），四条组合各钉一条**完整路径**。
+        // 用户原话："我们解压绝对不能将原来的文件夹给弄混乱"。
 
         [Fact]
-        public void ResolveDestinationDirectory_PerArchiveSubfolder_PutsContentInSameNameFolder()
+        public void 规则一_选中文件_未指定位置_落同目录同名子文件夹()
         {
             OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
                 @"C:\111\222.rar", OutputPlacementMode.PerArchiveSubfolder);
 
             Assert.True(result.Success);
-            Assert.Equal(OutputPlacementError.None, result.Error);
             Assert.Equal(@"C:\111", result.DestinationRoot);
             Assert.Equal(@"C:\111\222", result.DestinationDirectory);
             Assert.Equal("222", result.ArchiveBaseName);
+            Assert.Equal("222", result.PackageFolderName);
+            Assert.False(result.UsesSelectedFolderName);
+            Assert.False(result.SharesDestinationWithOtherPackages);
             Assert.False(result.CollapsedRepeatedFolderLayer);
         }
 
         [Fact]
-        public void ResolveDestinationDirectory_SourceDirectoryFlat_PutsContentInSourceDirectory()
+        public void 规则二_选中文件夹_未指定位置_产物全部留在该文件夹里面()
         {
-            OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
-                @"C:\111\222.rar", OutputPlacementMode.SourceDirectoryFlat);
+            // 用户在「添加文件夹」里选了 C:\111\222，这个文件夹里有好几个包。
+            // 产物必须落在 222 **里面**：既不凭空多出 111\222\222 这一层，也绝不扔到 111\ 去。
+            OutputPlacementResult first = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\222\a.rar",
+                OutputPlacementMode.PerArchiveSubfolder,
+                selectionKind: SourceSelectionKind.Folder,
+                selectionRoot: @"C:\111\222");
 
-            Assert.True(result.Success);
-            Assert.Equal(@"C:\111", result.DestinationRoot);
-            Assert.Equal(@"C:\111", result.DestinationDirectory);
-            Assert.Equal("222", result.ArchiveBaseName);
+            OutputPlacementResult second = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\222\b.7z.001",
+                OutputPlacementMode.PerArchiveSubfolder,
+                selectionKind: SourceSelectionKind.Folder,
+                selectionRoot: @"C:\111\222");
+
+            Assert.Equal(@"C:\111\222\a", first.DestinationDirectory);
+            Assert.Equal(@"C:\111\222\b", second.DestinationDirectory);
+            Assert.StartsWith(@"C:\111\222\", first.DestinationDirectory, StringComparison.Ordinal);
+            Assert.DoesNotContain(@"C:\111\222\222", first.DestinationDirectory, StringComparison.Ordinal);
+            Assert.False(first.UsesSelectedFolderName);
+
+            /*
+             * 所选文件夹里只有与它同名的那个包（111\222\222.7z.001）时，塌缩规则让产物直接落进 222 本身
+             * —— 这正是用户说的"我们就在 222 文件夹里面操作"。
+             */
+            OutputPlacementResult onlyOne = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\222\222.7z.001",
+                OutputPlacementMode.PerArchiveSubfolder,
+                collapseRepeatedFolderLayer: true,
+                sourceDirectoryContainsOnlyThisArchive: true,
+                selectionKind: SourceSelectionKind.Folder,
+                selectionRoot: @"C:\111\222");
+
+            Assert.True(onlyOne.CollapsedRepeatedFolderLayer);
+            Assert.Equal(@"C:\111\222", onlyOne.DestinationDirectory);
         }
 
         [Fact]
-        public void ResolveDestinationDirectory_CustomRootPerArchive_AddsArchiveFolder()
+        public void 规则三_选中文件_指定位置_名字是去掉后缀的包名()
         {
             OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
-                @"C:\111\222.rar", OutputPlacementMode.CustomRootPerArchive, @"D:\out", driveExists: DriveExists);
+                @"C:\111\222.rar",
+                OutputPlacementMode.CustomRootPerArchive,
+                @"D:\BBB",
+                driveExists: DriveExists);
 
             Assert.True(result.Success);
-            Assert.Equal(@"D:\out", result.DestinationRoot);
-            Assert.Equal(@"D:\out\222", result.DestinationDirectory);
+            Assert.Equal(@"D:\BBB", result.DestinationRoot);
+            Assert.Equal(@"D:\BBB\222", result.DestinationDirectory);
+            Assert.Equal("222", result.PackageFolderName);
+            Assert.False(result.UsesSelectedFolderName);
+            Assert.False(result.SharesDestinationWithOtherPackages);
         }
 
         [Fact]
-        public void ResolveDestinationDirectory_CustomRootFlat_DoesNotAddArchiveFolder()
+        public void 规则四_选中文件夹_指定位置_名字是选中文件夹的名字()
         {
-            OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
-                @"C:\111\222.rar", OutputPlacementMode.CustomRootFlat, @"D:\out", driveExists: DriveExists);
+            // 用户在「添加文件夹」里选了 C:\111\222，指定位置 D:\BBB →
+            // 先在 BBB 里建一个和选中文件夹同名的子文件夹，再在里面操作。
+            OutputPlacementResult first = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\222\a.rar",
+                OutputPlacementMode.CustomRootPerArchive,
+                @"D:\BBB",
+                driveExists: DriveExists,
+                selectionKind: SourceSelectionKind.Folder,
+                selectionRoot: @"C:\111\222");
 
-            Assert.True(result.Success);
-            Assert.Equal(@"D:\out", result.DestinationRoot);
-            Assert.Equal(@"D:\out", result.DestinationDirectory);
+            OutputPlacementResult second = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\222\b.7z.001",
+                OutputPlacementMode.CustomRootPerArchive,
+                @"D:\BBB",
+                driveExists: DriveExists,
+                selectionKind: SourceSelectionKind.Folder,
+                selectionRoot: @"C:\111\222");
+
+            Assert.Equal(@"D:\BBB\222", first.DestinationDirectory);
+            Assert.Equal("222", first.PackageFolderName);
+            Assert.True(first.UsesSelectedFolderName);
+
+            // 同一个文件夹里的包都落进同一层（共用根）：管线靠这条事实让开"目录已存在就改名"。
+            Assert.True(first.SharesDestinationWithOtherPackages);
+            Assert.Equal(first.DestinationDirectory, second.DestinationDirectory);
+
+            // 选中文件夹但根没记下（缺信息）→ 回落包基名，绝不摊在 BBB 根上。
+            OutputPlacementResult noRoot = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\222\a.rar",
+                OutputPlacementMode.CustomRootPerArchive,
+                @"D:\BBB",
+                driveExists: DriveExists,
+                selectionKind: SourceSelectionKind.Folder,
+                selectionRoot: null);
+
+            Assert.Equal(@"D:\BBB\a", noRoot.DestinationDirectory);
+            Assert.False(noRoot.UsesSelectedFolderName);
+            Assert.False(noRoot.SharesDestinationWithOtherPackages);
         }
 
-        // "单独建文件夹"和"直接解到此目录"必须是两个独立可选项，差别就在这一层。
         [Fact]
-        public void ResolveDestinationDirectory_CustomRoot_TwoModesDifferByExactlyOneLayer()
+        public void 规则命名_分卷组与内嵌归档都要取对名字()
         {
-            OutputPlacementResult perArchive = OutputPlacement.ResolveDestinationDirectory(
-                @"C:\111\222.rar", OutputPlacementMode.CustomRootPerArchive, @"D:\out", driveExists: DriveExists);
+            // 分卷组：222.7z.001 → 222（不是 222.7z），组里每一卷算出同一条落点。
+            Assert.Equal(
+                @"C:\111\222",
+                OutputPlacement.ResolveDestinationDirectory(
+                    @"C:\111\222.7z.001", OutputPlacementMode.PerArchiveSubfolder).DestinationDirectory);
 
-            OutputPlacementResult flat = OutputPlacement.ResolveDestinationDirectory(
-                @"C:\111\222.rar", OutputPlacementMode.CustomRootFlat, @"D:\out", driveExists: DriveExists);
+            Assert.Equal(
+                @"D:\BBB\222",
+                OutputPlacement.ResolveDestinationDirectory(
+                    @"C:\111\222.7z.001",
+                    OutputPlacementMode.CustomRootPerArchive,
+                    @"D:\BBB",
+                    driveExists: DriveExists).DestinationDirectory);
 
-            Assert.NotEqual(perArchive.DestinationDirectory, flat.DestinationDirectory);
-            Assert.Equal(flat.DestinationDirectory + @"\222", perArchive.DestinationDirectory);
+            // 内嵌归档（双面文件，伪装成视频后缀）：222.mp4 → 222。
+            Assert.Equal(
+                @"C:\111\222",
+                OutputPlacement.ResolveDestinationDirectory(
+                    @"C:\111\222.mp4", OutputPlacementMode.PerArchiveSubfolder).DestinationDirectory);
+
+            Assert.Equal(
+                @"D:\BBB\222",
+                OutputPlacement.ResolveDestinationDirectory(
+                    @"C:\111\222.mp4",
+                    OutputPlacementMode.CustomRootPerArchive,
+                    @"D:\BBB",
+                    driveExists: DriveExists).DestinationDirectory);
+
+            // 选中文件夹时那一层是文件夹名，跟文件夹里是分卷还是双面文件无关。
+            Assert.Equal(
+                @"D:\BBB\222",
+                OutputPlacement.ResolveDestinationDirectory(
+                    @"C:\111\222\222.7z.001",
+                    OutputPlacementMode.CustomRootPerArchive,
+                    @"D:\BBB",
+                    driveExists: DriveExists,
+                    selectionKind: SourceSelectionKind.Folder,
+                    selectionRoot: @"C:\111\222").DestinationDirectory);
+        }
+
+        // "解压到当前目录（摊平）"与"直接解到指定目录（不建子文件夹）"两档已被用户 2026-09-24 第 13 条删除：
+        // 旧值（枚举编号 1 / 3、旧名字）读进来必须**迁移到剩下的两档**，而且不抛异常。
+        [Theory]
+        [InlineData(1, OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData(3, OutputPlacementMode.CustomRootPerArchive)]
+        [InlineData(0, OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData(2, OutputPlacementMode.CustomRootPerArchive)]
+        [InlineData(99, OutputPlacementMode.PerArchiveSubfolder)]
+        public void 旧枚举值迁到新档(int legacyValue, OutputPlacementMode expected)
+        {
+            Assert.Equal(expected, OutputPlacement.NormalizeLegacyMode((OutputPlacementMode)legacyValue));
+        }
+
+        [Theory]
+        [InlineData("SourceDirectoryFlat", OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData("CustomRootFlat", OutputPlacementMode.CustomRootPerArchive)]
+        [InlineData("PerArchiveSubfolder", OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData("CustomRootPerArchive", OutputPlacementMode.CustomRootPerArchive)]
+        [InlineData("1", OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData("3", OutputPlacementMode.CustomRootPerArchive)]
+        [InlineData("", OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData("   ", OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData("胡说八道", OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData(null, OutputPlacementMode.PerArchiveSubfolder)]
+        public void 旧枚举名迁到新档(string? legacyName, OutputPlacementMode expected)
+        {
+            Assert.Equal(expected, OutputPlacement.ParsePlacementMode(legacyName));
+        }
+
+        [Fact]
+        public void 旧枚举值传进落点解析_也按新档算_不抛异常()
+        {
+            // 摊平那两档的编号即使漏到落点解析里，也必须落到"建同名子文件夹"上，
+            // 绝不落成 111\ 或 D:\out 根上（那正是用户删掉它们的理由）。
+            OutputPlacementResult legacyFlat = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\222.rar", (OutputPlacementMode)1);
+
+            Assert.Equal(@"C:\111\222", legacyFlat.DestinationDirectory);
+
+            OutputPlacementResult legacyCustomFlat = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\222.rar", (OutputPlacementMode)3, @"D:\out", driveExists: DriveExists);
+
+            Assert.Equal(@"D:\out\222", legacyCustomFlat.DestinationDirectory);
         }
 
         // ── 包基名：分卷组取整个组，不是 222.7z ────────────────────────────────
@@ -215,7 +359,7 @@ namespace ArchiveFixer.Tests
         public void ResolveDestinationDirectory_MissingDrive_ReportsMissingDrive()
         {
             OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
-                @"C:\111\222.rar", OutputPlacementMode.CustomRootFlat, @"Z:\out", driveExists: DriveMissing);
+                @"C:\111\222.rar", OutputPlacementMode.CustomRootPerArchive, @"Z:\out", driveExists: DriveMissing);
 
             Assert.False(result.Success);
             Assert.Equal(OutputPlacementError.CustomRootDriveMissing, result.Error);
@@ -230,7 +374,7 @@ namespace ArchiveFixer.Tests
             string customRoot = Path.Combine(driveRoot, "ArchiveFixerOutputPlacementProbe");
 
             OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
-                @"C:\111\222.rar", OutputPlacementMode.CustomRootFlat, customRoot);
+                @"C:\111\222.rar", OutputPlacementMode.CustomRootPerArchive, customRoot);
 
             Assert.True(result.Success);
         }
@@ -380,10 +524,8 @@ namespace ArchiveFixer.Tests
 
         [Theory]
         [InlineData(OutputPlacementMode.PerArchiveSubfolder, true, true)]
-        [InlineData(OutputPlacementMode.SourceDirectoryFlat, true, false)]
         [InlineData(OutputPlacementMode.CustomRootPerArchive, false, true)]
-        [InlineData(OutputPlacementMode.CustomRootFlat, false, false)]
-        public void ToLegacyFlags_MapsFourModes(
+        public void ToLegacyFlags_MapsRetainedModes(
             OutputPlacementMode mode,
             bool expectedExtractToOriginalDirectory,
             bool expectedKeepArchiveNameFolder)
@@ -396,15 +538,18 @@ namespace ArchiveFixer.Tests
 
         [Theory]
         [InlineData(true, true, @"D:\out", OutputPlacementMode.PerArchiveSubfolder)]
-        [InlineData(true, false, @"D:\out", OutputPlacementMode.SourceDirectoryFlat)]
         [InlineData(false, true, @"D:\out", OutputPlacementMode.CustomRootPerArchive)]
-        [InlineData(false, false, @"D:\out", OutputPlacementMode.CustomRootFlat)]
+
+        // 被删掉的两档（旧配置里就是这两种组合）→ 迁移到剩下的两档，读旧 appsettings.json 不炸。
+        [InlineData(true, false, @"D:\out", OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData(false, false, @"D:\out", OutputPlacementMode.CustomRootPerArchive)]
 
         // 空自定义根 → 源目录家族（绝不把旧代码"落到程序目录"的兜底当成一种落点）。
         [InlineData(false, true, null, OutputPlacementMode.PerArchiveSubfolder)]
         [InlineData(false, true, "", OutputPlacementMode.PerArchiveSubfolder)]
         [InlineData(false, true, "   ", OutputPlacementMode.PerArchiveSubfolder)]
-        [InlineData(false, false, null, OutputPlacementMode.SourceDirectoryFlat)]
+        [InlineData(false, false, null, OutputPlacementMode.PerArchiveSubfolder)]
+        [InlineData(false, false, "", OutputPlacementMode.PerArchiveSubfolder)]
         public void FromLegacyFlags_MapsOldConfiguration(
             bool extractToOriginalDirectory,
             bool keepArchiveNameFolder,
@@ -418,9 +563,7 @@ namespace ArchiveFixer.Tests
 
         [Theory]
         [InlineData(OutputPlacementMode.PerArchiveSubfolder)]
-        [InlineData(OutputPlacementMode.SourceDirectoryFlat)]
         [InlineData(OutputPlacementMode.CustomRootPerArchive)]
-        [InlineData(OutputPlacementMode.CustomRootFlat)]
         public void LegacyFlags_RoundTripIsExactWhenCustomRootIsKept(OutputPlacementMode mode)
         {
             (bool extractToOriginalDirectory, bool keepArchiveNameFolder) = OutputPlacement.ToLegacyFlags(mode);

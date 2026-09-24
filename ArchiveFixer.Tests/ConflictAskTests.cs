@@ -338,16 +338,17 @@ namespace ArchiveFixer.Tests
                 OnConflictAsync = (_, _) => Task.FromResult<ConflictDecision?>(ConflictDecision.Once(ConflictChoice.Overwrite))
             };
 
-            // 模式 B「解压到压缩包所在目录」：落点就是源目录，所以上面那次"输出目录已存在"不成立
-            // （那条规则对源目录让开，见 ExtractionCoordinator 里的说明），冲突要留到定稿那一步才出现。
+            // 落点就是源目录（场景 B 塌缩：src\pack\pack.7z → src\pack），
+            // 所以上面那次"输出目录已存在"不成立（那条规则对源目录让开，见 ExtractionCoordinator 的说明），
+            // 冲突要留到定稿那一步才出现。
             Harness harness = CreateHarness(dialog, settings =>
             {
                 settings.ConflictAction = ConflictActions.Ask;
                 settings.ExtractToOriginalDirectory = true;
-                settings.KeepArchiveNameFolder = false;
+                settings.KeepArchiveNameFolder = true;
             });
 
-            string source = CreateSourceFile("pack.7z");
+            string source = CreateCollapsingSourceFile("pack");
             string sourceDirectory = Path.GetDirectoryName(source)!;
 
             // 源目录里已经有一个同名文件（重跑一次、上次留下的产物都会这样）。
@@ -405,10 +406,10 @@ namespace ArchiveFixer.Tests
             {
                 settings.ConflictAction = ConflictActions.Ask;
                 settings.ExtractToOriginalDirectory = true;
-                settings.KeepArchiveNameFolder = false;
+                settings.KeepArchiveNameFolder = true;
             });
 
-            string source = CreateSourceFile("pack.7z");
+            string source = CreateCollapsingSourceFile("pack");
             string sourceDirectory = Path.GetDirectoryName(source)!;
             string existing = Path.Combine(sourceDirectory, "content.txt");
 
@@ -474,10 +475,10 @@ namespace ArchiveFixer.Tests
             {
                 settings.ConflictAction = ConflictActions.Ask;
                 settings.ExtractToOriginalDirectory = true;
-                settings.KeepArchiveNameFolder = false;
+                settings.KeepArchiveNameFolder = true;
             });
 
-            string source = CreateSourceFile("pack.7z");
+            string source = CreateCollapsingSourceFile("pack");
             string sourceDirectory = Path.GetDirectoryName(source)!;
             string existing = Path.Combine(sourceDirectory, "content.txt");
 
@@ -805,6 +806,27 @@ namespace ArchiveFixer.Tests
             Directory.CreateDirectory(directory);
 
             string path = Path.Combine(directory, fileName);
+            File.WriteAllText(path, "not a real archive - the engine is faked in these tests");
+            return path;
+        }
+
+        /// <summary>
+        /// 造一个**落点就是它自己所在目录**的源包：<c>src\pack\pack.7z</c>（场景 B 塌缩，
+        /// 规格 §3.3）。定稿阶段的同名冲突只在这种形状下才露面 ——
+        /// "输出目录已存在且非空就改名"那条规则对源目录让开（见 ExtractionCoordinator 的说明）。
+        ///
+        /// <para>
+        /// ⚠ 2026-09-24 改：以前这里用 <c>ExtractToOriginalDirectory=true + KeepArchiveNameFolder=false</c>
+        /// （"解压到压缩包所在目录"）来制造"落点 == 源目录"。用户第 13 条把那两档删掉之后，
+        /// 同一个现场改用**塌缩**来造 —— 它是保留下来、且真的会落到源目录的唯一路径。
+        /// </para>
+        /// </summary>
+        private string CreateCollapsingSourceFile(string packageName)
+        {
+            string directory = Path.Combine(_root, "src", packageName);
+            Directory.CreateDirectory(directory);
+
+            string path = Path.Combine(directory, packageName + ".7z");
             File.WriteAllText(path, "not a real archive - the engine is faked in these tests");
             return path;
         }

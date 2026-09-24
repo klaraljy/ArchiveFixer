@@ -11,12 +11,12 @@ namespace ArchiveFixer.Tests
     ///
     /// 三条主线：
     /// ① 目录名 = <c>其余物</c>，且**旧名 <c>过程物</c> 仍然被认**（决策 D-8：老版本留下的目录要能清掉）；
-    /// ② 四种落点模式的目录公式（决策 D-10）：包本来就有自己目录的模式**不再多套一层**，
+    /// ② 其余物目录公式（决策 D-10）：每包一个目录的落点**不再多套一层**，
     ///    多个包共用同一个输出根的模式才按包基名分层；
     /// ③ 内容物那一层正好也叫「其余物」时的兜底（改用「其余物(1)」）。
     ///
     /// 公式的**唯一实现处**是 <see cref="ProcessArtifactLayout"/>：本文件既直接测它，
-    /// 也通过 <see cref="ResultFinalizer.Plan"/> 把四种模式的真实落点钉死（两条路必须是同一个答案）。
+    /// 也通过 <see cref="ResultFinalizer.Plan"/> 把两种情形的真实落点钉死（两条路必须是同一个答案）。
     /// </summary>
     public class RestDirectoryLayoutTests : IDisposable
     {
@@ -126,12 +126,12 @@ namespace ArchiveFixer.Tests
                 ProcessArtifactLayout.ResolveArtifactDirectory(@"C:\111\其余物"));
         }
 
-        // ---------- ② 四种落点模式的目录公式（D-10） ----------
+        // ---------- ② 其余物目录公式（D-10） ----------
 
         [Fact]
-        public void 目录公式_模式A_同名子文件夹_其余物在包目录下()
+        public void 目录公式_每包一个目录_其余物在包目录下()
         {
-            // PerArchiveSubfolder：destDir 本身就是"一个包一个目录" → destDir\其余物\，不再分一层。
+            // 每包一个目录：destDir 本身就是"一个包一个目录" → destDir\其余物\，不再分一层。
             string directory = ProcessArtifactLayout.ResolveArtifactDirectory(
                 @"C:\111\222",
                 "222",
@@ -141,9 +141,9 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 目录公式_模式B_解压到当前目录_其余物按包名分层()
+        public void 目录公式_共用根_其余物按包名分层()
         {
-            // SourceDirectoryFlat：一个源目录里几十上百个包共用它 → 其余物\包基名\。
+            // 共用根（同一次导入里的包都落进同一层）→ 其余物\包基名\。
             string directory = ProcessArtifactLayout.ResolveArtifactDirectory(
                 @"C:\111",
                 "222.7z.001",
@@ -157,7 +157,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 目录公式_模式C_自定义根单独建文件夹_其余物在包目录下()
+        public void 目录公式_指定位置每包一个目录_其余物在包目录下()
         {
             string directory = ProcessArtifactLayout.ResolveArtifactDirectory(
                 @"C:\root\222",
@@ -168,7 +168,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 目录公式_模式D_自定义根直接解到该目录_其余物按包名分层()
+        public void 目录公式_指定位置共用根_其余物按包名分层()
         {
             string directory = ProcessArtifactLayout.ResolveArtifactDirectory(
                 @"C:\root",
@@ -192,9 +192,9 @@ namespace ArchiveFixer.Tests
 
         // ---------- ②' 同一套公式在定稿计划里的真实落点 ----------
 
-        /// <summary>模式 A：同名子文件夹（默认档）。</summary>
+        /// <summary>每包一个目录（默认档）。</summary>
         [Fact]
-        public void 定稿落点_模式A_其余物落在包自己那一个目录下()
+        public void 定稿落点_每包一个目录_其余物落在包自己那一个目录下()
         {
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { StagedFile(@"out\666\a.mp4"), StagedArtifact(@"inner.7z", 10) },
@@ -203,15 +203,15 @@ namespace ArchiveFixer.Tests
                 "222",
                 "out",
                 Staging,
-                OutputPlacementMode.PerArchiveSubfolder);
+                sharedOutputRoot: false);
 
             Assert.Equal(@"C:\111\222\其余物", plan.ProcessArtifactDirectory);
             Assert.Equal(@"C:\111\222\其余物\inner.7z", plan.ProcessArtifactMoves[0].To);
         }
 
-        /// <summary>模式 B：解压到压缩包所在目录（多个包共用一个根）。</summary>
+        /// <summary>共用根：同一次导入里的包都落进同一层（"添加文件夹 + 指定位置"）。</summary>
         [Fact]
-        public void 定稿落点_模式B_其余物按包基名分层()
+        public void 定稿落点_共用根_其余物按包基名分层()
         {
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { StagedFile(@"out\666\a.mp4"), StagedArtifact(@"inner.7z", 10) },
@@ -220,15 +220,15 @@ namespace ArchiveFixer.Tests
                 "222",
                 "out",
                 Staging,
-                OutputPlacementMode.SourceDirectoryFlat);
+                sharedOutputRoot: true);
 
             Assert.Equal(@"C:\111\其余物\222", plan.ProcessArtifactDirectory);
             Assert.Equal(@"C:\111\其余物\222\inner.7z", plan.ProcessArtifactMoves[0].To);
         }
 
-        /// <summary>模式 C：自定义位置 + 单独建文件夹（一个包一个目录）。</summary>
+        /// <summary>指定位置 + 每个包各一个目录。</summary>
         [Fact]
-        public void 定稿落点_模式C_其余物落在包自己那一个目录下()
+        public void 定稿落点_指定位置每包一个目录_其余物落在包自己那一个目录下()
         {
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { StagedFile(@"out\666\a.mp4"), StagedArtifact(@"inner.7z", 10) },
@@ -237,15 +237,15 @@ namespace ArchiveFixer.Tests
                 "222",
                 "out",
                 Staging,
-                OutputPlacementMode.CustomRootPerArchive);
+                sharedOutputRoot: false);
 
             Assert.Equal(@"C:\root\222\其余物", plan.ProcessArtifactDirectory);
             Assert.Equal(@"C:\root\222\其余物\inner.7z", plan.ProcessArtifactMoves[0].To);
         }
 
-        /// <summary>模式 D：自定义位置 + 直接解到该目录（多个包共用一个根）。</summary>
+        /// <summary>指定位置 + 共用根（同一次导入里的包都落进同一层）。</summary>
         [Fact]
-        public void 定稿落点_模式D_其余物按包基名分层()
+        public void 定稿落点_指定位置共用根_其余物按包基名分层()
         {
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { StagedFile(@"out\666\a.mp4"), StagedArtifact(@"inner.7z", 10) },
@@ -254,7 +254,7 @@ namespace ArchiveFixer.Tests
                 "222",
                 "out",
                 Staging,
-                OutputPlacementMode.CustomRootFlat);
+                sharedOutputRoot: true);
 
             Assert.Equal(@"C:\root\其余物\222", plan.ProcessArtifactDirectory);
             Assert.Equal(@"C:\root\其余物\222\inner.7z", plan.ProcessArtifactMoves[0].To);
@@ -262,14 +262,14 @@ namespace ArchiveFixer.Tests
 
         /// <summary>共用根但拿不到包基名：退回集中一处，并且**必须**留下提醒（不许静默）。</summary>
         [Fact]
-        public void 定稿落点_模式D拿不到包基名时退回集中一处并提醒()
+        public void 定稿落点_共用根拿不到包基名时退回集中一处并提醒()
         {
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { StagedFile(@"out\666\a.mp4"), StagedArtifact(@"inner.7z", 10) },
                 @"C:\root",
                 stagingRoot: Staging,
                 contentRoot: "out",
-                placementMode: OutputPlacementMode.CustomRootFlat);
+                sharedOutputRoot: true);
 
             Assert.Equal(@"C:\root\其余物", plan.ProcessArtifactDirectory);
             Assert.Contains(plan.Warnings, warning => warning.Contains("其余物"));

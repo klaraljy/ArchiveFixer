@@ -14,26 +14,23 @@ using System.Windows.Input;
 namespace ArchiveFixer.ViewModels
 {
     /// <summary>
-    /// 输出位置：四种互斥的落点。
+    /// 输出位置：**两档互斥**（用户 2026-09-24 第 13 条删掉了"摊平"那两档）。
     ///
-    /// 为什么不直接摆两个复选框：产品里"落到哪"本来就是四选一，
-    /// 用「解压到原目录」+「保留同名文件夹」两个独立开关表达，
-    /// 用户得自己在脑子里做组合，还很容易选出想要的那一种（用户原话"根本看不懂输出的哪"）。
-    /// 这里把它还原成四选一，落到设置里仍然是**原来那两个布尔**，不新增设置项。
+    /// <para>
+    /// 为什么不直接摆一个复选框：产品里"落到哪"本来就是二选一，
+    /// 落到设置里仍然是**原来那两个布尔**（不新增设置项）。
+    /// 旧版本的四选一里有两档已被用户亲手删除（解压到当前目录 / 直接解到指定目录），
+    /// 界面上再也选不到它们；旧配置里剩下的那两个布尔组合由
+    /// <see cref="ArchiveFixer.Extraction.OutputPlacement.FromLegacyFlags"/> 迁移到这两档。
+    /// </para>
     /// </summary>
     public enum OutputPlacementOption
     {
-        /// <summary>解压到以压缩包名命名的子文件夹（111\222.rar → 111\222\内容物）。默认。</summary>
+        /// <summary>以包名命名的子文件夹（111\222.rar → 111\222\内容物）。默认。</summary>
         ArchiveNamedSubfolder,
 
-        /// <summary>解压到压缩包所在目录（111\222.rar → 111\内容物）。</summary>
-        SourceDirectory,
-
-        /// <summary>解压到指定位置，并建立同名子文件夹（→ 333\222\内容物）。</summary>
-        CustomNamedSubfolder,
-
-        /// <summary>解压到指定位置，直接放在该目录下（→ 333\内容物）。</summary>
-        CustomFlat
+        /// <summary>指定位置 + 同名子文件夹（→ 333\222\内容物；选中文件夹时用该文件夹的名字）。</summary>
+        CustomNamedSubfolder
     }
 
     /// <summary>
@@ -115,7 +112,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 输出位置（四选一）。读写的就是设置里那两个布尔，没有新增设置项。
+        /// 输出位置（**二选一**）。读写的就是设置里那两个布尔，没有新增设置项。
         /// </summary>
         public OutputPlacementOption OutputPlacement
         {
@@ -787,8 +784,8 @@ namespace ArchiveFixer.ViewModels
                 Settings.CustomOutputDirectory = folder;
                 Settings.ExtractToOriginalDirectory = false;
 
-                // 选了自定义目录 = 切到"解压到指定位置"那一档；
-                // 保留用户原来对"要不要同名子文件夹"的选择（KeepArchiveNameFolder 不动）。
+                // 选了自定义目录 = 切到"指定位置 + 同名子文件夹"那一档（只剩这一档用得上路径）。
+                Settings.KeepArchiveNameFolder = true;
                 OnPropertyChanged(nameof(Settings));
                 OnPropertyChanged(nameof(CustomOutputDirectory));
                 RaiseOutputPlacementChanged();
@@ -802,48 +799,31 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 两个布尔 ↔ 四选一的唯一映射处。
+        /// 两个布尔 ↔ 两档的**唯一映射处**（用户 2026-09-24 第 13 条之后只剩两档）。
+        ///
+        /// <para>
+        /// 唯一的判断题是 <c>ExtractToOriginalDirectory</c>（是不是"指定了位置"）。
+        /// <c>KeepArchiveNameFolder</c> 已经**不参与判断**（两档都建同名子文件夹）——
+        /// 旧的"摊平"组合（<c>true,false</c> / <c>false,false</c>）由设置层的
+        /// <see cref="AppSettings.Normalize"/> 迁移掉，界面上再也选不出来。
+        /// </para>
         /// </summary>
         public static OutputPlacementOption ResolveOutputPlacement(
             bool extractToOriginalDirectory,
             bool keepArchiveNameFolder)
         {
-            if (extractToOriginalDirectory)
-            {
-                return keepArchiveNameFolder
-                    ? OutputPlacementOption.ArchiveNamedSubfolder
-                    : OutputPlacementOption.SourceDirectory;
-            }
+            _ = keepArchiveNameFolder;
 
-            return keepArchiveNameFolder
-                ? OutputPlacementOption.CustomNamedSubfolder
-                : OutputPlacementOption.CustomFlat;
+            return extractToOriginalDirectory
+                ? OutputPlacementOption.ArchiveNamedSubfolder
+                : OutputPlacementOption.CustomNamedSubfolder;
         }
 
         private static void ApplyOutputPlacement(AppSettings settings, OutputPlacementOption option)
         {
-            switch (option)
-            {
-                case OutputPlacementOption.SourceDirectory:
-                    settings.ExtractToOriginalDirectory = true;
-                    settings.KeepArchiveNameFolder = false;
-                    break;
-
-                case OutputPlacementOption.CustomNamedSubfolder:
-                    settings.ExtractToOriginalDirectory = false;
-                    settings.KeepArchiveNameFolder = true;
-                    break;
-
-                case OutputPlacementOption.CustomFlat:
-                    settings.ExtractToOriginalDirectory = false;
-                    settings.KeepArchiveNameFolder = false;
-                    break;
-
-                default:
-                    settings.ExtractToOriginalDirectory = true;
-                    settings.KeepArchiveNameFolder = true;
-                    break;
-            }
+            // 落盘仍是那两个布尔（旧版本也读得懂），但第二个**永远是 true**：没有"不建子文件夹"的档了。
+            settings.ExtractToOriginalDirectory = option != OutputPlacementOption.CustomNamedSubfolder;
+            settings.KeepArchiveNameFolder = true;
         }
 
         private void RaiseOutputPlacementChanged()
@@ -1119,7 +1099,7 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 选择结果归集的目标目录。
-        /// 这里**不**动"解压到压缩包所在目录"开关 —— 归集是解压之后的一步，
+        /// 这里**不**动落点开关 —— 归集是解压之后的一步，
         /// 和"解压到哪里"是两件事，顺手改掉会让用户莫名其妙地换了输出位置。
         /// </summary>
         private void SelectCollectTargetDirectory()

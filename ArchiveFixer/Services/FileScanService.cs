@@ -1,3 +1,4 @@
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using System;
@@ -76,9 +77,22 @@ namespace ArchiveFixer.Services
                         {
                             List<ArchiveTask> folderTasks = ScanFolder(path, options, cancellationToken);
 
+                            /*
+                             * 用户选中的是**文件夹**：把这件事记在每一个任务上（用户 2026-09-24 第 13 条）。
+                             *
+                             * 为什么必须在这里记：文件夹里的包各自成任务，之后只看任务路径是推不出
+                             * "用户选的是一个容器"的。落点四条规则里有两条要靠它：
+                             * · 指定位置时落点用**这个文件夹的名字**（BBB\222\）；
+                             * · 未指定位置时产物必须留在这个文件夹里面（不新建同名层、不往外扔）。
+                             */
+                            string folderRoot = SafePathHelper.GetFullPathSafe(path);
+
                             foreach (ArchiveTask task in folderTasks)
                             {
                                 cancellationToken.ThrowIfCancellationRequested();
+
+                                task.SourceSelectionKind = SourceSelectionKind.Folder;
+                                task.SourceSelectionRoot = folderRoot;
 
                                 string fullPath = SafePathHelper.GetFullPathSafe(task.CurrentPath);
 

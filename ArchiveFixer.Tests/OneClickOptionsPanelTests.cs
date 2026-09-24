@@ -68,9 +68,11 @@ namespace ArchiveFixer.Tests
         /// </summary>
         [Theory]
         [InlineData(OutputPlacementMode.PerArchiveSubfolder)]
-        [InlineData(OutputPlacementMode.SourceDirectoryFlat)]
         [InlineData(OutputPlacementMode.CustomRootPerArchive)]
-        [InlineData(OutputPlacementMode.CustomRootFlat)]
+
+        // 被删掉的两档的旧编号也一起走一遍：面板 → ExtractOptions → 落点这条链上不许有第二处判断。
+        [InlineData((OutputPlacementMode)1)]
+        [InlineData((OutputPlacementMode)3)]
         public void 面板选的落点_与OutputPlacement唯一实现算出同一条路径(OutputPlacementMode mode)
         {
             string customRoot = Path.Combine(_root, "custom");
@@ -106,7 +108,7 @@ namespace ArchiveFixer.Tests
         {
             var snapshot = new OneClickRunOptions
             {
-                PlacementMode = OutputPlacementMode.CustomRootFlat,
+                PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                 CustomRoot = "   "
             };
 
@@ -246,7 +248,7 @@ namespace ArchiveFixer.Tests
 
                 return OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
                 {
-                    PlacementMode = OutputPlacementMode.CustomRootFlat,
+                    PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                     CustomRoot = flatRoot,
                     TerminalLayout = TerminalLayoutMode.UseArchiveName,
                     SourceHandling = SourceHandlingMode.KeepInPlace,
@@ -296,7 +298,7 @@ namespace ArchiveFixer.Tests
 
             harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
             {
-                PlacementMode = OutputPlacementMode.CustomRootFlat,
+                PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                 CustomRoot = flatRoot,
                 TerminalLayout = TerminalLayoutMode.UseArchiveName,
                 SourceHandling = SourceHandlingMode.KeepInPlace,
@@ -312,7 +314,7 @@ namespace ArchiveFixer.Tests
             AppSettings reloaded = new SettingsService(harness.PathService).Load();
 
             Assert.False(reloaded.ExtractToOriginalDirectory);
-            Assert.False(reloaded.KeepArchiveNameFolder);
+            Assert.True(reloaded.KeepArchiveNameFolder);
             Assert.Equal(flatRoot, reloaded.CustomOutputDirectory);
             Assert.Equal("UseArchiveName", reloaded.TerminalLayoutMode);
             Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), reloaded.SourceHandling);
@@ -343,7 +345,7 @@ namespace ArchiveFixer.Tests
                 prompts++;
                 return OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
                 {
-                    PlacementMode = OutputPlacementMode.CustomRootFlat,
+                    PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                     CustomRoot = flatRoot,
                     SourceHandling = SourceHandlingMode.KeepInPlace
                 });
@@ -376,7 +378,7 @@ namespace ArchiveFixer.Tests
 
                 return OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
                 {
-                    PlacementMode = OutputPlacementMode.CustomRootFlat,
+                    PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                     CustomRoot = flatRoot,
                     SourceHandling = SourceHandlingMode.KeepInPlace,
                     SuppressPanelNextTime = true
@@ -434,7 +436,7 @@ namespace ArchiveFixer.Tests
 
             harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
             {
-                PlacementMode = OutputPlacementMode.CustomRootFlat,
+                PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                 CustomRoot = flatRoot,
                 TerminalLayout = TerminalLayoutMode.UseArchiveName,
                 SourceHandling = SourceHandlingMode.KeepInPlace

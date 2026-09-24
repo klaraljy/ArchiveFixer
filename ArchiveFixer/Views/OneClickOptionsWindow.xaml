@@ -77,11 +77,11 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,0">
             <StackPanel>
 
-                <!-- ==================== 本次落点（四选一） ==================== -->
+                <!-- ==================== 本次落点（二选一） ==================== -->
                 <GroupBox Header="本次落点">
                     <StackPanel>
                         <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,0,0,8"
-                                   Text="四选一，互斥。默认取设置里的当前值；改这里不会写回设置。" />
+                                   Text="二选一，互斥。默认取设置里的当前值；改这里不会写回设置。" />
 
                         <RadioButton x:Name="PlacementPerArchiveOption"
                                      x:FieldModifier="public"
@@ -93,33 +93,13 @@
                             </StackPanel>
                         </RadioButton>
 
-                        <RadioButton x:Name="PlacementSourceDirectoryOption"
-                                     x:FieldModifier="public"
-                                     GroupName="Placement"
-                                     Checked="Placement_Checked">
-                            <StackPanel>
-                                <TextBlock Text="解压到压缩包所在目录" Style="{StaticResource BodyTextStyle}" />
-                                <TextBlock Text="111\222.rar → 111\内容物（产物直接落在包旁边）" Style="{StaticResource HintTextStyle}" />
-                            </StackPanel>
-                        </RadioButton>
-
                         <RadioButton x:Name="PlacementCustomPerArchiveOption"
                                      x:FieldModifier="public"
                                      GroupName="Placement"
                                      Checked="Placement_Checked">
                             <StackPanel>
                                 <TextBlock Text="解压到指定位置，并建立同名子文件夹" Style="{StaticResource BodyTextStyle}" />
-                                <TextBlock Text="111\222.rar → 333\222\内容物（每个包各占一个文件夹）" Style="{StaticResource HintTextStyle}" />
-                            </StackPanel>
-                        </RadioButton>
-
-                        <RadioButton x:Name="PlacementCustomFlatOption"
-                                     x:FieldModifier="public"
-                                     GroupName="Placement"
-                                     Checked="Placement_Checked">
-                            <StackPanel>
-                                <TextBlock Text="解压到指定位置，直接放在该目录下" Style="{StaticResource BodyTextStyle}" />
-                                <TextBlock Text="111\222.rar → 333\内容物（所有包的内容物摊在同一个目录里）" Style="{StaticResource HintTextStyle}" />
+                                <TextBlock Text="111\222.rar → 333\222\内容物（选中文件夹时用该文件夹的名字：333\222\内容物）" Style="{StaticResource HintTextStyle}" />
                             </StackPanel>
                         </RadioButton>
                     </StackPanel>
@@ -141,14 +121,14 @@
                             <TextBox x:Name="CustomRootBox"
                                      x:FieldModifier="public"
                                      TextChanged="CustomRootBox_TextChanged"
-                                     ToolTip="只对上面两种「指定位置」模式生效" />
+                                     ToolTip="只对上面「解压到指定位置」那一档生效" />
                         </DockPanel>
 
                         <TextBlock x:Name="CustomRootHint"
                                      x:FieldModifier="public"
                                    Style="{StaticResource HintTextStyle}"
                                    Margin="0,6,0,0"
-                                   Text="只对上面两种「指定位置」模式生效；选另外两种模式时这里留着不影响结果。" />
+                                   Text="只对上面「解压到指定位置」那一档生效；选另一档时这里留着不影响结果。" />
                     </StackPanel>
                 </GroupBox>
 

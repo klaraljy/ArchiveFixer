@@ -36,7 +36,7 @@
           和隐式样式（WPF 隐式样式不合并，会把 App.xaml 那份整个顶掉，于是同一类按钮在主窗口
           和对话框里手感不同）；
         · 「输出到：输入框 + 选择」换成只读的"当前输出位置"摘要 + 「改…」，
-          输出位置的设置只有设置窗口一处入口（四选一），主窗口不再有第二个选择按钮。
+          输出位置的设置只有设置窗口一处入口（二选一），主窗口不再有第二个选择按钮。
     -->
 
     <DockPanel Margin="12">
@@ -175,7 +175,7 @@
                                     MinWidth="56"
                                     Style="{StaticResource ToolbarButtonStyle}"
                                     Margin="10,0,0,0"
-                                    ToolTip="打开设置窗口的「输出位置」（四选一）"
+                                    ToolTip="打开设置窗口的「输出位置」（二选一）"
                                     Command="{Binding OpenSettingsCommand}" />
 
                             <TextBlock TextTrimming="CharacterEllipsis"
