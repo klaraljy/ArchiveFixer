@@ -273,7 +273,15 @@ namespace ArchiveFixer.Tests
                  * 它和上面那些一样：界面上有这一格，代码里就**必须**真的读它
                  * （ExtractionCoordinator.ConfirmBatchRemindersAsync 的第一道判断）。
                  */
-                "RemindBeforeExtract"
+                "RemindBeforeExtract",
+
+                /*
+                 * 2026-09-24 第 15 / 17 条补的两个开关：
+                 * · RemindJunkAfterImport —— 导入文件夹后就提醒无用物（ScanCoordinator 真的读它）；
+                 * · SkipOneClickConfirm   —— 一键处理不再弹确认框（OneClickCoordinator 真的读它）。
+                 * 两个都必须在界面上有"再打开"的入口，否则勾一次就再也回不来了。
+                 */
+                "RemindJunkAfterImport", "SkipOneClickConfirm"
             };
 
             foreach (string name in appSettingsBound)

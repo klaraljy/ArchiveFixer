@@ -672,6 +672,32 @@ namespace ArchiveFixer.Models
         /// <summary>一个都没勾时点「移除勾选的」。</summary>
         public const string RemoveCheckedTasksNoneText = "没有勾选任何任务，没有可移除的。";
 
+        /// <summary>③「清理与删除」页那个开关的文案（第 15 条：导入后就提醒无用物）。</summary>
+        public const string SettingsRemindJunkAfterImportLabel = "导入文件夹后提醒一次「疑似无用物」";
+
+        /// <summary>它的说明（默认开；关掉 = 导入后一次都不提醒，判据与扫描都不跑）。</summary>
+        public const string SettingsRemindJunkAfterImportHint =
+            "默认开：每次选完文件夹就扫一遍源目录，把打包者常带的说明 / 网址 / 工具列出来，"
+            + "并可以一键把它们从任务列表里去掉（**程序对这些文件一个都不会动**：不删、不改名、不搬走）。"
+            + "关掉 = 导入后完全不提醒。";
+
+        /// <summary>③ 页「工作区残留」那一组的标题。</summary>
+        public const string WorkspaceLeftoverGroupHeader = "工作区残留（失败 / 取消留下的中间产物）";
+
+        /// <summary>③ 页「工作区残留」那一组的说明（为什么以前只写日志、为什么程序不自动删）。</summary>
+        public const string WorkspaceLeftoverGroupHint =
+            "失败 / 取消 / 部分完成的任务会把中间产物留在工作区（那是那批唯一解出来的一份，"
+            + "所以程序**不会自动删**）。这里列出它们占了多少空间，确认之后可以一次清掉 —— "
+            + "只删工作区根目录下的那些任务目录，日志、密码、设置一律不碰。";
+
+        /// <summary>② 「解压方式」页那个开关的文案（第 17 条：一键处理的那一个确认框可关）。</summary>
+        public const string SettingsSkipOneClickConfirmLabel = "一键处理前不再弹确认框（直接按当前设置开始）";
+
+        /// <summary>它的说明。</summary>
+        public const string SettingsSkipOneClickConfirmHint =
+            "默认关（每次都弹一个确认框，正文是「内容物会生成在什么地方」+「其余物是否自动删除」）。"
+            + "勾上之后一键处理直接开始，一个框都不弹；这里可以随时取消勾选，把确认框要回来。";
+
         // ================================================================
         // 打包（⑤「打包」选项卡）
         // ================================================================

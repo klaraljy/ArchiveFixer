@@ -115,7 +115,7 @@
             </GroupBox>
 
             <!-- ==================== 解压前的提醒 ==================== -->
-            <GroupBox Header="解压前的提醒">
+            <GroupBox Header="提醒">
                 <StackPanel>
                     <CheckBox Content="{x:Static models:StatusText.SettingsRemindBeforeExtractLabel}"
                               IsChecked="{Binding SettingsEditor.Settings.RemindBeforeExtract, Mode=TwoWay}"
@@ -125,6 +125,51 @@
                                Margin="22,4,0,0"
                                TextWrapping="Wrap"
                                Text="{x:Static models:StatusText.SettingsRemindBeforeExtractHint}" />
+
+                    <!--
+                        第 15 条：导入文件夹后**立刻**提醒一次无用物（与上面那条解压前的提醒是两件事：
+                        这一条管"选完文件夹就说"，上面那条管"动手解压前再说一次"，两个开关各自可关）。
+                    -->
+                    <CheckBox Margin="0,10,0,0"
+                              Content="{x:Static models:StatusText.SettingsRemindJunkAfterImportLabel}"
+                              IsChecked="{Binding SettingsEditor.Settings.RemindJunkAfterImport, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.SettingsRemindJunkAfterImportHint}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="22,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.SettingsRemindJunkAfterImportHint}" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 工作区残留（第 22 条） ==================== -->
+            <GroupBox Header="{x:Static models:StatusText.WorkspaceLeftoverGroupHeader}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.WorkspaceLeftoverGroupHint}" />
+
+                    <!-- 有残留时才显示这一行（几个 + 共多少），没有就整块不出现 -->
+                    <TextBlock Margin="0,8,0,0"
+                               FontWeight="SemiBold"
+                               TextWrapping="Wrap"
+                               Text="{Binding WorkspaceLeftoverBanner}"
+                               Visibility="{Binding HasWorkspaceLeftovers, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="清理工作区…"
+                                MinWidth="112"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                ToolTip="列出每个残留目录的体积与文件数，二次确认之后删掉（只动工作区根目录下的那些任务目录）"
+                                Command="{Binding ClearWorkspaceLeftoversCommand}" />
+
+                        <Button Content="打开工作区目录"
+                                MinWidth="124"
+                                Margin="8,0,0,0"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                ToolTip="在资源管理器里看一眼那些残留（程序不会自动删它们）"
+                                Command="{Binding OpenWorkDirectoryCommand}" />
+                    </WrapPanel>
                 </StackPanel>
             </GroupBox>
         </StackPanel>

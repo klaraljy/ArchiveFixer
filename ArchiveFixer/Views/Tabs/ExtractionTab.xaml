@@ -172,7 +172,21 @@
             <!-- ==================== 解压前与完成后 ==================== -->
             <GroupBox Header="解压前与完成后">
                 <StackPanel>
+                    <!--
+                        第 17 条：一键处理的那**一个**确认框可以关掉（用户原话："这个可以选中以后不弹出"）。
+                        确认框里那个勾选项写的就是这一项 —— 这里是它的"再打开"入口。
+                    -->
+                    <CheckBox Content="{x:Static models:StatusText.SettingsSkipOneClickConfirmLabel}"
+                              IsChecked="{Binding SettingsEditor.Settings.SkipOneClickConfirm, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.SettingsSkipOneClickConfirmHint}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="22,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.SettingsSkipOneClickConfirmHint}" />
+
                     <CheckBox Content="解压前测试完整性"
+                              Margin="0,10,0,0"
                               IsChecked="{Binding SettingsEditor.Settings.TestBeforeExtract, Mode=TwoWay}" />
 
                     <CheckBox Content="定稿完成后在资源管理器里打开输出目录"

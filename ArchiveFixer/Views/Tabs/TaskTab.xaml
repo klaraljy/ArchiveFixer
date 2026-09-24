@@ -82,6 +82,29 @@
                             ToolTip="勾上的取消、没勾的勾上（Ctrl+I）"
                             Command="{Binding InvertTaskSelectionCommand}" />
 
+                    <!--
+                        第 15 条："列表要能删无用物"。只动列表，源文件不动 ——
+                        所以它摆在勾选那三个按钮旁边，语气也是普通的（不是红色危险按钮）。
+                    -->
+                    <Button Content="移除勾选的"
+                            MinWidth="88"
+                            Margin="0,0,12,0"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            ToolTip="把勾选的任务从列表里去掉（源文件、输出目录、日志一个字节都不动；移除错了再添加一次就回来）"
+                            Command="{Binding RemoveCheckedTasksCommand}" />
+
+                    <!--
+                        第 16 条追加：上一批撞到 10 层上限时，这一颗才出现（HasPendingContinuation）。
+                        它复用一键处理本身 —— 剩下的内层包在上批结束时已经加进列表并勾好了。
+                    -->
+                    <Button Content="{Binding ContinueOneClickButtonText}"
+                            MinWidth="150"
+                            Margin="0,0,8,0"
+                            FontWeight="SemiBold"
+                            ToolTip="接着把上批剩下的内层包解下去（每批最多 10 层）"
+                            Visibility="{Binding HasPendingContinuation, Converter={StaticResource BoolToVisibilityConverter}}"
+                            Command="{Binding ContinueOneClickCommand}" />
+
                     <!-- 忙的时候才出现：空闲时是两个永远按不动的灰按钮，占位又误导 -->
                     <Button Content="停止后续"
                             Margin="0,0,8,0"
@@ -474,7 +497,19 @@
 
         <!-- ============ 汇总区 ============ -->
         <Border Grid.Row="6" Style="{StaticResource CardStyle}" Padding="12,8" Margin="0,8,0,0">
-            <WrapPanel VerticalAlignment="Center">
+            <StackPanel>
+                <!--
+                    第 16 条追加：撞到层数上限时这一行必须出现（到顶不许静默停下）——
+                    文案由 PendingContinuationText 统一给出（几个没解 + 点哪里继续）。
+                -->
+                <TextBlock Text="{Binding PendingContinuationText}"
+                           Margin="0,0,0,6"
+                           FontWeight="SemiBold"
+                           TextWrapping="Wrap"
+                           Foreground="{StaticResource DangerTextBrush}"
+                           Visibility="{Binding HasPendingContinuation, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                <WrapPanel VerticalAlignment="Center">
                 <TextBlock Text="汇总："
                            Style="{StaticResource CardTitleTextStyle}"
                            Margin="0,0,10,0"
@@ -526,7 +561,8 @@
 
                 <TextBlock Text="其他失败：" Style="{StaticResource StatLabelTextStyle}" />
                 <TextBlock Text="{Binding Summary.OtherFailedCount}" Style="{StaticResource StatValueTextStyle}" />
-            </WrapPanel>
+                </WrapPanel>
+            </StackPanel>
         </Border>
     </Grid>
 </UserControl>

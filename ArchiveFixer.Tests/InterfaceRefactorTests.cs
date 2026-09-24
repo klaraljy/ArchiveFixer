@@ -317,10 +317,16 @@ namespace ArchiveFixer.Tests
                 ["CustomSevenZipExePath"] = "ExtractionTab",
                 ["DangerousSpaceModeEnabled"] = "ExtractionTab",
 
+                // ② 的第 17 条那一格：一键处理的确认框可以关掉（也在确认框自己的勾选项里写着）
+                ["SkipOneClickConfirm"] = "ExtractionTab",
+
                 // ③ 清理与删除
                 ["RestRemovalDefaultMode"] = "CleanupTab",
                 ["DeleteSourceAfterExtract"] = "CleanupTab",
                 ["RemindBeforeExtract"] = "CleanupTab",
+
+                // ③ 的第 15 条那一格：导入文件夹后就提醒无用物
+                ["RemindJunkAfterImport"] = "CleanupTab",
 
                 // ④ 密码
                 ["UseGlobalPasswordForAllTasks"] = "PasswordTab",
@@ -413,6 +419,50 @@ namespace ArchiveFixer.Tests
                     Read("Views", "Tabs", expectedTab + ".xaml").Contains("SettingsEditor." + property, StringComparison.Ordinal),
                     $"{expectedTab} 里没有绑定 SettingsEditor.{property}");
             }
+        }
+
+        /// <summary>
+        /// 第 15/16 追加/22 条补进来的三个入口必须真的挂在界面上。
+        ///
+        /// <para>命令存在但界面上找不到 = 功能只活在代码里（用户点不到），
+        /// 这一组就是防那种"实现了但没接线"的半成品。</para>
+        /// </summary>
+        [Fact]
+        public void 第15到22条补的三个入口都真的挂在界面上()
+        {
+            var expected = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                // 第 16 条追加：撞到 10 层上限之后接着解
+                ["ContinueOneClickCommand"] = "TaskTab",
+
+                // 第 15 条：列表里删无用物
+                ["RemoveCheckedTasksCommand"] = "TaskTab",
+
+                // 第 22 条：工作区残留一键清
+                ["ClearWorkspaceLeftoversCommand"] = "CleanupTab"
+            };
+
+            foreach ((string command, string tab) in expected)
+            {
+                Assert.NotNull(typeof(MainViewModel).GetProperty(command));
+
+                Assert.True(
+                    Read("Views", "Tabs", tab + ".xaml").Contains(command, StringComparison.Ordinal),
+                    $"{tab} 里没有绑定 {command}");
+            }
+
+            // "还剩 N 个内层包"那一行提示与按钮文案也要一起出现（到顶不许静默停下）
+            string taskTab = Read("Views", "Tabs", "TaskTab.xaml");
+
+            Assert.Contains("PendingContinuationText", taskTab, StringComparison.Ordinal);
+            Assert.Contains("ContinueOneClickButtonText", taskTab, StringComparison.Ordinal);
+            Assert.Contains("HasPendingContinuation", taskTab, StringComparison.Ordinal);
+
+            // 工作区残留那一行提示同理（第 22 条：看得见才谈得上清理）
+            string cleanupTab = Read("Views", "Tabs", "CleanupTab.xaml");
+
+            Assert.Contains("WorkspaceLeftoverBanner", cleanupTab, StringComparison.Ordinal);
+            Assert.Contains("HasWorkspaceLeftovers", cleanupTab, StringComparison.Ordinal);
         }
 
         [Fact]
