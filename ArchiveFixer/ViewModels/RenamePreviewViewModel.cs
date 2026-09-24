@@ -15,6 +15,12 @@ namespace ArchiveFixer.ViewModels
         private RenamePreviewItem? _selectedItem;
         private string _message = string.Empty;
 
+        /// <summary>
+        /// 批量装载期间挂起统计重算（见 <see cref="LoadItems"/>）：旧行为是每 Add 一项就重算
+        /// 6 个 O(N) 统计属性 —— 几百项就是 ≈3N² 次谓词求值，而它们全都有绑定。
+        /// </summary>
+        private bool _suspendStatistics;
+
         public ObservableCollection<RenamePreviewItem> Items { get; }
 
         public ObservableCollection<RenamePreviewItem> PreviewItems => Items;
@@ -115,7 +121,10 @@ namespace ArchiveFixer.ViewModels
                     }
                 }
 
-                RefreshStatistics();
+                if (!_suspendStatistics)
+                {
+                    RefreshStatistics();
+                }
             };
         }
 
@@ -127,33 +136,52 @@ namespace ArchiveFixer.ViewModels
 
         public void LoadItems(IEnumerable<RenamePreviewItem>? items)
         {
-            foreach (RenamePreviewItem item in Items)
-            {
-                item.PropertyChanged -= Item_PropertyChanged;
-            }
+            /*
+             * 批量装载期间**挂起统计重算**（用户 2026-09-24 第 12 条"卡死"的修法之一）。
+             *
+             * 旧行为：每 Add 一项就 RefreshStatistics()，而它抛的 6 个计算属性
+             * （SelectedCount / CanRenameCount / ConflictCount / SkipCount / HasExecutableItems …）
+             * 各自都是一遍 O(N) 的 LINQ —— 几百项就是 ≈3N² 次谓词求值，
+             * 而且它们全都有绑定（RenamePreviewWindow.xaml），每抛一次界面就求值一次。
+             * 一键处理里这个窗口是**必经**的一步，于是它也参与把界面线程喂满。
+             */
+            _suspendStatistics = true;
 
-            Items.Clear();
-
-            if (items != null)
+            try
             {
-                foreach (RenamePreviewItem item in items)
+                foreach (RenamePreviewItem item in Items)
                 {
-                    if (item.Status == StatusText.RenameCannot || item.Status == StatusText.RenameWillSkip)
-                    {
-                        item.IsSelected = false;
-                    }
-
                     item.PropertyChanged -= Item_PropertyChanged;
-                    item.PropertyChanged += Item_PropertyChanged;
-
-                    Items.Add(item);
                 }
+
+                Items.Clear();
+
+                if (items != null)
+                {
+                    foreach (RenamePreviewItem item in items)
+                    {
+                        if (item.Status == StatusText.RenameCannot || item.Status == StatusText.RenameWillSkip)
+                        {
+                            item.IsSelected = false;
+                        }
+
+                        item.PropertyChanged -= Item_PropertyChanged;
+                        item.PropertyChanged += Item_PropertyChanged;
+
+                        Items.Add(item);
+                    }
+                }
+            }
+            finally
+            {
+                _suspendStatistics = false;
             }
 
             Message = Items.Count == 0
                 ? "没有可预览的改名项。"
                 : $"已生成 {Items.Count} 个改名预览项。";
 
+            // 整份装载完只算**一次**统计。
             RefreshStatistics();
         }
 

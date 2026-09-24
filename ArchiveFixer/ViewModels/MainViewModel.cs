@@ -243,7 +243,14 @@ namespace ArchiveFixer.ViewModels
         private bool _dangerModeBusy;
         private string _spaceModeText = string.Empty;
 
-        public ObservableCollection<ArchiveTask> Tasks { get; } = new();
+        /// <summary>
+        /// 任务列表。
+        ///
+        /// <para>类型是 <see cref="RangeObservableCollection{T}"/>（ObservableCollection 的子类）：
+        /// 导入几百个包时用它的批量方法**只发一次集合变更通知**，
+        /// 而不是逐项 <c>Add</c> 触发几百次界面刷新（用户 2026-09-24 第 12 条"卡死"的修法之一）。</para>
+        /// </summary>
+        public RangeObservableCollection<ArchiveTask> Tasks { get; } = new();
 
         public ObservableCollection<OperationLogItem> Logs { get; } = new();
 
@@ -1051,6 +1058,20 @@ namespace ArchiveFixer.ViewModels
 
         public ICommand AddFilesCommand { get; }
         public ICommand AddFolderCommand { get; }
+
+        /// <summary>
+        /// 「文件 → 追加到列表 → 追加文件…」（用户 2026-09-24 第 12 条补拍）。
+        ///
+        /// <para>语义 = **旧行为**（保留现有任务，只把新选的加到末尾）。它有意做成菜单里的一条
+        /// **显式**入口：默认的「添加」是替换，想追加就必须自己说出来 ——
+        /// 用户原话是"每次我新选择了其他的，无论是什么，你都要将列表彻底清空"，
+        /// 所以"追加"只能是显式动作，不能是默认动作。</para>
+        /// </summary>
+        public ICommand AppendFilesCommand { get; }
+
+        /// <summary>「文件 → 追加到列表 → 追加文件夹…」。</summary>
+        public ICommand AppendFolderCommand { get; }
+
         public ICommand ScanCommand { get; }
         public ICommand ClearCommand { get; }
         public ICommand RemoveSelectedCommand { get; }
@@ -1144,8 +1165,9 @@ namespace ArchiveFixer.ViewModels
          * · 全不选 —— "从一堆已勾选里只留一个"的第一步，也是用户点名要的那个键；
          * · 反选 —— 挑三五个时比逐个点快。
          *
-         * ⚠ 全不选**不动"当前点中的那一行"**：口径是"一个都没勾时按当前点中的那一行办"，
-         * 清掉行高亮会让紧接着的「删除其余物 / 清理空文件夹」失去兜底对象。
+         * ⚠ 全不选**不动"当前点中的那一行"**（行高亮留着给右键菜单用），但命令型入口
+         * **一律只认勾选**：一个都没勾就什么都不做、只提示（用户 2026-09-24 第 12 条）——
+         * ⛔ 所以这里**不存在**"清掉行高亮会让清理类命令失去兜底对象"这种顾虑。
          */
 
         /// <summary>勾选整个列表（Ctrl+A）。</summary>
@@ -1282,6 +1304,8 @@ namespace ArchiveFixer.ViewModels
 
             AddFilesCommand = new AsyncRelayCommand(_scanCoordinator.AddFilesAsync, CanRunNormalCommand);
             AddFolderCommand = new AsyncRelayCommand(_scanCoordinator.AddFolderAsync, CanRunNormalCommand);
+            AppendFilesCommand = new AsyncRelayCommand(_scanCoordinator.AppendFilesAsync, CanRunNormalCommand);
+            AppendFolderCommand = new AsyncRelayCommand(_scanCoordinator.AppendFolderAsync, CanRunNormalCommand);
             ScanCommand = new AsyncRelayCommand(_scanCoordinator.ScanTasksAsync, CanRunNormalCommand);
             ClearCommand = new RelayCommand(ClearTasks, CanRunNormalCommand);
             RemoveSelectedCommand = new RelayCommand(RemoveSelectedTasks, CanRunNormalCommand);
@@ -1417,10 +1441,17 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 供界面拖拽等入口调用，实际导入逻辑在扫描协调器中。
+        ///
+        /// <para>拖放一批新文件 = 一次"新的选择"，所以默认与「添加文件 / 添加文件夹」同为
+        /// <b>替换</b>语义（用户 2026-09-24 第 12 条："每次我新选择了其他的，无论是什么，
+        /// 你都要将列表彻底清空"）。要往现有列表里加，走菜单「文件 → 追加到列表」
+        /// （<c>ScanCoordinator.AppendFilesAsync / AppendFolderAsync</c>）。</para>
         /// </summary>
-        public Task AddPathsAsync(IEnumerable<string> paths)
+        public Task AddPathsAsync(
+            IEnumerable<string> paths,
+            ImportMode mode = ImportMode.Replace)
         {
-            return _scanCoordinator.AddPathsAsync(paths);
+            return _scanCoordinator.AddPathsAsync(paths, mode);
         }
 
         /// <summary>
@@ -1817,6 +1848,23 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void Tasks_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
         {
+            /*
+             * Reset（批量替换 / 清空）**不带** OldItems / NewItems —— 逐项挂监听的那两条路都拿不到东西。
+             * 批量导入走的正是 Reset（见 RangeObservableCollection），所以必须在这里按当前列表整批重挂，
+             * 否则导入进来的任务勾选一下，汇总里的「选中：N」和「只解压」的可用性就不会跟着变
+             *（那正是 2026-09-22 修过的那个"界面在撒谎"的缺陷，换个入口复活）。
+             */
+            if (e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                foreach (ArchiveTask task in Tasks)
+                {
+                    task.PropertyChanged -= Task_SelectionPropertyChanged;
+                    task.PropertyChanged += Task_SelectionPropertyChanged;
+                }
+
+                return;
+            }
+
             if (e.OldItems != null)
             {
                 foreach (ArchiveTask task in e.OldItems.OfType<ArchiveTask>())
@@ -1867,8 +1915,16 @@ namespace ArchiveFixer.ViewModels
             UpdateSummary();
         }
 
-        /// <summary>配合 <see cref="_bulkSelectionUpdate"/>：批量动作结束后只刷一次汇总。</summary>
-        private void RunBulkSelectionUpdate(Action changeSelection)
+        /// <summary>
+        /// 配合 <see cref="_bulkSelectionUpdate"/>：批量动作结束后只刷一次汇总。
+        ///
+        /// <para><b>凡是"循环改一批任务的勾选"的代码都必须走它</b>（用户 2026-09-24 第 12 条"卡死"
+        /// 的修法之一）：逐项改勾选会逐项触发全表汇总重算 + 38 条命令可用性重查 ——
+        /// 几百项的任务列表就是几百次 O(N) 全表扫描（O(N²)）。跨类调用的例子见
+        /// <c>OneClickCoordinator</c>（续解把已处理的任务取消勾选、把新内层包勾上）
+        /// 与 <c>MainWindow.SmartRenameCurrentTaskMenuItem_Click</c>（只留当前这一个）。</para>
+        /// </summary>
+        internal void RunBulkSelectionUpdate(Action changeSelection)
         {
             _bulkSelectionUpdate = true;
 
@@ -1924,9 +1980,10 @@ namespace ArchiveFixer.ViewModels
             });
 
             /*
-             * 刻意不动行高亮（SelectedTask）：一个都没勾时，删除其余物 / 清理空文件夹
-             * 按"当前点中的那一行"办（见 StatusText.SelectionScopeHint），把它清掉等于
-             * 顺手拆掉那个兜底 —— 用户点完"全不选"再点「删除其余物」会收到"请先勾选或点中一个任务"。
+             * 行高亮这里**刻意保留**：右键菜单、复制路径这类"这一行"的操作仍然用它。
+             * 但命令型入口（一键处理 / 只解压 / 清理类）**一律只认勾选** ——
+             * 一个都没勾时它们只提示、什么都不做（用户 2026-09-24 第 12 条），
+             * 所以"清掉行高亮会拆掉兜底"这个老顾虑已经不存在了。
              */
             AppendLog(
                 "INFO",
@@ -2045,13 +2102,14 @@ namespace ArchiveFixer.ViewModels
         {
             const string title = "移除选中";
 
-            CleanupTargetSelection selection = ResolveCleanupTargets(Tasks, SelectedTask);
+            CleanupTargetSelection selection = ResolveCleanupTargets(Tasks);
 
             AppendLog(selection.HasTarget ? "INFO" : "WARN", DescribeCleanupTargets(title, selection));
 
             if (!selection.HasTarget)
             {
-                _dialogService.ShowWarning(string.Format(StatusText.PickTaskPromptFormat, title));
+                // 只提示、什么都不做（用户 2026-09-24 第 12 条：一律只认勾选）。
+                _dialogService.ShowWarning(PromptNoCheckedTask(title));
                 return;
             }
 
@@ -2067,11 +2125,22 @@ namespace ArchiveFixer.ViewModels
             AutoLoadPasswordBook();
 
             UpdateSummary();
-            AppendLog(
-                "INFO",
-                selection.Source == CleanupTargetSource.Checked
-                    ? $"{title}：以勾选为准，已移除 {targets.Count} 个任务。"
-                    : $"{title}：没有勾选任何任务，按当前点中的那一行处理 —— 已移除「{targets[0].FileName}」。");
+            AppendLog("INFO", $"{title}：以勾选为准，已移除 {targets.Count} 个任务。");
+        }
+
+        /// <summary>
+        /// "一个都没勾"时的**唯一**提示句（用户 2026-09-24 第 12 条定的口径：只提示、不动作）。
+        ///
+        /// <para>措辞来自 <see cref="StatusText.NoCheckedTaskPromptFormat"/> —— 界面蓝字、命令提示、
+        /// 日志三处共用同一句话，谁也不能再各写一套（§7）。</para>
+        /// </summary>
+        private string PromptNoCheckedTask(string title)
+        {
+            return string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.NoCheckedTaskPromptFormat,
+                title,
+                Tasks.Count);
         }
 
         public void UpdateSummary()
@@ -2684,14 +2753,11 @@ namespace ArchiveFixer.ViewModels
         /// <summary>一次清理/列表命令"作用于谁"的来源。</summary>
         internal enum CleanupTargetSource
         {
-            /// <summary>既没有勾选，也没有当前行 —— 什么都不能做（提示用户先选一个）。</summary>
+            /// <summary>一个都没勾 —— 什么都不做（提示用户先勾选）。</summary>
             None = 0,
 
-            /// <summary>以**勾选**为准（界面上写的那一套，正常路径）。</summary>
-            Checked = 1,
-
-            /// <summary>一个都没勾，退化为"**当前点中的那一行**"（用户点了一行也算明确指向）。</summary>
-            CurrentRow = 2
+            /// <summary>以**勾选**为准（界面上写的那一套，**唯一**会执行的来源）。</summary>
+            Checked = 1
         }
 
         /// <summary>
@@ -2704,99 +2770,69 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal sealed class CleanupTargetSelection
         {
-            /// <summary>本次要处理的任务（按列表顺序；来源是勾选时就是全部勾选项）。</summary>
+            /// <summary>本次要处理的任务（按列表顺序；只看勾选）。</summary>
             public IReadOnlyList<ArchiveTask> Tasks { get; init; } = Array.Empty<ArchiveTask>();
 
-            /// <summary>作用来源：勾选 / 当前行 / 都没有。</summary>
+            /// <summary>作用来源：勾选 / 一个都没勾。</summary>
             public CleanupTargetSource Source { get; init; }
-
-            /// <summary>DataGrid 的当前行（用户高亮/点中的那一行），可能为 null。</summary>
-            public ArchiveTask? CurrentRow { get; init; }
 
             /// <summary>有没有可处理的目标。</summary>
             public bool HasTarget => Tasks.Count > 0;
         }
 
         /// <summary>
-        /// 解析一次命令作用于谁（**唯一判定处**，缺陷 1 的修复核心）。
+        /// 解析一次命令作用于谁（**唯一判定处**）。
         ///
-        /// <para>规则与界面蓝字 <see cref="StatusText.SelectionScopeHint"/> 逐字对应：</para>
+        /// <para><b>一律只认勾选</b>（用户 2026-09-24 第 12 条亲自拍板，原话：
+        /// "你只需要操作我选中的文件，其他的不用管"）：</para>
         /// <list type="number">
-        /// <item><description>有勾选任务 → 就作用于勾选的那些（"勾选"才是这一列存在的意义）；</description></item>
-        /// <item><description>一个都没勾 → 退化为"当前点中的那一行"（用户点了一行同样是明确指向）；</description></item>
-        /// <item><description>两者都没有 → 返回空，调用方按 <see cref="StatusText.PickTaskPromptFormat"/> 提示。</description></item>
+        /// <item><description>有勾选任务 → 就作用于勾选的那些；</description></item>
+        /// <item><description>一个都没勾 → 返回空，调用方按
+        /// <see cref="StatusText.NoCheckedTaskPromptFormat"/> **只提示、什么都不做**。</description></item>
         /// </list>
         ///
-        /// <para>
-        /// 为什么"当前行"只能是**兜底**而不是并列选项：界面上两套"选中"（行高亮 / 勾选框）并存，
-        /// 用户看到的"选中 1"来自汇总区的勾选计数。旧实现只看当前行，于是勾了任务的用户
-        /// 收到"请先在列表里选中一个任务"（2026-09-22 真机验收，缺陷 1）。
-        /// 顺序反过来（先看当前行）会把"勾了 20 个却只处理高亮的那一个"变成新的惊吓。
-        /// </para>
-        /// <para>
-        /// <paramref name="currentRow"/> **必须还在列表里**才算数：任务被移除之后
-        /// <see cref="SelectedTask"/> 可能还指着那个已经不存在的对象（界面有 DataGrid 会把它清成 null，
-        /// 但命令层不能依赖"界面一定会清"）—— 拿一个不在列表里的任务去删东西，
-        /// 是最不该出现的一类"删了个用户没看见的东西"。
-        /// </para>
+        /// <para>⛔ <b>这里曾经有一条"一个都没勾时退回当前点中的那一行"的兜底 —— 已经删掉，
+        /// 不要再加回来</b>。用户原话："我即使没有特地的没有去选中，你为什么还要去操作，
+        /// 这个操作导致我彻底的卡死了"。两套"选中"（行高亮 / 勾选框）并存时，兜底等于
+        /// **替他决定要动哪些文件**：他以为"我没勾就是不动"，程序却拿高亮那一行开了工。
+        /// 代价（用户点一行但没勾 → 收到提示）远小于代价的另一面（动了没打算动的文件）。</para>
         /// </summary>
-        internal static CleanupTargetSelection ResolveCleanupTargets(
-            IEnumerable<ArchiveTask>? tasks,
-            ArchiveTask? currentRow)
+        internal static CleanupTargetSelection ResolveCleanupTargets(IEnumerable<ArchiveTask>? tasks)
         {
-            List<ArchiveTask> allTasks = tasks?
-                .Where(task => task != null)
+            List<ArchiveTask> checkedTasks = tasks?
+                .Where(task => task != null && task.IsSelected)
                 .ToList()
                 ?? new List<ArchiveTask>();
-
-            List<ArchiveTask> checkedTasks = allTasks.Where(task => task.IsSelected).ToList();
 
             if (checkedTasks.Count > 0)
             {
                 return new CleanupTargetSelection
                 {
                     Tasks = checkedTasks,
-                    Source = CleanupTargetSource.Checked,
-                    CurrentRow = currentRow
+                    Source = CleanupTargetSource.Checked
                 };
             }
 
-            if (currentRow != null && allTasks.Contains(currentRow))
-            {
-                return new CleanupTargetSelection
-                {
-                    Tasks = new[] { currentRow },
-                    Source = CleanupTargetSource.CurrentRow,
-                    CurrentRow = currentRow
-                };
-            }
-
-            return new CleanupTargetSelection { Source = CleanupTargetSource.None, CurrentRow = null };
+            return new CleanupTargetSelection { Source = CleanupTargetSource.None };
         }
 
         /// <summary>
-        /// 把"这次用的是哪一种选中含义"写进日志（缺陷 1 的另一半：**用了哪一种必须留痕**）。
+        /// 把"这次用的是哪一种选中含义"写进日志（**用了哪一种必须留痕**）。
         ///
         /// 用户事后要能回答"刚才为什么只动了这一个 / 为什么动了这 7 个" —— 只写"已取消"
         /// 或什么都不写，排查就只能靠猜（那次真机验收就是这么被误导的）。
         /// </summary>
         internal static string DescribeCleanupTargets(string title, CleanupTargetSelection selection)
         {
-            switch (selection.Source)
+            if (selection.Source == CleanupTargetSource.Checked)
             {
-                case CleanupTargetSource.Checked:
-                    return selection.Tasks.Count == 1
-                        ? $"{title}：以勾选为准，本次作用于勾选的 1 个任务「{selection.Tasks[0].FileName}」。"
-                        : $"{title}：以勾选为准，本次作用于勾选的 {selection.Tasks.Count} 个任务"
-                          + "（逐个处理，每个任务都会先给你看预览与确认框）。";
-
-                case CleanupTargetSource.CurrentRow:
-                    return $"{title}：没有勾选任何任务，按当前点中的那一行处理 ——「{selection.Tasks[0].FileName}」。"
-                           + "（想一次处理多个，请先在最左侧一列勾选。）";
-
-                default:
-                    return $"{title}：既没有勾选任务，也没有点中任何一行，已取消（一个字节都没动）。";
+                return selection.Tasks.Count == 1
+                    ? $"{title}：以勾选为准，本次作用于勾选的 1 个任务「{selection.Tasks[0].FileName}」。"
+                    : $"{title}：以勾选为准，本次作用于勾选的 {selection.Tasks.Count} 个任务"
+                      + "（逐个处理，每个任务都会先给你看预览与确认框）。";
             }
+
+            return $"{title}：没有勾选任何任务，已取消（一个文件、一个字节都没动）。";
         }
 
         /// <summary>
@@ -2847,12 +2883,12 @@ namespace ArchiveFixer.ViewModels
         /// **判定作用于谁 → 预览 → 红色确认（默认回收站，勾选框切激进档）→（激进档）二次确认 → 后台执行 → 写日志**。
         ///
         /// <para>
-        /// <b>选中口径（2026-09-22 真机验收抓到的缺陷 1）</b>：这三个入口以前只看 DataGrid 的
-        /// **当前行**（<see cref="SelectedTask"/>）。于是"勾选框勾上了、汇总里也写着选中 1"的用户
-        /// 点「删除其余物…」收到的是"请先在列表里选中一个任务"，只能手动再点一下那一行才work
-        /// （日志里那句"没有选中任务"还会把人往"是不是没勾上"的方向带）。
-        /// 现在统一走 <see cref="ResolveCleanupTargets"/>：<b>勾选为准</b> → 一个都没勾时退化为当前行
-        /// → 两者都没有才提示，提示语与界面蓝字共用同一套词（<see cref="StatusText.SelectionScopeHint"/>）。
+        /// <b>选中口径（2026-09-24 用户第 12 条亲自拍板：一律只认勾选）</b>：这三个入口统一走
+        /// <see cref="ResolveCleanupTargets"/> —— 只作用于**勾选**的任务；一个都没勾就只提示
+        /// （<see cref="StatusText.NoCheckedTaskPromptFormat"/>），一个字节都不动。
+        /// ⛔ 曾经那条"一个都没勾时退回当前点中的那一行"的兜底**已删除**：用户原话
+        /// "你只需要操作我选中的文件，其他的不用管"，兜底等于替他决定要动哪些文件。
+        /// （早期还有一个反向缺陷：这三个入口只看当前行，勾了任务的用户反而收到"请先选中一个任务"。）
         /// </para>
         /// <para>
         /// 多任务时**合并成一次确认**（用户 2026-09-22 拍板，原话："要合并成 1 次确认，不要有冗余操作"）：
@@ -2887,15 +2923,14 @@ namespace ArchiveFixer.ViewModels
                 ? "清理空文件夹"
                 : everything ? "删除本目录全部其余物" : "删除其余物";
 
-            CleanupTargetSelection selection = ResolveCleanupTargets(Tasks, SelectedTask);
+            CleanupTargetSelection selection = ResolveCleanupTargets(Tasks);
 
             AppendLog(selection.HasTarget ? "INFO" : "WARN", DescribeCleanupTargets(title, selection));
 
             if (!selection.HasTarget)
             {
-                // 措辞与蓝字同一套（"勾选 / 点中"）：旧文案"请先在列表里选中一个任务"
-                // 会让勾了任务的用户以为勾选没用 —— 而当时确实是代码只看当前行。
-                _dialogService.ShowWarning(string.Format(StatusText.PickTaskPromptFormat, title));
+                // 一律只认勾选：一个都没勾就只提示、什么都不做（用户 2026-09-24 第 12 条）。
+                _dialogService.ShowWarning(PromptNoCheckedTask(title));
                 return;
             }
 
@@ -3946,12 +3981,52 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 整份替换任务列表（导入路径、以及"先清空再加"那两步）的**唯一收口**。
+        ///
+        /// <para>为什么必须收口（用户 2026-09-24 第 12 条"卡死"的修法）：</para>
+        /// <list type="number">
+        /// <item><description><b>集合层面只通知一次</b> —— 走
+        /// <see cref="RangeObservableCollection{T}.ReplaceAll"/>，几百项不再触发几百次界面刷新；</description></item>
+        /// <item><description><b>索引重排一次</b>（<see cref="RebuildTaskIndex"/>）—— 替换与追加两种语义
+        /// 都需要（扫描给每项编的是它自己那一批的号）；</description></item>
+        /// <item><description><b>当前行不能指着已经不在列表里的对象</b>：把
+        /// <see cref="SelectedTask"/> 清成 null，否则右键菜单/详情会拿到一个幽灵任务；</description></item>
+        /// <item><description><b>汇总只重算一次</b>（除非调用方明确说不要，见
+        /// <paramref name="refreshSummary"/>）—— 「批量添加 N 项只触发 1 次全量统计重算」有测试钉住。</description></item>
+        /// </list>
+        /// </summary>
+        /// <param name="tasks">新的整份列表。</param>
+        /// <param name="refreshSummary">
+        /// 是否在这里重算汇总。默认 true；导入路径在"先清空再加"的第一步传 false ——
+        /// 那一步只是过渡状态，最终那一次才需要算（否则一次导入会算两遍整表）。
+        /// </param>
+        internal void ReplaceAllTasks(IEnumerable<ArchiveTask>? tasks, bool refreshSummary = true)
+        {
+            Tasks.ReplaceAll(tasks);
+
+            RebuildTaskIndex();
+
+            // 清空/替换之后，DataGrid 的当前行可能还指着已经被移除的对象。
+            if (SelectedTask != null && !Tasks.Contains(SelectedTask))
+            {
+                SelectedTask = null;
+            }
+
+            if (refreshSummary)
+            {
+                UpdateSummary();
+            }
+        }
+
         private void RaiseAllCommandCanExecuteChanged()
         {
             foreach (ICommand command in new[]
                      {
                  AddFilesCommand,
                  AddFolderCommand,
+                 AppendFilesCommand,
+                 AppendFolderCommand,
                  ScanCommand,
                  ClearCommand,
                  RemoveSelectedCommand,

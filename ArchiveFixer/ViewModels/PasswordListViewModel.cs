@@ -65,19 +65,6 @@ namespace ArchiveFixer.ViewModels
         /// <summary>把手工条目追加进用户自己的密码本 txt（写前备份、只追加、写完自检）。</summary>
         private readonly PasswordBookWriter _passwordBookWriter;
 
-        /// <summary>
-        /// 本次运行里**已经写回成功**的值。
-        ///
-        /// <para>为什么要单独记一份（而不是改 <see cref="PasswordItem.Source"/>）：写回是"按值"的 ——
-        /// 用户写完回又把某条密码改了，那条就**重新变成未写回**（新值并不在文件里）。
-        /// 按值记天然就有这个行为，而改来源标记会把这件事掩盖过去；而且来源改成别的值以后，
-        /// 那条目就再也不算"手动添加"了，语义上是错的。</para>
-        ///
-        /// <para>它只在内存里：重启后按记忆 + 密码本重建，这份"已写回"的账本来也就不在了
-        /// （重建出来的内容不跟着它走，所以不需要它跨重启）。</para>
-        /// </summary>
-        private readonly HashSet<string> _writtenBackValues = new(StringComparer.Ordinal);
-
         private PasswordItem? _selectedPassword;
         private string _newPassword = string.Empty;
         private bool _showPasswords;
@@ -231,10 +218,14 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 还没写回密码本的**手工条目**条数（<c>Source == "ManualList"</c> 且本次运行里没写回成功过）。
+        /// 还没写回密码本的**手工条目**条数（来源是手动添加，且它的值**不在任何一本已记住的密码本里**）。
         ///
         /// <para>它就是「写回密码本…」按钮的可用性判据 —— 一条都没有时按钮置灰，
         /// 用户点不动，也就不会产生"点了一下什么都没发生"的困惑。</para>
+        ///
+        /// <para>判据是**按值、且以文件为准**的（用户 2026-09-24 第 21 条）：重启之后程序重新读一遍
+        /// 每本已记住的书，值真的在里面才算已写回。⛔ 绝不靠"本次运行里记过一笔"这种只在内存里的账 ——
+        /// 那正是"提示写回成功、重启又显示未写回"的旧病根。</para>
         /// </summary>
         public int UnwrittenManualCount => CollectUnwrittenManualValues().Count;
 
@@ -757,12 +748,13 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 挑出待写回的值：手动添加、且**这一条**本次运行里还没写回成功过。
+        /// 挑出待写回的值：手动添加、且它的值**不在任何一本已记住的密码本里**。
         /// 列表顺序原样保留（写回后文件里的先后就是用户看到的先后）。
         ///
-        /// <para>判据必须是"按值"的，不能只看来源：用户写回之后又把某条密码改了，新值并不在文件里，
-        /// 那一条就要**重新变回未写回**（标记重新出现）。所以这里比对的是
-        /// "这一条现在的值，是不是就是当初写进去的那个值"。</para>
+        /// <para>判据必须是"按值 + 以文件为准"的，不能只看来源，也不能只看"本次运行里写过没有"：
+        /// 用户写回之后又把某条密码改了，新值并不在文件里，那一条就要**重新变回未写回**
+        /// （标记重新出现）；反过来，重启之后来源还是 <c>ManualList</c>，但值已经在书里了，
+        /// 那一条就**不许**再算未写回 —— 那正是用户报的第 21 条。</para>
         /// </summary>
         private List<string> CollectUnwrittenManualValues()
         {
@@ -773,25 +765,29 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这一条是不是"手动添加、还没写回"。
+        /// 这一条是不是"手动添加、还没写回"（用户 2026-09-24 第 21 条的口径）。
         ///
-        /// <para>判据两条：来源是手动 ⨯ 它的值不是"当初写进去的那个值"。
-        /// 后者用一个**按值的账**比对（<see cref="IsWrittenBack"/>），而不是"这个值在文件里出现过没有" ——
-        /// 后者会在"用户先把 A 写回、又新增一条同样等于 A 的手动条目"时把新条目误判成已写回。</para>
+        /// <para>判据两条：来源是手动 ⨯ **这个值不在任何一本已记住的密码本里**。
+        /// 第二条查的是 <see cref="PasswordService.IsValueInRememberedBooks"/> ——
+        /// 它认的是**从文件里解析出来的值**（启动合并每本书时记下、"写回"成功后重读文件刷新）。
+        /// 于是"写回成功 → 标记消失 → 重启后仍然消失"是同一个事实的两次查询，而不是两套账。</para>
+        ///
+        /// <para>没有任何已记住的书 / 书不存在 / 读不出来：查询恒为 false → 标记照旧亮着。
+        /// 这是**刻意**的诚实行为：那时程序确实不知道这个值在不在用户的书里，就不许说已写回。</para>
         /// </summary>
         private bool IsUnwrittenManual(PasswordItem? item)
         {
             return item != null
                 && string.Equals(item.Source, ManualSource, StringComparison.Ordinal)
-                && !IsWrittenBack(item);
+                && !IsInRememberedBook(item);
         }
 
-        /// <summary>空值不算"已写回"（空密码从来不会被写进去，标记也就不该消失）。</summary>
-        private bool IsWrittenBack(PasswordItem item)
+        /// <summary>这一条的值是不是已经躺在某一本已记住的密码本里。</summary>
+        private bool IsInRememberedBook(PasswordItem item)
         {
             string value = item.Value ?? string.Empty;
 
-            return value.Length > 0 && _writtenBackValues.Contains(value);
+            return value.Length > 0 && _passwordService.IsValueInRememberedBooks(value);
         }
 
         /// <summary>
@@ -809,23 +805,27 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 写回成功后把这些值记成"已经在文件里"，对应条目的标记随之消失。
+        /// 写回成功之后刷新**事实**（用户 2026-09-24 第 21 条的核心修法）。
         ///
+        /// <para>顺序不能反、也不能省：</para>
+        /// <list type="number">
+        /// <item><description>目标文件从此是一本"已记住"的密码本（写进去了，就是他在用的书）；</description></item>
+        /// <item><description><b>重新读一遍文件</b>得出值集合 —— ⛔ 绝不把"我刚写过"记账当成事实。
+        /// 只有文件里真的有，重启之后重新读出来的结论才对得上；这一条正是旧实现"当场清标记、
+        /// 重启又长回来"的根因。</description></item>
+        /// <item><description>备注与标记按新事实重算（备注仍停在"手动添加"时才顺手更新，不覆盖用户自己写的）。</description></item>
+        /// </list>
         /// <para>刻意**不改 <c>Source</c>、也不改 <c>Value</c>**：来源仍是"手动添加"（它就是手动加的），
-        /// 标记消失靠的是这份按值的账；而密码本体一个字符都不许动（含首尾空格）。
-        /// 备注仍停在"手动添加"时才顺手更新一下，免得覆盖掉用户自己写的备注。</para>
+        /// 密码本体一个字符都不许动（含首尾空格）。</para>
         /// </summary>
-        private void MarkAsWrittenBack(IReadOnlyList<string> writtenValues)
+        private void MarkAsWrittenBack(string targetPath, IReadOnlyList<string> writtenValues)
         {
-            var written = new HashSet<string>(writtenValues, StringComparer.Ordinal);
+            _passwordService.RememberBookPath(targetPath);
 
-            foreach (string value in written)
-            {
-                if (value.Length > 0)
-                {
-                    _writtenBackValues.Add(value);
-                }
-            }
+            // 写回本身已经落盘（PasswordService 的落盘开关由它自己管），这里再刷一次值集合。
+            _passwordService.RefreshRememberedBookValues();
+
+            var written = new HashSet<string>(writtenValues, StringComparer.Ordinal);
 
             foreach (PasswordItem item in Passwords)
             {
@@ -982,8 +982,9 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            // 写回成功：这些值从此"已经在文件里"，标记消失（用户一眼能看出"哪些条重启会没"）。
-            MarkAsWrittenBack(pending);
+            // 写回成功：目标书里现在确实有这些值 —— 重新读文件刷新值集合，标记随之消失
+            //（用户一眼能看出"哪些条重启会没"；重启后再查一次，结论不变）。
+            MarkAsWrittenBack(result.TargetPath, pending);
 
             var detail = new StringBuilder();
 

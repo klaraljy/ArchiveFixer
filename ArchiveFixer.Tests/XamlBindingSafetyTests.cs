@@ -140,11 +140,18 @@ namespace ArchiveFixer.Tests
         {
             string mainWindow = File.ReadAllText(Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "MainWindow.xaml"));
 
-            // 蓝字不许再写死：它必须引用 Models/StatusText.SelectionScopeHint（缺陷 1 的一半）。
+            // 蓝字不许再写死：它必须引用 Models/StatusText.SelectionScopeHint。
             Assert.Contains("StatusText.SelectionScopeHint", mainWindow, StringComparison.Ordinal);
 
             Assert.Contains("勾选", StatusText.SelectionScopeHint, StringComparison.Ordinal);
-            Assert.Contains("点中", StatusText.SelectionScopeHint, StringComparison.Ordinal);
+
+            /*
+             * 口径必须写成"一律只认勾选"（用户 2026-09-24 第 12 条亲自拍板）。
+             * ⛔ 这里曾经断言过"点中"二字 —— 那两个字属于已经被否掉的"没勾就按当前行办"兜底，
+             * 现在必须彻底消失，免得界面又在教用户一条不存在的规则。
+             */
+            Assert.Contains("只认勾选", StatusText.SelectionScopeHint, StringComparison.Ordinal);
+            Assert.DoesNotContain("按当前点中的那一行办", StatusText.SelectionScopeHint, StringComparison.Ordinal);
         }
     }
 

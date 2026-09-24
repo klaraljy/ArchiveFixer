@@ -24,9 +24,11 @@ namespace ArchiveFixer.Tests
     /// 点「工具 → 删除其余物…」弹出的却是"请先在列表里选中一个任务"，
     /// 日志还写着"没有选中任务，已取消" —— 把人往"是不是没勾上"的方向带。手动点中那一行它才工作。</para>
     ///
-    /// <para><b>现在的语义</b>（<c>MainViewModel.ResolveCleanupTargets</c> 是唯一判定处）：
-    /// 有勾选 → 作用于勾选的那些；一个都没勾 → 退化为当前点中的那一行；
-    /// 两者都没有 → 提示"请先勾选或点中一个任务"（与蓝字同一套词，且**用了哪一种必须写进日志**）。</para>
+    /// <para><b>现在的语义</b>（<c>MainViewModel.ResolveCleanupTargets</c> 是唯一判定处，
+    /// 用户 2026-09-24 第 12 条亲自拍板）：<b>一律只认勾选</b> —— 有勾选 → 作用于勾选的那些；
+    /// 一个都没勾 → **只提示"没有勾选任何任务"、什么都不做**。
+    /// ⛔ 那条"一个都没勾时退化为当前点中的那一行"的兜底**已经删掉，不要再加回来**
+    /// （用户原话："你只需要操作我选中的文件，其他的不用管"）。</para>
     ///
     /// <para><b>多任务合并确认（用户 2026-09-22 追加拍板）</b>：勾了 N 个任务时
     /// **只弹一次确认**（以前每个任务各弹一次预览 + 一次确认，勾 5 个就是 5 次点击 ——
@@ -113,32 +115,36 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 删除其余物_一个都没勾时退化为当前点中的那一行()
+        public async Task 删除其余物_一个都没勾时_只提示不动作_当前行也不算数()
         {
             Harness harness = CreateHarness();
 
             ArchiveTask currentRow = AddOwnOutputTask(harness, "222", isSelected: false);
             AddOwnOutputTask(harness, "333", isSelected: false);
 
+            // 当前行就停在一个任务上 —— 旧行为会拿它开刀，新口径必须**一个都不动**。
             harness.Vm.SelectedTask = currentRow;
+
+            DialogService.ClearFallbackLog();
 
             int confirmDialogsBefore = CountFallbackEntries("ShowDestructiveConfirmWithOption");
 
-            await RunCleanupAsync(harness, harness.Vm.CleanProcessArtifactsCommand);
+            await RunCleanupAsync(harness, harness.Vm.CleanProcessArtifactsCommand, expectConfirmDialog: false);
 
             List<string> logs = Snapshot(harness);
 
-            Assert.Contains(logs, line => line.Contains("没有勾选任何任务，按当前点中的那一行处理", StringComparison.Ordinal)
-                                          && line.Contains("222.7z", StringComparison.Ordinal));
-            Assert.DoesNotContain(logs, line => line.Contains("333.7z", StringComparison.Ordinal));
+            Assert.Contains(logs, line => line.Contains("没有勾选任何任务", StringComparison.Ordinal)
+                                          && line.Contains("已取消", StringComparison.Ordinal));
 
-            // 单个任务时确认框仍然只有一次，而且格式与合并之前逐字节一致
-            //（同样是相对计数：FallbackLog 是进程级共享的）。
-            Assert.Equal(confirmDialogsBefore + 1, CountFallbackEntries("ShowDestructiveConfirmWithOption"));
-            Assert.DoesNotContain(
-                "本次只确认这一次",
-                LastFallbackEntry("ShowDestructiveConfirmWithOption"),
-                StringComparison.Ordinal);
+            // ⛔ 那条兜底的措辞必须彻底消失（它是"没勾也照样操作"的教唆）。
+            Assert.DoesNotContain(logs, line => line.Contains("按当前点中的那一行处理", StringComparison.Ordinal));
+
+            // 一个确认框都不该弹：没有目标就没有确认。
+            Assert.Equal(confirmDialogsBefore, CountFallbackEntries("ShowDestructiveConfirmWithOption"));
+
+            // 假执行器一次都没被叫到 —— "什么都不做"是可断言的事实，不是形容词。
+            Assert.Empty(harness.Executor.RecycleCalls);
+            Assert.Empty(harness.Executor.PermanentCalls);
         }
 
         [Fact]
@@ -157,15 +163,19 @@ namespace ArchiveFixer.Tests
 
             List<string> logs = Snapshot(harness);
 
-            Assert.Contains(logs, line => line.Contains("既没有勾选任务，也没有点中任何一行", StringComparison.Ordinal));
+            Assert.Contains(logs, line => line.Contains("没有勾选任何任务", StringComparison.Ordinal));
 
             string warning = LastFallbackEntry("ShowWarning");
 
-            Assert.Contains("请先勾选或点中一个任务", warning, StringComparison.Ordinal);
+            // 提示句来自唯一来源 StatusText.NoCheckedTaskPromptFormat（界面蓝字 / 命令提示 / 日志共用）。
+            Assert.Contains("没有勾选任何任务", warning, StringComparison.Ordinal);
             Assert.Contains("删除其余物", warning, StringComparison.Ordinal);
+            Assert.Contains("只处理你勾选的任务", warning, StringComparison.Ordinal);
 
-            // 旧文案"请先在列表里选中一个任务"会让人以为勾选没用 —— 它必须消失。
+            // 旧文案两套都要消失：一套是"请先在列表里选中一个任务"（让人以为勾选没用），
+            // 另一套是"请先勾选或点中一个任务"（教的正是已经被否掉的当前行兜底）。
             Assert.DoesNotContain("请在列表里选中", warning, StringComparison.Ordinal);
+            Assert.DoesNotContain("点中", warning, StringComparison.Ordinal);
 
             // 根本不该走到确认框（没有目标）。
             Assert.Equal(confirmDialogsBefore, CountFallbackEntries("ShowDestructiveConfirmWithOption"));
@@ -262,7 +272,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 清理空文件夹_一个都没勾时退化为当前点中的那一行()
+        public async Task 清理空文件夹_一个都没勾时_只提示不动作()
         {
             Harness harness = CreateHarness();
 
@@ -272,21 +282,27 @@ namespace ArchiveFixer.Tests
             MakeEmptyShell(first);
             MakeEmptyShell(second);
 
+            // 当前行停在 333 上：旧口径会去清它的空文件夹，新口径必须一个都不动。
             harness.Vm.SelectedTask = second;
 
-            await RunCleanupAsync(harness, harness.Vm.CleanEmptyFoldersCommand);
+            DialogService.ClearFallbackLog();
+
+            await RunCleanupAsync(harness, harness.Vm.CleanEmptyFoldersCommand, expectConfirmDialog: false);
 
             List<string> logs = Snapshot(harness);
 
-            Assert.Contains(logs, line => line.Contains("按当前点中的那一行处理", StringComparison.Ordinal)
-                                          && line.Contains("333.7z", StringComparison.Ordinal));
-            Assert.DoesNotContain(logs, line => line.Contains("（222.7z）", StringComparison.Ordinal));
+            Assert.Contains(logs, line => line.Contains("没有勾选任何任务", StringComparison.Ordinal));
+            Assert.DoesNotContain(logs, line => line.Contains("按当前点中的那一行处理", StringComparison.Ordinal));
+
+            // 两个空目录都还在（"什么都没做"）。
+            Assert.True(Directory.Exists(first.OutputPath), "没勾选时不许碰任何目录");
+            Assert.True(Directory.Exists(second.OutputPath), "没勾选时不许碰任何目录");
         }
 
         // ================================================================ ④ 移除选中 / 清空列表
 
         [Fact]
-        public void 移除选中_勾选生效_没勾选退化为当前行_都没有才提示()
+        public void 移除选中_只认勾选_没勾选时只提示一个都不移除()
         {
             Harness harness = CreateHarness();
 
@@ -306,18 +322,25 @@ namespace ArchiveFixer.Tests
                         && line.Contains("以勾选为准", StringComparison.Ordinal)
                         && line.Contains("2 个任务", StringComparison.Ordinal));
 
-            // ② 一个都没勾 → 按当前点中的那一行办（以前是静默什么都不做）。
+            // ② 一个都没勾 → **什么都不做**（旧行为是拿当前行开刀，用户 2026-09-24 明确否掉）。
             harness.Vm.SelectedTask = third;
+
+            DialogService.ClearFallbackLog();
             harness.Vm.RemoveSelectedCommand.Execute(null);
 
-            Assert.Empty(harness.Vm.Tasks);
-            Assert.Contains(
-                Snapshot(harness),
-                line => line.Contains("按当前点中的那一行处理", StringComparison.Ordinal)
-                        && line.Contains("444.7z", StringComparison.Ordinal));
+            Assert.Single(harness.Vm.Tasks);
+            Assert.Same(third, harness.Vm.Tasks[0]);
 
-            // ③ 都没有 → 提示（与清理类命令同一句话）。
-            AddOwnOutputTask(harness, "555", isSelected: false);
+            Assert.DoesNotContain(
+                Snapshot(harness),
+                line => line.Contains("按当前点中的那一行处理", StringComparison.Ordinal));
+
+            string warning = LastFallbackEntry("ShowWarning");
+
+            Assert.Contains("没有勾选任何任务", warning, StringComparison.Ordinal);
+            Assert.Contains("移除选中", warning, StringComparison.Ordinal);
+
+            // ③ 连当前行都没有 → 同一句话（口径只有一条，不存在"两种提示"）。
             harness.Vm.SelectedTask = null;
 
             DialogService.ClearFallbackLog();
@@ -325,9 +348,10 @@ namespace ArchiveFixer.Tests
 
             Assert.Single(harness.Vm.Tasks);
 
-            string warning = LastFallbackEntry("ShowWarning");
-            Assert.Contains("请先勾选或点中一个任务", warning, StringComparison.Ordinal);
-            Assert.Contains("移除选中", warning, StringComparison.Ordinal);
+            string warningAgain = LastFallbackEntry("ShowWarning");
+
+            Assert.Contains("没有勾选任何任务", warningAgain, StringComparison.Ordinal);
+            Assert.Contains("移除选中", warningAgain, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -356,13 +380,18 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 清空列表在界面上不再被说成只作用于勾选()
         {
-            // 蓝字是唯一的口径声明：它必须把"清空列表 = 整表操作"与勾选作用域分开说。
+            // 蓝字是唯一的口径声明：它必须把"清空列表 = 整表操作"与"命令一律只认勾选"分开说。
             Assert.Contains("清空列表", StatusText.SelectionScopeHint, StringComparison.Ordinal);
             Assert.Contains("整表操作", StatusText.SelectionScopeHint, StringComparison.Ordinal);
             Assert.Contains("勾选", StatusText.SelectionScopeHint, StringComparison.Ordinal);
-            Assert.Contains("点中", StatusText.SelectionScopeHint, StringComparison.Ordinal);
+            Assert.Contains("只认勾选", StatusText.SelectionScopeHint, StringComparison.Ordinal);
+            Assert.Contains("一个都没勾就什么都不做", StatusText.SelectionScopeHint, StringComparison.Ordinal);
 
-            // 删除其余物 / 清理空文件夹 也在蓝字的勾选名单里（它们以前不在这句话的覆盖下）。
+            // ⛔ 那句教"没勾也可以按当前行办"的旧措辞必须彻底消失（用户 2026-09-24 第 12 条否掉了它）。
+            Assert.DoesNotContain("按当前点中的那一行办", StatusText.SelectionScopeHint, StringComparison.Ordinal);
+            Assert.DoesNotContain("点中一个任务", StatusText.SelectionScopeHint, StringComparison.Ordinal);
+
+            // 删除其余物 / 清理空文件夹 也在蓝字的勾选名单里。
             Assert.Contains("删除其余物", StatusText.SelectionScopeHint, StringComparison.Ordinal);
             Assert.Contains("清理空文件夹", StatusText.SelectionScopeHint, StringComparison.Ordinal);
         }
@@ -370,39 +399,41 @@ namespace ArchiveFixer.Tests
         // ================================================================ ⑤ 判定本身（纯函数）
 
         [Fact]
-        public void 选中口径判定_勾选优先于当前行()
+        public void 选中口径判定_一律只认勾选_当前行不算数()
         {
             var checkedTask = new ArchiveTask(@"C:\t\222.7z", 1) { IsSelected = true };
             var notChecked = new ArchiveTask(@"C:\t\333.7z", 2) { IsSelected = false };
 
             MainViewModel.CleanupTargetSelection byCheckbox =
-                MainViewModel.ResolveCleanupTargets(new[] { checkedTask, notChecked }, notChecked);
+                MainViewModel.ResolveCleanupTargets(new[] { checkedTask, notChecked });
 
             Assert.Equal(MainViewModel.CleanupTargetSource.Checked, byCheckbox.Source);
             Assert.Equal(new[] { checkedTask }, byCheckbox.Tasks);
 
-            MainViewModel.CleanupTargetSelection byRow =
-                MainViewModel.ResolveCleanupTargets(new[] { notChecked }, notChecked);
-
-            Assert.Equal(MainViewModel.CleanupTargetSource.CurrentRow, byRow.Source);
-            Assert.Equal(new[] { notChecked }, byRow.Tasks);
-
+            // 一个都没勾：哪怕列表里就摆着任务、哪怕它就是"当前点中的那一行"，也**一个都不给**。
             MainViewModel.CleanupTargetSelection none =
-                MainViewModel.ResolveCleanupTargets(new[] { notChecked }, null);
+                MainViewModel.ResolveCleanupTargets(new[] { notChecked });
 
             Assert.Equal(MainViewModel.CleanupTargetSource.None, none.Source);
             Assert.False(none.HasTarget);
+            Assert.Empty(none.Tasks);
+
+            // 空列表同理（别在这里抛异常）。
+            MainViewModel.CleanupTargetSelection empty = MainViewModel.ResolveCleanupTargets(null);
+
+            Assert.Equal(MainViewModel.CleanupTargetSource.None, empty.Source);
+            Assert.False(empty.HasTarget);
         }
 
         [Fact]
-        public void 当前行已经不在列表里时_不算数()
+        public void 空列表与列表中一个都没勾_判定一致()
         {
-            // 任务被移除之后 SelectedTask 可能还指着那个对象（界面会清成 null，命令层不能依赖它）。
-            var removedTask = new ArchiveTask(@"C:\t\999.7z", 9) { IsSelected = false };
             var inList = new ArchiveTask(@"C:\t\222.7z", 1) { IsSelected = false };
 
+            // 「任务被移除之后 SelectedTask 还指着旧对象」这一类幽灵状态，现在天然不可能再被当成目标 ——
+            // 判定只看 IsSelected，不接收也读不到任何"当前行"。
             MainViewModel.CleanupTargetSelection selection =
-                MainViewModel.ResolveCleanupTargets(new[] { inList }, removedTask);
+                MainViewModel.ResolveCleanupTargets(new[] { inList });
 
             Assert.Equal(MainViewModel.CleanupTargetSource.None, selection.Source);
             Assert.False(selection.HasTarget);
@@ -415,26 +446,23 @@ namespace ArchiveFixer.Tests
 
             string byChecked = MainViewModel.DescribeCleanupTargets(
                 "删除其余物",
-                MainViewModel.ResolveCleanupTargets(new[] { task }, null));
+                MainViewModel.ResolveCleanupTargets(new[] { task }));
 
             Assert.Contains("以勾选为准", byChecked, StringComparison.Ordinal);
             Assert.Contains("222.7z", byChecked, StringComparison.Ordinal);
 
             var rowTask = new ArchiveTask(@"C:\t\333.7z", 2) { IsSelected = false };
 
-            string byRow = MainViewModel.DescribeCleanupTargets(
-                "删除其余物",
-                MainViewModel.ResolveCleanupTargets(new[] { rowTask }, rowTask));
-
-            Assert.Contains("没有勾选任何任务", byRow, StringComparison.Ordinal);
-            Assert.Contains("按当前点中的那一行处理", byRow, StringComparison.Ordinal);
-
             string nothing = MainViewModel.DescribeCleanupTargets(
                 "删除其余物",
-                MainViewModel.ResolveCleanupTargets(new[] { rowTask }, null));
+                MainViewModel.ResolveCleanupTargets(new[] { rowTask }));
 
-            Assert.Contains("既没有勾选任务", nothing, StringComparison.Ordinal);
+            Assert.Contains("没有勾选任何任务", nothing, StringComparison.Ordinal);
             Assert.Contains("已取消", nothing, StringComparison.Ordinal);
+
+            // 留痕的那句话里不许再出现"按当前行处理"的旧口径。
+            Assert.DoesNotContain("当前点中的那一行", nothing, StringComparison.Ordinal);
+            Assert.DoesNotContain("333.7z", nothing, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -445,7 +473,7 @@ namespace ArchiveFixer.Tests
             var third = new ArchiveTask(@"C:\t\444.7z", 3) { IsSelected = true, OutputPath = @"C:\t\other" };
 
             MainViewModel.CleanupTargetSelection selection =
-                MainViewModel.ResolveCleanupTargets(new[] { first, second, third }, null);
+                MainViewModel.ResolveCleanupTargets(new[] { first, second, third });
 
             // 整目录语义：同目录只算一次（其余两个包本来也会被这一次删掉）。
             Assert.Equal(2, MainViewModel.ExpandCleanupTargets(selection, everythingInDirectory: true).Count);

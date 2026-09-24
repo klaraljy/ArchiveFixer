@@ -163,10 +163,15 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 全不选不动当前行_删除其余物仍然能按当前行兜底()
+        public void 全不选之后_清理类命令不会再拿当前行开刀()
         {
-            // 口径是"一个都没勾时按当前点中的那一行办"（见 StatusText.SelectionScopeHint）：
-            // 「全不选」若顺手把行高亮也清了，紧接着的「删除其余物」就没有兜底对象了。
+            /*
+             * 用户 2026-09-24 第 12 条："我即使没有特地的没有去选中，你为什么还要去操作，
+             * 你只需要操作我选中的文件，其他的不用管。"
+             *
+             * 所以「全不选」之后：行高亮还在（右键菜单仍能用），但命令型入口**一个都不给** ——
+             * 旧口径那条"退化为当前点中的那一行"的兜底已经删掉。
+             */
             MainViewModel vm = CreateViewModel();
 
             ArchiveTask first = AddTask(vm, "222.7z");
@@ -181,10 +186,11 @@ namespace ArchiveFixer.Tests
             Assert.False(second.IsSelected);
 
             MainViewModel.CleanupTargetSelection selection =
-                MainViewModel.ResolveCleanupTargets(vm.Tasks, vm.SelectedTask);
+                MainViewModel.ResolveCleanupTargets(vm.Tasks);
 
-            Assert.Equal(MainViewModel.CleanupTargetSource.CurrentRow, selection.Source);
-            Assert.Same(second, selection.Tasks[0]);
+            Assert.Equal(MainViewModel.CleanupTargetSource.None, selection.Source);
+            Assert.False(selection.HasTarget);
+            Assert.Empty(selection.Tasks);
         }
 
         [Fact]

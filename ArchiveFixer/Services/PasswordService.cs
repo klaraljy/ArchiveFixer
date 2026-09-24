@@ -39,6 +39,25 @@ namespace ArchiveFixer.Services
         /// </summary>
         private readonly List<string> _tombstones = new();
 
+        /// <summary>
+        /// 每本已记住的密码本**解析出来的值集合**（键 = 书路径，Windows 口径大小写不敏感）。
+        ///
+        /// <para><b>它解决哪一个现象</b>（用户 2026-09-24 第 21 条原话："上面显示添加成功了，为什么重启了一下，
+        /// 又显示未添加，你到底是不是保存在本地的"）：以前「未写回」标记只看
+        /// <see cref="PasswordItem.Source"/> 是不是 <c>ManualList</c>，而落盘的只有**来源** ——
+        /// "这条值到底在不在密码本文件里"这个事实既没被记录、也没被重新判定。
+        /// 写回成功只是当场把内存里的账记了一笔，重启后账没了、来源又恢复成 <c>ManualList</c>，
+        /// 标记于是原样长回来。现在判据改成**按值**：值出现在任何一本已记住的书里，才算已写回。</para>
+        ///
+        /// <para><b>为什么不合并成一个全局集合</b>：用户在设置里移除一本书之后，那本书里的值就
+        /// 不再算"已写回"了；按书记账才能把移除的那一本单独丢掉，不必为此重新读所有文件。</para>
+        ///
+        /// <para><b>诚实原则</b>：这里只放"真的从文件里读出来的值"。没有任何已记住的书、
+        /// 书不存在、读不出来 —— 都**不放**任何东西，标记照旧亮着（绝不假装已写回）。</para>
+        /// </summary>
+        private readonly Dictionary<string, HashSet<string>> _bookValuesByPath =
+            new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>落盘抑制计数（批量操作期间不为每一条写一次文件）。</summary>
         private int _persistSuspensions;
 
@@ -89,6 +108,30 @@ namespace ArchiveFixer.Services
 
         /// <summary>墓碑（副本，只读；供测试与排障核对）。</summary>
         public IReadOnlyList<string> Tombstones => _tombstones;
+
+        /// <summary>
+        /// 已记住的密码本里一共读到过多少个不同的值（排障与测试用；读不到的书一个都不算）。
+        ///
+        /// <para>只数"当前还在记住清单里"的书：用户移除一本书之后，它的值不该再被算进来
+        /// （否则那条目会一直显示"已写回"，而实际上它已经不在任何一本被记住的书里了）。</para>
+        /// </summary>
+        public int RememberedBookValueCount
+        {
+            get
+            {
+                var values = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (string path in _bookPaths)
+                {
+                    if (_bookValuesByPath.TryGetValue(path, out HashSet<string>? known))
+                    {
+                        values.UnionWith(known);
+                    }
+                }
+
+                return values.Count;
+            }
+        }
 
         public PasswordService()
         {
@@ -216,6 +259,10 @@ namespace ArchiveFixer.Services
                 }
             }
 
+            // 被移除的那些书，它的值账要一起丢掉：不然"值在某本书里"会一直算数，
+            // 而用户刚刚在设置里把那本书删掉了 —— 那正是"显示已写回、其实带不走"的假象。
+            PruneBookValues();
+
             PersistPasswordList();
         }
 
@@ -228,6 +275,70 @@ namespace ArchiveFixer.Services
             }
 
             PersistPasswordList();
+        }
+
+        /// <summary>
+        /// 这个值是不是**确实躺在某一本已记住的密码本里**（用户 2026-09-24 第 21 条的判据）。
+        ///
+        /// <para>纯事实查询：只认从文件里解析出来的值。没有任何已记住的书、书不存在、
+        /// 书读不出来、值是空串 —— 一律返回 false（调用方据此保持「未写回」标记，不假装已写回）。</para>
+        /// </summary>
+        public bool IsValueInRememberedBooks(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return false;
+            }
+
+            foreach (string path in _bookPaths)
+            {
+                if (_bookValuesByPath.TryGetValue(path, out HashSet<string>? known) && known.Contains(value))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// **重新读一遍**所有已记住的密码本来重建值集合，返回其中真正读到的本书。
+        ///
+        /// <para>什么时候必须调它：「写回密码本」成功之后 —— 值刚刚被追加进文件，只有重新读文件
+        /// 才知道它真的在里面了（⛔ 不许把"我刚写过"当成事实记一笔，那正是重启后标记复活的旧病根）。
+        /// 读不到的书整本丢掉旧账，绝不保留它上一次读到的值。</para>
+        /// </summary>
+        public int RefreshRememberedBookValues()
+        {
+            _bookValuesByPath.Clear();
+
+            int readableBooks = 0;
+
+            foreach (string path in _bookPaths.ToList())
+            {
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    continue;
+                }
+
+                PasswordBookParseResult parsed;
+
+                try
+                {
+                    parsed = PasswordBookParser.ParseFile(path);
+                }
+                catch (Exception)
+                {
+                    // 读不出来 = 这本书现在提供不了任何事实（权限、被占用、编码彻底认不出…）。
+                    // 吞掉异常是刻意的：它只影响一个显示标记，绝不配让"写回"这个动作失败或崩掉。
+                    continue;
+                }
+
+                RecordBookValues(path, parsed.Entries);
+                readableBooks++;
+            }
+
+            return readableBooks;
         }
 
         /// <summary>
@@ -261,6 +372,13 @@ namespace ArchiveFixer.Services
 
             warnings = parsed.Warnings;
             parsedCount = parsed.Entries.Count;
+
+            /*
+             * 合并这一步顺手把"这本书里有哪些值"记下来（用户 2026-09-24 第 21 条）：
+             * 启动时逐本合并正是"加载每本书的值集合"那一刻，而这里的解析结果**现成**，
+             * 不必再读一遍文件。判"未写回"标记时问的就是这份事实。
+             */
+            RecordBookValues(bookPath, parsed.Entries);
 
             var existing = new HashSet<string>(
                 Passwords.Select(item => item.Value ?? string.Empty),
@@ -391,6 +509,55 @@ namespace ArchiveFixer.Services
             _bookPaths.Add(trimmed);
 
             return true;
+        }
+
+        /// <summary>
+        /// 把一本书这次解析出来的值**整份替换**进 <see cref="_bookValuesByPath"/>。
+        ///
+        /// <para>为什么是"整份替换"而不是"逐条追加"：用户手改过密码本（删掉几行）之后，
+        /// 上一次读到的值不能继续算数 —— 否则那条目会一直显示"已写回"，而文件里其实已经没有了。</para>
+        ///
+        /// <para>含被墓碑跳过的值：墓碑管的是"要不要放进尝试列表"，与"文件里有没有这个值"是两件事。</para>
+        /// </summary>
+        private void RecordBookValues(string? bookPath, IEnumerable<PasswordEntry>? entries)
+        {
+            if (string.IsNullOrWhiteSpace(bookPath))
+            {
+                return;
+            }
+
+            var values = new HashSet<string>(StringComparer.Ordinal);
+
+            if (entries != null)
+            {
+                foreach (PasswordEntry entry in entries)
+                {
+                    if (entry != null && !string.IsNullOrEmpty(entry.Password))
+                    {
+                        values.Add(entry.Password);
+                    }
+                }
+            }
+
+            _bookValuesByPath[bookPath.Trim()] = values;
+        }
+
+        /// <summary>把"已经不在记住清单里"的书的值账丢掉（用户移除一本书之后）。</summary>
+        private void PruneBookValues()
+        {
+            if (_bookValuesByPath.Count == 0)
+            {
+                return;
+            }
+
+            var stale = _bookValuesByPath.Keys
+                .Where(path => !_bookPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (string path in stale)
+            {
+                _bookValuesByPath.Remove(path);
+            }
         }
 
         private PasswordListSnapshot BuildSnapshot()
@@ -666,6 +833,14 @@ namespace ArchiveFixer.Services
             LastImportWarnings = parsed.Warnings;
 
             LastImportedBookPath = txtPath;
+
+            /*
+             * 导入进来的值**确实在用户那本书里** —— 记下来，"未写回"标记就不会误报
+             * （用户 2026-09-24 第 21 条：判据按值、且以文件为准）。
+             * 放在 AddBookPathCore 之前也没关系：查询时会先看书在不在记住清单里，
+             * 而下面紧接着就会把这本书加进清单。
+             */
+            RecordBookValues(txtPath, parsed.Entries);
 
             /*
              * 把路径写盘 —— 挂在"导入"这个动作上，而不是挂在某个窗口上。

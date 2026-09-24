@@ -264,10 +264,24 @@ namespace ArchiveFixer.ViewModels
 
             if (targets.Count == 0)
             {
+                /*
+                 * 一律只认勾选（用户 2026-09-24 第 12 条）：一个都没勾 → **只提示、什么都不做**。
+                 * ⛔ 这里永远不许再出现"没勾就退回当前点中的那一行"之类的兜底
+                 *（用户原话："你只需要操作我选中的文件，其他的不用管"）。
+                 *
+                 * 提示语来自 StatusText 的唯一来源，与「只解压」、清理类命令逐字相同 ——
+                 * 以前三处各写一套，用户看到三种说法，还以为是三个不同的问题。
+                 */
                 _dialogService.ShowInfo(Tasks.Count == 0
-                    ? "任务列表是空的。先把文件或文件夹拖进来，或点“添加文件夹”。"
-                    : $"请先勾选要处理的任务。{Environment.NewLine}{Environment.NewLine}" +
-                      $"列表里有 {Tasks.Count} 个任务，当前一个都没勾。在列表上按 Ctrl+A 可以全选。");
+                    ? StatusText.TaskListEmptyPrompt
+                    : string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.NoCheckedTaskPromptFormat,
+                        "一键处理",
+                        Tasks.Count));
+
+                AppendLog("WARN", StatusText.NoCheckedTaskLogFormat);
+
                 return;
             }
 
@@ -489,11 +503,18 @@ namespace ArchiveFixer.ViewModels
                          * 已经处理过的任务全部取消勾选。
                          * 不这样做，下一轮会把它们**重新解压一遍**，产出 "(1)" 这样的垃圾副本 ——
                          * 解压流程只认勾选状态，这正是它该有的样子（不偷偷处理没勾的）。
+                         *
+                         * 必须走批量守卫（用户 2026-09-24 第 12 条"卡死"的修法之一）：逐项改勾选
+                         * 会让**每一项**都触发一次全表汇总重算 + 38 条命令重查，
+                         * 几百项的任务列表在这一步就是几百次 O(N) 扫描（O(N²)）。
                          */
-                        foreach (ArchiveTask task in processed)
+                        _vm.RunBulkSelectionUpdate(() =>
                         {
-                            task.IsSelected = false;
-                        }
+                            foreach (ArchiveTask task in processed)
+                            {
+                                task.IsSelected = false;
+                            }
+                        });
 
                         nextRound = await AddInnerTasksAsync(innerArchives);
                     }
@@ -680,7 +701,17 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                await _scanCoordinator.AddPathsAsync(candidates.Select(c => c.Path).ToList());
+                /*
+                 * ⚠ 这里必须是**追加**（ImportMode.Append）。
+                 *
+                 * 「添加文件 / 添加文件夹」的默认语义是"清空整张表再加"（用户 2026-09-24 第 12 条），
+                 * 而这一步是解压途中往列表里补内层包 —— 用替换语义就会把用户的任务表
+                 * （连同刚刚解完的那些结果行）整张清掉。AddPathsAsync 刻意**不给默认值**，
+                 * 就是为了让这种调用点必须把意图写出来。
+                 */
+                await _scanCoordinator.AddPathsAsync(
+                    candidates.Select(c => c.Path).ToList(),
+                    ImportMode.Append);
             }
             finally
             {
@@ -701,32 +732,39 @@ namespace ArchiveFixer.ViewModels
 
             var added = new List<ArchiveTask>();
 
-            for (int i = before; i < Tasks.Count; i++)
+            /*
+             * 新内层包一律勾上，整批只刷一次汇总（批量守卫）——
+             * 内层包可能有几十上百个，逐项勾选会逐项触发全表重算（O(N²)）。
+             */
+            _vm.RunBulkSelectionUpdate(() =>
             {
-                /*
-                 * 新任务必须处于勾选状态才会被下一轮处理。
-                 * FileScanService 建任务时就是 IsSelected = true（也确认过 ArchiveTask 的字段默认值），
-                 * 但这条是"续解能不能继续"的命门，显式写一遍，免得以后有人改默认值时静默失效。
-                 */
-                Tasks[i].IsSelected = true;
-
-                if (byPath.TryGetValue(NormalizePath(Tasks[i].CurrentPath), out InnerArchiveCandidate? candidate))
+                for (int i = before; i < Tasks.Count; i++)
                 {
-                    Tasks[i].ParentOutputDirectory = candidate.ParentOutputDirectory;
-                    Tasks[i].ParentTaskName = candidate.ParentTaskName;
-
                     /*
-                     * 落点当场写一遍，别等界面刷新：续解下一轮要读 task.OutputPath 找内层包，
-                     * 中间任何一次时序错位都会让第二层静默不跑（历史事故）。
+                     * 新任务必须处于勾选状态才会被下一轮处理。
+                     * FileScanService 建任务时就是 IsSelected = true（也确认过 ArchiveTask 的字段默认值），
+                     * 但这条是"续解能不能继续"的命门，显式写一遍，免得以后有人改默认值时静默失效。
                      */
-                    if (!string.IsNullOrWhiteSpace(candidate.ParentOutputDirectory))
-                    {
-                        Tasks[i].OutputPath = candidate.ParentOutputDirectory;
-                    }
-                }
+                    Tasks[i].IsSelected = true;
 
-                added.Add(Tasks[i]);
-            }
+                    if (byPath.TryGetValue(NormalizePath(Tasks[i].CurrentPath), out InnerArchiveCandidate? candidate))
+                    {
+                        Tasks[i].ParentOutputDirectory = candidate.ParentOutputDirectory;
+                        Tasks[i].ParentTaskName = candidate.ParentTaskName;
+
+                        /*
+                         * 落点当场写一遍，别等界面刷新：续解下一轮要读 task.OutputPath 找内层包，
+                         * 中间任何一次时序错位都会让第二层静默不跑（历史事故）。
+                         */
+                        if (!string.IsNullOrWhiteSpace(candidate.ParentOutputDirectory))
+                        {
+                            Tasks[i].OutputPath = candidate.ParentOutputDirectory;
+                        }
+                    }
+
+                    added.Add(Tasks[i]);
+                }
+            });
 
             return added;
         }

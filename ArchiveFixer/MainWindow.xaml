@@ -47,8 +47,27 @@
               Padding="2"
               Background="Transparent">
             <MenuItem Header="文件">
-                <MenuItem Header="添加文件..." Command="{Binding AddFilesCommand}" />
-                <MenuItem Header="添加文件夹..." Command="{Binding AddFolderCommand}" />
+                <!--
+                    用户 2026-09-24 第 12 条拍板：「添加文件 / 添加文件夹」= **替换**语义
+                    （先把整张表彻底清空再加）。原话："每次我新选择了其他的，无论是什么，
+                    你都要将列表彻底清空" —— 旧行为是追加，于是上一批任务一直赖在列表里，
+                    他点一键处理时把旧的那批一起跑了。
+                    想往现有列表里加 → 用下面的「追加到列表」。
+                -->
+                <MenuItem Header="添加文件..."
+                          Command="{Binding AddFilesCommand}"
+                          ToolTip="{x:Static models:StatusText.AddReplacesListHint}" />
+                <MenuItem Header="添加文件夹..."
+                          Command="{Binding AddFolderCommand}"
+                          ToolTip="{x:Static models:StatusText.AddReplacesListHint}" />
+                <MenuItem Header="追加到列表">
+                    <MenuItem Header="追加文件..."
+                              Command="{Binding AppendFilesCommand}"
+                              ToolTip="{x:Static models:StatusText.AppendToListHint}" />
+                    <MenuItem Header="追加文件夹..."
+                              Command="{Binding AppendFolderCommand}"
+                              ToolTip="{x:Static models:StatusText.AppendToListHint}" />
+                </MenuItem>
                 <Separator />
                 <MenuItem Header="重新扫描" Command="{Binding ScanCommand}" />
                 <Separator />
@@ -81,8 +100,10 @@
                 <Separator />
                 <!--
                     删除入口（规格 §3.2 / §5）。三个动作**互相独立**，不合并成一个开关：
-                    作用对象**以勾选为准**（最左侧一列）——勾了几个就逐个处理几个；一个都没勾时
-                    退化为"当前点中的那一行"；两者都没有才会提示先选一个（与列表上方那条蓝字同一套口径）。
+                    作用对象**一律只认勾选**（最左侧一列）——勾了几个就逐个处理几个；
+                    **一个都没勾就什么都不做**，只提示"没有勾选任何任务"（与列表上方那条蓝字同一套口径，
+                    见 Models/StatusText.SelectionScopeHint）。
+                    ⛔ 这里从来没有、也不许再有"没勾就按当前点中的那一行办"这条兜底。
                     作用域本身： 「删除其余物」只作用于**每个目标任务自己那一份**（包有自己的目录时是
                     <任务输出目录>\其余物\，共享输出目录时是 <共享根>\其余物\<本任务包基名>\，
                     绝不碰别的包的目录）；「删除本目录全部其余物」是显式的整目录入口，
@@ -92,13 +113,13 @@
                 -->
                 <MenuItem Header="删除其余物..."
                           Command="{Binding CleanProcessArtifactsCommand}"
-                          ToolTip="删除**勾选**的每个任务自己那一份「其余物」（内层归档 / 分卷 / 中间件 / 源包）。先预览条目数、总大小与源包个数，默认移入回收站，不会碰同一个目录下其它包的其余物。一个都没勾时按当前点中的那一行处理。" />
+                          ToolTip="删除**勾选**的每个任务自己那一份「其余物」（内层归档 / 分卷 / 中间件 / 源包）。先预览条目数、总大小与源包个数，默认移入回收站，不会碰同一个目录下其它包的其余物。作用对象一律只认勾选：一个都没勾就什么都不做（口径见列表上方那条说明）。" />
                 <MenuItem Header="删除本目录全部其余物..."
                           Command="{Binding CleanAllProcessArtifactsCommand}"
                           ToolTip="删除目标任务输出目录（共享目录模式下就是源包所在目录）下的**全部**其余物，会影响同目录里的所有包 —— 确认框里会点名影响几个包。先预览并写明影响范围，默认不选。" />
                 <MenuItem Header="清理空文件夹..."
                           Command="{Binding CleanEmptyFoldersCommand}"
-                          ToolTip="清理**勾选**的每个任务输出根下“任意层级都没有文件”的子目录（一个都没勾时按当前点中的那一行处理）。先预览，默认移入回收站。" />
+                          ToolTip="清理**勾选**的每个任务输出根下“任意层级都没有文件”的子目录（一个都没勾就什么都不做，只提示）。先预览，默认移入回收站。" />
             </MenuItem>
         </Menu>
 

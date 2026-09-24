@@ -21,6 +21,9 @@ namespace ArchiveFixer
         private ScrollViewer? _logScrollViewer;
         private bool _logPinnedToBottom = true;
 
+        /// <summary>日志滚动已排队（一个排空周期只滚一次，见 <see cref="Logs_CollectionChanged"/>）。</summary>
+        private bool _scrollToEndPending;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -182,7 +185,37 @@ namespace ArchiveFixer
                 return;
             }
 
-            LogList.ScrollIntoView(LogList.Items[LogList.Items.Count - 1]);
+            /*
+             * 合并滚动（用户 2026-09-24 第 12 条"卡死"的修法之一）。
+             *
+             * 旧写法是**每加一行就 ScrollIntoView** —— 而导入/一键处理会连着打几十上百行
+             * （批首的排期日志就是一个没有 await 的循环里连打 N+2 行），每行都强制一次
+             * 布局 + 滚动命中测试，界面线程被日志拖着走。
+             *
+             * 现在一个"排空周期"只滚一次：请求排在 Background 优先级上，
+             * 那些同样是排队进来的日志行（Normal 优先级）先全部处理完，滚动才发生。
+             * 用户看到的效果一样（始终贴在最后一行），省掉的是成百次布局。
+             */
+            if (_scrollToEndPending)
+            {
+                return;
+            }
+
+            _scrollToEndPending = true;
+
+            Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() =>
+                {
+                    _scrollToEndPending = false;
+
+                    if (!_logPinnedToBottom || LogList.Items.Count == 0)
+                    {
+                        return;
+                    }
+
+                    LogList.ScrollIntoView(LogList.Items[LogList.Items.Count - 1]);
+                }));
         }
 
         private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
@@ -376,15 +409,21 @@ namespace ArchiveFixer
                 return;
             }
 
-            foreach (ArchiveTask item in viewModel.Tasks)
+            /*
+             * 一次"只留这一个"（用户 2026-09-24 第 12 条"卡死"的修法之一）。
+             *
+             * 旧写法逐项 item.IsSelected = false —— 每一项都会触发一次全表汇总重算
+             * （MainViewModel.Task_SelectionPropertyChanged）+ 38 条命令可用性重查，
+             * 几百项的任务列表就是几百次全表重算。现在套既有批量守卫：
+             * 整段改完只刷**一次**汇总（磁盘上一个字节都不动）。
+             */
+            viewModel.RunBulkSelectionUpdate(() =>
             {
-                if (!ReferenceEquals(item, task))
+                foreach (ArchiveTask item in viewModel.Tasks)
                 {
-                    item.IsSelected = false;
+                    item.IsSelected = ReferenceEquals(item, task);
                 }
-            }
-
-            task.IsSelected = true;
+            });
 
             if (viewModel.SmartRenameCommand.CanExecute(null))
             {
