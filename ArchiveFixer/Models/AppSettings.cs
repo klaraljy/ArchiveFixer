@@ -358,21 +358,32 @@ namespace ArchiveFixer.Models
         /// </summary>
         public bool ReportDangerousEntries { get; set; } = true;
 
+        /// <summary>
+        /// 解压前的提醒（**默认开**）：扫一遍源目录，把"可能的无用物"与"一个可用密码都没有"的包列出来，
+        /// 让用户先看一眼再决定（AGENTS.md §9.7；用户 2026-09-24 第 15 条要求这一项可关）。
+        ///
+        /// <para>
+        /// 关掉它 = **不扫、不弹**，直接开始解压。它与弹窗里那个"本次运行不再提示"是两件事：
+        /// 后者只记内存、进程一退就失效，这一项是落盘的长期选择。
+        /// </para>
+        /// </summary>
+        public bool RemindBeforeExtract { get; set; } = true;
+
         public bool RememberLastOutputDirectory { get; set; } = true;
 
         /// <summary>
-        /// 扫描时是否包含隐藏文件（默认否）。**只能手改配置文件** —— 设置窗口没有这一项。
+        /// 扫描时是否包含隐藏文件（默认否）。设置界面在⑥设置页的「扫描与识别」里。
         /// </summary>
         public bool IncludeHiddenFiles { get; set; } = false;
 
         /// <summary>
-        /// 扫描时是否包含系统文件（默认否）。**只能手改配置文件** —— 设置窗口没有这一项。
+        /// 扫描时是否包含系统文件（默认否）。设置界面在⑥设置页的「扫描与识别」里。
         /// </summary>
         public bool IncludeSystemFiles { get; set; } = false;
 
         /// <summary>
         /// 扫描时的单文件大小上限，单位 **MB**（0 = 不限制，默认）。
-        /// **只能手改配置文件** —— 设置窗口没有这一项。超过上限的文件不进任务列表。
+        /// 设置界面在⑥设置页的「扫描与识别」里。超过上限的文件不进任务列表。
         /// </summary>
         public long MaxFileSizeLimit { get; set; } = 0;
 
@@ -683,6 +694,7 @@ namespace ArchiveFixer.Models
                 OpenOutputFolderWhenDone = false,
                 RestRemovalDefaultMode = RestRemovalModes.RecycleBin,
                 ReportDangerousEntries = true,
+                RemindBeforeExtract = true,
                 RememberLastOutputDirectory = true,
                 IncludeHiddenFiles = false,
                 IncludeSystemFiles = false,

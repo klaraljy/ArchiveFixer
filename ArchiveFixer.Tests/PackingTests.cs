@@ -1344,10 +1344,14 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置窗口里真的有RarExe那一格_并且写明许可边界()
+        public void 解压方式页里真的有RarExe那一格_并且写明许可边界()
         {
+            /*
+             * 2026-09-24 第 11 条之后外部工具路径归到②解压方式页的「引擎」分组
+             * （原来是设置窗口的「高级设置」里）。
+             */
             string xaml = File.ReadAllText(
-                Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "Views", "SettingsWindow.xaml"));
+                Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "Views", "Tabs", "ExtractionTab.xaml"));
 
             Assert.Contains("CustomRarExePath", xaml, StringComparison.Ordinal);
             Assert.Contains("SelectRarExeCommand", xaml, StringComparison.Ordinal);

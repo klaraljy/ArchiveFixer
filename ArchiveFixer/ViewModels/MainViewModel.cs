@@ -208,6 +208,7 @@ namespace ArchiveFixer.ViewModels
         private readonly RenameCoordinator _renameCoordinator;
         private readonly ExtractionCoordinator _extractionCoordinator;
         private readonly OneClickCoordinator _oneClickCoordinator;
+        private readonly SettingsViewModel _settingsEditor;
 
         private AppSettings _settings;
         private string _globalPassword = string.Empty;
@@ -262,7 +263,88 @@ namespace ArchiveFixer.ViewModels
                 if (SetProperty(ref _settings, value))
                 {
                     ApplyEngineSettings();
+
+                    /*
+                     * 设置对象换成新的一份了（恢复默认 / 保存之后）：选项卡上那三页设置
+                     * 绑的是 SettingsEditor，必须让它**指向同一个对象** ——
+                     * 否则界面上还显示着上一份的值，用户改完保存却"看起来没生效"。
+                     *
+                     * （构造阶段这里是 null：编辑器还没建出来，?.就是为它准备的。）
+                     */
+                    SettingsEditor?.AttachSharedSettings(_settings);
                 }
+            }
+        }
+
+        /// <summary>
+        /// 选项卡上「设置」「解压方式」「清理与删除」「密码」四页共用的设置编辑器
+        /// （用户 2026-09-24 第 11 条：设置窗口退休，内容按功能拆进选项卡）。
+        ///
+        /// <para>
+        /// 它仍然是 <see cref="SettingsViewModel"/> —— 保存前的两道拦截
+        /// （工具路径指向不存在的文件、危险模式没自测凭证）**一行没动**，
+        /// 只是把"点保存 → 关窗"换成"点底栏的保存设置 → 留在原地"。
+        /// </para>
+        /// </summary>
+        public SettingsViewModel SettingsEditor => _settingsEditor;
+
+        /// <summary>
+        /// ⑤ 打包页用的编辑器（原打包窗口的 ViewModel，界面整页搬进选项卡，没有第二份）。
+        ///
+        /// <para>日志通过 <c>LogSink</c> 接到主日志上 —— 打包结果要能追到引擎名与版本（不变量 14），
+        /// 切走页面之后日志里还得查得到。</para>
+        /// </summary>
+        public PackingViewModel PackingEditor { get; }
+
+        /// <summary>
+        /// 「跳到某一页」的请求（设置 / 打包搬进选项卡之后，这两个命令只是切页）。
+        /// 没有订阅者（测试 / 命令行宿主）时只写一行日志 —— 绝不静默什么都不做。
+        /// </summary>
+        public event Action<int>? TabRequested;
+
+        /// <summary>打包页在选项卡里的位置。</summary>
+        public const int PackingTabIndex = 4;
+
+        /// <summary>设置页在选项卡里的位置。</summary>
+        public const int SettingsTabIndex = 5;
+
+        /// <summary>
+        /// 「关于」那一段（帮助 → 关于 与⑥设置页共用同一份文本）：
+        /// 程序版本 + 每个引擎的名字 / 版本 / 是否可用 + 许可边界。
+        ///
+        /// <para>
+        /// 为什么把引擎版本摆在这里：结果要能追到具体引擎与版本（不变量 14），
+        /// 而"我现在到底在用哪个 7-Zip / UnRAR"是用户排障时第一个要问的问题。
+        /// 引擎那一份数据来自 <see cref="SettingsEditor"/> 的检测结果，界面与这里不会分叉。
+        /// </para>
+        /// </summary>
+        public string AboutText
+        {
+            get
+            {
+                var builder = new System.Text.StringBuilder();
+
+                string version = typeof(MainViewModel).Assembly.GetName().Version?.ToString() ?? "（版本读不到）";
+
+                builder.AppendLine("ArchiveFixer " + version);
+                builder.AppendLine();
+
+                if (SettingsEditor.Engines.Count == 0)
+                {
+                    builder.AppendLine("（没有检测到任何引擎）");
+                }
+                else
+                {
+                    foreach (EngineOptionItem engine in SettingsEditor.Engines)
+                    {
+                        builder.AppendLine(engine.HeaderText);
+                    }
+                }
+
+                builder.AppendLine();
+                builder.Append(StatusText.AboutLicenseText);
+
+                return builder.ToString();
             }
         }
 
@@ -402,7 +484,7 @@ namespace ArchiveFixer.ViewModels
 
             if (count == 0)
             {
-                PasswordBookSummary = "密码本：未加载（0 条）——点「密码列表管理」或菜单「工具 → 导入密码本...」";
+                PasswordBookSummary = "密码本：未加载（0 条）——点「密码列表管理」或在④「密码」页点「导入密码本…」";
                 PasswordBookTooltip = "空密码仍会按设置尝试；密码列表按本机加密保存（可在设置里关掉），日志不记明文。";
 
                 AppendRememberedListWarningToSummary();
@@ -1090,8 +1172,20 @@ namespace ArchiveFixer.ViewModels
         public ICommand OpenPasswordListCommand { get; }
 
         /// <summary>
-        /// 打包入口（菜单「工具 → 打包文件夹为加密分卷…」，**唯一**入口；用户 2026-09-22 需求第 10 条）。
+        /// 底栏的「保存设置」：校验 → 归一化 → 落盘 → 把引擎相关设置推给引擎层。
+        ///
+        /// <para>选项卡上的设置页改的是**共享的那一份设置对象**，所以在按下这个按钮之前，
+        /// 改动只在本次运行内有效（界面上写着这句话）；按下之后才写进 appsettings.json。
+        /// 校验不过（工具路径不存在 / 危险模式没凭证）就停在原地并把改法说清 —— 与设置窗口同一份实现。</para>
+        /// </summary>
+        public ICommand SaveSettingsCommand { get; }
+
+        /// <summary>
+        /// 打包入口（**⑤「打包」选项卡**，整页在那儿；用户 2026-09-22 需求第 10 条）。
         /// 打包是独立的一条流水线（7z 分卷 → 外层加密 rar），不依赖任务列表，所以没有勾选之类的前置条件。
+        ///
+        /// <para>2026-09-24 第 11 条之后它不再打开窗口，只负责把界面切到⑤页
+        /// （原来的打包窗口已退休，界面整页搬进了选项卡）。</para>
         /// </summary>
         public ICommand OpenPackingCommand { get; }
 
@@ -1293,6 +1387,19 @@ namespace ArchiveFixer.ViewModels
             ApplyEngineSettings();
 
             /*
+             * 设置编辑器（选项卡②③④⑥绑它）与打包编辑器（⑤绑它）。
+             *
+             * ⚠ AttachSharedSettings 是**必须**的：SettingsViewModel 的构造函数会克隆一份设置
+             * （设置窗口的「取消」靠它回退），而选项卡上同一项可能在多处出现
+             * （并发档既在②的输入框里、又决定危险模式凭证的覆盖判定），
+             * 两份值一定会打架 —— 共享同一个对象才不会有"界面显示 A、保存写回 B"。
+             */
+            _settingsEditor = new SettingsViewModel(_settings, _settingsService);
+            _settingsEditor.AttachSharedSettings(_settings);
+
+            PackingEditor = new PackingViewModel { LogSink = line => AppendLog("INFO", line) };
+
+            /*
              * 「记住上次输出目录」真正生效的地方（不是留着好看的开关）：
              * 关掉之后，启动时**不**把上次的输出目录填回 SelectedOutputDirectory，
              * 这一次运行按"输出位置"那一档的规则算落点（默认 = 压缩包同目录）。
@@ -1325,6 +1432,7 @@ namespace ArchiveFixer.ViewModels
             OpenSettingsCommand = new RelayCommand(OpenSettings, CanRunNormalCommand);
             OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
             OpenPackingCommand = new RelayCommand(OpenPacking, CanRunNormalCommand);
+            SaveSettingsCommand = new RelayCommand(SaveSettings, CanRunNormalCommand);
             ImportPasswordBookCommand = new RelayCommand(ImportPasswordBook, CanRunNormalCommand);
             ExportLogCommand = new RelayCommand(ExportLog);
             CopyFailedListCommand = new RelayCommand(CopyFailedList);
@@ -1334,7 +1442,7 @@ namespace ArchiveFixer.ViewModels
             OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
             OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
 
-            // 其余物删除入口（菜单「工具」）：预览 → 确认 → 后台执行，全程不阻塞界面。
+            // 其余物删除入口（③「清理与删除」页）：预览 → 确认 → 后台执行，全程不阻塞界面。
             // 第一个只作用于**当前勾选任务自己那一份**；第二个是显式的"整个目录"入口（默认不选）。
             CleanProcessArtifactsCommand = new AsyncRelayCommand(
                 () => RunCleanupAsync(CleanupScope.Artifacts, ArtifactDeleteScope.SelectedTask),
@@ -1573,7 +1681,7 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * 书的清单两边都有，合并顺序按"记忆优先、设置兜底"：
                  * ① 记忆里的顺序是用户实际用出来的顺序，要保留；
-                 * ② 设置里那份是权威（用户在设置窗口能逐项移除），所以**以设置的集合为准**，
+                 * ② 设置里那份是权威（用户在④「密码」页能逐项移除），所以**以设置的集合为准**，
                  *    只是顺序尽量沿用记忆 —— 移除过的书不许因为记忆里还有就被加回来；
                  * ③ 设置里一本都没有（被清掉 / 换了一份配置）而记忆里有：按记忆恢复，等于自愈一次。
                  */
@@ -1707,7 +1815,8 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 把"记住的密码本"从设置推给密码服务（用户在设置窗口里增删过之后由 <see cref="OpenSettings"/> 调它）。
+        /// 把"记住的密码本"从设置推给密码服务（用户在④「密码」页增删过、点底栏「保存设置」之后由
+        /// <see cref="SaveSettings"/> 调它）。
         /// </summary>
         private void ApplyRememberedBookPathsFromSettings()
         {
@@ -2218,7 +2327,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>
         /// 翻译只走既有实现：落点两个布尔由 <see cref="OutputPlacement.ToLegacyFlags"/> 给出、
         /// 终端落法与源包处理由 <see cref="OutputPlacement.ToSettingValue"/> /
-        /// <see cref="AppSettings.ToSourceHandlingValue"/> 序列化 —— 与设置窗口写的是同一套字符串口径，
+        /// <see cref="AppSettings.ToSourceHandlingValue"/> 序列化 —— 与②「解压方式」/③「清理与删除」页写的是同一套字符串口径，
         /// 不新造第三种表示法。
         /// </para>
         /// <para>
@@ -2346,50 +2455,85 @@ namespace ArchiveFixer.ViewModels
                 StatusText.PartiallyCompleted;
         }
 
+        /// <summary>
+        /// 「设置」入口（旧菜单「工具 → 设置...」）：设置已经搬进⑥选项卡，
+        /// 所以这里只做一件事 —— 请界面切到那一页，并把这件事写进日志。
+        ///
+        /// <para>为什么保留这个命令而不是删掉：它一直是"打开设置"的公开入口，
+        /// 删掉它等于悄悄改掉 MainViewModel 的对外形状；保留成"切页"语义，
+        /// 任何旧调用点仍然得到正确结果。</para>
+        /// </summary>
         private void OpenSettings()
+        {
+            RequestTab(SettingsTabIndex, "设置已经搬进「设置」选项卡（原来的设置窗口已退休）。");
+        }
+
+        /// <summary>见 <see cref="OpenSettings"/>：打包整页搬进⑤选项卡。</summary>
+        private void OpenPacking()
+        {
+            RequestTab(PackingTabIndex, "打包已经搬进「打包」选项卡（原来的打包窗口已退休）。");
+        }
+
+        private void RequestTab(int index, string log)
+        {
+            AppendLog("INFO", log);
+
+            TabRequested?.Invoke(index);
+        }
+
+        /// <summary>
+        /// 底栏的「保存设置」：走 <see cref="SettingsEditor"/> 那一套校验与落盘
+        /// （**唯一**的保存实现，与原设置窗口完全相同），成功后把界面与引擎层一起刷新。
+        ///
+        /// <para>
+        /// 为什么要在这里刷新这么多东西：设置一落盘，落点、缓存根、日志开关、引擎优先级、
+        /// 记住的密码本清单都会影响已经跑起来的这套服务 —— 少刷一样就会变成
+        /// "设置里改了、这次运行还是老的"。
+        /// </para>
+        /// </summary>
+        private void SaveSettings()
         {
             try
             {
-                var window = new SettingsWindow(Settings, _settingsService)
+                SettingsEditor.SaveCommand.Execute(null);
+
+                // 校验没过（工具路径不存在 / 危险模式没凭证）：SettingsEditor.Message 里已经写明改法，
+                // 这里**什么都不做** —— 绝不把一次失败的保存说成成功。
+                if (SettingsEditor.DialogResult != true)
                 {
-                    Owner = Application.Current.MainWindow
-                };
-
-                bool? result = window.ShowDialog();
-
-                if (result == true)
-                {
-                    Settings = window.ResultSettings;
-                    Settings.Normalize();
-
-                    SelectedOutputDirectory = Settings.CustomOutputDirectory ?? string.Empty;
-
-                    _settingsService.Save(Settings);
-
-                    /*
-                     * 设置里那份"记住的密码本"是权威清单（用户能逐项移除），保存后立刻推给密码服务：
-                     * 推完记忆文件里那份也跟着变成同一份 —— 下一轮启动的合并就不会把用户刚移除的书
-                     * 又从记忆里翻出来（那样"移除"这个按钮就是句空话）。
-                     */
-                    ApplyRememberedBookPathsFromSettings();
-
-                    RefreshOutputPaths();
-                    LogLeftoverWorkspaces();
-                    AutoLoadPasswordBook();
-
-                    UpdateSummary();
-
-                    AppendLog("INFO", "设置已保存");
+                    return;
                 }
-                else
-                {
-                    AppendLog("INFO", "用户取消设置修改");
-                }
+
+                Settings = SettingsEditor.Settings;
+                ApplyEngineSettings();
+
+                SelectedOutputDirectory = Settings.CustomOutputDirectory ?? string.Empty;
+
+                /*
+                 * 设置里那份"记住的密码本"是权威清单（用户能逐项移除），保存后立刻推给密码服务：
+                 * 推完记忆文件里那份也跟着变成同一份 —— 下一轮启动的合并就不会把用户刚移除的书
+                 * 又从记忆里翻出来（那样"移除"这个按钮就是句空话）。
+                 */
+                ApplyRememberedBookPathsFromSettings();
+
+                RefreshOutputPaths();
+                LogLeftoverWorkspaces();
+                AutoLoadPasswordBook();
+                UpdateSummary();
+
+                // 并发档、危险模式那几句话是"包在设置外面"的展示状态：设置变了必须重算。
+                OnPropertyChanged(nameof(MaxParallelChoice));
+                OnPropertyChanged(nameof(DangerModeEnabled));
+                OnPropertyChanged(nameof(HasDangerModeSelfTest));
+                OnPropertyChanged(nameof(DangerModeSelfTestText));
+                RefreshSpaceModeText();
+
+                AppendLog("INFO", "设置已保存");
             }
             catch (Exception ex)
             {
-                AppendLog("ERROR", "打开设置窗口失败：" + ex.Message);
-                _dialogService.ShowError("打开设置窗口失败：" + ex.Message);
+                AppendLog("ERROR", "保存设置失败：" + ex.Message);
+                _dialogService.ShowError("保存设置失败：" + ex.Message);
             }
         }
 
@@ -2406,38 +2550,24 @@ namespace ArchiveFixer.ViewModels
             Settings = _settingsService.ResetToDefault();
             SelectedOutputDirectory = Settings.CustomOutputDirectory ?? string.Empty;
             RefreshOutputPaths();
+
+            /*
+             * 恢复默认会把危险模式、并发档、自测凭证一起改回默认值 ——
+             * 那几个展示属性是"包在设置外面"的（AppSettings 不发通知），
+             * 不显式通知的话⑥设置页会继续显示"危险模式已开启"而实际已经关掉了。
+             */
+            OnPropertyChanged(nameof(MaxParallelChoice));
+            OnPropertyChanged(nameof(DangerModeEnabled));
+            OnPropertyChanged(nameof(HasDangerModeSelfTest));
+            OnPropertyChanged(nameof(DangerModeSelfTestText));
+            RefreshSpaceModeText();
+
             AppendLog("INFO", "已恢复默认设置");
         }
 
         /// <summary>
-        /// 打开打包窗口（菜单「工具 → 打包文件夹为加密分卷…」）。
-        ///
-        /// <para>与解压那条流水线**完全独立**：不碰任务列表、不碰勾选、不读源包所在目录。
-        /// 每一步的日志通过 <c>LogSink</c> 接到主日志上 —— 打包结果要能追到引擎名与版本
-        /// （不变量 14），窗口关掉之后日志里还得查得到。</para>
+        /// 打开密码列表窗口（④密码页的「密码列表管理…」）。
         /// </summary>
-        private void OpenPacking()
-        {
-            try
-            {
-                var viewModel = new PackingViewModel { LogSink = line => AppendLog("INFO", line) };
-
-                var window = new PackingWindow(viewModel)
-                {
-                    Owner = Application.Current?.MainWindow
-                };
-
-                window.ShowDialog();
-
-                AppendLog("INFO", StatusText.PackName + "窗口已关闭。");
-            }
-            catch (Exception ex)
-            {
-                AppendLog("ERROR", "打开打包窗口失败：" + ex.Message);
-                _dialogService.ShowError("打开打包窗口失败：" + ex.Message);
-            }
-        }
-
         private void OpenPasswordList()
         {
             var vm = new PasswordListViewModel(_passwordService, _dialogService);
@@ -2879,7 +3009,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 其余物/空文件夹的删除流程（菜单「工具 → 删除其余物… / 删除本目录全部其余物… / 清理空文件夹…」）：
+        /// 其余物/空文件夹的删除流程（③「清理与删除」页那三个按钮）：
         /// **判定作用于谁 → 预览 → 红色确认（默认回收站，勾选框切激进档）→（激进档）二次确认 → 后台执行 → 写日志**。
         ///
         /// <para>
@@ -4050,6 +4180,7 @@ namespace ArchiveFixer.ViewModels
                  OpenSettingsCommand,
                  OpenPasswordListCommand,
                  OpenPackingCommand,
+                 SaveSettingsCommand,
                  ExportLogCommand,
                  CopyFailedListCommand,
                  OpenOutputDirectoryCommand,

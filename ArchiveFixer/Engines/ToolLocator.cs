@@ -25,7 +25,7 @@ namespace ArchiveFixer.Engines
     /// 4. 都没有 → 返回"本来应该在的位置"，由引擎报"不可用"，选择器自动跳过它</para>
     ///
     /// <para><b>Rar.exe 解析顺序</b>（打包功能，docs/打包功能.md §5）：
-    /// 1. 用户指定的路径（<see cref="CustomRarExePath"/>，来自设置窗口「外部工具」那一组）
+    /// 1. 用户指定的路径（<see cref="CustomRarExePath"/>，来自②「解压方式」页 → 引擎那一格）
     /// 2. 用户**已装**的 WinRAR 目录里的 <c>Rar.exe</c>，再退 <c>WinRAR.exe</c>
     /// 3. 都没有 → <see cref="RarExists"/> = false，打包侧**明确报错**并给出三条出路
     /// （装 WinRAR / 外层容器改 7z / 不做外层）。
@@ -121,7 +121,7 @@ namespace ArchiveFixer.Engines
         public string BundledUnRarDirectory => Path.Combine(AppContext.BaseDirectory, "tools", "unrar");
 
         /// <summary>
-        /// 用户指定的 <c>Rar.exe</c> 路径（来自设置窗口「外部工具」那一组；用户 2026-09-23 决定加这一格）。
+        /// 用户指定的 <c>Rar.exe</c> 路径（来自②「解压方式」页 → 引擎那一格；用户 2026-09-23 决定加这一格）。
         /// 赋值后自动失效缓存。
         ///
         /// <para>空 = 按"已装 WinRAR 目录 → <c>WinRAR.exe</c>"自动解析。填了但文件不存在时
@@ -440,8 +440,8 @@ namespace ArchiveFixer.Engines
             return "这一步需要本机已安装 WinRAR（要 Rar.exe / WinRAR.exe）—— 程序不会替你装、也不会随包分发它"
                  + "（WinRAR 是共享软件，许可不允许随其它软件包分发）。"
                  + $"期望位置：{RarExpectedPath}。"
-                 + "在设置 →「外部工具」里可以填你自己装的那一份 Rar.exe 的路径；"
-                 + "如果这台机器上确实没有，也可以把打包窗口的外层容器改成 7z（无需额外安装）或选「不做外层容器」。";
+                 + "在②「解压方式」页 →「引擎」里可以填你自己装的那一份 Rar.exe 的路径；"
+                 + "如果这台机器上确实没有，也可以把⑤「打包」页的外层容器改成 7z（无需额外安装）或选「不做外层容器」。";
         }
 
         /// <summary>

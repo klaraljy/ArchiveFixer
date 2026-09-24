@@ -113,35 +113,51 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 检查器覆盖到了主窗口里每一条Run点Text绑定()
+        public void 检查器覆盖到了日志模板里每一条Run点Text绑定()
         {
             /*
              * 这条是"覆盖度"断言：2026-09-22 崩的就是 `<Run Text="{Binding TimeText}"/>`，
              * 所以检查器必须真的把这类写法一条不落地看进去。只断言"零发现"是不够的 ——
              * 一个悄悄失效的检查器同样会报绿。
+             *
+             * 2026-09-24 第 11 条之后日志模板搬进了①任务页（Views\Tabs\TaskTab.xaml），
+             * 独立日志窗口（Views\LogWindow.xaml）里还有一份同样的模板 —— 两处都要扫。
              */
-            string mainWindowPath = Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "MainWindow.xaml");
-            string mainWindow = File.ReadAllText(mainWindowPath);
+            foreach ((string relativePath, int expectedMinimum) in new[]
+                     {
+                         // ①任务页的日志模板（3 条）+ 「后缀状态」列的 ToolTip（4 条）
+                         (Path.Combine("ArchiveFixer", "Views", "Tabs", "TaskTab.xaml"), 7),
 
-            int runBindings = Regex.Matches(mainWindow, "<Run[^>]*Text=\"\\{Binding").Count;
+                         // 独立日志窗口（第 18 条）：时间 / 级别 / 正文
+                         (Path.Combine("ArchiveFixer", "Views", "LogWindow.xaml"), 3)
+                     })
+            {
+                string path = Path.Combine(XamlBindingScan.RepositoryRoot, relativePath);
+                string text = File.ReadAllText(path);
 
-            Assert.True(runBindings >= 5, $"主窗口里的 Run.Text 绑定少得反常（{runBindings} 条）—— 检查器可能已经扫不到它们了");
+                int runBindings = Regex.Matches(text, "<Run[^>]*Text=\"\\{Binding").Count;
 
-            IReadOnlyList<string> findings = XamlBindingScan.ScanText("MainWindow.xaml", mainWindow, out int scanned);
+                Assert.True(
+                    runBindings >= expectedMinimum,
+                    $"{relativePath} 里的 Run.Text 绑定少得反常（{runBindings} 条，至少应有 {expectedMinimum} 条）—— 检查器可能已经扫不到它们了");
 
-            Assert.Empty(findings);
-            Assert.True(
-                scanned >= runBindings,
-                $"扫到的默认双向绑定（{scanned} 条）少于 Run.Text 绑定数（{runBindings} 条）—— Run.Text 的元数据判定失效了");
+                IReadOnlyList<string> findings = XamlBindingScan.ScanText(relativePath, text, out int scanned);
+
+                Assert.Empty(findings);
+                Assert.True(
+                    scanned >= runBindings,
+                    $"扫到的默认双向绑定（{scanned} 条）少于 Run.Text 绑定数（{runBindings} 条）—— Run.Text 的元数据判定失效了");
+            }
         }
 
         [Fact]
         public void 界面蓝字与命令提示共用同一个文案来源()
         {
-            string mainWindow = File.ReadAllText(Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "MainWindow.xaml"));
+            string taskTab = File.ReadAllText(
+                Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "Views", "Tabs", "TaskTab.xaml"));
 
-            // 蓝字不许再写死：它必须引用 Models/StatusText.SelectionScopeHint。
-            Assert.Contains("StatusText.SelectionScopeHint", mainWindow, StringComparison.Ordinal);
+            // 蓝字不许再写死：它必须引用 Models/StatusText.SelectionScopeHint（任务列表在①任务页里）。
+            Assert.Contains("StatusText.SelectionScopeHint", taskTab, StringComparison.Ordinal);
 
             Assert.Contains("勾选", StatusText.SelectionScopeHint, StringComparison.Ordinal);
 

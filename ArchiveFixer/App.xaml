@@ -636,6 +636,72 @@
             </Style.Triggers>
         </Style>
 
+        <!-- ============ 主界面选项卡（用户 2026-09-24 第 11 条） ============ -->
+
+        <!--
+            选项卡条是主界面的"主目录"，所以它必须自己有一套自绘样式：
+            默认的 Aero2 标签页在浅灰底上是一块立体凸起，与程序里其余控件（扁平、细边框）拼在一起很显乱。
+            选中态用主色下划线 + 面板底色，未选中态保持透明 —— 一眼能看出"现在在哪一页"。
+            ⚠ 模板里每个 TemplateBinding 都必须留着：去掉 ContentPresenter 的 ContentSource="Header"
+              选项卡就变成空白，这是这类模板最常见的一次性错误。
+        -->
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="HeaderBorder"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                BorderThickness="0,0,0,2"
+                                CornerRadius="4,4,0,0"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter x:Name="HeaderContent"
+                                              ContentSource="Header"
+                                              RecognizesAccessKey="True"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="HeaderBorder" Property="Background" Value="{StaticResource PanelBrush}" />
+                                <Setter TargetName="HeaderBorder" Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
+                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True" />
+                                    <Condition Property="IsSelected" Value="False" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="HeaderBorder" Property="Background" Value="{StaticResource OverlayHoverBrush}" />
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="TabControl">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+        </Style>
+
+        <!-- 拖动分隔条：细，但要有可抓的宽度（太细会拖不住）。 -->
+        <Style TargetType="GridSplitter">
+            <Setter Property="Background" Value="{StaticResource DividerBrush}" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+        </Style>
+
         <!-- ============ 其它 ============ -->
 
         <Style TargetType="ToolTip">

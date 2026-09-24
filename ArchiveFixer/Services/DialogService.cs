@@ -981,7 +981,7 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 选宿主窗口：先当前激活的那个（可能正是密码列表/设置窗口），再退回主窗口。
+        /// 选宿主窗口：先当前激活的那个（可能正是密码列表窗口 / 打包页里的对话框），再退回主窗口。
         /// 不这样做的话，从模态子窗口里弹出的提示会跑到主窗口后面去。
         /// </summary>
         private static Window? ResolveOwner()

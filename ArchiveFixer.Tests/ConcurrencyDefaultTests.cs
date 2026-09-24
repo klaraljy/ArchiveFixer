@@ -101,13 +101,18 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 设置界面_并发那一项旁边写着核数建议与新的默认值()
         {
+            /*
+             * 2026-09-24 第 11 条之后，并发档从主界面搬到了②解压方式页的「并发与空间」分组
+             * （原来是主界面一个下拉 + 设置窗口一个数字框，两处并存）。
+             */
             string path = Path.Combine(
                 XamlBindingScan.RepositoryRoot,
                 "ArchiveFixer",
                 "Views",
-                "SettingsWindow.xaml");
+                "Tabs",
+                "ExtractionTab.xaml");
 
-            Assert.True(File.Exists(path), $"读不到设置窗口 XAML：{path}");
+            Assert.True(File.Exists(path), $"读不到解压方式页 XAML：{path}");
 
             string xaml = File.ReadAllText(path);
 

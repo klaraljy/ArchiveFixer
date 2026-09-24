@@ -218,11 +218,13 @@ namespace ArchiveFixer.Tests
         {
             // DataGridCheckBoxColumn 的首次点击只是"进入编辑态"，要点第二次才切换 ——
             // 用户抱怨的正是这个。静态钉住：选择那一列必须是模板列。
-            string xaml = ReadMainWindowXaml();
+            //
+            // 2026-09-24 第 11 条之后任务列表搬进了①任务页（Views\Tabs\TaskTab.xaml）。
+            string xaml = ReadTaskTabXaml();
 
             int selectionColumnStart = xaml.IndexOf("Header=\"选择\"", StringComparison.Ordinal);
 
-            Assert.True(selectionColumnStart > 0, "MainWindow.xaml 里找不到「选择」列");
+            Assert.True(selectionColumnStart > 0, "任务页里找不到「选择」列");
 
             int templateColumnStart = xaml.LastIndexOf("<DataGridTemplateColumn", selectionColumnStart, StringComparison.Ordinal);
 
@@ -241,19 +243,30 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 主窗口有全选全不选反选的入口与快捷键()
         {
-            string xaml = ReadMainWindowXaml();
+            // 任务列表在①任务页里，但勾选的三个按钮、快捷键与命令仍然全在主窗口这一套里。
+            string mainXaml = ReadMainWindowXaml();
+            string taskTabXaml = ReadTaskTabXaml();
 
-            Assert.Contains("SelectAllTasksCommand", xaml, StringComparison.Ordinal);
-            Assert.Contains("SelectNoneTasksCommand", xaml, StringComparison.Ordinal);
-            Assert.Contains("InvertTaskSelectionCommand", xaml, StringComparison.Ordinal);
-            Assert.Contains("SelectSoleTaskCommand", xaml, StringComparison.Ordinal);
+            Assert.Contains("SelectNoneTasksCommand", mainXaml, StringComparison.Ordinal);
+            Assert.Contains("InvertTaskSelectionCommand", mainXaml, StringComparison.Ordinal);
 
-            // Ctrl+A 由 MainWindow.xaml.cs 的 PreviewKeyDown 实现（DataGrid 自己会吃掉 Ctrl+A）。
+            Assert.Contains("SelectAllTasksCommand", taskTabXaml, StringComparison.Ordinal);
+            Assert.Contains("SelectNoneTasksCommand", taskTabXaml, StringComparison.Ordinal);
+            Assert.Contains("InvertTaskSelectionCommand", taskTabXaml, StringComparison.Ordinal);
+            Assert.Contains("SelectSoleTaskCommand", taskTabXaml, StringComparison.Ordinal);
+
+            // Ctrl+A 由 MainWindow.xaml.cs 的 PreviewKeyDown 实现（DataGrid 自己会吃掉 Ctrl+A）；
+            // "焦点在不在表格里"由①任务页回答。
             string codeBehind = File.ReadAllText(
                 Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "MainWindow.xaml.cs"));
 
             Assert.Contains("Key.A", codeBehind, StringComparison.Ordinal);
             Assert.Contains("SelectAllTasksCommand", codeBehind, StringComparison.Ordinal);
+
+            string taskTabCodeBehind = File.ReadAllText(
+                Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "Views", "Tabs", "TaskTab.xaml.cs"));
+
+            Assert.Contains("IsKeyboardFocusWithinTaskGrid", taskTabCodeBehind, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -404,6 +417,13 @@ namespace ArchiveFixer.Tests
         {
             return File.ReadAllText(
                 Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "MainWindow.xaml"));
+        }
+
+        /// <summary>① 任务页的 XAML（2026-09-24 第 11 条之后任务列表住在这里）。</summary>
+        private static string ReadTaskTabXaml()
+        {
+            return File.ReadAllText(
+                Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "Views", "Tabs", "TaskTab.xaml"));
         }
 
         private static T? FindDescendant<T>(DependencyObject? root)

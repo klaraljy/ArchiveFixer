@@ -316,13 +316,26 @@ namespace ArchiveFixer.Models
         // 危险模式（红按钮）：文案与风险描述
         // ================================================================
         //
-        // ⚠ 这一组是**界面文案的唯一来源**：确认框正文、设置窗口的开关说明、
+        // ⚠ 这一组是**界面文案的唯一来源**：确认框正文、②「解压方式」页高风险区的开关说明、
         //    自测通过后的提示都引用它，`docs/使用说明.md` 的「空间不够怎么办」一节照抄这份措辞。
         //    以前那种"确认框写一套、设置里写一套、文档里再写一套"的形态，改一处漏两处，
         //    而这里漏掉的每一句都是**用户拿不可逆操作换来的知情权**。
 
         /// <summary>这个模式在界面上的名字（按钮 / 开关 / 日志里都用它）。</summary>
         public const string DangerModeName = "危险模式 · 边解边彻底删其余物";
+
+        /// <summary>
+        /// 危险模式开着时，①任务页顶部那**一行小白字**（用户 2026-09-24 第 11 条：
+        /// "这个危险操作这个红框多么多余啊，别放在主界面"）。
+        ///
+        /// <para>
+        /// 红横幅搬去了②解压方式页的「高风险区」，主界面只留这一行的理由：
+        /// **不可逆的档位必须一直看得见**（AGENTS.md §9.6 的红线），
+        /// 但不必占掉半个屏幕。四句话的完整版仍然写在②页。
+        /// </para>
+        /// </summary>
+        public const string DangerModeActiveOneLineHint =
+            "⚠ 危险模式已开启：任务成功后它的源包与中间件会被永久删除（详情与关闭入口在「解压方式」页底部）。";
 
         /// <summary>确认框里"这是什么"的那一段。</summary>
         public const string DangerModeSummary =
@@ -479,7 +492,7 @@ namespace ArchiveFixer.Models
             "已按「" + JunkReminderNoText + "」处理：这一批没有开始（任务、源包、输出目录一个字节都没动）。";
 
         // ================================================================
-        // 打包（菜单「工具 → 打包文件夹为加密分卷…」）
+        // 打包（⑤「打包」选项卡）
         // ================================================================
         //
         // ⚠ 这一组是**打包功能的文案唯一来源**（AGENTS.md §7）：窗口标题 / 步骤行 / 结论 /
@@ -751,7 +764,7 @@ namespace ArchiveFixer.Models
         // 密码列表的**本机加密记忆**（DPAPI 机器范围）—— 用户 2026-09-24 拍板
         // ================================================================
         //
-        // ⚠ 这一组同样是**唯一来源**（AGENTS.md §7）：设置窗口的开关与说明、密码列表窗口顶部那句、
+        // ⚠ 这一组同样是**唯一来源**（AGENTS.md §7）：设置界面的开关与说明、密码列表窗口顶部那句、
         //    记忆摘要、读不出来的提示、以及日志文案都从这里引，别在 XAML / ViewModel 里另写一份。
         //
         // 用户选定的是 Windows 自带的 DPAPI **机器范围**（CryptProtectData + CRYPTPROTECT_LOCAL_MACHINE）：
@@ -818,7 +831,7 @@ namespace ArchiveFixer.Models
         public const string PasswordListMemoryDisabledLog =
             "「记住密码列表」已关闭：不写也不读密码列表记忆（磁盘上已有的那份不会被删除）。";
 
-        // ── 设置窗口：记住密码列表 + 已记住的密码本 ──
+        // ── ④「密码」页：记住密码列表 + 已记住的密码本 ──
 
         /// <summary>设置里那个开关的文案。**必须写明"加密存在程序目录 + 跟 Windows 账号无关"**。</summary>
         public const string SettingsRememberPasswordListLabel = "记住密码列表（加密保存在程序目录，跟 Windows 账号无关）";
@@ -853,5 +866,46 @@ namespace ArchiveFixer.Models
         /// <summary>设置里"记住密码列表"关着时，这一组的降级说明。</summary>
         public const string SettingsRememberedBooksDisabledText =
             "「记住密码列表」关着：这份清单这次不生效（密码列表窗口里的改动不会跨重启保留）。";
+
+        // ── 清理与删除页：解压前的提醒开关（用户 2026-09-24 第 15 条的界面入口） ──
+
+        /// <summary>
+        /// 「解压前提醒无用物」这个开关的标签。
+        ///
+        /// <para>
+        /// 提醒本身早就有了（AGENTS.md §9.7：每次解压前列出可能的无用物与"没有可用密码"的包），
+        /// 但一直只能在弹窗里勾"本次运行不再提示"（只记内存）。用户第 15 条要求它可关，
+        /// 于是补上这个设置项 —— 关掉就是**不再扫、不再弹**。
+        /// </para>
+        /// </summary>
+        public const string SettingsRemindBeforeExtractLabel = "解压前提醒可能的无用物与没有可用密码的包";
+
+        /// <summary>开关下面那一行说明（说清"关掉之后会少了什么"）。</summary>
+        public const string SettingsRemindBeforeExtractHint =
+            "开：每次解压前先扫一遍源目录，把「看起来像打包者附带的说明 / 网址 / 工具」的文件与「一个可用密码都没有」的包列出来，"
+            + "让你先看一眼再决定（这两个提醒都不影响解压本身）。关：这一遍扫描与弹窗都不做，直接开始。";
+
+        /// <summary>关掉提醒时写一条日志：事后能判断"这次为什么没弹提醒"。</summary>
+        public const string RemindBeforeExtractDisabledLog =
+            "设置里关掉了「解压前提醒」：本次跳过无用物 / 无可用密码的扫描与提醒。";
+
+        // ── 关于 / 版本 / 许可（帮助 → 关于 与⑥设置页共用） ──
+
+        /// <summary>
+        /// 「关于」里的许可那一段。
+        ///
+        /// <para>
+        /// 必须与 LICENSE 的第三方组件声明同口径：内置 7-Zip 是 LGPL（+ unRAR 限制条款）、
+        /// 内置 UnRAR 是 RARLAB freeware（允许随包分发），而 <c>Rar.exe</c>/<c>WinRAR.exe</c>
+        /// 是共享软件、**绝不随包分发**（AGENTS.md §3.1）。用户问"这东西能不能商用 / 能不能带走"时，
+        /// 答案就在这里，不必去翻仓库。
+        /// </para>
+        /// </summary>
+        public const string AboutLicenseText =
+            "许可：本程序 MIT。" + "\r\n"
+            + "内置 7-Zip（LGPL + unRAR 限制条款）、内置 UnRAR（RARLAB freeware，许可明确允许随包分发）。" + "\r\n"
+            + "Rar.exe / WinRAR.exe 是共享软件：程序**只检测与调用**你自己装的那一份，绝不复制、绝不随包分发，" + "\r\n"
+            + "也绝不会拿 7-Zip 假装做出 .rar。";
+
     }
 }

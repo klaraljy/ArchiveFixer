@@ -1,0 +1,536 @@
+<UserControl x:Class="ArchiveFixer.Views.Tabs.ExtractionTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:models="clr-namespace:ArchiveFixer.Models"
+             xmlns:storage="clr-namespace:ArchiveFixer.Storage">
+
+    <!--
+        ② 解压方式页（用户 2026-09-24 第 11 条）。
+        内容全部按功能归位：落点 / 终端落法 / 嵌套与覆盖 / 解压前后 / 并发与空间 / 引擎，
+        页面最底下是**高风险区**（危险模式：开关 + 风险四条 + 自测入口）——
+        它原来是一块占满主界面宽度的红横幅，用户点名说多余。
+
+        第 20 条：整页可滚（内容多），每个分组用 GroupBox + 星号/自动行，没有任何固定高度堆叠。
+    -->
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+        <StackPanel>
+
+            <!-- ==================== 落点（解压到哪） ==================== -->
+            <GroupBox Header="落点（解压到哪）">
+                <StackPanel>
+                    <RadioButton GroupName="OutputPlacement"
+                                 IsChecked="{Binding SettingsEditor.OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=ArchiveNamedSubfolder, Mode=TwoWay}"
+                                 Content="同名子文件夹（111\222.rar → 111\222\）"
+                                 ToolTip="与 WinRAR 默认一致，不会和同目录其它文件混在一起" />
+
+                    <RadioButton GroupName="OutputPlacement"
+                                 Margin="0,6,0,0"
+                                 IsChecked="{Binding SettingsEditor.OutputPlacement, Converter={StaticResource EnumOptionConverter}, ConverterParameter=CustomNamedSubfolder, Mode=TwoWay}"
+                                 Content="指定位置 + 同名子文件夹（111\222.rar → 333\222\）"
+                                 ToolTip="多个包各占一个文件夹，适合归集整理" />
+
+                    <Border Style="{StaticResource InfoBannerStyle}" Margin="0,10,0,8">
+                        <TextBlock Text="{Binding SettingsEditor.OutputPlacementSummary}"
+                                   Style="{StaticResource BannerTextStyle}"
+                                   Foreground="{StaticResource InfoTextBrush}"
+                                   FontFamily="{StaticResource MonoFontFamily}" />
+                    </Border>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="指定位置："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.CustomOutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 IsEnabled="{Binding SettingsEditor.IsCustomOutputEnabled}"
+                                 ToolTip="只有选了「指定位置 + 同名子文件夹」那一档才用得上" />
+
+                        <Button Grid.Column="2"
+                                Content="选择"
+                                MinWidth="72"
+                                Margin="8,0,0,0"
+                                IsEnabled="{Binding SettingsEditor.IsCustomOutputEnabled}"
+                                Command="{Binding SettingsEditor.SelectOutputDirectoryCommand}" />
+
+                        <TextBlock Grid.Column="3"
+                                   Text="（不适用）"
+                                   VerticalAlignment="Center"
+                                   Margin="10,0,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SettingsEditor.IsCustomOutputEnabled}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 内容物最后一层（终端落法） ==================== -->
+            <GroupBox Header="内容物最后那一层（终端落法）">
+                <StackPanel>
+                    <RadioButton GroupName="TerminalLayout"
+                                 IsChecked="{Binding SettingsEditor.TerminalLayout, Converter={StaticResource EnumOptionConverter}, ConverterParameter=KeepLastFolder, Mode=TwoWay}"
+                                 Content="多文件时保留最后一层文件夹名（111\222\ → 111\222\666\）"
+                                 ToolTip="保留包内那一层名字，不丢信息（默认）" />
+
+                    <RadioButton GroupName="TerminalLayout"
+                                 Margin="0,6,0,0"
+                                 IsChecked="{Binding SettingsEditor.TerminalLayout, Converter={StaticResource EnumOptionConverter}, ConverterParameter=UseArchiveName, Mode=TwoWay}"
+                                 Content="多文件时用压缩包名当最后一层（111\222\ → 111\222\）"
+                                 ToolTip="少一层点击，但丢掉了包内那层名字" />
+
+                    <CheckBox Content="包名与所在文件夹同名时，去掉重复的那一层"
+                              Margin="0,10,0,0"
+                              IsChecked="{Binding SettingsEditor.CollapseRepeatedFolderLayer, Mode=TwoWay}"
+                              ToolTip="111\222\名字\名字.rar → 111\222\名字\；仅当该文件夹下没有别的包时才生效" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 嵌套与覆盖 ==================== -->
+            <GroupBox Header="嵌套与覆盖">
+                <StackPanel>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="嵌套压缩包："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <ComboBox Grid.Column="1"
+                                  SelectedValue="{Binding SettingsEditor.Settings.RecursionMode, Mode=TwoWay}"
+                                  SelectedValuePath="Tag">
+                            <ComboBoxItem Content="只解当前这一层" Tag="SingleLayer" />
+                            <ComboBoxItem Content="单链自动展开（推荐：只有一个内层包时才继续）" Tag="SingleChain" />
+                            <ComboBoxItem Content="展开所有分支（内层有多个包时全部解开）" Tag="AllBranches" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="最大嵌套层数："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.MaxRecursionDepth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="1~10。到达上限会安全停下并报告停在哪一层，不会无限展开。" />
+
+                        <TextBlock Grid.Column="2"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Text="1~10。到上限会停下并报告。" />
+                    </Grid>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="解压覆盖策略："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <ComboBox Grid.Column="1"
+                                  SelectedValue="{Binding SettingsEditor.Settings.OverwriteMode, Mode=TwoWay}"
+                                  SelectedValuePath="Tag">
+                            <ComboBoxItem Content="跳过已存在文件" Tag="SkipExisting" />
+                            <ComboBoxItem Content="覆盖全部" Tag="OverwriteAll" />
+                            <ComboBoxItem Content="自动重命名解压出的文件" Tag="AutoRenameExtracted" />
+                            <ComboBoxItem Content="自动重命名已存在文件（仅 7-Zip 支持）" Tag="AutoRenameExisting" />
+                        </ComboBox>
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="110,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="RAR 包默认走 UnRAR，而它没有「自动重命名已存在文件」这一档 —— 那里的实际行为是「跳过已存在文件」。要覆盖就选「覆盖全部」。" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 解压前与完成后 ==================== -->
+            <GroupBox Header="解压前与完成后">
+                <StackPanel>
+                    <CheckBox Content="解压前测试完整性"
+                              IsChecked="{Binding SettingsEditor.Settings.TestBeforeExtract, Mode=TwoWay}" />
+
+                    <CheckBox Content="定稿完成后在资源管理器里打开输出目录"
+                              Margin="0,8,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.OpenOutputFolderWhenDone, Mode=TwoWay}"
+                              ToolTip="只在任务真正定稿成功之后打开；失败 / 部分完成 / 取消时一律不打开。只开文件夹，不会把本程序窗口置前。" />
+
+                    <CheckBox Content="统计并提示可疑条目（可执行文件 / 脚本）"
+                              Margin="0,8,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.ReportDangerousEntries, Mode=TwoWay}"
+                              ToolTip="只提示、绝不阻断：不会因此跳过任何条目，也不会改变落盘结果" />
+
+                    <CheckBox Content="把解压结果归集到统一目录"
+                              Margin="0,8,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.CollectResultsToDirectory, Mode=TwoWay}" />
+
+                    <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="归集目标目录："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.CollectTargetDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <Button Grid.Column="2"
+                                Content="选择"
+                                MinWidth="72"
+                                Margin="8,0,0,0"
+                                Command="{Binding SettingsEditor.SelectCollectTargetDirectoryCommand}" />
+                    </Grid>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 并发与空间 ==================== -->
+            <GroupBox Header="并发与空间（从主界面搬来）">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="并发档："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <!--
+                            可编辑的下拉：1 / 2 / 3 / 4 / 8 是档位，也可以直接填 1~8 的任意数
+                            （设置项本身允许 1~8，这里不再把 5~7 挡在门外）。
+                        -->
+                        <ComboBox Grid.Column="1"
+                                  IsEditable="True"
+                                  ItemsSource="{Binding MaxParallelChoices}"
+                                  Text="{Binding SettingsEditor.Settings.MaxParallelExtractCount, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                  SelectionChanged="ParallelCount_SelectionChanged"
+                                  LostFocus="ParallelCount_LostFocus"
+                                  ToolTip="同时解压几个包（1~8，默认 4）。装不下当前可用空间的任务仍然会在启动前被拦下，并如实报告各自需要多少。" />
+
+                        <TextBlock Grid.Column="2"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap">
+                            <Run Text="默认 4（实测：并发 1→4 吞吐 3.08×，4→8 只再快 1.9% 却把单包耗时拉长一倍）—— " />
+                            <Run Text="{x:Static storage:ProcessorTopology.ConcurrencyAdvice}" /><Run Text="。" />
+                        </TextBlock>
+                    </Grid>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <CheckBox Content="全速（本批不节流）"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding RunAtFullSpeed, Mode=TwoWay}"
+                                  ToolTip="本批忽略并发档，能并行多少就并行多少（只对本次运行有效，不改设置）。慢盘上会让磁盘更忙。" />
+
+                        <Button Content="按空间算建议"
+                                Margin="16,0,0,0"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTip="按当前可用空间算出最多能并行几个（要读每个源包的大小，可能要一两秒）"
+                                Command="{Binding RefreshParallelAdviceCommand}" />
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding ParallelAdviceText}"
+                               Margin="0,8,0,0"
+                               TextWrapping="Wrap"
+                               ToolTip="{Binding ParallelAdviceText}"
+                               Style="{StaticResource HintTextStyle}" />
+
+                    <Border Style="{StaticResource InfoBannerStyle}" Margin="0,8,0,0">
+                        <StackPanel>
+                            <TextBlock Text="{Binding SpaceModeText}"
+                                       Style="{StaticResource BannerTextStyle}"
+                                       Foreground="{StaticResource InfoTextBrush}"
+                                       TextWrapping="Wrap" />
+
+                            <TextBlock Style="{StaticResource BannerTextStyle}"
+                                       Foreground="{StaticResource InfoTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,3,0,0"
+                                       Text="空间门：每个任务启动前都按「源包 + 内容物 + 其余物增量 + 512 MiB 余量」核算；不够就不启动，并写明需要多少、可用多少、差多少。取不到目标盘可用空间时**不拦**，但会在日志里明说取不到。" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </GroupBox>
+
+            <!--
+                ==================== 引擎（用哪个程序解压） ====================
+                AGENTS.md §3.1 要求"界面显示当前是否在用"，所以每行都带：
+                检测状态 + 路径 + 版本 + 它当前负责哪些格式。
+            -->
+            <GroupBox Header="引擎（用哪个程序解压）">
+                <StackPanel>
+                    <ItemsControl ItemsSource="{Binding SettingsEditor.Engines}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource OptionRowStyle}"
+                                        Background="{StaticResource PanelSunkenBrush}"
+                                        BorderBrush="{StaticResource PanelBorderBrush}"
+                                        Margin="0,0,0,6"
+                                        Padding="8,6">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{Binding HeaderText}"
+                                                       Style="{StaticResource BodyTextStyle}" />
+
+                                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                                       Margin="0,2,0,0"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Path}"
+                                                       Text="{Binding Path, StringFormat=路径：{0}}" />
+
+                                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                <TextBlock Style="{StaticResource HintTextStyle}"
+                                                           Text="{Binding SourceText, StringFormat=来源：{0}}" />
+
+                                                <TextBlock Margin="10,0,0,0"
+                                                           Text="{Binding UsageText}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+                                                            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsInUse}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <TextBlock Grid.Column="1"
+                                                   VerticalAlignment="Center"
+                                                   Margin="10,0"
+                                                   FontWeight="SemiBold"
+                                                   Text="{Binding StatusText}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource BodyTextStyle}">
+                                                    <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsAvailable}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <Button Grid.Column="2"
+                                                Content="上移"
+                                                MinWidth="56"
+                                                Margin="0,0,6,0"
+                                                Style="{StaticResource ToolbarButtonStyle}"
+                                                VerticalAlignment="Center"
+                                                IsEnabled="{Binding CanMoveUp}"
+                                                ToolTip="把它的优先级提前一位（排在前面的优先被选上）"
+                                                Command="{Binding DataContext.SettingsEditor.MoveEngineUpCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+
+                                        <Button Grid.Column="3"
+                                                Content="下移"
+                                                MinWidth="56"
+                                                Style="{StaticResource ToolbarButtonStyle}"
+                                                VerticalAlignment="Center"
+                                                IsEnabled="{Binding CanMoveDown}"
+                                                ToolTip="把它的优先级推后一位"
+                                                Command="{Binding DataContext.SettingsEditor.MoveEngineDownCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Border Style="{StaticResource InfoBannerStyle}" Margin="0,4,0,10">
+                        <TextBlock Style="{StaticResource BannerTextStyle}"
+                                   Foreground="{StaticResource InfoTextBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding SettingsEditor.EngineSelectionSummary}" />
+                    </Border>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="UnRAR.exe 路径："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.CustomUnRarExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="留空表示自动：先找本机已装 WinRAR 目录里的 UnRAR.exe，再退回程序内置的 tools\unrar\UnRAR.exe。" />
+                    </Grid>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="Rar.exe 路径："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.CustomRarExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="{Binding SettingsEditor.RarExePathHint}" />
+
+                        <Button Grid.Column="2"
+                                Content="浏览…"
+                                MinWidth="72"
+                                Margin="8,0,0,0"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Command="{Binding SettingsEditor.SelectRarExeCommand}"
+                                ToolTip="选你自己安装 / 下载的 WinRAR 里的 Rar.exe（程序不会复制、也不会随包分发它）" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="150,0,0,4"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.RarExePathHint}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="150,0,0,10"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.RarToolStatusText}" />
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="7z.exe 路径："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.CustomSevenZipExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="留空表示使用程序目录下的 tools\7zip\7z.exe" />
+                    </Grid>
+
+                    <CheckBox Content="保留受损的文件（校验和不符的半成品留在磁盘上）"
+                              Margin="0,6,0,0"
+                              IsChecked="{Binding SettingsEditor.KeepBrokenFiles, Mode=TwoWay}"
+                              ToolTip="只让 RAR 引擎（UnRAR）别把校验失败的半成品删掉（-kb）。7-Zip 没有这个开关。任务状态仍然是「失败 / 部分完成」。" />
+                </StackPanel>
+            </GroupBox>
+
+            <!--
+                ==================== 高风险区：危险模式 ====================
+                从主界面的常驻红横幅整体搬来（用户："这个危险操作这个红框多么多余啊，别放在主界面"）。
+                风险四条的**唯一来源**仍是 StatusText.DangerModeRiskLines（这里绑定，不重抄）。
+            -->
+            <Border Background="{StaticResource DangerSoftBrush}"
+                    BorderBrush="{StaticResource DangerBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}"
+                    Padding="{StaticResource BannerPadding}"
+                    Margin="0,0,0,4">
+                <StackPanel>
+                    <TextBlock Text="高风险区"
+                               Style="{StaticResource CardTitleTextStyle}"
+                               Foreground="{StaticResource DangerTextBrush}" />
+
+                    <TextBlock Text="{Binding DangerModeSummaryText}"
+                               Foreground="{StaticResource DangerTextBrush}"
+                               FontSize="11.5"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,0" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="⚠ 危险模式"
+                                MinHeight="36"
+                                MinWidth="120"
+                                Style="{StaticResource DangerButtonStyle}"
+                                Command="{Binding ToggleDangerModeCommand}"
+                                ToolTip="{Binding DangerModeSummaryText}" />
+
+                        <TextBlock Text="{Binding SpaceModeText}"
+                                   Margin="12,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource DangerTextBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <ItemsControl ItemsSource="{Binding DangerModeRiskLines}"
+                                  Margin="0,8,0,0"
+                                  Focusable="False">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Mode=OneWay}"
+                                           Foreground="{StaticResource DangerTextBrush}"
+                                           FontSize="11.5"
+                                           TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Text="{x:Static models:StatusText.DangerModeSelfTestWarning}"
+                               Margin="0,6,0,0"
+                               Foreground="{StaticResource DangerTextBrush}"
+                               FontSize="11.5"
+                               TextWrapping="Wrap" />
+
+                    <TextBlock Text="{Binding DangerModeSelfTestText}"
+                               Margin="0,4,0,0"
+                               Foreground="{StaticResource DangerTextBrush}"
+                               FontSize="11.5"
+                               TextWrapping="Wrap" />
+
+                    <!-- 凭证盖不住当前并发档：**不许静默降级**，必须在明面上说 -->
+                    <TextBlock Text="{Binding DangerModeCoverageText}"
+                               Margin="0,4,0,0"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource DangerTextBrush}"
+                               FontSize="11.5"
+                               TextWrapping="Wrap"
+                               Visibility="{Binding DangerModeNotCovered, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                    <CheckBox Content="开启危险模式（每个任务成功后立刻彻底删除它自己的其余物）"
+                              Margin="0,8,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.DangerousSpaceModeEnabled, Mode=TwoWay}"
+                              Foreground="{StaticResource DangerTextBrush}"
+                              ToolTip="开启后：任务在「内容物已定稿 + 输出校验通过 + 未取消」之后，它的其余物（源包 + 中间件）会被永久删除，不进回收站。没有自测凭证（或凭证盖不住当前并发档）时，保存会被拦下。" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

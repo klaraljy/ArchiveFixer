@@ -1,0 +1,240 @@
+<UserControl x:Class="ArchiveFixer.Views.Tabs.SettingsTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:models="clr-namespace:ArchiveFixer.Models">
+
+    <!--
+        ⑥ 设置页（用户 2026-09-24 第 11 条）：**只剩程序级的东西** ——
+        缓存与工作区、日志、启动时行为、扫描与识别、恢复默认、关于 / 版本 / 许可。
+        「解压方式 / 清理与删除 / 密码 / 打包」那几类都已各自成页，这里不再重复一份。
+        整页可滚（第 20 条）。
+    -->
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+        <StackPanel>
+
+            <!-- ==================== 缓存与工作区 ==================== -->
+            <GroupBox Header="缓存与工作区目录">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="缓存根目录："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.CacheRootDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="留空表示用程序目录下的 data。日志、临时文件、递归工作区都放它下面；不能填 C 盘。" />
+
+                        <Button Grid.Column="2"
+                                Content="选择"
+                                MinWidth="72"
+                                Margin="8,0,0,0"
+                                Command="{Binding SettingsEditor.SelectCacheRootDirectoryCommand}" />
+
+                        <Button Grid.Column="3"
+                                Content="打开工作区目录"
+                                MinWidth="120"
+                                Margin="8,0,0,0"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Command="{Binding OpenWorkDirectoryCommand}"
+                                ToolTip="递归解压中断后残留的中间产物在这里" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="110,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="留空 = 程序目录下的 data（默认，跟着安装位置走）。缓存不能落 C 盘：填了系统盘会拒绝保存并说明原因。" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 日志 ==================== -->
+            <GroupBox Header="日志">
+                <StackPanel>
+                    <CheckBox Content="启用日志文件"
+                              IsChecked="{Binding SettingsEditor.Settings.EnableLog, Mode=TwoWay}"
+                              ToolTip="关掉之后不再往 data\logs 追加文件日志（屏幕上的日志照旧显示）；日志里的密码一律脱敏。" />
+
+                    <WrapPanel Margin="0,10,0,0">
+                        <Button Content="导出日志"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Command="{Binding ExportLogCommand}" />
+
+                        <Button Content="打开日志目录"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Margin="8,0,0,0"
+                                Command="{Binding OpenLogDirectoryCommand}" />
+                    </WrapPanel>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 启动时行为 ==================== -->
+            <GroupBox Header="启动时行为">
+                <StackPanel>
+                    <CheckBox Content="记住上次输出目录"
+                              IsChecked="{Binding SettingsEditor.Settings.RememberLastOutputDirectory, Mode=TwoWay}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="22,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="关掉之后：下次启动不再把上次的输出目录填回「当前输出位置」。注意主窗口里没有临时选输出目录的入口（输出位置只在「解压方式」页改），所以这一项的实际作用就是「启动时要不要沿用上次那个自定义根」。" />
+
+                    <CheckBox Content="低运行优先级运行"
+                              Margin="0,12,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.LowProcessPriority, Mode=TwoWay}"
+                              ToolTip="让本程序与它启动的解压进程让出 CPU / 磁盘优先级。重启程序后生效。" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="22,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="开着：批量解压时还让得开手，前台程序不会被拖卡（代价是纯后台跑时慢一点）。它与「并发档」是两个互相独立的旋钮，改一个不会顺手改另一个。" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 扫描与识别 ==================== -->
+            <GroupBox Header="扫描与识别">
+                <StackPanel>
+                    <CheckBox Content="递归扫描文件夹"
+                              IsChecked="{Binding SettingsEditor.Settings.RecursiveScan, Mode=TwoWay}" />
+
+                    <CheckBox Content="导入后自动扫描（拖拽 / 添加文件 / 添加文件夹）"
+                              Margin="0,8,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.AutoScanAfterDrop, Mode=TwoWay}"
+                              ToolTip="关掉之后导入只加进列表、不自动识别；需要识别时用菜单「文件 → 重新扫描」。" />
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="扫描模式："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <ComboBox Grid.Column="1"
+                                  SelectedValue="{Binding SettingsEditor.Settings.ScanMode, Mode=TwoWay}"
+                                  SelectedValuePath="Tag">
+                            <ComboBoxItem Content="扫描全部文件" Tag="ScanAllFiles" />
+                            <ComboBoxItem Content="只扫描常见压缩后缀" Tag="ScanKnownArchiveExtensions" />
+                            <ComboBoxItem Content="扫描可疑文件" Tag="ScanSuspiciousFiles" />
+                        </ComboBox>
+                    </Grid>
+
+                    <CheckBox Content="包含隐藏文件"
+                              Margin="0,10,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.IncludeHiddenFiles, Mode=TwoWay}"
+                              ToolTip="默认不扫隐藏文件（属性里带「隐藏」的）。打开后它们也会进列表。" />
+
+                    <CheckBox Content="包含系统文件"
+                              Margin="0,8,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.IncludeSystemFiles, Mode=TwoWay}"
+                              ToolTip="默认跳过系统文件（属性里带「系统」的，如 desktop.ini、Thumbs.db）。一般不要打开。" />
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="单文件上限："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.MaxFileSizeLimit, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="单位 MB；0 = 不限。超过上限的文件在扫描阶段就被跳过。" />
+
+                        <TextBlock Grid.Column="2"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Text="单位 MB，0 = 不限。格式靠文件头识别，不靠后缀。" />
+                    </Grid>
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="未知格式处理："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <ComboBox Grid.Column="1"
+                                  SelectedValue="{Binding SettingsEditor.Settings.UnknownFormatAction, Mode=TwoWay}"
+                                  SelectedValuePath="Tag">
+                            <ComboBoxItem Content="加入列表并标记未知" Tag="MarkUnknown" />
+                            <ComboBoxItem Content="跳过" Tag="Skip" />
+                            <ComboBoxItem Content="仍尝试解压" Tag="TryExtract" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="默认补充后缀："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.DefaultExtension, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="例如 .7z、.zip、.rar" />
+                    </Grid>
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="同名冲突处理："
+                                   Style="{StaticResource LabelTextStyle}"
+                                   ToolTip="解压落位与改名遇到同名时的处置方式（默认自动重命名，绝不覆盖）。" />
+
+                        <ComboBox Grid.Column="1"
+                                  SelectedValue="{Binding SettingsEditor.Settings.ConflictAction, Mode=TwoWay}"
+                                  SelectedValuePath="Tag"
+                                  ToolTip="默认「自动重命名」：新产物落成 名字(1)，不动已存在的文件。">
+                            <ComboBoxItem Content="跳过（不动已存在的文件）" Tag="Skip" />
+                            <ComboBoxItem Content="覆盖（先挪到临时名，落位成功后才删旧的）" Tag="Overwrite" />
+                            <ComboBoxItem Content="自动重命名（默认，绝不覆盖）" Tag="AutoRename" />
+                            <ComboBoxItem Content="询问（第一次冲突时暂停任务问一次）" Tag="Ask" />
+                        </ComboBox>
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="110,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="改名一定会先弹预览，改完由你确认才落盘。「询问」在两处都真的会问：解压落位弹一次聚合询问；改名冲突在预览表里逐条确认（没选就按保守档自动重命名，绝不覆盖）。" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 恢复默认 / 关于 ==================== -->
+            <GroupBox Header="恢复默认与关于">
+                <StackPanel>
+                    <Button Content="恢复默认设置"
+                            MinWidth="128"
+                            HorizontalAlignment="Left"
+                            Style="{StaticResource DangerOutlineButtonStyle}"
+                            ToolTip="把所有设置恢复成默认值（会先确认；恢复后立即生效并写盘）"
+                            Command="{Binding ResetSettingsCommand}" />
+
+                    <TextBlock Text="{Binding AboutText}"
+                               Margin="0,12,0,0"
+                               TextWrapping="Wrap"
+                               FontFamily="{StaticResource MonoFontFamily}"
+                               FontSize="11.5"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               ToolTip="版本 / 引擎版本 / 许可" />
+                </StackPanel>
+            </GroupBox>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

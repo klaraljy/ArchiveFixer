@@ -289,7 +289,7 @@ namespace ArchiveFixer.Models
                    $"源包处理：{DescribeSourceHandling(SourceHandling)}";
         }
 
-        /// <summary>落点模式的中文说明（含一个例子；与设置窗口里那两档的措辞同一口径）。</summary>
+        /// <summary>落点模式的中文说明（含一个例子；与②「解压方式」页那两档的措辞同一口径）。</summary>
         public static string DescribePlacement(OutputPlacementMode mode, string? customRoot)
         {
             return OutputPlacement.NormalizeLegacyMode(mode) switch

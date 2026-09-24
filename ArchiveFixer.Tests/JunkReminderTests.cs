@@ -458,6 +458,47 @@ namespace ArchiveFixer.Tests
             Assert.Equal(1, secondCalls);
         }
 
+        // ================================================================ ⑦ 设置里可以整个关掉（第 15 条）
+
+        [Fact]
+        public async Task 设置里关掉提醒_就不扫也不弹且整批照跑()
+        {
+            /*
+             * 用户 2026-09-24 第 15 条要求这个提醒**可关**。
+             * 关掉之后必须：① 连扫描都不做（那条扫描会枚举整个源目录）；② 不弹窗；
+             * ③ 整批照常跑完（提醒从来不是阻断项，关掉更不该影响解压）。
+             */
+            Harness harness = CreateHarness("disabled");
+
+            CreateTextFile(harness, "说明.txt");
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile(harness, "包.7z"));
+            WireSuccessfulExtraction(harness, "payload.mp4", "内容物");
+
+            harness.Vm.Settings.RemindBeforeExtract = false;
+
+            int calls = 0;
+            harness.Coordinator.ReminderAnswerOverride = _ =>
+            {
+                calls++;
+                return new ExtractionCoordinator.ReminderAnswer { Confirmed = true };
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(0, calls);
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.True(File.Exists(Path.Combine(task.OutputPath, "payload.mp4")));
+
+            Assert.Contains(
+                harness.Log.Logs,
+                item => item.Message.Contains(StatusText.RemindBeforeExtractDisabledLog, StringComparison.Ordinal));
+
+            // 默认值是**开**（关掉是用户显式选的，不是"没配就静默变成不提醒"）。
+            Assert.True(new AppSettings().RemindBeforeExtract);
+            Assert.True(AppSettings.CreateDefault().RemindBeforeExtract);
+        }
+
         // ================================================================ 装配
 
         /// <summary>测试用的密码本条目（占位符，见 AGENTS.md §8：仓库里不出现真实密码）。</summary>

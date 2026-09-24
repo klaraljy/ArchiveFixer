@@ -12,7 +12,9 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Xunit;
 using Xunit.Abstractions;
@@ -138,6 +140,18 @@ namespace ArchiveFixer.Tests
                     window.Handle != IntPtr.Zero,
                     $"窗口「{window.Name}」没有拿到句柄 —— Show() 没有真正完成"));
 
+            /*
+             * 六个功能页必须逐页被实例化过（用户 2026-09-24 第 11 条）。
+             *
+             * 为什么单独记一份：TabControl **只为选中的那一页建内容**，
+             * 所以"主窗口能显示"并不等于"②~⑥页的模板没问题"。
+             * 探针把六页依次选中并 UpdateLayout 一遍，模板期错误（只读属性上的默认双向绑定等）
+             * 才会在另外五页上照样暴露出来。
+             */
+            Assert.Equal(UiProbe.ExpectedTabHeaders.Count, report.ShownTabs.Count);
+
+            Assert.Equal(UiProbe.ExpectedTabHeaders, report.ShownTabs);
+
             // 关掉之后不许残留（残留 = 消息泵还挂着窗口，退出时可能卡住或留下看不见的窗口）。
             Assert.Equal(0, report.RemainingWindowCount);
 
@@ -151,6 +165,9 @@ namespace ArchiveFixer.Tests
     {
         /// <summary>成功显示过的窗口（名字 + 句柄）。</summary>
         public List<ShownWindowInfo> ShownWindows { get; } = new();
+
+        /// <summary>被选中过、模板真的实例化过的选项卡标题（顺序 = 界面顺序）。</summary>
+        public List<string> ShownTabs { get; } = new();
 
         /// <summary>异常原文（null = 全程没抛）。</summary>
         public string? FailureText { get; set; }
@@ -187,17 +204,36 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 探针必须显示到的窗口清单（**断言用**）：少一个就说明"同类错误要覆盖到其它窗口"这条要求没做到。
+        ///
+        /// <para>
+        /// 2026-09-24 第 11 条之后少两个、多一个：设置窗口与打包窗口退休
+        /// （内容搬进⑥「设置」与⑤「打包」选项卡，由 <see cref="ExpectedTabHeaders"/> 那一轮覆盖），
+        /// 新增独立日志窗口（第 18 条：日志放大）。
+        /// </para>
         /// </summary>
         public static readonly IReadOnlyList<string> ExpectedWindowNames = new[]
         {
             MainWindowName,
             RenamePreviewWindowName,
             PasswordListWindowName,
-            SettingsWindowName,
             TaskDetailWindowName,
             OneClickOptionsWindowName,
             AppDialogWindowName,
-            PackingWindowName
+            LogWindowName
+        };
+
+        /// <summary>
+        /// 主窗口选项卡的标题与顺序（用户 2026-09-24 第 11 条拍板的六个）。
+        /// 探针会逐页选中并 UpdateLayout —— 只有被选中的那一页才会实例化模板。
+        /// </summary>
+        public static readonly IReadOnlyList<string> ExpectedTabHeaders = new[]
+        {
+            "任务",
+            "解压方式",
+            "清理与删除",
+            "密码",
+            "打包",
+            "设置"
         };
 
         public const string MainWindowName = "主窗口 MainWindow";
@@ -206,15 +242,13 @@ namespace ArchiveFixer.Tests
 
         public const string PasswordListWindowName = "密码列表窗口 PasswordListWindow";
 
-        public const string SettingsWindowName = "设置窗口 SettingsWindow";
-
         public const string TaskDetailWindowName = "任务详情窗口 TaskDetailWindow";
 
         public const string OneClickOptionsWindowName = "本次选项面板 OneClickOptionsWindow";
 
         public const string AppDialogWindowName = "自绘对话框 AppDialogWindow";
 
-        public const string PackingWindowName = "打包窗口 PackingWindow";
+        public const string LogWindowName = "独立日志窗口 LogWindow";
 
         /// <param name="onProbeThread">
         /// 可选前置钩子，**在探针那条 STA 线程上**、创建任何窗口之前执行。
@@ -362,11 +396,18 @@ namespace ArchiveFixer.Tests
                 // 主窗口已经在屏幕上（离屏）并且布局跑完了：这时才轮到"对着真实可视树"的检查。
                 inspectMain?.Invoke(main, viewModel);
 
+                /*
+                 * 六个功能页逐页实例化（TabControl 只为选中页建内容）。
+                 * 放在 inspectMain 之后：那一轮检查的是①任务页的真实可视树（选择列的勾选框），
+                 * 逐页切换会重建行容器。
+                 */
+                TourMainTabs(main, report, log);
+
                 try
                 {
                     /*
                      * ③ 其余窗口**一起显示一遍**（同类错误可能长在任何一个窗口的模板里）：
-                     * 改名预览 / 密码列表 / 设置 / 任务详情 / 本次选项面板 / 自绘对话框。
+                     * 改名预览 / 密码列表 / 任务详情 / 本次选项面板 / 自绘对话框 / 独立日志窗口。
                      * 每个都带真实数据，否则列表类模板仍然不会被实例化。
                      */
                     var task = viewModel.Tasks[0];
@@ -380,14 +421,6 @@ namespace ArchiveFixer.Tests
                     ShowAndRecord(
                         new PasswordListWindow(BuildPasswordListViewModel(workRoot)),
                         PasswordListWindowName,
-                        report,
-                        main);
-
-                    ShowAndRecord(
-                        new SettingsWindow(
-                            AppSettings.CreateDefault(),
-                            new SettingsService(new PathService { DataRootDirectory = Path.Combine(workRoot, "data") })),
-                        SettingsWindowName,
                         report,
                         main);
 
@@ -414,13 +447,12 @@ namespace ArchiveFixer.Tests
                         main);
 
                     /*
-                     * 打包窗口（用户 2026-09-22 需求第 10 条）：带真实 ViewModel 显示一遍，
-                     * 让它那套"输入框 + 勾选 + 进度条 + 结果区"的模板真的被实例化。
-                     * 默认 ViewModel 不碰盘（没有源文件夹时不扫任何目录），所以探针里是安全的。
+                     * 独立日志窗口（用户 2026-09-24 第 18 条）：DataContext 就是主窗口那个 ViewModel ——
+                     * 两边显示的是同一个日志集合，所以这里的模板一旦坏掉，用户看到的日志窗口就是一片空白。
                      */
                     ShowAndRecord(
-                        new PackingWindow(new PackingViewModel()),
-                        PackingWindowName,
+                        new LogWindow { DataContext = viewModel },
+                        LogWindowName,
                         report,
                         main);
                 }
@@ -442,6 +474,72 @@ namespace ArchiveFixer.Tests
                     // 关不掉也只是留个实例，下面会把 Application.Current 还原成 null。
                 }
             }
+        }
+
+        /// <summary>
+        /// 把主窗口的六个选项卡**逐页选中**并 <c>UpdateLayout</c> 一遍，记下标题与顺序。
+        ///
+        /// <para>
+        /// 为什么必须这么做：<see cref="TabControl"/> 只为**选中**的那一页建内容，
+        /// 其余页的 DataTemplate 根本不会被实例化 —— 2026-09-22 那次"启动即崩"
+        /// 就是这类只在模板实例化时才发作的错误。六页里任何一页的绑定写错，
+        /// 这里都会抛出来（<see cref="UiBindingReachabilityTests"/> 还能顺便收到绑定报错）。
+        /// </para>
+        /// </summary>
+        private static void TourMainTabs(MainWindow main, UiProbeReport report, Action<string> log)
+        {
+            TabControl? tabs = FindDescendant<TabControl>(main)
+                              ?? throw new InvalidOperationException(
+                                  "主窗口里找不到 TabControl —— 第 11 条的六个功能页无从验证");
+
+            if (tabs.Items.Count != ExpectedTabHeaders.Count)
+            {
+                throw new InvalidOperationException(
+                    $"主窗口的选项卡有 {tabs.Items.Count} 个，期望 {ExpectedTabHeaders.Count} 个"
+                    + $"（{string.Join(" / ", ExpectedTabHeaders)}）");
+            }
+
+            for (int i = 0; i < tabs.Items.Count; i++)
+            {
+                tabs.SelectedIndex = i;
+
+                // 模板（DataTemplate / ItemsPanel / 列表行）就是在这一步被实例化的。
+                main.UpdateLayout();
+
+                string header = (tabs.Items[i] as TabItem)?.Header?.ToString() ?? string.Empty;
+
+                report.ShownTabs.Add(header);
+            }
+
+            log("· 六个选项卡逐页实例化完成：" + string.Join(" / ", report.ShownTabs));
+
+            // 收尾回到①任务页：探针之后还有别的检查会用到那张表。
+            tabs.SelectedIndex = 0;
+            main.UpdateLayout();
+        }
+
+        private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+        {
+            int count = VisualTreeHelper.GetChildrenCount(root);
+
+            for (int i = 0; i < count; i++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(root, i);
+
+                if (child is T hit)
+                {
+                    return hit;
+                }
+
+                T? deeper = FindDescendant<T>(child);
+
+                if (deeper != null)
+                {
+                    return deeper;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>

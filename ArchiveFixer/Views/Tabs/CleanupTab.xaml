@@ -1,0 +1,132 @@
+<UserControl x:Class="ArchiveFixer.Views.Tabs.CleanupTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:models="clr-namespace:ArchiveFixer.Models">
+
+    <!--
+        ③ 清理与删除页（用户 2026-09-24 第 11 条）。
+        「源包怎么处理」「其余物怎么删」「空文件夹清不清」全部归到这一页；
+        整页可滚（第 20 条），没有任何固定高度堆叠。
+    -->
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+        <StackPanel>
+
+            <!-- ==================== 源包处理 ==================== -->
+            <GroupBox Header="源包处理（解完之后拿源包怎么办）">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="源包处理："
+                                   Style="{StaticResource LabelTextStyle}"
+                                   ToolTip="「一键处理」与手动「只解压」读的是同一档。" />
+
+                        <ComboBox Grid.Column="1"
+                                  SelectedValue="{Binding SettingsEditor.SourceHandling, Mode=TwoWay}"
+                                  SelectedValuePath="Tag">
+                            <ComboBoxItem Content="留在原地（不动源包）" Tag="KeepInPlace" />
+                            <ComboBoxItem Content="移入「其余物」（默认，推荐）" Tag="MoveToRest" />
+                            <ComboBoxItem Content="校验通过后删除（不可逆）" Tag="DeleteAfterVerify" />
+                        </ComboBox>
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="110,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="只有「内容物已定稿 + 输出校验通过 + 未取消 + 属于本任务分卷组」四条同时成立才动源包；失败 / 部分完成 / 取消时源包一律原地不动、其余物不生成。删除前一定再确认一次。" />
+
+                    <CheckBox Content="手动「只解压」：解压成功且校验通过后删除源压缩包／源分卷"
+                              Margin="0,12,0,0"
+                              IsChecked="{Binding SettingsEditor.Settings.DeleteSourceAfterExtract, Mode=TwoWay}" />
+
+                    <Border Style="{StaticResource WarningBannerStyle}" Margin="0,8,0,0">
+                        <TextBlock Style="{StaticResource BannerTextStyle}"
+                                   Foreground="{StaticResource WarningTextBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="⚠ 删除不可逆，默认关闭。它只在上面选了「留在原地」时的手动「只解压」路径上参与；只有「解压成功 + 输出校验通过」才会删，校验不通过、被取消、只完成一部分时一律不删。" />
+                    </Border>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 其余物删除（红色区） ==================== -->
+            <GroupBox Header="其余物删除（删除操作，不可逆）">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="默认档："
+                                   Style="{StaticResource LabelTextStyle}"
+                                   ToolTip="只决定删除确认框里那个「改为彻底删除」勾选框的默认状态。" />
+
+                        <ComboBox Grid.Column="1"
+                                  SelectedValue="{Binding SettingsEditor.Settings.RestRemovalDefaultMode, Mode=TwoWay}"
+                                  SelectedValuePath="Tag"
+                                  Foreground="{StaticResource DangerTextBrush}"
+                                  ToolTip="无论哪一档，删除前都先预览 + 确认；彻底删除还要二次确认。">
+                            <ComboBoxItem Content="移入回收站（默认，可从回收站还原）" Tag="RecycleBin" />
+                            <ComboBoxItem Content="彻底删除（不可恢复，仍要二次确认）" Tag="Permanent" />
+                        </ComboBox>
+                    </Grid>
+
+                    <Border Background="{StaticResource DangerSoftBrush}"
+                            BorderBrush="{StaticResource DangerBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource CardCornerRadius}"
+                            Padding="{StaticResource BannerPadding}"
+                            Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="删除入口（一律只认勾选：一个都没勾就什么都不做）"
+                                       Style="{StaticResource CardTitleTextStyle}"
+                                       Foreground="{StaticResource DangerTextBrush}" />
+
+                            <WrapPanel Margin="0,8,0,0">
+                                <Button Content="删除其余物…"
+                                        Style="{StaticResource DangerOutlineButtonStyle}"
+                                        ToolTip="删除勾选的每个任务自己那一份「其余物」（内层归档 / 分卷 / 中间件 / 源包）。先预览条目数、总大小与源包个数。"
+                                        Command="{Binding CleanProcessArtifactsCommand}" />
+
+                                <Button Content="删除本目录全部其余物…"
+                                        Margin="8,0,0,0"
+                                        Style="{StaticResource DangerOutlineButtonStyle}"
+                                        ToolTip="删除目标任务输出目录下的全部其余物，会影响同目录里的所有包 —— 确认框里会点名影响几个包。"
+                                        Command="{Binding CleanAllProcessArtifactsCommand}" />
+
+                                <Button Content="清理空文件夹…"
+                                        Margin="8,0,0,0"
+                                        Style="{StaticResource DangerOutlineButtonStyle}"
+                                        ToolTip="清理勾选的每个任务输出根下「任意层级都没有文件」的子目录。先预览，默认移入回收站。"
+                                        Command="{Binding CleanEmptyFoldersCommand}" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,8,0,0"
+                               TextWrapping="Wrap"
+                               Text="默认档只是确认框的默认值，不是「跳过确认」；回收站不可用时（网络盘 / 策略禁用）一律不删并说明原因，绝不会因此降级成彻底删除。" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ==================== 解压前的提醒 ==================== -->
+            <GroupBox Header="解压前的提醒">
+                <StackPanel>
+                    <CheckBox Content="{x:Static models:StatusText.SettingsRemindBeforeExtractLabel}"
+                              IsChecked="{Binding SettingsEditor.Settings.RemindBeforeExtract, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.SettingsRemindBeforeExtractHint}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="22,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.SettingsRemindBeforeExtractHint}" />
+                </StackPanel>
+            </GroupBox>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

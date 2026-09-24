@@ -34,7 +34,7 @@ namespace ArchiveFixer.ViewModels
     }
 
     /// <summary>
-    /// 设置窗口里的**一行引擎**（检测状态 + 路径 + 版本 + 是不是当前在用）。
+    /// 设置界面上的**一行引擎**（检测状态 + 路径 + 版本 + 是不是当前在用）。
     ///
     /// 为什么要显示这三样（AGENTS.md §3.1：界面显示当前是否在用）：
     /// 用户机器上可能有**两份** UnRAR —— 自己装的 WinRAR 里那份（本机实测 6.11），
@@ -85,7 +85,8 @@ namespace ArchiveFixer.ViewModels
     }
 
     /// <summary>
-    /// 设置窗口 ViewModel。
+    /// 设置编辑器：**②解压方式 / ③清理与删除 / ④密码 / ⑥设置**四页共用（2026-09-24 第 11 条之后，
+    /// 原「设置窗口」退休，这里就是它的全部逻辑 —— 一行没改）。
     /// 负责展示、修改和恢复默认设置。
     /// </summary>
     public class SettingsViewModel : ViewModelBase
@@ -326,7 +327,7 @@ namespace ArchiveFixer.ViewModels
         /// 下次打开设置那一格是空的、真正用的是内置的那一份，而用户以为自己在用自己的那个版本。
         /// </para>
         /// <para>
-        /// 校验口径与缓存根目录一致：**拦在保存之前**，停在设置窗口里说清"填的这个文件不存在"
+        /// 校验口径与缓存根目录一致：**拦在保存之前**，停在设置界面上说清"填的这个文件不存在"
         /// 以及"留空是什么行为"，改完再保存。检验的是"文件存不存在"，不是"它是不是 7z" ——
         /// 后者由 <c>ToolLocator</c> / 引擎自己判定，这里越权猜只会误伤。
         /// </para>
@@ -355,6 +356,30 @@ namespace ArchiveFixer.ViewModels
             Settings.ExtractToOriginalDirectory,
             Settings.KeepArchiveNameFolder,
             Settings.CustomOutputDirectory ?? string.Empty);
+
+        /// <summary>
+        /// 把编辑器挂到**共享的**设置对象上（选项卡形态：②③④⑥四页共用一个编辑器）。
+        ///
+        /// <para>
+        /// 与构造函数的区别必须说清：构造函数克隆一份设置，好让"整份回退"成为可能
+        /// （原设置窗口的「取消」用它；选项卡形态下改用 <see cref="AttachSharedSettings"/> 共享同一份）。
+        /// 选项卡里没有那个"关窗即提交/丢弃"的时刻，而且同一项可能在多处出现
+        /// （并发档既在输入框里、又决定危险模式凭证盖不盖得住），两份值一定会打架。
+        /// 所以这里**不克隆** —— 界面改动即时进入内存，由底栏的「保存设置」负责校验与落盘。
+        /// </para>
+        /// <para>
+        /// 挂了之后要显式通知一轮：<see cref="AppSettings"/> 不实现 INotifyPropertyChanged，
+        /// 不通知的话界面还绑在上一份对象上，看起来就是"恢复默认没反应"。
+        /// </para>
+        /// </summary>
+        public void AttachSharedSettings(AppSettings settings)
+        {
+            _settings = settings ?? _settingsService.CreateDefault();
+
+            OnPropertyChanged(nameof(Settings));
+            RefreshRememberedBooks();
+            RaiseOutputPlacementChanged();
+        }
 
         /// <summary>
         /// 引擎优先级列表（界面上的顺序 = 落盘的顺序，见 <see cref="AppSettings.EnginePriority"/>）。
@@ -575,11 +600,18 @@ namespace ArchiveFixer.ViewModels
             try
             {
                 /*
+                 * 先复位"最近一次保存的结果"。它是**一次**保存的结论，不是历史累计：
+                 * 选项卡形态下窗口不再关闭，上一次的成功标记留着会让"这次校验没过"
+                 * 被读成"这次成功了"（调用方正是按 DialogResult 决定要不要应用设置的）。
+                 */
+                DialogResult = null;
+
+                /*
                  * 缓存根目录先校验再保存（不能落到 C 盘）。
                  *
                  * 为什么在这里**拦住**而不是"存下来再警告"：缓存根目录决定工作区落点，
                  * 存进配置之后下一次启动就会照它建目录 —— 用户看到警告时目录已经建好了，
-                 * "提示"就变成了既成事实。校验不过就停在设置窗口里，改完再保存。
+                 * "提示"就变成了既成事实。校验不过就停在设置界面上，改完再保存。
                  */
                 if (!ValidateCacheRootDirectory(Settings.CacheRootDirectory, out string cacheMessage))
                 {
@@ -669,7 +701,7 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * 保存的**同时**把引擎相关的项推给引擎层（优先级 / 两条工具路径 / 保留受损文件）。
                  *
-                 * 为什么在这里推：设置窗口是用户改这些值的唯一入口，而引擎选择发生在
+                 * 为什么在这里推：设置界面是用户改这些值的唯一入口，而引擎选择发生在
                  * "下一次点击处理"那一刻 —— 不推的话，用户改完顺序、关掉窗口、立刻处理一个包，
                  * 用的还是旧顺序（"改了没反应"）。这条推送与主窗口的
                  * ApplyEngineSettings 幂等，谁先谁后都不会打架。
@@ -765,7 +797,7 @@ namespace ArchiveFixer.ViewModels
 
             RefreshRememberedBooks();
 
-            Message = $"已从「已记住的密码本」里移除「{System.IO.Path.GetFileName(path)}」；点「保存」后生效。"
+            Message = $"已从「已记住的密码本」里移除「{System.IO.Path.GetFileName(path)}」；点底栏「保存设置」后生效。"
                       + "磁盘上的那个文件不会被删除，也不会被修改。";
         }
 
@@ -851,7 +883,7 @@ namespace ArchiveFixer.ViewModels
         /// 重算引擎列表（顺序、检测状态、路径、版本、当前在用）。
         ///
         /// ⚠ 刻意**不**用 <c>ToolLocator.Default</c> 去探测：那是运行时的全局解析结果。
-        /// 用户在设置窗口里改路径、还没点保存时，界面必须显示"改完之后会怎样"，
+        /// 用户在设置界面改路径、还没点「保存设置」时，界面必须显示"改完之后会怎样"，
         /// 而点「取消」时又不能把这个改动漏到运行时（那正是"取消了却生效了"的经典缺陷）。
         /// 所以这里用一个**临时**的 ToolLocator + 注册表 + 选择器，只做预览，不产生副作用。
         /// </summary>
@@ -959,7 +991,7 @@ namespace ArchiveFixer.ViewModels
 
                 CustomRarExePath = picked;
 
-                Message = "已选择 Rar.exe；点「保存」后生效。" + StatusText.SettingsRarExePathHint;
+                Message = "已选择 Rar.exe；点底栏「保存设置」后生效。" + StatusText.SettingsRarExePathHint;
             }
             catch (Exception ex)
             {
@@ -1059,7 +1091,7 @@ namespace ArchiveFixer.ViewModels
 
             RefreshEngineList();
 
-            Message = $"引擎顺序已调整：{string.Join(" → ", priority.Select(DescribeEngineIdForMessage))}（点「保存」后生效）";
+            Message = $"引擎顺序已调整：{string.Join(" → ", priority.Select(DescribeEngineIdForMessage))}（点底栏「保存设置」后生效）";
         }
 
         private static string DescribeEngineIdForMessage(string id)
@@ -1088,7 +1120,7 @@ namespace ArchiveFixer.ViewModels
                 CacheRootDirectory = folder;
 
                 Message = ValidateCacheRootDirectory(folder, out string reason)
-                    ? "已选择缓存根目录；点「保存」后生效。"
+                    ? "已选择缓存根目录；点底栏「保存设置」后生效。"
                     : "这个位置不能用：" + reason;
             }
             catch (Exception ex)

@@ -1,35 +1,42 @@
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using ArchiveFixer.Views;
+using ArchiveFixer.Views.Tabs;
 using System;
-using System.Collections.Specialized;
-using System.ComponentModel;
+using System.IO;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
 
 namespace ArchiveFixer
 {
+    /// <summary>
+    /// 主窗口的 code-behind（用户 2026-09-24 第 11 条之后）。
+    ///
+    /// <para>
+    /// 界面已经拆成「菜单 + 六个选项卡 + 底栏」，所以这里只剩三类东西：
+    /// 菜单项的处理（视图 / 帮助 / 退出）、拖放导入、以及 Ctrl+A 的抢占。
+    /// 原来堆在这里的日志跟随滚动、密码框同步、右键菜单、详情窗口全部跟着控件
+    /// 搬进了对应的选项卡（<c>Views\Tabs\</c>）。
+    /// </para>
+    /// <para>
+    /// 菜单项刻意用 <c>Click</c> 而不是新造一堆命令：它们做的都是"操作界面本身"
+    /// （开日志窗口、收起日志区、滚动到选中行、打开文档），没有业务语义，不该塞进 ViewModel。
+    /// </para>
+    /// </summary>
     public partial class MainWindow : Window
     {
-        private bool _syncingPassword;
         private readonly DialogService _dialogService = new();
 
-        private INotifyCollectionChanged? _hookedLogs;
-        private ScrollViewer? _logScrollViewer;
-        private bool _logPinnedToBottom = true;
-
-        /// <summary>日志滚动已排队（一个排空周期只滚一次，见 <see cref="Logs_CollectionChanged"/>）。</summary>
-        private bool _scrollToEndPending;
+        /// <summary>说明文档的相对位置（开发态在仓库里，分发态在程序目录旁）。</summary>
+        private const string UsageDocRelativePath = @"docs\使用说明.md";
 
         public MainWindow()
         {
             InitializeComponent();
 
             Loaded += MainWindow_Loaded;
-            DataContextChanged += MainWindow_DataContextChanged;
 
             /*
              * Ctrl+A 的可靠入口（用户 2026-09-22 追加需求："有一个全选的选项"）。
@@ -43,11 +50,48 @@ namespace ArchiveFixer
         }
 
         /// <summary>
+        /// 接上"跳到某一页"的请求（<see cref="MainViewModel.TabRequested"/>）。
+        ///
+        /// <para>
+        /// 为什么由窗口来切页，而不是让 ViewModel 去碰 TabControl：ViewModel 不该知道
+        /// 界面长什么样。设置与打包搬进选项卡之后，那两条旧命令的语义就只剩"切到那一页"。
+        /// </para>
+        /// </summary>
+        private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is MainViewModel viewModel)
+            {
+                viewModel.TabRequested -= ViewModel_TabRequested;
+                viewModel.TabRequested += ViewModel_TabRequested;
+            }
+        }
+
+        private void ViewModel_TabRequested(int index)
+        {
+            if (index >= 0 && index < MainTabControl.Items.Count)
+            {
+                MainTabControl.SelectedIndex = index;
+            }
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            if (DataContext is MainViewModel viewModel)
+            {
+                viewModel.TabRequested -= ViewModel_TabRequested;
+            }
+
+            base.OnClosed(e);
+        }
+
+        /// <summary>
         /// Ctrl+A / Ctrl+D / Ctrl+I：全选 / 全不选 / 反选（都作用在**勾选框**上）。
         ///
         /// <para>
         /// Ctrl+D 与 Ctrl+I 走 <c>Window.InputBindings</c> 就够了（DataGrid 没用这两个键），
-        /// 只有 Ctrl+A 需要在这里抢下来 —— 见构造函数的注释。
+        /// 只有 Ctrl+A 需要在这里抢下来。任务表格现在住在①任务页里，
+        /// 所以"焦点在不在表格里"这件事由那一页回答（<see cref="TaskTab.IsKeyboardFocusWithinTaskGrid"/>）——
+        /// 它顺带保证了密码框里的 Ctrl+A（全选文本）不会被吃掉。
         /// </para>
         /// </summary>
         private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -62,9 +106,8 @@ namespace ArchiveFixer
                 return;
             }
 
-            // 只在焦点还在任务列表（或窗口本体）时接管：别把密码框等处的 Ctrl+A
-            //（"全选文本"）也吃掉 —— 那会变成另一种"点了没用"。
-            if (Keyboard.FocusedElement is DependencyObject focused && !IsWithinTaskGrid(focused))
+            if (Keyboard.FocusedElement is not DependencyObject focused ||
+                !TaskTabHost.IsKeyboardFocusWithinTaskGrid(focused))
             {
                 return;
             }
@@ -78,248 +121,99 @@ namespace ArchiveFixer
             e.Handled = true;
         }
 
-        /// <summary>焦点是不是落在任务表格里（表格自身、行、单元格、勾选框都算）。</summary>
-        private bool IsWithinTaskGrid(DependencyObject? focused)
+        private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            while (focused != null)
+            Close();
+        }
+
+        private void LogWindowMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            try
             {
-                if (ReferenceEquals(focused, TaskDataGrid))
+                var window = new LogWindow
                 {
-                    return true;
-                }
+                    DataContext = DataContext,
+                    Owner = this
+                };
 
-                focused = focused is Visual or System.Windows.Media.Media3D.Visual3D
-                    ? VisualTreeHelper.GetParent(focused)
-                    : LogicalTreeHelper.GetParent(focused);
+                window.Show();
             }
-
-            return false;
-        }
-
-        private void MainWindow_Loaded(object sender, RoutedEventArgs e)
-        {
-            HookViewModelPropertyChanged();
-            SyncPasswordBoxFromViewModel();
-            HookLogAutoScroll();
-        }
-
-        private void MainWindow_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
-        {
-            if (e.OldValue is INotifyPropertyChanged oldVm)
+            catch (Exception ex)
             {
-                oldVm.PropertyChanged -= ViewModel_PropertyChanged;
+                _dialogService.ShowException(ex, "打开日志窗口失败");
             }
+        }
 
-            HookViewModelPropertyChanged();
-            SyncPasswordBoxFromViewModel();
-            HookLogAutoScroll();
+        private void ToggleLogAreaMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            // 日志区在①任务页里：菜单与页内那个「收起 / 展开」按钮走的是同一份状态。
+            TaskTabHost.ToggleLogArea();
+        }
+
+        private void JumpToSelectedTaskMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            TaskTabHost.ScrollToSelectedTask();
+        }
+
+        private void UsageMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            string? doc = LocateUsageDoc();
+
+            if (doc == null || !SafePathHelper.OpenFileInExplorer(doc))
+            {
+                _dialogService.ShowInfo(
+                    "找不到《使用说明》文档。" + Environment.NewLine + Environment.NewLine
+                    + "它随程序放在 " + UsageDocRelativePath + "；开发态在仓库的 docs 目录里。");
+            }
+        }
+
+        private void ShortcutsMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            _dialogService.ShowInfo(
+                "快捷键" + Environment.NewLine + Environment.NewLine
+                + "Ctrl+A　勾选全部任务" + Environment.NewLine
+                + "Ctrl+D　取消全部勾选" + Environment.NewLine
+                + "Ctrl+I　反选" + Environment.NewLine + Environment.NewLine
+                + "勾选是一切的入口：一键处理 / 只解压 / 删除其余物 / 清理空文件夹都只作用于勾选中的任务，"
+                + "一个都没勾就什么都不做。");
+        }
+
+        private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is MainViewModel viewModel)
+            {
+                _dialogService.ShowInfo(viewModel.AboutText);
+            }
         }
 
         /// <summary>
-        /// 日志区跟随最新一行。
-        ///
-        /// 为什么要有它：以前追加日志**不滚动**，跑完一批之后日志区还停在最早那几行，
-        /// 用户看到的是"什么都没发生 / 卡住了"（端到端验收时实测到这个问题）。
-        ///
-        /// 但也不能无条件滚：用户往上翻看历史时被一直拽回底部同样难受。
-        /// 所以用"当前是否贴底"作为开关 —— 贴底才跟随，翻上去就尊重用户。
+        /// 找《使用说明》：先看程序目录旁的 <c>docs\</c>（分发态），再从程序目录往上找仓库根（开发态）。
+        /// 找不到就返回 null，由调用方给一句人能看懂的提示 —— 绝不静默无反应。
         /// </summary>
-        private void HookLogAutoScroll()
+        private static string? LocateUsageDoc()
         {
-            if (_hookedLogs != null)
+            try
             {
-                _hookedLogs.CollectionChanged -= Logs_CollectionChanged;
-                _hookedLogs = null;
-            }
+                var directory = new DirectoryInfo(AppContext.BaseDirectory);
 
-            if (_logScrollViewer != null)
-            {
-                _logScrollViewer.ScrollChanged -= LogScrollViewer_ScrollChanged;
-                _logScrollViewer = null;
-            }
-
-            if (DataContext is MainViewModel vm && vm.Logs is INotifyCollectionChanged notifier)
-            {
-                _hookedLogs = notifier;
-                _hookedLogs.CollectionChanged += Logs_CollectionChanged;
-            }
-
-            // ListBox 的 ScrollViewer 要等模板应用后才在可视树里，Loaded 时取一次即可。
-            _logScrollViewer = FindDescendant<ScrollViewer>(LogList);
-
-            if (_logScrollViewer != null)
-            {
-                _logScrollViewer.ScrollChanged += LogScrollViewer_ScrollChanged;
-            }
-
-            _logPinnedToBottom = true;
-        }
-
-        private void LogScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
-        {
-            /*
-             * 只认"用户真的滚了"（VerticalChange != 0）。
-             * 内容变多也会触发 ScrollChanged，但那时 VerticalChange 为 0 ——
-             * 若把它也算进来，刚追加一行就会因为"底部变远了"而被判成"没贴底"，
-             * 后续日志再也不会跟随（这正是这类实现最常见的坑）。
-             */
-            if (Math.Abs(e.VerticalChange) < 0.1)
-            {
-                return;
-            }
-
-            // 8px 容差：滚动偏移是浮点，正好到底时未必严格相等。
-            _logPinnedToBottom = e.ExtentHeight <= e.ViewportHeight ||
-                                 e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 8;
-        }
-
-        private void Logs_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        {
-            if (e.Action != NotifyCollectionChangedAction.Add || LogList.Items.Count == 0)
-            {
-                return;
-            }
-
-            if (!_logPinnedToBottom)
-            {
-                return;
-            }
-
-            /*
-             * 合并滚动（用户 2026-09-24 第 12 条"卡死"的修法之一）。
-             *
-             * 旧写法是**每加一行就 ScrollIntoView** —— 而导入/一键处理会连着打几十上百行
-             * （批首的排期日志就是一个没有 await 的循环里连打 N+2 行），每行都强制一次
-             * 布局 + 滚动命中测试，界面线程被日志拖着走。
-             *
-             * 现在一个"排空周期"只滚一次：请求排在 Background 优先级上，
-             * 那些同样是排队进来的日志行（Normal 优先级）先全部处理完，滚动才发生。
-             * 用户看到的效果一样（始终贴在最后一行），省掉的是成百次布局。
-             */
-            if (_scrollToEndPending)
-            {
-                return;
-            }
-
-            _scrollToEndPending = true;
-
-            Dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Background,
-                new Action(() =>
+                for (int depth = 0; directory != null && depth < 6; depth++)
                 {
-                    _scrollToEndPending = false;
+                    string candidate = Path.Combine(directory.FullName, UsageDocRelativePath);
 
-                    if (!_logPinnedToBottom || LogList.Items.Count == 0)
+                    if (File.Exists(candidate))
                     {
-                        return;
+                        return candidate;
                     }
 
-                    LogList.ScrollIntoView(LogList.Items[LogList.Items.Count - 1]);
-                }));
-        }
-
-        private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
-        {
-            int count = VisualTreeHelper.GetChildrenCount(root);
-
-            for (int i = 0; i < count; i++)
+                    directory = directory.Parent;
+                }
+            }
+            catch
             {
-                DependencyObject child = VisualTreeHelper.GetChild(root, i);
-
-                if (child is T hit)
-                {
-                    return hit;
-                }
-
-                T? deeper = FindDescendant<T>(child);
-
-                if (deeper != null)
-                {
-                    return deeper;
-                }
+                // 找文档失败不是功能故障：调用方会给出提示。
             }
 
             return null;
-        }
-
-        private void HookViewModelPropertyChanged()
-        {
-            if (DataContext is INotifyPropertyChanged vm)
-            {
-                vm.PropertyChanged -= ViewModel_PropertyChanged;
-                vm.PropertyChanged += ViewModel_PropertyChanged;
-            }
-        }
-
-        private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
-        {
-            if (e.PropertyName == nameof(MainViewModel.GlobalPassword) ||
-                e.PropertyName == nameof(MainViewModel.ShowPassword))
-            {
-                SyncPasswordBoxFromViewModel();
-            }
-        }
-
-        private void SyncPasswordBoxFromViewModel()
-        {
-            if (_syncingPassword)
-            {
-                return;
-            }
-
-            if (DataContext is not MainViewModel viewModel)
-            {
-                return;
-            }
-
-            if (GlobalPasswordBox == null)
-            {
-                return;
-            }
-
-            try
-            {
-                _syncingPassword = true;
-
-                string password = viewModel.GlobalPassword ?? string.Empty;
-
-                if (GlobalPasswordBox.Password != password)
-                {
-                    GlobalPasswordBox.Password = password;
-                }
-            }
-            finally
-            {
-                _syncingPassword = false;
-            }
-        }
-
-        private void GlobalPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
-        {
-            if (_syncingPassword)
-            {
-                return;
-            }
-
-            if (DataContext is not MainViewModel viewModel)
-            {
-                return;
-            }
-
-            if (sender is not PasswordBox passwordBox)
-            {
-                return;
-            }
-
-            try
-            {
-                _syncingPassword = true;
-                viewModel.GlobalPassword = passwordBox.Password;
-            }
-            finally
-            {
-                _syncingPassword = false;
-            }
         }
 
         private async void Window_Drop(object sender, DragEventArgs e)
@@ -366,101 +260,6 @@ namespace ArchiveFixer
             }
 
             e.Handled = true;
-        }
-
-        /// <summary>
-        /// 右键点击 DataGrid 行时，自动选中当前行。
-        /// 否则右键菜单可能操作的是上一次选中的任务。
-        /// </summary>
-        private void TaskDataGrid_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
-        {
-            DependencyObject? source = e.OriginalSource as DependencyObject;
-
-            DataGridRow? row = FindParent<DataGridRow>(source);
-
-            if (row != null)
-            {
-                row.IsSelected = true;
-                TaskDataGrid.SelectedItem = row.Item;
-                TaskDataGrid.Focus();
-            }
-        }
-
-        /// <summary>
-        /// 右键菜单：智能修正此文件后缀。
-        ///
-        /// SmartRenameCommand 作用在"勾选"的任务上（OneClickCoordinator 里判的就是 IsSelected），
-        /// 所以右键单个文件时必须把它自己勾上、并让其余任务退出这次操作的 scope。
-        /// 旧写法的问题不是"清了别的勾选"，而是**清了却一句提示都没有**：用户勾了 20 个，
-        /// 右键其中一个修后缀，汇总区的"选中："从 20 变成 1，紧接着「一键处理」「移除选中」
-        /// 「清空列表」的作用范围全变了，日志里查不到原因。
-        /// 兜底做法：作用范围写在列表上方的常驻提示行里，用户点之前就知道这次会动几个。
-        /// </summary>
-        private void SmartRenameCurrentTaskMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            if (DataContext is not MainViewModel viewModel)
-            {
-                return;
-            }
-
-            if (TaskDataGrid?.SelectedItem is not ArchiveTask task)
-            {
-                _dialogService.ShowInfo("请先选择一个任务。");
-                return;
-            }
-
-            /*
-             * 一次"只留这一个"（用户 2026-09-24 第 12 条"卡死"的修法之一）。
-             *
-             * 旧写法逐项 item.IsSelected = false —— 每一项都会触发一次全表汇总重算
-             * （MainViewModel.Task_SelectionPropertyChanged）+ 38 条命令可用性重查，
-             * 几百项的任务列表就是几百次全表重算。现在套既有批量守卫：
-             * 整段改完只刷**一次**汇总（磁盘上一个字节都不动）。
-             */
-            viewModel.RunBulkSelectionUpdate(() =>
-            {
-                foreach (ArchiveTask item in viewModel.Tasks)
-                {
-                    item.IsSelected = ReferenceEquals(item, task);
-                }
-            });
-
-            if (viewModel.SmartRenameCommand.CanExecute(null))
-            {
-                viewModel.SmartRenameCommand.Execute(null);
-            }
-        }
-
-        private void TaskDetailMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            if (TaskDataGrid?.SelectedItem is not ArchiveTask task)
-            {
-                _dialogService.ShowInfo("请先选择一个任务。");
-                return;
-            }
-
-            var window = new TaskDetailWindow(task)
-            {
-                Owner = this
-            };
-
-            window.ShowDialog();
-        }
-
-        private static T? FindParent<T>(DependencyObject? child)
-            where T : DependencyObject
-        {
-            while (child != null)
-            {
-                if (child is T target)
-                {
-                    return target;
-                }
-
-                child = VisualTreeHelper.GetParent(child);
-            }
-
-            return null;
         }
     }
 }

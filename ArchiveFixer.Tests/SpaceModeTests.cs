@@ -1156,28 +1156,31 @@ namespace ArchiveFixer.Tests
         // ================================================================ ⑩ 文案不许分叉
 
         [Fact]
-        public void 风险四条_确认框设置界面与文档用的是同一份措辞()
+        public void 风险四条_确认框高风险区与文档用的是同一份措辞()
         {
             /*
              * 用户 2026-09-22 的原话是"我们要对用户**详细描述**一下"。
              * 这里的判据不是"某处写了就算"：同一份风险必须同时出现在**三个地方**，
              * 而且措辞要对得上 —— 改一处漏两处，用户拿不可逆操作换来的知情权就缺一块。
+             *
+             * 2026-09-24 第 11 条之后"设置界面"那一处搬到了②解压方式页底部的「高风险区」，
+             * 而且改成**绑定** StatusText.DangerModeRiskLines（不再抄一份文本）：
+             * 抄一份就存在"改一处漏一处"的可能，绑定则从根上不可能分叉 —— 这是加强不是削弱，
+             * 所以这里查的是绑定名而不是字面量。
              */
             Assert.Equal(4, StatusText.DangerModeRiskLines.Length);
 
-            string settingsXaml = ReadRepositoryFile("ArchiveFixer", "Views", "SettingsWindow.xaml");
-            string mainXaml = ReadRepositoryFile("ArchiveFixer", "MainWindow.xaml");
+            string extractionXaml = ReadRepositoryFile("ArchiveFixer", "Views", "Tabs", "ExtractionTab.xaml");
+            string taskTabXaml = ReadRepositoryFile("ArchiveFixer", "Views", "Tabs", "TaskTab.xaml");
             string usage = ReadRepositoryFile("docs", "使用说明.md");
             string mainViewModel = ReadRepositoryFile("ArchiveFixer", "ViewModels", "MainViewModel.cs");
 
-            foreach (string risk in StatusText.DangerModeRiskLines)
-            {
-                // ① 设置界面逐条列出（XAML 里拿不到数组，所以那里是同一份文本的副本）。
-                Assert.Contains(risk, settingsXaml, StringComparison.Ordinal);
+            // ① 高风险区那一段逐条列出 —— 绑的是 StatusText 那一份（渲染出来就是同样四句）。
+            Assert.Contains("DangerModeRiskLines", extractionXaml, StringComparison.Ordinal);
+            Assert.Contains("StatusText.DangerModeSelfTestWarning", extractionXaml, StringComparison.Ordinal);
 
-                // ② 主界面**引用**同一份（不重抄一遍，所以这里查的是绑定名，不是文本）。
-                Assert.Contains("DangerModeRiskLines", mainXaml, StringComparison.Ordinal);
-            }
+            // ② 主界面只留一行小白字（红横幅已经搬走），但那一行仍然要看得见。
+            Assert.Contains("StatusText.DangerModeActiveOneLineHint", taskTabXaml, StringComparison.Ordinal);
 
             // ③ 使用说明逐条列出（文档里有 markdown 加粗与序号，所以比"关键句"而不是整句）。
             string[] keyPhrases =
@@ -1193,9 +1196,7 @@ namespace ArchiveFixer.Tests
                 Assert.Contains(phrase, usage, StringComparison.Ordinal);
             }
 
-            // 自测协议那两句也必须在设置界面与文档里都有落点。
-            // 设置界面这里是**引用**（x:Static），不是抄一遍 —— 所以查的是引用名。
-            Assert.Contains("StatusText.DangerModeSelfTestWarning", settingsXaml, StringComparison.Ordinal);
+            // 自测协议那两句也必须在界面上有落点，且在文档里写全。
             Assert.Contains("并发数 × 2", usage, StringComparison.Ordinal);
             Assert.Contains("可以一试，但风险还是有的", usage, StringComparison.Ordinal);
 
@@ -1218,21 +1219,26 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 危险模式的界面入口_是个红色按钮并且写着风险()
         {
-            string mainXaml = ReadRepositoryFile("ArchiveFixer", "MainWindow.xaml");
+            /*
+             * 2026-09-24 第 11 条之后，危险模式的界面入口从主界面红横幅搬到了
+             * ②解压方式页底部的「高风险区」（用户原话："这个危险操作这个红框多么多余啊，别放在主界面"）。
+             * 判据一条没减：红色按钮 + 风险四条 + 自测凭证 + 并发档与空间建议。
+             */
+            string extractionXaml = ReadRepositoryFile("ArchiveFixer", "Views", "Tabs", "ExtractionTab.xaml");
 
             // 红色（DangerButtonStyle 是实心红那一档）。
-            Assert.Contains("DangerButtonStyle", mainXaml, StringComparison.Ordinal);
-            Assert.Contains("ToggleDangerModeCommand", mainXaml, StringComparison.Ordinal);
+            Assert.Contains("DangerButtonStyle", extractionXaml, StringComparison.Ordinal);
+            Assert.Contains("ToggleDangerModeCommand", extractionXaml, StringComparison.Ordinal);
 
             // 并发档与"按空间算建议"也在界面上（用户要求"算出并显示最多能并行几个"）。
-            Assert.Contains("MaxParallelChoices", mainXaml, StringComparison.Ordinal);
-            Assert.Contains("ParallelAdviceText", mainXaml, StringComparison.Ordinal);
-            Assert.Contains("RefreshParallelAdviceCommand", mainXaml, StringComparison.Ordinal);
+            Assert.Contains("MaxParallelChoices", extractionXaml, StringComparison.Ordinal);
+            Assert.Contains("ParallelAdviceText", extractionXaml, StringComparison.Ordinal);
+            Assert.Contains("RefreshParallelAdviceCommand", extractionXaml, StringComparison.Ordinal);
 
-            // 开启时那条常驻红横幅（风险一直摆在界面上，而不是只在弹窗里出现一次）。
-            Assert.Contains("DangerModeEnabled", mainXaml, StringComparison.Ordinal);
+            // 开启时的常驻风险说明（风险一直摆在界面上，而不是只在弹窗里出现一次）。
+            Assert.Contains("DangerModeEnabled", ReadRepositoryFile("ArchiveFixer", "Views", "Tabs", "TaskTab.xaml"), StringComparison.Ordinal);
 
-            // 横幅里的四条是**绑定**过来的（主 ViewModel 引用 StatusText 那一份，不重抄）。
+            // 风险四条是**绑定**过来的（主 ViewModel 引用 StatusText 那一份，不重抄）。
             string mainViewModel = ReadRepositoryFile("ArchiveFixer", "ViewModels", "MainViewModel.cs");
 
             Assert.Contains(

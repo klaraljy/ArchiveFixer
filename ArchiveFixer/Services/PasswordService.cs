@@ -289,7 +289,7 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 把"记住的密码本"整份替换掉（设置窗口里移除一项之后由主界面调它）。
+        /// 把"记住的密码本"整份替换掉（④「密码」页里移除一项之后由主界面调它）。
         /// 顺序即合并顺序；重复项按 Windows 路径口径（大小写不敏感）去掉。
         /// </summary>
         public void SetRememberedBookPaths(IEnumerable<string>? paths)

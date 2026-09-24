@@ -3,6 +3,7 @@ using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using Xunit;
@@ -200,9 +201,9 @@ namespace ArchiveFixer.Tests
         // ================================================================ ③ 文案与行为
 
         [Fact]
-        public void 设置窗口的自动扫描文案_覆盖三种导入入口()
+        public void 设置界面的自动扫描文案_覆盖三种导入入口()
         {
-            string xaml = ReadSettingsWindowXaml();
+            string xaml = ReadSettingsSurfaceXaml();
 
             // 这个开关在 ScanCoordinator.AddPathsAsync 里判，管的是所有导入入口，
             // 不只拖拽 —— 旧文案只提拖拽，会让关掉它的人以为用按钮添加还会自动扫描。
@@ -211,9 +212,9 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置窗口不再提主窗口那个不存在的临时输出目录入口()
+        public void 设置界面不再提主窗口那个不存在的临时输出目录入口()
         {
-            string xaml = ReadSettingsWindowXaml();
+            string xaml = ReadSettingsSurfaceXaml();
 
             Assert.DoesNotContain(
                 "主窗口里临时选的目录也不会写进设置",
@@ -224,9 +225,9 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置窗口如实说明覆盖策略的引擎差异()
+        public void 设置界面如实说明覆盖策略的引擎差异()
         {
-            string xaml = ReadSettingsWindowXaml();
+            string xaml = ReadSettingsSurfaceXaml();
 
             // 界面给了「自动重命名已存在文件」这一档，但它只对 7-Zip 有效：
             // UnRAR 落到 -o-（不覆盖、也不改名）。不说清楚就是"界面说一套、实际做另一套"。
@@ -236,14 +237,18 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置窗口里的每个绑定路径都能在对应的ViewModel上找到()
+        public void 每个设置项的绑定路径都能在对应的ViewModel上找到()
         {
             /*
              * 静态兜底：WPF 对"绑定名写错"是**静默**的（那一格永远是空的）。
              * 运行时的绑定跟踪由 UiBindingReachabilityTests 负责；这一条只用**字符串级**检查
-             * 兜住 SettingsWindow 这个最常改的文件（它绑定的是 SettingsViewModel + AppSettings）。
+             * 兜住全部设置界面（用户 2026-09-24 第 11 条之后是 MainWindow + 六个选项卡；
+             * 原来只有 SettingsWindow.xaml 一个文件）。
+             *
+             * ⚠ 清单**一件都不能少**：每一条都必须在界面上找得到 ——
+             * "配置里能改、界面里找不到"对用户就是一句谎。
              */
-            string xaml = ReadSettingsWindowXaml();
+            string xaml = ReadSettingsSurfaceXaml();
 
             string[] appSettingsBound = new[]
             {
@@ -258,26 +263,58 @@ namespace ArchiveFixer.Tests
                 /*
                  * 扫描侧的三项（2026-09-23 补的界面入口）。
                  *
-                 * 它们本来就有实现（FileScanService 真的按它们过滤），但设置窗口里一直没有入口 ——
+                 * 它们本来就有实现（FileScanService 真的按它们过滤），但设置里一直没有入口 ——
                  * "配置里能改、界面里找不到"对用户就是一句谎。列进这份清单，防止以后被顺手删掉。
                  */
-                "IncludeHiddenFiles", "IncludeSystemFiles", "MaxFileSizeLimit"
+                "IncludeHiddenFiles", "IncludeSystemFiles", "MaxFileSizeLimit",
+
+                /*
+                 * 2026-09-24 第 15 条补的「解压前提醒」开关。
+                 * 它和上面那些一样：界面上有这一格，代码里就**必须**真的读它
+                 * （ExtractionCoordinator.ConfirmBatchRemindersAsync 的第一道判断）。
+                 */
+                "RemindBeforeExtract"
             };
 
             foreach (string name in appSettingsBound)
             {
                 Assert.True(
                     xaml.Contains("Settings." + name, StringComparison.Ordinal),
-                    $"SettingsWindow.xaml 里没有绑定 Settings.{name}（清单过时了？）");
+                    $"设置界面（MainWindow + 六个选项卡）里没有绑定 Settings.{name}（清单过时了？）");
 
                 Assert.NotNull(typeof(AppSettings).GetProperty(name));
             }
         }
 
-        private static string ReadSettingsWindowXaml()
+        /// <summary>
+        /// 设置界面的**全部** XAML：主窗口 + 六个选项卡。
+        ///
+        /// <para>
+        /// 为什么不再是单个文件（2026-09-24 第 11 条）：设置窗口退休了，它的控件按功能
+        /// 搬进了②解压方式 / ③清理与删除 / ④密码 / ⑥设置四页。这几条断言钉的是
+        /// "设置界面上写了什么"，与"写在哪个文件里"无关，所以扫并集 ——
+        /// 逐项落在哪一页由 <c>InterfaceRefactorTests</c> 那张更细的表钉住。
+        /// </para>
+        /// </summary>
+        private static string ReadSettingsSurfaceXaml()
         {
-            return File.ReadAllText(
-                Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "Views", "SettingsWindow.xaml"));
+            string root = XamlBindingScan.RepositoryRoot;
+
+            var builder = new System.Text.StringBuilder();
+
+            builder.AppendLine(File.ReadAllText(Path.Combine(root, "ArchiveFixer", "MainWindow.xaml")));
+
+            string tabsDirectory = Path.Combine(root, "ArchiveFixer", "Views", "Tabs");
+
+            Assert.True(Directory.Exists(tabsDirectory), $"读不到选项卡目录：{tabsDirectory}");
+
+            foreach (string file in Directory.EnumerateFiles(tabsDirectory, "*.xaml")
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                builder.AppendLine(File.ReadAllText(file));
+            }
+
+            return builder.ToString();
         }
     }
 }

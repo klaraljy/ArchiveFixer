@@ -4113,6 +4113,18 @@ namespace ArchiveFixer.ViewModels
                 return true;
             }
 
+            /*
+             * 设置里关掉了「解压前的提醒」= **不扫、不弹**，直接开始（用户 2026-09-24 第 15 条）。
+             *
+             * ⚠ 判在**扫描之前**：那条扫描会枚举整批任务的源目录（最坏约十万条目录项），
+             * 关掉开关的人不该付这份代价。这里只读设置、只写一行日志，不碰任何文件。
+             */
+            if (!Settings.RemindBeforeExtract)
+            {
+                AppendLog("INFO", StatusText.RemindBeforeExtractDisabledLog);
+                return true;
+            }
+
             SourceJunkScanResult junk = await SourceJunkScanner
                 .ScanAsync(selectedTasks, _reminderProber, CancellationToken.None)
                 .ConfigureAwait(false);
