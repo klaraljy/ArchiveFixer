@@ -330,8 +330,17 @@ namespace ArchiveFixer.Storage
         }
 
         /// <summary>
-        /// 本批任何任务的源包与其分卷（<c>CurrentPath</c> + <c>VolumePaths</c>）——
+        /// 本批任何**是压缩包**的任务的源包与其分卷（<c>CurrentPath</c> + <c>VolumePaths</c>）——
         /// 这些文件**永远不算无用物**（判据 2）。
+        ///
+        /// <para>⚠ 2026-09-24 第 15 条之后这里多了一个限定：只保护 <see cref="ArchiveTask.IsArchive"/>
+        /// 为真的任务。原因是那条需求把提醒提前到了**导入之后**，而"添加文件夹"默认会把文件夹里的
+        /// **所有**文件都收进任务列表（<c>ScanAllFiles</c>）—— 打包者附带的 <c>说明.txt</c> / <c>网址.url</c>
+        /// 同样会成为任务。按旧口径它们全都被"属于本批任务"保护起来，于是提醒永远列不出任何东西，
+        /// 而用户要的恰恰是"列表里把这些删掉"。</para>
+        ///
+        /// <para>安全性没有降低：真正的包由**判据 3**（魔数体检，认得出是归档就不算无用物）兜着，
+        /// 而且判据 1（名字）本来就不含 <c>.7z</c>/<c>.rar</c>/<c>.zip</c> 这些归档后缀。</para>
         /// </summary>
         private static HashSet<string> CollectProtectedPaths(IReadOnlyList<ArchiveTask> tasks)
         {
@@ -339,7 +348,7 @@ namespace ArchiveFixer.Storage
 
             foreach (ArchiveTask? task in tasks)
             {
-                if (task == null)
+                if (task == null || !task.IsArchive)
                 {
                     continue;
                 }

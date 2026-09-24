@@ -1144,6 +1144,12 @@ namespace ArchiveFixer.ViewModels
         public ICommand CleanEmptyFoldersCommand { get; }
 
         public ICommand RemoveTaskCommand { get; }
+
+        /// <summary>
+        /// 移除**勾选的**任务（用户 2026-09-24 第 15 条："列表要能删无用物"）。
+        /// 只动列表，源文件不动；移除错了再添加一次就回来，所以不做二次确认。
+        /// </summary>
+        public ICommand RemoveCheckedTasksCommand { get; }
         public ICommand RescanTaskCommand { get; }
         public ICommand CopyTaskInfoCommand { get; }
         public ICommand CopyTaskPathCommand { get; }
@@ -1388,6 +1394,11 @@ namespace ArchiveFixer.ViewModels
 
 
             RemoveTaskCommand = new RelayCommand(RemoveTask);
+
+            // 「移除勾选的」：没有勾选就没有可移除的（CanExecute 跟着选择状态走）。
+            RemoveCheckedTasksCommand = new RelayCommand(
+                RemoveCheckedTasks,
+                () => !IsBusy && Tasks.Any(task => task.IsSelected));
             RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync);
             CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo);
             CopyTaskPathCommand = new RelayCommand(CopyTaskPath);
@@ -2541,6 +2552,34 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 AppendLog("WARN", "「以后不再询问」没能写进设置：" + ex.Message);
+                return;
+            }
+
+            OnPropertyChanged(nameof(Settings));
+        }
+
+        /// <summary>
+        /// 记下"导入之后不再弹无用物提醒"（用户 2026-09-24 第 15 条："用户可以选中关闭以后就不用触发了"）。
+        ///
+        /// <para>写失败只写 WARN：导入本身已经成功，不该因为记不住一个偏好就变成失败；
+        /// 界面上（③ 清理与删除 页）留着一个开关可以再打开。</para>
+        /// </summary>
+        internal void SaveRemindJunkAfterImport(bool remind)
+        {
+            if (Settings == null || Settings.RemindJunkAfterImport == remind)
+            {
+                return;
+            }
+
+            Settings.RemindJunkAfterImport = remind;
+
+            try
+            {
+                _settingsService.Save(Settings);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "「无用物提醒」开关没能写进设置：" + ex.Message);
                 return;
             }
 
@@ -4071,6 +4110,88 @@ namespace ArchiveFixer.ViewModels
             AutoLoadPasswordBook();
 
             UpdateSummary();
+        }
+
+        /// <summary>
+        /// 导入后无用物提醒的替身入口（**只给测试**；正式路径永远是 null = 走真弹窗）。
+        /// 见 <see cref="ScanCoordinator.JunkReminderOverride"/>。
+        /// </summary>
+        internal Func<string, ImportJunkAnswer>? JunkReminderOverride
+        {
+            get => _scanCoordinator.JunkReminderOverride;
+            set => _scanCoordinator.JunkReminderOverride = value;
+        }
+
+        /// <summary>
+        /// 移除**勾选的**任务（用户 2026-09-24 第 15 条："列表要能删无用物"）。
+        ///
+        /// <para>只动任务列表：源文件、输出目录、日志一个字节都不碰 —— 移除错了再"添加"一次就回来了，
+        /// 所以这里**不做二次确认**（确认框留给真正不可逆的事：删源、清工作区、清其余物）。</para>
+        /// </summary>
+        private void RemoveCheckedTasks()
+        {
+            List<ArchiveTask> checkedTasks = Tasks.Where(task => task.IsSelected).ToList();
+
+            if (checkedTasks.Count == 0)
+            {
+                _dialogService.ShowInfo(StatusText.RemoveCheckedTasksNoneText);
+                return;
+            }
+
+            RemoveTasksCore(checkedTasks);
+        }
+
+        /// <summary>
+        /// 按源路径移除任务（导入后的无用物提醒里点"从列表里移除这些"走这条）。
+        /// </summary>
+        /// <returns>真的移掉了几个（路径对不上的不算）。</returns>
+        internal int RemoveTasksBySourcePaths(IEnumerable<string>? paths)
+        {
+            if (paths == null)
+            {
+                return 0;
+            }
+
+            var wanted = new HashSet<string>(
+                paths.Where(path => !string.IsNullOrWhiteSpace(path)),
+                StringComparer.OrdinalIgnoreCase);
+
+            if (wanted.Count == 0)
+            {
+                return 0;
+            }
+
+            List<ArchiveTask> matched = Tasks
+                .Where(task => wanted.Contains(task.CurrentPath ?? string.Empty))
+                .ToList();
+
+            if (matched.Count == 0)
+            {
+                return 0;
+            }
+
+            RemoveTasksCore(matched);
+
+            return matched.Count;
+        }
+
+        /// <summary>移除一批任务并收尾（顺序、索引、汇总、日志一处收口）。</summary>
+        private void RemoveTasksCore(IReadOnlyList<ArchiveTask> toRemove)
+        {
+            foreach (ArchiveTask task in toRemove)
+            {
+                Tasks.Remove(task);
+            }
+
+            RebuildTaskIndex();
+            UpdateSummary();
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.RemoveTasksLogFormat,
+                    toRemove.Count));
         }
 
         private void CopyTaskInfo(object? parameter)

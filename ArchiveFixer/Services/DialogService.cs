@@ -301,7 +301,7 @@ namespace ArchiveFixer.Services
         /// <param name="yesText">主按钮文案（写动作本身："继续处理"）。</param>
         /// <param name="noText">次按钮文案（"先不处理"）。</param>
         /// <param name="optionChecked">用户最终是否勾选（未确认 / 无界面宿主时恒为 false）。</param>
-        public bool ShowReminderConfirm(
+        public virtual bool ShowReminderConfirm(
             string title,
             string message,
             string yesText,

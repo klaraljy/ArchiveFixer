@@ -597,6 +597,69 @@ namespace ArchiveFixer.Models
             "已达到每批 {0} 层的上限，还剩 {1} 个内层包没解（已经勾好）—— 点「继续解」接着解。";
 
         // ================================================================
+        // 导入后的无用物提醒 + 列表里删无用物（用户 2026-09-24 第 15 条）
+        // ================================================================
+        //
+        // 用户原话："列表要能删无用物；每次操作的选完文件夹，就要出一个无用物提醒，
+        // 用户可以选中关闭以后就不用触发了。"
+        //
+        // 与 §9.7「解压前的提醒」是**同一个判据**（SourceJunkScanner），只是时机提前到导入之后：
+        // 选完文件夹立刻告诉他"这里有这些东西"，而不是等他点了处理才说。
+        // 程序对无用物依旧**一个都不动**（不删/不改名/不搬）；"从列表里移除"只动任务列表。
+
+        /// <summary>提醒框标题。</summary>
+        public const string ImportJunkReminderTitle = "无用物提醒";
+
+        /// <summary>开场：这些是什么 + 判据有多窄。</summary>
+        public const string ImportJunkReminderIntro =
+            "这次导入的文件夹里有一些文件，很可能是打包者附带的说明 / 网址 / 工具 / 广告之类的诱饵"
+            + "（本程序只按文件名 + 魔数判了个大概，**不保证**它们真的没用）：";
+
+        /// <summary>最多列这么多条（其余只报个数）。</summary>
+        public const string ImportJunkReminderCountFormat = "这次一共认出 {0} 个：";
+
+        /// <summary>还有多少个没列出来。</summary>
+        public const string ImportJunkReminderMoreFormat = "  …还有 {0} 个（最多列 10 条）";
+
+        /// <summary>撞到扫描上限时如实说明。</summary>
+        public const string ImportJunkReminderTruncatedNote = "  （文件太多，本次只核对了前一部分）";
+
+        /// <summary>收尾：程序不动它们 + "从列表里移除"动的只是列表。</summary>
+        public const string ImportJunkReminderFooter =
+            "本程序对上面这些文件**一个都不会动**（不删、不改名、不搬走）；"
+            + "点「从列表里移除这些」只是把它们从任务列表里去掉，源文件照样留在原地。";
+
+        /// <summary>主按钮：知道了（什么都不做）。</summary>
+        public const string ImportJunkReminderKeepText = "知道了";
+
+        /// <summary>次按钮：只把它们从任务列表里移除。</summary>
+        public const string ImportJunkReminderRemoveText = "从列表里移除这些";
+
+        /// <summary>可选项位：以后不再提醒（写进设置，界面上有开关能再打开）。</summary>
+        public const string ImportJunkReminderOptionText = "以后不再提醒（可在「清理与删除」页把开关打开）";
+
+        /// <summary>导入后提醒的日志（数量 + 前几个名字）。</summary>
+        public const string ImportJunkReminderLogFormat = "导入后提醒：源目录里有 {0} 个疑似无用物（例如 {1}）。";
+
+        /// <summary>无界面宿主：不弹窗、只写日志（与 §9.7 同一口径）。</summary>
+        public const string ImportJunkReminderNoHostLog =
+            "当前宿主没有界面：导入后的无用物提醒不弹窗、只写日志（什么都不删）。";
+
+        /// <summary>用户勾了"以后不再提醒"并写进设置。</summary>
+        public const string ImportJunkReminderSuppressedLog =
+            "已记下「以后不再提醒无用物」：写进设置，可在「清理与删除」页把开关打开。";
+
+        /// <summary>用户选了"从列表里移除这些"。</summary>
+        public const string ImportJunkReminderRemovedLogFormat =
+            "已按提醒里的选择，把 {0} 个无用物从任务列表里移除（源文件一个字节都没动）。";
+
+        /// <summary>列表里手动移除任务（右键 / 「移除勾选的」）。</summary>
+        public const string RemoveTasksLogFormat = "已从任务列表里移除 {0} 个（源文件一个字节都没动）。";
+
+        /// <summary>一个都没勾时点「移除勾选的」。</summary>
+        public const string RemoveCheckedTasksNoneText = "没有勾选任何任务，没有可移除的。";
+
+        // ================================================================
         // 打包（菜单「工具 → 打包文件夹为加密分卷…」）
         // ================================================================
         //

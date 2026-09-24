@@ -1,5 +1,7 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -31,6 +33,21 @@ namespace ArchiveFixer.ViewModels
     }
 
     /// <summary>
+    /// 一次「导入后无用物提醒」的用户答案（用户 2026-09-24 第 15 条）。
+    ///
+    /// <para><see cref="Keep"/> = 主按钮「知道了」（什么都不做）；
+    /// false = 次按钮「从列表里移除这些」（只把那些无用物从**任务列表**里去掉，源文件一个字节都不动）。</para>
+    /// </summary>
+    internal sealed class ImportJunkAnswer
+    {
+        /// <summary>true = 知道了（默认，最保守：什么都不做）。</summary>
+        public bool Keep { get; init; } = true;
+
+        /// <summary>是否勾了「以后不再提醒」（勾了就写进设置）。</summary>
+        public bool OptionChecked { get; init; }
+    }
+
+    /// <summary>
     /// 扫描流程协调器。
     /// 负责导入文件/文件夹、生成任务、批量格式识别扫描、单任务重扫。
     /// </summary>
@@ -42,6 +59,36 @@ namespace ArchiveFixer.ViewModels
         private readonly DialogService _dialogService;
 
         private CancellationTokenSource? _operationCts;
+
+        /// <summary>
+        /// "无用物"魔数体检用的识别器：**复用现有那一套**（与 §9.7 解压前提醒同一个实现），
+        /// 绝不另写一份魔数表 —— 两份必然漂移，而漂移的代价是把用户的真包（伪装后缀 / 双面文件）
+        /// 叫成"无用物"。
+        /// </summary>
+        private readonly IArchiveProber _junkProber = new MagicArchiveProber();
+
+        /// <summary>
+        /// 本次运行里用户勾过「以后不再提醒」（第 15 条）。
+        ///
+        /// <para>勾的那一下会写进设置（<see cref="AppSettings.RemindJunkAfterImport"/>），
+        /// 这个内存标记只是让本次运行**立刻**生效，不用等下一次读设置。</para>
+        /// </summary>
+        private bool _junkReminderSuppressedThisRun;
+
+        /// <summary>
+        /// 导入后无用物提醒的**替身入口**（只给测试；正式路径永远是 null = 走真弹窗）。
+        ///
+        /// <para>为什么需要它：真窗口在无界面宿主里根本不会弹，而"问了几次、正文里列了什么、
+        /// 用户答了「知道了」还是「从列表里移除」"这三件事只有让调用方答一次才测得出来
+        /// （与 <c>ExtractionCoordinator.ReminderAnswerOverride</c> 同一套做法）。</para>
+        /// </summary>
+        internal Func<string, ImportJunkAnswer>? JunkReminderOverride
+        {
+            get => _junkReminderOverride;
+            set => _junkReminderOverride = value;
+        }
+
+        private Func<string, ImportJunkAnswer>? _junkReminderOverride;
 
         public ScanCoordinator(
             MainViewModel vm,
@@ -124,6 +171,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             IsBusy = true;
+
+            // 这次导入实际收进来的任务（导入后的无用物提醒只扫这几个的源目录）。
+            var importedTasks = new List<ArchiveTask>();
 
             try
             {
@@ -209,6 +259,8 @@ namespace ArchiveFixer.ViewModels
                     // 扫描收尾会再刷一次汇总（识别结果改了格式/状态），所以这里不重复刷。
                     await ScanTasksAsync();
                 }
+
+                importedTasks = accepted;
             }
             catch (Exception ex)
             {
@@ -222,6 +274,173 @@ namespace ArchiveFixer.ViewModels
             {
                 IsBusy = false;
             }
+
+            /*
+             * ===== 导入后的无用物提醒（用户 2026-09-24 第 15 条）=====
+             *
+             * 用户原话："每次操作的选完文件夹，就要出一个无用物提醒，用户可以选中关闭以后就不用触发了。"
+             *
+             * ⚠ 位置必须在 IsBusy = false **之后**（也就是 finally 外面）：
+             * 界面上的进度条绑的是 IsBusy，在忙碌状态里弹框就会出现"我还没确认，进度条已经在动"
+             * —— 那正是用户第 17 条点名的那件事，别在这里又犯一次。
+             */
+            await RemindJunkAfterImportAsync(importedTasks);
+        }
+
+        /// <summary>
+        /// 导入完成后扫一遍源目录里的"疑似无用物"并提醒（用户 2026-09-24 第 15 条）。
+        ///
+        /// <para>判据与 §9.7「解压前的提醒」**完全同一套**（<see cref="SourceJunkScanner"/>：
+        /// 名字在打包者常放的那几类里 + 不属于本批任何任务 + 魔数认不出是压缩包）。
+        /// 这里的区别只是**时机**：选完文件夹立刻说，而不是等他点了一键处理才说。</para>
+        ///
+        /// <para>三条纪律：</para>
+        /// <list type="number">
+        /// <item><description>程序对无用物**一个都不动**（不删 / 不改名 / 不搬）；</description></item>
+        /// <item><description>点"从列表里移除这些"只动**任务列表**，源文件照样留在原地；</description></item>
+        /// <item><description>勾了"以后不再提醒"写进设置（<see cref="AppSettings.RemindJunkAfterImport"/>），
+        /// 界面上有开关能再打开；无界面宿主只写日志、不弹窗。</description></item>
+        /// </list>
+        /// </summary>
+        private async Task RemindJunkAfterImportAsync(IReadOnlyList<ArchiveTask> imported)
+        {
+            if (_junkReminderSuppressedThisRun
+                || !Settings.RemindJunkAfterImport
+                || imported == null
+                || imported.Count == 0)
+            {
+                return;
+            }
+
+            SourceJunkScanResult junk;
+
+            try
+            {
+                // 扫描要枚举目录 + 读文件头（最坏 2000 次），放后台线程；界面线程只更新状态。
+                junk = await Task.Run(() => SourceJunkScanner.ScanAsync(imported, _junkProber));
+            }
+            catch (Exception ex)
+            {
+                // 提醒绝不允许让导入变成失败（与 §9.7 同一口径）。
+                AppendLog("WARN", "导入后的无用物扫描失败（不影响导入）：" + ex.Message);
+                return;
+            }
+
+            if (!junk.HasAnything)
+            {
+                return;
+            }
+
+            AppendLog(
+                "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.ImportJunkReminderLogFormat,
+                    junk.TotalCount,
+                    string.Join("、", junk.SampleNames)));
+
+            if (System.Windows.Application.Current == null && _junkReminderOverride == null)
+            {
+                /*
+                 * 无界面宿主（控制台宿主等）**不弹窗、不死等**：直接按「知道了」放行。
+                 *
+                 * 这里刻意**不走** DialogService 的降级路径：那一条会写一条"没有界面宿主，按…放行"的
+                 * 降级日志，而本方法在每个导入用例里都会被走到 —— 那行日志会污染所有导入测试的日志断言
+                 * （与 ExtractionCoordinator.AskReminderAsync 同一口径的处理）。
+                 * 注意：放行 = **什么都不做**（不删、不动列表），这与破坏性确认的降级方向正好相反。
+                 */
+                AppendLog("INFO", StatusText.ImportJunkReminderNoHostLog);
+                return;
+            }
+
+            string message = BuildJunkReminderMessage(junk);
+
+            bool keepEverything;
+            bool optionChecked;
+
+            if (_junkReminderOverride != null)
+            {
+                // 测试替身优先：无界面宿主里它是唯一能回答"弹了几次、正文是什么"的入口。
+                ImportJunkAnswer answer = _junkReminderOverride(message);
+
+                keepEverything = answer.Keep;
+                optionChecked = answer.OptionChecked;
+            }
+            else
+            {
+                keepEverything = _dialogService.ShowReminderConfirm(
+                    StatusText.ImportJunkReminderTitle,
+                    message,
+                    StatusText.ImportJunkReminderKeepText,
+                    StatusText.ImportJunkReminderRemoveText,
+                    StatusText.ImportJunkReminderOptionText,
+                    optionCheckedByDefault: false,
+                    out optionChecked);
+            }
+
+            if (optionChecked)
+            {
+                _junkReminderSuppressedThisRun = true;
+                _vm.SaveRemindJunkAfterImport(false);
+                AppendLog("INFO", StatusText.ImportJunkReminderSuppressedLog);
+            }
+
+            if (keepEverything)
+            {
+                return;
+            }
+
+            // "从列表里移除这些"：只动任务列表，源文件一个字节都不动。
+            int removed = _vm.RemoveTasksBySourcePaths(junk.Items.Select(item => item.FullPath));
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.ImportJunkReminderRemovedLogFormat,
+                    removed));
+        }
+
+        /// <summary>拼提醒正文（三段：这些是什么 → 结果里有几个 → 程序不会动它们）。</summary>
+        private static string BuildJunkReminderMessage(SourceJunkScanResult junk)
+        {
+            var builder = new System.Text.StringBuilder();
+
+            builder.AppendLine(StatusText.ImportJunkReminderIntro);
+            builder.AppendLine();
+            builder.AppendLine(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.ImportJunkReminderCountFormat,
+                junk.TotalCount));
+
+            foreach (IGrouping<string, SourceJunkItem> group in
+                     junk.Items.GroupBy(item => item.DirectoryPath, StringComparer.OrdinalIgnoreCase))
+            {
+                builder.AppendLine("  " + group.Key);
+
+                foreach (SourceJunkItem item in group)
+                {
+                    builder.AppendLine("    " + item.FileName);
+                }
+            }
+
+            if (junk.ExtraCount > 0)
+            {
+                builder.AppendLine(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.ImportJunkReminderMoreFormat,
+                    junk.ExtraCount));
+            }
+
+            if (junk.Truncated)
+            {
+                builder.AppendLine(StatusText.ImportJunkReminderTruncatedNote);
+            }
+
+            builder.AppendLine();
+            builder.Append(StatusText.ImportJunkReminderFooter);
+
+            return builder.ToString();
         }
 
         public async Task ScanTasksAsync()
