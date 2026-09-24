@@ -610,6 +610,12 @@ namespace ArchiveFixer.ViewModels
             public string Summary { get; init; } = string.Empty;
 
             /// <summary>
+            /// 这一单真的按**特定解压**跑了（判定表里"要套的那一层"没有套，规格 §3.5）。
+            /// 日志与任务详情据此说清"这次为什么少了一层"（用户最恨"我以为它按默认跑的"）。
+            /// </summary>
+            public bool SpecialExtractionApplied { get; init; }
+
+            /// <summary>
             /// 暂存区里**只有 0 字节产物**（用户 2026-09-24 铁证：密码不对时 7z 会写出 0 字节的桩文件）。
             ///
             /// <para>
@@ -746,6 +752,29 @@ namespace ArchiveFixer.ViewModels
                 ?? OutputPlacement.ParseTerminalLayoutMode(Settings.TerminalLayoutMode);
 
             /*
+             * 特定解压（规格 §3.5，用户 2026-09-24 拍板）：与终端落法同一处、同一时机读一次。
+             *
+             * 快照只读一次的原因与上面那条一样：一次一键处理会跨很多任务、很多轮（续解最多 10 层），
+             * 用户跑到一半去改设置**不许**影响这一批（否则同一个包的前后两层会按两套规则落）。
+             * 总开关关着时快照就是 Off —— 规则清单里写什么都不参与运算，
+             * 行为与加这条功能之前逐字相同（这是用户点名要的那条保证）。
+             */
+            SpecialExtractionPlan specialExtraction =
+                SpecialExtractionPlan.FromSettings(Settings);
+
+            if (specialExtraction.IsActive)
+            {
+                // 可追溯（用户 2026-09-24）：这一单按哪条特定规则跑，日志里必须看得见。
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.SpecialExtractionAppliedLogFormat,
+                        task.FileName,
+                        specialExtraction.RuleNames));
+            }
+
+            /*
              * 同名冲突的决定：Ask 档**必须在动最终目录之前**拿到答案（"暂停该任务"就发生在这里）。
              *
              * 位置刻意放在收尾重活之前、并且只在本任务第一次撞上冲突时问：
@@ -771,7 +800,8 @@ namespace ArchiveFixer.ViewModels
                             stageDirectory,
                             task.OutputPath,
                             sharedOutputRoot,
-                            terminalLayout),
+                            terminalLayout,
+                            specialExtraction),
                         cancellationToken);
 
                     if (precheck.TotalCount > 0)
@@ -809,7 +839,8 @@ namespace ArchiveFixer.ViewModels
                     oneClickRun,
                     conflictAction,
                     conflictDecision,
-                    cancellationToken),
+                    cancellationToken,
+                    specialExtraction),
                 cancellationToken);
 
             // 回到 UI 线程：只做状态与日志，不再碰大盘。
@@ -1082,7 +1113,8 @@ namespace ArchiveFixer.ViewModels
             bool oneClickRun,
             string conflictAction,
             ConflictDecision? conflictDecision,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            SpecialExtractionPlan? specialExtraction = null)
         {
             var logEntries = new List<(string Level, string Message)>();
 
@@ -1186,7 +1218,8 @@ namespace ArchiveFixer.ViewModels
                 conflictAction,
                 conflictDecision,
                 cancellationToken,
-                verification.Verified);
+                verification.Verified,
+                specialExtraction);
 
             if (commit.Attempted)
             {
@@ -2138,12 +2171,18 @@ namespace ArchiveFixer.ViewModels
         /// 于是用户在设置里选"用压缩包名当最后一层"完全不生效 —— 界面上的选项与真实行为不一致，
         /// 是本项目明令禁止的那一类（"改了没用"的开关）。
         /// </param>
+        /// <param name="specialExtraction">
+        /// 本批生效的特定解压（规格 §3.5；默认 <see cref="SpecialExtractionPlan.Off"/> = 与以前逐字相同）。
+        /// 规则生效时判定表里"要套的那一层"不再套（<c>222\1111\内容物</c>）；包内有并列的多个文件夹、
+        /// 或几个包共用同一个成品目录时不塌，按原判定表套一层并写一条 WARN（见 <see cref="ResultFinalizer.Plan"/>）。
+        /// </param>
         internal static FinalLayoutPlan PlanFinalLayout(
             string stageDirectory,
             string destinationDirectory,
             bool sharedOutputRoot,
             string? archiveBaseName,
-            TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder)
+            TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder,
+            SpecialExtractionPlan? specialExtraction = null)
         {
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -2252,7 +2291,8 @@ namespace ArchiveFixer.ViewModels
                 archiveBaseName,
                 contentRoot: null,
                 stagingRoot: stageRoot,
-                sharedOutputRoot: sharedOutputRoot);
+                sharedOutputRoot: sharedOutputRoot,
+                specialExtraction: specialExtraction);
 
             var processSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -2273,6 +2313,7 @@ namespace ArchiveFixer.ViewModels
                 ProcessArtifactTotalSize = finalize.ProcessArtifactTotalSize,
                 ContentFileCount = finalize.ContentFileCount,
                 Summary = finalize.Summary,
+                SpecialExtractionApplied = finalize.SpecialExtractionApplied,
                 Warnings = finalize.Warnings.Concat(warnings).ToList()
             };
         }
@@ -2319,7 +2360,8 @@ namespace ArchiveFixer.ViewModels
             string conflictAction,
             ConflictDecision? conflictDecision,
             CancellationToken cancellationToken,
-            bool verificationPassed = true)
+            bool verificationPassed = true,
+            SpecialExtractionPlan? specialExtraction = null)
         {
             var logEntries = new List<(string Level, string Message)>();
 
@@ -2349,7 +2391,8 @@ namespace ArchiveFixer.ViewModels
                     stageDirectory,
                     destinationDirectory,
                     sharedOutputRoot,
-                    terminalLayout);
+                    terminalLayout,
+                    specialExtraction);
             }
             catch (Exception ex)
             {
@@ -3573,7 +3616,8 @@ namespace ArchiveFixer.ViewModels
             string stageDirectory,
             string destinationDirectory,
             bool sharedOutputRoot,
-            TerminalLayoutMode terminalLayout)
+            TerminalLayoutMode terminalLayout,
+            SpecialExtractionPlan? specialExtraction = null)
         {
             var precheck = new ConflictPrecheck();
 
@@ -3588,7 +3632,7 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                plan = PlanFinalLayoutForTask(task, stageDirectory, destinationDirectory, sharedOutputRoot, terminalLayout);
+                plan = PlanFinalLayoutForTask(task, stageDirectory, destinationDirectory, sharedOutputRoot, terminalLayout, specialExtraction);
             }
             catch
             {
@@ -3637,7 +3681,8 @@ namespace ArchiveFixer.ViewModels
             string stageDirectory,
             string destinationDirectory,
             bool sharedOutputRoot,
-            TerminalLayoutMode terminalLayout)
+            TerminalLayoutMode terminalLayout,
+            SpecialExtractionPlan? specialExtraction = null)
         {
             string archiveBaseName = OutputPlacement.ResolveArchiveBaseName(task.CurrentPath);
 
@@ -3646,7 +3691,8 @@ namespace ArchiveFixer.ViewModels
                 destinationDirectory,
                 sharedOutputRoot,
                 archiveBaseName,
-                terminalLayout);
+                terminalLayout,
+                specialExtraction);
         }
 
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
@@ -4235,6 +4281,13 @@ namespace ArchiveFixer.ViewModels
             SourceHandlingMode sourceHandling = pendingOptions?.SourceHandling
                 ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
 
+            /*
+             * 「特定解压」那一行（用户 2026-09-24）：开关开着**且**至少有一条规则会真的跑时才写 ——
+             * 用户最恨"我以为它按默认跑的"，所以动手前的那个框里必须写明这一次用了哪条规则。
+             * 开关开着但一条规则都没勾时**不写**（那条路上行为与默认完全一样，写一行反而误导）。
+             */
+            SpecialExtractionPlan specialExtraction = SpecialExtractionPlan.FromSettings(Settings);
+
             return new OneClickConfirmFacts
             {
                 DestinationEcho = destination,
@@ -4242,6 +4295,9 @@ namespace ArchiveFixer.ViewModels
                     + (dangerActive ? StatusText.OneClickConfirmRestAutoDelete : StatusText.OneClickConfirmRestKeep),
                 SourceEcho = StatusText.OneClickConfirmSourceLabel
                     + OneClickRunOptions.DescribeSourceHandling(sourceHandling),
+                SpecialExtractionEcho = specialExtraction.IsActive
+                    ? StatusText.SpecialExtractionConfirmLabel + specialExtraction.RuleNames
+                    : string.Empty,
                 NoticeEcho = BuildConfirmNotice(reminders)
             };
         }
@@ -6866,10 +6922,25 @@ namespace ArchiveFixer.ViewModels
             if (RunOptions != null)
             {
                 RunOptions.ApplyTo(extractOptions);
-
-                // 任务上留一份"为什么落这儿"（§9.2 硬要求⑥）：失败清单第二级与「复制任务信息」读它。
-                task.RunOptionsNote = RunOptions.Describe();
             }
+
+            /*
+             * 任务上留一份"为什么落这儿"（§9.2 硬要求⑥ / 特定解压的用户 2026-09-24 要求）：
+             * 失败清单第二级与「复制任务信息」读它。
+             *
+             * ⚠ 特定解压那一句**不能只在有本次选项快照时才写**：手动「只解压」路径没有快照
+             * （RunOptions 为 null），但用户开了特定解压时同样要能回答"这次用的是哪条特定规则"。
+             * 两段都空时写空串（把上一轮留在同一个任务对象上的旧依据清掉 —— 任务对象是复用的，
+             * 留着旧依据会让用户读到一条已经不成立的解释）。
+             */
+            string runOptionsNote = RunOptions?.Describe() ?? string.Empty;
+            string specialExtractionNote = SpecialExtractionPlan.FromSettings(Settings).Describe();
+
+            task.RunOptionsNote = specialExtractionNote.Length == 0
+                ? runOptionsNote
+                : runOptionsNote.Length == 0
+                    ? specialExtractionNote
+                    : runOptionsNote + "；" + specialExtractionNote;
 
             /*
              * 场景 B 塌缩（规格 §3.3）：111\222\名字\名字.rar → 产物落 111\222\名字\内容物。

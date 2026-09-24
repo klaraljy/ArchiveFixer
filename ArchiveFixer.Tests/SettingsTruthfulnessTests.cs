@@ -281,7 +281,14 @@ namespace ArchiveFixer.Tests
                  * · SkipOneClickConfirm   —— 一键处理不再弹确认框（OneClickCoordinator 真的读它）。
                  * 两个都必须在界面上有"再打开"的入口，否则勾一次就再也回不来了。
                  */
-                "RemindJunkAfterImport", "SkipOneClickConfirm"
+                "RemindJunkAfterImport", "SkipOneClickConfirm",
+
+                /*
+                 * 2026-09-24「特定解压」的总开关（①任务页、一键处理旁边）。
+                 * 它必须真的被解压管线读到 —— ExtractionCoordinator 的决定性判断就是
+                 * SpecialExtractionPlan.FromSettings(Settings) 里的第一句（关着时规则清单一律不算）。
+                 */
+                "UseSpecialExtraction"
             };
 
             foreach (string name in appSettingsBound)

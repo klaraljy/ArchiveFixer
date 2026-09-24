@@ -66,6 +66,18 @@
                            TextWrapping="Wrap"
                            Text="{Binding SourceEcho}" />
 
+                <!--
+                    特定解压那一行（用户 2026-09-24）：**只有开着的时候才出现** ——
+                    他最恨"我以为它按默认跑的"，所以这一次到底按哪条特定规则跑必须写在动手前。
+                -->
+                <TextBlock x:Name="SpecialText"
+                           x:FieldModifier="public"
+                           Style="{StaticResource HintTextStyle}"
+                           Margin="0,6,0,0"
+                           TextWrapping="Wrap"
+                           Visibility="Collapsed"
+                           Text="{Binding SpecialExtractionEcho}" />
+
                 <!-- 无用物 / 没有可用密码两段（有才出现；两段都空时整块收起） -->
                 <TextBlock x:Name="NoticeText"
                            x:FieldModifier="public"

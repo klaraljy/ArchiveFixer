@@ -101,6 +101,52 @@
                 </StackPanel>
             </GroupBox>
 
+            <!--
+                ==================== 特定解压（用户 2026-09-24 拍板） ====================
+                这一栏是**可加的**：规则全部按注册表渲染（Extraction/SpecialExtractionRules.All），
+                XAML 里一条规则都没写死 —— 以后加规则 = 加一条描述 + 它的实现，这里一个字都不用动
+                （有测试钉住：塞一条假描述进注册表，这一栏自动多一条）。
+
+                优先级必须写明（用户点名要求）：这里的规则**优先于**上面那组「终端落法」。
+                总开关在①「任务」页、一键处理旁边 —— 这一页只挑规则，不重复放开关
+                （两项都绑同一个设置会被界面重构的"一项只有一个家"钉死）。
+            -->
+            <GroupBox Header="{x:Static models:StatusText.SpecialExtractionRulesGroupHeader}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.SpecialExtractionRulesIntro}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.SpecialExtractionPriorityHint}" />
+
+                    <!--
+                        规则列表：每条 = 开关 + 名称 + 一句说明 + ToolTip。
+                        开关直接写回设置里的规则 Id 清单（SettingsEditor 那一列负责归一化）。
+                    -->
+                    <ItemsControl ItemsSource="{Binding SettingsEditor.SpecialExtractionRules}"
+                                  Margin="0,8,0,0"
+                                  Focusable="False">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,0,0,8">
+                                    <CheckBox Content="{Binding Name, Mode=OneWay}"
+                                              IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                              ToolTip="{Binding ToolTip, Mode=OneWay}" />
+
+                                    <TextBlock Text="{Binding Description, Mode=OneWay}"
+                                               Style="{StaticResource HintTextStyle}"
+                                               Margin="22,2,0,0"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </GroupBox>
+
             <!-- ==================== 嵌套与覆盖 ==================== -->
             <GroupBox Header="嵌套与覆盖">
                 <StackPanel>

@@ -131,6 +131,21 @@
                             Style="{StaticResource PrimaryButtonStyle}"
                             ToolTip="对勾选的任务依次做：识别格式 → 修正伪装后缀（先给你看预览）→ 按密码本解压 → 汇总结果"
                             Command="{Binding OneClickProcessCommand}" />
+
+                    <!--
+                        特定解压总开关（用户 2026-09-24 原话："我是想在一键解压旁边弄一个特定解压开关"）。
+                        规则在②「解压方式」页那一栏里逐条挑；ToolTip 列出当前生效的规则
+                        （一条都没开就提示去②页挑）—— 关掉它 = 一键处理的行为与现在逐字相同。
+
+                        ⚠ 直接绑设置对象那一格（与②页「危险模式」那个开关同一写法）：它不需要
+                        "勾一下就让别的控件跟着变"，而这一页要绑的正是**那个**设置项本身。
+                    -->
+                    <CheckBox Content="{x:Static models:StatusText.SpecialExtractionToggleLabel}"
+                              Margin="12,0,0,0"
+                              FontWeight="SemiBold"
+                              VerticalAlignment="Center"
+                              IsChecked="{Binding SettingsEditor.Settings.UseSpecialExtraction, Mode=TwoWay}"
+                              ToolTip="{Binding SettingsEditor.SpecialExtractionToolTip}" />
                 </WrapPanel>
             </Grid>
         </Border>

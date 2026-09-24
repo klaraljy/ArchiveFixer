@@ -159,6 +159,67 @@ namespace ArchiveFixer.ViewModels
         public bool IsCustomOutputEnabled => !Settings.ExtractToOriginalDirectory;
 
         /// <summary>
+        /// ②页「特定解压」那一栏的**全部规则**（按注册表渲染，顺序 = 注册表声明顺序 = 落盘顺序）。
+        ///
+        /// <para>
+        /// ⚠ 这一栏是"可加的"：界面上不写死任何一条规则，加规则时 XAML 一个字都不用改
+        /// （有测试钉住：塞一条假描述进注册表 → 这里自动多一条、①页 ToolTip 里也会出现）。
+        /// </para>
+        /// </summary>
+        public ObservableCollection<SpecialExtractionRuleItem> SpecialExtractionRules { get; } = new();
+
+        /// <summary>
+        /// ①页那个开关的 ToolTip（用户 2026-09-24 要求："列出当前启用的规则（没有就写去②页挑）"）。
+        ///
+        /// <para>
+        /// 列的是**规则清单里勾上的那些**（不管总开关开没开）—— 用户要能一眼看出
+        /// "打开这个开关会发生什么"，而不是打开之后才发现自己上次关掉了全部规则。
+        /// </para>
+        /// </summary>
+        public string SpecialExtractionToolTip
+        {
+            get
+            {
+                List<string> names = SpecialExtractionRules
+                    .Where(item => item.IsEnabled)
+                    .Select(item => item.Name)
+                    .ToList();
+
+                return names.Count == 0
+                    ? StatusText.SpecialExtractionNoRuleHint
+                    : string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.SpecialExtractionToolTipFormat,
+                        string.Join("、", names));
+            }
+        }
+
+        /// <summary>
+        /// 把那一栏刷成注册表里的真实内容（构造 / 换设置对象 / 恢复默认之后都要来一遍）。
+        ///
+        /// <para>
+        /// 勾选状态从设置里现读（不猜、不缓存）：<c>RestoreDefault</c> 换掉整个 <see cref="AppSettings"/>
+        /// 之后，界面上若还留着上一次的勾，用户就会对着一个**不成立**的状态点保存。
+        /// </para>
+        /// </summary>
+        private void RefreshSpecialExtractionRules()
+        {
+            SpecialExtractionRules.Clear();
+
+            foreach (SpecialExtractionRule rule in ArchiveFixer.Extraction.SpecialExtractionRules.All)
+            {
+                SpecialExtractionRules.Add(new SpecialExtractionRuleItem(Settings, rule, OnSpecialExtractionRuleChanged));
+            }
+
+            OnPropertyChanged(nameof(SpecialExtractionToolTip));
+        }
+
+        private void OnSpecialExtractionRuleChanged()
+        {
+            OnPropertyChanged(nameof(SpecialExtractionToolTip));
+        }
+
+        /// <summary>
         /// 终端落法（规格 §3.1 的可选项）：内容物最里面那一层文件夹叫什么。
         ///
         /// 读写的是设置里的字符串（<see cref="AppSettings.TerminalLayoutMode"/>），
@@ -233,6 +294,85 @@ namespace ArchiveFixer.ViewModels
 
                 Settings.CollapseRepeatedFolderLayer = value;
                 OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// ②页「特定解压」那一栏里的**一行**（一条规则 = 名称 + 说明 + 开关 + ToolTip）。
+        ///
+        /// <para>
+        /// 用户 2026-09-24 原话："在解压方式里面就可以去添加一个特定解压这一栏，
+        /// **也就是以后可能会经常加的东西**"。所以这一行的内容**全部来自注册表**
+        /// （<see cref="SpecialExtractionRules.All"/>）：界面里没有一条写死的规则，
+        /// 加规则时这个类与 XAML 都不用动。
+        /// </para>
+        /// </summary>
+        public sealed class SpecialExtractionRuleItem : ViewModelBase
+        {
+            private readonly AppSettings _settings;
+            private readonly Action _changed;
+            private bool _isEnabled;
+
+            internal SpecialExtractionRuleItem(AppSettings settings, SpecialExtractionRule rule, Action changed)
+            {
+                _settings = settings;
+                _changed = changed;
+
+                Id = rule.Id;
+                Name = rule.Name;
+                Description = rule.Description;
+
+                // ⚠ 必须写全限定名：本类的宿主（SettingsViewModel）有一个**同名属性**
+                // SpecialExtractionRules（②页那一栏的集合），简单名会被解析成那个属性
+                //（C# 的 color-color 规则，与 TerminalLayout 那处的坑是同一个）。
+                _isEnabled = ArchiveFixer.Extraction.SpecialExtractionRules.IsEnabled(
+                    ArchiveFixer.Extraction.SpecialExtractionRules.Normalize(settings.SpecialExtractionRules),
+                    rule.Id);
+            }
+
+            /// <summary>稳定 Id（落盘的就是它；界面上不显示，只在说明里出现）。</summary>
+            public string Id { get; }
+
+            /// <summary>中文名（注册表给的）。</summary>
+            public string Name { get; }
+
+            /// <summary>一句说明（注册表给的）。</summary>
+            public string Description { get; }
+
+            /// <summary>ToolTip（与说明同一份，别处不再写第二份措辞）。</summary>
+            public string ToolTip => Description;
+
+            /// <summary>
+            /// 这条规则开不开。写回的是设置里的规则 Id 清单
+            /// （<see cref="AppSettings.SpecialExtractionRules"/>），并立刻归一化一次 ——
+            /// 于是"界面上的勾"与"落盘的清单"永远是同一个事实。
+            /// </summary>
+            public bool IsEnabled
+            {
+                get => _isEnabled;
+                set
+                {
+                    if (_isEnabled == value)
+                    {
+                        return;
+                    }
+
+                    _isEnabled = value;
+
+                    List<string> ids = ArchiveFixer.Extraction.SpecialExtractionRules.Normalize(_settings.SpecialExtractionRules);
+
+                    ids.RemoveAll(id => string.Equals(id, Id, StringComparison.OrdinalIgnoreCase));
+
+                    if (value)
+                    {
+                        ids.Add(Id);
+                    }
+
+                    _settings.SpecialExtractionRules = ArchiveFixer.Extraction.SpecialExtractionRules.Normalize(ids);
+
+                    OnPropertyChanged();
+                    _changed();
+                }
             }
         }
 
@@ -378,6 +518,7 @@ namespace ArchiveFixer.ViewModels
 
             OnPropertyChanged(nameof(Settings));
             RefreshRememberedBooks();
+            RefreshSpecialExtractionRules();
             RaiseOutputPlacementChanged();
         }
 
@@ -591,6 +732,7 @@ namespace ArchiveFixer.ViewModels
             RefreshEngineList();
             RefreshRarStatus();
             RefreshRememberedBooks();
+            RefreshSpecialExtractionRules();
 
             Message = "设置已加载。";
         }
@@ -732,6 +874,7 @@ namespace ArchiveFixer.ViewModels
         {
             Settings = _settingsService.CreateDefault();
             RefreshRememberedBooks();
+            RefreshSpecialExtractionRules();
             Message = "已恢复默认设置，点击保存后生效。";
         }
 

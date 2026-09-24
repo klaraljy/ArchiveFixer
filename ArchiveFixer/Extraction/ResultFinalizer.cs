@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Extraction
 {
@@ -130,6 +131,13 @@ namespace ArchiveFixer.Extraction
         /// <summary>规划过程中的提醒（忽略的非法条目、退而求其次的取名等），不改变结论。</summary>
         public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
+        /// <summary>
+        /// 这一单是不是真的按**特定解压**跑了（判定表里"要套的那一层"没有套）。
+        ///
+        /// <para>规划器只报事实，日志与任务详情据此说清"这次为什么少了一层"。</para>
+        /// </summary>
+        public bool SpecialExtractionApplied { get; init; }
+
         internal static FinalizePlan Failure(string reason)
         {
             return new FinalizePlan
@@ -208,6 +216,17 @@ namespace ArchiveFixer.Extraction
         /// （<c>BBB\222\</c>，文件夹里每个包都落进去）。调用方**不许**按模式自己再推一遍。
         /// </para>
         /// </param>
+        /// <param name="specialExtraction">
+        /// 这一批生效的**特定解压**（规格 §3.5；默认 <see cref="SpecialExtractionPlan.Off"/> =
+        /// 与加这条功能之前逐字相同）。
+        ///
+        /// <para>
+        /// 它只做一件事：<see cref="SpecialExtractionEffect.SingleContentLayer"/> 生效、且包内确实是
+        /// **一条单链**时，<b>判定表里"要套的那一层"不再套</b> —— 内容物直接落在成品目录里
+        /// （<c>222\1111\内容物</c>，包名那一层一个字都不动）。出现并列的多个文件夹、或几个包共用
+        /// 同一个成品目录时**不塌**，按原判定表套一层并写一条 WARN 说明原因（**绝不静默**）。
+        /// </para>
+        /// </param>
         public static FinalizePlan Plan(
             IReadOnlyList<StagedEntry>? stagedEntries,
             string? destinationDirectory,
@@ -215,7 +234,8 @@ namespace ArchiveFixer.Extraction
             string? archiveBaseName = null,
             string? contentRoot = null,
             string? stagingRoot = null,
-            bool sharedOutputRoot = false)
+            bool sharedOutputRoot = false,
+            SpecialExtractionPlan? specialExtraction = null)
         {
             if (string.IsNullOrWhiteSpace(destinationDirectory))
             {
@@ -311,6 +331,50 @@ namespace ArchiveFixer.Extraction
 
             string? wrapperName = ResolveWrapperName(
                 kind, terminalLayout, shape, destDir, hasArchiveName, safeArchiveBaseName, warnings);
+
+            /*
+             * ── 特定解压例外档（规格 §3.5，用户 2026-09-24 拍板）────────────────────────
+             *
+             * 用户原话："假如 222\ 里面有 100 个 .rar 压缩包，而且每个压缩包里面又压缩了两次……
+             * 按照之前的方式是这样的 222\1111\内容物最近的一层文件夹\内容物，
+             * **我想要的是这种 222\1111\内容物**"。
+             *
+             * 落法就是"把刚算出来的那一层去掉"（wrapperName = null）：下面的内容物搬运会退化成
+             * "把最里面那一层的活条目逐个搬进 destDir"，于是内容物直接落在成品目录里。
+             * ⚠ **包名那一层一个字都不动** —— destDir 是上面落点解析算出来的（222\1111\），
+             * 本例外档绝不允许把内容物搬到 222\ 去（用户 2026-09-24 第 22 条的红线：
+             * "为了防止弄混乱文件夹，内容物外面必须套一层文件夹"）。
+             *
+             * 三条边界，任何一条不成立都**不塌**，并且必须写一条 WARN 说清为什么（绝不静默）：
+             * ① 总开关关着 / 这条规则没开 → 根本不会走到这里（specialExtraction.IsActive 为 false）；
+             * ② 几个包共用同一个成品目录 → 那一层就是"包名那一层"，去掉它会把几个包的内容物混在一起；
+             * ③ 包内有**多个并列的文件夹** → 去掉一层就分不清哪个才是内容物。
+             */
+            bool specialCollapse = false;
+
+            if (specialExtraction is { IsActive: true }
+                && specialExtraction.Effect == SpecialExtractionEffect.SingleContentLayer
+                && kind is not (FinalizeLayoutKind.SingleFileToDestination
+                    or FinalizeLayoutKind.Empty
+                    or FinalizeLayoutKind.ProcessArtifactsOnly
+                    or FinalizeLayoutKind.Failed))
+            {
+                if (sharedOutputRoot)
+                {
+                    warnings.Add(specialExtraction.DescribeSkipSharedRoot(destDir));
+                }
+                else if (!IsSingleContentChain(shape))
+                {
+                    warnings.Add(specialExtraction.DescribeSkipBranch(
+                        CountBranches(shape),
+                        DescribeBranches(shape)));
+                }
+                else
+                {
+                    wrapperName = null;
+                    specialCollapse = true;
+                }
+            }
 
             // ── 内容物落法 ──────────────────────────────────────────────────────
             var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -484,9 +548,63 @@ namespace ArchiveFixer.Extraction
                 ProcessArtifactTotalSize = artifactTotalSize,
                 ContentFileCount = contentFileCount,
                 ContentTotalSize = contentTotalSize,
-                Summary = BuildSummary(kind, contentParent, moves.Count, artifactMoves.Count, warnings.Count),
+                SpecialExtractionApplied = specialCollapse,
+                Summary = BuildSummary(
+                    kind, contentParent, moves.Count, artifactMoves.Count, warnings.Count,
+                    specialCollapse ? specialExtraction!.RuleNames : null),
                 Warnings = warnings
             };
+        }
+
+        /// <summary>
+        /// 特定解压「每个包只留一层内容」的判据：包内是不是**一条单链**（规格 §3.5）。
+        ///
+        /// <para>
+        /// 用户原话："我想要的是这种 <c>222\1111\内容物</c>"。判据必须精确到"确实只有一条路可走"，
+        /// 否则会把并列的东西压到一起：
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description><b>可以塌</b>：最里面那一层**一个文件夹都没有**（只有内容文件），
+        /// 或者只有**一个**文件夹（那就是唯一的内容物，连同它里面的东西一起落进成品目录）；</description></item>
+        /// <item><description><b>不塌</b>：两个及以上并列的文件夹 —— 去掉外面那层之后，
+        /// 用户分不清哪个才是内容物，按原判定表保守套一层（宁可多一层，绝不弄混）。</description></item>
+        /// </list>
+        ///
+        /// <para>
+        /// ⚠ "只有一个文件夹"在 <see cref="AnalyzeContent"/> 里已经被它自己的循环吃进链
+        /// （每层只有一个子目录、没有文件就继续往下走），所以这里看到的最内层必然是
+        /// "有文件"或"有两个以上文件夹"。判据写成"文件夹个数 ≤ 1"是为了把两种形状
+        /// 一起说清楚，而不是靠上面那条不变式。
+        /// </para>
+        /// </summary>
+        private static bool IsSingleContentChain(ContentShape shape)
+        {
+            return shape.HasContent && CountBranches(shape) <= 1;
+        }
+
+        /// <summary>最里面那一层有几个**并列的文件夹**（纯空壳目录已经被 AnalyzeContent 摘掉了）。</summary>
+        private static int CountBranches(ContentShape shape)
+        {
+            return shape.Items.Count(item => item.IsDirectory);
+        }
+
+        /// <summary>WARN 里举几个并列文件夹的名字（最多 3 个，超了写"…"）。</summary>
+        private static string DescribeBranches(ContentShape shape)
+        {
+            List<string> names = shape.Items
+                .Where(item => item.IsDirectory)
+                .Select(item => item.Name)
+                .Take(3)
+                .ToList();
+
+            if (names.Count == 0)
+            {
+                return StatusText.SpecialExtractionSkippedNoContentReason;
+            }
+
+            string joined = string.Join("、", names);
+
+            return CountBranches(shape) > names.Count ? joined + "…" : joined;
         }
 
         /// <summary>
@@ -809,22 +927,35 @@ namespace ArchiveFixer.Extraction
             string contentParent,
             int moveCount,
             int artifactMoveCount,
-            int warningCount)
+            int warningCount,
+            string? specialRuleNames)
         {
-            string layout = kind switch
-            {
-                FinalizeLayoutKind.SingleFileToDestination => "判定表 1：终端是单个文件，直接放进目标目录",
-                FinalizeLayoutKind.WrapInFolder => "判定表 2：在目标目录下套一层",
-                FinalizeLayoutKind.PromoteInnermostFolder => "判定表 3：提上来的是最后那个有意义的文件夹（路上有纯空壳目录）",
-                FinalizeLayoutKind.CollapseSingleChain => "判定表 4：单链塌缩到最深层那个文件夹名",
-                FinalizeLayoutKind.ProcessArtifactsOnly => "只有其余物，没有内容物",
-                FinalizeLayoutKind.Empty => "暂存区里没有可定稿的东西",
-                _ => "定稿布局规划失败"
-            };
+            /*
+             * 特定解压生效时**不能**再报"判定表 4：单链塌缩到最深层那个文件夹名" ——
+             * 那一档说的正是"保留最深层那个名字"，而规则做的恰好相反（连那一层也不套）。
+             * 结论行必须与真实落法一致，否则用户读日志会得出相反的结论。
+             */
+            string layout = !string.IsNullOrWhiteSpace(specialRuleNames)
+                ? string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.SpecialExtractionAppliedSummaryFormat,
+                    specialRuleNames,
+                    string.IsNullOrWhiteSpace(contentParent) ? "成品目录" : contentParent)
+                : kind switch
+                {
+                    FinalizeLayoutKind.SingleFileToDestination => "判定表 1：终端是单个文件，直接放进目标目录",
+                    FinalizeLayoutKind.WrapInFolder => "判定表 2：在目标目录下套一层",
+                    FinalizeLayoutKind.PromoteInnermostFolder => "判定表 3：提上来的是最后那个有意义的文件夹（路上有纯空壳目录）",
+                    FinalizeLayoutKind.CollapseSingleChain => "判定表 4：单链塌缩到最深层那个文件夹名",
+                    FinalizeLayoutKind.ProcessArtifactsOnly => "只有其余物，没有内容物",
+                    FinalizeLayoutKind.Empty => "暂存区里没有可定稿的东西",
+                    _ => "定稿布局规划失败"
+                };
 
             string summary = $"{layout}；共 {moveCount} 项移动（其中其余物 {artifactMoveCount} 项）";
 
-            if (!string.IsNullOrWhiteSpace(contentParent))
+            // 特定解压那一档已经把落点写进结论句里了，不再重复一次"内容物落在 …"。
+            if (!string.IsNullOrWhiteSpace(contentParent) && string.IsNullOrWhiteSpace(specialRuleNames))
             {
                 summary += "；内容物落在 " + contentParent;
             }

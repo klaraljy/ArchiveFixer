@@ -1162,6 +1162,81 @@ namespace ArchiveFixer.Models
         public const string RemindBeforeExtractDisabledLog =
             "设置里关掉了「解压前提醒」：本次跳过无用物 / 无可用密码的扫描与提醒。";
 
+        // ── 特定解压（用户 2026-09-24 拍板：①页一个开关 + ②页**可扩展**的一栏） ──
+        //
+        // 用户原话："我是想在一键解压旁边弄一个特定解压开关，这样要弄特定解压你就在选项卡里面有解压方式，
+        // 在解压方式里面就可以去添加一个特定解压这一栏，也就是以后可能会经常加的东西，
+        // 因为每个人的特定的解压方式不同"。
+        //
+        // ⚠ 这一组是「特定解压」的**唯一措辞来源**（AGENTS.md §7）。三条纪律：
+        //    ① 规则自己的名称与说明由注册表给（<c>Extraction/SpecialExtractionRules.cs</c>），
+        //       这里只放**界面骨架**（标题 / 开场白 / 优先级 / ①页 ToolTip / 日志与 WARN 模板）；
+        //    ② 界面上不写规则清单，一律按注册表渲染 —— 以后加规则不动 XAML；
+        //    ③ "关掉全部 = 与现在完全一样"这句必须出现在界面上（用户最恨"我以为它按默认跑的"）。
+
+        /// <summary>功能名（①页开关、②页分组标题、日志里都用它）。</summary>
+        public const string SpecialExtractionName = "特定解压";
+
+        /// <summary>①页「一键处理」旁边那个总开关的文案。</summary>
+        public const string SpecialExtractionToggleLabel = "特定解压";
+
+        /// <summary>①页开关的 ToolTip：没有启用任何规则时显示它（指路去②页）。</summary>
+        public const string SpecialExtractionNoRuleHint =
+            "还没有开任何特定解压规则 —— 去②「解压方式」页的「特定解压」那一栏里挑一条。";
+
+        /// <summary>①页开关的 ToolTip：列出现在会生效的规则（措辞与②页同一份）。</summary>
+        public const string SpecialExtractionToolTipFormat =
+            "特定解压：{0}。规则在②「解压方式」页里挑；关掉 = 与现在完全一样（判定表照旧套那一层）。";
+
+        /// <summary>②页那一栏的标题。</summary>
+        public const string SpecialExtractionRulesGroupHeader = "特定解压（可以往上加的规则）";
+
+        /// <summary>②页那一栏的开场白（用户要的那句"可加的"）。</summary>
+        public const string SpecialExtractionRulesIntro =
+            "这些是**可加的**特殊解压方式：开哪条就按哪条跑（关掉全部 = 与现在完全一样）。"
+            + "要它生效，先把①「任务」页「一键处理」旁边的「特定解压」总开关打开。";
+
+        /// <summary>②页那一栏里"它与终端落法谁优先"的那句话（用户点名要写明优先级）。</summary>
+        public const string SpecialExtractionPriorityHint =
+            "与上面「内容物最后那一层（终端落法）」的优先级：这里的规则**优先**。"
+            + "规则生效时，判定表里要套的那一层不再套，内容物直接落在成品目录里（222\\1111\\内容物）；"
+            + "规则不生效（总开关关着 / 规则没开 / 包内不止一个文件夹）时才按终端落法走。";
+
+        /// <summary>确认框正文里那一行（开了特定解压才出现）。</summary>
+        public const string SpecialExtractionConfirmLabel = "特定解压：";
+
+        /// <summary>任务详情 / 失败清单里的那一行（<c>ArchiveTask.RunOptionsNote</c>）。</summary>
+        public const string SpecialExtractionNoteFormat = "特定解压：{0}";
+
+        /// <summary>日志：本次按哪几条特定规则跑（一条都不开时不写）。</summary>
+        public const string SpecialExtractionAppliedLogFormat = "{0}：特定解压 —— {1}";
+
+        /// <summary>定稿结论：这一单真的按规则塌了那一层（说清落在哪）。</summary>
+        public const string SpecialExtractionAppliedSummaryFormat =
+            "特定解压「{0}」生效：不再套那一层，内容物直接落在 {1}";
+
+        /// <summary>
+        /// 不塌的理由之一：多个包共用同一个成品目录（"添加文件夹 + 指定位置"那一档）。
+        ///
+        /// <para>
+        /// 为什么不塌：那一档下"包名那一层"<b>就是</b>判定表套出来的那一层，
+        /// 不套它等于把好几个包的内容物倒进同一个目录（用户最反感的"东西挤在一起"）。
+        /// 保守档 + 一条 WARN，**绝不静默**。
+        /// </para>
+        /// </summary>
+        public const string SpecialExtractionSkippedSharedRootFormat =
+            "特定解压「{0}」这次没按它走：本批有多个包共用同一个成品目录（{1}），"
+            + "去掉那一层会让几个包的内容物混在一起 —— 按原判定表套一层（保守档，不是失败）。";
+
+        /// <summary>不塌的理由之二：包内有多个并列文件夹 / 多个分支（不是一条单链）。</summary>
+        public const string SpecialExtractionSkippedBranchFormat =
+            "特定解压「{0}」这次没按它走：包内不是一个内容文件夹，而是 {1} 个并列的文件夹（{2}）—— "
+            + "再去掉一层就分不清哪个才是内容物 —— 按原判定表套一层（保守档，不是失败）。";
+
+        /// <summary>规则不适用时的兜底理由（没有并列文件夹可数，例如内容物是单个文件）。</summary>
+        public const string SpecialExtractionSkippedNoContentReason =
+            "这一单没有可塌的那一层（内容物本来就直接落在成品目录里）";
+
         // ── 关于 / 版本 / 许可（帮助 → 关于 与⑥设置页共用） ──
 
         /// <summary>

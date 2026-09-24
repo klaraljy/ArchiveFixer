@@ -1,6 +1,7 @@
 using ArchiveFixer.Engines;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace ArchiveFixer.Models
 {
@@ -621,6 +622,42 @@ namespace ArchiveFixer.Models
         public bool CollapseRepeatedFolderLayer { get; set; } = true;
 
         /// <summary>
+        /// 「特定解压」总开关（用户 2026-09-24 拍板：**①「任务」页、一键处理旁边**那一个开关）。
+        ///
+        /// <para>
+        /// 用户原话："我是想在一键解压旁边弄一个特定解压开关，这样要弄特定解压你就在选项卡里面有解压方式，
+        /// 在解压方式里面就可以去添加一个特定解压这一栏，也就是以后可能会经常加的东西，
+        /// 因为每个人的特定的解压方式不同"。
+        /// </para>
+        ///
+        /// <para>
+        /// <b>默认关</b>（最不意外）：关着时 <see cref="SpecialExtractionRules"/> 里写什么都不参与运算，
+        /// 一键处理与手动「只解压」的行为与加这条功能之前**逐字相同**（有测试钉住）。
+        /// 规则本身在②「解压方式」页那一栏里逐条挑。
+        /// </para>
+        /// </summary>
+        public bool UseSpecialExtraction { get; set; }
+
+        /// <summary>
+        /// 启用的**特定解压规则 Id**（②「解压方式」页那一栏里每条规则的开关）。
+        ///
+        /// <para>
+        /// 存的是注册表（<see cref="ArchiveFixer.Extraction.SpecialExtractionRules"/>）里的稳定 Id
+        /// （第一条 = <c>SingleContentLayer</c>）—— 与其它列表设置（<see cref="EnginePriority"/>、
+        /// <see cref="PasswordBookPaths"/>）一样用字符串落盘：Id 比序号抗改，用户手改配置文件也看得懂。
+        /// </para>
+        ///
+        /// <para>
+        /// 容错口径（<see cref="Normalize"/> 里收口，唯一实现在
+        /// <c>SpecialExtractionRules.Normalize</c>）：认不出的 Id **丢掉**（绝不因此报错、
+        /// 也绝不把它当另一条规则跑）、去重、统一成注册表里的规范写法。
+        /// <c>null</c>（旧配置里没有这个字段）→ 取默认集；**空列表**（用户把规则全关掉）→ 保持空
+        /// （否则"关掉全部 = 与现在完全一样"存不住）。
+        /// </para>
+        /// </summary>
+        public List<string>? SpecialExtractionRules { get; set; }
+
+        /// <summary>
         /// 「一键处理」里怎么处理源包（决策 D-9，2026-09-22 用户拍板）。
         ///
         /// 存的是 <see cref="SourceHandlingMode"/> 的**枚举名**（<c>MoveToRest</c> / <c>KeepInPlace</c> /
@@ -761,6 +798,14 @@ namespace ArchiveFixer.Models
                 MaxPasswordAttemptsPerLayer = 10,
                 TerminalLayoutMode = "KeepLastFolder",
                 CollapseRepeatedFolderLayer = true,
+
+                /*
+                 * 特定解压（用户 2026-09-24）：总开关默认**关**，规则清单预置默认集
+                 * （由注册表自己说哪几条默认勾上 —— 以后加规则时这里一个字都不用改）。
+                 * 两者都要落到新配置里：只写默认值而不写清单，"关掉全部"与"从没配过"就分不开了。
+                 */
+                UseSpecialExtraction = false,
+                SpecialExtractionRules = ArchiveFixer.Extraction.SpecialExtractionRules.DefaultEnabledIds.ToList(),
                 SourceHandling = nameof(SourceHandlingMode.MoveToRest)
             };
         }
@@ -916,6 +961,19 @@ namespace ArchiveFixer.Models
              * （一键处理的新默认值是"移动"——比删除保守，用户随时可以在设置里改成删除。）
              */
             SourceHandling = ParseSourceHandling(SourceHandling).ToString();
+
+            /*
+             * 特定解压规则清单（用户 2026-09-24）：认不出的 Id 丢掉、去重、统一写法、按注册表顺序排。
+             *
+             * 归一化放在设置层，与 EnginePriority / SourceHandling 同一口径：到定稿那一刻才发现
+             * "这个 Id 读不懂"是最糟的 —— 用户已经点了一键处理，规则却要临时猜一条来跑。
+             * 判定只有一处实现（SpecialExtractionRules.Normalize），这里不另写一套字符串比较。
+             *
+             * ⚠ null 与空列表是**两件事**：null = 旧配置里没有这个字段 → 取默认集；
+             *   空列表 = 用户把规则全关掉了 → 保持空（"关掉全部 = 与现在完全一样"必须存得住）。
+             */
+            SpecialExtractionRules = ArchiveFixer.Extraction.SpecialExtractionRules
+                .Normalize(SpecialExtractionRules);
 
             /*
              * 一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）：
