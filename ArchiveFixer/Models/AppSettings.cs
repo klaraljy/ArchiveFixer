@@ -492,8 +492,14 @@ namespace ArchiveFixer.Models
         /// 递归修好后再改回来 —— 不能让用户替我的 bug 买单。
         public string RecursionMode { get; set; } = "SingleLayer";
 
-        /// <summary>递归最大层数。到顶就停并报告，不做无限展开。</summary>
-        public int MaxRecursionDepth { get; set; } = 3;
+        /// <summary>
+        /// 递归最大层数（1~10）。到顶就停并报告，不做无限展开（不变量 8）。
+        ///
+        /// <para>⚠ 2026-09-24 用户拍板把默认值从 3 提到 **10**，与一键处理的轮数上限
+        /// （<c>OneClickCoordinator.MaxRounds = 10</c>）统一：他原话是"你为什么只弄了两层，
+        /// 我要的一键解压时多重解压"——两个上限一个 3 一个 10 只会让人以为"有一处没生效"。</para>
+        /// </summary>
+        public int MaxRecursionDepth { get; set; } = 10;
 
         /// <summary>
         /// 每一层（每个归档）最多真的试几个密码候选。
@@ -742,7 +748,7 @@ namespace ArchiveFixer.Models
                 SkipOneClickConfirm = false,
                 RemindJunkAfterImport = true,
                 RecursionMode = "SingleLayer",
-                MaxRecursionDepth = 3,
+                MaxRecursionDepth = 10,
                 MaxPasswordAttemptsPerLayer = 10,
                 TerminalLayoutMode = "KeepLastFolder",
                 CollapseRepeatedFolderLayer = true,
