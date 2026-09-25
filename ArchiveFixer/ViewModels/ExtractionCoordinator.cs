@@ -4447,7 +4447,20 @@ namespace ArchiveFixer.ViewModels
                 CustomOutputDirectory = SelectedOutputDirectory,
                 KeepArchiveNameFolder = Settings.KeepArchiveNameFolder,
                 TestBeforeExtract = Settings.TestBeforeExtract,
-                OverwriteMode = Settings.OverwriteMode,
+
+                /*
+                 * ⚠ 引擎的"覆盖档"**刻意不跟着设置走**（用户 2026-09-25 真机铁证）。
+                 *
+                 * 设置里那一档（默认 SkipExisting → `-aos`）是给"最终落位的同名冲突"用的，
+                 * 而我们自己的定稿逻辑（SafePathHelper 自动改名 / 冲突档）**根本不看引擎这个参数** ——
+                 * 引擎写的永远是**我们的暂存目录**（`engineOutputPath = stageDirectory`），
+                 * 里面的东西每一轮都是垃圾。
+                 *
+                 * 跟着设置走的代价实测过一次：`-aos` 让"上一次错密码留下的 0 字节桩文件"把
+                 * **下一个候选（可能就是正确密码）**直接跳过、退出码 0 → 正确密码被当成废票扔掉
+                 * （详见下面候选循环里那段说明）。所以暂存提取一律**覆盖写**。
+                 */
+                OverwriteMode = "OverwriteAll",
                 UseGlobalPassword = Settings.UseGlobalPasswordForAllTasks,
                 GlobalPassword = GlobalPassword,
                 TryPasswordList = true,
@@ -8086,6 +8099,26 @@ namespace ArchiveFixer.ViewModels
                     task.LastUpdatedTime = DateTime.Now;
 
                     AppendLog("INFO", $"{task.FileName}：开始解压，密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
+
+                    /*
+                     * ===== 每换一个候选，先把暂存产物清空（用户 2026-09-25 真机铁证）=====
+                     *
+                     * 现场（日志 8:27:53–54 十条候选）：偶数候选全是"引擎说成功但产物 2 个 / 0 字节"，
+                     * 奇数候选全是"密码错误" —— 奇偶交替。查下来是**上一次尝试的垃圾把下一次废掉**：
+                     *
+                     * ① 7z 用**错密码**解一个 AES ZIP 时，会先在输出目录里建出 0 字节的桩文件，**然后**才报
+                     *    Wrong password（退出码 2）—— 实测如此（用故意错的密码跑，目录里照样留下 2 个 0 字节文件）；
+                     * ② 旧代码只在"引擎说成功但校验不过"那一支清产物，"密码错误"这一支**直接 continue**，
+                     *    于是桩文件留在了暂存目录里；
+                     * ③ 下一次尝试带着 `-aos`（已存在就跳过）跑：7z 看到那两个文件已存在，**直接跳过、退出码 0**，
+                     *    我们随后校验到"2 个文件 / 0 字节"，把这个候选当成废票扔掉并清掉产物；
+                     * ④ 于是**真正正确的那个候选，只要排在"错密码候选"后面，就永远没机会真正解一次** ——
+                     *    用户密码本里的第一条正是这样被废掉的。
+                     *
+                     * 修法：每个候选都从**空目录**开始。宁可每次多删一次（暂存目录本来就是我们的、内容都是垃圾），
+                     * 也不能让上一次的桩文件把这一次的正确密码判成废票。
+                     */
+                    await DiscardStageProductsAsync(task, engineOutputPath, cancellationToken);
 
                     ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
      BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),

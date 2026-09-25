@@ -640,6 +640,39 @@ namespace ArchiveFixer.Extraction
         /// ⚠ 一次"解一层"可能真的跑好几遍引擎（每个密码候选一次），进度因此会**从 0 重新开始** ——
         /// 这是如实反映（上一遍确实白跑了），上层按"进度回退 = 新的一轮"处理（见 TaskProgressSink）。
         /// </param>
+        /// <summary>
+        /// 把**这一层在工作区里的产物目录**清空并重建（换密码候选之前调用）。
+        ///
+        /// <para>为什么必须清：7z 用错密码时会先建出 0 字节的桩文件再报错，而本层的提取参数是
+        /// `SkipExisting`（`-aos`）—— 下一次尝试会被这些桩文件跳过，正确的密码就永远解不出东西
+        /// （用户 2026-09-25 真机日志里"偶数候选产物为空、奇数候选密码错误"的奇偶交替就是这个）。</para>
+        ///
+        /// <para>安全边界：只动传进来的这个目录（它是 <see cref="ExtractionWorkspace"/> 造的层产物目录）；
+        /// 清不掉（被占用 / 权限 / 路径过长）**不抛异常** —— 清不动最多让这一次尝试按旧垃圾判废，
+        /// 由结果校验兜底，不该因为一次清理失败就把整层判死。</para>
+        /// </summary>
+        private static void TryResetLayerOutputDirectory(string? directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return;
+            }
+
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+
+                Directory.CreateDirectory(directory);
+            }
+            catch
+            {
+                // 见上面的说明：清理失败只影响这一次尝试的质量，不影响正确性（校验那道闸门还在）。
+            }
+        }
+
         private async Task<LayerOutcome> ExtractLayerAsync(
             WorkItem item,
             CancellationToken cancellationToken,
@@ -697,6 +730,19 @@ namespace ArchiveFixer.Extraction
                         BuildLayerReport(item, lastFailure, succeededPassword: null, unsafeSummary),
                         RecursionStopReason.UnsafeEntry);
                 }
+
+                /*
+                 * ===== 每换一个候选，先把这一层的产物目录清空（用户 2026-09-25 真机铁证）=====
+                 *
+                 * 与 ExtractionCoordinator 候选循环里同一处修复（那边有完整现场说明）：
+                 * 7z 用**错密码**时也会先在输出目录里建出 0 字节的桩文件，然后才报 Wrong password；
+                 * 而本层的 options 是 `SkipExisting`（`-aos`）—— 那是为了"归档内有重复条目时保留先落地的那个"，
+                 * 结果下一个候选会被这些桩文件**跳过**、直接报成功，正确的密码反而永远没机会解一次。
+                 *
+                 * ⚠ 清的只是**这一层在工作区里的产物目录**（我们自己造的），绝不碰源文件、也绝不碰最终输出目录；
+                 * 清不掉（被占用 / 权限）时不抛：引擎那边由结果校验兜底（校验不过就不算成功）。
+                 */
+                TryResetLayerOutputDirectory(item.Layer.OutputPath);
 
                 ArchiveOperationResult result = await _engine.ExtractAsync(
                         new ArchiveRequest

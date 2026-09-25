@@ -37,6 +37,7 @@
 | 2026-09-24 | **这几天不要打包**（"我现在先不要打包，我现在还要测试个好几天，等到哪天我说要打包了，你就弄"） | ⛔ 不生成 `dist\*.zip` 发行包；构建只用于刷新绿色目录。**等用户明说"打包"再打**（他连续真机测的这几天，发行包会把旧版本固化住） |
 | 2026-09-24 | **「特定解压」按"可扩展的一栏"做**（"我是想在一键解压旁边弄一个特定解压开关……在解压方式里面就可以去添加一个特定解压这一栏，也就是以后可能会经常加的东西，因为每个人的特定的解压方式不同"） | ✅ **已落地**（2026-09-24）：①页一键处理旁一个开关；②页「解压方式」一栏**列表式**的特定规则（每条 = 名称 + 说明 + 开关；第一条 = 「每个包只留一层内容」）。**规则注册表** = `Extraction/SpecialExtractionRules.cs`（只提供描述，实现按 Id 分派到 `SpecialExtractionEffect`）；**设置** = `AppSettings.UseSpecialExtraction`（默认关）+ `AppSettings.SpecialExtractionRules`（存启用的 Id）；**界面** = `Views/Tabs/TaskTab.xaml`（开关）+ `Views/Tabs/ExtractionTab.xaml`（那一栏，按注册表渲染）。**加第二条规则 = ①注册表加一条描述 ②`SpecialExtractionEffect` 加一档 + `ResolveEffect` 加一行分派 ③在管线里实现它 —— 界面骨架一个字都不用动**（有测试钉住：塞一条假描述 → 两页的列表里自动多一条）。规则定义与不塌的边界见 §9.9 |
 | 2026-09-24 | **第 26 条（内容物里的压缩包要不要解）用户说"有待商榷，先放着"** | ⛔ 现状**不改**（续解仍会解开内容物里的压缩包）。方案备好待拍板：这一层出了内容物就停 + 说清 + 一个默认关的开关。见 `修改日志.md` 第 26 条那行 |
+| 2026-09-25 | **第 25 条真机故障："我的密码本里面第一个密码就是这个解压包的密码"却被判成密码错误** | ✅ 已修（完整链条见 `修改日志.md` 第 25 条那一行）：**错密码候选留下的 0 字节桩文件 + `-aos` 跳过 = 把下一个（可能正确的）候选废掉**。两条修法**必须一起在**：①**每换一个候选先从空目录开始**（`DiscardStageProductsAsync`）；②**暂存提取一律 `-aoa`**（`ExtractionCoordinator.BuildExtractOptions`，不跟设置里那一档走）+ 递归核心同一条隐患（`RecursiveExtractor.TryResetLayerOutputDirectory`）。回归测试 = `PasswordCandidateStageResetTests`（真 7z + AES ZIP；**撤掉修复立刻变红**）。⛔ 以后动候选循环 / 覆盖档，先跑这一组 |
 
 ---
 
@@ -186,8 +187,8 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 **代码风格**：沿用既有风格（4 空格缩进、私有字段 `_camelCase`、`Nullable` + `ImplicitUsings` 开启）。
 注释写**为什么**（尤其"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
 
-**验证状态（2026-09-24 第 24 条"特定解压"之后）**：`dotnet build ArchiveFixer.slnx --no-incremental` **0 错误 0 警告**；
-`dotnet test` **1528 通过 / 0 失败 / 0 跳过**（连跑两遍都是这个数）；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
+**验证状态（2026-09-25 第 25 条"正确密码被判成废票"修复之后）**：`dotnet build ArchiveFixer.slnx --no-incremental` **0 错误 0 警告**；
+`dotnet test` **1531 通过 / 0 失败 / 0 跳过**（连跑两遍都是这个数）；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
 > ⚠ 真 7z 用例在**全量并发**下偶发「引擎操作失败」（实测 `RecursiveExtractorTests.用户确认继续后…`、
 > 以及 `RecursiveExtractorTests.递归取消_工作区保留` 一次，**单跑必过**）——
 > 这是测试侧争用（多集合并行时多个 7z 进程抢磁盘），不是产品缺陷；遇到就**单跑确认**，别去改产品代码。
