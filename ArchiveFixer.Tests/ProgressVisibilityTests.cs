@@ -705,24 +705,22 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("%", task.StatusDisplayText);
 
             /*
-             * 进度日志：只跨 10% 档位才写一行。
-             * 0/5/9 都在第 0 档 → 只写 0% 那一行；10→10%、25→20%档、47→40%档、88→80%档、100→100%档。
+             * 进度日志：**成功的任务一条都不写**（用户 2026-09-25 第 44 条：
+             * "进度显示的不要这么的详细……就比如说开始解压，A.rar 解压100%，解压成功"）。
+             *
+             * 进度本身照样落到**任务对象**上（上面那几条断言钉的就是它），只是不再往日志里灌
+             * —— 一次 68 个包的批次里，光进度就是 1181 行（实测占整份日志的 16%）。
+             * ⚠ 失败 / 取消时进度会随细节一起吐出来（那一档的规矩见 LogVolumePolicyTests）。
              */
             string[] progressLogs = harness.Log.Logs
                 .Select(x => x.Message)
                 .Where(x => x.Contains("：进度 ", StringComparison.Ordinal))
                 .ToArray();
 
-            Assert.Equal(6, progressLogs.Length);
-            Assert.Contains(progressLogs, x => x.Contains("进度 0%", StringComparison.Ordinal));
-            Assert.Contains(progressLogs, x => x.Contains("进度 10%", StringComparison.Ordinal));
-            Assert.Contains(progressLogs, x => x.Contains("进度 25%", StringComparison.Ordinal));
-            Assert.Contains(progressLogs, x => x.Contains("进度 47%", StringComparison.Ordinal));
-            Assert.Contains(progressLogs, x => x.Contains("进度 88%", StringComparison.Ordinal));
-            Assert.Contains(progressLogs, x => x.Contains("进度 100%", StringComparison.Ordinal));
+            Assert.Empty(progressLogs);
 
-            // 同一个 10% 档位里的 5 / 9 不许各写一行（这正是"淹没日志"的来源）。
-            Assert.DoesNotContain(progressLogs, x => x.Contains("进度 5%", StringComparison.Ordinal));
+            // ⚠ 反向那条（失败时进度照样吐出来）由 LogVolumePolicyTests.失败的任务_细节照旧全留 钉住，
+            // 这里不重复断言 —— 免得把"某条恰好含某词的行"当成证据。
             Assert.DoesNotContain(progressLogs, x => x.Contains("进度 9%", StringComparison.Ordinal));
         }
 

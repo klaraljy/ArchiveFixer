@@ -1066,6 +1066,9 @@ namespace ArchiveFixer.Tests
 
             var coordinator = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
 
+            // 这个用例拿「细节日志」当行为证据（第 44 条之后，成功时默认只留两行）。
+            coordinator.KeepTaskDetailInLog = true;
+
             return new Harness(vm, engine, vm, coordinator, logService, pathService);
         }
 

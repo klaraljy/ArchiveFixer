@@ -89,7 +89,7 @@ namespace ArchiveFixer.Tests
             Assert.False(File.Exists(source), "文件夹展开出来的包成功之后，源文件必须被删");
             Assert.Contains(
                 harness.Log.Logs,
-                x => x.Message.Contains("其余物已彻底删除", StringComparison.Ordinal));
+                x => x.Message.Contains(StatusText.RestActionDelete, StringComparison.Ordinal));
         }
 
         // ================================================================ ② 失败：一律不删
@@ -433,6 +433,9 @@ namespace ArchiveFixer.Tests
             ToolLocator.Default.CustomSevenZipExePath = previousSevenZipPath;
 
             var coordinator = new ExtractionCoordinator(vm, effectiveEngine, passwordService, pathService, new DialogService());
+
+            // 这个用例拿「细节日志」当行为证据（第 44 条之后，成功时默认只留两行）。
+            coordinator.KeepTaskDetailInLog = true;
             var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
             var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
             var oneClick = new OneClickCoordinator(vm, scan, rename, coordinator, new DialogService());

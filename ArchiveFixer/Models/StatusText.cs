@@ -1444,5 +1444,32 @@ namespace ArchiveFixer.Models
         /// <summary>日志里那一行的前缀（免得整段塞进失败清单时看不出是补充说明）。</summary>
         public const string EmbeddedFirstVolumeHintLogFormat =
             "说清一句：{0} 里装的是这一组分卷的第 1 卷，缺首卷的是外面那一组（{1}）—— 详见失败原因。";
+
+        // ── 日志瘦身（用户 2026-09-25 第 44 条："一次导出 713KB，这个多吓人"） ──
+
+        /// <summary>
+        /// 其余物处理的**逐任务一行**：<c>{0}</c> = 动作（彻底删除 / 移入回收站），
+        /// <c>{1}</c> = 短路径，<c>{2}</c> = 条目数，<c>{3}</c> = 释放大小。
+        ///
+        /// <para>⛔ 这里**不许**再堆理由与"不可逆"的长文案：那样 68 个包就是 400 多行、7 万字符。
+        /// 理由与"不可逆"在**批首一条** + ③页那条常驻红提示里已经说过一遍了。</para>
+        /// </summary>
+        public const string RestPurgedCompactFormat = "{0}：{1}（{2} 项 / {3}）";
+
+        /// <summary>批末的其余物汇总（一条顶掉几十行）：<c>{0}</c> = 任务数，<c>{1}</c> = 合计大小。</summary>
+        public const string RestPurgedBatchSummaryFormat = "本批其余物已处理：{0} 个任务，合计 {1}。";
+
+        /// <summary>其余物动作：彻底删除（逐任务一行里的动作名）。</summary>
+        public const string RestActionDelete = "彻底删除";
+
+        /// <summary>其余物动作：移入回收站（逐任务一行里的动作名）。</summary>
+        public const string RestActionRecycleBin = "移入回收站";
+
+        /// <summary>
+        /// 「其余物保留」的**逐任务一行**：<c>{0}</c> = 任务名，<c>{1}</c> = 短路径，<c>{2}</c> = 条目数。
+        ///
+        /// <para>⛔ 这里不许再带"去哪儿改档位"那段说明 —— 那句话批首已经说过一遍了（第 44 条）。</para>
+        /// </summary>
+        public const string RestKeptCompactFormat = "{0}：其余物保留：{1}（{2} 项）";
     }
 }

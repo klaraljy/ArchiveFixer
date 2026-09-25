@@ -1019,6 +1019,9 @@ namespace ArchiveFixer.Tests
 
             var coordinator = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
 
+            // 这个用例拿「细节日志」当行为证据（第 44 条之后，成功时默认只留两行）。
+            coordinator.KeepTaskDetailInLog = true;
+
             /*
              * 二选一（清空的动作刻意放在**装配之后**，见方法开头的说明）：
              * · true  = 用户**显式设过**缓存根目录（老行为，工作区 = <cacheRoot>\work）；

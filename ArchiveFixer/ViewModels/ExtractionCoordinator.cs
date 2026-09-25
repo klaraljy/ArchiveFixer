@@ -3155,7 +3155,7 @@ namespace ArchiveFixer.ViewModels
                 List<string> contentNames = contentMoves
                     .Select(move => Path.GetFileName(move.To))
                     .Where(name => !string.IsNullOrWhiteSpace(name))
-                    .Take(MaxFinalizeDetailLines)
+                    .Take(MaxFinalizeContentNameLines)
                     .ToList();
 
                 if (contentNames.Count > 0)
@@ -5729,7 +5729,267 @@ namespace ArchiveFixer.ViewModels
         private bool IsStopping { get => _vm.IsStopping; set => _vm.IsStopping = value; }
         private bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
         private void AppendLog(string message) => _vm.AppendLog(message);
-        private void AppendLog(string level, string message) => _vm.AppendLog(level, message);
+
+        /*
+         * ==================== 每任务日志「攒着，成功就丢」（用户 2026-09-25 第 44 条）====================
+         *
+         * 他的原话："你看看一次导出 713KB……这个多吓人"，并给了三条建议：
+         * ①进度别这么详细（"就比如说开始解压，A.rar 解压100%，解压成功"）；
+         * ②每次不用汇报那么详细（"多相同文件，数量肯定会很多"）；③删文件别写那么多文字。
+         *
+         * 量化过那一次 4025 行 / 713 KB 的构成：**进度 1181 行（16%）**、**删除 412 行（16%）**、
+         * 其余 2432 行里绝大多数是**每个任务十几条一样形状的样板**（落点 / 入仓 / 空间门 / 资源预算 /
+         * 特定解压 / 结果校验 / 定稿完成 / 工作区清理 / 其余物…），68 个包就是 68 份。
+         *
+         * 所以这里的规矩是：**一个任务跑的时候，INFO 先攒着**；
+         * · 任务**成功** → 只留"开始"与"收尾摘要"两行，细节全丢（他明确说"成功就不用那么多"）；
+         * · 任务**失败 / 取消 / 部分完成** → 攒下的细节**原样全吐出来**（他明确说"如果失败的话，
+         *   你就可以多一点"）—— 排查要的就是那些数字与路径；
+         * · **进度行永远是"噪声"**：成功时一律丢，失败时随细节一起吐出来；
+         * · WARN / ERROR **立刻可见**（它们是信号，不许被攒住），并且第一次出现时把**之前**攒的那些
+         *   一起吐出来 —— 否则错误行会孤零零地出现在日志里，前面发生了什么全看不到。
+         */
+        private sealed class TaskLogCapture
+        {
+            public List<(string Level, string Message)> Buffer { get; } = new();
+
+            public bool DetailsVisible { get; set; }
+        }
+
+        /*
+         * ⚠ 缓冲必须是**每个任务各一份**，而且得跟着 async 流走：批量解压是**并发**的
+         * （用户选的并行档，实测 4 个任务同时跑）。第一版把它写成协调器上的普通字段 ——
+         * 两个任务同时开工就互相清缓冲、互相吐摘要，`List.Add` 还会被两个线程同时改，
+         * 结果任务直接炸成「未知错误」（两处既有用例当场变红，就是这条）。
+         * AsyncLocal 每个任务的 await 链各拿一份，天然不串。
+         */
+        private readonly AsyncLocal<TaskLogCapture?> _currentTaskLog = new();
+
+        /// <summary>进度类日志：成功时一律丢（量最大，信息量最低），失败时随细节一起吐。</summary>
+        private static bool IsProgressNoise(string message) =>
+            message.Contains("：进度 ", StringComparison.Ordinal)
+            || message.Contains("：取出内嵌归档 ", StringComparison.Ordinal);
+
+        /// <summary>
+        /// **排查用**：true = 成功时也把全部细节写进日志（默认 <c>false</c> = 产品行为：成功只留两行）。
+        ///
+        /// <para>为什么留这个口子：一大批既有用例把"日志里那一行"当作**行为证据**（跨盘搬运走了复制、
+        /// 工作区被清理、空间依据写了"同卷只算一份"……），而第 44 条的瘦身改的是**默认呈现**、
+        /// 不是行为本身。让那些用例显式声明"我这个用例要看细节"，比把它们一条条改成断言摘要更诚实
+        /// —— 也让"默认现在是简洁的"这件事只由 <c>LogVolumePolicyTests</c> 一处钉住。</para>
+        ///
+        /// <para>⛔ 产品界面里**没有任何入口**会把它置 true（⑥页也没有这个开关）：用户要的是简洁，
+        /// 要细节请用失败清单 / 任务详情 / 把 <c>KeepFailedWorkspace</c> 打开留现场。</para>
+        /// </summary>
+        internal bool KeepTaskDetailInLog { get; set; }
+
+        private void BeginTaskLogCapture(ArchiveTask task)
+        {
+            _currentTaskLog.Value = KeepTaskDetailInLog ? null : new TaskLogCapture();
+
+            /*
+             * 「开始解压」**直接写出去**（不进缓冲）：用户 2026-09-25 第 44 条要的形状就是
+             * "开始解压 → 100% → 解压成功"两行 —— 一行开始、一行结果，中间的过程只在他要看的时候
+             * （失败 / 有 WARN）才出现。
+             */
+            if (task != null)
+            {
+                _vm.AppendLog("INFO", $"{task.FileName}：开始{StatusText.OpExtract}");
+            }
+        }
+
+        private void FlushTaskLogBuffer(TaskLogCapture capture)
+        {
+            if (capture.Buffer.Count == 0)
+            {
+                return;
+            }
+
+            foreach ((string level, string message) in capture.Buffer)
+            {
+                _vm.AppendLog(level, message);
+            }
+
+            capture.Buffer.Clear();
+        }
+
+        /// <summary>
+        /// 任务收尾：按**机器终态**决定细节留不留（⛔ 不比对中文文案），再补一行"收尾摘要"。
+        /// </summary>
+        private void EndTaskLogCapture(ArchiveTask task)
+        {
+            TaskLogCapture? capture = _currentTaskLog.Value;
+
+            _currentTaskLog.Value = null;
+
+            if (capture == null)
+            {
+                return;
+            }
+
+            bool succeeded = task.Outcome == TaskOutcome.Succeeded;
+
+            if (succeeded)
+            {
+                capture.Buffer.Clear();   // 成功：样板与进度全丢，只留下面那一行
+            }
+            else
+            {
+                FlushTaskLogBuffer(capture);   // 失败 / 取消 / 部分完成：细节全留
+            }
+
+            _vm.AppendLog("INFO", BuildTaskSummaryLine(task));
+        }
+
+        /// <summary>一行说清这个任务的结果（成功时的**唯一**一行）。</summary>
+        private static string BuildTaskSummaryLine(ArchiveTask task)
+        {
+            var parts = new List<string> { task.Status };
+
+            if (task.OutputVerification == OutputVerificationOutcome.Passed)
+            {
+                parts.Add("校验通过");
+            }
+            else if (task.OutputVerification == OutputVerificationOutcome.Failed)
+            {
+                parts.Add("校验未通过");
+            }
+
+            string destination = DescribeShortDestination(task.CollectedPath, task.OutputPath);
+
+            if (!string.IsNullOrWhiteSpace(destination))
+            {
+                parts.Add("→ " + destination);
+            }
+
+            if (task.IsContinuationTask && task.Outcome == TaskOutcome.Succeeded)
+            {
+                parts.Add("续解");
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.ElapsedText) && task.ElapsedText != "-")
+            {
+                parts.Add("用时 " + task.ElapsedText);
+            }
+
+            return $"{task.FileName}：{string.Join(" ｜ ", parts)}";
+        }
+
+        /// <summary>
+        /// 落点写成"短地址"（用户 2026-09-25 第 44 条：满屏几百字符的绝对路径最占地方）。
+        /// 规则：从**输出根**往下保留；拿不到输出根就保留末两段，前面用 `…\` 省掉。
+        /// 完整路径仍然在任务详情 / 失败清单 / ①页「输出位置」里（那里要求看到完整地址）。
+        /// </summary>
+        private static string DescribeShortDestination(string? collectedPath, string? outputPath)
+        {
+            string path = !string.IsNullOrWhiteSpace(collectedPath) ? collectedPath! : outputPath ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (trimmed.Length <= MaxSummaryPathLength)
+            {
+                return trimmed;
+            }
+
+            string[] segments = trimmed.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries);
+
+            if (segments.Length <= 3)
+            {
+                return trimmed;
+            }
+
+            string tail = string.Join(Path.DirectorySeparatorChar, segments[^2..]);
+
+            return "…" + Path.DirectorySeparatorChar + tail;
+        }
+
+        /// <summary>收尾摘要里允许的路径长度上限（超过就只留末两段）。</summary>
+        private const int MaxSummaryPathLength = 72;
+
+        /// <summary>其余物目录里有几个顶层条目（只数，不递归 —— 只为一行日志说清"有多少东西"）。</summary>
+        private static int CountRestEntries(string? directory)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
+                    ? 0
+                    : Directory.GetFileSystemEntries(directory).Length;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        /// <summary>本批"其余物已处理"的记账（逐任务只写一行，批末一条汇总 —— 第 44 条）。</summary>
+        private int _batchPurgedTaskCount;
+        private long _batchPurgedBytes;
+
+        /// <summary>批级记账的锁（任务是并发跑的，普通字段会被两个线程同时改）。</summary>
+        private readonly object _batchPurgeGate = new();
+
+        private void NoteBatchPurge(long freedBytes, bool permanent)
+        {
+            lock (_batchPurgeGate)
+            {
+                _batchPurgedTaskCount++;
+                _batchPurgedBytes += freedBytes;
+
+                if (permanent)
+                {
+                    _batchPurgedPermanently = true;
+                }
+            }
+        }
+
+        private bool _batchPurgedPermanently;
+
+        private (int Tasks, long Bytes, bool Permanent) ReadBatchPurge()
+        {
+            lock (_batchPurgeGate)
+            {
+                return (_batchPurgedTaskCount, _batchPurgedBytes, _batchPurgedPermanently);
+            }
+        }
+
+        private void AppendLog(string level, string message)
+        {
+            TaskLogCapture? capture = _currentTaskLog.Value;
+
+            if (capture != null && !string.IsNullOrEmpty(message))
+            {
+                bool isInfo = string.Equals(level, "INFO", StringComparison.OrdinalIgnoreCase);
+
+                if (isInfo && IsProgressNoise(message))
+                {
+                    // 进度：攒着（失败时才有用），成功时随缓冲一起丢。
+                    capture.Buffer.Add((level, message));
+                    return;
+                }
+
+                if (isInfo && !capture.DetailsVisible)
+                {
+                    capture.Buffer.Add((level, message));
+                    return;
+                }
+
+                if (!isInfo && !capture.DetailsVisible)
+                {
+                    // WARN / ERROR：先把"之前发生了什么"吐出来，再把这一行放出去（顺序才对得上）。
+                    FlushTaskLogBuffer(capture);
+                    capture.DetailsVisible = true;
+                }
+            }
+
+            _vm.AppendLog(level, message);
+        }
         private void UpdateSummary() => _vm.UpdateSummary();
 
         /// <summary>
@@ -5880,6 +6140,10 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 _operationCts = new CancellationTokenSource();
+
+                _batchPurgedTaskCount = 0;
+                _batchPurgedBytes = 0;
+                _batchPurgedPermanently = false;
 
                 AppendLog("INFO", "开始批量解压");
 
@@ -6041,6 +6305,23 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 AppendLog("INFO", "批量解压完成");
+
+                // 其余物处理的批末汇总（第 44 条：逐任务一行 + 这里一条，替掉以前几十行长文案）。
+                (int purgedTasks, long purgedBytes, bool purgedPermanently) = ReadBatchPurge();
+
+                if (purgedTasks > 0)
+                {
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.RestPurgedBatchSummaryFormat,
+                            purgedTasks,
+                            WorkspaceCleanupService.FormatSize(purgedBytes))
+                        + (purgedPermanently
+                            ? "（彻底删除，不进回收站、不可恢复）"
+                            : "（已进回收站，可还原）"));
+                }
 
                 /*
                  * **如实报告**被空间门跳过的任务（用户 2026-09-22 需求第 2 条：
@@ -6693,6 +6974,15 @@ namespace ArchiveFixer.ViewModels
         private const int MaxFinalizeDetailLines = 20;
 
         /// <summary>
+        /// 「本次内容物 —— 名字、名字…」最多列几个（用户 2026-09-25 第 44 条）。
+        ///
+        /// <para>那一行原来是**整份日志里最占字节的一条**（56 行 / 3 万字符：每行二十个文件名的完整清单，
+        /// 而他这批是 68 套同名照片）。名字仍然有用（续解找下一层靠它、名字被改坏时肉眼能看出来），
+        /// 但**前 5 个足够定性**：多出来的只写个数。</para>
+        /// </summary>
+        private const int MaxFinalizeContentNameLines = 5;
+
+        /// <summary>
         /// 「删除操作」那一档的**唯一触发点**：任务收尾之后，按用户选的档处理它自己的其余物。
         ///
         /// <para>三档（用户 2026-09-25 第 32 条亲自定的）：不动（Keep）/ 移入回收站 / 彻底删除。
@@ -6743,11 +7033,19 @@ namespace ArchiveFixer.ViewModels
                 // 静默正是问题本身。只对真的产出了其余物的任务写，免得整批刷屏。
                 if (!string.IsNullOrWhiteSpace(task.RestDirectoryPath))
                 {
+                    /*
+                     * 一行说清（第 44 条：一次导出 713 KB，"每次不需要汇报得那么详细"）。
+                     * "去哪儿改档位"这句话**批首已经说过一遍**（`其余物：本批保留（③页「删除操作」= 不动其余物）…`），
+                     * 逐任务再念一遍 68 次只是把日志撑大。
+                     */
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：其余物按设置**保留**（{task.RestDirectoryPath}）——"
-                        + "③「清理与删除」页的「删除操作」现在是「不动其余物」；随时可手工删，"
-                        + "或改成「移入回收站」/「彻底删除」让程序在成功后自己处理。");
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.RestKeptCompactFormat,
+                            task.FileName,
+                            DescribeShortDestination(task.RestDirectoryPath, task.RestDirectoryPath),
+                            CountRestEntries(task.RestDirectoryPath)));
                 }
 
                 return;
@@ -6775,9 +7073,16 @@ namespace ArchiveFixer.ViewModels
                 };
             }
 
-            foreach (string line in outcome.LogLines)
+            /*
+             * 逐条 LogLines（`[彻底删除] 成功 路径=…；理由=…；条目数=…；总大小=…；说明=…`）
+             * **只在没删成时写**（用户 2026-09-25 第 44 条：成功那一支一行就够，见下面）。
+             */
+            if (!outcome.Succeeded)
             {
-                AppendLog("INFO", line);
+                foreach (string line in outcome.LogLines)
+                {
+                    AppendLog("INFO", line);
+                }
             }
 
             if (outcome.Succeeded)
@@ -6785,12 +7090,23 @@ namespace ArchiveFixer.ViewModels
                 runtime.RestPurged = deleteMode == DeleteMode.Permanent;
                 runtime.PurgedBytes = outcome.FreedBytes;
 
+                /*
+                 * 一行说清（用户 2026-09-25 第 44 条："最后删除文件你还弄得这么多的文字"）。
+                 * 以前这里是两句长文案（含理由、条目数、总大小、说明、完整路径、不可逆提示），
+                 * 68 个包就是 400 多行、7 万多字符。理由与"不可逆"已经在批首那条 + ③页常驻红提示里
+                 * 说过一次了，逐任务再念一遍只是把日志撑大；**失败时仍然全量**（下面那一支）。
+                 */
+                NoteBatchPurge(outcome.FreedBytes, deleteMode == DeleteMode.Permanent);
+
                 AppendLog(
                     "INFO",
-                    outcome.Message
-                    + (deleteMode == DeleteMode.Permanent
-                        ? "（这一步不可逆：源包与本任务的中间件已经不在回收站里）"
-                        : "（可从回收站还原；空间要等清空回收站才真正释放）"));
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.RestPurgedCompactFormat,
+                        deleteMode == DeleteMode.Permanent ? StatusText.RestActionDelete : StatusText.RestActionRecycleBin,
+                        DescribeShortDestination(outcome.Directory, outcome.Directory),
+                        outcome.EntryCount,
+                        WorkspaceCleanupService.FormatSize(outcome.FreedBytes)));
 
                 return;
             }
@@ -6922,6 +7238,8 @@ namespace ArchiveFixer.ViewModels
             var taskCts = new CancellationTokenSource();
             TrackRunningTask(taskCts);
 
+            BeginTaskLogCapture(task);
+
             try
             {
                 await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
@@ -6979,6 +7297,9 @@ namespace ArchiveFixer.ViewModels
                  * 成功路径不从这里走（那一支的清理在 PostProcessSuccessAsync 里按"校验通过"删）。
                  */
                 CleanupFailedTaskWorkspace(task);
+
+                // 日志收尾：成功 → 只留一行摘要（细节全丢）；失败 / 取消 → 细节全吐出来再收摘要。
+                EndTaskLogCapture(task);
 
                 UpdateSummary();
             }
@@ -8247,7 +8568,14 @@ namespace ArchiveFixer.ViewModels
 
                 if (!string.IsNullOrWhiteSpace(budget.Reason))
                 {
-                    AppendLog("WARN", $"{task.FileName}：资源预算提示 —— {budget.Reason}");
+                    /*
+                     * 这一条是**提示**（"预检通过：N 个文件 / 约 X MiB，展开比 N 倍"），不是警告 ——
+                     * 以前记成 WARN，后果有两个：①日志里每个任务都顶着一条黄字，看着像出了事；
+                     * ②第 44 条的日志瘦身策略里"出现 WARN 就把该任务的细节全部解锁"，
+                     *    于是 68 个包每个都把十几行样板全吐了出来（实测就是被这一条挡住的）。
+                     * 真正被预算挡下时走的是 ERROR（"安全上限"/"磁盘空间不足"那几支），一个字都不少。
+                     */
+                    AppendLog("INFO", $"{task.FileName}：资源预算提示 —— {budget.Reason}");
                 }
 
                 /*

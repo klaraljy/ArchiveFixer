@@ -94,6 +94,9 @@ namespace ArchiveFixer.Storage
             return $"当前可用 {TaskSpaceEstimate.FormatSize(AvailableBytes)}，建议并行 {RecommendedParallelCount} 个";
         }
 
+        /// <summary>日志里"顺序明细"最多列几条（其余的只报个数 —— 用户 2026-09-25 第 44 条）。</summary>
+        private const int SpacePlanDetailLimit = 5;
+
         /// <summary>进日志的多行说法：顺序 + 建议 + 计划时就被挡下的。</summary>
         public IReadOnlyList<string> DescribeLines()
         {
@@ -103,9 +106,19 @@ namespace ArchiveFixer.Storage
                 "空间调度依据：" + Basis
             };
 
-            foreach (ScheduledExtractionItem item in Ordered)
+            foreach (ScheduledExtractionItem item in Ordered.Take(SpacePlanDetailLimit))
             {
                 lines.Add($"  顺序 {item.OriginalIndex + 1}：{item.Estimate.Describe()}");
+            }
+
+            /*
+             * 明细只列前几条（用户 2026-09-25 第 44 条：一次导出 713 KB，"每次不需要汇报得那么详细"）。
+             * 68 个包就是 68 行、每行一条长路径 —— "谁排第几、为什么这么排"在前几条里已经看得很清楚，
+             * 剩下的只是把同一句话重复几十遍。⛔ 不静默截断：还剩多少必须写出来。
+             */
+            if (Ordered.Count > SpacePlanDetailLimit)
+            {
+                lines.Add($"  …还有 {Ordered.Count - SpacePlanDetailLimit} 个任务没列出来（明细见各自的任务详情）");
             }
 
             foreach (ScheduledExtractionItem item in BlockedAtPlanTime)

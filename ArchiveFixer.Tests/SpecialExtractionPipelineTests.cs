@@ -494,6 +494,9 @@ namespace ArchiveFixer.Tests
             var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
             var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
             var extraction = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
+
+            // 这个用例拿「细节日志」当行为证据（第 44 条之后，成功时默认只留两行）。
+            extraction.KeepTaskDetailInLog = true;
             var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
             return new Harness(vm, oneClick, extraction, logService, sourceRoot);
