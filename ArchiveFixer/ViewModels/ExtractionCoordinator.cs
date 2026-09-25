@@ -5879,32 +5879,33 @@ namespace ArchiveFixer.ViewModels
             || message.Contains("：取出内嵌归档 ", StringComparison.Ordinal);
 
         /// <summary>
-        /// **排查用**：true = 成功时也把全部细节写进日志（默认 <c>false</c> = 产品行为：成功只留两行）。
+        /// **测试用**的显式口子：true = 成功时也把全部细节写进日志
+        /// （默认 <c>false</c> = 产品行为：成功的任务在日志里只留一行摘要）。
         ///
         /// <para>为什么留这个口子：一大批既有用例把"日志里那一行"当作**行为证据**（跨盘搬运走了复制、
         /// 工作区被清理、空间依据写了"同卷只算一份"……），而第 44 条的瘦身改的是**默认呈现**、
         /// 不是行为本身。让那些用例显式声明"我这个用例要看细节"，比把它们一条条改成断言摘要更诚实
         /// —— 也让"默认现在是简洁的"这件事只由 <c>LogVolumePolicyTests</c> 一处钉住。</para>
         ///
-        /// <para>⛔ 产品界面里**没有任何入口**会把它置 true（⑥页也没有这个开关）：用户要的是简洁，
-        /// 要细节请用失败清单 / 任务详情 / 把 <c>KeepFailedWorkspace</c> 打开留现场。</para>
+        /// <para>⚠ 用户侧的入口是 ⑥设置 →「详细日志（排查用）」（<see cref="AppSettings.VerboseLog"/>，
+        /// 默认关），二者在 <see cref="VerboseTaskLogEnabled"/> 里合成同一个行为；
+        /// ⛔ 这里这个口子只给测试用，界面不绑它。</para>
         /// </summary>
         internal bool KeepTaskDetailInLog { get; set; }
 
         private void BeginTaskLogCapture(ArchiveTask task)
         {
-            _currentTaskLog.Value = KeepTaskDetailInLog ? null : new TaskLogCapture();
+            // 详细档（⑥设置 →「详细日志（排查用）」，默认关）或测试显式要求 → 不攒，全部原样写出去。
+            _currentTaskLog.Value = VerboseTaskLogEnabled ? null : new TaskLogCapture();
 
             /*
-             * 「开始解压」**直接写出去**（不进缓冲）：用户 2026-09-25 第 44 条要的形状就是
-             * "开始解压 → 100% → 解压成功"两行 —— 一行开始、一行结果，中间的过程只在他要看的时候
-             * （失败 / 有 WARN）才出现。
+             * ⚠ 这里**不再**单独写一行"开始解压"：它与收尾摘要合成一行（用户 2026-09-25 第 44 条追加：
+             * "把开始解压 + 摘要合成一行"）—— 一个任务在日志里就**一行**，136 个任务的批次从 270 行降到 140 行以内。
              */
-            if (task != null)
-            {
-                _vm.AppendLog("INFO", $"{task.FileName}：开始{StatusText.OpExtract}");
-            }
         }
+
+        /// <summary>详细日志：设置里的开关（默认关）或测试/排查用的显式口子。</summary>
+        private bool VerboseTaskLogEnabled => KeepTaskDetailInLog || Settings.VerboseLog;
 
         private void FlushTaskLogBuffer(TaskLogCapture capture)
         {
@@ -5930,20 +5931,23 @@ namespace ArchiveFixer.ViewModels
 
             _currentTaskLog.Value = null;
 
-            if (capture == null)
+            /*
+             * ⚠ 详细档（capture == null）也要写这一行：它是"开始解压 + 摘要合成一行"里的那一行，
+             * 详细档只是**额外**把中间过程全写出去（用户 2026-09-25 第 44 条追加），
+             * ⛔ 不是"详细档就没有收尾摘要"。
+             */
+            if (capture != null)
             {
-                return;
-            }
+                bool succeeded = task.Outcome == TaskOutcome.Succeeded;
 
-            bool succeeded = task.Outcome == TaskOutcome.Succeeded;
-
-            if (succeeded)
-            {
-                capture.Buffer.Clear();   // 成功：样板与进度全丢，只留下面那一行
-            }
-            else
-            {
-                FlushTaskLogBuffer(capture);   // 失败 / 取消 / 部分完成：细节全留
+                if (succeeded)
+                {
+                    capture.Buffer.Clear();   // 成功：样板与进度全丢，只留下面那一行
+                }
+                else
+                {
+                    FlushTaskLogBuffer(capture);   // 失败 / 取消 / 部分完成：细节全留
+                }
             }
 
             _vm.AppendLog("INFO", BuildTaskSummaryLine(task));
@@ -5952,7 +5956,15 @@ namespace ArchiveFixer.ViewModels
         /// <summary>一行说清这个任务的结果（成功时的**唯一**一行）。</summary>
         private static string BuildTaskSummaryLine(ArchiveTask task)
         {
-            var parts = new List<string> { task.Status };
+            var parts = new List<string>();
+
+            // 成功 = "解压 100%"（用户要的形状："开始解压，A.rar 解压100%，解压成功"合成一行）。
+            if (task.Outcome == TaskOutcome.Succeeded)
+            {
+                parts.Add($"{StatusText.OpExtract} 100%");
+            }
+
+            parts.Add(task.Status);
 
             if (task.OutputVerification == OutputVerificationOutcome.Passed)
             {

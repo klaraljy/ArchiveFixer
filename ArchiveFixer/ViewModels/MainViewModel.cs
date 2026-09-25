@@ -3100,6 +3100,93 @@ namespace ArchiveFixer.ViewModels
 
 
 
+        /// <summary>
+        /// 导出日志文件的**头部**（用户 2026-09-25 第 44 条追加拍板）：
+        /// 时间范围 / 任务数 / 成功失败 / 引擎版本 / 输出根 + "细节在哪看"。
+        ///
+        /// <para>为什么值得写：这份 txt 的用途就是"发给别人（或未来的自己）排查" ——
+        /// 没有头，读的人得先自己找"这是哪一批、跑到几点、成不成、用的哪个引擎"。
+        /// ⛔ 这里只写**机器事实**（任务表的终态枚举与引擎标识），不写任何密码相关内容。</para>
+        ///
+        /// <para>internal 是为了让测试能直接钉住"头部写了哪几件事、顺序对不对"
+        /// （产品入口只有「导出日志（本次操作）」这一个，见 <see cref="ExportLog"/>）。</para>
+        /// </summary>
+        internal IReadOnlyList<string> BuildLogExportHeader()
+        {
+            var lines = new List<string>
+            {
+                "================ ArchiveFixer 日志导出 ================"
+            };
+
+            DateTime? first = Tasks.Where(task => task.StartTime.HasValue).Min(task => task.StartTime);
+            DateTime? last = Tasks.Where(task => task.EndTime.HasValue).Max(task => task.EndTime);
+
+            if (first.HasValue && last.HasValue)
+            {
+                lines.Add($"时间范围：{first:yyyy-MM-dd HH:mm:ss} → {last:yyyy-MM-dd HH:mm:ss}"
+                    + (last.Value > first.Value ? $"（用时 {(last.Value - first.Value).ToString(@"hh\:mm\:ss")}）" : string.Empty));
+            }
+            else
+            {
+                lines.Add($"导出时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            }
+
+            int succeeded = Tasks.Count(task => task.Outcome == TaskOutcome.Succeeded);
+            int failed = Tasks.Count(task => task.Outcome == TaskOutcome.Failed);
+            int skipped = Tasks.Count(task => task.Outcome == TaskOutcome.Skipped);
+
+            lines.Add($"任务数：{Tasks.Count}（成功 {succeeded} / 失败 {failed} / 跳过 {skipped}）");
+
+            string engine = DescribeEngineIdentity();
+
+            if (!string.IsNullOrWhiteSpace(engine))
+            {
+                lines.Add("引擎：" + engine);
+            }
+
+            string outputRoot = !string.IsNullOrWhiteSpace(SelectedOutputDirectory)
+                ? SelectedOutputDirectory
+                : (Tasks.FirstOrDefault(task => !string.IsNullOrWhiteSpace(task.OutputPath))?.OutputPath ?? string.Empty);
+
+            if (!string.IsNullOrWhiteSpace(outputRoot))
+            {
+                lines.Add("输出位置：" + outputRoot);
+            }
+
+            lines.Add(
+                "细节在哪看：①页任务行的「详情 / 右键复制任务信息」= 单任务全过程；"
+                + "「导出失败清单」= 每个失败包的原因与所用引擎；"
+                + "③页「工作区残留」= 失败时留下的中间产物（要先在③页打开「失败时保留中间产物」）；"
+                + "要看成功任务的**全过程**请在⑥设置勾上「详细日志（排查用）」再跑一次。");
+            lines.Add("================ 以下是日志正文 ================");
+
+            return lines;
+        }
+
+        /// <summary>
+        /// 当前生效的引擎标识（名字 + 版本）—— 导出头部与任务详情共用同一份口径。
+        ///
+        /// ⛔ 问的是 <c>TaskSummaryService.EngineIdentity</c>（报告层那一份），
+        /// 不自己 new 引擎、也不自己拼 7z 路径（AGENTS.md §3.1：引擎选择只允许注册表一个来源）；
+        /// 版本取不到时它自己只说名字（见 <see cref="EngineIdentity.Describe"/>），这里不补编。
+        /// </summary>
+        private string DescribeEngineIdentity()
+        {
+            try
+            {
+                string engine = _taskSummaryService.EngineIdentity.Describe();
+
+                return string.IsNullOrWhiteSpace(engine)
+                    ? string.Empty
+                    : $"{engine}（优先级：{Settings.EnginePriority}）";
+            }
+            catch
+            {
+                // 报告层不该因为"引擎信息取不到"整个失败：头部少一行，日志照旧导得出来。
+                return string.Empty;
+            }
+        }
+
         private void ExportLog()
         {
             /*
@@ -3119,7 +3206,7 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                (int lineCount, bool fromMarker) = _logService.ExportOperationLog(path);
+                (int lineCount, bool fromMarker) = _logService.ExportOperationLog(path, BuildLogExportHeader());
 
                 AppendLog("INFO", $"日志已导出（本次操作）：{path}（{lineCount} 行）");
 

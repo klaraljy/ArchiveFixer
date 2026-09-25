@@ -398,6 +398,9 @@ namespace ArchiveFixer.Tests
                 ["DefaultExtension"] = "SettingsTab",
                 ["ConflictAction"] = "SettingsTab",
                 ["EnableLog"] = "SettingsTab",
+
+                // ⑥ 的「日志」那一组里 2026-09-25（第 44 条追加之二）补的「详细日志（排查用）」。
+                ["VerboseLog"] = "SettingsTab",
                 ["LowProcessPriority"] = "SettingsTab",
                 ["RememberLastOutputDirectory"] = "SettingsTab",
 

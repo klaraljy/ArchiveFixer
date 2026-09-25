@@ -21,7 +21,7 @@ namespace ArchiveFixer.Tests
     /// <para>他给的三条要求，在这一组里逐条钉住：</para>
     /// <list type="number">
     /// <item><description><b>进度别这么详细</b> —— 成功的任务日志里**一条进度行都不许有**；</description></item>
-    /// <item><description><b>不用汇报那么详细</b> —— 成功 = 两行（开始 + 收尾摘要），样板行全丢；</description></item>
+    /// <item><description><b>不用汇报那么详细</b> —— 成功 = **一行**（"开始解压 + 收尾摘要"合成的那一行），样板行全丢；</description></item>
     /// <item><description><b>删文件别写那么多</b> —— 逐任务一行 + 批末一条汇总；</description></item>
     /// </list>
     /// <para>⚠ 反过来同样要钉住：**失败 / 取消时细节一个都不许少**（他原话："如果失败的话，
@@ -79,14 +79,18 @@ namespace ArchiveFixer.Tests
                 Assert.DoesNotContain(mine, line => line.Contains(boilerplate, StringComparison.Ordinal));
             }
 
-            // 收尾摘要：一行说清结果（状态 + 落点）。加上开头那一行"开始解压"，正常一个任务就 2–3 行
-            //（其余物那一档再补一行短句），⛔ 绝不是以前那种十几行。
+            // 收尾摘要：**一行**说清结果（"解压 100%" + 状态 + 落点；用户第 44 条追加：
+            // "把开始解压 + 摘要合成一行"）；其余物那一档再补一行短句，⛔ 绝不是以前那种十几行。
             Assert.True(
                 mine.Count <= 3,
-                $"成功的任务日志最多三行（开始 / 摘要 / 其余物），实际 {mine.Count} 行：" + string.Join(" | ", mine));
+                $"成功的任务日志最多三行（合成的那一行 / 其余物短句），实际 {mine.Count} 行：" + string.Join(" | ", mine));
 
-            Assert.Contains(mine, line => line.Contains("开始解压", StringComparison.Ordinal));
-            Assert.Single(mine, line => line.Contains(StatusText.ExtractSuccess, StringComparison.Ordinal));
+            // 合成的那一行：既要"解压 100%"、也要"解压成功"（以前它们是分开的两行）。
+            Assert.Single(mine, line => line.Contains("解压 100%", StringComparison.Ordinal));
+            Assert.Contains(
+                mine,
+                line => line.Contains("解压 100%", StringComparison.Ordinal)
+                    && line.Contains(StatusText.ExtractSuccess, StringComparison.Ordinal));
         }
 
         /// <summary>② 失败的任务：细节照旧全留（⛔ 不许"为了瘦身把失败现场也吃了"）。</summary>
@@ -229,6 +233,137 @@ namespace ArchiveFixer.Tests
 
             Assert.True(File.Exists(current), "当前这一份永远不许被删");
             Assert.True(File.Exists(stranger), "不匹配命名规则的文件一个字节都不许动");
+        }
+
+        // ================================================================ 第 44 条追加：三个新开关
+
+        /// <summary>
+        /// ⑥ **详细日志开关**（⑥设置 →「详细日志（排查用）」，默认关）。
+        ///
+        /// <para>默认档"成功就丢"是为了几十个同形包不刷屏；但排查**单个**包时要能拿回全过程 ——
+        /// 所以给一个显式开关，而不是让他去改代码。</para>
+        ///
+        /// <para>⚠ 这里同时钉住一个**容易写错的地方**：详细档（<c>capture == null</c>）**不是**
+        /// "连收尾摘要也没有" —— 那一行是"开始解压 + 摘要合成一行"里的那一行，两种档位都必须有。</para>
+        /// </summary>
+        [Fact]
+        public async Task 详细日志开关打开_成功任务写全过程_摘要那一行照旧在()
+        {
+            RequireSevenZip();
+
+            string package = BuildPackage("verbose.7z", 64 * 1024);
+            Harness harness = CreateHarness(settings => settings.VerboseLog = true);
+
+            await harness.AddTaskAsync(package);
+            await harness.Coordinator.StartExtractAsync();
+
+            List<string> mine = harness.LogTexts
+                .Where(line => line.Contains("] verbose.7z：", StringComparison.Ordinal))
+                .ToList();
+
+            // 默认档会丢掉的样板必须回来（至少一条：入仓目录 / 空间门 / 定稿）。
+            Assert.Contains(
+                mine,
+                line => line.Contains("入仓目录", StringComparison.Ordinal)
+                    || line.Contains("空间门通过", StringComparison.Ordinal)
+                    || line.Contains("定稿完成", StringComparison.Ordinal));
+
+            // ⛔ 详细档照样有收尾摘要那一行（它就是"开始解压 + 摘要合成一行"里的那一行）；
+            // 详细档里别的行也会提"解压成功"，所以这里钉的是**合成的那一行同时带着两个事实**。
+            Assert.Contains(
+                mine,
+                line => line.Contains("解压 100%", StringComparison.Ordinal)
+                    && line.Contains(StatusText.ExtractSuccess, StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// ② **导出文件加头**：时间范围 / 任务数 / 成功失败 / 引擎 / 输出根 + "细节在哪看"。
+        ///
+        /// <para>这份 txt 的用途就是"发给我排查" —— 没有头，读的人得先自己找"这是哪一批、跑到几点、
+        /// 成不成、用的哪个引擎"。⛔ 头部只许有机器事实，不许出现密码相关内容。</para>
+        /// </summary>
+        [Fact]
+        public async Task 导出头部_时间范围任务数引擎输出根与细节在哪看()
+        {
+            RequireSevenZip();
+
+            string package = BuildPackage("header.7z", 32 * 1024);
+            Harness harness = CreateHarness();
+
+            await harness.AddTaskAsync(package);
+            await harness.Coordinator.StartExtractAsync();
+
+            string text = string.Join("\n", harness.Vm.BuildLogExportHeader());
+
+            Assert.Contains("时间范围：", text);
+            Assert.Contains("任务数：1（成功 1 / 失败 0 / 跳过 0）", text);
+            Assert.Contains("引擎：", text);
+            Assert.Contains(harness.OutputRoot, text);
+            Assert.Contains("细节在哪看", text);
+
+            // 头里要告诉他"要更细的怎么办"（与 ⑥ 那个开关是同一件事）。
+            Assert.Contains("详细日志（排查用）", text);
+
+            // ⛔ 隐私红线：导出的头部不许出现密码相关内容。
+            Assert.DoesNotContain("密码", text);
+        }
+
+        /// <summary>
+        /// ② 的边界：**一个任务都没有**时点「导出日志」也不能崩
+        /// （启动后随手点一下是常事 —— 那时候任务表是空的，时间范围取不到）。
+        /// </summary>
+        [Fact]
+        public void 导出头部_没有任何任务时也能生成()
+        {
+            Harness harness = CreateHarness();
+
+            string text = string.Join("\n", harness.Vm.BuildLogExportHeader());
+
+            Assert.Contains("任务数：0（成功 0 / 失败 0 / 跳过 0）", text);
+            Assert.Contains("导出时间：", text);   // 取不到时间范围就写导出时间
+            Assert.Contains("细节在哪看", text);
+        }
+
+        /// <summary>
+        /// ② 的落地细节：头部**写在正文之前**，而且**不算进"日志多少行"那个数字**里
+        /// （否则他会以为日志突然变长了）。
+        /// </summary>
+        [Fact]
+        public void 导出头部_写在正文之前且不计入日志行数()
+        {
+            string dataRoot = Path.Combine(_root, "export-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dataRoot);
+
+            var pathService = new PathService { DataRootDirectory = dataRoot };
+            var logService = new LogService(pathService);
+
+            logService.Initialize(enableFileLog: true);
+            logService.MarkOperationStart("单元测试");
+            logService.WriteInfo("正文第一行");
+
+            string withHeader = Path.Combine(_root, "with-header.txt");
+            string withoutHeader = Path.Combine(_root, "without-header.txt");
+
+            (int linesWith, bool markerWith) = logService.ExportOperationLog(
+                withHeader,
+                new[] { "HEAD-1", "HEAD-2" });
+            (int linesWithout, bool markerWithout) = logService.ExportOperationLog(withoutHeader);
+
+            Assert.True(markerWith && markerWithout, "两份导出都应该是「本次操作」的范围");
+
+            // 头部不算行数：带不带头的**日志行数必须一样**。
+            Assert.Equal(linesWithout, linesWith);
+
+            string text = File.ReadAllText(withHeader);
+
+            Assert.Contains("HEAD-1", text);
+            Assert.Contains("正文第一行", text);
+            Assert.True(
+                text.IndexOf("HEAD-1", StringComparison.Ordinal) < text.IndexOf("正文第一行", StringComparison.Ordinal),
+                "头部必须写在正文之前");
+
+            // 不带头的导出里⛔ 不许出现头部那一行。
+            Assert.DoesNotContain("HEAD-1", File.ReadAllText(withoutHeader));
         }
 
         // ================================================================ 工具

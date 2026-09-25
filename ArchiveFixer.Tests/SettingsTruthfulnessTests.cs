@@ -312,7 +312,17 @@ namespace ArchiveFixer.Tests
                  * 而且必须真的被读到（ExtractionCoordinator.BudgetLimits 是唯一出口）。
                  */
                 "MaxSingleExtractedFileGiB", "MaxExtractedTotalGiB",
-                "MaxExtractedFileCount", "MaxExtractionRatio"
+                "MaxExtractedFileCount", "MaxExtractionRatio",
+
+                /*
+                 * 2026-09-25 第 44 条追加之二：⑥设置 →「日志」里的「详细日志（排查用）」。
+                 *
+                 * 在它之前，"成功任务的全部细节"只存在于一个**测试口子**（KeepTaskDetailInLog）——
+                 * 用户想排查单个包只能改代码。它必须真的被读到：
+                 * ExtractionCoordinator.VerboseTaskLogEnabled 就是唯一出口
+                 * （与那个测试口子合成同一个行为，⛔ 不许各写一份判断）。
+                 */
+                "VerboseLog"
             };
 
             foreach (string name in appSettingsBound)

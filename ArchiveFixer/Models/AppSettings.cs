@@ -244,6 +244,16 @@ namespace ArchiveFixer.Models
 
         public bool EnableLog { get; set; } = true;
 
+        /// <summary>
+        /// **详细日志（排查用）**：打开后，成功的任务也把全过程写进日志（用户 2026-09-25 第 44 条追加拍板）。
+        ///
+        /// <para>默认 <c>false</c> = 成功只留一行摘要（几十个同形包时日志小一个数量级）；
+        /// 打开 = 回到"每步都写"（进度、落点、入仓、空间门、结果校验、定稿……）。
+        /// ⚠ **失败 / 取消的任务不受这个开关影响** —— 它们永远保留全部细节
+        /// （用户原话："如果失败的话，你就可以多一点"）。</para>
+        /// </summary>
+        public bool VerboseLog { get; set; } = false;
+
         public bool AutoScanAfterDrop { get; set; } = true;
 
         /// <summary>
@@ -932,6 +942,10 @@ namespace ArchiveFixer.Models
                 ConflictAction = ConflictActions.AutoRename,
                 TestBeforeExtract = false,
                 EnableLog = true,
+
+                // 详细日志默认关：成功只留一行摘要（第 44 条追加）。显式写出来是为了让
+                // "出厂默认"一眼可见，别让人以为它是漏掉的。
+                VerboseLog = false,
                 AutoScanAfterDrop = true,
                 PreviewBeforeRename = true,
                 OverwriteMode = "SkipExisting",

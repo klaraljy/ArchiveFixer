@@ -149,7 +149,9 @@ namespace ArchiveFixer.Services
         /// 没有任何标记时导出**当前这一份日志文件**（= 本次运行）—— 那已经是他要的范围，绝不拼历史文件。</para>
         /// </summary>
         /// <returns>导出的行数，以及是不是"本次操作"的范围（false = 退回了整份当前日志）。</returns>
-        public (int Lines, bool FromOperationMarker) ExportOperationLog(string targetPath)
+        public (int Lines, bool FromOperationMarker) ExportOperationLog(
+            string targetPath,
+            IReadOnlyList<string>? headerLines = null)
         {
             if (string.IsNullOrWhiteSpace(targetPath))
             {
@@ -166,6 +168,22 @@ namespace ArchiveFixer.Services
             var builder = new StringBuilder();
             bool fromMarker = false;
             int lines = 0;
+
+            /*
+             * 导出文件**加个头**（用户 2026-09-25 第 44 条追加拍板）：
+             * 时间范围 / 任务数 / 成功失败 / 引擎版本 / 输出根 + "细节在哪看"。
+             * 为什么要它：这份文件是发给我排查用的 —— 没有头，读的人得先自己找"这是哪一批、跑成什么样"。
+             * ⚠ 头部行**不算进 lineCount**（那是"日志多少行"的数字，别把它算成日志内容）。
+             */
+            if (headerLines != null && headerLines.Count > 0)
+            {
+                foreach (string line in headerLines)
+                {
+                    builder.AppendLine(line);
+                }
+
+                builder.AppendLine();
+            }
 
             if (!string.IsNullOrWhiteSpace(_currentLogFilePath) && File.Exists(_currentLogFilePath))
             {
