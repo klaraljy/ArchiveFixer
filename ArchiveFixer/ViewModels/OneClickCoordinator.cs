@@ -294,19 +294,33 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrWhiteSpace(innerPackagePath))
             {
-                return fallback;
+                return EnsureChainRootPackageLayer(parentTask, fallback);
             }
 
             string? directory = Path.GetDirectoryName(innerPackagePath);
 
             if (string.IsNullOrWhiteSpace(directory))
             {
-                return fallback;
+                return EnsureChainRootPackageLayer(parentTask, fallback);
             }
 
             // 内层包在「其余物」（含旧名「过程物」）里 → 爬到那一层之外。
             string? outermostArtifact = null;
             string? cursor = directory;
+
+            // 「其余物\<这一层>\…」里的 <这一层>：共用根那一档下它就是**外层包的包基名**（D-10 的布局）。
+            string? artifactChild = null;
+            string? childCursor = directory;
+
+            while (!string.IsNullOrWhiteSpace(childCursor))
+            {
+                if (ProcessArtifactLayout.IsArtifactDirectoryName(Path.GetDirectoryName(childCursor)))
+                {
+                    artifactChild = Path.GetFileName(childCursor);
+                }
+
+                childCursor = Path.GetDirectoryName(childCursor);
+            }
 
             while (!string.IsNullOrWhiteSpace(cursor))
             {
@@ -325,7 +339,7 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrWhiteSpace(directory))
             {
-                return fallback;
+                return EnsureChainRootPackageLayer(parentTask, fallback, artifactChild);
             }
 
             /*
@@ -339,10 +353,87 @@ namespace ArchiveFixer.ViewModels
             if (!string.IsNullOrWhiteSpace(outputRoot) &&
                 !ArchivePathGuard.IsInsideRoot(outputRoot, directory, out _))
             {
-                return fallback;
+                return EnsureChainRootPackageLayer(parentTask, fallback, artifactChild);
             }
 
-            return directory;
+            return EnsureChainRootPackageLayer(parentTask, directory, artifactChild);
+        }
+
+        /// <summary>
+        /// **链根那一层包名目录必须存在**（用户 2026-09-25 第 43 条，真机：68 套图全平铺进共用根）。
+        ///
+        /// <para><b>现场</b>：用户"添加文件夹 + 指定位置"导入 68 个包，落点是**共用输出根**
+        /// （`CCC\SJA佳爷…\`，最后一段是**导入文件夹名**）。每个外层包的清单里**只有内层包**
+        /// （`00NN_auto.7z.001/.002/.003`）、**没有内容文件夹** —— 于是外层包这一轮什么都没定稿，
+        /// 链根那一层"包名目录"从来没被建出来。续解任务按"内层包所在的那一层"算落点，
+        /// 得到的就是那个**共用根**；再加上「每个包只留一层内容」把最后一层塌掉，
+        /// 68 套图全倒进同一个目录（真机实测：4339 个文件平铺、几千个同名被自动改名成 `(1)…`）。</para>
+        ///
+        /// <para><b>该是什么样</b>：用户 2026-09-24 拍板的语义就是 `222\1111\内容物`
+        /// （成品目录 \ **包名** \ 内容物）。所以这里补一层**链根任务的包基名**：
+        /// `CCC\SJA佳爷…\055\…`——每个包一个目录，兄弟包互不干扰。</para>
+        ///
+        /// <para><b>判据只有两条事实</b>（⛔ 不猜、不看文案）：①父任务是**链根**（不是续解任务）；
+        /// ②算出来的目录**最后一段不是它自己的包基名** —— 那说明这是"多个包共用的根"
+        /// （包名那一层不在路径里），而不是"它自己的包名目录"。两条都成立才补。</para>
+        ///
+        /// <para>⚠ 第二条正是它**不会**动到第 35 条那两种情形的原因：内层包在内容文件夹里时
+        /// （`…\111\2222\`），最后一段就是包名 `2222`；单个包 + 指定位置时目录本来就是
+        /// `…\指定位置\包名\` —— 两种都不补，行为与从前逐字相同。</para>
+        /// </summary>
+        private static string EnsureChainRootPackageLayer(
+            ArchiveTask parentTask,
+            string directory,
+            string? artifactChildLayer = null)
+        {
+            if (parentTask == null
+                || parentTask.IsContinuationTask
+                || string.IsNullOrWhiteSpace(directory))
+            {
+                return directory;
+            }
+
+            /*
+             * ⚠ 只有"算出来的目录**就是这个链根自己的输出根**"时才补那一层（⛔ 不许用"最后一段名字不等于包名"
+             * 之类的近似判据 —— 实测踩到：扫描把**兄弟包**内容目录里的内层包也算到这个父任务头上时，
+             * 那个近似判据会把兄弟的那一层当成共用根，补出一层 `…\3333\2222` 的错目录，把第 35 条那条
+             * "跟着内层包自己所在的目录走"给毁了）。
+             */
+            string ownRoot = string.IsNullOrWhiteSpace(parentTask.ContentDirectoryPath)
+                ? parentTask.OutputPath
+                : parentTask.ContentDirectoryPath;
+
+            if (string.IsNullOrWhiteSpace(ownRoot) || !SafePathHelper.PathEquals(ownRoot, directory))
+            {
+                return directory;
+            }
+
+            /*
+             * 层名优先取**内层包真正所在的那一层**（「其余物\055\…」里的 `055`）：
+             * 共用根那一档下"其余物"按包基名分了子目录（ResultFinalizer 的 D-10），
+             * 那个子目录名就是外层包的包基名，**比父任务的名字更可靠** ——
+             * 实测：两个兄弟包都装着同名内层卷时，扫描会把另一个包的内层包也算到这个父任务头上
+             * （`2222.7z：内层包移入其余物 —— …\3333\333.7z`），用父任务名就会把两个包的内容
+             * 倒进同一个目录（真机上就是"混乱"）。
+             */
+            string packageLayer = string.IsNullOrWhiteSpace(artifactChildLayer)
+                ? FileNameHelper.SanitizeFileName(FileNameHelper.GetArchiveBaseName(parentTask.CurrentPath))
+                : FileNameHelper.SanitizeFileName(artifactChildLayer!);
+
+            if (string.IsNullOrWhiteSpace(packageLayer))
+            {
+                return directory;
+            }
+
+            string trimmed = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (string.Equals(Path.GetFileName(trimmed), packageLayer, StringComparison.OrdinalIgnoreCase))
+            {
+                // 已经在自己那一层里（单个包 + 指定位置 / 内层包在内容文件夹里）→ 一个字都不动。
+                return directory;
+            }
+
+            return Path.Combine(trimmed, packageLayer);
         }
 
         /*

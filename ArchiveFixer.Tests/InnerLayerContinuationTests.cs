@@ -575,8 +575,89 @@ namespace ArchiveFixer.Tests
 
             // 反向断言：内容物**不许**直接躺在共用根上（那就是"与包名目录平级"的旧缺陷）。
             Assert.False(
-                File.Exists(Path.Combine(sharedRoot, "payload.txt")),
+                File.Exists(Path.Combine(sharedRoot, "payload.bin")),
                 "内容物被放到了共用根上（与包名目录平级）—— 续解落点又退回 OutputPath 了");
+        }
+
+        /// <summary>
+        /// **外层包里只有内层包（没有内容文件夹）时，内容物必须落进"外层包名目录"**（用户 2026-09-25 第 43 条，
+        /// 真机：68 套图全平铺进共用根、4339 个文件互相改名）。
+        ///
+        /// <para>真机形状：`添加文件夹 + 指定位置` 导入一整批包 → 落点是**共用输出根**
+        /// （最后一段是导入文件夹名）；每个外层包 `NNN.7z` 的清单里**只有内层分卷**
+        /// （`00NN_auto.7z.001/.002/.003`）、没有内容文件夹 → 外层这一轮什么都不定稿，
+        /// 链根那一层包名目录从来没建出来 → 续解产物落到共用根上（再被"只留一层内容"塌一层）
+        /// → 所有包的内容混在同一层。</para>
+        ///
+        /// <para>期望（用户 2026-09-24 拍板的语义 `222\1111\内容物`）：每个包**自己一层包名目录** ——
+        /// `<共用根>\<包名>\内容物`。</para>
+        /// </summary>
+        [Fact]
+        public async Task 外层包只有内层包时_内容物落进外层包名目录而不是平铺进共用根()
+        {
+            // ① 内层包：真的内容（payload.bin）打成 level.7z，再切成两卷以上 —— 与真机"内层是分卷"同形。
+            string innerStage = Path.Combine(_root, "flat-inner");
+            Directory.CreateDirectory(innerStage);
+
+            var payloadBytes = new byte[128 * 1024];
+            new Random(20260925).NextBytes(payloadBytes);
+            File.WriteAllBytes(Path.Combine(innerStage, "payload.bin"), payloadBytes);
+
+            Run7z(innerStage, "a", "-t7z", "-mx0", "-v16k", "level.7z", "-p" + InnerPassword, "-mhe=on", "payload.bin");
+
+            string[] innerVolumes = Directory.GetFiles(innerStage, "level.7z.*")
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            Assert.True(innerVolumes.Length >= 2, "内层包应该是分卷（两卷以上）");
+
+            // ② 两个外层包：**只有内层分卷、没有内容文件夹**（这就是缺陷的触发条件）。
+            string outerStage = Path.Combine(_root, "flat-outer");
+            Directory.CreateDirectory(outerStage);
+
+            foreach (string volume in innerVolumes)
+            {
+                File.Copy(volume, Path.Combine(outerStage, Path.GetFileName(volume)), overwrite: true);
+            }
+
+            string outer1 = BuildPackage("055.7z", outerStage, innerVolumes.Select(Path.GetFileName).Cast<object>().ToArray());
+            string outer2 = BuildPackage("056.7z", outerStage, innerVolumes.Select(Path.GetFileName).Cast<object>().ToArray());
+
+            string sourceFolder = Path.Combine(_root, "AAA", "111");
+            Directory.CreateDirectory(sourceFolder);
+            File.Copy(outer1, Path.Combine(sourceFolder, Path.GetFileName(outer1)), overwrite: true);
+            File.Copy(outer2, Path.Combine(sourceFolder, Path.GetFileName(outer2)), overwrite: true);
+
+            Harness harness = CreateHarness($"outer:{OuterPassword}\ninner:{InnerPassword}\n");
+            await harness.AddPathsAsync(sourceFolder);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            Assert.Equal(2, outcome.Rounds);
+
+            string sharedRoot = Path.Combine(harness.OutputRoot, "111");
+
+            // ③ 每个包的内容物都在**它自己的包名目录**里。
+            foreach (string packageName in new[] { "055", "056" })
+            {
+                string expected = Path.Combine(sharedRoot, packageName, "payload.bin");
+
+                Assert.True(
+                    File.Exists(expected),
+                    $"{packageName} 的内容物没落进包名目录（期望 {expected}）。实际目录树："
+                    + string.Join(" | ", Directory.GetFileSystemEntries(harness.OutputRoot, "*", SearchOption.AllDirectories))
+                    + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
+            }
+
+            // ④ 反向断言：共用根上**不许**直接躺着内容物（那就是真机"68 套混一层"的现场）。
+            Assert.False(
+                File.Exists(Path.Combine(sharedRoot, "payload.bin")),
+                "内容物被平铺到了共用根上 —— 链根包名那一层又没建出来");
+
+            // ⑤ 两个包的内容物各在一层，不互相撞名。
+            Assert.NotEqual(
+                Path.GetDirectoryName(Path.Combine(sharedRoot, "055", "payload.bin")),
+                Path.GetDirectoryName(Path.Combine(sharedRoot, "056", "payload.bin")));
         }
 
         /// <summary>
