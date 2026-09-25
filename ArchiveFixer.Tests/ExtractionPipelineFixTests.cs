@@ -466,6 +466,54 @@ namespace ArchiveFixer.Tests
             Assert.Contains("条目「Code Complete-BZ.7z(删掉.001」", task.ErrorMessage, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// 「一组分卷的第一卷名字被改坏」时必须判「分卷缺失」，**不是**解出一个等大的垃圾文件还显示成功
+        /// （用户 2026-09-25 第 36 条追加；真 7z 的这条行为由 <c>RawSplitStreamTests</c> 固化）。
+        ///
+        /// <para>真机链条：7-Zip 顺着名字找不到同组的后续卷 → 退化成通用分片 → 把这一卷**照解不误**（退出码 0）
+        /// → 解出来一个与它等大的垃圾文件 → 结果校验拿"清单那一条"比"盘上那一个文件"会判**通过**
+        /// → 用户拿到垃圾却看到「成功」。所以管线要在**写盘之前**拦下：引擎一次都不许调。</para>
+        /// </summary>
+        [Fact]
+        public async Task 第一卷名字被改坏时_判分卷缺失而不是解出一个垃圾文件()
+        {
+            Harness harness = CreateHarness();
+
+            string directory = Path.Combine(_root, "src");
+            Directory.CreateDirectory(directory);
+
+            string firstVolume = Path.Combine(directory, "Code Complete-BZ.7z(删掉.001");
+
+            File.WriteAllText(firstVolume, "not a real archive - the engine is faked in these tests");
+
+            // 同目录里像后续卷的那两个（真机上它们就躺在旁边，只是名字对不上）
+            File.WriteAllText(Path.Combine(directory, "Code Complete-BZ.7z.002"), "x");
+            File.WriteAllText(Path.Combine(directory, "Code Complete-BZ.7z.003"), "x");
+
+            ArchiveTask task = AddTask(harness, firstVolume);
+
+            long size = new FileInfo(firstVolume).Length;
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 1,
+                TotalUncompressedSize = size,
+                Entries = new List<ArchiveEntry> { new() { Path = "Code Complete-BZ.7z(删掉", Size = size } },
+                IsRawSplitStream = true,
+                EngineId = "fake",
+                EngineVersion = "1.0"
+            });
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Empty(harness.Engine.ExtractCalls);
+            Assert.Equal(StatusText.VolumeMissing, task.Status);
+            Assert.Contains("名字被改坏", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("Code Complete-BZ.7z.002", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("Code Complete-BZ.7z.001", task.ErrorMessage, StringComparison.Ordinal);
+        }
+
         // ================================================================ P1-6：实际输出目录写回任务
 
 

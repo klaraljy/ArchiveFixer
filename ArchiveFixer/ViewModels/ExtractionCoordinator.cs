@@ -7901,6 +7901,52 @@ namespace ArchiveFixer.ViewModels
             }
             else
             {
+                /*
+                 * 「一组分卷的第一卷名字被改坏」这一档（用户 2026-09-25 第 36 条追加，取证见 RawSplitStreamDetector）。
+                 *
+                 * 为什么必须在**写盘之前**拦：7-Zip 找不到同组的后续卷时会退化成"通用分片"，
+                 * 把这一卷**照解不误**（退出码 0）—— 解出来是一个与它等大的垃圾文件，
+                 * 而结果校验拿"清单那一条"比"盘上那一个文件"会判**通过**，
+                 * 用户拿到 5 GB 垃圾却看到「解压成功」。这就是"成功"被用错，必须判「分卷缺失」。
+                 *
+                 * ⛔ 判据全在 RawSplitStreamDetector 里（纯函数、可测）：引擎说通用分片 + 清单只有"文件自己"一条
+                 * + 魔数认得出是归档 + 这一组只有自己一卷。名字正常且卷齐的那一组**不拦**（拼起来正是用户要的）。
+                 */
+                if (RawSplitStreamDetector.IsBrokenVolumeChain(
+                        preflightList,
+                        task.CurrentPath,
+                        task.IsArchive && !string.Equals(task.DetectedFormat, "Unknown", StringComparison.OrdinalIgnoreCase),
+                        task.VolumeCount))
+                {
+                    string volumeDirectory = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
+
+                    IReadOnlyList<string> siblings = RawSplitStreamDetector.FindSiblingVolumes(
+                        CollectVolumeFilesInDirectory(volumeDirectory).Select(Path.GetFileName),
+                        task.CurrentPath);
+
+                    string standardName = RawSplitStreamDetector.SuggestStandardFirstName(siblings);
+
+                    string siblingText = siblings.Count > 0
+                        ? $"同目录里有像后续卷的文件：{string.Join("、", siblings)}"
+                          + "（它们与这一卷的名字对不上，所以引擎找不到它们）。"
+                        : "同目录里也没有找到像后续卷的文件。";
+
+                    string advice = string.IsNullOrWhiteSpace(standardName)
+                        ? string.Empty
+                        : $"把这一卷改回标准命名（{standardName}）就能解开。";
+
+                    task.Status = StatusText.VolumeMissing;
+                    task.ErrorMessage =
+                        "分卷缺失：这一卷是「一组分卷的第一卷」，但它的名字被改坏了 —— "
+                        + "引擎按名字找不到同组的后续卷，只会把它当成一段通用分片"
+                        + "（那样「解出来」的是一个与它等大的垃圾文件，不是包里的内容），所以**不开始**。"
+                        + siblingText + advice
+                        + "程序不会替你改源文件（不变量 1），改完重新扫描这个包即可。";
+
+                    AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                    return;
+                }
+
                 PathSafetyReport pathReport = ArchivePathGuard.CheckEntries(preflightList.Entries);
 
                 if (!pathReport.IsSafe)

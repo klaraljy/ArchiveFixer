@@ -32,6 +32,7 @@ namespace ArchiveFixer.Engines.SevenZip
             bool anyEncrypted = false;
             bool headerEncrypted = false;
             bool multiVolume = false;
+            bool rawSplitStream = false;
             bool seenSeparator = false;
             var block = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -46,6 +47,15 @@ namespace ArchiveFixer.Engines.SevenZip
                     // 分隔线之前是归档自身的信息块
                     headerEncrypted = IsEncryptedBlock(block) || IsAesMethod(block);
                     multiVolume = block.ContainsKey("Volume Index") || block.ContainsKey("Multivolume");
+
+                    /*
+                     * Type = Split（用户 2026-09-25 第 36 条追加）：7-Zip 说"这不是一个归档，是一段通用分片"。
+                     * 它出现的情形就是"分卷的第一卷名字被改坏、后续卷按名字找不到"（真机取证见
+                     * ArchiveListResult.IsRawSplitStream 的注释）。管线据此在写盘之前判「分卷缺失」。
+                     */
+                    rawSplitStream = block.TryGetValue("Type", out string? headerType)
+                        && string.Equals(headerType?.Trim(), "Split", StringComparison.OrdinalIgnoreCase);
+
                     block.Clear();
                     seenSeparator = true;
                     continue;
@@ -98,6 +108,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 DirectoryCount = directoryCount,
                 IsEncrypted = headerEncrypted || anyEncrypted,
                 IsMultiVolume = multiVolume,
+                IsRawSplitStream = rawSplitStream,
                 EngineId = engineId,
                 EngineVersion = engineVersion
             };
