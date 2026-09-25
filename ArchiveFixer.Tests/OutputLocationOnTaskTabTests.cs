@@ -190,7 +190,72 @@ namespace ArchiveFixer.Tests
             Assert.True(vm.SettingsEditor.Settings.ExtractToOriginalDirectory);
         }
 
-        /// <summary>①页那个「未指定位置」开关：写的就是落点判据本身，并会招呼②页刷新一遍。</summary>
+        /// <summary>
+        /// **用户真机报的那一条**（2026-09-25 第 31 条）：在①页点「选择…」挑一个目录之后，
+        /// ②页「落点（解压到哪）」那几个控件**必须重新求值**。
+        ///
+        /// <para>为什么以前全绿却仍然坏：②页控件绑的是 <see cref="SettingsViewModel"/> 算出来的属性，
+        /// 而 <c>AppSettings</c> 是普通 POCO；①页那条路以前只改设置**不发通知** ——
+        /// 于是"只看值"的断言（<c>SettingsEditor.CustomOutputDirectory == chosen</c>）恒真，
+        /// 界面却还停在老的『同名子文件夹』单选 + 灰着的『（不适用）』路径框。
+        /// 所以这一条钉的是**通知本身**，这也是他嘴里"两处不同步、很意外"的机制。</para>
+        ///
+        /// <para>走的是真命令（<c>SelectOutputDirectoryCommand</c> → 私有 <c>SelectOutputDirectory()</c>），
+        /// 与用户点按钮的路径**逐句相同**，不是绕过命令直接写属性。</para>
+        /// </summary>
+        [Fact]
+        public void 任务页选择目录命令_解压方式页那几个控件必须收到通知()
+        {
+            const string chosen = @"H:\BaiduNetdiskDownload\测试\CCC";
+
+            MainViewModel vm = CreateViewModel(out _, chosen);
+            var raised = new List<string?>();
+
+            vm.SettingsEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+            Assert.True(vm.SelectOutputDirectoryCommand.CanExecute(null), "「选择…」按钮此刻应该是可点的");
+            vm.SelectOutputDirectoryCommand.Execute(null);
+
+            // 值：两页读的是同一份真值。
+            Assert.Equal(chosen, vm.Settings.CustomOutputDirectory);
+            Assert.False(vm.Settings.ExtractToOriginalDirectory);
+            Assert.Equal(OutputPlacementOption.CustomNamedSubfolder, vm.SettingsEditor.OutputPlacement);
+            Assert.True(vm.SettingsEditor.IsCustomOutputEnabled);
+
+            // 通知：②页那几个绑定的属性一个都不能漏（漏一个，界面上就有一块停在旧状态）。
+            Assert.Contains(nameof(SettingsViewModel.OutputPlacement), raised);
+            Assert.Contains(nameof(SettingsViewModel.IsCustomOutputEnabled), raised);
+            Assert.Contains(nameof(SettingsViewModel.OutputPlacementSummary), raised);
+            Assert.Contains(nameof(SettingsViewModel.CustomOutputDirectory), raised);
+
+            // ①页那一行自己也要跟着走（省略显示 + 完整路径）。
+            Assert.Equal(chosen, vm.Settings.CustomOutputDirectory);
+            Assert.False(vm.OutputLocationFollowsArchive);
+            Assert.Contains("CCC", vm.OutputLocationToolTip, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 直接写 <see cref="MainViewModel.SelectedOutputDirectory"/>（拖放 / 恢复记忆 / 启动填充都走它）
+        /// 也必须招呼②页 —— 这一条挡的是"只修了按钮那条路"。
+        /// </summary>
+        [Fact]
+        public void 直接设置输出目录_也要招呼解压方式页()
+        {
+            MainViewModel vm = CreateViewModel();
+            var raised = new List<string?>();
+
+            vm.SettingsEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+            vm.SelectedOutputDirectory = @"D:\输出";
+
+            Assert.Contains(nameof(SettingsViewModel.OutputPlacement), raised);
+            Assert.Contains(nameof(SettingsViewModel.IsCustomOutputEnabled), raised);
+            Assert.Equal(OutputPlacementOption.CustomNamedSubfolder, vm.SettingsEditor.OutputPlacement);
+        }
+
+        /// <summary>
+        /// ①页那个「未指定位置」开关：写的就是落点判据本身，并会招呼②页刷新一遍。
+        /// </summary>
         [Fact]
         public void 任务页那个开关_与解压方式页是同一个值()
         {
@@ -285,6 +350,25 @@ namespace ArchiveFixer.Tests
             Assert.Contains("SettingsEditor.SelectOutputDirectoryCommand", extraction, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// **进②页就对齐**（2026-09-25 第 31 条的第二道保险）：①页那条路已经统一发通知，
+        /// 但只要将来有人再加一条写设置的路径漏了通知，用户切过去还是会看到旧状态 ——
+        /// 所以切到②「解压方式」页时再按最新设置求值一次。这里钉的是**接线真的在**
+        /// （TabControl 的 SelectionChanged + ②页那个 TabItem 有名字 + 处理器里确实调了刷新）。
+        /// </summary>
+        [Fact]
+        public void 切到解压方式页_会再对齐一次落点显示()
+        {
+            string window = Read("MainWindow.xaml");
+            string code = Read("MainWindow.xaml.cs");
+
+            Assert.Contains(@"SelectionChanged=""MainTabControl_SelectionChanged""", window, StringComparison.Ordinal);
+            Assert.Contains(@"x:Name=""ExtractionTabItem""", window, StringComparison.Ordinal);
+            Assert.Contains("MainTabControl_SelectionChanged", code, StringComparison.Ordinal);
+            Assert.Contains("NotifyOutputPlacementChanged", code, StringComparison.Ordinal);
+            Assert.Contains("ExtractionTabItem", code, StringComparison.Ordinal);
+        }
+
         // ================================================================ 装配
 
         private CapturingClipboardViewModel CreateViewModel()
@@ -293,6 +377,16 @@ namespace ArchiveFixer.Tests
         }
 
         private CapturingClipboardViewModel CreateViewModel(out LogService logService)
+        {
+            return CreateViewModel(out logService, folderToChoose: null);
+        }
+
+        /// <summary>
+        /// 装配一套真 VM。<paramref name="folderToChoose"/> 非空时，注入一个"用户挑好了这个目录"的假对话框
+        /// —— 无界面宿主下真 <see cref="DialogService.ShowFolderBrowserDialog"/> 一律返回空串，
+        /// 那样①页「选择…」这条真实路径根本走不到（2026-09-25 第 31 条就是为了走通它才把它改成 virtual）。
+        /// </summary>
+        private CapturingClipboardViewModel CreateViewModel(out LogService logService, string? folderToChoose)
         {
             string cacheRoot = Path.Combine(_root, "data");
 
@@ -324,13 +418,26 @@ namespace ArchiveFixer.Tests
                     pathService,
                     new TaskSummaryService(),
                     new ClipboardService(),
-                    new DialogService());
+                    folderToChoose == null ? new DialogService() : new StubFolderDialogService(folderToChoose));
             }
             finally
             {
                 RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
                 Engines.ToolLocator.Default.CustomSevenZipExePath = previousSevenZipPath;
             }
+        }
+
+        /// <summary>假对话框：直接回答"用户挑好了这个目录"（其余行为与真的一样）。</summary>
+        private sealed class StubFolderDialogService : DialogService
+        {
+            private readonly string _folder;
+
+            public StubFolderDialogService(string folder)
+            {
+                _folder = folder;
+            }
+
+            public override string ShowFolderBrowserDialog() => _folder;
         }
 
         /// <summary>

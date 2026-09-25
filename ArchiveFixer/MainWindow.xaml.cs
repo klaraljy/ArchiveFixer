@@ -7,6 +7,7 @@ using ArchiveFixer.Views.Tabs;
 using System;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 
 namespace ArchiveFixer
@@ -71,6 +72,34 @@ namespace ArchiveFixer
             if (index >= 0 && index < MainTabControl.Items.Count)
             {
                 MainTabControl.SelectedIndex = index;
+            }
+        }
+
+        /// <summary>
+        /// 切到②「解压方式」页时，让那一页上的落点控件**按最新设置重新求值**。
+        ///
+        /// <para><b>为什么要有这一道</b>（用户 2026-09-25 第 31 条，他报了两次"两处不同步、很意外"）：
+        /// 落点有两处入口（①页「输出位置」与②页「落点（解压到哪）」），真值只有一份
+        /// （<c>ExtractToOriginalDirectory</c> + <c>CustomOutputDirectory</c>），
+        /// 但②页那几个控件绑的是 <c>SettingsEditor</c> 算出来的属性 —— 只要有一条写设置的路径漏了通知，
+        /// 用户切过去看到的就是旧状态。写设置的地方已经统一走
+        /// <c>MainViewModel.NotifyOutputPlacementChangedEverywhere</c>；这里再补一道"进页面就对齐"，
+        /// 让漏通知这种错误**不可能**再以"两处显示不一样"的形式露到界面上（有测试钉住①那条路已经不漏）。
+        /// </para>
+        ///
+        /// <para>只做重新求值，不写任何设置，所以不可能与①页形成来回覆盖。</para>
+        /// </summary>
+        private void MainTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!ReferenceEquals(e.OriginalSource, MainTabControl) ||
+                !ReferenceEquals(MainTabControl.SelectedItem, ExtractionTabItem))
+            {
+                return;
+            }
+
+            if (DataContext is MainViewModel viewModel)
+            {
+                viewModel.SettingsEditor.NotifyOutputPlacementChanged();
             }
         }
 

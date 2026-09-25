@@ -135,8 +135,12 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 选择文件夹。
         /// .NET 8 WPF 可使用 Microsoft.Win32.OpenFolderDialog。
+        ///
+        /// <para><c>virtual</c> 与 <see cref="ShowOpenSingleFileDialog"/> 同理（2026-09-25 第 31 条）：
+        /// 无界面宿主下本方法一律返回空串，测试注入不了"用户挑好了哪个目录"，
+        /// 于是①页「选择…」那条**真实路径**没法被端到端钉住 —— 而"两处落点不同步"的缺陷正是从这条路进来的。</para>
         /// </summary>
-        public string ShowFolderBrowserDialog()
+        public virtual string ShowFolderBrowserDialog()
         {
             return ShowFileDialog(
                 () =>

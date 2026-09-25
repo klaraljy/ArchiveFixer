@@ -796,7 +796,7 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     RefreshOutputPaths();
-                    RaiseOutputLocationChanged();
+                    NotifyOutputPlacementChangedEverywhere();
                 }
             }
         }
@@ -877,9 +877,8 @@ namespace ArchiveFixer.ViewModels
                 Settings.ExtractToOriginalDirectory = value;
                 Settings.KeepArchiveNameFolder = true;
 
-                SettingsEditor?.NotifyOutputPlacementChanged();
+                NotifyOutputPlacementChangedEverywhere();
                 OnPropertyChanged(nameof(Settings));
-                RaiseOutputLocationChanged();
                 RefreshOutputPaths();
 
                 AppendLog(
@@ -888,6 +887,29 @@ namespace ArchiveFixer.ViewModels
                         ? StatusText.OutputLocationSwitchedToOriginalLog
                         : StatusText.OutputLocationSwitchedToCustomLog);
             }
+        }
+
+        /// <summary>
+        /// 落点变了 → **两页一起**刷新（①页那一行 + ②页「落点（解压到哪）」那几个控件）。
+        ///
+        /// <para><b>为什么必须有这一个出口</b>（2026-09-25 第 31 条，用户真机报的"两处还是不同步"）：
+        /// <see cref="AppSettings"/> 是普通 POCO（不发通知），而②页的控件绑的是
+        /// <see cref="SettingsViewModel"/> 算出来的属性（<c>OutputPlacement</c> / <c>IsCustomOutputEnabled</c> /
+        /// <c>CustomOutputDirectory</c> / <c>OutputPlacementSummary</c>）。
+        /// ①页的「选择…」以前只改设置、**一个通知都不发** —— 值是同一份（两页读同一个对象，所以只看值的测试全绿），
+        /// 可②页那几个**界面元素不会重新求值**：用户去②页看到的是"①页已经选了目录，落点还写着『同名子文件夹』，
+        /// 路径框灰着写『（不适用）』" —— 正是他说的"很意外"。</para>
+        ///
+        /// <para>⛔ 凡是写 <c>ExtractToOriginalDirectory</c> / <c>CustomOutputDirectory</c> 的地方，
+        /// 收尾都必须走这里（①页选择、①页开关、确认框"保存为默认"、②页各处）。</para>
+        /// </summary>
+        private void NotifyOutputPlacementChangedEverywhere()
+        {
+            // ②页：让那几个控件按新值重新求值。
+            SettingsEditor?.NotifyOutputPlacementChanged();
+
+            // ①页：那一行文本 / ToolTip / 开关。
+            RaiseOutputLocationChanged();
         }
 
         /// <summary>
@@ -2937,6 +2959,12 @@ namespace ArchiveFixer.ViewModels
 
             Settings.Normalize();
 
+            /*
+             * 确认框里改过落点、又选了「保存为默认」→ ①页那一行与②页那几个控件都要跟着走
+             * （这里也是直接写 Settings 的路径之一，2026-09-25 第 31 条同一口径）。
+             */
+            NotifyOutputPlacementChangedEverywhere();
+
             try
             {
                 _settingsService.Save(Settings);
@@ -4548,6 +4576,13 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 RefreshOutputPaths();
+
+                /*
+                 * ⚠ 这一句是 2026-09-25 第 31 条的关键：上面那几行直接写了 Settings，
+                 * 而②页「落点（解压到哪）」那几个控件绑的是 SettingsEditor 算出来的属性 ——
+                 * 不通知的话，用户从①页选完目录去②页，看到的还是老的单选状态与灰着的路径框。
+                 */
+                NotifyOutputPlacementChangedEverywhere();
 
                 AppendLog("INFO", "已选择输出目录：" + folder);
             }

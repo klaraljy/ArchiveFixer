@@ -129,12 +129,12 @@
         </Border>
 
         <!-- ============ 六个选项卡 ============ -->
-        <TabControl x:Name="MainTabControl" Margin="0,0,0,0">
+        <TabControl x:Name="MainTabControl" Margin="0,0,0,0" SelectionChanged="MainTabControl_SelectionChanged">
             <TabItem Header="任务">
                 <tabs:TaskTab x:Name="TaskTabHost" />
             </TabItem>
 
-            <TabItem Header="解压方式">
+            <TabItem x:Name="ExtractionTabItem" Header="解压方式">
                 <tabs:ExtractionTab />
             </TabItem>
 

@@ -43,6 +43,7 @@
 | 2026-09-25 | **第 28 条：`H:\...\DDD` 那个目录是什么鬼** | 真相 = 那就是他自己设置里的「指定位置」，某次解压真的往里写过东西（日志 14/21/22 行）。**核对结论：选择位置时不建目录**（`SelectOutputDirectory()` 只改设置；目录只在定稿那一步 `EnsureDirectoryExists(destinationDirectory)` 建）——两处入口各留了一句"刻意不建"的注释 |
 | 2026-09-25 | **第 29 条：中文密码一直报密码错误**（"我那个密码是中文的就没有办法了吗"） | ✅ 已修（完整链条见 `修改日志.md` 第 29 条）：**ZIP 的 AES 只认字节，不认字符串** —— 打包方按 UTF-8 字节派生密钥（百度网盘分享包，归档里还声明着 `Encrypt UTF8`），而 7-Zip 解码时**只按 ANSI(936)/GBK** 派生（实测它连 bit11 都不看：手工置上/清掉，结论一个字不变），于是密码再对也报"密码错误"。落地：**内嵌归档直读自己解 AES**（`Extraction/ZipAesCrypto`：PBKDF2-HMAC-SHA1 1000 轮 + AES-CTR + HMAC-SHA1 认证；密码字节 **UTF-8 / ANSI 两档都试**，先过 2 字节校验值再用认证码确认）；候选密码**必须在直读探查之前**算好（`ExtractionCoordinator`），探通即直读、**不再抠那份等大的副本**；密码一个都不通过是**硬失败，绝不回落抠取**（回落只会白拷一份等大副本、再让 7z 报一次同样的错）。空间核算补 `RequiresPassword`（识别阶段就知道"只差一个密码"），不再为不会发生的抠取副本预留空间。回归 = `ZipAesDirectReadTests`（含**真 7z 反向校验**：ANSI 打包的包 7z 与内置读取器都要能开，UTF-8 打包的 7z 必须开不了） |
 | 2026-09-25 | **第 30 条：列表式密码带冒号永远试不到**（排查第 29 条时发现，用户未直接报） | ✅ 已修：含冒号的行以前一律按"名称:密码"切，而**列表式密码自带冒号**（`abc:123`、`www.xxx.com:8888`）时正确的整行从来没被试过。现在映射式条目额外记住**整行原文**（`PasswordEntry.RawLine`），候选链新增 `BookRawLine` 一档（排在显式密码**之后**，密码列表界面上一条都不多）。回归 = `PasswordServiceTests`（候选顺序恰好 `["123","plain","abc:123"]`）+ `PasswordBookTests` |
+| 2026-09-25 | **第 31 条：①页「输出位置」与②页「落点」不同步**（"这会让用户很意外"，他第二次报同一件事） | ✅ 已修：**值是一份、通知一个都没发** —— ①页那条路（「选择…」/直接赋值/确认框「保存为默认」）只写 `AppSettings`，而②页控件绑的是 `SettingsEditor` 算出来的属性（`AppSettings` 是 POCO 不发通知），于是②页元素不重新求值、显示旧状态。落地：①**唯一出口** `MainViewModel.NotifyOutputPlacementChangedEverywhere()`（②页 `NotifyOutputPlacementChanged` + ①页 `RaiseOutputLocationChanged`），**四处写落点的地方全走它**；②切到②页时（`MainTabControl.SelectionChanged`）再对齐一次（第二道保险）；③`DialogService.ShowFolderBrowserDialog` 改 `virtual`，好让①页「选择…」这条真实路径可测。⛔ **纪律：落点两页的真值只有一份，任何新写的路径收尾必须走那个出口；测试要钉"通知"而不是"值"**（既有 15 条值级测试全绿却漏掉了这个缺陷）。回归 = `OutputLocationOnTaskTabTests`（撤掉修复立刻变红两条） |
 
 ---
 
@@ -192,9 +193,8 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 **代码风格**：沿用既有风格（4 空格缩进、私有字段 `_camelCase`、`Nullable` + `ImplicitUsings` 开启）。
 注释写**为什么**（尤其"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
 
-**验证状态（2026-09-25 第 29/30 条"中文密码 / 冒号密码"修复之后）**：`dotnet build ArchiveFixer.slnx --no-incremental` **0 错误 0 警告**；
-`dotnet test` **1564 通过 / 0 失败 / 0 跳过**（三遍里两遍全绿；中间那一遍挂在下面那条已知偶发上，**单跑 1/1 过**）；
-`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
+**验证状态（2026-09-25 第 29/30/31 条"中文密码 / 冒号密码 / 两页落点同步"修复之后）**：`dotnet build ArchiveFixer.slnx --no-incremental` **0 错误 0 警告**；
+`dotnet test` **1567 通过 / 0 失败 / 0 跳过**（连跑两遍都是这个数）；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
 > ⚠ 真 7z 用例在**全量并发**下偶发「引擎操作失败」（实测 `RecursiveExtractorTests.用户确认继续后…`、
 > 以及 `RecursiveExtractorTests.递归取消_工作区保留` 一次，**单跑必过**）——
 > 这是测试侧争用（多集合并行时多个 7z 进程抢磁盘），不是产品缺陷；遇到就**单跑确认**，别去改产品代码。
