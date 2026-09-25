@@ -2681,6 +2681,36 @@ namespace ArchiveFixer.ViewModels
 
             logEntries.Add((failures.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：定稿完成{contentNote} —— {summary}"));
 
+            /*
+             * 产物**点名**（用户 2026-09-25："出问题我看日志就能知道"）。
+             *
+             * 为什么必须列名字：续解那一步是按"这一轮新出现的文件"找下一层的，而名字被改坏的产物
+             * （真机上是 `222.ra删除r`）在日志里如果只报个数，用户就只能自己去翻目录 —— 那次就是这么绕远的。
+             * 上限 20 条，超出只报个数（几千个文件时不能让日志爆掉），但"还有多少没列"必须写出来。
+             */
+            if (plan.Moves.Count > 0)
+            {
+                List<PlannedMove> contentMoves = plan.Moves
+                    .Where(move => !plan.ProcessArtifactSources.Contains(move.From))
+                    .ToList();
+
+                List<string> contentNames = contentMoves
+                    .Select(move => Path.GetFileName(move.To))
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Take(MaxFinalizeDetailLines)
+                    .ToList();
+
+                if (contentNames.Count > 0)
+                {
+                    logEntries.Add((
+                        "INFO",
+                        $"{task.FileName}：本次内容物 —— {string.Join("、", contentNames)}"
+                        + (contentMoves.Count > contentNames.Count
+                            ? $"（…还有 {contentMoves.Count - contentNames.Count} 项没列出来）"
+                            : string.Empty)));
+                }
+            }
+
             // 覆盖留痕：被顶掉的落点单独再写一条，用户事后追查"我原来那份去哪了"时有据可依。
             foreach (string overwrittenPath in overwritten)
             {
@@ -4265,11 +4295,17 @@ namespace ArchiveFixer.ViewModels
                 .ConfigureAwait(false);
 
             /*
-             * 「其余物会怎么处理」= ③页「删除操作」那一档（用户 2026-09-25 第 32 条：三档
+             * 「其余物会怎么处理」= 「删除操作」那一档（用户 2026-09-25 第 32 条：三档
              * 不动 / 移入回收站 / 彻底删除，判据只有一处实现 RestHandlingModes.Normalize）。
              * 这里只是把它**原样说给用户听**，一个字都不另算。
+             *
+             * ⚠ 第 33 条：**「本次选项」优先** —— 确认框里的折叠区现在也能改这一档，
+             * 用户改完再点「开始处理」时，正文那一行必须跟着说这一次将会怎么处理，
+             * 不能仍念设置里的旧值（那正是"弹窗没跟着设置/选择更新"的另一半）。
              */
-            string restHandling = RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
+            string restHandling = pendingOptions != null
+                ? RestHandlingModes.Normalize(pendingOptions.RestHandling)
+                : RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
 
             SourceHandlingMode sourceHandling = pendingOptions?.SourceHandling
                 ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
@@ -6192,8 +6228,11 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>「定稿完成」之后点名产物时的条数上限（超了只报个数，但会写明还有多少没列）。</summary>
+        private const int MaxFinalizeDetailLines = 20;
+
         /// <summary>
-        /// **「删除操作」的唯一触发点**：任务收尾之后，按用户选的档处理它自己的其余物。
+        /// 「删除操作」那一档的**唯一触发点**：任务收尾之后，按用户选的档处理它自己的其余物。
         ///
         /// <para>三档（用户 2026-09-25 第 32 条亲自定的）：不动（Keep）/ 移入回收站 / 彻底删除。
         /// 后两档的门槛全在 <see cref="RestItemPurger"/> 里（终态必须是「完成」+ 校验通过 + 未取消 +
@@ -6293,10 +6332,16 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 批首定一次"本批的删除操作按哪一档走"（用户中途改了设置也只影响下一批，同一批口径一致）。
+        ///
+        /// <para>⚠ 2026-09-25 第 33 条：**「本次选项」优先**（<see cref="RunOptions"/> 里那一档）——
+        /// 用户在确认框的折叠区里改了「删除操作」，这一次就必须按他选的跑；
+        /// 没有本次选项（无界面宿主 / 勾了"以后不再询问"）时才读设置。</para>
         /// </summary>
         private void PrepareRestHandlingForBatch()
         {
-            _restHandlingThisBatch = RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
+            _restHandlingThisBatch = RunOptions != null
+                ? RestHandlingModes.Normalize(RunOptions.RestHandling)
+                : RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
         }
 
         /// <summary>

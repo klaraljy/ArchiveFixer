@@ -1,4 +1,6 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Storage;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
@@ -159,10 +161,13 @@ namespace ArchiveFixer.ViewModels
         private readonly DialogService _dialogService;
 
         /// <summary>
-        /// 内层包候选的"这真的是包吗"探针（只读文件头；用户 2026-09-24 要求加的下限）。
-        /// 用 <see cref="MagicArchiveProber"/> 而不是另造一套签名表 —— 与递归展开同一口径。
+        /// 内层包候选的"这真的是包吗"判据（用户 2026-09-24 要求加的下限；2026-09-25 第 33 条改成**只认内容**）。
+        ///
+        /// <para>走 <see cref="ArchiveDetectService"/> 的完整识别（文件头魔数 + 文件头认不出时的尾部
+        /// "内嵌归档"检测）——与"扫描任务"那一步**同一个实现**，⛔ 不另造一套签名表，
+        /// 也**不再**按后缀筛（真机上"名字被塞两个字就只解一层"就是那道筛子造成的）。</para>
         /// </summary>
-        private readonly MagicArchiveProber _magicProber = new();
+        private readonly ArchiveDetectService _detectService = new();
 
         /// <summary>
         /// 本次运行里用户勾过「以后不再询问」——之后的一键处理直接按设置走，不再弹确认框。
@@ -581,9 +586,18 @@ namespace ArchiveFixer.ViewModels
                         break;
                     }
 
-                    // 从本轮成功任务的产物里找内层包。找不到就结束，但**不许静默**（见下面的日志）。
-                    List<InnerArchiveCandidate> innerArchives =
-                        await CollectInnerLayersAsync(roundTargets, existingFiles, unreadableDirectories, sourcePaths);
+                    /*
+                     * 从本轮成功任务的产物里找内层包。找不到就结束，但**不许静默**：
+                     * 扫描的每一条判据都会写进日志（认出谁 / 跳过谁 / 为什么），
+                     * 于是"只解了一层"这类问题**看日志就能定位**（用户 2026-09-25 明确要求）。
+                     */
+                    (List<InnerArchiveCandidate> innerArchives, List<string> scanLog) =
+                        await CollectInnerLayersAsync(round, roundTargets, existingFiles, unreadableDirectories, sourcePaths);
+
+                    foreach (string line in scanLog)
+                    {
+                        AppendLog(line.Contains("[WARN]", StringComparison.Ordinal) ? "WARN" : "INFO", line);
+                    }
 
                     if (innerArchives.Count == 0)
                     {
@@ -594,7 +608,7 @@ namespace ArchiveFixer.ViewModels
                          * 或者内层包落在了没被看到的目录里"。真实踩坑就是后者 —— 输出目录已存在时
                          * 解压实际落到 xxx(1)，而续解只按解压**前**的目录快照找包，
                          * 结果第二层根本没跑，汇总却照样打印"一键处理完成：成功 N"。
-                         * 有这一行日志，用户（和我们）才有一条能对照的线索。
+                         * 有这一行日志（以及上面那串逐条明细），用户（和我们）才有能对照的线索。
                          */
                         AppendLog("INFO", $"一键处理：第 {round} 层没有发现可继续解压的内层包，到此结束。");
                         break;
@@ -751,32 +765,47 @@ namespace ArchiveFixer.ViewModels
         {
             int pending = rootTasks.Count(task => task.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd);
 
-            if (pending == 0)
-            {
-                return;
-            }
-
             if (stopped)
             {
-                AppendLog(
-                    "WARN",
-                    $"一键处理：被「停止后续」中断，{pending} 个源包的补搬（移入其余物）没有执行，源包留在原地。");
+                if (pending > 0)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"一键处理：被「停止后续」中断，{pending} 个源包的补搬（移入其余物）没有执行，源包留在原地。");
+                }
+
                 return;
             }
 
             if (hitRoundLimit)
             {
-                AppendLog(
-                    "WARN",
-                    $"一键处理：还有更深的包没解（已达到 {MaxRounds} 轮上限），" +
-                    $"{pending} 个源包的补搬没有执行 —— 内容物可能还不全，此时不动源包。");
+                if (pending > 0)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"一键处理：还有更深的包没解（已达到 {MaxRounds} 轮上限），" +
+                        $"{pending} 个源包的补搬没有执行 —— 内容物可能还不全，此时不动源包。");
+                }
+
                 return;
             }
 
-            AppendLog(
-                "INFO",
-                $"一键处理：续解链已结束，对 {pending} 个「本轮没有内容物」的最外层源包做一次补搬（按源包处理档位）。");
+            if (pending > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    $"一键处理：续解链已结束，对 {pending} 个「本轮没有内容物」的最外层源包做一次补搬（按源包处理档位）。");
+            }
 
+            /*
+             * ⚠ **即使 pending == 0 也必须调下去**（2026-09-25 第 33 条被测试逮到的那一处）：
+             * 链尾这一步不只做"源包补搬"，还负责**按「删除操作」那一档处理已经搬好的其余物**。
+             * 形状 A（第一层直接出内容物）下源包在第 1 轮就当场搬进其余物了，
+             * 到这里 `SourcePackageMove` 已经是 <c>Done</c> → 老的 `if (pending == 0) return;`
+             * 让整条链尾钩子**一次都不跑** → 用户选了「彻底删除」，跑完其余物还在
+             * （正是他真机报的那个现象；形状 B 的包因为 pending > 0 反而照常生效，
+             * 所以这个缺陷只在"第一层就出内容物"的包上露出来）。
+             */
             await _extractionCoordinator.CompleteRootSourcePackagesAfterChainAsync(
                 rootTasks,
                 chainTasks,
@@ -1082,7 +1111,33 @@ namespace ArchiveFixer.ViewModels
         /// 线程规则：目录枚举在后台（见 <see cref="SnapshotCandidateDirectoriesAsync"/> 的说明），
         /// 过滤是纯内存哈希查表，留在调用线程上做。
         /// </summary>
-        private async Task<List<InnerArchiveCandidate>> CollectInnerLayersAsync(
+        /// <summary>
+        /// 从本轮成功任务的产物里找"还能继续解"的内层包。
+        ///
+        /// <para><b>判据（2026-09-25 第 33 条改）：只认内容，⛔ 后缀不参与判决。</b>
+        /// 老实现的第一道门是后缀白名单（<see cref="IsArchiveStartPoint"/>）。真机现场：
+        /// 第一层解出来的下一层叫 <c>222.ra删除r</c>（打包方在 <c>.rar</c> 中间插了「删除」两个字），
+        /// 后缀 <c>.ra删除r</c> 不认识 → <b>在魔数体检之前就被扔掉</b> →
+        /// 日志只写"第 1 层没有发现可继续解压的内层包"，用户看到的就是"只解了一层"。
+        /// 而"不信后缀、只认魔数"恰恰是这个程序的前提 —— 这一步等于把它写反了，
+        /// 于是**只对名字正常的内层包有效**（"换一种伪装就失效"的机制就在这里）。
+        /// 现在：新产物逐个按内容判定 —— 先读文件头（<see cref="MagicArchiveProber"/>），
+        /// 认不出再按"双面文件"读尾部（<see cref="EmbeddedArchiveDetector"/>，与识别阶段同一口径），
+        /// 两条都不成立才不是包。</para>
+        ///
+        /// <para>仍然按名字排除的只有一种：<b>分卷的后续卷</b>
+        /// （<c>.002</c>／<c>.z02</c>／<c>.r01</c>／<c>.part2+</c>）—— 那是"哪一卷是组的开头"这条
+        /// <b>分组</b>信息，不是格式判断（见 <see cref="IsVolumeContinuationPart"/>）。</para>
+        ///
+        /// <para>代价有界：头部体检每个新文件一次；尾部体检只对"文件头认不出 + ≥ 64 KiB"的文件做，
+        /// 每轮最多 <see cref="MaxTailProbesPerRound"/> 次，超了就写一条 WARN 说清还剩几个没体检
+        /// （宁可说清"没看"，也不假装"没有"）。</para>
+        ///
+        /// <para>返回候选 + <b>一行一条的扫描日志</b>（认出了谁、跳过了谁、为什么跳）——
+        /// 用户 2026-09-25 的要求是"出问题我看日志就能知道"，所以这一段的判据必须能自证。</para>
+        /// </summary>
+        private async Task<(List<InnerArchiveCandidate> Candidates, List<string> LogLines)> CollectInnerLayersAsync(
+            int round,
             IReadOnlyList<ArchiveTask> roundTargets,
             HashSet<string> existingFiles,
             HashSet<string> unreadableDirectories,
@@ -1128,7 +1183,7 @@ namespace ArchiveFixer.ViewModels
 
             if (parents.Count == 0)
             {
-                return new List<InnerArchiveCandidate>();
+                return (new List<InnerArchiveCandidate>(), new List<string>());
             }
 
             List<(string OutputDirectory, List<string> Files)> scanned = await Task.Run(() =>
@@ -1158,6 +1213,10 @@ namespace ArchiveFixer.ViewModels
             });
 
             var found = new Dictionary<string, InnerArchiveCandidate>(StringComparer.OrdinalIgnoreCase);
+            var scanLog = new List<string>();
+            var recognizedLines = new List<string>();
+            var skippedLines = new List<string>();
+            int newFileCount = 0;
 
             foreach ((ArchiveTask task, string outputDirectory) in parents)
             {
@@ -1185,44 +1244,56 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
+                    newFileCount++;
+
                     // 源文件本身（含分卷各卷）不算内层包。
                     if (sourcePaths.Contains(file))
                     {
+                        skippedLines.Add($"{file}（是本批的源包）");
                         continue;
                     }
 
                     if (knownTaskPaths.Contains(file))
                     {
-                        continue;
-                    }
-
-                    if (!IsArchiveStartPoint(file))
-                    {
+                        skippedLines.Add($"{file}（已经在任务列表里）");
                         continue;
                     }
 
                     /*
-                     * ===== 内层包候选的**下限**（用户 2026-09-24 铁证，两条缺一不可）=====
+                     * ===== 内层包候选的**下限**（用户 2026-09-24 铁证）=====
                      *
                      * 现场：外层 ZIP 是加密条目 → 7z 半成功写出 **0 字节**的 `2部轻熟1.7z.001/.002` →
                      * 老逻辑只看后缀，把那个 0 字节的 `.001` 当成"包"继续往下解，一路解到 `2部轻熟1.7z`
-                     * 才被 7-Zip 用"文件为空"打回来 —— 用户看到的是连解两层空气、任务列表里多出两条
-                     * "文件为空"的失败记录。用户明确要求：**0 字节的文件绝不许进入续解链**。
-                     *
-                     * ① 非零字节：0 字节的记录不可能是任何归档（连头都没有）；
-                     * ② 魔数认得出来：真读一次文件头，认不出就不是包（后缀可以骗人，7z 写出来的桩文件
-                     *    也可以是任意名字）。②比①贵一点（一次头部读），但只对**过了后缀筛**的那些文件做，
-                     *    量级与"这一轮新出现的包"同阶。
+                     * 才被 7-Zip 用"文件为空"打回来 —— 用户看到的是连解两层空气。
+                     * 用户明确要求：**0 字节的文件绝不许进入续解链**。
                      */
                     if (!TryGetCandidateLength(file, out long candidateLength) || candidateLength <= 0)
                     {
+                        skippedLines.Add($"{file}（0 字节或读不到，不可能是包）");
                         continue;
                     }
 
-                    if (!await IsRecognizedArchiveFileAsync(file))
+                    /*
+                     * 唯一还按名字排除的一类：分卷的**后续卷**（.002 / .z02 / .r01 / .part2+）。
+                     * 理由是"哪一卷是组的开头"只能从名字看出来 —— 这是**分组**信息，不是格式判断；
+                     * 格式一律只看内容（下一段）。⛔ 别在这里再加"后缀得是已知归档后缀"那种条件：
+                     * 那正是 2026-09-25 真机上"名字被塞了两个字就只解一层"的根因。
+                     */
+                    if (IsVolumeContinuationPart(file))
                     {
+                        skippedLines.Add($"{file}（是分卷的后续卷，起点在第一卷上）");
                         continue;
                     }
+
+                    (bool isArchive, string how) = await ClassifyArchiveByContentAsync(file);
+
+                    if (!isArchive)
+                    {
+                        skippedLines.Add($"{file}（{how}）");
+                        continue;
+                    }
+
+                    recognizedLines.Add($"{file}（{TaskSpaceEstimate.FormatSize(candidateLength)}，{how}）");
 
                     if (!found.ContainsKey(file))
                     {
@@ -1236,7 +1307,43 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            return found.Values.OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase).ToList();
+            /*
+             * 扫描日志：**先写清"看了多少、认出几个、跳过几个"，再把逐条明细列出来**。
+             * 上限 20 条明细（一个包里几千个文件时不能让日志爆掉），超出只报个数 ——
+             * 但"有多少没列出来"必须写出来，绝不静默截断。
+             */
+            scanLog.Add(
+                $"一键处理：第 {round} 层产物扫描 —— 新文件 {newFileCount} 个；"
+                + $"按内容认出归档 {recognizedLines.Count} 个；跳过 {skippedLines.Count} 个。");
+
+            foreach (string line in AppendCapped(recognizedLines, "认出（会继续解）"))
+            {
+                scanLog.Add(line);
+            }
+
+            foreach (string line in AppendCapped(skippedLines, "跳过"))
+            {
+                scanLog.Add(line);
+            }
+
+            return (found.Values.OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase).ToList(), scanLog);
+        }
+
+        /// <summary>明细行的条数上限（每个方向）：够看清现场，又不至于让日志爆掉。</summary>
+        internal const int MaxScanDetailLines = 20;
+
+        /// <summary>把明细行截成"最多 N 条 + 一行说明还剩多少"（绝不静默截断）。</summary>
+        private static IEnumerable<string> AppendCapped(List<string> lines, string label)
+        {
+            foreach (string line in lines.Take(MaxScanDetailLines))
+            {
+                yield return $"一键处理：    {label}：{line}";
+            }
+
+            if (lines.Count > MaxScanDetailLines)
+            {
+                yield return $"一键处理：    {label}：…还有 {lines.Count - MaxScanDetailLines} 个（略）";
+            }
         }
 
         /// <summary>
@@ -1261,24 +1368,41 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 魔数认不认得出来这是归档（只读文件头，认不出就不是包）。
+        /// 按**内容**判断一个候选是不是归档（后缀一个字都不看）。
         ///
-        /// <para>
-        /// 判据来自 <see cref="MagicArchiveProber"/>（它只认"已知格式的归档"，
-        /// <c>Unknown</c> 不算 —— 与递归展开同一口径，不在这里另造一套）。读头部是真异步 I/O，
-        /// 不会占住 UI 线程；调用点已经先用后缀筛过一遍，所以代价只与"这一轮新出现的包"同阶。
-        /// </para>
+        /// <para>判据与识别阶段**同一口径**：直接调 <see cref="ArchiveDetectService.DetectAsync"/>
+        /// ——也就是"扫描任务"那一步用的同一个实现：先读文件头魔数（RAR5 / 7z / ZIP / 分卷起点…），
+        /// 文件头认不出时它自己会去看文件尾部有没有"内嵌归档"（假 MP4 头 + 尾部完整 ZIP 那种双面文件）。
+        /// ⛔ 这里**不许**再另造一套签名表或另加一道按名字的筛子 —— 那正是 2026-09-25
+        /// 真机上"名字被塞了两个字就只解一层"的根因。</para>
+        ///
+        /// <para>返回 <c>(是归档?, 判据说明)</c>：说明会原样进日志（用户要求"看日志就能定位"）。</para>
         /// </summary>
-        private async Task<bool> IsRecognizedArchiveFileAsync(string filePath)
+        private async Task<(bool IsArchive, string How)> ClassifyArchiveByContentAsync(string filePath)
         {
             try
             {
-                return await _magicProber.IsArchiveAsync(filePath);
+                DetectResult result = await _detectService.DetectAsync(filePath);
+
+                if (!result.IsArchive || !result.IsKnownFormat)
+                {
+                    return (false, "按内容认不出是归档（文件头与尾部都试过了）");
+                }
+
+                /*
+                 * 说清是**哪一条**判据认出来的：
+                 * · 尾部内嵌归档 → 这种文件必须按偏移抠出来才能解（解压侧已经这么做了）；
+                 * · 文件头魔数 → 普通包。
+                 * 用户要的是"日志能自证"，所以这一句不能含糊。
+                 */
+                return result.EmbeddedArchiveOffset > 0
+                    ? (true, $"尾部内嵌归档（{result.Format}，偏移 {result.EmbeddedArchiveOffset}）")
+                    : (true, $"文件头魔数（{result.Format}）");
             }
             catch
             {
                 // 读不了（被独占 / 刚好被删）：当作"认不出来"，不把它当包 —— 宁可不续解，也不解空气。
-                return false;
+                return (false, "读不了（被占用或刚好被删）");
             }
         }
 
@@ -1302,7 +1426,46 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 判断一个文件是不是<b>分卷的后续卷</b>（<c>.002+</c>／<c>.z02+</c>／<c>.r01+</c>／<c>.part2+</c>）。
+        ///
+        /// <para>这是续解扫描里**唯一**还按名字排除的一类，理由：一组分卷里"哪一卷是开头"
+        /// 只能从名字看出来 —— 那是<b>分组</b>信息，不是格式判断。格式一律只看内容
+        /// （见 <see cref="ClassifyArchiveByContentAsync"/>）。</para>
+        ///
+        /// <para>⛔ 别在这里加"后缀必须是已知归档后缀"那种条件：2026-09-25 真机上
+        /// "名字被塞了两个字（<c>222.ra删除r</c>）就只解一层"的根因正是那样一道门。</para>
+        /// </summary>
+        internal static bool IsVolumeContinuationPart(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                return false;
+            }
+
+            string fileName = Path.GetFileName(filePath);
+            string extension = Path.GetExtension(fileName);
+
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                return false;
+            }
+
+            if (ExtensionHelper.IsVolumePartExtension(extension))
+            {
+                // 三位数字分卷里只有 .001 是起点；.z01 / .r00 这类也不是组的开头。
+                return !extension.Equals(".001", StringComparison.OrdinalIgnoreCase);
+            }
+
+            // xxx.part2.rar 的最后后缀是 .rar，编号在倒数第二个后缀上。
+            return GetPartSegmentNumber(fileName) > 1;
+        }
+
+        /// <summary>
         /// 判断一个文件是不是"归档的起点"（分卷组的第一卷，或者单文件归档）。
+        ///
+        /// <para>⚠ <b>它只用于"按名字粗筛 + 列表/断言"，⛔ 不再是续解扫描的判据</b>
+        /// （2026-09-25 第 33 条：后缀可以骗人，续解必须按内容认，见
+        /// <see cref="ClassifyArchiveByContentAsync"/>）。</para>
         ///
         /// 排除项：<c>.002</c> 及更大编号、<c>.z01/.z02…</c>、<c>.r00/.r01…</c>、
         /// <c>.part2</c> 及更大的分卷段 —— 它们既不是完整归档，也不是组的开头。
@@ -1322,18 +1485,7 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            if (ExtensionHelper.IsVolumePartExtension(extension))
-            {
-                /*
-                 * 三位数字分卷里只有 .001 是起点。
-                 * .z01 / .r00 / .part1 都不是：zip 分卷的起点叫 xxx.zip，rar 老式分卷的起点叫 xxx.rar，
-                 * .part1 那种命名的起点在 xxx.part1.rar 上（由下面那段处理）。
-                 */
-                return extension.Equals(".001", StringComparison.OrdinalIgnoreCase);
-            }
-
-            // xxx.part2.rar 的最后后缀是 .rar，光看后缀分不出来，编号在倒数第二个后缀上。
-            if (GetPartSegmentNumber(fileName) > 1)
+            if (IsVolumeContinuationPart(filePath))
             {
                 return false;
             }

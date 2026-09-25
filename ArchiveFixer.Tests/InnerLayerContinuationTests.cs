@@ -396,6 +396,109 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(processDirectory, "outer.7z")));
         }
 
+        // ---------------------------------------------------------------- 第 33 条：伪装过的下一层
+
+        /// <summary>
+        /// <b>2026-09-25 真机现场（这一条就是为它写的）</b>：第一层解出来的下一层，
+        /// 名字被打包方**塞了字**（真机上是 <c>222.ra删除r</c> —— 把「删除」插进 <c>.rar</c> 中间）。
+        ///
+        /// <para>修复前：续解扫描的第一道门是后缀白名单（<c>IsArchiveStartPoint</c> →
+        /// <c>IsKnownArchiveExtension(".ra删除r")</c> = false），于是**在魔数体检之前**就把这个包扔了 ——
+        /// 日志只写"第 1 层没有发现可继续解压的内层包"，用户看到的就是"只解了一层"。
+        /// 这一条钉的是"只认内容、后缀不参与判决"：样本里那个内层包叫 <c>inner.7删除z</c>
+        /// （同一种伪装手法），它必须被认出来、自动改名成 <c>.7z</c>、解到第二层。</para>
+        ///
+        /// <para>⛔ 撤掉修复（把后缀白名单那道门加回去）这一条立刻变红。</para>
+        /// </summary>
+        [Fact]
+        public async Task 续解_下一层的名字被塞了字_按内容认出并解到第二层()
+        {
+            const string mangledName = "inner.7删除z";
+
+            string innerStage = Path.Combine(_root, "mangled-inner");
+            Directory.CreateDirectory(innerStage);
+            WriteText(Path.Combine(innerStage, "payload.txt"), InnerPayloadText);
+            Run7z(innerStage, "a", "-t7z", mangledName, "-p" + InnerPassword, "-mhe=on", "payload.txt");
+
+            // 外层里装的正是那个名字被改坏的内层包。
+            string outerStage = Path.Combine(_root, "mangled-outer");
+            Directory.CreateDirectory(outerStage);
+            File.Copy(Path.Combine(innerStage, mangledName), Path.Combine(outerStage, mangledName), overwrite: true);
+
+            string outer = BuildPackage("mangled.7z", outerStage, mangledName);
+
+            // 密码本用**列表式**：内层包的名字被改过，"按名字命中"的映射式本来就不该指望它。
+            Harness harness = CreateHarness($"{OuterPassword}\n{InnerPassword}\n");
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.ContinuationLayers);
+
+            // ① 扫描日志必须自证：看了几个、认出几个、认的是谁、按什么判据
+            //    （用户 2026-09-25 的要求："出问题我看日志就能知道"，不用再去翻目录）。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("产物扫描", StringComparison.Ordinal) &&
+                        line.Contains("按内容认出归档 1 个", StringComparison.Ordinal));
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains(mangledName, StringComparison.Ordinal) &&
+                        line.Contains("文件头魔数", StringComparison.Ordinal));
+
+            // ② 最深处的内容物真的出来了。
+            string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
+            Assert.Single(payloads);
+            Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
+
+            // ③ 而且那个包被**自动改名**成了正常后缀（第 32 条那条"一键档自动改名"照旧生效）。
+            Assert.Single(Directory.GetFiles(harness.OutputRoot, "inner.7z", SearchOption.AllDirectories));
+        }
+
+        /// <summary>
+        /// <b>"伪装两层"</b>（用户 2026-09-25 原话："我明显说过，用户可能会伪装两层的"）：
+        /// 第一层的产物**名字**是假的（<c>user.jp删除g</c>）**而且**文件头也是假的
+        /// （前 128 KB 是假 MP4 头，完整 ZIP 挂在尾部）—— 两层面具都得看穿。
+        ///
+        /// <para>修复前：光是名字那一层就被后缀白名单挡掉了（<c>.jp删除g</c> 不是已知归档后缀）；
+        /// 而只把后缀改对也还不够 —— 文件头是 <c>ftyp</c>，只看魔数照样认不出。
+        /// 现在两条判据一起上：文件头认不出 → 按"双面文件"读尾部
+        /// （与识别阶段同一个 <c>EmbeddedArchiveDetector</c>，不另造一套）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 续解_下一层名字和文件头都是假的_两层面具都要看穿()
+        {
+            // 现成的真实现场样本：假 MP4 头 + 尾部完整 ZIP（ZIP 里是加密的 7z 分卷）。
+            string polyglot = BuildPolyglotUserFile();
+            const string disguisedName = "user.jp删除g";
+
+            string outerStage = Path.Combine(_root, "polyglot-outer");
+            Directory.CreateDirectory(outerStage);
+            File.Copy(polyglot, Path.Combine(outerStage, disguisedName), overwrite: true);
+
+            string outer = BuildPackage("polyglot.7z", outerStage, disguisedName);
+
+            Harness harness = CreateHarness($"{OuterPassword}\n{InnerPassword}\n");
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            // ① 第一层之后**必须继续**：名字与文件头都没能拦住它，而且日志写明是按尾部认出来的。
+            Assert.True(
+                outcome.ContinuationLayers >= 1,
+                $"第一层之后没有续解（轮数 {outcome.Rounds}）—— 名字或文件头把下一层挡掉了");
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains(disguisedName, StringComparison.Ordinal) &&
+                        line.Contains("尾部内嵌归档", StringComparison.Ordinal));
+
+            // ② 最深处的内容物出来了（尾部 ZIP 里的加密分卷被解开）。
+            string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
+            Assert.NotEmpty(payloads);
+            Assert.Contains(payloads, path => File.ReadAllText(path) == InnerPayloadText);
+        }
+
         // ---------------------------------------------------------------- 第四步：没有内层包 = 回归
 
         [Fact]
@@ -1036,6 +1139,9 @@ namespace ArchiveFixer.Tests
             /// （MainViewModel.AppendLog 走的就是它），所以"有没有写这条日志"可以直接断言。
             /// </summary>
             public LogService Log { get; }
+
+            /// <summary>屏幕日志的文本（断言"写没写这条日志"用；与既有同类测试同一写法）。</summary>
+            public IEnumerable<string> LogTexts => Log.Logs.Select(item => item.DisplayText);
 
             public Task AddPathsAsync(params string[] paths) => Vm.AddPathsAsync(paths);
 

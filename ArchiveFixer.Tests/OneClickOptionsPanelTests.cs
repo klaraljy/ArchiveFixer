@@ -324,6 +324,115 @@ namespace ArchiveFixer.Tests
             Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), reloaded.SourceHandling);
         }
 
+        // ================================================================ ⑦ 弹窗要跟着设置走（第 33 条）
+
+        /// <summary>
+        /// 第 33 条：**弹窗里选的「删除操作」这一次就算数** —— 设置里是默认的「不动其余物」也一样，
+        /// 而且它照旧**不写设置文件**（没勾「存为默认」）。
+        ///
+        /// <para>为什么必须钉：老实现里 `PrepareRestHandlingForBatch` 只读设置，而弹窗里**根本没有这一项**
+        /// （用户 2026-09-25："一键处理的弹窗也是要随着现在的设置进行更新的"）——
+        /// 结果是"其余物到底删不删"在弹窗里既看不到、也改不了。</para>
+        /// </summary>
+        [Fact]
+        public async Task 弹窗里选彻底删除_这一次真的删且不写设置文件()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
+
+            string before = HashFile(harness.SettingsFilePath);
+
+            harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
+            {
+                PlacementMode = OutputPlacementMode.PerArchiveSubfolder,
+                TerminalLayout = TerminalLayoutMode.KeepLastFolder,
+                SourceHandling = SourceHandlingMode.MoveToRest,
+                RestHandling = RestHandlingModes.Delete,
+                SaveAsDefault = false
+            });
+
+            await harness.OneClick.RunAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.False(File.Exists(harness.SourcePath), "弹窗里选了「放入其余物 + 彻底删除」，源包必须被搬走并删掉");
+            Assert.False(
+                Directory.Exists(Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName)),
+                "彻底删除跑完不该还留着其余物目录");
+
+            // 没勾「存为默认」→ 设置文件与内存里的设置都不许被这一次污染。
+            Assert.Equal(before, HashFile(harness.SettingsFilePath));
+            Assert.Equal(RestHandlingModes.Keep, harness.Vm.Settings.RestHandlingAfterVerify);
+        }
+
+        /// <summary>
+        /// 反过来的一半：弹窗里的初值**取当前设置**（③页选了什么，弹窗打开时就是什么）。
+        /// </summary>
+        [Fact]
+        public void 弹窗初值_删除操作取设置里的当前档()
+        {
+            AppSettings settings = AppSettings.CreateDefault();
+
+            Assert.Equal(RestHandlingModes.Keep, OneClickRunOptions.FromSettings(settings).RestHandling);
+
+            settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+
+            Assert.Equal(RestHandlingModes.Delete, OneClickRunOptions.FromSettings(settings).RestHandling);
+
+            // 这句话日志与任务详情都读它，必须把这一档说清。
+            Assert.Contains(
+                "彻底删除",
+                OneClickRunOptions.FromSettings(settings).Describe(),
+                StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 弹窗自己的那份界面：**已退役的第三档一个字都不许剩**，新三档 + 那条关不掉的红提示都要在。
+        ///
+        /// <para>直接读 XAML 文本（与 `SpaceModeTests` / `InterfaceRefactorTests` 钉 ③页 的同一手法）：
+        /// 这一条挡的正是"模型改了、弹窗没跟上"——真机上用户点了「校验通过后删除」，
+        /// 而窗口代码只读另外两个单选，于是静默按「留在原地」跑。</para>
+        /// </summary>
+        [Fact]
+        public void 弹窗界面_三档删除操作齐全且退役那一档不在了()
+        {
+            string xaml = ReadRepositoryFile(Path.Combine("ArchiveFixer", "Views", "OneClickOptionsWindow.xaml"));
+
+            Assert.DoesNotContain("SourceDeleteAfterVerifyOption", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("校验通过后删除", xaml, StringComparison.Ordinal);
+
+            Assert.Contains("SourceKeepInPlaceOption", xaml, StringComparison.Ordinal);
+            Assert.Contains("原来的位置不动（默认）", xaml, StringComparison.Ordinal);
+
+            Assert.Contains("RestKeepOption", xaml, StringComparison.Ordinal);
+            Assert.Contains("RestRecycleOption", xaml, StringComparison.Ordinal);
+            Assert.Contains("RestDeleteOption", xaml, StringComparison.Ordinal);
+
+            // 第三档红字 + 常驻提示（提示没有关闭入口 = 只有改回选项它才消失）。
+            Assert.Contains("RestDeleteNotice", xaml, StringComparison.Ordinal);
+            Assert.Contains("DangerTextBrush", xaml, StringComparison.Ordinal);
+            Assert.Contains("彻底删除不可恢复", xaml, StringComparison.Ordinal);
+        }
+
+        /// <summary>从仓库根读一个文本文件（测试的工作目录是 bin\…，往上找到仓库那一层为止）。</summary>
+        private static string ReadRepositoryFile(string relativePath)
+        {
+            DirectoryInfo? directory = new(AppContext.BaseDirectory);
+
+            while (directory != null)
+            {
+                string candidate = Path.Combine(directory.FullName, relativePath);
+
+                if (File.Exists(candidate))
+                {
+                    return File.ReadAllText(candidate);
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new FileNotFoundException($"仓库里找不到这个文件：{relativePath}");
+        }
+
         // ================================================================ ③ 只弹一次
 
         /// <summary>

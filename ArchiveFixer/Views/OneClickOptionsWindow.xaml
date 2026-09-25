@@ -128,7 +128,7 @@
         </Border>
 
         <!-- ============ 要改才展开（默认收起） ============ -->
-        <Expander Header="本次改一下（落点 / 终端落法 / 源包处理）"
+        <Expander Header="本次改一下（落点 / 终端落法 / 源包操作 / 删除操作）"
                   x:Name="TweakExpander"
                   x:FieldModifier="public"
                   IsExpanded="False">
@@ -197,40 +197,73 @@
                         </StackPanel>
                     </GroupBox>
 
-                    <!-- ==================== 源包处理 ==================== -->
-                    <GroupBox Header="源包处理">
+                    <!-- ==================== 源包操作 ==================== -->
+                    <GroupBox Header="1 源包操作（成功之后，源包放哪）">
                         <StackPanel>
-                            <RadioButton x:Name="SourceMoveToRestOption"
-                                         x:FieldModifier="public"
-                                         GroupName="SourceHandling"
-                                         Checked="SourceHandling_Checked">
-                                <StackPanel>
-                                    <TextBlock Text="移入「其余物」（默认，推荐）" Style="{StaticResource BodyTextStyle}" />
-                                    <TextBlock Text="成功 + 校验通过之后才搬；失败 / 取消一律原地不动" Style="{StaticResource HintTextStyle}" />
-                                </StackPanel>
-                            </RadioButton>
-
                             <RadioButton x:Name="SourceKeepInPlaceOption"
                                          x:FieldModifier="public"
                                          GroupName="SourceHandling"
-                                         Margin="0,4,0,0"
                                          Checked="SourceHandling_Checked">
                                 <StackPanel>
-                                    <TextBlock Text="留在原地（不动源包）" Style="{StaticResource BodyTextStyle}" />
-                                    <TextBlock Text="传统解压器语义：源包一个字节都不搬" Style="{StaticResource HintTextStyle}" />
+                                    <TextBlock Text="原来的位置不动（默认）" Style="{StaticResource BodyTextStyle}" />
+                                    <TextBlock Text="程序一个字节都不碰你的源包" Style="{StaticResource HintTextStyle}" />
                                 </StackPanel>
                             </RadioButton>
 
-                            <RadioButton x:Name="SourceDeleteAfterVerifyOption"
+                            <RadioButton x:Name="SourceMoveToRestOption"
                                          x:FieldModifier="public"
                                          GroupName="SourceHandling"
                                          Margin="0,4,0,0"
                                          Checked="SourceHandling_Checked">
                                 <StackPanel>
-                                    <TextBlock Text="校验通过后删除" Style="{StaticResource BodyTextStyle}" />
-                                    <TextBlock Text="沿用清理源包的规则；失败一律不删" Style="{StaticResource HintTextStyle}" />
+                                    <TextBlock Text="放入其余物当中" Style="{StaticResource BodyTextStyle}" />
+                                    <TextBlock Text="成功 + 校验通过之后才搬；失败 / 取消一律原地不动" Style="{StaticResource HintTextStyle}" />
                                 </StackPanel>
                             </RadioButton>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- ==================== 删除操作（2026-09-25 第 33 条补进弹窗） ==================== -->
+                    <GroupBox Header="2 删除操作（成品目录里的「其余物」怎么办）">
+                        <StackPanel>
+                            <RadioButton x:Name="RestKeepOption"
+                                         x:FieldModifier="public"
+                                         GroupName="RestHandling"
+                                         Checked="RestHandling_Checked">
+                                <TextBlock Text="不动其余物（默认）" Style="{StaticResource BodyTextStyle}" />
+                            </RadioButton>
+
+                            <RadioButton x:Name="RestRecycleOption"
+                                         x:FieldModifier="public"
+                                         GroupName="RestHandling"
+                                         Margin="0,4,0,0"
+                                         Checked="RestHandling_Checked">
+                                <TextBlock Text="移入回收站（可还原；空间要等清空回收站才释放）" Style="{StaticResource BodyTextStyle}" />
+                            </RadioButton>
+
+                            <RadioButton x:Name="RestDeleteOption"
+                                         x:FieldModifier="public"
+                                         GroupName="RestHandling"
+                                         Margin="0,4,0,0"
+                                         Foreground="{StaticResource DangerTextBrush}"
+                                         Checked="RestHandling_Checked">
+                                <TextBlock Text="彻底删除，直接省空间" Style="{StaticResource BodyTextStyle}" Foreground="{StaticResource DangerTextBrush}" />
+                            </RadioButton>
+
+                            <!--
+                                选「彻底删除」时下面**常驻**一条提示（与 ③页 同一条口径）：
+                                没有关闭按钮，只有把选项改回去它才消失。
+                            -->
+                            <Border x:Name="RestDeleteNotice"
+                                    x:FieldModifier="public"
+                                    Style="{StaticResource WarningBannerStyle}"
+                                    Margin="0,8,0,0"
+                                    Visibility="Collapsed">
+                                <TextBlock Style="{StaticResource BannerTextStyle}"
+                                           Foreground="{StaticResource DangerTextBrush}"
+                                           TextWrapping="Wrap"
+                                           Text="⚠ 彻底删除不可恢复：任务成功后，它的其余物（中间件，以及按上面选择搬进去的源包）会被永久删除，不进回收站。失败 / 部分完成 / 取消的任务一个字节都不删。" />
+                            </Border>
                         </StackPanel>
                     </GroupBox>
 

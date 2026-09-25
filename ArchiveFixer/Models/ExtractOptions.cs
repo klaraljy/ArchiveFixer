@@ -182,6 +182,20 @@ namespace ArchiveFixer.Models
         /// </summary>
         public SourceHandlingMode SourceHandling { get; init; } = SourceHandlingMode.KeepInPlace;
 
+        /// <summary>
+        /// 其余物怎么处理（2026-09-25 第 33 条补进"本次选项"；③页那一栏是同一个词表）。
+        ///
+        /// <para>取值见 <see cref="RestHandlingModes"/>：<c>Keep</c>（默认，不动其余物）/
+        /// <c>RecycleBin</c>（移入回收站，可还原）/ <c>Delete</c>（彻底删除，省空间）。
+        /// 默认 = <see cref="RestHandlingModes.Keep"/>，与 <see cref="AppSettings.RestHandlingAfterVerify"/>
+        /// 的默认档一致。</para>
+        ///
+        /// <para>⚠ 用户 2026-09-25 的原话："一键处理的弹窗也是要随着现在的设置进行更新的" ——
+        /// 所以"本次选项"必须**完整覆盖**③页那两栏（源包操作 + 删除操作），
+        /// 不能只有源包操作、让"其余物到底删不删"在弹窗里无从选择也无从看到。</para>
+        /// </summary>
+        public string RestHandling { get; init; } = RestHandlingModes.Keep;
+
         /// <summary>面板上勾了「把本次选择存为默认」——**只有它为 true 时才允许写设置文件**。</summary>
         public bool SaveAsDefault { get; init; }
 
@@ -240,7 +254,8 @@ namespace ArchiveFixer.Models
                     customRoot),
                 CustomRoot = customRoot,
                 TerminalLayout = OutputPlacement.ParseTerminalLayoutMode(settings.TerminalLayoutMode),
-                SourceHandling = AppSettings.ParseSourceHandling(settings.SourceHandling)
+                SourceHandling = AppSettings.ParseSourceHandling(settings.SourceHandling),
+                RestHandling = RestHandlingModes.Normalize(settings.RestHandlingAfterVerify)
             };
         }
 
@@ -293,7 +308,8 @@ namespace ArchiveFixer.Models
                 : $"{DescribePlacement(PlacementMode, CustomRoot)}（未填指定位置，本次落点按设置值）";
 
             return $"落点：{placement}；终端落法：{DescribeTerminalLayout(TerminalLayout)}；" +
-                   $"源包处理：{DescribeSourceHandling(SourceHandling)}";
+                   $"源包处理：{DescribeSourceHandling(SourceHandling)}；" +
+                   $"其余物：{DescribeRestHandling(RestHandling)}";
         }
 
         /// <summary>落点模式的中文说明（含一个例子；与②「解压方式」页那两档的措辞同一口径）。</summary>
@@ -318,8 +334,24 @@ namespace ArchiveFixer.Models
         {
             return mode switch
             {
-                SourceHandlingMode.KeepInPlace => "留在原地（一个字节都不搬）",
-                _ => "移入其余物（默认）"
+                SourceHandlingMode.KeepInPlace => "留在原地（默认，一个字节都不搬）",
+                _ => "放入其余物当中"
+            };
+        }
+
+        /// <summary>
+        /// 「其余物」那一档的中文说法。
+        ///
+        /// <para>⚠ 措辞与确认框正文（<c>StatusText.OneClickConfirmRest*</c>）**同一口径**：
+        /// 都是"用户会看到的那句话"，只是详情不同 —— 一个给折叠区的单选框用，一个给正文那一行用。</para>
+        /// </summary>
+        public static string DescribeRestHandling(string? mode)
+        {
+            return RestHandlingModes.Normalize(mode) switch
+            {
+                RestHandlingModes.RecycleBin => "移入回收站（可还原）",
+                RestHandlingModes.Delete => "彻底删除（直接省空间，不可恢复）",
+                _ => "不动其余物（默认）"
             };
         }
 

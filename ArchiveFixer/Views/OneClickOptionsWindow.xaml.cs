@@ -224,6 +224,7 @@ namespace ArchiveFixer.Views
                     ? TerminalLayoutMode.UseArchiveName
                     : TerminalLayoutMode.KeepLastFolder,
                 SourceHandling = ResolveSourceHandling(),
+                RestHandling = ResolveRestHandling(),
                 SaveAsDefault = SaveAsDefaultBox.IsChecked == true,
                 SuppressPanelNextTime = SuppressPanelBox.IsChecked == true
             };
@@ -336,9 +337,22 @@ namespace ArchiveFixer.Views
             TerminalKeepLastFolderOption.IsChecked = seed.TerminalLayout != TerminalLayoutMode.UseArchiveName;
 
             // 2026-09-25 第 32 条之后只剩两档（原地不动 / 放入其余物）：第三档"校验通过后删除"已删掉，
-            // 要删源包改成"放入其余物 + ③页「删除操作」"（语义更清楚、选项少一个）。
+            // 要删源包改成"放入其余物 + 删除操作"（语义更清楚、选项少一个）。
             SourceKeepInPlaceOption.IsChecked = seed.SourceHandling == SourceHandlingMode.KeepInPlace;
             SourceMoveToRestOption.IsChecked = seed.SourceHandling != SourceHandlingMode.KeepInPlace;
+
+            /*
+             * 「删除操作」三档（第 33 条补进弹窗）：初值取当前设置 —— 用户 2026-09-25 的原话是
+             * "一键处理的弹窗也是要随着现在的设置进行更新的"，所以弹窗里必须**看得见也改得了**
+             * 这一次的其余物会怎么处理，不能只让它在正文里被动显示一行。
+             */
+            string restHandling = RestHandlingModes.Normalize(seed.RestHandling);
+
+            RestKeepOption.IsChecked = string.Equals(restHandling, RestHandlingModes.Keep, StringComparison.Ordinal);
+            RestRecycleOption.IsChecked = string.Equals(restHandling, RestHandlingModes.RecycleBin, StringComparison.Ordinal);
+            RestDeleteOption.IsChecked = string.Equals(restHandling, RestHandlingModes.Delete, StringComparison.Ordinal);
+
+            UpdateRestDeleteNotice();
 
             /*
              * 两个勾选项的预置口径（2026-09-24 第 17 条之后）：
@@ -368,7 +382,7 @@ namespace ArchiveFixer.Views
         {
             /*
              * ⚠ 判据写在**会动源文件**的那一档上，兜底留在"什么都不做"那一档（2026-09-25 第 32 条）：
-             * 反过来写（"没勾留在原地就当移入其余物"）时，任何一次界面状态错乱都会变成
+             * 反过来写（"没勾留在原地就当放入其余物"）时，任何一次界面状态错乱都会变成
              * "用户没同意过，源包却被搬走了"—— 而搬走是不可逆的。默认档也已经是「留在原地」。
              */
             if (SourceMoveToRestOption.IsChecked == true)
@@ -377,6 +391,44 @@ namespace ArchiveFixer.Views
             }
 
             return SourceHandlingMode.KeepInPlace;
+        }
+
+        /// <summary>
+        /// 折叠区里选的「删除操作」是哪一档。
+        ///
+        /// <para>兜底同样落在"什么都不做"那一档（<see cref="RestHandlingModes.Keep"/>）——
+        /// 三档里只有它不可能删掉任何东西。</para>
+        /// </summary>
+        private string ResolveRestHandling()
+        {
+            if (RestDeleteOption.IsChecked == true)
+            {
+                return RestHandlingModes.Delete;
+            }
+
+            if (RestRecycleOption.IsChecked == true)
+            {
+                return RestHandlingModes.RecycleBin;
+            }
+
+            return RestHandlingModes.Keep;
+        }
+
+        /// <summary>
+        /// 选「彻底删除」时那条红字提示常驻显示（与 ③页 同一条口径：**没有关闭按钮**，
+        /// 只有把选项改回去它才消失）。
+        /// </summary>
+        private void UpdateRestDeleteNotice()
+        {
+            RestDeleteNotice.Visibility = RestDeleteOption.IsChecked == true
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        private void RestHandling_Checked(object sender, RoutedEventArgs e)
+        {
+            UpdateRestDeleteNotice();
+            Option_Changed(sender, e);
         }
 
         /// <summary>

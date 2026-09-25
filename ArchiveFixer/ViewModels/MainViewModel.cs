@@ -2670,6 +2670,12 @@ namespace ArchiveFixer.ViewModels
             Settings.TerminalLayoutMode = OutputPlacement.ToSettingValue(options.TerminalLayout);
             Settings.SourceHandling = AppSettings.ToSourceHandlingValue(options.SourceHandling);
 
+            /*
+             * 「删除操作」那一档（2026-09-25 第 33 条补）：弹窗的折叠区里也能改它，
+             * 勾了「存为默认」就一起写回 —— 否则用户下次会发现"我在弹窗里选的没被记住"。
+             */
+            Settings.RestHandlingAfterVerify = RestHandlingModes.Normalize(options.RestHandling);
+
             Settings.Normalize();
 
             /*

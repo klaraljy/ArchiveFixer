@@ -161,6 +161,46 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// 第 33 条：「其余物」那一行**跟着本次选项走**，不是照着设置念 ——
+        /// 用户在确认框折叠区里把「删除操作」改成彻底删除之后，正文必须说"会自动彻底删除"；
+        /// 没改（默认档）时说"不自动删除"。
+        ///
+        /// <para>为什么必须钉：正文那行原来只读设置，于是"弹窗里改了这一档"与"正文说的"会打架，
+        /// 而用户正是靠这一行决定"要不要按开始处理"（用户 2026-09-25：
+        /// "一键处理的弹窗也是要随着现在的设置进行更新的"）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 正文的其余物那一行_跟着本次选项里的删除操作档()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask task = AddTask(harness, CreateSourceFile("222.7z"));
+
+            // 设置里是默认档（不动其余物）：正文照它说。
+            OneClickConfirmFacts bySettings = await harness.Extraction.BuildConfirmFactsAsync(
+                new[] { task },
+                OneClickRunOptions.FromSettings(harness.Vm.Settings),
+                null);
+
+            Assert.Contains("不自动删除", bySettings.RestEcho, StringComparison.Ordinal);
+
+            // 本次选项改成"彻底删除"：正文必须跟着改口。
+            var chosen = new OneClickRunOptions
+            {
+                PlacementMode = OutputPlacementMode.PerArchiveSubfolder,
+                TerminalLayout = TerminalLayoutMode.KeepLastFolder,
+                RestHandling = RestHandlingModes.Delete
+            };
+
+            OneClickConfirmFacts byChoice = await harness.Extraction.BuildConfirmFactsAsync(
+                new[] { task },
+                chosen,
+                null);
+
+            Assert.Contains("自动彻底删除", byChoice.RestEcho, StringComparison.Ordinal);
+            Assert.DoesNotContain("不自动删除", byChoice.RestEcho, StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// 落点算不出来时（选了"指定位置"却给了一个**相对路径**），正文**如实说明原因**，
         /// 绝不编一个看起来正常的假路径让用户放心。
         ///
