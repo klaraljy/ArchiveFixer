@@ -275,6 +275,118 @@ namespace ArchiveFixer.Tests
             return bytes;
         }
 
+        /// <summary>
+        /// **尾部挂 RAR / 7z**（用户 2026-09-25 第 38 条追加："尾部挂 RAR/7z 的识别还是空白 → 快"）。
+        ///
+        /// <para>形状：`封面.jpg`（20 MB 前缀，**超过引擎自己的容忍度**）+ 一整个 `资料.rar` / `资料.7z`。
+        /// 实测这种前缀下 7-Zip 与 UnRAR 都会报"不是归档"，所以必须我们自己扫签名定位起点、抠出来再解。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("rar", "RAR5", ".rar")]
+        [InlineData("7z", "7Z", ".7z")]
+        public async Task 尾部挂rar或7z_扫签名定位起点_抠出来能解(string container, string expectedFormat, string expectedExtension)
+        {
+            RequireSevenZip();
+
+            const int prefixBytes = 20 * 1024 * 1024;
+
+            string payload = Path.Combine(_root, $"payload-{container}.bin");
+            var payloadBytes = new byte[3 * 1024 * 1024];
+            new Random(41).NextBytes(payloadBytes);
+            File.WriteAllBytes(payload, payloadBytes);
+
+            string archive = Path.Combine(_root, $"资料.{container}");
+
+            if (container == "rar")
+            {
+                RunWinRar("a", "-m0", "-idq", archive, Path.GetFileName(payload));   // 只给文件名：给绝对路径 WinRAR 会把整条路径存进去
+            }
+            else
+            {
+                Run7z("a", "-t7z", "-mx0", archive, Path.GetFileName(payload));
+            }
+
+            byte[] archiveBytes = File.ReadAllBytes(archive);
+            byte[] prefix = new byte[prefixBytes];
+            new Random(43).NextBytes(prefix);
+
+            string doubleSided = Path.Combine(_root, $"封面-{container}-带包.jpg");
+
+            using (var stream = File.Create(doubleSided))
+            {
+                stream.Write(prefix);
+                stream.Write(archiveBytes);
+            }
+
+            // ① 识别：扫签名定位起点。
+            DetectResult detected = await new ArchiveDetectService().DetectAsync(doubleSided);
+
+            Assert.True(detected.IsArchive, $"图片前缀 + 尾部 {container} 必须被当成归档处理");
+            Assert.Equal(expectedFormat, detected.Format);
+            Assert.Equal(expectedExtension, detected.SuggestedExtension);
+            Assert.Equal(prefixBytes, detected.EmbeddedArchiveOffset);
+            Assert.Equal(prefixBytes + archiveBytes.Length, detected.EmbeddedArchiveEnd);
+            Assert.False(detected.EmbeddedDirectReadSupported, "RAR / 7z 不走内置直读（它只解 ZIP）");
+
+            // ② 抠出 [偏移, 末尾) 交给引擎（管线就是这么做的）→ 内容必须解得出来。
+            string carved = Path.Combine(_root, $"carved-{container}.{container}");
+            File.WriteAllBytes(carved, archiveBytes);
+
+            string output = Path.Combine(_root, $"tail-{container}-out");
+            Directory.CreateDirectory(output);
+
+            ArchiveOperationResult extract = await new SevenZipEngine().ExtractAsync(
+                new ArchiveRequest { ArchivePath = carved, OutputPath = output },
+                new ExtractOptions(),
+                CancellationToken.None);
+
+            Assert.True(extract.Success, extract.Message);
+            Assert.Equal(payloadBytes, File.ReadAllBytes(Path.Combine(output, $"payload-{container}.bin")));
+        }
+
+        private void RunWinRar(params object[] args)
+        {
+            string? rar = LocateWinRar();
+
+            if (rar == null)
+            {
+                throw new InvalidOperationException("测试机上没装 WinRAR（Rar.exe），本用例无法造 RAR 样本。");
+            }
+
+            var psi = new ProcessStartInfo(rar)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = _root
+            };
+
+            foreach (object arg in args)
+            {
+                psi.ArgumentList.Add(arg?.ToString() ?? string.Empty);
+            }
+
+            using Process process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 Rar.exe");
+
+            string stdout = process.StandardOutput.ReadToEnd();
+            string stderr = process.StandardError.ReadToEnd();
+
+            Assert.True(process.WaitForExit(120_000), "Rar.exe 超时");
+            Assert.True(process.ExitCode == 0, $"Rar.exe 失败（{process.ExitCode}）：{stdout}{stderr}");
+        }
+
+        private static string? LocateWinRar()
+        {
+            string[] candidates =
+            {
+                @"C:\Program Files\WinRAR\Rar.exe",
+                @"C:\Program Files (x86)\WinRAR\Rar.exe"
+            };
+
+            return candidates.FirstOrDefault(File.Exists);
+        }
+
         // ================================================================ 工具
 
         private void Run7z(params object[] args)

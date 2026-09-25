@@ -1480,28 +1480,58 @@ namespace ArchiveFixer.Extraction
 
             if (entry.Method == 0)
             {
-                long remaining = entry.CompressedSize;
+                /*
+                 * 存（Copy）条目：**读写下重叠**地拷（用户 2026-09-25 第 38 条追加："做"）。
+                 *
+                 * 为什么值得：老的写法是"读一块 → 写一块 → 读一块…"严格串行，而在 U 盘 / 机械盘上
+                 * 每一次"读→写"换向都要等一次寻道与旋转延迟，**两边的等待时间会叠加**。
+                 * 双缓冲让"下一次读"和"这一次写"同时在飞，USB 上通常能把有效吞吐往"两者较大者"推。
+                 * ⛔ 只对**原样拷贝**这条路做：deflate / AES 那两条路的读要经过解压/解密流，
+                 * 提前读没有意义（CPU 才是那两条路的主导）。
+                 */
+                byte[] bufferA = new byte[CopyBufferSize];
+                byte[] bufferB = new byte[CopyBufferSize];
 
-                while (remaining > 0)
+                long remaining = entry.CompressedSize;
+                int length = ReadAtMost(source, bufferA, remaining);
+
+                long copied = 0;
+
+                while (length > 0)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    int read = source.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                    long remainingAfter = remaining - length;
+                    Task<int>? pendingRead = remainingAfter > 0
+                        ? ReadAtMostAsync(source, bufferB, remainingAfter, cancellationToken)
+                        : null;
 
-                    if (read <= 0)
-                    {
-                        throw new IOException($"条目 {entry.Name} 的数据在归档区间里就读完了（文件可能被截断）");
-                    }
+                    target.Write(bufferA, 0, length);
 
-                    target.Write(buffer, 0, read);
-
-                    remaining -= read;
-                    entryWritten += read;
-                    writtenBytes += read;
+                    remaining -= length;
+                    copied += length;
+                    entryWritten += length;
+                    writtenBytes += length;
 
                     ReportIfDue(progress, stopwatch, ref nextReportAtMs, writtenBytes, totalBytes);
+
+                    if (pendingRead == null)
+                    {
+                        break;
+                    }
+
+                    length = pendingRead.GetAwaiter().GetResult();
+
+                    // 双缓冲换手：刚读完的那块成为下一轮要写的那块。
+                    (bufferA, bufferB) = (bufferB, bufferA);
                 }
 
+                if (remaining > 0)
+                {
+                    throw new IOException($"条目 {entry.Name} 的数据在归档区间里就读完了（文件可能被截断）");
+                }
+
+                _ = copied;
                 return entryWritten;
             }
 
@@ -1638,6 +1668,38 @@ namespace ArchiveFixer.Extraction
         }
 
         // ================================================================ 进度 / 回滚 / 小工具
+
+        /// <summary>
+        /// 读一块（最多 <paramref name="maxBytes"/>，最多一个缓冲那么多）；读到 0 表示数据提前结束
+        /// —— 调用方按"文件被截断"处理（与老的串行写法同一个判据）。
+        /// </summary>
+        private static int ReadAtMost(FileStream source, byte[] buffer, long maxBytes)
+        {
+            int want = (int)Math.Min(buffer.Length, maxBytes);
+
+            return want <= 0 ? 0 : source.Read(buffer, 0, want);
+        }
+
+        /// <summary>
+        /// 异步版的 <see cref="ReadAtMost(FileStream, byte[], long)"/>：让"下一次读"与"这一次写"重叠
+        /// （用户 2026-09-25 第 38 条追加：读写下重叠，做）。
+        ///
+        /// <para>源流是按 <c>RandomAccess</c> 打开的（直读的读法本身是随机的），没开 <c>useAsync</c>，
+        /// 于是 <c>ReadAsync</c> 走线程池 —— 对"与主线程的写重叠"来说够了，且不改变语义：
+        /// 它仍然只是把这一块读进缓冲，什么时候真正完成由 <c>GetResult()</c> 那一步决定。</para>
+        /// </summary>
+        private static Task<int> ReadAtMostAsync(
+            FileStream source,
+            byte[] buffer,
+            long maxBytes,
+            CancellationToken cancellationToken)
+        {
+            int want = (int)Math.Min(buffer.Length, maxBytes);
+
+            return want <= 0
+                ? Task.FromResult(0)
+                : source.ReadAsync(buffer.AsMemory(0, want), cancellationToken).AsTask();
+        }
 
         private static void ReportProgress(IProgress<int>? progress, int percent)
         {

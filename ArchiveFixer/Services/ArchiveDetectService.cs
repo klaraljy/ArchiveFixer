@@ -79,6 +79,21 @@ namespace ArchiveFixer.Services
                     {
                         return embeddedResult;
                     }
+
+                    /*
+                     * ZIP 那条路（尾部 EOCD 反推起点）没命中时，再从头扫一遍 RAR / 7z 的签名
+                     * （用户 2026-09-25 第 38 条追加）。
+                     *
+                     * 为什么必须有这一档：RAR / 7z 的目录结构**不支持**从尾部反推起点，
+                     * 而实测"封面.jpg + 资料.rar"这种形状在前缀 20 MB 时，7-Zip 与 UnRAR
+                     * 都直接报"不是归档"—— 不自己定位起点、抠出来，就永远解不了。
+                     */
+                    DetectResult? tailResult = DetectTailArchive(filePath, headerResult);
+
+                    if (tailResult != null)
+                    {
+                        return tailResult;
+                    }
                 }
 
                 return headerResult;
@@ -95,6 +110,57 @@ namespace ArchiveFixer.Services
             {
                 return CreateUnknownResult("识别失败：" + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 文件头不认识、ZIP 也没在尾部命中时，再从头扫 RAR / 7z 的签名（用户 2026-09-25 第 38 条追加）。
+        ///
+        /// <para>命中时的结论与 ZIP 那条路**同一形状**：<see cref="DetectResult.Format"/> 是真实格式、
+        /// <see cref="DetectResult.EmbeddedArchiveOffset"/> 是起点，管线照旧"抠出 [起点, 末尾) → 交给引擎"。</para>
+        ///
+        /// <para>两点如实说明：①**终点取文件末尾** —— RAR / 7z 没有 ZIP 那种能算出精确终点的结构，
+        /// 而两者都能容忍归档结束标记之后的少量尾巴（抠出来的副本照旧能解）；
+        /// ②<see cref="DetectResult.EmbeddedDirectReadSupported"/> 一定是 <c>false</c> ——
+        /// 内置直读器只会解 ZIP，RAR / 7z 必须走"抠取 + 引擎"。</para>
+        /// </summary>
+        private DetectResult? DetectTailArchive(string filePath, DetectResult headerResult)
+        {
+            TailArchiveSignature? signature = TailArchiveScanner.Find(filePath);
+
+            if (signature == null)
+            {
+                return null;
+            }
+
+            long end = headerResult.EmbeddedArchiveEnd;
+
+            if (end <= signature.Offset)
+            {
+                try
+                {
+                    end = new FileInfo(filePath).Length;
+                }
+                catch
+                {
+                    end = 0;
+                }
+            }
+
+            return new DetectResult
+            {
+                Format = signature.Format,
+                SuggestedExtension = signature.SuggestedExtension,
+                IsArchive = true,
+                IsKnownFormat = true,
+                IsProbablyEncrypted = false,
+                Message = signature.Describe(),
+                HeaderHex = headerResult.HeaderHex,
+                Confidence = 80,
+                EmbeddedArchiveOffset = signature.Offset,
+                EmbeddedArchiveEnd = end,
+                EmbeddedDirectReadSupported = false,
+                EmbeddedDirectReadReason = "内置直读器只解 ZIP；RAR / 7z 这条走「抠取 + 引擎」"
+            };
         }
 
         /// <summary>
