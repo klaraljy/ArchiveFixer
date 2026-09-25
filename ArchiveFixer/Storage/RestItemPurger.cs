@@ -35,7 +35,11 @@ namespace ArchiveFixer.Storage
     }
 
     /// <summary>
-    /// 危险模式（红按钮）的**唯一执行体**：把一个任务自己的 `其余物` **彻底删除**（不进回收站）。
+    /// 「删除操作」那一档的**唯一执行体**：按用户选的方式处理一个任务自己的 `其余物`
+    /// （<see cref="DeleteMode.RecycleBin"/> = 移入回收站，可还原；<see cref="DeleteMode.Permanent"/> = 彻底删除）。
+    ///
+    /// <para>⚠ 2026-09-25 第 32 条起它不再只服务"危险模式"（那套已整块退役）：③页的「删除操作」
+    /// 三档里后两档都走这里，<b>五道门槛一个字不改</b>。</para>
     ///
     /// <para><b>门槛（五条，缺一不可 —— 这是那条红线"失败不删任何东西"的落点）</b>：</para>
     /// <list type="number">
@@ -72,16 +76,21 @@ namespace ArchiveFixer.Storage
             _probe = probe ?? WindowsDeleteFileSystemProbe.Instance;
         }
 
-        /// <summary>删除理由（写进删除日志）。必须写清"为什么可以删"与"进了哪里"。</summary>
-        public const string DangerModeReason =
-            "危险模式：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 彻底删除本任务的其余物（源包 + 中间件，不进回收站）";
+        /// <summary>彻底删除那一档的理由（写进删除日志）。必须写清"为什么可以删"与"进了哪里"。</summary>
+        public const string AutoPurgeReason =
+            "删除操作=彻底删除：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 彻底删除本任务的其余物（源包 + 中间件，不进回收站）";
+
+        /// <summary>移入回收站那一档的理由。</summary>
+        public const string AutoRecycleReason =
+            "删除操作=移入回收站：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 把本任务的其余物（源包 + 中间件）移入回收站（可还原；空间要等清空回收站才释放）";
 
         /// <summary>
         /// 试着删除一个任务的其余物。**任何一条门槛不成立都返回"没动"**，并给出原因（不抛异常）。
         /// </summary>
         /// <param name="task">目标任务。</param>
         /// <param name="cancelled">这一刻是不是已经被取消（用户按了「取消当前」/「停止后续」）。</param>
-        public RestPurgeOutcome Purge(ArchiveTask? task, bool cancelled)
+        /// <param name="mode">怎么处理：<see cref="DeleteMode.RecycleBin"/> 或 <see cref="DeleteMode.Permanent"/>。</param>
+        public RestPurgeOutcome Purge(ArchiveTask? task, bool cancelled, DeleteMode mode = DeleteMode.Permanent)
         {
             if (task == null)
             {
@@ -146,8 +155,10 @@ namespace ArchiveFixer.Storage
 
             // logSink 传 null：删除日志由调用方（协调器）原样写进界面与文件日志，
             // 不在这里另开一个落点（两处各写一份会让日志出现两个时间戳）。
+            string reason = mode == DeleteMode.RecycleBin ? AutoRecycleReason : AutoPurgeReason;
+
             var service = new RecycleBinService(_executor, null, _probe);
-            DeleteRequest request = new DeleteRequest(directory, DangerModeReason);
+            DeleteRequest request = new DeleteRequest(directory, reason);
 
             DeleteResult result;
 
@@ -159,8 +170,8 @@ namespace ArchiveFixer.Storage
                     {
                         AllowedRoot = allowedRoot,
                         UserConfirmed = true,
-                        Mode = DeleteMode.Permanent,
-                        Reason = DangerModeReason
+                        Mode = mode,
+                        Reason = reason
                     });
             }
             catch (Exception ex)
@@ -182,7 +193,9 @@ namespace ArchiveFixer.Storage
                     Attempted = true,
                     Succeeded = false,
                     Directory = directory,
-                    Message = $"{name}：其余物没能删掉（{failure}）—— 内容物不受影响，但空间没有回来",
+                    Message = mode == DeleteMode.RecycleBin
+                        ? $"{name}：其余物没能移入回收站（{failure}）—— 内容物不受影响，其余物仍在原处"
+                        : $"{name}：其余物没能删掉（{failure}）—— 内容物不受影响，但空间没有回来",
                     LogLines = logLines
                 };
             }
@@ -194,9 +207,11 @@ namespace ArchiveFixer.Storage
                 Directory = directory,
                 FreedBytes = result.FreedBytes,
                 EntryCount = outcome?.EntryCount ?? 0,
-                Message =
-                    $"{name}：危险模式已彻底删除其余物 {directory}"
-                    + $"（{outcome?.EntryCount ?? 0} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，不进回收站）",
+                Message = mode == DeleteMode.RecycleBin
+                    ? $"{name}：其余物已移入回收站 {directory}"
+                      + $"（{outcome?.EntryCount ?? 0} 个条目 / {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，可还原）"
+                    : $"{name}：其余物已彻底删除 {directory}"
+                      + $"（{outcome?.EntryCount ?? 0} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，不进回收站）",
                 LogLines = logLines
             };
         }

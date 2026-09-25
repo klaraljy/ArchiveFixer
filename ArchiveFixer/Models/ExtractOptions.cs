@@ -174,8 +174,13 @@ namespace ArchiveFixer.Models
         /// <summary>终端落法（规格 §3.1 的那个可选项）。</summary>
         public TerminalLayoutMode TerminalLayout { get; init; } = TerminalLayoutMode.KeepLastFolder;
 
-        /// <summary>源包处理档（规格 §3.4 的三档）。</summary>
-        public SourceHandlingMode SourceHandling { get; init; } = SourceHandlingMode.MoveToRest;
+        /// <summary>
+        /// 源包处理档（2026-09-25 第 32 条起**只剩两档**：留在原地 / 放入其余物当中）。
+        ///
+        /// <para>默认 = <see cref="SourceHandlingMode.KeepInPlace"/>，与 <see cref="AppSettings.SourceHandling"/>
+        /// 的默认档一致（一个什么都不做的兜底，绝不能让"没填这一格"变成搬走用户的源包）。</para>
+        /// </summary>
+        public SourceHandlingMode SourceHandling { get; init; } = SourceHandlingMode.KeepInPlace;
 
         /// <summary>面板上勾了「把本次选择存为默认」——**只有它为 true 时才允许写设置文件**。</summary>
         public bool SaveAsDefault { get; init; }
@@ -314,7 +319,6 @@ namespace ArchiveFixer.Models
             return mode switch
             {
                 SourceHandlingMode.KeepInPlace => "留在原地（一个字节都不搬）",
-                SourceHandlingMode.DeleteAfterVerify => "校验通过后删除（走既有的清理源包规则）",
                 _ => "移入其余物（默认）"
             };
         }

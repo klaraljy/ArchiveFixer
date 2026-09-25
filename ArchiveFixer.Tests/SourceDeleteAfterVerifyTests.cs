@@ -16,7 +16,7 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 源包处理档 <see cref="SourceHandlingMode.DeleteAfterVerify"/>（「校验通过后删除」）的回归测试
+    /// 「源包被删掉」这条路的回归测试（2026-09-25 第 32 条之后 = 源包放入其余物 + 删除操作=彻底删除；旧档名 DeleteAfterVerify 已删）
     /// （用户 2026-09-24 第 19.4 条）。
     ///
     /// <para>
@@ -29,7 +29,7 @@ namespace ArchiveFixer.Tests
     /// <c>ScanFile</c>）。真正的原因是**形状**：
     /// 文件夹里的包绝大多数是"第一层只出内层包"的多层包（假 MP4 + 尾部 ZIP + 内层加密分卷），
     /// 于是它们被记账成"留到链结束后补做"；而链结束后的那一段（<c>RunDeferredSourceMoveWork</c>）
-    /// 老代码只实现了 <c>MoveToRest</c>，<c>DeleteAfterVerify</c> 走到那里写一句"按该档不搬源包"就返回了 ——
+    /// 老代码只实现了 <c>MoveToRest</c>，那条"删源包"的老档走到那里写一句"按该档不搬源包"就返回了 ——
     /// **等于什么都没做**。单个文件那种"第一层直接出内容物"的形状不经过延期，所以当场就删掉了。
     /// </para>
     /// </summary>
@@ -68,7 +68,12 @@ namespace ArchiveFixer.Tests
         public async Task 文件夹展开出的单个包_校验通过后源文件被删()
         {
             Harness harness = CreateHarness(settings =>
-                settings.SourceHandling = nameof(SourceHandlingMode.DeleteAfterVerify));
+            {
+                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
+                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
 
             string source = harness.CreateSourceInFolder("folder", "pack.7z");
 
@@ -84,8 +89,7 @@ namespace ArchiveFixer.Tests
             Assert.False(File.Exists(source), "文件夹展开出来的包成功之后，源文件必须被删");
             Assert.Contains(
                 harness.Log.Logs,
-                x => x.Message.Contains("清理源包", StringComparison.Ordinal) &&
-                     x.Message.Contains("已删除 1 个源文件", StringComparison.Ordinal));
+                x => x.Message.Contains("其余物已彻底删除", StringComparison.Ordinal));
         }
 
         // ================================================================ ② 失败：一律不删
@@ -94,7 +98,12 @@ namespace ArchiveFixer.Tests
         public async Task 失败_一个字节都不删()
         {
             Harness harness = CreateHarness(settings =>
-                settings.SourceHandling = nameof(SourceHandlingMode.DeleteAfterVerify));
+            {
+                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
+                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
 
             string source = harness.CreateSourceInFolder("folder", "pack.7z");
             ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
@@ -118,7 +127,12 @@ namespace ArchiveFixer.Tests
         public async Task 校验未通过_一个字节都不删_而且日志里说清为什么()
         {
             Harness harness = CreateHarness(settings =>
-                settings.SourceHandling = nameof(SourceHandlingMode.DeleteAfterVerify));
+            {
+                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
+                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
 
             string source = harness.CreateSourceInFolder("folder", "pack.7z");
             ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
@@ -148,7 +162,12 @@ namespace ArchiveFixer.Tests
         public async Task 分卷组成功_整组被删()
         {
             Harness harness = CreateHarness(settings =>
-                settings.SourceHandling = nameof(SourceHandlingMode.DeleteAfterVerify));
+            {
+                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
+                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
 
             string folder = Path.Combine(_root, "src", "volumes");
             Directory.CreateDirectory(folder);
@@ -179,7 +198,12 @@ namespace ArchiveFixer.Tests
         public async Task 取消_一个字节都不删()
         {
             Harness harness = CreateHarness(settings =>
-                settings.SourceHandling = nameof(SourceHandlingMode.DeleteAfterVerify));
+            {
+                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
+                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
 
             string source = harness.CreateSourceInFolder("folder", "pack.7z");
             ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
@@ -216,7 +240,11 @@ namespace ArchiveFixer.Tests
             string sevenZip = SevenZipFactAttribute.LocateSevenZipPath();
 
             Harness harness = CreateHarness(
-                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteAfterVerify),
+                settings =>
+                {
+                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+                },
                 engine: new SevenZipEngine());
 
             string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
@@ -260,9 +288,23 @@ namespace ArchiveFixer.Tests
 
                 // 源包被删（修复前这里是"还在"）。
                 Assert.False(File.Exists(outerArchive), "链跑完、内容物出来之后，删除档必须把源包删掉");
+
+                /*
+                 * ⚠ 这一条才是本用例的**牙齿**（2026-09-25 第 32 条收尾时补的）：
+                 * 上面那条 `File.Exists(outerArchive)` 光看"源包还在不在原位"是**判不出**删除有没有发生的 ——
+                 * 源包按「源包操作」被搬进其余物之后原位也没有了，于是"该删的没删"能一路绿灯。
+                 * 其余物目录本身在不在，才是用户看到的那件事（"源包确实没有了，但是其余物还在"）。
+                 */
+                Assert.False(string.IsNullOrWhiteSpace(task.RestDirectoryPath), "前提：这一单必须记下了其余物位置");
+                Assert.False(
+                    Directory.Exists(task.RestDirectoryPath),
+                    $"选了彻底删除，链尾必须把其余物那一份删掉，实际还在：{task.RestDirectoryPath}");
+
+                // 第 32 条之后这句话改口径了：源包先按「源包操作」进其余物，链尾再按「删除操作」处理那一份
+                // 其余物 —— 日志如实写"链结束后的其余物处理"，不再是旧的"链结束后的清理"。
                 Assert.Contains(
                     harness.Log.Logs,
-                    x => x.Message.Contains("链结束后的清理", StringComparison.Ordinal));
+                    x => x.Message.Contains("链结束后的其余物处理", StringComparison.Ordinal));
             }
             finally
             {
@@ -278,7 +320,12 @@ namespace ArchiveFixer.Tests
         public async Task 一键处理_链里有一层校验没过_不删源包()
         {
             Harness harness = CreateHarness(settings =>
-                settings.SourceHandling = nameof(SourceHandlingMode.DeleteAfterVerify));
+            {
+                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
+                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
 
             string source = harness.CreateSourceInFolder("folder", "outer.7z");
             ArchiveTask task = harness.AddTask(source);

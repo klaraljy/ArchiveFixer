@@ -450,7 +450,8 @@ namespace ArchiveFixer.Tests
 
             Harness harness = CreateHarness(settings =>
             {
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);   // 默认档
+                // 显式选上"放入其余物"（第 32 条之后设置里的默认档是"留在原地"，本用例要钉的是搬走那条路）
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
                 settings.AutoScanAfterDrop = true;
             });
 
@@ -503,7 +504,7 @@ namespace ArchiveFixer.Tests
         /// </para>
         /// </summary>
         [Fact]
-        public async Task 一键处理_需要修正后缀时会先出预览_且无UI宿主不会偷偷改名()
+        public async Task 一键处理_需要修正后缀时自动改名_且手动档仍然先预览()
         {
             string disguised = CopyToWorkDir(_samples.Fam3bWholeArchiveMp4, "整包.mp4");
             string before = HashFile(disguised);
@@ -521,21 +522,33 @@ namespace ArchiveFixer.Tests
 
             await harness.OneClick.RunAsync();
 
+            /*
+             * 2026-09-25 用户第 32 条改了这条口径（原话："这个一键处理自己会自动改名自动解压，
+             * 为什么遇到这种改名的压缩包还要我两次确认……那种情况只有手动档才会有"）：
+             * 一键档**自动改名、不弹预览窗口**（所以在无 UI 宿主里也照样跑得下去），逐个改名仍逐条写日志；
+             * 手动档（②页/右键那几条改名命令）**照旧先出预览** —— 那条不变量没有消失，只是不再管一键档。
+             */
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("个任务需要修正后缀，先出预览", StringComparison.Ordinal));
+                line => line.Contains("个任务需要修正后缀，自动执行（不弹预览）", StringComparison.Ordinal));
 
-            // 接着它停在"把预览窗口显出来"那一步（无 UI 宿主里没有 Application.Current），
-            // 于是整批以失败告终 —— 这正是"无预览就不改名"的行为证据。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("一键处理失败", StringComparison.Ordinal));
+                line => line.Contains("自动修正后缀", StringComparison.Ordinal));
 
-            // 没弹成的窗口 = 本次一键处理没往下走；**绝不许**在没预览的情况下把文件改了。
-            Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(disguised)!, "整包.zip")),
-                "没有经过预览就改名 = 违反不变量 3");
-            Assert.True(File.Exists(disguised));
-            Assert.Equal(before, HashFile(disguised));
+            /*
+             * 这个样本是"整个文件其实是个 ZIP、名字却叫 .mp4"（`Fam3b`）→ 属于**该改**的那一类：
+             * 一键档现在真的把它改了，而且逐条留痕（旧名 -> 新名）。
+             * 对照：族 1 / 族 2 那种"视频尾部挂 ZIP"的双面文件**不改名**，那条红线由本类上面几条用例钉着。
+             */
+            string renamed = Path.Combine(Path.GetDirectoryName(disguised)!, "整包.zip");
+
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("整包.mp4 -> 整包.zip", StringComparison.Ordinal));
+
+            Assert.True(File.Exists(renamed), "该改名的包，一键档要自动改成 .zip");
+            Assert.False(File.Exists(disguised), "改名之后旧名字不该还在");
 
             _output.WriteLine("一键处理日志：" + string.Join(" | ", harness.LogTexts.Where(l => l.Contains("改名", StringComparison.Ordinal) || l.Contains("一键处理", StringComparison.Ordinal))));
         }
@@ -688,7 +701,7 @@ namespace ArchiveFixer.Tests
         /// 反射只能看到类型，看不到"有没有一处忘了写 true"。
         /// </summary>
         [Fact]
-        public void 不变量3_每一处改名都必须先预览()
+        public void 不变量3_手动档的每一处改名都必须先预览_一键档是自动改名()
         {
             string source = File.ReadAllText(RepoPath("ArchiveFixer", "ViewModels", "RenameCoordinator.cs"));
 
@@ -698,10 +711,20 @@ namespace ArchiveFixer.Tests
             Assert.True(renameOptionSites >= 5, $"改名入口比预期少（找到 {renameOptionSites} 处），检查是不是漏了");
             Assert.Equal(renameOptionSites, previewBeforeRename);
 
-            // 预览 → 拿返回值 → 不是 true 就什么都不做。
+            // 手动档：预览 → 拿返回值 → 不是 true 就什么都不做。
             Assert.Contains("new RenamePreviewWindow(previewItems)", source, StringComparison.Ordinal);
             Assert.Contains("window.ShowDialog()", source, StringComparison.Ordinal);
             Assert.Contains("if (dialogResult != true)", source, StringComparison.Ordinal);
+
+            /*
+             * 一键档（2026-09-25 第 32 条）：**唯一**允许不弹预览的入口是 AutoFixExtensionsAsync，
+             * 而且它必须逐条写日志（"旧名 -> 新名，状态：…"）—— 不弹窗可以，"不留痕"不行。
+             * 这里用源码文本钉住这两件事同时成立，防止以后有人顺手再开一条不弹窗也不写日志的路。
+             */
+            Assert.Contains("internal async Task<bool> AutoFixExtensionsAsync()", source, StringComparison.Ordinal);
+            Assert.Contains("ApplyConflictChoice(item)", source, StringComparison.Ordinal);
+            Assert.Contains("自动修正后缀", source, StringComparison.Ordinal);
+            Assert.Contains("item.OriginalFileName} -> {item.NewFileName}，状态：{item.Status}", source, StringComparison.Ordinal);
         }
 
         // ================================================================ 共用断言 / 装配

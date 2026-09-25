@@ -6,9 +6,10 @@
 
     <!--
         ② 解压方式页（用户 2026-09-24 第 11 条）。
-        内容全部按功能归位：落点 / 终端落法 / 嵌套与覆盖 / 解压前后 / 并发与空间 / 引擎，
-        页面最底下是**高风险区**（危险模式：开关 + 风险四条 + 自测入口）——
-        它原来是一块占满主界面宽度的红横幅，用户点名说多余。
+        内容全部按功能归位：落点 / 终端落法 / 嵌套与覆盖 / 解压前后 / 并发与空间 / 引擎。
+        ⛔ 页面最底下那块「高风险区（危险模式 + 自测凭证 + 风险四条 + 红横幅）」按用户
+        2026-09-25 第 32 条**整块退役**：那条需求现在是③页「删除操作」里的第三档，
+        选它时会在下面出现一条不可关闭的红字提示 —— 红字就是警告，不再另配注释。
 
         第 20 条：整页可滚（内容多），每个分组用 GroupBox + 星号/自动行，没有任何固定高度堆叠。
     -->
@@ -512,85 +513,6 @@
                               ToolTip="只让 RAR 引擎（UnRAR）别把校验失败的半成品删掉（-kb）。7-Zip 没有这个开关。任务状态仍然是「失败 / 部分完成」。" />
                 </StackPanel>
             </GroupBox>
-
-            <!--
-                ==================== 高风险区：危险模式 ====================
-                从主界面的常驻红横幅整体搬来（用户："这个危险操作这个红框多么多余啊，别放在主界面"）。
-                风险四条的**唯一来源**仍是 StatusText.DangerModeRiskLines（这里绑定，不重抄）。
-            -->
-            <Border Background="{StaticResource DangerSoftBrush}"
-                    BorderBrush="{StaticResource DangerBorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="{StaticResource CardCornerRadius}"
-                    Padding="{StaticResource BannerPadding}"
-                    Margin="0,0,0,4">
-                <StackPanel>
-                    <TextBlock Text="高风险区"
-                               Style="{StaticResource CardTitleTextStyle}"
-                               Foreground="{StaticResource DangerTextBrush}" />
-
-                    <TextBlock Text="{Binding DangerModeSummaryText}"
-                               Foreground="{StaticResource DangerTextBrush}"
-                               FontSize="11.5"
-                               TextWrapping="Wrap"
-                               Margin="0,4,0,0" />
-
-                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="⚠ 危险模式"
-                                MinHeight="36"
-                                MinWidth="120"
-                                Style="{StaticResource DangerButtonStyle}"
-                                Command="{Binding ToggleDangerModeCommand}"
-                                ToolTip="{Binding DangerModeSummaryText}" />
-
-                        <TextBlock Text="{Binding SpaceModeText}"
-                                   Margin="12,0,0,0"
-                                   VerticalAlignment="Center"
-                                   Foreground="{StaticResource DangerTextBrush}"
-                                   TextWrapping="Wrap" />
-                    </StackPanel>
-
-                    <ItemsControl ItemsSource="{Binding DangerModeRiskLines}"
-                                  Margin="0,8,0,0"
-                                  Focusable="False">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding Mode=OneWay}"
-                                           Foreground="{StaticResource DangerTextBrush}"
-                                           FontSize="11.5"
-                                           TextWrapping="Wrap" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <TextBlock Text="{x:Static models:StatusText.DangerModeSelfTestWarning}"
-                               Margin="0,6,0,0"
-                               Foreground="{StaticResource DangerTextBrush}"
-                               FontSize="11.5"
-                               TextWrapping="Wrap" />
-
-                    <TextBlock Text="{Binding DangerModeSelfTestText}"
-                               Margin="0,4,0,0"
-                               Foreground="{StaticResource DangerTextBrush}"
-                               FontSize="11.5"
-                               TextWrapping="Wrap" />
-
-                    <!-- 凭证盖不住当前并发档：**不许静默降级**，必须在明面上说 -->
-                    <TextBlock Text="{Binding DangerModeCoverageText}"
-                               Margin="0,4,0,0"
-                               FontWeight="SemiBold"
-                               Foreground="{StaticResource DangerTextBrush}"
-                               FontSize="11.5"
-                               TextWrapping="Wrap"
-                               Visibility="{Binding DangerModeNotCovered, Converter={StaticResource BoolToVisibilityConverter}}" />
-
-                    <CheckBox Content="开启危险模式（每个任务成功后立刻彻底删除它自己的其余物）"
-                              Margin="0,8,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.DangerousSpaceModeEnabled, Mode=TwoWay}"
-                              Foreground="{StaticResource DangerTextBrush}"
-                              ToolTip="开启后：任务在「内容物已定稿 + 输出校验通过 + 未取消」之后，它的其余物（源包 + 中间件）会被永久删除，不进回收站。没有自测凭证（或凭证盖不住当前并发档）时，保存会被拦下。" />
-                </StackPanel>
-            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

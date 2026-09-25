@@ -514,10 +514,13 @@ namespace ArchiveFixer.Models
         /// <summary>第二件事：其余物。</summary>
         public const string OneClickConfirmRestLabel = "其余物：";
 
-        /// <summary>其余物这一档：危险模式已开 → 解压成功后自动彻底删掉。</summary>
-        public const string OneClickConfirmRestAutoDelete = "解压成功后自动彻底删除（危险模式已开启）";
+        /// <summary>其余物这一档：删除操作=彻底删除 → 解压成功后自动彻底删掉（不可恢复）。</summary>
+        public const string OneClickConfirmRestAutoDelete = "解压成功后自动彻底删除（不可恢复，直接省空间）";
 
-        /// <summary>其余物这一档：默认 → 留在输出目录的「其余物」里，不自动删。</summary>
+        /// <summary>其余物这一档：删除操作=移入回收站 → 解压成功后自动移入回收站（可还原）。</summary>
+        public const string OneClickConfirmRestRecycle = "解压成功后自动移入回收站（可还原；空间要等清空回收站才释放）";
+
+        /// <summary>其余物这一档：删除操作=不动其余物（默认）→ 留在输出目录的「其余物」里。</summary>
         public const string OneClickConfirmRestKeep = "不自动删除，留在输出目录的「其余物」里";
 
         /// <summary>第三行（短）：源包怎么处理。</summary>

@@ -11,7 +11,7 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 「空间规划 + 危险模式」的**纯模型**测试（用户 2026-09-22 需求第 1 / 2 / 3 条）。
+    /// 「空间规划 + 其余物处理（删除操作）」的**纯模型**测试（用户 2026-09-22 需求第 1 / 2 条；2026-09-25 第 32 条改口径）。
     ///
     /// <para>这一组不碰 WPF、不跑管线，只钉三件事：</para>
     /// <list type="number">
@@ -19,10 +19,10 @@ namespace ArchiveFixer.Tests
     /// 够不够判在 <see cref="SpaceGate"/>；</description></item>
     /// <item><description><b>调度</b>：按需求从小到大排 + "装不下就跳过、绝不静默" + "5G 与 6G 不许一起上"
     /// （用户点名的反例）；</description></item>
-    /// <item><description><b>危险模式的五条门槛</b>与<b>自测协议的四条判据</b>。</description></item>
+    /// <item><description><b>其余物处理的五条门槛</b>：只有「完成 + 校验通过 + 未取消 + 路径是记下来的那一条 + 在自己输出根之内」才动手（彻底删除与移入回收站共用）。</description></item>
     /// </list>
     ///
-    /// <para>端到端（真跑一遍解压管线、真的删掉其余物）在 <c>DangerModePipelineTests</c> 里。</para>
+    /// <para>端到端（真跑一遍解压管线、真的删掉其余物）在 <c>SourceDeleteAfterVerifyTests</c> 里。</para>
     /// </summary>
     public class SpaceModeTests : IDisposable
     {
@@ -68,7 +68,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(source + 512L * 1024 * 1024, estimate.RetainedBytes);
             Assert.Equal(source + 2 * Gib + 512L * 1024 * 1024, estimate.PeakBytes);
 
-            // 危险模式能立刻收回的正好是"任务完成前一直占着"的那一份（源包 + 过程物）。
+            // 「彻底删除」能立刻收回的正好是"任务完成前一直占着"的那一份（源包 + 过程物）。
             Assert.Equal(estimate.RetainedBytes, estimate.ReclaimableBytes);
         }
 
@@ -241,7 +241,7 @@ namespace ArchiveFixer.Tests
             Assert.Contains("可用", decision.Reason, StringComparison.Ordinal);
             Assert.Contains("差", decision.Reason, StringComparison.Ordinal);
 
-            // 建议动作必须包含三种正路（清其余物 / 换盘 / 危险模式）。
+            // 建议动作必须包含三种正路（清其余物 / 换盘 / 把删除操作改成回收站或彻底删除）。
             string suggestions = string.Join("|", decision.Suggestions);
 
             Assert.Contains("删除其余物", suggestions, StringComparison.Ordinal);
@@ -333,14 +333,14 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 账本_危险模式回收的空间会出现在下一次判断里()
+        public void 账本_其余物彻底删除回收的空间会出现在下一次判断里()
         {
             var ledger = new SpaceReservationLedger(10 * Gib, reserveBytes: 0);
 
             Assert.True(ledger.TryReserve(9 * Gib).Allowed);
             Assert.False(ledger.TryReserve(2 * Gib).Allowed);
 
-            // 危险模式：任务成功后其余物被真的删掉，可用空间涨回来。
+            // 彻底删除：任务成功后其余物被真的删掉，可用空间涨回来。
             ledger.RefreshAvailable(12 * Gib);
 
             Assert.True(ledger.TryReserve(2 * Gib).Allowed);
@@ -550,10 +550,10 @@ namespace ArchiveFixer.Tests
             Assert.Equal(new[] { 1, 2, 3, 4, 8 }, ExtractionScheduler.AllowedParallelCounts.ToArray());
         }
 
-        // ================================================================ ⑤ 危险模式：五条门槛
+        // ================================================================ ⑤ 其余物处理：五条门槛（彻底删除 / 移入回收站共用）
 
         [Fact]
-        public void 危险模式_成功加校验通过_其余物被彻底删除并且不进回收站()
+        public void 彻底删除_成功加校验通过_其余物被彻底删除并且不进回收站()
         {
             (ArchiveTask task, string sourcePath, string restDirectory) = CreatePurgeScenario();
 
@@ -573,7 +573,7 @@ namespace ArchiveFixer.Tests
             Assert.Contains(
                 outcome.LogLines,
                 line => line.Contains("其余物", StringComparison.Ordinal) ||
-                        line.Contains(RestItemPurger.DangerModeReason, StringComparison.Ordinal));
+                        line.Contains(RestItemPurger.AutoPurgeReason, StringComparison.Ordinal));
         }
 
         [Theory]
@@ -582,7 +582,7 @@ namespace ArchiveFixer.Tests
         [InlineData(StatusText.Cancelled)]
         [InlineData(StatusText.Skipped)]
         [InlineData(StatusText.Extracting)]
-        public void 危险模式_不是完整成功就一个字节都不删(string status)
+        public void 彻底删除_不是完整成功就一个字节都不删(string status)
         {
             (ArchiveTask task, string sourcePath, string restDirectory) = CreatePurgeScenario();
 
@@ -598,7 +598,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 危险模式_校验没通过就不删_哪怕状态是解压成功()
+        public void 彻底删除_校验没通过就不删_哪怕状态是解压成功()
         {
             (ArchiveTask task, string sourcePath, string restDirectory) = CreatePurgeScenario();
 
@@ -614,7 +614,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 危险模式_被取消就不删()
+        public void 彻底删除_被取消就不删()
         {
             (ArchiveTask task, string sourcePath, string restDirectory) = CreatePurgeScenario();
 
@@ -627,7 +627,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 危险模式_没记下本次的其余物路径时不敢猜_一个字节都不删()
+        public void 彻底删除_没记下本次的其余物路径时不敢猜_一个字节都不删()
         {
             (ArchiveTask task, string sourcePath, string restDirectory) = CreatePurgeScenario();
 
@@ -642,7 +642,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 危险模式_其余物落在自己输出根之外时拒绝删除()
+        public void 彻底删除_其余物落在自己输出根之外时拒绝删除()
         {
             (ArchiveTask task, string sourcePath, string restDirectory) = CreatePurgeScenario();
 
@@ -663,7 +663,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 危险模式_形状不像其余物的目录一律拒绝()
+        public void 彻底删除_形状不像其余物的目录一律拒绝()
         {
             (ArchiveTask task, string sourcePath, string restDirectory) = CreatePurgeScenario();
 
@@ -686,7 +686,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 危险模式_共用输出根的分层布局_其余物包名_同样认()
+        public void 彻底删除_共用输出根的分层布局_其余物包名_同样认()
         {
             string outputRoot = Path.Combine(_root, "shared-out");
             string restDirectory = Path.Combine(outputRoot, "其余物", "222");
@@ -715,7 +715,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 危险模式_共用输出根下只删自己那一份_别的包的目录不动()
+        public void 彻底删除_共用输出根下只删自己那一份_别的包的目录不动()
         {
             string outputRoot = Path.Combine(_root, "shared-out2");
             string mine = Path.Combine(outputRoot, "其余物", "222");
@@ -742,358 +742,23 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(other, "333.7z")), "别的包的其余物一个字节都不许动");
         }
 
-        // ================================================================ ⑥ 自测协议
+        // ================================================================ ⑥ 删除操作三档（用户 2026-09-25 第 32 条）
 
+        /// <summary>
+        /// 新设置项 <c>RestHandlingAfterVerify</c>：默认**不动其余物**，三档都能落盘读回，
+        /// 认不出的值一律回落 "Keep"（保守方向：宁可不动，绝不误删）。
+        /// </summary>
         [Fact]
-        public void 自测_样本量就是并发数的两倍()
+        public void 删除操作_默认不动其余物_三档都能落盘读回()
         {
-            Assert.Equal(2, DangerModeSelfTestProtocol.RequiredSampleSize(1));
-            Assert.Equal(4, DangerModeSelfTestProtocol.RequiredSampleSize(2));
-            Assert.Equal(8, DangerModeSelfTestProtocol.RequiredSampleSize(4));
-            Assert.Equal(10, DangerModeSelfTestProtocol.RequiredSampleSize(5));
-            Assert.Equal(16, DangerModeSelfTestProtocol.RequiredSampleSize(8));
-        }
+            Assert.Equal(RestHandlingModes.Keep, AppSettings.CreateDefault().RestHandlingAfterVerify);
 
-        [Fact]
-        public void 自测_挑样本从最小的开始_并排除解不了的包()
-        {
-            var usableSmall = CreateTask("small.7z", 1 * 1024 * 1024);
-            var usableBig = CreateTask("big.7z", 8 * 1024 * 1024);
+            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize(null));
+            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("  "));
+            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("什么鬼"));
+            Assert.Equal(RestHandlingModes.RecycleBin, RestHandlingModes.Normalize("recyclebin"));
+            Assert.Equal(RestHandlingModes.Delete, RestHandlingModes.Normalize("DELETE"));
 
-            var unknown = CreateTask("unknown.xyz", 512);
-            unknown.IsArchive = false;
-            unknown.DetectedFormat = "Unknown";
-
-            var missingVolume = CreateTask("broken.7z.001", 256);
-            missingVolume.IsVolumeGroup = true;
-            missingVolume.IsVolumeComplete = false;
-
-            List<ArchiveTask> samples = DangerModeSelfTestProtocol
-                .SelectSamples(new[] { usableBig, unknown, usableSmall, missingVolume }, requiredSampleSize: 2)
-                .ToList();
-
-            Assert.Equal(2, samples.Count);
-            Assert.Equal("small.7z", samples[0].FileName);
-            Assert.Equal("big.7z", samples[1].FileName);
-        }
-
-        [Fact]
-        public void 自测_四条判据全过才通过_并且说出用户可以一试但风险还在()
-        {
-            DangerModeSelfTestVerdict verdict = DangerModeSelfTestProtocol.Evaluate(GoodEvidence());
-
-            Assert.True(verdict.Passed);
-            Assert.Empty(verdict.FailureReasons);
-            Assert.Contains("可以一试，但风险还是有的", verdict.Summary, StringComparison.Ordinal);
-            Assert.Contains("源包已被永久删除", verdict.Summary, StringComparison.Ordinal);
-        }
-
-        [Fact]
-        public void 自测_样本不够就不通过_并且说清要几个()
-        {
-            DangerModeSelfTestEvidence evidence = GoodEvidence();
-            evidence = new DangerModeSelfTestEvidence
-            {
-                ParallelCount = evidence.ParallelCount,
-                RequiredSampleSize = evidence.RequiredSampleSize,
-                Steps = evidence.Steps.Take(1).ToList()
-            };
-
-            DangerModeSelfTestVerdict verdict = DangerModeSelfTestProtocol.Evaluate(evidence);
-
-            Assert.False(verdict.Passed);
-            Assert.Contains(
-                verdict.FailureReasons,
-                reason => reason.Contains("实际只跑了 1 个", StringComparison.Ordinal));
-        }
-
-        [Fact]
-        public void 自测_有一个文件校验没通过_就拒绝开启并点名那个文件()
-        {
-            DangerModeSelfTestEvidence evidence = GoodEvidence();
-
-            List<DangerModeSelfTestStep> steps = evidence.Steps.ToList();
-            steps[1] = new DangerModeSelfTestStep
-            {
-                DisplayName = steps[1].DisplayName,
-                ExtractSucceeded = true,
-                Verified = false,
-                RestPurged = true,
-                PurgedBytes = steps[1].PurgedBytes,
-                AvailableBeforeStart = steps[1].AvailableBeforeStart,
-                AvailableAfterFinish = steps[1].AvailableAfterFinish,
-                ContentBytes = steps[1].ContentBytes
-            };
-
-            DangerModeSelfTestVerdict verdict = DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
-            {
-                ParallelCount = evidence.ParallelCount,
-                RequiredSampleSize = evidence.RequiredSampleSize,
-                Steps = steps
-            });
-
-            Assert.False(verdict.Passed);
-            Assert.Contains(
-                verdict.FailureReasons,
-                reason => reason.Contains(steps[1].DisplayName, StringComparison.Ordinal) &&
-                          reason.Contains("输出校验", StringComparison.Ordinal));
-        }
-
-        [Fact]
-        public void 自测_其余物没被删就拒绝开启()
-        {
-            DangerModeSelfTestEvidence evidence = GoodEvidence();
-
-            List<DangerModeSelfTestStep> steps = evidence.Steps
-                .Select((step, index) => index == 0
-                    ? new DangerModeSelfTestStep
-                    {
-                        DisplayName = step.DisplayName,
-                        ExtractSucceeded = true,
-                        Verified = true,
-                        RestPurged = false,
-                        AvailableBeforeStart = step.AvailableBeforeStart,
-                        AvailableAfterFinish = step.AvailableAfterFinish,
-                        ContentBytes = step.ContentBytes
-                    }
-                    : step)
-                .ToList();
-
-            DangerModeSelfTestVerdict verdict = DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
-            {
-                ParallelCount = evidence.ParallelCount,
-                RequiredSampleSize = evidence.RequiredSampleSize,
-                Steps = steps
-            });
-
-            Assert.False(verdict.Passed);
-            Assert.Contains(
-                verdict.FailureReasons,
-                reason => reason.Contains("其余物没有被彻底删除", StringComparison.Ordinal));
-        }
-
-        [Fact]
-        public void 自测_空间曲线不符合预期就拒绝开启()
-        {
-            /*
-             * 这一条检的是"净占用基本不变"这句承诺：源包与中间件没被真正回收时，
-             * 可用空间会掉下大约一整个峰值需求的量 —— 必须判不通过。
-             */
-            long content = 100L * 1024 * 1024;
-            long purged = 100L * 1024 * 1024;
-
-            var step = new DangerModeSelfTestStep
-            {
-                DisplayName = "a.7z",
-                ExtractSucceeded = true,
-                Verified = true,
-                RestPurged = true,
-                PurgedBytes = purged,
-
-                // 开始 10G、收尾只剩 9G：净消耗 1G 远超"内容物 − 回收 + 容差"。
-                AvailableBeforeStart = 10 * Gib,
-                AvailableAfterFinish = 9 * Gib,
-                ContentBytes = content
-            };
-
-            var steps = new List<DangerModeSelfTestStep>();
-            steps.AddRange(Enumerable.Repeat(step, 2));
-
-            DangerModeSelfTestVerdict verdict = DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
-            {
-                ParallelCount = 1,
-                RequiredSampleSize = 2,
-                Steps = steps
-            });
-
-            Assert.False(verdict.Passed);
-            Assert.Contains(
-                verdict.FailureReasons,
-                reason => reason.Contains("空间曲线不符合预期", StringComparison.Ordinal));
-        }
-
-        [Fact]
-        public void 自测_取不到可用空间时不算通过_验不了就是验不了()
-        {
-            DangerModeSelfTestEvidence evidence = GoodEvidence();
-
-            List<DangerModeSelfTestStep> steps = evidence.Steps
-                .Select(step => new DangerModeSelfTestStep
-                {
-                    DisplayName = step.DisplayName,
-                    ExtractSucceeded = true,
-                    Verified = true,
-                    RestPurged = true,
-                    PurgedBytes = step.PurgedBytes,
-                    AvailableBeforeStart = -1,
-                    AvailableAfterFinish = -1,
-                    ContentBytes = step.ContentBytes
-                })
-                .ToList();
-
-            DangerModeSelfTestVerdict verdict = DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
-            {
-                ParallelCount = evidence.ParallelCount,
-                RequiredSampleSize = evidence.RequiredSampleSize,
-                Steps = steps
-            });
-
-            Assert.False(verdict.Passed);
-            Assert.Contains(
-                verdict.FailureReasons,
-                reason => reason.Contains("空间曲线无法验证", StringComparison.Ordinal));
-        }
-
-        [Fact]
-        public void 自测_源包留在原地时直接拒绝_因为它省不出源包那一份空间()
-        {
-            AppSettings settings = AppSettings.CreateDefault();
-            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-
-            Assert.False(DangerModeSelfTestProtocol.CheckPreconditions(settings, out string reason));
-            Assert.Contains("留在原地", reason, StringComparison.Ordinal);
-
-            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
-
-            Assert.True(DangerModeSelfTestProtocol.CheckPreconditions(settings, out _));
-        }
-
-        // ================================================================ ⑦ 自测凭证
-
-        [Fact]
-        public void 凭证_没自测过的空凭证一律不算数()
-        {
-            Assert.False(DangerModeSelfTestStamp.IsValid(null));
-            Assert.False(DangerModeSelfTestStamp.IsValid(string.Empty));
-            Assert.False(DangerModeSelfTestStamp.IsValid("   "));
-            Assert.False(DangerModeSelfTestStamp.IsValid("通过"));
-            Assert.False(DangerModeSelfTestStamp.IsValid("自测没通过"));
-        }
-
-        [Fact]
-        public void 凭证_由结论造出来之后能读出并发与样本数()
-        {
-            var verdict = new DangerModeSelfTestVerdict
-            {
-                Passed = true,
-                ParallelCount = 5,
-                SampleSize = 10
-            };
-
-            string stamp = DangerModeSelfTestStamp.Create(verdict, new DateTime(2026, 9, 22, 21, 30, 0));
-
-            Assert.True(DangerModeSelfTestStamp.IsValid(stamp));
-            Assert.Equal(5, DangerModeSelfTestStamp.ParseParallelCount(stamp));
-            Assert.Equal(10, DangerModeSelfTestStamp.ParseSampleSize(stamp));
-            Assert.Contains("2026-09-22 21:30:00", stamp, StringComparison.Ordinal);
-        }
-
-        // ================================================================ ⑧ 设置项
-
-        [Fact]
-        public void 设置_危险模式默认关_而且没有凭证时开不起来()
-        {
-            Assert.False(new AppSettings().DangerousSpaceModeEnabled);
-            Assert.False(AppSettings.CreateDefault().DangerousSpaceModeEnabled);
-
-            // 手改配置文件把开关写成 true：Normalize 必须把它关回去（这就是自测协议的自动执行点）。
-            var hacked = new AppSettings
-            {
-                DangerousSpaceModeEnabled = true,
-                DangerModeSelfTestStamp = string.Empty
-            };
-
-            hacked.Normalize();
-
-            Assert.False(hacked.DangerousSpaceModeEnabled);
-
-            // 写坏了的凭证同样不算数。
-            hacked.DangerousSpaceModeEnabled = true;
-            hacked.DangerModeSelfTestStamp = "我手动写的通过";
-            hacked.Normalize();
-
-            Assert.False(hacked.DangerousSpaceModeEnabled);
-        }
-
-        [Fact]
-        public void 设置_有凭证时开关保持打开_关掉时凭证不清()
-        {
-            var settings = new AppSettings
-            {
-                DangerousSpaceModeEnabled = true,
-                DangerModeSelfTestStamp = DangerModeSelfTestStamp.Create(
-                    new DangerModeSelfTestVerdict { Passed = true, ParallelCount = 2, SampleSize = 4 },
-                    DateTime.Now)
-            };
-
-            settings.Normalize();
-            Assert.True(settings.DangerousSpaceModeEnabled);
-
-            settings.DangerousSpaceModeEnabled = false;
-            settings.Normalize();
-
-            // 凭证保留：它记录的是"这台机器上做过自测"这个事实，清掉只会逼用户再删一批源包。
-            Assert.True(DangerModeSelfTestStamp.IsValid(settings.DangerModeSelfTestStamp));
-        }
-
-        [Fact]
-        public void 设置_改并发档不会顺手清掉自测凭证()
-        {
-            var settings = new AppSettings
-            {
-                MaxParallelExtractCount = 2,
-                DangerousSpaceModeEnabled = true,
-                DangerModeSelfTestStamp = DangerModeSelfTestStamp.Create(
-                    new DangerModeSelfTestVerdict { Passed = true, ParallelCount = 2, SampleSize = 4 },
-                    DateTime.Now)
-            };
-
-            settings.MaxParallelExtractCount = 8;
-            settings.Normalize();
-
-            Assert.Equal(8, settings.MaxParallelExtractCount);
-            Assert.True(settings.DangerousSpaceModeEnabled);
-            Assert.Equal(2, DangerModeSelfTestStamp.ParseParallelCount(settings.DangerModeSelfTestStamp));
-        }
-
-        [Fact]
-        public void 凭证覆盖判定_盖得住才生效_而且调小算盖得住()
-        {
-            /*
-             * "自测凭证只覆盖它跑过的那一档"：协议是"拿并发数 × 2 个文件真跑一遍"，
-             * 所以凭证不能替更高的档位背书（那等于没测过就用，代价是源包永久删除）。
-             * 单调方向是刻意的：调小并发只会更安全，不该逼用户再删一批样本源包。
-             */
-            string stamp4 = DangerModeSelfTestStamp.Create(
-                new DangerModeSelfTestVerdict { Passed = true, ParallelCount = 4, SampleSize = 8 },
-                DateTime.Now);
-
-            Assert.True(DangerModeSelfTestStamp.Covers(stamp4, 1));
-            Assert.True(DangerModeSelfTestStamp.Covers(stamp4, 4));
-            Assert.False(DangerModeSelfTestStamp.Covers(stamp4, 8));
-
-            // 没有凭证 / 写坏的凭证：一律盖不住。
-            Assert.False(DangerModeSelfTestStamp.Covers(string.Empty, 1));
-            Assert.False(DangerModeSelfTestStamp.Covers("我手动写的通过", 1));
-
-            // 样本数不够 2× 并发也不算数（"并发=8|样本=2"是手改得出来的）。
-            string thin = DangerModeSelfTestStamp.Create(
-                new DangerModeSelfTestVerdict { Passed = true, ParallelCount = 8, SampleSize = 2 },
-                DateTime.Now);
-
-            Assert.False(DangerModeSelfTestStamp.Covers(thin, 4));
-
-            // 盖不住时那句话必须带"怎么办"，不然用户只能干看着。
-            string why = DangerModeSelfTestStamp.DescribeCoverage(stamp4, 8);
-
-            Assert.Contains("并发 4", why, StringComparison.Ordinal);
-            Assert.Contains("重新自测", why, StringComparison.Ordinal);
-            Assert.Equal(string.Empty, DangerModeSelfTestStamp.DescribeCoverage(stamp4, 4));
-        }
-
-        [Fact]
-        public void 设置_两个新键能落盘并在重启后读回来()
-        {
             string dataRoot = Path.Combine(_root, "data");
             Directory.CreateDirectory(dataRoot);
 
@@ -1101,19 +766,51 @@ namespace ArchiveFixer.Tests
             var service = new SettingsService(pathService);
 
             AppSettings settings = AppSettings.CreateDefault();
-            settings.DangerousSpaceModeEnabled = true;
-            settings.DangerModeSelfTestStamp = DangerModeSelfTestStamp.Create(
-                new DangerModeSelfTestVerdict { Passed = true, ParallelCount = 4, SampleSize = 8 },
-                DateTime.Now);
-
+            settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             service.Save(settings);
 
             AppSettings reloaded = new SettingsService(new PathService { DataRootDirectory = dataRoot }).Load();
 
-            Assert.True(reloaded.DangerousSpaceModeEnabled);
-            Assert.Equal(4, DangerModeSelfTestStamp.ParseParallelCount(reloaded.DangerModeSelfTestStamp));
-            Assert.Equal(8, DangerModeSelfTestStamp.ParseSampleSize(reloaded.DangerModeSelfTestStamp));
+            Assert.Equal(RestHandlingModes.Delete, reloaded.RestHandlingAfterVerify);
         }
+
+        /// <summary>
+        /// 退役迁移（第 32 条）：旧配置里开过危险模式 → 一次性迁移成「彻底删除」，并把旧字段清干净；
+        /// 旧的手动删源开关 / 旧的「校验通过后删除」档 → "源包移入其余物 + 移入回收站"（可还原的那一档，不替用户重做不可逆选择）。
+        /// </summary>
+        [Fact]
+        public void 旧危险模式与旧删源档_一次性迁移成新的两档()
+        {
+            AppSettings danger = AppSettings.CreateDefault();
+            danger.DangerousSpaceModeEnabled = true;
+            danger.DangerModeSelfTestStamp = "自测通过|2026-09-22 21:30:00|并发=2|样本=4";
+            danger.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+
+            danger.Normalize();
+
+            Assert.Equal(RestHandlingModes.Delete, danger.RestHandlingAfterVerify);
+            Assert.False(danger.DangerousSpaceModeEnabled);
+            Assert.Equal(string.Empty, danger.DangerModeSelfTestStamp);
+
+            AppSettings manualDelete = AppSettings.CreateDefault();
+            manualDelete.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+            manualDelete.DeleteSourceAfterExtract = true;
+
+            manualDelete.Normalize();
+
+            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), manualDelete.SourceHandling);
+            Assert.Equal(RestHandlingModes.RecycleBin, manualDelete.RestHandlingAfterVerify);
+            Assert.False(manualDelete.DeleteSourceAfterExtract);
+
+            AppSettings legacySource = AppSettings.CreateDefault();
+            legacySource.SourceHandling = "DeleteAfterVerify";
+
+            legacySource.Normalize();
+
+            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), legacySource.SourceHandling);
+            Assert.Equal(RestHandlingModes.RecycleBin, legacySource.RestHandlingAfterVerify);
+        }
+
 
         // ================================================================ ⑨ 状态三处同改
 
@@ -1152,99 +849,43 @@ namespace ArchiveFixer.Tests
             Assert.Contains("磁盘空间不足", failedList, StringComparison.Ordinal);
             Assert.Contains("差 22 GiB", failedList, StringComparison.Ordinal);
         }
+        // ================================================================ ⑩ 界面：三档在③页，②页不再有红区
 
-        // ================================================================ ⑩ 文案不许分叉
-
+        /// <summary>
+        /// 用户 2026-09-25 第 32 条定的界面形态：
+        /// ③页 = 「1 源包操作」（两个单选）+「2 删除操作」（三个单选，第三档整条红字 +
+        /// 选中时下面**常驻**一条不可关闭的提示）；②页那个「高风险区（危险模式）」整块没有了。
+        /// </summary>
         [Fact]
-        public void 风险四条_确认框高风险区与文档用的是同一份措辞()
+        public void 界面_三档删除操作在清理页_解压方式页不再有危险模式红区()
         {
-            /*
-             * 用户 2026-09-22 的原话是"我们要对用户**详细描述**一下"。
-             * 这里的判据不是"某处写了就算"：同一份风险必须同时出现在**三个地方**，
-             * 而且措辞要对得上 —— 改一处漏两处，用户拿不可逆操作换来的知情权就缺一块。
-             *
-             * 2026-09-24 第 11 条之后"设置界面"那一处搬到了②解压方式页底部的「高风险区」，
-             * 而且改成**绑定** StatusText.DangerModeRiskLines（不再抄一份文本）：
-             * 抄一份就存在"改一处漏一处"的可能，绑定则从根上不可能分叉 —— 这是加强不是削弱，
-             * 所以这里查的是绑定名而不是字面量。
-             */
-            Assert.Equal(4, StatusText.DangerModeRiskLines.Length);
+            string cleanup = File.ReadAllText(
+                Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "Views", "Tabs", "CleanupTab.xaml"));
 
-            string extractionXaml = ReadRepositoryFile("ArchiveFixer", "Views", "Tabs", "ExtractionTab.xaml");
-            string taskTabXaml = ReadRepositoryFile("ArchiveFixer", "Views", "Tabs", "TaskTab.xaml");
-            string usage = ReadRepositoryFile("docs", "使用说明.md");
-            string mainViewModel = ReadRepositoryFile("ArchiveFixer", "ViewModels", "MainViewModel.cs");
+            Assert.Contains("1 源包操作", cleanup, StringComparison.Ordinal);
+            Assert.Contains("2 删除操作", cleanup, StringComparison.Ordinal);
+            Assert.Contains("SettingsEditor.SourceHandling", cleanup, StringComparison.Ordinal);
+            Assert.Contains("ConverterParameter=KeepInPlace", cleanup, StringComparison.Ordinal);
+            Assert.Contains("ConverterParameter=MoveToRest", cleanup, StringComparison.Ordinal);
+            Assert.Contains("SettingsEditor.RestHandling", cleanup, StringComparison.Ordinal);
+            Assert.Contains("ConverterParameter=Keep", cleanup, StringComparison.Ordinal);
+            Assert.Contains("ConverterParameter=RecycleBin", cleanup, StringComparison.Ordinal);
+            Assert.Contains("ConverterParameter=Delete", cleanup, StringComparison.Ordinal);
 
-            // ① 高风险区那一段逐条列出 —— 绑的是 StatusText 那一份（渲染出来就是同样四句）。
-            Assert.Contains("DangerModeRiskLines", extractionXaml, StringComparison.Ordinal);
-            Assert.Contains("StatusText.DangerModeSelfTestWarning", extractionXaml, StringComparison.Ordinal);
+            // 第三档那条红字提示：绑 IsRestDeleteSelected（选中才出现，没有关闭按钮 = 不能消掉）。
+            Assert.Contains("IsRestDeleteSelected", cleanup, StringComparison.Ordinal);
 
-            // ② 主界面只留一行小白字（红横幅已经搬走），但那一行仍然要看得见。
-            Assert.Contains("StatusText.DangerModeActiveOneLineHint", taskTabXaml, StringComparison.Ordinal);
+            // 旧的手动删源复选框与"校验通过后删除"那一档都不许再出现。
+            Assert.DoesNotContain("DeleteAfterVerify", cleanup, StringComparison.Ordinal);
+            Assert.DoesNotContain("DeleteSourceAfterExtract", cleanup, StringComparison.Ordinal);
 
-            // ③ 使用说明逐条列出（文档里有 markdown 加粗与序号，所以比"关键句"而不是整句）。
-            string[] keyPhrases =
-            {
-                "源包会被永久删除",
-                "校验不等于你确认过内容",
-                "源包已删、内容物未完成",
-                "只在你确实没有空间时才用它"
-            };
+            string extraction = File.ReadAllText(
+                Path.Combine(XamlBindingScan.RepositoryRoot, "ArchiveFixer", "Views", "Tabs", "ExtractionTab.xaml"));
 
-            foreach (string phrase in keyPhrases)
-            {
-                Assert.Contains(phrase, usage, StringComparison.Ordinal);
-            }
-
-            // 自测协议那两句也必须在界面上有落点，且在文档里写全。
-            Assert.Contains("并发数 × 2", usage, StringComparison.Ordinal);
-            Assert.Contains("可以一试，但风险还是有的", usage, StringComparison.Ordinal);
-
-            // 确认框正文必须把风险四条拼进去（只看调用点：MainViewModel 是唯一弹它的地方）。
-            Assert.Contains("StatusText.DangerModeRisks", mainViewModel, StringComparison.Ordinal);
-            Assert.Contains("StatusText.DangerModeSelfTestProtocolText", mainViewModel, StringComparison.Ordinal);
-            Assert.Contains("StatusText.DangerModeSelfTestWarning", mainViewModel, StringComparison.Ordinal);
-        }
-
-        [Fact]
-        public void 风险四条_顺序与内容就是用户要求的那四条()
-        {
-            // 顺序不要重排：它就是用户给的顺序，读起来是一条从"最不可逆"到"什么时候才该用"的链。
-            Assert.Contains("源包会被永久删除", StatusText.DangerModeRiskLines[0], StringComparison.Ordinal);
-            Assert.Contains("校验不等于你确认过内容", StatusText.DangerModeRiskLines[1], StringComparison.Ordinal);
-            Assert.Contains("源包已删、内容物未完成", StatusText.DangerModeRiskLines[2], StringComparison.Ordinal);
-            Assert.Contains("只在你确实没有空间时才用它", StatusText.DangerModeRiskLines[3], StringComparison.Ordinal);
-        }
-
-        [Fact]
-        public void 危险模式的界面入口_是个红色按钮并且写着风险()
-        {
-            /*
-             * 2026-09-24 第 11 条之后，危险模式的界面入口从主界面红横幅搬到了
-             * ②解压方式页底部的「高风险区」（用户原话："这个危险操作这个红框多么多余啊，别放在主界面"）。
-             * 判据一条没减：红色按钮 + 风险四条 + 自测凭证 + 并发档与空间建议。
-             */
-            string extractionXaml = ReadRepositoryFile("ArchiveFixer", "Views", "Tabs", "ExtractionTab.xaml");
-
-            // 红色（DangerButtonStyle 是实心红那一档）。
-            Assert.Contains("DangerButtonStyle", extractionXaml, StringComparison.Ordinal);
-            Assert.Contains("ToggleDangerModeCommand", extractionXaml, StringComparison.Ordinal);
-
-            // 并发档与"按空间算建议"也在界面上（用户要求"算出并显示最多能并行几个"）。
-            Assert.Contains("MaxParallelChoices", extractionXaml, StringComparison.Ordinal);
-            Assert.Contains("ParallelAdviceText", extractionXaml, StringComparison.Ordinal);
-            Assert.Contains("RefreshParallelAdviceCommand", extractionXaml, StringComparison.Ordinal);
-
-            // 开启时的常驻风险说明（风险一直摆在界面上，而不是只在弹窗里出现一次）。
-            Assert.Contains("DangerModeEnabled", ReadRepositoryFile("ArchiveFixer", "Views", "Tabs", "TaskTab.xaml"), StringComparison.Ordinal);
-
-            // 风险四条是**绑定**过来的（主 ViewModel 引用 StatusText 那一份，不重抄）。
-            string mainViewModel = ReadRepositoryFile("ArchiveFixer", "ViewModels", "MainViewModel.cs");
-
-            Assert.Contains(
-                "IReadOnlyList<string> DangerModeRiskLines => StatusText.DangerModeRiskLines;",
-                mainViewModel.Replace("\r", string.Empty).Replace("\n", string.Empty).Replace("  ", " "),
-                StringComparison.Ordinal);
+            Assert.DoesNotContain("Text=\u0022高风险区\u0022", extraction, StringComparison.Ordinal);
+            Assert.DoesNotContain("ToggleDangerModeCommand", extraction, StringComparison.Ordinal);
+            Assert.DoesNotContain("DangerModeRiskLines", extraction, StringComparison.Ordinal);
+            Assert.DoesNotContain("DangerousSpaceModeEnabled", extraction, StringComparison.Ordinal);
         }
 
         private static string ReadRepositoryFile(params string[] parts)
@@ -1334,7 +975,7 @@ namespace ArchiveFixer.Tests
             return path;
         }
 
-        /// <summary>造一个"危险模式该删"的现场：成功 + 校验通过 + 其余物里有源包。</summary>
+        /// <summary>造一个"其余物处理该动手"的现场：成功 + 校验通过 + 其余物里有源包。</summary>
         private (ArchiveTask Task, string SourcePath, string RestDirectory) CreatePurgeScenario()
         {
             string outputPath = Path.Combine(_root, "out", "222");
@@ -1359,7 +1000,7 @@ namespace ArchiveFixer.Tests
                 /*
                  * 机器终态也要一起给（2026-09-24 起删除裁决读它，不再读 Status 那个中文文案）：
                  * 光有"状态写着解压成功 + 校验通过"还不够 —— 那两样都可能被别处改掉，
-                 * 而危险模式删的是**永久删除**，判据必须是管线在结论成立那一刻写下的枚举。
+                 * 而彻底删除是**永久删除**，判据必须是管线在结论成立那一刻写下的枚举。
                  */
                 Outcome = TaskOutcome.Succeeded,
                 RestDirectoryPath = restDirectory,
@@ -1369,39 +1010,5 @@ namespace ArchiveFixer.Tests
             return (task, sourcePath, restDirectory);
         }
 
-        /// <summary>一份"全过"的自测证据（并发 2 → 4 个样本）。</summary>
-        private static DangerModeSelfTestEvidence GoodEvidence()
-        {
-            long content = 100L * 1024 * 1024;
-            long purged = 120L * 1024 * 1024;
-
-            var steps = new List<DangerModeSelfTestStep>();
-
-            for (int i = 0; i < 4; i++)
-            {
-                steps.Add(new DangerModeSelfTestStep
-                {
-                    DisplayName = $"sample-{i}.7z",
-                    TaskPath = Path.Combine("src", $"sample-{i}.7z"),
-                    ExtractSucceeded = true,
-                    Verified = true,
-                    RestPurged = true,
-                    PurgedBytes = purged,
-
-                    // 危险模式的预期曲线：净消耗 ≈ 内容物 − 回收 ≈ 0。
-                    AvailableBeforeStart = 10 * Gib,
-                    AvailableAfterFinish = 10 * Gib,
-                    RequiredBytes = content + purged,
-                    ContentBytes = content
-                });
-            }
-
-            return new DangerModeSelfTestEvidence
-            {
-                ParallelCount = 2,
-                RequiredSampleSize = 4,
-                Steps = steps
-            };
-        }
     }
 }

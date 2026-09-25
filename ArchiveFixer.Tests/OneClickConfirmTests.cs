@@ -188,21 +188,19 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 「其余物是否自动删除」这一行必须跟着**本批到底生不生效**走：
-        /// 默认（危险模式关）说不自动删除；开了危险模式但凭证盖不住本批并发档，**照样**说不自动删除
-        /// —— 那时候批内确实一个字节都不删，说成"会自动删"就是骗人。
+        /// 「其余物」这一行必须**跟着③页「删除操作」那一档说**（用户 2026-09-25 第 32 条定了三档）：
+        /// 不动其余物 = 说不自动删除；移入回收站 / 彻底删除 = 如实说会自动处理（而且两档措辞不同）。
         /// </summary>
-        [Fact]
-        public async Task 其余物一行_凭证据不住时不声称自动删除()
+        [Theory]
+        [InlineData(RestHandlingModes.Keep, StatusText.OneClickConfirmRestKeep)]
+        [InlineData(RestHandlingModes.RecycleBin, StatusText.OneClickConfirmRestRecycle)]
+        [InlineData(RestHandlingModes.Delete, StatusText.OneClickConfirmRestAutoDelete)]
+        public async Task 其余物一行_按删除操作那一档说(string mode, string expected)
         {
             Harness harness = CreateHarness(settings =>
             {
-                settings.DangerousSpaceModeEnabled = true;
-
-                // 凭证只覆盖并发 2，而本批并发是默认的 4 → 盖不住 → 本批不生效。
-                settings.DangerModeSelfTestStamp = DangerModeSelfTestStamp.Create(
-                    DangerModeSelfTestProtocol.Evaluate(GoodEvidence(parallelCount: 2)),
-                    new DateTime(2026, 9, 24, 20, 0, 0));
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = mode;
             });
 
             ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
@@ -212,34 +210,128 @@ namespace ArchiveFixer.Tests
                 OneClickRunOptions.FromSettings(harness.Vm.Settings),
                 null);
 
-            Assert.Contains(StatusText.OneClickConfirmRestKeep, facts.RestEcho, StringComparison.Ordinal);
-            Assert.DoesNotContain(StatusText.OneClickConfirmRestAutoDelete, facts.RestEcho, StringComparison.Ordinal);
-        }
+            Assert.Contains(expected, facts.RestEcho, StringComparison.Ordinal);
 
-        /// <summary>凭证盖得住本批并发档时才说"解压成功后自动彻底删除"。</summary>
-        [Fact]
-        public async Task 其余物一行_危险模式真的生效时才说自动删除()
-        {
-            Harness harness = CreateHarness(settings =>
+            // 三档措辞互不相同：说错档 = 用户按错的预期动手。
+            foreach (string other in new[]
+                     {
+                         StatusText.OneClickConfirmRestKeep,
+                         StatusText.OneClickConfirmRestRecycle,
+                         StatusText.OneClickConfirmRestAutoDelete
+                     })
             {
-                settings.MaxParallelExtractCount = 4;
-                settings.DangerousSpaceModeEnabled = true;
-                settings.DangerModeSelfTestStamp = DangerModeSelfTestStamp.Create(
-                    DangerModeSelfTestProtocol.Evaluate(GoodEvidence(parallelCount: 4)),
-                    new DateTime(2026, 9, 24, 20, 0, 0));
-            });
-
-            ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
-
-            var facts = await harness.Extraction.BuildConfirmFactsAsync(
-                new[] { task },
-                OneClickRunOptions.FromSettings(harness.Vm.Settings),
-                null);
-
-            Assert.Contains(StatusText.OneClickConfirmRestAutoDelete, facts.RestEcho, StringComparison.Ordinal);
+                if (!string.Equals(other, expected, StringComparison.Ordinal))
+                {
+                    Assert.DoesNotContain(other, facts.RestEcho, StringComparison.Ordinal);
+                }
+            }
         }
 
         // ================================================================ ③ 只能有一个弹窗
+
+        /// <summary>
+        /// **需要改名的包也不再弹第二个框**（用户 2026-09-25 第 32 条）：
+        /// "这个一键处理自己会自动改名自动解压，为什么遇到这种改名的压缩包还要我两次确认，
+        /// 这个对用户来说是完全多余的……那种情况只有手动档才会有"。
+        ///
+        /// <para>所以一键档：改名**自动执行**（逐条写日志），整批**只弹那一个确认框**；
+        /// 手动档（②页/右键那几条改名命令）照旧先出预览 —— 这一条只管一键档。</para>
+        /// </summary>
+        [Fact]
+        public async Task 需要改后缀时_一键处理只弹一个框并自动改名()
+        {
+            Harness harness = CreateHarness();
+
+            string disguised = CreateSourceFile("2222.jpg");
+            ArchiveTask task = AddTask(harness, disguised);
+
+            // 与识别阶段给的结论一致：后缀不匹配（jpg 里其实是 7z）→ 属于"需要改名"。
+            task.ExtensionStatus = StatusText.ExtensionMismatch;
+            task.DetectedFormat = "7Z";
+            task.SuggestedExtension = ".7z";
+
+            int prompts = 0;
+
+            harness.OneClick.OptionsPromptOverride = _ =>
+            {
+                prompts++;
+
+                return OneClickOptionsPrompt.Confirmed(
+                    OneClickRunOptions.FromSettings(harness.Vm.Settings, harness.OutputRoot));
+            };
+
+            await harness.OneClick.RunAsync();
+
+            Assert.Equal(1, prompts);
+
+            string renamed = Path.Combine(Path.GetDirectoryName(disguised)!, "2222.7z");
+
+            Assert.False(File.Exists(disguised), "伪装后缀必须被自动改掉");
+
+            /*
+             * 改名后的文件这会儿可能已经不在源目录里了：本批的源包处理档是「移入其余物」，
+             * 解压成功 + 校验通过之后它会被搬走（那是另一条既有规则，与本次改动无关）。
+             * 所以这里按"整棵树里找得到那个新名字"来断言，并把源目录为空当作正常。
+             */
+            string[] renamedAnywhere = Directory.GetFiles(_root, "2222.7z", SearchOption.AllDirectories);
+
+            Assert.True(
+                renamedAnywhere.Length == 1,
+                $"改名后的 2222.7z 应该正好有一份（可能被搬进其余物），实际 {renamedAnywhere.Length} 份："
+                + string.Join(" | ", renamedAnywhere));
+
+            Assert.Empty(Directory.GetFiles(_root, "2222.jpg", SearchOption.AllDirectories));
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("自动修正后缀", StringComparison.Ordinal));
+        }
+
+        // ================================================================ ④ 其余物会怎么处理，当场说清
+
+        /// <summary>
+        /// 删除操作 = 不动其余物（默认档）时，批首必须**明说**会保留（用户第 32 条：
+        /// 他设过"其余物彻底删除"，结果其余物还在，而日志里一声不响 —— 静默正是问题本身）。
+        /// </summary>
+        [Fact]
+        public async Task 删除操作不动其余物_批首要说清会保留()
+        {
+            Harness harness = CreateHarness();
+            AddTask(harness, CreateSourceFile("pack.7z"));
+
+            harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(
+                OneClickRunOptions.FromSettings(harness.Vm.Settings, harness.OutputRoot));
+
+            await harness.OneClick.RunAsync();
+
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("其余物：本批保留", StringComparison.Ordinal)
+                        && line.Contains("删除操作", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 删除操作 = 彻底删除时，批首同样要说清（这次说的是"会彻底删除"，并写明失败/取消不删）。
+        /// </summary>
+        [Fact]
+        public async Task 删除操作彻底删除_批首要说清会彻底删()
+        {
+            Harness harness = CreateHarness(settings =>
+            {
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
+
+            AddTask(harness, CreateSourceFile("pack.7z"));
+
+            harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(
+                OneClickRunOptions.FromSettings(harness.Vm.Settings, harness.OutputRoot));
+
+            await harness.OneClick.RunAsync();
+
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("其余物：本批任务成功后会彻底删除", StringComparison.Ordinal));
+        }
 
         /// <summary>
         /// 一键处理这条路**只允许一个弹窗**：无用物 / 没有可用密码的提醒并进确认框的正文，
@@ -460,42 +552,6 @@ namespace ArchiveFixer.Tests
             return task;
         }
 
-        /// <summary>一份"全过"的自测证据（协议要求 并发 × 2 个样本，四条判据全满足）。</summary>
-        private static DangerModeSelfTestEvidence GoodEvidence(int parallelCount)
-        {
-            int sampleSize = DangerModeSelfTestProtocol.RequiredSampleSize(parallelCount);
-
-            long content = 100L * 1024 * 1024;
-            long purged = 120L * 1024 * 1024;
-
-            var steps = new List<DangerModeSelfTestStep>();
-
-            for (int i = 0; i < sampleSize; i++)
-            {
-                steps.Add(new DangerModeSelfTestStep
-                {
-                    DisplayName = $"sample-{i}.7z",
-                    TaskPath = Path.Combine("src", $"sample-{i}.7z"),
-                    ExtractSucceeded = true,
-                    Verified = true,
-                    RestPurged = true,
-                    PurgedBytes = purged,
-
-                    // 危险模式的预期曲线：净消耗 ≈ 内容物 − 回收 ≈ 0。
-                    AvailableBeforeStart = 10 * Gib,
-                    AvailableAfterFinish = 10 * Gib,
-                    RequiredBytes = content + purged,
-                    ContentBytes = content
-                });
-            }
-
-            return new DangerModeSelfTestEvidence
-            {
-                ParallelCount = parallelCount,
-                RequiredSampleSize = sampleSize,
-                Steps = steps
-            };
-        }
 
         private sealed class Harness
         {

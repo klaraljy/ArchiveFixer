@@ -335,11 +335,10 @@ namespace ArchiveFixer.Views
             TerminalUseArchiveNameOption.IsChecked = seed.TerminalLayout == TerminalLayoutMode.UseArchiveName;
             TerminalKeepLastFolderOption.IsChecked = seed.TerminalLayout != TerminalLayoutMode.UseArchiveName;
 
+            // 2026-09-25 第 32 条之后只剩两档（原地不动 / 放入其余物）：第三档"校验通过后删除"已删掉，
+            // 要删源包改成"放入其余物 + ③页「删除操作」"（语义更清楚、选项少一个）。
             SourceKeepInPlaceOption.IsChecked = seed.SourceHandling == SourceHandlingMode.KeepInPlace;
-            SourceDeleteAfterVerifyOption.IsChecked = seed.SourceHandling == SourceHandlingMode.DeleteAfterVerify;
-            SourceMoveToRestOption.IsChecked =
-                seed.SourceHandling != SourceHandlingMode.KeepInPlace &&
-                seed.SourceHandling != SourceHandlingMode.DeleteAfterVerify;
+            SourceMoveToRestOption.IsChecked = seed.SourceHandling != SourceHandlingMode.KeepInPlace;
 
             /*
              * 两个勾选项的预置口径（2026-09-24 第 17 条之后）：
@@ -367,17 +366,17 @@ namespace ArchiveFixer.Views
 
         private SourceHandlingMode ResolveSourceHandling()
         {
-            if (SourceKeepInPlaceOption.IsChecked == true)
+            /*
+             * ⚠ 判据写在**会动源文件**的那一档上，兜底留在"什么都不做"那一档（2026-09-25 第 32 条）：
+             * 反过来写（"没勾留在原地就当移入其余物"）时，任何一次界面状态错乱都会变成
+             * "用户没同意过，源包却被搬走了"—— 而搬走是不可逆的。默认档也已经是「留在原地」。
+             */
+            if (SourceMoveToRestOption.IsChecked == true)
             {
-                return SourceHandlingMode.KeepInPlace;
+                return SourceHandlingMode.MoveToRest;
             }
 
-            if (SourceDeleteAfterVerifyOption.IsChecked == true)
-            {
-                return SourceHandlingMode.DeleteAfterVerify;
-            }
-
-            return SourceHandlingMode.MoveToRest;
+            return SourceHandlingMode.KeepInPlace;
         }
 
         /// <summary>

@@ -936,6 +936,12 @@ namespace ArchiveFixer.Tests
             settings.KeepArchiveNameFolder = true;
             settings.PasswordBookPath = bookPath;
 
+            /*
+             * 第 32 条之后设置里的默认档是「源包留在原地」；本类全部用例钉的都是"源包进其余物"那条链
+             * （含链尾补搬），所以在这里显式选上「放入其余物」，免得用例变成在测默认档。
+             */
+            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+
             // 7z 路径留空 = 用 ToolLocator 解析出的内置路径。测试目录里也有一份 tools\7zip
             // （由 ArchiveFixer.csproj 的 CopyToOutputDirectory 带过来），所以真引擎在测试里是可用的。
             settings.CustomSevenZipExePath = string.Empty;

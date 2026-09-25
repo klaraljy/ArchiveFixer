@@ -5,8 +5,9 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 源包处理档的设置项（决策 D-9）：
-    /// 默认 = <c>MoveToRest</c>（一键处理把源包移进其余物），空 / 非法一律回落这一档，旧配置不报错。
+    /// 源包处理档的设置项（决策 D-9；默认档见 2026-09-25 第 32 条）：
+    /// 默认 = <c>KeepInPlace</c>（**源包原来位置不动** —— 用户在 ③「清理与删除」页亲自定的默认），
+    /// 空 / 非法一律回落这一档，旧配置不报错。
     ///
     /// 为什么容错必须在这一层：这个字符串可能来自旧配置（没有这个字段）、用户手改的 json，
     /// 或将来改名后的枚举。到解压那一刻才发现读不懂是最糟的 —— 用户已经点了一键处理，
@@ -15,13 +16,13 @@ namespace ArchiveFixer.Tests
     public class SourceHandlingSettingTests
     {
         [Fact]
-        public void 默认档_是移入其余物()
+        public void 默认档_是留在原地()
         {
             var settings = new AppSettings();
 
-            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), settings.SourceHandling);
-            Assert.Equal(SourceHandlingMode.MoveToRest, AppSettings.ParseSourceHandling(settings.SourceHandling));
-            Assert.Equal(SourceHandlingMode.MoveToRest, AppSettings.ParseSourceHandling(AppSettings.CreateDefault().SourceHandling));
+            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), settings.SourceHandling);
+            Assert.Equal(SourceHandlingMode.KeepInPlace, AppSettings.ParseSourceHandling(settings.SourceHandling));
+            Assert.Equal(SourceHandlingMode.KeepInPlace, AppSettings.ParseSourceHandling(AppSettings.CreateDefault().SourceHandling));
         }
 
         [Theory]
@@ -33,14 +34,13 @@ namespace ArchiveFixer.Tests
         [InlineData("-1")]
         public void 空或非法值一律回落默认档_不抛异常(string? stored)
         {
-            Assert.Equal(SourceHandlingMode.MoveToRest, AppSettings.ParseSourceHandling(stored));
+            Assert.Equal(SourceHandlingMode.KeepInPlace, AppSettings.ParseSourceHandling(stored));
         }
 
         [Theory]
         [InlineData("MoveToRest", SourceHandlingMode.MoveToRest)]
         [InlineData("KeepInPlace", SourceHandlingMode.KeepInPlace)]
-        [InlineData("DeleteAfterVerify", SourceHandlingMode.DeleteAfterVerify)]
-        [InlineData("keepplace", SourceHandlingMode.MoveToRest)]          // 写错的枚举名 → 默认档
+        [InlineData("keepplace", SourceHandlingMode.KeepInPlace)]         // 写错的枚举名 → 默认档
         [InlineData(" KeepInPlace ", SourceHandlingMode.KeepInPlace)]     // 手改 json 时多打空格
         [InlineData("movetorest", SourceHandlingMode.MoveToRest)]         // 大小写不敏感
         public void 合法值原样解析(string stored, SourceHandlingMode expected)
@@ -55,12 +55,12 @@ namespace ArchiveFixer.Tests
 
             settings.Normalize();
 
-            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), settings.SourceHandling);
+            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), settings.SourceHandling);
 
-            settings.SourceHandling = "  DeleteAfterVerify  ";
+            settings.SourceHandling = "  MoveToRest  ";
             settings.Normalize();
 
-            Assert.Equal(nameof(SourceHandlingMode.DeleteAfterVerify), settings.SourceHandling);
+            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), settings.SourceHandling);
         }
 
         [Fact]

@@ -279,6 +279,47 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 「删除操作」三档（用户 2026-09-25 第 32 条亲自定的）：不动其余物（默认）/ 移入回收站 / 彻底删除。
+        ///
+        /// <para>读写的是设置里的字符串（<see cref="AppSettings.RestHandlingAfterVerify"/>），
+        /// 解析/归一化都走 <see cref="RestHandlingModes"/> —— 与解压时的口径是同一份实现
+        /// （与 <see cref="SourceHandling"/> 同一套写法，避免"界面上选了这个、跑起来是那个"）。</para>
+        ///
+        /// <para>⛔ 它取代了原来那套「危险模式 + 自测凭证」：选「彻底删除」不再需要任何凭证，
+        /// ③页会在选项下面常驻一条不可关闭的红字提示（见 <see cref="IsRestDeleteSelected"/>）。</para>
+        /// </summary>
+        public string RestHandling
+        {
+            get => RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
+            set
+            {
+                string stored = RestHandlingModes.Normalize(value);
+
+                if (string.Equals(Settings.RestHandlingAfterVerify, stored, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                Settings.RestHandlingAfterVerify = stored;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsRestDeleteSelected));
+                OnPropertyChanged(nameof(RestHandlingSummary));
+            }
+        }
+
+        /// <summary>③页那条红字提示的可见性：选了「彻底删除」就常驻显示（不能消掉）。</summary>
+        public bool IsRestDeleteSelected =>
+            string.Equals(RestHandling, RestHandlingModes.Delete, StringComparison.Ordinal);
+
+        /// <summary>这一档的一句话（确认框/界面复用它，免得两处各写一套措辞）。</summary>
+        public string RestHandlingSummary => RestHandling switch
+        {
+            RestHandlingModes.RecycleBin => StatusText.OneClickConfirmRestRecycle,
+            RestHandlingModes.Delete => StatusText.OneClickConfirmRestAutoDelete,
+            _ => StatusText.OneClickConfirmRestKeep
+        };
+
+        /// <summary>
         /// 场景 B 塌缩（规格 §3.3，默认**开**）：包基名与所在目录同名、且目录下只有这一个包时，
         /// 去掉重复的一层（<c>111\222\名字\名字.rar</c> → 产物落 <c>111\222\名字\</c>）。
         /// </summary>
@@ -805,31 +846,11 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * 危险模式：**没有自测凭证（或凭证盖不住当前并发档）就不许在设置里打开**
-                 * （用户 2026-09-22 的协议）。
-                 *
-                 * 拦在保存之前而不是"存下来再关回去"：Normalize() 会把"开着但没凭证"的状态静默关掉，
-                 * 于是"勾上 → 保存 → 看到『设置已保存』"会变成一条**静默丢弃用户选择**的路
-                 * （与工具路径那条同一个口径）。这里直接说清该怎么做，并让用户留在窗口里。
-                 *
-                 * 为什么连并发档一起判：自测是"拿并发数 × 2 个文件真跑一遍"，凭证只对它跑过的那一档成立。
-                 * 把并发调到 8 再勾这个开关，存下来的是一个**开不起来**的组合 ——
-                 * 当场说清，比让用户到跑批时才发现"以为在删、其实没删"要好。
+                 * 危险模式那一段保存前拦截**已随该功能整块退役**（用户 2026-09-25 第 32 条：
+                 * "危险模式 + 自测凭证 + 风险四条 + 红横幅……全部删掉，字体变红就是最好的操作"）。
+                 * 现在②③页那三档「删除操作」不需要任何凭证：选了「彻底删除」时界面会在选项下面
+                 * 常驻一条不可关闭的红字提示（③页 XAML），保存不再被拦。
                  */
-                if (Settings.DangerousSpaceModeEnabled &&
-                    !ArchiveFixer.Storage.DangerModeSelfTestStamp.Covers(
-                        Settings.DangerModeSelfTestStamp,
-                        Settings.MaxParallelExtractCount))
-                {
-                    string coverage = ArchiveFixer.Storage.DangerModeSelfTestStamp.DescribeCoverage(
-                        Settings.DangerModeSelfTestStamp,
-                        Settings.MaxParallelExtractCount);
-
-                    Message = "设置未保存："
-                              + (string.IsNullOrWhiteSpace(coverage) ? StatusText.DangerModeNeedsSelfTest : coverage);
-
-                    return;
-                }
 
                 /*
                  * Normalize() 会把超范围的数字夹回合法区间（例如密码尝试上限 5000 → 1000）。

@@ -255,7 +255,15 @@ namespace ArchiveFixer.Tests
                 "RecursiveScan", "AutoScanAfterDrop", "ScanMode", "UnknownFormatAction", "DefaultExtension",
                 "ConflictAction", "TestBeforeExtract", "OpenOutputFolderWhenDone", "ReportDangerousEntries",
                 "CollectResultsToDirectory", "CollectTargetDirectory", "RecursionMode", "MaxRecursionDepth",
-                "OverwriteMode", "MaxParallelExtractCount", "RestRemovalDefaultMode", "DeleteSourceAfterExtract",
+                "OverwriteMode", "MaxParallelExtractCount", "RestRemovalDefaultMode",
+
+                /*
+                 * ⚠ 2026-09-25 第 32 条删掉了两格，所以这里也少了两条：
+                 * · DeleteSourceAfterExtract —— 手动「只解压」专用的删源开关退役（手动档与一键档读同一套设置）；
+                 * · RestHandlingAfterVerify / SourceHandling —— 它们是③页两组单选，绑的是
+                 *   SettingsEditor 的解析属性（不是 Settings.<原名>），由 InterfaceRefactorTests
+                 *   的 危险模式那一套已退役 那一条负责钉住。
+                 */
                 "TryEmptyPasswordFirst", "UseGlobalPasswordForAllTasks", "EnableSidecarPassword",
                 "MaxPasswordAttemptsPerLayer", "EnableLog", "LowProcessPriority", "RememberLastOutputDirectory",
                 "CustomSevenZipExePath",

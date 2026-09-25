@@ -328,16 +328,13 @@ namespace ArchiveFixer.ViewModels
         /// <summary>本批的"本次选项"（没有就是 null —— 地基路径、或没弹面板时的降级）。</summary>
         private OneClickRunOptions? RunOptions => _runOptions;
 
-        /// <summary>
-        /// "清理源包"的删除执行体（**只给测试注入**；产品代码留空 = 真文件系统）。
-        ///
-        /// <para>
-        /// 为什么必须留这个接缝（用户 2026-09-24 要求）：那条红线是"校验没通过时**一次都不许调用删除**"，
-        /// 而"有没有调用"只有把执行体换成记账的假实现才断言得出来（看源码里的 <c>File.Delete</c> 看不出运行时走没走到）。
-        /// 与既有的 <c>SpaceProbeOverride</c> / <c>OptionsPromptOverride</c> 同一类测试接缝。
-        /// </para>
-        /// </summary>
-        internal ISourceDeleteFileSystem? SourceDeleteFileSystemOverride { get; set; }
+        /*
+         * ⛔ 原来这里有一个 `SourceDeleteFileSystemOverride`（"清理源包"的删除执行体，只给测试注入）。
+         * 2026-09-25 第 32 条之后**管线里再没有任何一处调用 `SourceCleanupService`**
+         * （删除统一走 `Storage/RestItemPurger`，它自己的执行体接缝在 `RecycleBinService` 那一层），
+         * 所以这个接缝成了"看起来能影响删除、其实什么都不影响"的假接口 —— 一并删掉，
+         * 免得以后有人拿它当"删除没发生"的证据。
+         */
 
         /// <summary>
         /// 本批是否出现过密码类失败（密码错误 / 达到尝试上限）。
@@ -405,37 +402,19 @@ namespace ArchiveFixer.ViewModels
         private readonly System.Collections.Concurrent.ConcurrentDictionary<ArchiveTask, RecursiveExtractor> _taskRecursiveExtractors = new();
 
         /// <summary>
-        /// 危险模式：本批因为"空间不足"被跳过（没启动）的任务。
+        /// 空间不足：本批因此被跳过（没启动）的任务。
         /// 批末要**如实报告**它们各自需要多少 —— 静默跳过是明令禁止的。
         /// </summary>
         private readonly List<(string Name, long RequiredBytes, long AvailableBytes, long ShortfallBytes)> _spaceBlockedTasks = new();
 
-        /*
-         * 自测期间把危险模式**临时**打开（用户 2026-09-22 要求的协议：先拿 2×并发数 个文件真跑一遍）。
-         *
-         * 为什么是一个运行期开关而不是"先把设置改成 true 再跑"：
-         * ① 自测没通过时设置必须**保持原样**（一个字节都不许被写）；
-         * ② 设置是落盘的，而自测是一个可能中途失败的动作 —— 写到盘上的 true 会留在那里。
-         */
-        private bool _dangerModeArmedForSelfTest;
-
-        /// <summary>正在跑的自测证据收集器（不在自测时为 null）。</summary>
-        private DangerModeSelfTestRecorder? _selfTestRecorder;
-
         /// <summary>
-        /// 本批实际生效的危险模式。
+        /// 本批生效的「删除操作」档（<see cref="RestHandlingModes"/>；批首定一次）。
         ///
-        /// <para>⚠ 它是**批首定一次**的（<see cref="PrepareDangerModeForBatch"/>），不是每次读设置现算：
-        /// 自测期间要强制开（<c>_dangerModeArmedForSelfTest</c>），平时还要求"自测凭证盖得住本批的并发档"。
-        /// 默认 false —— 没经过批首的路径（例如单独解压一个包）永远按普通档走，不会顺手删东西。</para>
+        /// <para>⚠ 批首定一次而不是每任务现读设置：同一批里不许"前半段按一个档、后半段按另一个"
+        /// （用户可能中途去③页改）。<see cref="RestHandlingModes.Keep"/> 是默认档 ——
+        /// 没经过批首的路径（例如单独解压一个包）永远按 Keep 走，不会顺手删东西。</para>
         /// </summary>
-        private bool IsDangerModeActive => _dangerModeActiveThisBatch;
-
-        /// <summary>本批危险模式是否真的生效（批首定一次）。</summary>
-        private bool _dangerModeActiveThisBatch;
-
-        /// <summary>本批"开着但自测凭证盖不住"的说明（空 = 没有这种情况）。</summary>
-        private string _dangerModeNotCoveredReason = string.Empty;
+        private string _restHandlingThisBatch = RestHandlingModes.Keep;
 
         /// <summary>逐任务的运行期记账（并发下多个任务同时写，所以全部走锁）。</summary>
         private sealed class ScheduledTaskRuntime
@@ -443,36 +422,20 @@ namespace ArchiveFixer.ViewModels
             /// <summary>当前账上给这个任务预留的字节数（开工时是粗估，拿到清单后可能被调整）。</summary>
             public long ReservedBytes;
 
-            /// <summary>它开工前的可用空间（-1 = 取不到）——自测的空间曲线要它。</summary>
+            /// <summary>它开工前的可用空间（-1 = 取不到）。</summary>
             public long AvailableBeforeStart = -1;
 
-            /// <summary>它收尾（含危险模式删除）之后的可用空间（-1 = 取不到）。</summary>
+            /// <summary>它收尾（含其余物处理）之后的可用空间（-1 = 取不到）。</summary>
             public long AvailableAfterFinish = -1;
 
             /// <summary>其余物是不是被彻底删掉了。</summary>
             public bool RestPurged;
 
-            /// <summary>彻底删除释放的字节数。</summary>
+            /// <summary>其余物处理（回收站 / 彻底删除）释放或腾出的字节数。</summary>
             public long PurgedBytes;
 
-            /// <summary>危险模式动作没做成时的原因（空 = 没出问题）。</summary>
+            /// <summary>其余物处理没做成时的原因（空 = 没出问题）。</summary>
             public string PurgeNote = string.Empty;
-        }
-
-        /// <summary>
-        /// 自测的进度与样本台账。
-        ///
-        /// <para>它只记"这一批自测在处理哪几个文件、并发几" —— 逐文件的结果在
-        /// <see cref="_spaceRuntime"/> 里（那是所有任务共用的运行期记账，不专为自测而生）。
-        /// 两处分开的好处：自测中断（用户点取消）时，已经跑完的那几个文件的结果照样是完整的。</para>
-        /// </summary>
-        private sealed class DangerModeSelfTestRecorder
-        {
-            public int ParallelCount { get; init; }
-
-            public int RequiredSampleSize { get; init; }
-
-            public List<ArchiveTask> Samples { get; } = new();
         }
 
         public ExtractionCoordinator(
@@ -737,27 +700,21 @@ namespace ArchiveFixer.ViewModels
              * MoveSourcePackageIntoRest 统一把关。用户原话：
              * 「如果成功了你就直接将源包放在其余物里面」「地基路径也照这条走」。
              *
-             * 档位语义：
+             * 档位语义（**2026-09-25 第 32 条收敛成两档**）：
              * · MoveToRest（默认）—— 成功 + 校验通过就把整组源包移入其余物；
-             * · KeepInPlace —— 一个字节都不搬（"传统解压器"语义的出口）；
-             * · DeleteAfterVerify —— 沿用 §9.5：校验通过后删源包（回收站/彻底删除按既有设置）。
+             * · KeepInPlace —— 一个字节都不搬（"传统解压器"语义的出口）。
              *
-             * 为什么 deleteSource 要按档位算，而不是照抄一个布尔：
-             * "移"和"删"绝不能同时生效 —— 刚搬进其余物的源包会被下一步清理掉，
-             * 用户看到的就成了"源包没了"（这句踩坑记录从上一版保留）。
-             * 另外地基路径上那个更老的 §9.5 开关 DeleteSourceAfterExtract（默认关）仍然算数，
-             * 但**只在 KeepInPlace 档**：那是"传统解压器 + 解压后清理源包"的既有组合，
-             * 上一版就是这么用的，不该被这次改动悄悄改掉；MoveToRest 档下它不参与，
-             * 否则用户开过这个老开关就会在"移入其余物"之后立刻被删掉。
+             * ⛔ 原来还有第三档 DeleteAfterVerify（校验通过后删源包），已按用户要求删掉：
+             * 要删源包就选"放入其余物" + ③页「删除操作」= 回收站 / 彻底删除 ——
+             * 那条路由 RunRestHandlingAsync 在收尾之后统一处理（回收站可还原，彻底删除直接省空间）。
+             * 手动档那条更老的开关 DeleteSourceAfterExtract 也一并退役（用户原话：
+             * "手动档的操作就和选项卡里面的一致"）：两条路径现在读**同一套**设置。
              *
              * ⚠ 「本次选项」里选过源包处理时**以它为准**（规格 §9.2 硬要求①：覆盖只对本次有效）：
              * RunOptions 只在"一键处理这一批"里非空，地基路径永远是 null → 照旧读设置。
              */
             SourceHandlingMode sourceHandling = RunOptions?.SourceHandling
                 ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
-
-            bool deleteSource = sourceHandling == SourceHandlingMode.DeleteAfterVerify ||
-                (!oneClickRun && sourceHandling == SourceHandlingMode.KeepInPlace && Settings.DeleteSourceAfterExtract);
 
             /*
              * 终端落法（规格 §3.1 / 设置项 TerminalLayoutMode）同样在这里读一次并解析：
@@ -849,7 +806,6 @@ namespace ArchiveFixer.ViewModels
                     expected,
                     collectResults,
                     collectTargetDirectory,
-                    deleteSource,
                     sourceHandling,
                     sharedOutputRoot,
                     terminalLayout,
@@ -1123,7 +1079,6 @@ namespace ArchiveFixer.ViewModels
             ArchiveListResult expected,
             bool collectResults,
             string collectTargetDirectory,
-            bool deleteSource,
             SourceHandlingMode sourceHandling,
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
@@ -1350,46 +1305,6 @@ namespace ArchiveFixer.ViewModels
                     // 内容物已经好了，只有源包没搬成 —— 这不是"解压失败"，而是"这件事没做完"。
                     sourceMoveFailure =
                         $"内容物已好，源包未能移入其余物：{sourceMove.Message}（源包仍在原处，内容物不受影响）";
-                }
-            }
-            else if (sourceHandling == SourceHandlingMode.DeleteAfterVerify)
-            {
-                /*
-                 * 一键处理 + **本轮只有待续解的中间件**（内容物是续解子任务产出的）→ 现在绝不能删。
-                 *
-                 * 用户 2026-09-24 的第 19.4 条：他把设置定成「校验通过后删除」，选中**文件夹**时
-                 * 里面那些包一个都没被删，而选中**单个文件**时删了 —— 差别就在这里。
-                 * 一个文件夹里的包绝大多数是"第一层只出内层包"的形状（假 MP4 + 尾部 ZIP + 内层加密分卷），
-                 * 内容物要等第二、第三层才出现；而老代码在 DeleteAfterVerify 档上**当场就删**，
-                 * 于是源包在内容物还没出来之前就没了（比"没删"更糟，只是他还没碰上那一次）。
-                 *
-                 * 现在与 MoveToRest 完全同一口径：记账成"留到链结束后补做"，
-                 * 由 <see cref="CompleteRootSourcePackagesAfterChainAsync"/> 在**整条链跑完 + 全链校验通过 +
-                 * 那个目录里确实有内容物**之后按档位删（见 RunDeferredSourceMoveWork）。
-                 * 链没跑完 / 撞轮数上限 / 任何一层校验没过 → 一个字节都不删。
-                 */
-                if (oneClickRun && commit.Attempted && commit.FailedCount == 0 && commit.MovedContentCount == 0)
-                {
-                    task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
-
-                    logEntries.Add((
-                        "INFO",
-                        $"{task.FileName}：本轮产出的都是待续解的中间件（没有内容物定稿），" +
-                        $"按「校验通过后删除」档先留着源包，等整条续解链跑完、全链校验通过之后再删。"));
-                }
-                else
-                {
-                    SourceCleanupResult cleanup = new SourceCleanupService(SourceDeleteFileSystemOverride).Cleanup(task, verification, deleteSource);
-
-                    /*
-                     * 这句日志**不再只写"真的删了"那一次**（用户 2026-09-24 诊断出来的静默口）：
-                     * Attempted=false 有两种情形（输出校验未通过 / 任务没有可删的源文件路径），
-                     * 老写法一声不吭 —— 用户看到的现象就是"设置成删除档，源包却没删，日志里一个字都没有"。
-                     * 现在跳过也要说明原因（WARN），做成了就写 INFO。
-                     */
-                    logEntries.Add((
-                        cleanup.Attempted && cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
-                        $"{task.FileName}：清理源包 —— {cleanup.Message}"));
                 }
             }
 
@@ -1697,41 +1612,88 @@ namespace ArchiveFixer.ViewModels
 
             foreach (ArchiveTask rootTask in rootTasks)
             {
-                if (rootTask == null || rootTask.SourcePackageMove != SourcePackageMoveState.DeferredToChainEnd)
+                if (rootTask == null)
                 {
                     continue;
                 }
 
-                // 后台重活（目录遍历 + 可能的整包跨盘拷贝），日志先收集、回到 UI 线程再写。
-                DeferredSourceMoveWork work = await Task.Run(
-                    () => RunDeferredSourceMoveWork(rootTask, chainTasks, sourceHandling, cancellationToken),
-                    CancellationToken.None);
-
-                foreach ((string level, string message) in work.LogEntries)
-                {
-                    AppendLog(level, message);
-                }
-
-                if (!string.IsNullOrWhiteSpace(work.Failure))
+                if (rootTask.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd)
                 {
                     /*
-                     * 与"本轮直接搬"同一口径（决策 D-12）：内容物已经好了，所以**不**顶掉"解压成功"，
-                     * 但任务整体没做完 —— 标成「部分完成」并写明原因（不变量 6 的反面同样成立）。
+                     * 后台重活（目录遍历 + 可能的整包跨盘拷贝 + 链尾那一档"其余物处理"），
+                     * 日志先收集、回到 UI 线程再写。
                      */
-                    rootTask.Status = StatusText.PartiallyCompleted;
-                    rootTask.ErrorMessage = work.Failure;
+                    DeferredSourceMoveWork work = await RunDeferredSourceMoveWorkAsync(
+                        rootTask, chainTasks, sourceHandling, cancellationToken);
 
-                    rootTask.VerifyMessage = string.IsNullOrWhiteSpace(rootTask.VerifyMessage)
-                        ? work.Failure
-                        : $"{rootTask.VerifyMessage}；{work.Failure}";
+                    foreach ((string level, string message) in work.LogEntries)
+                    {
+                        AppendLog(level, message);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(work.Failure))
+                    {
+                        /*
+                         * 与"本轮直接搬"同一口径（决策 D-12）：内容物已经好了，所以**不**顶掉"解压成功"，
+                         * 但任务整体没做完 —— 标成「部分完成」并写明原因（不变量 6 的反面同样成立）。
+                         */
+                        rootTask.Status = StatusText.PartiallyCompleted;
+                        rootTask.ErrorMessage = work.Failure;
+
+                        rootTask.VerifyMessage = string.IsNullOrWhiteSpace(rootTask.VerifyMessage)
+                            ? work.Failure
+                            : $"{rootTask.VerifyMessage}；{work.Failure}";
+                    }
+
+                    continue;
                 }
+
+                /*
+                 * 一键处理里「删除操作」那一档是**留到链尾统一做**的（见 RunRestHandlingAsync 的说明：
+                 * 任务收尾那一刻其余物里还躺着内层包，删了就没法接着解）。
+                 * 到得了这里就说明整条续解链已经跑完 —— 除了上面那种"待补搬"的任务，
+                 * 其余成功任务也要在这里把各自的其余物按档处理掉，否则选了「彻底删除」的人会发现
+                 * 中间件那几份一直留着。
+                 */
+                await ApplyRestHandlingAfterChainAsync(rootTask, cancellationToken);
             }
+        }
+
+        /// <summary>
+        /// 链尾对**单个**成功任务补做「删除操作」那一档（一键处理专用；幂等：已处理过的直接跳过）。
+        /// </summary>
+        private async Task ApplyRestHandlingAfterChainAsync(ArchiveTask task, CancellationToken cancellationToken)
+        {
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (task.Outcome != TaskOutcome.Succeeded ||
+                task.OutputVerification != OutputVerificationOutcome.Passed ||
+                string.IsNullOrWhiteSpace(task.RestDirectoryPath) ||
+                !Directory.Exists(task.RestDirectoryPath))
+            {
+                // 没成功 / 没校验通过 / 没有其余物 → 什么都不做（红线：失败一个字节都不删）。
+                return;
+            }
+
+            ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
+
+            if (runtime.PurgedBytes > 0 || runtime.RestPurged)
+            {
+                return;
+            }
+
+            await RunRestHandlingAsync(task, runtime, oneClickRun: false, force: true);
         }
 
         /// <summary>
         /// 链结束后补搬的后台本体：判据 → 执行 → 结论。**只允许在后台线程上跑**。
         /// </summary>
-        private DeferredSourceMoveWork RunDeferredSourceMoveWork(
+        private async Task<DeferredSourceMoveWork> RunDeferredSourceMoveWorkAsync(
             ArchiveTask rootTask,
             IReadOnlyList<ArchiveTask>? chainTasks,
             SourceHandlingMode sourceHandling,
@@ -1761,10 +1723,7 @@ namespace ArchiveFixer.ViewModels
 
             if (cancellationToken.IsCancellationRequested)
             {
-                // 措辞跟着档位走（读日志的人要能一眼看出"这一次本来要做的是哪件事"）。
-                string action = sourceHandling == SourceHandlingMode.DeleteAfterVerify ? "清理" : "补搬";
-
-                logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的{action}被取消，源包留在原地（其余物不生成）。"));
+                logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的补搬被取消，源包留在原地（其余物不生成）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -1853,41 +1812,6 @@ namespace ArchiveFixer.ViewModels
              * 未取消 + 不是内层包），只是最后的动作不同：一个搬进其余物、一个按 §9.5 删掉。
              * 失败 / 取消 / 校验未通过 → 上面每一条都已经 return，一个字节都不会动（红线不变）。
              */
-            if (sourceHandling == SourceHandlingMode.DeleteAfterVerify)
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的清理被取消，源包留在原地（一个字节都不删）。"));
-                    return new DeferredSourceMoveWork(logEntries);
-                }
-
-                /*
-                 * 删除判据只给**事实**：`verified: true` 的依据就是上面逐条查过的那些 ——
-                 * 根任务校验通过（OutputVerification == Passed）、全链每一个落在这个目录的任务都校验通过、
-                 * 目录里确实有内容物、且没被取消。它**不是**从状态字符串推出来的（用户 2026-09-24 要求）。
-                 */
-                SourceCleanupResult cleanup = new SourceCleanupService(SourceDeleteFileSystemOverride).CleanupVerified(
-                    rootTask,
-                    verified: true,
-                    verificationNote:
-                        $"整条续解链已跑完，{destinationDirectory} 里有 {contentFiles} 个内容物且全链输出校验通过",
-                    enabled: true);
-
-                logEntries.Add((
-                    cleanup.FailedFiles.Count == 0 ? "INFO" : "WARN",
-                    $"{rootTask.FileName}：链结束后的清理（「校验通过后删除」档） —— {cleanup.Message}"));
-
-                if (cleanup.FailedFiles.Count > 0)
-                {
-                    string cleanupFailure =
-                        $"内容物已好，但源包没能删掉：{cleanup.Message}（源包仍在原处，内容物不受影响）";
-
-                    return new DeferredSourceMoveWork(logEntries, cleanupFailure);
-                }
-
-                return new DeferredSourceMoveWork(logEntries);
-            }
-
             string artifactRoot = rootTask.RestDirectoryPath;
 
             if (string.IsNullOrWhiteSpace(artifactRoot))
@@ -1922,7 +1846,55 @@ namespace ArchiveFixer.ViewModels
                 ? $"内容物已好，源包未能移入其余物：{result.Message}（源包仍在原处，内容物不受影响）"
                 : null;
 
+            if (failure == null)
+            {
+                /*
+                 * ⚠ 链结束后的补搬有一个**顺序陷阱**（2026-09-25 第 32 条实现删除操作时被测试逮住）：
+                 * 根任务收尾那一刻它的其余物里还只有中间件，源包是**现在**才搬进去的 ——
+                 * 所以"删除操作"那一档必须在这里**再做一次**，否则选了「彻底删除 / 移入回收站」的人
+                 * 会发现"中间件被清了，源包却躺在其余物里"（正是他抱怨过的那种不一致）。
+                 *
+                 * 判据与 RunRestHandlingAsync 完全同一套（RestItemPurger 的五道门槛 + 本批档位）：
+                 * 到得了这里就说明"整条链跑完 + 全链校验通过 + 目录里确实有内容物 + 未取消"，
+                 * 于是把这一份刚搬好的其余物按档处理掉。
+                 */
+                await ApplyRestHandlingAfterChainMoveAsync(rootTask, logEntries, cancellationToken);
+            }
+
             return new DeferredSourceMoveWork(logEntries, failure);
+        }
+
+        /// <summary>
+        /// 链结束后的补搬把源包放进其余物之后，按本批「删除操作」档把那一份处理掉
+        /// （不动 / 移入回收站 / 彻底删除）。删不掉只写 WARN，绝不改任务结论。
+        /// </summary>
+        private async Task ApplyRestHandlingAfterChainMoveAsync(
+            ArchiveTask rootTask,
+            List<(string Level, string Message)> logEntries,
+            CancellationToken cancellationToken)
+        {
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            bool cancelled = cancellationToken.IsCancellationRequested ||
+                             IsStopping ||
+                             _operationCts?.IsCancellationRequested == true;
+
+            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
+                ? DeleteMode.RecycleBin
+                : DeleteMode.Permanent;
+
+            RestPurgeOutcome outcome = await Task.Run(
+                () => new RestItemPurger().Purge(rootTask, cancelled, deleteMode),
+                CancellationToken.None);
+
+            logEntries.Add((
+                outcome.Succeeded ? "INFO" : "WARN",
+                $"{rootTask.FileName}：链结束后的其余物处理 —— {outcome.Message}"));
         }
 
         /// <summary>
@@ -4279,7 +4251,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>三个结论各有**唯一来源**，这里只做汇总，绝不另算一遍：</para>
         /// <list type="bullet">
         /// <item><description>内容物落点 → <see cref="PathService.ResolveOutputPlacement"/>（与真正开跑同一条推导链）；</description></item>
-        /// <item><description>其余物会不会被自动删 → 本批危险模式是否真的生效（同一套凭证判据）；</description></item>
+        /// <item><description>其余物会怎么处理 → ③页「删除操作」那一档（<see cref="AppSettings.RestHandlingAfterVerify"/>，用户 2026-09-25 第 32 条定的三档）；</description></item>
         /// <item><description>两行提醒 → <see cref="BatchReminderFacts"/>（同一个无用物扫描器 + 同一套密码候选判据）。</description></item>
         /// </list>
         /// </summary>
@@ -4293,14 +4265,11 @@ namespace ArchiveFixer.ViewModels
                 .ConfigureAwait(false);
 
             /*
-             * 「其余物会不会被自动删掉」= 危险模式这一批到底生不生效。
-             * 判据与 PrepareDangerModeForBatch 完全同一套（开关 + 凭证盖得住本批并发档），
-             * 只是**不写**批内状态：这里还在"问用户"的阶段，任何批内记账都不该被这一次预览改掉。
+             * 「其余物会怎么处理」= ③页「删除操作」那一档（用户 2026-09-25 第 32 条：三档
+             * 不动 / 移入回收站 / 彻底删除，判据只有一处实现 RestHandlingModes.Normalize）。
+             * 这里只是把它**原样说给用户听**，一个字都不另算。
              */
-            bool dangerActive = Settings.DangerousSpaceModeEnabled
-                && DangerModeSelfTestStamp.Covers(
-                    Settings.DangerModeSelfTestStamp,
-                    ResolveParallelCountForDisplay());
+            string restHandling = RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
 
             SourceHandlingMode sourceHandling = pendingOptions?.SourceHandling
                 ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
@@ -4315,8 +4284,12 @@ namespace ArchiveFixer.ViewModels
             return new OneClickConfirmFacts
             {
                 DestinationEcho = destination,
-                RestEcho = StatusText.OneClickConfirmRestLabel
-                    + (dangerActive ? StatusText.OneClickConfirmRestAutoDelete : StatusText.OneClickConfirmRestKeep),
+                RestEcho = StatusText.OneClickConfirmRestLabel + restHandling switch
+                {
+                    RestHandlingModes.RecycleBin => StatusText.OneClickConfirmRestRecycle,
+                    RestHandlingModes.Delete => StatusText.OneClickConfirmRestAutoDelete,
+                    _ => StatusText.OneClickConfirmRestKeep
+                },
                 SourceEcho = StatusText.OneClickConfirmSourceLabel
                     + OneClickRunOptions.DescribeSourceHandling(sourceHandling),
                 SpecialExtractionEcho = specialExtraction.IsActive
@@ -4648,7 +4621,9 @@ namespace ArchiveFixer.ViewModels
 
                     foreach (SourceJunkItem item in group)
                     {
-                        builder.AppendLine("    " + item.FileName);
+                        // 目录要标出来（第 32 条）：真实资源包把密码提示做成一个文件夹，
+                        // 与"说明.txt"混在一起不标就分不清哪个是文件夹。
+                        builder.AppendLine("    " + item.FileName + (item.IsDirectory ? "（文件夹）" : string.Empty));
                     }
                 }
 
@@ -5452,21 +5427,14 @@ namespace ArchiveFixer.ViewModels
                  */
                 ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, maxParallel);
 
-                PrepareDangerModeForBatch(maxParallel);
+                PrepareRestHandlingForBatch();
 
                 foreach (string line in plan.DescribeLines())
                 {
                     AppendLog("INFO", line);
                 }
 
-                if (IsDangerModeActive)
-                {
-                    LogDangerModeArmed();
-                }
-                else if (!string.IsNullOrWhiteSpace(_dangerModeNotCoveredReason))
-                {
-                    LogDangerModeNotCovered();
-                }
+                LogRestHandlingForBatch();
 
                 _spaceLedger = new SpaceReservationLedger(
                     ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)),
@@ -5632,25 +5600,27 @@ namespace ArchiveFixer.ViewModels
 
                 /*
                  * 空间规划与本批记账同样"只活这一批"：
-                 * 上一批的账本必须丢掉（下一批的可用空间与任务集都变了）；
-                 * 自测的临时开关也必须落回原状 —— 它只在一次自测里有效。
-                 *
-                 * ⚠ **_spaceRuntime / _refinedEstimates 刻意不在这里清**：自测要在这条批跑完之后
-                 * 才去读逐任务的记账（删了多少、空间曲线怎么走），在这里清掉等于让自测永远拿不到证据。
-                 * 它们由批**开始时**的 ResetSpacePlanningState 清 —— 与其它批级记账同一套时机。
+                 * 上一批的账本必须丢掉（下一批的可用空间与任务集都变了）。
                  */
                 _spaceLedger = null;
-                _dangerModeArmedForSelfTest = false;
 
-                // 批级开关也要落回原状：它只对这一批有效（下一批会重新按当时的档位与凭证判定）。
-                _dangerModeActiveThisBatch = false;
-                _dangerModeNotCoveredReason = string.Empty;
+                /*
+                 * ⚠ 这里**刻意不**把 `_restHandlingThisBatch` 落回 Keep（2026-09-25 第 32 条被测试逮住）。
+                 *
+                 * 一键处理的「删除操作」是在**整条续解链跑完之后**做的，而那个链尾钩子
+                 * （`CompleteRootSourcePackagesAfterChainAsync`，由 `OneClickCoordinator` 在本次解压批次
+                 * 返回之后调用）读的就是这个字段 —— 在这里清掉，等于把用户选的「彻底删除 / 移入回收站」
+                 * 静默降级成「不动其余物」：真机表现就是"我明明选了彻底删除，其余物还在"。
+                 *
+                 * 下一批开工时 `PrepareRestHandlingForBatch()` 会重新按当时的设置写一次，
+                 * 所以留着的值只服务于"这一批自己的链尾"，不会影响任何后续批次。
+                 */
 
                 UpdateSummary();
             }
         }
 
-        // ================================================================ 空间规划 + 危险模式
+        // ================================================================ 空间规划 + 其余物处理
 
         /// <summary>
         /// 给界面算一次"按当前可用空间，最多能并行几个"（用户 2026-09-22 需求第 2 条）。
@@ -5669,26 +5639,26 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 供界面显示的"当前空间档位"一句话（危险模式是否生效也在这句里说清）。
+        /// 供界面显示的"当前空间档位"一句话（其余物会不会被自动处理也在这句里说清）。
         /// </summary>
         internal string DescribeSpaceMode()
         {
-            string danger = Settings.DangerousSpaceModeEnabled
-                ? "危险模式：**已开启**（每个任务成功后立刻彻底删它的其余物，源包不可还原）"
-                : "危险模式：关闭（其余物按默认档处理）";
+            string mode = RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
 
-            string stamp = DangerModeSelfTestStamp.Describe(Settings.DangerModeSelfTestStamp);
+            string rest = mode switch
+            {
+                RestHandlingModes.RecycleBin =>
+                    "其余物：任务成功后移入回收站（可还原；空间要等清空回收站才释放）",
+                RestHandlingModes.Delete =>
+                    "其余物：任务成功后彻底删除（源包 + 中间件，不可恢复）",
+                _ => "其余物：保留（不动其余物）"
+            };
 
-            /*
-             * 开着但凭证盖不住当前档位时，这句话必须说出来 —— 它是界面上"当前空间档位"的权威一句，
-             * 只写"已开启"会让人以为边解边删正在起作用。
-             */
-            string coverage = Settings.DangerousSpaceModeEnabled &&
-                              !DangerModeSelfTestStamp.Covers(Settings.DangerModeSelfTestStamp, ResolveParallelCountForDisplay())
-                ? "；⚠ 但自测凭证盖不住当前并发档，本批不生效（" + StatusText.DangerModeNotCoveredBySelfTest + "）"
-                : string.Empty;
+            string source = AppSettings.ParseSourceHandling(Settings.SourceHandling) == SourceHandlingMode.KeepInPlace
+                ? "源包：留在原地"
+                : "源包：移入其余物";
 
-            return danger + (string.IsNullOrWhiteSpace(stamp) ? "；还没有自测凭证" : "；" + stamp) + coverage;
+            return source + "；" + rest;
         }
 
         /// <summary>界面上那句"当前档位"用的并发数（与真正开跑时同一个口径：设置项 1–8）。</summary>
@@ -6202,7 +6172,7 @@ namespace ArchiveFixer.ViewModels
             {
                 await ProcessExtractTaskAsync(task, oneClickRun);
 
-                await RunDangerModePurgeAsync(task, runtime);
+                await RunRestHandlingAsync(task, runtime, oneClickRun);
             }
             finally
             {
@@ -6218,61 +6188,73 @@ namespace ArchiveFixer.ViewModels
                     runtime.ReservedBytes = 0;
                 }
 
-                LogSelfTestProgress(task);
-
                 UpdateSummary();
             }
         }
 
         /// <summary>
-        /// 自测的**逐文件进度**（用户明确要求"自测要有进度与结果：哪个文件、通过/失败、为什么"）。
-        /// 每跑完一个样本就写一行，而不是憋到最后一次性吐出十条。
+        /// **「删除操作」的唯一触发点**：任务收尾之后，按用户选的档处理它自己的其余物。
+        ///
+        /// <para>三档（用户 2026-09-25 第 32 条亲自定的）：不动（Keep）/ 移入回收站 / 彻底删除。
+        /// 后两档的门槛全在 <see cref="RestItemPurger"/> 里（终态必须是「完成」+ 校验通过 + 未取消 +
+        /// 路径是定稿那一刻记下来的那一条 + 落在自己的输出根之内）——这里只负责"什么时候试"和"怎么记账"。
+        /// **失败 / 部分完成 / 取消的任务一个字节都不会被删**（不变量 1 的红线）。</para>
         /// </summary>
-        private void LogSelfTestProgress(ArchiveTask task)
+        private async Task RunRestHandlingAsync(
+            ArchiveTask task,
+            ScheduledTaskRuntime runtime,
+            bool oneClickRun,
+            bool force = false)
         {
-            DangerModeSelfTestRecorder? recorder = _selfTestRecorder;
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
 
-            if (recorder == null)
+            /*
+             * ⚠ 一键处理里**不能在这里动手**（2026-09-25 第 32 条实现删除操作时被测试逮住的顺序陷阱）：
+             * 任务收尾这一刻，其余物里躺着的正是**下一层要解的内层包** —— 当场删掉，续解就没粮草了
+             * （实测：选了「彻底删除」之后 ContinuationLayers 直接变成 0，第二层再也解不出来）。
+             * 所以一键档统一记成"留到链尾"，由
+             * CompleteRootSourcePackagesAfterChainAsync → ApplyRestHandlingAfterChainAsync 处理；
+             * 手动「只解压」是单层路径，没有链可等，当场按档处理。
+             */
+            if (oneClickRun && !force)
             {
+                if (!string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：其余物先留着（里面还有要接着解的内层包），整条续解链跑完后再按「删除操作」处理。");
+                }
+
                 return;
             }
 
-            int total = recorder.Samples.Count;
-            int done = recorder.Samples.Count(sample => !string.IsNullOrWhiteSpace(sample.Status) &&
-                                                        sample.EndTime != null);
-
-            ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
-
-            AppendLog(
-                "INFO",
-                $"自测进度 {Math.Min(done, total)}/{total}：{task.FileName} —— "
-                + $"终态「{task.Status}」，输出校验{(task.IsOutputVerified ? "通过" : "未通过")}，"
-                + $"其余物{(runtime.RestPurged ? $"已彻底删除（释放 {TaskSpaceEstimate.FormatSize(runtime.PurgedBytes)}）" : "未删除")}"
-                + (string.IsNullOrWhiteSpace(runtime.PurgeNote) ? string.Empty : $"，说明：{runtime.PurgeNote}"));
-        }
-
-        /// <summary>
-        /// 危险模式的**唯一触发点**：任务成功了就立刻把它自己的其余物彻底删掉。
-        ///
-        /// <para>门槛全在 <see cref="RestItemPurger"/> 里（终态必须是「解压成功」+ 校验通过 + 未取消 +
-        /// 路径是本次记下来的那一条 + 落在自己的输出根之内）——这里只负责"什么时候试"和"怎么记账"。
-        /// **失败 / 部分完成 / 取消的任务一个字节都不会被删**（不变量 1 的红线）。</para>
-        /// </summary>
-        private async Task RunDangerModePurgeAsync(ArchiveTask task, ScheduledTaskRuntime runtime)
-        {
-            if (!IsDangerModeActive)
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
             {
+                // 不动其余物：也要**说一句**（用户 2026-09-25 真机反馈："源包确实没有了，但是其余物还在"）——
+                // 静默正是问题本身。只对真的产出了其余物的任务写，免得整批刷屏。
+                if (!string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：其余物按设置**保留**（{task.RestDirectoryPath}）——"
+                        + "③「清理与删除」页的「删除操作」现在是「不动其余物」；随时可手工删，"
+                        + "或改成「移入回收站」/「彻底删除」让程序在成功后自己处理。");
+                }
+
                 return;
             }
 
             bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
+            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
+                ? DeleteMode.RecycleBin
+                : DeleteMode.Permanent;
 
             RestPurgeOutcome outcome;
 
             try
             {
                 // 磁盘活（量大小 + 删目录）→ 放后台，别占住 UI 线程。
-                outcome = await Task.Run(() => new RestItemPurger().Purge(task, cancelled));
+                outcome = await Task.Run(() => new RestItemPurger().Purge(task, cancelled, deleteMode));
             }
             catch (Exception ex)
             {
@@ -6280,7 +6262,7 @@ namespace ArchiveFixer.ViewModels
                 // 绝不允许把已经成功的解压拖成异常：结论落成"没删成"，内容物不受影响。
                 outcome = new RestPurgeOutcome
                 {
-                    Message = $"{task.FileName}：危险模式删除其余物时出现意外错误：{ex.Message}"
+                    Message = $"{task.FileName}：处理其余物时出现意外错误：{ex.Message}"
                 };
             }
 
@@ -6291,10 +6273,16 @@ namespace ArchiveFixer.ViewModels
 
             if (outcome.Succeeded)
             {
-                runtime.RestPurged = true;
+                runtime.RestPurged = deleteMode == DeleteMode.Permanent;
                 runtime.PurgedBytes = outcome.FreedBytes;
 
-                AppendLog("WARN", outcome.Message + "（这一步不可逆：源包与本任务的中间件已经不在回收站里）");
+                AppendLog(
+                    "INFO",
+                    outcome.Message
+                    + (deleteMode == DeleteMode.Permanent
+                        ? "（这一步不可逆：源包与本任务的中间件已经不在回收站里）"
+                        : "（可从回收站还原；空间要等清空回收站才真正释放）"));
+
                 return;
             }
 
@@ -6304,82 +6292,43 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 批首定一次"本批危险模式到底生不生效"。
-        ///
-        /// <para>两条独立条件：开关开着（或正在自测），**并且**自测凭证盖得住本批的并发档。
-        /// 后者是用户那条协议的直接推论 —— 自测是"拿并发数 × 2 个文件真跑一遍"，
-        /// 结论只对它跑过的那一档成立；档位调高之后拿旧凭证开这个模式等于**没测过就用了**，
-        /// 而这条路上源包会被永久删除，代价不可逆。</para>
-        ///
-        /// <para>盖不住时**不是**偷偷关掉开关，而是本批不生效 + 在日志与界面横幅上说明白：
-        /// 静默降级会让人以为"边解边删"在起作用，于是放心把盘塞满 —— 那才是真正的危险。</para>
+        /// 批首定一次"本批的删除操作按哪一档走"（用户中途改了设置也只影响下一批，同一批口径一致）。
         /// </summary>
-        private void PrepareDangerModeForBatch(int maxParallel)
+        private void PrepareRestHandlingForBatch()
         {
-            _dangerModeActiveThisBatch = false;
-            _dangerModeNotCoveredReason = string.Empty;
-
-            // 自测本身就是那次"证明"：它按自己的档位跑，不再要凭证（凭证正是它要产出的东西）。
-            if (_dangerModeArmedForSelfTest)
-            {
-                _dangerModeActiveThisBatch = true;
-                return;
-            }
-
-            if (!Settings.DangerousSpaceModeEnabled)
-            {
-                return;
-            }
-
-            string? stamp = Settings.DangerModeSelfTestStamp;
-
-            if (!DangerModeSelfTestStamp.Covers(stamp, maxParallel))
-            {
-                _dangerModeNotCoveredReason = DangerModeSelfTestStamp.DescribeCoverage(stamp, maxParallel);
-                return;
-            }
-
-            _dangerModeActiveThisBatch = true;
+            _restHandlingThisBatch = RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
         }
 
-        /// <summary>危险模式开着、但凭证盖不住本批并发档时的那条日志（本批一个字节都不删）。</summary>
-        private void LogDangerModeNotCovered()
+        /// <summary>
+        /// 批首写一条"其余物这一批会怎么处理"的日志（用户 2026-09-25 第 32 条：
+        /// 他要的是**当场看得懂**，而不是跑完发现"其余物还在"却不知道为什么）。
+        /// </summary>
+        private void LogRestHandlingForBatch()
         {
-            AppendLog(
-                "WARN",
-                "⚠ " + StatusText.DangerModeNotCoveredBySelfTest
-                + " 本批所有任务按**普通档**执行：其余物照常生成（进回收站，可还原）。");
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
 
-            AppendLog("WARN", "原因：" + _dangerModeNotCoveredReason);
-        }
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+            {
+                AppendLog(
+                    "INFO",
+                    "其余物：本批保留（③页「删除操作」= 不动其余物）。任务成功后源包与中间件都留在成品目录里，随时可手工删。");
+                return;
+            }
 
-        /// <summary>危险模式开启时在批首写一条"当前处于什么档位"的日志（可追溯）。</summary>
-        private void LogDangerModeArmed()
-        {
-            bool selfTest = _dangerModeArmedForSelfTest;
+            if (string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase))
+            {
+                AppendLog(
+                    "WARN",
+                    "其余物：本批任务成功后会移入回收站（可还原；空间要等清空回收站才真正释放）。"
+                    + "失败 / 部分完成 / 取消的任务一个字节都不动。");
+                return;
+            }
 
             AppendLog(
                 "WARN",
-                $"⚠ {StatusText.DangerModeName} 已生效"
-                + (selfTest ? "（**自测**：这一批是为了验证协议，跑完就恢复原状）" : string.Empty)
-                + "：每个任务在「内容物定稿 + 输出校验通过 + 未取消」之后，会立刻把它自己的其余物"
-                + "（源包 + 中间件）**彻底删除**，不进回收站、无法还原。"
-                + "失败 / 部分完成 / 取消的任务一个字节都不删。");
-
-            foreach (string risk in StatusText.DangerModeRiskLines)
-            {
-                AppendLog("WARN", "危险模式风险：" + risk);
-            }
-
-            string stamp = DangerModeSelfTestStamp.Describe(Settings.DangerModeSelfTestStamp);
-
-            AppendLog(
-                "INFO",
-                string.IsNullOrWhiteSpace(stamp)
-                    ? "危险模式当前**没有**自测凭证（设置里手改开的会被自动关回去）。"
-                    : "危险模式自测凭证：" + stamp);
+                "其余物：本批任务成功后会彻底删除（源包 + 中间件，不进回收站、不可恢复）。"
+                + "失败 / 部分完成 / 取消的任务一个字节都不动。");
         }
-
         /// <summary>把解压前那一遍 list 算出来的**精确**空间需求记下来（自测的空间曲线要用）。</summary>
         private void RecordRefinedEstimate(ArchiveTask task, TaskSpaceEstimate estimate)
         {
@@ -6435,162 +6384,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             return decision;
-        }
-
-        /// <summary>
-        /// **危险模式自测**（用户 2026-09-22 明确要求的协议）。
-        ///
-        /// <para>「拿 2×并发数 个文件跑一次，自测通过才允许开启」——这里就是那个"跑一次"：
-        /// 真的走一遍解压管线（含空间门、定稿、校验、危险模式删除），
-        /// 然后把证据交给 <see cref="DangerModeSelfTestProtocol.Evaluate"/> 判定。</para>
-        ///
-        /// <para><b>为什么用它自己那条批而不是另写一条精简流程</b>：自测要证明的正是"真跑起来会怎样"。
-        /// 另写一条"简化版"只能证明简化版没问题 —— 那是最典型的自欺。</para>
-        ///
-        /// <para>三件事保证不越界：① 只对传进来的候选（= 用户勾选的任务）动手；
-        /// ② 跑完把勾选状态**原样还原**；③ 危险模式只是**临时**打开（<c>_dangerModeArmedForSelfTest</c>），
-        /// 设置文件一个字节都不写。</para>
-        /// </summary>
-        /// <param name="candidates">候选任务（调用方传"当前勾选的任务"）。</param>
-        internal async Task<DangerModeSelfTestVerdict> RunDangerModeSelfTestAsync(IReadOnlyList<ArchiveTask> candidates)
-        {
-            if (_isExtracting)
-            {
-                return DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
-                {
-                    BlockedReason = "当前正在批量解压，先等它跑完再自测"
-                });
-            }
-
-            int parallel = Math.Clamp(Settings.MaxParallelExtractCount, 1, ExtractionScheduler.ParallelCeiling);
-            int required = DangerModeSelfTestProtocol.RequiredSampleSize(parallel);
-
-            if (!DangerModeSelfTestProtocol.CheckPreconditions(Settings, out string precondition))
-            {
-                AppendLog("ERROR", "危险模式自测未开始：" + precondition);
-
-                return DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
-                {
-                    ParallelCount = parallel,
-                    RequiredSampleSize = required,
-                    BlockedReason = precondition
-                });
-            }
-
-            IReadOnlyList<ArchiveTask> samples =
-                DangerModeSelfTestProtocol.SelectSamples(candidates, required);
-
-            if (samples.Count < required)
-            {
-                string why =
-                    $"自测需要 {required} 个可解压的任务（当前并发档 {parallel} × {DangerModeSelfTestProtocol.SampleMultiplier}），"
-                    + $"当前勾选的任务里只凑得出 {samples.Count} 个 —— 先多勾几个，"
-                    + "或者把「最大并发解压数」调小（并发越小，要求的样本越少）。";
-
-                AppendLog("ERROR", "危险模式自测未开始：" + why);
-
-                return DangerModeSelfTestProtocol.Evaluate(new DangerModeSelfTestEvidence
-                {
-                    ParallelCount = parallel,
-                    RequiredSampleSize = required,
-                    BlockedReason = why
-                });
-            }
-
-            AppendLog(
-                "INFO",
-                $"危险模式自测开始：并发 {parallel}，按协议要跑 {required} 个文件，实际挑了 {samples.Count} 个"
-                + "（从需求最小的开始）。" + StatusText.DangerModeSelfTestWarning);
-
-            var recorder = new DangerModeSelfTestRecorder
-            {
-                ParallelCount = parallel,
-                RequiredSampleSize = required
-            };
-
-            recorder.Samples.AddRange(samples);
-
-            // 勾选状态快照：自测只处理样本，跑完**原样还原**（绝不顺手改用户的勾选）。
-            var selectionSnapshot = Tasks.ToDictionary(task => task, task => task.IsSelected);
-
-            _selfTestRecorder = recorder;
-            _dangerModeArmedForSelfTest = true;
-
-            try
-            {
-                foreach (ArchiveTask task in Tasks)
-                {
-                    task.IsSelected = samples.Contains(task);
-                }
-
-                // 自测走**地基路径**（oneClickRun = false）：源包处理在定稿那一刻就做，
-                // 不牵扯"续解链结束再补搬"那套延期语义 —— 自测要验的是危险模式本身。
-                await StartExtractCoreAsync(oneClickRun: false, runOptions: null);
-            }
-            catch (Exception ex)
-            {
-                AppendLog("ERROR", $"危险模式自测执行时出现意外错误：{ex.Message}");
-            }
-            finally
-            {
-                foreach (KeyValuePair<ArchiveTask, bool> pair in selectionSnapshot)
-                {
-                    pair.Key.IsSelected = pair.Value;
-                }
-
-                _dangerModeArmedForSelfTest = false;
-                _selfTestRecorder = null;
-            }
-
-            DangerModeSelfTestVerdict verdict = DangerModeSelfTestProtocol.Evaluate(BuildSelfTestEvidence(recorder));
-
-            foreach (string line in verdict.StepLines)
-            {
-                AppendLog("INFO", "自测结果 —— " + line);
-            }
-
-            foreach (string reason in verdict.FailureReasons)
-            {
-                AppendLog("ERROR", "自测不通过：" + reason);
-            }
-
-            AppendLog(verdict.Passed ? "WARN" : "ERROR", verdict.Summary);
-
-            return verdict;
-        }
-
-        /// <summary>把运行期记账翻成自测证据（逐文件：成功 / 校验 / 其余物已删 / 空间曲线）。</summary>
-        private DangerModeSelfTestEvidence BuildSelfTestEvidence(DangerModeSelfTestRecorder recorder)
-        {
-            var steps = new List<DangerModeSelfTestStep>();
-
-            foreach (ArchiveTask task in recorder.Samples)
-            {
-                ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
-                TaskSpaceEstimate? refined = TryGetRefinedEstimate(task);
-
-                steps.Add(new DangerModeSelfTestStep
-                {
-                    DisplayName = string.IsNullOrWhiteSpace(task.FileName) ? task.CurrentPath : task.FileName,
-                    TaskPath = task.CurrentPath,
-                    ExtractSucceeded = string.Equals(task.Status, StatusText.ExtractSuccess, StringComparison.Ordinal),
-                    Verified = task.IsOutputVerified,
-                    RestPurged = runtime.RestPurged,
-                    PurgedBytes = runtime.PurgedBytes,
-                    AvailableBeforeStart = runtime.AvailableBeforeStart,
-                    AvailableAfterFinish = runtime.AvailableAfterFinish,
-                    RequiredBytes = refined?.PeakBytes ?? 0L,
-                    ContentBytes = refined?.ContentBytes ?? 0L,
-                    FailureReason = string.IsNullOrWhiteSpace(runtime.PurgeNote) ? string.Empty : runtime.PurgeNote
-                });
-            }
-
-            return new DangerModeSelfTestEvidence
-            {
-                ParallelCount = recorder.ParallelCount,
-                RequiredSampleSize = recorder.RequiredSampleSize,
-                Steps = steps
-            };
         }
 
         private async Task ProcessExtractTaskAsync(ArchiveTask task, bool oneClickRun)
@@ -7839,11 +7632,17 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog("INFO", $"{task.FileName}：空间门通过（精确） —— {preciseGate.Reason}；{refined.Basis}");
 
-                if (IsDangerModeActive)
+                if (!string.Equals(
+                        RestHandlingModes.Normalize(_restHandlingThisBatch),
+                        RestHandlingModes.Keep,
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：危险模式会在定稿 + 校验通过之后彻底删除它的其余物"
+                        $"{task.FileName}：定稿 + 校验通过之后会按「删除操作」"
+                        + (string.Equals(RestHandlingModes.Normalize(_restHandlingThisBatch), RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
+                            ? "把其余物移入回收站"
+                            : "彻底删除其余物")
                         + $"（预计可回收 {TaskSpaceEstimate.FormatSize(refined.ReclaimableBytes)}）");
                 }
 

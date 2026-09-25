@@ -208,8 +208,10 @@ namespace ArchiveFixer.Tests
                 settings.CollectResultsToDirectory = true;
                 settings.CollectTargetDirectory = collectRoot;
 
-                // 开着"清理源包"才有意义：取消之后一个源文件都不许少。
-                settings.DeleteSourceAfterExtract = true;
+                // 开着"会动源包"的那两档才有意义：取消之后一个源文件都不许少。
+                // （第 32 条之后就是这两档组合：源包放进其余物 + 其余物彻底删除。）
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
             string source = CreateSourceFile("cancel.7z");
@@ -577,8 +579,9 @@ namespace ArchiveFixer.Tests
                 settings.CollectResultsToDirectory = true;
                 settings.CollectTargetDirectory = collectRoot;
 
-                // 开着"清理源包"才有意义：越界结论下源文件一个都不许少。
-                settings.DeleteSourceAfterExtract = true;
+                // 开着"会动源包"的那两档才有意义：越界结论下源文件一个都不许少。
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
             string source = CreateSourceFile("escape.7z");

@@ -20,6 +20,13 @@ namespace ArchiveFixer.Storage
 
         /// <summary>完整路径（日志与排障用）。</summary>
         public string FullPath { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 它是个**目录**（2026-09-25 第 32 条加）：真实资源包常把密码提示做成一个文件夹
+        /// （用户的素材就是 <c>解压密码为：cosergirl.com</c>），那种条目要标出来给人看，
+        /// 免得提示里"说明.txt"和"某个文件夹"混在一起分不清。
+        /// </summary>
+        public bool IsDirectory { get; init; }
     }
 
     /// <summary>一次"无用物"扫描的结论。</summary>
@@ -116,6 +123,46 @@ namespace ArchiveFixer.Storage
         public static readonly IReadOnlyList<string> JunkFileNames = new[] { "Thumbs.db", ".DS_Store" };
 
         /// <summary>
+        /// **名字里带这些字**的条目（文件或**目录**）也算"打包者附带的东西"（2026-09-25 第 32 条加）。
+        ///
+        /// <para>来由（用户真机素材）：他的资源包里没有"说明.txt"这种文件，而是把提示做成了
+        /// <b>一个文件夹</b>：<c>解压密码为：cosergirl.com</c>。旧判据只看扩展名 →
+        /// 一个条目都认不出来 → 他说"为什么我用了这么久还是没有看到有关无用物的任何提醒"。</para>
+        ///
+        /// <para>判据仍然窄：只认这些"一眼就是给人看的提示"词，绝不把 <c>1-29+4 IF线</c>
+        /// 这类**内容文件夹**叫成无用物（那是用户真正要的东西）。</para>
+        /// </summary>
+        public static readonly IReadOnlyList<string> JunkNameKeywords = new[]
+        {
+            "解压密码", "密码是", "密码为", "密码：", "密码:",
+            "说明", "必看", "公告", "广告", "网址", "更多资源", "公众号", "微信", "QQ群",
+            "防和谐", "防删", "失效", "补档", "下载说明", "使用说明", "readme"
+        };
+
+        /// <summary>
+        /// 这个名字看起来像"给人看的提示"吗（密码提示 / 说明 / 公告那一类；大小写不敏感）。
+        ///
+        /// <para>它同时适用于**文件与目录**：目录名在真实资源包里经常就是那个密码提示。</para>
+        /// </summary>
+        public static bool LooksLikeHintName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            string plain = Path.GetFileName(name.TrimEnd('\\', '/'));
+
+            if (plain.Length == 0)
+            {
+                return false;
+            }
+
+            return JunkNameKeywords.Any(keyword =>
+                plain.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
         /// 这个文件名"看起来像"打包者附带的东西吗（**只看名字**，不含"是不是压缩包"那一步）。
         /// </summary>
         public static bool LooksLikeJunkCandidate(string? fileName)
@@ -128,6 +175,13 @@ namespace ArchiveFixer.Storage
             string name = Path.GetFileName(fileName);
 
             if (JunkFileNames.Any(known => string.Equals(name, known, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            // 名字里带"解压密码 / 说明 / 公告"这类字样的一律算（第 32 条）：真实资源包把密码提示
+            // 做成 `解压密码为：xxx.txt` 甚至一个**文件夹**，只按扩展名认会一条都认不出来。
+            if (LooksLikeHintName(name))
             {
                 return true;
             }
@@ -201,6 +255,31 @@ namespace ArchiveFixer.Storage
                 }
 
                 scannedDirectories++;
+
+                /*
+                 * 先收**目录**（第 32 条）：只看直属子目录的名字，不做魔数体检、也不递归 ——
+                 * 目录不可能是压缩包，而名字里带"解压密码 / 说明 / 公告"的那种一眼就是给人看的提示。
+                 * 这一步是廉价的纯名字判断，代价可以忽略。
+                 */
+                foreach (string childDirectory in CollectHintDirectories(directory))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (items.Count < MaxReportedItems)
+                    {
+                        items.Add(new SourceJunkItem
+                        {
+                            DirectoryPath = directory,
+                            FileName = Path.GetFileName(childDirectory),
+                            FullPath = childDirectory,
+                            IsDirectory = true
+                        });
+                    }
+                    else
+                    {
+                        extra++;
+                    }
+                }
 
                 List<string> candidates = CollectJunkCandidates(
                     directory,
@@ -379,6 +458,32 @@ namespace ArchiveFixer.Storage
             {
                 // 路径形状不合法：它本来也不可能出现在目录枚举结果里，忽略即可。
             }
+        }
+
+        /// <summary>
+        /// 一个目录里"名字像密码提示 / 说明公告"的**直属子目录**（第 32 条；不递归、不体检）。
+        /// 任何 IO 异常都吞掉：提醒不允许让整批解压开不了头。
+        /// </summary>
+        private static List<string> CollectHintDirectories(string directory)
+        {
+            var result = new List<string>();
+
+            try
+            {
+                foreach (string path in Directory.EnumerateDirectories(directory))
+                {
+                    if (LooksLikeHintName(Path.GetFileName(path)))
+                    {
+                        result.Add(path);
+                    }
+                }
+            }
+            catch
+            {
+                // 读不了当"这里没有"。
+            }
+
+            return result;
         }
 
         /// <summary>

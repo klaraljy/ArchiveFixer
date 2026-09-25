@@ -4,56 +4,77 @@
              xmlns:models="clr-namespace:ArchiveFixer.Models">
 
     <!--
-        ③ 清理与删除页（用户 2026-09-24 第 11 条）。
-        「源包怎么处理」「其余物怎么删」「空文件夹清不清」全部归到这一页；
+        ③ 清理与删除页（用户 2026-09-24 第 11 条；2026-09-25 第 32 条按用户口述重排）。
+        两组单选，按用户原话摆：
+          1 源包操作：1_原来的位置不动（默认） 2_放入其余物当中
+          2 删除操作：1_不动其余物（默认）     2_移入回收站     3_彻底删除（红字，选它时下面常驻一条提示）
+        下面是手工清理入口 / 提醒 / 工作区残留 —— 都只认勾选。
         整页可滚（第 20 条），没有任何固定高度堆叠。
     -->
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
         <StackPanel>
 
-            <!-- ==================== 源包处理 ==================== -->
-            <GroupBox Header="源包处理（解完之后拿源包怎么办）">
+            <!-- ==================== 1 源包操作 ==================== -->
+            <GroupBox Header="1 源包操作（解完之后拿源包怎么办）">
                 <StackPanel>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                    <RadioButton x:Name="SourceKeepInPlaceOption"
+                                 GroupName="SourceHandling"
+                                 IsChecked="{Binding SettingsEditor.SourceHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=KeepInPlace, Mode=TwoWay}"
+                                 Content="原来的位置不动（默认）" />
 
-                        <TextBlock Text="源包处理："
-                                   Style="{StaticResource LabelTextStyle}"
-                                   ToolTip="「一键处理」与手动「只解压」读的是同一档。" />
-
-                        <ComboBox Grid.Column="1"
-                                  SelectedValue="{Binding SettingsEditor.SourceHandling, Mode=TwoWay}"
-                                  SelectedValuePath="Tag">
-                            <ComboBoxItem Content="留在原地（不动源包）" Tag="KeepInPlace" />
-                            <ComboBoxItem Content="移入「其余物」（默认，推荐）" Tag="MoveToRest" />
-                            <ComboBoxItem Content="校验通过后删除（不可逆）" Tag="DeleteAfterVerify" />
-                        </ComboBox>
-                    </Grid>
+                    <RadioButton x:Name="SourceMoveToRestOption"
+                                 GroupName="SourceHandling"
+                                 Margin="0,6,0,0"
+                                 IsChecked="{Binding SettingsEditor.SourceHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=MoveToRest, Mode=TwoWay}"
+                                 Content="放入其余物当中（和中间件一起放进成品目录的「其余物」）" />
 
                     <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="110,6,0,0"
+                               Margin="0,6,0,0"
                                TextWrapping="Wrap"
-                               Text="只有「内容物已定稿 + 输出校验通过 + 未取消 + 属于本任务分卷组」四条同时成立才动源包；失败 / 部分完成 / 取消时源包一律原地不动、其余物不生成。删除前一定再确认一次。" />
+                               Text="只有「内容物已定稿 + 输出校验通过 + 未取消」三条同时成立才动源包；失败 / 部分完成 / 取消时源包一律原地不动。" />
+                </StackPanel>
+            </GroupBox>
 
-                    <CheckBox Content="手动「只解压」：解压成功且校验通过后删除源压缩包／源分卷"
-                              Margin="0,12,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.DeleteSourceAfterExtract, Mode=TwoWay}" />
+            <!-- ==================== 2 删除操作 ==================== -->
+            <GroupBox Header="2 删除操作（解压成功后，成品目录里的「其余物」怎么办）">
+                <StackPanel>
+                    <RadioButton x:Name="RestKeepOption"
+                                 GroupName="RestHandling"
+                                 IsChecked="{Binding SettingsEditor.RestHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=Keep, Mode=TwoWay}"
+                                 Content="不动其余物（默认）" />
 
-                    <Border Style="{StaticResource WarningBannerStyle}" Margin="0,8,0,0">
+                    <RadioButton x:Name="RestRecycleOption"
+                                 GroupName="RestHandling"
+                                 Margin="0,6,0,0"
+                                 IsChecked="{Binding SettingsEditor.RestHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=RecycleBin, Mode=TwoWay}"
+                                 Content="动，但只移到回收站（可还原；空间要等清空回收站才释放）" />
+
+                    <RadioButton x:Name="RestDeleteOption"
+                                 GroupName="RestHandling"
+                                 Margin="0,6,0,0"
+                                 Foreground="{StaticResource DangerTextBrush}"
+                                 IsChecked="{Binding SettingsEditor.RestHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=Delete, Mode=TwoWay}"
+                                 Content="动，而且是彻底删除，直接省空间" />
+
+                    <!--
+                        选「彻底删除」时下面**常驻**一条提示（用户 2026-09-25 第 32 条原话：
+                        "当用户点击了彻底删除那个选项时就会在下面出现一个提示的选项，而且不能消掉，
+                        用户选择了就一直放在那"）—— 没有关闭按钮，只有把选项改回去它才消失。
+                    -->
+                    <Border Style="{StaticResource WarningBannerStyle}"
+                            Margin="0,8,0,0"
+                            Visibility="{Binding SettingsEditor.IsRestDeleteSelected, Converter={StaticResource BoolToVisibilityConverter}}">
                         <TextBlock Style="{StaticResource BannerTextStyle}"
-                                   Foreground="{StaticResource WarningTextBrush}"
+                                   Foreground="{StaticResource DangerTextBrush}"
                                    TextWrapping="Wrap"
-                                   Text="⚠ 删除不可逆，默认关闭。它只在上面选了「留在原地」时的手动「只解压」路径上参与；只有「解压成功 + 输出校验通过」才会删，校验不通过、被取消、只完成一部分时一律不删。" />
+                                   Text="⚠ 彻底删除不可恢复：任务成功后，它的其余物（中间件，以及按上面选择搬进去的源包）会被永久删除，不进回收站。失败 / 部分完成 / 取消的任务一个字节都不删。" />
                     </Border>
                 </StackPanel>
             </GroupBox>
 
-            <!-- ==================== 其余物删除（红色区） ==================== -->
-            <GroupBox Header="其余物删除（删除操作，不可逆）">
+            <!-- ==================== 手工清理 + 手工删除的默认档 ==================== -->
+            <GroupBox Header="手工清理（只作用于勾选的任务，删除前先预览 + 确认）">
                 <StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -61,9 +82,9 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Text="默认档："
+                        <TextBlock Text="手工删除时的默认："
                                    Style="{StaticResource LabelTextStyle}"
-                                   ToolTip="只决定删除确认框里那个「改为彻底删除」勾选框的默认状态。" />
+                                   ToolTip="只决定「删除其余物…」确认框里那个「改为彻底删除」勾选框的默认状态，不影响解压时的行为。" />
 
                         <ComboBox Grid.Column="1"
                                   SelectedValue="{Binding SettingsEditor.Settings.RestRemovalDefaultMode, Mode=TwoWay}"
@@ -82,7 +103,7 @@
                             Padding="{StaticResource BannerPadding}"
                             Margin="0,10,0,0">
                         <StackPanel>
-                            <TextBlock Text="删除入口（一律只认勾选：一个都没勾就什么都不做）"
+                            <TextBlock Text="手工删除入口（一律只认勾选：一个都没勾就什么都不做）"
                                        Style="{StaticResource CardTitleTextStyle}"
                                        Foreground="{StaticResource DangerTextBrush}" />
 
@@ -110,7 +131,7 @@
                     <TextBlock Style="{StaticResource HintTextStyle}"
                                Margin="0,8,0,0"
                                TextWrapping="Wrap"
-                               Text="默认档只是确认框的默认值，不是「跳过确认」；回收站不可用时（网络盘 / 策略禁用）一律不删并说明原因，绝不会因此降级成彻底删除。" />
+                               Text="「手工删除时的默认」只是确认框的默认值，不是「跳过确认」；回收站不可用时（网络盘 / 策略禁用）一律不删并说明原因，绝不会因此降级成彻底删除。" />
                 </StackPanel>
             </GroupBox>
 

@@ -17,7 +17,7 @@ namespace ArchiveFixer.Tests
     /// <list type="number">
     /// <item><description>六个选项卡的标题与顺序；</description></item>
     /// <item><description>① 任务页**不再**有并发档 / 空间管理 / 危险模式红横幅 / 输出位置那一大块（反向断言）；</description></item>
-    /// <item><description>危险模式入口在②页，风险四条仍是 <see cref="StatusText.DangerModeRiskLines"/> 那一份；</description></item>
+    /// <item><description>危险模式那套（红按钮 / 风险四条 / 自测）已在 2026-09-25 第 32 条整块退役，界面上一个字都不留；</description></item>
     /// <item><description>日志区与列表之间真的有分隔条，而且是上下拖的那种；</description></item>
     /// <item><description>菜单只剩三组、旧菜单的每个命令都找得到新家；</description></item>
     /// <item><description>窗口默认尺寸与最小尺寸；</description></item>
@@ -158,7 +158,7 @@ namespace ArchiveFixer.Tests
 
             foreach (string moved in new[]
                      {
-                         "MaxParallelChoice", "ParallelAdviceText", "DangerButtonStyle", "DangerModeRiskLines",
+                         "MaxParallelChoice", "ParallelAdviceText", "DangerButtonStyle", "RestHandlingAfterVerify",
                          "TaskDataGrid", "LogList", "GlobalPasswordBox", "OpenPackingCommand"
                      })
             {
@@ -166,35 +166,40 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        // ================================================================ ③ 危险模式的新家
+        // ================================================================ ③ 删除操作的新家（原「危险模式」已退役）
 
+        /// <summary>
+        /// 2026-09-25 第 32 条：②页底部那套「高风险区（危险模式 + 自测凭证 + 风险四条 + 红横幅）」
+        /// 被用户**整块删掉**，那条需求变成③页「2 删除操作」的第三档（红字 + 选中时常驻提示）。
+        /// 这一条钉的就是"旧的一套一个字都不许留在界面上"。
+        /// </summary>
         [Fact]
-        public void 危险模式在解压方式页_风险四条仍是同一份措辞()
+        public void 危险模式那一套已退役_界面上一个字都不留()
         {
             string extraction = Read("Views", "Tabs", "ExtractionTab.xaml");
-
-            Assert.Contains("ToggleDangerModeCommand", extraction, StringComparison.Ordinal);
-            Assert.Contains("DangerButtonStyle", extraction, StringComparison.Ordinal);
-
-            // 四条风险**绑定** StatusText 那一份（界面里没有第二份文本，改一处不可能漏一处）。
-            Assert.Contains("DangerModeRiskLines", extraction, StringComparison.Ordinal);
-            Assert.Contains("StatusText.DangerModeSelfTestWarning", extraction, StringComparison.Ordinal);
-
-            // 主 ViewModel 暴露的就是 StatusText 那一份，不是自己抄的一份。
-            string viewModelSource = Read("ViewModels", "MainViewModel.cs");
-
-            Assert.Contains(
-                "IReadOnlyList<string> DangerModeRiskLines => StatusText.DangerModeRiskLines;",
-                viewModelSource,
-                StringComparison.Ordinal);
-
-            // 开关也在这一页（设置里那一项 + 红色按钮两条入口都对着同一个设置项）。
-            Assert.Contains("SettingsEditor.Settings.DangerousSpaceModeEnabled", extraction, StringComparison.Ordinal);
-
-            // ①页只留一行小白字提示。
             string taskTab = Read("Views", "Tabs", "TaskTab.xaml");
+            string mainViewModel = Read("ViewModels", "MainViewModel.cs");
 
-            Assert.Contains("StatusText.DangerModeActiveOneLineHint", taskTab, StringComparison.Ordinal);
+            foreach (string retired in new[]
+                     {
+                         "ToggleDangerModeCommand", "DangerButtonStyle", "DangerModeRiskLines",
+                         "DangerModeSummaryText", "DangerModeSelfTestText", "DangerousSpaceModeEnabled",
+                         "Text=\u0022高风险区\u0022"
+                     })
+            {
+                Assert.DoesNotContain(retired, extraction, StringComparison.Ordinal);
+                Assert.DoesNotContain(retired, mainViewModel, StringComparison.Ordinal);
+            }
+
+            // ①页那一行"危险模式已开启"的小白字也一起没了。
+            Assert.DoesNotContain("DangerModeActiveOneLineHint", taskTab, StringComparison.Ordinal);
+
+            // 新家：③页两组单选 + 选中「彻底删除」时常驻的那条提示。
+            string cleanup = Read("Views", "Tabs", "CleanupTab.xaml");
+
+            Assert.Contains("SettingsEditor.SourceHandling", cleanup, StringComparison.Ordinal);
+            Assert.Contains("SettingsEditor.RestHandling", cleanup, StringComparison.Ordinal);
+            Assert.Contains("IsRestDeleteSelected", cleanup, StringComparison.Ordinal);
         }
 
         // ================================================================ ④ 日志区可分拖（第 18 条）
@@ -358,14 +363,19 @@ namespace ArchiveFixer.Tests
                 ["CollectResultsToDirectory"] = "ExtractionTab",
                 ["CollectTargetDirectory"] = "ExtractionTab",
                 ["CustomSevenZipExePath"] = "ExtractionTab",
-                ["DangerousSpaceModeEnabled"] = "ExtractionTab",
 
                 // ② 的第 17 条那一格：一键处理的确认框可以关掉（也在确认框自己的勾选项里写着）
                 ["SkipOneClickConfirm"] = "ExtractionTab",
 
                 // ③ 清理与删除
                 ["RestRemovalDefaultMode"] = "CleanupTab",
-                ["DeleteSourceAfterExtract"] = "CleanupTab",
+
+                /*
+                 * ⚠ 源包操作 / 删除操作这两组**不在这份清单里**：它们绑的是
+                 * SettingsEditor.SourceHandling / SettingsEditor.RestHandling（SettingsViewModel 的解析属性，
+                 * 与解压时的口径同一份实现），而这份清单钉的是 "Settings.<原名>" 这种直接绑定。
+                 * 它们的界面落点由 危险模式那一套已退役_界面上一个字都不留 那一条钉住。
+                 */
                 ["RemindBeforeExtract"] = "CleanupTab",
 
                 // ③ 的第 15 条那一格：导入文件夹后就提醒无用物

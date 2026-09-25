@@ -21,13 +21,57 @@ namespace ArchiveFixer.Models
         MoveToRest = 0,
 
         /// <summary>源包留在原地，一个字节都不动。</summary>
-        KeepInPlace = 1,
+        KeepInPlace = 1
+    }
 
-        /// <summary>
-        /// 沿用既有 §9.5 的清理（不可逆）：只有"解压成功 + 输出校验通过 + 属于本任务分卷组"才删，
-        /// 回收站 / 彻底删除按既有设置走。
-        /// </summary>
-        DeleteAfterVerify = 2
+    /// <summary>
+    /// 「其余物」在**解压成功 + 输出校验通过 + 未取消**之后怎么处理（设置项
+    /// <see cref="AppSettings.RestHandlingAfterVerify"/>）的**唯一词表**。
+    ///
+    /// <para><b>用户 2026-09-25 亲自定的三档</b>（原话：「删除操作，1_不动其余物，2_动，但是只删除在回收站的位置，
+    /// 3_动，而且是彻底删除，直接节约空间（这个就可以字体变红了，就不用再弄其他的没用的注释了）」）：</para>
+    /// <list type="number">
+    /// <item><description><see cref="Keep"/>：不动其余物（**默认**）。</description></item>
+    /// <item><description><see cref="RecycleBin"/>：移入回收站 —— 可还原；⚠ 空间要等清空回收站才真正释放。</description></item>
+    /// <item><description><see cref="Delete"/>：彻底删除、直接省空间 —— **不可恢复**，界面上整条标红。</description></item>
+    /// </list>
+    ///
+    /// <para>⚠ 它同时取代了 2026-09-22 那套「危险模式 + 自测凭证」（用户 2026-09-25 明确要求整块删掉）：
+    /// 不再有自测、风险四条与红横幅 —— **红字就是警告**。而"失败 / 部分完成 / 取消一个字节都不删"这条红线
+    /// 由 <c>Storage/RestItemPurger</c> 的五道门槛继续钉着（与哪一档无关）。</para>
+    /// </summary>
+    public static class RestHandlingModes
+    {
+        /// <summary>不动其余物（默认）。</summary>
+        public const string Keep = "Keep";
+
+        /// <summary>移入回收站（可还原；空间要等清空回收站才释放）。</summary>
+        public const string RecycleBin = "RecycleBin";
+
+        /// <summary>彻底删除（不可恢复，直接省空间）。</summary>
+        public const string Delete = "Delete";
+
+        /// <summary>三档的唯一判据（认不出的值一律回落 <see cref="Keep"/>，绝不回落成"删"）。</summary>
+        public static bool IsKnown(string? value) =>
+            string.Equals(value, Keep, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, RecycleBin, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, Delete, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>归一化：认不出的值 → <see cref="Keep"/>（保守方向：宁可不动，绝不误删）。</summary>
+        public static string Normalize(string? value)
+        {
+            if (string.Equals(value, RecycleBin, StringComparison.OrdinalIgnoreCase))
+            {
+                return RecycleBin;
+            }
+
+            if (string.Equals(value, Delete, StringComparison.OrdinalIgnoreCase))
+            {
+                return Delete;
+            }
+
+            return Keep;
+        }
     }
 
     /// <summary>
@@ -255,39 +299,31 @@ namespace ArchiveFixer.Models
         public const int DefaultMaxParallelExtractCount = 4;
 
         /// <summary>
-        /// **危险模式**开关（用户 2026-09-22 需求第 3 条：红色警告按钮）。
+        /// 「其余物」在**解压成功 + 输出校验通过 + 未取消**之后怎么处理
+        /// （取值见 <see cref="RestHandlingModes"/>：<c>Keep</c> / <c>RecycleBin</c> / <c>Delete</c>）。
         ///
-        /// <para>
-        /// 语义：并行解压，每个任务在「内容物已定稿并按落点策略排好 + 输出校验通过 + 未取消」之后，
-        /// 立刻把它自己的「其余物」（源包 + 中间件）**彻底删除**（不进回收站），于是净占用基本不变 ——
-        /// 这就是它能解决"空间不够"的原因。
-        /// </para>
+        /// <para><b>用户 2026-09-25 亲自定的三档</b>，取代了原先那套「危险模式 + 自测凭证 + 风险四条 + 红横幅」
+        /// （他明确要求"全部删掉，字体变红就是最好的操作"）：这一项就是 ③「清理与删除」页那个"删除操作"
+        /// 单选框存的值，**默认 <see cref="RestHandlingModes.Keep"/>（不动其余物）**。</para>
         ///
-        /// <para>⚠ <b>三条硬约束</b>（违反任何一条都等于把红线拆了）：</para>
-        /// <list type="number">
-        /// <item><description><b>默认关</b>，且**没有自测凭证时不许开**
-        /// （<see cref="DangerModeSelfTestStamp"/> 为空 → <see cref="Normalize"/> 强制关回来）。</description></item>
-        /// <item><description>每个任务的删除都走 <c>Storage/RestItemPurger</c> 的五条门槛：
-        /// 终态必须是「解压成功」+ 输出校验通过 + 未取消 + 路径是本次记下来的那一条 +
-        /// 落在自己的输出根之内。**失败 / 部分完成 / 取消的任务一个字节都不删**（不变量 1 的红线）。</description></item>
-        /// <item><description>风险四条写在界面上（<c>StatusText.DangerModeRisks</c>），
-        /// 确认框 + 设置说明 + <c>docs/使用说明.md</c> 共用同一份措辞。</description></item>
-        /// </list>
+        /// <para>红线（与哪一档无关，由 <c>Storage/RestItemPurger</c> 的五道门槛执行）：
+        /// 只有"解压成功 + 输出校验通过 + 未取消 + 落在本任务输出根之内 + 路径就是定稿那一刻记下来的那条"
+        /// 才动；**失败 / 部分完成 / 取消 → 一个字节都不删**（不变量 1）。</para>
+        /// </summary>
+        public string RestHandlingAfterVerify { get; set; } = RestHandlingModes.Keep;
+
+        /// <summary>
+        /// ⛔ **已退役**（2026-09-25 用户第 32 条：「危险模式……全部删掉」）：
+        /// 原来这是那套"红色按钮 + 自测凭证 + 风险四条 + 红横幅"的总开关。
+        ///
+        /// <para>现在保留这个属性只有两个用途：①读得懂旧 <c>appsettings.json</c>（不然那一行会被当成未知字段丢掉，
+        /// 我们也就无从迁移）；②<see cref="Normalize"/> 里把它一次性迁移成
+        /// <see cref="RestHandlingAfterVerify"/> = <see cref="RestHandlingModes.Delete"/>，
+        /// 随后一律写回 <c>false</c>。程序里**没有任何地方**再读它做决策。</para>
         /// </summary>
         public bool DangerousSpaceModeEnabled { get; set; } = false;
 
-        /// <summary>
-        /// 「危险模式自测通过」的凭证（见 <c>Storage/DangerModeSelfTestStamp</c>）。
-        ///
-        /// <para>
-        /// 空 = **没自测过**：这时 <see cref="DangerousSpaceModeEnabled"/> 无论怎么改都开不起来
-        /// （<see cref="Normalize"/> 会把它关回去）。它挡的正是"手改 json 绕过整条自测协议"这条路。
-        /// </para>
-        /// <para>
-        /// 内容形如 <c>自测通过|2026-09-22 21:30:00|并发=2|样本=4</c>：一行可读文本，
-        /// 用户自己看得懂，排障时也能一眼看出"这次自测是在什么档位下做的"。
-        /// </para>
-        /// </summary>
+        /// <summary>⛔ **已退役**（见 <see cref="DangerousSpaceModeEnabled"/>）：旧的自测凭证，读取时一律清空。</summary>
         public string DangerModeSelfTestStamp { get; set; } = string.Empty;
 
         /// <summary>
@@ -474,8 +510,14 @@ namespace ArchiveFixer.Models
         public bool KeepBrokenFiles { get; set; } = false;
 
         /// <summary>
-        /// 解压成功且校验通过后删除源压缩包/源分卷。
-        /// **默认关闭**：删除不可逆，必须用户显式开启（AGENTS.md §9.5、用户 2026-09-21 指示）。
+        /// ⛔ **已退役**（2026-09-25 用户第 32 条）：原来这一格是"手动「只解压」成功后删源包"的独立开关。
+        ///
+        /// <para>用户原话：「其实手动档和我们这个一键操作可以看成是同一批，只不过，一键处理不会有那么多的操作，
+        /// 手动档的操作就和选项卡里面的一致」—— 所以手动档不再有自己的删除开关，
+        /// 统一读 <see cref="SourceHandling"/>(源包操作) + <see cref="RestHandlingAfterVerify"/>(删除操作)。
+        /// 这个属性只为**读得懂旧配置文件**而保留：旧值 <c>true</c> 在
+        /// <see cref="Normalize"/> 里被迁移成"源包移入其余物 + 其余物移入回收站"（可还原的那一档），
+        /// 之后一律写回 <c>false</c>。</para>
         /// </summary>
         public bool DeleteSourceAfterExtract { get; set; } = false;
 
@@ -675,29 +717,38 @@ namespace ArchiveFixer.Models
         public List<string>? SpecialExtractionRules { get; set; }
 
         /// <summary>
-        /// 「一键处理」里怎么处理源包（决策 D-9，2026-09-22 用户拍板）。
+        /// 「源包操作」（决策 D-9，2026-09-22 用户拍板；**2026-09-25 收敛成两档**）。
         ///
-        /// 存的是 <see cref="SourceHandlingMode"/> 的**枚举名**（<c>MoveToRest</c> / <c>KeepInPlace</c> /
-        /// <c>DeleteAfterVerify</c>），与其它设置项（RecursionMode / OverwriteMode / TerminalLayoutMode）
-        /// 一样用字符串落盘 —— 枚举名比数字抗改，用户手改配置文件也看得懂。
+        /// 存的是 <see cref="SourceHandlingMode"/> 的**枚举名**（<c>MoveToRest</c> / <c>KeepInPlace</c>），
+        /// 与其它设置项（RecursionMode / OverwriteMode / TerminalLayoutMode）一样用字符串落盘 ——
+        /// 枚举名比数字抗改，用户手改配置文件也看得懂。
         ///
-        /// 默认 <c>MoveToRest</c>：源包跟着进其余物，用户在那个目录里一次删掉就干净了
-        /// （用户原话："其余物/源包+过程物，这样删除对用户就更方便一点"）。可关。
+        /// <para><b>默认 <c>KeepInPlace</c></b>（2026-09-25 第 32 条用户拍板："默认是源包原来位置不动"）：
+        /// 程序默认**一个字节都不搬用户的源包**；要整理的人自己选"放入其余物当中"，
+        /// 再由「删除操作」（<see cref="RestHandlingAfterVerify"/>）决定那份其余物是留着、进回收站还是彻底删。</para>
         ///
-        /// ⚠ **两条路径行为一致**（用户 2026-09-22 版本二，推翻早先"地基路径永远不动源包"）：
-        /// 手动「只解压」与一键处理读的是同一个档位，成功后同样把源包移入其余物；
-        /// <c>KeepInPlace</c> 档才是"一个字节都不搬"的出口。
-        /// <see cref="DeleteSourceAfterExtract"/> 仍然只管 <c>KeepInPlace</c> 档下"传统解压器 + 解压后清理"
-        /// 那个老组合（见 <c>ExtractionCoordinator</c> 里 deleteSource 的算法）。
+        /// <para><b>2026-09-25 第 32 条：原来的第三档 <c>DeleteAfterVerify</c> 被删掉</b>
+        /// （用户原话：「源包操作里的第 3 项……删掉」）。要删源包请用
+        /// "源包操作 = 放入其余物" + "删除操作 = 回收站 / 彻底删除"（见 <see cref="RestHandlingAfterVerify"/>）——
+        /// 两档组合起来语义更清楚，选项也少一个。旧值在 <see cref="Normalize"/> 里迁移成
+        /// "移入其余物 + 移入回收站"（可还原的那一档）。</para>
+        ///
+        /// <para>⚠ <b>两条路径行为一致</b>（用户 2026-09-22 版本二，推翻早先"地基路径永远不动源包"；
+        /// 2026-09-25 再次确认手动档与一键档是同一批）：手动「只解压」与一键处理读的是同一套设置；
+        /// <c>KeepInPlace</c> 才是"一个字节都不搬"的出口。</para>
         /// </summary>
-        public string SourceHandling { get; set; } = nameof(SourceHandlingMode.MoveToRest);
+        public string SourceHandling { get; set; } = nameof(SourceHandlingMode.KeepInPlace);
 
         /// <summary>
-        /// 解析源包处理档：空 / 非法一律回落 <see cref="SourceHandlingMode.MoveToRest"/>。
+        /// 解析源包处理档：空 / 非法一律回落 <see cref="SourceHandlingMode.KeepInPlace"/>。
         ///
         /// 容错放在这里（与 <c>ParseTerminalLayoutMode</c> 同一口径）：这个字符串可能来自
         /// 旧配置（缺字段 → 反序列化后是默认值）、用户手改的 json，或将来改名后的枚举。
         /// 读不懂时**退回最不意外的那一档**，而不是到解压那一刻才报错或猜一个别的行为。
+        ///
+        /// <para>⚠ 回落档必须与 <see cref="SourceHandling"/> 的默认值 / <c>CreateDefault</c> **一致**
+        /// （2026-09-25 第 32 条把默认档改成「留在原地」时，这里漏改过一处：一个手改坏的字符串会把
+        /// 用户从没同意过的"搬走源包"打开 —— 而这一档是**不可逆**的）。读不懂 = 什么都不做。</para>
         /// </summary>
         public static SourceHandlingMode ParseSourceHandling(string? value)
         {
@@ -708,7 +759,7 @@ namespace ArchiveFixer.Models
                 return mode;
             }
 
-            return SourceHandlingMode.MoveToRest;
+            return SourceHandlingMode.KeepInPlace;
         }
 
         /// <summary>反解成落盘字符串（界面 ↔ 解压管线共用同一份口径）。</summary>
@@ -781,8 +832,6 @@ namespace ArchiveFixer.Models
                 TryEmptyPasswordFirst = true,
                 UseGlobalPasswordForAllTasks = true,
                 MaxParallelExtractCount = DefaultMaxParallelExtractCount,
-                DangerousSpaceModeEnabled = false,
-                DangerModeSelfTestStamp = string.Empty,
                 LowProcessPriority = true,
                 OpenOutputFolderWhenDone = false,
                 RestRemovalDefaultMode = RestRemovalModes.RecycleBin,
@@ -801,6 +850,7 @@ namespace ArchiveFixer.Models
                 EnginePriority = new List<string>(EngineIds.DefaultPriority),
                 KeepBrokenFiles = false,
                 DeleteSourceAfterExtract = false,
+                RestHandlingAfterVerify = RestHandlingModes.Keep,
                 CollectResultsToDirectory = false,
                 CollectTargetDirectory = string.Empty,
                 CacheRootDirectory = string.Empty,
@@ -823,7 +873,7 @@ namespace ArchiveFixer.Models
                  */
                 UseSpecialExtraction = false,
                 SpecialExtractionRules = ArchiveFixer.Extraction.SpecialExtractionRules.DefaultEnabledIds.ToList(),
-                SourceHandling = nameof(SourceHandlingMode.MoveToRest),
+                SourceHandling = nameof(SourceHandlingMode.KeepInPlace),
 
                 // 失败 / 取消不留中间产物（用户 2026-09-25 第 25 条追加）：默认关闭，
                 // 老配置里没有这个字段时反序列化出来也是 false —— 与默认档一致，不需要迁移标记。
@@ -878,22 +928,49 @@ namespace ArchiveFixer.Models
             }
 
             /*
-             * 危险模式：**没有自测凭证就不许开着**。
+             * 危险模式退役（2026-09-25 第 32 条）：旧配置里那个开关与自测凭证**一次性迁移**成新的
+             * 「删除操作」档位，然后两个旧字段一律写回关闭/空 —— 从此它们只是"读得懂旧 json"的占位。
              *
-             * 这是那条自测协议唯一能"自动执行"的地方：用户手改 appsettings.json 把
-             * DangerousSpaceModeEnabled 写成 true，或者凭证字段被清掉、写坏 —— 读取时一律关回去。
-             * 协议本身（拿 2×并发数 个文件真跑一遍）没法在这里做（要跑引擎、要几分钟），
-             * 所以这里的判据只能是"凭证在不在"，而凭证只可能由自测通过那条路径写出来。
-             *
-             * ⚠ 刻意**不**顺手清掉凭证：凭证是"这台机器上这个用户做过自测"的事实记录，
-             * 清掉它只会逼用户再删一批源包（自测本身也是不可逆的）。
+             * 迁移方向（保守优先）：开过危险模式的用户，意图就是"成功后彻底删掉其余物" →
+             * 迁移成 <see cref="RestHandlingModes.Delete"/>；没开过的保持默认 Keep。
+             * 旧的手动删源开关 <see cref="DeleteSourceAfterExtract"/>=true → "源包移入其余物 + 移入回收站"
+             * （**可还原的那一档**：它原来管的是不可逆删除，但我们不能替用户把不可逆的选择重新做一遍）。
              */
-            DangerModeSelfTestStamp ??= string.Empty;
-
-            if (DangerousSpaceModeEnabled && !ArchiveFixer.Storage.DangerModeSelfTestStamp.IsValid(DangerModeSelfTestStamp))
+            if (DangerousSpaceModeEnabled)
             {
-                DangerousSpaceModeEnabled = false;
+                RestHandlingAfterVerify = RestHandlingModes.Delete;
             }
+
+            if (DeleteSourceAfterExtract)
+            {
+                SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+
+                if (!string.Equals(RestHandlingAfterVerify, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
+                {
+                    RestHandlingAfterVerify = RestHandlingModes.RecycleBin;
+                }
+            }
+
+            DangerousSpaceModeEnabled = false;
+            DangerModeSelfTestStamp = string.Empty;
+            DeleteSourceAfterExtract = false;
+
+            // 源包处理档：旧值 DeleteAfterVerify（第三档，2026-09-25 已删）→ 移入其余物 + 移入回收站。
+            if (string.Equals(SourceHandling?.Trim(), "DeleteAfterVerify", StringComparison.OrdinalIgnoreCase))
+            {
+                SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+
+                if (string.Equals(RestHandlingAfterVerify, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+                {
+                    RestHandlingAfterVerify = RestHandlingModes.RecycleBin;
+                }
+            }
+
+            /*
+             * 「删除操作」三档：空 / 非法一律回落 **Keep（不动其余物）** —— 保守方向是"宁可不动，绝不误删"。
+             * 判定只有一处实现（RestHandlingModes.Normalize），这里不另写一套字符串比较。
+             */
+            RestHandlingAfterVerify = RestHandlingModes.Normalize(RestHandlingAfterVerify);
 
             /*
              * 「其余物」清理默认档：空 / 非法一律回落 RecycleBin（**可恢复的那一档**），旧配置不报错。

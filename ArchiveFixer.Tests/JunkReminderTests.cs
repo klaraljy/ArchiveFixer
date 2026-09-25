@@ -105,8 +105,46 @@ namespace ArchiveFixer.Tests
                 name => name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase));
         }
 
-        // ================================================================ ② 源包与分卷不算无用物
+        // ================================================================ ①B 目录形式的密码提示（第 32 条）
 
+        /// <summary>
+        /// **用户真机素材**：他的资源包里没有"说明.txt"，而是把密码提示做成一个**文件夹**
+        /// —— <c>解压密码为：cosergirl.com</c>。旧判据只看文件的扩展名，一个条目都认不出来，
+        /// 于是他反馈"为什么我用了这么久还是没有看到有关无用物的任何提醒"。
+        ///
+        /// <para>同时钉住反面：普通的内容文件夹（<c>1-29+4 IF线</c>）**绝不能**被叫成无用物
+        /// —— 那是用户真正要解出来的东西。</para>
+        /// </summary>
+        [Fact]
+        public async Task 源目录里的密码提示文件夹_要报出来_普通内容文件夹不许报()
+        {
+            Harness harness = CreateHarness("run");
+
+            string hintDirectory = CreateDirectory(harness, "解压密码为：cosergirl.com");
+            string contentDirectory = CreateDirectory(harness, "1-29+4 IF线");
+            ArchiveTask task = AddTask(harness, CreateSourceFile(harness, "001.7z"));
+
+            // 名字判据本身先钉一遍（文件与目录同一套）。
+            Assert.True(SourceJunkScanner.LooksLikeHintName("解压密码为：cosergirl.com"));
+            Assert.True(SourceJunkScanner.LooksLikeHintName("使用说明.txt"));
+            Assert.False(SourceJunkScanner.LooksLikeHintName("1-29+4 IF线"));
+            Assert.False(SourceJunkScanner.LooksLikeHintName("001.7z"));
+
+            SourceJunkScanResult result = await SourceJunkScanner.ScanAsync(
+                new[] { task },
+                new MagicArchiveProber(),
+                CancellationToken.None);
+
+            SourceJunkItem item = Assert.Single(result.Items);
+
+            Assert.Equal(Path.GetFileName(hintDirectory), item.FileName);
+            Assert.True(item.IsDirectory, "目录必须标出来（提示里要写「（文件夹）」）");
+            Assert.DoesNotContain(
+                result.Items,
+                x => string.Equals(x.FileName, Path.GetFileName(contentDirectory), StringComparison.Ordinal));
+        }
+
+        // ================================================================ ② 源包与分卷不算无用物
         [Fact]
         public async Task 本批的源包与分卷组成员_不会被当成无用物()
         {
@@ -640,6 +678,15 @@ namespace ArchiveFixer.Tests
         {
             string path = Path.Combine(harness.SourceDirectory, fileName);
             File.WriteAllBytes(path, content);
+
+            return path;
+        }
+
+        /// <summary>源目录里的一个子目录（第 32 条：密码提示经常就是一个文件夹）。</summary>
+        private static string CreateDirectory(Harness harness, string directoryName)
+        {
+            string path = Path.Combine(harness.SourceDirectory, directoryName);
+            Directory.CreateDirectory(path);
 
             return path;
         }

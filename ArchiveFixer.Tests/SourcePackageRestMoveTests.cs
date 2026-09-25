@@ -681,17 +681,36 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 一键处理_删除档_校验通过后删源包()
+        public async Task 一键处理_彻底删除档_源包跟着其余物一起被删()
         {
-            Harness harness = CreateHarness(settings => settings.SourceHandling = "DeleteAfterVerify");
+            /*
+             * 2026-09-25 第 32 条之后，"校验通过后删源包"由两档组合表达：
+             * 源包操作 = 放入其余物 + 删除操作 = 彻底删除。这里走的是**单层**（第一层直接出内容物），
+             * 所以收尾那一刻其余物里已经有源包了 → 当场按档删掉。
+             */
+            Harness harness = CreateHarness(settings =>
+            {
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
 
             string source = CreateSourceFile("pack.7z");
             ArchiveTask task = AddTask(harness, source);
 
             await harness.Coordinator.StartExtractForOneClickAsync();
 
+            /*
+             * 一键处理的"删除操作"是**链尾**做的（第 32 条：链还没跑完就删其余物，会把后面几层要用的
+             * 内层分卷一起删掉）—— 所以这里要像真管线那样补上链尾那一步：
+             * `OneClickCoordinator.CompleteRootSourcePackagesAsync` → `CompleteRootSourcePackagesAfterChainAsync`。
+             */
+            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { task }, new[] { task });
+
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(source), "DeleteAfterVerify 档应当在校验通过后删掉源包");
+            Assert.False(File.Exists(source), "彻底删除档应当把源包（连同其余物）一起删掉");
+            Assert.False(
+                Directory.Exists(Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName)),
+                "彻底删除档跑完不该还留着其余物目录");
             Assert.Equal(5, CountFiles(task.OutputPath));
         }
 
@@ -846,6 +865,13 @@ namespace ArchiveFixer.Tests
             settings.KeepArchiveNameFolder = true;
             settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
+
+            /*
+             * ⚠ 这一组测的是"源包搬进其余物"这条路，所以显式把档位设成 MoveToRest：
+             * 2026-09-25 第 32 条把**默认档**改成了「原来的位置不动」（用户拍板），
+             * 不显式设置的话这些用例测的就变成"默认不搬"了（那样它们会集体变红）。
+             */
+            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
 
             configure?.Invoke(settings);
             settingsService.Save(settings);

@@ -29,16 +29,6 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 危险模式开着时只留这一行小白字（用户："这个危险操作这个红框多么多余啊，别放在主界面"） -->
-        <TextBlock Grid.Row="0"
-                   Margin="2,0,0,8"
-                   FontSize="11.5"
-                   Foreground="{StaticResource TextMutedBrush}"
-                   TextTrimming="CharacterEllipsis"
-                   ToolTip="{x:Static models:StatusText.DangerModeActiveOneLineHint}"
-                   Text="{x:Static models:StatusText.DangerModeActiveOneLineHint}"
-                   Visibility="{Binding DangerModeEnabled, Converter={StaticResource BoolToVisibilityConverter}}" />
-
         <!-- ============ 主操作条 ============ -->
         <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="12,10" Margin="0,0,0,8">
             <Grid>

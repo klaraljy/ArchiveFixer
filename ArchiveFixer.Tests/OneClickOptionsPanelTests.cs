@@ -168,11 +168,12 @@ namespace ArchiveFixer.Tests
                 pathService.BuildOutputPath(task, overridden));
 
             // 三档默认值也钉住（§9.1 表格里写的"取设置里的当前值"）
+            // ⚠ 第 32 条把「源包操作」的默认档改成了**留在原地**（原来默认搬进其余物）。
             OneClickRunOptions seed = OneClickRunOptions.FromSettings(settings, outputRoot);
 
             Assert.Equal(OutputPlacementMode.CustomRootPerArchive, seed.PlacementMode);
             Assert.Equal(TerminalLayoutMode.KeepLastFolder, seed.TerminalLayout);
-            Assert.Equal(SourceHandlingMode.MoveToRest, seed.SourceHandling);
+            Assert.Equal(SourceHandlingMode.KeepInPlace, seed.SourceHandling);
             Assert.True(seed.IsPlacementValid);
             Assert.False(seed.SaveAsDefault);
             Assert.False(seed.SuppressPanelNextTime);
@@ -234,7 +235,9 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 不勾存为默认_设置文件字节完全不变()
         {
-            Harness harness = CreateHarness();
+            // 设置里刻意放一个**与面板不同**的源包档（第 32 条的默认是 KeepInPlace）：
+            // 只有两边不一样，下面"内存里的设置没被这一次覆盖污染"才是真的判据。
+            Harness harness = CreateHarness(s => s.SourceHandling = nameof(SourceHandlingMode.MoveToRest));
             ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
 
             string flatRoot = Path.Combine(_root, "panel-flat");
@@ -272,7 +275,8 @@ namespace ArchiveFixer.Tests
             // ③ 设置文件：字节级不变
             Assert.Equal(before, HashFile(harness.SettingsFilePath));
 
-            // ④ 内存里的设置对象也没被这一次覆盖污染
+            // ④ 内存里的设置对象也没被这一次覆盖污染：设置里是 MoveToRest，面板选的是 KeepInPlace，
+            //    跑完设置里必须还是 MoveToRest（否则下一次不进面板就会静默按面板的值走）。
             Assert.Equal(harness.OutputRoot, harness.Vm.Settings.CustomOutputDirectory);
             Assert.Equal(nameof(SourceHandlingMode.MoveToRest), harness.Vm.Settings.SourceHandling);
             Assert.Equal("KeepLastFolder", harness.Vm.Settings.TerminalLayoutMode);

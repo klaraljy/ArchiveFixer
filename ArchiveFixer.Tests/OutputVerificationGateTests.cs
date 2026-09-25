@@ -318,22 +318,25 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 同一条红线的**管线版**：DeleteAfterVerify 档 + 引擎写出 0 字节产物 →
-        /// 整个任务流程里删除执行器一次都没被调用。
+        /// 同一条红线的**管线版**（2026-09-25 第 32 条改成新的两档组合）：删除操作=彻底删除 + 引擎写出
+        /// 0 字节产物 → 这一批**一个字节都没被删**：源包还在原处、其余物目录压根没生成。
         /// </summary>
         [Fact]
-        public async Task 删除档_管线里校验判否_删除执行器0次调用且源包还在()
+        public async Task 删除档_管线里校验判否_源包还在且没有生成其余物()
         {
             Harness harness = CreateHarness(settings =>
             {
-                settings.SourceHandling = nameof(SourceHandlingMode.DeleteAfterVerify);
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                 settings.MaxPasswordAttemptsPerLayer = 10;
                 settings.TryEmptyPasswordFirst = false;
             });
 
-            var deleteFileSystem = new CountingDeleteFileSystem();
-            harness.Coordinator.SourceDeleteFileSystemOverride = deleteFileSystem;
-
+            /*
+             * ⚠ 这里曾经注入过一个"记账的删除执行体"（`SourceDeleteFileSystemOverride`）来断言"删一次都没删"，
+             * 但第 32 条之后管线不再走 `SourceCleanupService`（删除统一走 `RestItemPurger`），
+             * 那个接缝已删除 —— 现在的判据是**文件系统上的事实**：源包还在原处、其余物目录压根没生成。
+             */
             string source = harness.CreateSourceFile("pack.7z");
             ArchiveTask task = harness.AddTask(source);
 
@@ -349,8 +352,10 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.Equal(0, deleteFileSystem.DeleteCalls);
-            Assert.True(File.Exists(source), "校验未通过时删除档一个字节都不许删");
+            Assert.True(File.Exists(source), "校验未通过时一个字节都不许删（源包仍在原处）");
+            Assert.True(
+                string.IsNullOrWhiteSpace(task.RestDirectoryPath) || !Directory.Exists(task.RestDirectoryPath),
+                "任务没成功 → 其余物目录不该生成，更不该有东西被删");
         }
 
         // ================================================================ ④ 汇总口径：不许算成成功

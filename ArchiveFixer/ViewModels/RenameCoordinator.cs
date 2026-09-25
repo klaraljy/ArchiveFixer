@@ -49,18 +49,94 @@ namespace ArchiveFixer.ViewModels
 
         internal async Task SmartRenameAsync()
         {
-            var options = new RenameOptions
-            {
-                OperationType = "FixByDetectedFormat",
-                TargetExtension = Settings.DefaultExtension,
-                DeleteExtensionCount = 1,
-                ConflictAction = Settings.ConflictAction,
-                PreviewBeforeRename = true,
-                UnknownFormatAction = Settings.UnknownFormatAction
-            };
-
-            await RenameByOptionsAsync(options);
+            await RenameByOptionsAsync(BuildFixByDetectedFormatOptions());
         }
+
+        /// <summary>
+        /// **一键处理里的自动改名**（用户 2026-09-25 明确指示）。
+        ///
+        /// <para><b>用户原话</b>：「这个一键处理自己会自动改名自动解压，为什么遇到这种改名的压缩包还要我两次确认，
+        /// 这个对用户来说是完全多余的，繁琐的操作，那种情况只有手动档才会有」。
+        /// 所以一键档**不弹改名预览、也不弹执行前确认**：计划与手动档**完全同一套**
+        /// （同一个 <see cref="BuildPreviewAsync"/>、同一条 <c>RenameService.ExecuteRenameAsync</c>），
+        /// 差别只在"给不给人看那一页"。</para>
+        ///
+        /// <para><b>为什么不违反"改名不静默"</b>：改后缀是**可逆**操作，而且每一个改名都照旧
+        /// 逐条写进日志（`旧名 -> 新名，状态：…`）与任务列表；一键档的语义本来就是
+        /// "点一次，剩下全自动"。手动档（②页/右键那几条命令）**照旧先出预览**，一个字没改。</para>
+        ///
+        /// <para>冲突一律按**保守档**处理（自动重命名，绝不覆盖）——与手动档"没选 = 自动重命名"
+        /// 是同一条兜底（<see cref="RenameService.ApplyConflictChoice"/>），不另写一套判定。</para>
+        /// </summary>
+        /// <returns>真的执行了改名返回 true；没有可改的项（或参数被挡下）返回 false。</returns>
+        internal async Task<bool> AutoFixExtensionsAsync()
+        {
+            List<RenamePreviewItem>? previewItems = await BuildPreviewAsync(BuildFixByDetectedFormatOptions());
+
+            if (previewItems == null)
+            {
+                return false;
+            }
+
+            foreach (RenamePreviewItem item in previewItems)
+            {
+                _renameService.ApplyConflictChoice(item);
+            }
+
+            List<RenamePreviewItem> selected = previewItems.Where(x => x.IsSelected && x.CanRename).ToList();
+
+            if (selected.Count == 0)
+            {
+                AppendLog("INFO", "一键处理：自动改名这一步没有可执行的项，跳过。");
+                return false;
+            }
+
+            IsBusy = true;
+
+            try
+            {
+                AppendLog(
+                    "INFO",
+                    $"一键处理：自动修正后缀 {selected.Count} 项（一键档不弹预览窗口，逐条写日志）。");
+
+                await _renameService.ExecuteRenameAsync(selected, Tasks);
+
+                foreach (RenamePreviewItem item in selected)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{item.OriginalFileName} -> {item.NewFileName}，状态：{item.Status}，错误：{item.ErrorMessage}");
+                }
+
+                await ScanTasksAsync();
+
+                RebuildTaskIndex();
+                RefreshOutputPaths();
+                UpdateSummary();
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", "自动改名失败：" + ex.Message);
+                return false;
+            }
+            finally
+            {
+                IsBusy = false;
+            }
+        }
+
+        /// <summary>「按识别结果修正后缀」的参数（手动档与一键档共用同一份，绝不分叉）。</summary>
+        private RenameOptions BuildFixByDetectedFormatOptions() => new RenameOptions
+        {
+            OperationType = "FixByDetectedFormat",
+            TargetExtension = Settings.DefaultExtension,
+            DeleteExtensionCount = 1,
+            ConflictAction = Settings.ConflictAction,
+            PreviewBeforeRename = true,
+            UnknownFormatAction = Settings.UnknownFormatAction
+        };
 
         internal async Task AddExtensionAsync()
         {
