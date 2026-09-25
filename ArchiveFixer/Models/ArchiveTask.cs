@@ -727,6 +727,19 @@ namespace ArchiveFixer.Models
         public string RestDirectoryPath { get; set; } = string.Empty;
 
         /// <summary>
+        /// 本任务定稿成功那一刻，**内容物实际落地的那一层目录**（2026-09-25 第 35 条新加）。
+        ///
+        /// <para>为什么需要它：<see cref="ParentOutputDirectory"/>（续解产物的落点）以前直接取父任务的
+        /// <see cref="OutputPath"/>。在"添加文件夹 + 指定位置"那种**多个包共用同一个输出根**的批次里，
+        /// 父任务的 OutputPath 是那个共用根（如 <c>BBB\111</c>），而它的内容物其实落在**包名那一层**
+        /// （<c>BBB\111\2222\</c>，因为包里自带一个同名文件夹）—— 于是下一层的产物被放到了共用根上，
+        /// 与包名目录平级：用户看到的正是「<c>BBB\111\222</c> 应该放进 <c>BBB\111\2222</c> 里面」。</para>
+        ///
+        /// <para>空 = 还没定稿过（或这一轮没成功定稿）；调用方要按 <see cref="OutputPath"/> 回落。</para>
+        /// </summary>
+        public string ContentDirectoryPath { get; set; } = string.Empty;
+
+        /// <summary>
         /// 本任务**所属的输出根**，即把它解出来的那个父任务的最终输出目录。
         ///
         /// 为什么要有这个字段（用户诉求"一个源包 = 一个最终目录"）：

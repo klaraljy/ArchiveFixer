@@ -1,5 +1,6 @@
 using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Security;
 using ArchiveFixer.Storage;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
@@ -257,22 +258,91 @@ namespace ArchiveFixer.ViewModels
         private bool IsBusy => _vm.IsBusy;
 
         /// <summary>
-        /// 内层包的落点 = **父任务的最终目录**（归集之后就是归集目录，没归集就是输出目录）。
+        /// 内层包的落点 = **那个内层包自己所在的那一层目录**（第 35 条改正；归集开启时仍以归集目录为准）。
         ///
-        /// 归集是"把产物目录整个搬走"，所以开了归集时父任务的 OutputPath 已经不存在了，
-        /// 权威落点是 CollectedPath。内层包必须跟着搬过去的那一个目录走，否则第二层会落到
-        /// 一个空目录里，用户看到的还是"东西散在两个地方"。
+        /// <para><b>真机现场</b>（"添加文件夹 + 指定位置"，多个包共用同一个输出根）：外层包第一层的产物是
+        /// 一个文件夹 <c>BBB\111\2222\</c>，里面躺着下一层的包 <c>222.ra删除r</c>。
+        /// 老实现按**父任务的 OutputPath**（＝共用根 <c>BBB\111</c>）落下一层的产物，于是内容物与包名目录
+        /// **平级**（<c>BBB\111\222</c> 与 <c>BBB\111\2222</c> 并排）。用户原话：
+        /// "我觉得你应该是要将 `BBB\111\222` 文件夹放在 `BBB\111\2222` 这个里面"。</para>
+        ///
+        /// <para>判据用"内层包自己所在的目录"这条**事实**，不猜任何名字：下一层的内容物落在那个包**旁边**，
+        /// 天然就是"一个源包 = 一个目录"。唯一要处理的是内层包**本身就在「其余物」里**的情况
+        /// （中间件集中处）—— 那时要爬到「其余物」外面那一层，否则下一层的内容物会被放进其余物里、
+        /// 跟着「彻底删除」一起没了。</para>
+        ///
+        /// <para>归集（<c>CollectResultsToDirectory</c>）是"把产物目录整个搬走"，那时旧路径已经不存在，
+        /// 权威落点是 <see cref="ArchiveTask.CollectedPath"/>（既有行为，不变）。</para>
         /// </summary>
-        internal static string ResolveContinuationOutputDirectory(ArchiveTask parentTask)
+        /// <param name="parentTask">内层包所属的父任务。</param>
+        /// <param name="innerPackagePath">内层包自己的路径（给 null 时退回"父任务的内容物层 / 输出目录"）。</param>
+        internal static string ResolveContinuationOutputDirectory(ArchiveTask parentTask, string? innerPackagePath = null)
         {
             if (parentTask == null)
             {
                 return string.Empty;
             }
 
-            return string.IsNullOrWhiteSpace(parentTask.CollectedPath)
+            if (!string.IsNullOrWhiteSpace(parentTask.CollectedPath))
+            {
+                return parentTask.CollectedPath;
+            }
+
+            string fallback = string.IsNullOrWhiteSpace(parentTask.ContentDirectoryPath)
                 ? parentTask.OutputPath
-                : parentTask.CollectedPath;
+                : parentTask.ContentDirectoryPath;
+
+            if (string.IsNullOrWhiteSpace(innerPackagePath))
+            {
+                return fallback;
+            }
+
+            string? directory = Path.GetDirectoryName(innerPackagePath);
+
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return fallback;
+            }
+
+            // 内层包在「其余物」（含旧名「过程物」）里 → 爬到那一层之外。
+            string? outermostArtifact = null;
+            string? cursor = directory;
+
+            while (!string.IsNullOrWhiteSpace(cursor))
+            {
+                if (ProcessArtifactLayout.IsArtifactDirectoryName(cursor))
+                {
+                    outermostArtifact = cursor;
+                }
+
+                cursor = Path.GetDirectoryName(cursor);
+            }
+
+            if (outermostArtifact != null)
+            {
+                directory = Path.GetDirectoryName(outermostArtifact);
+            }
+
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return fallback;
+            }
+
+            /*
+             * 不许越出根任务的输出范围（共用输出根模式下 root 就是那个根）：
+             * 内层包如果被放在了范围之外（理论上不该发生），落点退回 fallback，绝不往外写。
+             */
+            string outputRoot = string.IsNullOrWhiteSpace(parentTask.OutputPath)
+                ? parentTask.ContentDirectoryPath
+                : parentTask.OutputPath;
+
+            if (!string.IsNullOrWhiteSpace(outputRoot) &&
+                !ArchivePathGuard.IsInsideRoot(outputRoot, directory, out _))
+            {
+                return fallback;
+            }
+
+            return directory;
         }
 
         /*
@@ -1168,6 +1238,7 @@ namespace ArchiveFixer.ViewModels
              * 解压前就有的文件会被过滤掉，不会把用户自己放在旁边的包重新解一遍。
              */
             var parents = new List<(ArchiveTask Task, string OutputDirectory)>();
+            var seenDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (ArchiveTask task in roundTargets)
             {
@@ -1186,7 +1257,14 @@ namespace ArchiveFixer.ViewModels
 
                 foreach (string directory in CandidateDirectories(task))
                 {
-                    if (!string.IsNullOrWhiteSpace(directory) && !unreadableDirectories.Contains(directory))
+                    /*
+                     * ⚠ 同一个目录只扫一次（2026-09-25 第 35 条修的真机日志噪声）：
+                     * 共用输出根那一档下 4 个任务指向同一个目录，逐个任务扫就把同一批文件数了 4 遍 ——
+                     * 日志里出现"新文件 16 个"（实际 4 个）和同一条"认出…"重复 4 行，纯噪声。
+                     */
+                    if (!string.IsNullOrWhiteSpace(directory) &&
+                        !unreadableDirectories.Contains(directory) &&
+                        seenDirectories.Add(directory))
                     {
                         parents.Add((task, directory));
                     }
@@ -1246,9 +1324,7 @@ namespace ArchiveFixer.ViewModels
                     ? Path.GetFileName(task.CurrentPath)
                     : task.FileName;
 
-                string continuationOutput = ResolveContinuationOutputDirectory(task);
-
-                foreach (string file in files)
+                string continuationOutput = ResolveContinuationOutputDirectory(task); foreach (string file in files)
                 {
                     // 只认"这一轮新出现"的：解压前就在那里的文件不是这一轮的产物。
                     if (existingFiles.Contains(file))
@@ -1312,7 +1388,13 @@ namespace ArchiveFixer.ViewModels
                         found[file] = new InnerArchiveCandidate
                         {
                             Path = file,
-                            ParentOutputDirectory = continuationOutput,
+
+                            /*
+                             * ⚠ 落点**按每个内层包自己所在的目录**算（第 35 条），不能用"每个父任务一个" ——
+                             * 共用输出根那一档下，同一个父任务的两个内层包分别躺在
+                             * `…\111\2222\` 与 `…\111\3333\`，各自的内容物必须回到各自那一层旁边。
+                             */
+                            ParentOutputDirectory = ResolveContinuationOutputDirectory(task, file),
                             ParentTaskName = parentName
                         };
                     }

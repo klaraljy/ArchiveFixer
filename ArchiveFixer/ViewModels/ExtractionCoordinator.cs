@@ -542,6 +542,14 @@ namespace ArchiveFixer.ViewModels
             /// <summary>其余物目录（定稿计划算出来的那个）。源包搬运要用它当目标根（决策 D-10/D-12）。</summary>
             public string ProcessArtifactDirectory { get; init; } = string.Empty;
 
+            /// <summary>
+            /// 内容物实际落地的那一层目录（＝定稿计划的 <c>DestinationDirectory</c>）。
+            ///
+            /// <para>第 35 条：续解产物必须落进**父任务内容物所在的那一层**，而不是父任务的 OutputPath ——
+            /// 共用输出根模式下两者不是一个目录（前者是 <c>BBB\111\2222\</c>，后者是 <c>BBB\111</c>）。</para>
+            /// </summary>
+            public string ContentDirectory { get; init; } = string.Empty;
+
             public long ProcessArtifactBytes { get; init; }
 
             public int RenamedCount { get; init; }
@@ -998,6 +1006,17 @@ namespace ArchiveFixer.ViewModels
                 if (!string.IsNullOrWhiteSpace(restDirectory))
                 {
                     task.RestDirectoryPath = restDirectory;
+                }
+
+                /*
+                 * 内容物实际落地的那一层目录（第 35 条）：续解产物的落点要跟着它走。
+                 * 同样要按归集后的位置换算 —— 归集把整个产物目录搬走了，旧路径已经不在了。
+                 */
+                string contentDirectory = ResolveContentDirectoryAfterCollect(work.Commit, work.Collected);
+
+                if (!string.IsNullOrWhiteSpace(contentDirectory))
+                {
+                    task.ContentDirectoryPath = contentDirectory;
                 }
             }
 
@@ -1649,6 +1668,20 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
+                 * 先把**这条链里被真正解过的内层包**收进其余物（2026-09-25 第 35 条的真机故障）。
+                 *
+                 * 现场：外层包里装的是下一层的包（`2222.rar` → `222.ra删除r` → 内容物），
+                 * 第一层定稿时那个内层包被当成**内容物**放在成品目录里（它只是个文件，不是分卷），
+                 * 于是 `RestDirectoryPath` 一直是空的 —— 用户选了「彻底删除」，链尾这一步直接
+                 * 因为"没有其余物"返回，**内层包原样留在成品目录里**（`CCC\2222\222.rar`）。
+                 * 正确口径（本来就是设计里的）：中间件集中进其余物，源包与中间件一起按档处理。
+                 *
+                 * 判据是**事实**、不是猜名字：这个文件是这条链里某个续解任务的输入
+                 * （它的 `CurrentPath`，且那个任务成功 + 校验通过）。
+                 */
+                await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
+
+                /*
                  * 一键处理里「删除操作」那一档是**留到链尾统一做**的（见 RunRestHandlingAsync 的说明：
                  * 任务收尾那一刻其余物里还躺着内层包，删了就没法接着解）。
                  * 到得了这里就说明整条续解链已经跑完 —— 除了上面那种"待补搬"的任务，
@@ -1656,6 +1689,158 @@ namespace ArchiveFixer.ViewModels
                  * 中间件那几份一直留着。
                  */
                 await ApplyRestHandlingAfterChainAsync(rootTask, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// 把一条续解链里**被真正解过的内层包**搬进根任务的「其余物」（第 35 条）。
+        ///
+        /// <para>只搬"事实成立"的那些：属于这条链、是续解任务、任务成功 + 校验通过、
+        /// 文件还在、且落在根任务的输出范围之内。搬完把其余物目录记到根任务上 ——
+        /// 这样「删除操作」那一档才有对象可删（此前内层包不在其余物里，彻底删除等于空转）。</para>
+        ///
+        /// <para>任何一步失败只写 WARN（内层包留在原地，不影响任何结论）；已经被搬进其余物的跳过（幂等）。</para>
+        /// </summary>
+        private async Task CollectChainInnerPackagesIntoRestAsync(
+            ArchiveTask rootTask,
+            IReadOnlyList<ArchiveTask>? chainTasks,
+            CancellationToken cancellationToken)
+        {
+            if (chainTasks == null || chainTasks.Count == 0)
+            {
+                return;
+            }
+
+            /*
+             * 归到哪一份其余物：根任务的（内容物那一层目录下的「其余物」）。
+             * 定稿时已经记下过就沿用那一条（⛔ 不许现场重算：那一层可能因为撞名变成了「其余物(1)」）。
+             */
+            string restDirectory = rootTask.RestDirectoryPath;
+
+            if (string.IsNullOrWhiteSpace(restDirectory))
+            {
+                string baseDirectory = string.IsNullOrWhiteSpace(rootTask.ContentDirectoryPath)
+                    ? rootTask.OutputPath
+                    : rootTask.ContentDirectoryPath;
+
+                if (string.IsNullOrWhiteSpace(baseDirectory))
+                {
+                    return;
+                }
+
+                restDirectory = Path.Combine(baseDirectory, ProcessArtifactLayout.ArtifactDirectoryName);
+            }
+
+            string outputRoot = string.IsNullOrWhiteSpace(rootTask.OutputPath)
+                ? rootTask.ContentDirectoryPath
+                : rootTask.OutputPath;
+
+            List<(string From, string To)> moves = await Task.Run(() =>
+            {
+                var planned = new List<(string, string)>();
+
+                foreach (ArchiveTask? candidate in chainTasks)
+                {
+                    if (candidate == null ||
+                        ReferenceEquals(candidate, rootTask) ||
+                        !candidate.IsContinuationTask ||
+                        candidate.Outcome != TaskOutcome.Succeeded ||
+                        candidate.OutputVerification != OutputVerificationOutcome.Passed)
+                    {
+                        continue;
+                    }
+
+                    string path = candidate.CurrentPath;
+
+                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    {
+                        continue;
+                    }
+
+                    // 已经在其余物里了（重复调用 / 上一轮搬过）：跳过。
+                    if (SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(path) ?? string.Empty)
+                            .EndsWith(ProcessArtifactLayout.ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(outputRoot) &&
+                        !ArchivePathGuard.IsInsideRoot(outputRoot, path, out _))
+                    {
+                        // 不在根任务的输出范围内（理论上不该发生）：不动它。
+                        continue;
+                    }
+
+                    // 撞名（同一条链里两个同名内层包）自动让位，绝不覆盖。
+                    string target = SafePathHelper.AutoRenameFilePath(
+                        Path.Combine(restDirectory, Path.GetFileName(path)));
+
+                    planned.Add((path, target));
+                }
+
+                return planned;
+            }, cancellationToken);
+
+            if (moves.Count == 0)
+            {
+                return;
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                AppendLog("WARN", $"{rootTask.FileName}：链尾收内层包之前被取消，内层包留在原地（其余物不生成）。");
+                return;
+            }
+
+            var failures = new List<string>();
+
+            foreach ((string from, string to) in moves)
+            {
+                try
+                {
+                    SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(to) ?? string.Empty);
+
+                    /*
+                     * 同卷直接改名（快、且失败不留半份）；跨卷 / 被占用时回落到"先复制成功再删原件"
+                     * （与源包搬运同一口径：复制失败就一个字节都不动）。
+                     */
+                    try
+                    {
+                        File.Move(from, to, overwrite: false);
+                    }
+                    catch (IOException)
+                    {
+                        File.Copy(from, to, overwrite: false);
+                        File.Delete(from);
+                    }
+                    catch (NotSupportedException)
+                    {
+                        File.Copy(from, to, overwrite: false);
+                        File.Delete(from);
+                    }
+
+                    // 任务对象跟着改位置：续解扫描靠它把"刚搬走的内层包"排除掉。
+                    foreach (ArchiveTask? candidate in chainTasks)
+                    {
+                        if (candidate != null && SafePathHelper.PathEquals(candidate.CurrentPath, from))
+                        {
+                            candidate.CurrentPath = to;
+                        }
+                    }
+
+                    AppendLog("INFO", $"{rootTask.FileName}：内层包移入其余物 —— {from} → {to}");
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{Path.GetFileName(from)}（{ex.Message}）");
+                    AppendLog("WARN", $"{rootTask.FileName}：内层包没能移入其余物：{from} —— {ex.Message}（它留在原地）");
+                }
+            }
+
+            if (moves.Count > failures.Count)
+            {
+                // 只有真的搬进去了才把其余物记到根任务上（否则删除档会去删一个不存在的目录）。
+                rootTask.RestDirectoryPath = restDirectory;
             }
         }
 
@@ -2074,6 +2259,94 @@ namespace ArchiveFixer.ViewModels
             {
                 return planned;
             }
+        }
+
+        private static string ResolveContentDirectoryAfterCollect(
+            StageCommitResult commit,
+            CollectResult? collected)
+        {
+            string planned = commit.ContentDirectory;
+
+            if (string.IsNullOrWhiteSpace(planned))
+            {
+                return string.Empty;
+            }
+
+            if (collected is not { Success: true } || string.IsNullOrWhiteSpace(collected.DestinationPath))
+            {
+                return planned;
+            }
+
+            try
+            {
+                // 内容目录相对**输出目录**的那一段在归集之后原样保留（归集是整棵搬走）。
+                string outputDirectory = commit.ContentDirectory;
+
+                if (!string.IsNullOrWhiteSpace(commit.ProcessArtifactDirectory))
+                {
+                    outputDirectory = Path.GetDirectoryName(commit.ProcessArtifactDirectory) ?? outputDirectory;
+                }
+
+                string moved = Path.Combine(
+                    collected.DestinationPath,
+                    Path.GetRelativePath(outputDirectory, planned));
+
+                if (SafePathHelper.DirectoryExists(moved))
+                {
+                    return moved;
+                }
+
+                return SafePathHelper.DirectoryExists(planned) ? planned : moved;
+            }
+            catch
+            {
+                return planned;
+            }
+        }
+
+        /// <summary>
+        /// 内容物**实际所在的那一层目录**（第 35 条）。
+        ///
+        /// <para>定稿计划的 <c>DestinationDirectory</c> 是"落点目录"，但内容物往往被套了一层
+        /// （判定表：多文件套一层 / 包里自带一个同名文件夹）—— 真机现场就是这样：
+        /// 共用输出根是 <c>BBB\111</c>，而定稿把那**一个**文件夹 <c>2222</c> 搬了进去，
+        /// 于是内容物真正所在的那一层是 <c>BBB\111\2222</c>。</para>
+        ///
+        /// <para>判据：落点目录里**除了「其余物」之外只剩一个条目、而且它是目录** → 那一层就是内容物层；
+        /// 否则就是落点目录本身（内容物是散文件，或本来就有多项）。
+        /// 续解产物按它落位，才能做到"一个源包 = 一个目录"（用户第 35 条原话：
+        /// "你应该是要将 `BBB\111\222` 文件夹放在 `BBB\111\2222` 这个里面"）。</para>
+        /// </summary>
+        private static string ResolveContentLayerDirectory(string destinationDirectory, string processArtifactDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(destinationDirectory))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                if (!Directory.Exists(destinationDirectory))
+                {
+                    return destinationDirectory;
+                }
+
+                List<string> entries = Directory
+                    .GetFileSystemEntries(destinationDirectory)
+                    .Where(path => !ProcessArtifactLayout.IsArtifactDirectoryName(path))
+                    .ToList();
+
+                if (entries.Count == 1 && Directory.Exists(entries[0]))
+                {
+                    return entries[0];
+                }
+            }
+            catch
+            {
+                // 读不了目录（权限 / 刚好被删）：按落点目录回落，绝不因此让定稿结论出问题。
+            }
+
+            return destinationDirectory;
         }
 
         /// <summary>
@@ -2725,6 +2998,7 @@ namespace ArchiveFixer.ViewModels
                 MovedProcessCount = movedProcess,
                 ContentFileCount = plan.ContentFileCount,
                 ProcessArtifactDirectory = processDirectory,
+                ContentDirectory = ResolveContentLayerDirectory(destinationDirectory, processDirectory),
                 ProcessArtifactBytes = plan.ProcessArtifactTotalSize,
                 RenamedCount = renamed,
                 SkippedCount = skippedContent + skippedProcess,
@@ -6259,9 +6533,18 @@ namespace ArchiveFixer.ViewModels
             {
                 if (!string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
                 {
+                    /*
+                     * ⚠ 措辞要**如实**（第 35 条）：这一轮**没有**产生其余物时（内容物里就是那个内层包），
+                     * 老文案"其余物先留着（里面还有要接着解的内层包）"会让人以为目录已经建好了 ——
+                     * 用户按这句话去找其余物，只会更糊涂。有其余物才说"留着"，没有就说清"这一轮没有其余物"。
+                     */
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：其余物先留着（里面还有要接着解的内层包），整条续解链跑完后再按「删除操作」处理。");
+                        string.IsNullOrWhiteSpace(task.RestDirectoryPath)
+                            ? $"{task.FileName}：这一轮没有产生其余物（中间件就是内容物里的那个内层包）；"
+                              + "整条续解链跑完后按「删除操作」处理内层包。"
+                            : $"{task.FileName}：其余物先留着（里面还有要接着解的内层包），"
+                              + "整条续解链跑完后再按「删除操作」处理。");
                 }
 
                 return;

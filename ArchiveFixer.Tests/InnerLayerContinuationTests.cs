@@ -499,6 +499,175 @@ namespace ArchiveFixer.Tests
             Assert.Contains(payloads, path => File.ReadAllText(path) == InnerPayloadText);
         }
 
+        // ---------------------------------------------------------------- 第 35 条：落点与内层包归属
+
+        /// <summary>
+        /// <b>2026-09-25 第 35 条真机现场（共用输出根那一档）</b>：选整个文件夹 → 解到指定位置，
+        /// 4 个包共用同一个输出根（<c>BBB\111</c>）。
+        ///
+        /// <para>修复前：续解产物按**父任务的 OutputPath**（＝共用根）落，于是内容物与包名目录**平级** ——
+        /// 用户看到 <c>BBB\111\222</c> 和 <c>BBB\111\2222</c> 并排，原话是
+        /// "你应该是要将 `BBB\111\222` 文件夹放在 `BBB\111\2222` 这个里面"。
+        /// 现在续解落点取"父任务**内容物实际所在的那一层**"，产物落进包名目录里。</para>
+        /// </summary>
+        [Fact]
+        public async Task 共用输出根时_续解产物落进包名目录里而不是与它平级()
+        {
+            /*
+             * 样本必须与真机**同形**（这一点很关键，第一版样本造错了就测不出这个缺陷）：
+             * 外层包 → 里面一个**同名文件夹** `2222\` → 文件夹里是**名字被塞了字的下一层包**
+             * （真机是 `222.ra删除r`）。名字被改坏 → 定稿按"内容物"收下那一层文件夹
+             * （认得出是归档的话会整层进其余物，那是另一种形状），内容物层因此是 `…\111\2222`。
+             */
+            const string mangledName = "222.ra删除r";
+            const string mangledName2 = "333.ra删除r";
+
+            string innerStage = Path.Combine(_root, "wrap-inner");
+            Directory.CreateDirectory(innerStage);
+            WriteText(Path.Combine(innerStage, "payload.txt"), InnerPayloadText);
+            Run7z(innerStage, "a", "-t7z", mangledName, "-p" + InnerPassword, "-mhe=on", "payload.txt");
+            Run7z(innerStage, "a", "-t7z", mangledName2, "-p" + InnerPassword, "-mhe=on", "payload.txt");
+
+            string outerStage = Path.Combine(_root, "wrap-outer");
+            Directory.CreateDirectory(Path.Combine(outerStage, "2222"));
+            Directory.CreateDirectory(Path.Combine(outerStage, "3333"));
+            File.Copy(
+                Path.Combine(innerStage, mangledName),
+                Path.Combine(outerStage, "2222", mangledName),
+                overwrite: true);
+            File.Copy(
+                Path.Combine(innerStage, mangledName2),
+                Path.Combine(outerStage, "3333", mangledName2),
+                overwrite: true);
+
+            string outer = BuildPackage("2222.7z", outerStage, "2222");
+            string outer2 = BuildPackage("3333.7z", outerStage, "3333");
+
+            /*
+             * ⚠ 必须走"**添加文件夹** + 指定位置"那一档，而且文件夹里**不止一个包**
+             * （两个以上才会真的走"共用输出根"那条路）：这时父任务的 OutputPath 是共用根
+             * （`…\111`），而内容物实际落在包名那一层（`…\111\2222`）—— 两者分家才是真机的现场
+             * （`BBB\111\222` 与 `BBB\111\2222` 平级）。
+             */
+            string sourceFolder = Path.Combine(_root, "AAA", "111");
+            Directory.CreateDirectory(sourceFolder);
+            File.Copy(outer, Path.Combine(sourceFolder, Path.GetFileName(outer)), overwrite: true);
+            File.Copy(outer2, Path.Combine(sourceFolder, Path.GetFileName(outer2)), overwrite: true);
+
+            Harness harness = CreateHarness($"{OuterPassword}\n{InnerPassword}\n");
+            await harness.AddPathsAsync(sourceFolder);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            Assert.Equal(2, outcome.Rounds);
+
+            string sharedRoot = Path.Combine(harness.OutputRoot, "111");
+
+            // 每个包的内容物都必须落在**它自己的包名目录**里。
+            foreach (string packageName in new[] { "2222", "3333" })
+            {
+                Assert.True(
+                    File.Exists(Path.Combine(sharedRoot, packageName, "payload.txt")),
+                    $"{packageName} 的内容物没落进包名目录。实际目录树："
+                    + string.Join(" | ", Directory.GetFileSystemEntries(harness.OutputRoot, "*", SearchOption.AllDirectories))
+                    + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
+            }
+
+            // 反向断言：内容物**不许**直接躺在共用根上（那就是"与包名目录平级"的旧缺陷）。
+            Assert.False(
+                File.Exists(Path.Combine(sharedRoot, "payload.txt")),
+                "内容物被放到了共用根上（与包名目录平级）—— 续解落点又退回 OutputPath 了");
+        }
+
+        /// <summary>
+        /// <b>被续解链真正解过的内层包必须进「其余物」</b>（第 35 条）：
+        /// 修复前第一层把内层包当**内容物**放在成品目录里，`RestDirectoryPath` 一直是空的 ——
+        /// 于是「彻底删除」在链尾**没有对象可删**，内层包原样留着（真机：<c>CCC\2222\222.rar</c>）。
+        /// </summary>
+        [Fact]
+        public async Task 内层包在链尾被收进其余物_保留档留在其余物里()
+        {
+            const string mangledName = "inner.7删除z";
+            string outer = BuildMangledInnerPackage(mangledName);
+
+            Harness harness = CreateHarness($"{OuterPassword}\n{InnerPassword}\n");
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            Assert.Equal(2, outcome.Rounds);
+
+            // 内容物照常在。
+            string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
+            Assert.Single(payloads);
+            Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
+
+            // 内层包（已自动改名成 .7z）不在成品目录里裸放着了，而是进了「其余物」。
+            Assert.DoesNotContain(
+                Directory.GetFiles(harness.OutputRoot, "inner.7z", SearchOption.AllDirectories),
+                path => !path.Contains("其余物", StringComparison.Ordinal));
+
+            if (harness.Vm.Settings.RestHandlingAfterVerify == RestHandlingModes.Keep)
+            {
+                Assert.Single(
+                    Directory.GetFiles(harness.OutputRoot, "inner.7z", SearchOption.AllDirectories),
+                    path => path.Contains("其余物", StringComparison.Ordinal));
+            }
+
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("内层包移入其余物", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 同一形状 + 「删除操作 = 彻底删除」：链尾收进其余物之后**连内层包一起被删掉**
+        /// （源包留在原地 —— 这份样本的源包档就是默认的「原来的位置不动」）。
+        /// </summary>
+        [Fact]
+        public async Task 彻底删除档_链尾把内层包连其余物一起删掉()
+        {
+            const string mangledName = "inner.7删除z";
+            string outer = BuildMangledInnerPackage(mangledName);
+
+            Harness harness = CreateHarness(
+                $"{OuterPassword}\n{InnerPassword}\n",
+                settings =>
+                {
+                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+                });
+
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            Assert.Equal(2, outcome.Rounds);
+
+            // 内容物还在（成功路径一个字节都没动它）。
+            string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
+            Assert.Single(payloads);
+
+            // 内层包与其余物目录都不见了（源包按「源包操作」搬进了其余物 → 也一起被删）。
+            Assert.Empty(Directory.GetFiles(harness.OutputRoot, "inner.7z", SearchOption.AllDirectories));
+            Assert.Empty(Directory.GetDirectories(harness.OutputRoot, "其余物", SearchOption.AllDirectories));
+            Assert.False(File.Exists(outer), "源包操作=放入其余物 + 删除操作=彻底删除 → 源包也该没了");
+        }
+
+        /// <summary>造"外层包 → 名字被塞字的内层包 → 内容物"这条链（第 33/35 条共用样本）。</summary>
+        private string BuildMangledInnerPackage(string mangledName)
+        {
+            string innerStage = Path.Combine(_root, "mangle-inner-" + mangledName);
+            Directory.CreateDirectory(innerStage);
+            WriteText(Path.Combine(innerStage, "payload.txt"), InnerPayloadText);
+            Run7z(innerStage, "a", "-t7z", mangledName, "-p" + InnerPassword, "-mhe=on", "payload.txt");
+
+            string outerStage = Path.Combine(_root, "mangle-outer-" + mangledName);
+            Directory.CreateDirectory(outerStage);
+            File.Copy(Path.Combine(innerStage, mangledName), Path.Combine(outerStage, mangledName), overwrite: true);
+
+            return BuildPackage("mangle-" + Guid.NewGuid().ToString("N") + ".7z", outerStage, mangledName);
+        }
+
         // ---------------------------------------------------------------- 第四步：没有内层包 = 回归
 
         [Fact]
