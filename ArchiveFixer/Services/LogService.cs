@@ -239,6 +239,9 @@ namespace ArchiveFixer.Services
                         _currentLogFilePath,
                         $"[{FormatTimestamp(DateTime.Now)}] [INFO] 日志初始化{Environment.NewLine}",
                         Encoding.UTF8);
+
+                    // 顺手把老日志收一收（第 44 条追加）：不清理的话日志目录只增不减。
+                    CleanupOldLogs();
                 }
             }
             catch
@@ -247,6 +250,95 @@ namespace ArchiveFixer.Services
                 _currentLogFilePath = string.Empty;
             }
         }
+
+        /// <summary>
+        /// 日志目录的**保留策略**（用户 2026-09-25 第 44 条追加：他导出的那两份日志一份 721 KB、一份 1.4 MB，
+        /// 目录里已经攒了 56 份、3.4 MB —— 而在这之前**没有任何清理**，只增不减）。
+        ///
+        /// <para>规则（按时间从旧到新处理，⛔ 绝不动当前这一份、绝不动不匹配 <c>ArchiveFixer_*.log</c> 的文件）：</para>
+        /// <list type="number">
+        /// <item><description>删掉**超过 <see cref="LogRetentionDays"/> 天**的；</description></item>
+        /// <item><description>剩下的若总量超过 <see cref="LogRetentionTotalBytes"/>，从最旧的开始删到限额以内；</description></item>
+        /// <item><description>**至少留最近 <see cref="LogRetentionMinFiles"/> 份**（用户随时可能要看昨天那一次）。</description></item>
+        /// </list>
+        ///
+        /// <para>删了就在新日志首行之后写一条 INFO 说清删了几份 / 释放多少 —— 静默删文件是这个项目的红线。</para>
+        /// </summary>
+        private void CleanupOldLogs()
+        {
+            try
+            {
+                var files = new DirectoryInfo(LogDirectory)
+                    .GetFiles("ArchiveFixer_*.log", SearchOption.TopDirectoryOnly)
+                    .Where(file => !string.Equals(file.FullName, _currentLogFilePath, StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(file => file.LastWriteTimeUtc)
+                    .ToList();
+
+                if (files.Count <= LogRetentionMinFiles)
+                {
+                    return;
+                }
+
+                DateTime cutoffUtc = DateTime.UtcNow - TimeSpan.FromDays(LogRetentionDays);
+                long totalBytes = files.Sum(file => file.Length);
+                int deleted = 0;
+                long freedBytes = 0;
+
+                foreach (FileInfo file in files)
+                {
+                    // 最近 N 份永远留着（下面是按时间升序，最后 N 份在队尾）。
+                    if (files.Count - files.IndexOf(file) <= LogRetentionMinFiles)
+                    {
+                        break;
+                    }
+
+                    bool tooOld = file.LastWriteTimeUtc < cutoffUtc;
+                    bool overQuota = totalBytes > LogRetentionTotalBytes;
+
+                    if (!tooOld && !overQuota)
+                    {
+                        break;
+                    }
+
+                    long length = file.Length;
+
+                    try
+                    {
+                        file.Delete();
+                        deleted++;
+                        freedBytes += length;
+                        totalBytes -= length;
+                    }
+                    catch
+                    {
+                        // 正被别的进程占用（例如上一份还开着）：跳过，下次启动再收。
+                    }
+                }
+
+                if (deleted > 0)
+                {
+                    File.AppendAllText(
+                        _currentLogFilePath,
+                        $"[{FormatTimestamp(DateTime.Now)}] [INFO] 已清理 {deleted} 份老日志（保留最近 {LogRetentionDays} 天 / "
+                        + $"上限 {LogRetentionTotalBytes / 1024 / 1024} MB / 至少 {LogRetentionMinFiles} 份），释放 "
+                        + $"{freedBytes / 1024.0 / 1024.0:0.0} MB{Environment.NewLine}",
+                        Encoding.UTF8);
+                }
+            }
+            catch
+            {
+                // 清理失败绝不能让程序起不来：日志只是辅助。
+            }
+        }
+
+        /// <summary>日志保留天数（第 44 条追加；固定策略，界面上没有开关 —— 要改告诉我）。</summary>
+        internal const int LogRetentionDays = 30;
+
+        /// <summary>日志目录总量上限（超过就从最旧的开始删）。</summary>
+        internal const long LogRetentionTotalBytes = 50L * 1024 * 1024;
+
+        /// <summary>无论如何至少留最近这么多份（用户随时可能要看"昨天那一次"）。</summary>
+        internal const int LogRetentionMinFiles = 10;
 
         /// <summary>
         /// 写入 INFO 日志。

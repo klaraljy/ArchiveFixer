@@ -145,6 +145,92 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain(purgeLines, line => line.Contains("这一步不可逆", StringComparison.Ordinal));
         }
 
+        /// <summary>④ 批末汇总：一眼看到"这批成不成"（第 44 条追加）。</summary>
+        [Fact]
+        public async Task 批末汇总_一眼看到成功失败与逐条失败()
+        {
+            RequireSevenZip();
+
+            string good = BuildPackage("good.7z", 32 * 1024);
+
+            string broken = Path.Combine(_root, "packages", "broken.7z");
+            byte[] bytes = new byte[4096];
+            new Random(7).NextBytes(bytes);
+            bytes[0] = 0x37;
+            bytes[1] = 0x7A;
+            bytes[2] = 0xBC;
+            bytes[3] = 0xAF;
+            bytes[4] = 0x27;
+            bytes[5] = 0x1C;
+            File.WriteAllBytes(broken, bytes);
+
+            Harness harness = CreateHarness();
+
+            await harness.AddTaskAsync(good);
+            await harness.AddTaskAsync(broken);
+            await harness.Coordinator.StartExtractAsync();
+
+            string? summary = harness.LogTexts.FirstOrDefault(line => line.Contains("本批汇总：", StringComparison.Ordinal));
+
+            Assert.NotNull(summary);
+            Assert.True(
+                summary!.Contains("2 个任务", StringComparison.Ordinal) && summary.Contains("失败 1", StringComparison.Ordinal),
+                $"批末汇总不对：{summary}\nbroken 相关日志：\n{string.Join("\n", harness.LogTexts.Where(l => l.Contains("broken", StringComparison.Ordinal)))}");
+
+            // 失败要**逐条点名**（不用他去数行）。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("  失败：", StringComparison.Ordinal)
+                    && line.Contains("broken.7z", StringComparison.Ordinal));
+        }
+
+        /// <summary>⑤ 老日志保留策略：超期 / 超量的收掉，最近若干份与"当前这一份"永远留着。</summary>
+        [Fact]
+        public void 日志保留_清理老日志但不碰当前这一份与最近几份()
+        {
+            string dataRoot = Path.Combine(_root, "retention-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dataRoot);
+
+            var pathService = new PathService { DataRootDirectory = dataRoot };
+            var logService = new LogService(pathService);
+
+            logService.Initialize(enableFileLog: true);
+
+            string logsDirectory = logService.LogDirectory;
+            string current = logService.CurrentLogFilePath;
+
+            Assert.True(File.Exists(current), "当前日志文件应该已经建好");
+
+            // 造 40 份"很旧"的日志（每份 2 MB → 共 80 MB，超过 50 MB 上限），再各留一份的修改时间。
+            DateTime old = DateTime.UtcNow.AddDays(-90);
+
+            for (int i = 0; i < 40; i++)
+            {
+                string fake = Path.Combine(logsDirectory, $"ArchiveFixer_20250101_{i:D6}.log");
+                File.WriteAllBytes(fake, new byte[2 * 1024 * 1024]);
+                File.SetLastWriteTimeUtc(fake, old.AddMinutes(i));
+            }
+
+            // 不匹配命名规则的文件：⛔ 一个都不许动。
+            string stranger = Path.Combine(logsDirectory, "别人的日志.txt");
+            File.WriteAllText(stranger, "不要动我");
+            File.SetLastWriteTimeUtc(stranger, old);
+
+            var second = new LogService(pathService);
+            second.Initialize(enableFileLog: true);
+
+            int remaining = Directory.GetFiles(logsDirectory, "ArchiveFixer_*.log").Length;
+
+            // 至少留 LogRetentionMinFiles 份，且总量落回上限以内（当前这一份 + 最近几份）。
+            Assert.True(remaining >= LogService.LogRetentionMinFiles, $"老日志被清得太狠：只剩 {remaining} 份");
+
+            long total = Directory.GetFiles(logsDirectory, "ArchiveFixer_*.log").Sum(file => new FileInfo(file).Length);
+            Assert.True(total <= LogService.LogRetentionTotalBytes, $"日志总量仍超上限：{total / 1024 / 1024} MB");
+
+            Assert.True(File.Exists(current), "当前这一份永远不许被删");
+            Assert.True(File.Exists(stranger), "不匹配命名规则的文件一个字节都不许动");
+        }
+
         // ================================================================ 工具
 
         private string BuildPackage(string fileName, int payloadBytes)

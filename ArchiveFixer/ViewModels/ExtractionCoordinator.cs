@@ -3731,6 +3731,9 @@ namespace ArchiveFixer.ViewModels
             private readonly ExtractionCoordinator _owner;
             private int _lastLoggedDecile = -1;
 
+            /// <summary>上一次"心跳"写出去的时刻（长任务专用，见 <see cref="HeartbeatInterval"/>）。</summary>
+            private DateTime _lastHeartbeatUtc = DateTime.UtcNow;
+
             public TaskProgressSink(ExtractionCoordinator owner, ArchiveTask task)
             {
                 _owner = owner;
@@ -3788,25 +3791,130 @@ namespace ArchiveFixer.ViewModels
 
                 if (decile <= _lastLoggedDecile)
                 {
+                    /*
+                     * ── 长任务心跳（第 44 条的补充，用户"如果失败的话你就可以多一点"的另一面）──
+                     *
+                     * 瘦身之后，一个 40 GB 的包在日志里就是"开始解压"……然后**半小时没动静**，
+                     * 直到收尾摘要才再出现一行 —— 用户会以为卡死了（他以前就报过"看着像卡住"）。
+                     * 所以：**每 30 秒**至少放一条进度出去（含百分比、当前条目、已用时间），
+                     * 明确标成"仍在解压"，它**绕过"成功就丢"的缓冲**（心跳的意义就是"现在还在动"）。
+                     */
+                    if (DateTime.UtcNow - _lastHeartbeatUtc >= HeartbeatInterval)
+                    {
+                        _lastHeartbeatUtc = DateTime.UtcNow;
+
+                        string heartbeatEntry = DescribeEntry(progress.CurrentEntry);
+
+                        _owner.AppendHeartbeat(
+                            string.IsNullOrWhiteSpace(heartbeatEntry)
+                                ? $"{Task.FileName}：仍在解压 {progress.Percent}%"
+                                : $"{Task.FileName}：仍在解压 {progress.Percent}%（当前：{heartbeatEntry}）");
+                    }
+
                     return;
                 }
 
                 _lastLoggedDecile = decile;
-
-                string entry = progress.CurrentEntry ?? string.Empty;
-
-                if (entry.Length > ProgressLogEntryMaxLength)
-                {
-                    entry = entry[..ProgressLogEntryMaxLength] + "…";
-                }
+                _lastHeartbeatUtc = DateTime.UtcNow;
 
                 _owner.AppendLog(
                     "INFO",
-                    string.IsNullOrWhiteSpace(entry)
+                    string.IsNullOrWhiteSpace(DescribeEntry(progress.CurrentEntry))
                         ? $"{Task.FileName}：进度 {progress.Percent}%"
-                        : $"{Task.FileName}：进度 {progress.Percent}%（当前：{entry}）");
+                        : $"{Task.FileName}：进度 {progress.Percent}%（当前：{DescribeEntry(progress.CurrentEntry)}）");
+            }
+
+            /// <summary>当前条目名（超长截断）—— 进度行与心跳共用同一份口径。</summary>
+            private static string DescribeEntry(string? currentEntry)
+            {
+                string entry = currentEntry ?? string.Empty;
+
+                return entry.Length > ProgressLogEntryMaxLength
+                    ? entry[..ProgressLogEntryMaxLength] + "…"
+                    : entry;
             }
         }
+
+        /// <summary>长任务心跳间隔（第 44 条：瘦身不许把"还在动"一起瘦掉）。</summary>
+        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// 心跳：**绕开"成功就丢"缓冲**直接写出去 —— 它要回答的正是"此刻还在动吗"。
+        /// 任务收尾时的摘要仍然照写，两者不冲突。
+        /// </summary>
+        private void AppendHeartbeat(string message) => _vm.AppendLog("INFO", message);
+
+        /// <summary>
+        /// 批末一条**汇总**（第 44 条的补充）：任务数 / 成功 / 失败 / 跳过 / 用时 + 失败逐条。
+        ///
+        /// <para>为什么要它：瘦身之后每个任务只剩两行，但 136 个任务仍是 270 多行 ——
+        /// 用户真正想知道的是"这批到底成不成、哪几个不成"，那应该是**一眼**能看到的结论，
+        /// 而不是让他自己数行。失败逐条写"名字 + 状态"（最多 20 条，多的写个数）。
+        /// ⛔ 判据全用机器终态（<see cref="TaskOutcome"/>），不比对中文。</para>
+        /// </summary>
+        private void AppendBatchSummary(IReadOnlyList<ArchiveTask>? tasks)
+        {
+            if (tasks == null || tasks.Count == 0)
+            {
+                return;
+            }
+
+            int succeeded = tasks.Count(task => task.Outcome == TaskOutcome.Succeeded);
+            int failed = tasks.Count(task => task.Outcome == TaskOutcome.Failed);
+            int skipped = tasks.Count(task => task.Outcome == TaskOutcome.Skipped);
+            int cancelled = tasks.Count(task => task.Outcome == TaskOutcome.Cancelled);
+            int pending = tasks.Count - succeeded - failed - skipped - cancelled;
+
+            DateTime? first = tasks.Where(task => task.StartTime.HasValue).Min(task => task.StartTime);
+            DateTime? last = tasks.Where(task => task.EndTime.HasValue).Max(task => task.EndTime);
+            string elapsed = first.HasValue && last.HasValue && last.Value > first.Value
+                ? (last.Value - first.Value).ToString(@"hh\:mm\:ss")
+                : string.Empty;
+
+            var parts = new List<string>
+            {
+                $"成功 {succeeded}",
+                $"失败 {failed}",
+                $"跳过 {skipped}"
+            };
+
+            if (cancelled > 0)
+            {
+                parts.Add($"取消 {cancelled}");
+            }
+
+            if (pending > 0)
+            {
+                parts.Add($"未处理 {pending}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(elapsed))
+            {
+                parts.Add("用时 " + elapsed);
+            }
+
+            AppendLog(
+                failed > 0 ? "WARN" : "INFO",
+                $"本批汇总：{tasks.Count} 个任务 —— {string.Join(" / ", parts)}。");
+
+            if (failed == 0)
+            {
+                return;
+            }
+
+            foreach (ArchiveTask task in tasks.Where(task => task.Outcome == TaskOutcome.Failed).Take(MaxBatchSummaryFailures))
+            {
+                AppendLog("WARN", $"  失败：{task.FileName} —— {task.Status}");
+            }
+
+            if (failed > MaxBatchSummaryFailures)
+            {
+                AppendLog("WARN", $"  …还有 {failed - MaxBatchSummaryFailures} 个失败没列出来（完整清单见「导出失败清单」）");
+            }
+        }
+
+        /// <summary>批末汇总里最多逐条列几个失败（再多让他去导出失败清单）。</summary>
+        private const int MaxBatchSummaryFailures = 20;
 
         /// <summary>
         /// 造一个带进度 / 卡住提示的引擎请求（本次改动的接线点）。
@@ -5867,8 +5975,11 @@ namespace ArchiveFixer.ViewModels
                 parts.Add("续解");
             }
 
-            if (!string.IsNullOrWhiteSpace(task.ElapsedText) && task.ElapsedText != "-")
+            if (!string.IsNullOrWhiteSpace(task.ElapsedText)
+                && task.ElapsedText != "-"
+                && !string.Equals(task.ElapsedText, "00:00:00", StringComparison.Ordinal))
             {
+                // 秒级任务不写"用时 00:00:00"（68 个包就是 68 个零，纯噪声）。
                 parts.Add("用时 " + task.ElapsedText);
             }
 
@@ -6305,6 +6416,8 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 AppendLog("INFO", "批量解压完成");
+
+                AppendBatchSummary(selectedTasks);
 
                 // 其余物处理的批末汇总（第 44 条：逐任务一行 + 这里一条，替掉以前几十行长文案）。
                 (int purgedTasks, long purgedBytes, bool purgedPermanently) = ReadBatchPurge();
@@ -7297,6 +7410,21 @@ namespace ArchiveFixer.ViewModels
                  * 成功路径不从这里走（那一支的清理在 PostProcessSuccessAsync 里按"校验通过"删）。
                  */
                 CleanupFailedTaskWorkspace(task);
+
+                /*
+                 * 机器终态收口（第 44 条追加）：任务已经结束（`EndTime` 有值）而 `Outcome` 还停在 `Pending`，
+                 * 说明它走的是那些"只写了中文状态、没写终态"的失败分支（实测：识别不出格式的包
+                 * 状态是「解压失败」，`Outcome` 却是 `Pending`，于是批末汇总把它算进"未处理"）。
+                 *
+                 * 汇总 / 失败清单 / 四道删除门读的都是这一位，⛔ 一律不许靠比对中文。
+                 * 判据用"没通过输出校验"这条事实，只有真正的失败才会落进来。
+                 */
+                if (task.Outcome == TaskOutcome.Pending
+                    && task.EndTime.HasValue
+                    && task.OutputVerification != OutputVerificationOutcome.Passed)
+                {
+                    task.Outcome = TaskOutcome.Failed;
+                }
 
                 // 日志收尾：成功 → 只留一行摘要（细节全丢）；失败 / 取消 → 细节全吐出来再收摘要。
                 EndTaskLogCapture(task);
