@@ -82,6 +82,87 @@ namespace ArchiveFixer.Tests
             Assert.Equal(RestHandlingModes.Delete, RestHandlingModes.Normalize("delete"));
         }
 
+        /// <summary>
+        /// <b>2026-09-25 第 34 条的真机故障：在③页点单选框，设置一个字节都没写。</b>
+        ///
+        /// <para>机制：③页「2 删除操作」绑的是 <c>SettingsEditor.RestHandling</c>（**字符串**），
+        /// 而 <c>EnumOptionConverter.ConvertBack</c> 老实现只认枚举 —— 目标类型是 string 时直接返回
+        /// <c>Binding.DoNothing</c>，于是"有黑点、没写值"。用户看到的是一整条链：
+        /// 选「彻底删除」→ 点保存 → 一键处理的弹窗里还是旧档位（"我之前的选项完全没有用"）；
+        /// 任何一次绑定重新求值又把黑点弹回旧值。</para>
+        ///
+        /// <para>这条测试走**与绑定完全同一条路**：转换器 ConvertBack → 把结果写进属性
+        /// （等价于 TwoWay 绑定写回源）。⛔ 撤掉 ConvertBack 里那段"字符串档位"的分支，这条立刻变红。</para>
+        /// </summary>
+        [Fact]
+        public void 单选框写回_字符串档位也必须落进设置()
+        {
+            MainViewModel vm = CreateViewModel();
+            var converter = new ArchiveFixer.Helpers.EnumOptionConverter();
+
+            // 用户点③页的「彻底删除」：RadioButton 的 IsChecked 变 true → 转换器往回写。
+            foreach (string mode in new[] { RestHandlingModes.Delete, RestHandlingModes.RecycleBin, RestHandlingModes.Keep })
+            {
+                object? written = converter.ConvertBack(true, typeof(string), mode, System.Globalization.CultureInfo.InvariantCulture);
+
+                Assert.False(
+                    ReferenceEquals(written, System.Windows.Data.Binding.DoNothing),
+                    $"「{mode}」这一档没有被写回（ConvertBack 返回了 DoNothing）—— 点了单选框等于没点");
+                Assert.Equal(mode, written);
+
+                vm.SettingsEditor.RestHandling = (string)written!;
+
+                Assert.Equal(mode, vm.Settings.RestHandlingAfterVerify);
+            }
+
+            // 取消勾选（被同组别的项顶掉）时**不许**写回，否则会把刚选中的那一项又改掉。
+            Assert.True(
+                ReferenceEquals(
+                    converter.ConvertBack(false, typeof(string), RestHandlingModes.Delete, System.Globalization.CultureInfo.InvariantCulture),
+                    System.Windows.Data.Binding.DoNothing));
+
+            // 枚举档位（源包操作那一组）照旧按枚举写回 —— 两种目标类型都要能用。
+            object? enumWritten = converter.ConvertBack(
+                true,
+                typeof(SourceHandlingMode),
+                nameof(SourceHandlingMode.MoveToRest),
+                System.Globalization.CultureInfo.InvariantCulture);
+
+            Assert.Equal(SourceHandlingMode.MoveToRest, enumWritten);
+        }
+
+        /// <summary>
+        /// 通知口径：**源包操作与删除操作都必须在那张"包在 Settings 外面"的通知清单里**。
+        ///
+        /// <para>真机现场：关掉一键处理的弹窗回到③页，「删除操作」那一组三个单选一个黑点都没有；
+        /// 切一次选项卡之后「源包操作」的黑点回来了、删除操作的还是不在 ——
+        /// 差别正是老实现的通知清单里**只有 SourceHandling、漏了 RestHandling**
+        /// （从 <c>RaiseOutputPlacementChanged</c> 漏掉的直接后果）。</para>
+        /// </summary>
+        [Fact]
+        public void 重新求值时_源包操作与删除操作都要发通知()
+        {
+            MainViewModel vm = CreateViewModel();
+
+            var raised = new List<string>();
+
+            vm.SettingsEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? string.Empty);
+
+            vm.SettingsEditor.NotifyProcessingOptionsChanged();
+
+            Assert.Contains(nameof(vm.SettingsEditor.SourceHandling), raised);
+            Assert.Contains(nameof(vm.SettingsEditor.RestHandling), raised);
+            Assert.Contains(nameof(vm.SettingsEditor.IsRestDeleteSelected), raised);
+            Assert.Contains(nameof(vm.SettingsEditor.RestHandlingSummary), raised);
+
+            // 落点那条路（①页「选择…」/ ③页切页都走它）同样要把这两档带上。
+            raised.Clear();
+            vm.SettingsEditor.NotifyOutputPlacementChanged();
+
+            Assert.Contains(nameof(vm.SettingsEditor.SourceHandling), raised);
+            Assert.Contains(nameof(vm.SettingsEditor.RestHandling), raised);
+        }
+
         // ================================================================ ② ViewModel 那一层
 
         /// <summary>选了「彻底删除」→ 那条约提示必须可见；换回别的档 → 收起来（没有"关掉"这条出口）。</summary>

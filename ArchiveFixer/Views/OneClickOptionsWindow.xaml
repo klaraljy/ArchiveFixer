@@ -139,18 +139,24 @@
                 <StackPanel>
 
                     <!-- ==================== 本次落点（二选一） ==================== -->
+                    <!--
+                        ⚠ 这里的 GroupName 必须与主界面选项卡**不重名**（2026-09-25 第 34 条真机故障）：
+                        弹窗和③页原来都用 "SourceHandling"/"RestHandling"，弹窗填初值时把③页那一组
+                        单选按钮一起取消了 —— 用户关掉弹窗回到③页，看到的是一组**没有黑点**的选项，
+                        而设置里的值其实是对的。带 Panel 前缀 = 这两组只在本窗口内互斥。
+                    -->
                     <GroupBox Header="本次落点">
                         <StackPanel>
                             <RadioButton x:Name="PlacementPerArchiveOption"
                                          x:FieldModifier="public"
-                                         GroupName="Placement"
+                                         GroupName="PanelPlacement"
                                          Checked="Placement_Checked">
                                 <TextBlock Text="以包名命名的子文件夹（默认）" Style="{StaticResource BodyTextStyle}" />
                             </RadioButton>
 
                             <RadioButton x:Name="PlacementCustomPerArchiveOption"
                                          x:FieldModifier="public"
-                                         GroupName="Placement"
+                                         GroupName="PanelPlacement"
                                          Margin="0,4,0,0"
                                          Checked="Placement_Checked">
                                 <TextBlock Text="解压到指定位置，并建立同名子文件夹" Style="{StaticResource BodyTextStyle}" />
@@ -182,14 +188,14 @@
                         <StackPanel>
                             <RadioButton x:Name="TerminalKeepLastFolderOption"
                                          x:FieldModifier="public"
-                                         GroupName="TerminalLayout"
+                                         GroupName="PanelTerminalLayout"
                                          Checked="TerminalLayout_Checked">
                                 <TextBlock Text="多文件时保留最后一层文件夹名（默认）" Style="{StaticResource BodyTextStyle}" />
                             </RadioButton>
 
                             <RadioButton x:Name="TerminalUseArchiveNameOption"
                                          x:FieldModifier="public"
-                                         GroupName="TerminalLayout"
+                                         GroupName="PanelTerminalLayout"
                                          Margin="0,4,0,0"
                                          Checked="TerminalLayout_Checked">
                                 <TextBlock Text="多文件时用压缩包名当最后一层" Style="{StaticResource BodyTextStyle}" />
@@ -202,7 +208,7 @@
                         <StackPanel>
                             <RadioButton x:Name="SourceKeepInPlaceOption"
                                          x:FieldModifier="public"
-                                         GroupName="SourceHandling"
+                                         GroupName="PanelSourceHandling"
                                          Checked="SourceHandling_Checked">
                                 <StackPanel>
                                     <TextBlock Text="原来的位置不动（默认）" Style="{StaticResource BodyTextStyle}" />
@@ -212,7 +218,7 @@
 
                             <RadioButton x:Name="SourceMoveToRestOption"
                                          x:FieldModifier="public"
-                                         GroupName="SourceHandling"
+                                         GroupName="PanelSourceHandling"
                                          Margin="0,4,0,0"
                                          Checked="SourceHandling_Checked">
                                 <StackPanel>
@@ -228,14 +234,14 @@
                         <StackPanel>
                             <RadioButton x:Name="RestKeepOption"
                                          x:FieldModifier="public"
-                                         GroupName="RestHandling"
+                                         GroupName="PanelRestHandling"
                                          Checked="RestHandling_Checked">
                                 <TextBlock Text="不动其余物（默认）" Style="{StaticResource BodyTextStyle}" />
                             </RadioButton>
 
                             <RadioButton x:Name="RestRecycleOption"
                                          x:FieldModifier="public"
-                                         GroupName="RestHandling"
+                                         GroupName="PanelRestHandling"
                                          Margin="0,4,0,0"
                                          Checked="RestHandling_Checked">
                                 <TextBlock Text="移入回收站（可还原；空间要等清空回收站才释放）" Style="{StaticResource BodyTextStyle}" />
@@ -243,7 +249,7 @@
 
                             <RadioButton x:Name="RestDeleteOption"
                                          x:FieldModifier="public"
-                                         GroupName="RestHandling"
+                                         GroupName="PanelRestHandling"
                                          Margin="0,4,0,0"
                                          Foreground="{StaticResource DangerTextBrush}"
                                          Checked="RestHandling_Checked">

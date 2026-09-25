@@ -33,7 +33,22 @@ namespace ArchiveFixer.Helpers
                 return Binding.DoNothing;
             }
 
+            /*
+             * ⚠ 目标属性是**字符串**时必须原样返回参数（2026-09-25 第 34 条的真机故障）。
+             *
+             * 真机现场：③页「2 删除操作」三档绑的是 `SettingsEditor.RestHandling`（string），
+             * 而老实现到这里只认枚举 —— `targetType` 是 string → `IsEnum` 为 false → 返回
+             * `Binding.DoNothing` → **点单选框有黑点、但设置一个字节都没写**。
+             * 用户看到的是：选「彻底删除」→ 点保存 → 一键处理的弹窗里还是旧档位
+             * （"我之前的选项完全没有用"），而任何一次绑定重新求值又会把黑点弹回旧值。
+             * 字符串档位（`RestHandling` 这类）由属性 setter 自己归一化，这里不需要认识它的词表。
+             */
             Type enumType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+            if (enumType == typeof(string))
+            {
+                return parameter.ToString()!;
+            }
 
             if (!enumType.IsEnum)
             {

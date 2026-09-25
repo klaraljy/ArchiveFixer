@@ -138,7 +138,7 @@
                 <tabs:ExtractionTab />
             </TabItem>
 
-            <TabItem Header="清理与删除">
+            <TabItem x:Name="CleanupTabItem" Header="清理与删除">
                 <tabs:CleanupTab />
             </TabItem>
 

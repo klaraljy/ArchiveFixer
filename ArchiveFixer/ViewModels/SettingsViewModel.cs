@@ -1029,7 +1029,8 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 让外面（①「任务」页那一格）也能把落点相关的显示拉回同一份真值（用户 2026-09-25 第 27 条）。
+        /// 让外面（①「任务」页那一格 / 一键处理的弹窗收尾）也能把**设置在界面上的那些派生显示**
+        /// 拉回同一份真值（用户 2026-09-25 第 27 条；第 34 条补全）。
         ///
         /// <para>为什么必须有这个公开入口：①页那个「未指定位置」开关直接写的是
         /// <c>Settings.ExtractToOriginalDirectory</c>（两档落点的唯一判据），
@@ -1042,6 +1043,23 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         public void NotifyOutputPlacementChanged() => RaiseOutputPlacementChanged();
 
+        /// <summary>
+        /// 把"源包操作 / 删除操作"这两个档位在界面上的显示拉回同一份真值（2026-09-25 第 34 条）。
+        ///
+        /// <para>它专门补上 <see cref="RaiseOutputPlacementChanged"/> 里漏掉的那三个属性：
+        /// <see cref="RestHandling"/> / <see cref="IsRestDeleteSelected"/> / <see cref="RestHandlingSummary"/>。
+        /// 真机现场：关掉一键处理的弹窗回到③页，「删除操作」那一组三个单选**一个黑点都没有**，
+        /// 而切一次选项卡之后「源包操作」的黑点回来了、「删除操作」的还是不在 ——
+        /// 差别就在这里：前者在老实现的通知清单里，后者不在。</para>
+        /// </summary>
+        public void NotifyProcessingOptionsChanged()
+        {
+            OnPropertyChanged(nameof(SourceHandling));
+            OnPropertyChanged(nameof(RestHandling));
+            OnPropertyChanged(nameof(IsRestDeleteSelected));
+            OnPropertyChanged(nameof(RestHandlingSummary));
+        }
+
         private void RaiseOutputPlacementChanged()
         {
             OnPropertyChanged(nameof(OutputPlacement));
@@ -1053,11 +1071,14 @@ namespace ArchiveFixer.ViewModels
             // 恢复默认 / 重新加载设置之后必须显式通知，否则界面还显示旧值。
             OnPropertyChanged(nameof(TerminalLayout));
             OnPropertyChanged(nameof(CollapseRepeatedFolderLayer));
-            OnPropertyChanged(nameof(SourceHandling));
             OnPropertyChanged(nameof(CacheRootDirectory));
             OnPropertyChanged(nameof(CustomUnRarExePath));
             OnPropertyChanged(nameof(CustomRarExePath));
             OnPropertyChanged(nameof(KeepBrokenFiles));
+
+            // ⚠ 源包操作 / 删除操作也在这张清单里（第 34 条：漏掉 RestHandling 那一档时，
+            // ③页「删除操作」的黑点一旦被弹窗取消就再也回不来了）。
+            NotifyProcessingOptionsChanged();
 
             RefreshEngineList();
             RefreshRarStatus();

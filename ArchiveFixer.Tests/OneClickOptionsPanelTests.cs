@@ -411,6 +411,22 @@ namespace ArchiveFixer.Tests
             Assert.Contains("RestDeleteNotice", xaml, StringComparison.Ordinal);
             Assert.Contains("DangerTextBrush", xaml, StringComparison.Ordinal);
             Assert.Contains("彻底删除不可恢复", xaml, StringComparison.Ordinal);
+
+            /*
+             * ⚠ 弹窗的单选按钮**不许**与选项卡共用 GroupName（2026-09-25 第 34 条真机故障）：
+             * 两边原来都叫 "SourceHandling" / "RestHandling"，弹窗填初值时把③页那一组一起取消了 ——
+             * 用户关掉弹窗回到③页，看到的是一组**没有黑点**的选项（设置里的值其实是对的）。
+             */
+            Assert.DoesNotContain("GroupName=\"SourceHandling\"", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("GroupName=\"RestHandling\"", xaml, StringComparison.Ordinal);
+            Assert.Contains("GroupName=\"PanelSourceHandling\"", xaml, StringComparison.Ordinal);
+            Assert.Contains("GroupName=\"PanelRestHandling\"", xaml, StringComparison.Ordinal);
+
+            // ③页那一组仍然是原名字（两页各自成组，互不影响）。
+            string cleanup = ReadRepositoryFile(Path.Combine("ArchiveFixer", "Views", "Tabs", "CleanupTab.xaml"));
+
+            Assert.Contains("GroupName=\"SourceHandling\"", cleanup, StringComparison.Ordinal);
+            Assert.Contains("GroupName=\"RestHandling\"", cleanup, StringComparison.Ordinal);
         }
 
         /// <summary>从仓库根读一个文本文件（测试的工作目录是 bin\…，往上找到仓库那一层为止）。</summary>
