@@ -171,6 +171,110 @@ namespace ArchiveFixer.Tests
                 $"直读只该处理尾部归档区间（写了 {result.WrittenBytes} 字节，归档 {zipBytes.Length} 字节）");
         }
 
+        /// <summary>
+        /// **`.jpg` 双面文件**（用户 2026-09-25 第 38 条的原话："jpg伪装不是仅仅改一个后缀，而是将图片
+        /// 放在前面然后将压缩包一起打包，你会检测到一个jpg文件而且要zip直读，所有和.mp4一样"）。
+        ///
+        /// <para>这条钉住整条路：**真 JPEG 前缀**（有效 <c>FF D8 FF … FF D9</c>）+ 尾部一个完整 ZIP →
+        /// ①识别必须报"内嵌归档"（格式 ZIP、给出偏移）；②直读只处理尾部那段归档区间（前缀不读）；
+        /// ③内容解得出来；④**普通 jpg（尾部没有 ZIP）不许被误判成归档**。</para>
+        /// </summary>
+        [Fact]
+        public async Task jpg双面文件_图片前缀加尾部zip_识别成内嵌归档并直读()
+        {
+            RequireSevenZip();
+
+            // ① 造一个"真 JPEG"（有效头 + 有效尾），大小贴近真实图片。
+            string jpegOnly = Path.Combine(_root, "photo-only.jpg");
+            File.WriteAllBytes(jpegOnly, BuildJpeg(3 * 1024 * 1024));
+
+            // ② 尾部放一个完整的 ZIP（存方式）。
+            string inner = Path.Combine(_root, "inner-photo.bin");
+            var innerBytes = new byte[6 * 1024 * 1024];
+            new Random(23).NextBytes(innerBytes);
+            File.WriteAllBytes(inner, innerBytes);
+
+            string zip = Path.Combine(_root, "tail.zip");
+            Run7z("a", "-tzip", "-mx0", zip, inner);
+
+            byte[] jpegBytes = File.ReadAllBytes(jpegOnly);
+            byte[] zipBytes = File.ReadAllBytes(zip);
+
+            string doubleSided = Path.Combine(_root, "photo.jpg");
+            using (var stream = File.Create(doubleSided))
+            {
+                stream.Write(jpegBytes);
+                stream.Write(zipBytes);
+            }
+
+            // ③ 识别：按内容认出"内嵌归档"，并给出偏移。
+            DetectResult detected = await new ArchiveDetectService().DetectAsync(doubleSided);
+
+            Assert.True(detected.IsArchive, "图片前缀 + 尾部 ZIP 必须被当成归档处理（与 .mp4 同一条路）");
+            Assert.Equal("ZIP", detected.Format);
+            Assert.Equal(jpegBytes.Length, detected.EmbeddedArchiveOffset);
+            Assert.True(detected.EmbeddedArchiveEnd >= detected.EmbeddedArchiveOffset);
+            // 判据用**机器事实**（偏移 + 置信度 + 直读探查结论），不比对中文文案（AGENTS.md §7）。
+            Assert.Equal(80, detected.Confidence);
+            Assert.True(detected.EmbeddedDirectReadSupported, detected.EmbeddedDirectReadReason);
+
+            // ④ 直读：只读尾部区间，内容解得出来，前缀不参与。
+            string output = Path.Combine(_root, "jpg-direct-out");
+            Directory.CreateDirectory(output);
+
+            EmbeddedZipProbeResult probe = EmbeddedZipStreamExtractor.Probe(
+                doubleSided,
+                detected.EmbeddedArchiveOffset,
+                detected.EmbeddedArchiveEnd);
+
+            Assert.True(probe.Supported, probe.Reason);
+
+            EmbeddedZipExtractResult result = await Task.Run(() => EmbeddedZipStreamExtractor.Extract(
+                doubleSided,
+                detected.EmbeddedArchiveOffset,
+                detected.EmbeddedArchiveEnd,
+                output,
+                null,
+                CancellationToken.None));
+
+            Assert.True(result.Success, result.Message);
+            Assert.Equal(innerBytes, File.ReadAllBytes(Path.Combine(output, "inner-photo.bin")));
+
+            Assert.True(
+                result.WrittenBytes <= zipBytes.Length + 4096,
+                $"直读只该处理尾部归档区间（写了 {result.WrittenBytes} 字节，归档 {zipBytes.Length} 字节）");
+
+            // ⑤ 反向断言：普通 jpg（尾部没有 ZIP）不许被误判成归档。
+            DetectResult plain = await new ArchiveDetectService().DetectAsync(jpegOnly);
+
+            Assert.False(plain.IsArchive, "一张普通 jpg 不能被当成压缩包");
+            Assert.Equal(0L, plain.EmbeddedArchiveOffset);
+        }
+
+        /// <summary>造一张"结构上像真的"JPEG：SOI + APP0(JFIF) + 一段数据 + EOI。</summary>
+        private static byte[] BuildJpeg(int size)
+        {
+            var bytes = new byte[Math.Max(size, 4096)];
+
+            bytes[0] = 0xFF;
+            bytes[1] = 0xD8;
+
+            bytes[2] = 0xFF;
+            bytes[3] = 0xE0;
+            bytes[4] = 0x00;
+            bytes[5] = 0x10;
+
+            byte[] jfif = { (byte)'J', (byte)'F', (byte)'I', (byte)'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00 };
+            Array.Copy(jfif, 0, bytes, 6, jfif.Length);
+
+            new Random(31).NextBytes(bytes.AsSpan(20, bytes.Length - 24));
+
+            bytes[^2] = 0xFF;
+            bytes[^1] = 0xD9;
+
+            return bytes;
+        }
+
         // ================================================================ 工具
 
         private void Run7z(params object[] args)

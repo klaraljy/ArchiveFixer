@@ -212,7 +212,15 @@ namespace ArchiveFixer.Extraction
         private const int MaxEntryCount = 1_000_000;
 
         /// <summary>复制缓冲区。顺序流式，几百 MB 的条目也只占这么点内存。</summary>
-        private const int CopyBufferSize = 81920;
+        /// <summary>
+        /// 直读的拷贝缓冲（4 MiB）。
+        ///
+        /// <para>用户 2026-09-25 第 38 条："有其他的方法来节约 zip 直读的时间吗"（他不换盘，就要在同一块盘上省）。
+        /// 这块 80 KB 的缓冲是**本地慢盘上最大的一笔浪费**：直读是"读一块 → 写一块"交替进行的，
+        /// 而 U 盘 / 机械盘每换一次方向就是一次寻道 —— 80 KB 一块意味着每 80 KB 就换向一次；
+        /// 4 MiB 一块把换向次数降到 1/50。内存代价 4 MiB/任务（并发 4 时 16 MiB），可以接受。</para>
+        /// </summary>
+        private const int CopyBufferSize = 4 * 1024 * 1024;
 
         /// <summary>进度最小间隔：250 ms（与既有进度口径一致，不刷日志也不至于看着像卡住）。</summary>
         private const int ProgressIntervalMs = 250;
@@ -1257,6 +1265,12 @@ namespace ArchiveFixer.Extraction
                 FileAccess.Read,
                 FileShare.Read,
                 CopyBufferSize,
+                /*
+                 * ⚠ 这里**必须**是随机访问、不能改成 SequentialScan：直读的读法本身就是随机的 ——
+                 * 先读文件末尾的中央目录，再按每个条目的本地头 seek 过去读数据（条目之间还可能跳着走）。
+                 * 标成顺序扫描会让缓存管理器不做"按需预读"（反而更慢）。
+                 * 真正省时间的是上面那个 4 MiB 缓冲（用户 2026-09-25 第 38 条：不换盘也要省）。
+                 */
                 FileOptions.RandomAccess);
 
             var stopwatch = Stopwatch.StartNew();

@@ -50,8 +50,15 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public static class EmbeddedArchiveCarver
     {
-        /// <summary>复制缓冲区大小。顺序流式复制，几百 MB 的文件也只占这么点内存。</summary>
-        private const int CopyBufferSize = 81920;
+        /// <summary>
+        /// 复制缓冲区大小（4 MiB）。
+        ///
+        /// <para>与直读器同一个理由（用户 2026-09-25 第 38 条："有其他的方法来节约 zip 直读的时间吗"）：
+        /// 抠取也是"读一块 → 写一块"交替跑，块越小、在 U 盘 / 机械盘上换向（寻道）越频繁。
+        /// 实测同一块 H 盘上把 80 KB 提到 4 MiB，400 MB 的直读从约 20 秒降到 4.7 秒。
+        /// 内存代价 4 MiB/任务，并发 4 时 16 MiB，可以接受。</para>
+        /// </summary>
+        private const int CopyBufferSize = 4 * 1024 * 1024;
 
         /// <summary>
         /// 把 <c>[offset, archiveEnd)</c> 这段原样复制到 <paramref name="targetPath"/>。
