@@ -61,10 +61,16 @@
                               ToolTip="关掉之后不再往 data\logs 追加文件日志（屏幕上的日志照旧显示）；日志里的密码一律脱敏。" />
 
                     <WrapPanel Margin="0,10,0,0">
-                        <Button Content="导出全部日志"
+                        <Button Content="导出日志（本次操作）"
                                 Style="{StaticResource ToolbarButtonStyle}"
-                                ToolTip="把日志目录里的**所有**日志（本程序写过的每一份）合并导出成一个 txt"
+                                ToolTip="只导出**最近一次操作**的日志（从日志里那行「本次操作开始」起）"
                                 Command="{Binding ExportLogCommand}" />
+
+                        <Button Content="导出全部历史日志"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Margin="8,0,0,0"
+                                ToolTip="把日志目录里**每一份**历史日志都拼进来（平时用不上，只在需要翻旧账时用）"
+                                Command="{Binding ExportAllLogsCommand}" />
 
                         <Button Content="打开日志目录"
                                 Style="{StaticResource ToolbarButtonStyle}"

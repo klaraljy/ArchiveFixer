@@ -98,6 +98,127 @@ namespace ArchiveFixer.Services
         public string LogDirectory => _pathService.LogsDirectory;
 
         /// <summary>
+        /// 本次操作开始处的**屏幕日志下标**（-1 = 还没有标记）。
+        ///
+        /// <para>用户 2026-09-25 第 38 条："我想要的是本次操作的日志，也就是我最近一次点开操作的日志，
+        /// 我看着全部的日志非常的累" —— 所以导出要能只给"最近这一次操作"，
+        /// 而不是把历史日志全拼在一起。</para>
+        /// </summary>
+        private int _operationStartIndex = -1;
+
+        /// <summary>本次操作在日志文件里的起始**行号**（-1 = 没标记 / 不在同一个文件里）。</summary>
+        private int _operationStartFileLine = -1;
+
+        /// <summary>标记所在的那个日志文件（换文件之后旧行号就不能用了）。</summary>
+        private string _operationStartFile = string.Empty;
+
+        /// <summary>
+        /// 标记"一次新的操作开始了"（用户点了一次处理 / 一次扫描）。
+        ///
+        /// <para>写一行醒目的分隔线进日志，并记下当前位置 —— 这样**导出的日志**与用户自己打开日志文件
+        /// 看到的分界完全一致（"这次操作从哪儿开始"一眼可见）。</para>
+        /// </summary>
+        public void MarkOperationStart(string operationName)
+        {
+            AppendOperationSeparator(operationName);
+
+            _operationStartIndex = Math.Max(0, Logs.Count - 1);
+            _operationStartFile = _currentLogFilePath;
+            _operationStartFileLine = TryCountLines(_currentLogFilePath) - 1;
+        }
+
+        /// <summary>把"本次操作开始"写进日志（屏幕 + 文件；关掉文件日志时只进屏幕日志）。</summary>
+        private void AppendOperationSeparator(string operationName)
+        {
+            string message = $"======== 本次操作开始：{operationName} ========";
+
+            try
+            {
+                Write("INFO", message);
+            }
+            catch
+            {
+                // 写日志失败绝不能影响操作本身（与既有 Write 的口径一致）。
+            }
+        }
+
+        /// <summary>
+        /// **只导出"本次操作"的日志**（最近一次标记之后的部分）。
+        ///
+        /// <para>优先按日志文件导出（与用户手工打开看到的一致）；没有文件（关掉了文件日志）就退回屏幕日志。
+        /// 没有任何标记时导出**当前这一份日志文件**（= 本次运行）—— 那已经是他要的范围，绝不拼历史文件。</para>
+        /// </summary>
+        /// <returns>导出的行数，以及是不是"本次操作"的范围（false = 退回了整份当前日志）。</returns>
+        public (int Lines, bool FromOperationMarker) ExportOperationLog(string targetPath)
+        {
+            if (string.IsNullOrWhiteSpace(targetPath))
+            {
+                return (0, false);
+            }
+
+            string? directory = Path.GetDirectoryName(targetPath);
+
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var builder = new StringBuilder();
+            bool fromMarker = false;
+            int lines = 0;
+
+            if (!string.IsNullOrWhiteSpace(_currentLogFilePath) && File.Exists(_currentLogFilePath))
+            {
+                string[] all = File.ReadAllLines(_currentLogFilePath);
+                int start = 0;
+
+                if (_operationStartFileLine >= 0 &&
+                    string.Equals(_operationStartFile, _currentLogFilePath, StringComparison.OrdinalIgnoreCase) &&
+                    _operationStartFileLine < all.Length)
+                {
+                    start = _operationStartFileLine;
+                    fromMarker = true;
+                }
+
+                for (int i = start; i < all.Length; i++)
+                {
+                    builder.AppendLine(all[i]);
+                    lines++;
+                }
+            }
+            else
+            {
+                int start = _operationStartIndex >= 0 ? _operationStartIndex : 0;
+                fromMarker = _operationStartIndex >= 0;
+
+                for (int i = start; i < Logs.Count; i++)
+                {
+                    builder.AppendLine(Logs[i].DisplayText);
+                    lines++;
+                }
+            }
+
+            File.WriteAllText(targetPath, PasswordMasker.Sanitize(builder.ToString()), new UTF8Encoding(false));
+
+            return (lines, fromMarker);
+        }
+
+        /// <summary>数一个文件有多少行（读不了返回 0）。</summary>
+        private static int TryCountLines(string? path)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(path) || !File.Exists(path)
+                    ? 0
+                    : File.ReadAllLines(path).Length;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        /// <summary>
         /// 初始化日志系统。
         /// </summary>
         public void Initialize(bool enableFileLog = true)

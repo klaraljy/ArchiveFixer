@@ -1191,6 +1191,9 @@ namespace ArchiveFixer.ViewModels
         /// <summary>导入密码本（记住路径，下次启动自动加载）。用户已多次要求：导入一次就够。</summary>
         public ICommand ImportPasswordBookCommand { get; }
         public ICommand ExportLogCommand { get; }
+
+        /// <summary>导出**全部历史日志**（日志目录里每一份；用户 2026-09-25 第 38 条降级成显式入口）。</summary>
+        public ICommand ExportAllLogsCommand { get; }
         public ICommand CopyFailedListCommand { get; }
 
         /// <summary>把失败清单导出成 txt（M3：能说清每个失败为什么失败，且能带走）。</summary>
@@ -1452,15 +1455,38 @@ namespace ArchiveFixer.ViewModels
             DeleteLastExtensionCommand = new AsyncRelayCommand(_renameCoordinator.DeleteLastExtensionAsync, CanRunNormalCommand);
             DeleteMultipleExtensionsCommand = new AsyncRelayCommand(_renameCoordinator.DeleteMultipleExtensionsAsync, CanRunNormalCommand);
 
-            OneClickProcessCommand = new AsyncRelayCommand(_oneClickCoordinator.RunAsync, CanRunNormalCommand);
+            /*
+             * 四个"开始干活"的入口都打一个操作标记（用户 2026-09-25 第 38 条）：
+             * 日志里会出现一行 `======== 本次操作开始：<名字> ========`，
+             * 「导出日志」默认就从那一行开始导 —— 用户拿到的是**最近一次操作**的日志，不是一堆历史。
+             */
+            OneClickProcessCommand = new AsyncRelayCommand(
+                async () =>
+                {
+                    _logService.MarkOperationStart("一键处理");
+                    await _oneClickCoordinator.RunAsync().ConfigureAwait(true);
+                },
+                CanRunNormalCommand);
 
             /*
              * 「继续解」（第 16 条追加）：只在"上一批撞到层数上限、还剩内层包没解"时可点。
              * 与一键处理同一道忙碌守卫（CanRunNormalCommand）——两者不能同时跑。
              */
-            ContinueOneClickCommand = new AsyncRelayCommand(_oneClickCoordinator.RunAsync, CanContinueOneClick);
+            ContinueOneClickCommand = new AsyncRelayCommand(
+                async () =>
+                {
+                    _logService.MarkOperationStart("继续解");
+                    await _oneClickCoordinator.RunAsync().ConfigureAwait(true);
+                },
+                CanContinueOneClick);
 
-            StartExtractCommand = new AsyncRelayCommand(_extractionCoordinator.StartExtractAsync, CanStartExtract);
+            StartExtractCommand = new AsyncRelayCommand(
+                async () =>
+                {
+                    _logService.MarkOperationStart("解压");
+                    await _extractionCoordinator.StartExtractAsync().ConfigureAwait(true);
+                },
+                CanStartExtract);
             StopCommand = new RelayCommand(_extractionCoordinator.StopAfterCurrent, () => IsBusy);
             CancelCurrentCommand = new RelayCommand(_extractionCoordinator.CancelCurrentTask, () => IsBusy);
 
@@ -1471,6 +1497,7 @@ namespace ArchiveFixer.ViewModels
             SaveSettingsCommand = new RelayCommand(SaveSettings, CanRunNormalCommand);
             ImportPasswordBookCommand = new RelayCommand(ImportPasswordBook, CanRunNormalCommand);
             ExportLogCommand = new RelayCommand(ExportLog);
+            ExportAllLogsCommand = new RelayCommand(ExportAllLogs);
             CopyFailedListCommand = new RelayCommand(CopyFailedList);
             ExportFailedListCommand = new RelayCommand(ExportFailedList);
             OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
@@ -3066,13 +3093,50 @@ namespace ArchiveFixer.ViewModels
         private void ExportLog()
         {
             /*
-             * 用户 2026-09-25 第 37 条："不是导出失败日志，是导出所有日志，所有的"。
-             * 所以这里导的是**日志目录里的每一份**（拼成一个文件，带分隔头），不再是"当前这一次"。
+             * 用户 2026-09-25 第 38 条："我想要的是本次操作的日志，也就是我最近一次点开操作的日志，
+             * 我看着全部的日志非常的累" —— 所以这里**默认只导本次操作**（从"本次操作开始"那行分隔线起），
+             * 不再把历史日志全拼进来（历史日志另有下面那个显式入口）。
              */
             string path = _dialogService.ShowSaveFileDialog(
-                "导出全部日志",
+                "导出日志（本次操作）",
                 "日志文件 (*.log)|*.log|文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
-                $"ArchiveFixer-全部日志_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                $"ArchiveFixer-本次操作_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            try
+            {
+                (int lineCount, bool fromMarker) = _logService.ExportOperationLog(path);
+
+                AppendLog("INFO", $"日志已导出（本次操作）：{path}（{lineCount} 行）");
+
+                _dialogService.ShowInfo(
+                    fromMarker
+                        ? $"本次操作的日志已导出：{lineCount} 行。{Environment.NewLine}{path}"
+                        : $"这次还没有「操作开始」的标记，已导出**本次运行**的完整日志：{lineCount} 行。{Environment.NewLine}{path}");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", "导出日志失败：" + ex.Message);
+                _dialogService.ShowError(
+                    $"导出日志失败：{ex.Message}{Environment.NewLine}"
+                    + "换一个位置（例如桌面或 D 盘）再试；目标文件若正被别的程序打开，先把它关掉。");
+            }
+        }
+
+        /// <summary>
+        /// 导出**全部历史日志**（日志目录里每一份都拼进来；用户 2026-09-25 第 37 条要过一版，
+        /// 第 38 条明确了"平时只要本次操作" —— 所以它降级成一个**显式**入口，不再占主按钮）。
+        /// </summary>
+        private void ExportAllLogs()
+        {
+            string path = _dialogService.ShowSaveFileDialog(
+                "导出全部历史日志",
+                "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
+                $"ArchiveFixer-全部历史日志_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
 
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -3083,19 +3147,17 @@ namespace ArchiveFixer.ViewModels
             {
                 (int fileCount, int lineCount) = _logService.ExportAllLogs(path);
 
-                AppendLog("INFO", $"全部日志已导出：{path}（{fileCount} 份 / {lineCount} 行）");
+                AppendLog("INFO", $"全部历史日志已导出：{path}（{fileCount} 份 / {lineCount} 行）");
 
                 _dialogService.ShowInfo(
                     fileCount > 0
-                        ? $"全部日志已导出：{fileCount} 份 / {lineCount} 行。{Environment.NewLine}{path}"
-                        : "日志目录里还没有任何日志文件（先跑一次处理再来导出）。");
+                        ? $"全部历史日志已导出：{fileCount} 份 / {lineCount} 行。{Environment.NewLine}{path}"
+                        : "日志目录里还没有任何日志文件。");
             }
             catch (Exception ex)
             {
-                AppendLog("ERROR", "导出日志失败：" + ex.Message);
-                _dialogService.ShowError(
-                    $"导出日志失败：{ex.Message}{Environment.NewLine}"
-                    + "换一个位置（例如桌面或 D 盘）再试；目标文件若正被别的程序打开，先把它关掉。");
+                AppendLog("ERROR", "导出全部历史日志失败：" + ex.Message);
+                _dialogService.ShowError($"导出全部历史日志失败：{ex.Message}");
             }
         }
 
@@ -4657,6 +4719,7 @@ namespace ArchiveFixer.ViewModels
                  OpenPackingCommand,
                  SaveSettingsCommand,
                  ExportLogCommand,
+                 ExportAllLogsCommand,
                  CopyFailedListCommand,
                  OpenOutputDirectoryCommand,
                  SelectOutputDirectoryCommand,

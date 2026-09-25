@@ -526,10 +526,10 @@
                             用户 2026-09-25 第 37 条："导出所有日志才是最关键的"——他要的是**全部**日志（每一份都导），
                             不是只导这一次的。放在失败清单旁边：出问题的那一刻就能一键带走。
                         -->
-                        <Button Content="导出全部日志"
+                        <Button Content="导出日志（本次）"
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Margin="8,0,0,0"
-                                ToolTip="把日志目录里的**所有**日志（本程序写过的每一份）合并导出成一个 txt，便于排查或留档"
+                                ToolTip="只导出**最近一次操作**的日志（从日志里那行「本次操作开始」起），排查时一眼到底，不用翻历史"
                                 Command="{Binding ExportLogCommand}" />
 
                         <Button Content="打开输出目录"

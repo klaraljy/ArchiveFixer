@@ -1869,6 +1869,22 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 把"这段活干了多快"说成人话（"21.0 MB/s"）——直读那一条日志用它（用户 2026-09-25 第 38 条）。
+        /// 速度按**写出字节 ÷ 用时**算：直读的真实工作量就是把这些字节从源读到成品。
+        /// </summary>
+        private static string DescribeThroughput(long writtenBytes, TimeSpan elapsed)
+        {
+            if (writtenBytes <= 0 || elapsed.TotalSeconds <= 0.05)
+            {
+                return "速度算不出来（太小或太快）";
+            }
+
+            double mibPerSecond = writtenBytes / 1024d / 1024d / elapsed.TotalSeconds;
+
+            return $"{mibPerSecond:0.0} MB/s";
+        }
+
+        /// <summary>
         /// 「一组分卷的第一卷名字被改坏」时，把**我们自己产出的**那一卷改回标准命名（用户 2026-09-25 第 37 条）。
         ///
         /// <para>真机现场：他那个 12.22 GiB 的容器解出来的是三卷 7z，第一卷
@@ -9429,6 +9445,16 @@ namespace ArchiveFixer.ViewModels
 
             var progress = new DirectReadProgressBridge(progressSink);
 
+            /*
+             * 掐一下表（用户 2026-09-25 第 38 条："为什么要直读这么久…有没有什么办法改进"）。
+             *
+             * 直读 = 从源文件把这一段**读出来再写到成品**（等于一次同盘拷贝），所以它天然是**磁盘速度**：
+             * 实测他那块 H 盘顺序读写只有 18–22 MB/s（同一个 473 MB 文件在 H: 内复制一次 24.9 秒），
+             * 442 MB 的直读花 20 秒正好等于这个速度 —— **瓶颈在盘，不在读取器**。
+             * 把实测速度写进日志，用户一眼就能判断"是盘慢还是程序慢"，不用猜。
+             */
+            var directReadWatch = System.Diagnostics.Stopwatch.StartNew();
+
             EmbeddedZipExtractResult extract = await Task.Run(
                 () => EmbeddedZipStreamExtractor.Extract(
                     task.CurrentPath,
@@ -9442,6 +9468,8 @@ namespace ArchiveFixer.ViewModels
                     budgetOptions: BudgetLimits,
                     passwords: passwordCandidates),
                 cancellationToken);
+
+            directReadWatch.Stop();
 
             if (!extract.Success)
             {
@@ -9458,7 +9486,11 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            AppendLog("INFO", $"{task.FileName}：ZIP 直读完成 —— {extract.Message}");
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：ZIP 直读完成 —— {extract.Message}"
+                + $"；用时 {directReadWatch.Elapsed.TotalSeconds:0.0} 秒 ≈ {DescribeThroughput(extract.WrittenBytes, directReadWatch.Elapsed)}"
+                + "（直读就是「读出来再写进去」的一次拷贝，速度上限由这块盘决定）");
 
             task.Status = StatusText.ExtractSuccess;
             /*

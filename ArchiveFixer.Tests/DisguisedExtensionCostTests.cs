@@ -1,0 +1,230 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using ArchiveFixer.Engines;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Models;
+using ArchiveFixer.Services;
+using Xunit;
+
+namespace ArchiveFixer.Tests
+{
+    /// <summary>
+    /// 「改个后缀」到底要花多少时间（用户 2026-09-25 第 38 条："我们原本的手动操作仅仅只要修改个后缀，
+    /// 可能会卡一下但是不会等这么久的"；"我们现在还没有去测试 .jpg 后缀的操作"）。
+    ///
+    /// <para>把两件事分开钉住：</para>
+    /// <list type="number">
+    /// <item><description><b>单纯伪装后缀</b>（`pack.7z` 被改名成 `pack.jpg`）→ 我们只做**就地改名**（0 字节搬运）
+    /// + 一次正常解压；⛔ **不会**因为"后缀不对"去抠一份等大的副本。</description></item>
+    /// <item><description><b>双面文件</b>（真视频 + 尾部塞了归档）才需要直读，而直读**只读尾部那段归档区间**、
+    /// 一个字节都不碰前面的视频前缀 —— 这一步是"把内容落盘"的最低成本（抠取那条路反而要多拷一整份）。</description></item>
+    /// </list>
+    /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
+    public class DisguisedExtensionCostTests : IDisposable
+    {
+        private const int PayloadBytes = 48 * 1024 * 1024;
+
+        private readonly string _root;
+        private readonly string? _sevenZip;
+
+        public DisguisedExtensionCostTests()
+        {
+            _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerCost", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(_root);
+            _sevenZip = LocateSevenZip();
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(_root))
+                {
+                    Directory.Delete(_root, recursive: true);
+                }
+            }
+            catch
+            {
+                // 临时目录清不掉不影响结论。
+            }
+        }
+
+        /// <summary>
+        /// `.jpg` 伪装包：识别要认出真格式，改名要**就地**（远快于一次拷贝），解压要能出内容。
+        /// </summary>
+        [Fact]
+        public async Task jpg伪装的包_只做就地改名再解压_不多拷一份()
+        {
+            RequireSevenZip();
+
+            string source = Path.Combine(_root, "video-source");
+            Directory.CreateDirectory(source);
+
+            string payload = Path.Combine(source, "big.bin");
+            var bytes = new byte[PayloadBytes];
+            new Random(20260925).NextBytes(bytes);
+            File.WriteAllBytes(payload, bytes);
+
+            string realName = Path.Combine(_root, "pack.7z");
+            Run7z("a", "-t7z", "-mx0", realName, payload);
+
+            // 伪装：改名成 .jpg（打包者最常用的手法之一，与 .mp4 同理）。
+            string disguised = Path.Combine(_root, "pack.jpg");
+            File.Move(realName, disguised);
+
+            // ①识别：按文件头魔数认出 7Z（不看后缀）。
+            DetectResult detected = await new ArchiveDetectService().DetectAsync(disguised);
+
+            Assert.True(detected.IsKnownFormat, "按魔数必须认出这是 7z");
+            Assert.Equal("7Z", detected.Format);
+            Assert.Equal(".7z", detected.SuggestedExtension);
+
+            long before = new FileInfo(disguised).Length;
+
+            // ②改名：就地改名（同卷 File.Move），耗时应当远小于"拷贝 48 MB"。
+            var watch = Stopwatch.StartNew();
+            string renamed = Path.ChangeExtension(disguised, ".7z");
+            File.Move(disguised, renamed);
+            watch.Stop();
+
+            double secondsForCopy = before / 1024d / 1024d / 18d;   // 他那块盘实测 ~18 MB/s
+
+            Assert.True(
+                watch.Elapsed.TotalSeconds < secondsForCopy / 5,
+                $"就地改名应当远快于拷贝（改名 {watch.Elapsed.TotalSeconds:0.00} 秒，拷贝 {secondsForCopy:0.0} 秒）");
+
+            // ③没有产生第二个等大的文件（改后缀不该复制数据）。
+            Assert.False(File.Exists(disguised), "改名之后旧名字不该还在");
+            Assert.Equal(1, Directory.GetFiles(_root).Count(f => new FileInfo(f).Length == before));
+
+            // ④改名之后正常解压，内容出得来。
+            string output = Path.Combine(_root, "out");
+            Directory.CreateDirectory(output);
+
+            ArchiveOperationResult extract = await new SevenZipEngine().ExtractAsync(
+                new ArchiveRequest { ArchivePath = renamed, OutputPath = output },
+                new ExtractOptions(),
+                CancellationToken.None);
+
+            Assert.True(extract.Success, extract.Message);
+            Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(output, "big.bin")));
+        }
+
+        /// <summary>
+        /// 双面文件：直读**只读尾部归档区间**，前面的前缀不读、也不产生等大的临时副本。
+        /// （真机那个 `.mp4` 是 31 MB 前缀 + 442 MB 归档；这里用同形状的小样本。）
+        /// </summary>
+        [Fact]
+        public async Task 双面文件直读_只读尾部归档区间_不碰前缀也不抠副本()
+        {
+            RequireSevenZip();
+
+            const int prefixBytes = 2 * 1024 * 1024;
+
+            string inner = Path.Combine(_root, "inner.bin");
+            var innerBytes = new byte[4 * 1024 * 1024];
+            new Random(7).NextBytes(innerBytes);
+            File.WriteAllBytes(inner, innerBytes);
+
+            string zip = Path.Combine(_root, "tail.zip");
+            Run7z("a", "-tzip", "-mx0", zip, inner);
+
+            byte[] zipBytes = File.ReadAllBytes(zip);
+            byte[] prefix = new byte[prefixBytes];
+            new Random(11).NextBytes(prefix);
+
+            string doubleSided = Path.Combine(_root, "movie.mp4");
+            using (var stream = File.Create(doubleSided))
+            {
+                stream.Write(prefix);
+                stream.Write(zipBytes);
+            }
+
+            // 直读：区间 = [前缀长度, 文件末尾)。
+            string output = Path.Combine(_root, "direct-out");
+            Directory.CreateDirectory(output);
+
+            EmbeddedZipProbeResult probe = EmbeddedZipStreamExtractor.Probe(doubleSided, prefixBytes, prefixBytes + zipBytes.Length);
+
+            Assert.True(probe.Supported, probe.Reason);
+
+            EmbeddedZipExtractResult result = await Task.Run(() => EmbeddedZipStreamExtractor.Extract(
+                doubleSided,
+                prefixBytes,
+                prefixBytes + zipBytes.Length,
+                output,
+                null,
+                CancellationToken.None));
+
+            Assert.True(result.Success, result.Message);
+            Assert.Equal(innerBytes, File.ReadAllBytes(Path.Combine(output, "inner.bin")));
+
+            // 只读归档那一段：读出来的字节数 = 归档区间大小（不含前缀）。
+            Assert.True(
+                result.WrittenBytes <= zipBytes.Length + 4096,
+                $"直读只该处理尾部归档区间（写了 {result.WrittenBytes} 字节，归档 {zipBytes.Length} 字节）");
+        }
+
+        // ================================================================ 工具
+
+        private void Run7z(params object[] args)
+        {
+            RequireSevenZip();
+
+            var psi = new ProcessStartInfo(_sevenZip!)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = _root
+            };
+
+            foreach (object arg in args)
+            {
+                psi.ArgumentList.Add(arg?.ToString() ?? string.Empty);
+            }
+
+            using Process process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 7z.exe");
+
+            string stdout = process.StandardOutput.ReadToEnd();
+            string stderr = process.StandardError.ReadToEnd();
+
+            Assert.True(process.WaitForExit(120_000), "7z 超时");
+            Assert.True(process.ExitCode == 0, $"7z 失败（{process.ExitCode}）：{stdout}{stderr}");
+        }
+
+        private void RequireSevenZip()
+        {
+            if (string.IsNullOrEmpty(_sevenZip))
+            {
+                throw new InvalidOperationException(
+                    "测试机上没有 7z.exe（ArchiveFixer/tools/7zip/7z.exe），本用例无法运行。");
+            }
+        }
+
+        private static string? LocateSevenZip()
+        {
+            DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+            while (directory != null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "ArchiveFixer.slnx")))
+                {
+                    string candidate = Path.Combine(directory.FullName, "ArchiveFixer", "tools", "7zip", "7z.exe");
+                    return File.Exists(candidate) ? candidate : null;
+                }
+
+                directory = directory.Parent;
+            }
+
+            return null;
+        }
+    }
+}
