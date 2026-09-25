@@ -165,7 +165,9 @@ namespace ArchiveFixer.Helpers
 
             string root = customRoot.TrimEnd('\\', '/');
 
-            return $"{root} · 以压缩包名命名的子文件夹（{root}\\222\\内容物；选中文件夹时用该文件夹的名字）";
+            // 占位符写「包名」不写数字（用户 2026-09-25 第 36 条）：这一句会进日志与失败清单，
+            // 里面出现一个真实路径拼一个假目录名（旧的 `\222\`）会被当成"程序要往那儿写"。
+            return $"{root} · 以压缩包名命名的子文件夹（{root}\\包名\\内容物；选中文件夹时用该文件夹的名字）";
         }
 
         private static bool ToBool(object[] values, int index)

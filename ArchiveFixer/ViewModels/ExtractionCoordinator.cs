@@ -88,7 +88,16 @@ namespace ArchiveFixer.ViewModels
         private RecursionLimits BuildRecursionLimits() => new()
         {
             MaxDepth = Math.Clamp(Settings.MaxRecursionDepth, 1, 10),
-            MaxPasswordAttemptsPerLayer = MaxPasswordAttemptsPerLayer
+            MaxPasswordAttemptsPerLayer = MaxPasswordAttemptsPerLayer,
+
+            /*
+             * 累计总量与展开比也取用户那一套上限（第 36 条）：递归核心以前写死 50 GiB / 500 倍，
+             * 于是"我在设置里把总大小上限调大了"在递归档下不生效 —— 又是一处"改了没反应"。
+             * 文件数同理（预算那一档默认 20 万，递归那一档原来是 10 万）。
+             */
+            MaxTotalSize = BudgetLimits.MaxTotalSize,
+            MaxTotalFiles = BudgetLimits.MaxFileCount,
+            MaxExpansionRatio = BudgetLimits.MaxExpansionRatio
         };
 
         /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
@@ -211,6 +220,20 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private int MaxPasswordAttemptsPerLayer =>
             Math.Clamp(Settings.MaxPasswordAttemptsPerLayer, 1, 1000);
+
+        /// <summary>
+        /// 解压前的资源预算上限（不变量 8），四条全部来自设置（用户 2026-09-25 第 36 条）。
+        ///
+        /// <para>为什么收口成一个属性：这套上限有**四个**用它的地方 —— ①解压前预检
+        /// （<see cref="ResourceBudget.CheckBeforeExtract"/>）②产物事后核算 ③内嵌 ZIP 直读
+        /// ④递归核心的累计上限。以前①③④各写各的默认值（预检与直读是 <c>ResourceBudgetOptions.Default</c>、
+        /// 递归是 <c>RecursionLimits.Default</c> 的 50 GiB），用户在设置里改一处并不会同时生效 ——
+        /// 现在只有这一个出口，口径不可能再分叉。</para>
+        ///
+        /// <para>旧写法：解压前预检直接用 <c>new ResourceBudget()</c>（= 硬编码 4 GiB 单文件 / 20 GiB 总量），
+        /// 界面上一个字都没有 —— 他 12 GiB 的分卷包被拦下时看到的就是那句判决。</para>
+        /// </summary>
+        private ResourceBudgetOptions BudgetLimits => ResourceBudgetOptions.FromSettings(Settings);
 
         /// <summary>合并提示里最多列几个文件名（再多就让用户去看失败清单），别弹一个占满屏幕的框。</summary>
         private const int MaxPasswordFailureNamesInDialog = 10;
@@ -1169,13 +1192,14 @@ namespace ArchiveFixer.ViewModels
              * 这条只在引擎给不出清单时才真正有意义，但事后量一遍很便宜，就一直做。
              */
             (int producedFiles, long producedSize) = OutputVerifier.Measure(stageDirectory);
-            ResourceBudgetOptions budgetLimits = ResourceBudgetOptions.Default;
+            ResourceBudgetOptions budgetLimits = BudgetLimits;
 
             if (producedSize > budgetLimits.MaxTotalSize || producedFiles > budgetLimits.MaxFileCount)
             {
                 string budgetMessage =
                     $"解压产物超出资源预算：{producedFiles} 个文件 / {producedSize} 字节" +
-                    $"（上限 {budgetLimits.MaxFileCount} 个 / {budgetLimits.MaxTotalSize} 字节）。已停止后续任务。";
+                    $"（上限 {budgetLimits.MaxFileCount} 个 / {budgetLimits.MaxTotalSize} 字节）。已停止后续任务。"
+                    + ResourceBudget.CapHint;
 
                 logEntries.Add(("ERROR", $"{task.FileName}：{budgetMessage}"));
 
@@ -5746,6 +5770,8 @@ namespace ArchiveFixer.ViewModels
 
                 LogRestHandlingForBatch();
 
+                LogExtractionLimitsForBatch();
+
                 _spaceLedger = new SpaceReservationLedger(
                     ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)),
                     ReserveSpaceBytes);
@@ -6656,6 +6682,22 @@ namespace ArchiveFixer.ViewModels
                 "WARN",
                 "其余物：本批任务成功后会彻底删除（源包 + 中间件，不进回收站、不可恢复）。"
                 + "失败 / 部分完成 / 取消的任务一个字节都不动。");
+        }
+
+        /// <summary>
+        /// 批首写一条"这一批用的是哪四条安全上限"的日志（用户 2026-09-25 第 36 条）。
+        ///
+        /// <para>为什么要在**每一批**都写：那四条上限以前是硬编码的，用户被拦下时
+        /// 手里只有一句"超过单文件上限 4 GiB"和满肚子疑问（"我这盘还有 47 GB，为什么不行"）。
+        /// 现在它们既是设置项、又在这里当场报出来 —— 事后翻日志就能对上"是哪个上限拦的、当时设的是多少"。</para>
+        /// </summary>
+        private void LogExtractionLimitsForBatch()
+        {
+            AppendLog(
+                "INFO",
+                "安全上限（解压前预算）：" + BudgetLimits.Describe()
+                + "。超过就**不解这个包**（预检拒绝，一个字节都不写）；"
+                + "可在⑥设置 →「安全上限」里按自己的盘与资源改。");
         }
         /// <summary>把解压前那一遍 list 算出来的**精确**空间需求记下来（自测的空间曲线要用）。</summary>
         private void RecordRefinedEstimate(ArchiveTask task, TaskSpaceEstimate estimate)
@@ -7891,7 +7933,9 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 // 预算里的"落点"用暂存目录：引擎真正写盘的地方是它，最终目录此时还不存在。
-                BudgetCheckResult budget = new ResourceBudget().CheckBeforeExtract(preflightList, archiveSize, engineOutputPath);
+                // 上限取用户设置（第 36 条）：四条上限只有 BudgetLimits 这一个出口。
+                BudgetCheckResult budget = new ResourceBudget(BudgetLimits)
+                    .CheckBeforeExtract(preflightList, archiveSize, engineOutputPath);
 
                 /*
                  * 精确空间需求（用户 2026-09-22 需求第 1 条：核算必须含内容物 + 过程物 + 去重后的峰值）。
@@ -8887,7 +8931,9 @@ namespace ArchiveFixer.ViewModels
                     stageDirectory,
                     progress,
                     cancellationToken,
-                    budgetOptions: null,
+                    // 直读与 7z 两条路共用同一套上限（AGENTS.md §9.6"口径不许分叉"）：
+                    // 传 null 会让直读退回硬编码那一份，用户在设置里调大的值就只对 7z 生效。
+                    budgetOptions: BudgetLimits,
                     passwords: passwordCandidates),
                 cancellationToken);
 

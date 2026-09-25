@@ -312,13 +312,21 @@ namespace ArchiveFixer.Models
                    $"其余物：{DescribeRestHandling(RestHandling)}";
         }
 
-        /// <summary>落点模式的中文说明（含一个例子；与②「解压方式」页那两档的措辞同一口径）。</summary>
+        /// <summary>
+        /// 落点模式的中文说明（含一个例子；与②「解压方式」页那两档的措辞同一口径）。
+        ///
+        /// <para>⚠ 例子里的占位符一律写「包名」，**不许写具体数字**（用户 2026-09-25 第 36 条）：
+        /// 这里原来写的是 <c>{指定位置}\222\内容物</c>，而那串字会原样进日志与失败清单的
+        /// 「本次选项」—— 他真机上看到 <c>…\BBB\222\内容物</c> 时，会以为程序打算往一个
+        /// 他并没有的 <c>222</c> 目录里写东西（他的真实目录叫 <c>BBB\新建文件夹_…</c>）。
+        /// 例子要一眼看出是例子。</para>
+        /// </summary>
         public static string DescribePlacement(OutputPlacementMode mode, string? customRoot)
         {
             return OutputPlacement.NormalizeLegacyMode(mode) switch
             {
                 OutputPlacementMode.CustomRootPerArchive =>
-                    $"指定位置 + 同名子文件夹（{DescribeRoot(customRoot)}\\222\\内容物；选中文件夹时用该文件夹的名字）",
+                    $"指定位置 + 同名子文件夹（{DescribeRoot(customRoot)}\\包名\\内容物；选中文件夹时用该文件夹的名字）",
                 _ => "以包名命名的子文件夹（111\\222.rar → 111\\222\\内容物）"
             };
         }

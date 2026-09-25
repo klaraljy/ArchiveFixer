@@ -399,7 +399,16 @@ namespace ArchiveFixer.Tests
                 ["ConflictAction"] = "SettingsTab",
                 ["EnableLog"] = "SettingsTab",
                 ["LowProcessPriority"] = "SettingsTab",
-                ["RememberLastOutputDirectory"] = "SettingsTab"
+                ["RememberLastOutputDirectory"] = "SettingsTab",
+
+                /*
+                 * ⑥ 的第 36 条那一组：解压前的四条安全上限。
+                 * 它们以前是硬编码的（4 GiB 单文件 / 20 GiB 总量），用户被拦下时界面上一个字都没有。
+                 */
+                ["MaxSingleExtractedFileGiB"] = "SettingsTab",
+                ["MaxExtractedTotalGiB"] = "SettingsTab",
+                ["MaxExtractedFileCount"] = "SettingsTab",
+                ["MaxExtractionRatio"] = "SettingsTab"
             };
 
             var tabFiles = new Dictionary<string, string>(StringComparer.Ordinal);

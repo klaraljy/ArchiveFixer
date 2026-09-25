@@ -564,6 +564,112 @@ namespace ArchiveFixer.Models
         /// </summary>
         public int MaxPasswordAttemptsPerLayer { get; set; } = 10;
 
+        // ================================================================
+        // 解压前的资源预算上限（不变量 8；用户 2026-09-25 第 36 条：必须看得见、改得动）
+        // ================================================================
+
+        /*
+         * 为什么这四条从"写死在代码里"变成"设置项"（用户真机报的第 36 条）：
+         *
+         * 他拿一个 12.22 GiB 的包跑一键处理，里面是一组 5 GB 的分卷（`Code Complete-BZ.7z.001` 那类），
+         * 失败清单上写着"单个文件解压后 5242880000 字节（4.88 GiB）超过单文件上限 4294967296 字节（4 GiB）"。
+         * 那四条上限当时是**硬编码**的（`ResourceBudgetOptions` 的 4 GiB / 20 GiB），界面上一个字都没有，
+         * 于是他看到的是一句像"这个包有问题"的判决 —— 而实际上是程序自己的安全阀，而且他改不了。
+         *
+         * 处置（与"危险模式"退役同一口径：不要仪式，要看得见、改得动）：
+         * ① 默认值调到真实资源包绝不会碰到的量级（单文件 64 GiB / 总大小 512 GiB）；
+         * ② 四条全部落进设置（⑥设置 →「安全上限」），超范围就夹回并**当场告诉他**；
+         * ③ 拒绝文案必须自己说清"这是程序的上限、不是包坏了、去哪儿调"（`ResourceBudget` 的 `CapHint`）。
+         *
+         * ⛔ 不许再退回"写死"：不变量 8 要求的是**上限存在**，不是"上限不许用户改"。
+         */
+
+        /// <summary>解压后单个文件大小上限的默认值（64 GiB）。</summary>
+        public const int DefaultMaxSingleExtractedFileGiB = 64;
+
+        /// <summary>解压后总大小上限的默认值（512 GiB）。</summary>
+        public const int DefaultMaxExtractedTotalGiB = 512;
+
+        /// <summary>解压后文件数上限的默认值（20 万个）。</summary>
+        public const int DefaultMaxExtractedFileCount = 200_000;
+
+        /// <summary>展开比上限的默认值（1000 倍，超过视为压缩炸弹）。</summary>
+        public const double DefaultMaxExtractionRatio = 1000d;
+
+        /// <summary>两个大小上限允许的取值范围（GiB）：下限 1，上限 4096（4 TiB）。</summary>
+        public const int MinExtractionCapGiB = 1;
+
+        /// <summary>两个大小上限允许的取值范围（GiB）的上界。</summary>
+        public const int MaxExtractionCapGiB = 4096;
+
+        /// <summary>
+        /// 解压后**单个文件**的大小上限（GiB，默认 64）。
+        ///
+        /// <para>判的是"归档里最大的那一个条目"（`ResourceBudget` 规则 2a），超了就**不解这个包**。
+        /// 默认值取 64 GiB：任何真实视频 / 镜像都够，而"一个 1 KB 的文件声称要写 4 TiB"这种
+        /// 单条目炸弹仍然会被拦住（另有展开比与目标盘空间两道）。</para>
+        /// </summary>
+        public int MaxSingleExtractedFileGiB { get; set; } = DefaultMaxSingleExtractedFileGiB;
+
+        /// <summary>
+        /// 解压后**总大小**上限（GiB，默认 512）。永远不小于单文件那一档（见
+        /// <see cref="NormalizeTotalCapGiB"/>），否则它形同虚设。
+        /// </summary>
+        public int MaxExtractedTotalGiB { get; set; } = DefaultMaxExtractedTotalGiB;
+
+        /// <summary>解压后**文件数**上限（默认 20 万）。</summary>
+        public int MaxExtractedFileCount { get; set; } = DefaultMaxExtractedFileCount;
+
+        /// <summary>**展开比**上限（默认 1000 倍）：解压后总大小 ÷ 压缩包体积，超了按压缩炸弹拒绝。</summary>
+        public double MaxExtractionRatio { get; set; } = DefaultMaxExtractionRatio;
+
+        /// <summary>把"单文件上限"夹进合法区间（≤0 视为没配 → 用默认值）。</summary>
+        public static int NormalizeSingleFileCapGiB(int value)
+        {
+            if (value <= 0)
+            {
+                return DefaultMaxSingleExtractedFileGiB;
+            }
+
+            return Math.Clamp(value, MinExtractionCapGiB, MaxExtractionCapGiB);
+        }
+
+        /// <summary>
+        /// 把"总大小上限"夹进合法区间，并保证它**不小于**单文件上限 ——
+        /// 否则单文件那一档永远先命中，用户以为调大了总量却什么都没变。
+        /// </summary>
+        public static int NormalizeTotalCapGiB(int value, int singleFileGiB)
+        {
+            int single = NormalizeSingleFileCapGiB(singleFileGiB);
+            int total = value <= 0
+                ? DefaultMaxExtractedTotalGiB
+                : Math.Clamp(value, MinExtractionCapGiB, MaxExtractionCapGiB);
+
+            return Math.Max(single, total);
+        }
+
+        /// <summary>把"文件数上限"夹进合法区间（≤0 视为没配 → 用默认值）。</summary>
+        public static int NormalizeExtractedFileCountCap(int value)
+        {
+            if (value <= 0)
+            {
+                return DefaultMaxExtractedFileCount;
+            }
+
+            return Math.Clamp(value, 1, 50_000_000);
+        }
+
+        /// <summary>把"展开比上限"夹进合法区间（NaN / 无穷 / &lt;1 视为没配 → 用默认值）。</summary>
+        public static double NormalizeExtractionRatioCap(double value)
+        {
+            if (!double.IsFinite(value) || value < 1d)
+            {
+                return DefaultMaxExtractionRatio;
+            }
+
+            return Math.Min(value, 1_000_000d);
+        }
+
         /// <summary>
         /// 缓存根目录（日志 / 临时 / 递归工作区 / 配置文件都放这里）。
         ///
@@ -863,6 +969,12 @@ namespace ArchiveFixer.Models
                 MaxRecursionDepth = 10,
                 RecursionDefaultUnifiedToTen = true,
                 MaxPasswordAttemptsPerLayer = 10,
+
+                // 解压前的资源预算上限（用户 2026-09-25 第 36 条：四条都落进设置，默认值调到真实包碰不到的量级）。
+                MaxSingleExtractedFileGiB = DefaultMaxSingleExtractedFileGiB,
+                MaxExtractedTotalGiB = DefaultMaxExtractedTotalGiB,
+                MaxExtractedFileCount = DefaultMaxExtractedFileCount,
+                MaxExtractionRatio = DefaultMaxExtractionRatio,
                 TerminalLayoutMode = "KeepLastFolder",
                 CollapseRepeatedFolderLayer = true,
 
@@ -1121,6 +1233,16 @@ namespace ArchiveFixer.Models
             {
                 MaxPasswordAttemptsPerLayer = 1000;
             }
+
+            /*
+             * 解压前的资源预算上限（用户 2026-09-25 第 36 条）：四条都夹回合法区间。
+             * 夹的规则只有一处实现（上面那四个 NormalizeXxxCap），`ResourceBudgetOptions.FromSettings`
+             * 读的时候用的是同一批函数 —— 界面、落盘、真正判包三处口径不许分叉。
+             */
+            MaxSingleExtractedFileGiB = NormalizeSingleFileCapGiB(MaxSingleExtractedFileGiB);
+            MaxExtractedTotalGiB = NormalizeTotalCapGiB(MaxExtractedTotalGiB, MaxSingleExtractedFileGiB);
+            MaxExtractedFileCount = NormalizeExtractedFileCountCap(MaxExtractedFileCount);
+            MaxExtractionRatio = NormalizeExtractionRatioCap(MaxExtractionRatio);
 
             // 自定义 7z 路径要么是有效文件，要么当没填 —— 留一个失效路径会让整个程序找不到引擎。
             if (!string.IsNullOrWhiteSpace(CustomSevenZipExePath) && !System.IO.File.Exists(CustomSevenZipExePath))

@@ -303,7 +303,16 @@ namespace ArchiveFixer.Tests
                  * 它必须真的被收尾读到 —— ExtractionCoordinator.CleanupFailedTaskWorkspace
                  * 与 RecursiveExtractor 的失败清理都按它决定"清不清现场"，默认关 = 失败不留残留。
                  */
-                "KeepFailedWorkspace"
+                "KeepFailedWorkspace",
+
+                /*
+                 * 2026-09-25 第 36 条：解压前的四条安全上限（⑥设置 →「安全上限」）。
+                 * 以前它们是硬编码在 ResourceBudgetOptions 里的 4 GiB / 20 GiB —— 界面上一格都没有，
+                 * 用户被拦下时只能看到一句像"这个包坏了"的判决。四条都必须在界面上找得到，
+                 * 而且必须真的被读到（ExtractionCoordinator.BudgetLimits 是唯一出口）。
+                 */
+                "MaxSingleExtractedFileGiB", "MaxExtractedTotalGiB",
+                "MaxExtractedFileCount", "MaxExtractionRatio"
             };
 
             foreach (string name in appSettingsBound)

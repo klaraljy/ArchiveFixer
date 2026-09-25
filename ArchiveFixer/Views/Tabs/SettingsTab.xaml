@@ -216,6 +216,110 @@
                 </StackPanel>
             </GroupBox>
 
+            <!-- ==================== 安全上限（解压前预算，第 36 条） ==================== -->
+            <GroupBox Header="安全上限（解压前预算）">
+                <StackPanel>
+                    <!--
+                        用户 2026-09-25 第 36 条：这四条以前是硬编码的（4 GiB 单文件 / 20 GiB 总量），
+                        界面上一个字都没有 —— 他 12 GiB 的分卷包被拦下时，只看到一句像"包坏了"的判决。
+                        现在它们既是设置项，也写在失败文案里（"可在⑥设置 →「安全上限」里调大"）。
+                    -->
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="单文件上限："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.MaxSingleExtractedFileGiB, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="单位 GiB（1~4096）。解压后**单个文件**超过它就不解这个包 —— 这是安全上限，不是这个包坏了。" />
+
+                        <TextBlock Grid.Column="2"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Text="单位 GiB，默认 64。解压后单个文件超过它就拒绝这个包（一个字节都不写）。" />
+                    </Grid>
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="总大小上限："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.MaxExtractedTotalGiB, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="单位 GiB（1~4096，且不小于单文件上限）。默认 512。" />
+
+                        <TextBlock Grid.Column="2"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Text="单位 GiB，默认 512，且不小于单文件上限（否则单文件那一档永远先命中）。" />
+                    </Grid>
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="文件数上限："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.MaxExtractedFileCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="解压后条目数上限，默认 20 万。" />
+
+                        <TextBlock Grid.Column="2"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Text="默认 200000。解压后条目数超过它就拒绝这个包。" />
+                    </Grid>
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="120" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="展开比上限："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.MaxExtractionRatio, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="解压后总大小 ÷ 压缩包体积，默认 1000 倍，超过按压缩炸弹拒绝。" />
+
+                        <TextBlock Grid.Column="2"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="8,0,0,0"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Text="默认 1000 倍。超过按「疑似压缩炸弹」拒绝。" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="110,8,0,0"
+                               TextWrapping="Wrap"
+                               Text="这四条只**拒绝解压**，不会删任何东西；超过上限时失败清单会写清是哪个上限拦的。另有两道独立的闸门照旧生效：目标盘空间不够就不启动，解压过程中按累计大小设限。" />
+                </StackPanel>
+            </GroupBox>
+
             <!-- ==================== 恢复默认 / 关于 ==================== -->
             <GroupBox Header="恢复默认与关于">
                 <StackPanel>

@@ -207,7 +207,15 @@ namespace ArchiveFixer.Tests
 
             viewModel.OutputPlacement = OutputPlacementOption.CustomNamedSubfolder;
             viewModel.CustomOutputDirectory = @"D:\输出";
-            Assert.Contains(@"D:\输出\222\内容物", viewModel.OutputPlacementSummary, StringComparison.Ordinal);
+
+            /*
+             * 指定位置那一档的示例里，包名那一层写的是**占位符「包名」**（用户 2026-09-25 第 36 条）。
+             * 这里原来钉的是 `D:\输出\222\内容物`：那串字会原样进日志与失败清单的「本次选项」，
+             * 拼在他真实路径后面，读起来像"程序要往一个我没有的 222 目录里写东西"。
+             * ⛔ 别再改回具体数字 —— 示例要一眼看出是示例。
+             */
+            Assert.Contains(@"D:\输出\包名\内容物", viewModel.OutputPlacementSummary, StringComparison.Ordinal);
+            Assert.DoesNotContain(@"\222\", viewModel.OutputPlacementSummary, StringComparison.Ordinal);
         }
 
         [Fact]

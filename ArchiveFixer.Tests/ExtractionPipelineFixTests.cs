@@ -425,7 +425,49 @@ namespace ArchiveFixer.Tests
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
         }
 
+        /// <summary>
+        /// 安全上限也是**设置项**，而且必须真的管到解压管线（用户 2026-09-25 第 36 条）。
+        ///
+        /// <para>真机现场：他那个 12.22 GiB 的包里有 4.88 GiB 的单条目，而单文件上限当时是**硬编码**的
+        /// 4 GiB —— 界面上一个字都没有，他看到的只有失败清单上那句像"这个包坏了"的判决。</para>
+        ///
+        /// <para>这条钉子把上限调到 1 GiB：同一个清单必须**当场**被拒、引擎一次都不许调，
+        /// 而且任务上的原因要点名"安全上限"并带上调大的入口（撤掉接线立刻变红：
+        /// 预检退回 <c>new ResourceBudget()</c> 的 4 GiB 默认值时，1.0001 GiB 的条目会被放行、引擎被调用）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 安全上限来自设置_调小之后当场拒绝且不调引擎()
+        {
+            Harness harness = CreateHarness(configure: settings => settings.MaxSingleExtractedFileGiB = 1);
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("big-parts.7z"));
+
+            long entrySize = (1L * 1024 * 1024 * 1024) + (1L * 1024 * 1024);
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 1,
+                TotalUncompressedSize = entrySize,
+                Entries = new List<ArchiveEntry>
+                {
+                    // 名字刻意用他真机那个"括号没配对上"的卷名：文案里必须原样带出来（外面加「」）。
+                    new() { Path = "Code Complete-BZ.7z(删掉.001", Size = entrySize }
+                },
+                EngineId = "fake",
+                EngineVersion = "1.0"
+            });
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Empty(harness.Engine.ExtractCalls);
+            Assert.Equal(StatusText.ExtractFailed, task.Status);
+            Assert.Contains("安全上限", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("条目「Code Complete-BZ.7z(删掉.001」", task.ErrorMessage, StringComparison.Ordinal);
+        }
+
         // ================================================================ P1-6：实际输出目录写回任务
+
 
         /// <summary>
         /// 输出目录已存在且非空时会自动改用 <c>xxx(1)</c>。

@@ -92,6 +92,20 @@ namespace ArchiveFixer.Models
         public const string DiskSpaceInsufficient = "磁盘空间不足";
 
         /// <summary>
+        /// 资源预算上限类拒绝的**统一尾巴**（用户 2026-09-25 第 36 条）。
+        ///
+        /// <para>为什么要写这一句：他真机看到的失败清单是
+        /// "单个文件解压后 5242880000 字节（4.88 GiB）超过单文件上限 4294967296 字节（4 GiB）：
+        /// Code Complete-BZ.7z(删掉.001" —— 读起来像"这个包坏了"，而实际是程序自己的安全上限，
+        /// 而且当时界面上根本没有这一格。判决必须自己说清它是什么、去哪儿改。</para>
+        ///
+        /// <para>⛔ 目标盘空间不足那一档**不加**这句（原因真是"盘不够"，处置方式是清盘 / 换盘，
+        /// 与"调上限"不是一回事）。文案只有这一份：<c>ResourceBudget</c>（解压前预检与运行时累计）、
+        /// <c>ExtractionCoordinator</c>（产物事后核算）都引用它。</para>
+        /// </summary>
+        public const string SecurityCapHint = "（这是程序的安全上限，不是这个包坏了；可在⑥设置 →「安全上限」里调大）";
+
+        /// <summary>
         /// **源文件已变化**（AGENTS.md §6 不变量 11：源文件变化后不得继续使用旧识别结果）。
         ///
         /// <para>

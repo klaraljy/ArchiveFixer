@@ -859,6 +859,15 @@ namespace ArchiveFixer.ViewModels
                  */
                 int requestedPasswordAttempts = Settings.MaxPasswordAttemptsPerLayer;
 
+                /*
+                 * 安全上限那四条同理（用户 2026-09-25 第 36 条）：填了 0 / 负数 / 过大的数会被夹回合法区间，
+                 * 夹过就必须说 —— 他填 8192 GiB 而实际只生效 4096 时，"我以为我设成了 8192"是最坏的结果。
+                 */
+                int requestedSingleGiB = Settings.MaxSingleExtractedFileGiB;
+                int requestedTotalGiB = Settings.MaxExtractedTotalGiB;
+                int requestedFileCount = Settings.MaxExtractedFileCount;
+                double requestedRatio = Settings.MaxExtractionRatio;
+
                 Settings.Normalize();
 
                 /*
@@ -873,9 +882,30 @@ namespace ArchiveFixer.ViewModels
                 RefreshEngineList();
                 RefreshRarStatus();
 
-                Message = requestedPasswordAttempts != Settings.MaxPasswordAttemptsPerLayer
-                    ? $"设置已保存（每层密码尝试上限 {requestedPasswordAttempts} 超出 1~1000，已按 {Settings.MaxPasswordAttemptsPerLayer} 生效）。"
-                    : "设置已保存。";
+                bool passwordClamped = requestedPasswordAttempts != Settings.MaxPasswordAttemptsPerLayer;
+
+                bool capsClamped =
+                    requestedSingleGiB != Settings.MaxSingleExtractedFileGiB ||
+                    requestedTotalGiB != Settings.MaxExtractedTotalGiB ||
+                    requestedFileCount != Settings.MaxExtractedFileCount ||
+                    !requestedRatio.Equals(Settings.MaxExtractionRatio);
+
+                string clampNotice = (passwordClamped, capsClamped) switch
+                {
+                    (true, true) =>
+                        $"（每层密码尝试上限 {requestedPasswordAttempts} 超出 1~1000、安全上限也有超范围的值，"
+                        + $"已按 密码 {Settings.MaxPasswordAttemptsPerLayer} / 单文件 {Settings.MaxSingleExtractedFileGiB} GiB"
+                        + $" / 总大小 {Settings.MaxExtractedTotalGiB} GiB / 文件数 {Settings.MaxExtractedFileCount}"
+                        + $" / 展开比 {Settings.MaxExtractionRatio:0.##} 倍 生效。）",
+                    (true, false) =>
+                        $"（每层密码尝试上限 {requestedPasswordAttempts} 超出 1~1000，已按 {Settings.MaxPasswordAttemptsPerLayer} 生效。）",
+                    (false, true) =>
+                        $"（安全上限超出允许范围，已按 单文件 {Settings.MaxSingleExtractedFileGiB} GiB / 总大小 {Settings.MaxExtractedTotalGiB} GiB"
+                        + $" / 文件数 {Settings.MaxExtractedFileCount} / 展开比 {Settings.MaxExtractionRatio:0.##} 倍 生效。）",
+                    _ => string.Empty
+                };
+
+                Message = clampNotice.Length > 0 ? "设置已保存" + clampNotice : "设置已保存。";
 
                 DialogResult = true;
             }
