@@ -1244,6 +1244,12 @@ namespace ArchiveFixer.ViewModels
         /// 只动列表，源文件不动；移除错了再添加一次就回来，所以不做二次确认。
         /// </summary>
         public ICommand RemoveCheckedTasksCommand { get; }
+
+        /// <summary>
+        /// 「按建议改名并重试」（用户 2026-09-25 第 41 条）：给"名字被改坏的分卷第一卷"按标准名改名，
+        /// 只改名字、不覆盖、不删内容，改完立刻重新识别并重试解压。只在真有可改的任务时才亮。
+        /// </summary>
+        public ICommand RenameBySuggestionAndRetryCommand { get; }
         public ICommand RescanTaskCommand { get; }
         public ICommand CopyTaskInfoCommand { get; }
         public ICommand CopyTaskPathCommand { get; }
@@ -1544,6 +1550,10 @@ namespace ArchiveFixer.ViewModels
             RemoveCheckedTasksCommand = new RelayCommand(
                 RemoveCheckedTasks,
                 () => !IsBusy && Tasks.Any(task => task.IsSelected));
+
+            RenameBySuggestionAndRetryCommand = new AsyncRelayCommand(
+                RenameBySuggestionAndRetryAsync,
+                CanRenameBySuggestionAndRetry);
             RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync);
             CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo);
             CopyTaskPathCommand = new RelayCommand(CopyTaskPath);
@@ -4423,6 +4433,157 @@ namespace ArchiveFixer.ViewModels
             RemoveTasksCore(checkedTasks);
         }
 
+        /*
+         * ==================== 「按建议改名并重试」（用户 2026-09-25 第 41 条） ====================
+         *
+         * 场景：一组分卷的**第一卷**名字被改坏（`Code Complete-BZ.7z(删掉.001` 那种），
+         * 程序只能报「分卷缺失」+ 给一个标准改名建议 —— 源文件它自己一个字节都不能动（不变量 1）。
+         * 但这一卷是真的需要改名，让用户对着日志手打一个不规则的名字，既慢又容易打错。
+         *
+         * 所以：**用户显式点这个按钮**（勾选 + 确认框两道），程序替他改**这一个名字**，然后立刻重试。
+         * ⛔ 三条红线：①只在用户点了之后才动；②只 `File.Move` 改名，**绝不覆盖**（目标名被占就拒绝）、
+         * 绝不删除、绝不改内容；③改名建议只有一处推法（`Extraction/VolumeNameRepair`），
+         * 与失败清单里写给他的是同一个名字。
+         */
+
+        /// <summary>「按建议改名并重试」当前能改的那几个任务（勾选 + 这一档的毛病 + 计划成立）。</summary>
+        private List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> BuildVolumeRepairCandidates()
+        {
+            var candidates = new List<(ArchiveTask, VolumeNameRepairPlan)>();
+
+            foreach (ArchiveTask task in Tasks.Where(item => item != null && item.IsSelected))
+            {
+                /*
+                 * 判据是**机器事实**：任务上记着改名建议（= 上一轮判决认定"名字被改坏的第一卷"），
+                 * 而且此刻从文件系统真能算出一个成立的计划。
+                 * ⛔ 不比对中文状态文案（AGENTS.md §7）；建议为空时这个按钮根本不该亮。
+                 */
+                if (string.IsNullOrWhiteSpace(task.VolumeRenameSuggestion))
+                {
+                    continue;
+                }
+
+                VolumeNameRepairPlan plan = VolumeNameRepair.Plan(task.CurrentPath, EnumerateDirectoryFileNames(task.CurrentPath));
+
+                if (plan.CanRepair)
+                {
+                    candidates.Add((task, plan));
+                }
+            }
+
+            return candidates;
+        }
+
+        /// <summary>同目录里的文件名（读不了就当作空 —— 计划会因此判"不能改"，绝不抛）。</summary>
+        private static IEnumerable<string?> EnumerateDirectoryFileNames(string? filePath)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(filePath ?? string.Empty) ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return Array.Empty<string?>();
+                }
+
+                return Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly).Select(Path.GetFileName).ToList();
+            }
+            catch
+            {
+                return Array.Empty<string?>();
+            }
+        }
+
+        private bool CanRenameBySuggestionAndRetry()
+        {
+            return !IsBusy && BuildVolumeRepairCandidates().Count > 0;
+        }
+
+        /// <summary>
+        /// 按建议改名（只改名字）并立刻重试解压。
+        /// </summary>
+        internal async Task RenameBySuggestionAndRetryAsync()
+        {
+            List<(ArchiveTask Task, VolumeNameRepairPlan Plan)> candidates = BuildVolumeRepairCandidates();
+
+            if (candidates.Count == 0)
+            {
+                _dialogService.ShowInfo(StatusText.VolumeRepairNoneText);
+                return;
+            }
+
+            string list = string.Join(
+                Environment.NewLine,
+                candidates.Select(item => "· " + item.Plan.Describe()));
+
+            bool confirmed = _dialogService.ShowConfirm(
+                StatusText.VolumeRepairConfirmTitle
+                + Environment.NewLine + Environment.NewLine
+                + string.Format(StatusText.VolumeRepairConfirmBodyFormat, list));
+
+            if (!confirmed)
+            {
+                AppendLog("INFO", $"用户取消了「{StatusText.VolumeRepairConfirmTitle}」，磁盘上的文件没有动。");
+                return;
+            }
+
+            _logService.MarkOperationStart(StatusText.VolumeRepairConfirmTitle);
+
+            int renamed = 0;
+            int failed = 0;
+
+            foreach ((ArchiveTask task, VolumeNameRepairPlan plan) in candidates)
+            {
+                VolumeNameRepairResult result = VolumeNameRepair.TryApply(plan);
+
+                if (!result.Success)
+                {
+                    failed++;
+                    task.ErrorMessage = result.Message;
+                    AppendLog("ERROR", $"{plan.CurrentFileName}：{result.Message}");
+                    continue;
+                }
+
+                renamed++;
+
+                /*
+                 * 任务要跟着搬到新路径上：文件在磁盘上已经叫新名字了，任务还指着旧名字的话，
+                 * 紧接着的"重新识别"第一步就会撞上"源文件不在了"。
+                 */
+                task.CurrentPath = result.NewPath;
+                task.RefreshPathRelatedProperties();
+
+                AppendLog("INFO", result.Message);
+
+                /*
+                 * 重新识别 + **重拍源文件快照**（不变量 11）：路径换了，旧快照对新名字毫无意义，
+                 * 不重拍的话紧接着的解压会被"源文件已变化"拦下 —— 那条提示是防"文件被改过"的，
+                 * 不该拿来挡用户主动改的名字。
+                 */
+                await _scanCoordinator.RescanTaskAsync(task).ConfigureAwait(true);
+            }
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.VolumeRepairBatchDoneFormat,
+                    renamed,
+                    failed));
+
+            if (renamed == 0)
+            {
+                _dialogService.ShowWarning(StatusText.VolumeRepairNoneText);
+                return;
+            }
+
+            /*
+             * 重试 = 与「只解压」**同一条路**（不复制一份解压逻辑出来）：
+             * 勾选没变、路径已经指向新名字，按下去就是把这一组重新解一遍。
+             */
+            await _extractionCoordinator.StartExtractAsync().ConfigureAwait(true);
+        }
+
         /// <summary>
         /// 按源路径移除任务（导入后的无用物提醒里点"从列表里移除这些"走这条）。
         /// </summary>
@@ -4732,6 +4893,7 @@ namespace ArchiveFixer.ViewModels
 
                  RemoveTaskCommand,
                  RescanTaskCommand,
+                 RenameBySuggestionAndRetryCommand,
                  CopyTaskInfoCommand,
                  CopyTaskPathCommand,
                  CopyTaskErrorCommand,

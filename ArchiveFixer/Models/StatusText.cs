@@ -1362,5 +1362,63 @@ namespace ArchiveFixer.Models
             + "Rar.exe / WinRAR.exe 是共享软件：程序**只检测与调用**你自己装的那一份，绝不复制、绝不随包分发，" + "\r\n"
             + "也绝不会拿 7-Zip 假装做出 .rar。";
 
+        // ── 「按建议改名并重试」（用户 2026-09-25 第 41 条） ──
+
+        /// <summary>
+        /// 「按建议改名并重试」按钮的说明（XAML 里那个 ToolTip 的内容来源）。
+        ///
+        /// <para>为什么要把"只改名字、内容不动"写进提示：这个按钮会**动用户的源文件名**
+        /// （不变量 1 的唯一例外是用户显式发起），必须一眼就能看清它到底做什么、不做什么。</para>
+        /// </summary>
+        public const string VolumeRepairButtonToolTip =
+            "只对「名字被改坏的分卷第一卷」有效：按程序给出的标准名把这一卷改名" +
+            "（**只改文件名，内容一个字节都不动**），然后立刻重新识别并重试解压。";
+
+        /// <summary>一个可改名的任务都没有时点它的提示。</summary>
+        public const string VolumeRepairNoneText =
+            "勾选的任务里没有「名字被改坏的分卷第一卷」—— 没有可改名的。\n" +
+            "（这一档只在包报「分卷缺失」、且原因是第一卷名字被改坏时出现；日志与失败清单里写着给它的标准名。）";
+
+        /// <summary>确认框标题。</summary>
+        public const string VolumeRepairConfirmTitle = "按建议改名并重试";
+
+        /// <summary>确认框正文（<c>{0}</c> = 逐条 `旧名 → 新名`）。</summary>
+        public const string VolumeRepairConfirmBodyFormat =
+            "将要重命名下面这些文件（**只改名字，内容一个字节都不动**）：\n\n" +
+            "{0}\n\n" +
+            "改完程序会立刻重新识别它们并重试解压。源包操作与删除操作仍然按③页的档位走（默认什么都不搬、不删）。";
+
+        /// <summary>改名成功（写进日志 / 状态栏）。</summary>
+        public const string VolumeRepairDoneFormat = "已按建议改名：{0} → {1}";
+
+        /// <summary>改名失败（日志 / 弹窗）。<c>{0}</c> = 目标名，<c>{1}</c> = 原因。</summary>
+        public const string VolumeRepairRenameFailedFormat = "改名失败（目标名「{0}」）：{1}";
+
+        /// <summary>算计划时的意外（读不到文件属性等）。<c>{0}</c> = 原因。</summary>
+        public const string VolumeRepairPlanFailedFormat = "读不到这一卷的信息：{0}";
+
+        /// <summary>不能改名的原因：源文件不在了。</summary>
+        public const string VolumeRepairSourceMissing = "源文件不在了（可能已被移动、改名或删除）";
+
+        /// <summary>不能改名的原因：名字里没有卷号。</summary>
+        public const string VolumeRepairNotAVolumeName = "这个名字里没有卷号，程序不敢替它猜一个标准名";
+
+        /// <summary>不能改名的原因：不是第一卷。</summary>
+        public const string VolumeRepairNotFirstVolume = "它不是这一组的第 1 卷（只有第 1 卷的名字被改坏时，改名才有用）";
+
+        /// <summary>不能改名的原因：同目录没有像后续卷的文件。</summary>
+        public const string VolumeRepairNoSiblings = "同目录里没有找到像后续卷的文件（先把后续卷放回来，改名才凑得齐一组）";
+
+        /// <summary>不能改名的原因：推不出标准名。</summary>
+        public const string VolumeRepairNoSuggestion = "从后续卷的名字推不出这一组的标准名（宁可不说，也不给一个错的建议）";
+
+        /// <summary>不能改名 / 不需要改名的原因：名字本来就是标准的。</summary>
+        public const string VolumeRepairAlreadyStandard = "它的名字本来就是标准的，问题不在名字上";
+
+        /// <summary>不能改名的原因：目标名被占用。<c>{0}</c> = 目标名。</summary>
+        public const string VolumeRepairTargetTakenFormat = "目标名「{0}」已经被别的文件占用了，程序不会覆盖它";
+
+        /// <summary>改名批次收尾（写进日志）。<c>{0}</c> = 成功数，<c>{1}</c> = 失败数。</summary>
+        public const string VolumeRepairBatchDoneFormat = "按建议改名：成功 {0} 个、失败 {1} 个；接着重试解压勾选的任务。";
     }
 }

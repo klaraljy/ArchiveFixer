@@ -296,6 +296,13 @@ namespace ArchiveFixer.Services
             task.EmbeddedDirectReadSupported = result.EmbeddedDirectReadSupported;
             task.EmbeddedDirectReadReason = result.EmbeddedDirectReadReason ?? string.Empty;
 
+            /*
+             * 「按建议改名并重试」那条建议（用户 2026-09-25 第 41 条）必须跟着识别结果一起作废：
+             * 它是**上一轮解压**的判决产物，重扫之后（名字可能已经改好了）还算数的话，
+             * ①页那个按钮会在问题已经解决之后继续亮着，用户再点一次就是白改一次名字。
+             */
+            task.VolumeRenameSuggestion = string.Empty;
+
             if (result.IsArchive)
             {
                 task.Status = StatusText.Recognized;

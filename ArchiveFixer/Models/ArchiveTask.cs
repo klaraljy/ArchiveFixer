@@ -697,6 +697,18 @@ namespace ArchiveFixer.Models
         /// <summary>直读不支持时的原因（进日志与任务详情，说明"为什么要抠那一份副本"）。</summary>
         public string EmbeddedDirectReadReason { get; set; } = string.Empty;
 
+        /// <summary>
+        /// 「这一卷的名字被改坏了」时给出的**标准改名建议**（用户 2026-09-25 第 41 条；空 = 没有这个建议）。
+        ///
+        /// <para>为什么要在任务上记一份：①它是"①页那个「按建议改名并重试」按钮此刻该不该亮"的
+        /// **机器判据**（⛔ 不许靠比对中文状态文案，AGENTS.md §7）；②它就是失败清单里写给用户的那个名字，
+        /// 两者必须是同一份值（推法只有一处：<c>Extraction/VolumeNameRepair</c>）。</para>
+        ///
+        /// <para>重新识别（<see cref="ApplyDetectResult"/>）时一律清空 —— 那一轮有没有这个毛病，
+        /// 由那一轮的判决说了算，绝不沿用上一轮的结论。</para>
+        /// </summary>
+        public string VolumeRenameSuggestion { get; set; } = string.Empty;
+
         /// <summary>结果归集后的最终位置（没有归集时为空，表示还是 OutputPath）。</summary>
         public string CollectedPath { get; set; } = string.Empty;
 
@@ -1042,6 +1054,7 @@ namespace ArchiveFixer.Models
                 EmbeddedArchiveEnd = 0;
                 EmbeddedDirectReadSupported = false;
                 EmbeddedDirectReadReason = string.Empty;
+                VolumeRenameSuggestion = string.Empty;
                 ExtensionStatus = StatusText.UnknownFormat;
                 Status = StatusText.UnknownFormat;
                 Operation = StatusText.OpScan;
@@ -1060,6 +1073,9 @@ namespace ArchiveFixer.Models
             EmbeddedArchiveEnd = result.EmbeddedArchiveEnd;
             EmbeddedDirectReadSupported = result.EmbeddedDirectReadSupported;
             EmbeddedDirectReadReason = result.EmbeddedDirectReadReason ?? string.Empty;
+
+            // 改名建议同理：它是"上一轮那次解压判决"的产物，识别结果一刷新就必须作废。
+            VolumeRenameSuggestion = string.Empty;
             ExtensionStatus = extensionStatus;
 
             if (result.IsArchive)

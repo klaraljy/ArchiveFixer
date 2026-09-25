@@ -209,9 +209,20 @@
                   BorderBrush="{StaticResource PanelBorderBrush}"
                   BorderThickness="1">
             <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Content="智能修正选中后缀"
+                <!--
+                    「按建议改名并重试」（用户 2026-09-25 第 41 条）：只对"名字被改坏的分卷第一卷"有效。
+                    它是这个程序里**唯一**会动源文件名的入口之一，而且必须用户点了才动 ——
+                    所以文案里把"只改名字、内容不动"写进 ToolTip，确认框里再写一遍。
+                -->
+                <Button Content="按建议改名并重试"
                         MinWidth="136"
                         FontWeight="SemiBold"
+                        ToolTip="{x:Static models:StatusText.VolumeRepairButtonToolTip}"
+                        Command="{Binding RenameBySuggestionAndRetryCommand}" />
+
+                <Button Content="智能修正选中后缀"
+                        MinWidth="136"
+                        Margin="8,0,0,0"
                         ToolTip="对勾选的任务修正伪装后缀（会先弹出改名预览让你确认）"
                         Command="{Binding SmartRenameCommand}" />
 

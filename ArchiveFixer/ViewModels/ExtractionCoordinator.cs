@@ -8094,20 +8094,27 @@ namespace ArchiveFixer.ViewModels
                 {
                     string volumeDirectory = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
 
-                    IReadOnlyList<string> siblings = RawSplitStreamDetector.FindSiblingVolumes(
-                        CollectVolumeFilesInDirectory(volumeDirectory).Select(Path.GetFileName),
-                        task.CurrentPath);
+                    /*
+                     * 改名建议**只有一处推法**（Extraction/VolumeNameRepair）：
+                     * 失败清单里写给用户的名字、与①页「按建议改名并重试」真正会改成的名字，
+                     * 必须是同一个 —— 两边各推一次就会出现"按它说的改完还是解不开"。
+                     */
+                    VolumeNameRepairPlan repair = VolumeNameRepair.Plan(
+                        task.CurrentPath,
+                        CollectVolumeFilesInDirectory(volumeDirectory).Select(Path.GetFileName));
 
-                    string standardName = RawSplitStreamDetector.SuggestStandardFirstName(siblings);
+                    task.VolumeRenameSuggestion = repair.CanRepair ? repair.SuggestedFileName : string.Empty;
 
-                    string siblingText = siblings.Count > 0
-                        ? $"同目录里有像后续卷的文件：{string.Join("、", siblings)}"
+                    string siblingText = repair.Siblings.Count > 0
+                        ? $"同目录里有像后续卷的文件：{string.Join("、", repair.Siblings)}"
                           + "（它们与这一卷的名字对不上，所以引擎找不到它们）。"
                         : "同目录里也没有找到像后续卷的文件。";
 
-                    string advice = string.IsNullOrWhiteSpace(standardName)
-                        ? string.Empty
-                        : $"把这一卷改回标准命名（{standardName}）就能解开。";
+                    string advice = repair.CanRepair
+                        ? $"把这一卷改回标准命名（{repair.SuggestedFileName}）就能解开 —— "
+                          + "勾上它点①页「按建议改名并重试」，程序只改名字（内容一个字节都不动）后立刻重试；"
+                          + "也可以自己改完右键「重新扫描此文件」。"
+                        : $"这一步没给出改名建议：{repair.Reason}。";
 
                     task.Status = StatusText.VolumeMissing;
                     task.ErrorMessage =
@@ -8115,7 +8122,7 @@ namespace ArchiveFixer.ViewModels
                         + "引擎按名字找不到同组的后续卷，只会把它当成一段通用分片"
                         + "（那样「解出来」的是一个与它等大的垃圾文件，不是包里的内容），所以**不开始**。"
                         + siblingText + advice
-                        + "程序不会替你改源文件（不变量 1），改完重新扫描这个包即可。";
+                        + "程序不会**自己**改源文件（不变量 1）：只有你点那个按钮，它才会改这一个名字。";
 
                     AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
                     return;
