@@ -140,6 +140,18 @@ namespace ArchiveFixer.Engines.WinRar
             args.Add(BuildPasswordArgument(password));
             args.Add(archivePath);
 
+            /*
+             * 只解指定的条目（密码预检：先解"最小的那一个"验密码，再决定要不要跑整卷 —— 用户 2026-09-25 第 37 条）。
+             * UnRAR 的用法是 `unrar x 归档 条目…`，条目名要给在归档**之后**。
+             */
+            foreach (string entry in options.IncludeEntries ?? Array.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(entry))
+                {
+                    args.Add(entry);
+                }
+            }
+
             return args;
         }
 

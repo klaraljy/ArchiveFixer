@@ -514,6 +514,89 @@ namespace ArchiveFixer.Tests
             Assert.Contains("Code Complete-BZ.7z.001", task.ErrorMessage, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// **先试密码，再解整包**（用户 2026-09-25 第 37 条，他原话："你应该先试密码再进行解压"）。
+        ///
+        /// <para>真机代价：那个 12.22 GiB 的包用**空密码**跑了 10 分 18 秒才报密码错误（还把 12 GiB 垃圾写进工作区）。
+        /// 这条钉子把一个"名字可见 + 条目加密"的大包喂给管线，断言：</para>
+        /// <list type="bullet">
+        /// <item><description>错密码**只解探针那一个条目**（`IncludeEntries` 非空），**一次整包都不解**；</description></item>
+        /// <item><description>对密码才走到整包解压；</description></item>
+        /// <item><description>「空密码」这一档**根本不试**（加密包不可能用空密码加密）。</description></item>
+        /// </list>
+        /// </summary>
+        [Fact]
+        public async Task 加密大包_错密码只解一个小条目_绝不去解整包()
+        {
+            Harness harness = CreateHarness(passwords: new[] { "错误密码", "正确密码" });
+
+            // 源文件要有一点体积：预检里的"展开比"是 解压后 ÷ 压缩包体积，
+            // 55 字节的假源文件配 100 MiB 的声明显然会被判成压缩炸弹（那是另一条闸门，与本用例无关）。
+            string sourcePath = Path.Combine(_root, "src", "big-encrypted.7z");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+            File.WriteAllBytes(sourcePath, new byte[1024 * 1024]);
+
+            ArchiveTask task = AddTask(harness, sourcePath);
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 2,
+                TotalUncompressedSize = 100L * 1024 * 1024,
+                Entries = new List<ArchiveEntry>
+                {
+                    new() { Path = "big.bin", Size = 100L * 1024 * 1024 },
+                    new() { Path = "readme.txt", Size = 1024 }
+                },
+                IsEncrypted = true,
+                EngineId = "fake",
+                EngineVersion = "1.0"
+            });
+
+            int probeCalls = 0;
+            int fullExtractCalls = 0;
+            var triedCandidates = new List<string>();
+
+            harness.Engine.OnExtractWithOptionsAsync = (request, options) =>
+            {
+                triedCandidates.Add(request.Password ?? string.Empty);
+
+                if (options.IncludeEntries.Count > 0)
+                {
+                    probeCalls++;
+
+                    Assert.Equal("readme.txt", options.IncludeEntries[0]);
+
+                    return Task.FromResult(
+                        request.Password == "正确密码"
+                            ? Succeeded()
+                            : new ArchiveOperationResult
+                            {
+                                Success = false,
+                                Status = StatusText.WrongPassword,
+                                Message = "密码错误",
+                                DetectedErrorType = "WrongPassword"
+                            });
+                }
+
+                fullExtractCalls++;
+                WriteFiles(request.OutputPath!, 2);
+                harness.Engine.Extracted = true;
+                return Task.FromResult(Succeeded());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            _output.WriteLine($"诊断：状态={task.Status} 原因={task.ErrorMessage} 候选={string.Join("|", triedCandidates)} ExtractCalls={harness.Engine.ExtractCalls.Count}");
+
+            // 空密码那一档根本没被试过（加密包）。
+            Assert.DoesNotContain(string.Empty, triedCandidates);
+
+            // 两个非空候选各探一次；整包只解了一次（对的那个）。
+            Assert.Equal(2, probeCalls);
+            Assert.Equal(1, fullExtractCalls);
+        }
+
         // ================================================================ P1-6：实际输出目录写回任务
 
 
@@ -1447,6 +1530,9 @@ namespace ArchiveFixer.Tests
 
             public Func<ArchiveRequest, Task<ArchiveOperationResult>>? OnExtractAsync { get; set; }
 
+            /// <summary>带 <see cref="ExtractOptions"/> 的解压钩子（密码预检要按"只解哪些条目"区分）。</summary>
+            public Func<ArchiveRequest, ExtractOptions, Task<ArchiveOperationResult>>? OnExtractWithOptionsAsync { get; set; }
+
             public Func<ArchiveRequest, Task<ArchiveListResult>>? OnListAsync { get; set; }
 
             public string Id => "fake";
@@ -1489,6 +1575,11 @@ namespace ArchiveFixer.Tests
                 CancellationToken cancellationToken = default)
             {
                 ExtractCalls.Add(request.ArchivePath);
+
+                if (OnExtractWithOptionsAsync != null)
+                {
+                    return OnExtractWithOptionsAsync(request, options);
+                }
 
                 if (OnExtractAsync != null)
                 {

@@ -1033,6 +1033,19 @@ namespace ArchiveFixer.Engines.SevenZip
 
             args.Add("-p" + (password ?? string.Empty));
 
+            /*
+             * 只解指定的条目（密码预检：先解"最小的那一个"验密码，再决定要不要跑整包 —— 用户 2026-09-25 第 37 条）。
+             * 7-Zip 把归档之后的位置当"要处理的条目名"，名字要原样给（`-o`/`-p` 这些开关都已经加完）。
+             * ⚠ 调用方必须先把带通配符（* ? [）的名字挑掉：7-Zip 会把它们当模式匹配（见 Extraction/PasswordProbe）。
+             */
+            foreach (string entry in options.IncludeEntries ?? Array.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(entry))
+                {
+                    args.Add(entry);
+                }
+            }
+
             return args;
         }
 

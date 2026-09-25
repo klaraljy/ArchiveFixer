@@ -27,6 +27,7 @@ namespace ArchiveFixer.Tests
     /// （<see cref="RawSplitStreamDetector.IsBrokenVolumeChain"/>）；③名字正常、卷齐的那一组**绝不被误拦**
     /// （那是合法用法：通用分片拼起来正是用户要的东西）。</para>
     /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
     public class RawSplitStreamTests : IDisposable
     {
         private readonly string _root;

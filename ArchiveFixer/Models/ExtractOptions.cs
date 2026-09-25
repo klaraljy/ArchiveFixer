@@ -142,6 +142,16 @@ namespace ArchiveFixer.Models
                 MaxParallelExtractCount = 8;
             }
         }
+
+        /// <summary>
+        /// **只解这些条目**（空 = 全解）。密码预检用它只解"最小的那一个条目"来验密码，
+        /// 而不是拿一个可能不对的候选去跑整包（用户 2026-09-25 第 37 条）。
+        ///
+        /// <para>为什么是可写属性而不是 <c>init</c>：预检要在同一个 <see cref="ExtractOptions"/> 上临时换条目、
+        /// 跑完再换回来（它还带着覆盖档等一整套口径，不能为一次预检再造一份）。
+        /// 调用点只有 <c>ExtractionCoordinator</c> 的候选循环一处，且那是顺序执行的。</para>
+        /// </summary>
+        public IReadOnlyList<string> IncludeEntries { get; set; } = Array.Empty<string>();
     }
 
     /// <summary>

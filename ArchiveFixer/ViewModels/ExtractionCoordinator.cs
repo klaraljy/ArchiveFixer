@@ -1712,7 +1712,7 @@ namespace ArchiveFixer.ViewModels
                  * 其余成功任务也要在这里把各自的其余物按档处理掉，否则选了「彻底删除」的人会发现
                  * 中间件那几份一直留着。
                  */
-                await ApplyRestHandlingAfterChainAsync(rootTask, cancellationToken);
+                await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
             }
         }
 
@@ -1869,9 +1869,105 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 「一组分卷的第一卷名字被改坏」时，把**我们自己产出的**那一卷改回标准命名（用户 2026-09-25 第 37 条）。
+        ///
+        /// <para>真机现场：他那个 12.22 GiB 的容器解出来的是三卷 7z，第一卷
+        /// <c>Code Complete-BZ.7z(删掉.001</c>（打包者塞了字、吃掉右括号），后两卷名字正常。
+        /// 7-Zip 按名字找不到后续卷 → 把它当"通用分片" → 解出来是一个等大的垃圾文件；
+        /// 于是那 12 GiB 的内容永远出不来（用户看到的是"20 G 的素材只出来 8 G"）。</para>
+        ///
+        /// <para>⛔ 只对**续解任务**（文件是我们自己从上一层解出来的中间件）改名：
+        /// 那是把我们的产物摆正，不是动用户的源文件（不变量 1）。
+        /// 用户自己添加的坏名字分卷走不了这一条 —— 会由后面的「通用分片」闸门如实报「分卷缺失」并给出改名建议。</para>
+        ///
+        /// <para>改完之后**重拍源文件快照**（不变量 11）：名字换了、路径换了，旧快照对不上会让这一单
+        /// 被"源文件已变化"拦下（与"分卷补齐"那条路同一处理）。</para>
+        /// </summary>
+        private string TryRepairBrokenVolumeChainName(ArchiveTask task, string engineArchivePath)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(task.CurrentPath))
+            {
+                return engineArchivePath;
+            }
+
+            // 只有"从别的包里解出来的"才允许改名（见方法注释）。
+            if (!task.IsContinuationTask)
+            {
+                return engineArchivePath;
+            }
+
+            IReadOnlyList<string?> names = TryListFileNames(Path.GetDirectoryName(task.CurrentPath));
+
+            if (names.Count == 0)
+            {
+                return engineArchivePath;
+            }
+
+            BrokenVolumeChainRepair.RenamePlan? plan = BrokenVolumeChainRepair.TryPlan(task.CurrentPath, names);
+
+            // 名字本来就标准（零条改名）= 什么都不用做，也**不许**记那句"被改坏"的日志。
+            if (plan == null || BrokenVolumeChainRepair.IsNoOp(plan))
+            {
+                return engineArchivePath;
+            }
+
+            if (!BrokenVolumeChainRepair.TryApply(plan, out string failure))
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：这一卷的名字看着被改坏了（{plan.Describe()}），但改名没成功：{failure}"
+                    + " —— 保持原样继续，下面会如实报结论。");
+
+                return engineArchivePath;
+            }
+
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：**分卷名字被改坏，已在自己的产物里摆正** —— {plan.Describe()}"
+                + $"（源包一个字节都没动；改的是上一层解出来的中间件）。原位置：{task.CurrentPath}");
+
+            string previousPath = task.CurrentPath;
+            task.CurrentPath = string.IsNullOrWhiteSpace(plan.FirstVolumePathAfterRename)
+                ? previousPath
+                : plan.FirstVolumePathAfterRename;
+
+            // 路径换了就必须重拍快照（不变量 11：按"位"比对，旧路径会立刻判成"文件不见了"）。
+            task.CaptureSourceSnapshot();
+
+            return task.CurrentPath;
+        }
+
+        /// <summary>列一个目录里的**文件名**（读不了就返回空集合，调用方按"没有线索"处理）。</summary>
+        private static IReadOnlyList<string?> TryListFileNames(string? directory)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return Array.Empty<string?>();
+                }
+
+                return Directory.EnumerateFiles(directory!, "*", SearchOption.TopDirectoryOnly)
+                    .Select(Path.GetFileName)
+                    .ToList();
+            }
+            catch
+            {
+                return Array.Empty<string?>();
+            }
+        }
+
+        /// <summary>
         /// 链尾对**单个**成功任务补做「删除操作」那一档（一键处理专用；幂等：已处理过的直接跳过）。
         /// </summary>
-        private async Task ApplyRestHandlingAfterChainAsync(ArchiveTask task, CancellationToken cancellationToken)
+        /// <param name="chainTasks">
+        /// 整条链的全部任务（根 + 续解子任务）。**必须传**：链尾这一档除了看根任务自己，
+        /// 还要看"这条链是不是整条都成功了"（见 <see cref="DescribeChainBlocker"/>）。
+        /// </param>
+        private async Task ApplyRestHandlingAfterChainAsync(
+            ArchiveTask task,
+            IReadOnlyList<ArchiveTask>? chainTasks,
+            CancellationToken cancellationToken)
         {
             string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
 
@@ -1889,6 +1985,28 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            /*
+             * ===== 链尾「删除操作」的第六道门槛：**整条链都得成功**（用户 2026-09-25 第 37 条真机故障）=====
+             *
+             * 现场：他那个 12.22 GiB 的容器（`1-20+IF1-3.7z`）第一层**成功**了、三个分卷也进了其余物；
+             * 下一层 `Code Complete-BZ.7z(删掉.001` 判「分卷缺失」**失败**。链尾这一档当时只看根任务自己
+             * （Succeeded + 校验通过 + 其余物在）→ 把那一份 12.22 GiB 的其余物**彻底删了**。
+             * 用户看到的是"20 G 的素材只出来 8 G"，而且那 12 G 连中间件都不在了（只剩源容器）。
+             *
+             * 判据只读机器事实（终态枚举 + 校验枚举，⛔ 不比对中文文案）。
+             */
+            string? chainBlocker = DescribeChainBlocker(task, chainTasks);
+
+            if (chainBlocker != null)
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.FileName}：链尾的其余物**不处理**（{chainBlocker}）—— 这条链没跑完，"
+                    + "中间件是这条链唯一的产物线索，一个字节都不删（失败 / 取消 / 没跑完一律不动）。");
+
+                return;
+            }
+
             ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
 
             if (runtime.PurgedBytes > 0 || runtime.RestPurged)
@@ -1897,6 +2015,17 @@ namespace ArchiveFixer.ViewModels
             }
 
             await RunRestHandlingAsync(task, runtime, oneClickRun: false, force: true);
+        }
+
+        /// <summary>
+        /// 这条续解链上有没有"没成功"的任务（链尾「删除操作」的第六道门槛，用户 2026-09-25 第 37 条）。
+        ///
+        /// <para>判据本体在 <see cref="ChainCompletionGate"/>（公开的纯函数，单独可测）：
+        /// 链上每个续解任务都要 Succeeded + 输出校验 Passed，"还没跑过"同样算拦下。</para>
+        /// </summary>
+        private static string? DescribeChainBlocker(ArchiveTask rootTask, IReadOnlyList<ArchiveTask>? chainTasks)
+        {
+            return ChainCompletionGate.DescribeBlocker(rootTask, chainTasks);
         }
 
         /// <summary>
@@ -2067,7 +2196,7 @@ namespace ArchiveFixer.ViewModels
                  * 到得了这里就说明"整条链跑完 + 全链校验通过 + 目录里确实有内容物 + 未取消"，
                  * 于是把这一份刚搬好的其余物按档处理掉。
                  */
-                await ApplyRestHandlingAfterChainMoveAsync(rootTask, logEntries, cancellationToken);
+                await ApplyRestHandlingAfterChainMoveAsync(rootTask, chainTasks, logEntries, cancellationToken);
             }
 
             return new DeferredSourceMoveWork(logEntries, failure);
@@ -2079,6 +2208,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private async Task ApplyRestHandlingAfterChainMoveAsync(
             ArchiveTask rootTask,
+            IReadOnlyList<ArchiveTask>? chainTasks,
             List<(string Level, string Message)> logEntries,
             CancellationToken cancellationToken)
         {
@@ -2086,6 +2216,21 @@ namespace ArchiveFixer.ViewModels
 
             if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
             {
+                return;
+            }
+
+            /*
+             * 与 ApplyRestHandlingAfterChainAsync 同一道门槛（第 37 条）：这条链没整条成功就一个字节都不删。
+             * 这里虽然已经被 DescribeChainVerificationGap 挡过一道，但两者的判据不同（那道只看"落在同一目录"），
+             * 删除这种事宁可多挡一次。
+             */
+            string? chainBlocker = DescribeChainBlocker(rootTask, chainTasks);
+
+            if (chainBlocker != null)
+            {
+                logEntries.Add((
+                    "WARN",
+                    $"{rootTask.FileName}：链尾的其余物**不处理**（{chainBlocker}）—— 这条链没跑完，一个字节都不删。"));
                 return;
             }
 
@@ -7529,6 +7674,19 @@ namespace ArchiveFixer.ViewModels
             string engineArchivePath = task.CurrentPath;
 
             /*
+             * ===== 一组分卷的第一卷名字被改坏 → 在我们自己的产物里把它摆正（用户 2026-09-25 第 37 条）=====
+             *
+             * 必须在**第一次 list / 解压之前**做完：改完名字引擎才认得出这一组，
+             * 后面的清单、预算、路径预检、输出校验、定稿全都按"真正的归档内容"走。
+             * 判据见 BrokenVolumeChainRepair：名字带卷号 1 + 后续卷 2、3… 连续 + 标准基名推得出来。
+             *
+             * ⛔ 只改**我们自己产出的**那一卷（续解任务：它本来就在 `其余物` 里）；
+             * 用户自己添加的坏名字分卷一个字节都不动 —— 那种情况留给下面那道
+             * 「通用分片」闸门如实报「分卷缺失」+ 给改名建议。
+             */
+            engineArchivePath = TryRepairBrokenVolumeChainName(task, engineArchivePath);
+
+            /*
              * 内嵌 ZIP 的**直读**结论（非 null = 这一次走直读，不产生那份等大的临时副本）。
              *
              * 用户 2026-09-24 拍板：这条路先试直读，直读说"不支持"就**原地回落到今天的"抠取 + 7z"**。
@@ -8426,6 +8584,48 @@ namespace ArchiveFixer.ViewModels
                 bool hasWrongPassword = false;
 
                 /*
+                 * ===== 先试密码，再解整包（用户 2026-09-25 第 37 条）=====
+                 *
+                 * 两条纪律，缺一条他那个 12 GiB 的包就又要白跑一整包：
+                 * ① **加密包不试空密码**：7-Zip / WinRAR 都造不出"用空密码加密"的包（`-p""` 等于不加密），
+                 *    拿空密码去打一个已加密的包必然白跑 —— 他真机那 10 分 18 秒就是这么来的；
+                 * ② **候选先过"最小条目"这一关**：探针解开了才去解整包（见 Extraction/PasswordProbe）。
+                 *
+                 * 为什么以前躲不过：`-mhe=off` 的包**列目录不需要密码**（任何候选都列得出来），
+                 * 而 `Copy` 方法 + AES-CBC 的数据要**整条读完**才能比对 CRC —— 错密码的代价 = 解一遍整包。
+                 * ⚠ 空密码那一档只在"还有别的候选可试"时才跳过：一个候选都不剩会让下面的收场分支
+                 * 落到"未知解压失败"，那比多跑一次更难懂（见 skippedOnlyEmptyPasswordBecauseEncrypted 那一支）。
+                 */
+                string? probeEntryPath = PasswordProbe.IsWorthProbing(
+                        preflightList,
+                        preflightList?.TotalUncompressedSize ?? 0)
+                    ? PasswordProbe.ChooseProbeEntry(preflightList)
+                    : null;
+                long probeEntrySize = 0;
+                bool skippedOnlyEmptyPasswordBecauseEncrypted = false;
+
+                if (probeEntryPath != null)
+                {
+                    probeEntrySize = preflightList!.Entries
+                        .FirstOrDefault(e => e != null && string.Equals(e.Path, probeEntryPath, StringComparison.Ordinal))?.Size ?? 0;
+                }
+
+                if (PasswordProbe.ShouldSkipEmptyPassword(preflightList))
+                {
+                    int removedEmpty = candidates.RemoveAll(c => string.IsNullOrEmpty(c.Value));
+                    skippedOnlyEmptyPasswordBecauseEncrypted = removedEmpty > 0 && candidates.Count == 0;
+
+                    if (removedEmpty > 0)
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"{task.FileName}：整包已加密 —— 跳过「空密码」这一档（引擎造不出用空密码加密的包，"
+                            + "试它必然白跑一整包）。"
+                            + (candidates.Count == 0 ? "这次没有任何可用密码。" : $"还有 {Math.Min(candidates.Count, maxPasswordAttempts)} 个候选可试。"));
+                    }
+                }
+
+                /*
                  * 本轮候选循环的两笔账（用户 2026-09-24 要求，缺一不可）：
                  * · lastVerification —— 最后一个"解出来了但产物没通过校验"的结论。
                  *   循环跑完还没成功时，它就是**最准确**的失败理由（比泛泛的"密码错误"多出三个数字）；
@@ -8448,6 +8648,45 @@ namespace ArchiveFixer.ViewModels
                     task.Status = StatusText.Extracting;
                     task.ProgressText = StatusText.ProgressProcessing;
                     task.LastUpdatedTime = DateTime.Now;
+
+                    /*
+                     * ===== 候选先过"最小条目"这一关，通过了才去解整包（第 37 条）=====
+                     *
+                     * 探针只解清单里最小的那个文件（≤16 MiB，见 PasswordProbe）；解不开 = 这个候选不对，
+                     * 而**整包一个字节都没动**。挑不出探针时 probeEntryPath 为 null，这里整段跳过（退回老路）。
+                     */
+                    if (probeEntryPath != null)
+                    {
+                        PasswordProbeOutcome probe = await ProbePasswordAsync(
+                            engineArchivePath,
+                            extractOptions,
+                            engineOutputPath,
+                            probeEntryPath,
+                            selectedPassword,
+                            progressSink,
+                            cancellationToken);
+
+                        if (probe == PasswordProbeOutcome.Rejected)
+                        {
+                            hasWrongPassword = true;
+                            task.PasswordStatus = StatusText.WrongPassword;
+
+                            AppendLog(
+                                "WARN",
+                                $"{task.FileName}：密码预检不通过（只解了 {PasswordProbe.Describe(probeEntryPath, probeEntrySize)}，"
+                                + "整包一个字节都没动）—— 这个候选不对，试下一个。");
+
+                            continue;
+                        }
+
+                        if (probe == PasswordProbeOutcome.Verified)
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"{task.FileName}：密码预检通过（{PasswordProbe.Describe(probeEntryPath, probeEntrySize)} 解开了）"
+                                + "—— 这个候选是对的，开始解整包。");
+                        }
+                    }
 
                     AppendLog("INFO", $"{task.FileName}：开始解压，密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
@@ -8655,6 +8894,20 @@ namespace ArchiveFixer.ViewModels
                             task.PasswordStatus = StatusText.WrongPassword;
                             task.ErrorMessage = "密码错误或缺少正确密码";
                         }
+                        else if (skippedOnlyEmptyPasswordBecauseEncrypted)
+                        {
+                            /*
+                             * 加密包 + 一个候选都没有（只跳过的那一档空密码）：如实报"没有可用密码"，
+                             * ⛔ 不许落到"未知解压失败"（那是"我们不知道"的意思，这里我们很清楚）。
+                             */
+                            task.Status = StatusText.WrongPassword;
+                            task.PasswordStatus = StatusText.PasswordNeed;
+                            task.ErrorMessage =
+                                "整包已加密，但这次没有任何可用密码（空密码对已加密的包不可能成立，已跳过，"
+                                + "没有浪费一次整包解压）。";
+
+                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
+                        }
                         else if (lastResult != null)
                         {
                             task.Status = lastResult.Status;
@@ -8770,6 +9023,110 @@ namespace ArchiveFixer.ViewModels
                 cancellationToken);
 
             return new StageProductVerification(list, verification);
+        }
+
+        /// <summary>
+        /// 密码预检的三种结论（用户 2026-09-25 第 37 条）。
+        /// </summary>
+        private enum PasswordProbeOutcome
+        {
+            /// <summary>说不准（引擎给了别的错误 / 超时 / 探针目录写不进去）—— 调用方按老路解整包。</summary>
+            Inconclusive,
+
+            /// <summary>探针解开了：这个候选是对的，可以去解整包。</summary>
+            Verified,
+
+            /// <summary>探针明说密码不对：这个候选作废，整包一个字节都不用动。</summary>
+            Rejected
+        }
+
+        /// <summary>
+        /// 用候选密码**只解一个条目**（清单里最小的那个），验证这个密码对不对（用户 2026-09-25 第 37 条）。
+        ///
+        /// <para>真机代价对比：他那个 12.22 GiB 的包（名字可见、条目加密）用空密码解整包花了 **10 分 18 秒**
+        /// 并写出 12 GiB 垃圾，最后才报密码错误；本方法解一个 1 KiB 的说明文件，**毫秒级**就能否掉同一个候选。</para>
+        ///
+        /// <para>落点：探针产物写在**本任务暂存目录**下的私有子目录里（不变量 12：绝不写工作区之外），
+        /// 无论成败都在 finally 里删掉 —— 校验 / 定稿那两步看到的是"什么都没多出来"的暂存目录。</para>
+        ///
+        /// <para>三种结论的边界刻意保守：**只有引擎明说"密码错误"才判 Rejected**；
+        /// 别的错误（不支持单条目解、读不了、超时）一律 Inconclusive，退回整包试解 ——
+        /// 预检是省时间的手段，⛔ 不许因为它的误判把一个对的密码判死。</para>
+        /// </summary>
+        private async Task<PasswordProbeOutcome> ProbePasswordAsync(
+            string archivePath,
+            ExtractOptions extractOptions,
+            string stageDirectory,
+            string entryPath,
+            string password,
+            TaskProgressSink progressSink,
+            CancellationToken cancellationToken)
+        {
+            string probeDirectory = Path.Combine(stageDirectory, "_密码预检");
+
+            try
+            {
+                Directory.CreateDirectory(probeDirectory);
+            }
+            catch
+            {
+                // 建不出目录（权限 / 盘）：预检做不了，让调用方走老路。
+                return PasswordProbeOutcome.Inconclusive;
+            }
+
+            IReadOnlyList<string> previousEntries = extractOptions.IncludeEntries;
+
+            try
+            {
+                extractOptions.IncludeEntries = new[] { entryPath };
+
+                ArchiveOperationResult result = await _archiveEngine.ExtractAsync(
+                    BuildTrackedRequest(archivePath, password, probeDirectory, progressSink),
+                    extractOptions,
+                    cancellationToken);
+
+                if (result.DetectedErrorType == "Cancelled" || result.Status == StatusText.Cancelled)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+
+                if (result.Success)
+                {
+                    return PasswordProbeOutcome.Verified;
+                }
+
+                if (result.DetectedErrorType == "WrongPassword" || result.Status == StatusText.WrongPassword)
+                {
+                    return PasswordProbeOutcome.Rejected;
+                }
+
+                return PasswordProbeOutcome.Inconclusive;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                // 预检本身出错不是"这个包失败"：退回整包试解，结论仍然由整包那一步说了算。
+                return PasswordProbeOutcome.Inconclusive;
+            }
+            finally
+            {
+                extractOptions.IncludeEntries = previousEntries;
+
+                try
+                {
+                    if (Directory.Exists(probeDirectory))
+                    {
+                        Directory.Delete(probeDirectory, recursive: true);
+                    }
+                }
+                catch
+                {
+                    // 删不掉只影响暂存目录的整洁（那一份马上会被 DiscardStageProductsAsync 整份清掉）。
+                }
+            }
         }
 
         /// <summary>

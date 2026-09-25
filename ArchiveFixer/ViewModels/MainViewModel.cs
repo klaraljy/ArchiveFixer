@@ -3065,10 +3065,14 @@ namespace ArchiveFixer.ViewModels
 
         private void ExportLog()
         {
+            /*
+             * 用户 2026-09-25 第 37 条："不是导出失败日志，是导出所有日志，所有的"。
+             * 所以这里导的是**日志目录里的每一份**（拼成一个文件，带分隔头），不再是"当前这一次"。
+             */
             string path = _dialogService.ShowSaveFileDialog(
-                "导出日志",
+                "导出全部日志",
                 "日志文件 (*.log)|*.log|文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
-                "ArchiveFixer.log");
+                $"ArchiveFixer-全部日志_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
 
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -3077,8 +3081,14 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                _logService.ExportLog(path);
-                _dialogService.ShowInfo("日志已导出。");
+                (int fileCount, int lineCount) = _logService.ExportAllLogs(path);
+
+                AppendLog("INFO", $"全部日志已导出：{path}（{fileCount} 份 / {lineCount} 行）");
+
+                _dialogService.ShowInfo(
+                    fileCount > 0
+                        ? $"全部日志已导出：{fileCount} 份 / {lineCount} 行。{Environment.NewLine}{path}"
+                        : "日志目录里还没有任何日志文件（先跑一次处理再来导出）。");
             }
             catch (Exception ex)
             {

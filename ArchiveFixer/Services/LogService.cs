@@ -370,6 +370,106 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// **导出全部日志**（用户 2026-09-25 第 37 条：不是只导这一次的，是**所有**日志）。
+        ///
+        /// <para>把日志目录里所有 <c>ArchiveFixer_*.log</c> 按文件名排序（= 时间顺序，最旧在前）
+        /// 拼成一个文件，每份前面写一行分隔头（文件名 + 大小 + 行数），末尾写一行合计。
+        /// 内容一律过 <see cref="PasswordMasker"/>（与"导出日志 / 导出失败清单"同一口径）。</para>
+        ///
+        /// <para>读不出来的那一份**跳过但记一行**（被别的程序占用 / 权限）：绝不因为一份坏了就什么都不导。</para>
+        /// </summary>
+        /// <returns>导出的日志份数与行数（写成 <c>(0, 0)</c> 表示日志目录里一份都没有）。</returns>
+        public (int FileCount, int LineCount) ExportAllLogs(string targetPath)
+        {
+            if (string.IsNullOrWhiteSpace(targetPath))
+            {
+                return (0, 0);
+            }
+
+            string? directory = Path.GetDirectoryName(targetPath);
+
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var builder = new StringBuilder();
+
+            builder.AppendLine("ArchiveFixer 日志 —— 全部日志（本程序写过的每一份都在这里）");
+            builder.AppendLine($"导出时间：{FormatTimestamp(DateTime.Now)}");
+            builder.AppendLine($"日志目录：{LogDirectory}");
+            builder.AppendLine();
+
+            int fileCount = 0;
+            int lineCount = 0;
+            var skipped = new List<string>();
+
+            foreach (string file in EnumerateLogFilesOldestFirst())
+            {
+                string fileName = Path.GetFileName(file);
+
+                string[] lines;
+
+                try
+                {
+                    lines = File.ReadAllLines(file);
+                }
+                catch (Exception ex)
+                {
+                    skipped.Add($"{fileName}（{PasswordMasker.Sanitize(ex.Message)}）");
+                    continue;
+                }
+
+                builder.AppendLine("================================================================================");
+                builder.AppendLine($"# {fileName}（{lines.Length} 行）");
+                builder.AppendLine("================================================================================");
+
+                foreach (string line in lines)
+                {
+                    builder.AppendLine(line);
+                }
+
+                builder.AppendLine();
+
+                fileCount++;
+                lineCount += lines.Length;
+            }
+
+            if (skipped.Count > 0)
+            {
+                builder.AppendLine("--------------------------------------------------------------------------------");
+                builder.AppendLine("以下日志这次没能读出来（被占用或没有权限）：" + string.Join("、", skipped));
+            }
+
+            builder.AppendLine("--------------------------------------------------------------------------------");
+            builder.AppendLine($"合计：{fileCount} 份日志 / {lineCount} 行。");
+
+            File.WriteAllText(targetPath, PasswordMasker.Sanitize(builder.ToString()), new UTF8Encoding(false));
+
+            return (fileCount, lineCount);
+        }
+
+        /// <summary>日志目录里的日志文件，按文件名排序（= 时间顺序，最旧在前）。</summary>
+        private IEnumerable<string> EnumerateLogFilesOldestFirst()
+        {
+            try
+            {
+                if (!Directory.Exists(LogDirectory))
+                {
+                    return Array.Empty<string>();
+                }
+
+                return Directory.EnumerateFiles(LogDirectory, "ArchiveFixer_*.log", SearchOption.TopDirectoryOnly)
+                    .OrderBy(x => Path.GetFileName(x), StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+            catch
+            {
+                return Array.Empty<string>();
+            }
+        }
+
+        /// <summary>
         /// 导出当前日志。
         /// </summary>
         public bool ExportLog(string targetPath)

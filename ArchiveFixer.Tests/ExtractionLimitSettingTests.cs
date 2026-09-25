@@ -278,8 +278,7 @@ namespace ArchiveFixer.Tests
             /*
              * 盘不够是"清盘 / 换盘"，与"调上限"是两件事 —— 混在一起会让用户去改错的东西。
              * 造法与 SecurityGuardTests 里那条一样：四条上限全部放开，只让"空间"这一条命中
-             * （估算值 = 当前可用 + 1 字节）。⚠ 它与磁盘余量赛跑（别人释放 ≥1 字节就可能翻盘），
-             * 全量并发下偶发假红时单跑即知 —— 与既有的那条同一性质，不是产品缺陷。
+             * （估算值 = 当前可用 + 1 GiB —— 留足余量，免得别的进程刚释放几字节就把结论翻过来）。现在要 1 GiB 的余量才会翻盘（比"可用 + 1 字节"稳得多），全量并发下基本不会再假红。
              */
             string tempPath = Path.GetTempPath();
             long? freeSpace = ArchiveFixer.Storage.SpaceChecker.GetAvailableFreeSpace(tempPath);
@@ -300,7 +299,7 @@ namespace ArchiveFixer.Tests
             };
 
             BudgetCheckResult result = new ResourceBudget(options).CheckBeforeExtract(
-                ListingWithLargestEntry(freeSpace.Value + 1, "huge.bin"),
+                ListingWithLargestEntry(freeSpace.Value + (1024L * 1024 * 1024), "huge.bin"),
                 archiveSizeBytes: 0,
                 targetDirectory: tempPath);
 
