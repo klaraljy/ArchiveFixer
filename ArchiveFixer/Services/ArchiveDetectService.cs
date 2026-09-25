@@ -17,13 +17,15 @@ namespace ArchiveFixer.Services
     /// 1. 读取文件头。
     /// 2. 通过魔数判断真实格式。
     /// 3. 文件头不认识时，再读文件尾部找"内嵌归档"（双面文件）。
-    /// 4. 返回 DetectResult。
-    /// 5. 判断后缀状态。
-    /// 6. 将识别结果应用到 ArchiveTask。
+    /// 4. 尾部没命中时，顺序扫一遍找 RAR / 7z 魔数与"不在末尾的 ZIP"（第 38 / 40 条）。
+    /// 5. 返回 DetectResult。
+    /// 6. 判断后缀状态。
+    /// 7. 将识别结果应用到 ArchiveTask。
     /// 
     /// 注意：
-    /// 这里只读取文件头（34 KB）和"认识不出来时"的文件尾部（128 KB），
-    /// 不读取整个大文件。
+    /// 这里只读取文件头（34 KB）和"认识不出来时"的文件尾部（256 KB）；
+    /// 只有尾部那条路也没命中时才会顺序扫一遍（上限 512 MiB，命中即停），
+    /// **正常包一个字节都不多读**。
     /// </summary>
     public class ArchiveDetectService
     {
@@ -73,6 +75,10 @@ namespace ArchiveFixer.Services
                  */
                 if (headerResult.Format == "Unknown")
                 {
+                    /*
+                     * 尾部那 256 KB 里找 ZIP 的 EOCD（最便宜的一条：只读尾部）。
+                     * 这一条覆盖"视频/图片 + 尾部整包"的全部真实样本（第 33/38 条那批）。
+                     */
                     DetectResult? embeddedResult = DetectEmbeddedArchive(filePath, headerResult);
 
                     if (embeddedResult != null)
@@ -81,18 +87,36 @@ namespace ArchiveFixer.Services
                     }
 
                     /*
-                     * ZIP 那条路（尾部 EOCD 反推起点）没命中时，再从头扫一遍 RAR / 7z 的签名
-                     * （用户 2026-09-25 第 38 条追加）。
+                     * 尾部那条路没命中时，**一遍顺序扫**同时找两样东西（用户 2026-09-25 第 40 条）：
+                     * ①RAR / 7z 的魔数（第 38 条追加：这两种格式的目录结构不支持从尾部反推起点，
+                     *   实测前缀 20 MB 时连引擎都报"不是归档"，只能自己定位起点、抠出来再解）；
+                     * ②ZIP 的 EOCD 候选（第 40 条：ZIP 前面垫了图片、**后面还垫了数据**时，
+                     *   尾部 256 KB 里根本没有 EOCD，整条"从尾部反推"的路失效）。
                      *
-                     * 为什么必须有这一档：RAR / 7z 的目录结构**不支持**从尾部反推起点，
-                     * 而实测"封面.jpg + 资料.rar"这种形状在前缀 20 MB 时，7-Zip 与 UnRAR
-                     * 都直接报"不是归档"—— 不自己定位起点、抠出来，就永远解不了。
+                     * 为什么合成一遍扫：两条路在"都没命中"时要各读一遍整文件，
+                     * 一批几十个包就是白读几十遍 —— 一次 IO 拿两个结论，代价只算一次。
                      */
-                    DetectResult? tailResult = DetectTailArchive(filePath, headerResult);
+                    TailArchiveScanResult scan = TailArchiveScanner.Scan(filePath);
 
-                    if (tailResult != null)
+                    /*
+                     * 优先级：**自洽校验通过的 ZIP 优先于一个孤零零的魔数**。
+                     * 理由：魔数只有 7 个字节，它可能只是 ZIP **里面装着的一个 RAR 文件**
+                     * （打包者常这么套），而 ZIP 候选要过"中央目录签名 + 局部文件头"两条位置校验，
+                     * 是实打实的"这里有一个 ZIP"（判据见 EmbeddedArchiveDetector，一个字没放宽）。
+                     */
+                    if (scan.ZipEocdOffsets.Count > 0)
                     {
-                        return tailResult;
+                        EmbeddedArchiveInfo middle = EmbeddedArchiveDetector.DetectAt(filePath, scan.ZipEocdOffsets);
+
+                        if (middle.Found)
+                        {
+                            return BuildEmbeddedResult(filePath, middle, headerResult);
+                        }
+                    }
+
+                    if (scan.Archive != null)
+                    {
+                        return BuildTailArchiveResult(filePath, scan.Archive, headerResult);
                     }
                 }
 
@@ -113,9 +137,10 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// 文件头不认识、ZIP 也没在尾部命中时，再从头扫 RAR / 7z 的签名（用户 2026-09-25 第 38 条追加）。
+        /// 文件头不认识、尾部那 256 KB 也没命中 ZIP、顺序扫也没找到 RAR / 7z 魔数时，
+        /// 把扫出来的归档签名落成识别结论（用户 2026-09-25 第 38 条追加）。
         ///
-        /// <para>命中时的结论与 ZIP 那条路**同一形状**：<see cref="DetectResult.Format"/> 是真实格式、
+        /// <para>结论与 ZIP 那条路**同一形状**：<see cref="DetectResult.Format"/> 是真实格式、
         /// <see cref="DetectResult.EmbeddedArchiveOffset"/> 是起点，管线照旧"抠出 [起点, 末尾) → 交给引擎"。</para>
         ///
         /// <para>两点如实说明：①**终点取文件末尾** —— RAR / 7z 没有 ZIP 那种能算出精确终点的结构，
@@ -123,15 +148,8 @@ namespace ArchiveFixer.Services
         /// ②<see cref="DetectResult.EmbeddedDirectReadSupported"/> 一定是 <c>false</c> ——
         /// 内置直读器只会解 ZIP，RAR / 7z 必须走"抠取 + 引擎"。</para>
         /// </summary>
-        private DetectResult? DetectTailArchive(string filePath, DetectResult headerResult)
+        private DetectResult BuildTailArchiveResult(string filePath, TailArchiveSignature signature, DetectResult headerResult)
         {
-            TailArchiveSignature? signature = TailArchiveScanner.Find(filePath);
-
-            if (signature == null)
-            {
-                return null;
-            }
-
             long end = headerResult.EmbeddedArchiveEnd;
 
             if (end <= signature.Offset)
@@ -177,11 +195,18 @@ namespace ArchiveFixer.Services
         {
             EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(filePath);
 
-            if (!info.Found)
-            {
-                return null;
-            }
+            return info.Found ? BuildEmbeddedResult(filePath, info, headerResult) : null;
+        }
 
+        /// <summary>
+        /// 把一个"命中了的"内嵌归档结论落成 <see cref="DetectResult"/>。
+        ///
+        /// <para>两条路共用这一份：①尾部 256 KB 里找到 EOCD（<see cref="EmbeddedArchiveDetector.Detect"/>）；
+        /// ②整文件顺序扫找到 EOCD（<see cref="EmbeddedArchiveDetector.DetectAt"/>，第 40 条）。
+        /// 共用是刻意的 —— 直读探查、置信度、文案口径只允许有一处。</para>
+        /// </summary>
+        private static DetectResult BuildEmbeddedResult(string filePath, EmbeddedArchiveInfo info, DetectResult headerResult)
+        {
             /*
              * 顺手做一次**只读**的直读探查（用户 2026-09-24 需求第 7 条）。
              *
@@ -193,7 +218,10 @@ namespace ArchiveFixer.Services
              * 探查失败 / 抛异常一律按"不支持"处理（返回 false + 原因），绝不因此让识别失败：
              * 那时解压侧会照旧回落到抠取 + 7z，一切与今天一样。
              */
-            EmbeddedZipProbeResult directRead = EmbeddedZipStreamExtractor.Probe(filePath, info.Offset, info.ArchiveEnd);
+            EmbeddedZipProbeResult directRead = EmbeddedZipStreamExtractor.Probe(
+                filePath,
+                info.Offset,
+                info.ArchiveEnd);
 
             /*
              * 加密的 AES 内嵌包（百度网盘那种分享包）在识别阶段**拿不到密码**，探出来是"不支持"；

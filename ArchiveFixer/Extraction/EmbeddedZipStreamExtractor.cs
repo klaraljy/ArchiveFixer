@@ -1259,18 +1259,18 @@ namespace ArchiveFixer.Extraction
              * 源文件用 FileShare.Read（而不是探查时的 ReadWrite）：写出去的必须是**一致**的一段字节，
              * 别人正在写这个文件时宁可失败，也不要把"改了一半"的内容当成产物 —— 那会变成一个更难查的"文件损坏"。
              */
+            /*
+             * ⚠ 最后那个 FileOptions **必须**是随机访问、不能改成 SequentialScan：直读的读法本身就是随机的 ——
+             * 先读文件末尾的中央目录，再按每个条目的本地头 seek 过去读数据（条目之间还可能跳着走）。
+             * 标成顺序扫描会让缓存管理器不做"按需预读"（反而更慢）。
+             * 真正省时间的是上面那个 4 MiB 缓冲（用户 2026-09-25 第 38 条：不换盘也要省）。
+             */
             using var source = new FileStream(
                 sourcePath,
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
                 CopyBufferSize,
-                /*
-                 * ⚠ 这里**必须**是随机访问、不能改成 SequentialScan：直读的读法本身就是随机的 ——
-                 * 先读文件末尾的中央目录，再按每个条目的本地头 seek 过去读数据（条目之间还可能跳着走）。
-                 * 标成顺序扫描会让缓存管理器不做"按需预读"（反而更慢）。
-                 * 真正省时间的是上面那个 4 MiB 缓冲（用户 2026-09-25 第 38 条：不换盘也要省）。
-                 */
                 FileOptions.RandomAccess);
 
             var stopwatch = Stopwatch.StartNew();

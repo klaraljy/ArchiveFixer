@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace ArchiveFixer.Detection
 {
@@ -117,6 +119,85 @@ namespace ArchiveFixer.Detection
         private static readonly byte[] Zip64EndOfCentralDirectoryLocatorSignature = { 0x50, 0x4B, 0x06, 0x07 };
 
         /// <summary>
+        /// 按**已知的 EOCD 候选偏移**做自洽校验（用户 2026-09-25 第 40 条）：ZIP 不在文件末尾
+        /// （前面垫了图片、后面还垫了别的数据）时，尾部那 256 KB 里根本没有 EOCD，
+        /// <see cref="Detect"/> 那条"从尾部反推"的路整条失效 —— 候选偏移由
+        /// <c>TailArchiveScanner</c> 的那一遍顺序扫提供。
+        ///
+        /// <para><b>判据一个字没放宽</b>：每个候选仍然要过 <see cref="TryEvaluateCandidate"/>
+        /// 那三关（中央目录签名落在算出来的位置、归档起点正好是局部文件头、ZIP64 占位符要能解析）。
+        /// 所以"用一个偏移列表就能问出结论"这件事，安全性完全等于原来那条路 ——
+        /// 扫到的 <c>PK\x05\x06</c> 命中再多，不自洽就一个都不认。</para>
+        ///
+        /// <para>校验顺序 = **从后往前**（与 <see cref="Detect"/> 同一口径：真正的 EOCD 更可能靠后）。</para>
+        /// </summary>
+        /// <param name="filePath">待检测文件。</param>
+        /// <param name="eocdOffsets">EOCD 候选的绝对偏移（顺序无所谓，内部按偏移降序试）。</param>
+        public static EmbeddedArchiveInfo DetectAt(string filePath, IReadOnlyList<long>? eocdOffsets)
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath) || eocdOffsets == null || eocdOffsets.Count == 0)
+            {
+                return NotFound(string.Empty);
+            }
+
+            try
+            {
+                long fileLength = new FileInfo(filePath).Length;
+
+                using var stream = new FileStream(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite,
+                    bufferSize: 4096,
+                    FileOptions.RandomAccess);
+
+                foreach (long offset in eocdOffsets.OrderByDescending(o => o))
+                {
+                    // EOCD 必须完整落在文件里：签名在、字段被截断的情况在这里显式判掉。
+                    if (offset < 0 || offset + EndOfCentralDirectoryLength > fileLength)
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * 只读"这个候选自己那 98 字节"（ZIP64 收尾 76 + EOCD 22）——
+                     * 不是把整个尾部读进来：候选可能散在几 GB 之外，靠窗口大小去覆盖是不现实的。
+                     */
+                    long from = Math.Max(0, offset - Zip64FooterLength);
+                    int length = (int)(offset + EndOfCentralDirectoryLength - from);
+                    byte[] window = ReadAt(stream, from, length);
+
+                    if (window.Length < length)
+                    {
+                        continue;
+                    }
+
+                    EmbeddedArchiveInfo? hit = TryEvaluateCandidate(
+                        stream,
+                        window,
+                        from,
+                        (int)(offset - from),
+                        fileLength,
+                        scanned: true);
+
+                    if (hit != null)
+                    {
+                        return hit;
+                    }
+                }
+
+                return NotFound(
+                    $"扫到 {eocdOffsets.Count} 处 ZIP 收尾候选，但没有一处自洽（中央目录位置与 EOCD 对不上），不是内嵌归档。");
+            }
+            catch (Exception)
+            {
+                // 与 Detect 同一口径：兜底分支里的任何意外都只能得出"没找到"。
+                return NotFound(string.Empty);
+            }
+        }
+
+        /// <summary>
         /// 读文件尾部、**从后往前**枚举所有 <c>PK\x05\x06</c>（EOCD）候选，逐个做自洽校验；
         /// 第一个通过的候选就是结论。
         ///
@@ -222,12 +303,17 @@ namespace ArchiveFixer.Detection
         /// <summary>
         /// 校验一个 EOCD 候选。通过返回结论，不通过返回 null（调用方继续往前找下一个候选）。
         /// </summary>
+        /// <param name="scanned">
+        /// 候选是从**整文件顺序扫**里来的（= ZIP 可能不在文件末尾），只影响文案与
+        /// <see cref="EmbeddedArchiveInfo.ArchiveEnd"/> 之后的字节怎么称呼；判据一个字不变。
+        /// </param>
         private static EmbeddedArchiveInfo? TryEvaluateCandidate(
             FileStream stream,
             byte[] tail,
             long tailStart,
             int eocdIndex,
-            long fileLength)
+            long fileLength,
+            bool scanned = false)
         {
             // EOCD 必须完整落在读到的尾部里：签名在、字段被截断的情况在这里显式判掉（不拿异常当控制流）。
             if (eocdIndex + EndOfCentralDirectoryLength > tail.Length)
@@ -286,7 +372,8 @@ namespace ArchiveFixer.Detection
                         zip64CdOffset,
                         zip64EntryCount < 0 ? entryCount16 : zip64EntryCount,
                         archiveEnd,
-                        fileLength);
+                        fileLength,
+                        scanned);
 
                     if (hit != null)
                     {
@@ -313,7 +400,8 @@ namespace ArchiveFixer.Detection
                     cdOffset32,
                     entryCount16,
                     archiveEnd,
-                    fileLength);
+                    fileLength,
+                    scanned);
             }
 
             /*
@@ -334,7 +422,8 @@ namespace ArchiveFixer.Detection
             long cdOffset,
             long entryCount,
             long archiveEnd,
-            long fileLength)
+            long fileLength,
+            bool scanned = false)
         {
             if (cdSize < 0 || cdOffset < 0)
             {
@@ -384,6 +473,15 @@ namespace ArchiveFixer.Detection
 
             long tailAfterEocd = fileLength - archiveEnd;
 
+            /*
+             * 文案必须说清"藏在哪里"：尾部那条路（EOCD 离文件末尾十几 KB）与"前后都垫了数据"
+             * 是两种形状，用户要照着这句话判断该把哪一段抠出来（第 36 条那次的教训：
+             * 报告里的路径/区间写歪一点，读起来就像程序自己截断了）。
+             */
+            string where = scanned
+                ? $"文件里藏着一个 ZIP（前面 {delta} 字节是别的数据，例如图片/视频），需要用偏移取出后才能解压"
+                : $"文件尾部藏着一个 ZIP（前面 {delta} 字节是别的数据，例如视频），需要用偏移取出后才能解压";
+
             return new EmbeddedArchiveInfo
             {
                 Found = true,
@@ -394,10 +492,12 @@ namespace ArchiveFixer.Detection
                 EntryCount = (int)Math.Min(entryCount, int.MaxValue),
                 ArchiveLength = archiveLength,
                 Message =
-                    $"文件尾部藏着一个 ZIP（前面 {delta} 字节是别的数据，例如视频），需要用偏移取出后才能解压。" +
+                    $"{where}。" +
                     $"ZIP 区间：{delta}–{archiveEnd}，条目数：{entryCount}，需要取出 {archiveLength} 字节" +
                     (tailAfterEocd > 0
-                        ? $"；EOCD 之后还有 {tailAfterEocd} 字节尾部数据，不属于归档，抠取时按 {archiveEnd} 截断。"
+                        ? scanned
+                            ? $"；归档之后还有 {tailAfterEocd} 字节尾部数据（前后都垫了东西），抠取时按 {archiveEnd} 截断。"
+                            : $"；EOCD 之后还有 {tailAfterEocd} 字节尾部数据，不属于归档，抠取时按 {archiveEnd} 截断。"
                         : "。")
             };
         }
