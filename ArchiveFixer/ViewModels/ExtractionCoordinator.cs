@@ -8589,6 +8589,14 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = "密码错误或缺少正确密码";
                     }
 
+                    // 「容器里装的是分卷第一卷」那一档：把引擎那句与事实相反的话补正（第 42 条）。
+                    string volumeHint = BuildEmbeddedVolumeMissingHint(task, extractResult.DetectedErrorType);
+
+                    if (!string.IsNullOrEmpty(volumeHint))
+                    {
+                        task.ErrorMessage = task.ErrorMessage + " " + volumeHint;
+                    }
+
                     AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
                 }
             }
@@ -8877,6 +8885,14 @@ namespace ArchiveFixer.ViewModels
                     task.Status = extractResult.Status;
                     task.ErrorMessage = extractResult.Message;
 
+                    // 同上面那处：内嵌归档 + 分卷缺失时补一句事实（第 42 条）。
+                    string volumeHint = BuildEmbeddedVolumeMissingHint(task, extractResult.DetectedErrorType);
+
+                    if (!string.IsNullOrEmpty(volumeHint))
+                    {
+                        task.ErrorMessage = task.ErrorMessage + " " + volumeHint;
+                    }
+
                     AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
 
                     break;
@@ -8965,8 +8981,23 @@ namespace ArchiveFixer.ViewModels
                         }
                         else if (lastResult != null)
                         {
+                            /*
+                             * 候选循环里那条失败结论会走到这里**再落一次**（状态与原因都按最后那次引擎结果来）。
+                             *
+                             * ⚠ 为什么"容器里装的是分卷第一卷"那句补充必须**在这里也补一遍**（第 42 条实测踩到）：
+                             * 上面那个分支里我们已经把补充说明接在 `task.ErrorMessage` 后面了，
+                             * 但这里会把整条消息**重新赋值**（= 覆盖），于是失败清单里又只剩引擎那句
+                             * "后续卷、缺少首卷"——与事实正好相反。日志里有、清单里没有，用户看到的还是错的。
+                             */
                             task.Status = lastResult.Status;
                             task.ErrorMessage = lastResult.Message;
+
+                            string volumeHint = BuildEmbeddedVolumeMissingHint(task, lastResult.DetectedErrorType);
+
+                            if (!string.IsNullOrEmpty(volumeHint))
+                            {
+                                task.ErrorMessage = task.ErrorMessage + " " + volumeHint;
+                            }
                         }
                         else
                         {
@@ -9577,7 +9608,111 @@ namespace ArchiveFixer.ViewModels
         {
             string baseName = FileNameHelper.SanitizeFileName(FileNameHelper.GetArchiveBaseName(task.CurrentPath));
 
+            /*
+             * ⚠ 后缀**刻意**还是 `.zip`，哪怕抠出来的其实是 7z / RAR（用户 2026-09-25 第 42 条实测过才留下的）：
+             *
+             * · 完整的归档（容器里就是一整个 7z / RAR）**不看后缀**：两个引擎都按魔数认格式
+             *   （本机实测：完整 7z 与完整 RAR 各自改名成 `封面.zip`，`7z l` / `UnRAR l` 都退出码 0 并列出条目）；
+             * · 而"容器里装的是分卷的**第一卷**"时，后缀会改变引擎的判决：
+             *   叫 `封面.zip` → 引擎报的是「分卷缺失」这一类（成因说得对）；
+             *   叫 `封面.7z` → 引擎改口说「**文件损坏**」（把"缺后续卷"说成了"包坏了"，用户会去怀疑文件）。
+             *   实测三种命名（同一段第一卷字节）：`.zip` → Is not archive / 分卷缺失一类；
+             *   `.7z` 与 `.7z.001` → Unexpected end of archive（被归到"文件损坏"）。
+             *   所以这里**不许**"顺手改成真实格式的后缀" —— 那会把最需要说清的那一档说歪。
+             *   回归 = `SplitInsideContainerTests` 里那两条引擎行为证据。
+             */
             return Path.Combine(_pathService.BuildTaskWorkDirectory(task), baseName + ".zip");
+        }
+
+        /// <summary>
+        /// 内嵌归档 + 引擎报「分卷缺失」时补一句事实（用户 2026-09-25 第 42 条）。
+        ///
+        /// <para>真 7z 实测的现场：`封面.jpg` 里装着的**正是** `set.7z.001`，后续卷 `set.7z.002/.003`
+        /// 就在同一个目录里。抠出来交给引擎之后，引擎按**名字**找同组的其他卷 ——
+        /// 抠出来的那一段没有卷名，于是报"这是后续卷、缺少首卷"，而事实正好相反：
+        /// 首卷在我们手上，缺的是"名字对得上的后续卷"。用户拿着那句话只会去满盘找首卷。</para>
+        ///
+        /// <para>判据全部来自文件系统（<see cref="OrphanVolumeSetDetector"/> 是纯函数）：
+        /// 任务确实有内嵌归档 + 引擎报的确实是分卷缺失类 + 同目录里确实存在"缺首卷的那一组"。
+        /// 三条缺一条就返回空串（⛔ 不猜、不拼凑）。</para>
+        /// </summary>
+        private string BuildEmbeddedVolumeMissingHint(ArchiveTask task, string? detectedErrorType)
+        {
+            if (task == null || task.EmbeddedArchiveOffset <= 0)
+            {
+                return string.Empty;
+            }
+
+            if (!IsVolumeMissingErrorType(detectedErrorType))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                string directory = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return string.Empty;
+                }
+
+                IReadOnlyList<OrphanVolumeSet> orphans = OrphanVolumeSetDetector.Find(
+                    CollectVolumeFilesInDirectory(directory).Select(Path.GetFileName));
+
+                if (orphans.Count == 0)
+                {
+                    return string.Empty;
+                }
+
+                /*
+                 * 只有一组时才敢说——两组以上说明这个目录里缺首卷的组不止一个，
+                 * 我们无法确定容器里装的是哪一组（⛔ 宁可不说，也不指错组）。
+                 */
+                if (orphans.Count > 1)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{task.FileName}：同目录里有 {orphans.Count} 组缺首卷的分卷，无法确定容器里装的是哪一组；" +
+                        "这一条补充说明就不给了（失败原因仍是引擎报的那一条）。");
+
+                    return string.Empty;
+                }
+
+                string hint = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.EmbeddedFirstVolumeHintFormat,
+                    orphans[0].Describe(),
+                    task.FileName);
+
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.EmbeddedFirstVolumeHintLogFormat,
+                        task.FileName,
+                        orphans[0].Describe()));
+
+                return hint;
+            }
+            catch
+            {
+                // 补充说明拿不到就算了：失败原因本身仍然成立，绝不因为这句让结论变化。
+                return string.Empty;
+            }
+        }
+
+        /// <summary>引擎报的是不是"分卷缺失"这一类（7-Zip 与 UnRAR 两套错误码都认）。</summary>
+        private static bool IsVolumeMissingErrorType(string? detectedErrorType)
+        {
+            if (string.IsNullOrWhiteSpace(detectedErrorType))
+            {
+                return false;
+            }
+
+            return string.Equals(detectedErrorType, EngineErrorTypes.VolumeMissing, StringComparison.Ordinal)
+                || string.Equals(detectedErrorType, Engines.SevenZip.SevenZipOutputParser.MissingFirstVolumeErrorType, StringComparison.Ordinal)
+                || string.Equals(detectedErrorType, "VolumeMissing", StringComparison.Ordinal);
         }
 
         /// <summary>
