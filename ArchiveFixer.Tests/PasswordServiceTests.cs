@@ -40,6 +40,84 @@ public class PasswordServiceTests
         Assert.Equal("abc", service.Passwords[0].Value);
     }
 
+    /// <summary>
+    /// **列表式密码自带冒号**（资源站密码十有八九长这样：<c>abc:123</c>、<c>www.xxx.com:8888</c>）：
+    /// 候选链必须两种理解都试 —— 冒号右侧**和整行**。
+    ///
+    /// <para>修复前（2026-09-25 第 30 条）：含冒号的行一律按"名称:密码"切，只有右侧进候选，
+    /// **正确的整行从来没被试过** —— 用户看到的就是"密码本第一条就是这个包的密码，却一直密码错误"。</para>
+    ///
+    /// <para>顺序也要钉住：整行排在显式密码之后（正常的几百行映射式密码本只是尾部多些噪音候选，
+    /// 不会把真正要试的那几条挤出单层尝试上限）。</para>
+    /// </summary>
+    [Fact]
+    public void GetPasswordCandidates_列表式密码带冒号_整行也要进候选且排在列表之后()
+    {
+        string file = Path.Combine(Path.GetTempPath(), "af_pw_colon_" + Guid.NewGuid().ToString("N") + ".txt");
+
+        try
+        {
+            File.WriteAllLines(file, new[] { "abc:123", "plain" });
+
+            var service = new PasswordService();
+            service.ImportPasswordList(file);
+
+            var task = new ArchiveTask("C:\\x.zip");
+            List<PasswordItem> candidates = service.GetPasswordCandidates(
+                task,
+                string.Empty,
+                service.Passwords,
+                tryEmptyFirst: false);
+
+            Assert.Equal(new[] { "123", "plain", "abc:123" }, candidates.Select(c => c.Value));
+
+            PasswordItem rawLine = Assert.Single(candidates, c => c.Source == "BookRawLine");
+            Assert.Equal("abc:123", rawLine.Value);
+            Assert.DoesNotContain("abc:123", rawLine.Remark ?? string.Empty, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    /// <summary>
+    /// 正常的**映射式**密码本不能被这次改动打乱：命中的那条仍然是第一优先（<c>BookMapped</c>），
+    /// 整行只是排在后面的噪音候选（真实场景里它永远试不到，因为前面已经成功）。
+    /// </summary>
+    [Fact]
+    public void GetPasswordCandidates_映射式命中仍然排第一_整行排在后面()
+    {
+        string file = Path.Combine(Path.GetTempPath(), "af_pw_map_" + Guid.NewGuid().ToString("N") + ".txt");
+
+        try
+        {
+            File.WriteAllLines(file, new[] { "资源A:passA" });
+
+            var service = new PasswordService();
+            service.ImportPasswordList(file);
+
+            var task = new ArchiveTask("C:\\资源A.zip");
+            List<PasswordItem> candidates = service.GetPasswordCandidates(
+                task,
+                string.Empty,
+                service.Passwords,
+                tryEmptyFirst: false);
+
+            Assert.Equal("passA", candidates[0].Value);
+            Assert.Equal("BookMapped", candidates[0].Source);
+            Assert.Contains(candidates, c => c.Source == "BookRawLine" && c.Value == "资源A:passA");
+            Assert.True(
+                candidates.FindIndex(c => c.Source == "BookMapped") <
+                candidates.FindIndex(c => c.Source == "BookRawLine"),
+                "映射式命中必须排在整行那一档之前");
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
     [Fact]
     public void ImportPasswordList_DeduplicatesKeepingFirstOrder()
     {

@@ -47,6 +47,17 @@ namespace ArchiveFixer.Password
         public string? Remark { get; init; }
 
         /// <summary>
+        /// 映射式条目的**整行原文**（例：<c>abc:123</c>）；列表式与空密码标记为 null。
+        ///
+        /// <para><b>为什么必须留着它</b>（2026-09-25 第 30 条）：「映射式还是列表式」只能靠"这一行里有没有冒号"
+        /// 来猜，而**列表式的密码本身完全可能带冒号** —— <c>abc:123</c>、<c>www.xxx.com:8888</c>
+        /// 这类资源站密码很常见。那种情况下冒号右侧根本不是密码，**整行才是**。
+        /// 于是候选链要"两种理解都试"（见 <c>PasswordService.GetPasswordCandidates</c> 的 BookRawLine 一档），
+        /// 而密码列表界面上一条都不多（整行只在候选链里出现）。</para>
+        /// </summary>
+        public string? RawLine { get; init; }
+
+        /// <summary>
         /// 脱敏显示，避免手滑把本对象丢进日志或绑定到界面时泄露明文。
         /// </summary>
         public override string ToString()
@@ -431,6 +442,7 @@ namespace ArchiveFixer.Password
                 Name = trimmedName,
                 Kind = PasswordEntryKind.Mapped,
                 LineNumber = lineNumber,
+                RawLine = line,
                 Remark = $"来自第 {lineNumber} 行，名称：{trimmedName}"
             };
 

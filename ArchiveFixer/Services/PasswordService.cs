@@ -944,6 +944,29 @@ namespace ArchiveFixer.Services
             }
 
             /*
+             * 密码本里那些"按映射式切过"的行：再把**整行**试一遍（2026-09-25 第 30 条）。
+             *
+             * 为什么（真会咬人的形态）：映射式与列表式只能靠"行里有没有冒号"猜，而列表式的密码本身
+             * 完全可能带冒号（`abc:123`、`www.xxx.com:8888`）。那种书里，我们一直在拿冒号**右侧**当密码试，
+             * 正确的整行**从来没有被试过** —— 用户看到的就是"密码本第一条就是这个包的密码，却一直密码错误"。
+             *
+             * 位置：排在显式给的密码（统一密码 / 密码列表）**之后**，所以对正常的映射式密码本
+             * （几百行的"资源名:密码"）只是尾部多了些噪音候选，不会把用户真正要试的那几条挤出尝试上限。
+             */
+            foreach (PasswordEntry entry in _bookEntries)
+            {
+                if (entry == null || entry.Kind != PasswordEntryKind.Mapped || string.IsNullOrEmpty(entry.RawLine))
+                {
+                    continue;
+                }
+
+                AddCandidate(
+                    entry.RawLine!,
+                    "BookRawLine",
+                    $"密码本（第 {entry.LineNumber} 行整行）");
+            }
+
+            /*
              * 同目录说明文件里的密码：**显式开启才用**。
              * 它是"猜"出来的候选，所以排在用户明确给的密码之后（AGENTS.md §9.4）。
              */
@@ -1223,6 +1246,8 @@ namespace ArchiveFixer.Services
                 "TaskPassword" => "尝试单任务密码：******",
                 "GlobalPassword" => "尝试统一密码：******",
                 "ImportedList" => $"尝试密码列表第 {index} 项：******",
+                // 密码本里按映射式切过的那一行，按"整行就是密码"再试一次（列表式密码可能自带冒号）。
+                "BookRawLine" => $"尝试密码本整行（第 {index} 项）：******",
                 "ManualList" => $"尝试手动密码第 {index} 项：******",
                 // 一键处理/批量开始前那一次询问得到的密码（ExtractionCoordinator.ManualPasswordSource）：
                 // 以前它走 default 分支，日志里写成"密码候选第 N 项"，看不出这个密码是用户当场给的

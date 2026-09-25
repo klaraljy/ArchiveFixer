@@ -129,6 +129,15 @@ namespace ArchiveFixer.Services
              */
             EmbeddedZipProbeResult directRead = EmbeddedZipStreamExtractor.Probe(filePath, info.Offset, info.ArchiveEnd);
 
+            /*
+             * 加密的 AES 内嵌包（百度网盘那种分享包）在识别阶段**拿不到密码**，探出来是"不支持"；
+             * 但它其实只差一个密码 —— 解压那一刻候选密码一到就能直读（见 ExtractionCoordinator）。
+             * 所以这里按"能直读"记：空间账面上不该为一笔**根本不会发生**的抠取副本预留空间
+             * （40 GB 的双面文件被那笔虚假占用卡在空间门上，是实打实的误拦）。
+             * 密码不对时是硬失败（PasswordRejected），同样不会抠副本 —— 这个乐观是准的。
+             */
+            bool directReadApplies = directRead.Supported || directRead.RequiresPassword;
+
             return new DetectResult
             {
                 Format = "ZIP",
@@ -141,8 +150,8 @@ namespace ArchiveFixer.Services
                 Confidence = 80,
                 EmbeddedArchiveOffset = info.Offset,
                 EmbeddedArchiveEnd = info.ArchiveEnd,
-                EmbeddedDirectReadSupported = directRead.Supported,
-                EmbeddedDirectReadReason = directRead.Supported
+                EmbeddedDirectReadSupported = directReadApplies,
+                EmbeddedDirectReadReason = directReadApplies
                     ? string.Empty
                     : (directRead.PathRejected ? directRead.Message : directRead.Reason)
             };

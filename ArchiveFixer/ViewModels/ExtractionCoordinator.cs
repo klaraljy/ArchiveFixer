@@ -7374,6 +7374,46 @@ namespace ArchiveFixer.ViewModels
              */
             EmbeddedZipProbeResult? directZip = null;
 
+            /*
+             * 密码候选表：**必须在直读探查之前**算出来（2026-09-25 第 29 条）。
+             *
+             * 为什么顺序重要：内嵌归档可能是**加密的**（百度网盘那种分享包就是 AES-256），
+             * 而 7-Zip 对 AES 包的密码只按 ANSI 字节派生 —— 它永远打不开 UTF-8 打包的中文密码。
+             * 所以直读那一步要拿着候选密码自己去解（内置 ZIP-AES 读取器，两种字节编码都试），
+             * 解开了就**不用**再抠一份等大的副本、也不用去问 7z。
+             */
+            List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
+                task,
+                Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
+                _passwordService.Passwords,
+                Settings.TryEmptyPasswordFirst,
+                Settings.EnableSidecarPassword);
+
+            if (candidates.Count == 0)
+            {
+                candidates.Add(new PasswordItem
+                {
+                    Value = string.Empty,
+                    Source = "Empty",
+                    IsEnabled = true,
+                    Remark = "空密码"
+                });
+            }
+
+            /*
+             * 本批手动输入的密码（如果用户答过）插进候选里。
+             *
+             * 位置：空密码之后、密码本之前 —— 见 InsertManualPasswordCandidate 的说明。
+             * 它天然参与下面的"每层尝试上限"，所以不会让加密分卷的候选循环变成无限循环（不变量 8）。
+             */
+            InsertManualPasswordCandidate(candidates, _manualBatchPassword);
+
+            /*
+             * 直读/抠取两条路共用的候选值表。⛔ 只活在内存里：日志里只说"第 N 个候选 + 哪种字节编码"，
+             * 绝不出密码明文（AGENTS.md §8）。
+             */
+            List<string> candidatePasswords = candidates.Select(c => c.Value ?? string.Empty).ToList();
+
             if (task.EmbeddedArchiveOffset > 0)
             {
                 long carveBytes = 0;
@@ -7421,12 +7461,29 @@ namespace ArchiveFixer.ViewModels
                         task.CurrentPath,
                         task.EmbeddedArchiveOffset,
                         task.EmbeddedArchiveEnd,
-                        engineOutputPath);
+                        engineOutputPath,
+                        candidatePasswords,
+                        cancellationToken);
 
                     if (directZip.Supported)
                     {
                         // 上一次回落留下的抠取副本：本次直读用不到它，先清掉（见方法说明）。
                         DiscardStaleCarvedArtifact(task);
+
+                        if (directZip.ResolvedPasswordIndex > 0)
+                        {
+                            /*
+                             * 加密包（AES）解锁成功：这句话必须说清"是哪一档候选、按哪种字节解开的"，
+                             * 因为**7-Zip 在同样一个包上只会报"密码错误"**（它只按 ANSI 字节派生密码）——
+                             * 用户拿着正确的中文密码却反复失败，根因就在这里（2026-09-25 第 29 条）。
+                             * ⛔ 只说序号与编码，不说密码（AGENTS.md §8）。
+                             */
+                            AppendLog(
+                                "INFO",
+                                $"{task.FileName}：内嵌归档是加密包（AES），直读已用第 {directZip.ResolvedPasswordIndex} 个候选密码" +
+                                $"（按{ZipAesCrypto.DescribeEncoding(directZip.ResolvedPasswordEncoding)}）通过校验与认证码 —— " +
+                                "7-Zip 对这类包只按 ANSI 字节派生密码，交给它会一律报密码错误，所以本次由内置读取器解。");
+                        }
 
                         AppendLog(
                             "INFO",
@@ -7448,6 +7505,24 @@ namespace ArchiveFixer.ViewModels
                          * 白白拷一份等大的副本没有任何意义。文案与既有那条逐字一致。
                          */
                         task.Status = StatusText.ExtractFailed;
+                        task.ErrorMessage = directZip.Message;
+                        task.LastUpdatedTime = DateTime.Now;
+
+                        AppendLog("ERROR", $"{task.FileName}：{directZip.Message}");
+                        return;
+                    }
+                    else if (directZip.PasswordRejected)
+                    {
+                        /*
+                         * 加密包、候选密码一个都没通过：**硬失败，同样不回落**。
+                         *
+                         * 为什么这次连"抠出来交给 7z 试试"都不做：7-Zip 对 AES 包的密码只按 ANSI 字节派生
+                         * （实测把归档的 UTF-8 声明手工清掉/置上都一样），百度网盘那种按 UTF-8 打包的包
+                         * 在它那里**必然**再报一次密码错误 —— 回落只会白拷一份等大的副本（用户明说过
+                         * "我不希望有这么多的失败残留"）。而内置读取器两种字节都试过了，试不出来就是真没有。
+                         */
+                        task.Status = StatusText.WrongPassword;
+                        task.PasswordStatus = StatusText.WrongPassword;
                         task.ErrorMessage = directZip.Message;
                         task.LastUpdatedTime = DateTime.Now;
 
@@ -7544,32 +7619,6 @@ namespace ArchiveFixer.ViewModels
                         $"实际使用 {engineArchivePath} 解压。");
                 }
             }
-
-            List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
-                task,
-                Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
-                _passwordService.Passwords,
-                Settings.TryEmptyPasswordFirst,
-                Settings.EnableSidecarPassword);
-
-            if (candidates.Count == 0)
-            {
-                candidates.Add(new PasswordItem
-                {
-                    Value = string.Empty,
-                    Source = "Empty",
-                    IsEnabled = true,
-                    Remark = "空密码"
-                });
-            }
-
-            /*
-             * 本批手动输入的密码（如果用户答过）插进候选里。
-             *
-             * 位置：空密码之后、密码本之前 —— 见 InsertManualPasswordCandidate 的说明。
-             * 它天然参与下面的"每层尝试上限"，所以不会让加密分卷的候选循环变成无限循环（不变量 8）。
-             */
-            InsertManualPasswordCandidate(candidates, _manualBatchPassword);
 
             /*
              * 密码候选的**硬上限**（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
@@ -7937,6 +7986,7 @@ namespace ArchiveFixer.ViewModels
                 await RunEmbeddedZipDirectExtractionAsync(
                     task,
                     directZip,
+                    candidatePasswords,
                     preflightList,
                     engineOutputPath,
                     outputRedirectNote,
@@ -8681,6 +8731,7 @@ namespace ArchiveFixer.ViewModels
         private async Task RunEmbeddedZipDirectExtractionAsync(
             ArchiveTask task,
             EmbeddedZipProbeResult plan,
+            IReadOnlyList<string> passwordCandidates,
             ArchiveListResult? knownList,
             string stageDirectory,
             string outputRedirectNote,
@@ -8708,7 +8759,9 @@ namespace ArchiveFixer.ViewModels
                     task.EmbeddedArchiveEnd,
                     stageDirectory,
                     progress,
-                    cancellationToken),
+                    cancellationToken,
+                    budgetOptions: null,
+                    passwords: passwordCandidates),
                 cancellationToken);
 
             if (!extract.Success)
@@ -8729,7 +8782,11 @@ namespace ArchiveFixer.ViewModels
             AppendLog("INFO", $"{task.FileName}：ZIP 直读完成 —— {extract.Message}");
 
             task.Status = StatusText.ExtractSuccess;
-            task.PasswordStatus = StatusText.PasswordNotNeeded;
+            /*
+             * 密码状态按**实际发生的事**写：加密包是被内置读取器用候选密码解开的，
+             * 写成"不需要密码"会让报告与失败清单误导人（不变量 14 的同一口径）。
+             */
+            task.PasswordStatus = extract.WasEncrypted ? StatusText.PasswordCorrect : StatusText.PasswordNotNeeded;
             task.ErrorMessage = string.Empty;
 
             /*
@@ -8739,7 +8796,10 @@ namespace ArchiveFixer.ViewModels
              */
             task.EngineVerdict =
                 $"{EmbeddedZipStreamExtractor.ReaderDisplayName} 读出 {extract.FileCount} 个文件 / {extract.WrittenBytes} 字节" +
-                "（未调用 7-Zip，未生成临时副本）";
+                "（未调用 7-Zip，未生成临时副本）" +
+                (extract.WasEncrypted
+                    ? $"；密码：第 {extract.ResolvedPasswordIndex} 个候选用{ZipAesCrypto.DescribeEncoding(extract.ResolvedPasswordEncoding)}解开"
+                    : string.Empty);
 
             bool conclusionStands = await PostProcessSuccessAsync(
                 task,

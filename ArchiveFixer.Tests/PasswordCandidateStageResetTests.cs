@@ -109,6 +109,42 @@ namespace ArchiveFixer.Tests
                 "失败时不许留下任何非空产物（0 字节桩文件更不算产物）");
         }
 
+        /// <summary>
+        /// **中文密码**必须原样送到引擎（用户 2026-09-25 真机追问："我那个密码是中文的就没有办法了吗"）。
+        ///
+        /// <para>为什么单独钉一条：中文密码要穿过四道关 —— 密码本/手工输入的字符串、候选链、
+        /// 引擎参数（<c>ArgumentList</c>，不经 cmd）、引擎自己的编码。任何一道把它弄成乱码，
+        /// 用户看到的就是"密码明明对却一直密码错误"，而日志里因为脱敏**看不出**是编码坏了。</para>
+        ///
+        /// <para>⚠ 样本用 **7z 格式**造（不是 ZIP）：7-Zip 的 ZIP 编码器**拒绝非 ASCII 密码**
+        /// （实测 `7z a -tzip -p中文密码 …` 直接 `System ERROR: 参数错误`，退出码 2）。
+        /// 这条测的是"我们这一侧把中文密码原样送到了引擎"（**7z 格式**的密码在归档里是 UTF-16，
+        /// 没有编码歧义，所以它必然解得开）。
+        ///
+        /// <para>⛔ **别把这一条读成"中文密码在 ZIP 上也没问题"**：ZIP 的 AES 只认字节，
+        /// 7-Zip 解码时只按 ANSI(936) 派生密钥，而网盘分享包按 UTF-8 派生 ——
+        /// 那才是用户真机上"密码对却报密码错误"的根因（2026-09-25 第 29 条），
+        /// 由 `ZipAesDirectReadTests` 那一组负责钉住（含"真 7z 拿着正确中文密码必须解不开"）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 中文密码_原样送到引擎并能解开()
+        {
+            const string chinesePassword = "中文密码ABC";
+
+            string package = BuildEncrypted7zPackage(chinesePassword);
+
+            Harness harness = CreateHarness(new[] { chinesePassword });
+            ArchiveTask task = AddTask(harness, package);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            string payload = Assert.Single(Directory.GetFiles(task.OutputPath, "payload.bin", SearchOption.AllDirectories));
+
+            Assert.Equal(PayloadText, File.ReadAllText(payload));
+        }
+
         private async Task RunScenarioAsync(string[] bookPasswords)
         {
             string package = BuildEncryptedZipPackage();
@@ -143,6 +179,27 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// 用**内置 7z** 造一个加密的 7z 包（内容物是一个 <c>payload.bin</c>）—— 给中文密码那条用：
+        /// 7-Zip 的 **ZIP** 编码器拒绝非 ASCII 密码（实测），但 **7z 格式**接受（AES-256）。
+        /// </summary>
+        private string BuildEncrypted7zPackage(string password)
+        {
+            string stage = Path.Combine(_root, "stage7z");
+            string packageDirectory = Path.Combine(_root, "packages7z");
+
+            Directory.CreateDirectory(stage);
+            Directory.CreateDirectory(packageDirectory);
+
+            File.WriteAllText(Path.Combine(stage, "payload.bin"), PayloadText);
+
+            string package = Path.Combine(packageDirectory, "pack.7z");
+
+            Assert.True(RunSevenZip(stage, "a", "-t7z", "-p" + password, package, "payload.bin"), "造 7z 样本失败");
+
+            return package;
+        }
+
+        /// <summary>
         /// 用**内置 7z** 造一个 AES-256 加密的 ZIP（内容物是一个 <c>payload.bin</c>）。
         ///
         /// <para>为什么必须是 AES：这个 bug 的触发点正是"7z 用错密码时先建 0 字节桩文件、再报错"，
@@ -160,22 +217,32 @@ namespace ArchiveFixer.Tests
 
             string package = Path.Combine(packageDirectory, "pack.zip");
 
+            Assert.True(
+                RunSevenZip(stage, "a", "-tzip", "-mem=AES256", "-p" + CorrectPassword, package, "payload.bin"),
+                "造样本失败");
+
+            Assert.True(File.Exists(package), "样本没有造出来");
+
+            return package;
+        }
+
+        /// <summary>跑一次内置 7z（<c>ArgumentList</c>，与产品同一条路），返回是否成功。</summary>
+        private static bool RunSevenZip(string workingDirectory, params string[] arguments)
+        {
             var startInfo = new ProcessStartInfo
             {
                 FileName = ToolLocator.Default.SevenZipExePath,
-                WorkingDirectory = stage,
+                WorkingDirectory = workingDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
 
-            startInfo.ArgumentList.Add("a");
-            startInfo.ArgumentList.Add("-tzip");
-            startInfo.ArgumentList.Add("-mem=AES256");
-            startInfo.ArgumentList.Add("-p" + CorrectPassword);
-            startInfo.ArgumentList.Add(package);
-            startInfo.ArgumentList.Add("payload.bin");
+            foreach (string argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
 
             using Process process = Process.Start(startInfo)!;
 
@@ -183,10 +250,7 @@ namespace ArchiveFixer.Tests
             process.StandardError.ReadToEnd();
             process.WaitForExit();
 
-            Assert.True(process.ExitCode == 0, $"造样本失败（7z 退出码 {process.ExitCode}）");
-            Assert.True(File.Exists(package), "样本没有造出来");
-
-            return package;
+            return process.ExitCode == 0;
         }
 
         private Harness CreateHarness(IEnumerable<string> bookPasswords)

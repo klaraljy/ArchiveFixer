@@ -33,11 +33,26 @@ namespace ArchiveFixer.Extraction
 
         public bool IsDirectory { get; init; }
 
-        /// <summary>压缩方法（0 = stored，8 = deflate）。</summary>
+        /// <summary>压缩方法（0 = stored，8 = deflate）。AES 条目这里是**真方法**（解密之后再按它解压）。</summary>
         public int Method { get; init; }
 
         /// <summary>本地文件头相对 ZIP 起点的偏移（数据从哪里开始要从它往后数）。</summary>
         public long LocalHeaderOffset { get; init; }
+
+        /// <summary>
+        /// AES 强度字节（1/2/3 = AES-128/192/256）；0 = 不是 AES 条目。
+        ///
+        /// <para>为什么把"是不是 AES"记在条目上：读数据时要用它决定
+        /// "密文从哪里开始、有多长" —— 那份开销（盐 16 + 校验值 2 + 认证码 10 = 28 字节）
+        /// 已经算在中央目录声明的压缩后大小里了。</para>
+        /// </summary>
+        public int AesStrength { get; init; }
+
+        /// <summary>这条是不是加密条目（AES 或老式 ZipCrypto 都算）。</summary>
+        public bool IsEncrypted { get; init; }
+
+        /// <summary>AES 条目：密文总长（= 压缩后大小 − 28）。不是 AES 条目时为 0。</summary>
+        public long CipherLength => AesStrength == 0 ? 0 : CompressedSize - ZipAesCrypto.OverheadLength;
     }
 
     /// <summary>
@@ -58,7 +73,25 @@ namespace ArchiveFixer.Extraction
         /// <summary>条目名预检未通过 = **硬失败**，不是回落信号（见类注释）。</summary>
         public bool PathRejected { get; init; }
 
-        /// <summary>硬失败时给用户看的那句话（与既有"归档里有不安全的条目"同一口径，可直接落 task.ErrorMessage）。</summary>
+        /// <summary>
+        /// 加密条目：候选密码**一个都没通过校验** = **硬失败**，不是回落信号。
+        ///
+        /// <para>为什么不能回落：回落那条路是"抠出副本 + 7z"，而 7-Zip 对 AES 包的密码只按
+        /// ANSI 字节派生（无视归档里的 UTF-8 声明），UTF-8 打包的中文密码在它那里**永远**是"密码错误"。
+        /// 回落只会白拷一份等大的副本，再报一次同样的错 —— 那正是用户 2026-09-25 报的现场。</para>
+        /// </summary>
+        public bool PasswordRejected { get; init; }
+
+        /// <summary>
+        /// 这份归档**只差一个密码就能直读**（里面是 AES 条目，而这次没给候选密码）。
+        ///
+        /// <para>识别阶段（拿不到密码）用得上它：空间账面上要按"不需要那份等大的临时副本"算，
+        /// 否则一个 40 GB 的加密双面文件会被一笔根本不会发生的抠取副本卡在空间门上。
+        /// 密码不对时是 <see cref="PasswordRejected"/>（硬失败），同样不会抠副本 —— 所以这个乐观是准的。</para>
+        /// </summary>
+        public bool RequiresPassword { get; init; }
+
+        /// <summary>硬失败时给用户看的那句话（与 <see cref="PathRejected"/> 同一口径）。</summary>
         public string Message { get; init; } = string.Empty;
 
         /// <summary>条目清单（含目录条目）。</summary>
@@ -81,6 +114,17 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>清单里所有文件条目的原始大小合计（进度分母）。</summary>
         public long TotalBytes { get; init; }
+
+        /// <summary>
+        /// 解锁成功的那个候选在调用方给的候选表里的序号（1 起；0 = 这份归档没加密、不需要密码）。
+        ///
+        /// <para>⛔ 这里刻意**不**放密码明文：调用方拿序号去自己的候选表里取备注（已经是脱敏的），
+        /// 日志与结论里都只说"第 N 个候选 + 哪种字节编码"（AGENTS.md §8）。</para>
+        /// </summary>
+        public int ResolvedPasswordIndex { get; init; }
+
+        /// <summary>解锁成功时用的是哪种密码字节编码（<see cref="ResolvedPasswordIndex"/> 为 0 时无意义）。</summary>
+        public ZipAesPasswordEncoding ResolvedPasswordEncoding { get; init; }
     }
 
     /// <summary>
@@ -104,6 +148,15 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>落盘的条目清单（与 <see cref="EmbeddedZipProbeResult.Entries"/> 同一个口径）。</summary>
         public IReadOnlyList<EmbeddedZipEntry> Entries { get; init; } = Array.Empty<EmbeddedZipEntry>();
+
+        /// <summary>解密用掉的候选密码序号（1 起；0 = 没加密）。⛔ 不放密码明文。</summary>
+        public int ResolvedPasswordIndex { get; init; }
+
+        /// <summary>解密时生效的密码字节编码。</summary>
+        public ZipAesPasswordEncoding ResolvedPasswordEncoding { get; init; }
+
+        /// <summary>是不是加密包（AES）。报告与日志里要说清"这次是按哪种字节解开的"。</summary>
+        public bool WasEncrypted { get; init; }
     }
 
     /// <summary>
@@ -183,12 +236,25 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para><paramref name="targetDirectory"/> 给了才会算每个条目的落盘路径并复核"在本任务输出根之内"；
         /// 识别阶段（空间核算）拿不到目标目录，传 null 即可 —— 那时只做条目名层面的预检。</para>
+        ///
+        /// <para><paramref name="passwords"/> 是候选密码表（按尝试顺序，可含空密码）。加密条目（AES）
+        /// 会在这里被**逐个候选 × 两种字节编码**试一遍（校验值 + 认证码两道，见 <see cref="ZipAesCrypto"/>）：
+        /// 有一个通过就返回 <c>Supported = true</c> 并记下它是第几个候选；一个都不通过返回
+        /// <see cref="EmbeddedZipProbeResult.PasswordRejected"/>（**硬失败，绝不回落抠取**）。
+        /// 传 null（识别阶段 / 不加密的包）时，遇到加密条目仍然返回"不支持"这个**回落信号**。</para>
+        ///
+        /// <para><paramref name="confirmResolvedPassword"/> 为 true 时，命中的候选还要用**认证码**确认
+        /// （要顺序读完整段密文，几百 MB 的条目约 1 秒）；<see cref="Extract"/> 内部传 false ——
+        /// 它马上就会真正解密，而那一步本来就会逐条验认证码，重复读一遍纯属浪费。</para>
         /// </summary>
         public static EmbeddedZipProbeResult Probe(
             string? sourcePath,
             long offset,
             long archiveEnd,
-            string? targetDirectory = null)
+            string? targetDirectory = null,
+            IReadOnlyList<string>? passwords = null,
+            CancellationToken cancellationToken = default,
+            bool confirmResolvedPassword = true)
         {
             try
             {
@@ -210,7 +276,7 @@ namespace ArchiveFixer.Extraction
                     bufferSize: 4096,
                     FileOptions.RandomAccess);
 
-                return Parse(stream, offset, end, targetDirectory);
+                return Parse(stream, offset, end, targetDirectory, passwords, cancellationToken, confirmResolvedPassword);
             }
             catch (Exception ex)
             {
@@ -231,6 +297,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         /// <param name="progress">进度回调（0–100，按"已写出字节 / 清单里的总原始字节"算；≥ 每 250 ms 一次）。</param>
         /// <param name="budgetOptions">资源上限；null = <see cref="ResourceBudgetOptions.Default"/>。</param>
+        /// <param name="passwords">候选密码表（加密的 AES 内嵌包要用；顺序 = 尝试顺序）。</param>
         public static EmbeddedZipExtractResult Extract(
             string? sourcePath,
             long offset,
@@ -238,7 +305,8 @@ namespace ArchiveFixer.Extraction
             string targetDirectory,
             IProgress<int>? progress = null,
             CancellationToken cancellationToken = default,
-            ResourceBudgetOptions? budgetOptions = null)
+            ResourceBudgetOptions? budgetOptions = null,
+            IReadOnlyList<string>? passwords = null)
         {
             if (!TryResolveRange(sourcePath, offset, archiveEnd, out string source, out long end, out string rangeError))
             {
@@ -257,16 +325,31 @@ namespace ArchiveFixer.Extraction
                 return Failure($"无法创建直读解压的落点目录：{targetDirectory}", unsupported: false);
             }
 
-            EmbeddedZipProbeResult plan = Probe(source, offset, end, targetRoot);
+            /*
+             * confirmResolvedPassword: false —— 命中的候选不再单独读一遍密文去验认证码：
+             * 紧接着的 ExtractCore 会把每个条目的认证码都验一遍（那是必须做的一步），
+             * 在这里再读一遍等于把几百 MB 到 2 GB 的密文白白多读一次。
+             */
+            EmbeddedZipProbeResult plan = Probe(
+                source,
+                offset,
+                end,
+                targetRoot,
+                passwords,
+                cancellationToken,
+                confirmResolvedPassword: false);
 
             if (!plan.Supported)
             {
-                // 路径硬失败也走这里：调用方按 PathRejected 区分"回落到抠取"与"直接判失败"。
+                /*
+                 * 路径硬失败与"密码一个都没对"都走这里：调用方按 PathRejected / PasswordRejected
+                 * 区分"回落到抠取"与"直接判失败"（后者回落只会白拷一份等大的副本）。
+                 */
                 return new EmbeddedZipExtractResult
                 {
                     Success = false,
-                    Unsupported = !plan.PathRejected,
-                    Message = plan.PathRejected ? plan.Message : plan.Reason,
+                    Unsupported = !plan.PathRejected && !plan.PasswordRejected,
+                    Message = plan.PathRejected || plan.PasswordRejected ? plan.Message : plan.Reason,
                     Entries = plan.Entries
                 };
             }
@@ -293,6 +376,19 @@ namespace ArchiveFixer.Extraction
             var written = new List<string>();
             var createdDirectories = new List<string>();
 
+            /*
+             * 解锁成功的那个密码（列表里的第 ResolvedPasswordIndex 个）取出来往下传：
+             * 解密要的是**明文密码 + 编码**，而不是"第几个候选"。
+             * 它只活在这一个调用栈里，绝不进日志、报告与异常文本（AGENTS.md §8）。
+             */
+            string resolvedPassword = string.Empty;
+
+            if (plan.ResolvedPasswordIndex > 0 && passwords != null &&
+                plan.ResolvedPasswordIndex <= passwords.Count)
+            {
+                resolvedPassword = passwords[plan.ResolvedPasswordIndex - 1] ?? string.Empty;
+            }
+
             try
             {
                 return ExtractCore(
@@ -300,6 +396,7 @@ namespace ArchiveFixer.Extraction
                     offset,
                     end,
                     plan,
+                    resolvedPassword,
                     targetRoot,
                     tracker,
                     written,
@@ -326,7 +423,14 @@ namespace ArchiveFixer.Extraction
         /// 逐个试而不是"只看最后一个"的理由见 <c>EmbeddedArchiveDetector</c>：
         /// 真实现场里 EOCD 之后还有十几 KB 正常数据，那些数据里完全可能再出现一次同样的字节序列。
         /// </summary>
-        private static EmbeddedZipProbeResult Parse(FileStream stream, long offset, long end, string? targetDirectory)
+        private static EmbeddedZipProbeResult Parse(
+            FileStream stream,
+            long offset,
+            long end,
+            string? targetDirectory,
+            IReadOnlyList<string>? passwords,
+            CancellationToken cancellationToken,
+            bool confirmResolvedPassword)
         {
             long zipLength = end - offset;
             int windowLength = (int)Math.Min(zipLength, TailBytes);
@@ -354,6 +458,9 @@ namespace ArchiveFixer.Extraction
                     offset,
                     zipLength,
                     targetDirectory,
+                    passwords,
+                    cancellationToken,
+                    confirmResolvedPassword,
                     out string? reason);
 
                 if (reason != null)
@@ -385,6 +492,9 @@ namespace ArchiveFixer.Extraction
             long offset,
             long zipLength,
             string? targetDirectory,
+            IReadOnlyList<string>? passwords,
+            CancellationToken cancellationToken,
+            bool confirmResolvedPassword,
             out string? structuralReason)
         {
             structuralReason = null;
@@ -499,7 +609,10 @@ namespace ArchiveFixer.Extraction
                 zipLength,
                 cdRelStart,
                 entryCount,
-                targetDirectory);
+                targetDirectory,
+                passwords,
+                cancellationToken,
+                confirmResolvedPassword);
         }
 
         /// <summary>
@@ -515,12 +628,16 @@ namespace ArchiveFixer.Extraction
             long zipLength,
             long cdRelStart,
             long declaredEntryCount,
-            string? targetDirectory)
+            string? targetDirectory,
+            IReadOnlyList<string>? passwords,
+            CancellationToken cancellationToken,
+            bool confirmResolvedPassword)
         {
             var entries = new List<EmbeddedZipEntry>();
             var listEntries = new List<ArchiveEntry>();
             int index = 0;
             long totalBytes = 0;
+            bool hasAesEntry = false;
 
             while (index < centralDirectory.Length)
             {
@@ -582,9 +699,51 @@ namespace ArchiveFixer.Extraction
                 }
 
                 // 通用位标志 bit0 = 加密。
-                if ((flags & 0x0001) != 0)
+                bool isEncrypted = (flags & ZipAesCrypto.EncryptedFlag) != 0;
+                int aesStrength = 0;
+
+                if (isEncrypted)
                 {
-                    return CandidateEvaluation.Unsupported($"归档里有加密条目（{name}），直读不支持");
+                    /*
+                     * 加密条目分两种，能不能直读差别很大（2026-09-25 第 29 条）：
+                     *
+                     * · **AES（method = 99）**：加密方式写在扩展字段 0x9901 里，我们按规范自己解
+                     *   （<see cref="ZipAesCrypto"/>）。这条路必须自己走 —— 7-Zip 对 AES 包的密码
+                     *   只按 ANSI 字节派生，百度网盘那种"UTF-8 打包"的中文密码在它那里永远报密码错误。
+                     * · **老式 ZipCrypto**：本读取器不做，仍是"不支持"（回落到抠取 + 7z 是对的，7z 解它没问题）。
+                     *
+                     * ⚠ 这里必须**立刻返回**，不能"记一笔、continue 到循环末尾再统一报"：
+                     * 中央目录的游标 `index += …` 在循环体末尾，`continue` 会把它跳过 → 死循环空转
+                     * （2026-09-25 实测：全量测试卡在这条路上二十多分钟，进程 0.79 核空转、不碰磁盘）。
+                     */
+                    if (method != ZipAesCrypto.AesMethod)
+                    {
+                        return CandidateEvaluation.Unsupported($"归档里有加密条目（{name}），直读不支持");
+                    }
+
+                    ReadAesExtra(centralDirectory, extraIndex, extraLength, out aesStrength, out int actualMethod);
+
+                    if (ZipAesCrypto.KeyLengthForStrength(aesStrength) == 0)
+                    {
+                        return CandidateEvaluation.Unsupported(
+                            $"条目 {name} 声明了认不出的 AES 强度（{aesStrength}），直读不支持");
+                    }
+
+                    if (actualMethod != 0 && actualMethod != 8)
+                    {
+                        return CandidateEvaluation.Unsupported(
+                            $"条目 {name} 的 AES 内层压缩方法 {actualMethod} 直读不支持（只认 stored / deflate）");
+                    }
+
+                    if (compressedSize < ZipAesCrypto.OverheadLength + 1)
+                    {
+                        return CandidateEvaluation.Unsupported(
+                            $"条目 {name} 的压缩后大小 {compressedSize} 放不下 AES 的盐与认证码，直读不支持");
+                    }
+
+                    // method 换成**真方法**：解密之后要按它解压（下游只看 Method，不关心它原来写着 99）。
+                    method = actualMethod;
+                    hasAesEntry = true;
                 }
 
                 if (method != 0 && method != 8)
@@ -633,7 +792,9 @@ namespace ArchiveFixer.Extraction
                     CompressedSize = compressedSize,
                     IsDirectory = isDirectory,
                     Method = method,
-                    LocalHeaderOffset = localOffset
+                    LocalHeaderOffset = localOffset,
+                    AesStrength = isDirectory ? 0 : aesStrength,
+                    IsEncrypted = isEncrypted
                 });
 
                 index += CentralDirectoryHeaderLength + nameLength + extraLength + entryCommentLength;
@@ -643,6 +804,48 @@ namespace ArchiveFixer.Extraction
                 (declaredEntryCount > 0 && entries.Count != declaredEntryCount))
             {
                 return CandidateEvaluation.NotACandidate;
+            }
+
+            /*
+             * 加密包没有候选密码：仍然返回"不支持"这个**回落信号**（外加"只差一个密码"这个标记）。
+             * 识别阶段（ArchiveDetectService）就是这条路径 —— 那里拿不到密码，也不该在识别时猜密码；
+             * 但空间核算要知道"只要给对密码就能直读"，否则会为一笔不会发生的抠取副本预留空间。
+             */
+            if (hasAesEntry && (passwords == null || passwords.Count == 0))
+            {
+                return CandidateEvaluation.NeedsPassword("归档里有加密条目（AES），直读需要密码");
+            }
+
+            int resolvedPasswordIndex = 0;
+            ZipAesPasswordEncoding resolvedEncoding = ZipAesPasswordEncoding.Utf8;
+
+            if (hasAesEntry)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!TryResolvePassword(
+                        stream,
+                        offset,
+                        entries,
+                        passwords!,
+                        cancellationToken,
+                        confirmResolvedPassword,
+                        out resolvedPasswordIndex,
+                        out resolvedEncoding,
+                        out string passwordReason))
+                {
+                    /*
+                     * 一个候选都没通过 = **硬失败**，绝不回落抠取：
+                     * 抠取 + 7-Zip 这条路对 UTF-8 打包的 AES 中文密码**必然**再报一次"密码错误"，
+                     * 只会白拷一份等大的副本（用户 2026-07-… 那种 980 MB 级副本 + 失败残留的现场）。
+                     */
+                    return CandidateEvaluation.PasswordRejected(
+                        passwordReason,
+                        entries,
+                        listEntries,
+                        totalBytes,
+                        isEncrypted: true);
+                }
             }
 
             // 路径预检：与正常解压**同一处实现**（AGENTS.md §6 第 4 条），不另写一份。
@@ -657,10 +860,10 @@ namespace ArchiveFixer.Extraction
                     totalBytes);
             }
 
-            if (!TryBuildOutputPaths(entries, targetDirectory, out string pathReason))
+            if (!TryBuildOutputPaths(entries, targetDirectory, out string pathReason2))
             {
                 return CandidateEvaluation.PathRejected(
-                    "归档里的条目落点不安全，已拒绝解压：" + pathReason,
+                    "归档里的条目落点不安全，已拒绝解压：" + pathReason2,
                     entries,
                     listEntries,
                     totalBytes);
@@ -675,7 +878,7 @@ namespace ArchiveFixer.Extraction
                     TotalUncompressedSize = totalBytes,
                     FileCount = listEntries.Count(e => !e.IsDirectory),
                     DirectoryCount = listEntries.Count(e => e.IsDirectory),
-                    IsEncrypted = false,
+                    IsEncrypted = hasAesEntry,
                     IsMultiVolume = false,
                     EngineId = "embedded-zip-direct",
                     EngineVersion = EmbeddedZipStreamExtractorVersion,
@@ -683,7 +886,246 @@ namespace ArchiveFixer.Extraction
                 },
                 totalBytes,
                 offset,
-                offset + zipLength);
+                offset + zipLength,
+                resolvedPasswordIndex,
+                resolvedEncoding);
+        }
+
+        /// <summary>
+        /// 读 AES 扩展字段（<c>0x9901</c>，7 字节）：版本(2) + 厂商标识 "AE"(2) + 强度(1) + **真压缩方法**(2)。
+        ///
+        /// <para>⚠ 真方法必须从这里读：中央目录与方法字段写的是 99（= "是 AES"），
+        /// 数据其实还是先按 stored/deflate 处理再加密的。少了这一步会把密文当 deflate 解，得到垃圾或异常。</para>
+        /// </summary>
+        private static void ReadAesExtra(
+            byte[] extra,
+            int extraIndex,
+            int extraLength,
+            out int strength,
+            out int actualMethod)
+        {
+            strength = 0;
+            actualMethod = -1;
+
+            int end = extraIndex + extraLength;
+            int cursor = extraIndex;
+
+            while (cursor + 4 <= end)
+            {
+                int id = BitConverter.ToUInt16(extra, cursor);
+                int size = BitConverter.ToUInt16(extra, cursor + 2);
+                int body = cursor + 4;
+
+                if (body + size > end)
+                {
+                    return;
+                }
+
+                if (id == 0x9901 && size >= 7)
+                {
+                    strength = extra[body + 4];
+                    actualMethod = BitConverter.ToUInt16(extra, body + 5);
+                    return;
+                }
+
+                cursor = body + size;
+            }
+        }
+
+        /// <summary>
+        /// 逐个候选密码 × 两种字节编码试开第一条 AES 条目：
+        /// 先用两字节校验值筛（PBKDF2 1000 轮，约 0.5 ms 一次，够便宜），
+        /// 再用**认证码**确认（HMAC-SHA1 覆盖整段密文 —— 校验值只有 2 字节，1/65536 的巧合必须由它兜住）。
+        ///
+        /// <para>顺序上先试 UTF-8：百度网盘那种分享包在归档里就声明着 <c>Encrypt UTF8</c>，
+        /// 而它恰恰是 7-Zip 打不开的那一类；WinRAR 那类按 ANSI 打包的包会在第二档命中。</para>
+        /// </summary>
+        private static bool TryResolvePassword(
+            FileStream stream,
+            long offset,
+            List<EmbeddedZipEntry> entries,
+            IReadOnlyList<string> passwords,
+            CancellationToken cancellationToken,
+            bool confirmResolvedPassword,
+            out int resolvedIndex,
+            out ZipAesPasswordEncoding resolvedEncoding,
+            out string reason)
+        {
+            resolvedIndex = 0;
+            resolvedEncoding = ZipAesPasswordEncoding.Utf8;
+            reason = string.Empty;
+
+            EmbeddedZipEntry? probeEntry = entries.FirstOrDefault(e => !e.IsDirectory && e.AesStrength != 0);
+
+            if (probeEntry == null)
+            {
+                return true;
+            }
+
+            if (!TryGetAesDataLayout(stream, offset, probeEntry, out AesDataLayout layout, out string layoutError))
+            {
+                reason = layoutError;
+                return false;
+            }
+
+            int pvMatched = 0;
+
+            for (int i = 0; i < passwords.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                foreach (ZipAesPasswordEncoding encoding in new[]
+                         {
+                             ZipAesPasswordEncoding.Utf8,
+                             ZipAesPasswordEncoding.AnsiCodePage
+                         })
+                {
+                    if (!ZipAesCrypto.TryDeriveKeys(
+                            passwords[i] ?? string.Empty,
+                            encoding,
+                            layout.Salt,
+                            probeEntry.AesStrength,
+                            out ZipAesKeys? keys,
+                            out _))
+                    {
+                        continue;
+                    }
+
+                    if (keys!.PasswordVerifier != layout.PasswordVerifier)
+                    {
+                        continue;
+                    }
+
+                    pvMatched++;
+
+                    /*
+                     * 校验值撞上了：用认证码确认。
+                     * 这一步要顺序读完整段密文（几百 MB 的条目约 1 秒），所以只在"校验值对了"时才做 ——
+                     * 一个候选都不对时，整轮尝试仍是毫秒级。
+                     */
+                    if (!confirmResolvedPassword || ConfirmByAuthenticationCode(stream, layout, keys, cancellationToken))
+                    {
+                        resolvedIndex = i + 1;
+                        resolvedEncoding = encoding;
+                        return true;
+                    }
+                }
+            }
+
+            reason = pvMatched > 0
+                ? $"这个内嵌 ZIP 是 AES 加密的（{ZipAesCrypto.DescribeStrength(probeEntry.AesStrength)}），" +
+                  $"{passwords.Count} 个候选密码里有一个通过了校验值，但认证码对不上（密文可能被改过 / 源文件变过）——" +
+                  "没有解开，也没有生成临时副本。"
+                : $"这个内嵌 ZIP 是 AES 加密的（{ZipAesCrypto.DescribeStrength(probeEntry.AesStrength)}），" +
+                  $"{passwords.Count} 个候选密码逐个按 UTF-8 与 ANSI(936) 两种字节各试了一遍，都不对。" +
+                  "（7-Zip 对 AES 包只按 ANSI 字节派生密码，所以这类包交给它也一样报密码错误。）";
+
+            return false;
+        }
+
+        /// <summary>AES 条目的数据布局：盐 / 校验值 / 密文 / 认证码在源文件里的位置。</summary>
+        private readonly struct AesDataLayout
+        {
+            public byte[] Salt { get; init; }
+
+            public ushort PasswordVerifier { get; init; }
+
+            public long CipherStart { get; init; }
+
+            public long CipherLength { get; init; }
+
+            public byte[] AuthenticationCode { get; init; }
+        }
+
+        /// <summary>按本地头算出 AES 条目的数据布局（本地头长度每次都重算，理由同 <see cref="WriteEntry"/>）。</summary>
+        private static bool TryGetAesDataLayout(
+            FileStream stream,
+            long offset,
+            EmbeddedZipEntry entry,
+            out AesDataLayout layout,
+            out string error)
+        {
+            layout = default;
+            error = string.Empty;
+
+            long localHeader = offset + entry.LocalHeaderOffset;
+            byte[] header = ReadAt(stream, localHeader, LocalFileHeaderLength);
+
+            if (header.Length != LocalFileHeaderLength || !Matches(header, 0, LocalFileHeaderSignature))
+            {
+                error = $"条目 {entry.Name} 的本地文件头不存在或不是 PK\\x03\\x04";
+                return false;
+            }
+
+            int localNameLength = BitConverter.ToUInt16(header, 26);
+            int localExtraLength = BitConverter.ToUInt16(header, 28);
+            long dataOffset = localHeader + LocalFileHeaderLength + localNameLength + localExtraLength;
+            long cipherStart = dataOffset + ZipAesCrypto.SaltLength + ZipAesCrypto.PasswordVerifierLength;
+            long cipherLength = entry.CompressedSize - ZipAesCrypto.OverheadLength;
+
+            if (cipherLength < 0)
+            {
+                error = $"条目 {entry.Name} 的压缩后大小 {entry.CompressedSize} 放不下 AES 的盐与认证码";
+                return false;
+            }
+
+            byte[] prefix = ReadAt(stream, dataOffset, ZipAesCrypto.SaltLength + ZipAesCrypto.PasswordVerifierLength);
+
+            if (prefix.Length != ZipAesCrypto.SaltLength + ZipAesCrypto.PasswordVerifierLength)
+            {
+                error = $"条目 {entry.Name} 的 AES 盐/校验值读不满（文件可能被截断）";
+                return false;
+            }
+
+            var salt = new byte[ZipAesCrypto.SaltLength];
+            Buffer.BlockCopy(prefix, 0, salt, 0, ZipAesCrypto.SaltLength);
+
+            byte[] authCode = ReadAt(stream, cipherStart + cipherLength, ZipAesCrypto.AuthenticationCodeLength);
+
+            if (authCode.Length != ZipAesCrypto.AuthenticationCodeLength)
+            {
+                error = $"条目 {entry.Name} 的 AES 认证码读不满（文件可能被截断）";
+                return false;
+            }
+
+            layout = new AesDataLayout
+            {
+                Salt = salt,
+                PasswordVerifier = BitConverter.ToUInt16(prefix, ZipAesCrypto.SaltLength),
+                CipherStart = cipherStart,
+                CipherLength = cipherLength,
+                AuthenticationCode = authCode
+            };
+
+            return true;
+        }
+
+        /// <summary>把整段密文按"解密 + 认证"读一遍，只判认证码对不对（不落任何字节）。</summary>
+        private static bool ConfirmByAuthenticationCode(
+            FileStream stream,
+            AesDataLayout layout,
+            ZipAesKeys keys,
+            CancellationToken cancellationToken)
+        {
+            using var decrypt = new ZipAesDecryptStream(stream, layout.CipherStart, layout.CipherLength, keys);
+            byte[] buffer = new byte[CopyBufferSize];
+            long total = 0;
+
+            while (total < layout.CipherLength)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                int read = decrypt.Read(buffer, 0, buffer.Length);
+
+                if (read <= 0)
+                {
+                    return false;
+                }
+
+                total += read;
+            }
+
+            return decrypt.VerifyAuthenticationCode(layout.AuthenticationCode);
         }
 
         /// <summary>
@@ -747,7 +1189,9 @@ namespace ArchiveFixer.Extraction
                         CompressedSize = entry.CompressedSize,
                         IsDirectory = true,
                         Method = entry.Method,
-                        LocalHeaderOffset = entry.LocalHeaderOffset
+                        LocalHeaderOffset = entry.LocalHeaderOffset,
+                        AesStrength = 0,
+                        IsEncrypted = entry.IsEncrypted
                     };
 
                     continue;
@@ -774,7 +1218,14 @@ namespace ArchiveFixer.Extraction
                     CompressedSize = entry.CompressedSize,
                     IsDirectory = entry.IsDirectory,
                     Method = entry.Method,
-                    LocalHeaderOffset = entry.LocalHeaderOffset
+                    LocalHeaderOffset = entry.LocalHeaderOffset,
+                    /*
+                     * ⚠ 这里是把条目**重建**一遍（要补相对路径与落点），所以每加一个字段都必须在这里跟着抄一次：
+                     * 2026-09-25 就漏过 AesStrength（新增字段），后果是"密码明明校验通过了，
+                     * 解压时却按未加密路径去读密文" —— 报出来的错是"字节数与清单不符"，与真实原因毫不相干。
+                     */
+                    AesStrength = entry.AesStrength,
+                    IsEncrypted = entry.IsEncrypted
                 };
             }
 
@@ -788,6 +1239,7 @@ namespace ArchiveFixer.Extraction
             long offset,
             long end,
             EmbeddedZipProbeResult plan,
+            string resolvedPassword,
             string targetRoot,
             BudgetTracker tracker,
             List<string> written,
@@ -876,6 +1328,8 @@ namespace ArchiveFixer.Extraction
                             source,
                             offset,
                             entry,
+                            resolvedPassword,
+                            plan.ResolvedPasswordEncoding,
                             target,
                             ref writtenBytes,
                             totalBytes,
@@ -899,6 +1353,21 @@ namespace ArchiveFixer.Extraction
                     TryDeleteFile(tempPath);
                     throw;
                 }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+                {
+                    /*
+                     * **数据层面**的失败（认证码对不上 / 解出的字节数与清单不符 / 文件被截断 / 盘写不进去）
+                     * 落成"失败结果"，不往上抛异常。
+                     *
+                     * 为什么（2026-09-25 第 29 条）：本类的约定是"失败不留半成品，并如实告诉调用方为什么"。
+                     * 抛出去的话，调用方看到的是管线里一次未处理异常，而失败原因（加密包被改过、源文件在
+                     * 解压途中变了）恰恰是用户最需要看到的那句话。取消仍然照旧抛（那是另一套语义）。
+                     */
+                    TryDeleteFile(tempPath);
+                    Rollback(written, createdDirectories);
+
+                    return Failure($"{entry.Name} 解压失败：{ex.Message}", unsupported: false);
+                }
                 catch
                 {
                     TryDeleteFile(tempPath);
@@ -917,24 +1386,34 @@ namespace ArchiveFixer.Extraction
 
             ReportProgress(progress, 100);
 
+            int aesStrength = plan.Entries.FirstOrDefault(e => !e.IsDirectory && e.AesStrength != 0)?.AesStrength ?? 0;
+
             return new EmbeddedZipExtractResult
             {
                 Success = true,
-                Message =
-                    $"直读解出 {fileCount} 个文件 / {writtenBytes} 字节（区间 {offset}–{end}，没有生成临时副本）",
+                Message = aesStrength == 0
+                    ? $"直读解出 {fileCount} 个文件 / {writtenBytes} 字节（区间 {offset}–{end}，没有生成临时副本）"
+                    : $"直读解出 {fileCount} 个文件 / {writtenBytes} 字节（区间 {offset}–{end}，没有生成临时副本；" +
+                      $"加密包 {ZipAesCrypto.DescribeStrength(aesStrength)}，第 {plan.ResolvedPasswordIndex} 个候选密码按" +
+                      $"{ZipAesCrypto.DescribeEncoding(plan.ResolvedPasswordEncoding)}通过校验）",
                 FileCount = fileCount,
                 WrittenBytes = writtenBytes,
-                Entries = plan.Entries
+                Entries = plan.Entries,
+                ResolvedPasswordIndex = plan.ResolvedPasswordIndex,
+                ResolvedPasswordEncoding = plan.ResolvedPasswordEncoding,
+                WasEncrypted = aesStrength != 0
             };
         }
 
         /// <summary>
-        /// 写一个条目：stored 原样拷、deflate 解压流。返回实际写出的字节数。
+        /// 写一个条目：stored 原样拷、deflate 解压流、AES 先解密再按真方法处理。返回实际写出的字节数。
         /// </summary>
         private static long WriteEntry(
             FileStream source,
             long offset,
             EmbeddedZipEntry entry,
+            string resolvedPassword,
+            ZipAesPasswordEncoding passwordEncoding,
             FileStream target,
             ref long writtenBytes,
             long totalBytes,
@@ -944,6 +1423,23 @@ namespace ArchiveFixer.Extraction
             CancellationToken cancellationToken)
         {
             long entryWritten = 0;
+
+            if (entry.AesStrength != 0)
+            {
+                return WriteAesEntry(
+                    source,
+                    offset,
+                    entry,
+                    resolvedPassword,
+                    passwordEncoding,
+                    target,
+                    ref writtenBytes,
+                    totalBytes,
+                    stopwatch,
+                    ref nextReportAtMs,
+                    progress,
+                    cancellationToken);
+            }
 
             /*
              * 数据起点 = 本地头偏移 + 30 + 本地头名字长 + 本地头扩展区长。
@@ -1013,6 +1509,118 @@ namespace ArchiveFixer.Extraction
             }
 
             return entryWritten;
+        }
+
+        /// <summary>
+        /// AES 条目的写法：<c>盐(16) + 校验值(2) + 密文 + 认证码(10)</c> ——
+        /// 先按 CTR 解密（读到的是明文），再按**真方法**（stored 原样拷 / deflate 解压）落盘，
+        /// 最后用认证码确认整段密文没被动过。
+        ///
+        /// <para>⚠ 认证码这一关不能省：AES 的目的就是"被改过必须发现"。少了它，
+        /// 一个被篡改的包会看着成功（不变量 6 的同一口径）。所以顺序是
+        /// **先读完所有密文 → 再验认证码 → 才让调用方改名落位**。</para>
+        /// </summary>
+        private static long WriteAesEntry(
+            FileStream source,
+            long offset,
+            EmbeddedZipEntry entry,
+            string resolvedPassword,
+            ZipAesPasswordEncoding passwordEncoding,
+            FileStream target,
+            ref long writtenBytes,
+            long totalBytes,
+            Stopwatch stopwatch,
+            ref long nextReportAtMs,
+            IProgress<int>? progress,
+            CancellationToken cancellationToken)
+        {
+            if (!TryGetAesDataLayout(source, offset, entry, out AesDataLayout layout, out string layoutError))
+            {
+                throw new IOException(layoutError);
+            }
+
+            if (!ZipAesCrypto.TryDeriveKeys(
+                    resolvedPassword,
+                    passwordEncoding,
+                    layout.Salt,
+                    entry.AesStrength,
+                    out ZipAesKeys? keys,
+                    out string keyError))
+            {
+                throw new IOException($"条目 {entry.Name} 的 AES 密钥派生失败：{keyError}");
+            }
+
+            long entryWritten = 0;
+            byte[] buffer = new byte[CopyBufferSize];
+
+            using var decrypt = new ZipAesDecryptStream(source, layout.CipherStart, layout.CipherLength, keys!);
+
+            if (entry.Method == 0)
+            {
+                long remaining = layout.CipherLength;
+
+                while (remaining > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    int read = decrypt.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+
+                    target.Write(buffer, 0, read);
+
+                    remaining -= read;
+                    entryWritten += read;
+                    writtenBytes += read;
+
+                    ReportIfDue(progress, stopwatch, ref nextReportAtMs, writtenBytes, totalBytes);
+                }
+            }
+            else
+            {
+                using (var inflater = new DeflateStream(decrypt, CompressionMode.Decompress, leaveOpen: true))
+                {
+                    int decompressed;
+
+                    while ((decompressed = inflater.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        target.Write(buffer, 0, decompressed);
+
+                        entryWritten += decompressed;
+                        writtenBytes += decompressed;
+
+                        ReportIfDue(progress, stopwatch, ref nextReportAtMs, writtenBytes, totalBytes);
+                    }
+                }
+
+                /*
+                 * deflate 流读到结尾**不等于**密文读完（DeflateStream 会在结束标记处停下）。
+                 * 认证码是覆盖整段密文的，所以剩下的字节必须也过一遍 —— 否则等于"只认证了一半"。
+                 */
+                Drain(decrypt, buffer, cancellationToken);
+            }
+
+            if (!decrypt.VerifyAuthenticationCode(layout.AuthenticationCode))
+            {
+                throw new IOException(
+                    $"条目 {entry.Name} 的 AES 认证码对不上：密文可能被改过、或源文件在解压过程中变过");
+            }
+
+            return entryWritten;
+        }
+
+        /// <summary>把流里剩下的字节读完（只为让认证覆盖整段，内容丢弃）。</summary>
+        private static void Drain(Stream stream, byte[] buffer, CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (stream.Read(buffer, 0, buffer.Length) <= 0)
+                {
+                    return;
+                }
+            }
         }
 
         // ================================================================ 进度 / 回滚 / 小工具
@@ -1436,6 +2044,19 @@ namespace ArchiveFixer.Extraction
                 Result = EmbeddedZipStreamExtractor.Unsupported(reason)
             };
 
+            /// <summary>是候选，但**只差一个密码**（AES 条目在场、这次没给候选密码）。</summary>
+            public static CandidateEvaluation NeedsPassword(string reason) => new()
+            {
+                IsCandidate = true,
+                Result = new EmbeddedZipProbeResult
+                {
+                    Supported = false,
+                    RequiresPassword = true,
+                    Reason = reason,
+                    Message = reason
+                }
+            };
+
             /// <summary>是候选，但条目名不安全（硬失败，不回落）。</summary>
             public static CandidateEvaluation PathRejected(
                 string message,
@@ -1462,13 +2083,46 @@ namespace ArchiveFixer.Extraction
                     }
                 };
 
+            /// <summary>
+            /// 是候选，但加密条目的候选密码一个都没通过校验（硬失败，**不回落** —— 理由见
+            /// <see cref="EmbeddedZipProbeResult.PasswordRejected"/>）。
+            /// </summary>
+            public static CandidateEvaluation PasswordRejected(
+                string message,
+                List<EmbeddedZipEntry> entries,
+                List<ArchiveEntry> listEntries,
+                long totalBytes,
+                bool isEncrypted) => new()
+                {
+                    IsCandidate = true,
+                    Result = new EmbeddedZipProbeResult
+                    {
+                        Supported = false,
+                        PasswordRejected = true,
+                        Message = message,
+                        Reason = message,
+                        Entries = entries,
+                        List = new ArchiveListResult
+                        {
+                            Success = true,
+                            Entries = listEntries,
+                            TotalUncompressedSize = totalBytes,
+                            FileCount = listEntries.Count(e => !e.IsDirectory),
+                            DirectoryCount = listEntries.Count(e => e.IsDirectory),
+                            IsEncrypted = isEncrypted
+                        }
+                    }
+                };
+
             /// <summary>是候选，直读可用。</summary>
             public static CandidateEvaluation Ok(
                 List<EmbeddedZipEntry> entries,
                 ArchiveListResult list,
                 long totalBytes,
                 long offset,
-                long end) => new()
+                long end,
+                int resolvedPasswordIndex,
+                ZipAesPasswordEncoding resolvedPasswordEncoding) => new()
                 {
                     IsCandidate = true,
                     Result = new EmbeddedZipProbeResult
@@ -1479,7 +2133,9 @@ namespace ArchiveFixer.Extraction
                         ArchiveLength = end - offset,
                         Offset = offset,
                         End = end,
-                        TotalBytes = totalBytes
+                        TotalBytes = totalBytes,
+                        ResolvedPasswordIndex = resolvedPasswordIndex,
+                        ResolvedPasswordEncoding = resolvedPasswordEncoding
                     }
                 };
         }

@@ -179,6 +179,23 @@ namespace ArchiveFixer.Tests
             Assert.Equal(PasswordEntryKind.Mapped, entry.Kind);
             Assert.Equal("账号", entry.Name);
             Assert.Equal("口令:123", entry.Password);
+
+            /*
+             * 整行原文也要留着（2026-09-25 第 30 条）：
+             * 如果这本书其实是**列表式**（密码就是 `账号:口令:123` 整行），切出来的右侧根本不对，
+             * 候选链要靠 RawLine 把整行也试一遍。
+             */
+            Assert.Equal("账号:口令:123", entry.RawLine);
+        }
+
+        [Fact]
+        public void Parse_列表式的整行_不再留一份原文()
+        {
+            var result = PasswordBookParser.Parse("plain-pass\n");
+
+            var entry = Assert.Single(result.Entries);
+            Assert.Equal(PasswordEntryKind.List, entry.Kind);
+            Assert.Null(entry.RawLine);
         }
 
         [Fact]
