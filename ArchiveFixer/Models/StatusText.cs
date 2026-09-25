@@ -603,7 +603,38 @@ namespace ArchiveFixer.Models
 
         /// <summary>失败 / 取消时工作区里**有东西** → 保留（那是那批唯一解出来的一份）。</summary>
         public const string WorkspaceKeptOnFailureFormat =
-            "{0}：任务没成功，工作区里的 {1} 个文件 / {2} 保留在原处（那是这次唯一的一份产物线索）";
+            "{0}：任务没成功，工作区里的 {1} 个文件 / {2} 保留在原处（那是这次唯一的一份产物线索；"
+            + "要清就在 ③「清理与删除」页点「清理工作区」）：{3}";
+
+        // ================================================================
+        // 失败 / 取消不留残留（用户 2026-09-25 第 25 条追加）
+        // ================================================================
+        //
+        // 用户原话："我不希望有这么多的失败残留，还是这么说如果解压 40G，两层，解压失败有 80G 的
+        // 卸载残留，用户不得气死，你为什么要弄卸载残留，有一个导出失败列表不就可以了吗，
+        // 而且对于用户来说，失败了就失败了，成功了就成功了"。
+        //
+        // 结论：**默认档 = 没成功就一个中间产物都不留**（任务工作区 + 递归逐层工作区整份删掉），
+        // 只留日志与失败清单；要留现场排查的人在 ③ 页打开「失败时保留中间产物」（KeepFailedWorkspace）。
+        // 三条红线一个字不动：成功路径的清理口径照旧、源包一个字节都不动、已经定稿搬出去的内容物不受影响。
+
+        /// <summary>没成功（失败 / 取消 / 部分完成）→ 默认把这次的工作区整份清掉，并说清怎么改主意。</summary>
+        public const string WorkspaceClearedOnFailureFormat =
+            "{0}：已清理工作区：{1} 个文件 / {2}（这次没成功；要留现场请在 ③ 页打开「失败时保留中间产物」）：{3}";
+
+        /// <summary>没成功的清理没删掉（被占用 / 权限不足）：只写 WARN + 说清路径，绝不改任务结论。</summary>
+        public const string WorkspaceClearOnFailureFailedFormat =
+            "{0}：工作区没清掉（{1}），目录保留：{2}";
+
+        /// <summary>③ 页「工作区残留」那一组里的开关标题。</summary>
+        public const string SettingsKeepFailedWorkspaceLabel = "失败时保留中间产物（排查用）";
+
+        /// <summary>它的说明：默认关 = 失败/取消一个中间产物都不留；打开才留，而且能在本页清理。</summary>
+        public const string SettingsKeepFailedWorkspaceHint =
+            "默认关：失败 / 取消 / 部分完成的任务**不留任何中间产物**（暂存目录、抠出来的内嵌归档副本、"
+            + "已解出的中间件一起删掉），只留日志与失败清单。打开之后才留着便于排查 —— "
+            + "那些目录会出现在本页上面那一行里，可以随时清理。"
+            + "⚠ 两条不受它影响：成功路径照旧「成功且校验通过才清」，源包在任何情况下都一个字节不动。";
 
         /// <summary>启动 / 刷新日志里那句"这些根都扫过了"（默认跟输出盘之后根会变，位置必须写全）。</summary>
         public const string WorkspaceScannedRootsLogFormat = "本次扫描的工作区根目录：{0}";
@@ -638,9 +669,15 @@ namespace ArchiveFixer.Models
         /// <summary>启动 / 刷新时那条日志（几个 + 共多大 + 在哪）。</summary>
         public const string WorkspaceLeftoverLogFormat = "发现 {0} 个工作区残留（上次失败 / 取消留下的，共 {1}），位置：{2}";
 
-        /// <summary>紧跟其后的一句：为什么不自动删、去哪儿清。</summary>
+        /// <summary>
+        /// 紧跟其后的一句：为什么不自动删、去哪儿清。
+        ///
+        /// <para>⚠ 2026-09-25 第 25 条之后，"怎么会留下东西"只有两种可能（默认档一个都不留），
+        /// 这句话必须把两种都说出来 —— 否则用户会以为"程序明明说失败不留残留，怎么又冒出来了"。</para>
+        /// </summary>
         public const string WorkspaceLeftoverHintLog =
-            "程序**不会自动删**它们（里面可能是那批唯一解出来的一份产物）；要清就在「清理与删除」页点「清理工作区」，删前会再确认一次。";
+            "程序**不会自动删**它们（只可能是这两种来路：打开了「失败时保留中间产物」，"
+            + "或者上一次被强杀 / 断电来不及收尾）；要清就在「清理与删除」页点「清理工作区」，删前会再确认一次。";
 
         /// <summary>界面上那一行（常驻提示；没有残留时整行不显示）。</summary>
         public const string WorkspaceLeftoverBannerFormat = "工作区残留：{0} 个目录，共 {1}";
@@ -663,6 +700,59 @@ namespace ArchiveFixer.Models
 
         /// <summary>没有可清理的残留时的提示（用户点了按钮但确实没什么可清）。</summary>
         public const string WorkspaceCleanupNothingText = "现在没有可清理的工作区残留。";
+
+        // ================================================================
+        // ①「任务」页的「输出位置」那一格（用户 2026-09-25 第 27 条）
+        // ================================================================
+        //
+        // 用户原话："输出的指定位置可以放在主界面进行选择，这个没有问题，选项卡里面的也可以留着，
+        // 在添加文件夹和全选中间还有那么多的位置，如果选择解压到位置名字太长，可以简写……
+        // 反正我要求的就是我们最好能够看到完整的解压地址"。
+        //
+        // 落点：①页主操作条「添加文件夹」与「全选」之间那一格（Grid 的星号列），显示 + 选择 + 一个开关。
+        // 真值只有一份：MainViewModel.SelectedOutputDirectory（= Settings.CustomOutputDirectory）
+        // 与 Settings.ExtractToOriginalDirectory —— 与②「解压方式」页是同一个值，两边同时变。
+        // 长路径中间省略（Helpers/PathMiddleEllipsis），**完整路径在 ToolTip 与右键菜单里**。
+
+        /// <summary>那一格的前缀。</summary>
+        public const string OutputLocationLabel = "输出位置：";
+
+        /// <summary>选位置按钮（与②页那个「选择」同一个动作、同一份值）。</summary>
+        public const string OutputLocationChooseButtonText = "选择…";
+
+        /// <summary>开关：勾上 = 不指定统一位置（产物落在每个包自己所在的目录）。</summary>
+        public const string OutputLocationFollowsArchiveLabel = "未指定位置";
+
+        /// <summary>它的提示（说清两件事：落在哪、与②页是同一个设置项）。</summary>
+        public const string OutputLocationFollowsArchiveHint =
+            "勾上 = 产物落在**每个包自己所在的目录**（与②「解压方式」页的落点是同一个设置项）。"
+            + "取消勾选后点「选择…」挑一个统一的位置；两处改哪一处，另一处立刻跟着变。";
+
+        /// <summary>未指定位置时那一行的显示（不是空白，必须说清东西会落在哪）。</summary>
+        public const string OutputLocationUnspecifiedText = "（未指定：产物落在每个包自己的目录）";
+
+        /// <summary>取消勾选但还没挑目录时的显示（说清下一步点哪里）。</summary>
+        public const string OutputLocationNotChosenText = "（还没选位置 —— 点「选择…」挑一个目录）";
+
+        /// <summary>完整路径的 ToolTip（界面上显示的是中间省略过的，这里给全文）。</summary>
+        public const string OutputLocationToolTipFormat = "完整路径：{0}";
+
+        /// <summary>右键菜单：把完整路径（不省略）复制走。</summary>
+        public const string OutputLocationCopyMenuText = "复制完整路径";
+
+        /// <summary>复制成功 / 没有可复制内容的两条日志。</summary>
+        public const string OutputLocationCopyLogFormat = "已复制输出位置：{0}";
+
+        /// <summary>没有指定位置时点复制：如实说清，不假装复制成功。</summary>
+        public const string OutputLocationCopyNothingLog = "现在是「未指定位置」，没有可复制的输出路径。";
+
+        /// <summary>①页那个开关打开时的一条日志（说清东西会落在哪，不让人自己猜）。</summary>
+        public const string OutputLocationSwitchedToOriginalLog =
+            "输出位置：未指定 —— 产物落在每个包自己所在的目录。";
+
+        /// <summary>①页那个开关关掉时的一条日志（提醒下一步点哪里，否则落点会变成"没填路径的指定位置"）。</summary>
+        public const string OutputLocationSwitchedToCustomLog =
+            "输出位置：改为指定位置（请点「选择…」挑一个目录）。";
 
         // ================================================================
         // 「继续解」（用户 2026-09-24 第 16 条追加：一键解到尽头 + 硬上限 10 层 + 到顶一键继续）
@@ -750,10 +840,10 @@ namespace ArchiveFixer.Models
         /// <summary>③ 页「工作区残留」那一组的标题。</summary>
         public const string WorkspaceLeftoverGroupHeader = "工作区残留（失败 / 取消留下的中间产物）";
 
-        /// <summary>③ 页「工作区残留」那一组的说明（为什么以前只写日志、为什么程序不自动删）。</summary>
+        /// <summary>③ 页「工作区残留」那一组的说明（为什么默认一个都不留、什么情况下才会看见东西）。</summary>
         public const string WorkspaceLeftoverGroupHint =
-            "失败 / 取消 / 部分完成的任务会把中间产物留在工作区（那是那批唯一解出来的一份，"
-            + "所以程序**不会自动删**）。这里列出它们占了多少空间，确认之后可以一次清掉 —— "
+            "默认档下**只有两种情况**会留下东西：① 你在下面打开了「失败时保留中间产物」（排查用）；"
+            + "② 程序被强杀 / 断电，来不及收尾。这里列出它们占了多少空间，确认之后可以一次清掉 —— "
             + "只删工作区根目录下的那些任务目录，日志、密码、设置一律不碰。";
 
         /// <summary>② 「解压方式」页那个开关的文案（第 17 条：一键处理的那一个确认框可关）。</summary>

@@ -592,17 +592,19 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **红线**：失败时工作区里只要有文件就一律保留（那是那批唯一解出来的一份），
-        /// 并且日志要说清它留在哪、几个文件、多大。
+        /// **默认档**（用户 2026-09-25 第 25 条追加）：失败时工作区里有文件也**整份清掉** ——
+        /// 用户原话："我不希望有这么多的失败残留……有一个导出失败列表不就可以了吗，
+        /// 而且对于用户来说，失败了就失败了，成功了就成功了"。
         ///
         /// <para>这里用双面文件（内嵌归档）：抠取副本是**真实的字节拷贝**，所以失败时工作区里
-        /// 一定有东西 —— 正是这条红线要覆盖的局面。</para>
+        /// 一定有东西 —— 正是这条新默认档要覆盖的局面。三条红线同时钉住：
+        /// 源包原地不动、日志说清删了几个多大、③ 页扫不到任何残留。</para>
         /// </summary>
         [Fact]
-        public async Task 失败但有文件_一律保留()
+        public async Task 失败但有文件_默认档整个工作区被清掉()
         {
             Harness harness = CreateHarness(configureCacheRoot: true, customOutput: true);
-            string source = harness.CreateEmbeddedSourceFile("kept.7z");
+            string source = harness.CreateEmbeddedSourceFile("cleared.7z");
 
             ArchiveTask task = harness.AddTask(source);
             task.EmbeddedArchiveOffset = 4096;
@@ -615,12 +617,159 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+            Assert.False(Directory.Exists(taskWorkDirectory), $"默认档下失败的工作区还在：{taskWorkDirectory}");
+
+            // 源包一个字节都不动（不变量 1，正反两条：文件还在 + 内容没被改）。
+            Assert.True(File.Exists(source), "失败时源文件必须原样保留");
+
+            // 删了什么、多大、怎么改主意：一条 INFO 说全。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("已清理工作区：", StringComparison.Ordinal) &&
+                        line.Contains("这次没成功", StringComparison.Ordinal) &&
+                        line.Contains("失败时保留中间产物", StringComparison.Ordinal));
+
+            // ③ 页扫的是各工作区根：清干净之后一个残留都不该列出来。
+            Assert.Empty(WorkspaceCleanupService.ScanMany(harness.Vm.WorkspaceScanRoots));
+        }
+
+        /// <summary>
+        /// 打开「失败时保留中间产物」＝回到老行为：有文件就保留，并且日志说清**在哪、几个、多大**
+        /// （③ 页扫得到、能清）。
+        /// </summary>
+        [Fact]
+        public async Task 打开保留开关_失败但有文件_一律保留且说清在哪()
+        {
+            Harness harness = CreateHarness(configureCacheRoot: true, customOutput: true);
+            string source = harness.CreateEmbeddedSourceFile("kept.7z");
+
+            ArchiveTask task = harness.AddTask(source);
+            task.EmbeddedArchiveOffset = 4096;
+
+            string taskWorkDirectory = harness.PathService.BuildTaskWorkDirectory(task);
+
+            // 用户在 ③ 页打开「失败时保留中间产物（排查用）」。
+            harness.Vm.Settings.KeepFailedWorkspace = true;
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
             Assert.True(Directory.Exists(taskWorkDirectory), $"失败时有文件的工作区被清掉了：{taskWorkDirectory}");
             Assert.NotEmpty(Directory.GetFiles(taskWorkDirectory, "*", SearchOption.AllDirectories));
 
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("保留在原处", StringComparison.Ordinal));
+                line => line.Contains("保留在原处", StringComparison.Ordinal) &&
+                        line.Contains(taskWorkDirectory, StringComparison.OrdinalIgnoreCase));
+
+            // 留着就一定要**扫得到**（用户 2026-09-24 第 22 条：看不见的保留等于没保留）。
+            IReadOnlyList<WorkspaceLeftover> leftovers = WorkspaceCleanupService.ScanMany(harness.Vm.WorkspaceScanRoots);
+
+            Assert.Contains(leftovers, item => string.Equals(item.DirectoryPath, taskWorkDirectory, StringComparison.OrdinalIgnoreCase));
+            Assert.True(WorkspaceCleanupService.TotalBytesOf(leftovers) > 0, "开着保留开关留下的残留应当有体积可报");
+        }
+
+        /// <summary>
+        /// 零文件空壳**无论如何都删**：打开「失败时保留中间产物」也删 —— 空目录不占空间、
+        /// 也没有现场可看，留着只会在 ③ 页多一行噪声。
+        /// </summary>
+        [Fact]
+        public async Task 打开保留开关_零文件空壳照样删掉()
+        {
+            Harness harness = CreateHarness(configureCacheRoot: true, customOutput: true);
+            string source = harness.CreateSourceFile("empty-shell-kept.7z");
+
+            ArchiveTask task = harness.AddTask(source);
+
+            string taskWorkDirectory = harness.PathService.BuildTaskWorkDirectory(task);
+
+            harness.Vm.Settings.KeepFailedWorkspace = true;
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.False(Directory.Exists(taskWorkDirectory), $"打开保留开关时空壳工作区也该删：{taskWorkDirectory}");
+            Assert.True(File.Exists(source), "失败时源文件必须原样保留");
+        }
+
+        /// <summary>
+        /// **边界一：工作区里有外来子目录 → 一个字节都不删**（删除的第二道容器内校验）。
+        ///
+        /// <para>判据与成功路径的 <c>CleanupTaskWorkspaceDirectory</c> 逐字相同：本任务的工作区里
+        /// 只允许有我们自己造的 <c>stage</c> 子目录。出现别的子目录说明"它不是我们造的那个目录"
+        /// （最典型：任务名撞上了递归工作区的 <c>recursive</c>），为安全起见整份不动、只写 WARN。</para>
+        /// </summary>
+        [Fact]
+        public async Task 失败清理_工作区里有外来子目录_一个字节都不删()
+        {
+            Harness harness = CreateHarness(configureCacheRoot: true, customOutput: true);
+            string source = harness.CreateSourceFile("foreign.7z");
+
+            ArchiveTask task = harness.AddTask(source);
+
+            string taskWorkDirectory = harness.PathService.BuildTaskWorkDirectory(task);
+            string foreign = Path.Combine(taskWorkDirectory, "不是我们造的");
+
+            Directory.CreateDirectory(foreign);
+            File.WriteAllText(Path.Combine(foreign, "keep.txt"), "这不是程序造的内容，绝不许删");
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.WrongPassword, task.Status);
+            Assert.True(Directory.Exists(foreign), "工作区里有外来子目录时，一个字节都不许删");
+            Assert.True(File.Exists(Path.Combine(foreign, "keep.txt")));
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("非本任务造的子目录", StringComparison.Ordinal) &&
+                        line.Contains(foreign, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// **边界二：记下来的目录不在（当前生效的）工作区根之下 → 一个字节都不删**。
+        ///
+        /// <para>造法：解压途中把工作区根换到别处（真实场景 = 用户下一批改了缓存根 / 换了输出盘），
+        /// 于是收尾时那条记录已经不在根之下。容器内校验收紧到"必须在根之下"，
+        /// 越界只写 WARN —— 它保护的是"工作区之外的任何东西都不许被这条清理碰到"。</para>
+        /// </summary>
+        [Fact]
+        public async Task 失败清理_目录不在工作区根之下_一个字节都不删()
+        {
+            Harness harness = CreateHarness(configureCacheRoot: true, customOutput: true);
+            string source = harness.CreateSourceFile("outside-root.7z");
+
+            ArchiveTask task = harness.AddTask(source);
+
+            string taskWorkDirectory = harness.PathService.BuildTaskWorkDirectory(task);
+            string otherRoot = Path.Combine(_root, "别的根", "work");
+
+            Directory.CreateDirectory(otherRoot);
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                // 解压途中工作区根被换走（下一批跟了别的输出盘）：收尾时那条记录不再属于当前根。
+                harness.PathService.WorkDirectory = otherRoot;
+                File.WriteAllText(Path.Combine(request.OutputPath!, "half.bin"), "半截产物");
+                return WrongPassword();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.WrongPassword, task.Status);
+            Assert.True(Directory.Exists(taskWorkDirectory), "越界的工作区目录绝不许删");
+            Assert.NotEmpty(Directory.GetFiles(taskWorkDirectory, "*", SearchOption.AllDirectories));
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("不在工作区根之下", StringComparison.Ordinal));
         }
 
         /// <summary>取消收尾**且一个文件都没解出来** → 同样按空壳清掉（用户点停之后留下的空壳最没意义）。</summary>

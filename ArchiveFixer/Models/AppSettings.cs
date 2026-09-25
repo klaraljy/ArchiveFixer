@@ -596,6 +596,23 @@ namespace ArchiveFixer.Models
         /// </summary>
         public bool RemindJunkAfterImport { get; set; } = true;
 
+        /// <summary>
+        /// 失败 / 取消 / 部分完成时**保留**中间产物（用户 2026-09-25 第 25 条追加，**默认关**）。
+        ///
+        /// <para><b>用户原话</b>：「我不希望有这么多的失败残留，还是这么说如果解压 40G，两层，
+        /// 解压失败有 80G 的卸载残留，用户不得气死，你为什么要弄卸载残留，有一个导出失败列表
+        /// 不就可以了吗，而且对于用户来说，失败了就失败了，成功了就成功了」。</para>
+        ///
+        /// <para>默认 <c>false</c> = 没成功就**一个中间产物都不留**：任务工作区（暂存目录、抠出来的内嵌
+        /// 归档副本、已解出的中间件）与递归核心的逐层工作区整份删掉，只留日志与失败清单。
+        /// 打开它才是老行为（留着现场便于排查，③「清理与删除」页能扫到、能清）。</para>
+        ///
+        /// <para>⚠ 这条设置**只影响"没成功"的收尾**：成功路径的清理口径一个字没变
+        /// （仍然只有"解压成功 + 输出校验通过 + 未取消"才清），源包仍然一个字节都不动
+        /// （不变量 1），已经定稿搬出去的内容物也早就不在工作区里了。</para>
+        /// </summary>
+        public bool KeepFailedWorkspace { get; set; }
+
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
@@ -806,7 +823,11 @@ namespace ArchiveFixer.Models
                  */
                 UseSpecialExtraction = false,
                 SpecialExtractionRules = ArchiveFixer.Extraction.SpecialExtractionRules.DefaultEnabledIds.ToList(),
-                SourceHandling = nameof(SourceHandlingMode.MoveToRest)
+                SourceHandling = nameof(SourceHandlingMode.MoveToRest),
+
+                // 失败 / 取消不留中间产物（用户 2026-09-25 第 25 条追加）：默认关闭，
+                // 老配置里没有这个字段时反序列化出来也是 false —— 与默认档一致，不需要迁移标记。
+                KeepFailedWorkspace = false
             };
         }
 
@@ -910,6 +931,15 @@ namespace ArchiveFixer.Models
             CollectTargetDirectory ??= string.Empty;
             CacheRootDirectory ??= string.Empty;
             PasswordBookPath ??= string.Empty;
+
+            /*
+             * 「失败时保留中间产物」（用户 2026-09-25 第 25 条追加）：**bool 不需要归一化**。
+             *
+             * 它只有开 / 关两种取值，读不出第三种；而旧配置里没有这个字段时，
+             * System.Text.Json 反序列化后就是属性默认值 false —— 与"默认档 = 失败不留残留"完全一致。
+             * 所以这里**一个字都不写**：刻意留这段说明，免得以后有人顺手加一句
+             * `KeepFailedWorkspace = false;` 把用户打开的那一档每次启动都顶掉。
+             */
 
             /*
              * 密码本清单（用户 2026-09-24：多本密码本）。

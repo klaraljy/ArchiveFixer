@@ -142,12 +142,27 @@
                 </StackPanel>
             </GroupBox>
 
-            <!-- ==================== 工作区残留（第 22 条） ==================== -->
+            <!-- ==================== 工作区残留（第 22 条 + 第 25 条追加） ==================== -->
             <GroupBox Header="{x:Static models:StatusText.WorkspaceLeftoverGroupHeader}">
                 <StackPanel>
                     <TextBlock Style="{StaticResource HintTextStyle}"
                                TextWrapping="Wrap"
                                Text="{x:Static models:StatusText.WorkspaceLeftoverGroupHint}" />
+
+                    <!--
+                        第 25 条追加（用户原话："我不希望有这么多的失败残留……如果解压 40G，两层，
+                        解压失败有 80G 的卸载残留"）：默认关 = 失败 / 取消一个中间产物都不留；
+                        打开才留现场，而且就留在本页上面那一行里、随时可清。
+                    -->
+                    <CheckBox Margin="0,10,0,0"
+                              Content="{x:Static models:StatusText.SettingsKeepFailedWorkspaceLabel}"
+                              IsChecked="{Binding SettingsEditor.Settings.KeepFailedWorkspace, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.SettingsKeepFailedWorkspaceHint}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="22,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.SettingsKeepFailedWorkspaceHint}" />
 
                     <!-- 有残留时才显示这一行（几个 + 共多少），没有就整块不出现 -->
                     <TextBlock Margin="0,8,0,0"

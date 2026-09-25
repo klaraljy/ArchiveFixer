@@ -796,7 +796,172 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     RefreshOutputPaths();
+                    RaiseOutputLocationChanged();
                 }
+            }
+        }
+
+        // ================================================================ ①页「输出位置」那一格（用户 2026-09-25 第 27 条）
+
+        /// <summary>
+        /// ①「任务」页主操作条里那一格显示的文本（用户原话："输出的指定位置可以放在主界面进行选择……
+        /// 在添加文件夹和全选中间还有那么多的位置……反正我要求的就是我们最好能够看到完整的解压地址"）。
+        ///
+        /// <para><b>三态，每一种都要说清"东西会落在哪"</b>：</para>
+        /// <list type="number">
+        /// <item><description>未指定位置（<c>ExtractToOriginalDirectory</c>）→ 明说产物落在每个包自己的目录；</description></item>
+        /// <item><description>指定了位置 → 路径**中间省略**（前三段 + <c>\...\</c> + 末两段），完整路径在 ToolTip 与右键菜单里；</description></item>
+        /// <item><description>刚取消勾选还没挑目录 → 明说下一步点「选择…」，绝不显示成"已经指定好了"。</description></item>
+        /// </list>
+        ///
+        /// <para>⚠ 它读的**就是**②「解压方式」页那两个值（<see cref="SelectedOutputDirectory"/> +
+        /// <c>Settings.ExtractToOriginalDirectory</c>），不新开字段、不各存一份：
+        /// 两处改哪一处，另一处与这一行立刻跟着变（SettingsEditor 的属性变更会回来通知这里）。</para>
+        /// </summary>
+        public string OutputLocationDisplay
+        {
+            get
+            {
+                if (Settings == null || Settings.ExtractToOriginalDirectory)
+                {
+                    return StatusText.OutputLocationUnspecifiedText;
+                }
+
+                if (string.IsNullOrWhiteSpace(SelectedOutputDirectory))
+                {
+                    return StatusText.OutputLocationNotChosenText;
+                }
+
+                return PathMiddleEllipsis.Elide(SelectedOutputDirectory);
+            }
+        }
+
+        /// <summary>完整路径的 ToolTip（界面上那一行是省略过的，这里给全文）。</summary>
+        public string OutputLocationToolTip
+        {
+            get
+            {
+                if (Settings == null || Settings.ExtractToOriginalDirectory)
+                {
+                    return StatusText.OutputLocationFollowsArchiveHint;
+                }
+
+                return string.IsNullOrWhiteSpace(SelectedOutputDirectory)
+                    ? StatusText.OutputLocationNotChosenText
+                    : string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.OutputLocationToolTipFormat,
+                        SelectedOutputDirectory);
+            }
+        }
+
+        /// <summary>
+        /// ①页那个「未指定位置」开关：勾上 = 产物落在每个包自己所在的目录。
+        ///
+        /// <para>它就是 <c>Settings.ExtractToOriginalDirectory</c>（两档落点的**唯一判据**，
+        /// 见 <c>SettingsViewModel.ResolveOutputPlacement</c>）—— 与②页的单选按钮是同一个值，
+        /// 不新开字段。写的时候顺手招呼一下 <see cref="SettingsEditor"/>：②页那几个控件绑的是
+        /// 它算出来的属性（<c>OutputPlacement</c> / <c>IsCustomOutputEnabled</c>），
+        /// 不通知的话会出现"①页勾了、②页还显示老样子"。</para>
+        /// </summary>
+        public bool OutputLocationFollowsArchive
+        {
+            get => Settings?.ExtractToOriginalDirectory ?? true;
+            set
+            {
+                if (Settings == null || Settings.ExtractToOriginalDirectory == value)
+                {
+                    return;
+                }
+
+                Settings.ExtractToOriginalDirectory = value;
+                Settings.KeepArchiveNameFolder = true;
+
+                SettingsEditor?.NotifyOutputPlacementChanged();
+                OnPropertyChanged(nameof(Settings));
+                RaiseOutputLocationChanged();
+                RefreshOutputPaths();
+
+                AppendLog(
+                    "INFO",
+                    value
+                        ? StatusText.OutputLocationSwitchedToOriginalLog
+                        : StatusText.OutputLocationSwitchedToCustomLog);
+            }
+        }
+
+        /// <summary>
+        /// 输出位置相关的那几个展示属性一起通知（一处写、三处显示同一份事实）。
+        /// </summary>
+        private void RaiseOutputLocationChanged()
+        {
+            OnPropertyChanged(nameof(OutputLocationDisplay));
+            OnPropertyChanged(nameof(OutputLocationToolTip));
+            OnPropertyChanged(nameof(OutputLocationFollowsArchive));
+        }
+
+        /// <summary>
+        /// ②页改了落点之后，把①页那一行拉回同一个真值。
+        ///
+        /// <para>为什么必须显式同步：<see cref="AppSettings"/> 是普通 POCO（不实现 INotifyPropertyChanged），
+        /// 而②页的「选择」是直接写 <c>Settings.CustomOutputDirectory</c> 的（走 SettingsViewModel），
+        /// 不会经过 <see cref="SelectedOutputDirectory"/> 的 setter —— 不同步的话
+        /// ①页那一行会一直显示旧路径（用户会以为"改了没反应"）。
+        /// 这里只搬运、不回写设置，所以不可能形成两步循环。</para>
+        /// </summary>
+        private void SyncOutputLocationFromSettings()
+        {
+            string folder = Settings?.CustomOutputDirectory ?? string.Empty;
+
+            if (!string.Equals(_selectedOutputDirectory, folder, StringComparison.Ordinal))
+            {
+                _selectedOutputDirectory = folder;
+                OnPropertyChanged(nameof(SelectedOutputDirectory));
+                RefreshOutputPaths();
+            }
+
+            RaiseOutputLocationChanged();
+        }
+
+        /// <summary>
+        /// 设置编辑器（②③④⑥四页）里落点相关的属性变了 → 把①页那一行拉回来。
+        ///
+        /// <para>只认这三个名字（<c>OutputPlacement</c> / <c>CustomOutputDirectory</c> / <c>Settings</c>），
+        /// 别的属性一个都不碰 —— 设置页每敲一个字符都会发通知，整片刷新会把界面拖卡。</para>
+        /// </summary>
+        private void OnSettingsEditorPropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e == null)
+            {
+                return;
+            }
+
+            if (string.Equals(e.PropertyName, nameof(SettingsViewModel.OutputPlacement), StringComparison.Ordinal) ||
+                string.Equals(e.PropertyName, nameof(SettingsViewModel.CustomOutputDirectory), StringComparison.Ordinal) ||
+                string.Equals(e.PropertyName, nameof(SettingsViewModel.Settings), StringComparison.Ordinal))
+            {
+                SyncOutputLocationFromSettings();
+            }
+        }
+
+        /// <summary>①页右键菜单那一项：把**完整**路径复制走（界面上显示的是中间省略过的）。</summary>
+        private void CopyOutputLocation()
+        {
+            if (Settings == null || Settings.ExtractToOriginalDirectory ||
+                string.IsNullOrWhiteSpace(SelectedOutputDirectory))
+            {
+                AppendLog("INFO", StatusText.OutputLocationCopyNothingLog);
+                return;
+            }
+
+            if (CopySanitizedToClipboard(SelectedOutputDirectory))
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.OutputLocationCopyLogFormat,
+                        SelectedOutputDirectory));
             }
         }
 
@@ -1297,6 +1462,14 @@ namespace ArchiveFixer.ViewModels
         public ICommand ExportFailedListCommand { get; }
         public ICommand OpenOutputDirectoryCommand { get; }
         public ICommand SelectOutputDirectoryCommand { get; }
+
+        /// <summary>
+        /// ①页「输出位置」那一格右键菜单的「复制完整路径」（用户 2026-09-25 第 27 条）。
+        ///
+        /// <para>为什么要有它：那一行显示的是**中间省略**过的路径（"我们最好能够看到完整的解压地址"，
+        /// 但一行放不下 200 个字符），要拿去粘贴的人得能拿到全文 —— ToolTip 能看，这个能复制。</para>
+        /// </summary>
+        public ICommand CopyOutputLocationCommand { get; }
         public ICommand OpenLogDirectoryCommand { get; }
 
         /// <summary>打开递归解压的工作区目录（中断后残留的中间产物在这里）。</summary>
@@ -1566,6 +1739,18 @@ namespace ArchiveFixer.ViewModels
             ExportFailedListCommand = new RelayCommand(ExportFailedList);
             OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory, CanRunNormalCommand);
+            CopyOutputLocationCommand = new RelayCommand(CopyOutputLocation, CanRunNormalCommand);
+
+            /*
+             * ②③④⑥四页共用的设置编辑器改了落点之后，把①页「输出位置」那一行拉回同一个真值。
+             *
+             * 为什么必须挂这条线：AppSettings 是普通 POCO（不发通知），而②页的「选择 / 单选」
+             * 走的是 SettingsViewModel（直接写 Settings.CustomOutputDirectory / ExtractToOriginalDirectory），
+             * 不经过 MainViewModel.SelectedOutputDirectory 的 setter —— 不挂线的话，
+             * 用户在②页改完回到①页会看到旧路径（"改了没反应"那类 bug 的典型形态）。
+             * 只在这些属性上搬运，别的属性一律不碰（避免 SaveSettings 之后的整片刷新）。
+             */
+            _settingsEditor.PropertyChanged += OnSettingsEditorPropertyChanged;
             OpenLogDirectoryCommand = new RelayCommand(OpenLogDirectory);
             OpenWorkDirectoryCommand = new RelayCommand(OpenWorkDirectory);
 
@@ -4327,6 +4512,14 @@ namespace ArchiveFixer.ViewModels
 
                 SelectedOutputDirectory = folder;
 
+                /*
+                 * ⚠ 刻意**不建目录**（用户 2026-09-25 第 28 条的解释落地）：选择输出位置只是"记住一个地址"，
+                 * 这里一个 Directory.CreateDirectory 都不能有 —— 用户挑了一个位置又改主意时，
+                 * 盘上不该多出一个他没让程序建的空文件夹（用户实际遇到过：设置里的"指定位置"
+                 * 在磁盘上真冒出来一个目录，他问"这个又是什么鬼"）。
+                 * 目录只在**真正往它里面定稿**那一步才建（ExtractionCoordinator 的 stage commit：
+                 * EnsureDirectoryExists(destinationDirectory)），失败 / 取消时它根本不会被建出来。
+                 */
                 if (Settings != null)
                 {
                     Settings.CustomOutputDirectory = folder;
@@ -4709,6 +4902,7 @@ namespace ArchiveFixer.ViewModels
                  CopyFailedListCommand,
                  OpenOutputDirectoryCommand,
                  SelectOutputDirectoryCommand,
+                 CopyOutputLocationCommand,
                  OpenLogDirectoryCommand,
                  ResetSettingsCommand,
                  CleanProcessArtifactsCommand,

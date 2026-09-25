@@ -54,10 +54,43 @@ namespace ArchiveFixer.Tests
             "DangerModeRiskLines",        // 风险四条（红横幅）
             "DangerSoftBrush",            // 横幅底色
             "OutputPlacementSummaryConverter", // 输出位置那一大块
-            "SelectedOutputDirectory",
             "RunAtFullSpeed",             // 「全速」（跟着并发档走）
             "SpaceModeText",
             "OpenSettingsCommand"         // 「改…」跳设置窗口
+        };
+
+        /// <summary>
+        /// **有意为之的第二入口**（用户 2026-09-25 第 27 条）：同一项出现在两页里，
+        /// 在这一份清单里逐条登记 + 一句为什么，别让"同一项只许出现在一页"那条断言误报。
+        ///
+        /// <para>它与"两个控件改同一个值、用户看到改了没反应"那种缺陷的区别在于：
+        /// 这里两个入口读写的**是同一个真值**（<c>Settings.ExtractToOriginalDirectory</c> +
+        /// <c>Settings.CustomOutputDirectory</c>），而且在①页改完会显式通知②页刷新（反过来也一样），
+        /// 有专门的用例钉住（<c>OutputLocationOnTaskTabTests</c>）。</para>
+        /// </summary>
+        private static readonly Dictionary<string, string> DeliberateSecondEntries = new(StringComparer.Ordinal)
+        {
+            ["OutputLocationDisplay"] = "①页那一格显示的省略路径（第 27 条）。它只是显示，不存值。",
+
+            ["OutputLocationFollowsArchive"] = "①页那一格的「未指定位置」开关（第 27 条）。它写的就是②页落点判据本身。",
+
+            ["OutputLocationToolTip"] = "①页那一格的完整路径提示（第 27 条）。只读。",
+
+            ["SelectOutputDirectoryCommand"] = "①页「选择…」（第 27 条）。与②页那把「选择」同一个动作、同一份值。",
+
+            ["CopyOutputLocationCommand"] = "①页那一格右键的「复制完整路径」（第 27 条）。只读，不改任何值。"
+        };
+
+        /// <summary>
+        /// 同一件事的**值**在 ViewModel 上的名字（不进 XAML，所以不按"①页里找得到"判）。
+        ///
+        /// <para><c>SelectedOutputDirectory</c> 就是①页那一格显示的那个值：XAML 绑的是
+        /// <c>OutputLocationDisplay</c>（省略之后给人看的），值本身仍在 MainViewModel 上，
+        /// 与②页共用的也是它。</para>
+        /// </summary>
+        private static readonly Dictionary<string, string> DeliberateSecondEntryValues = new(StringComparer.Ordinal)
+        {
+            ["SelectedOutputDirectory"] = "①页与②页共用的那一个输出位置值（第 27 条）。"
         };
 
         // ================================================================ ① 六个选项卡
@@ -288,7 +321,14 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal("1400", (string?)document.Root?.Attribute("Width"));
             Assert.Equal("900", (string?)document.Root?.Attribute("Height"));
-            Assert.Equal("1000", (string?)document.Root?.Attribute("MinWidth"));
+
+            /*
+             * 最小宽度 2026-09-25 由 1000 抬到 1180（第 27 条）：①页工具条中间那一格
+             * 「输出位置」要有余量 —— 1000px 时右边那串按钮（全选…一键处理…特定解压）约 900px，
+             * 路径格会被压到几乎看不见、右端的「未指定位置」还可能被裁掉。
+             * 默认 1400 下完全够用，这条只防"用户把窗口拖到最小"那一种情况。
+             */
+            Assert.Equal("1180", (string?)document.Root?.Attribute("MinWidth"));
             Assert.Equal("640", (string?)document.Root?.Attribute("MinHeight"));
         }
 
@@ -370,6 +410,12 @@ namespace ArchiveFixer.Tests
                     $"{expectedTab} 里没有绑定 Settings.{property}");
 
                 // ③ 别的页不许也绑同一项 —— 两个控件改同一个值，用户会看到"改了没反应"。
+                //    例外只认 DeliberateSecondEntries 里逐条登记过的那些（第 27 条的输出位置）。
+                if (DeliberateSecondEntries.ContainsKey(property))
+                {
+                    continue;
+                }
+
                 foreach ((string tabName, string xaml) in tabFiles)
                 {
                     if (tabName == expectedTab)
@@ -381,6 +427,42 @@ namespace ArchiveFixer.Tests
                         xaml.Contains("Settings." + property, StringComparison.Ordinal),
                         $"Settings.{property} 同时出现在 {expectedTab} 与 {tabName} 两页里");
                 }
+            }
+        }
+
+        /// <summary>
+        /// 第二入口的白名单本身也要有据可查（用户 2026-09-25 第 27 条）：
+        /// 登记的每一项都必须**真的**挂在①页上，而且**不许**绕过 ViewModel 直接再绑一遍
+        /// <c>Settings.*</c> —— 那才会变成"两个控件改同一个值"的经典缺陷。
+        /// </summary>
+        [Fact]
+        public void 输出位置的第二入口_每一项都真挂在任务页且不重复绑设置项()
+        {
+            string taskTab = Read("Views", "Tabs", "TaskTab.xaml");
+            string viewModelSource = Read("ViewModels", "MainViewModel.cs");
+
+            foreach ((string name, string reason) in DeliberateSecondEntries)
+            {
+                Assert.True(
+                    taskTab.Contains(name, StringComparison.Ordinal),
+                    $"白名单里登记了 {name}（{reason}），但①页上找不到它 —— 白名单过时了");
+
+                Assert.False(
+                    taskTab.Contains("Settings." + name, StringComparison.Ordinal),
+                    $"{name} 不许在①页直接绑 Settings.*（那会让两处各改一份值）");
+            }
+
+            foreach ((string name, string reason) in DeliberateSecondEntryValues)
+            {
+                Assert.True(
+                    viewModelSource.Contains(name, StringComparison.Ordinal),
+                    $"白名单里登记了 {name}（{reason}），但 MainViewModel 上没有它 —— 白名单过时了");
+            }
+
+            // 反向：清单里没登记的、原来禁止的东西，一个都不许溜回①页。
+            foreach (string forbidden in MustNotBeOnTaskTab)
+            {
+                Assert.DoesNotContain(forbidden, taskTab, StringComparison.Ordinal);
             }
         }
 

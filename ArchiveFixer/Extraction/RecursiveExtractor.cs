@@ -4,6 +4,7 @@ using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Password;
 using ArchiveFixer.Security;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -1752,6 +1753,74 @@ namespace ArchiveFixer.Extraction
             }
 
             return CleanupWorkspace(workspace, taskLabel, reason);
+        }
+
+        /// <summary>
+        /// 失败 / 取消 / 部分完成收尾时，按用户设置（<c>AppSettings.KeepFailedWorkspace</c>，默认关）
+        /// 清掉**本次运行自己建的**那个工作区（用户 2026-09-25 第 25 条：失败不留残留）。
+        ///
+        /// <para>它是逐层产物的落点，双层包里最占地方的一份（"解压 40G，两层，解压失败有 80G"）。
+        /// 与 <see cref="TryCleanupCurrentWorkspace"/> 的区别只有"为什么清"与日志措辞：
+        /// 那一条是**结论被调用方改写**时才调（"用户选择只保留当前一层"），
+        /// 这一条是**整单没成功**时调 —— 调用方要判两件事才轮到它：这一单确实没成功、
+        /// 而且用户没有打开「失败时保留中间产物」（判断在
+        /// <c>ExtractionCoordinator.CleanupFailedTaskWorkspace</c> 里，一处收口）。</para>
+        ///
+        /// <para>安全口径与 <see cref="CleanupWorkspace"/> 完全一致：容器内校验先做一遍
+        /// （必须在工作区根目录之下）、<see cref="ExtractionWorkspace.Cleanup"/> 内部再独立校验一遍、
+        /// 只认本实例持有的那一个目录（绝不按目录名 / "最新目录"去扫 <c>work\recursive</c> ——
+        /// 并发跑两个递归任务时，扫描式删除会把对方正在写的工作区端掉）、
+        /// 删不掉只写 WARN（绝不改任务结论）。</para>
+        ///
+        /// <para>工作区本来就不在（成功那一支已经清过 / 这次没建到工作区）时**一个字都不写**：
+        /// 那种情况下没有任何"删了什么"需要交代，多写一行只会让日志变噪声。</para>
+        /// </summary>
+        /// <returns>工作区确实不在了（本次删掉 / 本来就不在）返回 true。</returns>
+        public bool TryDiscardCurrentWorkspaceOnFailure(string taskLabel)
+        {
+            ExtractionWorkspace? workspace = CurrentWorkspace;
+
+            if (workspace == null)
+            {
+                return false;
+            }
+
+            if (!Directory.Exists(workspace.TaskDirectory))
+            {
+                return true;
+            }
+
+            if (!ArchivePathGuard.IsInsideRoot(workspace.RootDirectory, workspace.TaskDirectory, out string guardReason))
+            {
+                Log(
+                    "WARN",
+                    $"{taskLabel}：工作区不在工作区根目录之下，已跳过清理 —— {guardReason}：{workspace.TaskDirectory}");
+
+                return false;
+            }
+
+            // 删除是**不可逆**的：动手之前先把"删什么、为什么、多大"写进日志（同 CleanupWorkspace）。
+            (int fileCount, long totalSize) = OutputVerifier.Measure(workspace.TaskDirectory);
+
+            Log(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.WorkspaceClearedOnFailureFormat,
+                    taskLabel,
+                    fileCount,
+                    TaskSpaceEstimate.FormatSize(totalSize),
+                    workspace.TaskDirectory));
+
+            WorkspaceCleanupResult cleanup = workspace.Cleanup();
+
+            // 删成了是 INFO，没删成（占用 / 权限 / 越界）是 WARN，而 Cleanup 的消息里已经带上了路径。
+            if (!cleanup.Cleaned)
+            {
+                Log("WARN", $"{taskLabel}：{cleanup.Message}");
+            }
+
+            return cleanup.Cleaned;
         }
 
         /// <summary>

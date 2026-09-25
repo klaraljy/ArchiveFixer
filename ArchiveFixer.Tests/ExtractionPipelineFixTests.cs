@@ -244,11 +244,15 @@ namespace ArchiveFixer.Tests
 
             /*
              * 产物一个都不许移动。
-             * 入仓之后产物在**暂存目录**里（这是取消时唯一还能看的地方），
-             * 最终目录**连建都不该建** —— 定稿没跑，它就不该存在（契约 §6 第 2 条）。
+             * 入仓之后产物在**暂存目录**里，而默认档（用户 2026-09-25 第 25 条追加："失败了就失败了"）
+             * 会把这一单没成功的工作区**整份清掉** —— 所以取消之后暂存目录连同它的产物都不在了。
+             * 要害仍然钉死两条：① 最终目录**连建都不该建**（定稿没跑，契约 §6 第 2 条）；
+             * ② 归集目录一个字节都没有（产物绝没有被搬走）。
              */
             Assert.False(Directory.Exists(collectRoot), "取消之后产物被归集走了");
-            Assert.Equal(5, CountFiles(TaskStageDirectory(harness, task)));
+            Assert.False(
+                Directory.Exists(TaskStageDirectory(harness, task)),
+                "默认档下取消之后暂存目录该被整份清掉");
             Assert.False(Directory.Exists(task.OutputPath), $"取消之后最终目录被建出来了：{task.OutputPath}");
             Assert.Equal(string.Empty, task.CollectedPath);
         }
@@ -632,12 +636,30 @@ namespace ArchiveFixer.Tests
             Assert.Equal(string.Empty, task.CollectedPath);
 
             /*
-             * 产物应当留在**暂存目录**里（那是引擎真正写盘的地方），而且最终目录连建都不该建 ——
-             * 越界结论下定稿根本不跑，最终目录里一个字节都不许有（契约 §6 第 2 条）。
+             * 默认档（用户 2026-09-25 第 25 条追加）：这一单没成功 → 工作区整份清掉。
+             * ⚠ 这一条用例的工作区里有一个**目录联接点**（那正是越界的来源）：Windows 会拒绝递归删除它，
+             * 于是走"删不掉"那一条路 —— 那时**必须**留一条 WARN 说清"没清掉 + 路径"，
+             * 绝不许假装清干净了（这条同时钉住"一次清理失败绝不改任务结论"）。
+             * 要害始终是"定稿一步都没跑"：最终目录连建都不该建、归集目录一个字节都没有、
+             * 越界落点的那个目录也没被我们删。
              */
-            Assert.True(
-                File.Exists(Path.Combine(TaskStageDirectory(harness, task), "innocent.txt")),
-                "产物应当留在暂存目录里");
+            string taskWorkDirectory = TaskWorkDirectory(harness, task);
+
+            if (Directory.Exists(taskWorkDirectory))
+            {
+                Assert.Contains(
+                    harness.Log.Logs,
+                    x => x.Level == "WARN" &&
+                         x.Message.Contains("工作区没清掉", StringComparison.Ordinal) &&
+                         x.Message.Contains(taskWorkDirectory, StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                Assert.False(
+                    Directory.Exists(TaskStageDirectory(harness, task)),
+                    "工作区都清掉了，暂存目录不该还在");
+            }
+
             Assert.False(Directory.Exists(task.OutputPath), $"越界结论下最终目录被建出来了：{task.OutputPath}");
             Assert.True(Directory.Exists(outside), "越界落点的目录本身不该被我们删掉");
         }
@@ -693,11 +715,27 @@ namespace ArchiveFixer.Tests
             Assert.Contains(
                 harness.Log.Logs,
                 x => x.Message.Contains("中间工作区已清理", StringComparison.Ordinal));
+
+            /*
+             * 成功这一支**不是**靠"失败不留残留"那条新逻辑清的（用户 2026-09-25 第 25 条追加）：
+             * 那一条的日志是「已清理工作区…（这次没成功…）」，这里一条都不许出现 ——
+             * 否则"成功路径的清理口径一个字不改"就成了空话，两套清理也会互相掩盖。
+             */
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                x => x.Message.Contains("已清理工作区：", StringComparison.Ordinal));
         }
 
-        /// <summary>取消：中间工作区是用户唯一还能看的东西，一律留着（与 §9.5 的清理语义对齐）。</summary>
+        /// <summary>
+        /// 取消：中间工作区默认**整份清掉**（用户 2026-09-25 第 25 条追加）。
+        ///
+        /// <para>旧口径是"取消时中间件是用户唯一还能看的东西，一律留着"（2026-09-24 第 23 条）。
+        /// 用户后来说得很直接："失败了就失败了，成功了就成功了"+"我不希望有这么多的失败残留"，
+        /// 而且失败清单已经能说清每个包为什么失败 —— 所以默认档改成不留现场；
+        /// 要看现场的人在 ③ 页打开「失败时保留中间产物」（那一条有独立用例钉住）。</para>
+        /// </summary>
         [Fact]
-        public async Task 取消后_中间工作区不清理()
+        public async Task 取消后_中间工作区默认被清掉()
         {
             Harness harness = CreateHarness();
             string source = CreateEmbeddedSourceFile("embedded-cancel.7z");
@@ -729,12 +767,18 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.Equal(StatusText.Cancelled, task.Status);
-            Assert.True(Directory.Exists(taskWorkDirectory), "取消之后中间工作区被清掉了");
+            Assert.False(Directory.Exists(taskWorkDirectory), $"取消之后中间工作区还在：{taskWorkDirectory}");
+            Assert.True(File.Exists(source), "取消时源文件必须原样保留");
+
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("已清理工作区：", StringComparison.Ordinal) &&
+                     x.Message.Contains("这次没成功", StringComparison.Ordinal));
         }
 
-        /// <summary>失败（密码不对）：同样不许清理 —— 用户可能要靠抠出来的中间件自己再试。</summary>
+        /// <summary>失败（密码不对）：默认同样整份清掉 —— 用户要的是"失败了就失败了"。</summary>
         [Fact]
-        public async Task 解压失败后_中间工作区不清理()
+        public async Task 解压失败后_中间工作区默认被清掉()
         {
             Harness harness = CreateHarness();
             string source = CreateEmbeddedSourceFile("embedded-fail.7z");
@@ -750,8 +794,14 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.Equal(StatusText.WrongPassword, task.Status);
-            Assert.True(Directory.Exists(taskWorkDirectory), "解压失败之后中间工作区被清掉了");
+            Assert.False(Directory.Exists(taskWorkDirectory), $"解压失败之后中间工作区还在：{taskWorkDirectory}");
             Assert.True(File.Exists(source), "失败时源文件必须原样保留");
+
+            // 删了什么要说清：几个文件 / 多大 / 怎么改主意（去 ③ 页打开保留开关）。
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("已清理工作区：", StringComparison.Ordinal) &&
+                     x.Message.Contains("失败时保留中间产物", StringComparison.Ordinal));
         }
 
         // ================================================================ 递归路径的工作区（data\work\recursive）
@@ -821,11 +871,15 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 递归失败（第一层就没解开）：两处工作区**都**要留着 —— 产物还没发布，
-        /// 这些中间件与逐层产物是用户唯一的线索（与不变量 6/7 的保留口径一致）。
+        /// 递归失败（第一层就没解开）：**两处**工作区默认都要清掉（用户 2026-09-25 第 25 条追加）。
+        ///
+        /// <para>用户原话：「如果解压 40G，两层，解压失败有 80G 的卸载残留，用户不得气死」——
+        /// 双层包失败时留得最多的正是递归核心那份逐层工作区，所以这一条同时钉两处：
+        /// ① 抠出来的中间件所在的 <c>work\&lt;任务名&gt;\</c>；② <c>work\recursive\&lt;taskId&gt;\</c>。
+        /// 结论仍是"部分完成"（绝不显示成功，不变量 6），源包一个字节不动（不变量 1）。</para>
         /// </summary>
         [Fact]
-        public async Task 递归失败后_抠出来的中间件不清理()
+        public async Task 递归失败后_两处工作区默认都被清掉()
         {
             Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
             string source = CreateEmbeddedSourceFile("embedded-recursive-fail.7z");
@@ -834,6 +888,7 @@ namespace ArchiveFixer.Tests
             task.EmbeddedArchiveOffset = EmbeddedPaddingBytes;
 
             string taskWorkDirectory = TaskWorkDirectory(harness, task);
+            string recursiveRoot = Path.Combine(harness.PathService.WorkDirectory, "recursive");
 
             harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
             harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
@@ -853,7 +908,11 @@ namespace ArchiveFixer.Tests
 
             // 递归没走完 → 部分完成（绝不显示成功）。
             Assert.Equal(StatusText.PartiallyCompleted, task.Status);
-            Assert.True(Directory.Exists(taskWorkDirectory), "递归失败之后中间工作区被清掉了");
+            Assert.False(Directory.Exists(taskWorkDirectory), $"递归失败之后中间工作区还在：{taskWorkDirectory}");
+
+            // 递归核心的逐层工作区（几百 MB / 几十 GB 的那一份）也必须清干净。
+            Assert.Equal(0, CountSubdirectories(recursiveRoot));
+
             Assert.True(File.Exists(source), "失败时源文件必须原样保留");
         }
 

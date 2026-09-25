@@ -288,7 +288,14 @@ namespace ArchiveFixer.Tests
                  * 它必须真的被解压管线读到 —— ExtractionCoordinator 的决定性判断就是
                  * SpecialExtractionPlan.FromSettings(Settings) 里的第一句（关着时规则清单一律不算）。
                  */
-                "UseSpecialExtraction"
+                "UseSpecialExtraction",
+
+                /*
+                 * 2026-09-25 第 25 条追加的「失败时保留中间产物」（③清理与删除页的「工作区残留」那一组里）。
+                 * 它必须真的被收尾读到 —— ExtractionCoordinator.CleanupFailedTaskWorkspace
+                 * 与 RecursiveExtractor 的失败清理都按它决定"清不清现场"，默认关 = 失败不留残留。
+                 */
+                "KeepFailedWorkspace"
             };
 
             foreach (string name in appSettingsBound)

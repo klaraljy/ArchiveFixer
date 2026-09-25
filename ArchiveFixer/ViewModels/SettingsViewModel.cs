@@ -959,6 +959,12 @@ namespace ArchiveFixer.ViewModels
                 Settings.CustomOutputDirectory = folder;
                 Settings.ExtractToOriginalDirectory = false;
 
+                /*
+                 * ⚠ 刻意**不建目录**（用户 2026-09-25 第 28 条）：选择位置只是改设置 ——
+                 * 挑完又改主意时，盘上不该留下一个空的"指定位置"目录。
+                 * 目录只在定稿那一步才建（ExtractionCoordinator 的 stage commit）。
+                 */
+
                 // 选了自定义目录 = 切到"指定位置 + 同名子文件夹"那一档（只剩这一档用得上路径）。
                 Settings.KeepArchiveNameFolder = true;
                 OnPropertyChanged(nameof(Settings));
@@ -1000,6 +1006,20 @@ namespace ArchiveFixer.ViewModels
             settings.ExtractToOriginalDirectory = option != OutputPlacementOption.CustomNamedSubfolder;
             settings.KeepArchiveNameFolder = true;
         }
+
+        /// <summary>
+        /// 让外面（①「任务」页那一格）也能把落点相关的显示拉回同一份真值（用户 2026-09-25 第 27 条）。
+        ///
+        /// <para>为什么必须有这个公开入口：①页那个「未指定位置」开关直接写的是
+        /// <c>Settings.ExtractToOriginalDirectory</c>（两档落点的唯一判据），
+        /// 而②页的单选按钮 / 那把「选择」按钮绑的是本类**算出来**的
+        /// <see cref="OutputPlacement"/> / <see cref="IsCustomOutputEnabled"/> / <see cref="OutputPlacementSummary"/> ——
+        /// AppSettings 是普通 POCO、不发通知，不喊这一声②页就会继续显示老档位
+        /// （"①页勾了、②页没变"正是历史上那类"改了没反应"的形态）。</para>
+        ///
+        /// <para>它就是 <see cref="RaiseOutputPlacementChanged"/>，语义一致、不另写一套。</para>
+        /// </summary>
+        public void NotifyOutputPlacementChanged() => RaiseOutputPlacementChanged();
 
         private void RaiseOutputPlacementChanged()
         {

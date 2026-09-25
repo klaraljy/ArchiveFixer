@@ -61,6 +61,66 @@
                             ToolTip="{x:Static models:StatusText.AddReplacesListHint}" />
                 </StackPanel>
 
+                <!--
+                    第 27 条：「输出位置」那一格就在「添加文件夹」与「全选」**之间**（用户原话：
+                    "输出的指定位置可以放在主界面进行选择……在添加文件夹和全选中间还有那么多的位置"）——
+                    刻意**不**塞进右边那串按钮里。
+
+                    三个部件：只读的当前路径（**中间省略**：前三段 + \...\ + 末两段，完整路径在
+                    ToolTip 与右键菜单里；"反正我要求的就是我们最好能够看到完整的解压地址"）、
+                    「选择…」、「未指定位置」开关。
+
+                    两个约束落在属性上：
+                    · 空间不够时先压这一格（路径 TextTrimming + 单元格 ClipToBounds），
+                      **不许**把右边的「全选 / 一键处理」挤走；
+                    · 绑的是 MainViewModel 上那两个属性 —— 与②「解压方式」页是同一份真值
+                      （Settings.ExtractToOriginalDirectory + Settings.CustomOutputDirectory），
+                      不新开字段、不各存一份。
+                -->
+                <Grid Grid.Column="1" Margin="12,0" VerticalAlignment="Center" ClipToBounds="True">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="{x:Static models:StatusText.OutputLocationLabel}"
+                               Style="{StaticResource LabelTextStyle}"
+                               VerticalAlignment="Center" />
+
+                    <TextBlock Grid.Column="1"
+                               Margin="6,0,0,0"
+                               MinWidth="160"
+                               VerticalAlignment="Center"
+                               FontFamily="{StaticResource MonoFontFamily}"
+                               TextTrimming="CharacterEllipsis"
+                               Text="{Binding OutputLocationDisplay}"
+                               ToolTip="{Binding OutputLocationToolTip}">
+                        <TextBlock.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="{x:Static models:StatusText.OutputLocationCopyMenuText}"
+                                          Command="{Binding PlacementTarget.DataContext.CopyOutputLocationCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                            </ContextMenu>
+                        </TextBlock.ContextMenu>
+                    </TextBlock>
+
+                    <Button Grid.Column="2"
+                            Content="{x:Static models:StatusText.OutputLocationChooseButtonText}"
+                            MinWidth="72"
+                            Margin="8,0,0,0"
+                            ToolTip="挑一个统一的输出位置（与②「解压方式」页那一格是同一个值）"
+                            Command="{Binding SelectOutputDirectoryCommand}" />
+
+                    <CheckBox Grid.Column="3"
+                              Content="{x:Static models:StatusText.OutputLocationFollowsArchiveLabel}"
+                              Margin="10,0,0,0"
+                              VerticalAlignment="Center"
+                              IsChecked="{Binding OutputLocationFollowsArchive, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.OutputLocationFollowsArchiveHint}" />
+                </Grid>
+
                 <WrapPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <Button Content="全选"
                             MinWidth="60"
