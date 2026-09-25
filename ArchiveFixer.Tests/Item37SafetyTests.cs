@@ -160,6 +160,59 @@ namespace ArchiveFixer.Tests
             Assert.False(File.Exists(Path.Combine(rightOutput, "大文件.bin")), "探针只解那一个条目");
         }
 
+        /// <summary>
+        /// **包里没有小文件时怎么先试密码**（用户 2026-09-25 第 38 条："而且没有小于16MB的文件怎么办"）。
+        ///
+        /// <para>办法：只读"第一个条目**解密后的开头 64 字节**" —— 密码对，它就是文件真正的开头（魔数）；
+        /// 密码错，就是随机字节。代价与包多大无关（一个 5 GiB 的条目也只花零点几秒、一个字节都不落盘）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 真7z_没有小文件时_只读开头64字节就能分辨密码对不对()
+        {
+            RequireSevenZip();
+
+            string directory = Path.Combine(_root, "prefix");
+            Directory.CreateDirectory(directory);
+
+            // 先造一个"内层包"，它的开头就是 7z 魔数（真机那个包里是 .7z.001，形状一致）。
+            string innerSource = Path.Combine(directory, "payload.bin");
+            File.WriteAllBytes(innerSource, new byte[128 * 1024]);
+
+            string inner = Path.Combine(directory, "inner.7z");
+            Run7z("a", "-t7z", "-mx0", inner, innerSource);
+
+            // 外层：密码 + 存（Copy）方式，形状与真机那个"名字可见、条目加密"的包一致。
+            string outer = Path.Combine(directory, "encrypted-outer.7z");
+            Run7z("a", "-t7z", "-mx0", "-p" + "正确的密码", outer, inner);
+
+            var engine = new SevenZipEngine();
+
+            ArchiveListResult list = await engine.ListAsync(ArchiveRequest.For(outer), CancellationToken.None);
+
+            Assert.True(list.Success, list.Message);
+            Assert.True(list.IsEncrypted, "外层是加密包");
+
+            // ①读开头这一档拿得出条目（哪怕包里一个"小文件"都没有）。
+            string? prefixEntry = PasswordProbe.ChoosePrefixEntry(list);
+            Assert.NotNull(prefixEntry);
+
+            byte[]? right = await engine.TryReadDecryptedPrefixAsync(
+                outer, prefixEntry!, "正确的密码", PasswordProbe.PrefixProbeBytes);
+
+            Assert.NotNull(right);
+            Assert.True(
+                PasswordProbe.LooksLikeFileStart(right),
+                "对密码解出来的开头必须是文件真正的开头（内层 7z 的魔数）");
+
+            byte[]? wrong = await engine.TryReadDecryptedPrefixAsync(
+                outer, prefixEntry!, "错的密码", PasswordProbe.PrefixProbeBytes);
+
+            Assert.NotNull(wrong);
+            Assert.False(
+                PasswordProbe.LooksLikeFileStart(wrong),
+                "错密码解出来的是随机字节，看不出是文件开头 —— 靠这一点就能把它排到最后");
+        }
+
         // ================================================================ ② 链尾删除要看整条链
 
         [Fact]

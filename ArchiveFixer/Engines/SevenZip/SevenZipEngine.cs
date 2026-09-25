@@ -76,6 +76,28 @@ namespace ArchiveFixer.Engines.SevenZip
         }
 
         /// <summary>
+        /// **只读"某个条目解密后的开头 N 字节"**（用户 2026-09-25 第 38 条；密码预检专用）。
+        ///
+        /// <para>为什么放在具体引擎上、不进 <see cref="IArchiveEngine"/>：四个核心操作（probe/list/test/extract）
+        /// 是所有引擎都必须有的；"读开头几十字节"是 7-Zip 这条路特有的省时手段
+        /// （UnRAR 走 <c>-hp</c> 时读头就能拒，本来就快）。调用方（<c>PasswordProbe</c>）拿不到它就退回整包试解。</para>
+        /// </summary>
+        public Task<byte[]?> TryReadDecryptedPrefixAsync(
+            string archivePath,
+            string entryPath,
+            string password,
+            int maxBytes,
+            CancellationToken cancellationToken = default)
+        {
+            if (!IsAvailable)
+            {
+                return Task.FromResult<byte[]?>(null);
+            }
+
+            return _runner.TryReadDecryptedPrefixAsync(archivePath, entryPath, password, maxBytes, cancellationToken);
+        }
+
+        /// <summary>
         /// 列出条目。用 <c>7z l -slt</c>（稳定键值格式），解析交给 <see cref="SevenZipListParser"/>。
         /// M5 的资源预算与"解压前路径预检"都要靠它，所以这里失败时必须给出可读原因，不能只返回空列表。
         /// </summary>

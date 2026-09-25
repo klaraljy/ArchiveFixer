@@ -201,7 +201,7 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 注释写**为什么**（尤其"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
 
 **验证状态（2026-09-25 第 37 条"先试密码再解整包 / 链尾门槛 / 导出全部日志"之后）**：`dotnet build ArchiveFixer.slnx --no-incremental` **0 错误 0 警告**；
-`dotnet test` **1595 通过 / 0 失败 / 0 跳过**；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
+`dotnet test` **1596 通过 / 0 失败 / 0 跳过**；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
 > ⚠ 真 7z 用例在**全量并发**下偶发「引擎操作失败」（实测 `RecursiveExtractorTests.用户确认继续后…`、
 > 以及 `RecursiveExtractorTests.递归取消_工作区保留` 一次，**单跑必过**）——
 > 这是测试侧争用（多集合并行时多个 7z 进程抢磁盘），不是产品缺陷；遇到就**单跑确认**，别去改产品代码。

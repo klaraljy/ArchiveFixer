@@ -102,6 +102,177 @@ namespace ArchiveFixer.Extraction
             return list is { Success: true, IsEncrypted: true };
         }
 
+        /// <summary>
+        /// 预检要读的"解密后开头"字节数（64）。
+        ///
+        /// <para>够覆盖常见格式的魔数（mp4 的 <c>ftyp</c> 在第 4–8 字节、其余都在前 8 字节）；
+        /// 再多读没有额外信息，只会让 7-Zip 多写一点。</para>
+        /// </summary>
+        public const int PrefixProbeBytes = 64;
+
+        /// <summary>
+        /// 从清单里挑"用来读开头字节"的条目：优先最小的那个（顺带也能做小样预检），
+        /// **没有小条目时退而取第一个文件条目** —— 读开头 64 字节的代价与条目多大无关
+        /// （用户 2026-09-25 第 38 条："没有小于 16 MB 的文件怎么办"）。
+        /// </summary>
+        public static string? ChoosePrefixEntry(ArchiveListResult? list)
+        {
+            string? small = ChooseProbeEntry(list);
+
+            if (small != null)
+            {
+                return small;
+            }
+
+            if (list == null || !list.Success || list.Entries == null)
+            {
+                return null;
+            }
+
+            foreach (ArchiveEntry? entry in list.Entries)
+            {
+                if (entry == null || entry.IsDirectory || string.IsNullOrWhiteSpace(entry.Path))
+                {
+                    continue;
+                }
+
+                if (ContainsWildcard(entry.Path))
+                {
+                    continue;
+                }
+
+                return entry.Path;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 解出来的开头这几十字节**像不像一个正常文件的开头**。
+        ///
+        /// <para>用途只有一个：给候选密码分组 —— 像文件开头的先试，什么都不像的排到最后再试。
+        /// ⛔ **判据必须保守**：这里返回 <c>false</c> 只表示"看不出是什么文件"，
+        /// **不等于**"密码错"（有些真实文件就是没有魔数的裸数据）。所以调用方只许拿它**调顺序**，
+        /// 绝不许据此丢掉一个候选。</para>
+        /// </summary>
+        public static bool LooksLikeFileStart(byte[]? prefix)
+        {
+            if (prefix == null || prefix.Length < 4)
+            {
+                return false;
+            }
+
+            ReadOnlySpan<byte> span = prefix;
+
+            foreach (byte[] magic in KnownMagics)
+            {
+                if (span.Length >= magic.Length && span[..magic.Length].SequenceEqual(magic))
+                {
+                    return true;
+                }
+            }
+
+            // mp4 / mov：前 4 字节是长度，第 5–8 字节是 "ftyp" / "moov" / "mdat" / "free"。
+            if (span.Length >= 8 && MatchesAscii(span[4..8], "ftyp"))
+            {
+                return true;
+            }
+
+            // RIFF 容器（wav / avi / webp）：RIFF????WAVE/AVI /WEBP
+            if (span.Length >= 12 && MatchesAscii(span[..4], "RIFF"))
+            {
+                return true;
+            }
+
+            // 全 0 开头（光盘镜像的系统区就是这样）或全同一个字节：说不准，按"像文件"放过。
+            bool allZero = true;
+            bool allSame = true;
+
+            for (int i = 1; i < span.Length; i++)
+            {
+                if (span[i] != 0)
+                {
+                    allZero = false;
+                }
+
+                if (span[i] != span[0])
+                {
+                    allSame = false;
+                }
+            }
+
+            if (allZero || allSame)
+            {
+                return true;
+            }
+
+            return LooksLikeText(span);
+        }
+
+        /// <summary>看着像文本（说明文件 / txt / 配置）：可打印字节占绝大多数，或带 UTF-8 BOM。</summary>
+        private static bool LooksLikeText(ReadOnlySpan<byte> span)
+        {
+            if (span.Length >= 3 && span[0] == 0xEF && span[1] == 0xBB && span[2] == 0xBF)
+            {
+                return true;
+            }
+
+            int printable = 0;
+
+            foreach (byte b in span)
+            {
+                // 制表 / 换行 / 回车，或普通可打印 ASCII。
+                if (b == 0x09 || b == 0x0A || b == 0x0D || (b >= 0x20 && b <= 0x7E))
+                {
+                    printable++;
+                }
+            }
+
+            return printable >= span.Length - (span.Length / 8);
+        }
+
+        private static bool MatchesAscii(ReadOnlySpan<byte> span, string text)
+        {
+            if (span.Length < text.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (span[i] != (byte)text[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static readonly byte[][] KnownMagics = new[]
+        {
+            new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C },             // 7z
+            new byte[] { 0x50, 0x4B, 0x03, 0x04 },                         // zip（本地文件头）
+            new byte[] { 0x50, 0x4B, 0x05, 0x06 },                         // zip（空归档）
+            new byte[] { 0x50, 0x4B, 0x07, 0x08 },                         // zip（分卷）
+            new byte[] { 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07 },             // rar
+            new byte[] { 0x1F, 0x8B },                                     // gzip
+            new byte[] { 0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00 },             // xz
+            new byte[] { 0x42, 0x5A, 0x68 },                               // bzip2
+            new byte[] { 0x1A, 0x45, 0xDF, 0xA3 },                         // mkv / webm
+            new byte[] { 0x46, 0x4C, 0x56 },                               // flv
+            new byte[] { 0xFF, 0xD8, 0xFF },                               // jpeg
+            new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }, // png
+            new byte[] { 0x47, 0x49, 0x46, 0x38 },                         // gif
+            new byte[] { 0x25, 0x50, 0x44, 0x46 },                         // pdf
+            new byte[] { 0x4D, 0x5A },                                     // exe / dll / 自解压包
+            new byte[] { 0x49, 0x44, 0x33 },                               // mp3（带 ID3）
+            new byte[] { 0x4F, 0x67, 0x67, 0x53 },                         // ogg
+            new byte[] { 0x66, 0x4C, 0x61, 0x43 },                         // flac
+            new byte[] { 0x75, 0x73, 0x74, 0x61, 0x72 },                   // tar
+            new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C },             // （重复一次无害，保持表可读）
+        };
+
         private static bool ContainsWildcard(string path)
         {
             return path.IndexOfAny(new[] { '*', '?', '[' }) >= 0;

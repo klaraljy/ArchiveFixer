@@ -8626,6 +8626,38 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
+                 * ===== 先试密码：只读「开头 64 字节」给候选排序（用户 2026-09-25 第 38 条）=====
+                 *
+                 * 这一档专门解决"包里**没有**小文件"（他这个 12 GiB 的包正是三个 5 GB 的大条目 ——
+                 * 小样预检挑不出探针）。7z 的 AES **没有密码校验位**（不像 WinZip AES 有 2 字节校验值），
+                 * 所以"只验密码、不读数据"在协议上做不到；但可以**只读开头几十字节**：
+                 * 密码对，解出来的就是文件真正的开头（7z/zip/rar/mp4… 的魔数）；密码错，解出来是随机字节。
+                 * 代价 = 7-Zip 的密钥派生（约 0.1–0.3 秒），**与包多大无关**、一个字节都不落盘。
+                 *
+                 * ⛔ 只用来**排序**、绝不丢候选：看不出文件开头**不等于**密码错
+                 * （有些真实文件就是没有魔数的裸数据）—— 那些排到后面再试，一个都不会少。
+                 */
+                string? prefixEntryPath = PasswordProbe.IsWorthProbing(
+                        preflightList,
+                        preflightList?.TotalUncompressedSize ?? 0)
+                    ? PasswordProbe.ChoosePrefixEntry(preflightList)
+                    : null;
+
+                if (prefixEntryPath != null &&
+                    candidates.Count > 1 &&
+                    _archiveEngine is SevenZipEngine prefixEngine)
+                {
+                    candidates = await RankCandidatesByDecryptedPrefixAsync(
+                        task,
+                        engineArchivePath,
+                        prefixEngine,
+                        prefixEntryPath,
+                        candidates,
+                        maxPasswordAttempts,
+                        cancellationToken);
+                }
+
+                /*
                  * 本轮候选循环的两笔账（用户 2026-09-24 要求，缺一不可）：
                  * · lastVerification —— 最后一个"解出来了但产物没通过校验"的结论。
                  *   循环跑完还没成功时，它就是**最准确**的失败理由（比泛泛的"密码错误"多出三个数字）；
@@ -9023,6 +9055,77 @@ namespace ArchiveFixer.ViewModels
                 cancellationToken);
 
             return new StageProductVerification(list, verification);
+        }
+
+        /// <summary>
+        /// 用"解密后的开头 64 字节"给候选密码**排序**（用户 2026-09-25 第 38 条）。
+        ///
+        /// <para>形状对得上的（看得出文件魔数 / 像文本）排前面；读不出来的（引擎不支持、超时）保持原位；
+        /// 读出**随机字节**的排最后 —— 那基本就是"密码不对"，但**一个候选都不丢**：
+        /// 万一那个密码其实是对的、而这个文件恰好没有魔数，它仍然会被试到（只是排在后面）。
+        /// 检查的候选数封顶在"每层尝试上限"个（每个约 0.1–0.3 秒，十来个也就一两秒）。</para>
+        /// </summary>
+        private async Task<List<PasswordItem>> RankCandidatesByDecryptedPrefixAsync(
+            ArchiveTask task,
+            string archivePath,
+            SevenZipEngine engine,
+            string entryPath,
+            List<PasswordItem> candidates,
+            int maxPasswordAttempts,
+            CancellationToken cancellationToken)
+        {
+            var plausible = new List<PasswordItem>();
+            var unknown = new List<PasswordItem>();
+            var implausible = new List<PasswordItem>();
+            var uncheckedCandidates = new List<PasswordItem>();
+
+            int limit = Math.Min(candidates.Count, Math.Max(1, maxPasswordAttempts));
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                if (i >= limit)
+                {
+                    uncheckedCandidates.Add(candidates[i]);
+                    continue;
+                }
+
+                PasswordItem candidate = candidates[i];
+
+                byte[]? prefix = await engine.TryReadDecryptedPrefixAsync(
+                    archivePath,
+                    entryPath,
+                    candidate.Value ?? string.Empty,
+                    PasswordProbe.PrefixProbeBytes,
+                    cancellationToken);
+
+                if (prefix == null)
+                {
+                    unknown.Add(candidate);
+                }
+                else if (PasswordProbe.LooksLikeFileStart(prefix))
+                {
+                    plausible.Add(candidate);
+                }
+                else
+                {
+                    implausible.Add(candidate);
+                }
+            }
+
+            var ordered = new List<PasswordItem>(candidates.Count);
+            ordered.AddRange(plausible);
+            ordered.AddRange(unknown);
+            ordered.AddRange(implausible);
+            ordered.AddRange(uncheckedCandidates);
+
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：密码预检 —— 只读「{entryPath}」解密后的开头 {PasswordProbe.PrefixProbeBytes} 字节"
+                + $"（与包多大无关，一个字节都不落盘）：看着像正常文件开头 {plausible.Count} 个"
+                + $"（先试），说不准 {unknown.Count} 个，看不出是文件开头 {implausible.Count} 个（排到最后再试）。"
+                + "⛔ 一个候选都不会被丢掉。");
+
+            return ordered;
         }
 
         /// <summary>
