@@ -34,8 +34,7 @@ namespace ArchiveFixer.Tests
 
             foreach (string file in Directory
                          .EnumerateFiles(appDirectory, "*.cs", SearchOption.AllDirectories)
-                         .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                                        && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)))
+                         .Where(path => !IsBuildOutput(path)))
             {
                 string[] lines = File.ReadAllLines(file, Encoding.UTF8);
 
@@ -62,10 +61,54 @@ namespace ArchiveFixer.Tests
                 }
             }
 
+            findings.AddRange(FindBoldMarkersInXaml(appDirectory));
+
             Assert.True(
                 findings.Count == 0,
                 "下面这些字符串会被**原样**显示到界面上（WPF 不认 Markdown）：" +
                 Environment.NewLine + string.Join(Environment.NewLine, findings));
+        }
+
+        /// <summary>
+        /// XAML 里也要扫（2026-09-26 真机代跑逮到的）：<c>Text=</c> / <c>ToolTip=</c> / <c>Content=</c>
+        /// 里的 <c>**加粗**</c> 与 .cs 里的是同一个毛病，只是上一次那一轮体检**只扫了 .cs**
+        /// —— 于是②页空间门那条提示、⑥页四个 ToolTip、⑤页「压缩流程」、①页两个导出按钮的
+        /// ToolTip 一共 7 处，界面上一直挂着星号（真机打开②页一眼就看见了）。
+        ///
+        /// <para>⛔ 注释（<c>&lt;!-- … --&gt;</c>，含多行）里的 Markdown 是写给读代码的人看的，跳过。</para>
+        /// </summary>
+        private static List<string> FindBoldMarkersInXaml(string appDirectory)
+        {
+            var findings = new List<string>();
+
+            foreach (string file in Directory
+                         .EnumerateFiles(appDirectory, "*.xaml", SearchOption.AllDirectories)
+                         .Where(path => !IsBuildOutput(path)))
+            {
+                string text = File.ReadAllText(file, Encoding.UTF8);
+                string stripped = Regex.Replace(text, "<!--.*?-->", string.Empty, RegexOptions.Singleline);
+
+                string[] lines = stripped.Split('\n');
+
+                for (int index = 0; index < lines.Length; index++)
+                {
+                    string line = lines[index].TrimEnd('\r');
+
+                    if (BoldMarker.IsMatch(line))
+                    {
+                        findings.Add(
+                            $"{Path.GetFileName(file)}:{index + 1}（XAML）：{line.Trim()[..Math.Min(120, line.Trim().Length)]}");
+                    }
+                }
+            }
+
+            return findings;
+        }
+
+        private static bool IsBuildOutput(string path)
+        {
+            return path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                   || path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal);
         }
     }
 }

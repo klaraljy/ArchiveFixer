@@ -321,7 +321,7 @@
                         <CheckBox Content="全速（本批不节流）"
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding RunAtFullSpeed, Mode=TwoWay}"
-                                  ToolTip="本批忽略并发档，能并行多少就并行多少（只对本次运行有效，不改设置）。慢盘上会让磁盘更忙。" />
+                                  ToolTip="本批忽略并发档，能并行多少就并行多少。这是一个「设置」：改了立刻存、重启后还是勾着的（想恢复排队就把勾去掉）。慢盘上会让磁盘更忙。" />
 
                         <Button Content="按空间算建议"
                                 Margin="16,0,0,0"
@@ -347,7 +347,7 @@
                                        Foreground="{StaticResource InfoTextBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,3,0,0"
-                                       Text="空间门：每个任务启动前都按「源包 + 内容物 + 其余物增量 + 512 MiB 余量」核算；不够就不启动，并写明需要多少、可用多少、差多少。取不到目标盘可用空间时**不拦**，但会在日志里明说取不到。" />
+                                       Text="空间门：每个任务启动前都按「源包 + 内容物 + 其余物增量 + 512 MiB 余量」核算；不够就不启动，并写明需要多少、可用多少、差多少。取不到目标盘可用空间时「不拦」，但会在日志里明说取不到。" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

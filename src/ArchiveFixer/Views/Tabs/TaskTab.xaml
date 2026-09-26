@@ -555,7 +555,7 @@
                         <Button Content="导出日志（本次）"
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Margin="8,0,0,0"
-                                ToolTip="只导出**最近一次操作**的日志（从日志里那行「本次操作开始」起），排查时一眼到底，不用翻历史"
+                                ToolTip="只导出「最近一次操作」的日志（从日志里那行「本次操作开始」起），排查时一眼到底，不用翻历史"
                                 Command="{Binding ExportLogCommand}" />
 
                         <Button Content="打开输出目录"

@@ -86,18 +86,16 @@
             </MenuItem>
         </Menu>
 
-        <!-- ============ 底部：状态 / 进度（「保存全部设置」已挪到选项卡那一行的最右端） ============ -->
+        <!--
+            ============ 底部：只有"正在干活"那一条 ============
+
+            用户 2026-09-26："你那个按钮和最下面一个框，框里面写着设置已加载都要删除"。
+            所以这一条**不再显示任何设置相关的文字**（那句"设置已加载。"以前会停在那儿，
+            他读成"每次点完就消失 = 没保存"）；设置现在是**改了就自动存**，
+            没有任何"要你点一下"的东西（见 MainViewModel.AutoSaveSettingsIfChanged）。
+        -->
         <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Padding="12,8" Margin="0,8,0,0">
             <DockPanel>
-                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding SettingsEditor.Message}"
-                               Style="{StaticResource HintTextStyle}"
-                               VerticalAlignment="Center"
-                               MaxWidth="820"
-                               TextTrimming="CharacterEllipsis"
-                               ToolTip="{Binding SettingsEditor.Message}" />
-                </StackPanel>
-
                 <StackPanel DockPanel.Dock="Right"
                             Orientation="Horizontal"
                             HorizontalAlignment="Right"
@@ -117,17 +115,18 @@
                                  BorderThickness="0" />
                 </StackPanel>
 
-                <Border />
+                <!-- 空闲时这里显示"设置已经自动存好了"的最近一次结论（不是要你点的东西）。 -->
+                <TextBlock Text="{Binding SettingsAutoSaveNote}"
+                           Style="{StaticResource HintTextStyle}"
+                           VerticalAlignment="Center"
+                           MaxWidth="820"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding SettingsAutoSaveNote}" />
             </DockPanel>
         </Border>
 
         <!--
-            ============ 六个选项卡（「保存全部设置」在选项卡那一行的最右端）============
-
-            用户 2026-09-26："这个主界面最下面的一个保存设置按钮……将他的位置移到选项卡这一行的
-            最右端位置，而且将名字改为「保存全部设置」，就是记忆下目前用户设置的东西"。
-            做法 = 给 TabControl 换一个模板：表头那一行用 DockPanel，右边留一格放按钮；
-            选项卡内容仍然走 SelectedContent。
+            ============ 六个选项卡 ============
         -->
         <TabControl x:Name="MainTabControl" Margin="0,0,0,0" SelectionChanged="MainTabControl_SelectionChanged">
             <TabControl.Template>
@@ -139,18 +138,6 @@
                         </Grid.RowDefinitions>
 
                         <DockPanel Grid.Row="0">
-                            <StackPanel DockPanel.Dock="Right"
-                                        Orientation="Horizontal"
-                                        VerticalAlignment="Center"
-                                        Margin="10,0,0,0">
-                                <Button Content="保存全部设置"
-                                        MinWidth="112"
-                                        Padding="12,4"
-                                        Style="{StaticResource PrimaryButtonStyle}"
-                                        Command="{Binding SaveSettingsCommand}"
-                                        ToolTip="校验并写入 appsettings.json（解压 / 清理 / 密码 / 打包 / 设置页里的全部选项都在里面），同时把引擎相关设置推给引擎层。改设置不会自动落盘 —— 不点它，改动只在本次运行内有效。" />
-                            </StackPanel>
-
                             <TabPanel IsItemsHost="True"
                                       Margin="0,0,0,-1"
                                       KeyboardNavigation.TabIndex="1"

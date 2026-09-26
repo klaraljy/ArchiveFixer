@@ -301,6 +301,18 @@ namespace ArchiveFixer.Models
         public int MaxParallelExtractCount { get; set; } = DefaultMaxParallelExtractCount;
 
         /// <summary>
+        /// 「全速」：不再按 <see cref="MaxParallelExtractCount"/> 节流（能并行多少就并行多少）。
+        ///
+        /// <para><b>用户 2026-09-26 明确要求它必须记住</b>：原话"我刚刚测试当点击并发操作的时候，
+        /// 这个开关就没有保存……我现在是想他们一个要自动保存……而且要有记忆性，下次重启也要有，
+        /// 这点要非常重视"。以前它只是主视图模型上的一个字段（语义刻意写成"只看这一次运行"），
+        /// 于是他勾了、重启又回到节流档 —— 那在他眼里就是"没保存"。</para>
+        ///
+        /// <para>现在的语义：**记住**（写进 appsettings.json）。想回到节流档就取消勾选（同样会被记住）。</para>
+        /// </summary>
+        public bool RunAtFullSpeed { get; set; }
+
+        /// <summary>
         /// 并发数的出厂默认值（**4**，见 <see cref="MaxParallelExtractCount"/> 的实测依据）。
         ///
         /// <para>单独提出来是为了让"默认值"在代码里只有一个来源：
@@ -997,6 +1009,7 @@ namespace ArchiveFixer.Models
                 TryEmptyPasswordFirst = true,
                 UseGlobalPasswordForAllTasks = true,
                 MaxParallelExtractCount = DefaultMaxParallelExtractCount,
+                RunAtFullSpeed = false,
                 LowProcessPriority = true,
                 OpenOutputFolderWhenDone = false,
                 RestRemovalDefaultMode = RestRemovalModes.RecycleBin,

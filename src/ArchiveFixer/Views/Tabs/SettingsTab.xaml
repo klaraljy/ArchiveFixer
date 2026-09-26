@@ -73,13 +73,13 @@
                     <WrapPanel Margin="0,10,0,0">
                         <Button Content="导出日志（本次操作）"
                                 Style="{StaticResource ToolbarButtonStyle}"
-                                ToolTip="只导出**最近一次操作**的日志（从日志里那行「本次操作开始」起）"
+                                ToolTip="只导出「最近一次操作」的日志（从日志里那行「本次操作开始」起）"
                                 Command="{Binding ExportLogCommand}" />
 
                         <Button Content="导出全部历史日志"
                                 Style="{StaticResource ToolbarButtonStyle}"
                                 Margin="8,0,0,0"
-                                ToolTip="把日志目录里**每一份**历史日志都拼进来（平时用不上，只在需要翻旧账时用）"
+                                ToolTip="把日志目录里「每一份」历史日志都拼进来（平时用不上，只在需要翻旧账时用）"
                                 Command="{Binding ExportAllLogsCommand}" />
 
                         <Button Content="打开日志目录"
@@ -254,7 +254,7 @@
 
                         <TextBox Grid.Column="1"
                                  Text="{Binding SettingsEditor.Settings.MaxSingleExtractedFileGiB, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="单位 GiB（1~4096）。解压后**单个文件**超过它就不解这个包 —— 这是安全上限，不是这个包坏了。" />
+                                 ToolTip="单位 GiB（1~4096）。解压后「单个文件」超过它就不解这个包 —— 这是安全上限，不是这个包坏了。" />
 
                         <TextBlock Grid.Column="2"
                                    Style="{StaticResource HintTextStyle}"
@@ -333,7 +333,7 @@
                     <TextBlock Style="{StaticResource HintTextStyle}"
                                Margin="110,8,0,0"
                                TextWrapping="Wrap"
-                               Text="这四条只**拒绝解压**，不会删任何东西；超过上限时失败清单会写清是哪个上限拦的。另有两道独立的闸门照旧生效：目标盘空间不够就不启动，解压过程中按累计大小设限。" />
+                               Text="这四条只「拒绝解压」，不会删任何东西；超过上限时失败清单会写清是哪个上限拦的。另有两道独立的闸门照旧生效：目标盘空间不够就不启动，解压过程中按累计大小设限。" />
                 </StackPanel>
             </GroupBox>
 

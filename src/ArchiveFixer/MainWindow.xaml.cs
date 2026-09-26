@@ -119,6 +119,13 @@ namespace ArchiveFixer
             if (DataContext is MainViewModel viewModel)
             {
                 viewModel.TabRequested -= ViewModel_TabRequested;
+
+                /*
+                 * 关窗前的最后一次落盘（用户 2026-09-26 要的"改了就自动存、重启还在"）：
+                 * 自动保存是每 800 ms 一跳，用户完全可能"改完立刻关窗" —— 那一下没跳到的改动
+                 * 必须在关窗这一刻补上，否则他会看到"我刚改的又没了"（那正是他报的那类"没保存"）。
+                 */
+                viewModel.FlushSettingsAutoSave();
             }
 
             base.OnClosed(e);

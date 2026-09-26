@@ -546,7 +546,7 @@ namespace ArchiveFixer.ViewModels
         /// （原设置窗口的「取消」用它；选项卡形态下改用 <see cref="AttachSharedSettings"/> 共享同一份）。
         /// 选项卡里没有那个"关窗即提交/丢弃"的时刻，而且同一项可能在多处出现
         /// （并发档既在输入框里、又决定危险模式凭证盖不盖得住），两份值一定会打架。
-        /// 所以这里**不克隆** —— 界面改动即时进入内存，由底栏的「保存设置」负责校验与落盘。
+        /// 所以这里**不克隆** —— 界面改动即时进入内存，由自动保存（<c>MainViewModel.AutoSaveSettingsIfChanged</c>）负责校验与落盘。
         /// </para>
         /// <para>
         /// 挂了之后要显式通知一轮：<see cref="AppSettings"/> 不实现 INotifyPropertyChanged，
@@ -775,7 +775,53 @@ namespace ArchiveFixer.ViewModels
             RefreshRememberedBooks();
             RefreshSpecialExtractionRules();
 
-            Message = "设置已加载。";
+            Message = "设置已加载（改哪一项都会自动存，不用点保存）。";
+        }
+
+        /// <summary>
+        /// 自动保存前的那道校验（用户 2026-09-26："设置要改了就自动存"）。
+        ///
+        /// <para>返回 <c>null</c> = 可以落盘；否则返回"为什么先不存"的一句话。</para>
+        ///
+        /// <para><b>判据与 <see cref="Save"/> 完全同一套</b>（同一批私有校验方法）——
+        /// ⛔ 自动保存绝不能因为"它是自动的"就绕过"缓存根目录不许落 C 盘、工具路径必须存在"这两条：
+        /// 那两条以前是"保存"这一步拦下的，现在保存随时会发生，拦截点必须跟着走。</para>
+        /// </summary>
+        internal string? DescribeAutoSaveBlock()
+        {
+            if (!ValidateCacheRootDirectory(Settings.CacheRootDirectory, out string cacheMessage))
+            {
+                return cacheMessage;
+            }
+
+            if (!ValidateToolExePath(
+                    Settings.CustomSevenZipExePath,
+                    "7z.exe 路径",
+                    "留空表示用程序目录下内置的 tools\\7zip\\7z.exe。",
+                    out string sevenZipMessage))
+            {
+                return sevenZipMessage;
+            }
+
+            if (!ValidateToolExePath(
+                    Settings.CustomUnRarExePath,
+                    "UnRAR.exe 路径",
+                    "留空表示自动解析：先找本机已装 WinRAR 目录里的 UnRAR.exe，再退回程序内置的 tools\\unrar\\UnRAR.exe。",
+                    out string unRarMessage))
+            {
+                return unRarMessage;
+            }
+
+            if (!ValidateToolExePath(
+                    Settings.CustomRarExePath,
+                    "Rar.exe 路径",
+                    StatusText.SettingsRarExePathEmptyHint,
+                    out string rarMessage))
+            {
+                return rarMessage;
+            }
+
+            return null;
         }
 
         private void Save()
@@ -991,7 +1037,7 @@ namespace ArchiveFixer.ViewModels
 
             RefreshRememberedBooks();
 
-            Message = $"已从「已记住的密码本」里移除「{System.IO.Path.GetFileName(path)}」；点底栏「保存设置」后生效。"
+            Message = $"已从「已记住的密码本」里移除「{System.IO.Path.GetFileName(path)}」；改完立刻自动存（见底栏那一行）。"
                       + "磁盘上的那个文件不会被删除，也不会被修改。";
         }
 
@@ -1118,7 +1164,7 @@ namespace ArchiveFixer.ViewModels
         /// 重算引擎列表（顺序、检测状态、路径、版本、当前在用）。
         ///
         /// ⚠ 刻意**不**用 <c>ToolLocator.Default</c> 去探测：那是运行时的全局解析结果。
-        /// 用户在设置界面改路径、还没点「保存设置」时，界面必须显示"改完之后会怎样"，
+        /// 用户在设置界面改路径、还没轮到落盘时，界面必须显示"改完之后会怎样"，
         /// 而点「取消」时又不能把这个改动漏到运行时（那正是"取消了却生效了"的经典缺陷）。
         /// 所以这里用一个**临时**的 ToolLocator + 注册表 + 选择器，只做预览，不产生副作用。
         /// </summary>
@@ -1226,7 +1272,7 @@ namespace ArchiveFixer.ViewModels
 
                 CustomRarExePath = picked;
 
-                Message = "已选择 Rar.exe；点底栏「保存设置」后生效。" + StatusText.SettingsRarExePathHint;
+                Message = "已选择 Rar.exe；改完立刻自动存（见底栏那一行）。" + StatusText.SettingsRarExePathHint;
             }
             catch (Exception ex)
             {
@@ -1326,7 +1372,7 @@ namespace ArchiveFixer.ViewModels
 
             RefreshEngineList();
 
-            Message = $"引擎顺序已调整：{string.Join(" → ", priority.Select(DescribeEngineIdForMessage))}（点底栏「保存设置」后生效）";
+            Message = $"引擎顺序已调整：{string.Join(" → ", priority.Select(DescribeEngineIdForMessage))}（改完立刻自动存）";
         }
 
         private static string DescribeEngineIdForMessage(string id)
@@ -1355,7 +1401,7 @@ namespace ArchiveFixer.ViewModels
                 CacheRootDirectory = folder;
 
                 Message = ValidateCacheRootDirectory(folder, out string reason)
-                    ? "已选择缓存根目录；点底栏「保存设置」后生效。"
+                    ? "已选择缓存根目录；改完立刻自动存（见底栏那一行）。"
                     : "这个位置不能用：" + reason;
             }
             catch (Exception ex)

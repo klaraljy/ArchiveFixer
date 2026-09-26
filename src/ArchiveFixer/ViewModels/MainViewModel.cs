@@ -293,7 +293,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>
         /// 它仍然是 <see cref="SettingsViewModel"/> —— 保存前的两道拦截
         /// （工具路径指向不存在的文件、危险模式没自测凭证）**一行没动**，
-        /// 只是把"点保存 → 关窗"换成"点底栏的保存设置 → 留在原地"。
+        /// 只是把"点保存 → 关窗"换成"改哪一项都会自动存"（2026-09-26 起连那个按钮都不需要）。
         /// </para>
         /// </summary>
         public SettingsViewModel SettingsEditor => _settingsEditor;
@@ -416,6 +416,38 @@ namespace ArchiveFixer.ViewModels
             // 密码本侧车文件跟着同一个根走，否则"导入记住了"和"启动读取"会看两个目录。
             _passwordService.DataRootDirectory = _pathService.DataRootDirectory;
             ToolLocator.Default.Invalidate();
+        }
+
+        /// <summary>
+        /// 数据根跟着「缓存根目录」走（见 <see cref="ApplyEngineSettings"/>），所以设置文件可能有两处：
+        /// 程序目录下的 <c>data</c>（启动时读的那一份）与缓存根目录那一份。
+        ///
+        /// <para>这个补的是**第二步读**：数据根真的换了地方、而那个位置**真的已经有一份设置**时，
+        /// 再读一次并以它为准 —— 否则会出现"启动读旧的、保存写新的"，用户改什么都记不住
+        /// （用户 2026-09-26 第 1 条要的正是"下次重启也要有"）。</para>
+        ///
+        /// <para>⛔ 那个位置**没有**文件时一个字都不写：那多半是"第一次把缓存根指过去"（或刚换过盘），
+        /// 手上这一份就是最新的，下一次自动保存自然会把它写到新位置。
+        /// 在这里顺手 <c>Save</c> 一份默认值等于把用户的设置清掉。</para>
+        /// </summary>
+        /// <returns>真的换了设置文件（并且读了新那一份）时为 true。</returns>
+        private bool ReloadSettingsFromEffectiveDataRoot(string loadedFrom)
+        {
+            string effective = _settingsService.SettingsFilePath;
+
+            if (string.Equals(loadedFrom, effective, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!File.Exists(effective))
+            {
+                AppendLog("INFO", $"缓存根目录里的设置文件还不存在（{effective}），本次沿用程序目录那一份，改动会写到新位置。");
+                return false;
+            }
+
+            _settings = _settingsService.Load();
+            return true;
         }
 
         /// <summary>
@@ -766,18 +798,161 @@ namespace ArchiveFixer.ViewModels
          */
         public bool RunAtFullSpeed
         {
-            get => _runAtFullSpeed;
+            /*
+             * 用户 2026-09-26 明确要求这个开关**必须记住**（原话："我刚刚测试当点击并发操作的时候，
+             * 这个开关就没有保存……而且要有记忆性，下次重启也要有，这点要非常重视"）。
+             *
+             * 所以它从"主视图模型上的一个字段（只看这一次运行）"改成**设置项**：
+             * 勾上就写进 Settings（自动保存那条路会立刻落盘），重启后读回来还是勾着的。
+             * ⛔ 语义仍然是"不按最大并发数节流"，只是**记性**变了。
+             */
+            get => Settings?.RunAtFullSpeed ?? _runAtFullSpeed;
             set
             {
+                if (Settings != null)
+                {
+                    Settings.RunAtFullSpeed = value;
+                }
+
                 if (SetProperty(ref _runAtFullSpeed, value))
                 {
                     AppendLog(
                         "INFO",
                         value
-                            ? "已开启「全速」：本批忽略「最大并发解压数」的节流，能并行多少就并行多少。"
-                            : "已关闭「全速」：本批按设置里的「最大并发解压数」节流。");
+                            ? "已开启「全速」：不再按「最大并发解压数」节流，能并行多少就并行多少（这个开关会记住）。"
+                            : "已关闭「全速」：按设置里的「最大并发解压数」节流（这个开关会记住）。");
                 }
             }
+        }
+
+        /// <summary>上一次**真的写进磁盘**的那份设置（自动保存的判据；见 <see cref="AutoSaveSettingsIfChanged"/>）。</summary>
+        private string _lastSavedSettingsJson = string.Empty;
+
+        private System.Windows.Threading.DispatcherTimer? _settingsAutoSaveTimer;
+
+        /// <summary>自动保存的间隔：够短（改完几乎立刻落盘）又够长（拖滑块/连点勾选框时不会写几十次盘）。</summary>
+        internal static readonly TimeSpan SettingsAutoSaveInterval = TimeSpan.FromMilliseconds(800);
+
+        /// <summary>
+        /// 起"改了就自动存"的计时器（用户 2026-09-26："我现在是想他们一个要自动保存，
+        /// 就是你那个按钮和最下面一个框……都要删除"）。
+        ///
+        /// <para>为什么用"定时比指纹"而不是"每个控件都去挂事件"：设置项有几十个，绑定的写法有三种
+        /// （SettingsEditor 转发、直接绑 Settings、勾选框绑视图模型属性），漏挂一个就是"这个开关又没保存"。
+        /// 比指纹是**收口**的做法：只要 Settings 里任何一处变了，下一次 tick 就落盘 —— 不会有漏网的入口。
+        /// （JSON 很小，一秒序列化一次的开销可以忽略；⛔ 只有真的不同才会写文件。）</para>
+        ///
+        /// <para>没有界面宿主（单元测试）时不起计时器：那时由测试直接调
+        /// <see cref="AutoSaveSettingsIfChanged"/>，行为完全一样。</para>
+        /// </summary>
+        private void StartSettingsAutoSaveTimer()
+        {
+            System.Windows.Threading.Dispatcher? dispatcher = Application.Current?.Dispatcher;
+
+            if (dispatcher == null)
+            {
+                return;
+            }
+
+            _settingsAutoSaveTimer = new System.Windows.Threading.DispatcherTimer(
+                SettingsAutoSaveInterval,
+                System.Windows.Threading.DispatcherPriority.Background,
+                (_, _) => AutoSaveSettingsIfChanged(),
+                dispatcher);
+
+            _settingsAutoSaveTimer.Start();
+        }
+
+        /// <summary>
+        /// 「改了就自动存」的本体：设置与上一次落盘那份不同 → 校验 → 写盘 → 记账。
+        ///
+        /// <para>⛔ 两条边界：①**校验不过就不存**（缓存根目录落到 C 盘、工具路径不存在 ——
+        /// 与设置页「保存」同一套判据），并写一条 WARN 说清"改好就会立刻存"，绝不把不可用的值写进去；
+        /// ②写盘失败只写 WARN，绝不弹框、绝不崩（自动保存不该打断用户手上的事）。</para>
+        /// </summary>
+        internal bool AutoSaveSettingsIfChanged()
+        {
+            try
+            {
+                string json = _settingsService.Serialize(Settings);
+
+                if (string.Equals(json, _lastSavedSettingsJson, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                string? blocked = SettingsEditor.DescribeAutoSaveBlock();
+
+                if (!string.IsNullOrWhiteSpace(blocked))
+                {
+                    // 只在第一次拦住时写一条（改一次路径、tick 一次，不刷屏）。
+                    if (!string.Equals(_lastAutoSaveBlockNote, blocked, StringComparison.Ordinal))
+                    {
+                        _lastAutoSaveBlockNote = blocked;
+                        AppendLog("WARN", $"设置暂时没有自动保存：{blocked}（改好之后会自动存，不用点任何按钮）");
+                        SettingsAutoSaveNote = $"设置暂时没有自动保存：{blocked}";
+                    }
+
+                    return false;
+                }
+
+                _lastAutoSaveBlockNote = string.Empty;
+
+                _settingsService.Save(Settings);
+                _lastSavedSettingsJson = _settingsService.Serialize(Settings);
+
+                AppendLog("INFO", "设置已自动保存（改动即时落盘，重启后仍在）");
+
+                SettingsAutoSaveNote = "设置已自动保存 —— 改哪一项都会立刻存下来，重启后还在（不用点任何按钮）。";
+
+                ApplySettingsSideEffectsAfterSave();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "自动保存设置失败：" + ex.Message);
+                return false;
+            }
+        }
+
+        private string _settingsAutoSaveNote = "设置会自动保存：改哪一项都会立刻存下来，重启后还在。";
+
+        /// <summary>
+        /// 底栏那一行"设置现在是什么状态"（用户 2026-09-26 把原来那个「设置已加载。」的框换掉——
+        /// 他要的是"不用管、自己会存"，所以这一行只做**告知**，⛔ 绝不是要你点一下的东西）。
+        /// </summary>
+        public string SettingsAutoSaveNote
+        {
+            get => _settingsAutoSaveNote;
+            private set => SetProperty(ref _settingsAutoSaveNote, value);
+        }
+
+        /// <summary>被自动保存拦住的理由（用来"同一句话只说一次"）。</summary>
+        private string _lastAutoSaveBlockNote = string.Empty;
+
+        /// <summary>保存成功之后那些"包在设置外面"的东西要跟着重算（与以前点保存按钮之后做的同一件事）。</summary>
+        private void ApplySettingsSideEffectsAfterSave()
+        {
+            ApplyEngineSettings();
+
+            SelectedOutputDirectory = Settings.CustomOutputDirectory ?? string.Empty;
+
+            ApplyRememberedBookPathsFromSettings();
+
+            RefreshOutputPaths();
+            UpdateSummary();
+
+            OnPropertyChanged(nameof(MaxParallelChoice));
+            RefreshSpaceModeText();
+        }
+
+        /// <summary>
+        /// 关窗前的最后一次落盘（自动保存是 800 ms 一跳，用户可能改完就关）。
+        /// </summary>
+        internal void FlushSettingsAutoSave()
+        {
+            _settingsAutoSaveTimer?.Stop();
+            AutoSaveSettingsIfChanged();
         }
 
         public string SelectedOutputDirectory
@@ -1165,15 +1340,6 @@ namespace ArchiveFixer.ViewModels
         public ICommand OpenPasswordListCommand { get; }
 
         /// <summary>
-        /// 底栏的「保存设置」：校验 → 归一化 → 落盘 → 把引擎相关设置推给引擎层。
-        ///
-        /// <para>选项卡上的设置页改的是**共享的那一份设置对象**，所以在按下这个按钮之前，
-        /// 改动只在本次运行内有效（界面上写着这句话）；按下之后才写进 appsettings.json。
-        /// 校验不过（工具路径不存在 / 危险模式没凭证）就停在原地并把改法说清 —— 与设置窗口同一份实现。</para>
-        /// </summary>
-        public ICommand SaveSettingsCommand { get; }
-
-        /// <summary>
         /// 打包入口（**⑤「打包」选项卡**，整页在那儿；用户 2026-09-22 需求第 10 条）。
         /// 打包是独立的一条流水线（7z 分卷 → 外层加密 rar），不依赖任务列表，所以没有勾选之类的前置条件。
         ///
@@ -1436,8 +1602,29 @@ namespace ArchiveFixer.ViewModels
              */
             _taskSummaryService.EngineIdentityProvider = task => ResolveEngineIdentity(task);
 
+            /*
+             * 读设置分三步，顺序不能换：
+             * ① 先读**程序目录下 data** 那一份（启动时 PathService 的默认根）—— 「缓存根目录」这个设置
+             *    本身就在它里面，不读它就不可能知道数据根该去哪儿；
+             * ② ApplyEngineSettings 按缓存根目录把数据根定下来（设置 / 日志 / 工作区都跟着它走，
+             *    见 docs/使用说明.md §2），于是设置文件可能**换了地方**；
+             * ③ 数据根真换了、且那个位置**真的有一份设置** → 再读一次，以它为准。
+             *
+             * 少了第 ③ 步会怎样（2026-09-26 修，用户第 1 条"要有记忆性，下次重启也要有"）：
+             * 设过缓存根目录的人，**每一次启动都从程序目录读旧那份、保存写的却是缓存根那一份** ——
+             * 界面上改什么、关掉、再开，全都回到旧值，看起来就是"设置根本没保存"。
+             */
             _settings = _settingsService.Load();
+            string settingsLoadedFrom = _settingsService.SettingsFilePath;
             ApplyEngineSettings();
+
+            if (ReloadSettingsFromEffectiveDataRoot(settingsLoadedFrom))
+            {
+                // 缓存根那一份可能改了引擎优先级 / 日志开关 / 工具路径 —— 再推一次（幂等）。
+                ApplyEngineSettings();
+            }
+
+            StartSettingsAutoSaveTimer();
 
             /*
              * 设置编辑器（选项卡②③④⑥绑它）与打包编辑器（⑤绑它）。
@@ -1534,7 +1721,6 @@ namespace ArchiveFixer.ViewModels
             OpenPasswordListCommand = new RelayCommand(OpenPasswordList, CanRunNormalCommand);
             OpenPackingCommand = new RelayCommand(OpenPacking, CanRunNormalCommand);
 
-            SaveSettingsCommand = new RelayCommand(SaveSettings, CanRunNormalCommand);
             ImportPasswordBookCommand = new RelayCommand(ImportPasswordBook, CanRunNormalCommand);
             ExportLogCommand = new RelayCommand(ExportLog);
             ExportAllLogsCommand = new RelayCommand(ExportAllLogs);
@@ -1677,6 +1863,16 @@ namespace ArchiveFixer.ViewModels
             AutoLoadPasswordBook();
 
             UpdateSummary();
+
+            /*
+             * 自动保存的基线：把"整个构造过程全部走完之后的那一份设置"记成已存指纹 ——
+             * 于是启动本身不写盘，只有**用户真的改了东西**才会落盘（见 AutoSaveSettingsIfChanged）。
+             *
+             * ⚠ 基线必须在**最后**取：②③④⑥四页的编辑器与⑤打包页在构造时会把若干默认档补齐，
+             * 挂在构造开头取的话，这些"程序自己的初始化"会被当成用户改动 —— 开机 800ms 后
+             * 白白写一次盘（真机上表现为"什么都没动，设置文件的时间戳却变了"）。
+             */
+            _lastSavedSettingsJson = _settingsService.Serialize(_settings);
         }
 
         /// <summary>
@@ -1947,7 +2143,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 把"记住的密码本"从设置推给密码服务（用户在④「密码」页增删过、点底栏「保存设置」之后由
+        /// 把"记住的密码本"从设置推给密码服务（用户在④「密码」页增删过、设置落盘之后由
         /// <see cref="SaveSettings"/> 调它）。
         /// </summary>
         private void ApplyRememberedBookPathsFromSettings()
@@ -2939,16 +3135,6 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 底栏的「保存设置」：走 <see cref="SettingsEditor"/> 那一套校验与落盘
-        /// （**唯一**的保存实现，与原设置窗口完全相同），成功后把界面与引擎层一起刷新。
-        ///
-        /// <para>
-        /// 为什么要在这里刷新这么多东西：设置一落盘，落点、缓存根、日志开关、引擎优先级、
-        /// 记住的密码本清单都会影响已经跑起来的这套服务 —— 少刷一样就会变成
-        /// "设置里改了、这次运行还是老的"。
-        /// </para>
-        /// </summary>
-        /// <summary>
         /// 打包那边改了它自己的两档（原包 / 其余物 / 落点）之后落盘 ——
         /// 用户 2026-09-26 第 46 条："而且相应的保存记忆操作"。
         ///
@@ -2957,9 +3143,25 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void SavePackingSettings()
         {
+            /*
+             * 与自动保存**同一道闸门**：设置里有非法值（缓存根目录落在 C 盘 / 工具路径指向一个不存在的
+             * 文件）时先不落盘并说清 —— ⛔ 打包这条路不许变成"把非法设置偷偷写进盘"的后门
+             * （那两格决定了数据根与引擎，写进去下次启动就照它走）。
+             */
+            string? blocked = SettingsEditor?.DescribeAutoSaveBlock();
+
+            if (!string.IsNullOrEmpty(blocked))
+            {
+                AppendLog("WARN", "打包的选择还没写进设置（改成合法值之后会自动存）：" + blocked);
+                return;
+            }
+
             try
             {
                 _settingsService.Save(Settings);
+
+                // 基线跟着走：否则自动保存下一跳会认为"还有没存的东西"，又白写一次盘。
+                _lastSavedSettingsJson = _settingsService.Serialize(Settings);
             }
             catch (Exception ex)
             {
@@ -2967,48 +3169,11 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        private void SaveSettings()
-        {
-            try
-            {
-                SettingsEditor.SaveCommand.Execute(null);
+        // 「保存设置」这个动作**整块退役**（用户 2026-09-26："你那个按钮和最下面一个框……都要删除"）：
+        // 现在改任何一项都会自动落盘（AutoSaveSettingsIfChanged），
+        // 校验判据搬到 SettingsEditor.DescribeAutoSaveBlock()，保存后的连带动作搬到
+        // ApplySettingsSideEffectsAfterSave()。⛔ 不再留一个"要用户点一下"的入口。
 
-                // 校验没过（工具路径不存在 / 危险模式没凭证）：SettingsEditor.Message 里已经写明改法，
-                // 这里**什么都不做** —— 绝不把一次失败的保存说成成功。
-                if (SettingsEditor.DialogResult != true)
-                {
-                    return;
-                }
-
-                Settings = SettingsEditor.Settings;
-                ApplyEngineSettings();
-
-                SelectedOutputDirectory = Settings.CustomOutputDirectory ?? string.Empty;
-
-                /*
-                 * 设置里那份"记住的密码本"是权威清单（用户能逐项移除），保存后立刻推给密码服务：
-                 * 推完记忆文件里那份也跟着变成同一份 —— 下一轮启动的合并就不会把用户刚移除的书
-                 * 又从记忆里翻出来（那样"移除"这个按钮就是句空话）。
-                 */
-                ApplyRememberedBookPathsFromSettings();
-
-                RefreshOutputPaths();
-                LogLeftoverWorkspaces();
-                AutoLoadPasswordBook();
-                UpdateSummary();
-
-                // 并发档、危险模式那几句话是"包在设置外面"的展示状态：设置变了必须重算。
-                OnPropertyChanged(nameof(MaxParallelChoice));
-                RefreshSpaceModeText();
-
-                AppendLog("INFO", "设置已保存");
-            }
-            catch (Exception ex)
-            {
-                AppendLog("ERROR", "保存设置失败：" + ex.Message);
-                _dialogService.ShowError("保存设置失败：" + ex.Message);
-            }
-        }
 
 
         private void ResetSettings()
@@ -5357,7 +5522,6 @@ namespace ArchiveFixer.ViewModels
                  OpenSettingsCommand,
                  OpenPasswordListCommand,
                  OpenPackingCommand,
-                 SaveSettingsCommand,
                  ExportLogCommand,
                  ExportAllLogsCommand,
                  CopyFailedListCommand,

@@ -65,7 +65,7 @@ namespace ArchiveFixer.Engines
         /// 优先级默认取自 <see cref="EngineRuntimeSettings.EnginePriority"/>（<c>WinRar → SevenZip</c>）；
         /// 列表里没提到的引擎排在最后，保持注册顺序（稳定、可复现）。
         ///
-        /// <paramref name="priority"/> 用于**预览**：②「解压方式」页里用户改了顺序、还没点「保存设置」时，
+        /// <paramref name="priority"/> 用于**预览**：②「解压方式」页里用户改了顺序、还没轮到落盘时，
         /// 界面要显示"改完之后会怎样"，而全局的运行时设置此刻**不能**被改
         /// （否则没点保存也会生效 —— "改了没保存却生效了"的经典缺陷）。
         /// </summary>

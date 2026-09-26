@@ -152,9 +152,16 @@ namespace ArchiveFixer.Tests
         {
             string mainWindow = Read("MainWindow.xaml");
 
-            // 底部状态/进度 + 保存设置：除此之外主窗口不该再出现设置类控件。
-            Assert.Contains("SettingsEditor.Message", mainWindow, StringComparison.Ordinal);
-            Assert.Contains("SaveSettingsCommand", mainWindow, StringComparison.Ordinal);
+            /*
+             * 用户 2026-09-26 把"设置要手动保存"整块推翻了：
+             * 「保存全部设置」按钮与底部那个「设置已加载。」的框**都必须不在**，
+             * 底栏只留"正在处理…"（忙时）与"设置会自动保存"的告知（闲时）。
+             * ⛔ 这条是**反向**断言：以后谁再把"点一下才保存"的按钮加回来，这里立刻红。
+             */
+            Assert.DoesNotContain("保存全部设置", mainWindow, StringComparison.Ordinal);
+            Assert.DoesNotContain("SaveSettingsCommand", mainWindow, StringComparison.Ordinal);
+            Assert.DoesNotContain("SettingsEditor.Message", mainWindow, StringComparison.Ordinal);
+            Assert.Contains("SettingsAutoSaveNote", mainWindow, StringComparison.Ordinal);
 
             foreach (string moved in new[]
                      {
@@ -313,7 +320,10 @@ namespace ArchiveFixer.Tests
 
             string viewModel = Read("ViewModels", "MainViewModel.cs");
 
-            Assert.Contains("SaveSettingsCommand", viewModel, StringComparison.Ordinal);
+            // 自动保存（用户 2026-09-26）：主视图模型里必须有这条唯一出口，⛔ 不许再有"手动保存"命令。
+            Assert.Contains("AutoSaveSettingsIfChanged", viewModel, StringComparison.Ordinal);
+            Assert.Contains("FlushSettingsAutoSave", viewModel, StringComparison.Ordinal);
+            Assert.DoesNotContain("SaveSettingsCommand", viewModel, StringComparison.Ordinal);
             Assert.Contains("TabRequested", viewModel, StringComparison.Ordinal);
         }
 

@@ -64,6 +64,21 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 把一份设置序列化成落盘用的那段 JSON（**自动保存的"变了没有"判据**就用它：
+        /// 与上一次写进去的那份逐字符比，不同才写 —— 用户 2026-09-26 要的"改了就自动存"）。
+        ///
+        /// <para>⛔ 序列化只有这一处实现：<see cref="Save"/> 也用它，否则"比较用的字符串"
+        /// 与"真正写下去的字符串"会漂移（那就会出现"每次都觉得变了、每跳一次写一次盘"）。</para>
+        /// </summary>
+        public string Serialize(AppSettings? settings)
+        {
+            settings ??= CreateDefault();
+            settings.Normalize();
+
+            return JsonSerializer.Serialize(settings, _jsonOptions);
+        }
+
+        /// <summary>
         /// 保存设置。
         /// </summary>
         public void Save(AppSettings settings)
@@ -79,7 +94,7 @@ namespace ArchiveFixer.Services
                     Directory.CreateDirectory(directory);
                 }
 
-                string json = JsonSerializer.Serialize(settings, _jsonOptions);
+                string json = Serialize(settings);
                 File.WriteAllText(SettingsFilePath, json);
             }
             catch
