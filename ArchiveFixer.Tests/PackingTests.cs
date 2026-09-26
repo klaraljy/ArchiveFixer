@@ -723,6 +723,125 @@ namespace ArchiveFixer.Tests
             Assert.Contains(entries, e => e.EndsWith(baseName + "(1)", StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>
+        /// 真 7z 端到端（2026-09-26 第 46 条）：**原包操作 = 移入其余物 + 其余物保留**。
+        ///
+        /// <para>这是"整理型"用户会选的那一档：打完只剩一个 <c>.rar</c> 在明面上，
+        /// 原文件夹被搬进"装分卷的文件夹"里跟着一起留着（可还原）。要钉三件事：
+        /// ①源**真的**从原地消失了（不是"说搬了其实没搬"）；②它在**其余物那一层**里、
+        /// 内容一个字节没少；③装分卷的文件夹本身**还在**（保留档不许把它删掉）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 真7z端到端_原包移入其余物_保留档下源搬进装分卷的文件夹且内容不丢()
+        {
+            string sevenZip = LocateSevenZip();
+
+            if (string.IsNullOrEmpty(sevenZip))
+            {
+                Skip("测试机上没有内置 7z.exe");
+                return;
+            }
+
+            var tools = new ToolLocator();
+
+            const string baseName = "A-move";
+
+            string source = CreateSourceFolder(baseName, 2, 600 * 1024);
+            string sourceHash = HashDirectory(source);
+
+            var service = new PackingService(tools, null, _ => long.MaxValue);
+
+            PackingResult result = await service.PackAsync(new PackingRequest
+            {
+                SourceFolder = source,
+                VolumeSizeBytes = OneMebibyte,
+                Password = SamplePassword,
+                RunOptions = new PackingRunOptions
+                {
+                    TargetMode = PackingTargetMode.Local,
+                    SourceHandling = PackingSourceHandling.MoveToRest,
+                    RestHandling = PackingRestHandling.Keep
+                }
+            });
+
+            Assert.True(result.Success, result.Describe());
+
+            string outer = Path.Combine(
+                _root,
+                baseName + (result.OuterContainer == PackOuterContainer.Rar ? ".rar" : ".7z"));
+
+            Assert.True(File.Exists(outer), "最终产物必须真的在磁盘上");
+
+            // 装分卷的文件夹会因为"源文件夹本身就叫这个名字"而让位成 `A-move(1)`。
+            string rest = Path.Combine(_root, baseName + "(1)");
+
+            Assert.False(Directory.Exists(source), "移入其余物之后，源不该还在原地");
+            Assert.True(Directory.Exists(rest), $"装分卷的文件夹应当保留：{rest}");
+
+            string moved = Path.Combine(rest, baseName);
+
+            Assert.True(Directory.Exists(moved), "源文件夹应当被搬进装分卷的文件夹里");
+            Assert.Equal(sourceHash, HashDirectory(moved));
+
+            // 其余物那一档是"保留"，所以分卷也还在（这一档的用处就是让人自己检查）。
+            Assert.NotEmpty(Directory.GetFiles(rest, "*.7z.0*"));
+
+            Assert.Contains("已移入其余物", result.CleanupNote, StringComparison.Ordinal);
+            Assert.Contains("保留", result.CleanupNote, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 真 7z 端到端（2026-09-26 第 46 条）：**危险组合** —— 原包移入其余物 **+** 其余物彻底删除。
+        ///
+        /// <para>弹窗里对这一步有红字警告（"这等于连你的原文件夹一起彻底删除"）。这条用例把那个语义
+        /// **真跑一遍**：干完之后落点目录里**只剩那一个 <c>.rar</c>**，源与分卷都不在了 ——
+        /// 换句话说警告说的就是事实，不是吓唬人。⚠ 只在测试的临时目录里跑，绝不碰任何真实素材。</para>
+        /// </summary>
+        [Fact]
+        public async Task 真7z端到端_原包移入其余物_其余物彻底删除_最后只剩那一个压缩包()
+        {
+            string sevenZip = LocateSevenZip();
+
+            if (string.IsNullOrEmpty(sevenZip))
+            {
+                Skip("测试机上没有内置 7z.exe");
+                return;
+            }
+
+            var tools = new ToolLocator();
+
+            const string baseName = "A-both-delete";
+
+            string source = CreateSourceFolder(baseName, 2, 600 * 1024);
+
+            var service = new PackingService(tools, null, _ => long.MaxValue);
+
+            PackingResult result = await service.PackAsync(new PackingRequest
+            {
+                SourceFolder = source,
+                VolumeSizeBytes = OneMebibyte,
+                Password = SamplePassword,
+                RunOptions = new PackingRunOptions
+                {
+                    TargetMode = PackingTargetMode.Local,
+                    SourceHandling = PackingSourceHandling.MoveToRest,
+                    RestHandling = PackingRestHandling.Delete
+                }
+            });
+
+            Assert.True(result.Success, result.Describe());
+
+            string outer = Path.Combine(
+                _root,
+                baseName + (result.OuterContainer == PackOuterContainer.Rar ? ".rar" : ".7z"));
+
+            Assert.True(File.Exists(outer), "最终产物必须真的在磁盘上");
+
+            Assert.False(Directory.Exists(source), "这一档下源文件夹会被连根删掉（弹窗里的红字就是这个意思）");
+            Assert.Empty(Directory.GetDirectories(_root));
+            Assert.Contains("已彻底删除", result.CleanupNote, StringComparison.Ordinal);
+        }
+
         [Fact]
         public async Task 真7z端到端_两层都做_rar里装的是B这一层()
         {
@@ -1581,6 +1700,29 @@ namespace ArchiveFixer.Tests
             using FileStream stream = File.OpenRead(path);
 
             return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
+        }
+
+        /// <summary>
+        /// 一整棵目录的"内容指纹"：递归取每个文件（**相对路径 + 内容的 SHA-256**），
+        /// 按相对路径排序后连成一串再哈希一次。
+        ///
+        /// <para>用来钉"搬进其余物之后内容一个字节没少 / 一个文件没多" —— 只比文件名或只比大小都会被漏掉。</para>
+        /// </summary>
+        private static string HashDirectory(string directory)
+        {
+            var entries = new List<string>();
+
+            foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(directory, file).Replace('\\', '/');
+
+                entries.Add(relative + "=" + Sha256Of(file));
+            }
+
+            entries.Sort(StringComparer.Ordinal);
+
+            return Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", entries))));
         }
 
         /// <summary>
