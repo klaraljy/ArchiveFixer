@@ -919,22 +919,12 @@ namespace ArchiveFixer.Models
         public const string PackPartialVolumesOnly = "只做了 7z 分卷（按要求不做外层容器）";
 
         /// <summary>
-        /// 没有 Rar.exe 时的那句话。**必须包含"需要本机已安装 WinRAR"**（验收判据点名的字串）。
+        /// ⛔ 2026-09-26 第 46 条：这里原来的 <c>PackNeedRar</c>（"这一步需要本机已安装 WinRAR"）
+        /// 与 <c>PackThreeWaysOut</c>（三条出路，让用户自己去⑤页换容器）**两条都已删除** ——
+        /// 没装 WinRAR 时打包会**自动改用 7z 外层**，而"外层容器"那个控件也已经不在界面上了。
+        /// 现在"没有 Rar.exe"那句话的唯一来源是 <c>ToolLocator.DescribeNoRarAvailable()</c>
+        /// （⑤页状态格 / 日志 / 失败原因都引它）。
         /// </summary>
-        public const string PackNeedRar =
-            "这一步需要本机已安装 WinRAR（要 Rar.exe / WinRAR.exe）：程序不会替你装、也不会随包分发它。";
-
-        /// <summary>
-        /// 没有 Rar.exe 时的**三条出路**（用户 2026-09-23 决定）。
-        ///
-        /// <para>为什么是三条而不是两条：RARLAB 的 EULA（§3.1 / §3.2 / §3.3 / §10）明确禁止把
-        /// <c>Rar.exe</c> 随任何软件包分发，所以"本机没装 WinRAR"是常态而不是异常；
-        /// 只有"装 WinRAR"与"什么都不做"两条出路时，用户就只剩下"为了打包去装一个共享软件"这一条路。</para>
-        /// </summary>
-        public const string PackThreeWaysOut =
-            "三条出路：① 装好 WinRAR（带 Rar.exe）后重试；"
-            + "② 把「外层容器」改成 7z —— 无需额外安装（7-Zip 是 LGPL，随程序分发）；"
-            + "③ 选「不做外层容器」，这次就只出 B 里的 7z 加密分卷。";
 
         // ── 外层容器三选一（用户 2026-09-23 决定；界面、日志、失败原因共用同一份说法） ──
 

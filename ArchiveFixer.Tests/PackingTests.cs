@@ -277,28 +277,36 @@ namespace ArchiveFixer.Tests
 
         // ══════════════════════════ ③ 没有 Rar.exe ══════════════════════════
 
+        /// <summary>
+        /// ⚠ **2026-09-26 第 46 条改了口径**（用户原话："如果用户没有装 WinRAR，那就弄 7z 吧"）：
+        /// 这句话以前是"这一步需要本机已安装 WinRAR" + 三条出路（让他自己去⑤页换容器 / 选不做外层）。
+        /// 现在⑤页上**没有**"外层容器"那个控件了，程序也会**自动**改用 7z ——
+        /// 所以那句话必须①说清"会自动改用 7z、产物是 .7z"；②指路**指对界面**（想拿 .rar 只有一个入口 =
+        /// ②「解压方式」页 →「引擎」里的自选路径）；③**不再**让用户去点一个不存在的控件。
+        /// </summary>
         [Fact]
-        public void 文案_没有Rar时那句话必须点名要装WinRAR_并给三条出路()
+        public void 文案_没有Rar时_说清会自动改用7z外层_并指对填自选路径的地方()
         {
-            Assert.Contains("需要本机已安装 WinRAR", StatusText.PackNeedRar, StringComparison.Ordinal);
-
-            /*
-             * 三条出路（用户 2026-09-23 决定）：装 WinRAR / 外层容器改 7z（无需额外安装）/ 不做外层。
-             * RARLAB 的 EULA 禁止随包分发 Rar.exe，所以"本机没装 WinRAR"是常态 ——
-             * 只有两条出路时，用户就只剩下"为了打包去装一个共享软件"这条路。
-             */
-            string ways = StatusText.PackThreeWaysOut;
-
-            Assert.Contains("装好 WinRAR", ways, StringComparison.Ordinal);
-            Assert.Contains("7z", ways, StringComparison.Ordinal);
-            Assert.Contains("无需额外安装", ways, StringComparison.Ordinal);
-            Assert.Contains("不做外层", ways, StringComparison.Ordinal);
-            Assert.Contains("只出 B 里的 7z 加密分卷", ways, StringComparison.Ordinal);
-
             var tools = new ToolLocator { UseWinRarInstallation = false };
 
             Assert.False(tools.RarExists, "两档都关掉后必须判定为'没有 Rar.exe'");
-            Assert.Contains("需要本机已安装 WinRAR", tools.DescribeNoRarAvailable(), StringComparison.Ordinal);
+
+            string text = tools.DescribeNoRarAvailable();
+
+            Assert.Contains("没有 Rar.exe", text, StringComparison.Ordinal);
+            Assert.Contains("自动改用 7z 外层", text, StringComparison.Ordinal);
+            Assert.Contains(".7z", text, StringComparison.Ordinal);
+            Assert.Contains("绝不随包分发", text, StringComparison.Ordinal);
+            Assert.Contains(tools.RarExpectedPath, text, StringComparison.Ordinal);
+
+            // 指路必须指对：想拿 .rar 只有"装 WinRAR"与"②页填自选路径"两条。
+            Assert.Contains("②「解压方式」页", text, StringComparison.Ordinal);
+            Assert.Contains("Rar.exe 的路径", text, StringComparison.Ordinal);
+
+            // ⛔ 不许再出现退役的说法（那两样界面上都已经没有了）。
+            Assert.DoesNotContain("三条出路", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("需要本机已安装 WinRAR", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("不做外层容器", text, StringComparison.Ordinal);
         }
 
         /// <summary>

@@ -27,8 +27,9 @@ namespace ArchiveFixer.Engines
     /// <para><b>Rar.exe 解析顺序</b>（打包功能，docs/打包功能.md §5）：
     /// 1. 用户指定的路径（<see cref="CustomRarExePath"/>，来自②「解压方式」页 → 引擎那一格）
     /// 2. 用户**已装**的 WinRAR 目录里的 <c>Rar.exe</c>，再退 <c>WinRAR.exe</c>
-    /// 3. 都没有 → <see cref="RarExists"/> = false，打包侧**明确报错**并给出三条出路
-    /// （装 WinRAR / 外层容器改 7z / 不做外层）。
+    /// 3. 都没有 → <see cref="RarExists"/> = false：打包侧**自动改用内置 7-Zip 做外层**
+    /// （产物是 <c>.7z</c> 而不是 <c>.rar</c>，2026-09-26 第 46 条口径），
+    /// 并把 <see cref="DescribeNoRarAvailable"/> 那段话写进⑤页状态格与日志。
     /// ⛔ <c>Rar.exe</c> / <c>WinRAR.exe</c> 是**共享软件**：只检测、只调用，**绝不打包、绝不复制**
     /// （AGENTS.md §3.1）。自选那一格指向的永远是**用户自己装的**那一份。</para>
     ///
@@ -429,19 +430,25 @@ namespace ArchiveFixer.Engines
         }
 
         /// <summary>
-        /// 没有 Rar.exe 时给用户看的那段话 —— **唯一来源**（界面、日志、失败原因都引它）。
+        /// 没有 Rar.exe 时给用户看的那段话 —— **唯一来源**（⑤页状态格、日志、失败原因都引它）。
         ///
         /// <para>为什么不内置一个：<c>Rar.exe</c> 是共享软件，许可不允许再分发（AGENTS.md §3.1）。
         /// 也**不会**拿 7-Zip 假装做出一个 <c>.rar</c>：7-Zip 建不了 RAR（算法是专有的），
         /// 改名成 <c>.rar</c> 是伪造，用户拿去用时会直接坏掉。</para>
+        ///
+        /// <para>⚠ 2026-09-26 第 46 条改口径（用户原话："如果用户没有装 WinRAR，那就弄 7z 吧"）：
+        /// 这段话以前是"这一步需要本机已安装 WinRAR"+ 让他去⑤页把外层容器改成 7z ——
+        /// 现在那样卡住已经没有意义（<c>PackingService</c> 会**自动**改用 7z 外层），
+        /// 而⑤页上"外层容器"那个控件**已经不存在了**。⛔ 文案指路必须指对界面（第 45 条纪律②）：
+        /// 现在只剩"想拿到 <c>.rar</c> 该怎么办"，而那条路只有一处入口 = ②页 →「引擎」里的自选路径。</para>
         /// </summary>
         public string DescribeNoRarAvailable()
         {
-            return "这一步需要本机已安装 WinRAR（要 Rar.exe / WinRAR.exe）—— 程序不会替你装、也不会随包分发它"
-                 + "（WinRAR 是共享软件，许可不允许随其它软件包分发）。"
+            return "本机没有 Rar.exe（WinRAR 是共享软件，程序只检测与调用它、绝不随包分发）—— "
+                 + "打包会**自动改用 7z 外层**（内置 7-Zip，无需额外安装），产物是 .7z 而不是 .rar。"
                  + $"期望位置：{RarExpectedPath}。"
-                 + "在②「解压方式」页 →「引擎」里可以填你自己装的那一份 Rar.exe 的路径；"
-                 + "如果这台机器上确实没有，也可以把⑤「打包」页的外层容器改成 7z（无需额外安装）或选「不做外层容器」。";
+                 + "想要 .rar 的话有两条：① 装好 WinRAR 后重试；"
+                 + "② 在②「解压方式」页 →「引擎」里填你自己那份 Rar.exe 的路径。";
         }
 
         /// <summary>

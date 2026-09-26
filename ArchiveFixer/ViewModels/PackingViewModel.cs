@@ -417,16 +417,14 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>没有 Rar.exe 时要显眼说出来的那段话（正文）。</summary>
-        public string RarMissingText => StatusText.PackNeedRar;
-
         /// <summary>
-        /// 没有 Rar.exe 时的**三条出路**（用户 2026-09-23 决定：加"外层容器改 7z"这条）。
-        /// 界面与失败原因引的是同一份措辞（<see cref="StatusText.PackThreeWaysOut"/>）。
+        /// 没有 Rar.exe（界面据此把那一格画成警告色）。
+        ///
+        /// <para>⛔ 第 46 条：原来这里还有 <c>RarMissingText</c> / <c>RarMissingWaysText</c>
+        /// （"需要本机已安装 WinRAR" + 三条出路）—— 两条**都已删除**：现在没装 WinRAR 时打包
+        /// **自动改用 7z 外层**，界面上那一格直接显示 <see cref="RarStatusText"/>（唯一来源 =
+        /// <c>ToolLocator.DescribeNoRarAvailable()</c>），不再有"让用户自己去换容器"这回事。</para>
         /// </summary>
-        public string RarMissingWaysText => StatusText.PackThreeWaysOut;
-
-        /// <summary>没有 Rar.exe（界面据此把"只做 7z 分卷"这一段显示出来）。</summary>
         public bool HasNoRar => !RarAvailable;
 
         // ────────────────────────── 运行状态 ──────────────────────────
