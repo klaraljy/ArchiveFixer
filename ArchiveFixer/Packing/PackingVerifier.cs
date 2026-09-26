@@ -188,8 +188,8 @@ namespace ArchiveFixer.Packing
                 return new PackingVerification
                 {
                     Ok = false,
-                    Detail = "B 里一个分卷都没有，产物不完整。",
-                    Problems = new[] { "B 里没有分卷" }
+                    Detail = $"「{folderName}」里一个分卷都没有，产物不完整。",
+                    Problems = new[] { "装分卷的文件夹里没有分卷" }
                 };
             }
 
@@ -228,7 +228,7 @@ namespace ArchiveFixer.Packing
 
             if (outsideFolder.Count > 0)
             {
-                problems.Add($"{artifact} 里有 B 这一层之外的东西：" + string.Join('、', outsideFolder.Take(5)));
+                problems.Add($"{artifact} 里有「{folderName}」这一层之外的东西：" + string.Join('、', outsideFolder.Take(5)));
             }
 
             if (problems.Count > 0)
@@ -244,7 +244,7 @@ namespace ArchiveFixer.Packing
             return new PackingVerification
             {
                 Ok = true,
-                Detail = $"{artifact} 里数出 {seenNames.Count} 个分卷，与 B 里的 {expected.Count} 个一致，且都在「{folderName}」这一层下",
+                Detail = $"{artifact} 里数出 {seenNames.Count} 个分卷，与「{folderName}」里的 {expected.Count} 个一致，且都在这一层下",
                 Problems = Array.Empty<string>()
             };
         }

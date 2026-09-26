@@ -549,34 +549,36 @@ namespace ArchiveFixer.Packing
 
             if (PathEquals(source, output))
             {
-                return $"输出文件夹 B 不能就是源文件夹 A：{output}。请另选一个（默认是 A 同级的「{Path.GetFileName(source)}_打包」）。";
+                return $"落点不能就是源文件夹本身：{output}。"
+                     + "请在确认弹窗里把落点改回「本地」（= 源旁边），或另选一个目录。";
             }
 
             if (IsInside(output, source))
             {
-                return $"输出文件夹 B 不能放在源文件夹 A 里面（A：{source}；B：{output}）——"
-                     + "分卷会落进正在打包的目录，越打越多。请把 B 放到 A 外面（默认位置就在 A 的同级）。";
+                return $"「装分卷的文件夹」不能落在源文件夹里面（源：{source}；落点：{output}）——"
+                     + "分卷会落进正在打包的目录，越打越多。请在确认弹窗里把落点改到源文件夹外面"
+                     + "（默认的「本地」就在源的同级）。";
             }
 
             if (hasOuter && IsInside(outer, output))
             {
-                return $"{noun}不能放在输出文件夹 B 里面（B：{output}；{noun}：{outer}）——"
-                     + "外层容器会把自己装进去。默认位置是 B 的同级。";
+                return $"{noun}不能放在「装分卷的文件夹」里面（它：{output}；{noun}：{outer}）——"
+                     + "外层容器会把自己装进去。默认位置与那个文件夹同级。";
             }
 
             if (hasOuter && IsInside(outer, source))
             {
-                return $"{noun}不能放在源文件夹 A 里面（A：{source}；{noun}：{outer}）——"
-                     + "源目录里不写任何东西（避免把打包结果又打进去一次）。";
+                return $"{noun}不能放在源文件夹里面（源：{source}；{noun}：{outer}）——"
+                     + "源目录里不写任何东西（避免把打包结果又打进去一次）。请把落点改到源文件夹外面。";
             }
 
             if (IsInside(source, output))
             {
                 return hasOuter
-                    ? $"源文件夹 A 在输出文件夹 B 里面（A：{source}；B：{output}）——"
-                      + $"外层容器（{noun}）装的是整个 B，会把源文件原样再存一份。请把 B 放到 A 外面。"
-                    : $"源文件夹 A 在输出文件夹 B 里面（A：{source}；B：{output}）——"
-                      + "源文件与打包产物会混在同一个目录里（两者必须相互独立）。请把 B 放到 A 外面。";
+                    ? $"源文件夹落在落点目录里面了（源：{source}；落点：{output}）——"
+                      + $"外层容器（{noun}）装的是整个落点目录，会把源文件原样再存一份。请把落点改到源文件夹外面。"
+                    : $"源文件夹落在落点目录里面了（源：{source}；落点：{output}）——"
+                      + "源文件与打包产物会混在同一个目录里（两者必须相互独立）。请把落点改到源文件夹外面。";
             }
 
             if (hasOuter && Directory.Exists(outer))
@@ -587,14 +589,15 @@ namespace ArchiveFixer.Packing
             if (hasOuter && File.Exists(outer))
             {
                 // 与不变量 3 同一口径：冲突**不默认覆盖**。
-                return $"结果文件已存在（不会默认覆盖）：{outer}。请先把旧的改名 / 移走，或换一个输出文件夹。";
+                return $"同名结果文件已经存在（不会默认覆盖）：{outer}。"
+                     + "请先把旧的改名 / 移走，或在确认弹窗里换一个落点目录。";
             }
 
             if (Directory.Exists(output) && !IsDirectoryEmpty(output))
             {
-                return $"输出文件夹已存在且不为空：{output}。"
-                     + "打包只往**空文件夹**里写（B 里的东西最后会被整个装进外层容器，混进旧文件会让结果不对）。"
-                     + "请先清空它、或另选一个文件夹。";
+                return $"「装分卷的文件夹」已经存在而且不是空的：{output}。"
+                     + "打包只往**空文件夹**里写（那里的东西最后会被整个装进外层容器，混进旧文件会让结果不对）。"
+                     + "请先清空它、或在确认弹窗里换一个落点目录。";
             }
 
             return null;

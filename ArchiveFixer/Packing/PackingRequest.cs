@@ -163,13 +163,13 @@ namespace ArchiveFixer.Packing
     {
         /// <summary>没设密码时的那句话（用户原话的落点：密码必须有）。</summary>
         public const string RequiredMessage =
-            "必须设置密码：两层加密（7z 分卷 + 外层 rar）都要用它，空密码和只有空格的密码都不接受。";
+            "必须设置密码：两层加密（7z 分卷 + 外层容器）都要用它，空密码和只有空格的密码都不接受。";
 
         /// <summary>两次输入不一致。</summary>
         public const string MismatchMessage = "两次输入的密码不一致，请重新输入。";
 
         /// <summary>外层勾了「用另一个密码」但没填。</summary>
-        public const string OuterRequiredMessage = "勾了「外层 rar 用另一个密码」，就要把外层的密码也填上。";
+        public const string OuterRequiredMessage = "勾了「两层用不同的密码」，就要把「最外层」那个密码也填上。";
 
         /// <summary>
         /// 日志里代表"已设置密码"的**唯一一句话**。

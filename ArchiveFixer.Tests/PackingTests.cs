@@ -423,13 +423,13 @@ namespace ArchiveFixer.Tests
             string? rejected = PackingPlan.ValidatePlacement(source, output, rar);
 
             Assert.NotNull(rejected);
-            Assert.Contains("不能放在源文件夹 A 里面", rejected!, StringComparison.Ordinal);
+            Assert.Contains("不能落在源文件夹里面", rejected!, StringComparison.Ordinal);
 
             Assert.False(PackingPlan.TryCreate(
                 new PackingRequest { SourceFolder = source, OutputFolder = output, RarPath = rar, Password = SamplePassword },
                 out _,
                 out string error));
-            Assert.Contains("不能放在源文件夹 A 里面", error, StringComparison.Ordinal);
+            Assert.Contains("不能落在源文件夹里面", error, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -442,7 +442,7 @@ namespace ArchiveFixer.Tests
             string? rejected = PackingPlan.ValidatePlacement(source, output, rar);
 
             Assert.NotNull(rejected);
-            Assert.Contains("不能放在输出文件夹 B 里面", rejected!, StringComparison.Ordinal);
+            Assert.Contains("不能放在「装分卷的文件夹」里面", rejected!, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -457,17 +457,17 @@ namespace ArchiveFixer.Tests
                 Path.Combine(source, "结果.rar"));
 
             Assert.NotNull(rarInSource);
-            Assert.Contains("不能放在源文件夹 A 里面", rarInSource!, StringComparison.Ordinal);
+            Assert.Contains("不能放在源文件夹里面", rarInSource!, StringComparison.Ordinal);
 
-            // A 在 B 里面 → 外层 rar 装的是整个 B，会把源文件原样再存一份。
-            // ⚠ rar 必须放在 B **外面**，否则会先撞上"rar 不能放在 B 里面"那一条，测的就不是这一条判据了。
+            // A 在 B 里面 → 外层容器装的是整个落点目录，会把源文件原样再存一份。
+            // ⚠ rar 必须放在那个文件夹 **外面**，否则会先撞上"rar 不能放在它里面"那一条，测的就不是这一条判据了。
             string? sourceInOutput = PackingPlan.ValidatePlacement(
                 source,
                 _root,
                 Path.Combine(Path.GetDirectoryName(_root) ?? _root, "B-cross.rar"));
 
             Assert.NotNull(sourceInOutput);
-            Assert.Contains("源文件夹 A 在输出文件夹 B 里面", sourceInOutput!, StringComparison.Ordinal);
+            Assert.Contains("源文件夹落在落点目录里面了", sourceInOutput!, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -481,7 +481,7 @@ namespace ArchiveFixer.Tests
 
             string? notEmpty = PackingPlan.ValidatePlacement(source, output, Path.Combine(_root, "B-conflict.rar"));
             Assert.NotNull(notEmpty);
-            Assert.Contains("不为空", notEmpty!, StringComparison.Ordinal);
+            Assert.Contains("已经存在而且不是空的", notEmpty!, StringComparison.Ordinal);
 
             // 空的 B 是可以用的。
             Directory.Delete(output, recursive: true);
@@ -1098,7 +1098,9 @@ namespace ArchiveFixer.Tests
                 volumes);
 
             Assert.False(stray.Ok);
-            Assert.Contains("B 这一层之外", stray.Detail, StringComparison.Ordinal);
+
+            // 第 46 条改口径：这句话里点名的是**那个文件夹实际叫什么**（旧文案写死的 "B" 已经没有了）。
+            Assert.Contains("「B」这一层之外", stray.Detail, StringComparison.Ordinal);
 
             Assert.False(PackingVerifier.Verify(Array.Empty<string>(), "B", volumes).Ok);
             Assert.False(PackingVerifier.Verify(new[] { "B" }, "B", Array.Empty<PackingVolume>()).Ok);

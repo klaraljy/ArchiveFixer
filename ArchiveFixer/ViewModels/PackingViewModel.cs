@@ -401,6 +401,36 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>内置 7-Zip 在不在（自动回退到 7z 外层时要用）。</summary>
+        public bool SevenZipAvailable
+        {
+            get
+            {
+                try
+                {
+                    return _tools.SevenZipExists;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 外层容器**实际会用哪一个**（第 46 条：没装 WinRAR 就自动改用 7z）。
+        ///
+        /// <para>⛔ 这一处是**唯一来源**（与 <c>PackingService</c> 引的是同一个
+        /// <see cref="PackingOuterContainerResolver"/>）：⑤页摘要、确认弹窗里那句"最终产物"、
+        /// 结果区都必须写**实际**会产出的那个文件名 —— 否则没装 WinRAR 的机器上会写着
+        /// <c>1111.rar</c>、跑完却得到 <c>1111.7z</c>（界面撒谎）。</para>
+        /// </summary>
+        public PackingOuterContainerResolution EffectiveOuterContainer =>
+            PackingOuterContainerResolver.Resolve(OuterContainer, RarAvailable, SevenZipAvailable);
+
+        /// <summary>实际会做的容器。</summary>
+        public PackOuterContainer EffectiveContainer => EffectiveOuterContainer.Effective;
+
         /// <summary>Rar.exe 的现状那句话（"用的哪一个、从哪来的" / "没找到，期望位置在哪"）。</summary>
         public string RarStatusText
         {
@@ -615,19 +645,50 @@ namespace ArchiveFixer.ViewModels
 
             _lastPlan = plan;
 
+            PackingOuterContainerResolution outer = EffectiveOuterContainer;
+
+            // ⛔ 要外层却连内置 7-Zip 都没有（程序装坏了那种）：**不许写成"不做外层、结果就是分卷"** ——
+            //    服务那边会直接报"没法生成任何外层容器"，界面先说清楚，别让他确认一件做不成的事。
+            if (outer.Impossible)
+            {
+                SummaryText =
+                    $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
+                    + Environment.NewLine
+                    + "外层容器：**做不出来** —— 本机既没有 Rar.exe，也没有可用的 7-Zip。";
+                PlacementText = $"请先修好 7-Zip（程序目录 tools\\7zip：{_tools.SevenZipExePath}），否则打不了包。";
+
+                return;
+            }
+
+            string outerNote = outer.FellBackToSevenZip
+                ? "（本机没有 Rar.exe，自动改用 7z —— 无需额外安装）"
+                : string.Empty;
+
             SummaryText =
                 $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
                 + (plan.UnreadableCount > 0 ? $"（其中 {plan.UnreadableCount} 个条目读不到大小）" : string.Empty)
                 + Environment.NewLine
                 + plan.DescribeVolumePlan()
                 + Environment.NewLine
-                + $"外层容器：{plan.OuterContainer.ShortName()}"
+                + $"外层容器：{outer.Effective.ShortName()}{outerNote}"
                 + $"；需要空余空间：约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}";
 
-            PlacementText = plan.OuterContainer.HasOuterArtifact()
-                ? $"最终产物：{plan.OuterPath}"
+            PlacementText = outer.Effective.HasOuterArtifact()
+                ? $"最终产物：{OuterPathFor(plan, outer.Effective)}"
                 : $"不做外层容器：结果就是 {plan.OutputFolder} 里的分卷";
         }
+
+        /// <summary>
+        /// 按**实际生效的容器**取最终产物的完整路径（`.rar` 还是 `.7z` 由它决定）。
+        /// ⛔ 不许各处自己按 <c>plan.OuterContainer</c>（= 请求里那个）拼路径。
+        /// </summary>
+        internal static string OuterPathFor(PackingPlan plan, PackOuterContainer effectiveContainer) =>
+            effectiveContainer switch
+            {
+                PackOuterContainer.SevenZip => plan.SevenZipOuterPath,
+                PackOuterContainer.None => string.Empty,
+                _ => plan.RarPath
+            };
 
         /// <summary>
         /// 开始打包（用户 2026-09-26 第 46 条的流程）：
@@ -668,6 +729,19 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            /*
+             * 要外层、却连内置 7-Zip 都拿不到（程序装坏了那种）→ **先拦下**，
+             * 别让他确认一件注定失败的事（服务那边也会报同一件事，这里只是不浪费他一次点击）。
+             */
+            if (EffectiveOuterContainer.Impossible)
+            {
+                Warn(
+                    "本机既没有 Rar.exe，也没有可用的 7-Zip —— 打不了包。"
+                    + $"请检查程序目录里的 tools\\7zip（{_tools.SevenZipExePath}），或重新解压一份程序。");
+
+                return;
+            }
+
             // 先用"设置里那一套"算一遍规划（弹窗要把"最终产物在哪"显示出来）。
             PackingRunOptions initial = PackingRunOptions.FromSettings(_settings);
 
@@ -679,8 +753,11 @@ namespace ArchiveFixer.ViewModels
             }
 
             // ───────── 小确认弹窗（取消 = 什么都不做）─────────
+            //
+            // ⚠ 弹窗里那句"最终产物"必须按**实际生效的容器**写（没装 WinRAR 时是 `.7z`），
+            //    而且要跟着用户在弹窗里改落点实时重算 —— 见 `PackingConfirmRequest.BuildHeadLines`。
             PackingRunOptions? confirmed = _dialogService.ShowPackingConfirm(
-                PackingConfirmRequest.FromPlan(previewPlan, initial));
+                PackingConfirmRequest.FromPlan(previewPlan, initial, EffectiveContainer));
 
             if (confirmed == null)
             {
@@ -913,10 +990,43 @@ namespace ArchiveFixer.ViewModels
                 outerLine = "没有外层容器文件（选的是「不做外层容器」）。";
             }
 
+            /*
+             * ⛔ 结果区**不许撒谎**（第 46 条收尾自查抓到的第 6 处）：
+             * 原来这里无条件写"分卷在：<文件夹>（N 个）"+「其余物按你选的档留着了，自己删掉就行」——
+             * 而**默认档就是把那个文件夹彻底删掉**，于是他跑完看到的是一句"分卷在 X、你可以自己删 X"，
+             * 那个 X 已经不存在了。现在按**收尾那句机器结论**分档说。
+             */
+            string volumesLine;
+
+            if (result.CleanupNote.Contains("已彻底删除", StringComparison.Ordinal))
+            {
+                volumesLine = "装分卷的文件夹（其余物）：已按你选的档**彻底删除**（不再占空间）。";
+            }
+            else if (result.CleanupNote.Contains("已移入回收站", StringComparison.Ordinal))
+            {
+                volumesLine = "装分卷的文件夹（其余物）：已按你选的档**移入回收站**（可还原）。";
+            }
+            else if (result.Success && Directory.Exists(plan.OutputFolder))
+            {
+                volumesLine = $"装分卷的文件夹（其余物）：{plan.OutputFolder}（{result.Volumes.Count} 个分卷）";
+            }
+            else if (Directory.Exists(plan.OutputFolder))
+            {
+                volumesLine = $"分卷在：{plan.OutputFolder}（{result.Volumes.Count} 个）"
+                            + "—— 这次中途停下了，这些分卷**可能不完整**；重试前请先清空它。";
+            }
+            else
+            {
+                volumesLine = "没有生成任何分卷。";
+            }
+
+            // 「其余物留着」那句提示只在**真的留着**的时候才出现（失败 / 取消时收尾根本没跑）。
+            bool restKept = result.Success && result.CleanupNote.Contains("保留", StringComparison.Ordinal);
+
             ResultText = result.Describe() + Environment.NewLine
                 + outerLine + Environment.NewLine
-                + $"分卷在：{plan.OutputFolder}（{result.Volumes.Count} 个）" + Environment.NewLine
-                + StatusText.PackKeepFolderHint;
+                + volumesLine
+                + (restKept ? Environment.NewLine + StatusText.PackKeepFolderHint : string.Empty);
 
             ProgressPercent = result.Success ? 100 : ProgressPercent;
             CurrentStepText = result.Success ? StatusText.PackSuccess : ResultTitle;

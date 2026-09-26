@@ -164,7 +164,7 @@ namespace ArchiveFixer.Packing
             Write("7-Zip：" + _tools.DescribeResolution());
 
             /*
-             * 外层容器的可用性检查，全部**在切分卷之前**做完（三条路各查各的）：
+             * 外层容器的可用性检查，全部**在切分卷之前**做完：
              *
              * 先花十几分钟切出几十个分卷、再告诉他"外层做不了"，等于让他在最贵的步骤上白等。
              * 这一步只是**检测**，绝不复制、绝不内置 Rar.exe（共享软件，AGENTS.md §3.1）。
@@ -172,54 +172,43 @@ namespace ArchiveFixer.Packing
              * ⚠ 2026-09-26 第 46 条改口径（用户原话："如果用户没有装 WinRAR，那就弄 7z 吧"）：
              * 外面选的是 rar 但本机没有 Rar.exe 时**自动改用 7z 外层**（7-Zip 是随程序分发的，无需安装），
              * 并在日志与结果里如实写明"用的是 7z 而不是 rar" —— 不再拿"去装 WinRAR"把整件事卡住。
+             * ⛔ 这个结论**界面也要用**（⑤页摘要 / 确认弹窗里那句"最终产物"），所以它只有一处计算：
+             * `PackingOuterContainerResolver`（见 `PackingViewModel.EffectiveOuterContainer`）。
              */
-            PackOuterContainer effectiveContainer = request.OuterContainer;
+            PackingOuterContainerResolution outer = PackingOuterContainerResolver.Resolve(
+                request.OuterContainer,
+                _tools.RarExists,
+                _tools.SevenZipExists);
 
-            switch (request.OuterContainer)
+            PackOuterContainer effectiveContainer = outer.Effective;
+
+            if (outer.Impossible)
             {
-                case PackOuterContainer.Rar:
-                    if (!_tools.RarExists)
-                    {
-                        effectiveContainer = PackOuterContainer.SevenZip;
+                Write("7-Zip：" + _tools.DescribeResolution());
 
-                        Write("Rar.exe：" + _tools.DescribeNoRarAvailable());
-                        Write(
-                            "本机没有 Rar.exe（WinRAR 是共享软件，程序不分发它）—— "
-                            + "按你说的改用 **7z 外层**（7-Zip 随程序分发、无需额外安装）："
-                            + $"结果会是 {Path.GetFileName(plan.SevenZipOuterPath)}，而不是 .rar。");
+                return Fail(
+                    $"本机既没有 Rar.exe 也没有可用的 7-Zip（{_tools.SevenZipExePath}），"
+                    + "没法生成任何外层容器。请检查 7-Zip 那一格设置，或重新解压一份程序。",
+                    StatusText.PackFailed);
+            }
 
-                        if (!_tools.SevenZipExists)
-                        {
-                            return Fail(
-                                $"本机既没有 Rar.exe 也没有可用的 7-Zip（{_tools.SevenZipExePath}），"
-                                + "没法生成任何外层容器。请检查 7-Zip 那一格设置，或重新解压一份程序。",
-                                StatusText.PackFailed);
-                        }
-                    }
-                    else
-                    {
-                        Write("外层容器 rar：" + _tools.DescribeRarResolution());
-                    }
-
-                    break;
-
-                case PackOuterContainer.SevenZip:
-                    if (!_tools.SevenZipExists)
-                    {
-                        Write("7-Zip：" + _tools.DescribeResolution());
-
-                        return Fail(
-                            $"外层容器选了 7z，但没找到 7-Zip 程序：{_tools.SevenZipExePath}。"
-                            + "它是随程序分发的（tools\\7zip），请检查这一格设置或重新解压一份程序。",
-                            StatusText.PackFailed);
-                    }
-
-                    Write("外层容器 7z：" + _tools.DescribeResolution() + "（无需额外安装）");
-                    break;
-
-                default:
-                    Write("按要求不做外层容器：" + StatusText.PackOuterNoneText);
-                    break;
+            if (outer.FellBackToSevenZip)
+            {
+                Write("Rar.exe：" + _tools.DescribeNoRarAvailable());
+                Write(outer.Note + $"结果会是 {Path.GetFileName(plan.SevenZipOuterPath)}。");
+                Write("外层容器 7z：" + _tools.DescribeResolution() + "（无需额外安装）");
+            }
+            else if (effectiveContainer == PackOuterContainer.Rar)
+            {
+                Write("外层容器 rar：" + _tools.DescribeRarResolution());
+            }
+            else if (effectiveContainer == PackOuterContainer.SevenZip)
+            {
+                Write("外层容器 7z：" + _tools.DescribeResolution() + "（无需额外安装）");
+            }
+            else
+            {
+                Write("按要求不做外层容器：" + StatusText.PackOuterNoneText);
             }
 
             Write(plan.DescribeOuterContainer(effectiveContainer));
@@ -297,19 +286,19 @@ namespace ArchiveFixer.Packing
 
             if (volumeStep.Cancelled)
             {
-                Write($"分卷情况：B 里现有 {volumes.Count} 个分卷（**可能不完整**），重试前请先清空 B。");
+                Write(DescribePartialVolumes(volumes.Count, plan));
 
                 return Cancelled("生成 7z 分卷时被取消", null, volumes);
             }
 
             if (!volumeStep.Success)
             {
-                Write($"分卷情况：B 里现有 {volumes.Count} 个分卷（**可能不完整**），重试前请先清空 B。");
+                Write(DescribePartialVolumes(volumes.Count, plan));
 
                 return Fail(
                     $"7-Zip 没能建出加密分卷（退出码 {volumeStep.ExitCode}）。"
                     + DescribeOutputTail(volumeStep)
-                    + "分卷没有做成，外层 rar 也就没开始 —— 结果文件一个都没有生成。",
+                    + "分卷没有做成，外层容器也就没开始 —— 结果文件一个都没有生成。",
                     StatusText.PackFailed,
                     volumes);
             }
@@ -325,7 +314,7 @@ namespace ArchiveFixer.Packing
                   + $"；预计 {plan.PlannedVolumeCount} 卷");
 
             // ───────── 不做外层容器这条路（本机没装 WinRAR 时最省的出路） ─────────
-            if (!request.OuterContainer.HasOuterArtifact())
+            if (!effectiveContainer.HasOuterArtifact())
             {
                 Report(PackingStep.Finished, StatusText.PackSuccess, 100);
 
@@ -336,6 +325,7 @@ namespace ArchiveFixer.Packing
                     State = PackingState.Succeeded,
                     Message = StatusText.PackPartialVolumesOnly,
                     OuterContainer = PackOuterContainer.None,
+                    VolumesFolder = plan.OutputFolder,
                     Volumes = volumes,
                     VerificationDetail = "只做了 7z 分卷（按要求不做外层容器）",
                     LogLines = lines,
@@ -383,7 +373,7 @@ namespace ArchiveFixer.Packing
             {
                 DeleteIncompleteOuter(outerPath, outerName, Write);
 
-                return Cancelled($"生成{outerName}时被取消（分卷还在 B 里）", null, volumes);
+                return Cancelled($"生成{outerName}时被取消（分卷还在「{FolderName(plan)}」里）", null, volumes);
             }
 
             if (!outerStep.Success)
@@ -393,7 +383,7 @@ namespace ArchiveFixer.Packing
                 return Fail(
                     $"{outerName}没做成（{outerTool} 退出码 {outerStep.ExitCode}）。" + DescribeOutputTail(outerStep)
                     + $"7z 分卷还在：{plan.OutputFolder}（{volumes.Count} 个）—— 修好原因后可以重试，"
-                    + "重试前请先清空 B，让程序从干净状态重建。",
+                    + $"重试前请先清空「{FolderName(plan)}」，让程序从干净状态重建。",
                     StatusText.PackFailed,
                     volumes);
             }
@@ -499,6 +489,7 @@ namespace ArchiveFixer.Packing
                 OuterContainer = effectiveContainer,
                 OuterPath = outerPath,
                 OuterBytes = outerBytes,
+                VolumesFolder = plan.OutputFolder,
                 Volumes = volumes,
                 VerificationDetail = verification.Detail,
                 CleanupNote = cleanup.Ran
@@ -743,7 +734,28 @@ namespace ArchiveFixer.Packing
             }));
         }
 
-        /// <summary>从 B 里数出 7z 切出来的分卷（按 <c>&lt;A名&gt;.7z.NNN</c> 认，不自己拼名字）。</summary>
+        /// <summary>装分卷的那个文件夹的名字（给用户看的短名字；取不到时给一句人话）。</summary>
+        internal static string FolderName(PackingPlan plan)
+        {
+            string name = Path.GetFileName(
+                (plan.OutputFolder ?? string.Empty).TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+            return string.IsNullOrWhiteSpace(name) ? "装分卷的文件夹" : name;
+        }
+
+        /// <summary>
+        /// 中途停下时如实报"现在切出来几个卷、重试前该清哪个文件夹"。
+        ///
+        /// <para>⛔ 第 46 条之前这里写的是"B 里现有 N 个分卷……重试前请先清空 B" —— 那是旧模型的说法
+        /// （用户要填一个叫 B 的输出文件夹），现在界面上没有 B 了，只有"那个装分卷的文件夹"（其余物），
+        /// 所以必须点名它**实际叫什么**，否则他拿着日志去找一个不存在的 "B"。</para>
+        /// </summary>
+        internal static string DescribePartialVolumes(int count, PackingPlan plan) =>
+            $"分卷情况：「{FolderName(plan)}」里现在有 {count} 个分卷（**可能不完整**）；"
+            + "重试前请先清空这个文件夹（它就在落点目录里，也就是「其余物」）。";
+
+        /// <summary>按 <c>&lt;源名&gt;.7z.NNN</c> 从那个装分卷的文件夹里数出实际切出来的分卷（不自己拼名字）。</summary>
         internal static List<PackingVolume> CollectVolumes(PackingPlan plan)
         {
             var volumes = new List<PackingVolume>();

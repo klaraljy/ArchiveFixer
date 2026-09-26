@@ -98,6 +98,177 @@ namespace ArchiveFixer.Tests
             Assert.Equal(Path.Combine(_root, "111.rar"), plan.RarPath);
         }
 
+        // ================================================================ 抬头不许撒谎（第 46 条收尾）
+
+        /// <summary>
+        /// ⛔ **没装 WinRAR 时，弹窗里那句"最终产物"必须写 `.7z`** —— 实际产出的就是它。
+        ///
+        /// <para>收尾自查时抓到的真缺陷：外层容器是"实际生效的那个"由 `PackingService` 内部算，
+        /// 而弹窗按请求里那个（永远 rar）写，于是没装 WinRAR 的机器上会写着
+        /// <c>1111.rar</c>、跑完却得到 <c>1111.7z</c>（第 36/45 条那类"界面撒谎"）。
+        /// 现在服务与界面引同一个 `PackingOuterContainerResolver`。</para>
+        /// </summary>
+        [Fact]
+        public void 确认弹窗抬头_没装Rar时写的是7z产物而不是rar()
+        {
+            string source = BuildSourceFolder("素材");
+
+            Assert.True(PackingPlan.TryCreate(
+                new PackingRequest { SourceFolder = source, Password = SamplePassword },
+                out PackingPlan? plan,
+                out string error), error);
+
+            // 本机没有 Rar.exe、但有内置 7-Zip → 实际会用 7z。
+            PackingOuterContainerResolution outer = PackingOuterContainerResolver.Resolve(
+                PackOuterContainer.Rar,
+                rarExists: false,
+                sevenZipExists: true);
+
+            Assert.True(outer.FellBackToSevenZip);
+
+            PackingConfirmRequest request = PackingConfirmRequest.FromPlan(plan!, new PackingRunOptions(), outer.Effective);
+            IReadOnlyList<string> head = request.BuildHeadLines();
+
+            string artifactLine = Assert.Single(head, line => line.Contains("最终产物：", StringComparison.Ordinal));
+
+            Assert.Contains(".7z", artifactLine, StringComparison.Ordinal);
+            Assert.DoesNotContain(".rar", artifactLine, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("自动用 7z", artifactLine, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// ⛔ 用户在弹窗里把落点改成「指定位置」之后，那句"最终产物"必须**跟着换目录** ——
+        /// 否则弹窗说的是 A 目录、跑出来落在 B 目录（同一个"界面撒谎"的毛病）。
+        /// </summary>
+        [Fact]
+        public void 确认弹窗抬头_落点改成指定位置之后最终产物跟着换目录()
+        {
+            string source = BuildSourceFolder("素材");
+
+            Assert.True(PackingPlan.TryCreate(
+                new PackingRequest { SourceFolder = source, Password = SamplePassword },
+                out PackingPlan? plan,
+                out string error), error);
+
+            PackingConfirmRequest request = PackingConfirmRequest.FromPlan(plan!, new PackingRunOptions());
+
+            string localLine = Assert.Single(
+                request.BuildHeadLines(new PackingRunOptions { TargetMode = PackingTargetMode.Local }),
+                line => line.Contains("最终产物：", StringComparison.Ordinal));
+
+            Assert.Contains(_root, localLine, StringComparison.Ordinal);
+
+            string elsewhere = Path.Combine(_root, "别处");
+
+            Directory.CreateDirectory(elsewhere);
+
+            string customLine = Assert.Single(
+                request.BuildHeadLines(new PackingRunOptions
+                {
+                    TargetMode = PackingTargetMode.Custom,
+                    CustomOutputDirectory = elsewhere
+                }),
+                line => line.Contains("最终产物：", StringComparison.Ordinal));
+
+            Assert.Contains(elsewhere, customLine, StringComparison.Ordinal);
+            Assert.EndsWith("素材.rar", customLine);
+        }
+
+        /// <summary>
+        /// 三层解析规则本身（纯逻辑）：要 rar 有 rar 就用 rar；没 rar 有 7z 就自动 7z；
+        /// 两个都没有则**什么外层都做不出来**（调用方据此报错，⛔ 不许假装成功）。
+        /// </summary>
+        [Fact]
+        public void 外层容器解析_有Rar用Rar_没Rar自动7z_都没有则做不出来()
+        {
+            PackingOuterContainerResolution withRar = PackingOuterContainerResolver.Resolve(
+                PackOuterContainer.Rar,
+                rarExists: true,
+                sevenZipExists: true);
+
+            Assert.Equal(PackOuterContainer.Rar, withRar.Effective);
+            Assert.False(withRar.FellBackToSevenZip);
+            Assert.False(withRar.Impossible);
+
+            PackingOuterContainerResolution fallback = PackingOuterContainerResolver.Resolve(
+                PackOuterContainer.Rar,
+                rarExists: false,
+                sevenZipExists: true);
+
+            Assert.Equal(PackOuterContainer.SevenZip, fallback.Effective);
+            Assert.True(fallback.FellBackToSevenZip);
+            Assert.Contains("没有 Rar.exe", fallback.Note, StringComparison.Ordinal);
+            Assert.Contains("7z 外层", fallback.Note, StringComparison.Ordinal);
+
+            PackingOuterContainerResolution nothing = PackingOuterContainerResolver.Resolve(
+                PackOuterContainer.Rar,
+                rarExists: false,
+                sevenZipExists: false);
+
+            Assert.True(nothing.Impossible, "要外层却什么都没有 → 必须报错，不许假装做完");
+
+            // "不做外层"永远成立（它不需要任何工具）。
+            Assert.False(PackingOuterContainerResolver
+                .Resolve(PackOuterContainer.None, rarExists: false, sevenZipExists: false)
+                .Impossible);
+        }
+
+        /// <summary>
+        /// ⛔ 结果区**不许撒谎**（第 46 条收尾自查抓到的第 6 处）：默认档下"其余物"（装分卷的文件夹）
+        /// 是被**彻底删掉**的，所以结果区不能再写"分卷在 X、你可以自己删 X"，也不该再出现
+        /// 「其余物留着了」那句提示 —— 原来这两句是**无条件**拼上去的。
+        ///
+        /// <para>这条走**真 7z 端到端**（假 runner 到不了收尾那一步），直接读 ViewModel 的 `ResultText`。</para>
+        /// </summary>
+        [Fact]
+        public async Task 结果区_默认档其余物已删_不许再写分卷在X可以自己删()
+        {
+            string sevenZip = LocateSevenZip();
+
+            if (string.IsNullOrEmpty(sevenZip))
+            {
+                return;
+            }
+
+            string source = BuildSourceFolder("素材");
+
+            var tools = new ToolLocator();
+
+            // 真服务 + 真 runner；弹窗替身回一套**默认档**（本地 / 原包不动 / 其余物彻底删除）。
+            var viewModel = new PackingViewModel(
+                new PackingService(tools, null, _ => long.MaxValue),
+                new FakeDialogService(new PackingRunOptions()),
+                new PathService { DataRootDirectory = Path.Combine(_root, "data") },
+                new ClipboardService(),
+                tools);
+
+            viewModel.Settings = AppSettings.CreateDefault();
+            viewModel.SourceFolder = source;
+            viewModel.Password = SamplePassword;
+
+            await viewModel.StartAsync();
+
+            Assert.Equal("Success", viewModel.ResultKind);
+            Assert.Contains("打包成功", viewModel.ResultText, StringComparison.Ordinal);
+
+            // 装分卷的文件夹会因为"源文件夹本身就叫这个名字"而让位成 `素材(1)`（第 46 条的命名规则）。
+            string volumesFolder = Path.Combine(_root, "素材(1)");
+
+            Assert.False(Directory.Exists(volumesFolder), "默认档下装分卷的文件夹应当已被删掉");
+
+            // 落点目录里只剩源文件夹本身（其余的都被清掉了）。
+            Assert.Equal(new[] { source }, Directory.GetDirectories(_root));
+
+            // ① 不能再说"分卷在 <那个文件夹>"。
+            Assert.DoesNotContain($"分卷在：{volumesFolder}", viewModel.ResultText, StringComparison.Ordinal);
+
+            // ② 也不能再说"其余物留着了、你自己删"。
+            Assert.DoesNotContain("留着了", viewModel.ResultText, StringComparison.Ordinal);
+
+            // ③ 要如实说"已彻底删除"。
+            Assert.Contains("彻底删除", viewModel.ResultText, StringComparison.Ordinal);
+        }
+
         // ================================================================ 取消 = 什么都不做
 
         [Fact]
@@ -179,6 +350,31 @@ namespace ArchiveFixer.Tests
         }
 
         // ================================================================ 工具
+
+        /// <summary>找内置 7z.exe（找不到就跳过真引擎那几条）。</summary>
+        private static string LocateSevenZip()
+        {
+            DirectoryInfo? directory = new(AppContext.BaseDirectory);
+
+            while (directory != null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "ArchiveFixer.slnx")))
+                {
+                    string candidate = Path.Combine(directory.FullName, "ArchiveFixer", "tools", "7zip", "7z.exe");
+
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+
+                directory = directory.Parent;
+            }
+
+            string local = Path.Combine(AppContext.BaseDirectory, "tools", "7zip", "7z.exe");
+
+            return File.Exists(local) ? local : string.Empty;
+        }
 
         private string BuildSourceFolder(string name)
         {

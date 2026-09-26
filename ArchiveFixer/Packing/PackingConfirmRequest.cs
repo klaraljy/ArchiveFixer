@@ -21,14 +21,29 @@ namespace ArchiveFixer.Packing
         /// <summary>用户选中的那个路径（文件夹或文件）。</summary>
         public string SourcePath { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 源解析结果（单文件时含"要建的那个同名文件夹"）。
+        /// 有它才能按**当前**落点选择实时重算"最终产物在哪"（见 <see cref="BuildHeadLines"/>）。
+        /// </summary>
+        public PackingSourceResolution? Resolution { get; init; }
+
         /// <summary>源是文件夹还是单文件（单文件时会先建同名文件夹，那一层算其余物）。</summary>
         public PackingSourceKind SourceKind { get; init; } = PackingSourceKind.Folder;
 
-        /// <summary>最终产物（<c>.rar</c> 或没装 WinRAR 时的 <c>.7z</c>）的完整路径。</summary>
-        public string OuterPath { get; init; } = string.Empty;
+        /// <summary>
+        /// **实际生效的**外层容器（没装 WinRAR 时是 7z）—— 标题那行写的产物名必须跟它走，
+        /// ⛔ 不许按"请求里那个"写（那会让弹窗写着 `.rar`、跑完得到 `.7z`）。
+        /// </summary>
+        public PackOuterContainer EffectiveContainer { get; init; } = PackOuterContainer.Rar;
 
-        /// <summary>外层容器（实际生效的那个：rar / 7z）。</summary>
-        public PackOuterContainer OuterContainer { get; init; } = PackOuterContainer.Rar;
+        /// <summary>与 <see cref="EffectiveContainer"/> 同一个值（旧调用方按这个名字读）。</summary>
+        public PackOuterContainer OuterContainer => EffectiveContainer;
+
+        /// <summary>
+        /// 按"打开弹窗时那一套选择"算出来的最终产物路径（打开弹窗那一刻的快照）。
+        /// <see cref="ArtifactPathFor"/> 在拿不到源解析结果时回落到它。
+        /// </summary>
+        public string OuterPath { get; init; } = string.Empty;
 
         /// <summary>内容摘要（几个文件、多大）。</summary>
         public string ContentSummary { get; init; } = string.Empty;
@@ -43,37 +58,68 @@ namespace ArchiveFixer.Packing
         public PackingRunOptions Initial { get; init; } = new();
 
         /// <summary>取默认值构造（源 + 规划已经算好时）。</summary>
-        public static PackingConfirmRequest FromPlan(PackingPlan plan, PackingRunOptions initial)
+        public static PackingConfirmRequest FromPlan(
+            PackingPlan plan,
+            PackingRunOptions initial,
+            PackOuterContainer effectiveContainer = PackOuterContainer.Rar)
         {
             if (plan == null)
             {
                 return new PackingConfirmRequest();
             }
 
-            string outerPath = plan.OuterContainer switch
-            {
-                PackOuterContainer.SevenZip => plan.SevenZipOuterPath,
-                PackOuterContainer.None => string.Empty,
-                _ => plan.RarPath
-            };
-
             return new PackingConfirmRequest
             {
                 SourceName = plan.SourceFolderName,
                 SourcePath = plan.SourceResolution?.SourcePath ?? plan.SourceFolder,
+                Resolution = plan.SourceResolution,
                 SourceKind = plan.SourceResolution?.Kind ?? PackingSourceKind.Folder,
-                OuterPath = outerPath,
-                OuterContainer = plan.OuterContainer,
+                OuterPath = effectiveContainer switch
+                {
+                    PackOuterContainer.SevenZip => plan.SevenZipOuterPath,
+                    PackOuterContainer.None => string.Empty,
+                    _ => plan.RarPath
+                },
+                EffectiveContainer = effectiveContainer,
                 ContentSummary = $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
-                                 + (plan.UnreadableCount > 0 ? $"（其中 {plan.UnreadableCount} 个读不到大小）" : string.Empty),
+                                 + (plan.UnreadableCount > 0 ? $"（其中 {plan.UnreadableCount} 个文件读不到大小）" : string.Empty),
                 VolumeRuleText = plan.DescribeVolumePlan(),
                 SpaceText = $"需要空余空间约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}",
                 Initial = initial ?? new PackingRunOptions()
             };
         }
 
-        /// <summary>弹窗顶部那几行（源 → 产物）。</summary>
-        public IReadOnlyList<string> BuildHeadLines()
+        /// <summary>
+        /// 按**当前**那一套选择算"最终产物在哪"（落点 + 实际容器 + 源名，重名自动让位）。
+        ///
+        /// <para>⛔ 复用规划层那两处口径（`PackingPaths.ResolveTargetDirectory` 与
+        /// `PackingNaming.ResolveUniqueFilePath`），⛔ 不在这里自己拼一遍路径 ——
+        /// 否则弹窗说的名字与真正产出的名字会不一致。</para>
+        /// </summary>
+        public string ArtifactPathFor(PackingRunOptions options)
+        {
+            if (Resolution == null)
+            {
+                return OuterPath;
+            }
+
+            string directory = PackingPaths.ResolveTargetDirectory(Resolution, options ?? new PackingRunOptions());
+
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return OuterPath;
+            }
+
+            string extension = EffectiveContainer == PackOuterContainer.SevenZip ? ".7z" : ".rar";
+
+            return PackingNaming.ResolveUniqueFilePath(directory, SourceName, extension);
+        }
+
+        /// <summary>
+        /// 弹窗顶部那几行（源 → 产物）。
+        /// <paramref name="options"/> 传当前选择时会**按它重算**最终产物路径（默认用打开弹窗时那一套）。
+        /// </summary>
+        public IReadOnlyList<string> BuildHeadLines(PackingRunOptions? options = null)
         {
             var lines = new List<string>
             {
@@ -97,10 +143,14 @@ namespace ArchiveFixer.Packing
                 lines.Add(SpaceText);
             }
 
+            string artifact = ArtifactPathFor(options ?? Initial);
+
             lines.Add(
-                OuterContainer == PackOuterContainer.SevenZip
-                    ? $"最终产物：{OuterPath}（本机没有 Rar.exe，外层用 7z —— 无需额外安装）"
-                    : $"最终产物：{OuterPath}");
+                EffectiveContainer == PackOuterContainer.SevenZip
+                    ? $"最终产物：{artifact}（本机没有 Rar.exe，外层自动用 7z —— 无需额外安装）"
+                    : EffectiveContainer == PackOuterContainer.None
+                        ? "最终产物：不做外层容器（结果就是那个装分卷的文件夹里的分卷）"
+                        : $"最终产物：{artifact}");
 
             return lines;
         }

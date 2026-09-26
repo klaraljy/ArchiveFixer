@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
@@ -126,9 +127,41 @@ namespace ArchiveFixer.Packing
         public string FirstVolumePath => Volumes.Count > 0 ? Volumes[0].Path : string.Empty;
 
         /// <summary>
+        /// 装分卷的那个文件夹（= 「其余物」）的全路径；没走到那一步时是空串。
+        ///
+        /// <para>只用来把结论里的路径说清楚 —— ⛔ 第 46 条之前结论里写的是旧模型的说法
+        /// "结果就是 B 里的 N 个分卷"，而界面上早就没有 "B" 了。</para>
+        /// </summary>
+        public string VolumesFolder { get; init; } = string.Empty;
+
+        /// <summary>那个文件夹的名字（结论里给人看的短名字）。</summary>
+        public string VolumesFolderName
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(VolumesFolder))
+                {
+                    return "装分卷的文件夹";
+                }
+
+                try
+                {
+                    string name = Path.GetFileName(
+                        VolumesFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+                    return string.IsNullOrWhiteSpace(name) ? "装分卷的文件夹" : name;
+                }
+                catch
+                {
+                    return "装分卷的文件夹";
+                }
+            }
+        }
+
+        /// <summary>
         /// 结果区那一句话：**实际产物路径 + 容器类型** + 分卷数（失败时给出原因）。
         ///
-        /// <para>为什么把容器类型写进结论：用户 2026-09-23 之后外层有 rar / 7z / 不做三种，
+        /// <para>为什么把容器类型写进结论：外层容器现在由程序按本机工具自动定（`rar` 或 `7z`），
         /// 只说一句"完成"会让他分不清拿到的是 <c>.rar</c> 还是 <c>.7z</c>，也分不清"没做外层"
         /// 是按要求做的还是出错了 —— 结论必须能被机器与人都一眼判定（不变量 6、14）。</para>
         /// </summary>
@@ -138,9 +171,9 @@ namespace ArchiveFixer.Packing
             {
                 if (!OuterContainer.HasOuterArtifact())
                 {
-                    return $"打包成功（外层容器：{OuterContainer.ShortName()}）：结果就是 B 里的 {Volumes.Count} 个 7z 加密分卷"
-                         + $"（共 {TaskSpaceEstimate.FormatSize(TotalVolumeBytes)}），第一个是 {FirstVolumePath}；"
-                         + "按要求没有外层容器文件。";
+                    return $"打包成功（外层容器：{OuterContainer.ShortName()}）：结果就是「{VolumesFolderName}」里的 "
+                         + $"{Volumes.Count} 个 7z 加密分卷（共 {TaskSpaceEstimate.FormatSize(TotalVolumeBytes)}），"
+                         + $"第一个是 {FirstVolumePath}；按要求没有外层容器文件。";
                 }
 
                 return $"打包成功（外层容器：{OuterContainer.ShortName()}）：{OuterPath}"

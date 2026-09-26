@@ -930,15 +930,15 @@ namespace ArchiveFixer.Models
 
         /// <summary>外层容器 = rar 的完整说法（含许可边界）。</summary>
         public const string PackOuterRarText =
-            "外层容器 rar：把 B 压成一个带密码的 .rar（需要本机已安装的 WinRAR：程序只检测与调用它，绝不随包分发）";
+            "外层容器 rar：把那个装分卷的文件夹压成一个带密码的 .rar（需要本机已安装的 WinRAR：程序只检测与调用它，绝不随包分发）";
 
         /// <summary>外层容器 = 7z 的完整说法（**无需额外安装**这句是关键信息）。</summary>
         public const string PackOuterSevenZipText =
-            "外层容器 7z：把 B 压成一个带密码的 .7z（-mhe 连文件名一起加密）—— 无需额外安装（7-Zip 是 LGPL，随程序分发）";
+            "外层容器 7z：把那个装分卷的文件夹压成一个带密码的 .7z（-mhe 连文件名一起加密）—— 无需额外安装（7-Zip 是 LGPL，随程序分发）";
 
         /// <summary>外层容器 = 不做。</summary>
         public const string PackOuterNoneText =
-            "不做外层容器：结果就是 B 里的 7z 加密分卷（不需要 Rar.exe，也不需要多一份空间）";
+            "不做外层容器：结果就是那个装分卷的文件夹里的 7z 加密分卷（不需要 Rar.exe，也不需要多一份空间）";
 
         /// <summary>外层容器 rar 的短名（日志 / 摘要行）。</summary>
         public const string PackOuterRarShort = "rar";
@@ -949,9 +949,9 @@ namespace ArchiveFixer.Models
         /// <summary>不做外层的短名。</summary>
         public const string PackOuterNoneShort = "不做外层";
 
-        /// <summary>结果区提醒：B 可以自己删（用户可能要先检查分卷）。</summary>
+        /// <summary>结果区提醒：那个装分卷的文件夹还在时，用户可以自己看、也可以自己删。</summary>
         public const string PackKeepFolderHint =
-            "文件夹 B 会保留下来（你可以先检查分卷）；确认结果没问题之后，B 可以自己删掉。";
+            "「其余物」（装 7z 分卷的那个文件夹）按你选的档留着了 —— 可以先检查分卷，确认没问题之后自己删掉它就行。";
 
         // ── 设置界面：自选 Rar.exe 路径（用户 2026-09-23 决定） ──
 

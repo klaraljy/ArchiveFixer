@@ -538,4 +538,66 @@ namespace ArchiveFixer.Packing
             }
         }
     }
+
+    /// <summary>
+    /// 外层容器"**实际会用哪一个**"的结论（用户 2026-09-26 第 46 条：界面不再让用户选，
+    /// 没装 WinRAR 时自动改用 7z）。
+    ///
+    /// <para>⛔ 为什么要单独有这么一处：这个结论**界面也要用** —— ⑤页摘要、确认弹窗里那句
+    /// "最终产物：…"都得写实际会产出的那个文件名。以前只有 <c>PackingService</c> 内部算它，
+    /// 于是没装 WinRAR 的机器上弹窗会写"最终产物：<c>1111.rar</c>"、跑完却得到
+    /// <c>1111.7z</c> —— **界面撒谎**（第 36/45 条那类）。现在服务与界面引同一份计算。</para>
+    /// </summary>
+    public sealed class PackingOuterContainerResolution
+    {
+        /// <summary>本来要做的（请求里那个）。</summary>
+        public PackOuterContainer Requested { get; init; } = PackOuterContainer.Rar;
+
+        /// <summary>实际会做的。</summary>
+        public PackOuterContainer Effective { get; init; } = PackOuterContainer.Rar;
+
+        /// <summary>是不是"要 rar 但本机没有 <c>Rar.exe</c>，于是自动改用 7z"。</summary>
+        public bool FellBackToSevenZip =>
+            Requested == PackOuterContainer.Rar && Effective == PackOuterContainer.SevenZip;
+
+        /// <summary>要外层、却连内置 7-Zip 都没有 → 什么外层都做不出来（调用方据此报错）。</summary>
+        public bool Impossible => Requested.HasOuterArtifact() && !Effective.HasOuterArtifact();
+
+        /// <summary>给用户与日志的一句话（没有发生回退时是空串）。</summary>
+        public string Note => FellBackToSevenZip
+            ? "本机没有 Rar.exe（WinRAR 是共享软件，程序不随包分发它）—— 自动改用 7z 外层："
+              + "产物会是一个 .7z，而不是 .rar。"
+            : string.Empty;
+    }
+
+    /// <summary>把"想做的容器"翻成"实际会做的容器"（**唯一出口**，见 <see cref="PackingOuterContainerResolution"/>）。</summary>
+    public static class PackingOuterContainerResolver
+    {
+        /// <summary>
+        /// 解析规则（用户原话："如果用户没有装 WinRAR，那就弄 7z 吧"）：
+        /// 要 rar → 有 <c>Rar.exe</c> 就用 rar，没有但有内置 7-Zip 就**自动 7z**，两个都没有则做不出来；
+        /// 要 7z → 有内置 7-Zip 就用它，没有则做不出来；不做外层 → 照旧（永远成立）。
+        /// ⛔ **绝不把 7z 的产物叫成 <c>.rar</c>** —— 产物名跟着实际容器走。
+        /// </summary>
+        public static PackingOuterContainerResolution Resolve(
+            PackOuterContainer requested,
+            bool rarExists,
+            bool sevenZipExists)
+        {
+            PackOuterContainer effective = requested switch
+            {
+                PackOuterContainer.Rar => rarExists
+                    ? PackOuterContainer.Rar
+                    : sevenZipExists ? PackOuterContainer.SevenZip : PackOuterContainer.None,
+                PackOuterContainer.SevenZip => sevenZipExists ? PackOuterContainer.SevenZip : PackOuterContainer.None,
+                _ => PackOuterContainer.None
+            };
+
+            return new PackingOuterContainerResolution
+            {
+                Requested = requested,
+                Effective = effective
+            };
+        }
+    }
 }
