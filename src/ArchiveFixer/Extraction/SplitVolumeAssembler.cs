@@ -289,7 +289,7 @@ namespace ArchiveFixer.Extraction
             if (candidates.Count == 0)
             {
                 return Refuse(
-                    refuse($"同目录里有 {orphans.Count} 组缺首卷的分卷，但**没有一族**与容器里那一段对得上"
+                    refuse($"同目录里有 {orphans.Count} 组缺首卷的分卷，但没有一族与容器里那一段对得上"
                            + $"（容器里是 {DescribeFamily(firstVolumeFamily)}），不接。"),
                     assemblyDirectory);
             }
@@ -301,7 +301,7 @@ namespace ArchiveFixer.Extraction
                  * ⛔ 不猜 —— 接错组的后果是"用别人的后续卷去解自己的首卷"，那比不做坏得多。
                  */
                 return Refuse(
-                    refuse($"同目录里有 {candidates.Count} 组**同一族**且都缺首卷的分卷"
+                    refuse($"同目录里有 {candidates.Count} 组同一族且都缺首卷的分卷"
                            + $"（{string.Join("；", candidates.Select(candidate => candidate.Describe()))}），"
                            + "无法确定容器里装的是哪一组，不接。"),
                     assemblyDirectory);

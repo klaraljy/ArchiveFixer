@@ -46,7 +46,7 @@ namespace ArchiveFixer.Storage
     /// **解压之前**的空间门（用户 2026-09-22 需求第 1 条）。
     ///
     /// <para><b>它与 <c>Security/ResourceBudget</c> 的分工</b>：预算回答"这个包该不该解"（硬上限：
-    /// 单文件 / 文件数 / 总量 / 展开比 / 盘空间），本类回答"**现在**能不能开这个任务"。
+    /// 单文件 / 文件数 / 总量 / 展开比 / 盘空间），本类回答"现在能不能开这个任务"。
     /// 两者的盘空间判断共用 <see cref="SpaceChecker"/> 的取数口径（唯一一处 DriveInfo），不另写一份。</para>
     ///
     /// <para><b>为什么以前说拦没拦住</b>：旧实现里空间不足只写一条 <c>WARN</c>，任务照跑，
@@ -190,7 +190,7 @@ namespace ArchiveFixer.Storage
             {
                 suggestions.Add(
                     $"改用激进模式（边解边彻底删其余物）可以少要 {TaskSpaceEstimate.FormatSize(reclaimableBytes)}，"
-                    + "但那种模式会**永久删除源包**，开启前必须先跑自测");
+                    + "但那种模式会永久删除源包，开启前必须先跑自测");
             }
             else
             {

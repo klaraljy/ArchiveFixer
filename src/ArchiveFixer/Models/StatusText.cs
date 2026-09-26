@@ -198,7 +198,7 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 内嵌归档：文件本身不是压缩包，尾部却拼着一整个 ZIP（前面是视频等正常数据）。
         ///
-        /// 后缀一栏给这一类，是为了让用户一眼看出"**不要改后缀**"：
+        /// 后缀一栏给这一类，是为了让用户一眼看出"不要改后缀"：
         /// ZIP 的内部偏移相对它自己，而前置数据远超 7-Zip 的容忍上限（实测 8 MiB），
         /// 所以改成 <c>.zip</c> 之后 7z 仍然打不开，改名的唯一效果是让用户以为已经修好了。
         /// 真正要做的是按偏移把尾部那段取出来。
@@ -216,6 +216,34 @@ namespace ArchiveFixer.Models
         public const string RenameWillSkip = "将跳过";
         public const string TargetExists = "目标已存在";
         public const string WillAutoRename = "将自动重命名";
+
+        /*
+         * ===== 改名预览：跳过 / 冲突的**原因**（唯一文案来源） =====
+         *
+         * 为什么集中放这里：这几句会出现在预览表的「错误信息」列、任务列表的错误信息列、
+         * 以及失败清单里，写散在各个分支里就会各说各话（2026-09-26 审计顺手收口）。
+         */
+
+        /// <summary>
+        /// 分卷文件**五种改名操作一律不动**（原话口径见 <c>FileNameHelper.IsVolumePartFileName</c>）。
+        ///
+        /// <para>以前这道闸门只长在「智能修正」里，于是「替换后缀」能把 <c>set.7z.001</c> 改成
+        /// <c>set.7z.7z</c> —— 用户点一下就把整组弄成"再也解不开"，程序之后只会报「分卷缺失」。</para>
+        /// </summary>
+        public const string RenameVolumeSkippedReason = "分卷文件不改名（7z / WinRAR 只认 .001 这一套命名，改了名整组就解不开）";
+
+        /// <summary>
+        /// 本次批次里两行改成了同一个名字 → 后一行自动错开（与执行期同一套"绝不覆盖"的语义）。
+        ///
+        /// <para>修的是一个真缺陷：预览以前只查**磁盘上**的冲突，不查**本批次内**两行撞名，
+        /// 于是预览说"可以改 2 个"，执行到落位那一步 File.Move 撞名 → 整批回滚 + 一句看不懂的报错。</para>
+        /// </summary>
+        public const string RenameBatchDuplicateAutoRenameFormat =
+            "本次有两行改成了同一个名字，这一行自动改成 {0}（绝不覆盖）";
+
+        /// <summary>「询问」档：这一行撞名了，要在预览表里逐条选怎么办（**列名必须写对**）。</summary>
+        public const string RenameConflictNeedChoiceReason =
+            "目标文件已存在 —— 在「冲突」列里选怎么办（不选 = 自动重命名，绝不覆盖）";
 
         // ================================================================
         // 提示文案（**不是状态**）
@@ -264,7 +292,7 @@ namespace ArchiveFixer.Models
         /// </para>
         /// </summary>
         public const string SelectionScopeHint =
-            "「一键处理 / 只解压 / 智能修正 / 移除选中 / 删除其余物 / 清理空文件夹」**一律只认勾选**（最左侧一列）；" +
+            "「一键处理 / 只解压 / 智能修正 / 移除选中 / 删除其余物 / 清理空文件夹」一律只认勾选（最左侧一列）；" +
             "一个都没勾就什么都不做，只提示你先勾选。" +
             "右键菜单只作用于当前这一行；「清空列表」是整表操作（与勾选无关）。";
 
@@ -281,7 +309,7 @@ namespace ArchiveFixer.Models
         /// </summary>
         public static readonly string NoCheckedTaskPromptFormat =
             "没有勾选任何任务，已取消「{0}」（一个文件都没动）。" + Environment.NewLine + Environment.NewLine +
-            "列表里有 {1} 个任务，当前一个都没勾。这个命令**只处理你勾选的任务**：" +
+            "列表里有 {1} 个任务，当前一个都没勾。这个命令只处理你勾选的任务：" +
             "在最左侧一列勾上要处理的那些，再点一次（在列表上按 Ctrl+A 可以全选）。";
 
         /// <summary>配套的日志行（提示框与日志说同一件事，事后排查不会对不上）。</summary>
@@ -302,7 +330,7 @@ namespace ArchiveFixer.Models
 
         /// <summary>「添加文件 / 添加文件夹」的界面提示（ToolTip + 日志共用）。</summary>
         public const string AddReplacesListHint =
-            "添加 = 先**清空整张任务列表**再加入你这次选的内容（替换语义）。" +
+            "添加 = 先清空整张任务列表再加入你这次选的内容（替换语义）。" +
             "要往现有列表里加，用「文件 → 追加到列表」。";
 
         /// <summary>「追加到列表」的界面提示。</summary>
@@ -314,11 +342,11 @@ namespace ArchiveFixer.Models
         /// 日志里也必须说清这次用的是哪一种语义 —— 用户事后要能回答"我上一批怎么不见了"。
         /// </summary>
         public const string ImportReplaceLogFormat =
-            "开始导入路径（**替换**语义：先清空整张表再添加{0}）。要往现有列表里加，用「文件 → 追加到列表」。";
+            "开始导入路径（替换语义：先清空整张表再添加{0}）。要往现有列表里加，用「文件 → 追加到列表」。";
 
         /// <summary>导入日志：**追加**语义。</summary>
         public const string ImportAppendLogFormat =
-            "开始导入路径（**追加**语义：保留列表里现有的任务，新任务加到末尾）。";
+            "开始导入路径（追加语义：保留列表里现有的任务，新任务加到末尾）。";
 
         /// <summary>导入日志：清掉了多少个旧任务（拼在 <see cref="ImportReplaceLogFormat"/> 里）。</summary>
         public const string ImportReplacedTasksTextFormat = "，已清掉原有 {0} 个任务";
@@ -444,11 +472,11 @@ namespace ArchiveFixer.Models
         /// <summary>① 段标题：源目录里那些"可能是打包者附带的文件"。</summary>
         public const string JunkReminderJunkHeader =
             "① 这些源目录里有一些文件，很可能是打包者附带的说明 / 网址 / 工具 / 广告之类的诱饵"
-            + "（本程序只按文件名 + 魔数判了个大概，**不保证**它们真的没用）：";
+            + "（本程序只按文件名 + 魔数判了个大概，不保证它们真的没用）：";
 
         /// <summary>① 段结尾：**程序不会动它们** + 解压完由用户自己判断（用户点名要写清的两件事）。</summary>
         public const string JunkReminderJunkFooter =
-            "上面这些文件本程序**一个都不会动**（不删、不改名、不搬走）；"
+            "上面这些文件本程序一个都不会动（不删、不改名、不搬走）；"
             + "解压完成后你可以自己看一眼，再决定要不要删。";
 
         /// <summary>① 段：这次一共认出多少个（列出来的最多 10 条，其余只报个数）。</summary>
@@ -462,7 +490,7 @@ namespace ArchiveFixer.Models
 
         /// <summary>② 段标题：需要密码、但当前一个可用候选都没有的包。</summary>
         public const string JunkReminderPasswordHeaderFormat =
-            "② 本批有 {0} 个包需要密码，但当前**一个可用候选都没有**"
+            "② 本批有 {0} 个包需要密码，但当前一个可用候选都没有"
             + "（密码本为空 / 映射式没命中 / 没设统一密码）：";
 
         /// <summary>② 段：说清继续会发生什么（"即使密码本已预加载也可能没覆盖到"的那种包）。</summary>
@@ -608,7 +636,7 @@ namespace ArchiveFixer.Models
         public const string WorkspaceNotOnOutputDriveFormat =
             "⚠ 工作区不在这批的输出盘上（工作区在 {0}，落点盘是 {1}）：定稿那一步会是跨盘复制（慢、也不省空间），"
             + "而且空间门只按落点盘核算 —— 工作区那块盘还要另留得下「内容物 + 过程物」，"
-            + "这一半**不在账面上**（已知限制）。想让它跟着输出盘走：把「缓存根目录」留空。";
+            + "这一半不在账面上（已知限制）。想让它跟着输出盘走：把「缓存根目录」留空。";
 
         /// <summary>空壳工作区（一个文件都没解出来）当场清掉。</summary>
         public const string WorkspaceEmptyShellRemovedFormat =
@@ -648,7 +676,7 @@ namespace ArchiveFixer.Models
 
         /// <summary>它的说明：默认关 = 失败/取消一个中间产物都不留；打开才留，而且能在本页清理。</summary>
         public const string SettingsKeepFailedWorkspaceHint =
-            "默认关：失败 / 取消 / 部分完成的任务**不留任何中间产物**（暂存目录、抠出来的内嵌归档副本、"
+            "默认关：失败 / 取消 / 部分完成的任务不留任何中间产物（暂存目录、抠出来的内嵌归档副本、"
             + "已解出的中间件一起删掉），只留日志与失败清单。打开之后才留着便于排查 —— "
             + "那些目录会出现在本页上面那一行里，可以随时清理。"
             + "⚠ 两条不受它影响：成功路径照旧「成功且校验通过才清」，源包在任何情况下都一个字节不动。";
@@ -663,7 +691,7 @@ namespace ArchiveFixer.Models
         /// （XML 属性值里的 <c>&lt;</c> 不是良构字符）—— 要写"输出盘"就直接写中文。</para>
         /// </summary>
         public const string SettingsCacheRootHint =
-            "留空（默认）= 工作区跟着**输出盘**走：在输出盘的根目录下建一个 .ArchiveFixer.work"
+            "留空（默认）= 工作区跟着输出盘走：在输出盘的根目录下建一个 .ArchiveFixer.work"
             + "（点开头，Windows 默认隐藏）—— 中间产物不再堆在程序盘上，定稿也是同盘改名（快、不占双份）。"
             + "日志 / 临时 / 设置仍在程序目录下的 data。填了就以它为准（工作区 = 它下面的 work 子目录）；"
             + "缓存不能落 C 盘：填了系统盘会拒绝保存并说明原因。";
@@ -693,7 +721,7 @@ namespace ArchiveFixer.Models
         /// 这句话必须把两种都说出来 —— 否则用户会以为"程序明明说失败不留残留，怎么又冒出来了"。</para>
         /// </summary>
         public const string WorkspaceLeftoverHintLog =
-            "程序**不会自动删**它们（只可能是这两种来路：打开了「失败时保留中间产物」，"
+            "程序不会自动删它们（只可能是这两种来路：打开了「失败时保留中间产物」，"
             + "或者上一次被强杀 / 断电来不及收尾）；要清就在「清理与删除」页点「清理工作区」，删前会再确认一次。";
 
         /// <summary>界面上那一行（常驻提示；没有残留时整行不显示）。</summary>
@@ -742,7 +770,7 @@ namespace ArchiveFixer.Models
 
         /// <summary>它的提示（说清两件事：落在哪、与②页是同一个设置项）。</summary>
         public const string OutputLocationFollowsArchiveHint =
-            "勾上 = 产物落在**每个包自己所在的目录**（与②「解压方式」页的落点是同一个设置项）。"
+            "勾上 = 产物落在每个包自己所在的目录（与②「解压方式」页的落点是同一个设置项）。"
             + "取消勾选后点「选择…」挑一个统一的位置；两处改哪一处，另一处立刻跟着变。";
 
         /// <summary>未指定位置时那一行的显示（不是空白，必须说清东西会落在哪）。</summary>
@@ -799,7 +827,7 @@ namespace ArchiveFixer.Models
         /// <summary>开场：这些是什么 + 判据有多窄。</summary>
         public const string ImportJunkReminderIntro =
             "这次导入的文件夹里有一些文件，很可能是打包者附带的说明 / 网址 / 工具 / 广告之类的诱饵"
-            + "（本程序只按文件名 + 魔数判了个大概，**不保证**它们真的没用）：";
+            + "（本程序只按文件名 + 魔数判了个大概，不保证它们真的没用）：";
 
         /// <summary>最多列这么多条（其余只报个数）。</summary>
         public const string ImportJunkReminderCountFormat = "这次一共认出 {0} 个：";
@@ -812,7 +840,7 @@ namespace ArchiveFixer.Models
 
         /// <summary>收尾：程序不动它们 + "从列表里移除"动的只是列表。</summary>
         public const string ImportJunkReminderFooter =
-            "本程序对上面这些文件**一个都不会动**（不删、不改名、不搬走）；"
+            "本程序对上面这些文件一个都不会动（不删、不改名、不搬走）；"
             + "点「从列表里移除这些」只是把它们从任务列表里去掉，源文件照样留在原地。";
 
         /// <summary>主按钮：知道了（什么都不做）。</summary>
@@ -851,7 +879,7 @@ namespace ArchiveFixer.Models
         /// <summary>它的说明（默认开；关掉 = 导入后一次都不提醒，判据与扫描都不跑）。</summary>
         public const string SettingsRemindJunkAfterImportHint =
             "默认开：每次选完文件夹就扫一遍源目录，把打包者常带的说明 / 网址 / 工具列出来，"
-            + "并可以一键把它们从任务列表里去掉（**程序对这些文件一个都不会动**：不删、不改名、不搬走）。"
+            + "并可以一键把它们从任务列表里去掉（程序对这些文件一个都不会动：不删、不改名、不搬走）。"
             + "关掉 = 导入后完全不提醒。";
 
         /// <summary>③ 页「工作区残留」那一组的标题。</summary>
@@ -859,7 +887,7 @@ namespace ArchiveFixer.Models
 
         /// <summary>③ 页「工作区残留」那一组的说明（为什么默认一个都不留、什么情况下才会看见东西）。</summary>
         public const string WorkspaceLeftoverGroupHint =
-            "默认档下**只有两种情况**会留下东西：① 你在下面打开了「失败时保留中间产物」（排查用）；"
+            "默认档下只有两种情况会留下东西：① 你在下面打开了「失败时保留中间产物」（排查用）；"
             + "② 程序被强杀 / 断电，来不及收尾。这里列出它们占了多少空间，确认之后可以一次清掉 —— "
             + "只删工作区根目录下的那些任务目录，日志、密码、设置一律不碰。";
 
@@ -1036,7 +1064,7 @@ namespace ArchiveFixer.Models
         /// 用户看到的现象就是"我明明加了密码，它却像没识别到"。这条提醒把该改什么说清。</para>
         /// </summary>
         public const string PasswordWriteBackAttemptLimitHintFormat =
-            "提醒：写回是追加到密码本**末尾**，而尝试顺序是「空密码 → 最近成功 → 映射式命中 → 统一密码 → 密码列表」。"
+            "提醒：写回是追加到密码本末尾，而尝试顺序是「空密码 → 最近成功 → 映射式命中 → 统一密码 → 密码列表」。"
             + "你当前的「每层密码尝试上限」是 {0} 条 —— 密码本条目一多，排在后面的候选会被这个上限截断"
             + "（那时状态显示「达到密码尝试上限」，不是「密码错误」）。"
             + "想让它一定被试到：把上限调大（设置 → 密码设置），或者改用「名称:密码」的映射式写法（映射命中排在列表遍历之前）。";
@@ -1055,7 +1083,7 @@ namespace ArchiveFixer.Models
         /// 所以这里必须写明"重启后会重新读文件判定，不靠当场记一笔"。</para>
         /// </summary>
         public const string PasswordWriteBackPendingHint =
-            "这条手动添加的密码，值**不在任何一本已记住的密码本里** —— 列表按本机加密保存，"
+            "这条手动添加的密码，值不在任何一本已记住的密码本里 —— 列表按本机加密保存，"
             + "但换机器、重装系统或关掉「记住密码列表」就没了，"
             + "点「" + PasswordWriteBackButtonText + "」才会长期保留在你自己的文件里。"
             + "写回成功后标记立刻消失，重启后仍然消失（程序重新读书里的值来判定，不靠当场记一笔）。"
@@ -1290,12 +1318,12 @@ namespace ArchiveFixer.Models
 
         /// <summary>②页那一栏的开场白（用户要的那句"可加的"）。</summary>
         public const string SpecialExtractionRulesIntro =
-            "这些是**可加的**特殊解压方式：开哪条就按哪条跑（关掉全部 = 与现在完全一样）。"
+            "这些是可加的特殊解压方式：开哪条就按哪条跑（关掉全部 = 与现在完全一样）。"
             + "要它生效，先把①「任务」页「一键处理」旁边的「特定解压」总开关打开。";
 
         /// <summary>②页那一栏里"它与终端落法谁优先"的那句话（用户点名要写明优先级）。</summary>
         public const string SpecialExtractionPriorityHint =
-            "与上面「内容物最后那一层（终端落法）」的优先级：这里的规则**优先**。"
+            "与上面「内容物最后那一层（终端落法）」的优先级：这里的规则优先。"
             + "规则生效时，判定表里要套的那一层不再套，内容物直接落在成品目录里（222\\1111\\内容物）；"
             + "规则不生效（总开关关着 / 规则没开 / 包内不止一个文件夹）时才按终端落法走。";
 
@@ -1349,7 +1377,7 @@ namespace ArchiveFixer.Models
         public const string AboutLicenseText =
             "许可：本程序 MIT。" + "\r\n"
             + "内置 7-Zip（LGPL + unRAR 限制条款）、内置 UnRAR（RARLAB freeware，许可明确允许随包分发）。" + "\r\n"
-            + "Rar.exe / WinRAR.exe 是共享软件：程序**只检测与调用**你自己装的那一份，绝不复制、绝不随包分发，" + "\r\n"
+            + "Rar.exe / WinRAR.exe 是共享软件：程序只检测与调用你自己装的那一份，绝不复制、绝不随包分发，" + "\r\n"
             + "也绝不会拿 7-Zip 假装做出 .rar。";
 
         // ── 「按建议改名并重试」（用户 2026-09-25 第 41 条） ──
@@ -1362,7 +1390,7 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string VolumeRepairButtonToolTip =
             "只对「名字被改坏的分卷第一卷」有效：按程序给出的标准名把这一卷改名" +
-            "（**只改文件名，内容一个字节都不动**），然后立刻重新识别并重试解压。";
+            "（只改文件名，内容一个字节都不动），然后立刻重新识别并重试解压。";
 
         /// <summary>一个可改名的任务都没有时点它的提示。</summary>
         public const string VolumeRepairNoneText =
@@ -1374,7 +1402,7 @@ namespace ArchiveFixer.Models
 
         /// <summary>确认框正文（<c>{0}</c> = 逐条 `旧名 → 新名`）。</summary>
         public const string VolumeRepairConfirmBodyFormat =
-            "将要重命名下面这些文件（**只改名字，内容一个字节都不动**）：\n\n" +
+            "将要重命名下面这些文件（只改名字，内容一个字节都不动）：\n\n" +
             "{0}\n\n" +
             "改完程序会立刻重新识别它们并重试解压。源包操作与删除操作仍然按③页的档位走（默认什么都不搬、不删）。";
 
@@ -1417,7 +1445,7 @@ namespace ArchiveFixer.Models
         /// 内嵌归档 + 引擎报「分卷缺失」时补的一句事实。
         ///
         /// <para>为什么必须补：真 7z 实测（`封面.jpg` 里装着 `set.7z.001`、后续卷在外面）时，
-        /// 引擎报的原文是"这是分卷压缩包的**后续卷**，缺少首卷"——**与事实正好相反**：
+        /// 引擎报的原文是"这是分卷压缩包的后续卷，缺少首卷"——**与事实正好相反**：
         /// 首卷就在我们手上（刚从容器里抠出来），缺的是"名字对得上的后续卷"。
         /// 用户拿着那句话只会去满盘找首卷，而首卷根本不在任何文件里。</para>
         ///
@@ -1428,10 +1456,10 @@ namespace ArchiveFixer.Models
         /// <c>{1}</c> = 容器的文件名。</para>
         /// </summary>
         public const string EmbeddedFirstVolumeHintFormat =
-            "**更正引擎那一句**：它说「这是后续卷、缺少首卷」——说反了。这个容器里装着的**就是**那一组分卷的第 1 卷" +
-            "（已按偏移取出），缺首卷的是外面那一组：{0}。引擎是按**文件名**去找同一组的其他卷的，" +
+            "更正引擎那一句：它说「这是后续卷、缺少首卷」——说反了。这个容器里装着的就是那一组分卷的第 1 卷" +
+            "（已按偏移取出），缺首卷的是外面那一组：{0}。引擎是按文件名去找同一组的其他卷的，" +
             "抠出来的那一段既不在那个目录、名字也不带卷号，所以它找不到。" +
-            "要让程序**自己**把两边接起来：②页打开「容器里装的是分卷第 1 卷时，自动接上同目录的后续卷」" +
+            "要让程序自己把两边接起来：②页打开「容器里装的是分卷第 1 卷时，自动接上同目录的后续卷」" +
             "（工作区里接名字；同一块盘不复制字节，跨盘才复制且先查空间），再重跑这一单；" +
             "也可以自己把首卷弄出来、按标准名与后续卷放进同一个目录（{2}）。";
 
@@ -1446,7 +1474,7 @@ namespace ArchiveFixer.Models
         /// 失败原因里的每一句都要与"当前这一档到底做了什么"一致，否则用户会反复点重跑。</para>
         /// </summary>
         public const string EmbeddedFirstVolumeHintAssemblyTriedSuffix =
-            "（②页那个开关**已经打开**，所以这一次程序**已经试过**自动拼装 —— 没成的原因写在日志里那几条 WARN 上；" +
+            "（②页那个开关已经打开，所以这一次程序已经试过自动拼装 —— 没成的原因写在日志里那几条 WARN 上；" +
             "反复重跑不会有不同结果，除非先解决它说的那个原因。）";
 
         // ── 日志瘦身（用户 2026-09-25 第 44 条："一次导出 713KB，这个多吓人"） ──

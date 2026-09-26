@@ -79,13 +79,21 @@ namespace ArchiveFixer.ViewModels
 
         public bool HasExecutableItems => Items.Any(x => x.IsSelected && CanItemRename(x));
 
+        /// <summary>
+        /// 还有撞名的行没选怎么办（「询问」档）。
+        ///
+        /// <para>用它决定「冲突全部自动重命名」那颗批量按钮**显不显示** ——
+        /// 不是询问档、或者冲突都选完了的时候，那颗按钮点了只会回一句"当前没有需要选择的同名冲突"，
+        /// 白占位置（2026-09-26 审计：界面上每多一颗按不动的按钮，用户就多问一次"这是干嘛的"）。</para>
+        /// </summary>
+        public bool HasPendingConflictChoices => Items.Any(x =>
+            x.NeedsConflictChoice && string.IsNullOrWhiteSpace(x.ConflictChoice));
+
         public ICommand SelectAllCommand { get; }
 
         public ICommand SelectNoneCommand { get; }
 
         public ICommand InvertSelectionCommand { get; }
-
-        public ICommand SelectCanRenameCommand { get; }
 
         public ICommand ConfirmCommand { get; }
 
@@ -98,7 +106,6 @@ namespace ArchiveFixer.ViewModels
             SelectAllCommand = new RelayCommand(_ => SelectAll());
             SelectNoneCommand = new RelayCommand(_ => SelectNone());
             InvertSelectionCommand = new RelayCommand(_ => InvertSelection());
-            SelectCanRenameCommand = new RelayCommand(_ => SelectCanRename());
             ConfirmCommand = new RelayCommand(_ => Confirm(), _ => HasExecutableItems);
             CancelCommand = new RelayCommand(_ => Cancel());
 
@@ -228,16 +235,10 @@ namespace ArchiveFixer.ViewModels
             RefreshStatistics();
         }
 
-        public void SelectCanRename()
-        {
-            foreach (RenamePreviewItem item in Items)
-            {
-                item.IsSelected = CanItemRename(item);
-            }
+        // 「仅选可改名」已退役（2026-09-26 审计）：装载时就不能改名的行本来就已经取消勾选，
+        // 它和「全选」是同一个结果 —— 按钮删掉，方法一并不留（界面里每多一颗按不动的按钮都是负担）。
 
-            Message = "已仅选择可改名项。";
-            RefreshStatistics();
-        }
+
 
         public void Confirm()
         {
@@ -287,7 +288,10 @@ namespace ArchiveFixer.ViewModels
                 or nameof(RenamePreviewItem.NewPath)
                 or nameof(RenamePreviewItem.NewFileName)
                 or nameof(RenamePreviewItem.CanRename)
-                or nameof(RenamePreviewItem.ErrorMessage))
+                or nameof(RenamePreviewItem.ErrorMessage)
+                // 冲突那一列选完之后「冲突全部自动重命名」要自己收起来（它有 Visibility 绑定）。
+                or nameof(RenamePreviewItem.ConflictChoice)
+                or nameof(RenamePreviewItem.NeedsConflictChoice))
             {
                 RefreshStatistics();
             }
@@ -336,6 +340,7 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(ConflictCount));
             OnPropertyChanged(nameof(SkipCount));
             OnPropertyChanged(nameof(HasExecutableItems));
+            OnPropertyChanged(nameof(HasPendingConflictChoices));
 
             if (ConfirmCommand is RelayCommand relayCommand)
             {

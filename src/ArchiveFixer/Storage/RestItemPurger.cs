@@ -109,7 +109,7 @@ namespace ArchiveFixer.Storage
             if (task.Outcome != TaskOutcome.Succeeded)
             {
                 return Skip(
-                    $"{name}：任务的**机器终态**不是「完成」（当前：{task.Outcome}）—— " +
+                    $"{name}：任务的机器终态不是「完成」（当前：{task.Outcome}）—— " +
                     $"其余物一个字节都不删（部分完成 / 失败 / 取消 / 跳过一律不动）");
             }
 

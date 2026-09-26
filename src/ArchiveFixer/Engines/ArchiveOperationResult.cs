@@ -101,7 +101,7 @@ namespace ArchiveFixer.Engines
         public bool IsWrongPassword => DetectedErrorType == "WrongPassword";
 
         /// <summary>
-        /// 这次是"**部分完成**"：解出来了一部分，但绝不是成功（AGENTS.md §6 第 6 条）。
+        /// 这次是"部分完成"：解出来了一部分，但绝不是成功（AGENTS.md §6 第 6 条）。
         ///
         /// 7-Zip 在"一部分文件解出来、一部分失败"时给的是退出码 1（非致命错误），
         /// 这一条就是它落到调用方手里的判定口 —— 界面上"成功"的那一格永远不许吃到它。

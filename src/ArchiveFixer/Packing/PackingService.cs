@@ -798,7 +798,7 @@ namespace ArchiveFixer.Packing
         /// 所以必须点名它**实际叫什么**，否则他拿着日志去找一个不存在的 "B"。</para>
         /// </summary>
         internal static string DescribePartialVolumes(int count, PackingPlan plan) =>
-            $"分卷情况：「{FolderName(plan)}」里现在有 {count} 个分卷（**可能不完整**）；"
+            $"分卷情况：「{FolderName(plan)}」里现在有 {count} 个分卷（可能不完整）；"
             + "重试前请先清空这个文件夹（它就在落点目录里，也就是「其余物」）。";
 
         /// <summary>按 <c>&lt;源名&gt;.7z.NNN</c> 从那个装分卷的文件夹里数出实际切出来的分卷（不自己拼名字）。</summary>

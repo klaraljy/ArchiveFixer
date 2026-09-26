@@ -441,7 +441,7 @@ namespace ArchiveFixer.Services
         /// <para>
         /// ⚠ 必须"两个名字各算一次"，不能拿 <c>D\其余物\222</c> 去喂
         /// <see cref="ProcessArtifactLayout.FindExistingArtifactDirectories"/>：
-        /// 那个方法是"**再往下一层**找其余物目录"（它给参数追加 <c>\其余物</c> 或 <c>\过程物</c>），
+        /// 那个方法是"再往下一层找其余物目录"（它给参数追加 <c>\其余物</c> 或 <c>\过程物</c>），
         /// 喂一个带包名的路径进去会去找 <c>D\其余物\222\其余物</c>，永远找不到。
         /// </para>
         /// </summary>

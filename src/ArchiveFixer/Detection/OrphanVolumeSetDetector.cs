@@ -5,7 +5,7 @@ using System.Linq;
 namespace ArchiveFixer.Detection
 {
     /// <summary>
-    /// 目录里"**缺首卷**的一大组分卷"（例如只有 <c>set.7z.002</c> / <c>set.7z.003</c>，
+    /// 目录里"缺首卷的一大组分卷"（例如只有 <c>set.7z.002</c> / <c>set.7z.003</c>，
     /// 没有 <c>set.7z.001</c>）。
     ///
     /// <para><b>为什么单独要这么一个东西</b>（用户 2026-09-25 第 42 条，真 7z 探针实测）：

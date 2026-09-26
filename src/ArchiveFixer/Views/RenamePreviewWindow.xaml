@@ -3,18 +3,23 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Style="{StaticResource AppWindowStyle}"
         Title="改名预览"
-        Width="1330"
-        Height="680"
-        MinWidth="1000"
-        MinHeight="520"
+        Width="1100"
+        Height="600"
+        MinWidth="920"
+        MinHeight="460"
         WindowStartupLocation="CenterOwner">
 
     <!--
-        改名预览（UI v2）。
-        改之前：标题挤在统计行里、底部一排 6 个同权重按钮、空列表时只有一张白表格。
-        现在：标题独立、统计做成小卡片、确认/取消与"选择辅助"分成两级，空列表给引导文案。
-        窗口宽度按"新增了「冲突选择（询问档）」一列"重新算过：默认宽度下 9 列刚好放得下，
-        不必横向滚动（原来 1180 宽，加上新列会把最后一列挤出视野）。
+        改名预览（UI v3，2026-09-26 审计后瘦身）。
+        v2 是 1330×680、10 列：固定列宽合计 1096px，「新路径」再吃掉一条星号列 —— 窗口改不小，
+        而真正要看的**后缀**偏偏被截掉（「原文件名」用 CharacterEllipsis = 尾省略）。
+
+        v3 砍掉三处冗余、把宽度花在该花的地方：
+        · 「检测格式」并进「操作」列（"按真实格式修正（ZIP）"）—— 5 种操作里只有这一种用得上它；
+        · 「冲突处理」+「冲突选择（询问档）」合成一列「冲突」（能选的行给下拉框，其余给档位文字）；
+        · 「新路径」整列删掉（同目录改名时它就是 原目录+新文件名，纯重复），完整新路径进 ToolTip；
+        · 「状态」列里带一行错误原因（原来单开一列「错误信息」）。
+        · 两个名字列改用**中间省略**（FileNameMiddleEllipsis）：尾部后缀永远看得见。
     -->
 
     <DockPanel Margin="12">
@@ -31,14 +36,10 @@
                     <TextBlock Text="请确认以下改名操作" Style="{StaticResource PageTitleTextStyle}" />
 
                     <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,5,0,0"
-                               Text="只有勾选、且状态为「可改名」的项目会被改。「新文件名」一列可以直接双击修改；改名会真实修改磁盘上的文件名。" />
+                               Text="只有勾选、且状态为「可改名」的行会被改；名字太长时中间用 … 省略（后缀照旧看得到），悬停可看全名。" />
 
-                    <!--
-                        同名冲突（设置里选了「询问」时）：**在预览里逐条确认**，不再另弹对话框。
-                        没选就不放行；不选默认是自动重命名 —— 绝不覆盖（不变量 3）。
-                    -->
                     <TextBlock Style="{StaticResource HintTextStyle}" Margin="0,3,0,0"
-                               Text="若「同名冲突处理」档位是「询问」：撞名的行会在「冲突选择（询问档）」列里出现下拉框，请逐条选（不选不放行；默认档是自动重命名，绝不覆盖）。" />
+                               Text="「新文件名」那一格可以直接双击改；撞名的行在「冲突」列里逐条选（不选 = 自动重命名，绝不覆盖）。" />
                 </StackPanel>
 
                 <WrapPanel Grid.Column="1" VerticalAlignment="Top" Margin="16,2,0,0">
@@ -111,23 +112,19 @@
                     <Button Content="反选"
                             MinWidth="64"
                             Style="{StaticResource ToolbarButtonStyle}"
-                            Margin="0,0,6,0"
                             Command="{Binding InvertSelectionCommand}" />
-
-                    <Button Content="仅选可改名"
-                            MinWidth="96"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            Command="{Binding SelectCanRenameCommand}" />
 
                     <!--
                         「询问」档的批量出口（等价 WinRAR 覆盖询问里的「全部重命名」那一档）：
-                        撞名多的时候逐个点下拉框太烦，一次全设成自动重命名 —— 这也是最安全的那一档（绝不覆盖）。
+                        只在**还有待选的冲突**时出现 —— 不是询问档、冲突都选完了的时候它按下去只会
+                        回一句"没有需要选择的同名冲突"，白占位置（2026-09-26 审计）。
                     -->
                     <Button Content="冲突全部自动重命名"
                             MinWidth="150"
                             Margin="8,0,0,0"
                             Style="{StaticResource ToolbarButtonStyle}"
                             ToolTip="把所有「同名冲突」一次设为自动重命名：产物落成 名字(1)，已有文件一个字节都不动。"
+                            Visibility="{Binding HasPendingConflictChoices, Converter={StaticResource BoolToVisibilityConverter}}"
                             Click="ConflictAllAutoRenameButton_Click" />
                 </StackPanel>
 
@@ -184,7 +181,7 @@
 
                     <DataGrid.Columns>
                         <!-- 模板列：DataGridCheckBoxColumn 要点两次才勾得上 -->
-                        <DataGridTemplateColumn Header="选择" Width="60">
+                        <DataGridTemplateColumn Header="选择" Width="52">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -194,60 +191,70 @@
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
 
-                        <DataGridTextColumn Header="原文件名"
-                                            Binding="{Binding OriginalFileName}"
-                                            Width="150"
-                                            IsReadOnly="True">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                    <Setter Property="ToolTip" Value="{Binding OriginalPath}" />
-                                </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
+                        <!--
+                            「原文件名」：中间省略、**后缀一定看得见**（FileNameMiddleEllipsis）。
+                            以前是 150px + CharacterEllipsis（尾省略）—— 长名字第一个没的就是后缀，
+                            而这正是用户唯一要对比的东西。完整路径在 ToolTip 里。
+                        -->
+                        <DataGridTemplateColumn Header="原文件名" Width="260" IsReadOnly="True">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding OriginalFileNameDisplay}"
+                                               VerticalAlignment="Center"
+                                               Margin="4,0"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding OriginalPath}" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
 
-                        <DataGridTextColumn Header="检测格式"
-                                            Binding="{Binding DetectedFormat}"
-                                            Width="78"
-                                            IsReadOnly="True" />
-
+                        <!-- 操作（智能修正这一类把检测格式并进来，例如"按真实格式修正（ZIP）"） -->
                         <DataGridTextColumn Header="操作"
                                             Binding="{Binding Operation}"
-                                            Width="132"
-                                            IsReadOnly="True" />
-
-                        <DataGridTextColumn Header="新文件名（可编辑）"
-                                            Binding="{Binding NewFileName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                            Width="190"
-                                            IsReadOnly="False" />
-
-                        <DataGridTextColumn Header="冲突处理"
-                                            Binding="{Binding ConflictAction, Converter={StaticResource ConflictActionTextConverter}}"
-                                            Width="88"
+                                            Width="120"
                                             IsReadOnly="True" />
 
                         <!--
-                            「询问」档的逐条确认（真实缺陷修正）：
-                            以前这一档在改名路径上被静默当成"自动重命名"，预览里会出现
-                            「询问」+「将自动重命名」并列（界面自相矛盾）。
-                            现在撞名的行在这里给一个下拉框，用户在**预览里**逐条选；
-                            没选的一律按保守档自动重命名 —— 绝不覆盖（不变量 3）。
-                            只有 NeedsConflictChoice 为真的行才出现下拉框，其余行是一片空白。
+                            「新文件名」：可编辑（双击进编辑态，编辑时看到的是**全名**）。
+                            非编辑态走中间省略，完整落点路径在 ToolTip 里 —— 以前这一列既不省略也不给提示，
+                            长名字直接被格子切断，连"…"都没有。
                         -->
-                        <DataGridTemplateColumn Header="冲突选择（询问档）" Width="180">
+                        <DataGridTemplateColumn Header="新文件名（可编辑）" Width="260">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding NewFileNameDisplay}"
+                                               VerticalAlignment="Center"
+                                               Margin="4,0"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding NewPath}" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+
+                            <DataGridTemplateColumn.CellEditingTemplate>
+                                <DataTemplate>
+                                    <TextBox Text="{Binding NewFileName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                             ToolTip="{Binding NewPath}" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellEditingTemplate>
+                        </DataGridTemplateColumn>
+
+                        <!--
+                            「冲突」= 原来的「冲突处理」+「冲突选择（询问档）」两列合一。
+                            撞名且档位是「询问」的行给下拉框；其余行给档位文字（只读）。
+                            没选的行用警示底色标出来 —— 不选不放行（见窗口 code-behind 的 pending 拦截）。
+                        -->
+                        <DataGridTemplateColumn Header="冲突" Width="160">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <Grid>
-                                        <TextBlock Text="{Binding ConflictChoiceHint}"
+                                        <TextBlock Text="{Binding ConflictAction, Converter={StaticResource ConflictActionTextConverter}}"
                                                    VerticalAlignment="Center"
                                                    Margin="4,0"
                                                    TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding ConflictChoiceHint}">
+                                                   ToolTip="{Binding ConflictAction, Converter={StaticResource ConflictActionTextConverter}}">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
                                                     <Style.Triggers>
-                                                        <!-- 需要选择时那一格留给下拉框，这里只负责"不需要选"的行（一片空白）。 -->
                                                         <DataTrigger Binding="{Binding NeedsConflictChoice}" Value="True">
                                                             <Setter Property="Visibility" Value="Collapsed" />
                                                         </DataTrigger>
@@ -280,42 +287,34 @@
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
 
-                        <DataGridTextColumn Header="状态"
-                                            Binding="{Binding Status}"
-                                            Width="88"
-                                            IsReadOnly="True">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="FontWeight" Value="SemiBold" />
-                                </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
+                        <!-- 状态（+ 一行原因）：原来「状态」与「错误信息」是两列，合成一列省 130px -->
+                        <DataGridTemplateColumn Header="状态" Width="190" IsReadOnly="True">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="4,2">
+                                        <TextBlock Text="{Binding Status}" FontWeight="SemiBold" />
 
-                        <DataGridTextColumn Header="错误信息"
-                                            Binding="{Binding ErrorMessage}"
-                                            Width="130"
-                                            IsReadOnly="True">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                    <Setter Property="ToolTip" Value="{Binding ErrorMessage}" />
-                                    <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
-                                </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
-
-                        <DataGridTextColumn Header="新路径"
-                                            Binding="{Binding NewPath}"
-                                            Width="*"
-                                            MinWidth="180"
-                                            IsReadOnly="True">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                    <Setter Property="ToolTip" Value="{Binding NewPath}" />
-                                </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
+                                        <TextBlock Text="{Binding ErrorMessage}"
+                                                   FontSize="11.5"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding ErrorMessage}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <!-- 有原因才占一行（多数行是干净的） -->
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
                     </DataGrid.Columns>
                 </DataGrid>
 

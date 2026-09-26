@@ -59,11 +59,17 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
-        /// 新文件名。
-        /// 注意：
-        /// 这里不在每个字符输入时自动刷新 NewPath，
-        /// 避免 DataGrid 编辑时频繁触发路径更新。
-        /// 确认改名时统一调用 SyncNewPathFromNewFileName。
+        /// 新文件名（预览表里那一列可编辑的格子）。
+        ///
+        /// <para>⚠ 改完必须**当场**同步 <see cref="NewPath"/>（2026-09-26 审计修的真缺陷）：
+        /// 以前只在"点确认改名"那一刻同步（<see cref="SyncNewPathFromNewFileName"/> 由
+        /// <c>RenamePreviewViewModel.ValidateSelectedItems</c> 调），而 <see cref="CanRename"/>、
+        /// 预览表的四个统计卡、」确认改名「按钮的可用性读的全是 <c>NewPath</c> ——
+        /// 于是用户改完名字之后，界面上显示的还是**旧结论**（旧落点、旧冲突数），
+        /// 正是本项目最忌讳的"界面撒谎"。</para>
+        ///
+        /// <para>同步里带了校验（空名 / 非法字符 / 带路径分隔符 → 标成不能改名），
+        /// 所以"改成非法名字"也会当场在表里反映出来，不必等到确认。</para>
         /// </summary>
         public string NewFileName
         {
@@ -72,7 +78,7 @@ namespace ArchiveFixer.Models
             {
                 if (SetProperty(ref _newFileName, value ?? string.Empty))
                 {
-                    OnPropertyChanged(nameof(CanRename));
+                    SyncNewPathFromNewFileName();
                 }
             }
         }
@@ -90,6 +96,7 @@ namespace ArchiveFixer.Models
                     {
                         _newFileName = fileName;
                         OnPropertyChanged(nameof(NewFileName));
+                        OnPropertyChanged(nameof(NewFileNameDisplay));
                     }
 
                     OnPropertyChanged(nameof(CanRename));
@@ -183,7 +190,13 @@ namespace ArchiveFixer.Models
             NeedsConflictChoice = true;
             ConflictChoice = string.Empty;
             Status = StatusText.TargetExists;
-            ErrorMessage = "目标文件已存在 —— 在「冲突处理」列里选怎么办（默认自动重命名，不会覆盖）";
+
+            /*
+             * 这句以前写的是"在「冲突处理」列里选" —— 而真正带下拉框的那一列叫「冲突」，
+             * 「冲突处理」那一列是**只读**的档位文字。用户照着提示去点一个点不动的格子，
+             * 只会以为程序坏了（2026-09-26 审计：文案指路必须指对界面）。
+             */
+            ErrorMessage = StatusText.RenameConflictNeedChoiceReason;
             OnPropertyChanged(nameof(CanRename));
         }
 
@@ -220,6 +233,18 @@ namespace ArchiveFixer.Models
             !string.Equals(Status, StatusText.RenameWillSkip, StringComparison.OrdinalIgnoreCase);
 
         public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
+
+        /// <summary>预览表里「原文件名」那一格显示的名字（**中间省略，尾部后缀必须看得见**）。</summary>
+        public string OriginalFileNameDisplay => FileNameMiddleEllipsis.Elide(OriginalFileName, DisplayUnits);
+
+        /// <summary>
+        /// 预览表里「新文件名」那一格显示的名字（同上）。
+        /// 编辑那一格时控件换成真文本框，看到的是**全名**（省略只发生在"看"的时候）。
+        /// </summary>
+        public string NewFileNameDisplay => FileNameMiddleEllipsis.Elide(NewFileName, DisplayUnits);
+
+        /// <summary>两列名字的显示宽度上限（半角字符数 ≈ 260px 宽的一列）。</summary>
+        private const int DisplayUnits = 36;
 
         public RenamePreviewItem()
         {
@@ -354,6 +379,20 @@ namespace ArchiveFixer.Models
                 or nameof(Status))
             {
                 OnPropertyChanged(nameof(CanRename));
+            }
+
+            /*
+             * 两个"显示用"的名字跟着原名/新名一起刷新：
+             * 省略只在**显示**这一层做，属性变了不通知的话，表里那一格还留着旧名字的省略结果。
+             */
+            if (propertyName is nameof(OriginalFileName))
+            {
+                OnPropertyChanged(nameof(OriginalFileNameDisplay));
+            }
+
+            if (propertyName is nameof(NewFileName))
+            {
+                OnPropertyChanged(nameof(NewFileNameDisplay));
             }
 
             if (propertyName == nameof(ErrorMessage))

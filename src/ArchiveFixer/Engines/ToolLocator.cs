@@ -445,7 +445,7 @@ namespace ArchiveFixer.Engines
         public string DescribeNoRarAvailable()
         {
             return "本机没有 Rar.exe（WinRAR 是共享软件，程序只检测与调用它、绝不随包分发）—— "
-                 + "打包会**自动改用 7z 外层**（内置 7-Zip，无需额外安装），产物是 .7z 而不是 .rar。"
+                 + "打包会自动改用 7z 外层（内置 7-Zip，无需额外安装），产物是 .7z 而不是 .rar。"
                  + $"期望位置：{RarExpectedPath}。"
                  + "想要 .rar 的话有两条：① 装好 WinRAR 后重试；"
                  + "② 在②「解压方式」页 →「引擎」里填你自己那份 Rar.exe 的路径。";
@@ -614,7 +614,7 @@ namespace ArchiveFixer.Engines
         /// <summary>
         /// 当前优先级的人读写法（引擎 id → 外部工具名）。
         ///
-        /// 映射为什么放在这里而不是 <c>EngineIds</c>：这句话回答的是"**外部工具**按什么顺序找"，
+        /// 映射为什么放在这里而不是 <c>EngineIds</c>：这句话回答的是"外部工具按什么顺序找"，
         /// 而本类正是外部工具的唯一定位者，"引擎 id ↔ 工具名"的对应关系只有在这件事上才有意义。
         /// 认不出的 id 原样列出，绝不悄悄丢掉 —— 将来加第三个引擎时，提示里要能看见它。
         /// </summary>

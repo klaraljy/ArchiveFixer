@@ -155,18 +155,18 @@ namespace ArchiveFixer.Storage
         {
             if (workspaceSharesTargetVolume == true)
             {
-                return "工作区与成品**同卷**：暂存与成品是同一份字节（定稿走同卷改名），"
+                return "工作区与成品同卷：暂存与成品是同一份字节（定稿走同卷改名），"
                        + "内容物在峰值里只算一份；峰值那一刻 = 内容物已解进工作区、源包还在这块盘上";
             }
 
             if (workspaceSharesTargetVolume == false)
             {
-                return "工作区与成品**跨卷**：定稿那一步是复制 + 删原件，成品盘会多出一份内容物；"
+                return "工作区与成品跨卷：定稿那一步是复制 + 删原件，成品盘会多出一份内容物；"
                        + "工作区盘另外还要留得下 内容物 + 过程物（当前账本只按成品盘核算，"
                        + "工作区盘那一半是已知限制）";
             }
 
-            return "工作区与成品是否同卷**未知**（取不到落点或工作区根）：不做同卷假设，按最保守的口径算";
+            return "工作区与成品是否同卷未知（取不到落点或工作区根）：不做同卷假设，按最保守的口径算";
         }
 
         /// <summary>饱和加法：回绕成负数等于把空间判断整个废掉（"需要 -2G"永远放行）。</summary>
@@ -437,7 +437,7 @@ namespace ArchiveFixer.Storage
 
             if (directReadAvailable)
             {
-                return "，内嵌归档走 ZIP 直读（**不需要**那份等大的临时副本，不记这一笔）";
+                return "，内嵌归档走 ZIP 直读（不需要那份等大的临时副本，不记这一笔）";
             }
 
             return carvedBytes > 0

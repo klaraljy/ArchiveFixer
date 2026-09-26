@@ -161,8 +161,12 @@ namespace ArchiveFixer.Views.Tabs
         /// SmartRenameCommand 作用在"勾选"的任务上，所以右键单个文件时必须把它自己勾上、
         /// 并让其余任务退出这次操作的 scope。一次批量"只留这一个"（不逐项改 → 不触发 N 次全表重算）。
         /// </para>
+        /// <para>
+        /// ⚠ "用完把勾选还回去"这一条在 <see cref="MainViewModel.RunSmartRenameForSingleTaskAsync"/> 里：
+        /// 以前这里改完就完事，于是用户批量勾了 20 个、右键修一个，回来发现勾选全没了（2026-09-26 审计）。
+        /// </para>
         /// </summary>
-        private void SmartRenameCurrentTaskMenuItem_Click(object sender, RoutedEventArgs e)
+        private async void SmartRenameCurrentTaskMenuItem_Click(object sender, RoutedEventArgs e)
         {
             if (DataContext is not MainViewModel viewModel)
             {
@@ -175,18 +179,7 @@ namespace ArchiveFixer.Views.Tabs
                 return;
             }
 
-            viewModel.RunBulkSelectionUpdate(() =>
-            {
-                foreach (ArchiveTask item in viewModel.Tasks)
-                {
-                    item.IsSelected = ReferenceEquals(item, task);
-                }
-            });
-
-            if (viewModel.SmartRenameCommand.CanExecute(null))
-            {
-                viewModel.SmartRenameCommand.Execute(null);
-            }
+            await viewModel.RunSmartRenameForSingleTaskAsync(task);
         }
 
         private void TaskDetailMenuItem_Click(object sender, RoutedEventArgs e)

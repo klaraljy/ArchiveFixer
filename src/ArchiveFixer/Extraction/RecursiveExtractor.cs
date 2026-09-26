@@ -359,7 +359,7 @@ namespace ArchiveFixer.Extraction
             var stopReason = RecursionStopReason.None;
 
             /*
-             * 这个字段只表示"**这一次运行**有没有产生新的、还没回答的询问"。
+             * 这个字段只表示"这一次运行有没有产生新的、还没回答的询问"。
              * 刻意不从 previousDecision 起手：传了 previousDecision 就说明用户已经回答过了，
              * 把它原样塞回结果会让调用方以为"还得再问一次"（RecursionResult.Decision 的约定是
              * "非 null = 需要用户就多分支做选择"）。
@@ -836,7 +836,7 @@ namespace ArchiveFixer.Extraction
                     OutputPath = item.Layer.OutputPath,
                     Success = false,
                     Status = StatusText.ExtractFailed,
-                    Message = "产物越出本层产物目录 —— 按既定口径**整包判定失败**（不归集产物、不处理源包、其余物不生成）：" +
+                    Message = "产物越出本层产物目录 —— 按既定口径整包判定失败（不归集产物、不处理源包、其余物不生成）：" +
                               landingViolation +
                               "。⚠ 解压是外部引擎进程写的盘，越界的那一次写入拦不住；本层产物留在工作区、未发布。",
                     InnerArchives = Array.Empty<string>(),

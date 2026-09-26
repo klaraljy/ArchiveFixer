@@ -406,7 +406,7 @@ namespace ArchiveFixer.Models
         /// 定稿完成后在资源管理器里打开输出目录（**默认关**）。
         ///
         /// <para>
-        /// ⚠ 这是"**会动用户桌面**"的行为（依据 <c>docs/WinRAR功能参考.md</c> §2 C 组 / §3 第 7 条）：
+        /// ⚠ 这是"会动用户桌面"的行为（依据 <c>docs/WinRAR功能参考.md</c> §2 C 组 / §3 第 7 条）：
         /// ① 只有用户**显式打开**这一项才执行，绝不做成默认；
         /// ② 打开时**只打开文件夹** —— 复用既有 <c>SafePathHelper.OpenDirectory</c>
         ///    （<c>explorer.exe &lt;目录&gt;</c>），**不得**把主窗口置前 / 最大化 / 抢焦点，
@@ -501,7 +501,7 @@ namespace ArchiveFixer.Models
         public string CustomSevenZipExePath { get; set; } = string.Empty;
 
         /// <summary>
-        /// 用户自定义的 UnRAR.exe 路径；空表示按"**已装的 WinRAR 目录 → 内置 tools\unrar**"自动解析。
+        /// 用户自定义的 UnRAR.exe 路径；空表示按"已装的 WinRAR 目录 → 内置 tools\unrar"自动解析。
         ///
         /// 与 <see cref="CustomSevenZipExePath"/> 同一口径：路径**只**由 <c>ToolLocator</c> 解析，
         /// 别的文件里不许再拼一遍（AGENTS.md §3.1）。

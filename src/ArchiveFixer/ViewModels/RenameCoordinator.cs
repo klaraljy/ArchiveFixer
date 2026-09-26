@@ -45,7 +45,52 @@ namespace ArchiveFixer.ViewModels
         private void UpdateSummary() => _vm.UpdateSummary();
         private void RefreshOutputPaths() => _vm.RefreshOutputPaths();
         private void RebuildTaskIndex() => _vm.RebuildTaskIndex();
-        private Task ScanTasksAsync() => _scanCoordinator.ScanTasksAsync();
+
+        /// <summary>
+        /// 这一次改名会动到哪些任务（**必须在执行之前对好**）。
+        ///
+        /// <para>为什么不能执行之后再找：执行阶段会把任务的 <c>CurrentPath</c> 换到新名字上，
+        /// 那时再拿预览项里记的"原路径"去比就对不上了（第二次改名尤其明显）。</para>
+        /// </summary>
+        private List<ArchiveTask> MatchTasks(IEnumerable<RenamePreviewItem> items)
+        {
+            var matched = new List<ArchiveTask>();
+            var seen = new HashSet<ArchiveTask>();
+
+            foreach (RenamePreviewItem item in items)
+            {
+                ArchiveTask? task = RenameService.FindTaskByPath(Tasks, item.OriginalPath);
+
+                if (task != null && seen.Add(task))
+                {
+                    matched.Add(task);
+                }
+            }
+
+            return matched;
+        }
+
+        /// <summary>
+        /// 改名跑完只重扫**这一次真正改过名的那些任务**。
+        ///
+        /// <para>⛔ 不许退回 <c>_scanCoordinator.ScanTasksAsync()</c>（2026-09-26 审计修的真缺陷）：
+        /// 那一条会遍历**整张任务列表**，而 <c>ArchiveDetectService.ApplyDetectResultAsync</c>
+        /// 一进来就把 <c>Status = 扫描中</c>、<c>ErrorMessage = ""</c>，收尾再统一写成「已识别 / 格式未知」——
+        /// 于是用户改一个文件的后缀，整张表里已经解压成功的行变回「已识别」、
+        /// 失败行的**失败原因被清空**，而汇总与失败清单读的是另一套字段
+        /// （<c>Outcome</c> / <c>OutputVerification</c> / <c>ErrorMessage</c>）→
+        /// "汇总说失败 3 个、列表里一行失败都看不到"。顺带还要把整表重新识别一遍（大包很慢）。</para>
+        ///
+        /// <para>一键处理那条链早就绕开了它（见 <c>OneClickCoordinator.ScanRoundAsync</c> 的注释），
+        /// 「按建议改名并重试」也是按任务重扫 —— 只有手动这五颗按钮漏了。</para>
+        /// </summary>
+        private async Task RescanRenamedTasksAsync(IEnumerable<ArchiveTask> renamedTasks)
+        {
+            foreach (ArchiveTask task in renamedTasks)
+            {
+                await _scanCoordinator.RescanTaskAsync(task).ConfigureAwait(true);
+            }
+        }
 
         internal async Task SmartRenameAsync()
         {
@@ -99,6 +144,8 @@ namespace ArchiveFixer.ViewModels
                     "INFO",
                     $"一键处理：自动修正后缀 {selected.Count} 项（一键档不弹预览窗口，逐条写日志）。");
 
+                List<ArchiveTask> renamedTasks = MatchTasks(selected);
+
                 await _renameService.ExecuteRenameAsync(selected, Tasks);
 
                 foreach (RenamePreviewItem item in selected)
@@ -108,7 +155,7 @@ namespace ArchiveFixer.ViewModels
                         $"{item.OriginalFileName} -> {item.NewFileName}，状态：{item.Status}，错误：{item.ErrorMessage}");
                 }
 
-                await ScanTasksAsync();
+                await RescanRenamedTasksAsync(renamedTasks);
 
                 RebuildTaskIndex();
                 RefreshOutputPaths();
@@ -365,6 +412,8 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog("INFO", $"开始执行改名，共 {selectedPreviewItems.Count} 个文件。");
 
+                List<ArchiveTask> renamedTasks = MatchTasks(selectedPreviewItems);
+
                 await _renameService.ExecuteRenameAsync(
                     selectedPreviewItems,
                     Tasks);
@@ -375,7 +424,7 @@ namespace ArchiveFixer.ViewModels
                         $"{item.OriginalFileName} -> {item.NewFileName}，状态：{item.Status}，错误：{item.ErrorMessage}");
                 }
 
-                await ScanTasksAsync();
+                await RescanRenamedTasksAsync(renamedTasks);
 
                 RebuildTaskIndex();
                 RefreshOutputPaths();
@@ -553,42 +602,49 @@ namespace ArchiveFixer.ViewModels
             return "." + value;
         }
 
+        /// <summary>
+        /// 「添加后缀 / 替换后缀 / 删除多个后缀」的输入框。
+        ///
+        /// <para><b>2026-09-26 审计改版</b>：以前这是个"现搭的窗口"，既没走
+        /// <c>AppWindowStyle</c>（于是字体、行高、DPI 取整与全 App 其它弹窗不是同一套，
+        /// 在 125% / 150% 缩放上看着就是"文字排版不对劲"），又写死了白底与固定 460×230 且
+        /// <c>NoResize</c>（「删除多个后缀」那条提示有 5 行，缩放一大就贴着按钮），
+        /// 按钮还是**「确定」在左、「取消」在右**（全 App 其它弹窗都是主操作在最右）。</para>
+        ///
+        /// <para>现在：套 <c>AppWindowStyle</c>、高度按内容自适应（<c>SizeToContent</c>）、
+        /// 可缩放、提示行紧跟输入框（不再被塞进星号行里跟按钮隔一大截）、
+        /// 按钮用 <c>SecondaryButtonStyle</c> + <c>PrimaryButtonStyle</c> 且**主操作在最右**。</para>
+        /// </summary>
         private string? ShowTextInputDialog(string title, string message, string defaultValue)
         {
             var window = new Window
             {
                 Title = title,
-                Width = 460,
-                Height = 230,
+                Width = 480,
                 MinWidth = 420,
-                MinHeight = 220,
+                MaxWidth = 760,
+                SizeToContent = SizeToContent.Height,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                ResizeMode = ResizeMode.NoResize,
-                Owner = Application.Current.MainWindow,
-                Background = System.Windows.Media.Brushes.White
+                ResizeMode = ResizeMode.CanResize,
+                ShowInTaskbar = false,
+                Owner = Application.Current?.MainWindow
             };
+
+            // 资源查不到（无界面宿主）时 SetResourceReference 什么都不做，不会抛。
+            window.SetResourceReference(FrameworkElement.StyleProperty, "AppWindowStyle");
 
             var root = new System.Windows.Controls.Grid
             {
-                Margin = new Thickness(16)
+                Margin = new Thickness(18, 16, 18, 14)
             };
 
-            root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
+            for (int i = 0; i < 4; i++)
             {
-                Height = System.Windows.GridLength.Auto
-            });
-            root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
-            {
-                Height = System.Windows.GridLength.Auto
-            });
-            root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
-            {
-                Height = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star)
-            });
-            root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
-            {
-                Height = System.Windows.GridLength.Auto
-            });
+                root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
+                {
+                    Height = System.Windows.GridLength.Auto
+                });
+            }
 
             var textBlock = new System.Windows.Controls.TextBlock
             {
@@ -602,9 +658,9 @@ namespace ArchiveFixer.ViewModels
             var textBox = new System.Windows.Controls.TextBox
             {
                 Text = defaultValue ?? string.Empty,
-                Height = 30,
+                MinHeight = 30,
                 VerticalContentAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 12)
+                Margin = new Thickness(0, 0, 0, 6)
             };
             System.Windows.Controls.Grid.SetRow(textBox, 1);
             root.Children.Add(textBox);
@@ -612,10 +668,11 @@ namespace ArchiveFixer.ViewModels
             var hint = new System.Windows.Controls.TextBlock
             {
                 Text = "提示：输入 zip 会自动变成 .zip；输入 .rar 会保持 .rar。",
-                Foreground = System.Windows.Media.Brushes.Gray,
                 TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 10)
+                Opacity = 0.75,
+                Margin = new Thickness(0, 0, 0, 16)
             };
+            hint.SetResourceReference(FrameworkElement.StyleProperty, "HintTextStyle");
             System.Windows.Controls.Grid.SetRow(hint, 2);
             root.Children.Add(hint);
 
@@ -625,22 +682,25 @@ namespace ArchiveFixer.ViewModels
                 HorizontalAlignment = HorizontalAlignment.Right
             };
 
-            var okButton = new System.Windows.Controls.Button
-            {
-                Content = "确定",
-                Width = 86,
-                Height = 30,
-                Margin = new Thickness(0, 0, 8, 0),
-                IsDefault = true
-            };
-
+            // 主操作在最右（全 App 一致）：取消在左、确定在右。
             var cancelButton = new System.Windows.Controls.Button
             {
                 Content = StatusText.OpCancel,
-                Width = 86,
-                Height = 30,
+                MinWidth = 88,
+                Margin = new Thickness(0, 0, 8, 0),
                 IsCancel = true
             };
+
+            cancelButton.SetResourceReference(FrameworkElement.StyleProperty, "SecondaryButtonStyle");
+
+            var okButton = new System.Windows.Controls.Button
+            {
+                Content = "确定",
+                MinWidth = 96,
+                IsDefault = true
+            };
+
+            okButton.SetResourceReference(FrameworkElement.StyleProperty, "PrimaryButtonStyle");
 
             okButton.Click += (_, _) =>
             {
@@ -654,8 +714,8 @@ namespace ArchiveFixer.ViewModels
                 window.Close();
             };
 
-            buttonPanel.Children.Add(okButton);
             buttonPanel.Children.Add(cancelButton);
+            buttonPanel.Children.Add(okButton);
 
             System.Windows.Controls.Grid.SetRow(buttonPanel, 3);
             root.Children.Add(buttonPanel);

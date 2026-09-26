@@ -65,7 +65,7 @@ namespace ArchiveFixer.Services
                     }
 
                     string newPath = BuildNewPath(task, options);
-                    string operationName = GetOperationDisplayName(options);
+                    string operationName = BuildOperationLabel(options, task.DetectedFormat);
 
                     RenamePreviewItem item = new RenamePreviewItem(
                         oldPath,
@@ -77,6 +77,26 @@ namespace ArchiveFixer.Services
                     if (!File.Exists(oldPath))
                     {
                         item.MarkInvalid("源文件不存在");
+                        result.Add(item);
+                        continue;
+                    }
+
+                    /*
+                     * 分卷文件**五种操作一律不改名**（2026-09-26 审计）。
+                     *
+                     * 判据与「智能修正」用的是同一句（FileNameHelper.IsVolumePartFileName），
+                     * 以前它只长在那一条路上：智能修正会原样返回名字（于是显示"无需改名"），
+                     * 而「添加 / 替换 / 删除最后一个 / 删除多个后缀」照改不误 ——
+                     * 勾着 set.7z.001 点一下「替换后缀」，整组就变成 7z 再也找不到的散卷。
+                     *
+                     * 落点写回原名（而不是 BuildNewPath 算出来的那个）：预览表里显示的
+                     * "新文件名"必须等于"磁盘上真正会发生的事"，这一行不会改，就该显示原名。
+                     */
+                    if (FileNameHelper.IsVolumePartFileName(item.OriginalFileName))
+                    {
+                        item.NewPath = oldPath;
+                        item.NewFileName = item.OriginalFileName;
+                        item.MarkSkip(StatusText.RenameVolumeSkippedReason);
                         result.Add(item);
                         continue;
                     }
@@ -173,7 +193,101 @@ namespace ArchiveFixer.Services
                 }
             }
 
+            ResolveBatchDuplicateTargets(result);
+
             return result;
+        }
+
+        /// <summary>
+        /// **本批次内**两行改成同一个落点时，把后来者错开（2026-09-26 审计修的真缺陷）。
+        ///
+        /// <para><b>为什么必须在预览期做</b>：上面那个循环只看得见**磁盘上**已有的文件，
+        /// 看不见"这一批里另一行马上就要占这个名字"。<c>A.jpg</c> 与 <c>A.png</c> 同目录、
+        /// 一起用「替换后缀」改成 <c>.rar</c> 时两行的落点都是 <c>A.rar</c> ——
+        /// 预览里两行都是「可改名」、统计还写着"确认改名 2 个文件"，
+        /// 可执行阶段第 3 步 <c>File.Move</c> 撞名 → **整批回滚** + 用户拿到一句
+        /// "落位 A.rar 时出错：文件已存在"（数据不丢，但结论与预览不符、报错也看不懂）。</para>
+        ///
+        /// <para><b>为什么只处理"批内重名"</b>：磁盘上已存在的冲突在生成预览时就已经按
+        /// 用户的冲突档位处理过了（跳过 / 覆盖 / 询问 / 自动重命名）。这里**不重新判磁盘**，
+        /// 否则会把"名称交换"（A↔B，两个落点都真实存在）误判成冲突 —— 那是执行期刻意支持的一档。
+        /// 错开用的名字仍然绕开磁盘上已有的文件（<see cref="ResolveBatchUniqueTargetPath"/>）。</para>
+        /// </summary>
+        private static void ResolveBatchDuplicateTargets(List<RenamePreviewItem> items)
+        {
+            var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (RenamePreviewItem item in items)
+            {
+                if (!WillExecute(item))
+                {
+                    continue;
+                }
+
+                if (claimed.Add(item.NewPath))
+                {
+                    continue;
+                }
+
+                string resolved = ResolveBatchUniqueTargetPath(item.NewPath, claimed);
+
+                item.NewPath = resolved;
+                item.MarkAutoRename(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.RenameBatchDuplicateAutoRenameFormat,
+                    Path.GetFileName(resolved)));
+            }
+        }
+
+        /// <summary>这一条会不会真的执行（与执行期 <c>RenamePlan.ShouldExecute</c> 同一口径）。</summary>
+        private static bool WillExecute(RenamePreviewItem? item)
+        {
+            return item != null
+                && item.IsSelected
+                && !string.IsNullOrWhiteSpace(item.OriginalPath)
+                && !string.IsNullOrWhiteSpace(item.NewPath)
+                && !string.Equals(item.Status, StatusText.RenameCannot, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(item.Status, StatusText.RenameWillSkip, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 取一个"本批次还没被占、磁盘上也没有"的名字：<c>名字(1).ext</c>、<c>名字(2).ext</c>…
+        /// 编号风格与 <see cref="SafePathHelper.AutoRenameFilePath"/> 一致（用户看到的还是同一套）。
+        /// </summary>
+        private static string ResolveBatchUniqueTargetPath(string desiredPath, ISet<string> claimed)
+        {
+            if (string.IsNullOrWhiteSpace(desiredPath))
+            {
+                return desiredPath;
+            }
+
+            string? directory = Path.GetDirectoryName(desiredPath);
+            string fileName = Path.GetFileNameWithoutExtension(desiredPath);
+            string extension = Path.GetExtension(desiredPath);
+
+            if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(fileName))
+            {
+                return SafePathHelper.AutoRenameFilePath(desiredPath);
+            }
+
+            for (int i = 1; i < 10000; i++)
+            {
+                string candidate = Path.Combine(directory, $"{fileName}({i}){extension}");
+
+                if (claimed.Contains(candidate))
+                {
+                    continue;
+                }
+
+                if (File.Exists(candidate) || Directory.Exists(candidate))
+                {
+                    continue;
+                }
+
+                return candidate;
+            }
+
+            return SafePathHelper.AutoRenameFilePath(desiredPath);
         }
 
         public string BuildNewPath(ArchiveTask task, RenameOptions options)
@@ -1087,6 +1201,28 @@ namespace ArchiveFixer.Services
             return value;
         }
 
+        /// <summary>
+        /// 预览表「操作」列的文字。
+        ///
+        /// <para>「智能修正」这一类把**检测格式**并进来（<c>按真实格式修正（ZIP）</c>）——
+        /// 它以前是单独一列「检测格式」，可 5 种操作里只有这一种用得上它，
+        /// 白占 78px 而名字列被挤到看不见后缀（2026-09-26 审计）。</para>
+        /// </summary>
+        private static string BuildOperationLabel(RenameOptions options, string? detectedFormat)
+        {
+            string name = GetOperationDisplayName(options);
+
+            if (!string.Equals(options?.OperationType, "FixByDetectedFormat", StringComparison.OrdinalIgnoreCase))
+            {
+                return name;
+            }
+
+            return string.IsNullOrWhiteSpace(detectedFormat) ||
+                   string.Equals(detectedFormat, "Unknown", StringComparison.OrdinalIgnoreCase)
+                ? name
+                : $"{name}（{detectedFormat}）";
+        }
+
         private static string GetOperationDisplayName(RenameOptions options)
         {
             if (options == null)
@@ -1105,7 +1241,14 @@ namespace ArchiveFixer.Services
             };
         }
 
-        private static ArchiveTask? FindTaskByPath(IEnumerable<ArchiveTask> tasks, string path)
+        /// <summary>
+        /// 按路径在任务表里找任务（改名执行与"只重扫被改过名的那些"共用这一份匹配口径）。
+        ///
+        /// <para>三个字段都要比：执行期会把 <c>CurrentPath</c> 换到新名字上，而
+        /// <c>OriginalPath</c> / <c>RenamePreviewPath</c> 还留着旧路径 —— 少比一个就会漏掉任务，
+        /// 于是"改名成功但列表里那一行还指着旧文件"。</para>
+        /// </summary>
+        public static ArchiveTask? FindTaskByPath(IEnumerable<ArchiveTask> tasks, string path)
         {
             if (tasks == null || string.IsNullOrWhiteSpace(path))
             {

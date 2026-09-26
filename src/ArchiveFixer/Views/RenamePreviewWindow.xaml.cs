@@ -56,7 +56,7 @@ namespace ArchiveFixer.Views
 
             if (pending > 0)
             {
-                ViewModel.Message = $"还有 {pending} 个同名冲突没选怎么办（在「冲突选择（询问档）」列里选，或点下面的「冲突全部自动重命名」）。";
+                ViewModel.Message = $"还有 {pending} 个同名冲突没选怎么办（在「冲突」列里选，或点下面的「冲突全部自动重命名」）。";
 
                 /*
                  * ⚠ 走自绘对话框，**不用系统 MessageBox**：
@@ -66,7 +66,7 @@ namespace ArchiveFixer.Views
                  *    （AGENTS.md §13 的同一精神：能不抢焦点就不抢）。
                  */
                 _dialogService.ShowWarning(
-                    $"有 {pending} 个目标文件已经存在，请先在「冲突选择（询问档）」那一列里选择怎么办。{Environment.NewLine}{Environment.NewLine}"
+                    $"有 {pending} 个目标文件已经存在，请先在「冲突」那一列里选择怎么办。{Environment.NewLine}{Environment.NewLine}"
                     + $"· 自动重命名：产物落成 名字(1)，已有文件一个字节都不动（默认，不覆盖）{Environment.NewLine}"
                     + $"· 跳过：这一条不改名{Environment.NewLine}"
                     + $"· 覆盖：先移开旧文件再落位，中途失败不丢文件{Environment.NewLine}{Environment.NewLine}"

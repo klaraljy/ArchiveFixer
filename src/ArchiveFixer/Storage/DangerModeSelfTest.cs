@@ -331,7 +331,7 @@ namespace ArchiveFixer.Storage
                 Summary =
                     $"自测通过（并发 {parallel}，共测 {evidence.Steps.Count} 个文件）："
                     + "每个文件都解压成功 + 输出校验通过 + 其余物已彻底删除 + 空间曲线符合预期。"
-                    + "**可以一试，但风险还是有的**：源包已被永久删除，无法还原。",
+                    + "可以一试，但风险还是有的：源包已被永久删除，无法还原。",
                 StepLines = stepLines,
                 FailureReasons = Array.Empty<string>(),
                 SampleSize = evidence.Steps.Count,

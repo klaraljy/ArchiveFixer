@@ -1169,7 +1169,7 @@ namespace ArchiveFixer.ViewModels
                  * 落进 task.ErrorMessage（任务行 + 详情 + 失败清单都看得到），不是只进日志。
                  */
                 string landingMessage =
-                    "产物越出目标根目录 —— 按既定口径**整包判定失败**（不归集产物、不处理源包、其余物不生成）：" +
+                    "产物越出目标根目录 —— 按既定口径整包判定失败（不归集产物、不处理源包、其余物不生成）：" +
                     landingViolation +
                     "。⚠ 解压是外部 7-Zip 进程写的盘，越界的那一次写入拦不住；" +
                     "这次的结果不能承认，产物留在暂存目录里供你自行判断，请先确认包里有没有异常条目。";
@@ -1947,7 +1947,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：**分卷名字被改坏，已在自己的产物里摆正** —— {plan.Describe()}"
+                $"{task.FileName}：分卷名字被改坏，已在自己的产物里摆正 —— {plan.Describe()}"
                 + $"（源包一个字节都没动；改的是上一层解出来的中间件）。原位置：{task.CurrentPath}");
 
             string previousPath = task.CurrentPath;
@@ -2025,7 +2025,7 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：链尾的其余物**不处理**（{chainBlocker}）—— 这条链没跑完，"
+                    $"{task.FileName}：链尾的其余物不处理（{chainBlocker}）—— 这条链没跑完，"
                     + "中间件是这条链唯一的产物线索，一个字节都不删（失败 / 取消 / 没跑完一律不动）。");
 
                 return;
@@ -2105,7 +2105,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：根任务的**输出校验没有通过**（机器结论：{rootTask.OutputVerification}），" +
+                    $"{rootTask.FileName}：根任务的输出校验没有通过（机器结论：{rootTask.OutputVerification}），" +
                     $"链结束后不动源包（源包留在原地）。校验结论：{rootTask.VerifyMessage}"));
                 return new DeferredSourceMoveWork(logEntries);
             }
@@ -2254,7 +2254,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：链尾的其余物**不处理**（{chainBlocker}）—— 这条链没跑完，一个字节都不删。"));
+                    $"{rootTask.FileName}：链尾的其余物不处理（{chainBlocker}）—— 这条链没跑完，一个字节都不删。"));
                 return;
             }
 
@@ -2599,7 +2599,7 @@ namespace ArchiveFixer.ViewModels
         /// 再把它的话翻译成本类执行阶段用的形状。
         ///
         /// 分工要说清楚：
-        /// · 本方法负责"**哪些是其余物**" —— 这一步只有跑过暂存阶段的人知道。
+        /// · 本方法负责"哪些是其余物" —— 这一步只有跑过暂存阶段的人知道。
         ///   判据用后缀（分卷段 + 归档本体）：解压出来的归档就是**待续解的内层包**，
         ///   按流水线语义它属于其余物（一键处理下一轮会去解它，成功的话它的内容物自会落进内容物一层）；
         ///   判定失败/到轮数上限时它留在 <c>其余物</c> 里可回收，比混在内容物里强。
@@ -4373,7 +4373,7 @@ namespace ArchiveFixer.ViewModels
 
             string question =
                 $"「{task.FileName}」的分卷不完整，现在缺：{missing}。{Environment.NewLine}{Environment.NewLine}" +
-                $"分卷包里每一卷都是必需的数据片，缺一卷就一定解不开 —— 所以程序**不会**在缺卷时开始。" +
+                $"分卷包里每一卷都是必需的数据片，缺一卷就一定解不开 —— 所以程序不会在缺卷时开始。" +
                 $"{Environment.NewLine}{Environment.NewLine}" +
                 "如果你的卷散在别的文件夹（或者另一个盘），可以现在指定那个目录：" +
                 "程序会在那里找齐这一组，找齐了就继续；找不齐仍然不会开始。";
@@ -5409,7 +5409,7 @@ namespace ArchiveFixer.ViewModels
                 Environment.NewLine + Environment.NewLine +
                 "如果密码本里没有它们的密码，可以现在手动给一个：本批所有任务都会把它当候选试一遍。" +
                 Environment.NewLine +
-                "⚠ 只对本次运行有效，**不会写进任何文件、也不会进密码列表**（关掉程序就没了）。";
+                "⚠ 只对本次运行有效，不会写进任何文件、也不会进密码列表（关掉程序就没了）。";
 
             string? entered = await ShowPasswordPromptOnUiThreadAsync(message);
 
@@ -6242,7 +6242,7 @@ namespace ArchiveFixer.ViewModels
             {
                 /*
                  * 提示由 ToolLocator 现算（体检报告 §4 第 1 条）：
-                 * 这条判定的口径是"**任一**引擎可用"，而默认优先级是 WinRAR(UnRAR) → 7-Zip ——
+                 * 这条判定的口径是"任一引擎可用"，而默认优先级是 WinRAR(UnRAR) → 7-Zip ——
                  * 写死 7z 路径会把"其实只缺 UnRAR"的用户引去修一个没问题的目录。
                  * 两条期望路径与当前优先级顺序都由 ToolLocator 给出（外部工具路径只有它一个来源）。
                  */
@@ -6267,7 +6267,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "WARN",
                         "本次选项里选了「指定位置」但没填路径 —— 为了避免它被解释成「未指定位置」那一档，" +
-                        "本次落点**回落设置里的值**（其余两项照常生效）。");
+                        "本次落点回落设置里的值（其余两项照常生效）。");
                 }
             }
 
@@ -6441,7 +6441,7 @@ namespace ArchiveFixer.ViewModels
                                 $"并发已满（{runningTasks.Count}/{maxParallel} 个任务正在跑），后面的任务在队列里等空位。" +
                                 (fullSpeed
                                     ? "（已开「全速」，本批不再节流。）"
-                                    : "想立刻放开：②页 →「并发与空间」勾上「全速（本批不节流）」—— 勾上**当场生效**，" +
+                                    : "想立刻放开：②页 →「并发与空间」勾上「全速（本批不节流）」—— 勾上当场生效，" +
                                       "不用停止、也不用重开；或点①页「停止后续」不再启动后面的任务。" +
                                       "（这条只在第一次排队时说一遍，本批还有几个在等，跑完会在结尾汇总。）"));
                         }
@@ -7416,7 +7416,7 @@ namespace ArchiveFixer.ViewModels
             AppendLog(
                 "INFO",
                 "安全上限（解压前预算）：" + BudgetLimits.Describe()
-                + "。超过就**不解这个包**（预检拒绝，一个字节都不写）；"
+                + "。超过就不解这个包（预检拒绝，一个字节都不写）；"
                 + "可在⑥设置 →「安全上限」里按自己的盘与资源改。");
         }
         /// <summary>把解压前那一遍 list 算出来的**精确**空间需求记下来（自测的空间曲线要用）。</summary>
@@ -8401,7 +8401,7 @@ namespace ArchiveFixer.ViewModels
                         AppendLog(
                             "INFO",
                             $"{task.FileName}：内嵌归档可以 ZIP 直读（{directZip.List?.FileCount ?? 0} 个文件 / " +
-                            $"{TaskSpaceEstimate.FormatSize(directZip.TotalBytes)}）—— 本次**不需要**那份等大的临时副本" +
+                            $"{TaskSpaceEstimate.FormatSize(directZip.TotalBytes)}）—— 本次不需要那份等大的临时副本" +
                             $"（原本要抠 {TaskSpaceEstimate.FormatSize(directZip.ArchiveLength)}）。");
 
                         // 直读的"引擎"是内置读取器：结果可追溯（不变量 14）里不能写成 7-Zip。
@@ -8724,9 +8724,9 @@ namespace ArchiveFixer.ViewModels
                     task.ErrorMessage =
                         "分卷缺失：这一卷是「一组分卷的第一卷」，但它的名字被改坏了 —— "
                         + "引擎按名字找不到同组的后续卷，只会把它当成一段通用分片"
-                        + "（那样「解出来」的是一个与它等大的垃圾文件，不是包里的内容），所以**不开始**。"
+                        + "（那样「解出来」的是一个与它等大的垃圾文件，不是包里的内容），所以不开始。"
                         + siblingText + advice
-                        + "程序不会**自己**改源文件（不变量 1）：只有你点那个按钮，它才会改这一个名字。";
+                        + "程序不会自己改源文件（不变量 1）：只有你点那个按钮，它才会改这一个名字。";
 
                     AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
                     return;
@@ -9307,7 +9307,7 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * ===== 先试密码：只读「开头 64 字节」给候选排序（用户 2026-09-25 第 38 条）=====
                  *
-                 * 这一档专门解决"包里**没有**小文件"（他这个 12 GiB 的包正是三个 5 GB 的大条目 ——
+                 * 这一档专门解决"包里没有小文件"（他这个 12 GiB 的包正是三个 5 GB 的大条目 ——
                  * 小样预检挑不出探针）。7z 的 AES **没有密码校验位**（不像 WinZip AES 有 2 字节校验值），
                  * 所以"只验密码、不读数据"在协议上做不到；但可以**只读开头几十字节**：
                  * 密码对，解出来的就是文件真正的开头（7z/zip/rar/mp4… 的魔数）；密码错，解出来是随机字节。
@@ -10262,7 +10262,7 @@ namespace ArchiveFixer.ViewModels
              *
              * · 完整的归档（容器里就是一整个 7z / RAR）**不看后缀**：两个引擎都按魔数认格式
              *   （本机实测：完整 7z 与完整 RAR 各自改名成 `封面.zip`，`7z l` / `UnRAR l` 都退出码 0 并列出条目）；
-             * · 而"容器里装的是分卷的**第一卷**"时，后缀会改变引擎的判决：
+             * · 而"容器里装的是分卷的第一卷"时，后缀会改变引擎的判决：
              *   叫 `封面.zip` → 引擎报的是「分卷缺失」这一类（成因说得对）；
              *   叫 `封面.7z` → 引擎改口说「**文件损坏**」（把"缺后续卷"说成了"包坏了"，用户会去怀疑文件）。
              *   实测三种命名（同一段第一卷字节）：`.zip` → Is not archive / 分卷缺失一类；
@@ -10653,7 +10653,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这个子目录名是不是"**我们自己造的**"（决定清工作区时敢不敢整份删）。
+        /// 这个子目录名是不是"我们自己造的"（决定清工作区时敢不敢整份删）。
         ///
         /// <para>现在只认两个：<c>stage</c>（暂存/入仓）与 <c>volumes</c>（第 42 条的拼装目录）。
         /// ⛔ 出现别的子目录一律不删 —— 那最典型的情况是"任务名撞上了递归工作区的 <c>recursive</c>"，

@@ -517,7 +517,7 @@ namespace ArchiveFixer.Engines.SevenZip
             }
 
             /*
-             * 这一份的关键字只描述"**7-Zip 自己**可能打出来的行"，全是英文。
+             * 这一份的关键字只描述"7-Zip 自己可能打出来的行"，全是英文。
              * ⛔ 不许往这里加我们自己产出的中文文案：那种行只存在于 ArchiveOperationResult.Message 里，
              * 永远不会出现在本方法的入参上，改一个字还会静默失效。
              */

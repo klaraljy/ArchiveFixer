@@ -1411,7 +1411,7 @@ namespace ArchiveFixer.ViewModels
             };
 
             /*
-             * "这个包**实际**是哪个引擎解的"接进报告（不变量 14）。
+             * "这个包实际是哪个引擎解的"接进报告（不变量 14）。
              *
              * 报告层默认只能报"通用引擎"（它不知道每个包走了哪条分派路，而且报告生成那一刻
              * 用户可能已经改了优先级、卸载了 WinRAR —— 那时再去问注册表问的是"现在"，
@@ -2534,7 +2534,7 @@ namespace ArchiveFixer.ViewModels
 
             string confirmText =
                 $"确定要清空整个任务列表吗？{Environment.NewLine}{Environment.NewLine}"
-                + $"列表里的 {totalCount} 个任务会全部移除 —— 这是**整表操作**，与勾选无关"
+                + $"列表里的 {totalCount} 个任务会全部移除 —— 这是整表操作，与勾选无关"
                 + (checkedCount > 0
                     ? $"（当前勾选的 {checkedCount} 个也会一起移除）。"
                     : "。")
@@ -3215,7 +3215,7 @@ namespace ArchiveFixer.ViewModels
                 "细节在哪看：①页任务行的「详情 / 右键复制任务信息」= 单任务全过程；"
                 + "「导出失败清单」= 每个失败包的原因与所用引擎；"
                 + "③页「工作区残留」= 失败时留下的中间产物（要先在③页打开「失败时保留中间产物」）；"
-                + "要看成功任务的**全过程**请在⑥设置勾上「详细日志（排查用）」再跑一次。");
+                + "要看成功任务的全过程请在⑥设置勾上「详细日志（排查用）」再跑一次。");
             lines.Add("================ 以下是日志正文 ================");
 
             return lines;
@@ -3263,7 +3263,7 @@ namespace ArchiveFixer.ViewModels
         {
             /*
              * 用户 2026-09-25 第 38 条："我想要的是本次操作的日志，也就是我最近一次点开操作的日志，
-             * 我看着全部的日志非常的累" —— 所以这里**默认只导本次操作**（从"本次操作开始"那行分隔线起），
+             * 我看着全部的日志非常的累" —— 所以这里默认只导本次操作（从"本次操作开始"那行分隔线起），
              * 不再把历史日志全拼进来（历史日志另有下面那个显式入口）。
              */
             string path = _dialogService.ShowSaveFileDialog(
@@ -3285,7 +3285,7 @@ namespace ArchiveFixer.ViewModels
                 _dialogService.ShowInfo(
                     fromMarker
                         ? $"本次操作的日志已导出：{lineCount} 行。{Environment.NewLine}{path}"
-                        : $"这次还没有「操作开始」的标记，已导出**本次运行**的完整日志：{lineCount} 行。{Environment.NewLine}{path}");
+                        : $"这次还没有「操作开始」的标记，已导出本次运行的完整日志：{lineCount} 行。{Environment.NewLine}{path}");
             }
             catch (Exception ex)
             {
@@ -3420,7 +3420,7 @@ namespace ArchiveFixer.ViewModels
         /// 「定稿完成后打开输出目录」的落地（设置项 <see cref="AppSettings.OpenOutputFolderWhenDone"/>，**默认关**）。
         ///
         /// <para>
-        /// 由解压管线在"**最外层任务** + 内容物已定稿 + 输出校验通过 + 未取消"的收尾处调用，
+        /// 由解压管线在"最外层任务 + 内容物已定稿 + 输出校验通过 + 未取消"的收尾处调用，
         /// 而且**整批只调一次**（记账在 <see cref="ExtractionCoordinator"/> 那一侧）：
         /// 一批 50–200 个包每个都开一次资源管理器，那不是"看一眼结果"，是骚扰。
         /// </para>
@@ -4348,7 +4348,7 @@ namespace ArchiveFixer.ViewModels
             builder.AppendLine();
 
             builder.AppendLine(mode == DeleteMode.Permanent
-                ? "⚠ 彻底删除：内容不会进回收站，**无法恢复**。"
+                ? "⚠ 彻底删除：内容不会进回收站，无法恢复。"
                 : "默认档：移入回收站，之后可以从回收站还原。回收站不可用时程序不会改删，会直接报错并放弃。");
 
             return builder.ToString().TrimEnd();
@@ -4742,6 +4742,60 @@ namespace ArchiveFixer.ViewModels
              */
             await _extractionCoordinator.StartExtractAsync().ConfigureAwait(true);
         }
+
+        /// <summary>
+        /// 右键「智能修正此文件后缀」的入口：**只把这一行纳入本次操作，用完把勾选原样还回去**。
+        ///
+        /// <para>以前是选项卡的 code-behind 自己"把其余行全取消勾选"就完事 —— 用户批量勾了 20 个、
+        /// 右键修其中一个，回来发现勾选全没了，而且没有任何提示（2026-09-26 审计）。
+        /// 勾选是"命令的作用域"，不该被一个针对单行的动作悄悄清空。</para>
+        /// </summary>
+        internal async Task RunSmartRenameForSingleTaskAsync(ArchiveTask? task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            List<ArchiveTask> previouslySelected = Tasks.Where(item => item.IsSelected).ToList();
+
+            RunBulkSelectionUpdate(() =>
+            {
+                foreach (ArchiveTask item in Tasks)
+                {
+                    item.IsSelected = ReferenceEquals(item, task);
+                }
+            });
+
+            try
+            {
+                if (SmartRenameRunnerOverride != null)
+                {
+                    await SmartRenameRunnerOverride().ConfigureAwait(true);
+                    return;
+                }
+
+                await _renameCoordinator.SmartRenameAsync().ConfigureAwait(true);
+            }
+            finally
+            {
+                RunBulkSelectionUpdate(() =>
+                {
+                    foreach (ArchiveTask item in previouslySelected)
+                    {
+                        item.IsSelected = true;
+                    }
+                });
+            }
+        }
+
+        /// <summary>
+        /// 右键单文件改名的**执行替身**（只给测试用；正式路径永远是 null = 走真预览窗口）。
+        ///
+        /// <para>为什么需要它：真窗口在无界面宿主里不会弹，而"勾选会不会被还回来"这件事
+        /// 只有把"执行"这一步换掉才测得到（与 <c>ScanCoordinator.JunkReminderOverride</c> 同一套做法）。</para>
+        /// </summary>
+        internal Func<Task>? SmartRenameRunnerOverride { get; set; }
 
         /// <summary>
         /// 按源路径移除任务（导入后的无用物提醒里点"从列表里移除这些"走这条）。

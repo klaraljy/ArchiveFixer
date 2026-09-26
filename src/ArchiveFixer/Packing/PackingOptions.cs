@@ -21,7 +21,7 @@ namespace ArchiveFixer.Packing
         /// <summary>
         /// **默认**：源文件夹（或单文件）**旁边**，也就是源所在的那个目录。
         ///
-        /// <para>用户原话："**默认放在源文件目录旁边**"（他当天先说了"默认不去选择位置就将压缩至选择的
+        /// <para>用户原话："默认放在源文件目录旁边"（他当天先说了"默认不去选择位置就将压缩至选择的
         /// 目录位置"，随后明确纠正为源旁边 —— 从此**不跟①页「输出位置」**）。</para>
         /// </summary>
         Local = 0,
@@ -416,10 +416,15 @@ namespace ArchiveFixer.Packing
         public bool WouldDeleteSource =>
             SourceHandling == PackingSourceHandling.MoveToRest && RestHandling != PackingRestHandling.Keep;
 
-        /// <summary>那句红字（不发生时为 <c>null</c>）。</summary>
+        /// <summary>
+        /// 那句红字（不发生时为 <c>null</c>）。
+        ///
+        /// <para>⛔ 这里不许写 Markdown 的星号加粗：WPF 不认它，弹窗里会**原样**显示成星号
+        /// （2026-09-26 审计；<c>UserFacingTextTests</c> 会拦）。强调用「」。</para>
+        /// </summary>
         public string? SourceLossWarning => WouldDeleteSource
             ? "⚠ 你选的是「原包移入其余物」+「其余物" + RestHandlingText + "」—— "
-              + "这等于**连你的原文件夹/原文件一起" + (RestHandling == PackingRestHandling.Delete ? "彻底删除" : "丢进回收站") + "**。"
+              + "这等于「连你的原文件夹/原文件一起" + (RestHandling == PackingRestHandling.Delete ? "彻底删除" : "丢进回收站") + "」。"
               + "只想留 .rar 的话，把原包操作改成「不动」。"
             : null;
 
@@ -586,7 +591,7 @@ namespace ArchiveFixer.Packing
     }
 
     /// <summary>
-    /// 外层容器"**实际会用哪一个**"的结论（用户 2026-09-26 第 46 条：界面不再让用户选，
+    /// 外层容器"实际会用哪一个"的结论（用户 2026-09-26 第 46 条：界面不再让用户选，
     /// 没装 WinRAR 时自动改用 7z）。
     ///
     /// <para>⛔ 为什么要单独有这么一处：这个结论**界面也要用** —— ⑤页摘要、确认弹窗里那句

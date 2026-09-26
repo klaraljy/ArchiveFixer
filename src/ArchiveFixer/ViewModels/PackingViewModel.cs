@@ -406,7 +406,7 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// ⑤页上那行「落点：…」—— **最终压缩包会放在哪**（用户 2026-09-26 真机原话：
-        /// "怎么没有文件指定的压缩位置……**选择还是得放在页面**"）。
+        /// "怎么没有文件指定的压缩位置……选择还是得放在页面"）。
         ///
         /// <para>值与真正用的一样（同一个 <see cref="PackingPaths.ResolveTargetDirectory"/>），
         /// 只报事实：不建目录、不改设置。</para>
@@ -840,7 +840,7 @@ namespace ArchiveFixer.ViewModels
                 SummaryText =
                     $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
                     + Environment.NewLine
-                    + "外层容器：**做不出来** —— 本机既没有 Rar.exe，也没有可用的 7-Zip。";
+                    + "外层容器：做不出来 —— 本机既没有 Rar.exe，也没有可用的 7-Zip。";
                 PlacementText = $"请先修好 7-Zip（程序目录 tools\\7zip：{_tools.SevenZipExePath}），否则打不了包。";
 
                 return;
@@ -932,7 +932,7 @@ namespace ArchiveFixer.ViewModels
              * 先用**页面上那一套**（落点由⑤页选、两档操作由设置记得的那一套）算一遍规划，
              * 弹窗要把"最终产物在哪"显示出来。
              *
-             * ⚠ 2026-09-26 追加改口径（用户原话："**选择还是得放在页面**"）：落点的**选择**在⑤页，
+             * ⚠ 2026-09-26 追加改口径（用户原话："选择还是得放在页面"）：落点的**选择**在⑤页，
              * 弹窗里那块只**显示**（不再有本地/指定位置的单选）。
              */
             PackingRunOptions initial = BuildPlacementOptions();
@@ -1206,11 +1206,11 @@ namespace ArchiveFixer.ViewModels
 
             if (result.CleanupNote.Contains("已彻底删除", StringComparison.Ordinal))
             {
-                volumesLine = "装分卷的文件夹（其余物）：已按你选的档**彻底删除**（不再占空间）。";
+                volumesLine = "装分卷的文件夹（其余物）：已按你选的档彻底删除（不再占空间）。";
             }
             else if (result.CleanupNote.Contains("已移入回收站", StringComparison.Ordinal))
             {
-                volumesLine = "装分卷的文件夹（其余物）：已按你选的档**移入回收站**（可还原）。";
+                volumesLine = "装分卷的文件夹（其余物）：已按你选的档移入回收站（可还原）。";
             }
             else if (result.Success && Directory.Exists(plan.OutputFolder))
             {
@@ -1219,7 +1219,7 @@ namespace ArchiveFixer.ViewModels
             else if (Directory.Exists(plan.OutputFolder))
             {
                 volumesLine = $"分卷在：{plan.OutputFolder}（{result.Volumes.Count} 个）"
-                            + "—— 这次中途停下了，这些分卷**可能不完整**；重试前请先清空它。";
+                            + "—— 这次中途停下了，这些分卷可能不完整；重试前请先清空它。";
             }
             else
             {
