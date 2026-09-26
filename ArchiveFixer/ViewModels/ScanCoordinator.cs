@@ -455,6 +455,10 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
+                // ⛔ 扫描也是一个"开始干活"的入口：「导出日志（本次操作）」要从这一行开始导，
+                //    否则用户扫完就导出，头一行还是上一次操作的标记（第 46 条 ⑬ 抓到的同一类）。
+                _vm.MarkOperationStartForLog("扫描任务");
+
                 AppendLog("INFO", "开始扫描任务");
 
                 foreach (ArchiveTask task in Tasks)

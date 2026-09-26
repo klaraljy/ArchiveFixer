@@ -2624,6 +2624,15 @@ namespace ArchiveFixer.ViewModels
             AppendLog("INFO", message);
         }
 
+        /// <summary>
+        /// 在操作日志里打一条"======== 本次操作开始：<paramref name="operationName"/> ========"。
+        ///
+        /// <para>「导出日志（本次操作）」就是从**最后一条**这样的标记开始导的（第 38 条那套口径）。
+        /// ⛔ 每个"开始干活"的入口都要打一条，否则用户刚干完就导出，导出来的头一行会是**上一次**操作的名字
+        /// （打包与扫描都漏过这一条，见第 46 条 ⑬）。</para>
+        /// </summary>
+        public void MarkOperationStartForLog(string operationName) => _logService.MarkOperationStart(operationName);
+
         public void AppendLog(string level, string message)
         {
             string safeMessage = message ?? string.Empty;
