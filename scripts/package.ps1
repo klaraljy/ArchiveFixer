@@ -176,7 +176,7 @@ if ($missing.Count -gt 0) {
 }
 Write-Detail "源文件齐（$($requiredSources.Count) 项，含两份第三方许可文本）"
 
-# 正在运行的程序：只报告，不杀进程（AGENTS.md §13）。
+# 正在运行的程序：只报告，不杀进程（AGENTS.md §9.1）。
 $running = @(Get-Process -Name 'ArchiveFixer' -ErrorAction SilentlyContinue)
 if ($running.Count -gt 0) {
     $rows = @()

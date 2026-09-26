@@ -62,7 +62,7 @@ dotnet format ArchiveFixer.slnx --verify-no-changes                     # 格式
 - 内置工具：`src/ArchiveFixer/tools/7zip/`（LGPL，随程序分发）与 `tools/unrar/`（RARLAB freeware，允许随包分发）；
   **WinRAR 本体不随包分发**（共享软件），只检测与调用你自己装的那一份（见[引擎与外部工具](docs/引擎与外部工具.md)）。
 - 运行时文件（exe/dll/pdb/json + `tools/`）拷到绿色目录即可用，**⛔ 不要动绿色目录里的 `data\`**（那是用户数据）。
-- 当前测试规模与已知的偶发假红见 [`AGENTS.md` §5](AGENTS.md)。**暂不生成发行包**（等作者说"打包"再打）。
+- 当前测试规模与已知的偶发假红见 [`AGENTS.md` §11](AGENTS.md)。**暂不生成发行包**（等作者说"打包"再打）。
 
 ## 目录结构
 
