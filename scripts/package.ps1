@@ -110,7 +110,7 @@ function Test-FileLocked {
 # ---------------------------------------------------------------- 路径与版本
 
 $repoRoot    = Split-Path -Parent $PSScriptRoot
-$projectPath = Join-Path $repoRoot 'ArchiveFixer\ArchiveFixer.csproj'
+$projectPath = Join-Path $repoRoot 'src\ArchiveFixer\ArchiveFixer.csproj'
 
 if (-not (Test-Path -LiteralPath $projectPath)) {
     Fail "找不到项目文件：$projectPath" '请在仓库里运行：pwsh -File scripts/package.ps1'
@@ -158,13 +158,13 @@ $requiredSources = @(
     'LICENSE',
     'README.md',
     'docs\使用说明.md',
-    'ArchiveFixer\tools\7zip\7z.exe',
-    'ArchiveFixer\tools\7zip\7z.dll',
-    'ArchiveFixer\tools\7zip\License.txt',
-    'ArchiveFixer\tools\7zip\README.md',
-    'ArchiveFixer\tools\unrar\UnRAR.exe',
-    'ArchiveFixer\tools\unrar\license.txt',
-    'ArchiveFixer\tools\unrar\README.md'
+    'src\ArchiveFixer\tools\7zip\7z.exe',
+    'src\ArchiveFixer\tools\7zip\7z.dll',
+    'src\ArchiveFixer\tools\7zip\License.txt',
+    'src\ArchiveFixer\tools\7zip\README.md',
+    'src\ArchiveFixer\tools\unrar\UnRAR.exe',
+    'src\ArchiveFixer\tools\unrar\license.txt',
+    'src\ArchiveFixer\tools\unrar\README.md'
 )
 $missing = @()
 foreach ($rel in $requiredSources) {
@@ -302,10 +302,10 @@ foreach ($skipped in $skippedList) { Write-Detail "已排除：$skipped" }
 
 # 内置工具的文档：csproj 只负责 exe/dll/许可文本，README 由这里补齐（缺了就补，已有就不动）。
 $extraToolFiles = @(
-    @{ Source = 'ArchiveFixer\tools\7zip\README.md';       Target = 'tools\7zip\README.md' },
-    @{ Source = 'ArchiveFixer\tools\7zip\License.txt';     Target = 'tools\7zip\License.txt' },
-    @{ Source = 'ArchiveFixer\tools\unrar\license.txt';    Target = 'tools\unrar\license.txt' },
-    @{ Source = 'ArchiveFixer\tools\unrar\README.md';      Target = 'tools\unrar\README.md' }
+    @{ Source = 'src\ArchiveFixer\tools\7zip\README.md';       Target = 'tools\7zip\README.md' },
+    @{ Source = 'src\ArchiveFixer\tools\7zip\License.txt';     Target = 'tools\7zip\License.txt' },
+    @{ Source = 'src\ArchiveFixer\tools\unrar\license.txt';    Target = 'tools\unrar\license.txt' },
+    @{ Source = 'src\ArchiveFixer\tools\unrar\README.md';      Target = 'tools\unrar\README.md' }
 )
 foreach ($item in $extraToolFiles) {
     $dest = Join-Path $distDir $item.Target

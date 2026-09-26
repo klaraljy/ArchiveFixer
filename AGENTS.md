@@ -167,14 +167,14 @@ Windows 桌面工具：把一批**来源不明、后缀被改坏、加密、分�
 
 ---
 
-## 4. 目录结构（目标态，现状 = 08-09 基线）
+## 4. 目录结构（**2026-09-26 已按用户要求重排：本体进 `src/`、测试进 `tests/`**）
 
-现状：`Converters/ Helpers/ Models/ Services/ ViewModels/ Views/` + `ArchiveFixer.Tests/`。
-
-目标态在现状基础上**新增分层**（括号内为落地顺序）：
+> 用户原话："我在 GitHub 上看到的根本就不像一个工具的规格，还有一个 `.Tests`……**这个我觉得好像
+> 不要放在工具里面吧**"。于是根目录只留"项目级"的东西，工具本体与测试各进一层。
 
 ```
-ArchiveFixer/
+ArchiveFixer.slnx              解决方案（指向下面两个项目）
+src/ArchiveFixer/              工具本体（WPF + 纯逻辑分层）
   Domain/        纯模型：ArchiveDescriptor / ArchiveTask / TaskState / ErrorCode / RenamePlan   (M1)
   Detection/     魔数识别 / 后缀分析 / 分卷组识别                                              (M1)
   Engines/       IArchiveEngine / SevenZipEngine / EngineRegistry / EngineSelector / ToolLocator (M1)
@@ -182,10 +182,17 @@ ArchiveFixer/
   Extraction/    单层 / 分卷 / 递归 / 工作区 / 发布 / 冲突                                      (M2–M4)
   Security/      路径预检 / 资源预算 / 危险文件 / 输出落点校验                                  (M5)
   Storage/       源文件稳定性 / 目标空间检查                                                    (M5)
+  Packing/       打包（用户 2026-09-22 需求第 10 条）
   Services/ ViewModels/ Views/ Helpers/ Models/ Converters/   （既有，逐步把逻辑下沉到上面几层）
-ArchiveFixer.Tests/   xUnit
-docs/                 需求评审与考古、需求变更、测试样本说明
+  tools/         内置外部工具（7zip / unrar），随程序分发、随包带许可文本
+tests/ArchiveFixer.Tests/   xUnit（与本体分开；跑不起真 7z 的用例自己跳过）
+docs/                 需求评审与考古、需求变更、功能一览、设置项、打包功能、人工测试清单…
 samples/              只放**生成脚本 + 清单**，样本本体不入仓库
+scripts/              package.ps1（生成 dist；**用户说暂不打包**）
+dist/                 发行产物（不入库）
+README.md             一页纸（细节都在 docs/）
+AGENTS.md             开发规则（本项目特有）
+修改日志.md           一条一行流水账
 ```
 
 **分层铁律**：`Domain / Detection / Engines / Password / Extraction / Security / Storage`
@@ -200,10 +207,10 @@ samples/              只放**生成脚本 + 清单**，样本本体不入仓库
 dotnet build ArchiveFixer.slnx
 
 # 运行（GUI）
-dotnet run --project ArchiveFixer/ArchiveFixer.csproj
+dotnet run --project src/ArchiveFixer/ArchiveFixer.csproj
 
 # 测试（必须全绿才算"改了东西"）
-dotnet test ArchiveFixer.Tests/ArchiveFixer.Tests.csproj
+dotnet test tests/ArchiveFixer.Tests/ArchiveFixer.Tests.csproj
 
 # 格式检查（.NET SDK 自带；先 --verify-no-changes 看差异，不要自动改）
 dotnet format ArchiveFixer.slnx --verify-no-changes
@@ -225,7 +232,7 @@ dotnet format ArchiveFixer.slnx --verify-no-changes
 > 而启动那条「工作区残留」日志按设计要写**实际位置**，工作区根正好是 `<数据根>\work`）：
 > **单跑该用例、以及单跑整个 `PasswordListStoreTests` 都是 18/18 全过**；遇到先单跑，别急着改断言或产品代码。
 > 改构建/打包后要把运行时文件拷到绿色目录（用户真实测试位置）：
-> `Copy-Item bin\Release\net8.0-windows\{ArchiveFixer.exe,ArchiveFixer.dll,ArchiveFixer.pdb,*.json} E:\ArchiveFixer\` + `tools\`，**⛔ 绝不碰 `E:\ArchiveFixer\data`**（那里是用户的日志/密码列表/设置）。
+> `Copy-Item src\ArchiveFixer\bin\Release\net8.0-windows\{ArchiveFixer.exe,ArchiveFixer.dll,ArchiveFixer.pdb,*.json} E:\ArchiveFixer\` + `src\ArchiveFixer\tools\`，**⛔ 绝不碰 `E:\ArchiveFixer\data`**（那里是用户的日志/密码列表/设置）。
 改动代码后这三条都要重新跑；**长活（构建/全量测试）放后台任务**，别阻塞干等（全局 §作业模式 规矩 23）；
 格式差异用 `dotnet format whitespace ArchiveFixer.slnx` 修，不要手工对齐。
 > ⚠️ **同一个 checkout 里不许并发跑构建/测试**（2026-09-24 实测教训）：`--no-incremental` 的构建会重建
@@ -628,7 +635,7 @@ B 段判据：`IsEncrypted` 且候选里**一个非空的都没有**；文案必
 | 8 | 三处待拍板（agent 已按保守方向处理） | ① **空间门按"输出盘"核算**（原来写的"工作区在别的盘不重复核算"）。⚠ **2026-09-24 第 23 条改了口径**：默认档下工作区**就在输出盘上**（`<输出盘>\.ArchiveFixer.work`），所以那块盘的账面是完整的 —— **同卷 = 暂存与成品是同一份字节**（定稿走同卷改名），内容物在峰值里只算一份；**跨卷**时（用户设过 `CacheRootDirectory` / 拿不到盘回落程序目录）成品盘会多出一份内容物，而**工作区那块盘另外还要留 内容物 + 过程物** —— 这一半**仍然不在账面上**（已知限制，批首写一条 WARN 明说，要做需账本支持多卷）。措辞唯一来源 `TaskSpaceEstimate.DescribeVolumeLayout`；② ⛔ 原来那处"没凭证/盖不住就不许在设置里打开"的保存前拦截**已随危险模式删除**（2026-09-25 第 32 条）；现在只拦"工具路径指向不存在的文件"那一类；③ ~~自测不做档位归一化~~（自测本身已退役） |
 | 9 | 打包功能的硬约束 | ✅ **分卷按卷数**（2026-09-26 第 46 条改口径：内容 &lt;1 GiB → 目标 **2 卷**、≥1 GiB → **3 卷**，每卷上限 = ⌈内容÷卷数⌉ 向上取整到整 MiB，交给 `7z -v` 切；⛔ 不承诺"平均分"、⛔ 不再让用户填 MiB）；✅ **外层容器**：有 `Rar.exe` 用 rar（`-hp`），**没有就自动改用 7z**（产物 `源名.7z`，日志/结果/弹窗写明），⛔ **绝不用 7z 假装生成 `.rar`**（旧的"三选一 + 没装就报错 + 三条出路"已退役）。✅ **`CustomRarExePath` 的设置界面入口已补**（2026-09-23，见 §9.8）—— 许可边界：RARLAB EULA §3.1/§3.2/§3.3/§10 **禁止随其它软件包分发**，故只允许"用户自装、自选路径、程序只检测与调用" |
 | 10 | UI 自动化 vs 程序自身提醒 | ✅ 两者不冲突：§13 管代理脚本，程序按用户要求把自己的输入框/警告框拎到前面（`Helpers/WindowAttention.cs`）；实现必须保留"屏幕外 / `ShowActivated=false` 不提醒"两个静默出口 |
-| 11 | 密码列表怎么跨重启保留（2026-09-24 用户真机反馈后拍板） | ✅ **用户选定的方案**：Windows 自带 **DPAPI 机器范围**（`CryptProtectData` + `CRYPTPROTECT_LOCAL_MACHINE`，固定应用 entropy），加密存在 `<程序目录>\data\password-list.dat`，**跟 Windows 账号无关、不弹框、绝不写 C 盘**；设置项 `RememberPasswordList`（**默认开**）可整个关掉（关掉 = **既不写也不读**）。**代价用户已知并接受**：同机任何本机用户都可能解开；**换机器 / 重装系统解不开 → 忽略并提示**（不崩、不覆盖、不删），出路是「写回密码本」。一并落地：内容 / 顺序 / 启用状态 / 手工条目跨重启保留、**多本密码本**（`PasswordBookPaths`，导入第二本不再顶掉第一本）、删除与清空记**墓碑**（重启不许从书里复活）、老字段 `PasswordBookPath` 在 `Normalize` 里**迁移进列表且保留不清**（回退旧版本不炸）。实现见 `Storage/PasswordListStore.cs`（纯逻辑、无 WPF、**不新增 NuGet 依赖**）、`Services/PasswordService.cs`、`ViewModels/MainViewModel.AutoLoadPasswordBook`；测试见 `ArchiveFixer.Tests/PasswordListStoreTests.cs`（18 条） |
+| 11 | 密码列表怎么跨重启保留（2026-09-24 用户真机反馈后拍板） | ✅ **用户选定的方案**：Windows 自带 **DPAPI 机器范围**（`CryptProtectData` + `CRYPTPROTECT_LOCAL_MACHINE`，固定应用 entropy），加密存在 `<程序目录>\data\password-list.dat`，**跟 Windows 账号无关、不弹框、绝不写 C 盘**；设置项 `RememberPasswordList`（**默认开**）可整个关掉（关掉 = **既不写也不读**）。**代价用户已知并接受**：同机任何本机用户都可能解开；**换机器 / 重装系统解不开 → 忽略并提示**（不崩、不覆盖、不删），出路是「写回密码本」。一并落地：内容 / 顺序 / 启用状态 / 手工条目跨重启保留、**多本密码本**（`PasswordBookPaths`，导入第二本不再顶掉第一本）、删除与清空记**墓碑**（重启不许从书里复活）、老字段 `PasswordBookPath` 在 `Normalize` 里**迁移进列表且保留不清**（回退旧版本不炸）。实现见 `Storage/PasswordListStore.cs`（纯逻辑、无 WPF、**不新增 NuGet 依赖**）、`Services/PasswordService.cs`、`ViewModels/MainViewModel.AutoLoadPasswordBook`；测试见 `tests/ArchiveFixer.Tests/PasswordListStoreTests.cs`（18 条） |
 
 ---
 

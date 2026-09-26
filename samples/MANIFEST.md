@@ -13,11 +13,11 @@ pwsh -File samples/generate-samples.ps1 -VolumeSizeMb 2
 ```
 
 - 输出到 `samples/generated/`
-- 只用项目内置的 `ArchiveFixer/tools/7zip/7z.exe`，不需要系统安装 7-Zip
+- 只用项目内置的 `src/ArchiveFixer/tools/7zip/7z.exe`，不需要系统安装 7-Zip
 - **脚本里的密码是合成密码**（`TestPass123!`），任何真实密码都不得写进本目录（AGENTS.md §8）
 - 脚本每次运行时**先清空**输出目录，保证结果可重复
 
-自动化冒烟测试（`ArchiveFixer.Tests/BaselineSmokeTests.cs`）**不依赖**这个目录：它自己用同一套规则把样本生成到临时目录，
+自动化冒烟测试（`tests/ArchiveFixer.Tests/BaselineSmokeTests.cs`）**不依赖**这个目录：它自己用同一套规则把样本生成到临时目录，
 所以全新克隆直接 `dotnet test` 就能跑。
 
 ## 当前批次

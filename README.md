@@ -52,14 +52,14 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
 ## 构建 / 运行 / 测试
 
 ```powershell
-dotnet build ArchiveFixer.slnx                                  # 构建
-dotnet run   --project ArchiveFixer/ArchiveFixer.csproj         # 运行（GUI）
-dotnet test  ArchiveFixer.Tests/ArchiveFixer.Tests.csproj       # 测试（必须全绿）
-dotnet format ArchiveFixer.slnx --verify-no-changes             # 格式检查
+dotnet build ArchiveFixer.slnx                                          # 构建
+dotnet run   --project src/ArchiveFixer/ArchiveFixer.csproj             # 运行（GUI）
+dotnet test  tests/ArchiveFixer.Tests/ArchiveFixer.Tests.csproj         # 测试（必须全绿）
+dotnet format ArchiveFixer.slnx --verify-no-changes                     # 格式检查
 ```
 
 - 环境：**.NET SDK 8.0**（项目固定 8.0，不随新 SDK 漂移）、Windows 10/11。
-- 内置工具：`ArchiveFixer/tools/7zip/`（LGPL，随程序分发）与 `tools/unrar/`（RARLAB freeware，允许随包分发）；
+- 内置工具：`src/ArchiveFixer/tools/7zip/`（LGPL，随程序分发）与 `tools/unrar/`（RARLAB freeware，允许随包分发）；
   **WinRAR 本体不随包分发**（共享软件），只检测与调用你自己装的那一份（见[引擎与外部工具](docs/引擎与外部工具.md)）。
 - 运行时文件（exe/dll/pdb/json + `tools/`）拷到绿色目录即可用，**⛔ 不要动绿色目录里的 `data\`**（那是用户数据）。
 - 当前测试规模与已知的偶发假红见 [`AGENTS.md` §5](AGENTS.md)。**暂不生成发行包**（等作者说"打包"再打）。
@@ -68,8 +68,8 @@ dotnet format ArchiveFixer.slnx --verify-no-changes             # 格式检查
 
 ```
 ArchiveFixer.slnx          解决方案
-ArchiveFixer/              工具本体（Domain/Detection/Engines/Password/Extraction/Security/Storage + WPF 界面）
-ArchiveFixer.Tests/        xUnit 测试（与本体分开；跑不起真 7z 的用例会自己跳过）
+src/ArchiveFixer/          工具本体（Domain/Detection/Engines/Password/Extraction/Security/Storage + WPF 界面）
+tests/ArchiveFixer.Tests/  xUnit 测试（与本体分开；跑不起真 7z 的用例会自己跳过）
 docs/                      使用说明 / 功能一览 / 设置项 / 需求变更 / 打包功能 / 人工测试清单 …
 samples/                   测试样本的生成脚本 + 清单（样本本体不入库）
 scripts/                   打包与自检脚本（暂不使用）

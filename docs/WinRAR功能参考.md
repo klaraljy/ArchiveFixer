@@ -739,7 +739,7 @@ G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1
 2. 真正需要单独核对的仍是 `README.md:166-170` 已经记下的那两件：
    **内置 7-Zip（`7z.exe` / `7z.dll`，26.03）的 LGPL + unRAR restriction**，以及
    **内置 `tools\unrar\UnRAR.exe`（RARLAB 免费件，7.23 稳定版）要随包带它的 `license.txt`**
-   （来源、SHA256 与许可摘录见 `ArchiveFixer/tools/unrar/README.md`）。
+   （来源、SHA256 与许可摘录见 `src/ArchiveFixer/tools/unrar/README.md`）。
    一个有用的旁证：WinRAR 自己在闭源产品里使用 7-Zip 的 `7zxa.dll`（LGPL 2.1+）来解压 7z ——
    说明"未修改地使用 7-Zip 的解压组件"在 LGPL 下是被接受的做法。
    但我们的形态不同（内置的是**独立可执行文件**，且含 unRAR restriction 的 RAR 解码）→
@@ -816,8 +816,8 @@ G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1
 - **原文写法**（§4 第 1 条、§5.3 补充第 1 条、§2 的几处"现状"）：*"`Engines/ToolLocator.cs`
   只认 7z，源码里没有任何 rar/unrar 探测"*、*"第一版连调用都还没做"*。
 - **现在的事实**（2026-09-22 落地）：
-  1. **已内置** `ArchiveFixer/tools/unrar/UnRAR.exe`（RARLAB 免费件，**7.23 稳定版**，
-     SHA256 / 来源 / 许可摘录见 `ArchiveFixer/tools/unrar/README.md`；许可第 2 条明确允许随包分发）；
+  1. **已内置** `src/ArchiveFixer/tools/unrar/UnRAR.exe`（RARLAB 免费件，**7.23 稳定版**，
+     SHA256 / 来源 / 许可摘录见 `src/ArchiveFixer/tools/unrar/README.md`；许可第 2 条明确允许随包分发）；
   2. **已实现** `Engines/WinRar/UnRarEngine`（`IArchiveEngine` 的 probe / list / test / extract），
      能力位**如实只登记 RAR**（zip / 7z / tar 一律声明不支持，交给 7-Zip）；
   3. **引擎优先级** `AppSettings.EnginePriority` 默认 `winrar → sevenzip`
