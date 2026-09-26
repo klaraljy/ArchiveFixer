@@ -1435,7 +1435,18 @@ namespace ArchiveFixer.ViewModels
             _settingsEditor = new SettingsViewModel(_settings, _settingsService);
             _settingsEditor.AttachSharedSettings(_settings);
 
-            PackingEditor = new PackingViewModel { LogSink = line => AppendLog("INFO", line) };
+            PackingEditor = new PackingViewModel
+            {
+                LogSink = line => AppendLog("INFO", line),
+
+                /*
+                 * ⛔ 打包也要在操作日志里**打一条"本次操作开始"**（第 38 条那套口径）：
+                 * 「导出日志（本次操作）」是从最后一条标记开始导的 —— 打包以前不打标记，
+                 * 于是用户"刚打完包就导出"，导出来的头一行还是**上一次解压**的"本次操作开始：解压"，
+                 * 或者干脆整份运行日志全倒出来。时机同理：**用户确认之后、调服务之前**（第 46 条）。
+                 */
+                OperationStarted = () => _logService.MarkOperationStart("打包")
+            };
 
             /*
              * 打包那几档（落点 / 原包操作 / 其余物操作）存在**同一份 AppSettings** 上，

@@ -136,6 +136,14 @@ namespace ArchiveFixer.ViewModels
         /// <summary>每一步的日志出口（由主界面接上，落到主日志文件里）。</summary>
         public Action<string>? LogSink { get; set; }
 
+        /// <summary>
+        /// **真正开始干活**之前的那个钩子（主界面用它写一条"本次操作开始：打包"）。
+        ///
+        /// <para>时机是硬要求：**用户确认之后、调服务之前** —— 取消时一次都不许触发
+        /// （"导出日志（本次操作）"就是从这一行开始导的，第 38 条那套口径）。</para>
+        /// </summary>
+        public Action? OperationStarted { get; set; }
+
         /// <summary>设置变了要不要落盘（由主界面接上；打包那几档要记住）。</summary>
         public Action? SettingsChanged { get; set; }
 
@@ -779,6 +787,10 @@ namespace ArchiveFixer.ViewModels
 
             _lastUsedPassword = Password;
             OnPropertyChanged(nameof(CanCopyPassword));
+
+            // 到这一步才真的开始干活：给操作日志打一条"本次操作开始：打包"
+            // （⛔ 取消 / 规划被拒时一次都不许触发 —— 这条也钉在用例里）。
+            OperationStarted?.Invoke();
 
             IsRunning = true;
             ProgressPercent = 0;

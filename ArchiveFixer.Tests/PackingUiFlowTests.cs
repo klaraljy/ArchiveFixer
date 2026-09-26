@@ -328,6 +328,24 @@ namespace ArchiveFixer.Tests
 
             // ③ 确认框也真的被问过一次（不是绕过去直接跑）。
             Assert.Equal(1, harness.Dialog.ConfirmCalls);
+
+            // ④ 操作日志的"本次操作开始：打包"这一条**打过**（「导出日志（本次操作）」靠它定位）。
+            Assert.Equal(1, harness.Starts());
+        }
+
+        /// <summary>
+        /// ⛔ **取消时"本次操作开始"一次都不许打** —— 否则用户点一次取消再点「导出日志（本次操作）」，
+        /// 导出来的头一行会是一句"本次操作开始：打包"，可那次操作什么都没干。
+        /// </summary>
+        [Fact]
+        public async Task 取消确认_操作日志里连本次操作开始都不许写()
+        {
+            string source = BuildSourceFolder("素材");
+            Harness harness = BuildHarness(source, new CountingRunner(), confirmed: null);
+
+            await harness.ViewModel.StartAsync();
+
+            Assert.Equal(0, harness.Starts());
         }
 
         /// <summary>弹窗里的选择来自设置：上次选"回收站"，这次打开就该是"回收站"。</summary>
@@ -407,17 +425,26 @@ namespace ArchiveFixer.Tests
             int saves = 0;
             viewModel.SettingsChanged = () => saves++;
 
-            return new Harness(viewModel, dialog, settings, () => saves);
+            int starts = 0;
+            viewModel.OperationStarted = () => starts++;
+
+            return new Harness(viewModel, dialog, settings, () => saves, () => starts);
         }
 
         private sealed class Harness
         {
-            public Harness(PackingViewModel viewModel, FakeDialogService dialog, AppSettings settings, Func<int> saves)
+            public Harness(
+                PackingViewModel viewModel,
+                FakeDialogService dialog,
+                AppSettings settings,
+                Func<int> saves,
+                Func<int> starts)
             {
                 ViewModel = viewModel;
                 Dialog = dialog;
                 Settings = settings;
                 Saves = saves;
+                Starts = starts;
             }
 
             public PackingViewModel ViewModel { get; }
@@ -427,6 +454,9 @@ namespace ArchiveFixer.Tests
             public AppSettings Settings { get; }
 
             public Func<int> Saves { get; }
+
+            /// <summary>操作日志里"本次操作开始"打过几次。</summary>
+            public Func<int> Starts { get; }
         }
 
         /// <summary>确认弹窗的替身：返回预设的那一套（null = 用户取消）。</summary>
