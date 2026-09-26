@@ -209,7 +209,7 @@
                     <StackPanel Margin="0,4,0,0">
                         <RadioButton x:Name="PlacementFollow"
                                      GroupName="PackPlacement"
-                                     Content="默认（跟①页「输出位置」走；没设过就是源旁边）"
+                                     Content="默认（放在源所在的目录旁边，也就是源旁边）"
                                      IsChecked="{Binding PlacementIsFollowDefault, Mode=TwoWay}" />
 
                         <RadioButton x:Name="PlacementCustom"

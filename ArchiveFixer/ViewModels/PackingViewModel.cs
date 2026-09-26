@@ -490,7 +490,7 @@ namespace ArchiveFixer.ViewModels
 
             _settings.PackTargetMode = (PlacementIsCustom
                 ? PackingTargetMode.Custom
-                : PackingTargetMode.FollowOutputDirectory).ToString();
+                : PackingTargetMode.Local).ToString();
 
             _settings.PackCustomOutputDirectory = CustomPlacementDirectory ?? string.Empty;
 
@@ -513,9 +513,8 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 页面上这几档 → 一套请求选项（⛔ 唯一出口：预览、弹窗抬头、真跑都引它）。
         ///
-        /// <para>落点取**页面**上那两档；"默认"那一档要落到的目录由
-        /// <see cref="PackingRunOptions.ResolveDefaultOutputDirectory"/> 从①页「输出位置」解析
-        /// （用户原话："如果用户默认不去选择位置就将压缩至选择的目录位置"）。</para>
+        /// <para>落点取**页面**上那两档：默认 = **源旁边**（用户原话："默认放在源文件目录旁边"），
+        /// 指定位置 = 这一页挑的那个目录。</para>
         /// </summary>
         internal PackingRunOptions BuildPlacementOptions()
         {
@@ -523,9 +522,8 @@ namespace ArchiveFixer.ViewModels
 
             return new PackingRunOptions
             {
-                TargetMode = PlacementIsCustom ? PackingTargetMode.Custom : PackingTargetMode.FollowOutputDirectory,
+                TargetMode = PlacementIsCustom ? PackingTargetMode.Custom : PackingTargetMode.Local,
                 CustomOutputDirectory = CustomPlacementDirectory ?? string.Empty,
-                DefaultOutputDirectory = PackingRunOptions.ResolveDefaultOutputDirectory(_settings),
                 SourceHandling = saved.SourceHandling,
                 RestHandling = saved.RestHandling
             };
@@ -554,8 +552,7 @@ namespace ArchiveFixer.ViewModels
             PlacementSummaryText = options.TargetMode switch
             {
                 PackingTargetMode.Custom => $"落点：指定位置 —— {directory}",
-                PackingTargetMode.Local => $"落点：本地（源旁边）—— {directory}",
-                _ => $"落点：默认（跟①页「输出位置」）—— {directory}"
+                _ => $"落点：默认（源旁边）—— {directory}"
             };
         }
 
@@ -962,7 +959,6 @@ namespace ArchiveFixer.ViewModels
             {
                 TargetMode = initial.TargetMode,
                 CustomOutputDirectory = initial.CustomOutputDirectory,
-                DefaultOutputDirectory = initial.DefaultOutputDirectory,
                 SourceHandling = confirmed.SourceHandling,
                 RestHandling = confirmed.RestHandling
             };

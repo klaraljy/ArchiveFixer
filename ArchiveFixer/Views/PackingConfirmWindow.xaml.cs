@@ -59,7 +59,6 @@ namespace ArchiveFixer.Views
             {
                 TargetMode = initial.TargetMode,
                 CustomOutputDirectory = initial.CustomOutputDirectory,
-                DefaultOutputDirectory = initial.DefaultOutputDirectory,
                 SourceHandling = SourceMove.IsChecked == true
                     ? PackingSourceHandling.MoveToRest
                     : PackingSourceHandling.KeepInPlace,
