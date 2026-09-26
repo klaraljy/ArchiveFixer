@@ -3135,7 +3135,15 @@ namespace ArchiveFixer.ViewModels
             int failed = Tasks.Count(task => task.Outcome == TaskOutcome.Failed);
             int skipped = Tasks.Count(task => task.Outcome == TaskOutcome.Skipped);
 
-            lines.Add($"任务数：{Tasks.Count}（成功 {succeeded} / 失败 {failed} / 跳过 {skipped}）");
+            /*
+             * 任务数要分两层说（用户 2026-09-26 第 45 条的真机现场）：他跑 38 个包，头部却写"任务数：76" ——
+             * 因为续解出来的内层包**也是任务**。不分开说，读的人会以为程序多跑了 38 个包。
+             */
+            int continuation = Tasks.Count(task => task.IsContinuationTask);
+
+            lines.Add(
+                $"任务数：{Tasks.Count}（成功 {succeeded} / 失败 {failed} / 跳过 {skipped}）"
+                + (continuation > 0 ? $"；其中续解出来的内层包 {continuation} 个" : string.Empty));
 
             string engine = DescribeEngineIdentity();
 
@@ -3176,9 +3184,23 @@ namespace ArchiveFixer.ViewModels
             {
                 string engine = _taskSummaryService.EngineIdentity.Describe();
 
-                return string.IsNullOrWhiteSpace(engine)
-                    ? string.Empty
-                    : $"{engine}（优先级：{Settings.EnginePriority}）";
+                if (string.IsNullOrWhiteSpace(engine))
+                {
+                    return string.Empty;
+                }
+
+                /*
+                 * ⚠ 优先级那一格是 List<string>：直接插进字符串会写成
+                 * `System.Collections.Generic.List`1[System.String]`（2026-09-26 真机导出的头部里就是这么写的）。
+                 * 这里必须自己用 `→` 连起来（与②页引擎那一栏同一口径）。
+                 */
+                string priority = Settings.EnginePriority is { Count: > 0 }
+                    ? string.Join(" → ", Settings.EnginePriority.Where(value => !string.IsNullOrWhiteSpace(value)))
+                    : string.Empty;
+
+                return string.IsNullOrWhiteSpace(priority)
+                    ? engine
+                    : $"{engine}（优先级：{priority}）";
             }
             catch
             {

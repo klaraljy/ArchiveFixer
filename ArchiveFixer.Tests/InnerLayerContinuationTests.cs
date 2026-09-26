@@ -695,9 +695,12 @@ namespace ArchiveFixer.Tests
                     path => path.Contains("其余物", StringComparison.Ordinal));
             }
 
+            // 日志里那一条：第 45 条起是"内层包已移入其余物 —— <文件名>（<包名> 那一层）"
+            // （原来写的是两条完整绝对路径，真机上 38 个包 × 200 字符纯属噪声）。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("内层包移入其余物", StringComparison.Ordinal));
+                line => line.Contains("内层包已移入其余物", StringComparison.Ordinal)
+                        && line.Contains("inner.7z", StringComparison.Ordinal));
         }
 
         /// <summary>

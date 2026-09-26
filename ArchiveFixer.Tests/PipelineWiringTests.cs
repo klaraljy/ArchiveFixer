@@ -892,13 +892,22 @@ namespace ArchiveFixer.Tests
             Assert.Contains(
                 harness.Log.Logs,
                 item => item.Message.Contains("并发已满", StringComparison.Ordinal) &&
-                        item.Message.Contains("等一个空位", StringComparison.Ordinal) &&
-                        item.Message.Contains("全速", StringComparison.Ordinal));
+                        item.Message.Contains("等空位", StringComparison.Ordinal) &&
+                        item.Message.Contains("全速（本批不节流）", StringComparison.Ordinal));
 
-            // 轮到它时要有一句"等到空位，开始解压"，否则用户只看到"等待"没有下文。
+            /*
+             * ⚠ 2026-09-26 第 45 条：**等待那一段不再逐任务刷**（真机 76 个任务刷了 74 遍），
+             * 所以原来那句「「X」等到空位，开始解压」没有了（等 <30 秒不单独写行）。
+             * 取而代之的是批末一条汇总 —— 这里改成钉它。
+             */
             Assert.Contains(
                 harness.Log.Logs,
-                item => item.Message.Contains("等到空位", StringComparison.Ordinal));
+                item => item.Message.Contains("并发排队汇总", StringComparison.Ordinal));
+
+            // ⛔ 反面：不许再说"主界面的「全速」"（那个开关在②页，用户就是被这句带偏的）。
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                item => item.Message.Contains("主界面的「全速」", StringComparison.Ordinal));
         }
 
         // ================================================================ 装配

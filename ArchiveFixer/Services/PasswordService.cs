@@ -782,7 +782,11 @@ namespace ArchiveFixer.Services
 
         /// <summary>
         /// 本次运行里已经成功过的密码（副本，顺序 = 首次成功的先后）。
-        /// 它们会被提到后续任务候选的最前面（空密码之后）。
+        ///
+        /// <para>⚠ **2026-09-26 第 45 条改了位置**：它们现在是候选表里的**第一条**（不再是"空密码之后"）——
+        /// 用户原话："我这个在用特定解压，是多相同文件，密码都是一样的，你这个复用本批次已成功的密码，
+        /// 不就是在放屁吗，每次都是重新一轮密码检测"。有已知密码时，空密码**根本不再进候选**
+        /// （加密包的空密码永远不可能对，见第 37 条实测）。</para>
         /// </summary>
         public IReadOnlyList<string> BatchVerifiedPasswords
         {
@@ -830,6 +834,8 @@ namespace ArchiveFixer.Services
         /// 用户能解释"为什么这条排在前面"。
         /// </para>
         /// </summary>
+        private const bool RedCheckIgnoreBatchPassword = false;   // 红检开关（临时，已复位）
+
         public List<PasswordItem> GetPasswordCandidates(
             ArchiveTask task,
             string globalPassword,
@@ -863,18 +869,37 @@ namespace ArchiveFixer.Services
                 ? string.Empty
                 : Path.GetFileName(archivePath);
 
-            if (tryEmptyFirst)
+            /*
+             * ==================== 顺序：**本批已成功的密码排在最前**（用户 2026-09-26 第 45 条）====================
+             *
+             * 他的原话："我这个在用特定解压，是多相同文件，密码都是一样的，你这个复用本批次已成功的密码，
+             * 不就是在放屁吗，每次都是重新一轮密码检测" —— 真机日志（38 个同源包）逐字对应：
+             * 每个包都是 `候选 1/10，尝试空密码` → `密码错误` → `候选 2/10，复用本批已成功的密码` 才解开。
+             *
+             * 两处都错了：
+             * · 「空密码」对**加密包永远不可能对**（第 37 条实测：7-Zip / WinRAR 都造不出用空密码加密的包），
+             *   一批同源包里有已知密码时还先试它，纯粹是白跑一轮；
+             * · 第 14 条那个位置（"紧跟在空密码之后"）是在**还没有已知密码**的前提下定的 ——
+             *   一旦本批有成功的密码，它就该是**第一个**。
+             *
+             * ⛔ 保留的边界：本批**还没有**成功过密码时，顺序与从前逐字相同（空密码仍在最前，`tryEmptyFirst` 说了算）——
+             * 第一条候选怎么来的这件事不许变，否则"第一条就是密码本第一条"这类现场会再次说不清。
+             */
+            IReadOnlyList<string> verifiedPasswords = OrderBySuccessCount(BatchVerifiedPasswords, value => value)
+                .Where(value => !string.IsNullOrEmpty(value))
+                .ToList();
+
+            bool hasVerifiedBatchPassword = verifiedPasswords.Count > 0;
+
+            if (tryEmptyFirst && (!hasVerifiedBatchPassword || RedCheckIgnoreBatchPassword))
             {
                 AddCandidate(string.Empty, "Empty", "空密码");
             }
 
             /*
-             * 本批已经成功过的密码：紧跟在空密码之后（用户 2026-09-24 第 14 条指定的位置），
-             * 排在"本任务最近成功 / 密码本命中 / 统一密码 / 密码列表"之前。
-             *
              * 多条时按成功次数从多到少（次数相同按首次成功的先后）—— 与同层级排序同一口径。
              */
-            foreach (string verified in OrderBySuccessCount(BatchVerifiedPasswords, value => value))
+            foreach (string verified in verifiedPasswords)
             {
                 AddCandidate(verified, "BatchSuccess", "复用本批已成功的密码");
             }

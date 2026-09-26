@@ -1852,7 +1852,15 @@ namespace ArchiveFixer.ViewModels
                         }
                     }
 
-                    AppendLog("INFO", $"{rootTask.FileName}：内层包移入其余物 —— {from} → {to}");
+                    /*
+                     * 一行说完，**不写两条完整绝对路径**（用户 2026-09-26 第 45 条：
+                     * 真机上这一行是 200 字符上下 × 38 个包，而两条路径对用户没有信息量 ——
+                     * 他关心的是"哪个内层包进了其余物"，不是它待在 H:\ 的哪一层）。
+                     */
+                    AppendLog(
+                        "INFO",
+                        $"{rootTask.FileName}：内层包已移入其余物 —— {Path.GetFileName(from)}"
+                        + $"（{Path.GetFileName(Path.GetDirectoryName(to)) ?? string.Empty} 那一层）");
                 }
                 catch (Exception ex)
                 {
@@ -4622,6 +4630,14 @@ namespace ArchiveFixer.ViewModels
         /// 0 或负数会让"等并发位"的循环条件永远成立 —— 那个任务会永远等下去。
         /// </para>
         /// </summary>
+        /// <summary>
+        /// 排队等空位**超过这个秒数**才单独写一行（否则只进批末汇总）。
+        ///
+        /// <para>用户 2026-09-26 第 45 条：原来每个被节流挡住的包都写两行同义反复的话，真机上 76 个任务
+        /// 出了 74 条 —— 而绝大多数等待只有一两秒，根本不值得占一行。</para>
+        /// </summary>
+        private const int ThrottleNoticeThresholdSeconds = 30;
+
         private int ResolveMaxParallel(IReadOnlyList<ArchiveTask> tasks, out bool fullSpeed)
         {
             fullSpeed = _vm.RunAtFullSpeed;
@@ -6048,6 +6064,31 @@ namespace ArchiveFixer.ViewModels
         /// <summary>收尾摘要里允许的路径长度上限（超过就只留末两段）。</summary>
         private const int MaxSummaryPathLength = 72;
 
+        /// <summary>
+        /// 只留路径的**末 N 段**（<c>H:\…\共用根\其余物\025</c> → <c>其余物\025</c>）。
+        ///
+        /// <para>其余物那一行用它（用户 2026-09-26 第 45 条：真机上逐任务一条 60 字符的完整路径 × 118 条，
+        /// 而他要认的只是"哪一个包的其余物"）。完整路径在 ③页「工作区残留」与输出目录里都看得到，
+        /// **失败**时也照旧全量打印。</para>
+        /// </summary>
+        private static string DescribeShortTail(string? path, int segments)
+        {
+            if (string.IsNullOrWhiteSpace(path) || segments <= 0)
+            {
+                return string.Empty;
+            }
+
+            string trimmed = path!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            string[] parts = trimmed.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries);
+
+            return parts.Length <= segments
+                ? trimmed
+                : string.Join(Path.DirectorySeparatorChar, parts[^segments..]);
+        }
+
         /// <summary>其余物目录里有几个顶层条目（只数，不递归 —— 只为一行日志说清"有多少东西"）。</summary>
         private static int CountRestEntries(string? directory)
         {
@@ -6340,6 +6381,18 @@ namespace ArchiveFixer.ViewModels
 
                 var runningTasks = new List<Task>();
 
+                /*
+                 * 第 45 条（用户 2026-09-26）：等待并发位的提示**一批只说一次** + 批末给个计数。
+                 *
+                 * 真机日志里那一行出现了 **74 次**（76 个任务）：
+                 * `并发已满（1/1 个任务正在跑），「018.7z」在队列里等一个空位。想让它立刻开跑：
+                 *   勾上主界面的「全速」；或点「停止后续」……`
+                 * 用户三条意见全中：①**主界面根本没有「全速」**（它在②页 →「并发与空间」）；
+                 * ②他不知道"是要暂停下来开还是直接开"；③一条 60 多字的提示刷 74 遍，量与"简洁"背道而驰。
+                 */
+                int throttledTasks = 0;
+                bool throttleExplained = false;
+
                 foreach (ScheduledExtractionItem item in plan.Ordered)
                 {
                     ArchiveTask task = item.Task;
@@ -6350,8 +6403,9 @@ namespace ArchiveFixer.ViewModels
                         break;
                     }
 
-                    // 每个任务各自的"已经在队列里等过"标记（只写一次等待日志，不刷屏）。
+                    // 每个任务各自的"已经在队列里等过"标记与开始等的时间（只有等得久才补一句，见下）。
                     bool queuedLogged = false;
+                    DateTime queuedSince = DateTime.Now;
 
                     // 等待有空闲并发位；期间若用户点了“停止后续”，不再为后面的任务等位。
                     while (runningTasks.Count >= maxParallel)
@@ -6362,19 +6416,48 @@ namespace ArchiveFixer.ViewModels
                          * 没有这一行时，被节流挡住的任务在界面上**完全看不出在等** ——
                          * 用户看到的是"点了开始，一半任务纹丝不动"，然后怀疑程序卡死
                          * （这正是本机历史上被投诉过的那类现象）。
-                         * 一次等待只写一行，不刷屏；这一行同时是"该开全速了"的提示。
                          */
+                        throttledTasks++;
+
                         if (!queuedLogged)
                         {
                             queuedLogged = true;
+                            queuedSince = DateTime.Now;
+                        }
 
+                        if (!throttleExplained)
+                        {
+                            throttleExplained = true;
+
+                            /*
+                             * 一批只说一次（用户 2026-09-26 第 45 条：这条刷了 74 遍）。
+                             * 三个必须写对的点：
+                             * ①**位置**：「全速（本批不节流）」在**②页 →「并发与空间」**，不在主界面；
+                             * ②**怎么用**：勾上**立刻**就放开本批（下面那个 if 会当场生效），不用停也不用重开；
+                             * ③另一条出路是「停止后续」。
+                             */
                             AppendLog(
                                 "INFO",
-                                $"并发已满（{runningTasks.Count}/{maxParallel} 个任务正在跑），" +
-                                $"「{task.FileName}」在队列里等一个空位。" +
+                                $"并发已满（{runningTasks.Count}/{maxParallel} 个任务正在跑），后面的任务在队列里等空位。" +
                                 (fullSpeed
                                     ? "（已开「全速」，本批不再节流。）"
-                                    : "想让它立刻开跑：勾上主界面的「全速」；或点「停止后续」不再启动后面的任务。"));
+                                    : "想立刻放开：②页 →「并发与空间」勾上「全速（本批不节流）」—— 勾上**当场生效**，" +
+                                      "不用停止、也不用重开；或点①页「停止后续」不再启动后面的任务。" +
+                                      "（这条只在第一次排队时说一遍，本批还有几个在等，跑完会在结尾汇总。）"));
+                        }
+
+                        /*
+                         * 中途勾上「全速」→ **立刻放开**（用户问的正是"是要暂停下来开还是直接开"：直接开）。
+                         * 这里重读一次那个开关（它是 MainViewModel 上的本次运行开关，不是落盘设置）。
+                         */
+                        if (!fullSpeed && _vm.RunAtFullSpeed)
+                        {
+                            fullSpeed = true;
+                            maxParallel = Math.Max(1, plan.Ordered.Count);
+
+                            AppendLog("INFO", $"检测到「全速」已勾上，本批立刻放开并发（同时最多 {maxParallel} 个）。");
+
+                            break;
                         }
 
                         Task finished = await Task.WhenAny(runningTasks);
@@ -6401,8 +6484,17 @@ namespace ArchiveFixer.ViewModels
 
                     if (queuedLogged)
                     {
-                        // 队列里等过了：说一句"轮到它了"，否则用户只看到"等待"没有下文。
-                        AppendLog("INFO", $"「{task.FileName}」等到空位，开始解压。");
+                        /*
+                         * 等过空位的任务：只在**等得久**的时候补一句（用户 2026-09-26 第 45 条：
+                         * 74 条"并发已满 / 等到空位"同义反复就是噪声）。30 秒以内的等待不值得单独占一行，
+                         * 批末那条汇总会把"有几个等过"说清。
+                         */
+                        TimeSpan waited = DateTime.Now - queuedSince;
+
+                        if (waited.TotalSeconds >= ThrottleNoticeThresholdSeconds)
+                        {
+                            AppendLog("INFO", $"「{task.FileName}」等了 {waited.TotalSeconds:F0} 秒才排上空位（本批同时最多跑 {maxParallel} 个）。");
+                        }
                     }
 
                     /*
@@ -6440,6 +6532,20 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 AppendLog("INFO", "批量解压完成");
+
+                /*
+                 * 并发排队的批末汇总（用户 2026-09-26 第 45 条）：过程里只在第一次排队时说一句，
+                 * 这里把"到底有几个等过"一次说清 —— 比 74 行同义反复有用得多。
+                 */
+                if (throttledTasks > 0)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"并发排队汇总：本批 {throttledTasks} 个任务等过空位（同时最多跑 {maxParallel} 个）。"
+                        + (fullSpeed
+                            ? "本批已开「全速」。"
+                            : "下次想全程不排队：②页 →「并发与空间」勾上「全速（本批不节流）」（勾上当场生效）。"));
+                }
 
                 AppendBatchSummary(selectedTasks);
 
@@ -7241,7 +7347,7 @@ namespace ArchiveFixer.ViewModels
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.RestPurgedCompactFormat,
                         deleteMode == DeleteMode.Permanent ? StatusText.RestActionDelete : StatusText.RestActionRecycleBin,
-                        DescribeShortDestination(outcome.Directory, outcome.Directory),
+                        DescribeShortTail(outcome.Directory, 2),
                         outcome.EntryCount,
                         WorkspaceCleanupService.FormatSize(outcome.FreedBytes)));
 
@@ -8946,7 +9052,15 @@ namespace ArchiveFixer.ViewModels
                     if (testResult.DetectedErrorType == "WrongPassword")
                     {
                         task.PasswordStatus = StatusText.WrongPassword;
-                        AppendLog("WARN", $"{task.FileName}：密码错误，继续尝试下一个候选密码。");
+
+                        /*
+                         * ⛔ 这里**不是** WARN（用户 2026-09-26 第 45 条实测）：候选错一个是**预期之内**的事，
+                         * 而 WARN 会（按第 44 条的规矩）把该任务攒着的细节**立刻全吐出来**并让后续 INFO 不再攒 ——
+                         * 真机上就是这一行让"成功就丢"整条失效：38 个包每个都因此把入仓 / 空间门 / 定稿 /
+                         * 本次内容物 / 结果校验几十行样板全写了出来（也是他看到的 246 KB 的主要来源）。
+                         * 用 INFO 之后：这个候选错了就错了，任务最后**成功** → 细节照样丢；**失败** → 细节照样全留。
+                         */
+                        AppendLog("INFO", $"{task.FileName}：这个密码候选不对，继续试下一个。");
                         continue;
                     }
 
@@ -9158,6 +9272,35 @@ namespace ArchiveFixer.ViewModels
                             $"{task.FileName}：整包已加密 —— 跳过「空密码」这一档（引擎造不出用空密码加密的包，"
                             + "试它必然白跑一整包）。"
                             + (candidates.Count == 0 ? "这次没有任何可用密码。" : $"还有 {Math.Min(candidates.Count, maxPasswordAttempts)} 个候选可试。"));
+                    }
+                }
+                else if (preflightList == null
+                         && string.Equals(
+                             lastListErrorType,
+                             SevenZipOutputParser.EncryptedHeadersErrorType,
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    /*
+                     * 文件名被加密（RAR `-hp` / 7z `-mhe=on`）时**清单根本读不出来**（preflightList == null），
+                     * 上面那条判据看不到任何条目 —— 可"这一包要密码"是引擎**已经说过**的事实。
+                     *
+                     * 用户 2026-09-26 第 45 条真机（38 个同源包，内层是加密 RAR）里那行
+                     * `开始解压，密码候选 1/10，尝试空密码` 就是从这条路来的：
+                     * 空密码必然失败，白跑一轮，还顺手把"成功就丢"的日志瘦身整条打掉（那一行以前记 WARN）。
+                     *
+                     * ⚠ **只在还有别的候选可试时**才跳过（与上面那一支同一条边界）：一个候选都不剩会让
+                     * 下面的收场分支落到"未知解压失败"，那比多跑一次更难懂 ——
+                     * `PipelineWiringTests.列目录失败且判为加密头_任务状态是文件名已加密` 钉着这一点。
+                     */
+                    int removedEmpty = candidates.Count > 1
+                        ? candidates.RemoveAll(c => string.IsNullOrEmpty(c.Value))
+                        : 0;
+
+                    if (removedEmpty > 0)
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"{task.FileName}：这一包连文件名都加密（引擎说 {lastListErrorType}）—— 同样跳过「空密码」这一档。");
                     }
                 }
 
@@ -9383,7 +9526,8 @@ namespace ArchiveFixer.ViewModels
                         hasWrongPassword = true;
                         task.PasswordStatus = StatusText.WrongPassword;
 
-                        AppendLog("WARN", $"{task.FileName}：密码错误，继续尝试下一个候选密码。");
+                        // 同上：候选不对是预期之内，⛔ 不许记 WARN（那会让"成功就丢"整条失效）。
+                        AppendLog("INFO", $"{task.FileName}：这个密码候选不对，继续试下一个。");
                         continue;
                     }
 

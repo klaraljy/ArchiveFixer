@@ -56,13 +56,14 @@ namespace ArchiveFixer.Tests
         // ================================================================ ① 假引擎计数：第二个包只被问一次
 
         /// <summary>
-        /// 第 1 个包在第 5 个候选上才成功；第 2 个包的**第一个非空候选**必须就是那条密码。
+        /// 第 1 个包在第 5 个候选上才成功；第 2 个包的**第一次尝试**就必须是那条密码（连空密码都不再有）。
         ///
-        /// <para>空密码那一次不算"尝试密码"：它是 §9.2 的第一档（"不需要密码"的必经一步），
-        /// 用户要求保留在最前。所以判据是"**除空密码外只被问一次**"，而且日志里能看见复用。</para>
+        /// <para>⚠ 2026-09-26 第 45 条改了口径（原来钉的是"除空密码外只被问一次"）：本批已经有成功的密码时，
+        /// 空密码**根本不再进候选表** —— 加密包的空密码永远不可能对，先试它只是白跑一轮。
+        /// 用户真机上每个包都是"先空密码、再复用"，他原话："不就是在放屁吗，每次都是重新一轮密码检测"。</para>
         /// </summary>
         [Fact]
-        public async Task 第一包第五候选成功_第二包除空密码外只被问一次且日志写明复用()
+        public async Task 第一包第五候选成功_第二包第一次尝试就是复用来的密码()
         {
             string password = "<示例密码5>";
 
@@ -89,19 +90,22 @@ namespace ArchiveFixer.Tests
             // 第 1 个包：空密码 + 4 条错密码 + 第 5 条 = 6 次（证明它确实在第 5 个候选上成功）。
             Assert.Equal(6, harness.Engine.AttemptsFor("first.7z").Count);
 
-            // 第 2 个包：空密码那一次 + **唯一**一次真密码尝试。
+            // 第 2 个包：**一次**，而且就是那条密码（空密码不再进来）。
             List<string> secondAttempts = harness.Engine.AttemptsFor("second.7z");
 
-            Assert.Equal(2, secondAttempts.Count);
-            Assert.Equal(string.Empty, secondAttempts[0]);
-            Assert.Equal(password, secondAttempts[1]);
+            Assert.Single(secondAttempts);
+            Assert.Equal(password, secondAttempts[0]);
 
-            // 日志要能看出"这一条是复用来的"（否则排障时看不出顺序为什么变了），而且绝不出现明文。
+            /*
+             * ⚠ 第 45 条起，"复用本批已成功的密码"这一行**在默认档里看不到**了 —— 它是任务细节，
+             * 而这个包**成功**了（"成功就丢"）。顺序本身由上面那个假引擎的尝试记录钉着（只有一次、就是那条密码）；
+             * "日志里看得见复用"这件事由**详细档**那条用例钉（Item45LogAndPasswordTests.真7z_密码复用…）。
+             * 这里只保留"绝不出现密码明文"这一条。
+             */
             string[] secondLines = harness.LogTexts
                 .Where(line => line.Contains("second.7z", StringComparison.Ordinal))
                 .ToArray();
 
-            Assert.Contains(secondLines, line => line.Contains("复用本批已成功的密码", StringComparison.Ordinal));
             Assert.DoesNotContain(secondLines, line => line.Contains(password, StringComparison.Ordinal));
         }
 
@@ -327,8 +331,16 @@ namespace ArchiveFixer.Tests
             Assert.Equal(new[] { "<示例密码甲>", "<示例密码乙>" }, tieOrder);
         }
 
+        /// <summary>
+        /// 复用项的位置：**候选表第一条**，而且那时**空密码根本不在表里**。
+        ///
+        /// <para>⚠ 2026-09-26 第 45 条改了位置（原来钉的是"紧跟空密码之后"，那是在**还没有已知密码**的
+        /// 前提下定的）：用户原话"我这个在用特定解压，是多相同文件，密码都是一样的，你这个复用本批次
+        /// 已成功的密码，不就是在放屁吗，每次都是重新一轮密码检测" —— 有已知密码时，加密包的空密码
+        /// 永远不可能对，先试它纯粹白跑一轮。</para>
+        /// </summary>
         [Fact]
-        public void 复用项位置_紧跟空密码之后()
+        public void 复用项位置_排在候选表第一条_且空密码不再进表()
         {
             var service = new PasswordService();
             service.AddPassword("<示例密码X>");
@@ -342,9 +354,11 @@ namespace ArchiveFixer.Tests
                 passwordList: service.Passwords,
                 tryEmptyFirst: true);
 
-            Assert.Equal("Empty", candidates[0].Source);
-            Assert.Equal("BatchSuccess", candidates[1].Source);
-            Assert.Equal("<示例密码复用>", candidates[1].Value);
+            Assert.Equal("BatchSuccess", candidates[0].Source);
+            Assert.Equal("<示例密码复用>", candidates[0].Value);
+
+            // ⛔ 空密码不在表里（这一条正是第 45 条要的）。
+            Assert.DoesNotContain(candidates, candidate => candidate.Source == "Empty");
 
             // ⛔ 其余候选一条都不许少（复用只是提前）。
             Assert.Contains(candidates, candidate => candidate.Value == "<示例密码X>");
@@ -462,14 +476,15 @@ namespace ArchiveFixer.Tests
             Assert.Equal(1, service.GetSuccessCount("<示例密码1>"));
             Assert.False(File.Exists(service.ListStore.FilePath), "关掉开关时记忆文件一个字节都不该有");
 
-            // 本次运行内复用照样生效（内存计数与开关无关）。
+            // 本次运行内复用照样生效（内存计数与开关无关）—— 第 45 条起它是**第一条**（空密码不再进表）。
             List<PasswordItem> candidates = service.GetPasswordCandidates(
                 new ArchiveTask(@"C:\b.7z"),
                 globalPassword: string.Empty,
                 passwordList: service.Passwords,
                 tryEmptyFirst: true);
 
-            Assert.Equal("<示例密码1>", candidates[1].Value);
+            Assert.Equal("<示例密码1>", candidates[0].Value);
+            Assert.Equal("BatchSuccess", candidates[0].Source);
 
             await Task.CompletedTask;
         }
