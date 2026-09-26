@@ -1389,16 +1389,19 @@ namespace ArchiveFixer.Models
         /// （不变量 1 的唯一例外是用户显式发起），必须一眼就能看清它到底做什么、不做什么。</para>
         /// </summary>
         public const string VolumeRepairButtonToolTip =
-            "只对「名字被改坏的分卷第一卷」有效：按程序给出的标准名把这一卷改名" +
-            "（只改文件名，内容一个字节都不动），然后立刻重新识别并重试解压。";
+            "只对「名字被改坏的分卷第一卷」有效（例如 set.7z(删掉.001）：按程序给出的标准名把这一卷改名" +
+            "（只改文件名，内容一个字节都不动），然后立刻重新识别并重试解压。\n" +
+            "灰着 = 勾选的任务里没有这种卷（判据是文件系统事实：名字带卷号、是第 1 卷、同目录有后续卷、" +
+            "推得出标准名、目标名没被占）。扫完就判，不用先跑一次解压。";
 
         /// <summary>一个可改名的任务都没有时点它的提示。</summary>
         public const string VolumeRepairNoneText =
             "勾选的任务里没有「名字被改坏的分卷第一卷」—— 没有可改名的。\n" +
-            "（这一档只在包报「分卷缺失」、且原因是第一卷名字被改坏时出现；日志与失败清单里写着给它的标准名。）";
+            "（判据：名字带卷号且是第 1 卷、同目录里能找到后续卷、能从后续卷推出标准名、" +
+            "现在的名字确实不是标准名、目标名没被占。想先看一眼诊断：日志里每次扫描都会写这一档。）";
 
         /// <summary>确认框标题。</summary>
-        public const string VolumeRepairConfirmTitle = "按建议改名并重试";
+        public const string VolumeRepairConfirmTitle = "修复分卷名并重试";
 
         /// <summary>确认框正文（<c>{0}</c> = 逐条 `旧名 → 新名`）。</summary>
         public const string VolumeRepairConfirmBodyFormat =

@@ -708,7 +708,14 @@ namespace ArchiveFixer.Tests
             int renameOptionSites = CountOccurrences(source, "new RenameOptions");
             int previewBeforeRename = CountOccurrences(source, "PreviewBeforeRename = true");
 
-            Assert.True(renameOptionSites >= 5, $"改名入口比预期少（找到 {renameOptionSites} 处），检查是不是漏了");
+            /*
+             * ⚠ 这个下限**跟着界面收敛一起降**（2026-09-26 审计：手动那一栏从六颗按钮并成四颗 ——
+             * 「添加 / 替换最后一个 / 删除最后一个」合成一颗「改后缀…」，「删除多个后缀」整块退役，
+             * 于是构造 RenameOptions 的地方从 5 处降到 2 处：智能修正 + 改后缀）。
+             * 它只是"扫描还找得到代码"的哨兵，真正的判据是下面那句相等 ——
+             * ⛔ 新增任何改名入口都必须带 PreviewBeforeRename = true。
+             */
+            Assert.True(renameOptionSites >= 2, $"改名入口比预期少（找到 {renameOptionSites} 处），检查是不是漏了");
             Assert.Equal(renameOptionSites, previewBeforeRename);
 
             // 手动档：预览 → 拿返回值 → 不是 true 就什么都不做。

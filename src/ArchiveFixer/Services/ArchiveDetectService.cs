@@ -252,6 +252,40 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 扫描期算一次"这一卷的名字要不要修"（见 <c>ApplyDetectResultAsync</c> 里那段注释）。
+        ///
+        /// <para>只有"第 1 卷"才可能修，所以先用卷号挡一道（省掉绝大多数任务的目录枚举）；
+        /// 任何 IO 意外都落成空串（= 按钮不亮），⛔ 绝不抛。</para>
+        /// </summary>
+        private static string ResolveVolumeRenameSuggestion(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                string fileName = Path.GetFileName(path);
+
+                if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != 1)
+                {
+                    return string.Empty;
+                }
+
+                VolumeNameRepairPlan plan = VolumeNameRepair.Plan(
+                    path,
+                    VolumeNameRepair.EnumerateFileNamesInDirectory(path));
+
+                return plan.CanRepair ? plan.SuggestedFileName : string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
         /// 识别并应用到任务。
         /// </summary>
         public async Task<DetectResult> ApplyDetectResultAsync(
@@ -297,11 +331,18 @@ namespace ArchiveFixer.Services
             task.EmbeddedDirectReadReason = result.EmbeddedDirectReadReason ?? string.Empty;
 
             /*
-             * 「按建议改名并重试」那条建议（用户 2026-09-25 第 41 条）必须跟着识别结果一起作废：
-             * 它是**上一轮解压**的判决产物，重扫之后（名字可能已经改好了）还算数的话，
-             * ①页那个按钮会在问题已经解决之后继续亮着，用户再点一次就是白改一次名字。
+             * 「修复分卷名并重试」那颗建议（用户 2026-09-25 第 41 条；**2026-09-26 审计改口径**）。
+             *
+             * 以前这里是无条件清空（那建议是"上一轮解压"的产物，重扫之后可能已经改好了），
+             * 后果是那颗按钮**要先跑一次失败的解压才可能亮** —— 用户从没见过它亮过。
+             *
+             * 现在改成**扫描时就从文件系统事实算一遍**（判据是 VolumeNameRepair.Plan 那六条：
+             * 源文件在 / 名字带卷号且是第 1 卷 / 同目录有后续卷 / 推得出标准名 / 现名不是标准名 /
+             * 目标名没被占）——"名字被改坏的第一卷"这六条当场就成立，于是**扫完按钮就是亮的**；
+             * 名字本来就标准、或者是后续卷、或者目标名被占时，算出来是空，按钮照旧熄灭
+             * （问题解决了它自己灭，这条语义一个字没变）。
              */
-            task.VolumeRenameSuggestion = string.Empty;
+            task.VolumeRenameSuggestion = ResolveVolumeRenameSuggestion(task.CurrentPath);
 
             if (result.IsArchive)
             {

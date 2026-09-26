@@ -135,25 +135,6 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
-        /// 创建删除多个后缀选项。
-        /// </summary>
-        public static RenameOptions CreateDeleteMultipleExtensions(int count, AppSettings settings)
-        {
-            settings ??= AppSettings.CreateDefault();
-            settings.Normalize();
-
-            return new RenameOptions
-            {
-                OperationType = "DeleteMultipleExtensions",
-                TargetExtension = settings.DefaultExtension,
-                DeleteExtensionCount = count < 1 ? 1 : count,
-                ConflictAction = settings.ConflictAction,
-                PreviewBeforeRename = settings.PreviewBeforeRename,
-                UnknownFormatAction = settings.UnknownFormatAction
-            };
-        }
-
-        /// <summary>
         /// 修正非法配置。
         /// </summary>
         public void Normalize()

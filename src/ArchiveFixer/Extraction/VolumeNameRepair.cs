@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Models;
 
@@ -76,6 +77,34 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public static class VolumeNameRepair
     {
+        /// <summary>
+        /// 同目录里的文件名（只要名字、不要路径；读不了就返回空 —— 计划会因此判"不能改"，**绝不抛**）。
+        ///
+        /// <para>只有这一份实现：识别阶段（算"要不要点亮修复按钮"）、改名预览（算落点）、
+        /// ①页那颗按钮（算真正会改成的名字）三处共用。⛔ 各写一份必然漂移 ——
+        /// 那正是"按它说的改完还是解不开"的来源。</para>
+        /// </summary>
+        public static IReadOnlyList<string?> EnumerateFileNamesInDirectory(string? filePath)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(filePath ?? string.Empty) ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return Array.Empty<string?>();
+                }
+
+                return Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                    .Select(Path.GetFileName)
+                    .ToList();
+            }
+            catch
+            {
+                return Array.Empty<string?>();
+            }
+        }
+
         /// <summary>
         /// 算出改名计划。任何 IO 意外都落成"不能改 + 原因"，绝不抛。
         /// </summary>

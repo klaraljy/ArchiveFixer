@@ -243,8 +243,15 @@ namespace ArchiveFixer.Models
         /// </summary>
         public string NewFileNameDisplay => FileNameMiddleEllipsis.Elide(NewFileName, DisplayUnits);
 
-        /// <summary>两列名字的显示宽度上限（半角字符数 ≈ 260px 宽的一列）。</summary>
-        private const int DisplayUnits = 36;
+        /// <summary>
+        /// 两列名字的显示宽度上限（半角字符数）。
+        ///
+        /// <para>⚠ 这个数是**真机校准**出来的：36 在"全中文的长名字"上仍然会被列宽尾部再裁一刀
+        /// （26 个汉字 ≈ 26 个单位，但中文字形比"1 个半角"宽，实测 260px 那一列放不下 36 个单位
+        /// 的中英混排）。30 是实测放得下的值 —— 中间省略必须**保证后缀完整可见**，
+        /// 否则这一列等于没修（2026-09-26 真机跑 C35 时逮到的）。</para>
+        /// </summary>
+        private const int DisplayUnits = 30;
 
         public RenamePreviewItem()
         {

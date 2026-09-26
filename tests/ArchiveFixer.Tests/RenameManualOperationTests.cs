@@ -52,16 +52,17 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 缺陷现场：那道"别把分卷链改坏"的闸门以前只长在「智能修正」里（<c>FileNameHelper</c> 的判据），
-        /// 而「添加 / 替换 / 删除最后一个 / 删除多个后缀」照改不误 ——
+        /// 而「添加 / 替换 / 删除最后一个后缀」照改不误 ——
         /// 勾着 <c>set.7z.001</c> 点一下「替换后缀」，整组就变成 7z 再也找不到的散卷。
+        ///
+        /// <para>「删除多个后缀」2026-09-26 整块退役（界面那颗按钮 + 命令一起删），所以这里只剩四种。</para>
         /// </summary>
         [Theory]
         [InlineData("FixByDetectedFormat")]
         [InlineData("AddExtension")]
         [InlineData("ReplaceLastExtension")]
         [InlineData("DeleteLastExtension")]
-        [InlineData("DeleteMultipleExtensions")]
-        public async Task 分卷文件_五种改名操作都不许动它的名字(string operationType)
+        public async Task 分卷文件_改名操作都不许动它的名字(string operationType)
         {
             string first = Path.Combine(_root, "set.7z.001");
             string second = Path.Combine(_root, "set.7z.002");
@@ -90,6 +91,114 @@ namespace ArchiveFixer.Tests
 
             Assert.True(File.Exists(first), "第一卷必须还在原名字上");
             Assert.True(File.Exists(second), "后续卷一个字节都不许动");
+        }
+
+        // ================================================================
+        // ①b 「名字被改坏的第一卷」：扫描完就该给建议 + 智能修正也能修它
+        //     （2026-09-26 审计的入口收敛：那颗按钮以前要先跑一次失败的解压才亮）
+        // ================================================================
+
+        [Fact]
+        public async Task 只有第一卷的名字坏了_同目录里还有别的分卷组_照样给得出建议()
+        {
+            // 真机形状（C27 那一档）：**只有第 1 卷**的名字被塞了字，后续卷名字正常。
+            // 同一个目录里再躺一组名字完全正常的分卷 + 几个普通包 —— 结论必须与干净目录逐字相同。
+            string broken = Path.Combine(_root, "set.7z(删掉.001");
+
+            File.WriteAllBytes(broken, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1, 2, 3 });
+            File.WriteAllBytes(Path.Combine(_root, "set.7z.002"), new byte[] { 4, 5, 6 });
+            File.WriteAllBytes(Path.Combine(_root, "set.7z.003"), new byte[] { 7, 8, 9 });
+            File.WriteAllBytes(Path.Combine(_root, "另一组.7z.001"), new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 9 });
+            File.WriteAllBytes(Path.Combine(_root, "另一组.7z.002"), new byte[] { 1 });
+            File.WriteAllText(Path.Combine(_root, "普通.zip"), "x");
+
+            var task = new ArchiveTask(broken, 1) { IsSelected = true };
+
+            await new ArchiveDetectService().ApplyDetectResultAsync(task);
+
+            Assert.Equal("set.7z.001", task.VolumeRenameSuggestion);
+        }
+
+        [Fact]
+        public async Task 每一卷的名字都被塞了字_不给建议_因为标准名推不出来()
+        {
+            // 2026-09-26 真机上确认过的一档：打包者把**每一卷**都改了名（<c>坏名.7z(删掉.001/.002</c>），
+            // 此时"这一组本该叫什么"是**推不出来**的（谁知道那两个字塞在哪一段）——
+            // 所以按钮保持灰色、建议为空，这**不是**缺陷；而 7-Zip 自己按同一套名字找同组卷，
+            // 不解压失败就不需要改名。
+            string broken = Path.Combine(_root, "全坏.7z(删掉.001");
+
+            File.WriteAllBytes(broken, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1, 2, 3 });
+            File.WriteAllBytes(Path.Combine(_root, "全坏.7z(删掉.002"), new byte[] { 4, 5, 6 });
+            File.WriteAllBytes(Path.Combine(_root, "全坏.7z(删掉.003"), new byte[] { 7, 8, 9 });
+            File.WriteAllBytes(Path.Combine(_root, "正常组.7z.001"), new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 9 });
+            File.WriteAllBytes(Path.Combine(_root, "正常组.7z.002"), new byte[] { 1 });
+
+            var task = new ArchiveTask(broken, 1) { IsSelected = true };
+
+            await new ArchiveDetectService().ApplyDetectResultAsync(task);
+
+            Assert.Equal(string.Empty, task.VolumeRenameSuggestion);
+        }
+
+
+        [Fact]
+        public async Task 扫描期就给出改名建议_不用先跑一次失败的解压()
+        {
+            string first = Path.Combine(_root, "卷名被改坏.7z(删掉.001");
+            string second = Path.Combine(_root, "卷名被改坏.7z.002");
+
+            File.WriteAllBytes(first, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1, 2, 3 });
+            File.WriteAllBytes(second, new byte[] { 4, 5, 6 });
+
+            var task = new ArchiveTask(first, 1) { IsSelected = true };
+            var detect = new ArchiveDetectService();
+
+            await detect.ApplyDetectResultAsync(task);
+
+            Assert.Equal("卷名被改坏.7z.001", task.VolumeRenameSuggestion);
+        }
+
+        [Fact]
+        public async Task 名字本来就标准时_扫描期不给建议()
+        {
+            string first = Path.Combine(_root, "标准名.7z.001");
+            string second = Path.Combine(_root, "标准名.7z.002");
+
+            File.WriteAllBytes(first, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1, 2, 3 });
+            File.WriteAllBytes(second, new byte[] { 4, 5, 6 });
+
+            var task = new ArchiveTask(first, 1) { IsSelected = true };
+
+            await new ArchiveDetectService().ApplyDetectResultAsync(task);
+
+            // 标准名的第一卷：没有可修的 → 建议必须是空（否则那颗按钮会一直亮着、点了白改一次名字）。
+            Assert.Equal(string.Empty, task.VolumeRenameSuggestion);
+        }
+
+        [Fact]
+        public void 智能修正也能把改坏的卷名修回标准名()
+        {
+            string first = Path.Combine(_root, "被改坏.7z(删掉.001");
+            string second = Path.Combine(_root, "被改坏.7z.002");
+
+            File.WriteAllBytes(first, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1, 2, 3 });
+            File.WriteAllBytes(second, new byte[] { 4, 5, 6 });
+
+            ArchiveTask task = CreateTask(first, "7Z", ".001");
+            var service = new RenameService();
+            var options = new RenameOptions
+            {
+                OperationType = "FixByDetectedFormat",
+                TargetExtension = ".7z",
+                ConflictAction = "AutoRename"
+            };
+
+            List<RenamePreviewItem> preview = service.BuildPreview(new[] { task }, options);
+
+            Assert.Single(preview);
+            Assert.Equal("被改坏.7z.001", preview[0].NewFileName);
+            Assert.NotEqual(StatusText.RenameWillSkip, preview[0].Status);
         }
 
         // ================================================================

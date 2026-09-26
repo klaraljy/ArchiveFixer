@@ -1,3 +1,4 @@
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using System;
@@ -82,17 +83,14 @@ namespace ArchiveFixer.Services
                     }
 
                     /*
-                     * 分卷文件**五种操作一律不改名**（2026-09-26 审计）。
-                     *
-                     * 判据与「智能修正」用的是同一句（FileNameHelper.IsVolumePartFileName），
-                     * 以前它只长在那一条路上：智能修正会原样返回名字（于是显示"无需改名"），
-                     * 而「添加 / 替换 / 删除最后一个 / 删除多个后缀」照改不误 ——
-                     * 勾着 set.7z.001 点一下「替换后缀」，整组就变成 7z 再也找不到的散卷。
-                     *
-                     * 落点写回原名（而不是 BuildNewPath 算出来的那个）：预览表里显示的
-                     * "新文件名"必须等于"磁盘上真正会发生的事"，这一行不会改，就该显示原名。
+                     * 分卷文件**不许改名** —— 只有一种例外：名字被改坏的第 1 卷能被修回标准名
+                     * （那一条在上面 BuildNewPath 的 FixByDetectedFormat 分支里算，判据是
+                     * VolumeNameRepair.Plan）。这里判"算出来的落点与原名相同"= 没有可修的东西，
+                     * 于是如实标「将跳过」并说清原因（2026-09-26 审计：以前这条闸门只长在智能修正里，
+                     * 「替换后缀」能把 set.7z.001 改成 set.7z.7z，整组就废了）。
                      */
-                    if (FileNameHelper.IsVolumePartFileName(item.OriginalFileName))
+                    if (FileNameHelper.IsVolumePartFileName(item.OriginalFileName) &&
+                        SafePathHelper.PathEquals(oldPath, newPath))
                     {
                         item.NewPath = oldPath;
                         item.NewFileName = item.OriginalFileName;
@@ -322,6 +320,19 @@ namespace ArchiveFixer.Services
 
             string newFileName;
 
+            /*
+             * 分卷文件只允许**一种**改名：「名字被改坏的第一卷」被修回标准名
+             * （那一条只走下面的 FixByDetectedFormat 分支，判据是 VolumeNameRepair.Plan）。
+             * 「添加 / 替换最后一个 / 删除最后一个 / 删除多个后缀」这四种对分卷一律**原样返回** ——
+             * 7z / WinRAR 只认 .001 这一套命名，改一下整组就再也解不开
+             * （以前这道闸门只长在 FixByDetectedFormat 里，2026-09-26 审计补全）。
+             */
+            if (FileNameHelper.IsVolumePartFileName(fileName) &&
+                !string.Equals(options.OperationType, "FixByDetectedFormat", StringComparison.OrdinalIgnoreCase))
+            {
+                return oldPath;
+            }
+
             switch (options.OperationType)
             {
                 case "AddExtension":
@@ -334,10 +345,6 @@ namespace ArchiveFixer.Services
 
                 case "DeleteLastExtension":
                     newFileName = BuildDeleteExtensionFileName(fileName, 1);
-                    break;
-
-                case "DeleteMultipleExtensions":
-                    newFileName = BuildDeleteExtensionFileName(fileName, options.DeleteExtensionCount);
                     break;
 
                 case "FixByDetectedFormat":
@@ -1020,13 +1027,24 @@ namespace ArchiveFixer.Services
                 return string.Empty;
             }
 
-            // 分卷文件一律不改名。
-            // 例：volume.7z.001 被识别为 7Z 后，后面的"多重后缀修正"会把它改成 volume.7z，
-            // 而 7z 只认 .001 这一套命名 —— 改名等于直接切断分卷链，整个包再也解不开。
-            // 这里只做"不许改坏"的保守拦截；完整的分卷组识别见 AGENTS.md §9.3（M2）。
+            /*
+             * 分卷文件：先看"名字被改坏的第一卷"能不能靠这一颗按钮修好（2026-09-26 审计：入口收敛）。
+             *
+             * 判据仍然是 VolumeNameRepair.Plan 那六条（与失败清单里写的建议、与①页「修复分卷名并重试」
+             * 真正会改成的名字**同一份计算**）—— 能修就给标准名；修不了（是后续卷 / 没有同组卷 /
+             * 目标名被占 / 名字本来就标准…）才落到下面那句"分卷文件不改名"。
+             *
+             * 以前这条路是断的：智能修正对分卷一律原样返回，于是"名字被改坏的第一卷"只能靠
+             * 另一颗按钮（而且那颗按钮要先跑一次失败的解压才亮）—— 用户看到的就是"两颗按钮意义一样，
+             * 可第一颗从来没亮过"。
+             */
             if (FileNameHelper.IsVolumePartFileName(fileName))
             {
-                return fileName;
+                VolumeNameRepairPlan volumeRepair = VolumeNameRepair.Plan(
+                    oldPath,
+                    VolumeNameRepair.EnumerateFileNamesInDirectory(oldPath));
+
+                return volumeRepair.CanRepair ? volumeRepair.SuggestedFileName : fileName;
             }
 
             /*
@@ -1235,7 +1253,6 @@ namespace ArchiveFixer.Services
                 "AddExtension" => "添加后缀",
                 "ReplaceLastExtension" => "替换最后后缀",
                 "DeleteLastExtension" => "删除最后后缀",
-                "DeleteMultipleExtensions" => $"删除 {options.DeleteExtensionCount} 个后缀",
                 "FixByDetectedFormat" => "按真实格式修正",
                 _ => options.OperationType
             };

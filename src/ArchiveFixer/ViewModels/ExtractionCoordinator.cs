@@ -8716,7 +8716,7 @@ namespace ArchiveFixer.ViewModels
 
                     string advice = repair.CanRepair
                         ? $"把这一卷改回标准命名（{repair.SuggestedFileName}）就能解开 —— "
-                          + "勾上它点①页「按建议改名并重试」，程序只改名字（内容一个字节都不动）后立刻重试；"
+                          + "勾上它点①页「修复分卷名并重试」，程序只改名字（内容一个字节都不动）后立刻重试；"
                           + "也可以自己改完右键「重新扫描此文件」。"
                         : $"这一步没给出改名建议：{repair.Reason}。";
 

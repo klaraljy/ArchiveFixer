@@ -210,39 +210,31 @@
                   BorderThickness="1">
             <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <!--
-                    「按建议改名并重试」（用户 2026-09-25 第 41 条）：只对"名字被改坏的分卷第一卷"有效。
-                    它是这个程序里**唯一**会动源文件名的入口之一，而且必须用户点了才动 ——
-                    所以文案里把"只改名字、内容不动"写进 ToolTip，确认框里再写一遍。
+                    「修复分卷名并重试」（用户 2026-09-25 第 41 条；2026-09-26 审计改口径）：
+                    只对"名字被改坏的分卷第一卷"有效，判据全在文件系统事实里（VolumeNameRepair.Plan 六条），
+                    所以**扫描完就亮**（以前要等一次失败的解压才亮，用户从没见过它亮）。
+                    它是这个程序里唯一会动源文件名的入口，而且必须用户点了才动 ——
+                    文案里把"只改名字、内容不动"写进 ToolTip，确认框里再写一遍。
+                    ToolTipService.ShowOnDisabled：灰着的时候也要能读到"它到底干什么、为什么现在不能用"。
                 -->
-                <Button Content="按建议改名并重试"
+                <Button Content="修复分卷名并重试"
                         MinWidth="136"
                         FontWeight="SemiBold"
                         ToolTip="{x:Static models:StatusText.VolumeRepairButtonToolTip}"
+                        ToolTipService.ShowOnDisabled="True"
                         Command="{Binding RenameBySuggestionAndRetryCommand}" />
 
                 <Button Content="智能修正选中后缀"
                         MinWidth="136"
                         Margin="8,0,0,0"
-                        ToolTip="对勾选的任务修正伪装后缀（会先弹出改名预览让你确认）"
+                        ToolTip="对勾选的任务按识别结果修正后缀（会先弹出改名预览让你确认）；名字被改坏的分卷第一卷也能在这一步修回标准名。"
                         Command="{Binding SmartRenameCommand}" />
 
-                <Button Content="添加后缀"
+                <Button Content="改后缀…"
+                        MinWidth="96"
                         Margin="8,0,0,0"
-                        Command="{Binding AddExtensionCommand}" />
-
-                <Button Content="替换后缀"
-                        Margin="8,0,0,0"
-                        Command="{Binding ReplaceExtensionCommand}" />
-
-                <Button Content="删除最后一个后缀"
-                        MinWidth="124"
-                        Margin="8,0,0,0"
-                        Command="{Binding DeleteLastExtensionCommand}" />
-
-                <Button Content="删除多个后缀"
-                        MinWidth="114"
-                        Margin="8,0,0,0"
-                        Command="{Binding DeleteMultipleExtensionsCommand}" />
+                        ToolTip="自己指定后缀怎么改：添加后缀 / 替换最后一个后缀 / 删除最后一个后缀（同样先出改名预览）。"
+                        Command="{Binding ChangeSuffixCommand}" />
             </WrapPanel>
         </Expander>
 

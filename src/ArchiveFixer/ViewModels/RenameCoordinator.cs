@@ -185,26 +185,29 @@ namespace ArchiveFixer.ViewModels
             UnknownFormatAction = Settings.UnknownFormatAction
         };
 
-        internal async Task AddExtensionAsync()
+        /// <summary>
+        /// 「改后缀…」：**一颗按钮 + 一个小窗**（模式下拉 + 值），取代原来的三颗按钮
+        /// （添加 / 替换最后一个 / 删除最后一个 —— 2026-09-26 审计：同一件事拆成三颗，
+        /// 手动这一栏就变成了"六七颗按不动的按钮"）。
+        ///
+        /// <para>三条路仍然走**同一套**预览与执行（<see cref="RenameByOptionsAsync"/>）：
+        /// 先给你看改名预览 → 确认 → 才动盘；⛔ 绝不覆盖、绝不先删后移。</para>
+        /// </summary>
+        internal async Task ChangeSuffixAsync()
         {
-            string defaultExt = string.IsNullOrWhiteSpace(Settings.DefaultExtension)
-                ? ".zip"
-                : Settings.DefaultExtension;
+            (string Mode, string Extension)? choice = ShowSuffixDialog();
 
-            string? input = ShowTextInputDialog(
-                "批量添加后缀",
-                "请输入要添加的后缀。\n例如：.zip、.rar、.7z、.jpg、.bin、.001",
-                defaultExt);
-
-            if (string.IsNullOrWhiteSpace(input))
+            if (choice == null)
             {
-                AppendLog("INFO", "用户取消添加后缀。");
+                AppendLog("INFO", "用户取消改后缀。");
                 return;
             }
 
-            string ext = NormalizeUserExtension(input);
+            string mode = choice.Value.Mode;
+            string extension = choice.Value.Extension;
 
-            if (string.IsNullOrWhiteSpace(ext))
+            if (!string.Equals(mode, "DeleteLastExtension", StringComparison.OrdinalIgnoreCase) &&
+                string.IsNullOrWhiteSpace(extension))
             {
                 _dialogService.ShowWarning("后缀不能为空。");
                 return;
@@ -212,8 +215,8 @@ namespace ArchiveFixer.ViewModels
 
             var options = new RenameOptions
             {
-                OperationType = "AddExtension",
-                TargetExtension = ext,
+                OperationType = mode,
+                TargetExtension = extension,
                 DeleteExtensionCount = 1,
                 ConflictAction = Settings.ConflictAction,
                 PreviewBeforeRename = true,
@@ -223,114 +226,9 @@ namespace ArchiveFixer.ViewModels
             await RenameByOptionsAsync(options);
         }
 
-        internal async Task ReplaceExtensionAsync()
-        {
-            string defaultExt = string.IsNullOrWhiteSpace(Settings.DefaultExtension)
-                ? ".zip"
-                : Settings.DefaultExtension;
-
-            string? input = ShowTextInputDialog(
-                "批量替换最后一个后缀",
-                "请输入新的后缀。\n例如：.zip、.rar、.7z、.jpg、.bin、.001\n\n示例：test.jpg -> test.zip",
-                defaultExt);
-
-            if (string.IsNullOrWhiteSpace(input))
-            {
-                AppendLog("INFO", "用户取消替换后缀。");
-                return;
-            }
-
-            string ext = NormalizeUserExtension(input);
-
-            if (string.IsNullOrWhiteSpace(ext))
-            {
-                _dialogService.ShowWarning("后缀不能为空。");
-                return;
-            }
-
-            var options = new RenameOptions
-            {
-                OperationType = "ReplaceLastExtension",
-                TargetExtension = ext,
-                DeleteExtensionCount = 1,
-                ConflictAction = Settings.ConflictAction,
-                PreviewBeforeRename = true,
-                UnknownFormatAction = Settings.UnknownFormatAction
-            };
-
-            await RenameByOptionsAsync(options);
-        }
-
-        internal async Task DeleteLastExtensionAsync()
-        {
-            bool confirm = _dialogService.ShowConfirm(
-                "确定要删除选中文件的最后一个后缀吗？\n\n例如：\n" +
-                "test.rar.jpg -> test.rar\n" +
-                "test.zip -> test");
-
-            if (!confirm)
-            {
-                AppendLog("INFO", "用户取消删除最后一个后缀。");
-                return;
-            }
-
-            var options = new RenameOptions
-            {
-                OperationType = "DeleteLastExtension",
-                TargetExtension = string.Empty,
-                DeleteExtensionCount = 1,
-                ConflictAction = Settings.ConflictAction,
-                PreviewBeforeRename = true,
-                UnknownFormatAction = Settings.UnknownFormatAction
-            };
-
-            await RenameByOptionsAsync(options);
-        }
-
-        internal async Task DeleteMultipleExtensionsAsync()
-        {
-            string? input = ShowTextInputDialog(
-                "删除多个后缀",
-                "请输入要删除的后缀数量。\n\n例如输入 2：\n" +
-                "test.rar.pdf.jpg -> test.rar\n" +
-                "abc.7z.jpg -> abc",
-                "2");
-
-            if (string.IsNullOrWhiteSpace(input))
-            {
-                AppendLog("INFO", "用户取消删除多个后缀。");
-                return;
-            }
-
-            if (!int.TryParse(input.Trim(), out int count) || count < 1)
-            {
-                _dialogService.ShowWarning("删除数量必须是大于 0 的整数。");
-                return;
-            }
-
-            if (count > 20)
-            {
-                bool confirmLarge = _dialogService.ShowConfirm(
-                    $"你输入的删除数量是 {count}，数值较大，确定继续吗？");
-
-                if (!confirmLarge)
-                {
-                    return;
-                }
-            }
-
-            var options = new RenameOptions
-            {
-                OperationType = "DeleteMultipleExtensions",
-                TargetExtension = string.Empty,
-                DeleteExtensionCount = count,
-                ConflictAction = Settings.ConflictAction,
-                PreviewBeforeRename = true,
-                UnknownFormatAction = Settings.UnknownFormatAction
-            };
-
-            await RenameByOptionsAsync(options);
-        }
+        // 「删除多个后缀」已退役（2026-09-26 审计）：要先想清"N 是几"，而真实数据里几乎没有
+        // "连续多个后缀"的形状 —— 它与「替换后缀」重叠，路径上还多一次输入框。
+        // 退役方式 = 按钮 + 命令 + 这里的方法 + RenameOptions 的工厂 + 服务分支一起删（⛔ 不留半截）。
 
         private async Task RenameByOptionsAsync(RenameOptions options)
         {
@@ -601,27 +499,23 @@ namespace ArchiveFixer.ViewModels
 
             return "." + value;
         }
-
         /// <summary>
-        /// 「添加后缀 / 替换后缀 / 删除多个后缀」的输入框。
+        /// 「改后缀…」那个小窗：**模式下拉 + 值**（2026-09-26 审计：三颗按钮并成一颗）。
         ///
-        /// <para><b>2026-09-26 审计改版</b>：以前这是个"现搭的窗口"，既没走
-        /// <c>AppWindowStyle</c>（于是字体、行高、DPI 取整与全 App 其它弹窗不是同一套，
-        /// 在 125% / 150% 缩放上看着就是"文字排版不对劲"），又写死了白底与固定 460×230 且
-        /// <c>NoResize</c>（「删除多个后缀」那条提示有 5 行，缩放一大就贴着按钮），
-        /// 按钮还是**「确定」在左、「取消」在右**（全 App 其它弹窗都是主操作在最右）。</para>
-        ///
-        /// <para>现在：套 <c>AppWindowStyle</c>、高度按内容自适应（<c>SizeToContent</c>）、
-        /// 可缩放、提示行紧跟输入框（不再被塞进星号行里跟按钮隔一大截）、
-        /// 按钮用 <c>SecondaryButtonStyle</c> + <c>PrimaryButtonStyle</c> 且**主操作在最右**。</para>
+        /// <para>走 <c>AppWindowStyle</c> + <c>SizeToContent</c>（可缩放、主操作在最右、
+        /// 提示行紧跟输入框）—— 与全 App 其它弹窗同一套观感。返回 <c>null</c> = 用户取消。</para>
         /// </summary>
-        private string? ShowTextInputDialog(string title, string message, string defaultValue)
+        private (string Mode, string Extension)? ShowSuffixDialog()
         {
+            string defaultExtension = string.IsNullOrWhiteSpace(Settings.DefaultExtension)
+                ? ".zip"
+                : Settings.DefaultExtension;
+
             var window = new Window
             {
-                Title = title,
-                Width = 480,
-                MinWidth = 420,
+                Title = "改后缀",
+                Width = 520,
+                MinWidth = 440,
                 MaxWidth = 760,
                 SizeToContent = SizeToContent.Height,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -630,7 +524,6 @@ namespace ArchiveFixer.ViewModels
                 Owner = Application.Current?.MainWindow
             };
 
-            // 资源查不到（无界面宿主）时 SetResourceReference 什么都不做，不会抛。
             window.SetResourceReference(FrameworkElement.StyleProperty, "AppWindowStyle");
 
             var root = new System.Windows.Controls.Grid
@@ -646,28 +539,79 @@ namespace ArchiveFixer.ViewModels
                 });
             }
 
-            var textBlock = new System.Windows.Controls.TextBlock
+            var message = new System.Windows.Controls.TextBlock
             {
-                Text = message,
+                Text = "对勾选的任务改后缀。确认后会先弹改名预览（绝不覆盖、绝不先删后移）。",
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 12)
             };
-            System.Windows.Controls.Grid.SetRow(textBlock, 0);
-            root.Children.Add(textBlock);
+            System.Windows.Controls.Grid.SetRow(message, 0);
+            root.Children.Add(message);
+
+            // 模式 + 值一行：模式决定值那一格能不能用
+            var row = new System.Windows.Controls.Grid
+            {
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(190)
+            });
+            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(12)
+            });
+            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star)
+            });
+
+            var modeBox = new System.Windows.Controls.ComboBox
+            {
+                MinHeight = 30,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+
+            modeBox.Items.Add(new System.Windows.Controls.ComboBoxItem
+            {
+                Content = "添加后缀",
+                Tag = "AddExtension",
+                ToolTip = "在原名后面「再挂一个」后缀：x.mp4 -> x.mp4.zip"
+            });
+
+            modeBox.Items.Add(new System.Windows.Controls.ComboBoxItem
+            {
+                Content = "替换最后一个后缀",
+                Tag = "ReplaceLastExtension",
+                ToolTip = "只换最后那一段：test.jpg -> test.zip"
+            });
+
+            modeBox.Items.Add(new System.Windows.Controls.ComboBoxItem
+            {
+                Content = "删除最后一个后缀",
+                Tag = "DeleteLastExtension",
+                ToolTip = "把最后那一段去掉：test.rar.jpg -> test.rar"
+            });
+
+            modeBox.SelectedIndex = 1;
+            System.Windows.Controls.Grid.SetColumn(modeBox, 0);
+            row.Children.Add(modeBox);
 
             var textBox = new System.Windows.Controls.TextBox
             {
-                Text = defaultValue ?? string.Empty,
+                Text = defaultExtension,
                 MinHeight = 30,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 6)
+                VerticalContentAlignment = VerticalAlignment.Center
             };
-            System.Windows.Controls.Grid.SetRow(textBox, 1);
-            root.Children.Add(textBox);
+            System.Windows.Controls.Grid.SetColumn(textBox, 2);
+            row.Children.Add(textBox);
+
+            System.Windows.Controls.Grid.SetRow(row, 1);
+            root.Children.Add(row);
 
             var hint = new System.Windows.Controls.TextBlock
             {
-                Text = "提示：输入 zip 会自动变成 .zip；输入 .rar 会保持 .rar。",
+                Text = "提示：输入 zip 会自动变成 .zip；「删除最后一个后缀」不需要填值。",
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.75,
                 Margin = new Thickness(0, 0, 0, 16)
@@ -676,13 +620,19 @@ namespace ArchiveFixer.ViewModels
             System.Windows.Controls.Grid.SetRow(hint, 2);
             root.Children.Add(hint);
 
+            modeBox.SelectionChanged += (_, _) =>
+            {
+                bool needsValue = !string.Equals(SelectedMode(), "DeleteLastExtension", StringComparison.OrdinalIgnoreCase);
+                textBox.IsEnabled = needsValue;
+                textBox.Opacity = needsValue ? 1.0 : 0.5;
+            };
+
             var buttonPanel = new System.Windows.Controls.StackPanel
             {
                 Orientation = System.Windows.Controls.Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right
             };
 
-            // 主操作在最右（全 App 一致）：取消在左、确定在右。
             var cancelButton = new System.Windows.Controls.Button
             {
                 Content = StatusText.OpCancel,
@@ -690,7 +640,6 @@ namespace ArchiveFixer.ViewModels
                 Margin = new Thickness(0, 0, 8, 0),
                 IsCancel = true
             };
-
             cancelButton.SetResourceReference(FrameworkElement.StyleProperty, "SecondaryButtonStyle");
 
             var okButton = new System.Windows.Controls.Button
@@ -699,7 +648,6 @@ namespace ArchiveFixer.ViewModels
                 MinWidth = 96,
                 IsDefault = true
             };
-
             okButton.SetResourceReference(FrameworkElement.StyleProperty, "PrimaryButtonStyle");
 
             okButton.Click += (_, _) =>
@@ -722,20 +670,24 @@ namespace ArchiveFixer.ViewModels
 
             window.Content = root;
 
-            window.Loaded += (_, _) =>
+            window.Loaded += (_, _) => textBox.Focus();
+
+            string SelectedMode()
             {
-                textBox.Focus();
-                textBox.SelectAll();
-            };
+                return modeBox.SelectedItem is System.Windows.Controls.ComboBoxItem item &&
+                       item.Tag is string tag
+                    ? tag
+                    : "ReplaceLastExtension";
+            }
 
             bool? result = window.ShowDialog();
 
-            if (result == true)
+            if (result != true)
             {
-                return textBox.Text;
+                return null;
             }
 
-            return null;
+            return (SelectedMode(), NormalizeUserExtension(textBox.Text));
         }
     }
 }

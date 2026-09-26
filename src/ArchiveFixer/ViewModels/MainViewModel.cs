@@ -1155,10 +1155,7 @@ namespace ArchiveFixer.ViewModels
         public ICommand RemoveSelectedCommand { get; }
 
         public ICommand SmartRenameCommand { get; }
-        public ICommand AddExtensionCommand { get; }
-        public ICommand ReplaceExtensionCommand { get; }
-        public ICommand DeleteLastExtensionCommand { get; }
-        public ICommand DeleteMultipleExtensionsCommand { get; }
+        public ICommand ChangeSuffixCommand { get; }
 
         public ICommand StartExtractCommand { get; }
         public ICommand StopCommand { get; }
@@ -1478,10 +1475,7 @@ namespace ArchiveFixer.ViewModels
             RemoveSelectedCommand = new RelayCommand(RemoveSelectedTasks, CanRunNormalCommand);
 
             SmartRenameCommand = new AsyncRelayCommand(_renameCoordinator.SmartRenameAsync, CanRunNormalCommand);
-            AddExtensionCommand = new AsyncRelayCommand(_renameCoordinator.AddExtensionAsync, CanRunNormalCommand);
-            ReplaceExtensionCommand = new AsyncRelayCommand(_renameCoordinator.ReplaceExtensionAsync, CanRunNormalCommand);
-            DeleteLastExtensionCommand = new AsyncRelayCommand(_renameCoordinator.DeleteLastExtensionAsync, CanRunNormalCommand);
-            DeleteMultipleExtensionsCommand = new AsyncRelayCommand(_renameCoordinator.DeleteMultipleExtensionsAsync, CanRunNormalCommand);
+            ChangeSuffixCommand = new AsyncRelayCommand(_renameCoordinator.ChangeSuffixAsync, CanRunNormalCommand);
 
             /*
              * 四个"开始干活"的入口都打一个操作标记（用户 2026-09-25 第 38 条）：
@@ -4633,24 +4627,15 @@ namespace ArchiveFixer.ViewModels
             return candidates;
         }
 
-        /// <summary>同目录里的文件名（读不了就当作空 —— 计划会因此判"不能改"，绝不抛）。</summary>
+        /// <summary>
+        /// 同目录里的文件名（读不了就当作空 —— 计划会因此判"不能改"，绝不抛）。
+        ///
+        /// <para>实现只有一份：<see cref="VolumeNameRepair.EnumerateFileNamesInDirectory"/>
+        /// （识别阶段、改名预览、①页那颗按钮三处共用；⛔ 各写一份必然漂移）。</para>
+        /// </summary>
         private static IEnumerable<string?> EnumerateDirectoryFileNames(string? filePath)
         {
-            try
-            {
-                string directory = Path.GetDirectoryName(filePath ?? string.Empty) ?? string.Empty;
-
-                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-                {
-                    return Array.Empty<string?>();
-                }
-
-                return Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly).Select(Path.GetFileName).ToList();
-            }
-            catch
-            {
-                return Array.Empty<string?>();
-            }
+            return VolumeNameRepair.EnumerateFileNamesInDirectory(filePath);
         }
 
         private bool CanRenameBySuggestionAndRetry()
@@ -4690,6 +4675,7 @@ namespace ArchiveFixer.ViewModels
 
             int renamed = 0;
             int failed = 0;
+            var repaired = new List<ArchiveTask>();
 
             foreach ((ArchiveTask task, VolumeNameRepairPlan plan) in candidates)
             {
@@ -4704,6 +4690,7 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 renamed++;
+                repaired.Add(task);
 
                 /*
                  * 任务要跟着搬到新路径上：文件在磁盘上已经叫新名字了，任务还指着旧名字的话，
@@ -4737,10 +4724,92 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 重试 = 与「只解压」**同一条路**（不复制一份解压逻辑出来）：
-             * 勾选没变、路径已经指向新名字，按下去就是把这一组重新解一遍。
+             * **同一组的其它任务也要重扫**（2026-09-26 真机代跑当场撞到）：
+             * 它们的"分卷组"是**改名之前**拍下来的快照 —— 例：首卷名字坏掉时，`set.7z.002/.003/.004`
+             * 会各自成组（缺首卷），修好首卷之后这些任务手上还是"缺 set.7z.001"的旧结论，
+             * 紧接着的重试就会弹一句"分卷不完整，现在缺：set.7z.001"（可那个文件明明已经在了）。
+             * 判据用既有的 BelongsToSameGroup（族 + 基名），⛔ 不自己再写一套名字比较。
              */
-            await _extractionCoordinator.StartExtractAsync().ConfigureAwait(true);
+            foreach (ArchiveTask sibling in FindSameGroupTasks(repaired))
+            {
+                await _scanCoordinator.RescanTaskAsync(sibling).ConfigureAwait(true);
+            }
+
+            /*
+             * 重试 = 与「只解压」**同一条路**（不复制一份解压逻辑出来），但**只解刚刚改过名的那些任务**
+             * （2026-09-26 审计补的口径）：
+             *
+             * 这颗按钮以前只在"解压跑过一轮并报了分卷缺失"之后才亮，那时勾选的就是刚跑的那一批，
+             * 所以"按勾选重试"没问题；现在它**扫完就亮**，用户完全可能在还没跑过任何解压的时候点它 ——
+             * 那时整张表都勾着，旧写法会把**所有**勾选任务都解一遍（他只想修这一卷）。
+             * 用完把勾选原样还回去：勾选是用户的作用域，不该被这一下改掉。
+             */
+            List<ArchiveTask> previousSelection = Tasks.Where(item => item.IsSelected).ToList();
+
+            RunBulkSelectionUpdate(() =>
+            {
+                foreach (ArchiveTask item in Tasks)
+                {
+                    item.IsSelected = repaired.Contains(item);
+                }
+            });
+
+            try
+            {
+                await _extractionCoordinator.StartExtractAsync().ConfigureAwait(true);
+            }
+            finally
+            {
+                RunBulkSelectionUpdate(() =>
+                {
+                    foreach (ArchiveTask item in previousSelection)
+                    {
+                        item.IsSelected = true;
+                    }
+                });
+            }
+        }
+
+        /// <summary>
+        /// 与刚修好的那几卷**同目录、同组**的其它任务（用来在改名之后把它们一起重扫）。
+        ///
+        /// <para>判据全用既有的 <c>VolumeGroupDetector.BelongsToSameGroup</c>（族 + 基名）+ 目录相等 ——
+        /// ⛔ 不自己拿字符串前缀去猜"像不像一组"（那正是第 33 条踩过的坑）。</para>
+        /// </summary>
+        private IEnumerable<ArchiveTask> FindSameGroupTasks(IReadOnlyList<ArchiveTask> repaired)
+        {
+            var repairedSet = new HashSet<ArchiveTask>(repaired);
+            var result = new List<ArchiveTask>();
+
+            foreach (ArchiveTask task in Tasks)
+            {
+                if (task == null || repairedSet.Contains(task) || string.IsNullOrWhiteSpace(task.CurrentPath))
+                {
+                    continue;
+                }
+
+                string otherDirectory = System.IO.Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
+
+                foreach (ArchiveTask fixedTask in repaired)
+                {
+                    string fixedDirectory = System.IO.Path.GetDirectoryName(fixedTask.CurrentPath) ?? string.Empty;
+
+                    if (!string.Equals(otherDirectory, fixedDirectory, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (ArchiveFixer.Detection.VolumeGroupDetector.BelongsToSameGroup(
+                            System.IO.Path.GetFileName(task.CurrentPath),
+                            System.IO.Path.GetFileName(fixedTask.CurrentPath)))
+                    {
+                        result.Add(task);
+                        break;
+                    }
+                }
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -5074,10 +5143,7 @@ namespace ArchiveFixer.ViewModels
 
                  SmartRenameCommand,
                 OneClickProcessCommand,
-                 AddExtensionCommand,
-                 ReplaceExtensionCommand,
-                 DeleteLastExtensionCommand,
-                 DeleteMultipleExtensionsCommand,
+                 ChangeSuffixCommand,
 
                  StartExtractCommand,
                  StopCommand,

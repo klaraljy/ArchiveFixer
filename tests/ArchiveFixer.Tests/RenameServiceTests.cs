@@ -114,34 +114,8 @@ public class RenameServiceTests
         }
     }
 
-    [Fact]
-    public void BuildNewPath_DeleteMultipleExtensions_RemovesGivenCount()
-    {
-        string dir = CreateTempDir();
-        try
-        {
-            Directory.CreateDirectory(dir);
-            string file = Path.Combine(dir, "a.rar.pdf.jpg");
-            var task = CreateTask(file, "RAR", ".rar");
-
-            var options = new RenameOptions
-            {
-                OperationType = "DeleteMultipleExtensions",
-                DeleteExtensionCount = 2,
-                ConflictAction = "AutoRename"
-            };
-            options.Normalize();
-
-            var service = new RenameService();
-            string newPath = service.BuildNewPath(task, options);
-
-            Assert.Equal(Path.Combine(dir, "a.rar"), newPath);
-        }
-        finally
-        {
-            Directory.Delete(dir, true);
-        }
-    }
+    // 「删除多个后缀」整块退役（2026-09-26 审计：界面上的那颗按钮 + 命令 + 服务分支一起删）——
+    // 用例跟着删掉，⛔ 不留"测试还在钉一个已经不存在的操作"。
 
     [Fact]
     public async Task ExecuteRenameAsync_RenamesFilesOnDiskAndUpdatesTask()
