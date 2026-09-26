@@ -469,6 +469,9 @@ namespace ArchiveFixer.ViewModels
                     {
                         await _archiveDetectService.ApplyDetectResultAsync(task, _operationCts.Token);
 
+                        // 「首卷补齐后并组」：这一行若是"只有后续卷"，而它的首卷就在列表里 → 并入首卷那一行。
+                        MergeLaterVolumeIntoFirstVolumeRow(task);
+
                         /*
                          * 源文件快照（AGENTS.md §6 不变量 11 的基准）：**识别一完成就拍**。
                          *
@@ -513,6 +516,74 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 重新扫描单个任务。
         /// </summary>
+        /// <summary>
+        /// 「首卷补齐后并组」：`set.7z.002` 这种"只有后续卷"的行，如果在**列表里**找得到它那一组的首卷，
+        /// 就把它改成「已并入」——那一组由首卷那一行带着一起解，这一行不再单独算一单
+        /// （用户 2026-09-26 拍板："标成「分卷（后续卷，缺首卷）」**或**在首卷补齐后并组"）。
+        ///
+        /// <para>⛔ 判据全在**事实**上：①这一行的状态确实是「分卷缺失」（识别层刚判的）；②从它的名字推得出
+        /// 标准首卷名（`VolumeGroupDetector`，与别处同一份实现）；③列表里**真有一行**指着那个文件
+        /// （按目录 + 文件名比，不按"像不像"猜）。三条缺一条就一个字都不改。</para>
+        ///
+        /// <para>为什么不是"把这一行从列表里删掉"：删用户的列表行是破坏性的（他可能就是想看着它），
+        /// 而"标成已并入 + 不单独处理"已经让汇总与列表都诚实了。</para>
+        /// </summary>
+        internal bool MergeLaterVolumeIntoFirstVolumeRow(ArchiveTask? task)
+        {
+            if (task == null ||
+                !string.Equals(task.Status, StatusText.VolumeMissing, StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(task.CurrentPath))
+            {
+                return false;
+            }
+
+            string fileName = Path.GetFileName(task.CurrentPath);
+            int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+
+            if (index == null || index.Value < 2)
+            {
+                return false;
+            }
+
+            string? firstVolumeName = VolumeGroupDetector.TryGetFirstVolumeName(fileName);
+
+            if (string.IsNullOrWhiteSpace(firstVolumeName))
+            {
+                return false;
+            }
+
+            string directory = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
+
+            ArchiveTask? firstVolumeRow = Tasks.FirstOrDefault(candidate =>
+                candidate != null &&
+                !ReferenceEquals(candidate, task) &&
+                !string.IsNullOrWhiteSpace(candidate.CurrentPath) &&
+                string.Equals(Path.GetFileName(candidate.CurrentPath), firstVolumeName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(Path.GetDirectoryName(candidate.CurrentPath) ?? string.Empty, directory, StringComparison.OrdinalIgnoreCase));
+
+            if (firstVolumeRow == null)
+            {
+                return false;
+            }
+
+            task.Status = StatusText.Skipped;
+            task.Operation = StatusText.OpSkip;
+            task.ErrorMessage = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.LaterVolumeMergedNoteFormat,
+                firstVolumeName);
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.LaterVolumeMergedLogFormat,
+                    fileName,
+                    firstVolumeName));
+
+            return true;
+        }
+
         internal async Task RescanTaskAsync(object? parameter)
         {
             if (parameter is not ArchiveTask task)
@@ -521,6 +592,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             await _archiveDetectService.ApplyDetectResultAsync(task);
+
+            // 单任务重扫走同一套：并组这件事不许只在整表扫描时才成立（第 41 条那颗按钮就是按任务重扫的）。
+            MergeLaterVolumeIntoFirstVolumeRow(task);
 
             /*
              * 重扫 = 重新识别，所以基准也必须**跟着重拍**（用户右键「重新扫描此文件」正是

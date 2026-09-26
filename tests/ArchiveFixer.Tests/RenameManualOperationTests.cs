@@ -177,6 +177,36 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public async Task 首卷补齐后并组_后续卷那一行标成已并入且不再单独处理()
+        {
+            // 用户 2026-09-26 拍板的另半句："**或**在首卷补齐后并组"。
+            // 现场：一开始只加了 `set.7z.002`（那一行的状态是「分卷缺失」），随后把 `set.7z.001` 也加进来 —
+            // 这一行必须改成"已并入首卷那一行"（不再算一单、也不再去尝试单独解它）。
+            string first = Path.Combine(_root, "成组.7z.001");
+            string second = Path.Combine(_root, "成组.7z.002");
+
+            File.WriteAllBytes(first, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1, 2, 3 });
+            File.WriteAllBytes(second, new byte[] { 4, 5, 6, 7 });
+
+            Harness harness = CreateHarness();
+            ArchiveTask laterRow = harness.AddTask("成组.7z.002", new byte[] { 4, 5, 6, 7 }, isSelected: true);
+
+            await new ArchiveDetectService().ApplyDetectResultAsync(laterRow);
+            Assert.Equal(StatusText.VolumeMissing, laterRow.Status);
+
+            // 首卷还没进列表 → 一个字都不许改。
+            Assert.False(harness.Scan.MergeLaterVolumeIntoFirstVolumeRow(laterRow));
+            Assert.Equal(StatusText.VolumeMissing, laterRow.Status);
+
+            // 首卷进列表 → 并组。
+            ArchiveTask firstRow = harness.AddTask("成组.7z.001", new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1, 2, 3 }, isSelected: true);
+
+            Assert.True(harness.Scan.MergeLaterVolumeIntoFirstVolumeRow(laterRow));
+            Assert.Equal(StatusText.Skipped, laterRow.Status);
+            Assert.Contains("成组.7z.001", laterRow.ErrorMessage, StringComparison.Ordinal);
+            Assert.Equal(StatusText.Recognized, firstRow.Status); // 首卷那一行不受影响
+        }
+        [Fact]
         public async Task 普通的无格式文件_照旧报格式未知_不能被这条新规则误伤()
         {
             string junk = Path.Combine(_root, "随便一个.bin");
@@ -619,12 +649,15 @@ namespace ArchiveFixer.Tests
 
         private sealed class Harness
         {
-            public Harness(MainViewModel vm, RenameCoordinator rename, string sourceDirectory)
+            public Harness(MainViewModel vm, RenameCoordinator rename, ScanCoordinator scan, string sourceDirectory)
             {
                 Vm = vm;
                 Rename = rename;
+                Scan = scan;
                 SourceDirectory = sourceDirectory;
             }
+
+            public ScanCoordinator Scan { get; }
 
             public MainViewModel Vm { get; }
 
@@ -708,7 +741,7 @@ namespace ArchiveFixer.Tests
             var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
             var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
 
-            return new Harness(vm, rename, sourceDirectory);
+            return new Harness(vm, rename, scan, sourceDirectory);
         }
     }
 }
