@@ -17,11 +17,12 @@
 
             <!--
                 ⚠ 这一页的单选按钮与「一键处理 · 确认」那个弹窗（Views\OneClickOptionsWindow.xaml）里
-                是**同一组档位**，两处的 `x:Name` 现在重名、`GroupName` 已经隔开
-                （这里是 SourceHandling / RestHandling，弹窗那边是 PanelSourceHandling / PanelRestHandling）。
-                ⛔ 第 34 条那次真机事故就是"两个窗口共用 GroupName"—— 谁把弹窗那几行复制回这一页，
-                必须把 `Panel` 前缀一起丢掉、并确认 `x:Name` 不与这一页重名（同一个窗口里重名会直接报错，
-                跨文件重名不会报错但下次就分不清谁是谁）。
+                是**同一组档位**，两处**必须各自成组**：
+                · `GroupName` 这里是 SourceHandling / RestHandling，弹窗那边是 PanelSourceHandling / PanelRestHandling
+                  （⛔ 第 34 条那次真机事故就是"两个窗口共用 GroupName"：弹窗填初值时把这一组一起取消，
+                  用户关掉弹窗回来看到一组没有黑点的选项）；
+                · `x:Name` 也已经错开（弹窗那边统一带 Panel 前缀，有测试钉"两页的 x:Name 集合不相交"）。
+                谁把弹窗那几行复制回这一页，这两样都要一起改对。
             -->
 
             <!-- ==================== 1 源包操作 ==================== -->

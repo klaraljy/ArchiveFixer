@@ -1853,6 +1853,16 @@ namespace ArchiveFixer.ViewModels
             AppendLog("INFO", "软件启动");
 
             /*
+             * 弹窗"要不要响铃闪任务栏"的决定写进日志（用户 2026-09-26）：
+             * 现在的口径是**只有窗口没能出现在最前面时才提醒**，所以"这次为什么响 / 为什么没响"
+             * 必须答得出来 —— 用户问过一次"这个提醒的作用是什么"，日志就是那个答案。
+             * 静默档（已在前台）只记 INFO，提醒档记 WARN（一眼能看见）。
+             */
+            ArchiveFixer.Helpers.WindowAttention.Note = line => AppendLog(
+                line.Contains("安静显示", StringComparison.Ordinal) ? "INFO" : "WARN",
+                "窗口提醒：" + line);
+
+            /*
              * "一个引擎都用不了"的提示必须现算，**不许写死 7z 的路径**。
              *
              * 判据是"任一引擎可用"（EngineRouter.IsAvailable），而默认优先级是 UnRAR → 7-Zip：

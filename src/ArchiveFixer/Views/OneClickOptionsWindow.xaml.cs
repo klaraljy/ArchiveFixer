@@ -338,8 +338,8 @@ namespace ArchiveFixer.Views
 
             // 2026-09-25 第 32 条之后只剩两档（原地不动 / 放入其余物）：第三档"校验通过后删除"已删掉，
             // 要删源包改成"放入其余物 + 删除操作"（语义更清楚、选项少一个）。
-            SourceKeepInPlaceOption.IsChecked = seed.SourceHandling == SourceHandlingMode.KeepInPlace;
-            SourceMoveToRestOption.IsChecked = seed.SourceHandling != SourceHandlingMode.KeepInPlace;
+            PanelSourceKeepInPlaceOption.IsChecked = seed.SourceHandling == SourceHandlingMode.KeepInPlace;
+            PanelSourceMoveToRestOption.IsChecked = seed.SourceHandling != SourceHandlingMode.KeepInPlace;
 
             /*
              * 「删除操作」三档（第 33 条补进弹窗）：初值取当前设置 —— 用户 2026-09-25 的原话是
@@ -348,9 +348,9 @@ namespace ArchiveFixer.Views
              */
             string restHandling = RestHandlingModes.Normalize(seed.RestHandling);
 
-            RestKeepOption.IsChecked = string.Equals(restHandling, RestHandlingModes.Keep, StringComparison.Ordinal);
-            RestRecycleOption.IsChecked = string.Equals(restHandling, RestHandlingModes.RecycleBin, StringComparison.Ordinal);
-            RestDeleteOption.IsChecked = string.Equals(restHandling, RestHandlingModes.Delete, StringComparison.Ordinal);
+            PanelRestKeepOption.IsChecked = string.Equals(restHandling, RestHandlingModes.Keep, StringComparison.Ordinal);
+            PanelRestRecycleOption.IsChecked = string.Equals(restHandling, RestHandlingModes.RecycleBin, StringComparison.Ordinal);
+            PanelRestDeleteOption.IsChecked = string.Equals(restHandling, RestHandlingModes.Delete, StringComparison.Ordinal);
 
             UpdateRestDeleteNotice();
 
@@ -385,7 +385,7 @@ namespace ArchiveFixer.Views
              * 反过来写（"没勾留在原地就当放入其余物"）时，任何一次界面状态错乱都会变成
              * "用户没同意过，源包却被搬走了"—— 而搬走是不可逆的。默认档也已经是「留在原地」。
              */
-            if (SourceMoveToRestOption.IsChecked == true)
+            if (PanelSourceMoveToRestOption.IsChecked == true)
             {
                 return SourceHandlingMode.MoveToRest;
             }
@@ -401,12 +401,12 @@ namespace ArchiveFixer.Views
         /// </summary>
         private string ResolveRestHandling()
         {
-            if (RestDeleteOption.IsChecked == true)
+            if (PanelRestDeleteOption.IsChecked == true)
             {
                 return RestHandlingModes.Delete;
             }
 
-            if (RestRecycleOption.IsChecked == true)
+            if (PanelRestRecycleOption.IsChecked == true)
             {
                 return RestHandlingModes.RecycleBin;
             }
@@ -420,7 +420,7 @@ namespace ArchiveFixer.Views
         /// </summary>
         private void UpdateRestDeleteNotice()
         {
-            RestDeleteNotice.Visibility = RestDeleteOption.IsChecked == true
+            RestDeleteNotice.Visibility = PanelRestDeleteOption.IsChecked == true
                 ? Visibility.Visible
                 : Visibility.Collapsed;
         }

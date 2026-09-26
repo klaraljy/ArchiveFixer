@@ -21,7 +21,14 @@ namespace ArchiveFixer.Helpers
     /// 「密码本那个窗口弹出来之后躲到主窗口后面了，只有声音、没有闪烁，声音还很轻 ——
     /// WinRAR 会强闪烁 + 大声提醒」）。
     ///
-    /// <para><b>三件事</b>：</para>
+    /// <para>⚠ <b>2026-09-26 收紧口径</b>（用户原话："点开弹窗就会出现声音响两下，闪几下，
+    /// 你要知道这个提醒的作用是什么 —— 如果我现在的小窗没关闭导致我大窗口不能操作才需要这样的提醒，
+    /// 而不是现在的每时每刻提醒"）：提醒的**唯一理由**是"这个窗口没能在最前面出现，用户看不见它、
+    /// 而它正挡着大窗口"，所以现在**先等窗口落定、再看它是不是真的在最前面**：
+    /// 已经在前台（用户刚点出来的那种）→ **一声不响、一下不闪**；
+    /// 没在最前面（躲在大窗口后面 / 用户正在别的程序里、而这一批被它卡着）→ 拎到前面 + 闪 + 响。</para>
+    ///
+    /// <para><b>三件事</b>（只在上面那条判据成立时才做）：</para>
     /// <list type="number">
     /// <item><description><b>从别的窗口后面拎到前面</b>：被最小化就还原，然后 <c>Activate()</c>，
     /// 再用 <c>Topmost</c> 脉冲把 z 序顶上去（<c>Topmost</c> 立刻复位，不是"永远置顶"）。
@@ -48,8 +55,24 @@ namespace ArchiveFixer.Helpers
         /// <summary>两声提示音之间的间隔（毫秒）。</summary>
         public const int ChimeIntervalMs = 600;
 
+        /// <summary>
+        /// 窗口显示之后等多久再判"它在不在最前面"（毫秒）。
+        ///
+        /// <para><c>Loaded</c> 那一刻 WPF 还没把窗口激活完，立刻判会**误判成"不在前面"**，
+        /// 于是又变成"每时每刻提醒"（正是用户 2026-09-26 报的那个毛病）。</para>
+        /// </summary>
+        public const int SettleDelayMs = 180;
+
         /// <summary>离屏判据的阈值（窗口 Left/Top 小于它就算屏幕外）。</summary>
         public const double OffScreenThreshold = -10000d;
+
+        /// <summary>
+        /// 提醒决定的记录出口（由主界面接到日志上；没接就是静默 —— 单元测试里不产生任何输出）。
+        ///
+        /// <para>为什么要留这个口子：现在"响没响"取决于窗口有没有出现在最前面，
+        /// 用户问"这次为什么又响了 / 为什么没响"时，日志里必须答得出（真机验证也靠它）。</para>
+        /// </summary>
+        public static Action<string>? Note { get; set; }
 
         private const uint FLASHW_STOP = 0;
         private const uint FLASHW_ALL = 3;
@@ -62,7 +85,7 @@ namespace ArchiveFixer.Helpers
         }
 
         /// <summary>
-        /// 这个窗口该不该被"提醒"：屏幕外的不提醒、<c>ShowActivated=false</c> 的不提醒。
+        /// 这个窗口**有没有资格**被"提醒"：屏幕外的不提醒、<c>ShowActivated=false</c> 的不提醒。
         /// </summary>
         public static bool ShouldDemandAttention(bool showActivated, double left, double top)
         {
@@ -72,6 +95,19 @@ namespace ArchiveFixer.Helpers
             }
 
             return left > OffScreenThreshold && top > OffScreenThreshold;
+        }
+
+        /// <summary>
+        /// 显示之后到底要不要"闪 + 响"（用户 2026-09-26 收窄的那条判据）。
+        ///
+        /// <para>⛔ <b>已经出现在最前面的窗口不需要提醒</b> —— 用户刚点了按钮、窗口就摆在他眼前，
+        /// 这时候响两声只会让人以为出了什么事。提醒只留给"它没能在最前面出现"这一种情形
+        /// （躲在大窗口后面、或用户正在别的程序里而这一批正被它卡着）。</para>
+        /// </summary>
+        /// <param name="isInFront">判定的那一刻，这个窗口是不是前台窗口（且 WPF 认为它已激活）。</param>
+        public static bool ShouldAlert(bool showActivated, double left, double top, bool isInFront)
+        {
+            return ShouldDemandAttention(showActivated, left, top) && !isInFront;
         }
 
         /// <summary>
@@ -141,7 +177,39 @@ namespace ArchiveFixer.Helpers
                     return;
                 }
 
-                DemandAttention(window, strength, timer, ref remaining);
+                /*
+                 * ⚠ 等窗口"落定"再判（用户 2026-09-26 的收窄口径）：Loaded 那一刻 WPF 还没把它激活完，
+                 * 立刻判会误判成"不在最前面"，于是又变成"每开一个窗口就响两声闪几下"。
+                 * 落定之后**只有在它没能出现在最前面时**才提醒 —— 已经摆在他眼前的窗口不需要叫人。
+                 */
+                var settle = new DispatcherTimer(DispatcherPriority.Normal, window.Dispatcher)
+                {
+                    Interval = TimeSpan.FromMilliseconds(SettleDelayMs)
+                };
+
+                settle.Tick += (_, _) =>
+                {
+                    settle.Stop();
+
+                    if (!window.IsLoaded || !window.IsVisible)
+                    {
+                        return;
+                    }
+
+                    bool inFront = IsInFront(window);
+
+                    if (!ShouldAlert(window.ShowActivated, window.Left, window.Top, inFront))
+                    {
+                        Note?.Invoke($"{Describe(window)} 已经在最前面，安静显示（不响也不闪）。");
+                        return;
+                    }
+
+                    Note?.Invoke($"{Describe(window)} 没能出现在最前面（可能躲在大窗口后面）→ 拎到前面 + 闪 + 响。");
+
+                    DemandAttention(window, strength, timer, ref remaining);
+                };
+
+                settle.Start();
             };
 
             // 用户一来就闭嘴：激活（点到了）与关闭都要把闪烁与提示音停掉。
@@ -332,6 +400,55 @@ namespace ArchiveFixer.Helpers
             }
         }
 
+        /// <summary>
+        /// 这个窗口此刻是不是"在最前面"（判"要不要提醒"就用它）。
+        ///
+        /// <para>两条一起看：WPF 认为它已激活（<c>IsActive</c>），而且**系统**的前台窗口就是它
+        /// （<c>GetForegroundWindow</c>）。只看 <c>IsActive</c> 不够 —— WPF 的激活状态更新得比 z 序慢，
+        /// 而"被别人的窗口盖住"正是要提醒的那种情形。拿不到句柄（窗口还没建出来）时退回只看 <c>IsActive</c>。</para>
+        /// </summary>
+        internal static bool IsInFront(Window window)
+        {
+            if (window == null || !window.IsActive)
+            {
+                return false;
+            }
+
+            IntPtr handle = TryGetHandle(window);
+
+            if (handle == IntPtr.Zero)
+            {
+                return true;
+            }
+
+            try
+            {
+                return GetForegroundWindow() == handle;
+            }
+            catch
+            {
+                // 取不到前台窗口（无桌面会话）：当作"不在前面"，交给上层那两条判据兜底。
+                return false;
+            }
+        }
+
+        /// <summary>日志里怎么称呼这个窗口（用它自己的标题，取不到就写"窗口"）。</summary>
+        private static string Describe(Window window)
+        {
+            try
+            {
+                string title = window.Title ?? string.Empty;
+
+                return string.IsNullOrWhiteSpace(title)
+                    ? window.GetType().Name
+                    : $"「{title}」";
+            }
+            catch
+            {
+                return "窗口";
+            }
+        }
+
         private static void PlayChime()
         {
             try
@@ -359,6 +476,10 @@ namespace ArchiveFixer.Helpers
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        /// <summary>当前前台窗口的句柄（判"它在不在最前面"用）。</summary>
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
 
         [StructLayout(LayoutKind.Sequential)]
         private struct FLASHWINFO

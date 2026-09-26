@@ -69,6 +69,50 @@ namespace ArchiveFixer.Tests
             Assert.False(WindowAttention.ShouldDemandAttention(showActivated: false, left: 100, top: 100));
         }
 
+        /// <summary>
+        /// 用户 2026-09-26 收窄的那条口径（原话："点开弹窗就会出现声音响两下，闪几下，
+        /// 你要知道这个提醒的作用是什么 —— 如果我现在的小窗没关闭导致我大窗口不能操作才需要这样的提醒，
+        /// 而不是现在的每时每刻提醒"）：
+        ///
+        /// <para>⛔ **已经出现在最前面的窗口一声不响、一下不闪**；只有"它没能出现在最前面"
+        /// （躲在大窗口后面 / 用户正在别的程序里）才提醒。</para>
+        /// </summary>
+        [Fact]
+        public void 已经出现在最前面的窗口不响也不闪_只有没在最前面才提醒()
+        {
+            // 用户刚点出来、窗口就在他眼前：安静。
+            Assert.False(WindowAttention.ShouldAlert(
+                showActivated: true, left: 100, top: 100, isInFront: true));
+
+            // 躲在大窗口后面 / 用户在别的程序里：提醒（拎到前面 + 闪 + 响）。
+            Assert.True(WindowAttention.ShouldAlert(
+                showActivated: true, left: 100, top: 100, isInFront: false));
+
+            // 前两条老判据仍然优先：屏幕外、ShowActivated=false 一律不提醒（哪怕它不在前面）。
+            Assert.False(WindowAttention.ShouldAlert(
+                showActivated: true, left: -32000, top: -32000, isInFront: false));
+            Assert.False(WindowAttention.ShouldAlert(
+                showActivated: false, left: 100, top: 100, isInFront: false));
+
+            // 判定延迟必须为"等窗口落定"留出时间（太小会误判成"不在前面"→ 又变成每次都响）。
+            Assert.InRange(WindowAttention.SettleDelayMs, 80, 800);
+        }
+
+        /// <summary>
+        /// 源码守卫：`Attach` 里必须**先判"在不在最前面"再决定提醒** ——
+        /// 直接调 `DemandAttention` 的那种写法就是 2026-09-26 被投诉的"每时每刻提醒"。
+        /// </summary>
+        [Fact]
+        public void 挂提醒的那段代码必须经过_在不在最前面_这一道判据()
+        {
+            string source = File.ReadAllText(Path.Combine(
+                XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "Helpers", "WindowAttention.cs"));
+
+            Assert.Contains("ShouldAlert(", source, StringComparison.Ordinal);
+            Assert.Contains("IsInFront(", source, StringComparison.Ordinal);
+            Assert.Contains("GetForegroundWindow", source, StringComparison.Ordinal);
+        }
+
         [Fact]
         public void 最小化不可见或不在前台都要拎到前面_已经在前台就不动它()
         {

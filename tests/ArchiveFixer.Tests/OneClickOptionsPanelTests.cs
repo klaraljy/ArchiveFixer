@@ -400,12 +400,12 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("SourceDeleteAfterVerifyOption", xaml, StringComparison.Ordinal);
             Assert.DoesNotContain("校验通过后删除", xaml, StringComparison.Ordinal);
 
-            Assert.Contains("SourceKeepInPlaceOption", xaml, StringComparison.Ordinal);
+            Assert.Contains("PanelSourceKeepInPlaceOption", xaml, StringComparison.Ordinal);
             Assert.Contains("原来的位置不动（默认）", xaml, StringComparison.Ordinal);
 
-            Assert.Contains("RestKeepOption", xaml, StringComparison.Ordinal);
-            Assert.Contains("RestRecycleOption", xaml, StringComparison.Ordinal);
-            Assert.Contains("RestDeleteOption", xaml, StringComparison.Ordinal);
+            Assert.Contains("PanelRestKeepOption", xaml, StringComparison.Ordinal);
+            Assert.Contains("PanelRestRecycleOption", xaml, StringComparison.Ordinal);
+            Assert.Contains("PanelRestDeleteOption", xaml, StringComparison.Ordinal);
 
             // 第三档红字 + 常驻提示（提示没有关闭入口 = 只有改回选项它才消失）。
             Assert.Contains("RestDeleteNotice", xaml, StringComparison.Ordinal);
@@ -427,6 +427,31 @@ namespace ArchiveFixer.Tests
 
             Assert.Contains("GroupName=\"SourceHandling\"", cleanup, StringComparison.Ordinal);
             Assert.Contains("GroupName=\"RestHandling\"", cleanup, StringComparison.Ordinal);
+
+            /*
+             * ⚠ 2026-09-26 同步审计追加：`x:Name` 也要错开（GroupName 错了黑点会互相取消，
+             * `x:Name` 重名今天不报错、但那正是"下次谁把弹窗那几行复制回③页"的入口）。
+             * 判据 = 两页各自的 `x:Name="..."` 集合**没有交集**。
+             */
+            foreach (string name in RadioNames(cleanup))
+            {
+                Assert.DoesNotContain($"x:Name=\"{name}\"", xaml, StringComparison.Ordinal);
+            }
+        }
+
+        /// <summary>一个 XAML 里所有单选按钮的 <c>x:Name</c>（拿不到就返回空集合）。</summary>
+        private static IReadOnlyList<string> RadioNames(string xaml)
+        {
+            var names = new List<string>();
+
+            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
+                         xaml,
+                         "x:Name=\"([A-Za-z0-9_]+)\""))
+            {
+                names.Add(match.Groups[1].Value);
+            }
+
+            return names;
         }
 
         /// <summary>从仓库根读一个文本文件（测试的工作目录是 bin\…，往上找到仓库那一层为止）。</summary>

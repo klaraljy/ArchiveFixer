@@ -206,7 +206,7 @@
                     <!-- ==================== 源包操作 ==================== -->
                     <GroupBox Header="1 源包操作（成功之后，源包放哪）">
                         <StackPanel>
-                            <RadioButton x:Name="SourceKeepInPlaceOption"
+                            <RadioButton x:Name="PanelSourceKeepInPlaceOption"
                                          x:FieldModifier="public"
                                          GroupName="PanelSourceHandling"
                                          Checked="SourceHandling_Checked">
@@ -216,7 +216,7 @@
                                 </StackPanel>
                             </RadioButton>
 
-                            <RadioButton x:Name="SourceMoveToRestOption"
+                            <RadioButton x:Name="PanelSourceMoveToRestOption"
                                          x:FieldModifier="public"
                                          GroupName="PanelSourceHandling"
                                          Margin="0,4,0,0"
@@ -232,14 +232,14 @@
                     <!-- ==================== 删除操作（2026-09-25 第 33 条补进弹窗） ==================== -->
                     <GroupBox Header="2 删除操作（成品目录里的「其余物」怎么办）">
                         <StackPanel>
-                            <RadioButton x:Name="RestKeepOption"
+                            <RadioButton x:Name="PanelRestKeepOption"
                                          x:FieldModifier="public"
                                          GroupName="PanelRestHandling"
                                          Checked="RestHandling_Checked">
                                 <TextBlock Text="不动其余物（默认）" Style="{StaticResource BodyTextStyle}" />
                             </RadioButton>
 
-                            <RadioButton x:Name="RestRecycleOption"
+                            <RadioButton x:Name="PanelRestRecycleOption"
                                          x:FieldModifier="public"
                                          GroupName="PanelRestHandling"
                                          Margin="0,4,0,0"
@@ -247,7 +247,7 @@
                                 <TextBlock Text="移入回收站（可还原；空间要等清空回收站才释放）" Style="{StaticResource BodyTextStyle}" />
                             </RadioButton>
 
-                            <RadioButton x:Name="RestDeleteOption"
+                            <RadioButton x:Name="PanelRestDeleteOption"
                                          x:FieldModifier="public"
                                          GroupName="PanelRestHandling"
                                          Margin="0,4,0,0"
