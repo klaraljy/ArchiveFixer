@@ -275,13 +275,18 @@ namespace ArchiveFixer.ViewModels
                     ApplyEngineSettings();
 
                     /*
-                     * 设置对象换成新的一份了（恢复默认 / 保存之后）：选项卡上那三页设置
-                     * 绑的是 SettingsEditor，必须让它**指向同一个对象** ——
-                     * 否则界面上还显示着上一份的值，用户改完保存却"看起来没生效"。
+                     * 设置对象换成新的一份了（恢复默认 / 保存之后）：**两页**设置编辑器都必须指向新对象 ——
+                     * ②③④⑥四页绑的是 SettingsEditor，⑤打包页绑的是 PackingEditor.Settings，两者各存一份引用。
                      *
-                     * （构造阶段这里是 null：编辑器还没建出来，?.就是为它准备的。）
+                     * ⚠ 2026-09-26 补 PackingEditor 那一句（真缺陷）：⑥页点「恢复默认设置」时
+                     * `Settings = ResetToDefault()` 换掉的是**新对象**，而⑤页那只还咬着旧对象 ——
+                     * 用户之后在⑤页选落点 / 原包 / 其余物，写进的是那个**已经没人读的死对象**：
+                     * 日志说"已写进设置"，重启却全回到默认（他报的"没有记忆性"的另一种形态）。
+                     *
+                     * （构造阶段这两只都是 null：编辑器还没建出来，?.就是为它们准备的。）
                      */
                     SettingsEditor?.AttachSharedSettings(_settings);
+                    PackingEditor?.AttachSharedSettings(_settings);
                 }
             }
         }
@@ -874,6 +879,15 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
+                /*
+                 * ⚠ 快照必须在 Serialize **之前**取：Serialize 会顺手 Normalize（那正是它作为唯一序列化出口
+                 * 的职责），而 Normalize 会把超范围的数字**夹回**合法区间 —— 夹过就必须让用户看见
+                 * （用户 2026-09-25 第 36 条："不许静默改掉你填的数字"）。
+                 * 以前这件事是"点保存"那条路在 `SettingsViewModel.Message` 里说的，而现在保存是自动的、
+                 * 那个框也已经删掉 —— 所以改到这里：夹回的结论并进底栏那一行（见 DescribeClampNotice）。
+                 */
+                SettingsViewModel.SettingsClampSnapshot requested = SettingsViewModel.SettingsClampSnapshot.Capture(Settings);
+
                 string json = _settingsService.Serialize(Settings);
 
                 if (string.Equals(json, _lastSavedSettingsJson, StringComparison.Ordinal))
@@ -898,14 +912,25 @@ namespace ArchiveFixer.ViewModels
 
                 _lastAutoSaveBlockNote = string.Empty;
 
-                _settingsService.Save(Settings);
-                _lastSavedSettingsJson = _settingsService.Serialize(Settings);
+                if (!WriteSettingsToDisk("设置"))
+                {
+                    SettingsAutoSaveNote = "设置没能写进磁盘（磁盘只读 / 被占用？）—— 改好之后会自动再试一次。";
+                    return false;
+                }
 
                 AppendLog("INFO", "设置已自动保存（改动即时落盘，重启后仍在）");
 
-                SettingsAutoSaveNote = "设置已自动保存 —— 改哪一项都会立刻存下来，重启后还在（不用点任何按钮）。";
+                string clampNotice = SettingsViewModel.DescribeClampNotice(requested, Settings);
 
-                ApplySettingsSideEffectsAfterSave();
+                SettingsAutoSaveNote = clampNotice.Length > 0
+                    ? "设置已自动保存，不过有一项被夹回合法范围：" + clampNotice
+                    : "设置已自动保存 —— 改哪一项都会立刻存下来，重启后还在（不用点任何按钮）。";
+
+                if (clampNotice.Length > 0)
+                {
+                    AppendLog("WARN", "设置里的数字超出允许范围，已按合法值生效：" + clampNotice);
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -913,6 +938,48 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("WARN", "自动保存设置失败：" + ex.Message);
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 把设置写进磁盘并更新指纹 —— **写盘的唯一出口**（自动保存与"用户显式选择"几条路都走它）。
+        ///
+        /// <para>为什么要有这个出口：写盘点一共有八处（自动保存 + 一键处理面板「存为默认」/
+        /// 「以后不再询问」/「无用物提醒」/ 导入密码本 / 记住的密码本 / ①页「选择…」/ 打包那几档），
+        /// 以前各自 <c>try { Save } catch</c>，而自动保存靠的是"上一次真的写下去的那份"当指纹 ——
+        /// 谁绕过它，定时器就会在 800ms 后再写一遍（内容一样、纯属白写）。</para>
+        ///
+        /// <para>⛔ 那道校验（缓存根目录 / 工具路径）**只长在自动保存这一条路上**（见
+        /// <see cref="AutoSaveSettingsIfChanged"/>）：其余调用点写的是"用户刚在这个界面上做的选择"，
+        /// 与那两格无关 —— 把它们也拦下会让"我明明点了却没记住"重现，那正是用户 2026-09-26
+        /// 第 1 条最反感的事。</para>
+        /// </summary>
+        private bool WriteSettingsToDisk(string what)
+        {
+            if (_settingsService.Save(Settings))
+            {
+                _lastSavedSettingsJson = _settingsService.Serialize(Settings);
+
+                /*
+                 * ⚠ 收尾动作必须在这里做（2026-09-26 补）：指纹基线一更新，自动保存那一跳就"看不出变化"、
+                 * 于是**不会再走** ApplySettingsSideEffectsAfterSave() —— 而那几条"自己写盘"的路
+                 * （一键处理面板「存为默认」/ 导入密码本 / 记住的密码本 / ①页「选择…」/ 打包那几档）
+                 * 恰恰都会改到"包在设置外面"的展示属性（落点那一行、并发那句话、密码本摘要）。
+                 * 放在这个唯一出口上，五条路就都跟着刷新了。
+                 */
+                ApplySettingsSideEffectsAfterSave();
+
+                /*
+                 * 底栏那一行也要跟着说一声（2026-09-26）：⑤页改打包那几档走的就是这条路，
+                 * 以前它只写盘、一句话都不说 —— 用户改完看不到任何确认，只能读成"没保存"。
+                 * （自动保存那条路随后会用更具体的措辞覆盖这一句，见 AutoSaveSettingsIfChanged。）
+                 */
+                SettingsAutoSaveNote = "设置已自动保存 —— 改哪一项都会立刻存下来，重启后还在（不用点任何按钮）。";
+
+                return true;
+            }
+
+            AppendLog("WARN", $"{what}没能写进设置（写盘失败：磁盘只读 / 被占用？）—— 下次打开会回到上一次的值。");
+            return false;
         }
 
         private string _settingsAutoSaveNote = "设置会自动保存：改哪一项都会立刻存下来，重启后还在。";
@@ -942,7 +1009,6 @@ namespace ArchiveFixer.ViewModels
             RefreshOutputPaths();
             UpdateSummary();
 
-            OnPropertyChanged(nameof(MaxParallelChoice));
             RefreshSpaceModeText();
         }
 
@@ -1177,47 +1243,6 @@ namespace ArchiveFixer.ViewModels
         {
             get => _parallelAdviceText;
             private set => SetProperty(ref _parallelAdviceText, value ?? string.Empty);
-        }
-
-        /// <summary>
-        /// 并发档位（用户 2026-09-22 需求：可选 1 / 2 / 3 / 4 / 8）。
-        ///
-        /// <para>它是设置项 <see cref="AppSettings.MaxParallelExtractCount"/> 的界面形态：
-        /// 读时夹到合法档位（设置里手改成 7 也能正常显示），写时落盘 —— 与其他设置项同一口径，
-        /// 不藏在内存里（用户上次选的档位下次启动还在）。</para>
-        /// </summary>
-        public int MaxParallelChoice
-        {
-            get => ExtractionScheduler.NormalizeParallelCount(Settings?.MaxParallelExtractCount ?? 1);
-            set
-            {
-                int normalized = ExtractionScheduler.NormalizeParallelCount(value);
-
-                if (Settings == null || Settings.MaxParallelExtractCount == normalized)
-                {
-                    return;
-                }
-
-                Settings.MaxParallelExtractCount = normalized;
-
-                try
-                {
-                    _settingsService.Save(Settings);
-                }
-                catch (Exception ex)
-                {
-                    AppendLog("WARN", $"保存并发档位失败（本次仍生效）：{ex.Message}");
-                }
-
-                OnPropertyChanged();
-                AppendLog(
-                    "INFO",
-                    $"最大并发解压数已改成 {normalized}。"
-                    + "空间不够时程序仍会在启动前拦下装不下的任务（见「按空间算建议」）。");
-
-                // 档位一动，"自测凭证还盖不盖得住"就可能翻转（4 → 8 直接失效）→ 立刻刷新界面那句话。
-                RefreshSpaceModeText();
-            }
         }
 
         /// <summary>并发档位的候选（界面的下拉框直接绑它；1 / 2 / 3 / 4 / 8）。</summary>
@@ -2181,7 +2206,14 @@ namespace ArchiveFixer.ViewModels
                 int count = _passwordService.ImportPasswordList(path).Count;
 
                 Settings.PasswordBookPath = path;
-                _settingsService.Save(Settings);
+                WriteSettingsToDisk("导入的密码本");
+
+                /*
+                 * ④页那份「已记住的密码本」清单要跟着重读（同步审计逮到）：它是 SettingsViewModel
+                 * 里的一份快照，导入这条路以前一次都不刷 —— 摘要行"密码本：xxx — N 条"当场就变了，
+                 * 下面那份清单还写着「还没有记住任何密码本 —— 启动时不会自动加载任何密码本」（与事实相反）。
+                 */
+                SettingsEditor?.NotifyRememberedBooksChanged();
 
                 RefreshPasswordBookSummary();
 
@@ -2963,18 +2995,9 @@ namespace ArchiveFixer.ViewModels
              */
             NotifyOutputPlacementChangedEverywhere();
 
-            try
+            if (!WriteSettingsToDisk("把本次选项存为默认"))
             {
-                _settingsService.Save(Settings);
-            }
-            catch (Exception ex)
-            {
-                /*
-                 * 兜底：SettingsService.Save 自己就吞写盘异常（既有行为，本批不改它），
-                 * 所以这里只会接住"别的东西炸了"——写失败本身不会走到这来，也就不会被误报成成功提示。
-                 */
-                AppendLog("ERROR", "把本次选项存为默认失败：" + ex.Message);
-                _dialogService.ShowError("把本次选项存为默认失败：" + ex.Message);
+                _dialogService.ShowError("把本次选项存为默认失败：设置文件写不进去（磁盘只读 / 被占用？）。");
                 return;
             }
 
@@ -3004,17 +3027,14 @@ namespace ArchiveFixer.ViewModels
 
             Settings.SkipOneClickConfirm = skip;
 
-            try
+            if (!WriteSettingsToDisk("「以后不再询问」"))
             {
-                _settingsService.Save(Settings);
-            }
-            catch (Exception ex)
-            {
-                AppendLog("WARN", "「以后不再询问」没能写进设置：" + ex.Message);
                 return;
             }
 
+            // ②页那个同义开关绑的是 SettingsEditor.Settings（POCO 不发通知）—— 不喊这一声它还显示着"会弹"。
             OnPropertyChanged(nameof(Settings));
+            SettingsEditor?.NotifyProcessingOptionsChanged();
         }
 
         /// <summary>
@@ -3032,17 +3052,14 @@ namespace ArchiveFixer.ViewModels
 
             Settings.RemindJunkAfterImport = remind;
 
-            try
+            if (!WriteSettingsToDisk("「无用物提醒」开关"))
             {
-                _settingsService.Save(Settings);
-            }
-            catch (Exception ex)
-            {
-                AppendLog("WARN", "「无用物提醒」开关没能写进设置：" + ex.Message);
                 return;
             }
 
+            // ③页那个同义开关同理（同步审计逮到：勾了"以后不再提醒"，那一格还显示着还会提醒）。
             OnPropertyChanged(nameof(Settings));
+            SettingsEditor?.NotifyProcessingOptionsChanged();
         }
 
         internal void RefreshOutputPaths()
@@ -3156,17 +3173,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            try
-            {
-                _settingsService.Save(Settings);
-
-                // 基线跟着走：否则自动保存下一跳会认为"还有没存的东西"，又白写一次盘。
-                _lastSavedSettingsJson = _settingsService.Serialize(Settings);
-            }
-            catch (Exception ex)
-            {
-                AppendLog("WARN", "打包的选择没能写进设置（下次打开会回到上一次的值）：" + ex.Message);
-            }
+            WriteSettingsToDisk("打包的选择");
         }
 
         // 「保存设置」这个动作**整块退役**（用户 2026-09-26："你那个按钮和最下面一个框……都要删除"）：
@@ -3190,12 +3197,20 @@ namespace ArchiveFixer.ViewModels
             RefreshOutputPaths();
 
             /*
-             * 恢复默认会把危险模式、并发档、自测凭证一起改回默认值 ——
+             * 恢复默认会把并发档、落点、源包/其余物那几档一起改回默认值 ——
              * 那几个展示属性是"包在设置外面"的（AppSettings 不发通知），
-             * 不显式通知的话⑥设置页会继续显示"危险模式已开启"而实际已经关掉了。
+             * 不显式刷新的话页面上还会停着改之前那句话。
+             *
+             * ⚠ ②页那个「全速」勾选框也是这一类（2026-09-26 同步审计逮到）：它的 getter 读
+             * `Settings.RunAtFullSpeed`，恢复默认把它清成 false —— 不通知的话界面还勾着"全速"，
+             * 而真正干活的那一套已经按并发档排队了。
              */
-            OnPropertyChanged(nameof(MaxParallelChoice));
+            OnPropertyChanged(nameof(Settings));
+            OnPropertyChanged(nameof(RunAtFullSpeed));
             RefreshSpaceModeText();
+            NotifyOutputPlacementChangedEverywhere();
+            SettingsEditor?.NotifyProcessingOptionsChanged();
+            SettingsEditor?.NotifyRememberedBooksChanged();
 
             AppendLog("INFO", "已恢复默认设置");
         }
@@ -3294,15 +3309,11 @@ namespace ArchiveFixer.ViewModels
             Settings.PasswordBookPaths = merged;
             Settings.PasswordBookPath = merged.Count > 0 ? merged[merged.Count - 1] : string.Empty;
 
-            try
-            {
-                _settingsService.Save(Settings);
-            }
-            catch (Exception ex)
-            {
-                // 记不住路径不该让关窗这个动作失败，但要说清楚（否则用户下次启动发现没自动加载会以为是 bug）。
-                AppendLog("WARN", "把记住的密码本写进设置失败：" + ex.Message);
-            }
+            // 记不住路径不该让关窗这个动作失败，但写失败要说清楚（否则用户下次启动发现没自动加载会以为是 bug）。
+            WriteSettingsToDisk("记住的密码本");
+
+            // ④页那份清单跟着重读（同 ImportPasswordBook：它是快照，不刷就与设置里的真值不一样）。
+            SettingsEditor?.NotifyRememberedBooksChanged();
         }
 
         /// <summary>
@@ -4694,14 +4705,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     if (Settings.RememberLastOutputDirectory)
                     {
-                        try
-                        {
-                            _settingsService.Save(Settings);
-                        }
-                        catch (Exception ex)
-                        {
-                            AppendLog("WARN", "保存输出目录设置失败：" + ex.Message);
-                        }
+                        WriteSettingsToDisk("输出位置");
                     }
                     else
                     {

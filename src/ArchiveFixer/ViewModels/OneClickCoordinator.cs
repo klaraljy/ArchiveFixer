@@ -1026,36 +1026,32 @@ namespace ArchiveFixer.ViewModels
         /// <see cref="PathService.BuildOutputPath"/> 见到这个字段就直接返回它，
         /// 于是内层包不会再算出 <c>&lt;id&gt;.7z\内容物</c> 这种自己的目录。
         ///
-        /// 为什么临时关掉 <see cref="AppSettings.AutoScanAfterDrop"/>：
-        /// AddPathsAsync 在它开启时会顺手对整个列表做一次重新识别，同样会把已经解压完的任务状态冲回
-        /// "已识别"（第 1 层的结果在界面上就没了）。这里只要"把新文件变成任务"，
-        /// 识别由本轮自己按任务做（见 <see cref="ScanRoundAsync"/>），所以临时关掉、用完立刻还原。
+        /// 为什么这一次导入要关掉"顺手整表重新识别"（<c>suppressAutoScan</c>）：
+        /// AddPathsAsync 在「导入后自动识别」开启时会顺手对整个列表做一次重新识别，同样会把已经解压完的
+        /// 任务状态冲回"已识别"（第 1 层的结果在界面上就没了）。这里只要"把新文件变成任务"，
+        /// 识别由本轮自己按任务做（见 <see cref="ScanRoundAsync"/>）。
+        ///
+        /// ⚠ 2026-09-26 改：以前是"临时把 <c>Settings.AutoScanAfterDrop</c> 改成 false、用完还原" ——
+        /// 那是**用户看得见、还会被自动保存写进盘**的一个设置项：万一在那段窗口里进程被杀（或断电报错），
+        /// 用户的"导入后自动扫描"就永久变成关的，而他从没动过那个开关。
+        /// 现在走 <c>AddPathsAsync</c> 的参数，一个设置项都不碰。
         /// </summary>
         private async Task<List<ArchiveTask>> AddInnerTasksAsync(IReadOnlyList<InnerArchiveCandidate> candidates)
         {
             int before = Tasks.Count;
-            bool autoScanAfterDrop = Settings.AutoScanAfterDrop;
 
-            Settings.AutoScanAfterDrop = false;
-
-            try
-            {
-                /*
-                 * ⚠ 这里必须是**追加**（ImportMode.Append）。
-                 *
-                 * 「添加文件 / 添加文件夹」的默认语义是"清空整张表再加"（用户 2026-09-24 第 12 条），
-                 * 而这一步是解压途中往列表里补内层包 —— 用替换语义就会把用户的任务表
-                 * （连同刚刚解完的那些结果行）整张清掉。AddPathsAsync 刻意**不给默认值**，
-                 * 就是为了让这种调用点必须把意图写出来。
-                 */
-                await _scanCoordinator.AddPathsAsync(
-                    candidates.Select(c => c.Path).ToList(),
-                    ImportMode.Append);
-            }
-            finally
-            {
-                Settings.AutoScanAfterDrop = autoScanAfterDrop;
-            }
+            /*
+             * ⚠ 这里必须是**追加**（ImportMode.Append）。
+             *
+             * 「添加文件 / 添加文件夹」的默认语义是"清空整张表再加"（用户 2026-09-24 第 12 条），
+             * 而这一步是解压途中往列表里补内层包 —— 用替换语义就会把用户的任务表
+             * （连同刚刚解完的那些结果行）整张清掉。AddPathsAsync 刻意**不给默认值**，
+             * 就是为了让这种调用点必须把意图写出来。
+             */
+            await _scanCoordinator.AddPathsAsync(
+                candidates.Select(c => c.Path).ToList(),
+                ImportMode.Append,
+                suppressAutoScan: true);
 
             // 按完整路径找回"这个任务对应哪个内层候选"：AddPathsAsync 可能改写路径大小写，
             // 也可能因为重复而少加几个，所以用查表而不是按下标一一对应。

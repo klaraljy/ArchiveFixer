@@ -80,8 +80,14 @@ namespace ArchiveFixer.Services
 
         /// <summary>
         /// 保存设置。
+        ///
+        /// <para>返回值 = **真的写进磁盘了没有**（2026-09-26）：以前它把写盘异常整个吞掉、对外返回 void，
+        /// 于是每个调用点都只能写一句"保存失败"的兜底 catch（那些 catch 永远不会被触发），
+        /// 而"到底存下来没有"谁也答不上来 —— 自动保存要如实告诉用户"这次存没存"，
+        /// 就必须让这一层说实话。异常仍然不往上抛（设置保存失败不该让主程序崩）。</para>
         /// </summary>
-        public void Save(AppSettings settings)
+        /// <returns>写成功 true；磁盘只读 / 被占用等失败 false（调用方按需记日志或提示）。</returns>
+        public bool Save(AppSettings settings)
         {
             settings ??= CreateDefault();
             settings.Normalize();
@@ -96,11 +102,12 @@ namespace ArchiveFixer.Services
 
                 string json = Serialize(settings);
                 File.WriteAllText(SettingsFilePath, json);
+                return true;
             }
             catch
             {
-                // 设置保存失败不能导致主程序崩溃。
-                // 这里不抛出异常，由调用方需要时自行记录日志。
+                // 设置保存失败不能导致主程序崩溃；由调用方按返回值决定怎么告诉用户。
+                return false;
             }
         }
 

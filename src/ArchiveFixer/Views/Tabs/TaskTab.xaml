@@ -179,7 +179,7 @@
                             MinHeight="36"
                             FontSize="15"
                             Style="{StaticResource PrimaryButtonStyle}"
-                            ToolTip="对勾选的任务依次做：识别格式 → 修正伪装后缀（先给你看预览）→ 按密码本解压 → 汇总结果"
+                            ToolTip="对勾选的任务依次做：识别格式 → 修正伪装后缀（自动改，不弹预览；改名结果逐条写在日志里）→ 按密码本解压 → 汇总结果"
                             Command="{Binding OneClickProcessCommand}" />
 
                     <!--
@@ -211,7 +211,7 @@
             <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <!--
                     「修复分卷名并重试」（用户 2026-09-25 第 41 条；2026-09-26 审计改口径）：
-                    只对"名字被改坏的分卷第一卷"有效，判据全在文件系统事实里（VolumeNameRepair.Plan 六条），
+                    只对"名字被改坏的分卷第一卷"有效，判据全在文件系统事实里（VolumeNameRepair.Plan 七条），
                     所以**扫描完就亮**（以前要等一次失败的解压才亮，用户从没见过它亮）。
                     它是这个程序里唯一会动源文件名的入口，而且必须用户点了才动 ——
                     文案里把"只改名字、内容不动"写进 ToolTip，确认框里再写一遍。
@@ -224,6 +224,11 @@
                         ToolTipService.ShowOnDisabled="True"
                         Command="{Binding RenameBySuggestionAndRetryCommand}" />
 
+                <!--
+                    ⚠ 「智能修正」不是"完全不碰分卷"（2026-09-26 审计）：它遇到分卷名会先问一次
+                    VolumeNameRepair.Plan —— 名字被改坏的第一卷会被修回标准名，其余的照样跳过。
+                    文案必须这么说，否则用户以为"点了也白点"（真机上他正是这么问的）。
+                -->
                 <Button Content="智能修正选中后缀"
                         MinWidth="136"
                         Margin="8,0,0,0"

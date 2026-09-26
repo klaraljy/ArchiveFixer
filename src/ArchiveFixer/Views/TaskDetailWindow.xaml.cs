@@ -9,11 +9,18 @@ namespace ArchiveFixer.Views
     /// <summary>
     /// 任务详情窗口。
     /// 只展示任务信息，不展示明文密码。
+    ///
+    /// <para>⚠ 窗口里那份文本快照必须跟着任务走（2026-09-26 同步审计逮到）：状态 / 进度那几行是**绑定**
+    /// （实时），而下面这个文本框是打开那一刻拼的一份 —— 给一个正在跑的任务打开详情，
+    /// 上面写"解压中 45%"、下面还停在"已识别"，点「复制全部」拿到的却是新的（屏幕与剪贴板不一致，
+    /// 而这个文件的注释自己写着"跟屏幕上看的不一致等于白贴"）。现在订阅任务的属性变化，值一变就重拼。</para>
     /// </summary>
     public partial class TaskDetailWindow : Window
     {
         private readonly ClipboardService _clipboardService;
         private readonly DialogService _dialogService;
+
+        private ArchiveTask? _subscribedTask;
 
         public ArchiveTask? TaskItem { get; private set; }
 
@@ -39,6 +46,12 @@ namespace ArchiveFixer.Views
 
         public void SetTask(ArchiveTask? task)
         {
+            if (_subscribedTask != null)
+            {
+                _subscribedTask.PropertyChanged -= OnTaskPropertyChanged;
+                _subscribedTask = null;
+            }
+
             TaskItem = task;
             DataContext = task;
 
@@ -48,7 +61,31 @@ namespace ArchiveFixer.Views
                 return;
             }
 
+            task.PropertyChanged += OnTaskPropertyChanged;
+            _subscribedTask = task;
+
             TaskLogTextBox.Text = BuildDetailText(task);
+        }
+
+        /// <summary>任务上任何一个值变了就重拼那一份文本（只有窗口开着时才订阅，见 SetTask / OnClosed）。</summary>
+        private void OnTaskPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (TaskItem != null)
+            {
+                TaskLogTextBox.Text = BuildDetailText(TaskItem);
+            }
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            // ⛔ 必须退订：任务活得比窗口长（列表里还留着），不退订就是内存泄漏 + 关窗之后还在拼字符串。
+            if (_subscribedTask != null)
+            {
+                _subscribedTask.PropertyChanged -= OnTaskPropertyChanged;
+                _subscribedTask = null;
+            }
+
+            base.OnClosed(e);
         }
 
         private void CopyAllButton_Click(object sender, RoutedEventArgs e)

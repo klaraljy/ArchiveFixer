@@ -347,6 +347,16 @@
                             ToolTip="把所有设置恢复成默认值（会先确认；恢复后立即生效并写盘）"
                             Command="{Binding ResetSettingsCommand}" />
 
+                    <!--
+                        「刚刚做了什么」的一行反馈（2026-09-26 同步审计）：挑缓存根目录、挑 Rar.exe、
+                        恢复默认这些动作的结论原来只写在 SettingsViewModel.Message 里 —— 那个框已被用户要求删除，
+                        于是"这个位置不能用""已选择 Rar.exe"这类反馈在界面上**一句都没有**。绑在页内，就一行。
+                    -->
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,8,0,0"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.Message}" />
+
                     <TextBlock Text="{Binding AboutText}"
                                Margin="0,12,0,0"
                                TextWrapping="Wrap"

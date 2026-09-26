@@ -824,6 +824,66 @@ namespace ArchiveFixer.ViewModels
             return null;
         }
 
+        /// <summary>
+        /// 落盘前那一份"用户填的数字"（判"Normalize 有没有把它夹回去"就靠它）。
+        ///
+        /// <para>为什么要留快照：<see cref="AppSettings.Normalize"/> 会把超范围的值**就地**改成合法值，
+        /// 归一化之后再想比就已经晚了 —— 两条保存路（设置页那条与自动保存那条）都必须**先**取快照。</para>
+        /// </summary>
+        internal readonly record struct SettingsClampSnapshot(
+            int PasswordAttempts,
+            int SingleFileGiB,
+            int TotalGiB,
+            int FileCount,
+            double Ratio)
+        {
+            public static SettingsClampSnapshot Capture(AppSettings settings)
+            {
+                settings ??= new AppSettings();
+
+                return new SettingsClampSnapshot(
+                    settings.MaxPasswordAttemptsPerLayer,
+                    settings.MaxSingleExtractedFileGiB,
+                    settings.MaxExtractedTotalGiB,
+                    settings.MaxExtractedFileCount,
+                    settings.MaxExtractionRatio);
+            }
+        }
+
+        /// <summary>
+        /// 归一化之后"有没有哪个数字被夹回"的那句话（空字符串 = 一个都没被夹）。
+        ///
+        /// <para>⛔ 只有这一处实现：设置页那条路把它接在"设置已保存"后面，自动保存那条路把它并进
+        /// 底栏（用户 2026-09-26 第 1 条把那个框删掉之后，这里是唯一还会说"你填的数被夹了"的地方）。</para>
+        /// </summary>
+        internal static string DescribeClampNotice(SettingsClampSnapshot requested, AppSettings settings)
+        {
+            settings ??= new AppSettings();
+
+            bool passwordClamped = requested.PasswordAttempts != settings.MaxPasswordAttemptsPerLayer;
+
+            bool capsClamped =
+                requested.SingleFileGiB != settings.MaxSingleExtractedFileGiB ||
+                requested.TotalGiB != settings.MaxExtractedTotalGiB ||
+                requested.FileCount != settings.MaxExtractedFileCount ||
+                !requested.Ratio.Equals(settings.MaxExtractionRatio);
+
+            return (passwordClamped, capsClamped) switch
+            {
+                (true, true) =>
+                    $"每层密码尝试上限 {requested.PasswordAttempts} 超出 1~1000、安全上限也有超范围的值，"
+                    + $"已按 密码 {settings.MaxPasswordAttemptsPerLayer} / 单文件 {settings.MaxSingleExtractedFileGiB} GiB"
+                    + $" / 总大小 {settings.MaxExtractedTotalGiB} GiB / 文件数 {settings.MaxExtractedFileCount}"
+                    + $" / 展开比 {settings.MaxExtractionRatio:0.##} 倍 生效。",
+                (true, false) =>
+                    $"每层密码尝试上限 {requested.PasswordAttempts} 超出 1~1000，已按 {settings.MaxPasswordAttemptsPerLayer} 生效。",
+                (false, true) =>
+                    $"安全上限超出允许范围，已按 单文件 {settings.MaxSingleExtractedFileGiB} GiB / 总大小 {settings.MaxExtractedTotalGiB} GiB"
+                    + $" / 文件数 {settings.MaxExtractedFileCount} / 展开比 {settings.MaxExtractionRatio:0.##} 倍 生效。",
+                _ => string.Empty
+            };
+        }
+
         private void Save()
         {
             try
@@ -899,20 +959,15 @@ namespace ArchiveFixer.ViewModels
                  */
 
                 /*
-                 * Normalize() 会把超范围的数字夹回合法区间（例如密码尝试上限 5000 → 1000）。
-                 * 静默改掉用户填的数字是"我以为我设成了 5000"的经典来源，所以这里比一下前后值，
-                 * 被夹过就在底栏说清楚 —— 用户填错的数字必须看得见。
+                 * Normalize() 会把超范围的数字夹回合法区间（密码尝试上限 5000 → 1000；安全上限 8192 GiB → 4096）。
+                 * 静默改掉用户填的数字是"我以为我设成了 5000"的经典来源 —— 所以**先留一份快照**，
+                 * 归一化之后再比一次，夹过就说清楚（判据与措辞只有一处实现：DescribeClampNotice）。
+                 *
+                 * ⚠ 保存改成自动之后（用户 2026-09-26 第 1 条）**同一个判据还得在自动保存那条路上用一次**
+                 * （见 MainViewModel.AutoSaveSettingsIfChanged）：底栏那个框删掉了，夹回的结论改由
+                 * SettingsAutoSaveNote 说 —— 两条路必须说同一句话，否则"填大了没人告诉你"又回来了。
                  */
-                int requestedPasswordAttempts = Settings.MaxPasswordAttemptsPerLayer;
-
-                /*
-                 * 安全上限那四条同理（用户 2026-09-25 第 36 条）：填了 0 / 负数 / 过大的数会被夹回合法区间，
-                 * 夹过就必须说 —— 他填 8192 GiB 而实际只生效 4096 时，"我以为我设成了 8192"是最坏的结果。
-                 */
-                int requestedSingleGiB = Settings.MaxSingleExtractedFileGiB;
-                int requestedTotalGiB = Settings.MaxExtractedTotalGiB;
-                int requestedFileCount = Settings.MaxExtractedFileCount;
-                double requestedRatio = Settings.MaxExtractionRatio;
+                SettingsClampSnapshot requested = SettingsClampSnapshot.Capture(Settings);
 
                 Settings.Normalize();
 
@@ -928,28 +983,21 @@ namespace ArchiveFixer.ViewModels
                 RefreshEngineList();
                 RefreshRarStatus();
 
-                bool passwordClamped = requestedPasswordAttempts != Settings.MaxPasswordAttemptsPerLayer;
+                string clampNotice = DescribeClampNotice(requested, Settings);
 
-                bool capsClamped =
-                    requestedSingleGiB != Settings.MaxSingleExtractedFileGiB ||
-                    requestedTotalGiB != Settings.MaxExtractedTotalGiB ||
-                    requestedFileCount != Settings.MaxExtractedFileCount ||
-                    !requestedRatio.Equals(Settings.MaxExtractionRatio);
-
-                string clampNotice = (passwordClamped, capsClamped) switch
+                /*
+                 * 真的写盘（2026-09-26 补）：这个方法以前只做"校验 + 归一化 + 写 Message"，
+                 * 落盘一直由主窗口那颗「保存设置」按钮在 Save() 之后补一刀 —— 那颗按钮随自动保存
+                 * 整块退役之后，`SaveCommand` 就变成了一句"名为保存、其实不保存"的空话。
+                 * ⛔ 名字必须与事实一致：要么改名，要么真存 —— 这里选后者
+                 * （它也是设置对话框形态的宿主唯一需要的那个动作）。
+                 */
+                if (!_settingsService.Save(Settings))
                 {
-                    (true, true) =>
-                        $"（每层密码尝试上限 {requestedPasswordAttempts} 超出 1~1000、安全上限也有超范围的值，"
-                        + $"已按 密码 {Settings.MaxPasswordAttemptsPerLayer} / 单文件 {Settings.MaxSingleExtractedFileGiB} GiB"
-                        + $" / 总大小 {Settings.MaxExtractedTotalGiB} GiB / 文件数 {Settings.MaxExtractedFileCount}"
-                        + $" / 展开比 {Settings.MaxExtractionRatio:0.##} 倍 生效。）",
-                    (true, false) =>
-                        $"（每层密码尝试上限 {requestedPasswordAttempts} 超出 1~1000，已按 {Settings.MaxPasswordAttemptsPerLayer} 生效。）",
-                    (false, true) =>
-                        $"（安全上限超出允许范围，已按 单文件 {Settings.MaxSingleExtractedFileGiB} GiB / 总大小 {Settings.MaxExtractedTotalGiB} GiB"
-                        + $" / 文件数 {Settings.MaxExtractedFileCount} / 展开比 {Settings.MaxExtractionRatio:0.##} 倍 生效。）",
-                    _ => string.Empty
-                };
+                    Message = "设置没能写进磁盘（磁盘只读 / 被占用？）—— 请检查程序目录是否可写。";
+                    DialogResult = false;
+                    return;
+                }
 
                 Message = clampNotice.Length > 0 ? "设置已保存" + clampNotice : "设置已保存。";
 
@@ -979,6 +1027,8 @@ namespace ArchiveFixer.ViewModels
         /// 把「已记住的密码本」那一组刷成设置里的真实内容（不猜、不缓存）。
         /// 恢复默认设置、以及移除一项之后都要重来一遍，否则界面上会留着已经移除的项。
         /// </summary>
+        internal void NotifyRememberedBooksChanged() => RefreshRememberedBooks();
+
         private void RefreshRememberedBooks()
         {
             RememberedBooks.Clear();
@@ -1134,6 +1184,17 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(RestHandling));
             OnPropertyChanged(nameof(IsRestDeleteSelected));
             OnPropertyChanged(nameof(RestHandlingSummary));
+
+            /*
+             * ⚠ 还有一批设置项是**直接**绑 `SettingsEditor.Settings.X` 的（②页「以后不再询问」、
+             * ③页「导入后提醒」、⑥页那十几格……）。AppSettings 是普通 POCO、自己不发通知，
+             * 所以"值被别的入口改了"之后，这些控件不会重新求值 —— 真机形态是：
+             * 弹窗里勾了「以后不再询问」（确实生效、弹窗真的不再出现），回②页一看那个勾**还在没勾**，
+             * 用户只能理解成"我勾了没用"（2026-09-26 同步审计逮到）。
+             *
+             * 通知 `Settings` 本身 = 让所有 `...Settings.X` 的绑定重新求值一次（OneWay 会重读）。
+             */
+            OnPropertyChanged(nameof(Settings));
         }
 
         private void RaiseOutputPlacementChanged()

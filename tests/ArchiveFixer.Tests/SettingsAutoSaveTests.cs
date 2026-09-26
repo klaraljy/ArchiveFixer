@@ -154,6 +154,119 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// 用户 2026-09-25 第 36 条要的"不许静默改掉你填的数字"：Normalize 会把超范围的值夹回合法区间，
+        /// 夹过就必须在**看得见的地方**说 —— 那个地方以前是底栏的"设置已保存（…已按 … 生效）"。
+        ///
+        /// <para>⚠ 2026-09-26 的同步审计逮到：保存改成自动、那个框删掉之后，这条承诺**没人执行了** ——
+        /// 用户填 8192、实际生效 4096，界面上一个字都没有（人工测试清单 C19 正是照这条承诺写的）。
+        /// 现在由底栏那一行说（`SettingsAutoSaveNote`）。</para>
+        /// </summary>
+        [Fact]
+        public void 填超范围的数字被夹回_底栏必须说清()
+        {
+            Harness harness = CreateHarness("clamp");
+
+            harness.Vm.Settings.MaxSingleExtractedFileGiB = 8192;
+
+            Assert.True(harness.Vm.AutoSaveSettingsIfChanged(), "夹回之后这一跳仍然要落盘（存的是合法值）");
+
+            // ① 文件里是夹回后的值（不是用户填的 8192）。
+            Assert.Equal(
+                AppSettings.MaxExtractionCapGiB,
+                new SettingsService(harness.PathService).Load().MaxSingleExtractedFileGiB);
+
+            // ② 底栏那一行必须说清"有一项被夹回了"，而且要说到是哪个上限。
+            Assert.Contains("夹回", harness.Vm.SettingsAutoSaveNote, StringComparison.Ordinal);
+            Assert.Contains("安全上限", harness.Vm.SettingsAutoSaveNote, StringComparison.Ordinal);
+
+            // 反向：没超范围时不许乱说"被夹回"。
+            Harness normal = CreateHarness("clamp-ok");
+
+            normal.Vm.Settings.MaxSingleExtractedFileGiB = 128;
+            Assert.True(normal.Vm.AutoSaveSettingsIfChanged());
+            Assert.DoesNotContain("夹回", normal.Vm.SettingsAutoSaveNote, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// ⑥页「恢复默认设置」换的是**一份新的 AppSettings 对象** —— ⑤打包页那只必须跟着换过去，
+        /// 否则它之后写的是"已经没人读的死对象"：日志说"已写进设置"，重启却全回到默认。
+        ///
+        /// <para>（2026-09-26 同步审计逮到的真缺陷：`Settings` 的 setter 只重挂了 SettingsEditor，
+        /// 漏了 PackingEditor。）</para>
+        /// </summary>
+        [Fact]
+        public void 恢复默认设置之后_打包页也要换成新的那一份设置()
+        {
+            Harness harness = CreateHarness("reset");
+
+            Assert.Same(harness.Vm.Settings, harness.Vm.PackingEditor.Settings);
+
+            AppSettings before = harness.Vm.Settings;
+
+            harness.Vm.Settings = new SettingsService(harness.PathService).ResetToDefault();
+
+            Assert.NotSame(before, harness.Vm.Settings);
+            Assert.Same(harness.Vm.Settings, harness.Vm.PackingEditor.Settings);
+
+            // ⑤页改一档 → 写进的是**新的**那一份（不是被换掉的那只死对象）。
+            harness.Vm.PackingEditor.PlacementIsCustom = true;
+
+            Assert.Equal("Custom", harness.Vm.Settings.PackTargetMode);
+            Assert.Equal("Local", before.PackTargetMode);
+        }
+
+        /// <summary>
+        /// 换设置对象之后，"指定位置"那一格显示的文字也要跟着换新对象（真机逮到）：
+        /// `LoadPlacementFromSettings` 只改了字段、没通知属性 —— 于是⑥页恢复默认之后
+        /// ⑤页那个灰着的框里**还挂着上一次的路径**，与"现在没有指定位置"正好相反。
+        /// </summary>
+        [Fact]
+        public void 换设置对象之后_打包页那一格目录也要跟着换()
+        {
+            Harness harness = CreateHarness("pack-dir");
+
+            harness.Vm.Settings.PackTargetMode = "Custom";
+            harness.Vm.Settings.PackCustomOutputDirectory = @"D:\旧的出包";
+            harness.Vm.PackingEditor.AttachSharedSettings(harness.Vm.Settings);
+
+            Assert.Equal(@"D:\旧的出包", harness.Vm.PackingEditor.CustomPlacementDirectory);
+
+            var raised = new List<string>();
+            harness.Vm.PackingEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? string.Empty);
+
+            AppSettings fresh = AppSettings.CreateDefault();
+            fresh.PackTargetMode = "Local";
+
+            harness.Vm.PackingEditor.AttachSharedSettings(fresh);
+
+            Assert.Equal(string.Empty, harness.Vm.PackingEditor.CustomPlacementDirectory);
+            Assert.Contains(nameof(harness.Vm.PackingEditor.CustomPlacementDirectory), raised);
+            Assert.False(harness.Vm.PackingEditor.PlacementIsCustom);
+        }
+
+        /// <summary>
+        /// 弹窗里勾了「以后不再询问」之后，②页那个同义开关必须跟着刷新（值写对了、界面显示旧值 = 用户读成"没生效"）。
+        /// ③页的「导入后提醒」同理。判据是**通知**（SettingsViewModel 里那张清单），不是值。
+        /// </summary>
+        [Fact]
+        public void 弹窗里勾了以后不再询问_解压方式页那个开关要跟着刷新()
+        {
+            Harness harness = CreateHarness("notify");
+            var raised = new List<string>();
+
+            harness.Vm.SettingsEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? string.Empty);
+
+            harness.Vm.SaveSkipOneClickConfirm(true);
+
+            Assert.Contains(nameof(harness.Vm.SettingsEditor.Settings), raised);
+
+            raised.Clear();
+            harness.Vm.SaveRemindJunkAfterImport(false);
+
+            Assert.Contains(nameof(harness.Vm.SettingsEditor.Settings), raised);
+        }
+
+        /// <summary>
         /// 设过「缓存根目录」的人：数据根会跟着缓存根走（见 <c>MainViewModel.ApplyEngineSettings</c>），
         /// 于是设置文件有两个可能的位置 —— 程序目录下的 <c>data</c>（启动时先读的那一份）与缓存根那一份。
         ///

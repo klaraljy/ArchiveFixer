@@ -169,6 +169,19 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 把设置**换成新的一份对象**（用户 2026-09-26：⑥页「恢复默认设置」之后⑤页必须跟着换过来）。
+        ///
+        /// <para>为什么不直接叫属性 setter：这里要做的是"共享同一份"这件事本身，
+        /// 与 <c>SettingsViewModel.AttachSharedSettings</c> 同一口径 —— 名字写清楚，
+        /// 免得下次有人以为它只是"设个值"。⛔ 换对象之后⑤页那三档必须按新对象重新读一遍，
+        /// 否则界面还停着上一份的值（用户会以为"恢复默认没生效"）。</para>
+        /// </summary>
+        public void AttachSharedSettings(AppSettings settings)
+        {
+            Settings = settings ?? new AppSettings();
+        }
+
         /// <summary>密码列表的来源（④页那份；由主界面注入）。</summary>
         public Func<IReadOnlyList<string>>? PasswordListProvider
         {
@@ -513,6 +526,13 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(PlacementIsCustom));
             OnPropertyChanged(nameof(PlacementIsFollowDefault));
             OnPropertyChanged(nameof(PlacementIsEditable));
+
+            /*
+             * ⚠ 目录那一格也要通知（2026-09-26 真机逮到）：上面只是改了**字段**，
+             * 而那一格绑的是属性 —— 不通知的话，⑥页「恢复默认设置」之后⑤页那个「指定位置」框
+             * 还显示着上一次的路径（灰着、不可改），与"现在没有指定位置"这个事实正好相反。
+             */
+            OnPropertyChanged(nameof(CustomPlacementDirectory));
         }
 
         /// <summary>

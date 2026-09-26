@@ -163,7 +163,17 @@ namespace ArchiveFixer.ViewModels
         /// （<c>OneClickCoordinator</c>），默认成"替换"就等于在一次解压途中把用户的任务表清空 ——
         /// 这种事必须让每个调用点**写出来**，编译器盯着。（用户 2026-09-24 第 12 条定的默认语义是替换。）
         /// </param>
-        public async Task AddPathsAsync(IEnumerable<string> paths, ImportMode mode)
+        /// <param name="suppressAutoScan">
+        /// 这一次导入**不要**顺手做整表重新识别（默认 false = 照设置里那一档走）。
+        ///
+        /// <para>续解往列表里补内层包时必须传 true：整表重扫会把已经解压完的任务状态冲回「已识别」，
+        /// 第 1 层的结果在界面上就没了（识别由续解那一轮自己按任务做）。</para>
+        ///
+        /// <para>⛔ 这个开关**不许**用"临时改 <c>Settings.AutoScanAfterDrop</c>"来实现 ——
+        /// 那是用户看得见、还会被自动保存写进盘的一个设置项：2026-09-26 的同步审计指出，
+        /// 万一在那一小段窗口里进程被杀，用户的"导入后自动扫描"就永久变成关的，而他从没动过那个开关。</para>
+        /// </param>
+        public async Task AddPathsAsync(IEnumerable<string> paths, ImportMode mode, bool suppressAutoScan = false)
         {
             if (paths == null)
             {
@@ -254,7 +264,7 @@ namespace ArchiveFixer.ViewModels
                         StatusText.ImportFinishedLogFormat,
                         accepted.Count));
 
-                if (Settings.AutoScanAfterDrop && accepted.Count > 0)
+                if (!suppressAutoScan && Settings.AutoScanAfterDrop && accepted.Count > 0)
                 {
                     // 扫描收尾会再刷一次汇总（识别结果改了格式/状态），所以这里不重复刷。
                     await ScanTasksAsync();
