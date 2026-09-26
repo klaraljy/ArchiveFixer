@@ -337,6 +337,23 @@ namespace ArchiveFixer.Models
         public string DangerModeSelfTestStamp { get; set; } = string.Empty;
 
         /// <summary>
+        /// **容器里装的是分卷的第 1 卷时，自动把同目录的后续卷接上**（用户 2026-09-25 第 42 条，**默认关**）。
+        ///
+        /// <para>他遇到的形状：一个文件（例如 <c>封面.jpg</c>）里装着的正是 <c>set.7z.001</c>，
+        /// 而 <c>set.7z.002/.003</c> 就躺在**同一个目录**里。引擎按**文件名**在**同一个目录**里找同组的其他卷，
+        /// 而抠出来的那一段既不在那个目录、名字也不带卷号 → 报"分卷缺失"，两边永远凑不上。</para>
+        ///
+        /// <para>打开之后：程序在工作区里摆一套"名字成套、同在一个目录"的卷
+        /// （首卷 = 容器里那一段，改成标准首卷名；后续卷 = 同盘**硬链接**、跨盘才复制且先查空间），
+        /// 拿拼好的那一套去解压。**用户的源文件一个字节都不动**（见 <c>Extraction/SplitVolumeAssembler</c>）。</para>
+        ///
+        /// <para>⛔ 为什么默认关：它会读用户的源目录、并在盘上造名字 / 复制卷。
+        /// 判不准的场合（同族两组以上缺首卷、族认不出来且不止一组）**一律不动**，
+        /// 照旧如实报"分卷缺失"并给出改名建议。</para>
+        /// </summary>
+        public bool AssembleSplitVolumesFromContainer { get; set; } = false;
+
+        /// <summary>
         /// 低运行优先级（**默认开**）：启动时把本进程设成 <c>BelowNormal</c>，
         /// 解压子进程（7z.exe）继承这个优先级，于是批量解压不再和桌面抢 CPU / 磁盘。
         ///
@@ -957,6 +974,9 @@ namespace ArchiveFixer.Models
                 RestRemovalDefaultMode = RestRemovalModes.RecycleBin,
                 ReportDangerousEntries = true,
                 RemindBeforeExtract = true,
+
+                // 第 42 条的全自动拼装：出厂**关**（它会读源目录、并在盘上造名字 / 复制卷）。
+                AssembleSplitVolumesFromContainer = false,
                 RememberLastOutputDirectory = true,
                 IncludeHiddenFiles = false,
                 IncludeSystemFiles = false,

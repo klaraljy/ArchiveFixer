@@ -5990,6 +5990,15 @@ namespace ArchiveFixer.ViewModels
                 parts.Add("续解");
             }
 
+            /*
+             * 第 42 条：这一单在工作区里接过分卷（默认关的那个开关）—— 那是**动过盘**的动作，
+             * 而默认档"成功就丢"会把过程细节丢掉，所以必须出现在这一行摘要里。
+             */
+            if (!string.IsNullOrWhiteSpace(task.SplitVolumeAssemblyNote))
+            {
+                parts.Add(task.SplitVolumeAssemblyNote);
+            }
+
             if (!string.IsNullOrWhiteSpace(task.ElapsedText)
                 && task.ElapsedText != "-"
                 && !string.Equals(task.ElapsedText, "00:00:00", StringComparison.Ordinal))
@@ -7526,10 +7535,7 @@ namespace ArchiveFixer.ViewModels
                 string[] subdirectories = Directory.GetDirectories(taskDirectory);
 
                 string? foreign = subdirectories.FirstOrDefault(
-                    directory => !string.Equals(
-                        Path.GetFileName(directory),
-                        PathService.StageDirectoryName,
-                        StringComparison.OrdinalIgnoreCase));
+                    directory => !IsOurWorkspaceSubdirectory(Path.GetFileName(directory)));
 
                 if (foreign != null)
                 {
@@ -8493,6 +8499,34 @@ namespace ArchiveFixer.ViewModels
 
                     lastListErrorType = attempt.ErrorType ?? string.Empty;
                     lastListMessage = attempt.Message ?? string.Empty;
+                }
+            }
+
+            /*
+             * ==================== 第 42 条：容器里装的是第 1 卷时，把外面的后续卷接上 ====================
+             *
+             * 用户 2026-09-25 选的方案 A：**做，但默认关**（②页那个开关打开才走这条路）。
+             * 三种形状长得很像，判据必须是**引擎自己说的话**，不能靠猜：
+             * · 容器里装的是**完整**归档 → 上面那次 list 就成功了（preflightList != null），走不到这里；
+             * · 容器里装的是**分卷第 1 卷**、后续卷在外面 → list 报的正是「分卷缺失」这一类 ← 只有这一档才拼；
+             * · 容器里装的是**后续卷**（真的缺首卷） → 外面那一组里**有**标准首卷名 → 不是"缺首卷的组"，
+             *   SplitVolumeAssembler 的一组都挑不出来，一个字都不动。
+             * 所以这里要求"引擎刚说过分卷缺失"这一条**硬证据**，拼完再用引擎验一次：验不过就退回原路。
+             */
+            if (preflightList == null
+                && directZip == null
+                && task.EmbeddedArchiveOffset > 0
+                && Settings.AssembleSplitVolumesFromContainer
+                && IsVolumeMissingErrorType(lastListErrorType))
+            {
+                (string? assembledFirstVolume, ArchiveListResult? assembledList) =
+                    await TryAssembleSplitVolumesAsync(task, engineArchivePath, candidates, cancellationToken);
+
+                if (assembledFirstVolume != null && assembledList != null)
+                {
+                    // 引擎自己认了这一套：换成它，后面预检 / 解压全都用拼好的那一套。
+                    engineArchivePath = assembledFirstVolume;
+                    preflightList = assembledList;
                 }
             }
 
@@ -10154,7 +10188,17 @@ namespace ArchiveFixer.ViewModels
                     System.Globalization.CultureInfo.CurrentCulture,
                     StatusText.EmbeddedFirstVolumeHintFormat,
                     orphans[0].Describe(),
-                    task.FileName);
+                    task.FileName,
+                    orphans[0].FirstVolumeName);
+
+                /*
+                 * 开关打开时补一句"这次已经试过了" —— 否则用户会以为程序没试
+                 * （方案 A 落地后，失败原因里的建议必须与"当前这一档到底试没试"一致）。
+                 */
+                if (Settings.AssembleSplitVolumesFromContainer)
+                {
+                    hint += StatusText.EmbeddedFirstVolumeHintAssemblyTriedSuffix;
+                }
 
                 AppendLog(
                     "WARN",
@@ -10187,6 +10231,187 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **第 42 条的全自动拼装**（用户 2026-09-25 选的方案 A：做，默认关）：
+        /// 容器里装的是分卷第 1 卷、后续卷在容器外面时，在**工作区**里接出一套"名字成套、同在一个目录"的卷。
+        ///
+        /// <para>调用时机是**引擎已经说过"分卷缺失"之后**（不是抠完就拼）—— 这是这一档最重要的安全阀：
+        /// 容器里装的是**完整**归档时 list 早就成功了，根本走不到这里；真的装的是"后续卷"时，
+        /// 外面那一组里**有**标准首卷名，<see cref="SplitVolumeAssembler"/> 一组都挑不出来。
+        /// 拼完还要再让引擎自己验一次，验不过就**退回原路**（结论一个字不变）。</para>
+        ///
+        /// <para>返回 <c>(null, null)</c> = 没拼 / 拼了但引擎不认 —— 调用方照旧走今天那条路。</para>
+        /// </summary>
+        private async Task<(string? FirstVolumePath, ArchiveListResult? List)> TryAssembleSplitVolumesAsync(
+            ArchiveTask task,
+            string carvedPath,
+            IReadOnlyList<PasswordItem> candidates,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                string sourceDirectory = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
+                string workDirectory = _pathService.BuildTaskWorkDirectory(task);
+
+                if (string.IsNullOrWhiteSpace(sourceDirectory) || string.IsNullOrWhiteSpace(workDirectory))
+                {
+                    return (null, null);
+                }
+
+                string assemblyDirectory = Path.Combine(workDirectory, SplitVolumeAssembler.AssemblyDirectoryName);
+
+                /*
+                 * 同一个任务被重试时这里可能有上一轮的残留：只清**我们自己造的那一个目录**
+                 * （名字与父目录都对得上才清；对不上就一个字节都不动）。
+                 */
+                if (!TryResetAssemblyDirectory(assemblyDirectory, workDirectory))
+                {
+                    AppendLog("WARN", $"{task.FileName}：拼装目录里已经有程序没造过的东西，本次不拼（一个字节都不动）。");
+                    return (null, null);
+                }
+
+                SplitVolumeFamily family = SplitVolumeAssembler.DetectFamilyByMagic(carvedPath);
+
+                SplitVolumeAssemblyPlan plan = SplitVolumeAssembler.Plan(
+                    carvedPath,
+                    family,
+                    sourceDirectory,
+                    assemblyDirectory,
+                    CollectVolumeFilesInDirectory(sourceDirectory).Select(Path.GetFileName));
+
+                if (!plan.CanAssemble)
+                {
+                    AppendLog("INFO", $"{task.FileName}：没有自动把两边的分卷接起来 —— {plan.Reason}");
+                    return (null, null);
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"{task.FileName}：{plan.Reason}正在工作区里接起来（你的源文件只读，一个字节都不动）。");
+
+                /*
+                 * 进度用 Progress<long>（回调回到捕获的上下文，与"抠取内嵌归档"那处的写法一致）——
+                 * ⛔ 绝不在复制循环里直接碰界面/日志：那段代码跑在线程池上。
+                 * 每 1 GiB 报一次：跨盘复制几个 5 GB 的卷时，用户要能看出"还在动"。
+                 */
+                long logged = 0;
+
+                IProgress<long> copyProgress = new Progress<long>(copied =>
+                {
+                    if (copied - logged >= 1024L * 1024 * 1024)
+                    {
+                        logged = copied;
+                        AppendLog("INFO", $"{task.FileName}：正在复制后续卷 …已复制 {TaskSpaceEstimate.FormatSize(copied)}");
+                    }
+                });
+
+                SplitVolumeAssemblyResult assembled = await Task.Run(
+                    () => SplitVolumeAssembler.TryAssemble(
+                        plan,
+                        availableSpace: null,
+                        progress: copied => copyProgress.Report(copied),
+                        cancellationToken),
+                    cancellationToken);
+
+                if (!assembled.Success)
+                {
+                    AppendLog("WARN", $"{task.FileName}：自动拼装没做成 —— {assembled.Reason}照旧按「分卷缺失」处理。");
+                    return (null, null);
+                }
+
+                foreach (string line in assembled.LogLines)
+                {
+                    AppendLog("INFO", $"{task.FileName}：{line}");
+                }
+
+                /*
+                 * 记在任务上：默认档的日志"成功就丢"，而"接过分卷"是**动过盘**的事实，
+                 * 用户不改设置也要能看见 → 收尾那一行摘要会带上它（见 BuildTaskSummaryLine）。
+                 */
+                task.SplitVolumeAssemblyNote =
+                    $"接上分卷（硬链接 {assembled.HardLinkCount} / 复制 {assembled.CopyCount}"
+                    + (assembled.CopiedBytes > 0 ? $"，{TaskSpaceEstimate.FormatSize(assembled.CopiedBytes)}" : string.Empty)
+                    + "）";
+
+                // 拼完**必须让引擎自己验一次**：它认了才算数（与上面那次 list 用的是同一套候选顺序）。
+                ArchiveListResult? assembledList = null;
+
+                foreach (PasswordItem candidate in candidates.Take(MaxPreflightPasswordAttempts))
+                {
+                    ArchiveListResult attempt = await _archiveEngine.ListAsync(
+                        ArchiveRequest.For(assembled.FirstVolumePath, candidate.Value),
+                        cancellationToken);
+
+                    if (attempt.Success)
+                    {
+                        assembledList = attempt;
+                        break;
+                    }
+                }
+
+                if (assembledList == null)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{task.FileName}：接上后续卷之后引擎仍然打不开这一套（可能这一组本身就是坏的），" +
+                        "退回原路，照旧按「分卷缺失」报。");
+                    return (null, null);
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"{task.FileName}：接上后续卷之后引擎能打开了（{assembledList.FileCount} 个文件），" +
+                    "本次就用工作区里那一套解压（源目录里一个字节都没动）。");
+
+                return (assembled.FirstVolumePath, assembledList);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // 拼装是"锦上添花"：出任何错都退回原路，⛔ 绝不让它改变任务的结论。
+                AppendLog("WARN", $"{task.FileName}：自动拼装时出错（{ex.Message}），退回原路（结论不受影响）。");
+                return (null, null);
+            }
+        }
+
+        /// <summary>
+        /// 清掉本任务上一轮留下的拼装目录（**只认我们自己造的那一个**：父目录 = 本任务工作区、
+        /// 目录名 = <see cref="SplitVolumeAssembler.AssemblyDirectoryName"/>，两条都对得上才删）。
+        /// </summary>
+        private static bool TryResetAssemblyDirectory(string assemblyDirectory, string workDirectory)
+        {
+            try
+            {
+                if (!Directory.Exists(assemblyDirectory))
+                {
+                    return true;
+                }
+
+                string? parent = Path.GetDirectoryName(assemblyDirectory);
+
+                if (parent == null
+                    || !SafePathHelper.PathEquals(parent, workDirectory)
+                    || !string.Equals(
+                        Path.GetFileName(assemblyDirectory),
+                        SplitVolumeAssembler.AssemblyDirectoryName,
+                        StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                Directory.Delete(assemblyDirectory, recursive: true);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 清理**本任务自己**的中间工作区目录：<c>&lt;work&gt;\&lt;taskId&gt;\</c>。
         ///
         /// 为什么必须有（端到端验收实测）：双面文件要先按偏移把它尾部那段真正的 ZIP 抠进工作区再解压，
@@ -10205,7 +10430,8 @@ namespace ArchiveFixer.ViewModels
         /// 安全边界（这是"删目录"，每一条都要有）：
         /// · 目录按**暂存目录的父目录**算出（不再按 CurrentPath 重算，见下），
         ///   再规范化确认它确实在工作区根**之下**（容器内校验，越界就什么都不删）；
-        /// · 目录里只允许出现 <c>stage</c> 这一个子目录（我们自己造的）与本任务的中间件文件；
+        /// · 目录里只允许出现**我们自己造的那些**子目录（<c>stage</c>、第 42 条拼装用的 <c>volumes</c>，
+        ///   见 <see cref="IsOurWorkspaceSubdirectory"/>）与本任务的中间件文件；
         ///   出现别的子目录说明这不是我们造的那个目录（最典型：任务名撞上了递归工作区的 <c>recursive</c>），
         ///   为安全起见一个字节都不碰；
         /// · 删失败（被占用 / 权限不足）只写日志，绝不让已经成功的任务变成失败。
@@ -10248,10 +10474,7 @@ namespace ArchiveFixer.ViewModels
                 string[] subdirectories = Directory.GetDirectories(taskDirectory);
 
                 string? foreign = subdirectories.FirstOrDefault(
-                    directory => !string.Equals(
-                        Path.GetFileName(directory),
-                        PathService.StageDirectoryName,
-                        StringComparison.OrdinalIgnoreCase));
+                    directory => !IsOurWorkspaceSubdirectory(Path.GetFileName(directory)));
 
                 if (foreign != null)
                 {
@@ -10284,6 +10507,17 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("WARN", $"{task.FileName}：清理中间工作区失败（{ex.Message}），目录保留：{taskDirectory}");
             }
         }
+
+        /// <summary>
+        /// 这个子目录名是不是"**我们自己造的**"（决定清工作区时敢不敢整份删）。
+        ///
+        /// <para>现在只认两个：<c>stage</c>（暂存/入仓）与 <c>volumes</c>（第 42 条的拼装目录）。
+        /// ⛔ 出现别的子目录一律不删 —— 那最典型的情况是"任务名撞上了递归工作区的 <c>recursive</c>"，
+        /// 顺着删会把别人的东西删掉。以后每加一个我们自己造的子目录，都要加到这里。</para>
+        /// </summary>
+        private static bool IsOurWorkspaceSubdirectory(string name) =>
+            string.Equals(name, PathService.StageDirectoryName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, SplitVolumeAssembler.AssemblyDirectoryName, StringComparison.OrdinalIgnoreCase);
 
         public void StopAfterCurrent()
         {

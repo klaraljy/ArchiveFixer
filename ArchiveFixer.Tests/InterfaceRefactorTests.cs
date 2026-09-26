@@ -411,7 +411,10 @@ namespace ArchiveFixer.Tests
                 ["MaxSingleExtractedFileGiB"] = "SettingsTab",
                 ["MaxExtractedTotalGiB"] = "SettingsTab",
                 ["MaxExtractedFileCount"] = "SettingsTab",
-                ["MaxExtractionRatio"] = "SettingsTab"
+                ["MaxExtractionRatio"] = "SettingsTab",
+
+                // ② 的第 42 条那一格（"容器里装的是分卷第 1 卷时，自动接上同目录的后续卷"，默认关）。
+                ["AssembleSplitVolumesFromContainer"] = "ExtractionTab"
             };
 
             var tabFiles = new Dictionary<string, string>(StringComparer.Ordinal);

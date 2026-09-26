@@ -709,6 +709,16 @@ namespace ArchiveFixer.Models
         /// </summary>
         public string VolumeRenameSuggestion { get; set; } = string.Empty;
 
+        /// <summary>
+        /// **第 42 条**：这一单有没有"把容器里的第 1 卷与外面的后续卷接起来"（**默认关**的那个开关）。
+        ///
+        /// <para>为什么要在任务上记一份：那是**动过盘的动作**（在工作区里造名字 / 跨盘复制），
+        /// 而日志的默认档"成功就丢"会把过程细节全丢掉 —— 记在这里，收尾那一行摘要就能带上它，
+        /// 用户不必改设置就能看到"这一单接过分卷、用的是硬链接还是复制"。
+        /// 拼装没做 / 没做成时是空串（原因照旧写在日志的 WARN 上）。</para>
+        /// </summary>
+        public string SplitVolumeAssemblyNote { get; set; } = string.Empty;
+
         /// <summary>结果归集后的最终位置（没有归集时为空，表示还是 OutputPath）。</summary>
         public string CollectedPath { get; set; } = string.Empty;
 
@@ -1055,6 +1065,7 @@ namespace ArchiveFixer.Models
                 EmbeddedDirectReadSupported = false;
                 EmbeddedDirectReadReason = string.Empty;
                 VolumeRenameSuggestion = string.Empty;
+                SplitVolumeAssemblyNote = string.Empty;
                 ExtensionStatus = StatusText.UnknownFormat;
                 Status = StatusText.UnknownFormat;
                 Operation = StatusText.OpScan;
@@ -1076,6 +1087,7 @@ namespace ArchiveFixer.Models
 
             // 改名建议同理：它是"上一轮那次解压判决"的产物，识别结果一刷新就必须作废。
             VolumeRenameSuggestion = string.Empty;
+            SplitVolumeAssemblyNote = string.Empty;
             ExtensionStatus = extensionStatus;
 
             if (result.IsArchive)
