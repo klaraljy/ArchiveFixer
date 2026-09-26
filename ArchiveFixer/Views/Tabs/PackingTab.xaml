@@ -65,139 +65,121 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="14">
                 <StackPanel>
 
-                    <!-- 源文件夹 A -->
-                    <TextBlock Text="源文件夹 A（里面的内容会被打包）" Style="{StaticResource LabelTextStyle}" />
+                    <!--
+                        ==================== 源（文件夹或单个文件）====================
+                        用户 2026-09-26 第 46 条："用户有权利直接选择一个文件"——
+                        选文件时程序会在它旁边建同名文件夹把它装进去再打包（源文件不动）。
+                    -->
+                    <TextBlock Text="要打包的东西（选一个文件夹，或直接选一个文件）"
+                               Style="{StaticResource LabelTextStyle}" />
 
                     <Grid Margin="0,4,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
                         <TextBox Grid.Column="0"
                                  Text="{Binding SourceFolder, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                 ToolTip="要打包的文件夹。只打包它里面的内容（不含它自己这一层）" />
+                                 ToolTip="要打包的文件夹，或者一个文件。选文件时程序会在它旁边建同名文件夹把它放进去（不动源文件），再按文件夹打包" />
 
                         <Button Grid.Column="1"
-                                Content="选择…"
+                                Content="选文件夹…"
+                                MinWidth="92"
+                                Margin="8,0,0,0"
+                                Command="{Binding BrowseFolderCommand}" />
+
+                        <Button Grid.Column="2"
+                                Content="选文件…"
                                 MinWidth="80"
                                 Margin="8,0,0,0"
-                                Command="{Binding BrowseSourceCommand}" />
+                                Command="{Binding BrowseFileCommand}"
+                                ToolTip="例如 111.mp4：程序会在它旁边建一个 111 文件夹把它装进去再打包（源文件一个字节都不动）" />
                     </Grid>
 
-                    <!-- 输出文件夹 B -->
-                    <TextBlock Text="输出文件夹 B（分卷落在这里；最后整个压进外层容器）"
-                               Style="{StaticResource LabelTextStyle}"
-                               Margin="0,12,0,0" />
+                    <TextBlock Text="{Binding SourceKindText}"
+                               Style="{StaticResource HintTextStyle}"
+                               Margin="0,4,0,0"
+                               TextWrapping="Wrap" />
 
-                    <Grid Margin="0,4,0,0">
+                    <!--
+                        ==================== 密码 ====================
+                        用户 2026-09-26 第 46 条："做成选择，相同或者不同，默认就是相同；
+                        如果选择同一个密码用户只需要输入一次密码就够了，而且只有一个框……
+                        旁边就是可以从用户密码列表里面去选择的按钮"。
+                    -->
+                    <TextBlock Text="密码（必填）" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <RadioButton GroupName="PackPasswordMode"
+                                     Content="两层相同（默认）"
+                                     IsChecked="{Binding PasswordsAreSame, Mode=TwoWay}" />
+
+                        <RadioButton GroupName="PackPasswordMode"
+                                     Margin="16,0,0,0"
+                                     Content="两层不同"
+                                     IsChecked="{Binding UseSeparateOuterPassword, Mode=TwoWay}"
+                                     ToolTip="第一层是 7z 分卷，最外层是最后那个 .rar / .7z" />
+                    </StackPanel>
+
+                    <Grid Margin="0,8,0,0">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBox Grid.Column="0"
-                                 Text="{Binding OutputFolder, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                 ToolTip="默认与 A 同级：&lt;A 的父目录&gt;\&lt;A 名&gt;_打包。必须是空文件夹或还不存在" />
-
-                        <Button Grid.Column="1"
-                                Content="选择…"
-                                MinWidth="80"
-                                Margin="8,0,0,0"
-                                Command="{Binding BrowseOutputCommand}" />
-                    </Grid>
-
-                    <!-- 分卷大小 -->
-                    <TextBlock Text="分卷大小" Style="{StaticResource LabelTextStyle}" Margin="0,12,0,0" />
-
-                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                        <TextBox Width="110"
-                                 Text="{Binding VolumeSizeMiB, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                 ToolTip="每个分卷的体积上限，单位 MiB。默认 512" />
-
-                        <TextBlock Text="MiB"
+                        <TextBlock Grid.Column="0"
+                                   Text="第一层："
                                    Style="{StaticResource LabelTextStyle}"
-                                   VerticalAlignment="Center"
-                                   Margin="8,0,0,0" />
+                                   VerticalAlignment="Center" />
 
-                        <TextBlock Text="64 – 4096，默认 512"
-                                   Style="{StaticResource HintTextStyle}"
-                                   VerticalAlignment="Center"
-                                   Margin="8,0,0,0" />
-
-                        <Button Content="重算摘要"
-                                MinWidth="96"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                Margin="12,0,0,0"
-                                Command="{Binding RefreshSummaryCommand}"
-                                ToolTip="扫一遍 A 的文件数与总大小，重算下面的摘要（大文件夹需要几秒）" />
-                    </StackPanel>
-
-                    <!-- 密码 -->
-                    <TextBlock Text="密码（必填；两层默认用同一个）" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
-
-                    <Grid Margin="0,4,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <PasswordBox Grid.Column="0"
+                        <PasswordBox Grid.Column="1"
                                      x:Name="PasswordInput"
                                      PasswordChanged="PasswordInput_PasswordChanged"
-                                     ToolTip="7z 分卷与外层容器都用它（连文件名一起加密）。密码只存在内存里，不写设置、不记日志" />
+                                     ToolTip="7z 分卷这一层的密码（连文件名一起加密）。密码只存在内存里，不写设置、不记日志" />
 
-                        <PasswordBox Grid.Column="1"
-                                     x:Name="ConfirmPasswordInput"
-                                     Margin="8,0,0,0"
-                                     PasswordChanged="ConfirmPasswordInput_PasswordChanged"
-                                     ToolTip="再输一遍，防止打错" />
+                        <Button Grid.Column="2"
+                                Content="从密码列表选…"
+                                MinWidth="110"
+                                Margin="8,0,0,0"
+                                Click="PickPassword_Click"
+                                ToolTip="从④「密码」页那份列表里挑一条" />
                     </Grid>
 
-                    <CheckBox Content="外层容器用另一个密码"
-                              Margin="0,8,0,0"
-                              IsChecked="{Binding UseSeparateOuterPassword, Mode=TwoWay}"
-                              ToolTip="不勾就是两层同一个密码（默认）" />
-
-                    <Grid Margin="0,4,0,0"
+                    <Grid Margin="0,6,0,0"
                           IsEnabled="{Binding OuterPasswordEnabled}">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <PasswordBox Grid.Column="0"
-                                     x:Name="OuterPasswordInput"
-                                     PasswordChanged="OuterPasswordInput_PasswordChanged" />
+                        <TextBlock Grid.Column="0"
+                                   Text="最外层："
+                                   Style="{StaticResource LabelTextStyle}"
+                                   VerticalAlignment="Center" />
 
                         <PasswordBox Grid.Column="1"
-                                     x:Name="OuterConfirmPasswordInput"
-                                     Margin="8,0,0,0"
-                                     PasswordChanged="OuterConfirmPasswordInput_PasswordChanged" />
+                                     x:Name="OuterPasswordInput"
+                                     PasswordChanged="OuterPasswordInput_PasswordChanged"
+                                     ToolTip="最后那个 .rar / .7z 的密码（只有选「两层不同」时才用）" />
+
+                        <Button Grid.Column="2"
+                                Content="从密码列表选…"
+                                MinWidth="110"
+                                Margin="8,0,0,0"
+                                Tag="Outer"
+                                Click="PickPassword_Click" />
                     </Grid>
 
-                    <!-- 外层容器（三选一） -->
-                    <TextBlock Text="外层容器（B 最后压成什么）" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
-
-                    <RadioButton GroupName="OuterContainer"
-                                 Margin="0,6,0,0"
-                                 IsChecked="{Binding OuterContainerIsRar, Mode=TwoWay}"
-                                 Content="{Binding OuterRarOptionText}"
-                                 ToolTip="默认。需要本机已安装的 WinRAR（Rar.exe）—— 程序只检测与调用，绝不随包分发（WinRAR 是共享软件）" />
-
-                    <RadioButton GroupName="OuterContainer"
-                                 Margin="0,4,0,0"
-                                 IsChecked="{Binding OuterContainerIsSevenZip, Mode=TwoWay}"
-                                 Content="{Binding OuterSevenZipOptionText}"
-                                 ToolTip="用随程序分发的 7-Zip 做外层容器（连文件名一起加密）—— 不需要额外安装任何东西" />
-
-                    <RadioButton GroupName="OuterContainer"
-                                 Margin="0,4,0,0"
-                                 IsChecked="{Binding OuterContainerIsNone, Mode=TwoWay}"
-                                 Content="{Binding OuterNoneOptionText}"
-                                 ToolTip="不做外层容器：结果直接是 B 里的 .7z.001/.002/…" />
-
-                    <!-- 外层容器这一步能不能做（没有 Rar.exe 时说清三条出路；开始按钮**不**禁用） -->
+                    <!--
+                        ==================== 外层容器（不再让用户选）====================
+                        第 46 条：外层**默认 rar**；本机没装 WinRAR 时**自动改用 7z**
+                        （用户原话："如果用户没有装 WinRAR，那就弄 7z 吧"）。
+                        这一格只**如实显示**当前会用哪个。
+                    -->
                     <Border Margin="0,12,0,0" Padding="10" CornerRadius="4" BorderThickness="1">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -212,31 +194,12 @@
                             </Style>
                         </Border.Style>
 
-                        <StackPanel>
-                            <TextBlock Text="{Binding RarStatusText}"
-                                       Style="{StaticResource HintTextStyle}"
-                                       TextWrapping="Wrap" />
-
-                            <StackPanel Visibility="{Binding HasNoRar, Converter={StaticResource BoolToVisibilityConverter}}">
-                                <TextBlock Text="{Binding RarMissingText}"
-                                           Foreground="{StaticResource WarningTextBrush}"
-                                           TextWrapping="Wrap"
-                                           Margin="0,6,0,0" />
-
-                                <TextBlock Text="{Binding RarMissingWaysText}"
-                                           Style="{StaticResource HintTextStyle}"
-                                           TextWrapping="Wrap"
-                                           Margin="0,4,0,0" />
-                            </StackPanel>
-
-                            <TextBlock Style="{StaticResource HintTextStyle}"
-                                       Margin="0,6,0,0"
-                                       TextWrapping="Wrap"
-                                       Text="只有「rar 外层」需要你自己装的 WinRAR（共享软件，程序绝不随包分发）；程序也绝不会拿 7-Zip 假装做出一个 .rar 给你。" />
-                        </StackPanel>
+                        <TextBlock Text="{Binding RarStatusText}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   TextWrapping="Wrap" />
                     </Border>
 
-                    <!-- 摘要 -->
+                    <!-- 摘要（点「打包」还会弹一个小窗确认落点与两档操作） -->
                     <TextBlock Text="摘要" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
 
                     <Border Background="{StaticResource PanelSunkenBrush}"
@@ -254,6 +217,11 @@
                                        Style="{StaticResource HintTextStyle}"
                                        Margin="0,6,0,0"
                                        TextWrapping="Wrap" />
+
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       Margin="0,6,0,0"
+                                       TextWrapping="Wrap"
+                                       Text="点「打包」会先弹一个小窗：最终压缩包放在哪 + 原包操作 + 其余物操作（都会记住，下次照上次的来）。" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

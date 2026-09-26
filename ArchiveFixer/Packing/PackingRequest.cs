@@ -83,17 +83,30 @@ namespace ArchiveFixer.Packing
     /// </summary>
     public sealed class PackingRequest
     {
-        /// <summary>源文件夹 A（要打包的内容在里面）。</summary>
+        /// <summary>
+        /// 用户**选中的那个路径**：文件夹（主用法）或**单个文件**（用户 2026-09-26 第 46 条：
+        /// 选 <c>111.mp4</c> 时程序在它旁边生成 <c>111\</c> 把它装进去，再按文件夹打包）。
+        /// 真正要打包的文件夹由 <see cref="PackingSourceResolver"/> 解析出来。
+        /// </summary>
         public string SourceFolder { get; init; } = string.Empty;
 
-        /// <summary>输出文件夹 B（分卷落在这里；留空时按 A 同级推导）。</summary>
+        /// <summary>
+        /// 装 7z 分卷的文件夹（= **其余物**）；留空时按落点 + 源名推（重名自动让位）。
+        /// </summary>
         public string OutputFolder { get; init; } = string.Empty;
 
-        /// <summary>结果 rar 的路径（留空时按 <c>&lt;B&gt;.rar</c> 推导）；只在外层容器是 rar 时有意义。</summary>
+        /// <summary>结果 rar 的路径（留空时按"落点目录 + 源名.rar"推）。</summary>
         public string RarPath { get; init; } = string.Empty;
 
-        /// <summary>分卷大小（字节，整数 MiB）。默认 512 MiB。</summary>
-        public long VolumeSizeBytes { get; init; } = PackingPlan.DefaultVolumeSizeBytes;
+        /// <summary>
+        /// 分卷大小（字节，整数 MiB）。**0 = 自动**（默认）：按 <see cref="PackingVolumeRule"/>
+        /// 以"内容 &lt;1 GiB → 2 卷、≥1 GiB → 3 卷"算出每卷上限（用户 2026-09-26 拍板）。
+        /// 填了正数就是显式指定（测试与旧路径用）。
+        /// </summary>
+        public long VolumeSizeBytes { get; init; } = AutoVolumeSizeBytes;
+
+        /// <summary>分卷大小 = 自动（见 <see cref="VolumeSizeBytes"/>）。</summary>
+        public const long AutoVolumeSizeBytes = 0;
 
         /// <summary>内层 7z 分卷的密码（**必填**）。</summary>
         public string Password { get; init; } = string.Empty;
@@ -104,11 +117,16 @@ namespace ArchiveFixer.Packing
         /// <summary>
         /// 外层容器（用户 2026-09-23 决定：三选一）。**默认 <see cref="PackOuterContainer.Rar"/>**。
         ///
-        /// <para>本机没有 <c>Rar.exe</c> 时**不静默换容器**：默认选了 rar 就在切分卷之前明确报错，
-        /// 并给出三条出路（装 WinRAR / 换成 7z 外层 / 不做外层）。换成 7z 是**用户自己改**的一步，
-        /// 不是程序替他决定的。</para>
+        /// <para>⚠ 2026-09-26 第 46 条起：没装 WinRAR 时**自动改用 7z 外层**（用户原话：
+        /// "如果用户没有装 WinRAR，那就弄 7z 吧"）—— 由界面/服务在起跑前把
+        /// <see cref="PackOuterContainer.SevenZip"/> 填进来，不再拿"装 WinRAR"卡住整件事。</para>
         /// </summary>
         public PackOuterContainer OuterContainer { get; init; } = PackOuterContainer.Rar;
+
+        /// <summary>
+        /// 原包操作 / 其余物操作 / 落点（用户 2026-09-26 第 46 条；⛔ 与解压那套完全独立）。
+        /// </summary>
+        public PackingRunOptions RunOptions { get; init; } = new();
 
         /// <summary>外层实际用的密码：单独填了就用它，没填就与内层一致。</summary>
         public string EffectiveOuterPassword =>
@@ -124,8 +142,12 @@ namespace ArchiveFixer.Packing
         /// </summary>
         public string DescribeForLog()
         {
-            return $"源：{SourceFolder}；输出：{OutputFolder}；外层容器：{OuterContainer.Describe()}；"
-                 + $"分卷上限：{PackingPlan.FormatVolumeSize(VolumeSizeBytes)}；"
+            string volume = VolumeSizeBytes > 0
+                ? $"分卷上限：{PackingPlan.FormatVolumeSize(VolumeSizeBytes)}"
+                : "分卷：自动（按内容定卷数）";
+
+            return $"源：{SourceFolder}；{RunOptions.DescribeForLog()}；"
+                 + $"外层容器：{OuterContainer.Describe()}；{volume}；"
                  + PackingPasswordPolicy.SetLogLine;
         }
     }

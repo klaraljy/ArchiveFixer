@@ -55,14 +55,33 @@ namespace ArchiveFixer.ViewModels
         private readonly ToolLocator _tools;
 
         private string _sourceFolder = string.Empty;
+
+        /// <summary>⛔ 第 46 条起只作历史字段：落点在弹窗里选，卷数自动算。</summary>
         private string _outputFolder = string.Empty;
-        private string _volumeSizeMiB = "512";
+
+        private string _volumeSizeMiB = "自动";
         private string _password = string.Empty;
-        private string _confirmPassword = string.Empty;
         private string _outerPassword = string.Empty;
-        private string _outerConfirmPassword = string.Empty;
-        private bool _useSeparateOuterPassword;
+
+        /// <summary>两层用同一个密码（默认 true —— 用户 2026-09-26：相同就只输一次）。</summary>
+        private bool _passwordsAreSame = true;
+
         private PackOuterContainer _outerContainer = PackOuterContainer.Rar;
+
+        /// <summary>本次运行的那一套选择（落点 / 原包 / 其余物），由小确认弹窗回填。</summary>
+        private PackingRunOptions _runOptions = new();
+
+        /// <summary>最近一次算出来的规划（摘要 / 确认弹窗预览都用它）。</summary>
+        private PackingPlan? _lastPlan;
+
+        /// <summary>设置对象（打包那几档要记住；⛔ 与解压侧各存各的）。</summary>
+        private AppSettings _settings = new();
+
+        /// <summary>密码列表（"从密码列表里选"那个按钮从这里取；由主界面注入）。</summary>
+        private Func<IReadOnlyList<string>>? _passwordListProvider;
+
+        /// <summary>从密码列表挑一条的弹窗（默认走 <see cref="DialogService"/>；测试可注入）。</summary>
+        private Func<string, IReadOnlyList<string>, string?>? _passwordPicker;
 
         private string _summaryText = string.Empty;
         private string _placementText = string.Empty;
@@ -82,9 +101,6 @@ namespace ArchiveFixer.ViewModels
         private string _noticeText = string.Empty;
 
         private CancellationTokenSource? _cancellation;
-
-        /// <summary>用户有没有自己改过 B（改过就不再自动覆盖他的输入）。</summary>
-        private bool _outputTouchedByUser;
 
         private string _lastUsedPassword = string.Empty;
 
@@ -106,8 +122,8 @@ namespace ArchiveFixer.ViewModels
             _clipboardService = clipboardService ?? new ClipboardService();
             _tools = tools ?? _service.Tools;
 
-            BrowseSourceCommand = new RelayCommand(BrowseSource);
-            BrowseOutputCommand = new RelayCommand(BrowseOutput);
+            BrowseFolderCommand = new RelayCommand(BrowseSourceFolder);
+            BrowseFileCommand = new RelayCommand(BrowseSourceFile);
             RefreshSummaryCommand = new RelayCommand(RefreshSummary);
             StartCommand = new AsyncRelayCommand(StartAsync, () => !IsRunning);
             CancelCommand = new RelayCommand(Cancel, () => IsRunning);
@@ -120,9 +136,63 @@ namespace ArchiveFixer.ViewModels
         /// <summary>每一步的日志出口（由主界面接上，落到主日志文件里）。</summary>
         public Action<string>? LogSink { get; set; }
 
+        /// <summary>设置变了要不要落盘（由主界面接上；打包那几档要记住）。</summary>
+        public Action? SettingsChanged { get; set; }
+
+        /// <summary>
+        /// 设置对象（打包的落点 / 原包操作 / 其余物操作都存在它上面）。
+        /// ⛔ 与解压侧那两档**各存各的**（用户 2026-09-26 原话："两者绝对不能同步"）。
+        /// </summary>
+        public AppSettings Settings
+        {
+            get => _settings;
+            set => _settings = value ?? new AppSettings();
+        }
+
+        /// <summary>密码列表的来源（④页那份；由主界面注入）。</summary>
+        public Func<IReadOnlyList<string>>? PasswordListProvider
+        {
+            get => _passwordListProvider;
+            set => _passwordListProvider = value;
+        }
+
+        /// <summary>
+        /// 「从密码列表里选」：返回选中的那条（没选 / 列表为空时返回 null）。
+        /// 默认实现走 <see cref="DialogService.ShowPasswordPicker"/>；测试可注入。
+        /// </summary>
+        public string? PickPasswordFromList(string title)
+        {
+            IReadOnlyList<string> candidates = _passwordListProvider?.Invoke() ?? Array.Empty<string>();
+
+            if (candidates.Count == 0)
+            {
+                Warn("密码列表里还没有条目（可以在④「密码」页添加，或先导入密码本）。");
+                return null;
+            }
+
+            string? picked = _passwordPicker != null
+                ? _passwordPicker(title, candidates)
+                : _dialogService.ShowPasswordPicker(title, candidates);
+
+            if (string.IsNullOrEmpty(picked))
+            {
+                Info("没有选密码（框里保持原样）。");
+                return null;
+            }
+
+            return picked;
+        }
+
+        /// <summary>测试注入用：替换"从密码列表挑一条"的弹窗。</summary>
+        internal void UsePasswordPicker(Func<string, IReadOnlyList<string>, string?> picker) =>
+            _passwordPicker = picker;
+
         // ────────────────────────── 输入 ──────────────────────────
 
-        /// <summary>源文件夹 A。</summary>
+        /// <summary>
+        /// 源：用户选的路径（**文件夹或单个文件**，用户 2026-09-26 第 46 条）。
+        /// 单文件时程序会在它旁边建同名文件夹再打包（界面上说清这件事）。
+        /// </summary>
         public string SourceFolder
         {
             get => _sourceFolder;
@@ -130,34 +200,45 @@ namespace ArchiveFixer.ViewModels
             {
                 if (SetProperty(ref _sourceFolder, value ?? string.Empty))
                 {
-                    /*
-                     * B 默认与 A 同级（<A 的父目录>\<A 名>_打包）。
-                     * 只在"用户还没自己改过 B"时自动填 —— 自己填过就被覆盖，那是抢用户输入。
-                     */
-                    if (!_outputTouchedByUser)
-                    {
-                        string suggested = PackingPlan.DefaultOutputFolder(SourceFolder);
-
-                        if (suggested.Length > 0)
-                        {
-                            _outputFolder = suggested;
-                            OnPropertyChanged(nameof(OutputFolder));
-                        }
-                    }
+                    OnPropertyChanged(nameof(SourceKindText));
+                    OnPropertyChanged(nameof(IsSingleFileSource));
 
                     RefreshSummary();
                 }
             }
         }
 
-        /// <summary>输出文件夹 B。</summary>
+        /// <summary>选中的是单文件（界面上要提示"会先建同名文件夹"）。</summary>
+        public bool IsSingleFileSource
+        {
+            get
+            {
+                try
+                {
+                    return !string.IsNullOrWhiteSpace(_sourceFolder) && File.Exists(_sourceFolder);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>源那一行的人读文本（文件夹 / 单文件）。</summary>
+        public string SourceKindText => IsSingleFileSource
+            ? "单文件：会在它旁边建同名文件夹、把文件放进去（不动源文件），再按文件夹打包"
+            : "文件夹：直接打包里面的内容";
+
+        /// <summary>
+        /// 输出文件夹 B —— ⛔ **2026-09-26 第 46 条起界面不再让用户填**：
+        /// 落点在**小确认弹窗**里选（本地 / 指定位置），名字按源名自动算。
+        /// 这里保留属性只为旧绑定 / 旧用例不炸。
+        /// </summary>
         public string OutputFolder
         {
             get => _outputFolder;
             set
             {
-                _outputTouchedByUser = true;
-
                 if (SetProperty(ref _outputFolder, value ?? string.Empty))
                 {
                     RefreshSummary();
@@ -165,62 +246,59 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>分卷大小（MiB 文本；界面就是一个数字框）。</summary>
+        /// <summary>
+        /// 分卷大小（MiB 文本）—— ⛔ **2026-09-26 第 46 条起界面上没有这一格了**：
+        /// 分卷按卷数自动算（&lt;1 GiB → 2 卷、≥1 GiB → 3 卷），这里只为旧绑定留一个字段。
+        /// </summary>
         public string VolumeSizeMiB
         {
             get => _volumeSizeMiB;
+            set => SetProperty(ref _volumeSizeMiB, value ?? string.Empty);
+        }
+
+        /// <summary>两层用同一个密码（**默认**；用户 2026-09-26：相同就只输一次）。</summary>
+        public bool PasswordsAreSame
+        {
+            get => _passwordsAreSame;
             set
             {
-                if (SetProperty(ref _volumeSizeMiB, value ?? string.Empty))
+                if (SetProperty(ref _passwordsAreSame, value))
                 {
-                    RefreshSummary();
+                    OnPropertyChanged(nameof(UseSeparateOuterPassword));
+                    OnPropertyChanged(nameof(OuterPasswordEnabled));
+
+                    if (value)
+                    {
+                        // 切回"相同"时把外层那个框清掉，免得留着一个看不见的值。
+                        OuterPassword = string.Empty;
+                    }
                 }
             }
         }
 
-        /// <summary>内层 7z 分卷的密码（由窗口的 PasswordBox 推进来）。</summary>
+        /// <summary>内层 7z 分卷的密码（"相同"档时两层都用它）。</summary>
         public string Password
         {
             get => _password;
             set => SetProperty(ref _password, value ?? string.Empty);
         }
 
-        /// <summary>确认密码。</summary>
-        public string ConfirmPassword
-        {
-            get => _confirmPassword;
-            set => SetProperty(ref _confirmPassword, value ?? string.Empty);
-        }
-
-        /// <summary>外层 rar 的密码（勾了"用另一个密码"才有效）。</summary>
+        /// <summary>最外层容器的密码（选了"不同"才用）。</summary>
         public string OuterPassword
         {
             get => _outerPassword;
             set => SetProperty(ref _outerPassword, value ?? string.Empty);
         }
 
-        /// <summary>外层 rar 的确认密码。</summary>
-        public string OuterConfirmPassword
-        {
-            get => _outerConfirmPassword;
-            set => SetProperty(ref _outerConfirmPassword, value ?? string.Empty);
-        }
-
-        /// <summary>外层 rar 用另一个密码（默认不勾：两层同一个）。</summary>
+        /// <summary>外层用另一个密码（= 上面那个开关取反；旧绑定还认得它）。</summary>
         public bool UseSeparateOuterPassword
         {
-            get => _useSeparateOuterPassword;
-            set
-            {
-                if (SetProperty(ref _useSeparateOuterPassword, value))
-                {
-                    OnPropertyChanged(nameof(OuterPasswordEnabled));
-                }
-            }
+            get => !PasswordsAreSame;
+            set => PasswordsAreSame = !value;
         }
 
-        /// <summary>外层密码输入框可用（勾了上面那个才有意义）。</summary>
-        public bool OuterPasswordEnabled => UseSeparateOuterPassword;
+        /// <summary>外层密码输入框可用（选了"不同"才有意义）。</summary>
+        public bool OuterPasswordEnabled => !PasswordsAreSame;
 
         /// <summary>
         /// 外层容器（用户 2026-09-23 决定：三选一）。**默认 rar**（用户 2026-09-22 的原始要求）。
@@ -481,9 +559,11 @@ namespace ArchiveFixer.ViewModels
 
         // ────────────────────────── 命令 ──────────────────────────
 
-        public ICommand BrowseSourceCommand { get; }
+        /// <summary>选**文件夹**（主用法）。</summary>
+        public ICommand BrowseFolderCommand { get; }
 
-        public ICommand BrowseOutputCommand { get; }
+        /// <summary>选**单个文件**（第 46 条：会在它旁边建同名文件夹再打包）。</summary>
+        public ICommand BrowseFileCommand { get; }
 
         public ICommand RefreshSummaryCommand { get; }
 
@@ -497,8 +577,8 @@ namespace ArchiveFixer.ViewModels
 
         // ────────────────────────── 动作 ──────────────────────────
 
-        /// <summary>选源文件夹 A。</summary>
-        public void BrowseSource()
+        /// <summary>选源文件夹（它里面的内容会被打包）。</summary>
+        public void BrowseSourceFolder()
         {
             string picked = _dialogService.ShowFolderBrowserDialog();
 
@@ -508,76 +588,55 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>选输出文件夹 B。</summary>
-        public void BrowseOutput()
+        /// <summary>选源**文件**（程序会在它旁边建同名文件夹把它装进去再打包；源文件不动）。</summary>
+        public void BrowseSourceFile()
         {
-            string picked = _dialogService.ShowFolderBrowserDialog();
+            string picked = _dialogService.ShowOpenSingleFileDialog("选择要打包的文件", "所有文件 (*.*)|*.*");
 
             if (!string.IsNullOrWhiteSpace(picked))
             {
-                OutputFolder = picked;
+                SourceFolder = picked;
             }
         }
 
         /// <summary>
-        /// 重算摘要（扫一遍 A 的文件数与总大小）。
-        /// ⚠ 大文件夹上这一次扫描是要花时间的，所以它绑在"输入框失去焦点 / 点重算"上，
-        /// **不是**每敲一个字符就跑一遍。
+        /// 重算摘要（扫一遍源的文件数与总大小）。
+        /// ⚠ 大文件夹上这一次扫描是要花时间的，所以它绑在"选完源 / 点重算"上，**不是**每敲一个字符就跑。
         /// </summary>
         public void RefreshSummary()
         {
-            string volumeError = ValidateVolumeInput(out long volumeBytes);
-
-            var request = new PackingRequest
-            {
-                SourceFolder = SourceFolder,
-                OutputFolder = OutputFolder,
-                VolumeSizeBytes = volumeBytes,
-                Password = Password,
-                OuterContainer = OuterContainer
-            };
-
-            if (volumeError.Length > 0)
-            {
-                SummaryText = volumeError;
-                PlacementText = string.Empty;
-                return;
-            }
+            var request = BuildRequest(new PackingRunOptions());
 
             if (!PackingPlan.TryCreate(request, out PackingPlan? plan, out string error) || plan == null)
             {
-                SummaryText = error;
+                SummaryText = string.IsNullOrWhiteSpace(SourceFolder) ? "先选一个文件夹（或一个文件）。" : error;
                 PlacementText = string.Empty;
+                _lastPlan = null;
                 return;
             }
+
+            _lastPlan = plan;
 
             SummaryText =
                 $"内容：{plan.FileCount} 个文件，{TaskSpaceEstimate.FormatSize(plan.ContentBytes)}"
                 + (plan.UnreadableCount > 0 ? $"（其中 {plan.UnreadableCount} 个条目读不到大小）" : string.Empty)
-                + $"；每个分卷上限 {plan.VolumeSizeText}，预计 {plan.PlannedVolumeCount} 卷"
+                + Environment.NewLine
+                + plan.DescribeVolumePlan()
                 + Environment.NewLine
                 + $"外层容器：{plan.OuterContainer.ShortName()}"
-                + $"；需要空余空间：约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}"
-                + (plan.OuterContainer.HasOuterArtifact()
-                    ? "（分卷一份 + 外层容器再存一份）"
-                    : "（不做外层容器：只有分卷这一份，不需要再多一份空间）");
+                + $"；需要空余空间：约 {TaskSpaceEstimate.FormatSize(plan.RequiredSpaceBytes)}";
 
-            /*
-             * 落点必须把"**实际**产物是什么、在哪"写清楚：外层有 rar / 7z / 不做三种，
-             * 只说"分卷落在 B"会让用户分不清到底会不会多出一个 .rar。
-             */
             PlacementText = plan.OuterContainer.HasOuterArtifact()
-                ? $"分卷落在：{plan.OutputFolder}" + Environment.NewLine
-                  + $"外层容器（{plan.OuterContainer.ShortName()}）：{plan.OuterPath}"
-                : $"分卷落在：{plan.OutputFolder}" + Environment.NewLine
-                  + "不做外层容器：结果就是上面这些 .7z.001/.002/…（没有 .rar / .7z 外层文件）";
+                ? $"最终产物：{plan.OuterPath}"
+                : $"不做外层容器：结果就是 {plan.OutputFolder} 里的分卷";
         }
 
         /// <summary>
-        /// 开始打包。
+        /// 开始打包（用户 2026-09-26 第 46 条的流程）：
+        /// **先弹小确认弹窗**（落点 / 原包操作 / 其余物操作）→ 用户确认 → 才动任何字节。
         ///
-        /// <para>顺序刻意是"先判完所有输入 → 再动任何字节"：密码、分卷大小、落点、空间
-        /// 任何一条不过都**不开始**，用户不会看到"跑了十分钟才告诉我不行"。</para>
+        /// <para>⛔ 顺序是硬要求：没有确认之前**一个字节都不许动**（连输出文件夹都不建）；
+        /// 用户取消 = 什么都没发生（设置也不写回，因为他没确认）。</para>
         /// </summary>
         public async Task StartAsync()
         {
@@ -591,11 +650,13 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrWhiteSpace(SourceFolder))
             {
-                Warn("请先选择源文件夹 A。");
+                Warn("请先选择要打包的文件夹（或一个文件）。");
                 return;
             }
 
-            string passwordError = PackingPasswordPolicy.Validate(Password, ConfirmPassword);
+            string passwordError = PackingPasswordPolicy.IsUsable(Password)
+                ? string.Empty
+                : PackingPasswordPolicy.RequiredMessage;
 
             if (passwordError.Length > 0)
             {
@@ -603,42 +664,45 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            string outerError = PackingPasswordPolicy.ValidateOuter(
-                UseSeparateOuterPassword,
-                OuterPassword,
-                OuterConfirmPassword);
-
-            if (outerError.Length > 0)
+            if (!PasswordsAreSame && !PackingPasswordPolicy.IsUsable(OuterPassword))
             {
-                Warn(outerError);
+                Warn(PackingPasswordPolicy.OuterRequiredMessage);
                 return;
             }
 
-            string volumeError = ValidateVolumeInput(out long volumeBytes);
+            // 先用"设置里那一套"算一遍规划（弹窗要把"最终产物在哪"显示出来）。
+            PackingRunOptions initial = PackingRunOptions.FromSettings(_settings);
 
-            if (volumeError.Length > 0)
-            {
-                Warn(volumeError);
-                return;
-            }
-
-            var request = new PackingRequest
-            {
-                SourceFolder = SourceFolder,
-                OutputFolder = OutputFolder,
-                VolumeSizeBytes = volumeBytes,
-                Password = Password,
-                OuterPassword = UseSeparateOuterPassword ? OuterPassword : string.Empty,
-                OuterContainer = OuterContainer
-            };
-
-            if (!PackingPlan.TryCreate(request, out PackingPlan? plan, out string planError) || plan == null)
+            if (!PackingPlan.TryCreate(BuildRequest(initial), out PackingPlan? previewPlan, out string planError)
+                || previewPlan == null)
             {
                 Warn(planError);
                 return;
             }
 
-            _lastUsedPassword = request.Password;
+            // ───────── 小确认弹窗（取消 = 什么都不做）─────────
+            PackingRunOptions? confirmed = _dialogService.ShowPackingConfirm(
+                PackingConfirmRequest.FromPlan(previewPlan, initial));
+
+            if (confirmed == null)
+            {
+                Info("已取消：什么都没做（源与其余物一个字节都没动）。");
+                return;
+            }
+
+            // 确认了才写回设置（"相应的保存记忆操作"）。
+            confirmed.SaveTo(_settings);
+            SettingsChanged?.Invoke();
+
+            _runOptions = confirmed;
+
+            if (!PackingPlan.TryCreate(BuildRequest(confirmed), out PackingPlan? plan, out string error) || plan == null)
+            {
+                Warn(error);
+                return;
+            }
+
+            _lastUsedPassword = Password;
             OnPropertyChanged(nameof(CanCopyPassword));
 
             IsRunning = true;
@@ -658,6 +722,8 @@ namespace ArchiveFixer.ViewModels
 
                 ProgressDetailText = p.Detail;
             });
+
+            var request = BuildRequest(confirmed);
 
             PackingResult result;
 
@@ -686,6 +752,19 @@ namespace ArchiveFixer.ViewModels
 
             ApplyResult(result, plan);
         }
+
+        /// <summary>按当前输入 + 那一套选择造请求（**唯一出口**：摘要、预览、真正开跑都用它）。</summary>
+        private PackingRequest BuildRequest(PackingRunOptions options) => new()
+        {
+            SourceFolder = SourceFolder,
+
+            // 分卷大小 0 = 自动（第 46 条：按卷数算），落点与命名由 PackingPaths 推。
+            VolumeSizeBytes = 0,
+            Password = Password,
+            OuterPassword = PasswordsAreSame ? string.Empty : OuterPassword,
+            OuterContainer = OuterContainer,
+            RunOptions = options ?? new PackingRunOptions()
+        };
 
         /// <summary>取消（只杀自己启动的那个 PID 及其子进程）。</summary>
         public void Cancel()

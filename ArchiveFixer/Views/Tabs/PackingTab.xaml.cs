@@ -1,4 +1,5 @@
 using ArchiveFixer.ViewModels;
+using System;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -31,24 +32,58 @@ namespace ArchiveFixer.Views.Tabs
 
         private PackingViewModel? ViewModel => (DataContext as MainViewModel)?.PackingEditor;
 
+        /// <summary>第一层密码（7z 分卷那一层；"相同"档时两层都用它）。</summary>
         private void PasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
         {
             Push(sender, (vm, value) => vm.Password = value);
         }
 
-        private void ConfirmPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
-        {
-            Push(sender, (vm, value) => vm.ConfirmPassword = value);
-        }
-
+        /// <summary>最外层容器的密码（只有选"不同"时才有这个框）。</summary>
         private void OuterPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
         {
             Push(sender, (vm, value) => vm.OuterPassword = value);
         }
 
-        private void OuterConfirmPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
+        /// <summary>
+        /// 「从密码列表里选」：把选中那条填进对应那个框（用户 2026-09-26 第 46 条要求）。
+        /// 密码**不进日志、不落盘**（不变量 5）。
+        /// </summary>
+        private void PickPassword_Click(object sender, RoutedEventArgs e)
         {
-            Push(sender, (vm, value) => vm.OuterConfirmPassword = value);
+            if (ViewModel is not { } viewModel)
+            {
+                return;
+            }
+
+            bool outer = sender is FrameworkElement { Tag: string tag }
+                         && string.Equals(tag, "Outer", StringComparison.Ordinal);
+
+            string? picked = viewModel.PickPasswordFromList(outer ? "选最外层容器的密码" : "选第一层的密码");
+
+            if (string.IsNullOrEmpty(picked))
+            {
+                return;
+            }
+
+            try
+            {
+                _syncingPasswords = true;
+
+                if (outer)
+                {
+                    OuterPasswordInput.Password = picked;
+                    viewModel.OuterPassword = picked;
+                }
+                else
+                {
+                    PasswordInput.Password = picked;
+                    viewModel.Password = picked;
+                }
+            }
+            finally
+            {
+                _syncingPasswords = false;
+            }
         }
 
         private void Push(object sender, System.Action<PackingViewModel, string> apply)

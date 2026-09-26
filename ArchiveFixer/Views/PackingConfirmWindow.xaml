@@ -1,0 +1,136 @@
+<Window x:Class="ArchiveFixer.Views.PackingConfirmWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="打包"
+        Width="620"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+    <Window.Resources>
+        <Style x:Key="ConfirmLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,12,0,4" />
+        </Style>
+    </Window.Resources>
+
+    <StackPanel Margin="16">
+        <!-- 源与产物：几行纯事实 -->
+        <ItemsControl x:Name="HeadList">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,4" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- ==================== 最终压缩包放在哪 ==================== -->
+        <TextBlock Text="最终压缩包放在哪" Style="{StaticResource ConfirmLabelStyle}" />
+
+        <StackPanel>
+            <RadioButton x:Name="TargetLocal"
+                         GroupName="PackTarget"
+                         Content="本地（源旁边，默认）"
+                         IsChecked="True"
+                         Checked="OnTargetChanged" />
+            <TextBlock x:Name="LocalPathText"
+                       Margin="20,2,0,0"
+                       TextWrapping="Wrap"
+                       Foreground="Gray" />
+
+            <RadioButton x:Name="TargetCustom"
+                         GroupName="PackTarget"
+                         Margin="0,6,0,0"
+                         Content="指定位置"
+                         Checked="OnTargetChanged" />
+
+            <DockPanel Margin="20,4,0,0">
+                <Button x:Name="PickTargetButton"
+                        DockPanel.Dock="Right"
+                        Content="选择…"
+                        Padding="10,2"
+                        Margin="8,0,0,0"
+                        Click="OnPickTarget" />
+
+                <TextBox x:Name="CustomTargetBox"
+                         VerticalContentAlignment="Center"
+                         TextChanged="OnCustomTargetChanged" />
+            </DockPanel>
+        </StackPanel>
+
+        <!-- ==================== 原包操作 ==================== -->
+        <TextBlock Text="原包操作" Style="{StaticResource ConfirmLabelStyle}" />
+        <TextBlock x:Name="SourceExplanationText"
+                   TextWrapping="Wrap"
+                   Foreground="Gray"
+                   Margin="0,0,0,4" />
+
+        <StackPanel>
+            <RadioButton x:Name="SourceKeep"
+                         GroupName="PackSource"
+                         Content="不动（默认，一个字节都不碰）"
+                         IsChecked="True"
+                         Checked="OnOptionsChanged" />
+            <RadioButton x:Name="SourceMove"
+                         GroupName="PackSource"
+                         Margin="0,6,0,0"
+                         Content="移入其余物（搬进装 7z 分卷的那个文件夹）"
+                         Checked="OnOptionsChanged" />
+        </StackPanel>
+
+        <!-- ==================== 其余物操作 ==================== -->
+        <TextBlock Text="其余物操作" Style="{StaticResource ConfirmLabelStyle}" />
+        <TextBlock x:Name="RestExplanationText"
+                   TextWrapping="Wrap"
+                   Foreground="Gray"
+                   Margin="0,0,0,4" />
+
+        <StackPanel>
+            <RadioButton x:Name="RestDelete"
+                         GroupName="PackRest"
+                         Content="彻底删除（默认，不进回收站、不可恢复）"
+                         IsChecked="True"
+                         Checked="OnOptionsChanged" />
+            <RadioButton x:Name="RestRecycle"
+                         GroupName="PackRest"
+                         Margin="0,6,0,0"
+                         Content="移入回收站（可还原）"
+                         Checked="OnOptionsChanged" />
+            <RadioButton x:Name="RestKeep"
+                         GroupName="PackRest"
+                         Margin="0,6,0,0"
+                         Content="不动（留着，方便自己检查分卷）"
+                         Checked="OnOptionsChanged" />
+        </StackPanel>
+
+        <!-- 危险组合的红字警告（只在真要连原包一起删时出现） -->
+        <Border x:Name="DangerBox"
+                Visibility="Collapsed"
+                Background="#FFF3F3"
+                BorderBrush="#FFB0B0"
+                BorderThickness="1"
+                Padding="8"
+                Margin="0,12,0,0">
+            <TextBlock x:Name="DangerText"
+                       Foreground="#B00020"
+                       TextWrapping="Wrap" />
+        </Border>
+
+        <!-- 按钮 -->
+        <StackPanel Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,16,0,0">
+            <Button Content="开始打包"
+                    Padding="18,4"
+                    IsDefault="True"
+                    Click="OnStart" />
+            <Button Content="取消"
+                    Padding="18,4"
+                    Margin="10,0,0,0"
+                    IsCancel="True"
+                    Click="OnCancel" />
+        </StackPanel>
+    </StackPanel>
+</Window>

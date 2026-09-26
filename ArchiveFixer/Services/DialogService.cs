@@ -1,3 +1,4 @@
+using ArchiveFixer.Packing;
 using ArchiveFixer.Password;
 using ArchiveFixer.Views;
 using Microsoft.Win32;
@@ -154,6 +155,54 @@ namespace ArchiveFixer.Services
                     return dialog.ShowDialog() == true ? dialog.FolderName : string.Empty;
                 },
                 "ShowFolderBrowserDialog",
+                string.Empty);
+        }
+
+        /// <summary>
+        /// **打包的小确认弹窗**（用户 2026-09-26 第 46 条）：只显示"最终压缩包放在哪 + 原包操作 + 其余物操作"。
+        ///
+        /// <para>返回用户确认后的那一套选择；用户取消时返回 <c>null</c>（⛔ 一个字节都不许提前动）。
+        /// <c>virtual</c> 与 <see cref="ShowFolderBrowserDialog"/> 同理：无界面宿主下返回 <c>null</c>，
+        /// 测试注入不了"他点了哪几档"——而"选了什么就必须照着做什么"这件事必须能被端到端钉住。</para>
+        /// </summary>
+        public virtual PackingRunOptions? ShowPackingConfirm(PackingConfirmRequest request)
+        {
+            return ShowFileDialog<PackingRunOptions?>(
+                () =>
+                {
+                    var window = new Views.PackingConfirmWindow(request)
+                    {
+                        Owner = Application.Current?.MainWindow
+                    };
+
+                    return window.ShowDialog() == true ? window.Result : null;
+                },
+                "ShowPackingConfirm",
+                null);
+        }
+
+        /// <summary>
+        /// 「从密码列表里选」的小窗口（用户 2026-09-26 第 46 条）。
+        /// 返回选中那条；取消 / 列表为空时返回空串。⛔ 不做任何记账、不写日志。
+        /// </summary>
+        public virtual string ShowPasswordPicker(string title, IReadOnlyList<string> passwords)
+        {
+            if (passwords == null || passwords.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return ShowFileDialog(
+                () =>
+                {
+                    var window = new Views.PasswordPickerWindow(title, passwords)
+                    {
+                        Owner = Application.Current?.MainWindow
+                    };
+
+                    return window.ShowDialog() == true ? window.Picked ?? string.Empty : string.Empty;
+                },
+                "ShowPasswordPicker",
                 string.Empty);
         }
 

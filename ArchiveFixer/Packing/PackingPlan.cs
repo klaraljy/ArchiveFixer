@@ -84,13 +84,33 @@ namespace ArchiveFixer.Packing
         /// <summary>额外的固定余量（外层 rar 的头、目录项、以及别处同时在写的零碎）。</summary>
         public const long SpaceMarginBytes = 32L * 1024 * 1024;
 
-        /// <summary>源文件夹 A（全路径）。</summary>
+        /// <summary>源文件夹 A（全路径）——**真正要打包的那个文件夹**（单文件时是新建的同名文件夹）。</summary>
         public string SourceFolder { get; init; } = string.Empty;
 
-        /// <summary>A 的目录名（分卷名、rar 里的那一层都用它）。</summary>
+        /// <summary>A 的目录名（分卷名、rar 名都用它；由**源**的名字来，不是让位后的名字）。</summary>
         public string SourceFolderName { get; init; } = string.Empty;
 
-        /// <summary>输出文件夹 B（全路径）。</summary>
+        /// <summary>
+        /// 用户选中的那个路径（文件夹或**单个文件**）与它的解析结果（用户 2026-09-26 第 46 条）。
+        /// </summary>
+        public PackingSourceResolution SourceResolution { get; init; } = new();
+
+        /// <summary>
+        /// 单文件时要**新建**的那个同名文件夹（其余物）；文件夹源时是空串。
+        /// 服务层负责建它并把源文件放进去（同盘硬链接优先，跨盘才复制）。
+        /// </summary>
+        public string WrapperFolderToCreate => SourceResolution.WrapperFolderToCreate;
+
+        /// <summary>落点目录（本地 = 源旁边；指定位置 = 用户选的目录）。</summary>
+        public string TargetDirectory { get; init; } = string.Empty;
+
+        /// <summary>原包操作 / 其余物操作 / 落点（第 46 条；⛔ 与解压那套完全独立）。</summary>
+        public PackingRunOptions RunOptions { get; init; } = new();
+
+        /// <summary>目标卷数（&lt;1 GiB → 2、≥1 GiB → 3）。</summary>
+        public int VolumeTargetCount { get; init; } = PackingVolumeRule.SmallTargetCount;
+
+        /// <summary>输出文件夹 B（全路径）——装 7z 分卷的那个文件夹，也就是**其余物**。</summary>
         public string OutputFolder { get; init; } = string.Empty;
 
         /// <summary>结果 rar 的全路径（默认与 B 同级：<c>&lt;B&gt;.rar</c>）；外层容器是 7z / 不做外层时不参与。</summary>
@@ -143,19 +163,39 @@ namespace ArchiveFixer.Packing
         /// <summary>分卷大小的人读写法（<c>512 MiB</c>）。</summary>
         public string VolumeSizeText => FormatVolumeSize(VolumeSizeBytes);
 
-        /// <summary>分卷数的人读一句话（日志 / 结果区用）。</summary>
+        /// <summary>
+        /// 分卷数的人读一句话（日志 / 结果区用）。
+        ///
+        /// <para>⚠ 2026-09-26 第 46 条改口径：分卷**按卷数**（&lt;1 GiB → 2 卷、≥1 GiB → 3 卷），
+        /// 每卷上限由 <see cref="PackingVolumeRule"/> 算 —— 所以这里说的是"目标几卷、上限多少、预计切出几卷"。</para>
+        /// </summary>
         public string DescribeVolumePlan()
         {
-            return $"按每个分卷上限 {VolumeSizeText} 估算，会切出约 {PlannedVolumeCount} 卷"
-                 + $"（内容 {TaskSpaceEstimate.FormatSize(ContentBytes)}；实际卷数取决于压缩后的体积）";
+            return PackingVolumeRule.Describe(ContentBytes, VolumeSizeBytes);
         }
 
         /// <summary>外层容器的人读一句话（日志 / 摘要行用；把"落在哪个文件"一起说清）。</summary>
         public string DescribeOuterContainer()
         {
-            return OuterContainer.HasOuterArtifact()
-                ? $"外层容器：{OuterContainer.Describe()} → {OuterPath}"
-                : $"外层容器：{OuterContainer.Describe()} → 不产出外层文件，结果就是 B 里的分卷";
+            return DescribeOuterContainer(OuterContainer);
+        }
+
+        /// <summary>
+        /// 按**实际生效的**容器说一句话（第 46 条：没装 WinRAR 时 rar 会自动降级成 7z，
+        /// 那句"外层容器：…"必须说降级之后的那个，⛔ 不许照抄请求里那一档）。
+        /// </summary>
+        public string DescribeOuterContainer(PackOuterContainer effectiveContainer)
+        {
+            string path = effectiveContainer switch
+            {
+                PackOuterContainer.SevenZip => SevenZipOuterPath,
+                PackOuterContainer.None => string.Empty,
+                _ => RarPath
+            };
+
+            return effectiveContainer.HasOuterArtifact()
+                ? $"外层容器：{effectiveContainer.Describe()} → {path}"
+                : $"外层容器：{effectiveContainer.Describe()} → 不产出外层文件，结果就是 {OutputFolder} 里的分卷";
         }
 
         /// <summary>
@@ -301,23 +341,33 @@ namespace ArchiveFixer.Packing
                 return false;
             }
 
-            if (string.IsNullOrWhiteSpace(request.SourceFolder))
+            /*
+             * ① 先把"用户选的东西"翻成"要打包哪个文件夹"（用户 2026-09-26 第 46 条）：
+             * 文件夹 → 就是它自己；单文件 → 在它旁边生成同名文件夹，把文件放进去再打包，
+             * 那个新建的文件夹算**其余物**。
+             */
+            PackingSourceResolution sourceResolution = PackingSourceResolver.Resolve(request.SourceFolder);
+
+            if (!sourceResolution.Success)
             {
-                error = "请先选择源文件夹 A。";
+                error = sourceResolution.Reason;
                 return false;
             }
 
-            string source = SafeGetFullPath(request.SourceFolder);
+            string source = sourceResolution.FolderToPack;
 
-            if (!Directory.Exists(source))
+            // 单文件时源文件夹还没建 —— 规划阶段**不建盘**，只记下"要建它"。
+            if (sourceResolution.Kind == PackingSourceKind.Folder && !Directory.Exists(source))
             {
                 error = $"源文件夹不存在：{source}";
                 return false;
             }
 
-            if (request.VolumeSizeBytes < HardMinVolumeSizeBytes ||
-                request.VolumeSizeBytes > MaxVolumeSizeBytes ||
-                request.VolumeSizeBytes % (1024 * 1024) != 0)
+            // 显式指定分卷大小时才校验它；自动档（0）由 PackingVolumeRule 算。
+            if (request.VolumeSizeBytes > 0 &&
+                (request.VolumeSizeBytes < HardMinVolumeSizeBytes ||
+                 request.VolumeSizeBytes > MaxVolumeSizeBytes ||
+                 request.VolumeSizeBytes % (1024 * 1024) != 0))
             {
                 error = $"分卷大小不合法：{FormatVolumeSize(request.VolumeSizeBytes)}。"
                       + $"要在 {FormatVolumeSize(HardMinVolumeSizeBytes)} – {FormatVolumeSize(MaxVolumeSizeBytes)} 之间，"
@@ -325,27 +375,55 @@ namespace ArchiveFixer.Packing
                 return false;
             }
 
-            ScanResult scan = Scan(source);
+            // 单文件时那层文件夹里此刻还没有东西 —— 内容大小按**源文件**量。
+            ScanResult scan = sourceResolution.Kind == PackingSourceKind.File
+                ? ScanFile(sourceResolution.SourcePath)
+                : Scan(source);
 
             if (scan.FileCount == 0 || scan.Bytes <= 0)
             {
-                error = $"源文件夹里没有可打包的内容（{source}）：扫到 {scan.FileCount} 个文件、"
-                      + $"{TaskSpaceEstimate.FormatSize(scan.Bytes)}。请选一个里面有东西的文件夹。";
+                error = $"没有可打包的内容（{sourceResolution.SourcePath}）：扫到 {scan.FileCount} 个文件、"
+                      + $"{TaskSpaceEstimate.FormatSize(scan.Bytes)}。请选一个有东西的文件夹或文件。";
                 return false;
             }
 
+            /*
+             * ② 落点与命名（用户 2026-09-26 第 5/7 条）：
+             * · 落点目录 = 本地（源旁边，默认）或指定位置；
+             * · 装分卷的文件夹 = **源名**，重名让位成 `源名(1)`；
+             *   ⚠ 单文件时那个"马上要建的同名文件夹"要**先占住名字**，
+             *   否则分卷文件夹会跟它撞名、分卷落进正要打包的源文件夹里；
+             * · 最终 rar = **永远以源名命名**（`源名.rar`），重名同样让位。
+             */
+            string target = PackingPaths.ResolveTargetDirectory(
+                sourceResolution,
+                request.RunOptions ?? new PackingRunOptions());
+
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                error = "推不出落点目录，请手动指定一个（或确认源所在盘可用）。";
+                return false;
+            }
+
+            var reserved = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(sourceResolution.WrapperFolderToCreate))
+            {
+                reserved.Add(sourceResolution.WrapperFolderToCreate);
+            }
+
             string output = string.IsNullOrWhiteSpace(request.OutputFolder)
-                ? DefaultOutputFolder(source)
+                ? PackingPaths.ResolveVolumesFolder(target, sourceResolution.SourceName, reserved)
                 : SafeGetFullPath(request.OutputFolder);
 
             if (string.IsNullOrWhiteSpace(output))
             {
-                error = "推不出输出文件夹 B，请手动指定一个。";
+                error = "推不出装分卷的文件夹，请手动指定一个。";
                 return false;
             }
 
             string rarPath = string.IsNullOrWhiteSpace(request.RarPath)
-                ? DefaultRarPath(output)
+                ? PackingPaths.ResolveRarPath(target, sourceResolution.SourceName)
                 : SafeGetFullPath(request.RarPath);
 
             if (string.IsNullOrWhiteSpace(rarPath))
@@ -354,21 +432,20 @@ namespace ArchiveFixer.Packing
                 return false;
             }
 
-            // 外层 7z 容器与 rar 一一对应（同一个 B、同一个位置），不给用户第二个输入框：
-            // 落点规则两条容器完全一样，多一个框只会多一处能填错的地方。
-            string sevenZipOuterPath = DefaultSevenZipOuterPath(output);
+            // 外层 7z 容器与 rar 一一对应（同一个落点、同一个名字），不给用户第二个输入框。
+            string sevenZipOuterPath = PackingPaths.ResolveSevenZipOuterPath(target, sourceResolution.SourceName);
 
             if (request.OuterContainer == PackOuterContainer.SevenZip && string.IsNullOrWhiteSpace(sevenZipOuterPath))
             {
-                error = "推不出外层 7z 容器的路径，请手动指定一个输出文件夹。";
+                error = "推不出外层 7z 容器的路径，请手动指定一个落点目录。";
                 return false;
             }
 
-            string name = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            string name = sourceResolution.SourceName;
 
             if (string.IsNullOrWhiteSpace(name))
             {
-                error = $"源文件夹的名字取不出来（{source}），没法给分卷命名。";
+                error = $"源的名字取不出来（{sourceResolution.SourcePath}），没法给分卷命名。";
                 return false;
             }
 
@@ -381,21 +458,49 @@ namespace ArchiveFixer.Packing
                 return false;
             }
 
+            // ③ 分卷：自动档按"目标卷数"算每卷上限（第 46 条）；显式值照用。
+            int targetCount = PackingVolumeRule.TargetCount(scan.Bytes);
+
+            long volumeSize = request.VolumeSizeBytes > 0
+                ? request.VolumeSizeBytes
+                : PackingVolumeRule.ComputeVolumeSize(scan.Bytes, targetCount);
+
             plan = new PackingPlan
             {
                 SourceFolder = source,
                 SourceFolderName = name,
+                SourceResolution = sourceResolution,
+                TargetDirectory = target,
+                RunOptions = request.RunOptions ?? new PackingRunOptions(),
+                VolumeTargetCount = targetCount,
                 OutputFolder = output,
                 RarPath = rarPath,
                 SevenZipOuterPath = sevenZipOuterPath,
                 OuterContainer = request.OuterContainer,
-                VolumeSizeBytes = request.VolumeSizeBytes,
+                VolumeSizeBytes = volumeSize,
                 ContentBytes = scan.Bytes,
                 FileCount = scan.FileCount,
                 UnreadableCount = scan.UnreadableCount
             };
 
             return true;
+        }
+
+        /// <summary>单文件源的内容大小（内容就是这一个文件；读不到大小按 0 计并如实计数）。</summary>
+        private static ScanResult ScanFile(string filePath)
+        {
+            try
+            {
+                var info = new FileInfo(filePath);
+
+                return info.Exists
+                    ? new ScanResult(1, info.Length, 0)
+                    : new ScanResult(0, 0, 0);
+            }
+            catch
+            {
+                return new ScanResult(1, 0, 1);
+            }
         }
 
         /// <summary>

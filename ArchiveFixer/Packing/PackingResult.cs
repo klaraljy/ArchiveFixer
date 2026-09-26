@@ -100,8 +100,15 @@ namespace ArchiveFixer.Packing
 
         /// <summary>有没有外层产物（界面据此决定显不显示那一行路径）。</summary>
         public bool HasOuterArtifact => !string.IsNullOrWhiteSpace(OuterPath);
+
         /// <summary>产物校验的说明（列了几条、对不对得上）。</summary>
         public string VerificationDetail { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 收尾那一句（第 46 条）：原包怎么处理了、其余物怎么处理了
+        /// （例如 <c>原包：不动；其余物：已彻底删除</c>）。没走收尾时是空串。
+        /// </summary>
+        public string CleanupNote { get; init; } = string.Empty;
 
         /// <summary>分卷清单（名字 + 各自大小）。失败与取消时是"已经切出来的那几卷"。</summary>
         public IReadOnlyList<PackingVolume> Volumes { get; init; } = Array.Empty<PackingVolume>();

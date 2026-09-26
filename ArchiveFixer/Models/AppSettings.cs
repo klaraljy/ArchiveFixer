@@ -353,6 +353,34 @@ namespace ArchiveFixer.Models
         /// </summary>
         public bool AssembleSplitVolumesFromContainer { get; set; } = false;
 
+        // ==================== 打包（用户 2026-09-26 第 46 条：与解压那套**完全独立**）====================
+
+        /// <summary>
+        /// 最终 <c>.rar</c> 放哪：<c>Local</c>（默认，源旁边）/ <c>Custom</c>（指定位置）。
+        ///
+        /// <para>取值见 <c>Packing/PackingOptions.cs</c> 的 <c>PackingTargetMode</c>。
+        /// ⛔ 与解压侧的落点（<see cref="ExtractToOriginalDirectory"/> / <see cref="CustomOutputDirectory"/>）
+        /// **各存各的**：用户明确要求"两者绝对不能同步"。</para>
+        /// </summary>
+        public string PackTargetMode { get; set; } = "Local";
+
+        /// <summary>打包的指定位置（<see cref="PackTargetMode"/> = Custom 时用；留空 = 回落本地）。</summary>
+        public string PackCustomOutputDirectory { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 打包的**原包操作**：<c>KeepInPlace</c>（默认，一个字节都不碰）/ <c>MoveToRest</c>
+        /// （移入其余物 = 装 7z 分卷的那个文件夹里面）。
+        /// </summary>
+        public string PackSourceHandling { get; set; } = "KeepInPlace";
+
+        /// <summary>
+        /// 打包的**其余物操作**（其余物 = 装 7z 分卷的那个文件夹）：
+        /// <c>Keep</c> / <c>RecycleBin</c> / <c>Delete</c>（**默认 Delete** —— 用户原话："这个对用户来说一点用没有"）。
+        ///
+        /// <para>⛔ 只有 <c>.rar</c> 生成且校验通过之后才动；失败 / 取消一个字节都不动。</para>
+        /// </summary>
+        public string PackRestHandling { get; set; } = "Delete";
+
         /// <summary>
         /// 低运行优先级（**默认开**）：启动时把本进程设成 <c>BelowNormal</c>，
         /// 解压子进程（7z.exe）继承这个优先级，于是批量解压不再和桌面抢 CPU / 磁盘。
@@ -977,6 +1005,12 @@ namespace ArchiveFixer.Models
 
                 // 第 42 条的全自动拼装：出厂**关**（它会读源目录、并在盘上造名字 / 复制卷）。
                 AssembleSplitVolumesFromContainer = false,
+
+                // 打包（第 46 条）：落点默认本地、原包不动、其余物（装分卷的文件夹）默认彻底删除。
+                PackTargetMode = "Local",
+                PackCustomOutputDirectory = string.Empty,
+                PackSourceHandling = "KeepInPlace",
+                PackRestHandling = "Delete",
                 RememberLastOutputDirectory = true,
                 IncludeHiddenFiles = false,
                 IncludeSystemFiles = false,

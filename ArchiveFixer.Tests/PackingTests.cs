@@ -159,18 +159,23 @@ namespace ArchiveFixer.Tests
             Assert.Contains("没有可打包的内容", error, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// 默认落点与命名（⚠ **2026-09-26 第 46 条改了口径**）。
+        ///
+        /// <para>旧口径：B = <c>素材_打包</c>、rar = <c>素材_打包.rar</c>。
+        /// 新口径（用户拍板）：装分卷的文件夹**用源名**（撞名才 <c>素材(1)</c>）、
+        /// 最终 rar **永远用源名**（<c>素材.rar</c>）；两者都落在**本地**（源旁边）。</para>
+        /// </summary>
         [Fact]
-        public void 默认落点_B与A同级_rar与B同级()
+        public void 默认落点_装分卷的文件夹与rar都用源名_落在源旁边()
         {
             string source = Path.Combine(_root, "素材");
             Directory.CreateDirectory(source);
             File.WriteAllBytes(Path.Combine(source, "a.bin"), new byte[64]);
 
-            string expectedOutput = Path.Combine(_root, "素材_打包");
-            string expectedRar = Path.Combine(_root, "素材_打包.rar");
-
-            Assert.Equal(expectedOutput, PackingPlan.DefaultOutputFolder(source));
-            Assert.Equal(expectedRar, PackingPlan.DefaultRarPath(expectedOutput));
+            // 源文件夹还在 → 装分卷的文件夹让位成 `素材(1)`（用户原话："那就是 1111(1) 文件夹"）。
+            string expectedOutput = Path.Combine(_root, "素材(1)");
+            string expectedRar = Path.Combine(_root, "素材.rar");
 
             Assert.True(PackingPlan.TryCreate(
                 new PackingRequest { SourceFolder = source, Password = SamplePassword },
@@ -181,6 +186,11 @@ namespace ArchiveFixer.Tests
             Assert.Equal(expectedOutput, plan!.OutputFolder);
             Assert.Equal(expectedRar, plan.RarPath);
             Assert.Equal("素材.7z", plan.VolumeBaseName);
+            Assert.Equal(_root, plan.TargetDirectory);
+
+            // 64 字节的内容：<1 GiB → 目标 2 卷（每卷上限 1 MiB 的下限）。
+            Assert.Equal(2, plan.VolumeTargetCount);
+            Assert.Equal(1L * 1024 * 1024, plan.VolumeSizeBytes);
             Assert.Equal(1, plan.PlannedVolumeCount);
         }
 
@@ -291,15 +301,45 @@ namespace ArchiveFixer.Tests
             Assert.Contains("需要本机已安装 WinRAR", tools.DescribeNoRarAvailable(), StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// ⚠ **2026-09-26 第 46 条改了口径**（用户原话："如果用户没有装 WinRAR，那就弄 7z 吧"）：
+        /// 没有 <c>Rar.exe</c> 时**不再报错停下**，而是**自动改用 7z 外层** ——
+        /// 产物是 <c>.7z</c> 而不是 <c>.rar</c>，而且必须**如实说出来**（不许假装生成了 rar）。
+        ///
+        /// <para>旧口径（"明确报错 + 三条出路 + 一步都不跑"）已被这条要求取代，本用例改写为钉新行为。</para>
+        /// </summary>
         [Fact]
-        public async Task 没有RarExe_明确报错_一步都不跑_且不产生rar()
+        public async Task 没有RarExe_自动改用7z外层_并如实说明产物是7z()
         {
             string source = CreateSourceFolder("A-norar", 2, 64 * 1024);
             string output = Path.Combine(_root, "B-norar");
-            string rarPath = PackingPlan.DefaultRarPath(output);
 
             var tools = new ToolLocator { UseWinRarInstallation = false };
-            var runner = new FakePackRunner();
+            var runner = new FakePackRunner(sevenZipResult: arguments =>
+            {
+                if (FakePackRunner.IsVolumeCall(arguments))
+                {
+                    Directory.CreateDirectory(output);
+                    File.WriteAllBytes(Path.Combine(output, "A-norar.7z.001"), new byte[2048]);
+
+                    return FakePackRunner.Ok();
+                }
+
+                File.WriteAllBytes(Path.Combine(_root, "A-norar.7z"), new byte[4096]);
+
+                return FakePackRunner.Ok();
+            }, sevenZipListResult: _ => FakePackRunner.Ok(
+                "Listing archive: " + Path.Combine(_root, "A-norar.7z") + Environment.NewLine
+                + Environment.NewLine
+                + "--" + Environment.NewLine
+                + "Path = " + Path.Combine(_root, "A-norar.7z") + Environment.NewLine
+                + "Type = 7z" + Environment.NewLine
+                + Environment.NewLine
+                + "----------" + Environment.NewLine
+                + "Path = B-norar" + Environment.NewLine
+                + Environment.NewLine
+                + @"Path = B-norar\A-norar.7z.001" + Environment.NewLine));
+
             var service = new PackingService(tools, runner, _ => long.MaxValue);
 
             // 默认容器就是 rar（不显式指定），这样测的正是"默认档 + 没装 WinRAR"这条最常见的组合。
@@ -311,28 +351,20 @@ namespace ArchiveFixer.Tests
                 Password = SamplePassword
             });
 
-            Assert.Equal(PackingState.Failed, result.State);
-            Assert.False(result.Success);
-            Assert.Equal(PackOuterContainer.Rar, result.OuterContainer);
+            Assert.True(result.Success, result.Describe());
+            Assert.Equal(PackOuterContainer.SevenZip, result.OuterContainer);
+            Assert.EndsWith(".7z", result.OuterPath, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(".rar", result.OuterPath!, StringComparison.OrdinalIgnoreCase);
 
-            string described = result.Describe();
+            // 日志里必须说清"为什么是 7z"（用户自己没选过 7z）。
+            Assert.Contains(
+                result.LogLines,
+                line => line.Contains("没有 Rar.exe", StringComparison.Ordinal) &&
+                        line.Contains("7z 外层", StringComparison.Ordinal));
 
-            Assert.Contains("需要本机已安装 WinRAR", described, StringComparison.Ordinal);
-
-            // 判据：**一步都没跑**（不是"跑了但失败了"），而且没有留下任何 .rar / .7z。
-            Assert.Equal(0, runner.TotalCalls);
-            Assert.False(File.Exists(rarPath), "没有 Rar.exe 时绝不能产生 .rar（更不能用 7z 假装生成）");
-            Assert.False(Directory.Exists(output), "在切分卷之前就该停下：连输出文件夹都不该建");
+            // 一层都没少跑：分卷 + 外层 + 校验。
+            Assert.True(runner.TotalCalls >= 3, $"分卷 / 外层 / 校验都该跑过，实际 {runner.TotalCalls} 次");
             Assert.Empty(Directory.GetFiles(_root, "*.rar", SearchOption.AllDirectories));
-            Assert.Empty(Directory.GetFiles(_root, "*.7z", SearchOption.AllDirectories));
-            Assert.Empty(Directory.GetFiles(_root, "*.001", SearchOption.AllDirectories));
-
-            // **三条**出路都要在失败正文里（"换 7z 外层""不做外层"都必须是可点的，不是让用户自己去敲命令）。
-            Assert.Contains(StatusText.PackThreeWaysOut, described, StringComparison.Ordinal);
-            Assert.Contains("装好 WinRAR", described, StringComparison.Ordinal);
-            Assert.Contains("不做外层", described, StringComparison.Ordinal);
-            Assert.Contains("无需额外安装", described, StringComparison.Ordinal);
-            Assert.DoesNotContain(StatusText.PackSuccess, described, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -613,7 +645,9 @@ namespace ArchiveFixer.Tests
 
             string source = CreateSourceFolder("A-both", 2, 600 * 1024);
             string output = Path.Combine(_root, "B-both");
-            string rarPath = PackingPlan.DefaultRarPath(output);
+
+            // ⚠ 第 46 条：外层产物用**源名**（`A-both.rar`），落在落点目录（源的父目录）。
+            string rarPath = Path.Combine(_root, "A-both.rar");
 
             var service = new PackingService(tools, null, _ => long.MaxValue);
 
@@ -651,6 +685,11 @@ namespace ArchiveFixer.Tests
             // 日志里同样不许出现密码明文（这一条走的是 -hp，与 7z 的 -p 形态不同）。
             string joined = string.Join("\n", result.LogLines) + "\n" + result.Describe();
             Assert.DoesNotContain(SamplePassword, joined, StringComparison.Ordinal);
+
+            // 默认收尾：其余物（装分卷的文件夹）已彻底删除，原包仍在原地。
+            Assert.False(Directory.Exists(output), "默认档下其余物应当已被删除（只剩外层 rar）");
+            Assert.True(Directory.Exists(source), "原包默认不动");
+            Assert.Contains("已彻底删除", result.CleanupNote, StringComparison.Ordinal);
         }
 
         // ══════════════════════════ ⑦ 进度 ══════════════════════════
@@ -929,9 +968,10 @@ namespace ArchiveFixer.Tests
         {
             string source = CreateSourceFolder("A-7zouter", 2, 64 * 1024);
             string output = Path.Combine(_root, "B-7zouter");
-            string outerPath = PackingPlan.DefaultSevenZipOuterPath(output);
 
-            Assert.Equal(Path.Combine(_root, "B-7zouter.7z"), outerPath);
+            // ⚠ 2026-09-26 第 46 条：外层产物的**名字跟着源名**（`A-7zouter.7z`），落在落点目录里
+            //（这里是源的父目录 `_root`）—— 不再是 `B-7zouter.7z`。
+            string outerPath = Path.Combine(_root, "A-7zouter.7z");
 
             var runner = new FakePackRunner(
                 sevenZipResult: arguments =>
@@ -945,7 +985,7 @@ namespace ArchiveFixer.Tests
                         return FakePackRunner.Ok();
                     }
 
-                    // 外层容器那一步：造出 B.7z（假 runner 不真的起 7z）。
+                    // 外层容器那一步：造出外层 7z（假 runner 不真的起 7z）。
                     File.WriteAllBytes(outerPath, new byte[2048]);
 
                     return FakePackRunner.Ok();
@@ -1001,8 +1041,8 @@ namespace ArchiveFixer.Tests
                 new[] { "l", "-slt", "-sccUTF-8", "-y", "-p" + SamplePassword, outerPath },
                 listCall);
 
-            // ③ 产物名与校验：B.7z 里装的是 B 这一层下的两个分卷。
-            Assert.Equal("B-7zouter.7z", Path.GetFileName(result.OuterPath));
+            // ③ 产物名与校验：外层 7z 里装的是 B 这一层下的两个分卷。
+            Assert.Equal("A-7zouter.7z", Path.GetFileName(result.OuterPath));
             Assert.Equal(2, result.Volumes.Count);
             Assert.Contains("2 个分卷", result.VerificationDetail, StringComparison.Ordinal);
             Assert.Contains(StatusText.PackOuterSevenZipShort, result.Describe(), StringComparison.Ordinal);
@@ -1199,7 +1239,9 @@ namespace ArchiveFixer.Tests
 
             string source = CreateSourceFolder("A-7ze2e", 2, 700 * 1024);
             string output = Path.Combine(_root, "B-7ze2e");
-            string outerPath = PackingPlan.DefaultSevenZipOuterPath(output);
+
+            // ⚠ 第 46 条：外层 7z 用**源名**（`A-7ze2e.7z`），落在落点目录（源的父目录）。
+            string outerPath = Path.Combine(_root, "A-7ze2e.7z");
 
             var tools = new ToolLocator { UseWinRarInstallation = false };
             var logLines = new List<string>();
@@ -1222,9 +1264,17 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(outerPath), "7z 外层容器应当存在：" + outerPath);
             Assert.True(new FileInfo(outerPath).Length > 0);
 
-            // 1 MiB 分卷 + 随机内容 → 里面应当有两卷（与 ⑥ 的分卷口径一致）。
-            Assert.True(File.Exists(Path.Combine(output, "A-7ze2e.7z.001")));
-            Assert.True(File.Exists(Path.Combine(output, "A-7ze2e.7z.002")));
+            /*
+             * ⚠ 第 46 条的默认收尾（用户："其余物……默认删掉，因为这个对用户来说一点用没有"）：
+             * 成功之后**装分卷的文件夹 B 已经被彻底删除**，只剩外层容器。
+             */
+            Assert.False(Directory.Exists(output), "默认档下其余物（装分卷的文件夹）应当已被删除");
+            Assert.Contains("其余物", result.CleanupNote, StringComparison.Ordinal);
+            Assert.Contains("已彻底删除", result.CleanupNote, StringComparison.Ordinal);
+            Assert.Contains("原包：不动", result.CleanupNote, StringComparison.Ordinal);
+            Assert.True(Directory.Exists(source), "原包默认不动");
+
+            // 分卷清单在删之前就已经收好了（结果里照样能报出切了几卷）。
             Assert.Equal(2, result.Volumes.Count);
 
             // 真 7z 自己列一遍外层容器：对密码能列出条目（-mhe=on 的文件名也解得开）。

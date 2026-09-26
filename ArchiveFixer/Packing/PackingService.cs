@@ -169,22 +169,38 @@ namespace ArchiveFixer.Packing
              * 先花十几分钟切出几十个分卷、再告诉他"外层做不了"，等于让他在最贵的步骤上白等。
              * 这一步只是**检测**，绝不复制、绝不内置 Rar.exe（共享软件，AGENTS.md §3.1）。
              *
-             * ⚠ 选了 rar 而没有 Rar.exe 时**不静默换容器**（那是替用户改主意）：
-             * 明确报错 + 三条出路（其中"换 7z 外层"与"不做外层"都是界面上可点的选项）。
+             * ⚠ 2026-09-26 第 46 条改口径（用户原话："如果用户没有装 WinRAR，那就弄 7z 吧"）：
+             * 外面选的是 rar 但本机没有 Rar.exe 时**自动改用 7z 外层**（7-Zip 是随程序分发的，无需安装），
+             * 并在日志与结果里如实写明"用的是 7z 而不是 rar" —— 不再拿"去装 WinRAR"把整件事卡住。
              */
+            PackOuterContainer effectiveContainer = request.OuterContainer;
+
             switch (request.OuterContainer)
             {
                 case PackOuterContainer.Rar:
                     if (!_tools.RarExists)
                     {
-                        Write("Rar.exe：" + _tools.DescribeNoRarAvailable());
+                        effectiveContainer = PackOuterContainer.SevenZip;
 
-                        return Fail(
-                            StatusText.PackNeedRar + Environment.NewLine + StatusText.PackThreeWaysOut,
-                            StatusText.PackFailed);
+                        Write("Rar.exe：" + _tools.DescribeNoRarAvailable());
+                        Write(
+                            "本机没有 Rar.exe（WinRAR 是共享软件，程序不分发它）—— "
+                            + "按你说的改用 **7z 外层**（7-Zip 随程序分发、无需额外安装）："
+                            + $"结果会是 {Path.GetFileName(plan.SevenZipOuterPath)}，而不是 .rar。");
+
+                        if (!_tools.SevenZipExists)
+                        {
+                            return Fail(
+                                $"本机既没有 Rar.exe 也没有可用的 7-Zip（{_tools.SevenZipExePath}），"
+                                + "没法生成任何外层容器。请检查 7-Zip 那一格设置，或重新解压一份程序。",
+                                StatusText.PackFailed);
+                        }
+                    }
+                    else
+                    {
+                        Write("外层容器 rar：" + _tools.DescribeRarResolution());
                     }
 
-                    Write("外层容器 rar：" + _tools.DescribeRarResolution());
                     break;
 
                 case PackOuterContainer.SevenZip:
@@ -206,7 +222,7 @@ namespace ArchiveFixer.Packing
                     break;
             }
 
-            Write(plan.DescribeOuterContainer());
+            Write(plan.DescribeOuterContainer(effectiveContainer));
 
             // ───────── ② 空间门（与解压侧同一套 SpaceGate 口径） ─────────
             long? available = _availableSpaceProbe(plan.OutputFolder);
@@ -231,6 +247,21 @@ namespace ArchiveFixer.Packing
             catch (Exception ex)
             {
                 return Fail($"创建输出文件夹失败：{PackPasswordGuard.Sanitize(ex.Message, request.Password)}", StatusText.PackFailed);
+            }
+
+            /*
+             * ───────── ③b 单文件源：先给它建同名文件夹并把它放进去（用户 2026-09-26 第 46 条）─────────
+             *
+             * 原话："我们就在外面生成一个文件夹。111(文件夹)\111.MP4，然后我们再对其进行打包操作"。
+             * ⛔ 那条路**不动源文件**：同盘用**硬链接**（零字节），跨盘才复制（先查空间）。
+             * 那个新建的文件夹算**其余物**（原话："他不算是原包的内容"）。
+             */
+            if (!string.IsNullOrWhiteSpace(plan.WrapperFolderToCreate))
+            {
+                if (!TryPrepareSingleFileSource(plan, Write, out string prepareProblem))
+                {
+                    return Fail(prepareProblem, StatusText.PackFailed);
+                }
             }
 
             Write(plan.DescribeVolumePlan());
@@ -317,8 +348,9 @@ namespace ArchiveFixer.Packing
             }
 
             // ───────── ⑤ 第二步：外层容器（rar 或 7z） ─────────
-            string outerPath = plan.OuterPath;
-            bool outerIsRar = request.OuterContainer == PackOuterContainer.Rar;
+            // ⚠ 用**实际生效的**容器（第 46 条：没装 WinRAR 时 rar 已在上面的检查里降级成 7z）。
+            bool outerIsRar = effectiveContainer == PackOuterContainer.Rar;
+            string outerPath = outerIsRar ? plan.RarPath : plan.SevenZipOuterPath;
             string outerName = outerIsRar ? "外层 rar" : "外层 7z";
             string outerTool = outerIsRar ? "Rar.exe" : "7-Zip";
             PackToolKind outerToolKind = outerIsRar ? PackToolKind.Rar : PackToolKind.SevenZip;
@@ -442,6 +474,20 @@ namespace ArchiveFixer.Packing
                 outerBytes = 0;
             }
 
+            /*
+             * ───────── ⑦ 收尾：原包 / 其余物（用户 2026-09-26 第 46 条）─────────
+             *
+             * ⛔ 位置是刻意的：**只有外层容器生成 + 校验通过**之后才走这一步；
+             * 失败 / 取消 / 校验没过都在前面 return 掉了，一个字节都不会动（红线）。
+             * 收尾出问题也不改结论（结果文件已经在那儿了），只把话写进日志。
+             */
+            PackingCleanupOutcome cleanup = PackingCleanup.Run(plan, succeeded: true, outerPath);
+
+            foreach (string line in cleanup.LogLines)
+            {
+                Write(line);
+            }
+
             Report(PackingStep.Finished, StatusText.PackSuccess, 100);
 
             stopwatch.Stop();
@@ -450,11 +496,14 @@ namespace ArchiveFixer.Packing
             {
                 State = PackingState.Succeeded,
                 Message = StatusText.PackSuccess,
-                OuterContainer = request.OuterContainer,
+                OuterContainer = effectiveContainer,
                 OuterPath = outerPath,
                 OuterBytes = outerBytes,
                 Volumes = volumes,
                 VerificationDetail = verification.Detail,
+                CleanupNote = cleanup.Ran
+                    ? $"原包：{(cleanup.SourceMoved ? "已移入其余物" : "不动")}；其余物：{cleanup.RestSummary}"
+                    : string.Empty,
                 LogLines = lines,
                 Elapsed = stopwatch.Elapsed
             };
@@ -463,6 +512,90 @@ namespace ArchiveFixer.Packing
 
             return result;
         }
+
+        /// <summary>
+        /// 单文件源的准备：建同名文件夹 + 把源文件放进去（**硬链接优先**）。
+        ///
+        /// <para>⛔ 源文件一个字节都不改：同盘 <c>CreateHardLinkW</c>（零字节、多一个名字），
+        /// 跨盘只能复制（先查空间，不够就不做）。放不进去就**当场停**（不开始切分卷）。</para>
+        /// </summary>
+        private bool TryPrepareSingleFileSource(PackingPlan plan, Action<string> write, out string problem)
+        {
+            problem = string.Empty;
+
+            string source = plan.SourceResolution.SourcePath;
+            string folder = plan.WrapperFolderToCreate;
+            string target = Path.Combine(folder, Path.GetFileName(source));
+
+            try
+            {
+                Directory.CreateDirectory(folder);
+            }
+            catch (Exception ex)
+            {
+                problem = $"建不出同名文件夹（{folder}）：{ex.Message}";
+                return false;
+            }
+
+            if (File.Exists(target))
+            {
+                write($"单文件准备：同名文件夹里已经有这个文件了，直接用：{target}");
+                return true;
+            }
+
+            try
+            {
+                // 同一个盘：硬链接（零字节、不改源文件）。
+                if (TryCreateHardLink(target, source))
+                {
+                    write($"单文件准备：已把 {Path.GetFileName(source)} 接进同名文件夹（硬链接，不复制字节、源文件不动）→ {target}");
+                    return true;
+                }
+
+                // 跨盘：只能复制 —— 先查空间。
+                long length = new FileInfo(source).Length;
+                long? free = _availableSpaceProbe(folder);
+
+                if (free.HasValue && free.Value < length + (256L * 1024 * 1024))
+                {
+                    problem = $"要把 {Path.GetFileName(source)} 复制进同名文件夹，需要 {TaskSpaceEstimate.FormatSize(length)}，"
+                            + $"但目标盘只剩 {(free.HasValue ? TaskSpaceEstimate.FormatSize(free.Value) : "未知")}（还要留 256 MiB 余量）。"
+                            + "请自己建一个同名文件夹把它放进去，或者换一个落点。";
+                    return false;
+                }
+
+                File.Copy(source, target, overwrite: false);
+
+                write($"单文件准备：已把 {Path.GetFileName(source)} 复制进同名文件夹（跨盘，源文件仍在原地）→ {target}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                problem = $"把源文件放进同名文件夹失败（{source} → {target}）：{PackPasswordGuard.Sanitize(ex.Message, plan.RunOptions?.CustomOutputDirectory)}";
+                return false;
+            }
+        }
+
+        /// <summary>同盘硬链接（Windows）。做不了就返回 false，由调用方回落复制。</summary>
+        private static bool TryCreateHardLink(string linkPath, string existingPath)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return false;
+            }
+
+            try
+            {
+                return CreateHardLinkW(linkPath, existingPath, IntPtr.Zero);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern bool CreateHardLinkW(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
 
         /// <summary>
         /// 第一步的命令行（**只允许在本目录内拼**）。

@@ -1438,6 +1438,17 @@ namespace ArchiveFixer.ViewModels
             PackingEditor = new PackingViewModel { LogSink = line => AppendLog("INFO", line) };
 
             /*
+             * 打包那几档（落点 / 原包操作 / 其余物操作）存在**同一份 AppSettings** 上，
+             * 但字段与解压侧完全分开（第 46 条：⛔ 两者绝不同步）；改了要落盘（"保存记忆操作"）。
+             * 密码列表由④页那份喂进来（「从密码列表里选」按钮用）。
+             */
+            PackingEditor.Settings = Settings;
+            PackingEditor.SettingsChanged = SavePackingSettings; PackingEditor.PasswordListProvider = () => _passwordService.Passwords
+                .Where(item => item != null && item.IsEnabled && !string.IsNullOrEmpty(item.Value))
+                .Select(item => item.Value)
+                .ToList();
+
+            /*
              * 「记住上次输出目录」真正生效的地方（不是留着好看的开关）：
              * 关掉之后，启动时**不**把上次的输出目录填回 SelectedOutputDirectory，
              * 这一次运行按"输出位置"那一档的规则算落点（默认 = 压缩包同目录）。
@@ -2902,6 +2913,25 @@ namespace ArchiveFixer.ViewModels
         /// "设置里改了、这次运行还是老的"。
         /// </para>
         /// </summary>
+        /// <summary>
+        /// 打包那边改了它自己的两档（原包 / 其余物 / 落点）之后落盘 ——
+        /// 用户 2026-09-26 第 46 条："而且相应的保存记忆操作"。
+        ///
+        /// <para>⛔ 只写打包那三个字段（它们在 <c>PackingEditor.Settings</c> 上，与解压侧各存各的），
+        /// 这里不碰任何解压设置；写失败也不弹窗（打包本身已经跑完了，没道理为一个落盘失败打断他）。</para>
+        /// </summary>
+        private void SavePackingSettings()
+        {
+            try
+            {
+                _settingsService.Save(Settings);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "打包的选择没能写进设置（下次打开会回到上一次的值）：" + ex.Message);
+            }
+        }
+
         private void SaveSettings()
         {
             try
