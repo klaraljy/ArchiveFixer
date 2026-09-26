@@ -143,14 +143,30 @@ namespace ArchiveFixer.Services
         /// </summary>
         public virtual string ShowFolderBrowserDialog()
         {
+            return ShowFolderBrowserDialog("选择文件夹", string.Empty);
+        }
+
+        /// <summary>
+        /// 带标题 / 初始目录的那一版（⑤打包页「选择…」用：标题要说清是"最终压缩包放在哪"）。
+        ///
+        /// <para>⚠ 这两版**必须是同一条路**（①页与⑤页各调一版）：无界面宿主下都返回空串，
+        /// 测试只要 override 这一版就能钉住两条"选择…"的真实路径。</para>
+        /// </summary>
+        public virtual string ShowFolderBrowserDialog(string title, string initialDirectory)
+        {
             return ShowFileDialog(
                 () =>
                 {
                     var dialog = new OpenFolderDialog
                     {
-                        Title = "选择文件夹",
+                        Title = string.IsNullOrWhiteSpace(title) ? "选择文件夹" : title,
                         Multiselect = false
                     };
+
+                    if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+                    {
+                        dialog.InitialDirectory = initialDirectory;
+                    }
 
                     return dialog.ShowDialog() == true ? dialog.FolderName : string.Empty;
                 },

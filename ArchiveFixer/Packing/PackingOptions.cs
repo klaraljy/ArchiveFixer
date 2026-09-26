@@ -15,14 +15,21 @@ namespace ArchiveFixer.Packing
         File = 1
     }
 
-    /// <summary>最终 `.rar` 放在哪（用户 2026-09-26：本地（默认）/ 指定位置）。</summary>
+    /// <summary>最终 <c>.rar</c> 放在哪（用户 2026-09-26 第 46 条 + 当天追加）。</summary>
     public enum PackingTargetMode
     {
-        /// <summary>本地 = 源文件夹（或单文件）**旁边**（默认）。</summary>
-        Local = 0,
+        /// <summary>
+        /// **默认**：跟①页「输出位置」那一档走 —— 用户设过指定位置就用它，没设过就是源旁边。
+        ///
+        /// <para>用户原话："如果用户默认不去选择位置就将压缩至选择的目录位置"。</para>
+        /// </summary>
+        FollowOutputDirectory = 0,
 
-        /// <summary>指定位置（用户挑一个目录）。</summary>
-        Custom = 1
+        /// <summary>本地 = 源文件夹（或单文件）**旁边**。</summary>
+        Local = 1,
+
+        /// <summary>指定位置（用户在⑤页挑一个目录）。</summary>
+        Custom = 2
     }
 
     /// <summary>打包里的**原包操作**（用户 2026-09-26；⛔ 与解压那套完全独立、各自记忆）。</summary>
@@ -361,11 +368,20 @@ namespace ArchiveFixer.Packing
     /// </summary>
     public sealed class PackingRunOptions
     {
-        /// <summary>最终 `.rar` 放哪：本地（默认）/ 指定位置。</summary>
-        public PackingTargetMode TargetMode { get; init; } = PackingTargetMode.Local;
+        /// <summary>最终 <c>.rar</c> 放哪：默认（跟①页「输出位置」）/ 本地（源旁边）/ 指定位置。</summary>
+        public PackingTargetMode TargetMode { get; init; } = PackingTargetMode.FollowOutputDirectory;
 
         /// <summary>指定位置的目录（<see cref="PackingTargetMode.Custom"/> 时用）。</summary>
         public string CustomOutputDirectory { get; init; } = string.Empty;
+
+        /// <summary>
+        /// **默认档**要落到的目录（由界面从①页「输出位置」解析好塞进来；空 = 源旁边）。
+        ///
+        /// <para>为什么由界面解析：那一档的真值在 <c>AppSettings.ExtractToOriginalDirectory</c> /
+        /// <c>CustomOutputDirectory</c> 上，规划层（纯逻辑、不碰设置）不该去读它 —— 于是"解析"只有一处
+        /// （`PackingViewModel`），值随请求传进来。</para>
+        /// </summary>
+        public string DefaultOutputDirectory { get; init; } = string.Empty;
 
         /// <summary>原包操作：不动（默认）/ 移入其余物。</summary>
         public PackingSourceHandling SourceHandling { get; init; } = PackingSourceHandling.KeepInPlace;
@@ -385,9 +401,32 @@ namespace ArchiveFixer.Packing
             {
                 TargetMode = ParseTargetMode(settings.PackTargetMode),
                 CustomOutputDirectory = settings.PackCustomOutputDirectory ?? string.Empty,
+                DefaultOutputDirectory = ResolveDefaultOutputDirectory(settings),
                 SourceHandling = ParseSourceHandling(settings.PackSourceHandling),
                 RestHandling = ParseRestHandling(settings.PackRestHandling)
             };
+        }
+
+        /// <summary>
+        /// 默认档要落在哪：**跟①页「输出位置」**（用户 2026-09-26 原话："如果用户默认不去选择位置
+        /// 就将压缩至选择的目录位置"）。
+        ///
+        /// <list type="bullet">
+        /// <item><description>①页设了「指定位置」→ 用它（<c>AppSettings.CustomOutputDirectory</c>）；</description></item>
+        /// <item><description>①页是「未指定位置」（<c>ExtractToOriginalDirectory = true</c>）→ 空串 = 源旁边。</description></item>
+        /// </list>
+        /// ⛔ 这是"打包默认落点"的**唯一解析处**（`PackingViewModel` 与测试都引它）。
+        /// </summary>
+        public static string ResolveDefaultOutputDirectory(AppSettings? settings)
+        {
+            if (settings == null || settings.ExtractToOriginalDirectory)
+            {
+                return string.Empty;
+            }
+
+            return string.IsNullOrWhiteSpace(settings.CustomOutputDirectory)
+                ? string.Empty
+                : settings.CustomOutputDirectory;
         }
 
         /// <summary>写回设置（"相应的保存记忆操作"）。</summary>
@@ -434,9 +473,12 @@ namespace ArchiveFixer.Packing
         };
 
         /// <summary>落点那一档的中文。</summary>
-        public string TargetModeText => TargetMode == PackingTargetMode.Custom
-            ? "指定位置"
-            : "本地（源旁边）";
+        public string TargetModeText => TargetMode switch
+        {
+            PackingTargetMode.Custom => "指定位置",
+            PackingTargetMode.Local => "本地（源旁边）",
+            _ => "默认（跟①页「输出位置」）"
+        };
 
         /// <summary>进日志的一句话（⛔ 不含密码）。</summary>
         public string DescribeForLog() =>
@@ -447,7 +489,7 @@ namespace ArchiveFixer.Packing
             + $"；原包操作：{SourceHandlingText}；其余物操作：{RestHandlingText}";
 
         public static PackingTargetMode ParseTargetMode(string? value) =>
-            Enum.TryParse(value, ignoreCase: true, out PackingTargetMode parsed) ? parsed : PackingTargetMode.Local;
+            Enum.TryParse(value, ignoreCase: true, out PackingTargetMode parsed) ? parsed : PackingTargetMode.FollowOutputDirectory;
 
         public static PackingSourceHandling ParseSourceHandling(string? value) =>
             Enum.TryParse(value, ignoreCase: true, out PackingSourceHandling parsed)
@@ -468,7 +510,7 @@ namespace ArchiveFixer.Packing
     /// </summary>
     public static class PackingPaths
     {
-        /// <summary>落点目录（本地 = 源的父目录）。拿不到时返回空串，由调用方报错。</summary>
+        /// <summary>落点目录（默认 = 跟①页输出位置 / 本地 = 源的父目录）。拿不到时返回空串，由调用方报错。</summary>
         public static string ResolveTargetDirectory(PackingSourceResolution source, PackingRunOptions options)
         {
             if (source == null || !source.Success)
@@ -476,12 +518,29 @@ namespace ArchiveFixer.Packing
                 return string.Empty;
             }
 
-            if (options?.TargetMode == PackingTargetMode.Custom &&
+            options ??= new PackingRunOptions();
+
+            // 指定位置 → 就是它。
+            if (options.TargetMode == PackingTargetMode.Custom &&
                 !string.IsNullOrWhiteSpace(options.CustomOutputDirectory))
             {
                 try
                 {
                     return Path.GetFullPath(options.CustomOutputDirectory);
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }
+
+            // 默认档 → 跟①页「输出位置」（没设过就是源旁边）。
+            if (options.TargetMode == PackingTargetMode.FollowOutputDirectory &&
+                !string.IsNullOrWhiteSpace(options.DefaultOutputDirectory))
+            {
+                try
+                {
+                    return Path.GetFullPath(options.DefaultOutputDirectory);
                 }
                 catch
                 {

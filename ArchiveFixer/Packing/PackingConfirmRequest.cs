@@ -179,6 +179,43 @@ namespace ArchiveFixer.Packing
             ? $"其余物 = 装 7z 分卷的文件夹 + 为这个文件临时建的同名文件夹「{SourceName}」"
             : "其余物 = 装 7z 分卷的那个文件夹";
 
+        /// <summary>
+        /// 落点那句话（弹窗里**只显示**，选择在⑤页 —— 用户 2026-09-26 追加："选择还是得放在页面"）。
+        /// 形如 <c>默认（跟①页「输出位置」）→ D:\出包</c> / <c>本地（源旁边）→ C:\素材</c>。
+        /// </summary>
+        public string PlacementText
+        {
+            get
+            {
+                PackingRunOptions options = Initial ?? new PackingRunOptions();
+                string directory = TargetDirectory;
+
+                return $"{options.TargetModeText} → "
+                     + (string.IsNullOrWhiteSpace(directory) ? "（推不出目录）" : directory);
+            }
+        }
+
+        /// <summary>最终产物会落在哪个目录（按打开弹窗时那一套落点算好的）。</summary>
+        public string TargetDirectory
+        {
+            get
+            {
+                if (Resolution == null)
+                {
+                    try
+                    {
+                        return string.IsNullOrWhiteSpace(OuterPath) ? string.Empty : Path.GetDirectoryName(OuterPath) ?? string.Empty;
+                    }
+                    catch
+                    {
+                        return string.Empty;
+                    }
+                }
+
+                return PackingPaths.ResolveTargetDirectory(Resolution, Initial ?? new PackingRunOptions());
+            }
+        }
+
         /// <summary>原包到底是什么。</summary>
         public string SourceExplanation => SourceKind == PackingSourceKind.File
             ? $"原包 = 你选的那个文件（{Path.GetFileName(SourcePath)}）"

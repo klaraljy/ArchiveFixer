@@ -340,15 +340,65 @@ namespace ArchiveFixer.Tests
             Assert.Equal(PackingRestHandling.RecycleBin, reloaded.RestHandling);
 
             // 认不出来的值一律落回默认（旧配置 / 手改坏了都不许炸）。
+            // ⚠ 2026-09-26 追加改口径：**默认那一档现在是"跟①页输出位置"**（不再是"本地"）。
             settings.PackTargetMode = "??";
             settings.PackSourceHandling = "??";
             settings.PackRestHandling = "??";
 
             PackingRunOptions fallback = PackingRunOptions.FromSettings(settings);
 
-            Assert.Equal(PackingTargetMode.Local, fallback.TargetMode);
+            Assert.Equal(PackingTargetMode.FollowOutputDirectory, fallback.TargetMode);
             Assert.Equal(PackingSourceHandling.KeepInPlace, fallback.SourceHandling);
             Assert.Equal(PackingRestHandling.Delete, fallback.RestHandling);
+        }
+
+        /// <summary>
+        /// ⛔ **默认那一档 = 跟①页「输出位置」**（用户 2026-09-26 追加原话："如果用户默认不去选择位置
+        /// 就将压缩至选择的目录位置"）：
+        /// ①页设过"指定位置"就用它；①页是"未指定位置"就回落**源旁边**（空串）。
+        /// </summary>
+        [Fact]
+        public void 默认落点_跟首页输出位置_没设过就是源旁边()
+        {
+            var settings = AppSettings.CreateDefault();
+
+            // ①页 = 未指定位置（默认）→ 默认档解析出来是空串 = 源旁边。
+            settings.ExtractToOriginalDirectory = true;
+            settings.CustomOutputDirectory = @"D:\不该用它";
+
+            Assert.Equal(string.Empty, PackingRunOptions.ResolveDefaultOutputDirectory(settings));
+
+            // ①页 = 指定位置 → 默认档就落那儿。
+            settings.ExtractToOriginalDirectory = false;
+            settings.CustomOutputDirectory = @"D:\出包";
+
+            Assert.Equal(@"D:\出包", PackingRunOptions.ResolveDefaultOutputDirectory(settings));
+
+            // 落点解析：默认档 + 有目录 → 用它；默认档 + 没目录 → 源的父目录。
+            string source = Path.Combine(_root, "素材");
+            Directory.CreateDirectory(source);
+
+            Assert.True(PackingSourceResolver.Resolve(source).Success);
+
+            var follow = new PackingRunOptions
+            {
+                TargetMode = PackingTargetMode.FollowOutputDirectory,
+                DefaultOutputDirectory = @"D:\出包"
+            };
+
+            Assert.Equal(
+                @"D:\出包",
+                PackingPaths.ResolveTargetDirectory(PackingSourceResolver.Resolve(source), follow));
+
+            var followWithoutDirectory = new PackingRunOptions
+            {
+                TargetMode = PackingTargetMode.FollowOutputDirectory,
+                DefaultOutputDirectory = string.Empty
+            };
+
+            Assert.Equal(
+                _root,
+                PackingPaths.ResolveTargetDirectory(PackingSourceResolver.Resolve(source), followWithoutDirectory));
         }
 
         /// <summary>

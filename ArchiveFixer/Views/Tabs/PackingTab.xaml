@@ -199,7 +199,47 @@
                                    TextWrapping="Wrap" />
                     </Border>
 
-                    <!-- 摘要（点「打包」还会弹一个小窗确认落点与两档操作） -->
+                    <!--
+                        ==================== 落点（**选择在页面上**）====================
+                        用户 2026-09-26 追加："选择还是得放在页面"；默认那一档的意思是
+                        "跟①页「输出位置」走，没设过就是源旁边"。
+                    -->
+                    <TextBlock Text="最终压缩包放在哪" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
+
+                    <StackPanel Margin="0,4,0,0">
+                        <RadioButton x:Name="PlacementFollow"
+                                     GroupName="PackPlacement"
+                                     Content="默认（跟①页「输出位置」走；没设过就是源旁边）"
+                                     IsChecked="{Binding PlacementIsFollowDefault, Mode=TwoWay}" />
+
+                        <RadioButton x:Name="PlacementCustom"
+                                     GroupName="PackPlacement"
+                                     Margin="0,6,0,0"
+                                     Content="指定位置"
+                                     IsChecked="{Binding PlacementIsCustom, Mode=TwoWay}" />
+
+                        <DockPanel Margin="20,4,0,0">
+                            <Button DockPanel.Dock="Right"
+                                    Content="选择…"
+                                    Padding="10,2"
+                                    Margin="8,0,0,0"
+                                    MinWidth="72"
+                                    IsEnabled="{Binding PlacementIsEditable}"
+                                    Command="{Binding PickPlacementDirectoryCommand}" />
+
+                            <TextBox Text="{Binding CustomPlacementDirectory, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding PlacementIsEditable}"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="这里是最终 .rar / .7z 会落到的目录（⛔ 只在你点「打包…」并确认之后才会往里写）" />
+                        </DockPanel>
+
+                        <TextBlock Text="{Binding PlacementSummaryText}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="0,6,0,0"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <!-- 摘要（点「打包…」还会弹一个小窗确认两档操作） -->
                     <TextBlock Text="摘要" Style="{StaticResource LabelTextStyle}" Margin="0,14,0,0" />
 
                     <Border Background="{StaticResource PanelSunkenBrush}"
@@ -221,7 +261,7 @@
                             <TextBlock Style="{StaticResource HintTextStyle}"
                                        Margin="0,6,0,0"
                                        TextWrapping="Wrap"
-                                       Text="点「打包」会先弹一个小窗：最终压缩包放在哪 + 原包操作 + 其余物操作（都会记住，下次照上次的来）。" />
+                                       Text="点「打包…」还会弹一个小窗：确认原包操作 + 其余物操作（都会记住，下次照上次的来；落点在上面选）。" />
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -233,11 +273,11 @@
             <StackPanel>
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                        <Button Content="开始打包"
+                        <Button Content="打包…"
                                 MinWidth="104"
                                 Style="{StaticResource PrimaryButtonStyle}"
                                 Command="{Binding StartCommand}"
-                                ToolTip="先校验落点与空间，再开始切分卷、做外层容器" />
+                                ToolTip="先校验落点与空间，再开始切分卷、做外层容器（还会弹一个小窗确认两档操作）" />
 
                         <Button Content="取消"
                                 MinWidth="80"

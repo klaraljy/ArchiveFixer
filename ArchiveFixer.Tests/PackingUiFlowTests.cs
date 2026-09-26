@@ -269,6 +269,53 @@ namespace ArchiveFixer.Tests
             Assert.Contains("彻底删除", viewModel.ResultText, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// ⛔ **落点的选择在⑤页**（用户 2026-09-26 追加："选择还是得放在页面"）：
+        /// 页面上选「指定位置 + 某目录」→ 最终产物就落在那儿；而弹窗里那两档**不许**改落点
+        /// （这条用一个"乱返回落点"的弹窗替身钉住）。
+        /// </summary>
+        [Fact]
+        public async Task 落点在页面上选_弹窗不许改落点()
+        {
+            string source = BuildSourceFolder("素材");
+            string elsewhere = Path.Combine(_root, "出包");
+
+            Directory.CreateDirectory(elsewhere);
+
+            var runner = new CountingRunner();
+
+            // 弹窗替身故意返回"本地 + 另一个目录"——页面选的是"指定位置（出包）"，必须以此为准。
+            var confirmed = new PackingRunOptions
+            {
+                TargetMode = PackingTargetMode.Local,
+                CustomOutputDirectory = Path.Combine(_root, "弹窗瞎指的目录"),
+                SourceHandling = PackingSourceHandling.KeepInPlace,
+                RestHandling = PackingRestHandling.Delete
+            };
+
+            Harness harness = BuildHarness(source, runner, confirmed);
+
+            harness.ViewModel.PlacementIsCustom = true;
+            harness.ViewModel.CustomPlacementDirectory = elsewhere;
+
+            await harness.ViewModel.StartAsync();
+
+            Assert.True(runner.Calls >= 1, "确认之后至少要把分卷那一步跑起来");
+
+            // 分卷落点必须是**页面上选的那个目录**（不是弹窗里那个，也不是源旁边）。
+            Assert.Contains(
+                runner.Args,
+                line => line.Contains(Path.Combine(elsewhere, "素材"), StringComparison.OrdinalIgnoreCase));
+
+            Assert.DoesNotContain(
+                runner.Args,
+                line => line.Contains("弹窗瞎指的目录", StringComparison.Ordinal));
+
+            // 设置里记住的也是页面那一套。
+            Assert.Equal("Custom", harness.Settings.PackTargetMode);
+            Assert.Equal(elsewhere, harness.Settings.PackCustomOutputDirectory);
+        }
+
         // ================================================================ 取消 = 什么都不做
 
         [Fact]
@@ -296,17 +343,23 @@ namespace ArchiveFixer.Tests
         public async Task 确认之后_照着弹窗的选择做_而且只写打包那一套设置()
         {
             string source = BuildSourceFolder("素材");
+            string output = Path.Combine(_root, "出包");
+
+            Directory.CreateDirectory(output);
+
             var runner = new CountingRunner();
 
+            // 弹窗只管**两档操作**（落点由页面选，见 `落点在页面上选_弹窗不许改落点`）。
             var confirmed = new PackingRunOptions
             {
-                TargetMode = PackingTargetMode.Custom,
-                CustomOutputDirectory = Path.Combine(_root, "出包"),
                 SourceHandling = PackingSourceHandling.MoveToRest,
                 RestHandling = PackingRestHandling.Keep
             };
 
             Harness harness = BuildHarness(source, runner, confirmed);
+
+            harness.ViewModel.PlacementIsCustom = true;
+            harness.ViewModel.CustomPlacementDirectory = output;
 
             string extractSourceHandling = harness.Settings.SourceHandling;
             string extractRestHandling = harness.Settings.RestHandlingAfterVerify;
@@ -317,11 +370,11 @@ namespace ArchiveFixer.Tests
             Assert.True(runner.Calls >= 1, "确认之后至少要把分卷那一步跑起来");
             Assert.Contains(runner.Args, line => line.Contains("-v", StringComparison.Ordinal));
 
-            // ② 写回的是**打包那几档**；解压侧一个字都没动。
+            // ② 写回的是**打包那几档**（落点取自页面、两档取自弹窗）；解压侧一个字都没动。
             Assert.Equal("Custom", harness.Settings.PackTargetMode);
             Assert.Equal("MoveToRest", harness.Settings.PackSourceHandling);
             Assert.Equal("Keep", harness.Settings.PackRestHandling);
-            Assert.Equal(Path.Combine(_root, "出包"), harness.Settings.PackCustomOutputDirectory);
+            Assert.Equal(output, harness.Settings.PackCustomOutputDirectory);
 
             Assert.Equal(extractSourceHandling, harness.Settings.SourceHandling);
             Assert.Equal(extractRestHandling, harness.Settings.RestHandlingAfterVerify);

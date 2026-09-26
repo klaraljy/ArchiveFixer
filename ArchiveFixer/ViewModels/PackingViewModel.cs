@@ -85,6 +85,9 @@ namespace ArchiveFixer.ViewModels
 
         private string _summaryText = string.Empty;
         private string _placementText = string.Empty;
+        private string _placementSummaryText = string.Empty;
+        private bool _placementIsCustom;
+        private string _customPlacementDirectory = string.Empty;
 
         private bool _isRunning;
         private int _progressPercent;
@@ -124,12 +127,14 @@ namespace ArchiveFixer.ViewModels
 
             BrowseFolderCommand = new RelayCommand(BrowseSourceFolder);
             BrowseFileCommand = new RelayCommand(BrowseSourceFile);
+            PickPlacementDirectoryCommand = new RelayCommand(PickPlacementDirectory);
             RefreshSummaryCommand = new RelayCommand(RefreshSummary);
             StartCommand = new AsyncRelayCommand(StartAsync, () => !IsRunning);
             CancelCommand = new RelayCommand(Cancel, () => IsRunning);
             CopyPasswordCommand = new RelayCommand(CopyPassword);
             OpenOutputFolderCommand = new RelayCommand(OpenOutputFolder);
 
+            LoadPlacementFromSettings();
             RefreshSummary();
         }
 
@@ -154,7 +159,14 @@ namespace ArchiveFixer.ViewModels
         public AppSettings Settings
         {
             get => _settings;
-            set => _settings = value ?? new AppSettings();
+            set
+            {
+                _settings = value ?? new AppSettings();
+
+                // 设置变了（①页「输出位置」也是一份共享真值）→ 页面那两档与那行「落点」都要跟着重读。
+                LoadPlacementFromSettings();
+                RefreshPlacementSummary();
+            }
         }
 
         /// <summary>密码列表的来源（④页那份；由主界面注入）。</summary>
@@ -211,6 +223,7 @@ namespace ArchiveFixer.ViewModels
                     OnPropertyChanged(nameof(SourceKindText));
                     OnPropertyChanged(nameof(IsSingleFileSource));
 
+                    RefreshPlacementSummary();
                     RefreshSummary();
                 }
             }
@@ -384,6 +397,166 @@ namespace ArchiveFixer.ViewModels
         {
             get => _summaryText;
             private set => SetProperty(ref _summaryText, value ?? string.Empty);
+        }
+
+        /// <summary>
+        /// ⑤页上那行「落点：…」—— **最终压缩包会放在哪**（用户 2026-09-26 真机原话：
+        /// "怎么没有文件指定的压缩位置……**选择还是得放在页面**"）。
+        ///
+        /// <para>值与真正用的一样（同一个 <see cref="PackingPaths.ResolveTargetDirectory"/>），
+        /// 只报事实：不建目录、不改设置。</para>
+        /// </summary>
+        public string PlacementSummaryText
+        {
+            get => _placementSummaryText;
+            private set => SetProperty(ref _placementSummaryText, value ?? string.Empty);
+        }
+
+        /// <summary>落点 = **默认**（跟①页「输出位置」）。</summary>
+        public bool PlacementIsFollowDefault
+        {
+            get => !PlacementIsCustom;
+            set
+            {
+                if (value && PlacementIsCustom)
+                {
+                    PlacementIsCustom = false;
+                }
+            }
+        }
+
+        /// <summary>落点 = 指定位置（在⑤页挑一个目录）。</summary>
+        public bool PlacementIsCustom
+        {
+            get => _placementIsCustom;
+            set
+            {
+                if (SetProperty(ref _placementIsCustom, value))
+                {
+                    OnPropertyChanged(nameof(PlacementIsFollowDefault));
+                    OnPropertyChanged(nameof(PlacementIsEditable));
+
+                    PersistPlacement();
+                    RefreshPlacementSummary();
+                }
+            }
+        }
+
+        /// <summary>指定位置那个目录（只在 <see cref="PlacementIsCustom"/> 时有意义）。</summary>
+        public string CustomPlacementDirectory
+        {
+            get => _customPlacementDirectory;
+            set
+            {
+                if (SetProperty(ref _customPlacementDirectory, value ?? string.Empty))
+                {
+                    PersistPlacement();
+                    RefreshPlacementSummary();
+                }
+            }
+        }
+
+        /// <summary>指定位置那一格现在能不能编辑。</summary>
+        public bool PlacementIsEditable => PlacementIsCustom;
+
+        /// <summary>「选择…」：挑一个目录（⛔ 只改设置，**不建目录** —— 与①页同一口径）。</summary>
+        public void PickPlacementDirectory()
+        {
+            string? picked = _dialogService.ShowFolderBrowserDialog(
+                "选择最终压缩包放在哪",
+                string.IsNullOrWhiteSpace(CustomPlacementDirectory) ? SourceFolder : CustomPlacementDirectory);
+
+            if (string.IsNullOrWhiteSpace(picked))
+            {
+                return;
+            }
+
+            // 挑了目录 = 用户要"指定位置"，顺手把那一档切过去（他不会希望挑了却不生效）。
+            _placementIsCustom = true;
+            OnPropertyChanged(nameof(PlacementIsCustom));
+            OnPropertyChanged(nameof(PlacementIsFollowDefault));
+            OnPropertyChanged(nameof(PlacementIsEditable));
+
+            CustomPlacementDirectory = picked;
+        }
+
+        /// <summary>把页面上的两档写回设置（"相应的保存记忆操作"）。</summary>
+        private void PersistPlacement()
+        {
+            if (_settings == null)
+            {
+                return;
+            }
+
+            _settings.PackTargetMode = (PlacementIsCustom
+                ? PackingTargetMode.Custom
+                : PackingTargetMode.FollowOutputDirectory).ToString();
+
+            _settings.PackCustomOutputDirectory = CustomPlacementDirectory ?? string.Empty;
+
+            SettingsChanged?.Invoke();
+        }
+
+        /// <summary>把设置里那一套读进页面（打开⑤页 / 换设置对象时）。</summary>
+        private void LoadPlacementFromSettings()
+        {
+            string saved = _settings?.PackTargetMode ?? string.Empty;
+
+            _placementIsCustom = PackingRunOptions.ParseTargetMode(saved) == PackingTargetMode.Custom;
+            _customPlacementDirectory = _settings?.PackCustomOutputDirectory ?? string.Empty;
+
+            OnPropertyChanged(nameof(PlacementIsCustom));
+            OnPropertyChanged(nameof(PlacementIsFollowDefault));
+            OnPropertyChanged(nameof(PlacementIsEditable));
+        }
+
+        /// <summary>
+        /// 页面上这几档 → 一套请求选项（⛔ 唯一出口：预览、弹窗抬头、真跑都引它）。
+        ///
+        /// <para>落点取**页面**上那两档；"默认"那一档要落到的目录由
+        /// <see cref="PackingRunOptions.ResolveDefaultOutputDirectory"/> 从①页「输出位置」解析
+        /// （用户原话："如果用户默认不去选择位置就将压缩至选择的目录位置"）。</para>
+        /// </summary>
+        internal PackingRunOptions BuildPlacementOptions()
+        {
+            PackingRunOptions saved = PackingRunOptions.FromSettings(_settings);
+
+            return new PackingRunOptions
+            {
+                TargetMode = PlacementIsCustom ? PackingTargetMode.Custom : PackingTargetMode.FollowOutputDirectory,
+                CustomOutputDirectory = CustomPlacementDirectory ?? string.Empty,
+                DefaultOutputDirectory = PackingRunOptions.ResolveDefaultOutputDirectory(_settings),
+                SourceHandling = saved.SourceHandling,
+                RestHandling = saved.RestHandling
+            };
+        }
+
+        /// <summary>重算那行「落点」（很便宜：只解析路径，不扫源目录）。</summary>
+        private void RefreshPlacementSummary()
+        {
+            if (string.IsNullOrWhiteSpace(SourceFolder))
+            {
+                PlacementSummaryText = "落点：还没选源 —— 先选一个文件夹（或一个文件）。";
+                return;
+            }
+
+            PackingSourceResolution resolution = PackingSourceResolver.Resolve(SourceFolder);
+
+            if (!resolution.Success)
+            {
+                PlacementSummaryText = "落点：" + resolution.Reason;
+                return;
+            }
+
+            PackingRunOptions options = BuildPlacementOptions();
+            string directory = PackingPaths.ResolveTargetDirectory(resolution, options);
+
+            PlacementSummaryText = options.TargetMode switch
+            {
+                PackingTargetMode.Custom => $"落点：指定位置 —— {directory}",
+                PackingTargetMode.Local => $"落点：本地（源旁边）—— {directory}",
+                _ => $"落点：默认（跟①页「输出位置」）—— {directory}"
+            };
         }
 
         /// <summary>落点：B 与结果 rar 会落在哪儿。</summary>
@@ -601,6 +774,9 @@ namespace ArchiveFixer.ViewModels
         /// <summary>选**单个文件**（第 46 条：会在它旁边建同名文件夹再打包）。</summary>
         public ICommand BrowseFileCommand { get; }
 
+        /// <summary>「选择…」：挑最终压缩包放在哪个目录（**落点的选择在页面上**，用户 2026-09-26 追加）。</summary>
+        public ICommand PickPlacementDirectoryCommand { get; }
+
         public ICommand RefreshSummaryCommand { get; }
 
         public ICommand StartCommand { get; }
@@ -750,8 +926,14 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            // 先用"设置里那一套"算一遍规划（弹窗要把"最终产物在哪"显示出来）。
-            PackingRunOptions initial = PackingRunOptions.FromSettings(_settings);
+            /*
+             * 先用**页面上那一套**（落点由⑤页选、两档操作由设置记得的那一套）算一遍规划，
+             * 弹窗要把"最终产物在哪"显示出来。
+             *
+             * ⚠ 2026-09-26 追加改口径（用户原话："**选择还是得放在页面**"）：落点的**选择**在⑤页，
+             * 弹窗里那块只**显示**（不再有本地/指定位置的单选）。
+             */
+            PackingRunOptions initial = BuildPlacementOptions();
 
             if (!PackingPlan.TryCreate(BuildRequest(initial), out PackingPlan? previewPlan, out string planError)
                 || previewPlan == null)
@@ -762,8 +944,7 @@ namespace ArchiveFixer.ViewModels
 
             // ───────── 小确认弹窗（取消 = 什么都不做）─────────
             //
-            // ⚠ 弹窗里那句"最终产物"必须按**实际生效的容器**写（没装 WinRAR 时是 `.7z`），
-            //    而且要跟着用户在弹窗里改落点实时重算 —— 见 `PackingConfirmRequest.BuildHeadLines`。
+            // ⚠ 弹窗里那句"最终产物"必须按**实际生效的容器**写（没装 WinRAR 时是 `.7z`）。
             PackingRunOptions? confirmed = _dialogService.ShowPackingConfirm(
                 PackingConfirmRequest.FromPlan(previewPlan, initial, EffectiveContainer));
 
@@ -773,13 +954,25 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            // 确认了才写回设置（"相应的保存记忆操作"）。
-            confirmed.SaveTo(_settings);
+            /*
+             * 只有弹窗里那**两档操作**来自弹窗；落点始终是⑤页上那一套（⛔ 弹窗不许偷偷改落点）。
+             * 合并之后写回设置（"相应的保存记忆操作"）。
+             */
+            PackingRunOptions merged = new()
+            {
+                TargetMode = initial.TargetMode,
+                CustomOutputDirectory = initial.CustomOutputDirectory,
+                DefaultOutputDirectory = initial.DefaultOutputDirectory,
+                SourceHandling = confirmed.SourceHandling,
+                RestHandling = confirmed.RestHandling
+            };
+
+            merged.SaveTo(_settings);
             SettingsChanged?.Invoke();
 
-            _runOptions = confirmed;
+            _runOptions = merged;
 
-            if (!PackingPlan.TryCreate(BuildRequest(confirmed), out PackingPlan? plan, out string error) || plan == null)
+            if (!PackingPlan.TryCreate(BuildRequest(merged), out PackingPlan? plan, out string error) || plan == null)
             {
                 Warn(error);
                 return;
@@ -810,7 +1003,7 @@ namespace ArchiveFixer.ViewModels
                 ProgressDetailText = p.Detail;
             });
 
-            var request = BuildRequest(confirmed);
+            var request = BuildRequest(merged);
 
             PackingResult result;
 

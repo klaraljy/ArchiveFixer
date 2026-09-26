@@ -26,39 +26,24 @@
             </ItemsControl.ItemTemplate>
         </ItemsControl>
 
-        <!-- ==================== 最终压缩包放在哪 ==================== -->
+        <!-- ==================== 最终压缩包放在哪（**只显示**；选择在⑤页） ==================== -->
         <TextBlock Text="最终压缩包放在哪" Style="{StaticResource ConfirmLabelStyle}" />
 
-        <StackPanel>
-            <RadioButton x:Name="TargetLocal"
-                         GroupName="PackTarget"
-                         Content="本地（源旁边，默认）"
-                         IsChecked="True"
-                         Checked="OnTargetChanged" />
-            <TextBlock x:Name="LocalPathText"
-                       Margin="20,2,0,0"
-                       TextWrapping="Wrap"
-                       Foreground="Gray" />
+        <Border Background="#F7F7F7"
+                BorderBrush="#DDDDDD"
+                BorderThickness="1"
+                Padding="8"
+                Margin="0,0,0,2">
+            <StackPanel>
+                <TextBlock x:Name="PlacementText"
+                           TextWrapping="Wrap" />
 
-            <RadioButton x:Name="TargetCustom"
-                         GroupName="PackTarget"
-                         Margin="0,6,0,0"
-                         Content="指定位置"
-                         Checked="OnTargetChanged" />
-
-            <DockPanel Margin="20,4,0,0">
-                <Button x:Name="PickTargetButton"
-                        DockPanel.Dock="Right"
-                        Content="选择…"
-                        Padding="10,2"
-                        Margin="8,0,0,0"
-                        Click="OnPickTarget" />
-
-                <TextBox x:Name="CustomTargetBox"
-                         VerticalContentAlignment="Center"
-                         TextChanged="OnCustomTargetChanged" />
-            </DockPanel>
-        </StackPanel>
+                <TextBlock Margin="0,4,0,0"
+                           Foreground="Gray"
+                           TextWrapping="Wrap"
+                           Text="落点是在⑤「打包」页上选的（默认跟①页「输出位置」走）；这里只是把最终会落在哪显示给你确认。" />
+            </StackPanel>
+        </Border>
 
         <!-- ==================== 原包操作 ==================== -->
         <TextBlock Text="原包操作" Style="{StaticResource ConfirmLabelStyle}" />
