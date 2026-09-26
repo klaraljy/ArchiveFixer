@@ -193,21 +193,31 @@ namespace ArchiveFixer.ViewModels
         /// <para>三条路仍然走**同一套**预览与执行（<see cref="RenameByOptionsAsync"/>）：
         /// 先给你看改名预览 → 确认 → 才动盘；⛔ 绝不覆盖、绝不先删后移。</para>
         /// </summary>
-        internal async Task ChangeSuffixAsync()
+        internal async Task ChangeNameAsync()
         {
-            (string Mode, string Extension)? choice = ShowSuffixDialog();
+            (string Mode, string Extension, string FindText, string ReplaceText)? choice = ShowRenameDialog();
 
             if (choice == null)
             {
-                AppendLog("INFO", "用户取消改后缀。");
+                AppendLog("INFO", "用户取消改名。");
                 return;
             }
 
             string mode = choice.Value.Mode;
             string extension = choice.Value.Extension;
+            string findText = choice.Value.FindText;
+            string replaceText = choice.Value.ReplaceText;
 
-            if (!string.Equals(mode, "DeleteLastExtension", StringComparison.OrdinalIgnoreCase) &&
-                string.IsNullOrWhiteSpace(extension))
+            if (string.Equals(mode, "ReplaceFileNameText", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrEmpty(findText))
+                {
+                    _dialogService.ShowWarning("「查找」不能为空：要删掉 / 换掉哪一段，得先写出来。");
+                    return;
+                }
+            }
+            else if (!string.Equals(mode, "DeleteLastExtension", StringComparison.OrdinalIgnoreCase) &&
+                     string.IsNullOrWhiteSpace(extension))
             {
                 _dialogService.ShowWarning("后缀不能为空。");
                 return;
@@ -218,6 +228,8 @@ namespace ArchiveFixer.ViewModels
                 OperationType = mode,
                 TargetExtension = extension,
                 DeleteExtensionCount = 1,
+                FindText = findText,
+                ReplaceText = replaceText,
                 ConflictAction = Settings.ConflictAction,
                 PreviewBeforeRename = true,
                 UnknownFormatAction = Settings.UnknownFormatAction
@@ -499,13 +511,17 @@ namespace ArchiveFixer.ViewModels
 
             return "." + value;
         }
+
         /// <summary>
-        /// 「改后缀…」那个小窗：**模式下拉 + 值**（2026-09-26 审计：三颗按钮并成一颗）。
+        /// 「改名…」那个小窗：**模式下拉 + 值 / 查找→替换**（2026-09-26 用户批准：这一栏收成一颗按钮）。
         ///
-        /// <para>走 <c>AppWindowStyle</c> + <c>SizeToContent</c>（可缩放、主操作在最右、
-        /// 提示行紧跟输入框）—— 与全 App 其它弹窗同一套观感。返回 <c>null</c> = 用户取消。</para>
+        /// <para>四种模式：**替换文件名里的文字**（默认，正是他真机上最需要的那一档 ——
+        /// 打包者往名字里塞字，加/替换/删后缀都救不了）/ 替换最后一个后缀 / 添加后缀 / 删除最后一个后缀。</para>
+        ///
+        /// <para>走 <c>AppWindowStyle</c> + <c>SizeToContent</c>（可缩放、主操作在最右、提示紧跟输入框）。
+        /// 返回 <c>null</c> = 用户取消。</para>
         /// </summary>
-        private (string Mode, string Extension)? ShowSuffixDialog()
+        private (string Mode, string Extension, string FindText, string ReplaceText)? ShowRenameDialog()
         {
             string defaultExtension = string.IsNullOrWhiteSpace(Settings.DefaultExtension)
                 ? ".zip"
@@ -513,10 +529,10 @@ namespace ArchiveFixer.ViewModels
 
             var window = new Window
             {
-                Title = "改后缀",
-                Width = 520,
-                MinWidth = 440,
-                MaxWidth = 760,
+                Title = "改名",
+                Width = 560,
+                MinWidth = 460,
+                MaxWidth = 780,
                 SizeToContent = SizeToContent.Height,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 ResizeMode = ResizeMode.CanResize,
@@ -531,7 +547,7 @@ namespace ArchiveFixer.ViewModels
                 Margin = new Thickness(18, 16, 18, 14)
             };
 
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 6; i++)
             {
                 root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
                 {
@@ -541,30 +557,12 @@ namespace ArchiveFixer.ViewModels
 
             var message = new System.Windows.Controls.TextBlock
             {
-                Text = "对勾选的任务改后缀。确认后会先弹改名预览（绝不覆盖、绝不先删后移）。",
+                Text = "对勾选的任务改名。确认后会先弹改名预览（绝不覆盖、绝不先删后移）；分卷文件只有「替换文件名里的文字」会动。",
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 12)
             };
             System.Windows.Controls.Grid.SetRow(message, 0);
             root.Children.Add(message);
-
-            // 模式 + 值一行：模式决定值那一格能不能用
-            var row = new System.Windows.Controls.Grid
-            {
-                Margin = new Thickness(0, 0, 0, 6)
-            };
-            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
-            {
-                Width = new System.Windows.GridLength(190)
-            });
-            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
-            {
-                Width = new System.Windows.GridLength(12)
-            });
-            row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
-            {
-                Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star)
-            });
 
             var modeBox = new System.Windows.Controls.ComboBox
             {
@@ -574,9 +572,9 @@ namespace ArchiveFixer.ViewModels
 
             modeBox.Items.Add(new System.Windows.Controls.ComboBoxItem
             {
-                Content = "添加后缀",
-                Tag = "AddExtension",
-                ToolTip = "在原名后面「再挂一个」后缀：x.mp4 -> x.mp4.zip"
+                Content = "替换文件名里的文字（名字被塞了字就用它）",
+                Tag = "ReplaceFileNameText",
+                ToolTip = "把名字里出现的那一段换成另一段；「替换为」留空 = 直接删掉。整个文件名都算（含后缀段），区分大小写。"
             });
 
             modeBox.Items.Add(new System.Windows.Controls.ComboBoxItem
@@ -588,49 +586,158 @@ namespace ArchiveFixer.ViewModels
 
             modeBox.Items.Add(new System.Windows.Controls.ComboBoxItem
             {
+                Content = "添加后缀",
+                Tag = "AddExtension",
+                ToolTip = "在原名后面再挂一个后缀：x.mp4 -> x.mp4.zip"
+            });
+
+            modeBox.Items.Add(new System.Windows.Controls.ComboBoxItem
+            {
                 Content = "删除最后一个后缀",
                 Tag = "DeleteLastExtension",
                 ToolTip = "把最后那一段去掉：test.rar.jpg -> test.rar"
             });
 
-            modeBox.SelectedIndex = 1;
-            System.Windows.Controls.Grid.SetColumn(modeBox, 0);
-            row.Children.Add(modeBox);
+            modeBox.SelectedIndex = 0;
+            System.Windows.Controls.Grid.SetRow(modeBox, 1);
+            root.Children.Add(modeBox);
 
-            var textBox = new System.Windows.Controls.TextBox
+            // ── 后缀那一行（后缀三种模式用） ──
+            var extensionRow = new System.Windows.Controls.Grid
+            {
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+            extensionRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(96)
+            });
+            extensionRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star)
+            });
+
+            var extensionLabel = new System.Windows.Controls.TextBlock
+            {
+                Text = "后缀",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            System.Windows.Controls.Grid.SetColumn(extensionLabel, 0);
+            extensionRow.Children.Add(extensionLabel);
+
+            var extensionBox = new System.Windows.Controls.TextBox
             {
                 Text = defaultExtension,
                 MinHeight = 30,
                 VerticalContentAlignment = VerticalAlignment.Center
             };
-            System.Windows.Controls.Grid.SetColumn(textBox, 2);
-            row.Children.Add(textBox);
+            System.Windows.Controls.Grid.SetColumn(extensionBox, 1);
+            extensionRow.Children.Add(extensionBox);
 
-            System.Windows.Controls.Grid.SetRow(row, 1);
-            root.Children.Add(row);
+            System.Windows.Controls.Grid.SetRow(extensionRow, 2);
+            root.Children.Add(extensionRow);
+
+            // ── 查找 → 替换为（文字模式用） ──
+            var textRow = new System.Windows.Controls.Grid
+            {
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+            textRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(64)
+            });
+            textRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star)
+            });
+            textRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(12)
+            });
+            textRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(64)
+            });
+            textRow.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star)
+            });
+
+            var findLabel = new System.Windows.Controls.TextBlock
+            {
+                Text = "查找",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            System.Windows.Controls.Grid.SetColumn(findLabel, 0);
+            textRow.Children.Add(findLabel);
+
+            var findBox = new System.Windows.Controls.TextBox
+            {
+                MinHeight = 30,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                ToolTip = "要删掉 / 换掉的那一段（区分大小写）"
+            };
+            System.Windows.Controls.Grid.SetColumn(findBox, 1);
+            textRow.Children.Add(findBox);
+
+            var replaceLabel = new System.Windows.Controls.TextBlock
+            {
+                Text = "替换为",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            System.Windows.Controls.Grid.SetColumn(replaceLabel, 3);
+            textRow.Children.Add(replaceLabel);
+
+            var replaceBox = new System.Windows.Controls.TextBox
+            {
+                MinHeight = 30,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                ToolTip = "留空 = 直接删掉那一段（最常用）"
+            };
+            System.Windows.Controls.Grid.SetColumn(replaceBox, 4);
+            textRow.Children.Add(replaceBox);
+
+            System.Windows.Controls.Grid.SetRow(textRow, 3);
+            root.Children.Add(textRow);
 
             var hint = new System.Windows.Controls.TextBlock
             {
-                Text = "提示：输入 zip 会自动变成 .zip；「删除最后一个后缀」不需要填值。",
+                Text = "提示：「后缀」那一栏只在后缀三种模式下生效；文字模式在「整个文件名」上替换（含后缀段）。",
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.75,
-                Margin = new Thickness(0, 0, 0, 16)
+                Margin = new Thickness(0, 10, 0, 0)
             };
             hint.SetResourceReference(FrameworkElement.StyleProperty, "HintTextStyle");
-            System.Windows.Controls.Grid.SetRow(hint, 2);
+            System.Windows.Controls.Grid.SetRow(hint, 4);
             root.Children.Add(hint);
 
-            modeBox.SelectionChanged += (_, _) =>
+            string SelectedMode()
             {
-                bool needsValue = !string.Equals(SelectedMode(), "DeleteLastExtension", StringComparison.OrdinalIgnoreCase);
-                textBox.IsEnabled = needsValue;
-                textBox.Opacity = needsValue ? 1.0 : 0.5;
-            };
+                return modeBox.SelectedItem is System.Windows.Controls.ComboBoxItem item &&
+                       item.Tag is string tag
+                    ? tag
+                    : "ReplaceFileNameText";
+            }
 
-            var buttonPanel = new System.Windows.Controls.StackPanel
+            void ApplyMode()
+            {
+                string mode = SelectedMode();
+                bool isTextMode = string.Equals(mode, "ReplaceFileNameText", StringComparison.OrdinalIgnoreCase);
+                bool needsValue = !string.Equals(mode, "DeleteLastExtension", StringComparison.OrdinalIgnoreCase);
+
+                textRow.Visibility = isTextMode ? Visibility.Visible : Visibility.Collapsed;
+                extensionRow.Visibility = isTextMode ? Visibility.Collapsed : Visibility.Visible;
+                extensionBox.IsEnabled = needsValue;
+                extensionBox.Opacity = needsValue ? 1.0 : 0.5;
+            }
+
+            modeBox.SelectionChanged += (_, _) => ApplyMode();
+            ApplyMode();
+
+            var buttons = new System.Windows.Controls.StackPanel
             {
                 Orientation = System.Windows.Controls.Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 16, 0, 0)
             };
 
             var cancelButton = new System.Windows.Controls.Button
@@ -662,23 +769,25 @@ namespace ArchiveFixer.ViewModels
                 window.Close();
             };
 
-            buttonPanel.Children.Add(cancelButton);
-            buttonPanel.Children.Add(okButton);
+            buttons.Children.Add(cancelButton);
+            buttons.Children.Add(okButton);
 
-            System.Windows.Controls.Grid.SetRow(buttonPanel, 3);
-            root.Children.Add(buttonPanel);
+            System.Windows.Controls.Grid.SetRow(buttons, 5);
+            root.Children.Add(buttons);
 
             window.Content = root;
 
-            window.Loaded += (_, _) => textBox.Focus();
-
-            string SelectedMode()
+            window.Loaded += (_, _) =>
             {
-                return modeBox.SelectedItem is System.Windows.Controls.ComboBoxItem item &&
-                       item.Tag is string tag
-                    ? tag
-                    : "ReplaceLastExtension";
-            }
+                if (string.Equals(SelectedMode(), "ReplaceFileNameText", StringComparison.OrdinalIgnoreCase))
+                {
+                    findBox.Focus();
+                }
+                else
+                {
+                    extensionBox.Focus();
+                }
+            };
 
             bool? result = window.ShowDialog();
 
@@ -687,7 +796,11 @@ namespace ArchiveFixer.ViewModels
                 return null;
             }
 
-            return (SelectedMode(), NormalizeUserExtension(textBox.Text));
+            return (
+                SelectedMode(),
+                NormalizeUserExtension(extensionBox.Text),
+                findBox.Text ?? string.Empty,
+                replaceBox.Text ?? string.Empty);
         }
     }
 }

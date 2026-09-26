@@ -252,6 +252,62 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 「这一份只是分卷组的后续卷」时给用户的那句话（不是这种形状就返回空串）。
+        ///
+        /// <para>判据（全部来自名字 + 一次"同目录里在不在"的检查）：</para>
+        /// <list type="number">
+        /// <item><description>名字里带卷号、而且**不是第 1 卷**（第 1 卷没有魔数也一样能开，正是被这条排除的）；</description></item>
+        /// <item><description>从它推得出**标准首卷名**（推不出就不猜，退回"格式未知"）。</description></item>
+        /// </list>
+        ///
+        /// <para>句子分两档：首卷**就在同目录里** → 让用户把它也加进来；同目录也没有 → 如实说没找到。
+        /// ⛔ 不说"文件损坏"，也不说"格式不支持" —— 那两句都会把人引到错的方向。</para>
+        /// </summary>
+        private static string BuildLaterVolumeOnlyNote(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                string fileName = Path.GetFileName(path);
+                int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+
+                if (index == null || index.Value < 2)
+                {
+                    return string.Empty;
+                }
+
+                string? firstVolumeName = VolumeGroupDetector.TryGetFirstVolumeName(fileName);
+
+                if (string.IsNullOrWhiteSpace(firstVolumeName))
+                {
+                    return string.Empty;
+                }
+
+                string directory = Path.GetDirectoryName(path) ?? string.Empty;
+                bool firstVolumeIsNextToIt = !string.IsNullOrWhiteSpace(directory)
+                                             && File.Exists(Path.Combine(directory, firstVolumeName!));
+
+                return string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.LaterVolumeOnlyFormat,
+                    fileName,
+                    index.Value,
+                    firstVolumeName,
+                    firstVolumeIsNextToIt
+                        ? StatusText.LaterVolumeOnlyFirstVolumeHere
+                        : StatusText.LaterVolumeOnlyFirstVolumeMissing);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
         /// 扫描期算一次"这一卷的名字要不要修"（见 <c>ApplyDetectResultAsync</c> 里那段注释）。
         ///
         /// <para>只有"第 1 卷"才可能修，所以先用卷号挡一道（省掉绝大多数任务的目录枚举）；
@@ -353,10 +409,33 @@ namespace ArchiveFixer.Services
             }
             else
             {
-                task.Status = StatusText.UnknownFormat;
-                task.Operation = StatusText.OpWaiting;
-                task.ProgressText = StatusText.ProgressCompleted;
-                task.ErrorMessage = result.Message;
+                /*
+                 * 「列表里只有分卷组的后续卷」这一档（用户 2026-09-26 拍板："可以"）。
+                 *
+                 * 现场（真机代跑时撞到）：一组分卷的**第 1 卷没被加进来**（或名字被改坏、当时不在目录里），
+                 * 于是 `set.7z.002` 自己成了一个任务 —— 它的文件头里**没有归档魔数**（那只是数据流的中段），
+                 * 识别必然报「格式未知 / 未识别为支持的压缩格式」，用户看到会以为文件坏了；
+                 * 可它其实是一组分卷的后续卷，该做的是"把第 1 卷也加进来"。
+                 *
+                 * ⛔ 判据全在**名字**上（分卷号 ≥ 2 + 推得出标准首卷名），**不改格式结论**
+                 * （DetectedFormat 仍然是 Unknown —— 那是识别层的诚实结论），只把状态与那句话换对。
+                 */
+                string laterVolumeNote = BuildLaterVolumeOnlyNote(task.CurrentPath);
+
+                if (!string.IsNullOrWhiteSpace(laterVolumeNote))
+                {
+                    task.Status = StatusText.VolumeMissing;
+                    task.Operation = StatusText.OpWaiting;
+                    task.ProgressText = StatusText.ProgressCompleted;
+                    task.ErrorMessage = laterVolumeNote;
+                }
+                else
+                {
+                    task.Status = StatusText.UnknownFormat;
+                    task.Operation = StatusText.OpWaiting;
+                    task.ProgressText = StatusText.ProgressCompleted;
+                    task.ErrorMessage = result.Message;
+                }
             }
 
             task.LastUpdatedTime = DateTime.Now;
@@ -399,19 +478,23 @@ namespace ArchiveFixer.Services
                 return StatusText.ExtensionEmbedded;
             }
 
-            if (result == null || !result.IsArchive || !result.IsKnownFormat)
-            {
-                return StatusText.UnknownFormat;
-            }
-
             /*
              * 分卷文件的"后缀"是 .001 / .z01 / .part1 这类卷标记，不是伪装，也不是漏写后缀。
              * 设计.md §七 要求把它单独归一类；报成"多重后缀疑似伪装"会误导用户去"修正"它，
              * 而修正分卷名会直接切断分卷链。
+             *
+             * ⚠ 这一条排在"格式未知"**之前**（用户 2026-09-26 拍板）：后续卷（`set.7z.002`）的文件头里
+             * 没有归档魔数，识别必然说 Unknown —— 可它的**后缀**一点都不神秘，就是分卷标记。
+             * 报成"格式未知"会把"缺首卷"这件事藏起来（状态那一列现在会说清，见 ApplyDetectResultAsync）。
              */
             if (FileNameHelper.IsVolumePartFileName(fileName))
             {
                 return StatusText.ExtensionVolume;
+            }
+
+            if (result == null || !result.IsArchive || !result.IsKnownFormat)
+            {
+                return StatusText.UnknownFormat;
             }
 
             string suggestedExtension = ExtensionHelper.NormalizeExtension(result.SuggestedExtension);

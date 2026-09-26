@@ -1155,7 +1155,7 @@ namespace ArchiveFixer.ViewModels
         public ICommand RemoveSelectedCommand { get; }
 
         public ICommand SmartRenameCommand { get; }
-        public ICommand ChangeSuffixCommand { get; }
+        public ICommand ChangeNameCommand { get; }
 
         public ICommand StartExtractCommand { get; }
         public ICommand StopCommand { get; }
@@ -1252,6 +1252,24 @@ namespace ArchiveFixer.ViewModels
         public ICommand CopyTaskPathCommand { get; }
         public ICommand CopyTaskErrorCommand { get; }
         public ICommand OpenTaskDirectoryCommand { get; }
+
+        /// <summary>
+        /// 「打开源目录」：把**第一个勾选任务**所在的文件夹在资源管理器里打开（手动那一栏那颗按钮，用户 2026-09-26 批准加）。
+        ///
+        /// <para>为什么要有它：右键菜单里那条「打开文件所在目录」只对"当前行"生效 ——
+        /// 批量处理时用户手上往往没有"当前行"，只想顺手看一眼源目录在哪。</para>
+        /// </summary>
+        public ICommand OpenCheckedSourceDirectoryCommand { get; }
+
+        /// <summary>
+        /// 「看内容」：只列清单（条目数 / 总大小 / 前几条），**不解压、不写盘**（用户 2026-09-26 批准加）。
+        /// </summary>
+        public ICommand InspectArchiveCommand { get; }
+
+        /// <summary>
+        /// 「试密码」：拿候选逐个问引擎"这个能不能开"，报出能开的那个（只显示候选说明，不显示密码）。
+        /// </summary>
+        public ICommand TryPasswordsCommand { get; }
         public ICommand OpenTaskOutputDirectoryCommand { get; }
 
         /// <summary>打开当前任务的其余物目录（旧名"过程物"）；没有就提示一句。</summary>
@@ -1475,7 +1493,7 @@ namespace ArchiveFixer.ViewModels
             RemoveSelectedCommand = new RelayCommand(RemoveSelectedTasks, CanRunNormalCommand);
 
             SmartRenameCommand = new AsyncRelayCommand(_renameCoordinator.SmartRenameAsync, CanRunNormalCommand);
-            ChangeSuffixCommand = new AsyncRelayCommand(_renameCoordinator.ChangeSuffixAsync, CanRunNormalCommand);
+            ChangeNameCommand = new AsyncRelayCommand(_renameCoordinator.ChangeNameAsync, CanRunNormalCommand);
 
             /*
              * 四个"开始干活"的入口都打一个操作标记（用户 2026-09-25 第 38 条）：
@@ -1522,6 +1540,9 @@ namespace ArchiveFixer.ViewModels
             ExportAllLogsCommand = new RelayCommand(ExportAllLogs);
             CopyFailedListCommand = new RelayCommand(CopyFailedList);
             ExportFailedListCommand = new RelayCommand(ExportFailedList);
+            OpenCheckedSourceDirectoryCommand = new RelayCommand(OpenCheckedSourceDirectory, CanRunNormalCommand);
+            InspectArchiveCommand = new AsyncRelayCommand(InspectCheckedArchivesAsync, CanRunNormalCommand);
+            TryPasswordsCommand = new AsyncRelayCommand(TryPasswordsForCheckedArchivesAsync, CanRunNormalCommand);
             OpenOutputDirectoryCommand = new RelayCommand(OpenOutputDirectory);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory, CanRunNormalCommand);
             CopyOutputLocationCommand = new RelayCommand(CopyOutputLocation, CanRunNormalCommand);
@@ -5014,6 +5035,185 @@ namespace ArchiveFixer.ViewModels
             return builder.ToString().TrimEnd();
         }
 
+        // ==================== 「看内容 / 试密码」（用户 2026-09-26 批准加的两个高频功能） ====================
+
+        /// <summary>
+        /// 「看内容」：对勾选的任务只 `list` 一遍 —— 回答"这个包里有什么、多大、要不要密码"。
+        ///
+        /// <para>⛔ 不写盘、不解压（<see cref="ArchiveInspectService"/> 只调 list）；结论走一个可复制的弹窗 + 日志。</para>
+        /// </summary>
+        private async Task InspectCheckedArchivesAsync()
+        {
+            await RunInspectAsync(tryPasswords: false).ConfigureAwait(true);
+        }
+
+        /// <summary>
+        /// 「试密码」：与「看内容」同一条实现，只是**把候选逐个都问一遍**，报出能开的那个。
+        /// </summary>
+        private async Task TryPasswordsForCheckedArchivesAsync()
+        {
+            await RunInspectAsync(tryPasswords: true).ConfigureAwait(true);
+        }
+
+        /// <summary>
+        /// 两个按钮共用的本体（⛔ 一份实现：不然"看内容"说不能开、"试密码"说能开，用户只会更糊涂）。
+        /// </summary>
+        private async Task RunInspectAsync(bool tryPasswords)
+        {
+            List<ArchiveTask> targets = Tasks.Where(item => item.IsSelected).ToList();
+
+            if (targets.Count == 0)
+            {
+                _dialogService.ShowInfo("请先勾选要看的任务（最左侧一列）。");
+                return;
+            }
+
+            _logService.MarkOperationStart(tryPasswords ? "试密码" : "看内容");
+            AppendLog("INFO", $"{(tryPasswords ? "试密码" : "看内容")}：{targets.Count} 个任务（只列目录，不解压、不写盘）。");
+
+            IsBusy = true;
+
+            try
+            {
+                var inspect = new ArchiveInspectService(_archiveEngine);
+                var report = new System.Text.StringBuilder();
+
+                foreach (ArchiveTask task in targets)
+                {
+                    /*
+                     * 候选按**既有那一套顺序**算（与解压完全同一份：本批已成功 → 空密码 → 映射式 → 统一密码 → 列表）——
+                     * ⛔ 这里不许自己拼一套，否则界面上给的顺序与真正解压时的顺序会对不上。
+                     * 「看内容」不试密码（只回答"要不要密码"）；「试密码」才把候选交下去。
+                     */
+                    IReadOnlyList<PasswordItem>? candidates = tryPasswords
+                        ? _passwordService
+                            .GetPasswordCandidates(
+                                task,
+                                Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
+                                _passwordService.Passwords,
+                                Settings.TryEmptyPasswordFirst,
+                                Settings.EnableSidecarPassword)
+                            .Take(Math.Clamp(Settings.MaxPasswordAttemptsPerLayer, 1, 1000))
+                            .ToList()
+                        : null;
+
+                    ArchiveInspectResult result = await inspect.InspectAsync(task, candidates).ConfigureAwait(true);
+
+                    report.AppendLine(DescribeInspectResult(result, tryPasswords));
+                    report.AppendLine();
+
+                    AppendLog(
+                        result.Success ? "INFO" : "WARN",
+                        $"{task.FileName}：{(tryPasswords ? "试密码" : "看内容")} —— {SummarizeInspectResult(result, tryPasswords)}");
+                }
+
+                _dialogService.ShowInfo(
+                    $"{(tryPasswords ? "试密码" : "看内容")}（{targets.Count} 个任务，只列目录、没写盘）："
+                    + Environment.NewLine + Environment.NewLine
+                    + report.ToString().TrimEnd());
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", $"{(tryPasswords ? "试密码" : "看内容")}失败：{ex.Message}");
+                _dialogService.ShowError($"{(tryPasswords ? "试密码" : "看内容")}失败：{ex.Message}");
+            }
+            finally
+            {
+                IsBusy = false;
+            }
+        }
+
+        /// <summary>弹窗里那一段（人读的：多行、可复制）。</summary>
+        internal static string DescribeInspectResult(ArchiveInspectResult result, bool tryPasswords)
+        {
+            var text = new System.Text.StringBuilder();
+
+            text.AppendLine($"【{result.Task?.FileName ?? "（未知）"}】");
+
+            if (!result.Success)
+            {
+                text.AppendLine($"  ✗ {result.Message}");
+                return text.ToString().TrimEnd();
+            }
+
+            string size = TaskSpaceEstimate.FormatSize(result.TotalBytes);
+
+            text.AppendLine(
+                $"  格式 {result.Format} ｜ 文件 {result.FileCount} 个"
+                + (result.DirectoryCount > 0 ? $" + 文件夹 {result.DirectoryCount} 个" : string.Empty)
+                + $" ｜ 解压后约 {size}"
+                + (result.IsMultiVolume ? " ｜ 分卷" : string.Empty));
+
+            if (result.NeedsPassword)
+            {
+                text.AppendLine(result.PasswordFound
+                    ? $"  密码：需要 —— 能开的是「{result.PasswordLabel}」（试到第 {result.CandidatesTried} 个）"
+                    : $"  密码：需要 —— {result.CandidatesTried}/{result.CandidatesTotal} 个候选都没能开"
+                      + (tryPasswords ? string.Empty : "（想要它替你逐个试：点「试密码」）"));
+            }
+            else
+            {
+                text.AppendLine("  密码：不需要");
+            }
+
+            if (result.TopEntries.Count > 0)
+            {
+                text.AppendLine("  里面有：");
+
+                foreach (ArchiveInspectEntry entry in result.TopEntries)
+                {
+                    string suffix = entry.IsDirectory ? "（文件夹）" : "  " + TaskSpaceEstimate.FormatSize(entry.Size);
+                    text.AppendLine($"    · {entry.Name}{suffix}");
+                }
+
+                int remaining = result.FileCount + result.DirectoryCount - result.TopEntries.Count;
+
+                if (remaining > 0)
+                {
+                    text.AppendLine($"    … 还有 {remaining} 项没列出来");
+                }
+            }
+
+            text.AppendLine($"  （用时 {result.ElapsedText}）");
+
+            return text.ToString().TrimEnd();
+        }
+
+        /// <summary>日志里那一行（短）。</summary>
+        internal static string SummarizeInspectResult(ArchiveInspectResult result, bool tryPasswords)
+        {
+            if (!result.Success)
+            {
+                return result.Message;
+            }
+
+            string password = !result.NeedsPassword
+                ? "不需要密码"
+                : result.PasswordFound
+                    ? $"密码={result.PasswordLabel}"
+                    : $"没试出密码（{result.CandidatesTried}/{result.CandidatesTotal}）";
+
+            return $"格式 {result.Format}，{result.FileCount} 个文件 / {TaskSpaceEstimate.FormatSize(result.TotalBytes)}，{password}";
+        }
+        /// <summary>
+        /// 「打开源目录」（手动那一栏）：第一个勾选任务所在的文件夹；一个都没勾就退回"当前行"。
+        ///
+        /// <para>⛔ 它只**打开目录**，不动任何文件（不选中、不改名、不删除）。</para>
+        /// </summary>
+        private void OpenCheckedSourceDirectory()
+        {
+            ArchiveTask? task = Tasks.FirstOrDefault(item => item.IsSelected) ?? SelectedTask;
+
+            if (task == null)
+            {
+                _dialogService.ShowInfo("列表里还没有任务：先点「添加文件 / 添加文件夹」（也可以直接把文件拖进窗口）。");
+                return;
+            }
+
+            OpenTaskDirectory(task);
+            AppendLog("INFO", $"{task.FileName}：已在资源管理器里打开它所在的目录。");
+        }
+
         private void OpenTaskDirectory(object? parameter)
         {
             if (parameter is not ArchiveTask task)
@@ -5143,7 +5343,7 @@ namespace ArchiveFixer.ViewModels
 
                  SmartRenameCommand,
                 OneClickProcessCommand,
-                 ChangeSuffixCommand,
+                 ChangeNameCommand,
 
                  StartExtractCommand,
                  StopCommand,

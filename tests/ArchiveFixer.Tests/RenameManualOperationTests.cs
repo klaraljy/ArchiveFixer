@@ -143,6 +143,52 @@ namespace ArchiveFixer.Tests
 
 
         [Fact]
+        public async Task 只有后续卷在列表里时_说的是分卷缺首卷_不是格式未知()
+        {
+            // 用户 2026-09-26 拍板的那一档：`set.7z.002` 自己一个任务（首卷没被加进来 / 或不在目录里）。
+            // 它的文件头里没有归档魔数，识别必然 Unknown —— 但**状态**必须说清"这是后续卷、缺首卷"，
+            // 否则用户以为文件坏了（真机代跑时看到的就是「未识别为支持的压缩格式」）。
+            string later = Path.Combine(_root, "单独.7z.002");
+            File.WriteAllBytes(later, new byte[] { 4, 5, 6, 7 });
+
+            var task = new ArchiveTask(later, 1) { IsSelected = true };
+
+            await new ArchiveDetectService().ApplyDetectResultAsync(task);
+
+            Assert.Equal(StatusText.VolumeMissing, task.Status);
+            Assert.Contains("后续卷", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("单独.7z.001", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.Equal(StatusText.ExtensionVolume, task.ExtensionStatus);
+        }
+
+        [Fact]
+        public async Task 首卷就在同目录里时_那句话会告诉用户这一行不用管()
+        {
+            string later = Path.Combine(_root, "同目录.7z.002");
+            File.WriteAllBytes(later, new byte[] { 4, 5, 6, 7 });
+            File.WriteAllBytes(Path.Combine(_root, "同目录.7z.001"), new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1 });
+
+            var task = new ArchiveTask(later, 1) { IsSelected = true };
+
+            await new ArchiveDetectService().ApplyDetectResultAsync(task);
+
+            Assert.Equal(StatusText.VolumeMissing, task.Status);
+            Assert.Contains(StatusText.LaterVolumeOnlyFirstVolumeHere, task.ErrorMessage, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task 普通的无格式文件_照旧报格式未知_不能被这条新规则误伤()
+        {
+            string junk = Path.Combine(_root, "随便一个.bin");
+            File.WriteAllBytes(junk, new byte[] { 1, 2, 3, 4, 5 });
+
+            var task = new ArchiveTask(junk, 1) { IsSelected = true };
+
+            await new ArchiveDetectService().ApplyDetectResultAsync(task);
+
+            Assert.Equal(StatusText.UnknownFormat, task.Status);
+        }
+        [Fact]
         public async Task 扫描期就给出改名建议_不用先跑一次失败的解压()
         {
             string first = Path.Combine(_root, "卷名被改坏.7z(删掉.001");
@@ -201,6 +247,92 @@ namespace ArchiveFixer.Tests
             Assert.NotEqual(StatusText.RenameWillSkip, preview[0].Status);
         }
 
+        // ================================================================
+        // ①c 「替换文件名里的文字」（2026-09-26 用户批准加的高频功能）
+        // ================================================================
+
+        [Fact]
+        public async Task 名字里被塞了字_用文字替换把它去掉()
+        {
+            // 真机形状（第 33 条那批）：打包者把后缀塞成了 `222.ra删除r`。
+            // 加/替换/删后缀都能歪打正着，但"名字中间被塞字"（第二种形状）只有这一条路能修。
+            string packed = Path.Combine(_root, "222.ra删除r");
+            File.WriteAllText(packed, "x");
+
+            ArchiveTask task = CreateTask(packed, "RAR5", ".rar");
+            var service = new RenameService();
+            var options = new RenameOptions
+            {
+                OperationType = "ReplaceFileNameText",
+                FindText = "删除",
+                ReplaceText = string.Empty,
+                ConflictAction = "AutoRename"
+            };
+
+            List<RenamePreviewItem> preview = service.BuildPreview(new[] { task }, options);
+
+            Assert.Single(preview);
+            Assert.Equal("222.rar", preview[0].NewFileName);
+
+            await service.ExecuteRenameAsync(preview, new[] { task });
+
+            Assert.True(File.Exists(Path.Combine(_root, "222.rar")));
+            Assert.False(File.Exists(packed));
+        }
+
+        [Fact]
+        public void 文字替换_名字里没有那一段时原样跳过()
+        {
+            string file = Path.Combine(_root, "干净的包.zip");
+            File.WriteAllText(file, "x");
+
+            ArchiveTask task = CreateTask(file, "ZIP", ".zip");
+            var options = new RenameOptions
+            {
+                OperationType = "ReplaceFileNameText",
+                FindText = "删掉",
+                ReplaceText = string.Empty,
+                ConflictAction = "AutoRename"
+            };
+
+            List<RenamePreviewItem> preview = new RenameService().BuildPreview(new[] { task }, options);
+
+            Assert.Single(preview);
+            Assert.Equal(StatusText.RenameWillSkip, preview[0].Status);
+            Assert.Equal("干净的包.zip", preview[0].NewFileName);
+        }
+
+        [Fact]
+        public async Task 文字替换_对分卷也放行_因为每一卷都被塞了同样的字()
+        {
+            // 打包者往**每一卷**的名字里都塞了字（set.7z(删掉.001/.002/…）：把它们一起去掉正是修法，
+            // 所以这一档豁免"分卷不许改名"那道闸门（⭐ 只对 ReplaceFileNameText 豁免）。
+            string first = Path.Combine(_root, "set.7z(删掉.001");
+            string second = Path.Combine(_root, "set.7z(删掉.002");
+
+            File.WriteAllBytes(first, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 1, 2, 3 });
+            File.WriteAllBytes(second, new byte[] { 4, 5, 6 });
+
+            var tasks = new[] { CreateTask(first, "7Z", ".001"), CreateTask(second, "7Z", ".002") };
+            var service = new RenameService();
+            var options = new RenameOptions
+            {
+                OperationType = "ReplaceFileNameText",
+                FindText = "(删掉",
+                ReplaceText = string.Empty,
+                ConflictAction = "AutoRename"
+            };
+
+            List<RenamePreviewItem> preview = service.BuildPreview(tasks, options);
+
+            Assert.Equal(2, preview.Count);
+            Assert.All(preview, item => Assert.NotEqual(StatusText.RenameWillSkip, item.Status));
+
+            await service.ExecuteRenameAsync(preview, tasks);
+
+            Assert.True(File.Exists(Path.Combine(_root, "set.7z.001")));
+            Assert.True(File.Exists(Path.Combine(_root, "set.7z.002")));
+        }
         // ================================================================
         // ② 本批次内两行撞名：预览期就错开（2026-09-26 审计）
         // ================================================================

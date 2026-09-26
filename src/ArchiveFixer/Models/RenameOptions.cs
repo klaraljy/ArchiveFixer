@@ -28,10 +28,21 @@ namespace ArchiveFixer.Models
         public string TargetExtension { get; set; } = ".7z";
 
         /// <summary>
-        /// 删除后缀数量。
-        /// DeleteMultipleExtensions 时使用。
+        /// 删除后缀数量（<c>DeleteLastExtension</c> 用，固定 1）。
         /// </summary>
         public int DeleteExtensionCount { get; set; } = 1;
+
+        /// <summary>
+        /// 「替换文件名里的文字」要**找**的那一段（用户 2026-09-26 批准加的高频功能）。
+        ///
+        /// <para>为什么要有它：他真机上遇到的伪装有两种 —— 一种是后缀被塞字（<c>222.ra删除r</c>），
+        /// 另一种是**名字中间被塞字**（<c>Code Complete-BZ.7z(删掉.001</c>）。后者加/替换/删后缀都救不了，
+        /// 只有"把名字里那两个字去掉"能修。</para>
+        /// </summary>
+        public string FindText { get; set; } = string.Empty;
+
+        /// <summary>找到之后换成什么；**留空 = 直接删掉**（这是最常用的用法）。</summary>
+        public string ReplaceText { get; set; } = string.Empty;
 
         /// <summary>
         /// 冲突处理。

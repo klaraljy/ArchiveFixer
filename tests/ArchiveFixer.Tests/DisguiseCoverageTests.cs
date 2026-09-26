@@ -217,11 +217,16 @@ namespace ArchiveFixer.Tests
 
             foreach (string volume in volumes.Skip(1))
             {
-                _output.WriteLine($"后续卷单独识别（预期 Unknown，不会成为任务）：{Path.GetFileName(volume)}");
+                _output.WriteLine($"后续卷单独识别（格式 Unknown、后缀=分卷后缀、状态=分卷缺失）：{Path.GetFileName(volume)}");
                 var solo = new ArchiveTask(volume);
                 await detect.ApplyDetectResultAsync(solo);
+
+                // 格式仍然是 Unknown（它的文件头里没有归档魔数 —— 识别层如实说），
+                // 但**后缀状态**是"分卷后缀"、**任务状态**是"分卷缺失"（用户 2026-09-26 拍板：
+                // 一个 `.002` 被说成"格式未知"会让人以为文件坏了，真相是缺第 1 卷）。
                 Assert.Equal("Unknown", solo.DetectedFormat);
-                Assert.Equal(StatusText.UnknownFormat, solo.ExtensionStatus);
+                Assert.Equal(StatusText.ExtensionVolume, solo.ExtensionStatus);
+                Assert.Equal(StatusText.VolumeMissing, solo.Status);
 
                 // 即便它看起来"格式未知"，也**不许**被改名 —— 改成 .7z 同样会切断分卷链。
                 string newPath = new RenameService().BuildNewPath(

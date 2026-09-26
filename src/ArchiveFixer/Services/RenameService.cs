@@ -327,8 +327,16 @@ namespace ArchiveFixer.Services
              * 7z / WinRAR 只认 .001 这一套命名，改一下整组就再也解不开
              * （以前这道闸门只长在 FixByDetectedFormat 里，2026-09-26 审计补全）。
              */
-            if (FileNameHelper.IsVolumePartFileName(fileName) &&
-                !string.Equals(options.OperationType, "FixByDetectedFormat", StringComparison.OrdinalIgnoreCase))
+            bool isVolumePart = FileNameHelper.IsVolumePartFileName(fileName);
+            bool isFormatFix = string.Equals(options.OperationType, "FixByDetectedFormat", StringComparison.OrdinalIgnoreCase);
+            bool isTextReplace = string.Equals(options.OperationType, "ReplaceFileNameText", StringComparison.OrdinalIgnoreCase);
+
+            /*
+             * 「替换文件名里的文字」对分卷**豁免**这条闸门：打包者塞的字往往在**每一卷**的名字里
+             * （`set.7z(删掉.001/.002/.003`），把这几个字一起去掉**正是**修法 ——
+             * 而用户是把整组勾上再点那颗按钮的，预览表里逐行列着"哪一行改成什么"，看得见才点得下去。
+             */
+            if (isVolumePart && !isFormatFix && !isTextReplace)
             {
                 return oldPath;
             }
@@ -345,6 +353,10 @@ namespace ArchiveFixer.Services
 
                 case "DeleteLastExtension":
                     newFileName = BuildDeleteExtensionFileName(fileName, 1);
+                    break;
+
+                case "ReplaceFileNameText":
+                    newFileName = BuildReplaceTextFileName(fileName, options.FindText, options.ReplaceText);
                     break;
 
                 case "FixByDetectedFormat":
@@ -1011,6 +1023,36 @@ namespace ArchiveFixer.Services
             return result;
         }
 
+        /// <summary>
+        /// 「替换文件名里的文字」：把名字里出现的那一段换成另一段（留空 = 删掉）。
+        ///
+        /// <para>口径（写进预览、也写进弹窗提示）：</para>
+        /// <list type="bullet">
+        /// <item><description>在**整个文件名**（含后缀那一段）上替换 —— 他那种"后缀被塞字"（`222.ra删除r`）
+        /// 与"名字中间被塞字"（`Code Complete-BZ.7z(删掉.001`）才能用同一颗按钮修；</description></item>
+        /// <item><description>**全部出现**都换（不是只换第一处）：修名字时"每一处都得干净"；</description></item>
+        /// <item><description>**区分大小写**（Ordinal）：`ABC` 与 `abc` 是两回事，宁可不换也不误换；</description></item>
+        /// <item><description>找不到 / 找的是空串 → 原样返回（预览里会显示「将跳过 / 无需改名」）。</description></item>
+        /// </list>
+        /// </summary>
+        private static string BuildReplaceTextFileName(string fileName, string? findText, string? replaceText)
+        {
+            if (string.IsNullOrWhiteSpace(fileName) || string.IsNullOrEmpty(findText))
+            {
+                return fileName;
+            }
+
+            if (!fileName.Contains(findText, StringComparison.Ordinal))
+            {
+                return fileName;
+            }
+
+            string replaced = fileName.Replace(findText, replaceText ?? string.Empty, StringComparison.Ordinal);
+
+            // 换完可能变成空名 / 只剩后缀（例如把主名整段删掉）：那种名字不合法或没意义，宁可不换。
+            return string.IsNullOrWhiteSpace(replaced) ? fileName : replaced;
+        }
+
         private static string BuildFixByDetectedFormatFileName(ArchiveTask task, RenameOptions options)
         {
             string oldPath = task.CurrentPath;
@@ -1253,6 +1295,7 @@ namespace ArchiveFixer.Services
                 "AddExtension" => "添加后缀",
                 "ReplaceLastExtension" => "替换最后后缀",
                 "DeleteLastExtension" => "删除最后后缀",
+                "ReplaceFileNameText" => "替换文件名里的文字",
                 "FixByDetectedFormat" => "按真实格式修正",
                 _ => options.OperationType
             };

@@ -230,11 +230,34 @@
                         ToolTip="对勾选的任务按识别结果修正后缀（会先弹出改名预览让你确认）；名字被改坏的分卷第一卷也能在这一步修回标准名。"
                         Command="{Binding SmartRenameCommand}" />
 
-                <Button Content="改后缀…"
+                <Button Content="改名…"
                         MinWidth="96"
                         Margin="8,0,0,0"
-                        ToolTip="自己指定后缀怎么改：添加后缀 / 替换最后一个后缀 / 删除最后一个后缀（同样先出改名预览）。"
-                        Command="{Binding ChangeSuffixCommand}" />
+                        ToolTip="自己指定怎么改：替换文件名里的文字（删掉被塞进去的字）/ 替换最后一个后缀 / 添加后缀 / 删除最后一个后缀（同样先出改名预览）。"
+                        Command="{Binding ChangeNameCommand}" />
+
+                <!--
+                    两颗"只看不动盘"的按钮（用户 2026-09-26 批准加的高频功能）：
+                    看内容 = 列出包里有什么（不解压）；试密码 = 逐个候选问一遍"这个能不能开"。
+                    ⛔ 它们一个字节都不写盘、也不动源文件。
+                -->
+                <Button Content="看内容"
+                        MinWidth="84"
+                        Margin="8,0,0,0"
+                        ToolTip="只列出勾选任务里有什么（条目数、总大小、前几条），不解压、不写盘。"
+                        Command="{Binding InspectArchiveCommand}" />
+
+                <Button Content="试密码"
+                        MinWidth="84"
+                        Margin="8,0,0,0"
+                        ToolTip="拿密码本与密码列表逐个候选去问引擎「这个能不能开」，报出能开的那个（只显示它排第几，不显示密码本身）。"
+                        Command="{Binding TryPasswordsCommand}" />
+
+                <Button Content="打开源目录"
+                        MinWidth="104"
+                        Margin="8,0,0,0"
+                        ToolTip="在资源管理器里打开第一个勾选任务所在的文件夹（只打开，不动文件）。"
+                        Command="{Binding OpenCheckedSourceDirectoryCommand}" />
             </WrapPanel>
         </Expander>
 
