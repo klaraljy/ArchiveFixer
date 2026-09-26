@@ -86,11 +86,13 @@ namespace ArchiveFixer.Packing
 
             bool sourceMoved = false;
             string moveTarget = string.Empty;
+            string createdRestFolder = string.Empty;
 
             // ───────── ① 原包：不动 / 移入其余物 ─────────
             if (options.SourceHandling == PackingSourceHandling.MoveToRest)
             {
-                (sourceMoved, moveTarget, string moveLine, string? moveProblem) = MoveSourceIntoRest(plan);
+                (sourceMoved, moveTarget, createdRestFolder, string moveLine, string? moveProblem) =
+                    MoveSourceIntoRest(plan);
 
                 lines.Add(moveLine);
 
@@ -101,7 +103,7 @@ namespace ArchiveFixer.Packing
             }
 
             // ───────── ② 其余物：不动 / 回收站 / 彻底删除 ─────────
-            List<string> restPaths = ResolveRestPaths(plan);
+            List<string> restPaths = ResolveRestPaths(plan, createdRestFolder);
             string restSummary;
             long freed = 0;
 
@@ -186,50 +188,72 @@ namespace ArchiveFixer.Packing
             };
         }
 
-        /// <summary>把原包搬进装分卷的文件夹（⛔ 只搬用户给的那一个；撞名就如实报，不覆盖）。</summary>
-        private static (bool Moved, string Target, string Line, string? Problem) MoveSourceIntoRest(PackingPlan plan)
+        /// <summary>
+        /// 把原包搬进"其余物"（⛔ 只搬用户给的那一个；撞名自动让位，不覆盖）。
+        ///
+        /// <para>返回值里多一个 <c>RestFolder</c>：那是**这一档才建**的那个以源名命名的文件夹
+        /// （其余物清单要把整份带上，否则"其余物 = 彻底删除"删不掉原包）。</para>
+        /// </summary>
+        private static (bool Moved, string Target, string RestFolder, string Line, string? Problem) MoveSourceIntoRest(
+            PackingPlan plan)
         {
             string source = plan.SourceResolution?.SourcePath ?? plan.SourceFolder;
 
             if (string.IsNullOrWhiteSpace(source) || !(File.Exists(source) || Directory.Exists(source)))
             {
-                return (false, string.Empty, "原包操作为「移入其余物」，但源已经不在了 —— 这一步跳过。", null);
+                return (false, string.Empty, string.Empty, "原包操作为「移入其余物」，但源已经不在了 —— 这一步跳过。", null);
             }
 
             string name = plan.SourceResolution?.SourceName is { Length: > 0 } sourceName
                 ? sourceName
                 : Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
-            string target = Path.Combine(plan.OutputFolder, name);
+            /*
+             * ⚠ 2026-09-26 追加改口径：分卷不再装在中间文件夹里，所以"移入其余物"**没有现成的文件夹可搬**。
+             * 这一档 now 由我们来建一个以源名命名的文件夹（只在**用户显式选了这一档**时才建），
+             * 把源搬进去 —— 于是"其余物 = 那个文件夹 + 那些分卷文件"，后半段
+             * （其余物 = 彻底删除）仍然能一次把原包与分卷一起处理掉。
+             * ⛔ 默认档（原包不动）**一个文件夹都不建** —— 那正是他嫌多余的那一层。
+             */
+            string target = PackingNaming.ResolveUniqueFolderPath(plan.OutputFolder, name);
 
             try
             {
-                if (File.Exists(target) || Directory.Exists(target))
+                if (string.IsNullOrWhiteSpace(target))
                 {
-                    return (false, target, $"原包移入其余物：目标已经存在（{target}），这一步跳过（不覆盖）。", null);
+                    return (false, string.Empty, string.Empty, "原包移入其余物：推不出目标文件夹，这一步跳过。", null);
                 }
+
+                Directory.CreateDirectory(plan.OutputFolder);
+                Directory.CreateDirectory(target);
 
                 if (Directory.Exists(source))
                 {
-                    Directory.CreateDirectory(plan.OutputFolder);
-                    Directory.Move(source, target);
+                    Directory.Move(source, Path.Combine(target, name));
                 }
                 else
                 {
-                    Directory.CreateDirectory(plan.OutputFolder);
-                    File.Move(source, target);
+                    File.Move(source, Path.Combine(target, name));
                 }
 
-                return (true, target, $"原包已移入其余物：{source} → {target}", null);
+                string moved = Path.Combine(target, name);
+
+                return (true, moved, target, $"原包已移入其余物：{source} → {moved}", null);
             }
             catch (Exception ex)
             {
-                return (false, target, "原包没能移入其余物（它还在原地）。", $"{source} → {target}：{ex.Message}");
+                return (false, target, string.Empty, "原包没能移入其余物（它还在原地）。", $"{source} → {target}：{ex.Message}");
             }
         }
 
-        /// <summary>其余物清单：装分卷的文件夹 + （单文件时）那个临时建的同名文件夹。</summary>
-        private static List<string> ResolveRestPaths(PackingPlan plan)
+        /// <summary>
+        /// 其余物清单：**切出来的那些 7z 分卷文件** +（单文件时）那个临时建的同名文件夹。
+        ///
+        /// <para>⚠ 2026-09-26 追加改口径：以前分卷装在一个以源名命名的中间文件夹里，其余物就是那个文件夹；
+        /// 现在分卷**直接落在落点目录里**（用户原话："外面不用再套一件文件夹了"），
+        /// 所以其余物 = 那些分卷文件本身。</para>
+        /// </summary>
+        private static List<string> ResolveRestPaths(PackingPlan plan, string createdRestFolder = "")
         {
             var paths = new List<string>();
 
@@ -254,7 +278,16 @@ namespace ArchiveFixer.Packing
                 paths.Add(path);
             }
 
-            Add(plan.OutputFolder);
+            foreach (string volume in EnumerateVolumeFiles(plan))
+            {
+                Add(volume);
+            }
+
+            // 「原包移入其余物」这一档才会有的那个文件夹（装了原包）。
+            if (!string.IsNullOrWhiteSpace(createdRestFolder))
+            {
+                Add(createdRestFolder);
+            }
 
             string wrapper = plan.SourceResolution?.WrapperFolderToCreate ?? string.Empty;
 
@@ -264,6 +297,45 @@ namespace ArchiveFixer.Packing
             }
 
             return paths;
+        }
+
+        /// <summary>落点目录里属于这一次的那些分卷文件（按基名 + 纯数字后缀认，与数分卷同一口径）。</summary>
+        private static List<string> EnumerateVolumeFiles(PackingPlan plan)
+        {
+            var files = new List<string>();
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(plan.OutputFolder) ||
+                    string.IsNullOrWhiteSpace(plan.VolumeBaseName) ||
+                    !Directory.Exists(plan.OutputFolder))
+                {
+                    return files;
+                }
+
+                foreach (string file in Directory.EnumerateFiles(plan.OutputFolder))
+                {
+                    string fileName = Path.GetFileName(file);
+
+                    if (!fileName.StartsWith(plan.VolumeBaseName + ".", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    string suffix = fileName[(plan.VolumeBaseName.Length + 1)..];
+
+                    if (suffix.Length > 0 && suffix.All(char.IsDigit))
+                    {
+                        files.Add(file);
+                    }
+                }
+            }
+            catch
+            {
+                // 数不出来就当没有：收尾这一步的出问题只写日志，不改结论（红线 ④）。
+            }
+
+            return files;
         }
 
         private static DeleteResult DefaultDelete(DeleteRequest request, DeleteOptions options)

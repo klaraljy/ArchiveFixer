@@ -13,8 +13,10 @@
     <Grid DataContext="{Binding PackingEditor}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="3*" MinHeight="220" />
+            <!-- 可拖的分隔条（用户 2026-09-26："两个大框都不能上下移动间距来调整大小"） -->
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="2*" MinHeight="150" />
         </Grid.RowDefinitions>
 
         <!-- ============ 提示条：校验不过 / 结果提示 ============ -->
@@ -262,15 +264,48 @@
                                        Margin="0,6,0,0"
                                        TextWrapping="Wrap"
                                        Text="点「打包…」还会弹一个小窗：确认原包操作 + 其余物操作（都会记住，下次照上次的来；落点在上面选）。" />
+
+                            <!--
+                                压缩流程（用户 2026-09-26："下面加一个压缩流程描述，将这个打包功能详细的给用户看"）。
+                                ⛔ 文案与实际行为一一对应（改管线就要改这里）。
+                            -->
+                            <Border Background="{StaticResource PanelSunkenBrush}"
+                                    BorderBrush="{StaticResource PanelBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Padding="10,8"
+                                    Margin="0,10,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="压缩流程（点「打包…」并确认之后，程序按这四步走）"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,6" />
+
+                                    <TextBlock TextWrapping="Wrap"
+                                               LineHeight="20"
+                                               Text="1）切分卷：把源里的东西用内置 7-Zip 打成加密分卷（-mhe 连文件名一起加密；内容 &lt;1 GiB 切 2 卷、≥1 GiB 切 3 卷，前面每卷装满、最后一卷是零头）。&#10;2）分卷就地落盘：分卷直接落在上面那个落点目录里（不再套一层同名文件夹），名字 = 源名 + .7z.001/.002…，撞名自动让位成 源名(1).7z.001。&#10;3）做外层容器：把上面那几个分卷压成一个带密码的 rar（本机没装 WinRAR 时自动用 7z，产物就是 .7z）；分卷在归档里是**顶层**的，解出来就是这几个分卷。&#10;4）校验 + 收尾：列一遍外层容器里的条目、与磁盘上的分卷逐个核对（对不上不显示成功）；通过之后才按你选的两档处理原包与其余物（其余物 = 那几个分卷文件，默认彻底删除）。失败 / 取消一个字节都不动。" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
         </Border>
 
-        <!-- ============ 操作栏 + 进度 + 结果 ============ -->
-        <Border Grid.Row="2" Style="{StaticResource CardStyle}" Margin="0,8,0,0">
-            <StackPanel>
+        <!-- 上下两块之间的分隔条：拖它就能调两块的间距（用户 2026-09-26 点名要的） -->
+        <GridSplitter Grid.Row="2"
+                      Height="6"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Center"
+                      Background="Transparent"
+                      ResizeBehavior="PreviousAndNext"
+                      ResizeDirection="Rows"
+                      Cursor="SizeNS"
+                      ToolTip="上下拖动，调整「表单」与「进度 / 结果」两块的高度" />
+
+        <!-- ============ 操作栏 + 进度 + 结果（内容自己滚，不再把上面那块压扁） ============ -->
+        <Border Grid.Row="3" Style="{StaticResource CardStyle}" Margin="0,4,0,0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
+                <StackPanel>
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
                         <Button Content="打包…"
@@ -405,7 +440,8 @@
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
-            </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
         </Border>
     </Grid>
 </UserControl>

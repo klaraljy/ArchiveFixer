@@ -78,7 +78,8 @@ namespace ArchiveFixer.Packing
             IReadOnlyList<string> arguments,
             string usedPassword,
             IProgress<PackStepProgress>? progress,
-            CancellationToken cancellationToken);
+            CancellationToken cancellationToken,
+            string? workingDirectory = null);
     }
 
     /// <summary>
@@ -139,7 +140,8 @@ namespace ArchiveFixer.Packing
             IReadOnlyList<string> arguments,
             string usedPassword,
             IProgress<PackStepProgress>? progress,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string? workingDirectory = null)
         {
             if (!IsToolAvailable(tool))
             {
@@ -223,7 +225,18 @@ namespace ArchiveFixer.Packing
                     RedirectStandardInput = true,
                     StandardOutputEncoding = ResolveOutputEncoding(tool),
                     StandardErrorEncoding = ResolveOutputEncoding(tool),
-                    WorkingDirectory = AppContext.BaseDirectory
+
+                    /*
+                     * 进程在哪个目录里跑。
+                     *
+                     * ⚠ 2026-09-26 追加改口径：外层容器那一步装的是**逐个点名的分卷文件**
+                     * （顶层、没有文件夹层），所以那一步要让进程在**落点目录**里执行、参数里只给文件名 ——
+                     * 给绝对路径的话 7z / RAR 会把路径也存进归档（多出一层目录）。
+                     * 其余步骤（切分卷、列条目）传 null = 照旧用程序目录。
+                     */
+                    WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory)
+                        ? AppContext.BaseDirectory
+                        : workingDirectory
                 };
 
                 foreach (string argument in arguments)

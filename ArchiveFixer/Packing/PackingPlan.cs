@@ -110,8 +110,30 @@ namespace ArchiveFixer.Packing
         /// <summary>目标卷数（&lt;1 GiB → 2、≥1 GiB → 3）。</summary>
         public int VolumeTargetCount { get; init; } = PackingVolumeRule.SmallTargetCount;
 
-        /// <summary>输出文件夹 B（全路径）——装 7z 分卷的那个文件夹，也就是**其余物**。</summary>
+        /// <summary>
+        /// 分卷落在哪个目录（全路径）—— 与 <see cref="TargetDirectory"/> **同一个目录**。
+        ///
+        /// <para>⚠ **2026-09-26 追加改口径**（用户原话："7z 分卷文件外面好像不用再套一件文件夹了，
+        /// 有点太多余了，这样也不用去考虑文件名重复的问题了"）：以前分卷会先落进一个**以源名命名的
+        /// 中间文件夹**（也就是"其余物"），现在**不再套那一层** —— 分卷直接落在落点目录里，
+        /// 外层容器里装的也是这些分卷（顶层，没有文件夹层）。
+        /// 于是"其余物"= **切出来的那些分卷文件**（单文件时再加上那个临时建的同名文件夹）。</para>
+        /// </summary>
         public string OutputFolder { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 分卷的基路径（全路径，<c>&lt;落点&gt;\&lt;源名&gt;.7z</c>，撞名时让位成 <c>源名(1).7z</c>）；
+        /// 实际的卷名由 7z 在它后面加 <c>.001</c>。
+        ///
+        /// <para>⛔ 撞名判据看的是**真正的第一卷**（<c>…001</c>）在不在 —— 只测 `源名.7z` 是测不出来的，
+        /// 7z 会直接把已有的分卷覆盖掉。</para>
+        /// </summary>
+        public string VolumeBasePath { get; init; } = string.Empty;
+
+        /// <summary>分卷基路径的文件名部分（<c>&lt;源名&gt;.7z</c>）。</summary>
+        public string VolumeBaseName => string.IsNullOrWhiteSpace(VolumeBasePath)
+            ? string.Empty
+            : Path.GetFileName(VolumeBasePath);
 
         /// <summary>结果 rar 的全路径（默认与 B 同级：<c>&lt;B&gt;.rar</c>）；外层容器是 7z / 不做外层时不参与。</summary>
         public string RarPath { get; init; } = string.Empty;
@@ -132,11 +154,6 @@ namespace ArchiveFixer.Packing
             PackOuterContainer.None => string.Empty,
             _ => RarPath
         };
-
-        /// <summary>分卷的基名（<c>&lt;A 名&gt;.7z</c>）；实际的卷名由 7z 在它后面加 <c>.001</c>。</summary>
-        public string VolumeBaseName => string.IsNullOrWhiteSpace(SourceFolderName)
-            ? string.Empty
-            : SourceFolderName + ".7z";
 
         /// <summary>分卷大小（字节）。</summary>
         public long VolumeSizeBytes { get; init; } = DefaultVolumeSizeBytes;
@@ -388,12 +405,11 @@ namespace ArchiveFixer.Packing
             }
 
             /*
-             * ② 落点与命名（用户 2026-09-26 第 5/7 条）：
-             * · 落点目录 = 本地（源旁边，默认）或指定位置；
-             * · 装分卷的文件夹 = **源名**，重名让位成 `源名(1)`；
-             *   ⚠ 单文件时那个"马上要建的同名文件夹"要**先占住名字**，
-             *   否则分卷文件夹会跟它撞名、分卷落进正要打包的源文件夹里；
-             * · 最终 rar = **永远以源名命名**（`源名.rar`），重名同样让位。
+             * ② 落点与命名（用户 2026-09-26 第 5/7 条 + 当天追加）：
+             * · 落点目录 = 源旁边（默认）或指定位置；
+             * · **分卷直接落在落点目录里**（追加改口径：不再套一个以源名命名的中间文件夹），
+             *   基名 = 源名 + `.7z`，撞名（含"真正的第一卷已存在"）让位成 `源名(1).7z`；
+             * · 最终 rar / 7z 外层 = **永远以源名命名**（`源名.rar`），重名同样让位。
              */
             string target = PackingPaths.ResolveTargetDirectory(
                 sourceResolution,
@@ -405,20 +421,21 @@ namespace ArchiveFixer.Packing
                 return false;
             }
 
-            var reserved = new List<string>();
-
-            if (!string.IsNullOrWhiteSpace(sourceResolution.WrapperFolderToCreate))
-            {
-                reserved.Add(sourceResolution.WrapperFolderToCreate);
-            }
-
             string output = string.IsNullOrWhiteSpace(request.OutputFolder)
-                ? PackingPaths.ResolveVolumesFolder(target, sourceResolution.SourceName, reserved)
+                ? target
                 : SafeGetFullPath(request.OutputFolder);
 
             if (string.IsNullOrWhiteSpace(output))
             {
-                error = "推不出装分卷的文件夹，请手动指定一个。";
+                error = "推不出分卷落在哪个目录，请手动指定一个。";
+                return false;
+            }
+
+            string volumeBasePath = PackingPaths.ResolveUniqueVolumeBasePath(output, sourceResolution.SourceName);
+
+            if (string.IsNullOrWhiteSpace(volumeBasePath))
+            {
+                error = $"推不出分卷的名字（源：{sourceResolution.SourceName}）。";
                 return false;
             }
 
@@ -474,6 +491,7 @@ namespace ArchiveFixer.Packing
                 RunOptions = request.RunOptions ?? new PackingRunOptions(),
                 VolumeTargetCount = targetCount,
                 OutputFolder = output,
+                VolumeBasePath = volumeBasePath,
                 RarPath = rarPath,
                 SevenZipOuterPath = sevenZipOuterPath,
                 OuterContainer = request.OuterContainer,
@@ -549,36 +567,29 @@ namespace ArchiveFixer.Packing
 
             if (PathEquals(source, output))
             {
-                return $"落点不能就是源文件夹本身：{output}。"
-                     + "请在确认弹窗里把落点改回「本地」（= 源旁边），或另选一个目录。";
+                return $"落点不能就是源文件夹本身：{output}。请在⑤页把落点改回「默认（源旁边）」，或另选一个目录。";
             }
 
             if (IsInside(output, source))
             {
-                return $"「装分卷的文件夹」不能落在源文件夹里面（源：{source}；落点：{output}）——"
-                     + "分卷会落进正在打包的目录，越打越多。请在确认弹窗里把落点改到源文件夹外面"
-                     + "（默认的「本地」就在源的同级）。";
+                return $"落点不能落在源文件夹里面（源：{source}；落点：{output}）——"
+                     + "分卷会落进正在打包的目录，越打越多。请在⑤页把落点改到源文件夹外面"
+                     + "（默认的「源旁边」就在源的同级）。";
             }
 
-            if (hasOuter && IsInside(outer, output))
-            {
-                return $"{noun}不能放在「装分卷的文件夹」里面（它：{output}；{noun}：{outer}）——"
-                     + "外层容器会把自己装进去。默认位置与那个文件夹同级。";
-            }
+            /*
+             * ⚠ 2026-09-26 追加改口径：这里原来有两条判据（"外层容器不能放在装分卷的文件夹里面"、
+             * "源文件夹不能落在落点目录里面"），都是"B 会被整个装进外层容器"那个旧模型的前提。
+             * 现在分卷**直接落在落点目录里**、外层容器装的是**逐个点名的分卷文件**，
+             * 而"默认落点 = 源旁边"本来就让源文件夹位于落点目录里 —— 那两条按字面会把**默认档自己**
+             * 一网打尽（实测：改完之后默认落点直接被拒）。所以它们整块退役，
+             * 只保留真正的红线：落点不能是源文件夹本身、不能落在源文件夹里面、外层容器不能写进源目录。
+             */
 
             if (hasOuter && IsInside(outer, source))
             {
                 return $"{noun}不能放在源文件夹里面（源：{source}；{noun}：{outer}）——"
                      + "源目录里不写任何东西（避免把打包结果又打进去一次）。请把落点改到源文件夹外面。";
-            }
-
-            if (IsInside(source, output))
-            {
-                return hasOuter
-                    ? $"源文件夹落在落点目录里面了（源：{source}；落点：{output}）——"
-                      + $"外层容器（{noun}）装的是整个落点目录，会把源文件原样再存一份。请把落点改到源文件夹外面。"
-                    : $"源文件夹落在落点目录里面了（源：{source}；落点：{output}）——"
-                      + "源文件与打包产物会混在同一个目录里（两者必须相互独立）。请把落点改到源文件夹外面。";
             }
 
             if (hasOuter && Directory.Exists(outer))
@@ -590,15 +601,14 @@ namespace ArchiveFixer.Packing
             {
                 // 与不变量 3 同一口径：冲突**不默认覆盖**。
                 return $"同名结果文件已经存在（不会默认覆盖）：{outer}。"
-                     + "请先把旧的改名 / 移走，或在确认弹窗里换一个落点目录。";
+                     + "请先把旧的改名 / 移走，或在⑤页换一个落点目录。";
             }
 
-            if (Directory.Exists(output) && !IsDirectoryEmpty(output))
-            {
-                return $"「装分卷的文件夹」已经存在而且不是空的：{output}。"
-                     + "打包只往**空文件夹**里写（那里的东西最后会被整个装进外层容器，混进旧文件会让结果不对）。"
-                     + "请先清空它、或在确认弹窗里换一个落点目录。";
-            }
+            /*
+             * ⚠ 追加改口径：原来这里还要求"输出文件夹必须是空的"（旧模型里 B 会被整个装进外层容器）。
+             * 现在落点目录**就是源所在的那个目录**（默认档），它当然不是空的 —— 判据整条退役。
+             * 撞名由"分卷基名 / 外层产物各自让位"负责（见 `ResolveUniqueVolumeBasePath` 与上面的 File.Exists）。
+             */
 
             return null;
         }

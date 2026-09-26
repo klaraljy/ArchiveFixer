@@ -8,40 +8,59 @@
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False">
     <Window.Resources>
+        <!-- 统一的排版：标题块（加粗 + 上间距 14 / 下间距 6）、说明块（灰字）、小卡片边框。 -->
         <Style x:Key="ConfirmLabelStyle" TargetType="TextBlock">
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="0,12,0,4" />
+            <Setter Property="Margin" Value="0,14,0,6" />
+        </Style>
+
+        <Style x:Key="ConfirmHintStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="Gray" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+
+        <Style x:Key="ConfirmCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#F7F7F7" />
+            <Setter Property="BorderBrush" Value="#DDDDDD" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="10,8" />
+        </Style>
+
+        <Style x:Key="ConfirmRadioStyle" TargetType="RadioButton">
+            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="Padding" Value="2,2" />
         </Style>
     </Window.Resources>
 
-    <StackPanel Margin="16">
+    <StackPanel Margin="18,16,18,16">
         <!-- 源与产物：几行纯事实 -->
-        <ItemsControl x:Name="HeadList">
-            <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                    <TextBlock Text="{Binding}"
-                               TextWrapping="Wrap"
-                               Margin="0,0,0,4" />
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
-        </ItemsControl>
+        <Border Style="{StaticResource ConfirmCardStyle}">
+            <ItemsControl x:Name="HeadList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}"
+                                   TextWrapping="Wrap"
+                                   LineHeight="19"
+                                   Margin="0,0,0,3" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
 
         <!-- ==================== 最终压缩包放在哪（**只显示**；选择在⑤页） ==================== -->
         <TextBlock Text="最终压缩包放在哪" Style="{StaticResource ConfirmLabelStyle}" />
 
-        <Border Background="#F7F7F7"
-                BorderBrush="#DDDDDD"
-                BorderThickness="1"
-                Padding="8"
-                Margin="0,0,0,2">
+        <Border Style="{StaticResource ConfirmCardStyle}">
             <StackPanel>
                 <TextBlock x:Name="PlacementText"
-                           TextWrapping="Wrap" />
-
-                <TextBlock Margin="0,4,0,0"
-                           Foreground="Gray"
                            TextWrapping="Wrap"
-                           Text="落点是在⑤「打包」页上选的（默认跟①页「输出位置」走）；这里只是把最终会落在哪显示给你确认。" />
+                           LineHeight="19" />
+
+                <TextBlock Style="{StaticResource ConfirmHintStyle}"
+                           Margin="0,6,0,0"
+                           Text="落点是在⑤「打包」页上选的（默认 = 源旁边）；这里只是把最终会落在哪显示给你确认。" />
             </StackPanel>
         </Border>
 
@@ -52,43 +71,48 @@
                    Foreground="Gray"
                    Margin="0,0,0,4" />
 
-        <StackPanel>
-            <RadioButton x:Name="SourceKeep"
-                         GroupName="PackSource"
-                         Content="不动（默认，一个字节都不碰）"
-                         IsChecked="True"
-                         Checked="OnOptionsChanged" />
-            <RadioButton x:Name="SourceMove"
-                         GroupName="PackSource"
-                         Margin="0,6,0,0"
-                         Content="移入其余物（搬进装 7z 分卷的那个文件夹）"
-                         Checked="OnOptionsChanged" />
-        </StackPanel>
+        <Border Style="{StaticResource ConfirmCardStyle}" Margin="0,0,0,0">
+            <StackPanel>
+                <RadioButton x:Name="SourceKeep"
+                             Style="{StaticResource ConfirmRadioStyle}"
+                             GroupName="PackSource"
+                             Content="不动（默认，一个字节都不碰）"
+                             IsChecked="True"
+                             Checked="OnOptionsChanged" />
+                <RadioButton x:Name="SourceMove"
+                             Style="{StaticResource ConfirmRadioStyle}"
+                             Margin="0,0,0,0"
+                             GroupName="PackSource"
+                             Content="移入其余物（程序建一个以源名命名的文件夹把它搬进去）"
+                             Checked="OnOptionsChanged" />
+            </StackPanel>
+        </Border>
 
         <!-- ==================== 其余物操作 ==================== -->
         <TextBlock Text="其余物操作" Style="{StaticResource ConfirmLabelStyle}" />
-        <TextBlock x:Name="RestExplanationText"
-                   TextWrapping="Wrap"
-                   Foreground="Gray"
-                   Margin="0,0,0,4" />
+        <TextBlock x:Name="RestExplanationText" Style="{StaticResource ConfirmHintStyle}" />
 
-        <StackPanel>
-            <RadioButton x:Name="RestDelete"
-                         GroupName="PackRest"
-                         Content="彻底删除（默认，不进回收站、不可恢复）"
-                         IsChecked="True"
-                         Checked="OnOptionsChanged" />
-            <RadioButton x:Name="RestRecycle"
-                         GroupName="PackRest"
-                         Margin="0,6,0,0"
-                         Content="移入回收站（可还原）"
-                         Checked="OnOptionsChanged" />
-            <RadioButton x:Name="RestKeep"
-                         GroupName="PackRest"
-                         Margin="0,6,0,0"
-                         Content="不动（留着，方便自己检查分卷）"
-                         Checked="OnOptionsChanged" />
-        </StackPanel>
+        <Border Style="{StaticResource ConfirmCardStyle}">
+            <StackPanel>
+                <RadioButton x:Name="RestDelete"
+                             Style="{StaticResource ConfirmRadioStyle}"
+                             GroupName="PackRest"
+                             Content="彻底删除（默认，不进回收站、不可恢复）"
+                             IsChecked="True"
+                             Checked="OnOptionsChanged" />
+                <RadioButton x:Name="RestRecycle"
+                             Style="{StaticResource ConfirmRadioStyle}"
+                             GroupName="PackRest"
+                             Content="移入回收站（可还原）"
+                             Checked="OnOptionsChanged" />
+                <RadioButton x:Name="RestKeep"
+                             Style="{StaticResource ConfirmRadioStyle}"
+                             Margin="0"
+                             GroupName="PackRest"
+                             Content="不动（留着，方便自己检查分卷）"
+                             Checked="OnOptionsChanged" />
+            </StackPanel>
+        </Border>
 
         <!-- 危险组合的红字警告（只在真要连原包一起删时出现） -->
         <Border x:Name="DangerBox"
@@ -96,23 +120,27 @@
                 Background="#FFF3F3"
                 BorderBrush="#FFB0B0"
                 BorderThickness="1"
-                Padding="8"
-                Margin="0,12,0,0">
+                CornerRadius="4"
+                Padding="10,8"
+                Margin="0,14,0,0">
             <TextBlock x:Name="DangerText"
                        Foreground="#B00020"
-                       TextWrapping="Wrap" />
+                       TextWrapping="Wrap"
+                       LineHeight="19" />
         </Border>
 
-        <!-- 按钮 -->
+        <!-- 按钮（等宽、右对齐） -->
         <StackPanel Orientation="Horizontal"
                     HorizontalAlignment="Right"
-                    Margin="0,16,0,0">
+                    Margin="0,18,0,0">
             <Button Content="开始打包"
-                    Padding="18,4"
+                    MinWidth="104"
+                    Padding="16,5"
                     IsDefault="True"
                     Click="OnStart" />
             <Button Content="取消"
-                    Padding="18,4"
+                    MinWidth="88"
+                    Padding="16,5"
                     Margin="10,0,0,0"
                     IsCancel="True"
                     Click="OnCancel" />

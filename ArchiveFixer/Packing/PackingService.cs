@@ -350,16 +350,23 @@ namespace ArchiveFixer.Packing
 
             PackStepResult outerStep;
 
+            /*
+             * ⚠ 追加改口径：外层容器现在装的是**逐个点名的分卷文件**（顶层，没有文件夹层），
+             * 所以这一步的进程要在**落点目录**里执行、参数里只给文件名（见两个 Build*Arguments）。
+             */
+            List<string> outerArguments = outerIsRar
+                ? BuildRarArguments(plan, request.EffectiveOuterPassword, volumes)
+                : BuildSevenZipOuterArguments(plan, request.EffectiveOuterPassword, VolumePaths(volumes));
+
             try
             {
                 outerStep = await _runner.RunAsync(
                         outerToolKind,
-                        outerIsRar
-                            ? BuildRarArguments(plan, request.EffectiveOuterPassword)
-                            : BuildSevenZipOuterArguments(plan, request.EffectiveOuterPassword),
+                        outerArguments,
                         request.EffectiveOuterPassword,
                         WrapProgress(progress, PackingStep.OuterContainer, outerStepText),
-                        cancellationToken)
+                        cancellationToken,
+                        plan.OutputFolder)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -373,7 +380,7 @@ namespace ArchiveFixer.Packing
             {
                 DeleteIncompleteOuter(outerPath, outerName, Write);
 
-                return Cancelled($"生成{outerName}时被取消（分卷还在「{FolderName(plan)}」里）", null, volumes);
+                return Cancelled($"生成{outerName}时被取消（分卷还在落点目录里）", null, volumes);
             }
 
             if (!outerStep.Success)
@@ -382,8 +389,8 @@ namespace ArchiveFixer.Packing
 
                 return Fail(
                     $"{outerName}没做成（{outerTool} 退出码 {outerStep.ExitCode}）。" + DescribeOutputTail(outerStep)
-                    + $"7z 分卷还在：{plan.OutputFolder}（{volumes.Count} 个）—— 修好原因后可以重试，"
-                    + $"重试前请先清空「{FolderName(plan)}」，让程序从干净状态重建。",
+                    + $"7z 分卷还在落点目录里：{plan.OutputFolder}（{volumes.Count} 个）—— 修好原因后可以重试，"
+                    + "重试前请先删掉那些分卷文件，让程序从干净状态重建。",
                     StatusText.PackFailed,
                     volumes);
             }
@@ -428,7 +435,8 @@ namespace ArchiveFixer.Packing
                         outerIsRar
                             ? PackingVerifier.ParseBareList(listing.StandardOutput)
                             : PackingVerifier.ParseSevenZipSltList(listing.StandardOutput),
-                        Path.GetFileName(plan.OutputFolder),
+                        // ⚠ 追加改口径：没有中间文件夹了 → 归档里就是**顶层的那几个分卷**（folderName 传空 = 不要求目录层）。
+                        string.Empty,
                         volumes,
                         outerIsRar ? "rar" : "7z");
                 }
@@ -595,6 +603,10 @@ namespace ArchiveFixer.Packing
         /// <c>-bsp1</c>：进度打到 stdout（**不能加 <c>-bd</c>**，那会把进度指示器整个压掉，
         /// 与解压侧踩过的坑同一个）；<c>-sccUTF-8</c>：输出用 UTF-8，中文名才认得出来；
         /// <c>-y</c>：不问任何问题（无人值守）。</para>
+        ///
+        /// <para>⚠ 2026-09-26 追加改口径：分卷**直接落在落点目录里**（<see cref="PackingPlan.VolumeBasePath"/>），
+        /// 不再先落进一个以源名命名的中间文件夹 —— 用户原话："7z 分卷文件外面好像不用再套一件文件夹了，
+        /// 有点太多余了，这样也不用去考虑文件名重复的问题了"。</para>
         /// </summary>
         internal static List<string> BuildVolumeArguments(PackingPlan plan, string password)
         {
@@ -612,26 +624,29 @@ namespace ArchiveFixer.Packing
                 "-y",
                 "-p" + password,
                 "-v" + volumeMegabytes + "m",
-                Path.Combine(plan.OutputFolder, plan.VolumeBaseName),
+                plan.VolumeBasePath,
                 Path.Combine(plan.SourceFolder, "*")
             };
         }
 
         /// <summary>
         /// 第二步（外层容器 = 7z）的命令行：
-        /// <c>a -t7z -mhe=on -mx=5 -bsp1 -sccUTF-8 -y -p&lt;密码&gt; "&lt;B&gt;.7z" "&lt;B&gt;"</c>。
+        /// <c>a -t7z -mhe=on -mx=5 -bsp1 -sccUTF-8 -y -p&lt;密码&gt; "&lt;落点&gt;\&lt;源名&gt;.7z" 分卷1 分卷2…</c>。
         ///
         /// <para>与第一步同一套安全传参 / 进度 / 取消做法（<c>-bsp1</c> 进度、<c>-sccUTF-8</c> 输出编码、
         /// <c>-y</c> 无人值守），差别只有两条：不分卷（外层就是一个文件），以及
         /// <c>-mhe=on</c> 让**文件名也加密**（与 rar 那边的 <c>-hp</c> 对齐）。</para>
         ///
-        /// <para>为什么参数里给的是 <c>B</c> 而不是 <c>B\*</c>：<c>7z a out.7z &lt;B&gt;</c> 会把 <c>B</c>
-        /// 这一层目录名带进归档（条目是 <c>B\x.7z.001</c>），与 <c>Rar.exe -ep1</c> 的形态一一对应 ——
-        /// 用户解出来看到的都是一个文件夹，而不是一堆散着的分卷（docs/打包功能.md §4）。</para>
+        /// <para>⚠ 追加改口径：参数里给的是**逐个点名的分卷文件名**（进程在**落点目录**里执行，
+        /// 见 `RunOuterAsync` 传的 workingDirectory），于是归档里就是这些分卷（顶层、没有文件夹层）。
+        /// ⛔ 不能写 <c>&lt;落点&gt;\*</c>：那会把源文件夹本身也扫进去（"越打越多"）。</para>
         /// </summary>
-        internal static List<string> BuildSevenZipOuterArguments(PackingPlan plan, string outerPassword)
+        internal static List<string> BuildSevenZipOuterArguments(
+            PackingPlan plan,
+            string outerPassword,
+            IReadOnlyList<string> volumePaths)
         {
-            return new List<string>
+            var args = new List<string>
             {
                 "a",
                 "-t7z",
@@ -641,9 +656,15 @@ namespace ArchiveFixer.Packing
                 "-sccUTF-8",
                 "-y",
                 "-p" + outerPassword,
-                plan.SevenZipOuterPath,
-                plan.OutputFolder
+                plan.SevenZipOuterPath
             };
+
+            foreach (string volume in volumePaths)
+            {
+                args.Add(Path.GetFileName(volume));
+            }
+
+            return args;
         }
 
         /// <summary>
@@ -668,17 +689,22 @@ namespace ArchiveFixer.Packing
         }
 
         /// <summary>
-        /// 第二步的命令行：<c>a -hp&lt;密码&gt; -r -ep1 [-ibck] -y "&lt;B&gt;.rar" "&lt;B&gt;"</c>。
+        /// 第二步的命令行（外层 rar）：
+        /// <c>a -hp&lt;密码&gt; -ep1 [-ibck] -y "&lt;落点&gt;\&lt;源名&gt;.rar" 分卷1 分卷2…</c>。
         ///
-        /// <para><c>-hp</c>：连文件名一起加密；<c>-r</c>：递归子目录；<c>-ep1</c>：去掉上层目录、
-        /// 只保留 <c>B</c> 这一层（本机实测：条目名就是 <c>B\xxx.7z.001</c>，解出来有个文件夹）。</para>
+        /// <para><c>-hp</c>：连文件名一起加密；<c>-ep1</c>：不保存路径 —— 给文件时就是**只有文件名**，
+        /// 于是归档里是顶层的那几个分卷（与 7z 外层形态一一对应）。</para>
         ///
-        /// <para>退到 <c>WinRAR.exe</c> 时补 <c>-ibck</c>（后台 / 托盘运行）——
+        /// <para>⚠ 追加改口径：不再传那个中间文件夹，改成**逐个点名分卷文件**（进程在落点目录里跑）。
+        /// 退到 <c>WinRAR.exe</c> 时补 <c>-ibck</c>（后台 / 托盘运行）——
         /// 那个是 GUI 程序，不加它会在用户桌面弹出一个进度窗口并抢焦点。</para>
         /// </summary>
-        private List<string> BuildRarArguments(PackingPlan plan, string outerPassword)
+        private List<string> BuildRarArguments(
+            PackingPlan plan,
+            string outerPassword,
+            IReadOnlyList<PackingVolume> volumes)
         {
-            var args = new List<string> { "a", "-hp" + outerPassword, "-r", "-ep1" };
+            var args = new List<string> { "a", "-hp" + outerPassword, "-ep1" };
 
             if (_tools.IsUsingWinRarGuiForRar)
             {
@@ -687,9 +713,29 @@ namespace ArchiveFixer.Packing
 
             args.Add("-y");
             args.Add(plan.RarPath);
-            args.Add(plan.OutputFolder);
+
+            foreach (string volume in VolumePaths(volumes))
+            {
+                args.Add(Path.GetFileName(volume));
+            }
 
             return args;
+        }
+
+        /// <summary>分卷的完整路径（外层那一步只给文件名，进程在落点目录里跑）。</summary>
+        private static List<string> VolumePaths(IReadOnlyList<PackingVolume> volumes)
+        {
+            var paths = new List<string>(volumes.Count);
+
+            foreach (PackingVolume volume in volumes)
+            {
+                if (!string.IsNullOrWhiteSpace(volume.Path))
+                {
+                    paths.Add(volume.Path);
+                }
+            }
+
+            return paths;
         }
 
         /// <summary>

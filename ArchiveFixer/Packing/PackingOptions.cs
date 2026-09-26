@@ -520,6 +520,45 @@ namespace ArchiveFixer.Packing
         public static string ResolveSevenZipOuterPath(string targetDirectory, string sourceName) =>
             PackingNaming.ResolveUniqueFilePath(targetDirectory, sourceName, ".7z");
 
+        /// <summary>
+        /// 分卷的基路径（<c>&lt;落点&gt;\&lt;源名&gt;.7z</c>，撞名时让位成 <c>源名(1).7z</c>）。
+        ///
+        /// <para>⛔ **撞名判据必须看真正的第一卷**（<c>…7z.001</c>）：只看 <c>源名.7z</c> 是看不出来的
+        /// （那个文件根本不存在），而 7z 带 <c>-y</c> 会把已有的分卷直接覆盖掉。</para>
+        /// </summary>
+        public static string ResolveUniqueVolumeBasePath(string directory, string baseName)
+        {
+            if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(baseName))
+            {
+                return string.Empty;
+            }
+
+            string candidate = Path.Combine(directory, baseName + ".7z");
+
+            if (!IsVolumeBaseTaken(candidate))
+            {
+                return candidate;
+            }
+
+            for (int index = 1; index < 10000; index++)
+            {
+                candidate = Path.Combine(directory, $"{baseName}({index}).7z");
+
+                if (!IsVolumeBaseTaken(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return Path.Combine(directory, $"{baseName}({DateTime.Now:yyyyMMddHHmmss}).7z");
+        }
+
+        private static bool IsVolumeBaseTaken(string basePath) =>
+            File.Exists(basePath) ||
+            Directory.Exists(basePath) ||
+            File.Exists(basePath + ".001") ||
+            Directory.Exists(basePath + ".001");
+
         /// <summary>把源文件夹/文件搬进其余物时，它在里面的目标路径。</summary>
         public static string ResolveSourceMoveTarget(string volumesFolder, string sourceName) =>
             Path.Combine(volumesFolder, sourceName);

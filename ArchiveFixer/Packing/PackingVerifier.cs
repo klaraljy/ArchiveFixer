@@ -153,14 +153,17 @@ namespace ArchiveFixer.Packing
         }
 
         /// <summary>
-        /// 核对：<paramref name="entries"/> 是外层容器里的条目，<paramref name="volumes"/> 是 B 里的分卷。
+        /// 核对：<paramref name="entries"/> 是外层容器里的条目，<paramref name="volumes"/> 是磁盘上的分卷。
         /// </summary>
         /// <param name="entries">条目名（rar 用 <c>ParseBareList</c>，7z 用 <c>ParseSevenZipSltList</c>）。</param>
-        /// <param name="folderName">B 的目录名（归档里该有的那一层）。</param>
-        /// <param name="volumes">B 里实际切出来的分卷。</param>
+        /// <param name="folderName">
+        /// 归档里该有的那一层目录名。⚠ **2026-09-26 追加改口径后传空串**（分卷直接落在落点目录里、
+        /// 外层容器装的就是顶层的那几个分卷），此时不要求任何目录层，且"多出来的东西"一律算多余。
+        /// </param>
+        /// <param name="volumes">磁盘上实际切出来的分卷。</param>
         /// <param name="artifactName">
-        /// 外层产物在句子里的名字（<c>rar</c> / <c>7z</c>）。外层容器三选一之后，"rar 里少了…"这种话
-        /// 在 7z 容器下就是错的 —— 结论与失败原因会原样给用户看，所以名字必须跟着容器走。
+        /// 外层产物在句子里的名字（<c>rar</c> / <c>7z</c>）。结论与失败原因会原样给用户看，
+        /// 所以名字必须跟着容器走。
         /// </param>
         public static PackingVerification Verify(
             IReadOnlyList<string>? entries,
@@ -172,6 +175,8 @@ namespace ArchiveFixer.Packing
             IReadOnlyList<string> list = entries ?? Array.Empty<string>();
             IReadOnlyList<PackingVolume> expected = volumes ?? Array.Empty<PackingVolume>();
             string artifact = string.IsNullOrWhiteSpace(artifactName) ? "外层容器" : artifactName;
+            bool requiresFolder = !string.IsNullOrWhiteSpace(folderName);
+            string where = requiresFolder ? $"「{folderName}」里" : "顶层";
 
             if (list.Count == 0)
             {
@@ -188,8 +193,8 @@ namespace ArchiveFixer.Packing
                 return new PackingVerification
                 {
                     Ok = false,
-                    Detail = $"「{folderName}」里一个分卷都没有，产物不完整。",
-                    Problems = new[] { "装分卷的文件夹里没有分卷" }
+                    Detail = "磁盘上一个分卷都没有，产物不完整。",
+                    Problems = new[] { "没有分卷" }
                 };
             }
 
@@ -198,7 +203,7 @@ namespace ArchiveFixer.Packing
                 StringComparer.OrdinalIgnoreCase);
 
             var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var outsideFolder = new List<string>();
+            var stray = new List<string>();
 
             foreach (string entry in list)
             {
@@ -210,9 +215,11 @@ namespace ArchiveFixer.Packing
                     continue;
                 }
 
-                if (!IsWithinFolder(entry, folderName))
+                // 不要求目录层时（追加改口径后的常态），**任何**不是分卷的条目都算多余；
+                // 要求目录层时（历史上那一版）才只看"那一层之外的"东西。
+                if (!requiresFolder || !IsWithinFolder(entry, folderName))
                 {
-                    outsideFolder.Add(entry);
+                    stray.Add(entry);
                 }
             }
 
@@ -226,9 +233,9 @@ namespace ArchiveFixer.Packing
                 problems.Add($"{artifact} 里少了这些分卷：" + string.Join('、', missing));
             }
 
-            if (outsideFolder.Count > 0)
+            if (stray.Count > 0)
             {
-                problems.Add($"{artifact} 里有「{folderName}」这一层之外的东西：" + string.Join('、', outsideFolder.Take(5)));
+                problems.Add($"{artifact} 里多出这些东西（只该有那几个分卷）：" + string.Join('、', stray.Take(5)));
             }
 
             if (problems.Count > 0)
@@ -244,7 +251,7 @@ namespace ArchiveFixer.Packing
             return new PackingVerification
             {
                 Ok = true,
-                Detail = $"{artifact} 里数出 {seenNames.Count} 个分卷，与「{folderName}」里的 {expected.Count} 个一致，且都在这一层下",
+                Detail = $"{artifact} 里数出 {seenNames.Count} 个分卷，与磁盘上的 {expected.Count} 个一致，且都在{where}",
                 Problems = Array.Empty<string>()
             };
         }

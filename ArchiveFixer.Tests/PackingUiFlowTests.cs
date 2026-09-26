@@ -544,7 +544,8 @@ namespace ArchiveFixer.Tests
                 IReadOnlyList<string> arguments,
                 string usedPassword,
                 IProgress<PackStepProgress>? progress,
-                System.Threading.CancellationToken cancellationToken)
+                System.Threading.CancellationToken cancellationToken,
+                string? workingDirectory = null)
             {
                 Calls++;
                 Args.Add(tool + " " + string.Join(" ", arguments));

@@ -167,14 +167,17 @@ namespace ArchiveFixer.Tests
         /// 最终 rar **永远用源名**（<c>素材.rar</c>）；两者都落在**本地**（源旁边）。</para>
         /// </summary>
         [Fact]
-        public void 默认落点_装分卷的文件夹与rar都用源名_落在源旁边()
+        public void 默认落点_分卷直接落在源旁边_rar也用源名()
         {
             string source = Path.Combine(_root, "素材");
             Directory.CreateDirectory(source);
             File.WriteAllBytes(Path.Combine(source, "a.bin"), new byte[64]);
 
-            // 源文件夹还在 → 装分卷的文件夹让位成 `素材(1)`（用户原话："那就是 1111(1) 文件夹"）。
-            string expectedOutput = Path.Combine(_root, "素材(1)");
+            /*
+             * ⚠ 2026-09-26 追加改口径（用户原话："7z 分卷文件外面好像不用再套一件文件夹了，
+             * 有点太多余了，这样也不用去考虑文件名重复的问题了"）：
+             * 分卷**直接落在落点目录里**（默认 = 源旁边），不再有 `素材(1)` 那一层中间文件夹。
+             */
             string expectedRar = Path.Combine(_root, "素材.rar");
 
             Assert.True(PackingPlan.TryCreate(
@@ -183,15 +186,39 @@ namespace ArchiveFixer.Tests
                 out string error), error);
 
             Assert.NotNull(plan);
-            Assert.Equal(expectedOutput, plan!.OutputFolder);
-            Assert.Equal(expectedRar, plan.RarPath);
+            Assert.Equal(_root, plan!.OutputFolder);
+            Assert.Equal(Path.Combine(_root, "素材.7z"), plan.VolumeBasePath);
             Assert.Equal("素材.7z", plan.VolumeBaseName);
+            Assert.Equal(expectedRar, plan.RarPath);
             Assert.Equal(_root, plan.TargetDirectory);
 
             // 64 字节的内容：<1 GiB → 目标 2 卷（每卷上限 1 MiB 的下限）。
             Assert.Equal(2, plan.VolumeTargetCount);
             Assert.Equal(1L * 1024 * 1024, plan.VolumeSizeBytes);
             Assert.Equal(1, plan.PlannedVolumeCount);
+        }
+
+        /// <summary>
+        /// ⛔ 分卷撞名时的判据必须看**真正的第一卷**（`素材.7z.001`）：只看 `素材.7z` 是看不出来的
+        /// （那个文件根本不存在），而 7z 带 <c>-y</c> 会把已有的分卷直接覆盖掉。
+        /// </summary>
+        [Fact]
+        public void 分卷撞名_看的是真正的第一卷_而不是基名()
+        {
+            string source = Path.Combine(_root, "素材");
+            Directory.CreateDirectory(source);
+            File.WriteAllBytes(Path.Combine(source, "a.bin"), new byte[64]);
+
+            // 已经存在 `素材.7z.001`（上一次留下的）→ 这一次必须让位成 `素材(1).7z`。
+            File.WriteAllBytes(Path.Combine(_root, "素材.7z.001"), new byte[16]);
+
+            Assert.True(PackingPlan.TryCreate(
+                new PackingRequest { SourceFolder = source, Password = SamplePassword },
+                out PackingPlan? plan,
+                out string error), error);
+
+            Assert.Equal(Path.Combine(_root, "素材(1).7z"), plan!.VolumeBasePath);
+            Assert.Equal(Path.Combine(_root, "素材.rar"), plan.RarPath);
         }
 
         // ══════════════════════════ ② 密码 ══════════════════════════
@@ -344,9 +371,8 @@ namespace ArchiveFixer.Tests
                 + "Type = 7z" + Environment.NewLine
                 + Environment.NewLine
                 + "----------" + Environment.NewLine
-                + "Path = B-norar" + Environment.NewLine
-                + Environment.NewLine
-                + @"Path = B-norar\A-norar.7z.001" + Environment.NewLine));
+                // ⚠ 追加改口径：外层 7z 里就是**顶层的那一个分卷**。
+                + "Path = A-norar.7z.001" + Environment.NewLine));
 
             var service = new PackingService(tools, runner, _ => long.MaxValue);
 
@@ -432,21 +458,23 @@ namespace ArchiveFixer.Tests
             Assert.Contains("不能落在源文件夹里面", error, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// ⚠ 追加改口径：**"外层容器不能落在落点目录里面"那条判据退役**（旧模型里落点是一个中间文件夹、
+        /// 外层容器会把它整个装进去；现在分卷直接落在落点目录里、外层容器也只装点名的分卷文件，
+        /// 自己也住在同一个目录里）。这条反向钉住新口径：rar 与落点同目录必须放行。
+        /// </summary>
         [Fact]
-        public void 结果rar落在B里面_拒绝()
+        public void 结果rar与落点同目录_放行()
         {
             string source = CreateSourceFolder("A-rarinB", 1, 1024);
             string output = Path.Combine(_root, "B-rarinB");
             string rar = Path.Combine(output, "结果.rar");
 
-            string? rejected = PackingPlan.ValidatePlacement(source, output, rar);
-
-            Assert.NotNull(rejected);
-            Assert.Contains("不能放在「装分卷的文件夹」里面", rejected!, StringComparison.Ordinal);
+            Assert.Null(PackingPlan.ValidatePlacement(source, output, rar));
         }
 
         [Fact]
-        public void rar落在A里面或A落在B里面_同样拒绝()
+        public void rar落在A里面_同样拒绝()
         {
             string source = CreateSourceFolder("A-cross", 1, 1024);
 
@@ -460,18 +488,22 @@ namespace ArchiveFixer.Tests
             Assert.Contains("不能放在源文件夹里面", rarInSource!, StringComparison.Ordinal);
 
             // A 在 B 里面 → 外层容器装的是整个落点目录，会把源文件原样再存一份。
-            // ⚠ rar 必须放在那个文件夹 **外面**，否则会先撞上"rar 不能放在它里面"那一条，测的就不是这一条判据了。
+            /*
+             * ⚠ 2026-09-26 追加改口径：原来这里还拒"源文件夹落在落点目录里面"——那条是
+             * "B（中间文件夹）会被整个装进外层容器"那个旧模型的前提。现在分卷直接落在落点目录里、
+             * 外层容器装的是**逐个点名的分卷文件**，而"默认落点 = 源旁边"本身就让源位于落点目录里，
+             * 所以那条判据整块退役 —— 这里反向钉住"默认形状必须放行"。
+             */
             string? sourceInOutput = PackingPlan.ValidatePlacement(
                 source,
                 _root,
                 Path.Combine(Path.GetDirectoryName(_root) ?? _root, "B-cross.rar"));
 
-            Assert.NotNull(sourceInOutput);
-            Assert.Contains("源文件夹落在落点目录里面了", sourceInOutput!, StringComparison.Ordinal);
+            Assert.Null(sourceInOutput);
         }
 
         [Fact]
-        public void 输出文件夹非空或rar已存在_都不默认覆盖()
+        public void rar已存在_不默认覆盖()
         {
             string source = CreateSourceFolder("A-conflict", 1, 1024);
             string output = Path.Combine(_root, "B-conflict");
@@ -479,13 +511,7 @@ namespace ArchiveFixer.Tests
             Directory.CreateDirectory(output);
             File.WriteAllText(Path.Combine(output, "别人放的东西.txt"), "x");
 
-            string? notEmpty = PackingPlan.ValidatePlacement(source, output, Path.Combine(_root, "B-conflict.rar"));
-            Assert.NotNull(notEmpty);
-            Assert.Contains("已经存在而且不是空的", notEmpty!, StringComparison.Ordinal);
-
-            // 空的 B 是可以用的。
-            Directory.Delete(output, recursive: true);
-            Directory.CreateDirectory(output);
+            // ⚠ 追加改口径：落点目录**可以是非空的**（默认就是源所在的那个目录），不再拒。
             Assert.Null(PackingPlan.ValidatePlacement(source, output, Path.Combine(_root, "B-conflict.rar")));
 
             File.WriteAllText(Path.Combine(_root, "B-conflict.rar"), "old");
@@ -693,10 +719,10 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(sourcePath), "原文件必须还在原地");
             Assert.Equal(before, Sha256Of(sourcePath));
 
-            // ② 默认档：临时建的同名文件夹 + 装分卷的文件夹**都已经删掉**（落点目录里不再有任何目录）。
+            // ② 默认档：临时建的同名文件夹 + **那些分卷文件**都已经删掉（落点目录里不再有目录、也没有分卷）。
             Assert.False(Directory.Exists(Path.Combine(_root, baseName)), $"临时建的同名文件夹应当已被删掉：{baseName}");
-            Assert.False(Directory.Exists(Path.Combine(_root, baseName + "(1)")), "装分卷的文件夹应当已被删掉");
             Assert.Empty(Directory.GetDirectories(_root));
+            Assert.Empty(Directory.GetFiles(_root, baseName + ".7z.*"));
             Assert.Contains("已彻底删除", result.CleanupNote, StringComparison.Ordinal);
 
             // ③ 日志里不许出现密码明文（这一条走的是 -hp / -p，两种形态都不能漏）。
@@ -705,7 +731,7 @@ namespace ArchiveFixer.Tests
                 string.Join("\n", result.LogLines),
                 StringComparison.Ordinal);
 
-            // ④ 产物里面装的是"那个同名文件夹 + 其中的分卷"（用真引擎自己列一遍）。
+            // ④ 产物里面装的是**顶层的那几个分卷**（用真引擎自己列一遍）。
             //
             // ⚠ 这里**用内置 7-Zip 列 rar**，不用 `Rar.exe lb`：Rar.exe 的输出是**控制台代码页**
             // （本机 936），而测试的 RunProcess 按 UTF-8 解码 —— 英文名看不出来，**中文名会变成乱码**
@@ -720,19 +746,19 @@ namespace ArchiveFixer.Tests
             IReadOnlyList<string> entries = PackingVerifier.ParseSevenZipSltList(stdout);
 
             Assert.Contains(entries, e => e.EndsWith(baseName + ".7z.001", StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(entries, e => e.EndsWith(baseName + "(1)", StringComparison.OrdinalIgnoreCase));
+            Assert.All(entries, e => Assert.DoesNotContain("\\", e, StringComparison.Ordinal));
         }
 
         /// <summary>
-        /// 真 7z 端到端（2026-09-26 第 46 条）：**原包操作 = 移入其余物 + 其余物保留**。
+        /// 真 7z 端到端（2026-09-26 第 46 条 + 追加改口径）：**原包操作 = 移入其余物 + 其余物保留**。
         ///
-        /// <para>这是"整理型"用户会选的那一档：打完只剩一个 <c>.rar</c> 在明面上，
-        /// 原文件夹被搬进"装分卷的文件夹"里跟着一起留着（可还原）。要钉三件事：
-        /// ①源**真的**从原地消失了（不是"说搬了其实没搬"）；②它在**其余物那一层**里、
-        /// 内容一个字节没少；③装分卷的文件夹本身**还在**（保留档不许把它删掉）。</para>
+        /// <para>⚠ 追加改口径之后，分卷不再装在中间文件夹里，所以这一档由程序**现建**一个以源名命名的
+        /// 文件夹（源文件夹本来就叫这个名字 → 让位成 <c>A-move(1)</c>）把源搬进去；"其余物保留"
+        /// 留下的是**那个文件夹 + 那些分卷文件**。要钉三件事：
+        /// ①源**真的**从原地消失了；②它在那个文件夹里、内容一个字节没少；③分卷也还在。</para>
         /// </summary>
         [Fact]
-        public async Task 真7z端到端_原包移入其余物_保留档下源搬进装分卷的文件夹且内容不丢()
+        public async Task 真7z端到端_原包移入其余物_保留档下源被搬进新建的文件夹且内容不丢()
         {
             string sevenZip = LocateSevenZip();
 
@@ -772,19 +798,19 @@ namespace ArchiveFixer.Tests
 
             Assert.True(File.Exists(outer), "最终产物必须真的在磁盘上");
 
-            // 装分卷的文件夹会因为"源文件夹本身就叫这个名字"而让位成 `A-move(1)`。
-            string rest = Path.Combine(_root, baseName + "(1)");
+            // 装源包的那个文件夹（这一档才建）：源文件夹本身占着 `A-move`，于是让位成 `A-move(1)`。
+            string holder = Path.Combine(_root, baseName + "(1)");
 
             Assert.False(Directory.Exists(source), "移入其余物之后，源不该还在原地");
-            Assert.True(Directory.Exists(rest), $"装分卷的文件夹应当保留：{rest}");
+            Assert.True(Directory.Exists(holder), $"装原包的那个文件夹应当保留：{holder}");
 
-            string moved = Path.Combine(rest, baseName);
+            string moved = Path.Combine(holder, baseName);
 
-            Assert.True(Directory.Exists(moved), "源文件夹应当被搬进装分卷的文件夹里");
+            Assert.True(Directory.Exists(moved), "源文件夹应当被搬进那个文件夹里");
             Assert.Equal(sourceHash, HashDirectory(moved));
 
-            // 其余物那一档是"保留"，所以分卷也还在（这一档的用处就是让人自己检查）。
-            Assert.NotEmpty(Directory.GetFiles(rest, "*.7z.0*"));
+            // 其余物那一档是"保留"，所以分卷也还在（就在落点目录里）。
+            Assert.NotEmpty(Directory.GetFiles(_root, baseName + ".7z.0*"));
 
             Assert.Contains("已移入其余物", result.CleanupNote, StringComparison.Ordinal);
             Assert.Contains("保留", result.CleanupNote, StringComparison.Ordinal);
@@ -843,7 +869,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 真7z端到端_两层都做_rar里装的是B这一层()
+        public async Task 真7z端到端_两层都做_rar里装的就是那几个分卷_顶层()
         {
             string sevenZip = LocateSevenZip();
 
@@ -862,7 +888,6 @@ namespace ArchiveFixer.Tests
             }
 
             string source = CreateSourceFolder("A-both", 2, 600 * 1024);
-            string output = Path.Combine(_root, "B-both");
 
             // ⚠ 第 46 条：外层产物用**源名**（`A-both.rar`），落在落点目录（源的父目录）。
             string rarPath = Path.Combine(_root, "A-both.rar");
@@ -872,7 +897,6 @@ namespace ArchiveFixer.Tests
             PackingResult result = await service.PackAsync(new PackingRequest
             {
                 SourceFolder = source,
-                OutputFolder = output,
                 VolumeSizeBytes = OneMebibyte,
                 Password = SamplePassword
             });
@@ -887,8 +911,9 @@ namespace ArchiveFixer.Tests
 
             // 产物校验那句话要说清"数出几个、都在哪一层"。
             Assert.Contains("分卷", result.VerificationDetail, StringComparison.Ordinal);
+            Assert.Contains("顶层", result.VerificationDetail, StringComparison.Ordinal);
 
-            // 自己再列一遍 rar：条目必须带 B 这一层（用户解出来要看到文件夹）。
+            // 自己再列一遍 rar：追加改口径之后，条目就是**顶层的那几个分卷**（没有文件夹层）。
             string rarExe = tools.RarExePath;
             (int exit, string stdout, string stderr) = RunProcess(rarExe, new[] { "lb", "-p" + SamplePassword, rarPath });
 
@@ -896,16 +921,16 @@ namespace ArchiveFixer.Tests
 
             IReadOnlyList<string> entries = PackingVerifier.ParseBareList(stdout);
 
-            Assert.Contains(entries, e => e.EndsWith("A-both.7z.001", StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(entries, e => e.EndsWith("A-both.7z.002", StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(entries, e => PackingVerifier.IsWithinFolder(e, Path.GetFileName(output)));
+            Assert.Equal(2, entries.Count);
+            Assert.Contains("A-both.7z.001", entries);
+            Assert.Contains("A-both.7z.002", entries);
 
             // 日志里同样不许出现密码明文（这一条走的是 -hp，与 7z 的 -p 形态不同）。
             string joined = string.Join("\n", result.LogLines) + "\n" + result.Describe();
             Assert.DoesNotContain(SamplePassword, joined, StringComparison.Ordinal);
 
-            // 默认收尾：其余物（装分卷的文件夹）已彻底删除，原包仍在原地。
-            Assert.False(Directory.Exists(output), "默认档下其余物应当已被删除（只剩外层 rar）");
+            // 默认收尾：分卷（其余物）已彻底删除，原包仍在原地，落点目录里只剩 rar。
+            Assert.False(File.Exists(Path.Combine(_root, "A-both.7z.001")), "默认档下分卷应当已被删除");
             Assert.True(Directory.Exists(source), "原包默认不动");
             Assert.Contains("已彻底删除", result.CleanupNote, StringComparison.Ordinal);
         }
@@ -954,6 +979,9 @@ namespace ArchiveFixer.Tests
                 SourceFolder = source,
                 SourceFolderName = "A-progress",
                 OutputFolder = output,
+
+                // ⚠ 追加改口径：分卷基路径是算好的（`<落点>\A-progress.7z`），不再由 OutputFolder + 基名拼。
+                VolumeBasePath = Path.Combine(output, "A-progress.7z"),
                 RarPath = PackingPlan.DefaultRarPath(output),
                 VolumeSizeBytes = OneMebibyte
             };
@@ -1075,17 +1103,22 @@ namespace ArchiveFixer.Tests
                 new() { FileName = "A.7z.002", Index = 2, Bytes = 100 }
             };
 
+            /*
+             * ⚠ 2026-09-26 追加改口径：**不再要求目录层**（folderName 传空 = 顶层）。
+             * 历史那一版（"归档里有个 B 文件夹"）仍然保留支持 —— 传了 folderName 就照旧判。
+             */
             PackingVerification good = PackingVerifier.Verify(
-                new[] { @"B\A.7z.001", @"B\A.7z.002", "B" },
-                "B",
+                new[] { "A.7z.001", "A.7z.002" },
+                string.Empty,
                 volumes);
 
             Assert.True(good.Ok);
             Assert.Contains("2 个分卷", good.Detail, StringComparison.Ordinal);
+            Assert.Contains("顶层", good.Detail, StringComparison.Ordinal);
 
             PackingVerification missing = PackingVerifier.Verify(
-                new[] { @"B\A.7z.001", "B" },
-                "B",
+                new[] { "A.7z.001" },
+                string.Empty,
                 volumes);
 
             Assert.False(missing.Ok);
@@ -1093,17 +1126,23 @@ namespace ArchiveFixer.Tests
             Assert.Contains("A.7z.002", missing.Detail, StringComparison.Ordinal);
 
             PackingVerification stray = PackingVerifier.Verify(
-                new[] { @"B\A.7z.001", @"B\A.7z.002", "B", @"别处\多余.txt" },
-                "B",
+                new[] { "A.7z.001", "A.7z.002", "多余.txt" },
+                string.Empty,
                 volumes);
 
             Assert.False(stray.Ok);
+            Assert.Contains("多出这些东西", stray.Detail, StringComparison.Ordinal);
 
-            // 第 46 条改口径：这句话里点名的是**那个文件夹实际叫什么**（旧文案写死的 "B" 已经没有了）。
-            Assert.Contains("「B」这一层之外", stray.Detail, StringComparison.Ordinal);
+            // 传了目录名就按"有目录层"判（历史口径仍然能用）。
+            PackingVerification layered = PackingVerifier.Verify(
+                new[] { @"B\A.7z.001", @"B\A.7z.002", "B" },
+                "B",
+                volumes);
 
-            Assert.False(PackingVerifier.Verify(Array.Empty<string>(), "B", volumes).Ok);
-            Assert.False(PackingVerifier.Verify(new[] { "B" }, "B", Array.Empty<PackingVolume>()).Ok);
+            Assert.True(layered.Ok);
+
+            Assert.False(PackingVerifier.Verify(Array.Empty<string>(), string.Empty, volumes).Ok);
+            Assert.False(PackingVerifier.Verify(new[] { "A.7z.001" }, string.Empty, Array.Empty<PackingVolume>()).Ok);
 
             // bare listing 的解析：一行一个名字，空行丢掉。
             Assert.Equal(3, PackingVerifier.ParseBareList("B\\A.7z.001\r\nB\\A.7z.002\r\n\r\nB\r\n").Count);
@@ -1218,11 +1257,10 @@ namespace ArchiveFixer.Tests
                     + "Type = 7z" + Environment.NewLine
                     + Environment.NewLine
                     + "----------" + Environment.NewLine
-                    + "Path = B-7zouter" + Environment.NewLine
+                    // ⚠ 追加改口径：归档里就是**顶层的那几个分卷**（没有中间文件夹那一层）。
+                    + "Path = A-7zouter.7z.001" + Environment.NewLine
                     + Environment.NewLine
-                    + @"Path = B-7zouter\A-7zouter.7z.001" + Environment.NewLine
-                    + Environment.NewLine
-                    + @"Path = B-7zouter\A-7zouter.7z.002" + Environment.NewLine));
+                    + "Path = A-7zouter.7z.002" + Environment.NewLine));
 
             // 这台机器**没有** Rar.exe（两档都关掉）—— 7z 外层这条路本来就与它无关。
             var tools = new ToolLocator { UseWinRarInstallation = false };
@@ -1243,16 +1281,21 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(outerPath), "7z 外层容器应当落在 B 的同级（B.7z）");
             Assert.Equal(0, runner.RarCalls); // 一次都没碰 Rar.exe
 
-            // ① 外层命令：字面模板（用户 2026-09-23 给的：7z a -t7z -mhe=on -mx=5 -p<密码> "<B>.7z" "<B>"）。
+            // ① 外层命令：字面模板（追加改口径后给的是**逐个点名的分卷文件名**，进程在落点目录里跑）。
             IReadOnlyList<string> outerCall = runner.Arguments.Single(a => !FakePackRunner.IsVolumeCall(a) && a[0] == "a");
 
             Assert.Equal(
                 new[]
                 {
                     "a", "-t7z", "-mx=5", "-mhe=on", "-bsp1", "-sccUTF-8", "-y",
-                    "-p" + SamplePassword, outerPath, output
+                    "-p" + SamplePassword, outerPath, "A-7zouter.7z.001", "A-7zouter.7z.002"
                 },
                 outerCall);
+
+            // ⛔ 那一步必须在**落点目录**里执行（给绝对路径会把路径也存进归档，多出一层目录）。
+            int outerIndex = runner.Arguments.IndexOf(outerCall);
+
+            Assert.Equal(output, runner.WorkingDirectories[outerIndex]);
 
             // ② 列条目走的是 7z 的 -slt（机器格式），不是给人看的表格。
             IReadOnlyList<string> listCall = runner.Arguments.Single(a => a[0] == "l");
@@ -1261,10 +1304,11 @@ namespace ArchiveFixer.Tests
                 new[] { "l", "-slt", "-sccUTF-8", "-y", "-p" + SamplePassword, outerPath },
                 listCall);
 
-            // ③ 产物名与校验：外层 7z 里装的是 B 这一层下的两个分卷。
+            // ③ 产物名与校验：外层 7z 里装的是**顶层**那两个分卷。
             Assert.Equal("A-7zouter.7z", Path.GetFileName(result.OuterPath));
             Assert.Equal(2, result.Volumes.Count);
             Assert.Contains("2 个分卷", result.VerificationDetail, StringComparison.Ordinal);
+            Assert.Contains("顶层", result.VerificationDetail, StringComparison.Ordinal);
             Assert.Contains(StatusText.PackOuterSevenZipShort, result.Describe(), StringComparison.Ordinal);
 
             // ④ 日志与结论里没有密码明文（7z 外层走的是 -p，与 rar 的 -hp 形态不同）。
@@ -1417,8 +1461,7 @@ namespace ArchiveFixer.Tests
                 },
                 sevenZipListResult: _ => FakePackRunner.Ok(
                     "----------" + Environment.NewLine
-                    + "Path = B-7znorar" + Environment.NewLine
-                    + @"Path = B-7znorar\A-7znorar.7z.001" + Environment.NewLine));
+                    + "Path = A-7znorar.7z.001" + Environment.NewLine));
 
             var tools = new ToolLocator { UseWinRarInstallation = false };
 
@@ -1485,10 +1528,12 @@ namespace ArchiveFixer.Tests
             Assert.True(new FileInfo(outerPath).Length > 0);
 
             /*
-             * ⚠ 第 46 条的默认收尾（用户："其余物……默认删掉，因为这个对用户来说一点用没有"）：
-             * 成功之后**装分卷的文件夹 B 已经被彻底删除**，只剩外层容器。
+             * ⚠ 2026-09-26 追加改口径（用户："7z 分卷文件外面好像不用再套一件文件夹了"）：
+             * 分卷**直接落在落点目录里**，成功之后默认把它们彻底删掉，只剩外层容器 ——
+             * 落点目录本身还在（它是源的父目录）。
              */
-            Assert.False(Directory.Exists(output), "默认档下其余物（装分卷的文件夹）应当已被删除");
+            Assert.False(File.Exists(Path.Combine(_root, "A-7ze2e.7z.001")), "默认档下分卷应当已被删除");
+            Assert.False(File.Exists(Path.Combine(_root, "A-7ze2e.7z.002")), "默认档下分卷应当已被删除");
             Assert.Contains("其余物", result.CleanupNote, StringComparison.Ordinal);
             Assert.Contains("已彻底删除", result.CleanupNote, StringComparison.Ordinal);
             Assert.Contains("原包：不动", result.CleanupNote, StringComparison.Ordinal);
@@ -1852,15 +1897,20 @@ namespace ArchiveFixer.Tests
 
             public List<IReadOnlyList<string>> Arguments { get; } = new();
 
+            /// <summary>每次调用时那个"在哪个目录里跑"（外层那一步必须是落点目录）。</summary>
+            public List<string> WorkingDirectories { get; } = new();
+
             public async Task<PackStepResult> RunAsync(
                 PackToolKind tool,
                 IReadOnlyList<string> arguments,
                 string usedPassword,
                 IProgress<PackStepProgress>? progress,
-                CancellationToken cancellationToken)
+                CancellationToken cancellationToken,
+                string? workingDirectory = null)
             {
                 TotalCalls++;
                 Arguments.Add(arguments);
+                WorkingDirectories.Add(workingDirectory ?? string.Empty);
 
                 if (tool == PackToolKind.SevenZip)
                 {
@@ -1885,7 +1935,7 @@ namespace ArchiveFixer.Tests
                         if (_sevenZipDelegate != null)
                         {
                             return await _sevenZipDelegate
-                                .RunAsync(tool, arguments, usedPassword, progress, cancellationToken)
+                                .RunAsync(tool, arguments, usedPassword, progress, cancellationToken, workingDirectory)
                                 .ConfigureAwait(false);
                         }
 

@@ -28,8 +28,8 @@ namespace ArchiveFixer.Views
                 PasswordList.SelectedIndex = 0;
             }
 
-            HintText.Text = $"从密码列表里挑一条（共 {PasswordList.Items.Count} 条；只在内存里用到，"
-                          + "不写进日志、不落盘）。";
+            HintTextBlock.Text = $"从密码列表里挑一条（共 {PasswordList.Items.Count} 条；只在内存里用到，"
+                               + "不写进日志、不落盘）。";
         }
 
         /// <summary>选中的密码（取消时是 null）。</summary>

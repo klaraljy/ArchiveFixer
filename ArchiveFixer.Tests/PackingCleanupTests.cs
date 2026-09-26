@@ -56,7 +56,7 @@ namespace ArchiveFixer.Tests
                 harness.Delete);
 
             Assert.False(outcome.Ran);
-            Assert.True(Directory.Exists(harness.Plan.OutputFolder), "没成功时其余物必须原样留着");
+            Assert.True(File.Exists(harness.Volume001), "没成功时其余物（分卷文件）必须原样留着");
             Assert.True(Directory.Exists(harness.SourceFolder), "没成功时源必须原样留着");
             Assert.Contains(outcome.LogLines, line => line.Contains("一个字节都不动", StringComparison.Ordinal));
         }
@@ -79,13 +79,13 @@ namespace ArchiveFixer.Tests
             Assert.Equal("已彻底删除", outcome.RestSummary);
             Assert.True(outcome.FreedBytes > 0);
 
-            Assert.False(Directory.Exists(harness.Plan.OutputFolder), "其余物应当被删掉");
+            Assert.False(File.Exists(harness.Volume001), "其余物（分卷文件）应当被删掉");
             Assert.True(Directory.Exists(harness.SourceFolder), "原包默认不动");
             Assert.True(File.Exists(harness.OuterPath), "外层容器（= 结果）必须在");
         }
 
         [Fact]
-        public void 其余物不动那一档_文件夹留着()
+        public void 其余物不动那一档_分卷文件留着()
         {
             Harness harness = Build(withWrapper: false, options: new PackingRunOptions
             {
@@ -100,7 +100,7 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal("保留", outcome.RestSummary);
             Assert.Equal(0, outcome.FreedBytes);
-            Assert.True(Directory.Exists(harness.Plan.OutputFolder));
+            Assert.True(File.Exists(harness.Volume001));
             Assert.Contains(outcome.LogLines, line => line.Contains("其余物保留", StringComparison.Ordinal));
         }
 
@@ -142,9 +142,14 @@ namespace ArchiveFixer.Tests
             Assert.True(outcome.SourceMoved);
             Assert.False(Directory.Exists(harness.SourceFolder), "源应当已经搬走");
 
-            string moved = Path.Combine(harness.Plan.OutputFolder, Path.GetFileName(harness.SourceFolder));
+            /*
+             * ⚠ 追加改口径：分卷不再装在中间文件夹里，所以"移入其余物"这一步由程序**现建**一个
+             * 以源名命名的文件夹（源文件夹本来就叫 `素材`，于是让位成 `素材(1)`），把源搬进去。
+             */
+            string holder = Path.Combine(_root, "素材(1)");
+            string moved = Path.Combine(holder, "素材");
 
-            Assert.True(Directory.Exists(moved), "源应当在其余物里面：" + moved);
+            Assert.True(Directory.Exists(moved), "源应当在其余物那个文件夹里：" + moved);
             Assert.True(File.Exists(Path.Combine(moved, "a.bin")));
         }
 
@@ -173,8 +178,9 @@ namespace ArchiveFixer.Tests
                 harness.Delete);
 
             Assert.True(outcome.SourceMoved);
-            Assert.False(Directory.Exists(harness.Plan.OutputFolder), "其余物应当被删");
+            Assert.False(File.Exists(harness.Volume001), "其余物（分卷文件）应当被删");
             Assert.False(Directory.Exists(harness.SourceFolder), "原包也被一起删了（用户明知并确认过）");
+            Assert.False(Directory.Exists(Path.Combine(_root, "素材(1)")), "装原包的那个文件夹也一起没了");
             Assert.True(File.Exists(harness.OuterPath));
         }
 
@@ -191,7 +197,7 @@ namespace ArchiveFixer.Tests
                 outerArtifactPath: string.Empty,
                 harness.Delete);
 
-            Assert.True(Directory.Exists(harness.Plan.OutputFolder), "分卷就是结果，绝不能删");
+            Assert.True(File.Exists(harness.Volume001), "分卷就是结果，绝不能删");
             Assert.Empty(harness.DeleteModes);
             Assert.Contains(outcome.LogLines, line => line.Contains("分卷就是结果", StringComparison.Ordinal));
         }
@@ -199,7 +205,7 @@ namespace ArchiveFixer.Tests
         // ================================================================ 单文件：那个临时文件夹也算其余物
 
         [Fact]
-        public void 单文件_临时建的同名文件夹与分卷文件夹一起按档处理()
+        public void 单文件_临时建的同名文件夹与分卷一起按档处理()
         {
             string file = Path.Combine(_root, "111.mp4");
             File.WriteAllBytes(file, new byte[64]);
@@ -216,7 +222,7 @@ namespace ArchiveFixer.Tests
                 harness.Delete);
 
             Assert.Equal("已彻底删除", outcome.RestSummary);
-            Assert.False(Directory.Exists(harness.Plan.OutputFolder), "装分卷的文件夹应当被删");
+            Assert.False(File.Exists(harness.Volume001), "分卷文件应当被删");
             Assert.False(Directory.Exists(harness.Plan.WrapperFolderToCreate), "临时建的同名文件夹也应当被删");
             Assert.True(File.Exists(file), "原文件默认不动（它不在其余物里）");
         }
@@ -234,7 +240,7 @@ namespace ArchiveFixer.Tests
                 harness.OuterPath,
                 harness.Delete);
 
-            Assert.True(Directory.Exists(harness.Plan.OutputFolder), "越界的其余物一个字节都不许动");
+            Assert.True(File.Exists(harness.Volume001), "越界的其余物一个字节都不许动");
             Assert.Empty(harness.DeleteModes);
             Assert.Contains("跳过", outcome.RestSummary, StringComparison.Ordinal);
         }
@@ -252,7 +258,7 @@ namespace ArchiveFixer.Tests
                 harness.OuterPath,
                 harness.Delete);
 
-            Assert.True(Directory.Exists(harness.Plan.OutputFolder), "没删成当然还在");
+            Assert.True(File.Exists(harness.Volume001), "没删成当然还在");
             Assert.Contains("没做成", outcome.RestSummary, StringComparison.Ordinal);
             Assert.True(File.Exists(harness.OuterPath), "结果文件不受收尾影响");
         }
@@ -289,20 +295,20 @@ namespace ArchiveFixer.Tests
             string target = outputOutsideTarget ? Path.Combine(_root, "别的落点") : _root;
             Directory.CreateDirectory(target);
 
-            // ⚠ 与真管线同一条命名规则：源文件夹还在时，装分卷的文件夹让位成 `素材(1)`。
-            var reserved = new List<string>();
-
-            if (!string.IsNullOrWhiteSpace(resolution.WrapperFolderToCreate))
-            {
-                reserved.Add(resolution.WrapperFolderToCreate);
-            }
-
-            string output = outputOutsideTarget
-                ? Path.Combine(_root, "越界的其余物")
-                : PackingPaths.ResolveVolumesFolder(target, resolution.SourceName, reserved);
+            /*
+             * ⚠ 2026-09-26 追加改口径：分卷**直接落在落点目录里**（不再套一个中间文件夹），
+             * 所以"其余物"是那些**分卷文件**。这里照新模型造现场：
+             * · OutputFolder = 落点目录（除非专门测"越界"那一档）；
+             * · VolumeBasePath = `<落点>\<源名>.7z`，第一卷 = 它 + `.001`。
+             */
+            string output = outputOutsideTarget ? Path.Combine(_root, "越界的其余物") : target;
 
             Directory.CreateDirectory(output);
-            File.WriteAllBytes(Path.Combine(output, resolution.SourceName + ".7z.001"), new byte[4096]);
+
+            string volumeBase = PackingPaths.ResolveUniqueVolumeBasePath(output, resolution.SourceName);
+            string volume001 = volumeBase + ".001";
+
+            File.WriteAllBytes(volume001, new byte[4096]);
 
             string outerPath = Path.Combine(target, resolution.SourceName + ".rar");
             File.WriteAllBytes(outerPath, new byte[8192]);
@@ -315,6 +321,7 @@ namespace ArchiveFixer.Tests
                 TargetDirectory = target,
                 RunOptions = request.RunOptions,
                 OutputFolder = output,
+                VolumeBasePath = volumeBase,
                 RarPath = outerPath,
                 SevenZipOuterPath = Path.Combine(target, resolution.SourceName + ".7z"),
                 OuterContainer = outerContainer,
@@ -323,7 +330,7 @@ namespace ArchiveFixer.Tests
                 FileCount = 1
             };
 
-            var harness = new Harness(plan, source, outerPath, deleteFails);
+            var harness = new Harness(plan, source, outerPath, deleteFails) { Volume001 = volume001 };
 
             return harness;
         }
@@ -343,6 +350,9 @@ namespace ArchiveFixer.Tests
             public string SourceFolder { get; }
 
             public string OuterPath { get; }
+
+            /// <summary>造出来的第一卷（其余物 = 这些分卷文件）。</summary>
+            public string Volume001 { get; init; } = string.Empty;
 
             public bool DeleteFails { get; }
 

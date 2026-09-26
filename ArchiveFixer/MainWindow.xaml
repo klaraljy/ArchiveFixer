@@ -86,21 +86,14 @@
             </MenuItem>
         </Menu>
 
-        <!-- ============ 底部：设置保存 + 状态 / 进度 ============ -->
+        <!-- ============ 底部：状态 / 进度（「保存全部设置」已挪到选项卡那一行的最右端） ============ -->
         <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Padding="12,8" Margin="0,8,0,0">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Content="保存设置"
-                            MinWidth="96"
-                            Style="{StaticResource PrimaryButtonStyle}"
-                            Command="{Binding SaveSettingsCommand}"
-                            ToolTip="校验并写入 appsettings.json，同时把引擎相关设置推给引擎层。改设置不会自动落盘 —— 不点它，改动只在本次运行内有效。" />
-
                     <TextBlock Text="{Binding SettingsEditor.Message}"
                                Style="{StaticResource HintTextStyle}"
                                VerticalAlignment="Center"
-                               Margin="12,0,0,0"
-                               MaxWidth="520"
+                               MaxWidth="820"
                                TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding SettingsEditor.Message}" />
                 </StackPanel>
@@ -128,8 +121,49 @@
             </DockPanel>
         </Border>
 
-        <!-- ============ 六个选项卡 ============ -->
+        <!--
+            ============ 六个选项卡（「保存全部设置」在选项卡那一行的最右端）============
+
+            用户 2026-09-26："这个主界面最下面的一个保存设置按钮……将他的位置移到选项卡这一行的
+            最右端位置，而且将名字改为「保存全部设置」，就是记忆下目前用户设置的东西"。
+            做法 = 给 TabControl 换一个模板：表头那一行用 DockPanel，右边留一格放按钮；
+            选项卡内容仍然走 SelectedContent。
+        -->
         <TabControl x:Name="MainTabControl" Margin="0,0,0,0" SelectionChanged="MainTabControl_SelectionChanged">
+            <TabControl.Template>
+                <ControlTemplate TargetType="TabControl">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <DockPanel Grid.Row="0">
+                            <StackPanel DockPanel.Dock="Right"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center"
+                                        Margin="10,0,0,0">
+                                <Button Content="保存全部设置"
+                                        MinWidth="112"
+                                        Padding="12,4"
+                                        Style="{StaticResource PrimaryButtonStyle}"
+                                        Command="{Binding SaveSettingsCommand}"
+                                        ToolTip="校验并写入 appsettings.json（解压 / 清理 / 密码 / 打包 / 设置页里的全部选项都在里面），同时把引擎相关设置推给引擎层。改设置不会自动落盘 —— 不点它，改动只在本次运行内有效。" />
+                            </StackPanel>
+
+                            <TabPanel IsItemsHost="True"
+                                      Margin="0,0,0,-1"
+                                      KeyboardNavigation.TabIndex="1"
+                                      Panel.ZIndex="1" />
+                        </DockPanel>
+
+                        <ContentPresenter Grid.Row="1"
+                                          ContentSource="SelectedContent"
+                                          Margin="0,0,0,0" />
+                    </Grid>
+                </ControlTemplate>
+            </TabControl.Template>
+
             <TabItem Header="任务">
                 <tabs:TaskTab x:Name="TaskTabHost" />
             </TabItem>

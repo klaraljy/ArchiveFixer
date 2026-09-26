@@ -196,7 +196,12 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrEmpty(picked))
             {
-                Info("没有选密码（框里保持原样）。");
+                /*
+                 * ⛔ 用户 2026-09-26："为什么这个界面最上面会出现「没有选择密码（框里保持原样）」，
+                 * 你这个什么意思，我感到莫名其妙" —— 取消挑密码是**什么都没发生**，
+                 * 不该在页面顶上留一句需要他去解读的话。这里改成**不提示**（顺手把旧提示清掉）。
+                 */
+                ClearNotice();
                 return null;
             }
 
