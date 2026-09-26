@@ -250,19 +250,26 @@ namespace ArchiveFixer.Tests
         // ---------------------------------------------------------------- 第三步：轮数硬上限
 
         [Fact]
-        public async Task 一直产出新包时_最多只续解到MaxRounds轮_到顶提示还剩几个()
+        public async Task 一直产出新包时_最多只续解到设置里的最大层数_到顶提示还剩几个()
         {
-            // 链比上限多一层：跑满 MaxRounds 轮之后，正好还剩最后那一层没解。
-            int lastLevel = OneClickCoordinator.MaxRounds + 1;
+            Harness harness = CreateHarness(ChainPassword + "\n");
+
+            /*
+             * 上限**跟着设置走**（②页「最大嵌套层数」，默认 5，天花板 10）：
+             * 取生效值而不是那个常量，否则"界面说 5、程序跑 10"这种不同步在测试里也看不出来。
+             */
+            int roundLimit = harness.OneClick.RoundLimit;
+
+            // 链比上限多一层：跑满 roundLimit 轮之后，正好还剩最后那一层没解。
+            int lastLevel = roundLimit + 1;
             string outer = BuildChain(lastLevel);
 
-            Harness harness = CreateHarness(ChainPassword + "\n");
             await harness.AddPathsAsync(outer);
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(OneClickCoordinator.MaxRounds, outcome.Rounds);
-            Assert.Equal(OneClickCoordinator.MaxRounds - 1, outcome.ContinuationLayers);
+            Assert.Equal(roundLimit, outcome.Rounds);
+            Assert.Equal(roundLimit - 1, outcome.ContinuationLayers);
             Assert.True(outcome.HitRoundLimit, $"第 {lastLevel} 层还有包，应该报到上限");
             Assert.Contains("轮上限", outcome.Summary, StringComparison.Ordinal);
             Assert.False(outcome.Stopped);
@@ -286,11 +293,11 @@ namespace ArchiveFixer.Tests
             Assert.True(pending.IsSelected, "剩下的内层包要勾好，否则「继续解」点下去什么都不做");
 
             // 已经处理过的那些 + 剩下这一个（= 上限轮数 + 1）
-            Assert.Equal(OneClickCoordinator.MaxRounds + 1, harness.Vm.Tasks.Count);
+            Assert.Equal(roundLimit + 1, harness.Vm.Tasks.Count);
 
             (int sum, int scope) = ParseSummaryCounts(outcome.Summary);
             Assert.Equal(scope, sum);
-            Assert.Equal(OneClickCoordinator.MaxRounds, scope);
+            Assert.Equal(roundLimit, scope);
         }
 
         /// <summary>
@@ -302,10 +309,12 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 到上限之后继续解_把剩下的解完()
         {
-            int lastLevel = OneClickCoordinator.MaxRounds + 1;
+            Harness harness = CreateHarness(ChainPassword + "\n");
+
+            // 上限取生效值（②页「最大嵌套层数」）：链比它多一层，第一轮必然撞上限。
+            int lastLevel = harness.OneClick.RoundLimit + 1;
             string outer = BuildChain(lastLevel);
 
-            Harness harness = CreateHarness(ChainPassword + "\n");
             await harness.AddPathsAsync(outer);
 
             OneClickOutcome first = await harness.RunOneClickAsync();
@@ -328,6 +337,34 @@ namespace ArchiveFixer.Tests
             Assert.Contains(
                 harness.Engine.ExtractCalls,
                 p => p.EndsWith($"level{lastLevel}.7z", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// 轮数上限**只有一个真值来源**：②页「最大嵌套层数」（<c>AppSettings.MaxRecursionDepth</c>）。
+        ///
+        /// <para>用户 2026-09-26 原话：<i>"现在将默认的最大的解压层数改成 5，用户有需要自己会改的"</i>——
+        /// 默认 5、天花板 10，而且界面写几，一键处理这一批就只跑几轮
+        /// （⛔ 不许再出现"界面说 5、程序按 10 跑"的不同步）。</para>
+        /// </summary>
+        [Fact]
+        public void 轮数上限_默认5_跟着设置走_天花板仍然是10()
+        {
+            Harness harness = CreateHarness(ChainPassword + "\n");
+
+            Assert.Equal(5, harness.Vm.Settings.MaxRecursionDepth);
+            Assert.Equal(5, harness.OneClick.RoundLimit);
+
+            // 用户自己改大 → 当场跟着走（不需要重启、不需要重开一批）
+            harness.Vm.Settings.MaxRecursionDepth = 7;
+            Assert.Equal(7, harness.OneClick.RoundLimit);
+
+            // 超范围两头都要夹回：上面是硬上限（不变量 8），下面最小 1 轮
+            harness.Vm.Settings.MaxRecursionDepth = 99;
+            Assert.Equal(OneClickCoordinator.MaxRoundsCeiling, harness.OneClick.RoundLimit);
+            Assert.Equal(10, harness.OneClick.RoundLimit);
+
+            harness.Vm.Settings.MaxRecursionDepth = 0;
+            Assert.Equal(1, harness.OneClick.RoundLimit);
         }
 
         // ---------------------------------------------------------------- 用户的验收判据：一个源包 = 一个目录
@@ -1137,8 +1174,9 @@ namespace ArchiveFixer.Tests
         /// 每一层的产物里都有一个**新包**，所以它会一直想往下解 ——
         /// 正好用来验证轮数硬上限（不变量 8）与「继续解」（用户 2026-09-24 第 16 条追加）。
         ///
-        /// <para>层数由调用方给，而且**必须跟着 <see cref="OneClickCoordinator.MaxRounds"/> 走**：
-        /// 上限从 3 提到 10 之后，写死"四层链"的那种样本会**跑到底**、根本碰不到上限，
+        /// <para>层数由调用方给，而且**必须跟着生效的
+        /// <see cref="OneClickCoordinator.RoundLimit"/> 走**：上限从 10 收敛成"设置里的最大嵌套层数
+        /// （默认 5）"之后，写死"四层链"的那种样本会**跑到底**、根本碰不到上限，
         /// 测试就从"验证上限"悄悄变成"验证能跑完"（假绿）。</para>
         /// </summary>
         private string BuildChain(int levelCount)
@@ -1384,6 +1422,9 @@ namespace ArchiveFixer.Tests
             public MainViewModel Vm { get; }
 
             public CountingEngine Engine { get; }
+
+            /// <summary>一键处理协调器：用例要读**生效的轮数上限**（<c>RoundLimit</c>），⛔ 不许写死常量。</summary>
+            public OneClickCoordinator OneClick => _oneClick;
 
             public string OutputRoot { get; }
 

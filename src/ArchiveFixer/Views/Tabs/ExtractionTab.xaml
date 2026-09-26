@@ -181,13 +181,13 @@
 
                         <TextBox Grid.Column="1"
                                  Text="{Binding SettingsEditor.Settings.MaxRecursionDepth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="1~10。到达上限会安全停下并报告停在哪一层，不会无限展开。" />
+                                 ToolTip="1~10，默认 5。到达上限会安全停下并报告停在哪一层，不会无限展开。一键处理的续解轮数也按这一格走。" />
 
                         <TextBlock Grid.Column="2"
                                    Style="{StaticResource HintTextStyle}"
                                    Margin="8,0,0,0"
                                    VerticalAlignment="Center"
-                                   Text="1~10。到上限会停下并报告。" />
+                                   Text="1~10，默认 5。到上限会停下并报告；一键处理的续解轮数按这一格走。" />
                     </Grid>
 
                     <Grid>

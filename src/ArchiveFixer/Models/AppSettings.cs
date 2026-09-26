@@ -605,11 +605,18 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 递归最大层数（1~10）。到顶就停并报告，不做无限展开（不变量 8）。
         ///
-        /// <para>⚠ 2026-09-24 用户拍板把默认值从 3 提到 **10**，与一键处理的轮数上限
-        /// （<c>OneClickCoordinator.MaxRounds = 10</c>）统一：他原话是"你为什么只弄了两层，
-        /// 我要的一键解压时多重解压"——两个上限一个 3 一个 10 只会让人以为"有一处没生效"。</para>
+        /// <para>⚠ 2026-09-24 用户拍板把默认值从 3 提到 **10**，与一键处理的轮数上限统一：
+        /// 他原话是"你为什么只弄了两层，我要的一键解压时多重解压"——
+        /// 两个上限一个 3 一个 10 只会让人以为"有一处没生效"。</para>
+        ///
+        /// <para>⚠ <b>2026-09-26 又调回 5</b>（他原话："现在将默认的最大的解压层数从 10 改到 5 吧，
+        /// 用户有需要自己会改的"）：理由是他想明白了真实形状 —— 里面的压缩包**可能是用户想留的东西**
+        /// （游戏包里的 mod 压缩包不止一个，程序判不出来，我们只做提醒、不做判定）。
+        /// 默认少解几层 = 少一次"把你想要的东西拆了"的机会；真要深挖的人在②页改成 10 就行。
+        /// 一键处理每一批的轮数**跟着这一格走**（见 <c>OneClickCoordinator.RoundLimit</c>），
+        /// 所以"界面写 5、程序跑到 10"这种不一致不会发生。</para>
         /// </summary>
-        public int MaxRecursionDepth { get; set; } = 10;
+        public int MaxRecursionDepth { get; set; } = 5;
 
         /// <summary>
         /// 一次性迁移标记：旧的"最大层数默认 3"已经统一成 10（用户 2026-09-24 拍板）。
@@ -1047,7 +1054,9 @@ namespace ArchiveFixer.Models
                 SkipOneClickConfirm = false,
                 RemindJunkAfterImport = true,
                 RecursionMode = "SingleLayer",
-                MaxRecursionDepth = 10,
+
+                // 默认层数 = 5（用户 2026-09-26："从 10 改到 5 吧，用户有需要自己会改的"）。
+                MaxRecursionDepth = 5,
                 RecursionDefaultUnifiedToTen = true,
                 MaxPasswordAttemptsPerLayer = 10,
 

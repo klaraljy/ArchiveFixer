@@ -347,6 +347,10 @@ namespace ArchiveFixer.ViewModels
                 builder.AppendLine("ArchiveFixer " + version);
                 builder.AppendLine();
 
+                // 反馈方式也写在「关于」里（用户 2026-09-26 要求写进标题，这里同步 —— 邮箱只有一处字面量）。
+                builder.AppendLine("遇到问题请反馈给作者：发邮件 " + StatusText.FeedbackEmail);
+                builder.AppendLine();
+
                 if (SettingsEditor.Engines.Count == 0)
                 {
                     builder.AppendLine("（没有检测到任何引擎）");
@@ -2364,7 +2368,7 @@ namespace ArchiveFixer.ViewModels
             : string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
                 StatusText.ContinueOneClickHintFormat,
-                OneClickCoordinator.MaxRounds,
+                _oneClickCoordinator?.RoundLimit ?? 5,
                 _pendingContinuationCount);
 
         /// <summary>「继续解」按钮上的文案。</summary>

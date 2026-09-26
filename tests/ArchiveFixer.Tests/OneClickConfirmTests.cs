@@ -496,7 +496,7 @@ namespace ArchiveFixer.Tests
             Assert.True(harness.Vm.HasPendingContinuation);
             Assert.Contains("3", harness.Vm.ContinueOneClickButtonText, StringComparison.Ordinal);
             Assert.Contains(
-                OneClickCoordinator.MaxRounds.ToString(System.Globalization.CultureInfo.CurrentCulture),
+                harness.OneClick.RoundLimit.ToString(System.Globalization.CultureInfo.CurrentCulture),
                 harness.Vm.PendingContinuationText,
                 StringComparison.Ordinal);
             Assert.True(harness.Vm.ContinueOneClickCommand.CanExecute(null));

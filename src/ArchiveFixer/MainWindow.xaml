@@ -5,7 +5,7 @@
         xmlns:models="clr-namespace:ArchiveFixer.Models"
         xmlns:tabs="clr-namespace:ArchiveFixer.Views.Tabs"
         Style="{StaticResource AppWindowStyle}"
-        Title="ArchiveFixer 第十一版 - 批量压缩包识别与解压工具"
+        Title="{x:Static models:StatusText.AppWindowTitle}"
         Width="1400"
         Height="900"
         MinWidth="1180"

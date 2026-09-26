@@ -132,7 +132,7 @@ namespace ArchiveFixer.ViewModels
     /// 这里**刻意不碰** <c>Extraction/RecursiveExtractor</c>：那条递归路径在用户的真实文件上会卡死
     /// （历史事故见 docs/需求变更.md），所以续解用的是**已经跑通的单层解压**重复跑 ——
     /// 一轮就是一次正常的"识别 → 改名 → 解压"，只是把上一轮产出的内层包当成本轮输入，
-    /// 轮数卡死在 <see cref="MaxRounds"/> 轮（不变量 8）。RecursionMode 的默认值不动。
+    /// 轮数卡死在 <see cref="RoundLimit"/> 轮（默认 5，天花板 <see cref="MaxRoundsCeiling"/> = 不变量 8）。RecursionMode 的默认值不动。
     ///
     /// 刻意不做的事：
     /// - 不自动删源包（那是 M3 的独立开关，默认关闭，且要校验通过才删）；
@@ -142,18 +142,32 @@ namespace ArchiveFixer.ViewModels
     internal sealed class OneClickCoordinator
     {
         /// <summary>
-        /// 轮数硬上限（不变量 8）：含第一层在内一共 **10 轮**。
+        /// 轮数**硬上限**（不变量 8）：含第一层在内一共最多 **10 轮**。
         ///
         /// <para>⚠ 2026-09-24 第 16 条追加由用户拍板从 3 提到 10：他要的是**一键解到尽头**
         /// （原话："你为什么只弄了两层，我要的一键解压时多重解压……都到最后一步了还没成功"）。
         /// 但硬上限这件事本身不许取消（不变量 8）：真遇到"套了几十层"的包，继续无脑往下解
         /// 只会把时间和磁盘烧在一个可能失控的展开上。</para>
         ///
+        /// <para>⚠ <b>2026-09-26：实际用几轮改由设置决定</b>（②页「最大嵌套层数」，见
+        /// <see cref="RoundLimit"/>）—— 默认从 10 调到 **5**（他原话："现在将默认的最大的解压层数
+        /// 从 10 改到 5 吧，用户有需要自己会改的"）。这个常量从此只当**天花板**用：
+        /// 设置允许 1~10，绝不允许超过它。⛔ 界面写 5、程序跑到 10 这种不一致不许出现。</para>
+        ///
         /// <para>到顶**不是静默停下**：剩下的内层包会被加进任务列表并勾好，汇总与弹窗里写明
-        /// "还剩 N 个内层包没解"，界面给一个「继续解」按钮接着跑下一批 10 轮
+        /// "还剩 N 个内层包没解"，界面给一个「继续解」按钮接着跑下一批
         /// （见 <see cref="OneClickOutcome.PendingContinuationCount"/>）。</para>
         /// </summary>
-        internal const int MaxRounds = 10;
+        internal const int MaxRoundsCeiling = 10;
+
+        /// <summary>
+        /// 这一批实际允许跑几轮 = ②页「最大嵌套层数」（默认 5），夹在 1~<see cref="MaxRoundsCeiling"/>。
+        ///
+        /// <para>为什么跟设置走：这一格的名字就叫"最大嵌套层数"，而一键处理是主流程 ——
+        /// 两处各有一套上限只会让人以为"有一处没生效"（2026-09-24 把 3 与 10 统一成 10 就是这个原因，
+        /// 2026-09-26 它跟着 10→5 一起下来，仍然是同一个数字）。</para>
+        /// </summary>
+        internal int RoundLimit => Math.Clamp(Settings?.MaxRecursionDepth ?? 5, 1, MaxRoundsCeiling);
 
         private readonly MainViewModel _vm;
         private readonly ScanCoordinator _scanCoordinator;
@@ -704,7 +718,7 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                while (round < MaxRounds)
+                while (round < RoundLimit)
                 {
                     round++;
 
@@ -787,7 +801,7 @@ namespace ArchiveFixer.ViewModels
                         break;
                     }
 
-                    if (round >= MaxRounds)
+                    if (round >= RoundLimit)
                     {
                         hitRoundLimit = true;
 
@@ -798,7 +812,7 @@ namespace ArchiveFixer.ViewModels
                          * 只是这一批不再解它们：于是用户看到的列表里就摆着"还没解的那些包"，
                          * 汇总与弹窗写明还剩几个，界面给「继续解」接着跑下一批 10 轮。
                          *
-                         * 为什么不直接继续解完：硬上限就是不变量 8 的那道闸（见 MaxRounds 的说明）。
+                         * 为什么不直接继续解完：硬上限就是不变量 8 的那道闸（见 RoundLimit / MaxRoundsCeiling 的说明）。
                          */
                         try
                         {
@@ -812,8 +826,8 @@ namespace ArchiveFixer.ViewModels
                         AppendLog(
                             "WARN",
                             $"一键处理：第 {round + 1} 层还有 {innerArchives.Count} 个内层包，"
-                            + $"但已达到 {MaxRounds} 轮上限，本批先停在这里 —— "
-                            + $"{pendingContinuation.Count} 个内层包已加进列表并勾好，点「继续解」接着解（每次最多再解 {MaxRounds} 轮）。");
+                            + $"但已达到 {RoundLimit} 轮上限，本批先停在这里 —— "
+                            + $"{pendingContinuation.Count} 个内层包已加进列表并勾好，点「继续解」接着解（每次最多再解 {RoundLimit} 轮）。");
 
                         break;
                     }
@@ -956,7 +970,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "WARN",
-                        $"一键处理：还有更深的包没解（已达到 {MaxRounds} 轮上限），" +
+                        $"一键处理：还有更深的包没解（已达到 {RoundLimit} 轮上限），" +
                         $"{pending} 个源包的补搬没有执行 —— 内容物可能还不全，此时不动源包。");
                 }
 
@@ -1803,8 +1817,8 @@ namespace ArchiveFixer.ViewModels
                  * 他不知道还剩什么、也不知道下一步点哪里。
                  */
                 line += pendingContinuation > 0
-                    ? $" 已达到 {MaxRounds} 轮上限，还剩 {pendingContinuation} 个内层包没解（已加进列表并勾好，点「继续解」接着解）。"
-                    : $" 还有更深的内层包，但已达到 {MaxRounds} 轮上限，没有继续。";
+                    ? $" 已达到 {RoundLimit} 轮上限，还剩 {pendingContinuation} 个内层包没解（已加进列表并勾好，点「继续解」接着解）。"
+                    : $" 还有更深的内层包，但已达到 {RoundLimit} 轮上限，没有继续。";
             }
 
             return line;

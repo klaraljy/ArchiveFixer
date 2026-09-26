@@ -11,6 +11,7 @@
 
 | 日期 | 用户指示 | 落到本文 |
 |---|---|---|
+| 2026-09-26 | **换图标 + 标题栏写反馈邮箱 + 第 26 条定案（只提醒不判定）+ 默认最大嵌套层数 10 → 5** | ✅ 已落地：①**新应用图标**（蓝底 + 金箱盖 + 白箱体 + 深蓝对勾，7 档尺寸各自单独画：16/24/32/48/64/128 = 经典 DIB、256 = PNG）—— 生成器 = `scripts/make-icon.ps1` + `scripts/icon-gen/`（⛔ **不在 `ArchiveFixer.slnx` 里**，主程序构建/测试/format 不碰它；改图标 = 改绘制代码 + 跑脚本），产物 = `src/ArchiveFixer/Assets/ArchiveFixer.ico`；②**标题栏与「关于」都写反馈邮箱**：字面量只有一处 —— `StatusText.FeedbackEmail`，标题是 `StatusText.AppWindowTitle`（⛔ 不许在 XAML/VM 里再抄一遍）；③**第 26 条定案**（他原话："我不建议弄……这个可能是用户不想解压的，而且你也不好判断，现在最好的就是给用户一个提醒"）：**只提醒、不判定** —— 一键处理确认框里那条常驻提醒（`StatusText.OneClickConfirmNestedCaveat`）是唯一出口，⛔ 不做"内容物里出了归档就停"那种自动判定；④**默认最大嵌套层数 10 → 5**（"用户有需要自己会改的"）：`AppSettings.MaxRecursionDepth` 默认 5，一键处理每一批的轮数 = `OneClickCoordinator.RoundLimit`（= 夹在 1~`MaxRoundsCeiling`(10) 的那一格）—— ⛔ **不许再有第二套轮数**（"界面写 5、程序按 10 跑"就是这次拆掉的东西）；到顶照旧把剩下的内层包加进列表并勾好 + ①页「继续解」。⛔ **纪律：①凡"程序写死的数字"与"设置里的数字"指同一件事，必须只留一个真值出口（`RoundLimit`），测试也要读生效值而不是常量；②用户要求的"提醒"就是提醒 —— ⛔ 不许顺手把它做成自动行为；③二进制资产要么可复现（有生成脚本），要么写明来源。** 回归 = `InnerLayerContinuationTests`（两条改读生效值 + 新增 `轮数上限_默认5_跟着设置走_天花板仍然是10`）+ `OneClickConfirmTests`（「继续解」提示读生效值）；全量 **1740 通过 / 0 失败**；构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过；绿色目录已刷新，新图标已从 exe 里抽出来核对过 |
 | 2026-09-21 | 技术栈由 agent 决定，旧代码可以抛弃 | §3 C# / .NET 8 WPF |
 | 2026-09-21 | 以 `F:\VS2026\ArchiveFixer`（2026-08-09）为基线 | §3、§5 |
 | 2026-09-21 | 解压后清理源包做成正式功能，**默认关闭**，可一键开启，且必须"解压成功 + 校验通过"才删 | §9.5 |
@@ -194,7 +195,9 @@ src/ArchiveFixer/              工具本体（WPF + 纯逻辑分层）
 tests/ArchiveFixer.Tests/   xUnit（与本体分开；跑不起真 7z 的用例自己跳过）
 docs/                 需求评审与考古、需求变更、功能一览、设置项、打包功能、人工测试清单…
 samples/              只放**生成脚本 + 清单**，样本本体不入仓库
-scripts/              package.ps1（生成 dist；**用户说暂不打包**）
+scripts/              package.ps1（生成 dist；**用户说暂不打包**）、
+                      make-icon.ps1 + icon-gen/（重生成 `src/ArchiveFixer/Assets/ArchiveFixer.ico`；
+                      ⛔ icon-gen **不在解决方案里**，主程序构建/测试/format 都不碰它）
 dist/                 发行产物（不入库）
 README.md             一页纸（细节都在 docs/）
 AGENTS.md             开发规则（本项目特有）
@@ -220,13 +223,21 @@ dotnet test tests/ArchiveFixer.Tests/ArchiveFixer.Tests.csproj
 
 # 格式检查（.NET SDK 自带；先 --verify-no-changes 看差异，不要自动改）
 dotnet format ArchiveFixer.slnx --verify-no-changes
+
+# 重新生成应用图标（改 scripts/icon-gen/Program.cs 的绘制代码之后跑；
+# ⛔ icon-gen 不在解决方案里，不参与构建/测试/format）
+pwsh scripts/make-icon.ps1                       # 只出 ico
+pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png   # 顺带出一张预览图（自己看一眼再提交）
 ```
+
+> ⚠ 换了 .ico 之后**必须重新构建**（图标在编译期由 `/win32icon` 塞进 exe），并刷新绿色目录；
+> 核对办法：从 `E:\ArchiveFixer\ArchiveFixer.exe` 抽图标出来看（`ExtractAssociatedIcon`）。
 
 **代码风格**：沿用既有风格（4 空格缩进、私有字段 `_camelCase`、`Nullable` + `ImplicitUsings` 开启）。
 注释写**为什么**（尤其"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
 
-**验证状态（2026-09-26 第 46 条"打包重做"之后）**：`dotnet build ArchiveFixer.slnx --no-incremental` **0 错误 0 警告**；
-`dotnet test` **1692 通过 / 0 失败 / 0 跳过**（全量里 `RecursiveExtractorTests.用户确认继续后…` 与 `PasswordListStoreTests.启动_先加载记忆再逐本合并_日志只写条数与文件名` 偶发假红，**单跑必过**）；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
+**验证状态（2026-09-26 图标 / 标题邮箱 / 默认层数 5 这一批之后）**：`dotnet build ArchiveFixer.slnx --no-incremental` **0 错误 0 警告**；
+`dotnet test` **1740 通过 / 0 失败 / 0 跳过**（全量里 `RecursiveExtractorTests.用户确认继续后…` 与 `PasswordListStoreTests.启动_先加载记忆再逐本合并_日志只写条数与文件名` 偶发假红，**单跑必过**）；`dotnet format ArchiveFixer.slnx --verify-no-changes` **通过**。
 > ⚠ 真 7z 用例在**全量并发**下偶发「引擎操作失败」（实测 `RecursiveExtractorTests.用户确认继续后…`、
 > 以及 `RecursiveExtractorTests.递归取消_工作区保留` 一次、`RecursiveExtractorTests.previousDecision_只处理候选里的归档不重新全盘扫描` 一次
 > （2026-09-26 实测：`无法创建工作区目录 …\data\work\recursive\branches_…` —— 并行的几个测试集在同一秒里造递归工作区，**单跑必过**），**单跑必过**）——

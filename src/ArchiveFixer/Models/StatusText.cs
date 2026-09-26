@@ -6,6 +6,20 @@ namespace ArchiveFixer.Models
     /// </summary>
     public static class StatusText
     {
+        /// <summary>
+        /// 主窗口标题（左上角那一行）—— 用户 2026-09-26 要求把**反馈方式**写在上面：
+        /// "现在将应用左上角的应用名可以改一下，在后面加上『遇到问题反馈给作者，
+        /// 发邮件 klaraljy0617@outlook.com』"。
+        ///
+        /// <para>⛔ 邮箱是**唯一**要改的地方：About 那一块也引用 <see cref="FeedbackEmail"/>，
+        /// 不许在别处再写一遍字面量。</para>
+        /// </summary>
+        public const string AppWindowTitle =
+            "ArchiveFixer 第十一版 - 批量压缩包识别与解压工具　｜　遇到问题请反馈给作者（发邮件 klaraljy0617@outlook.com）";
+
+        /// <summary>作者的反馈邮箱（标题与「关于」共用一份）。</summary>
+        public const string FeedbackEmail = "klaraljy0617@outlook.com";
+
         // 进度文本
         public const string ProgressWaiting = "-";
         public const string ProgressProcessing = "处理中";

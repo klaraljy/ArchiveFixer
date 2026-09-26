@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    图标生成器（开发工具，**不在 ArchiveFixer.slnx 里** —— 主程序构建/测试/format 都不会碰它）。
+    用法见 scripts/make-icon.ps1。绘制用的是 System.Drawing，它跟着 WindowsForms 那一档框架引用进来
+    （UseWPF 单独用是不够的：System.Drawing.Common 不会自动被引用），本工具不写任何界面代码。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>icon-gen</AssemblyName>
+    <RootNamespace>ArchiveFixer.IconGen</RootNamespace>
+  </PropertyGroup>
+
+</Project>
