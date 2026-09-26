@@ -117,7 +117,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 缓存根目录不合法时_先不落盘并在底栏说清()
+        public void 缓存根目录不合法时_先不落盘并在日志里说清()
         {
             Harness harness = CreateHarness("badcache");
             int before = new SettingsService(harness.PathService).Load().MaxParallelExtractCount;
@@ -132,8 +132,11 @@ namespace ArchiveFixer.Tests
             Assert.Equal(before, onDisk.MaxParallelExtractCount);
             Assert.DoesNotContain("af-should-not-be-saved", onDisk.CacheRootDirectory ?? string.Empty, StringComparison.Ordinal);
 
-            // 底栏必须看得见"为什么先没存"（它不是失败，是"改好就会存"）。
-            Assert.Contains("没有自动保存", harness.Vm.SettingsAutoSaveNote, StringComparison.Ordinal);
+            // 界面上不再提示（用户 2026-09-26："彻底删除"），但日志里必须留下"为什么先没存"。
+            Assert.Contains(
+                harness.Logs,
+                line => line.Contains("设置暂时没有自动保存", StringComparison.Ordinal)
+                        && line.Contains("C 盘", StringComparison.Ordinal));
 
             // 改回合法值 → 立刻存下来（连同刚才那一项）。
             harness.Vm.Settings.CacheRootDirectory = harness.DataRoot;
@@ -155,14 +158,15 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 用户 2026-09-25 第 36 条要的"不许静默改掉你填的数字"：Normalize 会把超范围的值夹回合法区间，
-        /// 夹过就必须在**看得见的地方**说 —— 那个地方以前是底栏的"设置已保存（…已按 … 生效）"。
+        /// 夹过就必须**说清**。
         ///
         /// <para>⚠ 2026-09-26 的同步审计逮到：保存改成自动、那个框删掉之后，这条承诺**没人执行了** ——
         /// 用户填 8192、实际生效 4096，界面上一个字都没有（人工测试清单 C19 正是照这条承诺写的）。
-        /// 现在由底栏那一行说（`SettingsAutoSaveNote`）。</para>
+        /// 补回到底栏那一行；⚠ 同日他又要求"底栏那一行彻底删除"（"这个鬼东西太突兀了"）→
+        /// 现在**唯一出口是日志**（一条 WARN，含被夹回后的真实值）。</para>
         /// </summary>
         [Fact]
-        public void 填超范围的数字被夹回_底栏必须说清()
+        public void 填超范围的数字被夹回_日志必须说清()
         {
             Harness harness = CreateHarness("clamp");
 
@@ -175,16 +179,21 @@ namespace ArchiveFixer.Tests
                 AppSettings.MaxExtractionCapGiB,
                 new SettingsService(harness.PathService).Load().MaxSingleExtractedFileGiB);
 
-            // ② 底栏那一行必须说清"有一项被夹回了"，而且要说到是哪个上限。
-            Assert.Contains("夹回", harness.Vm.SettingsAutoSaveNote, StringComparison.Ordinal);
-            Assert.Contains("安全上限", harness.Vm.SettingsAutoSaveNote, StringComparison.Ordinal);
+            // ② 日志里必须说清"有一项被夹回了"，而且要说到是哪个上限、夹成了多少。
+            Assert.Contains(
+                harness.Logs,
+                line => line.Contains("超出允许范围", StringComparison.Ordinal)
+                        && line.Contains("安全上限", StringComparison.Ordinal)
+                        && line.Contains(
+                            AppSettings.MaxExtractionCapGiB.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            StringComparison.Ordinal));
 
             // 反向：没超范围时不许乱说"被夹回"。
             Harness normal = CreateHarness("clamp-ok");
 
             normal.Vm.Settings.MaxSingleExtractedFileGiB = 128;
             Assert.True(normal.Vm.AutoSaveSettingsIfChanged());
-            Assert.DoesNotContain("夹回", normal.Vm.SettingsAutoSaveNote, StringComparison.Ordinal);
+            Assert.DoesNotContain(normal.Logs, line => line.Contains("超出允许范围", StringComparison.Ordinal));
         }
 
         /// <summary>
@@ -298,7 +307,7 @@ namespace ArchiveFixer.Tests
             inCacheRoot.MaxParallelExtractCount = 7;
             new SettingsService(new PathService { DataRootDirectory = cacheRoot }).Save(inCacheRoot);
 
-            MainViewModel vm = BuildViewModel(settingsService, pathService, programData);
+            MainViewModel vm = BuildViewModel(settingsService, pathService, programData, out LogService _);
 
             Assert.Equal(7, vm.Settings.MaxParallelExtractCount);
             Assert.Equal(
@@ -318,7 +327,8 @@ namespace ArchiveFixer.Tests
             MainViewModel second = BuildViewModel(
                 new SettingsService(new PathService { DataRootDirectory = programData }),
                 new PathService { DataRootDirectory = programData },
-                programData);
+                programData,
+                out LogService _);
 
             Assert.Equal(6, second.Settings.MaxParallelExtractCount);
             Assert.False(
@@ -330,11 +340,12 @@ namespace ArchiveFixer.Tests
 
         private sealed class Harness
         {
-            public Harness(MainViewModel vm, PathService pathService, string dataRoot)
+            public Harness(MainViewModel vm, PathService pathService, string dataRoot, LogService log)
             {
                 Vm = vm;
                 PathService = pathService;
                 DataRoot = dataRoot;
+                Log = log;
             }
 
             public MainViewModel Vm { get; }
@@ -342,6 +353,11 @@ namespace ArchiveFixer.Tests
             public PathService PathService { get; }
 
             public string DataRoot { get; }
+
+            public LogService Log { get; }
+
+            /// <summary>屏幕日志的正文（判"界面上不再提示、日志里必须说清"要用它）。</summary>
+            public IEnumerable<string> Logs => Log.Logs.Select(item => item.DisplayText);
 
             public string SettingsFilePath => PathService.SettingsFilePath;
         }
@@ -373,7 +389,11 @@ namespace ArchiveFixer.Tests
                 settingsService.Save(settings);
             }
 
-            return new Harness(BuildViewModel(settingsService, pathService, dataRoot), pathService, dataRoot);
+            return new Harness(
+                BuildViewModel(settingsService, pathService, dataRoot, out LogService log),
+                pathService,
+                dataRoot,
+                log);
         }
 
         /// <summary>
@@ -383,10 +403,13 @@ namespace ArchiveFixer.Tests
         private static MainViewModel BuildViewModel(
             SettingsService settingsService,
             PathService pathService,
-            string dataRoot)
+            string dataRoot,
+            out LogService log)
         {
             string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
             string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
+
+            log = new LogService(pathService);
 
             var vm = new MainViewModel(
                 new FileScanService(),
@@ -394,7 +417,7 @@ namespace ArchiveFixer.Tests
                 new RenameService(),
                 new SevenZipEngine(),
                 new PasswordService { DataRootDirectory = dataRoot },
-                new LogService(pathService),
+                log,
                 settingsService,
                 pathService,
                 new TaskSummaryService(),

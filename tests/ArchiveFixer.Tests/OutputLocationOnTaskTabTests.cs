@@ -339,6 +339,38 @@ namespace ArchiveFixer.Tests
             Assert.Contains("StatusText.OutputLocationCopyMenuText", taskTab, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// 勾选那几个按钮**属于列表**（用户 2026-09-26："现在将一键处理那一行里有四个对文件操作的选项框
+        /// 给移到下面来，移动到列表板块上端，这个之前占着绝大部分的位置，我输出的目录文件位置都挡的看不见了"）。
+        ///
+        /// <para>判据用**位置**：这四个命令必须出现在「任务列表」那一段里，⛔ 不许留在主操作条那一段
+        /// （主操作条只剩 添加文件 / 添加文件夹 / 输出位置 / 只解压 / 一键处理 / 特定解压）。</para>
+        /// </summary>
+        [Fact]
+        public void 勾选那四个按钮在任务列表那一段_不在主操作条里()
+        {
+            string taskTab = Read("Views", "Tabs", "TaskTab.xaml");
+
+            int toolbarStart = taskTab.IndexOf("主操作条", StringComparison.Ordinal);
+            int listStart = taskTab.IndexOf("任务列表", StringComparison.Ordinal);
+
+            Assert.True(toolbarStart > 0, "①页里找不到主操作条那一段");
+            Assert.True(listStart > toolbarStart, "①页里找不到任务列表那一段（它在主操作条后面）");
+
+            foreach (string command in new[]
+                     {
+                         "SelectAllTasksCommand",
+                         "SelectNoneTasksCommand",
+                         "InvertTaskSelectionCommand",
+                         "RemoveCheckedTasksCommand"
+                     })
+            {
+                int index = taskTab.IndexOf(command, StringComparison.Ordinal);
+
+                Assert.True(index > listStart, $"{command} 必须在任务列表那一段里（用户要求移到列表上端）");
+            }
+        }
+
         /// <summary>②页那个入口一个字没动（用户："选项卡里面的也可以留着"）。</summary>
         [Fact]
         public void 解压方式页的输出位置入口照旧()

@@ -9345,6 +9345,20 @@ namespace ArchiveFixer.ViewModels
                 OutputVerificationResult? lastVerification = null;
                 int attemptedCandidates = 0;
 
+                /*
+                 * ⛔ 上限必须在**动过候选表之后**重算（2026-09-26 真机逮到的缺陷）：
+                 * 上面"跳过空密码"那一档会 `RemoveAll` 掉空密码候选，候选表因此少一个 ——
+                 * 而 `maxPasswordAttempts` 是**列目录之前**算的（`Math.Min(候选数, 每层上限)`）。
+                 * 候选数 ≤ 上限时两者相等，于是循环最后会多跑一次、`candidates[i]` 越界：
+                 * 真机现场（加密包 + 候选 10 个）就是 `开始解压，密码候选 9/10` 之后直接
+                 * `任务失败：… Index was out of range`，结论落成一句看不懂的"未知错误"。
+                 *
+                 * 顺带把"有没有被上限截断"一起重算：少了那一个之后可能已经"全都试过了"，
+                 * 仍然按旧值判就会把"密码都不对"误报成「达到密码尝试上限」。
+                 */
+                maxPasswordAttempts = Math.Min(candidates.Count, attemptLimit);
+                candidatesTruncated = candidates.Count > maxPasswordAttempts;
+
                 for (int i = 0; i < maxPasswordAttempts; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();

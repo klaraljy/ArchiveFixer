@@ -439,6 +439,32 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        /// <summary>
+        /// 确认框里那条**常驻提醒**：程序不判断"内容物里该不该有压缩包"（用户 2026-09-26 要求
+        /// 写在动手之前，原话："我们没有压缩包内容识别操作，很有可能您最终想要得到的内容物里面
+        /// 含不该解开的压缩文件，请您仔细判别和在解压方式里面调节一次解压的检测次数"）。
+        ///
+        /// <para>判据三条：①弹窗 XAML 里真的挂了那一段；②文案出自 `StatusText`（唯一来源）；
+        /// ③文案必须**指对去哪儿调**（②「解压方式」页 →「嵌套与覆盖」+ 最大层数）——
+        /// 只说"请仔细判别"而没有出口，等于把问题丢回给用户。</para>
+        /// </summary>
+        [Fact]
+        public void 确认框里有那条嵌套压缩包提醒_而且指对去哪儿调()
+        {
+            string xaml = ReadRepositoryFile(Path.Combine("src", "ArchiveFixer", "Views", "OneClickOptionsWindow.xaml"));
+
+            Assert.Contains("StatusText.OneClickConfirmNestedCaveat", xaml, StringComparison.Ordinal);
+
+            string text = StatusText.OneClickConfirmNestedCaveat;
+
+            Assert.Contains("嵌套", text, StringComparison.Ordinal);
+            Assert.Contains("解压方式", text, StringComparison.Ordinal);
+            Assert.Contains("层数", text, StringComparison.Ordinal);
+
+            // 面向用户的字符串里不许写 Markdown（UserFacingTextTests 会全量扫，这里再钉一次这条）。
+            Assert.DoesNotContain("**", text, StringComparison.Ordinal);
+        }
+
         /// <summary>一个 XAML 里所有单选按钮的 <c>x:Name</c>（拿不到就返回空集合）。</summary>
         private static IReadOnlyList<string> RadioNames(string xaml)
         {

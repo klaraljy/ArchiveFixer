@@ -51,7 +51,9 @@
                      ScrollViewer.HorizontalScrollBarVisibility="Auto">
                 <ListBox.ItemTemplate>
                     <DataTemplate>
-                        <TextBlock TextWrapping="NoWrap">
+                        <!-- 按级别上色（与①页日志区同一份口径：红 ERROR / 黄 WARN / 黑 INFO）。 -->
+                        <TextBlock TextWrapping="NoWrap"
+                                   Foreground="{Binding Level, Converter={StaticResource StatusToBrushConverter}}">
                             <!-- Run.Text 默认 TwoWay，绑只读属性必须显式 OneWay -->
                             <Run Text="{Binding TimeText, Mode=OneWay, StringFormat=[{0}]}" />
                             <Run Text=" [" />

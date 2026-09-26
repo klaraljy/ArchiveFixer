@@ -37,6 +37,22 @@ namespace ArchiveFixer.Converters
                 return DefaultBrush;
             }
 
+            /*
+             * 日志三级**先判**（用户 2026-09-26："用不同颜色的字体，就比如说用红色、黄色、黑色字体，
+             * 表示危险、警告、正常的操作"）：
+             * · ERROR → 红（危险，要处理）；
+             * · WARN  → 黄（警告，看一眼）；
+             * · INFO  → 黑（正常操作，别抢注意力）。
+             *
+             * ⚠ 为什么 INFO 要从 IsSuccessStatus 里拿出来：那一组同时服务于**任务状态列**
+             * （"已识别 / 解压成功"用绿色是对的），而日志里的 INFO 只是"进行到哪了" ——
+             * 一片绿会让"哪一行真出事了"看不出来。所以按**日志级别**这一档单独返回默认色（黑）。
+             */
+            if (string.Equals(status, "INFO", StringComparison.Ordinal))
+            {
+                return DefaultBrush;
+            }
+
             if (IsSuccessStatus(status))
             {
                 return SuccessBrush;
@@ -84,8 +100,7 @@ namespace ArchiveFixer.Converters
                 StatusText.ExtractSuccess or
                 StatusText.PasswordCorrect or
                 StatusText.Success or
-                StatusText.ProgressCompleted or
-                "INFO";
+                StatusText.ProgressCompleted;
         }
 
         private static bool IsErrorStatus(string status)

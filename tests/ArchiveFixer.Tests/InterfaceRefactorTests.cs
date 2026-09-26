@@ -3,8 +3,10 @@ using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Windows.Media;
 using System.Xml.Linq;
 using Xunit;
 
@@ -153,15 +155,19 @@ namespace ArchiveFixer.Tests
             string mainWindow = Read("MainWindow.xaml");
 
             /*
-             * 用户 2026-09-26 把"设置要手动保存"整块推翻了：
-             * 「保存全部设置」按钮与底部那个「设置已加载。」的框**都必须不在**，
-             * 底栏只留"正在处理…"（忙时）与"设置会自动保存"的告知（闲时）。
-             * ⛔ 这条是**反向**断言：以后谁再把"点一下才保存"的按钮加回来，这里立刻红。
+             * 用户 2026-09-26 把"设置要手动保存"整块推翻了，随后**连那一行告知也删掉**：
+             * 「保存全部设置」按钮、底部那个「设置已加载。」的框、以及后来那行"设置会自动保存"
+             * （他原话："这个鬼东西太突兀了，而且这个又相当于是应该，但你却非要标出来，
+             * 而且在切换选项卡的时候也会显示出来……现在彻底删除"）**都必须不在**；
+             * 底栏只留"正在处理…"（忙时那一个指示器）。
+             * ⛔ 这条是**反向**断言：以后谁再把"设置相关的一行字 / 一个按钮"加回底栏，这里立刻红
+             * （设置本身仍然是改了就自动存，见 SettingsAutoSaveTests）。
              */
             Assert.DoesNotContain("保存全部设置", mainWindow, StringComparison.Ordinal);
             Assert.DoesNotContain("SaveSettingsCommand", mainWindow, StringComparison.Ordinal);
             Assert.DoesNotContain("SettingsEditor.Message", mainWindow, StringComparison.Ordinal);
-            Assert.Contains("SettingsAutoSaveNote", mainWindow, StringComparison.Ordinal);
+            Assert.DoesNotContain("SettingsAutoSaveNote", mainWindow, StringComparison.Ordinal);
+            Assert.Contains("正在处理…", mainWindow, StringComparison.Ordinal);
 
             foreach (string moved in new[]
                      {
@@ -224,13 +230,25 @@ namespace ArchiveFixer.Tests
 
             List<XElement> rows = document.Descendants(Presentation + "RowDefinition").ToList();
 
-            // 日志行默认 28*（约占这一页高度的 28%），列表行 72* 且最小 160 ——
-            // 分隔条拖到底也压不掉列表（"只有两个框变大"那种病就是从固定高度来的）。
-            Assert.Contains(rows, row => (string?)row.Attribute(X + "Name") == "LogRow"
-                                         && (string?)row.Attribute("Height") == "28*");
+            /*
+             * 比例（用户 2026-09-26："将界面比例调整好"）：日志行 22*、列表行 78* 且最小 180 ——
+             * 列表拿大头，分隔条拖到底也压不掉列表（"只有两个框变大"那种病就是从固定高度来的）。
+             * ⚠ 断言的是**关系**（都是星号伸缩 + 列表那份更大 + 各自有下限），⛔ 不锁死具体数字：
+             * 哪天再调一次比例不该把这条测试改成"改数字"。
+             */
+            XElement logRow = Assert.Single(rows, row => (string?)row.Attribute(X + "Name") == "LogRow");
 
-            Assert.Contains(rows, row => (string?)row.Attribute("Height") == "72*"
-                                         && (string?)row.Attribute("MinHeight") == "160");
+            Assert.EndsWith("*", (string?)logRow.Attribute("Height"), StringComparison.Ordinal);
+            Assert.Equal("72", (string?)logRow.Attribute("MinHeight"));
+
+            XElement listRow = Assert.Single(rows, row => (string?)row.Attribute("MinHeight") == "180");
+
+            Assert.EndsWith("*", (string?)listRow.Attribute("Height"), StringComparison.Ordinal);
+
+            int listWeight = int.Parse(((string?)listRow.Attribute("Height"))![..^1], System.Globalization.CultureInfo.InvariantCulture);
+            int logWeight = int.Parse(((string?)logRow.Attribute("Height"))![..^1], System.Globalization.CultureInfo.InvariantCulture);
+
+            Assert.True(listWeight > logWeight, $"列表那一行必须比日志那一行大（现在 {listWeight}* vs {logWeight}*）");
 
             // 固定高度的行一个都不许有（第 20 条：拉大窗口时必须跟着伸缩）。
             Assert.DoesNotContain(rows, row => ((string?)row.Attribute("Height"))?.EndsWith("px", StringComparison.Ordinal) == true);
@@ -241,6 +259,56 @@ namespace ArchiveFixer.Tests
             string logWindow = Read("Views", "LogWindow.xaml");
 
             Assert.Contains("ItemsSource=\"{Binding Logs}\"", logWindow, StringComparison.Ordinal);
+
+            /*
+             * 日志**按级别上色**（用户 2026-09-26："用不同颜色的字体，就比如说用红色、黄色、黑色字体，
+             * 表示危险、警告、正常的操作"）：两处日志（①页与放大窗口）都必须把 Foreground 绑到
+             * 级别上，⛔ 不许只有一处上色。
+             */
+            foreach (string file in new[] { Path.Combine("Views", "Tabs", "TaskTab.xaml"), Path.Combine("Views", "LogWindow.xaml") })
+            {
+                string text = file.Contains("LogWindow", StringComparison.Ordinal) ? logWindow : Read(file);
+
+                Assert.Contains(
+                    "Foreground=\"{Binding Level, Converter={StaticResource StatusToBrushConverter}}\"",
+                    text,
+                    StringComparison.Ordinal);
+            }
+        }
+
+        /// <summary>
+        /// 日志三级 → 颜色：**红 = ERROR、黄 = WARN、黑 = INFO**（用户 2026-09-26 点名的那三种）。
+        ///
+        /// <para>⛔ 反向约束：INFO 不许用绿色（那条路以前把 INFO 归进了"成功色"，于是一片绿，
+        /// "哪一行真出事了"看不出来）—— 任务状态列的成功色不受影响。</para>
+        /// </summary>
+        [Fact]
+        public void 日志三级分别是红黄黑()
+        {
+            var converter = new Converters.StatusToBrushConverter();
+
+            Brush Convert(string level) => (Brush)converter.Convert(level, typeof(Brush), null!, CultureInfo.InvariantCulture);
+
+            Color warn = ((SolidColorBrush)Convert("WARN")).Color;
+            Color error = ((SolidColorBrush)Convert("ERROR")).Color;
+            Color info = ((SolidColorBrush)Convert("INFO")).Color;
+
+            // 红：红分量最大。
+            Assert.True(error.R > error.G && error.R > error.B, $"ERROR 该是红的，实际 {error}");
+            Assert.Equal(converter.DefaultBrush, Convert("INFO"));
+            Assert.NotEqual(converter.DefaultBrush, Convert("WARN"));
+
+            // 黄/橙：红绿都高、蓝低（不锁死具体色值，只钉"黄系"这个事实）。
+            Assert.True(warn.R > 180 && warn.G > 90 && warn.B < 80, $"WARN 该是黄/橙系，实际 {warn}");
+            Assert.NotEqual(error, warn);
+
+            // 黑（默认色）也得是深色，否则"正常操作"会看不清。
+            var black = (SolidColorBrush)converter.DefaultBrush;
+            Assert.True(black.Color.R < 96 && black.Color.G < 96 && black.Color.B < 96, $"默认色该是深色，实际 {black.Color}");
+
+            // 任务状态列的成功色不受影响（它仍然要是绿的）。
+            Color success = ((SolidColorBrush)Convert(StatusText.ExtractSuccess)).Color;
+            Assert.True(success.G > success.R && success.G > success.B, $"成功态该是绿的，实际 {success}");
         }
 
         // ================================================================ ⑤ 菜单只剩三组 + 命令不丢

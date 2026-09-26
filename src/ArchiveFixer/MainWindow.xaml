@@ -89,40 +89,32 @@
         <!--
             ============ 底部：只有"正在干活"那一条 ============
 
-            用户 2026-09-26："你那个按钮和最下面一个框，框里面写着设置已加载都要删除"。
-            所以这一条**不再显示任何设置相关的文字**（那句"设置已加载。"以前会停在那儿，
-            他读成"每次点完就消失 = 没保存"）；设置现在是**改了就自动存**，
-            没有任何"要你点一下"的东西（见 MainViewModel.AutoSaveSettingsIfChanged）。
+            用户 2026-09-26 两次点名："你那个按钮和最下面一个框，框里面写着设置已加载都要删除" →
+            "就是提醒用户设置会自动保存的，这个鬼东西太突兀了，而且**在切换选项卡的时候也会显示出来**……
+            这个让用户决定，**现在彻底删除**"。
+
+            所以这一条**只有"正在处理…"那一个指示器**：设置相关的字**一个字都不留**
+            （设置本身仍然是"改了就自动存"，底栏不需要为此占一行；某项不合法时**不再在界面上提示**，
+            只有日志里一条 WARN —— 这是用户 2026-09-26 明确选的取舍，见 AGENTS.md §0 那一行）。
         -->
         <Border DockPanel.Dock="Bottom" Style="{StaticResource CardStyle}" Padding="12,8" Margin="0,8,0,0">
-            <DockPanel>
-                <StackPanel DockPanel.Dock="Right"
-                            Orientation="Horizontal"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center"
-                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <TextBlock Text="正在处理…（界面在干活，长任务请耐心等；随时可以「停止后续」）"
-                               Style="{StaticResource HintTextStyle}"
-                               VerticalAlignment="Center"
-                               Margin="0,0,10,0" />
-
-                    <ProgressBar IsIndeterminate="True"
-                                 Height="4"
-                                 Width="180"
-                                 VerticalAlignment="Center"
-                                 Foreground="{StaticResource PrimaryBrush}"
-                                 Background="{StaticResource PrimarySoftBrush}"
-                                 BorderThickness="0" />
-                </StackPanel>
-
-                <!-- 空闲时这里显示"设置已经自动存好了"的最近一次结论（不是要你点的东西）。 -->
-                <TextBlock Text="{Binding SettingsAutoSaveNote}"
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock Text="正在处理…（界面在干活，长任务请耐心等；随时可以「停止后续」）"
                            Style="{StaticResource HintTextStyle}"
                            VerticalAlignment="Center"
-                           MaxWidth="820"
-                           TextTrimming="CharacterEllipsis"
-                           ToolTip="{Binding SettingsAutoSaveNote}" />
-            </DockPanel>
+                           Margin="0,0,10,0" />
+
+                <ProgressBar IsIndeterminate="True"
+                             Height="4"
+                             Width="180"
+                             VerticalAlignment="Center"
+                             Foreground="{StaticResource PrimaryBrush}"
+                             Background="{StaticResource PrimarySoftBrush}"
+                             BorderThickness="0" />
+            </StackPanel>
         </Border>
 
         <!--

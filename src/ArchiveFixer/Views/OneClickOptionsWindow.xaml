@@ -1,6 +1,7 @@
 <Window x:Class="ArchiveFixer.Views.OneClickOptionsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:ArchiveFixer.Models"
         Style="{StaticResource AppWindowStyle}"
         Title="一键处理 · 确认"
         Width="620"
@@ -65,6 +66,18 @@
                            Margin="0,6,0,0"
                            TextWrapping="Wrap"
                            Text="{Binding SourceEcho}" />
+
+                <!--
+                    常驻提醒：程序不判断"内容物里该不该有压缩包"（用户 2026-09-26 点名要写在动手之前）。
+                    文案唯一来源 = StatusText.OneClickConfirmNestedCaveat（含"去哪儿调"）。
+                -->
+                <TextBlock x:Name="NestedCaveatText"
+                           x:FieldModifier="public"
+                           Margin="0,8,0,0"
+                           TextWrapping="Wrap"
+                           FontSize="11.5"
+                           Foreground="{StaticResource WarningTextBrush}"
+                           Text="{x:Static models:StatusText.OneClickConfirmNestedCaveat}" />
 
                 <!--
                     特定解压那一行（用户 2026-09-24）：**只有开着的时候才出现** ——

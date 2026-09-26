@@ -23,9 +23,14 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="72*" MinHeight="160" />
+            <!--
+                比例（用户 2026-09-26："将界面比例调整好"）：列表拿大头（78*）、日志 22* ——
+                勾选那一排搬到列表上方之后，主操作条回到一行，列表又多了十几像素；
+                日志那一条仍然够看三五行，需要看全的时候有「日志放大」。
+            -->
+            <RowDefinition Height="78*" MinHeight="180" />
             <RowDefinition Height="Auto" />
-            <RowDefinition x:Name="LogRow" Height="28*" />
+            <RowDefinition x:Name="LogRow" Height="22*" MinHeight="72" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
@@ -112,37 +117,6 @@
                 </Grid>
 
                 <WrapPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <Button Content="全选"
-                            MinWidth="60"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            ToolTip="勾选列表里的全部任务（Ctrl+A）"
-                            Command="{Binding SelectAllTasksCommand}" />
-
-                    <Button Content="全不选"
-                            MinWidth="68"
-                            Margin="6,0,0,0"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            ToolTip="取消全部勾选（Ctrl+D）—— 想只解其中一个时，先点这里再点那一行"
-                            Command="{Binding SelectNoneTasksCommand}" />
-
-                    <Button Content="反选"
-                            MinWidth="60"
-                            Margin="6,0,12,0"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            ToolTip="勾上的取消、没勾的勾上（Ctrl+I）"
-                            Command="{Binding InvertTaskSelectionCommand}" />
-
-                    <!--
-                        第 15 条："列表要能删无用物"。只动列表，源文件不动 ——
-                        所以它摆在勾选那三个按钮旁边，语气也是普通的（不是红色危险按钮）。
-                    -->
-                    <Button Content="移除勾选的"
-                            MinWidth="88"
-                            Margin="0,0,12,0"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            ToolTip="把勾选的任务从列表里去掉（源文件、输出目录、日志一个字节都不动；移除错了再添加一次就回来）"
-                            Command="{Binding RemoveCheckedTasksCommand}" />
-
                     <!--
                         第 16 条追加：上一批撞到 10 层上限时，这一颗才出现（HasPendingContinuation）。
                         它复用一键处理本身 —— 剩下的内层包在上批结束时已经加进列表并勾好了。
@@ -269,6 +243,59 @@
         <!-- ============ 任务列表 ============ -->
         <Border Grid.Row="3" Style="{StaticResource CardStyle}" Padding="0">
             <DockPanel>
+                <!--
+                    勾选那一排（用户 2026-09-26："现在将一键处理那一行里有四个对文件操作的选项框给移到下面来，
+                    移动到列表板块上端，这个之前占着绝大部分的位置，我输出的目录文件位置都挡的看不见了"）。
+
+                    为什么就该在这一排：全选 / 全不选 / 反选 / 移除勾选的**只作用于这张列表**，
+                    放在主操作条上既挤走了「输出位置」那条路径、又让"选任务"和"选文件"两件事混在一行。
+                    ⛔ 主操作条现在只留：添加文件 / 添加文件夹 / 输出位置 / 只解压 / 一键处理 / 特定解压。
+                -->
+                <Border DockPanel.Dock="Top"
+                        Background="{StaticResource PanelBrush}"
+                        BorderBrush="{StaticResource PanelBorderBrush}"
+                        BorderThickness="0,0,0,1"
+                        CornerRadius="{StaticResource CardCornerRadiusTop}"
+                        Padding="12,6">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="勾选："
+                                   Style="{StaticResource LabelTextStyle}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,4,0" />
+
+                        <Button Content="全选"
+                                MinWidth="60"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTip="勾选列表里的全部任务（Ctrl+A）"
+                                Command="{Binding SelectAllTasksCommand}" />
+
+                        <Button Content="全不选"
+                                MinWidth="68"
+                                Margin="6,0,0,0"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTip="取消全部勾选（Ctrl+D）—— 想只解其中一个时，先点这里再点那一行"
+                                Command="{Binding SelectNoneTasksCommand}" />
+
+                        <Button Content="反选"
+                                MinWidth="60"
+                                Margin="6,0,0,0"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTip="勾上的取消、没勾的勾上（Ctrl+I）"
+                                Command="{Binding InvertTaskSelectionCommand}" />
+
+                        <!--
+                            第 15 条："列表要能删无用物"。只动列表，源文件不动 ——
+                            所以它和勾选那三个挨着，语气也是普通的（不是红色危险按钮）。
+                        -->
+                        <Button Content="移除勾选的"
+                                MinWidth="88"
+                                Margin="6,0,0,0"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTip="把勾选的任务从列表里去掉（源文件、输出目录、日志一个字节都不动；移除错了再添加一次就回来）"
+                                Command="{Binding RemoveCheckedTasksCommand}" />
+                    </StackPanel>
+                </Border>
+
                 <Border DockPanel.Dock="Top"
                         Background="{StaticResource InfoSoftBrush}"
                         BorderBrush="{StaticResource InfoBorderBrush}"
@@ -584,7 +611,13 @@
                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock TextWrapping="NoWrap">
+                            <!--
+                                按级别上色（用户 2026-09-26："用不同颜色的字体……红色、黄色、黑色字体，
+                                表示危险、警告、正常的操作"）：红 = ERROR、黄 = WARN、黑 = INFO。
+                                唯一实现是 StatusToBrushConverter（任务状态列同一份口径）。
+                            -->
+                            <TextBlock TextWrapping="NoWrap"
+                                       Foreground="{Binding Level, Converter={StaticResource StatusToBrushConverter}}">
                                 <!--
                                     ⚠ 必须显式写 Mode=OneWay：Run.Text 在 WPF 里**默认是 TwoWay**，
                                     而 TimeText 是只读计算属性，不写会在模板实例化时抛 XamlParseException。

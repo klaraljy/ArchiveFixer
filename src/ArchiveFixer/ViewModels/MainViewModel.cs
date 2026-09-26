@@ -904,7 +904,6 @@ namespace ArchiveFixer.ViewModels
                     {
                         _lastAutoSaveBlockNote = blocked;
                         AppendLog("WARN", $"设置暂时没有自动保存：{blocked}（改好之后会自动存，不用点任何按钮）");
-                        SettingsAutoSaveNote = $"设置暂时没有自动保存：{blocked}";
                     }
 
                     return false;
@@ -914,17 +913,12 @@ namespace ArchiveFixer.ViewModels
 
                 if (!WriteSettingsToDisk("设置"))
                 {
-                    SettingsAutoSaveNote = "设置没能写进磁盘（磁盘只读 / 被占用？）—— 改好之后会自动再试一次。";
                     return false;
                 }
 
                 AppendLog("INFO", "设置已自动保存（改动即时落盘，重启后仍在）");
 
                 string clampNotice = SettingsViewModel.DescribeClampNotice(requested, Settings);
-
-                SettingsAutoSaveNote = clampNotice.Length > 0
-                    ? "设置已自动保存，不过有一项被夹回合法范围：" + clampNotice
-                    : "设置已自动保存 —— 改哪一项都会立刻存下来，重启后还在（不用点任何按钮）。";
 
                 if (clampNotice.Length > 0)
                 {
@@ -967,14 +961,6 @@ namespace ArchiveFixer.ViewModels
                  * 放在这个唯一出口上，五条路就都跟着刷新了。
                  */
                 ApplySettingsSideEffectsAfterSave();
-
-                /*
-                 * 底栏那一行也要跟着说一声（2026-09-26）：⑤页改打包那几档走的就是这条路，
-                 * 以前它只写盘、一句话都不说 —— 用户改完看不到任何确认，只能读成"没保存"。
-                 * （自动保存那条路随后会用更具体的措辞覆盖这一句，见 AutoSaveSettingsIfChanged。）
-                 */
-                SettingsAutoSaveNote = "设置已自动保存 —— 改哪一项都会立刻存下来，重启后还在（不用点任何按钮）。";
-
                 return true;
             }
 
@@ -982,17 +968,18 @@ namespace ArchiveFixer.ViewModels
             return false;
         }
 
-        private string _settingsAutoSaveNote = "设置会自动保存：改哪一项都会立刻存下来，重启后还在。";
-
-        /// <summary>
-        /// 底栏那一行"设置现在是什么状态"（用户 2026-09-26 把原来那个「设置已加载。」的框换掉——
-        /// 他要的是"不用管、自己会存"，所以这一行只做**告知**，⛔ 绝不是要你点一下的东西）。
-        /// </summary>
-        public string SettingsAutoSaveNote
-        {
-            get => _settingsAutoSaveNote;
-            private set => SetProperty(ref _settingsAutoSaveNote, value);
-        }
+        /*
+         * 「底栏那一行设置状态」整块删除（用户 2026-09-26）：
+         *
+         * 原话："就是提醒用户设置会自动保存的，这个鬼东西太突兀了，而且这个又相当于是应该，
+         * 但你却非要标出来，而且在切换选项卡的时候也会显示出来……这个让用户决定，现在彻底删除。"
+         *
+         * 于是：界面上**一个字都不留**（连"这一步先没存"也不提示）——
+         * 代价是他自己选的，只保留日志里的那两条 WARN：
+         * · 某项不合法（缓存根目录落 C 盘 / 工具路径不存在）→ `设置暂时没有自动保存：<原因>`；
+         * · 写盘失败 → `<某处>没能写进设置（写盘失败：磁盘只读 / 被占用？）`。
+         * ⛔ 不许再把"设置已自动保存"这类报平安的话挂回界面上（那是程序自己的状态）。
+         */
 
         /// <summary>被自动保存拦住的理由（用来"同一句话只说一次"）。</summary>
         private string _lastAutoSaveBlockNote = string.Empty;
