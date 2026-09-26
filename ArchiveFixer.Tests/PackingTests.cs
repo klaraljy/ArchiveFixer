@@ -632,6 +632,97 @@ namespace ArchiveFixer.Tests
                 line => line.Contains("7-Zip", StringComparison.Ordinal) && line.Contains("版本", StringComparison.Ordinal));
         }
 
+        /// <summary>
+        /// 真 7z 端到端（2026-09-26 第 46 条）：**源是一个文件**。
+        ///
+        /// <para>这是他在真机上最先会试的那一档（他原话："选一个文件也可以"），而它比"源是文件夹"多了三件事：
+        /// ①在文件**旁边**建同名文件夹、把文件**硬链接**进去（零字节搬动）；②那个文件夹算**其余物**
+        /// （"他不算是原包的内容"），默认档下要跟着装分卷的文件夹一起被删掉；
+        /// ③装分卷的文件夹会因为"同名文件夹已经被占用"而叫 <c>单文件源(1)</c>。
+        /// ⛔ 全程**原文件一个字节都不能动**（硬链接删除不影响它 —— 这一条必须真跑才算数）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 真7z端到端_源是单个文件_硬链接进同名文件夹_收尾后只剩产物与原件()
+        {
+            string sevenZip = LocateSevenZip();
+
+            if (string.IsNullOrEmpty(sevenZip))
+            {
+                Skip("测试机上没有内置 7z.exe");
+                return;
+            }
+
+            var tools = new ToolLocator();
+
+            const string baseName = "单文件源";
+
+            string sourcePath = Path.Combine(_root, baseName + ".bin");
+            byte[] payload = new byte[1_500_000];
+
+            Random.Shared.NextBytes(payload);
+            File.WriteAllBytes(sourcePath, payload);
+
+            string before = Sha256Of(sourcePath);
+
+            var service = new PackingService(tools, null, _ => long.MaxValue);
+
+            PackingResult result = await service.PackAsync(new PackingRequest
+            {
+                SourceFolder = sourcePath,
+                VolumeSizeBytes = OneMebibyte,
+                Password = SamplePassword,
+                RunOptions = new PackingRunOptions
+                {
+                    TargetMode = PackingTargetMode.Local,
+                    SourceHandling = PackingSourceHandling.KeepInPlace,
+                    RestHandling = PackingRestHandling.Delete
+                }
+            });
+
+            Assert.True(result.Success, result.Describe());
+
+            // 产物名**以源名为准**，跟着实际容器走（本机有 Rar.exe 就是 .rar，否则自动 7z）。
+            string expectedOuter = Path.Combine(
+                _root,
+                baseName + (result.OuterContainer == PackOuterContainer.Rar ? ".rar" : ".7z"));
+
+            Assert.Equal(expectedOuter, result.OuterPath);
+            Assert.True(File.Exists(expectedOuter), "最终产物必须真的在磁盘上");
+
+            // ① 原文件：还在原地、内容一个字节不差（硬链接被删掉不影响它）。
+            Assert.True(File.Exists(sourcePath), "原文件必须还在原地");
+            Assert.Equal(before, Sha256Of(sourcePath));
+
+            // ② 默认档：临时建的同名文件夹 + 装分卷的文件夹**都已经删掉**（落点目录里不再有任何目录）。
+            Assert.False(Directory.Exists(Path.Combine(_root, baseName)), $"临时建的同名文件夹应当已被删掉：{baseName}");
+            Assert.False(Directory.Exists(Path.Combine(_root, baseName + "(1)")), "装分卷的文件夹应当已被删掉");
+            Assert.Empty(Directory.GetDirectories(_root));
+            Assert.Contains("已彻底删除", result.CleanupNote, StringComparison.Ordinal);
+
+            // ③ 日志里不许出现密码明文（这一条走的是 -hp / -p，两种形态都不能漏）。
+            Assert.DoesNotContain(
+                SamplePassword,
+                string.Join("\n", result.LogLines),
+                StringComparison.Ordinal);
+
+            // ④ 产物里面装的是"那个同名文件夹 + 其中的分卷"（用真引擎自己列一遍）。
+            //
+            // ⚠ 这里**用内置 7-Zip 列 rar**，不用 `Rar.exe lb`：Rar.exe 的输出是**控制台代码页**
+            // （本机 936），而测试的 RunProcess 按 UTF-8 解码 —— 英文名看不出来，**中文名会变成乱码**
+            // 而让断言假红（第一次就是这么红的）。服务自己那条 rar 校验走的是 OEM 解码（已实测通过），
+            // 这里换 7-Zip + `-sccUTF-8` 就能拿到正确的中文条目名。
+            (int exit, string stdout, string stderr) = RunSevenZip(
+                sevenZip,
+                "l", "-slt", "-sccUTF-8", "-y", "-p" + SamplePassword, expectedOuter);
+
+            Assert.True(exit == 0, $"7-Zip 应当能列出产物条目（退出码 {exit}）：{stdout}{stderr}");
+
+            IReadOnlyList<string> entries = PackingVerifier.ParseSevenZipSltList(stdout);
+
+            Assert.Contains(entries, e => e.EndsWith(baseName + ".7z.001", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(entries, e => e.EndsWith(baseName + "(1)", StringComparison.OrdinalIgnoreCase));
+        }
+
         [Fact]
         public async Task 真7z端到端_两层都做_rar里装的是B这一层()
         {
@@ -1482,6 +1573,14 @@ namespace ArchiveFixer.Tests
             string local = Path.Combine(AppContext.BaseDirectory, "tools", "7zip", "7z.exe");
 
             return File.Exists(local) ? local : string.Empty;
+        }
+
+        /// <summary>文件内容的 SHA-256（用来钉"原文件一个字节都没动"）。</summary>
+        private static string Sha256Of(string path)
+        {
+            using FileStream stream = File.OpenRead(path);
+
+            return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
         }
 
         /// <summary>
