@@ -257,6 +257,11 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
 - **「不删原包」安全档 + 空间侦察**（2026-09-27 晚，用户追加）：
+  - ⚠ **「不删原包」是"测试期专用"的**（用户 2026-09-27 原话："这个我想好像在测试完成之后就不用留着，
+    因为这个本来就是测试，如果用户有这个空余空间那就不用测试了，直接解压就行了，**打包软件的时候我会让你删掉的**"）
+    —— 到"打包发行"那一轮要把它整块删掉（`MainViewModel.SpaceTightKeepSource`、①页那颗勾、
+    `_spaceTightKeepSourceThisBatch` 与它那两条文案、`StatusText.SpaceTightKeepSource*`、
+    相关用例），**空间侦察（`SpaceTrendMonitor`）保留**（它不属于测试专用，是"空间怎么变"的常规交代）。
   - ①页「空间不足」**右边**那颗勾 = 那个模式的**安全档**（`MainViewModel.SpaceTightKeepSource`，同样是运行期开关）：
     并发 / 排序 / 其余物删除三件事与默认档完全一样，唯一差别是**源包一个字节都不动**
     （`ExtractionCoordinator._spaceTightKeepSourceThisBatch` → `PostProcessSuccessAsync` 里那一支什么都不做）。
