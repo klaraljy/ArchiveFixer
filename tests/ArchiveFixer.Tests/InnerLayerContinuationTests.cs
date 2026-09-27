@@ -1015,6 +1015,51 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(rest, "inner.7z.001")), "内层分卷也应该在同一个其余物里");
         }
 
+        // ---------------------------------------------------------------- 落点模型 v2：手动档「解压到当前文件夹」
+
+        /// <summary>
+        /// **手动档「解压到当前文件夹」的真 7z 端到端**（用户 2026-09-27 新增的那颗按钮）：
+        /// 内容物**不建包名那一层**、直接落在源包所在的那一层，而**归档自带的那层文件夹照旧保留**
+        /// （"按包内原样解开"，不是把归档结构也拆掉）。
+        ///
+        /// <para>形状：<c>&lt;root&gt;\packages\flat.7z</c> 里是 <c>内容物\payload.bin</c>。</para>
+        /// </summary>
+        [Fact]
+        public async Task 手动档解压到当前文件夹_真7z端到端_内容物落源包那一层()
+        {
+            string build = Path.Combine(_root, "flat-build");
+            Directory.CreateDirectory(Path.Combine(build, "内容物"));
+
+            WriteText(Path.Combine(build, "内容物", "payload.bin"), InnerPayloadText);
+
+            string package = BuildPackage("flat.7z", build, @"内容物\payload.bin");
+            string sourceDirectory = Path.GetDirectoryName(package)!;
+
+            Harness harness = CreateHarness($"{OuterPassword}\n");
+
+            await harness.AddPathsAsync(package);
+
+            await harness.Extraction
+                .StartExtractAsync(extractIntoSourceFolder: true)
+                .WaitAsync(TimeSpan.FromSeconds(120));
+
+            // ① 内容物落在源包那一层里（`packages\内容物\payload.bin`），**没有** `flat\` 这一层。
+            Assert.True(
+                File.Exists(Path.Combine(sourceDirectory, "内容物", "payload.bin")),
+                "手动摊平之后内容物应该落在源包所在目录里。实际目录树："
+                + string.Join(" | ", Directory.GetFileSystemEntries(sourceDirectory, "*", SearchOption.AllDirectories))
+                + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
+
+            Assert.False(
+                Directory.Exists(Path.Combine(sourceDirectory, "flat")),
+                "手动摊平不该建包名那一层");
+
+            // ② 日志里留了那句提醒（事后能回答"这批为什么没有包名那一层"）。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("本次按「解压到当前文件夹」执行", StringComparison.Ordinal));
+        }
+
         // ---------------------------------------------------------------- 落点模型 v2：续解层的两种档位
 
         /// <summary>
@@ -1576,7 +1621,7 @@ namespace ArchiveFixer.Tests
             var extraction = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
             var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
-            return new Harness(vm, engine, oneClick, outputRoot, logService);
+            return new Harness(vm, engine, oneClick, extraction, outputRoot, logService);
         }
 
         /// <summary>把汇总里的分项数字抠出来求和，用来验证"分项之和 = 本次任务数"这条硬要求。</summary>
@@ -1609,12 +1654,14 @@ namespace ArchiveFixer.Tests
                 MainViewModel vm,
                 CountingEngine engine,
                 OneClickCoordinator oneClick,
+                ExtractionCoordinator extraction,
                 string outputRoot,
                 LogService log)
             {
                 Vm = vm;
                 Engine = engine;
                 _oneClick = oneClick;
+                Extraction = extraction;
                 OutputRoot = outputRoot;
                 Log = log;
             }
@@ -1622,6 +1669,9 @@ namespace ArchiveFixer.Tests
             public MainViewModel Vm { get; }
 
             public CountingEngine Engine { get; }
+
+            /// <summary>手动那条解压入口（「只解压」/「解压到当前文件夹」走它）—— 落点模型 v2 的用例要直接调它。</summary>
+            public ExtractionCoordinator Extraction { get; }
 
             /// <summary>一键处理协调器：用例要读**生效的轮数上限**（<c>RoundLimit</c>），⛔ 不许写死常量。</summary>
             public OneClickCoordinator OneClick => _oneClick;
