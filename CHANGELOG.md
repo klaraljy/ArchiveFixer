@@ -33,7 +33,7 @@
 | 包 | 目标机要求 | 体积 |
 |---|---|---|
 | `ArchiveFixer-0.1.0-框架依赖.zip` | 需要 **.NET 8 桌面运行时（x64）** | 小 |
-| `ArchiveFixer-0.1.0-独立版.zip` | 什么都不用装 | 大 |
+| `ArchiveFixer-0.1.0-独立.zip` | 什么都不用装 | 大 |
 
 解压出来就是一个现成目录，双击 `ArchiveFixer.exe` 即用。**不要**把它放进 `C:\Program Files\`
 （程序要在自己目录下写 `data\`：日志、设置、密码列表）。
