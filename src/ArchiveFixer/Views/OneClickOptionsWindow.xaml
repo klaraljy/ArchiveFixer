@@ -281,7 +281,7 @@
                                 <TextBlock Style="{StaticResource BannerTextStyle}"
                                            Foreground="{StaticResource DangerTextBrush}"
                                            TextWrapping="Wrap"
-                                           Text="⚠ 彻底删除不可恢复：任务成功后，它的其余物（中间件，以及按上面选择搬进去的源包）会被永久删除，不进回收站。失败 / 部分完成 / 取消的任务一个字节都不删。" />
+                                           Text="⚠ 彻底删除不可恢复：任务成功后，它的其余物（过程物，以及按上面选择搬进去的源包）会被永久删除，不进回收站。失败 / 部分完成 / 取消的任务一个字节都不删。" />
                             </Border>
                         </StackPanel>
                     </GroupBox>

@@ -21,7 +21,7 @@ namespace ArchiveFixer.Tests
     /// <item><description><b>先试密码再解整包</b>：候选只解"最小的一个条目"验密码（<see cref="PasswordProbe"/>），
     /// 错了就不去跑整包；<b>加密包不试空密码</b>（引擎造不出用空密码加密的包）。</description></item>
     /// <item><description><b>链尾删除要先看整条链</b>：链上有失败 / 没跑完的任务时，其余物一个字节都不删
-    /// （他的 12.22 GiB 中间件就是这么被删掉的）。</description></item>
+    /// （他的 12.22 GiB 过程物就是这么被删掉的）。</description></item>
     /// <item><description><b>第一卷名字被改坏时，把我们自己的产物摆正</b>（<see cref="BrokenVolumeChainRepair"/>），
     /// 让那 12 GiB 的内容真的解得出来；用户自己给的源文件一个字节都不动。</description></item>
     /// </list>

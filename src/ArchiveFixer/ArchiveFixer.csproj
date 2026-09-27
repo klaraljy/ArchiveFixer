@@ -55,4 +55,28 @@
     </None>
   </ItemGroup>
 
+  <!--
+      面向用户的四份文档跟着程序一起复制到输出目录的 docs\ 下（用户 2026-09-27 真机：
+      "我选中最上端的帮助点击提示显示路径错误" —— 绿色目录 E:\ArchiveFixer\ 里根本没有 docs\，
+      而帮助菜单要按 <程序目录>\docs\使用说明.md 去找）。
+
+      ⛔ 只拷这四份"给用户看的"，不拷开发文档（需求书 / 需求变更 / AGENTS 那一类不该随分发出去）。
+      路径用 Link 固定成 docs\<名字>，与仓库里的相对位置一致 —— 帮助菜单与 scripts\package.ps1
+      读的都是同一个相对路径。
+  -->
+  <ItemGroup>
+    <None Include="..\..\docs\使用说明.md" Link="docs\使用说明.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\..\docs\功能一览.md" Link="docs\功能一览.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\..\docs\设置项.md" Link="docs\设置项.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\..\docs\人工测试清单.md" Link="docs\人工测试清单.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

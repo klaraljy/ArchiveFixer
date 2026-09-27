@@ -101,14 +101,14 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 手动「只解压」是**单层**路径：第一层只出中间件（内容物在更深的层里）时它没有"续解链"可等，
+        /// 手动「只解压」是**单层**路径：第一层只出过程物（内容物在更深的层里）时它没有"续解链"可等，
         /// 而"解压成功 + 校验通过"这个事实当场就成立 —— 所以源包**当场**搬，不延期。
         ///
         /// 这一条同时钉住"延期只属于一键处理"这件事：手动路径若也延期，就再也没有人来补搬，
         /// 源包会永远留在原地（那正是本次要修的缺陷在另一条路径上的翻版）。
         /// </summary>
         [Fact]
-        public async Task 手动只解压_第一层只出中间件_源包照样当场搬进其余物()
+        public async Task 手动只解压_第一层只出过程物_源包照样当场搬进其余物()
         {
             Harness harness = CreateHarness(settings => settings.SourceHandling = "MoveToRest");
 
@@ -269,14 +269,14 @@ namespace ArchiveFixer.Tests
                         line.Contains(movedSource, StringComparison.Ordinal));
 
             // 工作区照常清理：它必须按**暂存目录**反推（源包搬家后 CurrentPath 的哈希变了，
-            // 按 CurrentPath 重算会算到另一个目录上，于是近 1 GB 中间件静默留在工作区）。
+            // 按 CurrentPath 重算会算到另一个目录上，于是近 1 GB 过程物静默留在工作区）。
             Assert.False(Directory.Exists(workDirectory), "源包搬家之后工作区没被清理");
         }
 
         // ================================================================ ②之二 形状 B：内容物在第 2 层才出现
 
         /// <summary>
-        /// **形状 B —— 本次修的缺陷**：第一层只出内层中间件（**0 个内容物**），内容物要等续解出来的
+        /// **形状 B —— 本次修的缺陷**：第一层只出内层过程物（**0 个内容物**），内容物要等续解出来的
         /// 子任务才出现（用户真实文件：<c>222.mp4</c> = 假 MP4 头 + 尾部完整 ZIP + ZIP 里是头加密的 7z 分卷）。
         ///
         /// <para>修复前的现场：</para>
@@ -442,7 +442,7 @@ namespace ArchiveFixer.Tests
 
             harness.Vm.Tasks.Add(root);
 
-            // 第一层只出中间件 → 源包被记账成"待补搬"。
+            // 第一层只出过程物 → 源包被记账成"待补搬"。
             harness.Engine.FileNames = new[] { "inner.7z.001" };
             await harness.Coordinator.StartExtractForOneClickAsync();
 
@@ -450,7 +450,7 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, root.SourcePackageMove);
 
-            // 续解那一步没能产出内容物（第二层失败 / 没跑）→ 链尾补搬时目录里只有中间件。
+            // 续解那一步没能产出内容物（第二层失败 / 没跑）→ 链尾补搬时目录里只有过程物。
             await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { root }, new[] { root });
 
             Assert.True(File.Exists(source), "内容物没出来时源包必须原地不动");
@@ -466,7 +466,7 @@ namespace ArchiveFixer.Tests
         /// 不算"内容物已校验通过"，源包不许动。
         ///
         /// 这条是"别拿 move 计数当唯一判据"的另一半：搬是搬了，但校验这一关必须真的过 ——
-        /// 而且要看的是**产出内容物那一层**的校验，不是根任务那一层（根任务那一轮只有中间件）。
+        /// 而且要看的是**产出内容物那一层**的校验，不是根任务那一层（根任务那一轮只有过程物）。
         /// </summary>
         [Fact]
         public async Task 形状B_内容物校验没过_源包留在原地()
@@ -486,7 +486,7 @@ namespace ArchiveFixer.Tests
 
             harness.Vm.Tasks.Add(root);
 
-            // ① 第一层只出中间件 → 源包被记账成"待补搬"。
+            // ① 第一层只出过程物 → 源包被记账成"待补搬"。
             harness.Engine.FileNames = new[] { "inner.7z.001" };
             await harness.Coordinator.StartExtractForOneClickAsync();
 
@@ -540,7 +540,7 @@ namespace ArchiveFixer.Tests
             root.VolumePaths.Add(second);
             harness.Vm.Tasks.Add(root);
 
-            // 第一层只出中间件（0 内容物）→ 延期。
+            // 第一层只出过程物（0 内容物）→ 延期。
             harness.Engine.FileNames = new[] { "inner.7z.001" };
             await harness.Coordinator.StartExtractForOneClickAsync();
 
@@ -1004,7 +1004,7 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// 可控的假引擎：解压时往引擎输出目录（= 暂存目录）写 <see cref="FileNames"/> 里的那些文件，
         /// 列目录返回同样的条目（于是输出校验能通过）。与 ExtractionPipelineFixTests 的同一套，
-        /// 只多了三个钩子：换个产物清单（造"第一层只出中间件"的形状）、注入解压失败、
+        /// 只多了三个钩子：换个产物清单（造"第一层只出过程物"的形状）、注入解压失败、
         /// 在收尾那一刻按取消。
         /// </summary>
         private sealed class FakeEngine : IArchiveEngine

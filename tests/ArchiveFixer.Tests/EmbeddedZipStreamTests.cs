@@ -83,7 +83,7 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// stored（方法 0）条目：产物与源逐字节一致，而且**工作区里没有抠出来的 .zip** ——
-        /// 这正是"省掉了那份等大的临时副本"的直接证据（直读的落点只有内容物，没有任何中间件）。
+        /// 这正是"省掉了那份等大的临时副本"的直接证据（直读的落点只有内容物，没有任何过程物）。
         /// </summary>
         [Fact]
         public void Stored条目_产物逐字节一致且工作区里没有抠出来的副本()
@@ -1082,7 +1082,7 @@ namespace ArchiveFixer.Tests
 
             public string OutputRoot { get; }
 
-            /// <summary>工作区根（<c>&lt;数据根&gt;\work</c>）：抠出来的中间件会落在这里。</summary>
+            /// <summary>工作区根（<c>&lt;数据根&gt;\work</c>）：抠出来的过程物会落在这里。</summary>
             public string WorkRoot { get; }
 
             public LogService Log { get; }

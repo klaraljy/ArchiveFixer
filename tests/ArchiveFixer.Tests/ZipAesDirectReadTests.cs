@@ -579,7 +579,7 @@ namespace ArchiveFixer.Tests
 
             public string OutputRoot { get; }
 
-            /// <summary>工作区根：抠出来的中间件会落在这里（本组要求它里面**没有** .zip）。</summary>
+            /// <summary>工作区根：抠出来的过程物会落在这里（本组要求它里面**没有** .zip）。</summary>
             public string WorkRoot { get; }
 
             public LogService Log { get; }

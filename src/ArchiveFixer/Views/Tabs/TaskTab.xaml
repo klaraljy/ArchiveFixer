@@ -291,8 +291,18 @@
                                 MinWidth="88"
                                 Margin="6,0,0,0"
                                 Style="{StaticResource ToolbarButtonStyle}"
-                                ToolTip="把勾选的任务从列表里去掉（源文件、输出目录、日志一个字节都不动；移除错了再添加一次就回来）"
+                                ToolTip="{Binding RemoveCheckedTasksTooltip}"
+                                ToolTipService.ShowOnDisabled="True"
                                 Command="{Binding RemoveCheckedTasksCommand}" />
+
+                        <!--
+                            勾选合计（用户 2026-09-27："显示选中文件的大小……这样用户就能更好的察觉"）：
+                            只读、跟着勾选实时变；一个都没勾时说清"没有勾选任何任务"，⛔ 不留空白。
+                        -->
+                        <TextBlock Text="{Binding SelectedTasksSummary}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   Margin="12,0,0,0"
+                                   VerticalAlignment="Center" />
                     </StackPanel>
                 </Border>
 
@@ -408,6 +418,25 @@
                                     <Style TargetType="TextBlock">
                                         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
                                         <Setter Property="ToolTip" Value="{Binding CurrentPath}" />
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+
+                            <!--
+                                「大小」紧跟文件名（用户 2026-09-27："应该改在列表管理里面显示选中文件的大小，
+                                就排在文件名后面，这样用户就能更好的察觉"）。
+                                值由 ArchiveTask.RefreshSourceSize 采集（任务创建 / 改名 / 重扫三条路都会刷新），
+                                读不到时显示「-」，⛔ 不显示 0 字节。
+                            -->
+                            <DataGridTextColumn Header="大小"
+                                                Binding="{Binding SourceSizeText}"
+                                                Width="90"
+                                                IsReadOnly="True">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextAlignment" Value="Right" />
+                                        <Setter Property="Margin" Value="0,0,8,0" />
+                                        <Setter Property="ToolTip" Value="源文件大小（分卷按这一行文件算；整组体积见空间提示与任务详情）" />
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>

@@ -161,7 +161,7 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(shared, "a.rar.txt")));
             Assert.True(File.Exists(Path.Combine(shared, "b.7z.txt")));
 
-            // 共用根 → 其余物按包基名分层（决策 D-10），不然两个包的分卷/中间件会互相撞名。
+            // 共用根 → 其余物按包基名分层（决策 D-10），不然两个包的分卷/过程物会互相撞名。
             Assert.True(Directory.Exists(Path.Combine(shared, "其余物", "a")));
             Assert.True(Directory.Exists(Path.Combine(shared, "其余物", "b")));
         }

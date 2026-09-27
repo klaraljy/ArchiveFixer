@@ -239,7 +239,7 @@ namespace ArchiveFixer.Tests
 
             /*
              * 内层分卷落进**其余物**（契约 §3.2）：用户看到的是"一个源包 = 一个目录"，
-             * 中间件集中在 其余物 里，不再和内容物混在同一层。
+             * 过程物集中在 其余物 里，不再和内容物混在同一层。
              */
             Assert.True(File.Exists(Path.Combine(harness.OutputRoot, "outer", "其余物", "inner.7z.001")));
 
@@ -375,7 +375,7 @@ namespace ArchiveFixer.Tests
         /// 文件一多根本就分不清"</i>。
         ///
         /// 期望：处理完一个源包之后，**最终只有 <c>&lt;输出根&gt;\&lt;包名&gt;\</c> 这一个目录**，
-        /// 里面是内容物 + 一个集中的 <c>其余物</c>；中间件（内层分卷、抠出的 ZIP）一个都不许漏到外面。
+        /// 里面是内容物 + 一个集中的 <c>其余物</c>；过程物（内层分卷、抠出的 ZIP）一个都不许漏到外面。
         ///
         /// 这里用的是最像真实现场的那条链：`outer.7z` →（第一层就是内层加密分卷）→ 分卷 → 内容物。
         /// 旧实现会额外产出 <c>inner.7z\</c> 这类平级目录，而且分卷本身还和内容物躺在同一层。
@@ -407,7 +407,7 @@ namespace ArchiveFixer.Tests
             Assert.Single(payloads);
             Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
 
-            // ③ 中间件全部集中在 其余物 里，一个都不许漏在外面
+            // ③ 过程物全部集中在 其余物 里，一个都不许漏在外面
             string processDirectory = Path.Combine(outputDirectory, "其余物");
             Assert.True(Directory.Exists(processDirectory), $"其余物目录不存在：{processDirectory}");
             Assert.True(File.Exists(Path.Combine(processDirectory, "inner.7z.001")));
@@ -423,10 +423,10 @@ namespace ArchiveFixer.Tests
                 topLevel,
                 name => Assert.False(
                     OneClickCoordinator.IsArchiveStartPoint(name) || name.EndsWith(".002", StringComparison.OrdinalIgnoreCase),
-                    $"中间件漏到内容物一层了：{name}"));
+                    $"过程物漏到内容物一层了：{name}"));
 
             /*
-             * ④ 源包（含它的中间件）都进了那**一个**目录的 其余物 里 —— 用户 2026-09-22 的规则：
+             * ④ 源包（含它的过程物）都进了那**一个**目录的 其余物 里 —— 用户 2026-09-22 的规则：
              * 成功 + 校验通过就把源包放进其余物；本样本第一层没有内容物，所以发生在链结束之后。
              */
             Assert.False(File.Exists(outer), "源包应该已经被搬进其余物");

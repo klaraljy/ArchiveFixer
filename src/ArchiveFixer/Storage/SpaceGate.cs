@@ -183,7 +183,7 @@ namespace ArchiveFixer.Storage
         {
             var suggestions = new List<string>
             {
-                "先清理「其余物」（③「清理与删除」页 →「删除其余物…」）：把上一个包的源包与中间件清掉，空间立刻回来"
+                "先清理「其余物」（③「清理与删除」页 →「删除其余物…」）：把上一个包的源包与过程物清掉，空间立刻回来"
             };
 
             if (reclaimableBytes > 0)

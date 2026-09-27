@@ -74,7 +74,7 @@ namespace ArchiveFixer.ViewModels
                 AppendLog,
                 // 不变量 11 在**每一层**上的落点：递归核心每解一层之前都会问一次
                 // "这一层要解的那个源文件还是原来那一份吗"。只有第 0 层（用户给的源包）
-                // 会真的比对 —— 第 1 层起解的是工作区里我们自己产出的中间件，
+                // 会真的比对 —— 第 1 层起解的是工作区里我们自己产出的过程物，
                 // 它们本来就不在快照里（详见 CheckRootSourceUnchangedAsync）。
                 CheckRootSourceUnchangedAsync);
 
@@ -194,7 +194,7 @@ namespace ArchiveFixer.ViewModels
         /// 递归核心那一侧的检查口（不变量 11 覆盖到每一层）。
         ///
         /// <para><b>只认第 0 层</b>，也就是用户给的源包：第 1 层起解的是**我们自己**从内层抠出来的
-        /// 中间件（工作区里的文件），它们既不在源文件快照里、也不该被源文件的变化牵连 ——
+        /// 过程物（工作区里的文件），它们既不在源文件快照里、也不该被源文件的变化牵连 ——
         /// 拿源包的快照去比内层包，只会得出一句必然错误的"源文件已变化"。</para>
         ///
         /// <para>返回非 null = 已经拦下，递归核心会停止展开并把这句话当成本次的结论。</para>
@@ -401,7 +401,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>为什么必须记、不能事后重算：<see cref="PathService.BuildTaskWorkDirectory"/> 的 taskId 含
         /// **源路径哈希**，而任务收尾会把源包搬进 `其余物` 并回写 <c>task.CurrentPath</c> ——
         /// 重算出来的是**另一个**目录（<see cref="CleanupTaskWorkspaceDirectory"/> 的注释里记着这个坑：
-        /// 实测近 1 GB 中间件因为重算而"清理"了个空）。空壳清理同样只能在**当时那个**目录上做。</para>
+        /// 实测近 1 GB 过程物因为重算而"清理"了个空）。空壳清理同样只能在**当时那个**目录上做。</para>
         ///
         /// <para>键用任务对象本身（理由与 <see cref="_spaceRuntime"/> 一样），条目在任务收尾时移除。</para>
         /// </summary>
@@ -682,7 +682,7 @@ namespace ArchiveFixer.ViewModels
         /// ⚠ <b>它已经不再决定"要不要动源包"</b>（用户 2026-09-22 的新规则：两条路径一致，
         /// 成功 + 校验通过就把源包移入 <c>其余物</c>；见下方源包处理那一段）。
         /// 现在它只剩一个用处：**一键处理有续解链、手动「只解压」没有** ——
-        /// 真实文件常常"第一层只出中间件"，那时一键处理要把源包搬运留到链结束后补做，
+        /// 真实文件常常"第一层只出过程物"，那时一键处理要把源包搬运留到链结束后补做，
         /// 而单层的「只解压」当场就能按"定稿 + 校验通过"处理掉。
         /// </para>
         /// </param>
@@ -1016,7 +1016,7 @@ namespace ArchiveFixer.ViewModels
             /*
              * 记下**这一轮定稿实际使用的其余物目录**。
              *
-             * 为什么必须记：真实文件（222.mp4 = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）第一层只出中间件，
+             * 为什么必须记：真实文件（222.mp4 = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）第一层只出过程物，
              * 源包搬运要留到整条续解链跑完之后补做 —— 那一刻已经不在这一轮的收尾里了，
              * 而"其余物到底在哪"这个事实只有定稿计划知道（归集之后还会整体平移一次）。
              * 现场重算路径会在三处出错：内容物层正好也叫「其余物」时的 `其余物(1)`、
@@ -1048,10 +1048,10 @@ namespace ArchiveFixer.ViewModels
              *
              * 位置与条件都在这里定死：**解压成功 + 输出校验通过 + 没被取消**。
              * 越界 / 超预算在上面已经 return（结论不成立）；取消会让上面的 await 抛 OperationCanceledException；
-             * 校验没过时产物可能不全，工作区里的中间件是用户唯一的线索 —— 一律不删。
+             * 校验没过时产物可能不全，工作区里的过程物是用户唯一的线索 —— 一律不删。
              *
              * 入仓（stage）之后这里更要紧了：暂存目录就在本任务的工作区里，产物已经定稿搬走，
-             * 剩下的全是可再生的中间件。
+             * 剩下的全是可再生的过程物。
              */
             if (work.Verification.Verified && !cancellationToken.IsCancellationRequested)
             {
@@ -1198,7 +1198,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string budgetMessage =
                     $"解压产物超出资源预算：{producedFiles} 个文件 / {producedSize} 字节" +
-                    $"（上限 {budgetLimits.MaxFileCount} 个 / {budgetLimits.MaxTotalSize} 字节）。已停止后续任务。"
+                    $"（上限 {budgetLimits.MaxFileCount} 个 / {budgetLimits.MaxTotalSize} 字节）。已按「停止后续」停下。"
                     + ResourceBudget.CapHint;
 
                 logEntries.Add(("ERROR", $"{task.FileName}：{budgetMessage}"));
@@ -1215,7 +1215,7 @@ namespace ArchiveFixer.ViewModels
             logEntries.Add((verification.Verified ? "INFO" : "WARN", $"{task.FileName}：结果校验 —— {verification.Message}"));
 
             /*
-             * 2) 定稿（契约 §2.2）：把暂存产物**一次性**搬到最终目录，中间件归入 <c>其余物</c>。
+             * 2) 定稿（契约 §2.2）：把暂存产物**一次性**搬到最终目录，过程物归入 <c>其余物</c>。
              *
              * 只在这一刻、只有这一条路径会往最终目录写东西。之前的所有动作（抠内嵌归档、解第一层、
              * 解内层分卷）都在私有暂存目录里完成 —— 这就是用户那句"分卷文件你居然又解压到外面来了"
@@ -1324,9 +1324,9 @@ namespace ArchiveFixer.ViewModels
              * 两条路径都走这里（用户 2026-09-22 的新规则：手动「只解压」不再例外），
              * 唯一的差别是"本轮没有内容物"时怎么办，见 MoveSourcePackageIntoRest。
              *
-             * 只对**最外层源包**做：续解出来的内层包，它的"源文件"是我们自己产出的中间件
+             * 只对**最外层源包**做：续解出来的内层包，它的"源文件"是我们自己产出的过程物
              * （现在就在 <c>其余物</c> 里），既不是用户给的包，也不该被搬走/删掉 ——
-             * 用户按下"解压后删除源包"时想删的是他拖进来的那个包，不是其余物里的中间件。
+             * 用户按下"解压后删除源包"时想删的是他拖进来的那个包，不是其余物里的过程物。
              */
             SourcePackageMoveResult? sourceMove = null;
             string? sourceMoveFailure = null;
@@ -1335,7 +1335,7 @@ namespace ArchiveFixer.ViewModels
             {
                 if (sourceHandling != SourceHandlingMode.KeepInPlace)
                 {
-                    logEntries.Add(("INFO", $"{task.FileName}：内层包，源文件属于其余物里的中间件，已跳过源包处理。"));
+                    logEntries.Add(("INFO", $"{task.FileName}：内层包，源文件属于其余物里的过程物，已跳过源包处理。"));
                 }
             }
             else if (sourceHandling == SourceHandlingMode.MoveToRest)
@@ -1371,14 +1371,14 @@ namespace ArchiveFixer.ViewModels
         /// <para>
         /// <b>2026-09-22 修掉的那个真实缺陷</b>：条件 ① 原来死认"本轮搬过内容物"
         /// （<c>commit.MovedContentCount &gt; 0</c>），而用户的真实文件
-        /// （<c>222.mp4</c> = 假 MP4 头 + 尾部完整 ZIP + ZIP 里是头加密的 7z 分卷）**第一层只出中间件**，
-        /// 内容物是续解出来的子任务产出的 —— 子任务按设计跳过源包处理（它的"源文件"是我们自己的中间件），
+        /// （<c>222.mp4</c> = 假 MP4 头 + 尾部完整 ZIP + ZIP 里是头加密的 7z 分卷）**第一层只出过程物**，
+        /// 内容物是续解出来的子任务产出的 —— 子任务按设计跳过源包处理（它的"源文件"是我们自己的过程物），
         /// 于是整条一键处理流水线跑完，源包还躺在原地、其余物里只有 4 个内层分卷。
         /// 现在把它分成三种情况：
         /// </para>
         /// <list type="number">
         /// <item><description><b>本轮有内容物、且没有任何搬运失败</b> → 当场搬（原有路径）。</description></item>
-        /// <item><description><b>本轮没有内容物、但也没有任何搬运失败</b>（典型：第一层只出中间件）：
+        /// <item><description><b>本轮没有内容物、但也没有任何搬运失败</b>（典型：第一层只出过程物）：
         /// 一键处理记成"留到链结束后补搬"（<see cref="SourcePackageMoveState.DeferredToChainEnd"/>，
         /// 由 <see cref="OneClickCoordinator"/> 在整条续解链跑完之后调
         /// <see cref="CompleteRootSourcePackagesAfterChainAsync"/>）；手动「只解压」是单层路径、
@@ -1441,18 +1441,18 @@ namespace ArchiveFixer.ViewModels
             if (oneClickRun && commit.MovedContentCount == 0)
             {
                 /*
-                 * 一键处理 + 本轮没有内容物：真实文件的常见形状（第一层只出待续解的中间件）。
+                 * 一键处理 + 本轮没有内容物：真实文件的常见形状（第一层只出待续解的过程物）。
                  * 此刻"内容物已定稿"这个事实还不存在，但它**马上会由续解子任务产生** ——
                  * 所以不能像原来那样直接放弃，而要记成"留到链结束后补搬"。
                  *
-                 * 为什么只延期、不当场搬：这一轮产物全是中间件，内容物还没出现；
+                 * 为什么只延期、不当场搬：这一轮产物全是过程物，内容物还没出现；
                  * 一键处理的链可能还要跑两层，链没跑完就动源包＝在"内容物可能不全"时动用户唯一无法再生的东西。
                  */
                 task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
 
                 logEntries.Add((
                     "INFO",
-                    $"{task.FileName}：本轮产出的都是待续解的中间件（没有内容物定稿），" +
+                    $"{task.FileName}：本轮产出的都是待续解的过程物（没有内容物定稿），" +
                     $"源包先留在原地，等整条续解链跑完后再按设置搬进其余物。"));
 
                 return new SourcePackageMoveResult { Attempted = false, Message = "本轮没有内容物，源包搬运留到链结束后补搬" };
@@ -1594,7 +1594,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>
         /// 场景：<c>222.mp4</c> = 假 MP4 头 + 尾部完整 ZIP + ZIP 里是头加密的 7z 分卷。
         /// 第一层只解出 4 个内层分卷（都是"其余物"），内容物要到第 2 层续解才出现；
-        /// 而续解子任务按设计**跳过源包处理**（它的"源文件"是我们自己产出的中间件）。
+        /// 而续解子任务按设计**跳过源包处理**（它的"源文件"是我们自己产出的过程物）。
         /// 于是最外层那一轮既没有内容物、又是唯一有资格处理源包的任务 —— 整条链跑完，源包还躺在原地。
         /// 修法：最外层那一轮把源包记账成"留到链结束后补搬"，由
         /// <see cref="OneClickCoordinator"/> 在**整条续解链跑完之后**（它才知道链什么时候结束）
@@ -1609,7 +1609,7 @@ namespace ArchiveFixer.ViewModels
         /// <item><description>根任务以「解压成功」收尾、且输出校验通过，且**分卷组完整**（不完整就不动源包）；</description></item>
         /// <item><description>链里**每一个**把那个最终目录当落点的任务都通过了输出校验，而且至少有一个确实落在那里
         /// （内容物是它们共同定稿的；只看根任务会漏掉"第二层校验没过却照样搬"）；</description></item>
-        /// <item><description>那个目录里**确实有内容物文件** —— 排除 <c>其余物</c> 里的东西、排除归档/分卷这类中间件；
+        /// <item><description>那个目录里**确实有内容物文件** —— 排除 <c>其余物</c> 里的东西、排除归档/分卷这类过程物；
         /// 这就是"内容物已定稿"的事实依据；</description></item>
         /// <item><description>未取消（调用方与本方法各查一次令牌）；</description></item>
         /// <item><description><see cref="ArchiveTask.SourcePackageMove"/> 记账：只有被标记成"待补搬"且没搬过的才做，
@@ -1698,7 +1698,7 @@ namespace ArchiveFixer.ViewModels
                  * 第一层定稿时那个内层包被当成**内容物**放在成品目录里（它只是个文件，不是分卷），
                  * 于是 `RestDirectoryPath` 一直是空的 —— 用户选了「彻底删除」，链尾这一步直接
                  * 因为"没有其余物"返回，**内层包原样留在成品目录里**（`CCC\2222\222.rar`）。
-                 * 正确口径（本来就是设计里的）：中间件集中进其余物，源包与中间件一起按档处理。
+                 * 正确口径（本来就是设计里的）：过程物集中进其余物，源包与过程物一起按档处理。
                  *
                  * 判据是**事实**、不是猜名字：这个文件是这条链里某个续解任务的输入
                  * （它的 `CurrentPath`，且那个任务成功 + 校验通过）。
@@ -1710,7 +1710,7 @@ namespace ArchiveFixer.ViewModels
                  * 任务收尾那一刻其余物里还躺着内层包，删了就没法接着解）。
                  * 到得了这里就说明整条续解链已经跑完 —— 除了上面那种"待补搬"的任务，
                  * 其余成功任务也要在这里把各自的其余物按档处理掉，否则选了「彻底删除」的人会发现
-                 * 中间件那几份一直留着。
+                 * 过程物那几份一直留着。
                  */
                 await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
             }
@@ -1900,7 +1900,7 @@ namespace ArchiveFixer.ViewModels
         /// 7-Zip 按名字找不到后续卷 → 把它当"通用分片" → 解出来是一个等大的垃圾文件；
         /// 于是那 12 GiB 的内容永远出不来（用户看到的是"20 G 的素材只出来 8 G"）。</para>
         ///
-        /// <para>⛔ 只对**续解任务**（文件是我们自己从上一层解出来的中间件）改名：
+        /// <para>⛔ 只对**续解任务**（文件是我们自己从上一层解出来的过程物）改名：
         /// 那是把我们的产物摆正，不是动用户的源文件（不变量 1）。
         /// 用户自己添加的坏名字分卷走不了这一条 —— 会由后面的「通用分片」闸门如实报「分卷缺失」并给出改名建议。</para>
         ///
@@ -1948,7 +1948,7 @@ namespace ArchiveFixer.ViewModels
             AppendLog(
                 "INFO",
                 $"{task.FileName}：分卷名字被改坏，已在自己的产物里摆正 —— {plan.Describe()}"
-                + $"（源包一个字节都没动；改的是上一层解出来的中间件）。原位置：{task.CurrentPath}");
+                + $"（源包一个字节都没动；改的是上一层解出来的过程物）。原位置：{task.CurrentPath}");
 
             string previousPath = task.CurrentPath;
             task.CurrentPath = string.IsNullOrWhiteSpace(plan.FirstVolumePathAfterRename)
@@ -2015,7 +2015,7 @@ namespace ArchiveFixer.ViewModels
              * 现场：他那个 12.22 GiB 的容器（`1-20+IF1-3.7z`）第一层**成功**了、三个分卷也进了其余物；
              * 下一层 `Code Complete-BZ.7z(删掉.001` 判「分卷缺失」**失败**。链尾这一档当时只看根任务自己
              * （Succeeded + 校验通过 + 其余物在）→ 把那一份 12.22 GiB 的其余物**彻底删了**。
-             * 用户看到的是"20 G 的素材只出来 8 G"，而且那 12 G 连中间件都不在了（只剩源容器）。
+             * 用户看到的是"20 G 的素材只出来 8 G"，而且那 12 G 连过程物都不在了（只剩源容器）。
              *
              * 判据只读机器事实（终态枚举 + 校验枚举，⛔ 不比对中文文案）。
              */
@@ -2026,7 +2026,7 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(
                     "WARN",
                     $"{task.FileName}：链尾的其余物不处理（{chainBlocker}）—— 这条链没跑完，"
-                    + "中间件是这条链唯一的产物线索，一个字节都不删（失败 / 取消 / 没跑完一律不动）。");
+                    + "过程物是这条链唯一的产物线索，一个字节都不删（失败 / 取消 / 没跑完一律不动）。");
 
                 return;
             }
@@ -2079,7 +2079,7 @@ namespace ArchiveFixer.ViewModels
 
             if (rootTask.IsContinuationTask)
             {
-                // 只处理最外层源包：内层包的"源文件"是其余物里的中间件（与本轮直接搬同一口径）。
+                // 只处理最外层源包：内层包的"源文件"是其余物里的过程物（与本轮直接搬同一口径）。
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -2155,7 +2155,7 @@ namespace ArchiveFixer.ViewModels
                 // 内容物压根没出现（例如第二层解压失败 / 密码不对）：源包留在原地，其余物不为它生成。
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：{destinationDirectory} 里没有内容物（只有中间件），" +
+                    $"{rootTask.FileName}：{destinationDirectory} 里没有内容物（只有过程物），" +
                     $"链结束后不补搬源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
@@ -2212,9 +2212,9 @@ namespace ArchiveFixer.ViewModels
             {
                 /*
                  * ⚠ 链结束后的补搬有一个**顺序陷阱**（2026-09-25 第 32 条实现删除操作时被测试逮住）：
-                 * 根任务收尾那一刻它的其余物里还只有中间件，源包是**现在**才搬进去的 ——
+                 * 根任务收尾那一刻它的其余物里还只有过程物，源包是**现在**才搬进去的 ——
                  * 所以"删除操作"那一档必须在这里**再做一次**，否则选了「彻底删除 / 移入回收站」的人
-                 * 会发现"中间件被清了，源包却躺在其余物里"（正是他抱怨过的那种不一致）。
+                 * 会发现"过程物被清了，源包却躺在其余物里"（正是他抱怨过的那种不一致）。
                  *
                  * 判据与 RunRestHandlingAsync 完全同一套（RestItemPurger 的五道门槛 + 本批档位）：
                  * 到得了这里就说明"整条链跑完 + 全链校验通过 + 目录里确实有内容物 + 未取消"，
@@ -2289,7 +2289,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>
         /// 为什么要看**整条链**而不是只看根任务：用户那个形状里内容物是**续解子任务**产出的，
-        /// 根任务那一轮的校验只覆盖了"中间件都搬进去了"。只看根任务，就会出现
+        /// 根任务那一轮的校验只覆盖了"过程物都搬进去了"。只看根任务，就会出现
         /// "第二层校验没过（比如声明的条目数与落盘不符）却照样把源包搬走"。
         /// </para>
         /// <para>
@@ -2359,7 +2359,7 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 数一个最终目录里**真正的内容物文件**：排除 <c>其余物</c>（含旧名 <c>过程物</c>）里的东西，
-        /// 排除归档与分卷这类"待续解的中间件"。
+        /// 排除归档与分卷这类"待续解的过程物"。
         ///
         /// 这是"内容物确实已定稿"的事实依据 —— 不用"本轮搬了几条"这种过程数字
         /// （用户明确要求：别拿 move 计数当唯一判据）。
@@ -2406,9 +2406,9 @@ namespace ArchiveFixer.ViewModels
         /// 所以"计划路径相对 destDir 的那一段"就是它在新位置下的相对路径。三种情况：
         /// ① 归集之后的位置已经存在（其余物真的被搬过去了）→ 用它；
         /// ② 它还不存在、而计划路径还在（归集只搬走了一部分）→ 用计划路径；
-        /// ③ 两边都不存在（本次根本没有中间件）→ **跟着内容物走**，在归集目录里新建。
+        /// ③ 两边都不存在（本次根本没有过程物）→ **跟着内容物走**，在归集目录里新建。
         ///
-        /// ③ 是最容易写错的一档：没有中间件时 <c>destDir\其余物</c> 压根不存在，
+        /// ③ 是最容易写错的一档：没有过程物时 <c>destDir\其余物</c> 压根不存在，
         /// 只看"存在与否"就会退回那个**已经不存在**的旧位置，源包被扔进一个空目录（用户找不到）。
         /// </summary>
         private static string ResolveRestDirectoryAfterCollect(
@@ -2937,7 +2937,7 @@ namespace ArchiveFixer.ViewModels
             int skippedContent = 0;
             int skippedProcess = 0;
 
-            // 计划里 **内容物在前、其余物在后**：先让用户要的东西落位，再收拾中间件。
+            // 计划里 **内容物在前、其余物在后**：先让用户要的东西落位，再收拾过程物。
             foreach (PlannedMove move in plan.Moves)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -3137,7 +3137,7 @@ namespace ArchiveFixer.ViewModels
              * 而实际上校验早已判否、那 2 项是 0 字节垃圾 —— 用户看到"定稿完成"就以为流程正常走完了。
              * 现在两种情况各挂一句明确的结论：
              * · 校验未通过 → "⚠ 校验未通过，产物视为无效"；
-             * · 校验通过但一个内容物都没有 → 如实说"这次没有内容物"（那是合法的，例如只出中间件）。
+             * · 校验通过但一个内容物都没有 → 如实说"这次没有内容物"（那是合法的，例如只出过程物）。
              */
             string contentNote = plan.ContentFileCount > 0
                 ? string.Empty
@@ -3540,7 +3540,7 @@ namespace ArchiveFixer.ViewModels
              * 它必须始终指向**最终目录**（一键处理的续解、界面"输出目录"列、清理源包都读它），
              * 而现在递归的产物先落在**暂存目录**里（调用方传的就是 stage），要等定稿那一步才搬出去。
              * 旧写法 `task.OutputPath = result.FinalOutputPath` 在这里会把任务指向暂存区：
-             * 用户点"打开输出目录"会看到工作区里的中间件，续解也会去暂存区里找内层包。
+             * 用户点"打开输出目录"会看到工作区里的过程物，续解也会去暂存区里找内层包。
              */
             if (!result.Completed)
             {
@@ -6127,6 +6127,26 @@ namespace ArchiveFixer.ViewModels
 
         private bool _batchPurgedPermanently;
 
+        /// <summary>
+        /// 「停止后续」的那条日志**本批只写一次**（2026-09-27 真机：他连点两次按钮，
+        /// 日志里"已请求停止后续任务"出现两遍，跑完收尾又是第三句不同措辞）。
+        /// 批开始处（<c>_operationCts = new CancellationTokenSource()</c> 那一段）重置。
+        /// </summary>
+        private bool _stopNoticeLogged;
+
+        /// <summary>见 <see cref="StatusText.StopRequestedNotice"/>：措辞统一、只写一次。</summary>
+        private void LogStopRequestOnce()
+        {
+            if (_stopNoticeLogged)
+            {
+                return;
+            }
+
+            _stopNoticeLogged = true;
+
+            AppendLog("WARN", StatusText.StopRequestedNotice);
+        }
+
         private (int Tasks, long Bytes, bool Permanent) ReadBatchPurge()
         {
             lock (_batchPurgeGate)
@@ -6186,7 +6206,7 @@ namespace ArchiveFixer.ViewModels
         /// </para>
         /// <para>
         /// 两条路径真正的差别只剩一处（回写 <c>oneClickRun</c> 一路传到底）：**一键处理有续解链**，
-        /// 所以"第一层只出中间件"时它把源包搬运留到链结束后补做（<see cref="CompleteRootSourcePackagesAfterChainAsync"/>）；
+        /// 所以"第一层只出过程物"时它把源包搬运留到链结束后补做（<see cref="CompleteRootSourcePackagesAfterChainAsync"/>）；
         /// 单层的「只解压」没有链可等，当场按"定稿 + 校验通过"处理。
         /// 定稿、校验、归集、工作区清理的行为两条路径完全一致。
         /// </para>
@@ -6320,6 +6340,7 @@ namespace ArchiveFixer.ViewModels
                 _batchPurgedTaskCount = 0;
                 _batchPurgedBytes = 0;
                 _batchPurgedPermanently = false;
+                _stopNoticeLogged = false;
 
                 AppendLog("INFO", "开始批量解压");
 
@@ -6399,7 +6420,7 @@ namespace ArchiveFixer.ViewModels
 
                     if (IsStopping || _operationCts.IsCancellationRequested)
                     {
-                        AppendLog("WARN", "已停止后续任务，不再启动新的解压任务。");
+                        LogStopRequestOnce();
                         break;
                     }
 
@@ -6478,7 +6499,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     if (IsStopping || _operationCts.IsCancellationRequested)
                     {
-                        AppendLog("WARN", "已停止后续任务，不再启动新的解压任务。");
+                        LogStopRequestOnce();
                         break;
                     }
 
@@ -6660,22 +6681,44 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 「其余物」这一档会动到什么 —— **其余物 = 过程物 + 原包**（用户 2026-09-27 定死的口径）。
+        ///
+        /// <para>为什么必须由档位决定这句话：源包那一档选「留在原地」时，其余物里**根本没有源包**。
+        /// 2026-09-27 真机上就是这里出的洋相 —— 同一份日志一边写"源包处理：留在原地（一个字节都不搬）"，
+        /// 一边写"其余物：任务成功后会彻底删除（源包 + 过程物）"，用户直接问"我都设置了原包不动，
+        /// 你怎么还说原包在其余物里面"。</para>
+        /// </summary>
+        internal static string DescribeRestScope(SourceHandlingMode sourceHandling)
+            => sourceHandling == SourceHandlingMode.KeepInPlace
+                ? "解压过程中产生的过程物（源包留在原地：一个字节都不搬、不删）"
+                : "源包 + 过程物";
+
+        /// <summary>
+        /// 本批（或本单）生效的「源包怎么处理」——**唯一出口**：
+        /// `RunOptions`（一键处理的「本次选项」）优先，否则读设置。
+        /// </summary>
+        private SourceHandlingMode EffectiveSourceHandling
+            => RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
+
+        /// <summary>
         /// 供界面显示的"当前空间档位"一句话（其余物会不会被自动处理也在这句里说清）。
         /// </summary>
         internal string DescribeSpaceMode()
         {
             string mode = RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
+            SourceHandlingMode sourceMode = AppSettings.ParseSourceHandling(Settings.SourceHandling);
+            string scope = DescribeRestScope(sourceMode);
 
             string rest = mode switch
             {
                 RestHandlingModes.RecycleBin =>
-                    "其余物：任务成功后移入回收站（可还原；空间要等清空回收站才释放）",
+                    $"其余物：任务成功后移入回收站（{scope}；可还原，空间要等清空回收站才释放）",
                 RestHandlingModes.Delete =>
-                    "其余物：任务成功后彻底删除（源包 + 中间件，不可恢复）",
+                    $"其余物：任务成功后彻底删除（{scope}，不可恢复）",
                 _ => "其余物：保留（不动其余物）"
             };
 
-            string source = AppSettings.ParseSourceHandling(Settings.SourceHandling) == SourceHandlingMode.KeepInPlace
+            string source = sourceMode == SourceHandlingMode.KeepInPlace
                 ? "源包：留在原地"
                 : "源包：移入其余物";
 
@@ -7261,7 +7304,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         string.IsNullOrWhiteSpace(task.RestDirectoryPath)
-                            ? $"{task.FileName}：这一轮没有产生其余物（中间件就是内容物里的那个内层包）；"
+                            ? $"{task.FileName}：这一轮没有产生其余物（过程物就是内容物里的那个内层包）；"
                               + "整条续解链跑完后按「删除操作」处理内层包。"
                             : $"{task.FileName}：其余物先留着（里面还有要接着解的内层包），"
                               + "整条续解链跑完后再按「删除操作」处理。");
@@ -7381,11 +7424,18 @@ namespace ArchiveFixer.ViewModels
         {
             string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
 
+            /*
+             * 范围这句话**跟着源包那一档说**（2026-09-27 用户真机：他选了"源包留在原地"，
+             * 这条却写"彻底删除（源包 + 过程物）"，两句自相矛盾）。判据来自 `EffectiveSourceHandling`，
+             * ⛔ 不许在这里另读一遍设置。
+             */
+            string scope = DescribeRestScope(EffectiveSourceHandling);
+
             if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
             {
                 AppendLog(
                     "INFO",
-                    "其余物：本批保留（③页「删除操作」= 不动其余物）。任务成功后源包与中间件都留在成品目录里，随时可手工删。");
+                    $"其余物：本批保留（③页「删除操作」= 不动其余物）。任务成功后其余物（{scope}）留在成品目录里，随时可手工删。");
                 return;
             }
 
@@ -7393,14 +7443,14 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog(
                     "WARN",
-                    "其余物：本批任务成功后会移入回收站（可还原；空间要等清空回收站才真正释放）。"
+                    $"其余物：本批任务成功后会移入回收站（{scope}；可还原，空间要等清空回收站才真正释放）。"
                     + "失败 / 部分完成 / 取消的任务一个字节都不动。");
                 return;
             }
 
             AppendLog(
                 "WARN",
-                "其余物：本批任务成功后会彻底删除（源包 + 中间件，不进回收站、不可恢复）。"
+                $"其余物：本批任务成功后会彻底删除（{scope}，不进回收站、不可恢复）。"
                 + "失败 / 部分完成 / 取消的任务一个字节都不动。");
         }
 
@@ -7569,7 +7619,7 @@ namespace ArchiveFixer.ViewModels
         /// <para><b>默认档（<see cref="AppSettings.KeepFailedWorkspace"/> = false）：整份删掉。</b>
         /// 用户原话："我不希望有这么多的失败残留……如果解压 40G，两层，解压失败有 80G 的卸载残留，
         /// 用户不得气死……失败了就失败了，成功了就成功了"。删掉的是 <c>&lt;work&gt;\&lt;taskId&gt;</c>
-        /// 整棵（含 <c>stage</c>、抠出来的内嵌归档副本、已解出的中间件）。
+        /// 整棵（含 <c>stage</c>、抠出来的内嵌归档副本、已解出的过程物）。
         /// <b>零文件空壳无论如何都删</b>（没有现场可留，这条与设置无关；
         /// 它就是原来的"空壳当场清"，现在并进这一条）。</para>
         ///
@@ -8772,7 +8822,7 @@ namespace ArchiveFixer.ViewModels
                  * 精确空间需求（用户 2026-09-22 需求第 1 条：核算必须含内容物 + 过程物 + 去重后的峰值）。
                  *
                  * 用的是**手上这一份 list**（绝不为此再跑一次 7z：加密包每多列一次目录就多一次失败机会），
-                 * 而流程预算只算了"内容物"那一项 —— 源包在盘上还没走、抠出来的内嵌中间件、
+                 * 而流程预算只算了"内容物"那一项 —— 源包在盘上还没走、抠出来的内嵌过程物、
                  * 内层包再展开的增量、以及并发下别的任务已经占下的份额，都要在这一步一起算进来。
                  */
                 TaskSpaceEstimate refined = SpaceEstimator.RefineWithListing(
@@ -8840,13 +8890,29 @@ namespace ArchiveFixer.ViewModels
                         RestHandlingModes.Keep,
                         StringComparison.OrdinalIgnoreCase))
                 {
+                    /*
+                     * "预计可回收多少"必须**跟着源包那一档算**（2026-09-27 用户真机）：
+                     * `ReclaimableBytes` = 源包 + 过程物（那是"危险模式能收回多少"的口径），
+                     * 可源包选的是「留在原地」时它一个字节都不会被碰 —— 报 6.8 MiB 就是在骗人
+                     * （日志里那个 6.8 MiB 正是源包自己的大小）。
+                     */
+                    SourceHandlingMode sourceMode = EffectiveSourceHandling;
+
+                    long reclaimable = sourceMode == SourceHandlingMode.KeepInPlace
+                        ? refined.ProcessArtifactBytes
+                        : refined.ReclaimableBytes;
+
+                    string amount = reclaimable > 0
+                        ? $"预计可回收 {TaskSpaceEstimate.FormatSize(reclaimable)}"
+                        : "这次没有可回收的过程物";
+
                     AppendLog(
                         "INFO",
                         $"{task.FileName}：定稿 + 校验通过之后会按「删除操作」"
                         + (string.Equals(RestHandlingModes.Normalize(_restHandlingThisBatch), RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
                             ? "把其余物移入回收站"
                             : "彻底删除其余物")
-                        + $"（预计可回收 {TaskSpaceEstimate.FormatSize(refined.ReclaimableBytes)}）");
+                        + $"（范围：{DescribeRestScope(sourceMode)}；{amount}）");
                 }
 
                 if (!string.IsNullOrWhiteSpace(budget.Reason))
@@ -9346,6 +9412,22 @@ namespace ArchiveFixer.ViewModels
                 int attemptedCandidates = 0;
 
                 /*
+                 * 2026-09-27 真机（`rar-android-722.132.apk`）加的两笔账：
+                 *
+                 * · previousVerification —— 上一个候选的校验数字。**连续两个候选结果一模一样**时，
+                 *   换密码显然不会改变任何东西，再试下去只是白烧时间（真机白试了 9 次 / 5 分钟）；
+                 * · passwordIrrelevant —— 结论是"产物不完整、与密码无关"（包没加密 / 结果不变 / 试到上限之外）。
+                 *   收尾时据此**不许**再把它说成「密码错误」——那句话把用户指去核对密码本，方向全错。
+                 *
+                 * · stoppedByStopRequest —— 用户点了「停止后续」，候选循环在**候选之间**停下的那一档
+                 *   （用户 2026-09-27："停止后续就是停止所有的东西"）。
+                 */
+                OutputVerificationResult? previousVerification = null;
+                bool passwordIrrelevant = false;
+                string? passwordIrrelevantReason = null;
+                bool stoppedByStopRequest = false;
+
+                /*
                  * ⛔ 上限必须在**动过候选表之后**重算（2026-09-26 真机逮到的缺陷）：
                  * 上面"跳过空密码"那一档会 `RemoveAll` 掉空密码候选，候选表因此少一个 ——
                  * 而 `maxPasswordAttempts` 是**列目录之前**算的（`Math.Min(候选数, 每层上限)`）。
@@ -9362,6 +9444,29 @@ namespace ArchiveFixer.ViewModels
                 for (int i = 0; i < maxPasswordAttempts; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    /*
+                     * ===== 「停止后续」在候选之间生效（用户 2026-09-27 真机）=====
+                     *
+                     * 现场：08:25:32 他点了「停止后续」，08:25:33 程序照旧开始"密码候选 10/10"，
+                     * 又跑了 32 秒才结束 —— 他原话："我都暂停了，你还在尝试新的密码"。
+                     *
+                     * 为什么判在这里：`StopAfterCurrent` 取消的是**批级** token（只阻止启动后续任务），
+                     * 每个任务持有自己的取消源（不变量 9：停止后续 ≠ 强杀当前）。所以任务内部要自己看
+                     * `IsStopping` 这个"用户想让一切都停下来"的信号 —— **候选之间**是天然的落点：
+                     * 正在解的那一个不打断（不留半个产物），下一个密码一个都不再试。
+                     */
+                    if (IsStopping && attemptedCandidates > 0)
+                    {
+                        stoppedByStopRequest = true;
+
+                        AppendLog(
+                            "WARN",
+                            $"{task.FileName}：已按「停止后续」中断 —— 剩余 "
+                            + $"{maxPasswordAttempts - attemptedCandidates} 个候选密码不再尝试。");
+
+                        break;
+                    }
 
                     PasswordItem candidate = candidates[i];
                     string password = candidate.Value ?? string.Empty;
@@ -9505,7 +9610,55 @@ namespace ArchiveFixer.ViewModels
 
                             bool hasMoreCandidates = i < maxPasswordAttempts - 1;
 
-                            if (landingViolation == null && hasMoreCandidates)
+                            /*
+                             * ===== 这次失败到底是不是"密码不对"？（2026-09-27 真机铁证）=====
+                             *
+                             * 现场：`rar-android-722.132.apk` 用**空密码**解出 1238 个文件（校验说"少 33 个"），
+                             * 程序把这句话当成"这个候选不行"，于是把 10 个候选密码全试了一遍（5 分钟），
+                             * 最后报「密码错误」—— 而那个包**根本没有加密**。那次"少 33 个"的真因是
+                             * **32 组仅大小写不同的同名条目**（Windows 物理上放不下），已在校验口径里修掉；
+                             * 这里修的是**另一半**：结论不能想当然地归给密码。
+                             *
+                             * 三条判据全部来自事实（⛔ 不比对文案）：
+                             *  ① 包**没有加密**（清单里一个加密条目都没有）→ 密码与产物无关；
+                             *  ② 与**上一个候选的结果完全相同**（同文件数、同字节数）→ 换密码不会改变结果；
+                             *  ③ 用户已经点了「停止后续」→ 一个都不再试。
+                             * 命中任一条就不再烧候选，并把这个结论带进收尾（⛔ 不许说成「密码错误」）。
+                             */
+                            /*
+                             * ⛔ 前置门槛：**必须真的解出了内容**（字节数 > 0）才谈得上"与密码无关"。
+                             *
+                             * 为什么这一条不能省（2026-09-25 那条修复正是它）：**错密码**的典型签名就是
+                             * "引擎退出码 0、只写出一堆 0 字节桩文件"，而那种结果**必须继续试下一个候选** ——
+                             * 密码本里正确的那个可能就排在后面。只有"解出了真东西、只是比清单少"这种形状，
+                             * 换密码才不可能有帮助（真机那个 apk：1238 个真文件 / 13.5 MB）。
+                             */
+                            bool realContentProduced = stage.Verification.ActualTotalSize > 0;
+
+                            bool listSaysNoEncryption =
+                                realContentProduced && stage.List is { Success: true, IsEncrypted: false };
+
+                            bool sameAsPrevious =
+                                realContentProduced &&
+                                previousVerification != null &&
+                                previousVerification.ActualFileCount == stage.Verification.ActualFileCount &&
+                                previousVerification.ActualTotalSize == stage.Verification.ActualTotalSize;
+
+                            previousVerification = stage.Verification;
+
+                            string? stopReason = !hasMoreCandidates
+                                ? "没有更多候选可试，按失败收场"
+                                : stoppedByStopRequest
+                                    ? "已按「停止后续」中断，剩余候选不再尝试"
+                                    : listSaysNoEncryption
+                                        ? $"这个包没有加密（清单里没有加密条目），换密码不会改变结果，"
+                                          + $"剩余 {maxPasswordAttempts - attemptedCandidates} 个候选不再尝试"
+                                        : sameAsPrevious
+                                            ? $"与上一个候选的结果完全相同，换密码不会改变结果，"
+                                              + $"剩余 {maxPasswordAttempts - attemptedCandidates} 个候选不再尝试"
+                                            : null;
+
+                            if (landingViolation == null && stopReason == null)
                             {
                                 AppendLog(
                                     "WARN",
@@ -9516,10 +9669,27 @@ namespace ArchiveFixer.ViewModels
                                 continue;
                             }
 
+                            /* 结论是"与密码无关"时，收尾必须按这个走（否则会给用户指错方向）。 */
+                            passwordIrrelevant = listSaysNoEncryption || sameAsPrevious;
+
+                            /*
+                             * 理由要**原样带进收尾**（2026-09-27 自查逮到的措辞 bug）：
+                             * 两句结论对应的现场完全不同 —— 一个是"包根本没加密"，
+                             * 一个是"加密了但换哪个候选结果都一样"。收尾那句如果一律写"没有加密"，
+                             * 用户拿着一个明明加密的包会以为程序搞错了。
+                             */
+                            passwordIrrelevantReason = listSaysNoEncryption
+                                ? "这个包没有加密（清单里没有加密条目）"
+                                : sameAsPrevious
+                                    ? "连续两个候选的结果完全相同"
+                                    : null;
+
                             AppendLog(
                                 "WARN",
                                 $"{task.FileName}：结果校验 —— {stage.Verification.Message}" +
-                                "（没有更多候选可试，按失败收场）");
+                                "（" + (landingViolation != null
+                                    ? "产物越界，按越界收场，不再换密码"
+                                    : stopReason ?? "按失败收场") + "）");
                         }
 
                         // 收尾否掉结论（越界 / 超预算 / 定稿失败 / 校验未通过 / 源包没有搬成）时不许写"解压成功"。
@@ -9578,13 +9748,30 @@ namespace ArchiveFixer.ViewModels
                     if (lastVerification is { Verified: false } failedVerification &&
                         task.OutputVerification == OutputVerificationOutcome.Failed)
                     {
-                        bool triedPasswords = hasWrongPassword || attemptedCandidates > 1;
+                        /*
+                         * 结论归给谁？三档互斥，全部读**事实**（⛔ 不比对文案）：
+                         * · passwordIrrelevant（包没加密 / 候选结果始终一样）→ 是**产物不完整**，与密码无关；
+                         * · stoppedByStopRequest（用户中途喊停）→ 是**没试完**，不能说"密码错了"；
+                         * · 其余才是真的"试过密码都不对"。
+                         */
+                        bool verdictIsPasswordProblem =
+                            (hasWrongPassword || attemptedCandidates > 1) && !passwordIrrelevant && !stoppedByStopRequest;
 
-                        task.Status = triedPasswords ? StatusText.WrongPassword : StatusText.ExtractFailed;
-                        task.PasswordStatus = triedPasswords ? StatusText.WrongPassword : task.PasswordStatus;
-                        task.ErrorMessage =
-                            $"{failedVerification.FailureMessage}" +
-                            $"（已试 {attemptedCandidates} 个候选，产物始终不完整）";
+                        task.Status = verdictIsPasswordProblem ? StatusText.WrongPassword : StatusText.ExtractFailed;
+
+                        task.PasswordStatus = verdictIsPasswordProblem
+                            ? StatusText.WrongPassword
+                            : passwordIrrelevant
+                                ? StatusText.PasswordNotNeeded
+                                : task.PasswordStatus;
+
+                        string verdictTail = passwordIrrelevant
+                            ? $"（已试 {attemptedCandidates} 个候选，产物始终不完整；{passwordIrrelevantReason}，问题不在密码上）"
+                            : stoppedByStopRequest
+                                ? $"（已试 {attemptedCandidates} 个候选，产物始终不完整；已按「停止后续」中断，剩余候选未尝试）"
+                                : $"（已试 {attemptedCandidates} 个候选，产物始终不完整）";
+
+                        task.ErrorMessage = $"{failedVerification.FailureMessage}{verdictTail}";
 
                         /*
                          * 机器可判的两个事实必须一起落（用户 2026-09-24 要求）：
@@ -10076,7 +10263,7 @@ namespace ArchiveFixer.ViewModels
         /// 定稿那一步会把它当成本任务的其余物搬进用户目录，等于把这次省下来的空间又还回去了
         /// （用户要的正是"别再有这份副本"）。</para>
         ///
-        /// <para>它是本任务**私有工作区**里的派生中间件（不是源文件，也不是别人的东西），
+        /// <para>它是本任务**私有工作区**里的派生过程物（不是源文件，也不是别人的东西），
         /// 而本次已经确定不用它 —— 删掉是唯一不误导的做法。边界与
         /// <see cref="CleanupTaskWorkspaceDirectory"/> 同一口径：只在"确实在工作区根之下"时动手，
         /// 删不掉只记 WARN（绝不让一次清理失败影响解压结论）。</para>
@@ -10573,23 +10760,23 @@ namespace ArchiveFixer.ViewModels
         /// 清理**本任务自己**的中间工作区目录：<c>&lt;work&gt;\&lt;taskId&gt;\</c>。
         ///
         /// 为什么必须有（端到端验收实测）：双面文件要先按偏移把它尾部那段真正的 ZIP 抠进工作区再解压，
-        /// 一次**成功**的一键处理就在那个目录里留下近 1 GB 中间件（实测 733 MB + 167 MB 两个包）。
+        /// 一次**成功**的一键处理就在那个目录里留下近 1 GB 过程物（实测 733 MB + 167 MB 两个包）。
         /// 这些是从源文件按偏移可再生的派生数据，成功后留着纯属垃圾：跑几批就把盘吃掉，
         /// 而且 MainViewModel 启动时会把工作区根下的每个子目录都报成"未完成的工作区"，留着还会造成假警报。
         ///
         /// 入仓（stage）之后这一条覆盖的范围变大了：暂存目录也在这个工作区里，
         /// 所以**每个任务**（不只是抠过内嵌归档的）成功后都要清 —— 条件反而更简单：
-        /// 定稿把内容物搬走之后，这里剩下的全是可再生的中间件。
+        /// 定稿把内容物搬走之后，这里剩下的全是可再生的过程物。
         ///
         /// 只在这三件事同时成立时才删（与 AGENTS.md §9.5 的清理语义对齐）：
         /// ① 解压成功；② 输出校验通过；③ 没有被取消、没有越界结论、没有超预算、没有定稿失败。
-        /// 取消 / 部分完成 / 校验失败 / 越界一律不删 —— 产物可能没落全，工作区里的中间件是用户唯一的线索。
+        /// 取消 / 部分完成 / 校验失败 / 越界一律不删 —— 产物可能没落全，工作区里的过程物是用户唯一的线索。
         ///
         /// 安全边界（这是"删目录"，每一条都要有）：
         /// · 目录按**暂存目录的父目录**算出（不再按 CurrentPath 重算，见下），
         ///   再规范化确认它确实在工作区根**之下**（容器内校验，越界就什么都不删）；
         /// · 目录里只允许出现**我们自己造的那些**子目录（<c>stage</c>、第 42 条拼装用的 <c>volumes</c>，
-        ///   见 <see cref="IsOurWorkspaceSubdirectory"/>）与本任务的中间件文件；
+        ///   见 <see cref="IsOurWorkspaceSubdirectory"/>）与本任务的过程物文件；
         ///   出现别的子目录说明这不是我们造的那个目录（最典型：任务名撞上了递归工作区的 <c>recursive</c>），
         ///   为安全起见一个字节都不碰；
         /// · 删失败（被占用 / 权限不足）只写日志，绝不让已经成功的任务变成失败。
@@ -10597,7 +10784,7 @@ namespace ArchiveFixer.ViewModels
         /// ⚠ 目录**必须**由 <paramref name="stageDirectory"/> 反推，不能再调
         /// <see cref="PathService.BuildTaskWorkDirectory"/> 重算：它的 taskId 含源路径哈希，
         /// 而一键处理成功后会按设置把源包搬进其余物并回写 <c>task.CurrentPath</c> ——
-        /// 重算出来的就是另一个目录，清理会静默地什么都不做（实测口径：近 1 GB 中间件留在工作区）。
+        /// 重算出来的就是另一个目录，清理会静默地什么都不做（实测口径：近 1 GB 过程物留在工作区）。
         /// </summary>
         private void CleanupTaskWorkspaceDirectory(ArchiveTask task, string stageDirectory)
         {
@@ -10694,7 +10881,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 _operationCts?.Cancel();
 
-                AppendLog("WARN", "已请求停止后续任务，不再启动新的解压任务。");
+                LogStopRequestOnce();
             }
             catch (Exception ex)
             {

@@ -260,7 +260,7 @@ namespace ArchiveFixer.Extraction
         /// 目标目录为空时返回空串（不抛异常：规划阶段拿不到目标目录是调用方的常见状态）。
         ///
         /// ⚠ 这是"集中一处"的那一档；**多个包共用同一个目标目录**时要走三参数重载，
-        /// 否则几十个包的中间件会在同一个 <c>其余物\</c> 里互相撞名（决策 D-10 / D-2）。
+        /// 否则几十个包的过程物会在同一个 <c>其余物\</c> 里互相撞名（决策 D-10 / D-2）。
         /// </summary>
         public static string ResolveArtifactDirectory(string? targetDirectory)
         {
@@ -291,7 +291,7 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>
         /// 为什么要分这两档：共用根时一个目录里有几十上百个包，其余物再不按包名分一层，
-        /// 分卷和中间件就会互相撞名、也分不清是谁的（决策 D-2 的老理由）；
+        /// 分卷和过程物就会互相撞名、也分不清是谁的（决策 D-2 的老理由）；
         /// 而包本来就有自己目录时再按包名分一层，就是用户最反感的"凭空多弄一个文件夹"（决策 D-10）。
         /// </para>
         /// </summary>
@@ -1002,7 +1002,7 @@ namespace ArchiveFixer.Extraction
     ///
     /// <para>
     /// 为什么源包也算「其余物」：用户在"其余物"里一次删掉就干净了 ——
-    /// 内容物留在原地，源包和中间件一起进同一层，整理完只需删一个目录。
+    /// 内容物留在原地，源包和过程物一起进同一层，整理完只需删一个目录。
     /// </para>
     /// <para>
     /// 四条硬约束（都在这里落地，调用方不许绕过）：
@@ -1326,7 +1326,7 @@ namespace ArchiveFixer.Extraction
         /// ① 在其余物目录**之内或就是它**（共享根模式下源包会落在 <c>其余物\包名\</c>，
         ///    而这里传进来的就是那一层）；
         /// ② 在"同一个位置的旧名目录"里（<c>其余物</c> ↔ <c>过程物</c>）；
-        /// ③ 在其余物目录下的 <c>过程物\</c> 子目录里（老版本把中间件又套了一层的情况）。
+        /// ③ 在其余物目录下的 <c>过程物\</c> 子目录里（老版本把过程物又套了一层的情况）。
         /// </summary>
         /// <param name="restDirectory">命中的那个其余物目录（写日志用）。</param>
         private static bool IsAlreadyInsideRest(string source, string artifactRoot, out string restDirectory)

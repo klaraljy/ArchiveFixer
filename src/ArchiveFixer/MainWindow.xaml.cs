@@ -202,16 +202,71 @@ namespace ArchiveFixer
             TaskTabHost.ScrollToSelectedTask();
         }
 
+        /// <summary>
+        /// 选项卡那一排最右端的「说明」（用户 2026-09-27）。
+        /// ⛔ 只读程序里自带的内容（<see cref="Models.HelpContent"/>），不依赖任何文件 ——
+        /// 与帮助菜单里那份「使用说明」的区别就在这里。
+        /// </summary>
+        private void HelpMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var window = new Views.HelpWindow { Owner = this };
+                window.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                _dialogService.ShowException(ex, "打开说明失败");
+            }
+        }
+
         private void UsageMenuItem_Click(object sender, RoutedEventArgs e)
         {
             string? doc = LocateUsageDoc();
 
             if (doc == null || !SafePathHelper.OpenFileInExplorer(doc))
             {
+                /*
+                 * 用户 2026-09-27 真机："我选中最上端的帮助点击提示显示路径错误"。
+                 *
+                 * 现场：绿色目录 `E:\ArchiveFixer\` 里没有 `docs\`，而这个方法从程序目录往上爬 6 层
+                 * 找 `docs\使用说明.md`（那是给开发态准备的），于是必然找不到 —— 而他看到的
+                 * 只是一句"找不到…路径错误"，不知道该去哪儿找、也不知道还有别的入口。
+                 *
+                 * 现在三件事一起给：①**列出我真找过的位置**；②告诉他把 docs 放到程序旁边就能用；
+                 * ③指路那颗**永远打得开**的「说明」（程序自带、不依赖文件）。
+                 */
                 _dialogService.ShowInfo(
                     "找不到《使用说明》文档。" + Environment.NewLine + Environment.NewLine
-                    + "它随程序放在 " + UsageDocRelativePath + "；开发态在仓库的 docs 目录里。");
+                    + "我找过这些位置：" + Environment.NewLine
+                    + DescribeUsageDocSearch() + Environment.NewLine
+                    + "解决办法：把仓库里的 docs 目录整个放到程序目录旁边（ArchiveFixer.exe 所在的那一层），"
+                    + "或者直接点选项卡那一排最右端的「说明」—— 那份是程序自带的，不依赖任何文件。");
             }
+        }
+
+        /// <summary>把"我找过哪些位置"逐行写出来（找不到文档时给用户看，⛔ 不再只说一句路径错）。</summary>
+        private static string DescribeUsageDocSearch()
+        {
+            var builder = new System.Text.StringBuilder();
+
+            try
+            {
+                var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+                for (int depth = 0; directory != null && depth < 6; depth++)
+                {
+                    builder.AppendLine("　· " + Path.Combine(directory.FullName, UsageDocRelativePath));
+
+                    directory = directory.Parent;
+                }
+            }
+            catch
+            {
+                builder.AppendLine("　· （列目录时出错，位置读不出来）");
+            }
+
+            return builder.ToString().TrimEnd();
         }
 
         private void ShortcutsMenuItem_Click(object sender, RoutedEventArgs e)

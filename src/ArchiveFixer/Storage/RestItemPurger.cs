@@ -59,7 +59,7 @@ namespace ArchiveFixer.Storage
     /// <para><b>为什么不用 <c>MaintenanceCleanupService.CleanProcessArtifacts</c></b>：它按任务**现场**解析作用域
     /// （<c>ResolveArtifactScope</c>），而危险模式动作的时刻是"源包刚被搬进其余物之后"——
     /// 那时 <see cref="ArchiveTask.CurrentPath"/> 已经指向其余物里面的新位置，
-    /// 现场解析在共享输出根模式下会退化成"整个 `其余物\`"，一删就是同目录里所有包的中间件。
+    /// 现场解析在共享输出根模式下会退化成"整个 `其余物\`"，一删就是同目录里所有包的过程物。
     /// 所以这里只认定稿那一刻记下来的那一条路径（门槛 4），并用"必须在自己的输出根之内 + 形状必须是其余物"
     /// 两道校验兜住（门槛 5），两条都过了才动手。</para>
     ///
@@ -78,11 +78,11 @@ namespace ArchiveFixer.Storage
 
         /// <summary>彻底删除那一档的理由（写进删除日志）。必须写清"为什么可以删"与"进了哪里"。</summary>
         public const string AutoPurgeReason =
-            "删除操作=彻底删除：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 彻底删除本任务的其余物（源包 + 中间件，不进回收站）";
+            "删除操作=彻底删除：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 彻底删除本任务的其余物（源包 + 过程物，不进回收站）";
 
         /// <summary>移入回收站那一档的理由。</summary>
         public const string AutoRecycleReason =
-            "删除操作=移入回收站：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 把本任务的其余物（源包 + 中间件）移入回收站（可还原；空间要等清空回收站才释放）";
+            "删除操作=移入回收站：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 把本任务的其余物（源包 + 过程物）移入回收站（可还原；空间要等清空回收站才释放）";
 
         /// <summary>
         /// 试着删除一个任务的其余物。**任何一条门槛不成立都返回"没动"**，并给出原因（不抛异常）。
@@ -176,7 +176,7 @@ namespace ArchiveFixer.Storage
             }
             catch (Exception ex)
             {
-                return Skip($"{name}：删除其余物时出现意外错误（{ex.Message}），源包与中间件都还在");
+                return Skip($"{name}：删除其余物时出现意外错误（{ex.Message}），源包与过程物都还在");
             }
 
             var logLines = result.LogEntries.Select(entry => entry.ToDisplayText()).ToList();

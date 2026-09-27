@@ -101,7 +101,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `bin\Release\...` **不是**用户数据所在地；重新构建后把运行时文件拷过去：
   `Copy-Item src\ArchiveFixer\bin\Release\net8.0-windows\{ArchiveFixer.exe,ArchiveFixer.dll,ArchiveFixer.pdb,*.json} E:\ArchiveFixer\`
-  再拷 `src\ArchiveFixer\tools\`。桌面快捷方式已指向绿色目录。
+  再拷 `src\ArchiveFixer\tools\` **和 `src\ArchiveFixer\bin\Release\net8.0-windows\docs\`**（2026-09-27 起
+  csproj 会把面向用户的四份文档复制到输出目录的 `docs\` 下 —— 帮助菜单的「使用说明」按
+  `<程序目录>\docs\使用说明.md` 找它，不拷过去就会报"路径错误"，真机上正是这么被逮到的）。
 - **⛔ 绝不碰 `E:\ArchiveFixer\data`** —— 那里是用户的日志 / 密码列表 / 设置。
 
 ### 5.2 并发纪律
@@ -230,9 +232,9 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 > 另有 `E:\DeepSeek项目分析\ArchiveFixer\项目设计.md` = **需求全集 / 长期愿景**，有效但需按非目标裁剪。
 > ⛔ 别把"没写进本文件"理解成"被否决了"。
 
-## 11. 当前验证状态（2026-09-26，图标 / 标题邮箱 / 默认层数 5 这一批之后）
+## 11. 当前验证状态（2026-09-27，真机第二轮六条修完之后）
 
-- `dotnet build ArchiveFixer.slnx --no-incremental`：**0 错误 0 警告**；`dotnet test`：**1740 条全绿**（最近一次全量实测 1739 通过 + 1 条已知 flaky 假红，单跑必过）；
+- `dotnet build ArchiveFixer.slnx --no-incremental`：**0 错误 0 警告**；`dotnet test`：**1756 条全绿**（0 失败 / 0 跳过）；
   `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
 - **已知 flaky（全量并发下偶发假红，单跑必过 —— 遇到先单跑确认，别去改产品代码或断言）**：

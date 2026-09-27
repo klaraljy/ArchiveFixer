@@ -289,7 +289,7 @@ namespace ArchiveFixer.Extraction
         /// 与引擎 / 探测器 / 密码来源全部注入是同一个理由。
         /// </para>
         /// <para>
-        /// ⚠ 注入方要**自己判断是不是第 0 层**：第 1 层起解的是工作区里的中间件，
+        /// ⚠ 注入方要**自己判断是不是第 0 层**：第 1 层起解的是工作区里的过程物，
         /// 拿源包的快照去比它们只会得出一句必然错误的结论（见 ExtractionCoordinator）。
         /// </para>
         /// </summary>
@@ -507,7 +507,7 @@ namespace ArchiveFixer.Extraction
                      * 所以拦在这里 = 一个字节都没写过。
                      *
                      * 只对第 0 层问（见 _sourceCheck 的说明）：第 1 层起解的是我们自己
-                     * 从内层抠出来的中间件，拿源包的快照去比它们只会得出一句错误的结论。
+                     * 从内层抠出来的过程物，拿源包的快照去比它们只会得出一句错误的结论。
                      */
                     if (item.IsRoot && _sourceCheck != null)
                     {

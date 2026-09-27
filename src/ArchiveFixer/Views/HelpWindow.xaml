@@ -1,0 +1,102 @@
+<Window x:Class="ArchiveFixer.Views.HelpWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:ArchiveFixer.Models"
+        Style="{StaticResource AppWindowStyle}"
+        Title="说明"
+        Width="880"
+        Height="720"
+        MinWidth="640"
+        MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+
+    <!--
+        「说明」窗（用户 2026-09-27："在选项卡那一行在设置右边弄一个说明，说明里面包含着对我们这项工具的
+        详细介绍，而且包括很多专有名词的解释，比如其余物、过程物、无用物"）。
+
+        ⛔ 全部文字来自 Models/HelpContent.cs（单一出处，可测）；这里一个字都不手写，
+        免得以后改了术语表、窗口里还留着旧说法。
+        ⛔ 刻意不依赖任何外部文件：帮助菜单里「使用说明」要读 docs\使用说明.md（分发包里可能没有），
+        这一份是程序自带的兜底 —— 用户点它必须**永远**能打开。
+    -->
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="{x:Static models:HelpContent.Tagline}"
+                       Style="{StaticResource BodyTextStyle}"
+                       TextWrapping="Wrap" />
+
+            <ItemsControl ItemsSource="{x:Static models:HelpContent.Introduction}"
+                          Margin="0,12,0,0">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,6" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1"
+                      Margin="0,14,0,0"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{x:Static models:HelpContent.Glossary}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!-- 一条术语一张卡片：左边词、右边解释（与⑤页密码卡片同一套样式口径）。 -->
+                        <Border Style="{StaticResource CardStyle}"
+                                CornerRadius="{StaticResource CardCornerRadius}"
+                                Padding="12,8"
+                                Margin="0,0,0,8">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding Term}"
+                                           Style="{StaticResource LabelTextStyle}"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Top" />
+
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding Explanation}"
+                                           Style="{StaticResource BodyTextStyle}"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Top" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,12,0,0">
+            <Button Content="复制全部说明"
+                    MinWidth="120"
+                    Style="{StaticResource ToolbarButtonStyle}"
+                    Click="CopyAll_Click"
+                    ToolTip="把这一份说明（含术语表）整段复制到剪贴板，方便贴给别人" />
+
+            <Button Content="关闭"
+                    MinWidth="90"
+                    Margin="8,0,0,0"
+                    Style="{StaticResource ToolbarButtonStyle}"
+                    IsCancel="True"
+                    Click="Close_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -234,7 +234,7 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>清理理由（写进删除日志；两档共用同一句话）。</summary>
-        public const string ProcessArtifactReason = "删除其余物（内层归档 / 分卷 / 中间件 / 源包）";
+        public const string ProcessArtifactReason = "删除其余物（内层归档 / 分卷 / 过程物 / 源包）";
 
         /// <summary>「删除本目录全部其余物」的理由：说清这次不是只删本任务那一份。</summary>
         public const string AllArtifactsReason = "删除本目录全部其余物（影响该目录下所有包）";
@@ -420,7 +420,7 @@ namespace ArchiveFixer.Services
                     BlockReason =
                         $"{outputFull} 是多个包共用的输出目录，只允许删本任务那一份"
                         + $"（{Path.Combine(ArtifactDirectoryName, packageBaseName)}），但它不存在，所以本次不删任何东西；"
-                        + "不会退到上一层去删整个其余物目录（那会误删同目录里其它包的中间件）"
+                        + "不会退到上一层去删整个其余物目录（那会误删同目录里其它包的过程物）"
                 };
             }
 

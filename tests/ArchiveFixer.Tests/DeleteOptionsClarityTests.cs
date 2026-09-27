@@ -317,7 +317,7 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        /// <summary>造一个"删除操作该动手"的现场：完成 + 校验通过 + 其余物里躺着源包与中间件。</summary>
+        /// <summary>造一个"删除操作该动手"的现场：完成 + 校验通过 + 其余物里躺着源包与过程物。</summary>
         private (ArchiveTask Task, string RestDirectory) CreatePurgeScenario()
         {
             string outputPath = Path.Combine(_root, "out", "222");
@@ -326,7 +326,7 @@ namespace ArchiveFixer.Tests
             Directory.CreateDirectory(restDirectory);
 
             File.WriteAllText(Path.Combine(restDirectory, "222.7z"), "源包（会被删）");
-            File.WriteAllText(Path.Combine(restDirectory, "inner-222.7z.001"), "内层分卷（中间件）");
+            File.WriteAllText(Path.Combine(restDirectory, "inner-222.7z.001"), "内层分卷（过程物）");
             File.WriteAllText(Path.Combine(outputPath, "payload.mp4"), "内容物");
 
             var task = new ArchiveTask(Path.Combine(_root, "src", "222.7z"), 1)

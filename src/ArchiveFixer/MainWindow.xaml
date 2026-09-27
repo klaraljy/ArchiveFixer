@@ -130,6 +130,24 @@
                         </Grid.RowDefinitions>
 
                         <DockPanel Grid.Row="0">
+                            <!--
+                                「说明」固定在选项卡这一行的最右端（用户 2026-09-27：
+                                "在选项卡那一行在设置右边弄一个说明，说明里面包含着对我们这项工具的详细介绍，
+                                而且包括很多专有名词的解释，比如其余物、过程物、无用物"）。
+
+                                ⛔ 它不读任何外部文件（介绍与术语表都在 Models/HelpContent.cs 里）——
+                                帮助菜单里那份「使用说明」要读 docs\使用说明.md，分发包里可能没有，
+                                这一颗必须永远打得开。
+                            -->
+                            <Button DockPanel.Dock="Right"
+                                    Content="说明"
+                                    MinWidth="72"
+                                    Margin="8,0,0,-1"
+                                    VerticalAlignment="Center"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    ToolTip="这个工具是什么、那些专有名词（其余物 / 过程物 / 无用物…）是什么意思"
+                                    Click="HelpMenuItem_Click" />
+
                             <TabPanel IsItemsHost="True"
                                       Margin="0,0,0,-1"
                                       KeyboardNavigation.TabIndex="1"

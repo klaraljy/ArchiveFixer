@@ -235,7 +235,7 @@ namespace ArchiveFixer.Tests
         /// </para>
         /// </summary>
         [SevenZipFact]
-        public async Task 一键处理_第一层只出中间件_链跑完后按删除档删源包()
+        public async Task 一键处理_第一层只出过程物_链跑完后按删除档删源包()
         {
             string sevenZip = SevenZipFactAttribute.LocateSevenZipPath();
 
@@ -275,7 +275,7 @@ namespace ArchiveFixer.Tests
 
                 OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-                Assert.True(outcome.ContinuationLayers >= 1, "前提：这一单必须是「第一层只出中间件」的多层包");
+                Assert.True(outcome.ContinuationLayers >= 1, "前提：这一单必须是「第一层只出过程物」的多层包");
 
                 Assert.Equal(StatusText.ExtractSuccess, task.Status);
                 Assert.Equal(OutputVerificationOutcome.Passed, task.OutputVerification);
@@ -330,7 +330,7 @@ namespace ArchiveFixer.Tests
             string source = harness.CreateSourceInFolder("folder", "outer.7z");
             ArchiveTask task = harness.AddTask(source);
 
-            // 第一层只出中间件 → 延期；第二层（人工加的续解任务）校验不过。
+            // 第一层只出过程物 → 延期；第二层（人工加的续解任务）校验不过。
             harness.Engine.SetProducts(("inner.7z", 16));
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();

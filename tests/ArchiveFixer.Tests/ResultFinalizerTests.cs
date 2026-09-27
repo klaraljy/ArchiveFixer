@@ -572,7 +572,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void Plan_MissingContentRoot_TreatsEverythingAsProcessArtifacts()
         {
-            // 内容物根写错时宁可"没有内容物"，也不能把暂存区里的中间件当成用户的东西搬出去。
+            // 内容物根写错时宁可"没有内容物"，也不能把暂存区里的过程物当成用户的东西搬出去。
             FinalizePlan plan = Plan(File(@"other\a.mp4"));
 
             Assert.Equal(FinalizeLayoutKind.ProcessArtifactsOnly, plan.Layout);

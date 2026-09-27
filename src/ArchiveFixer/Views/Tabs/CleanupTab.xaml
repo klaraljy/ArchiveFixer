@@ -37,7 +37,7 @@
                                  GroupName="SourceHandling"
                                  Margin="0,6,0,0"
                                  IsChecked="{Binding SettingsEditor.SourceHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=MoveToRest, Mode=TwoWay}"
-                                 Content="放入其余物当中（和中间件一起放进成品目录的「其余物」）" />
+                                 Content="放入其余物当中（和过程物一起放进成品目录的「其余物」）" />
 
                     <TextBlock Style="{StaticResource HintTextStyle}"
                                Margin="0,6,0,0"
@@ -78,7 +78,7 @@
                         <TextBlock Style="{StaticResource BannerTextStyle}"
                                    Foreground="{StaticResource DangerTextBrush}"
                                    TextWrapping="Wrap"
-                                   Text="⚠ 彻底删除不可恢复：任务成功后，它的其余物（中间件，以及按上面选择搬进去的源包）会被永久删除，不进回收站。失败 / 部分完成 / 取消的任务一个字节都不删。" />
+                                   Text="⚠ 彻底删除不可恢复：任务成功后，它的其余物（过程物，以及按上面选择搬进去的源包）会被永久删除，不进回收站。失败 / 部分完成 / 取消的任务一个字节都不删。" />
                     </Border>
                 </StackPanel>
             </GroupBox>
@@ -120,7 +120,7 @@
                             <WrapPanel Margin="0,8,0,0">
                                 <Button Content="删除其余物…"
                                         Style="{StaticResource DangerOutlineButtonStyle}"
-                                        ToolTip="删除勾选的每个任务自己那一份「其余物」（内层归档 / 分卷 / 中间件 / 源包）。先预览条目数、总大小与源包个数。"
+                                        ToolTip="删除勾选的每个任务自己那一份「其余物」（内层归档 / 分卷 / 过程物 / 源包）。先预览条目数、总大小与源包个数。"
                                         Command="{Binding CleanProcessArtifactsCommand}" />
 
                                 <Button Content="删除本目录全部其余物…"

@@ -84,7 +84,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 粗估_分卷整组求和且按路径去重_内嵌归档中间件单独计()
+        public void 粗估_分卷整组求和且按路径去重_内嵌归档过程物单独计()
         {
             string part1 = CreateSizedFile("vol.7z.001", 4096);
             string part2 = CreateSizedFile("vol.7z.002", 2048);
@@ -117,7 +117,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 粗估_内嵌归档抠出来的中间件计入过程物()
+        public void 粗估_内嵌归档抠出来的过程物计入过程物()
         {
             string file = CreateSizedFile("double.mp4", 10000);
 
@@ -217,7 +217,7 @@ namespace ArchiveFixer.Tests
             Assert.False(refined.HasListing);
             Assert.Equal(800, refined.ContentBytes);
 
-            // 已经量出来的内嵌中间件照记（那是真量出来的字节）。
+            // 已经量出来的内嵌过程物照记（那是真量出来的字节）。
             Assert.Equal(256, refined.ProcessArtifactBytes);
             Assert.Contains("没拿到条目清单", refined.Basis, StringComparison.Ordinal);
         }
@@ -985,7 +985,7 @@ namespace ArchiveFixer.Tests
 
             string sourcePath = Path.Combine(restDirectory, "222.7z");
             File.WriteAllText(sourcePath, "源包（会被永久删除）");
-            File.WriteAllText(Path.Combine(restDirectory, "inner-222.7z.001"), "内层分卷（中间件）");
+            File.WriteAllText(Path.Combine(restDirectory, "inner-222.7z.001"), "内层分卷（过程物）");
 
             // 内容物也要在位：删除的判据是"内容物已定稿"，这个现场得有内容物。
             File.WriteAllText(Path.Combine(outputPath, "payload.mp4"), "内容物");

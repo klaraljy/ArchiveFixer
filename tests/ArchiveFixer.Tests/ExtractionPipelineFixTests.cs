@@ -712,9 +712,13 @@ namespace ArchiveFixer.Tests
             releaseFirst.TrySetResult(true);
 
             // 等到"停止后续"这件事被循环处理掉（旧实现在这里会先去启动第 3 个任务）。
+            //
+            // ⚠ 2026-09-27 起这条日志的措辞统一成一句（StatusText.StopRequestedNotice）：
+            // 原来是"已请求停止后续任务，不再启动新的解压任务。"，现在是
+            // "已按「停止后续」停下：不再启动新任务；…在下一个安全点停下…"。
             await WaitAsync(
                 () => harness.Engine.ExtractCalls.Any(p => string.Equals(p, third.CurrentPath, StringComparison.OrdinalIgnoreCase)) ||
-                      harness.Log.Logs.Any(x => x.Message.Contains("不再启动新的解压任务", StringComparison.Ordinal)),
+                      harness.Log.Logs.Any(x => x.Message.Contains("已按「停止后续」停下", StringComparison.Ordinal)),
                 TimeSpan.FromSeconds(10),
                 "停止后续没有被处理");
 
@@ -844,7 +848,7 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 双面文件（内嵌归档）要先按偏移把尾部那段 ZIP 抠进 <c>work\&lt;任务名&gt;\</c> 再解压。
-        /// 端到端验收实测：一次**成功**的一键处理在那里留下近 1 GB 中间件（733 MB + 167 MB）。
+        /// 端到端验收实测：一次**成功**的一键处理在那里留下近 1 GB 过程物（733 MB + 167 MB）。
         /// 这些是从源文件可再生的派生数据 —— 成功且校验通过后必须清掉。
         /// </summary>
         [Fact]
@@ -905,7 +909,7 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// 取消：中间工作区默认**整份清掉**（用户 2026-09-25 第 25 条追加）。
         ///
-        /// <para>旧口径是"取消时中间件是用户唯一还能看的东西，一律留着"（2026-09-24 第 23 条）。
+        /// <para>旧口径是"取消时过程物是用户唯一还能看的东西，一律留着"（2026-09-24 第 23 条）。
         /// 用户后来说得很直接："失败了就失败了，成功了就成功了"+"我不希望有这么多的失败残留"，
         /// 而且失败清单已经能说清每个包为什么失败 —— 所以默认档改成不留现场；
         /// 要看现场的人在 ③ 页打开「失败时保留中间产物」（那一条有独立用例钉住）。</para>
@@ -985,11 +989,11 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// 递归模式（<c>RecursionMode != SingleLayer</c>）的这一路同样不许漏垃圾，而且**有两处**：
         /// ① 递归核心自己的逐层工作区（<c>data\work\recursive\&lt;taskId&gt;\</c>，动辄几百 MB）；
-        /// ② 双面文件抠出来的中间件所在的 <c>work\&lt;任务名&gt;\</c>。
+        /// ② 双面文件抠出来的过程物所在的 <c>work\&lt;任务名&gt;\</c>。
         /// 递归成功后两处都必须清掉 —— 否则"解压成功"就是一次几百 MB 的泄漏。
         /// </summary>
         [Fact]
-        public async Task 递归成功且产物发布后_抠出来的中间件与递归工作区一起被清理()
+        public async Task 递归成功且产物发布后_抠出来的过程物与递归工作区一起被清理()
         {
             Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
             string source = CreateEmbeddedSourceFile("embedded-recursive.7z");
@@ -1051,7 +1055,7 @@ namespace ArchiveFixer.Tests
         ///
         /// <para>用户原话：「如果解压 40G，两层，解压失败有 80G 的卸载残留，用户不得气死」——
         /// 双层包失败时留得最多的正是递归核心那份逐层工作区，所以这一条同时钉两处：
-        /// ① 抠出来的中间件所在的 <c>work\&lt;任务名&gt;\</c>；② <c>work\recursive\&lt;taskId&gt;\</c>。
+        /// ① 抠出来的过程物所在的 <c>work\&lt;任务名&gt;\</c>；② <c>work\recursive\&lt;taskId&gt;\</c>。
         /// 结论仍是"部分完成"（绝不显示成功，不变量 6），源包一个字节不动（不变量 1）。</para>
         /// </summary>
         [Fact]
@@ -1136,7 +1140,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
             // 第 0 层产物被取回并定稿：清理没有连产物一起删。
-            // （内层归档按契约是"中间件"，会在输出目录下的「其余物」里，所以按名递归找，
+            // （内层归档按契约是"过程物"，会在输出目录下的「其余物」里，所以按名递归找，
             //   不假设它躺在输出目录根上。）
             Assert.True(
                 Directory.Exists(task.OutputPath) &&
@@ -1144,6 +1148,162 @@ namespace ArchiveFixer.Tests
                 $"第 0 层产物应当被取回并定稿：{task.OutputPath}");
 
             Assert.Equal(0, CountSubdirectories(recursiveRoot));
+        }
+
+        // ================================================================ 2026-09-27 真机：候选循环的三条
+
+        /// <summary>
+        /// **包没加密 / 结果不变 → 不许再烧候选，也不许把结论写成「密码错误」**
+        /// （用户 2026-09-27 真机：`rar-android-722.132.apk` 用空密码解出 1238 个文件，
+        /// 被当成"候选密码不对"，10 个候选白试 5 分钟，最后还报「密码错误」）。
+        ///
+        /// <para>本用例造的形状 = 引擎说成功、产物**真的有一份**、但比清单少一个文件，
+        /// 而且清单里**一个加密条目都没有** → 换密码根本不可能改变结果。</para>
+        /// </summary>
+        [Fact]
+        public async Task 没加密的包_产物校验不过时_不再换密码也不写密码错误()
+        {
+            Harness harness = CreateHarness(passwords: new[] { "候选密码1", "候选密码2", "候选密码3" });
+
+            string sourcePath = CreateSourceFile("apk-like.apk");
+            ArchiveTask task = AddTask(harness, sourcePath);
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 2,
+                TotalUncompressedSize = 200,
+                Entries = new List<ArchiveEntry>
+                {
+                    new() { Path = "classes.dex", Size = 100 },
+                    new() { Path = "AndroidManifest.xml", Size = 100 }
+                },
+                IsEncrypted = false,
+                EngineId = "fake",
+                EngineVersion = "1.0"
+            });
+
+            // 引擎"成功"，但只写出一个文件 → 校验必然判否（真机少 33 个文件就是这种形状）
+            harness.Engine.OnExtractAsync = request =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                Directory.CreateDirectory(request.OutputPath!);
+                File.WriteAllBytes(Path.Combine(request.OutputPath!, "classes.dex"), new byte[100]);
+                return Task.FromResult(Succeeded());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Single(harness.Engine.ExtractCalls);
+            Assert.NotEqual(StatusText.WrongPassword, task.Status);
+            Assert.Equal(StatusText.PasswordNotNeeded, task.PasswordStatus);
+            Assert.Contains("没有加密", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("产物校验未通过", task.ErrorMessage, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **连续两个候选的结果一模一样 → 立刻停**（换密码不可能改变结果；真机白试了 9 次）。
+        ///
+        /// <para>判据只用事实：两次校验的文件数与字节数相同（⛔ 不比文案、也不看引擎说了什么）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 连续两个候选结果完全相同_不再试第三个()
+        {
+            Harness harness = CreateHarness(passwords: new[] { "候选密码1", "候选密码2", "候选密码3", "候选密码4" });
+
+            string sourcePath = CreateSourceFile("same-result.7z");
+            ArchiveTask task = AddTask(harness, sourcePath);
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 2,
+                TotalUncompressedSize = 200,
+                Entries = new List<ArchiveEntry>
+                {
+                    new() { Path = "one.bin", Size = 100 },
+                    new() { Path = "two.bin", Size = 100 }
+                },
+
+                // 加密包：这一条走的是"结果相同"那一路（不是"没加密"那一路）
+                IsEncrypted = true,
+                EngineId = "fake",
+                EngineVersion = "1.0"
+            });
+
+            harness.Engine.OnExtractAsync = request =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                Directory.CreateDirectory(request.OutputPath!);
+                File.WriteAllBytes(Path.Combine(request.OutputPath!, "one.bin"), new byte[100]);
+                return Task.FromResult(Succeeded());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(2, harness.Engine.ExtractCalls.Count);
+            Assert.Contains("完全相同", task.ErrorMessage, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **「停止后续」必须在候选之间生效**（用户 2026-09-27："我都暂停了，你还在尝试新的密码"）。
+        ///
+        /// <para>真机现场：08:25:32 点了停止，08:25:33 程序照旧开始"密码候选 10/10"，又跑 32 秒。
+        /// 本用例在第 1 个候选返回密码错误时调用 <c>StopAfterCurrent()</c>（就是那颗按钮的动作），
+        /// 断言**只试了 1 个候选**，而且那条日志只写一次、说清"在下一个安全点停下"。</para>
+        /// </summary>
+        [Fact]
+        public async Task 停止后续_候选之间停下_不再试新密码()
+        {
+            Harness harness = CreateHarness(passwords: new[] { "候选密码1", "候选密码2", "候选密码3", "候选密码4" });
+
+            string sourcePath = CreateSourceFile("stop-between-candidates.7z");
+            AddTask(harness, sourcePath);
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 1,
+                TotalUncompressedSize = 100,
+                Entries = new List<ArchiveEntry> { new() { Path = "one.bin", Size = 100 } },
+                IsEncrypted = true,
+                EngineId = "fake",
+                EngineVersion = "1.0"
+            });
+
+            harness.Engine.OnExtractAsync = request =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+
+                // 用户在第 1 个候选跑完之后点了「停止后续」（真机上就是那颗按钮）
+                harness.Coordinator.StopAfterCurrent();
+
+                return Task.FromResult(WrongPassword());
+            };
+
+            try
+            {
+                await harness.Coordinator.StartExtractAsync();
+            }
+            catch (OperationCanceledException)
+            {
+                // 批级取消把整批收掉也算"停下"，核心断言在下面（只试了一个候选）。
+            }
+
+            List<string> logs = harness.Log.Logs.Select(item => item.DisplayText).ToList();
+
+            Assert.True(
+                harness.Engine.ExtractCalls.Count == 1,
+                $"点了「停止后续」之后又试了 {harness.Engine.ExtractCalls.Count} 个候选。日志：{string.Join(" ｜ ", logs)}");
+
+            /*
+             * 日志两条、各有各的用途（真机上原来是三句不同措辞、还重复刷）：
+             * · 批级通知**只写一次**（"…在下一个安全点停下…"）—— 他连点两次也只出现一条；
+             * · 任务级那条说清"在第几个候选上停下、还剩几个没试"。
+             */
+            Assert.Equal(1, logs.Count(text => text.Contains("下一个安全点停下", StringComparison.Ordinal)));
+            Assert.Contains(logs, text => text.Contains("已按「停止后续」中断", StringComparison.Ordinal)
+                                          && text.Contains("不再尝试", StringComparison.Ordinal));
         }
 
         // ================================================================ 装配
@@ -1288,7 +1448,7 @@ namespace ArchiveFixer.Tests
         /// 造一个"双面文件"：前面垫一段数据，偏移之后才是"真正的归档"。
         ///
         /// 抠包（<see cref="EmbeddedArchiveCarver"/>）是**真实的字节拷贝**，不需要那一段真的能被解开
-        /// —— 解压由假引擎负责。要的只是"任务确实往工作区里写了中间件"这个事实。
+        /// —— 解压由假引擎负责。要的只是"任务确实往工作区里写了过程物"这个事实。
         /// </summary>
         private string CreateEmbeddedSourceFile(string fileName)
         {
@@ -1307,7 +1467,7 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 本任务的中间件落点目录（布局由 <see cref="PathService.BuildTaskWorkDirectory"/> 给出，
+        /// 本任务的过程物落点目录（布局由 <see cref="PathService.BuildTaskWorkDirectory"/> 给出，
         /// 测试**不自己拼规则** —— 拼一份迟早与实现分叉）。
         /// </summary>
         private static string TaskWorkDirectory(Harness harness, ArchiveTask task) =>

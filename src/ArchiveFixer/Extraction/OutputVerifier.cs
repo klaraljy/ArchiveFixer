@@ -56,6 +56,18 @@ namespace ArchiveFixer.Extraction
 
         public long ActualTotalSize { get; init; }
 
+        /// <summary>
+        /// 归档里**仅大小写不同**的同名条目组数（2026-09-27 真机：`rar-android-722.132.apk`）。
+        ///
+        /// <para>Windows 的盘不区分大小写，`res\9N.9.png` 与 `res\9n.9.png` 物理上只能是**同一个文件**，
+        /// 所以这类条目**注定落不全** —— 预期数必须先按"仅大小写去重"折算，否则每一个这种包都会被判成
+        /// "产物不完整"（真机后果：把 10 个密码候选白试一遍，最后还报「密码错误」）。</para>
+        /// </summary>
+        public int CaseOnlyDuplicateGroups { get; init; }
+
+        /// <summary>被大小写折叠**吃掉**的条目数（预期折算时扣掉的份数）。</summary>
+        public int CaseOnlyDroppedEntries { get; init; }
+
         /// <summary>给人看的一句话（直接进汇总报告与日志，不要在这里拼密码等敏感内容）。</summary>
         public string Message { get; init; } = string.Empty;
     }
@@ -166,8 +178,27 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public static OutputVerificationResult Verify(string? outputDirectory, ArchiveListResult? expected)
         {
-            int expectedFileCount = expected?.FileCount ?? 0;
-            long expectedTotalSize = expected?.TotalUncompressedSize ?? 0;
+            /*
+             * ===== 预期数必须按"仅大小写去重"折算（2026-09-27 真机铁证）=====
+             *
+             * 现场：`rar-android-722.132.apk`（6.8 MiB，1271 个条目）。候选 1 = **空密码**就解出 1238 个文件，
+             * 我们却说"校验未通过：预期 1271 / 实际 1238"，于是把 10 个候选密码全试了一遍（5 分钟），
+             * 最后报「密码错误」——而它**根本不需要密码**。
+             *
+             * 复现结论（内置 7z 实测）：这个包里有 **32 组仅大小写不同的同名条目**（65 条，例
+             * `res\9N.9.png` 与 `res\9n.9.png`）。Windows 不区分大小写 → 只能落地一份 → 65 − 32 = **33 个**
+             * 缺口，与日志里差的那 33 个逐字吻合。谁赢？实测是**后写的那一条**：按"取每组最后一条"折算，
+             * 总字节正好等于盘上的 13,543,946（另两种折算分别是 13,547,285 / 13,562,445，都不对）。
+             *
+             * 所以：预期 = 按 `Path.ToLowerInvariant()` 分组、每组取**最后一条**的字节数。
+             * ⛔ 这不是放宽判据：真正缺文件的包照样判不过（下面仍然是 >= 比较），
+             * 只是不再把"Windows 物理上放不下"算成"解压不完整"。
+             */
+            var (expectedFileCount, expectedTotalSize, caseGroups, caseDropped) = CollapseCaseOnlyDuplicates(expected);
+            string caseNote = caseGroups > 0
+                ? $"（归档里有 {caseGroups} 组仅大小写不同的同名条目、共 {caseDropped} 条：Windows 不区分大小写，"
+                  + "只能落地一份，预期已按\"后写覆盖先写\"折算）"
+                : string.Empty;
 
             bool directoryExists = SafeDirectoryExists(outputDirectory);
             (int actualFileCount, long actualTotalSize) = Measure(outputDirectory);
@@ -252,10 +283,80 @@ namespace ArchiveFixer.Extraction
                 ActualFileCount = actualFileCount,
                 ExpectedTotalSize = expectedTotalSize,
                 ActualTotalSize = actualTotalSize,
-                Message = verified
+                CaseOnlyDuplicateGroups = caseGroups,
+                CaseOnlyDroppedEntries = caseDropped,
+                Message = (verified
                     ? $"校验通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节"
-                    : $"校验未通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节"
+                    : $"校验未通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节")
+                    + caseNote
             };
+        }
+
+        /// <summary>
+        /// 把"归档声明的条目"折算成**在这台机器上真能落地的**条目数 / 字节数：
+        /// 按 <c>Path.ToLowerInvariant()</c> 分组，每组只算**最后一条**（Windows 不区分大小写，后写的覆盖先写的）。
+        ///
+        /// <para>为什么要单独一个函数：这段口径要能被测试直接调（真机证据见 <see cref="Verify"/> 里的长注释），
+        /// 也要在 <c>Entries</c> 拿不到时安全退回引擎给的两个总数。</para>
+        /// </summary>
+        internal static (int FileCount, long TotalSize, int CaseGroups, int DroppedEntries) CollapseCaseOnlyDuplicates(
+            ArchiveListResult? expected)
+        {
+            if (expected == null || !expected.Success || expected.Entries == null || expected.Entries.Count == 0)
+            {
+                return (expected?.FileCount ?? 0, expected?.TotalUncompressedSize ?? 0, 0, 0);
+            }
+
+            // 每组取**最后一条**：字典的赋值天然就是"后来的覆盖先前的"，正合 7z 顺序解压的实际行为。
+            var lastSizeByLowerPath = new Dictionary<string, long>(StringComparer.Ordinal);
+            var entriesPerLowerPath = new Dictionary<string, int>(StringComparer.Ordinal);
+            int totalEntries = 0;
+
+            foreach (ArchiveEntry entry in expected.Entries)
+            {
+                if (entry == null || entry.IsDirectory || string.IsNullOrWhiteSpace(entry.Path))
+                {
+                    continue;
+                }
+
+                totalEntries++;
+
+                string key = entry.Path.ToLowerInvariant();
+                lastSizeByLowerPath[key] = entry.Size;
+                entriesPerLowerPath[key] = entriesPerLowerPath.TryGetValue(key, out int count) ? count + 1 : 1;
+            }
+
+            long totalSize = 0;
+
+            foreach (long value in lastSizeByLowerPath.Values)
+            {
+                totalSize += value;
+            }
+
+            int caseGroups = 0;
+
+            foreach (int count in entriesPerLowerPath.Values)
+            {
+                if (count > 1)
+                {
+                    caseGroups++;
+                }
+            }
+
+            /*
+             * ⛔ **没有大小写冲突时，一个字都不改**：原样返回引擎给的两个总数。
+             *
+             * 为什么必须分这一档（2026-09-27 自查逮到的回归）：`Entries` 里每条的大小是**解析出来的**，
+             * 而 `TotalUncompressedSize` 是引擎声明的总量 —— 正常情况下两者相等，但"条目大小不可信"
+             * 的场合确实存在（测试夹具、头部声明与条目不符的畸形包）。只有**真的存在冲突**时，
+             * 才需要（也才允许）用"条目求和"替换引擎的总量。
+             */
+            if (caseGroups == 0)
+            {
+                return (expected.FileCount, expected.TotalUncompressedSize, 0, 0);
+            }
+
+            return (lastSizeByLowerPath.Count, totalSize, caseGroups, totalEntries - lastSizeByLowerPath.Count);
         }
 
         private static bool SafeDirectoryExists(string? path)

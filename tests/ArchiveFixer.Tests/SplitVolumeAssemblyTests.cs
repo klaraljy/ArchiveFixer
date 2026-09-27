@@ -409,7 +409,7 @@ namespace ArchiveFixer.Tests
             // ③源目录一个字节没动（不变量 1：容器与外面那一组卷都只读）。
             Assert.Equal(before, HashAllFiles(work));
 
-            // ④拼装产物是**中间件**：任务成功后工作区整份清掉，不留残留。
+            // ④拼装产物是**过程物**：任务成功后工作区整份清掉，不留残留。
             string workRoot = Path.Combine(harness.DataRoot, "work");
 
             List<string> leftovers = Directory.Exists(workRoot)

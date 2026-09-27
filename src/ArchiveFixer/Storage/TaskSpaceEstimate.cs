@@ -25,7 +25,7 @@ namespace ArchiveFixer.Storage
     /// <c>ResourceBudget</c> 同一份 list、同一套累加口径）；拿不到时按源包体积估**下界**并标注
     /// <see cref="ContentEstimated"/>。</description></item>
     /// <item><description><see cref="ProcessArtifactBytes"/> —— 本次会**额外**产生的过程物：
-    /// 内嵌归档抠出来的中间件（源文件尾部那一段的副本）+ 内容物里的内层包**再展开**的增量
+    /// 内嵌归档抠出来的过程物（源文件尾部那一段的副本）+ 内容物里的内层包**再展开**的增量
     /// （内层包自身已经算在 <see cref="ContentBytes"/> 里，这里只算它展开后多出来的那一份）。</description></item>
     /// </list>
     ///
@@ -33,7 +33,7 @@ namespace ArchiveFixer.Storage
     /// <list type="number">
     /// <item><description>同一个**全路径**只算一次：源包与它的各卷按路径去重（改名前后的同一个文件不重复计）。</description></item>
     /// <item><description>分卷各卷只进 <see cref="SourceBytes"/>，**绝不**再按"过程物"算第二遍
-    /// （旧 `解压7z分卷文件.bat` 的场景里，分卷既被当成源包又被当成中间件，很容易重复计）。</description></item>
+    /// （旧 `解压7z分卷文件.bat` 的场景里，分卷既被当成源包又被当成过程物，很容易重复计）。</description></item>
     /// <item><description>内层归档自身已在 <see cref="ContentBytes"/> 里，<see cref="ProcessArtifactBytes"/>
     /// 只计它的**展开增量**。</description></item>
     /// </list>
@@ -70,7 +70,7 @@ namespace ArchiveFixer.Storage
         /// <summary>内容物字节数。清单拿不到时是按源包体积估的下界（见 <see cref="ContentEstimated"/>）。</summary>
         public long ContentBytes { get; init; }
 
-        /// <summary>本次会额外产生的过程物字节数（内嵌归档中间件 + 内层包再展开的增量）。</summary>
+        /// <summary>本次会额外产生的过程物字节数（内嵌归档过程物 + 内层包再展开的增量）。</summary>
         public long ProcessArtifactBytes { get; init; }
 
         /// <summary>是不是"清单读不到、内容物按源包体积估的"。</summary>
@@ -265,7 +265,7 @@ namespace ArchiveFixer.Storage
         /// <param name="directReadAvailable">
         /// 这个任务的内嵌归档能不能走**直读**（<c>Extraction/EmbeddedZipStreamExtractor</c>）。
         ///
-        /// <para>为 true 时**不记**那笔抠取副本 —— 直读路线一个字节的中间件都不产生
+        /// <para>为 true 时**不记**那笔抠取副本 —— 直读路线一个字节的过程物都不产生
         /// （用户 2026-09-24 需求第 7 条：账面上必须与真实发生的动作一致，
         /// 不许一边说"省了副本"一边又把它预留出来）。判别由调用方给
         /// （<c>ArchiveTask.EmbeddedDirectReadSupported</c> + 这一批会不会走递归模式），
@@ -331,7 +331,7 @@ namespace ArchiveFixer.Storage
             {
                 /*
                  * 清单读不到（加密头 / 引擎拒绝列目录 / 流式）：**保留粗估**，一个字都不许假装知道。
-                 * 只把"已经量出来的内嵌归档中间件"补进去 —— 那个字节数是真量出来的。
+                 * 只把"已经量出来的内嵌归档过程物"补进去 —— 那个字节数是真量出来的。
                  */
                 return new TaskSpaceEstimate
                 {
@@ -441,7 +441,7 @@ namespace ArchiveFixer.Storage
             }
 
             return carvedBytes > 0
-                ? $"，内嵌归档中间件（抠取副本）{TaskSpaceEstimate.FormatSize(carvedBytes)}"
+                ? $"，内嵌归档过程物（抠取副本）{TaskSpaceEstimate.FormatSize(carvedBytes)}"
                 : string.Empty;
         }
 

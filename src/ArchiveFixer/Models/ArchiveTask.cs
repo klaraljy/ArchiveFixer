@@ -21,7 +21,7 @@ namespace ArchiveFixer.Models
     /// 靠"文件还在不在"猜是不行的：搬运失败、被跳过、半途放弃都会让文件"还在原地"，
     /// 于是每次都会再试一遍，用户看到的是"每次运行都多一份"。</description></item>
     /// <item><description><b>延期</b>：用户那个真实文件（<c>222.mp4</c> = 假 MP4 头 + 尾部 ZIP + 内层加密分卷）
-    /// 第一层解出来的**只有待续解的中间件**，此时没有任何"内容物已定稿"的事实，不能搬；
+    /// 第一层解出来的**只有待续解的过程物**，此时没有任何"内容物已定稿"的事实，不能搬；
     /// 要记下"留到链结束后"，否则补搬没有触发点。</description></item>
     /// </list>
     /// </summary>
@@ -194,6 +194,53 @@ namespace ArchiveFixer.Models
         /// </para>
         /// </summary>
         public SourceSelectionKind SourceSelectionKind { get; set; } = SourceSelectionKind.File;
+
+        private long _sourceSizeBytes;
+
+        /// <summary>
+        /// 源文件大小（字节）。0 = 还没采到 / 文件不在（两种情况都不编数字）。
+        /// 由 <see cref="RefreshSourceSize"/> 采集。
+        /// </summary>
+        public long SourceSizeBytes
+        {
+            get => _sourceSizeBytes;
+            set
+            {
+                if (SetProperty(ref _sourceSizeBytes, value))
+                {
+                    OnPropertyChanged(nameof(SourceSizeText));
+                }
+            }
+        }
+
+        /// <summary>
+        /// 列表里那一列「大小」显示的文字（用户 2026-09-27 要求排在**文件名**后面）。
+        /// 采不到时显示一个短横，⛔ 不显示"0 字节"（那会让人以为文件是空的）。
+        /// </summary>
+        public string SourceSizeText => _sourceSizeBytes > 0 ? FormatSizeText(_sourceSizeBytes) : "-";
+
+        /// <summary>
+        /// 人读的字节数（列表列宽有限，所以最多两位小数、单位取最合适的那一档）。
+        /// 单位与 <c>Storage/TaskSpaceEstimate.FormatSize</c> **完全一致**（KiB / MiB / GiB / 字节）——
+        /// 界面上两处对同一块盘报出两种单位，用户会以为程序在算两个不同的数（历史上被投诉过）。
+        /// 这里自带一份实现是为了**不让 Models 层反向依赖 Storage 层**（分层铁律）。
+        /// </summary>
+        private static string FormatSizeText(long bytes)
+        {
+            string[] units = { "字节", "KiB", "MiB", "GiB", "TiB" };
+            double value = bytes;
+            int unit = 0;
+
+            while (value >= 1024 && unit < units.Length - 1)
+            {
+                value /= 1024;
+                unit++;
+            }
+
+            return unit == 0
+                ? $"{bytes} {units[0]}"
+                : value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + " " + units[unit];
+        }
 
         /// <summary>
         /// 这次导入时用户选中的那个根：选文件时是文件全路径，选文件夹时是**文件夹全路径**
@@ -728,7 +775,7 @@ namespace ArchiveFixer.Models
         /// <para>
         /// 两个用途，缺一不可（见 <see cref="SourcePackageMoveState"/> 的说明）：
         /// <b>幂等</b>（搬过就绝不再搬第二次，不靠"文件还在不在"猜）与
-        /// <b>延期</b>（第一层只出中间件时，把搬运留到整条续解链跑完之后补做）。
+        /// <b>延期</b>（第一层只出过程物时，把搬运留到整条续解链跑完之后补做）。
         /// </para>
         ///
         /// 它**不参与任何界面显示**：只是流水线的记账字段（与 <see cref="OutputPath"/> /
@@ -905,7 +952,7 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 是不是"续解出来的内层包"（而不是用户直接给的源包）。
         ///
-        /// 区分这两类很关键：内层包的源文件是**我们自己产出的中间件**（已经归到
+        /// 区分这两类很关键：内层包的源文件是**我们自己产出的过程物**（已经归到
         /// <c>过程物</c> 里），既不是用户的源包、也不该被当成"输出目录冲突"重新起一个目录。
         /// </summary>
         public bool IsContinuationTask => !string.IsNullOrWhiteSpace(ParentOutputDirectory);
@@ -1021,7 +1068,7 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
-        /// 更新路径相关属性。
+        /// 更新路径相关属性（并**顺手刷新源文件大小**）。
         /// </summary>
         public void RefreshPathRelatedProperties()
         {
@@ -1032,6 +1079,7 @@ namespace ArchiveFixer.Models
                     FileName = string.Empty;
                     DirectoryPath = string.Empty;
                     CurrentExtension = "无";
+                    SourceSizeBytes = 0;
                     return;
                 }
 
@@ -1046,7 +1094,40 @@ namespace ArchiveFixer.Models
                 FileName = CurrentPath;
                 DirectoryPath = string.Empty;
                 CurrentExtension = "无";
+                SourceSizeBytes = 0;
             }
+
+            RefreshSourceSize();
+        }
+
+        /// <summary>
+        /// 采集源文件大小（用户 2026-09-27："应该改在列表管理里面显示选中文件的大小，
+        /// 就排在文件名后面，这样用户就能更好的察觉"）。
+        ///
+        /// <para>为什么挂在"路径相关属性"这一个出口上：任务创建、改名、重新扫描三条路都会调
+        /// <see cref="RefreshPathRelatedProperties"/>，在那里采一次就不会出现"某条路忘了填、列表里空着"。
+        /// 读不到（文件没了 / 权限）时如实记 0，⛔ 不抛、也不编一个数出来。</para>
+        ///
+        /// <para>⚠ 分卷组：任务只认**自己那一个文件**（第一卷），整组体积由空间估算那边另算，
+        /// 这里不做加法 —— 列表里显示的就该是"这一行文件的大小"。</para>
+        /// </summary>
+        public void RefreshSourceSize()
+        {
+            long size = 0;
+
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(CurrentPath) && File.Exists(CurrentPath))
+                {
+                    size = new FileInfo(CurrentPath).Length;
+                }
+            }
+            catch
+            {
+                size = 0;
+            }
+
+            SourceSizeBytes = size;
         }
 
         /// <summary>

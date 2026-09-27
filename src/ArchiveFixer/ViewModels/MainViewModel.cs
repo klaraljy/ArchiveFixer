@@ -776,9 +776,21 @@ namespace ArchiveFixer.ViewModels
         {
             if (SetProperty(ref _isBusy, value, nameof(IsBusy)))
             {
+                // 「移除勾选的」那颗按钮的说明跟着忙碌状态变（灰着的时候要能读出为什么，见属性注释）。
+                OnPropertyChanged(nameof(RemoveCheckedTasksTooltip));
                 RaiseAllCommandCanExecuteChanged();
             }
         }
+
+        /// <summary>
+        /// 「移除勾选的」那颗按钮的 ToolTip —— **灰着的时候必须能读出为什么**（用户 2026-09-27）：
+        /// 他在跑批的时候点这颗按钮，"点了没反应"，因为 <c>CanExecute</c> 里的 <c>!IsBusy</c> 让它变灰了，
+        /// 而灰按钮既没有提示也没有声音（旁边的全选 / 反选 / 不选没有这个条件，所以看起来只有它坏了）。
+        /// 现在把两种状态各写一句话，配 <c>ToolTipService.ShowOnDisabled="True"</c> 就能读到。
+        /// </summary>
+        public string RemoveCheckedTasksTooltip => IsBusy
+            ? StatusText.RemoveCheckedTasksBusyHint
+            : StatusText.RemoveCheckedTasksHint;
 
         public bool IsStopping
         {
@@ -2860,7 +2872,37 @@ namespace ArchiveFixer.ViewModels
         public void UpdateSummary()
         {
             Summary = _taskSummaryService.BuildSummary(Tasks);
+            OnPropertyChanged(nameof(SelectedTasksSummary));
             RaiseAllCommandCanExecuteChanged();
+        }
+
+        /// <summary>
+        /// 「勾选：」那一排右边那句"已勾选 N 项 · 合计 X"（用户 2026-09-27："应该…显示选中文件的大小…
+        /// 这样用户就能更好的察觉"）。
+        ///
+        /// <para>合计只累加**采到了大小**的那些（<c>SourceSizeBytes</c> 为 0 的算 0）；
+        /// 一个都没勾时返回一句空提示，⛔ 不留空白让人以为坏了。</para>
+        /// </summary>
+        public string SelectedTasksSummary
+        {
+            get
+            {
+                List<ArchiveTask> selected = Tasks.Where(task => task != null && task.IsSelected).ToList();
+
+                if (selected.Count == 0)
+                {
+                    return "（没有勾选任何任务）";
+                }
+
+                long total = 0;
+
+                foreach (ArchiveTask task in selected)
+                {
+                    total += task.SourceSizeBytes;
+                }
+
+                return $"已勾选 {selected.Count} 项 · 合计 {TaskSpaceEstimate.FormatSize(total)}";
+            }
         }
 
         public void AppendLog(string message)
