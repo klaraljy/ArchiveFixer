@@ -356,6 +356,7 @@ namespace ArchiveFixer.Tests
                 new[] { task }, seed, reminders: null);
 
             Assert.Equal(string.Empty, normal.SpaceTightEcho);
+            Assert.False(normal.SourceEchoLocked);
             Assert.Contains(OneClickRunOptions.DescribeSourceHandling(SourceHandlingMode.KeepInPlace), normal.SourceEcho, StringComparison.Ordinal);
             Assert.Contains(StatusText.OneClickConfirmRestKeep, normal.RestEcho, StringComparison.Ordinal);
 
@@ -371,6 +372,22 @@ namespace ArchiveFixer.Tests
 
             Assert.Contains(OneClickRunOptions.DescribeSourceHandling(SourceHandlingMode.MoveToRest), tight.SourceEcho, StringComparison.Ordinal);
             Assert.Contains(StatusText.OneClickConfirmRestAutoDelete, tight.RestEcho, StringComparison.Ordinal);
+
+            /*
+             * ⚠ 「源包：」那一行必须**锁住**（用户 2026-09-27 真机逮到的那条矛盾）：
+             * 确认框打开时会按折叠区里的单选框重算那一行，而单选框只反映**设置**（源包=留在原地）——
+             * 不锁的话同一个框里就会出现"源包：留在原地"与红字"会自动覆盖为「源包 → 放入其余物」"两句矛盾的话。
+             */
+            Assert.True(tight.SourceEchoLocked, "空间不足模式下必须锁住「源包：」那一行");
+
+            // 而且窗口那边真的照着它办了（无 UI 宿主里构造不了窗口，所以钉住那处判据的存在）。
+            string windowCode = File.ReadAllText(
+                Path.Combine(XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "Views", "OneClickOptionsWindow.xaml.cs"),
+                Encoding.UTF8);
+
+            Assert.Contains("_sourceEchoLocked", windowCode, StringComparison.Ordinal);
+            Assert.Contains("if (!_sourceEchoLocked)", windowCode, StringComparison.Ordinal);
+            Assert.Contains("facts?.SourceEchoLocked == true", windowCode, StringComparison.Ordinal);
 
             // 而且它只是"这一次"的说法：设置本身还是留在原地 / 不动其余物。
             Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), harness.Vm.Settings.SourceHandling);

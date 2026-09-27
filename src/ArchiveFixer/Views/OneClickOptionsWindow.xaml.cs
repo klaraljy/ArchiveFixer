@@ -82,6 +82,15 @@ namespace ArchiveFixer.Views
         /// <summary>重算落点那一行的并发编号（连点几下时只认最后一次算出来的结果）。</summary>
         private int _echoRevision;
 
+        /// <summary>
+        /// 「源包：」那一行**不许**按折叠区里的单选框重算（用户 2026-09-27 真机逮到的那条矛盾）。
+        ///
+        /// <para>为 true = 「空间不足」模式正开着：这一批的源包处理是**运行期覆盖**的，
+        /// 而折叠区里的单选框只反映设置 —— 重算就会让正文出现"源包：留在原地"与红字
+        /// "会自动覆盖为「源包 → 放入其余物」"两句互相矛盾的话。</para>
+        /// </summary>
+        private readonly bool _sourceEchoLocked;
+
         public event PropertyChangedEventHandler? PropertyChanged;
 
         /// <summary>无参构造：供 XAML 宿主 / 设计器使用（等价于"按默认设置、按设置值"）。</summary>
@@ -114,6 +123,10 @@ namespace ArchiveFixer.Views
         /// <param name="spaceTightEcho">
         /// 「空间不足」模式那条红字（用户 2026-09-27）；空 = 不显示（①页那个勾没开）。
         /// </param>
+        /// <param name="sourceEchoLocked">
+        /// 「源包：」那一行要不要锁住（true = 空间不足模式开着，正文用调用方算好的**覆盖后**的值，
+        /// 折叠区里的单选框不再改写它）。
+        /// </param>
         public OneClickOptionsWindow(
             AppSettings? settings,
             OneClickRunOptions? seed,
@@ -123,7 +136,8 @@ namespace ArchiveFixer.Views
             string? noticeEcho = null,
             Func<OneClickRunOptions, Task<string>>? destinationEchoFactory = null,
             string? specialExtractionEcho = null,
-            string? spaceTightEcho = null)
+            string? spaceTightEcho = null,
+            bool sourceEchoLocked = false)
         {
             InitializeComponent();
 
@@ -138,6 +152,7 @@ namespace ArchiveFixer.Views
             _noticeEcho = noticeEcho ?? string.Empty;
             _specialExtractionEcho = specialExtractionEcho ?? string.Empty;
             _spaceTightEcho = spaceTightEcho ?? string.Empty;
+            _sourceEchoLocked = sourceEchoLocked;
             _destinationEchoFactory = destinationEchoFactory;
 
             ApplySpecialExtractionEcho();
@@ -323,7 +338,8 @@ namespace ArchiveFixer.Views
                 facts?.NoticeEcho,
                 destinationEchoFactory,
                 facts?.SpecialExtractionEcho,
-                facts?.SpaceTightEcho);
+                facts?.SpaceTightEcho,
+                facts?.SourceEchoLocked == true);
 
             Window? owner = Application.Current?.MainWindow;
 
@@ -477,8 +493,16 @@ namespace ArchiveFixer.Views
                 ? string.Empty
                 : "选了「指定位置」但还没填路径：点「浏览…」选一个目录，或改用上面那一档。";
 
-            // 源包那一行跟着折叠区里的选择实时变（它是"这次会不会动我的源包"的答案）。
-            SourceEcho = StatusText.OneClickConfirmSourceLabel + OneClickRunOptions.DescribeSourceHandling(current.SourceHandling);
+            /*
+             * 源包那一行跟着折叠区里的选择实时变（它是"这次会不会动我的源包"的答案）。
+             *
+             * ⚠ 例外：空间不足模式开着时**不许重算**（`_sourceEchoLocked`）—— 折叠区里的单选框只反映设置，
+             * 而这一批真实行为是覆盖后的；重算会让正文出现两句互相矛盾的话（真机逮到过）。
+             */
+            if (!_sourceEchoLocked)
+            {
+                SourceEcho = StatusText.OneClickConfirmSourceLabel + OneClickRunOptions.DescribeSourceHandling(current.SourceHandling);
+            }
 
             RefreshDestinationEcho();
         }

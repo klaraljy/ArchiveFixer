@@ -5261,6 +5261,13 @@ namespace ArchiveFixer.ViewModels
                 },
                 SourceEcho = StatusText.OneClickConfirmSourceLabel
                     + OneClickRunOptions.DescribeSourceHandling(sourceHandling),
+
+                /*
+                 * 空间不足模式下把「源包：」那一行**锁住**（用户 2026-09-27 真机逮到）：
+                 * 折叠区里的单选框显示的是**设置**里的档（源包=留在原地），而这一批真实行为是覆盖后的 ——
+                 * 不锁的话同一个框里会出现"源包：留在原地"与红字"会自动覆盖为「源包 → 放入其余物」"两句矛盾的话。
+                 */
+                SourceEchoLocked = spaceTight,
                 SpaceTightEcho = spaceTight
                     ? spaceTightKeepSource
                         ? StatusText.SpaceTightKeepSourceConfirmText
