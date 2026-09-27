@@ -31,7 +31,7 @@
 
 .PARAMETER WorkDirectory
     临时目录，默认 <仓库根的上一级>\_tmp\ArchiveFixer\package
-    （全局约定：临时文件统一放 E:\DeepSeekProjects\_tmp\<项目名>\，不入仓库）。
+    （全局约定：临时文件统一放 <临时目录>\<项目名>\，不入仓库）。
 
 .PARAMETER IncludeSymbols
     把 .pdb 调试符号一起放进包（默认不放 —— 分发包只需要能跑）。
@@ -131,7 +131,7 @@ $version = $versionNode.InnerText.Trim()
 
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'dist' }
 if (-not $WorkDirectory) {
-    # 仓库的上一级 = E:\DeepSeekProjects → 临时目录落 E:\DeepSeekProjects\_tmp\ArchiveFixer\package
+    # 仓库的上一级 = E:\DeepSeekProjects → 临时目录落 <临时目录>\ArchiveFixer\package
     $WorkDirectory = Join-Path (Split-Path -Parent $repoRoot) '_tmp\ArchiveFixer\package'
 }
 

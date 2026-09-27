@@ -20,7 +20,7 @@ namespace ArchiveFixer.Views
             InitializeComponent();
         }
 
-        /// <summary>把整份说明（介绍 + 术语表）拼成一段纯文本 —— 「复制全部说明」用。</summary>
+        /// <summary>把整份说明（介绍 + 功能详解 + 术语表）拼成一段纯文本 —— 「复制全部说明」用。</summary>
         internal static string BuildPlainText()
         {
             var builder = new StringBuilder();
@@ -34,7 +34,16 @@ namespace ArchiveFixer.Views
                 builder.AppendLine();
             }
 
-            builder.AppendLine("———— 术语表 ————");
+            builder.AppendLine("———— " + HelpContent.FeaturesHeading + " ————");
+            builder.AppendLine();
+
+            foreach (HelpTerm feature in HelpContent.Features)
+            {
+                builder.AppendLine(feature.Term + "：" + feature.Explanation);
+                builder.AppendLine();
+            }
+
+            builder.AppendLine("———— " + HelpContent.GlossaryHeading + " ————");
             builder.AppendLine();
 
             foreach (HelpTerm term in HelpContent.Glossary)

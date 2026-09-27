@@ -756,7 +756,7 @@ G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1
 |---|---|---|---|
 | `Rar.txt`（RAR 6.11 控制台版手册，UTF-16LE） | `C:\Program Files\WinRAR\` | 2121 行 / 105942 B | 主要依据：命令列表（`a/c/d/e/x/t/…`）、全部开关（`-ad/-o/-or/-kb/-ri/-x/-n/-ep*/-ts/-log/-ioff/…`）、返回码表、术语表 |
 | `WhatsNew.txt`（4.00→6.11，UTF-8 无 BOM） | 同上 | 2090 行 / 113674 B | 功能演进与设计意图：6.00 的"解压到"4 选 1 与 `-ad2`、6.10 的"完成时"与 `-mes`/`-op`/`-ep4`、5.90 的选项页、5.80 的 7z 长路径与进度窗口截断、UNACEV2 漏洞与 6.01/6.11 的加固 |
-| `WinRAR.chm` → 解出 289 文件 / 271 个帮助主题 | 解到 `E:\DeepSeekProjects\_tmp\ArchiveFixer\winrar-doc\`（缓存，不入仓库） | 450586 B → 271 主题约 168 KB 纯文本 | 解压对话框三页（常规/高级/选项）、覆盖确认 6 档、路径设置、Profiles、密码管理、安全设置、退出码、报告、分卷、致谢 |
+| `WinRAR.chm` → 解出 289 文件 / 271 个帮助主题 | 解到 `<临时目录>\ArchiveFixer\winrar-doc\`（缓存，不入仓库） | 450586 B → 271 主题约 168 KB 纯文本 | 解压对话框三页（常规/高级/选项）、覆盖确认 6 档、路径设置、Profiles、密码管理、安全设置、退出码、报告、分卷、致谢 |
 | `License.txt`（GBK） | `C:\Program Files\WinRAR\` | 162 行 / 9983 B | §5 的全部条款要点（与帮助的"WinRAR 许可"主题同文） |
 | `ReadMe.txt`（GBK） | 同上 | 26 行 / 890 B | 格式支持清单（完整 RAR/ZIP，解压 7Z/ARJ/BZ2/CAB/GZ/ISO/JAR/LZH/TAR/UUE/XZ/Z/LZ/ZST） |
 | ArchiveFixer 侧 | `E:\DeepSeekProjects\ArchiveFixer` | — | `AGENTS.md`（全）、`docs/输出与整理模型.md`（全）、`README.md`（全）、`Models/AppSettings.cs`（全）、`Models/StatusText.cs`、`Extraction/OutputPlacement.cs`、`Helpers/FileNameHelper.cs`、`Helpers/SafePathHelper.cs`、`Engines/ArchiveOperationResult.cs`、`Security/ArchivePathGuard.cs` 等，另加一次 18 项只读代码核查（`Profile/掩码/时间判据/PriorityClass` 等关键项均以 grep 零命中确认"没有"） |
@@ -832,4 +832,4 @@ G2（缺卷手动指定）、H4（手动输入密码出口）、K2（退出码 1
   实测（7-Zip 26.01/26.03）**不成立**：带正确密码它能解 RAR4/RAR5 的 `-hp`（含分卷）。
   第二引擎的价值因此落在"**分类与报错更准**"（缺卷时点名缺哪一卷、加密头有显式标志）
   以及"将来 RAR 7.x 新格式"上，不在"7-Zip 完全不能"。证据与原始输出见交付报告
-  `E:\DeepSeekProjects\_tmp\ArchiveFixer\fix-unrar.md`。
+  `<临时目录>\ArchiveFixer\fix-unrar.md`。

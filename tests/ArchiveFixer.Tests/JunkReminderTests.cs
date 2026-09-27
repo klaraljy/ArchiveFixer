@@ -109,7 +109,7 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// **用户真机素材**：他的资源包里没有"说明.txt"，而是把密码提示做成一个**文件夹**
-        /// —— <c>解压密码为：cosergirl.com</c>。旧判据只看文件的扩展名，一个条目都认不出来，
+        /// —— <c>解压密码为：example.com</c>。旧判据只看文件的扩展名，一个条目都认不出来，
         /// 于是他反馈"为什么我用了这么久还是没有看到有关无用物的任何提醒"。
         ///
         /// <para>同时钉住反面：普通的内容文件夹（<c>1-29+4 IF线</c>）**绝不能**被叫成无用物
@@ -120,12 +120,12 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness("run");
 
-            string hintDirectory = CreateDirectory(harness, "解压密码为：cosergirl.com");
+            string hintDirectory = CreateDirectory(harness, "解压密码为：example.com");
             string contentDirectory = CreateDirectory(harness, "1-29+4 IF线");
             ArchiveTask task = AddTask(harness, CreateSourceFile(harness, "001.7z"));
 
             // 名字判据本身先钉一遍（文件与目录同一套）。
-            Assert.True(SourceJunkScanner.LooksLikeHintName("解压密码为：cosergirl.com"));
+            Assert.True(SourceJunkScanner.LooksLikeHintName("解压密码为：example.com"));
             Assert.True(SourceJunkScanner.LooksLikeHintName("使用说明.txt"));
             Assert.False(SourceJunkScanner.LooksLikeHintName("1-29+4 IF线"));
             Assert.False(SourceJunkScanner.LooksLikeHintName("001.7z"));

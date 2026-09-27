@@ -206,7 +206,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 任务页选择目录命令_解压方式页那几个控件必须收到通知()
         {
-            const string chosen = @"H:\BaiduNetdiskDownload\测试\CCC";
+            const string chosen = @"<测试目录>\测试\CCC";
 
             MainViewModel vm = CreateViewModel(out _, chosen);
             var raised = new List<string?>();

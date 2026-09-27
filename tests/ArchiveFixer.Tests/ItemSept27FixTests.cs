@@ -186,6 +186,42 @@ namespace ArchiveFixer.Tests
             Assert.Contains("其余物里就只有过程物", rest.Explanation, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// **功能详解**那一段（用户 2026-09-27 追加："里面有专有名词的详细解释，但是没有功能的详细解释"）：
+        /// 至少要覆盖到六个选项卡 + 一键处理 + 空间那三件事，而且每条都得说人话。
+        /// </summary>
+        [Fact]
+        public void 说明内容_功能详解覆盖六个选项卡与关键机制()
+        {
+            IReadOnlyList<HelpTerm> features = HelpContent.Features;
+
+            Assert.True(features.Count >= 12, $"功能详解太薄（{features.Count} 条）");
+
+            foreach (HelpTerm feature in features)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(feature.Term));
+                Assert.True(feature.Explanation.Length >= 20, $"功能「{feature.Term}」的解释太短：{feature.Explanation}");
+            }
+
+            string all = string.Join("\n", features.Select(f => f.Term + "：" + f.Explanation));
+
+            foreach (string required in new[]
+                     {
+                         "① 任务页", "② 解压方式页", "③ 清理与删除页", "④ 密码页", "⑤ 打包页", "⑥ 设置页",
+                         "一键处理：它到底做了哪几步",
+                         "空间：三个工具各管什么",
+                         "「空间不足」模式",
+                         "同名冲突怎么办",
+                         "日志与排障"
+                     })
+            {
+                Assert.Contains(required, all, StringComparison.Ordinal);
+            }
+
+            // 两段的分工不能糊在一起：功能详解里不解释"其余物是什么"（那是术语表的活）。
+            Assert.DoesNotContain(features, f => f.Term == "其余物");
+        }
+
         /// <summary>说明窗**不依赖任何外部文件**（帮助菜单那份「使用说明」要读 docs\，分发包里可能没有）。</summary>
         [Fact]
         public void 说明窗_内容全部来自HelpContent_不读文件()
@@ -196,6 +232,9 @@ namespace ArchiveFixer.Tests
             Assert.Contains("HelpContent.Tagline", xaml, StringComparison.Ordinal);
             Assert.Contains("HelpContent.Introduction", xaml, StringComparison.Ordinal);
             Assert.Contains("HelpContent.Glossary", xaml, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.Features", xaml, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.FeaturesHeading", xaml, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.GlossaryHeading", xaml, StringComparison.Ordinal);
 
             Assert.DoesNotContain("File.ReadAllText", code, StringComparison.Ordinal);
             Assert.DoesNotContain("File.Exists", code, StringComparison.Ordinal);
