@@ -1687,7 +1687,9 @@ namespace ArchiveFixer.ViewModels
                 List<(ArchiveTask Parent, string ParentName, string File)> children = group.ToList();
 
                 // 父任务自己产出了内容物 = 这一层是"内容 + 内层包"的分支，不是干净的单链中间层。
-                bool parentProducedContent = !string.IsNullOrWhiteSpace(parent.ContentDirectoryPath);
+                // ⚠ 判据是**搬出去的内容物文件数**（唯一权威来源 = 定稿计划），不是
+                // `ContentDirectoryPath` —— 后者对"只出过程物"的层也非空（见 ArchiveTask.ContentFileCount）。
+                bool parentProducedContent = parent.ContentFileCount > 0;
 
                 bool addLayer = ShouldAddContinuationLevelLayer(
                     Settings.OmitMiddleContinuationLayers,

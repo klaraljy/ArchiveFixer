@@ -770,6 +770,19 @@ namespace ArchiveFixer.Models
         public string CollectedPath { get; set; } = string.Empty;
 
         /// <summary>
+        /// 本任务定稿时**搬出去的内容物文件数**（0 = 这一层只出了过程物 / 什么都没出）。
+        ///
+        /// <para>
+        /// 为什么要单独记（2026-09-27，落点模型 v2）：续解层"该不该给这一层建一个包名目录"的判据里有一条
+        /// "父任务自己产出了内容物吗"（出了就是分支，那一层照建）。这条事实**不能拿
+        /// <see cref="ContentDirectoryPath"/> 代替** —— 后者是"内容物那一层在哪"，而只出过程物的那一层
+        /// 也会被算成"落点目录本身"，实测因此把简洁档判成了忠实档（端到端测试当场红）。
+        /// 唯一权威来源是定稿计划的 <c>ContentFileCount</c>（`StageCommitResult`）。
+        /// </para>
+        /// </summary>
+        public int ContentFileCount { get; set; }
+
+        /// <summary>
         /// 源包搬运（一键处理 / 手动「只解压」把整组源包移入 <c>其余物</c>）在**本任务**上的记账。
         ///
         /// <para>

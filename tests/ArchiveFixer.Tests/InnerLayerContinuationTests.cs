@@ -1015,6 +1015,139 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(rest, "inner.7z.001")), "内层分卷也应该在同一个其余物里");
         }
 
+        // ---------------------------------------------------------------- 落点模型 v2：续解层的两种档位
+
+        /// <summary>
+        /// **续解层"首尾必留、中间看开关"的真 7z 端到端**（用户 2026-09-27 拍板）：
+        /// 同一条**单链**样本，开关关着 = 忠实档（每个内层包各占一层），打开 = 简洁档
+        /// （中间那些"只出过程物"的过路层省掉，第一层与最后一层永远保留）。
+        ///
+        /// <para>形状：<c>outer.7z → level2.7z → level3.7z → level4.7z → 内容物\payload.bin</c>，
+        /// 每一层里**只有**下一个包（干净单链），所以每一层都会走"该不该建那一层"的判据。
+        /// 最深一层放的是**一个文件夹**（不是单个文件）：判定表 1 对"终端只有单个文件"本来就不套层，
+        /// 拿单个文件当样本会把"末层那一层"这件事测糊。</para>
+        ///
+        /// <para>红在哪：把 <c>ShouldAddContinuationLevelLayer</c> 里"简洁档"那一支改成恒 <c>true</c>
+        /// → 简洁档那两段立刻红；判据若退回用 <c>ContentDirectoryPath</c> 非空（而不是真的内容物文件数）
+        /// → 也红（这正是端到端测试当场逮到的一次）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 续解中间层_忠实档每层各占一层_简洁档只留首尾()
+        {
+            // ── 忠实档（默认，开关关）：每层各占一层 ─────────────────────────────
+            Harness faithful = CreateHarness($"{ChainPassword}\n");
+
+            await faithful.AddPathsAsync(BuildFolderChain(4));
+
+            OneClickOutcome faithfulOutcome = await faithful.RunOneClickAsync();
+
+            Assert.True(faithfulOutcome.Rounds >= 2, "这条链至少要解两轮才能看出层数差别");
+
+            string faithfulPayload = Assert.Single(
+                Directory.GetFiles(faithful.OutputRoot, "payload.bin", SearchOption.AllDirectories));
+
+            Assert.Equal(
+                Path.Combine(faithful.OutputRoot, "outer", "level2", "level3", "level4", "内容物", "payload.bin"),
+                faithfulPayload);
+
+            // 忠实档：每一层自己的其余物在**它自己那一层**里（里面的包分得清是谁的）。
+            Assert.True(
+                File.Exists(Path.Combine(faithful.OutputRoot, "outer", "level2", "其余物", "level3.7z")),
+                "忠实档下 level3.7z 应该躺在 level2 那一层的其余物里");
+
+            // ── 简洁档（开关开）：中间层省掉，只留第一层与最后一层 ────────────────
+            /*
+             * ⚠ 换一个输出根：两套 harness 默认共用 `<root>\out`，第一段已经在那里留下了一份产物
+             * （`Assert.Single` 会数到两份，测的就不是这一档了）。
+             */
+            string compactOutputRoot = Path.Combine(_root, "out-compact");
+
+            Harness compact = CreateHarness(
+                $"{ChainPassword}\n",
+                settings =>
+                {
+                    settings.OmitMiddleContinuationLayers = true;
+                    settings.CustomOutputDirectory = compactOutputRoot;
+                });
+
+            await compact.AddPathsAsync(BuildFolderChain(4));
+
+            // 前提必须成立：开关确实读进了设置（否则下面测的就不是"简洁档"而是默认档）。
+            Assert.True(
+                compact.Vm.Settings.OmitMiddleContinuationLayers,
+                "「续解时省略中间层」没有生效到设置上 —— 后面的层数断言没有意义");
+
+            await compact.RunOneClickAsync();
+
+            string compactPayload = Assert.Single(
+                Directory.GetFiles(compactOutputRoot, "payload.bin", SearchOption.AllDirectories));
+
+            /*
+             * 简洁档：`…\outer\内容物\payload.bin` ——
+             * `level2`/`level3`/`level4` 三层都是"只出过程物"的过路层（省掉），
+             * `outer` 是第一层（永远保留）、`内容物` 是最后一层（装着内容物的那个包自己那一层）。
+             */
+            Assert.True(
+                string.Equals(
+                    Path.Combine(compactOutputRoot, "outer", "内容物", "payload.bin"),
+                    compactPayload,
+                    StringComparison.OrdinalIgnoreCase),
+                $"简洁档应当只留首尾两层。实际：{compactPayload}"
+                + $"\n目录树：{string.Join(" | ", Directory.GetFileSystemEntries(compactOutputRoot, "*", SearchOption.AllDirectories))}"
+                + $"\n日志（层相关）：\n{string.Join("\n", compact.LogTexts.Where(line => line.Contains("层", StringComparison.Ordinal)))}");
+
+            // 中间层真的省了：三个内层包 + 源包**全都在 `outer\其余物\` 这一处**（没有各自的层）。
+            Assert.True(
+                File.Exists(Path.Combine(compactOutputRoot, "outer", "其余物", "level2.7z")),
+                "简洁档下内层包应该集中在外层那一层的其余物里");
+            Assert.True(
+                File.Exists(Path.Combine(compactOutputRoot, "outer", "其余物", "level4.7z")),
+                "简洁档下最后一层的包也应该在外层那一层的其余物里");
+
+            Assert.False(
+                Directory.Exists(Path.Combine(compactOutputRoot, "outer", "level2")),
+                "简洁档不该给过路层建目录");
+        }
+
+        /// <summary>
+        /// 造一条**单链**、最深一层是"一个文件夹 + 里面一个文件"的样本：
+        /// <c>outer.7z → level2.7z → … → levelN.7z → 内容物\payload.bin</c>。
+        ///
+        /// <para>与 <see cref="BuildChain"/> 的差别只有最后一层的内容形状（那个是单文件，
+        /// 判定表 1 不套层）—— 落点模型 v2 的"末层那一层"必须用一个文件夹才测得出来。</para>
+        /// </summary>
+        private string BuildFolderChain(int levelCount)
+        {
+            Assert.True(levelCount >= 2, "至少要有 outer + 一层内层包");
+
+            string build = Path.Combine(_root, "folder-chain-" + levelCount);
+            Directory.CreateDirectory(Path.Combine(build, "内容物"));
+
+            WriteText(Path.Combine(build, "内容物", "payload.bin"), InnerPayloadText);
+
+            Run7z(build, "a", "-t7z", $"level{levelCount}.7z", "-p" + ChainPassword, "-mhe=on", @"内容物\payload.bin");
+
+            for (int level = levelCount - 1; level >= 2; level--)
+            {
+                Run7z(
+                    build,
+                    "a",
+                    "-t7z",
+                    $"level{level}.7z",
+                    "-p" + ChainPassword,
+                    "-mhe=on",
+                    $"level{level + 1}.7z");
+            }
+
+            string packageDirectory = Path.Combine(_root, "packages");
+            Directory.CreateDirectory(packageDirectory);
+
+            string outer = Path.Combine(packageDirectory, "outer.7z");
+            Run7z(build, "a", "-t7z", outer, "-p" + ChainPassword, "-mhe=on", "level2.7z");
+
+            return outer;
+        }
+
         // ---------------------------------------------------------------- 归档起点判定（纯函数）
 
         [Theory]

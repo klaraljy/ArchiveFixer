@@ -245,7 +245,7 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 
 ## 11. 当前验证状态（2026-09-27，落点模型 v2 落完并全量通过之后）
 
-- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1771 条全绿**（0 失败 / 0 跳过）；
+- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1763 条全绿**（0 失败 / 0 跳过）；
   `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
 - **落点模型 v2**（2026-09-27）：终点落法固定（不再让用户选）、手动「解压到当前文件夹」、

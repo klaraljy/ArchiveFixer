@@ -1051,6 +1051,16 @@ namespace ArchiveFixer.ViewModels
                 {
                     task.ContentDirectoryPath = contentDirectory;
                 }
+
+                /*
+                 * "这一层到底产出了内容物没有"（2026-09-27 落点模型 v2）：续解层"该不该建包名目录"的
+                 * 判据里要用它 —— 只出过程物的过路层在简洁档下不建层，而出了内容物就说明是分支、照建。
+                 *
+                 * ⚠ 必须记**文件数**，不能拿 `ContentDirectoryPath` 非空当证据：那一格是"内容物层在哪"，
+                 * 只出过程物的层也会被算成落点目录本身（真机形状：destDir 里只剩一个 `其余物\`）——
+                 * 实测拿它当判据时，简洁档被判成了忠实档（端到端用例当场红）。
+                 */
+                task.ContentFileCount = work.Commit.ContentFileCount;
             }
 
             /*
