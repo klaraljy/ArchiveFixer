@@ -161,6 +161,70 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **选文件夹 + 指定位置**（2026-09-27 落点模型 v2 方案 A）的预告必须也是真话：
+        /// 落点 = <c>指定位置\选中文件夹名\相对子路径\包基名</c>，确认框里那一行与实际输出目录逐字一致。
+        ///
+        /// <para>为什么单独钉：这一档的落点在 v2 里刚改过（以前几个包都倒进同一层），
+        /// 而确认框那行是用户"按开始处理"的唯一依据 —— 预告与实际不一致就是"说一套做一套"。</para>
+        /// </summary>
+        [Fact]
+        public async Task 选文件夹加指定位置_正文落点与真实输出目录一致()
+        {
+            Harness harness = CreateHarness();
+
+            string customRoot = Path.Combine(_root, "BBB");
+            string selectionRoot = Path.Combine(_root, "AAA");
+
+            Directory.CreateDirectory(customRoot);
+            Directory.CreateDirectory(Path.Combine(selectionRoot, "新建"));
+
+            // 包在选中的文件夹里**还隔着一层子文件夹**：子路径必须原样保住。
+            string package = Path.Combine(selectionRoot, "新建", "222.7z");
+            File.WriteAllText(package, "not a real archive - the engine is faked in these tests");
+
+            var task = new ArchiveTask(package, 1)
+            {
+                IsArchive = true,
+                DetectedFormat = "7Z",
+                ExtensionStatus = StatusText.ExtensionNormal,
+                Status = StatusText.Recognized,
+                IsSelected = true,
+                SourceSelectionKind = SourceSelectionKind.Folder,
+                SourceSelectionRoot = selectionRoot
+            };
+
+            harness.Vm.Tasks.Add(task);
+
+            OneClickConfirmFacts? facts = null;
+
+            harness.OneClick.OptionsPromptOverride = _ =>
+            {
+                facts = harness.Extraction
+                    .BuildConfirmFactsAsync(new[] { task }, OneClickRunOptions.FromSettings(harness.Vm.Settings, customRoot), null)
+                    .GetAwaiter()
+                    .GetResult();
+
+                return OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
+                {
+                    PlacementMode = OutputPlacementMode.CustomRootPerArchive,
+                    CustomRoot = customRoot
+                });
+            };
+
+            await harness.OneClick.RunAsync();
+
+            Assert.NotNull(facts);
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // 预告 = `BBB\AAA\新建\222`，与实际输出目录逐字一致。
+            Assert.Equal(task.OutputPath, facts!.DestinationEcho);
+
+            Assert.True(
+                task.OutputPath.EndsWith(Path.Combine("AAA", "新建", "222"), StringComparison.OrdinalIgnoreCase),
+                $"落点应该是 指定位置\\选中文件夹名\\子路径\\包名。实际：{task.OutputPath}");
+        }
+
+        /// <summary>
         /// 第 33 条：「其余物」那一行**跟着本次选项走**，不是照着设置念 ——
         /// 用户在确认框折叠区里把「删除操作」改成彻底删除之后，正文必须说"会自动彻底删除"；
         /// 没改（默认档）时说"不自动删除"。
