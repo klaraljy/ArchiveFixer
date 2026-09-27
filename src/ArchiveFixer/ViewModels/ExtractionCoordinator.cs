@@ -702,6 +702,23 @@ namespace ArchiveFixer.ViewModels
         /// 内嵌 ZIP 直读那条路就是这样：清单是解析出来的，而源文件 7z 根本打不开
         /// （前缀远超 8 MiB 的容忍上限）。留 null 时行为与以前逐字节一致。
         /// </param>
+        /// <param name="recursion">
+        /// 这一单是不是**递归展开**出来的（可选；一键处理那条路走 <see cref="RunRecursiveAsync"/>）。
+        ///
+        /// <para>
+        /// ⚠ 它只影响一件事：**结果校验拿什么当预期**。递归展开超过一层时，
+        /// "外层归档的清单"（第 0 层声明的东西）与"暂存区里最终的内容物"（叶子层解出来的东西）
+        /// 本来就不是一回事 —— 拿前者核对后者**必然对不上**。
+        /// 真机铁证（用户 2026-09-27 CCC，13 个包全部"解压失败"、内容其实完好）：
+        /// `预期 2 个文件 / 157348161 字节，实际 7 个 / 157347461 字节`，
+        /// 而日志同一段里写着"已完成 2 层递归解压…已发布 7 个文件"—— 7 个才是对的。
+        /// </para>
+        /// <para>
+        /// 所以这一档改为"**没有可用的预期清单**"：只做非空 / 落点 / 预算三道校验
+        /// （<see cref="OutputVerifier"/> 的规则 1–3），并在日志里说清为什么不算清单。
+        /// 单层递归（只展开一层）仍然照旧拿外层清单核对 —— 那时两者确实是一回事。
+        /// </para>
+        /// </param>
         private async Task<bool> PostProcessSuccessAsync(
             ArchiveTask task,
             string engineArchivePath,
@@ -711,9 +728,18 @@ namespace ArchiveFixer.ViewModels
             bool sharedOutputRoot,
             bool oneClickRun,
             CancellationToken cancellationToken,
-            ArchiveListResult? knownList = null)
+            ArchiveListResult? knownList = null,
+            RecursionResult? recursion = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            /*
+             * 递归展开超过一层 → 外层清单不再描述最终产物（见 recursion 参数说明）。
+             * 这里给一份 **Success = false** 的"空预期"：OutputVerifier 会走"只做非空校验"那一支，
+             * 并在结论里如实写明"未取得预期条目数"——比拿一份对不上的清单判失败诚实得多。
+             */
+            int expandedLayers = recursion?.Layers.Count(layer => layer.Success) ?? 0;
+            bool recursionOutranOuterManifest = expandedLayers > 1;
 
             // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
             // 清单同样取自**真正解开的那份归档**：内嵌归档要拿抠出来的文件去列，源文件 7z 根本打不开。
@@ -721,11 +747,17 @@ namespace ArchiveFixer.ViewModels
             //
             // 直读路线把清单直接带进来（见 knownList）：它必须与真正解出来的东西是同一份，
             // 不然"校验通过"就变成了拿两个不同来源的数字互相点头。
-            ArchiveListResult expected = knownList != null && knownList.Success
-                ? knownList
-                : await _archiveEngine.ListAsync(
-                    ArchiveRequest.For(engineArchivePath, password),
-                    cancellationToken);
+            ArchiveListResult expected = recursionOutranOuterManifest
+                ? new ArchiveListResult
+                {
+                    Success = false,
+                    Message = $"本次递归展开了 {expandedLayers} 层：第 0 层的清单不再描述最终产物"
+                }
+                : knownList != null && knownList.Success
+                    ? knownList
+                    : await _archiveEngine.ListAsync(
+                        ArchiveRequest.For(engineArchivePath, password),
+                        cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -3336,7 +3368,13 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 递归解压一个任务，并把结果落到任务状态上。
-        /// 多分支时**必须问用户**（不变量 8），问完只处理用户确认的那批候选。
+        ///
+        /// <para>
+        /// 多分支（一层里有多个内层包）默认**必须问用户**（不变量 8）。但**一键处理期间一个字都不问**：
+        /// 用户 2026-09-27 原话 —— "什么叫做一键解压，就是说用户选中你来，然后自己去忙了，
+        /// 根本就没有空管你，以后不要出现弹窗"。一键档下按**保守档**办：只保留当前这一层的结果
+        /// （等于用户在那种框里点"取消"），并在日志与汇总里写明"还剩 N 个分支没展开"。
+        /// </para>
         /// </summary>
         /// <param name="engineArchivePath">
         /// 真正交给引擎的归档路径。内嵌归档时它是工作区里抠出来的那个文件（不是 <c>task.CurrentPath</c>）。
@@ -3345,10 +3383,18 @@ namespace ArchiveFixer.ViewModels
         /// 暂存目录（入仓阶段）。递归核心把叶子层产物发布到**这里**，不直接写最终目录 ——
         /// 定稿那一步才把它们搬进 <see cref="ArchiveTask.OutputPath"/>。
         /// </param>
-        private async Task RunRecursiveAsync(
+        /// <param name="oneClickRun">
+        /// 这一批是不是「一键处理」/「继续解」发起的（**决定要不要弹多分支确认框**，见方法说明）。
+        /// </param>
+        /// <returns>
+        /// 递归结论（调用方要用它判断"展开了几层"——结果校验拿什么当预期全靠这个，见
+        /// <see cref="PostProcessSuccessAsync"/> 的 <c>recursion</c> 参数）。
+        /// </returns>
+        private async Task<RecursionResult?> RunRecursiveAsync(
             ArchiveTask task,
             string engineArchivePath,
             string stageDirectory,
+            bool oneClickRun,
             CancellationToken cancellationToken)
         {
             RecursionMode mode = string.Equals(Settings.RecursionMode, "AllBranches", StringComparison.OrdinalIgnoreCase)
@@ -3408,9 +3454,23 @@ namespace ArchiveFixer.ViewModels
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
-                bool expandAll = await ShowConfirmOnUiThreadAsync(
-                    result.Decision.Prompt + Environment.NewLine + Environment.NewLine +
-                    "选“确定”：把这些内层归档也解开。选“取消”：只保留当前这一层的结果。");
+                /*
+                 * 一键处理期间**不弹这个框**（用户 2026-09-27：一键解压 = 用户走开，不许有弹窗）。
+                 * 保守档 = 与"用户在框里点取消"同一件事：只保留当前这一层的结果，
+                 * 剩下的分支不展开，并在日志里说清还剩几个（汇总行也会带上）。
+                 */
+                bool expandAll = !oneClickRun
+                    && await ShowConfirmOnUiThreadAsync(
+                        result.Decision.Prompt + Environment.NewLine + Environment.NewLine +
+                        "选“确定”：把这些内层归档也解开。选“取消”：只保留当前这一层的结果。");
+
+                if (oneClickRun)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{task.FileName}：这一层里有 {result.Decision.CandidateArchives.Count} 个内层归档（多分支）——"
+                        + "一键处理不弹确认框，按保守档只保留当前这一层的结果；要展开就再手动解一次。");
+                }
 
                 if (expandAll)
                 {
@@ -3488,6 +3548,8 @@ namespace ArchiveFixer.ViewModels
             }
 
             ApplyRecursionResult(task, result);
+
+            return result;
         }
 
         /// <summary>
@@ -5832,7 +5894,7 @@ namespace ArchiveFixer.ViewModels
         /// 有几个、都是谁、其中几个是"到上限"（不是密码错误）。
         /// 日志与弹窗是同一句话，所以没有界面时（无头宿主）也留得下证据。
         /// </summary>
-        private async Task ShowPasswordFailuresSummaryAsync()
+        private async Task ShowPasswordFailuresSummaryAsync(bool showDialog = true)
         {
             List<(string FileName, string Status)> failures;
 
@@ -5904,7 +5966,33 @@ namespace ArchiveFixer.ViewModels
             // 这里把换行换成"；"是为了让日志一行看完 —— 换行后的内容不会被脱敏规则吃掉。
             AppendLog("WARN", message.Replace(Environment.NewLine, "；"));
 
-            await ShowWarningOnUiThreadAsync(message);
+            if (showDialog)
+            {
+                await ShowWarningOnUiThreadAsync(message);
+            }
+        }
+
+        /// <summary>
+        /// 一键处理期间**关掉所有"需要用户回答"的框**（用户 2026-09-27："以后不要出现弹窗"）。
+        ///
+        /// <para>
+        /// 只做一件事：把同名冲突询问标成"问不到答案"—— 那条判据在
+        /// <c>PostProcessSuccessAsync</c> 与 <c>PrecheckFinalLayoutConflicts</c> 两处已经是
+        /// "问不到就走保守档（自动重命名、绝不覆盖）"，所以这里不需要第二套逻辑。
+        /// 其余几个框（多分支 / 缺卷补救 / 批次结束提示）各自在调用点上读 <c>oneClickRun</c>。
+        /// </para>
+        /// </summary>
+        private void SuppressDecisionPromptsForOneClickRun()
+        {
+            lock (_conflictDecisionLock)
+            {
+                _conflictPromptUnavailable = true;
+            }
+
+            AppendLog(
+                "INFO",
+                "一键处理：本次不弹任何确认框（多分支不展开、冲突走自动重命名、缺卷不补救、结束提示只写日志）——"
+                + "该问的事按保守档办，理由逐条写在日志里。");
         }
 
         private string GlobalPassword => _vm.GlobalPassword;
@@ -6365,6 +6453,26 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("INFO", StatusText.ExtractIntoSourceFolderReminderLog);
             }
 
+            /*
+             * ===== 一键处理期间**一个弹窗都不弹**（用户 2026-09-27 真机铁证）=====
+             *
+             * 原话："什么叫做一键解压，就是说用户选中你来，然后自己去忙了，根本就没有空管你，
+             * 以后不要出现弹窗"。他那一批 13 个任务一共被打断 8–9 次（多分支确认框 ×6–7 +
+             * 批次结束的提示 ×1）—— 每一次都要他回来点一下，而"一键"的全部意义就是不回来。
+             *
+             * 处置：凡是"需要用户回答"的框，一键档一律走**保守档**（照旧做最不意外的那件事），
+             * 并把"本来要问什么、按什么办了"写进日志：
+             *   · 多分支要不要展开 → 不展开，只保留当前这一层（见 RunRecursiveAsync）；
+             *   · 同名冲突怎么处理 → 自动重命名、绝不覆盖（走既有的 ConflictActions 保守档）；
+             *   · 分卷缺失要不要指定目录 → 不补救，照旧落「分卷缺失」（不变量 7 不放松）；
+             *   · 批次结束的密码提示 → 只写日志（含"再点一次可手动输密码"的出路）。
+             * ⛔ 判定与日志一条都没少，少的只是弹窗；手动「只解压」仍然照旧弹（那时用户就在旁边）。
+             */
+            if (oneClickRun)
+            {
+                SuppressDecisionPromptsForOneClickRun();
+            }
+
             if (runOptions != null)
             {
                 /*
@@ -6708,8 +6816,12 @@ namespace ArchiveFixer.ViewModels
                  * 密码错误**合并成一次提示**（P0）。
                  * 逐个任务弹模态框时，50 个错包就是 50 次阻塞点击 —— 批量处理根本跑不动。
                  * 放在批次结束后：此时才谈得上"本批 N 个包"，也不会挡住正在跑的任务。
+                 *
+                 * ⚠ 一键处理期间这条**只写日志、不弹框**（用户 2026-09-27：一键解压不许弹窗，
+                 * 用户走开时没人点它，反而把"批已跑完"这件事卡在最后一个模态框上）。
+                 * 日志那一行照旧写全（含"再点一次可以手动输密码"的出路），失败清单也能导出。
                  */
-                await ShowPasswordFailuresSummaryAsync();
+                await ShowPasswordFailuresSummaryAsync(showDialog: !oneClickRun);
             }
             finally
             {
@@ -7951,7 +8063,22 @@ namespace ArchiveFixer.ViewModels
              */
             if (task.IsVolumeGroup && !task.IsVolumeComplete)
             {
-                bool repaired = await TryRepairMissingVolumesAsync(task, cancellationToken);
+                /*
+                 * 一键处理期间**不问**"缺失卷在哪个目录"（用户 2026-09-27：一键解压不许弹窗）。
+                 * 保守档 = 不补救，照旧落「分卷缺失」并点名缺哪几个 —— 那本来就是"不问"时的结论，
+                 * 一个字都不放松（不变量 7）；用户回来看到红色任务，手动「只解压」时才会被问，
+                 * 那时他就在旁边。
+                 */
+                bool repaired = !oneClickRun
+                    && await TryRepairMissingVolumesAsync(task, cancellationToken);
+
+                if (oneClickRun)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{task.FileName}：分卷不完整（{task.VolumeInfoText}）——一键处理不弹补救询问，"
+                        + "本次不开始；要指定缺失卷所在目录，请手动「只解压」这一单。");
+                }
 
                 if (!repaired)
                 {
@@ -9070,13 +9197,23 @@ namespace ArchiveFixer.ViewModels
              */
             if (!string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase))
             {
-                await RunRecursiveAsync(task, engineArchivePath, engineOutputPath, cancellationToken);
+                RecursionResult? recursion = await RunRecursiveAsync(
+                    task, engineArchivePath, engineOutputPath, oneClickRun, cancellationToken);
 
                 if (task.Status == StatusText.ExtractSuccess)
                 {
                     // 递归产物同样要走"校验 → 定稿 → 归集 → 源包处理"，与单层路径一个字都不差。
                     bool recursionConclusionStands = await PostProcessSuccessAsync(
-                        task, engineArchivePath, string.Empty, engineOutputPath, outputRedirectNote, sharedOutputRoot, oneClickRun, cancellationToken);
+                        task,
+                        engineArchivePath,
+                        string.Empty,
+                        engineOutputPath,
+                        outputRedirectNote,
+                        sharedOutputRoot,
+                        oneClickRun,
+                        cancellationToken,
+                        knownList: null,
+                        recursion: recursion);
 
                     if (recursionConclusionStands && task.Status == StatusText.ExtractSuccess)
                     {

@@ -1216,14 +1216,16 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **分支退化**（用户 2026-09-27："出现分支就那一层照建"）：某一层**自己就产出了内容物**、
-        /// 同时里面还有个内层包 —— 简洁档下那一层**照旧建出来**，并在日志里说明为什么没省。
+        /// **父层自己产出了内容物 → 内层包的东西并进父层**（用户 2026-09-27 真机改的口径）：
+        /// 现场是 `（T250）经济2\国考资料.txt` 旁边本该就是 `老王宣传\…`，
+        /// 而我们给内层包 `Sociology.7z` 又造了一层 `Sociology\`，把真内容埋深了一层 ——
+        /// 他原话："最后的结果应该和上一层文件在同一个目录里面的……这个就非常的危险了"。
         ///
         /// <para>形状：<c>outer.7z</c> 里既有内容物 <c>payload.txt</c> 又有内层包 <c>level2.7z</c>
         /// （而 <c>level2.7z</c> 里是 <c>内容物\payload.bin</c>）。</para>
         /// </summary>
         [Fact]
-        public async Task 简洁档遇到分支_那一层照旧建出来并写日志()
+        public async Task 父层已有内容物时_内层包的东西并进父层_不另建目录()
         {
             string build = Path.Combine(_root, "branch-build");
             Directory.CreateDirectory(Path.Combine(build, "内容物"));
@@ -1234,12 +1236,11 @@ namespace ArchiveFixer.Tests
             // level2.7z：里面只有一个文件夹（单链内容）。
             Run7z(build, "a", "-t7z", "level2.7z", "-p" + ChainPassword, "-mhe=on", @"内容物\payload.bin");
 
-            // outer.7z：**既有内容物又有内层包** —— 这就是"分支"。
+            // outer.7z：**既有内容物又有内层包** —— 这就是"父层已出内容物"的形状。
             string outer = BuildPackage("outer.7z", build, "payload.txt", "level2.7z");
 
             string compactOutputRoot = Path.Combine(_root, "out-branch");
 
-            // ⚠ 外层包是 BuildPackage 造的（用的是 OuterPassword），内层包用 ChainPassword —— 两把都放进密码本。
             Harness harness = CreateHarness(
                 $"{OuterPassword}\n{ChainPassword}\n",
                 settings =>
@@ -1251,7 +1252,7 @@ namespace ArchiveFixer.Tests
             await harness.AddPathsAsync(outer);
             await harness.RunOneClickAsync();
 
-            // ① 外层自己的内容物照常落进第一层（`out-branch\outer\...`）。
+            // ① 外层自己的内容物照常落进第一层。
             Assert.True(
                 File.Exists(Path.Combine(compactOutputRoot, "outer", "payload.txt")),
                 "外层内容物没落进第一层。实际目录树："
@@ -1260,22 +1261,132 @@ namespace ArchiveFixer.Tests
                     : "（输出根都没建出来）")
                 + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
 
-            // ② 内层包那一层**照旧建出来**（分支不省层）→ `out-branch\outer\level2\内容物\payload.bin`。
+            // ② 内层包那一层**不另建**：它的内容并进 `outer\`（与 payload.txt 同一目录）。
             string payload = Assert.Single(
                 Directory.GetFiles(compactOutputRoot, "payload.bin", SearchOption.AllDirectories));
 
             Assert.True(
                 string.Equals(
-                    Path.Combine(compactOutputRoot, "outer", "level2", "内容物", "payload.bin"),
+                    Path.Combine(compactOutputRoot, "outer", "内容物", "payload.bin"),
                     payload,
                     StringComparison.OrdinalIgnoreCase),
-                $"分支那一层应该照旧建出来（退化成忠实档）。实际：{payload}");
+                $"内层包的东西应该并进父层（outer\\内容物\\payload.bin）。实际：{payload}");
 
-            // ③ 为什么没省必须写在日志里（⛔ 绝不静默）：这一层是"内容 + 内层包"的分支。
+            Assert.False(
+                Directory.Exists(Path.Combine(compactOutputRoot, "outer", "level2")),
+                "父层已经出了内容物 → 不该再给内层包另建一层目录");
+
+            // ③ 理由写在日志里（⛔ 绝不静默）。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("自己就产出了内容物", StringComparison.Ordinal)
-                        && line.Contains("省略中间层", StringComparison.Ordinal));
+                line => line.Contains("并进这一层", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// **递归展开多层时，结果校验不许拿第 0 层的清单去核对最终产物**（用户 2026-09-27 真机 CCC：
+        /// 13 个包**全部显示「解压失败」**，而内容其实完好；日志里同一段写着"已完成 2 层递归解压…已发布 7 个文件"，
+        /// 校验却报"预期 2 个文件 / …，实际 7 个 / …"）。
+        ///
+        /// <para>形状：<c>outer.7z</c> = <c>level2.7z</c> + <c>decoy.txt</c>（**2 个条目**）；
+        /// <c>level2.7z</c> = <c>final.txt</c>（1 个条目）。递归模式 SingleChain 会展开两层：
+        /// 第 0 层声明 2 个、最终产物 1 个 —— 旧口径必然判"校验未通过"。</para>
+        /// </summary>
+        [Fact]
+        public async Task 递归展开多层_不再拿第一层清单判校验失败()
+        {
+            string build = Path.Combine(_root, "recursion-verify-build");
+            Directory.CreateDirectory(build);
+
+            WriteText(Path.Combine(build, "final.txt"), InnerPayloadText);
+            Run7z(build, "a", "-t7z", "level2.7z", "-p" + ChainPassword, "-mhe=on", "final.txt");
+
+            WriteText(Path.Combine(build, "decoy.txt"), "打包者附带的说明\n");
+            string outer = BuildPackage("outer.7z", build, "level2.7z", "decoy.txt");
+
+            string outputRoot = Path.Combine(_root, "out-recursion-verify");
+
+            Harness harness = CreateHarness(
+                $"{OuterPassword}\n{ChainPassword}\n",
+                settings =>
+                {
+                    // 这一条的关键前提：走**递归核心**（不是一键处理的续解轮）。
+                    settings.RecursionMode = "SingleChain";
+                    settings.CustomOutputDirectory = outputRoot;
+
+                    // 校验那一段属于"成功任务的细节"，默认档只留一行摘要 —— 这条用例要看细节。
+                    settings.VerboseLog = true;
+                });
+
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            Assert.True(
+                File.Exists(Path.Combine(outputRoot, "outer", "final.txt")),
+                "最终产物应当是 level2.7z 里的 final.txt。实际目录树："
+                + string.Join(" | ", Directory.GetFileSystemEntries(outputRoot, "*", SearchOption.AllDirectories))
+                + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
+
+            // 校验那一段必须如实写明"这次不拿第 0 层清单核对"，不许假装做过清单校验。
+            Assert.True(
+                harness.LogTexts.Any(
+                    line => line.Contains("结果校验", StringComparison.Ordinal)
+                            && line.Contains("未取得预期条目数", StringComparison.Ordinal)),
+                "结果校验那一行没有如实写明\"未取得预期条目数\"。日志：\n" + string.Join("\n", harness.LogTexts));
+
+            Assert.Equal(1, outcome.Rounds);
+        }
+
+        /// <summary>
+        /// **一键处理期间不弹"要不要展开多分支"的确认框**（用户 2026-09-27："一键解压 = 用户走开，
+        /// 以后不要出现弹窗"）：多分支时按保守档只保留当前这一层，并把这件事写进日志。
+        /// </summary>
+        [Fact]
+        public async Task 一键处理遇到多分支_不弹确认框_按保守档只留当前层()
+        {
+            string build = Path.Combine(_root, "multibranch-build");
+            Directory.CreateDirectory(build);
+
+            WriteText(Path.Combine(build, "a.txt"), "分支 A\n");
+            WriteText(Path.Combine(build, "b.txt"), "分支 B\n");
+            Run7z(build, "a", "-t7z", "innerA.7z", "-p" + ChainPassword, "-mhe=on", "a.txt");
+            Run7z(build, "a", "-t7z", "innerB.7z", "-p" + ChainPassword, "-mhe=on", "b.txt");
+
+            // 外层里就是两个内层包 —— 递归核心会停成 NeedsDecision（以前这里弹框）。
+            string outer = BuildPackage("outer.7z", build, "innerA.7z", "innerB.7z");
+
+            string outputRoot = Path.Combine(_root, "out-multibranch");
+
+            Harness harness = CreateHarness(
+                $"{OuterPassword}\n{ChainPassword}\n",
+                settings =>
+                {
+                    settings.RecursionMode = "SingleChain";
+                    settings.CustomOutputDirectory = outputRoot;
+                });
+
+            await harness.AddPathsAsync(outer);
+            await harness.RunOneClickAsync();
+
+            // 保守档的痕迹必须在日志里（⛔ 不许静默）。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("一键处理不弹确认框", StringComparison.Ordinal));
+
+            /*
+             * 而且**不能**因此判失败：当前这一层的结果照样定稿（两个内层包本身）；
+             * 接着续解链会把这两个内层包各自当成一个任务继续解（各占一层），
+             * 所以任务数会变成 3 —— 这里断言的是"没有一个是失败/部分完成"。
+             */
+            Assert.NotEmpty(harness.Vm.Tasks);
+
+            Assert.DoesNotContain(
+                harness.Vm.Tasks,
+                task => task.Status == StatusText.ExtractFailed || task.Status == StatusText.PartiallyCompleted);
         }
 
         /// <summary>

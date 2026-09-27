@@ -25,14 +25,30 @@ namespace ArchiveFixer.Tests
         // ── ① 该不该建这一层（唯一判据 ShouldAddContinuationLevelLayer） ──────────
 
         [Fact]
-        public void 忠实档_每一层都建层()
+        public void 忠实档_干净单链的每一层都建层()
         {
-            // 开关关 = 忠实档：单链、有没有内容物，都照建（用户要的就是"每层都看得见"）。
+            // 开关关 = 忠实档：**干净的单链过路层**（父层只出了下一个包）照建 ——
+            // 这正是 111\222\333\444\555\666\内容物 那条链。
             Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
                 omitMiddleLayers: false, parentProducedContent: false, siblingCount: 1));
+        }
 
-            Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: false, parentProducedContent: true, siblingCount: 3));
+        [Fact]
+        public void 父层自己产出了内容物_两种档位都不另建层_并进父层()
+        {
+            /*
+             * 用户 2026-09-27 真机（改口径的那一条）：父层已经有内容物时，内层包解出来的东西
+             * **并进父层那一个目录**，不再用内层包名另造一层 —— 他原话："最后的结果应该和上一层文件
+             * 在同一个目录里面的，但是你直接把他放进去了，这个就非常的危险了"
+             * （现场：`（T250）经济2\国考资料.txt` 旁边本该是 `老王宣传\…`，我们却造了一层 `Sociology\`）。
+             *
+             * ⚠ 这是**忠实档也照办**的规则：它跟"中间层省不省"是两个开关维度。
+             */
+            Assert.False(OneClickCoordinator.ShouldAddContinuationLevelLayer(
+                omitMiddleLayers: false, parentProducedContent: true, siblingCount: 1));
+
+            Assert.False(OneClickCoordinator.ShouldAddContinuationLevelLayer(
+                omitMiddleLayers: true, parentProducedContent: true, siblingCount: 1));
         }
 
         [Fact]
@@ -44,26 +60,22 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 简洁档_父任务产出过内容物就照建_退化成忠实档()
-        {
-            // 父任务既有内容物又有内层包 = 分支：那一层照建（⛔ 不许为了"简洁"把分支也省掉）。
-            Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: true, parentProducedContent: true, siblingCount: 1));
-        }
-
-        [Fact]
-        public void 简洁档_同一层认出多个内层包也照建()
+        public void 同一层认出多个内层包_两种档位都要建层()
         {
             // 一个父任务这一轮认出 2 个以上内层包 = 分支：各自一层，否则几个包的内容物会倒进同一层。
+            // 这条压过"父层已出内容物"那条（先命中先返回）—— 几个包挤进同一层更糟。
             Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
                 omitMiddleLayers: true, parentProducedContent: false, siblingCount: 2));
 
             Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: true, parentProducedContent: false, siblingCount: 7));
+                omitMiddleLayers: true, parentProducedContent: true, siblingCount: 5));
+
+            Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
+                omitMiddleLayers: false, parentProducedContent: true, siblingCount: 7));
         }
 
         [Fact]
-        public void 简洁档_父子两种分支同时出现也只建一次层()
+        public void 简洁档_父子两种分支只留一层目录()
         {
             // 两种分支叠加（自己出了内容物 + 认出多个内层包）：结论仍是"建"，而且**只建一层**
             //（这一层的目录一个，几个内层包各自再按自己的包名占一层）。

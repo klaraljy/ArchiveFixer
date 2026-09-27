@@ -245,15 +245,22 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 
 ## 11. 当前验证状态（2026-09-27，落点模型 v2 落完并全量通过之后）
 
-- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1770 条全绿**（0 失败 / 0 跳过）；
+- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1772 条全绿**（0 失败 / 0 跳过）；
   `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
 - **落点模型 v2**（2026-09-27）：终点落法固定（不再让用户选）、手动「解压到当前文件夹」、
-  一律不塌缩、续解首尾必留（`OmitMiddleContinuationLayers`，默认关 = 忠实档）。
+  一律不塌缩、续解层按三条优先判据（**同层多个内层包 → 建**；**父层已出内容物 → 不建、并进父层**；
+  剩余"干净单链过路层"看开关 `OmitMiddleContinuationLayers`，默认关 = 忠实档）。
   契约在 `docs/输出与整理模型.md` §1.1 / §3.1 / §3.3.1；判据出口三处：
   `OutputPlacement.ResolveDestinationDirectory`（落点）、
   `OneClickCoordinator.ShouldAddContinuationLevelLayer`（续解该不该建那一层）、
   `ResultFinalizer.Plan(..., suppressPackageFolderLayer:)`（定稿要不要套包名那一层）。
+- **一键处理期间零弹窗**（用户 2026-09-27 真机要求："用户选中你来，然后自己去忙了……以后不要出现弹窗"）：
+  `ExtractionCoordinator.SuppressDecisionPromptsForOneClickRun()` 一处收口（冲突询问复用既有的
+  `_conflictPromptUnavailable`），多分支 / 缺卷补救 / 批次结束提示各自读 `oneClickRun`。
+  ⛔ 以后**不许**在一键档里新增任何"要用户点一下"的框 —— 需要决策就按保守档办 + 写日志。
+- **递归多层的结果校验**：展开 > 1 层时**不拿第 0 层清单当预期**（`PostProcessSuccessAsync` 的
+  `recursion` 参数），只做非空 / 落点 / 预算三道 —— 否则必然误报「解压失败」（真机 13 个包全中过）。
 - **已知 flaky（全量并发下偶发假红，单跑必过 —— 遇到先单跑确认，别去改产品代码或断言）**：
   - `RecursiveExtractorTests.用户确认继续后…` / `递归取消_工作区保留` / `previousDecision_只处理候选里的归档不重新全盘扫描`：
     真 7z 用例在全量并发下偶发"引擎操作失败"（实测 `无法创建工作区目录 …\data\work\recursive\branches_…` ——

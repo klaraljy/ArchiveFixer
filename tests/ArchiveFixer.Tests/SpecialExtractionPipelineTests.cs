@@ -267,20 +267,20 @@ namespace ArchiveFixer.Tests
         // ================================================================ ④ 同名冲突：改名，绝不覆盖
 
         /// <summary>
-        /// 规则生效时内外两层都有 <c>payload.txt</c>：**外层那一份一个字节都不许变**。
+        /// 规则生效时内外两层都有 <c>payload.txt</c>：**外层那一份一个字节都不许变**，
+        /// 内层那一份按冲突档自动改名落位（默认"自动重命名"，**绝不覆盖**）。
         ///
         /// <para>
-        /// ⚠ 2026-09-27 改（落点模型 v2）：以前这里靠"塌缩"把内层也放到同一层去撞名（于是有
-        /// <c>payload(1).txt</c>）；现在**续解的每一层各占一层**（忠实档默认），内层产物落在
-        /// <c>1111\inner\payload.txt</c> —— 根本不会撞名，这恰恰是用户要的"绝不弄混乱"。
-        /// 所以这条用例断言的变成：外层原样 + 内层在自己那一层里（两条都不丢、谁也不顶谁）。
+        /// ⚠ 2026-09-27 定稿的口径（两次改过，记在这里免得再翻错）：
+        /// ① 最初靠"场景 B 塌缩"把内层放到同一层撞名 → 有 <c>payload(1).txt</c>；
+        /// ② 中途塌缩退役、续解每层各占一层 → 内层落在 <c>1111\inner\payload.txt</c>，不撞名；
+        /// ③ **现在（用户真机拍板）**：父层自己已经出了内容物时，内层包解出来的东西**并进父层**
+        ///   （他原话："最后的结果应该和上一层文件在同一个目录里面的"），
+        ///   于是内外两份又落到同一层 —— 撞名照旧由冲突档兜住，外层那份一个字都没被顶掉。
         /// </para>
-        ///
-        /// <para>反过来（关掉规则）内层仍然待在自己那一层里（<c>1111\inner\X\payload.txt</c>）——
-        /// 两边的差别只剩"规则把内容物那一层提上来了"，与撞名无关。</para>
         /// </summary>
         [Fact]
-        public async Task 内外同名_各自待在自己那一层_谁也不顶谁()
+        public async Task 内外同名_并进同一层时按冲突档改名_外层一个字节不丢()
         {
             Harness harness = CreateHarness("222", settings =>
             {
@@ -303,31 +303,26 @@ namespace ArchiveFixer.Tests
             Assert.Equal(OuterPayloadText, File.ReadAllText(Path.Combine(contentDirectory, "payload.txt")));
 
             /*
-             * 内层那一份落在**它自己那一层**里（层名 = 内层包的包基名 `inner`；
-             * 规则把它内容物那一层 `X` 去掉，所以直接是 `inner\payload.txt`）。
+             * 内层那一份并进同一层、撞名 → 按冲突档改名（规则把内容物那一层 `X` 去掉，
+             * 所以它本来也叫 `payload.txt`）。
              */
             Assert.Equal(
                 InnerPayloadText,
-                File.ReadAllText(Path.Combine(contentDirectory, "inner", "payload.txt")));
+                File.ReadAllText(Path.Combine(contentDirectory, "payload(1).txt")));
 
-            Assert.False(File.Exists(Path.Combine(contentDirectory, "payload(1).txt")));
-
-            /*
-             * 反向对照：**关掉规则**时内层产物多留一层（`1111\inner\X\payload.txt`）——
-             * 于是上面那个路径确实来自"规则把内容物那一层提上来"，不是别的原因。
-             */
+            // 反向对照：**关掉规则**时内层会多留一层 `X`，于是不撞名（两份都在、都不改名）。
             Harness off = CreateHarness("222-off", settings => settings.UseSpecialExtraction = false);
 
             await off.AddPathsAsync(BuildNestedSameNamePackage(off.SourceRoot, "1111.7z"));
             await off.RunOneClickAsync();
 
             Assert.True(
-                File.Exists(Path.Combine(off.SourceRoot, "1111", "inner", "X", "payload.txt")),
-                "关掉规则时内层产物应该留在它自己那一层里");
+                File.Exists(Path.Combine(off.SourceRoot, "1111", "X", "payload.txt")),
+                "关掉规则时内层产物会多留一层 X（两份就不撞名了）");
 
             Assert.False(
                 File.Exists(Path.Combine(off.SourceRoot, "1111", "payload(1).txt")),
-                "关掉规则时也不该出现改名产物（内外两层从来不会落到同一层去）");
+                "关掉规则时不该出现改名产物（多留一层之后不撞名）");
         }
 
         // ================================================================ ⑤ 确认框那行

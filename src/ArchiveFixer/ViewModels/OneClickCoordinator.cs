@@ -362,30 +362,37 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 续解层"要不要给这一层套一个以包名命名的文件夹"（用户 2026-09-27：**首尾必留，中间看开关**）。
         ///
-        /// <para>三种情形都**必须建**（一条不成立才省）：</para>
-        /// <list type="bullet">
-        /// <item><description>忠实档（<paramref name="omitMiddleLayers"/> = false，默认）：每一层都建 ——
-        /// <c>111\222\333\444\555\666\内容物</c>，每个内层包各自一层，谁是谁一眼看清。</description></item>
-        /// <item><description>简洁档但父任务**自己产出了内容物**（说明这里是分支，不是干净的单链）：
-        /// 那一层照建，退化成忠实档（调用方负责写一条日志说明，⛔ 绝不静默）。</description></item>
-        /// <item><description>简洁档但同一个父任务这一轮认出了**多个**内层包（<paramref name="siblingCount"/> &gt; 1）：
-        /// 这是分支而不是单链 —— 每个包各自一层，否则几个包的内容物会倒进同一层里。</description></item>
+        /// <para>规则按优先级三条（先命中先返回）：</para>
+        /// <list type="number">
+        /// <item><description><b>同一个父任务这一轮认出多个内层包</b>（<paramref name="siblingCount"/> &gt; 1）→
+        /// **必须建**：几个包各自一层，否则它们的内容物会倒进同一层里互相撞名。</description></item>
+        /// <item><description><b>父任务自己产出了内容物</b>（<paramref name="parentProducedContent"/>）→
+        /// **不建**：内层包解出来的东西**并进父任务那一层**，与父任务自己的内容物放在同一个目录里。
+        /// ⚠ 这一条是 2026-09-27 真机改的（用户原话："最后的结果应该和上一层文件在同一个目录里面的，
+        /// 但是你直接把他放进去了，这个就非常的危险了"）：真机上 `（T250）经济2\国考资料.txt` 旁边
+        /// 本该就是 `老王宣传\…`，而我们给内层包 `Sociology.7z` 又造了一层 `Sociology\` ——
+        /// 真正的内容被埋到上一层文件下面一层，用户要找两层才看得见。</description></item>
+        /// <item><description>剩下就是"**干净的单链过路层**"（父任务只出了下一个包、没有自己的内容物）：
+        /// 忠实档建（<c>111\222\333\444\555\666\内容物</c> 那条链就是它）、
+        /// 简洁档省掉（<c>111\222\666\内容物</c>）。</description></item>
         /// </list>
-        ///
-        /// <para>只有"**干净的单链中间层**"（简洁档 + 父任务没产出内容物 + 本轮只有一个内层包）
-        /// 才省掉那一层：中间的过路层只剩 <c>其余物</c>，不值得为它多一层目录。</para>
         /// </summary>
         internal static bool ShouldAddContinuationLevelLayer(
             bool omitMiddleLayers,
             bool parentProducedContent,
             int siblingCount)
         {
-            if (!omitMiddleLayers)
+            if (siblingCount > 1)
             {
                 return true;
             }
 
-            return parentProducedContent || siblingCount > 1;
+            if (parentProducedContent)
+            {
+                return false;
+            }
+
+            return !omitMiddleLayers;
         }
 
         /// <summary>
@@ -805,7 +812,13 @@ namespace ArchiveFixer.ViewModels
 
                     _vm.ReportPendingContinuation(outcome.PendingContinuationCount);
 
-                    _dialogService.ShowInfo(outcome.Summary);
+                    /*
+                     * ⛔ 这里**不许**弹"本批汇总"（用户 2026-09-27 真机：一键处理期间弹了 8–9 个窗，
+                     * 他走开时没人点，最后一个模态框还会把"批已跑完"卡住）。
+                     * 汇总本来就有一份进日志（`一键处理完成：成功 … / 失败 …`），
+                     * 结果也全在任务列表与失败清单里 —— 只把这句话再写一遍日志，不打断他。
+                     */
+                    AppendLog("INFO", "一键处理汇总：" + outcome.Summary.Replace(Environment.NewLine, "；"));
                 }
                 finally
                 {
@@ -1698,17 +1711,28 @@ namespace ArchiveFixer.ViewModels
                     parentProducedContent,
                     children.Count);
 
-                if (Settings.OmitMiddleContinuationLayers && addLayer)
+                if (parentProducedContent && addLayer && children.Count > 1)
+                {
+                    scanLog.Add(
+                        $"{parent.FileName}：这一层自己产出了内容物、又认出了 {children.Count} 个内层包 ——"
+                        + "它们各自占一层（否则几个包的内容物会倒进同一层）。");
+                }
+                else if (parentProducedContent && !addLayer)
                 {
                     /*
-                     * 简洁档下**没省成**：必须说清是哪种分支（两类都算分支，⛔ 不许静默）。
-                     * ① 父任务自己出了内容物；② 同一个父任务这一轮认出多个内层包。
+                     * 用户 2026-09-27 真机：父层已经出了内容物 → 内层包解出来的东西**并进父层那一个目录**，
+                     * 与父层自己的内容物并排，不再用内层包名另造一层（那会把真内容埋深一层）。
                      */
-                    scanLog.Add(parentProducedContent
-                        ? $"{parent.FileName}：这一层自己就产出了内容物（内容 + 内层包 = 分支）——"
-                          + "「省略中间层」只在单链时生效，这一层照旧建出来。"
-                        : $"{parent.FileName}：这一层认出了 {children.Count} 个内层包（不是单链）——"
-                          + "「省略中间层」只在单链时生效，这一层照旧各占一层。");
+                    scanLog.Add(
+                        $"{parent.FileName}：这一层自己产出了内容物 —— 内层包解出来的东西并进这一层"
+                        + "（不再另建以包名命名的目录，免得真内容被埋到上一层文件下面）。");
+                }
+                else if (Settings.OmitMiddleContinuationLayers && addLayer)
+                {
+                    // 简洁档下没省成（这种形状只剩"同一层认出多个内层包"）：说清为什么，⛔ 不许静默。
+                    scanLog.Add(
+                        $"{parent.FileName}：这一层认出了 {children.Count} 个内层包（不是单链）——"
+                        + "「省略中间层」只在单链时生效，这一层照旧各占一层。");
                 }
 
                 foreach ((ArchiveTask _, string parentName, string file) in children)
