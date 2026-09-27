@@ -1356,7 +1356,16 @@ namespace ArchiveFixer.ViewModels
         /// <summary>把那条覆盖提示按当前开关刷一遍（开关一动、进页面时都要刷）。</summary>
         internal void RefreshSpaceTightOverrideText()
         {
-            SpaceTightOverrideText = SpaceTightMode ? StatusText.SpaceTightOverrideNotice : string.Empty;
+            /*
+             * 两条提示**各说各的**（用户 2026-09-27 加了「不删原包」安全档）：
+             * 会删源包那一档说"会删"，安全档说"一个字节都不动" —— 一条文案盖两种行为就是撒谎。
+             */
+            SpaceTightOverrideText = !SpaceTightMode
+                ? string.Empty
+                : SpaceTightKeepSource
+                    ? StatusText.SpaceTightKeepSourceOverrideNotice
+                    : StatusText.SpaceTightOverrideNotice;
+
             OnPropertyChanged(nameof(HasSpaceTightOverride));
         }
 
@@ -1381,18 +1390,77 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
+                /*
+                 * 关掉「空间不足」= 连安全档一起关（值 + 通知都发）。
+                 * 留着「不删原包」单独勾着毫无意义（它只描述"那个模式动不动源包"），
+                 * 而界面上孤零零一个勾着会让用户以为"我现在受保护" —— 那是假的。
+                 */
+                if (!value && _spaceTightKeepSource)
+                {
+                    _spaceTightKeepSource = false;
+                    OnPropertyChanged(nameof(SpaceTightKeepSource));
+                }
+
                 RefreshSpaceTightOverrideText();
 
                 AppendLog(
                     "WARN",
                     value
                         ? "已开「空间不足」模式（只对本次运行有效，不写设置）：下一批会按空间自己定并发，"
-                          + "并且每个包定稿 + 校验通过后立刻永久删除它的源包。"
+                          + (SpaceTightKeepSource
+                              ? "但源包一个字节都不动（「不删原包」勾着）。"
+                              : "并且每个包定稿 + 校验通过后立刻永久删除它的源包。")
                         : "已关「空间不足」模式：恢复按设置里的源包 / 其余物 / 并发档执行。");
             }
         }
 
         private bool _spaceTightMode;
+
+        /// <summary>
+        /// 「空间不足」的**安全档**：并发与排序照旧由空间决定，但**源包一个字节都不动**
+        /// （用户 2026-09-27："所有测试的情况下弄一个设置不删除原包的功能，在空间不足旁边弄一个，
+        /// 空间不足但是不删除原包的操作"）。
+        ///
+        /// <para>他的顾虑是原话："源包讲实话，这个功能才刚刚弄我怕会出现意外，导致没成功而且原包也没有了，
+        /// 这样的话就太亏了" —— 所以这一档的意义是**先看清空间怎么变，再决定要不要开那个会删源包的档**。
+        /// 它与「空间不足」一样是运行期开关（⛔ 不写设置）。</para>
+        ///
+        /// <para><b>两档的耦合只有一条</b>：勾上安全档 → 自动把「空间不足」也勾上（它只描述"那个模式动不动源包"，
+        /// 单独存在没有意义）；反过来关掉「空间不足」→ 安全档一起关。⛔ 不做反向的"取消安全档就关模式"。</para>
+        /// </summary>
+        public bool SpaceTightKeepSource
+        {
+            get => _spaceTightKeepSource;
+            set
+            {
+                if (!SetProperty(ref _spaceTightKeepSource, value))
+                {
+                    return;
+                }
+
+                if (value && !SpaceTightMode)
+                {
+                    SpaceTightMode = true;
+
+                    AppendLog(
+                        "WARN",
+                        "「不删原包」勾上 → 顺带把「空间不足」也勾上（它只是那个模式的安全档，"
+                        + "单独勾着没有意义）。");
+                }
+
+                RefreshSpaceTightOverrideText();
+
+                AppendLog(
+                    "WARN",
+                    value
+                        ? "「不删原包」已开：这一批源包一个字节都不动（不搬、不删），"
+                          + "只按空间决定并发与顺序；其余物（过程物）仍在成功后彻底删除。"
+                          + "⚠ 这一档不回收源包那份空间，所以需要的余量更大。"
+                        : "「不删原包」已关：这一批回到「空间不足」的默认档（每个包校验通过后删除源包）。");
+            }
+        }
+
+        private bool _spaceTightKeepSource;
 
         /*
          * ===== 解压前的**空间体检**（用户 2026-09-27 第 2 条）=====

@@ -466,6 +466,16 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private bool _spaceTightThisBatch;
 
+        /// <summary>
+        /// 本批是不是按「空间不足」的**安全档**跑（「不删原包」勾着时；见
+        /// <see cref="MainViewModel.SpaceTightKeepSource"/>）。
+        ///
+        /// <para>安全档与默认档的差别**只有一条**：源包一个字节都不动（不搬进其余物、也不删除）。
+        /// 并发、排序、其余物删除这三件事两档完全一致 —— 用户要的正是"先看清空间怎么变，
+        /// 再决定要不要开那个会删源包的档"（他的原话：怕"没成功而且原包也没有了"）。</para>
+        /// </summary>
+        private bool _spaceTightKeepSourceThisBatch;
+
         /// <summary>逐任务的运行期记账（并发下多个任务同时写，所以全部走锁）。</summary>
         private sealed class ScheduledTaskRuntime
         {
@@ -1405,6 +1415,19 @@ namespace ArchiveFixer.ViewModels
                 {
                     logEntries.Add(("INFO", $"{task.FileName}：内层包，源文件属于其余物里的过程物，已跳过源包处理。"));
                 }
+            }
+            else if (_spaceTightThisBatch && _spaceTightKeepSourceThisBatch)
+            {
+                /*
+                 * 「空间不足 + 不删原包」= **安全档**（用户 2026-09-27："所有测试的情况下弄一个设置
+                 * 不删除原包的功能……源包讲实话，这个功能才刚刚弄我怕会出现意外，导致没成功而且原包也没有了"）。
+                 *
+                 * 这一档**什么都不做**：源包既不搬进其余物、也不删除 —— 一个字节都不动。
+                 * 为什么要单独有这一支而不是"什么都不写"：写出来才能让下一个人一眼看到
+                 * "这里刻意不动源包"，而不是以为漏了一个分支。
+                 * 并发、排序、其余物（过程物）删除三件事与默认档完全一致。
+                 */
+                logEntries.Add(("INFO", $"{task.FileName}：不删原包 —— 源包一个字节都不动（空间不足的安全档）。"));
             }
             else if (_spaceTightThisBatch)
             {
@@ -5212,9 +5235,18 @@ namespace ArchiveFixer.ViewModels
              */
             bool spaceTight = _vm.SpaceTightMode;
 
+            /*
+             * 安全档（「不删原包」）：源包那一档要按"一个字节都不动"说，
+             * 而不是按上面那样被覆盖成「放入其余物」—— 那会与安全档的真实行为相反。
+             */
+            bool spaceTightKeepSource = spaceTight && _vm.SpaceTightKeepSource;
+
             if (spaceTight)
             {
-                sourceHandling = SourceHandlingMode.MoveToRest;
+                sourceHandling = spaceTightKeepSource
+                    ? SourceHandlingMode.KeepInPlace
+                    : SourceHandlingMode.MoveToRest;
+
                 restHandling = RestHandlingModes.Delete;
             }
 
@@ -5229,7 +5261,11 @@ namespace ArchiveFixer.ViewModels
                 },
                 SourceEcho = StatusText.OneClickConfirmSourceLabel
                     + OneClickRunOptions.DescribeSourceHandling(sourceHandling),
-                SpaceTightEcho = spaceTight ? StatusText.SpaceTightConfirmText : string.Empty,
+                SpaceTightEcho = spaceTight
+                    ? spaceTightKeepSource
+                        ? StatusText.SpaceTightKeepSourceConfirmText
+                        : StatusText.SpaceTightConfirmText
+                    : string.Empty,
                 SpecialExtractionEcho = specialExtraction.IsActive
                     ? StatusText.SpecialExtractionConfirmLabel + specialExtraction.RuleNames
                     : string.Empty,
@@ -6749,8 +6785,10 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
                  * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
+                 * 后面那一行是它的**安全档**（「不删原包」）—— 两档一起钉，同一批口径一致。
                  */
                 _spaceTightThisBatch = _vm.SpaceTightMode;
+                _spaceTightKeepSourceThisBatch = _spaceTightThisBatch && _vm.SpaceTightKeepSource;
 
                 int maxParallel = ResolveMaxParallel(selectedTasks, out bool fullSpeed);
 
@@ -6807,6 +6845,12 @@ namespace ArchiveFixer.ViewModels
                     ReserveSpaceBytes);
 
                 AppendLog("INFO", "空间账面：" + _spaceLedger.Describe());
+
+                /*
+                 * 空间侦察：从这一刻起"时刻"看着这块盘（每 5 秒一针 + 每个任务开工 / 收尾各一针），
+                 * 批末写一条空间曲线。位置在账面之后、第一个任务之前 —— 起点的数字就是"开工前还剩多少"。
+                 */
+                StartSpaceTrendMonitor(ResolveSpaceProbePath(selectedTasks));
 
                 var runningTasks = new List<Task>();
 
@@ -7089,6 +7133,10 @@ namespace ArchiveFixer.ViewModels
                  * 下一批开工时会重新 `= _vm.SpaceTightMode`，所以清掉不会丢任何东西。
                  */
                 _spaceTightThisBatch = false;
+                _spaceTightKeepSourceThisBatch = false;
+
+                // 空间侦察：停循环 + 把这一批的空间曲线写进日志（用户 2026-09-27 要求"时刻侦察空间变化"）。
+                StopSpaceTrendMonitor();
 
                 UpdateSummary();
             }
@@ -7131,6 +7179,24 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private SourceHandlingMode EffectiveSourceHandling
             => RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
+
+        /// <summary>
+        /// 本批源包**实际**会怎么被处理（空间不足模式覆盖之后的口径；供话术与判据共用）。
+        ///
+        /// <para>三种可能：普通档照设置 / 空间不足档（校验通过即删）/ 空间不足的安全档（一个字节都不动）。
+        /// ⛔ 说"会不会动源包"的地方只准读它 —— 各写一套必然出现"同一份日志里两句自相矛盾的话"。</para>
+        /// </summary>
+        private string DescribeEffectiveSourceHandlingForBatch()
+        {
+            if (!_spaceTightThisBatch)
+            {
+                return OneClickRunOptions.DescribeSourceHandling(EffectiveSourceHandling);
+            }
+
+            return _spaceTightKeepSourceThisBatch
+                ? "一个字节都不动（空间不足 + 不删原包）"
+                : "定稿 + 校验通过后立刻永久删除（空间不足模式）";
+        }
 
         /// <summary>
         /// 供界面显示的"当前空间档位"一句话（其余物会不会被自动处理也在这句里说清）。
@@ -7184,6 +7250,107 @@ namespace ArchiveFixer.ViewModels
             return SpaceProbeOverride != null
                 ? SpaceProbeOverride(path)
                 : SpaceChecker.GetAvailableFreeSpace(path);
+        }
+
+        /*
+         * ===== 空间变化侦察（用户 2026-09-27："你要时刻弄空间检测"）=====
+         *
+         * 一批里采几针、什么时候采、报不报，全在 Storage/SpaceTrendMonitor 里（纯逻辑、可单测）；
+         * 这里只负责"什么时候起、什么时候停、把哪句话写进日志"。
+         *
+         * ⚠ 它**只观察、不判断**：一次都不参与放行与调度 —— 拦人的仍然是每个任务启动前那道空间门。
+         * 侦察一旦变成判据，就会出现"日志说的"与"程序做的"两套口径（本项目最不能接受的那类形态）。
+         */
+        private SpaceTrendMonitor? _spaceTrend;
+        private CancellationTokenSource? _spaceTrendCts;
+
+        /// <summary>周期采样的间隔（用户要的是"时刻"，但一秒一针又纯属噪声 —— 5 秒够看清曲线）。</summary>
+        internal static readonly TimeSpan SpaceTrendInterval = TimeSpan.FromSeconds(5);
+
+        /// <summary>起侦察：批首采一针，然后每 <see cref="SpaceTrendInterval"/> 采一针。</summary>
+        private void StartSpaceTrendMonitor(string probePath)
+        {
+            StopSpaceTrendMonitor();
+
+            if (string.IsNullOrWhiteSpace(probePath))
+            {
+                AppendLog("WARN", "空间侦察没起来：这一批连「目标盘在哪」都没定下来（探测路径为空）。");
+                return;
+            }
+
+            _spaceTrend = new SpaceTrendMonitor(() => ProbeAvailableSpace(probePath));
+            _spaceTrendCts = new CancellationTokenSource();
+
+            SpaceTrendChange? first = _spaceTrend.Record("批首");
+
+            if (first != null)
+            {
+                AppendLog("INFO", SpaceTrendMonitor.DescribeChange(first, "目标盘") + $"（每 {SpaceTrendInterval.TotalSeconds:0} 秒侦察一次）");
+            }
+
+            SpaceTrendMonitor monitor = _spaceTrend;
+            CancellationToken token = _spaceTrendCts.Token;
+
+            _ = Task.Run(
+                () => monitor.RunAsync(SpaceTrendInterval, line => AppendLog("INFO", line), token),
+                CancellationToken.None);
+        }
+
+        /// <summary>停侦察 + 批末把空间曲线写进日志（这是"这一批空间怎么变的"唯一交代）。</summary>
+        private void StopSpaceTrendMonitor()
+        {
+            try
+            {
+                _spaceTrendCts?.Cancel();
+            }
+            catch
+            {
+                // 取消失败不影响收尾。
+            }
+
+            try
+            {
+                _spaceTrendCts?.Dispose();
+            }
+            catch
+            {
+            }
+
+            _spaceTrendCts = null;
+
+            SpaceTrendMonitor? monitor = _spaceTrend;
+            _spaceTrend = null;
+
+            if (monitor == null)
+            {
+                return;
+            }
+
+            // 收尾再采一针，然后写曲线（收工那一刻的数字是用户最关心的那一个）。
+            monitor.Record("批末");
+
+            foreach (string line in monitor.DescribeReport())
+            {
+                AppendLog("INFO", line);
+            }
+        }
+
+        /// <summary>
+        /// 逐任务采一针（开工 / 收尾各一次）。
+        ///
+        /// <para>两条纪律，缺一条就会踩到别人的规矩上：</para>
+        /// <list type="number">
+        /// <item><description><b>只记不报</b>（`notify: false`）：这一针不进过程日志 ——
+        /// 第 45 条定的是"成功的任务只留一行"，在这里多写一行就是废掉它。</description></item>
+        /// <item><description><b>注脚里不写任务文件名</b>（只写"任务开工 / 任务收尾"）：批末那条空间曲线
+        /// 会把最低点的注脚抄进去，而它同样是"含该文件名的行" ——
+        /// 全量回归实测：两条真 7z 用例（`Item45LogAndPasswordTests` 里用"行数 ≤ 3"钉着的）正是这么变红的。</description></item>
+        /// </list>
+        /// <para>曲线本身不受影响：这一针照样进采样表，最低点仍然写清"哪一刻、在什么节点上"。</para>
+        /// </summary>
+        private void RecordSpaceTrend(string note)
+        {
+            _spaceTrend?.Record(note, at: null, notify: false);
         }
 
         private long ReserveSpaceBytes => SpaceReserveOverride ?? SpaceGate.DefaultReserveBytes;
@@ -7683,6 +7850,8 @@ namespace ArchiveFixer.ViewModels
         {
             try
             {
+                RecordSpaceTrend("任务开工");
+
                 await ProcessExtractTaskAsync(task, oneClickRun);
 
                 await RunRestHandlingAsync(task, runtime, oneClickRun);
@@ -7700,6 +7869,8 @@ namespace ArchiveFixer.ViewModels
                     ledger.RefreshAvailable(runtime.AvailableAfterFinish >= 0 ? runtime.AvailableAfterFinish : null);
                     runtime.ReservedBytes = 0;
                 }
+
+                RecordSpaceTrend("任务收尾");
 
                 UpdateSummary();
             }
@@ -7889,9 +8060,14 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private string DescribeRestScopeForBatch()
         {
-            return _spaceTightThisBatch
-                ? "过程物（源包在本模式下不进其余物：定稿 + 校验通过后立刻永久删除）"
-                : DescribeRestScope(EffectiveSourceHandling);
+            if (!_spaceTightThisBatch)
+            {
+                return DescribeRestScope(EffectiveSourceHandling);
+            }
+
+            return _spaceTightKeepSourceThisBatch
+                ? "过程物（源包在本模式下「一个字节都不动」：不搬进其余物、也不删除）"
+                : "过程物（源包在本模式下不进其余物：定稿 + 校验通过后立刻永久删除）";
         }
 
         /// <summary>
@@ -7913,13 +8089,20 @@ namespace ArchiveFixer.ViewModels
             {
                 /*
                  * 这一批的"为什么这么办"写在最前面（用户 2026-09-26 教训：同一份日志里两句话自相矛盾
-                 * 比少写一句更糟）。它必须同时说清三件事：覆盖了什么、**没写设置**、什么时候删源包。
+                 * 比少写一句更糟）。它必须同时说清三件事：覆盖了什么、**没写设置**、以及源包的下场。
+                 *
+                 * ⚠ 两档分开说（用户 2026-09-27 加了「不删原包」安全档）：会删的那一档说"立刻删除"，
+                 * 安全档说"一个字节都不动" —— 一条文案盖两种行为就是撒谎。
                  */
                 AppendLog(
                     "WARN",
                     "「空间不足」模式（本次运行，不写设置）：本批忽略「最大并发解压数」与「全速」，"
-                    + "按空间自己定并发；每个包定稿 + 校验通过后立刻永久删除它的源包"
-                    + "（不进回收站、不可恢复），收回的空间马上给后面的包用。"
+                    + "按空间自己定并发；"
+                    + (_spaceTightKeepSourceThisBatch
+                        ? "「不删原包」也开着 —— 源包一个字节都不动（不搬、不删），"
+                          + "只把过程物在任务成功后彻底删掉。⚠ 这一档不回收源包那份空间，需要的余量更大。"
+                        : "每个包定稿 + 校验通过后立刻永久删除它的源包"
+                          + "（不进回收站、不可恢复），收回的空间马上给后面的包用。")
                     + "失败 / 部分完成 / 取消的任务一个字节都不删。");
             }
 

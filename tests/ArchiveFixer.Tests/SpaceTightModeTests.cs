@@ -398,6 +398,16 @@ namespace ArchiveFixer.Tests
             Assert.Contains("StatusText.SpaceTightToggleLabel", taskTab, StringComparison.Ordinal);
             Assert.Contains("StatusText.SpaceTightToggleToolTip", taskTab, StringComparison.Ordinal);
 
+            // 「不删原包」= 那个模式的安全档（用户 2026-09-27 追加），就在它旁边。
+            Assert.Contains("IsChecked=\"{Binding SpaceTightKeepSource, Mode=TwoWay}\"", taskTab, StringComparison.Ordinal);
+            Assert.Contains("StatusText.SpaceTightKeepSourceLabel", taskTab, StringComparison.Ordinal);
+            Assert.Contains("StatusText.SpaceTightKeepSourceToolTip", taskTab, StringComparison.Ordinal);
+
+            Assert.True(
+                taskTab.IndexOf("SpaceTightKeepSource", StringComparison.Ordinal) >
+                taskTab.IndexOf("SpaceTightMode", StringComparison.Ordinal),
+                "「不删原包」要排在「空间不足」右边（用户原话：「在空间不足旁边弄一个」）");
+
             int switchIndex = taskTab.IndexOf("SpaceTightMode", StringComparison.Ordinal);
             int oneClickIndex = taskTab.IndexOf("OneClickProcessCommand", StringComparison.Ordinal);
             int manualIndex = taskTab.IndexOf("手动操作（单独改后缀 / 单独解压）", StringComparison.Ordinal);
@@ -546,6 +556,136 @@ namespace ArchiveFixer.Tests
 
             // 回调是"投递即返回"的（不 await）：等那次后台体检跑完（有界等待）。
             await WaitForLogAsync(harness, "空间体检（换了输出位置）");
+        }
+
+        // ================================================================ ⑦ 安全档：不删原包（2026-09-27 追加）
+
+        /// <summary>
+        /// 「空间不足 + 不删原包」= **安全档**（用户 2026-09-27："源包讲实话，这个功能才刚刚弄
+        /// 我怕会出现意外，导致没成功而且原包也没有了，这样的话就太亏了"）：
+        /// 并发与排序照旧由空间决定，但**源包一个字节都不动**（既不搬进其余物、也不删除）。
+        /// </summary>
+        [Fact]
+        public async Task 不删原包_源包一个字节都不动_而设置也没被改()
+        {
+            Harness harness = CreateHarness(settings =>
+            {
+                // 设置里刻意选"会删"的那一套组合：安全档必须**压过**它。
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
+
+            string settingsBefore = File.ReadAllText(harness.SettingsFilePath, Encoding.UTF8);
+
+            string source = harness.CreateSource("pack.7z");
+            ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
+
+            harness.Engine.SetProducts(("payload-00000.bin", 8));
+
+            harness.Vm.SpaceTightKeepSource = true;
+
+            // 勾上安全档 → 自动把「空间不足」也勾上（它只是那个模式的安全档）。
+            Assert.True(harness.Vm.SpaceTightMode);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.True(task.IsOutputVerified);
+
+            Assert.True(File.Exists(source), "安全档下源包必须原地不动（这就是它存在的理由）");
+            Assert.Equal(SourcePackageMoveState.NotAttempted, task.SourcePackageMove);
+
+            // 源包没进其余物：其余物目录里不许出现那个包（"不搬"也要能被验）。
+            string restDirectory = Path.Combine(task.OutputPath, "其余物");
+
+            if (Directory.Exists(restDirectory))
+            {
+                Assert.DoesNotContain(
+                    Directory.EnumerateFiles(restDirectory, "*", SearchOption.AllDirectories),
+                    path => string.Equals(Path.GetFileName(path), "pack.7z", StringComparison.OrdinalIgnoreCase));
+            }
+
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("不删原包", StringComparison.Ordinal) &&
+                     x.Message.Contains("一个字节都不动", StringComparison.Ordinal));
+
+            // 设置同样一个字节都没改。
+            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), harness.Vm.Settings.SourceHandling);
+            Assert.Equal(RestHandlingModes.Delete, harness.Vm.Settings.RestHandlingAfterVerify);
+            Assert.Equal(settingsBefore, File.ReadAllText(harness.SettingsFilePath, Encoding.UTF8));
+        }
+
+        /// <summary>两个勾的耦合：勾安全档 → 自动勾上「空间不足」；关「空间不足」→ 安全档一起关。</summary>
+        [Fact]
+        public void 两个勾的耦合_勾安全档顺带勾模式_关模式连安全档一起关()
+        {
+            Harness harness = CreateHarness();
+
+            Assert.False(harness.Vm.SpaceTightMode);
+            Assert.False(harness.Vm.SpaceTightKeepSource);
+
+            harness.Vm.SpaceTightKeepSource = true;
+
+            Assert.True(harness.Vm.SpaceTightMode, "勾上安全档必须顺带把「空间不足」也勾上");
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("顺带把「空间不足」也勾上", StringComparison.Ordinal));
+
+            // 覆盖提示要说"源包一个字节都不动"，⛔ 不许拿"会删源包"那条（两档行为相反）。
+            Assert.Contains("一个字节都不动", harness.Vm.SpaceTightOverrideText, StringComparison.Ordinal);
+
+            harness.Vm.SpaceTightMode = false;
+
+            Assert.False(harness.Vm.SpaceTightKeepSource, "关掉「空间不足」之后安全档不能孤零零留着");
+            Assert.False(harness.Vm.HasSpaceTightOverride);
+        }
+
+        /// <summary>
+        /// **空间曲线**：一批跑完，日志里必须有"起 → 最低 → 收 + 最多同时占用"那一条，
+        /// 而且批首要留下"每 5 秒侦察一次"那句话（用户 2026-09-27："你要时刻弄空间检测……
+        /// 同样也要弄空间检查技术"）。
+        ///
+        /// <para>⚠ 这里只钉"这条线存在、字段齐、针数够"；**曲线的算术**（阈值、最低点、占用）由
+        /// <c>SpaceTrendMonitorTests</c> 用注时钟的单测精确钉住 —— 在这一层追具体数字会很脆：
+        /// 批首之前还有两次探测（排计划 + 建账本），把假盘按"第几次探测"编号等于在测别的东西。</para>
+        /// </summary>
+        [Fact]
+        public async Task 空间曲线_批末必须给出起最低收与最多占用()
+        {
+            Harness harness = CreateHarness();
+
+            long free = 10L * 1024 * 1024 * 1024;
+            harness.Coordinator.SpaceProbeOverride = _ => free;
+            harness.Coordinator.SpaceReserveOverride = 0;
+
+            string source = harness.CreateSource("pack.7z");
+            ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
+
+            harness.Engine.SetProducts(("payload-00000.bin", 8));
+
+            // 解压那一刻盘上掉下去（曲线的最低点就出现在这一带）。
+            harness.Engine.OnExtract = _ => free = 4L * 1024 * 1024 * 1024;
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            string curve = Assert.Single(
+                harness.Log.Logs,
+                x => x.Message.Contains("空间曲线", StringComparison.Ordinal)).Message;
+
+            Assert.Contains("起 ", curve, StringComparison.Ordinal);
+            Assert.Contains("最低 ", curve, StringComparison.Ordinal);
+            Assert.Contains("收 ", curve, StringComparison.Ordinal);
+            Assert.Contains("最多同时占用约", curve, StringComparison.Ordinal);
+
+            // 针数够（批首 / 开工 / 收尾 / 批末 至少四针），而且批首那句"时刻侦察"在。
+            Assert.Contains("本批 4 针", curve, StringComparison.Ordinal);
+
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("每 5 秒侦察一次", StringComparison.Ordinal));
         }
 
         // ================================================================ 装配
@@ -722,8 +862,11 @@ namespace ArchiveFixer.Tests
             /// <summary>非 null = 解压直接返回这个失败结论。</summary>
             public ArchiveOperationResult? ExtractFailure { get; set; }
 
-            /// <summary>列目录前回调（收尾第一件事就是列目录：用来在那一刻按取消）。</summary>
+            /// <summary>列目录前回调（收尾第一件事就是列目录：用来在那一刻按取消 / 改假盘数字）。</summary>
             public Action<ArchiveRequest>? OnList { get; set; }
+
+            /// <summary>真正解压那一刻的回调（用来在"内容物落盘之后"改假盘数字）。</summary>
+            public Action<ArchiveRequest>? OnExtract { get; set; }
 
             public bool Extracted { get; private set; }
 
@@ -783,6 +926,8 @@ namespace ArchiveFixer.Tests
                 {
                     return Task.FromResult(ExtractFailure);
                 }
+
+                OnExtract?.Invoke(request);
 
                 string output = request.OutputPath ?? string.Empty;
 

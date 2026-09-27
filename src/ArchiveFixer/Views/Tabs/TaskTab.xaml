@@ -159,6 +159,23 @@
                               IsChecked="{Binding SpaceTightMode, Mode=TwoWay}"
                               ToolTip="{x:Static models:StatusText.SpaceTightToggleToolTip}" />
 
+                    <!--
+                        ── 「不删原包」= 上面那个模式的**安全档**（用户 2026-09-27：
+                        "所有测试的情况下弄一个设置不删除原包的功能，在空间不足旁边弄一个，
+                        空间不足但是不删除原包的操作"）──
+
+                        他的顾虑是原话："源包讲实话，这个功能才刚刚弄我怕会出现意外，
+                        导致没成功而且原包也没有了，这样的话就太亏了"。
+                        所以这一档：并发与排序照旧由空间决定，但**源包一个字节都不动**。
+                        勾上它会把「空间不足」也一起勾上（见 MainViewModel 里那对耦合，值 + 通知都发）。
+                    -->
+                    <CheckBox Content="{x:Static models:StatusText.SpaceTightKeepSourceLabel}"
+                              Margin="0,0,10,0"
+                              VerticalAlignment="Center"
+                              Foreground="{StaticResource WarningTextBrush}"
+                              IsChecked="{Binding SpaceTightKeepSource, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.SpaceTightKeepSourceToolTip}" />
+
                     <Button Content="一键处理"
                             MinWidth="128"
                             MinHeight="36"
