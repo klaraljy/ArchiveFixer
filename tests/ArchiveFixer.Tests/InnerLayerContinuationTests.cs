@@ -1155,6 +1155,67 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// 简洁档下**末层那一层用的是包基名**（用户 2026-09-27 写的就是这个形状：`111\222\666\内容物`）：
+        /// 最深一层的内容物**直接摊在归档根上**（没有自带文件夹）时，最后一层由"包基名"担任；
+        /// 中间那些只出过程物的过路层仍然省掉。
+        ///
+        /// <para>形状：<c>outer.7z → level2.7z → level3.7z → flat1.bin + flat2.bin</c>
+        /// （最深一层是**两个散文件**，不是文件夹 —— 单个文件会走判定表 1，根本不套层，测不出这件事）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 简洁档_末层内容物摊在归档根上时_最后一层用包基名()
+        {
+            string build = Path.Combine(_root, "flat-chain-build");
+            Directory.CreateDirectory(build);
+
+            WriteText(Path.Combine(build, "flat1.bin"), InnerPayloadText);
+            WriteText(Path.Combine(build, "flat2.bin"), InnerPayloadText);
+
+            Run7z(build, "a", "-t7z", "level3.7z", "-p" + ChainPassword, "-mhe=on", "flat1.bin", "flat2.bin");
+            Run7z(build, "a", "-t7z", "level2.7z", "-p" + ChainPassword, "-mhe=on", "level3.7z");
+
+            string outer = BuildPackage("outer.7z", build, "level2.7z");
+
+            // ── 忠实档：每层各占一层，末层就是它自己那一层 ─────────────────────
+            Harness faithful = CreateHarness($"{OuterPassword}\n{ChainPassword}\n");
+            await faithful.AddPathsAsync(outer);
+            await faithful.RunOneClickAsync();
+
+            Assert.True(
+                File.Exists(Path.Combine(faithful.OutputRoot, "outer", "level2", "level3", "flat1.bin")),
+                "忠实档应当是 outer\\level2\\level3\\flat1.bin。实际目录树："
+                + string.Join(" | ", Directory.GetFileSystemEntries(faithful.OutputRoot, "*", SearchOption.AllDirectories)));
+
+            // ── 简洁档：中间层省掉，最后一层用包基名 ───────────────────────────
+            string compactOutputRoot = Path.Combine(_root, "out-flat");
+
+            Harness compact = CreateHarness(
+                $"{OuterPassword}\n{ChainPassword}\n",
+                settings =>
+                {
+                    settings.OmitMiddleContinuationLayers = true;
+                    settings.CustomOutputDirectory = compactOutputRoot;
+                });
+
+            await compact.AddPathsAsync(BuildPackage("outer.7z", build, "level2.7z"));
+            await compact.RunOneClickAsync();
+
+            Assert.True(
+                File.Exists(Path.Combine(compactOutputRoot, "outer", "level3", "flat1.bin")),
+                "简洁档应当是 outer\\level3\\flat1.bin（第一层 outer + 最后一层 level3）。实际目录树："
+                + string.Join(" | ", Directory.GetFileSystemEntries(compactOutputRoot, "*", SearchOption.AllDirectories))
+                + $"\n日志：\n{string.Join("\n", compact.LogTexts)}");
+
+            Assert.True(
+                File.Exists(Path.Combine(compactOutputRoot, "outer", "level3", "flat2.bin")),
+                "两份内容物都要在最后一层里");
+
+            Assert.False(
+                Directory.Exists(Path.Combine(compactOutputRoot, "outer", "level2")),
+                "简洁档不该给过路层建目录");
+        }
+
+        /// <summary>
         /// **分支退化**（用户 2026-09-27："出现分支就那一层照建"）：某一层**自己就产出了内容物**、
         /// 同时里面还有个内层包 —— 简洁档下那一层**照旧建出来**，并在日志里说明为什么没省。
         ///
