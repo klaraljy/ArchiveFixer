@@ -264,11 +264,16 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
     「**ASCII 文件名 + 中文 label**」：`ArchiveFixer-0.1.0-framework-dependent.zip`（label `…-框架依赖.zip`）/
     `ArchiveFixer-0.1.0-standalone.zip`（label `…-独立.zip`）；README / CHANGELOG 里写的就是这两个名字。
   - 本地另留一份可直接跑的独立版 `E:\ArchiveFixer-0.1.0-独立\`（用户 2026-09-27："在本地也给我留一份，独立的"）。
-  - ⚠ 传资产**别用 `gh release upload`**：本机代理下它的 `uploads.github.com` 稳定吃 **HTTP 404**（`gh` 会顺手
-    把整个 release 回滚掉），带 `--clobber` 重试还会删掉**另一个**资产（实测把已传好的框架依赖包删了）。
-    可用做法（实跑过）：`curl.exe -X POST -H "Authorization: Bearer $(gh auth token)" -H "Content-Type: application/zip"
-    --data-binary "@<zip>" "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=<ascii>&label=<urlencode(中文)>"`，
-    **直连**（临时清掉 `HTTP_PROXY`/`HTTPS_PROXY`，约 370 KB/s，70 MB 用 200 秒）；`api.github.com` 走代理时好时坏（偶发 `EOF` / TLS 超时）。
+  - ⚠ **传资产**（2026-09-27 晚用户更新代理后复测过的结论）：
+    - 代理下 `gh release upload` **小资产可以**（39 B 附件 3.7 秒成功），**70 MB 会在约 86 秒时 `EOF` 断掉**
+      （代理顶不住大 POST；更早的版本则是对 `uploads.github.com` 直接 **HTTP 404**，`gh` 会顺手把整个 release 回滚掉）。
+    - **大文件走直连**（临时清掉 `HTTP_PROXY`/`HTTPS_PROXY`）：`gh release upload` 直连传 70 MB **成功过**（约 3 分钟），
+      `curl.exe -X POST -H "Authorization: Bearer $(gh auth token)" -H "Content-Type: application/zip"
+      --data-binary "@<zip>" "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=<ascii>&label=<urlencode(中文)>"`
+      直连也成功过（约 370 KB/s，200 秒）；直连时 `api.github.com` 偶发 `EOF`，重试即可。
+    - ⛔ `gh release upload --clobber` **连别的资产一起删**（实测把已传好的框架依赖包删了，回到 Release 前先看 `gh release view`）。
+    - `gh` **不能设中文 label**，但传完可以补：`gh api -X PATCH repos/<o>/<r>/releases/assets/<数字 id> --input <{"label":"…"}>`
+      （已验证；数字 id 从 REST 接口取，`gh release view --json` 给的是 `RA_…` 节点 id，拿去 DELETE/PATCH **不认**）。
 - **README 截图**在 `docs/images/`（`task-tab.png` / `one-click-confirm.png` / `batch-done.png`），
   是**用生成的示例包**（3 个几十字节的假包：`说明-N.txt` + 一张示例图）在独立版临时副本里实拍的 ——
   ⛔ 不许把带真实路径 / 样本包名 / 作者邮箱的截图放进仓库（§8）；主界面那两张特意裁掉了标题栏
