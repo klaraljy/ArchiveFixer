@@ -1110,6 +1110,69 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **分支退化**（用户 2026-09-27："出现分支就那一层照建"）：某一层**自己就产出了内容物**、
+        /// 同时里面还有个内层包 —— 简洁档下那一层**照旧建出来**，并在日志里说明为什么没省。
+        ///
+        /// <para>形状：<c>outer.7z</c> 里既有内容物 <c>payload.txt</c> 又有内层包 <c>level2.7z</c>
+        /// （而 <c>level2.7z</c> 里是 <c>内容物\payload.bin</c>）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 简洁档遇到分支_那一层照旧建出来并写日志()
+        {
+            string build = Path.Combine(_root, "branch-build");
+            Directory.CreateDirectory(Path.Combine(build, "内容物"));
+
+            WriteText(Path.Combine(build, "payload.txt"), InnerPayloadText);
+            WriteText(Path.Combine(build, "内容物", "payload.bin"), InnerPayloadText);
+
+            // level2.7z：里面只有一个文件夹（单链内容）。
+            Run7z(build, "a", "-t7z", "level2.7z", "-p" + ChainPassword, "-mhe=on", @"内容物\payload.bin");
+
+            // outer.7z：**既有内容物又有内层包** —— 这就是"分支"。
+            string outer = BuildPackage("outer.7z", build, "payload.txt", "level2.7z");
+
+            string compactOutputRoot = Path.Combine(_root, "out-branch");
+
+            // ⚠ 外层包是 BuildPackage 造的（用的是 OuterPassword），内层包用 ChainPassword —— 两把都放进密码本。
+            Harness harness = CreateHarness(
+                $"{OuterPassword}\n{ChainPassword}\n",
+                settings =>
+                {
+                    settings.OmitMiddleContinuationLayers = true;
+                    settings.CustomOutputDirectory = compactOutputRoot;
+                });
+
+            await harness.AddPathsAsync(outer);
+            await harness.RunOneClickAsync();
+
+            // ① 外层自己的内容物照常落进第一层（`out-branch\outer\...`）。
+            Assert.True(
+                File.Exists(Path.Combine(compactOutputRoot, "outer", "payload.txt")),
+                "外层内容物没落进第一层。实际目录树："
+                + (Directory.Exists(compactOutputRoot)
+                    ? string.Join(" | ", Directory.GetFileSystemEntries(compactOutputRoot, "*", SearchOption.AllDirectories))
+                    : "（输出根都没建出来）")
+                + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
+
+            // ② 内层包那一层**照旧建出来**（分支不省层）→ `out-branch\outer\level2\内容物\payload.bin`。
+            string payload = Assert.Single(
+                Directory.GetFiles(compactOutputRoot, "payload.bin", SearchOption.AllDirectories));
+
+            Assert.True(
+                string.Equals(
+                    Path.Combine(compactOutputRoot, "outer", "level2", "内容物", "payload.bin"),
+                    payload,
+                    StringComparison.OrdinalIgnoreCase),
+                $"分支那一层应该照旧建出来（退化成忠实档）。实际：{payload}");
+
+            // ③ 为什么没省必须写在日志里（⛔ 绝不静默）：这一层是"内容 + 内层包"的分支。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("自己就产出了内容物", StringComparison.Ordinal)
+                        && line.Contains("省略中间层", StringComparison.Ordinal));
+        }
+
+        /// <summary>
         /// 造一条**单链**、最深一层是"一个文件夹 + 里面一个文件"的样本：
         /// <c>outer.7z → level2.7z → … → levelN.7z → 内容物\payload.bin</c>。
         ///

@@ -117,6 +117,39 @@ namespace ArchiveFixer.Tests
             Assert.Equal(4, loaded.MaxRecursionDepth);
             Assert.False(loaded.OmitMiddleContinuationLayers);
         }
+
+        /// <summary>
+        /// 设置文件里**不再写**退役的两个键，新键**必须写**（落点模型 v2 的序列化收口）。
+        ///
+        /// <para>为什么值得单独钉：`AppSettings` 删属性时如果只删了界面绑定、忘了删落盘字段，
+        /// 老键会一直躺在用户的 `appsettings.json` 里被后来的版本读到；反过来新键没接上，
+        /// 用户勾了那一格、重启就没了（"改了没用的开关"）。判据用**真实的设置文件文本**。
+        /// </para>
+        /// </summary>
+        [Fact]
+        public void 设置文件不再写退役的两个键_新键必须写着()
+        {
+            var pathService = new PathService { DataRootDirectory = _root };
+            var service = new SettingsService(pathService);
+
+            Directory.CreateDirectory(_root);
+
+            AppSettings settings = AppSettings.CreateDefault();
+            settings.OmitMiddleContinuationLayers = true;
+
+            service.Save(settings);
+
+            string json = File.ReadAllText(pathService.SettingsFilePath, Encoding.UTF8);
+
+            Assert.Contains("omitMiddleContinuationLayers", json, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("true", json, StringComparison.OrdinalIgnoreCase);
+
+            Assert.DoesNotContain("terminalLayoutMode", json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("collapseRepeatedFolderLayer", json, StringComparison.OrdinalIgnoreCase);
+
+            // 读回来也必须是同一个值（值 + 落盘两条都钉住）。
+            Assert.True(service.Load().OmitMiddleContinuationLayers);
+        }
         /// <summary>
         /// 最大层数的一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）。
         ///

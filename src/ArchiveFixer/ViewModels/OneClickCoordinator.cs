@@ -1675,10 +1675,12 @@ namespace ArchiveFixer.ViewModels
             /*
              * ===== 续解层那一层目录（用户 2026-09-27：首尾必留，中间看开关）=====
              *
-             * 判据全部在 <see cref="ShouldAddContinuationLevelLayer"/> 里（唯一实现），这里只做三件事：
+             * 判据全部在 <see cref="ShouldAddContinuationLevelLayer"/> 里（唯一实现），这里只做四件事：
              * ① 按父任务分组（"这一轮认出几个内层包"是按父任务数的）；
              * ② 要建层时取**这一层内层包的包基名**（分卷组取不出来 → 过程物名不成层，见 AppendOwnLayer）；
-             * ③ 简洁档因为分支而没能省掉那一层时，写一条日志说清为什么（⛔ 绝不静默）。
+             * ③ 简洁档因为**分支**而没能省掉那一层时，写一条日志说清是哪种分支（⛔ 绝不静默）——
+             *    "父任务自己出了内容物"与"这一层认出多个内层包"两种都要说；
+             * ④ 层名被内层包自己那个文件占着时不建层，同样写日志（见下面那一段）。
              */
             foreach (IGrouping<ArchiveTask, (ArchiveTask Parent, string ParentName, string File)> group in
                      candidates.GroupBy(candidate => candidate.Parent))
@@ -1696,11 +1698,17 @@ namespace ArchiveFixer.ViewModels
                     parentProducedContent,
                     children.Count);
 
-                if (Settings.OmitMiddleContinuationLayers && addLayer && !parentProducedContent)
+                if (Settings.OmitMiddleContinuationLayers && addLayer)
                 {
-                    scanLog.Add(
-                        $"{parent.FileName}：这一层认出了 {children.Count} 个内层包（不是单链）——"
-                        + "「省略中间层」只在单链时生效，这一层照旧各占一层。");
+                    /*
+                     * 简洁档下**没省成**：必须说清是哪种分支（两类都算分支，⛔ 不许静默）。
+                     * ① 父任务自己出了内容物；② 同一个父任务这一轮认出多个内层包。
+                     */
+                    scanLog.Add(parentProducedContent
+                        ? $"{parent.FileName}：这一层自己就产出了内容物（内容 + 内层包 = 分支）——"
+                          + "「省略中间层」只在单链时生效，这一层照旧建出来。"
+                        : $"{parent.FileName}：这一层认出了 {children.Count} 个内层包（不是单链）——"
+                          + "「省略中间层」只在单链时生效，这一层照旧各占一层。");
                 }
 
                 foreach ((ArchiveTask _, string parentName, string file) in children)
