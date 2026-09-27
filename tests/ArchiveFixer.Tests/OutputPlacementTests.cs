@@ -565,6 +565,32 @@ namespace ArchiveFixer.Tests
 
             Assert.False(atRoot.Success);
         }
+
+        /// <summary>
+        /// 手动档「解压到当前文件夹」**压过**"选文件夹 + 指定位置"那一套（含相对子路径）：
+        /// 它是"这一次按包内原样解开、就落在包旁边"的显式动作，⛔ 不该再往指定位置那边拐，
+        /// 也不该凭空补出一层子路径。
+        ///
+        /// <para>为什么值得钉：`ResolveDestinationDirectory` 里 flatten 那一支**在最前面**返回；
+        /// 谁哪天把它挪到子路径计算之后，用户点"解压到当前文件夹"就会得到
+        /// `指定位置\选中文件夹\子路径\包名\…` —— 与按钮上的承诺完全不符。</para>
+        /// </summary>
+        [Fact]
+        public void 手动档_压过选文件夹加指定位置_也不补子路径()
+        {
+            OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
+                @"C:\111\AAA\新建\222.rar",
+                OutputPlacementMode.CustomRootPerArchive,
+                @"D:\out",
+                selectionKind: SourceSelectionKind.Folder,
+                selectionRoot: @"C:\111\AAA",
+                flattenIntoSourceFolder: true);
+
+            Assert.True(result.Success);
+            Assert.Equal(@"C:\111\AAA\新建", result.DestinationDirectory);
+            Assert.Equal(string.Empty, result.RelativeSubPath);
+        }
+
         // ── 旧布尔 ↔ 新枚举（旧配置迁移，规格 §1.3） ───────────────────────────
 
         [Theory]

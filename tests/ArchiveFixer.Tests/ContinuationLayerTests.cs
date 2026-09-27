@@ -62,6 +62,15 @@ namespace ArchiveFixer.Tests
                 omitMiddleLayers: true, parentProducedContent: false, siblingCount: 7));
         }
 
+        [Fact]
+        public void 简洁档_父子两种分支同时出现也只建一次层()
+        {
+            // 两种分支叠加（自己出了内容物 + 认出多个内层包）：结论仍是"建"，而且**只建一层**
+            //（这一层的目录一个，几个内层包各自再按自己的包名占一层）。
+            Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
+                omitMiddleLayers: true, parentProducedContent: true, siblingCount: 5));
+        }
+
         // ── ② 层名怎么取（过程物名不成层） ──────────────────────────────────────
 
         [Theory]
