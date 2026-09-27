@@ -500,7 +500,82 @@ namespace ArchiveFixer.Tests
                 "导入完成后必须自动体检一次。实际日志：" + DescribeLogs(harness));
         }
 
+        /// <summary>
+        /// **②页那个「选择…」也必须是触发点**（用户 2026-09-27 第 2 条："用户选择/切换指定位置时也要判"）。
+        ///
+        /// <para>①页与②页的「选择…」是**两个入口、同一件事**（换了一块输出盘）。
+        /// 这条分两半钉：①②页那颗按钮选完目录要**通知**一声（本类造一个假的文件夹选择器，
+        /// 因为无界面宿主里真对话框一律返回空串）；②主视图模型接住之后**真的做体检**
+        /// （直接调它那个回调，断言日志里出现了体检结论）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 换输出位置_二页那颗选择按钮也会触发空间体检()
+        {
+            Harness harness = CreateHarness();
+
+            harness.Vm.ExtractionPipeline.SpaceProbeOverride = _ => 4096;
+            harness.Vm.ExtractionPipeline.SpaceReserveOverride = 0;
+
+            // ① ②页那颗按钮：选完目录要说一声（值也真的写进设置）。
+            string picked = Path.Combine(_root, "picked-output");
+            Directory.CreateDirectory(picked);
+
+            var picker = new FolderPickerDialogService { FolderToReturn = picked };
+            var editor = new SettingsViewModel(harness.Vm.Settings, new SettingsService(harness.PathService), picker);
+
+            string? notified = null;
+            editor.OutputDirectoryPicked = folder => notified = folder;
+
+            editor.SelectOutputDirectoryCommand.Execute(null);
+
+            Assert.Equal(picked, notified);
+            Assert.Equal(picked, editor.Settings.CustomOutputDirectory);
+
+            // ② 主视图模型的回调 = 真做一次体检（把回调接到那个假盘上，看日志）。
+            string folder = Path.Combine(_root, "src", "second-entry");
+            Directory.CreateDirectory(folder);
+            File.WriteAllBytes(Path.Combine(folder, "big.7z"), new byte[3 * 1024]);
+
+            ArchiveTask task = await harness.ScanFolderAndAddTask(folder);
+
+            Assert.Equal("big.7z", task.FileName);
+
+            Assert.NotNull(harness.Vm.SettingsEditor.OutputDirectoryPicked);
+
+            harness.Vm.SettingsEditor.OutputDirectoryPicked!(picked);
+
+            // 回调是"投递即返回"的（不 await）：等那次后台体检跑完（有界等待）。
+            await WaitForLogAsync(harness, "空间体检（换了输出位置）");
+        }
+
         // ================================================================ 装配
+
+        /// <summary>有界等待某条日志出现（回调是 fire-and-forget，不能同步断言）。</summary>
+        private static async Task WaitForLogAsync(Harness harness, string fragment)
+        {
+            for (int attempt = 0; attempt < 100; attempt++)
+            {
+                if (harness.Log.Logs.Any(x => x.Message.Contains(fragment, StringComparison.Ordinal)))
+                {
+                    return;
+                }
+
+                await Task.Delay(50);
+            }
+
+            Assert.Fail($"等了 5 秒也没等到那条日志：{fragment}。实际日志：" + DescribeLogs(harness));
+        }
+
+        /// <summary>假的文件夹选择器（只覆盖"用户挑好了哪个目录"这一步，其余行为与真实的一致）。</summary>
+        private sealed class FolderPickerDialogService : DialogService
+        {
+            public string FolderToReturn { get; set; } = string.Empty;
+
+            public override string ShowFolderBrowserDialog(string title, string initialDirectory)
+                => FolderToReturn;
+
+            public override string ShowFolderBrowserDialog() => FolderToReturn;
+        }
 
         /// <summary>把这一批的日志拼成一行（断言失败时看得见"实际写了什么"，省一次返工）。</summary>
         private static string DescribeLogs(Harness harness)

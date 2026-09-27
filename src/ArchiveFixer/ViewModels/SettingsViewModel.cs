@@ -697,6 +697,15 @@ namespace ArchiveFixer.ViewModels
             set => SetProperty(ref _message, value ?? string.Empty);
         }
 
+        /// <summary>
+        /// ②页「指定位置」那一格刚**选**完一个目录（只在这一刻触发，改设置 / 恢复默认都不触发）。
+        ///
+        /// <para>接它的是主视图模型：换盘之后要按新盘重做一次空间体检（用户 2026-09-27 第 2 条）。
+        /// 做成一个回调而不是在这里直接算，是因为"这批包多大、盘上还剩多少"这件事的判据
+        /// 在主视图模型那一侧（任务列表 + 解压协调器），本类只负责**说一声**。</para>
+        /// </summary>
+        internal Action<string>? OutputDirectoryPicked { get; set; }
+
         public ICommand SaveCommand { get; }
         public ICommand CancelCommand { get; }
         public ICommand ResetDefaultCommand { get; }
@@ -730,9 +739,19 @@ namespace ArchiveFixer.ViewModels
         }
 
         public SettingsViewModel(AppSettings settings, SettingsService settingsService)
+            : this(settings, settingsService, null)
+        {
+        }
+
+        /// <summary>
+        /// 正式构造 + **可注入的对话框服务**（只给测试：无界面宿主里
+        /// <see cref="Services.DialogService.ShowFolderBrowserDialog(string, string)"/> 一律返回空串，
+        /// 测试就注入不了"用户挑好了哪个目录"——而"挑完目录之后该发生什么"正是要钉住的东西）。
+        /// </summary>
+        public SettingsViewModel(AppSettings settings, SettingsService settingsService, DialogService? dialogService)
         {
             _settingsService = settingsService ?? new SettingsService();
-            _dialogService = new DialogService();
+            _dialogService = dialogService ?? new DialogService();
             _settings = CloneSettings(settings ?? _settingsService.CreateDefault());
 
             SaveCommand = new RelayCommand(Save);
@@ -1093,6 +1112,15 @@ namespace ArchiveFixer.ViewModels
                 OnPropertyChanged(nameof(Settings));
                 OnPropertyChanged(nameof(CustomOutputDirectory));
                 RaiseOutputPlacementChanged();
+
+                /*
+                 * 换输出位置 = **换了一块盘**（用户 2026-09-27 第 2 条："用户选择/切换指定位置时也要判"）。
+                 * ②页这一颗「选择…」正是"挑指定位置"的入口，所以它也必须触发那次空间体检 ——
+                 * 只挂在①页那一颗上，用户在②页挑完盘就什么都不知道（这正是"同一件事两个入口"的坑）。
+                 *
+                 * ⚠ 这里是**通知**不是动作：真正体检的是主视图模型的回调（它才拿得到任务列表与协调器）。
+                 */
+                OutputDirectoryPicked?.Invoke(folder);
 
                 Message = "已选择输出目录。";
             }

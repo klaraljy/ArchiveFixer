@@ -245,7 +245,7 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 
 ## 11. 当前验证状态（2026-09-27，落点模型 v2 落完并全量通过之后）
 
-- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1787 条全绿**（0 失败 / 0 跳过）；
+- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1788 条全绿**（0 失败 / 0 跳过）；
   `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
 - **「空间不足」模式**（2026-09-27 用户拍板）：①页主操作栏那个黄色勾选框，**运行期开关**
@@ -259,9 +259,12 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   动手前必须看得见：确认框红字 `StatusText.SpaceTightConfirmText`（正文两行同时换成覆盖后的值）+
   ②③页橙色提示 `StatusText.SpaceTightOverrideNotice`。
   契约在 `docs/输出与整理模型.md` §3.4.2，用例在 `SpaceTightModeTests` / `SpaceModeTests`。
-- **导入后的空间体检**（2026-09-27）：导入完成与**换输出位置**两处自动调
-  `MainViewModel.CheckSpaceForTasksAsync` → `ReportSpaceCheck`（判据复用 `ExtractionCoordinator.BuildSpaceAdvice`，
-  ⛔ 不另写一套）。放不下时 WARN + ERROR 两条日志 + `DialogService.ShowSpaceShortageWarning` 弹窗点名；
+- **导入后的空间体检**（2026-09-27）：**三个触发点** —— 导入完成（`ScanCoordinator.AddPathsAsync`）、
+  ①页「选择…」（`MainViewModel.SelectOutputDirectory`）、②页「指定位置 → 选择…」
+  （`SettingsViewModel.OutputDirectoryPicked` → MainViewModel 的回调）——
+  都调 `MainViewModel.CheckSpaceForTasksAsync` → `ReportSpaceCheck`
+  （判据复用 `ExtractionCoordinator.BuildSpaceAdvice`，⛔ 不另写一套）。
+  放不下时 WARN + ERROR 两条日志 + `DialogService.ShowSpaceShortageWarning` 弹窗点名；
   ⛔ 它只是提醒：不改设置、不改勾选、不拦着不让跑。
 - **落点模型 v2**（2026-09-27）：终点落法固定（不再让用户选）、手动「解压到当前文件夹」、
   一律不塌缩、续解层按三条优先判据（**同层多个内层包 → 建**；**父层已出内容物 → 不建、并进父层**；

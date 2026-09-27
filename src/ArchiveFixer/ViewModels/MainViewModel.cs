@@ -1873,6 +1873,15 @@ namespace ArchiveFixer.ViewModels
              * 两份值一定会打架 —— 共享同一个对象才不会有"界面显示 A、保存写回 B"。
              */
             _settingsEditor = new SettingsViewModel(_settings, _settingsService);
+
+            /*
+             * ②页「指定位置 → 选择…」也要做一次空间体检（用户 2026-09-27 第 2 条）：
+             * 那一颗按钮与①页的「选择…」是**两个入口、同一件事**（换了一块输出盘），
+             * 只挂一边的话，用户在②页挑完盘什么都不会发生。
+             * ⚠ 不 await（回调是同步的）：体检自己吞掉所有异常，不存在没人接的异常。
+             */
+            _settingsEditor.OutputDirectoryPicked = pickedFolder =>
+                _ = CheckSpaceForTasksAsync(Tasks.ToList(), "换了输出位置");
             _settingsEditor.AttachSharedSettings(_settings);
 
             PackingEditor = new PackingViewModel
