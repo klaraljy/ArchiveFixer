@@ -27,7 +27,9 @@ Windows 桌面工具：把一批**来源不明、后缀被改坏、加密、分�
 - 专项安装包提取（WIM/ESD、Inno Setup、InstallShield、MSI、SquashFS、LHA）—— 规则是**有真实样本才加**
 - WinRAR 的"捆绑 / 默认依赖 / 自动探测安装"；只保留"用户自装、自选路径、程序只检测与调用"
 - CLI 前端（第一版只做 GUI；但核心逻辑不得依赖 WPF，为 CLI 留位）、多语言（中文单语，不引 i18n 框架）
-- 任何联网功能（不自动下载引擎、不上传任何东西）、安装包 / 自动更新（第一版绿色目录分发）
+- 任何联网功能（不自动下载引擎、不上传任何东西）、自动更新（绿色目录分发）
+- **安装包**：v1 原本不做；**用户 2026-09-27 明确要求"我是要 .exe 安装文件的"** → 已做
+  （`installer\ArchiveFixer.nsi` + `scripts\installer.ps1`）。规则见 §11「安装包」那段，改之前先读。
 - 压缩炸弹的"智能判定"（只做硬预算上限，不猜意图）
 
 ## 3. 技术栈与分层铁律
@@ -72,6 +74,8 @@ tests/ArchiveFixer.Tests/      xUnit（与本体分开；跑不起真 7z 的用�
 docs/                          规格与文档（见 §10 文档地图）
 samples/                       只放**生成脚本 + 清单**，样本本体不入仓库
 scripts/package.ps1            生成 dist 发行包（**用户说暂不打包**）
+scripts/installer.ps1          出 .exe 安装包（NSIS；内容默认取 dist\ArchiveFixer-<版本>-独立）
+installer/ArchiveFixer.nsi      安装包脚本（⚠ 必须 UTF-8 **带 BOM**，否则 makensis 报 Bad text encoding）
 scripts/make-icon.ps1 + icon-gen/  重生成 `src/ArchiveFixer/Assets/ArchiveFixer.ico`
                                ⛔ icon-gen **不在解决方案里**，主程序构建/测试/format 都不碰它
 dist/                          发行产物（不入库）
@@ -274,6 +278,25 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
     - ⛔ `gh release upload --clobber` **连别的资产一起删**（实测把已传好的框架依赖包删了，回到 Release 前先看 `gh release view`）。
     - `gh` **不能设中文 label**，但传完可以补：`gh api -X PATCH repos/<o>/<r>/releases/assets/<数字 id> --input <{"label":"…"}>`
       （已验证；数字 id 从 REST 接口取，`gh release view --json` 给的是 `RA_…` 节点 id，拿去 DELETE/PATCH **不认**）。
+- **安装包（用户 2026-09-27 追加："我是要 .exe 安装文件的"）**：`installer\ArchiveFixer.nsi`（NSIS 3.10，
+  `D:\Codex Tools\NSIS\nsis-3.10\makensis.exe`）+ `scripts\installer.ps1`（默认拿 `dist\ArchiveFixer-<版本>-独立`
+  当内容）→ `dist\ArchiveFixer-0.1.0-setup.exe`（**47.82 MB**，164.57 MB 内容压到 29.1%，编译约 110 秒）。
+  - 装法：**每用户、`RequestExecutionLevel user`（不弹 UAC）**，默认 `%LOCALAPPDATA%\ArchiveFixer`（安装页可改）；
+    ⛔ 绝不能默认 `C:\Program Files\`（程序要往自己目录的 `data\` 写日志 / 设置 / 密码列表，那儿没写权限）。
+  - 卸载**默认保留 `data\`**（交互式会问一次；`/S` 静默卸载一律保留）。⛔ 不许改成"卸载就清空"。
+  - ⚠ `.nsi` **必须 UTF-8 带 BOM**（否则 makensis 直接报 `Bad text encoding`）；
+    ⚠ **注释行末尾不要留反斜杠**（NSIS 当续行符，会把下一行命令吞掉 —— 实测 FindFirst 那一行被吞过）；
+    ⚠ 命令行开关的判据只读 `${GetOptions}` **返回值**，别靠 `IfErrors`（实测搞反过 → 静默装也建快捷方式）；
+    ⚠ 卸载删桌面 `.lnk` 前必须看安装时写的 `DesktopShortcut` 标记，否则会删掉**用户自己的**快捷方式（实测踩到，
+      用户桌面那个 `E:\ArchiveFixer\` 的快捷方式被删过一次，已重建）。
+  - **验收（2026-09-28 凌晨，静默模式走完两条路）**：`/S /D=<临时目录>` 装出 **478 个文件 / 164.73 MB**，
+    `ArchiveFixer.exe` / `ArchiveFixer.dll` / `tools\7zip\7z.exe` 与发布目录**逐字节相同**（SHA256 比对）；
+    静默装**不建**快捷方式、不写标记；`/S /SHORTCUTS=1` 会建桌面 + 开始菜单并写标记（卸载时按标记删干净）；
+    两轮卸载后程序文件 / `tools` / `docs` / 本地化目录全清、注册表两条键全清、**`data\keepme.txt` 都保住了**、
+    用户桌面快捷方式（`E:\ArchiveFixer\ArchiveFixer.exe`）**毫发无损**；装出来后跑过一次，程序正常起窗口、
+    自己建出 `data\appsettings.json` + `password-list.dat` + 日志。
+  - 本地另存一份：`E:\ArchiveFixer-0.1.0-setup.exe`（用户："这个本地也要留一份就放在独立版旁边"）；
+    Release 上的资源名 `ArchiveFixer-0.1.0-setup.exe`（label `ArchiveFixer-0.1.0-安装包.exe`）。
 - **README 截图**在 `docs/images/`（`task-tab.png` / `one-click-confirm.png` / `batch-done.png`），
   是**用生成的示例包**（3 个几十字节的假包：`说明-N.txt` + 一张示例图）在独立版临时副本里实拍的 ——
   ⛔ 不许把带真实路径 / 样本包名 / 作者邮箱的截图放进仓库（§8）；主界面那两张特意裁掉了标题栏

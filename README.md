@@ -11,10 +11,13 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
 ## 30 秒上手
 
 1. **拿到程序**：到 [**Releases**](https://github.com/klaraljy/ArchiveFixer/releases) 下
-   `ArchiveFixer-0.1.0-framework-dependent.zip`（需 .NET 8 桌面运行时 x64）或 `ArchiveFixer-0.1.0-standalone.zip`
-   （什么都不用装），解压即用；自己构建出的包在 `dist\`（`dist` 不入库），文件名是中文的
-   `ArchiveFixer-0.1.0-框架依赖.zip` / `ArchiveFixer-0.1.0-独立.zip`
+   `ArchiveFixer-0.1.0-setup.exe`（**安装包**，双击一路下一步，默认装到 `%LOCALAPPDATA%\ArchiveFixer`，
+   会建快捷方式、控制面板里能卸载）、`ArchiveFixer-0.1.0-standalone.zip`（**独立版**，什么都不用装，解压即用）
+   或 `ArchiveFixer-0.1.0-framework-dependent.zip`（**框架依赖版**，需 .NET 8 桌面运行时 x64，体积最小）；
+   自己构建出的包在 `dist\`（`dist` 不入库），文件名是中文的
+   `ArchiveFixer-0.1.0-框架依赖.zip` / `ArchiveFixer-0.1.0-独立.zip` / `ArchiveFixer-0.1.0-setup.exe`
    —— ⚠️ GitHub 会把资源名里的非 ASCII 字符抹掉，所以发布件用 ASCII 文件名、中文名挂在资源标签上。
+   ⛔ 无论哪种装法，**都不要放进 `C:\Program Files\`**（程序要在自己目录下写 `data\`）。
 2. **双击启动** → ①「任务」页点「**添加文件夹**」（也可以直接把文件夹拖进窗口）。
 3. 勾上要处理的包 → 点「**一键处理**」→ 确认框里看一眼落点 → 确定。
 4. 干完看①页结果区；失败的在 `ArchiveFixer-失败清单.txt`，要发给我排查看「**导出日志（本次）**」。

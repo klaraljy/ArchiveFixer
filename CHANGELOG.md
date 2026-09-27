@@ -32,9 +32,14 @@
 
 | 包 | 目标机要求 | 体积 |
 |---|---|---|
+| `ArchiveFixer-0.1.0-setup.exe`（安装包） | 什么都不用装；双击一路「下一步」 | 48 MB |
 | `ArchiveFixer-0.1.0-framework-dependent.zip` | 需要 **.NET 8 桌面运行时（x64）** | 小（2.2 MB） |
-| `ArchiveFixer-0.1.0-standalone.zip` | 什么都不用装 | 大（70.8 MB） |
+| `ArchiveFixer-0.1.0-standalone.zip` | 什么都不用装，解压即用 | 大（70.8 MB） |
 
+- **安装包**：每用户安装、**不需要管理员权限**，默认装到 `%LOCALAPPDATA%\ArchiveFixer`（安装页可改），
+  建桌面 + 开始菜单快捷方式，控制面板「应用和功能」里能卸载；卸载会删程序文件与快捷方式、
+  **默认保留 `data\`**（设置 / 日志 / 密码列表，会问你一次；静默卸载一律保留）。
+  ⛔ 任何装法都**别放进 `C:\Program Files\`** —— 程序要在自己目录下写 `data\`。
 > ⚠️ GitHub 会把上传资源名里的**非 ASCII 字符直接抹掉**（实测 `…-独立.zip` 落到服务端变成 `…-.zip`），
 > 所以发布件的**文件名用 ASCII**、中文名放在资源**标签（label）**上；
 > 本地 `dist\` 里生成出来的仍然是中文名 `ArchiveFixer-0.1.0-框架依赖.zip` / `-独立.zip`。
