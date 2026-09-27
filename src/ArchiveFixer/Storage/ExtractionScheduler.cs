@@ -127,7 +127,12 @@ namespace ArchiveFixer.Storage
         {
             var lines = new List<string>
             {
-                $"空间调度：{OrderBasis}排了 {Ordered.Count} 个任务；{ParallelAdviceText()}（当前档：{RequestedParallelCount}）",
+                /*
+                 * ⚠ 括号里刻意写"设置里的档"而不是"当前档"：①页「空间不足」模式开着时，
+                 * 本批**不用**那一档（并发由空间自己定，另有一条 WARN 说明）——
+                 * 写"当前档"会让人把设置里的数字当成这一批真的在用的数字。
+                 */
+                $"空间调度：{OrderBasis}排了 {Ordered.Count} 个任务；{ParallelAdviceText()}（设置里的档：{RequestedParallelCount}）",
                 "空间调度依据：" + Basis
             };
 
