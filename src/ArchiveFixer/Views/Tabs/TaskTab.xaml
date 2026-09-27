@@ -216,6 +216,21 @@
                         Command="{Binding ChangeNameCommand}" />
 
                 <!--
+                    「解压到当前文件夹」（用户 2026-09-27 拍板加的手动档）：
+                    语义就是 WinRAR 右键那一句 —— 内容物**不建包名那一层**，直接落在包自己所在的目录里。
+                    它是**唯一**会摊平的入口（一键处理 / 继续解永远套一层包名文件夹），
+                    所以文案里必须把"少一层"和"撞名按覆盖策略处理"都说出来（用户拍板接受这个代价）。
+                    位置：与上面三个"会写盘"的动作排在一起，后面才是两颗只看不动的按钮。
+                -->
+                <Button Content="{x:Static models:StatusText.ExtractIntoSourceFolderText}"
+                        MinWidth="136"
+                        Margin="8,0,0,0"
+                        FontWeight="SemiBold"
+                        ToolTip="{x:Static models:StatusText.ExtractIntoSourceFolderToolTip}"
+                        ToolTipService.ShowOnDisabled="True"
+                        Command="{Binding ExtractIntoSourceFolderCommand}" />
+
+                <!--
                     两颗"只看不动盘"的按钮（用户 2026-09-26 批准加的高频功能）：
                     看内容 = 列出包里有什么（不解压）；试密码 = 逐个候选问一遍"这个能不能开"。
                     ⛔ 它们一个字节都不写盘、也不动源文件。

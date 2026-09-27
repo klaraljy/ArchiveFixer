@@ -290,6 +290,42 @@ namespace ArchiveFixer.Tests
             Assert.Contains("MiB", vm.SelectedTasksSummary, StringComparison.Ordinal);   // 1 KiB + 1 MiB → 合计按 MiB 档报
         }
 
+        // ================================================================ 落点模型 v2：手动档「解压到当前文件夹」
+
+        /// <summary>
+        /// ①页「手动操作」里必须有那颗按钮，而且它绑的是**它自己**的命令
+        /// （⛔ 不许偷偷复用「只解压」—— 两者落点不同，共用一个命令就是"点了没反应 / 落错地方"）。
+        ///
+        /// <para>同时钉住三条接线：文案来自 <see cref="StatusText.ExtractIntoSourceFolderText"/>、
+        /// 一键处理那条路**没有**这个命令（批量永不摊平）、命令在忙时点不动（与「只解压」同一道守卫）。</para>
+        /// </summary>
+        [Fact]
+        public void 手动操作_解压到当前文件夹_有独立按钮与命令()
+        {
+            string taskTab = Read("Views", "Tabs", "TaskTab.xaml");
+
+            Assert.Contains("ExtractIntoSourceFolderCommand", taskTab, StringComparison.Ordinal);
+            Assert.Contains("StatusText.ExtractIntoSourceFolderText", taskTab, StringComparison.Ordinal);
+
+            MainViewModel vm = CreateViewModel();
+
+            Assert.NotNull(vm.ExtractIntoSourceFolderCommand);
+
+            // 没勾任务时点不动（与「只解压」逐字同一条守卫）。
+            vm.Tasks.Add(new ArchiveTask(Path.Combine(_root, "x.rar"), 1) { IsSelected = false });
+
+            Assert.False(vm.ExtractIntoSourceFolderCommand.CanExecute(null));
+            Assert.False(vm.StartExtractCommand.CanExecute(null));
+
+            vm.Tasks[0].IsSelected = true;
+
+            Assert.True(vm.ExtractIntoSourceFolderCommand.CanExecute(null));
+            Assert.True(vm.StartExtractCommand.CanExecute(null));
+
+            // 两条命令是**两个对象**：共用一个就等于把摊平偷偷接给了「只解压」。
+            Assert.NotSame(vm.ExtractIntoSourceFolderCommand, vm.StartExtractCommand);
+        }
+
         // ================================================================ 第 2 条：移除勾选的
 
         /// <summary>

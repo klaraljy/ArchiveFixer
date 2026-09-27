@@ -16,8 +16,8 @@ namespace ArchiveFixer.Tests
     /// 收口接线回归：把"前四个代理互相移交、但没人接上"的几处接起来之后的看门测试。
     ///
     /// <list type="number">
-    /// <item>终端落法（<c>TerminalLayoutMode</c>）真的从设置传到 <c>Plan</c>，不再是写死的 KeepLastFolder；</item>
-    /// <item>场景 B 塌缩（规格 §3.3）真的接线：设置 → 目录扫描 → 落点；</item>
+    /// <item>落点（<c>OutputPlacement</c>）真的从设置 / 选项传到管线，两处算出的落点永远同一个；</item>
+    /// <item>一致性铁律：同一个包在界面「输出目录」列与管线里算出的落点必须一致（手动档那个开关正是这么逮到的）；</item>
     /// <item>清理服务（过程物 / 空文件夹）有可被界面调用的"预览 + 执行"两步。</item>
     /// </list>
     ///
@@ -83,71 +83,40 @@ namespace ArchiveFixer.Tests
             return new ArchiveTask(sourceArchive) { OutputPath = PathOf(outputRelativePath) };
         }
 
-        // ================================================================ ① 终端落法
+        // ================================================================ ① 简洁档（终端落法已退役）
 
+        /// <summary>
+        /// 终端落法那一档**已退役**（用户 2026-09-27："这个可以删除掉，默认就是这样的情况"），
+        /// 场景 B 塌缩也整条退役（"一律不塌缩"）；换上来的是**简洁档**开关，**默认关**（忠实档）。
+        /// </summary>
         [Fact]
-        public void 设置默认值_终端落法保留最后一层_场景B塌缩默认开()
+        public void 设置默认值_简洁档默认关_终端落法与塌缩字段都不在了()
         {
             AppSettings defaults = AppSettings.CreateDefault();
 
-            Assert.Equal("KeepLastFolder", defaults.TerminalLayoutMode);
-            Assert.True(defaults.CollapseRepeatedFolderLayer, "规格 §3.3 明确要求默认开");
+            Assert.False(defaults.OmitMiddleContinuationLayers, "简洁档默认关 = 忠实档（每层包名都留）");
         }
 
-        [Theory]
-        [InlineData("KeepLastFolder", TerminalLayoutMode.KeepLastFolder)]
-        [InlineData("UseArchiveName", TerminalLayoutMode.UseArchiveName)]
-        [InlineData("usearchivename", TerminalLayoutMode.UseArchiveName)]
-        [InlineData(" UseArchiveName ", TerminalLayoutMode.UseArchiveName)]
-        [InlineData("", TerminalLayoutMode.KeepLastFolder)]
-        [InlineData(null, TerminalLayoutMode.KeepLastFolder)]
-        [InlineData("随便写的非法值", TerminalLayoutMode.KeepLastFolder)]
-        [InlineData("999", TerminalLayoutMode.KeepLastFolder)]
-        public void 终端落法解析_非法值一律回落默认(string? raw, TerminalLayoutMode expected)
-        {
-            Assert.Equal(expected, OutputPlacement.ParseTerminalLayoutMode(raw));
-        }
-
+        /// <summary>旧配置里那两项（TerminalLayoutMode / CollapseRepeatedFolderLayer）读进来不报错、也不影响新行为。</summary>
         [Fact]
-        public void 终端落法Normalize_非法值写回默认而不是原样留着()
+        public void 旧配置带退役字段_不报错且取到新默认值()
         {
-            var settings = new AppSettings { TerminalLayoutMode = "谁把这里改坏了" };
-
-            settings.Normalize();
-
-            Assert.Equal("KeepLastFolder", settings.TerminalLayoutMode);
-        }
-
-        [Fact]
-        public void 终端落法_枚举与设置字符串互逆()
-        {
-            foreach (TerminalLayoutMode mode in Enum.GetValues<TerminalLayoutMode>())
-            {
-                Assert.Equal(mode, OutputPlacement.ParseTerminalLayoutMode(OutputPlacement.ToSettingValue(mode)));
-            }
-        }
-
-        [Fact]
-        public void 旧配置缺新字段_不报错且取到默认值()
-        {
-            // 旧版 appsettings.json：既没有 TerminalLayoutMode，也没有 CollapseRepeatedFolderLayer。
             var pathService = new PathService { DataRootDirectory = _root };
             var service = new SettingsService(pathService);
 
             Directory.CreateDirectory(_root);
             File.WriteAllText(
                 pathService.SettingsFilePath,
-                "{ \"RecursionMode\": \"SingleChain\", \"MaxRecursionDepth\": 4 }",
+                "{ \"RecursionMode\": \"SingleChain\", \"MaxRecursionDepth\": 4, " +
+                "\"TerminalLayoutMode\": \"UseArchiveName\", \"CollapseRepeatedFolderLayer\": false }",
                 new UTF8Encoding(false));
 
             AppSettings loaded = service.Load();
 
             Assert.Equal("SingleChain", loaded.RecursionMode);
             Assert.Equal(4, loaded.MaxRecursionDepth);
-            Assert.Equal("KeepLastFolder", loaded.TerminalLayoutMode);
-            Assert.True(loaded.CollapseRepeatedFolderLayer);
+            Assert.False(loaded.OmitMiddleContinuationLayers);
         }
-
         /// <summary>
         /// 最大层数的一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）。
         ///
@@ -180,127 +149,17 @@ namespace ArchiveFixer.Tests
             Assert.Equal(3, service.Load().MaxRecursionDepth);
         }
 
+        // ================================================================ ② 落点（塌缩已退役）
+
+        /// <summary>
+        /// **塌缩退役之后**：包名与所在目录同名（<c>111\222\名字\名字.rar</c>）也**一律多一层**，
+        /// 而且**与"那层里还有没有别的包"无关** —— 用户 2026-09-27："如果这层里还有很多别的东西呢，
+        /// 不就混乱了吗"，所以判据里不再有"扫目录"这一环，落点对用户完全可预期。
+        /// </summary>
         [Fact]
-        public void 设置里的终端落法_真的传到定稿规划()
-        {
-            // 暂存树：out\666\a.mp4、out\666\b.mp4（多个文件 → 判定表 2 会套一层）
-            string stage = PathOf("stage");
-            WriteFile(@"stage\666\a.mp4", "a");
-            WriteFile(@"stage\666\b.mp4", "b");
-
-            string destination = PathOf(@"111\222");
-
-            var settings = new AppSettings { TerminalLayoutMode = "KeepLastFolder" };
-
-            ExtractionCoordinator.FinalLayoutPlan keep = ExtractionCoordinator.PlanFinalLayout(
-                stage,
-                destination,
-                sharedOutputRoot: false,
-                "555",
-                OutputPlacement.ParseTerminalLayoutMode(settings.TerminalLayoutMode));
-
-            settings.TerminalLayoutMode = "UseArchiveName";
-
-            ExtractionCoordinator.FinalLayoutPlan useArchiveName = ExtractionCoordinator.PlanFinalLayout(
-                stage,
-                destination,
-                sharedOutputRoot: false,
-                "555",
-                OutputPlacement.ParseTerminalLayoutMode(settings.TerminalLayoutMode));
-
-            // 判定表 2 套出来的那一层：KeepLastFolder 用包内那层名字（666），UseArchiveName 用包基名（555）。
-            // （内容物是"整棵 666 目录搬走"，所以断言的是那一层的落点。）
-            Assert.Contains(keep.Moves, move => move.To == PathOf(@"111\222\666"));
-            Assert.Contains(useArchiveName.Moves, move => move.To == PathOf(@"111\222\555"));
-
-            // 两种取值必须真的不同（写死 KeepLastFolder 时这条会红）。
-            Assert.NotEqual(
-                keep.Moves.Select(move => move.To).OrderBy(path => path, StringComparer.Ordinal),
-                useArchiveName.Moves.Select(move => move.To).OrderBy(path => path, StringComparer.Ordinal));
-        }
-
-        // ================================================================ ② 场景 B 塌缩
-
-        [Fact]
-        public void 场景B_目录里只有这一个包_判定为可塌缩()
-        {
-            string archive = WriteFile(@"111\222\名字\名字.rar", "rar");
-
-            SourceFolderScanResult scan = SourceFolderScanService.Inspect(archive);
-
-            Assert.True(scan.IsCandidate);
-            Assert.True(scan.Scanned);
-            Assert.True(scan.ContainsOnlyThisArchive);
-        }
-
-        [Fact]
-        public void 场景B_包名与目录名不同_连目录都不扫()
-        {
-            string archive = WriteFile(@"111\222\333.rar", "rar");
-
-            SourceFolderScanResult scan = SourceFolderScanService.Inspect(archive);
-
-            Assert.False(scan.IsCandidate);
-            Assert.False(scan.Scanned);
-            Assert.False(scan.ContainsOnlyThisArchive);
-        }
-
-        [Fact]
-        public void 场景B_自己的分卷和说明文件不算别的包()
-        {
-            string archive = WriteFile(@"111\222\名字\名字.rar", "rar");
-            WriteFile(@"111\222\名字\名字.r00", "vol");
-            WriteFile(@"111\222\名字\名字.r01", "vol");
-            WriteFile(@"111\222\名字\说明.txt", "readme");
-
-            Assert.True(SourceFolderScanService.Inspect(archive).ContainsOnlyThisArchive);
-        }
-
-        [Fact]
-        public void 场景B_分卷组基名也算包基名()
-        {
-            string archive = WriteFile(@"111\222\名字\名字.7z.001", "v1");
-            WriteFile(@"111\222\名字\名字.7z.002", "v2");
-
-            SourceFolderScanResult scan = SourceFolderScanService.Inspect(archive);
-
-            Assert.True(scan.IsCandidate);
-            Assert.True(scan.ContainsOnlyThisArchive);
-        }
-
-        [Theory]
-        [InlineData("另一个.rar")]
-        [InlineData("另一个.7z")]
-        [InlineData("名字.zip")]
-        [InlineData("名字.7z.001")]
-        [InlineData("伪装.jpg.rar")]
-        public void 场景B_目录里还有别的包_不塌缩(string otherArchiveName)
-        {
-            string archive = WriteFile(@"111\222\名字\名字.rar", "rar");
-            WriteFile($"111\\222\\名字\\{otherArchiveName}", "other");
-
-            SourceFolderScanResult scan = SourceFolderScanService.Inspect(archive);
-
-            Assert.True(scan.IsCandidate);
-            Assert.False(scan.ContainsOnlyThisArchive);
-        }
-
-        [Fact]
-        public void 场景B_目录读不到_保守不塌缩()
-        {
-            // 目录不存在 = 读不到：多一层是安全的默认，绝不因为"扫不到"就塌缩。
-            SourceFolderScanResult scan = SourceFolderScanService.Inspect(PathOf(@"111\222\名字\名字.rar"));
-
-            Assert.True(scan.IsCandidate);
-            Assert.False(scan.Scanned);
-            Assert.False(scan.ContainsOnlyThisArchive);
-        }
-
-        [Fact]
-        public void 场景B_接线后落点少了重复的一层_有别的包时保留完整一层()
+        public void 塌缩退役后_同名同目录也一律多一层_与目录里有没有别的包无关()
         {
             var pathService = new PathService();
-            var settings = new AppSettings();
             var options = new ExtractOptions
             {
                 ExtractToOriginalDirectory = true,
@@ -310,87 +169,84 @@ namespace ArchiveFixer.Tests
             string onlyOne = WriteFile(@"111\222\名字\名字.rar", "rar");
             var task = new ArchiveTask(onlyOne);
 
-            SourceFolderScanResult scan = SourceFolderScanService.Inspect(onlyOne);
+            Assert.Equal(PathOf(@"111\222\名字\名字"), pathService.BuildOutputPath(task, options));
 
-            Assert.Equal(
-                PathOf(@"111\222\名字"),
-                pathService.BuildOutputPath(task, options, settings.CollapseRepeatedFolderLayer, scan.ContainsOnlyThisArchive));
-
-            // 同一个目录里再放一个包 → 事实变了，落点跟着回到 111\222\名字\名字。
+            // 同一个目录里再放一个包：落点**一个字都不变**（旧规则这里会从"塌缩"翻成"不塌缩"）。
             WriteFile(@"111\222\名字\另一个.rar", "other");
 
-            SourceFolderScanResult scanAgain = SourceFolderScanService.Inspect(onlyOne);
-
-            Assert.Equal(
-                PathOf(@"111\222\名字\名字"),
-                pathService.BuildOutputPath(task, options, settings.CollapseRepeatedFolderLayer, scanAgain.ContainsOnlyThisArchive));
+            Assert.Equal(PathOf(@"111\222\名字\名字"), pathService.BuildOutputPath(task, options));
         }
 
+        /// <summary>
+        /// 手动档「解压到当前文件夹」（2026-09-27 新加）：<c>111\222.rar</c> → 产物落 <c>111\</c>，
+        /// 于是 <c>LandsInSourceDirectory</c> 这一条唯一还成立的例外就是它。
+        /// </summary>
         [Fact]
-        public void 场景B_设置关掉塌缩时_即使只有这一个包也保留完整一层()
+        public void 手动档解压到当前文件夹_落点就是源包所在目录()
         {
             var pathService = new PathService();
             var options = new ExtractOptions
             {
                 ExtractToOriginalDirectory = true,
-                KeepArchiveNameFolder = true
+                KeepArchiveNameFolder = true,
+                ExtractIntoSourceFolder = true
             };
 
-            string archive = WriteFile(@"111\222\名字\名字.rar", "rar");
+            string archive = WriteFile(@"111\222.rar", "rar");
             var task = new ArchiveTask(archive);
+            string output = pathService.BuildOutputPath(task, options);
 
-            var settings = new AppSettings { CollapseRepeatedFolderLayer = false };
-            SourceFolderScanResult scan = SourceFolderScanService.Inspect(archive);
-
-            Assert.Equal(
-                PathOf(@"111\222\名字\名字"),
-                pathService.BuildOutputPath(task, options, settings.CollapseRepeatedFolderLayer, scan.ContainsOnlyThisArchive));
-        }
-
-        [Fact]
-        public void 场景B_塌缩后的落点就是源包所在目录_不套用目录已存在就改名()
-        {
-            /*
-             * 塌缩之后落点必然等于源包所在目录，而那个目录**必然非空**（源包躺在里面）。
-             * 所以"输出目录已存在且非空就改名 xxx(1)"这条规则必须让开 ——
-             * 否则塌缩当场被抵消，产物落到旁边的 名字(1)\。
-             * 这里把"落点 == 源包目录"这个判据钉死（管线里就是它决定让不让开）。
-             */
-            var pathService = new PathService();
-            var options = new ExtractOptions
-            {
-                ExtractToOriginalDirectory = true,
-                KeepArchiveNameFolder = true
-            };
-
-            string archive = WriteFile(@"111\222\名字\名字.rar", "rar");
-            var task = new ArchiveTask(archive);
-
-            SourceFolderScanResult scan = SourceFolderScanService.Inspect(archive);
-            string output = pathService.BuildOutputPath(task, options, true, scan.ContainsOnlyThisArchive);
-
+            Assert.Equal(PathOf(@"111"), output);
             Assert.True(OutputPlacement.LandsInSourceDirectory(archive, output));
 
             /*
-             * 旧写法（"解压到压缩包所在目录"）已被用户 2026-09-24 第 13 条删除：同一对布尔现在
-             * 迁移到"同名子文件夹"那一档，落点不再等于源目录 —— 这条例外今天只有塌缩那一条路。
+             * 自动档（默认）永远不是这一档：同一对设置下，落点是"同名子文件夹"。
+             * ⛔ 一键处理/批量不许走这里 —— 只有用户点「解压到当前文件夹」才会置这个标志。
              */
-            var legacyFlatOptions = new ExtractOptions
+            var autoOptions = new ExtractOptions
             {
                 ExtractToOriginalDirectory = true,
-                KeepArchiveNameFolder = false
+                KeepArchiveNameFolder = true
             };
 
-            Assert.False(OutputPlacement.LandsInSourceDirectory(
-                archive,
-                pathService.BuildOutputPath(task, legacyFlatOptions)));
+            Assert.Equal(PathOf(@"111\222"), pathService.BuildOutputPath(task, autoOptions));
+            Assert.False(OutputPlacement.LandsInSourceDirectory(archive, pathService.BuildOutputPath(task, autoOptions)));
+        }
 
-            // 普通的同名子文件夹落点（111\222\333）不适用这条例外，照旧走"已存在就改名"。
-            string other = WriteFile(@"111\222\333.rar", "rar");
+        /// <summary>
+        /// 「解压到当前文件夹」的**接线**（2026-09-27）：那个开关只有 <see cref="ExtractOptions.ExtractIntoSourceFolder"/>
+        /// 一个入口，界面那条路（<c>BuildOutputPath</c>，即「输出目录」列）与管线那条路（<c>ResolveOutputPlacement</c>）
+        /// 必须给出同一个落点。
+        ///
+        /// <para>红在哪：修之前 <c>BuildOutputPath</c> 只认自己那个同名形参、不认选项对象上的这一格 ——
+        /// 于是同一个任务在界面显示 <c>111\222</c>、真正解压却落到 <c>111\</c>（或者反过来）。
+        /// 这条断言就是"两处必须同一个答案"。</para>
+        /// </summary>
+        [Fact]
+        public void 手动档开关只有一个入口_界面列与管线算出同一个落点()
+        {
+            var pathService = new PathService();
+            var options = new ExtractOptions
+            {
+                ExtractToOriginalDirectory = true,
+                KeepArchiveNameFolder = true,
+                ExtractIntoSourceFolder = true
+            };
 
-            Assert.False(OutputPlacement.LandsInSourceDirectory(
-                other,
-                pathService.BuildOutputPath(new ArchiveTask(other), options)));
+            string archive = WriteFile(@"111\222.rar", "rar");
+            var task = new ArchiveTask(archive);
+
+            // ① 不带 volumeGroupBaseName 的那条（界面列走它）
+            Assert.Equal(PathOf(@"111"), pathService.BuildOutputPath(task, options));
+
+            // ② 管线那条（带整份结论）
+            OutputPlacementResult placement = pathService.ResolveOutputPlacement(task, options);
+
+            Assert.True(placement.Success);
+            Assert.Equal(PathOf(@"111"), placement.DestinationDirectory);
+
+            // 默认（一键处理/批量那条路）永远是"同名子文件夹"，摊平必须显式打开。
+            Assert.False(new ExtractOptions().ExtractIntoSourceFolder);
         }
 
         // ================================================================ ③ 删除入口（其余物）
@@ -887,13 +743,17 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 作用域提醒_共享模式下说清只删本任务那一份()
         {
-            // 模式 B：输出目录 = 源包所在目录。
+            /*
+             * 输出目录 = 源包所在目录。⚠ 2026-09-27 起这只可能是**手动档「解压到当前文件夹」**
+             * 之后的样子 —— 旧的场景 B 塌缩与"多个包共用一层"都已退役，措辞也按新事实改了
+             * （不再说"与其它包共用 / 按包基名分开的子目录"，那是已经不存在的情形）。
+             */
             var task = new ArchiveTask(PathOf(@"111\222\333.rar")) { OutputPath = PathOf(@"111\222") };
 
             string artifactNote = MainViewModel.BuildSharedScopeNote(CleanupScope.Artifacts, task);
 
             Assert.Contains("只删本任务那一份", artifactNote, StringComparison.Ordinal);
-            Assert.Contains("不会碰其它包", artifactNote, StringComparison.Ordinal);
+            Assert.Contains("不会碰别的包", artifactNote, StringComparison.Ordinal);
             Assert.Contains("源包所在目录", MainViewModel.BuildSharedScopeNote(CleanupScope.EmptyFolders, task));
 
             // 普通模式（输出目录是包子目录）：不提这句。
@@ -993,28 +853,17 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置窗口的终端落法_读写设置字符串()
+        public void 设置窗口的简洁档开关_读写设置项()
         {
             var viewModel = new SettingsViewModel(new AppSettings(), new SettingsService());
 
-            Assert.Equal(TerminalLayoutMode.KeepLastFolder, viewModel.TerminalLayout);
+            Assert.False(viewModel.OmitMiddleContinuationLayers, "默认关 = 忠实档");
 
-            viewModel.TerminalLayout = TerminalLayoutMode.UseArchiveName;
-            Assert.Equal("UseArchiveName", viewModel.Settings.TerminalLayoutMode);
+            viewModel.OmitMiddleContinuationLayers = true;
+            Assert.True(viewModel.Settings.OmitMiddleContinuationLayers);
 
-            viewModel.TerminalLayout = TerminalLayoutMode.KeepLastFolder;
-            Assert.Equal("KeepLastFolder", viewModel.Settings.TerminalLayoutMode);
-        }
-
-        [Fact]
-        public void 设置窗口的塌缩开关_读写设置项()
-        {
-            var viewModel = new SettingsViewModel(new AppSettings(), new SettingsService());
-
-            Assert.True(viewModel.CollapseRepeatedFolderLayer);
-
-            viewModel.CollapseRepeatedFolderLayer = false;
-            Assert.False(viewModel.Settings.CollapseRepeatedFolderLayer);
+            viewModel.OmitMiddleContinuationLayers = false;
+            Assert.False(viewModel.Settings.OmitMiddleContinuationLayers);
         }
 
         // ================================================================ ⑥ 异常文本脱敏（无 UI 宿主）

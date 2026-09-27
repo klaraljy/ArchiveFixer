@@ -6,7 +6,7 @@
 
     <!--
         ② 解压方式页（用户 2026-09-24 第 11 条）。
-        内容全部按功能归位：落点 / 终端落法 / 嵌套与覆盖 / 解压前后 / 并发与空间 / 引擎。
+        内容全部按功能归位：落点 / 嵌套与覆盖 / 解压前后 / 并发与空间 / 引擎。
         ⛔ 页面最底下那块「高风险区（危险模式 + 自测凭证 + 风险四条 + 红横幅）」按用户
         2026-09-25 第 32 条**整块退役**：那条需求现在是③页「删除操作」里的第三档，
         选它时会在下面出现一条不可关闭的红字提示 —— 红字就是警告，不再另配注释。
@@ -81,26 +81,14 @@
                 </StackPanel>
             </GroupBox>
 
-            <!-- ==================== 内容物最后一层（终端落法） ==================== -->
-            <GroupBox Header="内容物最后那一层（终端落法）">
-                <StackPanel>
-                    <RadioButton GroupName="TerminalLayout"
-                                 IsChecked="{Binding SettingsEditor.TerminalLayout, Converter={StaticResource EnumOptionConverter}, ConverterParameter=KeepLastFolder, Mode=TwoWay}"
-                                 Content="多文件时保留最后一层文件夹名（111\222\ → 111\222\666\）"
-                                 ToolTip="保留包内那一层名字，不丢信息（默认）" />
-
-                    <RadioButton GroupName="TerminalLayout"
-                                 Margin="0,6,0,0"
-                                 IsChecked="{Binding SettingsEditor.TerminalLayout, Converter={StaticResource EnumOptionConverter}, ConverterParameter=UseArchiveName, Mode=TwoWay}"
-                                 Content="多文件时用压缩包名当最后一层（111\222\ → 111\222\）"
-                                 ToolTip="少一层点击，但丢掉了包内那层名字" />
-
-                    <CheckBox Content="包名与所在文件夹同名时，去掉重复的那一层"
-                              Margin="0,10,0,0"
-                              IsChecked="{Binding SettingsEditor.CollapseRepeatedFolderLayer, Mode=TwoWay}"
-                              ToolTip="111\222\名字\名字.rar → 111\222\名字\；仅当该文件夹下没有别的包时才生效" />
-                </StackPanel>
-            </GroupBox>
+            <!--
+                ==================== 内容物最后一层：2026-09-27 整组删除 ====================
+                原来这里是「终端落法」两档单选框 + 「包名与文件夹同名时去掉一层」勾选框。
+                用户 2026-09-27 拍板：终点的落法**固定**为"保留压缩包自己那一层内层文件夹，
+                外面再套一层以包名命名的文件夹"，不再让用户选 —— 于是这组控件连同设置项一起删掉
+                （设置项 `TerminalLayoutMode` / `CollapseRepeatedFolderLayer` 已从 AppSettings 移除）。
+                要"平铺"只剩一条路：① 页「手动操作」里的「解压到当前文件夹」，且只对当次手动操作生效。
+            -->
 
             <!--
                 ==================== 特定解压（用户 2026-09-24 拍板） ====================
@@ -108,7 +96,7 @@
                 XAML 里一条规则都没写死 —— 以后加规则 = 加一条描述 + 它的实现，这里一个字都不用动
                 （有测试钉住：塞一条假描述进注册表，这一栏自动多一条）。
 
-                优先级必须写明（用户点名要求）：这里的规则**优先于**上面那组「终端落法」。
+                优先级必须写明（用户点名要求）：这里的规则**优先于**落点与嵌套的默认落法。
                 总开关在①「任务」页、一键处理旁边 —— 这一页只挑规则，不重复放开关
                 （两项都绑同一个设置会被界面重构的"一项只有一个家"钉死）。
             -->
@@ -189,6 +177,16 @@
                                    VerticalAlignment="Center"
                                    Text="1~10，默认 5。到上限会停下并报告；一键处理的续解轮数按这一格走。" />
                     </Grid>
+
+                    <!--
+                        续解的中间层（用户 2026-09-27 拍板）：首尾两层**永远保留**，中间那些"包里套包"的层
+                        默认照忠实档一层一层建出来；勾上这一格 = 简洁档，单链时把中间层省掉。
+                        出现分支（那一层里有多个包 / 还有别的文件）时**那一层照建**，并在日志里说明为什么没省。
+                    -->
+                    <CheckBox Content="续解时省略中间层（只留第一层与最后一层）"
+                              Margin="0,0,0,8"
+                              IsChecked="{Binding SettingsEditor.OmitMiddleContinuationLayers, Mode=TwoWay}"
+                              ToolTip="默认不勾 = 忠实档：111\222\333\444\555\666\内容物；勾上 = 简洁档：111\222\666\内容物。只在单链续解时生效，第一层与最后一层永远保留。" />
 
                     <Grid>
                         <Grid.ColumnDefinitions>

@@ -290,7 +290,176 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         /// <param name="parentTask">内层包所属的父任务。</param>
         /// <param name="innerPackagePath">内层包自己的路径（给 null 时退回"父任务的内容物层 / 输出目录"）。</param>
-        internal static string ResolveContinuationOutputDirectory(ArchiveTask parentTask, string? innerPackagePath = null)
+        /// <param name="ownLayerName">
+        /// 给**这一层自己**再套的那一层文件夹名（2026-09-27 用户拍板的"首尾必留、中间看开关"）：
+        /// 给了就在算出来的目录后面追加一层（<c>…\222</c> → <c>…\222\333</c>），
+        /// 给 null / 空 = 不追加（这一层的产物直接落进父任务那一层）。
+        ///
+        /// <para>⛔ 名字**必须由调用方按 <see cref="ShouldAddContinuationLevelLayer"/> 算出来再传**：
+        /// 这里只管"怎么拼、要不要防重复"，不管"该不该加"—— 判据只有一处（扫描那一侧），
+        /// 免得同一件事在两个地方各判一遍、判出两个结果。</para>
+        /// </param>
+        internal static string ResolveContinuationOutputDirectory(
+            ArchiveTask parentTask,
+            string? innerPackagePath = null,
+            string? ownLayerName = null)
+        {
+            string directory = ResolveContinuationBaseDirectory(parentTask, innerPackagePath);
+
+            /*
+             * ⚠ 这一层的位置**被内层包自己那个文件占着**时不能建（2026-09-27 真机测试逮到）：
+             * Windows 同一条路径上不许既有文件又有目录。典型现场 = **名字被改坏、剥不出后缀**的包
+             * （`user.jp删除g`、`222.ra删除r`）：它的包基名就等于文件名本身，于是
+             * `<父层>\user.jp删除g` 既是那个文件、又要当这一层的目录 → 建目录必然失败，
+             * 任务会落成"最终目录不存在且创建失败"。
+             *
+             * 处置：这一层**不另建**，内容落进父任务那一层里（内层包自己就躺在那里）——
+             * 这是物理上唯一可行的选择，调用方会写一条日志说清为什么（见扫描那一侧）。
+             */
+            if (IsOwnLayerOccupiedByPackageFile(directory, ownLayerName, innerPackagePath))
+            {
+                return directory;
+            }
+
+            return AppendOwnLayer(directory, ownLayerName);
+        }
+
+        /// <summary>
+        /// 这一层要建的位置是不是**被内层包自己那个文件占着**（同路径不许既有文件又有目录）。
+        ///
+        /// <para>只有"包基名 == 文件名"（名字被改坏、剥不出已知后缀那种）才会命中；
+        /// 正常包（`333.7z` → 层名 `333`）永远不会命中。</para>
+        /// </summary>
+        internal static bool IsOwnLayerOccupiedByPackageFile(
+            string directory,
+            string? ownLayerName,
+            string? innerPackagePath)
+        {
+            if (string.IsNullOrWhiteSpace(innerPackagePath) || string.IsNullOrWhiteSpace(ownLayerName))
+            {
+                return false;
+            }
+
+            string layered = AppendOwnLayer(directory, ownLayerName);
+
+            if (string.Equals(layered, directory, StringComparison.OrdinalIgnoreCase))
+            {
+                // 没打算加层（名字为空 / 最后一段已经同名）——不关这一条的事。
+                return false;
+            }
+
+            try
+            {
+                return File.Exists(layered) && !Directory.Exists(layered);
+            }
+            catch
+            {
+                // 路径形状怪异时按"没被占"处理：真建不出来会在任务级如实报出来。
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 续解层"要不要给这一层套一个以包名命名的文件夹"（用户 2026-09-27：**首尾必留，中间看开关**）。
+        ///
+        /// <para>三种情形都**必须建**（一条不成立才省）：</para>
+        /// <list type="bullet">
+        /// <item><description>忠实档（<paramref name="omitMiddleLayers"/> = false，默认）：每一层都建 ——
+        /// <c>111\222\333\444\555\666\内容物</c>，每个内层包各自一层，谁是谁一眼看清。</description></item>
+        /// <item><description>简洁档但父任务**自己产出了内容物**（说明这里是分支，不是干净的单链）：
+        /// 那一层照建，退化成忠实档（调用方负责写一条日志说明，⛔ 绝不静默）。</description></item>
+        /// <item><description>简洁档但同一个父任务这一轮认出了**多个**内层包（<paramref name="siblingCount"/> &gt; 1）：
+        /// 这是分支而不是单链 —— 每个包各自一层，否则几个包的内容物会倒进同一层里。</description></item>
+        /// </list>
+        ///
+        /// <para>只有"**干净的单链中间层**"（简洁档 + 父任务没产出内容物 + 本轮只有一个内层包）
+        /// 才省掉那一层：中间的过路层只剩 <c>其余物</c>，不值得为它多一层目录。</para>
+        /// </summary>
+        internal static bool ShouldAddContinuationLevelLayer(
+            bool omitMiddleLayers,
+            bool parentProducedContent,
+            int siblingCount)
+        {
+            if (!omitMiddleLayers)
+            {
+                return true;
+            }
+
+            return parentProducedContent || siblingCount > 1;
+        }
+
+        /// <summary>
+        /// 把"这一层自己的包名"追到目录后面（<c>…\222</c> → <c>…\222\333</c>）。
+        ///
+        /// <para>三条防重复/防空的判断，每条都对应一种真实形状：</para>
+        /// <list type="bullet">
+        /// <item><description>名字为空（取不出包名）→ 一个字都不加；</description></item>
+        /// <item><description>目录最后一段**已经**叫这个名字（<c>…\333\333.rar</c> 那种"包在自名文件夹里"）
+        /// → 不再加，否则会得到 <c>333\333</c> 这种重复层（用户明确抱怨过的形状）；</description></item>
+        /// <item><description><b>过程物名不成层</b>（用户 2026-09-27 红线）：分卷组的基名（真机现场
+        /// <c>59768866.001/.002</c> → <c>59768866</c>）**不是**用户认得出来的包名，
+        /// 拿它当一层只会在成品里造出 <c>…\包名\59768866\真内容</c> 这种怪目录 →
+        /// 这一档**不追加**，那一层的内容物归父任务自己那一层。</description></item>
+        /// </list>
+        /// </summary>
+        internal static string AppendOwnLayer(string directory, string? ownLayerName)
+        {
+            if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(ownLayerName))
+            {
+                return directory;
+            }
+
+            string layer = FileNameHelper.SanitizeFileName(ownLayerName);
+
+            if (layer.Length == 0)
+            {
+                return directory;
+            }
+
+            string trimmed = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (trimmed.Length == 0)
+            {
+                return directory;
+            }
+
+            if (string.Equals(Path.GetFileName(trimmed), layer, StringComparison.OrdinalIgnoreCase))
+            {
+                return directory;
+            }
+
+            return Path.Combine(trimmed, layer);
+        }
+
+        /// <summary>
+        /// 这一层该叫什么（= 内层包自己的包基名）；**分卷组返回空** —— 过程物名不成层
+        /// （见 <see cref="AppendOwnLayer"/> 第三条）。
+        /// </summary>
+        internal static string ResolveContinuationLayerName(string? innerPackagePath)
+        {
+            if (string.IsNullOrWhiteSpace(innerPackagePath))
+            {
+                return string.Empty;
+            }
+
+            string fileName = FileNameHelper.GetFileName(innerPackagePath);
+
+            if (fileName.Length == 0 || FileNameHelper.IsVolumePartFileName(fileName))
+            {
+                return string.Empty;
+            }
+
+            return OutputPlacement.ResolveArchiveBaseName(innerPackagePath);
+        }
+
+        /// <summary>
+        /// 内层包落点的**原有推导**（2026-09-25 第 35 条 + 第 43 条）：只算"内层包自己所在的那一层"，
+        /// 不追加任何层 —— <see cref="ResolveContinuationOutputDirectory"/> 在外面套那一层。
+        ///
+        /// <para>⚠ <c>internal</c>（不是 private）只为一处：扫描那一侧要拿它判
+        /// "这一层的位置是不是被内层包自己占着"，好在日志里说清为什么没建那一层。</para>
+        /// </summary>
+        internal static string ResolveContinuationBaseDirectory(ArchiveTask parentTask, string? innerPackagePath = null)
         {
             if (parentTask == null)
             {
@@ -1404,6 +1573,10 @@ namespace ArchiveFixer.ViewModels
             });
 
             var found = new Dictionary<string, InnerArchiveCandidate>(StringComparer.OrdinalIgnoreCase);
+
+            // 本轮按父任务登记的候选（父任务、父任务名、内层包路径）—— 落点要等扫完一整轮才能定。
+            var candidates = new List<(ArchiveTask Parent, string ParentName, string File)>();
+
             var scanLog = new List<string>();
             var recognizedLines = new List<string>();
             var skippedLines = new List<string>();
@@ -1425,7 +1598,7 @@ namespace ArchiveFixer.ViewModels
                     ? Path.GetFileName(task.CurrentPath)
                     : task.FileName;
 
-                string continuationOutput = ResolveContinuationOutputDirectory(task); foreach (string file in files)
+                foreach (string file in files)
                 {
                     // 只认"这一轮新出现"的：解压前就在那里的文件不是这一轮的产物。
                     if (existingFiles.Contains(file))
@@ -1486,19 +1659,70 @@ namespace ArchiveFixer.ViewModels
 
                     if (!found.ContainsKey(file))
                     {
-                        found[file] = new InnerArchiveCandidate
-                        {
-                            Path = file,
-
-                            /*
-                             * ⚠ 落点**按每个内层包自己所在的目录**算（第 35 条），不能用"每个父任务一个" ——
-                             * 共用输出根那一档下，同一个父任务的两个内层包分别躺在
-                             * `…\111\2222\` 与 `…\111\3333\`，各自的内容物必须回到各自那一层旁边。
-                             */
-                            ParentOutputDirectory = ResolveContinuationOutputDirectory(task, file),
-                            ParentTaskName = parentName
-                        };
+                        /*
+                         * ⚠ 落点**按每个内层包自己所在的目录**算（第 35 条），不能用"每个父任务一个" ——
+                         * 共用输出根那一档下，同一个父任务的两个内层包分别躺在
+                         * `…\111\2222\` 与 `…\111\3333\`，各自的内容物必须回到各自那一层旁边。
+                         *
+                         * 先只记下来，"要不要给这一层再套一层包名目录"**必须等这一轮扫完**才能定：
+                         * 判据里有"同一个父任务认出了几个内层包"（分支 or 单链）这条事实。
+                         */
+                        candidates.Add((task, parentName, file));
                     }
+                }
+            }
+
+            /*
+             * ===== 续解层那一层目录（用户 2026-09-27：首尾必留，中间看开关）=====
+             *
+             * 判据全部在 <see cref="ShouldAddContinuationLevelLayer"/> 里（唯一实现），这里只做三件事：
+             * ① 按父任务分组（"这一轮认出几个内层包"是按父任务数的）；
+             * ② 要建层时取**这一层内层包的包基名**（分卷组取不出来 → 过程物名不成层，见 AppendOwnLayer）；
+             * ③ 简洁档因为分支而没能省掉那一层时，写一条日志说清为什么（⛔ 绝不静默）。
+             */
+            foreach (IGrouping<ArchiveTask, (ArchiveTask Parent, string ParentName, string File)> group in
+                     candidates.GroupBy(candidate => candidate.Parent))
+            {
+                ArchiveTask parent = group.Key;
+                List<(ArchiveTask Parent, string ParentName, string File)> children = group.ToList();
+
+                // 父任务自己产出了内容物 = 这一层是"内容 + 内层包"的分支，不是干净的单链中间层。
+                bool parentProducedContent = !string.IsNullOrWhiteSpace(parent.ContentDirectoryPath);
+
+                bool addLayer = ShouldAddContinuationLevelLayer(
+                    Settings.OmitMiddleContinuationLayers,
+                    parentProducedContent,
+                    children.Count);
+
+                if (Settings.OmitMiddleContinuationLayers && addLayer && !parentProducedContent)
+                {
+                    scanLog.Add(
+                        $"{parent.FileName}：这一层认出了 {children.Count} 个内层包（不是单链）——"
+                        + "「省略中间层」只在单链时生效，这一层照旧各占一层。");
+                }
+
+                foreach ((ArchiveTask _, string parentName, string file) in children)
+                {
+                    string layerName = addLayer ? ResolveContinuationLayerName(file) : string.Empty;
+
+                    /*
+                     * 层名**被内层包自己那个文件占着**（名字被改坏、剥不出后缀那种）→ 那一层建不出来，
+                     * 内容落进父任务那一层。这是用户看得见的落点差别，必须写日志说清（⛔ 绝不静默）。
+                     */
+                    if (layerName.Length > 0
+                        && IsOwnLayerOccupiedByPackageFile(ResolveContinuationBaseDirectory(parent, file), layerName, file))
+                    {
+                        scanLog.Add(
+                            $"{file}：这一层要建的位置被「内层包自己」占着（名字被改坏、剥不出后缀）——"
+                            + "这一层不另建，内容落进父任务那一层里。");
+                    }
+
+                    found[file] = new InnerArchiveCandidate
+                    {
+                        Path = file,
+                        ParentOutputDirectory = ResolveContinuationOutputDirectory(parent, file, layerName),
+                        ParentTaskName = parentName
+                    };
                 }
             }
 

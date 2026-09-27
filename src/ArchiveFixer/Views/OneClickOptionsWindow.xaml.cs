@@ -220,9 +220,6 @@ namespace ArchiveFixer.Views
             {
                 PlacementMode = CurrentPlacementMode,
                 CustomRoot = (CustomRootBox.Text ?? string.Empty).Trim(),
-                TerminalLayout = TerminalUseArchiveNameOption.IsChecked == true
-                    ? TerminalLayoutMode.UseArchiveName
-                    : TerminalLayoutMode.KeepLastFolder,
                 SourceHandling = ResolveSourceHandling(),
                 RestHandling = ResolveRestHandling(),
                 SaveAsDefault = SaveAsDefaultBox.IsChecked == true,
@@ -332,9 +329,6 @@ namespace ArchiveFixer.Views
             }
 
             CustomRootBox.Text = seed.CustomRoot ?? string.Empty;
-
-            TerminalUseArchiveNameOption.IsChecked = seed.TerminalLayout == TerminalLayoutMode.UseArchiveName;
-            TerminalKeepLastFolderOption.IsChecked = seed.TerminalLayout != TerminalLayoutMode.UseArchiveName;
 
             // 2026-09-25 第 32 条之后只剩两档（原地不动 / 放入其余物）：第三档"校验通过后删除"已删掉，
             // 要删源包改成"放入其余物 + 删除操作"（语义更清楚、选项少一个）。
@@ -524,7 +518,7 @@ namespace ArchiveFixer.Views
 
         private void Placement_Checked(object sender, RoutedEventArgs e) => OnSelectionChanged();
 
-        private void TerminalLayout_Checked(object sender, RoutedEventArgs e) => OnSelectionChanged();
+
 
         private void SourceHandling_Checked(object sender, RoutedEventArgs e) => OnSelectionChanged();
 

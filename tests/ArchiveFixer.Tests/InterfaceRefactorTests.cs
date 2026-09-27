@@ -579,8 +579,12 @@ namespace ArchiveFixer.Tests
                 ["CustomOutputDirectory"] = "ExtractionTab",
                 ["OutputPlacementSummary"] = "ExtractionTab",
                 ["SelectOutputDirectoryCommand"] = "ExtractionTab",
-                ["TerminalLayout"] = "ExtractionTab",
-                ["CollapseRepeatedFolderLayer"] = "ExtractionTab",
+
+                /*
+                 * 续解的中间层（用户 2026-09-27）：原来这里是「终端落法」两档 + 「同名塌缩」勾选框，
+                 * 那一组控件连同设置项一起删了（落点固定，不再让用户选），位置让给这一格开关。
+                 */
+                ["OmitMiddleContinuationLayers"] = "ExtractionTab",
 
                 /*
                  * ②页「特定解压」那一栏（用户 2026-09-24：规则清单的家在②页，总开关在①页）。

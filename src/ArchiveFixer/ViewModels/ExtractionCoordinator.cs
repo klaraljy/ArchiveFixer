@@ -352,6 +352,17 @@ namespace ArchiveFixer.ViewModels
         private OneClickRunOptions? RunOptions => _runOptions;
 
         /*
+         * ===== 手动档「解压到当前文件夹」的运行期开关（用户 2026-09-27）=====
+         *
+         * 语义 = WinRAR 右键的「解压到当前文件夹」：`111\222.rar` → `111\内容物`（**不建包名那一层**）。
+         * 三条边界写死在这里，别的路径一律不许打开它：
+         * ① 只有①页那个显式按钮会传 true（一键处理 / 批量 / 续解一律 false）—— 用户红线：批量绝不摊平；
+         * ② 与「本次选项」同寿：批首置入、`finally` 里连同 _runOptions 一起清掉，不进设置、不落盘；
+         * ③ 同名冲突照走既定冲突档（用户拍板接受这个代价：摊平本来就更容易撞名）。
+         */
+        private bool _extractIntoSourceFolderThisRun;
+
+        /*
          * ⛔ 原来这里有一个 `SourceDeleteFileSystemOverride`（"清理源包"的删除执行体，只给测试注入）。
          * 2026-09-25 第 32 条之后**管线里再没有任何一处调用 `SourceCleanupService`**
          * （删除统一走 `Storage/RestItemPurger`，它自己的执行体接缝在 `RecycleBinService` 那一层），
@@ -748,13 +759,12 @@ namespace ArchiveFixer.ViewModels
                 ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
 
             /*
-             * 终端落法（规格 §3.1 / 设置项 TerminalLayoutMode）同样在这里读一次并解析：
-             * 解析口径唯一（OutputPlacement.ParseTerminalLayoutMode），非法值回落 KeepLastFolder，
-             * 所以一个读不懂的配置只会退到"最不意外"的那一档，不会把落点算成别的东西。
-             * 「本次选项」里选过就以它为准（同上，只对本次一键处理有效）。
+             * 终端落法（内容物最后一层）**已退役**（用户 2026-09-27："这个可以删除掉，默认就是这样的情况"）：
+             * 现在固定成"保留归档自带的那一层 + 外面永远裹一层包名目录"，
+             * 也就是原来那一档的 KeepLastFolder —— 参数仍然传下去（`ResultFinalizer.Plan` 的契约没变），
+             * 但设置项与界面入口都删掉了。想塌掉"包自带的那一层"只能用**特定解压**。
              */
-            TerminalLayoutMode terminalLayout = RunOptions?.TerminalLayout
-                ?? OutputPlacement.ParseTerminalLayoutMode(Settings.TerminalLayoutMode);
+            TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder;
 
             /*
              * 特定解压（规格 §3.5，用户 2026-09-24 拍板）：与终端落法同一处、同一时机读一次。
@@ -2620,11 +2630,11 @@ namespace ArchiveFixer.ViewModels
         /// 终端归档基名（"没有最外层文件夹名"时给那一层取名用）。传空则退回 destDir 自己的末段名。
         /// </param>
         /// <param name="terminalLayout">
-        /// 终端落法（规格 §3.1 的可选项，来自设置项 <see cref="AppSettings.TerminalLayoutMode"/>）。
-        ///
-        /// ⚠ 这里**必须由调用方传**：本方法以前把 <see cref="TerminalLayoutMode.KeepLastFolder"/> 写死，
-        /// 于是用户在设置里选"用压缩包名当最后一层"完全不生效 —— 界面上的选项与真实行为不一致，
-        /// 是本项目明令禁止的那一类（"改了没用"的开关）。
+        /// 终端落法。⚠ 用户 2026-09-27 把这档选择**从界面上删掉了**（落点固定，不再让用户选），
+        /// 所以生产路径现在一律传 <see cref="TerminalLayoutMode.KeepLastFolder"/>：
+        /// 保留压缩包自带的那一层内层文件夹，外面再套一层以包名命名的文件夹。
+        /// 参数本身留着 —— 它是 <see cref="ResultFinalizer.Plan"/> 的既有契约（其余物布局等路径也在用），
+        /// 删掉只会白白动一大片与本次需求无关的代码。
         /// </param>
         /// <param name="specialExtraction">
         /// 本批生效的特定解压（规格 §3.5；默认 <see cref="SpecialExtractionPlan.Off"/> = 与以前逐字相同）。
@@ -2637,7 +2647,8 @@ namespace ArchiveFixer.ViewModels
             bool sharedOutputRoot,
             string? archiveBaseName,
             TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder,
-            SpecialExtractionPlan? specialExtraction = null)
+            SpecialExtractionPlan? specialExtraction = null,
+            bool suppressPackageFolderLayer = false)
         {
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -2747,7 +2758,8 @@ namespace ArchiveFixer.ViewModels
                 contentRoot: null,
                 stagingRoot: stageRoot,
                 sharedOutputRoot: sharedOutputRoot,
-                specialExtraction: specialExtraction);
+                specialExtraction: specialExtraction,
+                suppressPackageFolderLayer: suppressPackageFolderLayer);
 
             var processSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -4274,10 +4286,39 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 续解任务的落点路径里**是不是已经带着"以本层包名命名的那一层"**。
+        ///
+        /// <para>它是"要不要再套一层"的判据，只读路径本身这一个事实（⛔ 不猜、不看文案）：
+        /// 忠实档 / 分支退化档下父任务落点已经追加过本层的包基名 → true（不再套，否则 <c>666\666</c>）；
+        /// 简洁档的单链下层落点还停在父任务那一层 → false（末层那一层就该由定稿套出来）。</para>
+        ///
+        /// <para>单独提出来是因为它是**唯一判据**、而且要被测试直接钉住 —— 埋在定稿流程里
+        /// 只能靠整条管线跑真 7z 才验得到。</para>
+        /// </summary>
+        internal static bool IsContinuationLayerAlreadyInPath(string? parentDirectory, string? archiveBaseName)
+        {
+            if (string.IsNullOrWhiteSpace(parentDirectory) || string.IsNullOrWhiteSpace(archiveBaseName))
+            {
+                return false;
+            }
+
+            string last = Path.GetFileName(
+                parentDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+
+            return string.Equals(last, FileNameHelper.SanitizeFileName(archiveBaseName), StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// 定稿布局规划的统一入口：算"终端归档基名"这件事只在这里做一次，
         /// 预检与真正的定稿走**同一份输入**（否则预检说有冲突、定稿却按另一套计划落位）。
+        ///
+        /// <para>
+        /// ⚠ 它刻意**不是 static**：本批是不是「解压到当前文件夹」只读
+        /// <c>_extractIntoSourceFolderThisRun</c> 这一个字段 —— 让两处调用各传一个参数，
+        /// 迟早会漂移成"预检按平铺算、定稿按套层算"（预检说有冲突、实际没有，或者反过来）。
+        /// </para>
         /// </summary>
-        private static FinalLayoutPlan PlanFinalLayoutForTask(
+        private FinalLayoutPlan PlanFinalLayoutForTask(
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
@@ -4287,13 +4328,39 @@ namespace ArchiveFixer.ViewModels
         {
             string archiveBaseName = OutputPlacement.ResolveArchiveBaseName(task.CurrentPath);
 
+            /*
+             * "要不要套包名那一层"只有这一个出口（`suppressPackageFolderLayer`），三种成因在这里合并：
+             *   ① 手动档「解压到当前文件夹」：落点就是源包所在那一层，按包内原样解开；
+             *   ② 续解的这一层已经在落点路径里（忠实档 / 分支退化档）：再套就是 `666\666`；
+             *   ③ 这一层本身就是分卷组的一卷（过程物名不成层）。
+             * 合成一个布尔往下传 —— 定稿那一侧只认一个判据，不会再出现"落点摊平了、定稿又套一层"。
+             *
+             * ⚠ ②这条判据**不能简化成"是不是续解任务"**：简洁档下续解的**末层**恰恰需要那一层
+             * （`111\222\666\内容物` 里的 `666`），而"自己那一层在不在落点路径里"是**路径本身**
+             * 说得清的事实 —— 不需要预知"这是不是最后一层"。
+             */
+            string parentDirectory = task.ParentOutputDirectory;
+            bool continuation = !string.IsNullOrWhiteSpace(parentDirectory);
+
+            bool layerAlreadyInPath = continuation
+                && IsContinuationLayerAlreadyInPath(parentDirectory, archiveBaseName);
+
+            /*
+             * 过程物名不成层（用户 2026-09-27 红线）：续解的这一层如果**本身就是分卷组的一卷**
+             * （`59768866.001`），它的包基名是过程物的名字、不是用户认得的包名 ——
+             * 拿它当一层就是真机上那个 `…\包名\59768866\真内容`。
+             */
+            bool processArtifactName = continuation
+                && FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(task.CurrentPath));
+
             return PlanFinalLayout(
                 stageDirectory,
                 destinationDirectory,
                 sharedOutputRoot,
                 archiveBaseName,
                 terminalLayout,
-                specialExtraction);
+                specialExtraction,
+                suppressPackageFolderLayer: _extractIntoSourceFolderThisRun || layerAlreadyInPath || processArtifactName);
         }
 
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
@@ -4961,13 +5028,12 @@ namespace ArchiveFixer.ViewModels
         /// 「内容物会生成在…」那一行（用户点名要看的第一件事）。
         ///
         /// <para>走**落点唯一实现**（<c>PathService.ResolveOutputPlacement</c> → <c>OutputPlacement</c>），
-        /// 与真正开跑时同一个 <c>ExtractOptions</c> 构造、同一套场景 B 塌缩判据 ——
+        /// 与真正开跑时同一个 <c>ExtractOptions</c> 构造（含"续解各占一层 / 一律不塌缩"那套口径）——
         /// 所以这一行说的就是"真会落到哪"，不是另写一套公式算出来的近似值。
         /// 算不出来时**如实说明原因**（绝不编一个假路径让用户放心）。</para>
         ///
-        /// <para>多包时补一句后缀，区分两种情况：所有包落进同一层（"添加文件夹 + 指定位置"）
-        /// 与每个包各建一层（其余档）—— 用户最恨的就是"东西挤在一起"或"凭空多一层"，
-        /// 这两种说法必须让他一眼看出来是哪一种。</para>
+        /// <para>多包时补一句后缀：现在只剩"每个包各建一层（含相对子路径）"这一种形状 ——
+        /// 旧的"所有包落进同一层"（场景 B / 共用根）已随落点模型 v2 退役。</para>
         /// </summary>
         internal async Task<string> DescribePlannedDestinationAsync(
             IReadOnlyList<ArchiveTask> targets,
@@ -4984,27 +5050,7 @@ namespace ArchiveFixer.ViewModels
 
             ArchiveTask first = targets[0];
 
-            // 场景 B 塌缩的判据与真正开跑那一处逐字相同（只对最外层源包、且包名 == 目录名时才扫一次目录）。
-            bool collapse = Settings.CollapseRepeatedFolderLayer
-                            && !first.IsContinuationTask
-                            && SourceFolderScanService.IsRepeatedFolderNameCandidate(first.CurrentPath);
-
-            bool sourceDirectoryContainsOnlyThisArchive = false;
-
-            if (collapse)
-            {
-                SourceFolderScanResult scan = await Task.Run(
-                    () => SourceFolderScanService.Inspect(first.CurrentPath),
-                    cancellationToken).ConfigureAwait(false);
-
-                sourceDirectoryContainsOnlyThisArchive = scan.ContainsOnlyThisArchive;
-            }
-
-            OutputPlacementResult placement = _pathService.ResolveOutputPlacement(
-                first,
-                extractOptions,
-                collapse,
-                sourceDirectoryContainsOnlyThisArchive);
+            OutputPlacementResult placement = _pathService.ResolveOutputPlacement(first, extractOptions);
 
             if (!placement.Success || string.IsNullOrWhiteSpace(placement.DestinationDirectory))
             {
@@ -5027,11 +5073,7 @@ namespace ArchiveFixer.ViewModels
 
             if (second != null)
             {
-                OutputPlacementResult other = _pathService.ResolveOutputPlacement(
-                    second,
-                    extractOptions,
-                    collapseRepeatedFolderLayer: false,
-                    sourceDirectoryContainsOnlyThisArchive: false);
+                OutputPlacementResult other = _pathService.ResolveOutputPlacement(second, extractOptions);
 
                 if (other.Success
                     && SafePathHelper.PathEquals(other.DestinationDirectory, placement.DestinationDirectory))
@@ -5083,7 +5125,15 @@ namespace ArchiveFixer.ViewModels
                 TryEmptyPasswordFirst = Settings.TryEmptyPasswordFirst,
                 CancelOnFirstSuccess = true,
                 TryExtractUnknownFormat = tryExtractUnknownFormat,
-                MaxParallelExtractCount = Settings.MaxParallelExtractCount
+                MaxParallelExtractCount = Settings.MaxParallelExtractCount,
+
+                /*
+                 * 「解压到当前文件夹」（用户 2026-09-27）：本批是不是摊平只看这一个运行期字段。
+                 * 落点由 OutputPlacement 唯一实现推导（destDir = 源包自己那一层），
+                 * "不套包名那一层"由定稿那一侧按同一字段决定（见 PlanFinalLayoutForTask）——
+                 * 两处读的是同一个字段，不会出现"落点摊平了、定稿又套了一层"。
+                 */
+                ExtractIntoSourceFolder = _extractIntoSourceFolderThisRun
             };
 
             extractOptions.Normalize();
@@ -6211,7 +6261,18 @@ namespace ArchiveFixer.ViewModels
         /// 定稿、校验、归集、工作区清理的行为两条路径完全一致。
         /// </para>
         /// </summary>
-        public Task StartExtractAsync() => StartExtractCoreAsync(oneClickRun: false, runOptions: null);
+        /// <param name="extractIntoSourceFolder">
+        /// 这一次按**「解压到当前文件夹」**办（用户 2026-09-27 新增的手动档；默认 false）。
+        ///
+        /// <para>
+        /// 语义 = WinRAR 右键的同一句话：内容物**不建包名那一层**，直接落在源包所在的那个目录里
+        /// （<c>111\222.rar</c> → <c>111\内容物</c>）。它只活在这一批里，⛔ 绝不写进设置；
+        /// **一键处理 / 继续解永远不会传它**（用户红线：批量处理一律套包名那一层，不摊平）。
+        /// 同名文件/文件夹按当前冲突档处理 —— 摊平会更容易撞名，这个代价用户 2026-09-27 明确接受。
+        /// </para>
+        /// </param>
+        public Task StartExtractAsync(bool extractIntoSourceFolder = false) =>
+            StartExtractCoreAsync(oneClickRun: false, runOptions: null, extractIntoSourceFolder: extractIntoSourceFolder);
 
         /// <summary>
         /// 「一键处理」的显式入口：与 <see cref="StartExtractAsync"/> 同一个本体，
@@ -6230,7 +6291,10 @@ namespace ArchiveFixer.ViewModels
         public Task StartExtractForOneClickAsync(OneClickRunOptions? runOptions = null) =>
             StartExtractCoreAsync(oneClickRun: true, runOptions);
 
-        private async Task StartExtractCoreAsync(bool oneClickRun, OneClickRunOptions? runOptions = null)
+        private async Task StartExtractCoreAsync(
+            bool oneClickRun,
+            OneClickRunOptions? runOptions = null,
+            bool extractIntoSourceFolder = false)
         {
             if (_isExtracting)
             {
@@ -6273,6 +6337,23 @@ namespace ArchiveFixer.ViewModels
             }
 
             _runOptions = runOptions;
+
+            /*
+             * 手动档「解压到当前文件夹」：只认**手动那一条入口**传来的值。
+             * 一键处理那条入口压根没有这个参数（永远 false）—— 这里再挡一道，防止以后有人顺手把它接过去：
+             * 批量摊平会把几十个包的内容物混进同一层，是用户明令禁止的。
+             */
+            _extractIntoSourceFolderThisRun = extractIntoSourceFolder && !oneClickRun;
+
+            if (extractIntoSourceFolder && oneClickRun)
+            {
+                AppendLog("WARN", "一键处理不接受「解压到当前文件夹」（批量一律套包名那一层）—— 本次按普通一键处理执行。");
+            }
+
+            if (_extractIntoSourceFolderThisRun)
+            {
+                AppendLog("INFO", StatusText.ExtractIntoSourceFolderReminderLog);
+            }
 
             if (runOptions != null)
             {
@@ -6639,6 +6720,13 @@ namespace ArchiveFixer.ViewModels
                 // 本次选项**只活这一批**：批结束就丢掉，下一批（哪怕是同一次运行里的下一轮续解）
                 // 由调用方重新给一份 —— 这样"覆盖"永远不会悄悄延续到别的批次上。
                 _runOptions = null;
+
+                /*
+                 * 「解压到当前文件夹」与"本次选项"同一个寿命，而且**必须**在批尾清掉：
+                 * 它是"这次点击"的语义，留着就会让下一次**一键处理**也悄悄摊平 ——
+                 * 那正是用户 2026-09-27 划的红线（批量绝不摊平）。
+                 */
+                _extractIntoSourceFolderThisRun = false;
 
                 /*
                  * 空间规划与本批记账同样"只活这一批"：
@@ -7990,46 +8078,18 @@ namespace ArchiveFixer.ViewModels
                     : runOptionsNote + "；" + specialExtractionNote;
 
             /*
-             * 场景 B 塌缩（规格 §3.3）：111\222\名字\名字.rar → 产物落 111\222\名字\内容物。
+             * 落点（唯一实现：PathService.ResolveOutputPlacement → OutputPlacement）。
              *
-             * 「包基名 == 所在目录名」是纯字符串判断（不碰磁盘）；成立之后才需要**扫一次目录**，
-             * 确认里面没有别的包。扫描是磁盘活：用户场景里一个目录可能有几百个条目、网络盘更慢，
-             * 所以必须在后台线程上跑（AGENTS.md / 任务硬约束：UI 线程只更新状态）。
-             *
-             * 只对**最外层源包**做：续解出来的内层包落点由父任务给定（见 BuildOutputPath 的早退分支），
-             * 这层规则对它没有意义。
-             */
-            bool collapseRepeatedFolderLayer = Settings.CollapseRepeatedFolderLayer;
-            bool sourceDirectoryContainsOnlyThisArchive = false;
-
-            if (collapseRepeatedFolderLayer
-                && !task.IsContinuationTask
-                && SourceFolderScanService.IsRepeatedFolderNameCandidate(task.CurrentPath))
-            {
-                SourceFolderScanResult scan = await Task.Run(
-                    () => SourceFolderScanService.Inspect(task.CurrentPath),
-                    cancellationToken);
-
-                sourceDirectoryContainsOnlyThisArchive = scan.ContainsOnlyThisArchive;
-
-                // 塌缩会少一层目录，这件事必须让用户看得见（日志里说清为什么）。
-                AppendLog(scan.ContainsOnlyThisArchive ? "INFO" : "WARN", $"{task.FileName}：{scan.Message}");
-            }
-
-            /*
-             * 解压前算出来的落点。它只是一个提议：下面可能因为目录已存在被改名。
-             *
-             * ⚠ 落点走**唯一实现**（PathService.ResolveOutputPlacement → OutputPlacement），
-             * 这里一并拿到"这个目录是不是同一批里多个包共用"这条事实（用户 2026-09-24 第 13 条：
-             * "添加文件夹 + 指定位置"那一档，文件夹里每个包都落进同一个 BBB\222\）：
-             * 它决定下面"目录已存在且非空就改名 xxx(1)"要不要让开，以及定稿时其余物要不要按包名分层。
-             * 别在这里自己推一遍（旧写法是拿落点模式反推，模式只剩两档之后推不出来了）。
+             * ⚠ 2026-09-27 起两件事变了：
+             * ①**场景 B 塌缩退役**（用户："如果 111\222\ 那层里还有很多别的东西呢，不就混乱了吗"）→
+             *   不再扫目录、不再塌缩，一律多一层包名目录
+             *   （顺带：原来为它服务的那次"目录里还有没有别的包"的扫描与 `SourceFolderScanService`
+             *   一起删掉了 —— 落点解析重新是纯函数，UI 线程上也没有磁盘活了）；
+             * ②手动档「解压到当前文件夹」走 `extractOptions.ExtractIntoSourceFolder`（内容物直接落源包那一层）。
              */
             OutputPlacementResult placement = _pathService.ResolveOutputPlacement(
                 task,
-                extractOptions,
-                collapseRepeatedFolderLayer,
-                sourceDirectoryContainsOnlyThisArchive);
+                extractOptions);
 
             string requestedOutputPath = placement.DestinationDirectory;
             string outputPath = requestedOutputPath;
@@ -8054,7 +8114,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 落点是不是"源包自己的目录"（场景 B 塌缩后的 111\222\名字）。
+             * 落点是不是"源包自己的目录"。
+             * 现在只剩一种成因：手动档「解压到当前文件夹」（用户 2026-09-27）——
+             * 场景 B 塌缩已经退役，别的落法都会多一层包名目录。
              * 这条事实决定"目录已存在且非空就改名 xxx(1)"要不要让开，
              * 理由见下面那个分支上的说明；判定本身只有一处实现（OutputPlacement）。
              */
@@ -8082,11 +8144,11 @@ namespace ArchiveFixer.ViewModels
                 else if (landsInSourceDirectory)
                 {
                     /*
-                     * 落点就是**源包所在目录**（场景 B 塌缩后的 111\222\名字）
+                     * 落点就是**源包所在目录**（手动档「解压到当前文件夹」）
                      * → 上面那条"已存在且非空就改名 xxx(1)"必须让开。
                      *
                      * 为什么：那个目录**必然非空** —— 源包自己就躺在里面。照旧规则一改名，
-                     * 用户的就地整理 / 塌缩当场被抵消，产物落到旁边的 名字(1)\，
+                     * 用户点的"解压到当前文件夹"当场被抵消，产物落到旁边的 名字(1)\，
                      * 正是这一轮要根治的"凭空多一层目录"。
                      *
                      * 让开之后会不会和既有文件混在一起：不会丢东西。定稿搬运对同名条目一律
@@ -8095,7 +8157,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：落点就是源包所在目录 {outputPath}（就地整理 / 已塌缩重复层），不套用“目录已存在就改名”的规则。");
+                        $"{task.FileName}：落点就是源包所在目录 {outputPath}（解压到当前文件夹 / 就地整理），不套用“目录已存在就改名”的规则。");
                 }
                 else if (sharedOutputRoot)
                 {
@@ -8216,12 +8278,13 @@ namespace ArchiveFixer.ViewModels
              * 只对"目录还不存在"的情况占位：
              * · 目录已存在时，上面的冲突档已经基于一个**看得见的事实**做完了决定（沿用 / 改名 / 跳过），
              *   再插一手会把用户显式选的「覆盖」变成"改名"，那是另一回事；
-             * · 落点就是源目录（场景 B 塌缩）时**绝不占位**：那个目录本来就是这次要整理的目标，
-             *   给它改名等于把用户的就地整理甩到旁边的 `名字(1)` 去；
+             * · 落点就是源目录（**手动档「解压到当前文件夹」**；旧场景 B 塌缩已退役）时**绝不占位**：
+             *   那个目录本来就是这次要整理的目标，给它改名等于把用户点的那次就地整理甩到旁边的 `名字(1)` 去；
              * · 落点是**本次导入共用的目标目录**时同样绝不占位（用户 2026-09-24 第 13 条）：
-             *   "添加文件夹 + 指定位置"下同一个文件夹里的包都落进 BBB\222\，
-             *   第一个包占了位，后面那些包就会各自换成 222(1)、222(2)… —— 用户要的"都放进 BBB\222\"
-             *   会被拆成一串目录（抢占只对"每包一个目录"的落点有意义）。
+             *   旧版"添加文件夹 + 指定位置"下同一个文件夹里的包都落进 BBB\222\，第一个包占了位，
+             *   后面那些包就会各自换成 222(1)、222(2)…（抢占只对"每包一个目录"的落点有意义）。
+             *   ⚠ 2026-09-27 落点模型 v2 之后那一档已经**每包一个目录**（`sharedOutputRoot` 恒为 false），
+             *   这条判据留着当兜底，不再有生产路径会命中它。
              */
             if (!task.IsContinuationTask &&
                 !landsInSourceDirectory &&

@@ -187,7 +187,6 @@ namespace ArchiveFixer.Tests
             var chosen = new OneClickRunOptions
             {
                 PlacementMode = OutputPlacementMode.PerArchiveSubfolder,
-                TerminalLayout = TerminalLayoutMode.KeepLastFolder,
                 RestHandling = RestHandlingModes.Delete
             };
 

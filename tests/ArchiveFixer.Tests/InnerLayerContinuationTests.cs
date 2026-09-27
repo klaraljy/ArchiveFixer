@@ -532,7 +532,11 @@ namespace ArchiveFixer.Tests
 
             // ② 最深处的内容物出来了（尾部 ZIP 里的加密分卷被解开）。
             string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
-            Assert.NotEmpty(payloads);
+            Assert.True(
+                payloads.Length > 0,
+                $"没找到 payload.txt。实际目录树：{string.Join(" | ", Directory.GetFileSystemEntries(harness.OutputRoot, "*", SearchOption.AllDirectories))}"
+                + $"\n轮数 {outcome.Rounds} / 续解层 {outcome.ContinuationLayers}"
+                + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
             Assert.Contains(payloads, path => File.ReadAllText(path) == InnerPayloadText);
         }
 

@@ -30,6 +30,16 @@ namespace ArchiveFixer.Models
         public bool KeepArchiveNameFolder { get; set; } = true;
 
         /// <summary>
+        /// 手动档「**解压到当前文件夹**」（用户 2026-09-27 新加的那一档，语义 = WinRAR 的"解压到当前文件夹"）：
+        /// 内容物直接落在**压缩包所在的那一层**，⛔ 不套包名文件夹（<c>111\222.rar</c> → <c>111\内容物</c>）。
+        ///
+        /// <para>⛔ 只有手动操作会把它置 true —— 一键处理 / 批量**永远**是"外面裹一层包名目录"。
+        /// 同一层里有多个包时它们的内容物会混进同一层（同名文件走冲突档）——这是用户自己点的，
+        /// 日志里会提醒一句。</para>
+        /// </summary>
+        public bool ExtractIntoSourceFolder { get; set; }
+
+        /// <summary>
         /// 解压前是否先执行 7z t 测试。
         /// </summary>
         public bool TestBeforeExtract { get; set; } = false;
@@ -181,9 +191,6 @@ namespace ArchiveFixer.Models
         /// <summary>指定位置（只有 <c>CustomRootPerArchive</c> 用得上；另一档下它是惰性的）。</summary>
         public string CustomRoot { get; init; } = string.Empty;
 
-        /// <summary>终端落法（规格 §3.1 的那个可选项）。</summary>
-        public TerminalLayoutMode TerminalLayout { get; init; } = TerminalLayoutMode.KeepLastFolder;
-
         /// <summary>
         /// 源包处理档（2026-09-25 第 32 条起**只剩两档**：留在原地 / 放入其余物当中）。
         ///
@@ -263,7 +270,6 @@ namespace ArchiveFixer.Models
                     settings.KeepArchiveNameFolder,
                     customRoot),
                 CustomRoot = customRoot,
-                TerminalLayout = OutputPlacement.ParseTerminalLayoutMode(settings.TerminalLayoutMode),
                 SourceHandling = AppSettings.ParseSourceHandling(settings.SourceHandling),
                 RestHandling = RestHandlingModes.Normalize(settings.RestHandlingAfterVerify)
             };
@@ -317,7 +323,7 @@ namespace ArchiveFixer.Models
                 ? DescribePlacement(PlacementMode, CustomRoot)
                 : $"{DescribePlacement(PlacementMode, CustomRoot)}（未填指定位置，本次落点按设置值）";
 
-            return $"落点：{placement}；终端落法：{DescribeTerminalLayout(TerminalLayout)}；" +
+            return $"落点：{placement}；" +
                    $"源包处理：{DescribeSourceHandling(SourceHandling)}；" +
                    $"其余物：{DescribeRestHandling(RestHandling)}";
         }
@@ -339,13 +345,6 @@ namespace ArchiveFixer.Models
                     $"指定位置 + 同名子文件夹（{DescribeRoot(customRoot)}\\包名\\内容物；选中文件夹时用该文件夹的名字）",
                 _ => "以包名命名的子文件夹（111\\222.rar → 111\\222\\内容物）"
             };
-        }
-
-        public static string DescribeTerminalLayout(TerminalLayoutMode mode)
-        {
-            return mode == TerminalLayoutMode.UseArchiveName
-                ? "多文件时用包名当最后一层（少一层点击）"
-                : "多文件时保留最后一层文件夹名（默认）";
         }
 
         public static string DescribeSourceHandling(SourceHandlingMode mode)

@@ -233,26 +233,13 @@ namespace ArchiveFixer.Services
         /// 少一个产物目录，好过多一堆没人找得到的文件。
         /// </para>
         /// </summary>
-        /// <param name="collapseRepeatedFolderLayer">
-        /// 场景 B 塌缩开关（规格 §3.3，设置项 <see cref="AppSettings.CollapseRepeatedFolderLayer"/>，默认开）。
-        /// </param>
-        /// <param name="sourceDirectoryContainsOnlyThisArchive">
-        /// "这个目录下只有这一个包"这个事实**必须由调用方查出来再告知**（目录扫描是磁盘活，
-        /// 见 <see cref="SourceFolderScanService.Inspect"/>，由解压管线在后台线程上跑）。
-        /// 默认 false = 不塌缩：宁可多一层，也不把多个包的产物混到一个目录里。
-        ///
-        /// ⚠ 界面刷新落点（<c>MainViewModel.RefreshOutputPaths</c>）走的是默认值 +
-        /// <paramref name="collapseRepeatedFolderLayer"/> = false，**不扫目录** ——
-        /// 那条路在 UI 线程上（AGENTS.md：UI 线程不许做目录扫描）；解压管线跑完会把
-        /// 真实的实际落点回写进 <c>task.OutputPath</c>，所以界面最终显示的是真值。
-        /// </param>
+        /// <param name="volumeGroupBaseName">分卷组基名（可选；给了就不再从文件名剥一遍）。</param>
         public string BuildOutputPath(
             ArchiveTask task,
             ExtractOptions options,
-            bool collapseRepeatedFolderLayer = false,
-            bool sourceDirectoryContainsOnlyThisArchive = false)
+            string? volumeGroupBaseName = null)
         {
-            return ResolveOutputPlacement(task, options, collapseRepeatedFolderLayer, sourceDirectoryContainsOnlyThisArchive)
+            return ResolveOutputPlacement(task, options, volumeGroupBaseName)
                 .DestinationDirectory;
         }
 
@@ -273,12 +260,18 @@ namespace ArchiveFixer.Services
         /// <see cref="ArchiveTask.SourceSelectionKind"/> / <see cref="ArchiveTask.SourceSelectionRoot"/> 上
         /// （导入那一刻由 <c>FileScanService</c> 写下）。
         /// </para>
+        ///
+        /// <para>
+        /// 「解压到当前文件夹」（<see cref="ExtractOptions.ExtractIntoSourceFolder"/>）**只从选项对象上读**：
+        /// 早先它另有一个同名形参，于是同一个开关有了两个入口 —— 实测立刻踩到
+        /// <c>BuildOutputPath(task, options)</c> 那条路（界面「输出目录」列走它）不认这个选项，
+        /// 而管线那条路认：同一个任务在两处显示两个落点。现在整个 <see cref="ExtractOptions"/>
+        /// 就是"这次按什么选项解压"的唯一载体，落点推导只认它。
+        /// </para>
         /// </summary>
         public OutputPlacementResult ResolveOutputPlacement(
             ArchiveTask task,
             ExtractOptions options,
-            bool collapseRepeatedFolderLayer = false,
-            bool sourceDirectoryContainsOnlyThisArchive = false,
             string? volumeGroupBaseName = null)
         {
             if (task == null)
@@ -338,12 +331,11 @@ namespace ArchiveFixer.Services
                 archivePath,
                 mode,
                 options.CustomOutputDirectory,
-                collapseRepeatedFolderLayer,
-                sourceDirectoryContainsOnlyThisArchive,
                 volumeGroupBaseName,
                 driveExists: null,
                 selectionKind: task.SourceSelectionKind,
-                selectionRoot: task.SourceSelectionRoot);
+                selectionRoot: task.SourceSelectionRoot,
+                flattenIntoSourceFolder: options.ExtractIntoSourceFolder);
         }
 
         /// <summary>

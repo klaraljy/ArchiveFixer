@@ -628,9 +628,7 @@ namespace ArchiveFixer.Tests
             // 111\222\333.rar（内含 333\ 一层）→ 111\222\333\…
             OutputPlacementResult placement = OutputPlacement.ResolveDestinationDirectory(
                 @"C:\111\222\333.rar",
-                OutputPlacementMode.PerArchiveSubfolder,
-                collapseRepeatedFolderLayer: true,
-                sourceDirectoryContainsOnlyThisArchive: true);
+                OutputPlacementMode.PerArchiveSubfolder);
 
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { File(@"out\333\a.mp4"), File(@"out\333\b.mp4") },
@@ -646,16 +644,14 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void PlacementAndFinalizer_ScenarioB_DoesNotNestTheRepeatedNameAgain()
+        public void PlacementAndFinalizer_同名同目录不再塌缩_落点就是包名那一层()
         {
-            // 111\222\名字\名字.rar（内含 名字\ 一层）→ 111\222\名字\…（不再出现"名字\名字"）
+            // 111\222\名字\名字.rar（内含 名字\ 一层）→ **111\222\名字\名字\**（2026-09-27：一律不塌缩）
             OutputPlacementResult placement = OutputPlacement.ResolveDestinationDirectory(
                 @"C:\111\222\名字\名字.rar",
-                OutputPlacementMode.PerArchiveSubfolder,
-                collapseRepeatedFolderLayer: true,
-                sourceDirectoryContainsOnlyThisArchive: true);
+                OutputPlacementMode.PerArchiveSubfolder);
 
-            Assert.Equal(@"C:\111\222\名字", placement.DestinationDirectory);
+            Assert.Equal(@"C:\111\222\名字\名字", placement.DestinationDirectory);
 
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[] { File(@"out\名字\a.mp4"), File(@"out\名字\b.mp4") },
@@ -665,8 +661,14 @@ namespace ArchiveFixer.Tests
                 "out",
                 Staging);
 
-            Assert.Equal(@"C:\111\222\名字", plan.ContentParentDirectory);
-            Assert.Equal(@"C:\111\222\名字\a.mp4", plan.Moves[0].To);
+            /*
+             * 归档自带的那一层**与包名同名**时不再叠一次：落点最后一段（`名字`）本来就是
+             * "以包名命名的那一层"，再套一个 `名字` 就得到 `…\名字\名字\名字` ——
+             * 正是用户反复抱怨的重复层（`111\222\222`）。
+             * 所以内容物直接落进落点：`…\名字\名字\a.mp4`，那一层的名字一个字都没丢。
+             */
+            Assert.Equal(@"C:\111\222\名字\名字", plan.ContentParentDirectory);
+            Assert.Equal(@"C:\111\222\名字\名字\a.mp4", plan.Moves[0].To);
         }
 
         [Fact]

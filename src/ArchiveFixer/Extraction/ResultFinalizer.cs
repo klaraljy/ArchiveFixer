@@ -227,6 +227,25 @@ namespace ArchiveFixer.Extraction
         /// 同一个成品目录时**不塌**，按原判定表套一层并写一条 WARN 说明原因（**绝不静默**）。
         /// </para>
         /// </param>
+        /// <param name="suppressPackageFolderLayer">
+        /// 这一次**不套"包名那一层"**。三种成因（判据在调用方，这里只认这一个布尔）：
+        ///
+        /// <list type="bullet">
+        /// <item><description><b>手动档「解压到当前文件夹」</b>（用户 2026-09-27，语义 = WinRAR 右键那一句）：
+        /// 落点**就是源包所在的那一层**，内容物按包内原样解开（<c>111\222.rar</c> → <c>111\内容物</c>）；
+        /// 一键处理 / 批量**永远不传它**（用户红线：批量一律套包名那一层，不摊平）。</description></item>
+        /// <item><description><b>续解的那一层已经在落点路径里</b>（忠实档 / 分支退化档，见
+        /// <c>ExtractionCoordinator.IsContinuationLayerAlreadyInPath</c>）：再套就是 <c>666\666</c>。</description></item>
+        /// <item><description><b>过程物名不成层</b>：续解的这一层本身就是分卷组的一卷（<c>59768866.001</c>），
+        /// 它的基名不是用户认得的包名 —— 真机上那个 <c>…\包名\59768866\真内容</c> 就是它造的。</description></item>
+        /// </list>
+        ///
+        /// <para>
+        /// ⚠ 它**只免掉"包名那一层"**：归档**自带的**那一层文件夹（内容物本身是一条单链文件夹）
+        /// 照旧保留 —— 手动档要的就是"按包内原样解开"（<c>111\666\a.mp4</c>），
+        /// 而不是把归档自己的目录结构也拆掉。
+        /// </para>
+        /// </param>
         public static FinalizePlan Plan(
             IReadOnlyList<StagedEntry>? stagedEntries,
             string? destinationDirectory,
@@ -235,7 +254,8 @@ namespace ArchiveFixer.Extraction
             string? contentRoot = null,
             string? stagingRoot = null,
             bool sharedOutputRoot = false,
-            SpecialExtractionPlan? specialExtraction = null)
+            SpecialExtractionPlan? specialExtraction = null,
+            bool suppressPackageFolderLayer = false)
         {
             if (string.IsNullOrWhiteSpace(destinationDirectory))
             {
@@ -330,7 +350,7 @@ namespace ArchiveFixer.Extraction
             bool hasArchiveName = !string.IsNullOrWhiteSpace(archiveBaseName);
 
             string? wrapperName = ResolveWrapperName(
-                kind, terminalLayout, shape, destDir, hasArchiveName, safeArchiveBaseName, warnings);
+                kind, terminalLayout, shape, destDir, hasArchiveName, safeArchiveBaseName, warnings, suppressPackageFolderLayer);
 
             /*
              * ── 特定解压例外档（规格 §3.5，用户 2026-09-24 拍板）────────────────────────
@@ -349,6 +369,11 @@ namespace ArchiveFixer.Extraction
              * ① 总开关关着 / 这条规则没开 → 根本不会走到这里（specialExtraction.IsActive 为 false）；
              * ② 几个包共用同一个成品目录 → 那一层就是"包名那一层"，去掉它会把几个包的内容物混在一起；
              * ③ 包内有**多个并列的文件夹** → 去掉一层就分不清哪个才是内容物。
+             *
+             * ⚠ 2026-09-27 落点模型 v2 之后与"不套包名层"（`suppressPackageFolderLayer`）**互不干扰**：
+             * 手动档「解压到当前文件夹」下规则照旧生效（开了规则就是"内容物直接落进源包那一层"，
+             * 正是这条规则的本意）；续解的那一层即便已经在落点路径里，规则也照旧把它里面多套的那一层去掉。
+             * ⛔ 别在这里加"摊平了就跳过规则"那种判断 —— 那等于替用户把开着的开关关掉。
              */
             bool specialCollapse = false;
 
@@ -649,7 +674,8 @@ namespace ArchiveFixer.Extraction
             string destDir,
             bool hasArchiveName,
             string safeArchiveBaseName,
-            List<string> warnings)
+            List<string> warnings,
+            bool suppressPackageFolderLayer = false)
         {
             if (kind is FinalizeLayoutKind.SingleFileToDestination
                 or FinalizeLayoutKind.Empty
@@ -657,6 +683,18 @@ namespace ArchiveFixer.Extraction
                 or FinalizeLayoutKind.Failed)
             {
                 return null;
+            }
+
+            /*
+             * 不套"包名那一层"（三种成因见 Plan 的参数说明）：
+             * 只保留"归档自带的那个文件夹那一层"—— 内容物本来就是一条单链文件夹时那一层是归档自己的结构，
+             * ⛔ 不再拿内层卷基名 / 包名当上一层套出来（真机上的
+             * `…\P55-8.7、8.8 磁场中的磁介质（1）\59768866\真内容` 就是这么来的）。
+             * 内容物直接摊在归档根上（没有自带文件夹）时**一层都不套**。
+             */
+            if (suppressPackageFolderLayer)
+            {
+                return shape.Chain.Count > 0 ? SafeName(shape.Chain[^1].Name) : null;
             }
 
             string? name;

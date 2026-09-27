@@ -220,30 +220,25 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 终端落法（规格 §3.1 的可选项）：内容物最里面那一层文件夹叫什么。
+        /// 续解时**省略中间层**（简洁档，用户 2026-09-27 定的；他原话叫"压缩空白目录"）。
         ///
-        /// 读写的是设置里的字符串（<see cref="AppSettings.TerminalLayoutMode"/>），
-        /// 解析/序列化都走 <see cref="OutputPlacement.ParseTerminalLayoutMode"/> /
-        /// <see cref="OutputPlacement.ToSettingValue"/> —— 与解压时的口径是同一份实现。
+        /// <para>关（默认＝忠实档）：<c>111\222\333\444\555\666\内容物</c>（每层包名都留）；
+        /// 开（简洁档）：<c>111\222\666\内容物</c>（只留第一层与最后一层）。</para>
         ///
-        /// 之前这一档**在界面上根本不存在**，解压管线把 KeepLastFolder 写死，
-        /// 于是"用压缩包名当最后一层"这个用户可选的行为完全没法选。
+        /// <para>⛔ 边界：只对**单链**生效（出现并列的多个内层包时那一层照建 + 日志说明）；
+        /// 第一层（源包名）与最后一层（真正装内容物的包）**永远保留**。</para>
         /// </summary>
-        public TerminalLayoutMode TerminalLayout
+        public bool OmitMiddleContinuationLayers
         {
-            // ⚠ 必须写全限定名：本类有一个同名的属性 OutputPlacement，写 OutputPlacement.X 会被
-            // 解析成"访问那个属性上的成员"（C# 的 color-color 规则），编译期就报错。
-            get => ArchiveFixer.Extraction.OutputPlacement.ParseTerminalLayoutMode(Settings.TerminalLayoutMode);
+            get => Settings.OmitMiddleContinuationLayers;
             set
             {
-                string stored = ArchiveFixer.Extraction.OutputPlacement.ToSettingValue(value);
-
-                if (string.Equals(Settings.TerminalLayoutMode, stored, StringComparison.Ordinal))
+                if (Settings.OmitMiddleContinuationLayers == value)
                 {
                     return;
                 }
 
-                Settings.TerminalLayoutMode = stored;
+                Settings.OmitMiddleContinuationLayers = value;
                 OnPropertyChanged();
             }
         }
@@ -254,7 +249,7 @@ namespace ArchiveFixer.ViewModels
         /// 读写的是设置里的字符串（<see cref="AppSettings.SourceHandling"/>），
         /// 解析/序列化都走 <see cref="AppSettings.ParseSourceHandling"/> /
         /// <see cref="AppSettings.ToSourceHandlingValue"/> —— 与解压时的口径是同一份实现
-        /// （与 <see cref="TerminalLayout"/> 同一套写法，避免"界面上选了这个、跑起来是那个"）。
+        /// （与其它"字符串存枚举名"的设置项同一套写法，避免"界面上选了这个、跑起来是那个"）。
         ///
         /// ⚠ <b>两条路径读的是同一档</b>（用户 2026-09-22 版本二，**推翻**早先
         /// "这一档只影响一键处理、地基路径永远不动源包"的说法）：
@@ -320,25 +315,6 @@ namespace ArchiveFixer.ViewModels
         };
 
         /// <summary>
-        /// 场景 B 塌缩（规格 §3.3，默认**开**）：包基名与所在目录同名、且目录下只有这一个包时，
-        /// 去掉重复的一层（<c>111\222\名字\名字.rar</c> → 产物落 <c>111\222\名字\</c>）。
-        /// </summary>
-        public bool CollapseRepeatedFolderLayer
-        {
-            get => Settings.CollapseRepeatedFolderLayer;
-            set
-            {
-                if (Settings.CollapseRepeatedFolderLayer == value)
-                {
-                    return;
-                }
-
-                Settings.CollapseRepeatedFolderLayer = value;
-                OnPropertyChanged();
-            }
-        }
-
-        /// <summary>
         /// ②页「特定解压」那一栏里的**一行**（一条规则 = 名称 + 说明 + 开关 + ToolTip）。
         ///
         /// <para>
@@ -365,7 +341,7 @@ namespace ArchiveFixer.ViewModels
 
                 // ⚠ 必须写全限定名：本类的宿主（SettingsViewModel）有一个**同名属性**
                 // SpecialExtractionRules（②页那一栏的集合），简单名会被解析成那个属性
-                //（C# 的 color-color 规则，与 TerminalLayout 那处的坑是同一个）。
+                //（C# 的 color-color 规则）。
                 _isEnabled = ArchiveFixer.Extraction.SpecialExtractionRules.IsEnabled(
                     ArchiveFixer.Extraction.SpecialExtractionRules.Normalize(settings.SpecialExtractionRules),
                     rule.Id);
@@ -1206,8 +1182,7 @@ namespace ArchiveFixer.ViewModels
 
             // 这几个属性是"包在 Settings 外面"的（AppSettings 不实现 INotifyPropertyChanged），
             // 恢复默认 / 重新加载设置之后必须显式通知，否则界面还显示旧值。
-            OnPropertyChanged(nameof(TerminalLayout));
-            OnPropertyChanged(nameof(CollapseRepeatedFolderLayer));
+            OnPropertyChanged(nameof(OmitMiddleContinuationLayers));
             OnPropertyChanged(nameof(CacheRootDirectory));
             OnPropertyChanged(nameof(CustomUnRarExePath));
             OnPropertyChanged(nameof(CustomRarExePath));

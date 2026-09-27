@@ -172,7 +172,6 @@ namespace ArchiveFixer.Tests
             OneClickRunOptions seed = OneClickRunOptions.FromSettings(settings, outputRoot);
 
             Assert.Equal(OutputPlacementMode.CustomRootPerArchive, seed.PlacementMode);
-            Assert.Equal(TerminalLayoutMode.KeepLastFolder, seed.TerminalLayout);
             Assert.Equal(SourceHandlingMode.KeepInPlace, seed.SourceHandling);
             Assert.True(seed.IsPlacementValid);
             Assert.False(seed.SaveAsDefault);
@@ -253,7 +252,6 @@ namespace ArchiveFixer.Tests
                 {
                     PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                     CustomRoot = flatRoot,
-                    TerminalLayout = TerminalLayoutMode.UseArchiveName,
                     SourceHandling = SourceHandlingMode.KeepInPlace,
                     SaveAsDefault = false
                 });
@@ -279,7 +277,6 @@ namespace ArchiveFixer.Tests
             //    跑完设置里必须还是 MoveToRest（否则下一次不进面板就会静默按面板的值走）。
             Assert.Equal(harness.OutputRoot, harness.Vm.Settings.CustomOutputDirectory);
             Assert.Equal(nameof(SourceHandlingMode.MoveToRest), harness.Vm.Settings.SourceHandling);
-            Assert.Equal("KeepLastFolder", harness.Vm.Settings.TerminalLayoutMode);
 
             // ⑤ 日志里说清了"不写回设置"
             Assert.Contains(
@@ -304,7 +301,6 @@ namespace ArchiveFixer.Tests
             {
                 PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                 CustomRoot = flatRoot,
-                TerminalLayout = TerminalLayoutMode.UseArchiveName,
                 SourceHandling = SourceHandlingMode.KeepInPlace,
                 SaveAsDefault = true
             });
@@ -320,7 +316,6 @@ namespace ArchiveFixer.Tests
             Assert.False(reloaded.ExtractToOriginalDirectory);
             Assert.True(reloaded.KeepArchiveNameFolder);
             Assert.Equal(flatRoot, reloaded.CustomOutputDirectory);
-            Assert.Equal("UseArchiveName", reloaded.TerminalLayoutMode);
             Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), reloaded.SourceHandling);
         }
 
@@ -345,7 +340,6 @@ namespace ArchiveFixer.Tests
             harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
             {
                 PlacementMode = OutputPlacementMode.PerArchiveSubfolder,
-                TerminalLayout = TerminalLayoutMode.KeepLastFolder,
                 SourceHandling = SourceHandlingMode.MoveToRest,
                 RestHandling = RestHandlingModes.Delete,
                 SaveAsDefault = false
@@ -636,7 +630,6 @@ namespace ArchiveFixer.Tests
             {
                 PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                 CustomRoot = flatRoot,
-                TerminalLayout = TerminalLayoutMode.UseArchiveName,
                 SourceHandling = SourceHandlingMode.KeepInPlace
             });
 
@@ -655,10 +648,11 @@ namespace ArchiveFixer.Tests
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
 
             // ① 任务上留了依据
+            // ⚠ 2026-09-27 起「终端落法」那一档已从界面与描述里删掉（落法固定），所以这里不再断言它。
             Assert.Contains("落点：", task.RunOptionsNote, StringComparison.Ordinal);
-            Assert.Contains("终端落法：", task.RunOptionsNote, StringComparison.Ordinal);
             Assert.Contains("源包处理：", task.RunOptionsNote, StringComparison.Ordinal);
             Assert.Contains("指定位置", task.RunOptionsNote, StringComparison.Ordinal);
+            Assert.DoesNotContain("终端落法", task.RunOptionsNote, StringComparison.Ordinal);
 
             // ② 日志里有"实际落点 + 依据"
             Assert.Contains(
@@ -740,6 +734,86 @@ namespace ArchiveFixer.Tests
             Assert.True(result.Completed || result.PartiallyCompleted, result.Summary);
         }
 
+        // ================================================================ ⑥ 手动摊平绝不外溢（红线）
+
+        /// <summary>
+        /// **一键处理永远套一层包名文件夹** —— 哪怕上一批刚刚手动点过「解压到当前文件夹」。
+        ///
+        /// <para>为什么必须有这条：那个"这次摊平"的标记是**运行期**的（`_extractIntoSourceFolderThisRun`），
+        /// 一键处理那条入口根本不带这个参数、批尾还会清掉。真出问题时表现极其隐蔽 ——
+        /// 用户手动平铺过一次，之后的一键处理把几十个包的内容物全倒进同一层（用户 2026-09-27 划的红线）。</para>
+        ///
+        /// <para>红在哪（实测过）：把批首那句
+        /// <c>_extractIntoSourceFolderThisRun = extractIntoSourceFolder &amp;&amp; !oneClickRun;</c>
+        /// 临时改成恒 <c>false</c> → 第一段（手动摊平落在源目录里）立刻变红，装回即绿。
+        /// 「一键处理那条入口根本不带这个参数」是**编译期**保证（形参默认 false + 那句 <c>&amp;&amp; !oneClickRun</c>），
+        /// 这条用例钉的是运行期那一半：标记不许在批与批之间存活。</para>
+        /// </summary>
+        [Fact]
+        public async Task 手动摊平只对那一次生效_下一次一键处理照旧套包名目录()
+        {
+            Harness harness = CreateHarness(settings =>
+            {
+                /*
+                 * 落点 = 包旁边同名文件夹（默认档），这样"摊平"与"不摊平"的差别一眼可见。
+                 * ⚠ 必须把 `CustomOutputDirectory` 清空：harness 默认给它一个输出根，
+                 * 而设置归一化见到非空的指定位置就会把落点判成"指定位置"那一档
+                 * （与②页那一格同一个判据），那样第二批就落到 `out\` 里、测不到源目录这一层。
+                 */
+                settings.ExtractToOriginalDirectory = true;
+                settings.KeepArchiveNameFolder = true;
+                settings.CustomOutputDirectory = string.Empty;
+            });
+
+            // ── ① 手动档：内容物直接落在源包所在那一层 ──────────────────────────
+            string flatSource = CreateSourceFile("flat.7z");
+            AddTask(harness, flatSource);
+
+            ExtractionCoordinator extraction = harness.Extraction;
+
+            await extraction.StartExtractAsync(extractIntoSourceFolder: true).WaitAsync(TimeSpan.FromSeconds(120));
+
+            string sourceDirectory = Path.GetDirectoryName(flatSource)!;
+
+            Assert.True(
+                File.Exists(Path.Combine(sourceDirectory, "payload-00000.bin")),
+                "手动摊平之后内容物应该直接落在源包所在目录里");
+            Assert.False(
+                Directory.Exists(Path.Combine(sourceDirectory, "flat")),
+                "手动摊平不该建包名那一层");
+
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains(StatusText.ExtractIntoSourceFolderReminderLog, StringComparison.Ordinal));
+
+            // ── ② 紧接着一键处理（**另一条入口**）：必须套回包名那一层 ────────────
+            // 换一组产物名：上一批已经在源目录里平铺过同名文件，这一批写到哪必须没有歧义。
+            harness.Engine.FileNames = new[] { "second.bin" };
+
+            string layeredSource = CreateSourceFile("layered.7z");
+
+            harness.Vm.Tasks.Clear();
+            AddTask(harness, layeredSource);
+
+            harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.NotShown();
+
+            await harness.OneClick.RunAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            string layeredDirectory = Path.Combine(sourceDirectory, "layered");
+
+            Assert.True(
+                Directory.Exists(layeredDirectory),
+                "一键处理必须套一层包名文件夹（手动摊平那个标记不许外溢到这一批）"
+                + $"\n实际目录树：{string.Join(" | ", Directory.GetFileSystemEntries(sourceDirectory, "*", SearchOption.AllDirectories))}"
+                + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
+            Assert.True(
+                File.Exists(Path.Combine(layeredDirectory, "second.bin")),
+                "内容物应该落在包名目录里面");
+            Assert.False(
+                File.Exists(Path.Combine(sourceDirectory, "second.bin")),
+                "一键处理**不该**把内容物摊在源包所在那一层");
+        }
+
         // ================================================================ 装配
 
         private Harness CreateHarness(Action<AppSettings>? configure = null)
@@ -793,7 +867,7 @@ namespace ArchiveFixer.Tests
             var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
             var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
-            return new Harness(vm, engine, oneClick, logService, pathService, outputRoot);
+            return new Harness(vm, engine, oneClick, extraction, logService, pathService, outputRoot);
         }
 
         private string CreateSourceFile(string fileName)
@@ -863,6 +937,7 @@ namespace ArchiveFixer.Tests
                 MainViewModel vm,
                 PanelFakeEngine engine,
                 OneClickCoordinator oneClick,
+                ExtractionCoordinator extraction,
                 LogService log,
                 PathService pathService,
                 string outputRoot)
@@ -870,6 +945,7 @@ namespace ArchiveFixer.Tests
                 Vm = vm;
                 Engine = engine;
                 OneClick = oneClick;
+                Extraction = extraction;
                 Log = log;
                 PathService = pathService;
                 OutputRoot = outputRoot;
@@ -880,6 +956,9 @@ namespace ArchiveFixer.Tests
             public PanelFakeEngine Engine { get; }
 
             public OneClickCoordinator OneClick { get; }
+
+            /// <summary>手动那条解压入口（「只解压」/「解压到当前文件夹」走它）。</summary>
+            public ExtractionCoordinator Extraction { get; }
 
             public LogService Log { get; }
 

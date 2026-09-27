@@ -117,7 +117,7 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 归一化：空 / 非法一律回落 <see cref="AutoRename"/>。
         ///
-        /// 容错口径与 <c>ParseSourceHandling</c> / <c>ParseTerminalLayoutMode</c> 一致：
+        /// 容错口径与 <c>ParseSourceHandling</c> / <c>ParsePlacementMode</c> 一致：
         /// 这个字符串可能来自旧配置（缺字段）、用户手改的 json，或将来改名的枚举。
         /// 读不懂时**退回最不意外、也最不可能丢数据的那一档**，而不是到解压那一刻才报错或猜一个别的行为。
         /// </summary>
@@ -839,26 +839,26 @@ namespace ArchiveFixer.Models
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
         /// <summary>
-        /// 终端落法（规格 <c>docs/输出与整理模型.md</c> §3.1 的可选项）：内容物最里面那一层文件夹叫什么。
+        /// 续解时**省略中间层**（用户 2026-09-27 定的「简洁档」，他原话叫"压缩空白目录"）。
         ///
-        /// 存的是 <see cref="ArchiveFixer.Extraction.TerminalLayoutMode"/> 的**枚举名**
-        /// （<c>KeepLastFolder</c> / <c>UseArchiveName</c>），与其它设置项（RecursionMode / OverwriteMode）
-        /// 一样用字符串落盘 —— 枚举名字比数字抗改，用户手改配置文件也能看懂。
+        /// <para>
+        /// 链条：<c>111\222.rar</c>（最外层）里套 <c>333</c>→<c>444</c>→<c>555</c>→<c>666</c>（<c>666</c> 里才是内容物）：
+        /// </para>
+        /// <list type="bullet">
+        /// <item><description><b>关（默认＝忠实档）</b>：<c>111\222\333\444\555\666\内容物</c> —— 每层包名都留；</description></item>
+        /// <item><description><b>开（简洁档）</b>：<c>111\222\666\内容物</c> —— 只留**第一层**与**最后一层**，
+        /// 中间那些"只产出下一个包、自己没有内容物"的层不建目录。</description></item>
+        /// </list>
         ///
-        /// 默认 <c>KeepLastFolder</c>：保留归档内最后一层文件夹名（<c>111\222\666\内容物</c>），
-        /// 更保守、不丢信息（规格 §7 决策 D-1）。
+        /// <para>
+        /// ⛔ 两条边界（用户当面确认）：①**只在单链时省略** —— 某一层里出现**并列的多个**内层包（分支）时，
+        /// 那一层照建（退化成忠实档）并写一条日志说明，否则几个包的内容物会并到同一层；
+        /// ②⛔ **永远不许省略第一层（源包名）与最后一层（真正装内容物的那个包）**。
+        /// </para>
+        ///
+        /// <para>中间层里夹带的非包文件（小 .txt / 无用物）**收进其余物**（一个字节都不丢，日志写明）。</para>
         /// </summary>
-        public string TerminalLayoutMode { get; set; } = "KeepLastFolder";
-
-        /// <summary>
-        /// 场景 B 塌缩（规格 §3.3）：<c>111\222\名字\名字.rar</c> 且该目录下只有这一个包时，
-        /// 产物直接落在 <c>111\222\名字\</c>，不再套一层重复的 <c>名字</c>。
-        ///
-        /// **默认开**（规格 §3.3 明确"此规则必须可关（设置项），默认开"）。
-        /// 只在"包基名 == 所在目录名"且目录里没有别的归档时才生效，其余情况一律不动 ——
-        /// 否则同一个目录里两个包的产物会并在一起，用户再也分不清哪份内容来自哪个包。
-        /// </summary>
-        public bool CollapseRepeatedFolderLayer { get; set; } = true;
+        public bool OmitMiddleContinuationLayers { get; set; }
 
         /// <summary>
         /// 「特定解压」总开关（用户 2026-09-24 拍板：**①「任务」页、一键处理旁边**那一个开关）。
@@ -922,7 +922,7 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 解析源包处理档：空 / 非法一律回落 <see cref="SourceHandlingMode.KeepInPlace"/>。
         ///
-        /// 容错放在这里（与 <c>ParseTerminalLayoutMode</c> 同一口径）：这个字符串可能来自
+        /// 容错放在这里（与 <c>ParsePlacementMode</c> 同一口径）：这个字符串可能来自
         /// 旧配置（缺字段 → 反序列化后是默认值）、用户手改的 json，或将来改名后的枚举。
         /// 读不懂时**退回最不意外的那一档**，而不是到解压那一刻才报错或猜一个别的行为。
         ///
@@ -1065,8 +1065,8 @@ namespace ArchiveFixer.Models
                 MaxExtractedTotalGiB = DefaultMaxExtractedTotalGiB,
                 MaxExtractedFileCount = DefaultMaxExtractedFileCount,
                 MaxExtractionRatio = DefaultMaxExtractionRatio,
-                TerminalLayoutMode = "KeepLastFolder",
-                CollapseRepeatedFolderLayer = true,
+                // 简洁档默认**关**（忠实档：每层包名都留）—— 用户 2026-09-27："我们有一个按钮可以让用户是否打开"
+                OmitMiddleContinuationLayers = false,
 
                 /*
                  * 特定解压（用户 2026-09-24）：总开关默认**关**，规则清单预置默认集
@@ -1248,18 +1248,10 @@ namespace ArchiveFixer.Models
             }
 
             /*
-             * 终端落法：非法值一律回落默认。
-             *
-             * 为什么放在设置层做容错（而不是等到解压时再判）：
-             * 这个字符串可能来自旧配置（缺字段）、用户手改的 json，或将来改名后的枚举。
-             * 到解压那一刻才发现"读不懂"是最糟的 —— 用户已经点了一键处理，落点却是猜出来的。
-             *
-             * 判断口径与运行时解析完全一致（都走 OutputPlacement.ParseTerminalLayoutMode），
-             * 不在这里另写一套字符串比较，免得两处对"什么算合法"产生分歧。
+             * 简洁档（续解省略中间层，用户 2026-09-27）：布尔项，非法值只可能是"缺字段" ——
+             * 缺字段时保持属性默认值 false（忠实档），这里不需要额外归一化。
              */
-            TerminalLayoutMode = ArchiveFixer.Extraction.OutputPlacement
-                .ParseTerminalLayoutMode(TerminalLayoutMode)
-                .ToString();
+            OmitMiddleContinuationLayers = OmitMiddleContinuationLayers;
 
             /*
              * 源包处理档（决策 D-9）：空 / 非法一律回落默认档 MoveToRest，**旧配置不报错**。

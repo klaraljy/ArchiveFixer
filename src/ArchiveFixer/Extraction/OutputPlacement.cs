@@ -63,11 +63,18 @@ namespace ArchiveFixer.Extraction
     }
 
     /// <summary>
-    /// 终端落法（规格 §3.1 的可选项）：内容物最里面那一层文件夹叫什么。
+    /// 终端落法（规格 §3.1）：内容物最里面那一层文件夹叫什么。
     ///
     /// <para>
-    /// <see cref="KeepLastFolder"/>（默认）保留归档内部最后一层文件夹名（<c>111\222\666\…</c>）；
+    /// <see cref="KeepLastFolder"/> 保留归档内部最后一层文件夹名（<c>111\222\666\…</c>）；
     /// <see cref="UseArchiveName"/> 改用归档基名（<c>111\222\…</c>，"少一层点击"）。
+    /// </para>
+    /// <para>
+    /// ⚠️ <b>2026-09-27 起它不再是一项用户设置</b>：用户把界面上那一档整个删掉了，
+    /// 生产路径一律传 <see cref="KeepLastFolder"/>（"保留包内那层文件夹 + 外面套一层包名文件夹"）。
+    /// 枚举留着是因为它是 <see cref="ResultFinalizer.Plan"/> 的**既有契约参数**
+    /// （其余物布局等路径也读它），删掉只会白动一大片与本次需求无关的代码 ——
+    /// ⛔ 但**不许**再把它接回设置或界面（那就是"改了没用的开关"）。
     /// </para>
     /// <para>
     /// ⚠️ 本选项只管**套出来的那一层文件夹叫什么**。判定表情形 1（终端就是单个文件）本来就没有
@@ -76,10 +83,10 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public enum TerminalLayoutMode
     {
-        /// <summary>保留归档内最后一层文件夹名（默认，更保守，不丢信息）。</summary>
+        /// <summary>保留归档内最后一层文件夹名（生产路径固定用这一档；更保守，不丢信息）。</summary>
         KeepLastFolder = 0,
 
-        /// <summary>用归档基名当最后那一层文件夹名。</summary>
+        /// <summary>用归档基名当最后那一层文件夹名（内部契约仍有这一支，生产路径不会传）。</summary>
         UseArchiveName = 1
     }
 
@@ -144,28 +151,44 @@ namespace ArchiveFixer.Extraction
         public bool UsesSelectedFolderName { get; init; }
 
         /// <summary>
-        /// 这个落点目录是**同一次导入里的多个包共用**的（"文件夹 + 指定位置"那一档：
-        /// 文件夹里每个包都落进同一个 <c>BBB\222\</c>）。
+        /// 从**选中的那个文件夹**到"这个包所在目录"的那一段相对子路径（2026-09-27 用户指示，方案 A）。
+        ///
+        /// <para>用户原话：<i>"我选中了这个 AAA……里面有五个子文件夹，而且每个都有确切的名字，
+        /// 你解压的情况就是将这五个都删掉，而后再将这里面的东西全部拿出来了，这不就导致了文件夹混乱了吗，
+        /// 你应该在各自的子文件夹里面操作"</i>。所以这一段**原样保留**：
+        /// <c>AAA\新建文件夹_20260916_152637\解压软件\rar-android-722.132.apk</c> 里的包 →
+        /// <c>BBB\AAA\新建文件夹_20260916_152637\解压软件\&lt;包基名&gt;\</c>。</para>
+        ///
+        /// <para>包**直接躺在**选中文件夹里时为空串（那就是老行为：<c>BBB\AAA\&lt;包基名&gt;\</c>）。
+        /// 包不在选中文件夹之下（理论上不该发生）时同样为空串 —— 宁可少一层，也不拼出一个跑到别处的路径。</para>
+        /// </summary>
+        public string RelativeSubPath { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 这个落点目录是**同一次导入里的多个包共用**的。
         ///
         /// <para>
-        /// 调用方靠它决定两件事（都只有这一处判据，别在管线里再推一遍）：
-        /// ① 别的包刚往这个目录里定稿过，**不能**因为"目录已存在且非空"就改名成 <c>222(1)</c>
-        ///    —— 那会把用户要的"都放进 BBB\222\"当场拆开；
-        /// ② 定稿时其余物要按包基名再分一层（决策 D-10 的原判据是"多个包共用根"）。
+        /// ⚠ <b>2026-09-27 起这一档不再出现</b>（用户指示方案 A）："选文件夹 + 指定位置"以前是
+        /// 文件夹里每个包都落进同一个 <c>BBB\222\</c>，现在是
+        /// <c>BBB\222\&lt;相对子路径&gt;\&lt;包基名&gt;\</c> —— **每包一个目录**。
+        /// 保留这个字段是为了让管线里那两处判据（"目录已存在且非空要不要让开"、
+        /// "其余物要不要按包名分层"）继续有唯一出口，只是它现在恒为 false。
         /// </para>
         /// </summary>
         public bool SharesDestinationWithOtherPackages { get; init; }
 
-        /// <summary>是否命中了场景 B 的"重复一层塌缩"（规格 §3.3）。</summary>
-        public bool CollapsedRepeatedFolderLayer { get; init; }
+
     }
 
     /// <summary>
     /// 输出落点解析（规格 §1，**唯一实现处**；不变量 §6.6：禁止在别处再拼一遍输出路径）。
     ///
     /// <para>
-    /// 用户 2026-09-24 第 13 条之后只剩**四条规则**（<c>选文件/选文件夹</c> × <c>未指定/指定位置</c>），
-    /// 全部由 <see cref="ResolveDestinationDirectory"/> 一处实现；界面上再也选不到"摊平"那两档。
+    /// 2026-09-27「落点模型 v2」之后是**三档 + 一个手动档**：
+    /// 未指定位置（包旁边同名文件夹 / 选中的文件夹里面）、指定位置（<c>BBB\包名\</c>）、
+    /// 指定位置 + 选文件夹（<c>BBB\选中文件夹名\相对子路径\包名\</c>），
+    /// 外加①页那颗手动按钮的「解压到当前文件夹」（落点 = 源包所在那一层，⛔ 不建包名层）。
+    /// **一律不塌缩**（旧场景 B 已退役）—— 全部由 <see cref="ResolveDestinationDirectory"/> 一处实现。
     /// </para>
     ///
     /// <para>
@@ -179,51 +202,29 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public static class OutputPlacement
     {
-        /// <summary>终端落法的设置默认值（<see cref="AppSettings.TerminalLayoutMode"/> 的默认字符串）。</summary>
-        public const string DefaultTerminalLayoutSetting = "KeepLastFolder";
-
-        /// <summary>
-        /// 设置里的终端落法字符串 → 枚举（**唯一解析处**）。
-        ///
-        /// 为什么解析要放这里而不是 ViewModel / 设置层各写一份：落点解析是本类的事，
-        /// "什么算合法的终端落法"只应该有一个答案。设置加载时（<c>AppSettings.Normalize</c>）
-        /// 与解压时（<c>ExtractionCoordinator</c>）都调它，两处口径不会分叉。
-        ///
-        /// 容错规则：空 / 非法 / 大小写不符 / 旧配置缺字段（反序列化后为 null）一律回落
-        /// <see cref="TerminalLayoutMode.KeepLastFolder"/> —— 这是"最不意外"的那一档（规格 §4），
-        /// 绝不因为一个读不懂的字符串就把落点算成别的东西。
-        /// </summary>
-        public static TerminalLayoutMode ParseTerminalLayoutMode(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return TerminalLayoutMode.KeepLastFolder;
-            }
-
-            return Enum.TryParse(value.Trim(), ignoreCase: true, out TerminalLayoutMode parsed)
-                   && Enum.IsDefined(parsed)
-                ? parsed
-                : TerminalLayoutMode.KeepLastFolder;
-        }
-
-        /// <summary>枚举 → 设置字符串（与 <see cref="ParseTerminalLayoutMode"/> 严格互逆）。</summary>
-        public static string ToSettingValue(TerminalLayoutMode mode)
-        {
-            return mode.ToString();
-        }
+        /*
+         * ⛔ 2026-09-27 删掉了三个成员：`DefaultTerminalLayoutSetting` / `ParseTerminalLayoutMode` /
+         * `ToSettingValue`。
+         *
+         * 它们是"终端落法"还是一项**用户设置**时的解析出口（`AppSettings.TerminalLayoutMode`）。
+         * 用户把那一档整个删掉之后，落法在**生产路径上固定**，这三个成员一个调用方都不剩 ——
+         * 留着就是"看起来能改、其实没有任何行为差别"的假接口（本项目反复清理过这一类）。
+         * 枚举 <see cref="TerminalLayoutMode"/> 本身留着：它是 <c>ResultFinalizer.Plan</c> 的既有契约参数。
+         */
 
         /// <summary>
         /// 落点是不是**源包自己所在的那个目录**。
         ///
         /// <para>
-        /// 现在只剩一种情形会成立：场景 B 塌缩之后（<c>111\222\名字\名字.rar</c> → 落点 <c>111\222\名字</c>）。
-        /// 旧版本还有"解压到压缩包所在目录"那一档会走这里，但它已被用户 2026-09-24 第 13 条删除。
+        /// 现在只剩一种情形会成立：**手动档「解压到当前文件夹」**（用户 2026-09-27，
+        /// <c>111\222.rar</c> → 落点 <c>111\</c>）。旧版本还有两种会走到这里 ——
+        /// "解压到压缩包所在目录"那一档（2026-09-24 第 13 条删掉）与场景 B 塌缩（2026-09-27 退役）。
         /// </para>
         /// <para>
         /// 为什么需要这个判断：解压管线有一条"输出目录已存在且非空 → 自动改名成 <c>xxx(1)</c>"的规则
         /// （避免把产物倒进一个已有内容的目录）。而源包所在目录**必然非空** —— 源包自己就躺在里面。
-        /// 不留这个例外，用户选的"就地整理"和场景 B 的塌缩会当场被抵消，
-        /// 产物落到旁边的 <c>名字(1)\</c>，正是要根治的"凭空多一层"。
+        /// 不留这个例外，用户点的那次"解压到当前文件夹"会当场被抵消，产物落到旁边的 <c>名字(1)\</c>，
+        /// 正是要根治的"凭空多一层"。
         /// </para>
         /// </summary>
         public static bool LandsInSourceDirectory(string? sourceArchivePath, string? destinationDirectory)
@@ -427,13 +428,15 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 解析最终落点 <c>destDir</c>（规格 §1.1 的四条规则 + §3.3 场景 B 塌缩）。
+        /// 解析最终落点 <c>destDir</c>（规格 §1.1 落点模型 v2）。
         ///
         /// <code>
         /// destRoot = 未指定位置 ? dir(源包) : 指定位置
         /// 包名     = 指定位置 且 选中对象是文件夹 ? SafeName(选中的文件夹名)
-        ///            : SafeName(包基名)          // 分卷组 = 整组基名；伪装后缀/内嵌归档都剥对
-        /// destDir  = destRoot \ 包名              // 两档都建这一层（"摊平"两档已被用户删除）
+        ///            : SafeName(包基名)                 // 分卷组 = 整组基名；伪装后缀/内嵌归档都剥对
+        /// destDir  = 选中文件夹 + 指定位置 ? destRoot \ 选中文件夹名 \ 相对子路径 \ 包基名
+        ///            : destRoot \ 包名                  // 其余各档都只建这一层
+        /// 手动档   =「解压到当前文件夹」? dir(源包)       // 不建包名那一层；盘根直接判失败
         /// </code>
         ///
         /// <para>
@@ -441,22 +444,13 @@ namespace ArchiveFixer.Extraction
         /// （它在所选文件夹里面），包名是**各个包自己的基名** —— 于是产物落在 <c>111\222\a\</c>，
         /// 既没有凭空多出一层 <c>111\222\222\</c>（"不新建"），也没有把内容摊进 <c>222\</c> 或扔到 <c>111\</c>
         /// （用户原话："我们就在 222 文件夹里面操作，不将东西往外面扔"）。
-        /// 所选文件夹里只有与它同名的那个包时（<c>111\222\222.7z.001</c>），下面的塌缩规则会让产物
-        /// 直接落进 <c>111\222\</c> 本身。
+        /// ⚠ 包名与所在目录同名时（<c>111\222\222.7z.001</c>）**也照样多一层** ——
+        /// 旧那条"看情况塌掉重复一层"的规则（场景 B）已于 2026-09-27 退役。
         /// </para>
         /// </summary>
         /// <param name="sourceArchivePath">源包路径。</param>
         /// <param name="mode">落点模式（只剩两档）。</param>
         /// <param name="customRoot">自定义根（仅 <see cref="OutputPlacementMode.CustomRootPerArchive"/> 用得上）。</param>
-        /// <param name="collapseRepeatedFolderLayer">
-        /// 场景 B 开关（规格 §3.3，默认开）："包名 == 其所在目录名"且该目录下只有这一个包时，
-        /// 塌缩掉重复的一层，产物直接落在该包自己的目录里（<c>111\222\名字\内容物</c>）。
-        /// 只在未指定位置那一档有意义 —— 指定位置时"所在目录名"根本不参与运算。
-        /// </param>
-        /// <param name="sourceDirectoryContainsOnlyThisArchive">
-        /// "这个目录下只有这一个包"这个事实**由调用方告知**：
-        /// 本类是纯函数，不去扫目录。传 false 就等于关掉塌缩（宁可多一层，也不把多个包的产物混到一个目录里）。
-        /// </param>
         /// <param name="volumeGroupBaseName">
         /// 分卷组基名（<see cref="Detection.VolumeGroupDetector"/> 的结果，如 <c>222.7z</c>）。
         /// 给了就用它替代"从文件名剥分卷标记"这一步 —— 上游已经算过就别再算一遍。
@@ -468,17 +462,21 @@ namespace ArchiveFixer.Extraction
         /// 用户选中的那个根（文件夹选择时是文件夹全路径）。空的文件夹根**不参与运算**，
         /// 免得把"某次没记全的导入"当成"用户选了一个叫空字符串的文件夹"。
         /// </param>
+        /// <param name="flattenIntoSourceFolder">
+        /// 手动档「**解压到当前文件夹**」（2026-09-27 新增）：内容物直接落在**源包所在那一层**，
+        /// ⛔ 不建包名文件夹（<c>111\222.rar</c> → <c>111\内容物</c>）。
+        /// ⛔ 只有手动操作会传 true —— 一键处理/批量永远是"外面裹一层包名目录"。
+        /// </param>
         /// <param name="driveExists">盘符存在性探针，见 <see cref="ResolveDestinationRoot"/>。</param>
         public static OutputPlacementResult ResolveDestinationDirectory(
             string? sourceArchivePath,
             OutputPlacementMode mode,
             string? customRoot = null,
-            bool collapseRepeatedFolderLayer = true,
-            bool sourceDirectoryContainsOnlyThisArchive = false,
             string? volumeGroupBaseName = null,
             Func<string, bool>? driveExists = null,
             SourceSelectionKind selectionKind = SourceSelectionKind.File,
-            string? selectionRoot = null)
+            string? selectionRoot = null,
+            bool flattenIntoSourceFolder = false)
         {
             mode = NormalizeLegacyMode(mode);
 
@@ -493,6 +491,43 @@ namespace ArchiveFixer.Extraction
             string safeBaseName = FileNameHelper.SanitizeFileName(rawBaseName);
 
             /*
+             * 手动档「解压到当前文件夹」（用户 2026-09-27）：内容物直接落进**压缩包所在的那一层**。
+             *
+             * 语义就是他说的 WinRAR"解压到当前文件夹"：<c>111\222.rar</c> → <c>111\内容物</c>。
+             * ⛔ 只有手动操作会走到这一支；一键处理/批量永远裹一层包名目录。
+             * 代价照实说：同一层里有多个包时，它们的内容物会混进同一层（同名文件走冲突档）——
+             * 这是用户自己点的，日志里会提醒。
+             */
+            if (flattenIntoSourceFolder)
+            {
+                string sourceDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
+
+                if (string.IsNullOrWhiteSpace(sourceDirectory))
+                {
+                    return Failure(
+                        OutputPlacementError.SourceDirectoryUnavailable,
+                        "源包路径里没有目录部分，无法判断\"当前文件夹\"");
+                }
+
+                if (IsPathRoot(sourceDirectory))
+                {
+                    return Failure(
+                        OutputPlacementError.InvalidDestinationPath,
+                        $"「解压到当前文件夹」不能直接摊在盘根上：{sourceDirectory}");
+                }
+
+                return new OutputPlacementResult
+                {
+                    Success = true,
+                    DestinationRoot = sourceDirectory,
+                    DestinationDirectory = sourceDirectory,
+                    ArchiveBaseName = safeBaseName,
+                    PackageFolderName = safeBaseName,
+                    Message = $"解压到当前文件夹（不套包名目录）：{sourceDirectory}"
+                };
+            }
+
+            /*
              * "指定位置 + 添加文件夹"：落点那一层用**选中的文件夹名**（用户原话：
              * "我们就在 BBB 里面创建一个和我们选中文件夹名字相同的子文件夹，然后再里面操作"）。
              *
@@ -501,6 +536,31 @@ namespace ArchiveFixer.Extraction
              */
             string selectedFolderName = ResolveSelectedFolderName(selectionKind, selectionRoot);
             bool useSelectedFolderName = UsesCustomRoot(mode) && selectedFolderName.Length > 0;
+
+            /*
+             * ===== 「选文件夹 + 指定位置」的两条规则（2026-09-27 用户指示方案 A）=====
+             *
+             * ① **保留选中文件夹名那一层**（既有规则，一个字不动）：产物落在 BBB\AAA\ 下面；
+             * ② **把"这个包相对选中文件夹的那一段子路径"原样搬过去**，并且**每个包再占自己一层**
+             *    （包基名）。于是
+             *        AAA\新建文件夹_20260916_152637\解压软件\rar-android-722.132.apk
+             *      → BBB\AAA\新建文件夹_20260916_152637\解压软件\rar-android-722.132\
+             *
+             * 为什么必须改（真机现场）：源目录里 5 个子文件夹各有确切名字、每个子文件夹里若干包；
+             * 旧规则把 13 个包**全部倒进同一层** BBB\AAA\ —— 子文件夹名字与"哪个包属于哪个文件夹"
+             * 在产物里彻底消失，13 个包的第一层内容物（0 字节的 国考资料.txt）还互相撞名成了
+             * (1)…(6)。用户的原话就是"这不就导致了文件夹混乱了吗，你应该在各自的子文件夹里面操作"。
+             *
+             * ⛔ 这一档从此**不再"多个包共用一层"**：`SharesDestinationWithOtherPackages` 恒为 false，
+             * 管线里"共用根"那两条特例（让开已存在目录、其余物按包名分层）在这条路上自然不再生效。
+             */
+            bool folderImportIntoCustomRoot =
+                useSelectedFolderName && selectionKind == SourceSelectionKind.Folder && !string.IsNullOrWhiteSpace(selectionRoot);
+
+            string relativeSubPath = folderImportIntoCustomRoot
+                ? ResolveRelativeSubPath(selectionRoot!, sourceArchivePath)
+                : string.Empty;
+
             string packageName = useSelectedFolderName ? selectedFolderName : safeBaseName;
 
             if (packageName.Length == 0)
@@ -508,7 +568,11 @@ namespace ArchiveFixer.Extraction
                 return Failure(OutputPlacementError.InvalidDestinationPath, "目标目录路径拼不出来：" + root.DestinationRoot);
             }
 
-            string perArchiveDirectory = SafeCombine(root.DestinationRoot, packageName);
+            string perArchiveDirectory = folderImportIntoCustomRoot
+                ? SafeCombine(
+                    SafeCombine(root.DestinationRoot, selectedFolderName),
+                    JoinSubPath(relativeSubPath, safeBaseName))
+                : SafeCombine(root.DestinationRoot, packageName);
 
             if (perArchiveDirectory.Length == 0)
             {
@@ -516,48 +580,13 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * 场景 B：111\222\名字\名字.rar。
+             * 场景 B「包名与所在目录同名就塌缩」**已退役**（用户 2026-09-27）：
              *
-             * 不塌缩时 destDir = dir(源包) + 包名 = 111\222\名字\名字，比用户期望的
-             * 111\222\名字\内容物 多出重复的一层。判据是"包名 == 它所在目录名"，
-             * 但**还要**目录下只有这一个包 —— 否则同一个目录里两个包的产物会并在一起，
-             * 用户再也分不清哪份内容来自哪个包（所以这一条由调用方告知，猜不得）。
-             *
-             * 塌缩就是把刚算出来的那一层去掉，即 destDir 回到"源包自己的目录"。
-             * ⚠ 用 rawBaseName 比，不拿 selectedFolderName 比：塌缩判的是"包自己的名字"，
-             * 而"添加文件夹 + 指定位置"那种落点跟源包所在目录名没有关系。
+             * 他原话："不行，如果 111\222\ 这层文件夹里面还有很多的东西呢，这不就是将文件夹弄混乱了吗"。
+             * 旧规则只在"该目录里只有这一个**包**"时才塌缩，可那层目录里完全可能还有几十个小文件、
+             * 说明、别的素材 —— 一塌就全混在一起，而且"什么时候会塌"对用户不可预期。
+             * 现在**一律不塌缩**：<c>111\222\222.rar</c> → <c>111\222\222\内容物</c>，永远多这一层、永远不乱。
              */
-            if (collapseRepeatedFolderLayer
-                && mode == OutputPlacementMode.PerArchiveSubfolder
-                && sourceDirectoryContainsOnlyThisArchive)
-            {
-                string sourceDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
-                string sourceDirectoryName = FileNameHelper.GetFileName(sourceDirectory);
-
-                bool sameName = !string.IsNullOrWhiteSpace(sourceDirectoryName)
-                                && (string.Equals(sourceDirectoryName, rawBaseName, StringComparison.OrdinalIgnoreCase)
-                                    || string.Equals(sourceDirectoryName, safeBaseName, StringComparison.OrdinalIgnoreCase));
-
-                if (sameName)
-                {
-                    string collapsed = TryGetParentDirectory(perArchiveDirectory);
-
-                    // 盘根不安全：把内容物直接摊在 D:\ 上比多一层糟得多，宁可不动。
-                    if (collapsed.Length > 0 && !IsPathRoot(collapsed))
-                    {
-                        return new OutputPlacementResult
-                        {
-                            Success = true,
-                            DestinationRoot = root.DestinationRoot,
-                            DestinationDirectory = collapsed,
-                            ArchiveBaseName = safeBaseName,
-                            PackageFolderName = packageName,
-                            CollapsedRepeatedFolderLayer = true,
-                            Message = $"包名与目录同名，已塌缩重复的一层，落点：{collapsed}"
-                        };
-                    }
-                }
-            }
 
             return new OutputPlacementResult
             {
@@ -565,15 +594,16 @@ namespace ArchiveFixer.Extraction
                 DestinationRoot = root.DestinationRoot,
                 DestinationDirectory = perArchiveDirectory,
                 ArchiveBaseName = safeBaseName,
-                PackageFolderName = packageName,
+                PackageFolderName = safeBaseName,
+                RelativeSubPath = relativeSubPath,
                 UsesSelectedFolderName = useSelectedFolderName,
 
                 /*
-                 * "多个包共用这个落点"只在**指定位置 + 添加文件夹**时成立：
-                 * 那个文件夹里可能有好几个包，它们都落进同一个 <c>BBB\222\</c>。
-                 * 其余三档的落点每包一个目录（同名包撞车由既有冲突档处理），不是"共用根"。
+                 * ⚠ 2026-09-27 起**恒为 false**：以前"指定位置 + 添加文件夹"是文件夹里每个包都落进
+                 * 同一个 BBB\222\（那时这里给 true）；现在每包一层（BBB\222\<子路径>\<包基名>），
+                 * 就没有"共用根"这回事了。字段保留是为了让管线那两处判据继续只读一个出口。
                  */
-                SharesDestinationWithOtherPackages = useSelectedFolderName,
+                SharesDestinationWithOtherPackages = false,
 
                 Message = "落点：" + perArchiveDirectory
             };
@@ -816,6 +846,74 @@ namespace ArchiveFixer.Extraction
         private static string SafeCombine(string directory, string name)
         {
             return SafePathHelper.Combine(directory, name);
+        }
+
+        /// <summary>
+        /// 从**选中的文件夹**到"这个包所在目录"的那一段相对子路径，逐段清洗后原样保留
+        /// （2026-09-27 用户指示方案 A，见 <see cref="OutputPlacementResult.RelativeSubPath"/>）。
+        ///
+        /// <para>拿不到 / 不在选中文件夹之下（相对路径以 <c>..</c> 开头）/ 是绝对路径时一律返回空串：
+        /// ⛔ 宁可少一层，也不拼出一个跑到用户没指定的地方的路径（不变量 4）。</para>
+        ///
+        /// <para>纯字符串运算，**不碰磁盘** —— 落点解析是纯函数（类注释里的设计约束①）。</para>
+        ///
+        /// <para>⚠ 形参刻意收 <c>string?</c>：调用点上的源包路径本来就是可空的（"还没指定文件"那一档），
+        /// 它在这一层内部已经按空串处理 —— 让调用方写 <c>!</c> 只是把警告挪个地方，不是真的安全。</para>
+        /// </summary>
+        private static string ResolveRelativeSubPath(string selectionRoot, string? sourceArchivePath)
+        {
+            try
+            {
+                string? packageDirectory = FileNameHelper.GetDirectoryName(sourceArchivePath);
+
+                if (string.IsNullOrWhiteSpace(packageDirectory))
+                {
+                    return string.Empty;
+                }
+
+                string root = selectionRoot.Trim().TrimEnd('\\', '/');
+                string directory = packageDirectory.Trim().TrimEnd('\\', '/');
+
+                if (root.Length == 0 || directory.Length == 0)
+                {
+                    return string.Empty;
+                }
+
+                string relative = Path.GetRelativePath(root, directory);
+
+                if (string.IsNullOrWhiteSpace(relative)
+                    || string.Equals(relative, ".", StringComparison.Ordinal)
+                    || Path.IsPathRooted(relative)
+                    || relative.StartsWith("..", StringComparison.Ordinal))
+                {
+                    return string.Empty;
+                }
+
+                var segments = new List<string>();
+
+                foreach (string segment in relative.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string safe = FileNameHelper.SanitizeFileName(segment);
+
+                    if (safe.Length > 0)
+                    {
+                        segments.Add(safe);
+                    }
+                }
+
+                return string.Join("\\", segments);
+            }
+            catch
+            {
+                // 路径形状怪异（非法字符 / 太长）时按"包直接在选中文件夹里"处理。
+                return string.Empty;
+            }
+        }
+
+        /// <summary>把"相对子路径"和最后一层（包基名）拼起来；子路径为空时就只有包基名。</summary>
+        private static string JoinSubPath(string relativeSubPath, string leaf)
+        {
+            return string.IsNullOrWhiteSpace(relativeSubPath) ? leaf : relativeSubPath + "\\" + leaf;
         }
 
         private static OutputPlacementResult Failure(OutputPlacementError error, string message)

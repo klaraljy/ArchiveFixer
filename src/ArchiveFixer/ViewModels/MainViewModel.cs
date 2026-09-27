@@ -1361,6 +1361,17 @@ namespace ArchiveFixer.ViewModels
         public ICommand ChangeNameCommand { get; }
 
         public ICommand StartExtractCommand { get; }
+
+        /// <summary>
+        /// 手动档「解压到当前文件夹」（用户 2026-09-27 拍板新加的一个按钮）：
+        /// 与 <see cref="StartExtractCommand"/> 同一条管线，只多一个"这次不建包名那一层"的运行期标记。
+        ///
+        /// <para>⛔ 它**不是**"只解压"的别名：两者的落点差别写在
+        /// <see cref="ExtractionCoordinator.StartExtractAsync(bool)"/> 上（<c>111\222.rar</c> →
+        /// <c>111\内容物</c> vs <c>111\222\内容物</c>）。一键处理 / 批量**永远不会**走这一档。</para>
+        /// </summary>
+        public ICommand ExtractIntoSourceFolderCommand { get; }
+
         public ICommand StopCommand { get; }
         public ICommand CancelCurrentCommand { get; }
 
@@ -1740,6 +1751,22 @@ namespace ArchiveFixer.ViewModels
                 {
                     _logService.MarkOperationStart("解压");
                     await _extractionCoordinator.StartExtractAsync().ConfigureAwait(true);
+                },
+                CanStartExtract);
+
+            /*
+             * 「解压到当前文件夹」（用户 2026-09-27）：与上面那条**同一个本体**，
+             * 只把"这次摊平"这一个运行期标记传下去 —— 落点推导、定稿、校验、其余物、清理
+             * 全都还是同一条管线（⛔ 不许为它另写一条解压路径）。
+             *
+             * 可用性守卫与「只解压」逐字相同（闲着 + 至少勾了一个任务）：
+             * 它同样按勾选办事，不勾就点不动，免得用户以为"点了没反应"。
+             */
+            ExtractIntoSourceFolderCommand = new AsyncRelayCommand(
+                async () =>
+                {
+                    _logService.MarkOperationStart(StatusText.ExtractIntoSourceFolderText);
+                    await _extractionCoordinator.StartExtractAsync(extractIntoSourceFolder: true).ConfigureAwait(true);
                 },
                 CanStartExtract);
             StopCommand = new RelayCommand(_extractionCoordinator.StopAfterCurrent, () => IsBusy);
@@ -2991,13 +3018,13 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>
         /// 翻译只走既有实现：落点两个布尔由 <see cref="OutputPlacement.ToLegacyFlags"/> 给出、
-        /// 终端落法与源包处理由 <see cref="OutputPlacement.ToSettingValue"/> /
-        /// <see cref="AppSettings.ToSourceHandlingValue"/> 序列化 —— 与②「解压方式」/③「清理与删除」页写的是同一套字符串口径，
-        /// 不新造第三种表示法。
+        /// 源包处理由 <see cref="AppSettings.ToSourceHandlingValue"/> 序列化 ——
+        /// 与②「解压方式」/③「清理与删除」页写的是同一套字符串口径，不新造第三种表示法。
         /// </para>
         /// <para>
-        /// 落点无效（选了"指定位置"却没填路径）时**不写落点**，但终端落法 / 源包处理照写：
-        /// 那两项本来就与路径无关，因为一个空路径把另外两项一起丢掉才是意外。
+        /// 落点无效（选了"指定位置"却没填路径）时**不写落点**，但源包处理照写：
+        /// 那一项本来就与路径无关，因为一个空路径把它一起丢掉才是意外。
+        /// （终端落法 2026-09-27 已从设置里删除，这里不再有它。）
         /// </para>
         /// </summary>
         internal void SaveOneClickOptionsAsDefaults(OneClickRunOptions options)
@@ -3030,7 +3057,7 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            Settings.TerminalLayoutMode = OutputPlacement.ToSettingValue(options.TerminalLayout);
+            // 终端落法那一档**已退役**（用户 2026-09-27 删除）：弹窗里不再有它，也不写回设置。
             Settings.SourceHandling = AppSettings.ToSourceHandlingValue(options.SourceHandling);
 
             /*
@@ -3151,10 +3178,10 @@ namespace ArchiveFixer.ViewModels
                 try
                 {
                     /*
-                     * 这里**不扫目录**（不传 collapseRepeatedFolderLayer / containsOnly）：
-                     * 本方法跑在 UI 线程上，而"目录里是不是只有这一个包"要枚举目录（大目录会卡界面）。
-                     * 场景 B 的塌缩由解压管线在后台线程上判定，跑完会把真实落点回写进 task.OutputPath，
-                     * 所以界面上最终显示的就是实际落点。
+                     * 这里**只算落点、不碰磁盘**：`BuildOutputPath` → `OutputPlacement` 是纯函数
+                     * （2026-09-27 起连"目录里是不是只有这一个包"都不用问了 —— 塌缩退役之后
+                     * 它不再需要任何目录枚举），所以本方法放在 UI 线程上也安全。
+                     * 真实落点仍以解压管线回写的 task.OutputPath 为准（输出目录已存在时可能是 xxx(1)）。
                      */
                     task.OutputPath = _pathService.BuildOutputPath(task, options);
                 }
@@ -4649,11 +4676,11 @@ namespace ArchiveFixer.ViewModels
                        + affected;
             }
 
-            return "当前任务的输出目录与同目录的其它包共用（包名与目录同名时合并了重复的一层），"
-                   + "本次只删本任务那一份其余物（按包基名分开的子目录），不会碰其它包的其余物。";
+            return "当前任务的输出目录与源包所在目录是同一个（手动档「解压到当前文件夹」之后就是这样），"
+                   + "本次只删本任务那一份其余物，不会碰别的包。";
         }
 
-        /// <summary>任务的输出目录是不是就是源包所在目录（场景 B 塌缩之后的形态）。</summary>
+        /// <summary>任务的输出目录是不是就是源包所在目录（**手动档「解压到当前文件夹」之后的形态**）。</summary>
         internal static bool IsOutputDirectorySharedWithSource(string? outputDirectory, string? sourceArchivePath)
         {
             // 判据只有一处实现（OutputPlacement.LandsInSourceDirectory），这里只是把参数顺序转过来。
@@ -5589,6 +5616,7 @@ namespace ArchiveFixer.ViewModels
                  ChangeNameCommand,
 
                  StartExtractCommand,
+                 ExtractIntoSourceFolderCommand,
                  StopCommand,
                  CancelCurrentCommand,
 

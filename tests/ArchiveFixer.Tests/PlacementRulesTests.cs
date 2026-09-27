@@ -123,14 +123,17 @@ namespace ArchiveFixer.Tests
         // ================================================================ 规则四：文件夹 + 指定位置
 
         /// <summary>
-        /// 用户在「添加文件夹」里选了 <c>222</c>，并指定了解压位置 <c>BBB</c>：
-        /// 在 BBB 里建一个和选中文件夹同名的子文件夹（<c>BBB\222\</c>），再在里面操作。
+        /// 用户在「添加文件夹」里选了 <c>AAA</c>，并指定了解压位置 <c>BBB</c>：
+        /// 产物落在 <c>BBB\AAA\</c> 下面，而且**每个包再占自己那一层**；
+        /// 包里在子文件夹里时，**那一段子路径原样保留**。
         ///
-        /// <para>重点在**共用落点**：同一个文件夹里的所有包都落进这一层，
-        /// 不能因为"目录已存在且非空"被改名成 <c>222(1)</c>（那样用户要的"都放进 BBB\222\"当场被拆开）。</para>
+        /// <para>用户 2026-09-27 现场：AAA 里有 5 个有确切名字的子文件夹，
+        /// 旧规则把 13 个包全倒进 <c>BBB\AAA\</c> 同一层 —— 子文件夹名字与归属全丢、
+        /// 同名文件撞成 <c>(1)…(6)</c>。他原话："这不就导致了文件夹混乱了吗，
+        /// 你应该在各自的子文件夹里面操作"。</para>
         /// </summary>
         [Fact]
-        public async Task 文件夹指定位置_所有包都落进以选中文件夹命名的那一层()
+        public async Task 文件夹指定位置_每个包在选中文件夹名那一层下各占一层_子路径原样保住()
         {
             Harness harness = CreateHarness("folder-custom", settings =>
             {
@@ -138,32 +141,62 @@ namespace ArchiveFixer.Tests
                 settings.CustomOutputDirectory = Path.Combine(_root, "folder-custom", "BBB");
                 settings.KeepArchiveNameFolder = true;
 
-                // 源包搬进其余物（默认档）：顺带把"共用根时其余物按包名分层"也钉住。
+                // 源包搬进其余物（默认档）。
                 settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
             });
 
-            string packageFolder = Path.Combine(harness.SourceRoot, "111", "222");
-            Directory.CreateDirectory(packageFolder);
+            string selectedFolder = Path.Combine(harness.SourceRoot, "AAA");
+            string nestedFolder = Path.Combine(selectedFolder, "新建文件夹_20260916_152637");
+            Directory.CreateDirectory(nestedFolder);
 
-            WriteFakeArchive(packageFolder, "a.rar");
-            WriteFakeArchive(packageFolder, "b.7z");
+            WriteFakeArchive(nestedFolder, "a.rar");
+            WriteFakeArchive(nestedFolder, "b.7z");
+            WriteFakeArchive(selectedFolder, "c.rar");
 
-            IReadOnlyList<ArchiveTask> tasks = await harness.ImportFolderAsync(packageFolder);
+            // 真机的「添加文件夹」会往下走子文件夹（用户现场就是 5 个子文件夹里的包全被导入了）。
+            IReadOnlyList<ArchiveTask> tasks = await harness.ImportFolderAsync(selectedFolder, recursive: true);
 
             await harness.RunAsync(tasks);
 
-            string shared = Path.Combine(harness.CustomRoot, "222");
+            string selectedLayer = Path.Combine(harness.CustomRoot, "AAA");
 
             Assert.All(tasks, task => Assert.Equal(StatusText.ExtractSuccess, task.Status));
-            Assert.All(tasks, task => Assert.Equal(shared, task.OutputPath));
 
-            Assert.False(Directory.Exists(Path.Combine(harness.CustomRoot, "222(1)")), "共用落点不许被拆成一串 222(1)");
-            Assert.True(File.Exists(Path.Combine(shared, "a.rar.txt")));
-            Assert.True(File.Exists(Path.Combine(shared, "b.7z.txt")));
+            // 按**落点最后一段**找任务（导入顺序与源文件名后缀都不是断言的一部分）。
+            ArchiveTask ByLeaf(string leaf)
+            {
+                ArchiveTask? found = tasks.FirstOrDefault(task =>
+                    string.Equals(Path.GetFileName(task.OutputPath), leaf, StringComparison.OrdinalIgnoreCase));
 
-            // 共用根 → 其余物按包基名分层（决策 D-10），不然两个包的分卷/过程物会互相撞名。
-            Assert.True(Directory.Exists(Path.Combine(shared, "其余物", "a")));
-            Assert.True(Directory.Exists(Path.Combine(shared, "其余物", "b")));
+                Assert.True(
+                    found != null,
+                    $"找不到落点最后一段是「{leaf}」的任务；实际落点：{string.Join(" | ", tasks.Select(t => t.OutputPath))}");
+
+                return found!;
+            }
+
+            ArchiveTask nestedA = ByLeaf("a");
+            ArchiveTask nestedB = ByLeaf("b");
+            ArchiveTask flatC = ByLeaf("c");
+
+            // 子文件夹里的两个包 → AAA\新建文件夹_20260916_152637\<包名>\
+            Assert.Equal(Path.Combine(selectedLayer, "新建文件夹_20260916_152637", "a"), nestedA.OutputPath);
+            Assert.Equal(Path.Combine(selectedLayer, "新建文件夹_20260916_152637", "b"), nestedB.OutputPath);
+
+            // 直接躺在选中文件夹里的那个包 → AAA\<包名>\
+            Assert.Equal(Path.Combine(selectedLayer, "c"), flatC.OutputPath);
+
+            Assert.True(File.Exists(Path.Combine(nestedA.OutputPath, "a.rar.txt")));
+            Assert.True(File.Exists(Path.Combine(nestedB.OutputPath, "b.7z.txt")));
+            Assert.True(File.Exists(Path.Combine(flatC.OutputPath, "c.rar.txt")));
+
+            // ⛔ 选中文件夹那一层上**不许有裸文件**（真机上 13 个包全倒在这里、还撞名成 (1)…(6)）。
+            Assert.Empty(Directory.GetFiles(selectedLayer));
+
+            // 每包一个目录 → 其余物也回到"每包自己那一层"里（这一档已经没有共用根了）。
+            Assert.True(Directory.Exists(Path.Combine(nestedA.OutputPath, "其余物")));
+            Assert.True(Directory.Exists(Path.Combine(nestedB.OutputPath, "其余物")));
+            Assert.False(Directory.Exists(Path.Combine(selectedLayer, "其余物")), "这一档不再共用根，其余物不该出现在选中文件夹那一层");
         }
 
         // ================================================================ 规则一 / 规则三：选文件
@@ -321,9 +354,9 @@ namespace ArchiveFixer.Tests
             public string CustomRoot { get; }
 
             /// <summary>按「添加文件夹」的语义导入（任务上带 SourceSelectionKind.Folder）。</summary>
-            public async Task<IReadOnlyList<ArchiveTask>> ImportFolderAsync(string folder)
+            public async Task<IReadOnlyList<ArchiveTask>> ImportFolderAsync(string folder, bool recursive = false)
             {
-                return await ImportAsync(new[] { folder });
+                return await ImportAsync(new[] { folder }, recursive);
             }
 
             /// <summary>按「添加文件」的语义导入。</summary>
@@ -342,11 +375,11 @@ namespace ArchiveFixer.Tests
                 Assert.All(tasks, task => Assert.True(task.EndTime.HasValue, $"{task.FileName} 没有跑完"));
             }
 
-            private async Task<IReadOnlyList<ArchiveTask>> ImportAsync(IEnumerable<string> paths)
+            private async Task<IReadOnlyList<ArchiveTask>> ImportAsync(IEnumerable<string> paths, bool recursive = false)
             {
                 List<ArchiveTask> scanned = await Scan.ScanPathsAsync(
                     paths,
-                    new ScanOptions { ScanMode = "ScanAllFiles", RecursiveScan = false },
+                    new ScanOptions { ScanMode = "ScanAllFiles", RecursiveScan = recursive },
                     CancellationToken.None);
 
                 var imported = new List<ArchiveTask>();

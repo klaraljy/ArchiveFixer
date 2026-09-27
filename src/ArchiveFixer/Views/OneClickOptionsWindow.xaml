@@ -20,8 +20,9 @@
 
         所以这个窗口只有三段东西：
         ① 正文两行（+ 需要时再加两行提示）：内容物落点 + 其余物是否自动删除（用户点名要的那两件事）；
-        ② 一个**默认收起**的折叠区：真要临时改落点 / 终端落法 / 源包处理时才展开 ——
-           旧版把这一整套摊在正文里，正是他嫌"这么的啰嗦"的那部分；
+        ② 一个**默认收起**的折叠区：真要临时改落点 / 源包处理 / 删除操作时才展开 ——
+           旧版把这一整套摊在正文里，正是他嫌"这么的啰嗦"的那部分
+           （「终端落法」那一组 2026-09-27 已随设置项一起删除，见下面那段注释）；
         ③ 「以后不再询问」+ 开始 / 取消。
 
         ⚠ 三条不许回退的纪律：
@@ -141,7 +142,7 @@
         </Border>
 
         <!-- ============ 要改才展开（默认收起） ============ -->
-        <Expander Header="本次改一下（落点 / 终端落法 / 源包操作 / 删除操作）"
+        <Expander Header="本次改一下（落点 / 源包操作 / 删除操作）"
                   x:Name="TweakExpander"
                   x:FieldModifier="public"
                   IsExpanded="False">
@@ -196,25 +197,11 @@
                         </DockPanel>
                     </GroupBox>
 
-                    <!-- ==================== 终端落法 ==================== -->
-                    <GroupBox Header="终端落法（内容物最后那一层）">
-                        <StackPanel>
-                            <RadioButton x:Name="TerminalKeepLastFolderOption"
-                                         x:FieldModifier="public"
-                                         GroupName="PanelTerminalLayout"
-                                         Checked="TerminalLayout_Checked">
-                                <TextBlock Text="多文件时保留最后一层文件夹名（默认）" Style="{StaticResource BodyTextStyle}" />
-                            </RadioButton>
-
-                            <RadioButton x:Name="TerminalUseArchiveNameOption"
-                                         x:FieldModifier="public"
-                                         GroupName="PanelTerminalLayout"
-                                         Margin="0,4,0,0"
-                                         Checked="TerminalLayout_Checked">
-                                <TextBlock Text="多文件时用压缩包名当最后一层" Style="{StaticResource BodyTextStyle}" />
-                            </RadioButton>
-                        </StackPanel>
-                    </GroupBox>
+                    <!--
+                        ⛔ 「终端落法（内容物最后那一层）」这一组**已删除**（用户 2026-09-27：
+                        "这个可以删除掉，默认就是这样的情况"）。现在的口径是固定的：
+                        包名那一层永远在、归档自带的那一层也保留；想塌掉包自带那一层只能用**特定解压**。
+                    -->
 
                     <!-- ==================== 源包操作 ==================== -->
                     <GroupBox Header="1 源包操作（成功之后，源包放哪）">
