@@ -241,13 +241,21 @@ namespace ArchiveFixer.Tests
             Assert.Contains("可用", decision.Reason, StringComparison.Ordinal);
             Assert.Contains("差", decision.Reason, StringComparison.Ordinal);
 
-            // 建议动作必须包含三种正路（清其余物 / 换盘 / 把删除操作改成回收站或彻底删除）。
+            // 建议动作必须包含三种正路（清其余物 / 换盘 / 开①页「空间不足」模式）。
             string suggestions = string.Join("|", decision.Suggestions);
 
             Assert.Contains("删除其余物", suggestions, StringComparison.Ordinal);
             Assert.Contains("指定位置", suggestions, StringComparison.Ordinal);
-            Assert.Contains("激进模式", suggestions, StringComparison.Ordinal);
+            Assert.Contains("空间不足", suggestions, StringComparison.Ordinal);
             Assert.Contains("并发", suggestions, StringComparison.Ordinal);
+
+            /*
+             * ⛔ 退役文案不许回潮（2026-09-27）：那条建议以前写的是"改用激进模式 + 必须先跑自测"，
+             * 而"危险模式 / 自测凭证"整套机理早已被用户删掉（第 32 条）——
+             * 界面还在教用户去开一个不存在的东西，就是误导。
+             */
+            Assert.DoesNotContain("激进模式", suggestions, StringComparison.Ordinal);
+            Assert.DoesNotContain("自测", suggestions, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -886,6 +894,172 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("ToggleDangerModeCommand", extraction, StringComparison.Ordinal);
             Assert.DoesNotContain("DangerModeRiskLines", extraction, StringComparison.Ordinal);
             Assert.DoesNotContain("DangerousSpaceModeEnabled", extraction, StringComparison.Ordinal);
+        }
+
+        // ================================================================ ⑪ 空间不足模式的排序与并发档（用户 2026-09-27）
+
+        /// <summary>
+        /// 空间不足模式**按净占用排序**（净占用 = 解完真正留在盘上的字节数 = 内容物），
+        /// 而普通档照旧按峰值排 —— 同两份估算、两种顺序，而且 `Basis` 那句也要跟着换。
+        ///
+        /// <para>为什么这条重要：那个模式的全部意义是"边解边把空间还回来"，所以必须先解
+        /// "解完占地最少"的包。而放行判断**仍然按峰值**（见下一条测试）——
+        /// 排序换口径、放行不换口径，这两件事必须同时钉住。</para>
+        /// </summary>
+        [Fact]
+        public void 空间不足模式_按净占用排序_普通档仍按峰值()
+        {
+            ArchiveTask bigSource = CreateLazyTask("a-big-source.7z", 8 * Gib);
+            ArchiveTask bigContent = CreateLazyTask("b-big-content.7z", 1 * Gib);
+
+            var estimates = new Dictionary<string, TaskSpaceEstimate>(StringComparer.OrdinalIgnoreCase)
+            {
+                // A：源包大、内容物小（净占用小，但峰值大）
+                [bigSource.FileName] = EstimateOf(8 * Gib, 1 * Gib),
+
+                // B：源包小、内容物大（净占用大）
+                [bigContent.FileName] = EstimateOf(1 * Gib, 6 * Gib)
+            };
+
+            List<ArchiveTask> tasks = new() { bigSource, bigContent };
+
+            TaskSpaceEstimate Estimate(ArchiveTask task) => estimates[task.FileName];
+
+            ExtractionSchedulePlan normal = ExtractionScheduler.Build(
+                tasks, Estimate, availableBytes: 100 * Gib, reserveBytes: 0, requestedParallelCount: 1);
+
+            ExtractionSchedulePlan tight = ExtractionScheduler.Build(
+                tasks,
+                Estimate,
+                availableBytes: 100 * Gib,
+                reserveBytes: 0,
+                requestedParallelCount: 1,
+                sortKey: item => item.Estimate.NetOccupancyBytes,
+                orderBasis: ExtractionSchedulePlan.NetOccupancyOrderBasis);
+
+            // 普通档：峰值 A=9G、B=7G → B 先。
+            Assert.Equal("b-big-content.7z", normal.Ordered[0].Task.FileName);
+
+            // 空间不足档：净占用 A=1G、B=6G → A 先。
+            Assert.Equal("a-big-source.7z", tight.Ordered[0].Task.FileName);
+
+            Assert.Equal(ExtractionSchedulePlan.DefaultOrderBasis, normal.OrderBasis);
+            Assert.Contains("净占用", tight.OrderBasis, StringComparison.Ordinal);
+
+            // 顺序换了，但"放行"这个判断一个字节都没变（还是按峰值算的）。
+            Assert.Equal(normal.Ordered[0].RequiredBytes, normal.Ordered[0].Estimate.PeakBytes);
+            Assert.All(tight.Ordered, item => Assert.True(item.FitsAlone));
+        }
+
+        /// <summary>
+        /// 空间不足模式**不会**因为"净占用小"就放行一个峰值装不下的包：
+        /// 排序键只改顺序，<see cref="ScheduledExtractionItem.FitsAlone"/> 与差值仍按峰值算。
+        /// </summary>
+        [Fact]
+        public void 空间不足模式_净占用小但峰值装不下_仍然算放不下()
+        {
+            List<ArchiveTask> tasks = new()
+            {
+                // 峰值 = 0 + 1G（内容物按 1 倍估）+ 1G = 2G；可用只有 1G → 单独跑也放不下。
+                CreateLazyTask("cannot-fit.7z", 1 * Gib)
+            };
+
+            ExtractionSchedulePlan tight = ExtractionScheduler.Build(
+                tasks,
+                LazyEstimate,
+                availableBytes: 1 * Gib,
+                reserveBytes: 0,
+                requestedParallelCount: 1,
+                sortKey: item => item.Estimate.NetOccupancyBytes,
+                orderBasis: ExtractionSchedulePlan.NetOccupancyOrderBasis);
+
+            Assert.Single(tight.BlockedAtPlanTime);
+            Assert.False(tight.Ordered[0].FitsAlone);
+            Assert.Equal(1 * Gib, tight.Ordered[0].ShortfallBytes);
+        }
+
+        /// <summary>
+        /// 并发档（用户 2026-09-27 拍板）：**很多个体积相近的小包 → 5**，
+        /// 多个偏大 / 体积差得远的包 → **3**；取不到可用空间时按最保守的 3。
+        /// </summary>
+        [Fact]
+        public void 空间不足模式_并发档_相近小包给5个_其余给3个_取不到空间也给3个()
+        {
+            long budget = 10 * Gib;
+
+            // ① 六个体积相近的小包（每个峰值 200M ≤ 预算/4 = 2.5G）→ 5
+            var manySmall = new List<ScheduledExtractionItem>();
+
+            for (int index = 0; index < 6; index++)
+            {
+                manySmall.Add(CreateLazyItem($"small-{index}.7z", 100L * 1024 * 1024));
+            }
+
+            int count = ExtractionScheduler.ResolveSpaceTightParallelCount(
+                manySmall, budget, recommendedBySpace: 8, out string basis);
+
+            Assert.Equal(ExtractionScheduler.SpaceTightParallelForManySmall, count);
+            Assert.Contains("小包", basis, StringComparison.Ordinal);
+
+            // ② 同样六个包，但体积差得远（100M 与 4G）→ 3（不是"很多个一样的包"）
+            var mixed = new List<ScheduledExtractionItem>
+            {
+                CreateLazyItem("m-100m.7z", 100L * 1024 * 1024),
+                CreateLazyItem("m-4g.7z", 4L * Gib),
+                CreateLazyItem("m-200m.7z", 200L * 1024 * 1024),
+                CreateLazyItem("m-300m.7z", 300L * 1024 * 1024),
+                CreateLazyItem("m-1g.7z", 1 * Gib),
+                CreateLazyItem("m-2g.7z", 2 * Gib)
+            };
+
+            Assert.Equal(
+                ExtractionScheduler.SpaceTightParallelForMixedOrLarge,
+                ExtractionScheduler.ResolveSpaceTightParallelCount(mixed, budget, 8, out _));
+
+            // ③ 个数不够（只有 3 个）→ 3
+            Assert.Equal(
+                ExtractionScheduler.SpaceTightParallelForMixedOrLarge,
+                ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall.Take(3).ToList(), budget, 8, out _));
+
+            // ④ 取不到可用空间 → 空间建议就是 1（不知道够不够时不并行），模式照它办
+            Assert.Equal(
+                1,
+                ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall, -1, 1, out string unknownBasis));
+
+            Assert.Contains("没能取到", unknownBasis, StringComparison.Ordinal);
+            Assert.Contains("1 个", unknownBasis, StringComparison.Ordinal);
+
+            /*
+             * ⑤ 空间建议更小的时候**取小**、而且说法跟着那个数走（"上限 5、实际 2"必须说出来，
+             * 否则用户拿日志对并发数就会得出"日志是假的"）；它给 0（连最小的都放不下）时**取 1 而不是 0** ——
+             * 0 会让"等并发位"那个循环永远等不到空位（`runningTasks.Count >= maxParallel` 恒真）。
+             */
+            Assert.Equal(2, ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall, budget, 2, out string clampedBasis));
+            Assert.Contains("压到 2 个", clampedBasis, StringComparison.Ordinal);
+
+            Assert.Equal(1, ExtractionScheduler.ResolveSpaceTightParallelCount(manySmall, budget, 0, out _));
+        }
+
+        /// <summary>造一个带净占用的调度项（只用于并发档那几条，不碰真实文件）。</summary>
+        private ScheduledExtractionItem CreateLazyItem(string name, long sourceBytes)
+        {
+            return new ScheduledExtractionItem(
+                CreateLazyTask(name, sourceBytes),
+                LazyEstimate(CreateLazyTask(name, sourceBytes)),
+                0);
+        }
+
+        /// <summary>合成估算：源包 / 内容物 / 过程物各自指定（排序那两条要"净占用顺序 ≠ 峰值顺序"）。</summary>
+        private static TaskSpaceEstimate EstimateOf(long sourceBytes, long contentBytes, long processArtifactBytes = 0)
+        {
+            return new TaskSpaceEstimate
+            {
+                SourceBytes = sourceBytes,
+                ContentBytes = contentBytes,
+                ProcessArtifactBytes = processArtifactBytes,
+                ContentEstimated = true,
+                Basis = "测试用的合成估算"
+            };
         }
 
         private static string ReadRepositoryFile(params string[] parts)

@@ -245,9 +245,24 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 
 ## 11. 当前验证状态（2026-09-27，落点模型 v2 落完并全量通过之后）
 
-- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1772 条全绿**（0 失败 / 0 跳过）；
+- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1787 条全绿**（0 失败 / 0 跳过）；
   `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
+- **「空间不足」模式**（2026-09-27 用户拍板）：①页主操作栏那个黄色勾选框，**运行期开关**
+  （`MainViewModel.SpaceTightMode`，⛔ 不写设置、不记忆），批首钉死、批尾清掉。
+  一个布尔管四件事（判据全在 `ExtractionCoordinator._spaceTightThisBatch`）：
+  并发由 `ExtractionScheduler.ResolveSpaceTightParallelCount` 定（体积相近的小包 5 / 其余 3，
+  与空间建议取小、绝不取 0）、排序按 `TaskSpaceEstimate.NetOccupancyBytes`（**只改顺序，放行仍按峰值**）、
+  `PrepareRestHandlingForBatch` 强制 `Delete`、源包在定稿 + 校验通过时由
+  `PurgeSourcePackageForSpaceTight` **当场永久删除**（执行体 = `Extraction.SourceCleanupService`，
+  它在管线上的**唯一**调用点就是这里）。
+  动手前必须看得见：确认框红字 `StatusText.SpaceTightConfirmText`（正文两行同时换成覆盖后的值）+
+  ②③页橙色提示 `StatusText.SpaceTightOverrideNotice`。
+  契约在 `docs/输出与整理模型.md` §3.4.2，用例在 `SpaceTightModeTests` / `SpaceModeTests`。
+- **导入后的空间体检**（2026-09-27）：导入完成与**换输出位置**两处自动调
+  `MainViewModel.CheckSpaceForTasksAsync` → `ReportSpaceCheck`（判据复用 `ExtractionCoordinator.BuildSpaceAdvice`，
+  ⛔ 不另写一套）。放不下时 WARN + ERROR 两条日志 + `DialogService.ShowSpaceShortageWarning` 弹窗点名；
+  ⛔ 它只是提醒：不改设置、不改勾选、不拦着不让跑。
 - **落点模型 v2**（2026-09-27）：终点落法固定（不再让用户选）、手动「解压到当前文件夹」、
   一律不塌缩、续解层按三条优先判据（**同层多个内层包 → 建**；**父层已出内容物 → 不建、并进父层**；
   剩余"干净单链过路层"看开关 `OmitMiddleContinuationLayers`，默认关 = 忠实档）。
@@ -255,10 +270,11 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   `OutputPlacement.ResolveDestinationDirectory`（落点）、
   `OneClickCoordinator.ShouldAddContinuationLevelLayer`（续解该不该建那一层）、
   `ResultFinalizer.Plan(..., suppressPackageFolderLayer:)`（定稿要不要套包名那一层）。
-- **一键处理期间零弹窗**（用户 2026-09-27 真机要求："用户选中你来，然后自己去忙了……以后不要出现弹窗"）：
-  `ExtractionCoordinator.SuppressDecisionPromptsForOneClickRun()` 一处收口（冲突询问复用既有的
-  `_conflictPromptUnavailable`），多分支 / 缺卷补救 / 批次结束提示各自读 `oneClickRun`。
-  ⛔ 以后**不许**在一键档里新增任何"要用户点一下"的框 —— 需要决策就按保守档办 + 写日志。
+- **一键处理期间零弹窗，唯一例外是批末汇总**（用户 2026-09-27 两次拍板："以后不要出现弹窗" →
+  "最终汇总框可以留、其他都删"）：`ExtractionCoordinator.SuppressDecisionPromptsForOneClickRun()` 一处收口
+  （冲突询问复用既有的 `_conflictPromptUnavailable`），多分支 / 缺卷补救各自读 `oneClickRun`；
+  批**跑完之后**那一个 `ShowInfo(outcome.Summary)` 保留（那时不会卡住任何任务），日志那一行照旧写。
+  ⛔ 以后**不许**在一键档的**批中间**新增任何"要用户点一下"的框 —— 需要决策就按保守档办 + 写日志。
 - **递归多层的结果校验**：展开 > 1 层时**不拿第 0 层清单当预期**（`PostProcessSuccessAsync` 的
   `recursion` 参数），只做非空 / 落点 / 预算三道 —— 否则必然误报「解压失败」（真机 13 个包全中过）。
 - **已知 flaky（全量并发下偶发假红，单跑必过 —— 遇到先单跑确认，别去改产品代码或断言）**：

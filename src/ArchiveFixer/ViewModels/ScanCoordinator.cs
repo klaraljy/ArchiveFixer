@@ -295,6 +295,21 @@ namespace ArchiveFixer.ViewModels
              * —— 那正是用户第 17 条点名的那件事，别在这里又犯一次。
              */
             await RemindJunkAfterImportAsync(importedTasks);
+
+            /*
+             * ===== 导入后的**空间体检**（用户 2026-09-27 第 2 条）=====
+             *
+             * 位置与无用物提醒**刻意同级**（都在 IsBusy = false 之后）：用户自己点的那一次
+             * 一键处理永远不会被这两个框打断，而"这批包放不放得下"必须在**动手之前**说 ——
+             * 真机上他遇到的是"解到一半才发现盘不够"。
+             *
+             * 续解往列表里补内层包那一条路（suppressAutoScan = true）**不做**：
+             * 那些包是程序自己刚产出的过程物，正在跑的批次里统计它们没有意义（空间门照旧逐个判）。
+             */
+            if (!suppressAutoScan)
+            {
+                await _vm.CheckSpaceForTasksAsync(importedTasks, "导入完成");
+            }
         }
 
         /// <summary>

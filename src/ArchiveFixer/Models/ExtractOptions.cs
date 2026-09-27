@@ -408,5 +408,14 @@ namespace ArchiveFixer.Models
 
         /// <summary>需要时的提醒两行（疑似无用物 / 没有可用密码的包）；空 = 不显示。</summary>
         public string NoticeEcho { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 「空间不足」模式那条**红字**（用户 2026-09-27 要求：这个模式会在动手前覆盖源包/其余物两档，
+        /// 而且会永久删源包，必须在点「开始处理」之前看见）。空 = 整行不显示（模式没开）。
+        ///
+        /// <para>它与 <see cref="NoticeEcho"/> 分开：那一段是灰字提醒（"顺便说一声"），
+        /// 这一段是红字（"这次会删你的源包"）—— 两种分量不能共用一个控件。</para>
+        /// </summary>
+        public string SpaceTightEcho { get; init; } = string.Empty;
     }
 }

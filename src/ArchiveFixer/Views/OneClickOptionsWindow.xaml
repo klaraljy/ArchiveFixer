@@ -92,6 +92,25 @@
                            Visibility="Collapsed"
                            Text="{Binding SpecialExtractionEcho}" />
 
+                <!--
+                    「空间不足」模式那条**红字**（用户 2026-09-27）：
+                    这个模式会覆盖源包 / 其余物两档，而且会**永久删除源包** —— 属于"必须在点开始之前看见"的事，
+                    所以它用红字（与③页「彻底删除」那条同一分量），而且没有关闭按钮（只有关掉①页那个勾才消失）。
+                    文案唯一来源 = StatusText.SpaceTightConfirmText（本窗口不写字面量）。
+                -->
+                <Border x:Name="SpaceTightNotice"
+                        x:FieldModifier="public"
+                        Style="{StaticResource WarningBannerStyle}"
+                        Margin="0,8,0,0"
+                        Visibility="Collapsed">
+                    <TextBlock x:Name="SpaceTightNoticeText"
+                               x:FieldModifier="public"
+                               Style="{StaticResource BannerTextStyle}"
+                               Foreground="{StaticResource DangerTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="{Binding SpaceTightEcho}" />
+                </Border>
+
                 <!-- 无用物 / 没有可用密码两段（有才出现；两段都空时整块收起） -->
                 <TextBlock x:Name="NoticeText"
                            x:FieldModifier="public"

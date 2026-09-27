@@ -24,7 +24,7 @@ namespace ArchiveFixer.Storage
         /// <summary>中文结论，**一定带具体数字**（需要 X、可用 Y、差 Z）。</summary>
         public string Reason { get; init; } = string.Empty;
 
-        /// <summary>建议动作（清理 `其余物` / 换输出盘 / 改用激进模式 / 降并发）。</summary>
+        /// <summary>建议动作（清理 `其余物` / 换输出盘 / 开「空间不足」模式 / 降并发）。</summary>
         public IReadOnlyList<string> Suggestions { get; init; } = Array.Empty<string>();
 
         /// <summary>可用空间**取不到**（盘未就绪 / 路径非法 / 权限）。</summary>
@@ -83,8 +83,8 @@ namespace ArchiveFixer.Storage
         /// 同时通过检查、一起去吃同一块盘（用户点名的反例：5G + 6G 两个大包并行排上）。
         /// </param>
         /// <param name="reclaimableBytes">
-        /// 这个任务在**危险模式**下完成时能立刻收回的字节数（源包 + 过程物）。
-        /// 它只用于**建议文案**（"改用激进模式可以少要多少"），绝不参与放行判断 ——
+        /// 这个任务完成时能立刻收回的字节数（源包 + 过程物；开「空间不足」模式时它真的会被删掉）。
+        /// 它只用于**建议文案**（"开那个模式可以少要多少"），绝不参与放行判断 ——
         /// 判断必须按"这些字节此刻还在盘上"来算。
         /// </param>
         public static SpaceGateDecision Check(
@@ -170,7 +170,7 @@ namespace ArchiveFixer.Storage
         /// <summary>
         /// 拦下时的那几句话。建议动作按用户能立刻做的顺序排：
         /// ① 清 `其余物`（能立刻腾出空间，而且是他本来就要删的东西）；
-        /// ② 换输出盘 / 换落点；③ 危险模式（说明它为什么能省，并**同时**说明它必须先自测）；
+        /// ② 换输出盘 / 换落点；③ 开①页那个「空间不足」模式（说明它为什么能省，并**同时**说明它会永久删源包）；
         /// ④ 降并发（并发越高，同时在盘上的峰值越大）。
         /// </summary>
         private static SpaceGateDecision Block(
@@ -186,16 +186,14 @@ namespace ArchiveFixer.Storage
                 "先清理「其余物」（③「清理与删除」页 →「删除其余物…」）：把上一个包的源包与过程物清掉，空间立刻回来"
             };
 
-            if (reclaimableBytes > 0)
-            {
-                suggestions.Add(
-                    $"改用激进模式（边解边彻底删其余物）可以少要 {TaskSpaceEstimate.FormatSize(reclaimableBytes)}，"
-                    + "但那种模式会永久删除源包，开启前必须先跑自测");
-            }
-            else
-            {
-                suggestions.Add("改用激进模式（边解边彻底删其余物）可以边解边回收源包占的空间，但它会永久删除源包，开启前必须先跑自测");
-            }
+            string tightModeHint = reclaimableBytes > 0
+                ? $"开①页的「空间不足」模式可以少要 {TaskSpaceEstimate.FormatSize(reclaimableBytes)}"
+                : "开①页的「空间不足」模式可以边解边回收源包占的空间";
+
+            suggestions.Add(
+                tightModeHint
+                + "（每个包校验通过后立刻永久删除它的源包；只对这一次运行有效，不写设置。"
+                + "⚠ 它删的是你的源包，删了不可恢复）");
 
             suggestions.Add("换一个空间更大的输出盘：设置 → 输出位置 → 「指定位置」");
             suggestions.Add($"把「最大并发解压数」调小（当前判断里已经算进了同时在跑的任务）：差 {TaskSpaceEstimate.FormatSize(shortfall)}");
@@ -228,8 +226,8 @@ namespace ArchiveFixer.Storage
     /// 第二个大包会在启动前就被拦下（差多少也算得出来）。</para>
     ///
     /// <para><b>释放与刷新</b>：任务结束时按**当初预留的那个数字**释放（不是按实际用量），
-    /// 同时用最新探测到的可用空间刷新账本 —— 危险模式下其余物被真的删掉，多出来的空间会因此
-    /// 出现在下一次判断里，这正是那种模式"越跑越宽松"的原因。</para>
+    /// 同时用最新探测到的可用空间刷新账本 —— 「空间不足」模式下源包真的被删掉，多出来的空间会因此
+    /// 出现在下一次判断里，这正是那个模式"越跑越宽松"的原因。</para>
     ///
     /// <para>本类是纯数据（无 IO、无 WPF），磁盘探测由调用方喂进来，所以可以被单测精确摆布。</para>
     /// </summary>

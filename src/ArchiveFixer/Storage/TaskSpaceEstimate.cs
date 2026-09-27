@@ -20,7 +20,7 @@ namespace ArchiveFixer.Storage
     /// <list type="number">
     /// <item><description><see cref="SourceBytes"/> —— 本任务源包**整组**（分卷求和）。
     /// 解压期间它一直占着盘：成功之后只是**搬进 `其余物`**（同盘移动不释放空间），
-    /// 只有危险模式才会在定稿之后真的把它删掉。</description></item>
+    /// 只有①页「空间不足」模式才会在定稿 + 校验通过之后真的把它删掉（那份空间才回到可用空间里）。</description></item>
     /// <item><description><see cref="ContentBytes"/> —— 内容物。清单拿得到时是解压后总大小（与
     /// <c>ResourceBudget</c> 同一份 list、同一套累加口径）；拿不到时按源包体积估**下界**并标注
     /// <see cref="ContentEstimated"/>。</description></item>
@@ -85,7 +85,7 @@ namespace ArchiveFixer.Storage
         /// <summary>
         /// 任务完成前**一直占着盘**的那部分（源包 + 过程物）。
         ///
-        /// <para>危险模式"边解边彻底删其余物"能立刻收回的就是它 —— 这也是那种模式能解决"空间不够"的
+        /// <para>①页「空间不足」模式"边解边删源包"能立刻收回的就是它 —— 这也是那个模式能解决"空间不够"的
         /// 全部原因：普通档下这些字节只是从源目录搬进了 `其余物`，净占用一点没变。</para>
         /// </summary>
         public long RetainedBytes => SaturatingSum(SourceBytes, ProcessArtifactBytes);
@@ -112,8 +112,22 @@ namespace ArchiveFixer.Storage
         /// <summary>峰值需求：源包 + 过程物 + 内容物同时存在的那一刻。</summary>
         public long PeakBytes => SaturatingSum(RetainedBytes, ContentBytes);
 
-        /// <summary>危险模式在定稿之后能收回的字节数。</summary>
+        /// <summary>
+        /// ①页「空间不足」模式在定稿 + 校验通过之后能收回的字节数（源包 + 过程物）。
+        ///
+        /// <para>它**不参与放行判断**（那一刻这些字节还在盘上），只用于两处：
+        /// 建议文案里的"开那个模式可以少要多少"，以及空间不足模式自己的排序口径
+        /// （净占用 = <see cref="PeakBytes"/> − 它，见 <c>ExtractionScheduler.Build</c> 的 sortKey）。</para>
+        /// </summary>
         public long ReclaimableBytes => RetainedBytes;
+
+        /// <summary>
+        /// **净占用**：这个任务跑完（源包与过程物都已按模式回收）之后真正留在盘上的字节数。
+        ///
+        /// <para>= <see cref="PeakBytes"/> − <see cref="ReclaimableBytes"/> = <see cref="ContentBytes"/>。
+        /// 空间不足模式按它**从小到大**排执行顺序：先解"解完占地最少"的包，盘上越跑越宽。</para>
+        /// </summary>
+        public long NetOccupancyBytes => ContentBytes;
 
         /// <summary>
         /// 把"同卷 / 跨卷"这个事实补进这一份估算（返回**新的一份**，不原地改）。

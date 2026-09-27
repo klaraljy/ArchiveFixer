@@ -341,6 +341,18 @@
                                        Foreground="{StaticResource InfoTextBrush}"
                                        TextWrapping="Wrap" />
 
+                            <!--
+                                ①页那个「空间不足」开关开着时的**覆盖提示**（用户 2026-09-27）：
+                                这一页正是他核对"源包 / 其余物 / 并发"的地方，只写在①页等于没写。
+                                关着时整行收起（空字符串 → Collapsed，见 BoolToVisibility 那一套的同款做法）。
+                            -->
+                            <TextBlock Text="{Binding SpaceTightOverrideText}"
+                                       Style="{StaticResource BannerTextStyle}"
+                                       Foreground="{StaticResource WarningTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,3,0,0"
+                                       Visibility="{Binding HasSpaceTightOverride, Converter={StaticResource BoolToVisibilityConverter}}" />
+
                             <TextBlock Style="{StaticResource BannerTextStyle}"
                                        Foreground="{StaticResource InfoTextBrush}"
                                        TextWrapping="Wrap"

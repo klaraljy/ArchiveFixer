@@ -142,11 +142,22 @@
                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}"
                             Command="{Binding CancelCurrentCommand}" />
 
-                    <Button Content="只解压"
-                            MinWidth="88"
-                            Margin="0,0,8,0"
-                            ToolTip="跳过改后缀这一步，直接对勾选的任务按密码本解压"
-                            Command="{Binding StartExtractCommand}" />
+                    <!--
+                        ── 空间不足开关（用户 2026-09-27 拍板：放在「一键处理」左边，黄色）──
+
+                        三件事必须一眼看得出来（所以是黄字 + ToolTip 全文）：
+                        ① 它是**这一次运行**的开关，不写设置、不记忆（关掉程序就没了）；
+                        ② 它会让程序**永久删除源包**（定稿 + 校验通过的那一刻）；
+                        ③ 它会覆盖并发档与「全速」。
+                        ⛔ 它绝不是一个"设置"：绑的是 MainViewModel.SpaceTightMode（纯运行期字段）。
+                    -->
+                    <CheckBox Content="{x:Static models:StatusText.SpaceTightToggleLabel}"
+                              Margin="0,0,10,0"
+                              FontWeight="SemiBold"
+                              VerticalAlignment="Center"
+                              Foreground="{StaticResource WarningTextBrush}"
+                              IsChecked="{Binding SpaceTightMode, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.SpaceTightToggleToolTip}" />
 
                     <Button Content="一键处理"
                             MinWidth="128"
@@ -216,11 +227,22 @@
                         Command="{Binding ChangeNameCommand}" />
 
                 <!--
+                    「只解压」（用户 2026-09-27：从主操作栏**移到这里**）：
+                    语义一个字没变 —— 跳过改后缀，直接对勾选的任务按密码本解压。
+                    它属于"手动档"：一次只解当前这一层、不续解、要弹的框照旧弹（一键处理才是不弹窗那条路）。
+                -->
+                <Button Content="只解压"
+                        MinWidth="88"
+                        FontWeight="SemiBold"
+                        ToolTip="跳过改后缀这一步，直接对勾选的任务按密码本解压（只解当前这一层，不续解内层包）"
+                        Command="{Binding StartExtractCommand}" />
+
+                <!--
                     「解压到当前文件夹」（用户 2026-09-27 拍板加的手动档）：
                     语义就是 WinRAR 右键那一句 —— 内容物**不建包名那一层**，直接落在包自己所在的目录里。
                     它是**唯一**会摊平的入口（一键处理 / 继续解永远套一层包名文件夹），
                     所以文案里必须把"少一层"和"撞名按覆盖策略处理"都说出来（用户拍板接受这个代价）。
-                    位置：与上面三个"会写盘"的动作排在一起，后面才是那几颗只看不动的按钮。
+                    位置：与上面那几个"会写盘"的动作排在一起，后面才是那几颗只看不动的按钮。
                 -->
                 <Button Content="{x:Static models:StatusText.ExtractIntoSourceFolderText}"
                         MinWidth="136"

@@ -70,6 +70,12 @@ namespace ArchiveFixer.Views
         /// </summary>
         private string _specialExtractionEcho = string.Empty;
 
+        /// <summary>
+        /// 「空间不足」模式那条红字（用户 2026-09-27）；空 = 整块不显示（模式没开）。
+        /// 与「特定解压」同理：它是**事实**（①页那个勾的状态），不是本窗口里的选项。
+        /// </summary>
+        private string _spaceTightEcho = string.Empty;
+
         /// <summary>初始化期间不刷新界面：避免在控件还没填完时把半成品状态写进正文。</summary>
         private bool _initializing = true;
 
@@ -105,6 +111,9 @@ namespace ArchiveFixer.Views
         /// <param name="specialExtractionEcho">
         /// 「特定解压：&lt;规则名&gt;」那一行（用户 2026-09-24）；空 = 不显示（没开特定解压）。
         /// </param>
+        /// <param name="spaceTightEcho">
+        /// 「空间不足」模式那条红字（用户 2026-09-27）；空 = 不显示（①页那个勾没开）。
+        /// </param>
         public OneClickOptionsWindow(
             AppSettings? settings,
             OneClickRunOptions? seed,
@@ -113,7 +122,8 @@ namespace ArchiveFixer.Views
             string? sourceEcho,
             string? noticeEcho = null,
             Func<OneClickRunOptions, Task<string>>? destinationEchoFactory = null,
-            string? specialExtractionEcho = null)
+            string? specialExtractionEcho = null,
+            string? spaceTightEcho = null)
         {
             InitializeComponent();
 
@@ -127,9 +137,11 @@ namespace ArchiveFixer.Views
             _sourceEcho = sourceEcho ?? string.Empty;
             _noticeEcho = noticeEcho ?? string.Empty;
             _specialExtractionEcho = specialExtractionEcho ?? string.Empty;
+            _spaceTightEcho = spaceTightEcho ?? string.Empty;
             _destinationEchoFactory = destinationEchoFactory;
 
             ApplySpecialExtractionEcho();
+            ApplySpaceTightEcho();
             ApplySeed(seed ?? OneClickRunOptions.FromSettings(_settings));
 
             _initializing = false;
@@ -198,6 +210,24 @@ namespace ArchiveFixer.Views
             SpecialText.Visibility = string.IsNullOrWhiteSpace(_specialExtractionEcho)
                 ? Visibility.Collapsed
                 : Visibility.Visible;
+        }
+
+        /// <summary>
+        /// 「空间不足」模式那条红字（用户 2026-09-27）：与「特定解压」同一套做法 ——
+        /// 它是①页那个勾的状态（**事实**），不随本窗口里的折叠区选择变化，构造时刷一次就够。
+        /// </summary>
+        private void ApplySpaceTightEcho()
+        {
+            SpaceTightNotice.Visibility = string.IsNullOrWhiteSpace(_spaceTightEcho)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+
+        /// <summary>「空间不足」模式那条红字（空 = 整块收起）。</summary>
+        public string SpaceTightEcho
+        {
+            get => _spaceTightEcho;
+            private set => SetEcho(ref _spaceTightEcho, value, nameof(SpaceTightEcho));
         }
 
         /// <summary>
@@ -292,7 +322,8 @@ namespace ArchiveFixer.Views
                 facts?.SourceEcho,
                 facts?.NoticeEcho,
                 destinationEchoFactory,
-                facts?.SpecialExtractionEcho);
+                facts?.SpecialExtractionEcho,
+                facts?.SpaceTightEcho);
 
             Window? owner = Application.Current?.MainWindow;
 
@@ -306,7 +337,6 @@ namespace ArchiveFixer.Views
             }
 
             bool? result = window.ShowDialog();
-
             return result == true && window.IsConfirmed
                 ? OneClickOptionsPrompt.Confirmed(window.ReadResult())
                 : OneClickOptionsPrompt.Cancelled();

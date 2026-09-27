@@ -848,6 +848,31 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// **空间体检**那一个警告框（用户 2026-09-27："还可以弄一个弹窗，因为这个比较危险"）。
+        ///
+        /// <para>与 <see cref="ShowWarning(string)"/> 的区别只有一个，但很关键：正文之外还给一块
+        /// <b>Detail</b>（等宽、可滚动、可复制）逐条列出"哪些包放不下、各差多少" ——
+        /// 那些名字与数字塞进正文会把框撑高到看不完，而它们正是用户要照着清理的清单。</para>
+        ///
+        /// <para><c>virtual</c> 与其他可注入对话框同理：让测试能看见"到底弹了什么"，
+        /// 而不是只能读降级日志。无界面宿主（单元测试 / 控制台宿主）由 <see cref="ShowNotification"/>
+        /// 自己降级成一条记录 —— 不弹窗、不死等。</para>
+        /// </summary>
+        public virtual void ShowSpaceShortageWarning(string message, string detail)
+        {
+            ShowNotification(
+                new AppDialogRequest
+                {
+                    Title = "空间不足",
+                    Message = message,
+                    Detail = detail ?? string.Empty,
+                    Icon = AppDialogIcon.Warning,
+                    Buttons = AppDialogButtons.Ok
+                },
+                "ShowSpaceShortageWarning");
+        }
+
+        /// <summary>
         /// 错误提示。
         ///
         /// <para><c>virtual</c> 与 <see cref="ShowConfirm(string, string, bool, string, out bool)"/> 同理：

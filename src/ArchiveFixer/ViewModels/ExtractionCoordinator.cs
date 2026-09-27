@@ -450,6 +450,22 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private string _restHandlingThisBatch = RestHandlingModes.Keep;
 
+        /// <summary>
+        /// 本批是不是按**「空间不足」模式**跑（批首定一次；用户 2026-09-27 拍板的模式）。
+        ///
+        /// <para>它是一个**运行期**开关（<see cref="MainViewModel.SpaceTightMode"/>，⛔ 不写设置、不记忆），
+        /// 但一经开跑就**钉死在这一批上**：同一批里不许"前半段边解边删源包、后半段又不删了" ——
+        /// 那会让空间账面与用户看到的行为前后矛盾。批首定一次、批内只读它。</para>
+        ///
+        /// <para>它一共改四件事（每一件都写在下面对应位置的注释里）：
+        /// ① 并发档（忽略设置里的档与「全速」，按 <c>ExtractionScheduler.ResolveSpaceTightParallelCount</c>）；
+        /// ② 排序（按净占用从小到大，先解"解完占地最少"的）；
+        /// ③ 源包处理（✅ 定稿 + 校验通过 → **当场永久删除源包**，不进其余物）；
+        /// ④ 删除操作（其余物 = 过程物，任务成功后彻底删除）。
+        /// ⛔ 它**不动**任何设置：用户设置里的三档在这次运行里一个字节都不会被改写。</para>
+        /// </summary>
+        private bool _spaceTightThisBatch;
+
         /// <summary>逐任务的运行期记账（并发下多个任务同时写，所以全部走锁）。</summary>
         private sealed class ScheduledTaskRuntime
         {
@@ -1390,6 +1406,29 @@ namespace ArchiveFixer.ViewModels
                     logEntries.Add(("INFO", $"{task.FileName}：内层包，源文件属于其余物里的过程物，已跳过源包处理。"));
                 }
             }
+            else if (_spaceTightThisBatch)
+            {
+                /*
+                 * 「空间不足」模式：**当场删源包**（用户 2026-09-27 拍板："源包在那一层定稿 + 校验通过后
+                 * 立即删除，最快回收空间"）。
+                 *
+                 * 为什么不走「搬进其余物」那一条：其余物就在成品目录里（同一块盘），
+                 * 搬过去是**同盘移动**，一个字节都不会回到可用空间里 —— 那就等于这个模式什么都没省。
+                 * 所以这一档的语义是"定稿 + 校验通过即永久删除源包"，删完账本当场刷新，
+                 * 后面的包才有空间跑（这正是这个模式存在的全部理由）。
+                 *
+                 * 门槛**不比搬运那一档少**（`SourceCleanupService` 里那五条一个都不放松）：
+                 * 定稿成功（commit）+ 输出校验通过（verification）+ 未取消（调用方刚查过令牌）
+                 * + 清单只来自任务自身 + 不扫目录 / 不递归 / 不删目录。
+                 * 一键处理里**内层包**在上一分支就被排除了（它的"源文件"是我们自己产出的过程物）。
+                 *
+                 * ⚠ 一处刻意的差别（要如实知道）：**第一层只出过程物**时（典型：挖出内层包、
+                 * 内容物由续解产出），搬运那一档会"留到链尾补搬"，而这里**当场就删** ——
+                 * 用户要的就是最快回收。安全性来自同一个事实：这一刻内层包已经完整落在其余物里，
+                 * 续解从头到尾都不需要再碰源包（它已经一个字节都用不上了）。
+                 */
+                sourceMoveFailure = PurgeSourcePackageForSpaceTight(task, verification, commit, logEntries);
+            }
             else if (sourceHandling == SourceHandlingMode.MoveToRest)
             {
                 sourceMove = MoveSourcePackageIntoRest(
@@ -1520,6 +1559,106 @@ namespace ArchiveFixer.ViewModels
 
             return ExecuteSourcePackageMove(task, artifactRoot, SourceMoveTrigger.DirectInRound, logEntries);
         }
+
+        /// <summary>
+        /// 「空间不足」模式的**唯一回收动作**：这一轮定稿 + 校验通过之后，立刻永久删除本任务的整组源包。
+        ///
+        /// <para><b>为什么必须在"这一刻"删</b>：这个模式能成立的前提是"盘上的字节真的变少了"。
+        /// 其余物式的搬运是同盘移动（净占用不变），链尾统一处理又要等到整条续解链跑完 ——
+        /// 而链没跑完时后面的包已经因为空间不足被拦下了。所以这里选**最快回收**的那一刻：
+        /// 内容物已定稿（<paramref name="verification"/> 通过）就删。</para>
+        ///
+        /// <para><b>门槛比搬运那一档只多不少</b>（判据全在 <see cref="SourceCleanupService"/> 里，这里只喂事实）：</para>
+        /// <list type="number">
+        /// <item><description>内容物**已定稿**（<paramref name="commit"/>.Attempted 且没有搬运失败）；</description></item>
+        /// <item><description>输出校验通过（<paramref name="verification"/>，本方法开头先查一次，没通过直接返回、一个字节都不动）；</description></item>
+        /// <item><description>调用方已经查过"未取消"（<c>PostProcessSuccessAsync</c> 在动源包之前单独再查一次令牌）；</description></item>
+        /// <item><description>要删的清单**只来自任务自身**（分卷组 = 整组各卷，单文件 = 它自己）；</description></item>
+        /// <item><description>**不扫目录、不递归、不删目录**；</description></item>
+        /// <item><description>单个文件删不掉（占用 / 只读 / 权限）只记失败并继续，绝不影响内容物的结论。</description></item>
+        /// </list>
+        ///
+        /// <para>删成功（或本来就没什么可删的）之后把 <see cref="ArchiveTask.SourcePackageMove"/> 落成
+        /// <see cref="SourcePackageMoveState.Done"/>：链尾那次"补搬"因此会跳过它 ——
+        /// ⛔ 同一个源包绝不允许既被删又被搬（那会凭空报一堆"源包不存在"的假失败）。</para>
+        /// </summary>
+        /// <returns>失败时返回一句"内容物已好、源包没删掉"的说明（调用方据此标「部分完成」）；正常返回 null。</returns>
+        private string? PurgeSourcePackageForSpaceTight(
+            ArchiveTask task,
+            OutputVerificationResult verification,
+            StageCommitResult commit,
+            List<(string Level, string Message)> logEntries)
+        {
+            if (task == null)
+            {
+                return null;
+            }
+
+            if (commit == null || !commit.Attempted || commit.FailedCount > 0)
+            {
+                // 定稿没发生 / 有搬运失败 → 与搬运那一档同一条红线：源包一个字节都不动。
+                logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，源包留在原地（空间不足模式也不删）。"));
+                return null;
+            }
+
+            if (verification == null || !verification.Verified)
+            {
+                // 校验没过就没有"这一层已经定稿"这回事 —— 源包一律不动（与 D-11 同一条红线）。
+                logEntries.Add(("WARN", $"{task.FileName}：输出校验未通过，源包留在原地（空间不足模式也不删）。"));
+                return null;
+            }
+
+            if (task.SourcePackageMove == SourcePackageMoveState.Done)
+            {
+                // 幂等：已经处理过了（删过 / 搬过），绝不第二次。
+                logEntries.Add(("INFO", $"{task.FileName}：源包已经处理过（删过或搬过），不再动第二次。"));
+                return null;
+            }
+
+            SourceCleanupResult cleanup = SourcePackageCleanup.CleanupVerified(
+                task,
+                verified: true,
+                verificationNote: "空间不足模式：内容物已定稿，校验通过",
+                enabled: true);
+
+            if (cleanup.DeletedFiles.Count == 0 && cleanup.FailedFiles.Count == 0)
+            {
+                // 没有可删的路径（分卷清单不完整）→ 如实说，不假装删过了。
+                logEntries.Add(("WARN", $"{task.FileName}：空间不足模式要删源包，但任务的源包清单是空的 —— {cleanup.Message}"));
+                return null;
+            }
+
+            if (cleanup.FailedFiles.Count > 0)
+            {
+                logEntries.Add((
+                    "ERROR",
+                    $"{task.FileName}：空间不足模式删除源包有 {cleanup.FailedFiles.Count} 个失败"
+                    + $"（{string.Join("、", cleanup.FailedFiles.Take(3).Select(path => Path.GetFileName(path)))}）—— 源包仍在原处。"));
+
+                return "空间不足模式：内容物已好，但源包没能全部删除（" + cleanup.Message + "）；源包仍在原处，内容物不受影响";
+            }
+
+            task.SourcePackageMove = SourcePackageMoveState.Done;
+
+            logEntries.Add((
+                "INFO",
+                $"{task.FileName}：空间不足模式 —— 定稿 + 校验通过，已立刻永久删除源包 "
+                + $"{cleanup.DeletedFiles.Count} 个，收回 {WorkspaceCleanupService.FormatSize(cleanup.FreedBytes)}"
+                + "（不进回收站、不可恢复；这份空间马上给后面的包用）。"));
+
+            return null;
+        }
+
+        /// <summary>
+        /// 删源包的执行体（<see cref="SourceCleanupService"/> 的实例持有者）。
+        ///
+        /// <para>可注入只为一件事：单测要能断言"该不删时一次都没被调用"（记账式假文件系统）。
+        /// 产品代码永远走真实的 <see cref="FileSystemSourceDeleteFileSystem"/>。</para>
+        /// </summary>
+        internal ISourceDeleteFileSystem SourcePackageDeleteFileSystem { get; set; } =
+            FileSystemSourceDeleteFileSystem.Instance;
+
+        private SourceCleanupService SourcePackageCleanup => new(SourcePackageDeleteFileSystem);
 
         /// <summary>
         /// 源包搬运的**触发点**：两条路径共用同一个执行体，但日志必须能分清是哪一次搬的
@@ -4789,6 +4928,31 @@ namespace ArchiveFixer.ViewModels
             return Math.Clamp(Settings.MaxParallelExtractCount, 1, MaxParallelExtractCountCeiling);
         }
 
+        /// <summary>
+        /// 「空间不足」模式下**本批开几个**（用户 2026-09-27 拍板：忽略设置里的并发档与「全速」）。
+        ///
+        /// <para>判据全部在 <see cref="ExtractionScheduler.ResolveSpaceTightParallelCount"/> 里
+        /// （"很多个体积相近的小包"→5，其余→3；再与"按空间算得出的建议并行数"取小）。
+        /// 这里只做两件事：把那个数夹进"不超过任务数"，以及把**为什么是这个数**写进日志 ——
+        /// 空间不足模式下用户最需要知道的正是"你凭什么只开 3 个"。</para>
+        /// </summary>
+        private int ResolveSpaceTightParallelForBatch(ExtractionSchedulePlan plan)
+        {
+            int count = ExtractionScheduler.ResolveSpaceTightParallelCount(
+                plan.Ordered,
+                plan.BudgetBytes,
+                plan.RecommendedParallelCount,
+                out string basis);
+
+            count = Math.Clamp(count, 1, Math.Max(1, plan.Ordered.Count));
+
+            AppendLog(
+                "WARN",
+                $"「空间不足」模式：本批同时最多跑 {count} 个（忽略「最大并发解压数」与「全速」，不写设置）。{basis}。");
+
+            return count;
+        }
+
         /// <summary>并发上限的硬顶（与设置界面的 1–8 一致；这里只做兜底夹取）。</summary>
         private const int MaxParallelExtractCountCeiling = 8;
 
@@ -5039,6 +5203,21 @@ namespace ArchiveFixer.ViewModels
              */
             SpecialExtractionPlan specialExtraction = SpecialExtractionPlan.FromSettings(Settings);
 
+            /*
+             * 「空间不足」模式：**动手前就把话说清**（用户 2026-09-27 要求确认框里有一条红字）——
+             * 这个模式会覆盖上面那两档，而且会永久删除源包，属于"必须在点开始之前看见"的事。
+             *
+             * ⚠ 正文那两行也换成**覆盖后**的值：只加一条红字、却让"源包：留在原地"那一行照旧显示
+             * 设置里的值，等于让用户在同一个框里读到两句互相矛盾的话。
+             */
+            bool spaceTight = _vm.SpaceTightMode;
+
+            if (spaceTight)
+            {
+                sourceHandling = SourceHandlingMode.MoveToRest;
+                restHandling = RestHandlingModes.Delete;
+            }
+
             return new OneClickConfirmFacts
             {
                 DestinationEcho = destination,
@@ -5050,6 +5229,7 @@ namespace ArchiveFixer.ViewModels
                 },
                 SourceEcho = StatusText.OneClickConfirmSourceLabel
                     + OneClickRunOptions.DescribeSourceHandling(sourceHandling),
+                SpaceTightEcho = spaceTight ? StatusText.SpaceTightConfirmText : string.Empty,
                 SpecialExtractionEcho = specialExtraction.IsActive
                     ? StatusText.SpecialExtractionConfirmLabel + specialExtraction.RuleNames
                     : string.Empty,
@@ -6566,7 +6746,27 @@ namespace ArchiveFixer.ViewModels
                  */
                 ApplyBatchWorkspaceRoot(selectedTasks);
 
+                /*
+                 * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
+                 * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
+                 */
+                _spaceTightThisBatch = _vm.SpaceTightMode;
+
                 int maxParallel = ResolveMaxParallel(selectedTasks, out bool fullSpeed);
+
+                if (_spaceTightThisBatch && fullSpeed)
+                {
+                    /*
+                     * 「全速」在这个模式下**不生效**（用户原话："忽略全速和并发档"）。
+                     * 说清原因再关掉它：否则日志里"已开全速"与"同时最多跑 3 个"会自相矛盾。
+                     */
+                    AppendLog(
+                        "WARN",
+                        "「空间不足」模式已开：本批忽略「全速」与②页的「最大并发解压数」，"
+                        + "改由空间自己决定并发（只影响这一批，设置里的勾一个字节都没改）。");
+
+                    fullSpeed = false;
+                }
 
                 /*
                  * ===== 空间规划 + 空间门（用户 2026-09-22 需求第 1 / 2 条）=====
@@ -6580,7 +6780,16 @@ namespace ArchiveFixer.ViewModels
                  * ⚠ 排序只影响**执行顺序**，不动任务列表本身：用户在列表里看到的顺序、
                  * 任务的 Index 都不变（改列表顺序会让"我刚才是第 3 个"这种对照失效）。
                  */
-                ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, maxParallel);
+                ExtractionSchedulePlan plan = BuildSchedulePlan(selectedTasks, maxParallel, _spaceTightThisBatch);
+
+                if (_spaceTightThisBatch)
+                {
+                    /*
+                     * 并发档在**计划之后**定（它要读计划里的净占用与空间建议）——
+                     * 顺序与普通档相反，因为普通档读的是设置、这里读的是刚刚算出来的空间。
+                     */
+                    maxParallel = ResolveSpaceTightParallelForBatch(plan);
+                }
 
                 PrepareRestHandlingForBatch();
 
@@ -6669,8 +6878,11 @@ namespace ArchiveFixer.ViewModels
                         /*
                          * 中途勾上「全速」→ **立刻放开**（用户问的正是"是要暂停下来开还是直接开"：直接开）。
                          * 这里重读一次那个开关（它是 MainViewModel 上的本次运行开关，不是落盘设置）。
+                         *
+                         * ⚠ 「空间不足」模式下这一条**不生效**（用户 2026-09-27："忽略全速和并发档"）：
+                         * 那个模式的并发数是按空间算出来的，中途放开等于把"别把盘写满"这条自己拆掉。
                          */
-                        if (!fullSpeed && _vm.RunAtFullSpeed)
+                        if (!_spaceTightThisBatch && !fullSpeed && _vm.RunAtFullSpeed)
                         {
                             fullSpeed = true;
                             maxParallel = Math.Max(1, plan.Ordered.Count);
@@ -6867,6 +7079,16 @@ namespace ArchiveFixer.ViewModels
                  * 下一批开工时 `PrepareRestHandlingForBatch()` 会重新按当时的设置写一次，
                  * 所以留着的值只服务于"这一批自己的链尾"，不会影响任何后续批次。
                  */
+
+                /*
+                 * 「空间不足」模式**与上面那个字段相反：批尾必须清掉**。
+                 *
+                 * 理由：它读的是①页那个运行期勾（<see cref="MainViewModel.SpaceTightMode"/>），
+                 * 而用户随时可能把它关掉 —— 留着 true 会让**批尾之后**的代码（链尾补搬、
+                 * 单包重试、界面上的空间建议）继续按"删源包"那一套思考。
+                 * 下一批开工时会重新 `= _vm.SpaceTightMode`，所以清掉不会丢任何东西。
+                 */
+                _spaceTightThisBatch = false;
 
                 UpdateSummary();
             }
@@ -7222,9 +7444,22 @@ namespace ArchiveFixer.ViewModels
         /// 为了排序去把每个包的目录都列一遍，等于在"还没开始解"之前先跑一遍整批。
         /// 真正的精确值在解压前的预检里算（那时本来就要列目录），并会在开工后调整预留。</para>
         /// </summary>
-        private ExtractionSchedulePlan BuildSchedulePlan(IReadOnlyList<ArchiveTask> tasks, int requestedParallel)
+        private ExtractionSchedulePlan BuildSchedulePlan(
+            IReadOnlyList<ArchiveTask> tasks,
+            int requestedParallel,
+            bool spaceTightOrdering = false)
         {
             _spaceProbePath = ResolveSpaceProbePath(tasks);
+
+            /*
+             * 排序键（空间不足模式）：**净占用** = 解完之后真正留在盘上的字节数（= 内容物）。
+             * 那个模式下源包与过程物都会被删掉，所以"峰值"里那一大截是**会回来的** ——
+             * 先解净占用小的，盘上越跑越宽；按峰值排则会先啃大包，把盘一次吃满。
+             * ⚠ 只改顺序：放行判断照旧按峰值（见 ExtractionScheduler.Build 的参数说明）。
+             */
+            Func<ScheduledExtractionItem, long>? sortKey = spaceTightOrdering
+                ? item => item.Estimate.NetOccupancyBytes
+                : null;
 
             return ExtractionScheduler.Build(
                 tasks,
@@ -7232,7 +7467,9 @@ namespace ArchiveFixer.ViewModels
                     .WithVolumeLayout(ResolveWorkspaceVolumeShare(ResolveSpaceProbePathOrBatch(task))),
                 ProbeAvailableSpace(_spaceProbePath),
                 ReserveSpaceBytes,
-                requestedParallel);
+                requestedParallel,
+                sortKey,
+                spaceTightOrdering ? ExtractionSchedulePlan.NetOccupancyOrderBasis : null);
         }
 
         /// <summary>
@@ -7430,14 +7667,16 @@ namespace ArchiveFixer.ViewModels
             AppendLog(
                 "WARN",
                 "处理办法：清理「其余物」腾空间 / 换一个空间更大的输出盘 / "
-                + "把「最大并发解压数」调小，或在通过自测后改用危险模式（边解边彻底删其余物）。");
+                + "开①页那个「空间不足」模式（边解边删源包，每解完一个就收回一份空间；"
+                + "⚠ 它会永久删除源包，只对这一次运行有效、不写设置）。"
+                + (_spaceTightThisBatch ? "本批已经开着那个模式了 —— 那说明连它也不够：请换盘或先清理。" : string.Empty));
         }
 
         /// <summary>
-        /// 跑一个任务：解压 → （危险模式）立刻彻底删其余物 → 释放预留 + 刷新可用空间。
+        /// 跑一个任务：解压 → （空间不足模式下当场删源包）→ 其余物按档处理 → 释放预留 + 刷新可用空间。
         ///
         /// <para>⚠ 顺序是刻意的：删除发生在**任务收尾之后、释放预留之前**。
-        /// 这样"危险模式回收回来的空间"会出现在下一个任务的空间门判断里（这正是它能解决空间不够的原因），
+        /// 这样"删源包回收回来的空间"会出现在下一个任务的空间门判断里（这正是那个模式能解决空间不够的原因），
         /// 而账本上的预留仍然按"这些字节还在盘上"来算，绝不会提前把它许给别的任务。</para>
         /// </summary>
         private async Task RunScheduledTaskAsync(ArchiveTask task, bool oneClickRun, ScheduledTaskRuntime runtime)
@@ -7621,9 +7860,38 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void PrepareRestHandlingForBatch()
         {
+            /*
+             * ⚠ 「空间不足」模式**覆盖**这一档（用户 2026-09-27 拍板的口径：
+             * 源包 → 放入其余物 + 其余物 → 彻底删除，运行期自动覆盖、⛔ 不写设置）。
+             *
+             * 注意覆盖的**不是**"是否删源包"那件事 —— 源包在这个模式下的命运在
+             * PostProcessSuccessAsync 里已经定了（定稿 + 校验通过 → 当场删）。
+             * 这一档管的是**过程物**（内层包、暂存残渣）：它们仍然按链尾统一处理，
+             * 所以这里给它落到"彻底删除"。
+             */
+            if (_spaceTightThisBatch)
+            {
+                _restHandlingThisBatch = RestHandlingModes.Delete;
+                return;
+            }
+
             _restHandlingThisBatch = RunOptions != null
                 ? RestHandlingModes.Normalize(RunOptions.RestHandling)
                 : RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
+        }
+
+        /// <summary>
+        /// 本批「其余物」的范围那一句话（口径的唯一来源）。
+        ///
+        /// <para>「空间不足」模式必须**另说一句**：那种模式下源包根本不进其余物（校验通过即删），
+        /// 照普通档说"源包 + 过程物"会让用户以为源包还在其余物里躺着 ——
+        /// 而他会去找一个根本不存在的东西（2026-09-27 真机上正是这类自相矛盾的日志挨了骂）。</para>
+        /// </summary>
+        private string DescribeRestScopeForBatch()
+        {
+            return _spaceTightThisBatch
+                ? "过程物（源包在本模式下不进其余物：定稿 + 校验通过后立刻永久删除）"
+                : DescribeRestScope(EffectiveSourceHandling);
         }
 
         /// <summary>
@@ -7639,7 +7907,21 @@ namespace ArchiveFixer.ViewModels
              * 这条却写"彻底删除（源包 + 过程物）"，两句自相矛盾）。判据来自 `EffectiveSourceHandling`，
              * ⛔ 不许在这里另读一遍设置。
              */
-            string scope = DescribeRestScope(EffectiveSourceHandling);
+            string scope = DescribeRestScopeForBatch();
+
+            if (_spaceTightThisBatch)
+            {
+                /*
+                 * 这一批的"为什么这么办"写在最前面（用户 2026-09-26 教训：同一份日志里两句话自相矛盾
+                 * 比少写一句更糟）。它必须同时说清三件事：覆盖了什么、**没写设置**、什么时候删源包。
+                 */
+                AppendLog(
+                    "WARN",
+                    "「空间不足」模式（本次运行，不写设置）：本批忽略「最大并发解压数」与「全速」，"
+                    + "按空间自己定并发；每个包定稿 + 校验通过后立刻永久删除它的源包"
+                    + "（不进回收站、不可恢复），收回的空间马上给后面的包用。"
+                    + "失败 / 部分完成 / 取消的任务一个字节都不删。");
+            }
 
             if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
             {

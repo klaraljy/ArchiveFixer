@@ -25,6 +25,21 @@
                 谁把弹窗那几行复制回这一页，这两样都要一起改对。
             -->
 
+            <!--
+                ①页那个「空间不足」开关开着时的**覆盖提示**（用户 2026-09-27）：
+                这一页正是他核对"源包怎么处理、其余物怎么删"的地方 —— 只写在①页等于没写，
+                他翻到这里看到的仍是设置里的黑点，就会读成"程序没按我看到的跑"。
+                关着时整行收起（判据是 HasSpaceTightOverride，与文本同时通知）。
+            -->
+            <Border Style="{StaticResource WarningBannerStyle}"
+                    Margin="0,0,0,8"
+                    Visibility="{Binding HasSpaceTightOverride, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock Text="{Binding SpaceTightOverrideText}"
+                           Style="{StaticResource BannerTextStyle}"
+                           Foreground="{StaticResource DangerTextBrush}"
+                           TextWrapping="Wrap" />
+            </Border>
+
             <!-- ==================== 1 源包操作 ==================== -->
             <GroupBox Header="1 源包操作（解完之后拿源包怎么办）">
                 <StackPanel>
