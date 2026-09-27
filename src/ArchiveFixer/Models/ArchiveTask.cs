@@ -461,9 +461,28 @@ namespace ArchiveFixer.Models
             {
                 string text = Status;
 
-                if (HasLiveProgress)
+                /*
+                 * 百分比什么时候显示（用户 2026-09-27 真机："上面怎么都显示解压成功 99%，
+                 * 连一个 100% 的都没有"）：
+                 *
+                 * · 正在跑（HasLiveProgress）→ 显示实时百分比；
+                 * · **已经成功** → 一律显示 100%。
+                 *   为什么成功这一档要**写死 100**、而不是读存下来的百分比：
+                 *   ① 引擎报的最后一帧常常只到 99（`Everything is Ok` 之前那一次）；
+                 *   ② 收尾有好几条路（MarkSuccess / 定稿收尾 / 各分支早退），其中有的会
+                 *      `ClearProgress()` 把百分比清成 -1 —— 读字段就会一会儿 99、一会儿没有。
+                 *   成功的判据是**机器终态**（Outcome），不是那个瞬时字段，所以这里按终态说话。
+                 *
+                 * ⛔ 失败 / 部分完成 / 取消**不显示**百分比：配上 100% 会自相矛盾
+                 *   （"解压失败 100%"读起来像成功了，正是不变量 6 最忌讳的那种形态）。
+                 */
+                int? percent = HasLiveProgress
+                    ? _progressPercent
+                    : Outcome == TaskOutcome.Succeeded ? 100 : null;
+
+                if (percent.HasValue)
                 {
-                    text += $" {_progressPercent}%";
+                    text += $" {percent.Value}%";
                 }
 
                 if (HasResponsivenessHint)

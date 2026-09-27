@@ -291,13 +291,21 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   （`MainViewModel.SpaceTightMode`，⛔ 不写设置、不记忆），批首钉死、批尾清掉。
   一个布尔管四件事（判据全在 `ExtractionCoordinator._spaceTightThisBatch`）：
   并发由 `ExtractionScheduler.ResolveSpaceTightParallelCount` 定（体积相近的小包 5 / 其余 3，
-  与空间建议取小、绝不取 0）、排序按 `TaskSpaceEstimate.NetOccupancyBytes`（**只改顺序，放行仍按峰值**）、
+  与空间建议取小、绝不取 0；**再与用户的「最大并发解压数」取小** —— 2026-09-27 追加：
+  模式上限与「全速」照旧不生效，但**允许用户把并发压得更低**，慢盘上少开几个反而更快也更不卡）、
+  排序按 `TaskSpaceEstimate.NetOccupancyBytes`（**只改顺序，放行仍按峰值**）、
   `PrepareRestHandlingForBatch` 强制 `Delete`、源包在定稿 + 校验通过时由
   `PurgeSourcePackageForSpaceTight` **当场永久删除**（执行体 = `Extraction.SourceCleanupService`，
   它在管线上的**唯一**调用点就是这里）。
   动手前必须看得见：确认框红字 `StatusText.SpaceTightConfirmText`（正文两行同时换成覆盖后的值）+
   ②③页橙色提示 `StatusText.SpaceTightOverrideNotice`。
   契约在 `docs/输出与整理模型.md` §3.4.2，用例在 `SpaceTightModeTests` / `SpaceModeTests`。
+- **「进度 / 部分完成」两处显示口径**（2026-09-27 真机反馈改的）：
+  - **成功的任务显示「解压成功 100%」**：判据是**机器终态**（`Outcome == Succeeded` → 一律补 100），
+    ⛔ 不读那个瞬时百分比（引擎最后一帧常常只到 99，而且有的收尾分支会 `ClearProgress()` 清成 -1）；
+    成功收尾同时落 `EndTime`（否则"耗时"会一直往上涨）。失败 / 部分完成 / 取消**不显示**百分比。
+  - **批末汇总里「部分完成」单独一档**（以前被算进"未处理"，与一键处理汇总的说法不一致）。
+  - ①页「大小」列宽 **118**（`1112.53 MiB` 这种最长形状要能完整显示，⛔ 别再收窄）。
 - **导入后的空间体检**（2026-09-27）：**三个触发点** —— 导入完成（`ScanCoordinator.AddPathsAsync`）、
   ①页「选择…」（`MainViewModel.SelectOutputDirectory`）、②页「指定位置 → 选择…」
   （`SettingsViewModel.OutputDirectoryPicked` → MainViewModel 的回调）——

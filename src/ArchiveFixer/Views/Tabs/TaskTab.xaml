@@ -481,10 +481,16 @@
                                 就排在文件名后面，这样用户就能更好的察觉"）。
                                 值由 ArchiveTask.RefreshSourceSize 采集（任务创建 / 改名 / 重扫三条路都会刷新），
                                 读不到时显示「-」，⛔ 不显示 0 字节。
+
+                                ⚠ 宽度 118（用户 2026-09-27 第二次追加："将列表里面的表示文件大小的那列弄宽一点，
+                                这个单位都不好看清，只是这样的 312.64MiB 要全部显示出来"）：
+                                `1112.53 MiB` 这种 11 个字符的最长形状 + 右对齐那 8px 外边距 + 单元格内边距 ——
+                                之前 90 会把它截成 `312.64Mi…`。⛔ 别再收窄。
                             -->
                             <DataGridTextColumn Header="大小"
                                                 Binding="{Binding SourceSizeText}"
-                                                Width="90"
+                                                Width="118"
+                                                MinWidth="118"
                                                 IsReadOnly="True">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">

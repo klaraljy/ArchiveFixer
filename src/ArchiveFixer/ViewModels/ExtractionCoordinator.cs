@@ -1176,6 +1176,28 @@ namespace ArchiveFixer.ViewModels
                 ? TaskOutcome.Succeeded
                 : TaskOutcome.PartiallyCompleted;
 
+            /*
+             * 收尾时把进度**补到 100% 并停表**（用户 2026-09-27 真机："上面怎么都显示解压成功 99%，
+             * 连一个 100% 的都没有"）。
+             *
+             * 两个原因叠在一起：
+             * ① 引擎报的最后一帧常常是 99（`Everything is Ok` 之前的那一次），任务其实已经成功；
+             * ② 成功这条路以前**不写 EndTime**，于是 HasLiveProgress 一直为真 ——
+             *    列表里那一格永远停在"解压成功 99%"，而"耗时"还会一直往上涨（UpdateElapsedText 拿 Now 兜底）。
+             * 现在：成功的任务进度补成 100、EndTime 落定 → 那一格显示"解压成功 100%"、耗时不再变。
+             * ⛔ 只对**成功**补 100：部分完成 / 失败 / 取消保持原样，免得出现"解压失败 100%"这种自相矛盾。
+             */
+            if (task.Outcome == TaskOutcome.Succeeded)
+            {
+                task.ApplyProgress(100, null);
+            }
+
+            if (!task.EndTime.HasValue)
+            {
+                task.EndTime = DateTime.Now;
+                task.UpdateElapsedText();
+            }
+
             return true;
         }
 
@@ -4117,7 +4139,8 @@ namespace ArchiveFixer.ViewModels
             int failed = tasks.Count(task => task.Outcome == TaskOutcome.Failed);
             int skipped = tasks.Count(task => task.Outcome == TaskOutcome.Skipped);
             int cancelled = tasks.Count(task => task.Outcome == TaskOutcome.Cancelled);
-            int pending = tasks.Count - succeeded - failed - skipped - cancelled;
+            int partial = tasks.Count(task => task.Outcome == TaskOutcome.PartiallyCompleted);
+            int pending = tasks.Count - succeeded - failed - skipped - cancelled - partial;
 
             DateTime? first = tasks.Where(task => task.StartTime.HasValue).Min(task => task.StartTime);
             DateTime? last = tasks.Where(task => task.EndTime.HasValue).Max(task => task.EndTime);
@@ -4135,6 +4158,18 @@ namespace ArchiveFixer.ViewModels
             if (cancelled > 0)
             {
                 parts.Add($"取消 {cancelled}");
+            }
+
+            /*
+             * 「部分完成」单独一档（用户 2026-09-27："统一成「部分完成」可以"）。
+             *
+             * 以前它被算进 `pending`（= 总数 − 成功 − 失败 − 跳过 − 取消），于是同一件事
+             * 批末说"未处理 1"、一键处理汇总说"部分完成 1" —— 两个说法，用户对着日志看会以为
+             * 有一单压根没跑。现在两处口径一致。
+             */
+            if (partial > 0)
+            {
+                parts.Add($"部分完成 {partial}");
             }
 
             if (pending > 0)
@@ -4969,9 +5004,29 @@ namespace ArchiveFixer.ViewModels
 
             count = Math.Clamp(count, 1, Math.Max(1, plan.Ordered.Count));
 
+            /*
+             * ⚠ 用户档只用来**往下压**（用户 2026-09-27 第二次追加："反正空间是弄好了，时间就是速度和卡顿
+             * 你想怎么解决"，而这一批在 USB 外置盘上 3 个并发把磁头抢满了、界面也卡）。
+             *
+             * 口径：模式自己的上限（5 / 3）与「全速」照旧不生效，但**用户的并发档允许更低** ——
+             * 慢盘上 1~2 个并发不但不卡，总时间常常还更短（磁头不用来回抢）。
+             * ⛔ 只取小、绝不取大：拿用户档把并发**抬高**到模式上限之上是不允许的（那就把这个模式的意义拆掉了）。
+             */
+            int userCap = Math.Clamp(Settings.MaxParallelExtractCount, 1, MaxParallelExtractCountCeiling);
+
+            if (userCap < count)
+            {
+                AppendLog(
+                    "WARN",
+                    $"「空间不足」模式：模式自己算出最多跑 {count} 个，但②页的「最大并发解压数」是 {userCap} —— "
+                    + $"按更保守的 {userCap} 个跑（慢盘上并发少反而更快、也更不卡）。");
+
+                count = userCap;
+            }
+
             AppendLog(
                 "WARN",
-                $"「空间不足」模式：本批同时最多跑 {count} 个（忽略「最大并发解压数」与「全速」，不写设置）。{basis}。");
+                $"「空间不足」模式：本批同时最多跑 {count} 个（忽略「全速」，不写设置）。{basis}。");
 
             return count;
         }
@@ -6802,13 +6857,14 @@ namespace ArchiveFixer.ViewModels
                 if (_spaceTightThisBatch && fullSpeed)
                 {
                     /*
-                     * 「全速」在这个模式下**不生效**（用户原话："忽略全速和并发档"）。
+                     * 「全速」在这个模式下**不生效**（用户原话："忽略全速和并发档"；
+                     * 2026-09-27 追加：并发档改成"只许往下压"，见 ResolveSpaceTightParallelForBatch）。
                      * 说清原因再关掉它：否则日志里"已开全速"与"同时最多跑 3 个"会自相矛盾。
                      */
                     AppendLog(
                         "WARN",
-                        "「空间不足」模式已开：本批忽略「全速」与②页的「最大并发解压数」，"
-                        + "改由空间自己决定并发（只影响这一批，设置里的勾一个字节都没改）。");
+                        "「空间不足」模式已开：本批「全速」不生效，并发由空间自己定"
+                        + "（若②页的「最大并发解压数」比它更低，就按更低的跑；设置里的值一个字节都没改）。");
 
                     fullSpeed = false;
                 }
@@ -8103,8 +8159,8 @@ namespace ArchiveFixer.ViewModels
                  */
                 AppendLog(
                     "WARN",
-                    "「空间不足」模式（本次运行，不写设置）：本批忽略「最大并发解压数」与「全速」，"
-                    + "按空间自己定并发；"
+                    "「空间不足」模式（本次运行，不写设置）：本批忽略「全速」，并发由空间自己定"
+                    + "（你要是把②页的「最大并发解压数」调得更低，就按更低的那个跑 —— 慢盘上少开几个反而更快）；"
                     + (_spaceTightKeepSourceThisBatch
                         ? "「不删原包」也开着 —— 源包一个字节都不动（不搬、不删），"
                           + "只把过程物在任务成功后彻底删掉。⚠ 这一档不回收源包那份空间，需要的余量更大。"

@@ -705,7 +705,165 @@ namespace ArchiveFixer.Tests
                 x => x.Message.Contains("每 5 秒侦察一次", StringComparison.Ordinal));
         }
 
+        // ================================================================ ⑦ 收尾显示与并发（2026-09-27 真机反馈的三条）
+
+        /// <summary>
+        /// 成功的任务要显示「解压成功 **100%**」，不是 99%（用户真机："上面怎么都显示解压成功 99%，
+        /// 连一个 100% 的都没有"）。
+        ///
+        /// <para>两个原因：① 引擎最后一帧常常只报到 99；② 成功这条路以前不写 <c>EndTime</c>，
+        /// 于是"实时进度"永远为真 —— 列表那一格永远停在 99%，"耗时"还会一直往上涨。</para>
+        /// </summary>
+        [Fact]
+        public async Task 成功之后_进度补到100且耗时停表()
+        {
+            Harness harness = CreateHarness();
+            string source = harness.CreateSource("pack.7z");
+            ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
+
+            harness.Engine.SetProducts(("payload-00000.bin", 8));
+
+            // 让引擎最后只报到 99（真机上 7-Zip 的最后一帧就是这样）。
+            harness.Engine.OnExtract = _ => task.ApplyProgress(99, "payload-00000.bin");
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+            Assert.True(task.EndTime.HasValue, "成功也要落 EndTime —— 否则耗时永远在涨");
+            Assert.Contains("100%", task.StatusDisplayText, StringComparison.Ordinal);
+            Assert.DoesNotContain("99%", task.StatusDisplayText, StringComparison.Ordinal);
+
+            // 耗时定格：再等一会儿也不许变（EndTime 有值 → UpdateElapsedText 不再拿 Now 兜底）。
+            string frozen = task.ElapsedText;
+            await Task.Delay(60);
+            task.UpdateElapsedText();
+            Assert.Equal(frozen, task.ElapsedText);
+        }
+
+        /// <summary>反例：失败 / 部分完成的任务**不许**显示百分比（"解压失败 100%"读起来像成功了）。</summary>
+        [Fact]
+        public async Task 失败与部分完成_不显示百分比()
+        {
+            Harness harness = CreateHarness();
+
+            string source = harness.CreateSource("pack.7z");
+            ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
+
+            harness.Engine.SetProducts(("payload-00000.bin", 8));
+            harness.Engine.OnExtract = _ => task.ApplyProgress(100, null);
+            harness.Engine.ExtractFailure = new ArchiveOperationResult
+            {
+                Success = false,
+                Status = StatusText.Corrupted,
+                Message = "文件损坏",
+                DetectedErrorType = "Corrupted"
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.NotEqual(TaskOutcome.Succeeded, task.Outcome);
+            Assert.DoesNotContain("%", task.StatusDisplayText, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 批末汇总要**单独报「部分完成」**（用户 2026-09-27："统一成「部分完成」可以"）：
+        /// 以前它被算进"未处理" —— 同一件事批末一个说法、一键处理汇总另一个说法。
+        /// </summary>
+        [Fact]
+        public async Task 批末汇总_部分完成单独一档_不再算进未处理()
+        {
+            Harness harness = CreateHarness(settings =>
+            {
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
+
+            string source = harness.CreateSource("pack.7z");
+            ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
+
+            harness.Engine.SetProducts(("payload-00000.bin", 8));
+
+            // 空间不足（删除档）+ 让"删源包"必失败 → 内容物已好、源包没删掉 = 部分完成。
+            harness.Vm.SpaceTightMode = true;
+            harness.Coordinator.SourcePackageDeleteFileSystem = new FailingDeleteFileSystem();
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
+
+            string summary = Assert.Single(
+                harness.Log.Logs,
+                x => x.Message.Contains("本批汇总：", StringComparison.Ordinal)).Message;
+
+            Assert.Contains("部分完成 1", summary, StringComparison.Ordinal);
+            Assert.DoesNotContain("未处理", summary, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 「空间不足」模式的并发：模式自己的上限（5/3）与「全速」照旧不生效，
+        /// 但**用户把并发档调得更低时要照办**（用户 2026-09-27："时间就是速度和卡顿你想怎么解决" ——
+        /// 慢盘上少开几个反而更快、也不那么卡）。⛔ 只许往下压，绝不许拿用户档把并发抬高。
+        /// </summary>
+        [Fact]
+        public async Task 空间不足模式_用户并发档更低时按更低的跑()
+        {
+            Harness harness = CreateHarness(settings =>
+            {
+                settings.MaxParallelExtractCount = 1;
+                settings.RunAtFullSpeed = true;   // 全速仍然不生效：模式自己决定，但下限来自用户档
+            });
+
+            // 造 6 个体积相近的小包（"很多个小包"那一档的形状），直接写进一个专门的目录。
+            string folder = Path.Combine(_root, "src", "many");
+            Directory.CreateDirectory(folder);
+
+            for (int index = 1; index <= 6; index++)
+            {
+                File.WriteAllText(
+                    Path.Combine(folder, $"pack{index}.7z"),
+                    new string('x', 4096));
+            }
+
+            var scanService = new FileScanService();
+
+            List<ArchiveTask> scanned = await scanService.ScanPathsAsync(
+                new[] { folder },
+                new ScanOptions { RecursiveScan = true, ScanMode = "ScanAllFiles" });
+
+            Assert.True(scanned.Count >= 2, "前提：这一批至少要有两个任务");
+
+            foreach (ArchiveTask item in scanned)
+            {
+                item.IsSelected = true;
+                harness.Vm.Tasks.Add(item);
+            }
+
+            harness.Vm.SpaceTightMode = true;
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.True(
+                harness.Log.Logs.Any(x => x.Message.Contains("按更保守的 1 个跑", StringComparison.Ordinal)),
+                "用户并发档 = 1 时必须压到 1。实际日志：" + DescribeLogs(harness));
+
+            Assert.True(
+                harness.Log.Logs.Any(x => x.Message.Contains("本批同时最多跑 1 个", StringComparison.Ordinal)),
+                "并发结论那一行必须是 1。实际日志：" + DescribeLogs(harness));
+
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                x => x.Message.Contains("同时最多跑 3 个", StringComparison.Ordinal));
+        }
+
         // ================================================================ 装配
+
+        /// <summary>假的"删源包"执行体：每次删都抛异常（用来造「部分完成」）。</summary>
+        private sealed class FailingDeleteFileSystem : Extraction.ISourceDeleteFileSystem
+        {
+            public bool FileExists(string path) => true;
+
+            public void DeleteFile(string path) => throw new IOException("测试用的删除失败（文件被占用）");
+        }
 
         /// <summary>有界等待某条日志出现（回调是 fire-and-forget，不能同步断言）。</summary>
         private static async Task WaitForLogAsync(Harness harness, string fragment)

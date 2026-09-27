@@ -698,11 +698,18 @@ namespace ArchiveFixer.Tests
             Assert.Contains("100%", statusSeenWhileRunning[0]);
             Assert.StartsWith(StatusText.Extracting, statusSeenWhileRunning[0], StringComparison.Ordinal);
 
-            // 收尾后：任务成功，且**不得**再挂着进度（不变量 6 的反面同样成立）。
+            /*
+             * 收尾后：任务成功，实时进度字段本身仍然清干净（不变量 6 的反面同样成立：
+             * 跑完的任务不该还挂着"解压中 45%"）。
+             *
+             * ⚠ 但**显示那一格**从 2026-09-27 起会补一个「100%」（用户真机："上面怎么都显示
+             * 解压成功 99%，连一个 100% 的都没有"）—— 它读的是**机器终态**（Outcome），
+             * 不是那个瞬时百分比：引擎最后一帧常常只到 99，而且有的收尾分支会把字段清成 -1。
+             * 判据见 ArchiveTask.StatusDisplayText 的注释。
+             */
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
             Assert.Equal(ArchiveTask.NoProgress, task.ProgressPercent);
-            Assert.Equal(StatusText.ExtractSuccess, task.StatusDisplayText);
-            Assert.DoesNotContain("%", task.StatusDisplayText);
+            Assert.Equal($"{StatusText.ExtractSuccess} 100%", task.StatusDisplayText);
 
             /*
              * 进度日志：**成功的任务一条都不写**（用户 2026-09-25 第 44 条：
@@ -771,7 +778,7 @@ namespace ArchiveFixer.Tests
             // 只提示不处理：任务照常按引擎的结论收尾，提示随收尾一起清掉。
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
             Assert.False(task.HasResponsivenessHint);
-            Assert.Equal(StatusText.ExtractSuccess, task.StatusDisplayText);
+            Assert.Equal($"{StatusText.ExtractSuccess} 100%", task.StatusDisplayText);
         }
 
         [Fact]
