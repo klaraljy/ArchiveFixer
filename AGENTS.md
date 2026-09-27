@@ -256,6 +256,23 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 - **v0.1.0（第一个对外版本，2026-09-27 用户定）**：`ArchiveFixer.csproj` 的 `Version/AssemblyVersion/FileVersion`
   全部改成 **0.1.0**（旧的 11.0.0 只是开发期编号，从没发布过）；`docs/使用说明.md` / `docs/人工测试清单.md`
   里的版本号同步（`docs/需求评审与考古.md` 里那一处是**历史证据**，按 §9.4 留着）。
+- **已发布**：仓库 `https://github.com/klaraljy/ArchiveFixer`（MIT、公开、About = 那句功能简介 + 13 个 topics），
+  Release **v0.1.0** 附两个资产（本地 `dist\` 里是中文名 `ArchiveFixer-0.1.0-框架依赖.zip` 2.19 MiB / 18 项、
+  `ArchiveFixer-0.1.0-独立.zip` 70.83 MiB / 477 项；⛔ 别写成 `-独立版.zip`，README / CHANGELOG 各错过一次）：
+  - ⚠ **GitHub 会把资源名里的非 ASCII 字符直接抹掉** —— 实测 `…-独立.zip` 落到服务端变成 `…-.zip`
+    （用纯 ASCII 的百分号编码 URL 上传也一样），而 **`label` 保留中文**。所以发布件一律
+    「**ASCII 文件名 + 中文 label**」：`ArchiveFixer-0.1.0-framework-dependent.zip`（label `…-框架依赖.zip`）/
+    `ArchiveFixer-0.1.0-standalone.zip`（label `…-独立.zip`）；README / CHANGELOG 里写的就是这两个名字。
+  - 本地另留一份可直接跑的独立版 `E:\ArchiveFixer-0.1.0-独立\`（用户 2026-09-27："在本地也给我留一份，独立的"）。
+  - ⚠ 传资产**别用 `gh release upload`**：本机代理下它的 `uploads.github.com` 稳定吃 **HTTP 404**（`gh` 会顺手
+    把整个 release 回滚掉），带 `--clobber` 重试还会删掉**另一个**资产（实测把已传好的框架依赖包删了）。
+    可用做法（实跑过）：`curl.exe -X POST -H "Authorization: Bearer $(gh auth token)" -H "Content-Type: application/zip"
+    --data-binary "@<zip>" "https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=<ascii>&label=<urlencode(中文)>"`，
+    **直连**（临时清掉 `HTTP_PROXY`/`HTTPS_PROXY`，约 370 KB/s，70 MB 用 200 秒）；`api.github.com` 走代理时好时坏（偶发 `EOF` / TLS 超时）。
+- **README 截图**在 `docs/images/`（`task-tab.png` / `one-click-confirm.png` / `batch-done.png`），
+  是**用生成的示例包**（3 个几十字节的假包：`说明-N.txt` + 一张示例图）在独立版临时副本里实拍的 ——
+  ⛔ 不许把带真实路径 / 样本包名 / 作者邮箱的截图放进仓库（§8）；主界面那两张特意裁掉了标题栏
+  （标题栏里有作者邮箱），裁剪脚本 `_tmp\ArchiveFixer\crop.ps1`（裁 x10/y40/1380x850）。
 - **「说明」窗多了功能详解**（用户 2026-09-27："里面有专有名词的详细解释，但是没有功能的详细解释"）：
   `HelpContent.Features`（16 条：六个选项卡 + 一键处理 + 落点 / 冲突 / 空间三件事 + 安全 + 排障），
   与 `HelpContent.Glossary`（术语表）分两段、两个小标题显示；`BuildPlainText`（复制全部说明）两段都带。
