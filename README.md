@@ -22,6 +22,24 @@ Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联
 
 ---
 
+## 长什么样
+
+**① 导入一批包 → 自动识别**（不信后缀，只认文件头魔数 + 尾部内嵌归档）
+
+![任务页：导入后自动识别](docs/images/task-tab.png)
+
+**② 一键处理：动手之前把「落点 / 其余物 / 源包」三个决定讲清楚**（确认之后全程零弹窗）
+
+<img src="docs/images/one-click-confirm.png" width="620" alt="一键处理确认框">
+
+**③ 跑完：成功一行一条、失败全留，批末汇总**
+
+![处理完成与汇总](docs/images/batch-done.png)
+
+> 截图里是**生成的示例包**（3 个几十字节的假包，内容为 `说明-N.txt` + 一张示例图），不含任何真实数据。
+
+---
+
 ## 能做什么（一行一条）
 
 | 能力 | 一句话 | 细节 |
@@ -79,6 +97,7 @@ ArchiveFixer.slnx          解决方案
 src/ArchiveFixer/          工具本体（Domain/Detection/Engines/Password/Extraction/Security/Storage + WPF 界面）
 tests/ArchiveFixer.Tests/  xUnit 测试（与本体分开；跑不起真 7z 的用例会自己跳过）
 docs/                      使用说明 / 功能一览 / 设置项 / 需求变更 / 打包功能 / 人工测试清单 …
+docs/images/               README 用的截图（用生成的示例包拍的，不含真实数据）
 samples/                   测试样本的生成脚本 + 清单（样本本体不入库）
 scripts/                   打包与自检脚本（暂不使用）
 dist/                      发行产物（不入库）
