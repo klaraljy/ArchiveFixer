@@ -218,6 +218,11 @@ if (Test-Path -LiteralPath $publishDir) {
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 
 $publishArgs = @('publish', $projectPath, '-c', 'Release', '-o', $publishDir, '--nologo')
+
+# 发行档（用户 2026-09-27："发行版要删「不删原包」，我们本地的不用"）：
+# 它把 src\ArchiveFixer\ViewModels\MainViewModel.cs 里那个测试期专用的安全档整块关掉
+# （编译期常量 Models\BuildEdition.cs）。⛔ 本机构建 / 测试不传这个参数。
+$publishArgs += @('-p:ArchiveFixerEdition=Release')
 if ($SelfContained) {
     $publishArgs += @('-r', 'win-x64', '--self-contained', 'true')
 } else {
@@ -327,6 +332,18 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\使用说明.md') -Destination
 $distDocs = Join-Path $distDir 'docs'
 New-Item -ItemType Directory -Force -Path $distDocs | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\使用说明.md') -Destination (Join-Path $distDocs '使用说明.md') -Force
+
+# 开发期文档不进发行包（用户 2026-09-27："旧AGENTS.md + 大量『用户第 N 条』式历史……不发，这个只是我们的开发痕迹"）：
+# 发布输出里带着 csproj 复制的四份面向用户的文档，其中《人工测试清单》是给作者照着点的测试清单，属于开发材料。
+$devOnlyDocs = @('人工测试清单.md')
+foreach ($devDoc in $devOnlyDocs) {
+    $devPath = Join-Path $distDocs $devDoc
+
+    if (Test-Path -LiteralPath $devPath) {
+        Remove-Item -LiteralPath $devPath -Force
+        Write-Detail "已从发行包里剔除开发期文档：docs\$devDoc"
+    }
+}
 
 $distFiles = @(Get-ChildItem -LiteralPath $distDir -Recurse -File)
 $distSize  = Get-TreeSize $distDir

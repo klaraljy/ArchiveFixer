@@ -22,6 +22,14 @@
     <Description>批量压缩包识别、伪装后缀修正、密码管理与 7-Zip 解压工具</Description>
   </PropertyGroup>
 
+  <!--
+    发行档开关（用户 2026-09-27："发行版要删「不删原包」，我们本地的不用"）。
+    ⛔ 只有 scripts/package.ps1 会传 -p:ArchiveFixerEdition=Release；本机构建 / 测试 / dotnet run
+    一律走开发版（带那个安全档），所以这里**不给默认值**。
+  -->
+  <PropertyGroup Condition="'$(ArchiveFixerEdition)' == 'Release'">
+    <DefineConstants>$(DefineConstants);RELEASE_EDITION</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <None Include="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

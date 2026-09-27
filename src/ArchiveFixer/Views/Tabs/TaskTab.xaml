@@ -174,6 +174,7 @@
                               VerticalAlignment="Center"
                               Foreground="{StaticResource WarningTextBrush}"
                               IsChecked="{Binding SpaceTightKeepSource, Mode=TwoWay}"
+                              Visibility="{Binding IsSpaceTightKeepSourceAvailable, Converter={StaticResource BoolToVisibilityConverter}}"
                               ToolTip="{x:Static models:StatusText.SpaceTightKeepSourceToolTip}" />
 
                     <Button Content="一键处理"

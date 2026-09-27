@@ -1433,6 +1433,19 @@ namespace ArchiveFixer.ViewModels
             get => _spaceTightKeepSource;
             set
             {
+                /*
+                 * 发行档没有这个安全档（用户 2026-09-27："发行版要删，我们本地的不用"）：
+                 * 界面上那颗勾在发行档里是**收起的**（见 IsSpaceTightKeepSourceAvailable），
+                 * 这里再挡一道 —— 万一有别的入口（设置文件、脚本）把它设成 true，也只当没这回事。
+                 *
+                 * ⚠ 写法上必须让"挡住"这件事在**两种构建下都是同一段代码**：
+                 * 写成 `if (!IsAvailable) { value = false; }` 时，发行档里 `KeepSourceOptionEnabled`
+                 * 是编译期常量 false → 那个分支恒真 → 编译器把后面整段判成**无法访问的代码**（CS0162 警告），
+                 * 而本项目的标准是 0 警告。所以这里让判据**参与运算**（一个与运算），
+                 * 效果一样、两种构建下都干净。
+                 */
+                value = value && BuildEdition.KeepSourceOptionEnabled;
+
                 if (!SetProperty(ref _spaceTightKeepSource, value))
                 {
                     return;
@@ -1461,6 +1474,15 @@ namespace ArchiveFixer.ViewModels
         }
 
         private bool _spaceTightKeepSource;
+
+        /// <summary>
+        /// 界面上要不要显示「不删原包」那颗勾（发行档不显示 —— 它是测试期专用的安全档，
+        /// 用户 2026-09-27："发行版要删，我们本地的不用"）。
+        ///
+        /// <para>唯一判据是 <see cref="BuildEdition.KeepSourceOptionEnabled"/>（编译期常量），
+        /// ⛔ 不许在别处再判断一次。</para>
+        /// </summary>
+        public bool IsSpaceTightKeepSourceAvailable => BuildEdition.KeepSourceOptionEnabled;
 
         /*
          * ===== 解压前的**空间体检**（用户 2026-09-27 第 2 条）=====

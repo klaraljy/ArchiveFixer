@@ -3816,6 +3816,26 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(
                     "WARN",
                     $"{task.FileName}：这次没有走完，产物仍在暂存目录，未搬进输出目录：{result.FinalOutputPath}");
+
+                /*
+                 * 「下一步该怎么办」必须写出来（用户 2026-09-27 真机：018.7z 的 .rar 里是 **37 个内层包**，
+                 * 递归按"多分支默认不展开"停在第 3 层 → 这一单落「部分完成」、产物没搬出、工作区按默认清掉，
+                 * 而日志里只有"停在第 3 层"这种**技术结论**，没有一个字告诉他该怎么办）。
+                 *
+                 * 两条出路都写清（用户拍板："或在汇总里明确说「这单要去②页开『展开所有分支』」"）：
+                 * ① 要一次解到底 → ②页 →「嵌套与压缩包」改成「展开所有分支」再重跑这一单；
+                 * ② 只想先把已经解出来的东西留下来 → ③页打开「失败时保留中间产物」，产物就留在上面那个暂存目录里。
+                 */
+                if (result.StopReason == RecursionStopReason.NeedsDecision)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{task.FileName}：这一单里有多个内层包（多分支默认不展开），所以停在了半路。"
+                        + "两条出路：① 想一次解到底 —— ②页 →「嵌套与压缩包」把那一档改成「展开所有分支」"
+                        + "（也可以把「最大嵌套层数」调大）后，单独重跑这一单；"
+                        + "② 只想先把已经解出来的东西留下 —— ③页打开「失败时保留中间产物」，"
+                        + "产物就留在上面那个暂存目录里。");
+                }
             }
         }
 
@@ -7201,6 +7221,20 @@ namespace ArchiveFixer.ViewModels
                 // 空间侦察：停循环 + 把这一批的空间曲线写进日志（用户 2026-09-27 要求"时刻侦察空间变化"）。
                 StopSpaceTrendMonitor();
 
+                /*
+                 * 顺手把**空的工作区壳**收掉（用户 2026-09-27：真机跑完 `…\.ArchiveFixer.work\recursive`
+                 * 会留一个空壳在那儿）。
+                 *
+                 * 为什么要在这里做：任务是各清各的（每单自己的目录、递归逐层），但 `recursive`
+                 * 这种"父壳"没人负责 —— 文件都没了，壳还在，用户看着就是残留。
+                 *
+                 * 三条安全边界（⛔ 一条都不许松）：
+                 * ① **根下面只要还有一个文件就一个字节都不动**（宁可留着壳，也不许误删东西）；
+                 * ② 只删工作区根**直接子目录**，绝不递归着往外走（不会碰到源包 / 成品目录）；
+                 * ③ 全部包在 try/catch 里 —— 收尾的顺手活，失败只写日志，不许影响批结论。
+                 */
+                RemoveEmptyWorkspaceShells();
+
                 UpdateSummary();
             }
         }
@@ -7868,6 +7902,47 @@ namespace ArchiveFixer.ViewModels
                 requiredBytes,
                 availableBytes,
                 shortfallBytes));
+        }
+
+        /// <summary>
+        /// 把工作区根下面**空掉的壳目录**收掉（见调用点的三条安全边界）。
+        /// </summary>
+        private void RemoveEmptyWorkspaceShells()
+        {
+            try
+            {
+                string root = _pathService.WorkDirectory;
+
+                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+                {
+                    return;
+                }
+
+                // ① 只要根下面还有一个文件，就什么都不动（宁可留壳，也不误删）。
+                if (Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Any())
+                {
+                    return;
+                }
+
+                foreach (string directory in Directory.EnumerateDirectories(root))
+                {
+                    try
+                    {
+                        // ② 只删直接子目录（`recursive` 这种父壳就在这一层）。
+                        Directory.Delete(directory, recursive: true);
+                        AppendLog("INFO", $"顺手清掉了空的工作区壳：{directory}");
+                    }
+                    catch (Exception ex)
+                    {
+                        // ③ 收尾的顺手活：失败只写一句，绝不影响批结论。
+                        AppendLog("INFO", $"空的工作区壳没清掉（不影响结果）：{directory} —— {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("INFO", $"清理空工作区壳时出错（不影响结果）：{ex.Message}");
+            }
         }
 
         /// <summary>
