@@ -783,14 +783,14 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 「移除勾选的」那颗按钮的 ToolTip —— **灰着的时候必须能读出为什么**（用户 2026-09-27）：
-        /// 他在跑批的时候点这颗按钮，"点了没反应"，因为 <c>CanExecute</c> 里的 <c>!IsBusy</c> 让它变灰了，
-        /// 而灰按钮既没有提示也没有声音（旁边的全选 / 反选 / 不选没有这个条件，所以看起来只有它坏了）。
-        /// 现在把两种状态各写一句话，配 <c>ToolTipService.ShowOnDisabled="True"</c> 就能读到。
+        /// 「移除勾选的」那颗按钮的 ToolTip。
+        ///
+        /// <para>2026-09-27 第二次修：它原来写着"处理中不能改列表"（我上一轮加的），用户当场反问
+        /// <i>"我就是修改列表删除东西，和正在处理有什么关系"</i> —— 他说得对：这是**纯列表操作**，
+        /// 与跑批无关，按钮现在永远可点。真正让他觉得"没效果"的是另一件事：**它只认打了勾的行**，
+        /// 而他习惯"点中一行 + 点按钮"。所以这句话要把两种用法都写明。</para>
         /// </summary>
-        public string RemoveCheckedTasksTooltip => IsBusy
-            ? StatusText.RemoveCheckedTasksBusyHint
-            : StatusText.RemoveCheckedTasksHint;
+        public string RemoveCheckedTasksTooltip => StatusText.RemoveCheckedTasksHint;
 
         public bool IsStopping
         {
@@ -1797,10 +1797,19 @@ namespace ArchiveFixer.ViewModels
 
             RemoveTaskCommand = new RelayCommand(RemoveTask);
 
-            // 「移除勾选的」：没有勾选就没有可移除的（CanExecute 跟着选择状态走）。
-            RemoveCheckedTasksCommand = new RelayCommand(
-                RemoveCheckedTasks,
-                () => !IsBusy && Tasks.Any(task => task.IsSelected));
+            /*
+             * 「移除勾选的」（用户 2026-09-27 第二次报"还是没效果"）—— 两个真问题叠在一起：
+             *
+             * ① 它以前绑了 `!IsBusy`：跑批中途这颗按钮是灰的。可它是**纯列表操作**（只动内存里那几行，
+             *    磁盘一个字节都不碰），与"正在处理"本来没有关系 —— 用户原话就是
+             *    "我就是修改列表删除东西，和正在处理有什么关系"。
+             * ② 它只认**打了勾**的行；而他的实际操作是"点中一行（高亮）+ 点这颗按钮" → 什么都没发生，
+             *    既没日志也没提示，看起来就是按钮坏了。
+             *
+             * 现在：**永远可点**（跑批时也照删 —— 正在跑的那一个继续跑完，只是不再显示在列表里）；
+             * 优先移除勾选的，一个都没勾时按**当前高亮的那一行**移除，并在日志里写明是按哪一行办的。
+             */
+            RemoveCheckedTasksCommand = new RelayCommand(RemoveCheckedTasks);
 
             RenameBySuggestionAndRetryCommand = new AsyncRelayCommand(
                 RenameBySuggestionAndRetryAsync,
@@ -4810,8 +4819,30 @@ namespace ArchiveFixer.ViewModels
         {
             List<ArchiveTask> checkedTasks = Tasks.Where(task => task.IsSelected).ToList();
 
+            /*
+             * 一个都没勾、但用户**点中了一行**（高亮）→ 就按那一行办。
+             *
+             * 为什么这里允许"退到高亮行"，而"一键处理 / 只解压 / 清理"那些命令不允许（用户 2026-09-24
+             * 第 12 条那条规定仍然有效）：那些命令**动磁盘**，猜错代价不可逆；这一颗**只动列表**，
+             * 移除错了再"添加文件 / 添加文件夹"一次就回来。而真机上正是这个差别让用户觉得"按钮坏了"。
+             */
             if (checkedTasks.Count == 0)
             {
+                ArchiveTask? highlighted = SelectedTask;
+
+                if (highlighted != null && Tasks.Contains(highlighted))
+                {
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.RemoveCheckedTasksHighlightFallbackLogFormat,
+                            highlighted.FileName));
+
+                    RemoveTasksCore(new[] { highlighted });
+                    return;
+                }
+
                 _dialogService.ShowInfo(StatusText.RemoveCheckedTasksNoneText);
                 return;
             }

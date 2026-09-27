@@ -293,46 +293,70 @@ namespace ArchiveFixer.Tests
         // ================================================================ 第 2 条：移除勾选的
 
         /// <summary>
-        /// 「移除勾选的」：空闲时**真的**把勾选的行移掉；跑批时点不动，但**说得清为什么**
-        /// （真机现场：跑批时按钮是灰的，点了没反应也不说话 → 他以为这颗按钮坏了）。
+        /// 「移除勾选的」：**永远可点**（纯列表操作，与"正在处理"无关 —— 用户原话："我就是修改列表删除东西，
+        /// 和正在处理有什么关系"）；优先移除勾选的，**一个都没勾时按当前高亮那一行**移除
+        /// （他上一轮"点了没反应"的真因：他只点中了行、没打勾）。
         /// </summary>
         [Fact]
-        public void 移除勾选的_空闲时真的移除_处理中给出原因()
+        public void 移除勾选的_勾选的与高亮那一行都能移除_处理中也照样能点()
         {
-            MainViewModel vm = CreateViewModel();
+            MainViewModel vm = CreateViewModel(out LogService log);
 
-            string file = Path.Combine(_root, "remove-me.bin");
-            File.WriteAllBytes(file, new byte[16]);
+            string checkedFile = Path.Combine(_root, "checked.bin");
+            string highlightedFile = Path.Combine(_root, "highlighted.bin");
+            string untouchedFile = Path.Combine(_root, "untouched.bin");
 
-            var task = new ArchiveTask(file, 1) { IsSelected = true };
-            vm.Tasks.Add(task);
+            File.WriteAllBytes(checkedFile, new byte[16]);
+            File.WriteAllBytes(highlightedFile, new byte[16]);
+            File.WriteAllBytes(untouchedFile, new byte[16]);
 
-            Assert.True(vm.RemoveCheckedTasksCommand.CanExecute(null), "空闲 + 有勾选时它必须可用");
-            Assert.Contains("只动列表", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
+            var checkedTask = new ArchiveTask(checkedFile, 1) { IsSelected = true };
+            var highlightedTask = new ArchiveTask(highlightedFile, 2) { IsSelected = false };
+            var untouchedTask = new ArchiveTask(untouchedFile, 3) { IsSelected = false };
 
-            /*
-             * 处理中：命令不可用（列表不能在跑批中途被改），但 ToolTip 必须换成"为什么点不动"。
-             * 这条是本用例的重点 —— 用户 2026-09-27 抱怨的正是"灰着还不说原因"。
-             */
+            vm.Tasks.Add(checkedTask);
+            vm.Tasks.Add(highlightedTask);
+            vm.Tasks.Add(untouchedTask);
+
+            /* 处理中也要能点（旧实现绑了 !IsBusy → 跑批时是灰的，用户当场反问过这件事）。 */
             vm.IsBusy = true;
 
             try
             {
-                Assert.False(vm.RemoveCheckedTasksCommand.CanExecute(null), "处理中不能改列表");
-                Assert.Contains("正在处理", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
-                Assert.Contains("停止后续", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
+                Assert.True(vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批中途也必须能改列表（纯列表操作）");
+                Assert.Contains("只动列表", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
+                Assert.Contains("当前点中", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
             }
             finally
             {
                 vm.IsBusy = false;
             }
 
-            Assert.True(vm.RemoveCheckedTasksCommand.CanExecute(null));
-
+            // ① 有勾选 → 移除勾选的那些（高亮那一行不动）
             vm.RemoveCheckedTasksCommand.Execute(null);
 
-            Assert.Empty(vm.Tasks);
-            Assert.True(File.Exists(file), "移除只动列表：源文件一个字节都不许动");
+            Assert.DoesNotContain(checkedTask, vm.Tasks);
+            Assert.Contains(highlightedTask, vm.Tasks);
+
+            // ② 没有勾选、但点中了一行（高亮）→ 移除那一行，并写日志说清是按哪一行办的
+            vm.SelectedTask = highlightedTask;
+            vm.RemoveCheckedTasksCommand.Execute(null);
+
+            Assert.DoesNotContain(highlightedTask, vm.Tasks);
+            Assert.Contains(untouchedTask, vm.Tasks);
+
+            /*
+             * 日志断言走**文件日志**（LogService.Logs）：无界面宿主里 `MainViewModel.Logs`（屏幕日志）
+             * 是靠 Dispatcher 回填的，进程里没有 Application 就永远是空的 —— 拿它断言会"看起来没写日志"。
+             */
+            List<string> logs = log.Logs.Select(item => item.DisplayText).ToList();
+
+            Assert.Contains(
+                logs,
+                text => text.Contains("没有勾选任何任务，改为移除当前点中的那一行", StringComparison.Ordinal)
+                        && text.Contains("highlighted.bin", StringComparison.Ordinal));
+
+            Assert.True(File.Exists(checkedFile) && File.Exists(highlightedFile), "移除只动列表：源文件一个字节都不许动");
         }
 
         // ================================================================ 第 6 条：docs 随程序发
@@ -367,7 +391,9 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ 装配
 
-        private MainViewModel CreateViewModel()
+        private MainViewModel CreateViewModel() => CreateViewModel(out _);
+
+        private MainViewModel CreateViewModel(out LogService logService)
         {
             string cacheRoot = Path.Combine(_root, "data");
             Directory.CreateDirectory(cacheRoot);
@@ -383,6 +409,8 @@ namespace ArchiveFixer.Tests
             string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
             string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
 
+            logService = new LogService(pathService);
+
             try
             {
                 return new MainViewModel(
@@ -391,7 +419,7 @@ namespace ArchiveFixer.Tests
                     new RenameService(),
                     new ArchiveFixer.Engines.SevenZip.SevenZipEngine(),
                     new PasswordService(),
-                    new LogService(pathService),
+                    logService,
                     settingsService,
                     pathService,
                     new TaskSummaryService(),
