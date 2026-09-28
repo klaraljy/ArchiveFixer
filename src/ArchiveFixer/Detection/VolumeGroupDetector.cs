@@ -529,6 +529,16 @@ namespace ArchiveFixer.Detection
                     }
 
                     /*
+                     * ⚠ 与 FileNameHelper 里那条**同一道闸门**（2026-09-28）：只有"卷标记**紧跟在已知压缩后缀后面**"
+                     * 才算跨段伪装（`x.7z.001.txt` / `x.rar.001.bak`）。不加这条，`rar-android-722.132.apk`
+                     * 会被算成"卷 132 + .apk 尾巴"（`TryGetFirstVolumeName` 推出 `rar-android-722.001.apk`）——
+                     * 落点与改名那两条路另有闸门不受影响，但**探测器口径必须一致**，否则迟早再冒出一条边角。
+                     */
+                    if (i < 1 || !ExtensionHelper.IsKnownArchiveExtension("." + parts[i - 1]))
+                    {
+                        continue;
+                    }
+                    /*
                      * ⚠ 只检查**卷标记右边**的那几段，别去查卷标记自己 —— `.001` 本身就在
                      * KnownArchiveExtensions 里（老代码把它当"压缩包后缀"收进去了），
                      * 拿它当判据会把 `.001.txt` 这种刚刚要支持的名字全挡掉（实测踩到过）。
