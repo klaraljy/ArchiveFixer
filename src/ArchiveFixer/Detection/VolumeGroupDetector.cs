@@ -499,7 +499,23 @@ namespace ArchiveFixer.Detection
             //    ⚠ 但"分卷标记后面**粘着**垃圾"的（volume.7z.001删除，百度网盘给每卷缀「删除」）算分卷：
             //    不算的话整组会散成几个独立压缩包，一键处理改名时会把 .001 这一段吃掉（2026-09-28 事故）。
             //    垃圾尾巴记进 Tail，小组时用它补出来的"缺失卷名"才跟磁盘上的名字对得上。
-            if (TryParseVolumeSegment(last, out VolumeFamily family, out int index, out int digitWidth, out string junkTail))
+            // 末尾一段是分卷标记：先按已有两档解析；解析不出来再试**容错**档
+            // （用户 2026-09-28 第三次真机：`amb909.7sz.00c1` —— 干扰字符塞进卷号内部、而且是字母）。
+            // ⛔ 容错档只多认"删少量非纯数字字符后是合法卷标记"，认不出就照旧 null（宁可不动）。
+            bool isVolumeSegment = TryParseVolumeSegment(last, out VolumeFamily family, out int index, out int digitWidth, out string junkTail);
+
+            if (!isVolumeSegment &&
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(last, out string tolerantMark, out string tolerantJunk) &&
+                TryParseVolumeSegment(tolerantMark, out family, out index, out digitWidth, out _))
+            {
+                // 容错档的垃圾是**夹在卷号内部**的（`00c1` 的 `c`）—— 补卷名时要用**干净的标准名**
+                // （`amb909.7z.001`），所以这里不把垃圾当尾巴传下去（尾巴是给"粘在末尾"那种用的）。
+                _ = tolerantJunk;
+                junkTail = string.Empty;
+                isVolumeSegment = true;
+            }
+
+            if (isVolumeSegment)
             {
                 string baseName = JoinBaseName(parts, 1);
                 if (baseName.Length > 0)
@@ -784,10 +800,57 @@ namespace ArchiveFixer.Detection
              * （`7z删除` → `7z`）。正常名字（`rar-android-722.132`）不受影响 —— 那一段不是"后缀+垃圾"。
              */
             baseName = StripJunkAfterArchiveExtension(baseName);
+            baseName = NormalizeArchiveExtensionSegment(baseName);
 
             // 基名不 Trim：文件名里的首尾空格是真的会改变归组的字符。
             // 但"全是空白"的基名（例如文件名叫 ".zip"）没有意义，直接不认。
             return string.IsNullOrWhiteSpace(baseName) ? string.Empty : baseName;
+        }
+
+        /// <summary>
+        /// 把基名最后一段里"夹在压缩后缀**内部**的垃圾"归一：`x.7sz` → `x.7z`、`x.7删z` → `x.7z`。
+        ///
+        /// <para>为什么需要（用户 2026-09-28 第三次真机）：两卷分别被伪装成 `amb909.7sz.00c1` 与
+        /// `amb909.7删z.00除2`，后缀段里各塞了一个字符 → 基名成了 `amb909.7sz` / `amb909.7删z`，
+        /// **两个基名不同 → 同一组两卷散成两组**。这里只做"删 1 个字符后是不是已知压缩后缀"，
+        /// 候选**唯一**才认（有歧义就不动）。</para>
+        /// </summary>
+        private static string NormalizeArchiveExtensionSegment(string baseName)
+        {
+            int lastDot = baseName.LastIndexOf('.');
+
+            if (lastDot <= 0 || lastDot == baseName.Length - 1)
+            {
+                return baseName;
+            }
+
+            string segment = baseName[(lastDot + 1)..];
+
+            if (ExtensionHelper.IsKnownArchiveExtension("." + segment))
+            {
+                return baseName;
+            }
+
+            string? unique = null;
+
+            for (int i = 0; i < segment.Length; i++)
+            {
+                string candidate = segment.Remove(i, 1);
+
+                if (!ExtensionHelper.IsKnownArchiveExtension("." + candidate))
+                {
+                    continue;
+                }
+
+                if (unique != null)
+                {
+                    return baseName; // 有歧义：宁可不归一
+                }
+
+                unique = candidate;
+            }
+
+            return unique == null ? baseName : baseName[..(lastDot + 1)] + unique;
         }
 
         /// <summary>
