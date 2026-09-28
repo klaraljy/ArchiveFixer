@@ -41,14 +41,23 @@ namespace ArchiveFixer.Detection
         /// <summary>
         /// 判据（全部成立才算，缺一条都不拦）：
         /// ①引擎说这是通用分片流（<see cref="ArchiveListResult.IsRawSplitStream"/>）；
-        /// ②清单里**只有一条**、而且那一条就是"文件自己"（名字 = 文件名去掉卷号、大小 = 这个文件的大小）；
+        /// ②清单里**只有一条**、而且那一条就是"文件自己"（名字 = 文件名去掉末尾那一段分片号、大小 = 这个文件的大小）；
         /// ③内容魔数认得出是归档（调用方给的 <paramref name="isArchiveByContent"/>）；
-        /// ④文件名里带卷号（<c>.001</c> 这一套 —— 它**是**一组分卷的一卷）；
+        /// ④文件名末尾**真的有一段被 7-Zip 当分片号剥掉**（<c>.001</c> / <c>.01</c> / <c>.1</c> / <c>partN</c> /
+        ///   <c>.z01</c> / <c>.r00</c> —— 7-Zip 的通用分片处理器就是这么认盘号的）；
         /// ⑤这一组**只有自己一卷**（<paramref name="knownVolumeCount"/> ≤ 1）——
         ///   卷齐的时候（例如 <c>X.001/X.002</c> 都在）拼起来是对的，绝不能拦。
         ///
         /// <para>⚠ <paramref name="knownVolumeCount"/> 传 0 也算"只有自己一卷"：归组服务没跑过
         /// （测试里直接建的任务、或从别的入口进来的任务）时不能因此漏判。</para>
+        ///
+        /// <para><b>2026-09-28 放宽的那一处（红检暴露的假成功）</b>：原来第 ④ 条写的是
+        /// "名字得能被 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 认出卷号"，而那只认
+        /// <c>.001</c>/<c>partN</c>/<c>.z01</c>/<c>.r00</c> —— 真机那种被改烂的
+        /// <c>amb909.7.01</c>（两段数字）认不出来，于是这道闸门**放行**，
+        /// 7-Zip 把这一卷当通用分片解出 1 MiB 垃圾、退出码 0，管线报「解压成功」。
+        /// 现在换成**与 7-Zip 同一口径**的物理形状：文件名末尾那一段只要纯数字就算分片号
+        /// （<c>StripVolumeSuffix</c> 就是按这个剥的，而剥出来的名字必须与引擎报的条目名逐字相同）。</para>
         /// </summary>
         public static bool IsBrokenVolumeChain(
             ArchiveListResult? list,
@@ -67,9 +76,10 @@ namespace ArchiveFixer.Detection
             }
 
             string fileName = Path.GetFileName(archivePath);
+            string selfBaseName = StripVolumeSuffix(fileName);
 
-            // 名字里得带卷号：不带卷号的普通包（`X.7z`）走不到这一档。
-            if (VolumeGroupDetector.TryGetVolumeIndex(fileName) == null)
+            // 名字末尾得真的有一段分片号（7-Zip 剥掉的那一段）；剥不出东西说明它不是在按分卷认这个文件。
+            if (selfBaseName.Length == 0 || string.Equals(selfBaseName, fileName, StringComparison.Ordinal))
             {
                 return false;
             }
@@ -95,11 +105,8 @@ namespace ArchiveFixer.Detection
                 return false;
             }
 
-            string selfBaseName = StripVolumeSuffix(fileName);
-
-            // 条目名 = 文件名去掉卷号（7-Zip 对通用分片的报法），且大小就是这个卷本身。
-            if (string.IsNullOrWhiteSpace(selfBaseName) ||
-                !string.Equals(entry.Path?.Trim(), selfBaseName, StringComparison.OrdinalIgnoreCase))
+            // 条目名 = 文件名去掉分片号（7-Zip 对通用分片的报法），且大小就是这个卷本身。
+            if (!string.Equals(entry.Path?.Trim(), selfBaseName, StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
@@ -108,6 +115,78 @@ namespace ArchiveFixer.Detection
 
             // 大小对不上就不是"通用分片"，别硬判（宁可放过，也不要把正常包拦下来）。
             return fileSize > 0 && entry.Size == fileSize;
+        }
+
+        /// <summary>
+        /// **收尾那一步的最后一道闸门**（用户 2026-09-28：红检里实测到的"假成功"）：
+        /// 产物里**只有一个文件、而且它就是源包自己**（名字 = 源包名去掉末尾那段分片号，大小 = 源包大小）。
+        ///
+        /// <para><b>为什么写盘之前那道闸门还不够</b>：写盘前那道闸门要引擎**列出清单**才生效；
+        /// 而列出清单失败 / 走直读 / 递归这些岔路上，7-Zip 照样会退出码 0 地把这一卷拼成一个等大的垃圾文件。
+        /// 收尾时量一遍产物形状是最后能拦住它的地方 —— 它挡住的是"把垃圾当内容物报成功"，
+        /// 并顺带挡住两条不可逆动作（源包移入其余物 / 删除）因为它们都以校验通过为前提。</para>
+        ///
+        /// <para>判据刻意**只认这一种形状**（多一个文件、多一层目录、大小差一个字节都不判），
+        /// 免得误伤正常包。返回 true = 这是"只把这一卷拼了一遍"的假产物。</para>
+        /// </summary>
+        /// <param name="sourceArchivePath">交给引擎的那一份源包（任务的当前路径）。</param>
+        /// <param name="sourceIsArchiveByContent">源包内容魔数认得出是归档（通用分片本身是合法的，
+        /// 视频被切成 <c>X.001</c> 那种没人要我们判）。</param>
+        /// <param name="stageDirectory">本任务的暂存目录（引擎真正写盘的地方）。</param>
+        public static bool LooksLikeSplitStreamEcho(
+            string? sourceArchivePath,
+            bool sourceIsArchiveByContent,
+            string? stageDirectory)
+        {
+            if (!sourceIsArchiveByContent
+                || string.IsNullOrWhiteSpace(sourceArchivePath)
+                || string.IsNullOrWhiteSpace(stageDirectory))
+            {
+                return false;
+            }
+
+            string fileName = Path.GetFileName(sourceArchivePath);
+            string selfBaseName = StripVolumeSuffix(fileName);
+
+            if (selfBaseName.Length == 0 || string.Equals(selfBaseName, fileName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            long sourceSize = TryGetFileSize(sourceArchivePath);
+
+            if (sourceSize <= 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!Directory.Exists(stageDirectory))
+                {
+                    return false;
+                }
+
+                string[] entries = Directory.GetFileSystemEntries(stageDirectory);
+
+                // 产物顶层必须**干干净净**只有一个文件：多一个文件、多一层目录都不判（宁可放过）。
+                if (entries.Length != 1 || Directory.Exists(entries[0]))
+                {
+                    return false;
+                }
+
+                if (!string.Equals(Path.GetFileName(entries[0]), selfBaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                return TryGetFileSize(entries[0]) == sourceSize;
+            }
+            catch
+            {
+                // 读不到暂存目录 → 什么都不判：这道闸门的作用是"别把垃圾报成成功"，不是"必须拦下什么"。
+                return false;
+            }
         }
 
         /// <summary>

@@ -1239,6 +1239,50 @@ namespace ArchiveFixer.ViewModels
                 expected.Success ? expected : null);
 
             /*
+             * ⛔ 「只出了源包自己那一个垃圾」—— 收尾这一步的最后一道闸门（用户 2026-09-28 红检实测）。
+             *
+             * 现场：**单个**被改烂名字的 7z 第一卷（同目录里没有能配对的后续卷）会被 7-Zip 当成
+             * 「通用分片流（Split）」解掉：退出码 0，清单里只有一条，**那一条就是文件自己**，
+             * 于是产物 = 一个与源包等大的垃圾文件，名字正好是源包名去掉末尾那段分片号。
+             * 老口径下"预期 1 条 / 实际 1 个文件、字节数也对得上" → 判**通过** → 报「解压成功」，
+             * 而用户的输出目录里根本没有包里的内容物 —— 这正是"部分成功不得显示为成功"被违反的那一次。
+             *
+             * 为什么写盘之前那道闸门（RawSplitStreamDetector.IsBrokenVolumeChain）不够：
+             * 它要引擎**列得出清单**才生效，而列出清单失败 / 直读 / 递归这些岔路上引擎照样会这么干。
+             * 这里量的是**产物形状**，与清单无关，所以是最后能拦住它的地方。
+             *
+             * 判据只有一处（RawSplitStreamDetector.LooksLikeSplitStreamEcho，纯函数、可单独测），
+             * 这一支**直接 return**：不定稿（输出目录里不会多出一个垃圾内容物）、不归集、
+             * 不生成其余物、更不动源包 —— 那几条不可逆动作全部以"校验通过"为前提，这里把前提掐掉。
+             */
+            if (verification.Verified
+                && RawSplitStreamDetector.LooksLikeSplitStreamEcho(
+                    task.CurrentPath,
+                    task.IsArchive
+                        && !string.Equals(task.DetectedFormat, "Unknown", StringComparison.OrdinalIgnoreCase),
+                    stageDirectory))
+            {
+                string echoMessage =
+                    "校验未通过：解出来的是一个与源包等大的「通用分片」垃圾 —— 它的名字与字节数都和源包本身一样"
+                    + "（引擎没找到这一组的后续卷，只把这一卷当成一段分片拼了一遍）。"
+                    + "这不是包里的内容物：任务按失败结案，不落「解压成功」；"
+                    + "不定稿（输出目录里不会多出这个垃圾文件）、不生成其余物、源包一个字节都不动。"
+                    + "请把这一组的后续卷放回同目录（或先按内容级卷号把整组名字改回标准名）再重试。";
+
+                logEntries.Add(("ERROR", $"{task.FileName}：{echoMessage}"));
+
+                return new PostProcessWorkResult
+                {
+                    Verification = new OutputVerificationResult
+                    {
+                        Verified = false,
+                        Message = echoMessage
+                    },
+                    LogEntries = logEntries
+                };
+            }
+
+            /*
              * 解压后落点校验（第二道防线，不变量 4）：产物必须都落在目标根目录之内。
              *
              * 量的是**暂存区**：引擎写盘的地方就是它（契约 §2.1）。落点校验必须在定稿**之前**做，
