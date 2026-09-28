@@ -655,5 +655,118 @@ namespace ArchiveFixer.Helpers
             junk = s.Replace(bones, string.Empty, StringComparison.Ordinal);
             return true;
         }
+
+        /// <summary>
+        /// **容错**版（用户 2026-09-28 第三次真机：`amb909.7sz.00c1` / `amb909.7删z.00除2`）：
+        /// 干扰字符被**塞进卷号内部**、甚至是**字母**（`001`→`00c1`）时也要认出来。
+        ///
+        /// <para>判据：允许删掉**最多 2 个**"多余字符"后剩下的必须是合法卷标记；
+        /// 被删掉的字符必须**不全都是数字**（否则 `0012` 会被误读成 `001`+`2`）；
+        /// 候选唯一时才返回 —— 有歧义（能删出两种合法标记）一律**不认**（宁可不动）。</para>
+        ///
+        /// <code>
+        /// 00c1 → (001, "c")     0删0除1 → (001, "删除")     7sz（后缀段）→ 不认（段本身不是卷标记）
+        /// 0012 → false（删掉的是纯数字）      001 → (001, "")
+        /// </code>
+        ///
+        /// <para>⛔ **只回答"像不像卷标记"，不负责敢不敢用** —— 真要据此改名字，调用方还必须拿到
+        /// "兄弟卷佐证 + 尺寸规律"两条证据（子卷归组那三层判据里另外两层）。</para>
+        /// </summary>
+        public static bool TrySplitVolumeSegmentTolerant(string? segment, out string canonicalSegment, out string junk)
+        {
+            canonicalSegment = string.Empty;
+            junk = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(segment))
+            {
+                return false;
+            }
+
+            string s = segment.Trim();
+
+            // 先走已有的两档（整段就是标记 / 前缀标记+尾巴 / 非字母数字骨架）
+            if (TrySplitVolumeSegmentLoose(s, out canonicalSegment, out junk))
+            {
+                return true;
+            }
+
+            // 再试"删最多 2 个字符"：把删掉的字符当垃圾
+            string? uniqueMark = null;
+            string uniqueJunk = string.Empty;
+            bool ambiguous = false;
+
+            int length = s.Length;
+
+            // 删 1 个
+            for (int i = 0; i < length; i++)
+            {
+                string candidate = s.Remove(i, 1);
+
+                if (!IsVolumePartExtension("." + candidate))
+                {
+                    continue;
+                }
+
+                if (char.IsAsciiDigit(s[i]))
+                {
+                    continue; // 删掉的是数字 → 更像另一套位宽，不猜
+                }
+
+                if (uniqueMark != null)
+                {
+                    ambiguous = true;
+                    break;
+                }
+
+                uniqueMark = candidate;
+                uniqueJunk = s[i].ToString();
+            }
+
+            // 删 2 个
+            if (!ambiguous && uniqueMark == null && length >= 5)
+            {
+                for (int i = 0; i < length - 1; i++)
+                {
+                    for (int j = i + 1; j < length; j++)
+                    {
+                        string candidate = s.Remove(j, 1).Remove(i, 1);
+                        string removed = string.Concat(s[i], s[j]);
+
+                        if (!IsVolumePartExtension("." + candidate))
+                        {
+                            continue;
+                        }
+
+                        if (removed.All(char.IsAsciiDigit))
+                        {
+                            continue;
+                        }
+
+                        if (uniqueMark != null)
+                        {
+                            ambiguous = true;
+                            break;
+                        }
+
+                        uniqueMark = candidate;
+                        uniqueJunk = removed;
+                    }
+
+                    if (ambiguous || uniqueMark != null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (ambiguous || uniqueMark == null)
+            {
+                return false;
+            }
+
+            canonicalSegment = uniqueMark;
+            junk = uniqueJunk;
+            return true;
+        }
     }
 }
