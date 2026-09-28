@@ -2017,25 +2017,68 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    // 已经在其余物里了（重复调用 / 上一轮搬过）：跳过。
-                    if (SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(path) ?? string.Empty)
-                            .EndsWith(ProcessArtifactLayout.ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase))
+                    /*
+                     * ⛔ 分卷组必须**整组一起搬**（2026-09-28 真机：内层包是 4 卷分卷组时只搬走了
+                     * `amb.7z.001` 并把它彻底删掉，`.002/.003/.004` 留在成品目录里 —— 用户原话
+                     * "同样犯了 winrar 会犯的问题：只删除 .001 为首的分卷头文件，其他分卷还残留着"）。
+                     * 搬一半等于把一套完整的包拆成废件，比不搬糟得多。
+                     *
+                     * 判据与"源包整组一起移"**同一套**：分卷组取 VolumePaths 全卷，单文件取它自己。
+                     */
+                    var groupPaths = new List<string>();
+
+                    if (candidate.IsVolumeGroup && candidate.VolumePaths.Count > 0)
                     {
+                        foreach (string volumePath in candidate.VolumePaths)
+                        {
+                            if (!string.IsNullOrWhiteSpace(volumePath) && File.Exists(volumePath))
+                            {
+                                groupPaths.Add(volumePath);
+                            }
+                        }
+                    }
+
+                    if (groupPaths.Count == 0)
+                    {
+                        groupPaths.Add(path);
+                    }
+
+                    /*
+                     * 兜底（**宁可不动，也不搬一半**）：分组信息没拿到（IsVolumeGroup=false），
+                     * 但名字明显是分卷、同目录里还躺着同组的别的卷 —— 这一卷不搬，写清为什么。
+                     * 留下的是一套完整的包，用户还能自己接着处理。
+                     */
+                    if (!candidate.IsVolumeGroup && HasSiblingVolumeBeside(path))
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{rootTask.FileName}：{Path.GetFileName(path)} 看着是分卷组的一卷，"
+                            + "但没拿到整组清单 —— 这次不搬它（搬一半会把一套包拆成废件）。");
                         continue;
                     }
 
-                    if (!string.IsNullOrWhiteSpace(outputRoot) &&
-                        !ArchivePathGuard.IsInsideRoot(outputRoot, path, out _))
+                    foreach (string groupPath in groupPaths)
                     {
-                        // 不在根任务的输出范围内（理论上不该发生）：不动它。
-                        continue;
+                        // 已经在其余物里了（重复调用 / 上一轮搬过）：跳过。
+                        if (SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(groupPath) ?? string.Empty)
+                                .EndsWith(ProcessArtifactLayout.ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(outputRoot) &&
+                            !ArchivePathGuard.IsInsideRoot(outputRoot, groupPath, out _))
+                        {
+                            // 不在根任务的输出范围内（理论上不该发生）：不动它。
+                            continue;
+                        }
+
+                        // 撞名（同一条链里两个同名内层包）自动让位，绝不覆盖。
+                        string target = SafePathHelper.AutoRenameFilePath(
+                            Path.Combine(restDirectory, Path.GetFileName(groupPath)));
+
+                        planned.Add((groupPath, target));
                     }
-
-                    // 撞名（同一条链里两个同名内层包）自动让位，绝不覆盖。
-                    string target = SafePathHelper.AutoRenameFilePath(
-                        Path.Combine(restDirectory, Path.GetFileName(path)));
-
-                    planned.Add((path, target));
                 }
 
                 return planned;
@@ -4922,6 +4965,54 @@ namespace ArchiveFixer.ViewModels
 
             return groups.FirstOrDefault(g => g.Volumes.Any(
                 v => string.Equals(SafePathHelper.GetFullPathSafe(v.Path), currentPath, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        /// <summary>
+        /// 同目录里还有没有"同一分卷组的别的卷"（只按名字判，**只用于兜底拒搬**）。
+        ///
+        /// <para>用于"分组信息没拿到时宁可不动"那一条：搬走一卷、把同组别的卷留在原地，
+        /// 等于把一套完整的包拆成废件（2026-09-28 真机：内层包 4 卷只搬走了 `.001`）。</para>
+        /// </summary>
+        private static bool HasSiblingVolumeBeside(string? path)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    return false;
+                }
+
+                string name = FileNameHelper.GetFileName(path);
+
+                if (!FileNameHelper.IsVolumePartFileName(name))
+                {
+                    return false;
+                }
+
+                string directory = Path.GetDirectoryName(path) ?? string.Empty;
+
+                foreach (string sibling in Directory.EnumerateFiles(directory))
+                {
+                    string siblingName = Path.GetFileName(sibling);
+
+                    if (string.Equals(siblingName, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (FileNameHelper.IsVolumePartFileName(siblingName) &&
+                        VolumeGroupDetector.BelongsToSameGroup(name, siblingName))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                // 读目录失败就当"没有兄弟卷"：调用点那边保守方向是"不搬"，不会因为这里失败而多搬东西。
+            }
+
+            return false;
         }
 
         /// <summary>
