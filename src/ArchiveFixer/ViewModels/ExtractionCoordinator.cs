@@ -2084,6 +2084,65 @@ namespace ArchiveFixer.ViewModels
                 return planned;
             }, cancellationToken);
 
+            /*
+             * ⛔ **留着没跑的内层包不能当过程物清掉**（用户 2026-09-28 真机：
+             * `amb909\amb909\amb.7z.001..004` 一直留在成品目录里，他以为是"忘了搬进其余物"）。
+             *
+             * 为什么不能清：过程物（内层包）能清的前提是"它的内容物已经解出来了" ——
+             * 这一单跑成功、内层包被判**已完成**才成立。而"这一轮根本没跑"的内层包，内容还在它里面，
+             * 清掉（其余物在删除档下是**彻底删除**）等于把唯一一份内容删了。
+             *
+             * 所以这里只做一件事：**如实点名 + 告诉他怎么处理**。判据与搬运用同一套
+             * （分卷组取 VolumePaths 全卷，单文件取自己；只认在本单输出目录里的）。
+             */
+            try
+            {
+                var leftBehind = new List<string>();
+
+                foreach (ArchiveTask? candidate in chainTasks)
+                {
+                    if (candidate == null ||
+                        ReferenceEquals(candidate, rootTask) ||
+                        !candidate.IsContinuationTask ||
+                        (candidate.Outcome == TaskOutcome.Succeeded &&
+                         candidate.OutputVerification == OutputVerificationOutcome.Passed))
+                    {
+                        continue;
+                    }
+
+                    IEnumerable<string> candidatePaths = candidate.IsVolumeGroup && candidate.VolumePaths.Count > 0
+                        ? candidate.VolumePaths
+                        : new[] { candidate.CurrentPath };
+
+                    foreach (string candidatePath in candidatePaths)
+                    {
+                        if (string.IsNullOrWhiteSpace(candidatePath) || !File.Exists(candidatePath))
+                        {
+                            continue;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(outputRoot) &&
+                            ArchivePathGuard.IsInsideRoot(outputRoot, candidatePath, out _))
+                        {
+                            leftBehind.Add(Path.GetFileName(candidatePath));
+                        }
+                    }
+                }
+
+                if (leftBehind.Count > 0)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{rootTask.FileName}：成品目录里还留着 {leftBehind.Count} 个内层包没被清理（它们的内容还没解出来，"
+                        + $"清掉就等于删内容）：{string.Join("、", leftBehind.Take(5))}"
+                        + $"{(leftBehind.Count > 5 ? " 等" : string.Empty)}"
+                        + " —— 要解就把它们加进任务列表；删除档只清「内容物已经解出来」的过程物。");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{rootTask.FileName}：清点留在成品目录里的内层包失败（不影响这一单）：{ex.Message}");
+            }
             if (moves.Count == 0)
             {
                 return;
