@@ -1925,10 +1925,16 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            if (ExtensionHelper.IsVolumePartExtension(extension))
+            /*
+             * ⚠ 判据改用**容差档**（2026-09-28 审计：这是全项目最后一处还在用"前缀档"的分卷名判断）。
+             * 老写法 `IsVolumePartExtension(extension)` 只认干净的 `.001`/`.z01`，于是名字被伪装过的后续卷
+             * （`amb909.7删z.00除2`、`amb909.7z.002sc`）在这里判成"不是后续卷" —— 与探测器、改名闸门
+             * 的口径不一致（同一判据第三次翻车就是这种"两处不同步"）。判据只留 `ExtensionHelper` 一份。
+             */
+            if (ExtensionHelper.TrySplitVolumeSegmentTolerant(extension.TrimStart('.'), out string volumeMark, out _))
             {
-                // 三位数字分卷里只有 .001 是起点；.z01 / .r00 这类也不是组的开头。
-                return !extension.Equals(".001", StringComparison.OrdinalIgnoreCase);
+                // 三位数字分卷里只有 001 是起点；.z01 / .r00 这类也不是组的开头（老口径不变）。
+                return !string.Equals(volumeMark, "001", StringComparison.OrdinalIgnoreCase);
             }
 
             // xxx.part2.rar 的最后后缀是 .rar，编号在倒数第二个后缀上。
