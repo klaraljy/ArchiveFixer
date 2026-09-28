@@ -265,8 +265,37 @@ namespace ArchiveFixer.Models
         public string DetectedFormat
         {
             get => _detectedFormat;
-            set => SetProperty(ref _detectedFormat, string.IsNullOrWhiteSpace(value) ? "Unknown" : value);
+            set
+            {
+                if (SetProperty(ref _detectedFormat, string.IsNullOrWhiteSpace(value) ? "Unknown" : value))
+                {
+                    OnPropertyChanged(nameof(DetectedFormatDisplay));
+                }
+            }
         }
+
+        /// <summary>
+        /// 这一单开工前，程序**自动把它（或它那一组）的分卷名改回了标准名**（用户 2026-09-28）。
+        ///
+        /// <para>为什么要记：改名是**解压前的准备步骤**，"跳过 / 失败"是**解压这一单的结论** ——
+        /// 真机上用户看到的就是"界面说跳过、日志说跳过，可名字确实被改了"，读起来自相矛盾。
+        /// 记下来之后状态那一列会写成 <c>已跳过（已改回标准名）</c>，一眼能看出"改过名"与"没解"是两件事。</para>
+        /// </summary>
+        public bool VolumeNameAutoRenamed { get; set; }
+
+        /// <summary>
+        /// 「检测格式」那一列**给用户看的**说法（用户 2026-09-28：续卷显示 Unknown 会读成"没认出来"）。
+        ///
+        /// <para>续卷（`x.7z.002`）是裸切块、**没有文件头魔数**，所以内容格式本来就判不了 ——
+        /// 那是"物理上判不了"，不是"我们不认识"。后缀状态那一列才是结论（分卷后缀）。
+        /// 这里只改**显示**：格式 Unknown + 后缀状态是分卷 → 说「分卷续卷（无文件头）」。
+        /// 日志里照旧写 Unknown（机器事实不改），免得排查时对不上。</para>
+        /// </summary>
+        public string DetectedFormatDisplay =>
+            string.Equals(_detectedFormat, "Unknown", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(ExtensionStatus, StatusText.ExtensionVolume, StringComparison.Ordinal)
+                ? "分卷续卷（无文件头）"
+                : _detectedFormat;
 
         /// <summary>
         /// 建议后缀。
@@ -285,7 +314,14 @@ namespace ArchiveFixer.Models
         public string ExtensionStatus
         {
             get => _extensionStatus;
-            set => SetProperty(ref _extensionStatus, string.IsNullOrWhiteSpace(value) ? StatusText.NotChecked : value);
+            set
+            {
+                if (SetProperty(ref _extensionStatus, string.IsNullOrWhiteSpace(value) ? StatusText.NotChecked : value))
+                {
+                    // 后缀状态决定「检测格式」那一列该怎么念（续卷要改口径，见 DetectedFormatDisplay）。
+                    OnPropertyChanged(nameof(DetectedFormatDisplay));
+                }
+            }
         }
 
         /// <summary>
@@ -488,6 +524,16 @@ namespace ArchiveFixer.Models
                 if (HasResponsivenessHint)
                 {
                     text += $" · {_responsivenessHint}";
+                }
+
+                /*
+                 * "改过名"和"这一单没解成"是两件事（用户 2026-09-28 真机："界面上显示跳过，
+                 * 日志上也显示跳过，但是确实是改好了名字了，这是什么情况"）。
+                 * 分卷名是**解压前**自动改好的；解压这单照样可能跳过 / 失败 —— 说清楚，别让人以为白改了。
+                 */
+                if (VolumeNameAutoRenamed)
+                {
+                    text += "（已改回标准名）";
                 }
 
                 return text;

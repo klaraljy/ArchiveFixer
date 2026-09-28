@@ -514,7 +514,7 @@
                                                 IsReadOnly="True" />
 
                             <DataGridTextColumn Header="检测格式"
-                                                Binding="{Binding DetectedFormat}"
+                                                Binding="{Binding DetectedFormatDisplay}"
                                                 Width="90"
                                                 IsReadOnly="True" />
 
@@ -578,7 +578,18 @@
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                        <Setter Property="ToolTip" Value="{Binding ErrorMessage}" />
+                                        <!--
+                                            悬停要能看全（用户 2026-09-28）：直接绑字符串的 ToolTip 是**单行**的，
+                                            窄窗口下那条长错误信息会一路顶到屏幕外，等于看不了。
+                                            换成带 Wrap + MaxWidth 的 TextBlock，长文案在气泡里自己折行。
+                                        -->
+                                        <Setter Property="ToolTip">
+                                            <Setter.Value>
+                                                <TextBlock Text="{Binding ErrorMessage}"
+                                                           TextWrapping="Wrap"
+                                                           MaxWidth="560" />
+                                            </Setter.Value>
+                                        </Setter>
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>

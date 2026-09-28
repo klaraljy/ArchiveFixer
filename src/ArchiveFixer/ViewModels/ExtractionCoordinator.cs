@@ -5062,6 +5062,10 @@ namespace ArchiveFixer.ViewModels
                     "INFO",
                     $"{task.FileName}：分卷名不标准，已按标准名改好（{plan.Items.Count} 卷，只改名字、内容一个字节没动）：{plan.Describe()}");
 
+                // 记在任务上：状态那一列会写成"已跳过（已改回标准名）"——
+                // 免得"改过名"与"这一单没解成"读起来自相矛盾（用户 2026-09-28 真机反馈）。
+                task.VolumeNameAutoRenamed = true;
+
                 // 任务上的路径同步成新名字，后面各层（引擎、校验、日志）拿到的就是标准名。
                 foreach (VolumeRepairItem item in plan.Items)
                 {
