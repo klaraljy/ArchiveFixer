@@ -441,7 +441,10 @@ namespace ArchiveFixer.Detection
             // ② 末尾一段自己就是分卷标记：volume.7z.001 / archive.001 / x.z01 / x.r00 / x.part1。
             //    注意 volume.7z.001.txt 走不到这里（它末段是 txt），这正是要的效果：
             //    改坏后缀的文件不再被当成同一组的分卷。
-            if (TryParseVolumeSegment(last, out VolumeFamily family, out int index, out int digitWidth))
+            //    ⚠ 但"分卷标记后面**粘着**垃圾"的（volume.7z.001删除，百度网盘给每卷缀「删除」）算分卷：
+            //    不算的话整组会散成几个独立压缩包，一键处理改名时会把 .001 这一段吃掉（2026-09-28 事故）。
+            //    垃圾尾巴记进 Tail，小组时用它补出来的"缺失卷名"才跟磁盘上的名字对得上。
+            if (TryParseVolumeSegment(last, out VolumeFamily family, out int index, out int digitWidth, out string junkTail))
             {
                 string baseName = JoinBaseName(parts, 1);
                 if (baseName.Length > 0)
@@ -451,7 +454,8 @@ namespace ArchiveFixer.Detection
                         BaseName = baseName,
                         Family = family,
                         Index = index,
-                        DigitWidth = digitWidth
+                        DigitWidth = digitWidth,
+                        Tail = junkTail
                     };
                 }
             }
@@ -514,27 +518,36 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
-        /// 解析"末尾那一段"属于哪一族、是第几卷。
+        /// 解析"末尾那一段"属于哪一族、是第几卷，以及**粘在卷号后面的垃圾尾巴**。
         ///
-        /// 先用 <see cref="ExtensionHelper.IsVolumePartExtension"/> 当闸门：什么算分卷标记只留一份定义，
-        /// 将来它扩了（比如补上新的记法），这里不会漏。但它只回答"是不是"，
-        /// "是哪一族、第几卷"还得自己拆 —— 这才是卷序偏移最容易写错的地方。
+        /// 先用 <see cref="ExtensionHelper.TrySplitVolumeSegment"/> 把段拆成「分卷标记 + 垃圾」：
+        /// "什么算分卷标记"只留一份定义，将来它扩了（比如补上新的记法），这里不会漏；
+        /// 但它只回答"是不是、垃圾是什么"，"是哪一族、第几卷"还得自己拆 ——
+        /// 这才是卷序偏移最容易写错的地方。
         /// </summary>
-        private static bool TryParseVolumeSegment(string segment, out VolumeFamily family, out int index, out int digitWidth)
+        private static bool TryParseVolumeSegment(
+            string segment,
+            out VolumeFamily family,
+            out int index,
+            out int digitWidth,
+            out string junkTail)
         {
             family = VolumeFamily.Numeric;
             index = 0;
             digitWidth = 1;
+            junkTail = string.Empty;
 
-            if (!ExtensionHelper.IsVolumePartExtension("." + segment))
+            if (!ExtensionHelper.TrySplitVolumeSegment(segment, out string mark, out string junk))
             {
                 return false;
             }
 
+            junkTail = junk;
+
             // .z01 ~ .z99：zip 分卷的**后续**卷。z01 前面还有本体 x.zip，所以卷序 = NN + 1。
-            if (segment.Length == 3
-                && (segment[0] == 'z' || segment[0] == 'Z')
-                && TryParseTwoDigits(segment.AsSpan(1), out int zipOrdinal)
+            if (mark.Length == 3
+                && (mark[0] == 'z' || mark[0] == 'Z')
+                && TryParseTwoDigits(mark.AsSpan(1), out int zipOrdinal)
                 && zipOrdinal >= 1)
             {
                 family = VolumeFamily.ZipSpanned;
@@ -544,9 +557,9 @@ namespace ArchiveFixer.Detection
 
             // .r00 ~ .r99：rar 老式分卷的后续卷。r00 是"第 1 个后续卷"、本体 x.rar 才是第 1 卷，
             // 所以卷序 = NN + 2（这里 0 是合法序号，不能像 zip 那样拒掉）。
-            if (segment.Length == 3
-                && (segment[0] == 'r' || segment[0] == 'R')
-                && TryParseTwoDigits(segment.AsSpan(1), out int rarOrdinal))
+            if (mark.Length == 3
+                && (mark[0] == 'r' || mark[0] == 'R')
+                && TryParseTwoDigits(mark.AsSpan(1), out int rarOrdinal))
             {
                 family = VolumeFamily.RarOld;
                 index = rarOrdinal + 2;
@@ -554,9 +567,9 @@ namespace ArchiveFixer.Detection
             }
 
             // .001 ~ .999：数字本身就是卷序。
-            if (segment.Length == 3 && IsAsciiDigits(segment.AsSpan()))
+            if (mark.Length == 3 && IsAsciiDigits(mark.AsSpan()))
             {
-                if (!TryParseVolumeNumber(segment, out index))
+                if (!TryParseVolumeNumber(mark, out index))
                 {
                     return false;
                 }
@@ -567,20 +580,21 @@ namespace ArchiveFixer.Detection
             }
 
             // .partN / .partNN：卷序就是 N（part1 本身就是第一卷）。
-            if (segment.Length >= 5
-                && segment.StartsWith("part", StringComparison.OrdinalIgnoreCase)
-                && IsAsciiDigits(segment.AsSpan(4)))
+            if (mark.Length >= 5
+                && mark.StartsWith("part", StringComparison.OrdinalIgnoreCase)
+                && IsAsciiDigits(mark.AsSpan(4)))
             {
-                if (!TryParseVolumeNumber(segment[4..], out index))
+                if (!TryParseVolumeNumber(mark[4..], out index))
                 {
                     return false;
                 }
 
                 family = VolumeFamily.PartNumbered;
-                digitWidth = segment.Length - 4;
+                digitWidth = mark.Length - 4;
                 return true;
             }
 
+            junkTail = string.Empty;
             return false;
         }
 

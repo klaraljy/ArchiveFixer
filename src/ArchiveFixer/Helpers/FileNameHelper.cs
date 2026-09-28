@@ -281,7 +281,11 @@ namespace ArchiveFixer.Helpers
 
                 string tail = current[(lastDot + 1)..];
 
-                if (ExtensionHelper.IsVolumePartExtension("." + tail))
+                // ⚠ 用 TrySplitVolumeSegment 而不是 IsVolumePartExtension：分卷标记后面粘着垃圾的
+                // （百度网盘那种 222.7z.001删除）也算分卷标记，**连同垃圾一起剥掉** ——
+                // 不剥的话 GetArchiveBaseName 会把它当成"普通后缀"剥，剥出来的基名对着整个包，
+                // 改名时就会把 .001 这一段吃掉（2026-09-28 真机事故的根因）。
+                if (ExtensionHelper.TrySplitVolumeSegment(tail, out _, out _))
                 {
                     current = current[..lastDot];
                     continue;
@@ -375,14 +379,16 @@ namespace ArchiveFixer.Helpers
             }
 
             // xxx.001 / xxx.z01 / xxx.part1
-            if (ExtensionHelper.IsVolumePartExtension("." + parts[^1]))
+            // ⚠ 分卷标记后面粘着垃圾的（xxx.7z.001删除）也算：百度网盘给每个分卷名缀「删除」，
+            //    老判据不认它 → 整组被当成几个独立压缩包 → 一键处理改名把分卷链切断（2026-09-28 事故）。
+            if (ExtensionHelper.TrySplitVolumeSegment(parts[^1], out _, out _))
             {
                 return true;
             }
 
             // xxx.part1.rar
             if (parts.Length >= 3 &&
-                ExtensionHelper.IsVolumePartExtension("." + parts[^2]) &&
+                ExtensionHelper.TrySplitVolumeSegment(parts[^2], out _, out _) &&
                 string.Equals(parts[^1], "rar", StringComparison.OrdinalIgnoreCase))
             {
                 return true;

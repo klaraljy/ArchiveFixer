@@ -495,5 +495,86 @@ namespace ArchiveFixer.Helpers
 
             return false;
         }
+
+        /// <summary>
+        /// 把"可能是分卷标记"的**一整段**拆成「分卷标记 + 粘在后面的垃圾」。
+        ///
+        /// <code>
+        /// 001        → (001, "")        z01 → (z01, "")      part1 → (part1, "")
+        /// 001删除    → (001, "删除")    001(1) → (001, "(1)") part01副本 → (part01, "副本")
+        /// </code>
+        ///
+        /// <para>
+        /// 为什么要有这一条（2026-09-28 真机事故）：百度网盘会把每个分卷名缀上「删除」这类尾巴，
+        /// 变成 <c>giu910.7z.001删除</c>。老判据要求"分卷标记必须是最后一段"，于是整组被当成
+        /// **几个各自独立的 .7z**，一键处理再把它们改成 <c>giu910.7z</c> / <c>giu910(1).7z</c> ——
+        /// 分卷链当场被切断（介质没坏，但名字再也对不上了）。
+        /// </para>
+        ///
+        /// <para>
+        /// 判据只此一处：<see cref="FileNameHelper"/> 与 <c>VolumeGroupDetector</c> 都转调本方法。
+        /// 尾巴**必须粘在号码后面、里面不含点**（<c>.001.txt</c> 这种另起一段的**不认** —— 那是
+        /// "后缀被改坏"的老口径，保持不变）；尾巴是纯数字的也不认（那更像另一套位宽，不许乱猜）。
+        /// </para>
+        /// </summary>
+        public static bool TrySplitVolumeSegment(string? segment, out string volumeSegment, out string junkTail)
+        {
+            volumeSegment = string.Empty;
+            junkTail = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(segment))
+            {
+                return false;
+            }
+
+            string s = segment.Trim();
+
+            // ① 整段就是分卷标记（老口径，最常见）
+            if (IsVolumePartExtension("." + s))
+            {
+                volumeSegment = s;
+                return true;
+            }
+
+            // ② 标记 + 粘着的垃圾。先按 3 个字符试（001 / z01 / r00），再按 part+数字试。
+            int markLength = 0;
+
+            if (s.Length > 3 && IsVolumePartExtension("." + s[..3]))
+            {
+                markLength = 3;
+            }
+            else if (s.StartsWith("part", StringComparison.OrdinalIgnoreCase))
+            {
+                int i = 4;
+
+                while (i < s.Length && char.IsAsciiDigit(s[i]))
+                {
+                    i++;
+                }
+
+                if (i > 4)
+                {
+                    markLength = i;
+                }
+            }
+
+            if (markLength <= 0 || markLength >= s.Length)
+            {
+                return false;
+            }
+
+            string mark = s[..markLength];
+            string tail = s[markLength..];
+
+            // 尾巴别是纯数字（0023 这种更像卷号本身），也别长到不像垃圾
+            if (tail.Length > 32 || tail.All(char.IsAsciiDigit))
+            {
+                return false;
+            }
+
+            volumeSegment = mark;
+            junkTail = tail;
+            return true;
+        }
     }
 }

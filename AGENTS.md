@@ -278,6 +278,17 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
     - ⛔ `gh release upload --clobber` **连别的资产一起删**（实测把已传好的框架依赖包删了，回到 Release 前先看 `gh release view`）。
     - `gh` **不能设中文 label**，但传完可以补：`gh api -X PATCH repos/<o>/<r>/releases/assets/<数字 id> --input <{"label":"…"}>`
       （已验证；数字 id 从 REST 接口取，`gh release view --json` 给的是 `RA_…` 节点 id，拿去 DELETE/PATCH **不认**）。
+- **分卷名后面粘着垃圾（2026-09-28 真机事故，用户当场报）**：百度网盘给每个分卷名缀「删除」
+  （`giu910.7z.001删除` / `.002删除` / `.003删除`）。老判据要求"卷标记必须是最后一段" → 三卷散成三个任务，
+  而且「修正后缀」把它们改成 `amb909.7z` / `amb909(1).7z` —— **卷号被吃掉、分卷链断掉**（内容没坏，名字对不上）。
+  修法：`ExtensionHelper.TrySplitVolumeSegment`（**判据只此一处**）把段拆成「分卷标记 + 粘着的垃圾」，
+  `FileNameHelper.IsVolumePartFileName` / `StripVolumeMarkers` 与 `VolumeGroupDetector` 全转调它，
+  垃圾记进 `VolumeNameInfo.Tail`（缺卷提示才会带同样的尾巴）；`RenameService` 那道"分卷不许改名"的闸门因此自动生效。
+  - ⛔ 老口径**不许回退**：另起一段的后缀（`x.7z.001.txt` / `x.001.bak`）照旧**不算**分卷；纯数字尾巴（`0012`）不猜。
+  - ⚠ **遗留**：程序只做到"认得出 + 不改坏"；带垃圾尾巴的组交给 7-Zip 仍会报缺卷（7z 只认 `<基名>.001` 这套名）。
+    下一步要做的是**显式**的「把整组名字改回标准名」（沿用 `VolumeNameRepair` 的口径：用户点了才改、只改名字、绝不覆盖）。
+  - 用真实数字钉住：`giu910` 三卷 7,516,192,768 ×2 + 3,975,934,338；`amb909` 现场 = 第一卷 2,147,483,648（带 `37 7A BC AF 27 1C`）
+    + 第二卷 1,890,791,346。用例 `VolumeJunkTailTests`（21 条），红检时把修复 stash 掉会红 8 条。
 - **安装包（用户 2026-09-27 追加："我是要 .exe 安装文件的"）**：`installer\ArchiveFixer.nsi`（NSIS 3.10，
   `D:\Codex Tools\NSIS\nsis-3.10\makensis.exe`）+ `scripts\installer.ps1`（默认拿 `dist\ArchiveFixer-<版本>-独立`
   当内容）→ `dist\ArchiveFixer-0.1.0-setup.exe`（**47.82 MB**，164.57 MB 内容压到 29.1%，编译约 110 秒）。
