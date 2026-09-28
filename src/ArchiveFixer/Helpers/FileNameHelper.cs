@@ -285,7 +285,7 @@ namespace ArchiveFixer.Helpers
                 // （百度网盘那种 `222.7z.001删除`、`222.7z.删除001`、`222.z0删除3`）也算分卷标记，
                 // **连同垃圾一起剥掉** —— 不剥的话 GetArchiveBaseName 会把 `001删除` 当"普通后缀"剥，
                 // 算出来的基名对着整个包，改名时就会把 `.001` 这一段吃掉（2026-09-28 真机事故的根因）。
-                if (ExtensionHelper.TrySplitVolumeSegmentLoose(tail, out _, out _))
+                if (ExtensionHelper.TrySplitVolumeSegmentTolerant(tail, out _, out _))
                 {
                     current = current[..lastDot];
                     continue;
@@ -303,7 +303,7 @@ namespace ArchiveFixer.Helpers
 
                         if (beforeDot > 0 &&
                             ExtensionHelper.IsKnownArchiveExtension(current[beforeDot..markDot]) &&
-                            ExtensionHelper.TrySplitVolumeSegmentLoose(current[(markDot + 1)..lastDot], out _, out _))
+                            ExtensionHelper.TrySplitVolumeSegmentTolerant(current[(markDot + 1)..lastDot], out _, out _))
                         {
                             current = current[..beforeDot];
                             goto stripped;
@@ -409,7 +409,7 @@ namespace ArchiveFixer.Helpers
             //   ② **卷标记后面还挂着别的点段**的（`xxx.7z.001.txt`、`xxx.rar.001.bak`）也算 ——
             //      只要那些尾段**不是已知压缩后缀**。
             //   不算的话，这类名字会被当成"普通包"，改名时把卷号吃掉、整条分卷链断掉。
-            if (ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^1], out _, out _))
+            if (ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^1], out _, out _))
             {
                 return true;
             }
@@ -421,7 +421,7 @@ namespace ArchiveFixer.Helpers
 
             // xxx.part1.rar
             if (parts.Length >= 3 &&
-                ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^2], out _, out _) &&
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^2], out _, out _) &&
                 string.Equals(parts[^1], "rar", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
@@ -446,7 +446,7 @@ namespace ArchiveFixer.Helpers
 
             for (int i = parts.Length - 2; i >= 1; i--)
             {
-                if (!ExtensionHelper.TrySplitVolumeSegmentLoose(parts[i], out _, out _))
+                if (!ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[i], out _, out _))
                 {
                     continue;
                 }
