@@ -930,6 +930,16 @@ namespace ArchiveFixer.ViewModels
                     await ScanRoundAsync(round, roundTargets);
 
                     /*
+                     * ⛔ 本轮"开跑时"的目标快照（2026-09-28 真机）。
+                     *
+                     * 收尾那个"有任务没轮到就停"的守卫**必须只看这份快照**：本轮解压途中会往列表里加
+                     * **下一轮**才该解的内层包（AddInnerTasksAsync），拿实时清单去比，那些刚加进来、
+                     * 本来就该下一轮跑的任务会被当成"这一轮没轮到" → 正常续解被误判成"用户叫停"，
+                     * 于是**只解一层就收工**（真机现象；总结还会说"已按「停止后续」中断"，用户根本没按过）。
+                     */
+                    List<ArchiveTask> roundStartTargets = roundTargets.ToList();
+
+                    /*
                      * 第二步：修正伪装后缀。只处理确实需要改的。
                      *
                      * **一键档不弹预览**（用户 2026-09-25 明确指示）："这个一键处理自己会自动改名自动解压，
@@ -971,7 +981,9 @@ namespace ArchiveFixer.ViewModels
                     UpdateSummary();
 
                     // 「停止后续」之后不许再续解：按下过停止，或者这一轮有任务根本没轮到。
-                    if (stopRequested || roundTargets.Any(t => !IsHandled(t)))
+                    // ⚠ 用 roundStartTargets（本轮开跑时的快照），不用实时 roundTargets ——
+                    //    理由见上面那段注释：中途加进来的下一轮任务不该算"这一轮没轮到"。
+                    if (stopRequested || roundStartTargets.Any(t => !IsHandled(t)))
                     {
                         stopped = true;
                         break;
@@ -1120,7 +1132,7 @@ namespace ArchiveFixer.ViewModels
                 hitRoundLimit,
                 runOptions);
 
-            string summary = BuildSummaryLine(processed, stopped, continuationLayers, hitRoundLimit, pendingContinuation.Count);
+            string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count);
 
             AppendLog("INFO", summary);
 
@@ -2072,6 +2084,7 @@ namespace ArchiveFixer.ViewModels
         private string BuildSummaryLine(
             IReadOnlyList<ArchiveTask> targets,
             bool stopped = false,
+            bool stopRequestedByUser = false,
             int continuationLayers = 0,
             bool hitRoundLimit = false,
             int pendingContinuation = 0)
@@ -2143,9 +2156,18 @@ namespace ArchiveFixer.ViewModels
 
             if (stopped)
             {
+                /*
+                 * ⚠ 两种"停下"必须分开说（2026-09-28 真机）：用户按了「停止后续」，和
+                 * "本轮有任务真的没轮到"（程序自己的判断）是两件事 —— 老代码一律写"已按「停止后续」中断"，
+                 * 于是用户没按过也被告知"你按了"，还会误以为程序没错。
+                 */
+                string reason = stopRequestedByUser
+                    ? "已按「停止后续」中断"
+                    : "本轮有任务没轮到，已停下（不是你按的「停止后续」）";
+
                 line += continuationLayers > 0
-                    ? $" 已按「停止后续」中断（已完成续解 {continuationLayers} 层）。"
-                    : " 已按「停止后续」中断，没有继续解内层包。";
+                    ? $" {reason}（已完成续解 {continuationLayers} 层）。"
+                    : $" {reason}，没有继续解内层包。";
             }
             else if (continuationLayers > 0)
             {
