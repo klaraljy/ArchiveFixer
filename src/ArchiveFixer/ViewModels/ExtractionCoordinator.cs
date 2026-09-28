@@ -5105,7 +5105,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⛔ 底线：只改名字，不动内容；目标名被占 / 证据不足 → 一个字节都不动，写清为什么。</para>
         /// </summary>
-        private void NormalizeDisguisedVolumeNames(ArchiveTask? task)
+        private async Task NormalizeDisguisedVolumeNamesAsync(ArchiveTask? task, CancellationToken cancellationToken)
         {
             if (task == null)
             {
@@ -5116,17 +5116,47 @@ namespace ArchiveFixer.ViewModels
             {
                 string current = task.CurrentPath ?? string.Empty;
 
-                if (string.IsNullOrWhiteSpace(current) ||
-                    !FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(current)))
+                if (string.IsNullOrWhiteSpace(current))
                 {
                     return;
                 }
 
-                VolumeNameRepairPlan plan = VolumeNameRepair.Plan(
-                    current,
-                    VolumeNameRepair.EnumerateFileNamesInDirectory(current));
+                VolumeNameRepairPlan? plan = null;
 
-                if (!plan.CanRepair || plan.Items.Count == 0)
+                if (FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(current)))
+                {
+                    plan = VolumeNameRepair.Plan(
+                        current,
+                        VolumeNameRepair.EnumerateFileNamesInDirectory(current));
+                }
+
+                if (plan != null && !plan.CanRepair)
+                {
+                    /*
+                     * 名字那条路走不通（推不出标准名）→ 再回退到内容级推断一次。
+                     * ⛔ 判据与执行体仍然只有 VolumeNameRepair 那一份，这里只是换个入口。
+                     */
+                    plan = await VolumeNameRepair.PlanByContentAsync(
+                        current,
+                        VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
+                        _archiveEngine,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else if (plan == null)
+                {
+                    /*
+                     * 名字里**完全没有卷号**这一档（用户 2026-09-28 现场：`amb909.7.01` / `amb909.z.2` / `amb909..3`）。
+                     * 名字判据必然返回 null，所以不进 Plan，直接交给内容级推断：
+                     * 内容认 7z 第一卷 + 同目录等长文件 + 硬链接试开。
+                     */
+                    plan = await VolumeNameRepair.PlanByContentAsync(
+                        current,
+                        VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
+                        _archiveEngine,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                if (plan == null || !plan.CanRepair || plan.Items.Count == 0)
                 {
                     return;
                 }
@@ -8895,7 +8925,7 @@ namespace ArchiveFixer.ViewModels
              * 只改名字、内容一个字节不动；凑不成组 / 目标名被占 → 什么都不做，并写清为什么。
              * 手动档「修复分卷名并重试」调的是**同一对**判据与执行体（VolumeNameRepair）。
              */
-            NormalizeDisguisedVolumeNames(task);
+            await NormalizeDisguisedVolumeNamesAsync(task, cancellationToken).ConfigureAwait(true);
 
             /*
              * ===== 不变量 11 的**第一道**（也是唯一收口的那一道）：源文件变化 = 立刻停下 =====

@@ -1535,6 +1535,20 @@ namespace ArchiveFixer.Models
         /// <summary>不能改名的原因：目标名被占用。<c>{0}</c> = 目标名。</summary>
         public const string VolumeRepairTargetTakenFormat = "目标名「{0}」已经被别的文件占用了，程序不会覆盖它";
 
+        // ── 「名字完全靠不住 → 靠内容 + 尺寸 + 试开」这一档（用户 2026-09-28 三层方案） ──
+
+        /// <summary>内容不是 7z 的第一卷（不含魔数）→ 不敢按内容推。</summary>
+        public const string VolumeRepairContentNotFirst7zVolume =
+            "它的开头不是 7z 的第一卷（分卷的第一卷才有 7z 魔数），程序不在内容上猜";
+
+        /// <summary>同目录尺寸看不出分卷规律（除最后一卷外应当等长）。</summary>
+        public const string VolumeRepairContentNoSizePattern =
+            "同目录里看不出分卷的尺寸规律（除最后一卷外应当一样大），没有把握就不动";
+
+        /// <summary>试开验证没通过。<c>{0}</c> = 试开失败的原因。</summary>
+        public const string VolumeRepairContentProbeFailedFormat =
+            "把候选按假设的顺序试开，引擎也读不出里面的东西（{0}），所以一个字节都不动";
+
         /// <summary>改名批次收尾（写进日志）。<c>{0}</c> = 成功数，<c>{1}</c> = 失败数。</summary>
         public const string VolumeRepairBatchDoneFormat = "按建议改名：成功 {0} 个、失败 {1} 个；接着重试解压勾选的任务。";
 

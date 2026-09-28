@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
@@ -130,6 +132,49 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// 同目录里的"路径 + 大小"（内容级推断要按尺寸排候选；读不了就返回空 —— 推断会因此判"不能改"，**绝不抛**）。
+        ///
+        /// <para>与 <see cref="EnumerateFileNamesInDirectory"/> 一样只有一份实现：
+        /// 必须与它看到**同一个目录、同一批文件**，否则"按名字能改、按内容不能改"这类矛盾迟早冒出来。</para>
+        /// </summary>
+        public static IReadOnlyList<VolumeCandidate> EnumerateVolumeCandidatesInDirectory(string? filePath)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(filePath ?? string.Empty) ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return Array.Empty<VolumeCandidate>();
+                }
+
+                var candidates = new List<VolumeCandidate>();
+
+                foreach (string file in Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    long size;
+
+                    try
+                    {
+                        size = new FileInfo(file).Length;
+                    }
+                    catch
+                    {
+                        size = -1;
+                    }
+
+                    candidates.Add(new VolumeCandidate { Path = file, Size = size });
+                }
+
+                return candidates;
+            }
+            catch
+            {
+                return Array.Empty<VolumeCandidate>();
+            }
+        }
+
+        /// <summary>
         /// 算出改名计划。任何 IO 意外都落成"不能改 + 原因"，绝不抛。
         /// </summary>
         /// <param name="currentPath">那一卷现在的完整路径。</param>
@@ -235,6 +280,123 @@ namespace ArchiveFixer.Extraction
                         TargetPath = targetPath
                     }
                 }
+            };
+        }
+
+        /// <summary>
+        /// 「**名字完全靠不住**」那一档：内容认出这是 7z 的第一卷、同目录尺寸排出候选顺序、
+        /// 再用引擎**试开**验证顺序 —— 验证通过才给改名计划（用户 2026-09-28 三层方案的第 1 步）。
+        ///
+        /// <para><b>什么时候走这条</b>：<see cref="Plan"/> 按名字推不出标准名（用户现场的
+        /// <c>amb909.7.01</c> / <c>amb909.z.2</c> / <c>amb909..3</c>：卷号被改烂、后缀也不对）。
+        /// ⛔ 判据与执行体仍然只有一处 —— 这条算出来的计划照样交给 <see cref="TryApply"/> 去改，
+        /// 界面上（①页「修复分卷名并重试」）与管线里（<c>NormalizeDisguisedVolumeNames</c>）
+        /// 读的是**同一份**计划。</para>
+        ///
+        /// <para><b>三道证据，缺一不可</b>：① 内容 = 7z 魔数（第一卷独有，推不出卷号是物理事实）；
+        /// ② 同目录尺寸规律（除最后一卷外等长，且候选 ≤ 第一卷）；
+        /// ③ 试开成功（<see cref="VolumeProbeVerifier"/>：硬链接成假设名让引擎真列一次）。
+        /// 任何一道不过 → <c>CanRepair = false</c> + 写明为什么，**一个字节都不动**。</para>
+        ///
+        /// <para>⛔ 只对 7z 开这一档：RAR / ZIP 的分卷**内容里有盘号**，该走内容级卷号识别，
+        /// 不该用"猜顺序"这种弱证据去改它们的名字。</para>
+        /// </summary>
+        public static async Task<VolumeNameRepairPlan> PlanByContentAsync(
+            string? currentPath,
+            IEnumerable<VolumeCandidate>? filesInDirectory,
+            Engines.IArchiveEngine engine,
+            CancellationToken cancellationToken = default)
+        {
+            string path = currentPath ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return Cannot(path, StatusText.VolumeRepairSourceMissing);
+            }
+
+            string fileName = Path.GetFileName(path);
+
+            // 名字里已经有卷号 → 那是 Plan 的活，这里不抢（判据出口只有一个）。
+            if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != null)
+            {
+                return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+            }
+
+            Detection.VolumeContentFormat format = Detection.VolumeContentInference.SniffFormat(path);
+
+            if (format != Detection.VolumeContentFormat.SevenZip)
+            {
+                return Cannot(path, StatusText.VolumeRepairContentNotFirst7zVolume);
+            }
+
+            IReadOnlyList<VolumeCandidate> candidates =
+                Detection.VolumeContentInference.BuildCandidates(path, filesInDirectory);
+
+            if (!Detection.VolumeContentInference.HasVolumeSizePattern(path, candidates))
+            {
+                return Cannot(path, StatusText.VolumeRepairContentNoSizePattern);
+            }
+
+            IReadOnlyList<IReadOnlyList<VolumeCandidate>> orderings =
+                Detection.VolumeContentInference.BuildOrderings(path, candidates);
+
+            var verifier = new VolumeProbeVerifier(engine);
+            VolumeProbeOutcome probe = await verifier
+                .VerifyAsync(path, orderings, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!probe.Confirmed || probe.OrderedVolumes.Count < 2)
+            {
+                return Cannot(path, string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason));
+            }
+
+            if (!Detection.VolumeContentInference.TryDeriveBaseName(path, format, out string baseName))
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSuggestion);
+            }
+
+            IReadOnlyList<string> targetNames =
+                Detection.VolumeContentInference.BuildStandardFileNames(baseName, probe.OrderedVolumes.Count);
+
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            var items = new List<VolumeRepairItem>();
+
+            for (int i = 0; i < probe.OrderedVolumes.Count && i < targetNames.Count; i++)
+            {
+                string source = probe.OrderedVolumes[i].Path;
+                string target = Path.Combine(directory, targetNames[i]);
+
+                if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+                }
+
+                // ⛔ 绝不覆盖：任何一个目标名被占，整组不改。
+                if (File.Exists(target))
+                {
+                    return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, targetNames[i]));
+                }
+
+                items.Add(new VolumeRepairItem
+                {
+                    CurrentPath = source,
+                    CurrentFileName = Path.GetFileName(source),
+                    SuggestedFileName = targetNames[i],
+                    TargetPath = target
+                });
+            }
+
+            VolumeRepairItem self = items[0];
+
+            return new VolumeNameRepairPlan
+            {
+                CanRepair = true,
+                CurrentPath = self.CurrentPath,
+                CurrentFileName = self.CurrentFileName,
+                SuggestedFileName = self.SuggestedFileName,
+                TargetPath = self.TargetPath,
+                Siblings = items.Select(i => i.CurrentFileName).ToList(),
+                Items = items
             };
         }
 
