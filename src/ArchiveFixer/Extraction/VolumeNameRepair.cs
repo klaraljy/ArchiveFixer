@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 
 namespace ArchiveFixer.Extraction
@@ -51,9 +52,32 @@ namespace ArchiveFixer.Extraction
         /// <summary>同目录里"像这一组后续卷"的文件名（只用来把话说清）。</summary>
         public IReadOnlyList<string> Siblings { get; init; } = Array.Empty<string>();
 
-        /// <summary>一行给人看：<c>旧名 → 新名</c>。</summary>
+        /// <summary>
+        /// 这次要改的**每一卷**（用户 2026-09-28 追加：网盘给整组的名字都缀了「删除」，
+        /// 只改第一卷没用 —— 7-Zip 找 `.002` 时名字对不上，照样报缺卷）。
+        ///
+        /// <para>老调用方读上面那四个单文件属性（= 第一项），行为与以前逐字一样；
+        /// 「修复分卷名并重试」按本列表一次把整组改干净。</para>
+        /// </summary>
+        public IReadOnlyList<VolumeRepairItem> Items { get; init; } = Array.Empty<VolumeRepairItem>();
+
+        /// <summary>一行给人看：<c>旧名 → 新名</c>（整组时写出卷数）。</summary>
         public string Describe() =>
-            $"{CurrentFileName} → {SuggestedFileName}";
+            Items.Count > 1
+                ? $"{CurrentFileName} → {SuggestedFileName} 等 {Items.Count} 卷"
+                : $"{CurrentFileName} → {SuggestedFileName}";
+    }
+
+    /// <summary>一组里的一卷：现在叫什么、该叫什么。</summary>
+    public sealed class VolumeRepairItem
+    {
+        public string CurrentPath { get; init; } = string.Empty;
+
+        public string CurrentFileName { get; init; } = string.Empty;
+
+        public string SuggestedFileName { get; init; } = string.Empty;
+
+        public string TargetPath { get; init; } = string.Empty;
     }
 
     /// <summary>改名结果。</summary>
@@ -147,6 +171,20 @@ namespace ArchiveFixer.Extraction
                 return Cannot(path, StatusText.VolumeRepairNotAVolumeName);
             }
 
+            /*
+             * 先看"整组名字都被缀了垃圾"这一档（2026-09-28 真机：百度网盘给每个分卷名缀「删除」）。
+             * ⚠ 必须排在"必须是第 1 卷"与"得有兄弟卷"这两道门**之前** —— 带垃圾的组里，
+             * 第 2/3 卷也有名字要改，而且 `RawSplitStreamDetector.FindSiblingVolumes` 认不出它们
+             * （它按标准名找兄弟），排后面就永远走不到。
+             * 判据只有一条：这一段的卷标记后面粘着垃圾，去掉垃圾就是标准名 —— 只删尾巴、不动卷号。
+             */
+            VolumeNameRepairPlan? groupPlan = PlanJunkTailGroup(path, fileName, fileNamesInDirectory);
+
+            if (groupPlan != null)
+            {
+                return groupPlan;
+            }
+
             if (index.Value != 1)
             {
                 return Cannot(path, StatusText.VolumeRepairNotFirstVolume);
@@ -186,8 +224,130 @@ namespace ArchiveFixer.Extraction
                 CurrentFileName = fileName,
                 SuggestedFileName = suggested,
                 TargetPath = targetPath,
-                Siblings = siblings
+                Siblings = siblings,
+                Items = new[]
+                {
+                    new VolumeRepairItem
+                    {
+                        CurrentPath = path,
+                        CurrentFileName = fileName,
+                        SuggestedFileName = suggested,
+                        TargetPath = targetPath
+                    }
+                }
             };
+        }
+
+        /// <summary>
+        /// 「整组名字的卷号后面都粘着垃圾」这一档的计划：<c>giu910.7z.001删除</c> →
+        /// <c>giu910.7z.001</c>、<c>.002删除</c> → <c>.002</c>……一次把整组改回标准名。
+        ///
+        /// <para>⛔ 只删尾巴、**绝不动卷号**；任何一卷的目标名已被占用 → 整组不改（宁可不做，也不覆盖）；
+        /// 只有一卷需要改时也算这一档（用户点一下就好）。返回 null 表示"不是这一档"，交给老的
+        /// 「第一卷名字被改坏」那条路。</para>
+        /// </summary>
+        private static VolumeNameRepairPlan? PlanJunkTailGroup(
+            string path,
+            string fileName,
+            IEnumerable<string?>? fileNamesInDirectory)
+        {
+            if (!TrySplitJunkTail(fileName, out string baseName, out string junk) || junk.Length == 0)
+            {
+                return null;
+            }
+
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            var items = new List<VolumeRepairItem>();
+
+            foreach (string? sibling in fileNamesInDirectory ?? Array.Empty<string?>())
+            {
+                if (string.IsNullOrWhiteSpace(sibling))
+                {
+                    continue;
+                }
+
+                // 同一组：同一个基名 + 同样的垃圾尾巴（`.001删除` / `.002删除` …）
+                if (!TrySplitJunkTail(sibling, out string siblingBase, out string siblingJunk) ||
+                    siblingJunk.Length == 0 ||
+                    !string.Equals(siblingBase, baseName, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(siblingJunk, junk, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string current = Path.Combine(directory, sibling);
+                string target = Path.Combine(directory, sibling[..^junk.Length]);
+
+                if (File.Exists(target))
+                {
+                    return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, sibling[..^junk.Length]));
+                }
+
+                items.Add(new VolumeRepairItem
+                {
+                    CurrentPath = current,
+                    CurrentFileName = sibling,
+                    SuggestedFileName = sibling[..^junk.Length],
+                    TargetPath = target
+                });
+            }
+
+            if (items.Count == 0)
+            {
+                return null;
+            }
+
+            // 自己必须在里面（调用方给的这一卷就是要修的那一卷）
+            VolumeRepairItem self = items.FirstOrDefault(
+                i => string.Equals(i.CurrentFileName, fileName, StringComparison.OrdinalIgnoreCase))!;
+
+            if (self == null)
+            {
+                return null;
+            }
+
+            var ordered = items
+                .OrderBy(i => i.CurrentFileName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return new VolumeNameRepairPlan
+            {
+                CanRepair = true,
+                CurrentPath = self.CurrentPath,
+                CurrentFileName = self.CurrentFileName,
+                SuggestedFileName = self.SuggestedFileName,
+                TargetPath = self.TargetPath,
+                Siblings = ordered.Select(i => i.CurrentFileName).ToList(),
+                Items = ordered
+            };
+        }
+
+        /// <summary>
+        /// 把"卷号段 + 粘着的垃圾"拆出来：<c>giu910.7z.001删除</c> → 基名 <c>giu910.7z</c>、垃圾 <c>删除</c>。
+        /// 判据转调 <see cref="ExtensionHelper.TrySplitVolumeSegment"/>（只此一处）。
+        /// </summary>
+        private static bool TrySplitJunkTail(string fileName, out string baseName, out string junk)
+        {
+            baseName = string.Empty;
+            junk = string.Empty;
+
+            int lastDot = fileName.LastIndexOf('.');
+
+            if (lastDot <= 0 || lastDot == fileName.Length - 1)
+            {
+                return false;
+            }
+
+            string segment = fileName[(lastDot + 1)..];
+
+            if (!ExtensionHelper.TrySplitVolumeSegment(segment, out _, out string tail) || tail.Length == 0)
+            {
+                return false;
+            }
+
+            baseName = fileName[..lastDot];
+            junk = tail;
+            return true;
         }
 
         /// <summary>
@@ -262,13 +422,76 @@ namespace ArchiveFixer.Extraction
                 return Failure(string.Format(StatusText.VolumeRepairRenameFailedFormat, plan.SuggestedFileName, ex.Message));
             }
 
+            /*
+             * 还有别的卷要改（网盘给整组缀了「删除」那种）：接着一卷一卷来。
+             * ⛔ 每一卷都走与上面同一套判据（源在、目标未被占、字节数不差）；
+             * 中途失败就**停下并如实报"已改了 N 卷"**，绝不假装整组都改好了。
+             */
+            var rest = (plan.Items ?? Array.Empty<VolumeRepairItem>())
+                .Where(i => !string.Equals(i.CurrentPath, plan.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            int done = 0;
+
+            foreach (VolumeRepairItem item in rest)
+            {
+                try
+                {
+                    if (!File.Exists(item.CurrentPath))
+                    {
+                        return PartialFailure(plan, done, $"{item.CurrentFileName}：{StatusText.VolumeRepairSourceMissing}");
+                    }
+
+                    if (string.Equals(item.CurrentPath, item.TargetPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (File.Exists(item.TargetPath))
+                    {
+                        return PartialFailure(
+                            plan,
+                            done,
+                            string.Format(StatusText.VolumeRepairTargetTakenFormat, item.SuggestedFileName));
+                    }
+
+                    long before = new FileInfo(item.CurrentPath).Length;
+                    File.Move(item.CurrentPath, item.TargetPath);
+                    long after = new FileInfo(item.TargetPath).Length;
+
+                    if (after != before)
+                    {
+                        return PartialFailure(plan, done, $"字节数变了（{before} → {after}）");
+                    }
+
+                    done++;
+                }
+                catch (Exception ex)
+                {
+                    return PartialFailure(
+                        plan,
+                        done,
+                        string.Format(StatusText.VolumeRepairRenameFailedFormat, item.SuggestedFileName, ex.Message));
+                }
+            }
+
             return new VolumeNameRepairResult
             {
                 Success = true,
                 NewPath = plan.TargetPath,
-                Message = string.Format(StatusText.VolumeRepairDoneFormat, plan.CurrentFileName, plan.SuggestedFileName)
+                Message = done == 0
+                    ? string.Format(StatusText.VolumeRepairDoneFormat, plan.CurrentFileName, plan.SuggestedFileName)
+                    : string.Format(
+                        StatusText.VolumeRepairGroupDoneFormat,
+                        plan.CurrentFileName,
+                        plan.SuggestedFileName,
+                        done + 1)
             };
         }
+
+        /// <summary>整组改到一半失败：把"改了几卷、卡在哪一卷"写清楚（面向用户，不含糊）。</summary>
+        private static VolumeNameRepairResult PartialFailure(VolumeNameRepairPlan plan, int done, string why) =>
+            Failure(string.Format(StatusText.VolumeRepairGroupPartialFormat, done + 1, why));
 
         private static VolumeNameRepairPlan Cannot(string path, string reason) => new()
         {

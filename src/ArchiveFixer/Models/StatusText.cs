@@ -1525,6 +1525,12 @@ namespace ArchiveFixer.Models
         /// <summary>改名成功（写进日志 / 状态栏）。</summary>
         public const string VolumeRepairDoneFormat = "已按建议改名：{0} → {1}";
 
+        /// <summary>整组改名成功（网盘给每卷缀了垃圾那种）。<c>{0}</c>/<c>{1}</c> = 第一卷一旧一新，<c>{2}</c> = 一共改了几卷。</summary>
+        public const string VolumeRepairGroupDoneFormat = "已按建议改名（整组 {2} 卷）：{0} → {1} 等";
+
+        /// <summary>整组改到一半失败。<c>{0}</c> = 已经改好的卷数，<c>{1}</c> = 卡住的原因。</summary>
+        public const string VolumeRepairGroupPartialFormat = "整组改名只完成了 {0} 卷就停下了（已改的那几卷不会再动）：{1}";
+
         /// <summary>改名失败（日志 / 弹窗）。<c>{0}</c> = 目标名，<c>{1}</c> = 原因。</summary>
         public const string VolumeRepairRenameFailedFormat = "改名失败（目标名「{0}」）：{1}";
 
