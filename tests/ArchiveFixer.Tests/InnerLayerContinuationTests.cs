@@ -974,6 +974,160 @@ namespace ArchiveFixer.Tests
             Assert.Equal(2, scope);
         }
 
+        // ---------------------------------------------------------------- 第五步之二：收尾守卫不许误判"没轮到"
+
+        /// <summary>
+        /// <b>第 1 轮只有 1 个包，解压途中产物里冒出一个内层包 → 必须接着解第 2 层</b>
+        /// （2026-09-28 真机："只解一层就停，汇总还写『已按「停止后续」中断』"，而用户根本没按过）。
+        ///
+        /// <para>收尾守卫（<c>roundStartTargets.Any(t =&gt; !IsHandled(t))</c>）判的是"**这一轮开跑时**
+        /// 的目标里还有没有没轮到的"。本轮解压途中通过 <c>AddInnerTasksAsync</c> 加进来的内层包是
+        /// <b>下一轮</b>才该解的，绝不能被读成"有任务没轮到" —— 一旦读错，一次正常的续解会当场
+        /// 变成"用户叫停"：只解一层就收工，汇总里还写着用户按了「停止后续」。</para>
+        ///
+        /// <para>这条用例钉的是**用户看得见的那三件事**：续解层数 ≥ 1、内层包真的被引擎解过
+        /// （第 2 层的内容物出来了）、汇总里既没有"已按「停止后续」中断"也没有"没轮到"。</para>
+        /// </summary>
+        [Fact]
+        public async Task 单包一轮_产物里冒出内层包_必须续解第二层且汇总不谎报用户叫停()
+        {
+            BuildInnerVolumeGroup();
+            string outer = BuildPackageFromInnerStage("outer.7z");
+
+            Harness harness = CreateHarness($"outer:{OuterPassword}\ninner:{InnerPassword}\n");
+            await harness.AddPathsAsync(outer);
+
+            ArchiveTask only = Assert.Single(harness.Vm.Tasks);
+
+            Assert.True(only.IsSelected, "唯一那个包必须是勾选的，否则这条用例什么都没跑");
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            // ① 续解真的发生了：第 1 轮目标只有 1 个包，第 2 层的包是解压途中才出现的。
+            Assert.True(
+                outcome.ContinuationLayers >= 1,
+                $"第 1 轮只有 1 个包、产物里有内层包时必须继续解第 2 层。"
+                + $"实际轮数 {outcome.Rounds} / 续解层 {outcome.ContinuationLayers}"
+                + $"\n汇总：{outcome.Summary}"
+                + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
+            Assert.Equal(2, outcome.Rounds);
+
+            // ② 没有被读成"用户叫停"（守卫误判的信号就是这两条）。
+            Assert.False(
+                outcome.Stopped,
+                "正常的第 2 层续解被守卫读成了『有任务没轮到』：" + outcome.Summary);
+            Assert.DoesNotContain("已按「停止后续」中断", outcome.Summary, StringComparison.Ordinal);
+            Assert.DoesNotContain("没轮到", outcome.Summary, StringComparison.Ordinal);
+
+            // ③ 内层包真的被解了：引擎为它被调用过，而且第 2 层的内容物确实出来了。
+            Assert.Contains(
+                harness.Engine.ExtractCalls,
+                path => path.EndsWith("inner.7z.001", StringComparison.OrdinalIgnoreCase));
+
+            string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
+            Assert.True(
+                payloads.Length == 1,
+                $"第 2 层应该产出一份 payload.txt，实际 {payloads.Length} 份（目录：{harness.OutputRoot}）");
+            Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
+
+            // ④ 汇总正面写着续解——不是"停在一层"。
+            Assert.Contains("自动续解 1 层", outcome.Summary, StringComparison.Ordinal);
+
+            (int sum, int scope) = ParseSummaryCounts(outcome.Summary);
+            Assert.Equal(scope, sum);
+            Assert.Equal(2, scope);
+        }
+
+        /// <summary>
+        /// <b>开工前被移出列表的任务，不许被读成"这一轮有任务没轮到"</b>——这是"只解一层就停"的成因。
+        ///
+        /// <para>真机形状（2026-09-28）：用户选的文件夹里既有真包、也有打包者附带的说明；
+        /// 一键处理开工前那一步会先把无用物从**任务列表**里移掉
+        /// （<c>ScanCoordinator.RemoveJunkTasksFromListAsync</c>，只动列表、不动磁盘），
+        /// 而"这一批要处理谁"的清单是在那之前拍的 —— 拿它去比，刚被移出列表的无用物就成了
+        /// "有任务没轮到"：第一批只解一层就收工，汇总还写"已按「停止后续」中断"。</para>
+        ///
+        /// <para>⚠ 这里**故意按真实顺序**复刻那条链路（先拍清单 → 把无用物移出列表 → 再跑管线）：
+        /// 只有"清单里有一个已经不在列表里的任务"这种状态才测得到这条判据。
+        /// 撤掉 <c>RunPipelineAsync</c> 里那道"只认还在列表里的目标"的过滤，这一条立刻变红
+        /// （红在"只解了一层 + 汇总报成用户叫停"这个点上）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 开工前被移出列表的无用物_不算这一轮没轮到_照常续解第二层()
+        {
+            BuildInnerVolumeGroup();
+            string outer = BuildPackageFromInnerStage("outer.7z");
+
+            // 真包旁边放一个打包者常带的说明（一键处理开工前那一步就是把它从列表里移掉的）。
+            string sourceDirectory = Path.GetDirectoryName(outer)!;
+            string junk = Path.Combine(sourceDirectory, "说明.txt");
+            WriteText(junk, "打包者附带的说明，不是压缩包\n");
+            DateTime junkWriteTime = File.GetLastWriteTimeUtc(junk);
+
+            Harness harness = CreateHarness($"outer:{OuterPassword}\ninner:{InnerPassword}\n");
+            await harness.AddPathsAsync(outer);
+
+            /*
+             * 再往列表里放一行"说明.txt"（用户点一键处理那一刻，列表里就是这两行）。
+             *
+             * ⚠ 这一行**只能手工放**：2026-09-28 起"导入时的无用物清理"（见 ImportJunkReminderTests）
+             * 会把它直接移出列表，所以走一次完整导入已经造不出"列表里还留着无用物"这个状态；
+             * 而那个状态在一键处理开工前**真实存在过**（用户先导入、列表之后又变过，
+             * 或者无用物扫描撞到上限留下残渣）—— 要钉的判据就是它。
+             */
+            var junkTask = new ArchiveTask(junk, harness.Vm.Tasks.Count + 1)
+            {
+                IsSelected = true,
+                Status = StatusText.Recognized,
+                ExtensionStatus = StatusText.ExtensionNormal
+            };
+
+            harness.Vm.Tasks.Add(junkTask);
+
+            // 用户点「一键处理」那一刻，勾选的就是这两行（真包 + 说明）。
+            List<ArchiveTask> targets = harness.Vm.Tasks.Where(task => task.IsSelected).ToList();
+
+            Assert.Equal(2, targets.Count);
+            Assert.Contains(targets, task => task.FileName.Equals("说明.txt", StringComparison.OrdinalIgnoreCase));
+
+            // 开工前那一步：把无用物从列表里移掉（磁盘一个字节都不动）。
+            int removed = await harness.Scan.RemoveJunkTasksFromListAsync(targets);
+
+            Assert.Equal(1, removed);
+            Assert.Single(harness.Vm.Tasks);
+
+            OneClickOutcome outcome = await harness.OneClick.RunPipelineAsync(targets);
+
+            // ① 照常续解，没有被读成"用户叫停"（红检时这一条正是"只解了一层"的现场）。
+            Assert.True(
+                outcome.Rounds == 2 && outcome.ContinuationLayers == 1,
+                $"只解了一层就停（轮数 {outcome.Rounds} / 续解层 {outcome.ContinuationLayers}）。"
+                + $"\n汇总：{outcome.Summary}"
+                + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
+            Assert.False(
+                outcome.Stopped,
+                "已经不在列表里的无用物被守卫读成了『有任务没轮到』：" + outcome.Summary);
+            Assert.DoesNotContain("已按「停止后续」中断", outcome.Summary, StringComparison.Ordinal);
+            Assert.DoesNotContain("没轮到", outcome.Summary, StringComparison.Ordinal);
+
+            // ② 移出列表的那一个**不许**再算进"本次处理"（否则汇总里会凭空多一个"未处理 1"）。
+            (int sum, int scope) = ParseSummaryCounts(outcome.Summary);
+
+            Assert.Equal(scope, sum);
+            Assert.Equal(2, scope);
+
+            // ③ 第 2 层的内容物真的出来了。
+            string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
+
+            Assert.Single(payloads);
+            Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
+
+            // ④ 红线：只动列表，磁盘上的那个说明文件还在原位、内容与写入时间都没变。
+            Assert.True(File.Exists(junk), "移出列表不许删磁盘上的文件");
+            Assert.Equal("打包者附带的说明，不是压缩包\n", File.ReadAllText(junk));
+            Assert.Equal(junkWriteTime, File.GetLastWriteTimeUtc(junk));
+        }
+
         // ---------------------------------------------------------------- 第六步：用户的真实现场
 
         [Fact]
@@ -1793,7 +1947,7 @@ namespace ArchiveFixer.Tests
             var extraction = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
             var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
-            return new Harness(vm, engine, oneClick, extraction, outputRoot, logService);
+            return new Harness(vm, engine, oneClick, extraction, scan, outputRoot, logService);
         }
 
         /// <summary>把汇总里的分项数字抠出来求和，用来验证"分项之和 = 本次任务数"这条硬要求。</summary>
@@ -1827,6 +1981,7 @@ namespace ArchiveFixer.Tests
                 CountingEngine engine,
                 OneClickCoordinator oneClick,
                 ExtractionCoordinator extraction,
+                ScanCoordinator scan,
                 string outputRoot,
                 LogService log)
             {
@@ -1834,6 +1989,7 @@ namespace ArchiveFixer.Tests
                 Engine = engine;
                 _oneClick = oneClick;
                 Extraction = extraction;
+                Scan = scan;
                 OutputRoot = outputRoot;
                 Log = log;
             }
@@ -1844,6 +2000,12 @@ namespace ArchiveFixer.Tests
 
             /// <summary>手动那条解压入口（「只解压」/「解压到当前文件夹」走它）—— 落点模型 v2 的用例要直接调它。</summary>
             public ExtractionCoordinator Extraction { get; }
+
+            /// <summary>
+            /// 扫描协调器。用例要直接调它做的只有一件事：复刻"一键处理开工前把无用物移出列表"
+            /// 那一步（<see cref="ScanCoordinator.RemoveJunkTasksFromListAsync"/>）。
+            /// </summary>
+            public ScanCoordinator Scan { get; }
 
             /// <summary>一键处理协调器：用例要读**生效的轮数上限**（<c>RoundLimit</c>），⛔ 不许写死常量。</summary>
             public OneClickCoordinator OneClick => _oneClick;

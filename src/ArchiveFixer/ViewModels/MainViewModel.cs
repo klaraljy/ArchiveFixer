@@ -3415,10 +3415,15 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 记下"导入之后不再弹无用物提醒"（用户 2026-09-24 第 15 条："用户可以选中关闭以后就不用触发了"）。
+        /// 写"导入之后不再弹无用物提醒"这个设置项（用户 2026-09-24 第 15 条：
+        /// "用户可以选中关闭以后就不用触发了"）。
         ///
-        /// <para>写失败只写 WARN：导入本身已经成功，不该因为记不住一个偏好就变成失败；
-        /// 界面上（③ 清理与删除 页）留着一个开关可以再打开。</para>
+        /// <para>⚠ <b>2026-09-28：这个开关已经不再控制任何行为</b> —— 那个提醒框退休了，
+        /// 无用物改成**导入一完成就自动移出任务列表**（<c>ScanCoordinator.AddPathsAsync</c>），
+        /// 与开关状态无关。设置项与这个写入入口先留着（⛔ 不动设置序列化：用户盘上的
+        /// <c>appsettings.json</c> 里这个键还得读写得动）。</para>
+        ///
+        /// <para>写失败只写 WARN：导入本身已经成功，不该因为记不住一个偏好就变成失败。</para>
         /// </summary>
         internal void SaveRemindJunkAfterImport(bool remind)
         {
@@ -5130,16 +5135,6 @@ namespace ArchiveFixer.ViewModels
             AutoLoadPasswordBook();
 
             UpdateSummary();
-        }
-
-        /// <summary>
-        /// 导入后无用物提醒的替身入口（**只给测试**；正式路径永远是 null = 走真弹窗）。
-        /// 见 <see cref="ScanCoordinator.JunkReminderOverride"/>。
-        /// </summary>
-        internal Func<string, ImportJunkAnswer>? JunkReminderOverride
-        {
-            get => _scanCoordinator.JunkReminderOverride;
-            set => _scanCoordinator.JunkReminderOverride = value;
         }
 
         /// <summary>

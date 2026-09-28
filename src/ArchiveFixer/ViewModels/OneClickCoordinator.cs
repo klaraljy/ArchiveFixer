@@ -882,15 +882,31 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyList<ArchiveTask> firstRoundTargets,
             OneClickRunOptions? runOptions = null)
         {
-            AppendLog("INFO", $"一键处理开始，共 {firstRoundTargets.Count} 个任务。");
+            /*
+             * ⛔ 这一批只处理**还在任务列表里**的目标（2026-09-28 真机："只解一层就停"的真正成因）。
+             *
+             * 调用方拍下"这一批要处理谁"的清单之后，列表还可能变——一键处理开工前那一步就会把
+             * 无用物从列表里移掉（ScanCoordinator.RemoveJunkTasksFromListAsync：只动列表，不动磁盘）。
+             * 被移掉的那些**既不在列表里、也不会被解压循环碰到**（解压循环走的是列表），
+             * 于是收尾守卫（下面那句 roundStartTargets.Any(t => !IsHandled(t))）会把它们读成
+             * "这一轮有任务没轮到" → 一次正常的续解被误判成用户叫停：**只解一层就收工**，
+             * 汇总还写着"已按「停止后续」中断"（用户根本没按过；真机症状就是这个）。
+             *
+             * ⚠ 判据是**引用**（那个任务对象还在不在列表里），不按路径比 ——
+             * 同一个文件被重新导入会是一个新任务，路径一样但它不属于这一批。
+             */
+            var listedTasks = new HashSet<ArchiveTask>(Tasks);
+            List<ArchiveTask> rootTargets = firstRoundTargets.Where(listedTasks.Contains).ToList();
+
+            AppendLog("INFO", $"一键处理开始，共 {rootTargets.Count} 个任务。");
 
             // 处理过的任务按轮累加：汇总要算"本次一共处理了多少个"，只算第一轮会和实际不符。
-            var processed = new List<ArchiveTask>(firstRoundTargets);
+            var processed = new List<ArchiveTask>(rootTargets);
 
             // 源文件（含分卷各卷）不算内层包：不能把用户最初给的那个 .mp4 / .7z.001 又加一遍。
-            HashSet<string> sourcePaths = BuildSourcePathSet(firstRoundTargets);
+            HashSet<string> sourcePaths = BuildSourcePathSet(rootTargets);
 
-            List<ArchiveTask> roundTargets = firstRoundTargets.ToList();
+            List<ArchiveTask> roundTargets = rootTargets.ToList();
 
             int round = 0;
             int continuationLayers = 0;
@@ -932,10 +948,18 @@ namespace ArchiveFixer.ViewModels
                     /*
                      * ⛔ 本轮"开跑时"的目标快照（2026-09-28 真机）。
                      *
-                     * 收尾那个"有任务没轮到就停"的守卫**必须只看这份快照**：本轮解压途中会往列表里加
+                     * 收尾那个"有任务没轮到就停"的守卫**只看这份快照**：本轮解压途中会往列表里加
                      * **下一轮**才该解的内层包（AddInnerTasksAsync），拿实时清单去比，那些刚加进来、
                      * 本来就该下一轮跑的任务会被当成"这一轮没轮到" → 正常续解被误判成"用户叫停"，
                      * 于是**只解一层就收工**（真机现象；总结还会说"已按「停止后续」中断"，用户根本没按过）。
+                     *
+                     * ⚠ 2026-09-28 复检（补守门用例时当场量到的）：这份快照与 roundTargets 在同一个迭代里
+                     * **内容逐项相同**（roundTargets 只在本轮末尾才被重新赋值，中途没有任何地方改它），
+                     * 所以"改用快照"这一下本身不改变行为，真机上那个"只解一层就停"也不是它治好的 ——
+                     * 真正的成因是"这一批的目标清单里混进了**已经从列表里移掉**的任务"（开工前清无用物那一步），
+                     * 那个已经在 RunPipelineAsync 入口处过滤掉了（见那里的说明）。
+                     * 保留这份快照的理由：它把"守卫只看本轮开跑时的目标"这条语义**写死**在这里，
+                     * 以后谁要是把 roundTargets 改成实时清单（比如直接传 Tasks），守卫不会跟着一起错。
                      */
                     List<ArchiveTask> roundStartTargets = roundTargets.ToList();
 
@@ -1126,7 +1150,7 @@ namespace ArchiveFixer.ViewModels
              * 两种情况都写 WARN 说明原因，绝不静默。
              */
             await CompleteRootSourcePackagesAsync(
-                firstRoundTargets,
+                rootTargets,
                 processed,
                 stopped || stopRequested,
                 hitRoundLimit,

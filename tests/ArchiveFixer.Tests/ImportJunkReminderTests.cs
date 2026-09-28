@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
@@ -6,25 +7,29 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Xunit;
 
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 用户 2026-09-24 第 15 条的回归测试：**导入之后就要提醒无用物，而且要能从列表里删掉**。
+    /// <b>导入时的无用物处理</b>的回归测试。
     ///
-    /// <para>用户原话：「列表要能删无用物；每次操作的选完文件夹，就要出一个无用物提醒，
-    /// 用户可以选中关闭以后就不用触发了」。</para>
+    /// <para>⚠ 类名是历史遗留（它以前测的是那个「导入后提醒」弹窗）。用户 2026-09-28 把口径改死了：
+    /// 原话「为什么不在检测到的时候就直接移除」「当选择文件的时候，移除无用物的弹窗，没有弹出来
+    /// 我还以为你又没弄好，但是在点击一键处理之后，他一出来，但是在我点击之前他一直还是勾选着，
+    /// 你为什么要这样」→ <b>导入一完成就自动把无用物移出任务列表</b>，那个提醒框退休。</para>
     ///
     /// <para>这一组钉四件事：</para>
     /// <list type="number">
-    /// <item><description>导入之后就扫（而不是等他点一键处理）、判据与 §9.7 同一套；</description></item>
-    /// <item><description><b>能被列出来</b>：导入文件夹时无用物自己也会进任务列表，
-    /// 所以"属于本批任务就不报"这条保护必须只覆盖**是压缩包**的任务（否则提醒永远是空的 —— 见
-    /// <c>SourceJunkScanner.CollectProtectedPaths</c> 的说明）；</description></item>
-    /// <item><description>程序对无用物**一个都不动**，"从列表里移除"只动任务列表；</description></item>
-    /// <item><description>勾「以后不再提醒」写进设置，之后导入一次都不弹。</description></item>
+    /// <item><description>导入之后**立刻**移出列表（不用等一键处理，也不用等任何弹窗）；</description></item>
+    /// <item><description><b>红线：磁盘一个字节都不动</b> —— 不删、不改名、不搬走，内容与最后写入时间都对照；
+    /// 日志里写明移了几个、是哪些，并说清"源文件一个字节都没动"；</description></item>
+    /// <item><description><b>判据窄，不误伤真包</b>：名字像无用物、魔数却是真包（伪装包）的必须留在列表里；
+    /// 分卷组的后续卷（没有魔数可看）也必须靠"同组兄弟卷"那条保护留下来；</description></item>
+    /// <item><description>那个已退休的开关（<c>AppSettings.RemindJunkAfterImport</c>）**不再控制**这件事：
+    /// 开着关着都照样移出列表，但设置项本身读写与序列化一个字都没动。</description></item>
     /// </list>
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
@@ -53,56 +58,29 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        // ================================================================ ① 扫得出来
+        // ================================================================ ① 导入即移出 + 红线
 
         /// <summary>
-        /// 真窗口宿主（这里用注入的替身）里：导入文件夹之后弹一次提醒，里面列出的正是那些无用物，
-        /// 而且**任务列表里那些行也能被列出来**（它们同样是任务 —— 见类注释第 2 条）。
+        /// 导入文件夹之后**立刻**把无用物移出列表：两个没用物不在列表里了，真包还在，
+        /// 而磁盘上三个文件**一个字节都没动**（内容与最后写入时间逐项对照）。
         /// </summary>
         [Fact]
-        public async Task 导入文件夹之后_无用物被列出来()
+        public async Task 导入之后_无用物立刻被移出列表_磁盘一个字节都没动()
         {
             string folder = CreateSourceFolder();
+            string junkText = Path.Combine(folder, "说明.txt");
+            string junkUrl = Path.Combine(folder, "网址.url");
 
-            Harness harness = CreateHarness(new DialogService());
-            var reminder = new ReminderStub();
-            harness.Vm.JunkReminderOverride = reminder.Ask;
+            byte[] textBefore = File.ReadAllBytes(junkText);
+            byte[] urlBefore = File.ReadAllBytes(junkUrl);
+            DateTime textTimeBefore = File.GetLastWriteTimeUtc(junkText);
+            DateTime urlTimeBefore = File.GetLastWriteTimeUtc(junkUrl);
+
+            Harness harness = CreateHarness();
 
             await harness.Vm.AddPathsAsync(new[] { folder });
 
-            Assert.Equal(1, reminder.Calls);
-
-            // 提醒正文里两个无用物都在，源包（.7z）不在
-            Assert.Contains("说明.txt", reminder.LastMessage, StringComparison.Ordinal);
-            Assert.Contains("网址.url", reminder.LastMessage, StringComparison.Ordinal);
-            Assert.DoesNotContain("pack.7z", reminder.LastMessage, StringComparison.Ordinal);
-
-            // 日志里也有这一条（可追溯）
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("导入后提醒：", StringComparison.Ordinal)
-                        && line.Contains("说明.txt", StringComparison.Ordinal));
-
-            // 程序对无用物一个都没动
-            Assert.True(File.Exists(Path.Combine(folder, "说明.txt")));
-            Assert.True(File.Exists(Path.Combine(folder, "网址.url")));
-        }
-
-        /// <summary>点「从列表里移除这些」：任务列表里那两行没了，源文件照样在。</summary>
-        [Fact]
-        public async Task 选从列表里移除_只动列表不动源文件()
-        {
-            string folder = CreateSourceFolder();
-
-            Harness harness = CreateHarness(new DialogService());
-            var reminder = new ReminderStub { Keep = false };
-            harness.Vm.JunkReminderOverride = reminder.Ask;
-
-            await harness.Vm.AddPathsAsync(new[] { folder });
-
-            Assert.Equal(1, reminder.Calls);
-
-            // 两个无用物已经从列表里消失
+            // ① 两个无用物**已经不在列表里**（不用等一键处理，也不用等任何弹窗）。
             Assert.DoesNotContain(
                 harness.Vm.Tasks,
                 task => task.FileName.Equals("说明.txt", StringComparison.OrdinalIgnoreCase));
@@ -110,119 +88,156 @@ namespace ArchiveFixer.Tests
                 harness.Vm.Tasks,
                 task => task.FileName.Equals("网址.url", StringComparison.OrdinalIgnoreCase));
 
-            // 源文件一个字节都没动
-            Assert.True(File.Exists(Path.Combine(folder, "说明.txt")));
-            Assert.True(File.Exists(Path.Combine(folder, "网址.url")));
-
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("从任务列表里移除", StringComparison.Ordinal));
-        }
-
-        /// <summary>点「知道了」：什么都不动（列表也保持原样）。</summary>
-        [Fact]
-        public async Task 选知道了_列表与源文件都不动()
-        {
-            string folder = CreateSourceFolder();
-
-            Harness harness = CreateHarness(new DialogService());
-            var reminder = new ReminderStub { Keep = true };
-            harness.Vm.JunkReminderOverride = reminder.Ask;
-
-            await harness.Vm.AddPathsAsync(new[] { folder });
-
-            Assert.Equal(1, reminder.Calls);
+            // ② 真包留在列表里（这一档不动真东西）。
             Assert.Contains(
                 harness.Vm.Tasks,
-                task => task.FileName.Equals("说明.txt", StringComparison.OrdinalIgnoreCase));
-            Assert.True(File.Exists(Path.Combine(folder, "说明.txt")));
-        }
+                task => task.FileName.Equals("pack.7z", StringComparison.OrdinalIgnoreCase));
 
-        // ================================================================ ② 无界面宿主 / 开关
+            // ③ 红线：磁盘上的文件还在原位，内容与最后写入时间都没变（不是"删了又建一个同名的"）。
+            Assert.True(File.Exists(junkText), "红线：只许动列表，绝不许删 / 搬 / 改名磁盘上的文件");
+            Assert.True(File.Exists(junkUrl), "红线：只许动列表，绝不许删 / 搬 / 改名磁盘上的文件");
+            Assert.Equal(textBefore, File.ReadAllBytes(junkText));
+            Assert.Equal(urlBefore, File.ReadAllBytes(junkUrl));
+            Assert.Equal(textTimeBefore, File.GetLastWriteTimeUtc(junkText));
+            Assert.Equal(urlTimeBefore, File.GetLastWriteTimeUtc(junkUrl));
 
-        /// <summary>
-        /// 无界面宿主（单测、控制台宿主）：**不弹窗、不死等**，只写一行日志 —— 导入照常完成。
-        /// </summary>
-        [Fact]
-        public async Task 无界面宿主_只写日志不弹窗()
-        {
-            string folder = CreateSourceFolder();
-
-            Harness harness = CreateHarness(new DialogService());
-
-            await harness.Vm.AddPathsAsync(new[] { folder });
-
+            // ④ 日志写明"移了几个、是哪几个、没动文件"（用户要能追溯）。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains(StatusText.ImportJunkReminderNoHostLog, StringComparison.Ordinal));
-
-            Assert.True(File.Exists(Path.Combine(folder, "说明.txt")));
+                line => line.Contains("导入完成：已自动把 2 个无用物从任务列表里移出", StringComparison.Ordinal) &&
+                        line.Contains("说明.txt", StringComparison.Ordinal) &&
+                        line.Contains("网址.url", StringComparison.Ordinal) &&
+                        line.Contains("源文件一个字节都没动", StringComparison.Ordinal));
         }
 
-        /// <summary>勾了「以后不再提醒」：写进设置，之后导入一次都不提醒。</summary>
+        // ================================================================ ② 判据窄：不误伤真包
+
+        /// <summary>
+        /// 名字像无用物、魔数却是真包的那一个（伪装包）必须**留在列表里**：
+        /// 这正是 <c>SourceJunkScanner</c> 判据 3 存在的理由，也是"导入即移出"最容易出事的地方。
+        /// </summary>
         [Fact]
-        public async Task 勾了以后不再提醒_写进设置且之后不再提醒()
+        public async Task 名字像无用物的真包_不会被移出列表()
+        {
+            string folder = Path.Combine(_root, "src-disguised");
+            Directory.CreateDirectory(folder);
+
+            string disguised = Path.Combine(folder, "真包.jpg");
+            File.WriteAllBytes(disguised, ZipHeaderBytes());
+            File.WriteAllText(Path.Combine(folder, "说明.txt"), "这是打包者附带的说明，不是压缩包");
+
+            // 前提先钉一遍，否则这条用例可能什么都没证明。
+            Assert.True(SourceJunkScanner.LooksLikeJunkCandidate("真包.jpg"), "前提：名字必须也像无用物");
+            Assert.True(await new MagicArchiveProber().IsArchiveAsync(disguised), "前提：真包必须能被魔数认出来");
+
+            Harness harness = CreateHarness();
+
+            await harness.Vm.AddPathsAsync(new[] { folder });
+
+            // 真包留下、说明移出（只差"名字像不像"这一件事，靠魔数分开）。
+            Assert.Contains(
+                harness.Vm.Tasks,
+                task => task.FileName.Equals("真包.jpg", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                harness.Vm.Tasks,
+                task => task.FileName.Equals("说明.txt", StringComparison.OrdinalIgnoreCase));
+
+            Assert.True(File.Exists(disguised), "红线：真包一个字节都不许动");
+        }
+
+        /// <summary>
+        /// <b>分卷组的后续卷不许被当成无用物移出列表</b>（用户 2026-09-28 真机那条保护）。
+        ///
+        /// <para>后续卷是裸切块、**没有文件头魔数**，名字里又带"说明"这类字眼时，
+        /// 只按名字 + 魔数判就会把它叫成无用物；一旦被移出列表，整组只剩第一卷，**再也解不开**。
+        /// 保护是 <c>SourceJunkScanner.CollectProtectedPaths</c> 里那条"同目录同组的兄弟卷"——
+        /// 本用例就是钉住它别被拆掉。</para>
+        ///
+        /// <para>⚠ 两行是**手工**建的：整组一次导入时 <c>VolumeGroupingService</c> 会把它们并成一行
+        /// （后续卷压根不是任务行）；而"后续卷自己占一行"在真机上出现过 ——
+        /// 首卷后来才补齐的那条「首卷补齐后并组」就是它。</para>
+        /// </summary>
+        [Fact]
+        public async Task 分卷组的后续卷_不会被移出列表()
+        {
+            string folder = Path.Combine(_root, "src-volume");
+            Directory.CreateDirectory(folder);
+
+            string first = Path.Combine(folder, "说明.7z.001");
+            string second = Path.Combine(folder, "说明.7z.002");
+
+            File.WriteAllBytes(first, SevenZipHeaderBytes());
+            File.WriteAllBytes(second, new byte[] { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 });
+
+            // 前提：两卷都真的像无用物候选、后续卷真的没有魔数（否则这条用例测不到那条保护）。
+            Assert.True(SourceJunkScanner.LooksLikeJunkCandidate("说明.7z.001"));
+            Assert.True(SourceJunkScanner.LooksLikeJunkCandidate("说明.7z.002"));
+            Assert.False(
+                await new MagicArchiveProber().IsArchiveAsync(second),
+                "前提：后续卷必须是魔数认不出来的（裸切块），这才需要那条保护");
+            Assert.True(
+                await new MagicArchiveProber().IsArchiveAsync(first),
+                "前提：第一卷必须认得出是包 —— 那条保护是靠它认领兄弟卷的");
+
+            Harness harness = CreateHarness();
+
+            AddTask(harness, first, isArchive: true);
+            AddTask(harness, second, isArchive: false);
+
+            int removed = await harness.Scan.RemoveJunkTasksFromListAsync(harness.Vm.Tasks.ToList());
+
+            // 一个都不许移：第一卷自己是真包，后续卷被同组的兄弟卷认领。
+            Assert.Equal(0, removed);
+            Assert.Equal(2, harness.Vm.Tasks.Count);
+            Assert.True(File.Exists(first));
+            Assert.True(File.Exists(second));
+        }
+
+        // ================================================================ ③ 已退休的开关不再控制这件事
+
+        /// <summary>
+        /// 那个开关（<c>RemindJunkAfterImport</c>）**关着也照样移出列表** —— 它已经不再控制导入时的行为；
+        /// 但设置项本身仍然读写正常（序列化一个字都没动，用户盘上的 <c>appsettings.json</c> 还认得它）。
+        /// </summary>
+        [Fact]
+        public async Task 开关关着也照样移出列表_设置项本身仍然可读写()
         {
             string folder = CreateSourceFolder();
 
-            Harness harness = CreateHarness(new DialogService());
-            var reminder = new ReminderStub { Keep = true, OptionChecked = true };
-            harness.Vm.JunkReminderOverride = reminder.Ask;
+            Harness harness = CreateHarness(settings => settings.RemindJunkAfterImport = false);
 
             await harness.Vm.AddPathsAsync(new[] { folder });
 
-            Assert.Equal(1, reminder.Calls);
+            Assert.DoesNotContain(
+                harness.Vm.Tasks,
+                task => task.FileName.Equals("说明.txt", StringComparison.OrdinalIgnoreCase));
 
-            // ① 写进设置（跨重启有效）
-            AppSettings reloaded = new SettingsService(harness.PathService).Load();
-            Assert.False(reloaded.RemindJunkAfterImport);
-
-            // ② 再导入一次：一个框都不弹
-            await harness.Vm.AddPathsAsync(new[] { folder });
-
-            Assert.Equal(1, reminder.Calls);
-
-            // ③ 而且它也是可逆的：把开关打开就恢复提醒
+            // 设置项照旧：能写、能落盘、能读回来（"先留着、别动设置序列化"）。
             harness.Vm.SaveRemindJunkAfterImport(true);
 
             Assert.True(new SettingsService(harness.PathService).Load().RemindJunkAfterImport);
         }
 
-        /// <summary>设置里关掉开关：导入之后**一次都不扫、不提醒**（连日志都不写）。</summary>
-        [Fact]
-        public async Task 开关关掉_导入后完全不提醒()
-        {
-            string folder = CreateSourceFolder();
-
-            Harness harness = CreateHarness(
-                new DialogService(),
-                settings => settings.RemindJunkAfterImport = false);
-
-            var reminder = new ReminderStub();
-            harness.Vm.JunkReminderOverride = reminder.Ask;
-
-            await harness.Vm.AddPathsAsync(new[] { folder });
-
-            Assert.Equal(0, reminder.Calls);
-            Assert.DoesNotContain(
-                harness.LogTexts,
-                line => line.Contains("导入后提醒：", StringComparison.Ordinal));
-        }
-
-        // ================================================================ ③ 列表里删无用物
+        // ================================================================ ④ 列表里手动删任务
 
         /// <summary>「移除勾选的」：只移除勾选的那些，源文件不动，没有勾选时只提示一句。</summary>
         [Fact]
         public async Task 移除勾选的任务_只动列表()
         {
-            string folder = CreateSourceFolder();
+            string folder = Path.Combine(_root, "src-manual");
+            Directory.CreateDirectory(folder);
 
-            Harness harness = CreateHarness(new DialogService(), settings => settings.RemindJunkAfterImport = false);
+            // 这一条测的是**手动移除**这条命令，所以放两个真包（不会被导入时那次清理碰到的）。
+            File.WriteAllText(Path.Combine(folder, "pack-a.7z"), "not a real archive - the engine is faked in these tests");
+            File.WriteAllText(Path.Combine(folder, "pack-b.7z"), "not a real archive - the engine is faked in these tests");
+
+            Harness harness = CreateHarness();
 
             await harness.Vm.AddPathsAsync(new[] { folder });
 
             List<ArchiveTask> tasks = harness.Vm.Tasks.ToList();
-            Assert.True(tasks.Count >= 2);
+
+            Assert.Equal(2, tasks.Count);
 
             // 一个都不勾：只提示，不动
             foreach (ArchiveTask task in tasks)
@@ -243,15 +258,28 @@ namespace ArchiveFixer.Tests
 
             Assert.DoesNotContain(harness.Vm.Tasks, task => ReferenceEquals(task, doomed));
             Assert.True(File.Exists(doomedPath), "移除任务不许动源文件");
-            Assert.True(File.Exists(Path.Combine(folder, "说明.txt")));
+            Assert.True(File.Exists(Path.Combine(folder, "pack-a.7z")));
+            Assert.True(File.Exists(Path.Combine(folder, "pack-b.7z")));
         }
+
+        /*
+         * ===== 删掉的两条老用例（⛔ 不是"改成假装跑过"，是真的测不到了）=====
+         *
+         * ①「选知道了_列表与源文件都不动」—— 它测的是那个提醒框的主按钮「知道了」。
+         *    提醒框已经退休（用户 2026-09-28：「为什么不在检测到的时候就直接移除」），
+         *    导入路径里再也不弹这个框，"点知道了会怎样"这个行为在程序里已经不存在，
+         *    所以这条用例删除；现在的口径由上面「导入之后_无用物立刻被移出列表_磁盘一个字节都没动」钉住。
+         *
+         * ②「勾了以后不再提醒_写进设置且之后不再提醒」—— 同理：提醒框退休之后没有"提醒"可关，
+         *    那个开关也不再控制导入时的行为（见「开关关着也照样移出列表_设置项本身仍然可读写」）。
+         *    老用例的一半（设置项仍然写得进、读得回）保留在那一条里，剩下的一半测的是一个不存在的行为。
+         */
 
         // ================================================================ 装配
 
         /// <summary>造一个文件夹：一个（假）包 + 两个打包者常带的无用物。</summary>
-        private string CreateSourceFolder()
+        private static string CreateSourceFolderAt(string folder)
         {
-            string folder = Path.Combine(_root, "src");
             Directory.CreateDirectory(folder);
 
             File.WriteAllText(Path.Combine(folder, "pack.7z"), "not a real archive - the engine is faked in these tests");
@@ -261,7 +289,30 @@ namespace ArchiveFixer.Tests
             return folder;
         }
 
-        private Harness CreateHarness(DialogService dialogService, Action<AppSettings>? configure = null)
+        private string CreateSourceFolder() => CreateSourceFolderAt(Path.Combine(_root, "src"));
+
+        /// <summary>
+        /// 手工建一行任务（与 <c>OneClickJunkAutoRemoveTests</c> 同一套做法）。
+        ///
+        /// <para>为什么有的用例要手工建：整组一次导入时 <c>VolumeGroupingService</c> 会把分卷并成一行，
+        /// 而"分卷组的后续卷自己占一行"这种形状在真机上出现过（首卷后来才补齐）——
+        /// 要钉住那条兄弟卷保护，只能把这个形状直接摆出来。</para>
+        /// </summary>
+        private static ArchiveTask AddTask(Harness harness, string sourcePath, bool isArchive)
+        {
+            var task = new ArchiveTask(sourcePath, harness.Vm.Tasks.Count + 1)
+            {
+                IsArchive = isArchive,
+                Status = StatusText.Recognized,
+                ExtensionStatus = StatusText.ExtensionNormal,
+                IsSelected = true
+            };
+
+            harness.Vm.Tasks.Add(task);
+            return task;
+        }
+
+        private Harness CreateHarness(Action<AppSettings>? configure = null)
         {
             string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dataRoot);
@@ -275,7 +326,11 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.RecursionMode = "SingleLayer";
 
-            // 导入后**不要**自动扫描：这一组测的是"导入 + 提醒"，不是识别（假包识别出来也不是归档）。
+            /*
+             * 导入后**不要**自动扫描：这一组测的是"导入时的无用物处理"，不是识别
+             * （那几个假包识别出来也不是归档）。无用物的判据不依赖识别结果 ——
+             * 名字 + 魔数体检自己就能定案，所以关掉识别照样测得到。
+             */
             settings.AutoScanAfterDrop = false;
 
             configure?.Invoke(settings);
@@ -297,24 +352,30 @@ namespace ArchiveFixer.Tests
                 pathService,
                 new TaskSummaryService(),
                 new ClipboardService(),
-                dialogService);
+                new DialogService());
 
             Extraction.RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
             Engines.ToolLocator.Default.CustomSevenZipExePath = previousSevenZipPath;
 
-            return new Harness(vm, logService, pathService);
+            // 分卷那条用例要直接调"把无用物移出列表"这一个方法（导入路径调的也是它）。
+            var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
+
+            return new Harness(vm, scan, logService, pathService);
         }
 
         private sealed class Harness
         {
-            public Harness(MainViewModel vm, LogService log, PathService pathService)
+            public Harness(MainViewModel vm, ScanCoordinator scan, LogService log, PathService pathService)
             {
                 Vm = vm;
+                Scan = scan;
                 Log = log;
                 PathService = pathService;
             }
 
             public MainViewModel Vm { get; }
+
+            public ScanCoordinator Scan { get; }
 
             public LogService Log { get; }
 
@@ -324,27 +385,31 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 可控的提醒替身：记下被问了几次、正文是什么，并按设置回答"知道了 / 从列表里移除"与勾选状态。
-        /// （真窗口在无界面宿主里不会弹，所以只能用替身证明"问过没有、问的是什么"。）
+        /// 一个"文件头就是 ZIP"的真包（魔数认得出来，但内容是不是一个完整 ZIP 与本组用例无关）。
         /// </summary>
-        private sealed class ReminderStub
+        private static byte[] ZipHeaderBytes()
         {
-            /// <summary>true = 主按钮「知道了」；false = 次按钮「从列表里移除这些」。</summary>
-            public bool Keep { get; set; } = true;
+            var bytes = new List<byte> { 0x50, 0x4B, 0x03, 0x04 };
 
-            public bool OptionChecked { get; set; }
-
-            public int Calls { get; private set; }
-
-            public string LastMessage { get; private set; } = string.Empty;
-
-            public ImportJunkAnswer Ask(string message)
+            while (bytes.Count < 64)
             {
-                Calls++;
-                LastMessage = message;
-
-                return new ImportJunkAnswer { Keep = Keep, OptionChecked = OptionChecked };
+                bytes.Add(0x00);
             }
+
+            return bytes.ToArray();
+        }
+
+        /// <summary>一个"文件头就是 7z"的假包（7z 的签名 <c>37 7A BC AF 27 1C</c> + 补零）。</summary>
+        private static byte[] SevenZipHeaderBytes()
+        {
+            var bytes = new List<byte> { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C };
+
+            while (bytes.Count < 64)
+            {
+                bytes.Add(0x00);
+            }
+
+            return bytes.ToArray();
         }
 
         /// <summary>本组用例不解压：一个永远不可用的假引擎就够（构造函数只读它的能力位）。</summary>

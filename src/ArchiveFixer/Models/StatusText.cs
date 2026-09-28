@@ -924,61 +924,24 @@ namespace ArchiveFixer.Models
             "已达到每批 {0} 层的上限，还剩 {1} 个内层包没解（已经勾好）—— 点「继续解」接着解。";
 
         // ================================================================
-        // 导入后的无用物提醒 + 列表里删无用物（用户 2026-09-24 第 15 条）
+        // 导入时的无用物处理 + 列表里删无用物
         // ================================================================
         //
-        // 用户原话："列表要能删无用物；每次操作的选完文件夹，就要出一个无用物提醒，
-        // 用户可以选中关闭以后就不用触发了。"
+        // 用户 2026-09-24 第 15 条要的是"列表要能删无用物"；2026-09-28 他把时机收得更死：
+        // 原话「为什么不在检测到的时候就直接移除」「当选择文件的时候，移除无用物的弹窗，没有弹出来
+        // 我还以为你又没弄好，但是在点击一键处理之后，他一出来，但是在我点击之前他一直还是勾选着，
+        // 你为什么要这样」——于是**导入一完成就自动把无用物移出任务列表**，
+        // ⛔ 那条「导入后提醒」的弹窗已经退休（相关文案一并删除，别再加回来）。
         //
-        // 与 §9.7「解压前的提醒」是**同一个判据**（SourceJunkScanner），只是时机提前到导入之后：
-        // 选完文件夹立刻告诉他"这里有这些东西"，而不是等他点了处理才说。
-        // 程序对无用物依旧**一个都不动**（不删/不改名/不搬）；"从列表里移除"只动任务列表。
+        // 与 §9.7「解压前的提醒」仍是**同一个判据**（SourceJunkScanner）；程序对无用物依旧
+        // **一个都不动**（不删/不改名/不搬），"移出列表"动的只是任务列表。
 
-        /// <summary>提醒框标题。</summary>
-        public const string ImportJunkReminderTitle = "无用物提醒";
-
-        /// <summary>开场：这些是什么 + 判据有多窄。</summary>
-        public const string ImportJunkReminderIntro =
-            "这次导入的文件夹里有一些文件，很可能是打包者附带的说明 / 网址 / 工具 / 广告之类的诱饵"
-            + "（本程序只按文件名 + 魔数判了个大概，不保证它们真的没用）：";
-
-        /// <summary>最多列这么多条（其余只报个数）。</summary>
-        public const string ImportJunkReminderCountFormat = "这次一共认出 {0} 个：";
-
-        /// <summary>还有多少个没列出来。</summary>
-        public const string ImportJunkReminderMoreFormat = "  …还有 {0} 个（最多列 10 条）";
-
-        /// <summary>撞到扫描上限时如实说明。</summary>
-        public const string ImportJunkReminderTruncatedNote = "  （文件太多，本次只核对了前一部分）";
-
-        /// <summary>收尾：程序不动它们 + "从列表里移除"动的只是列表。</summary>
-        public const string ImportJunkReminderFooter =
-            "本程序对上面这些文件一个都不会动（不删、不改名、不搬走）；"
-            + "点「从列表里移除这些」只是把它们从任务列表里去掉，源文件照样留在原地。";
-
-        /// <summary>主按钮：知道了（什么都不做）。</summary>
-        public const string ImportJunkReminderKeepText = "知道了";
-
-        /// <summary>次按钮：只把它们从任务列表里移除。</summary>
-        public const string ImportJunkReminderRemoveText = "从列表里移除这些";
-
-        /// <summary>可选项位：以后不再提醒（写进设置，界面上有开关能再打开）。</summary>
-        public const string ImportJunkReminderOptionText = "以后不再提醒（可在「清理与删除」页把开关打开）";
-
-        /// <summary>导入后提醒的日志（数量 + 前几个名字）。</summary>
-        public const string ImportJunkReminderLogFormat = "导入后提醒：源目录里有 {0} 个疑似无用物（例如 {1}）。";
-
-        /// <summary>无界面宿主：不弹窗、只写日志（与 §9.7 同一口径）。</summary>
-        public const string ImportJunkReminderNoHostLog =
-            "当前宿主没有界面：导入后的无用物提醒不弹窗、只写日志（什么都不删）。";
-
-        /// <summary>用户勾了"以后不再提醒"并写进设置。</summary>
-        public const string ImportJunkReminderSuppressedLog =
-            "已记下「以后不再提醒无用物」：写进设置，可在「清理与删除」页把开关打开。";
-
-        /// <summary>用户选了"从列表里移除这些"。</summary>
-        public const string ImportJunkReminderRemovedLogFormat =
-            "已按提醒里的选择，把 {0} 个无用物从任务列表里移除（源文件一个字节都没动）。";
+        /// <summary>
+        /// 导入完成时**自动**把无用物从任务列表里移出（用户 2026-09-28）。
+        /// <c>{0}</c> = 移掉几个，<c>{1}</c> = 前几个名字（最多 5 个）。
+        /// </summary>
+        public const string ImportJunkRemovedLogFormat =
+            "导入完成：已自动把 {0} 个无用物从任务列表里移出（它们对解压没用；源文件一个字节都没动）：{1}";
 
         /// <summary>
         /// 一键处理开工前**自动**把无用物从列表里移掉（用户 2026-09-28：「1.要」）。
@@ -993,14 +956,21 @@ namespace ArchiveFixer.Models
         /// <summary>一个都没勾时点「移除勾选的」。</summary>
         public const string RemoveCheckedTasksNoneText = "没有勾选任何任务，没有可移除的。";
 
-        /// <summary>③「清理与删除」页那个开关的文案（第 15 条：导入后就提醒无用物）。</summary>
-        public const string SettingsRemindJunkAfterImportLabel = "导入文件夹后提醒一次「疑似无用物」";
+        /// <summary>
+        /// ③「清理与删除」页那个开关的文案。
+        ///
+        /// <para>⚠ <b>2026-09-28：它已经不再控制任何行为</b> —— 那个「导入后提醒」弹窗退休了，
+        /// 无用物改成**导入一完成就自动移出列表**（<c>ScanCoordinator.AddPathsAsync</c>），
+        /// 与这个开关的开关状态无关。设置项本身先留着（⛔ 不动设置序列化，用户盘上的
+        /// <c>appsettings.json</c> 里这个键还得读得进来），界面上这一格也留着，
+        /// 但文案如实说明它现在不生效 —— 一个写着"关了就不提醒"却什么都不管的开关，对用户就是一句谎。</para>
+        /// </summary>
+        public const string SettingsRemindJunkAfterImportLabel = "导入文件夹后提醒一次「疑似无用物」（已停用）";
 
-        /// <summary>它的说明（默认开；关掉 = 导入后一次都不提醒，判据与扫描都不跑）。</summary>
+        /// <summary>它的说明（如实写明：2026-09-28 起这个开关不再控制导入时的行为）。</summary>
         public const string SettingsRemindJunkAfterImportHint =
-            "默认开：每次选完文件夹就扫一遍源目录，把打包者常带的说明 / 网址 / 工具列出来，"
-            + "并可以一键把它们从任务列表里去掉（程序对这些文件一个都不会动：不删、不改名、不搬走）。"
-            + "关掉 = 导入后完全不提醒。";
+            "已停用：无用物现在是「导入一完成就自动从任务列表里移出」（只动列表，源文件一个字节都不动），"
+            + "跟这个开关无关。这一格先留着（设置文件不动），改它现在什么都不影响。";
 
         /// <summary>③ 页「工作区残留」那一组的标题。</summary>
         public const string WorkspaceLeftoverGroupHeader = "工作区残留（失败 / 取消留下的中间产物）";
