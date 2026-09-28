@@ -764,9 +764,58 @@ namespace ArchiveFixer.Detection
 
             string baseName = string.Join(".", parts, 0, count);
 
+            /*
+             * ⛔ 剥掉"粘在压缩后缀上的垃圾"（2026-09-28 真机）：
+             * `amb909.7z删除.001` 的基名老算法算成 `amb909.7z删除`，而同组的 `amb909.7z.002sc`
+             * 算成 `amb909.7z` —— **两个基名不同 → 同一组的两卷被分到两个组**，
+             * 于是第二卷自己单干、报"缺第一卷"，一键处理里就出现"跳过但名字确实改了"那种看不懂的场面。
+             *
+             * 判据很窄：基名的**最后一段**必须以已知压缩后缀开头、后面只跟非字母数字的垃圾
+             * （`7z删除` → `7z`）。正常名字（`rar-android-722.132`）不受影响 —— 那一段不是"后缀+垃圾"。
+             */
+            baseName = StripJunkAfterArchiveExtension(baseName);
+
             // 基名不 Trim：文件名里的首尾空格是真的会改变归组的字符。
             // 但"全是空白"的基名（例如文件名叫 ".zip"）没有意义，直接不认。
             return string.IsNullOrWhiteSpace(baseName) ? string.Empty : baseName;
+        }
+
+        /// <summary>
+        /// 把"压缩后缀后面粘着垃圾"的最后一段清干净：<c>x.7z删除</c> → <c>x.7z</c>；<c>y.rar副本</c> → <c>y.rar</c>。
+        /// 段里没有已知压缩后缀、或后缀后面还跟着字母数字的，一律原样返回（宁可不动，也不乱剪）。
+        /// </summary>
+        private static string StripJunkAfterArchiveExtension(string baseName)
+        {
+            int lastDot = baseName.LastIndexOf('.');
+
+            if (lastDot <= 0 || lastDot == baseName.Length - 1)
+            {
+                return baseName;
+            }
+
+            string segment = baseName[(lastDot + 1)..];
+            int letterCount = 0;
+
+            while (letterCount < segment.Length && char.IsAsciiLetterOrDigit(segment[letterCount]))
+            {
+                letterCount++;
+            }
+
+            if (letterCount == 0 || letterCount == segment.Length)
+            {
+                // 整段都是字母数字（`7z` / `132`）：要么本来就是干净后缀，要么根本不是"后缀+垃圾"
+                return baseName;
+            }
+
+            string extension = "." + segment[..letterCount];
+
+            if (!ExtensionHelper.IsKnownArchiveExtension(extension) &&
+                !ExtensionHelper.IsVolumePartExtension(extension))
+            {
+                return baseName;
+            }
+
+            return baseName[..(lastDot + 1 + letterCount)];
         }
 
         private static VolumeGroup BuildGroup(VolumeBucket bucket, Dictionary<string, int> familyCounts)
