@@ -1300,6 +1300,8 @@ namespace ArchiveFixer.ViewModels
                      */
                     Tasks[i].IsSelected = true;
 
+                    ApplyVolumeGroupingFromDirectory(Tasks[i]);
+
                     if (byPath.TryGetValue(NormalizePath(Tasks[i].CurrentPath), out InnerArchiveCandidate? candidate))
                     {
                         Tasks[i].ParentOutputDirectory = candidate.ParentOutputDirectory;
@@ -1340,6 +1342,63 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 把一个任务按**它所在目录里的真实文件**归组（分卷组挂上 VolumePaths / IsVolumeGroup）。
+        ///
+        /// <para>为什么要单独做（2026-09-28 真机最后一环）：续解层的内层任务是走
+        /// AddPathsAsync(..., suppressAutoScan: true) 加进来的，那条路**不跑扫描期的分卷归组**，
+        /// 于是内层分卷组的任务 IsVolumeGroup = false —— 链尾"把内层包收进其余物"的安全闸门
+        /// （"名字像分卷、同目录还有同组的卷，却没有整组清单 → 宁可不搬"）就把它挡住了，
+        /// 用户看到的就是 amb.7z.001..004 一直赖在成品目录里。</para>
+        ///
+        /// <para>判据只此一份：VolumeGroupDetector.Group + VolumeGroupingService.ApplyGroupInfo
+        /// （与扫描期、与手动档完全同一条路）。归不上组时什么都不动（行为与以前一样，不会更糟）。</para>
+        /// </summary>
+        internal static void ApplyVolumeGroupingFromDirectory(ArchiveTask? task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            string path = task.CurrentPath;
+
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            var candidates = new List<ArchiveFixer.Detection.VolumeCandidate>();
+
+            foreach (string sibling in Directory.EnumerateFiles(directory))
+            {
+                long size = -1;
+
+                try
+                {
+                    size = new FileInfo(sibling).Length;
+                }
+                catch
+                {
+                    // 量不出大小不影响归组；"伪装名"那一档要尺寸佐证，量不出就不放行那一档。
+                }
+
+                candidates.Add(new ArchiveFixer.Detection.VolumeCandidate { Path = sibling, Size = size });
+            }
+
+            string fullPath = Path.GetFullPath(path);
+
+            ArchiveFixer.Detection.VolumeGroup? group =
+                ArchiveFixer.Detection.VolumeGroupDetector.Group(candidates)
+                    .FirstOrDefault(g => g.Volumes.Any(
+                        v => string.Equals(Path.GetFullPath(v.Path), fullPath, StringComparison.OrdinalIgnoreCase)));
+
+            if (group != null)
+            {
+                new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
+            }
+        }
         /// <summary>
         /// 只对"还没识别"的任务重扫：
         /// 一律重扫会把已经识别好的、甚至已经解压完的任务重新洗一遍，白费时间还冲掉结果。
