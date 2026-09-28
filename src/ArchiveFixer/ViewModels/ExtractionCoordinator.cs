@@ -1999,13 +1999,35 @@ namespace ArchiveFixer.ViewModels
             {
                 var planned = new List<(string, string)>();
 
+                /*
+                 * ⛔ 谁的"过程物"要收：**成功的**续解任务 + **这一轮根本没跑成的**内层包（用户 2026-09-28 拍板）。
+                 *
+                 * 用户原话：「自动清掉，这个算没有成功的过程物，而且原包还在就不用怕，如果原包放在了
+                 * 其余物里面一起删除，成功了就刚好是我们要达到的地方，**失败了也不会删除**」——
+                 * 也就是：内层包本来就是"外层包解出来的过程物"，只要外层这一单**成功**了，
+                 * 它就该跟源包一起进其余物、按删除档一起清掉；外层失败/部分完成/取消时一个字节都不动。
+                 *
+                 * ⚠ 所以这里多一道自守：只有**根任务成功且校验通过**时，才把"没跑成的内层包"也算进去 ——
+                 * 不指望调用方一定在成功路径上（红线自己守，不靠上下文）。
+                 */
+                bool rootSucceeded =
+                    rootTask.Outcome == TaskOutcome.Succeeded &&
+                    rootTask.OutputVerification == OutputVerificationOutcome.Passed;
+
                 foreach (ArchiveTask? candidate in chainTasks)
                 {
                     if (candidate == null ||
                         ReferenceEquals(candidate, rootTask) ||
-                        !candidate.IsContinuationTask ||
-                        candidate.Outcome != TaskOutcome.Succeeded ||
-                        candidate.OutputVerification != OutputVerificationOutcome.Passed)
+                        !candidate.IsContinuationTask)
+                    {
+                        continue;
+                    }
+
+                    bool candidateSucceeded =
+                        candidate.Outcome == TaskOutcome.Succeeded &&
+                        candidate.OutputVerification == OutputVerificationOutcome.Passed;
+
+                    if (!candidateSucceeded && !rootSucceeded)
                     {
                         continue;
                     }
