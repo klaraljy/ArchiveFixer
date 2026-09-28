@@ -4973,7 +4973,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>用于"分组信息没拿到时宁可不动"那一条：搬走一卷、把同组别的卷留在原地，
         /// 等于把一套完整的包拆成废件（2026-09-28 真机：内层包 4 卷只搬走了 `.001`）。</para>
         /// </summary>
-        private static bool HasSiblingVolumeBeside(string? path)
+        internal static bool HasSiblingVolumeBeside(string? path)
         {
             try
             {
