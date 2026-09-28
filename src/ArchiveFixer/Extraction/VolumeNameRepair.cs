@@ -347,12 +347,12 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
-            if (ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^1], out _, out _))
+            if (ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^1], out _, out _))
             {
                 return false;
             }
 
-            return ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^2], out _, out _);
+            return ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^2], out _, out _);
         }
 
         /// <summary>
@@ -374,9 +374,9 @@ namespace ArchiveFixer.Extraction
 
             // ① 最后一段自己就是"带垃圾的卷标记"（001删除 / 删除001 / z0删除3）
             if (!ExtensionHelper.IsVolumePartExtension("." + parts[^1]) &&
-                ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^1], out string mark, out _))
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^1], out string mark, out _))
             {
-                baseName = string.Join('.', parts, 0, parts.Length - 1);
+                baseName = VolumeGroupDetector.NormalizeArchiveExtensionSegment(string.Join('.', parts, 0, parts.Length - 1));
                 canonicalSegment = mark;
                 return baseName.Length > 0;
             }
@@ -386,7 +386,7 @@ namespace ArchiveFixer.Extraction
             //      拿它当闸门会把 `.001.txt` 全挡掉（实测踩到过）。
             for (int i = parts.Length - 2; i >= 1; i--)
             {
-                if (!ExtensionHelper.TrySplitVolumeSegmentLoose(parts[i], out string innerMark, out _))
+                if (!ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[i], out string innerMark, out _))
                 {
                     continue;
                 }
@@ -407,7 +407,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                baseName = string.Join('.', parts, 0, i);
+                baseName = VolumeGroupDetector.NormalizeArchiveExtensionSegment(string.Join('.', parts, 0, i));
                 canonicalSegment = innerMark;
                 return baseName.Length > 0;
             }

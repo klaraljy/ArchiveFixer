@@ -815,7 +815,7 @@ namespace ArchiveFixer.Detection
         /// **两个基名不同 → 同一组两卷散成两组**。这里只做"删 1 个字符后是不是已知压缩后缀"，
         /// 候选**唯一**才认（有歧义就不动）。</para>
         /// </summary>
-        private static string NormalizeArchiveExtensionSegment(string baseName)
+        internal static string NormalizeArchiveExtensionSegment(string baseName)
         {
             int lastDot = baseName.LastIndexOf('.');
 
