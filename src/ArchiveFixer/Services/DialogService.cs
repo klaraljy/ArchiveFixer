@@ -407,7 +407,21 @@ namespace ArchiveFixer.Services
                 "ShowReminderConfirm",
                 fallback: true);
 
-            optionChecked = confirmed && checkedState;
+            /*
+             * ⛔ `optionChecked` 必须是**复选框本身的状态**，与用户按了哪个按钮无关（2026-09-28 真机）。
+             *
+             * 老写法 `optionChecked = confirmed && checkedState`：本对话框的语义是
+             * 「是 = 保留全部（知道了）/ 否 = 从列表里移除这些」，用户**点了"从列表里移除"并勾上
+             * "以后不再提醒"** 时 `confirmed == false`，勾选状态被这一句直接丢掉 →
+             * `RemindJunkAfterImport` 永远回不到 false，下次导入又弹一遍。
+             *
+             * 真机证据：日志有 `已按提醒里的选择，把 N 个无用物从任务列表里移除`，
+             * 但**没有**那条"已记住不再提醒"的日志；`appsettings.json` 里 `RemindJunkAfterImport` 始终是 true。
+             *
+             * ⚠ 只改这一处：另外三个（ShowConfirm / ShowDestructiveConfirm…）的 Yes 是"动手那个"，
+             * 用户选否时勾选状态本来就没有意义，保持原样。
+             */
+            optionChecked = checkedState;
             return confirmed;
         }
 
