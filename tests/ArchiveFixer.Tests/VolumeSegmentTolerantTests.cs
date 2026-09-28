@@ -47,5 +47,20 @@ namespace ArchiveFixer.Tests
             Assert.False(ExtensionHelper.TrySplitVolumeSegmentTolerant("apk", out _, out _));
             Assert.False(ExtensionHelper.TrySplitVolumeSegmentTolerant(string.Empty, out _, out _));
         }
+
+        [Fact]
+        public void 夹在号码中间的垃圾_不许当成尾巴往外传()
+        {
+            // 用户 2026-09-28 真机：`amb909.7删z.00除2` 补出来的缺卷名是 `amb909.7z.00100除2`
+            // —— 垃圾夹在号码中间，却被拼到了"卷号后面"，成了磁盘上不存在的名字。
+            Assert.True(ExtensionHelper.TrySplitVolumeSegmentLoose("00除2", out string mark, out string junk));
+            Assert.Equal("002", mark);
+            Assert.Equal(string.Empty, junk);
+
+            // 真·后缀垃圾照旧带尾巴（`giu910.7z.002删除` 才是用户能在磁盘上找到的那个名字）
+            Assert.True(ExtensionHelper.TrySplitVolumeSegmentLoose("002删除", out string mark2, out string junk2));
+            Assert.Equal("002", mark2);
+            Assert.Equal("删除", junk2);
+        }
     }
 }

@@ -652,7 +652,15 @@ namespace ArchiveFixer.Helpers
             }
 
             canonicalSegment = bones;
-            junk = s.Replace(bones, string.Empty, StringComparison.Ordinal);
+
+            /*
+             * ⛔ 骨架档的垃圾**可能夹在号码中间**（`00除2` 的 `除`、`z0删除3` 的 `删除`），
+             * 它**不是**"卷号后面的尾巴" —— 老写法 `s.Replace(bones, "")` 还会在"骨架不是原串子串"时
+             * 原样吐回整段（`00除2` → 垃圾算成 `00除2`），补缺失卷名就拼出
+             * `amb909.7z.00100除2` 这种磁盘上不存在的名字（用户 2026-09-28 真机）。
+             * 尾巴只给"真·后缀"那一档用（`001删除` 走前缀规则，照旧带尾巴）。
+             */
+            junk = string.Empty;
             return true;
         }
 
