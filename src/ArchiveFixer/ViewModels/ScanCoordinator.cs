@@ -426,6 +426,57 @@ namespace ArchiveFixer.ViewModels
                     removed));
         }
 
+        /// <summary>
+        /// 一键处理**开工前**：把「无用物」（对解压没用的说明 / 网址 / 广告之类）从任务列表里移掉。
+        ///
+        /// <para><b>为什么要有</b>（用户 2026-09-28：「1.要」）：这些文件对解压没有用，但以前只有
+        /// "导入后的那个提醒框"能把它们从列表里移掉 —— 用户一勾「以后不再提醒」，这个入口也没了，
+        /// 于是它们永远赖在列表里，一键处理还得一个个跳过。一键处理 = 按一下全搞定，就该顺手清掉。</para>
+        ///
+        /// <para>⛔ 只动**列表**，绝不删 / 移动任何文件（用户原话：「他们是无用物，只是对你们解压没有用，
+        /// 不是垃圾」）。扫不到、扫描出错 → 什么都不做，只写一句日志，绝不影响这一批。</para>
+        /// </summary>
+        /// <returns>移掉的任务个数。</returns>
+        internal async Task<int> RemoveJunkTasksFromListAsync(IReadOnlyList<ArchiveTask>? tasks)
+        {
+            if (tasks == null || tasks.Count == 0)
+            {
+                return 0;
+            }
+
+            SourceJunkScanResult junk;
+
+            try
+            {
+                junk = await SourceJunkScanner.ScanAsync(tasks, _junkProber);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", "一键处理：无用物扫描失败（不影响这一批）：" + ex.Message);
+                return 0;
+            }
+
+            if (junk == null || !junk.HasAnything || junk.Items.Count == 0)
+            {
+                return 0;
+            }
+
+            int removed = _vm.RemoveTasksBySourcePaths(junk.Items.Select(item => item.FullPath));
+
+            if (removed > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.OneClickJunkRemovedLogFormat,
+                        removed,
+                        string.Join("、", junk.Items.Take(5).Select(item => item.FileName))));
+            }
+
+            return removed;
+        }
+
         /// <summary>拼提醒正文（三段：这些是什么 → 结果里有几个 → 程序不会动它们）。</summary>
         private static string BuildJunkReminderMessage(SourceJunkScanResult junk)
         {

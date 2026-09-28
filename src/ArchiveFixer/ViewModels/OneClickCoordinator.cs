@@ -801,6 +801,20 @@ namespace ArchiveFixer.ViewModels
                     AppendLog("INFO", "一键处理：已勾「以后不再询问」，本次直接按设置开始：" + seed.Describe());
                 }
 
+                /*
+                 * 一键处理 = 按一下全搞定（用户 2026-09-28：「1.要」）：**无用物不要留在任务列表里**。
+                 * ⛔ 只动列表，绝不删 / 移动文件；放在 EnterBusy 之前，列表先清干净、用户看得见。
+                 * 出错也不影响这一批（只写一句 WARN）。
+                 */
+                try
+                {
+                    await _scanCoordinator.RemoveJunkTasksFromListAsync(targets);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("WARN", "一键处理：清理列表里的无用物失败（不影响这一批）：" + ex.Message);
+                }
+
                 EnterBusy();
 
                 try

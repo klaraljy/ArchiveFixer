@@ -980,6 +980,13 @@ namespace ArchiveFixer.Models
         public const string ImportJunkReminderRemovedLogFormat =
             "已按提醒里的选择，把 {0} 个无用物从任务列表里移除（源文件一个字节都没动）。";
 
+        /// <summary>
+        /// 一键处理开工前**自动**把无用物从列表里移掉（用户 2026-09-28：「1.要」）。
+        /// <c>{0}</c> = 移掉几个，<c>{1}</c> = 前几个名字（最多 5 个）。
+        /// </summary>
+        public const string OneClickJunkRemovedLogFormat =
+            "一键处理：先把 {0} 个无用物从列表里移掉（它们对解压没用；源文件一个字节都没动）：{1}";
+
         /// <summary>列表里手动移除任务（右键 / 「移除勾选的」）。</summary>
         public const string RemoveTasksLogFormat = "已从任务列表里移除 {0} 个（源文件一个字节都没动）。";
 
