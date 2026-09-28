@@ -59,7 +59,9 @@ namespace ArchiveFixer.Tests
         }
 
         [Theory]
-        [InlineData("volume.7z.001.txt")]
+        // ⚠ 这里原来有 "volume.7z.001.txt"，2026-09-28 被用户推翻：
+        //   「x.001.txt 依旧不算（点在段外）。这个难道你就弄不了了吗」→ 现在它**算**这一组的第 1 卷，
+        //   用例见 VolumeJunkTailTests.卷号后面粘着垃圾_仍然算分卷。
         [InlineData("readme.txt")]
         [InlineData("archive")]
         [InlineData(".zip")]
@@ -91,7 +93,7 @@ namespace ArchiveFixer.Tests
 
         [Theory]
         [InlineData("readme.txt")]
-        [InlineData("volume.7z.001.txt")]
+        // "volume.7z.001.txt" 原来在这儿，2026-09-28 改成算分卷（用户指示，见上一条注释）
         public void TryGetFirstVolumeName_NonVolume_ReturnsNull(string fileName)
         {
             Assert.Null(VolumeGroupDetector.TryGetFirstVolumeName(fileName));
@@ -119,7 +121,8 @@ namespace ArchiveFixer.Tests
         [InlineData("x.part1.rar", "x.part2.rar", true)]
         [InlineData("x.rar", "x.zip", false)]
         [InlineData("x.rar", "x.part1.rar", false)]
-        [InlineData("volume.7z.001", "volume.7z.001.txt", false)]
+        // ⚠ 这一条 2026-09-28 由 false 改成 true：`…001.txt` 现在算同一组的第 1 卷（用户指示）
+        [InlineData("volume.7z.001", "volume.7z.001.txt", true)]
         [InlineData("archive.001", "archive.part1.rar", false)]
         public void BelongsToSameGroup_ComparesFamilyAndBaseName(string fileNameA, string fileNameB, bool expected)
         {
@@ -225,14 +228,31 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void Group_TrailingTextAfterVolumeMark_IsNotAVolume()
+        public void Group_TrailingTextAfterVolumeMark_IsAVolume()
         {
+            /*
+             * ⚠ 这条用例的**口径在 2026-09-28 被用户推翻过**，别照着老名字改回去：
+             * 老口径是"卷标记必须是最后一段"，于是 `volume.7z.003.txt` 不算分卷、被当成独立压缩包
+             * （一键处理接着就会把 `.003` 吃掉）。用户原话：「x.001.txt 依旧不算（点在段外）。
+             * 这个难道你就弄不了了吗」。现在的判据：卷标记后面**只要不是已知压缩后缀**，就还算这一组的卷。
+             */
             var group = Assert.Single(VolumeGroupDetector.Group(
                 Candidates("volume.7z.001", "volume.7z.002", "volume.7z.003.txt")));
 
-            Assert.Equal(2, group.KnownVolumeCount);
+            Assert.Equal(3, group.KnownVolumeCount);
             Assert.True(group.IsComplete);
-            Assert.DoesNotContain(group.Volumes, v => v.Path.EndsWith("volume.7z.003.txt", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(group.Volumes, v => v.Path.EndsWith("volume.7z.003.txt", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public void Group_TrailingArchiveExtension_IsStillNotAVolume()
+        {
+            // 卷标记后面挂着**已知压缩后缀**的不算这一组（`x.7z.001.zip` 更像"一个真 zip 被改了名"）
+            var group = Assert.Single(VolumeGroupDetector.Group(
+                Candidates("volume.7z.001", "volume.7z.002")));
+
+            Assert.Equal(2, group.KnownVolumeCount);
+            Assert.DoesNotContain(group.Volumes, v => v.Path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
         }
 
         [Fact]

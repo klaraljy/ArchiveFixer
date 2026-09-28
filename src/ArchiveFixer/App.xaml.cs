@@ -50,11 +50,27 @@ namespace ArchiveFixer
         public static string SevenZipDirectory =>
             ArchiveFixer.Engines.ToolLocator.Default.BundledDirectory;
 
+        /// <summary>
+        /// 启动参数里带的路径（用户 2026-09-28 第 3 条）。
+        ///
+        /// <para>Windows 在「打开方式」/「发送到」/把文件拖到 exe 图标上时，都会把文件路径当命令行参数传进来
+        /// （<c>ArchiveFixer.exe "H:\x\y.7z"</c>）。这里只做一件事：**原样收下**，
+        /// 由 <c>MainWindow</c> 在主界面加载后交给 <c>AddPathsAsync</c> 导入
+        /// （导入实现只有一份，与①页「添加文件」、拖进窗口完全同一条路）。</para>
+        ///
+        /// <para>启动时不在 WPF 生命周期里碰界面，所以这里不解析、不弹窗、不报错。</para>
+        /// </summary>
+        public static IReadOnlyList<string> StartupPaths { get; private set; } = Array.Empty<string>();
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
 
             AppBaseDirectory = AppContext.BaseDirectory;
+
+            StartupPaths = (e?.Args ?? Array.Empty<string>())
+                .Where(a => !string.IsNullOrWhiteSpace(a))
+                .ToList();
 
             /*
              * 代码页编码（GBK / GB18030）在 .NET Core 上要先注册才拿得到 ——

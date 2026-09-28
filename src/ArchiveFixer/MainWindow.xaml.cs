@@ -5,7 +5,9 @@ using ArchiveFixer.ViewModels;
 using ArchiveFixer.Views;
 using ArchiveFixer.Views.Tabs;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -64,6 +66,48 @@ namespace ArchiveFixer
             {
                 viewModel.TabRequested -= ViewModel_TabRequested;
                 viewModel.TabRequested += ViewModel_TabRequested;
+
+                ImportStartupPaths(viewModel);
+            }
+        }
+
+        /// <summary>
+        /// 把**启动参数里带的路径**导入进来（用户 2026-09-28 第 3 条："右键 → 打开方式 → 选我们的 exe，
+        /// 就直接让我们的应用启动，然后自动选中这个文件"）。
+        ///
+        /// <para>Windows 在「打开方式」/「发送到」/把文件拖到 exe 图标上时，都是把路径当**命令行参数**递进来；
+        /// 以前这里什么都不做，用户看到的是"窗口开了、列表是空的"。这里转手交给
+        /// <c>AddPathsAsync</c> —— 与①页「添加文件/文件夹」、拖进窗口那条路**同一份导入实现**
+        /// （识别、无用物提醒、空间体检全都跟着走）。</para>
+        ///
+        /// <para>只处理**存在**的路径；参数里的选项（<c>-x</c> 之类）按"不是路径"忽略掉，不报错。</para>
+        /// </summary>
+        private async void ImportStartupPaths(MainViewModel viewModel)
+        {
+            try
+            {
+                List<string> paths = App.StartupPaths
+                    .Where(p => !string.IsNullOrWhiteSpace(p) && (File.Exists(p) || Directory.Exists(p)))
+                    .ToList();
+
+                if (paths.Count == 0)
+                {
+                    return;
+                }
+
+                await viewModel.AddPathsAsync(paths);
+            }
+            catch (Exception ex)
+            {
+                // 启动参数导入失败不该影响主界面：写进日志，用户自己还能手动「添加文件」。
+                try
+                {
+                    viewModel.AppendLog("WARN", $"启动参数里的路径没能导入：{ex.Message}");
+                }
+                catch
+                {
+                    // 连日志都写不进去就只能算了 —— 主界面已经能用。
+                }
             }
         }
 

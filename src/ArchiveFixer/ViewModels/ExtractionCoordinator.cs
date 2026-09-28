@@ -4925,6 +4925,82 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 解压前把"名字被伪装的整组卷名"改回标准名（用户 2026-09-28 三层方案的第 3 步）。
+        ///
+        /// <para>判据只有一处（<see cref="VolumeNameRepair.Plan"/>），执行体也只有一处
+        /// （<see cref="VolumeNameRepair.TryApply"/>）—— 手动档的「修复分卷名并重试」调的是**同一对**。
+        /// 这里把它挪到"每单开工前"自动做一次：一键处理与手动解压都从这个入口走，两条路行为一致。</para>
+        ///
+        /// <para>⛔ 底线：只改名字，不动内容；目标名被占 / 证据不足 → 一个字节都不动，写清为什么。</para>
+        /// </summary>
+        private void NormalizeDisguisedVolumeNames(ArchiveTask? task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            try
+            {
+                string current = task.CurrentPath ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(current) ||
+                    !FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(current)))
+                {
+                    return;
+                }
+
+                VolumeNameRepairPlan plan = VolumeNameRepair.Plan(
+                    current,
+                    VolumeNameRepair.EnumerateFileNamesInDirectory(current));
+
+                if (!plan.CanRepair || plan.Items.Count == 0)
+                {
+                    return;
+                }
+
+                VolumeNameRepairResult result = VolumeNameRepair.TryApply(plan);
+
+                if (!result.Success)
+                {
+                    AppendLog("WARN", $"{task.FileName}：分卷名没改（{result.Message}），这一单可能因此解不开。");
+                    return;
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"{task.FileName}：分卷名不标准，已按标准名改好（{plan.Items.Count} 卷，只改名字、内容一个字节没动）：{plan.Describe()}");
+
+                // 任务上的路径同步成新名字，后面各层（引擎、校验、日志）拿到的就是标准名。
+                foreach (VolumeRepairItem item in plan.Items)
+                {
+                    if (string.Equals(task.CurrentPath, item.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        task.CurrentPath = item.TargetPath;
+                    }
+                }
+
+                for (int i = 0; i < task.VolumePaths.Count; i++)
+                {
+                    VolumeRepairItem? hit = plan.Items.FirstOrDefault(
+                        x => string.Equals(x.CurrentPath, task.VolumePaths[i], StringComparison.OrdinalIgnoreCase));
+
+                    if (hit != null)
+                    {
+                        task.VolumePaths[i] = hit.TargetPath;
+                    }
+                }
+
+                task.CaptureSourceSnapshot();
+            }
+            catch (Exception ex)
+            {
+                // 改名失败不该拖垮整单：写清楚，后面的流程按原名去跑（它会如实报缺卷 / 打不开）。
+                AppendLog("WARN", $"{task.FileName}：分卷名自动修正跳过（{ex.Message}）。");
+            }
+        }
+
+        /// <summary>
         /// 在 UI 线程上弹一个"是 / 否"确认框（**无 UI 宿主返回 false**，不弹窗口也不死等）。
         ///
         /// 与 <see cref="ShowConfirmOnUiThreadAsync"/> 的区别只有降级行为：那个走
@@ -8631,6 +8707,19 @@ namespace ArchiveFixer.ViewModels
              */
             task.DangerousEntriesWarning = string.Empty;
             task.PathLengthWarning = string.Empty;
+
+            /*
+             * ===== 分卷名被伪装时，解压前先把整组改回标准名 =====
+             *
+             * 用户 2026-09-28 的口径：「一键处理的功能是啥，就是我按一下你全部搞定，这些必要的操作肯定是要的」。
+             * 7-Zip **只认 `<基名>.001/.002`… 这套精确名字**（实测：只把第二卷改成 `.002删除`，
+             * `7z x` 直接 `Unexpected end of archive`），名字不标准就必须先改，否则这一单必然失败。
+             *
+             * 位置在**任何引擎调用之前**，且早于源快照（改完名字再拍快照，后面各层比对的都是新名字）。
+             * 只改名字、内容一个字节不动；凑不成组 / 目标名被占 → 什么都不做，并写清为什么。
+             * 手动档「修复分卷名并重试」调的是**同一对**判据与执行体（VolumeNameRepair）。
+             */
+            NormalizeDisguisedVolumeNames(task);
 
             /*
              * ===== 不变量 11 的**第一道**（也是唯一收口的那一道）：源文件变化 = 立刻停下 =====

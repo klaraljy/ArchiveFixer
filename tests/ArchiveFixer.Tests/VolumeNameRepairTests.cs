@@ -231,23 +231,18 @@ namespace ArchiveFixer.Tests
             task.CaptureSourceSnapshot();
             harness.Vm.Tasks.Add(task);
 
-            // ①手动「只解压」：必须判「分卷缺失」，并把标准名记在任务上（不改任何文件）。
+            /*
+             * ①手动「只解压」：**现在会在开工前自动把名字改回标准名**（2026-09-28 用户口径：
+             * 「一键处理的功能是啥，就是我按一下你全部搞定，这些必要的操作肯定是要的」），
+             * 所以这里不再是"报分卷缺失等着用户点按钮"，而是"改好名字 → 直接解出内容"。
+             *
+             * ⚠ 老断言（判 VolumeMissing、文件一个字节不动、按钮亮起）在 AutoRepairDisguisedVolumeTests
+             * 那一批之前是对的；口径变了就要改断言，别把老期望硬留在那儿。
+             * 手动按钮那条路仍然在（判据与执行体同一个 VolumeNameRepair），由下面第二个用例覆盖。
+             */
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.Equal(StatusText.VolumeMissing, task.Status);
-            Assert.Equal("set.7z.001", task.VolumeRenameSuggestion);
-            Assert.True(File.Exists(mangled), "程序自己绝不动源文件");
-            Assert.False(File.Exists(first), "还没点按钮，标准名不该凭空出现");
-
-            // ②按钮亮着（判据 = 任务上有建议 + 文件系统上计划成立）。
-            Assert.True(
-                harness.Vm.RenameBySuggestionAndRetryCommand.CanExecute(null),
-                "有可改的任务时这个按钮必须可点");
-
-            // ③点它：改名 + 重新识别 + 重试解压。
-            await harness.Vm.RenameBySuggestionAndRetryAsync();
-
-            Assert.True(File.Exists(first), "应该已经改回标准名了");
+            Assert.True(File.Exists(first), "名字应该已经自动改回标准名了");
             Assert.False(File.Exists(mangled), "旧名字该没了");
             Assert.Equal(first, task.CurrentPath);
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
@@ -262,11 +257,7 @@ namespace ArchiveFixer.Tests
                 File.Exists(Path.Combine(harness.OutputRoot, "set", "set.7z(删掉")),
                 "解出来的不该是「文件自己」那一份垃圾");
 
-            // ⑥按钮自己熄灭（建议在重新识别时被清掉、名字也已经标准了）。
-            Assert.Equal(string.Empty, task.VolumeRenameSuggestion);
-            Assert.False(harness.Vm.RenameBySuggestionAndRetryCommand.CanExecute(null));
-
-            // ⑦源包按默认档留在原地（不变量 1；这个按钮只改名字，不搬不删）。
+            // ⑥源包按默认档留在原地（不变量 1；自动修名只改名字，不搬不删）。
             Assert.True(File.Exists(first));
             Assert.True(File.Exists(Path.Combine(volumes, "set.7z.002")));
             Assert.True(File.Exists(Path.Combine(volumes, "set.7z.003")));

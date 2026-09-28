@@ -251,11 +251,10 @@ namespace ArchiveFixer.Extraction
             string fileName,
             IEnumerable<string?>? fileNamesInDirectory)
         {
-            if (!TrySplitJunkTail(fileName, out string baseName, out string junk) || junk.Length == 0)
+            if (!TrySplitDisguised(fileName, out string baseName, out string _))
             {
                 return null;
             }
-
             string directory = Path.GetDirectoryName(path) ?? string.Empty;
             var items = new List<VolumeRepairItem>();
 
@@ -266,28 +265,34 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                // 同一组：同一个基名 + 同样的垃圾尾巴（`.001删除` / `.002删除` …）
-                if (!TrySplitJunkTail(sibling, out string siblingBase, out string siblingJunk) ||
-                    siblingJunk.Length == 0 ||
+                // 同一组：同一个基名 + 同一种伪装形状（都带点段尾巴，或都不带）
+                if (!TrySplitDisguised(sibling, out string siblingBase, out string siblingMark) ||
                     !string.Equals(siblingBase, baseName, StringComparison.OrdinalIgnoreCase) ||
-                    !string.Equals(siblingJunk, junk, StringComparison.Ordinal))
+                    !LooksLikeSameFamilyShape(fileName, sibling))
+                {
+                    continue;
+                }
+
+                string targetName = siblingBase + "." + siblingMark;
+
+                if (string.Equals(targetName, sibling, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
                 string current = Path.Combine(directory, sibling);
-                string target = Path.Combine(directory, sibling[..^junk.Length]);
+                string target = Path.Combine(directory, targetName);
 
                 if (File.Exists(target))
                 {
-                    return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, sibling[..^junk.Length]));
+                    return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, targetName));
                 }
 
                 items.Add(new VolumeRepairItem
                 {
                     CurrentPath = current,
                     CurrentFileName = sibling,
-                    SuggestedFileName = sibling[..^junk.Length],
+                    SuggestedFileName = targetName,
                     TargetPath = target
                 });
             }
@@ -326,28 +331,88 @@ namespace ArchiveFixer.Extraction
         /// 把"卷号段 + 粘着的垃圾"拆出来：<c>giu910.7z.001删除</c> → 基名 <c>giu910.7z</c>、垃圾 <c>删除</c>。
         /// 判据转调 <see cref="ExtensionHelper.TrySplitVolumeSegment"/>（只此一处）。
         /// </summary>
-        private static bool TrySplitJunkTail(string fileName, out string baseName, out string junk)
+        /// <summary>
+        /// 两个名字是不是"同一种伪装形状"：都带点段尾巴（<c>001.txt</c>）或都不带（<c>001删除</c>）。
+        /// 不这么分，<c>x.7z.001</c> 与 <c>x.7z.002.txt</c> 会被当成同一组的两卷，改出来一半带尾巴一半不带。
+        /// </summary>
+        private static bool LooksLikeSameFamilyShape(string a, string b) =>
+            HasDotTailSegment(a) == HasDotTailSegment(b);
+
+        private static bool HasDotTailSegment(string fileName)
+        {
+            string[] parts = fileName.Split('.');
+
+            if (parts.Length < 3)
+            {
+                return false;
+            }
+
+            if (ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^1], out _, out _))
+            {
+                return false;
+            }
+
+            return ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^2], out _, out _);
+        }
+
+        /// <summary>
+        /// 把"被伪装的卷名"拆开：<c>giu910.7z.001删除</c> → 基名 <c>giu910.7z</c>、标准卷段 <c>001</c>；
+        /// <c>x.7z.001.txt</c> → 基名 <c>x.7z</c>、卷段 <c>001</c>；<c>y.z0删除3</c> → 基名 <c>y</c>、<c>z03</c>。
+        /// 判据转调 <see cref="ExtensionHelper.TrySplitVolumeSegmentLoose"/>（只此一处）。
+        /// </summary>
+        private static bool TrySplitDisguised(string fileName, out string baseName, out string canonicalSegment)
         {
             baseName = string.Empty;
-            junk = string.Empty;
+            canonicalSegment = string.Empty;
 
-            int lastDot = fileName.LastIndexOf('.');
+            string[] parts = fileName.Split('.');
 
-            if (lastDot <= 0 || lastDot == fileName.Length - 1)
+            if (parts.Length < 2)
             {
                 return false;
             }
 
-            string segment = fileName[(lastDot + 1)..];
-
-            if (!ExtensionHelper.TrySplitVolumeSegment(segment, out _, out string tail) || tail.Length == 0)
+            // ① 最后一段自己就是"带垃圾的卷标记"（001删除 / 删除001 / z0删除3）
+            if (!ExtensionHelper.IsVolumePartExtension("." + parts[^1]) &&
+                ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^1], out string mark, out _))
             {
-                return false;
+                baseName = string.Join('.', parts, 0, parts.Length - 1);
+                canonicalSegment = mark;
+                return baseName.Length > 0;
             }
 
-            baseName = fileName[..lastDot];
-            junk = tail;
-            return true;
+            // ② 卷标记后面还挂着别的点段（x.7z.001.txt）
+            //    ⚠ 别去查卷标记自己是不是"已知压缩后缀" —— `.001` 本身就在那份名单里，
+            //      拿它当闸门会把 `.001.txt` 全挡掉（实测踩到过）。
+            for (int i = parts.Length - 2; i >= 1; i--)
+            {
+                if (!ExtensionHelper.TrySplitVolumeSegmentLoose(parts[i], out string innerMark, out _))
+                {
+                    continue;
+                }
+
+                bool onlyPlainTails = true;
+
+                for (int j = i + 1; j < parts.Length; j++)
+                {
+                    if (ExtensionHelper.IsKnownArchiveExtension("." + parts[j]))
+                    {
+                        onlyPlainTails = false;
+                        break;
+                    }
+                }
+
+                if (!onlyPlainTails)
+                {
+                    continue;
+                }
+
+                baseName = string.Join('.', parts, 0, i);
+                canonicalSegment = innerMark;
+                return baseName.Length > 0;
+            }
+
+            return false;
         }
 
         /// <summary>

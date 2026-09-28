@@ -181,6 +181,15 @@ namespace ArchiveFixer.Detection
 
             // 只有"本体"没有分卷标记的桶不是分卷组（普通 x.zip / x.rar 就落在这里）。
             List<VolumeBucket> survivors = buckets.Values.Where(b => b.HasVolumeMark).ToList();
+
+            /*
+             * 名字**被伪装过**的组（`001删除` / `001.txt`）必须再过一道"尺寸规律"：
+             * 除最后一卷外大小完全相等、最后一卷 ≤ 整卷大小。理由（用户 2026-09-28 三层方案）：
+             * 宽松的名字判据有可能把"碰巧带数字段"的一堆文件凑成一组，而尺寸规律是**与名字无关**的硬证据；
+             * 一旦认错组，一键处理就会去改一批不相干文件的名字 —— 认错比不认糟得多。
+             */
+            survivors = survivors.Where(b => !b.HasDisguisedName || b.HasRegularVolumeSizes).ToList();
+
             if (survivors.Count == 0)
             {
                 return Array.Empty<VolumeGroup>();
@@ -277,6 +286,9 @@ namespace ArchiveFixer.Detection
             /// <summary><c>partN</c> 的数字位宽（<c>part01</c> → 2），用来让补出来的缺失名保持同样的补零风格。</summary>
             public int DigitWidth { get; init; } = 1;
 
+            /// <summary>是不是"名字被伪装过"的分卷标记（夹了垃圾 `001删除`、或标记后面挂点段 `001.txt`）。</summary>
+            public bool IsDisguised { get; init; }
+
             /// <summary>按本族命名规则写出"第 index 卷"的文件名；该族表示不了这个卷号时返回 false。</summary>
             public bool TryFormat(int index, out string fileName)
             {
@@ -356,6 +368,44 @@ namespace ArchiveFixer.Detection
             /// <summary>桶里出现过"真正的分卷标记"（区别于 <c>x.zip</c> / <c>x.rar</c> 本体）。</summary>
             public bool HasVolumeMark { get; private set; }
 
+            /// <summary>桶里出现过"名字被伪装过"的卷标记（<c>001删除</c> / <c>001.txt</c>）。</summary>
+            public bool HasDisguisedName { get; private set; }
+
+            /// <summary>
+            /// **尺寸规律**（三层证据里的第 2 层，与名字无关）：除最后一卷外大小完全相等、
+            /// 最后一卷更小或相等。名字被伪装过的组必须过这一关才认 —— 认错比不认更糟。
+            /// 量不出大小（<c>Size &lt;= 0</c>）时一律当"没证据"，不放行。
+            /// </summary>
+            public bool HasRegularVolumeSizes
+            {
+                get
+                {
+                    var ordered = SortedIndices.Select(i => this[i]).ToList();
+
+                    if (ordered.Count < 2)
+                    {
+                        return false;
+                    }
+
+                    long full = ordered[0].Size;
+
+                    if (full <= 0)
+                    {
+                        return false;
+                    }
+
+                    for (int k = 0; k < ordered.Count - 1; k++)
+                    {
+                        if (ordered[k].Size != full)
+                        {
+                            return false;
+                        }
+                    }
+
+                    return ordered[^1].Size > 0 && ordered[^1].Size <= full;
+                }
+            }
+
             /// <summary>补齐缺失文件名时用的尾巴（见 <see cref="VolumeNameInfo.Tail"/>）。</summary>
             public string Tail { get; private set; } = string.Empty;
 
@@ -381,6 +431,11 @@ namespace ArchiveFixer.Detection
                 if (info.Tail.Length > 0)
                 {
                     Tail = info.Tail;
+                }
+
+                if (info.IsDisguised)
+                {
+                    HasDisguisedName = true;
                 }
 
                 if (info.DigitWidth > DigitWidth)
@@ -455,7 +510,59 @@ namespace ArchiveFixer.Detection
                         Family = family,
                         Index = index,
                         DigitWidth = digitWidth,
-                        Tail = junkTail
+                        Tail = junkTail,
+                        IsDisguised = junkTail.Length > 0
+                    };
+                }
+            }
+
+            // ②b 卷标记后面还挂着别的点段：volume.7z.001.txt / archive.rar.001.bak
+            //     （用户 2026-09-28 追加：不能只认"标记必须是最后一段"）。
+            //     尾巴原样记进 Tail，补缺失卷名时才能拼回 `…001.txt` 这个名字。
+            if (parts.Length >= 3 && !ExtensionHelper.IsKnownArchiveExtension("." + last))
+            {
+                for (int i = parts.Length - 2; i >= 1; i--)
+                {
+                    if (!TryParseVolumeSegment(parts[i], out VolumeFamily tailFamily2, out int tailIndex2, out int tailWidth2, out _))
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * ⚠ 只检查**卷标记右边**的那几段，别去查卷标记自己 —— `.001` 本身就在
+                     * KnownArchiveExtensions 里（老代码把它当"压缩包后缀"收进去了），
+                     * 拿它当判据会把 `.001.txt` 这种刚刚要支持的名字全挡掉（实测踩到过）。
+                     */
+                    bool tailsArePlain = true;
+
+                    for (int j = i + 1; j < parts.Length; j++)
+                    {
+                        if (ExtensionHelper.IsKnownArchiveExtension("." + parts[j]))
+                        {
+                            tailsArePlain = false;
+                            break;
+                        }
+                    }
+
+                    if (!tailsArePlain)
+                    {
+                        continue;
+                    }
+
+                    string tailBase = JoinBaseName(parts, parts.Length - i);
+                    if (tailBase.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    return new VolumeNameInfo
+                    {
+                        BaseName = tailBase,
+                        Family = tailFamily2,
+                        Index = tailIndex2,
+                        DigitWidth = tailWidth2,
+                        Tail = "." + string.Join('.', parts, i + 1, parts.Length - i - 1),
+                        IsDisguised = true
                     };
                 }
             }
@@ -537,7 +644,7 @@ namespace ArchiveFixer.Detection
             digitWidth = 1;
             junkTail = string.Empty;
 
-            if (!ExtensionHelper.TrySplitVolumeSegment(segment, out string mark, out string junk))
+            if (!ExtensionHelper.TrySplitVolumeSegmentLoose(segment, out string mark, out string junk))
             {
                 return false;
             }

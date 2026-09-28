@@ -281,15 +281,40 @@ namespace ArchiveFixer.Helpers
 
                 string tail = current[(lastDot + 1)..];
 
-                // ⚠ 用 TrySplitVolumeSegment 而不是 IsVolumePartExtension：分卷标记后面粘着垃圾的
-                // （百度网盘那种 222.7z.001删除）也算分卷标记，**连同垃圾一起剥掉** ——
-                // 不剥的话 GetArchiveBaseName 会把它当成"普通后缀"剥，剥出来的基名对着整个包，
-                // 改名时就会把 .001 这一段吃掉（2026-09-28 真机事故的根因）。
-                if (ExtensionHelper.TrySplitVolumeSegment(tail, out _, out _))
+                // ⚠ 用宽松判据（TrySplitVolumeSegmentLoose）而不是老的前缀版：卷标记里/前后夹垃圾的
+                // （百度网盘那种 `222.7z.001删除`、`222.7z.删除001`、`222.z0删除3`）也算分卷标记，
+                // **连同垃圾一起剥掉** —— 不剥的话 GetArchiveBaseName 会把 `001删除` 当"普通后缀"剥，
+                // 算出来的基名对着整个包，改名时就会把 `.001` 这一段吃掉（2026-09-28 真机事故的根因）。
+                if (ExtensionHelper.TrySplitVolumeSegmentLoose(tail, out _, out _))
                 {
                     current = current[..lastDot];
                     continue;
                 }
+
+                // 卷标记后面还挂着别的点段（`x.7z.001.txt`）：从右往左找到"紧跟在压缩后缀后的卷标记"，
+                // 把标记及其右边全剥掉。判据与 IsVolumePartFileName 里那条**同一份**。
+                if (tail.Length > 0 && !ExtensionHelper.IsKnownArchiveExtension("." + tail))
+                {
+                    int markDot = current.LastIndexOf('.', Math.Max(0, lastDot - 1));
+
+                    while (markDot > 0)
+                    {
+                        int beforeDot = current.LastIndexOf('.', Math.Max(0, markDot - 1));
+
+                        if (beforeDot > 0 &&
+                            ExtensionHelper.IsKnownArchiveExtension(current[beforeDot..markDot]) &&
+                            ExtensionHelper.TrySplitVolumeSegmentLoose(current[(markDot + 1)..lastDot], out _, out _))
+                        {
+                            current = current[..beforeDot];
+                            goto stripped;
+                        }
+
+                        lastDot = markDot;
+                        markDot = beforeDot;
+                    }
+                }
+
+            stripped:
 
                 // xxx.part1.rar：分卷段在倒数第二段上，光看最后一段（.rar）看不出来。
                 // ⚠ 必须要求分卷段**前面还有内容**（previousDot > 0），否则 "222.rar" 里的 "222"
@@ -379,18 +404,79 @@ namespace ArchiveFixer.Helpers
             }
 
             // xxx.001 / xxx.z01 / xxx.part1
-            // ⚠ 分卷标记后面粘着垃圾的（xxx.7z.001删除）也算：百度网盘给每个分卷名缀「删除」，
-            //    老判据不认它 → 整组被当成几个独立压缩包 → 一键处理改名把分卷链切断（2026-09-28 事故）。
-            if (ExtensionHelper.TrySplitVolumeSegment(parts[^1], out _, out _))
+            // ⚠ 两处都放宽（用户 2026-09-28 第二轮）：
+            //   ① 卷标记里/前后夹垃圾的（`xxx.7z.001删除`、`xxx.7z.删除001`、`xxx.z0删除3`）也算；
+            //   ② **卷标记后面还挂着别的点段**的（`xxx.7z.001.txt`、`xxx.rar.001.bak`）也算 ——
+            //      只要那些尾段**不是已知压缩后缀**。
+            //   不算的话，这类名字会被当成"普通包"，改名时把卷号吃掉、整条分卷链断掉。
+            if (ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^1], out _, out _))
+            {
+                return true;
+            }
+
+            if (IsVolumeMarkFollowedByNonArchiveTail(parts))
             {
                 return true;
             }
 
             // xxx.part1.rar
             if (parts.Length >= 3 &&
-                ExtensionHelper.TrySplitVolumeSegment(parts[^2], out _, out _) &&
+                ExtensionHelper.TrySplitVolumeSegmentLoose(parts[^2], out _, out _) &&
                 string.Equals(parts[^1], "rar", StringComparison.OrdinalIgnoreCase))
             {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// "卷标记后面还挂着别的点段"（<c>x.7z.001.txt</c> / <c>x.rar.001.bak</c>）算不算分卷：
+        /// **从右往左**找第一个能当卷标记的段，它右边的所有段都不许是已知压缩后缀。
+        ///
+        /// 为什么这么定：<c>x.7z.001.rar</c> 是"分卷段后挂 .rar"的既有写法（另一条分支管它），
+        /// <c>x.7z.001.zip</c> 更像"一个真 zip 被改了名" —— 这两种都不算跨段伪装。
+        /// </summary>
+        private static bool IsVolumeMarkFollowedByNonArchiveTail(string[] parts)
+        {
+            if (parts.Length < 3)
+            {
+                return false;
+            }
+
+            for (int i = parts.Length - 2; i >= 1; i--)
+            {
+                if (!ExtensionHelper.TrySplitVolumeSegmentLoose(parts[i], out _, out _))
+                {
+                    continue;
+                }
+
+                /*
+                 * ⚠ 收紧的一道闸门（2026-09-28 全量回归逮到的真回归）：
+                 * 只有"卷标记**紧跟在已知压缩后缀后面**"才算跨段伪装（`x.7z.001.txt`、`x.rar.001.bak`）。
+                 * 不加这条，`rar-android-722.132.apk` 会被当成"卷 132 + .apk 尾巴"，
+                 * 基名被剥成 `rar-android-722` —— 落点目录跟着变（`OutputPlacementTests` 当场红）。
+                 * 宁可漏认（用户还能靠改名解决），也不能把正常文件名剥错。
+                 */
+                if (i < 1 || !ExtensionHelper.IsKnownArchiveExtension("." + parts[i - 1]))
+                {
+                    continue;
+                }
+
+                // 卷标记左边得有基名（`001.txt` 这种连基名都没有的不算分卷）
+                if (string.Join('.', parts, 0, i - 1).Length == 0)
+                {
+                    return false;
+                }
+
+                for (int j = i + 1; j < parts.Length; j++)
+                {
+                    if (ExtensionHelper.IsKnownArchiveExtension("." + parts[j]))
+                    {
+                        return false;
+                    }
+                }
+
                 return true;
             }
 

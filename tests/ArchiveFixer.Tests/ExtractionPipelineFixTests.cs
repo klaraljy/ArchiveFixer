@@ -507,11 +507,9 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.Empty(harness.Engine.ExtractCalls);
-            Assert.Equal(StatusText.VolumeMissing, task.Status);
-            Assert.Contains("名字被改坏", task.ErrorMessage, StringComparison.Ordinal);
-            Assert.Contains("Code Complete-BZ.7z.002", task.ErrorMessage, StringComparison.Ordinal);
-            Assert.Contains("Code Complete-BZ.7z.001", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(directory, "Code Complete-BZ.7z.001")), "应该自动改回标准名");
+            Assert.False(File.Exists(firstVolume), "旧名字该没了");
+            Assert.NotEqual(StatusText.VolumeMissing, task.Status);
         }
 
         /// <summary>

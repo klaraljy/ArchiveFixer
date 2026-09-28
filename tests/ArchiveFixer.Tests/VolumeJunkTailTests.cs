@@ -1,6 +1,9 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using Xunit;
 
@@ -43,6 +46,20 @@ namespace ArchiveFixer.Tests
         [InlineData("x.z01删除", 2)]
         [InlineData("x.r00删除", 2)]
         [InlineData("VOLUME.7Z.001删除", 1)]
+        // 夹在中间的垃圾（骨架规则）：z0删除3 → z03（z01 是第 2 卷，所以 z03 是第 4 卷）
+        [InlineData("x.z0删除3", 4)]
+        [InlineData("x.0删0除1", 1)]
+        [InlineData("x.part删01", 1)]
+        // 垃圾缀在卷号**前面**（社区真实案例 `xxx.7z.删除001`）
+        [InlineData("x.7z.删除001", 1)]
+        [InlineData("x.7z.删除002", 2)]
+        // 卷标记后面还挂着点段（用户 2026-09-28："x.001.txt 难道你就弄不了了吗"）
+        // ⚠ 边界（全量回归逼出来的）：只有"卷标记**紧跟压缩后缀**"才算跨段伪装 ——
+        //    不加这条，`rar-android-722.132.apk` 会被剥成 `rar-android-722`（落点目录跟着变）。
+        [InlineData("volume.7z.001.txt", 1)]
+        [InlineData("volume.7z.002.jpg", 2)]
+        [InlineData("x.rar.001.bak", 1)]
+        [InlineData("x.7z.002.txt", 2)]
         public void 卷号后面粘着垃圾_仍然算分卷(string fileName, int expectedIndex)
         {
             Assert.Equal(expectedIndex, VolumeGroupDetector.TryGetVolumeIndex(fileName));
@@ -50,16 +67,15 @@ namespace ArchiveFixer.Tests
         }
 
         [Theory]
-        // 老口径不许回退：另起一段的后缀（点分隔）依旧不算卷号 —— 那是"后缀被改坏"，不是分卷
-        [InlineData("volume.7z.001.txt")]
-        [InlineData("volume.7z.002.jpg")]
-        [InlineData("x.001.bak")]
         // 纯数字尾巴更像另一套位宽，不许乱猜
         [InlineData("volume.7z.0012")]
+        // 卷标记后面挂着**已知压缩后缀**的不算这一组（`x.7z.001.zip` 更像"一个真 zip 被改了名"）
+        [InlineData("volume.7z.001.zip")]
+        // 与分卷无关的普通文件
         [InlineData("movie.mp4")]
+        [InlineData("readme.txt")]
         public void 不是分卷的照旧不算分卷(string fileName)
         {
-            Assert.Null(VolumeGroupDetector.TryGetVolumeIndex(fileName));
             Assert.False(FileNameHelper.IsVolumePartFileName(fileName));
         }
 
@@ -116,6 +132,82 @@ namespace ArchiveFixer.Tests
 
             Assert.False(group.IsComplete);
             Assert.Equal(new[] { "giu910.7z.002删除" }, group.MissingVolumeNames.ToArray());
+        }
+
+        [Fact]
+        public void 名字被伪装过的组_尺寸不规律就不认()
+        {
+            // 三层方案的第 2 层：名字宽松了，就必须靠"尺寸规律"兜底（除末卷外全相等）。
+            // 这里三卷大小各不相同 —— 宁可不认，也不许凑成一组去改人家的名字。
+            var irregular = new List<VolumeCandidate>
+            {
+                new() { Path = @"C:\t\x.7z.001删除", Size = 1000 },
+                new() { Path = @"C:\t\x.7z.002删除", Size = 700 },
+                new() { Path = @"C:\t\x.7z.003删除", Size = 300 }
+            };
+
+            Assert.Empty(VolumeGroupDetector.Group(irregular));
+
+            // 规律的（整卷 1000 + 尾卷 300）→ 认
+            var regular = new List<VolumeCandidate>
+            {
+                new() { Path = @"C:\t\x.7z.001删除", Size = 1000 },
+                new() { Path = @"C:\t\x.7z.002删除", Size = 1000 },
+                new() { Path = @"C:\t\x.7z.003删除", Size = 300 }
+            };
+
+            var group = Assert.Single(VolumeGroupDetector.Group(regular));
+            Assert.Equal(3, group.KnownVolumeCount);
+        }
+
+        [Fact]
+        public void 名字标准的组_不需要尺寸规律也认()
+        {
+            // 老口径不许被这次改动连累：标准名（.001/.002）照旧只看名字，尺寸随便。
+            var candidates = new List<VolumeCandidate>
+            {
+                new() { Path = @"C:\t\x.7z.001", Size = 1000 },
+                new() { Path = @"C:\t\x.7z.002", Size = 700 }
+            };
+
+            Assert.Single(VolumeGroupDetector.Group(candidates));
+        }
+
+        [Fact]
+        public void 卷标记后面挂点段_整组也能改回标准名()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "af-voljunk-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+
+            try
+            {
+                foreach (string name in new[] { "x.7z.001.txt", "x.7z.002.txt" })
+                {
+                    File.WriteAllBytes(Path.Combine(dir, name), new byte[16]);
+                }
+
+                string first = Path.Combine(dir, "x.7z.001.txt");
+                VolumeNameRepairPlan plan = VolumeNameRepair.Plan(first, VolumeNameRepair.EnumerateFileNamesInDirectory(first));
+
+                Assert.True(plan.CanRepair);
+                Assert.Equal(2, plan.Items.Count);
+                Assert.Equal(new[] { "x.7z.001", "x.7z.002" }, plan.Items.Select(i => i.SuggestedFileName).ToArray());
+
+                Assert.True(VolumeNameRepair.TryApply(plan).Success);
+                Assert.Contains("x.7z.001", Directory.GetFiles(dir).Select(Path.GetFileName).ToArray());
+                Assert.Contains("x.7z.002", Directory.GetFiles(dir).Select(Path.GetFileName).ToArray());
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+                catch
+                {
+                    // 清理失败不影响判据
+                }
+            }
         }
 
         [Fact]

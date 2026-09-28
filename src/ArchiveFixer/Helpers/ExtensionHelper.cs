@@ -576,5 +576,84 @@ namespace ArchiveFixer.Helpers
             junkTail = tail;
             return true;
         }
+
+        /// <summary>
+        /// **宽松**版：段里任何位置夹了垃圾都能认出卷标记（用户 2026-09-28 第二轮追加）。
+        ///
+        /// <code>
+        /// 001      → (001, "")        z01 → (z01, "")        part1 → (part1, "")
+        /// 001删除  → (001, "删除")     删除001 → (001, "删除")   z0删除3 → (z03, "删除")
+        /// 001(1)   → (001, "(1)")     part01副本 → (part01, "副本")
+        /// 0012     → false（纯数字尾巴更像另一套位宽，不猜）
+        /// </code>
+        ///
+        /// <para>
+        /// 判据顺序（**顺序本身就是判据**，调换会让 <c>001(1)</c> 之类漏掉）：
+        /// ① 整段就是标记 → ② 前缀标记 + 尾巴（老口径，<c>001(1)</c> 走这条）→ ③ **骨架**：
+        /// 剔掉段内所有非字母数字字符，剩下的若整体是合法标记就算（<c>z0删除3</c> → <c>z03</c>、
+        /// <c>删除001</c> → <c>001</c>）。
+        /// </para>
+        ///
+        /// <para>
+        /// 为什么敢宽松：认出卷标记只用来判"这几个文件是不是一组分卷"和"该改成什么名字"；
+        /// 真要不要改，后面还有**尺寸规律**与**用户授权**两道。收益是实打实的 ——
+        /// 网盘那个「删除」既能缀在后面（<c>.001删除</c>）也能缀在前面（<c>.删除001</c>），
+        /// 还可能夹在中间（<c>.z0删除3</c>）。
+        /// </para>
+        /// </summary>
+        public static bool TrySplitVolumeSegmentLoose(string? segment, out string canonicalSegment, out string junk)
+        {
+            canonicalSegment = string.Empty;
+            junk = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(segment))
+            {
+                return false;
+            }
+
+            string s = segment.Trim();
+
+            // ① 整段就是标记
+            if (IsVolumePartExtension("." + s))
+            {
+                canonicalSegment = s;
+                return true;
+            }
+
+            // ② 前缀标记 + 尾巴（老口径优先：001(1) / 001删除 走这条）
+            if (TrySplitVolumeSegment(s, out string prefixMark, out string prefixTail))
+            {
+                canonicalSegment = prefixMark;
+                junk = prefixTail;
+                return true;
+            }
+
+            // ③ 骨架：剔掉所有非字母数字，剩下的整体是合法标记才算
+            var skeleton = new System.Text.StringBuilder(s.Length);
+
+            foreach (char c in s)
+            {
+                if (char.IsAsciiLetterOrDigit(c))
+                {
+                    skeleton.Append(c);
+                }
+            }
+
+            string bones = skeleton.ToString();
+
+            if (bones.Length == 0 || bones.Length == s.Length)
+            {
+                return false;
+            }
+
+            if (!IsVolumePartExtension("." + bones))
+            {
+                return false;
+            }
+
+            canonicalSegment = bones;
+            junk = s.Replace(bones, string.Empty, StringComparison.Ordinal);
+            return true;
+        }
     }
 }
