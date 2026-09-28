@@ -1,4 +1,5 @@
 using ArchiveFixer.Detection;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using System;
 using System.Collections.Generic;
@@ -438,9 +439,65 @@ namespace ArchiveFixer.Storage
                 {
                     AddProtectedPath(result, volumePath);
                 }
+
+                /*
+                 * ⛔ **同目录里同组的兄弟卷也要保护**（用户 2026-09-28 真机）：
+                 * 分卷组的后续卷**没有文件头魔数**（裸切块），所以 `IsArchive == false`、
+                 * 也不会出现在 `VolumePaths` 里（归组当时没成组）—— 于是它被判成"疑似无用物"，
+                 * 提醒框一出现用户就会把它从列表里删掉，只剩第一卷，**整组再也解不开**。
+                 *
+                 * 判据用**名字**（`FileNameHelper.IsVolumePartFileName` + 同组），不看内容 ——
+                 * 后续卷本来就没东西可看。
+                 */
+                AddSiblingVolumePaths(result, task.CurrentPath);
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 把"和 <paramref name="sourcePath"/> 同一分卷组的兄弟卷"也加进保护集。
+        /// 只按名字判（同目录 + 同组），读不到目录就安静跳过 —— 保护集少几个不会造成破坏，
+        /// 多保护几个只是"提醒少列一条"。
+        /// </summary>
+        private static void AddSiblingVolumePaths(HashSet<string> target, string? sourcePath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(sourcePath))
+                {
+                    return;
+                }
+
+                string selfName = Path.GetFileName(sourcePath);
+
+                if (!FileNameHelper.IsVolumePartFileName(selfName))
+                {
+                    return;
+                }
+
+                string directory = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+
+                foreach (string sibling in Directory.EnumerateFiles(directory))
+                {
+                    string siblingName = Path.GetFileName(sibling);
+
+                    if (string.Equals(siblingName, selfName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (FileNameHelper.IsVolumePartFileName(siblingName) &&
+                        VolumeGroupDetector.BelongsToSameGroup(selfName, siblingName))
+                    {
+                        AddProtectedPath(target, sibling);
+                    }
+                }
+            }
+            catch
+            {
+                // 读目录失败就少保护几个：这里的方向是"宁可少列一条提醒"，不是破坏性动作。
+            }
         }
 
         private static void AddProtectedPath(HashSet<string> target, string? path)
