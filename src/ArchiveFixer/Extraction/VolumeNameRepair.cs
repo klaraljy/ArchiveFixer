@@ -254,6 +254,30 @@ namespace ArchiveFixer.Extraction
                 return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
             }
 
+            /*
+             * ⛔ 第二道闸门：**这份计划只改第一卷**（Items 只有一项）。
+             *
+             * 如果同目录里的兄弟卷自己也带着垃圾（它们的基名与建议名的基名不一致），那改完第一卷之后
+             * 7-Zip 会按**新的**基名去找 `.002` / `.003` —— 找不到就整组打不开：
+             * 「改一个」比「一个都不改」更糟（2026-09-29 复查逮到：`全坏.7z(删掉.001` 那一组两卷都带垃圾，
+             * 老代码会把第一卷改成 `全坏.7z.001`，剩下两卷还叫 `(删掉` 那套名字）。
+             *
+             * 判据只读事实：兄弟卷的基名与建议名的基名**必须相等**（剥法只有一处：
+             * <see cref="FileNameHelper.StripVolumeMarkers"/>，它连"卷标记里夹的垃圾"一起剥）。
+             * 不等 = 它们也得跟着改，而这条路改不到它们 → 退到「什么都不做」。
+             * 「能一次把整组改干净」的那一档是 <see cref="PlanJunkTailGroup"/>，它排在这条路**前面** ——
+             * 走到这里说明它认不出这个形状（垃圾塞在压缩后缀里，而不是粘在卷标记上）。
+             */
+            string suggestedStem = FileNameHelper.StripVolumeMarkers(suggested);
+
+            if (siblings.Any(sibling => !string.Equals(
+                FileNameHelper.StripVolumeMarkers(sibling),
+                suggestedStem,
+                StringComparison.OrdinalIgnoreCase)))
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSuggestion);
+            }
+
             string directory = Path.GetDirectoryName(path) ?? string.Empty;
             string targetPath = Path.Combine(directory, suggested);
 
@@ -291,7 +315,7 @@ namespace ArchiveFixer.Extraction
         /// <list type="number">
         /// <item><description><b>7z</b>：内容里**没有卷号**（只有第一卷有魔数），所以只能
         /// "同目录尺寸排候选顺序 + 硬链接试开验证"（<see cref="VolumeProbeVerifier"/>）。</description></item>
-        /// <item><description><b>RAR</b>：卷号**写在内容里**（RAR5 在主归档头、RAR3 在卷尾归档结尾块）→
+        /// <item><description><b>RAR</b>：卷号**写在内容里**（RAR5 在主归档头、RAR 1.5–4.x/RAR4 在卷尾归档结尾块）→
         /// 直接按卷号归组，不需要试开（<see cref="Detection.VolumeNumberFromContent"/>）。</description></item>
         /// <item><description><b>跨盘 ZIP</b>：末片的 EOCD 里有盘号（= 总片数），非末片只有结尾的跨盘标记 →
         /// 只有 2 片时能用消去法定序。</description></item>
@@ -353,7 +377,7 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>与 7z 那条最大的不同：这里**不靠猜、不用试开** —— 卷号是内容自己说的，
         /// 所以只要"整组连成 1..N"这一条自洽就够。认不出来（头截断 / CRC 对不上 / 绝对卷号连不成 1..N /
-        /// RAR3 的基数两种解释都成立 / 跨盘 zip 片数 ≥ 3）一律拒绝，原样不动。</para>
+        /// RAR 1.5–4.x（RAR4）的基数两种解释都成立 / 跨盘 zip 片数 ≥ 3）一律拒绝，原样不动。</para>
         /// </summary>
         private static VolumeNameRepairPlan PlanByNumberedContent(
             string path,
@@ -587,6 +611,21 @@ namespace ArchiveFixer.Extraction
             string fileName,
             IEnumerable<string?>? fileNamesInDirectory)
         {
+            /*
+             * 跨盘 zip 例外（用户 2026-09-29 真样本）：这一族的**整组名字只能靠内容定** ——
+             * 末片叫 `.zip`（7-Zip 打开这一组的入口），之前的片叫 `.z01`/`.z02`……，
+             * 而"哪一片才是末片"名字里根本没有（真样本第一片 `222.z0删除1`、末片 `222.z1111ip`）。
+             * 按名字把每片还原成自己的卷标记只会得到 `222.z01` + `222.z11` ——
+             * 那是一个 7-Zip 永远打不开的组（改错名字比不改更糟）。
+             *
+             * 所以：内容是**跨盘 zip 的成员**时，这条名字路让位给 PlanByContentAsync
+             * （调用方在"推不出标准名"时会接着走内容那条路，判据与执行体仍只有一份）。
+             */
+            if (IsDisguisedZipMember(path))
+            {
+                return null;
+            }
+
             if (!TrySplitDisguised(fileName, out string baseName, out string _))
             {
                 return null;
@@ -661,6 +700,17 @@ namespace ArchiveFixer.Extraction
                 Siblings = ordered.Select(i => i.CurrentFileName).ToList(),
                 Items = ordered
             };
+        }
+
+        /// <summary>
+        /// 内容是**跨盘 zip 的成员**（判据只在 <see cref="Detection.VolumeNumberFromContent"/> 那一处，
+        /// 这里只问结论）。⛔ 单盘 zip（EOCD 盘号 0）不算 —— 那种包的名字本来就该由别的路管。
+        /// </summary>
+        private static bool IsDisguisedZipMember(string path)
+        {
+            Detection.VolumeNumberReading reading = Detection.VolumeNumberFromContent.Read(path);
+
+            return reading.Format == Detection.VolumeContentFormat.Zip && reading.IsVolumeMember;
         }
 
         /// <summary>

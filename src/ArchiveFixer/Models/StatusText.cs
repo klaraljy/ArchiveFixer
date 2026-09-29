@@ -1543,19 +1543,19 @@ namespace ArchiveFixer.Models
         public const string VolumeRepairContentNotAVolumeMember =
             "它的内容没说自己是分卷组的一员（不是 RAR 分卷、也不是跨盘 zip 的片），程序不在内容上猜";
 
-        /// <summary>RAR3 的老式编号族（第一卷 .rar、之后 .r00/.r01……）：本程序只认 partN.rar 一族。</summary>
+        /// <summary>RAR 1.5–4.x（WinRAR 里叫 RAR4）的老式编号族（第一卷 .rar、之后 .r00/.r01……）：本程序只认 partN.rar 一族。</summary>
         public const string VolumeRepairContentRarOldNumbering =
-            "这是 RAR3 的老式编号分卷（第一卷 .rar、之后 .r00/.r01……）：程序只认 partN.rar 这一种拼法，" +
+            "这是 RAR4（RAR 1.5–4.x）的老式编号分卷（第一卷 .rar、之后 .r00/.r01……）：程序只认 partN.rar 这一种拼法，" +
             "换成别的拼法可能整组解不开，所以一个字节都不动";
 
-        /// <summary>RAR3 主头的「这一卷是第 1 卷」标记与推出来的卷号对不上。</summary>
+        /// <summary>RAR 1.5–4.x 主头的「这一卷是第 1 卷」标记与推出来的卷号对不上。</summary>
         public const string VolumeRepairContentRarFirstVolumeMismatch =
-            "RAR3 头里标着「这一卷是第 1 卷」的那一卷，与按卷号排出来的第 1 卷不是同一卷 —— " +
+            "RAR4（RAR 1.5–4.x）头里标着「这一卷是第 1 卷」的那一卷，与按卷号排出来的第 1 卷不是同一卷 —— " +
             "很可能真正的第 1 卷不在这个目录里，那就不能改（把第 2 卷改名叫第 1 卷只会更糟）";
 
-        /// <summary>RAR3 卷号的基数（0 起还是 1 起）两种解释都成立 / 都不成立。</summary>
+        /// <summary>RAR 1.5–4.x 卷号的基数（0 起还是 1 起）两种解释都成立 / 都不成立。</summary>
         public const string VolumeRepairContentRarBaseAmbiguous =
-            "RAR3 的卷号字段没写基数是 0 起还是 1 起，而这一组两种解释都说得通 —— 程序不猜";
+            "RAR4（RAR 1.5–4.x）的卷号字段没写基数是 0 起还是 1 起，而这一组两种解释都说得通 —— 程序不猜";
 
         /// <summary>整组卷号连不成 1..N。<c>{0}</c> = 同目录里认出几卷。</summary>
         public const string VolumeRepairContentGroupNotContiguousFormat =

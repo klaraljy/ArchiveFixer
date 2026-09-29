@@ -19,14 +19,14 @@ namespace ArchiveFixer.Detection
         /// <summary>7z 的数字族：<c>基名.7z.001</c> / <c>.002</c>……（与 <c>VolumeGroupDetector</c> 的数字族口径一致）。</summary>
         SevenZipNumbered,
 
-        /// <summary>RAR 族：<c>基名.part1.rar</c> / <c>part2.rar</c>……（RAR5 与 RAR3 新编号都认这一族）。</summary>
+        /// <summary>RAR 族：<c>基名.part1.rar</c> / <c>part2.rar</c>……（RAR5 与 RAR 1.5–4.x/RAR4 的新编号都认这一族）。</summary>
         RarPart,
 
         /// <summary>真·跨盘 zip 族：<c>基名.z01</c>……<c>基名.z99</c> + 末片 <c>基名.zip</c>（PKZIP 跨盘族的拼法）。</summary>
         ZipSpanned
     }
 
-    /// <summary>RAR3 主头里的编号族（<c>MHD_NEWNUMBERING</c>）。</summary>
+    /// <summary>RAR 1.5–4.x（RAR4）主头里的编号族（<c>MHD_NEWNUMBERING</c>）。</summary>
     public enum RarNumberingFamily
     {
         Unknown,
@@ -52,10 +52,10 @@ namespace ArchiveFixer.Detection
         /// <summary>头被截断 / CRC 对不上 / 归档头被加密 —— 读不出卷号。</summary>
         HeadersUnreadable,
 
-        /// <summary>RAR3 的老式编号族（<c>.rar</c>/<c>.r00</c>）：本程序只认 <c>partN.rar</c> 这一族，不猜。</summary>
+        /// <summary>RAR 1.5–4.x（RAR4）的老式编号族（<c>.rar</c>/<c>.r00</c>）：本程序只认 <c>partN.rar</c> 这一族，不猜。</summary>
         RarOldNumbering,
 
-        /// <summary>RAR3 的"这是第 1 卷"标记与推出来的卷号对不上。</summary>
+        /// <summary>RAR 1.5–4.x（RAR4）的"这是第 1 卷"标记与推出来的卷号对不上。</summary>
         RarFirstVolumeMismatch,
 
         /// <summary>同目录里凑不齐一组（认出来的成员少于 2 卷）。</summary>
@@ -64,7 +64,7 @@ namespace ArchiveFixer.Detection
         /// <summary>整组卷号连不成 1..N（缺卷，或有一卷被改坏后认不出来了）。</summary>
         GroupNotContiguous,
 
-        /// <summary>RAR3 卷号的基数（0 起还是 1 起）两种解释都成立 / 都不成立 —— 不猜。</summary>
+        /// <summary>RAR 1.5–4.x（RAR4）卷号的基数（0 起还是 1 起）两种解释都成立 / 都不成立 —— 不猜。</summary>
         GroupBaseAmbiguous,
 
         /// <summary>EOCD 说这是**单盘** zip（盘号 0）—— 不是跨盘组。</summary>
@@ -95,22 +95,29 @@ namespace ArchiveFixer.Detection
         /// <summary>内容自述"我是分卷组的一员"。</summary>
         public bool IsVolumeMember { get; init; }
 
-        /// <summary>卷号（**1 起**）。null = 内容里没有盘号（跨盘 zip 的非末片），或还没定（RAR3 要看整组）。</summary>
+        /// <summary>
+        /// 这一卷的字节数（读不到就是 0）。**只给"尺寸规律"那一条判据用** ——
+        /// 分卷组里除最后一片外都是切分上限那么大的满片，所以"该接在末片前面"的那一片不可能比末片还小。
+        /// </summary>
+        public long Size { get; init; }
+
+        /// <summary>卷号（**1 起**）。null = 内容里没有盘号（跨盘 zip 的非末片），或还没定（RAR 1.5–4.x 要看整组）。</summary>
         public int? Number { get; init; }
 
         /// <summary>能确定总片数时给出（跨盘 zip 的末片：盘号 + 1）。</summary>
         public int? Total { get; init; }
 
         /// <summary>
-        /// RAR3 卷尾归档结尾块里的**原始**卷号字段值。基数（0 起还是 1 起）在 RAR 的文档里没写，
+        /// RAR **1.5–4.x**（WinRAR 里叫 RAR4；签名与 RAR3 是同一个，靠签名分不出 3 与 4）
+        /// 卷尾归档结尾块里的**原始**卷号字段值。基数（0 起还是 1 起）在 RAR 的文档里没写，
         /// 只能靠"整组必须连成 1..N"来定 —— 所以这里保留原值，不在单卷上做加减。
         /// </summary>
         public int? RawField { get; init; }
 
-        /// <summary>RAR3 主头的 <c>MHD_FIRSTVOLUME</c>（"这一卷就是第 1 卷"）。</summary>
+        /// <summary>RAR 1.5–4.x 主头的 <c>MHD_FIRSTVOLUME</c>（"这一卷就是第 1 卷"）。</summary>
         public bool FirstVolumeFlag { get; init; }
 
-        /// <summary>RAR3 主头的编号族。</summary>
+        /// <summary>RAR 1.5–4.x 主头的编号族。</summary>
         public RarNumberingFamily RarNumbering { get; init; }
 
         /// <summary>读不出来 / 认不出来时是哪一档。</summary>
@@ -153,13 +160,18 @@ namespace ArchiveFixer.Detection
     /// <list type="bullet">
     /// <item><description><b>RAR5</b>：主归档头（headerType=1）的 archiveFlags 带 <c>0x0001</c> = 这是分卷组的一员；
     /// 带 <c>0x0002</c> = 后面还有卷号字段（**第 1 卷没有这个字段**），字段值 v → 卷号 = v + 1。</description></item>
-    /// <item><description><b>RAR3/4</b>：卷号**不在**主头里，而在**卷尾归档结尾块**（type <c>0x7B</c>）
-    /// 的 <c>EARC_VOLNUMBER</c> 字段（flags <c>0x0008</c>）；该字段紧挨着块尾 7 字节的保留区之前，
-    /// 所以它的位置 = <c>块起点 + HEAD_SIZE - 11</c>（⛔ 不去猜 <c>EARC_DATACRC</c> 那一位是多少）。
-    /// ⚠ 基数（0 起还是 1 起）RAR 的文档没写 → 交给"整组必须连成 1..N"自洽判定。</description></item>
+    /// <item><description><b>RAR 1.5–4.x</b>（WinRAR 里就叫 <b>RAR4</b>；<c>Rar!\x1A\x07\x00</c> 这个签名
+    /// RAR3 与 RAR4 是**同一个**，靠它根本分不出 3 与 4，所以本文件一律不断言"这一卷是 RAR3"）：
+    /// 卷号**不在**主头里，而在**卷尾归档结尾块**（type <c>0x7B</c>）的 <c>EARC_VOLNUMBER</c> 字段
+    /// （flags <c>0x0008</c>）。块里可选字段按 <c>EARC_DATACRC(4)</c> → <c>EARC_VOLNUMBER(2)</c> →
+    /// 保留区(7) 的**顺序**排，各自看出没出那一位 flag，所以卷号位置 =
+    /// <c>块起点 + 7 + (有 DATACRC ? 4 : 0)</c>。⚠ 基数（0 起还是 1 起）RAR 的文档没写
+    /// → 交给"整组必须连成 1..N"自洽判定。</description></item>
     /// <item><description><b>跨盘 ZIP</b>：EOCD（<c>PK\x05\x06</c>）偏移 4 = 本盘号、偏移 6 = 中央目录起始盘号；
     /// 两个都 0 = 单盘。EOCD 只在**末片**且必须在文件最末（注释长度要自洽）→ 本盘号 + 1 = 总片数。
-    /// **非末片内容里没有盘号**，只有结尾的跨盘标记 <c>PK\x07\x08</c>（判据：开头是本地文件头 + 结尾是该标记）。</description></item>
+    /// **非末片内容里没有盘号**，只能靠开头是不是 PK 签名认"它是 zip 流"（真 PKZIP 跨盘的第 1 片以
+    /// 跨盘标记 <c>PK\x07\x08</c> 开头，不是本地文件头 —— 用户 2026-09-29 真样本），
+    /// 位置则由末片的盘号 + 片数 + 尺寸规律消去法定。</description></item>
     /// </list>
     ///
     /// <para><b>⛔ 拿不准一律不认</b>：头截断、CRC 对不上、卷号连不成 1..N、两种基数都成立、
@@ -188,35 +200,38 @@ namespace ArchiveFixer.Detection
         /// <summary>RAR5 headerFlags：头里带可选数据区（数据区大小字段存在）。</summary>
         private const ulong Rar5HeaderDataArea = 0x0002;
 
-        /// <summary>RAR3 主头 TYPE。</summary>
-        private const byte Rar3MainHeaderType = 0x73;
+        /// <summary>RAR 1.5–4.x 主头 TYPE（<c>MHD_HEAD</c>）。</summary>
+        private const byte Rar4LegacyMainHeaderType = 0x73;
 
-        /// <summary>RAR3 归档结尾块 TYPE。</summary>
-        private const byte Rar3EndBlockType = 0x7B;
+        /// <summary>RAR 1.5–4.x 归档结尾块 TYPE（<c>ENDARC_HEAD</c>）。</summary>
+        private const byte Rar4LegacyEndBlockType = 0x7B;
 
-        /// <summary>RAR3 主头 flags：这是分卷组的一员。</summary>
-        private const ushort Rar3Volume = 0x0001;
+        /// <summary>RAR 1.5–4.x 主头 flags：这是分卷组的一员（<c>MHD_VOLUME</c>）。</summary>
+        private const ushort Rar4LegacyVolume = 0x0001;
 
-        /// <summary>RAR3 主头 flags：新式编号（<c>partN.rar</c>）；不设 = 老式（<c>.rar</c>/<c>.r00</c>）。</summary>
-        private const ushort Rar3NewNumbering = 0x0010;
+        /// <summary>RAR 1.5–4.x 主头 flags：新式编号（<c>partN.rar</c>）；不设 = 老式（<c>.rar</c>/<c>.r00</c>）。</summary>
+        private const ushort Rar4LegacyNewNumbering = 0x0010;
 
-        /// <summary>RAR3 主头 flags：这一卷就是第 1 卷。</summary>
-        private const ushort Rar3FirstVolume = 0x0100;
+        /// <summary>RAR 1.5–4.x 主头 flags：这一卷就是第 1 卷（<c>MHD_FIRSTVOLUME</c>）。</summary>
+        private const ushort Rar4LegacyFirstVolume = 0x0100;
 
-        /// <summary>RAR3 归档结尾块 flags：块里有卷号字段。</summary>
-        private const ushort Rar3EndBlockVolumeNumber = 0x0008;
+        /// <summary>RAR 1.5–4.x 归档结尾块 flags：块里有 <c>EARC_VOLNUMBER</c> 卷号字段。</summary>
+        private const ushort Rar4LegacyEndBlockVolumeNumber = 0x0008;
 
-        /// <summary>RAR3 归档结尾块末尾的保留区（7 字节），卷号字段紧挨在它前面。</summary>
-        private const int Rar3EndBlockReservedSize = 7;
+        /// <summary>RAR 1.5–4.x 归档结尾块 flags：块里有 <c>EARC_DATACRC</c>（4 字节，排在卷号**前面**）。</summary>
+        private const ushort Rar4LegacyEndBlockDataCrc = 0x0002;
+
+        /// <summary>RAR 1.5–4.x 归档结尾块 flags：块尾有 7 字节保留区（<c>EARC_REVSPACE</c>，排在最后）。</summary>
+        private const ushort Rar4LegacyEndBlockReservedSpace = 0x0004;
+
+        /// <summary>RAR 1.5–4.x 归档结尾块末尾的保留区（7 字节，<c>EARC_REVSPACE</c>）。</summary>
+        private const int Rar4LegacyEndBlockReservedSize = 7;
 
         /// <summary>EOCD 定长部分（签名 4 + 18）。</summary>
         private const int EndOfCentralDirectorySize = 22;
 
         /// <summary>zip 注释最长 65535 —— EOCD 最多往回找这么多字节。</summary>
         private const int ZipCommentMaxLength = 0xFFFF;
-
-        /// <summary>跨盘 zip 非末片结尾的"跨盘标记"（本地文件头的数据描述符签名）。</summary>
-        private static readonly byte[] ZipSpanningMarker = { 0x50, 0x4B, 0x07, 0x08 };
 
         /// <summary>RAR5 头大小上限：格式自己规定"不许超过 3 字节 vint"，也就是 2 MB。</summary>
         private const int Rar5MaxHeaderSize = 2 * 1024 * 1024;
@@ -436,10 +451,10 @@ namespace ArchiveFixer.Detection
                 return NotAVolume(filePath, VolumeContentFormat.Rar, VolumeNumberFail.HeadersUnreadable);
             }
 
-            // 签名第 7 字节：0x01 0x00 = RAR5；0x00 = RAR3/4（RAR 4.x 与 3.x 的格式是同一个）。
+            // 签名第 7 字节：0x01 0x00 = RAR5；0x00 = RAR 1.5–4.x（WinRAR 里叫 RAR4；两者签名相同）。
             return head[6] == 0x01 && head[7] == 0x00
                 ? ReadRar5(filePath)
-                : ReadRar3(filePath);
+                : ReadRar4Legacy(filePath);
         }
 
         /// <summary>RAR5：解析主归档头（字段布局取自 RAR 5.0 官方格式说明，见类注释里的链接口径）。</summary>
@@ -547,6 +562,7 @@ namespace ArchiveFixer.Detection
             {
                 Path = filePath,
                 Format = VolumeContentFormat.Rar,
+                Size = LengthOf(filePath),
                 IsVolumeMember = true,
                 Number = number,
                 RawField = (int)rawField,
@@ -555,8 +571,10 @@ namespace ArchiveFixer.Detection
             };
         }
 
-        /// <summary>RAR3/4：主头读编号族与"第 1 卷"标记，卷号从**卷尾归档结尾块**里取。</summary>
-        private static VolumeNumberReading ReadRar3(string filePath)
+        /// <summary>
+        /// RAR 1.5–4.x（WinRAR 里叫 RAR4）：主头读编号族与"第 1 卷"标记，卷号从**卷尾归档结尾块**里取。
+        /// </summary>
+        private static VolumeNumberReading ReadRar4Legacy(string filePath)
         {
             long length = LengthOf(filePath);
 
@@ -567,7 +585,7 @@ namespace ArchiveFixer.Detection
 
             byte[] main = ReadBytes(filePath, 7, 13);
 
-            if (main.Length < 13 || main[2] != Rar3MainHeaderType)
+            if (main.Length < 13 || main[2] != Rar4LegacyMainHeaderType)
             {
                 return NotAVolume(filePath, VolumeContentFormat.Rar, VolumeNumberFail.NotVolumeMember);
             }
@@ -577,8 +595,8 @@ namespace ArchiveFixer.Detection
             ushort mainSize = BinaryPrimitives.ReadUInt16LittleEndian(main.AsSpan(5, 2));
 
             /*
-             * RAR3 的 HEAD_SIZE 把 HEAD_CRC 一起算进去（主头就是 13 字节），块的范围是 [起点, 起点 + HEAD_SIZE)，
-             * 校验范围是 [HEAD_TYPE, 块末尾)。
+             * RAR 1.5–4.x 的 HEAD_SIZE 把 HEAD_CRC 一起算进去（主头就是 13 字节），块的范围是
+             * [起点, 起点 + HEAD_SIZE)，校验范围是 [HEAD_TYPE, 块末尾)。
              */
             if (mainSize < 13 || 7 + mainSize > length)
             {
@@ -592,13 +610,13 @@ namespace ArchiveFixer.Detection
                 return NotAVolume(filePath, VolumeContentFormat.Rar, VolumeNumberFail.HeadersUnreadable);
             }
 
-            if ((mainFlags & Rar3Volume) == 0)
+            if ((mainFlags & Rar4LegacyVolume) == 0)
             {
                 return NotAVolume(filePath, VolumeContentFormat.Rar, VolumeNumberFail.NotVolumeMember);
             }
 
-            bool newNumbering = (mainFlags & Rar3NewNumbering) != 0;
-            bool firstVolume = (mainFlags & Rar3FirstVolume) != 0;
+            bool newNumbering = (mainFlags & Rar4LegacyNewNumbering) != 0;
+            bool firstVolume = (mainFlags & Rar4LegacyFirstVolume) != 0;
 
             if (!newNumbering)
             {
@@ -610,6 +628,7 @@ namespace ArchiveFixer.Detection
                 {
                     Path = filePath,
                     Format = VolumeContentFormat.Rar,
+                    Size = length,
                     IsVolumeMember = true,
                     RawField = null,
                     FirstVolumeFlag = firstVolume,
@@ -618,7 +637,7 @@ namespace ArchiveFixer.Detection
                 };
             }
 
-            int? volumeField = TryReadRar3EndBlockVolumeNumber(filePath, length, out VolumeNumberFail fail);
+            int? volumeField = TryReadRar4LegacyEndBlockVolumeNumber(filePath, length, out VolumeNumberFail fail);
 
             if (volumeField == null)
             {
@@ -629,6 +648,7 @@ namespace ArchiveFixer.Detection
             {
                 Path = filePath,
                 Format = VolumeContentFormat.Rar,
+                Size = length,
                 IsVolumeMember = true,
                 RawField = volumeField,
                 FirstVolumeFlag = firstVolume,
@@ -640,11 +660,21 @@ namespace ArchiveFixer.Detection
         /// <summary>
         /// 找卷尾的归档结尾块并取出卷号字段（原始值，基数待定）。
         ///
-        /// <para>⛔ 位置**不去猜 <c>EARC_DATACRC</c> 是哪一位**：卷号字段紧挨着块尾 7 字节保留区之前，
-        /// 所以它一定在 <c>块起点 + HEAD_SIZE - 11</c>。块本身按"TYPE=0x7B、HEAD_SIZE 自洽到文件末尾、
-        /// 头部 CRC 对得上"三条一起认。</para>
+        /// <para><b>字段位置按官方布局**顺序**算，不写死偏移</b>：结尾块里可选字段按
+        /// <c>EARC_DATACRC(4)</c> → <c>EARC_VOLNUMBER(2)</c> → 保留区(7) 的顺序排，各自看出没出那一位 flag。
+        /// 所以卷号的偏移 = <c>7 + (有 DATACRC ? 4 : 0)</c>（7 = HEAD_CRC(2) + TYPE(1) + FLAGS(2) + SIZE(2)）。</para>
+        ///
+        /// <para><b>⚠ 老写法在这里是真错的（2026-09-29 真样本逮到）</b>：它把卷号当成 4 字节、按
+        /// <c>块起点 + HEAD_SIZE − 11</c> 读 —— 真样本两卷因此读出 <c>0xCF7C</c> / <c>0x01EF02</c>
+        /// （DATACRC 的尾巴混了进来），整组连不成 1..N，于是"RAR 分卷一律不认"。
+        /// 真样本的字节是硬证据：两卷的 <c>HEAD_SIZE = 20 = 7 + 4 + 2 + 7</c>，卷号是紧跟 DATACRC 的
+        /// **2 字节**（第 1 卷 0、第 2 卷 1），其后再 7 字节保留区；而且只有第 1 卷带
+        /// <c>EARC_NEXT_VOLUME</c>（0x0001）—— 与"它是第 1 卷"的结论互相印证。</para>
+        ///
+        /// <para>块本身按"TYPE=0x7B、HEAD_SIZE 正好收在文件末尾、头部 CRC 对得上、各可选字段的总长与
+        /// HEAD_SIZE 相等"四条一起认；布局与官方说明不符时**不认**（宁可不动，也不拿一个错偏移去凑卷号）。</para>
         /// </summary>
-        private static int? TryReadRar3EndBlockVolumeNumber(
+        private static int? TryReadRar4LegacyEndBlockVolumeNumber(
             string filePath,
             long length,
             out VolumeNumberFail fail)
@@ -661,7 +691,7 @@ namespace ArchiveFixer.Detection
 
             for (int start = tailLength - 14; start >= 0; start--)
             {
-                if (tail[start + 2] != Rar3EndBlockType)
+                if (tail[start + 2] != Rar4LegacyEndBlockType)
                 {
                     continue;
                 }
@@ -669,7 +699,7 @@ namespace ArchiveFixer.Detection
                 ushort size = BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(start + 5, 2));
 
                 // 块必须正好收在文件末尾：末尾之后 RAR 不再读任何东西。
-                if (start + size != tailLength || size < 7 + Rar3EndBlockReservedSize)
+                if (start + size != tailLength || size < 7 + Rar4LegacyEndBlockReservedSize)
                 {
                     continue;
                 }
@@ -683,23 +713,28 @@ namespace ArchiveFixer.Detection
 
                 ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(start + 3, 2));
 
-                if ((flags & Rar3EndBlockVolumeNumber) == 0)
+                if ((flags & Rar4LegacyEndBlockVolumeNumber) == 0)
                 {
                     // 结尾块里没有卷号字段：这一卷的内容里就没有卷号（如实说不认）。
                     fail = VolumeNumberFail.HeadersUnreadable;
                     return null;
                 }
 
-                int fieldOffset = start + size - Rar3EndBlockReservedSize - 4;
-                uint value = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(fieldOffset, 4));
+                int fieldOffset = 7 + ((flags & Rar4LegacyEndBlockDataCrc) != 0 ? 4 : 0);
+                int expectedSize = fieldOffset + 2
+                    + ((flags & Rar4LegacyEndBlockReservedSpace) != 0 ? Rar4LegacyEndBlockReservedSize : 0);
 
-                if (value > int.MaxValue - 2)
+                if (size != expectedSize)
                 {
+                    /*
+                     * 各可选字段按 flag 算出来的总长与 HEAD_SIZE 对不上 —— 说明这一块的布局不是官方说明的那一套，
+                     * 谁也不敢保证那个 2 字节字段就是卷号。⛔ 不认（改错名字比不改更糟）。
+                     */
                     fail = VolumeNumberFail.HeadersUnreadable;
                     return null;
                 }
 
-                return (int)value;
+                return BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(start + fieldOffset, 2));
             }
 
             return null;
@@ -744,19 +779,25 @@ namespace ArchiveFixer.Detection
             }
 
             /*
-             * 不是末片：只有"开头是本地文件头 + 结尾是跨盘标记 PK\x07\x08"这一种形状能认。
-             * ⚠ 文件开头必须**单独读**：分片可能有几百 MB，尾部那个缓冲区里根本没有开头那几个字节。
+             * 不是末片：**只要开头是任意一个 PK 签名**就算这一组的成员（用户 2026-09-29 真样本）。
+             *
+             * ⚠ 老写法要求"开头是本地文件头 PK\x03\x04 **且** 结尾是跨盘标记 PK\x07\x08"，真样本两条都不满足：
+             * 真 PKZIP / 网盘那种跨盘 zip 的第 1 片**以跨盘标记 PK\x07\x08 开头**（7-Zip 管这 4 个字节叫
+             * Embedded Stub），而切点落在数据中间，文件结尾根本不是标记。于是"第一片认不出来" →
+             * 整组凑不齐 → 一个字节都不敢动。
+             *
+             * ⛔ 放松的只有"这一片像不像 zip 流"这一条判据；"哪一片是第几片"仍然只由 EOCD 的盘号 + 片数 +
+             * 尺寸规律决定（见 ResolveZipGroup），拿不准一律不认。
              */
             byte[] head = ReadBytes(filePath, 0, 4);
 
-            if (head.Length == 4 && head[0] == 0x50 && head[1] == 0x4B && head[2] == 0x03 && head[3] == 0x04
-                && tail[^1] == ZipSpanningMarker[3] && tail[^2] == ZipSpanningMarker[2]
-                && tail[^3] == ZipSpanningMarker[1] && tail[^4] == ZipSpanningMarker[0])
+            if (IsZipSignature(head))
             {
                 return new VolumeNumberReading
                 {
                     Path = filePath,
                     Format = VolumeContentFormat.Zip,
+                    Size = LengthOf(filePath),
                     IsVolumeMember = true,
                     Number = null, // 非末片内容里没有盘号：位置只能靠消去法
                     Fail = VolumeNumberFail.None
@@ -765,6 +806,23 @@ namespace ArchiveFixer.Detection
 
             return NotAVolume(filePath, VolumeContentFormat.Zip, VolumeNumberFail.NotVolumeMember);
         }
+
+        /// <summary>
+        /// 这 4 个字节是不是 zip 流的开头签名：本地文件头 <c>PK\x03\x04</c>、中央目录 <c>PK\x01\x02</c>、
+        /// EOCD <c>PK\x05\x06</c>、数据描述符/跨盘标记 <c>PK\x07\x08</c>。
+        ///
+        /// <para>四个都收的理由：跨盘 zip 的每一片都是从**字节流中间**切出来的，切点落在哪儿都不奇怪 ——
+        /// 真正的闸门不是"开头像不像本地文件头"，而是"整组能不能连成 1..N"（片数、盘号、尺寸）。</para>
+        /// </summary>
+        private static bool IsZipSignature(ReadOnlySpan<byte> head) =>
+            head.Length >= 4
+            && head[0] == 0x50
+            && head[1] == 0x4B
+            && ((head[2] == 0x03 && head[3] == 0x04)
+                || (head[2] == 0x01 && head[3] == 0x02)
+                || (head[2] == 0x05 && head[3] == 0x06)
+                || (head[2] == 0x07 && head[3] == 0x08));
+
 
         private static VolumeNumberReading FromEndOfCentralDirectory(string filePath, ReadOnlySpan<byte> eocd)
         {
@@ -787,6 +845,7 @@ namespace ArchiveFixer.Detection
             {
                 Path = filePath,
                 Format = VolumeContentFormat.Zip,
+                Size = LengthOf(filePath),
                 IsVolumeMember = true,
                 Number = diskNumber + 1, // 盘号 0 起
                 Total = diskNumber + 1,  // 末片：本盘号 + 1 = 总片数
@@ -797,8 +856,8 @@ namespace ArchiveFixer.Detection
         // ── 定序 ──
 
         /// <summary>
-        /// RAR 组：RAR5 的内容里就是绝对卷号；RAR3 的字段基数待定 → 用"整组必须连成 1..N"判，
-        /// 再用主头的"这是第 1 卷"标记交叉核对。
+        /// RAR 组：RAR5 的内容里就是绝对卷号；RAR 1.5–4.x（RAR4）的字段基数待定 →
+        /// 用"整组必须连成 1..N"判，再用主头的"这是第 1 卷"标记交叉核对。
         /// </summary>
         private static VolumeGroupOrder ResolveRarGroup(
             IReadOnlyList<VolumeNumberReading> list,
@@ -813,12 +872,12 @@ namespace ArchiveFixer.Detection
                 return Refuse(VolumeNumberFail.GroupIncomplete, members.Count);
             }
 
-            bool hasRar3 = members.Any(m => m.Number == null);
+            bool hasRar4Legacy = members.Any(m => m.Number == null);
             bool hasRar5 = members.Any(m => m.Number != null);
 
-            if (hasRar3 && hasRar5)
+            if (hasRar4Legacy && hasRar5)
             {
-                // 同一个目录里混着 RAR3 与 RAR5 的分卷：不是一组，绝不猜。
+                // 同一个目录里混着 RAR 1.5–4.x（RAR4）与 RAR5 的分卷：不是一组，绝不猜。
                 return Refuse(VolumeNumberFail.GroupNotContiguous, members.Count);
             }
 
@@ -829,10 +888,10 @@ namespace ArchiveFixer.Detection
 
             var numbers = new List<int>(members.Count);
 
-            if (hasRar3)
+            if (hasRar4Legacy)
             {
                 /*
-                 * RAR3 的卷号字段基数文档没写。两种解释各自要求"整组连成 1..N"：
+                 * RAR 1.5–4.x 的卷号字段基数文档没写。两种解释各自要求"整组连成 1..N"：
                  * 字段本身就是 1 起的 → 原样；字段是 0 起的 → 全体 +1。
                  * 两种都成立（或都不成立）= 没有任何证据能定基数 → 不认（用户 2026-09-29 明确的规矩）。
                  */
@@ -847,7 +906,7 @@ namespace ArchiveFixer.Detection
                 numbers.AddRange(members.Select(m => zeroBased ? m.RawField!.Value + 1 : m.RawField!.Value));
 
                 /*
-                 * 交叉核对：RAR3 主头有"这一卷就是第 1 卷"标记（MHD_FIRSTVOLUME）。
+                 * 交叉核对：RAR 1.5–4.x 主头有"这一卷就是第 1 卷"标记（MHD_FIRSTVOLUME）。
                  * 少了这一步，"0 起的整组里恰好缺了第 1 卷"会被读成"1 起的一组"——
                  * 那就会把第 2 卷改名叫 part1.rar（改错名字比不改更糟）。
                  */
@@ -950,6 +1009,17 @@ namespace ArchiveFixer.Detection
             {
                 // 手上的这一片不在这一组里（同目录还躺着别的跨盘组）。
                 return Refuse(VolumeNumberFail.CurrentNotInGroup, members.Count);
+            }
+
+            /*
+             * 尺寸规律：跨盘 zip 的**非末片**都是切分上限那么大的满片，末片是余量 ——
+             * 所以"该接在末片前面"的那一片必定**不小于**末片。比末片还小说明这两个文件不是一组，
+             * 认了就等于把一个不相干的文件改成 `.z01`（改错名字比不改更糟）。
+             * ⚠ 只在两边都取到字节数时判；取不到（被占 / 权限）时不拿 0 去比，免得把真组挡在门外。
+             */
+            if (segments[0].Size > 0 && tails[0].Size > 0 && segments[0].Size < tails[0].Size)
+            {
+                return Refuse(VolumeNumberFail.ZipPartsMissing, 1);
             }
 
             return new VolumeGroupOrder

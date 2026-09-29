@@ -11,12 +11,13 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// **内容级卷号识别**（用户 2026-09-29 任务）：RAR5 / RAR3 的卷号、跨盘 ZIP 的盘号 ——
-    /// 全部用**表驱动 + 自己构造字节**钉住，不靠真样本（RAR 本机造不出来，见文件末尾的说明）。
+    /// **内容级卷号识别**（用户 2026-09-29 任务）：RAR5 / RAR 1.5–4.x（WinRAR 里叫 RAR4）的卷号、
+    /// 跨盘 ZIP 的盘号 —— 全部用**表驱动 + 自己构造字节**钉住，不靠真样本。
+    /// （真样本另有一组用例：<c>RealVolumeSampleTests</c>，样本不在时自动跳过。）
     ///
     /// <para>这一组钉的是三件事：① 字段读得对（偏移 / vint / 卷尾块 / EOCD 注释自洽）；
-    /// ② 拿不准时**不认**（截断、CRC 对不上、加密头、卷号连不成 1..N、两种基数都成立、片数 ≥ 3）；
-    /// ③ 认出来之后拼出来的名字**只有一套拼法**（RAR 族带 <c>.rar</c> 尾巴）。</para>
+    /// ② 拿不准时**不认**（截断、CRC 对不上、加密头、卷号连不成 1..N、两种基数都成立、片数 ≥ 3、
+    /// 结尾块布局与官方说明不符）；③ 认出来之后拼出来的名字**只有一套拼法**（RAR 族带 <c>.rar</c> 尾巴）。</para>
     /// </summary>
     public class VolumeNumberContentTests : IDisposable
     {
@@ -135,17 +136,17 @@ namespace ArchiveFixer.Tests
             Assert.Equal(VolumeNumberFail.HeadersUnreadable, reading.Fail);
         }
 
-        // ── RAR3：卷号在卷尾归档结尾块里 ──
+        // ── RAR 1.5–4.x（RAR4）：卷号在卷尾归档结尾块里 ──
 
         [Theory]
-        [InlineData(0u, true)]  // 第 1 卷：卷尾字段值 0（基数待定）、主头带"第 1 卷"标记
-        [InlineData(1u, false)] // 第 2 卷
-        [InlineData(4u, false)]
-        public void RAR3_卷号在卷尾归档结尾块里_原值保留(
-            uint volumeField,
+        [InlineData(0, true)]  // 第 1 卷：卷尾字段值 0（基数待定）、主头带"第 1 卷"标记
+        [InlineData(1, false)] // 第 2 卷
+        [InlineData(4, false)]
+        public void RAR4_卷号在卷尾归档结尾块里_原值保留(
+            ushort volumeField,
             bool firstVolume)
         {
-            string path = Write("x.bin", Rar3Archive(0x0001, volumeField, firstVolume));
+            string path = Write("x.bin", Rar4Archive(0x0001, volumeField, firstVolume));
 
             VolumeNumberReading reading = VolumeNumberFromContent.Read(path);
 
@@ -159,10 +160,31 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void RAR3_老式编号族_一个字节都不动()
+        public void RAR4_卷尾块写的是老口径的四字节卷号_布局对不上_不认()
+        {
+            /*
+             * 这一条钉的是 2026-09-29 真样本逮到的那个缺陷：老代码把卷号当成**四字节**、
+             * 按"块起点 + HEAD_SIZE − 11"读，于是把 EARC_DATACRC 的尾巴当成了卷号
+             * （真样本读出 0xCF7C / 0x01EF02 → 整组连不成 1..N → RAR 分卷一律不认）。
+             *
+             * 真样本的字节是硬证据：HEAD_SIZE = 20 = 7 + 4（DATACRC）+ 2（VOLNUMBER）+ 7（保留区）。
+             * 所以"四字节卷号 + 7 字节保留区"这种块（HEAD_SIZE 22）必须**读不出来** ——
+             * ⛔ 不许为了兼容一个错的偏移去猜：字段总长与 HEAD_SIZE 不符就是不认。
+             */
+            byte[] full = Rar4Archive(0x0001, 1, firstVolume: false, legacyFourByteVolumeNumber: true);
+            string path = Write("x.bin", full);
+
+            VolumeNumberReading reading = VolumeNumberFromContent.Read(path);
+
+            Assert.False(reading.IsVolumeMember);
+            Assert.Equal(VolumeNumberFail.HeadersUnreadable, reading.Fail);
+        }
+
+        [Fact]
+        public void RAR4_老式编号族_一个字节都不动()
         {
             // MHD_NEWNUMBERING 不设 = 老式 .rar/.r00 族：本程序只认 partN.rar，不猜。
-            string path = Write("x.bin", Rar3Archive(0x0001, 1u, firstVolume: true, newNumbering: false));
+            string path = Write("x.bin", Rar4Archive(0x0001, 1, firstVolume: true, newNumbering: false));
 
             VolumeNumberReading reading = VolumeNumberFromContent.Read(path);
 
@@ -171,9 +193,9 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void RAR3_卷尾结尾块被截断_不认()
+        public void RAR4_卷尾结尾块被截断_不认()
         {
-            byte[] full = Rar3Archive(0x0001, 1u, firstVolume: true);
+            byte[] full = Rar4Archive(0x0001, 1, firstVolume: true);
             string path = Write("x.bin", full.Take(full.Length - 3).ToArray());
 
             VolumeNumberReading reading = VolumeNumberFromContent.Read(path);
@@ -183,9 +205,9 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void RAR3_主头CRC对不上_不认()
+        public void RAR4_主头CRC对不上_不认()
         {
-            byte[] bytes = Rar3Archive(0x0001, 1u, firstVolume: true);
+            byte[] bytes = Rar4Archive(0x0001, 1, firstVolume: true);
 
             bytes[10] ^= 0x5A; // 主头保留区（CRC 覆盖范围内）
 
@@ -237,11 +259,14 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void ZIP_注释长度写错_不认()
+        public void ZIP_注释长度写错_当不成末片_整组也不认()
         {
             /*
              * EOCD 必须**正好**收在文件末尾：注释长度说 4 字节、文件里却只有 2 字节 ——
-             * 这种"看着像 EOCD"的东西一律不认（它是判"这一片是不是末片"的唯一依据）。
+             * 这种"看着像 EOCD"的东西一律不能当末片（它是判"这一片是不是末片"的唯一依据）。
+             *
+             * ⚠ 它开头是本地文件头，所以按新判据它仍然是"像 zip 流的一片"（成员、但没有盘号）；
+             * 关键是**它当不了末片**，于是整组凑不齐 → 一个字节都不动。
              */
             byte[] bytes = ZipTail(1, 0, new byte[] { 0x41, 0x42 });
             bytes[^3] = 0x04; // 注释长度改成 4
@@ -250,25 +275,62 @@ namespace ArchiveFixer.Tests
 
             VolumeNumberReading reading = VolumeNumberFromContent.Read(path);
 
-            Assert.False(reading.IsVolumeMember);
-            Assert.Equal(VolumeNumberFail.NotVolumeMember, reading.Fail);
+            Assert.Null(reading.Number);
+
+            VolumeGroupOrder order = VolumeNumberFromContent.ResolveGroup(path, new[] { reading });
+
+            Assert.False(order.Confirmed);
         }
 
         [Fact]
-        public void ZIP_非末片_只有结尾的跨盘标记能认()
+        public void ZIP_非末片_开头是任意PK签名就算这一组的成员()
         {
-            // 开头是本地文件头 + 结尾是 PK\x07\x08：内容里**没有盘号**，位置只能靠消去法。
-            string yes = Write("a.bin", ZipSegment(4096));
-            string no = Write("b.bin", ZipSegment(4096, withMarker: false));
+            /*
+             * 判据（用户 2026-09-29 真样本定的）：非末片**不看结尾**，只看开头是不是 zip 流的签名。
+             * 真 PKZIP / 网盘那种跨盘 zip 的第 1 片**以跨盘标记 PK\x07\x08 开头**（7-Zip 叫它
+             * Embedded Stub），而且切点落在数据中间，结尾根本不是标记 ——
+             * 老判据"本地文件头开头 + 标记结尾"两条都要求，于是真样本的第一片永远认不出来。
+             */
+            string localHeader = Write("a.bin", ZipSegment(4096, ZipSegmentHead.LocalFileHeader));
+            string spanningMarker = Write("b.bin", ZipSegment(4096, ZipSegmentHead.SpanningMarker));
+            string centralDirectory = Write("c.bin", ZipSegment(4096, ZipSegmentHead.CentralDirectory));
+            string notZip = Write("d.bin", ZipSegment(4096, ZipSegmentHead.NotZip));
 
-            VolumeNumberReading member = VolumeNumberFromContent.Read(yes);
-            VolumeNumberReading plain = VolumeNumberFromContent.Read(no);
+            foreach (string path in new[] { localHeader, spanningMarker, centralDirectory })
+            {
+                VolumeNumberReading reading = VolumeNumberFromContent.Read(path);
 
-            Assert.True(member.IsVolumeMember);
-            Assert.Null(member.Number);
-            Assert.Equal(VolumeNumberFail.None, member.Fail);
+                Assert.True(reading.IsVolumeMember, $"{Path.GetFileName(path)} 没被认成跨盘组的成员");
+                Assert.Null(reading.Number); // 内容里没有盘号：位置只能靠消去法
+                Assert.Equal(VolumeNumberFail.None, reading.Fail);
+            }
 
-            Assert.False(plain.IsVolumeMember);
+            Assert.False(VolumeNumberFromContent.Read(notZip).IsVolumeMember);
+        }
+
+        [Fact]
+        public void ZIP_非末片比末片还小_不是一组_不认()
+        {
+            /*
+             * 尺寸规律：跨盘 zip 的非末片都是切分上限那么大的满片，末片是余量 ——
+             * 所以"该接在末片前面"的那一片必定不小于末片。反过来说明它们不是一组，
+             * 认了就等于把一个不相干的文件改成 `.z01`。
+             */
+            string big = Write("big.bin", ZipSegment(8192, ZipSegmentHead.LocalFileHeader));
+            string small = Write("small.bin", ZipSegment(16, ZipSegmentHead.LocalFileHeader));
+            string tail = Write("tail.bin", ZipTail(1, 0, Array.Empty<byte>()));
+
+            VolumeGroupOrder ok = VolumeNumberFromContent.ResolveGroup(
+                big,
+                new[] { VolumeNumberFromContent.Read(big), VolumeNumberFromContent.Read(tail) });
+
+            Assert.True(ok.Confirmed);
+
+            VolumeGroupOrder refused = VolumeNumberFromContent.ResolveGroup(
+                small,
+                new[] { VolumeNumberFromContent.Read(small), VolumeNumberFromContent.Read(tail) });
+
+            Assert.False(refused.Confirmed);
         }
 
         [Fact]
@@ -339,14 +401,14 @@ namespace ArchiveFixer.Tests
 
         [Theory]
         // 卷尾字段值 a/b/c + "第 1 卷"标记长在第几个文件上 → （认不认、不认是哪一档）
-        [InlineData(0u, 1u, 2u, 0, true, VolumeNumberFail.None)]                   // 0 起的一整组：{0,1,2} → 卷号 1,2,3
-        [InlineData(1u, 2u, 3u, 0, true, VolumeNumberFail.None)]                   // 1 起的一整组：{1,2,3} → 卷号 1,2,3
-        [InlineData(0u, 2u, 3u, 0, false, VolumeNumberFail.GroupBaseAmbiguous)]    // {0,2,3} 两种基数都连不成 1..N → 不认
-        [InlineData(0u, 1u, 2u, 2, false, VolumeNumberFail.RarFirstVolumeMismatch)] // "第 1 卷"标记长在第 3 个文件上 → 自相矛盾
-        public void RAR3_基数靠整组自洽判定_第1卷标记要一致(
-            uint a,
-            uint b,
-            uint c,
+        [InlineData(0, 1, 2, 0, true, VolumeNumberFail.None)]                   // 0 起的一整组：{0,1,2} → 卷号 1,2,3
+        [InlineData(1, 2, 3, 0, true, VolumeNumberFail.None)]                   // 1 起的一整组：{1,2,3} → 卷号 1,2,3
+        [InlineData(0, 2, 3, 0, false, VolumeNumberFail.GroupBaseAmbiguous)]    // {0,2,3} 两种基数都连不成 1..N → 不认
+        [InlineData(0, 1, 2, 2, false, VolumeNumberFail.RarFirstVolumeMismatch)] // "第 1 卷"标记长在第 3 个文件上 → 自相矛盾
+        public void RAR4_基数靠整组自洽判定_第1卷标记要一致(
+            ushort a,
+            ushort b,
+            ushort c,
             int firstFlagIndex,
             bool expectedConfirmed,
             VolumeNumberFail expectedFail)
@@ -355,8 +417,8 @@ namespace ArchiveFixer.Tests
 
             for (int index = 0; index < 3; index++)
             {
-                uint field = index switch { 0 => a, 1 => b, _ => c };
-                paths[index] = Write($"v{index}.dat", Rar3Archive(0x0001, field, firstVolume: index == firstFlagIndex));
+                ushort field = index switch { 0 => a, 1 => b, _ => c };
+                paths[index] = Write($"v{index}.dat", Rar4Archive(0x0001, field, firstVolume: index == firstFlagIndex));
             }
 
             VolumeGroupOrder order = VolumeNumberFromContent.ResolveGroup(paths[0], paths.Select(VolumeNumberFromContent.Read));
@@ -372,14 +434,14 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void RAR3_只有一卷时没有整组上下文_两种基数都说得通_不许认()
+        public void RAR4_只有一卷时没有整组上下文_两种基数都说得通_不许认()
         {
             /*
              * 这一条正是用户说的"两种基数解释都成立时不许认"：
              * 单看一卷（字段值 0），"0 起 → 它是第 1 卷"与"1 起 → 它是第 0 卷（无效）"都说得通，
              * 没有整组就定不了基数。单卷读取因此只给原始值、不给卷号，定序也必须有 ≥ 2 卷。
              */
-            string path = Write("solo.dat", Rar3Archive(0x0001, 0u, firstVolume: true));
+            string path = Write("solo.dat", Rar4Archive(0x0001, 0, firstVolume: true));
 
             VolumeNumberReading reading = VolumeNumberFromContent.Read(path);
 
@@ -395,7 +457,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void ZIP_两片时用消去法定序_三片以上不认()
         {
-            string segment = Write("seg.bin", ZipSegment(8192));
+            string segment = Write("seg.bin", ZipSegment(8192, ZipSegmentHead.LocalFileHeader));
             string tailTwo = Write("tail2.bin", ZipTail(1, 0, Array.Empty<byte>()));
             string tailThree = Write("tail3.bin", ZipTail(2, 0, Array.Empty<byte>()));
 
@@ -563,11 +625,11 @@ namespace ArchiveFixer.Tests
 
             /*
              * 真机里最常见的样子：末片还叫 sp2.zip，中间那一片被网盘/自己改烂了（sp2.disk1）。
-             * 末片的内容说"本盘号 1"（= 第 2 片、总共 2 片），首片内容只有结尾的跨盘标记 →
-             * 消去法把它定成第 1 片，于是它该叫 sp2.z01。
+             * 末片的内容说"本盘号 1"（= 第 2 片、总共 2 片），首片内容是 zip 流（真样本那种以
+             * 跨盘标记开场的样子）→ 消去法把它定成第 1 片，于是它该叫 sp2.z01。
              */
             string tail = Write(Path.Combine(directory, "sp2.zip"), ZipTail(1, 0, Array.Empty<byte>()));
-            string first = Write(Path.Combine(directory, "sp2.disk1"), ZipSegment(4096));
+            string first = Write(Path.Combine(directory, "sp2.disk1"), ZipSegment(4096, ZipSegmentHead.SpanningMarker));
 
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 tail,
@@ -662,12 +724,22 @@ namespace ArchiveFixer.Tests
             return header.ToArray();
         }
 
-        /// <summary>RAR3/4 归档：签名 + 主头（13 字节）+ 归档结尾块（卷号在里面）。</summary>
-        private static byte[] Rar3Archive(
+        /// <summary>
+        /// RAR 1.5–4.x（WinRAR 里叫 RAR4）：签名 + 主头（13 字节）+ 归档结尾块（卷号在里面）。
+        ///
+        /// <para>结尾块的布局照**真样本**写（2026-09-29：两套真包都是
+        /// <c>HEAD_SIZE = 20 = 7 + 4(EARC_DATACRC) + 2(EARC_VOLNUMBER) + 7(EARC_REVSPACE)</c>，
+        /// 卷号是 2 字节；只有第 1 卷带 <c>EARC_NEXT_VOLUME</c>）。
+        /// <paramref name="legacyFourByteVolumeNumber"/> = 老代码以为的那种"四字节卷号"布局，
+        /// 专门用来钉"布局不符就不认"。</para>
+        /// </summary>
+        private static byte[] Rar4Archive(
             ushort mainFlags,
-            uint volumeField,
+            ushort volumeField,
             bool firstVolume,
-            bool newNumbering = true)
+            bool newNumbering = true,
+            bool legacyFourByteVolumeNumber = false,
+            bool nextVolume = true)
         {
             ushort flags = mainFlags;
 
@@ -693,19 +765,30 @@ namespace ArchiveFixer.Tests
             bytes.AddRange(BitConverter.GetBytes(TestCrc16(main.ToArray())));
             bytes.AddRange(main);
 
-            // 归档结尾块：TYPE(1) FLAGS(2) SIZE(2) DATACRC(4) VOLNUMBER(4) REVSPACE(7)；
-            // 块总长 = 2（CRC 单独写在前面）+ 这 20 字节 = HEAD_SIZE 22
-            const ushort endFlags = 0x0002 | 0x0008;
-            const ushort endSize = 7 + 4 + 4 + 7;
+            /*
+             * 归档结尾块：TYPE(1) FLAGS(2) SIZE(2) [DATACRC(4)] VOLNUMBER(2 或老的 4) [REVSPACE(7)]。
+             * 块总长（含前面的 CRC 2 字节）= HEAD_SIZE —— 真样本就是 7 + 4 + 2 + 7 = 20。
+             */
+            int volumeFieldSize = legacyFourByteVolumeNumber ? 4 : 2;
+
+            ushort endFlags = 0x0002 | 0x0004 | 0x0008;
+
+            if (nextVolume)
+            {
+                endFlags |= 0x0001; // EARC_NEXT_VOLUME：后面还有一卷
+            }
+
+            ushort endSize = (ushort)(7 + 4 + volumeFieldSize + 7);
 
             var end = new List<byte> { 0x7B, 0x00, 0x00 };
             end[1] = (byte)(endFlags & 0xFF);
             end[2] = (byte)(endFlags >> 8);
             end.Add((byte)(endSize & 0xFF));
             end.Add((byte)(endSize >> 8));
-            end.AddRange(new byte[] { 0x11, 0x22, 0x33, 0x44 });              // DATACRC
-            end.AddRange(BitConverter.GetBytes(volumeField));                 // VOLNUMBER
-            end.AddRange(new byte[7]);                                        // REVSPACE
+            end.AddRange(new byte[] { 0x11, 0x22, 0x33, 0x44 });              // EARC_DATACRC
+            end.AddRange(BitConverter.GetBytes(volumeField));                 // EARC_VOLNUMBER（后面补 0 就当 4 字节）
+            end.AddRange(new byte[volumeFieldSize - 2]);
+            end.AddRange(new byte[7]);                                        // EARC_REVSPACE
 
             bytes.AddRange(BitConverter.GetBytes(TestCrc16(end.ToArray())));
             bytes.AddRange(end);
@@ -733,19 +816,52 @@ namespace ArchiveFixer.Tests
             return bytes.ToArray();
         }
 
-        /// <summary>跨盘 zip 的**非末片**：开头是本地文件头，结尾是跨盘标记 <c>PK\x07\x08</c>。</summary>
-        private static byte[] ZipSegment(int size, bool withMarker = true)
+        /// <summary>跨盘 zip 的**非末片**能以哪个签名开头（真样本的第 1 片就是"跨盘标记"那一档）。</summary>
+        private enum ZipSegmentHead
         {
-            var bytes = new List<byte> { 0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00 };
+            /// <summary>本地文件头 <c>PK\x03\x04</c>（老判据只认这一种）。</summary>
+            LocalFileHeader,
+
+            /// <summary>跨盘标记 <c>PK\x07\x08</c>（真 PKZIP 跨盘第 1 片的开头，7-Zip 叫 Embedded Stub）。</summary>
+            SpanningMarker,
+
+            /// <summary>中央目录 <c>PK\x01\x02</c>。</summary>
+            CentralDirectory,
+
+            /// <summary>根本不是 PK。</summary>
+            NotZip
+        }
+
+        /// <summary>
+        /// 跨盘 zip 的**非末片**：开头是给定签名，后面接一段填充。
+        /// ⚠ 真样本的切点落在数据中间，结尾**没有**任何标记 —— 所以这里也不再往结尾贴标记。
+        /// </summary>
+        private static byte[] ZipSegment(int size, ZipSegmentHead head)
+        {
+            var bytes = new List<byte>();
+
+            switch (head)
+            {
+                case ZipSegmentHead.LocalFileHeader:
+                    bytes.AddRange(new byte[] { 0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00 });
+                    break;
+
+                case ZipSegmentHead.SpanningMarker:
+                    bytes.AddRange(new byte[] { 0x50, 0x4B, 0x07, 0x08 });
+                    break;
+
+                case ZipSegmentHead.CentralDirectory:
+                    bytes.AddRange(new byte[] { 0x50, 0x4B, 0x01, 0x02 });
+                    break;
+
+                default:
+                    bytes.AddRange(new byte[] { 0x2C, 0xE5, 0xA7, 0xA0 });
+                    break;
+            }
 
             while (bytes.Count < size)
             {
                 bytes.Add(0x5A);
-            }
-
-            if (withMarker)
-            {
-                bytes.AddRange(new byte[] { 0x50, 0x4B, 0x07, 0x08 });
             }
 
             return bytes.ToArray();
