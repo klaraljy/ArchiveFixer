@@ -427,7 +427,9 @@ namespace ArchiveFixer.Extraction
             return BuildPlanFromOrder(path, order, targetNames);
         }
 
-        /// <summary>7z：内容认第一卷 + 同目录尺寸规律 + 硬链接试开验证（用户 2026-09-28 那一档，一字未改）。</summary>
+        /// <summary>
+        /// 7z：内容认第一卷 + 同目录尺寸规律（或**两卷形状**，用户 2026-09-29 放宽）+ 硬链接试开验证。
+        /// </summary>
         private static async Task<VolumeNameRepairPlan> PlanSevenZipByContentAsync(
             string path,
             IEnumerable<VolumeCandidate>? filesInDirectory,
@@ -439,7 +441,19 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<VolumeCandidate> candidates =
                 Detection.VolumeContentInference.BuildCandidates(path, filesInDirectory);
 
-            if (!Detection.VolumeContentInference.HasVolumeSizePattern(path, candidates))
+            /*
+             * 「值不值得试开一次」的闸门 = **两张门票取或**（用户 2026-09-29 放宽，理由写在
+             * `VolumeContentInference.HasTwoVolumeShapeEvidence` 的注释里）：
+             *   ① 尺寸规律：有与第一卷等长的满片；
+             *   ② 两卷形状：一个等长的都没有 —— 那正是"第一卷满片 + 末卷是余量"这一组
+             *      （现场 `amb909.7.01` 2 GiB + `amb909.z.2` 1.89 GB）。老口径只认 ①，
+             *      于是这一组报「同目录里也没有找到像后续卷的文件」，而兄弟卷就躺在同一个目录里。
+             *
+             * ⛔ 放宽的只是**"敢不敢试一次"**这一道：成不成立仍然只由下面的硬链接试开回答，
+             * 试不出来就一个字节都不动（判据仍然只有一处，就是这两张门票 + 试开）。
+             */
+            if (!Detection.VolumeContentInference.HasVolumeSizePattern(path, candidates)
+                && !Detection.VolumeContentInference.HasTwoVolumeShapeEvidence(path, candidates))
             {
                 return Cannot(path, StatusText.VolumeRepairContentNoSizePattern);
             }

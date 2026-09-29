@@ -368,12 +368,19 @@ namespace ArchiveFixer.Tests
         // ================================================================ 第 2 条：移除勾选的
 
         /// <summary>
-        /// 「移除勾选的」：**永远可点**（纯列表操作，与"正在处理"无关 —— 用户原话："我就是修改列表删除东西，
-        /// 和正在处理有什么关系"）；优先移除勾选的，**一个都没勾时按当前高亮那一行**移除
-        /// （他上一轮"点了没反应"的真因：他只点中了行、没打勾）。
+        /// 「移除勾选的」：优先移除勾选的；**一个都没勾时按当前高亮那一行**移除
+        /// （用户 2026-09-27"点了没反应"的真因：他只点中了行、没打勾）。
+        ///
+        /// <para>⚠ 2026-09-29 口径收回（用户："这个勾选行里面，移除勾选的按钮一直亮着没用啊，
+        /// 我都没有导入文件你亮着干什么" + "这怎么还是和前面的按钮样式不一样"）：
+        /// 那一轮改成"永远可点"之后，空列表 / 一个都没勾时它也亮着 —— 用户第二次报同一件事，
+        /// 于是判据收成与旁边「全选 / 全不选 / 反选」**同形**（<c>CanRemoveSelectedTasks</c>：
+        /// 闲着 + 至少一条勾着的）。所以本用例下面那两条断言跟着改：
+        /// 跑批中途**不再**可点（与旁边三个一致），高亮兜底那条路从"用户能点出来"降级成"兜底网"
+        /// （命令仍照办，只是按钮在那种状态下是灰的 —— 见 <c>MainViewModel.RemoveCheckedTasks</c>）。</para>
         /// </summary>
         [Fact]
-        public void 移除勾选的_勾选的与高亮那一行都能移除_处理中也照样能点()
+        public void 移除勾选的_勾选的与高亮那一行都能移除_处理中是灰的()
         {
             MainViewModel vm = CreateViewModel(out LogService log);
 
@@ -393,14 +400,16 @@ namespace ArchiveFixer.Tests
             vm.Tasks.Add(highlightedTask);
             vm.Tasks.Add(untouchedTask);
 
-            /* 处理中也要能点（旧实现绑了 !IsBusy → 跑批时是灰的，用户当场反问过这件事）。 */
+            /* 处理中与旁边那三个勾选按钮同形：灰的（用户 2026-09-29 的新口径，推翻 2026-09-27 的"永远可点"）。 */
             vm.IsBusy = true;
 
             try
             {
-                Assert.True(vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批中途也必须能改列表（纯列表操作）");
+                Assert.False(vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批中途必须与旁边三个按钮一样是灰的");
+
+                // 禁用态下也得答得出"为什么"（那颗按钮带 ToolTipService.ShowOnDisabled）。
                 Assert.Contains("只动列表", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
-                Assert.Contains("当前点中", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
+                Assert.Contains("灰的", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
             }
             finally
             {

@@ -31,9 +31,11 @@ namespace ArchiveFixer.Tests
 
         private readonly string _root;
         private readonly string? _sevenZip;
+        private readonly Xunit.Abstractions.ITestOutputHelper _output;
 
-        public DisguisedVolumeContentProbeTests()
+        public DisguisedVolumeContentProbeTests(Xunit.Abstractions.ITestOutputHelper output)
         {
+            _output = output;
             _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerVolumeProbe", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_root);
             _sevenZip = LocateSevenZip();
@@ -127,6 +129,173 @@ namespace ArchiveFixer.Tests
         }
 
         [SevenZipFact]
+        public async Task 真七z_两卷_第一卷满片第二卷是余量_名字只剩卷号_既有管线能真的解出内容()
+        {
+            /*
+             * 用户 2026-09-29 的真实现场（`<测试目录>` 里那两个文件）：
+             *   `amb909.7.01` = 2 GiB（**正好**是切分上限，开头是 7z 魔数）
+             *   `amb909.z.2`  = 1.89 GB（7-Zip 认不出格式 —— 它是一段**裸的续卷**）
+             * 老行为：第一卷报「分卷缺失 —— 同目录里也没有找到像后续卷的文件」，第二卷被当"不是压缩包"跳过，
+             * 于是这一组**能救的包救不回来**。
+             *
+             * 真因是"尺寸规律"要的是"有与第一卷等长的文件"，而两卷时第二卷就是余量、必然更短 ——
+             * 那条规律永远给不出证据。现在由"两卷形状"这张门票放过闸门，成不成立仍旧由硬链接试开回答。
+             *
+             * ⚠ 这里用 `-v1m` 的小样本代替 2 GiB 那个形状（形状一样：第一卷正好等于切分上限、第二卷是余量），
+             * 名字照真机那样只留"1 和 2"两个号。
+             */
+            string source = NewDirectory("amb909-two");
+            byte[] payload = MakePayload(source, 1572864); // 1.5 MiB → 1 MiB + 0.5 MiB
+
+            Run7z(source, "a", "-t7z", "-mx0", "-v1m", "amb909.7z", "data.bin");
+
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.002")), "样本不是两卷");
+            Assert.False(File.Exists(Path.Combine(source, "amb909.7z.003")), "样本该正好两卷（用来钉「没有等长兄弟」这个形状）");
+
+            long firstLength = new FileInfo(Path.Combine(source, "amb909.7z.001")).Length;
+            long secondLength = new FileInfo(Path.Combine(source, "amb909.7z.002")).Length;
+
+            Assert.Equal(1024 * 1024, firstLength);              // 第一卷 = 切分上限（满片）
+            Assert.True(secondLength < firstLength, "第二卷应当是余量（比第一卷短）");
+
+            // 真机那种改法：卷号被改烂、后缀也不对
+            File.Move(Path.Combine(source, "amb909.7z.001"), Path.Combine(source, "amb909.7.01"));
+            File.Move(Path.Combine(source, "amb909.7z.002"), Path.Combine(source, "amb909.z.2"));
+
+            string first = Path.Combine(source, "amb909.7.01");
+            Harness harness = CreateHarness();
+            ArchiveTask task = await AddTaskAsync(harness, first);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // **真的解出内容了**（逐字节一致）—— 这条比状态断言更有价值。
+            AssertPayloadExtracted(harness, payload);
+
+            // 整组改回标准名，旧名字一个不剩。
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.001")), "整组没改回标准名：缺 amb909.7z.001");
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.002")), "整组没改回标准名：缺 amb909.7z.002");
+            Assert.False(File.Exists(first), "旧名字还在：amb909.7.01");
+            Assert.False(File.Exists(Path.Combine(source, "amb909.z.2")), "旧名字还在：amb909.z.2");
+
+            Assert.Equal(Path.Combine(source, "amb909.7z.001"), task.CurrentPath);
+            Assert.True(task.VolumeNameAutoRenamed, "不是管线按内容改名的那一条路");
+        }
+
+        [SevenZipFact]
+        public async Task 真七z_两卷_名字里没有数字尾巴_靠体积规律也认得出这一组()
+        {
+            /*
+             * 第二张门票的**第二条**（用户原话："对不上再用体积规律（7z -v 的除末卷外都是满片：
+             * 正好等于切分上限，例如 2 GiB）"）：名字里连数字都没有时，只要第一卷正好是整数 MiB
+             * （`-v` 的切分上限永远是整数 MiB），"它是满片"就在体积上说得通 —— 放行去试开。
+             *
+             * ⛔ 放行的只是"敢试一次"：这一组能不能成立仍旧只由试开回答（下面那条反例钉着）。
+             */
+            string source = NewDirectory("amb909-notail");
+            byte[] payload = MakePayload(source, 1572864);
+
+            Run7z(source, "a", "-t7z", "-mx0", "-v1m", "amb909.7z", "data.bin");
+
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.002")), "样本不是两卷");
+
+            File.Move(Path.Combine(source, "amb909.7z.001"), Path.Combine(source, "amb909.aa"));
+            File.Move(Path.Combine(source, "amb909.7z.002"), Path.Combine(source, "amb909.bb"));
+
+            Harness harness = CreateHarness();
+            ArchiveTask task = await AddTaskAsync(harness, Path.Combine(source, "amb909.aa"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            AssertPayloadExtracted(harness, payload);
+
+            // 基名推不出归档后缀（`aa` 不是 `7z` 的"差一个字符"），所以基名原样留着 —— 名字只影响好不好看。
+            Assert.True(File.Exists(Path.Combine(source, "amb909.aa.7z.001")), "整组没改回标准名：缺 amb909.aa.7z.001");
+            Assert.True(File.Exists(Path.Combine(source, "amb909.aa.7z.002")), "整组没改回标准名：缺 amb909.aa.7z.002");
+            Assert.False(File.Exists(Path.Combine(source, "amb909.bb")), "旧名字还在：amb909.bb");
+        }
+
+        [SevenZipFact]
+        public async Task 真七z_两卷_只剩第一卷加一个无关小文件_试开不成立就什么都不做()
+        {
+            /*
+             * 反向守门（放开的闸门必须由试开兜住）：后续卷真的不在时，目录里那个**更短**的无关文件
+             * 会被"两卷形状"放进来试开一次 —— 引擎读不出来，于是**一个字节都不许动**：
+             * 名字不改、不报成功、源包原地不动。
+             */
+            string source = NewDirectory("amb909-missing-second");
+            MakePayload(source, 1572864);
+
+            Run7z(source, "a", "-t7z", "-mx0", "-v1m", "amb909.7z", "data.bin");
+
+            string first = Path.Combine(source, "amb909.7.01");
+            File.Move(Path.Combine(source, "amb909.7z.001"), first);
+
+            // 第二卷拿掉，换成一个无关的小文件（它比第一卷短，会被当候选）。
+            File.Delete(Path.Combine(source, "amb909.7z.002"));
+            File.WriteAllText(Path.Combine(source, "readme.txt"), "说明文件，与这一组分卷无关");
+
+            byte[] before = File.ReadAllBytes(first);
+
+            Harness harness = CreateHarness();
+            ArchiveTask task = await AddTaskAsync(harness, first);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+            Assert.NotEqual(TaskOutcome.Succeeded, task.Outcome);
+
+            // 一个字节都不许动：源包还在、名字没变、没有凭空造出一个标准名。
+            Assert.True(File.Exists(first), "源包被改名或搬走了");
+            Assert.Equal(before, File.ReadAllBytes(first));
+            Assert.False(File.Exists(Path.Combine(source, "amb909.7z.001")), "试开没成立却把名字改了");
+            Assert.True(File.Exists(Path.Combine(source, "readme.txt")), "无关文件被动过");
+            Assert.Empty(Directory.GetFiles(harness.OutputRoot, "*", SearchOption.AllDirectories));
+        }
+
+        [SevenZipFact]
+        public async Task 真七z_两卷_两个文件都在任务列表里_整组照样救得回来()
+        {
+            /*
+             * 真机的批次是**两个文件都被导入**（第一卷 + 那个认不出格式的续卷）—— 这一条照那个形状走一遍，
+             * 钉住"整组救回来"这件事不受影响；第二个任务自己落到什么状态**不在本用例的断言范围**里
+             * （它在管线里排在后面，而那时文件已经被整组改名了）。
+             */
+            string source = NewDirectory("amb909-two-tasks");
+            byte[] payload = MakePayload(source, 1572864);
+
+            Run7z(source, "a", "-t7z", "-mx0", "-v1m", "amb909.7z", "data.bin");
+
+            File.Move(Path.Combine(source, "amb909.7z.001"), Path.Combine(source, "amb909.7.01"));
+            File.Move(Path.Combine(source, "amb909.7z.002"), Path.Combine(source, "amb909.z.2"));
+
+            Harness harness = CreateHarness();
+
+            ArchiveTask first = await AddTaskAsync(harness, Path.Combine(source, "amb909.7.01"));
+
+            ArchiveTask second = await AddTaskAsync(harness, Path.Combine(source, "amb909.z.2"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, first.Status);
+            AssertPayloadExtracted(harness, payload);
+
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.001")), "整组没改回标准名：缺 amb909.7z.001");
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.002")), "整组没改回标准名：缺 amb909.7z.002");
+
+            /*
+             * 第二个任务不许报成功：它是那一组的**续卷**，整组已经由第一个任务解出来了，
+             * 它自己不产出任何东西 —— 报成功就是"成功"用错了（不变量 6）。
+             */
+            Assert.NotEqual(StatusText.ExtractSuccess, second.Status);
+
+            _output.WriteLine(
+                $"第二个任务（认不出格式的那一片）：状态=[{second.Status}] 终态=[{second.Outcome}] 原因=[{second.ErrorMessage}]");
+        }
+
+        [SevenZipFact]
         public async Task 真七z_完整包只改了后缀_不许被当成第一卷改名()
         {
             /*
@@ -153,9 +322,16 @@ namespace ArchiveFixer.Tests
 
         // ── 样本与断言 ──
 
-        private byte[] MakePayload(string directory)
+        /// <summary>
+        /// 造一份**不可压缩**的载荷（<c>-v1m</c> 要真的分卷：可压的会被压成一卷，"分卷"就名不副实）。
+        /// </summary>
+        /// <param name="bytes">
+        /// 载荷大小。默认 2.5 MiB（<c>-v1m</c> → 三卷：两个满卷 + 一个尾卷）；
+        /// 1.5 MiB 用来造**两卷**（一个满卷 + 一个余量），也就是真机那组的形状。
+        /// </param>
+        private byte[] MakePayload(string directory, int bytes = PayloadBytes)
         {
-            var payload = new byte[PayloadBytes];
+            var payload = new byte[bytes];
             new Random(20260928).NextBytes(payload);
             File.WriteAllBytes(Path.Combine(directory, "data.bin"), payload);
 

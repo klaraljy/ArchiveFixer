@@ -623,24 +623,66 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 「移除勾选的」在**没有勾选**（包括列表空着）时不许亮（用户 2026-09-29："我都没有导入文件
+        /// 「移除勾选的」在**没有勾选**（包括列表空着、只点了高亮那一行）时不许亮（用户 2026-09-29："我都没有导入文件
         /// 你亮着干什么"）。老判据只判"闲着"，于是空列表里它也亮着。
+        ///
+        /// <para>2026-09-29 补全三件事（那一次只钉了右键菜单那条命令，①页那颗按钮漏了）：</para>
+        /// <list type="number">
+        /// <item><description>①页那颗 <c>RemoveCheckedTasksCommand</c> 与右键菜单那条 <c>RemoveSelectedCommand</c>
+        /// **共用同一个判据**，两种形态（空列表 / 勾了又取消）都必须一致；</description></item>
+        /// <item><description><b>通知</b>：勾选一变就要发 <c>CanExecuteChanged</c>（RelayCommand 自己不发，
+        /// WPF 只在焦点变化时才重问 —— 那正是用户看到的"先亮着不动"）；</description></item>
+        /// <item><description>忙起来（跑批中）两颗都灰 —— 与旁边「全选 / 全不选 / 反选」同形
+        /// （用户那句"这怎么还是和前面的按钮样式不一样"）。⚠ 这一点<b>推翻了 2026-09-27 的"永远可点"</b>
+        /// （<c>ItemSept27FixTests</c> 里那条当时钉的是"处理中也照样能点"）：用户 2026-09-29 的新口径是
+        /// 与那一排另外三个按钮**同形**，因为"永远可点"的结果正是他这次报的"空列表里也亮着"。</description></item>
+        /// </list>
         /// </summary>
         [Fact]
         public void 移除勾选的_没有勾选时不许亮()
         {
             Harness harness = CreateHarness();
 
+            // 空列表：两颗都不亮，而且判据是同一个（⛔ 不许各写一套）。
             Assert.False(harness.Vm.RemoveSelectedCommand.CanExecute(null));
+            Assert.False(harness.Vm.RemoveCheckedTasksCommand.CanExecute(null));
 
             ArchiveTask task = AddTask(harness, CreateSourceFile("sel.7z"));
 
             // AddTask 默认勾上
             Assert.True(harness.Vm.RemoveSelectedCommand.CanExecute(null));
+            Assert.True(harness.Vm.RemoveCheckedTasksCommand.CanExecute(null));
+
+            // 勾选一变就要重问（否则界面停在旧值上，用户读成"没生效"）。
+            int notifications = 0;
+
+            harness.Vm.RemoveCheckedTasksCommand.CanExecuteChanged += (_, _) => notifications++;
 
             task.IsSelected = false;
 
+            Assert.False(harness.Vm.RemoveCheckedTasksCommand.CanExecute(null));
             Assert.False(harness.Vm.RemoveSelectedCommand.CanExecute(null));
+
+            Assert.True(
+                notifications > 0,
+                "取消勾选之后一次 CanExecuteChanged 都没发 —— WPF 不会重问，按钮会一直亮着");
+
+            /*
+             * 忙起来 = 两颗都灰（与旁边那三个勾选按钮同形）。
+             * 这条与 2026-09-27 的"永远可点"相反，是用户 2026-09-29 的新口径，理由写在方法注释里。
+             */
+            task.IsSelected = true;
+            harness.Vm.IsBusy = true;
+
+            try
+            {
+                Assert.False(harness.Vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批中途那颗按钮必须与旁边三个一样是灰的");
+                Assert.False(harness.Vm.RemoveSelectedCommand.CanExecute(null));
+            }
+            finally
+            {
+                harness.Vm.IsBusy = false;
+            }
         }
 
         // ================================================================ C3：缺卷时的手动指定目录

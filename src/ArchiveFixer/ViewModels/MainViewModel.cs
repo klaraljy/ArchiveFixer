@@ -2123,18 +2123,26 @@ namespace ArchiveFixer.ViewModels
             RemoveTaskCommand = new RelayCommand(RemoveTask);
 
             /*
-             * 「移除勾选的」（用户 2026-09-27 第二次报"还是没效果"）—— 两个真问题叠在一起：
+             * 「移除勾选的」—— 可用性判据与右键菜单那条 `RemoveSelectedCommand` **共用同一个**
+             * `CanRemoveSelectedTasks`（闲着 + 列表里真有一条勾着的），⛔ 不许各写一套。
              *
-             * ① 它以前绑了 `!IsBusy`：跑批中途这颗按钮是灰的。可它是**纯列表操作**（只动内存里那几行，
-             *    磁盘一个字节都不碰），与"正在处理"本来没有关系 —— 用户原话就是
-             *    "我就是修改列表删除东西，和正在处理有什么关系"。
-             * ② 它只认**打了勾**的行；而他的实际操作是"点中一行（高亮）+ 点这颗按钮" → 什么都没发生，
-             *    既没日志也没提示，看起来就是按钮坏了。
+             * 这条口径被用户改过两次，两次都记下来（后一次推翻前一次，别再翻回去）：
              *
-             * 现在：**永远可点**（跑批时也照删 —— 正在跑的那一个继续跑完，只是不再显示在列表里）；
-             * 优先移除勾选的，一个都没勾时按**当前高亮的那一行**移除，并在日志里写明是按哪一行办的。
+             * ① 2026-09-27：它以前绑 `!IsBusy`，跑批中途是灰的；而它只是**纯列表操作**（只动内存里那几行，
+             *    磁盘一个字节都不碰）—— 用户原话"我就是修改列表删除东西，和正在处理有什么关系"，
+             *    于是当时改成"永远可点"。
+             * ② 2026-09-29（**现行口径**）："永远可点"的结果是**列表空着 / 一个都没勾时它也亮着**，
+             *    点下去什么都不发生 —— 用户原话："这个勾选行里面，移除勾选的按钮一直亮着没用啊，
+             *    我都没有导入文件你亮着干什么"，紧接着又指出"这怎么还是和前面的按钮样式不一样"。
+             *    旁边「全选 / 全不选 / 反选」用的是 `CanChangeTaskSelection`（闲着 + 有东西可勾），
+             *    这一颗曾经既不看"有没有可移除的对象"、又不看"闲不闲"，在同一排里是唯一的例外 ——
+             *    所以口径收回成与那三个**同形**：**没有可作用的对象就不该亮**（与「只解压」同一条精神）。
+             *
+             * 通知那一条同样关键：判据对而界面不重问 = 用户读成"没生效"。它现在进了
+             * `RaiseAllCommandCanExecuteChanged`（`UpdateSummary` 收尾统一发一遍），
+             * 于是勾选变化 / 任务增删 / 忙闲切换都会立刻反映到按钮上（§9.5「值 + 通知」两条都要钉住）。
              */
-            RemoveCheckedTasksCommand = new RelayCommand(RemoveCheckedTasks);
+            RemoveCheckedTasksCommand = new RelayCommand(RemoveCheckedTasks, CanRemoveSelectedTasks);
 
             RenameBySuggestionAndRetryCommand = new AsyncRelayCommand(
                 RenameBySuggestionAndRetryAsync,
@@ -2875,12 +2883,16 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 「移除勾选的」的可用性：闲着 **且列表里真有一条勾着的**。
+        /// 「移除勾选的」（①页那颗按钮）与「移除勾选中的任务」（列表右键菜单）**共用**的可用性：
+        /// 闲着 **且列表里真有一条勾着的**。
         ///
         /// <para>用户 2026-09-29 真机反馈原话："这个勾选行里面，移除勾选的按钮一直亮着没用啊，
         /// 我都没有导入文件你亮着干什么" —— 老判据只判"闲着"（<c>CanRunNormalCommand</c>），
         /// 于是空列表里它也亮着；点下去什么都不发生，读起来就像坏了。
         /// 与「只解压」等命令同一条口径：**没有可作用的对象就不该亮**。</para>
+        ///
+        /// <para>⛔ 两条命令共用这一个判据（2026-09-29）：同一件事只允许有一个出口，
+        /// 各写一套必然漂移成"按钮是灰的、右键菜单却能点"。</para>
         /// </summary>
         private bool CanRemoveSelectedTasks()
         {
@@ -5167,9 +5179,11 @@ namespace ArchiveFixer.ViewModels
             /*
              * 一个都没勾、但用户**点中了一行**（高亮）→ 就按那一行办。
              *
-             * 为什么这里允许"退到高亮行"，而"一键处理 / 只解压 / 清理"那些命令不允许（用户 2026-09-24
-             * 第 12 条那条规定仍然有效）：那些命令**动磁盘**，猜错代价不可逆；这一颗**只动列表**，
-             * 移除错了再"添加文件 / 添加文件夹"一次就回来。而真机上正是这个差别让用户觉得"按钮坏了"。
+             * ⚠ 2026-09-29 口径收紧之后（命令判据 = 闲着 + 至少一条勾着的），界面**已经点不到**
+             * 这种状态了（按钮是灰的 + 不显示 hover），所以这一段降级成"兜底网"：
+             * 判据在 WPF 重问与用户实际点下之间可能差一拍（例如刚点完「全不选」），
+             * 那一下也**不能**变成"点了没反应"——还是照旧按高亮那一行办，并在日志里写明是按哪一行办的。
+             * ⛔ 绝不会退化成"删掉用户没打算删的那一行"：只有 SelectedTask 确实还在列表里才走这条。
              */
             if (checkedTasks.Count == 0)
             {
@@ -5942,6 +5956,16 @@ namespace ArchiveFixer.ViewModels
                  SelectNoneTasksCommand,
                  InvertTaskSelectionCommand,
                  SelectSoleTaskCommand,
+
+                 /*
+                  * 「移除勾选的」（用户 2026-09-29 第二次反馈：判据对了界面也不动）。
+                  * 它以前**不在**这份名单里，而 RelayCommand 自己不发 CanExecuteChanged ——
+                  * WPF 只在 CommandManager.RequerySuggested（焦点 / 输入变化）时才重问，
+                  * 于是"勾上一个任务"之后按钮要等下一次焦点变化才亮，用户看到的就是"先亮着不动"。
+                  * 这份名单由 UpdateSummary 统一发一遍（勾选变化 / 任务增删 / 忙闲切换都会走到它），
+                  * ⛔ 不许在别处再写一套通知。
+                  */
+                 RemoveCheckedTasksCommand,
 
                  OpenSettingsCommand,
                  OpenPasswordListCommand,

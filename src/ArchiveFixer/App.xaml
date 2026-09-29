@@ -310,6 +310,14 @@
                                 <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource PanelBorderBrush}" />
                                 <Setter Property="Foreground" Value="{StaticResource DisabledTextBrush}" />
                                 <Setter Property="Cursor" Value="Arrow" />
+                                <!--
+                                    禁用的按钮**不许再显示 hover**（用户 2026-09-29："鼠标放上去还是有显示的反应
+                                    而且鼠标的图案也会变"）。光标那一条原来就有，但悬停覆盖层漏了：
+                                    `IsMouseOver` 在 `IsEnabled=false` 的元素上照样为 true，两个触发器各改各的属性，
+                                    于是灰底上仍然浮着一层 hover 高亮 —— 看起来就像"这颗还是能点的"。
+                                    这里把它压回 0（触发器顺序也在起作用：这一条排在 IsMouseOver / IsPressed 之后）。
+                                -->
+                                <Setter TargetName="Overlay" Property="Opacity" Value="0" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

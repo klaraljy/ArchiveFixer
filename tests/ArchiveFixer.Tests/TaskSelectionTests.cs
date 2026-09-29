@@ -162,6 +162,141 @@ namespace ArchiveFixer.Tests
             Assert.True(vm.StartExtractCommand.CanExecute(null));
         }
 
+        /// <summary>
+        /// 「移除勾选的」的可用性必须与旁边「全选 / 全不选 / 反选」**同形**（用户 2026-09-29 两次反馈）：
+        /// 原话"这个勾选行里面，移除勾选的按钮一直亮着没用啊，我都没有导入文件你亮着干什么" →
+        /// "这怎么还是和前面的按钮样式不一样"。
+        ///
+        /// <para>老判据只判"闲着"，于是空列表里它也亮着、与已经灰下去的那三个并列在同一排 ——
+        /// 那正是用户看到的"样式不一样"。现行口径：闲着 **且** 至少一条勾着的
+        /// （<see cref="MainViewModel"/> 的 <c>CanRemoveSelectedTasks</c>，与右键菜单那条命令**共用**）。</para>
+        /// </summary>
+        [Fact]
+        public void 移除勾选的_与旁边三个勾选按钮同形()
+        {
+            MainViewModel vm = CreateViewModel();
+
+            // 空列表：四个全灰（这才是"和前面的按钮样式一样"）。
+            Assert.False(vm.RemoveCheckedTasksCommand.CanExecute(null), "空列表里「移除勾选的」不许亮");
+            Assert.False(vm.SelectAllTasksCommand.CanExecute(null));
+            Assert.False(vm.SelectNoneTasksCommand.CanExecute(null));
+            Assert.False(vm.InvertTaskSelectionCommand.CanExecute(null));
+
+            ArchiveTask only = AddTask(vm, "222.7z");
+
+            // 导入一个（默认勾上）：四个全亮。
+            Assert.True(vm.RemoveCheckedTasksCommand.CanExecute(null));
+            Assert.True(vm.SelectAllTasksCommand.CanExecute(null));
+
+            // 取消勾选：勾选那三个还亮着（列表里有东西可勾），「移除勾选的」灰下去（没有可移除的对象）。
+            only.IsSelected = false;
+
+            Assert.False(vm.RemoveCheckedTasksCommand.CanExecute(null));
+            Assert.True(vm.SelectAllTasksCommand.CanExecute(null));
+
+            // 再勾上 → 跟着亮回来。
+            only.IsSelected = true;
+
+            Assert.True(vm.RemoveCheckedTasksCommand.CanExecute(null));
+
+            // 忙起来：四个全灰。
+            vm.IsBusy = true;
+
+            try
+            {
+                Assert.False(vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批中途必须与旁边三个一样是灰的");
+                Assert.False(vm.SelectAllTasksCommand.CanExecute(null));
+            }
+            finally
+            {
+                vm.IsBusy = false;
+            }
+        }
+
+        /// <summary>
+        /// 判据对而**界面不重问** = 用户读成"没生效"（§9.5 的"值 + 通知"两条都要钉住）：
+        /// <c>RelayCommand</c> 自己不发 <c>CanExecuteChanged</c>，WPF 只在
+        /// <c>CommandManager.RequerySuggested</c>（焦点 / 输入变化）时才重问 ——
+        /// 缺了通知，勾上一个任务之后按钮要等下一次焦点变化才亮，用户看到的就是"先亮着不动"。
+        ///
+        /// <para>所以这条钉的是：那颗命令**进了** <c>RaiseAllCommandCanExecuteChanged</c> 那份名单
+        /// （勾选变化 / 任务增删 / 忙闲切换都从 <c>UpdateSummary</c> 走这一处收口）。
+        /// 这里显式再调一次 <c>UpdateSummary</c>，抹掉"无界面宿主 vs 有 Application 时回界面线程刷"
+        /// 的调度差异 —— 勾选变化那条路走的就是同一个方法（<c>RefreshSummaryAfterSelectionChange</c>）。</para>
+        /// </summary>
+        [Fact]
+        public void 移除勾选的_勾选一变就重问可用性()
+        {
+            MainViewModel vm = CreateViewModel();
+
+            ArchiveTask only = AddTask(vm, "333.7z");
+
+            int notifications = 0;
+
+            vm.RemoveCheckedTasksCommand.CanExecuteChanged += (_, _) => notifications++;
+
+            only.IsSelected = false;
+            vm.UpdateSummary();
+
+            Assert.True(
+                notifications > 0,
+                "勾选变化之后一次 CanExecuteChanged 都没发：WPF 不会重问，按钮会停在旧状态上（用户看到的就是「先亮着不动」）");
+        }
+
+        /// <summary>
+        /// **禁用态必须看得出来、而且不带 hover**（用户 2026-09-29："鼠标放上去还是有显示的反应
+        /// 而且鼠标的图案也会变"）。
+        ///
+        /// <para>为什么这条要用源码守卫而不是跑界面：这是"文件里到底写了什么"的事实。
+        /// `IsMouseOver` 在 `IsEnabled=false` 的元素上**照样为 true**，模板里两个触发器各改各的属性 ——
+        /// 只写"变灰"不把悬停覆盖层压回 0，禁用按钮上仍会浮一层高亮，看起来就像"这颗还能点"。</para>
+        /// </summary>
+        [Fact]
+        public void 按钮模板_禁用态变灰且不显示悬停()
+        {
+            string app = File.ReadAllText(
+                Path.Combine(XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "App.xaml"));
+
+            int disabledTrigger = app.IndexOf(
+                "<Trigger Property=\"IsEnabled\" Value=\"False\">", StringComparison.Ordinal);
+
+            Assert.True(disabledTrigger > 0, "App.xaml 的按钮模板里没有 IsEnabled=False 的触发器");
+
+            int triggerEnd = app.IndexOf("</Trigger>", disabledTrigger, StringComparison.Ordinal);
+
+            Assert.True(triggerEnd > disabledTrigger, "那个触发器没有闭合？");
+
+            string trigger = app[disabledTrigger..triggerEnd];
+
+            // 变灰 + 光标变箭头 + 悬停覆盖层压回 0（三条缺一条，用户就会看到"和别的按钮不一样"）。
+            Assert.Contains("DisabledBackgroundBrush", trigger, StringComparison.Ordinal);
+            Assert.Contains("DisabledTextBrush", trigger, StringComparison.Ordinal);
+            Assert.Contains("Cursor", trigger, StringComparison.Ordinal);
+            Assert.Contains("Overlay", trigger, StringComparison.Ordinal);
+            Assert.Contains("Opacity", trigger, StringComparison.Ordinal);
+
+            // 那一排四个按钮用的是同一个样式（判据只有一处，别给谁开小灶）。
+            string taskTab = ReadTaskTabXaml();
+
+            foreach (string command in new[]
+                     {
+                         "SelectAllTasksCommand",
+                         "SelectNoneTasksCommand",
+                         "InvertTaskSelectionCommand",
+                         "RemoveCheckedTasksCommand"
+                     })
+            {
+                int index = taskTab.IndexOf($"Command=\"{{Binding {command}}}\"", StringComparison.Ordinal);
+
+                Assert.True(index > 0, $"①页里找不到 {command}");
+
+                int buttonStart = taskTab.LastIndexOf("<Button", index, StringComparison.Ordinal);
+                string button = taskTab[buttonStart..index];
+
+                Assert.Contains("ToolbarButtonStyle", button, StringComparison.Ordinal);
+            }
+        }
+
         [Fact]
         public void 全不选之后_清理类命令不会再拿当前行开刀()
         {

@@ -32,8 +32,15 @@ namespace ArchiveFixer.Detection
     ///
     /// <para><b>物理事实（⛔ 别指望更多）</b>：7z 的 <c>-v</c> 分卷**内容里没有任何卷号标记** ——
     /// <c>.001</c> 是正常 7z 头，之后是裸字节流，所以"从内容直接读出第几卷"在 7z 上**不可能**。
-    /// 本类只做能做的三件事：① 用内容认出"这是 7z 的第一卷"；② 用同目录**尺寸**排出候选顺序；
-    /// ③ 把顺序交给 <c>VolumeProbeVerifier</c> 用引擎**试开**验证（验证通过才算数）。</para>
+    /// 本类只做能做的四件事：① 用内容认出"这是 7z 的第一卷"；② 用同目录**尺寸**排出候选顺序；
+    /// ③ 名字里那个"短数字尾巴"（<c>.2</c>）只用来**排序 / 当放行的第二张门票**；
+    /// ④ 把顺序交给 <c>VolumeProbeVerifier</c> 用引擎**试开**验证（验证通过才算数）。</para>
+    ///
+    /// <para><b>两卷形状（用户 2026-09-29 第二次真机）</b>：现场是 <c>amb909.7.01</c>（正好 2 GiB，
+    /// 带 7z 魔数）+ <c>amb909.z.2</c>（1.89 GB，认不出格式 = 裸的续卷），程序却报
+    /// 「同目录里也没有找到像后续卷的文件」—— 因为"尺寸规律"要的是"有与第一卷等长的文件"，
+    /// 而两卷时第二卷就是余量、必然更短。这一档现在由 <see cref="HasTwoVolumeShapeEvidence"/>
+    /// 放过闸门（名字的尾巴接得上 / 第一卷是整数 MiB），是不是真的一组仍旧只由试开回答。</para>
     ///
     /// <para>本类是**纯逻辑**：只读文件头（6 字节）、只做算术与排序，不建目录、不改名字、不调引擎。</para>
     /// </summary>
@@ -143,9 +150,68 @@ namespace ArchiveFixer.Detection
                 .Where(c => c != null && !string.IsNullOrWhiteSpace(c.Path))
                 .Where(c => !string.Equals(SafeFileName(c.Path), selfName, StringComparison.OrdinalIgnoreCase))
                 .Where(c => c.Size > 0 && c.Size <= firstSize)
+
+                /*
+                 * 「不是**已识别的**归档」（用户 2026-09-29 原话："候选从同目录里、**不是已识别的归档**、
+                 * 不是无用物（说明文件/样本图等）的文件里取"）。
+                 *
+                 * 这一条是**物理事实**，不是口味：7z 的 `-v` 分卷里，**只有第一卷有魔数**，
+                 * 之后的卷都是裸字节流（见类注释）。所以一个"认得出格式"的文件（自己就是 7z / RAR / zip
+                 * 头）绝不可能是另一组的续卷 —— 它是另一个独立的包。把它留在候选里只会拿它去试开、
+                 * 白烧一次引擎调用；真正的续卷恰恰是**认不出格式**的那些（用户那句
+                 * "不要把同目录里认不出格式的文件当无关物"说的就是它们）。
+                 *
+                 * ⚠ 顺序有讲究：先按下限（size ≤ 第一卷）筛，再读文件头 ——
+                 * 比第一卷还大的文件连打开都不用打开。
+                 */
+                .Where(c => SniffFormat(c.Path) == VolumeContentFormat.Unknown)
                 .OrderByDescending(c => c.Size)
                 .ThenBy(c => SafeFileName(c.Path), StringComparer.OrdinalIgnoreCase)
                 .ToList();
+        }
+
+        /// <summary>
+        /// 名字里的**短数字尾巴**（最后一段是 1~3 位纯数字）：<c>amb909.7.01</c> → 1、
+        /// <c>amb909.z.2</c> → 2、<c>amb909.7z.003</c> → 3；认不出来返回 null。
+        ///
+        /// <para><b>为什么加上它</b>（用户 2026-09-29 原话："我还说了，可以靠后缀数字 2 的情况猜一猜是第二卷"）：
+        /// 7z 的分卷内容里没有卷号，而**两卷**时"尺寸规律"必然给不出证据（第一卷满片、第二卷是余量，
+        /// 没有任何一卷与第一卷等长）—— 那一刻名字里的这个数字是唯一的线索。</para>
+        ///
+        /// <para>⛔ 它**只用来排序、并且只当"值得试开一次"的第二张门票**，绝不用来判"这是不是分卷"：
+        /// 是不是仍然只由"内容 + 硬链接试开"回答。位宽照旧只认 1~3 位纯数字
+        /// （<c>0012</c> 这种更像另一套位宽，不猜 —— 与 <c>ExtensionHelper</c> 的口径一致）。</para>
+        /// </summary>
+        public static int? TryReadShortNumberTail(string? path)
+        {
+            string name = SafeFileName(path);
+
+            int dot = name.LastIndexOf('.');
+
+            if (dot <= 0 || dot == name.Length - 1)
+            {
+                return null;
+            }
+
+            string tail = name[(dot + 1)..];
+
+            if (tail.Length is < 1 or > 3)
+            {
+                return null;
+            }
+
+            foreach (char c in tail)
+            {
+                if (!char.IsAsciiDigit(c))
+                {
+                    return null;
+                }
+            }
+
+            return int.TryParse(tail, NumberStyles.None, CultureInfo.InvariantCulture, out int value)
+                   && value is >= 1 and <= 999
+                ? value
+                : null;
         }
 
         /// <summary>
@@ -169,13 +235,89 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// **「两卷形状」这张门票**（用户 2026-09-29 现场：<c>amb909.7.01</c> 正好 2 GiB、
+        /// <c>amb909.z.2</c> 1.89 GB —— 一组两卷的包，能救却救不回来）。
+        ///
+        /// <para><b>为什么必须放宽到这一档</b>：<see cref="HasVolumeSizePattern"/> 要的是"有与第一卷等长的文件"，
+        /// 而**两卷**这一组里第二卷就是余量、必然更短 —— 那条规律**永远**给不出证据。
+        /// 结果就是最常见的两卷切法反而被挡在门外（老行为：报「同目录里也没有找到像后续卷的文件」，
+        /// 而兄弟卷就躺在同一个目录里）。</para>
+        ///
+        /// <para><b>两张门票，满足其一即可</b>（⛔ 都只是"值得试开一次"的门槛，成不成立仍然只由
+        /// <see cref="VolumeProbeVerifier"/> 的硬链接试开回答；试不出就什么都不做）：</para>
+        /// <list type="number">
+        /// <item><description><b>名字里的短数字尾巴接得上</b>：第一卷有尾巴时要求"候选 = 它 + 1"
+        /// （<c>.01</c> → <c>.2</c>），第一卷没尾巴时要求候选的号 ≥ 2（用户原话："可以靠后缀数字
+        /// 2 的情况猜一猜是第二卷"）；</description></item>
+        /// <item><description><b>体积规律</b>：第一卷是**整数 MiB** —— 7z 的切分上限永远是整数 MiB
+        /// （<c>-v1m</c> / <c>-v2g</c> / <c>-v100m</c>），所以"它是满片、这个更短的是末卷"在体积上说得通
+        /// （用户原话："对不上再用体积规律（7z <c>-v</c> 的除末卷外都是满片：正好等于切分上限，例如 2 GiB）"）。
+        /// 这只是**放行的第二张门票**，不是结论。</description></item>
+        /// </list>
+        /// </summary>
+        public static bool HasTwoVolumeShapeEvidence(
+            string? firstVolumePath,
+            IReadOnlyList<VolumeCandidate>? candidates)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return false;
+            }
+
+            long firstSize = SizeOf(firstVolumePath);
+
+            if (firstSize <= 0)
+            {
+                return false;
+            }
+
+            // 有等长的 → 走的是"尺寸规律"那张门票，本张不必出手（调用方按 或 组合两张）。
+            if (candidates.Any(c => c.Size == firstSize))
+            {
+                return false;
+            }
+
+            VolumeCandidate? partial = LargestShorter(firstVolumePath, candidates);
+
+            if (partial == null)
+            {
+                return false;
+            }
+
+            int? firstTail = TryReadShortNumberTail(firstVolumePath);
+            int? partialTail = TryReadShortNumberTail(partial.Path);
+
+            if (partialTail is int number
+                && number >= 2
+                && (firstTail == null || firstTail.Value == number - 1))
+            {
+                return true;
+            }
+
+            // 体积规律：切分上限永远是整数 MiB，"第一卷正好整 MiB"= 它在体积上像个满片。
+            const long MiB = 1024 * 1024;
+
+            return firstSize >= MiB && firstSize % MiB == 0;
+        }
+
+        /// <summary>
         /// 候选的**假设顺序**（第一个元素是第 2 卷，依此类推）。
         ///
         /// <para>只拿两类候选参与：**与第一卷等长的**（真正的满卷）与**最大的那一个更短的**
         /// （体积规律上它才可能是最后一卷；目录里别的小文件与这一组无关，不拉进来添乱）。
         /// 排序用的一条物理事实：最后一卷**必然排最后**，所以只需要排列满卷那一批 ——
-        /// 这一条把 720 种砍到通常只有几种。满卷之间大小完全一样，名字是唯一的线索，
-        /// 所以按名字升序打头、再逐个换位。</para>
+        /// 这一条把 720 种砍到通常只有几种。</para>
+        ///
+        /// <para><b>两处放宽（用户 2026-09-29）</b>：</para>
+        /// <list type="number">
+        /// <item><description><b>名字里的短数字尾巴优先</b>（他原话："可以靠后缀数字 2 的情况猜一猜是第二卷"）：
+        /// 满卷那一批全都有尾巴且互不相同时，**第一个**尝试的顺序就按号排（<c>.2</c> → <c>.3</c>），
+        /// 老的全排列照旧跟在后面兜底 —— 试开一次就成立时不必再烧后面那些。</description></item>
+        /// <item><description><b>一个等长的都没有时也给出顺序</b>：那正是"第一卷满片 + 末卷是余量"的两卷形状
+        /// （<c>-v2g</c> 切两个 2 GiB 级文件的现场）。这时唯一的假设顺序就是"第一卷 + 那个更短的"。
+        /// ⛔ 闸门在调用方（<see cref="HasVolumeSizePattern"/> / <see cref="HasTwoVolumeShapeEvidence"/>
+        /// 两张门票），这里只负责"假设"，成不成立由试开回答。</description></item>
+        /// </list>
         /// </summary>
         public static IReadOnlyList<IReadOnlyList<VolumeCandidate>> BuildOrderings(
             string? firstVolumePath,
@@ -193,41 +335,53 @@ namespace ArchiveFixer.Detection
                 return Array.Empty<IReadOnlyList<VolumeCandidate>>();
             }
 
-            var full = candidates
-                .Where(c => c.Size == firstSize)
-                .OrderBy(c => SafeFileName(c.Path), StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            List<VolumeCandidate> full = candidates.Where(c => c.Size == firstSize).ToList();
 
-            // 只有"最大的那个更短的文件"才可能是最后一卷；其余更短的一律当无关文件。
-            VolumeCandidate? partial = candidates
-                .Where(c => c.Size < firstSize)
-                .OrderByDescending(c => c.Size)
-                .ThenBy(c => SafeFileName(c.Path), StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
+            VolumeCandidate? partial = LargestShorter(firstVolumePath, candidates);
 
             if (full.Count == 0)
             {
-                return Array.Empty<IReadOnlyList<VolumeCandidate>>();
+                return partial == null
+                    ? Array.Empty<IReadOnlyList<VolumeCandidate>>()
+                    : new IReadOnlyList<VolumeCandidate>[] { new[] { partial } };
             }
 
             var orderings = new List<IReadOnlyList<VolumeCandidate>>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (List<VolumeCandidate> arrangement in Permutations(full, MaxOrderings))
+            void Emit(List<VolumeCandidate> ordered)
             {
-                var ordered = new List<VolumeCandidate>(arrangement);
-
                 if (partial != null)
                 {
-                    ordered.Add(partial);
+                    ordered = new List<VolumeCandidate>(ordered) { partial };
                 }
 
                 string key = string.Join("|", ordered.Select(c => SafeFileName(c.Path)));
 
-                if (seen.Add(key))
+                if (seen.Add(key) && orderings.Count < MaxOrderings)
                 {
                     orderings.Add(ordered);
                 }
+            }
+
+            /*
+             * ① 名字里的短数字尾巴接得上 → 先按号排（"数字对得上就直接按号排"）。
+             * 要求"全都有尾巴且互不相同"：缺一个或撞号就没有"按号排"可言，交给老的全排列。
+             */
+            var tails = full.Select(c => TryReadShortNumberTail(c.Path)).ToList();
+
+            if (tails.All(t => t != null) && tails.Distinct().Count() == tails.Count)
+            {
+                Emit(full
+                    .OrderBy(c => TryReadShortNumberTail(c.Path) ?? int.MaxValue)
+                    .ThenBy(c => SafeFileName(c.Path), StringComparer.OrdinalIgnoreCase)
+                    .ToList());
+            }
+
+            // ② 兜底：按名字升序打头的老全排列（大小完全一样时名字是唯一的线索），上限不变。
+            foreach (List<VolumeCandidate> arrangement in Permutations(full, MaxOrderings))
+            {
+                Emit(arrangement);
 
                 if (orderings.Count >= MaxOrderings)
                 {
@@ -264,6 +418,24 @@ namespace ArchiveFixer.Detection
         /// <summary>试开时第 <paramref name="index"/>（1 起）卷的假设名。</summary>
         public static string ProbeFileName(int index) =>
             ProbeBaseName + "." + index.ToString("D3", CultureInfo.InvariantCulture);
+
+        /// <summary>
+        /// 候选里"最像末卷"的那一个：更短的里面**最大的**（并列时名字升序）。
+        ///
+        /// <para>为什么只认这一个：<c>-v</c> 切出来的末卷**必然比前面的卷短**，而目录里别的更短文件
+        /// （说明、封面、另一个小包）与这一组无关。这一条判据只有这一处实现 ——
+        /// "谁可能是末卷"在假设顺序与两张门票里必须是同一个答案。</para>
+        /// </summary>
+        private static VolumeCandidate? LargestShorter(string? firstVolumePath, IReadOnlyList<VolumeCandidate> candidates)
+        {
+            long firstSize = SizeOf(firstVolumePath);
+
+            return candidates
+                .Where(c => c.Size > 0 && c.Size < firstSize)
+                .OrderByDescending(c => c.Size)
+                .ThenBy(c => SafeFileName(c.Path), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+        }
 
         /// <summary>满卷那一批的全排列（最多 <paramref name="limit"/> 个），按名字升序打头。</summary>
         private static IEnumerable<List<VolumeCandidate>> Permutations(List<VolumeCandidate> items, int limit)
