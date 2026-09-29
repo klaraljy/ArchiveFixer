@@ -29,6 +29,9 @@ namespace ArchiveFixer.Tests
     {
         private const int PayloadBytes = 2621440; // 2.5 MiB
 
+        /// <summary>「文件名也加密」那一档用的占位密码（⛔ 真密码绝不进仓库，§8）。</summary>
+        private const string ProbePassword = "VolumeProbe-Right-2026";
+
         private readonly string _root;
         private readonly string? _sevenZip;
         private readonly Xunit.Abstractions.ITestOutputHelper _output;
@@ -320,6 +323,132 @@ namespace ArchiveFixer.Tests
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
         }
 
+        // ================= 文件名也加密（7z -mhe）的那一档：用户 2026-09-29 真机的**真形状** =================
+
+        /// <summary>
+        /// **真机副本上实测出来的断点**（用户 2026-09-29 第二次真机报，20:05 那条日志）：
+        /// 现场那两个文件本来就是一组**完整**的两卷包，只是当年造包时开了 <c>-mhe</c>（**文件名也加密**）——
+        /// 于是硬链接试开拿不到密码，`7z l` 报的是
+        /// <c>Cannot open encrypted archive. Wrong password?</c>（引擎结构化结论 = <c>EncryptedHeaders</c>），
+        /// 老写法只认"列得出清单"→ 试开永远不成立 → 一个字节都不动 → 管线随后报「分卷缺失」
+        /// （**诊断说错了**：卷齐得很，缺的是密码）。
+        ///
+        /// <para>这一条钉的就是"文件名也加密的两卷、名字是 <c>.7.01</c>/<c>.z.2</c>"这个真形状：
+        /// 整组改回标准名 + **真的解出内容、逐字节一致**（密码本来就在「密码」页的密码本里）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真七z_两卷_文件名也加密_既有管线照样改回标准名并解出内容()
+        {
+            string source = NewDirectory("amb909-mhe");
+            byte[] payload = MakePayload(source, 1572864); // 1.5 MiB → 1 MiB + 0.5 MiB（第一卷满片、第二卷是余量）
+
+            Run7z(source, "a", "-t7z", "-mx0", "-mhe=on", "-p" + ProbePassword, "-v1m", "amb909.7z", "data.bin");
+
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.002")), "样本不是两卷");
+            Assert.False(File.Exists(Path.Combine(source, "amb909.7z.003")), "样本该正好两卷");
+
+            File.Move(Path.Combine(source, "amb909.7z.001"), Path.Combine(source, "amb909.7.01"));
+            File.Move(Path.Combine(source, "amb909.7z.002"), Path.Combine(source, "amb909.z.2"));
+
+            string first = Path.Combine(source, "amb909.7.01");
+            Harness harness = CreateHarness(new[] { ProbePassword });
+            ArchiveTask task = await AddTaskAsync(harness, first);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            AssertPayloadExtracted(harness, payload);
+
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.001")), "整组没改回标准名：缺 amb909.7z.001");
+            Assert.True(File.Exists(Path.Combine(source, "amb909.7z.002")), "整组没改回标准名：缺 amb909.7z.002");
+            Assert.False(File.Exists(first), "旧名字还在：amb909.7.01");
+            Assert.False(File.Exists(Path.Combine(source, "amb909.z.2")), "旧名字还在：amb909.z.2");
+            Assert.True(task.VolumeNameAutoRenamed, "不是管线按内容改名的那一条路");
+        }
+
+        /// <summary>
+        /// 反向守门（放开的判据必须由事实兜住）：**文件名也加密**的那一组，第二卷真的不在时，
+        /// 目录里那个无关小文件会被"两卷形状"放进去试开一次 —— 引擎报的是"打不开 / 数据不全"
+        /// （**不是**"这是加密归档"），于是**一个字节都不许动**。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真七z_两卷_文件名也加密_只剩第一卷加无关小文件_试开不成立就什么都不做()
+        {
+            string source = NewDirectory("amb909-mhe-missing-second");
+            MakePayload(source, 1572864);
+
+            Run7z(source, "a", "-t7z", "-mx0", "-mhe=on", "-p" + ProbePassword, "-v1m", "amb909.7z", "data.bin");
+
+            string first = Path.Combine(source, "amb909.7.01");
+            File.Move(Path.Combine(source, "amb909.7z.001"), first);
+
+            File.Delete(Path.Combine(source, "amb909.7z.002"));
+            File.WriteAllText(Path.Combine(source, "readme.txt"), "说明文件，与这一组分卷无关");
+
+            byte[] before = File.ReadAllBytes(first);
+
+            Harness harness = CreateHarness(new[] { ProbePassword });
+            ArchiveTask task = await AddTaskAsync(harness, first);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+            Assert.NotEqual(TaskOutcome.Succeeded, task.Outcome);
+
+            Assert.True(File.Exists(first), "源包被改名或搬走了");
+            Assert.Equal(before, File.ReadAllBytes(first));
+            Assert.False(File.Exists(Path.Combine(source, "amb909.7z.001")), "试开没成立却把名字改了");
+            Assert.True(File.Exists(Path.Combine(source, "readme.txt")), "无关文件被动过");
+            Assert.Empty(Directory.GetFiles(harness.OutputRoot, "*", SearchOption.AllDirectories));
+        }
+
+        /// <summary>
+        /// 反向守门（单卷那一档，加密版）：一个**完整**的、文件名也加密的包被改成 <c>solo.7.01</c> 时，
+        /// 单卷试开会报"这是加密归档" —— 那说明那一份头就在这个文件**里**，它本身就是完整的包，
+        /// ⛔ 绝不能按内容推顺序把它改名（改完 7-Zip 就找不着它了）。
+        ///
+        /// <para>所以单卷试开的"加密归档"结论必须**拒绝**，与"多卷试开"里的同一结论含义正好相反
+        /// （那边是"头在最后一卷里"= 这一组成立）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真七z_完整包文件名也加密_只改了后缀_不许被当成第一卷改名()
+        {
+            string source = NewDirectory("solo-mhe");
+            byte[] payload = MakePayload(source);
+
+            Run7z(source, "a", "-t7z", "-mx0", "-mhe=on", "-p" + ProbePassword, "solo.7z", "data.bin");
+
+            /*
+             * 目录里留一个"更短、名字带短数字尾巴"的文件（`data.2`）—— 否则"两卷形状"那张门票
+             * 根本不放行，单卷试开也就跑不到，这条用例会白绿。
+             */
+            File.Move(Path.Combine(source, "data.bin"), Path.Combine(source, "data.2"));
+
+            File.Move(Path.Combine(source, "solo.7z"), Path.Combine(source, "solo.7.01"));
+
+            string renamed = Path.Combine(source, "solo.7.01");
+
+            Harness harness = CreateHarness(new[] { ProbePassword });
+            ArchiveTask task = await AddTaskAsync(harness, renamed);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.True(File.Exists(renamed), "完整的加密包被当成分卷第一卷改掉了名字");
+            Assert.False(File.Exists(Path.Combine(source, "solo.7z.001")), "不该按内容推的名字改名");
+            Assert.False(File.Exists(Path.Combine(source, "solo.7z.002")), "把无关的 data.2 也一起改了名");
+            Assert.False(task.VolumeNameAutoRenamed, "这一单本来就不该走改名那条路");
+            Assert.True(File.Exists(Path.Combine(source, "data.2")), "无关文件被动过");
+
+            /*
+             * ⚠ 这一单**最终没能解开**（状态「分卷缺失」），而且与本次修复无关 —— 是**既有**的另一处误诊：
+             * 文件名末尾那一段是纯数字（`.01`）时，7-Zip 在没有密码的情况下会退化成"通用分片"处理器
+             * （清单里只有一条 = 文件自己），管线那道 RawSplitStreamDetector 闸门于是报了「分卷缺失」。
+             * 判据本身没错（通用分片正是它要拦的），错的是"没有密码"与"名字被改坏"两件事在那里分不开。
+             * 本轮**不动它**（判据只允许一处，且真机那一档是"两卷"而不是"完整单卷"），只把这个事实记下来。
+             */
+            _output.WriteLine($"完整加密包（名字带纯数字尾巴）这次的状态：[{task.Status}] 原因：[{task.ErrorMessage}]");
+        }
+
         // ── 样本与断言 ──
 
         /// <summary>
@@ -427,7 +556,7 @@ namespace ArchiveFixer.Tests
             return task;
         }
 
-        private Harness CreateHarness()
+        private Harness CreateHarness(IReadOnlyList<string>? bookPasswords = null)
         {
             string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
             string outputRoot = Path.Combine(_root, "out-" + Guid.NewGuid().ToString("N"));
@@ -452,6 +581,18 @@ namespace ArchiveFixer.Tests
 
             IArchiveEngine engine = new Engines.SevenZip.SevenZipEngine();
             var logService = new LogService(pathService);
+            var passwordService = new PasswordService();
+
+            foreach (string password in bookPasswords ?? Array.Empty<string>())
+            {
+                passwordService.Passwords.Add(new PasswordItem
+                {
+                    Value = password,
+                    Source = "ImportedList",
+                    IsEnabled = true,
+                    Remark = "分卷形状用例候选"
+                });
+            }
 
             string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
             string previousSevenZipPath = ToolLocator.Default.CustomSevenZipExePath;
@@ -461,7 +602,7 @@ namespace ArchiveFixer.Tests
                 new ArchiveDetectService(),
                 new RenameService(),
                 engine,
-                new PasswordService(),
+                passwordService,
                 logService,
                 settingsService,
                 pathService,
@@ -475,7 +616,7 @@ namespace ArchiveFixer.Tests
             var coordinator = new ExtractionCoordinator(
                 vm,
                 engine,
-                new PasswordService(),
+                passwordService,
                 pathService,
                 new ConfirmDialogService());
 

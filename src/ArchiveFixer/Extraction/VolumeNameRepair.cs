@@ -55,6 +55,19 @@ namespace ArchiveFixer.Extraction
         public IReadOnlyList<string> Siblings { get; init; } = Array.Empty<string>();
 
         /// <summary>
+        /// 这一份计划**真的跑过试开**（硬链接 + 引擎列一次目录）。
+        ///
+        /// <para>为什么要标出来：内容级这条路以前"不成立就静默返回"，用户在日志里看不到任何痕迹 ——
+        /// 2026-09-29 真机就是因此查不出断在哪（<c>ExtractionCoordinator.NormalizeDisguisedVolumeNamesAsync</c>）。
+        /// 标了它，调用方才能只对"真跑过试开"的那些写一行结论，
+        /// 而不会给每个普通压缩包都添一行（第 45 条的日志纪律：成功的任务只留一行）。</para>
+        /// </summary>
+        public bool TrialAttempted { get; init; }
+
+        /// <summary>试开成立、但引擎读不出清单：这一组是"文件名也加密"的归档（7z <c>-mhe</c> / RAR <c>-hp</c>）。</summary>
+        public bool ProbeNeedsPassword { get; init; }
+
+        /// <summary>
         /// 这次要改的**每一卷**（用户 2026-09-28 追加：网盘给整组的名字都缀了「删除」，
         /// 只改第一卷没用 —— 7-Zip 找 `.002` 时名字对不上，照样报缺卷）。
         ///
@@ -468,12 +481,16 @@ namespace ArchiveFixer.Extraction
 
             if (!probe.Confirmed || probe.OrderedVolumes.Count < 2)
             {
-                return Cannot(path, string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason));
+                // 试开**真跑过**（闸门已放行）→ 标出来，调用方才能把"试过了、不成立、为什么"写进日志。
+                return Cannot(
+                    path,
+                    string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason),
+                    trialAttempted: true);
             }
 
             if (!Detection.VolumeNumberFromContent.TryDeriveStem(path, format, out string stem))
             {
-                return Cannot(path, StatusText.VolumeRepairNoSuggestion);
+                return Cannot(path, StatusText.VolumeRepairNoSuggestion, trialAttempted: true);
             }
 
             IReadOnlyList<string> targetNames = Detection.VolumeNumberFromContent.BuildStandardNames(
@@ -489,13 +506,16 @@ namespace ArchiveFixer.Extraction
 
                 if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
                 {
-                    return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+                    return Cannot(path, StatusText.VolumeRepairAlreadyStandard, trialAttempted: true);
                 }
 
                 // ⛔ 绝不覆盖：任何一个目标名被占，整组不改。
                 if (File.Exists(target))
                 {
-                    return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, targetNames[i]));
+                    return Cannot(
+                        path,
+                        string.Format(StatusText.VolumeRepairTargetTakenFormat, targetNames[i]),
+                        trialAttempted: true);
                 }
 
                 items.Add(new VolumeRepairItem
@@ -517,7 +537,9 @@ namespace ArchiveFixer.Extraction
                 SuggestedFileName = self.SuggestedFileName,
                 TargetPath = self.TargetPath,
                 Siblings = items.Select(i => i.CurrentFileName).ToList(),
-                Items = items
+                Items = items,
+                TrialAttempted = true,
+                ProbeNeedsPassword = probe.NeedsPassword
             };
         }
 
@@ -1001,12 +1023,15 @@ namespace ArchiveFixer.Extraction
         private static VolumeNameRepairResult PartialFailure(VolumeNameRepairPlan plan, int done, string why) =>
             Failure(string.Format(StatusText.VolumeRepairGroupPartialFormat, done + 1, why));
 
-        private static VolumeNameRepairPlan Cannot(string path, string reason) => new()
+        /// <param name="trialAttempted">这一份"不能改"的结论是不是**试开跑过之后**下的
+        /// （只有真跑过试开才值得写一行日志说清结论，见 <see cref="VolumeNameRepairPlan.TrialAttempted"/>）。</param>
+        private static VolumeNameRepairPlan Cannot(string path, string reason, bool trialAttempted = false) => new()
         {
             CanRepair = false,
             Reason = reason,
             CurrentPath = path,
-            CurrentFileName = SafeFileName(path)
+            CurrentFileName = SafeFileName(path),
+            TrialAttempted = trialAttempted
         };
 
         private static VolumeNameRepairResult Failure(string message) => new()

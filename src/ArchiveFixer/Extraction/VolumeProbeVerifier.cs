@@ -15,6 +15,15 @@ namespace ArchiveFixer.Extraction
         /// <summary>顺序成立（引擎真的读到了里面的条目）。</summary>
         public bool Confirmed { get; init; }
 
+        /// <summary>
+        /// 成立，但引擎**读不出清单**：这一组是"文件名也加密"的归档（7z <c>-mhe</c> / RAR <c>-hp</c>），
+        /// 要正确密码才列得出条目。
+        ///
+        /// <para>它不影响"成立"这个结论（引擎按第一张卷声明的偏移真读到了那一份加密头），
+        /// 只影响**怎么说这句话** —— 用户 2026-09-29 真机就是这一类包。</para>
+        /// </summary>
+        public bool NeedsPassword { get; init; }
+
         /// <summary>成立时的完整卷序（第 1 卷在第一位）。</summary>
         public IReadOnlyList<VolumeCandidate> OrderedVolumes { get; init; } = Array.Empty<VolumeCandidate>();
 
@@ -112,20 +121,24 @@ namespace ArchiveFixer.Extraction
                     var volumes = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
                     volumes.AddRange(ordering);
 
-                    string? failure = await TryLinkAndListAsync(volumes, trialDirectory, cancellationToken).ConfigureAwait(false);
+                    TrialResult trial = await TryLinkAndListAsync(volumes, trialDirectory, cancellationToken).ConfigureAwait(false);
 
-                    if (failure == null)
+                    if (trial.Failure == null)
                     {
                         return new VolumeProbeOutcome
                         {
                             Confirmed = true,
+                            NeedsPassword = trial.EncryptedArchive,
                             OrderedVolumes = volumes,
                             Attempts = attempts,
-                            Reason = $"按试开验证的顺序成立了（试了 {attempts} 种排列）"
+                            Reason = trial.EncryptedArchive
+                                ? $"按试开验证的顺序成立了（试了 {attempts} 种排列；引擎认出了这一组是一份"
+                                  + "「文件名也加密」的归档，给不出密码就读不出清单）"
+                                : $"按试开验证的顺序成立了（试了 {attempts} 种排列）"
                         };
                     }
 
-                    LastFailure = failure;
+                    LastFailure = trial.Failure;
                 }
 
                 return Refuse(attempts, $"试了 {attempts} 种排列都不成立（最后一次：{LastFailure}）");
@@ -156,9 +169,22 @@ namespace ArchiveFixer.Extraction
             string soloDirectory = Path.Combine(probeRoot, "solo");
             var solo = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
 
-            string? failure = await TryLinkAndListAsync(solo, soloDirectory, cancellationToken).ConfigureAwait(false);
+            TrialResult trial = await TryLinkAndListAsync(solo, soloDirectory, cancellationToken).ConfigureAwait(false);
 
-            if (failure != null)
+            /*
+             * ⛔ 「单卷就报加密归档」必须**拒绝**（用户 2026-09-29 真机副本取证）：
+             * 7z 的"下一份头"写在**最后一卷**里，位置由第一张卷第 0 字节的 Start Header 给出；
+             * 单卷试开就报"头加密"，说明那一份头**就在这个文件里面** —— 它本身就是个**完整**的加密包，
+             * 不是分卷的第一卷（把它当第一卷改名只会把它弄坏）。
+             * 反过来，"分卷的第一卷独自一人"读不到头（头在后面的卷里），报的是"打不开 / 通用分片"。
+             */
+            if (trial.EncryptedArchive)
+            {
+                return Refuse(0, "第一卷自己就能完整打开（文件名也加密，没有密码读不出清单）"
+                                 + " —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）");
+            }
+
+            if (trial.Failure != null)
             {
                 // 打不开 → 正是"后面还有卷"的样子，可以接着试排列。
                 return null;
@@ -167,11 +193,27 @@ namespace ArchiveFixer.Extraction
             return Refuse(0, "第一卷自己就能完整打开 —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）");
         }
 
+        /// <summary>一次试开的结论（<see cref="Failure"/> 为 null = 成立）。</summary>
+        private readonly struct TrialResult
+        {
+            public TrialResult(string? failure, bool encryptedArchive)
+            {
+                Failure = failure;
+                EncryptedArchive = encryptedArchive;
+            }
+
+            /// <summary>失败原因；null = 这一次成立。</summary>
+            public string? Failure { get; }
+
+            /// <summary>引擎的结论是"这一组是一份**文件名也加密**的归档（7z <c>-mhe</c> / RAR <c>-hp</c>）"。</summary>
+            public bool EncryptedArchive { get; }
+        }
+
         /// <summary>
         /// 按假设名把这几卷硬链接进 <paramref name="directory"/> 并让引擎列一次；
-        /// 返回 null = 列出成功（顺序成立），否则返回失败原因。
+        /// 返回 <c>Failure == null</c> = 成立（顺序成立，或引擎认出了"这一组是加密归档"）。
         /// </summary>
-        private async Task<string?> TryLinkAndListAsync(
+        private async Task<TrialResult> TryLinkAndListAsync(
             IReadOnlyList<VolumeCandidate> volumes,
             string directory,
             CancellationToken cancellationToken)
@@ -182,7 +224,7 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
-                return $"试开目录建不出来（{ex.Message}）";
+                return new TrialResult($"试开目录建不出来（{ex.Message}）", false);
             }
 
             string firstLink = string.Empty;
@@ -195,7 +237,9 @@ namespace ArchiveFixer.Extraction
                 {
                     int error = Marshal.GetLastWin32Error();
 
-                    return $"做不了硬链接（Win32 错误 {error}）—— 源目录与试开目录必须在同一个卷上，且文件系统要支持硬链接";
+                    return new TrialResult(
+                        $"做不了硬链接（Win32 错误 {error}）—— 源目录与试开目录必须在同一个卷上，且文件系统要支持硬链接",
+                        false);
                 }
 
                 if (i == 0)
@@ -210,7 +254,33 @@ namespace ArchiveFixer.Extraction
 
             if (!list.Success)
             {
-                return string.IsNullOrWhiteSpace(list.Message) ? "引擎列不出来" : list.Message;
+                /*
+                 * ===== 「引擎认得出这一组，只是头加密读不出清单」= **肯定**回答（用户 2026-09-29 真机副本取证）=====
+                 *
+                 * 现场：`amb909.7.01`（2 GiB，带 7z 魔数）+ `amb909.z.2`（1.89 GB 裸续卷）本来就是一组**完整**的两卷包，
+                 * 只是当年造包时开了 `-mhe`（文件名也加密）。对**卷齐**的这一组，7-Zip 报的是
+                 * `Cannot open encrypted archive. Wrong password?`（引擎的结构化结论 = `EncryptedHeaders`）；
+                 * 而"卷不齐 / 拿别的文件顶替"报的是 `Cannot open the file as [7z] archive` + `Unexpected end of archive`
+                 * （两条都在本地副本上实测过，见 AGENTS.md §11）。
+                 *
+                 * 老写法只认 `list.Success` → 这一组**永远**"试不成立" → 一个字节都不动 →
+                 * 管线随后如实报「分卷缺失」。可真正的原因是「缺密码」：**诊断说错了**，
+                 * 用户被指去满盘找卷，而卷就躺在同一个目录里。
+                 *
+                 * 凭什么敢把它当肯定回答：7z 的"下一份头"写在**最后一卷**里，位置由第一张卷第 0 字节的 Start Header
+                 * 给出（现场 `NextHeaderOffset = 4038274896`、头长 66 → 头正好落在第二卷的最后一字节上）。
+                 * 引擎能报出"这是加密归档"，就说明它按第一张卷声明的偏移**真读到了那一份头** —— 这一组成立；
+                 * 它给不出的只是条目的名字。⛔ 判据仍然只由**这一次硬链接试开**回答（与"列得出清单"同一类证据），
+                 * 不是新造的第二套"这是不是分卷"判据；试不出（打不开 / 通用分片）照旧一个字节都不动。
+                 */
+                if (string.Equals(list.ErrorType, EngineErrorTypes.EncryptedHeaders, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new TrialResult(null, encryptedArchive: true);
+                }
+
+                return new TrialResult(
+                    string.IsNullOrWhiteSpace(list.Message) ? "引擎列不出来" : list.Message,
+                    false);
             }
 
             /*
@@ -220,10 +290,10 @@ namespace ArchiveFixer.Extraction
              */
             if (list.IsRawSplitStream)
             {
-                return "引擎只看到一段裸分片流（后续卷没接上）";
+                return new TrialResult("引擎只看到一段裸分片流（后续卷没接上）", false);
             }
 
-            return null;
+            return new TrialResult(null, false);
         }
 
         private static VolumeProbeOutcome Refuse(int attempts, string reason) => new()

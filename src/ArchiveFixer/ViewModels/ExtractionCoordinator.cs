@@ -5227,6 +5227,23 @@ namespace ArchiveFixer.ViewModels
 
                 if (plan == null || !plan.CanRepair || plan.Items.Count == 0)
                 {
+                    /*
+                     * ⚠ 这里**只**对"试开真跑过、结论是不成立"的情形写一行 —— 用户 2026-09-29 真机
+                     * 查不出断在哪，正是因为这条路上从前**一句日志都没有**（内容级推断默默返回，
+                     * 用户看到的只有后面那句「分卷缺失」，看不出程序到底试没试）。
+                     *
+                     * ⛔ 不能对所有"不能改"都写：内容级推断对**每个**普通包都会问一遍（名字里没有卷号 → 走内容路），
+                     * 全都记一行会把第 45 条的日志纪律打掉（成功的任务只留一行，见 Item45LogAndPasswordTests）。
+                     * 判据是 `TrialAttempted`（闸门放行过、硬链接与引擎调用真发生过），不是文案。
+                     */
+                    if (plan != null && plan.TrialAttempted && !plan.CanRepair)
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"{task.FileName}：按内容试开过这一组分卷（同卷硬链接 + 引擎列目录），不成立 —— "
+                            + $"{plan.Reason}；这一单按原名继续（源文件一个字节都没动）。");
+                    }
+
                     return;
                 }
 
@@ -5240,7 +5257,11 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog(
                     "INFO",
-                    $"{task.FileName}：分卷名不标准，已按标准名改好（{plan.Items.Count} 卷，只改名字、内容一个字节没动）：{plan.Describe()}");
+                    $"{task.FileName}：分卷名不标准，已按标准名改好（{plan.Items.Count} 卷，只改名字、内容一个字节没动）：{plan.Describe()}"
+                    + (plan.ProbeNeedsPassword
+                        ? "。⚠ 这一组是「文件名也加密」的归档（7z -mhe / RAR -hp）：试开时引擎只认得出它是一份加密归档、"
+                          + "列不出清单 —— 解压那一步要靠「密码」页里的密码本，没有可用密码就会停在「密码错误」。"
+                        : string.Empty));
 
                 // 记在任务上：状态那一列会写成"已跳过（已改回标准名）"——
                 // 免得"改过名"与"这一单没解成"读起来自相矛盾（用户 2026-09-28 真机反馈）。
