@@ -347,18 +347,21 @@ namespace ArchiveFixer.Storage
         }
 
         /// <summary>
-        /// 任务开工之后（一般是拿到条目清单、算出了精确峰值的那一刻）**改预留**。
+        /// 任务开工之后（一般是拿到条目清单、算出了精确需求的那一刻）**改预留**。
         ///
         /// <para>
-        /// 为什么要改而不是"开始时大致估一个就算了"：估小了会让"这些任务同时达到峰值"的总和超过可用空间 ——
+        /// 为什么要改而不是"开始时大致估一个就算了"：估小了会让"这些任务同时达到各自需求"的总和超过可用空间 ——
         /// 正是并发把磁盘写满的那条路径；估大了会白白拦下本来能跑的任务。
         /// 变更走的是**差值**：<see cref="TryReserve"/> 看到的 <c>已预留</c> 里已经含本任务那一份，
-        /// 所以 <c>差值 + 已预留</c> 恰好等于"新峰值 + 别的任务的预留"，判断口径与开工时完全一致。
+        /// 所以 <c>差值 + 已预留</c> 恰好等于"新需求 + 别的任务的预留"，判断口径与开工时完全一致。
         /// </para>
         /// </summary>
         /// <param name="currentReservation">本任务当前占着的预留（开工时申请的数字）。</param>
-        /// <param name="newRequiredBytes">按精确清单算出来的新峰值。</param>
-        /// <returns>新峰值下的空间门结论。放行时调用方要把预留改成 <paramref name="newRequiredBytes"/>。</returns>
+        /// <param name="newRequiredBytes">
+        /// 按精确清单算出来的新需求（<see cref="TaskSpaceEstimate.FreeSpaceDemandBytes"/>：内容物 + 过程物，
+        /// ⛔ 不是含源包的峰值）。
+        /// </param>
+        /// <returns>新需求下的空间门结论。放行时调用方要把预留改成 <paramref name="newRequiredBytes"/>。</returns>
         public SpaceGateDecision Adjust(long currentReservation, long newRequiredBytes, long reclaimableBytes = 0)
         {
             long current = currentReservation > 0 ? currentReservation : 0L;
