@@ -446,18 +446,22 @@ namespace ArchiveFixer.Tests
             Assert.Equal("g-80m.7z", plan.Ordered[0].Task.FileName);
             Assert.Equal("f-300m.7z", plan.Ordered[1].Task.FileName);
 
-            // 建议并行数按"这些任务同时达到峰值也不撑爆盘"来算：
-            // 峰值 = 2× 源包 → 0.16 + 0.6 + 2 + 4 = 6.76G ≤ 10G；再加 8G 就超了 → 4 个。
-            Assert.Equal(4, plan.RecommendedParallelCount);
-            Assert.Contains("建议并行 4 个", plan.ParallelAdviceText(), StringComparison.Ordinal);
+            /*
+             * 建议并行数按"这些任务同时达到各自的需求也不撑爆盘"来算：
+             * 需求 = 本次要从可用空间里新写多少（清单没读时 = 内容物 = 源包 1 倍估）→
+             * 0.08 + 0.3 + 1 + 2 + 4 = 7.38G ≤ 10G；再加 5G 那个就超了 → **5 个**。
+             *
+             * ⚠ 2026-09-29 改口径前这里是 4 个：老口径把**源包**也加进需求（峰值 = 2× 源包），
+             * 等于把已经在盘上、不在"可用"里的那 17.7 GiB 又算了一遍 —— 真机上就是这么被误拦的。
+             */
+            Assert.Equal(5, plan.RecommendedParallelCount);
+            Assert.Contains("建议并行 5 个", plan.ParallelAdviceText(), StringComparison.Ordinal);
 
-            // 这一组里真正"因为空间不足被跳过"的只有 6G 那个（峰值 12G > 可用 10G）——
-            // 其余几个只是排队等前面的跑完，**不许**把它们报成跳过。
-            Assert.Equal(
-                new[] { "c-6g.7z" },
-                plan.BlockedAtPlanTime.Select(item => item.Estimate.DisplayName).ToArray());
-
-            Assert.Equal(2 * Gib, plan.BlockedAtPlanTime[0].ShortfallBytes);
+            /*
+             * 这一组里**没有一个**包"单独跑也放不下"（需求最大的 6G ≤ 可用 10G）——
+             * 它们只是排队等前面的跑完，**不许**把任何一个报成跳过。
+             */
+            Assert.Empty(plan.BlockedAtPlanTime);
         }
 
         [Fact]
@@ -487,9 +491,9 @@ namespace ArchiveFixer.Tests
             Assert.False(huge.FitsAtPlanTime);
             Assert.False(huge.FitsAlone);
 
-            // 峰值 32G（源包 16G + 内容物按 1 倍估 16G），可用 10G → 差 22G。
-            Assert.Equal(32 * Gib, huge.RequiredBytes);
-            Assert.Equal(22 * Gib, huge.ShortfallBytes);
+            // 需求 = 内容物（源包 16G 按 1 倍估 = 16G；源包本身**不算**进需求），可用 10G → 差 6G。
+            Assert.Equal(16 * Gib, huge.RequiredBytes);
+            Assert.Equal(6 * Gib, huge.ShortfallBytes);
 
             ScheduledExtractionItem small = plan.Ordered.Single(item => item.Task.FileName == "d-100m.7z");
             Assert.True(small.FitsAtPlanTime);
@@ -900,28 +904,32 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 空间不足模式**按净占用排序**（净占用 = 解完真正留在盘上的字节数 = 内容物），
-        /// 而普通档照旧按峰值排 —— 同两份估算、两种顺序，而且 `Basis` 那句也要跟着换。
+        /// 而普通档按"本次要从可用空间里新写多少"（内容物 + 过程物）排 —— 同两份估算、两种顺序，
+        /// 而且 `Basis` 那句也要跟着换。
         ///
         /// <para>为什么这条重要：那个模式的全部意义是"边解边把空间还回来"，所以必须先解
-        /// "解完占地最少"的包。而放行判断**仍然按峰值**（见下一条测试）——
+        /// "解完占地最少"的包。而放行判断**仍然按需求**（见下一条测试）——
         /// 排序换口径、放行不换口径，这两件事必须同时钉住。</para>
+        ///
+        /// <para>⚠ 2026-09-29 改口径之后**源包不再进需求**，所以"两种顺序不同"这件事只能由
+        /// **过程物**造出来：A 的内容物小、过程物大（需求 11G 远大于净占用 1G），B 的内容物 5G、没有过程物。</para>
         /// </summary>
         [Fact]
-        public void 空间不足模式_按净占用排序_普通档仍按峰值()
+        public void 空间不足模式_按净占用排序_普通档仍按需求()
         {
-            ArchiveTask bigSource = CreateLazyTask("a-big-source.7z", 8 * Gib);
+            ArchiveTask bigProcess = CreateLazyTask("a-big-process.7z", 10 * Gib);
             ArchiveTask bigContent = CreateLazyTask("b-big-content.7z", 1 * Gib);
 
             var estimates = new Dictionary<string, TaskSpaceEstimate>(StringComparer.OrdinalIgnoreCase)
             {
-                // A：源包大、内容物小（净占用小，但峰值大）
-                [bigSource.FileName] = EstimateOf(8 * Gib, 1 * Gib),
+                // A：内容物小、过程物大（净占用小，但需求大）
+                [bigProcess.FileName] = EstimateOf(10 * Gib, 1 * Gib, 10 * Gib),
 
-                // B：源包小、内容物大（净占用大）
-                [bigContent.FileName] = EstimateOf(1 * Gib, 6 * Gib)
+                // B：内容物大、没有过程物（净占用与需求都是 5G）
+                [bigContent.FileName] = EstimateOf(1 * Gib, 5 * Gib)
             };
 
-            List<ArchiveTask> tasks = new() { bigSource, bigContent };
+            List<ArchiveTask> tasks = new() { bigProcess, bigContent };
 
             TaskSpaceEstimate Estimate(ArchiveTask task) => estimates[task.FileName];
 
@@ -937,36 +945,37 @@ namespace ArchiveFixer.Tests
                 sortKey: item => item.Estimate.NetOccupancyBytes,
                 orderBasis: ExtractionSchedulePlan.NetOccupancyOrderBasis);
 
-            // 普通档：峰值 A=9G、B=7G → B 先。
+            // 普通档：需求 A=11G、B=5G → B 先。
             Assert.Equal("b-big-content.7z", normal.Ordered[0].Task.FileName);
 
-            // 空间不足档：净占用 A=1G、B=6G → A 先。
-            Assert.Equal("a-big-source.7z", tight.Ordered[0].Task.FileName);
+            // 空间不足档：净占用 A=1G、B=5G → A 先。
+            Assert.Equal("a-big-process.7z", tight.Ordered[0].Task.FileName);
 
             Assert.Equal(ExtractionSchedulePlan.DefaultOrderBasis, normal.OrderBasis);
             Assert.Contains("净占用", tight.OrderBasis, StringComparison.Ordinal);
 
-            // 顺序换了，但"放行"这个判断一个字节都没变（还是按峰值算的）。
-            Assert.Equal(normal.Ordered[0].RequiredBytes, normal.Ordered[0].Estimate.PeakBytes);
+            // 顺序换了，但"放行"这个判断一个字节都没变（还是按需求 = 内容物 + 过程物算的）。
+            Assert.Equal(normal.Ordered[0].RequiredBytes, normal.Ordered[0].Estimate.FreeSpaceDemandBytes);
             Assert.All(tight.Ordered, item => Assert.True(item.FitsAlone));
         }
 
         /// <summary>
-        /// 空间不足模式**不会**因为"净占用小"就放行一个峰值装不下的包：
-        /// 排序键只改顺序，<see cref="ScheduledExtractionItem.FitsAlone"/> 与差值仍按峰值算。
+        /// 空间不足模式**不会**因为"净占用小"就放行一个需求装不下的包：
+        /// 排序键只改顺序，<see cref="ScheduledExtractionItem.FitsAlone"/> 与差值仍按需求算。
+        ///
+        /// <para>形状：内容物 1G（净占用就是 1G）+ 过程物 1G → 需求 2G，可用只有 1G → 单独跑也放不下。
+        /// ⚠ 2026-09-29 改口径之后源包不进需求，所以"净占用小于需求"只能靠**过程物**造出来。</para>
         /// </summary>
         [Fact]
-        public void 空间不足模式_净占用小但峰值装不下_仍然算放不下()
+        public void 空间不足模式_净占用小但需求装不下_仍然算放不下()
         {
-            List<ArchiveTask> tasks = new()
-            {
-                // 峰值 = 0 + 1G（内容物按 1 倍估）+ 1G = 2G；可用只有 1G → 单独跑也放不下。
-                CreateLazyTask("cannot-fit.7z", 1 * Gib)
-            };
+            List<ArchiveTask> tasks = new() { CreateLazyTask("cannot-fit.7z", 1 * Gib) };
+
+            TaskSpaceEstimate Estimate(ArchiveTask _) => EstimateOf(1 * Gib, 1 * Gib, 1 * Gib);
 
             ExtractionSchedulePlan tight = ExtractionScheduler.Build(
                 tasks,
-                LazyEstimate,
+                Estimate,
                 availableBytes: 1 * Gib,
                 reserveBytes: 0,
                 requestedParallelCount: 1,

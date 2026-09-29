@@ -455,7 +455,7 @@ namespace ArchiveFixer.Tests
             Harness harness = CreateHarness();
 
             /*
-             * 假盘：可用 4 KiB、要求保留 0 余量 → 预算是 4 KiB。
+             * 假盘：可用 2 KiB、要求保留 0 余量 → 预算是 2 KiB。
              *
              * ⚠ 必须用**假探测**而不是造一个大文件：估算器读的是**真实文件大小**
              * （`SpaceEstimator.FromSourceFiles` 直接 stat），手改 `ArchiveTask.SourceSizeBytes`
@@ -465,13 +465,14 @@ namespace ArchiveFixer.Tests
              * ⚠ 探测口子在**视图模型自己那一个**协调器上（`ExtractionPipeline`）：体检是
              * `Vm.CheckSpaceForTasksAsync` 发起的，用测试另建的那个实例注入是打不中的。
              */
-            harness.Vm.ExtractionPipeline.SpaceProbeOverride = _ => 4096;
+            harness.Vm.ExtractionPipeline.SpaceProbeOverride = _ => 2048;
             harness.Vm.ExtractionPipeline.SpaceReserveOverride = 0;
 
             string folder = Path.Combine(_root, "src", "check");
             Directory.CreateDirectory(folder);
 
-            // 3 KiB 的包峰值 6 KiB > 预算 4 KiB → 整盘都放不下，必须被点名。
+            // 3 KiB 的包需求 3 KiB（内容物按 1 倍估；源包已经在盘上、不算进需求）> 预算 2 KiB
+            // → 整盘都放不下，必须被点名。
             File.WriteAllBytes(Path.Combine(folder, "big.7z"), new byte[3 * 1024]);
 
             ArchiveTask bigTask = await harness.ScanFolderAndAddTask(folder);

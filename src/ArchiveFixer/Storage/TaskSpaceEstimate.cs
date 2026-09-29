@@ -38,7 +38,12 @@ namespace ArchiveFixer.Storage
     /// 只计它的**展开增量**。</description></item>
     /// </list>
     ///
-    /// <para><b>峰值</b>：<see cref="PeakBytes"/> = 源包 + 过程物 + 内容物，即"这一切同时存在"的那一刻。</para>
+    /// <para><b>峰值（描述）</b>：<see cref="PeakBytes"/> = 源包 + 过程物 + 内容物，即"这一切同时存在"的那一刻。
+    /// ⛔ 它是**描述**不是**判据**：盘上"还能用多少"（可用空间）本来就不含源包，
+    /// 拿峰值去比可用空间等于把源包算两遍（2026-09-29 真机事故，见 <see cref="FreeSpaceDemandBytes"/>）。</para>
+    ///
+    /// <para><b>判据（唯一出口）</b>：<see cref="FreeSpaceDemandBytes"/> = 内容物 + 过程物 ——
+    /// 这一次真正要从可用空间里**新写**的字节数。放行 / 拦下、并发累计、日志里的"需要多少"全用它。</para>
     ///
     /// <para><b>峰值与"同卷 / 跨卷"的关系（用户 2026-09-24 拍板改口径）</b>：工作区默认跟着**输出盘**走
     /// （<c>&lt;输出盘&gt;\.ArchiveFixer.work</c>），于是"暂存内容物"与"成品"落在**同一块盘**上。
@@ -87,6 +92,9 @@ namespace ArchiveFixer.Storage
         ///
         /// <para>①页「空间不足」模式"边解边删源包"能立刻收回的就是它 —— 这也是那个模式能解决"空间不够"的
         /// 全部原因：普通档下这些字节只是从源目录搬进了 `其余物`，净占用一点没变。</para>
+        ///
+        /// <para>⛔ **它不进放行判据**（判据是 <see cref="FreeSpaceDemandBytes"/>）：源包本来就在盘上、
+        /// 从来不在"可用空间"里，把它加进"需要"就是算两遍。</para>
         /// </summary>
         public long RetainedBytes => SaturatingSum(SourceBytes, ProcessArtifactBytes);
 
@@ -96,6 +104,9 @@ namespace ArchiveFixer.Storage
         /// <para>它是"跨卷时工作区那块盘至少要留得下多少"的那个数（见类注释里的同卷 / 跨卷说明）。
         /// 同卷（默认档）时它已经包含在 <see cref="PeakBytes"/> 里，**不额外再加一遍** ——
         /// 加一遍等于凭空把需求算大一倍。</para>
+        ///
+        /// <para>它同时就是**放行判据**那个数（<see cref="FreeSpaceDemandBytes"/> 直接引它）：
+        /// 工作区默认跟着输出盘走，于是"新写进工作区"= "从目标盘可用空间里吃掉"。</para>
         /// </summary>
         public long StagingBytes => SaturatingSum(ContentBytes, ProcessArtifactBytes);
 
@@ -109,8 +120,28 @@ namespace ArchiveFixer.Storage
         /// </summary>
         public bool? WorkspaceSharesTargetVolume { get; init; }
 
-        /// <summary>峰值需求：源包 + 过程物 + 内容物同时存在的那一刻。</summary>
+        /// <summary>盘上**总占地**：源包 + 过程物 + 内容物同时存在的那一刻（描述用，⛔ 不是放行判据）。</summary>
         public long PeakBytes => SaturatingSum(RetainedBytes, ContentBytes);
+
+        /// <summary>
+        /// **放行判据（唯一出口）**：这一次真正要从**目标盘可用空间**里吃掉多少字节
+        /// = 内容物 + 过程物（= <see cref="StagingBytes"/>）。
+        ///
+        /// <para><b>⛔ 绝不加源包。</b>可用空间这个数**已经**把盘上现有的东西（含源包）排除在外：
+        /// 源包占着的字节从来不在"可用"里，再把它算进"需要"就是把源包算两遍。
+        /// 盘上塞得下的恒等式是"本次新写 ≤ 可用 − 要保留的余量"，而"本次新写"只有内容物与过程物
+        /// （源包原地不动、或者搬进**同盘**的 `其余物`，都不产生新字节）。</para>
+        ///
+        /// <para><b>为什么 2026-09-29 之前是错的</b>（用户真机当场报"普通人随便都能解压"）：
+        /// 老口径拿 <see cref="PeakBytes"/>（含源包）去比可用空间 ——
+        /// 三卷共 19,008,319,874 字节、目标盘可用 33.45 GiB 的那一组，明明只要 17.70 GiB 就能解出来
+        /// （余 15.25 GiB），却被按 35.41 GiB 判成"整盘都放不下"（差 2.46 GiB），一个字节都没解。</para>
+        ///
+        /// <para>并发的账也按它记：同时在跑的几个任务，各自"新写"的量之和才是那一刻盘上多出来的量。
+        /// ①页「空间不足」模式**不需要另立一套判据** —— 源包在两种档下都不进需求；
+        /// 那个模式的差别只体现在"跑完把源包收回来、下一个包更宽"（账本每个任务收尾都真实重探可用空间）。</para>
+        /// </summary>
+        public long FreeSpaceDemandBytes => StagingBytes;
 
         /// <summary>
         /// ①页「空间不足」模式在定稿 + 校验通过之后能收回的字节数（源包 + 过程物）。
@@ -192,14 +223,21 @@ namespace ArchiveFixer.Storage
             return a > long.MaxValue - b ? long.MaxValue : a + b;
         }
 
-        /// <summary>一句话说法（日志/确认框用；数字一律走与 <see cref="SpaceChecker"/> 一致的口径）。</summary>
+        /// <summary>
+        /// 一句话说法（日志/确认框用；数字一律走与 <see cref="SpaceChecker"/> 一致的口径）。
+        ///
+        /// <para>两个数都要说出来，而且要说清哪个是**判据**：只写"峰值"时用户会拿它去对可用空间，
+        /// 然后得出"17.7 GiB 的包怎么说需要 35.41 GiB"（2026-09-29 真机就是这么被看出来的）。</para>
+        /// </summary>
         public string Describe()
         {
             string name = string.IsNullOrWhiteSpace(DisplayName) ? TaskPath : DisplayName;
 
             return $"{name}：源包 {FormatSize(SourceBytes)} + 内容物 {FormatSize(ContentBytes)}"
                    + (ContentEstimated ? "（估）" : string.Empty)
-                   + $" + 过程物 {FormatSize(ProcessArtifactBytes)} = 峰值 {FormatSize(PeakBytes)}"
+                   + $" + 过程物 {FormatSize(ProcessArtifactBytes)}"
+                   + $"（盘上总占地 {FormatSize(PeakBytes)}；"
+                   + $"本次要从可用空间里新写 {FormatSize(FreeSpaceDemandBytes)}）"
                    + (WorkspaceSharesTargetVolume == false
                        ? $"（工作区与成品跨卷：工作区那块盘另需 {FormatSize(StagingBytes)}）"
                        : string.Empty);

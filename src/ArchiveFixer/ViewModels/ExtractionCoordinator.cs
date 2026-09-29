@@ -7556,6 +7556,10 @@ namespace ArchiveFixer.ViewModels
                      * 第二个大包会在启动前就被拦下，而不是等它写到一半才报磁盘满。
                      * 拦下时**跳过它、继续看后面的**（后面的包可能更小、正好塞得下）——
                      * 全部排完再一次性报告哪些被跳过、各需要多少。
+                     *
+                     * ⚠ 数字是 `RequiredBytes` = 内容物 + 过程物（`TaskSpaceEstimate.FreeSpaceDemandBytes`），
+                     * **不是峰值**：源包已经在盘上、不在可用空间里，拿峰值比就是把源包算两遍
+                     * （2026-09-29 真机：17.7 GiB 的三卷包在 33.45 GiB 可用的盘上被判"整盘都放不下"）。
                      */
                     ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
 
@@ -8210,9 +8214,9 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 排序键（空间不足模式）：**净占用** = 解完之后真正留在盘上的字节数（= 内容物）。
-             * 那个模式下源包与过程物都会被删掉，所以"峰值"里那一大截是**会回来的** ——
-             * 先解净占用小的，盘上越跑越宽；按峰值排则会先啃大包，把盘一次吃满。
-             * ⚠ 只改顺序：放行判断照旧按峰值（见 ExtractionScheduler.Build 的参数说明）。
+             * 那个模式下源包与过程物都会被删掉，所以"需求"里那一截过程物是**会回来的** ——
+             * 先解净占用小的，盘上越跑越宽；按需求排则会先啃过程物多的包。
+             * ⚠ 只改顺序：放行判断照旧按需求（内容物 + 过程物，见 ExtractionScheduler.Build 的说明）。
              */
             Func<ScheduledExtractionItem, long>? sortKey = spaceTightOrdering
                 ? item => item.Estimate.NetOccupancyBytes
@@ -8800,8 +8804,12 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 拿开工时申请的预留与精确峰值对一次账：不够就加、多了就还。
+        /// 拿开工时申请的预留与精确需求对一次账：不够就加、多了就还。
         /// 加不上（盘已经不够了）时按「磁盘空间不足」处理 —— **这一步必须在真正写盘之前**。
+        ///
+        /// <para>⚠ 用的数字是 <see cref="TaskSpaceEstimate.FreeSpaceDemandBytes"/>（内容物 + 过程物），
+        /// **不是** <see cref="TaskSpaceEstimate.PeakBytes"/>：源包已经在盘上、不在可用空间里，
+        /// 拿峰值比可用空间就是把源包算两遍（2026-09-29 真机事故，见那个属性的说明）。</para>
         /// </summary>
         private SpaceGateDecision ReconcileReservation(ArchiveTask task, TaskSpaceEstimate refined)
         {
@@ -8811,7 +8819,7 @@ namespace ArchiveFixer.ViewModels
             {
                 // 没有账本（例如从别处直接调解压管线）：退化成一次直接判断，不假装知道并发情况。
                 return SpaceGate.Check(
-                    refined.PeakBytes,
+                    refined.FreeSpaceDemandBytes,
                     ProbeAvailableSpace(ResolveSpaceProbePathOrBatch(task)),
                     ReserveSpaceBytes,
                     0,
@@ -8821,12 +8829,12 @@ namespace ArchiveFixer.ViewModels
             ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
             SpaceGateDecision decision = ledger.Adjust(
                 runtime.ReservedBytes,
-                refined.PeakBytes,
+                refined.FreeSpaceDemandBytes,
                 refined.ReclaimableBytes);
 
             if (decision.Allowed && !decision.ProbeFailed)
             {
-                runtime.ReservedBytes = refined.PeakBytes;
+                runtime.ReservedBytes = refined.FreeSpaceDemandBytes;
             }
 
             return decision;
@@ -10128,11 +10136,14 @@ namespace ArchiveFixer.ViewModels
                     .CheckBeforeExtract(preflightList, archiveSize, engineOutputPath);
 
                 /*
-                 * 精确空间需求（用户 2026-09-22 需求第 1 条：核算必须含内容物 + 过程物 + 去重后的峰值）。
+                 * 精确空间需求（用户 2026-09-22 需求第 1 条：核算必须含内容物 + 过程物 + 去重）。
                  *
                  * 用的是**手上这一份 list**（绝不为此再跑一次 7z：加密包每多列一次目录就多一次失败机会），
-                 * 而流程预算只算了"内容物"那一项 —— 源包在盘上还没走、抠出来的内嵌过程物、
-                 * 内层包再展开的增量、以及并发下别的任务已经占下的份额，都要在这一步一起算进来。
+                 * 而流程预算只算了"内容物"那一项 —— 抠出来的内嵌过程物、内层包再展开的增量、
+                 * 以及并发下别的任务已经占下的份额，都要在这一步一起算进来。
+                 *
+                 * ⚠ 源包**不算**进这个需求：它已经在盘上、本来就不在"可用空间"里
+                 * （判据是 FreeSpaceDemandBytes = 内容物 + 过程物；见 TaskSpaceEstimate 里的说明）。
                  */
                 TaskSpaceEstimate refined = SpaceEstimator.RefineWithListing(
                     SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task)),
@@ -10159,7 +10170,7 @@ namespace ArchiveFixer.ViewModels
                         MarkSpaceBlockedCore(
                             task,
                             spaceReason + $"（{refined.Describe()}；依据：{refined.Basis}）",
-                            refined.PeakBytes,
+                            refined.FreeSpaceDemandBytes,
                             budget.FreeSpaceBytes ?? SpaceReservationLedger.UnknownAvailable,
                             spaceGate.Allowed ? 0L : spaceGate.ShortfallBytes);
 
@@ -10185,7 +10196,7 @@ namespace ArchiveFixer.ViewModels
                     MarkSpaceBlockedCore(
                         task,
                         preciseGate.ToLogLine() + $"（{refined.Describe()}；依据：{refined.Basis}）",
-                        refined.PeakBytes,
+                        refined.FreeSpaceDemandBytes,
                         preciseGate.AvailableBytes,
                         preciseGate.ShortfallBytes);
 

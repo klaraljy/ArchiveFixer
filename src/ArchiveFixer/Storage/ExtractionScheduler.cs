@@ -22,8 +22,15 @@ namespace ArchiveFixer.Storage
         /// <summary>任务在用户列表里的原始序号（同需求时按它保持稳定顺序，不把用户看到的顺序打乱）。</summary>
         public int OriginalIndex { get; }
 
-        /// <summary>排计划那一刻它需要的字节数（= 峰值需求）。</summary>
-        public long RequiredBytes => Estimate.PeakBytes;
+        /// <summary>
+        /// 排计划那一刻它需要的字节数（= <see cref="TaskSpaceEstimate.FreeSpaceDemandBytes"/>：
+        /// 内容物 + 过程物，也就是"这次要从可用空间里新写多少"）。
+        ///
+        /// <para>⚠ 它**不是** <see cref="TaskSpaceEstimate.PeakBytes"/>（那个含源包）。
+        /// 源包已经在盘上、不在可用空间里，拿峰值当需求就是把源包算两遍 ——
+        /// 2026-09-29 真机上正是这一处把一组 17.7 GiB 的三卷包判成"整盘都放不下"。</para>
+        /// </summary>
+        public long RequiredBytes => Estimate.FreeSpaceDemandBytes;
 
         /// <summary>
         /// 排计划那一刻**在并发集合里**是否轮得到它（它前面那些放得下的任务 + 它自己不超预算）。
@@ -34,14 +41,14 @@ namespace ArchiveFixer.Storage
         public bool FitsAtPlanTime { get; init; }
 
         /// <summary>
-        /// **单独跑也放不下**（峰值就超过了整个预算）。
+        /// **单独跑也放不下**（需求就超过了整个预算）。
         ///
         /// <para>它才是"因为空间不足被跳过"的判据：<see cref="FitsAtPlanTime"/> 为 false 只说明
         /// "现在这一批并行的位置里挤不下它"，等前面的跑完它照样能上 —— 那不是跳过，是排队。</para>
         /// </summary>
         public bool FitsAlone { get; init; }
 
-        /// <summary>差多少字节（能排上时为 0）。单独跑也放不下时 = 峰值 − 预算。</summary>
+        /// <summary>差多少字节（能排上时为 0）。单独跑也放不下时 = 需求 − 预算。</summary>
         public long ShortfallBytes { get; init; }
     }
 
@@ -51,11 +58,11 @@ namespace ArchiveFixer.Storage
     /// </summary>
     public sealed class ExtractionSchedulePlan
     {
-        /// <summary>执行顺序（按峰值需求**从小到大**）。</summary>
+        /// <summary>执行顺序（按空间需求**从小到大**）。</summary>
         public IReadOnlyList<ScheduledExtractionItem> Ordered { get; init; } = Array.Empty<ScheduledExtractionItem>();
 
         /// <summary>
-        /// **单独跑也放不下**的任务（峰值超过整个预算）—— "因为空间不足被跳过"的就是它们。
+        /// **单独跑也放不下**的任务（需求超过整个预算）—— "因为空间不足被跳过"的就是它们。
         ///
         /// <para>刻意**不**把"这一批并行的位置里挤不下"的那些算进来：那些任务只是排队，
         /// 前面的跑完就轮到它。把它们报成"跳过"会让用户以为整批都没跑。</para>
@@ -91,13 +98,14 @@ namespace ArchiveFixer.Storage
         /// <summary>
         /// 这一批是**按什么排的顺序**（进日志的那一句话）。
         ///
-        /// <para>它必须跟着真实的排序键走：普通档按「峰值需求」（源包 + 内容物 + 过程物），
-        /// 空间不足模式按「净占用」（解完之后真正留在盘上的字节数）—— 两句话要是说反了，
+        /// <para>它必须跟着真实的排序键走：普通档按「本次要从可用空间里新写多少」（内容物 + 过程物，
+        /// 也就是 <see cref="ScheduledExtractionItem.RequiredBytes"/>），空间不足模式按「净占用」
+        /// （解完之后真正留在盘上的字节数）—— 两句话要是说反了，
         /// 用户按日志核对顺序时就会得出"程序排序排错了"的结论。</para>
         /// </summary>
         public string OrderBasis { get; init; } = DefaultOrderBasis;
 
-        internal const string DefaultOrderBasis = "按空间需求从小到大";
+        internal const string DefaultOrderBasis = "按空间需求（本次要从可用空间里新写多少）从小到大";
 
         /// <summary>空间不足模式的排序口径（唯一措辞来源，日志与界面都引它）。</summary>
         internal const string NetOccupancyOrderBasis = "按净占用从小到大（空间不足模式：先解「解完占地最少」的包）";
@@ -169,7 +177,8 @@ namespace ArchiveFixer.Storage
     ///
     /// <para><b>两条规则，缺一不可</b>：</para>
     /// <list type="number">
-    /// <item><description><b>先排序</b>：按峰值需求**从小到大**排。用户点名的反例是
+    /// <item><description><b>先排序</b>：按空间需求（<see cref="ScheduledExtractionItem.RequiredBytes"/>，
+    /// 也就是"本次要从可用空间里新写多少"）**从小到大**排。用户点名的反例是
     /// "一开始就去解 5G+6G 的文件，这样并行两个都弄不了" —— 从小到大排之后，
     /// 排在最前面的一定是能塞进去的那些小包。</description></item>
     /// <item><description><b>只有装得下才启动</b>：本类给出的 <see cref="ScheduledExtractionItem.FitsAtPlanTime"/>
@@ -179,7 +188,7 @@ namespace ArchiveFixer.Storage
     /// </list>
     ///
     /// <para><b>建议并行数怎么算</b>：把排好序的需求从最小的开始累加，累加和（含余量）
-    /// 不超过可用空间的最多几个 —— 这就是"这些任务同时达到峰值"也不会撑爆盘的最大并行数。
+    /// 不超过可用空间的最多几个 —— 这就是"这些任务同时达到各自的峰值"也不会撑爆盘的最大并行数。
     /// 它是**建议**：用户在界面上选的档位不会因此被静默改掉，但每个任务启动前都会真的判一次空间。</para>
     /// </summary>
     public static class ExtractionScheduler
@@ -221,13 +230,15 @@ namespace ArchiveFixer.Storage
         /// <param name="reserveBytes">要保留的余量（null = 用 <see cref="SpaceGate.DefaultReserveBytes"/>）。</param>
         /// <param name="requestedParallelCount">用户选 / 设置里的并行档（会被夹到 1..8）。</param>
         /// <param name="sortKey">
-        /// **排序键**（不传 = 按 <see cref="ScheduledExtractionItem.RequiredBytes"/>，也就是峰值需求）。
+        /// **排序键**（不传 = 按 <see cref="ScheduledExtractionItem.RequiredBytes"/>，也就是
+        /// "本次要从可用空间里新写多少"= 内容物 + 过程物）。
         ///
         /// <para>空间不足模式传「净占用」（<see cref="TaskSpaceEstimate.ContentBytes"/>）：
         /// 那个模式下每个包一校验通过就把它自己的源包删掉，所以"解完真正留在盘上"的字节数
         /// 才是决定后面还能解几个的量 —— 先解净占用小的，盘上越跑越宽。
         /// ⛔ 它**只改顺序**：放行判断（<see cref="ScheduledExtractionItem.FitsAlone"/> 与真正的空间门）
-        /// 仍然按峰值需求算，绝不允许因为"净占用小"就放行一个峰值装不下的包。</para>
+        /// 仍然按 <see cref="TaskSpaceEstimate.FreeSpaceDemandBytes"/> 算，
+        /// 绝不允许因为"净占用小"就放行一个需求装不下的包。</para>
         /// </param>
         /// <param name="orderBasis">这次按什么排的（进日志的那一句话；不传 = 默认口径）。</param>
         public static ExtractionSchedulePlan Build(
@@ -389,10 +400,10 @@ namespace ArchiveFixer.Storage
         /// <summary>「很多个体积相近的小包」那一档（见 <see cref="SpaceTightParallelForMixedOrLarge"/>）。</summary>
         public const int SpaceTightParallelForManySmall = 5;
 
-        /// <summary>算"体积相近的小包"时，"小"的判据：峰值 ≤ 预算 ÷ 这个数。</summary>
+        /// <summary>算"体积相近的小包"时，"小"的判据：需求 ≤ 预算 ÷ 这个数。</summary>
         private const int SpaceTightSmallTaskBudgetDivisor = 4;
 
-        /// <summary>"体积相近"的判据：最大峰值 ÷ 最小峰值 ≤ 它。</summary>
+        /// <summary>"体积相近"的判据：最大需求 ÷ 最小需求 ≤ 它。</summary>
         private const double SpaceTightSimilarSizeRatio = 1.5d;
 
         /// <summary>至少这么多个"相近的小包"才算"很多个小包"。</summary>
@@ -403,15 +414,15 @@ namespace ArchiveFixer.Storage
         ///
         /// <para>规则（两条，判据全在这一个方法里，⛔ 不许在别处再写一套）：</para>
         /// <list type="number">
-        /// <item><description><b>很多个体积相近的小包</b>（≥ 5 个，且每个峰值 ≤ 预算 ÷ 4，
-        /// 且最大 / 最小峰值 ≤ 1.5 倍）→ <see cref="SpaceTightParallelForManySmall"/>（5）；</description></item>
+        /// <item><description><b>很多个体积相近的小包</b>（≥ 5 个，且每个需求 ≤ 预算 ÷ 4，
+        /// 且最大 / 最小需求 ≤ 1.5 倍）→ <see cref="SpaceTightParallelForManySmall"/>（5）；</description></item>
         /// <item><description>其余（多个偏大 / 体积差得远的包）→ <see cref="SpaceTightParallelForMixedOrLarge"/>（3）。</description></item>
         /// </list>
         ///
         /// <para>出来的数还要与"计划时按空间算得出的建议并行数"取小 —— 空间不足模式下
         /// 唯一不能放宽的就是空间。取不到可用空间时用最保守的 3（不猜"够"）。</para>
         /// </summary>
-        /// <param name="ordered">已排好序的计划（按净占用或峰值，两者都可）。</param>
+        /// <param name="ordered">已排好序的计划（按净占用或需求，两者都可）。</param>
         /// <param name="budgetBytes">可用于并行的预算（可用 − 余量；&lt; 0 = 取不到）。</param>
         /// <param name="recommendedBySpace">计划给出的建议并行数（0 = 连最小的都放不下）。</param>
         /// <param name="basis">这一档是怎么来的（进日志，用户要能复核）。</param>
@@ -435,7 +446,7 @@ namespace ArchiveFixer.Storage
                      && CountSimilarSmallTasks(items, budgetBytes) >= SpaceTightManySmallTaskCount)
             {
                 cap = SpaceTightParallelForManySmall;
-                reason = $"本批有 {items.Count} 个体积相近的小包（每个峰值不超过预算的 1/{SpaceTightSmallTaskBudgetDivisor}）";
+                reason = $"本批有 {items.Count} 个体积相近的小包（每个需求不超过预算的 1/{SpaceTightSmallTaskBudgetDivisor}）";
             }
             else
             {

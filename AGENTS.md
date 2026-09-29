@@ -329,10 +329,13 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   素材站点名**一律换占位符 —— `<盘符>:\<下载目录>\…` → `<测试目录>\…`、样本包名 → `<样本包>`、
   真实站点 → `example.com`、`密码本2` → `密码本示例`、仓库外的分析与临时目录 → `<仓库外>\` / `<临时目录>\`。
   ⛔ 这是 §8 隐私红线压过 §9.4"历史记录里的旧路径按原样留着"的一次**有意例外**（`旧AGENTS.md` 与历史日志一并改了）。
-- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1994 条**（通过 **1993** / 失败 0 / 跳过 1；
-  2026-09-29 深夜跑的全量，3 分 24 秒。⚠ 跳过的那 1 条是"真机副本 + 有密码时解出内容" ——
+- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1999 条**（通过 **1998** / 失败 0 / 跳过 1；
+  2026-09-29 深夜"源包不许算两遍"那一轮跑的全量，2 分 22 秒。⚠ 跳过的那 1 条是"真机副本 + 有密码时解出内容" ——
   这一组是 `-mhe`（文件名也加密）的包，密码由用户放进环境变量 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD` 才会跑，
-  没拿到就**如实跳过、不伪装成验过**）；`dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
+  没拿到就**如实跳过、不伪装成验过**。⚠ 另有一条真机只读用例（`SpaceDemandAccountingTests` 的真样本那条）
+  只在设了 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR` 时才跑 —— 上面这个 1998 是**设了的**那一轮，
+  没设时它照样**跳过并说明**（那时是 1997 通过 / 2 跳过，不是失败）；
+  `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
 - **「不删原包」安全档 + 空间侦察**（2026-09-27 晚，用户追加）：
   - ⚠ **「不删原包」是"测试期专用"的**（用户 2026-09-27 原话："这个我想好像在测试完成之后就不用留着，
@@ -371,7 +374,8 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   并发由 `ExtractionScheduler.ResolveSpaceTightParallelCount` 定（体积相近的小包 5 / 其余 3，
   与空间建议取小、绝不取 0；**再与用户的「最大并发解压数」取小** —— 2026-09-27 追加：
   模式上限与「全速」照旧不生效，但**允许用户把并发压得更低**，慢盘上少开几个反而更快也更不卡）、
-  排序按 `TaskSpaceEstimate.NetOccupancyBytes`（**只改顺序，放行仍按峰值**）、
+  排序按 `TaskSpaceEstimate.NetOccupancyBytes`（**只改顺序，放行仍按需求**
+  `FreeSpaceDemandBytes` = 内容物 + 过程物，见下面那条"源包不许算两遍"）、
   `PrepareRestHandlingForBatch` 强制 `Delete`、源包在定稿 + 校验通过时由
   `PurgeSourcePackageForSpaceTight` **当场永久删除**（执行体 = `Extraction.SourceCleanupService`，
   它在管线上的**唯一**调用点就是这里）。
@@ -391,6 +395,26 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   （判据复用 `ExtractionCoordinator.BuildSpaceAdvice`，⛔ 不另写一套）。
   放不下时 WARN + ERROR 两条日志 + `DialogService.ShowSpaceShortageWarning` 弹窗点名；
   ⛔ 它只是提醒：不改设置、不改勾选、不拦着不让跑。
+- ⛔ **源包不许算两遍（2026-09-29 真机事故，用户当场报"普通人随便都能解压"）**：
+  判据是 `TaskSpaceEstimate.FreeSpaceDemandBytes`（**唯一出口**）= `ContentBytes + ProcessArtifactBytes`
+  = "这次要从**可用空间**里新写多少"，`ScheduledExtractionItem.RequiredBytes` 与
+  `ExtractionCoordinator.ReconcileReservation`（解压前预检那道门，`:8814/8824`）都只读它；
+  `PeakBytes`（源包 + 过程物 + 内容物）**降级成描述**，⛔ 绝不许再拿它去比可用空间。
+  - 真机现场：三卷 7,516,192,768 ×2 + 3,975,934,338 = **19,008,319,874 B（17.70 GiB）**，
+    目标盘 H: 可用 **35,916,664,832 B（33.45 GiB）**。老口径算 `17.70 + 17.70 = 35.41 GiB > 32.95 GiB`（可用 − 512 MiB）
+    → 判"整盘都放不下"（差 2.46 GiB），**日志里连一次引擎调用都没有**（被空间门拒了）；
+    正确算式 `内容物 + 过程物 = 17.70 GiB ≤ 32.95 GiB` → **放行（余 15.25 GiB）**。
+  - **为什么错**：可用空间**本来就不含**盘上现有的东西（含源包）——源包搬进同盘 `其余物` 也不产生新字节；
+    盘上塞得下的恒等式是"本次新写 ≤ 可用 − 余量"。同一件事在 `Security/ResourceBudget.CheckFreeSpace`
+    里一直是对的（比的是纯内容物），错的是任务级那道门。
+  - **「空间不足」模式不需要另立判据**：源包在两种档下都不进需求（它已经在盘上）；那个模式的差别只体现在
+    "跑完把源包收回来、下一个包更宽"（`RunScheduledTaskAsync` 每个任务收尾都真实重探可用空间）。
+  - 用例 `SpaceDemandAccountingTests`（5 条：真机那一单 → 放行 / 可用 8 GiB → **必须拒绝并报差多少** /
+    内容物真超可用 → 照旧拒绝 / 模式同一口径且"净占用小≠放行" / **真样本只读**：环境变量
+    `ARCHIVEFIXER_REAL_SPACE_CASE_DIR` 指向真机那一组，用产品代码在真文件 + 真可用空间上算一遍，
+    不在就跳过并说明）。红检：把 `FreeSpaceDemandBytes` 改回 `PeakBytes` → **8 条红**。
+  - ⚠ **两处"差多少"的分母本来就不同**（`SpaceGate` 按可用空间、`ExtractionScheduler` 排计划按可用 − 余量），
+    本次没动；要改先想清楚"余量算不算差额"。
 - **落点模型 v2**（2026-09-27）：终点落法固定（不再让用户选）、手动「解压到当前文件夹」、
   一律不塌缩、续解层按三条优先判据（**同层多个内层包 → 建**；**父层已出内容物 → 不建、并进父层**；
   剩余"干净单链过路层"看开关 `OmitMiddleContinuationLayers`，默认关 = 忠实档）。

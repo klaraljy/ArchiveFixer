@@ -1581,8 +1581,14 @@ namespace ArchiveFixer.ViewModels
 
             foreach (ScheduledExtractionItem blocked in plan.BlockedAtPlanTime)
             {
+                /*
+                 * "需要"说的是**这次要从可用空间里新写多少**（内容物 + 过程物），不是源包占多少 ——
+                 * 源包已经在盘上、不在可用空间里（2026-09-29 真机就是因为这里口径错而被误拦）。
+                 * 括号里把那句话说清，用户才能自己复核这个数字。
+                 */
                 string line =
-                    $"{blocked.Estimate.DisplayName} —— 需要 {TaskSpaceEstimate.FormatSize(blocked.RequiredBytes)}，"
+                    $"{blocked.Estimate.DisplayName} —— 需要 {TaskSpaceEstimate.FormatSize(blocked.RequiredBytes)}"
+                    + $"（内容物 + 过程物，源包已经在盘上不算在内），"
                     + $"差 {TaskSpaceEstimate.FormatSize(blocked.ShortfallBytes)}";
 
                 names.Add(blocked.Estimate.DisplayName);

@@ -74,8 +74,14 @@ namespace ArchiveFixer.Storage
 
         /// <summary>
         /// 判断能否为一个任务预留 <paramref name="requiredBytes"/> 字节。
+        ///
+        /// <para>⚠ <paramref name="requiredBytes"/> 取
+        /// <see cref="TaskSpaceEstimate.FreeSpaceDemandBytes"/>（内容物 + 过程物 = "这次要从可用空间里
+        /// 新写多少"），⛔ **不是** <see cref="TaskSpaceEstimate.PeakBytes"/>：峰值里那份源包
+        /// 本来就在盘上、从来不在"可用空间"里，加进需求就是把源包算两遍
+        /// （2026-09-29 真机：17.7 GiB 的三卷包在 33.45 GiB 可用的盘上被判"整盘都放不下"）。</para>
         /// </summary>
-        /// <param name="requiredBytes">需求（通常取 <see cref="TaskSpaceEstimate.PeakBytes"/>）。</param>
+        /// <param name="requiredBytes">需求（取 <see cref="TaskSpaceEstimate.FreeSpaceDemandBytes"/>）。</param>
         /// <param name="availableBytes">目标盘可用字节数；null = 取不到。</param>
         /// <param name="reserveBytes">要保留的余量（负数按 0）。</param>
         /// <param name="alreadyReservedBytes">
