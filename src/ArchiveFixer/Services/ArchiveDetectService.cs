@@ -33,6 +33,139 @@ namespace ArchiveFixer.Services
         private const int HeaderReadLength = 34816;
 
         /// <summary>
+        /// 缓存键里"文件尾指纹"读多少字节（与 <c>EmbeddedArchiveDetector.DefaultTailBytes</c> 同量级）。
+        ///
+        /// <para>为什么这一档要额外读一次尾部：文件头认不出来时，结论可能出自"尾部内嵌 ZIP"或
+        /// "整文件顺序扫"这两条路 —— 而这两条路**都很贵**（顺序扫上限 512 MiB）。
+        /// 256 KB 换"相同文件不再扫第二遍"，是这一整套优化里最划算的一笔。</para>
+        /// </summary>
+        private const int TailFingerprintLength = 262144;
+
+        /// <summary>
+        /// 要不要用识别结论缓存（默认开）。
+        ///
+        /// <para>留成**实例**开关而不是静态开关：用例要拿"开缓存的一份"与"关缓存的一份"
+        /// 在同一批文件上各跑一遍、逐条对照结论（用户 2026-09-29 任务 B 第 3 条：
+        /// 改前改后的识别结果必须逐条相同）。静态开关会串到并行跑的别的用例上。</para>
+        /// </summary>
+        internal bool UseDetectCache { get; set; } = true;
+
+        /// <summary>一份文件的身份（缓存键里"大小 + 修改时间"那两条证据）。</summary>
+        private readonly struct FileIdentity
+        {
+            public FileIdentity(long length, long lastWriteTicks)
+            {
+                Length = length;
+                LastWriteTicks = lastWriteTicks;
+            }
+
+            public long Length { get; }
+
+            public long LastWriteTicks { get; }
+        }
+
+        /// <summary>量一次文件身份；量不到（不存在 / 被占 / 权限）返回 false —— 这时整条缓存都不碰。</summary>
+        private static bool TryReadIdentity(string filePath, out FileIdentity identity)
+        {
+            identity = default;
+
+            try
+            {
+                var info = new FileInfo(filePath);
+
+                if (!info.Exists)
+                {
+                    return false;
+                }
+
+                identity = new FileIdentity(info.Length, info.LastWriteTimeUtc.Ticks);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static DetectCacheKey BuildKey(
+            FileIdentity identity,
+            ulong headFingerprint,
+            ulong tailFingerprint,
+            DetectCacheEvidence evidence) => new()
+            {
+                Length = identity.Length,
+                LastWriteTicks = identity.LastWriteTicks,
+                HeadFingerprint = headFingerprint,
+                TailFingerprint = tailFingerprint,
+                Evidence = evidence
+            };
+
+        /// <summary>把"头不认识"那一档的结论存进缓存（键不可用时什么都不做）。</summary>
+        private void StoreUnknown(DetectCacheKey key, bool keyKnown, DetectResult result)
+        {
+            if (keyKnown && UseDetectCache)
+            {
+                DetectResultCache.Store(key, result);
+            }
+        }
+
+        /// <summary>
+        /// 读文件**尾部**若干字节（只给缓存键算指纹用）。读不到 / 空文件返回空数组（那就这一档不缓存）。
+        ///
+        /// <para>文件比这个长度还短时读到的就是整个文件，所以小文件的键天然是"整份内容"。</para>
+        /// </summary>
+        private static async Task<byte[]> ReadTailAsync(
+            string filePath,
+            int length,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await using var stream = new FileStream(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    bufferSize: 4096,
+                    useAsync: true);
+
+                long fileLength = stream.Length;
+
+                if (fileLength <= 0)
+                {
+                    return Array.Empty<byte>();
+                }
+
+                int want = (int)Math.Min(length, fileLength);
+
+                stream.Seek(fileLength - want, SeekOrigin.Begin);
+
+                byte[] buffer = new byte[want];
+                int total = 0;
+
+                while (total < want)
+                {
+                    int read = await stream.ReadAsync(buffer.AsMemory(total, want - total), cancellationToken);
+
+                    if (read <= 0)
+                    {
+                        break;
+                    }
+
+                    total += read;
+                }
+
+                return total == want ? buffer : buffer.Take(total).ToArray();
+            }
+            catch
+            {
+                // 尾部读不到就这一档不缓存：识别本身照旧往下走（绝不因为缓存失败而改变结论）。
+                return Array.Empty<byte>();
+            }
+        }
+
+        /// <summary>
         /// 识别文件真实格式。
         /// </summary>
         public async Task<DetectResult> DetectAsync(
@@ -51,6 +184,15 @@ namespace ArchiveFixer.Services
 
             try
             {
+                /*
+                 * 先量一次"这一份文件是谁"（字节数 + 修改时间）。
+                 *
+                 * 为什么在读文件头**之前**就要量：识别结论会按（大小 + 修改时间 + 内容指纹）进进程内缓存
+                 * （见 Detection/DetectResultCache，用户 2026-09-29 任务 B），
+                 * 而那三条证据必须在同一时刻取得，否则一次读写竞争就能把"改之前的内容"配上"改之后的时间"。
+                 */
+                bool identityKnown = TryReadIdentity(filePath, out FileIdentity before);
+
                 byte[] header = await ReadHeaderAsync(filePath, HeaderReadLength, cancellationToken);
 
                 if (header.Length == 0)
@@ -58,7 +200,57 @@ namespace ArchiveFixer.Services
                     return CreateUnknownResult("文件为空");
                 }
 
+                /*
+                 * 文件在读取期间没被动过 → 这一份身份可以用来查/存缓存；动过就整条缓存都不碰
+                 * （宁可多算一次，也不许把两条不同的内容混成一条结论）。
+                 */
+                bool identityStable = identityKnown
+                                      && TryReadIdentity(filePath, out FileIdentity after)
+                                      && after.Length == before.Length
+                                      && after.LastWriteTicks == before.LastWriteTicks;
+
+                ulong headFingerprint = DetectResultCache.Fingerprint(header);
+
                 DetectResult headerResult = DetectByHeader(header);
+
+                /*
+                 * RAR 的加密判读（用户 2026-09-29 任务 A）：魔数只能告诉我们"这是 RAR"，
+                 * "这一包加没加密"写在块的 flags 里（RAR4 的 MHD_PASSWORD / LHD_PASSWORD、
+                 * RAR5 的归档加密头 / File encryption 扩展记录），所以这里补一次**只读头部**的解析。
+                 *
+                 * ⛔ **判据只此一处出口**（Detection/RarEncryptionReader）：别在识别、解压、界面里
+                 * 各写一套"这包是不是加密的" —— 三套必然漂移，而漂移的后果是批首那句
+                 * "本批有 N 个包没有可用密码"与实际跑起来的结果对不上（AGENTS.md §11 那条待修）。
+                 *
+                 * 只对 RAR4 / RAR5 做：其它格式的加密信号各有各的读法（ZIP 看通用位标志，
+                 * 7z 现阶段要引擎才知道），不在这一次改动范围内，照旧"如实不报"。
+                 *
+                 * ⚠ 这一层**不缓存**（缓存里存的是它之前的那份）：它的判据要读头链，读到的位置可以越过
+                 * 这 34 KB 文件头，缓存键那四样证据盖不住它 —— 每次现算，代价只有几 KB 的读。
+                 */
+                if (headerResult.Format != "Unknown")
+                {
+                    // 文件比读入上限还短 ⇒ 整个文件都在指纹里（结论逐字节可复现）；否则只靠文件头。
+                    DetectCacheEvidence evidence = header.Length >= before.Length
+                        ? DetectCacheEvidence.WholeFile
+                        : DetectCacheEvidence.Head;
+
+                    DetectCacheKey key = BuildKey(before, headFingerprint, 0UL, evidence);
+
+                    if (identityStable
+                        && UseDetectCache
+                        && DetectResultCache.TryGet(key, out DetectResult cached))
+                    {
+                        return ApplyRarEncryptionVerdict(cached, filePath);
+                    }
+
+                    if (identityStable && UseDetectCache)
+                    {
+                        DetectResultCache.Store(key, headerResult);
+                    }
+
+                    return ApplyRarEncryptionVerdict(headerResult, filePath);
+                }
 
                 /*
                  * 只有文件头"不认识"时才去看文件尾部。
@@ -72,53 +264,103 @@ namespace ArchiveFixer.Services
                  * 反过来，尾部检测正是"只读文件头"这个设计的补丁：
                  * 真实案例里 ZIP 在 17 MB 之后，前 34 KB 全是 MP4 的 ftyp 头，
                  * 只看文件头永远得不出结论，这种文件就被判成"格式未知"了。
+                 *
+                 * ===== 缓存（第二档）=====
+                 * 这一档**最贵**：尾部没命中就要顺序扫一遍（上限 512 MiB）。所以：
+                 * · 文件比已读的头还短（整个文件都在手上）→ 键里放的就是**整个文件**的指纹，结论逐字节可复现；
+                 * · 否则再读一次文件尾 256 KB 算指纹 —— 这一截本来就要读（尾部内嵌那一条），
+                 *   而它换来的是"相同文件不再扫第二遍"。
                  */
-                if (headerResult.Format == "Unknown")
+                DetectCacheKey unknownKey = default;
+                bool unknownKeyKnown = false;
+
+                if (identityStable && UseDetectCache)
                 {
-                    /*
-                     * 尾部那 256 KB 里找 ZIP 的 EOCD（最便宜的一条：只读尾部）。
-                     * 这一条覆盖"视频/图片 + 尾部整包"的全部真实样本（第 33/38 条那批）。
-                     */
-                    DetectResult? embeddedResult = DetectEmbeddedArchive(filePath, headerResult);
-
-                    if (embeddedResult != null)
+                    if (header.Length >= before.Length)
                     {
-                        return embeddedResult;
+                        unknownKey = BuildKey(before, headFingerprint, 0UL, DetectCacheEvidence.WholeFile);
+                        unknownKeyKnown = true;
                     }
-
-                    /*
-                     * 尾部那条路没命中时，**一遍顺序扫**同时找两样东西（用户 2026-09-25 第 40 条）：
-                     * ①RAR / 7z 的魔数（第 38 条追加：这两种格式的目录结构不支持从尾部反推起点，
-                     *   实测前缀 20 MB 时连引擎都报"不是归档"，只能自己定位起点、抠出来再解）；
-                     * ②ZIP 的 EOCD 候选（第 40 条：ZIP 前面垫了图片、**后面还垫了数据**时，
-                     *   尾部 256 KB 里根本没有 EOCD，整条"从尾部反推"的路失效）。
-                     *
-                     * 为什么合成一遍扫：两条路在"都没命中"时要各读一遍整文件，
-                     * 一批几十个包就是白读几十遍 —— 一次 IO 拿两个结论，代价只算一次。
-                     */
-                    TailArchiveScanResult scan = TailArchiveScanner.Scan(filePath);
-
-                    /*
-                     * 优先级：**自洽校验通过的 ZIP 优先于一个孤零零的魔数**。
-                     * 理由：魔数只有 7 个字节，它可能只是 ZIP **里面装着的一个 RAR 文件**
-                     * （打包者常这么套），而 ZIP 候选要过"中央目录签名 + 局部文件头"两条位置校验，
-                     * 是实打实的"这里有一个 ZIP"（判据见 EmbeddedArchiveDetector，一个字没放宽）。
-                     */
-                    if (scan.ZipEocdOffsets.Count > 0)
+                    else
                     {
-                        EmbeddedArchiveInfo middle = EmbeddedArchiveDetector.DetectAt(filePath, scan.ZipEocdOffsets);
+                        byte[] tail = await ReadTailAsync(filePath, TailFingerprintLength, cancellationToken);
 
-                        if (middle.Found)
+                        if (tail.Length > 0)
                         {
-                            return BuildEmbeddedResult(filePath, middle, headerResult);
+                            unknownKey = BuildKey(
+                                before,
+                                headFingerprint,
+                                DetectResultCache.Fingerprint(tail),
+                                DetectCacheEvidence.HeadAndTail);
+
+                            unknownKeyKnown = true;
                         }
                     }
 
-                    if (scan.Archive != null)
+                    if (unknownKeyKnown && DetectResultCache.TryGet(unknownKey, out DetectResult cachedUnknown))
                     {
-                        return BuildTailArchiveResult(filePath, scan.Archive, headerResult);
+                        return cachedUnknown;
                     }
                 }
+
+                /*
+                 * 尾部那 256 KB 里找 ZIP 的 EOCD（最便宜的一条：只读尾部）。
+                 * 这一条覆盖"视频/图片 + 尾部整包"的全部真实样本（第 33/38 条那批）。
+                 */
+                DetectResult? embeddedResult = DetectEmbeddedArchive(filePath, headerResult);
+
+                if (embeddedResult != null)
+                {
+                    StoreUnknown(unknownKey, unknownKeyKnown, embeddedResult);
+
+                    return embeddedResult;
+                }
+
+                /*
+                 * 尾部那条路没命中时，**一遍顺序扫**同时找两样东西（用户 2026-09-25 第 40 条）：
+                 * ①RAR / 7z 的魔数（第 38 条追加：这两种格式的目录结构不支持从尾部反推起点，
+                 *   实测前缀 20 MB 时连引擎都报"不是归档"，只能自己定位起点、抠出来再解）；
+                 * ②ZIP 的 EOCD 候选（第 40 条：ZIP 前面垫了图片、**后面还垫了数据**时，
+                 *   尾部 256 KB 里根本没有 EOCD，整条"从尾部反推"的路失效）。
+                 *
+                 * 为什么合成一遍扫：两条路在"都没命中"时要各读一遍整文件，
+                 * 一批几十个包就是白读几十遍 —— 一次 IO 拿两个结论，代价只算一次。
+                 *
+                 * ⚠ 这一遍就是"识别慢"的大头（实测 2 GiB 认不出格式的文件要 3.5 秒）——
+                 * 所以上面那道缓存键才必须包含"文件尾 256 KB 的指纹"。
+                 */
+                TailArchiveScanResult scan = TailArchiveScanner.Scan(filePath);
+
+                /*
+                 * 优先级：**自洽校验通过的 ZIP 优先于一个孤零零的魔数**。
+                 * 理由：魔数只有 7 个字节，它可能只是 ZIP **里面装着的一个 RAR 文件**
+                 * （打包者常这么套），而 ZIP 候选要过"中央目录签名 + 局部文件头"两条位置校验，
+                 * 是实打实的"这里有一个 ZIP"（判据见 EmbeddedArchiveDetector，一个字没放宽）。
+                 */
+                if (scan.ZipEocdOffsets.Count > 0)
+                {
+                    EmbeddedArchiveInfo middle = EmbeddedArchiveDetector.DetectAt(filePath, scan.ZipEocdOffsets);
+
+                    if (middle.Found)
+                    {
+                        DetectResult middleResult = BuildEmbeddedResult(filePath, middle, headerResult);
+
+                        StoreUnknown(unknownKey, unknownKeyKnown, middleResult);
+
+                        return middleResult;
+                    }
+                }
+
+                if (scan.Archive != null)
+                {
+                    DetectResult tailResult = BuildTailArchiveResult(filePath, scan.Archive, headerResult);
+
+                    StoreUnknown(unknownKey, unknownKeyKnown, tailResult);
+
+                    return tailResult;
+                }
+
+                StoreUnknown(unknownKey, unknownKeyKnown, headerResult);
 
                 return headerResult;
             }
@@ -164,21 +406,61 @@ namespace ArchiveFixer.Services
                 }
             }
 
-            return new DetectResult
+            /*
+             * 尾部内嵌的那一段如果本身是 RAR，加密判读照样要做 —— 判据仍是同一个出口，
+             * 只是把起点挪到抠取偏移上（那一段的头就在那里）。⛔ 不为这条路另写一套判据。
+             */
+            return ApplyRarEncryptionVerdict(
+                new DetectResult
+                {
+                    Format = signature.Format,
+                    SuggestedExtension = signature.SuggestedExtension,
+                    IsArchive = true,
+                    IsKnownFormat = true,
+                    IsProbablyEncrypted = false,
+                    Message = signature.Describe(),
+                    HeaderHex = headerResult.HeaderHex,
+                    Confidence = 80,
+                    EmbeddedArchiveOffset = signature.Offset,
+                    EmbeddedArchiveEnd = end,
+                    EmbeddedDirectReadSupported = false,
+                    EmbeddedDirectReadReason = "内置直读器只解 ZIP；RAR / 7z 这条走「抠取 + 引擎」"
+                },
+                filePath,
+                signature.Offset);
+        }
+
+        /// <summary>
+        /// **RAR 加密判据的唯一出口**：RAR4 / RAR5 用 <see cref="RarEncryptionReader"/> 只读头部解析，
+        /// 读出"有加密证据"才置 <see cref="DetectResult.IsProbablyEncrypted"/>；读不出来（截断 / 布局不符）
+        /// 一律**不报加密**（⛔ 宁可漏报，也不误报 —— 见 <see cref="RarEncryptionState.Unknown"/>）。
+        ///
+        /// <para>不是 RAR（或 <paramref name="offset"/> 处也不是 RAR 签名）时原样返回，一个字都不改。</para>
+        /// </summary>
+        private static DetectResult ApplyRarEncryptionVerdict(
+            DetectResult result,
+            string filePath,
+            long offset = 0)
+        {
+            if (result == null || (result.Format != "RAR4" && result.Format != "RAR5"))
             {
-                Format = signature.Format,
-                SuggestedExtension = signature.SuggestedExtension,
-                IsArchive = true,
-                IsKnownFormat = true,
-                IsProbablyEncrypted = false,
-                Message = signature.Describe(),
-                HeaderHex = headerResult.HeaderHex,
-                Confidence = 80,
-                EmbeddedArchiveOffset = signature.Offset,
-                EmbeddedArchiveEnd = end,
-                EmbeddedDirectReadSupported = false,
-                EmbeddedDirectReadReason = "内置直读器只解 ZIP；RAR / 7z 这条走「抠取 + 引擎」"
-            };
+                // result 为 null 时**原样**把它交回调用方（保持"进来什么、出去什么"），用的是可空抑制。
+                return result!;
+            }
+
+            RarEncryptionReading reading = RarEncryptionReader.Read(filePath, offset);
+
+            if (reading == null || !reading.IsEncrypted)
+            {
+                return result;
+            }
+
+            result.IsProbablyEncrypted = true;
+            result.Message = result.Message + (reading.State == RarEncryptionState.HeadersEncrypted
+                ? StatusText.DetectRarHeadersEncryptedNote
+                : StatusText.DetectRarDataEncryptedNote);
+
+            return result;
         }
 
         /// <summary>
@@ -375,6 +657,16 @@ namespace ArchiveFixer.Services
                 result);
 
             task.IsArchive = result.IsArchive;
+
+            /*
+             * 加密结论 = **第 1 卷（= task.CurrentPath）那一份的结论**，多卷 RAR 上也是这样。
+             *
+             * 为什么必须说清这一条：RAR 的主头与第一个文件头都在**第 1 卷**里，后续卷是数据的中段，
+             * 直接读它必然得不出结论（RAR4 的续卷连主头都读不像、RAR5 的续卷是第一卷头链的续写）。
+             * 所以判据只问 `task.CurrentPath`（分卷归组保证了它就是第一卷），
+             * ⛔ **绝不去遍历 <see cref="ArchiveTask.VolumePaths"/> 再要求"每一卷都报加密"** ——
+             * 那会把"续卷读不出来"当成"没加密"，整组加密包当场判否（用户 2026-09-29 明确点名的坑）。
+             */
             task.IsEncrypted = result.IsProbablyEncrypted;
 
             // 内嵌归档偏移必须落到任务上：解压管线靠它决定"要不要先抠出来"。

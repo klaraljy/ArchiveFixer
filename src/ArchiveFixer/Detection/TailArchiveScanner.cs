@@ -85,6 +85,42 @@ namespace ArchiveFixer.Detection
         /// <summary>ZIP 中央目录结束记录（<c>PK\x05\x06</c>）—— 中部 ZIP 唯一的抓手。</summary>
         private static readonly byte[] ZipEocdSignature = { 0x50, 0x4B, 0x05, 0x06 };
 
+        /// <summary>ZIP 签名首字节 <c>'P'</c>。</summary>
+        private const byte ZipFirstByte = 0x50;
+
+        /// <summary>RAR 签名首字节 <c>'R'</c>。</summary>
+        private const byte RarFirstByte = 0x52;
+
+        /// <summary>7z 签名首字节 <c>'7'</c>。</summary>
+        private const byte SevenZipFirstByte = 0x37;
+
+        /// <summary>
+        /// 从 <paramref name="start"/> 起找下一个"**可能是签名开头**"的字节位置（找不到返回 −1）。
+        ///
+        /// <para>为什么值得单独一个方法：这一遍是拿 CPU 换命中的核心循环，逐字节比一比 512 MiB 要 3.5 秒
+        /// （实测；同一块盘纯读 512 MiB 只要 0.34 秒）。<c>IndexOfAny</c> 在 .NET 8 里是向量化的，
+        /// 找三个候选字节比一次一个字节地看快一个数量级。</para>
+        ///
+        /// <para>⚠ 候选集必须与签名表一致：<c>PK</c>（ZIP 两条）、<c>Rar!</c>、<c>37 7A</c>。
+        /// 归档魔数已经命中（<paramref name="archiveMissing"/> 为 false）时只剩 PK 有用 ——
+        /// 那时再找 RAR / 7z 只是白比（原来的循环也会在 <c>archive != null</c> 时把它们丢掉）。</para>
+        /// </summary>
+        private static int FindNextCandidate(byte[] buffer, int start, int total, bool archiveMissing)
+        {
+            if (start > total)
+            {
+                return -1;
+            }
+
+            ReadOnlySpan<byte> window = buffer.AsSpan(start, total - start + 1);
+
+            int found = archiveMissing
+                ? window.IndexOfAny(ZipFirstByte, RarFirstByte, SevenZipFirstByte)
+                : window.IndexOf(ZipFirstByte);
+
+            return found < 0 ? -1 : start + found;
+        }
+
         /// <summary>
         /// 从头扫，返回**第一个**命中的归档签名（偏移必须 &gt; 0：偏移 0 就是普通归档，不走这条路）。
         /// 找不到 / 读不了返回 null（绝不抛 —— 识别失败不该让整单失败）。
@@ -148,63 +184,75 @@ namespace ArchiveFixer.Detection
                     int total = carried + read;
                     long chunkStart = position - carried;
 
-                    // 从 1 开始找：偏移 0 上的是"文件本身的头"，不属于"尾部内嵌"。
-                    for (int i = 1; i <= total; i++)
+                    /*
+                     * 从 1 开始找：偏移 0 上的是"文件本身的头"，不属于"尾部内嵌"。
+                     *
+                     * ⚠ **这里不许再写成"逐个字节比一比"**（2026-09-29 量化后改的）：
+                     * 实测（本机 512 MiB 顺序读只要 335 ms）这一遍扫描 512 MiB 要 3.5 秒 ——
+                     * 也就是说它是 **CPU 密集**的，不是 IO 密集的，瓶颈就在这个字节循环上。
+                     * 现在改成"先用 SIMD 的 IndexOfAny 跳到下一个**可能是签名开头**的字节
+                     * （0x50 PK / 0x52 Rar / 0x37 7z 的首字节），再看那几个字节：
+                     * 判据一个字没放宽（同一个签名表、同一处 Matches），只是不再对明显不是签名的字节做判断。
+                     *
+                     * 另一条纪律不变：**命中 RAR / 7z 魔数就立刻收工**（第 39 条那批"图片后缀挂 RAR"靠它保速度）——
+                     * 唯一的例外仍是"魔数之前已经见过 PK\x03\x04"，那说明可能是整体被顶偏的 ZIP，
+                     * 这时才继续把 EOCD 候选收完。
+                     */
+                    int index = 1;
+
+                    while (index <= total)
                     {
-                        long absolute = chunkStart + i;
+                        int candidate = FindNextCandidate(buffer, index, total, archive == null);
 
-                        if (absolute <= 0)
+                        if (candidate < 0)
                         {
-                            continue;
+                            break;
                         }
 
-                        /*
-                         * 按**首字节**分派，不逐个签名去比：这一遍是拿 IO 换命中的核心循环，
-                         * 每字节做六次签名比较（ZIP 两条 + 魔数三条）纯属白烧 CPU。
-                         */
-                        byte first = buffer[i];
+                        index = candidate;
 
-                        if (first == 0x50)
+                        long absolute = chunkStart + index;
+
+                        if (absolute > 0)
                         {
-                            // ZIP 的两种签名都以 "PK" 开头。
-                            if (Matches(buffer, i, total, ZipEocdSignature))
+                            byte first = buffer[index];
+
+                            if (first == ZipFirstByte)
                             {
-                                RememberEocdCandidate(eocdOffsets, absolute);
+                                // ZIP 的两种签名都以 "PK" 开头。
+                                if (Matches(buffer, index, total, ZipEocdSignature))
+                                {
+                                    RememberEocdCandidate(eocdOffsets, absolute);
+                                }
+                                else if (Matches(buffer, index, total, ZipLocalHeaderSignature))
+                                {
+                                    sawZipLocalHeader = true;
+                                }
                             }
-                            else if (Matches(buffer, i, total, ZipLocalHeaderSignature))
+                            else if (archive == null)
                             {
-                                sawZipLocalHeader = true;
+                                TailArchiveSignature? hit = MatchAt(buffer, index, total, chunkStart);
+
+                                if (hit != null)
+                                {
+                                    archive = hit;
+
+                                    /*
+                                     * 两个终止条件（见类文档里的取舍）：
+                                     * ①这一片扫描里没见过 PK\x03\x04 → 这就是"图片挂个 RAR"那种最常见形状，
+                                     *   当场收工，后面的字节一个都不读（第 39 条那批的速度就靠这一条）；
+                                     * ②见过 → 可能是"整体被顶偏的 ZIP + 里面的 RAR"，继续把 EOCD 候选收完，
+                                     *   让自洽校验通过的 ZIP 优先。
+                                     */
+                                    if (!sawZipLocalHeader)
+                                    {
+                                        return Finish();
+                                    }
+                                }
                             }
-
-                            continue;
                         }
 
-                        if (first != 0x52 && first != 0x37)
-                        {
-                            // 'R' = Rar!…，'7' = 7z 的 37 7A BC AF 27 1C。
-                            continue;
-                        }
-
-                        TailArchiveSignature? hit = MatchAt(buffer, i, total, chunkStart);
-
-                        if (hit == null || archive != null)
-                        {
-                            continue;
-                        }
-
-                        archive = hit;
-
-                        /*
-                         * 两个终止条件（见类文档里的取舍）：
-                         * ①这一片扫描里没见过 PK\x03\x04 → 这就是"图片挂个 RAR"那种最常见形状，
-                         *   当场收工，后面的字节一个都不读（第 39 条那批的速度就靠这一条）；
-                         * ②见过 → 可能是"整体被顶偏的 ZIP + 里面的 RAR"，继续把 EOCD 候选收完，
-                         *   让自洽校验通过的 ZIP 优先。
-                         */
-                        if (!sawZipLocalHeader)
-                        {
-                            return Finish();
-                        }
+                        index++;
                     }
 
                     /*

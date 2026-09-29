@@ -294,8 +294,11 @@ namespace ArchiveFixer.Tests
         /// 找本机已装的 <c>Rar.exe</c>。用 <see cref="ToolLocator.WinRarInstallationCandidates"/>
         /// 的同一套探测目录（那里探的是 UnRAR.exe，这里换成同目录的 Rar.exe）——
         /// 只读取、只调用，绝不复制进仓库。
+        ///
+        /// <para><c>internal</c>：加密样本那一组（<c>RarEncryptionSampleSet</c>）用的是同一个探测器，
+        /// ⛔ 不另写一份"Rar.exe 在哪"。</para>
         /// </summary>
-        private static string? LocateRarExe()
+        internal static string? LocateRarExe()
         {
             foreach (string candidate in new ToolLocator().WinRarInstallationCandidates())
             {
@@ -359,7 +362,11 @@ namespace ArchiveFixer.Tests
                 plain[..(int)(plain.Length * 0.75)]);
         }
 
-        private static void RunRar(string rarExe, string workingDirectory, Action<string> log, params string[] args)
+        /// <summary>
+        /// 跑一次 <c>Rar.exe</c>（非 0 退出码只写日志、不抛 —— 造样本失败由调用方按"样本不全"处理）。
+        /// <c>internal</c>：加密样本那一组也走它（⛔ 不另写一份"怎么调 Rar.exe"）。
+        /// </summary>
+        internal static void RunRar(string rarExe, string workingDirectory, Action<string> log, params string[] args)
         {
             var psi = new ProcessStartInfo(rarExe)
             {

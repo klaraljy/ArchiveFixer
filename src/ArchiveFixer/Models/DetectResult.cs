@@ -190,6 +190,30 @@ namespace ArchiveFixer.Models
             };
         }
 
+        /// <summary>
+        /// 复制一份。
+        ///
+        /// <para>为什么必须有它：识别结论会进**进程内缓存**（同一份内容的第二个拷贝不再重算），
+        /// 而缓存里那一份**绝不能被调用方改到** —— 后处理会往识别结果上叠东西
+        /// （例如 RAR 加密判读改写 <see cref="Message"/> 与 <see cref="IsProbablyEncrypted"/>），
+        /// 直接交出缓存对象等于让"下一次命中"读到被改过的那一份。</para>
+        /// </summary>
+        public DetectResult Clone() => new()
+        {
+            Format = Format,
+            SuggestedExtension = SuggestedExtension,
+            IsArchive = IsArchive,
+            IsKnownFormat = IsKnownFormat,
+            IsProbablyEncrypted = IsProbablyEncrypted,
+            Message = Message,
+            HeaderHex = HeaderHex,
+            Confidence = Confidence,
+            EmbeddedArchiveOffset = EmbeddedArchiveOffset,
+            EmbeddedArchiveEnd = EmbeddedArchiveEnd,
+            EmbeddedDirectReadSupported = EmbeddedDirectReadSupported,
+            EmbeddedDirectReadReason = EmbeddedDirectReadReason
+        };
+
         public override string ToString()
         {
             if (string.IsNullOrWhiteSpace(SuggestedExtension))

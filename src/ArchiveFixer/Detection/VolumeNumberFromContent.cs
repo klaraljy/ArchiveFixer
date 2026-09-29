@@ -1131,7 +1131,7 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>RAR5 风格的 vint：低 7 位是数据、最高位是"还有下一字节"。</summary>
-        private static bool TryReadVint(ReadOnlySpan<byte> data, ref int offset, out ulong value)
+        internal static bool TryReadVint(ReadOnlySpan<byte> data, ref int offset, out ulong value)
         {
             value = 0;
             int shift = 0;
@@ -1152,15 +1152,22 @@ namespace ArchiveFixer.Detection
             return false;
         }
 
-        /// <summary>头 CRC 对得上（取补与不取补两种约定都收，理由见 <see cref="ReadRar5"/> 的注释）。</summary>
-        private static bool CrcMatches(uint stored, ReadOnlySpan<byte> data)
+        /// <summary>
+        /// 头 CRC 对得上（取补与不取补两种约定都收，理由见 <see cref="ReadRar5"/> 的注释）。
+        ///
+        /// <para>⚠ <c>internal</c> 而不是 <c>private</c>：RAR 头的 CRC 与 vint 读法在本仓库里**只留一份**
+        /// （<c>RarEncryptionReader</c> 解析 RAR4/RAR5 头时用的是同一份实现）——
+        /// 两份 CRC 表/两套 vint 约定必然漂移，而漂移的后果是"同一个头，一处认得出、一处认不出"。</para>
+        /// </summary>
+        internal static bool CrcMatches(uint stored, ReadOnlySpan<byte> data)
         {
             uint raw = Crc32Raw(data);
 
             return stored == raw || stored == (raw ^ 0xFFFFFFFF);
         }
 
-        private static bool CrcMatches16(ushort stored, ReadOnlySpan<byte> data)
+        /// <summary>RAR 1.5–4.x 的 16 位头 CRC（= 同一个 CRC32 的低 16 位；取补与不取补两种约定都收）。</summary>
+        internal static bool CrcMatches16(ushort stored, ReadOnlySpan<byte> data)
         {
             uint raw = Crc32Raw(data);
 
