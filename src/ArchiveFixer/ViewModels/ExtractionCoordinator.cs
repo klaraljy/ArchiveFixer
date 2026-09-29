@@ -8497,6 +8497,19 @@ namespace ArchiveFixer.ViewModels
             task.EndTime = DateTime.Now;
             task.LastUpdatedTime = DateTime.Now;
 
+            /*
+             * 用户 2026-09-30 第 1 条：批末那个汇总框要"点名差多少"。
+             * 这三个数**就是这里手上的**（空间门刚算出来的），原样记到任务上 ——
+             * 批末诊断清单只读它（Models\BatchSummaryDiagnostics.cs），⛔ 不重算一遍。
+             * 只在这里写：启动前那道门与解压前预检两条路都收口到本方法。
+             */
+            task.SpaceBlocked = new SpaceBlockedFacts
+            {
+                RequiredBytes = requiredBytes,
+                AvailableBytes = availableBytes,
+                ShortfallBytes = shortfallBytes
+            };
+
             // 措辞用"未解压"而不是"未启动"：这一条同时覆盖两条路 —— 批调度里根本没开跑的那些，
             // 以及跑起来之后在解压前预检里被拦下的那些（那时引擎一个字节都还没写）。
             AppendLog("ERROR", $"空间不足，未解压：{task.FileName} —— {message}");

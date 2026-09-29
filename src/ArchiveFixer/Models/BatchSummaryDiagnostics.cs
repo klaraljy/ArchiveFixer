@@ -1,0 +1,499 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using ArchiveFixer.Extraction;
+using ArchiveFixer.Storage;
+
+namespace ArchiveFixer.Models
+{
+    /// <summary>
+    /// 批末诊断清单里的**一组**（"哪一类错、点了哪几个包的名字"）。
+    ///
+    /// <para>顺序就是枚举声明顺序，也是显示顺序：先失败各组，再"没做成但不是失败"的那几档。
+    /// 这个顺序是**表的顺序**，⛔ 不在渲染处再排一次（同一件事只有一个出口）。</para>
+    /// </summary>
+    public enum BatchProblemKind
+    {
+        /// <summary>磁盘空间不足（空间门在解压**之前**就拦下了，包本身没问题）。</summary>
+        DiskSpace = 0,
+
+        /// <summary>密码类：密码错误 / 达到密码尝试上限 / 文件名已加密（三种终态合成一组，口径见 StatusText）。</summary>
+        Password = 1,
+
+        /// <summary>分卷缺失（不变量 7：必须报"缺哪几个"）。</summary>
+        MissingVolume = 2,
+
+        /// <summary>文件损坏。</summary>
+        Corrupted = 3,
+
+        /// <summary>权限不足。</summary>
+        AccessDenied = 4,
+
+        /// <summary>输出路径冲突。</summary>
+        OutputConflict = 5,
+
+        /// <summary>源文件已变化（不变量 11）。</summary>
+        SourceChanged = 6,
+
+        /// <summary>其他失败（解压失败 / 未知错误 / 没有可用的解压引擎 / 校验没通过 …）：兜底那一组。</summary>
+        Other = 7,
+
+        /// <summary>部分完成（做了一半，不得当成成功）。</summary>
+        PartiallyCompleted = 8,
+
+        /// <summary>已跳过（不是压缩包 / 同名冲突按用户选择跳过）。</summary>
+        Skipped = 9,
+
+        /// <summary>已取消。</summary>
+        Cancelled = 10,
+
+        /// <summary>没轮到（这一批结束时它还没有终态）。</summary>
+        NotReached = 11
+    }
+
+    /// <summary>诊断清单里被**点到名**的一个包。</summary>
+    public sealed class BatchProblemItem
+    {
+        /// <summary>只写**文件名**（隐私红线 §8：名字里不许带用户的目录）。</summary>
+        public string Name { get; init; } = string.Empty;
+
+        /// <summary>括号里那句补充（分卷缺哪几个 / 空间差多少）；空 = 没有补充。</summary>
+        public string Detail { get; init; } = string.Empty;
+    }
+
+    /// <summary>
+    /// 诊断清单里的一组：组名 + 个数 + 点名（最多 <see cref="BatchSummaryDiagnosticsRules.MaxNamesPerGroup"/> 个，
+    /// 其余折成"还有 K 个"）。
+    /// </summary>
+    public sealed class BatchProblemGroup
+    {
+        /// <summary>这一组是哪一类问题（判据与顺序都看它）。</summary>
+        public BatchProblemKind Kind { get; init; }
+
+        /// <summary>组名（能复用既有状态常量的就复用，见 <see cref="BatchSummaryDiagnosticsRules.DescribeKind"/>）。</summary>
+        public string Title { get; init; } = string.Empty;
+
+        /// <summary>被点名的那些包（已经按上限截断）。</summary>
+        public IReadOnlyList<BatchProblemItem> Items { get; init; } = Array.Empty<BatchProblemItem>();
+
+        /// <summary>这一组**实际**有几个（含没列出来的）。</summary>
+        public int TotalCount { get; init; }
+
+        /// <summary>组级的那一句注脚（目前只有密码类那一组有："可能是没有密码、或者密码不对"）。</summary>
+        public string Note { get; init; } = string.Empty;
+
+        /// <summary>没列出来的个数（0 = 全列了）。</summary>
+        public int HiddenCount => Math.Max(0, TotalCount - Items.Count);
+
+        /// <summary>
+        /// 渲染成一行，形状与用户在需求里给的一致：
+        /// <c>密码问题（可能是没有密码、或者密码不对）：3 个 —— a.rar、b.rar（还有 1 个）</c>。
+        /// </summary>
+        public string ToLine()
+        {
+            string names = string.Join(
+                "、",
+                Items.Select(item => string.IsNullOrWhiteSpace(item.Detail)
+                    ? item.Name
+                    : $"{item.Name}（{item.Detail}）"));
+
+            if (HiddenCount > 0)
+            {
+                names += string.Format(CultureInfo.CurrentCulture, StatusText.BatchDiagnosticsMoreFormat, HiddenCount);
+            }
+
+            string title = string.IsNullOrWhiteSpace(Note)
+                ? Title
+                : $"{Title}（{Note}）";
+
+            return StatusText.BatchDiagnosticsBullet + string.Format(
+                CultureInfo.CurrentCulture,
+                StatusText.BatchDiagnosticsLineFormat,
+                title,
+                TotalCount,
+                names);
+        }
+    }
+
+    /// <summary>
+    /// 批末那一次汇报的**一份**结论：颜色（<see cref="Severity"/>）与文字（<see cref="Groups"/> /
+    /// <see cref="Text"/>）。
+    ///
+    /// <para>为什么要合成一个对象（用户 2026-09-30 第 3 条："严重度管颜色、诊断管文字，
+    /// 两者都从同一份任务终态算出来，⛔ 不许各算一遍"）：这里就是那"一份" ——
+    /// 调用方只调 <see cref="BatchSummaryDiagnosticsRules.Build"/> 一次，
+    /// 颜色与文字都不可能来自两份不同的快照。</para>
+    /// </summary>
+    public sealed class BatchSummaryReport
+    {
+        /// <summary>这一批的汇总严重度（判据仍是 <see cref="BatchSummarySeverityRules"/> 那一个出口）。</summary>
+        public BatchSummarySeverity Severity { get; init; } = BatchSummarySeverity.Success;
+
+        /// <summary>按组归好的问题清单（空 = 这一批没有任何"没做成"的事）。</summary>
+        public IReadOnlyList<BatchProblemGroup> Groups { get; init; } = Array.Empty<BatchProblemGroup>();
+
+        /// <summary>逐组那些行 + 「下一步」那一行（**不含**标题，日志逐行写它）。</summary>
+        public IReadOnlyList<string> Lines { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// 可以直接摆进弹窗正文的清单（标题 + <see cref="Lines"/>）；
+        /// **空字符串 = 一个字都不写**（全成功那一批不许出现空标题）。
+        /// </summary>
+        public string Text => Lines.Count == 0
+            ? string.Empty
+            : StatusText.BatchDiagnosticsTitle + Environment.NewLine + string.Join(Environment.NewLine, Lines);
+
+        /// <summary>这一批有没有要说的（= <see cref="Text"/> 非空）。</summary>
+        public bool HasProblems => Groups.Count > 0;
+    }
+
+    /// <summary>
+    /// **批末诊断清单的唯一出口**（用户 2026-09-30 第 1 条）。
+    ///
+    /// <para>他要的东西：批末那个汇总框除了"成功 x / 失败 y / 跳过 z"这几个数字，还要像编译器那样
+    /// **点名说清错在哪** —— "空间不足、哪个压缩包密码不对、111.7z.001 的分卷找不到"。
+    /// 判据与排版都在这里，⛔ GUI / XAML / 窗口里一个字都不判断（它们只把
+    /// <see cref="BatchSummaryReport.Text"/> 摆出来）。</para>
+    ///
+    /// <para><b>分组口径（⛔ 不新造第二套分类）</b>：</para>
+    /// <list type="number">
+    /// <item><description><b>成功/失败这一层的裁决不在这里</b> —— 颜色仍由
+    /// <see cref="BatchSummarySeverityRules.FromTasks"/> 回答，本类把它**照抄**进
+    /// <see cref="BatchSummaryReport.Severity"/>（调一次 <see cref="Build"/> 就两样都有）。</description></item>
+    /// <item><description><b>具体原因只读既有的状态常量</b>（<see cref="ArchiveTask.Status"/> 对
+    /// <c>StatusText</c> 的那几个常量）—— 这正是 <c>TaskSummaryService.ClassifyOutcome</c> /
+    /// <c>OneClickCoordinator.IsFailureStatus</c> 一直在用的那一套口径；本类只是把它们**再细分一层**，
+    /// 没有引入新的状态、也没有改它们的含义。</description></item>
+    /// <item><description><b>状态说不出原因时按机器终态兜底</b>（<see cref="ArchiveTask.Outcome"/>）——
+    /// 保证"没做成的任务一个都不会从清单里消失"，落不到具体原因的进"其他失败"。</description></item>
+    /// </list>
+    ///
+    /// <para><b>成功的那条不许出现在任何组里</b>：终态是 <see cref="TaskOutcome.Succeeded"/> 且校验没有判否
+    /// 的任务直接跳过（判据与不变量 6 一致：部分成功 / 校验判否都不算成功）。</para>
+    /// </summary>
+    public static class BatchSummaryDiagnosticsRules
+    {
+        /// <summary>每组最多点几个名字（其余折成"还有 K 个"）—— 用户给的范围是 3~5，取小的那个。</summary>
+        public const int MaxNamesPerGroup = 3;
+
+        /// <summary>「下一步」那一行最多说几条动作（再多就折成一句"其余看…"）。</summary>
+        public const int MaxActionPhrases = 4;
+
+        /// <summary>单个文件名最长显示多少个字符（超了保留头尾，尾巴上常常是 <c>.7z.001</c>）。</summary>
+        public const int MaxNameLength = 60;
+
+        /// <summary>
+        /// 按**同一份**任务终态算出这一批的颜色与诊断清单（本类的唯一入口）。
+        /// </summary>
+        /// <param name="tasks">这一批真正处理过的任务（一键处理传的是根任务 + 全部续解子任务）。</param>
+        /// <param name="maxNamesPerGroup">每组最多点几个名字（默认 <see cref="MaxNamesPerGroup"/>）。</param>
+        public static BatchSummaryReport Build(
+            IEnumerable<ArchiveTask>? tasks,
+            int maxNamesPerGroup = MaxNamesPerGroup)
+        {
+            List<ArchiveTask> list = tasks?.Where(task => task != null).ToList() ?? new List<ArchiveTask>();
+
+            BatchSummarySeverity severity = BatchSummarySeverityRules.FromTasks(list);
+
+            int limit = maxNamesPerGroup <= 0 ? 1 : maxNamesPerGroup;
+
+            // 一次遍历归组：每个任务只被判一次，⛔ 不为每组建一次列表。
+            var buckets = new Dictionary<BatchProblemKind, List<ArchiveTask>>();
+
+            foreach (ArchiveTask task in list)
+            {
+                BatchProblemKind? kind = Classify(task);
+
+                if (kind == null)
+                {
+                    continue;
+                }
+
+                if (!buckets.TryGetValue(kind.Value, out List<ArchiveTask>? bucket))
+                {
+                    bucket = new List<ArchiveTask>();
+                    buckets[kind.Value] = bucket;
+                }
+
+                bucket.Add(task);
+            }
+
+            if (buckets.Count == 0)
+            {
+                // 全成功（或空批）：**一个字都不写**，连标题都不许出现。
+                return new BatchSummaryReport { Severity = severity };
+            }
+
+            var groups = new List<BatchProblemGroup>();
+
+            foreach (BatchProblemKind kind in Enum.GetValues<BatchProblemKind>())
+            {
+                if (!buckets.TryGetValue(kind, out List<ArchiveTask>? bucket) || bucket.Count == 0)
+                {
+                    continue;
+                }
+
+                groups.Add(new BatchProblemGroup
+                {
+                    Kind = kind,
+                    Title = DescribeKind(kind),
+                    Note = kind == BatchProblemKind.Password ? StatusText.BatchDiagnosticsPasswordNote : string.Empty,
+                    TotalCount = bucket.Count,
+                    Items = bucket.Take(limit).Select(BuildItem).ToList()
+                });
+            }
+
+            var lines = new List<string>();
+
+            foreach (BatchProblemGroup group in groups)
+            {
+                lines.Add(group.ToLine());
+            }
+
+            string nextStep = BuildNextStepLine(groups);
+
+            if (!string.IsNullOrWhiteSpace(nextStep))
+            {
+                lines.Add(nextStep);
+            }
+
+            return new BatchSummaryReport
+            {
+                Severity = severity,
+                Groups = groups,
+                Lines = lines
+            };
+        }
+
+        /// <summary>
+        /// 一个任务该进哪一组；<c>null</c> = 这一条**不进清单**（唯一的一档就是"成功"）。
+        ///
+        /// <para>判定顺序是刻意的：先剔掉成功，再按状态找具体原因，最后按机器终态兜底 ——
+        /// 这样"状态说不出原因"的失败不会消失，而"状态是失败、终态却写着成功"的怪帧
+        /// （真机出现过，见 <c>OneClickCoordinator.IsSuccessStatus</c>）也不会被当成成功放过去。</para>
+        /// </summary>
+        public static BatchProblemKind? Classify(ArchiveTask? task)
+        {
+            if (task == null)
+            {
+                return null;
+            }
+
+            /*
+             * ① 成功这一档：终态成功 **且** 校验没有判否。
+             * 用户明确要求"成功的那条不许出现在任何失败组里" —— 所以这里是 return null，不是某个"成功组"。
+             */
+            if (task.Outcome == TaskOutcome.Succeeded && task.OutputVerification != OutputVerificationOutcome.Failed)
+            {
+                return null;
+            }
+
+            // ② 具体原因：只认既有状态常量（与 TaskSummaryService / OneClickCoordinator 同一批常量）。
+            switch (task.Status)
+            {
+                case StatusText.DiskSpaceInsufficient:
+                    return BatchProblemKind.DiskSpace;
+
+                case StatusText.WrongPassword:
+                case StatusText.PasswordAttemptLimitReached:
+                case StatusText.EncryptedHeaders:
+                    return BatchProblemKind.Password;
+
+                case StatusText.VolumeMissing:
+                    return BatchProblemKind.MissingVolume;
+
+                case StatusText.Corrupted:
+                    return BatchProblemKind.Corrupted;
+
+                case StatusText.AccessDenied:
+                    return BatchProblemKind.AccessDenied;
+
+                case StatusText.OutputConflict:
+                    return BatchProblemKind.OutputConflict;
+
+                case StatusText.SourceChanged:
+                    return BatchProblemKind.SourceChanged;
+
+                case StatusText.PartiallyCompleted:
+                    return BatchProblemKind.PartiallyCompleted;
+
+                case StatusText.Skipped:
+                    return BatchProblemKind.Skipped;
+
+                case StatusText.Cancelled:
+                    return BatchProblemKind.Cancelled;
+            }
+
+            /*
+             * ③ 状态没给出具体原因 → 看**机器终态**兜底（⛔ 不猜原因）。
+             * 走到这里的 Succeeded 只可能是"校验判否"那一帧：不变量 6 要求它按失败报，归"其他失败"。
+             */
+            return task.Outcome switch
+            {
+                TaskOutcome.Failed => BatchProblemKind.Other,
+                TaskOutcome.Succeeded => BatchProblemKind.Other,
+                TaskOutcome.PartiallyCompleted => BatchProblemKind.PartiallyCompleted,
+                TaskOutcome.Skipped => BatchProblemKind.Skipped,
+                TaskOutcome.Cancelled => BatchProblemKind.Cancelled,
+                _ => BatchProblemKind.NotReached
+            };
+        }
+
+        /// <summary>组名（能复用既有状态常量的就复用：同一件事在界面上只允许有一个说法）。</summary>
+        public static string DescribeKind(BatchProblemKind kind) => kind switch
+        {
+            BatchProblemKind.DiskSpace => StatusText.DiskSpaceInsufficient,
+            BatchProblemKind.Password => StatusText.BatchDiagnosticsPasswordTitle,
+            BatchProblemKind.MissingVolume => StatusText.VolumeMissing,
+            BatchProblemKind.Corrupted => StatusText.Corrupted,
+            BatchProblemKind.AccessDenied => StatusText.AccessDenied,
+            BatchProblemKind.OutputConflict => StatusText.OutputConflict,
+            BatchProblemKind.SourceChanged => StatusText.SourceChanged,
+            BatchProblemKind.Other => StatusText.BatchDiagnosticsOtherTitle,
+            BatchProblemKind.PartiallyCompleted => StatusText.PartiallyCompleted,
+            BatchProblemKind.Skipped => StatusText.Skipped,
+            BatchProblemKind.Cancelled => StatusText.Cancelled,
+            _ => StatusText.BatchDiagnosticsNotReachedTitle
+        };
+
+        /// <summary>
+        /// 「下一步」那一行：只说这一批**真的出现过**的那几档动作（最多
+        /// <see cref="MaxActionPhrases"/> 条，其余折成一句），一行看完。
+        /// </summary>
+        private static string BuildNextStepLine(IReadOnlyList<BatchProblemGroup> groups)
+        {
+            var phrases = new List<string>();
+            bool more = false;
+
+            foreach (BatchProblemGroup group in groups)
+            {
+                string? action = DescribeAction(group.Kind);
+
+                if (string.IsNullOrWhiteSpace(action) || phrases.Contains(action))
+                {
+                    continue;
+                }
+
+                if (phrases.Count >= MaxActionPhrases)
+                {
+                    more = true;
+                    break;
+                }
+
+                phrases.Add(action);
+            }
+
+            if (phrases.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            if (more)
+            {
+                phrases.Add(StatusText.BatchDiagnosticsNextStepRest);
+            }
+
+            return StatusText.BatchDiagnosticsNextStepPrefix + string.Join("；", phrases) + "。";
+        }
+
+        /// <summary>
+        /// 每一档对应的**动作**（与各档现有的处置建议同一口径：空间那几条引空间门/中途提示的说法，
+        /// 密码那一条引"到「密码」页一键导入"）。返回 <c>null</c> = 这一档没有需要用户做的事。
+        /// </summary>
+        private static string? DescribeAction(BatchProblemKind kind) => kind switch
+        {
+            BatchProblemKind.DiskSpace => StatusText.BatchDiagnosticsActionDiskSpace,
+            BatchProblemKind.Password => StatusText.BatchDiagnosticsActionPassword,
+            BatchProblemKind.MissingVolume => StatusText.BatchDiagnosticsActionMissingVolume,
+            BatchProblemKind.Corrupted => StatusText.BatchDiagnosticsActionCorrupted,
+            BatchProblemKind.AccessDenied => StatusText.BatchDiagnosticsActionAccessDenied,
+            BatchProblemKind.OutputConflict => StatusText.BatchDiagnosticsActionOutputConflict,
+            BatchProblemKind.SourceChanged => StatusText.BatchDiagnosticsActionSourceChanged,
+            BatchProblemKind.Other => StatusText.BatchDiagnosticsActionOther,
+            BatchProblemKind.PartiallyCompleted => StatusText.BatchDiagnosticsActionOther,
+            BatchProblemKind.Cancelled => StatusText.BatchDiagnosticsActionNotFinished,
+            BatchProblemKind.NotReached => StatusText.BatchDiagnosticsActionNotFinished,
+
+            // 跳过（不是压缩包 / 用户自己在同名冲突里选的跳过）不需要用户做任何事。
+            _ => null
+        };
+
+        /// <summary>
+        /// 把任务渲染成清单里的一项：**只写文件名**（隐私 §8），该带补充的档把既有数字带出来。
+        ///
+        /// <para>两个补充都取自**已经算好的**值，⛔ 这里一个数都不重算：
+        /// 空间那三个数来自空间门（<see cref="ArchiveTask.SpaceBlocked"/>，源头是
+        /// <c>SpaceGate</c> / <c>ScheduledExtractionItem</c>）；缺的卷名来自识别阶段写好的
+        /// <see cref="ArchiveTask.MissingVolumeNames"/>。</para>
+        /// </summary>
+        private static BatchProblemItem BuildItem(ArchiveTask task) => new()
+        {
+            Name = Shorten(ResolveName(task)),
+            Detail = DescribeDetail(task)
+        };
+
+        private static string DescribeDetail(ArchiveTask task)
+        {
+            if (task.SpaceBlocked != null)
+            {
+                return string.Format(
+                    CultureInfo.CurrentCulture,
+                    StatusText.BatchDiagnosticsSpaceDetailFormat,
+                    TaskSpaceEstimate.FormatSize(task.SpaceBlocked.RequiredBytes),
+                    TaskSpaceEstimate.FormatSize(task.SpaceBlocked.ShortfallBytes));
+            }
+
+            if (task.MissingVolumeNames.Count > 0)
+            {
+                string volumes = string.Join("、", task.MissingVolumeNames.Take(MaxNamesPerGroup));
+
+                if (task.MissingVolumeNames.Count > MaxNamesPerGroup)
+                {
+                    volumes += string.Format(
+                        CultureInfo.CurrentCulture,
+                        StatusText.BatchDiagnosticsMoreFormat,
+                        task.MissingVolumeNames.Count - MaxNamesPerGroup);
+                }
+
+                return string.Format(
+                    CultureInfo.CurrentCulture,
+                    StatusText.BatchDiagnosticsMissingVolumesFormat,
+                    volumes);
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>文件名（没有就退回路径的文件名部分；两者都没有才写一个短横）。</summary>
+        private static string ResolveName(ArchiveTask task)
+        {
+            if (!string.IsNullOrWhiteSpace(task.FileName))
+            {
+                return task.FileName.Trim();
+            }
+
+            string fromPath = Path.GetFileName(task.CurrentPath ?? string.Empty);
+
+            return string.IsNullOrWhiteSpace(fromPath) ? "-" : fromPath;
+        }
+
+        /// <summary>
+        /// 超长名字保留**头 + 尾**：尾巴上常常是 <c>.7z.001</c> 这种能定位是哪一卷的信息，
+        /// 直接截尾会把它切掉（用户要靠它去目录里找那一个文件）。
+        /// </summary>
+        private static string Shorten(string name)
+        {
+            if (name.Length <= MaxNameLength)
+            {
+                return name;
+            }
+
+            int head = MaxNameLength / 2;
+            int tail = MaxNameLength - head - 1;
+
+            return name[..head] + "…" + name[^tail..];
+        }
+    }
+}

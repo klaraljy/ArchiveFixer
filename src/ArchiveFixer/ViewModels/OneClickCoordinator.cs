@@ -56,6 +56,34 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 别在窗口里按 <see cref="Summary"/> 这段中文再判断一次。</para>
         /// </summary>
         public BatchSummarySeverity Severity { get; init; } = BatchSummarySeverity.Success;
+
+        /// <summary>
+        /// **出错在哪**那份清单（用户 2026-09-30 第 1 条）：按机器终态 / 错误分类分组，
+        /// 逐组点名具体包名；空字符串 = 这一批没有任何"没做成"的事。
+        ///
+        /// <para>它与 <see cref="Severity"/> 出自**同一次**调用
+        /// （<see cref="BatchSummaryDiagnosticsRules.Build"/>，见 <see cref="RunPipelineAsync"/> 里那一行）：
+        /// 严重度管颜色、诊断管文字，两者是同一份任务终态算出来的，⛔ 不是各算一遍。</para>
+        /// </summary>
+        public string Diagnostics { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 上面那份清单的**逐行**形态（组行 + 「下一步」那一行，不含标题）：日志一行一条写它。
+        ///
+        /// <para>与 <see cref="Diagnostics"/> 出自同一个 <see cref="BatchSummaryReport"/> ——
+        /// 框里摆的那份文字与日志里写的那几行逐字一致（用户 2026-09-30 第 1 条的排障前提）。</para>
+        /// </summary>
+        public IReadOnlyList<string> DiagnosticLines { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// 批末那个框的**正文** = 一行汇总 + （有问题时）诊断清单。
+        ///
+        /// <para>日志仍用 <see cref="Summary"/> 那一行（一条一行好搜）；摆给用户看的用这一份 ——
+        /// 他原话："你和我这总会仔细看日志，但是用户不会，他们只想看看错误出在哪里"。</para>
+        /// </summary>
+        public string DialogMessage => string.IsNullOrWhiteSpace(Diagnostics)
+            ? Summary
+            : Summary + Environment.NewLine + Environment.NewLine + Diagnostics;
     }
 
     /// <summary>
@@ -851,10 +879,27 @@ namespace ArchiveFixer.ViewModels
                      * ⚠ 2026-09-29 第 3 条：这个框按**机器终态**分三档配色（蓝 / 橙 / 红顶部色带，
                      * 正文白底黑字）。严重度由 <see cref="OneClickOutcome.Severity"/> 带过来 ——
                      * 窗口一个字都不判断（见 BatchSummarySeverityRules 的说明）。
+                     *
+                     * ⚠ 2026-09-30 第 1 条：正文不只是那一行数字了 —— 还要像编译器那样**点名说清错在哪**
+                     * （空间不足差多少 / 哪些包可能是密码不对 / 111.7z.001 缺哪几卷…）。
+                     * 那份清单与严重度出自同一次调用（见 RunPipelineAsync 里
+                     * <c>BatchSummaryDiagnosticsRules.Build</c> 那一行），这里只是把它摆出来。
                      */
-                    _dialogService.ShowBatchSummary(outcome.Summary, outcome.Severity);
+                    _dialogService.ShowBatchSummary(outcome.DialogMessage, outcome.Severity);
 
                     AppendLog("INFO", "一键处理汇总：" + outcome.Summary.Replace(Environment.NewLine, "；"));
+
+                    /*
+                     * 那份清单同时逐组写进日志：用户不看日志，但**我们**要靠它排障 ——
+                     * 而且真机反馈回来时，"框里写了什么"与"日志里写了什么"必须是同一份文字。
+                     * 有问题才写（全成功那一批一个字都不加），组数与行数由清单本身封顶。
+                     */
+                    foreach (string line in outcome.DiagnosticLines)
+                    {
+                        AppendLog(
+                            outcome.Severity == BatchSummarySeverity.Failed ? "WARN" : "INFO",
+                            StatusText.BatchDiagnosticsLogPrefix + line);
+                    }
                 }
                 finally
                 {
@@ -1174,6 +1219,17 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog("INFO", summary);
 
+            /*
+             * 批末的**一份**结论（用户 2026-09-30 第 3 条："严重度管颜色、诊断管文字，
+             * 两者都从同一份任务终态算出来，⛔ 不许各算一遍"）：
+             * 颜色（Severity）与"出错在哪"那份文字清单（Text）都从**这一个**对象里取 ——
+             * 下面给 OneClickOutcome 的两项就是它的两个字段，不存在第二份快照。
+             *
+             * 判据与排版全在 Models\BatchSummaryDiagnostics.cs（唯一出口），
+             * ⛔ 这里与窗口里都不判断"哪一组、算不算失败"。
+             */
+            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(processed);
+
             return new OneClickOutcome
             {
                 Rounds = round,
@@ -1182,13 +1238,15 @@ namespace ArchiveFixer.ViewModels
                 HitRoundLimit = hitRoundLimit,
                 PendingContinuationCount = pendingContinuation.Count,
                 Summary = summary,
+                Diagnostics = report.Text,
+                DiagnosticLines = report.Lines,
 
                 /*
                  * 严重度从**这一批真正处理过的全部任务**算（根任务 + 所有续解子任务，
                  * 就是上面那个 processed 清单）：判据是机器终态，⛔ 不比中文文案。
                  * 空批（processed 为空）会得到 Success —— "什么都没发生"用蓝色最诚实。
                  */
-                Severity = BatchSummarySeverityRules.FromTasks(processed)
+                Severity = report.Severity
             };
         }
 

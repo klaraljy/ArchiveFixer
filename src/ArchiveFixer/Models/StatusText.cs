@@ -237,6 +237,22 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string EncryptedHeaders = "文件名已加密";
 
+        /// <summary>
+        /// 识别阶段从**RAR 头结构**读出来的加密结论后缀（用户 2026-09-29 任务 A）：
+        /// 只有数据加密（WinRAR 的 <c>-p</c>），文件名与头仍然可见。
+        ///
+        /// <para>拼在识别消息后面（<c>识别为 RAR4 压缩包（文件数据已加密）</c>），
+        /// 让"这一包为什么被算进'需要密码'"在任务详情里看得见 —— 判据出处见
+        /// <c>Detection/RarEncryptionReader</c>。</para>
+        /// </summary>
+        public const string DetectRarDataEncryptedNote = "（文件数据已加密）";
+
+        /// <summary>
+        /// 识别阶段从 RAR 头结构读出来的加密结论后缀：**连文件名与头一起加密**（WinRAR 的 <c>-hp</c>）——
+        /// 这种包连条目名都列不出来，只有正确密码才有下一步。
+        /// </summary>
+        public const string DetectRarHeadersEncryptedNote = "（文件名与头已加密）";
+
         // 后缀状态
         public const string NotChecked = "未检测";
         public const string ExtensionNormal = "后缀正常";
@@ -1731,5 +1747,87 @@ namespace ArchiveFixer.Models
         /// <para>⛔ 这里不许再带"去哪儿改档位"那段说明 —— 那句话批首已经说过一遍了（第 44 条）。</para>
         /// </summary>
         public const string RestKeptCompactFormat = "{0}：其余物保留：{1}（{2} 项）";
+
+        // ================================================================
+        // 批末诊断清单（用户 2026-09-30 第 1 条：批末那个汇总框不能只给数字，要像编译器那样说清"错在哪"）
+        // ================================================================
+        //
+        // 他原话："我说的最后的汇总框，不单是要改颜色，而且你要特别说明哪里出错了，就像一般的编译器里面
+        // 最后会报出错在什么地方，比如空间不足、哪个压缩包密码不对、111.7z.001 的分卷找不到……
+        // 你和我这总会仔细看日志，但是用户不会，他们只想看看错误出在哪里。"
+        //
+        // 措辞口径：每一组 = 组名 + 个数 + **具体包名**（最多几个，其余写"还有 K 个"）；
+        // 组名能复用既有状态常量的就复用（磁盘空间不足 / 分卷缺失 / 文件损坏 / 权限不足 /
+        // 输出路径冲突 / 源文件已变化 / 部分完成 / 已跳过 / 已取消），只有"密码问题"与"其他失败"
+        // 这两个**分组**名是这里新写的。
+
+        /// <summary>诊断清单的标题行（这一批一条问题都没有时**一个字都不写**；⛔ 不许出现空标题）。</summary>
+        public const string BatchDiagnosticsTitle = "出错在哪（逐组点名）：";
+
+        /// <summary>密码类那一组的组名（密码错误 / 达到密码尝试上限 / 文件名已加密三种终态合并成一组）。</summary>
+        public const string BatchDiagnosticsPasswordTitle = "密码问题";
+
+        /// <summary>
+        /// 密码类那一组的注脚。⚠ 必须带"可能"（AGENTS.md §11）：引擎给的结论并不专一，
+        /// 同一个包也可能是缺卷 / 损坏，⛔ 不许写成"就是没有密码"。
+        /// </summary>
+        public const string BatchDiagnosticsPasswordNote = "可能是没有密码、或者密码不对";
+
+        /// <summary>落不到任何具体原因的那些失败（解压失败 / 未知错误 / 没有可用的解压引擎 …）。</summary>
+        public const string BatchDiagnosticsOtherTitle = "其他失败";
+
+        /// <summary>这一批根本没轮到它（没有终态）的那些。</summary>
+        public const string BatchDiagnosticsNotReachedTitle = "没轮到";
+
+        /// <summary>一行的形状：<c>{0}</c> = 组名（可能带注脚），<c>{1}</c> = 个数，<c>{2}</c> = 包名清单。</summary>
+        public const string BatchDiagnosticsLineFormat = "{0}：{1} 个 —— {2}";
+
+        /// <summary>每组最多列几个名字之后的那一句（<c>{0}</c> = 还有几个名字没列）。</summary>
+        public const string BatchDiagnosticsMoreFormat = "（还有 {0} 个）";
+
+        /// <summary>分卷缺失那一组的逐条说明：<c>{0}</c> = 缺的卷名（不变量 7 要求报"缺哪几个"）。</summary>
+        public const string BatchDiagnosticsMissingVolumesFormat = "缺 {0}";
+
+        /// <summary>空间不足那一组的逐条说明：<c>{0}</c> = 需要多少，<c>{1}</c> = 差多少。</summary>
+        public const string BatchDiagnosticsSpaceDetailFormat = "需要 {0}，差 {1}";
+
+        /// <summary>每一组前面那个小圆点（与①页日志的缩进风格区分开：这是给弹窗读的清单）。</summary>
+        public const string BatchDiagnosticsBullet = "· ";
+
+        /// <summary>「下一步」那一行的前缀。</summary>
+        public const string BatchDiagnosticsNextStepPrefix = "下一步：";
+
+        /// <summary>「下一步」里最多说几条动作；超出部分折成这一句（弹窗总长度必须能一眼看完）。</summary>
+        public const string BatchDiagnosticsNextStepRest = "其余看①页「错误信息」列或「导出失败清单」";
+
+        /// <summary>「下一步」：空间不足那一档（与空间门/中途提示给的三条出路同一口径）。</summary>
+        public const string BatchDiagnosticsActionDiskSpace = "清空间（清理「其余物」，或换一个空间更大的输出盘）";
+
+        /// <summary>「下一步」：密码类那一档。</summary>
+        public const string BatchDiagnosticsActionPassword = "补密码（到「密码」页一键导入后重跑这些包）";
+
+        /// <summary>「下一步」：分卷缺失那一档。</summary>
+        public const string BatchDiagnosticsActionMissingVolume = "补卷（把缺的那几卷放到与第一卷同一个目录里）";
+
+        /// <summary>「下一步」：文件损坏那一档。</summary>
+        public const string BatchDiagnosticsActionCorrupted = "损坏的只能重新下载";
+
+        /// <summary>「下一步」：权限不足那一档。</summary>
+        public const string BatchDiagnosticsActionAccessDenied = "权限（关掉占用文件的程序，或换一个能写的输出目录）";
+
+        /// <summary>「下一步」：输出路径冲突那一档。</summary>
+        public const string BatchDiagnosticsActionOutputConflict = "冲突（换一个输出目录，或先处理掉同名文件）";
+
+        /// <summary>「下一步」：源文件已变化那一档（不变量 11）。</summary>
+        public const string BatchDiagnosticsActionSourceChanged = "源文件变了（右键「重新扫描此文件」后再处理）";
+
+        /// <summary>「下一步」：其他失败（含校验没通过、改名/测试失败、没有可用引擎…）。</summary>
+        public const string BatchDiagnosticsActionOther = "其他（看①页「错误信息」列，或「导出失败清单」）";
+
+        /// <summary>「下一步」：取消 / 没轮到的那一档。</summary>
+        public const string BatchDiagnosticsActionNotFinished = "没跑完的那些（再点一次「一键处理」接着跑）";
+
+        /// <summary>日志里逐组那一行的前缀（弹窗里是「·」，日志里带个来源标记更好搜）。</summary>
+        public const string BatchDiagnosticsLogPrefix = "批末诊断：";
     }
 }
