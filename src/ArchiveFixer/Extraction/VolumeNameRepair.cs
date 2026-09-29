@@ -284,22 +284,21 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 「**名字完全靠不住**」那一档：内容认出这是 7z 的第一卷、同目录尺寸排出候选顺序、
-        /// 再用引擎**试开**验证顺序 —— 验证通过才给改名计划（用户 2026-09-28 三层方案的第 1 步）。
+        /// 「**名字完全靠不住**」那一档：内容能回答多少就按内容办 —— 判据与执行体都只有这一份计划
+        /// （用户 2026-09-28 三层方案的第 1 步 + 2026-09-29 的 RAR / ZIP 内容级卷号）。
         ///
-        /// <para><b>什么时候走这条</b>：<see cref="Plan"/> 按名字推不出标准名（用户现场的
-        /// <c>amb909.7.01</c> / <c>amb909.z.2</c> / <c>amb909..3</c>：卷号被改烂、后缀也不对）。
-        /// ⛔ 判据与执行体仍然只有一处 —— 这条算出来的计划照样交给 <see cref="TryApply"/> 去改，
-        /// 界面上（①页「修复分卷名并重试」）与管线里（<c>NormalizeDisguisedVolumeNames</c>）
-        /// 读的是**同一份**计划。</para>
+        /// <para><b>三种格式走三条</b>（按内容挑，⛔ 不按后缀）：</para>
+        /// <list type="number">
+        /// <item><description><b>7z</b>：内容里**没有卷号**（只有第一卷有魔数），所以只能
+        /// "同目录尺寸排候选顺序 + 硬链接试开验证"（<see cref="VolumeProbeVerifier"/>）。</description></item>
+        /// <item><description><b>RAR</b>：卷号**写在内容里**（RAR5 在主归档头、RAR3 在卷尾归档结尾块）→
+        /// 直接按卷号归组，不需要试开（<see cref="Detection.VolumeNumberFromContent"/>）。</description></item>
+        /// <item><description><b>跨盘 ZIP</b>：末片的 EOCD 里有盘号（= 总片数），非末片只有结尾的跨盘标记 →
+        /// 只有 2 片时能用消去法定序。</description></item>
+        /// </list>
         ///
-        /// <para><b>三道证据，缺一不可</b>：① 内容 = 7z 魔数（第一卷独有，推不出卷号是物理事实）；
-        /// ② 同目录尺寸规律（除最后一卷外等长，且候选 ≤ 第一卷）；
-        /// ③ 试开成功（<see cref="VolumeProbeVerifier"/>：硬链接成假设名让引擎真列一次）。
-        /// 任何一道不过 → <c>CanRepair = false</c> + 写明为什么，**一个字节都不动**。</para>
-        ///
-        /// <para>⛔ 只对 7z 开这一档：RAR / ZIP 的分卷**内容里有盘号**，该走内容级卷号识别，
-        /// 不该用"猜顺序"这种弱证据去改它们的名字。</para>
+        /// <para><b>改名永远先过三道</b>：整组卷号必须连成 1..N（内容自洽）、目标名没被占用（⛔ 绝不覆盖）、
+        /// 至少有一卷的名字真的要改。任何一道不过 → <c>CanRepair = false</c> + 写明为什么，**一个字节都不动**。</para>
         /// </summary>
         public static async Task<VolumeNameRepairPlan> PlanByContentAsync(
             string? currentPath,
@@ -316,18 +315,102 @@ namespace ArchiveFixer.Extraction
 
             string fileName = Path.GetFileName(path);
 
-            // 名字里已经有卷号 → 那是 Plan 的活，这里不抢（判据出口只有一个）。
-            if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != null)
+            /*
+             * 按**内容**分派，⛔ 不按后缀、也不按"开头那几个字节"：跨盘 zip 的末片是从数据中间切出来的，
+             * 开头根本没有本地文件头（7z 的 -v 切出来就是这样），只有 EOCD 说得清它是什么。
+             */
+            Detection.VolumeNumberReading self = Detection.VolumeNumberFromContent.Read(path);
+
+            switch (self.Format)
             {
-                return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+                case Detection.VolumeContentFormat.SevenZip:
+                    {
+                        // 名字里已经有卷号 → 那是 Plan 的活，这里不抢（判据出口只有一个）。
+                        if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != null)
+                        {
+                            return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+                        }
+
+                        return await PlanSevenZipByContentAsync(path, filesInDirectory, engine, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                case Detection.VolumeContentFormat.Rar:
+                    return PlanByNumberedContent(
+                        path, filesInDirectory, VolumeNamingFamily.RarPart, Detection.VolumeContentFormat.Rar);
+
+                case Detection.VolumeContentFormat.Zip:
+                    return PlanByNumberedContent(
+                        path, filesInDirectory, VolumeNamingFamily.ZipSpanned, Detection.VolumeContentFormat.Zip);
+
+                default:
+                    return Cannot(path, StatusText.VolumeRepairContentNotAVolumeMember);
+            }
+        }
+
+        /// <summary>
+        /// **内容里带卷号**那一档（RAR 与跨盘 ZIP，用户 2026-09-29 任务）。
+        ///
+        /// <para>与 7z 那条最大的不同：这里**不靠猜、不用试开** —— 卷号是内容自己说的，
+        /// 所以只要"整组连成 1..N"这一条自洽就够。认不出来（头截断 / CRC 对不上 / 绝对卷号连不成 1..N /
+        /// RAR3 的基数两种解释都成立 / 跨盘 zip 片数 ≥ 3）一律拒绝，原样不动。</para>
+        /// </summary>
+        private static VolumeNameRepairPlan PlanByNumberedContent(
+            string path,
+            IEnumerable<VolumeCandidate>? filesInDirectory,
+            VolumeNamingFamily family,
+            Detection.VolumeContentFormat format)
+        {
+            var readings = new List<Detection.VolumeNumberReading>();
+
+            foreach (VolumeCandidate candidate in filesInDirectory ?? Array.Empty<VolumeCandidate>())
+            {
+                if (candidate == null || string.IsNullOrWhiteSpace(candidate.Path))
+                {
+                    continue;
+                }
+
+                readings.Add(Detection.VolumeNumberFromContent.Read(candidate.Path));
             }
 
-            Detection.VolumeContentFormat format = Detection.VolumeContentInference.SniffFormat(path);
+            Detection.VolumeGroupOrder order = Detection.VolumeNumberFromContent.ResolveGroup(path, readings);
 
-            if (format != Detection.VolumeContentFormat.SevenZip)
+            if (!order.Confirmed || order.Count < 2)
             {
-                return Cannot(path, StatusText.VolumeRepairContentNotFirst7zVolume);
+                return Cannot(path, DescribeNumberedContentFail(order.Fail, order.Detail));
             }
+
+            /*
+             * 基名从"这一组里最像标准名的那一卷"推：跨盘 zip 取末片（它的标准名就是 `X.zip`），
+             * RAR 取第 1 卷（`X.part1.rar`）。⛔ 名字只影响"改完像不像人写的"，正确性由卷号与"绝不覆盖"钉着。
+             */
+            string stemSource = family == VolumeNamingFamily.ZipSpanned
+                ? order.Slots[^1].Path
+                : order.Slots[0].Path;
+
+            if (!Detection.VolumeNumberFromContent.TryDeriveStem(stemSource, format, out string stem))
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSuggestion);
+            }
+
+            IReadOnlyList<string> targetNames = Detection.VolumeNumberFromContent.BuildStandardNames(stem, family, order.Count);
+
+            if (targetNames.Count != order.Count)
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSuggestion);
+            }
+
+            return BuildPlanFromOrder(path, order, targetNames);
+        }
+
+        /// <summary>7z：内容认第一卷 + 同目录尺寸规律 + 硬链接试开验证（用户 2026-09-28 那一档，一字未改）。</summary>
+        private static async Task<VolumeNameRepairPlan> PlanSevenZipByContentAsync(
+            string path,
+            IEnumerable<VolumeCandidate>? filesInDirectory,
+            Engines.IArchiveEngine engine,
+            CancellationToken cancellationToken)
+        {
+            Detection.VolumeContentFormat format = Detection.VolumeContentFormat.SevenZip;
 
             IReadOnlyList<VolumeCandidate> candidates =
                 Detection.VolumeContentInference.BuildCandidates(path, filesInDirectory);
@@ -350,13 +433,13 @@ namespace ArchiveFixer.Extraction
                 return Cannot(path, string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason));
             }
 
-            if (!Detection.VolumeContentInference.TryDeriveBaseName(path, format, out string baseName))
+            if (!Detection.VolumeNumberFromContent.TryDeriveStem(path, format, out string stem))
             {
                 return Cannot(path, StatusText.VolumeRepairNoSuggestion);
             }
 
-            IReadOnlyList<string> targetNames =
-                Detection.VolumeContentInference.BuildStandardFileNames(baseName, probe.OrderedVolumes.Count);
+            IReadOnlyList<string> targetNames = Detection.VolumeNumberFromContent.BuildStandardNames(
+                stem, VolumeNamingFamily.SevenZipNumbered, probe.OrderedVolumes.Count);
 
             string directory = Path.GetDirectoryName(path) ?? string.Empty;
             var items = new List<VolumeRepairItem>();
@@ -399,6 +482,97 @@ namespace ArchiveFixer.Extraction
                 Items = items
             };
         }
+
+        /// <summary>
+        /// 由"内容定好序的整组"造计划：卷号升序、逐卷算目标名，⛔ 目标名被占 → 整组不改。
+        ///
+        /// <para>要改的第一卷（<c>CurrentPath</c>）优先取**调用方手上那一卷**（它在组里时），
+        /// 否则取第一个真要改名的 —— <see cref="TryApply"/> 拿这一卷当入口，指到一个"名字本来就对"的卷上
+        /// 会直接判"问题不在名字上"，整组就白算了。</para>
+        /// </summary>
+        private static VolumeNameRepairPlan BuildPlanFromOrder(
+            string path,
+            Detection.VolumeGroupOrder order,
+            IReadOnlyList<string> targetNames)
+        {
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            var items = new List<VolumeRepairItem>();
+            int primary = -1;
+
+            for (int i = 0; i < order.Count; i++)
+            {
+                string source = order.Slots[i].Path;
+                string target = Path.Combine(directory, targetNames[i]);
+
+                if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    // 这一卷的名字本来就是对的：留在组里（调用方要按它同步任务路径），但不改。
+                    items.Add(new VolumeRepairItem
+                    {
+                        CurrentPath = source,
+                        CurrentFileName = Path.GetFileName(source),
+                        SuggestedFileName = targetNames[i],
+                        TargetPath = target
+                    });
+
+                    continue;
+                }
+
+                if (File.Exists(target))
+                {
+                    return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, targetNames[i]));
+                }
+
+                items.Add(new VolumeRepairItem
+                {
+                    CurrentPath = source,
+                    CurrentFileName = Path.GetFileName(source),
+                    SuggestedFileName = targetNames[i],
+                    TargetPath = target
+                });
+
+                if (primary < 0 || string.Equals(source, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    primary = i;
+                }
+            }
+
+            if (primary < 0)
+            {
+                return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+            }
+
+            VolumeRepairItem self = items[primary];
+
+            return new VolumeNameRepairPlan
+            {
+                CanRepair = true,
+                CurrentPath = self.CurrentPath,
+                CurrentFileName = self.CurrentFileName,
+                SuggestedFileName = self.SuggestedFileName,
+                TargetPath = self.TargetPath,
+                Siblings = items.Select(i => i.CurrentFileName).ToList(),
+                Items = items
+            };
+        }
+
+        /// <summary>内容级认不出来时给用户的那句话（判据在 <see cref="Detection.VolumeNumberFromContent"/>，文案只有这一处）。</summary>
+        private static string DescribeNumberedContentFail(Detection.VolumeNumberFail fail, int detail) => fail switch
+        {
+            Detection.VolumeNumberFail.RarOldNumbering => StatusText.VolumeRepairContentRarOldNumbering,
+            Detection.VolumeNumberFail.RarFirstVolumeMismatch => StatusText.VolumeRepairContentRarFirstVolumeMismatch,
+            Detection.VolumeNumberFail.GroupBaseAmbiguous => StatusText.VolumeRepairContentRarBaseAmbiguous,
+            Detection.VolumeNumberFail.ZipSingleDisk => StatusText.VolumeRepairContentZipSingleDisk,
+            Detection.VolumeNumberFail.ZipTooManyDisks =>
+                string.Format(StatusText.VolumeRepairContentZipTooManyDisksFormat, detail),
+            Detection.VolumeNumberFail.ZipPartsMissing =>
+                string.Format(StatusText.VolumeRepairContentZipPartsMissingFormat, detail),
+            Detection.VolumeNumberFail.CurrentNotFirstVolume => StatusText.VolumeRepairNotFirstVolume,
+            Detection.VolumeNumberFail.CurrentNotInGroup => StatusText.VolumeRepairContentCurrentNotInGroup,
+            Detection.VolumeNumberFail.GroupIncomplete or Detection.VolumeNumberFail.GroupNotContiguous =>
+                string.Format(StatusText.VolumeRepairContentGroupNotContiguousFormat, detail),
+            _ => StatusText.VolumeRepairContentNotAVolumeMember
+        };
 
         /// <summary>
         /// 「整组名字的卷号后面都粘着垃圾」这一档的计划：<c>giu910.7z.001删除</c> →

@@ -1537,9 +1537,46 @@ namespace ArchiveFixer.Models
 
         // ── 「名字完全靠不住 → 靠内容 + 尺寸 + 试开」这一档（用户 2026-09-28 三层方案） ──
 
-        /// <summary>内容不是 7z 的第一卷（不含魔数）→ 不敢按内容推。</summary>
-        public const string VolumeRepairContentNotFirst7zVolume =
-            "它的开头不是 7z 的第一卷（分卷的第一卷才有 7z 魔数），程序不在内容上猜";
+        // ── 「内容里有卷号」这一档（用户 2026-09-29：RAR / ZIP 的分卷号写在内容里） ──
+
+        /// <summary>内容既不是 RAR 分卷也不是跨盘 zip 的片（7z 那条路另说）。</summary>
+        public const string VolumeRepairContentNotAVolumeMember =
+            "它的内容没说自己是分卷组的一员（不是 RAR 分卷、也不是跨盘 zip 的片），程序不在内容上猜";
+
+        /// <summary>RAR3 的老式编号族（第一卷 .rar、之后 .r00/.r01……）：本程序只认 partN.rar 一族。</summary>
+        public const string VolumeRepairContentRarOldNumbering =
+            "这是 RAR3 的老式编号分卷（第一卷 .rar、之后 .r00/.r01……）：程序只认 partN.rar 这一种拼法，" +
+            "换成别的拼法可能整组解不开，所以一个字节都不动";
+
+        /// <summary>RAR3 主头的「这一卷是第 1 卷」标记与推出来的卷号对不上。</summary>
+        public const string VolumeRepairContentRarFirstVolumeMismatch =
+            "RAR3 头里标着「这一卷是第 1 卷」的那一卷，与按卷号排出来的第 1 卷不是同一卷 —— " +
+            "很可能真正的第 1 卷不在这个目录里，那就不能改（把第 2 卷改名叫第 1 卷只会更糟）";
+
+        /// <summary>RAR3 卷号的基数（0 起还是 1 起）两种解释都成立 / 都不成立。</summary>
+        public const string VolumeRepairContentRarBaseAmbiguous =
+            "RAR3 的卷号字段没写基数是 0 起还是 1 起，而这一组两种解释都说得通 —— 程序不猜";
+
+        /// <summary>整组卷号连不成 1..N。<c>{0}</c> = 同目录里认出几卷。</summary>
+        public const string VolumeRepairContentGroupNotContiguousFormat =
+            "同目录里认出 {0} 卷，但它们的卷号连不成 1、2、3……（缺卷，或者被改坏的那一卷已经认不出来了），整组都不动";
+
+        /// <summary>手上的这一片不在这一组里。</summary>
+        public const string VolumeRepairContentCurrentNotInGroup =
+            "你手上这一片不在同目录里那一组跨盘 zip 里（目录里还有别的组），程序不替它猜位置";
+
+        /// <summary>EOCD 说这是单盘 zip。</summary>
+        public const string VolumeRepairContentZipSingleDisk =
+            "它的中央目录说这是单盘 zip（盘号 0），不是跨盘组 —— 问题不在盘号上";
+
+        /// <summary>跨盘 zip 片数 ≥ 3。<c>{0}</c> = 末片说的总片数。</summary>
+        public const string VolumeRepairContentZipTooManyDisksFormat =
+            "末片说这一组有 {0} 片：除末片外，片的内容里没有盘号（只有结尾的跨盘标记），" +
+            "中间那几片的先后无从判断 —— 只有 2 片时才能用消去法定序，所以不动";
+
+        /// <summary>跨盘 zip 少了片。<c>{0}</c> = 同目录里认出的片数。</summary>
+        public const string VolumeRepairContentZipPartsMissingFormat =
+            "末片说这一组是跨盘的，但同目录里只认出 {0} 片能接上它 —— 凑不齐整组，一个字节都不动";
 
         /// <summary>同目录尺寸看不出分卷规律（除最后一卷外应当等长）。</summary>
         public const string VolumeRepairContentNoSizePattern =

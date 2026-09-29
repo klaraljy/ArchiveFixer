@@ -147,19 +147,19 @@ namespace ArchiveFixer.Tests
 
         [Theory]
         // 用户 2026-09-28 现场：后缀被吃掉一个字符、卷号被改烂 → 末段"差一个字符"补回来
-        [InlineData("amb909.7.01", VolumeContentFormat.SevenZip, "amb909.7z")]
-        // 认不出来的末段：把后缀接在后面，绝不硬猜
-        [InlineData("mystery.bin", VolumeContentFormat.SevenZip, "mystery.bin.7z")]
-        [InlineData("pack", VolumeContentFormat.SevenZip, "pack.7z")]
+        [InlineData("amb909.7.01", VolumeContentFormat.SevenZip, "amb909")]
+        // 认不出来的末段：原样留着，绝不硬剪
+        [InlineData("mystery.bin", VolumeContentFormat.SevenZip, "mystery.bin")]
+        [InlineData("pack", VolumeContentFormat.SevenZip, "pack")]
         // 已经对了就别乱动
-        [InlineData("good.7z.001", VolumeContentFormat.SevenZip, "good.7z")]
-        [InlineData("movie.rar.001", VolumeContentFormat.Rar, "movie.rar")]
-        public void 基名_保守地往内容后缀上靠(string fileName, VolumeContentFormat format, string expected)
+        [InlineData("good.7z.001", VolumeContentFormat.SevenZip, "good")]
+        [InlineData("movie.rar.001", VolumeContentFormat.Rar, "movie")]
+        public void 基名_保守地去掉卷号段与后缀段(string fileName, VolumeContentFormat format, string expected)
         {
-            Assert.True(VolumeContentInference.TryDeriveBaseName(
-                Path.Combine(_root, fileName), format, out string baseName));
+            Assert.True(VolumeNumberFromContent.TryDeriveStem(
+                Path.Combine(_root, fileName), format, out string stem));
 
-            Assert.Equal(expected, baseName);
+            Assert.Equal(expected, stem);
         }
 
         [Fact]
@@ -167,7 +167,7 @@ namespace ArchiveFixer.Tests
         {
             Assert.Equal(
                 new[] { "amb909.7z.001", "amb909.7z.002", "amb909.7z.003" },
-                VolumeContentInference.BuildStandardFileNames("amb909.7z", 3));
+                VolumeNumberFromContent.BuildStandardNames("amb909", VolumeNamingFamily.SevenZipNumbered, 3));
 
             // 与 VolumeGroupDetector 认的"数字族"对得上：改完名字必须能被它认成分卷
             Assert.Equal(1, VolumeGroupDetector.TryGetVolumeIndex("amb909.7z.001"));
