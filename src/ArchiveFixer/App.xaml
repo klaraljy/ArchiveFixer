@@ -64,6 +64,17 @@
         <SolidColorBrush x:Key="InfoBorderBrush" Color="#BBD3F8" />
         <SolidColorBrush x:Key="InfoTextBrush" Color="#1D4ED8" />
 
+        <!--
+            批末汇总框的三档配色（用户 2026-09-29："最后的总结也要分颜色，一般情况下是蓝白字黑，
+            加上两种就是橙白字黑和红白字黑"）= 底色三档 + 白字 + 黑框。
+            ⛔ 这三条画刷只由 BatchSummarySeverity 选中（Views\AppDialogWindow.ApplySummarySeverity），
+            别处不许按"这批像不像成功"自己挑颜色。
+        -->
+        <SolidColorBrush x:Key="SummarySuccessBrush" Color="#1D4ED8" />
+        <SolidColorBrush x:Key="SummaryPartialBrush" Color="#EA580C" />
+        <SolidColorBrush x:Key="SummaryFailedBrush" Color="#DC2626" />
+        <SolidColorBrush x:Key="SummaryBorderBrush" Color="#111827" />
+
         <!-- 行状态（DataGrid 悬停 / 选中 / 禁用） -->
         <SolidColorBrush x:Key="RowHoverBrush" Color="#F1F5FD" />
         <SolidColorBrush x:Key="RowSelectedBrush" Color="#DCE9FB" />

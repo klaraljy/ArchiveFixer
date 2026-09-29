@@ -329,13 +329,14 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   素材站点名**一律换占位符 —— `<盘符>:\<下载目录>\…` → `<测试目录>\…`、样本包名 → `<样本包>`、
   真实站点 → `example.com`、`密码本2` → `密码本示例`、仓库外的分析与临时目录 → `<仓库外>\` / `<临时目录>\`。
   ⛔ 这是 §8 隐私红线压过 §9.4"历史记录里的旧路径按原样留着"的一次**有意例外**（`旧AGENTS.md` 与历史日志一并改了）。
-- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1999 条**（通过 **1998** / 失败 0 / 跳过 1；
-  2026-09-29 深夜"源包不许算两遍"那一轮跑的全量，2 分 22 秒。⚠ 跳过的那 1 条是"真机副本 + 有密码时解出内容" ——
-  这一组是 `-mhe`（文件名也加密）的包，密码由用户放进环境变量 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD` 才会跑，
-  没拿到就**如实跳过、不伪装成验过**。⚠ 另有一条真机只读用例（`SpaceDemandAccountingTests` 的真样本那条）
-  只在设了 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR` 时才跑 —— 上面这个 1998 是**设了的**那一轮，
-  没设时它照样**跳过并说明**（那时是 1997 通过 / 2 跳过，不是失败）；
-  `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
+- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**2022 条**（通过 **2020** / 失败 0 / 跳过 2；
+  2026-09-29 "空间回收四条口径"那一轮跑的全量，2 分 21 秒。⚠ 两条跳过都**如实跳过、不伪装成验过**：
+  ① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` —— 那一组是 `-mhe`（文件名也加密）的包，
+  密码由用户放进环境变量 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD` 才会跑；
+  ② `SpaceDemandAccountingTests` 的真样本那条 —— 只在设了 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`
+  （或仓库同级 `_tmp\ArchiveFixer\space-real` 里真有那一组）时才跑，本机那份只读副本已不在，
+  所以这一轮是 **2020 通过 / 2 跳过**（上一轮设了那个变量时是 1998 通过 / 1 跳过，**不是失败**）；
+  `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**（改完先跑 `dotnet format whitespace` 修过一次缩进）。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
 - **「不删原包」安全档 + 空间侦察**（2026-09-27 晚，用户追加）：
   - ⚠ **「不删原包」是"测试期专用"的**（用户 2026-09-27 原话："这个我想好像在测试完成之后就不用留着，
@@ -382,6 +383,29 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   动手前必须看得见：确认框红字 `StatusText.SpaceTightConfirmText`（正文两行同时换成覆盖后的值）+
   ②③页橙色提示 `StatusText.SpaceTightOverrideNotice`。
   契约在 `docs/输出与整理模型.md` §3.4.2，用例在 `SpaceTightModeTests` / `SpaceModeTests`。
+- **空间回收的四条口径**（2026-09-29 用户四条反馈，一次落地；下面这些是**现状**，别再按旧口径改回去）：
+  1. **多层链是"每一层各删各的"**：`PostProcessSuccessAsync` 里那一支（判据
+     `_spaceTightThisBatch && !_spaceTightKeepSourceThisBatch`）刻意排在 `task.IsContinuationTask`
+     **之前**，所以续解层也收自己那一层的源包（= 上一层交出来的内层包）。四层链的峰值因此是
+     "当前层 + 下一层"（≈ 两倍单层），不是"四倍单层" —— 攒到链尾一起删正是用户第 1 条否掉的东西。
+     用例 `ChainSpaceReclaimTests`（真 7z 四层链 + 链上注入记账式删源执行体 + 每 10 ms 采样峰值）。
+  2. **某一层失败只影响那一层**：失败层的源包留着，**已经收走的更外层不回滚**（用户明确接受：
+     "原包是已经没有了但是留下的不会破"）。这句话在 `PurgeSourcePackageForSpaceTight` 与
+     `ChainSpaceReclaimTests` 的类注释里都写着 —— ⛔ 以后别把它当成 bug 去"修"。
+  3. **动手前就说"多层可能中途空间不足"**：判据唯一出口 `Storage/MultiLayerSpaceRiskRules`，
+     文案唯一来源 `StatusText.MultiLayerSpaceRiskFormat`（批首 WARN + 一键确认框的 `NoticeEcho` 同一句话）。
+     口径只用现成判据数（`Σ 任务 FreeSpaceDemandBytes` vs `plan.AvailableBytes`），
+     ⛔ **不拿 `PeakBytes` 比可用空间**（源包算两遍，2026-09-29 真机事故）。它只是提醒，不拦任何任务。
+  4. **中途撞上空间不足 ⇒ 一键档弹一次纯提示**：`DialogService.ShowSpaceBlockedNotice`
+     → 非模态 `Show()`（**不阻塞后续任务**，一键档批中间零弹窗红线不许破）、一个按钮、
+     同一批一次（`_spaceBlockedNoticeShown`，批首清零；后面的同类只写日志，批末逐条点名）；
+     ⛔ **手动档照旧只写日志**（`MarkSpaceBlockedCore` → `NotifySpaceBlockedOnce` 里按 `_oneClickThisBatch` 分档）。
+  5. **批末汇总框三档配色**：判据唯一出口 `Models/BatchSummarySeverity.cs` 的
+     `BatchSummarySeverityRules`（只读 `TaskOutcome` / 校验枚举，⛔ 不比中文），
+     顶部色带蓝（全成功）/ 橙（有部分完成、跳过、取消、没轮到）/ 红（有失败），下面**白底黑字**；
+     窗口侧只做"哪一档长什么样"（`AppDialogWindow.ResolveSummaryBannerBrushKey` + `AppDialogWindow.xaml`
+     的 `SummaryBanner`），⛔ 不许在 XAML 里再判断一次。边界：**只有"跳过"算橙**、空批算蓝。
+     用例 `SpaceRiskAndSummaryTests`（判据 + 配色键 + 真跑一次一键处理看接线）。
 - **「进度 / 部分完成」两处显示口径**（2026-09-27 真机反馈改的）：
   - **成功的任务显示「解压成功 100%」**：判据是**机器终态**（`Outcome == Succeeded` → 一律补 100），
     ⛔ 不读那个瞬时百分比（引擎最后一帧常常只到 99，而且有的收尾分支会 `ClearProgress()` 清成 -1）；
@@ -425,7 +449,9 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 - **一键处理期间零弹窗，唯一例外是批末汇总**（用户 2026-09-27 两次拍板："以后不要出现弹窗" →
   "最终汇总框可以留、其他都删"）：`ExtractionCoordinator.SuppressDecisionPromptsForOneClickRun()` 一处收口
   （冲突询问复用既有的 `_conflictPromptUnavailable`），多分支 / 缺卷补救各自读 `oneClickRun`；
-  批**跑完之后**那一个 `ShowInfo(outcome.Summary)` 保留（那时不会卡住任何任务），日志那一行照旧写。
+  批**跑完之后**那一个 `ShowBatchSummary(outcome.Summary, outcome.Severity)` 保留（那时不会卡住任何任务；
+  2026-09-29 起它带**汇总严重度**，窗口按它放蓝 / 橙 / 红顶部色带，见上面"空间回收的四条口径"第 5 条），
+  日志那一行照旧写。
   ⛔ 以后**不许**在一键档的**批中间**新增任何"要用户点一下"的框 —— 需要决策就按保守档办 + 写日志。
 - **递归多层的结果校验**：展开 > 1 层时**不拿第 0 层清单当预期**（`PostProcessSuccessAsync` 的
   `recursion` 参数），只做非空 / 落点 / 预算三道 —— 否则必然误报「解压失败」（真机 13 个包全中过）。

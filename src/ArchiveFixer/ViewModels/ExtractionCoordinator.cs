@@ -442,6 +442,24 @@ namespace ArchiveFixer.ViewModels
         private readonly List<(string Name, long RequiredBytes, long AvailableBytes, long ShortfallBytes)> _spaceBlockedTasks = new();
 
         /// <summary>
+        /// 本批是不是**一键处理**（批首钉一次；<c>oneClickRun</c> 只在批首那个参数里，
+        /// 而"中途撞上空间不足该不该弹提示"这件事发生在很深的地方，需要它当判据）。
+        ///
+        /// <para>为什么需要：一键档的批中间是**零弹窗**红线，而那条"空间不足"的纯提示恰恰是
+        /// 唯一被允许的例外之一（纯提示 / 一个按钮 / 非模态 / 同一批一次）——
+        /// 手动档保持原样（只写日志），所以要能把两档分开。</para>
+        /// </summary>
+        private bool _oneClickThisBatch;
+
+        /// <summary>
+        /// 本批那条"中途空间不足"的纯提示**弹过没有**（用户 2026-09-29 第 2 条：
+        /// "同一批只弹一次（合并计数）"）。
+        ///
+        /// <para>后面的同类情况只写日志 —— 一批几十个包时逐个弹等于把批卡死在他面前。</para>
+        /// </summary>
+        private bool _spaceBlockedNoticeShown;
+
+        /// <summary>
         /// 本批生效的「删除操作」档（<see cref="RestHandlingModes"/>；批首定一次）。
         ///
         /// <para>⚠ 批首定一次而不是每任务现读设置：同一批里不许"前半段按一个档、后半段按另一个"
@@ -1471,11 +1489,50 @@ namespace ArchiveFixer.ViewModels
              * 只对**最外层源包**做：续解出来的内层包，它的"源文件"是我们自己产出的过程物
              * （现在就在 <c>其余物</c> 里），既不是用户给的包，也不该被搬走/删掉 ——
              * 用户按下"解压后删除源包"时想删的是他拖进来的那个包，不是其余物里的过程物。
+             *
+             * ⚠ **唯一的例外是「空间不足」模式**（用户 2026-09-29 第 1 条第 4 条，见下面第一支）：
+             * 那个模式的全部意义就是"边解边回收"，所以它**每一层**都要收自己那一层的源包 ——
+             * 最外层收用户给的包，续解层收**上一层交给它的那个内层包**。不这样做的话，
+             * 四层嵌套链的峰值会是"四倍单层"（每层的内层包都攒到链尾才清），
+             * 而那个模式的初心恰恰是"峰值 ≈ 当前层 + 下一层"。
              */
             SourcePackageMoveResult? sourceMove = null;
             string? sourceMoveFailure = null;
 
-            if (task.IsContinuationTask)
+            if (_spaceTightThisBatch && !_spaceTightKeepSourceThisBatch)
+            {
+                /*
+                /*
+                 * 「空间不足」模式（用户 2026-09-27 拍板 + 2026-09-29 第 1/4 条收紧）：
+                 * **每一层跑完就删它自己那一层的源包**，不等整条续解链跑完。
+                 *
+                 * 这一支刻意排在 `IsContinuationTask` 之前（那是原来最先判的一条）：
+                 * 续解任务的"源文件"是上一层交出来的内层包 —— 对用户来说它是过程物，
+                 * 但对**这一层**来说它就是"解出这一层内容所消耗掉的那份源"，用完了就该当场还回去。
+                 * 语义与手动档"解压成功就直接删除解压包"完全一样（用户 2026-09-29 第 4 条：
+                 * "可以将用户选择空间不足的情况直接按照之前手动挡操作的来看"）——
+                 * 只是由模式**强制开启**，不再依赖③页那两档的组合；
+                 * 差别只有一处，而且是刻意的：**当场原地删，不先搬进其余物** ——
+                 * 其余物在同一块盘上，搬过去是同盘移动、一个字节都不会回到可用空间里，
+                 * 那就等于这个模式什么都没省（见 PurgeSourcePackageForSpaceTight 的说明）。
+                 *
+                 * ⛔ 红线一个字没松：这一支只在"校验通过 + 定稿成功 + 未取消"之后才走得到
+                 * （上面的 commit / verification 关卡与 `:1459` 的令牌检查），
+                 * 而且 `PurgeSourcePackageForSpaceTight` 自己还会再查一遍 commit 与 verification。
+                 * 失败 / 部分完成 / 取消 ⇒ 这一层与它下面所有层的源包一个字节都不动。
+                 *
+                 * 门槛**不比搬运那一档少**（`SourceCleanupService` 里那几条一条都不放松）：
+                 * 定稿成功（commit）+ 输出校验通过（verification）+ 未取消（调用方刚查过令牌）
+                 * + 清单只来自任务自身 + 不扫目录 / 不递归 / 不删目录。
+                 *
+                 * ⚠ 一处刻意的差别（要如实知道）：**第一层只出过程物**时（典型：挖出内层包、
+                 * 内容物由续解产出），搬运那一档会"留到链尾补搬"，而这里**当场就删** ——
+                 * 用户要的就是最快回收。安全性来自同一个事实：这一刻内层包已经完整落在其余物里，
+                 * 续解从头到尾都不需要再碰源包（它已经一个字节都用不上了）。
+                 */
+                sourceMoveFailure = PurgeSourcePackageForSpaceTight(task, verification, commit, logEntries);
+            }
+            else if (task.IsContinuationTask)
             {
                 if (sourceHandling != SourceHandlingMode.KeepInPlace)
                 {
@@ -1492,31 +1549,12 @@ namespace ArchiveFixer.ViewModels
                  * 为什么要单独有这一支而不是"什么都不写"：写出来才能让下一个人一眼看到
                  * "这里刻意不动源包"，而不是以为漏了一个分支。
                  * 并发、排序、其余物（过程物）删除三件事与默认档完全一致。
+                 *
+                 * ⚠ 2026-09-29 第 1/4 条之后，这一支排在上面那支后面：**只有"不删原包"才什么都不做**。
+                 * 默认档（会删的那一档）已经被上面的第一支接走了 —— 它连内层包一起收，
+                 * 两个分支合起来才是"删的那一档"，所以这里不再重复判一次 `_spaceTightThisBatch`。
                  */
                 logEntries.Add(("INFO", $"{task.FileName}：不删原包 —— 源包一个字节都不动（空间不足的安全档）。"));
-            }
-            else if (_spaceTightThisBatch)
-            {
-                /*
-                 * 「空间不足」模式：**当场删源包**（用户 2026-09-27 拍板："源包在那一层定稿 + 校验通过后
-                 * 立即删除，最快回收空间"）。
-                 *
-                 * 为什么不走「搬进其余物」那一条：其余物就在成品目录里（同一块盘），
-                 * 搬过去是**同盘移动**，一个字节都不会回到可用空间里 —— 那就等于这个模式什么都没省。
-                 * 所以这一档的语义是"定稿 + 校验通过即永久删除源包"，删完账本当场刷新，
-                 * 后面的包才有空间跑（这正是这个模式存在的全部理由）。
-                 *
-                 * 门槛**不比搬运那一档少**（`SourceCleanupService` 里那五条一个都不放松）：
-                 * 定稿成功（commit）+ 输出校验通过（verification）+ 未取消（调用方刚查过令牌）
-                 * + 清单只来自任务自身 + 不扫目录 / 不递归 / 不删目录。
-                 * 一键处理里**内层包**在上一分支就被排除了（它的"源文件"是我们自己产出的过程物）。
-                 *
-                 * ⚠ 一处刻意的差别（要如实知道）：**第一层只出过程物**时（典型：挖出内层包、
-                 * 内容物由续解产出），搬运那一档会"留到链尾补搬"，而这里**当场就删** ——
-                 * 用户要的就是最快回收。安全性来自同一个事实：这一刻内层包已经完整落在其余物里，
-                 * 续解从头到尾都不需要再碰源包（它已经一个字节都用不上了）。
-                 */
-                sourceMoveFailure = PurgeSourcePackageForSpaceTight(task, verification, commit, logEntries);
             }
             else if (sourceHandling == SourceHandlingMode.MoveToRest)
             {
@@ -1650,12 +1688,26 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 「空间不足」模式的**唯一回收动作**：这一轮定稿 + 校验通过之后，立刻永久删除本任务的整组源包。
+        /// 「空间不足」模式的**唯一回收动作**：**每一层**定稿 + 校验通过之后，立刻永久删除
+        /// **这一层自己**那一组源包（最外层 = 用户给的包；续解层 = 上一层交出来的内层包）。
         ///
         /// <para><b>为什么必须在"这一刻"删</b>：这个模式能成立的前提是"盘上的字节真的变少了"。
         /// 其余物式的搬运是同盘移动（净占用不变），链尾统一处理又要等到整条续解链跑完 ——
         /// 而链没跑完时后面的包已经因为空间不足被拦下了。所以这里选**最快回收**的那一刻：
-        /// 内容物已定稿（<paramref name="verification"/> 通过）就删。</para>
+        /// 这一层的内容物已定稿（<paramref name="verification"/> 通过）就删。</para>
+        ///
+        /// <para><b>为什么"每一层"是这条模式的初心</b>（用户 2026-09-29 第 1 条）：四层嵌套链下，
+        /// 只有最外层当场回收、内层包却攒到链尾的话，峰值是"四倍单层"；每层各收各的，
+        /// 峰值才是"当前层 + 下一层"（≈ 两倍单层）—— 与用户原话"每一层就删一遍，这样也还行，
+        /// 只不过是两倍的情况"完全一致。</para>
+        ///
+        /// <para><b>与手动档"解压成功就直接删除解压包"的关系</b>（用户 2026-09-29 第 4 条）：
+        /// 语义**完全一样**（成功 + 校验通过 + 未取消 ⇒ 这一层的源包消失），
+        /// 只是由模式**强制开启**，不再依赖③页「源包操作 + 删除操作」那两档的组合。
+        /// 执行体也仍然是项目里唯一那个"删任务自己的源包"的执行体（<see cref="SourceCleanupService"/>）——
+        /// ⛔ 没有第三套删除逻辑。与手动档唯一的差别是**原地删、不先搬进其余物**：
+        /// 其余物就在同一块盘上，搬过去是同盘移动、一个字节都不会回到可用空间里，
+        /// 那就等于这个模式什么都没省（这一条从 2026-09-27 起就是这么定的，不改）。</para>
         ///
         /// <para><b>门槛比搬运那一档只多不少</b>（判据全在 <see cref="SourceCleanupService"/> 里，这里只喂事实）：</para>
         /// <list type="number">
@@ -1669,7 +1721,9 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>删成功（或本来就没什么可删的）之后把 <see cref="ArchiveTask.SourcePackageMove"/> 落成
         /// <see cref="SourcePackageMoveState.Done"/>：链尾那次"补搬"因此会跳过它 ——
-        /// ⛔ 同一个源包绝不允许既被删又被搬（那会凭空报一堆"源包不存在"的假失败）。</para>
+        /// ⛔ 同一个源包绝不允许既被删又被搬（那会凭空报一堆"源包不存在"的假失败）。
+        /// 对续解层的内层包来说，这一步同时让链尾的 `CollectChainInnerPackagesIntoRestAsync`
+        /// 按"文件不在了"跳过它（那条路本来就只搬**还在盘上**的）。</para>
         /// </summary>
         /// <returns>失败时返回一句"内容物已好、源包没删掉"的说明（调用方据此标「部分完成」）；正常返回 null。</returns>
         private string? PurgeSourcePackageForSpaceTight(
@@ -1683,24 +1737,31 @@ namespace ArchiveFixer.ViewModels
                 return null;
             }
 
+            /*
+             * 日志措辞按"这一层的源包是什么"分开说：最外层是用户拖进来的那个包，
+             * 续解层是上一层解出来的内层包（对用户来说是过程物，但对这一层就是它的源）。
+             * 一句"源包"盖两种东西，真机上就会有人问"其余物里的内层包怎么也叫源包"。
+             */
+            string subject = task.IsContinuationTask ? "内层包（这一层的源）" : "源包";
+
             if (commit == null || !commit.Attempted || commit.FailedCount > 0)
             {
                 // 定稿没发生 / 有搬运失败 → 与搬运那一档同一条红线：源包一个字节都不动。
-                logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，源包留在原地（空间不足模式也不删）。"));
+                logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，{subject}留在原地（空间不足模式也不删）。"));
                 return null;
             }
 
             if (verification == null || !verification.Verified)
             {
                 // 校验没过就没有"这一层已经定稿"这回事 —— 源包一律不动（与 D-11 同一条红线）。
-                logEntries.Add(("WARN", $"{task.FileName}：输出校验未通过，源包留在原地（空间不足模式也不删）。"));
+                logEntries.Add(("WARN", $"{task.FileName}：输出校验未通过，{subject}留在原地（空间不足模式也不删）。"));
                 return null;
             }
 
             if (task.SourcePackageMove == SourcePackageMoveState.Done)
             {
                 // 幂等：已经处理过了（删过 / 搬过），绝不第二次。
-                logEntries.Add(("INFO", $"{task.FileName}：源包已经处理过（删过或搬过），不再动第二次。"));
+                logEntries.Add(("INFO", $"{task.FileName}：{subject}已经处理过（删过或搬过），不再动第二次。"));
                 return null;
             }
 
@@ -1713,7 +1774,7 @@ namespace ArchiveFixer.ViewModels
             if (cleanup.DeletedFiles.Count == 0 && cleanup.FailedFiles.Count == 0)
             {
                 // 没有可删的路径（分卷清单不完整）→ 如实说，不假装删过了。
-                logEntries.Add(("WARN", $"{task.FileName}：空间不足模式要删源包，但任务的源包清单是空的 —— {cleanup.Message}"));
+                logEntries.Add(("WARN", $"{task.FileName}：空间不足模式要删{subject}，但任务的源包清单是空的 —— {cleanup.Message}"));
                 return null;
             }
 
@@ -1721,17 +1782,17 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "ERROR",
-                    $"{task.FileName}：空间不足模式删除源包有 {cleanup.FailedFiles.Count} 个失败"
-                    + $"（{string.Join("、", cleanup.FailedFiles.Take(3).Select(path => Path.GetFileName(path)))}）—— 源包仍在原处。"));
+                    $"{task.FileName}：空间不足模式删除{subject}有 {cleanup.FailedFiles.Count} 个失败"
+                    + $"（{string.Join("、", cleanup.FailedFiles.Take(3).Select(path => Path.GetFileName(path)))}）—— {subject}仍在原处。"));
 
-                return "空间不足模式：内容物已好，但源包没能全部删除（" + cleanup.Message + "）；源包仍在原处，内容物不受影响";
+                return $"空间不足模式：内容物已好，但{subject}没能全部删除（" + cleanup.Message + $"）；{subject}仍在原处，内容物不受影响";
             }
 
             task.SourcePackageMove = SourcePackageMoveState.Done;
 
             logEntries.Add((
                 "INFO",
-                $"{task.FileName}：空间不足模式 —— 定稿 + 校验通过，已立刻永久删除源包 "
+                $"{task.FileName}：空间不足模式 —— 定稿 + 校验通过，已立刻永久删除{subject} "
                 + $"{cleanup.DeletedFiles.Count} 个，收回 {WorkspaceCleanupService.FormatSize(cleanup.FreedBytes)}"
                 + "（不进回收站、不可恢复；这份空间马上给后面的包用）。"));
 
@@ -5697,6 +5758,20 @@ namespace ArchiveFixer.ViewModels
                 restHandling = RestHandlingModes.Delete;
             }
 
+            /*
+             * 「多层 + 空间小 ⇒ 中途才报空间不足」这句话必须在**动手之前**就看得见
+             * （用户 2026-09-29 第 2 条："开工前就要看得见……在批首的日志与确认框里写明"）。
+             *
+             * 判据与批首那条 WARN **是同一处**（EvaluateMultiLayerSpaceRisk），空间口径也是同一个
+             * BuildSpaceAdvice（导入体检用的就是它）—— ⛔ 这里绝不另算一套。
+             * 花的是 stat 文件 + 探一次盘，几十到几百个包也只是毫秒级，所以放后台线程跑。
+             */
+            MultiLayerSpaceRisk spaceRisk = await Task.Run(
+                () => EvaluateMultiLayerSpaceRisk(BuildSpaceAdvice(targets)),
+                cancellationToken).ConfigureAwait(false);
+
+            string spaceRiskEcho = spaceRisk.Applies ? DescribeMultiLayerSpaceRisk(spaceRisk) : string.Empty;
+
             return new OneClickConfirmFacts
             {
                 DestinationEcho = destination,
@@ -5723,25 +5798,33 @@ namespace ArchiveFixer.ViewModels
                 SpecialExtractionEcho = specialExtraction.IsActive
                     ? StatusText.SpecialExtractionConfirmLabel + specialExtraction.RuleNames
                     : string.Empty,
-                NoticeEcho = BuildConfirmNotice(reminders)
+                NoticeEcho = BuildConfirmNotice(reminders, spaceRiskEcho)
             };
         }
 
         /// <summary>
-        /// 确认框里那段"要说一声"的提醒（无用物 / 没有可用密码）。
+        /// 确认框里那段"要说一声"的提醒（无用物 / 没有可用密码 / 多层可能中途空间不足）。
         ///
         /// <para>措辞与判定都沿用既有那一套（<c>StatusText.JunkReminder*</c> 的同源事实），
         /// 这里只是**变短**：确认框正文要能一眼看完，所以各只给一行、最多举三个例子。
         /// 详细清单仍然在日志里（<see cref="LogReminderFindings"/> 一字未改）。</para>
+        ///
+        /// <para>⚠ 空间那条排在最前（它关系"这一批能不能跑完"），而且它**不依赖**
+        /// <paramref name="reminders"/> —— 没有无用物、没有密码问题时它照样要出现。</para>
         /// </summary>
-        private static string BuildConfirmNotice(BatchReminderFacts? reminders)
+        private static string BuildConfirmNotice(BatchReminderFacts? reminders, string spaceRiskEcho)
         {
-            if (reminders == null || !reminders.HasAnything)
+            var builder = new StringBuilder();
+
+            if (!string.IsNullOrWhiteSpace(spaceRiskEcho))
             {
-                return string.Empty;
+                builder.AppendLine(spaceRiskEcho);
             }
 
-            var builder = new StringBuilder();
+            if (reminders == null || !reminders.HasAnything)
+            {
+                return builder.ToString().TrimEnd();
+            }
 
             if (reminders.Junk.HasAnything)
             {
@@ -7365,6 +7448,13 @@ namespace ArchiveFixer.ViewModels
                 _spaceTightThisBatch = _vm.SpaceTightMode;
                 _spaceTightKeepSourceThisBatch = _spaceTightThisBatch && _vm.SpaceTightKeepSource;
 
+                /*
+                 * 本批是不是一键档（只用于"中途空间不足要不要弹那一次纯提示"）：
+                 * 一键档的人常常已经走开，手动档他正坐在屏幕前看列表（任务状态会当场变红）。
+                 */
+                _oneClickThisBatch = oneClickRun;
+                _spaceBlockedNoticeShown = false;
+
                 int maxParallel = ResolveMaxParallel(selectedTasks, out bool fullSpeed);
 
                 if (_spaceTightThisBatch && fullSpeed)
@@ -7415,6 +7505,13 @@ namespace ArchiveFixer.ViewModels
                 LogRestHandlingForBatch();
 
                 LogExtractionLimitsForBatch();
+
+                /*
+                 * 「多层 + 空间小 ⇒ 中途才报空间不足」那句提醒（用户 2026-09-29 第 2 条）：
+                 * 必须在**动手之前**说，而且与确认框里那句用**同一份判据、同一段文案**
+                 * （见 EvaluateMultiLayerSpaceRisk / StatusText.MultiLayerSpaceRiskFormat）。
+                 */
+                LogMultiLayerSpaceRisk(plan);
 
                 _spaceLedger = new SpaceReservationLedger(
                     ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)),
@@ -7714,6 +7811,13 @@ namespace ArchiveFixer.ViewModels
                  */
                 _spaceTightThisBatch = false;
                 _spaceTightKeepSourceThisBatch = false;
+
+                /*
+                 * 「本批是不是一键档」同样只活这一批（它只服务于"中途空间不足要不要弹那一次纯提示"）：
+                 * 留着 true 会让**批尾之后**的单包路径（重试、链尾、清理）也以为自己在一键批里。
+                 * 下一次开工时重新按参数钉死。
+                 */
+                _oneClickThisBatch = false;
 
                 // 空间侦察：停循环 + 把这一批的空间曲线写进日志（用户 2026-09-27 要求"时刻侦察空间变化"）。
                 StopSpaceTrendMonitor();
@@ -8073,6 +8177,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             _spaceBlockedTasks.Clear();
+
+            // 那一次"中途空间不足"的纯提示也跟着本批记账一起清零：下一批该弹还得弹。
+            _spaceBlockedNoticeShown = false;
         }
 
         // ================================================================ 工作区根（默认跟输出盘）
@@ -8399,6 +8506,46 @@ namespace ArchiveFixer.ViewModels
                 requiredBytes,
                 availableBytes,
                 shortfallBytes));
+
+            NotifySpaceBlockedOnce(task, requiredBytes, availableBytes, shortfallBytes);
+        }
+
+        /// <summary>
+        /// 中途撞上空间不足时那**一次纯提示**（用户 2026-09-29 第 2 条）。
+        ///
+        /// <para>他的新口径：「错误也可以弹窗，因为这就相当于结束了，而且是解压失败了」——
+        /// 但一键档的红线是"批中间不许要用户点一下才能继续"，所以这里三条都钉死：</para>
+        /// <list type="number">
+        /// <item><description><b>非模态</b>（<c>DialogService.ShowSpaceBlockedNotice</c> → <c>Show()</c>）：
+        /// 窗口浮着，批一秒都不停；</description></item>
+        /// <item><description><b>一个按钮</b>（只有"确定"）；</description></item>
+        /// <item><description><b>同一批只弹一次</b>：后面的同类情况只写日志 —— 一批几十个包逐个弹
+        /// 等于把他按在屏幕前点几十次，而那正是这条红线要防的。合并后的完整清单在批末
+        /// （<see cref="ReportSpaceBlockedTasks"/> 逐条点名）与批末汇总框里。</description></item>
+        /// </list>
+        ///
+        /// <para>⚠ 手动档**照旧只写日志**（用户原话："手动档照旧"）：他坐在屏幕前，任务状态当场变红，
+        /// 不需要再飘一个窗口。</para>
+        /// </summary>
+        private void NotifySpaceBlockedOnce(ArchiveTask task, long requiredBytes, long availableBytes, long shortfallBytes)
+        {
+            if (!_oneClickThisBatch || _spaceBlockedNoticeShown)
+            {
+                return;
+            }
+
+            _spaceBlockedNoticeShown = true;
+
+            string name = string.IsNullOrWhiteSpace(task.FileName) ? task.CurrentPath : task.FileName;
+
+            _dialogService.ShowSpaceBlockedNotice(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.SpaceBlockedNoticeFormat,
+                1,
+                name,
+                TaskSpaceEstimate.FormatSize(requiredBytes),
+                availableBytes < 0 ? "未知" : TaskSpaceEstimate.FormatSize(availableBytes),
+                TaskSpaceEstimate.FormatSize(shortfallBytes)));
         }
 
         /// <summary>
@@ -8778,6 +8925,73 @@ namespace ArchiveFixer.ViewModels
                 "安全上限（解压前预算）：" + BudgetLimits.Describe()
                 + "。超过就不解这个包（预检拒绝，一个字节都不写）；"
                 + "可在⑥设置 →「安全上限」里按自己的盘与资源改。");
+        }
+
+        /// <summary>
+        /// 本批最多允许解几层（②页「最大嵌套层数」）。
+        ///
+        /// <para>⚠ 这个数**不是第二套轮数**：它就是 <c>OneClickCoordinator.RoundLimit</c> 读的那一个
+        /// 设置项（`MaxRecursionDepth`，默认 5、夹在 1~10）。这里只把它取出来说明白"最多几层"，
+        /// 绝不参与"实际跑几轮"的裁决（那个裁决只有 <c>OneClickCoordinator</c> 一处）。</para>
+        /// </summary>
+        private int ResolveMaxLayersForBatch() =>
+            Math.Clamp(Settings.MaxRecursionDepth, 1, OneClickCoordinator.MaxRoundsCeiling);
+
+        /// <summary>
+        /// 本批**有没有可能**解出第二层：一键档按轮数上限（&gt;1 就可能续解），
+        /// 手动档还多一条"递归模式没关"（手动路径的递归走 <c>RecursiveExtractor</c>）。
+        /// </summary>
+        private bool IsMultiLayerPossibleForBatch() =>
+            ResolveMaxLayersForBatch() > 1 || !IsSingleLayerRecursion();
+
+        /// <summary>
+        /// 「多层解压可能中途空间不足」的判据（**唯一出口**，批首日志与确认框都走它）。
+        ///
+        /// <para>输入全部来自**现成的估算口径**：各任务的
+        /// <see cref="TaskSpaceEstimate.FreeSpaceDemandBytes"/> 之和（= 这次要从可用空间里新写多少，
+        /// 已经含一层内层展开的增量）与排计划那一刻的可用空间。⛔ 不用 PeakBytes（含源包，
+        /// 拿它比可用空间就是把源包算两遍 —— 2026-09-29 那场真机事故的成因）。</para>
+        ///
+        /// <para>它只是一句提醒：不拦任务、不改设置、不改勾选（放行仍然由每个任务开工前那道空间门决定）。</para>
+        /// </summary>
+        internal MultiLayerSpaceRisk EvaluateMultiLayerSpaceRisk(ExtractionSchedulePlan plan)
+        {
+            if (plan == null)
+            {
+                return new MultiLayerSpaceRisk { AvailableBytes = -1 };
+            }
+
+            return MultiLayerSpaceRiskRules.Evaluate(
+                multiLayerPossible: IsMultiLayerPossibleForBatch(),
+                maxLayers: ResolveMaxLayersForBatch(),
+                totalDemandBytes: MultiLayerSpaceRiskRules.SumDemand(
+                    plan.Ordered.Select(item => item.RequiredBytes)),
+                availableBytes: plan.AvailableBytes);
+        }
+
+        /// <summary>那句话（日志与确认框**同一段文案**，免得两处说法分叉）。</summary>
+        internal static string DescribeMultiLayerSpaceRisk(MultiLayerSpaceRisk risk)
+        {
+            return string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.MultiLayerSpaceRiskFormat,
+                risk.MaxLayers,
+                TaskSpaceEstimate.FormatSize(risk.TotalDemandBytes),
+                TaskSpaceEstimate.FormatSize(risk.AvailableBytes),
+                TaskSpaceEstimate.FormatSize(risk.ShortfallBytes));
+        }
+
+        /// <summary>批首那一条 WARN（用户要求"开工前就要看得见"；不成立时一个字都不写）。</summary>
+        private void LogMultiLayerSpaceRisk(ExtractionSchedulePlan plan)
+        {
+            MultiLayerSpaceRisk risk = EvaluateMultiLayerSpaceRisk(plan);
+
+            if (!risk.Applies)
+            {
+                return;
+            }
+
+            AppendLog("WARN", DescribeMultiLayerSpaceRisk(risk));
         }
         /// <summary>把解压前那一遍 list 算出来的**精确**空间需求记下来（自测的空间曲线要用）。</summary>
         private void RecordRefinedEstimate(ArchiveTask task, TaskSpaceEstimate estimate)

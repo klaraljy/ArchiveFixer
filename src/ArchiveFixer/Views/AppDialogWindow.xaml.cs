@@ -80,6 +80,16 @@ namespace ArchiveFixer.Views
         public string NoText { get; set; } = "否";
 
         public string CancelText { get; set; } = "取消";
+
+        /// <summary>
+        /// 批末汇总的**严重度**（null = 普通对话框，一条色带都不显示）。
+        ///
+        /// <para>非 null 时窗口顶部放出一条约 30% 高的色带（蓝 / 橙 / 红），正文照旧白底黑字 ——
+        /// 用户 2026-09-29 原话："我记得你是上30%的位置是蓝色，然后下面是白底，黑字"。
+        /// 判定本身**不在这里**（⛔ 窗口不许按文案或状态自己猜），它来自
+        /// <see cref="ArchiveFixer.Models.BatchSummarySeverityRules"/> 那一个出口。</para>
+        /// </summary>
+        public ArchiveFixer.Models.BatchSummarySeverity? SummarySeverity { get; set; }
     }
 
     /// <summary>
@@ -178,6 +188,80 @@ namespace ArchiveFixer.Views
                 OptionCheckBox.IsChecked = request.OptionChecked;
                 OptionCheckBox.Visibility = Visibility.Visible;
             }
+
+            ApplySummarySeverity(request.SummarySeverity);
+        }
+
+        /// <summary>色带（批末汇总那一档）的底色画刷键 —— 判据（哪一档）不在这里，这里只管"哪一档长什么样"。</summary>
+        internal static string ResolveSummaryBannerBrushKey(ArchiveFixer.Models.BatchSummarySeverity severity) =>
+            severity switch
+            {
+                ArchiveFixer.Models.BatchSummarySeverity.Failed => "SummaryFailedBrush",
+                ArchiveFixer.Models.BatchSummarySeverity.Partial => "SummaryPartialBrush",
+                _ => "SummarySuccessBrush"
+            };
+
+        /// <summary>色带底色的兜底值（App.xaml 里的资源取不到时用它，例如没有 Application 的测试宿主）。</summary>
+        internal static Color ResolveSummaryBannerFallbackColor(ArchiveFixer.Models.BatchSummarySeverity severity) =>
+            severity switch
+            {
+                ArchiveFixer.Models.BatchSummarySeverity.Failed => Color.FromRgb(0xDC, 0x26, 0x26),
+                ArchiveFixer.Models.BatchSummarySeverity.Partial => Color.FromRgb(0xEA, 0x58, 0x0C),
+                _ => Color.FromRgb(0x1D, 0x4E, 0xD8)
+            };
+
+        /// <summary>色带里那几个字/图标怎么画（三档共用一个键：白字 + 半透明白底徽标）。</summary>
+        internal const string SummaryBannerForegroundBrushKey = "TextOnAccentBrush";
+
+        /// <summary>正文区的底色 / 字色（用户 2026-09-29："下面是白底，黑字" —— 三档完全一样）。</summary>
+        internal const string SummaryBodyBackgroundBrushKey = "PanelBrush";
+
+        internal const string SummaryBodyForegroundBrushKey = "TextPrimaryBrush";
+
+        /// <summary>
+        /// 批末汇总框：顶部放出一条**色带**（用户 2026-09-29 原话："我记得你是上30%的位置是蓝色，
+        /// 然后下面是白底，黑字，我什么时候说过白字的"）。
+        ///
+        /// <para>三档的差别**只在色带**：蓝 = 全成功 / 橙 = 有部分完成或跳过 / 红 = 有失败；
+        /// 正文一律白底黑字 —— 所以这里**不碰** <c>MessageTextBox</c> 的颜色，
+        /// 只把色带拉出来，并把普通布局里那块标题（图标 + 标题 + 副标题）收起来，免得同一句话出现两遍。</para>
+        ///
+        /// <para>色带的字号与配色刻意与普通布局的标题区一致（15.5 / SemiBold / 白字），
+        /// 这样"同一个框、多了一条色带"而不是"换了一个框"。</para>
+        /// </summary>
+        private void ApplySummarySeverity(ArchiveFixer.Models.BatchSummarySeverity? severity)
+        {
+            if (severity == null)
+            {
+                return;
+            }
+
+            SummaryBanner.Background = Brush(
+                ResolveSummaryBannerBrushKey(severity.Value),
+                ResolveSummaryBannerFallbackColor(severity.Value));
+
+            SummaryBannerTitle.Text = Title;
+            SummaryBannerTitle.Foreground = Brush(SummaryBannerForegroundBrushKey, Colors.White);
+            SummaryBannerGlyph.Foreground = Brush(SummaryBannerForegroundBrushKey, Colors.White);
+
+            /*
+             * 正文字色按"白底黑字"钉住（不随图标/严重度变）：色带档下用户要的是"上面一条颜色、
+             * 下面照旧读得清"，把正文也染成白字正是他明确否掉的那一版。
+             */
+            MessageTextBox.Foreground = Brush(SummaryBodyForegroundBrushKey, Color.FromRgb(0x1F, 0x24, 0x30));
+            MessageTextBox.Background = Brush(SummaryBodyBackgroundBrushKey, Colors.White);
+
+            // 标题已经搬到色带里了：普通布局那块整块收起（包括图标与副标题）。
+            TitlePanel.Visibility = Visibility.Collapsed;
+            MessageTextBox.Margin = new Thickness(0);
+
+            // 一个按钮的纯提示框：白底描边按钮，三种底色上都看得清（主色实心按钮压在红底上会糊）。
+            if (OkButton.Visibility == Visibility.Visible)
+            {
+                OkButton.Style = TryStyle("SecondaryButtonStyle", OkButton);
+            }
+
+            SummaryBanner.Visibility = Visibility.Visible;
         }
 
         private void ApplyIcon(AppDialogIcon icon)

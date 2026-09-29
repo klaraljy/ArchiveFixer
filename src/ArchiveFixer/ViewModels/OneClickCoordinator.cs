@@ -46,6 +46,16 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>一行汇总（已经写进日志，GUI 用它弹提示）。</summary>
         public string Summary { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 这一批的**汇总严重度**（用户 2026-09-29 第 3 条：批末那个框要按结果分颜色）。
+        ///
+        /// <para>判定只读机器终态（<see cref="ArchiveTask.Outcome"/> / 校验枚举），
+        /// 唯一出口是 <see cref="BatchSummarySeverityRules.FromTasks"/>；
+        /// 这里只是把它**带出来**，供 GUI 选蓝 / 橙 / 红那条色带 ——
+        /// ⛔ 别在窗口里按 <see cref="Summary"/> 这段中文再判断一次。</para>
+        /// </summary>
+        public BatchSummarySeverity Severity { get; init; } = BatchSummarySeverity.Success;
     }
 
     /// <summary>
@@ -837,8 +847,12 @@ namespace ArchiveFixer.ViewModels
                      * ⛔ 判定与日志一条都没少：下面那一行 `一键处理汇总：…` 照旧写进日志，
                      * 这个框只是把同一份 <see cref="OneClickOutcome.Summary"/> 摆到他眼前一次。
                      * ⛔ 也**只留这一个** —— 批中间那些"要用户回答"的框一律还是保守档 + 日志。
+                     *
+                     * ⚠ 2026-09-29 第 3 条：这个框按**机器终态**分三档配色（蓝 / 橙 / 红顶部色带，
+                     * 正文白底黑字）。严重度由 <see cref="OneClickOutcome.Severity"/> 带过来 ——
+                     * 窗口一个字都不判断（见 BatchSummarySeverityRules 的说明）。
                      */
-                    _dialogService.ShowInfo(outcome.Summary);
+                    _dialogService.ShowBatchSummary(outcome.Summary, outcome.Severity);
 
                     AppendLog("INFO", "一键处理汇总：" + outcome.Summary.Replace(Environment.NewLine, "；"));
                 }
@@ -1167,7 +1181,14 @@ namespace ArchiveFixer.ViewModels
                 Stopped = stopped,
                 HitRoundLimit = hitRoundLimit,
                 PendingContinuationCount = pendingContinuation.Count,
-                Summary = summary
+                Summary = summary,
+
+                /*
+                 * 严重度从**这一批真正处理过的全部任务**算（根任务 + 所有续解子任务，
+                 * 就是上面那个 processed 清单）：判据是机器终态，⛔ 不比中文文案。
+                 * 空批（processed 为空）会得到 Success —— "什么都没发生"用蓝色最诚实。
+                 */
+                Severity = BatchSummarySeverityRules.FromTasks(processed)
             };
         }
 

@@ -830,6 +830,71 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// **批末汇总**（用户 2026-09-29：这个框要按结果分颜色）。
+        ///
+        /// <para>与 <see cref="ShowInfo(string)"/> 的唯一区别是那个 <paramref name="severity"/>：
+        /// 窗口按它在顶部放一条色带（蓝 = 全成功 / 橙 = 有部分完成或跳过 / 红 = 有失败），
+        /// 正文照旧白底黑字。判定**不在这里**（⛔ 对话框不许读中文状态去猜），
+        /// 它来自 <see cref="ArchiveFixer.Models.BatchSummarySeverityRules"/> 那一个出口。</para>
+        ///
+        /// <para><c>virtual</c> 与其他可注入对话框同理：测试要能直接断言"弹的是哪一档"，
+        /// 而不是只能读降级日志。</para>
+        /// </summary>
+        public virtual void ShowBatchSummary(string message, ArchiveFixer.Models.BatchSummarySeverity severity)
+        {
+            ShowNotification(
+                new AppDialogRequest
+                {
+                    Title = severity switch
+                    {
+                        ArchiveFixer.Models.BatchSummarySeverity.Failed => "一键处理汇总（有失败）",
+                        ArchiveFixer.Models.BatchSummarySeverity.Partial => "一键处理汇总（有没做成的）",
+                        _ => "一键处理汇总"
+                    },
+
+                    /*
+                     * 图标跟着严重度走：它同时决定这个框的**提醒强度**
+                     * （AppDialogWindow.ResolveAttention：Warning / Error = 强提醒，Info = 响一声）。
+                     * 一批全成功还要"闪 + 连响三声"就是骚扰。
+                     */
+                    Icon = severity switch
+                    {
+                        ArchiveFixer.Models.BatchSummarySeverity.Failed => AppDialogIcon.Error,
+                        ArchiveFixer.Models.BatchSummarySeverity.Partial => AppDialogIcon.Warning,
+                        _ => AppDialogIcon.Info
+                    },
+                    Message = message,
+                    Buttons = AppDialogButtons.Ok,
+                    SummarySeverity = severity
+                },
+                "ShowBatchSummary");
+        }
+
+        /// <summary>
+        /// **中途因空间不足被拦下**的那一次提示（用户 2026-09-29 第 2 条）。
+        ///
+        /// <para>它必须是**纯提示、一个按钮、不阻塞后续任务**：一键处理的红线是"批中间不许要用户点一下
+        /// 才能继续"，而空间门拦下单个任务之后**整批照常在跑**（不变量 9：单个任务失败不中断整批）。
+        /// 所以这里走**非模态**窗口（<c>Show()</c>，不是 <c>ShowDialog()</c>）——
+        /// 窗口浮在那儿让他看得见，批一秒都不停。</para>
+        ///
+        /// <para>调用方负责"同一批只弹一次"（合并计数）：这里只管弹，不判断该不该弹。</para>
+        /// </summary>
+        public void ShowSpaceBlockedNotice(string message)
+        {
+            ShowNotification(
+                new AppDialogRequest
+                {
+                    Title = "磁盘空间不足",
+                    Message = message,
+                    Icon = AppDialogIcon.Warning,
+                    Buttons = AppDialogButtons.Ok
+                },
+                "ShowSpaceBlockedNotice",
+                modeless: true);
+        }
+
+        /// <summary>
         /// 信息提示。
         /// </summary>
         public void ShowInfo(string message)
@@ -987,7 +1052,14 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 通知型对话框（没有返回值）：后台线程投递即返回，不阻塞调用方。
         /// </summary>
-        private static void ShowNotification(AppDialogRequest request, string context)
+        /// <param name="modeless">
+        /// true = 用**非模态**窗口（<c>Show()</c>）—— 调用方在跑批，不能被一个提示卡住
+        /// （见 <see cref="ShowSpaceBlockedNotice"/>）。false = 原来的模态 <c>ShowDialog()</c>。
+        ///
+        /// <para>两者在**后台线程**上的行为一致：都是 <c>BeginInvoke</c> 投递完立刻返回 ——
+        /// 非模态那一档真正解决的是"**UI 线程**上调用时不卡住批处理"。</para>
+        /// </param>
+        private static void ShowNotification(AppDialogRequest request, string context, bool modeless = false)
         {
             Dispatcher? dispatcher = TryGetUiDispatcher();
 
@@ -1001,7 +1073,14 @@ namespace ArchiveFixer.Services
             {
                 try
                 {
-                    ShowModal(request, window => window.Result);
+                    if (modeless)
+                    {
+                        ShowModeless(request);
+                    }
+                    else
+                    {
+                        ShowModal(request, window => window.Result);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1018,7 +1097,14 @@ namespace ArchiveFixer.Services
                     {
                         try
                         {
-                            ShowModal(request, window => window.Result);
+                            if (modeless)
+                            {
+                                ShowModeless(request);
+                            }
+                            else
+                            {
+                                ShowModal(request, window => window.Result);
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -1086,6 +1172,35 @@ namespace ArchiveFixer.Services
             window.ShowDialog();
 
             return read(window);
+        }
+
+        /// <summary>
+        /// 在 UI 线程上创建并**非模态**显示统一对话框（<c>Show()</c>，不跑嵌套消息泵、不等用户）。
+        ///
+        /// <para>为什么需要它：批处理跑在 UI 线程上，"中途发现空间不足"这类**纯提示**要是用
+        /// <c>ShowDialog()</c>，就会把整批卡在"等用户点确定"上 —— 而一键档的红线正是
+        /// "批中间不许要用户点一下才能继续"（AGENTS.md §11）。非模态窗口浮在旁边，
+        /// 批一秒都不停，用户回来照样看得见。</para>
+        ///
+        /// <para>关窗路径不用改：<see cref="AppDialogWindow"/> 在非模态下设置 <c>DialogResult</c>
+        /// 会抛 <see cref="InvalidOperationException"/>，它自己已经捕获并回落到 <c>Close()</c>。</para>
+        /// </summary>
+        private static void ShowModeless(AppDialogRequest request)
+        {
+            var window = new AppDialogWindow(request);
+
+            Window? owner = ResolveOwner();
+
+            if (owner != null && owner.IsVisible)
+            {
+                window.Owner = owner;
+            }
+            else
+            {
+                window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            }
+
+            window.Show();
         }
 
         /// <summary>
