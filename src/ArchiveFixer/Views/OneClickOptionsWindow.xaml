@@ -161,7 +161,7 @@
         </Border>
 
         <!-- ============ 要改才展开（默认收起） ============ -->
-        <Expander Header="本次改一下（落点 / 源包操作 / 删除操作）"
+        <Expander Header="{x:Static models:StatusText.OneClickConfirmExpanderHeader}"
                   x:Name="TweakExpander"
                   x:FieldModifier="public"
                   IsExpanded="False">

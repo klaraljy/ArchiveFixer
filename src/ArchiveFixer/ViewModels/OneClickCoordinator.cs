@@ -2287,6 +2287,15 @@ namespace ArchiveFixer.ViewModels
                 StatusText.UnknownError or
                 StatusText.RenameFailed or
                 StatusText.TestFailed or
+                /*
+                 * 下面两条是 2026-09-29 复核补的（口径打架）：①页那份汇总
+                 * （TaskSummaryService.IsExtractFailureStatus）早就把「没有可用的解压引擎」与
+                 * 「磁盘空间不足」算进"解压失败"，而这里漏了 —— 同一件事两处判据不一致，
+                 * 表现为**空间门拦下的任务在一键汇总里被算成"未处理"、在①页里算成"解压失败"**。
+                 * ⛔ 两处名单必须一致；改这里请顺手看 TaskSummaryService.cs 那一份。
+                 */
+                StatusText.NoEngineAvailable or
+                StatusText.DiskSpaceInsufficient or
                 StatusText.PasswordAttemptLimitReached or
                 StatusText.SourceChanged;
         }

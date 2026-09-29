@@ -620,8 +620,17 @@ namespace ArchiveFixer.Extraction
              *
              * 所以：内容是**跨盘 zip 的成员**时，这条名字路让位给 PlanByContentAsync
              * （调用方在"推不出标准名"时会接着走内容那条路，判据与执行体仍只有一份）。
+             *
+             * ⚠ 但"让位"必须看**内容路真能不能拼出组**（2026-09-29 复核补的那半条）：
+             * 7-Zip 自己造的 `-tzip -v` 分卷 zip 长这样 —— 第 1 片开头是本地文件头、后面几片是从数据中间切开的，
+             * 而**末片的 EOCD 写的是"盘号 0 / 总盘数 0"**（7-Zip 就是这么写的，它不是 PKZIP 那套跨盘 EOCD）。
+             * 内容路因此认不出它（末片自述"单盘"），可名字路才是它的正路：`enc.zip.001删除` 里
+             * 卷标记 `001` 明明白白，去掉垃圾就是 7-Zip 认的标准名。
+             * 老写法只看"手上这一片像不像 zip 成员"就让位 → 内容路拼不出组 → **两边都不动**，
+             * 接着 7-Zip 打不开这一组、任务报「密码错误」（实测踩到）。
+             * 判据：**目录里存在一片自述"带盘号的跨盘 zip 末片"**（`Number != null`）才让位。
              */
-            if (IsDisguisedZipMember(path))
+            if (IsDisguisedZipMember(path) && HasSpannedZipTailInDirectory(path, fileNamesInDirectory))
             {
                 return null;
             }
@@ -711,6 +720,40 @@ namespace ArchiveFixer.Extraction
             Detection.VolumeNumberReading reading = Detection.VolumeNumberFromContent.Read(path);
 
             return reading.Format == Detection.VolumeContentFormat.Zip && reading.IsVolumeMember;
+        }
+
+        /// <summary>
+        /// 同目录里有没有**自述带盘号的跨盘 zip 末片** —— 有它，内容级那条路才真的拼得出整组
+        /// （名字路这时必须让位，否则会把 `222.z0删除1` + `222.z1111ip` 还原成 7-Zip 永远打不开的
+        /// `222.z01` + `222.z11`）。
+        ///
+        /// <para>⛔ 反过来不成立：7-Zip 自己造的 `-tzip -v` 分卷 zip，末片 EOCD 写的是"盘号 0"，
+        /// 内容级认不出来 —— 那种组必须留给名字路（卷标记就在名字里）。判据只问
+        /// <see cref="Detection.VolumeNumberFromContent"/> 的结论，这里不另写一套。</para>
+        /// </summary>
+        private static bool HasSpannedZipTailInDirectory(string path, IEnumerable<string?>? fileNamesInDirectory)
+        {
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+
+            foreach (string? name in fileNamesInDirectory ?? Array.Empty<string?>())
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                Detection.VolumeNumberReading reading = Detection.VolumeNumberFromContent.Read(
+                    Path.Combine(directory, name));
+
+                if (reading.Format == Detection.VolumeContentFormat.Zip
+                    && reading.IsVolumeMember
+                    && reading.Number != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

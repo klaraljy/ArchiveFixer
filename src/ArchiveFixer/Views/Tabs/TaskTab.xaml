@@ -132,13 +132,13 @@
                     <!-- 忙的时候才出现：空闲时是两个永远按不动的灰按钮，占位又误导 -->
                     <Button Content="停止后续"
                             Margin="0,0,8,0"
-                            ToolTip="当前任务继续跑完，但不再启动新任务"
+                            ToolTip="当前任务会在下一个安全点停下（密码候选之间、写完当前条目之后），只是不再启动新任务；要立刻掐断当前任务，点右边那个「取消当前」"
                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}"
                             Command="{Binding StopCommand}" />
 
                     <Button Content="取消当前"
                             Margin="0,0,8,0"
-                            ToolTip="强制结束当前任务的外部进程（保留工作区与日志）"
+                            ToolTip="立刻掐断当前任务（含它启动的外部进程）；失败或取消后工作区默认整份清掉，只有「设置」页打开「失败时保留中间产物」才留现场"
                             Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}"
                             Command="{Binding CancelCurrentCommand}" />
 

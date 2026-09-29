@@ -31,6 +31,22 @@ namespace ArchiveFixer.Tests
             };
         }
 
+        /// <summary>
+        /// **同一条状态在①页汇总与一键汇总里必须落同一桶**（2026-09-29 复核抓到的口径打架）：
+        /// ①页那份（<c>TaskSummaryService.IsExtractFailureStatus</c>）早就把「没有可用的解压引擎」与
+        /// 「磁盘空间不足」算进"解压失败"，而一键处理那份（<c>OneClickCoordinator.IsFailureStatus</c>）漏了 ——
+        /// 被空间门拦下的任务因此在一键汇总里被算成「未处理」（还会被读成"没轮到它"）。
+        /// </summary>
+        [Fact]
+        public void 空间不足与没有引擎_在一键汇总里也算失败()
+        {
+            Assert.True(ArchiveFixer.ViewModels.OneClickCoordinator.IsFailureStatus(Make(StatusText.DiskSpaceInsufficient)));
+            Assert.True(ArchiveFixer.ViewModels.OneClickCoordinator.IsFailureStatus(Make(StatusText.NoEngineAvailable)));
+
+            // 反向：成功状态永远不许落进失败桶。
+            Assert.False(ArchiveFixer.ViewModels.OneClickCoordinator.IsFailureStatus(Make(StatusText.ExtractSuccess)));
+        }
+
         [Fact]
         public void 各种状态混合时_分桶之和等于任务总数且各分项互不重叠()
         {

@@ -212,16 +212,39 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置界面不再提主窗口那个不存在的临时输出目录入口()
+        public void 设置界面如实说明输出位置的入口不止一处()
         {
             string xaml = ReadSettingsSurfaceXaml();
 
+            /*
+             * 老文案写"主窗口里没有临时选输出目录的入口"，这一条**当时是假的**：
+             * ①页主操作栏就有「输出位置：… 选择…」+「未指定位置」那颗开关
+             * （TaskTab.xaml 那一格，命令体是 MainViewModel.SelectOutputDirectory），
+             * 写的就是同一个 Settings.CustomOutputDirectory —— 而当时的用例把这句话钉住了，
+             * 于是"界面说反话"被测试保护着（2026-09-29 复核逮到）。
+             */
             Assert.DoesNotContain(
-                "主窗口里临时选的目录也不会写进设置",
+                "主窗口里没有临时选输出目录的入口",
                 xaml,
                 StringComparison.Ordinal);
 
-            Assert.Contains("主窗口里没有临时选输出目录的入口", xaml, StringComparison.Ordinal);
+            Assert.Contains("「任务」页", xaml, StringComparison.Ordinal);
+            Assert.Contains("记住上次输出目录", xaml, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 一键确认框的折叠区标题来自状态文案常量()
+        {
+            string xaml = File.ReadAllText(Path.Combine(XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "Views", "OneClickOptionsWindow.xaml"));
+
+            /*
+             * 同一个标题曾经有两个版本：XAML 手写「落点 / 源包操作 / 删除操作」（用户 2026-09-27 拍板的三组），
+             * 而 StatusText 里那条常量还停在上上一版（终端落法 / 源包处理）且**没人引用**。
+             * AGENTS.md §7：界面状态字符串统一引用 StatusText 常量，禁止手写中文字面量。
+             */
+            Assert.Contains("Header=\"{x:Static models:StatusText.OneClickConfirmExpanderHeader}\"", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("Header=\"本次改一下", xaml, StringComparison.Ordinal);
+            Assert.Contains("/ 源包操作 / 删除操作", ArchiveFixer.Models.StatusText.OneClickConfirmExpanderHeader, StringComparison.Ordinal);
         }
 
         [Fact]

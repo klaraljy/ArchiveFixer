@@ -143,6 +143,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 6. **部分成功不得显示为成功**；取消、超时、设备离线、分卷缺失一律不得显示成功。
 7. **分卷缺失不得开始不可完成的任务**，必须报"缺哪几个"。
 8. **递归必须有硬上限**（层数 / 文件数 / 总大小 / 单文件 / 展开比 / 密码尝试次数），且**多分支默认不展开**，必须问。
+   - ⚠ **例外（一键处理档）**：一键档**批中间零弹窗**，多分支不问 —— 按保守档办（不展开）+ 写日志
+     （判据 `ExtractionCoordinator` 的 `expandAll = !oneClickRun` 与 `SuppressDecisionPromptsForOneClickRun()`，
+     见 §11"一键处理期间零弹窗"那段）。手动档照旧**必须问**。
    - 上限**必须存在，但不许写死在代码里**：解压前那四条（单文件 / 总大小 / 文件数 / 展开比）是**用户设置**
      （⑥设置 →「安全上限」，默认 **64 GiB / 512 GiB / 20 万 / 1000 倍**），唯一出口
      `ResourceBudgetOptions.FromSettings` + `ExtractionCoordinator.BudgetLimits`。超范围一律**夹回并说明**；
@@ -288,7 +291,14 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   - ⚠ **遗留**：程序只做到"认得出 + 不改坏"；带垃圾尾巴的组交给 7-Zip 仍会报缺卷（7z 只认 `<基名>.001` 这套名）。
     下一步要做的是**显式**的「把整组名字改回标准名」（沿用 `VolumeNameRepair` 的口径：用户点了才改、只改名字、绝不覆盖）。
   - 用真实数字钉住：`giu910` 三卷 7,516,192,768 ×2 + 3,975,934,338；`amb909` 现场 = 第一卷 2,147,483,648（带 `37 7A BC AF 27 1C`）
-    + 第二卷 1,890,791,346。用例 `VolumeJunkTailTests`（21 条），红检时把修复 stash 掉会红 8 条。
+    + 第二卷 1,890,791,346。用例 `VolumeJunkTailTests`（**31 条** / 10 个方法），红检时把修复 stash 掉会红 8 条。
+  - ⚠ **判据不许"一见 zip 成员就让位"**（2026-09-29 复核逮到的真缺陷）：名字路（`VolumeNameRepair.PlanJunkTailGroup`）
+    原来看"手上这一片内容是跨盘 zip 成员"就把整组让给内容级那条路。可 **7-Zip 自己造的 `-tzip -v` 分卷 zip**
+    第 1 片也是"PK 开头、结尾没标记的成员"，而它的**末片 EOCD 写的是盘号 0**（不是 PKZIP 那套跨盘 EOCD）→
+    内容级拼不出组 → 名字路又让了位 → **两边都不动**：`enc.zip.001删除` 一个名字都没改，
+    7-Zip 打不开（实测 `7z l` 报 ERRORS、`Type = zip`），任务还把它报成「密码错误」。
+    现在让位条件是"**目录里真有一片自述带盘号的跨盘 zip 末片**"（`HasSpannedZipTailInDirectory`，判据仍只问
+    `VolumeNumberFromContent`）；真 PKZIP 那套（`.z01`/`.zip`）照旧走内容级。用例 `EncryptedVolumePipelineTests`（2 条）。
 - **安装包（用户 2026-09-27 追加："我是要 .exe 安装文件的"）**：`installer\ArchiveFixer.nsi`（NSIS 3.10，
   `D:\Codex Tools\NSIS\nsis-3.10\makensis.exe`）+ `scripts\installer.ps1`（默认拿 `dist\ArchiveFixer-<版本>-独立`
   当内容）→ `dist\ArchiveFixer-0.1.0-setup.exe`（**47.82 MB**，164.57 MB 内容压到 29.1%，编译约 110 秒）。
@@ -319,7 +329,7 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   素材站点名**一律换占位符 —— `<盘符>:\<下载目录>\…` → `<测试目录>\…`、样本包名 → `<样本包>`、
   真实站点 → `example.com`、`密码本2` → `密码本示例`、仓库外的分析与临时目录 → `<仓库外>\` / `<临时目录>\`。
   ⛔ 这是 §8 隐私红线压过 §9.4"历史记录里的旧路径按原样留着"的一次**有意例外**（`旧AGENTS.md` 与历史日志一并改了）。
-- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1953 条全绿**（0 失败 / 0 跳过；2026-09-29 真样本那一轮跑的全量，2 分 05 秒）；
+- `dotnet build ArchiveFixer.slnx`：**0 错误 0 警告**；`dotnet test`：**1959 条全绿**（0 失败 / 0 跳过；2026-09-29 收口那一轮跑的全量，2 分 33 秒）；
   `dotnet format ArchiveFixer.slnx --verify-no-changes`：**通过**。
   ⚠ 这条数字**只在这里写一次**：README 等文档要报数字就从这里抄，别再各写一份。
 - **「不删原包」安全档 + 空间侦察**（2026-09-27 晚，用户追加）：
@@ -421,6 +431,25 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   - ⚠ **RAR5 至今没有真实样本**（只有构造字节用例）；老式编号族 `.rar`/`.r00` 按设计**不认**。
   - ⚠ **回退代码后一定要 `--no-incremental` 重编**：`Copy-Item` 会把旧时间戳带回来，MSBuild 会跳过重编 ——
     实测表现为"红检恢复后复跑还是 12 条红"，跑的是红检那份二进制。
+- **四路只读核查查出并修掉的三条真缺陷（2026-09-29，用户"不要停"那一轮）**：
+  - ⚠ **密码记忆读失败会被自己的启动接线覆盖**（唯一会真丢数据的一条）：读不出来时（换机器 / 重装系统 /
+    文件损坏）老代码只写一句 WARN 就返回，而文案还写着"程序没有覆盖、也没有删除那份记忆" ——
+    紧接着 `SetRememberedBookPaths` → `PersistPasswordList` 就**替换式落盘**，那份解不开的记忆当场没了。
+    现在：读失败先 `PasswordListStore.TryBackupUnreadableFile` **复制**一份
+    `password-list.dat.unreadable-<时间戳>.bak`（⛔ 只复制，绝不移动 / 删除原件），文案如实点名备份名。
+    用例 `PasswordListStoreTests.记忆_读不出来时先另存备份_之后落盘不再毁掉原件`。
+  - ⛔ **一键档的"零弹窗"抑制必须排在 `ResetBatchConflictState()` 之后**：那个方法会把
+    `_conflictPromptUnavailable` 置回 false，先抑制后清零 = 没抑制（实测设置里选「询问」时一键档批中间
+    仍会弹聚合询问框）。用例 `ConflictAskTests.一键档_设置里选了询问_批中间也一次都不问`。
+  - ⛔ **失败名单有两处，必须一致**：`OneClickCoordinator.IsFailureStatus` 与
+    `TaskSummaryService.IsExtractFailureStatus`。少列一条就出现"同一任务在①页算解压失败、在一键汇总里算未处理"
+    （实测漏的是「没有可用的解压引擎」与「磁盘空间不足」）。用例
+    `TaskSummaryBucketingTests.空间不足与没有引擎_在一键汇总里也算失败`。
+  - ⚠ **一键档仍有一个例外没拍板**：加密包需要密码而候选里没有时会弹一次「手动输入密码」模态窗
+    （`ExtractionCoordinator.PromptForManualBatchPasswordAsync`，只看 `_manualPasswordPrompted`）——
+    文档已如实写成"第二个例外（整批一次，待用户拍板：保留还是改成只写日志）"，代码未动。
+  - ⚠ **文档别再说"每次解压前都会弹提醒"**：导入那条弹窗 2026-09-28 已退休（无用物改成导入一完成就
+    自动移出任务列表），只剩**手动「只解压」**会弹；一键档并进唯一那个确认框。
 
 ## 12. 细节去哪看
 

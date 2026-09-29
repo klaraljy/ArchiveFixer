@@ -226,10 +226,35 @@ namespace ArchiveFixer.Services
 
             if (!result.HasMemory)
             {
-                LastListWarning = string.Format(
+                /*
+                 * 读不出来（换机器 / 重装系统 / 文件被改坏）：**先把原件另存一份备份，再往下走**。
+                 *
+                 * ⚠ 老做法只写一句"已忽略、文件没被动"就返回，而下一句"程序没有覆盖、也没有删除那份记忆"
+                 * 是**假的**：启动接线随后就会按设置里的密码本清单落盘一次，Save 是替换式的 ——
+                 * 那份解不开的记忆当场被覆盖，用户却因为这句话放心了（2026-09-29 复核逮到）。
+                 * 现在：原件不动，额外留一份 `<文件名>.unreadable-<时间戳>.bak`，文案如实点名它。
+                 */
+                string warning = string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
                     StatusText.PasswordListMemoryUnavailableFormat,
                     result.FailureReason);
+
+                if (ListStore.TryBackupUnreadableFile(out string backupFileName, out string backupError))
+                {
+                    warning += string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PasswordListMemoryBackedUpFormat,
+                        backupFileName);
+                }
+                else
+                {
+                    warning += string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PasswordListMemoryBackupFailedFormat,
+                        backupError);
+                }
+
+                LastListWarning = warning;
 
                 RememberedListWarning?.Invoke(LastListWarning);
                 return result.Status;

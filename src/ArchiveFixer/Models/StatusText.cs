@@ -577,7 +577,7 @@ namespace ArchiveFixer.Models
         public const string OneClickConfirmSuppressText = "以后不再询问，按当前设置直接开始（可在「解压方式」页再打开）";
 
         /// <summary>折叠区标题：要改就展开（默认收起 —— 用户嫌旧面板啰嗦）。</summary>
-        public const string OneClickConfirmExpanderHeader = "本次改一下（落点 / 终端落法 / 源包处理）";
+        public const string OneClickConfirmExpanderHeader = "本次改一下（落点 / 源包操作 / 删除操作）";
 
         /// <summary>多包时那一行的后缀：每个包各建一个同名子文件夹。</summary>
         public const string OneClickConfirmMultiPerArchiveFormat = "（本批 {0} 个包，每个包各建一个同名子文件夹）";
@@ -1284,15 +1284,26 @@ namespace ArchiveFixer.Models
         /// 但用户的列表并没有"被程序弄丢"—— 出路是把列表写回他自己的密码本 txt，人肉搬过去。</para>
         /// </summary>
         public const string PasswordListMemoryUnavailableFormat =
-            "上次的密码列表无法读取，已忽略（{0}）。这不会影响你的密码本文件：程序没有覆盖、也没有删除那份记忆。"
-            + "如果是换了机器或重装了系统，可以用「写回密码本…」把当前列表带走。";
+            "上次的密码列表无法读取，已忽略（{0}）。";
 
         /// <summary>记忆保存失败时的提示（不弹框、不阻断，只在提示条上说一句）。</summary>
         public const string PasswordListMemorySaveFailedFormat = "这次的密码列表没能存下来（{0}）；列表本身照常可用。";
 
         /// <summary>主界面摘要那一行挂的短提示（明细在密码列表窗口的提示条上）。</summary>
         public const string PasswordListMemoryUnavailableShort =
-            "上次的密码列表读不出来（已忽略，文件没被动；明细见「密码列表管理」）";
+            "上次的密码列表读不出来（已忽略，原件已另存一份备份；明细见「密码列表管理」）";
+
+        /// <summary>
+        /// 读不出来时那句"已经另存了一份备份"（2026-09-29 复核补：老文案说"程序没有覆盖、也没有删除"，
+        /// 而启动接线随后就会把这份读不出来的记忆**覆盖掉** —— 话是假的，用户的密码列表会真的丢）。
+        /// </summary>
+        public const string PasswordListMemoryBackedUpFormat =
+            "读不出来的那份已另存为 {0}（同一目录下），换回原来的机器或系统时把它改回原名就能再用。"
+            + "如果是换了机器，也可以用「写回密码本…」把当前列表带走。";
+
+        /// <summary>连备份都没做成时的后半句 —— 如实说，别让用户以为盘上还留着一份。</summary>
+        public const string PasswordListMemoryBackupFailedFormat =
+            "⚠ 读不出来的那份也没能另存备份（{0}），它随时可能被新的记忆覆盖。";
 
         /// <summary>
         /// 启动时那条 INFO：一句话说清"记忆恢复了几条 + 几本密码本补了几条"（**只有条数与文件名**）。

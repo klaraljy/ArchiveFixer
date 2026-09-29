@@ -5082,17 +5082,21 @@ namespace ArchiveFixer.ViewModels
                     OnPropertyChanged(nameof(Settings));
 
                     /*
-                     * 「记住上次输出目录」：关掉时**不落盘** —— 这一次运行照用，
-                     * 但下次启动不会再把这次的目录填回来。开着（默认）时行为和以前一样。
+                     * 「记住上次输出目录」关掉时，**下次启动不填回**这个目录（启动读设置那一处判的就是它）。
+                     *
+                     * ⚠ 老代码在这里分了两支：关掉时**不写盘**、并写一句"本次选择不会写入设置" ——
+                     * 那句话是**假的**：800 ms 的自动保存按整份 Settings 的 JSON 指纹判"变了没有"
+                     * （AutoSaveSettingsIfChanged），CustomOutputDirectory 就在里面，照写不误。
+                     * 2026-09-29 复核逮到（同一件事两处判据打架），这里改成一句话说清真实行为：
+                     * 盘照落（开关关掉不影响它），只是下次启动不再拿它当默认。
                      */
-                    if (Settings.RememberLastOutputDirectory)
-                    {
-                        WriteSettingsToDisk("输出位置");
-                    }
-                    else
-                    {
-                        AppendLog("INFO", "「记住上次输出目录」已关闭：本次选择不会写入设置。");
-                    }
+                    WriteSettingsToDisk("输出位置");
+
+                    AppendLog(
+                        "INFO",
+                        Settings.RememberLastOutputDirectory
+                            ? "输出位置已记住：下次启动会填回这个目录。"
+                            : "「记住上次输出目录」已关闭：下次启动不会填回这个目录（设置文件里仍会记下它）。");
                 }
 
                 RefreshOutputPaths();

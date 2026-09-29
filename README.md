@@ -4,7 +4,7 @@
 
 当前版本：**v0.1.0**（第一个对外版本，见 [CHANGELOG](CHANGELOG.md)）
 
-Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联网 · 绿色目录分发（解压即用，不写注册表）
+Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联网 · **绿色目录版**解压即用、**不写注册表**（**安装包**会写 `HKCU` 两条键：卸载信息 + `Software\ArchiveFixer`）
 
 ---
 
@@ -87,7 +87,7 @@ dotnet test  tests/ArchiveFixer.Tests/ArchiveFixer.Tests.csproj         # 测试
 dotnet format ArchiveFixer.slnx --verify-no-changes                     # 格式检查
 ```
 
-- 环境：**.NET SDK 8.0**（项目固定 8.0，不随新 SDK 漂移）、Windows 10/11。
+- 环境：目标框架 **`net8.0-windows`**（用 .NET 8 或更高版本的 SDK 都能构建）、Windows 10/11。
 - 内置工具：`src/ArchiveFixer/tools/7zip/`（LGPL，随程序分发）与 `tools/unrar/`（RARLAB freeware，允许随包分发）；
   **WinRAR 本体不随包分发**（共享软件），只检测与调用你自己装的那一份（见[引擎与外部工具](docs/引擎与外部工具.md)）。
 - 运行时文件（exe/dll/pdb/json + `tools/`）拷到绿色目录即可用，**⛔ 不要动绿色目录里的 `data\`**（那是用户数据）。
@@ -114,6 +114,7 @@ dist/                      发行产物（不入库）
 - **密码明文会出现在进程命令行**（`-p<密码>` 是 7-Zip / UnRAR 的固有限制）；日志、报告、清单层已脱敏，但任务管理器里能看到。
 - **WinRAR 本体不能随包分发**（共享软件）→ 打包的外层 `.rar` 需要你自己装 WinRAR；没有时自动改用 7z（产物 `.7z`，绝不伪造 `.rar`）。
 - **删源包 / 删其余物是不可逆的**：默认档什么都不删；要删得你自己在③页选「彻底删除」，且必须"解压成功 + 校验通过"才动。
+  例外：①页「空间不足」模式**与③页设置无关**，校验通过后**当场永久删除**整组源包（动手前有红字确认）。
 - **不确定的包宁可不猜**：认不出来就报「格式未知」，不会乱指一个偏移去抠。
 - 外接盘 / 网络路径未做专门适配（不做设备身份与断连恢复）。
 

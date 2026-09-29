@@ -206,6 +206,63 @@ namespace ArchiveFixer.Storage
         public string TempFilePath => FilePath.Length == 0 ? string.Empty : FilePath + ".tmp";
 
         /// <summary>
+        /// 把**读不出来的**那份记忆另存一份备份：<c>password-list.dat.unreadable-&lt;时间戳&gt;.bak</c>。
+        ///
+        /// <para><b>为什么必须有这一步</b>（2026-09-29 复核逮到的一个会真的丢数据的缺口）：
+        /// <see cref="Load"/> 失败时只返回"没有可用记忆"+ 原因，**文件本身不动** —— 这没错；
+        /// 但启动接线紧接着就会按设置里的密码本清单 <c>PersistPasswordList</c> 一次，
+        /// 而 <see cref="Save"/> 是**替换式**的：那份解不开的记忆（换机器 / 重装系统之后的正常现象）
+        /// 当场被覆盖成新内容。老文案还告诉用户"程序没有覆盖、也没有删除那份记忆"，等于让他放心地丢掉它。
+        /// 现在读失败先**复制**一份出来（只读原件、一个字节不改），后面的写盘随便写。</para>
+        ///
+        /// <para>⛔ 只复制，绝不移动、绝不删除原件：用户换回原来的机器时把备份改回原名即可。</para>
+        /// </summary>
+        /// <param name="backupFileName">成功时给出备份的**文件名**（不含目录，避免把路径带进文案）。</param>
+        /// <param name="error">失败原因（脱敏，不含路径）。</param>
+        public bool TryBackupUnreadableFile(out string backupFileName, out string error)
+        {
+            backupFileName = string.Empty;
+            error = string.Empty;
+
+            string path = FilePath;
+
+            if (path.Length == 0)
+            {
+                error = "没有可用的数据根目录";
+                return false;
+            }
+
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    error = "原文件不在";
+                    return false;
+                }
+
+                string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+                string backup = path + ".unreadable-" + stamp + ".bak";
+
+                for (int suffix = 1; File.Exists(backup) && suffix < 100; suffix++)
+                {
+                    backup = path + ".unreadable-" + stamp + "-"
+                        + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".bak";
+                }
+
+                File.Copy(path, backup, overwrite: false);
+
+                backupFileName = Path.GetFileName(backup);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = DescribeException(ex);
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 读记忆。
         ///
         /// <para><b>任何失败都不许覆盖、不许删除这个文件</b>：解不开就当作"没有可用记忆"回去，

@@ -351,6 +351,50 @@ namespace ArchiveFixer.Tests
             Assert.Equal(tampered, File.ReadAllBytes(dataFile));
         }
 
+        // ------------------------------------------------------------------ ⑨b 读失败先备份
+
+        [Fact]
+        public void 记忆_读不出来时先另存备份_之后落盘不再毁掉原件()
+        {
+            /*
+             * 为什么单列一条（2026-09-29 复核逮到的数据风险）：
+             * 老代码读失败时只写一句"已忽略、文件没被动"就返回，而**界面文案还写着**
+             * "程序没有覆盖、也没有删除那份记忆" —— 可启动接线紧接着就会按密码本清单落盘一次，
+             * Save 是替换式的：那份解不开的记忆（换机器 / 重装系统之后的正常现象）当场被覆盖。
+             * 这一条钉住新口径：**读失败先把原件另存一份备份**，后面的写盘随便写。
+             */
+            using var dir = new TempDir();
+
+            PasswordService first = CreateService(dir.Path);
+            first.AddPassword("<示例密码1>");
+
+            string dataFile = DataFile(dir.Path);
+
+            byte[] tampered = File.ReadAllBytes(dataFile);
+            tampered[tampered.Length / 2] ^= 0xFF;
+            File.WriteAllBytes(dataFile, tampered);
+
+            PasswordService second = CreateService(dir.Path);
+
+            Assert.Equal(PasswordListLoadStatus.Undecryptable, second.LoadRememberedList());
+
+            // ① 备份真的落了盘，而且与"读不出来时盘上那一份"逐字节相同
+            string[] backups = Directory.GetFiles(dir.Path, "*.unreadable-*.bak");
+
+            Assert.Single(backups);
+            Assert.Equal(tampered, File.ReadAllBytes(backups[0]));
+
+            // ② 文案如实点名备份文件（老文案说"没有覆盖"，而下一步就会覆盖）
+            Assert.Contains(Path.GetFileName(backups[0]), second.LastListWarning, StringComparison.Ordinal);
+            Assert.DoesNotContain(dir.Path, second.LastListWarning, StringComparison.OrdinalIgnoreCase);
+
+            // ③ 之后正常落盘（启动接线就会做这件事）→ 正式文件被替换，备份一字不差
+            second.AddPassword("<示例密码2>");
+
+            Assert.NotEqual(tampered, File.ReadAllBytes(dataFile));
+            Assert.Equal(tampered, File.ReadAllBytes(backups[0]));
+        }
+
         // ------------------------------------------------------------------ ⑩ 半截 / 随机字节
 
         [Fact]

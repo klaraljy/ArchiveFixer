@@ -7091,11 +7091,12 @@ namespace ArchiveFixer.ViewModels
              *   · 分卷缺失要不要指定目录 → 不补救，照旧落「分卷缺失」（不变量 7 不放松）；
              *   · 批次结束的密码提示 → 只写日志（含"再点一次可手动输密码"的出路）。
              * ⛔ 判定与日志一条都没少，少的只是弹窗；手动「只解压」仍然照旧弹（那时用户就在旁边）。
+             *
+             * ⚠ 抑制必须排在**本批状态清零之后**（2026-09-29 复核逮到）：`ResetBatchConflictState()`
+             * 会把 `_conflictPromptUnavailable` 一起置回 false，老代码在它之前抑制 —— 于是设置里选
+             * 「询问」的人，一键档批中间照样会撞上那个聚合询问框（违反"一键档批中间零弹窗"）。
+             * 见下面 IsBusy = true 之后那一段。
              */
-            if (oneClickRun)
-            {
-                SuppressDecisionPromptsForOneClickRun();
-            }
 
             if (runOptions != null)
             {
@@ -7138,6 +7139,16 @@ namespace ArchiveFixer.ViewModels
 
             // 同名冲突的记账同样从零开始：上一批答过的「全部覆盖」绝不许延续到这一批。
             ResetBatchConflictState();
+
+            /*
+             * 一键档的"零弹窗"抑制放在这里 —— **必须在 ResetBatchConflictState 之后**：
+             * 那个方法会把 _conflictPromptUnavailable 置回 false，先抑制后清零等于没抑制
+             * （2026-09-29 复核逮到：设置里选「询问」时一键档批中间仍会弹聚合询问框）。
+             */
+            if (oneClickRun)
+            {
+                SuppressDecisionPromptsForOneClickRun();
+            }
 
             // 「完成后打开输出目录」整批只开一次；上一批开过不算这一批的（见 _outputFolderOpenedThisBatch）。
             ResetBatchOutputFolderState();

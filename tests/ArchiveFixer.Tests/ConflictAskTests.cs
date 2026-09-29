@@ -129,6 +129,58 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **一键处理档 + 设置里选了「询问」**：批中间照样一次都不许问 —— 用户 2026-09-27 两次拍板的红线
+        /// （"一键处理期间零弹窗，唯一例外是批末汇总"）。
+        ///
+        /// <para>为什么单列一条（2026-09-29 复核逮到）：<c>SuppressDecisionPromptsForOneClickRun()</c>
+        /// 原本排在 <c>ResetBatchConflictState()</c> **之前**，而后者会把 <c>_conflictPromptUnavailable</c>
+        /// 置回 false —— 先抑制后清零等于没抑制，选「询问」的人一键跑批时仍会撞上那个聚合询问框。
+        /// 这一条钉住顺序：抑制必须活过本批的状态清零。</para>
+        /// </summary>
+        [Fact]
+        public async Task 一键档_设置里选了询问_批中间也一次都不问()
+        {
+            var dialog = new RecordingDialogService();
+
+            Harness harness = CreateHarness(dialog, settings =>
+            {
+                settings.ConflictAction = ConflictActions.Ask;
+                settings.ExtractToOriginalDirectory = false;
+                settings.CustomOutputDirectory = Path.Combine(_root, "out-oneclick");
+                settings.KeepArchiveNameFolder = true;
+            });
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("pack-oneclick.7z"));
+
+            string requested = harness.PathService.BuildOutputPath(task, DefaultOptions(harness));
+
+            Directory.CreateDirectory(requested);
+            File.WriteAllText(Path.Combine(requested, "上次留下的旧文件.txt"), "old");
+
+            harness.Engine.OnExtractAsync = _ => Task.Run(() =>
+            {
+                WriteContent(_.OutputPath!, "content.txt", "new");
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult("content.txt"));
+
+            await harness.Coordinator.StartExtractForOneClickAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            // ① 一个字都没问
+            Assert.Empty(dialog.Prompts);
+
+            // ② 该问的事按保守档办了，而且**写进日志**（一键档的规矩是"少弹窗、不少判定"）
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.NotEqual(requested, task.OutputPath);
+            Assert.True(File.Exists(Path.Combine(requested, "上次留下的旧文件.txt")), "旧目录里的文件不许被清掉");
+
+            Assert.Contains(
+                harness.Log.Logs.Select(item => item.DisplayText),
+                text => text.Contains("本次不弹任何确认框", StringComparison.Ordinal));
+        }
+
+        /// <summary>
         /// 非 Ask 档（默认 AutoRename）一个字都不许问：默认路径绝不能被打断，
         /// 而且行为必须与改动前一致（自动改用 <c>名字(1)</c>）。
         /// </summary>
