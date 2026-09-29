@@ -510,73 +510,137 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 确认面板里填的密码：**当候选试过**，而且**追加到「密码」页那份列表的末尾**（用户明确要求存下来）。
-        ///
-        /// <para>用假引擎记录每次被要求用的密码 —— 这是"它真的进了候选链"的机器证据；
-        /// 列表末尾那一条则证明"以后一直有效"，不再是老框那种"只对本次运行有效"。</para>
+        /// 确认面板里那个「本批手动密码」输入框**已经撤掉**（用户 2026-09-29 第二次改口径："这个一键处理
+        /// 点击后出现一个输入框非常的奇怪，这个给他移除"）。要补密码的正路是**「密码」页一键导入** ——
+        /// 所以一键档只写一条指路日志，既不弹框、也不在面板里放输入格。
         /// </summary>
         [Fact]
-        public async Task 一键档_面板填的密码_当候选试过并追加到密码列表末尾()
+        public async Task 一键档_没有密码输入框_只写一条去密码页导入的指路日志()
         {
-            Harness harness = CreateHarness(passwords: new[] { "book-password" });
-            ArchiveTask task = AddTask(harness, CreateSourceFile("enc-panel.7z"));
+            Harness harness = CreateHarness();
+            ArchiveTask task = AddTask(harness, CreateSourceFile("enc-oneclick2.7z"));
 
             task.IsEncrypted = true;
 
-            var tried = new List<string>();
+            WireSuccessfulExtraction(harness, "content.txt");
 
-            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult("content.txt"));
-
-            harness.Engine.OnExtractAsync = request =>
-            {
-                lock (tried)
-                {
-                    tried.Add(request.Password ?? string.Empty);
-                }
-
-                /*
-                 * 只有拿到面板里填的那个密码才成功 —— 这样"它真的进了候选链"才是被证出来的：
-                 * 假引擎第一次一定拿到空密码（候选第一位），失败后管线才会换下一个候选。
-                 */
-                if (!string.Equals(request.Password, "<面板密码>", StringComparison.Ordinal))
-                {
-                    return Task.FromResult(new ArchiveOperationResult
-                    {
-                        Success = false,
-                        Status = StatusText.WrongPassword,
-                        Message = StatusText.WrongPassword,
-                        DetectedErrorType = "WrongPassword"
-                    });
-                }
-
-                WriteContent(request.OutputPath!, "content.txt", "okokokokoko");
-
-                return Task.FromResult(Succeeded());
-            };
-
-            var runOptions = new OneClickRunOptions
-            {
-                ManualPasswords = new[] { "<面板密码>" }
-            };
-
-            await harness.Coordinator.StartExtractForOneClickAsync(runOptions);
+            await harness.Coordinator.StartExtractForOneClickAsync(new OneClickRunOptions());
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
-            // ① 它真的进了候选链（假引擎被要求用过它）
-            Assert.Contains("<面板密码>", tried);
-
-            // ② 追加到列表**末尾**（老条目还在前面）
-            Assert.Equal("<面板密码>", harness.PasswordService.Passwords[^1].Value);
-            Assert.Contains(harness.PasswordService.Passwords, item => item.Value == "book-password");
-
-            // ③ 日志只说条数、不说内容（不变量 5）
             Assert.Contains(
                 harness.Log.Logs,
-                item => item.Message.Contains("本批手动密码", StringComparison.Ordinal));
+                item => item.Message.Contains("「密码」页一键导入", StringComparison.Ordinal));
+
+            // 从来没进过那个弹窗（"没有 WPF 界面，跳过「手动输入密码」"是进了弹窗路径才会写的话）
             Assert.DoesNotContain(
                 harness.Log.Logs,
-                item => item.Message.Contains("<面板密码>", StringComparison.Ordinal));
+                item => item.Message.Contains("没有 WPF 界面", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 手动「只解压」那条路**有可用候选时不再打扰**（用户 2026-09-29 提问："我的密码本里面明明有这个密码，
+        /// 为什么还是会出现没有密码的情况"）：老判据只看"这包看起来要密码"，密码本里明明有也会弹。
+        /// 现在复用与解压同一套参数算候选，**一个可用候选都没有**才问。
+        /// </summary>
+        [Fact]
+        public async Task 手动档_密码本里有可用候选时_不再走手动密码弹窗()
+        {
+            Harness harness = CreateHarness(passwords: new[] { "book-password" });
+            ArchiveTask task = AddTask(harness, CreateSourceFile("enc-has-book.7z"));
+
+            task.IsEncrypted = true;
+
+            WireSuccessfulExtraction(harness, "content.txt");
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // 没进弹窗路径（有候选就不该问）
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                item => item.Message.Contains("没有 WPF 界面", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 真的一个候选都没有时**照旧会问**（这条钉住"别把该问的也一起关掉"）。
+        /// </summary>
+        [Fact]
+        public async Task 手动档_一个可用候选都没有时_照旧走手动密码弹窗()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask task = AddTask(harness, CreateSourceFile("enc-no-book.7z"));
+
+            task.IsEncrypted = true;
+
+            WireSuccessfulExtraction(harness, "content.txt");
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Contains(
+                harness.Log.Logs,
+                item => item.Message.Contains("没有 WPF 界面", StringComparison.Ordinal) &&
+                        item.Message.Contains("手动输入密码", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 批末那条**红字**（用户 2026-09-29："你可以在日志里面最后用红色的一行字显示'有多少解压包是可能是
+        /// 由于没有密码和密码不对导致没用解压完成的'，这里就要注意的是**可能**，因为出错不仅仅是在这里"）。
+        /// </summary>
+        [Fact]
+        public async Task 批末_密码类失败会单独写一条红字_而且写明只是可能()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask task = AddTask(harness, CreateSourceFile("enc-wrong.7z"));
+
+            task.IsEncrypted = true;
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult("content.txt"));
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(new ArchiveOperationResult
+            {
+                Success = false,
+                Status = StatusText.WrongPassword,
+                Message = StatusText.WrongPassword,
+                DetectedErrorType = "WrongPassword"
+            });
+
+            await harness.Coordinator.StartExtractAsync();
+
+            var red = harness.Log.Logs
+                .Where(item => item.Level == "ERROR")
+                .Select(item => item.Message)
+                .ToList();
+
+            Assert.True(
+                red.Any(message => message.Contains("可能", StringComparison.Ordinal) &&
+                                   message.Contains("没有密码", StringComparison.Ordinal)),
+                $"没有红字。任务状态=[{task.Status}]；ERROR 行=[{string.Join(" | ", red)}]；" +
+                $"全部行=[{string.Join(" | ", harness.Log.Logs.Select(item => item.Level + ":" + item.Message))}]");
+
+            // 必须给出去哪儿补密码的出路
+            Assert.Contains(red, message => message.Contains("「密码」页一键导入", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 「移除勾选的」在**没有勾选**（包括列表空着）时不许亮（用户 2026-09-29："我都没有导入文件
+        /// 你亮着干什么"）。老判据只判"闲着"，于是空列表里它也亮着。
+        /// </summary>
+        [Fact]
+        public void 移除勾选的_没有勾选时不许亮()
+        {
+            Harness harness = CreateHarness();
+
+            Assert.False(harness.Vm.RemoveSelectedCommand.CanExecute(null));
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("sel.7z"));
+
+            // AddTask 默认勾上
+            Assert.True(harness.Vm.RemoveSelectedCommand.CanExecute(null));
+
+            task.IsSelected = false;
+
+            Assert.False(harness.Vm.RemoveSelectedCommand.CanExecute(null));
         }
 
         // ================================================================ C3：缺卷时的手动指定目录

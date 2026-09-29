@@ -2014,7 +2014,7 @@ namespace ArchiveFixer.ViewModels
             AppendFolderCommand = new AsyncRelayCommand(_scanCoordinator.AppendFolderAsync, CanRunNormalCommand);
             ScanCommand = new AsyncRelayCommand(_scanCoordinator.ScanTasksAsync, CanRunNormalCommand);
             ClearCommand = new RelayCommand(ClearTasks, CanRunNormalCommand);
-            RemoveSelectedCommand = new RelayCommand(RemoveSelectedTasks, CanRunNormalCommand);
+            RemoveSelectedCommand = new RelayCommand(RemoveSelectedTasks, CanRemoveSelectedTasks);
 
             SmartRenameCommand = new AsyncRelayCommand(_renameCoordinator.SmartRenameAsync, CanRunNormalCommand);
             ChangeNameCommand = new AsyncRelayCommand(_renameCoordinator.ChangeNameAsync, CanRunNormalCommand);
@@ -2872,6 +2872,19 @@ namespace ArchiveFixer.ViewModels
         private bool CanChangeTaskSelection()
         {
             return !IsBusy && Tasks.Count > 0;
+        }
+
+        /// <summary>
+        /// 「移除勾选的」的可用性：闲着 **且列表里真有一条勾着的**。
+        ///
+        /// <para>用户 2026-09-29 真机反馈原话："这个勾选行里面，移除勾选的按钮一直亮着没用啊，
+        /// 我都没有导入文件你亮着干什么" —— 老判据只判"闲着"（<c>CanRunNormalCommand</c>），
+        /// 于是空列表里它也亮着；点下去什么都不发生，读起来就像坏了。
+        /// 与「只解压」等命令同一条口径：**没有可作用的对象就不该亮**。</para>
+        /// </summary>
+        private bool CanRemoveSelectedTasks()
+        {
+            return !IsBusy && Tasks.Any(task => task?.IsSelected == true);
         }
 
         /*

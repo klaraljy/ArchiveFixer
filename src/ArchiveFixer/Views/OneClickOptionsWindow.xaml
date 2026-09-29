@@ -69,27 +69,6 @@
                            Text="{Binding SourceEcho}" />
 
                 <!--
-                    本批手动密码（用户 2026-09-29 拍板：一键档不再在批中间弹「手动输入密码」，
-                    要手动给密码就在这个"本来就要点一次"的确认框里填；一行一个、可留空）。
-                    文案唯一来源 = StatusText.OneClickConfirmManualPassword*（本窗口不写字面量）。
-                -->
-                <TextBlock x:Name="ManualPasswordLabel"
-                           x:FieldModifier="public"
-                           Style="{StaticResource HintTextStyle}"
-                           Margin="0,10,0,0"
-                           TextWrapping="Wrap"
-                           Text="{x:Static models:StatusText.OneClickConfirmManualPasswordLabel}" />
-
-                <TextBox x:Name="ManualPasswordBox"
-                         x:FieldModifier="public"
-                         Margin="0,4,0,0"
-                         Height="54"
-                         AcceptsReturn="True"
-                         TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto"
-                         ToolTip="{x:Static models:StatusText.OneClickConfirmManualPasswordHint}" />
-
-                <!--
                     常驻提醒：程序不判断"内容物里该不该有压缩包"（用户 2026-09-26 点名要写在动手之前）。
                     文案唯一来源 = StatusText.OneClickConfirmNestedCaveat（含"去哪儿调"）。
                 -->

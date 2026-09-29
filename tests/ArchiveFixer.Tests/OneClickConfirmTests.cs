@@ -524,8 +524,11 @@ namespace ArchiveFixer.Tests
                 OneClickRunOptions.FromSettings(harness.Vm.Settings),
                 reminders);
 
-            Assert.Contains("没有可用密码", facts.NoticeEcho, StringComparison.Ordinal);
+            Assert.Contains("可能需要密码", facts.NoticeEcho, StringComparison.Ordinal);
             Assert.Contains("locked.7z", facts.NoticeEcho, StringComparison.Ordinal);
+
+            // 2026-09-29：这一行必须给出去哪儿补密码的出路（用户要求"请在密码页一键导入"）
+            Assert.Contains("「密码」页一键导入", facts.NoticeEcho, StringComparison.Ordinal);
 
             // 反例：不加密的包不该出现在这一段里（否则每批都要多一行噪声）
             task.IsEncrypted = false;
@@ -538,7 +541,7 @@ namespace ArchiveFixer.Tests
                 OneClickRunOptions.FromSettings(harness.Vm.Settings),
                 quietReminders);
 
-            Assert.DoesNotContain("没有可用密码", quiet.NoticeEcho, StringComparison.Ordinal);
+            Assert.DoesNotContain("可能需要密码", quiet.NoticeEcho, StringComparison.Ordinal);
         }
 
         // ================================================================ ④ 「继续解」（第 16 条追加）

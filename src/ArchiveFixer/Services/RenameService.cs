@@ -1053,6 +1053,29 @@ namespace ArchiveFixer.Services
             return string.IsNullOrWhiteSpace(replaced) ? fileName : replaced;
         }
 
+        /// <summary>识别器认不出格式时给的那个值（见 <c>ArchiveEngineContracts</c>）。</summary>
+        private const string UnknownDetectedFormat = "Unknown";
+
+        /// <summary>
+        /// 文件名的**最后一段是纯数字**吗（<c>amb909.7.01</c> → <c>01</c>；<c>amb909.z.2</c> → <c>2</c>）？
+        ///
+        /// <para>纯数字尾巴在这一行里一律当**卷号**看，绝不当后缀去替换（2026-09-29 真机事故：
+        /// 把 `.01` 改成 `.7z` 等于把卷号删了，7-Zip 再也拼不起整组）。</para>
+        /// </summary>
+        private static bool LooksLikeNumericVolumeTail(string fileName)
+        {
+            string[] parts = fileName.Split('.');
+
+            if (parts.Length < 2)
+            {
+                return false;
+            }
+
+            string tail = parts[^1];
+
+            return tail.Length > 0 && tail.All(char.IsDigit);
+        }
+
         private static string BuildFixByDetectedFormatFileName(ArchiveTask task, RenameOptions options)
         {
             string oldPath = task.CurrentPath;
@@ -1087,6 +1110,30 @@ namespace ArchiveFixer.Services
                     VolumeNameRepair.EnumerateFileNamesInDirectory(oldPath));
 
                 return volumeRepair.CanRepair ? volumeRepair.SuggestedFileName : fileName;
+            }
+
+            /*
+             * ⛔ 两道"不许动"的闸门（2026-09-29 真机事故，用户当场报）。
+             *
+             * 现场：`amb909.7.01`（2 GiB，内容带 7z 魔数）与 `amb909.z.2`（1.89 GB，认不出格式）
+             * 在同一个目录里，是一组**名字被改坏的分卷**。老逻辑各改一次后缀 ——
+             * `.01` → `.7z`、`.2` → `.7z`（认不出格式时"建议后缀"是空的，就兜底成设置里的默认后缀 `.7z`），
+             * **卷号被吃掉**：7-Zip 再也找不到后续卷，整个包从"还能救"变成"文件损坏"。
+             *
+             * ① **格式未知 → 一个字都不改**：连"它是什么"都不知道，改后缀只能是猜；
+             *    设置里的默认后缀不是证据（这条同时治"Unknown 文件被改成默认后缀"这一类）。
+             * ② **末尾那一段是纯数字**（`.01` / `.2` / `..3` 这种）→ 那是**卷号**，不是后缀：
+             *    交给分卷那条路（`VolumeNameRepair` / 内容级推断），这里绝不动它。
+             */
+            if (string.IsNullOrWhiteSpace(task.DetectedFormat) ||
+                string.Equals(task.DetectedFormat, UnknownDetectedFormat, StringComparison.OrdinalIgnoreCase))
+            {
+                return fileName;
+            }
+
+            if (LooksLikeNumericVolumeTail(fileName))
+            {
+                return fileName;
             }
 
             /*

@@ -39,38 +39,6 @@ namespace ArchiveFixer.Tests
     {
         private readonly string _root;
 
-        /// <summary>
-        /// 面板上「本批手动密码」那个多行框的解析（用户 2026-09-29：一键档不再在批中间弹手动密码框，
-        /// 要手动给就在确认框里填，一行一个、填了会存进「密码」页列表末尾）。
-        ///
-        /// <para>钉三件事：① 一行一个、空行丢掉；② **只去首尾空白，不动密码内部的空格**
-        /// （有些密码真的带空格，Trim 掉就永远试不对）；③ 去重且保序、有条数上限。</para>
-        /// </summary>
-        [Fact]
-        public void 面板的手动密码框_一行一个_去空行去重且不动密码内部的空格()
-        {
-            IReadOnlyList<string> parsed = OneClickOptionsWindow.ParseManualPasswords(
-                "  first  \r\n\r\nsecond\n  first  \n third ");
-
-            Assert.Equal(new[] { "first", "second", "third" }, parsed);
-
-            // 内部的空格必须原样留着
-            Assert.Equal(new[] { "pass word" }, OneClickOptionsWindow.ParseManualPasswords("pass word"));
-
-            // 空 / 全是空白 → 一条都不给（不许凭空造出一个空密码候选）
-            Assert.Empty(OneClickOptionsWindow.ParseManualPasswords(null));
-            Assert.Empty(OneClickOptionsWindow.ParseManualPasswords("   \r\n\t "));
-
-            // 上限：超出的丢掉
-            string many = string.Join(
-                "\n",
-                Enumerable.Range(1, OneClickOptionsWindow.MaxManualPasswords + 10).Select(index => "p" + index));
-
-            Assert.Equal(
-                OneClickOptionsWindow.MaxManualPasswords,
-                OneClickOptionsWindow.ParseManualPasswords(many).Count);
-        }
-
         public OneClickOptionsPanelTests()
         {
             _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerOneClickOptions", Guid.NewGuid().ToString("N"));

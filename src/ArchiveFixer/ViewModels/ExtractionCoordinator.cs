@@ -4374,6 +4374,31 @@ namespace ArchiveFixer.ViewModels
                 failed > 0 ? "WARN" : "INFO",
                 $"本批汇总：{tasks.Count} 个任务 —— {string.Join(" / ", parts)}。");
 
+            /*
+             * 批末那条**红字**（用户 2026-09-29 要求）：把"可能是没有密码 / 密码不对"的那些单独点出来，
+             * 好让他一眼知道"该去补密码"而不是去怀疑文件坏了。
+             *
+             * ⚠ 只按**机器判定的密码类终态**点名，并且必须写"可能" —— 同一个包也可能是缺卷 / 损坏，
+             * 引擎给的结论并不专一（用户原话："可能由于，因为有的时候出错不仅仅是在这里"）。
+             */
+            List<ArchiveTask> passwordSuspects = tasks
+                .Where(task => task.Status is
+                    StatusText.WrongPassword or
+                    StatusText.PasswordAttemptLimitReached or
+                    StatusText.EncryptedHeaders)
+                .ToList();
+
+            if (passwordSuspects.Count > 0)
+            {
+                AppendLog(
+                    "ERROR",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.BatchPasswordSuspectsLogFormat,
+                        passwordSuspects.Count,
+                        string.Join("、", passwordSuspects.Take(MaxBatchSummaryFailures).Select(task => task.FileName))));
+            }
+
             if (failed == 0)
             {
                 return;
@@ -5920,7 +5945,8 @@ namespace ArchiveFixer.ViewModels
 
             foreach (ArchiveTask? task in tasks)
             {
-                if (task == null || !task.IsEncrypted)
+                if (task == null || !(task.IsEncrypted ||
+                    string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)))
                 {
                     continue;
                 }
@@ -6130,30 +6156,31 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            bool mayNeedPassword = tasks.Any(task =>
-                task != null &&
-                (task.IsEncrypted ||
-                 string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)));
+            /*
+             * 只问"**真有包连一个可用候选都没有**"的时候（2026-09-29 用户提问后的改动）。
+             *
+             * 老判据是"本批有包看起来要密码就弹" —— 哪怕密码本里明明有它的密码也弹，
+             * 用户的原话就是"我的密码本里面明明有这个密码，为什么还是会出现"。现在复用
+             * 与解压**同一套参数**算候选（GetPasswordCandidates：统一密码 / 密码本 / 空密码 / 旁路说明文件），
+             * 只要有一个包一个候选都拿不出来才问；有候选就一个字都不打扰。
+             */
+            List<ArchiveTask> suspects = FindSuspectsWithoutUsablePassword(tasks);
 
-            if (!mayNeedPassword)
+            if (suspects.Count == 0)
             {
                 return;
             }
 
             _manualPasswordPrompted = true;
 
-            List<ArchiveTask> suspects = tasks
-                .Where(task => task != null && (task.IsEncrypted ||
-                    string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)))
-                .Take(MaxPasswordFailureNamesInDialog)
-                .ToList();
+            List<ArchiveTask> named = suspects.Take(MaxPasswordFailureNamesInDialog).ToList();
 
             string message =
-                $"本批有 {tasks.Count(t => t != null && (t.IsEncrypted || string.Equals(t.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)))} 个包可能带密码。" +
+                $"本批有 {suspects.Count} 个包可能带密码，而当前一个可用候选都没有。" +
                 Environment.NewLine + Environment.NewLine +
-                string.Join(Environment.NewLine, suspects.Select(t => t.FileName)) +
+                string.Join(Environment.NewLine, named.Select(t => t.FileName)) +
                 Environment.NewLine + Environment.NewLine +
-                "如果密码本里没有它们的密码，可以现在手动给一个：本批所有任务都会把它当候选试一遍。" +
+                "可以现在手动给一个：本批所有任务都会把它当候选试一遍。" +
                 Environment.NewLine +
                 "⚠ 只对本次运行有效，不会写进任何文件、也不会进密码列表（关掉程序就没了）。";
 
@@ -6188,6 +6215,49 @@ namespace ArchiveFixer.ViewModels
                     $"⚠ 你输入的手动密码有 {entered.Length} 个字符，超过 7-Zip 支持的 {MaxSupportedPasswordLength} 个，" +
                     "更长的部分会被截断 —— 如果解不开，先确认密码本身有没有这么长。");
             }
+        }
+
+        /// <summary>
+        /// 「看起来要密码」**并且**用与解压同一套参数算下来**一个可用候选都没有**的那些包
+        /// —— 手动密码弹窗只在这些包存在时才问（2026-09-29 用户提问后收紧）。
+        ///
+        /// <para>⚠ 与 <c>FindTasksWithoutUsablePassword</c>（确认框那一段）的区别只有一个：
+        /// 这里把"引擎已经说过需要密码"（<see cref="StatusText.PasswordNeed"/>）也算嫌疑人 ——
+        /// RAR 这类容器的加密在识别阶段读不出来，只能等引擎列目录时才知道。</para>
+        /// </summary>
+        private List<ArchiveTask> FindSuspectsWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks)
+        {
+            var result = new List<ArchiveTask>();
+
+            foreach (ArchiveTask? task in tasks)
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                bool suspect = task.IsEncrypted ||
+                    string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal);
+
+                if (!suspect)
+                {
+                    continue;
+                }
+
+                List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
+                    task,
+                    Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
+                    _passwordService.Passwords,
+                    Settings.TryEmptyPasswordFirst,
+                    Settings.EnableSidecarPassword);
+
+                if (!SourceJunkScanner.HasUsablePasswordCandidate(candidates))
+                {
+                    result.Add(task);
+                }
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -6264,57 +6334,16 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 一键档的手动密码入口（用户 2026-09-29 拍板）：密码从**确认面板**来，不再弹那个框。
+        /// 一键档的密码提示（用户 2026-09-29 第二次改口径）：**不在批中间弹任何框、也不在面板里放输入框**
+        /// （他原话："这个一键处理点击后出现一个输入框非常的奇怪，这个给他移除，可以弄一个提醒字样，
+        /// 本次的解压可能需要密码，请在密码页一键导入"）。
         ///
-        /// <para>与老框的两点差别（用户明确要求）：① 可以一次给**多个**；
-        /// ② 每条都**追加到「密码」页那份列表的末尾**（<c>PasswordService.AddPassword</c>：
-        /// 末尾追加 + 去重 + 按本机加密落盘），以后一直有效。</para>
-        ///
-        /// <para>没填而本批又有"可能带密码"的包时，写一条 INFO 说清"要手动给就去确认面板填" ——
-        /// ⛔ 一键档**不许**在这里弹框（"批中间零弹窗"是用户两次拍板的红线）。</para>
+        /// <para>所以这里只做两件事：① 把"要补密码就去「密码」页一键导入"写进日志；
+        /// ② 标记本轮不再走"动手前问一次"那条路（续解的第 2/3 轮同一条口径）。</para>
         /// </summary>
-        private void SeedManualPasswordsFromOneClickRun(
-            OneClickRunOptions? runOptions,
-            IReadOnlyList<ArchiveTask> selectedTasks)
+        private void LogOneClickPasswordHint(IReadOnlyList<ArchiveTask> selectedTasks)
         {
-            // 本轮不再走"动手前问一次"那条路（续解的第 2/3 轮同一条口径）。
             _manualPasswordPrompted = true;
-
-            IReadOnlyList<string> manuals = runOptions?.ManualPasswords
-                ?? (IReadOnlyList<string>)Array.Empty<string>();
-
-            int added = 0;
-            int existed = 0;
-
-            foreach (string value in manuals)
-            {
-                if (string.IsNullOrWhiteSpace(value))
-                {
-                    continue;
-                }
-
-                _manualBatchPasswords.Add(value);
-
-                if (_passwordService.AddPassword(value))
-                {
-                    added++;
-                }
-                else
-                {
-                    existed++;
-                }
-            }
-
-            if (manuals.Count > 0)
-            {
-                AppendLog(
-                    "INFO",
-                    string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.OneClickConfirmManualPasswordSavedLogFormat,
-                        added,
-                        existed));
-            }
 
             bool mayNeedPassword = selectedTasks.Any(task =>
                 task != null &&
@@ -7292,7 +7321,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 if (oneClickRun)
                 {
-                    SeedManualPasswordsFromOneClickRun(runOptions, selectedTasks);
+                    LogOneClickPasswordHint(selectedTasks);
                 }
                 else
                 {
