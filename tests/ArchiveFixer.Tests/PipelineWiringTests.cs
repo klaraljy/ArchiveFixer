@@ -632,10 +632,10 @@ namespace ArchiveFixer.Tests
         /// **共用同一个判据**，两种形态（空列表 / 勾了又取消）都必须一致；</description></item>
         /// <item><description><b>通知</b>：勾选一变就要发 <c>CanExecuteChanged</c>（RelayCommand 自己不发，
         /// WPF 只在焦点变化时才重问 —— 那正是用户看到的"先亮着不动"）；</description></item>
-        /// <item><description>忙起来（跑批中）两颗都灰 —— 与旁边「全选 / 全不选 / 反选」同形
-        /// （用户那句"这怎么还是和前面的按钮样式不一样"）。⚠ 这一点<b>推翻了 2026-09-27 的"永远可点"</b>
-        /// （<c>ItemSept27FixTests</c> 里那条当时钉的是"处理中也照样能点"）：用户 2026-09-29 的新口径是
-        /// 与那一排另外三个按钮**同形**，因为"永远可点"的结果正是他这次报的"空列表里也亮着"。</description></item>
+        /// <item><description>跑批中途（<c>IsBusy=true</c>）**有勾选就照样亮** —— 它只是纯列表操作，
+        /// 用户 2026-09-27 原话<i>"我就是修改列表删除东西，和正在处理有什么关系"</i>。
+        /// ⛔ 判据里**不许有 <c>!IsBusy</c>**：2026-09-29 那一轮按"我都没有导入文件你亮着干什么"补的
+        /// 只是"没勾选就不亮"这一半，**没有**推翻 09-27（见 <c>ItemSept27FixTests</c> 那条的注释）。</description></item>
         /// </list>
         /// </summary>
         [Fact]
@@ -668,16 +668,19 @@ namespace ArchiveFixer.Tests
                 "取消勾选之后一次 CanExecuteChanged 都没发 —— WPF 不会重问，按钮会一直亮着");
 
             /*
-             * 忙起来 = 两颗都灰（与旁边那三个勾选按钮同形）。
-             * 这条与 2026-09-27 的"永远可点"相反，是用户 2026-09-29 的新口径，理由写在方法注释里。
+             * 忙起来 = **有勾选就两颗都亮**（它们共用同一个判据）。
+             * 这是用户 2026-09-27 的原话"我就是修改列表删除东西，和正在处理有什么关系"：
+             * 纯列表操作，跑批中途照样得能点 —— ⛔ 判据里不许有 !IsBusy。
              */
             task.IsSelected = true;
             harness.Vm.IsBusy = true;
 
             try
             {
-                Assert.False(harness.Vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批中途那颗按钮必须与旁边三个一样是灰的");
-                Assert.False(harness.Vm.RemoveSelectedCommand.CanExecute(null));
+                Assert.True(
+                    harness.Vm.RemoveCheckedTasksCommand.CanExecute(null),
+                    "跑批中途有勾选照样可点（纯列表操作，与正在处理的那一批无关）");
+                Assert.True(harness.Vm.RemoveSelectedCommand.CanExecute(null));
             }
             finally
             {

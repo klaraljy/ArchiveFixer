@@ -859,8 +859,6 @@ namespace ArchiveFixer.Services
         /// 用户能解释"为什么这条排在前面"。
         /// </para>
         /// </summary>
-        private const bool RedCheckIgnoreBatchPassword = false;   // 红检开关（临时，已复位）
-
         public List<PasswordItem> GetPasswordCandidates(
             ArchiveTask task,
             string globalPassword,
@@ -916,7 +914,7 @@ namespace ArchiveFixer.Services
 
             bool hasVerifiedBatchPassword = verifiedPasswords.Count > 0;
 
-            if (tryEmptyFirst && (!hasVerifiedBatchPassword || RedCheckIgnoreBatchPassword))
+            if (tryEmptyFirst && !hasVerifiedBatchPassword)
             {
                 AddCandidate(string.Empty, "Empty", "空密码");
             }

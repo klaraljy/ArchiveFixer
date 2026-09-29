@@ -16,7 +16,7 @@ namespace ArchiveFixer.Tests
     ///
     /// <list type="number">
     /// <item><description>列表要显示选中文件的大小（排在文件名后面）+ 勾选合计；</description></item>
-    /// <item><description>「移除勾选的」在跑批时点不动，必须能读出为什么；</description></item>
+    /// <item><description>「移除勾选的」的用法与可用性（跑批中途照样可点、没勾选时不亮、灰着也读得出为什么）；</description></item>
     /// <item><description>日志里"其余物会删什么"必须跟着**源包那一档**说，且术语统一（其余物 = 过程物 + 原包）；</description></item>
     /// <item><description>「停止后续」之后不许再试新的密码候选（在候选之间停）；</description></item>
     /// <item><description>不加密的包 / 连续候选结果相同 → 不许把结论写成「密码错误」，也不许继续烧候选；</description></item>
@@ -371,16 +371,15 @@ namespace ArchiveFixer.Tests
         /// 「移除勾选的」：优先移除勾选的；**一个都没勾时按当前高亮那一行**移除
         /// （用户 2026-09-27"点了没反应"的真因：他只点中了行、没打勾）。
         ///
-        /// <para>⚠ 2026-09-29 口径收回（用户："这个勾选行里面，移除勾选的按钮一直亮着没用啊，
-        /// 我都没有导入文件你亮着干什么" + "这怎么还是和前面的按钮样式不一样"）：
-        /// 那一轮改成"永远可点"之后，空列表 / 一个都没勾时它也亮着 —— 用户第二次报同一件事，
-        /// 于是判据收成与旁边「全选 / 全不选 / 反选」**同形**（<c>CanRemoveSelectedTasks</c>：
-        /// 闲着 + 至少一条勾着的）。所以本用例下面那两条断言跟着改：
-        /// 跑批中途**不再**可点（与旁边三个一致），高亮兜底那条路从"用户能点出来"降级成"兜底网"
-        /// （命令仍照办，只是按钮在那种状态下是灰的 —— 见 <c>MainViewModel.RemoveCheckedTasks</c>）。</para>
+        /// <para>⚠ 2026-09-29 的口径修正只补了**一半**，两半合起来才是现行判据（<c>CanRemoveSelectedTasks</c>）：
+        /// 那一轮按用户原话"我都没有导入文件你亮着干什么"补上"一个都没勾时不许亮"，
+        /// 但**不许**顺带把 2026-09-27 已经否掉的 <c>!IsBusy</c> 加回来 —— 用户 09-27 的原话是
+        /// "我就是修改列表删除东西，和正在处理有什么关系"。所以本用例下面那两条断言是：
+        /// **跑批中途有勾选照样可点**（并且照删），高亮兜底那条路仍是"兜底网"
+        /// （界面在"一个都没勾"时已经把按钮灰掉了，命令本身照办 —— 见 <c>MainViewModel.RemoveCheckedTasks</c>）。</para>
         /// </summary>
         [Fact]
-        public void 移除勾选的_勾选的与高亮那一行都能移除_处理中是灰的()
+        public void 移除勾选的_勾选的与高亮那一行都能移除_跑批中途照样可点()
         {
             MainViewModel vm = CreateViewModel(out LogService log);
 
@@ -400,27 +399,38 @@ namespace ArchiveFixer.Tests
             vm.Tasks.Add(highlightedTask);
             vm.Tasks.Add(untouchedTask);
 
-            /* 处理中与旁边那三个勾选按钮同形：灰的（用户 2026-09-29 的新口径，推翻 2026-09-27 的"永远可点"）。 */
+            /*
+             * 跑批中途：**照样可点、点下去也照删** —— 它是纯列表操作，磁盘一个字节都不碰
+             *（用户 2026-09-27 原话"我就是修改列表删除东西，和正在处理有什么关系"）。
+             * ⛔ 这里以前钉的是"跑批中途必须与旁边三个一样是灰的"，那等于把两轮反馈只留下一半，已改对。
+             */
             vm.IsBusy = true;
 
             try
             {
-                Assert.False(vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批中途必须与旁边三个按钮一样是灰的");
+                Assert.True(
+                    vm.RemoveCheckedTasksCommand.CanExecute(null),
+                    "跑批中途有勾选照样可点（纯列表操作，与正在处理的那一批无关）");
 
-                // 禁用态下也得答得出"为什么"（那颗按钮带 ToolTipService.ShowOnDisabled）。
+                /*
+                 * 灰着的时候也得答得出"为什么"（那颗按钮带 ToolTipService.ShowOnDisabled）——
+                 * 而这句话**只许**把"没有可移除的对象"说成灰的原因。
+                 */
                 Assert.Contains("只动列表", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
-                Assert.Contains("灰的", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
+                Assert.Contains("没有导入文件、或者一个都没勾时它是灰的", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
+                Assert.Contains("正在跑批时照样能点", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
+                Assert.DoesNotContain("正在处理时也是灰的", vm.RemoveCheckedTasksTooltip, StringComparison.Ordinal);
+
+                // ① 有勾选 → 跑批中途点下去照样移除勾选的那些（高亮那一行不动）
+                vm.RemoveCheckedTasksCommand.Execute(null);
+
+                Assert.DoesNotContain(checkedTask, vm.Tasks);
+                Assert.Contains(highlightedTask, vm.Tasks);
             }
             finally
             {
                 vm.IsBusy = false;
             }
-
-            // ① 有勾选 → 移除勾选的那些（高亮那一行不动）
-            vm.RemoveCheckedTasksCommand.Execute(null);
-
-            Assert.DoesNotContain(checkedTask, vm.Tasks);
-            Assert.Contains(highlightedTask, vm.Tasks);
 
             // ② 没有勾选、但点中了一行（高亮）→ 移除那一行，并写日志说清是按哪一行办的
             vm.SelectedTask = highlightedTask;

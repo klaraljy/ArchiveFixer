@@ -163,16 +163,21 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 「移除勾选的」的可用性必须与旁边「全选 / 全不选 / 反选」**同形**（用户 2026-09-29 两次反馈）：
-        /// 原话"这个勾选行里面，移除勾选的按钮一直亮着没用啊，我都没有导入文件你亮着干什么" →
-        /// "这怎么还是和前面的按钮样式不一样"。
+        /// 「移除勾选的」的可用性判据 = **列表里有没有勾着的**（用户两轮反馈**各管一半**，合成口径）：
         ///
-        /// <para>老判据只判"闲着"，于是空列表里它也亮着、与已经灰下去的那三个并列在同一排 ——
-        /// 那正是用户看到的"样式不一样"。现行口径：闲着 **且** 至少一条勾着的
-        /// （<see cref="MainViewModel"/> 的 <c>CanRemoveSelectedTasks</c>，与右键菜单那条命令**共用**）。</para>
+        /// <list type="number">
+        /// <item><description>2026-09-27 否掉了"跑批中途灰"那一半：它只是**纯列表操作**（磁盘一个字节都不碰），
+        /// 用户原话<i>"我就是修改列表删除东西，和正在处理有什么关系"</i>；</description></item>
+        /// <item><description>2026-09-29 补上"一个都没勾（包括空列表）时不许亮"那一半：原话
+        /// <i>"这个勾选行里面，移除勾选的按钮一直亮着没用啊，我都没有导入文件你亮着干什么"</i>。</description></item>
+        /// </list>
+        ///
+        /// <para>所以本用例钉两件事：**没勾选 → 灰**（与旁边那三个"没有可作用的对象就不亮"同形）；
+        /// **有勾选 → 亮，跑批中途也一样亮**（<see cref="MainViewModel"/> 的 <c>CanRemoveSelectedTasks</c>，
+        /// 与右键菜单那条命令**共用**）。⛔ 忙闲那一维根本不进判据 —— 把 <c>!IsBusy</c> 加回来就是推翻 09-27。</para>
         /// </summary>
         [Fact]
-        public void 移除勾选的_与旁边三个勾选按钮同形()
+        public void 移除勾选的_只看有没有勾选_不看忙闲()
         {
             MainViewModel vm = CreateViewModel();
 
@@ -199,13 +204,28 @@ namespace ArchiveFixer.Tests
 
             Assert.True(vm.RemoveCheckedTasksCommand.CanExecute(null));
 
-            // 忙起来：四个全灰。
+            // 忙起来：旁边三个灰下去（它们确实与跑批有关），「移除勾选的」**照样亮**（纯列表操作）。
             vm.IsBusy = true;
 
             try
             {
-                Assert.False(vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批中途必须与旁边三个一样是灰的");
+                Assert.True(
+                    vm.RemoveCheckedTasksCommand.CanExecute(null),
+                    "跑批中途有勾选照样可点 —— 它只动列表，与正在跑的那一批无关（用户 2026-09-27 原话）");
                 Assert.False(vm.SelectAllTasksCommand.CanExecute(null));
+            }
+            finally
+            {
+                vm.IsBusy = false;
+            }
+
+            // 跑批中途**没勾选**时仍然是灰的（09-29 那一半与忙闲无关，任何时候都成立 —— 两半合成）。
+            only.IsSelected = false;
+            vm.IsBusy = true;
+
+            try
+            {
+                Assert.False(vm.RemoveCheckedTasksCommand.CanExecute(null), "跑批期间一个都没勾也不许亮");
             }
             finally
             {
