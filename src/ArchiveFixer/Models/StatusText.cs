@@ -673,6 +673,27 @@ namespace ArchiveFixer.Models
         public const string OneClickConfirmNoPasswordFormat =
             "注意：本批有 {0} 个包没有可用密码（例如 {1}）—— 继续大概率以「密码错误」或「达到密码尝试上限」结束。";
 
+        /// <summary>
+        /// 确认面板上那个「本批手动密码」输入框的标题（用户 2026-09-29：一键档不再在批中间弹手动密码框，
+        /// 要手动给密码就在这里填；一行一个，留空 = 不给）。
+        /// </summary>
+        public const string OneClickConfirmManualPasswordLabel =
+            "本批手动密码（可留空；一行一个）：";
+
+        /// <summary>它的说明：候选位置 + **会存进密码列表末尾**（用户 2026-09-29 明确要求存下来）。</summary>
+        public const string OneClickConfirmManualPasswordHint =
+            "填了就对本批所有任务当候选试一遍（排在空密码之后、密码本之前），并会加到「密码」页那份列表的末尾，"
+            + "以后一直有效。只为这一次给、不想存下来的话，用「只解压」那颗按钮，它会在动手前单独问你一次。";
+
+        /// <summary>填进列表之后写一条 INFO（**只说条数，绝不说内容**）。</summary>
+        public const string OneClickConfirmManualPasswordSavedLogFormat =
+            "本批手动密码：{0} 条已加到「密码」页列表末尾；{1} 条本来就在列表里，没有重复添加。";
+
+        /// <summary>一键档不弹手动密码框时写的那条 INFO（说清"要手动给去哪儿给"）。</summary>
+        public const string OneClickConfirmManualPasswordSkippedLog =
+            "一键处理：本批有包可能带密码，但一键档不在批中间弹「手动输入密码」——"
+            + "要手动给密码，请在开始前的那个确认框里填「本批手动密码」；没填就按空密码 / 统一密码 / 密码本的顺序试。";
+
         /// <summary>A 段（疑似无用物）并进确认框的那一行。</summary>
         public const string OneClickConfirmJunkFormat =
             "另外：源目录里认出 {0} 个疑似无用物（例如 {1}），本程序一个都不会动它们。";

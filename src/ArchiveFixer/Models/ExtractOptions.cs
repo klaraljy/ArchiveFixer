@@ -242,6 +242,19 @@ namespace ArchiveFixer.Models
             !OutputPlacement.UsesCustomRoot(PlacementMode) || !string.IsNullOrWhiteSpace(CustomRoot);
 
         /// <summary>
+        /// 确认面板里填的**本批手动密码**（一行一个，可空；用户 2026-09-29）。
+        ///
+        /// <para>为什么搬到面板上：一键档的红线是"批中间零弹窗"，而原来那条「手动输入密码」的框
+        /// 恰恰卡在开工前 —— 等于给一键档开了第二个口子。现在要手动给密码，就在**本来就要点一次**的
+        /// 确认框里填，批中间彻底不弹。</para>
+        ///
+        /// <para>与老那条框的两点差别（用户明确要求）：① 一次可以给**多个**（一行一个）；
+        /// ② 会**追加到「密码」页那份列表的末尾**（按本机加密落盘），以后一直有效 ——
+        /// 老框是"只对本次运行有效、绝不落盘"。</para>
+        /// </summary>
+        public IReadOnlyList<string> ManualPasswords { get; init; } = Array.Empty<string>();
+
+        /// <summary>
         /// 从设置造一个快照（面板打开时的初值 / 没弹面板时的降级值）。
         ///
         /// ⚠ 只**读**设置，一个字都不写回去。

@@ -268,9 +268,54 @@ namespace ArchiveFixer.Views
                 SourceHandling = ResolveSourceHandling(),
                 RestHandling = ResolveRestHandling(),
                 SaveAsDefault = SaveAsDefaultBox.IsChecked == true,
-                SuppressPanelNextTime = SuppressPanelBox.IsChecked == true
+                SuppressPanelNextTime = SuppressPanelBox.IsChecked == true,
+                ManualPasswords = ParseManualPasswords(ManualPasswordBox.Text)
             };
         }
+
+        /// <summary>
+        /// 把面板里那个多行框解析成密码表：**一行一个**，去掉空行与首尾空白，按出现顺序去重。
+        ///
+        /// <para>⛔ 不 Trim 掉密码内部的空格（有些密码真的带空格），只去首尾 ——
+        /// 首尾空白几乎一定是粘贴时带进来的，留着它只会让用户"看着对、试不对"。</para>
+        ///
+        /// <para>上限 <see cref="MaxManualPasswords"/> 条：这个框是给"临时补几个"用的，
+        /// 不是密码本；超出的部分**丢掉并写进日志**（由调用方写，窗口不碰日志）。</para>
+        /// </summary>
+        internal static IReadOnlyList<string> ParseManualPasswords(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return Array.Empty<string>();
+            }
+
+            var result = new List<string>();
+
+            foreach (string line in text.Split('\n'))
+            {
+                string value = line.Trim();
+
+                if (value.Length == 0)
+                {
+                    continue;
+                }
+
+                if (!result.Contains(value, StringComparer.Ordinal))
+                {
+                    result.Add(value);
+                }
+
+                if (result.Count >= MaxManualPasswords)
+                {
+                    break;
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>这个框一次最多收几条（够用又不至于让候选循环炸掉）。</summary>
+        internal const int MaxManualPasswords = 50;
 
         /// <summary>
         /// 显示确认框并拿结果（**唯一的入口**）。任何"弹不出来 / 问不到"的情况都返回

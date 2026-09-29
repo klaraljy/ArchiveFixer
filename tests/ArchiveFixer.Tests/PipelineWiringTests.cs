@@ -474,6 +474,111 @@ namespace ArchiveFixer.Tests
             Assert.Equal(string.Empty, triedPasswords.First());
         }
 
+        // ================================================================ C2b：一键档的手动密码（2026-09-29）
+
+        /// <summary>
+        /// **一键档不再弹那个「手动输入密码」的框**（用户 2026-09-29 拍板：一键处理批中间零弹窗是红线，
+        /// 而那个框恰好卡在开工前，等于第二个口子）。要手动给密码就在确认面板的「本批手动密码」里填。
+        ///
+        /// <para>判据用**日志路径**：没界面宿主时那个框只会写一条
+        /// "当前宿主没有 WPF 界面，跳过「手动输入密码」这一步" —— 一键档**连这一步都不该进**，
+        /// 取而代之的是那条"要手动给就去确认面板填"的说明。</para>
+        /// </summary>
+        [Fact]
+        public async Task 一键档_带加密包也不再走手动密码弹窗_只写一条去哪儿填的日志()
+        {
+            Harness harness = CreateHarness();
+            ArchiveTask task = AddTask(harness, CreateSourceFile("enc-oneclick.7z"));
+
+            task.IsEncrypted = true;
+
+            WireSuccessfulExtraction(harness, "content.txt");
+
+            await harness.Coordinator.StartExtractForOneClickAsync(new OneClickRunOptions());
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // ① 走了"一键档不弹框"那条路（写清要去哪儿填）
+            Assert.Contains(
+                harness.Log.Logs,
+                item => item.Message.Contains(StatusText.OneClickConfirmManualPasswordSkippedLog, StringComparison.Ordinal));
+
+            // ② 从来没进过那个弹窗（"没有 WPF 界面，跳过「手动输入密码」"是进了弹窗路径才会写的话）
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                item => item.Message.Contains("没有 WPF 界面", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 确认面板里填的密码：**当候选试过**，而且**追加到「密码」页那份列表的末尾**（用户明确要求存下来）。
+        ///
+        /// <para>用假引擎记录每次被要求用的密码 —— 这是"它真的进了候选链"的机器证据；
+        /// 列表末尾那一条则证明"以后一直有效"，不再是老框那种"只对本次运行有效"。</para>
+        /// </summary>
+        [Fact]
+        public async Task 一键档_面板填的密码_当候选试过并追加到密码列表末尾()
+        {
+            Harness harness = CreateHarness(passwords: new[] { "book-password" });
+            ArchiveTask task = AddTask(harness, CreateSourceFile("enc-panel.7z"));
+
+            task.IsEncrypted = true;
+
+            var tried = new List<string>();
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult("content.txt"));
+
+            harness.Engine.OnExtractAsync = request =>
+            {
+                lock (tried)
+                {
+                    tried.Add(request.Password ?? string.Empty);
+                }
+
+                /*
+                 * 只有拿到面板里填的那个密码才成功 —— 这样"它真的进了候选链"才是被证出来的：
+                 * 假引擎第一次一定拿到空密码（候选第一位），失败后管线才会换下一个候选。
+                 */
+                if (!string.Equals(request.Password, "<面板密码>", StringComparison.Ordinal))
+                {
+                    return Task.FromResult(new ArchiveOperationResult
+                    {
+                        Success = false,
+                        Status = StatusText.WrongPassword,
+                        Message = StatusText.WrongPassword,
+                        DetectedErrorType = "WrongPassword"
+                    });
+                }
+
+                WriteContent(request.OutputPath!, "content.txt", "okokokokoko");
+
+                return Task.FromResult(Succeeded());
+            };
+
+            var runOptions = new OneClickRunOptions
+            {
+                ManualPasswords = new[] { "<面板密码>" }
+            };
+
+            await harness.Coordinator.StartExtractForOneClickAsync(runOptions);
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            // ① 它真的进了候选链（假引擎被要求用过它）
+            Assert.Contains("<面板密码>", tried);
+
+            // ② 追加到列表**末尾**（老条目还在前面）
+            Assert.Equal("<面板密码>", harness.PasswordService.Passwords[^1].Value);
+            Assert.Contains(harness.PasswordService.Passwords, item => item.Value == "book-password");
+
+            // ③ 日志只说条数、不说内容（不变量 5）
+            Assert.Contains(
+                harness.Log.Logs,
+                item => item.Message.Contains("本批手动密码", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                item => item.Message.Contains("<面板密码>", StringComparison.Ordinal));
+        }
+
         // ================================================================ C3：缺卷时的手动指定目录
 
         /// <summary>
@@ -920,7 +1025,8 @@ namespace ArchiveFixer.Tests
                 RecordingMainViewModel recordingVm,
                 ExtractionCoordinator coordinator,
                 LogService log,
-                PathService pathService)
+                PathService pathService,
+                PasswordService passwordService)
             {
                 Vm = vm;
                 Engine = engine;
@@ -928,6 +1034,7 @@ namespace ArchiveFixer.Tests
                 Coordinator = coordinator;
                 Log = log;
                 PathService = pathService;
+                PasswordService = passwordService;
             }
 
             public MainViewModel Vm { get; }
@@ -941,6 +1048,9 @@ namespace ArchiveFixer.Tests
             public LogService Log { get; }
 
             public PathService PathService { get; }
+
+            /// <summary>协调器手上那一份密码服务（断言"面板里填的密码进了列表末尾"要用它）。</summary>
+            public PasswordService PasswordService { get; }
         }
 
         /// <summary>
@@ -1078,7 +1188,7 @@ namespace ArchiveFixer.Tests
             // 这个用例拿「细节日志」当行为证据（第 44 条之后，成功时默认只留两行）。
             coordinator.KeepTaskDetailInLog = true;
 
-            return new Harness(vm, engine, vm, coordinator, logService, pathService);
+            return new Harness(vm, engine, vm, coordinator, logService, pathService, passwordService);
         }
 
         private ArchiveTask AddTask(Harness harness, string sourcePath)

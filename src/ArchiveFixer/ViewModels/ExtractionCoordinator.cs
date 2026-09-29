@@ -332,7 +332,7 @@ namespace ArchiveFixer.ViewModels
          * 现在整批**一次性**问一次，输入的值当成本批所有任务的候选（排在空密码之后、
          * 密码本之前 —— 它比密码本更"新"，是用户刚给出的信息）。
          */
-        private string? _manualBatchPassword;
+        private readonly List<string> _manualBatchPasswords = new();
 
         /// <summary>本批是否已经问过手动密码（一次性：问过就不再问，无论用户填没填）。</summary>
         private bool _manualPasswordPrompted;
@@ -5441,7 +5441,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void ResetManualBatchPassword()
         {
-            _manualBatchPassword = null;
+            _manualBatchPasswords.Clear();
             _manualPasswordPrompted = false;
             _batchHadPasswordFailures = false;
         }
@@ -6165,7 +6165,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            _manualBatchPassword = entered;
+            _manualBatchPasswords.Add(entered);
 
             /*
              * 日志只说"收到一个手动密码"，**绝不记录内容**（不变量 5）。
@@ -6203,36 +6203,128 @@ namespace ArchiveFixer.ViewModels
         /// 传 null / 空串时什么都不做（空密码已经由调用方自己保证了）。
         /// </para>
         /// </summary>
-        private static void InsertManualPasswordCandidate(List<PasswordItem> candidates, string? manualPassword)
+        private static void InsertManualPasswordCandidates(
+            List<PasswordItem> candidates,
+            IReadOnlyList<string>? manualPasswords,
+            string remark = "本次运行手动输入（不落盘）")
         {
-            if (string.IsNullOrEmpty(manualPassword) || candidates == null)
+            if (candidates == null || manualPasswords == null || manualPasswords.Count == 0)
             {
                 return;
             }
 
-            if (candidates.Any(item => string.Equals(item?.Value, manualPassword, StringComparison.Ordinal)))
+            var additions = new List<PasswordItem>();
+
+            foreach (string manual in manualPasswords)
+            {
+                if (string.IsNullOrEmpty(manual))
+                {
+                    continue;
+                }
+
+                if (candidates.Any(item => string.Equals(item?.Value, manual, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                if (additions.Any(item => string.Equals(item.Value, manual, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                additions.Add(new PasswordItem
+                {
+                    Value = manual,
+                    Source = ManualPasswordSource,
+                    IsEnabled = true,
+                    Remark = remark
+                });
+            }
+
+            if (additions.Count == 0)
             {
                 return;
             }
 
-            var candidate = new PasswordItem
-            {
-                Value = manualPassword,
-                Source = ManualPasswordSource,
-                IsEnabled = true,
-                Remark = "本次运行手动输入（不落盘）"
-            };
-
+            /*
+             * 整批插在**空密码之后**：空密码是"无密码包"的必经一步、零成本；
+             * 手动输入排在密码本之前 —— 它是用户刚刚给出的信息，比历史条目更"新"。
+             * ⛔ 用 InsertRange 一次插完（逐条插会把先插的挤到后面，顺序就反了）。
+             */
             int index = candidates.FindIndex(
                 item => string.Equals(item?.Source, "Empty", StringComparison.Ordinal));
 
             if (index >= 0 && index < candidates.Count - 1)
             {
-                candidates.Insert(index + 1, candidate);
+                candidates.InsertRange(index + 1, additions);
                 return;
             }
 
-            candidates.Add(candidate);
+            candidates.AddRange(additions);
+        }
+
+        /// <summary>
+        /// 一键档的手动密码入口（用户 2026-09-29 拍板）：密码从**确认面板**来，不再弹那个框。
+        ///
+        /// <para>与老框的两点差别（用户明确要求）：① 可以一次给**多个**；
+        /// ② 每条都**追加到「密码」页那份列表的末尾**（<c>PasswordService.AddPassword</c>：
+        /// 末尾追加 + 去重 + 按本机加密落盘），以后一直有效。</para>
+        ///
+        /// <para>没填而本批又有"可能带密码"的包时，写一条 INFO 说清"要手动给就去确认面板填" ——
+        /// ⛔ 一键档**不许**在这里弹框（"批中间零弹窗"是用户两次拍板的红线）。</para>
+        /// </summary>
+        private void SeedManualPasswordsFromOneClickRun(
+            OneClickRunOptions? runOptions,
+            IReadOnlyList<ArchiveTask> selectedTasks)
+        {
+            // 本轮不再走"动手前问一次"那条路（续解的第 2/3 轮同一条口径）。
+            _manualPasswordPrompted = true;
+
+            IReadOnlyList<string> manuals = runOptions?.ManualPasswords
+                ?? (IReadOnlyList<string>)Array.Empty<string>();
+
+            int added = 0;
+            int existed = 0;
+
+            foreach (string value in manuals)
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+
+                _manualBatchPasswords.Add(value);
+
+                if (_passwordService.AddPassword(value))
+                {
+                    added++;
+                }
+                else
+                {
+                    existed++;
+                }
+            }
+
+            if (manuals.Count > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.OneClickConfirmManualPasswordSavedLogFormat,
+                        added,
+                        existed));
+            }
+
+            bool mayNeedPassword = selectedTasks.Any(task =>
+                task != null &&
+                (task.IsEncrypted ||
+                 string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)));
+
+            if (mayNeedPassword && _manualBatchPasswords.Count == 0)
+            {
+                AppendLog("INFO", StatusText.OneClickConfirmManualPasswordSkippedLog);
+            }
         }
 
         /// <summary>手动密码候选的来源标记（只在这里出现一次，别在别处再写字面量）。</summary>
@@ -6577,12 +6669,12 @@ namespace ArchiveFixer.ViewModels
              */
             builder.AppendLine();
             builder.AppendLine(
-                _manualBatchPassword != null
-                    ? "本次运行你已经手动输入过一个密码；如果还是解不开，说明它不是这些包的密码 —— 换一个再试，或者去核对密码本。"
+                _manualBatchPasswords.Count > 0
+                    ? "本次运行你已经手动给过密码；如果还是解不开，说明它不是这些包的密码 —— 换一个再试，或者去核对密码本。"
                     : _batchHadPasswordFailures
-                        ? "下一步：再点一次「一键处理 / 只解压」，程序会在开始前问你要不要手动输一个密码" +
-                          "（只对那次运行有效，不会存盘）。"
-                        : "如果这些包需要密码：再点一次「一键处理 / 只解压」，程序会在开始前问你要不要手动输一个密码。");
+                        ? "下一步：再点一次「一键处理 / 只解压」——「只解压」会在开始前问你要不要手动输一个密码；"
+                          + "一键处理则是把密码填进开始前的那个确认框（填了会加到「密码」页列表末尾，以后一直有效）。"
+                        : "如果这些包需要密码：「只解压」会在开始前问你；一键处理则在开始前的确认框里有「本批手动密码」一格。");
 
             string message = builder.ToString().TrimEnd();
 
@@ -7188,10 +7280,24 @@ namespace ArchiveFixer.ViewModels
                  *
                  * 三条纪律：
                  * ① **整批一次性**（_manualPasswordPrompted）—— 不做成每个包问一次，那正是 D-4 要避免的；
-                 * ② **只对本次运行有效、绝不落盘**（不变量 5）—— 只是一个字段，不进设置、不进密码列表、不进日志；
+                 * ② 手动「只解压」这条路上**只对本次运行有效、绝不落盘**（不变量 5）——
+                 *    只是一个字段，不进设置、不进密码列表、不进日志；
                  * ③ **无 UI 宿主不弹窗、不死等** —— 判定见 PromptForManualBatchPasswordAsync。
+                 *
+                 * ⚠ **一键档不再走这个框**（用户 2026-09-29 拍板）：一键处理的红线是"批中间零弹窗"，
+                 * 而这个框恰好卡在开工前，等于给一键档开了第二个口子。现在一键档的手动密码
+                 * 从**确认面板**（<c>OneClickRunOptions.ManualPasswords</c>）来，而且填进去的会
+                 * **追加到「密码」页那份列表的末尾**（用户要求存下来）；没填就按老顺序试，
+                 * 只写一条日志说清"要手动给去哪儿给"。
                  */
-                await PromptForManualBatchPasswordAsync(selectedTasks);
+                if (oneClickRun)
+                {
+                    SeedManualPasswordsFromOneClickRun(runOptions, selectedTasks);
+                }
+                else
+                {
+                    await PromptForManualBatchPasswordAsync(selectedTasks);
+                }
 
                 /*
                  * ===== 工作区根：本批的中间产物放哪（用户 2026-09-24 拍板）=====
@@ -9522,7 +9628,7 @@ namespace ArchiveFixer.ViewModels
              * 位置：空密码之后、密码本之前 —— 见 InsertManualPasswordCandidate 的说明。
              * 它天然参与下面的"每层尝试上限"，所以不会让加密分卷的候选循环变成无限循环（不变量 8）。
              */
-            InsertManualPasswordCandidate(candidates, _manualBatchPassword);
+            InsertManualPasswordCandidates(candidates, _manualBatchPasswords);
 
             /*
              * 直读/抠取两条路共用的候选值表。⛔ 只活在内存里：日志里只说"第 N 个候选 + 哪种字节编码"，
