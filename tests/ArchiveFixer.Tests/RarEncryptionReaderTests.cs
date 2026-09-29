@@ -21,7 +21,7 @@ namespace ArchiveFixer.Tests
     /// 本机没有 <c>Rar.exe</c> 时**跳过并说明原因**（⛔ 不假装跑过）。</para>
     ///
     /// <para><b>红检</b>：把 <see cref="ArchiveDetectService"/> 里那一行
-    /// <c>headerResult = ApplyRarEncryptionVerdict(headerResult, filePath);</c> 摘掉 →
+    /// <c>return ApplyEncryptionVerdict(headerResult, filePath);</c> 摘掉 →
     /// 本组里所有"加密的认出来"的断言全红（<c>Assert.True(result.IsProbablyEncrypted)</c> 失败）；
     /// 只把 <c>RarEncryptionReader.Read</c> 改成恒返回 Unknown → 同样全红，而
     /// "没加密的不许误报"那几条照旧绿（它们本来就不该红 —— 这正是"宁可漏报不误报"的接线证明）。</para>
@@ -71,9 +71,9 @@ namespace ArchiveFixer.Tests
                 return;
             }
 
-            RarEncryptionReading reading = RarEncryptionReader.Read(_samples.Rar4DataEncrypted);
+            ArchiveEncryptionReading reading = RarEncryptionReader.Read(_samples.Rar4DataEncrypted);
 
-            Assert.Equal(RarEncryptionState.DataEncrypted, reading.State);
+            Assert.Equal(ArchiveEncryptionState.DataEncrypted, reading.State);
             Assert.True(reading.IsEncrypted);
         }
 
@@ -85,9 +85,9 @@ namespace ArchiveFixer.Tests
                 return;
             }
 
-            RarEncryptionReading reading = RarEncryptionReader.Read(_samples.Rar4HeadersEncrypted);
+            ArchiveEncryptionReading reading = RarEncryptionReader.Read(_samples.Rar4HeadersEncrypted);
 
-            Assert.Equal(RarEncryptionState.HeadersEncrypted, reading.State);
+            Assert.Equal(ArchiveEncryptionState.HeadersEncrypted, reading.State);
         }
 
         [Fact]
@@ -98,9 +98,9 @@ namespace ArchiveFixer.Tests
                 return;
             }
 
-            RarEncryptionReading reading = RarEncryptionReader.Read(_samples.Rar5DataEncrypted);
+            ArchiveEncryptionReading reading = RarEncryptionReader.Read(_samples.Rar5DataEncrypted);
 
-            Assert.Equal(RarEncryptionState.DataEncrypted, reading.State);
+            Assert.Equal(ArchiveEncryptionState.DataEncrypted, reading.State);
         }
 
         [Fact]
@@ -111,9 +111,9 @@ namespace ArchiveFixer.Tests
                 return;
             }
 
-            RarEncryptionReading reading = RarEncryptionReader.Read(_samples.Rar5HeadersEncrypted);
+            ArchiveEncryptionReading reading = RarEncryptionReader.Read(_samples.Rar5HeadersEncrypted);
 
-            Assert.Equal(RarEncryptionState.HeadersEncrypted, reading.State);
+            Assert.Equal(ArchiveEncryptionState.HeadersEncrypted, reading.State);
         }
 
         [Theory]
@@ -127,9 +127,9 @@ namespace ArchiveFixer.Tests
             }
 
             string path = which == "r4-plain" ? _samples.Rar4Plain : _samples.Rar5Plain;
-            RarEncryptionReading reading = RarEncryptionReader.Read(path);
+            ArchiveEncryptionReading reading = RarEncryptionReader.Read(path);
 
-            Assert.Equal(RarEncryptionState.NotEncrypted, reading.State);
+            Assert.Equal(ArchiveEncryptionState.NotEncrypted, reading.State);
             Assert.False(reading.IsEncrypted);
         }
 
@@ -155,8 +155,8 @@ namespace ArchiveFixer.Tests
                 return;
             }
 
-            Assert.Equal(RarEncryptionState.DataEncrypted, RarEncryptionReader.Read(dataFirst).State);
-            Assert.Equal(RarEncryptionState.HeadersEncrypted, RarEncryptionReader.Read(headersFirst).State);
+            Assert.Equal(ArchiveEncryptionState.DataEncrypted, RarEncryptionReader.Read(dataFirst).State);
+            Assert.Equal(ArchiveEncryptionState.HeadersEncrypted, RarEncryptionReader.Read(headersFirst).State);
 
             // 这是真的分卷组：第 1 卷之外还有 .part2.rar 起。
             Assert.NotEmpty(Directory.GetFiles(Path.GetDirectoryName(dataFirst)!, "r4-p-vol.part*.rar"));
@@ -232,7 +232,7 @@ namespace ArchiveFixer.Tests
             string truncated = Path.Combine(_root, "truncated.rar");
             byte[] whole = File.ReadAllBytes(_samples.Rar4HeadersEncrypted);
             File.WriteAllBytes(truncated, whole[..8]);
-            Assert.Equal(RarEncryptionState.Unknown, RarEncryptionReader.Read(truncated).State);
+            Assert.Equal(ArchiveEncryptionState.Unknown, RarEncryptionReader.Read(truncated).State);
 
             // ②签名 + 一个 CRC 对不上的主头（把 flags 那一字节改掉，块头 CRC 必然对不上）
             string broken = Path.Combine(_root, "broken.rar");
@@ -244,16 +244,16 @@ namespace ArchiveFixer.Tests
             }
 
             File.WriteAllBytes(broken, brokenBytes);
-            Assert.Equal(RarEncryptionState.Unknown, RarEncryptionReader.Read(broken).State);
+            Assert.Equal(ArchiveEncryptionState.Unknown, RarEncryptionReader.Read(broken).State);
 
             // ③根本不是 RAR
             string notRar = Path.Combine(_root, "not-rar.txt");
             File.WriteAllText(notRar, "这不是压缩包。");
-            Assert.Equal(RarEncryptionState.Unknown, RarEncryptionReader.Read(notRar).State);
+            Assert.Equal(ArchiveEncryptionState.Unknown, RarEncryptionReader.Read(notRar).State);
 
             // ④文件不存在
             Assert.Equal(
-                RarEncryptionState.Unknown,
+                ArchiveEncryptionState.Unknown,
                 RarEncryptionReader.Read(Path.Combine(_root, "根本没有这个文件.rar")).State);
         }
 
@@ -275,7 +275,7 @@ namespace ArchiveFixer.Tests
             string corrupted = Path.Combine(_root, "crc-broken.rar");
             File.WriteAllBytes(corrupted, bytes);
 
-            Assert.Equal(RarEncryptionState.Unknown, RarEncryptionReader.Read(corrupted).State);
+            Assert.Equal(ArchiveEncryptionState.Unknown, RarEncryptionReader.Read(corrupted).State);
         }
 
         /// <summary>
@@ -300,9 +300,9 @@ namespace ArchiveFixer.Tests
                 stream.SetLength(200L * 1024 * 1024);
             }
 
-            RarEncryptionReading reading = RarEncryptionReader.Read(big);
+            ArchiveEncryptionReading reading = RarEncryptionReader.Read(big);
 
-            Assert.Equal(RarEncryptionState.HeadersEncrypted, reading.State);
+            Assert.Equal(ArchiveEncryptionState.HeadersEncrypted, reading.State);
             Assert.True(
                 reading.BytesRead <= RarEncryptionReader.MaxHeaderBytes,
                 $"读入量 {reading.BytesRead} 字节超了上限 {RarEncryptionReader.MaxHeaderBytes}");
@@ -320,8 +320,8 @@ namespace ArchiveFixer.Tests
                 return;
             }
 
-            RarEncryptionReading plain = RarEncryptionReader.Read(_samples.Rar5Plain);
-            RarEncryptionReading unknown = RarEncryptionReader.Read(_samples.Rar5Plain + ".missing");
+            ArchiveEncryptionReading plain = RarEncryptionReader.Read(_samples.Rar5Plain);
+            ArchiveEncryptionReading unknown = RarEncryptionReader.Read(_samples.Rar5Plain + ".missing");
 
             Assert.False(plain.IsEncrypted);
             Assert.False(unknown.IsEncrypted);

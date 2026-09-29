@@ -5,50 +5,6 @@ using System.IO;
 namespace ArchiveFixer.Detection
 {
     /// <summary>
-    /// 一卷 RAR 的加密结论（**三态 + 一档细分**）。
-    ///
-    /// <para>⚠ 刻意不用 bool：<see cref="Unknown"/> 与 <see cref="NotEncrypted"/> 在**报告口径**上
-    /// 完全等价（都不报"加密"），但在**证据口径**上完全不同 —— 前者是"没读到 / 读不懂"，
-    /// 后者是"走完了整条头链，没有任何加密标志"。把这个区分丢掉，以后排障时就没有办法回答
-    /// "这一卷到底是没加密、还是我们没看明白"（用户 2026-09-29 那次 RAR 分卷事故就是栽在
-    /// "试开没成立"与"真的不是"混在一起上）。</para>
-    /// </summary>
-    public enum RarEncryptionState
-    {
-        /// <summary>**不知道**：头被截断、布局与官方说明不符、超出读取预算 —— ⛔ 绝不猜成"没加密"。</summary>
-        Unknown = 0,
-
-        /// <summary>走完了头链（读到了归档结尾块），没有任何加密标志。</summary>
-        NotEncrypted = 1,
-
-        /// <summary>**只有文件数据加密**（WinRAR 的 <c>-p</c>）：文件名与头照样看得见。</summary>
-        DataEncrypted = 2,
-
-        /// <summary>**连头都加密**（WinRAR 的 <c>-hp</c>）：后续头都是密文，连条目名都读不出来。</summary>
-        HeadersEncrypted = 3
-    }
-
-    /// <summary>一次 RAR 加密判读的结论（含依据与"这次一共读了多少字节"）。</summary>
-    public sealed class RarEncryptionReading
-    {
-        /// <summary>结论（三态 + 数据/头加密之分）。</summary>
-        public RarEncryptionState State { get; init; } = RarEncryptionState.Unknown;
-
-        /// <summary>
-        /// 依据的一句话（**只写结构化事实**：命中哪个头的哪一位、或哪一步读不下去）。
-        /// 它进日志 / 排障，⛔ 不含任何中文判断（AGENTS.md §7：判据不许看文案）。
-        /// </summary>
-        public string Basis { get; init; } = string.Empty;
-
-        /// <summary>这一次从文件里**读进内存**多少字节（⛔ 上限见 <see cref="RarEncryptionReader.MaxHeaderBytes"/>）。</summary>
-        public int BytesRead { get; init; }
-
-        /// <summary>要不要报"这是加密包"（只有两条**有证据**的档为真）。</summary>
-        public bool IsEncrypted =>
-            State == RarEncryptionState.DataEncrypted || State == RarEncryptionState.HeadersEncrypted;
-    }
-
-    /// <summary>
     /// **只读头部的 RAR 加密判读**（用户 2026-09-29 任务 A：识别阶段就要看得出 RAR 加密，
     /// ⛔ 不额外调引擎、不引入依赖、不把大文件读进来）。
     ///
@@ -84,7 +40,7 @@ namespace ArchiveFixer.Detection
     /// <item><description><b>只读头</b>：整个判读过程**读进内存的字节数 ≤ <see cref="MaxHeaderBytes"/>（64 KiB）**，
     /// 数据区一律用 seek 跳过去（绝不把包体读进来）；</description></item>
     /// <item><description><b>绝不猜</b>：头截断 / 块尺寸越界 / 头部 CRC 对不上 / 布局与官方说明不符
-    /// → 一律 <see cref="RarEncryptionState.Unknown"/>（宁可漏报，也不误报）；</description></item>
+    /// → 一律 <see cref="ArchiveEncryptionState.Unknown"/>（宁可漏报，也不误报）；</description></item>
     /// <item><description><b>不调引擎、不引依赖</b>：纯字节解析，用的 CRC32 与 vint 读法就是仓库里
     /// 既有的那一份（<see cref="VolumeNumberFromContent"/>，⛔ 不另写一份必然漂移的表）。</description></item>
     /// </list>
@@ -159,9 +115,9 @@ namespace ArchiveFixer.Detection
         /// 判读一个文件（或内嵌在别的文件里的、从 <paramref name="offset"/> 开始的一段 RAR）有没有加密。
         ///
         /// <para>任何 IO 意外（不存在 / 被占用 / 权限 / 半路被删）都落成
-        /// <see cref="RarEncryptionState.Unknown"/>，**绝不抛** —— 识别阶段不许因为它失败。</para>
+        /// <see cref="ArchiveEncryptionState.Unknown"/>，**绝不抛** —— 识别阶段不许因为它失败。</para>
         /// </summary>
-        public static RarEncryptionReading Read(string? filePath, long offset = 0)
+        public static ArchiveEncryptionReading Read(string? filePath, long offset = 0)
         {
             if (string.IsNullOrWhiteSpace(filePath) || offset < 0)
             {
@@ -203,9 +159,9 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>没有路径 / 读不出来时的"不知道"（不带依据 —— 没有可说的结构化事实）。</summary>
-        private static RarEncryptionReading NoPath() => new()
+        private static ArchiveEncryptionReading NoPath() => new()
         {
-            State = RarEncryptionState.Unknown,
+            State = ArchiveEncryptionState.Unknown,
             Basis = "没有可读的文件路径"
         };
 
@@ -233,7 +189,7 @@ namespace ArchiveFixer.Detection
         /// <para>块之间靠 <c>HEAD_SIZE</c> + 数据区长度（<c>LONG_BLOCK</c> 时头尾的 PACK_SIZE）跳过去，
         /// 所以**包体一个字节都不读**。</para>
         /// </summary>
-        private static RarEncryptionReading ReadRar4(BoundedReader reader)
+        private static ArchiveEncryptionReading ReadRar4(BoundedReader reader)
         {
             for (int index = 0; index < MaxHeaders; index++)
             {
@@ -278,7 +234,7 @@ namespace ArchiveFixer.Detection
                     if ((flags & Rar4MainPassword) != 0)
                     {
                         return reader.Encrypted(
-                            RarEncryptionState.HeadersEncrypted,
+                            ArchiveEncryptionState.HeadersEncrypted,
                             "RAR4 主头 MHD_PASSWORD(0x0080) 置位：该头之后的块都是密文");
                     }
                 }
@@ -291,7 +247,7 @@ namespace ArchiveFixer.Detection
                          * 这里**立刻返回**是安全的：主头永远是第一个块，头加密那一档不可能在后面才出现。
                          */
                         return reader.Encrypted(
-                            RarEncryptionState.DataEncrypted,
+                            ArchiveEncryptionState.DataEncrypted,
                             "RAR4 文件/服务头 LHD_PASSWORD(0x0004) 置位：该条目数据加密");
                     }
                 }
@@ -372,7 +328,7 @@ namespace ArchiveFixer.Detection
         /// （0x0004 是 Solid，官方说明那五条见类注释），所以这里一个字都不读它 ——
         /// 拿 Solid 当密码会把一大批普通固实包误报成"加密"。</para>
         /// </summary>
-        private static RarEncryptionReading ReadRar5(BoundedReader reader)
+        private static ArchiveEncryptionReading ReadRar5(BoundedReader reader)
         {
             for (int index = 0; index < MaxHeaders; index++)
             {
@@ -437,7 +393,7 @@ namespace ArchiveFixer.Detection
                 if (headerType == Rar5ArchiveEncryptionHeaderType)
                 {
                     return reader.Encrypted(
-                        RarEncryptionState.HeadersEncrypted,
+                        ArchiveEncryptionState.HeadersEncrypted,
                         "RAR5 第一个头是归档加密头（类型 4）：官方说明里它只出现在头加密的归档中");
                 }
 
@@ -450,7 +406,7 @@ namespace ArchiveFixer.Detection
                     && HasFileEncryptionRecord(body, extraAreaSize))
                 {
                     return reader.Encrypted(
-                        RarEncryptionState.DataEncrypted,
+                        ArchiveEncryptionState.DataEncrypted,
                         "RAR5 文件/服务头的扩展区里有 File encryption 记录（类型 0x01）：该条目数据加密");
                 }
 
@@ -514,9 +470,9 @@ namespace ArchiveFixer.Detection
             return false;
         }
 
-        private static RarEncryptionReading Unknown(string path, string basis) => new()
+        private static ArchiveEncryptionReading Unknown(string path, string basis) => new()
         {
-            State = RarEncryptionState.Unknown,
+            State = ArchiveEncryptionState.Unknown,
             Basis = basis
         };
 
@@ -635,21 +591,21 @@ namespace ArchiveFixer.Detection
                 return true;
             }
 
-            public RarEncryptionReading Unknown(string basis) => new()
+            public ArchiveEncryptionReading Unknown(string basis) => new()
             {
-                State = RarEncryptionState.Unknown,
+                State = ArchiveEncryptionState.Unknown,
                 Basis = basis,
                 BytesRead = _bytesRead
             };
 
-            public RarEncryptionReading Plain(string basis) => new()
+            public ArchiveEncryptionReading Plain(string basis) => new()
             {
-                State = RarEncryptionState.NotEncrypted,
+                State = ArchiveEncryptionState.NotEncrypted,
                 Basis = basis,
                 BytesRead = _bytesRead
             };
 
-            public RarEncryptionReading Encrypted(RarEncryptionState state, string basis) => new()
+            public ArchiveEncryptionReading Encrypted(ArchiveEncryptionState state, string basis) => new()
             {
                 State = state,
                 Basis = basis,

@@ -86,8 +86,9 @@ namespace ArchiveFixer.Detection
     /// 这种文件要刻意构造才做得出来（正常拷贝不会只差中间），而换来的是"相同文件不再重复扫 512 MiB"。
     /// 头就定了结论的那一档（<see cref="DetectCacheEvidence.Head"/>）没有这个边界：那些结论只由文件头决定。</para>
     ///
-    /// <para><b>RAR 的加密标志不进缓存</b>：它的判据要读头链（读的位置可以越过 64 KiB），
-    /// 所以每次都由 <c>ArchiveDetectService.ApplyRarEncryptionVerdict</c> 现算 —— 缓存里存的是"还没叠这一层"的结论。</para>
+    /// <para><b>加密标志不进缓存</b>（RAR / ZIP / 7z 三个格式一视同仁，用户 2026-09-30）：
+    /// 它们的判据要读头链 / 中央目录 / 7z 的 next header（读的位置可以越过 64 KiB），
+    /// 所以每次都由 <c>ArchiveDetectService.ApplyEncryptionVerdict</c> 现算 —— 缓存里存的是"还没叠这一层"的结论。</para>
     /// </summary>
     public static class DetectResultCache
     {

@@ -253,6 +253,29 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string DetectRarHeadersEncryptedNote = "（文件名与头已加密）";
 
+        /// <summary>
+        /// 识别阶段从 **ZIP 中央目录**读出来的加密结论后缀（用户 2026-09-30）：
+        /// 至少有一个条目的通用位标志 bit0 置位（ZipCrypto 与 AES 都置这一位，实测
+        /// <c>zc.zip</c> = flags <c>0x0001</c>/method 0、<c>aes.zip</c> = flags <c>0x0001</c>/method 99）。
+        ///
+        /// <para>措辞刻意说"条目"而不是"整包"：ZIP 允许**逐个条目**加密，
+        /// 只加密其中几个（实测 <c>mixed.zip</c> 的中央目录 flags = <c>0x0001 0x0000 0x0001</c>）
+        /// 也是常态，说成"整包加密"是过度断言。判据出处见 <c>Detection/ZipEncryptionReader</c>。</para>
+        /// </summary>
+        public const string DetectZipEncryptedNote = "（有加密的条目）";
+
+        /// <summary>
+        /// 识别阶段从 **7z 明文头**读出来的加密结论后缀：只有文件数据加密（7-Zip 的 <c>-p</c>）——
+        /// 文件名与头照样看得见。判据出处见 <c>Detection/SevenZipEncryptionReader</c>。
+        /// </summary>
+        public const string DetectSevenZipDataEncryptedNote = "（文件数据已加密）";
+
+        /// <summary>
+        /// 识别阶段从 **7z 编码头**读出来的加密结论后缀：**连头一起加密**（7-Zip 的 <c>-mhe</c> / <c>-hp</c>）——
+        /// 这种包连条目名都列不出来（<c>7z l -slt</c> 一条都不报），只有正确密码才有下一步。
+        /// </summary>
+        public const string DetectSevenZipHeadersEncryptedNote = "（文件名与头已加密）";
+
         // 后缀状态
         public const string NotChecked = "未检测";
         public const string ExtensionNormal = "后缀正常";

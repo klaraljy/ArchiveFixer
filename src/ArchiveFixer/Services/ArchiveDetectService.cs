@@ -214,19 +214,20 @@ namespace ArchiveFixer.Services
                 DetectResult headerResult = DetectByHeader(header);
 
                 /*
-                 * RAR 的加密判读（用户 2026-09-29 任务 A）：魔数只能告诉我们"这是 RAR"，
-                 * "这一包加没加密"写在块的 flags 里（RAR4 的 MHD_PASSWORD / LHD_PASSWORD、
-                 * RAR5 的归档加密头 / File encryption 扩展记录），所以这里补一次**只读头部**的解析。
+                 * 加密判读（用户 2026-09-29 任务 A 起于 RAR，2026-09-30 扩到 RAR / ZIP / 7z）：
+                 * 魔数只能告诉我们"这是哪种容器"，"这一包加没加密"写在各自的结构里
+                 * （RAR4 的 MHD_PASSWORD / LHD_PASSWORD、RAR5 的归档加密头 / File encryption 扩展记录、
+                 * ZIP 中央目录记录的通用位标志 bit0、7z coder 链里的 AES-256）——
+                 * 所以这里补一次**只读头尾**的解析。
                  *
-                 * ⛔ **判据只此一处出口**（Detection/RarEncryptionReader）：别在识别、解压、界面里
-                 * 各写一套"这包是不是加密的" —— 三套必然漂移，而漂移的后果是批首那句
-                 * "本批有 N 个包没有可用密码"与实际跑起来的结果对不上（AGENTS.md §11 那条待修）。
+                 * ⛔ **判据只此一处出口**（ApplyEncryptionVerdict → Detection/ 下那三个 reader）：
+                 * 别在识别、解压、界面里各写一套"这包是不是加密的" —— 三套必然漂移，
+                 * 而漂移的后果是批首那句"本批有 N 个包没有可用密码"与实际跑起来的结果对不上。
                  *
-                 * 只对 RAR4 / RAR5 做：其它格式的加密信号各有各的读法（ZIP 看通用位标志，
-                 * 7z 现阶段要引擎才知道），不在这一次改动范围内，照旧"如实不报"。
-                 *
-                 * ⚠ 这一层**不缓存**（缓存里存的是它之前的那份）：它的判据要读头链，读到的位置可以越过
-                 * 这 34 KB 文件头，缓存键那四样证据盖不住它 —— 每次现算，代价只有几 KB 的读。
+                 * ⚠ 这一层**不缓存**（缓存里存的是它之前的那份）：它的判据要读头链 / 中央目录 / 头尾，
+                 * 读到的位置可以越过这 34 KB 文件头，缓存键那四样证据盖不住它 —— 每次现算，代价只有几 KB 的读。
+                 * （也正因为这样，ZIP 的加密结论从 2026-09-30 起**只由出口给**，DetectByHeader 里那两处
+                 * 按"第一个本地头"的粗略判断已经撤掉 —— 它既会漏报、又会把加密标志夹带进缓存。）
                  */
                 if (headerResult.Format != "Unknown")
                 {
@@ -241,7 +242,7 @@ namespace ArchiveFixer.Services
                         && UseDetectCache
                         && DetectResultCache.TryGet(key, out DetectResult cached))
                     {
-                        return ApplyRarEncryptionVerdict(cached, filePath);
+                        return ApplyEncryptionVerdict(cached, filePath);
                     }
 
                     if (identityStable && UseDetectCache)
@@ -249,7 +250,7 @@ namespace ArchiveFixer.Services
                         DetectResultCache.Store(key, headerResult);
                     }
 
-                    return ApplyRarEncryptionVerdict(headerResult, filePath);
+                    return ApplyEncryptionVerdict(headerResult, filePath);
                 }
 
                 /*
@@ -407,10 +408,10 @@ namespace ArchiveFixer.Services
             }
 
             /*
-             * 尾部内嵌的那一段如果本身是 RAR，加密判读照样要做 —— 判据仍是同一个出口，
+             * 尾部内嵌的那一段如果本身是 RAR / 7z，加密判读照样要做 —— 判据仍是同一个出口，
              * 只是把起点挪到抠取偏移上（那一段的头就在那里）。⛔ 不为这条路另写一套判据。
              */
-            return ApplyRarEncryptionVerdict(
+            return ApplyEncryptionVerdict(
                 new DetectResult
                 {
                     Format = signature.Format,
@@ -431,36 +432,90 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// **RAR 加密判据的唯一出口**：RAR4 / RAR5 用 <see cref="RarEncryptionReader"/> 只读头部解析，
-        /// 读出"有加密证据"才置 <see cref="DetectResult.IsProbablyEncrypted"/>；读不出来（截断 / 布局不符）
-        /// 一律**不报加密**（⛔ 宁可漏报，也不误报 —— 见 <see cref="RarEncryptionState.Unknown"/>）。
+        /// **加密判据的唯一出口**（用户 2026-09-30 从"只认 RAR"扩到 **RAR / ZIP / 7z**）：
+        /// 三个格式各自用**只读头尾**的判据器解析（<see cref="RarEncryptionReader"/> /
+        /// <see cref="ZipEncryptionReader"/> / <see cref="SevenZipEncryptionReader"/>，
+        /// ⛔ 都不调引擎、不引依赖、都有读入量硬上限），读出"有加密证据"才置
+        /// <see cref="DetectResult.IsProbablyEncrypted"/>；读不出来（截断 / 布局不符 / 结构藏在压缩流里）
+        /// 一律**不报加密**（⛔ 宁可漏报，也不误报 —— 见 <see cref="ArchiveEncryptionState.Unknown"/>）。
         ///
-        /// <para>不是 RAR（或 <paramref name="offset"/> 处也不是 RAR 签名）时原样返回，一个字都不改。</para>
+        /// <para><b>为什么必须是"一个方法"</b>：识别、"尾部内嵌归档"、多卷卷组三条路都要给同一个结论，
+        /// 三处各写一份判据必然漂移，而漂移的后果是批首那句"本批有 N 个包没有可用密码"与实际跑起来的结果对不上
+        /// （AGENTS.md §9.5）。</para>
+        ///
+        /// <para><paramref name="offset"/>：这一段归档在文件里的起点（内嵌归档用；<c>0</c> = 文件开头就是它）。</para>
+        /// <para><paramref name="volumePaths"/>：分卷组的全部卷（**只有 7z 用得上** —— 它的元数据在最后一卷）。
+        /// 不给（或只有一卷）时按单文件判读，多卷 7z 会如实落到"不知道"。</para>
         /// </summary>
-        private static DetectResult ApplyRarEncryptionVerdict(
+        private static DetectResult ApplyEncryptionVerdict(
             DetectResult result,
             string filePath,
-            long offset = 0)
+            long offset = 0,
+            IReadOnlyList<string>? volumePaths = null)
         {
-            if (result == null || (result.Format != "RAR4" && result.Format != "RAR5"))
+            if (result == null)
             {
                 // result 为 null 时**原样**把它交回调用方（保持"进来什么、出去什么"），用的是可空抑制。
                 return result!;
             }
 
-            RarEncryptionReading reading = RarEncryptionReader.Read(filePath, offset);
+            ArchiveEncryptionReading? reading;
+
+            if (result.Format == "RAR4" || result.Format == "RAR5")
+            {
+                reading = RarEncryptionReader.Read(filePath, offset);
+            }
+            else if (IsZipFamilyFormat(result.Format))
+            {
+                reading = ZipEncryptionReader.Read(filePath, offset);
+            }
+            else if (result.Format == "7Z")
+            {
+                reading = SevenZipEncryptionReader.Read(filePath, offset, volumePaths);
+            }
+            else
+            {
+                // 别的格式这一轮不判（GZIP / BZIP2 / XZ / TAR / Unknown…），照旧"如实不报"。
+                return result;
+            }
 
             if (reading == null || !reading.IsEncrypted)
             {
                 return result;
             }
 
+            string note = ResolveEncryptionNote(result.Format, reading.State);
+
+            /*
+             * 注脚只追加一次：同一个 result 可能被判两次（识别那一遍 + 拿到卷组后再走一遍，
+             * 见 ApplyDetectResultAsync），⛔ 不许出现两个注脚叠在一起。
+             */
+            if (!result.Message.Contains(note, StringComparison.Ordinal))
+            {
+                result.Message += note;
+            }
+
             result.IsProbablyEncrypted = true;
-            result.Message = result.Message + (reading.State == RarEncryptionState.HeadersEncrypted
-                ? StatusText.DetectRarHeadersEncryptedNote
-                : StatusText.DetectRarDataEncryptedNote);
 
             return result;
+        }
+
+        /// <summary>
+        /// 加密结论对应的**用户可见注脚**（照 RAR 那两条的写法：一句中文，强调用「」）。
+        ///
+        /// <para>ZIP 只有一条：我们的判据是"至少一个条目置了 bit0"，分不出"头也加密"这一档
+        /// （ZIP 的中央目录本身不加密，ZipCrypto / AES 都只盖条目数据）。</para>
+        /// </summary>
+        private static string ResolveEncryptionNote(string format, ArchiveEncryptionState state)
+        {
+            if (IsZipFamilyFormat(format))
+            {
+                return StatusText.DetectZipEncryptedNote;
+            }
+
+            return state == ArchiveEncryptionState.HeadersEncrypted
+                ? StatusText.DetectSevenZipHeadersEncryptedNote
+                : StatusText.DetectSevenZipDataEncryptedNote;
         }
 
         /// <summary>
@@ -664,9 +719,27 @@ namespace ArchiveFixer.Services
              * 为什么必须说清这一条：RAR 的主头与第一个文件头都在**第 1 卷**里，后续卷是数据的中段，
              * 直接读它必然得不出结论（RAR4 的续卷连主头都读不像、RAR5 的续卷是第一卷头链的续写）。
              * 所以判据只问 `task.CurrentPath`（分卷归组保证了它就是第一卷），
-             * ⛔ **绝不去遍历 <see cref="ArchiveTask.VolumePaths"/> 再要求"每一卷都报加密"** ——
+             * ⛔ **绝不去遍历 VolumePaths 再要求"每一卷都报加密"** ——
              * 那会把"续卷读不出来"当成"没加密"，整组加密包当场判否（用户 2026-09-29 明确点名的坑）。
+             *
+             * ===== 多卷 7z：只有它需要卷组信息（用户 2026-09-30）=====
+             * 7z 分卷是**原样切**的（<c>-v100k</c> 切出来的每一卷就是整包的一段连续字节），
+             * 元数据在**最后一卷** —— 所以"只看第 1 卷"读不出 7z 的加密（实测 vol-p.7z 的第 1 卷里
+             * <c>32 + NextHeaderOffset + NextHeaderSize</c> 直接超出卷长，判据器如实报"不知道"）。
+             *
+             * 卷组信息**这时候已经填好了**（`FileScanService.ScanPathsAsync` 里
+             * `VolumeGroupingService.ApplyVolumeGrouping` 在归组，`ScanCoordinator.ScanTasksAsync`
+             * 之后才调识别），所以这里带卷组**再走一遍同一个出口** —— ⛔ 不为多卷另写一套判据，
+             * 出口仍然只有 <see cref="ApplyEncryptionVerdict"/> 一个方法。
+             *
+             * 单文件任务（卷组只有它自己）不重算：DetectAsync 那一遍问的就是同一个问题，
+             * 结果必然一样，白读一次没有意义。
              */
+            if (result.IsArchive && task.VolumePaths.Count > 1)
+            {
+                result = ApplyEncryptionVerdict(result, task.CurrentPath, 0, task.VolumePaths);
+            }
+
             task.IsEncrypted = result.IsProbablyEncrypted;
 
             // 内嵌归档偏移必须落到任务上：解压管线靠它决定"要不要先抠出来"。
@@ -933,7 +1006,7 @@ namespace ArchiveFixer.Services
                     SuggestedExtension = ".zip",
                     IsArchive = true,
                     IsKnownFormat = true,
-                    IsProbablyEncrypted = IsZipProbablyEncrypted(header),
+                    IsProbablyEncrypted = false,
                     Message = "识别为 ZIP 压缩包",
                     HeaderHex = headerHex,
                     Confidence = 100
@@ -963,7 +1036,7 @@ namespace ArchiveFixer.Services
                     SuggestedExtension = ".zip",
                     IsArchive = true,
                     IsKnownFormat = true,
-                    IsProbablyEncrypted = IsZipProbablyEncrypted(header),
+                    IsProbablyEncrypted = false,
                     Message = "识别为 ZIP 分卷或特殊 ZIP",
                     HeaderHex = headerHex,
                     Confidence = 90
@@ -1280,34 +1353,6 @@ namespace ArchiveFixer.Services
                    header[0x8003] == (byte)'0' &&
                    header[0x8004] == (byte)'0' &&
                    header[0x8005] == (byte)'1';
-        }
-
-        /// <summary>
-        /// 粗略判断 ZIP 是否可能加密。
-        /// 
-        /// ZIP Local File Header:
-        /// offset 6-7 为 general purpose bit flag。
-        /// bit 0 = encrypted。
-        /// 
-        /// 注意：
-        /// 这里只是基于文件头的初步判断，最终仍应以 7-Zip 测试结果为准。
-        /// </summary>
-        private static bool IsZipProbablyEncrypted(byte[] header)
-        {
-            if (header == null || header.Length < 8)
-            {
-                return false;
-            }
-
-            if (!StartsWith(header, 0x50, 0x4B, 0x03, 0x04) &&
-                !StartsWith(header, 0x50, 0x4B, 0x07, 0x08))
-            {
-                return false;
-            }
-
-            ushort generalPurposeBitFlag = BitConverter.ToUInt16(header, 6);
-
-            return (generalPurposeBitFlag & 0x0001) != 0;
         }
 
         /// <summary>
