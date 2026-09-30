@@ -361,6 +361,59 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        // ================================================================ ⑤ 没有工作区根 = 一次都不试（改名那条路）
+
+        /// <summary>
+        /// **没有工作区根 ⇒ 一次都不试开**（用户 2026-09-30 红线：工作区只准设在解压的地方）。
+        ///
+        /// <para>改名那条路（<c>VolumeNameRepair</c>）**没有目标目录** ⇒ 没有工作区根。老实现会退到
+        /// <c>&lt;第一卷卷根&gt;\.ArchiveFixer.work\volprobe-&lt;guid&gt;</c> —— 本机 C:\ 与 E:\ 根上
+        /// 那两个空壳就是这么来的。现在这一档：**引擎零调用、任何地方都不新建、结论判不出、不许删源**。</para>
+        /// </summary>
+        [Fact]
+        public async Task 没有工作区根_一次都不试开_判不出_源盘零新建()
+        {
+            string sourceParent = NewDirectory("no-work-root");
+
+            for (int i = 1; i <= 5; i++)
+            {
+                WriteFile(sourceParent, $"一只顶美.z{i:D2}", 4096);
+            }
+
+            string renamed = WriteFile(sourceParent, "一只顶美.z删除ip", 1024);
+            string first = Path.Combine(sourceParent, "一只顶美.z01");
+
+            string sourceVolumeRoot = Path.GetPathRoot(first) ?? string.Empty;
+            string shell = Path.Combine(sourceVolumeRoot, VolumeContentInference.WorkDirectoryName);
+
+            string[] treeBefore = SnapshotTree(sourceParent);
+            string[] shellBefore = SnapshotTree(shell);
+
+            var engine = new RecordingEngine();
+            var verifier = new VolumeProbeVerifier(engine);
+            var resolver = new VolumeGroupResolver(verifier.TryOpenAsync);
+
+            // WorkRootDirectory 留空 = 改名那条路的形态。
+            VolumeGroupResolution resolution = await resolver.ResolveAsync(new VolumeGroupQuery
+            {
+                AnchorPath = first,
+                AllowTrialOpen = true
+            });
+
+            Assert.Equal(VolumeGroupVerdict.Undetermined, resolution.Verdict);
+            Assert.False(resolution.CanEnterDeletableRestItems);
+            Assert.Contains("整卷是否齐全无法确认", resolution.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("完整（试开确认）", resolution.Reason, StringComparison.Ordinal);
+
+            // 组还是认出来了 ⇒ 不删源的安全结论不变。
+            Assert.True(resolution.IsGroupMember(renamed));
+
+            // 一次都不试 + 哪儿都没新建。
+            Assert.Empty(engine.ListCalls);
+            Assert.Equal(treeBefore, SnapshotTree(sourceParent));
+            Assert.Equal(shellBefore, SnapshotTree(shell));
+        }
+
         // ================================================================ 辅助
 
         /// <summary>
