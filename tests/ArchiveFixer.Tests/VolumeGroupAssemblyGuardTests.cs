@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
@@ -414,7 +415,100 @@ namespace ArchiveFixer.Tests
             Assert.Equal(shellBefore, SnapshotTree(shell));
         }
 
+        // ================================================================ ⑥ 改名那条路：没有工作区根 ⇒ 拒绝改名
+
+        /// <summary>
+        /// **改名修复（<c>VolumeNameRepair</c>）没有目标目录 ⇒ 没有工作区根 ⇒ 一次都不试开 ⇒ 拒绝改名**
+        /// （用户 2026-09-30 红线；协调者 2026-09-30 明确接受这个代价）。
+        ///
+        /// <para>现场用**真 7z** 造一组三卷，再把第一卷改名成没有卷号的样子（内容仍然是 7z 头，
+        /// 所以走的就是"按内容定序 + 试开验证"这条改名路）。老实现会退到
+        /// <c>&lt;第一卷卷根&gt;\.ArchiveFixer.work\volprobe-&lt;guid&gt;</c> 去试开 ——
+        /// 本机 C:\ 与 E:\ 根上那两个空壳就是这么来的。</para>
+        ///
+        /// <para>现在钉四件事：① 拒绝改名（<c>CanRepair == false</c>）；② 结论如实说"无法确认"，
+        /// ⛔ 不许写成"试开过了、不成立"；③ <c>TrialAttempted == false</c>（"没试"就是"没试"）；
+        /// ④ 源目录与源卷根那一侧**前后一字不差**（文件名、字节数、壳里的东西）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 改名路_没有工作区根_不试开_拒绝改名_源盘零新建()
+        {
+            string directory = NewDirectory("rename-no-root");
+            string payload = Path.Combine(directory, "data.bin");
+
+            File.WriteAllBytes(payload, MakeBytes(2 * 1024 * 1024 + 12345));
+
+            Run7z(directory, "a", "-t7z", "-mx0", "-v1m", "包.7z", "data.bin");
+
+            Assert.True(File.Exists(Path.Combine(directory, "包.7z.003")), "样本不是三卷");
+
+            // 真机那种改法：第一卷的名字整个换掉（名字里再也看不出卷号，内容仍是 7z 头）。
+            string first = Path.Combine(directory, "包.7z.001");
+            string renamedFirst = Path.Combine(directory, "包");
+            File.Move(first, renamedFirst);
+
+            Assert.Null(VolumeGroupDetector.TryGetVolumeIndex("包"));
+
+            string sourceVolumeRoot = Path.GetPathRoot(directory) ?? string.Empty;
+            string shell = Path.Combine(sourceVolumeRoot, VolumeContentInference.WorkDirectoryName);
+
+            string[] treeBefore = SnapshotTree(directory);
+            string[] shellBefore = SnapshotTree(shell);
+
+            VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
+                renamedFirst,
+                VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(renamedFirst),
+                engine: new SevenZipEngine());
+
+            // ① 拒绝改名，而且说清是"没法确认"而不是"试开不成立"。
+            Assert.False(plan.CanRepair, "没有工作区根就不许试开 ⇒ 证不出完整 ⇒ 必须拒绝改名");
+            Assert.Contains("无法确认", plan.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("引擎也读不出里面的东西", plan.Reason, StringComparison.Ordinal);
+
+            // ② "没试"就是"没试"。
+            Assert.False(plan.TrialAttempted);
+
+            // ③ 一个字节都没动：源目录树与源卷根那一侧前后一字不差。
+            Assert.Equal(treeBefore, SnapshotTree(directory));
+            Assert.Equal(shellBefore, SnapshotTree(shell));
+
+            Assert.True(File.Exists(renamedFirst), "源文件被改名了");
+            Assert.True(File.Exists(Path.Combine(directory, "包.7z.002")));
+            Assert.True(File.Exists(Path.Combine(directory, "包.7z.003")));
+        }
+
         // ================================================================ 辅助
+
+        /// <summary>跑一次内置 7z（造样本用；与 <c>VolumeGroupResolverTests</c> 同一套写法）。</summary>
+        private static void Run7z(string workingDirectory, params string[] args)
+        {
+            string? sevenZip = SevenZipFactAttribute.LocateSevenZipPath();
+
+            Assert.False(string.IsNullOrEmpty(sevenZip), "找不到内置 7z.exe");
+
+            var psi = new System.Diagnostics.ProcessStartInfo(sevenZip!)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = workingDirectory
+            };
+
+            foreach (string arg in args)
+            {
+                psi.ArgumentList.Add(arg);
+            }
+
+            using System.Diagnostics.Process process =
+                System.Diagnostics.Process.Start(psi) ?? throw new InvalidOperationException("无法启动 7z.exe");
+
+            string stdout = process.StandardOutput.ReadToEnd();
+            string stderr = process.StandardError.ReadToEnd();
+
+            Assert.True(process.WaitForExit(120_000), "7z.exe 超时");
+            Assert.True(process.ExitCode == 0, $"7z.exe 失败（退出码 {process.ExitCode}）：{stdout}{stderr}");
+        }
 
         /// <summary>
         /// 目录树快照（相对路径 + 字节数，排序后比较）：用来钉"跨盘这一档一个字节都不动"。
