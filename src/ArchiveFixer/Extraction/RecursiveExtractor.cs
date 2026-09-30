@@ -261,6 +261,18 @@ namespace ArchiveFixer.Extraction
         public ExtractionWorkspace? CurrentWorkspace { get; private set; }
 
         /// <summary>
+        /// 「续解时省略中间层」这一档（②页设置 <c>AppSettings.OmitMiddleContinuationLayers</c>）。
+        ///
+        /// <para>
+        /// **首层与末层永不受它影响**（用户 2026-09-30 红线：第一层与最后一层绝对不能省，
+        /// 只能省中间层）；判据只有一处：<see cref="PackageLayerRules.ShouldKeepLayerFolder"/>。
+        /// 由调用方按设置当场赋值（与 <see cref="RecursionLimits"/> 同一个理由：改完设置不重启也要生效）。
+        /// 默认 false = 忠实档（每层各占一层）。
+        /// </para>
+        /// </summary>
+        public bool OmitMiddlePackageLayers { get; set; }
+
+        /// <summary>
         /// 上一次运行留下、已被本次续跑取代的工作区（多分支询问 → 用户确认继续这一条路）。
         ///
         /// 为什么是**列表**而不是一个槽位：一个实例上可能出现"询问 → 续跑"这样的多次运行，
@@ -527,6 +539,13 @@ namespace ArchiveFixer.Extraction
                     if (outcome.Report != null)
                     {
                         layers.Add(outcome.Report);
+
+                        /*
+                         * 层成功与否只在这里标一次（就地替换发布只搬"真的解开了"的层）：
+                         * 失败的报告会带着 StopReason 让循环 break，所以下面这行是**唯一**的标记点，
+                         * ⛔ 不许在别处再标一遍 —— 两个地方各标一次迟早漂移。
+                         */
+                        item.Layer.Successful = outcome.Report.Success;
                     }
 
                     if (outcome.StopReason != RecursionStopReason.None)
@@ -1749,16 +1768,21 @@ namespace ArchiveFixer.Extraction
             if (published)
             {
                 /*
-                 * ⛔ 展开了内层包时不摊"叶子层自带的那个文件夹"（用户 2026-09-30 红线）：
-                 * 那一个文件夹就是**内层包自己产出的内容物那一层**，也正是"最里层"，
-                 * 摊掉它内容物就会直接躺在包名目录下（真机现场 `…\26081118\P`、`…\26081118\V`）。
-                 * 判据读**唯一**那个出口（InnermostPackageLayer），本方法自己数层数会与定稿侧漂移。
+                 * ⛔ 展开了内层包 ⇒ 走「**就地替换**」那一档（用户 2026-09-30 中午）：
+                 * 每个被解开的内层包在**它原来的位置**留下一个以它命名的文件夹
+                 * （<c>AAA\DDDD\内容物</c>、<c>AAA\BBBB\CCCCC\内容物</c>），真文件原地不动 ——
+                 * ⛔ 不再"把所有叶子层产物摊到发布目标根上"（那等于把它们都搬到顶层）。
+                 * 「中间层省不省」读同一个出口；**首层与末层不受它影响**。
                  *
-                 * 只解了一层（没有内层包）时照旧摊：那一份口径有很多既有用例钉着，一个字都不改。
+                 * 判据读**唯一**那个出口（PackageLayerRules），本方法自己数层数会与定稿侧漂移。
+                 * 只解了一层（没有内层包）时照旧摊外壳：那一份口径有很多既有用例钉着，一个字都不改。
                  */
+                bool inPlace = PackageLayerRules.ExpandedInnerPackage(layers);
+
                 WorkspacePublishResult publishResult = workspace.Publish(
                     finalOutputDirectory,
-                    stripLeafWrapper: !InnermostPackageLayer.ExpandedInnerPackage(layers));
+                    inPlaceInnerPackages: inPlace,
+                    omitMiddlePackageLayers: inPlace && OmitMiddlePackageLayers);
 
                 publishMessage = publishResult.Message;
 
