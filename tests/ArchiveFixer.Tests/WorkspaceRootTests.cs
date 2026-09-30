@@ -70,83 +70,103 @@ namespace ArchiveFixer.Tests
         // ================================================================ ① 解析规则（纯逻辑）
 
         /// <summary>
-        /// 指定位置在 D:\ → 工作区根就在 D:\（`D:\.ArchiveFixer.work`），而且**不去建程序目录下那个老位置**。
+        /// **新默认档**（用户 2026-09-30）：工作区根落在**这一单的目标目录里面**
+        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>），不再去盘根开第四个顶层目录。
         ///
-        /// <para>盘符是**假盘**（探针说 D:\ 在、建目录只记账），所以这条用例不碰本机任何真实盘 ——
-        /// 更不会在测试里造出 <c>D:\.ArchiveFixer.work</c> 或 <c>C:\.ArchiveFixer.work</c>。</para>
+        /// <para>同时钉三件事：① 目标目录还不存在时**先建它**（"原地就在原地创"）；
+        /// ② 工作区那一层**带 Hidden 属性**（用户"要创的话就隐秘文件"）；
+        /// ③ 程序目录下的老位置一个字节都不碰。</para>
         /// </summary>
         [Fact]
-        public void 指定位置在D盘_工作区根就在D盘_不碰程序目录()
+        public void 默认档_工作区根落在目标目录里面_带隐藏属性且先建目标目录()
         {
             string dataRoot = Path.Combine(_root, "program-data");
+            string target = Path.Combine(_root, "H盘上的成果", "1111");
             var created = new List<string>();
 
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
                 configuredCacheRoot: null,
-                dataRootDirectory: dataRoot,
-                batchDestinationDirectories: new[] { @"D:\out\pack-1" },
-                driveExists: drive => string.Equals(drive, @"D:\", StringComparison.OrdinalIgnoreCase),
+                batchDestinationDirectories: new[] { target },
                 ensureDirectory: path =>
                 {
                     created.Add(path);
                     return true;
                 });
 
-            Assert.Equal(WorkspaceRootOrigin.OutputDrive, resolution.Origin);
-            Assert.Equal(Path.Combine(@"D:\", ".ArchiveFixer.work"), resolution.RootDirectory);
-            Assert.False(resolution.IsFallback);
+            Assert.Equal(WorkspaceRootOrigin.OutputDirectory, resolution.Origin);
+            Assert.True(resolution.Resolved);
+            Assert.Equal(Path.Combine(target, ".ArchiveFixer.work"), resolution.RootDirectory);
+            Assert.Equal(target, resolution.TargetDirectory);
 
-            // 只建了输出盘上那一个；程序目录（老位置）一个目录都没碰。
-            Assert.Equal(new[] { Path.Combine(@"D:\", ".ArchiveFixer.work") }, created);
+            // ① 先建目标目录、再在其中建工作区；两下都在目标目录这一棵里。
+            Assert.Equal(new[] { target, Path.Combine(target, ".ArchiveFixer.work") }, created);
             Assert.DoesNotContain(created, path => path.StartsWith(dataRoot, StringComparison.OrdinalIgnoreCase));
 
-            // 日志里必须写清"在哪块盘"：用户照着这一行就能去盘上找。
-            Assert.Contains("D", resolution.Reason, StringComparison.Ordinal);
-            Assert.Contains(resolution.RootDirectory, resolution.Reason, StringComparison.Ordinal);
+            // ② 工作区落在目标目录里面 —— 它的父目录正好就是目标目录。
+            Assert.Equal(target, Path.GetDirectoryName(resolution.RootDirectory));
+
+            // 日志里必须写清"在哪、为什么"，用户照着这一行就能去目录里找。
+            Assert.Contains(target, resolution.Reason, StringComparison.Ordinal);
+            Assert.Contains("目标目录", resolution.Reason, StringComparison.Ordinal);
         }
 
         /// <summary>
-        /// 未指定位置时落点 = 源包所在目录 → 工作区跟着**源包那块盘**。
-        /// 判据不只是"根在哪块盘"（那可能只是碰巧），而是**喂给它的落点真的来自源包目录**。
+        /// ⛔ **拿不到目标目录 → 报错，绝不回落 C 盘 / 程序目录**（用户 2026-09-30 点名的红线：
+        /// "甚至危险操作固定到了 C 盘"）。
+        ///
+        /// <para>老实现这里会悄悄回落到 <c>&lt;程序目录&gt;\data\work</c> 并写一条 WARN"整批照常开工"；
+        /// 现在必须是：<c>RootDirectory</c> 为空 + <c>Origin = Unresolved</c> + ERROR 级 +
+        /// 文案里**明确告诉他去哪儿设**。</para>
         /// </summary>
-        [Fact]
-        public void 未指定位置_工作区跟着源包所在盘()
+        [Theory]
+        [InlineData("一个落点都没有")]
+        [InlineData("目标目录建不出来")]
+        public void 拿不到目标目录_报错且绝不回落程序目录(string failureKind)
         {
-            string sourceDirectory = Path.Combine(_root, "src");
-            string dataRoot = Path.Combine(_root, "program-data");
-
-            Directory.CreateDirectory(sourceDirectory);
-
-            // 落点由调用方走唯一实现（PathService.ResolveOutputPlacement）算出来 —— 这里就是它的结果形态：
-            // 未指定位置 = 源包所在目录 + 包名。
-            string destination = Path.Combine(sourceDirectory, "pack-1");
+            string dataRoot = Path.Combine(_root, "program-data-" + failureKind);
 
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
                 configuredCacheRoot: null,
-                dataRootDirectory: dataRoot,
-                batchDestinationDirectories: new[] { destination },
-                ensureDirectory: _ => true);
+                batchDestinationDirectories: failureKind == "一个落点都没有"
+                    ? Array.Empty<string>()
+                    : new[] { Path.Combine(_root, "建不出来的目标目录") },
+                ensureDirectory: _ => failureKind != "目标目录建不出来");
 
-            Assert.Equal(WorkspaceRootOrigin.OutputDrive, resolution.Origin);
+            Assert.Equal(WorkspaceRootOrigin.Unresolved, resolution.Origin);
+            Assert.False(resolution.Resolved);
 
-            // 真实盘根映射：临时目录与源目录在同一块盘上，所以根就在那块盘的根下。
-            Assert.Equal(
-                Path.Combine(Path.GetPathRoot(sourceDirectory)!, ".ArchiveFixer.work"),
-                resolution.RootDirectory);
+            // 关键：**没有**任何位置被选出来 —— 尤其不是程序目录下那个老位置。
+            Assert.Equal(string.Empty, resolution.RootDirectory);
+            Assert.DoesNotContain(dataRoot, resolution.Reason, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("\\data\\work", resolution.Reason, StringComparison.OrdinalIgnoreCase);
+
+            // 级别必须是 ERROR（不许降级成 WARN 让它看起来"只是慢一点"）。
+            Assert.Equal("ERROR", resolution.LogLevel);
+
+            // 文案必须指路：说清默认建在哪、以及用户可以去哪儿设。
+            Assert.Contains("缓存根目录", resolution.Reason, StringComparison.Ordinal);
+            Assert.Contains("目标目录", resolution.Reason, StringComparison.Ordinal);
+
+            if (failureKind == "目标目录建不出来")
+            {
+                Assert.Contains("不可写", resolution.Reason, StringComparison.Ordinal);
+            }
         }
 
-        /// <summary>一批里落点跨盘：取**第一个**能算出盘的，并且**如实说明跨了几个盘**（不许假装同盘）。</summary>
+        /// <summary>
+        /// **一批里落点跨盘**：工作区跟着**第一个**目标目录，并**如实说明**本批跨了几个盘
+        /// （不许假装它们同盘）。
+        /// </summary>
         [Fact]
-        public void 一批跨盘_取第一个盘且如实说明()
+        public void 一批跨盘_跟着第一个目标目录且如实说明()
         {
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
                 configuredCacheRoot: null,
-                dataRootDirectory: Path.Combine(_root, "program-data"),
                 batchDestinationDirectories: new[] { @"D:\out\a", @"E:\other\b" },
-                driveExists: _ => true,
+                driveOf: path => path.StartsWith(@"E:", StringComparison.OrdinalIgnoreCase) ? @"E:\" : @"D:\",
                 ensureDirectory: _ => true);
 
-            Assert.Equal(Path.Combine(@"D:\", ".ArchiveFixer.work"), resolution.RootDirectory);
+            Assert.Equal(Path.Combine(@"D:\out\a", ".ArchiveFixer.work"), resolution.RootDirectory);
             Assert.True(resolution.CrossDrive);
             Assert.Equal(2, resolution.BatchDrives.Count);
             Assert.Contains("跨 2 个盘", resolution.Reason, StringComparison.Ordinal);
@@ -154,51 +174,8 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 拿不到盘（盘不存在 / 建不出目录）→ **回落老行为** <c>&lt;程序目录&gt;\data\work</c>，
-        /// 写 WARN 说明原因，而且**绝不因此让整批开不了工**。
-        /// </summary>
-        [Theory]
-        [InlineData("盘不存在")]
-        [InlineData("建不出目录")]
-        public void 拿不到盘_回落程序目录并写WARN(string failureKind)
-        {
-            string dataRoot = Path.Combine(_root, failureKind);
-
-            WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
-                configuredCacheRoot: null,
-                dataRootDirectory: dataRoot,
-                batchDestinationDirectories: new[] { @"Z:\out\pack-1" },
-                driveExists: _ => failureKind != "盘不存在",
-                ensureDirectory: _ => failureKind != "建不出目录");
-
-            Assert.Equal(WorkspaceRootOrigin.ProgramDirectoryFallback, resolution.Origin);
-            Assert.True(resolution.IsFallback);
-            Assert.Equal("WARN", resolution.LogLevel);
-            Assert.Equal(Path.Combine(dataRoot, "work"), resolution.RootDirectory);
-
-            // 原因必须写具体：是"盘不存在"还是"建不出来"，用户的改法完全不同。
-            Assert.Contains(failureKind == "盘不存在" ? "不存在" : "不可写", resolution.Reason, StringComparison.Ordinal);
-        }
-
-        /// <summary>一个算得出落点的任务都没有（例如落点全算不出来）→ 同样回落，不抛、不空转。</summary>
-        [Fact]
-        public void 没有可用落点_回落程序目录()
-        {
-            string dataRoot = Path.Combine(_root, "no-destination");
-
-            WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
-                configuredCacheRoot: null,
-                dataRootDirectory: dataRoot,
-                batchDestinationDirectories: Array.Empty<string>(),
-                ensureDirectory: _ => true);
-
-            Assert.Equal(WorkspaceRootOrigin.ProgramDirectoryFallback, resolution.Origin);
-            Assert.Equal(Path.Combine(dataRoot, "work"), resolution.RootDirectory);
-        }
-
-        /// <summary>
         /// 用户**显式设过** <c>CacheRootDirectory</c> → 永远以它为准（<c>&lt;它&gt;\work</c>），
-        /// 哪怕这一批的落点在别的盘上。用户的选择一个字都不改。
+        /// 哪怕这一批的目标目录在别的盘上。用户的选择一个字都不改。
         /// </summary>
         [Fact]
         public void 用户设过缓存根目录_永远以它为准()
@@ -208,9 +185,7 @@ namespace ArchiveFixer.Tests
 
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
                 configuredCacheRoot: configured,
-                dataRootDirectory: Path.Combine(_root, "program-data"),
                 batchDestinationDirectories: new[] { @"D:\out\pack-1" },
-                driveExists: _ => true,
                 ensureDirectory: path =>
                 {
                     created.Add(path);
@@ -218,21 +193,25 @@ namespace ArchiveFixer.Tests
                 });
 
             Assert.Equal(WorkspaceRootOrigin.ConfiguredCacheRoot, resolution.Origin);
+            Assert.True(resolution.Resolved);
             Assert.Equal(Path.Combine(configured, "work"), resolution.RootDirectory);
 
-            // 与改这一条之前的行为逐字相同：老位置就在缓存根下面。
+            // 与改这一条之前的行为逐字相同：老位置就在缓存根下面；目标目录一档完全没参与。
             Assert.Equal(new[] { Path.Combine(configured, "work") }, created);
             Assert.Contains("以它为准", resolution.Reason, StringComparison.Ordinal);
         }
 
         /// <summary>
-        /// **反向断言**：工作区根不在源目录里、也不在成品目录里（不变量 12）。
+        /// 工作区根**在目标目录里面**（用户 2026-09-30 的新口径），而且**不与源包同层**
+        /// （不变量 12 还站得住的那一半：中间产物不许散在源包那一层里）。
         ///
-        /// <para>这里用的是**真实盘根映射**（临时目录在 C 盘 → 根会算成 <c>C:\.ArchiveFixer.work</c>），
-        /// 但建目录换成了记账替身 —— 所以断言的是真实路径形状，而磁盘上什么都没被创建。</para>
+        /// <para>⚠ 有意写清楚这一档的变化：未指定位置时目标目录 = <c>&lt;源目录&gt;\&lt;包名&gt;</c>，
+        /// 于是工作区落在 <c>&lt;源目录&gt;\&lt;包名&gt;\.ArchiveFixer.work</c> —— 它在**我们生成的成品目录里面**，
+        /// 不在源包那一层。老的"既不在源目录、也不在成品目录"这条断言与新口径直接冲突，
+        /// 已被用户 2026-09-30 的指示取代；这里保留的是"不许散进源包那一层"。</para>
         /// </summary>
         [Fact]
-        public void 工作区根不在源目录也不在成品目录()
+        public void 工作区根在目标目录里面_且不与源包同层()
         {
             string sourceDirectory = Path.Combine(_root, "src");
             string asSource = Path.Combine(sourceDirectory, "pack-1");
@@ -241,19 +220,20 @@ namespace ArchiveFixer.Tests
 
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
                 configuredCacheRoot: null,
-                dataRootDirectory: Path.Combine(_root, "program-data"),
                 batchDestinationDirectories: new[] { asSource },
                 ensureDirectory: _ => true);
 
-            Assert.False(
-                ArchivePathGuard.IsInsideRoot(sourceDirectory, resolution.RootDirectory, out _),
-                $"工作区根落进了源目录：{resolution.RootDirectory}");
-
-            Assert.False(
+            // ① 在目标目录里面。
+            Assert.True(
                 ArchivePathGuard.IsInsideRoot(asSource, resolution.RootDirectory, out _),
-                $"工作区根落进了成品目录：{resolution.RootDirectory}");
+                $"工作区根不在目标目录里面：{resolution.RootDirectory}");
 
-            // 它也不等于源目录 / 成品目录本身。
+            // ② 不与源包同层：它的**父目录**是成品目录，不是源包所在的那一层。
+            Assert.Equal(asSource, Path.GetDirectoryName(resolution.RootDirectory));
+            Assert.False(
+                SafePathHelper.PathEquals(sourceDirectory, Path.GetDirectoryName(resolution.RootDirectory)),
+                "工作区落进了源包那一层");
+
             Assert.False(SafePathHelper.PathEquals(sourceDirectory, resolution.RootDirectory));
             Assert.False(SafePathHelper.PathEquals(asSource, resolution.RootDirectory));
         }
@@ -368,23 +348,34 @@ namespace ArchiveFixer.Tests
         // ================================================================ ④ 批首解析（真管线）
 
         /// <summary>
-        /// **默认档 + 指定位置**：整批的工作区根落在（假）输出盘上，暂存目录真的写在它下面，
-        /// 程序目录那一份**一个字节都没建**，日志里写明"本批工作区在 X 盘"。
+        /// **默认档 + 指定位置**：整批的工作区根落在**这一单的目标目录里面**
+        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>），暂存目录真的写在它下面，那一层**带 Hidden 属性**，
+        /// 程序目录那一份**一个字节都没建**，日志里写明"工作区在目标目录里面"。
+        ///
+        /// <para>用户 2026-09-30 的三条诉求在这里一次性钉住：不再占盘根一个顶层目录、目录是隐秘的、
+        /// 且"原地就在原地创"。</para>
         /// </summary>
         [Fact]
-        public async Task 管线_默认跟在输出盘上_且不碰程序目录()
+        public async Task 管线_默认落在目标目录里面_带隐藏属性且不碰程序目录()
         {
             Harness harness = CreateHarness(configureCacheRoot: false, customOutput: true);
             string source = harness.CreateSourceFile("pack.7z");
 
-            harness.Coordinator.WorkspaceDriveOverride = _ => harness.FakeDriveRoot;
-            harness.Coordinator.WorkspaceDriveExistsOverride = drive => Directory.Exists(drive);
-
             ArchiveTask task = harness.AddTask(source);
+
+            // 工作区那一层在解压进行中才存在（批尾会连空壳一起收掉），所以隐藏属性在引擎回调里取证。
+            bool workspaceHiddenDuringExtract = false;
 
             harness.Engine.OnExtractAsync = request => Task.Run(() =>
             {
                 harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+
+                string runningRoot = Path.Combine(harness.OutputRoot, "pack", ".ArchiveFixer.work");
+
+                workspaceHiddenDuringExtract =
+                    Directory.Exists(runningRoot) &&
+                    (File.GetAttributes(runningRoot) & FileAttributes.Hidden) != 0;
+
                 WriteFiles(request.OutputPath!, 2);
                 return Succeeded();
             });
@@ -395,23 +386,35 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
-            string expectedRoot = Path.Combine(harness.FakeDriveRoot, ".ArchiveFixer.work");
+            string expectedRoot = Path.Combine(harness.OutputRoot, "pack", ".ArchiveFixer.work");
 
             Assert.Equal(expectedRoot, harness.PathService.WorkDirectory);
             Assert.Equal(expectedRoot, RecursiveExtractor.ConfiguredWorkspaceRoot);
 
+            // 目标目录真的被建出来了（"目标目录还不存在就先建它"）。
+            Assert.True(Directory.Exists(harness.OutputRoot), $"目标目录没被建出来：{harness.OutputRoot}");
+
             // 引擎写盘的地方（暂存目录）确实在这个根下面。
             Assert.StartsWith(expectedRoot, harness.Engine.LastExtractOutputPath, StringComparison.OrdinalIgnoreCase);
+
+            // ① 工作区那一层**带 Hidden 属性** —— 用户翻自己目录时看不见它（诉求③）。
+            Assert.True(workspaceHiddenDuringExtract, $"工作区目录没有 Hidden 属性：{expectedRoot}");
+
+            // ② 不再在盘根开第四个顶层目录：盘根那个老位置不该出现。
+            string driveRootWorkspace = Path.Combine(Path.GetPathRoot(harness.OutputRoot)!, ".ArchiveFixer.work");
+            Assert.False(
+                string.Equals(driveRootWorkspace, expectedRoot, StringComparison.OrdinalIgnoreCase),
+                "工作区又回到盘根去了");
 
             // 程序目录那一份（老位置）在这条路上**根本没被创建**。
             Assert.False(
                 Directory.Exists(Path.Combine(harness.CacheRoot, "work")),
-                "默认跟输出盘时，程序目录下的老位置一个字节都不该被建");
+                "默认档下程序目录下的老位置一个字节都不该被建");
 
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("本批工作区在", StringComparison.Ordinal) &&
-                        line.Contains(harness.FakeDriveRoot, StringComparison.OrdinalIgnoreCase));
+                line => line.Contains("本批工作区在目标目录里面", StringComparison.Ordinal) &&
+                        line.Contains(expectedRoot, StringComparison.OrdinalIgnoreCase));
 
             // 用过的根进了账本：③ 页与下次启动靠它才找得到这个根。
             Assert.Contains(
@@ -420,11 +423,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **未指定位置**：落点由"源包所在目录"算出 → 工作区跟着源包那块盘。
-        /// 判据是"喂给盘映射的那个落点确实来自源包目录"，不是只看根落在哪。
+        /// **未指定位置**：落点由"源包所在目录"算出 → 工作区就落在**源包旁边那个包名目录里面**。
+        /// 判据是"喂给解析器的目标目录确实来自源包目录"，不是只看根落在哪。
         /// </summary>
         [Fact]
-        public async Task 管线_未指定位置时跟着源包所在盘()
+        public async Task 管线_未指定位置时落在源包旁边的目标目录里面()
         {
             Harness harness = CreateHarness(configureCacheRoot: false, customOutput: false);
             string source = harness.CreateSourceFile("plain.7z");
@@ -434,10 +437,8 @@ namespace ArchiveFixer.Tests
             harness.Coordinator.WorkspaceDriveOverride = destination =>
             {
                 seenDestinations.Add(destination);
-                return harness.FakeDriveRoot;
+                return Path.GetPathRoot(destination) ?? string.Empty;
             };
-
-            harness.Coordinator.WorkspaceDriveExistsOverride = _ => true;
 
             ArchiveTask task = harness.AddTask(source);
 
@@ -452,14 +453,22 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.Equal(Path.Combine(harness.FakeDriveRoot, ".ArchiveFixer.work"), harness.PathService.WorkDirectory);
 
-            // 关键证据：算盘用的落点来自**源包所在目录**（未指定位置那一档的落点规则）。
+            string expectedRoot = Path.Combine(harness.SourceRoot, "plain", ".ArchiveFixer.work");
+
+            Assert.Equal(expectedRoot, harness.PathService.WorkDirectory);
+
+            // 关键证据：解析用的目标目录来自**源包所在目录**（未指定位置那一档的落点规则）。
             Assert.Contains(
                 seenDestinations,
                 destination => destination.StartsWith(
                     Path.GetDirectoryName(source)!,
                     StringComparison.OrdinalIgnoreCase));
+
+            // 而且工作区**不在**源包那一层（不变量 12：中间产物不许写进源目录）。
+            Assert.False(
+                string.Equals(harness.SourceRoot, Path.GetDirectoryName(expectedRoot), StringComparison.OrdinalIgnoreCase),
+                "工作区落进了源目录那一层");
         }
 
         /// <summary>用户设过缓存根目录 → 管线照旧用 <c>&lt;它&gt;\work</c>（老行为一个字都不改）。</summary>
@@ -468,9 +477,6 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(configureCacheRoot: true, customOutput: true);
             string source = harness.CreateSourceFile("configured.7z");
-
-            // 注入了假盘也必须用不上：显式设置的那一档**不进盘符分支**。
-            harness.Coordinator.WorkspaceDriveOverride = _ => harness.FakeDriveRoot;
 
             ArchiveTask task = harness.AddTask(source);
 
@@ -486,7 +492,11 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
             Assert.Equal(Path.Combine(harness.CacheRoot, "work"), harness.PathService.WorkDirectory);
-            Assert.False(Directory.Exists(Path.Combine(harness.FakeDriveRoot, ".ArchiveFixer.work")));
+
+            // 显式缓存根那一档**不进目标目录分支**：目标目录里不该出现第二个工作区。
+            Assert.False(
+                Directory.Exists(Path.Combine(harness.OutputRoot, "configured", ".ArchiveFixer.work")),
+                "设过缓存根目录时不该再在目标目录里建一个工作区");
 
             Assert.Contains(
                 harness.LogTexts,
@@ -494,13 +504,13 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **同卷的空间口径在真管线上看得见**：工作区与成品在同一块盘时，
+        /// **同卷的空间口径在真管线上看得见**：工作区与成品在同一块盘（同一棵树）时，
         /// 空间门的日志里必须出现"同卷…只算一份"这句话（用户要求"如实算进去"，看不见就等于没算）。
         /// </summary>
         [Fact]
         public async Task 管线_同卷时空间依据里写明_只算一份()
         {
-            Harness harness = CreateHarness(configureCacheRoot: true, customOutput: true);
+            Harness harness = CreateHarness(configureCacheRoot: false, customOutput: true);
             string source = harness.CreateSourceFile("same-volume.7z");
 
             ArchiveTask task = harness.AddTask(source);
@@ -517,7 +527,7 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
-            // 工作区（<缓存根>\work）与成品（<out>\包名）都在这个临时目录下的同一块盘上。
+            // 新默认档下工作区就在目标目录里面 ⇒ 两者必然同卷。
             Assert.Contains(
                 harness.LogTexts,
                 line => line.Contains("空间门通过（精确）", StringComparison.Ordinal) &&
@@ -526,22 +536,28 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **拿不到盘**：换成"盘不存在"的探针 → 回落程序目录 + WARN，而且**整批照常解压成功**
-        /// （绝不因为工作区定不下来就让整批开不了工）。
+        /// ⛔ **拿不到目标目录 → 整批停手并报错，绝不悄悄换个盘**（用户 2026-09-30 的红线）。
+        ///
+        /// <para>造法：把输出位置指到一个**路径形状不合法**的地方（<c>|</c> 在 Windows 上非法），
+        /// 于是这一批一个算得出目标目录的任务都没有。老实现会回落程序目录并"照常开工"；
+        /// 现在必须是：任务一个字节都没动、程序目录下的老位置没被建、日志里 ERROR 说清去哪儿设。</para>
         /// </summary>
         [Fact]
-        public async Task 管线_拿不到盘时回落程序目录且整批照跑()
+        public async Task 管线_拿不到目标目录时整批停手并报错()
         {
             Harness harness = CreateHarness(configureCacheRoot: false, customOutput: true);
-            string source = harness.CreateSourceFile("fallback.7z");
 
-            harness.Coordinator.WorkspaceDriveOverride = _ => @"Z:\";
-            harness.Coordinator.WorkspaceDriveExistsOverride = _ => false;
+            // 把输出位置指到一个**不存在的盘**（OutputPlacement 的盘符预检会判否）→ 一个目标目录都算不出来。
+            harness.Vm.SelectedOutputDirectory = @"Z:\不存在的盘\成果";
 
+            string source = harness.CreateSourceFile("no-destination.7z");
             ArchiveTask task = harness.AddTask(source);
+
+            bool engineCalled = false;
 
             harness.Engine.OnExtractAsync = request => Task.Run(() =>
             {
+                engineCalled = true;
                 WriteFiles(request.OutputPath!, 1);
                 return Succeeded();
             });
@@ -550,13 +566,20 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.Equal(Path.Combine(harness.CacheRoot, "work"), harness.PathService.WorkDirectory);
+            Assert.False(engineCalled, "工作区定不下来时引擎绝不该被调用（一个字节都不许写）");
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+            Assert.True(File.Exists(source), "源包必须原样保留");
 
+            // 程序目录下的老位置**一个字节都没建**（这就是"不许回落"的可观测判据）。
+            Assert.False(
+                Directory.Exists(Path.Combine(harness.CacheRoot, "work")),
+                "拿不到目标目录时，程序目录下的老位置绝不许被建出来");
+
+            // 必须指名道姓地告诉他去哪儿设。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("工作区回落到程序目录", StringComparison.Ordinal) &&
-                        line.Contains("盘不存在", StringComparison.Ordinal));
+                line => line.Contains("没有开工", StringComparison.Ordinal) &&
+                        line.Contains("缓存根目录", StringComparison.Ordinal));
         }
 
         // ================================================================ ⑤ 空壳工作区
@@ -910,6 +933,202 @@ namespace ArchiveFixer.Tests
             Assert.Equal(1, outcomes.Count(item => item.Deleted));
         }
 
+        // ================================================================ ⑦ 工作区那棵树必须被排除
+        //
+        // 用户 2026-09-30 划的**最关键那个坑**：工作区现在落在输出目录里面，所有
+        // "扫产物 / 数内容物 / 找内层包 / 校验落点"的判据都必须把它排除掉；
+        // 不排除的后果是程序把工作区里的中间产物当成"用户的内容物"搬出去 —— **不可逆**的事故。
+
+        /// <summary>
+        /// 扫描类判据的唯一出口 <see cref="WorkspaceTree"/>：
+        /// ① 按名字认出 <c>.ArchiveFixer.work</c>（不需要知道当前生效的根是哪一个）；
+        /// ② 按位置认出"在根之下"（覆盖用户显式设过 <c>CacheRootDirectory</c> 那一档的 <c>work</c> 目录）。
+        /// </summary>
+        [Fact]
+        public void 工作区判据_名字与位置两条都认()
+        {
+            string target = Path.Combine(_root, "excl", "out", "pack");
+            string workspace = Path.Combine(target, ".ArchiveFixer.work");
+
+            Directory.CreateDirectory(Path.Combine(workspace, "task-1", "layer-000", "output"));
+
+            string innerDecoy = Path.Combine(workspace, "task-1", "layer-000", "output", "inner.7z");
+            File.WriteAllText(innerDecoy, "中间的包，绝不是用户的内容物");
+
+            string realContent = Path.Combine(target, "photo-1.jpg");
+            File.WriteAllText(realContent, "真正的内容物");
+
+            // ① 名字：**任意一段**是那个点开头的名字就算（工作区里面的文件靠这一段认出来）。
+            Assert.True(WorkspaceTree.IsWorkspaceDirectoryName(workspace));
+            Assert.False(WorkspaceTree.IsWorkspaceDirectoryName(innerDecoy), "最后一段是 inner.7z，单看名字认不出来");
+            Assert.True(WorkspaceTree.HasWorkspaceSegment(innerDecoy), "但它路径里有一段就是工作区目录名");
+
+            Assert.True(WorkspaceTree.ShouldSkipEntry(workspace, null));
+            Assert.True(WorkspaceTree.ShouldSkipEntry(innerDecoy, null));
+
+            // ② 位置：用户设过缓存根目录时目录名叫 work，光看名字认不出来 —— 靠根来认。
+            string configuredWorkspace = Path.Combine(_root, "excl", "user-cache", "work");
+            string insideConfigured = Path.Combine(configuredWorkspace, "task-9", "stage", "half.bin");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(insideConfigured)!);
+            File.WriteAllText(insideConfigured, "半截产物");
+
+            Assert.False(WorkspaceTree.IsWorkspaceDirectoryName(insideConfigured), "work 这个名字本身认不出来");
+            Assert.True(WorkspaceTree.ShouldSkipEntry(insideConfigured, configuredWorkspace));
+
+            // 目录内递归枚举：只看得见真正的内容物，工作区里的中间包一个都不出现。
+            IReadOnlyList<string> files = WorkspaceTree.EnumerateFiles(target, workspace);
+
+            Assert.Contains(realContent, files);
+            Assert.DoesNotContain(innerDecoy, files);
+            Assert.DoesNotContain(files, file => file.Contains(".ArchiveFixer.work", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// ⛔ **工作区里的东西绝不许被当成"源包"搬进其它物**（不可逆动作的入口）。
+        ///
+        /// <para>路径：<c>ProcessArtifactLayout.Plan(task, 其余物目录)</c> 是"把源包搬进可删的其余物"
+        /// 的生产入口。源在工作区里时必须**一个字节都不搬**，并如实记下原因。</para>
+        /// </summary>
+        [Fact]
+        public void 工作区里的东西_绝不许被当成源包搬进其余物()
+        {
+            string target = Path.Combine(_root, "srcmove", "out", "pack");
+            string workspace = Path.Combine(target, ".ArchiveFixer.work");
+            string artifactDirectory = Path.Combine(target, "其余物");
+
+            Directory.CreateDirectory(workspace);
+            Directory.CreateDirectory(artifactDirectory);
+
+            // 假装它是"内层包"——它就躺在工作区里面（抠出来的副本 / 逐层中间包都长这样）。
+            string decoy = Path.Combine(workspace, "inner.7z");
+            File.WriteAllText(decoy, "工作区里的中间产物");
+
+            string? previousRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+
+            try
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = workspace;
+
+                var task = new ArchiveTask(decoy, 1)
+                {
+                    IsArchive = true,
+                    DetectedFormat = "7Z",
+                    Status = StatusText.Recognized,
+                    IsSelected = true
+                };
+
+                SourcePackageMovePlan plan = new SourcePackageMover().Plan(task, artifactDirectory);
+
+                Assert.Empty(plan.Moves);
+                Assert.Equal(0, plan.TotalSize);
+                Assert.Contains(
+                    plan.Skipped,
+                    skip => skip.SourcePath == decoy && skip.Reason == ArtifactSkipReason.SourceInsideWorkspace);
+
+                // 一个字节都没动：文件还在原地、其余物目录里什么都没有。
+                Assert.True(File.Exists(decoy), "工作区里的文件被搬走了");
+                Assert.Empty(Directory.GetFileSystemEntries(artifactDirectory));
+            }
+            finally
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = previousRoot;
+            }
+        }
+
+        /// <summary>
+        /// ⛔ **发布目标落在工作区里 → 立刻停手**。
+        ///
+        /// <para>工作区默认建在目标目录里面之后，"发布目标"与"工作区"第一次成了父子关系：
+        /// 万一有人把工作区本身当成发布目标，产物会被搬进工作区，紧接着收尾清理把它整份删掉 ——
+        /// 用户的成品**不可逆地消失**。所以这一档必须一个字节都不动。</para>
+        /// </summary>
+        [Fact]
+        public void 发布目标落在工作区里_立刻停手不搬任何东西()
+        {
+            string root = Path.Combine(_root, "publish-guard", "work");
+            var workspace = new ExtractionWorkspace(root, "task-1");
+
+            WorkspaceLayer layer = workspace.CreateNextLayer(Path.Combine(_root, "fake.7z"));
+            string product = Path.Combine(layer.OutputPath, "photo-1.jpg");
+
+            File.WriteAllText(product, "真正的内容物");
+
+            WorkspacePublishResult result = workspace.Publish(workspace.RootDirectory);
+
+            Assert.False(result.Success);
+            Assert.Equal(0, result.MovedFileCount);
+            Assert.Contains("工作区", result.Message, StringComparison.Ordinal);
+
+            // 产物**还在工作区那一层里**，没有被搬进工作区根（否则紧接着就被清理删掉了）。
+            Assert.True(File.Exists(product), "发布被拒之后产物必须原地不动");
+            Assert.False(File.Exists(Path.Combine(workspace.RootDirectory, "photo-1.jpg")));
+        }
+
+        /// <summary>
+        /// **整批结束之后 <c>&lt;目标目录&gt;\.ArchiveFixer.work</c> 这一层空壳不残留**
+        /// （用户 2026-09-30："整批结束后这一层空壳也要删掉，别留在用户目录里"）。
+        /// </summary>
+        [Fact]
+        public async Task 整批结束后_工作区空壳不留在目标目录里()
+        {
+            Harness harness = CreateHarness(configureCacheRoot: false, customOutput: true);
+            string source = harness.CreateSourceFile("shell.7z");
+
+            ArchiveTask task = harness.AddTask(source);
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                WriteFiles(request.OutputPath!, 2);
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(2));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            string workspace = Path.Combine(harness.OutputRoot, "shell", ".ArchiveFixer.work");
+
+            Assert.False(Directory.Exists(workspace), $"整批结束后工作区空壳还留在用户目录里：{workspace}");
+
+            // 内容物照旧在（收掉的是空壳，不是成品）。
+            Assert.Contains(
+                Directory.GetFileSystemEntries(Path.Combine(harness.OutputRoot, "shell")),
+                path => !path.EndsWith(".ArchiveFixer.work", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// ⛔ **目标目录在别的盘时，绝不回落到 C 盘 / 程序目录**（用户点名"危险操作固定到了 C 盘"）。
+        ///
+        /// <para>判据是三条一起看：工作区在**那个目标目录**里、根**不在** C 盘、程序目录下那个老位置
+        /// **一个字节都没被建**。</para>
+        /// </summary>
+        [Fact]
+        public void 目标目录在别的盘_不回落C盘也不碰程序目录()
+        {
+            var created = new List<string>();
+
+            WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
+                configuredCacheRoot: null,
+                batchDestinationDirectories: new[] { @"H:\成果\1111" },
+                driveOf: _ => @"H:\",
+                ensureDirectory: path =>
+                {
+                    created.Add(path);
+                    return true;
+                });
+
+            Assert.Equal(Path.Combine(@"H:\成果\1111", ".ArchiveFixer.work"), resolution.RootDirectory);
+            Assert.StartsWith(@"H:\", resolution.RootDirectory, StringComparison.OrdinalIgnoreCase);
+
+            // 拿不到 C 盘 / 程序目录的影子：这一批创建的目录**全在 H 盘那个目标目录这一棵里**。
+            Assert.All(created, path => Assert.StartsWith(@"H:\成果\1111", path, StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(created, path => path.StartsWith(@"C:", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(created, path => path.Contains("program-data", StringComparison.OrdinalIgnoreCase));
+        }
+
         // ================================================================ 装配
 
         private static string CreateLeftover(string workRoot, string name, int bytes)
@@ -1042,6 +1261,7 @@ namespace ArchiveFixer.Tests
                 pathService,
                 cacheRoot,
                 sourceRoot,
+                outputRoot,
                 fakeDrive);
         }
 
@@ -1081,6 +1301,7 @@ namespace ArchiveFixer.Tests
                 PathService pathService,
                 string cacheRoot,
                 string sourceRoot,
+                string outputRoot,
                 string fakeDriveRoot)
             {
                 Vm = vm;
@@ -1090,6 +1311,7 @@ namespace ArchiveFixer.Tests
                 PathService = pathService;
                 CacheRoot = cacheRoot;
                 SourceRoot = sourceRoot;
+                OutputRoot = outputRoot;
                 FakeDriveRoot = fakeDriveRoot;
             }
 
@@ -1108,7 +1330,13 @@ namespace ArchiveFixer.Tests
 
             public string SourceRoot { get; }
 
-            /// <summary>假输出盘根（测试注入的盘映射指向它，所以绝不碰真实盘）。</summary>
+            /// <summary>
+            /// "指定位置"那一档的输出根（<c>_root\out</c>，真实临时目录）。
+            /// 目标目录 = <c>&lt;它&gt;\&lt;包名&gt;</c>，工作区就在那个包名目录里面。
+            /// </summary>
+            public string OutputRoot { get; }
+
+            /// <summary>假输出盘根（只用于"跨盘描述"那一条；工作区位置已经不看盘符了）。</summary>
             public string FakeDriveRoot { get; }
 
             public IEnumerable<string> LogTexts => Log.Logs.Select(item => item.Message);

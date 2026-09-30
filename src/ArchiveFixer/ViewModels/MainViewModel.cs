@@ -408,18 +408,20 @@ namespace ArchiveFixer.ViewModels
                 : cacheRoot;
 
             /*
-             * 工作区根（用户 2026-09-24 拍板：**默认跟着输出盘**走）。
+             * 工作区根（用户 2026-09-30：**默认落在这一单的目标目录里面**）。
              *
              * 三档，与 WorkspaceRootResolver 同一口径：
              * ① 用户显式设过缓存根目录 → <它>\work（老行为，一个字都不改他的选择）；
-             * ② 留空 → 用**账本里记住的那个根**（上一批跟着输出盘定下来的那个，见 WorkspaceRootIndex），
-             *    没有记录时才是 <程序目录>\data\work（老位置＝拿不到盘时的回落档）；
-             * ③ 真正"跟着输出盘"的解析发生在**每批开工前**
+             * ② 留空 → 用**账本里记住的那个根**（上一批按目标目录定下来的那个，见 WorkspaceRootIndex）；
+             * ③ 真正"落在目标目录里"的解析发生在**每批开工前**
              *    （ExtractionCoordinator.ApplyBatchWorkspaceRoot）—— 只有那时才知道这一批会处理哪些包、
-             *    落点在哪块盘。启动 / 保存设置时根本还没有这一批的任务，所以这里只能是"上一批的根"。
+             *    目标目录在哪。启动 / 保存设置时根本还没有这一批的任务，所以这里只能是"上一批的根"。
+             *
+             * ⚠ 这里**只服务于 ③ 页的残留扫描与启动日志**，不是这一批真正会用的根。
+             * ⛔ 批首解析不出来时整批停手（绝不在这里替它挑一个盘）。
              *
              * ⚠ 递归核心的工作区根是进程级静态（它自己会再挂一层 "recursive"），必须跟着一起换 ——
-             * 不换的话递归那几百 MB 又会回到程序盘（那正是这一条要改掉的老行为）。
+             * 不换的话递归那几百 MB 又会回到程序盘（那正是早先要改掉的老行为）。
              */
             _pathService.WorkDirectory = ResolveStartupWorkspaceRoot(cacheRoot);
             RecursiveExtractor.ConfiguredWorkspaceRoot = _pathService.WorkDirectory;
@@ -550,6 +552,17 @@ namespace ArchiveFixer.ViewModels
         /// 界面上的"当前在用"是设置窗口自己算的预览，不能拿来证明真正跑起来用了谁。
         /// </summary>
         internal IArchiveEngine PipelineEngine => _archiveEngine;
+
+        /// <summary>
+        /// **当前生效的工作区根**（唯一来源 = <see cref="PathService.WorkDirectory"/>，批首由
+        /// <c>ExtractionCoordinator.ApplyBatchWorkspaceRoot</c> 定下来）。
+        ///
+        /// <para>为什么要有这个只读口子：工作区默认就落在**目标目录里面**
+        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30），凡是"扫产物 / 找内层包"
+        /// 的地方都必须在扫描时把它排除掉（唯一判据出口 <see cref="WorkspaceTree" />）——
+        /// 那些扫描点分布在别的协调器里，而 <c>_pathService</c> 是私有的。</para>
+        /// </summary>
+        internal string CurrentWorkspaceRoot => _pathService.WorkDirectory;
 
         /// <summary>
         /// 某个任务**实际**用的引擎（报告层问的就是这个）。

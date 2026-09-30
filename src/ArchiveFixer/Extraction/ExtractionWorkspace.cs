@@ -1,4 +1,5 @@
 using ArchiveFixer.Helpers;
+using ArchiveFixer.Storage;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -127,7 +128,11 @@ namespace ArchiveFixer.Extraction
 
             TaskDirectory = Path.Combine(RootDirectory, safeTaskId);
 
-            if (!SafePathHelper.EnsureDirectoryExists(TaskDirectory))
+            /*
+             * 工作区那棵树一律"建完立刻标隐藏"（用户 2026-09-30 诉求③："要创的话就隐秘文件，
+             * 就是单看着看不出来的，用户也察觉不到"）—— 父目录、任务目录、每一层目录都标。
+             */
+            if (!WorkspaceTree.EnsureHiddenDirectory(TaskDirectory))
             {
                 // 建不出来说明这个位置根本不可写（磁盘满 / 权限 / 路径非法）。
                 // 与其让后面每一层都失败一遍，不如在这里一次性说清。
@@ -158,7 +163,7 @@ namespace ArchiveFixer.Extraction
 
             string outputDirectory = Path.Combine(layerDirectory, OutputDirectoryName);
 
-            if (!SafePathHelper.EnsureDirectoryExists(outputDirectory))
+            if (!WorkspaceTree.EnsureHiddenDirectory(outputDirectory))
             {
                 throw new IOException($"无法创建工作区层目录：{outputDirectory}");
             }
@@ -208,6 +213,19 @@ namespace ArchiveFixer.Extraction
 
             string destination = SafePathHelper.GetFullPathSafe(targetDirectory);
             IReadOnlyList<WorkspaceLayer> leaves = ResolveLeafLayers();
+
+            /*
+             * ⛔ 发布目标**落在工作区自己那棵树里面**要立刻停手（用户 2026-09-30）。
+             *
+             * 工作区默认就建在目标目录里面（<目标目录>\.ArchiveFixer.work），于是"发布目标"与
+             * "工作区"第一次成了**父子关系** —— 万一有人把工作区根本身（或它的子目录）当成发布目标，
+             * 产物就会被搬进工作区，紧接着收尾清理会把工作区整份删掉：用户的成品**不可逆地消失**。
+             * 下面那条"目标不能落在某一层产物目录内部"只挡住了反方向（往自己里面塞），挡不住这一边。
+             */
+            if (IsSameOrChildPath(destination, RootDirectory))
+            {
+                return PublishFailure(destination, "发布目标目录就是工作区（或在工作区里面），已停止发布");
+            }
 
             /*
              * 目标落在产物目录内部要立刻停手，而且要在**建目录之前**判断（任意一层命中就整体停）：

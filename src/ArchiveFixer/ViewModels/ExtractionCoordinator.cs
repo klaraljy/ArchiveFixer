@@ -2824,18 +2824,24 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 数一个最终目录里**真正的内容物文件**：排除 <c>其余物</c>（含旧名 <c>过程物</c>）里的东西，
-        /// 排除归档与分卷这类"待续解的过程物"。
+        /// 排除归档与分卷这类"待续解的过程物"，**并排除工作区自己那棵树**（用户 2026-09-30）。
         ///
-        /// 这是"内容物确实已定稿"的事实依据 —— 不用"本轮搬了几条"这种过程数字
+        /// <para>这是"内容物确实已定稿"的事实依据 —— 不用"本轮搬了几条"这种过程数字
         /// （用户明确要求：别拿 move 计数当唯一判据）。
-        /// 读不了目录时返回 0：宁可判定"没有内容物"而不动源包。
+        /// 读不了目录时返回 0：宁可判定"没有内容物"而不动源包。</para>
+        ///
+        /// <para>⛔ 为什么必须排除工作区：工作区默认就建在目标目录里面（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>），
+        /// 而这一支是**删/搬源包（不可逆）之前的闸门** —— 把工作区里的暂存产物数成"内容物"，
+        /// 等于用一个假事实去放行不可逆动作。判据唯一出口 <see cref="WorkspaceTree"/>。</para>
         /// </summary>
-        private static int CountContentFiles(string destinationDirectory)
+        private int CountContentFiles(string destinationDirectory)
         {
             if (string.IsNullOrWhiteSpace(destinationDirectory) || !Directory.Exists(destinationDirectory))
             {
                 return 0;
             }
+
+            string workRoot = _pathService.WorkDirectory;
 
             try
             {
@@ -2843,6 +2849,11 @@ namespace ArchiveFixer.ViewModels
 
                 foreach (string file in Directory.EnumerateFiles(destinationDirectory, "*", SearchOption.AllDirectories))
                 {
+                    if (WorkspaceTree.ShouldSkipEntry(file, workRoot))
+                    {
+                        continue;
+                    }
+
                     if (ProcessArtifactLayout.IsInsideArtifactDirectory(file, destinationDirectory))
                     {
                         continue;
@@ -2970,12 +2981,16 @@ namespace ArchiveFixer.ViewModels
         /// 共用输出根是 <c>BBB\111</c>，而定稿把那**一个**文件夹 <c>2222</c> 搬了进去，
         /// 于是内容物真正所在的那一层是 <c>BBB\111\2222</c>。</para>
         ///
-        /// <para>判据：落点目录里**除了「其余物」之外只剩一个条目、而且它是目录** → 那一层就是内容物层；
-        /// 否则就是落点目录本身（内容物是散文件，或本来就有多项）。
+        /// <para>判据：落点目录里**除了「其余物」和工作区自己那棵树之外**只剩一个条目、而且它是目录
+        /// → 那一层就是内容物层；否则就是落点目录本身（内容物是散文件，或本来就有多项）。
         /// 续解产物按它落位，才能做到"一个源包 = 一个目录"（用户第 35 条原话：
         /// "你应该是要将 `BBB\111\222` 文件夹放在 `BBB\111\2222` 这个里面"）。</para>
+        ///
+        /// <para>⛔ <b>必须排除工作区那棵树</b>（用户 2026-09-30）：工作区默认就建在目标目录里面
+        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>），不排除的话它会被当成"唯一的那一个子目录"，
+        /// 于是"内容物层"被解析成工作区 —— 续解产物会直接落进工作区，然后被收尾清理一起删掉。</para>
         /// </summary>
-        private static string ResolveContentLayerDirectory(string destinationDirectory, string processArtifactDirectory)
+        private string ResolveContentLayerDirectory(string destinationDirectory, string processArtifactDirectory)
         {
             if (string.IsNullOrWhiteSpace(destinationDirectory))
             {
@@ -2989,9 +3004,12 @@ namespace ArchiveFixer.ViewModels
                     return destinationDirectory;
                 }
 
+                string workRoot = _pathService.WorkDirectory;
+
                 List<string> entries = Directory
                     .GetFileSystemEntries(destinationDirectory)
                     .Where(path => !ProcessArtifactLayout.IsArtifactDirectoryName(path))
+                    .Where(path => !WorkspaceTree.ShouldSkipEntry(path, workRoot))
                     .ToList();
 
                 if (entries.Count == 1 && Directory.Exists(entries[0]))
@@ -7591,12 +7609,23 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * ===== 工作区根：本批的中间产物放哪（用户 2026-09-24 拍板）=====
+                 * ===== 工作区根：本批的中间产物放哪（用户 2026-09-30：落在这一单的目标目录里）=====
                  *
-                 * 位置刻意在**空间规划之前**：空间账面要按"工作区与成品是不是同一块盘"给口径，
-                 * 而落点盘正是定工作区根时算出来的（两处必须看同一个事实，不能各算一遍）。
+                 * 位置刻意在**空间规划之前**：空间账面要按"工作区与成品是不是同一块卷"给口径，
+                 * 而目标目录正是定工作区根时算出来的（两处必须看同一个事实，不能各算一遍）。
+                 *
+                 * ⛔ 定不下来（没有任何任务算得出目标目录）→ **整批停手并报错**：
+                 * 老实现这里会悄悄回落到程序目录（可能就是 C 盘），用户 2026-09-30 点名否掉了那个方向。
+                 * return 在 try 里面，所以 finally 照常收尾（_isExtracting / IsBusy 都会被复位）。
                  */
-                ApplyBatchWorkspaceRoot(selectedTasks);
+                WorkspaceRootResolution workspaceResolution = ApplyBatchWorkspaceRoot(selectedTasks);
+
+                if (!workspaceResolution.Resolved)
+                {
+                    _dialogService.ShowError(workspaceResolution.Reason);
+                    AppendLog("ERROR", "这一批已经停下：工作区位置没定下来，一个字节都没写、源包一个都没碰。");
+                    return;
+                }
 
                 /*
                  * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
@@ -8342,37 +8371,34 @@ namespace ArchiveFixer.ViewModels
 
         // ================================================================ 工作区根（默认跟输出盘）
 
-        /// <summary>
-        /// 单测注入：把"一个输出落点"映射到**假盘根**（默认 = <see cref="Path.GetPathRoot(string)"/>）。
+        /// <summary>单测注入：把"一个目标目录"映射到**假盘根**（默认 = <see cref="Path.GetPathRoot(string)"/>）。
         ///
-        /// <para>为什么要留这个口子：默认档下工作区根落在输出盘上（<c>D:\.ArchiveFixer.work</c>），
-        /// 而单测的输出落点全在<b>临时目录</b>（C 盘）—— 不注入的话
-        /// "默认跟输出盘"这一条根本没法在测试里验证（真去建 <c>C:\.ArchiveFixer.work</c> 是绝不允许的）。
-        /// 与 <c>OutputPlacement.driveExists</c> / <see cref="SpaceProbeOverride"/> 同一套做法。</para>
+        /// <para>⚠ 现在它**只影响日志里"跨了几个盘"那句描述**：工作区位置不再取盘符，
+        /// 而是落在这一单的目标目录里面（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30）。
+        /// 于是单测可以直接用真实临时目录验证落点，不必再注入假盘。</para>
         /// </summary>
         internal Func<string, string>? WorkspaceDriveOverride { get; set; }
 
-        /// <summary>单测注入：盘根存在性探针（默认 = <c>Directory.Exists</c>）。null 表示"盘不存在"。</summary>
-        internal Func<string, bool>? WorkspaceDriveExistsOverride { get; set; }
-
         /// <summary>
-        /// 本批开工前定一次**工作区根**（用户 2026-09-24 拍板：默认跟着输出盘走）。
+        /// 本批开工前定一次**工作区根**（用户 2026-09-30：默认落在这一单的目标目录里面）。
         ///
         /// <para>三档与理由都写在 <see cref="WorkspaceRootResolver"/> 里，这里只负责"什么时候定"与"怎么告诉用户"：</para>
         /// <list type="number">
-        /// <item><description>落点全部由**唯一实现** <see cref="PathService.ResolveOutputPlacement"/> 算出来
-        /// （这里不自己拼路径），只从落点上取盘符；算不出落点的任务跳过 ——
+        /// <item><description>目标目录全部由**唯一实现** <see cref="PathService.ResolveOutputPlacement"/> 算出来
+        /// （这里不自己拼路径）；算不出落点的任务跳过 ——
         /// 它本来就会在任务级被报"输出目录无效"，不该让整批的工作区跟着定不下来。</description></item>
         /// <item><description>定完立刻写进 <see cref="PathService.WorkDirectory"/> 与
         /// <c>RecursiveExtractor.ConfiguredWorkspaceRoot</c>：此后本批所有中间产物
         /// （暂存、抠取副本、递归逐层）都在这一个根下面，**不会再有第二条拼路径的实现**。</description></item>
-        /// <item><description>日志里写清"在哪个盘、为什么、跨不跨盘"；回落档是 WARN 且带原因
-        /// （拿不到盘绝不让整批开不了工）。</description></item>
-        /// <item><description>跟着输出盘定出来的根要**记进小账本**（<see cref="WorkspaceRootIndex"/>）：
-        /// ③ 页与下次启动的残留扫描靠它才找得到（根会随输出盘变，不记住就等于漏报）。</description></item>
+        /// <item><description>日志里写清"在哪个目标目录里、跨不跨盘"。</description></item>
+        /// <item><description>⛔ <b>定不下来就是 ERROR + 整批停手</b>（见返回值）：绝不悄悄换个盘
+        /// （用户点名"危险操作固定到了 C 盘"）。</description></item>
+        /// <item><description>定出来的根要**记进小账本**（<see cref="WorkspaceRootIndex"/>）：
+        /// ③ 页与下次启动的残留扫描靠它才找得到（根会随目标目录变，不记住就等于漏报）。</description></item>
         /// </list>
         /// </summary>
-        private void ApplyBatchWorkspaceRoot(IReadOnlyList<ArchiveTask> tasks)
+        /// <returns>本批的工作区结论；<see cref="WorkspaceRootResolution.Resolved"/> 为 false 时调用方必须停手。</returns>
+        private WorkspaceRootResolution ApplyBatchWorkspaceRoot(IReadOnlyList<ArchiveTask> tasks)
         {
             ExtractOptions options = BuildExtractOptions(tryExtractUnknownFormat: false);
 
@@ -8398,21 +8424,29 @@ namespace ArchiveFixer.ViewModels
 
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
                 Settings?.CacheRootDirectory,
-                _pathService.DataRootDirectory,
                 destinations,
-                WorkspaceDriveOverride,
-                WorkspaceDriveExistsOverride);
+                WorkspaceDriveOverride);
+
+            AppendLog(resolution.LogLevel, resolution.Reason);
+
+            if (!resolution.Resolved)
+            {
+                /*
+                 * ⛔ 定不下来就**什么都不做**：不写 WorkDirectory（留空只会让后面拼出相对路径，
+                 * 那是"写到一个没人知道的地方"的更坏版本）、不碰递归静态、不记账本。
+                 * 停手由调用方做（它才知道怎么把这一批收干净）。
+                 */
+                return resolution;
+            }
 
             _pathService.WorkDirectory = resolution.RootDirectory;
 
             // 递归核心的工作区根是进程级静态，且它自己会再挂一层 "recursive"（见 RecursiveExtractor）。
             RecursiveExtractor.ConfiguredWorkspaceRoot = resolution.RootDirectory;
 
-            AppendLog(resolution.LogLevel, resolution.Reason);
-
             /*
-             * 工作区不在这批的输出盘上（用户显式设过缓存根目录 / 拿不到盘回落程序目录）：
-             * **必须说出来**。这一档下空间门只按落点盘核算，工作区那块盘还要另留
+             * 工作区不在这批的目标盘上（用户显式设过缓存根目录）：
+             * **必须说出来**。这一档下空间门只按目标盘核算，工作区那块盘还要另留
              * "内容物 + 过程物"（当前账本不核算它，是已知限制），而且定稿会退化成跨盘复制。
              * 静默下去的结果就是用户看到"空间明明够，怎么还是写满了"。
              */
@@ -8443,10 +8477,9 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            if (resolution.Origin == WorkspaceRootOrigin.OutputDrive)
-            {
-                WorkspaceRootIndex.Remember(_pathService.DataRootDirectory, resolution.RootDirectory);
-            }
+            WorkspaceRootIndex.Remember(_pathService.DataRootDirectory, resolution.RootDirectory);
+
+            return resolution;
         }
 
         private ScheduledTaskRuntime GetOrCreateRuntime(ArchiveTask task)
@@ -8752,6 +8785,28 @@ namespace ArchiveFixer.ViewModels
                         // ③ 收尾的顺手活：失败只写一句，绝不影响批结论。
                         AppendLog("INFO", $"空的工作区壳没清掉（不影响结果）：{directory} —— {ex.Message}");
                     }
+                }
+
+                /*
+                 * ④ 连 `<目标目录>\.ArchiveFixer.work` 这一层空壳一起收掉（用户 2026-09-30 明确要求：
+                 * "整批结束后这一层空壳也要删掉，别留在用户目录里"）。
+                 *
+                 * 走到这里**已经确认整棵树里一个文件都没有**（① 那道闸门），所以这一删不可能碰到内容物、
+                 * 也不可能碰到源包 —— 它删掉的只是一个空的隐藏目录。
+                 * 删完若用户目录那一层也是空的，那说明这一批什么都没解出来，那个目录本来就该自己消失，
+                 * 但**不越界去删目标目录本身**（那是用户的目录，可能有别的用途，也不是我们造的）。
+                 */
+                try
+                {
+                    if (!Directory.EnumerateFileSystemEntries(root).Any())
+                    {
+                        Directory.Delete(root, recursive: false);
+                        AppendLog("INFO", $"顺手收掉了空的工作区目录：{root}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("INFO", $"空的工作区目录没清掉（不影响结果）：{root} —— {ex.Message}");
                 }
             }
             catch (Exception ex)
@@ -9495,6 +9550,46 @@ namespace ArchiveFixer.ViewModels
             recursiveExtractor.TryDiscardCurrentWorkspaceOnFailure(task.FileName);
         }
 
+        /// <summary>
+        /// 这个落点目录里**除了工作区自己那棵树之外**还有没有东西。
+        ///
+        /// <para>⛔ 判据必须排除工作区（用户 2026-09-30）：工作区默认就建在目标目录里面
+        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>），于是目标目录**永远是"非空"的** ——
+        /// 不排除的后果是每一个任务都被判成"输出目录已存在且非空"：按「询问」档会停下来问用户，
+        /// 按自动改名档则把成品落进 <c>包名(1)</c>（用户看到的是一堆莫名其妙的 (1) 目录）。
+        /// 判据唯一出口 <see cref="WorkspaceTree"/>。</para>
+        /// </summary>
+        private bool HasProductEntriesOutsideWorkspace(string directory)
+        {
+            /*
+             * 扫描期在批中，工作区根已经由批首定好；不过这里刻意**不只在有根时才排**：
+             * WorkspaceTree 的名字那一条（点开头的 .ArchiveFixer.work）与根无关，
+             * 所以哪怕读不到当前根，默认档那一层照样被排除。
+             */
+            string workRoot = _pathService.WorkDirectory;
+
+            try
+            {
+                foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
+                {
+                    if (!WorkspaceTree.ShouldSkipEntry(entry, workRoot))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch
+            {
+                /*
+                 * 读不了目录：按"有东西"处理（与既有各处同一口径）—— 那一档只会走冲突询问 / 自动改名，
+                 * 绝不覆盖、绝不删任何东西，落在安全的一侧。
+                 */
+                return true;
+            }
+        }
+
         private async Task ExtractSingleTaskAsync(ArchiveTask task, CancellationToken cancellationToken, bool oneClickRun)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -9814,7 +9909,7 @@ namespace ArchiveFixer.ViewModels
                 }
                 else if (!string.IsNullOrWhiteSpace(outputPath) &&
                     Directory.Exists(outputPath) &&
-                    Directory.EnumerateFileSystemEntries(outputPath).Any())
+                    HasProductEntriesOutsideWorkspace(outputPath))
                 {
                     /*
                      * 目标目录已存在且非空 = 第一次撞上"目标已存在"的冲突。

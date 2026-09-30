@@ -1058,6 +1058,23 @@ namespace ArchiveFixer.Extraction
 
                 foreach (string entry in entries)
                 {
+                    /*
+                     * ⛔ 名字叫工作区目录的那一项**永远不是内层归档的候选**（用户 2026-09-30）。
+                     *
+                     * 工作区默认落在目标目录里面（<目标目录>\.ArchiveFixer.work），而本方法扫的是
+                     * "这一层的产物目录" —— 万一哪条岔路上产物目录把工作区套了进去，里面的
+                     * 抠取副本 / 逐层中间包**个个都能被识别成归档**，于是被接着解、被当内容物搬出去。
+                     *
+                     * ⚠ 这里**只按名字排，绝不按"在不在工作区根之下"排**：
+                     * 本层的产物目录本身就在工作区里（<根>\recursive\<id>\layer-NNN\output），
+                     * 用"根之下"那一条会把本层所有产物一次性全排掉 —— 递归当场变成"什么都没找到"
+                     * （2026-09-30 自查实测：两个内层包全被跳过，多分支确认整条路都不再触发）。
+                     */
+                    if (WorkspaceTree.IsWorkspaceDirectoryName(entry))
+                    {
+                        continue;
+                    }
+
                     if (!TryGetAttributes(entry, out FileAttributes attributes))
                     {
                         continue;
@@ -1619,7 +1636,8 @@ namespace ArchiveFixer.Extraction
                     ? Path.Combine(Path.GetTempPath(), "ArchiveFixer", "recursive")
                     : Path.Combine(configuredRoot, "recursive");
 
-                SafePathHelper.EnsureDirectoryExists(root);
+                // 工作区那棵树一律带隐藏属性（用户 2026-09-30 诉求③：单看着看不出来）。
+                WorkspaceTree.EnsureHiddenDirectory(root);
 
                 return root;
             }

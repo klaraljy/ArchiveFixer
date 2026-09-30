@@ -29,10 +29,11 @@ namespace ArchiveFixer
         /// <summary>
         /// 老位置的工作区目录（<c>&lt;程序目录&gt;\data\work</c>）。
         ///
-        /// <para>⚠ 2026-09-24 起**工作区默认不在这儿**：它跟着**输出盘**走
-        /// （<c>&lt;输出盘&gt;\.ArchiveFixer.work</c>，见 <c>Storage/WorkspaceRootResolver</c>）。
-        /// 这个属性现在只表示"拿不到输出盘时的回落位置"，也**不在启动时创建** ——
-        /// 启动就建一个只会建在错的盘上（那正是要改掉的老行为）。</para>
+        /// <para>⚠ 2026-09-30 起**工作区默认更不在这儿**：它落在**这一单的目标目录里面**
+        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，见 <c>Storage/WorkspaceRootResolver</c>）。
+        /// 这个属性现在只是一个**历史遗留的位置名字**（升级前那批残留可能还在那儿，
+        /// ③ 页的残留扫描仍然会扫它），**不在启动时创建**，
+        /// 也**不再是"拿不到位置时的回落点"** —— 拿不到目标目录一律报错停手。</para>
         /// </summary>
         public static string WorkDirectory =>
             Path.Combine(DataRootDirectory, "work");

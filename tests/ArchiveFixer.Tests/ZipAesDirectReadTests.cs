@@ -452,7 +452,19 @@ namespace ArchiveFixer.Tests
             Assert.True(produced.Length == 1, $"应该只解出一份说明.txt，实际 {produced.Length} 份");
             Assert.Equal(PayloadText, File.ReadAllText(produced[0]));
 
-            Assert.Empty(Directory.GetFiles(harness.WorkRoot, "*.zip", SearchOption.AllDirectories));
+            /*
+             * 抠取路线的痕迹必须**不存在**：工作区里没有 .zip（下一行再钉日志）。
+             *
+             * ⚠ 2026-09-30 起工作区就落在**目标目录里面**（<目标目录>\.ArchiveFixer.work），
+             * 而且整批跑完连那一层空壳一起收掉 —— 所以这里按"工作区可能已经不在盘上"来断言：
+             * 不在了本来就等于"里面没有抠出来的 zip"；还在就照旧扫一遍。
+             * 判据的牙齿在下面两条日志断言上（直读必须出现、"取出内嵌归档"必须不出现）。
+             */
+            if (Directory.Exists(harness.WorkRoot))
+            {
+                Assert.Empty(Directory.GetFiles(harness.WorkRoot, "*.zip", SearchOption.AllDirectories));
+            }
+
             Assert.DoesNotContain(harness.Log.Logs, x => x.Message.Contains("取出内嵌归档", StringComparison.Ordinal));
             Assert.Contains(harness.Log.Logs, x => x.Message.Contains("AES", StringComparison.Ordinal));
         }
@@ -559,19 +571,20 @@ namespace ArchiveFixer.Tests
             extraction.KeepTaskDetailInLog = true;
             var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
-            return new Harness(vm, oneClick, outputRoot, pathService.WorkDirectory, logService);
+            return new Harness(vm, oneClick, outputRoot, pathService, logService);
         }
 
         private sealed class Harness
         {
             private readonly OneClickCoordinator _oneClick;
+            private readonly PathService _pathService;
 
-            public Harness(MainViewModel vm, OneClickCoordinator oneClick, string outputRoot, string workRoot, LogService log)
+            public Harness(MainViewModel vm, OneClickCoordinator oneClick, string outputRoot, PathService pathService, LogService log)
             {
                 Vm = vm;
                 _oneClick = oneClick;
                 OutputRoot = outputRoot;
-                WorkRoot = workRoot;
+                _pathService = pathService;
                 Log = log;
             }
 
@@ -579,8 +592,12 @@ namespace ArchiveFixer.Tests
 
             public string OutputRoot { get; }
 
-            /// <summary>工作区根：抠出来的过程物会落在这里（本组要求它里面**没有** .zip）。</summary>
-            public string WorkRoot { get; }
+            /// <summary>
+            /// 工作区根：抠出来的过程物会落在这里（本组要求它里面**没有** .zip）。
+            /// ⚠ **活取值**：批首才定下来（默认落在目标目录里面），批尾还可能被连空壳一起收掉 ——
+            /// 所以不能在装配时抓一份快照（那拿到的是"还没解析过"的老位置）。
+            /// </summary>
+            public string WorkRoot => _pathService.WorkDirectory;
 
             public LogService Log { get; }
 

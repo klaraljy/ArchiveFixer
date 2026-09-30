@@ -1633,7 +1633,14 @@ namespace ArchiveFixer.ViewModels
 
                     try
                     {
-                        foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                        /*
+                         * ⛔ 必须**排除工作区自己那棵树**（用户 2026-09-30）：工作区默认建在目标目录里面
+                         * （<目标目录>\.ArchiveFixer.work），解压过程中它会被填满中间产物。
+                         * 不排除的话，这些中间产物会被当成本轮"新出现的产物"，进而被当成内层包继续解 /
+                         * 被当成内容物搬出去 —— 不可逆的事故。
+                         * 判据唯一出口见 WorkspaceTree（名字 + 当前生效的根两条）。
+                         */
+                        foreach (string file in WorkspaceTree.EnumerateFiles(directory, _vm.CurrentWorkspaceRoot))
                         {
                             files.Add(file);
                         }
@@ -1759,6 +1766,9 @@ namespace ArchiveFixer.ViewModels
             {
                 var results = new List<(string, List<string>)>();
 
+                // 扫描发生在后台线程上，先把当前生效的工作区根读出来（读的是批首定好的那一个）。
+                string workRoot = _vm.CurrentWorkspaceRoot;
+
                 foreach ((ArchiveTask _, string outputDirectory) in parents)
                 {
                     if (!Directory.Exists(outputDirectory))
@@ -1768,9 +1778,16 @@ namespace ArchiveFixer.ViewModels
 
                     try
                     {
+                        /*
+                         * ⛔ 第 N 层产物扫描**必须排除工作区自己那棵树**（用户 2026-09-30）：
+                         * 工作区默认就建在目标目录里面（<目标目录>\.ArchiveFixer.work），
+                         * 里面躺着抠出来的内嵌归档副本、逐层的中间包 —— 它们**全都能被识别成归档**。
+                         * 不排除的话，程序会把工作区里的中间产物当成"用户的内层包"继续解，
+                         * 解完再把它们当内容物搬出去：不可逆的事故。
+                         */
                         results.Add((
                             outputDirectory,
-                            Directory.EnumerateFiles(outputDirectory, "*", SearchOption.AllDirectories).ToList()));
+                            WorkspaceTree.EnumerateFiles(outputDirectory, workRoot).ToList()));
                     }
                     catch
                     {
