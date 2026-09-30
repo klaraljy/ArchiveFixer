@@ -222,7 +222,7 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   - ⛔ 默认安装目录**绝不**能是 `C:\Program Files\`（要往自己目录的 `data\` 写日志 / 设置 / 密码列表）；⛔ 卸载**默认保留 `data\`**，不许改成"卸载就清空"。
   - `.nsi` 必须 UTF-8 **带 BOM**；注释行末尾不留反斜杠；开关判据只读 `${GetOptions}` 返回值；卸载删桌面 `.lnk` 前先看 `DesktopShortcut` 标记（否则会删掉用户自己的快捷方式）。
 - **面向用户的截图与文档一律脱敏**（⛔ 个人路径 / 样本包名 / 站点名 / 作者邮箱都不进仓库）〔README 截图怎么拍的（docs/images/）〕〔开源前的脱敏〕
-- 「说明」窗 = `HelpContent.Features`（16 条功能详解）+ `HelpContent.Glossary`（术语表），两段分开显示〔说明窗补上功能详解〕
+- 「说明」窗 = `HelpContent.Features`（16 条）+ `HelpContent.Glossary`（术语表），分开显示〔说明窗补上功能详解〕
 
 ### 11.2 构建 / 测试基线
 
@@ -231,8 +231,8 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   两条跳过**如实跳过**（⛔ 不伪装成验过）：① `RealAmb909VolumePairTests` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests` 的真样本那条要
   `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`〔构建 / 全量测试 / 格式检查的基线数字〕
 - ⚠ **真样本用例没设环境变量时是"提前 return"，报表里同样算"通过"**（`RealEncryptionSampleTests` 3 条、`RealVolumeSampleTests` 等）—— ⛔ 别把这栏读成"真样本验过了"；要报真样本结果必须**设变量单独跑一次**并写清命中哪一份。
-- ⚠ 数字**只在这里写一次**：别的文档要报数字，从这里抄。
-- **已知 flaky**（全量并发偶发假红，**单跑必过**；先单跑确认，⛔ 别改产品代码或断言）〔已知 flaky 清单（全量并发假红，单跑必过）〕
+- ⚠ 数字只在这里写一次。
+- **已知 flaky**（全量并发假红；先单跑确认，⛔ 别改断言）〔已知 flaky 清单（全量并发假红，单跑必过）〕
 - ⚠ 回退代码后必须 `--no-incremental` 重编（`Copy-Item` 带回旧时间戳，MSBuild 跳过重编 → 跑的还是红检那份二进制）〔真样本验收：RAR4 / 跨盘 ZIP（2026-09-29）〕
 
 ### 11.3 空间：判据 / 模式 / 批末汇总
@@ -250,7 +250,7 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   4. 中途撞上空间不足 ⇒ **一键档弹一次纯提示**（非模态、不阻塞后续、同一批一次）；⛔ **手动档只写日志**。
   5. **批末汇总框色带**：判据唯一出口 `Models/BatchSummarySeverityRules`（只读 `TaskOutcome` / 校验枚举，⛔ 不比中文），蓝 = 全成功 / 橙 = 有部分完成·跳过·取消·没轮到 / 红 = 有失败；窗口只做"哪一档长什么样"（`AppDialogWindow.ResolveSummaryBannerBrushKey`），⛔ 不许在 XAML 里再判断。
 - ⭐ **批末汇总框还要"具体指出错在哪"**（与第 5 条同一个框：**颜色管"多糟"、清单管"错在哪"**）〔复盘同上一节〕
-  - 判据唯一出口 `Models/BatchSummaryDiagnosticsRules.Build(tasks)`：`BatchProblemKind` 12 档（枚举顺序 = 显示顺序），`Severity` 与文字出自**同一次调用**（⛔ 不许各算一遍）。
+  - 判据唯一出口 `Models/BatchSummaryDiagnosticsRules.Build(tasks)`：`BatchProblemKind` 12 档（顺序 = 显示顺序）、`Severity` 与文字出自**同一次调用**。
   - 每组最多 **3** 个名字（其余写「（还有 K 个）」）、**只写文件名**（§8）；全成功 / 空批一个字都不写；密码那组注脚**必须带"可能"**（⛔ 不许断言"就是密码问题"）。
   - 分组**不新造第二套分类**（只读既有状态常量 + 机器终态兜底 ⇒ 没做成的任务一个都不会消失，**终态 `Succeeded` 且校验没判否的不进任何组**）；两个补充数只取已算好的那一份（空间 = `ArchiveTask.SpaceBlocked`、
     缺卷 = `MissingVolumeNames`，⛔ 不重算）；⚠ **仍未做**：色带 + 清单在真机 GUI 上还没看过（走 `docs/人工测试清单.md`）、第 3 条那句是**上界**（⛔ 不许改成"精确预测"）、中途提示只带**第一个**被拦下的任务。
@@ -290,6 +290,7 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 
 ### 11.5 管线（落点 / 弹窗 / 校验 / 显示 / 密码）
 
+- ⛔ **落点最少两层文件夹**：最外层 = 包名目录、最里层 = **最后一个压缩包那一层**（⛔ 塌缩/不套层分支不许吃掉最里层；用户 2026-09-30）
 - **落点模型 v2**：判据出口三处 —— `OutputPlacement.ResolveDestinationDirectory`（落点）、`OneClickCoordinator.ShouldAddContinuationLevelLayer` （续解该不该建那一层）、`ResultFinalizer.Plan(..., suppressPackageFolderLayer:)`（定稿要不要套包名那一层）；
   契约 `docs/输出与整理模型.md` §1.1 / §3.1 / §3.3.1〔落点模型 v2〕
 - **一键处理期间零弹窗**（唯一例外 = 批末汇总框）：`ExtractionCoordinator.SuppressDecisionPromptsForOneClickRun()` 一处收口， 且**必须排在 `ResetBatchConflictState()` 之后**（先抑制后清零 = 没抑制）；⛔ 不许在一键档**批中间**新增任何"要用户点一下"的框
