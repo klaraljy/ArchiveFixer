@@ -288,6 +288,55 @@ namespace ArchiveFixer.Tests
             Assert.Empty(harness.Engine.ExtractCalls);
         }
 
+        // ================================================================ 新增状态：三处同改（AGENTS.md §7）
+
+        /// <summary>
+        /// 两义那一档是**新状态**：按 §7 三处（文案 + 配色 + 统计/失败清单）一次接通，
+        /// 并与批末诊断的归组、引擎解析层的映射对齐 —— 少接一处这条就红。
+        /// </summary>
+        [Fact]
+        public void 新增状态_密码错误或文件损坏_三处都已接通()
+        {
+            // ① 文案：两种可能都在，⛔ 既不是"密码错误"也不是"文件损坏"。
+            Assert.Equal("密码错误或文件损坏", StatusText.PasswordOrCorrupted);
+            Assert.NotEqual(StatusText.Corrupted, StatusText.PasswordOrCorrupted);
+            Assert.NotEqual(StatusText.WrongPassword, StatusText.PasswordOrCorrupted);
+
+            // ② 配色：这一单没拿到产物 ⇒ 失败色（与它的统计分桶"解压失败"一致）。
+            var converter = new Converters.StatusToBrushConverter();
+
+            Assert.Same(
+                converter.ErrorBrush,
+                converter.Convert(StatusText.PasswordOrCorrupted, typeof(object), null!, null!));
+            Assert.NotSame(
+                converter.SuccessBrush,
+                converter.Convert(StatusText.PasswordOrCorrupted, typeof(object), null!, null!));
+
+            // ③ 统计：算"解压失败"，**不算**"密码错误"、也不算"文件损坏"（统计层面同样不许单独定原因）。
+            var service = new TaskSummaryService();
+            var task = new ArchiveTask(@"C:\t\amb.rar")
+            {
+                Status = StatusText.PasswordOrCorrupted,
+                Outcome = TaskOutcome.Failed
+            };
+
+            TaskSummary summary = service.BuildSummary(new[] { task });
+
+            Assert.Equal(1, summary.ExtractFailedCount);
+            Assert.Equal(0, summary.PasswordErrorCount);
+            Assert.Equal(0, summary.CorruptedCount);
+            Assert.True(service.IsFailedStatus(StatusText.PasswordOrCorrupted));
+            Assert.Contains(StatusText.PasswordOrCorrupted, service.BuildFailedListText(new[] { task }));
+
+            // ④ 批末诊断：归"密码"那一组（它的注脚本来就写着"可能"，不会断言"就是没有密码"）。
+            Assert.Equal(BatchProblemKind.Password, BatchSummaryDiagnosticsRules.Classify(task));
+
+            // ⑤ 引擎解析层的映射（唯一出口）。
+            Assert.Equal(
+                StatusText.PasswordOrCorrupted,
+                UnRarOutputParser.ErrorTypeToTaskStatus(EngineErrorTypes.PasswordOrCorrupted));
+        }
+
         // ================================================================ 装配
 
         private string CreateSourceFile(string fileName)
