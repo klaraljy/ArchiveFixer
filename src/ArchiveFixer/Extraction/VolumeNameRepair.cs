@@ -481,11 +481,21 @@ namespace ArchiveFixer.Extraction
 
             if (!probe.Confirmed || probe.OrderedVolumes.Count < 2)
             {
-                // 试开**真跑过**（闸门已放行）→ 标出来，调用方才能把"试过了、不成立、为什么"写进日志。
-                return Cannot(
-                    path,
-                    string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason),
-                    trialAttempted: true);
+                /*
+                 * ⛔ "没试"与"试过不成立"必须分开说（用户 2026-09-30 红线：工作区只准设在解压的地方）：
+                 * 这条路**没有目标目录** ⇒ 没有工作区根 ⇒ 一次都不试开（见 VolumeProbeVerifier）。
+                 * 那一档只能如实报"无法确认"，⛔ 不许写成"试开没通过"；结论照旧是**不改名**。
+                 * `TrialAttempted` 也跟着如实走 —— 它的唯一含义就是"试开真跑过"。
+                 */
+                return probe.Attempted
+                    ? Cannot(
+                        path,
+                        string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason),
+                        trialAttempted: true)
+                    : Cannot(
+                        path,
+                        string.Format(StatusText.VolumeRepairNoProbeFormat, probe.Reason),
+                        trialAttempted: false);
             }
 
             if (!Detection.VolumeNumberFromContent.TryDeriveStem(path, format, out string stem))

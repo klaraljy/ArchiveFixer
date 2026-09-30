@@ -393,43 +393,17 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
-        /// 试开目录（**老路**，没给工作区根时用）：第一卷**所在卷根**下的
-        /// <c>.ArchiveFixer.work\volprobe-&lt;guid&gt;</c>；拿不到卷根返回空串。
-        ///
-        /// <para>⚠ 这一档由 <c>Extraction/VolumeNameRepair</c>（改名那条路，早于本判定器）在用，行为没改。
-        /// 判定器那条路走两参数重载 —— 它**绝不在源卷根开工作区**（见下）。</para>
-        /// </summary>
-        public static string BuildProbeRoot(string? firstVolumePath)
-        {
-            try
-            {
-                string full = Path.GetFullPath(firstVolumePath ?? string.Empty);
-                string root = Path.GetPathRoot(full) ?? string.Empty;
-
-                if (string.IsNullOrWhiteSpace(root))
-                {
-                    return string.Empty;
-                }
-
-                return Path.Combine(root, WorkDirectoryName, "volprobe-" + Guid.NewGuid().ToString("N"));
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-
-        /// <summary>
-        /// 试开目录，**只认调用方给的工作区根**（用户 2026-09-30 口径：临时物只准落
+        /// 试开目录：**只认调用方给的工作区根**（用户 2026-09-30 口径：临时物只准落
         /// <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>）。
         ///
-        /// <para>⛔ <b>硬链接不能跨卷</b>，而工作区根与第一卷不在同一个卷上时**没有第二条合法出路**：
-        /// 退到"源卷根下的 <c>.ArchiveFixer.work</c>"是**明确被否决**的做法
-        /// （用户原话：工作区就设在解压的地方，"这就完全不存在跨盘的操作"；在源盘开目录正是不变量 12
-        /// 禁止的"把中间产物写进源目录"，收工删掉也一样 —— 中途崩掉就在用户盘上留垃圾）。
-        /// 所以这一档**返回空串**，由调用方如实报"跨盘无法试开 ⇒ 判不出"。</para>
+        /// <para>⛔ <b>没有工作区根 = 不试开</b>。这一档以前会退到"第一卷所在卷根下的
+        /// <c>.ArchiveFixer.work</c>"，已经**整条删掉**（用户红线原话：「工作区就设在解压的地方，
+        /// 这就完全不存在跨盘的操作」；在源盘开目录正是不变量 12 禁止的"把中间产物写进源目录"，
+        /// 收工删掉也一样 —— 中途崩掉就在用户盘上留垃圾）。本机实测那两个卷根空壳
+        /// （<c>C:\.ArchiveFixer.work</c> / <c>E:\.ArchiveFixer.work</c>）就是这条老路留下的。</para>
         ///
-        /// <para>⛔ 也不许悄悄复制大文件去凑（一卷 2 GiB，复制一组要几十 GiB 和几分钟）。</para>
+        /// <para>同理：<b>跨卷也不试</b>（硬链接不能跨卷）—— 两档都返回空串，由调用方如实报
+        /// "无法确认 ⇒ 判不出"。⛔ 也绝不复制大文件去凑（一卷 2 GiB，复制一组要几十 GiB 和几分钟）。</para>
         /// </summary>
         /// <param name="firstVolumePath">第一卷（决定"必须同卷"的那个卷是哪一个）。</param>
         /// <param name="preferredWorkRoot">
@@ -441,15 +415,15 @@ namespace ArchiveFixer.Detection
             {
                 if (string.IsNullOrWhiteSpace(preferredWorkRoot))
                 {
+                    // 没有工作区根 ⇒ 没有合法落点（⛔ 不另找地方开一个）。
                     return string.Empty;
                 }
 
                 string full = Path.GetFullPath(firstVolumePath ?? string.Empty);
-                string root = Path.GetPathRoot(full) ?? string.Empty;
 
-                if (string.IsNullOrWhiteSpace(root) ||
-                    !IsSameVolumeRoot(full, preferredWorkRoot))
+                if (!IsSameVolumeRoot(full, preferredWorkRoot))
                 {
+                    // 跨卷 ⇒ 硬链接做不了；⛔ 不退源卷根、⛔ 不复制。
                     return string.Empty;
                 }
 

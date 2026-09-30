@@ -1717,6 +1717,17 @@ namespace ArchiveFixer.Models
         public const string VolumeRepairContentProbeFailedFormat =
             "把候选按假设的顺序试开，引擎也读不出里面的东西（{0}），所以一个字节都不动";
 
+        /// <summary>
+        /// **没法试开**（没工作区根 / 跨盘）。<c>{0}</c> = 没法试开的原因。
+        ///
+        /// <para>为什么与上一条分开（用户 2026-09-30 红线：工作区只准设在解压的地方）：
+        /// 改名那条路**没有目标目录** ⇒ 没有工作区根 ⇒ 按口径**不许**另找地方开一个 ⇒ 一次都不试。
+        /// ⛔ 那时不许写成"试开过了、不成立"（那是把"没试"说成"试过"），只能如实报"无法确认"，
+        /// 结论照旧是**不改名**（判不出就不动）。</para>
+        /// </summary>
+        public const string VolumeRepairNoProbeFormat =
+            "这一组没法做试开验证（{0}），证不出整组是齐的 ⇒ 无法确认，一个字节都不动";
+
         /// <summary>改名批次收尾（写进日志）。<c>{0}</c> = 成功数，<c>{1}</c> = 失败数。</summary>
         public const string VolumeRepairBatchDoneFormat = "按建议改名：成功 {0} 个、失败 {1} 个；接着重试解压勾选的任务。";
 

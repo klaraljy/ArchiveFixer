@@ -55,8 +55,10 @@ namespace ArchiveFixer.Extraction
     /// 引擎列一次目录的证据强度，比任何名字/尺寸规律都高。</para>
     ///
     /// <para><b>⛔ 绝不复制文件</b>：一卷 2 GiB，复制一组要几十 GiB 和几分钟。
-    /// 这里一律用 <c>CreateHardLinkW</c> 在**同一卷**上建第二个名字（零字节、瞬时）；
-    /// 因此工作目录必须建在第一卷**所在卷根**下（跨卷的硬链接不存在，<c>Path.GetTempPath()</c> 可能跨卷）。</para>
+    /// 这里一律用 <c>CreateHardLinkW</c> 在**同一卷**上建第二个名字（零字节、瞬时）。
+    /// 由此推出两条硬规矩（用户 2026-09-30 红线：「工作区就设在解压的地方，这就完全不存在跨盘的操作」）：
+    /// <b>① 没有工作区根（拿不到这一单的目标目录）⇒ 一次都不试</b>；<b>② 跨卷 ⇒ 一次都不试</b>。
+    /// ⛔ 不许退到源卷根 / 程序目录 / 临时目录另开一个工作区 —— 判不出就如实报"无法确认"。</para>
     ///
     /// <para><b>本类不引用 WPF</b>，只依赖 <see cref="IArchiveEngine"/> 与文件系统。</para>
     /// </summary>
@@ -78,11 +80,11 @@ namespace ArchiveFixer.Extraction
         /// <param name="cancellationToken">取消。</param>
         /// <param name="preferredWorkRoot">
         /// 试开临时物的落点（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30 口径）。
-        /// ⛔ 硬链接不能跨卷，而**跨卷时没有第二条合法出路**：退到"源卷根下的 <c>.ArchiveFixer.work</c>"
-        /// 已被否决（工作区只准设在解压的地方；在源盘开目录正是不变量 12 禁止的形态）。
-        /// 所以它和第一卷不在同一个卷上时，本方法**一次都不试**，直接如实报"跨盘 ⇒ 判不出"
-        /// （<see cref="VolumeProbeOutcome.SkipReason"/> = <see cref="VolumeTrialSkipReason.CrossVolume"/>）。
-        /// 空 = 走老路（第一卷所在卷根，<c>VolumeNameRepair</c> 那条路在用）。
+        /// <b>没有它 / 它跨卷 ⇒ 一次都不试</b>：⛔ 不退到"源卷根下的 <c>.ArchiveFixer.work</c>"
+        /// （工作区只准设在解压的地方，在源盘开目录正是不变量 12 禁止的形态；本机 C:\ 与 E:\ 根上
+        /// 那两个空壳就是这条老路留下的），⛔ 也不改用程序目录 / 临时目录。
+        /// 两档都如实报"无法确认"（<see cref="VolumeProbeOutcome.SkipReason"/> =
+        /// <see cref="VolumeTrialSkipReason.NoProbeRoot"/> / <see cref="VolumeTrialSkipReason.CrossVolume"/>）。
         /// </param>
         public async Task<VolumeProbeOutcome> VerifyAsync(
             string? firstVolumePath,
@@ -116,12 +118,29 @@ namespace ArchiveFixer.Extraction
             bool hasPreferredRoot = !string.IsNullOrWhiteSpace(preferredWorkRoot);
 
             /*
+             * ⛔ 没有工作区根 ⇒ **一次都不试**（用户 2026-09-30 红线：「工作区就设在解压的地方，
+             * 这就完全不存在跨盘的操作」）。
+             *
+             * 以前这一档会退到"第一卷所在卷根下的 .ArchiveFixer.work"—— 那就是"专门在用户盘上开一个
+             * 工作区"，本机实测 C:\ 与 E:\ 根上那两个空壳就是它留下的。整条删掉，⛔ 也不许改退到
+             * 程序目录 / 临时目录：证不出来就如实说"无法确认"，宁可什么都不做。
+             */
+            if (!hasPreferredRoot)
+            {
+                return Refuse(
+                    0,
+                    "这条路没有工作区根（拿不到这一单的目标目录）⇒ 不许试开：工作区只准设在解压的地方，"
+                    + "⛔ 不在源卷根 / 程序目录 / 临时目录另开一个 —— 证不出整组是齐的，只能如实报「无法确认」",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoProbeRoot);
+            }
+
+            /*
              * ⛔ 跨盘 = 一次都不试（用户 2026-09-30 决定，见 <paramref name="preferredWorkRoot"/> 的说明）。
              * 判据是"两个路径在不在同一个卷"，⛔ 不去比文案、也不试一次看看行不行 ——
              * 试开的第一步就是在那个目录里建东西，那正是被否决的动作。
              */
-            if (hasPreferredRoot &&
-                !VolumeContentInference.IsSameVolumeRoot(firstVolumePath, preferredWorkRoot))
+            if (!VolumeContentInference.IsSameVolumeRoot(firstVolumePath, preferredWorkRoot))
             {
                 return Refuse(
                     0,
@@ -131,15 +150,13 @@ namespace ArchiveFixer.Extraction
                     VolumeTrialSkipReason.CrossVolume);
             }
 
-            string probeRoot = hasPreferredRoot
-                ? VolumeContentInference.BuildProbeRoot(firstVolumePath, preferredWorkRoot)
-                : VolumeContentInference.BuildProbeRoot(firstVolumePath);
+            string probeRoot = VolumeContentInference.BuildProbeRoot(firstVolumePath, preferredWorkRoot);
 
             if (probeRoot.Length == 0)
             {
                 return Refuse(
                     0,
-                    "拿不到可用的试开目录（工作区根给得不合法，或者第一卷的卷根取不到）—— 不复制大文件，所以不试",
+                    "拿不到可用的试开目录（工作区根给得不合法）—— 不复制大文件，所以不试",
                     attempted: false,
                     VolumeTrialSkipReason.NoProbeRoot);
             }

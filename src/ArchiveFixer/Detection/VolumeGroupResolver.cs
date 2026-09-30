@@ -235,7 +235,10 @@ namespace ArchiveFixer.Detection
 
         /// <summary>
         /// 临时物落点：<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>（用户 2026-09-30 口径）。
-        /// 空 = 退到"第一卷所在卷根下的 <c>.ArchiveFixer.work</c>"（硬链接要求同卷，见试开器）。
+        ///
+        /// <para>⛔ <b>空 = 不试开</b>（不是"另找个地方试"）：工作区只准设在解压的地方 ——
+        /// 拿不到目标目录（例如改名那条路）或者它与第一卷不在同一个卷上（硬链接不能跨卷）时，
+        /// 试开这一档**一次都不做**，结论如实降成"判不出"。</para>
         /// </summary>
         public string WorkRootDirectory { get; init; } = string.Empty;
 
@@ -507,9 +510,8 @@ namespace ArchiveFixer.Detection
         {
             string detail = trial.Attempted
                 ? $"试了 {trial.Attempts} 种排列：{trial.Reason}"
-                : trial.SkipReason == VolumeTrialSkipReason.CrossVolume
-                    ? $"跨盘没得试（硬链接不能跨卷，而工作区只准设在解压的地方）⇒ 这一条证据**取不到**，"
-                        + $"结论如实降成「判不出」：{trial.Reason}"
+                : IsUnconfirmable(trial.SkipReason)
+                    ? $"这一条证据取不到（{DescribeSkip(trial.SkipReason)}）⇒ 结论如实降成「判不出」：{trial.Reason}"
                     : $"没试成（这一档是「没试」，不是「不成立」）：{trial.Reason}";
 
             VolumeEvidence row = Row(
@@ -524,18 +526,18 @@ namespace ArchiveFixer.Detection
             if (!trial.Attempted)
             {
                 /*
-                 * ===== 跨盘 ⇒ **判不出**（用户 2026-09-30 决定，协调者 2026-09-30 复核）=====
+                 * ===== 试开做不了 ⇒ **判不出**（用户 2026-09-30 决定，协调者复核）=====
                  *
-                 * 硬链接不能跨卷 ⇒ 源卷与工作区不在同一个卷上时，试开**根本没有合法的落点**：
-                 * 退到"源卷根下的 .ArchiveFixer.work"已被明确否决（工作区只准设在解压的地方；
-                 * 在用户盘上开目录是**不变量 12** 禁止的形态，收工删掉也一样 —— 中途崩掉就留垃圾）。
+                 * 两档落在这里（见 <see cref="IsUnconfirmable"/>）：
+                 *   · **没有工作区根**（拿不到这一单的目标目录，例如改名那条路）—— 不许另找地方开工作区；
+                 *   · **跨盘**（硬链接不能跨卷）—— 不许退到源卷根去试。
                  *
                  * 于是这一档如实降级成 <see cref="VolumeGroupVerdict.Undetermined"/>：
                  *   · 组成员的清单**照旧带出去**（GroupFilePaths 不变）⇒ 下游的保护/删除闸门一个字不放松；
                  *   · CanEnterDeletableRestItems = false ⇒ 不删源、不移动源；
-                 *   · 文案如实写"跨盘无法试开，整卷是否齐全无法确认"，⛔ 绝不许写成"已按试开验证"。
+                 *   · 文案如实写"无法确认"，⛔ 绝不许写成"已按试开验证"。
                  */
-                if (trial.SkipReason == VolumeTrialSkipReason.CrossVolume)
+                if (IsUnconfirmable(trial.SkipReason))
                 {
                     return new VolumeGroupResolution
                     {
@@ -546,8 +548,9 @@ namespace ArchiveFixer.Detection
                         MissingVolumeNames = Array.Empty<string>(),
                         PositionInferredNotes = baseline.PositionInferredNotes,
                         Evidence = Concat(baseline.Evidence, row),
-                        Reason = "判不出：跨盘无法试开，整卷是否齐全无法确认 —— " + trial.Reason
-                            + "。⛔ 判不出 ⇒ 不删源、不移动源、不改名；要确认只把这一组放到同一个盘上再来一次",
+                        Reason = "判不出：" + DescribeSkip(trial.SkipReason) + "。"
+                            + "⛔ 判不出 ⇒ 不删源、不移动源、不改名；要确认就得让这一组和它的工作区"
+                            + "在同一个盘上、并且有目标目录可以落工作区",
                         GroupFilePaths = baseline.GroupFilePaths,
                         HasRenamedVolume = baseline.HasRenamedVolume,
                         CanEnterDeletableRestItems = false
@@ -1064,6 +1067,32 @@ namespace ArchiveFixer.Detection
         /// </summary>
         private static bool Deletable(VolumeGroupVerdict verdict, bool hasRenamedVolume) =>
             verdict == VolumeGroupVerdict.Complete && !hasRenamedVolume;
+
+        /// <summary>
+        /// 这一档"没试开"是不是**原理上做不了**（不是我这次没取到证据）。
+        ///
+        /// <para>做不了 ⇒ 只能如实报"无法确认" ⇒ 结论降成 <see cref="VolumeGroupVerdict.Undetermined"/>
+        /// （⛔ 不许拿名字/体积那几条去顶"完整"，那正是 25 GB 那次的形状）。两档都源自用户红线
+        /// 「工作区就设在解压的地方，这就完全不存在跨盘的操作」：</para>
+        /// <list type="bullet">
+        /// <item><description><b>没有工作区根</b>（<see cref="VolumeTrialSkipReason.NoProbeRoot"/>）——
+        /// 拿不到目标目录，而工作区只准设在解压的地方，⛔ 不许另找地方开一个；</description></item>
+        /// <item><description><b>跨盘</b>（<see cref="VolumeTrialSkipReason.CrossVolume"/>）——
+        /// 硬链接不能跨卷，⛔ 不许退到源卷根去试。这一条是**原理限制**，不是偷懒。</description></item>
+        /// </list>
+        ///
+        /// <para>其余几档（没引擎 / 凑不出顺序）照旧"这一次没取到证据，结论不变" —— 没试 ≠ 不成立。</para>
+        /// </summary>
+        private static bool IsUnconfirmable(VolumeTrialSkipReason reason) =>
+            reason is VolumeTrialSkipReason.CrossVolume or VolumeTrialSkipReason.NoProbeRoot;
+
+        /// <summary>"没试开"的档说成给人看的一句话（⛔ 判据不许比这句话，判据只读枚举）。</summary>
+        private static string DescribeSkip(VolumeTrialSkipReason reason) => reason switch
+        {
+            VolumeTrialSkipReason.CrossVolume => "跨盘无法试开，整卷是否齐全无法确认",
+            VolumeTrialSkipReason.NoProbeRoot => "没有工作区根（拿不到目标目录），不许另找地方试开，整卷是否齐全无法确认",
+            _ => "试开这一条证据取不到，整卷是否齐全无法确认"
+        };
 
         // ────────────────────────────────────────────────────────────────────────
         // 证据各条的实现
