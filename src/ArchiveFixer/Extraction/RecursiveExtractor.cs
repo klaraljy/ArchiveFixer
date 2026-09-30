@@ -178,6 +178,17 @@ namespace ArchiveFixer.Extraction
 
         Corrupted,
 
+        /// <summary>
+        /// **两义**：引擎同一句话里既说"密码不对"又说"数据坏了"，谁也单独定不了原因（用户 2026-09-30 真机）。
+        ///
+        /// <para>它必须与 <see cref="Corrupted"/> 和 <see cref="WrongPassword"/> 都分开：
+        /// 折成 Corrupted ⇒ 结论断言"文件损坏"（用户被指去重新下载，而可能只是密码没试对）；
+        /// 折成 WrongPassword ⇒ 把真损坏说成密码错（用户去反复核对没写错的密码本）。
+        /// 与 7-Zip 侧同一口径：那句 <c>CRC Failed in encrypted file. Wrong password?</c>
+        /// 从不当成"已损坏"（见 <c>Item37SafetyTests</c>）。</para>
+        /// </summary>
+        PasswordOrCorrupted,
+
         /// <summary>条目路径不安全（预检拦下），本层不落盘。</summary>
         UnsafeEntry,
 
@@ -774,6 +785,13 @@ namespace ArchiveFixer.Extraction
             string? succeededPassword = null;
 
             /*
+             * 两义那一档的"第一次出现"（引擎既说密码不对、又说数据坏了）：
+             * 收尾时优先拿它当结论（<see cref="ResolvePasswordStopReason"/>），
+             * 于是结论与日志同时保留两种可能，⛔ 不会退化成一句"文件损坏"或"密码错误"。
+             */
+            ArchiveOperationResult? ambiguousPasswordFailure = null;
+
+            /*
              * 本层的清单（L3 的预期，见 <see cref="RecursionLayerReport.Manifest"/>）：
              * `candidateManifest` 是"当前这个候选列出来的清单"，`layerManifest` 只认
              * **真正解开这一层的那一个候选**的清单（见下面赋值处）。
@@ -1010,6 +1028,32 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
+                /*
+                 * ===== 两义那一档（用户 2026-09-30 真机）=====
+                 *
+                 * 引擎自己说"密码可能不对、也可能数据坏了"（RAR 1.5–4.x 的 `-p` 包：退出码 3 +
+                 * 「在加密文件 X 里校验和错误。文件已损坏或密码错误。」），**谁都不许单独定原因**：
+                 * · 判成"已损坏"⇒ 当场停下、其余 10 个候选一个都不试（真机就是这么只试了第 1 个）；
+                 * · 判成"密码错误"⇒ 把真损坏说成密码错（用户会去反复核对没写错的密码本）。
+                 * 所以与"密码错误"同一处置：**继续试下一个候选**；到收尾时结论落"两义"那一档
+                 * （<see cref="TaskOutcomeClassifier.TryResolveRecursionStop"/>），日志里也保留两种可能。
+                 * 与 7-Zip 侧同一口径（`CRC Failed in encrypted file. Wrong password?` 那句从不当"已损坏"，
+                 * 见 `Item37SafetyTests`）。
+                 */
+                if (result.IsPasswordOrCorrupted)
+                {
+                    ambiguousPasswordFailure = result;
+
+                    Log(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.CandidatePasswordOrCorruptedLogFormat,
+                            layerLabel));
+
+                    continue;
+                }
+
                 // 其余（引擎不可用、路径问题、输出冲突…）换密码也解决不了，直接停。
                 Log(
                     "ERROR",
@@ -1029,8 +1073,12 @@ namespace ArchiveFixer.Extraction
                 /*
                  * 收尾取"走得最远的那一次"的失败（`informativeFailure`，可能为 null）——
                  * 见上面那一大段说明：最后一次候选往往只是"连门都没进去"，它会把真原因盖掉。
+                 *
+                 * ⚠ 两义那一档**优先**（`ambiguousPasswordFailure`）：它是"引擎自己说两种可能都有"
+                 * 那次的原话，比"最后一次错密码"信息量大得多，也是结论能同时保留两种可能的唯一来源。
                  */
-                ArchiveOperationResult? conclusion = informativeFailure ?? lastFailure;
+                ArchiveOperationResult? conclusion =
+                    ambiguousPasswordFailure ?? informativeFailure ?? lastFailure;
 
                 RecursionLayerReport failureReport = BuildLayerReport(item, conclusion, succeededPassword: null);
 
@@ -1251,6 +1299,17 @@ namespace ArchiveFixer.Extraction
             if (lastFailure != null && lastFailure.IsCorrupted)
             {
                 return RecursionStopReason.Corrupted;
+            }
+
+            /*
+             * 两义那一档：引擎自己说"密码可能不对、也可能数据坏了"。
+             * ⛔ 不许折成上面那一档（"已损坏"= 断言单一原因），也不许折成下面那些
+             * "密码错误 / 达到上限"（那是反过来把真损坏说成密码错）——
+             * 它就是它自己：结论与日志同时保留两种可能（与 7-Zip 侧同一口径）。
+             */
+            if (lastFailure != null && lastFailure.IsPasswordOrCorrupted)
+            {
+                return RecursionStopReason.PasswordOrCorrupted;
             }
 
             if (!triedAny)

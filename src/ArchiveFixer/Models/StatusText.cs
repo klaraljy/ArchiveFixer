@@ -59,6 +59,25 @@ namespace ArchiveFixer.Models
         public const string WaitingExtract = "等待解压";
         public const string WrongPassword = "密码错误";
         public const string Corrupted = "文件损坏";
+
+        /// <summary>
+        /// **两种可能同时成立**：密码可能不对，包的数据也可能是坏的。
+        ///
+        /// <para>为什么要单独一类（用户 2026-09-30 真机）：RAR 1.5–4.x 的 <c>-p</c> 包在密码不对时，
+        /// UnRAR 只打一句 <c>Checksum error in the encrypted file X. Corrupt file or wrong password.</c>
+        /// （中文版：「在加密文件 X 里校验和错误。文件已损坏或密码错误。」、退出码 3）——
+        /// 这一句话里**同时**给了两种可能，引擎自己也分不开。以前它落到 <see cref="Corrupted"/>，
+        /// 于是①程序当场不再试其余密码候选（"换密码候选没有帮助"），11 个候选只试了第 1 个；
+        /// ②结论断言"文件损坏"，把用户指去重新下载。翻过来判成 <see cref="WrongPassword"/> 同样错 ——
+        /// 那会把真损坏说成"密码错"，用户会反复核对根本没写错的密码本。
+        /// 所以结论必须是**两义**：状态写两种可能，原因里必须带引擎原话。</para>
+        ///
+        /// <para>失败类状态：配色与统计必须与既有失败口径一致（见 <c>StatusToBrushConverter</c> 的错误色、
+        /// <c>TaskSummaryService</c> 的失败分桶、<c>TaskOutcomeClassifier</c> 的失败名单、
+        /// <c>BatchSummaryDiagnosticsRules</c> 的归组）—— 按 AGENTS.md §7 同改。</para>
+        /// </summary>
+        public const string PasswordOrCorrupted = "密码错误或文件损坏";
+
         public const string AccessDenied = "权限不足";
         public const string OutputConflict = "输出路径冲突";
         public const string VolumeMissing = "分卷缺失";
@@ -1972,6 +1991,22 @@ namespace ArchiveFixer.Models
         /// <summary>损坏归档：不换候选、直接停（单层与递归共用）。</summary>
         public const string CandidateStoppedByCorruptedLogFormat =
             "{0}：这个包已损坏，换密码候选没有帮助 —— 停下（不再重试其余候选）。";
+
+        /// <summary>
+        /// **两义那一档**（<see cref="PasswordOrCorrupted"/>）：引擎自己说"密码可能不对、也可能数据坏"，
+        /// 所以**不许停下**（与 7-Zip 侧同一口径：那句 CRC 原话也从不当成"已损坏"）。
+        /// </summary>
+        public const string CandidatePasswordOrCorruptedLogFormat =
+            "{0}：这一次没能确认密码 —— 引擎的原话把「密码不对」与「数据坏了」两种可能一起给了出来，"
+            + "换密码候选还有意义，继续试下一个。";
+
+        /// <summary>
+        /// 两义那一档的**结论文案**（<c>{0}</c> = 引擎原话）：
+        /// 两种可能都写着、都不断言，并给出各自动作 —— 与"密码错误"和"文件损坏"两档都不同。
+        /// </summary>
+        public const string PasswordOrCorruptedMessageFormat =
+            "密码可能不对，也可能这个包的数据坏了（引擎那句话把两种可能一起给了出来：{0}）。"
+            + "先拿密码本里的候选再试；密码确实对得上还是这样，就说明数据不完整，只能重新下载。";
 
         /// <summary>其余引擎错误：换密码也解决不了，直接停（单层与递归共用；<c>{1}</c> = 原因）。</summary>
         public const string CandidateStoppedByEngineErrorLogFormat =

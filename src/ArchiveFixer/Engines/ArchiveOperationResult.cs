@@ -188,6 +188,15 @@ namespace ArchiveFixer.Engines
 
         public bool IsCorrupted => DetectedErrorType == "CorruptedArchive";
 
+        /// <summary>
+        /// **两义那一档**：引擎同一句话里既说"密码不对"又说"数据坏了"（RAR 1.5–4.x 的加密包）。
+        ///
+        /// <para>候选循环见到它必须**继续试下一个候选**（与 <see cref="IsWrongPassword"/> 同一处置，
+        /// 与 7-Zip 侧那句 <c>CRC Failed in encrypted file. Wrong password?</c> 同一口径），
+        /// ⛔ 绝不像 <see cref="IsCorrupted"/> 那样当场停下（那会让正确的密码候选永远没机会被试）。</para>
+        /// </summary>
+        public bool IsPasswordOrCorrupted => DetectedErrorType == "PasswordOrCorrupted";
+
         public bool IsSevenZipMissing => DetectedErrorType == "SevenZipMissing";
 
         public bool IsCancelled => DetectedErrorType == "Cancelled";

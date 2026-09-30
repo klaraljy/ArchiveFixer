@@ -139,6 +139,26 @@ namespace ArchiveFixer.Engines
         /// <summary>归档损坏 / 校验和不符 / 数据不全。</summary>
         public const string CorruptedArchive = "CorruptedArchive";
 
+        /// <summary>
+        /// **引擎同一句话里同时给出了"密码不对"与"数据坏了"两种可能**，无法只挑一个下结论。
+        ///
+        /// <para>为什么要单独一类（用户 2026-09-30 真机，RAR 侧的 <c>Item37SafetyTests</c> 场景）：
+        /// RAR 1.5–4.x 的 <c>-p</c> 包在**密码不对**时，UnRAR 根本分不出"密码错"与"数据坏" ——
+        /// 英文版打 <c>Checksum error in the encrypted file X. Corrupt file or wrong password.</c>、
+        /// 中文版打「在加密文件 X 里校验和错误。文件已损坏或密码错误。」，两者退出码都是
+        /// <c>3</c>（<see cref="UnRarExitCodes.DataError"/>，见 <c>UnRarOutputParser</c> 的判定）。
+        /// 判成 <see cref="CorruptedArchive"/> 的后果是**当场不再试其余密码候选**（"换密码没有帮助"），
+        /// 11 个候选只试了第 1 个；判成 <see cref="WrongPassword"/> 又会把真损坏说成密码错。
+        /// 所以它既不是"损坏"也不是"密码错"，而是**两义**。</para>
+        ///
+        /// <para>它与 7-Zip 侧同一个口径：`CRC Failed in encrypted file. Wrong password?` 那句
+        /// 在 <c>SevenZipOutputParser</c> 里也从不单独定原因（见 <c>Item37SafetyTests</c> 与
+        /// <c>SevenZipExitCodeTests</c>）。两个引擎各自的**检测**方式不同（7-Zip 靠原话关键字、
+        /// RAR 靠"退出码 3 + 这个包确实是加密包"这两条结构化事实），但**处置只有一套**：
+        /// 继续试候选 + 结论与日志同时保留两种可能 + 把引擎原话带出来。</para>
+        /// </summary>
+        public const string PasswordOrCorrupted = "PasswordOrCorrupted";
+
         /// <summary>分卷缺失，且**已经确知缺了哪几卷**（不变量 7 要求报出来）。</summary>
         public const string VolumeMissing = "VolumeMissing";
 

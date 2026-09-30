@@ -193,6 +193,40 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **开工前就拦下这一单**的统一收尾（唯一出口）。
+        ///
+        /// <para>谁走它：不变量 11 的"源文件已变化"、不变量 7 的"缺卷预检"、以及"源文件不在了 /
+        /// 落点无效"这三条 —— 它们的共同点是**引擎一次都没被调用、这一单一个字节都没产出**，
+        /// 所以状态、原因、结束时间必须一次落全。</para>
+        ///
+        /// <para><b>为什么必须收口成一个出口</b>：机器终态的唯一收口（<c>ProcessExtractTaskAsync</c>
+        /// 的 finally，判据 <c>Outcome == Pending &amp;&amp; EndTime 有值 &amp;&amp; 校验没通过</c>）
+        /// 只在"这一单已经结束"时才敢补结论。少写一个 <c>EndTime</c>，任务就永远停在 <c>Pending</c>：
+        /// 批末汇总按终态把它算进「未处理」，而批末诊断按状态说「分卷缺失」—— 同一件事两处口径打架
+        /// （2026-09-30 真机 `222.z01`：`失败 4 / 未处理 1` vs `分卷缺失：1 个`）。</para>
+        ///
+        /// <para>⛔ 只落"这一单已结束 + 失败"这套事实（走 <see cref="ArchiveTask.MarkFailed"/>），
+        /// <b>不在这里替任何一档下别的结论</b>：状态与原因由调用方给（各档自己的判据），
+        /// 中文文案一个字都不改。</para>
+        /// </summary>
+        private void MarkStoppedBeforeExtract(ArchiveTask task, string status, string errorMessage)
+        {
+            /*
+             * 这一轮没有任何产物、也没有任何校验：上一轮留下的**校验结论与机器终态**必须清干净
+             * （任务对象是复用的：重试 / 再点一次）。
+             *
+             * 不清的话两头都会错：①收口那条判据（"校验没通过"才补 Failed）被上一轮的 `Passed`
+             * 挡在门外；②上一轮的 `Succeeded` 会活到这一轮，汇总把一次**没做成**的处置算成成功
+             * （不变量 6 的反面）。清成 `Pending` 而不是就地写 `Failed`，是为了让"终态由谁落"
+             * 仍然只有收口一处（这里只说"这一单还没有结论"）。
+             */
+            task.IsOutputVerified = false;
+            task.Outcome = TaskOutcome.Pending;
+
+            task.MarkFailed(StatusText.OpWaiting, status, errorMessage);
+        }
+
+        /// <summary>
         /// **真正调引擎之前**比一次：变了就当场停下（不变量 11）。
         ///
         /// <para><b>为什么落在这里</b>：<see cref="ExtractSingleTaskAsync"/> 是**所有**解压入口的
@@ -230,20 +264,12 @@ namespace ArchiveFixer.ViewModels
             reason = SourceFileSnapshot.DescribeChange(comparison);
 
             /*
-             * 状态 / 进度 / 原因三件事一起落（不变量 6 的反面同样成立：
+             * 状态 / 进度 / 原因 / 结束时间四件事一起落（不变量 6 的反面同样成立：
              * 一件没做成的事不许看起来像做成了）。这里刻意**不碰** task.OutputPath：
              * 它可能还停在上一次的值，但对一个"压根没开工"的任务来说没有意义，
              * 而失败清单里的"位置"一行读的是 CurrentPath（源包在哪），那才是用户要去找的东西。
              */
-            task.Status = StatusText.SourceChanged;
-            task.Operation = StatusText.OpWaiting;
-            task.ProgressText = StatusText.ProgressFailed;
-            task.ErrorMessage = reason;
-            task.IsOutputVerified = false;
-            task.EndTime = DateTime.Now;
-            task.LastUpdatedTime = DateTime.Now;
-            task.ClearProgress();
-            task.UpdateElapsedText();
+            MarkStoppedBeforeExtract(task, StatusText.SourceChanged, reason);
 
             AppendLog("ERROR", $"源文件已变化，未开始解压：{task.FileName} —— {reason}");
 
@@ -6197,32 +6223,124 @@ namespace ArchiveFixer.ViewModels
                 // 免得"改过名"与"这一单没解成"读起来自相矛盾（用户 2026-09-28 真机反馈）。
                 task.VolumeNameAutoRenamed = true;
 
-                // 任务上的路径同步成新名字，后面各层（引擎、校验、日志）拿到的就是标准名。
-                foreach (VolumeRepairItem item in plan.Items)
-                {
-                    if (string.Equals(task.CurrentPath, item.CurrentPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        task.CurrentPath = item.TargetPath;
-                    }
-                }
-
-                for (int i = 0; i < task.VolumePaths.Count; i++)
-                {
-                    VolumeRepairItem? hit = plan.Items.FirstOrDefault(
-                        x => string.Equals(x.CurrentPath, task.VolumePaths[i], StringComparison.OrdinalIgnoreCase));
-
-                    if (hit != null)
-                    {
-                        task.VolumePaths[i] = hit.TargetPath;
-                    }
-                }
-
-                task.CaptureSourceSnapshot();
+                // 任务上的路径同步成新名字（"谁负责更新任务路径 + 快照"的唯一出口）。
+                SyncTasksAfterVolumeRename(plan.Items, task);
             }
             catch (Exception ex)
             {
                 // 改名失败不该拖垮整单：写清楚，后面的流程按原名去跑（它会如实报缺卷 / 打不开）。
                 AppendLog("WARN", $"{task.FileName}：分卷名自动修正跳过（{ex.Message}）。");
+            }
+        }
+
+        /// <summary>
+        /// **一次改名之后，谁负责把任务路径 + 源文件快照更新到新名字** —— 全仓唯一出口。
+        ///
+        /// <para><b>为什么必须覆盖整个任务表、而不是"驱动改名的那一单"</b>（用户 2026-09-30 真机）：
+        /// <see cref="VolumeNameRepair.TryApply"/> 改的是**整组每一卷**（<c>VolumeNameRepair.cs</c> 里
+        /// `plan.Items` 逐项 <c>File.Move</c>），而"组里别的卷"完全可能是**同一批里另一个任务**指着的文件。
+        /// 只同步自己那一单，别的任务就会继续指着**已经不在磁盘上**的旧名字 ——
+        /// 紧接着的不变量 11 比对（<see cref="StopIfSourceChanged"/>）当场报「源文件已变化（文件不见了）」，
+        /// 那一单连解压都没开始（真机：一键档 5 个任务里 2 个因此失败，报的是"文件不见了"，
+        /// 而文件其实好端端地躺在同一个目录里、只是改了名）。</para>
+        ///
+        /// <para><b>为什么快照也必须重拍</b>：路径不是不变量 11 要保护的东西（大小与修改时间才是），
+        /// 但"改名"这件事实必须由程序自己记账 —— 重拍之后基准与新名字对齐，后面各层比对的才是同一份文件。
+        /// ⛔ 这**不是**"放宽成文件不在也算没变"：比对口径一个字没动，变的只是"谁的名字"。</para>
+        ///
+        /// <para>返回被同步到的任务（调用方要重新识别的那条手动路会用到）。名字没变的项不重拍快照
+        /// （<c>BuildPlanFromOrder</c> 会把"本来就标准"的那一卷也放进 Items）。</para>
+        /// </summary>
+        /// <param name="items">改名计划里的每一卷（旧路径 → 新路径）。</param>
+        /// <param name="primary">驱动这次改名的任务（可能在任务表里、也可能在表外，比如测试直接造的）。</param>
+        internal IReadOnlyList<ArchiveTask> SyncTasksAfterVolumeRename(
+            IEnumerable<VolumeRepairItem>? items,
+            ArchiveTask? primary = null)
+        {
+            var affected = new List<ArchiveTask>();
+
+            List<VolumeRepairItem> moves = (items ?? Enumerable.Empty<VolumeRepairItem>())
+                .Where(item => item != null &&
+                               !string.IsNullOrWhiteSpace(item.CurrentPath) &&
+                               !string.IsNullOrWhiteSpace(item.TargetPath) &&
+                               !string.Equals(item.CurrentPath, item.TargetPath, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (moves.Count == 0)
+            {
+                return affected;
+            }
+
+            /*
+             * 任务表的快照：这一步跑在后台线程上（解压管线），而任务表归 UI 线程写 ——
+             * 先取一份数组，避免"边枚举边被加/删"。
+             */
+            ArchiveTask[] table = Tasks.ToArray();
+
+            foreach (ArchiveTask candidate in EnumerateDistinct(primary, table))
+            {
+                bool touched = false;
+
+                foreach (VolumeRepairItem move in moves)
+                {
+                    if (string.Equals(candidate.CurrentPath, move.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // CurrentPath 的 setter 会顺手刷新文件名 / 目录 / 后缀 / 体积。
+                        candidate.CurrentPath = move.TargetPath;
+                        touched = true;
+                    }
+
+                    for (int i = 0; i < candidate.VolumePaths.Count; i++)
+                    {
+                        if (string.Equals(candidate.VolumePaths[i], move.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            candidate.VolumePaths[i] = move.TargetPath;
+                            touched = true;
+                        }
+                    }
+                }
+
+                if (!touched)
+                {
+                    continue;
+                }
+
+                // 基准跟着新名字重拍（不变量 11 的"改名不算变化"就落在这里，而不是落在比对里放宽判据）。
+                candidate.CaptureSourceSnapshot();
+                affected.Add(candidate);
+
+                if (!ReferenceEquals(candidate, primary))
+                {
+                    /*
+                     * 别的任务被顺带改了名必须**说出来**：用户看到那一行的文件名变了、
+                     * 而日志里一个字都没有的话，会以为程序动错了东西（AGENTS.md §9.5"值 + 通知"）。
+                     */
+                    AppendLog(
+                        "INFO",
+                        $"{candidate.FileName}：这一卷在同一个改名批次里被改成了标准名，"
+                        + "任务路径与源文件快照已同步到新名字（内容一个字节没动）。");
+                }
+            }
+
+            return affected;
+        }
+
+        /// <summary>把"驱动改名的任务"与任务表合成一个**不重复**的枚举（表里已有就不重复处理）。</summary>
+        private static IEnumerable<ArchiveTask> EnumerateDistinct(ArchiveTask? primary, IEnumerable<ArchiveTask> table)
+        {
+            var seen = new HashSet<ArchiveTask>();
+
+            if (primary != null && seen.Add(primary))
+            {
+                yield return primary;
+            }
+
+            foreach (ArchiveTask candidate in table)
+            {
+                if (candidate != null && seen.Add(candidate))
+                {
+                    yield return candidate;
+                }
             }
         }
 
@@ -10450,8 +10568,14 @@ namespace ArchiveFixer.ViewModels
 
                     string diagnosis = BuildVolumeVerdictMessage(task, volumeVerdict);
 
-                    task.Status = StatusText.VolumeMissing;
-                    task.ErrorMessage = diagnosis;
+                    /*
+                     * 判据走**开工前拦下的统一收口**（与"源文件已变化"同一个出口）：
+                     * 状态照旧是「分卷缺失」（中文一个字不改），但"这一单已经结束"这件事必须一起落 ——
+                     * 少了结束时间，机器终态的唯一收口补不了 Failed，它就一直停在 Pending：
+                     * 批末汇总说「未处理 1」、批末诊断说「分卷缺失」，两处口径当场打架
+                     * （2026-09-30 真机 `222.z01`）。
+                     */
+                    MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
 
                     AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
                     LogVolumeGroupEvidence(task, volumeVerdict);
@@ -10517,10 +10641,13 @@ namespace ArchiveFixer.ViewModels
 
             if (!File.Exists(task.CurrentPath))
             {
-                task.Status = StatusText.ExtractFailed;
-                task.Operation = StatusText.OpWaiting;
-                task.ProgressText = StatusText.ProgressCompleted;
-                task.ErrorMessage = "文件不存在";
+                /*
+                 * 与"缺卷预检 / 源文件已变化"同一个收口：这一单根本没开始解压，
+                 * 所以状态、原因、**结束时间**一次落全（少了它，机器终态永远停在 Pending，
+                 * 汇总把它算进「未处理」——与缺卷那一档同一个缺陷）。
+                 */
+                MarkStoppedBeforeExtract(task, StatusText.ExtractFailed, "文件不存在");
+
                 AppendLog("ERROR", $"文件不存在：{task.CurrentPath}");
                 return;
             }
@@ -10608,10 +10735,11 @@ namespace ArchiveFixer.ViewModels
              */
             if (string.IsNullOrWhiteSpace(outputPath))
             {
-                task.Status = StatusText.ExtractFailed;
-                task.ProgressText = StatusText.ProgressFailed;
-                task.ErrorMessage = "输出目录无效（未设置或不可用），请在设置里选择输出目录后重试";
-                task.LastUpdatedTime = DateTime.Now;
+                // 同上面两处：这一单到这儿就结束了（引擎一次都没被调用），结束时间必须一起落。
+                MarkStoppedBeforeExtract(
+                    task,
+                    StatusText.ExtractFailed,
+                    "输出目录无效（未设置或不可用），请在设置里选择输出目录后重试");
 
                 AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
                 return;
@@ -11599,6 +11727,12 @@ namespace ArchiveFixer.ViewModels
             bool passwordConfirmed = false;
 
             /*
+             * 两义那一档（引擎既说密码不对、又说数据坏了）出现过的那一次：
+             * 收尾时优先用它，结论与日志同时保留两种可能（判据在引擎解析层那一处）。
+             */
+            ArchiveOperationResult? ambiguousTestResult = null;
+
+            /*
              * 进度可见（D5）的接线点：**每个任务一个接收端**。
              *
              * 为什么一个任务只建一个：它记着"上一个写进日志的 10% 档位"，
@@ -11716,6 +11850,26 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
+                    /*
+                     * 两义那一档（引擎既说密码不对、又说数据坏了）在这里同样是**继续试下一个候选**，
+                     * 不许 break —— 判据与处置只有引擎解析层那一处（见 UnRarOutputParser /
+                     * EngineErrorTypes.PasswordOrCorrupted），三条候选循环口径一致。
+                     */
+                    if (testResult.DetectedErrorType == EngineErrorTypes.PasswordOrCorrupted)
+                    {
+                        ambiguousTestResult ??= testResult;
+                        task.PasswordStatus = StatusText.PasswordNeed;
+
+                        AppendLog(
+                            "WARN",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.CandidatePasswordOrCorruptedLogFormat,
+                                task.FileName));
+
+                        continue;
+                    }
+
                     task.Status = testResult.Status;
                     task.ErrorMessage = testResult.Message;
                     task.Operation = StatusText.OpWaiting;
@@ -11742,6 +11896,13 @@ namespace ArchiveFixer.ViewModels
                         task.PasswordStatus = StatusText.PasswordNeed;
                         task.ErrorMessage =
                             $"已达到密码尝试上限：本层试了 {maxPasswordAttempts} 个候选（共 {candidates.Count} 个），未能确认密码。";
+                    }
+                    else if (ambiguousTestResult != null)
+                    {
+                        // 同"普通模式"那一支：引擎自己说过两种可能，结论就必须把两种可能都留着。
+                        task.Status = ambiguousTestResult.Status;
+                        task.PasswordStatus = StatusText.PasswordNeed;
+                        task.ErrorMessage = ambiguousTestResult.Message;
                     }
                     else if (lastResult != null && lastResult.DetectedErrorType == "WrongPassword")
                     {
@@ -11884,6 +12045,13 @@ namespace ArchiveFixer.ViewModels
                  */
                 bool extractSuccess = false;
                 bool hasWrongPassword = false;
+
+                /*
+                 * 两义那一档（引擎既说密码不对、又说数据坏了）这一层出现过没有：
+                 * 过它的时候**不停候选循环**，收尾时状态与原因取它（引擎原话里两种可能都写着），
+                 * 只有它不存在时才退回"最后一次引擎结果"（老口径，行为不变）。
+                 */
+                ArchiveOperationResult? ambiguousResult = null;
 
                 /*
                  * ===== 先试密码，再解整包（用户 2026-09-25 第 37 条）=====
@@ -12313,6 +12481,30 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
+                    /*
+                     * ===== 两义那一档：引擎自己说"密码可能不对、也可能数据坏了"（用户 2026-09-30 真机）=====
+                     *
+                     * 与"密码错误"同一处置：**继续试下一个候选**（与 7-Zip 侧那句
+                     * `CRC Failed in encrypted file. Wrong password?` 同一口径，见 Item37SafetyTests）。
+                     * ⛔ 不许像"已损坏"那样当场 break —— 那正是真机"11 个候选只试了第 1 个"的成因；
+                     * 也⛔ 不许落成"密码错误"（那是把真损坏说成密码错）。
+                     * 收尾时状态与原因都取 `lastResult`（= 这一次的原话），于是结论里两种可能都在。
+                     */
+                    if (extractResult.DetectedErrorType == EngineErrorTypes.PasswordOrCorrupted)
+                    {
+                        ambiguousResult ??= extractResult;
+                        task.PasswordStatus = StatusText.PasswordNeed;
+
+                        AppendLog(
+                            "WARN",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.CandidatePasswordOrCorruptedLogFormat,
+                                task.FileName));
+
+                        continue;
+                    }
+
                     task.Status = extractResult.Status;
                     task.ErrorMessage = extractResult.Message;
 
@@ -12419,6 +12611,20 @@ namespace ArchiveFixer.ViewModels
                             task.PasswordStatus = StatusText.PasswordNeed;
                             task.ErrorMessage =
                                 $"已达到密码尝试上限：本层试了 {maxPasswordAttempts} 个候选（共 {candidates.Count} 个），未能确认密码。";
+                        }
+                        else if (ambiguousResult != null)
+                        {
+                            /*
+                             * 两义那一档优先于"密码错误"（用户 2026-09-30 真机）：引擎自己说过
+                             * "密码可能不对、也可能数据坏" —— 这一层只要出现过这种原话，
+                             * 结论就必须同时保留两种可能，⛔ 不许被后面某个候选的"密码错误"
+                             * 盖成一句断言（那正是"单独定原因"）。原话在 ErrorMessage 里带着。
+                             */
+                            task.Status = ambiguousResult.Status;
+                            task.PasswordStatus = StatusText.PasswordNeed;
+                            task.ErrorMessage = ambiguousResult.Message;
+
+                            AppendLog("ERROR", $"解压失败：{task.FileName}，原因：{task.ErrorMessage}");
                         }
                         else if (hasWrongPassword)
                         {

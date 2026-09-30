@@ -80,7 +80,8 @@ namespace ArchiveFixer.Engines.WinRar
             int exitCode,
             string? output,
             string? error,
-            EngineOperation? operation)
+            EngineOperation? operation,
+            string? archivePath = null)
         {
             if (exitCode == UnRarExitCodes.Success)
             {
@@ -145,6 +146,28 @@ namespace ArchiveFixer.Engines.WinRar
                     "Insert disk", "Please insert"))
             {
                 return EngineErrorTypes.VolumeMissing;
+            }
+
+            /*
+             * ===== 两义那一档必须排在"校验和 → 损坏"之前判（用户 2026-09-30 真机）=====
+             *
+             * 现场：RAR 1.5–4.x 的 `-p` 包（数据加密、文件名可见）在**密码不对**时，UnRAR 分不出
+             * "密码错"与"数据坏"，只打一句 `Checksum error in the encrypted file X. Corrupt file or
+             * wrong password.`（中文版：「在加密文件 X 里校验和错误。文件已损坏或密码错误。」），
+             * 退出码 **3**。判成 CorruptedArchive 的后果是**当场不再试其余候选**
+             * （`RecursiveExtractor` 见到 IsCorrupted 就 Stop）—— 11 个候选只试了第 1 个，
+             * 而用户的密码本里很可能就有对的那一个。
+             *
+             * 判据只读**两件结构化事实**，⛔ 不比对任何中文（我们的、引擎的都不比字符串语义）：
+             * ① 退出码 = 3（DataError：无效校验和 / 数据损坏）；
+             * ② 这个包**没有被判成"没加密"**（`Detection/RarEncryptionReader` 的结论；
+             *    加密与"不知道"都算 —— 判不出就得如实保留第二种可能，AGENTS.md §11.6 的 L 阶梯口径）。
+             * 反过来，"没加密"的包退出码 3 只剩"数据坏"一种解释（截断 / 校验和不符），
+             * 照旧落 CorruptedArchive、照旧不再换候选 —— 那一条语义一个字都没动。
+             */
+            if (LooksLikePasswordOrCorrupted(exitCode, archivePath))
+            {
+                return EngineErrorTypes.PasswordOrCorrupted;
             }
 
             if (ContainsAny(text,
@@ -261,6 +284,44 @@ namespace ArchiveFixer.Engines.WinRar
         }
 
         /// <summary>
+        /// **这一档是"两义"**：引擎自己说"密码可能不对、也可能数据坏"，谁都不许单独定原因。
+        ///
+        /// <para><b>两条结构化事实合起来才成立</b>（⛔ 不比中文，也不靠英文关键字 ——
+        /// 用户的 UnRAR 是中文版，本机实测它打的是「在加密文件 X 里校验和错误。文件已损坏或密码错误。」，
+        /// 英文关键字一个都不命中，只剩退出码可用）：</para>
+        /// <list type="number">
+        /// <item><description>退出码 = <see cref="UnRarExitCodes.DataError"/>（3：无效校验和 / 数据损坏）；</description></item>
+        /// <item><description>这个包**不是"确认没加密"**（<see cref="Detection.RarEncryptionReader"/> 的结论：
+        /// <c>DataEncrypted</c> / <c>HeadersEncrypted</c> / <c>Unknown</c> 都算）。
+        /// 本机实测（Rar.exe 现造样本）：RAR4 + <c>-p&lt;密码&gt;</c> 的包用错密码跑 <c>x</c> →
+        /// 退出码 3 + 上面那句话；用对密码 → 退出码 0。而**没加密**的包（<c>plain.rar</c> 截断那一档）
+        /// 退出码 3 只剩"数据坏"一种解释。</description></item>
+        /// </list>
+        ///
+        /// <para>⚠ 判不出（<c>Unknown</c>）为什么也收进来：这一档的代价不对称 ——
+        /// 当成"损坏"会让正确的密码候选永远没机会被试（而且结论指错方向："重新下载"），
+        /// 当成"两义"只是多试几个候选、结论照实说两种可能。用户 2026-09-30 的口径是
+        /// "时间可以多花几十秒，不能草率"。</para>
+        /// </summary>
+        public static bool LooksLikePasswordOrCorrupted(int exitCode, string? archivePath)
+        {
+            if (exitCode != UnRarExitCodes.DataError)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(archivePath))
+            {
+                // 没有路径（老调用方 / 只喂文本的单测）：不下这一档结论，按老口径走。
+                return false;
+            }
+
+            Detection.ArchiveEncryptionReading reading = Detection.RarEncryptionReader.Read(archivePath);
+
+            return reading.State != Detection.ArchiveEncryptionState.NotEncrypted;
+        }
+
+        /// <summary>
         /// 判定"文件名（头部）被加密"：RAR <c>-hp</c>。
         ///
         /// <b>为什么只看列目录</b>：解压 / 测试路径靠 <c>WrongPassword</c> 驱动密码候选循环
@@ -299,6 +360,12 @@ namespace ArchiveFixer.Engines.WinRar
                 EngineErrorTypes.WrongPassword => StatusText.WrongPassword,
                 EngineErrorTypes.NeedPassword => StatusText.WrongPassword,
                 EngineErrorTypes.CorruptedArchive => StatusText.Corrupted,
+
+                /*
+                 * 两义那一档：状态写"两种可能"，⛔ 既不许写成"文件损坏"（11 个候选只试 1 个的元凶），
+                 * 也不许写成"密码错误"（把真损坏说成密码错，用户会去反复核对没写错的密码本）。
+                 */
+                EngineErrorTypes.PasswordOrCorrupted => StatusText.PasswordOrCorrupted,
                 EngineErrorTypes.UnsupportedFormat => StatusText.ExtractFailed,
 
                 // 退出码 1 = 发生非致命错误：解出来一部分，但**不是成功**（不变量 6）。
@@ -337,6 +404,17 @@ namespace ArchiveFixer.Engines.WinRar
                 EngineErrorTypes.CorruptedArchive => string.IsNullOrWhiteSpace(detail)
                     ? "压缩包可能损坏或下载不完整"
                     : "压缩包可能损坏或下载不完整。" + detail,
+
+                /*
+                 * 两义那一档：**两种可能都写着、都不断言**，并把引擎原话带出来
+                 * （与 7-Zip 侧"结论必须带出引擎原话"同一条口径，见 Item37SafetyTests）。
+                 */
+                EngineErrorTypes.PasswordOrCorrupted => string.IsNullOrWhiteSpace(detail)
+                    ? "密码可能不对，也可能这个包的数据坏了 —— 引擎那句话把两种可能一起给了出来。"
+                    : string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PasswordOrCorruptedMessageFormat,
+                        detail),
 
                 NonFatalErrorType => string.IsNullOrWhiteSpace(detail)
                     ? "UnRAR 报告发生非致命错误：解出来的是部分内容，请核对产物"
