@@ -509,7 +509,7 @@ namespace ArchiveFixer.Detection
                             : string.Empty),
                     GroupFilePaths = baseline.GroupFilePaths,
                     HasRenamedVolume = baseline.HasRenamedVolume,
-                    CanEnterDeletableRestItems = !baseline.HasRenamedVolume
+                    CanEnterDeletableRestItems = Deletable(VolumeGroupVerdict.Complete, baseline.HasRenamedVolume)
                 };
             }
 
@@ -979,8 +979,21 @@ namespace ArchiveFixer.Detection
                  * ⛔ 可删资格 = 结论"完整" **且** 每一卷名字都标准，两条缺一不可。
                  * 名字不标准 ⇒ 7-Zip 按原名根本打不开 ⇒ 删了就是不可逆的数据丢失（25 GB 那次）。
                  */
-                CanEnterDeletableRestItems = verdict == VolumeGroupVerdict.Complete && !hasRenamedVolume
+                CanEnterDeletableRestItems = Deletable(verdict, hasRenamedVolume)
             };
+
+        /// <summary>
+        /// **"这一组可不可以进可删的其余物"的唯一算法**（AGENTS §9.5：同一件事只有一个出口）。
+        ///
+        /// <para>只有两条都成立才放行：① 结论是 <see cref="VolumeGroupVerdict.Complete"/>；
+        /// ② 组里没有名字不标准的卷。⛔ 其余一切情形（含"判不出"、含弱证据）一律 false ——
+        /// 兜底落在"什么都不做"那一档。</para>
+        ///
+        /// <para>放在这里当唯一出口，是因为试开那一档（<see cref="ApplyTrialOutcome"/>）也会落结论；
+        /// 两处各写一遍 `verdict == Complete &amp;&amp; !hasRenamedVolume` 迟早会走岔。</para>
+        /// </summary>
+        private static bool Deletable(VolumeGroupVerdict verdict, bool hasRenamedVolume) =>
+            verdict == VolumeGroupVerdict.Complete && !hasRenamedVolume;
 
         // ────────────────────────────────────────────────────────────────────────
         // 证据各条的实现

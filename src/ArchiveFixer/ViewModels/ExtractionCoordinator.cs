@@ -3159,7 +3159,7 @@ namespace ArchiveFixer.ViewModels
              * ⛔ 凡是被判定"属于某个分卷组"的文件，**永远不许进可删残留名单**：
              * 只有"整组完整 + 每一卷名字都标准"这一种情形才放行；其余一律让整份计划作废。
              */
-            IReadOnlyList<StageVolumeGroupView> stageVolumeGroups = ResolveStageVolumeGroups(stageRoot);
+            StageVolumeScan stageVolumeScan = ResolveStageVolumeGroups(stageRoot);
 
             foreach (string file in Directory.EnumerateFiles(stageRoot, "*", SearchOption.AllDirectories))
             {
@@ -3192,7 +3192,7 @@ namespace ArchiveFixer.ViewModels
                  * 这一份既不进其余物、也不当内容物，**整份计划作废**（下面的 Failed 分支），
                  * 于是源包与其余物的删除一个都不会发生（它们都挂在"定稿 + 校验通过"之后）。
                  */
-                StageVolumeGroupView? stageGroup = FindStageVolumeGroup(stageVolumeGroups, file);
+                StageVolumeGroupView? stageGroup = FindStageVolumeGroup(stageVolumeScan.Groups, file);
 
                 if (stageGroup != null)
                 {
@@ -3223,6 +3223,39 @@ namespace ArchiveFixer.ViewModels
                 {
                     zeroByteArtifacts++;
                     continue;
+                }
+
+                /*
+                 * ===== ⛔ 孤儿卷的兜底闸门（带卷标记、却没落进任何一组）=====
+                 *
+                 * 上面那道闸门只覆盖"归组认得出来的组"。可 <see cref="VolumeGroupDetector"/> 对
+                 * **名字被伪装过**的桶还要过一道尺寸规律，过不了就把整桶丢掉（2026-09-28 三层方案，
+                 * 为了"认错组比不认糟得多"）。丢掉之后，`x.7z.001` 这种文件在老写法里只剩
+                 * "扩展名像分卷 ⇒ 可删的其余物"这一条路 —— 而它旁边那个 `x.7z.002删除`
+                 * 恰恰可能是它的兄弟。**一卷被删掉就再也解不开整组**。
+                 *
+                 * 所以这一档回头**逐文件问判定器**（复用同一份目录事实，不重新列目录）：
+                 *   · 判定器证明"整组完整且名字标准" ⇒ 照老路当其余物；
+                 *   · 其余一切结论（判不出 / 缺卷 / 疑缺 / 名字不标准）⇒ **整份计划作废**，
+                 *     一个字节都不搬、不删（兜底落在"什么都不做"那一档，AGENTS §9.5）。
+                 *
+                 * ⛔ 只对**卷标记后缀**（`.001` / `.z01` / `.r00` / `.partN`）做这一步：
+                 * `.zip` / `.7z` 这种归档本体自己就是完整包，不走分卷这条判据。
+                 */
+                if (isProcessArtifact && stageGroup == null && IsVolumePartFile(file))
+                {
+                    VolumeGroupResolution orphan = new VolumeGroupResolver().Resolve(new VolumeGroupQuery
+                    {
+                        AnchorPath = file,
+                        DirectoryEntries = stageVolumeScan.EntriesFor(file),
+                        AllowTrialOpen = false
+                    });
+
+                    if (!orphan.CanEnterDeletableRestItems)
+                    {
+                        incompleteVolumeGroups.Add($"{Path.GetFileName(file)}：{orphan.Reason}");
+                        continue;
+                    }
                 }
 
                 staged.Add(new StagedEntry
@@ -3349,6 +3382,16 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 这个文件是不是**带卷标记的那一片**（<c>.001</c> / <c>.z01</c> / <c>.r00</c> / <c>.partN</c>）。
+        ///
+        /// <para>与 <see cref="IsProcessArtifactFile"/> 的区别就在这一格：那一条把"归档本体"
+        /// （<c>.zip</c> / <c>.7z</c> / <c>.rar</c>）也算其余物，而归档本体**自己就是完整包**，
+        /// 不需要分卷那条判据；只有带卷标记的这一档才可能是"某组缺了兄弟的一片"。</para>
+        /// </summary>
+        internal static bool IsVolumePartFile(string filePath) =>
+            ExtensionHelper.IsVolumePartExtension(Path.GetExtension(filePath));
+
+        /// <summary>
         /// **解前预检用的那一问**：这一单所在的目录里，围绕它到底组成了哪一组、齐不齐。
         ///
         /// <para>试开那一档在这里做（有可用引擎时才做）：临时物落
@@ -3422,10 +3465,29 @@ namespace ArchiveFixer.ViewModels
             if (resolution.Verdict == VolumeGroupVerdict.Complete)
             {
                 /*
-                 * 试开证明这一组是**齐的**，只是有卷的名字不是 7-Zip 认的标准名 ——
-                 * 老判据在这里只会说「分卷缺失」，把用户指去满盘找一卷根本不缺的卷。
+                 * ⛔ "完整"有两档来源，**不许混着说**：
+                 *   ① 试开真的跑过并成立（决定性证据）→ 才敢说"按试开验证"；
+                 *   ② 只有名字 / 体积 / 位置 / 物理同一性（前五条）说完整 → 那是"看不出缺哪一卷"，
+                 *      不是"验证过"。老写法在这里一律写"按试开验证这一组是齐的"，
+                 *      而试开这一档**在这一路上根本没跑**（没引擎 / 跨卷 / 顺序凑不齐时都是"没试"）——
+                 *      那是把"没试"说成"验过"（AGENTS：⛔ 不许假装做到了）。
                  */
-                return $"{baseline}；但按试开验证这一组是齐的（{resolution.Reason}）";
+                bool trialConfirmed = resolution.Evidence.Any(row =>
+                    row.Kind == VolumeEvidenceKind.TrialOpen
+                    && row.Outcome == VolumeEvidenceOutcome.Satisfied);
+
+                if (trialConfirmed)
+                {
+                    /*
+                     * 试开证明这一组是**齐的**，只是有卷的名字不是 7-Zip 认的标准名 ——
+                     * 老判据在这里只会说「分卷缺失」，把用户指去满盘找一卷根本不缺的卷。
+                     */
+                    return $"{baseline}；但按试开验证这一组是齐的（{resolution.Reason}）";
+                }
+
+                return $"{baseline}；按名字与体积这一组看不出缺哪一卷（{resolution.Reason}）"
+                    + " —— 这一条没有经过试开确认，所以只当参考，缺卷以任务自己那份识别结果为准"
+                    + "（⛔ 程序不会去改你的文件名，也不会动你的文件）";
             }
 
             if (resolution.MissingVolumeNames.Count > 0)
@@ -3527,12 +3589,49 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 暂存树的一次分卷扫描：**已经认出来的组** + **逐目录的事实清单**（后者给"孤儿卷"复查用）。
+        ///
+        /// <para>为什么要带着事实清单：带卷标记的文件**不一定**落进某个组 ——
+        /// <see cref="VolumeGroupDetector"/> 对"名字被伪装过"的桶还要过一道尺寸规律，
+        /// 过不了就把整桶丢掉（2026-09-28 三层方案，防认错组）。丢掉之后那些文件在
+        /// <see cref="PlanFinalLayout"/> 里就只剩"按扩展名像不像分卷"这一条老判据了 ——
+        /// 而它们恰恰可能是**缺了兄弟的那一组**。所以那一档必须回头问判定器（见调用点）。</para>
+        /// </summary>
+        internal sealed class StageVolumeScan
+        {
+            /// <summary>认出来的组（每组一条结论）。</summary>
+            public IReadOnlyList<StageVolumeGroupView> Groups { get; init; } = Array.Empty<StageVolumeGroupView>();
+
+            /// <summary>逐目录的事实清单（键 = 目录绝对路径）。</summary>
+            public IReadOnlyDictionary<string, IReadOnlyList<VolumeGroupEntry>> EntriesByDirectory { get; init; } =
+                new Dictionary<string, IReadOnlyList<VolumeGroupEntry>>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>这个文件的同目录事实清单（拿不到就返回空 —— 空清单在判定器里等于"判不出"）。</summary>
+            public IReadOnlyList<VolumeGroupEntry> EntriesFor(string filePath)
+            {
+                try
+                {
+                    string? directory = Path.GetDirectoryName(filePath);
+
+                    return !string.IsNullOrWhiteSpace(directory) &&
+                           EntriesByDirectory.TryGetValue(directory, out IReadOnlyList<VolumeGroupEntry>? entries)
+                        ? entries
+                        : Array.Empty<VolumeGroupEntry>();
+                }
+                catch
+                {
+                    return Array.Empty<VolumeGroupEntry>();
+                }
+            }
+        }
+
+        /// <summary>
         /// 把暂存树里出现的每一组分卷判一次（**逐目录**判：判定器只在同目录里认组）。
         ///
         /// <para>调用时机 = 定稿闸门开工前一次（不是每个文件各判一次 —— 那是 O(n²) 的目录枚举）。
         /// 不做试开：这一步跑在同步的定稿路径上；试开那一档在解前预检里做，两边收的是**同一份结论类型**。</para>
         /// </summary>
-        private static IReadOnlyList<StageVolumeGroupView> ResolveStageVolumeGroups(string stageRoot)
+        private static StageVolumeScan ResolveStageVolumeGroups(string stageRoot)
         {
             var result = new List<StageVolumeGroupView>();
             var byDirectory = new Dictionary<string, List<VolumeGroupEntry>>(StringComparer.OrdinalIgnoreCase);
@@ -3596,7 +3695,14 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            return result;
+            return new StageVolumeScan
+            {
+                Groups = result,
+                EntriesByDirectory = byDirectory.ToDictionary(
+                    pair => pair.Key,
+                    pair => (IReadOnlyList<VolumeGroupEntry>)pair.Value,
+                    StringComparer.OrdinalIgnoreCase)
+            };
         }
 
         /// <summary>这个文件属于哪一组（不属于任何组返回 null）。判定器认进来的推定候选也算。</summary>

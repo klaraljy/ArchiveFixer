@@ -526,7 +526,15 @@ namespace ArchiveFixer.Storage
                 AllowTrialOpen = false
             });
 
-            if (resolution.Verdict == VolumeGroupVerdict.Undetermined)
+            /*
+             * ⛔ 判据是"判定器有没有认出组成员"，**不是**"结论是不是完整"：
+             * 结论 `Undetermined`（判不出）时 `GroupFilePaths` 也可能非空（例如"这几卷不在同一个目录 /
+             * 同一个卷"那一档 —— 组是认出来了，只是不敢据此装配）。那一档恰恰**更**不该把成员列成无用物，
+             * 所以这里只在"一个成员都没认出来"时才放手。
+             *
+             * 方向永远是安全的：保护集多几个人，只会让提醒里少列几条（⛔ 不会多删任何东西）。
+             */
+            if (resolution.GroupFilePaths.Count == 0)
             {
                 return;
             }
