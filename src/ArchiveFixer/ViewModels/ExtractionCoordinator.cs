@@ -8955,6 +8955,26 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            /*
+             * ===== 上一次跑到一半被中断留下的空壳：**这一次跑的时候顺手收掉**（用户 2026-09-30 亲口点了"推荐"）=====
+             *
+             * 现场：正常跑完的收尾会连壳一起删（批尾那两步），只有**中断**这一档会残留 ——
+             * 真机上 `H:\成果\1111\` 里就只剩一个空的 `.ArchiveFixer.work`，一个成品都没有，
+             * 而用户翻自己目录时会看见这个凭空多出来的文件夹。
+             *
+             * 位置是**硬要求**：必须在 `WorkspaceRootResolver.Resolve` **之前**。
+             * 那一句会按"解析之前它在不在"如实记下 TargetDirectoryCreated，并把目标目录与工作区都建出来 ——
+             * 先建后收会把**刚建出来的工作区**当成残留删掉（顺序反了就是自伤）。
+             *
+             * ⛔ 只查**本批这些目标目录这一层**（destinations 就是唯一实现 ResolveOutputPlacement 算出来的落点），
+             * 不递归、不看兄弟目录、更不做全盘扫描；判据一条都不在这里写（唯一出口
+             * `Storage/WorkspaceLeftoverShellCleaner.ReclaimAll`：除了那个空工作区什么都没有才删）。
+             */
+            foreach (WorkspaceLeftoverShellOutcome leftover in WorkspaceLeftoverShellCleaner.ReclaimAll(destinations))
+            {
+                AppendLog(leftover.LogLevel, leftover.Message);
+            }
+
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
                 destinations,
                 WorkspaceDriveOverride);
