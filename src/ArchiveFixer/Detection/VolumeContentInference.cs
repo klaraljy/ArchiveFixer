@@ -393,25 +393,69 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
-        /// 试开目录：第一卷**所在卷根**下的 <c>.ArchiveFixer.work\volprobe-&lt;guid&gt;</c>；拿不到卷根返回空串。
+        /// 试开目录：**只认调用方给的工作区根**（用户 2026-09-30 口径：临时物只准落
+        /// <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>）。
+        ///
+        /// <para>⛔ <b>没有工作区根 = 不试开</b>。这一档以前会退到"第一卷所在卷根下的
+        /// <c>.ArchiveFixer.work</c>"，已经**整条删掉**（用户红线原话：「工作区就设在解压的地方，
+        /// 这就完全不存在跨盘的操作」；在源盘开目录正是不变量 12 禁止的"把中间产物写进源目录"，
+        /// 收工删掉也一样 —— 中途崩掉就在用户盘上留垃圾）。本机实测那两个卷根空壳
+        /// （<c>C:\.ArchiveFixer.work</c> / <c>E:\.ArchiveFixer.work</c>）就是这条老路留下的。</para>
+        ///
+        /// <para>同理：<b>跨卷也不试</b>（硬链接不能跨卷）—— 两档都返回空串，由调用方如实报
+        /// "无法确认 ⇒ 判不出"。⛔ 也绝不复制大文件去凑（一卷 2 GiB，复制一组要几十 GiB 和几分钟）。</para>
         /// </summary>
-        public static string BuildProbeRoot(string? firstVolumePath)
+        /// <param name="firstVolumePath">第一卷（决定"必须同卷"的那个卷是哪一个）。</param>
+        /// <param name="preferredWorkRoot">
+        /// 工作区根（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>）。空 / 跨卷 / 路径形状不合法 ⇒ 返回空串。
+        /// </param>
+        public static string BuildProbeRoot(string? firstVolumePath, string? preferredWorkRoot)
         {
             try
             {
-                string full = Path.GetFullPath(firstVolumePath ?? string.Empty);
-                string root = Path.GetPathRoot(full) ?? string.Empty;
-
-                if (string.IsNullOrWhiteSpace(root))
+                if (string.IsNullOrWhiteSpace(preferredWorkRoot))
                 {
+                    // 没有工作区根 ⇒ 没有合法落点（⛔ 不另找地方开一个）。
                     return string.Empty;
                 }
 
-                return Path.Combine(root, WorkDirectoryName, "volprobe-" + Guid.NewGuid().ToString("N"));
+                string full = Path.GetFullPath(firstVolumePath ?? string.Empty);
+
+                if (!IsSameVolumeRoot(full, preferredWorkRoot))
+                {
+                    // 跨卷 ⇒ 硬链接做不了；⛔ 不退源卷根、⛔ 不复制。
+                    return string.Empty;
+                }
+
+                return Path.Combine(
+                    Path.GetFullPath(preferredWorkRoot.Trim()),
+                    "volprobe-" + Guid.NewGuid().ToString("N"));
             }
             catch
             {
                 return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// 两个路径是不是在**同一个卷**上（= 硬链接唯一的成立条件）。
+        ///
+        /// <para>取不到任一侧的卷根 ⇒ <c>false</c>（判不出同一卷就按"跨卷"处理：宁可不试）。
+        /// 判据只看盘符/卷根字符串，⛔ 不查文件系统、不问卷 GUID —— 本程序不做设备身份。</para>
+        /// </summary>
+        public static bool IsSameVolumeRoot(string? pathA, string? pathB)
+        {
+            try
+            {
+                string rootA = Path.GetPathRoot(Path.GetFullPath(pathA ?? string.Empty)) ?? string.Empty;
+                string rootB = Path.GetPathRoot(Path.GetFullPath(pathB ?? string.Empty)) ?? string.Empty;
+
+                return rootA.Length > 0 && rootB.Length > 0
+                    && string.Equals(rootA, rootB, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
             }
         }
 

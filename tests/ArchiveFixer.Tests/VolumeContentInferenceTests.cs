@@ -316,17 +316,50 @@ namespace ArchiveFixer.Tests
             Assert.Equal(3, VolumeGroupDetector.TryGetVolumeIndex("amb909.7z.003"));
         }
 
+        /// <summary>
+        /// **试开目录只认同卷的工作区根**（用户 2026-09-30 红线：工作区就设在解压的地方，
+        /// "这就完全不存在跨盘的操作"）。
+        ///
+        /// <para>老实现（本分支第一版）在"没有工作区根 / 工作区根跨盘"时会退到
+        /// <c>&lt;第一卷卷根&gt;\.ArchiveFixer.work\volprobe-&lt;guid&gt;</c> —— 那正是用户明令取消的
+        /// "专门在一个盘里开个工作区"（本机 C:\ 与 E:\ 根上那两个空壳就是它留下的）。
+        /// 现在这两档都返回空串 = **不试开**；⛔ 也不许改退到程序目录 / 临时目录。</para>
+        /// </summary>
         [Fact]
-        public void 试开目录_建在第一卷所在卷根下_同卷才做得了硬链接()
+        public void 试开目录_只认同卷的工作区根_没有根或跨卷都不给()
         {
             string first = WriteBig("probe.01", 10);
-            string probeRoot = VolumeContentInference.BuildProbeRoot(first);
+
+            // ① 没有工作区根 ⇒ 空串（⛔ 不许退到卷根）。
+            Assert.Equal(string.Empty, VolumeContentInference.BuildProbeRoot(first, null));
+            Assert.Equal(string.Empty, VolumeContentInference.BuildProbeRoot(first, "   "));
+
+            // ② 同卷的工作区根 ⇒ 就用它，而且落在它下面。
+            string sameVolumeRoot = Path.Combine(Path.GetDirectoryName(first)!, VolumeContentInference.WorkDirectoryName);
+            string probeRoot = VolumeContentInference.BuildProbeRoot(first, sameVolumeRoot);
 
             Assert.NotEqual(string.Empty, probeRoot);
-            Assert.Equal(Path.GetPathRoot(first), Path.GetPathRoot(probeRoot));
-            Assert.Contains(VolumeContentInference.WorkDirectoryName, probeRoot, StringComparison.Ordinal);
+            Assert.StartsWith(sameVolumeRoot, probeRoot, StringComparison.OrdinalIgnoreCase);
             Assert.False(Directory.Exists(probeRoot), "只是算路径，不该真的建目录");
+
+            // ③ 跨卷的工作区根 ⇒ 空串（硬链接不能跨卷，而退源卷根已被否决）。
+            string? otherRoot = FindOtherVolumeRoot(Path.GetPathRoot(first));
+
+            if (otherRoot != null)
+            {
+                Assert.False(VolumeContentInference.IsSameVolumeRoot(first, otherRoot));
+                Assert.Equal(string.Empty, VolumeContentInference.BuildProbeRoot(first, otherRoot));
+            }
         }
+
+        /// <summary>找一个与 <paramref name="exclude"/> 不同的卷根（找不到返回 null，那一档跳过断言）。</summary>
+        private static string? FindOtherVolumeRoot(string? exclude) =>
+            DriveInfo.GetDrives()
+                .Where(drive => drive.IsReady
+                    && drive.DriveType is DriveType.Fixed or DriveType.Removable
+                    && !string.Equals(drive.Name, exclude, StringComparison.OrdinalIgnoreCase))
+                .Select(drive => drive.Name)
+                .FirstOrDefault();
 
         [Fact]
         public void 试开名_七z只认基名加三位卷号()

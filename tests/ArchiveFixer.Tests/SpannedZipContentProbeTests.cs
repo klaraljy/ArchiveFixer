@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using Xunit;
 
@@ -83,10 +84,13 @@ namespace ArchiveFixer.Tests
             Assert.False(CanListEntry(directory, tail), "名字坏着的时候引擎不该能打开它");
 
             // ④ 走产品代码：内容定序 → 改名计划 → 真的改
+            //    工作区根由调用方传（不变量 12）；跨盘 zip 这条路卷号写在内容里、**不试开**，
+            //    这里仍按"目标工作区就在这一单的目录里"给一个同卷的根（调用方本来就该这么传）。
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 tail,
                 VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(tail),
-                engine: new Engines.SevenZip.SevenZipEngine());
+                engine: new Engines.SevenZip.SevenZipEngine(),
+                workRootDirectory: WorkRootFor(tail));
 
             Assert.True(plan.CanRepair, plan.Reason);
             Assert.Equal(new[] { "sp2.z01", "sp2.zip" }, plan.Items.Select(i => i.SuggestedFileName).ToArray());
@@ -156,6 +160,14 @@ namespace ArchiveFixer.Tests
             return stdout.Contains("data.bin", StringComparison.Ordinal)
                 && stdout.Contains("Multivolume = +", StringComparison.Ordinal);
         }
+
+        /// <summary>
+        /// 这一单的"目标工作区根"（同卷）：<c>&lt;样本目录&gt;\.ArchiveFixer.work</c>。
+        /// 真实调用方传的是 <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>；用例里样本就在临时目录里，
+        /// 用 <see cref="VolumeContentInference.WorkDirectoryName"/> 这个**同一个常量**拼，⛔ 不写死名字。
+        /// </summary>
+        private static string WorkRootFor(string samplePath) =>
+            Path.Combine(Path.GetDirectoryName(samplePath)!, VolumeContentInference.WorkDirectoryName);
 
         private static void Run7z(string workingDirectory, params string[] args)
         {

@@ -239,7 +239,8 @@ namespace ArchiveFixer.Tests
                 VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                     entry,
                     VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(entry),
-                    new Engines.SevenZip.SevenZipEngine());
+                    new Engines.SevenZip.SevenZipEngine(),
+                    workRootDirectory: WorkRootFor(entry));
 
                 Assert.True(plan.CanRepair, $"{set.Name}：内容级计划没成（{plan.Reason}）");
                 Assert.Equal(2, plan.Items.Count);
@@ -332,7 +333,8 @@ namespace ArchiveFixer.Tests
                 VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                     first,
                     VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(first),
-                    new Engines.SevenZip.SevenZipEngine());
+                    new Engines.SevenZip.SevenZipEngine(),
+                    workRootDirectory: WorkRootFor(first));
 
                 Assert.True(plan.CanRepair, $"{set.Name}：内容级计划没成（{plan.Reason}）");
                 Assert.Equal(2, plan.Items.Count);
@@ -546,6 +548,16 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>本机 <c>Rar.exe</c>（路径来自产品自己的唯一出口 <see cref="Engines.ToolLocator"/>）。</summary>
+        /// <summary>
+        /// 这一单的"目标工作区根"（同卷）：<c>&lt;样本副本目录&gt;\.ArchiveFixer.work</c>。
+        /// 真实调用方传的是 <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>（不变量 12：需要临时物的地方由调用方传进来）；
+        /// 这里样本在只读副本的临时目录里，用**同一个常量**拼，⛔ 不写死名字。
+        /// </summary>
+        private static string WorkRootFor(string samplePath) =>
+            Path.Combine(
+                Path.GetDirectoryName(samplePath)!,
+                Detection.VolumeContentInference.WorkDirectoryName);
+
         private static void RunRar(string workingDirectory, params string[] args)
         {
             string rar = Engines.ToolLocator.Default.RarExePath;

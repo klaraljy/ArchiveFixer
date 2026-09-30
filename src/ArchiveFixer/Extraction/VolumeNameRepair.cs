@@ -336,11 +336,27 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para><b>改名永远先过三道</b>：整组卷号必须连成 1..N（内容自洽）、目标名没被占用（⛔ 绝不覆盖）、
         /// 至少有一卷的名字真的要改。任何一道不过 → <c>CanRepair = false</c> + 写明为什么，**一个字节都不动**。</para>
+        ///
+        /// <para><b>⛔ 工作区根必须由调用方传进来</b>（不变量 12：需要临时物的地方一律由调用方把工作区根传进去，
+        /// 传不进来就不做那件事）。7z 那条路要"硬链接 + 引擎列目录"才算得出顺序，而硬链接**不能跨卷** ——
+        /// 所以：<b>同盘</b>（工作区根与第一卷在同一个卷）⇒ 探针落在目标工作区里做，这条路照旧可用；
+        /// <b>跨盘 / 没传</b> ⇒ **不试开**，如实报"无法确认"，**不出改名计划**（⛔ 不退源卷根、⛔ 不复制、
+        /// ⛔ 不往程序目录或 <c>%TEMP%</c> 写）。参数**没有默认值**就是这个意思：每个调用点都必须显式表态，
+        /// 不许留下"不传 ⇒ 悄悄退到卷根"的老路。</para>
         /// </summary>
+        /// <param name="currentPath">要修的那一卷（组里任意一卷）。</param>
+        /// <param name="filesInDirectory">同目录候选（拿不到就传 null）。</param>
+        /// <param name="engine">试开用的引擎。</param>
+        /// <param name="workRootDirectory">
+        /// 这一单的目标工作区根（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>）。空 = 调用方拿不到工作区根
+        /// ⇒ 不做试开（如实报"无法确认"）。
+        /// </param>
+        /// <param name="cancellationToken">取消。</param>
         public static async Task<VolumeNameRepairPlan> PlanByContentAsync(
             string? currentPath,
             IEnumerable<VolumeCandidate>? filesInDirectory,
             Engines.IArchiveEngine engine,
+            string? workRootDirectory,
             CancellationToken cancellationToken = default)
         {
             string path = currentPath ?? string.Empty;
@@ -368,7 +384,12 @@ namespace ArchiveFixer.Extraction
                             return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
                         }
 
-                        return await PlanSevenZipByContentAsync(path, filesInDirectory, engine, cancellationToken)
+                        return await PlanSevenZipByContentAsync(
+                                path,
+                                filesInDirectory,
+                                engine,
+                                workRootDirectory,
+                                cancellationToken)
                             .ConfigureAwait(false);
                     }
 
@@ -447,6 +468,7 @@ namespace ArchiveFixer.Extraction
             string path,
             IEnumerable<VolumeCandidate>? filesInDirectory,
             Engines.IArchiveEngine engine,
+            string? workRootDirectory,
             CancellationToken cancellationToken)
         {
             Detection.VolumeContentFormat format = Detection.VolumeContentFormat.SevenZip;
@@ -476,16 +498,26 @@ namespace ArchiveFixer.Extraction
 
             var verifier = new VolumeProbeVerifier(engine);
             VolumeProbeOutcome probe = await verifier
-                .VerifyAsync(path, orderings, cancellationToken)
+                .VerifyAsync(path, orderings, cancellationToken, workRootDirectory)
                 .ConfigureAwait(false);
 
             if (!probe.Confirmed || probe.OrderedVolumes.Count < 2)
             {
-                // 试开**真跑过**（闸门已放行）→ 标出来，调用方才能把"试过了、不成立、为什么"写进日志。
-                return Cannot(
-                    path,
-                    string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason),
-                    trialAttempted: true);
+                /*
+                 * ⛔ "没试"与"试过不成立"必须分开说（用户 2026-09-30 红线：工作区只准设在解压的地方）：
+                 * 这条路**没有目标目录** ⇒ 没有工作区根 ⇒ 一次都不试开（见 VolumeProbeVerifier）。
+                 * 那一档只能如实报"无法确认"，⛔ 不许写成"试开没通过"；结论照旧是**不改名**。
+                 * `TrialAttempted` 也跟着如实走 —— 它的唯一含义就是"试开真跑过"。
+                 */
+                return probe.Attempted
+                    ? Cannot(
+                        path,
+                        string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason),
+                        trialAttempted: true)
+                    : Cannot(
+                        path,
+                        string.Format(StatusText.VolumeRepairNoProbeFormat, probe.Reason),
+                        trialAttempted: false);
             }
 
             if (!Detection.VolumeNumberFromContent.TryDeriveStem(path, format, out string stem))

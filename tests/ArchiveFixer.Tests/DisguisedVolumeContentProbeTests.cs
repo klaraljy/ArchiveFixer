@@ -58,20 +58,12 @@ namespace ArchiveFixer.Tests
                 // 清不掉只是脏一点。
             }
 
-            try
-            {
-                // 试开目录由产品代码自己删；万一没删干净，这里补一刀（⛔ 只删我们自己造的这一个名字）。
-                string work = Path.Combine(Path.GetTempPath(), VolumeContentInference.WorkDirectoryName);
-
-                if (Directory.Exists(work) && !Directory.EnumerateFileSystemEntries(work).Any())
-                {
-                    Directory.Delete(work);
-                }
-            }
-            catch
-            {
-                // 同上。
-            }
+            /*
+             * ⚠ 这里原来还有一段"补一刀删掉 <临时目录卷根>\.ArchiveFixer.work"的清理 —— 那是老行为的产物：
+             * 试开器在"没有工作区根 / 跨盘"时会退到**源卷根**去建探针目录（本机 C:\ 与 E:\ 根上那两个空壳
+             * 就是这么来的）。现在试开探针**只落调用方传进来的工作区根**（用户 2026-09-30 红线），
+             * 卷根那一档已经整条删掉，所以那段清理既无用、又会去动别人盘上的目录（⛔ 不许）。
+             */
         }
 
         [SevenZipFact]

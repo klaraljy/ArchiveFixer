@@ -27,6 +27,18 @@ namespace ArchiveFixer.Extraction
         /// <summary>成立时的完整卷序（第 1 卷在第一位）。</summary>
         public IReadOnlyList<VolumeCandidate> OrderedVolumes { get; init; } = Array.Empty<VolumeCandidate>();
 
+        /// <summary>
+        /// **真的试过**。false = 没试成（没有可用引擎 / 拿不到卷根 / 建不出试开目录 / **跨盘**）——
+        /// 这一档是"没试"，⛔ 不是"不成立"；消费方（<c>VolumeGroupResolver</c>）必须分开算。
+        /// </summary>
+        public bool Attempted { get; init; }
+
+        /// <summary>
+        /// 没试的**结构化**原因（⛔ 消费方不许去比 <see cref="Reason"/> 的中文）。
+        /// 只有 <see cref="VolumeTrialSkipReason.CrossVolume"/> 会改变结论：跨盘 ⇒ 判不出。
+        /// </summary>
+        public VolumeTrialSkipReason SkipReason { get; init; } = VolumeTrialSkipReason.None;
+
         /// <summary>试了几种排列。</summary>
         public int Attempts { get; init; }
 
@@ -43,8 +55,10 @@ namespace ArchiveFixer.Extraction
     /// 引擎列一次目录的证据强度，比任何名字/尺寸规律都高。</para>
     ///
     /// <para><b>⛔ 绝不复制文件</b>：一卷 2 GiB，复制一组要几十 GiB 和几分钟。
-    /// 这里一律用 <c>CreateHardLinkW</c> 在**同一卷**上建第二个名字（零字节、瞬时）；
-    /// 因此工作目录必须建在第一卷**所在卷根**下（跨卷的硬链接不存在，<c>Path.GetTempPath()</c> 可能跨卷）。</para>
+    /// 这里一律用 <c>CreateHardLinkW</c> 在**同一卷**上建第二个名字（零字节、瞬时）。
+    /// 由此推出两条硬规矩（用户 2026-09-30 红线：「工作区就设在解压的地方，这就完全不存在跨盘的操作」）：
+    /// <b>① 没有工作区根（拿不到这一单的目标目录）⇒ 一次都不试</b>；<b>② 跨卷 ⇒ 一次都不试</b>。
+    /// ⛔ 不许退到源卷根 / 程序目录 / 临时目录另开一个工作区 —— 判不出就如实报"无法确认"。</para>
     ///
     /// <para><b>本类不引用 WPF</b>，只依赖 <see cref="IArchiveEngine"/> 与文件系统。</para>
     /// </summary>
@@ -61,31 +75,90 @@ namespace ArchiveFixer.Extraction
         /// 先确认"第一卷自己打不开"（打得开 = 它本身就是个完整压缩包，不是分卷的第一卷，那就什么都别做），
         /// 再逐个假设顺序试开。
         /// </summary>
+        /// <param name="firstVolumePath">第一卷。</param>
+        /// <param name="orderings">后续卷的候选排列（每一组都不含第一卷）。</param>
+        /// <param name="cancellationToken">取消。</param>
+        /// <param name="preferredWorkRoot">
+        /// 试开临时物的落点（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30 口径）。
+        /// <b>没有它 / 它跨卷 ⇒ 一次都不试</b>：⛔ 不退到"源卷根下的 <c>.ArchiveFixer.work</c>"
+        /// （工作区只准设在解压的地方，在源盘开目录正是不变量 12 禁止的形态；本机 C:\ 与 E:\ 根上
+        /// 那两个空壳就是这条老路留下的），⛔ 也不改用程序目录 / 临时目录。
+        /// 两档都如实报"无法确认"（<see cref="VolumeProbeOutcome.SkipReason"/> =
+        /// <see cref="VolumeTrialSkipReason.NoProbeRoot"/> / <see cref="VolumeTrialSkipReason.CrossVolume"/>）。
+        /// </param>
         public async Task<VolumeProbeOutcome> VerifyAsync(
             string? firstVolumePath,
             IReadOnlyList<IReadOnlyList<VolumeCandidate>>? orderings,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            string? preferredWorkRoot = null)
         {
             if (string.IsNullOrWhiteSpace(firstVolumePath) || !File.Exists(firstVolumePath))
             {
-                return Refuse(0, "第一卷不在了");
+                return Refuse(0, "第一卷不在了", attempted: false, VolumeTrialSkipReason.Other);
             }
 
             if (orderings == null || orderings.Count == 0)
             {
-                return Refuse(0, "同目录里没有可当后续卷的候选文件");
+                return Refuse(
+                    0,
+                    "同目录里没有可当后续卷的候选文件",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoOrderings);
             }
 
             if (_engine == null || !_engine.IsAvailable)
             {
-                return Refuse(0, "当前没有可用的解压引擎，没法试开验证（宁可不改，也不猜）");
+                return Refuse(
+                    0,
+                    "当前没有可用的解压引擎，没法试开验证（宁可不改，也不猜）",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoEngine);
             }
 
-            string probeRoot = VolumeContentInference.BuildProbeRoot(firstVolumePath);
+            bool hasPreferredRoot = !string.IsNullOrWhiteSpace(preferredWorkRoot);
+
+            /*
+             * ⛔ 没有工作区根 ⇒ **一次都不试**（用户 2026-09-30 红线：「工作区就设在解压的地方，
+             * 这就完全不存在跨盘的操作」）。
+             *
+             * 以前这一档会退到"第一卷所在卷根下的 .ArchiveFixer.work"—— 那就是"专门在用户盘上开一个
+             * 工作区"，本机实测 C:\ 与 E:\ 根上那两个空壳就是它留下的。整条删掉，⛔ 也不许改退到
+             * 程序目录 / 临时目录：证不出来就如实说"无法确认"，宁可什么都不做。
+             */
+            if (!hasPreferredRoot)
+            {
+                return Refuse(
+                    0,
+                    "这条路没有工作区根（拿不到这一单的目标目录）⇒ 不许试开：工作区只准设在解压的地方，"
+                    + "⛔ 不在源卷根 / 程序目录 / 临时目录另开一个 —— 证不出整组是齐的，只能如实报「无法确认」",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoProbeRoot);
+            }
+
+            /*
+             * ⛔ 跨盘 = 一次都不试（用户 2026-09-30 决定，见 <paramref name="preferredWorkRoot"/> 的说明）。
+             * 判据是"两个路径在不在同一个卷"，⛔ 不去比文案、也不试一次看看行不行 ——
+             * 试开的第一步就是在那个目录里建东西，那正是被否决的动作。
+             */
+            if (!VolumeContentInference.IsSameVolumeRoot(firstVolumePath, preferredWorkRoot))
+            {
+                return Refuse(
+                    0,
+                    "跨盘无法试开，整卷是否齐全无法确认 —— 硬链接不能跨卷（源文件与目标工作区不在同一个卷上），"
+                    + "⛔ 不复制大文件、也不在源盘上开工作区，所以这一档只能判「无法确认」",
+                    attempted: false,
+                    VolumeTrialSkipReason.CrossVolume);
+            }
+
+            string probeRoot = VolumeContentInference.BuildProbeRoot(firstVolumePath, preferredWorkRoot);
 
             if (probeRoot.Length == 0)
             {
-                return Refuse(0, "拿不到第一卷所在的卷根，做不了硬链接（不复制大文件，所以不试）");
+                return Refuse(
+                    0,
+                    "拿不到可用的试开目录（工作区根给得不合法）—— 不复制大文件，所以不试",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoProbeRoot);
             }
 
             int attempts = 0;
@@ -98,7 +171,11 @@ namespace ArchiveFixer.Extraction
                 }
                 catch (Exception ex)
                 {
-                    return Refuse(0, $"试开目录建不出来（{ex.Message}）");
+                    return Refuse(
+                        0,
+                        $"试开目录建不出来（{ex.Message}）",
+                        attempted: false,
+                        VolumeTrialSkipReason.NoProbeRoot);
                 }
 
                 // ① 单独一卷能不能完整打开。能 → 它本来就是个完整包，改名只会把它弄坏。
@@ -107,7 +184,7 @@ namespace ArchiveFixer.Extraction
 
                 if (solo != null)
                 {
-                    return solo;
+                    return WithAttempted(solo, attempted: true);
                 }
 
                 // ② 逐个假设顺序试开：第一个"列得出来"的顺序就是它。
@@ -128,6 +205,7 @@ namespace ArchiveFixer.Extraction
                         return new VolumeProbeOutcome
                         {
                             Confirmed = true,
+                            Attempted = true,
                             NeedsPassword = trial.EncryptedArchive,
                             OrderedVolumes = volumes,
                             Attempts = attempts,
@@ -141,7 +219,7 @@ namespace ArchiveFixer.Extraction
                     LastFailure = trial.Failure;
                 }
 
-                return Refuse(attempts, $"试了 {attempts} 种排列都不成立（最后一次：{LastFailure}）");
+                return Refuse(attempts, $"试了 {attempts} 种排列都不成立（最后一次：{LastFailure}）", attempted: true);
             }
             catch (OperationCanceledException)
             {
@@ -149,13 +227,67 @@ namespace ArchiveFixer.Extraction
             }
             catch (Exception ex)
             {
-                return Refuse(attempts, $"试开过程中出错：{ex.Message}");
+                return Refuse(attempts, $"试开过程中出错：{ex.Message}", attempted: attempts > 0);
             }
             finally
             {
                 TryDelete(probeRoot);
             }
         }
+
+        /// <summary>
+        /// <see cref="VolumeGroupResolver"/> 要的那一个试开出口：把请求翻译成本类的硬链接试开，
+        /// 再把结论折成 <see cref="VolumeTrialOutcome"/>。
+        ///
+        /// <para>⛔ <b>只读</b>：源文件一个字节都不动 —— 只在试开目录里建**硬链接**（零字节、瞬时），
+        /// 收工把整棵试开目录删掉。这是"试开确认"能当最高权重证据的前提。</para>
+        /// </summary>
+        public async Task<VolumeTrialOutcome> TryOpenAsync(
+            VolumeTrialRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null)
+            {
+                return new VolumeTrialOutcome { Attempted = false, Reason = "试开请求为空" };
+            }
+
+            VolumeProbeOutcome outcome = await VerifyAsync(
+                    request.FirstVolumePath,
+                    request.Orderings,
+                    cancellationToken,
+                    request.PreferredWorkRootDirectory)
+                .ConfigureAwait(false);
+
+            var ordered = new List<string>();
+
+            foreach (VolumeCandidate volume in outcome.OrderedVolumes)
+            {
+                ordered.Add(volume.Path);
+            }
+
+            return new VolumeTrialOutcome
+            {
+                Confirmed = outcome.Confirmed,
+                Attempted = outcome.Attempted,
+                SkipReason = outcome.SkipReason,
+                NeedsPassword = outcome.NeedsPassword,
+                OrderedVolumePaths = ordered,
+                Attempts = outcome.Attempts,
+                Reason = outcome.Reason
+            };
+        }
+
+        /// <summary>补一个"真的试过"的标记（<see cref="TrySoloAsync"/> 的结论是确定的，但它自己不知道试没试）。</summary>
+        private static VolumeProbeOutcome WithAttempted(VolumeProbeOutcome outcome, bool attempted) => new()
+        {
+            Confirmed = outcome.Confirmed,
+            Attempted = attempted,
+            SkipReason = outcome.SkipReason,
+            NeedsPassword = outcome.NeedsPassword,
+            OrderedVolumes = outcome.OrderedVolumes,
+            Attempts = outcome.Attempts,
+            Reason = outcome.Reason
+        };
 
         /// <summary>最后一次试开失败的原因（只为把话说清，不参与判定）。</summary>
         private string LastFailure { get; set; } = "没有可用信息";
@@ -180,8 +312,11 @@ namespace ArchiveFixer.Extraction
              */
             if (trial.EncryptedArchive)
             {
-                return Refuse(0, "第一卷自己就能完整打开（文件名也加密，没有密码读不出清单）"
-                                 + " —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）");
+                return Refuse(
+                    0,
+                    "第一卷自己就能完整打开（文件名也加密，没有密码读不出清单）"
+                    + " —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）",
+                    attempted: true);
             }
 
             if (trial.Failure != null)
@@ -190,7 +325,10 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            return Refuse(0, "第一卷自己就能完整打开 —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）");
+            return Refuse(
+                0,
+                "第一卷自己就能完整打开 —— 它本身就是个完整的压缩包，不是分卷的第一卷（不动它）",
+                attempted: true);
         }
 
         /// <summary>一次试开的结论（<see cref="Failure"/> 为 null = 成立）。</summary>
@@ -296,12 +434,18 @@ namespace ArchiveFixer.Extraction
             return new TrialResult(null, false);
         }
 
-        private static VolumeProbeOutcome Refuse(int attempts, string reason) => new()
-        {
-            Confirmed = false,
-            Attempts = attempts,
-            Reason = reason
-        };
+        private static VolumeProbeOutcome Refuse(
+            int attempts,
+            string reason,
+            bool attempted,
+            VolumeTrialSkipReason skipReason = VolumeTrialSkipReason.None) => new()
+            {
+                Confirmed = false,
+                Attempted = attempted,
+                SkipReason = skipReason,
+                Attempts = attempts,
+                Reason = reason
+            };
 
         private static long SizeOf(string? path)
         {
