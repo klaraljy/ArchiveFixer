@@ -1444,6 +1444,10 @@ namespace ArchiveFixer.Tests
         /// <para>形状：<c>outer.7z</c> = <c>level2.7z</c> + <c>decoy.txt</c>（**2 个条目**）；
         /// <c>level2.7z</c> = <c>final.txt</c>（1 个条目）。递归模式 SingleChain 会展开两层：
         /// 第 0 层声明 2 个、最终产物 1 个 —— 旧口径必然判"校验未通过"。</para>
+        ///
+        /// <para>⚠ 2026-09-30 起判据更严一层：不但不许判失败，还必须**真的拿叶子层的清单核对过**
+        /// （<c>ManifestExpectation.Source = LeafLayer</c>）—— 判"判不出完整性"同样会挡住用户设的
+        /// "源包放入其余物 + 其余物彻底删除"（真机现场见 <c>ChainManifestCompletenessTests</c>）。</para>
         /// </summary>
         [Fact]
         public async Task 递归展开多层_不再拿第一层清单判校验失败()
@@ -1494,12 +1498,23 @@ namespace ArchiveFixer.Tests
                 + string.Join(" | ", Directory.GetFileSystemEntries(outputRoot, "*", SearchOption.AllDirectories))
                 + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
 
-            // 校验那一段必须如实写明"这次不拿第 0 层清单核对"，不许假装做过清单校验。
+            // 校验那一段必须如实写明"预期来自叶子层、不是第 0 层那份清单"，而且**真的核对过**。
+            //
+            // ⚠ 2026-09-30 改口径（用户真机报的 L4 bug）：老口径下这里只能退化成"未取得预期条目数"，
+            // 于是 L4 判「判不出完整性」⇒ 用户设的"源包放入其余物 + 彻底删除"整条失效。
+            // 现在第 0 层的清单仍然**不**用于核对最终产物（§11.5 那条不变），换成**产出最终产物的
+            // 叶子层**（level2.7z，1 个条目）的清单 —— 判据读结构化的
+            // <see cref="ArchiveTask.ManifestExpectation"/>，⛔ 不比中文文案。
+            Assert.Equal(ManifestExpectationSource.LeafLayer, task.ManifestExpectation.Source);
+            Assert.Equal(1, task.ManifestExpectation.LayerDepth);
+            Assert.Equal(1, task.ManifestExpectation.Expected!.FileCount);
+            Assert.True(task.OutputManifestCrossChecked);
+            Assert.Equal(ResultCompleteness.Complete, ResultCompletenessClassifier.Classify(task).State);
+
             Assert.True(
                 harness.LogTexts.Any(
-                    line => line.Contains("结果校验", StringComparison.Ordinal)
-                            && line.Contains("未取得预期条目数", StringComparison.Ordinal)),
-                "结果校验那一行没有如实写明\"未取得预期条目数\"。日志：\n" + string.Join("\n", harness.LogTexts));
+                    line => line.Contains(StatusText.CompletenessCompleteFormat, StringComparison.Ordinal)),
+                "结果校验那一行必须写明这是拿清单逐条核对过的（可证完整）。日志：\n" + string.Join("\n", harness.LogTexts));
 
             Assert.Equal(1, outcome.Rounds);
         }

@@ -854,29 +854,74 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 递归展开超过一层 → 外层清单不再描述最终产物（见 recursion 参数说明）。
-             * 这里给一份 **Success = false** 的"空预期"：OutputVerifier 会走"只做非空校验"那一支，
-             * 并在结论里如实写明"未取得预期条目数"——比拿一份对不上的清单判失败诚实得多。
+             *
+             * ⚠ 2026-09-30 修（用户真机报的 bug）：老写法一见"展开 > 1 层"就把预期整份丢掉
+             * （塞一份 `Success = false` 的空预期），于是 `ManifestCrossChecked = false` ⇒
+             * L4「判不出完整性」⇒ 用户设的"源包放入其余物 + 其余物彻底删除"**整条失效**，
+             * 源包与其余物一个字节都没动 —— 可两层**都**列得出清单。
+             *
+             * 现在改成：**第 0 层的清单只对第 0 层**（这条口径不变），但最终产物由**叶子层**产出，
+             * 所以换用叶子层的清单去核对它。哪一层、为什么取不到，全由
+             * <see cref="ChainManifestResolver"/> 这一个出口回答（⛔ 这里不许自己再判一遍层数）。
              */
-            int expandedLayers = recursion?.Layers.Count(layer => layer.Success) ?? 0;
-            bool recursionOutranOuterManifest = expandedLayers > 1;
+            ManifestExpectation manifestExpectation = ChainManifestResolver.Resolve(recursion, knownList);
+
+            // 记账：L4 的分类器与所有删除闸门都从任务上读它（"哪一层 + 为什么没清单"要能一路带到日志）。
+            task.ManifestExpectation = manifestExpectation;
 
             // 1) 校验：拿到引擎声明的条目数与总大小，和落盘结果对一遍。
             // 清单同样取自**真正解开的那份归档**：内嵌归档要拿抠出来的文件去列，源文件 7z 根本打不开。
             // 密码照旧传进去：加密头（-mhe）的包不给密码根本列不出清单，校验会直接退化成"没法比"。
-            //
-            // 直读路线把清单直接带进来（见 knownList）：它必须与真正解出来的东西是同一份，
-            // 不然"校验通过"就变成了拿两个不同来源的数字互相点头。
-            ArchiveListResult expected = recursionOutranOuterManifest
-                ? new ArchiveListResult
+            ArchiveListResult expected;
+
+            if (manifestExpectation.HasManifest)
+            {
+                expected = manifestExpectation.Expected!;
+            }
+            else if (manifestExpectation.Source == ManifestExpectationSource.QueryArchive)
+            {
+                // 展开 0~1 层且手上没有清单：**行为与以前逐字节一致**（现问引擎列一份）。
+                ArchiveListResult queried = await _archiveEngine.ListAsync(
+                    ArchiveRequest.For(engineArchivePath, password),
+                    cancellationToken);
+
+                if (queried.Success)
+                {
+                    expected = queried;
+                }
+                else
+                {
+                    /*
+                     * 连这一份都列不出来 ⇒ 预期确实取不到（L4 会落"判不出"，源包不动）。
+                     * 记账换成"点名这一份归档 + 为什么 + 用户能做什么"，
+                     * 于是后面那一行「为什么没删源包」能说清是哪一份、什么原因。
+                     */
+                    task.ManifestExpectation = ChainManifestResolver.DescribeOuterUnavailable(engineArchivePath, queried);
+
+                    expected = new ArchiveListResult
+                    {
+                        Success = false,
+                        ErrorType = queried.ErrorType,
+                        Message = task.ManifestExpectation.UnavailableReason
+                    };
+                }
+            }
+            else
+            {
+                /*
+                 * 真的取不到清单（叶子层列不出来 / 没有任何一层留下清单）：
+                 * 给一份 Success = false 的"空预期"，OutputVerifier 会走"只做非空校验"那一支，
+                 * L4 落「判不出」⇒ 源包一个字节都不动。
+                 *
+                 * Message 带上"哪一层 + 为什么" —— 它就是 L4 那句"无法确认完整性"后面的细节，
+                 * 用户按这句话就能知道下一步该做什么（用户 2026-09-30：日志不许再让人猜）。
+                 */
+                expected = new ArchiveListResult
                 {
                     Success = false,
-                    Message = $"本次递归展开了 {expandedLayers} 层：第 0 层的清单不再描述最终产物"
-                }
-                : knownList != null && knownList.Success
-                    ? knownList
-                    : await _archiveEngine.ListAsync(
-                        ArchiveRequest.For(engineArchivePath, password),
-                        cancellationToken);
+                    Message = manifestExpectation.UnavailableReason
+                };
+            }
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1140,6 +1185,12 @@ namespace ArchiveFixer.ViewModels
                 ? work.Verification.Message
                 : $"{work.Verification.Message}；{outputRedirectNote}";
 
+            /*
+             * L4 的那一行证据（用户 2026-09-30：日志不许再让人猜）。
+             * 位置刻意在"校验通过"这条分支之内：判否那一支上面已经带着原因 return 了。
+             */
+            AppendCompletenessEvidence(task, work.Verification, sourceHandling);
+
             // 定稿里搬不动的文件也必须让用户看得见：产物还在暂存区，不在他打开的那个目录里。
             if (work.Commit is { FailedCount: > 0 })
             {
@@ -1333,9 +1384,14 @@ namespace ArchiveFixer.ViewModels
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            OutputVerificationResult verification = OutputVerifier.Verify(
-                stageDirectory,
-                expected.Success ? expected : null);
+            /*
+             * ⚠ 2026-09-30（用户真机报的 bug）：**不再把"取不到清单"折成 null**。
+             * null 会把"为什么取不到"（<see cref="ChainManifestResolver"/> 点名的那一层与原因）
+             * 一起丢掉，用户只能看到一句"未取得预期条目数"。
+             * <see cref="OutputVerifier.Verify"/> 内部对 null 与 Success=false 的处理逐字相同
+             * （两条规则都先判 Success），所以这一改**只多带一句话，不改任何判定**。
+             */
+            OutputVerificationResult verification = OutputVerifier.Verify(stageDirectory, expected);
 
             /*
              * ⛔ 「只出了源包自己那一个垃圾」—— 收尾这一步的最后一道闸门（用户 2026-09-28 红检实测）。
@@ -1713,11 +1769,13 @@ namespace ArchiveFixer.ViewModels
              * <see cref="ResultCompletenessClassifier"/>）。老口径下"拿不到清单、只做了非空底线校验"
              * 也算通过，那一档**没有任何证据**却能把源包搬走；现在它落在"判不出"⇒ 源包留在原地。
              */
-            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(verification);
+            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(
+                verification,
+                task.ManifestExpectation);
 
             if (!completeness.AllowsSourceRemoval)
             {
-                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Message}，源包留在原地（未移入其余物）。"));
+                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Blocker} —— 源包留在原地（未移入其余物）。"));
                 return new SourcePackageMoveResult { Attempted = false, Message = completeness.Message + "，源包留在原地" };
             }
 
@@ -1843,11 +1901,13 @@ namespace ArchiveFixer.ViewModels
              * <see cref="ResultCompletenessClassifier"/>）：判不出完整性时**永久删源包**这一步不做 ——
              * "空间不足"是让用户难受，删错源包是不可逆。
              */
-            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(verification);
+            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(
+                verification,
+                task.ManifestExpectation);
 
             if (!completeness.AllowsSourceRemoval)
             {
-                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Message}，{subject}留在原地（空间不足模式也不删）。"));
+                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Blocker}，{subject}留在原地（空间不足模式也不删）。"));
                 return null;
             }
 
@@ -2559,18 +2619,58 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * ===== 判据逐条查、**每一条拦下都要说清是哪一条**（用户 2026-09-30 真机报的 bug）=====
+             *
+             * 现场：用户设了"源包放入其余物 + 其余物彻底删除"，链跑完（日志"没有发现可继续解压的内层包"），
+             * 然后**什么都没有**：源包原地不动、其余物没生成、日志里一个字都没说为什么 ——
+             * 老写法在下面那一支直接 `return`（一句注释"什么都不做"），用户只能猜。
+             *
+             * 现在：判据一条一条查出来，拦下时写一行 WARN，点名**是哪一条不成立**；
+             * 其中 L4 那一档由唯一出口 <see cref="ResultCompletenessClassifier"/> 给出
+             * 「哪一层 + 什么原因」（`verdict.Blocker`）。
+             */
+            if (task.Outcome != TaskOutcome.Succeeded)
+            {
+                AppendRemovalBlocked(
+                    task,
+                    $"{StatusText.ChainRestBlockedTaskOutcomeFormat}（机器终态：{task.Outcome}）");
+
+                return;
+            }
+
+            /*
              * ⚠ 2026-09-30（检验等级 L4）：第二条判据从"校验通过"**收紧**成"可证完整"——
              * 唯一出口 <see cref="ResultCompletenessClassifier"/>。老口径把"拿不到清单、
              * 只做了非空底线校验"也算成通过，这一档**没有任何证据**却能走到链尾删其余物。
              * （下游 <see cref="RestItemPurger"/> 还会再挡一次，但**同一件事只许有一个判据**：
              * 这里留一个更弱的版本，等于给下一个人两条互相矛盾的口径。）
              */
-            if (task.Outcome != TaskOutcome.Succeeded ||
-                !ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval ||
-                string.IsNullOrWhiteSpace(task.RestDirectoryPath) ||
-                !Directory.Exists(task.RestDirectoryPath))
+            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(task);
+
+            if (!completeness.AllowsSourceRemoval)
             {
-                // 没成功 / 完整性判不出 / 没有其余物 → 什么都不做（红线：失败一个字节都不删）。
+                // 红线：判不出 / 可证不完整 ⇒ 什么都不做，但**必须写清是哪一条判据拦下的**。
+                AppendRemovalBlocked(task, completeness.Blocker);
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                AppendRemovalBlocked(task, StatusText.ChainRestBlockedNoRestDirectoryFormat);
+
+                return;
+            }
+
+            if (!Directory.Exists(task.RestDirectoryPath))
+            {
+                AppendRemovalBlocked(
+                    task,
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.ChainRestBlockedRestMissingFormat,
+                        task.RestDirectoryPath));
+
                 return;
             }
 
@@ -2604,6 +2704,78 @@ namespace ArchiveFixer.ViewModels
             }
 
             await RunRestHandlingAsync(task, runtime, oneClickRun: false, force: true);
+        }
+
+        /// <summary>
+        /// 链尾"按档处理其余物 / 源包"被某一条判据拦下时的**唯一**一行日志
+        /// （用户 2026-09-30：源包被留下时必须说清是哪一条判据 —— ⛔ 不许静默 return）。
+        ///
+        /// <para>措辞与源包搬运动那几条 WARN 分开：这里说的是"链尾这一档没做"，
+        /// 而 <paramref name="why"/> 里已经带了具体判据（含"哪一层 + 什么原因"）。</para>
+        /// </summary>
+        private void AppendRemovalBlocked(ArchiveTask task, string why)
+        {
+            AppendLog(
+                "WARN",
+                $"{task.FileName}：链尾没有按「删除操作」处理其余物 / 源包 —— {why}；"
+                + "一个字节都没动（失败 / 取消 / 判不出完整性一律不动）。");
+        }
+
+        /// <summary>
+        /// L4（完整性分类）的**那一行证据** —— 全仓唯一一处写它。
+        ///
+        /// <para>为什么要写：这一条结论就是"敢不敢动用户源包"的唯一依据。
+        /// 2026-09-30 的真机日志里，源包被留下了、可**为什么**只有一个笼统的"没有可用的归档清单可核对"，
+        /// 用户根本不知道是哪一层、下一步该做什么。</para>
+        ///
+        /// <list type="bullet">
+        /// <item><description><b>可证完整</b>：只在"这一次真的要按设置动源包"时才写（留在原地档没什么要交代的）。</description></item>
+        /// <item><description><b>判不出 / 可证不完整</b>：**一律写**，而且写的是"为什么没删源包：判据 + 哪一层 + 原因"。</description></item>
+        /// </list>
+        /// </summary>
+        private void AppendCompletenessEvidence(
+            ArchiveTask task,
+            OutputVerificationResult verification,
+            SourceHandlingMode sourceHandling)
+        {
+            ResultCompletenessVerdict verdict = ResultCompletenessClassifier.Classify(
+                verification,
+                task.ManifestExpectation);
+
+            if (verdict.AllowsSourceRemoval)
+            {
+                if (sourceHandling == SourceHandlingMode.KeepInPlace)
+                {
+                    return;
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"{task.FileName}：{verdict.Message}（L3 核对依据：{DescribeManifestBasis(task.ManifestExpectation)}；"
+                    + $"机器结论：{verdict.Evidence}）");
+
+                return;
+            }
+
+            AppendLog(
+                "WARN",
+                $"{task.FileName}：{verdict.Blocker}（机器结论：{verdict.Evidence}）");
+        }
+
+        /// <summary>L3 的预期清单是从哪一层来的（给人看的一句话；取不到时说清是哪一层、为什么）。</summary>
+        private static string DescribeManifestBasis(ManifestExpectation expectation)
+        {
+            return expectation.Source switch
+            {
+                ManifestExpectationSource.LeafLayer =>
+                    $"{expectation.LayerLabel}（产出最终内容物的那一层）的清单 {expectation.Expected!.FileCount} 个文件 / "
+                    + $"{expectation.Expected.TotalUncompressedSize} 字节",
+                ManifestExpectationSource.OuterList =>
+                    $"归档自己的清单 {expectation.Expected!.FileCount} 个文件 / {expectation.Expected.TotalUncompressedSize} 字节",
+                ManifestExpectationSource.QueryArchive =>
+                    $"引擎对这份归档现列出来的清单",
+                _ => expectation.UnavailableReason
+            };
         }
 
         /// <summary>
@@ -2688,7 +2860,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：{rootCompleteness.Message}" +
+                    $"{rootTask.FileName}：{rootCompleteness.Blocker}" +
                     $"（机器结论：{rootCompleteness.Evidence}），链结束后不动源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
@@ -12393,8 +12565,12 @@ namespace ArchiveFixer.ViewModels
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            /*
+             * ⚠ 2026-09-30：与 RunPostProcessWork 同一口径 —— **不把"取不到清单"折成 null**
+             * （null 会把"为什么取不到"一起丢掉；Verify 内部对 null 与 Success=false 的处理逐字相同）。
+             */
             OutputVerificationResult verification = await Task.Run(
-                () => OutputVerifier.Verify(stageDirectory, list.Success ? list : null),
+                () => OutputVerifier.Verify(stageDirectory, list),
                 cancellationToken);
 
             return new StageProductVerification(list, verification);

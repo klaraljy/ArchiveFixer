@@ -918,6 +918,30 @@ namespace ArchiveFixer.Models
             "完整性：无法确认（没有可用的归档清单可核对，只做了「有产物、不是全 0 字节」的底线检查）—— "
             + "按规矩不动源包，解出来的结果照常保留";
 
+        /// <summary>
+        /// 「为什么没删源包」——**唯一**一处拼这句话（<c>ResultCompletenessVerdict.Blocker</c>）。
+        /// {0} = 判据（三态那句结论）。
+        /// </summary>
+        public const string SourceRemovalBlockedFormat = "为什么没删源包：{0}";
+
+        /// <summary>
+        /// 「为什么没删源包」的完整版：多带一句"哪一层 + 什么原因"。
+        /// {0} = 判据，{1} = 取不到清单的那一层与原因（用户能照着做下一步）。
+        ///
+        /// <para>用户 2026-09-30 真机报的 bug 里，日志只有前半句（"没有可用的归档清单可核对"），
+        /// 一个字都没说清是哪一层、为什么 —— 他只能猜。这一句就是为了不再让人猜。</para>
+        /// </summary>
+        public const string SourceRemovalBlockedDetailFormat = "为什么没删源包：{0}；具体判据 —— {1}";
+
+        /// <summary>链尾那一档被"任务没成功"拦下。</summary>
+        public const string ChainRestBlockedTaskOutcomeFormat = "任务没有成功";
+
+        /// <summary>链尾那一档被"没有其余物"拦下（这一单确实没产生过程物、源包也没搬进来）。</summary>
+        public const string ChainRestBlockedNoRestDirectoryFormat = "这一单没有其余物（没有过程物，源包也没被搬进来）";
+
+        /// <summary>链尾那一档被"记下来的其余物目录已经不在了"拦下。{0} = 目录。</summary>
+        public const string ChainRestBlockedRestMissingFormat = "记下来的其余物目录已经不在盘上（{0}）";
+
         // ================================================================
         // 工作区残留（用户 2026-09-24 第 22 条）
         // ================================================================

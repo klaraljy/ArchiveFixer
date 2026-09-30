@@ -100,6 +100,17 @@ namespace ArchiveFixer.Extraction
 
         public long OutputSize { get; init; }
 
+        /// <summary>
+        /// **本层解压前从引擎拿到的清单**（条目数 + 解压后总字节），L3 的预期来源。
+        ///
+        /// <para>为什么必须留在报告里（用户 2026-09-30 真机）：检验等级 L3 要拿"产出最终内容物的那一层"
+        /// 的清单去核对产物，而解压前那次列目录（<see cref="CheckEntriesBeforeExtractAsync"/>）
+        /// 以前只用来做路径预检，`ArchiveListResult` **用完即弃** —— 于是链尾只剩第 0 层的清单，
+        /// 而第 0 层清单对不上叶子层的产物，L4 只能判「判不出」，源包与其余物一个字节都不动。
+        /// 现在每一层各留各的（⛔ 第 0 层的清单只对第 0 层用）。</para>
+        /// </summary>
+        public LayerManifest Manifest { get; init; } = LayerManifest.Unavailable("这一层没有列过清单");
+
         /// <summary>只用 "空密码" 或 "******"；本层没试过密码时为空串。</summary>
         public string UsedPasswordMasked { get; init; } = string.Empty;
     }
@@ -763,6 +774,14 @@ namespace ArchiveFixer.Extraction
             string? succeededPassword = null;
 
             /*
+             * 本层的清单（L3 的预期，见 <see cref="RecursionLayerReport.Manifest"/>）：
+             * `candidateManifest` 是"当前这个候选列出来的清单"，`layerManifest` 只认
+             * **真正解开这一层的那一个候选**的清单（见下面赋值处）。
+             */
+            LayerManifest candidateManifest = LayerManifest.Unavailable("这一层还没有列过清单");
+            LayerManifest layerManifest = LayerManifest.Unavailable("这一层没能列出清单（解压前那次列目录没成功）");
+
+            /*
              * 这一层的最多候选数：**与循环用的同一个上限**（`_limits.MaxPasswordAttemptsPerLayer`）。
              * 先算出来是为了让"候选 i/N"里的 N 与真正会试的个数一致 ——
              * 写成 candidates.Count 会在被上限截断时给出一个永远到不了的 N。
@@ -835,11 +854,21 @@ namespace ArchiveFixer.Extraction
                  * 列不出来（加密头 -mhe、损坏）**不拦** —— 拦下来会让正常包也解不开，
                  * 那道兜底是解压后的落点校验。
                  */
-                string? unsafeSummary = await CheckEntriesBeforeExtractAsync(
-                        item.ArchivePath,
-                        candidate,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                (string? unsafeSummary, ArchiveListResult? listedThisCandidate) =
+                    await CheckEntriesBeforeExtractAsync(
+                            item.ArchivePath,
+                            candidate,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                /*
+                 * 本层的清单（L3 的预期）**只认真正解开的那一个候选**：加密头包用错密码时
+                 * 引擎也可能回一份残缺/空清单，拿它当预期会把"解得好好的"判成不完整。
+                 * 于是每个候选各记一份，等这次解压成功（下面的 `result.Success`）才采信。
+                 */
+                candidateManifest = listedThisCandidate is { Success: true }
+                    ? LayerManifest.From(listedThisCandidate)
+                    : LayerManifest.Unavailable(LayerManifest.DescribeListFailure(listedThisCandidate));
 
                 if (unsafeSummary != null)
                 {
@@ -887,6 +916,9 @@ namespace ArchiveFixer.Extraction
                     succeededPassword = candidate;
                     success = result;
                     lastFailure = null;
+
+                    // 这一层真正解开了 ⇒ 采信"解开它的那个候选"给出的清单（L3 的预期）。
+                    layerManifest = candidateManifest;
 
                     /*
                      * 详细日志档：成功那一次的命令行与原话也写下来 ——
@@ -1067,6 +1099,7 @@ namespace ArchiveFixer.Extraction
                 InnerArchives = innerArchives,
                 OutputFileCount = fileCount,
                 OutputSize = outputSize,
+                Manifest = layerManifest,
                 UsedPasswordMasked = PasswordMasker.Mask(succeededPassword)
             };
 
@@ -1077,8 +1110,16 @@ namespace ArchiveFixer.Extraction
         /// 第一道防线：解压前预检条目名。
         /// 返回 null = 没有发现问题、或者**列不出目录**（加密头 / 损坏，这种情况下不拦）；
         /// 返回非空字符串 = 发现了危险条目，内容是可以直接给用户看的一句话。
+        ///
+        /// <para>回传的第二个元素是这一次列目录的原始结论 —— **同一份清单不许列两遍**：
+        /// 检验等级 L3 要拿本层的清单当预期（见 <see cref="RecursionLayerReport.Manifest"/>），
+        /// 而这里本来就已经问过引擎列了一次，⛔ 不许为了拿预期再列一次（那会多花一次全包扫描）。</para>
         /// </summary>
-        private async Task<string?> CheckEntriesBeforeExtractAsync(
+        /// <returns>
+        /// 第一个元素 = 预检结论（null = 没发现问题 / 列不出目录）；
+        /// 第二个元素 = 这一次的列目录原始结论（列不出来时为 null）。
+        /// </returns>
+        private async Task<(string? UnsafeSummary, ArchiveListResult? Listed)> CheckEntriesBeforeExtractAsync(
             string archivePath,
             string password,
             CancellationToken cancellationToken)
@@ -1094,17 +1135,17 @@ namespace ArchiveFixer.Extraction
             catch
             {
                 // 引擎抛异常时按"列不出来"处理：真正的兜底是解压后的落点校验。
-                return null;
+                return (null, null);
             }
 
             if (!list.Success)
             {
-                return null;
+                return (null, list);
             }
 
             PathSafetyReport report = ArchivePathGuard.CheckEntries(list.Entries);
 
-            return report.IsSafe ? null : report.Summary;
+            return (report.IsSafe ? null : report.Summary, list);
         }
 
         /// <summary>
@@ -1833,6 +1874,9 @@ namespace ArchiveFixer.Extraction
                 InnerArchives = Array.Empty<string>(),
                 OutputFileCount = 0,
                 OutputSize = 0,
+
+                // 失败层没有可信清单（它压根没解开）：L3 不会拿它当预期，原因如实写。
+                Manifest = LayerManifest.Unavailable("这一层没有成功解压，没有可信清单"),
                 UsedPasswordMasked = succeededPassword == null ? string.Empty : PasswordMasker.Mask(succeededPassword)
             };
         }
