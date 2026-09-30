@@ -150,6 +150,15 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>父任务的名字（只用于日志与报告）。</summary>
         public string ParentTaskName { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 这条续解链**根任务的身份**（= 根任务那一刻的规范化绝对路径）。
+        /// <para>为什么必须按路径认链：链尾「删除操作」原先只看"是不是续解任务"，而调用方传进来的是
+        /// **整批**任务清单 —— 于是 A 目录那个包的链尾，被 B 目录里**同名**的另一个包的失败挡住
+        /// （真机 2026-09-30 日志原文：`333-Rar4.part1.rar：链尾的其余物不处理（链上的「111.part1.rar」没有成功）`）。
+        /// 名字相同 ≠ 同一条链。</para>
+        /// </summary>
+        public string RootSourcePath { get; init; } = string.Empty;
     }
 
     /// <summary>
@@ -1398,6 +1407,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         Tasks[i].ParentOutputDirectory = candidate.ParentOutputDirectory;
                         Tasks[i].ParentTaskName = candidate.ParentTaskName;
+                        Tasks[i].RootSourcePath = candidate.RootSourcePath;
 
                         /*
                          * 落点当场写一遍，别等界面刷新：续解下一轮要读 task.OutputPath 找内层包，
@@ -1945,7 +1955,8 @@ namespace ArchiveFixer.ViewModels
                     {
                         Path = file,
                         ParentOutputDirectory = ResolveContinuationOutputDirectory(parent, file, layerName),
-                        ParentTaskName = parentName
+                        ParentTaskName = parentName,
+                        RootSourcePath = parent.ChainRootIdentity
                     };
                 }
             }

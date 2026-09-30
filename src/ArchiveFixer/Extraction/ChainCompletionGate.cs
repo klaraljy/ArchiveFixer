@@ -61,6 +61,7 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<ArchiveTask>? chainTasks)
         {
             var seen = new HashSet<ArchiveTask>();
+            string rootIdentity = rootTask.ChainRootIdentity;
 
             foreach (ArchiveTask? candidate in chainTasks ?? Array.Empty<ArchiveTask>())
             {
@@ -70,6 +71,20 @@ namespace ArchiveFixer.Extraction
                 }
 
                 if (!candidate.IsContinuationTask)
+                {
+                    continue;
+                }
+
+                /*
+                 * 链身份按**路径**认（真机 2026-09-30：另一个目录里同名的包把这条链的链尾挡下了 ——
+                 * 日志原文「333-Rar4.part1.rar：链尾的其余物不处理（链上的「111.part1.rar」没有成功）」）。
+                 *
+                 * ⚠ 只有"带了明确链身份、且与根不同"的才排除；链身份为空（旧路径 / 测试直接构造的任务）
+                 * 一律按**本链成员**处理 —— 宁可多拦一次（不删），也绝不漏掉真链成员：漏掉就是 2026-09-25
+                 * 那次 12 GiB 其余物被删的事故。
+                 */
+                if (!string.IsNullOrWhiteSpace(candidate.RootSourcePath)
+                    && !string.Equals(candidate.RootSourcePath, rootIdentity, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }

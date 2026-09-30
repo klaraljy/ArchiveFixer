@@ -979,6 +979,13 @@ namespace ArchiveFixer.Models
         public string RootSourcePath { get; set; } = string.Empty;
 
         /// <summary>
+        /// 这条续解链的**链身份**（只用于比较）：带明确链身份就用它，否则回落到自己的路径。
+        /// <para>链尾「删除操作」那一档按它判断"这个任务是不是本链成员" —— 判据只能是路径，
+        /// ⛔ 不许用名字（2026-09-30 真机：另一个目录里同名的包把本链的链尾挡下了）。</para>
+        /// </summary>
+        public string ChainRootIdentity => string.IsNullOrWhiteSpace(RootSourcePath) ? CurrentPath : RootSourcePath;
+
+        /// <summary>
         /// 本任务**这一次实际用的「本次选项」**（一键处理面板选的那一组：落点 / 终端落法 / 源包处理），
         /// 一句话形式，由 <c>OneClickRunOptions.Describe()</c> 给出；空 = 这一次没走过一键处理。
         ///
