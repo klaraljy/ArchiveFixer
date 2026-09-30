@@ -716,6 +716,42 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **解前预检要说得对**（用户 2026-09-30 分卷组装算法）：真案 ① 的现场 ——
+        /// <c>111.7z.001</c> + 没有后缀的 <c>111</c> + <c>111.7z.003</c>。
+        ///
+        /// <para>报出来的必须是**缺哪一卷**（<c>111.7z.002</c>）+ 为什么这样判（卷号上有洞，
+        /// 而那个没有卷号的 <c>111</c> 只能算"按体积 + 位置推定"，采信它就得先改用户的名字 ——
+        /// 程序永远不改用户文件名）。而且**一次引擎调用都不许发生**：缺卷不开解（不变量 7）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 缺卷_真案一的现场_解前拦下并点名缺第2卷()
+        {
+            Harness harness = CreateHarness();
+
+            string first = CreateSourceFile("111.7z.001");
+            CreateSourceFile("111");
+            CreateSourceFile("111.7z.003");
+
+            ArchiveTask task = AddTask(harness, first);
+            task.IsVolumeGroup = true;
+            task.IsVolumeComplete = false;
+            task.VolumePaths.Add(first);
+            task.VolumeInfoText = "3 卷，缺 111.7z.002";
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.VolumeMissing, task.Status);
+
+            // 说清缺哪一卷 + 依据（判定器的结论，不再是含糊的"分卷不完整"）。
+            Assert.Contains("111.7z.002", task.ErrorMessage);
+            Assert.Contains("缺第 2 卷", task.ErrorMessage);
+            Assert.Contains("推定", task.ErrorMessage);
+
+            // 解前就拦下：一次都没真的去解压（不变量 7）。
+            Assert.Empty(harness.Engine.ExtractCalls);
+        }
+
+        /// <summary>
         /// 重新归组的判据（纯函数，不碰界面）：把"任务现有各卷 + 用户指定目录里找到的卷"合起来重算，
         /// 补齐了就返回完整的那一组，没补齐就仍然报缺。
         ///
