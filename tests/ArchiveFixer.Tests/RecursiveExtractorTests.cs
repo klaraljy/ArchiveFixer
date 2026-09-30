@@ -620,8 +620,9 @@ namespace ArchiveFixer.Tests
                 if (string.Equals(request.Password, "first", StringComparison.Ordinal))
                 {
                     // 这一次"走得很远"：真的留下了产物，然后才失败（数据校验不过）。
-                    Directory.CreateDirectory(request.OutputPath);
-                    File.WriteAllBytes(Path.Combine(request.OutputPath, "partial.bin"), new byte[4096]);
+                    // 输出路径由本测试自己发请求时给全，`!` 只为消掉 CS8604（`ExtractRequest.OutputPath` 是可空字符串），不改语义。
+                    Directory.CreateDirectory(request.OutputPath!);
+                    File.WriteAllBytes(Path.Combine(request.OutputPath!, "partial.bin"), new byte[4096]);
 
                     return Task.FromResult(new ArchiveOperationResult
                     {
@@ -664,7 +665,8 @@ namespace ArchiveFixer.Tests
 
         [SevenZipFact]
         public async Task 密码_候选还有剩余时报PasswordAttemptsExceeded()
-        {            RequireSevenZip();
+        {
+            RequireSevenZip();
 
             string outer = BuildEncryptedInnerPackage();
 
