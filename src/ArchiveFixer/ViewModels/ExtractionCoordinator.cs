@@ -76,7 +76,15 @@ namespace ArchiveFixer.ViewModels
                 // "这一层要解的那个源文件还是原来那一份吗"。只有第 0 层（用户给的源包）
                 // 会真的比对 —— 第 1 层起解的是工作区里我们自己产出的过程物，
                 // 它们本来就不在快照里（详见 CheckRootSourceUnchangedAsync）。
-                CheckRootSourceUnchangedAsync);
+                CheckRootSourceUnchangedAsync)
+            {
+                /*
+                 * 「续解时省略中间层」这一档同样当场从设置里取（与上限同一个理由：改完不重启也要生效）。
+                 * **首层与末层不受它影响** —— 判据只有一处（PackageLayerRules.ShouldKeepLayerFolder），
+                 * 递归发布侧与续解侧读的是同一个出口。
+                 */
+                OmitMiddlePackageLayers = Settings.OmitMiddleContinuationLayers
+            };
 
         /// <summary>
         /// 递归的硬上限（不变量 8）：层数与每层密码尝试次数都取用户的设置项。
@@ -3120,7 +3128,7 @@ namespace ArchiveFixer.ViewModels
         /// </param>
         /// <param name="innermostPackageBaseName">
         /// **最后一个被展开的内层包**的包基名（没有内层包时传空）。
-        /// 唯一来源 = <see cref="InnermostPackageLayer.ResolveBaseName"/>（读递归结果，不自己数层数）。
+        /// 唯一来源 = <see cref="PackageLayerRules.ResolveBaseName"/>（读递归结果，不自己数层数）。
         /// 它非空 ⇒ 落点最少两层（用户 2026-09-30 红线）：destDir 里面必须还有"最后一个压缩包"那一层。
         /// </param>
         internal static FinalLayoutPlan PlanFinalLayout(
@@ -5070,7 +5078,7 @@ namespace ArchiveFixer.ViewModels
             /*
              * ⛔ 落点最少两层（用户 2026-09-30 真机红线）：**最里层 = 最后一个压缩包那一层**。
              *
-             * 它的名字来源只有一处（`InnermostPackageLayer.ResolveBaseName`，读的就是这一次递归的结果）：
+             * 它的名字来源只有一处（`PackageLayerRules.ResolveBaseName`，读的就是这一次递归的结果）：
              * 递归展开了内层包时非空 ⇒ 定稿那一侧任何分支都不许把最里层吃掉
              * （真机现场 `26081118.7z` → 内层包解出 `T 小小绘 推特大合集 330P+454V-9.31G\P|V`，
              * 定稿却只留 `P`、`V` 直接躺在 `…\26081118\` 下）。
@@ -5079,7 +5087,7 @@ namespace ArchiveFixer.ViewModels
              * ⚠ 它与 `suppressPackageFolderLayer` 是**两件事**：后者只免掉"包名那一层"，
              * 最里层由这里另外钉住 —— 预检与真正的定稿走的是**同一个**方法，不会各判一套。
              */
-            string innermostPackageBaseName = InnermostPackageLayer.ResolveBaseName(recursion?.Layers);
+            string innermostPackageBaseName = PackageLayerRules.ResolveBaseName(recursion?.Layers);
 
             /*
              * "要不要套包名那一层"只有这一个出口（`suppressPackageFolderLayer`），三种成因在这里合并：

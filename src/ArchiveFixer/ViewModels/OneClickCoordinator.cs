@@ -400,37 +400,21 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 续解层"要不要给这一层套一个以包名命名的文件夹"（用户 2026-09-27：**首尾必留，中间看开关**）。
         ///
-        /// <para>规则按优先级三条（先命中先返回）：</para>
-        /// <list type="number">
-        /// <item><description><b>同一个父任务这一轮认出多个内层包</b>（<paramref name="siblingCount"/> &gt; 1）→
-        /// **必须建**：几个包各自一层，否则它们的内容物会倒进同一层里互相撞名。</description></item>
-        /// <item><description><b>父任务自己产出了内容物</b>（<paramref name="parentProducedContent"/>）→
-        /// **不建**：内层包解出来的东西**并进父任务那一层**，与父任务自己的内容物放在同一个目录里。
-        /// ⚠ 这一条是 2026-09-27 真机改的（用户原话："最后的结果应该和上一层文件在同一个目录里面的，
-        /// 但是你直接把他放进去了，这个就非常的危险了"）：真机上 `（T250）经济2\国考资料.txt` 旁边
-        /// 本该就是 `老王宣传\…`，而我们给内层包 `Sociology.7z` 又造了一层 `Sociology\` ——
-        /// 真正的内容被埋到上一层文件下面一层，用户要找两层才看得见。</description></item>
-        /// <item><description>剩下就是"**干净的单链过路层**"（父任务只出了下一个包、没有自己的内容物）：
-        /// 忠实档建（<c>111\222\333\444\555\666\内容物</c> 那条链就是它）、
-        /// 简洁档省掉（<c>111\222\666\内容物</c>）。</description></item>
-        /// </list>
+        /// <para>
+        /// ⚠ 判据**只有一处**：<see cref="PackageLayerRules.ShouldAddInnerPackageLayer"/>。
+        /// 这里只做转发（保留这个方法名是因为既有用例与文档都按它指认这一档规则），
+        /// ⛔ 不许在这里再写第二份规则 —— 递归发布侧读的是同一个出口。
+        /// </para>
         /// </summary>
         internal static bool ShouldAddContinuationLevelLayer(
             bool omitMiddleLayers,
             bool parentProducedContent,
             int siblingCount)
         {
-            if (siblingCount > 1)
-            {
-                return true;
-            }
-
-            if (parentProducedContent)
-            {
-                return false;
-            }
-
-            return !omitMiddleLayers;
+            return PackageLayerRules.ShouldAddInnerPackageLayer(
+                omitMiddleLayers,
+                parentProducedContent,
+                siblingCount);
         }
 
         /// <summary>
@@ -477,24 +461,17 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这一层该叫什么（= 内层包自己的包基名）；**分卷组返回空** —— 过程物名不成层
-        /// （见 <see cref="AppendOwnLayer"/> 第三条）。
+        /// 这一层该叫什么（= 内层包**去掉假后缀的基名**：就地替换留下的那个文件夹名）；
+        /// **分卷组返回空** —— 过程物名不成层。
+        ///
+        /// <para>
+        /// ⚠ 判据**只有一处**：<see cref="PackageLayerRules.ResolveInPlaceLayerName"/>
+        /// （递归发布侧留目录用的是同一个方法），这里只做转发。
+        /// </para>
         /// </summary>
         internal static string ResolveContinuationLayerName(string? innerPackagePath)
         {
-            if (string.IsNullOrWhiteSpace(innerPackagePath))
-            {
-                return string.Empty;
-            }
-
-            string fileName = FileNameHelper.GetFileName(innerPackagePath);
-
-            if (fileName.Length == 0 || FileNameHelper.IsVolumePartFileName(fileName))
-            {
-                return string.Empty;
-            }
-
-            return OutputPlacement.ResolveArchiveBaseName(innerPackagePath);
+            return PackageLayerRules.ResolveInPlaceLayerName(innerPackagePath);
         }
 
         /// <summary>

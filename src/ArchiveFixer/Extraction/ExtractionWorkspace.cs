@@ -33,6 +33,20 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>本层要解的那个归档（第 0 层是任务的 CurrentPath，之后是上一层产物里的内层归档）。</summary>
         public string InputPath { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 这一层到底解开了没有。**就地替换发布**只搬"真的解开了"的层
+        /// （见 <see cref="Publish"/> 的三条边界）：失败的那一层没产出任何东西，
+        /// 把它的包删掉、或者把它的空目录搬出去，都只会让用户唯一的那一份线索消失。
+        ///
+        /// <para>
+        /// 默认 **true**：建出来的层按"会有产物"算，只有递归核心收到引擎的失败结论时才置 false
+        /// （它只在**一处**标记，见 RecursiveExtractor 主循环）。
+        /// 默认 true 也让"手工搭一个工作区直接发布"的调用方（诊断、单测）不必先记得设它 ——
+        /// 那种场合本来就没有"失败层"这回事。
+        /// </para>
+        /// </summary>
+        public bool Successful { get; set; } = true;
     }
 
     /// <summary>
@@ -196,24 +210,31 @@ namespace ArchiveFixer.Extraction
         /// <see cref="MaxWrapperStripDepth"/> 层，且**每层都要重新满足**上述条件才继续摊。
         ///
         /// <para>
-        /// ⛔ <b>这一次递归展开了内层包时不摊</b>（<paramref name="stripLeafWrapper"/> 传 false）：
-        /// 那时叶子层产物里那**一个**文件夹就是"内层包自己产出的内容物那一层"，
-        /// 而它正是用户 2026-09-30 红线里"**最里层**"的那一层 —— 摊掉它，内容物就会
-        /// 直接躺在包名目录下（真机现场 <c>…\26081118\P</c>、<c>…\26081118\V</c>，
-        /// <c>T 小小绘 推特大合集 330P+454V-9.31G</c> 就是在这一步丢的）。
-        /// 重复层由定稿侧的判定表 ④（单链塌缩）负责，工作区不再提前替它拍板。
+        /// ⛔ <b>这一次递归展开了内层包时走"就地替换"那一档</b>（<paramref name="inPlaceInnerPackages"/>
+        /// 传 true，用户 2026-09-30 中午的规则）：被解开的内层包在**它原来的位置**留下一个
+        /// **以它命名的文件夹**（去掉假后缀的基名）放内容物，真文件原地不动 ——
+        /// 形状 <c>AAA\DDDD\内容物</c>、<c>AAA\BBBB\CCCCC\内容物</c>。
+        /// ⛔ 老口径"把所有叶子层产物摊到发布目标根上"（等于把它们都搬到顶层）**只有在这一档之外**
+        /// 才是对的；摊平"无意义外壳"这一档在就地替换里**一层都不做** ——
+        /// 那些文件夹是打包人自己的结构，见 <see cref="PackageLayerRules"/>。
         /// </para>
         ///
         /// <paramref name="targetDirectory"/> 必须由调用方给出**完整目标位置**
-        /// （本方法不会替它再拼一层包名）：递归模式下"叶子层产物"与"统一目标目录"的关系
+        /// （本方法不会替它再拼一层包名）：递归模式下"层产物"与"统一目标目录"的关系
         /// 由调用方决定，工作区不替用户拍板。
         /// </summary>
-        /// <param name="stripLeafWrapper">
-        /// 发布前要不要去掉叶子层自带的那个"无意义外壳"（默认 true = 与加"最少两层"那条红线之前
-        /// 逐字相同）。判据**不在本类**：由调用方从 <see cref="InnermostPackageLayer"/> 那**一个**
-        /// 出口读"这一次展开了内层包没有"，本类只认这一个布尔。
+        /// <param name="inPlaceInnerPackages">
+        /// 这一次递归展开了内层包没有（默认 false = 与加"最少两层 / 就地替换"那两条规则之前**逐字相同**）。
+        /// 判据**不在本类**：由调用方从 <see cref="PackageLayerRules"/> 那**一个**出口读，本类只认这一个布尔。
         /// </param>
-        public WorkspacePublishResult Publish(string targetDirectory, bool stripLeafWrapper = true)
+        /// <param name="omitMiddlePackageLayers">
+        /// 中间层省不省（②页「续解时省略中间层」这一档）。**首层与末层永不受它影响**：
+        /// 首层是发布目标本身，末层由 <see cref="PackageLayerRules.ShouldKeepLayerFolder"/> 无条件保留。
+        /// </param>
+        public WorkspacePublishResult Publish(
+            string targetDirectory,
+            bool inPlaceInnerPackages = false,
+            bool omitMiddlePackageLayers = false)
         {
             if (string.IsNullOrWhiteSpace(targetDirectory))
             {
@@ -267,20 +288,27 @@ namespace ArchiveFixer.Extraction
 
                 int movedCount = 0;
 
-                // 按层号升序搬：同名的"谁先落位"因此是稳定的（先解出来的先落位，后来的改名）。
-                foreach (WorkspaceLayer leaf in leaves)
+                if (inPlaceInnerPackages)
                 {
-                    if (!SafeDirectoryExists(leaf.OutputPath))
+                    movedCount += PublishInPlace(destination, omitMiddlePackageLayers, renamed, errors);
+                }
+                else
+                {
+                    // 按层号升序搬：同名的"谁先落位"因此是稳定的（先解出来的先落位，后来的改名）。
+                    foreach (WorkspaceLayer leaf in leaves)
                     {
-                        errors.Add($"第 {leaf.Depth} 层的产物目录不存在（{leaf.OutputPath}）");
-                        continue;
-                    }
+                        if (!SafeDirectoryExists(leaf.OutputPath))
+                        {
+                            errors.Add($"第 {leaf.Depth} 层的产物目录不存在（{leaf.OutputPath}）");
+                            continue;
+                        }
 
-                    movedCount += MoveContent(
-                        ResolveContentRoot(leaf.OutputPath, stripLeafWrapper),
-                        destination,
-                        renamed,
-                        errors);
+                        movedCount += MoveContent(
+                            ResolveContentRoot(leaf.OutputPath, stripWrapper: true),
+                            destination,
+                            renamed,
+                            errors);
+                    }
                 }
 
                 return new WorkspacePublishResult
@@ -299,7 +327,245 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 删除工作区，并如实回答"删了没有、为什么"。
+        /// **就地替换**那一档的发布（用户 2026-09-30 中午：递归 = 就地替换）。
+        ///
+        /// <para>算法（层号升序，父层一定排在子层前面）：</para>
+        /// <list type="number">
+        /// <item><description>第 0 层：产物**原样**搬进发布目标（不做任何"外壳摊平"——
+        /// 那些文件夹是打包人自己的结构）；</description></item>
+        /// <item><description>之后每一层：它要解的那个包在父层产物里的相对路径是 <c>X\Y\DDDD.mp4</c>，
+        /// 那一层就落在 <c>&lt;父层落点&gt;\X\Y\DDDD\</c> —— **原位置 + 去掉假后缀的基名**；</description></item>
+        /// <item><description>落位之后把那个包文件**从产物里拿掉**：位置让给同名目录
+        /// （用户给的形状 <c>AAA\DDDD\内容物</c> 里没有 <c>DDDD.mp4</c>）。真文件原地不动。</description></item>
+        /// </list>
+        ///
+        /// <para>
+        /// 三条边界（都是"宁可少动"的那一侧）：
+        /// ① <b>失败的层不参与</b> —— 它没产出任何东西，把它的包删掉等于把用户唯一的那一份弄丢；
+        /// ② 父子关系不额外记一份，仍从 <see cref="WorkspaceLayer.InputPath"/> 反推
+        /// （与 <see cref="ResolveLeafLayers"/> 同一个事实来源）；
+        /// ③ "中间层省不省 / 末层永不可省"全部读 <see cref="PackageLayerRules"/> 那一个出口，
+        /// 本方法不自己判。
+        /// </para>
+        /// </summary>
+        private int PublishInPlace(
+            string destination,
+            bool omitMiddlePackageLayers,
+            List<string> renamed,
+            List<string> errors)
+        {
+            List<WorkspaceLayer> successful = _layers
+                .Where(layer => layer.Successful)
+                .OrderBy(layer => layer.Depth)
+                .ToList();
+
+            // 每一层下面挂着哪几个**真的解开了**的内层包（兄弟数 / "还有没有下一层"都从这里来）。
+            var childrenOf = new Dictionary<WorkspaceLayer, List<WorkspaceLayer>>();
+            var parentOf = new Dictionary<WorkspaceLayer, WorkspaceLayer?>();
+
+            /*
+             * ⛔ "该不该给这一层留一个包名目录"必须**在任何一次移动之前**全部算完。
+             *
+             * 判据里有一条是"父层除了交给下一层的那个包，还有没有别的东西"
+             * （<see cref="PackageLayerRules.ProducedOwnContent"/>），读的是**父层产物目录**；
+             * 而移动是**按层号升序**做的 —— 等到处理第 N 层时，第 N-1 层的产物目录已经被搬空、
+             * 甚至被顺手删掉了（MoveContent 末尾那条 TryDeleteDirectoryIfEmpty）。
+             * 那时再去读只会读到"目录不存在"（保守口径按"出了内容物"算），
+             * 于是每一层都被判成"不该留目录" —— 五层链会被压成一层。
+             */
+            var keepFolderOf = new Dictionary<WorkspaceLayer, bool>();
+
+            foreach (WorkspaceLayer layer in successful)
+            {
+                WorkspaceLayer? parent = layer.Depth == 0 ? null : ResolveParentLayer(layer, successful);
+
+                parentOf[layer] = parent;
+
+                if (parent == null)
+                {
+                    continue;
+                }
+
+                if (!childrenOf.TryGetValue(parent, out List<WorkspaceLayer>? children))
+                {
+                    children = new List<WorkspaceLayer>();
+                    childrenOf[parent] = children;
+                }
+
+                children.Add(layer);
+            }
+
+            foreach (WorkspaceLayer layer in successful)
+            {
+                WorkspaceLayer? parent = parentOf[layer];
+
+                if (parent == null)
+                {
+                    continue;
+                }
+
+                int siblingCount = childrenOf.TryGetValue(parent, out List<WorkspaceLayer>? siblings)
+                    ? siblings.Count
+                    : 0;
+
+                bool parentProducedContent = PackageLayerRules.ProducedOwnContent(parent.OutputPath, siblingCount);
+
+                keepFolderOf[layer] = PackageLayerRules.ShouldKeepLayerFolder(
+                    omitMiddlePackageLayers,
+                    parentProducedContent,
+                    siblingCount,
+                    hasChildLayer: childrenOf.ContainsKey(layer));
+            }
+
+            var destinationOf = new Dictionary<WorkspaceLayer, string>();
+            int movedCount = 0;
+
+            foreach (WorkspaceLayer layer in successful)
+            {
+                if (!SafeDirectoryExists(layer.OutputPath))
+                {
+                    errors.Add($"第 {layer.Depth} 层的产物目录不存在（{layer.OutputPath}）");
+                    continue;
+                }
+
+                WorkspaceLayer? parent = parentOf[layer];
+
+                if (parent == null)
+                {
+                    if (layer.Depth != 0)
+                    {
+                        // 找不到父层说明这一层的输入不在任何一层的产物里（不该发生）：不猜落点。
+                        errors.Add($"第 {layer.Depth} 层的输入（{layer.InputPath}）不在任何一层的产物里，已跳过");
+                        continue;
+                    }
+
+                    destinationOf[layer] = destination;
+
+                    movedCount += MoveContent(
+                        ResolveContentRoot(layer.OutputPath, stripWrapper: false),
+                        destination,
+                        renamed,
+                        errors);
+
+                    continue;
+                }
+
+                string relArchive = RelativeUnder(parent.OutputPath, layer.InputPath);
+                string relDirectory = Path.GetDirectoryName(relArchive) ?? string.Empty;
+                string baseDirectory = relDirectory.Length == 0
+                    ? destinationOf[parent]
+                    : SafePathHelper.Combine(destinationOf[parent], relDirectory);
+
+                string layerName = keepFolderOf[layer]
+                    ? PackageLayerRules.ResolveInPlaceLayerName(layer.InputPath)
+                    : string.Empty;
+
+                string layerDirectory = layerName.Length == 0
+                    ? baseDirectory
+                    : SafePathHelper.Combine(baseDirectory, layerName);
+
+                /*
+                 * 先把包文件从产物里拿掉，再把这一层的内容搬进同名目录 ——
+                 * 反过来的话同名目录会和那个文件抢同一个路径（Windows 上必然失败）。
+                 *
+                 * ⚠ 路径从**父层的落点**拼（`destinationOf[parent] + relArchive`），
+                 * 不是从 `baseDirectory`（那个已经把 `relDirectory` 算进去了，再拼一次 relArchive
+                 * 会得到 `…\BBBB\BBBB\CCCCC.mp4` 这种不存在的路径，于是包永远删不掉）。
+                 */
+                TryDeleteConsumedPackage(SafePathHelper.Combine(destinationOf[parent], relArchive), errors);
+
+                destinationOf[layer] = layerDirectory;
+
+                movedCount += MoveContent(
+                    ResolveContentRoot(layer.OutputPath, stripWrapper: false),
+                    layerDirectory,
+                    renamed,
+                    errors);
+            }
+
+            return movedCount;
+        }
+
+        /// <summary>
+        /// 这一层的输入归档是从哪一层的产物里解出来的：取"产物目录是它的祖先"的那一层里**层号最大**的
+        /// （层号升序建层，所以直接倒着找第一个命中的就是父层）。
+        /// 找不到返回 null（第 0 层、或路径关系不成立）。
+        /// </summary>
+        private static WorkspaceLayer? ResolveParentLayer(
+            WorkspaceLayer layer,
+            IReadOnlyList<WorkspaceLayer> candidates)
+        {
+            for (int i = candidates.Count - 1; i >= 0; i--)
+            {
+                WorkspaceLayer candidate = candidates[i];
+
+                if (candidate.Depth >= layer.Depth)
+                {
+                    continue;
+                }
+
+                if (IsSameOrChildPath(layer.InputPath, candidate.OutputPath))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary><paramref name="childPath"/> 在 <paramref name="parentDirectory"/> 之下的相对路径。</summary>
+        private static string RelativeUnder(string? parentDirectory, string? childPath)
+        {
+            string fullParent = NormalizeForCompare(parentDirectory);
+            string fullChild = NormalizeForCompare(childPath);
+
+            if (fullParent.Length == 0
+                || fullChild.Length == 0
+                || !fullChild.StartsWith(fullParent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            return fullChild[(fullParent.Length + 1)..];
+        }
+
+        /// <summary>
+        /// 把**已经被解开**的那个包文件从产物里删掉（它的位置让给同名目录）。
+        ///
+        /// <para>
+        /// 只在它确实位于发布目标之下时才删（越界一律不碰，只记一条）—— 这是不可逆操作，
+        /// 兜底必须落在"什么都不做"那一档。删不掉也不影响已经落位的内容物，只记进 Message。
+        /// </para>
+        /// </summary>
+        private static void TryDeleteConsumedPackage(string publishedArchivePath, List<string> errors)
+        {
+            if (string.IsNullOrWhiteSpace(publishedArchivePath))
+            {
+                return;
+            }
+
+            try
+            {
+                if (Directory.Exists(publishedArchivePath))
+                {
+                    // 已经被同名目录占着：说明这一层的东西早就落在那儿了，什么都不用做。
+                    return;
+                }
+
+                if (!File.Exists(publishedArchivePath))
+                {
+                    return;
+                }
+
+                File.Delete(publishedArchivePath);
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{Path.GetFileName(publishedArchivePath)}（已解开，但原文件没能删掉：{ex.Message}）");
+            }
+        }
+
+        /// <summary>
         ///
         /// 只在调用方**确认后**调用（AGENTS.md §6 第 13 条：清工作区必须先经用户确认）。
         /// 对"本次任务自己造出来的中间产物"来说，那个确认点就是"任务已成功、产物已经发布出去"；

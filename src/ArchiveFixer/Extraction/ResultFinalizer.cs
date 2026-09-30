@@ -249,7 +249,7 @@ namespace ArchiveFixer.Extraction
         /// <param name="innermostPackageBaseName">
         /// **最后一个被展开的内层包**的包基名（递归链里最后一个真的解开了的内层包；
         /// 没有内层包 —— 也就是只解了一层 —— 时传空）。唯一来源见
-        /// <see cref="InnermostPackageLayer.ResolveBaseName"/>。
+        /// <see cref="PackageLayerRules.ResolveBaseName"/>。
         ///
         /// <para>
         /// ⛔ 用户 2026-09-30 真机红线：**落点最少两层文件夹**。最外层 = 以源包（任务）包名命名的
@@ -296,7 +296,7 @@ namespace ArchiveFixer.Extraction
              * 任何分支（①单文件直放 / ②不套包名层 / ③提上来 / ④单链塌缩）都不许吃掉它。
              * 空 ⇒ 只解了一层（没有内层包）⇒ 一切照旧，与加这条红线之前逐字相同。
              *
-             * 判据本身就是"最后一个内层包的包基名"这一个字符串（唯一来源见 InnermostPackageLayer），
+             * 判据本身就是"最后一个内层包的包基名"这一个字符串（唯一来源见 PackageLayerRules），
              * 不另开第二个布尔 —— 两处各存一份必然漂移。
              */
             bool hasInnermostPackage = !string.IsNullOrWhiteSpace(innermostPackageBaseName);
@@ -398,6 +398,22 @@ namespace ArchiveFixer.Extraction
                     ? shape.Chain[0]
                     : shape.Chain[^1];
 
+            /*
+             * ⛔ **就地替换那一层已经在暂存树里了**（用户 2026-09-30 中午）：
+             * 工作区发布已经把每个被解开的内层包就地换成了 `<去掉假后缀的基名>\`，
+             * 于是暂存树的内容物根上**一定至少有一个目录**（那一个就是末层）。
+             *
+             * 这时定稿**不许再套一层**：内容物根底下那些条目（真文件 + 各个内层包的目录）
+             * 原样搬进 destDir 就是用户要的形状（极端例子 `AAA\{1.mp4, DDDD\, EEEE\, BBBB\CCCCC\, …}`）。
+             * 老口径拿"最后一个内层包的包基名"再套一层，会把 `DDDD\`、`BBBB\` 这些**整个塞进**
+             * 一个凭空多出来的目录里 —— 那不是"省层"，而是"多一层"。
+             *
+             * 只有内容物根上**一个目录都没有**（调用方给的暂存树里根本没有就地替换那一层：
+             * 单层路径、直读路径、以及手工喂树的单元测试）时才退回"按内层包包基名建一层"。
+             */
+            bool inPlaceLayerAlreadyInTree = hasInnermostPackage
+                && (shape.Chain.Count > 0 || shape.Items.Any(node => node.IsDirectory));
+
             string safeArchiveBaseName = FileNameHelper.SanitizeFileName(archiveBaseName ?? string.Empty);
             bool hasArchiveName = !string.IsNullOrWhiteSpace(archiveBaseName);
             string safeInnermostPackageBaseName = FileNameHelper.SanitizeFileName(innermostPackageBaseName ?? string.Empty);
@@ -412,7 +428,8 @@ namespace ArchiveFixer.Extraction
                 warnings,
                 suppressPackageFolderLayer,
                 hasInnermostPackage,
-                safeInnermostPackageBaseName);
+                safeInnermostPackageBaseName,
+                inPlaceLayerAlreadyInTree);
 
             /*
              * ── 特定解压例外档（规格 §3.5，用户 2026-09-24 拍板）────────────────────────
@@ -472,6 +489,10 @@ namespace ArchiveFixer.Extraction
              * 用户原话："最外一层和最里面一层的文件夹都不能省"。所以在这里统一补回来 ——
              * 判据只有这一处，⛔ 不在每个分支里各补一遍（那样迟早漏一个）。
              *
+             * ⚠ 例外只有一条：**就地替换那一层已经在暂存树里、而且内容物根上不是一条链**
+             * （多分支 / 真文件与包目录并排）时，"不套层"本身就是正确落法 ——
+             * 那一层就在要搬的那些条目里面，不属于"被吃掉"。判据与 ResolveWrapperName 同一处口径。
+             *
              * 特定解压例外档被这一条盖住时**绝不静默**：如实降成"这一次没生效"并写清原因，
              * 日志与结论也不会再报"规则已生效"（SpecialExtractionApplied 保持 false）。
              */
@@ -481,7 +502,15 @@ namespace ArchiveFixer.Extraction
                     or FinalizeLayoutKind.ProcessArtifactsOnly
                     or FinalizeLayoutKind.Failed))
             {
-                wrapperName = ResolveInnermostLayerName(wrapperChainNode, safeInnermostPackageBaseName);
+                string? restored = ResolveInnermostLayerName(
+                    wrapperChainNode,
+                    safeInnermostPackageBaseName,
+                    inPlaceLayerAlreadyInTree);
+
+                if (restored != null)
+                {
+                    wrapperName = restored;
+                }
 
                 if (specialCollapse)
                 {
@@ -490,7 +519,9 @@ namespace ArchiveFixer.Extraction
                     warnings.Add(
                         "特定解压规则这一次没有生效：包里还有内层包（" + safeInnermostPackageBaseName
                         + "），落点最少两层 —— 最里层是「最后一个压缩包」那一层，不许被吃掉。"
-                        + "内容物落进 " + SafePathHelper.Combine(destDir, wrapperName));
+                        + "内容物落进 " + (wrapperName == null
+                            ? destDir
+                            : SafePathHelper.Combine(destDir, wrapperName)));
                 }
             }
 
@@ -739,17 +770,28 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * ① 终端只有单个文件 → 直接放 destDir 下。
+             * ⛔ **普通文件夹不许摊平**（用户 2026-09-30 中午，红检点之一）。
              *
-             * ⚠ 只有"没有内层包"时才允许直放：展开了内层包 ⇒ 最里层必须存在（用户 2026-09-30 红线），
-             * 单个文件也得待在那个包自己的那一层里面（"任何分支都不许省"）。
-             * 落法仍然是判定表 ② 的"在 destDir 下套一层"，只是那一层的名字由内层包决定。
+             * 用户原话："如果是一个文件夹 1111 里面包裹真正的内容物，这个时候你就会把 1111 省略，
+             * 这是非常大忌。1111 只是一个文件夹名字，我们不能去假设原打包人的逻辑。"
+             *
+             * 判据是**事实**：这一次递归展开了内层包（就地替换那一层已经在暂存树里）⇒ 树上的每一层
+             * 都有出处，"这一层只有一个子文件夹"**不再是**去掉它的理由 ⇒ 判定表 ③（提上来）
+             * 与 ④（单链塌缩）两条**一个都不参与**，整棵结构原样保留。
+             *
+             * 只解了一层（没有内层包）时照旧走 ③/④：那一份口径有很多既有用例钉着，一个字都不改。
+             */
+            if (hasInnermostPackage)
+            {
+                return FinalizeLayoutKind.WrapInFolder;
+            }
+
+            /*
+             * ① 终端只有单个文件 → 直接放 destDir 下。
              */
             if (shape.IsSingleFile)
             {
-                return hasInnermostPackage
-                    ? FinalizeLayoutKind.WrapInFolder
-                    : FinalizeLayoutKind.SingleFileToDestination;
+                return FinalizeLayoutKind.SingleFileToDestination;
             }
 
             // ③ 路上跳过了纯空壳目录 → 提上来的是"最后那个有意义的文件夹"。
@@ -779,24 +821,34 @@ namespace ArchiveFixer.Extraction
         /// <c>T 小小绘 推特大合集 330P+454V-9.31G\P|V</c> 里两者正好同一个，看不出区别；
         /// 可包内如果是 <c>T …\P\a.jpg</c> 这种单文件夹链，取最深那个就会把 <c>P</c>
         /// （**归档内部子文件夹**）直接放到包名目录下 —— 那正是用户点名不许出现的形状。</description></item>
-        /// <item><description>连一个文件夹都没有 → 用内层包自己的包基名建一层。
+        /// <item><description>连一个文件夹都没有、而**就地替换那一层已经在暂存树里**时 → 返回 null
+        /// （不套层）：内容物根底下那些条目（真文件 + 各个内层包的目录）原样搬进 <c>destDir</c>
+        /// 就是用户要的形状；再套一层反而会把它们整个塞进一个凭空多出来的目录里。</description></item>
+        /// <item><description>其余（暂存树里根本没有就地替换那一层：单层路径 / 直读路径 / 手工喂树的用例）
+        /// → 用内层包自己的包基名建一层。
         /// ⚠ 它与 <c>destDir</c> 最后一段同名（内层包与源包同名）时**照建**：
         /// 用户宁可多一层，也不要内容物摊平。</description></item>
         /// </list>
         /// </summary>
-        private static string ResolveInnermostLayerName(Node? wrapperChainNode, string safeInnermostPackageBaseName)
+        private static string? ResolveInnermostLayerName(
+            Node? wrapperChainNode,
+            string safeInnermostPackageBaseName,
+            bool inPlaceLayerAlreadyInTree)
         {
-            return wrapperChainNode != null
-                ? SafeName(wrapperChainNode.Name)
-                : safeInnermostPackageBaseName;
+            if (wrapperChainNode != null)
+            {
+                return SafeName(wrapperChainNode.Name);
+            }
+
+            return inPlaceLayerAlreadyInTree ? null : safeInnermostPackageBaseName;
         }
 
         /// <summary>
         /// 决定"套出来的那一层"叫什么；返回 null 表示**不套层**（内容直接落 <c>destDir</c>）。
         ///
         /// <para>
-        /// ⚠ "不套层"只剩**没有内层包**（只解了一层）时才可能发生：展开了内层包时，
-        /// <see cref="Plan"/> 末尾那道闸门会把最里层补回来（判据只有那一处）。
+        /// ⚠ "不套层"只剩两种情形：**没有内层包**（只解了一层），或者**就地替换那一层已经在暂存树里、
+        /// 而且内容物根上不是一条链**（多分支 / 真文件与包目录并排）。
         /// </para>
         /// </summary>
         /// <param name="suppressPackageFolderLayer">
@@ -807,6 +859,9 @@ namespace ArchiveFixer.Extraction
         /// 漏传就等于把红线关掉，⛔ 不许靠"忘了传"来绕过它。
         /// </param>
         /// <param name="safeInnermostPackageBaseName">内层包包基名（已清洗）；<paramref name="hasInnermostPackage"/> 为真时的取名依据。</param>
+        /// <param name="inPlaceLayerAlreadyInTree">
+        /// 暂存树的内容物根上**已经**有就地替换留下的那个 <c>&lt;包基名&gt;\</c>（见 <see cref="Plan"/>）。
+        /// </param>
         private static string? ResolveWrapperName(
             FinalizeLayoutKind kind,
             TerminalLayoutMode terminalLayout,
@@ -817,7 +872,8 @@ namespace ArchiveFixer.Extraction
             List<string> warnings,
             bool suppressPackageFolderLayer,
             bool hasInnermostPackage,
-            string safeInnermostPackageBaseName)
+            string safeInnermostPackageBaseName,
+            bool inPlaceLayerAlreadyInTree)
         {
             if (kind is FinalizeLayoutKind.SingleFileToDestination
                 or FinalizeLayoutKind.Empty
@@ -828,13 +884,17 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * ⛔ 展开了内层包 ⇒ **最里层必须存在**（用户 2026-09-30 红线）：
-             * 这一支直接给出那一层，下面那两条"省一层"的老分支（不套包名层 / 套层名与落点末段同名）
-             * 一个都不参与 —— 用户宁可多一层，也不要内容物摊平在包名目录下。
+             * ⛔ 展开了内层包（用户 2026-09-30 红线）：这一支直接给出那一层，下面那两条"省一层"的老分支
+             * （不套包名层 / 套层名与落点末段同名）一个都不参与 —— 用户宁可多一层，也不要内容物摊平在
+             * 包名目录下。链上有节点就用它；就地替换那一层已经在树里、又不是链时**不套层**
+             * （那些条目本身就是"真文件 + 各自包名的目录"，正是用户要的形状）。
              */
             if (hasInnermostPackage)
             {
-                return ResolveInnermostLayerName(wrapperChainNode, safeInnermostPackageBaseName);
+                return ResolveInnermostLayerName(
+                    wrapperChainNode,
+                    safeInnermostPackageBaseName,
+                    inPlaceLayerAlreadyInTree);
             }
 
             /*

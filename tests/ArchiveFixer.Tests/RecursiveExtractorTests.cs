@@ -191,9 +191,14 @@ namespace ArchiveFixer.Tests
             Assert.True(result.Completed, result.Summary);
             Assert.True(result.Layers.Count >= 2, $"应至少解出 2 层，实际 {result.Layers.Count}；{result.Summary}");
 
-            // 最内层的文件必须出现在最终目录里，而且中间层不该再套着 inner.7z。
-            Assert.True(File.Exists(Path.Combine(output, "data.txt")), result.Summary);
+            // 最内层的文件必须出现在最终目录里，而且在**内层包自己那一层**里面
+            // （用户 2026-09-30 中午：就地替换 —— 被解开的包在原位置留下一个以它命名的文件夹）；
+            // 中间层那个 inner.7z 本身不该再留在产物里。
+            Assert.True(File.Exists(Path.Combine(output, "inner", "data.txt")), result.Summary);
             Assert.False(File.Exists(Path.Combine(output, "inner.7z")), "内层归档已被展开，不该再出现在最终产物里");
+
+            // 外层自己的文件原地不动。
+            Assert.True(File.Exists(Path.Combine(output, "说明.txt")), result.Summary);
 
             Assert.Equal(new[] { 0, 1 }, result.Layers.Select(layer => layer.Depth).ToList());
 
@@ -286,8 +291,13 @@ namespace ArchiveFixer.Tests
             Assert.Null(result.Decision);
             Assert.True(result.Layers.Count >= 3, $"外层 + 两个分支至少 3 层，实际 {result.Layers.Count}");
 
-            Assert.True(File.Exists(Path.Combine(output, "a.txt")), result.Summary);
-            Assert.True(File.Exists(Path.Combine(output, "b.txt")), result.Summary);
+            // 每个分支**各自一层自己的包名**（用户 2026-09-30 中午的就地替换：
+            // `a.7z` 在原位置留下 `a\`、`b.7z` 留下 `b\`，⛔ 不许"多个分支共用一个名字"）。
+            Assert.True(File.Exists(Path.Combine(output, "a", "a.txt")), result.Summary);
+            Assert.True(File.Exists(Path.Combine(output, "b", "b.txt")), result.Summary);
+
+            // 外层的说明文件原地不动。
+            Assert.True(File.Exists(Path.Combine(output, "note.txt")), result.Summary);
         }
 
         [SevenZipFact]
@@ -321,9 +331,9 @@ namespace ArchiveFixer.Tests
             Assert.Equal(RecursionStopReason.Completed, second.StopReason);
             Assert.True(second.Layers.Count >= 3, $"两个分支都该被解开，实际层数 {second.Layers.Count}");
 
-            // 两个分支的产物都要落到最终目录。
-            Assert.True(File.Exists(Path.Combine(output, "a.txt")), second.Summary);
-            Assert.True(File.Exists(Path.Combine(output, "b.txt")), second.Summary);
+            // 两个分支的产物都要落到最终目录（各自一层自己的包名）。
+            Assert.True(File.Exists(Path.Combine(output, "a", "a.txt")), second.Summary);
+            Assert.True(File.Exists(Path.Combine(output, "b", "b.txt")), second.Summary);
         }
 
         [SevenZipFact]
@@ -372,11 +382,12 @@ namespace ArchiveFixer.Tests
             Assert.True(result.Completed, result.Summary);
             Assert.Null(result.Decision);
 
-            // 被点名的那一个分支的产物必须解出来（a.7z → a.txt）。
-            Assert.True(File.Exists(Path.Combine(output, "a.txt")), result.Summary);
+            // 被点名的那一个分支的产物必须解出来（a.7z → 原位置 `a\` 里 → a.txt）。
+            Assert.True(File.Exists(Path.Combine(output, "a", "a.txt")), result.Summary);
 
             // 没被点名的分支不能出现在最终产物里。
-            Assert.False(File.Exists(Path.Combine(output, "b.txt")), "未被点名的分支不该被展开");
+            Assert.False(File.Exists(Path.Combine(output, "b", "b.txt")), "未被点名的分支不该被展开");
+            Assert.False(Directory.Exists(Path.Combine(output, "b")), "未被点名的分支不该有自己那一层");
         }
 
         [SevenZipFact]
@@ -552,7 +563,9 @@ namespace ArchiveFixer.Tests
                 CancellationToken.None);
 
             Assert.True(result.Completed, result.Summary);
-            Assert.True(File.Exists(Path.Combine(output, "secret.txt")), result.Summary);
+
+            // 内层包 `secret.7z` 在原位置留下 `secret\`（就地替换），内容物放进去。
+            Assert.True(File.Exists(Path.Combine(output, "secret", "secret.txt")), result.Summary);
 
             // 内层那一层的密码标记只能是脱敏值，且任何报告字段都不能出现明文（规则 9）。
             RecursionLayerReport innerLayer = result.Layers.Single(layer => layer.Depth == 1);
@@ -879,17 +892,21 @@ namespace ArchiveFixer.Tests
             Assert.True(result.Completed, result.Summary);
             Assert.Equal(2, result.Layers.Count);
 
-            // `T 内层包产出` 那一层必须还在（它就是"最里层"），P 待在它里面。
+            // `T 内层包产出` 那一层必须还在（它是内层包自己产出的结构），P 待在它里面；
+            // 而它外面还套着**内层包自己那一层**（`inner.7z` → `inner\`，用户 2026-09-30 的就地替换）。
             Assert.True(
-                File.Exists(Path.Combine(output, "T 内层包产出", "P", "a.jpg")),
+                File.Exists(Path.Combine(output, "inner", "T 内层包产出", "P", "a.jpg")),
                 "内层包自己产出的那层文件夹被摊掉了。实际目录树："
                 + string.Join(" | ", Directory.GetFileSystemEntries(output, "*", SearchOption.AllDirectories))
                 + $"\n结论：{result.Summary}");
 
-            // ⛔ 老形状（P 直接躺在发布目标根上）不许再出现。
+            // ⛔ 老形状（P 直接躺在发布目标根上，或者 `T 内层包产出` 直接躺在发布目标根上）不许再出现。
             Assert.False(
                 Directory.Exists(Path.Combine(output, "P")),
                 "P 不许被摊到发布目标根上（那正是真机上 …\\26081118\\P 的形状）");
+            Assert.False(
+                Directory.Exists(Path.Combine(output, "T 内层包产出")),
+                "内层包自己那一层（`inner\\`）不许被摊掉");
         }
 
         // ─────────────────── 工作区清理（成功后不留 data\work\recursive 垃圾） ───────────────────
@@ -1218,8 +1235,8 @@ namespace ArchiveFixer.Tests
                 CancellationToken.None);
 
             Assert.True(second.Completed, second.Summary);
-            Assert.True(File.Exists(Path.Combine(output, "a.txt")), second.Summary);
-            Assert.True(File.Exists(Path.Combine(output, "b.txt")), second.Summary);
+            Assert.True(File.Exists(Path.Combine(output, "a", "a.txt")), second.Summary);
+            Assert.True(File.Exists(Path.Combine(output, "b", "b.txt")), second.Summary);
 
             Assert.False(
                 Directory.Exists(Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory),

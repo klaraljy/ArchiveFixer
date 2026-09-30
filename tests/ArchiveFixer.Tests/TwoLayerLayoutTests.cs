@@ -27,7 +27,7 @@ namespace ArchiveFixer.Tests
     /// </list>
     ///
     /// <para>
-    /// 判据只有一处：<see cref="InnermostPackageLayer"/> 算"最后一个被展开的内层包"，
+    /// 判据只有一处：<see cref="PackageLayerRules"/> 算"最后一个被展开的内层包"，
     /// 定稿侧用它决定最里层叫什么、发布侧用它决定要不要保留叶子层自带的那个文件夹。
     /// ⛔ **没有内层包（只解了一层）时行为逐字不变** —— 那一份口径有很多既有用例钉着。
     /// </para>
@@ -83,13 +83,13 @@ namespace ArchiveFixer.Tests
             // 第 0 层 = 任务自己那个包：没有内层包 ⇒ 最里层无从谈起，两处消费方都按老口径走。
             var onlyRoot = new[] { Layer(@"C:\in\26081118.7z") };
 
-            Assert.False(InnermostPackageLayer.ExpandedInnerPackage(onlyRoot));
-            Assert.Equal(string.Empty, InnermostPackageLayer.ResolveBaseName(onlyRoot));
-            Assert.Equal(string.Empty, InnermostPackageLayer.ResolveArchivePath(onlyRoot));
+            Assert.False(PackageLayerRules.ExpandedInnerPackage(onlyRoot));
+            Assert.Equal(string.Empty, PackageLayerRules.ResolveBaseName(onlyRoot));
+            Assert.Equal(string.Empty, PackageLayerRules.ResolveArchivePath(onlyRoot));
 
             // 传 null / 空列表同样判"没有内层包"（单层路径、直读路径都会传 null）。
-            Assert.False(InnermostPackageLayer.ExpandedInnerPackage(null));
-            Assert.Equal(string.Empty, InnermostPackageLayer.ResolveBaseName(Array.Empty<RecursionLayerReport>()));
+            Assert.False(PackageLayerRules.ExpandedInnerPackage(null));
+            Assert.Equal(string.Empty, PackageLayerRules.ResolveBaseName(Array.Empty<RecursionLayerReport>()));
         }
 
         [Fact]
@@ -104,16 +104,16 @@ namespace ArchiveFixer.Tests
                 Layer(@"C:\work\1\out\坏包.7z", success: false, depth: 2)
             };
 
-            Assert.True(InnermostPackageLayer.ExpandedInnerPackage(layers));
-            Assert.Equal(@"C:\work\1\out\小小绘 推特大合集.7z", InnermostPackageLayer.ResolveArchivePath(layers));
+            Assert.True(PackageLayerRules.ExpandedInnerPackage(layers));
+            Assert.Equal(@"C:\work\1\out\小小绘 推特大合集.7z", PackageLayerRules.ResolveArchivePath(layers));
 
             // 名字走**唯一**那一个包名取法（OutputPlacement.ResolveArchiveBaseName）：去掉所有后缀。
-            Assert.Equal("小小绘 推特大合集", InnermostPackageLayer.ResolveBaseName(layers));
+            Assert.Equal("小小绘 推特大合集", PackageLayerRules.ResolveBaseName(layers));
 
             // 分卷组取整组基名（复用既有实现，不另写一份取名字规则）。
             Assert.Equal(
                 "222",
-                InnermostPackageLayer.ResolveBaseName(new[]
+                PackageLayerRules.ResolveBaseName(new[]
                 {
                     Layer(@"C:\work\1\out\outer.7z", depth: 0),
                     Layer(@"C:\work\1\out\222.7z.001", depth: 1)
@@ -182,15 +182,20 @@ namespace ArchiveFixer.Tests
         public void 定稿_内层包名与源包包名相同_仍然两层()
         {
             // 内层包 `26081118.7z` 的内容直接摊在它自己的根上（没有自带文件夹）：
-            // 那一层只能拿内层包的包基名来建 —— 与 destDir 末段同名也**照建**
+            // 就地替换留下的那一层名字**只能**取内层包的包基名 —— 与 destDir 末段同名也**照建**
             // （用户宁可多一层，也不要内容物摊平）。
+            //
+            // ⚠ 暂存树按**就地替换之后**的真实形状给（用户 2026-09-30 中午）：
+            // 工作区发布已经在原位置留下了 `<包基名>\`，所以这里是 `out\26081118\{P,V}`
+            // 而不是"内容直接摊在 out 上"。
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[]
                 {
-                    Dir(@"out\P"),
-                    File(@"out\P\a.jpg"),
-                    Dir(@"out\V"),
-                    File(@"out\V\b.mp4")
+                    Dir(@"out\26081118"),
+                    Dir(@"out\26081118\P"),
+                    File(@"out\26081118\P\a.jpg"),
+                    Dir(@"out\26081118\V"),
+                    File(@"out\26081118\V\b.mp4")
                 },
                 SourcePackageDir,
                 TerminalLayoutMode.KeepLastFolder,
@@ -202,10 +207,13 @@ namespace ArchiveFixer.Tests
             Assert.Equal(FinalizeLayoutKind.WrapInFolder, plan.Layout);
             Assert.Equal("26081118", plan.ContentDirectoryName);
             Assert.Equal(SourcePackageDir + @"\26081118", plan.ContentParentDirectory);
-            Assert.Equal(SourcePackageDir + @"\26081118\P", plan.Moves[0].To);
-            Assert.Equal(SourcePackageDir + @"\26081118\V", plan.Moves[1].To);
 
-            // 两层：源包包名目录 + 最里层。
+            // 整棵 `26081118` 子树一次搬走（P、V 原样待在它里面）。
+            Assert.Single(plan.Moves);
+            Assert.Equal(Staging + @"\out\26081118", plan.Moves[0].From);
+            Assert.Equal(SourcePackageDir + @"\26081118", plan.Moves[0].To);
+
+            // 两层：源包包名目录 + 最里层（两层同名也照建）。
             Assert.NotEqual(SourcePackageDir, plan.ContentParentDirectory);
         }
 
@@ -300,13 +308,16 @@ namespace ArchiveFixer.Tests
             // 这里用三个名字把"每一种成因都不许吃掉最里层"分别钉住（Theory 名 = 成因）。
             Assert.False(string.IsNullOrWhiteSpace(cause));
 
+            // ⚠ 暂存树按**就地替换之后**的真实形状给：工作区发布已经在原位置留下了 `inner\`
+            // （内层包的内容直接摊在它自己的根上时，那一层就是包基名），所以是 `out\inner\{P,V}`。
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[]
                 {
-                    Dir(@"out\P"),
-                    File(@"out\P\a.jpg"),
-                    Dir(@"out\V"),
-                    File(@"out\V\b.mp4")
+                    Dir(@"out\inner"),
+                    Dir(@"out\inner\P"),
+                    File(@"out\inner\P\a.jpg"),
+                    Dir(@"out\inner\V"),
+                    File(@"out\inner\V\b.mp4")
                 },
                 @"C:\111\222\666",
                 TerminalLayoutMode.KeepLastFolder,
@@ -318,8 +329,11 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal("inner", plan.ContentDirectoryName);
             Assert.Equal(@"C:\111\222\666\inner", plan.ContentParentDirectory);
-            Assert.Equal(@"C:\111\222\666\inner\P", plan.Moves[0].To);
-            Assert.Equal(@"C:\111\222\666\inner\V", plan.Moves[1].To);
+
+            // 整棵 `inner` 子树一次搬走（P、V 原样待在它里面），所以落点是那个文件夹本身。
+            Assert.Single(plan.Moves);
+            Assert.Equal(Staging + @"\out\inner", plan.Moves[0].From);
+            Assert.Equal(@"C:\111\222\666\inner", plan.Moves[0].To);
         }
 
         [Fact]
@@ -461,7 +475,7 @@ namespace ArchiveFixer.Tests
 
                 string target = Path.Combine(root, "stage");
 
-                WorkspacePublishResult published = workspace.Publish(target, stripLeafWrapper: false);
+                WorkspacePublishResult published = workspace.Publish(target, inPlaceInnerPackages: true);
 
                 Assert.True(published.Success, published.Message);
 
