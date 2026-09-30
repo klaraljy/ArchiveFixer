@@ -136,6 +136,28 @@ namespace ArchiveFixer.Tests
             Assert.False(File.Exists(container), $"源包应该已按设置被彻底删除。{Diagnose(harness)}");
             Assert.Empty(FindRestDirectories(harness.OutputRoot));
 
+            /*
+             * ⚠「其余物按「彻底删除」**真被处理**」必须是**独立**的一条断言 —— 只钉"源包被删"是不够的：
+             * "其余物压根没生成"同样能让上面两条通过，而那正是这次 bug 的另一半
+             * （用户原话就是"源包留在原地、其余物根本没生成"）。三条合起来才排得掉那一档：
+             *   ① 定稿时**确实记下过**一份其余物（源包真的被搬进去了）；
+             *   ② 那一份现在**不在盘上**（不是"从来没建过"）；
+             *   ③ 日志里有一行「彻底删除：…」—— 判据取常量，⛔ 不手抄中文。
+             */
+            Assert.False(
+                string.IsNullOrWhiteSpace(task.RestDirectoryPath),
+                $"这一单定稿时应该真的生成过其余物（源包搬进去了），否则\"其余物被处理\"无从谈起。{Diagnose(harness)}");
+
+            Assert.False(
+                Directory.Exists(task.RestDirectoryPath),
+                $"其余物应该已按「彻底删除」被处理掉，实际还在盘上：{task.RestDirectoryPath}。{Diagnose(harness)}");
+
+            Assert.True(
+                harness.LogTexts.Any(
+                    line => line.Contains(StatusText.RestActionDelete + "：", StringComparison.Ordinal)),
+                "其余物按「彻底删除」处理完毕必须留下一行日志（唯一出口 StatusText.RestPurgedCompactFormat）。"
+                + Diagnose(harness));
+
             // 日志里必须有"可证完整"那一行依据（引用常量比对，不手抄中文）。
             Assert.Contains(
                 harness.LogTexts,
@@ -197,6 +219,90 @@ namespace ArchiveFixer.Tests
                 harness.LogTexts,
                 line => line.Contains("为什么没删源包", StringComparison.Ordinal)
                         && line.Contains("第 0 层", StringComparison.Ordinal));
+
+            /*
+             * ⚠ **链尾那一档也必须开口**（用户真机日志第 97 行承诺"整条续解链跑完后再按「删除操作」处理"，
+             * 第 112 行链就跑完了，然后一个字都没有）—— 老写法在这条判据上静默 `return`，
+             * 上面那条"为什么没删源包"照样在（它出自源包搬运那一步），所以**必须单独钉这一行**。
+             *
+             * 判据：日志里有一行既是「链尾被拦下」那一句（唯一出口 ChainRestBlockedPrefix），
+             * 又带着这一单的 L4 结论（Blocker = "判据 + 哪一层 + 原因"）。
+             */
+            string blocker = ResultCompletenessClassifier.Classify(task).Blocker;
+
+            Assert.False(
+                string.IsNullOrWhiteSpace(blocker),
+                "判不出完整性时必须有一句「为什么没删源包」。" + Diagnose(harness));
+
+            Assert.True(
+                harness.LogTexts.Any(
+                    line => line.Contains(StatusText.ChainRestBlockedPrefix, StringComparison.Ordinal)
+                            && line.Contains(blocker, StringComparison.Ordinal)),
+                "链尾那一档被拦下时必须写一行 WARN 说清是哪一条判据 —— ⛔ 不许静默 return。" + Diagnose(harness));
+        }
+
+        // ================================================================ 形状 5：多层链里的**叶子层**列不出清单
+
+        /// <summary>
+        /// **今天真机那个形状的多层版**：两层都解得出内容物，但**只有叶子层**列不出目录。
+        ///
+        /// <para>它与形状 2 的差别就是"层"：形状 2 是单层（第 0 层列不出来），这里第 0 层**列得出来**、
+        /// 产出最终内容物的**叶子层**列不出来。这一档钉的是"换拿叶子层清单"那条规则的**反面** ——
+        /// 拿不到就如实判「判不出」，⛔ **不许退回去拿第 0 层的清单顶替**（那会造出假失败），
+        /// 也⛔ 不许因为"叶子层拿不到"就把中间层/外层那份当成预期。</para>
+        ///
+        /// <para>断言：L3 裁决确实落在第 1 层（叶子层）且取不到清单；L4 = 判不出；
+        /// 源包一个字节不动、其余物不生成；内容物照常保留；日志**点名是哪一层**。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 形状5_多层链_叶子层列不出清单_仍判不出_源包不动_日志点名哪一层()
+        {
+            string outer = BuildTwoLayerPlainChain("chain-outer.7z", "chain-leaf.7z");
+
+            Harness harness = CreateHarness(
+                string.Empty,
+                settings =>
+                {
+                    settings.RecursionMode = "SingleChain";
+                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+                },
+                new LeafListFailsEngine("chain-leaf.7z"));
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync();
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+
+            /*
+             * 形状确实成立：L3 裁决落在**第 1 层**（叶子层）—— 说明"展开 > 1 层 ⇒ 拿叶子层的清单"
+             * 这一步真的走了，而这个形状恰恰是"叶子层那份拿不到"。
+             * 判据取机器字段（LayerDepth / LayerLabel），⛔ 不手抄中文。
+             */
+            Assert.Equal(1, task.ManifestExpectation.LayerDepth);
+            Assert.Contains("chain-leaf.7z", task.ManifestExpectation.LayerLabel, StringComparison.Ordinal);
+            Assert.False(task.ManifestExpectation.HasManifest, "叶子层列不出清单 ⇒ 这一单没有可用预期。" + Diagnose(harness));
+
+            Assert.False(task.OutputManifestCrossChecked);
+            Assert.Equal(ResultCompleteness.Undeterminable, ResultCompletenessClassifier.Classify(task).State);
+
+            // 红线：判不出 ⇒ 一个字节都不动（源包原地、其余物不生成）。
+            Assert.True(File.Exists(outer), "判不出完整性时源包必须原地不动。");
+            Assert.Empty(FindRestDirectories(harness.OutputRoot));
+
+            // 判不出完整性 ≠ 结果不算数：内容物照常保留在成品目录里。
+            Assert.Single(Directory.GetFiles(harness.OutputRoot, "content.txt", SearchOption.AllDirectories));
+
+            /*
+             * 日志必须**点名是哪一层**（用户 2026-09-30：日志不许再让人猜）——
+             * 拿 LayerLabel（"第 1 层：chain-leaf.7z"）当判据：它是机器可判的字段，
+             * ⛔ 不手抄中文，也⛔ 不比整句文案。
+             */
+            Assert.True(
+                harness.LogTexts.Any(
+                    line => line.Contains(task.ManifestExpectation.LayerLabel, StringComparison.Ordinal)),
+                "取不到清单时必须点名是哪一层，不能只说「没有可用的归档清单」。" + Diagnose(harness));
         }
 
         // ================================================================ 形状 3：续解链末尾
@@ -350,6 +456,38 @@ namespace ArchiveFixer.Tests
             }
 
             return container;
+        }
+
+        /// <summary>
+        /// 造**两层都不伪装**的链：`outer.7z` 里只有 `leaf.7z`，`leaf.7z` 里才是 `content.txt`。
+        ///
+        /// <para>与 <see cref="BuildDisguisedContainerWithInner7z"/> 是同一种"两层"形状，只是外壳不伪装 ——
+        /// 形状 5 要的是"多层链"这个事实本身（第 0 层列得出清单、叶子层列不出），
+        /// 不需要"内嵌归档抠副本"那一层噪音。</para>
+        /// </summary>
+        private string BuildTwoLayerPlainChain(string outerName, string leafName)
+        {
+            string leafStage = Path.Combine(_root, leafName + "-stage");
+            Directory.CreateDirectory(leafStage);
+            File.WriteAllText(Path.Combine(leafStage, "content.txt"), "叶子层才有的最终数据\n", new UTF8Encoding(false));
+
+            string packageDirectory = Path.Combine(_root, "packages");
+            Directory.CreateDirectory(packageDirectory);
+
+            string leaf = Path.Combine(packageDirectory, leafName);
+
+            // 相对名传给 7z（工作目录就是 stage），归档里的条目名才稳定。
+            Run7z(leafStage, "a", "-t7z", leaf, "content.txt");
+
+            string outerStage = Path.Combine(_root, outerName + "-stage");
+            Directory.CreateDirectory(outerStage);
+            File.Copy(leaf, Path.Combine(outerStage, leafName), overwrite: true);
+
+            string outer = Path.Combine(packageDirectory, outerName);
+
+            Run7z(outerStage, "a", "-t7z", outer, leafName);
+
+            return outer;
         }
 
         /// <summary>`Y.7z` = 只有一条 `Y\file.bin` 的真 7z（不加密：这一条测的是"清单拿不拿得到"）。</summary>
@@ -619,6 +757,64 @@ namespace ArchiveFixer.Tests
 
             /// <summary>跑一键处理的流程部分（不弹任何对话框 —— 测试里没人在那儿点确定）。</summary>
             public Task<OneClickOutcome> RunOneClickAsync() => _oneClick.RunPipelineAsync(Vm.Tasks.ToList());
+        }
+
+        /// <summary>
+        /// 假引擎：**只对叶子层列不出目录**，其余一切原样转给真 7-Zip 引擎。
+        ///
+        /// <para>为什么需要它：<see cref="ListFailsEngine"/> 是"每一层都列不出"，
+        /// 做不出形状 5 要的"第 0 层列得出来、只有产出最终内容物的叶子层列不出来"——
+        /// 而这一档正是检验等级 L3 那条"改拿叶子层清单"规则的**反面**
+        /// （拿不到就如实判「判不出」，⛔ 不许退回去拿第 0 层的顶替）。</para>
+        ///
+        /// <para>解压照样成功：预检那次列目录失败**不拦**（<c>RecursiveExtractor</c> 里
+        /// "拦下来会让正常包也解不开，兜底是解压后的落点校验"），所以这一档的产物是好的、
+        /// 只是没有清单可核对 —— 与真机里的加密头 / 损坏同形。</para>
+        /// </summary>
+        private sealed class LeafListFailsEngine : IArchiveEngine
+        {
+            private readonly SevenZipEngine _inner = new();
+            private readonly string _leafName;
+
+            public LeafListFailsEngine(string leafName)
+            {
+                _leafName = leafName;
+            }
+
+            public string Id => _inner.Id;
+
+            public string DisplayName => _inner.DisplayName;
+
+            public string Version => _inner.Version;
+
+            public bool IsAvailable => _inner.IsAvailable;
+
+            public EngineCapabilities Capabilities => _inner.Capabilities;
+
+            public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+                => _inner.ProbeAsync(request, cancellationToken);
+
+            public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            {
+                string name = Path.GetFileName(request.ArchivePath);
+
+                return name.StartsWith(_leafName, StringComparison.OrdinalIgnoreCase)
+                    ? Task.FromResult(ArchiveListResult.Failure(
+                        EngineErrorTypes.EncryptedHeaders,
+                        "Cannot open encrypted archive. Wrong password?",
+                        Id,
+                        Version))
+                    : _inner.ListAsync(request, cancellationToken);
+            }
+
+            public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+                => _inner.TestAsync(request, cancellationToken);
+
+            public Task<ArchiveOperationResult> ExtractAsync(
+                ArchiveRequest request,
+                ExtractOptions options,
+                CancellationToken cancellationToken = default)
+                => _inner.ExtractAsync(request, options, cancellationToken);
         }
 
         /// <summary>

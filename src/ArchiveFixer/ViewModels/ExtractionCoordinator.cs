@@ -2717,7 +2717,7 @@ namespace ArchiveFixer.ViewModels
         {
             AppendLog(
                 "WARN",
-                $"{task.FileName}：链尾没有按「删除操作」处理其余物 / 源包 —— {why}；"
+                $"{task.FileName}：{StatusText.ChainRestBlockedPrefix} —— {why}；"
                 + "一个字节都没动（失败 / 取消 / 判不出完整性一律不动）。");
         }
 

@@ -933,6 +933,14 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string SourceRemovalBlockedDetailFormat = "为什么没删源包：{0}；具体判据 —— {1}";
 
+        /// <summary>
+        /// 链尾那一档**被拦下**时那一行 WARN 的开头（<c>ExtractionCoordinator.AppendRemovalBlocked</c> 唯一使用处）。
+        ///
+        /// <para>为什么要有这个常量：这行日志是"用户没看到东西被删，到底是哪一条判据拦下的"的唯一答案，
+        /// 而用例要能**不手抄中文**地断言它（⛔ 抄中文的断言改一次文案就假绿）。</para>
+        /// </summary>
+        public const string ChainRestBlockedPrefix = "链尾没有按「删除操作」处理其余物 / 源包";
+
         /// <summary>链尾那一档被"任务没成功"拦下。</summary>
         public const string ChainRestBlockedTaskOutcomeFormat = "任务没有成功";
 
