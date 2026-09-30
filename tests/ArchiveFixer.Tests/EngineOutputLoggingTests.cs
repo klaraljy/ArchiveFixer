@@ -78,6 +78,37 @@ namespace ArchiveFixer.Tests
             Assert.Equal(lines.Length, lines.Distinct(StringComparer.Ordinal).Count());
         }
 
+        /// <summary>
+        /// **原因句保底**：`ERROR` 行多到占满三格时，原因句仍然必须在结果里 ——
+        /// 这正是"结论里必须看得见原因"这条要求的边界（多文件包解压失败时 7-Zip
+        /// 会为**每一个**失败文件各打一条 `ERROR:`，三条是很容易到的）。
+        ///
+        /// <para><b>红检</b>：把 <c>EngineOutputKeywords.PickImportantLines</c> 末尾那段
+        /// "原因句保底"撤掉（改回"按三档取满就停"）→ 本用例当场红，原因是关键词句整句不在结果里。</para>
+        /// </summary>
+        [Fact]
+        public void 结论_ERROR行占满三格时_原因句仍然必须在()
+        {
+            const string output =
+                "ERROR: C:\\t\\a.7z.001\n" +
+                "ERROR: C:\\t\\b.bin\n" +
+                "ERROR: C:\\t\\c.bin\n" +
+                "Cannot open encrypted archive. Wrong password?\n";
+
+            string message = SevenZipOutputParser.ExtractImportantMessage(output);
+
+            // 三行封顶不变（⛔ 不许因为保底就把上限撑破）
+            Assert.Equal(
+                SevenZipOutputParser.ImportantMessageMaxLines,
+                message.Split(SevenZipOutputParser.ImportantMessageSeparator).Length);
+
+            // ERROR 行仍然排在最前
+            Assert.StartsWith("ERROR: C:\\t\\a.7z.001", message, StringComparison.Ordinal);
+
+            // 原因句必须看得见 —— 这一条就是红检
+            Assert.Contains("Cannot open encrypted archive", message, StringComparison.Ordinal);
+        }
+
         [Fact]
         public void 结论_一行关键字都不命中时_退回现有行为()
         {

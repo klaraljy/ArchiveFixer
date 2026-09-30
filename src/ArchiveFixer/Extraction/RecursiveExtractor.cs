@@ -879,22 +879,26 @@ namespace ArchiveFixer.Extraction
                  * ===== 引擎原话落日志（用户 2026-09-27：「引擎原话从不落日志」）=====
                  *
                  * 放在 `lastFailure = result` 之后、所有 return / continue **之前**：
-                 * 三条出路（损坏停下 / 错密码继续 / 其它停下）都要留下这一次的原话。
-                 * 出口只有 <see cref="EngineOutputLog"/> 一个（与单层路径同一个），
+                 * 三条出路（损坏停下 / 错密码继续 / 其它停下）都要留下这一次的原话 ——
+                 * 但**每个候选只留这一份**：默认档与详细档都走这里，出口只有
+                 * <see cref="EngineOutputLog"/> 一个（与单层路径同一个），
                  * ⛔ 这里不许自己挑行、自己拼前缀。
                  *
-                 * ⚠ 详细档下**不写这一条**：那时每个候选都会走下面的 LogVerbose（INFO，同样带原话），
-                 * 再补一条 ERROR 就是同一个候选同一批原话写两遍 —— 十个候选二十行，噪声压过信号
-                 * （与单层路径"失败原话只在结论那一处写一次"同一个口径）。
+                 * ⚠ 详细档的"参数摘要 + 原话"由下面的 LogVerbose 写（INFO）。
+                 */
+                if (VerboseLog)
+                {
+                    EngineOutputLog.LogVerbose(Log, layerLabel, result);
+                }
+
+                /*
+                 * 默认档：**这个候选失败了**那一条（ERROR / WARN，一行）——
+                 * 与单层路径的候选循环同一口径（不变量 6：失败必须留痕），
+                 * 十个错候选就是十行，一行一个候选，读得出来"第几个候选开始不对"。
                  */
                 if (!VerboseLog)
                 {
                     EngineOutputLog.LogFailure(Log, layerLabel, result);
-                }
-
-                if (VerboseLog)
-                {
-                    EngineOutputLog.LogVerbose(Log, layerLabel, result);
                 }
 
                 /*
