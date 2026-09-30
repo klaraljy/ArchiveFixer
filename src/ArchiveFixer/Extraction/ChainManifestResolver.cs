@@ -150,7 +150,8 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>一层的说法：`第 1 层：Sociology.7z`（只写文件名 —— ⛔ 不把完整路径写进日志，§8）。</summary>
-        public static string DescribeLayer(RecursionLayerReport? layer)        {
+        public static string DescribeLayer(RecursionLayerReport? layer)
+        {
             if (layer == null)
             {
                 return string.Empty;
