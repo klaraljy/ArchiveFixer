@@ -281,6 +281,7 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   - **ZIP**：看**中央目录**的通用位标志 **bit0**；⚠ `0x0800` 是 UTF-8 文件名标志、**不是**加密位；中央目录读不出 ⇒ 兜底第一个本地头，那一档**只给"加密"或"不知道"，绝不说"没加密"**。
   - **7z**：AES-256 coder（大端 `0x06F10701`）；`kEncodedHeader(0x17)`+AES ⇒ `-mhe`、`kHeader(0x01)`+AES ⇒ `-p`。
   - ⛔ **读不出来一律"不知道"**（`Unknown` ≠ `NotEncrypted`，⛔ 不猜、不误报）：7z 头被压缩、多卷 7z 只给第 1 卷、截断 / 布局不符。
+  - ⛔ **`CRC Failed in encrypted file` 不许单独定原因**（"密码错"与"数据坏"给的是同一句，`Item37SafetyTests` 钉着）；**结论必须带出 7-Zip 原话**〔真机 2026-09-30〕
   - 用例 `RarEncryptionReaderTests` 13 + `ZipEncryptionReaderTests` 11 + `SevenZipEncryptionReaderTests` 11；真样本 3 条走 `ARCHIVEFIXER_REAL_ENCRYPTION_{7Z,ZIP_PLAIN,RAR}`〔已修：RAR 卷内容加密，识别阶段读不出"加密"（2026-09-30）〕〔加密识别扩到 ZIP 与 7z（2026-09-30）〕
 - ✅ **识别提速：相同文件走缓存 + 顺序扫不再逐字节比（2026-09-30）**：① `Detection/DetectResultCache` —— 识别结论按（字节数 + 修改时间 + 头指纹 + 尾指纹）缓存（20 个相同的 64 MiB 认不出文件：**16.8 s → 0.3 s**）； ② `TailArchiveScanner` 顺序扫改按 `IndexOfAny` 跳候选首字节。
   ⛔ **识别结论一个字都不许变**（逐字段对照"开 / 关缓存"两跑）、缓存**不含 RAR 加密标志**（每次现算）、

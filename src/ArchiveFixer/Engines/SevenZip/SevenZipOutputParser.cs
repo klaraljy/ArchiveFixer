@@ -374,9 +374,26 @@ namespace ArchiveFixer.Engines.SevenZip
             return errorType switch
             {
                 "None" => "操作成功",
-                "WrongPassword" => "密码错误或缺少正确密码",
+
+                /*
+                 * ⚠ 密码错误 / 损坏这两档**必须带 7-Zip 的原话**（用户 2026-09-30 真机）。
+                 *
+                 * 这两句是"我们下的结论"，而 7-Zip 自己那句话里带着**能分辨原因**的信息：
+                 * `Data Error in encrypted file`（密码不对）与 `CRC Failed in encrypted file`
+                 * （校验和对不上）是两句不同的话。把原话丢掉，用户与排查的人就只能看到一句笼统的
+                 * "密码错误" —— 于是被指去核对**根本没写错的密码本**（他原话："密码在密码本里面也是有的"）。
+                 *
+                 * ⛔ 这里只**如实带出**引擎原话，不改判据：`CRC Failed in encrypted file` 既可能出现在
+                 * "密码错"（数据是 stored 时也会走 CRC 这条路，见 Item37SafetyTests）也可能出现在
+                 * "数据坏"，所以**不许靠这句话单独下结论** —— 它与"密码是否已被清单证明"合起来才有意义。
+                 */
+                "WrongPassword" => string.IsNullOrWhiteSpace(detail)
+                    ? "密码错误或缺少正确密码"
+                    : $"密码错误或缺少正确密码（7-Zip：{detail}）",
                 "NeedPassword" => "压缩包需要密码，但当前没有提供正确密码",
-                "CorruptedArchive" => "压缩包可能损坏或下载不完整",
+                "CorruptedArchive" => string.IsNullOrWhiteSpace(detail)
+                    ? "压缩包可能损坏或下载不完整"
+                    : $"压缩包可能损坏或下载不完整（7-Zip：{detail}）",
                 "UnsupportedFormat" => "7-Zip 无法识别或不支持该格式",
 
                 NonFatalErrorType => string.IsNullOrWhiteSpace(detail)

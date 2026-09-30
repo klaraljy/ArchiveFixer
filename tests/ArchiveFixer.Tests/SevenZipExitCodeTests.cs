@@ -173,6 +173,58 @@ namespace ArchiveFixer.Tests
             Assert.Equal("UnknownError", SevenZipOutputParser.DetectSevenZipErrorType(3, "whatever", string.Empty));
         }
 
+        /// <summary>
+        /// **用户 2026-09-30 真机事故留下的教训**：7-Zip 的
+        /// <c>CRC Failed in encrypted file. Wrong password? : &lt;条目&gt;</c> **不能单独用来定原因** ——
+        /// 合成样本实测：①"密码错"（数据是 stored 时会走 CRC 这条路，`Item37SafetyTests` 钉着它）
+        /// 与 ②"密码对但数据坏"（把包里改坏 1 个字节）**给出的是同一句话**。
+        ///
+        /// <para>⇒ 所以本用例只钉两件事，⛔ 都不许改：
+        /// ⑴ 这句今天仍归 <c>WrongPassword</c> —— 靠改关键字顺序把它改成"损坏"会让"试下一个候选"失效，
+        ///    密码本里正确的那个候选就永远没机会被试（我第一次就是这么改的，3 条真 7z 用例当场变红）；
+        /// ⑵ 结论里**必须带出引擎原话**，否则用户与排查的人只看到一句笼统的"密码错误"，
+        ///    被指去核对根本没写错的密码本。</para>
+        ///
+        /// <para>真正的分辨只能靠**证据**（这一包的密码是否已经被"读出清单/解开加密头"证明过），
+        /// 不是靠这句话的字面。</para>
+        /// </summary>
+        [Fact]
+        public void 加密包CRC那句_不能单独定原因_但结论必须带出引擎原话()
+        {
+            const string crcLine = "ERROR: CRC Failed in encrypted file. Wrong password? : src\\a.bin";
+
+            // ⑴ 归类保持现状（不许靠关键字顺序判成"损坏"）
+            Assert.Equal(
+                "WrongPassword",
+                SevenZipOutputParser.DetectSevenZipErrorType(
+                    2,
+                    crcLine,
+                    string.Empty,
+                    "giu.7z.001",
+                    EngineOperation.Extract));
+
+            // ⑵ 结论里必须看得见引擎原话（这条是这次新加的：原来这两档把原话丢掉了）
+            Assert.Contains(
+                "CRC Failed in encrypted file",
+                SevenZipOutputParser.ErrorTypeToMessage("WrongPassword", crcLine),
+                StringComparison.Ordinal);
+
+            // 对照：头明文 + 密码错是**另一句**（所以引擎原话有信息量，别丢）
+            Assert.Equal(
+                "WrongPassword",
+                SevenZipOutputParser.DetectSevenZipErrorType(
+                    2,
+                    "ERROR: Data Error in encrypted file. Wrong password? : src\\a.bin",
+                    string.Empty,
+                    "giu.7z.001",
+                    EngineOperation.Extract));
+
+            Assert.Contains(
+                "Data Error in encrypted file",
+                SevenZipOutputParser.ErrorTypeToMessage("WrongPassword", "ERROR: Data Error in encrypted file. Wrong password? : src\\a.bin"),
+                StringComparison.Ordinal);
+        }
+
         // ---------------------------------------------------------------- 命令识别
 
         [Fact]
