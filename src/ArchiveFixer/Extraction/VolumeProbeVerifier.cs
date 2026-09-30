@@ -439,13 +439,13 @@ namespace ArchiveFixer.Extraction
             string reason,
             bool attempted,
             VolumeTrialSkipReason skipReason = VolumeTrialSkipReason.None) => new()
-        {
-            Confirmed = false,
-            Attempted = attempted,
-            SkipReason = skipReason,
-            Attempts = attempts,
-            Reason = reason
-        };
+            {
+                Confirmed = false,
+                Attempted = attempted,
+                SkipReason = skipReason,
+                Attempts = attempts,
+                Reason = reason
+            };
 
         private static long SizeOf(string? path)
         {
