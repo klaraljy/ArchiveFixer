@@ -33,6 +33,7 @@ namespace ArchiveFixer.Models
             StatusText.ExtractFailed or
             StatusText.WrongPassword or
             StatusText.Corrupted or
+            StatusText.PasswordOrCorrupted or
             StatusText.AccessDenied or
             StatusText.OutputConflict or
             StatusText.VolumeMissing or
@@ -55,6 +56,7 @@ namespace ArchiveFixer.Models
         /// </summary>
         public static bool IsExtractFailureStatus(string? status) => status is
             StatusText.ExtractFailed or
+            StatusText.PasswordOrCorrupted or
             StatusText.AccessDenied or
             StatusText.OutputConflict or
             StatusText.VolumeMissing or
@@ -103,6 +105,7 @@ namespace ArchiveFixer.Models
                 case RecursionStopReason.WrongPassword:
                 case RecursionStopReason.PasswordAttemptsExceeded:
                 case RecursionStopReason.Corrupted:
+                case RecursionStopReason.PasswordOrCorrupted:
                 case RecursionStopReason.EngineFailed:
                 case RecursionStopReason.UnsafeEntry:
                 case RecursionStopReason.DiskSpaceInsufficient:
@@ -124,6 +127,13 @@ namespace ArchiveFixer.Models
                         RecursionStopReason.WrongPassword => StatusText.WrongPassword,
                         RecursionStopReason.PasswordAttemptsExceeded => StatusText.PasswordAttemptLimitReached,
                         RecursionStopReason.Corrupted => StatusText.Corrupted,
+
+                        /*
+                         * 两义那一档（引擎既说密码不对、又说数据坏了）：状态写两种可能，
+                         * ⛔ 不许折成上面任意一档 —— 折哪一档都是"单独定原因"，两条都错
+                         * （用户 2026-09-30 真机；与 7-Zip 侧同一口径）。
+                         */
+                        RecursionStopReason.PasswordOrCorrupted => StatusText.PasswordOrCorrupted,
 
                         /*
                          * 写不下盘：归档本身没问题，用户要做的是清空间 / 换盘 ——

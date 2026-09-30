@@ -304,6 +304,14 @@ namespace ArchiveFixer.Models
                 case StatusText.WrongPassword:
                 case StatusText.PasswordAttemptLimitReached:
                 case StatusText.EncryptedHeaders:
+
+                /*
+                 * 两义那一档（密码可能不对、也可能数据坏）归"密码"这一组：这一组的注脚本来就写着
+                 * "可能"（<see cref="StatusText.BatchDiagnosticsPasswordNote"/>），
+                 * ⛔ 不许写成"就是没有密码"；而另一个可能是"数据坏"，那一条由任务自己的
+                 * ErrorMessage（带引擎原话）说清 —— 归到"损坏"组反而会把两种可能压成一种。
+                 */
+                case StatusText.PasswordOrCorrupted:
                     return BatchProblemKind.Password;
 
                 case StatusText.VolumeMissing:

@@ -111,6 +111,10 @@ namespace ArchiveFixer.Converters
                 StatusText.ExtractFailed or
                 StatusText.WrongPassword or
                 StatusText.Corrupted or
+                // 两义那一档（密码可能不对、也可能数据坏）：这一单**没拿到产物**，是失败，
+                // 给错误色并与它的统计分桶（解压失败）一致（§7 三处同改）；
+                // "两种可能都在"这件事写在状态文字与 ErrorMessage 里，不靠颜色表达。
+                StatusText.PasswordOrCorrupted or
                 StatusText.AccessDenied or
                 StatusText.OutputConflict or
                 StatusText.VolumeMissing or

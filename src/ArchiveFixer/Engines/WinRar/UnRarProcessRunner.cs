@@ -694,7 +694,7 @@ namespace ArchiveFixer.Engines.WinRar
 
             string errorType = success
                 ? "None"
-                : UnRarOutputParser.DetectErrorType(exitCode, output, error, operation);
+                : UnRarOutputParser.DetectErrorType(exitCode, output, error, operation, archivePath);
 
             string status = UnRarOutputParser.ErrorTypeToTaskStatus(errorType);
 

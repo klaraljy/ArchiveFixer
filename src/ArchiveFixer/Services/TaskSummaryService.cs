@@ -652,6 +652,10 @@ namespace ArchiveFixer.Services
                 StatusText.ExtractFailed or
                 StatusText.WrongPassword or
                 StatusText.Corrupted or
+                // 两义那一档（密码可能不对、也可能数据坏）：同样必须进失败清单 ——
+                // 这一单一个字节都没解出来，而"两种可能都在"这句话就是用户唯一的行动线索
+                // （先核对密码本；密码对得上就是数据坏了）。
+                StatusText.PasswordOrCorrupted or
                 StatusText.AccessDenied or
                 StatusText.OutputConflict or
                 StatusText.VolumeMissing or

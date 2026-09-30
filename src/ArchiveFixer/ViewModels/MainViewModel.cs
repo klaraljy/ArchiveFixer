@@ -5345,14 +5345,19 @@ namespace ArchiveFixer.ViewModels
                 renamed++;
                 repaired.Add(task);
 
+                AppendLog("INFO", result.Message);
+
                 /*
                  * 任务要跟着搬到新路径上：文件在磁盘上已经叫新名字了，任务还指着旧名字的话，
                  * 紧接着的"重新识别"第一步就会撞上"源文件不在了"。
+                 *
+                 * ⚠ 同步走的是**唯一出口** <see cref="ExtractionCoordinator.SyncTasksAfterVolumeRename"/>：
+                 * 这次改名动的是**整组**（组里别的卷很可能是同一批里另一个任务的文件，用户 2026-09-30 真机），
+                 * 所以它把所有指着被改过名的文件的任务一起搬到新名字上、并重拍它们的源文件快照
+                 * （不变量 11 的基准跟着名字走）。以前这里只改自己这一行 → 别的任务被不变量 11
+                 * 报成"源文件已变化（文件不见了）"。
                  */
-                task.CurrentPath = result.NewPath;
-                task.RefreshPathRelatedProperties();
-
-                AppendLog("INFO", result.Message);
+                _extractionCoordinator.SyncTasksAfterVolumeRename(plan.Items, task);
 
                 /*
                  * 重新识别 + **重拍源文件快照**（不变量 11）：路径换了，旧快照对新名字毫无意义，
