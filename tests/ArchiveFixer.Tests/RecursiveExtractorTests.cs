@@ -83,6 +83,11 @@ namespace ArchiveFixer.Tests
     ///
     /// 临时目录全部建在 <see cref="Path.GetTempPath"/> 下，<see cref="Dispose"/> 里删干净。
     /// </summary>
+    // 递归工作区的根是**进程级静态**（<c>RecursiveExtractor.ConfiguredWorkspaceRoot</c>）：
+    // 本文件只读它，别的用例类会改写它 —— 全量并发跑时被抢走会让工作区落到别的用例的临时目录里、
+    // 那个目录又被对方 Dispose 掉（现场：`工作区删不掉` 断言 "第 0 层的产物目录不存在"）。
+    // 所以与改写它的那些类一起**串行**跑，见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public sealed class RecursiveExtractorTests : IDisposable
     {
         /// <summary>测试专用合成密码；只出现在测试数据里，不是任何真实凭据。</summary>

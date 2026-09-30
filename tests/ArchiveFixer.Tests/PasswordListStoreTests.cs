@@ -23,6 +23,9 @@ namespace ArchiveFixer.Tests
     /// <para><b>隐私（AGENTS.md §8）</b>：这里出现的密码全是合成占位符（<c>&lt;示例密码N&gt;</c> 风格），
     /// 路径全部落在系统临时目录下 —— 不含任何真实密码、真实站点名或用户路径。</para>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根、并读 WorkspaceRootIndex 账本）：
+    // 与同类用例串行跑，不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public sealed class PasswordListStoreTests
     {
         // ------------------------------------------------------------------ ① 往返一致
@@ -715,6 +718,12 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 启动_先加载记忆再逐本合并_日志只写条数与文件名()
         {
+            // 这一条断言的是**日志全文**（不许出现完整路径），所以必须先把这个进程级的
+            // "本次会话用过的工作区根"账本清掉：它是静态的，别的用例类记进去的根会留在表里，
+            // MainViewModel 启动时照着它扫残留、一旦扫到就写一行"看了哪几个根"（`；` 连接），
+            // 那一行里必然带本用例自己的完整路径 —— 于是这条用例在全量并发跑时假红（单跑是绿的）。
+            WorkspaceRootIndex.ResetForTests();
+
             using var dir = new TempDir();
 
             string book1 = dir.WriteText("book1.txt", "P1\nP2\n", new UTF8Encoding(false));

@@ -29,6 +29,9 @@ namespace ArchiveFixer.Tests
     /// ——定稿、校验、归集、源包处理——解压本身不是被测对象。
     /// </para>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
+    // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public class SourcePackageRestMoveTests : IDisposable
     {
         private readonly string _root;

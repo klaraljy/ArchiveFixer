@@ -25,6 +25,9 @@ namespace ArchiveFixer.Tests
     /// <para>第 3 条落成一个判据出口（<see cref="BatchSummarySeverityRules"/>）+ 一条顶部色带：
     /// 蓝 = 全成功 / 橙 = 有部分完成或跳过 / 红 = 有失败，正文一律白底黑字。</para>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
+    // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public class SpaceRiskAndSummaryTests : IDisposable
     {
         private readonly string _root;

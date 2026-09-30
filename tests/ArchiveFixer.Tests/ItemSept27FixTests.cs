@@ -26,6 +26,9 @@ namespace ArchiveFixer.Tests
     /// <para>本文件里**不需要真 7z**：校验口径、术语表、列表列、命令可用性都是纯逻辑；
     /// 候选循环那三条在 <c>ExtractionPipelineFixTests</c> 里（那里已有假引擎与管线夹具）。</para>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
+    // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public sealed class ItemSept27FixTests : IDisposable
     {
         private readonly string _root;

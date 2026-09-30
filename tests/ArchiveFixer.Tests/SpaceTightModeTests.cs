@@ -34,6 +34,9 @@ namespace ArchiveFixer.Tests
     /// （"我以为它按默认跑的"是用户最恨的一件事）。</description></item>
     /// </list>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
+    // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public class SpaceTightModeTests : IDisposable
     {
         private readonly string _root;

@@ -27,6 +27,9 @@ namespace ArchiveFixer.Tests
     /// ② 每组的"还有 K 个"与总长度上限；③ **成功的那条不许出现在任何组里**、全成功时一个字都不写；
     /// ④ 判据只有一处（<see cref="BatchSummaryDiagnosticsRules"/>），颜色与文字出自同一次调用。</para>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根、并读 WorkspaceRootIndex 账本）：
+    // 与同类用例串行跑，不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public class BatchSummaryDiagnosticsTests : IDisposable
     {
         private readonly string _root;

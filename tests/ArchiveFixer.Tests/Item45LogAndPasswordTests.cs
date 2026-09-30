@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
+using ArchiveFixer.Storage;
 using ArchiveFixer.ViewModels;
 using Xunit;
 
@@ -432,6 +433,15 @@ namespace ArchiveFixer.Tests
 
         private Harness CreateHarness(IReadOnlyList<string>? bookPasswords = null)
         {
+            /*
+             * 这一组钉的是**日志总量**（每包 ≤3 行 / 字符数上界），所以启动那一趟必须干净：
+             * 工作区根的账本（WorkspaceRootIndex）是**进程级静态**，别的用例类记进去的根会留在表里，
+             * MainViewModel 启动时会照着它扫残留 —— 只要扫到（那些根下真有别的用例故意留下的现场），
+             * 就往日志里多写三行（含一行 `；` 连接的全部扫描根与一行列出每个残留位置的长文本），
+             * 字符数当场翻几倍 ⇒ 全量并发跑时假红、单跑是绿的。用例之间回到干净状态是测试的事。
+             */
+            WorkspaceRootIndex.ResetForTests();
+
             string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
             string outputRoot = Path.Combine(_root, "out-" + Guid.NewGuid().ToString("N"));
 

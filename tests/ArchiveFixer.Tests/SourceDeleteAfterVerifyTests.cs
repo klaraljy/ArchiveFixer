@@ -33,6 +33,9 @@ namespace ArchiveFixer.Tests
     /// **等于什么都没做**。单个文件那种"第一层直接出内容物"的形状不经过延期，所以当场就删掉了。
     /// </para>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
+    // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public class SourceDeleteAfterVerifyTests : IDisposable
     {
         private readonly string _root;

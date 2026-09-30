@@ -32,6 +32,9 @@ namespace ArchiveFixer.Tests
     ///
     /// <para>引擎是假的（<see cref="PlacementFakeEngine"/>），所以这些用例不依赖 7z，也不碰任何真实包。</para>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
+    // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public sealed class PlacementRulesTests : IDisposable
     {
         private readonly string _root;

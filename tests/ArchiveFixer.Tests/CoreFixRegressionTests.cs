@@ -26,6 +26,9 @@ namespace ArchiveFixer.Tests
     /// - 递归展开的内层包也要过 Security（P1）：危险条目名与越界落点都必须是失败结论；
     /// - 更深的层出现多分支（P2）：不能静默当成"已完成"。
     /// </summary>
+    // 碰进程级静态（构造 RecursiveExtractor / 指定 ConfiguredWorkspaceRoot）：
+    // 与同类用例串行跑，不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public class CoreFixRegressionTests : IDisposable
     {
         private readonly string _root;

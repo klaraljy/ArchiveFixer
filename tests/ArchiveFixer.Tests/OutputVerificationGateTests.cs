@@ -30,6 +30,9 @@ namespace ArchiveFixer.Tests
     /// 这一组就是按那四条逐个钉死：假引擎（真管线）+ 一条真 7z 的端到端。
     /// </para>
     /// </summary>
+    // 碰进程级静态（构造 MainViewModel 会写工作区根）：与同类用例串行跑，
+    // 不与别的集合并行 —— 见 InnerLayerContinuationTests 顶部的 CollectionDefinition。
+    [Collection("ArchiveFixerGlobalState")]
     public class OutputVerificationGateTests : IDisposable
     {
         private readonly string _root;
