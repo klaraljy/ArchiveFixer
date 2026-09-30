@@ -695,6 +695,7 @@ namespace ArchiveFixer.Extraction
             int attempts = 0;
             bool triedAny = false;
             ArchiveOperationResult? lastFailure = null;
+            ArchiveOperationResult? informativeFailure = null;
             ArchiveOperationResult? success = null;
             string? succeededPassword = null;
 
@@ -777,6 +778,24 @@ namespace ArchiveFixer.Extraction
                 lastFailure = result;
 
                 /*
+                 * ===== 报错结论要取**走得最远的那一次**，不是最后一次（用户 2026-09-30 真机）=====
+                 *
+                 * 现场：`giu.7z.001`（7z `-mhe` 四卷）的候选循环里，**正确密码那一次**真解了 13 分钟、
+                 * 写出 17.7 GiB 才失败；紧跟其后的几个错密码候选 50 毫秒就被 7-Zip 顶回来
+                 * （`Cannot open encrypted archive. Wrong password?`）。收尾用的是 `lastFailure` ⇒
+                 * 用户看到的是**最后那个错候选**的原话，真正那次失败（数据校验不过 / 解不出来）被吃掉，
+                 * 结论永远是"密码错误：所有候选都试过了" —— 方向全错。
+                 *
+                 * 判据只用**事实**：这一次尝试在产物目录里留下了多少字节。留下过东西的那一次，
+                 * 信息量必然大于"连门都没进去"的那些 ⇒ 记下**第一次**留下产物的失败，收尾优先用它
+                 * （没有就退回 `lastFailure`，行为与以前逐字一致）。
+                 */
+                if (informativeFailure == null && ProducedBytesInLayerOutput(item) > 0)
+                {
+                    informativeFailure = result;
+                }
+
+                /*
                  * 损坏不再换候选重试（规则 1）：换密码对损坏的归档没有任何帮助，
                  * 只会把同一个损坏包重试 N 遍，既浪费时间又掩盖真正的问题。
                  */
@@ -801,12 +820,18 @@ namespace ArchiveFixer.Extraction
 
             if (succeededPassword == null)
             {
-                RecursionLayerReport failureReport = BuildLayerReport(item, lastFailure, succeededPassword: null);
+                /*
+                 * 收尾取"走得最远的那一次"的失败（`informativeFailure`，可能为 null）——
+                 * 见上面那一大段说明：最后一次候选往往只是"连门都没进去"，它会把真原因盖掉。
+                 */
+                ArchiveOperationResult? conclusion = informativeFailure ?? lastFailure;
+
+                RecursionLayerReport failureReport = BuildLayerReport(item, conclusion, succeededPassword: null);
 
                 RecursionStopReason reason = ResolvePasswordStopReason(
                     candidates.Count,
                     attempts,
-                    lastFailure,
+                    conclusion,
                     triedAny);
 
                 return LayerOutcome.Stop(failureReport, reason);
@@ -1529,6 +1554,49 @@ namespace ArchiveFixer.Extraction
             }
 
             return candidates;
+        }
+
+        /// <summary>
+        /// 这一次尝试在**这一层的产物目录**里留下了多少字节。
+        ///
+        /// <para>用途只有一处：判定"哪一个候选的失败更值得当结论"—— 留下过产物的那一次必然比
+        /// "连门都没进去"的那些更有信息量（用户 2026-09-30 真机：正确密码那次解了 13 分钟 /
+        /// 17.7 GiB 才失败，却被后面 50 毫秒就失败的错候选盖掉）。</para>
+        ///
+        /// <para>读不到（目录不在 / 被占用 / 权限）一律返回 0：那只会让结论退回老口径
+        /// （用最后一次失败），⛔ 不会把"什么都没留下"误判成"留下了东西"。</para>
+        /// </summary>
+        private static long ProducedBytesInLayerOutput(WorkItem item)
+        {
+            try
+            {
+                string path = item.Layer.OutputPath;
+
+                if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+                {
+                    return 0;
+                }
+
+                long total = 0;
+
+                foreach (string file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        total += new FileInfo(file).Length;
+                    }
+                    catch
+                    {
+                        // 量不出单个文件不影响"有没有留下东西"这个结论。
+                    }
+                }
+
+                return total;
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         private RecursionLayerReport BuildLayerReport(

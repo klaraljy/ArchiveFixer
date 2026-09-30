@@ -597,10 +597,74 @@ namespace ArchiveFixer.Tests
             Assert.False(result.Completed);
         }
 
+        /// <summary>
+        /// **报错取"走得最远的那一次"**（用户 2026-09-30 真机）：7z `-mhe` 四卷包里，正确密码那一次
+        /// 真解出 17.7 GiB 才失败，紧跟其后的错密码候选 50 毫秒就被顶回来 —— 老口径收尾用
+        /// `lastFailure`，报出来的就是**最后那个错候选**的原话，真原因（数据校验不过）被吃掉。
+        ///
+        /// <para>判据只看事实：这一次尝试在产物目录里留下过多少字节。</para>
+        ///
+        /// <para><b>红检</b>：把 `informativeFailure` 那两行撤掉（收尾改回 `lastFailure`）→
+        /// 本用例立刻变红（Message 变成 <c>Cannot open encrypted archive. Wrong password?</c>）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 候选循环_报错取走得最远的那一次_不是最后一次()
+        {
+            string source = Path.Combine(_root, "widest-failure-source.7z");
+            File.WriteAllText(source, "not a real archive; the engine is fake");
+
+            var engine = new FakeEngine();
+
+            engine.OnExtractAsync = (request, options) =>
+            {
+                if (string.Equals(request.Password, "first", StringComparison.Ordinal))
+                {
+                    // 这一次"走得很远"：真的留下了产物，然后才失败（数据校验不过）。
+                    Directory.CreateDirectory(request.OutputPath);
+                    File.WriteAllBytes(Path.Combine(request.OutputPath, "partial.bin"), new byte[4096]);
+
+                    return Task.FromResult(new ArchiveOperationResult
+                    {
+                        Success = false,
+                        Status = StatusText.ExtractFailed,
+                        Message = "CRC Failed in encrypted file. Wrong password? : partial.bin",
+                        DetectedErrorType = "WrongPassword",
+                        EngineId = engine.Id
+                    });
+                }
+
+                // 后面几个候选连门都没进去，一个字节都没留下。
+                return Task.FromResult(new ArchiveOperationResult
+                {
+                    Success = false,
+                    Status = StatusText.WrongPassword,
+                    Message = "Cannot open encrypted archive. Wrong password?",
+                    DetectedErrorType = "WrongPassword",
+                    EngineId = engine.Id
+                });
+            };
+
+            var task = new ArchiveTask(source);
+            var extractor = new RecursiveExtractor(
+                engine,
+                new MagicAwareProber(),
+                _ => new[] { "first", "second", "third" });
+
+            RecursionResult result = await extractor.ExtractAsync(
+                task,
+                Path.Combine(_root, "out-widest-failure"),
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.Equal(RecursionStopReason.WrongPassword, result.StopReason);
+            Assert.Contains("CRC Failed", result.Layers[0].Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Cannot open encrypted archive", result.Layers[0].Message, StringComparison.Ordinal);
+        }
+
         [SevenZipFact]
         public async Task 密码_候选还有剩余时报PasswordAttemptsExceeded()
-        {
-            RequireSevenZip();
+        {            RequireSevenZip();
 
             string outer = BuildEncryptedInnerPackage();
 
