@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
@@ -265,7 +266,199 @@ namespace ArchiveFixer.Tests
             Assert.Empty(plan.Moves);
         }
 
+        // ================================================================ ④ 跨盘 = 判不出（⛔ 不许在源盘开工作区）
+
+        /// <summary>
+        /// **跨盘 ⇒ 判不出**（用户 2026-09-30 决定：工作区就设在解压的地方，"这就完全不存在跨盘的操作"）。
+        ///
+        /// <para>硬链接不能跨卷 ⇒ 源文件与工作区根不在同一个卷上时，试开**没有合法落点**。
+        /// 本分支第一版会退到"源卷根下的 <c>.ArchiveFixer.work</c>"去试 —— 那正是被否决的形态
+        /// （在用户盘上开目录 = 不变量 12 禁止的"中间产物写进源目录"，收工删掉也一样：中途崩掉就留垃圾）。</para>
+        ///
+        /// <para>这一条钉四件事：① 跨盘**一次都不试**（引擎一次都没被调用 ⇒ 不可能在源盘新建任何东西）；
+        /// ② 结论如实降成"判不出"、不许删源；③ 组成员身份照旧带出去（不删源的安全结论一个字不变）；
+        /// ④ 源目录树与源卷根**前后完全一致**（⛔ 跨盘这一档在源盘上什么都不会新建）。</para>
+        ///
+        /// <para>跨盘现场怎么造：源目录放在**测试程序集所在的卷**上，工作区根故意放在**系统临时目录那个卷**
+        /// 上（两个不同盘符）。单卷机器上这条用例没有意义，发现阶段跳过（见
+        /// <see cref="CrossVolumeFactAttribute"/>）。</para>
+        /// </summary>
+        [CrossVolumeFact]
+        public async Task 跨盘_不做试开_判不出_源盘上什么都不会新建()
+        {
+            // 源：测试程序集所在卷（不碰用户目录）；工作区：另一个卷上一个**不存在**的目录。
+            string sourceParent = Path.Combine(AppContext.BaseDirectory, "crossvol-src-" + Guid.NewGuid().ToString("N"));
+            string workRoot = Path.Combine(Path.GetTempPath(), "crossvol-work-" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(sourceParent);
+
+            try
+            {
+                for (int i = 1; i <= 5; i++)
+                {
+                    WriteFile(sourceParent, $"一只顶美.z{i:D2}", 4096);
+                }
+
+                string renamed = WriteFile(sourceParent, "一只顶美.z删除ip", 1024);
+                string first = Path.Combine(sourceParent, "一只顶美.z01");
+
+                // 前提：这一对真的跨卷（否则这条用例什么都没证明）。
+                Assert.False(
+                    VolumeContentInference.IsSameVolumeRoot(first, workRoot),
+                    "源目录与工作区根落在了同一个卷上，这条用例测不到跨盘那一档");
+
+                // 前提：源卷根**现在没有**工作区壳（老写法会在那里新建一个）。
+                string sourceVolumeRoot = Path.GetPathRoot(first) ?? string.Empty;
+                string shell = Path.Combine(sourceVolumeRoot, VolumeContentInference.WorkDirectoryName);
+                bool shellExistedBefore = Directory.Exists(shell);
+
+                string[] treeBefore = SnapshotTree(sourceParent);
+
+                var engine = new RecordingEngine();
+                var verifier = new VolumeProbeVerifier(engine);
+                var resolver = new VolumeGroupResolver(verifier.TryOpenAsync);
+
+                VolumeGroupResolution resolution = await resolver.ResolveAsync(new VolumeGroupQuery
+                {
+                    AnchorPath = first,
+                    WorkRootDirectory = workRoot,
+                    AllowTrialOpen = true
+                });
+
+                // ① 结论如实降级，而且没有删源资格。
+                Assert.Equal(VolumeGroupVerdict.Undetermined, resolution.Verdict);
+                Assert.False(resolution.CanEnterDeletableRestItems);
+                Assert.Contains("跨盘无法试开，整卷是否齐全无法确认", resolution.Reason, StringComparison.Ordinal);
+                Assert.DoesNotContain("完整（试开确认）", resolution.Reason, StringComparison.Ordinal);
+
+                // ② 组还是认出来了 ⇒ 组成员一个都不许被当"可删残留"（安全结论不变）。
+                Assert.True(resolution.IsGroupMember(renamed));
+                Assert.NotEmpty(resolution.GroupFilePaths);
+
+                // ③ 一次都没试：引擎一次没被调用，工作区根也没被建出来。
+                Assert.Empty(engine.ListCalls);
+                Assert.False(Directory.Exists(workRoot), "跨盘这一档连工作区根都不许碰");
+
+                // ④ 源盘上什么都不会新建：源目录树一字不差，源卷根下也没多出工作区壳。
+                Assert.Equal(treeBefore, SnapshotTree(sourceParent));
+                Assert.Equal(shellExistedBefore, Directory.Exists(shell));
+            }
+            finally
+            {
+                TryDeleteDirectory(sourceParent);
+                TryDeleteDirectory(workRoot);
+            }
+        }
+
         // ================================================================ 辅助
+
+        /// <summary>目录树快照（相对路径 + 字节数，排序后比较）：用来钉"跨盘这一档一个字节都不动"。</summary>
+        private static string[] SnapshotTree(string directory) =>
+            Directory
+                .EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(directory, path)
+                    + "|" + (Directory.Exists(path)
+                        ? "dir"
+                        : new FileInfo(path).Length.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                .OrderBy(text => text, StringComparer.Ordinal)
+                .ToArray();
+
+        private static void TryDeleteDirectory(string directory)
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch
+            {
+                // 临时目录清不掉不影响结论。
+            }
+        }
+
+        /// <summary>
+        /// **跨盘用例的标记**：只有"测试程序集所在卷"与"系统临时目录所在卷"是两个不同卷时才有意义。
+        ///
+        /// <para>做法与 <c>SevenZipFactAttribute</c> 一致：**发现阶段**探测，不满足就设
+        /// <see cref="FactAttribute.Skip"/> —— ⛔ 不用"运行时 return"假装跑过（那样报表里算"通过"，
+        /// 会让人读成"跨盘验过了"）。</para>
+        /// </summary>
+        [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+        public sealed class CrossVolumeFactAttribute : FactAttribute
+        {
+            public CrossVolumeFactAttribute()
+            {
+                string assemblyRoot = Path.GetPathRoot(AppContext.BaseDirectory) ?? string.Empty;
+                string tempRoot = Path.GetPathRoot(Path.GetTempPath()) ?? string.Empty;
+
+                if (assemblyRoot.Length == 0 ||
+                    string.Equals(assemblyRoot, tempRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    Skip = "这台机器上测试程序集与系统临时目录在同一个卷，造不出跨盘现场（跳过）。";
+                }
+            }
+        }
+
+        /// <summary>
+        /// **跨盘用的试开替身**：只数"引擎被调用了几次"—— 跨盘这一档必须**一次都没有**。
+        /// ⛔ 它自己不写盘：真写盘的只有 <c>VolumeProbeVerifier</c> 建硬链接那一步。
+        /// </summary>
+        private sealed class RecordingEngine : ArchiveFixer.Engines.IArchiveEngine
+        {
+            public List<string> ListCalls { get; } = new();
+
+            public string Id => "recording";
+
+            public string DisplayName => "计数替身";
+
+            public string Version => "0";
+
+            public bool IsAvailable => true;
+
+            public ArchiveFixer.Engines.EngineCapabilities Capabilities { get; } = new()
+            {
+                CanProbe = true,
+                CanList = true,
+                CanTest = true,
+                CanExtract = true,
+                SupportsPassword = true
+            };
+
+            public Task<ArchiveFixer.Engines.ArchiveProbeResult> ProbeAsync(
+                ArchiveFixer.Engines.ArchiveRequest request,
+                CancellationToken cancellationToken = default) =>
+                Task.FromResult(new ArchiveFixer.Engines.ArchiveProbeResult { IsArchive = false });
+
+            public Task<ArchiveFixer.Engines.ArchiveListResult> ListAsync(
+                ArchiveFixer.Engines.ArchiveRequest request,
+                CancellationToken cancellationToken = default)
+            {
+                lock (ListCalls)
+                {
+                    ListCalls.Add(request.ArchivePath);
+                }
+
+                return Task.FromResult(new ArchiveFixer.Engines.ArchiveListResult
+                {
+                    Success = true,
+                    FileCount = 1,
+                    Entries = new List<ArchiveFixer.Engines.ArchiveEntry> { new() { Path = "x", Size = 1 } }
+                });
+            }
+
+            public Task<ArchiveFixer.Engines.ArchiveOperationResult> TestAsync(
+                ArchiveFixer.Engines.ArchiveRequest request,
+                CancellationToken cancellationToken = default) =>
+                Task.FromResult(new ArchiveFixer.Engines.ArchiveOperationResult { Success = true });
+
+            public Task<ArchiveFixer.Engines.ArchiveOperationResult> ExtractAsync(
+                ArchiveFixer.Engines.ArchiveRequest request,
+                ArchiveFixer.Models.ExtractOptions options,
+                CancellationToken cancellationToken = default) =>
+                Task.FromResult(new ArchiveFixer.Engines.ArchiveOperationResult { Success = true });
+        }
 
         private static VolumeGroupResolution Resolve(string anchor) =>
             new VolumeGroupResolver().Resolve(new VolumeGroupQuery
