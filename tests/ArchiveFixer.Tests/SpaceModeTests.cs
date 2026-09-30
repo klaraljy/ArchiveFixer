@@ -610,17 +610,21 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 彻底删除_校验没通过就不删_哪怕状态是解压成功()
+        public void 彻底删除_判不出完整性就不删_哪怕状态是解压成功()
         {
             (ArchiveTask task, string sourcePath, string restDirectory) = CreatePurgeScenario();
 
             task.Status = StatusText.ExtractSuccess;
-            task.IsOutputVerified = false;
+            task.IsOutputVerified = true;
+
+            // L4：校验写着通过，但**没有核对过清单**（拿不到可信清单，只做了非空底线校验）⇒ 判不出。
+            task.OutputManifestCrossChecked = false;
+            task.IsOutputVerified = true;
 
             RestPurgeOutcome outcome = new RestItemPurger().Purge(task, cancelled: false);
 
             Assert.False(outcome.Attempted);
-            Assert.Contains("输出校验", outcome.Message, StringComparison.Ordinal);
+            Assert.Contains("无法确认", outcome.Message, StringComparison.Ordinal);
             Assert.True(Directory.Exists(restDirectory));
             Assert.True(File.Exists(sourcePath));
         }
@@ -713,6 +717,9 @@ namespace ArchiveFixer.Tests
                 OutputPath = outputRoot,
                 Status = StatusText.ExtractSuccess,
                 IsOutputVerified = true,
+
+                // L4：只有"拿清单核对过"才算可证完整，也才允许删源包（见 ResultCompletenessTests）。
+                OutputManifestCrossChecked = true,
                 Outcome = TaskOutcome.Succeeded,
                 RestDirectoryPath = restDirectory
             };
@@ -744,6 +751,9 @@ namespace ArchiveFixer.Tests
                 OutputPath = outputRoot,
                 Status = StatusText.ExtractSuccess,
                 IsOutputVerified = true,
+
+                // L4：只有"拿清单核对过"才算可证完整，也才允许删源包（见 ResultCompletenessTests）。
+                OutputManifestCrossChecked = true,
                 Outcome = TaskOutcome.Succeeded,
                 RestDirectoryPath = mine
             };
@@ -1158,7 +1168,14 @@ namespace ArchiveFixer.Tests
             return path;
         }
 
-        /// <summary>造一个"其余物处理该动手"的现场：成功 + 校验通过 + 其余物里有源包。</summary>
+        /// <summary>
+        /// 造一个"其余物处理该动手"的现场：成功 + **可证完整** + 其余物里有源包。
+        ///
+        /// <para>⚠ 2026-09-30（检验等级 L4）：光"校验通过"已经不够了 —— 只有
+        /// <c>ManifestCrossChecked = true</c>（拿清单逐条核对过）才算**可证完整**，
+        /// 也才允许删源包。这个现场要能代表"该动手"那一档，所以两样都给上；
+        /// "判不出 ⇒ 不删"另有一条专门的用例（<c>ResultCompletenessTests</c>）。</para>
+        /// </summary>
         private (ArchiveTask Task, string SourcePath, string RestDirectory) CreatePurgeScenario()
         {
             string outputPath = Path.Combine(_root, "out", "222");
@@ -1179,6 +1196,7 @@ namespace ArchiveFixer.Tests
                 OutputPath = outputPath,
                 Status = StatusText.ExtractSuccess,
                 IsOutputVerified = true,
+                OutputManifestCrossChecked = true,
 
                 /*
                  * 机器终态也要一起给（2026-09-24 起删除裁决读它，不再读 Status 那个中文文案）：

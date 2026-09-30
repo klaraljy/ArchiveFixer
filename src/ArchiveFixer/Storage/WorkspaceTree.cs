@@ -19,8 +19,8 @@ namespace ArchiveFixer.Storage
     /// <list type="number">
     /// <item><description><b>名字</b>：最后一段等于 <see cref="WorkspaceRootResolver.DefaultWorkspaceDirectoryName"/>
     /// —— 覆盖"目标目录"这一档（不需要知道当前生效的根是哪一个就能排除）。</description></item>
-    /// <item><description><b>位置</b>：在当前生效的工作区根**之内或就是它** —— 覆盖用户显式设过
-    /// <c>CacheRootDirectory</c> 那一档（那时目录名叫 <c>work</c>，光看名字认不出来）。</description></item>
+    /// <item><description><b>位置</b>：在当前生效的工作区根**之内或就是它** —— 覆盖"根还没解析出来 /
+    /// 名字被改过"那一档（光看名字认不出来时，位置还在）。</description></item>
     /// </list>
     ///
     /// <para>两条是**或**的关系：任一成立就算工作区自己那棵树。宁可多排除一个同名目录
@@ -120,8 +120,8 @@ namespace ArchiveFixer.Storage
         ///
         /// <para>为什么不用 <c>Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)</c>：
         /// 那个重载**看不到**该跳哪一棵子树（它只能按属性跳 Hidden/System，而 Hidden 只是我们尽力设的一个属性，
-        /// 设不上 / 被用户清掉 / 换台机器复制过都可能没了），也**不认**用户显式设过 <c>CacheRootDirectory</c>
-        /// 那一档的 <c>work</c> 目录名。这里显式按目录剪枝，与属性无关。</para>
+        /// 设不上 / 被用户清掉 / 换台机器复制过都可能没了），也**不认**工作区**里面**的文件
+        /// （最后一段根本不是那个目录名）。这里显式按目录剪枝，与属性无关。</para>
         ///
         /// <para>读不了的目录跳过（与既有各处"扫不动就少看一层、绝不让扫描把流程带崩"同一口径）；
         /// 符号链接 / 目录联接点不跟随（跟着走既可能绕圈，也会把别处的文件算成这次扫到的）。</para>

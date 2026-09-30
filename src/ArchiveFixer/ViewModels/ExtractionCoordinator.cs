@@ -1021,6 +1021,9 @@ namespace ArchiveFixer.ViewModels
 
             task.IsOutputVerified = work.Verification.Verified;
 
+            // L4 的第二个事实：这一次"通过"是**核对过清单**还是**只做了非空底线校验**（判不出完整性）。
+            task.OutputManifestCrossChecked = work.Verification.ManifestCrossChecked;
+
             /*
              * ===== 产物校验未通过 = **结论本身不成立**（用户 2026-09-24 铁证，不变量 6）=====
              *
@@ -1631,11 +1634,17 @@ namespace ArchiveFixer.ViewModels
             bool oneClickRun,
             List<(string Level, string Message)> logEntries)
         {
-            if (!verification.Verified)
+            /*
+             * ⚠ 2026-09-30（检验等级 L4）：判据从"校验通过"**收紧**成"可证完整"（唯一出口 =
+             * <see cref="ResultCompletenessClassifier"/>）。老口径下"拿不到清单、只做了非空底线校验"
+             * 也算通过，那一档**没有任何证据**却能把源包搬走；现在它落在"判不出"⇒ 源包留在原地。
+             */
+            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(verification);
+
+            if (!completeness.AllowsSourceRemoval)
             {
-                // 校验没过就没有"这次整理完成了"这回事，源包一律不动（D-11 第 2 条）。
-                logEntries.Add(("WARN", $"{task.FileName}：输出校验未通过，源包留在原地（未移入其余物）。"));
-                return new SourcePackageMoveResult { Attempted = false, Message = "输出校验未通过，源包留在原地" };
+                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Message}，源包留在原地（未移入其余物）。"));
+                return new SourcePackageMoveResult { Attempted = false, Message = completeness.Message + "，源包留在原地" };
             }
 
             if (task.SourcePackageMove == SourcePackageMoveState.Done)
@@ -1755,10 +1764,16 @@ namespace ArchiveFixer.ViewModels
                 return null;
             }
 
-            if (verification == null || !verification.Verified)
+            /*
+             * ⚠ 2026-09-30（检验等级 L4）：判据从"校验通过"**收紧**成"可证完整"（唯一出口 =
+             * <see cref="ResultCompletenessClassifier"/>）：判不出完整性时**永久删源包**这一步不做 ——
+             * "空间不足"是让用户难受，删错源包是不可逆。
+             */
+            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(verification);
+
+            if (!completeness.AllowsSourceRemoval)
             {
-                // 校验没过就没有"这一层已经定稿"这回事 —— 源包一律不动（与 D-11 同一条红线）。
-                logEntries.Add(("WARN", $"{task.FileName}：输出校验未通过，{subject}留在原地（空间不足模式也不删）。"));
+                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Message}，{subject}留在原地（空间不足模式也不删）。"));
                 return null;
             }
 
@@ -8458,7 +8473,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
-                Settings?.CacheRootDirectory,
                 destinations,
                 WorkspaceDriveOverride);
 
@@ -8480,39 +8494,13 @@ namespace ArchiveFixer.ViewModels
             RecursiveExtractor.ConfiguredWorkspaceRoot = resolution.RootDirectory;
 
             /*
-             * 工作区不在这批的目标盘上（用户显式设过缓存根目录）：
-             * **必须说出来**。这一档下空间门只按目标盘核算，工作区那块盘还要另留
-             * "内容物 + 过程物"（当前账本不核算它，是已知限制），而且定稿会退化成跨盘复制。
-             * 静默下去的结果就是用户看到"空间明明够，怎么还是写满了"。
+             * 工作区与目标盘的关系**永远**是"同一棵树"（工作区就建在目标目录里面），
+             * 所以这里不再有"工作区不在批目标盘上"那一档 —— 那个警告的前提（用户设过缓存根目录）
+             * 已随设置项一起删除。跨盘剩下的是**批内部**的：各任务落点在不同盘上，那个由
+             * WorkspaceRootResolver 的跨盘说明如实写出来。
              */
-            if (resolution.BatchDrives.Count > 0)
-            {
-                string workspaceDrive = ResolveDriveOf(resolution.RootDirectory);
 
-                bool onBatchDrive = false;
-
-                foreach (string drive in resolution.BatchDrives)
-                {
-                    if (string.Equals(drive, workspaceDrive, StringComparison.OrdinalIgnoreCase))
-                    {
-                        onBatchDrive = true;
-                        break;
-                    }
-                }
-
-                if (!onBatchDrive)
-                {
-                    AppendLog(
-                        "WARN",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.WorkspaceNotOnOutputDriveFormat,
-                            workspaceDrive,
-                            string.Join("、", resolution.BatchDrives)));
-                }
-            }
-
-            WorkspaceRootIndex.Remember(_pathService.DataRootDirectory, resolution.RootDirectory);
+            WorkspaceRootIndex.Remember(resolution.RootDirectory);
 
             return resolution;
         }

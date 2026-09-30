@@ -746,7 +746,6 @@ namespace ArchiveFixer.Tests
              * 不写这一笔，这个用例就会去动测试输出目录下的公共 data\，既不可重复也不干净。
              */
             AppSettings settings = AppSettings.CreateDefault();
-            settings.CacheRootDirectory = dir.Path;
             settings.PasswordBookPaths = new List<string> { book1, book2 };
             settings.PasswordBookPath = book2;
 

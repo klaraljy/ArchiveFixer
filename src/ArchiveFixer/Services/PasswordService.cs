@@ -182,8 +182,9 @@ namespace ArchiveFixer.Services
         /// 密码列表记忆文件落在哪个目录（沿用既有数据根目录，**不新造路径来源**）。
         ///
         /// 必须与 <see cref="PathService.DataRootDirectory"/> 保持一致：
-        /// 之前在导入那边写死 <c>AppContext.BaseDirectory\data</c>，读取那边却看用户配置的缓存根目录，
-        /// 用户一旦把缓存挪到别的盘（本项目要求缓存不能落 C 盘），就会"导入了、下次启动又说没配过"。
+        /// 之前在导入那边写死 <c>AppContext.BaseDirectory\data</c>、读取那边却另算一个目录，
+        /// 用户一旦换过位置就会"导入了、下次启动又说没配过"。
+        /// （现在数据根固定 = 程序目录下的 data，两边本来就同一个值；这条口径照旧不许各算一份。）
         /// </summary>
         public string DataRootDirectory
         {

@@ -608,9 +608,7 @@ namespace ArchiveFixer.Tests
                 ["SourceHandling"] = "CleanupTab",
                 ["IsRememberingPasswordList"] = "PasswordTab",
                 ["RememberedBooks"] = "PasswordTab",
-                ["RemoveRememberedBookCommand"] = "PasswordTab",
-                ["CacheRootDirectory"] = "SettingsTab",
-                ["SelectCacheRootDirectoryCommand"] = "SettingsTab"
+                ["RemoveRememberedBookCommand"] = "PasswordTab"
             };
 
             foreach ((string property, string expectedTab) in expected)

@@ -456,7 +456,6 @@ namespace ArchiveFixer.Tests
 
             AppSettings settings = AppSettings.CreateDefault();
 
-            settings.CacheRootDirectory = dataRoot;
 
             // 未指定位置：产物落在源包旁边那一层（用户现场就是 222\1111\…）。
             settings.ExtractToOriginalDirectory = true;

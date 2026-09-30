@@ -393,86 +393,18 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>
-        /// 缓存根目录（日志 / 临时 / 工作区都放它下面）。
-        /// 留空 = 程序目录下的 <c>data</c>（默认，跟着安装位置走）；填了必须是绝对路径且**不能是 C 盘**。
-        /// </summary>
-        public string CacheRootDirectory
-        {
-            get => Settings.CacheRootDirectory ?? string.Empty;
-            set
-            {
-                string normalized = value ?? string.Empty;
-
-                if (string.Equals(Settings.CacheRootDirectory, normalized, StringComparison.Ordinal))
-                {
-                    return;
-                }
-
-                Settings.CacheRootDirectory = normalized;
-                OnPropertyChanged();
-            }
-        }
-
-        /// <summary>
-        /// 缓存根目录的校验（**必须在保存前过这一关**）。
-        ///
-        /// 规则来自用户明确要求与规格 §7 决策 D-7：缓存绝不落 C 盘（%AppData% / 系统盘），
-        /// 绿色软件跟着安装位置走。留空是允许的（= 程序目录下的 data）。
-        ///
-        /// 返回 false 时 <paramref name="message"/> 是给用户看的原因与改法 ——
-        /// 只说"不合法"用户没法行动，必须说清"该改成什么样"。
-        /// </summary>
-        public static bool ValidateCacheRootDirectory(string? path, out string message)
-        {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                message = string.Empty;
-                return true;
-            }
-
-            string trimmed = path.Trim();
-
-            if (!Path.IsPathRooted(trimmed))
-            {
-                message = "缓存根目录必须是绝对路径（例如 D:\\ArchiveFixer-cache）；留空表示用程序目录下的 data。";
-                return false;
-            }
-
-            // UNC（\\server\share）没有盘符，按"不是 C 盘"处理。
-            if (trimmed.StartsWith(@"\\", StringComparison.Ordinal))
-            {
-                message = string.Empty;
-                return true;
-            }
-
-            string? root = null;
-
-            try
-            {
-                root = Path.GetPathRoot(Path.GetFullPath(trimmed));
-            }
-            catch
-            {
-                // 取不到盘根 → 由下面的统一提示拦下。
-            }
-
-            if (string.IsNullOrWhiteSpace(root) || root.Length < 1)
-            {
-                message = $"缓存根目录认不出盘符：{trimmed}。请用形如 D:\\ArchiveFixer-cache 的绝对路径。";
-                return false;
-            }
-
-            if (char.ToUpperInvariant(root[0]) == 'C')
-            {
-                message = "缓存不能放在 C 盘（系统盘）：%AppData% 与系统盘都已被明确否掉，缓存要跟着安装位置走。" +
-                          "请换一个盘，例如 D:\\ArchiveFixer-cache；留空则用程序目录下的 data。";
-                return false;
-            }
-
-            message = string.Empty;
-            return true;
-        }
+        /*
+         * ⛔ 这里原来有一个 `CacheRootDirectory` 属性 + `ValidateCacheRootDirectory`（"缓存根目录"那一格，
+         * 2026-09-30 **彻底删除**）。用户原话："这个彻底取消，用户没有定工作区的权力，就是在解压的地方
+         * 设立隐形的工作区，这就完全不存在跨盘的操作"。
+         *
+         * 删掉的是三样东西（一个都不留）：① 属性与设置页那一格；② "不许落 C 盘"那道校验
+         * （没有这个键了，也就无所谓校验）；③ 选择目录的命令。
+         * 数据根固定是程序目录下的 data，工作区固定由这一单的目标目录派生 —— 两者都不再由用户指定。
+         *
+         * 旧 appsettings.json 里残留的 `CacheRootDirectory` 键由 System.Text.Json 默认行为**安静忽略**：
+         * 不抛、不警告、不迁移到别处（用例 `SettingsCacheRootRemovalTests` 钉着）。
+         */
 
         /// <summary>
         /// 外部工具路径的校验（**必须在保存前过这一关**）。
@@ -484,8 +416,8 @@ namespace ArchiveFixer.ViewModels
         /// 下次打开设置那一格是空的、真正用的是内置的那一份，而用户以为自己在用自己的那个版本。
         /// </para>
         /// <para>
-        /// 校验口径与缓存根目录一致：**拦在保存之前**，停在设置界面上说清"填的这个文件不存在"
-        /// 以及"留空是什么行为"，改完再保存。检验的是"文件存不存在"，不是"它是不是 7z" ——
+        /// 口径是**拦在保存之前**，停在设置界面上说清"填的这个文件不存在"以及"留空是什么行为"，
+        /// 改完再保存。检验的是"文件存不存在"，不是"它是不是 7z" ——
         /// 后者由 <c>ToolLocator</c> / 引擎自己判定，这里越权猜只会误伤。
         /// </para>
         /// </summary>
@@ -720,9 +652,6 @@ namespace ArchiveFixer.ViewModels
         /// <summary>选择"结果归集"的目标目录（M3）。</summary>
         public ICommand SelectCollectTargetDirectoryCommand { get; }
 
-        /// <summary>选择缓存根目录。</summary>
-        public ICommand SelectCacheRootDirectoryCommand { get; }
-
         /// <summary>
         /// 浏览选择用户自己装的 <c>Rar.exe</c>（打包做外层 rar 时用）。
         /// 7z / UnRAR 那两格是纯文本框（历史如此），这一格按用户要求配一个"浏览"按钮 ——
@@ -759,7 +688,6 @@ namespace ArchiveFixer.ViewModels
             ResetDefaultCommand = new RelayCommand(ResetDefault);
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory);
             SelectCollectTargetDirectoryCommand = new RelayCommand(SelectCollectTargetDirectory);
-            SelectCacheRootDirectoryCommand = new RelayCommand(SelectCacheRootDirectory);
             SelectRarExeCommand = new RelayCommand(SelectRarExe);
             RemoveRememberedBookCommand = new RelayCommand(RemoveRememberedBook);
             MoveEngineUpCommand = new RelayCommand(parameter => MoveEngine(parameter, -1));
@@ -779,16 +707,11 @@ namespace ArchiveFixer.ViewModels
         /// <para>返回 <c>null</c> = 可以落盘；否则返回"为什么先不存"的一句话。</para>
         ///
         /// <para><b>判据与 <see cref="Save"/> 完全同一套</b>（同一批私有校验方法）——
-        /// ⛔ 自动保存绝不能因为"它是自动的"就绕过"缓存根目录不许落 C 盘、工具路径必须存在"这两条：
-        /// 那两条以前是"保存"这一步拦下的，现在保存随时会发生，拦截点必须跟着走。</para>
+        /// ⛔ 自动保存绝不能因为"它是自动的"就绕过"工具路径必须存在"这一条：
+        /// 它以前是"保存"这一步拦下的，现在保存随时会发生，拦截点必须跟着走。</para>
         /// </summary>
         internal string? DescribeAutoSaveBlock()
         {
-            if (!ValidateCacheRootDirectory(Settings.CacheRootDirectory, out string cacheMessage))
-            {
-                return cacheMessage;
-            }
-
             if (!ValidateToolExePath(
                     Settings.CustomSevenZipExePath,
                     "7z.exe 路径",
@@ -891,20 +814,7 @@ namespace ArchiveFixer.ViewModels
                 DialogResult = null;
 
                 /*
-                 * 缓存根目录先校验再保存（不能落到 C 盘）。
-                 *
-                 * 为什么在这里**拦住**而不是"存下来再警告"：缓存根目录决定工作区落点，
-                 * 存进配置之后下一次启动就会照它建目录 —— 用户看到警告时目录已经建好了，
-                 * "提示"就变成了既成事实。校验不过就停在设置界面上，改完再保存。
-                 */
-                if (!ValidateCacheRootDirectory(Settings.CacheRootDirectory, out string cacheMessage))
-                {
-                    Message = "设置未保存：" + cacheMessage;
-                    return;
-                }
-
-                /*
-                 * 两条外部工具路径同样**拦在保存之前**。
+                 * 两条外部工具路径**拦在保存之前**。
                  *
                  * 为什么必须拦：Normalize() 会把"文件不存在"的工具路径直接清空，
                  * 于是"填错路径 → 保存 → 看到『设置已保存』"是一条**静默丢弃用户输入**的路
@@ -1211,7 +1121,6 @@ namespace ArchiveFixer.ViewModels
             // 这几个属性是"包在 Settings 外面"的（AppSettings 不实现 INotifyPropertyChanged），
             // 恢复默认 / 重新加载设置之后必须显式通知，否则界面还显示旧值。
             OnPropertyChanged(nameof(OmitMiddleContinuationLayers));
-            OnPropertyChanged(nameof(CacheRootDirectory));
             OnPropertyChanged(nameof(CustomUnRarExePath));
             OnPropertyChanged(nameof(CustomRarExePath));
             OnPropertyChanged(nameof(KeepBrokenFiles));
@@ -1447,31 +1356,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             return string.Equals(id, EngineIds.SevenZip, StringComparison.OrdinalIgnoreCase) ? "7-Zip" : id;
-        }
-
-        /// <summary>选择缓存根目录（日志 / 临时 / 工作区都放它下面）。</summary>
-        private void SelectCacheRootDirectory()
-        {
-            try
-            {
-                string folder = _dialogService.ShowFolderBrowserDialog();
-
-                if (string.IsNullOrWhiteSpace(folder))
-                {
-                    Message = "已取消选择缓存根目录。";
-                    return;
-                }
-
-                CacheRootDirectory = folder;
-
-                Message = ValidateCacheRootDirectory(folder, out string reason)
-                    ? "已选择缓存根目录；改完立刻自动存（见底栏那一行）。"
-                    : "这个位置不能用：" + reason;
-            }
-            catch (Exception ex)
-            {
-                Message = "选择缓存根目录失败：" + ex.Message;
-            }
         }
 
         /// <summary>

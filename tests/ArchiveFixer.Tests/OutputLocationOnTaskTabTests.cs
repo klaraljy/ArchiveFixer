@@ -428,7 +428,6 @@ namespace ArchiveFixer.Tests
             var settingsService = new SettingsService(pathService);
 
             AppSettings settings = AppSettings.CreateDefault();
-            settings.CacheRootDirectory = cacheRoot;
             settings.AutoScanAfterDrop = false;
             settingsService.Save(settings);
 

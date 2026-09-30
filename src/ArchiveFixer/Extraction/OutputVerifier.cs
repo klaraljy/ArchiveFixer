@@ -68,6 +68,16 @@ namespace ArchiveFixer.Extraction
         /// <summary>被大小写折叠**吃掉**的条目数（预期折算时扣掉的份数）。</summary>
         public int CaseOnlyDroppedEntries { get; init; }
 
+        /// <summary>
+        /// 这一次校验**到底有没有拿可信清单逐条核对过**（L4 的判据，用户 2026-09-30 的检验等级）。
+        ///
+        /// <para>为什么必须有这个字段：<see cref="Verified"/> 为 true 有**两种完全不同的含义** ——
+        /// ① "拿清单核对过了，产物对得上"；② "没拿到清单，只做了非空 + 非全 0 字节的底线校验"。
+        /// 老口径下两者在数据上长得一模一样，于是"删源包"这道不可逆的闸门分不开它们
+        /// （见 <see cref="ResultCompletenessClassifier"/>）。这里把事实如实记下来，判定交给那一个出口。</para>
+        /// </summary>
+        public bool ManifestCrossChecked { get; init; }
+
         /// <summary>给人看的一句话（直接进汇总报告与日志，不要在这里拼密码等敏感内容）。</summary>
         public string Message { get; init; } = string.Empty;
     }
@@ -260,6 +270,12 @@ namespace ArchiveFixer.Extraction
                 return new OutputVerificationResult
                 {
                     Verified = true,
+
+                    /*
+                     * ⛔ 这一档"通过"的是**底线校验**，不是清单核对：如实记下来。
+                     * 下游（L4 分类器）据此把它判成"判不出完整性" ⇒ 源包一个字节都不删。
+                     */
+                    ManifestCrossChecked = false,
                     ExpectedFileCount = 0,
                     ActualFileCount = actualFileCount,
                     ExpectedTotalSize = 0,
@@ -279,6 +295,9 @@ namespace ArchiveFixer.Extraction
             return new OutputVerificationResult
             {
                 Verified = verified,
+
+                // 走到这一行就说明：手上确实有可信清单，而且**真的逐条比对过**（判据 = 上面那次比较）。
+                ManifestCrossChecked = true,
                 ExpectedFileCount = expectedFileCount,
                 ActualFileCount = actualFileCount,
                 ExpectedTotalSize = expectedTotalSize,

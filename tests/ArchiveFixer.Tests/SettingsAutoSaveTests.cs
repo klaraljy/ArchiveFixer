@@ -116,32 +116,36 @@ namespace ArchiveFixer.Tests
             Assert.Equal(afterChange, File.GetLastWriteTimeUtc(harness.SettingsFilePath));
         }
 
+        /// <summary>
+        /// 自动保存这条路：**非法的工具路径绝不会落到盘上**。
+        ///
+        /// <para>判据的唯一出口是 <see cref="AppSettings.Normalize"/> —— 它把"文件不存在"的工具路径**清空**
+        /// （`SettingsService.Serialize` 是唯一序列化出口，Normalize 就在它里面）。所以自动保存这里
+        /// 写下去的永远是清空后的值：用户不会在 `appsettings.json` 里留一个失效路径、下次启动拿着它去找引擎。</para>
+        ///
+        /// <para>⚠ 2026-09-30：这条用例原来断言的是"被 <c>DescribeAutoSaveBlock</c> 拦下 + 日志 WARN"，
+        /// 那个非法值是**「缓存根目录填 C 盘」** —— 设置项删除之后，自动保存这条路上已经没有
+        /// "Normalize 清不掉、只能靠拦下"的值了（工具路径都会被 Normalize 清空）。
+        /// 所以这里改成钉**真正生效的那条保证**：非法值不落盘、同一份里的其它改动照常存下来。
+        /// 「显式保存时被拦下并给出原因」那一条由 <c>WiringClosureTests</c> 用工具路径钉着。</para>
+        /// </summary>
         [Fact]
-        public void 缓存根目录不合法时_先不落盘并在日志里说清()
+        public void 非法工具路径不落盘_同一份里的其它改动照常存下来()
         {
-            Harness harness = CreateHarness("badcache");
-            int before = new SettingsService(harness.PathService).Load().MaxParallelExtractCount;
+            Harness harness = CreateHarness("badtoolpath");
 
             harness.Vm.Settings.MaxParallelExtractCount = 7;
-            harness.Vm.Settings.CacheRootDirectory = @"C:\af-should-not-be-saved";
+            harness.Vm.Settings.CustomRarExePath = @"C:\af-should-not-be-saved\Rar.exe";
 
-            // 校验没过 → 这一整份都先不存（缓存根目录决定数据根与工作区落点，写进去下次启动就照它走）。
-            Assert.False(harness.Vm.AutoSaveSettingsIfChanged());
+            Assert.True(harness.Vm.AutoSaveSettingsIfChanged(), "同一份里还有合法改动，这一跳必须落盘");
 
             AppSettings onDisk = new SettingsService(harness.PathService).Load();
-            Assert.Equal(before, onDisk.MaxParallelExtractCount);
-            Assert.DoesNotContain("af-should-not-be-saved", onDisk.CacheRootDirectory ?? string.Empty, StringComparison.Ordinal);
 
-            // 界面上不再提示（用户 2026-09-26："彻底删除"），但日志里必须留下"为什么先没存"。
-            Assert.Contains(
-                harness.Logs,
-                line => line.Contains("设置暂时没有自动保存", StringComparison.Ordinal)
-                        && line.Contains("C 盘", StringComparison.Ordinal));
+            Assert.Equal(7, onDisk.MaxParallelExtractCount);
+            Assert.Equal(string.Empty, onDisk.CustomRarExePath ?? string.Empty);
 
-            // 改回合法值 → 立刻存下来（连同刚才那一项）。
-            harness.Vm.Settings.CacheRootDirectory = harness.DataRoot;
-            Assert.True(harness.Vm.AutoSaveSettingsIfChanged());
-            Assert.Equal(7, new SettingsService(harness.PathService).Load().MaxParallelExtractCount);
+            // 内存里那一份也被 Normalize 清空了 —— 界面读的是同一个对象，不会显示一个已经不生效的路径。
+            Assert.Equal(string.Empty, harness.Vm.Settings.CustomRarExePath ?? string.Empty);
         }
 
         [Fact]
@@ -275,66 +279,12 @@ namespace ArchiveFixer.Tests
             Assert.Contains(nameof(harness.Vm.SettingsEditor.Settings), raised);
         }
 
-        /// <summary>
-        /// 设过「缓存根目录」的人：数据根会跟着缓存根走（见 <c>MainViewModel.ApplyEngineSettings</c>），
-        /// 于是设置文件有两个可能的位置 —— 程序目录下的 <c>data</c>（启动时先读的那一份）与缓存根那一份。
-        ///
-        /// <para>用户 2026-09-26 第 1 条要的"下次重启也要有"在这里最容易漏：启动读旧的、保存写新的，
-        /// 改什么都记不住。<b>以缓存根那一份为准</b>才对。</para>
-        /// </summary>
-        [Fact]
-        public void 数据根跟着缓存根目录走时_启动读的是缓存根那一份()
-        {
-            string runRoot = Path.Combine(_root, "cacheroot");
-            string programData = Path.Combine(runRoot, "programdata");
-            string cacheRoot = Path.Combine(runRoot, "cacherepo");
-
-            Directory.CreateDirectory(programData);
-            Directory.CreateDirectory(cacheRoot);
-
-            var pathService = new PathService { DataRootDirectory = programData };
-            var settingsService = new SettingsService(pathService);
-
-            // 程序目录那一份：只负责指出"数据根在哪儿"（缓存根目录 = cacherepo）。
-            AppSettings inProgramData = AppSettings.CreateDefault();
-            inProgramData.CacheRootDirectory = cacheRoot;
-            inProgramData.MaxParallelExtractCount = 2;
-            settingsService.Save(inProgramData);
-
-            // 缓存根那一份：真正最新的那份（并发档 = 9）。
-            AppSettings inCacheRoot = AppSettings.CreateDefault();
-            inCacheRoot.CacheRootDirectory = cacheRoot;
-            inCacheRoot.MaxParallelExtractCount = 7;
-            new SettingsService(new PathService { DataRootDirectory = cacheRoot }).Save(inCacheRoot);
-
-            MainViewModel vm = BuildViewModel(settingsService, pathService, programData, out LogService _);
-
-            Assert.Equal(7, vm.Settings.MaxParallelExtractCount);
-            Assert.Equal(
-                Path.Combine(cacheRoot, "appsettings.json"),
-                pathService.SettingsFilePath,
-                ignoreCase: true);
-
-            // 缓存根位置**还没有**设置文件时：沿用程序目录那一份，⛔ 绝不当场写一份默认值盖掉它。
-            string emptyCacheRoot = Path.Combine(runRoot, "emptycache");
-            Directory.CreateDirectory(emptyCacheRoot);
-
-            AppSettings pointingToEmpty = AppSettings.CreateDefault();
-            pointingToEmpty.CacheRootDirectory = emptyCacheRoot;
-            pointingToEmpty.MaxParallelExtractCount = 6;
-            new SettingsService(new PathService { DataRootDirectory = programData }).Save(pointingToEmpty);
-
-            MainViewModel second = BuildViewModel(
-                new SettingsService(new PathService { DataRootDirectory = programData }),
-                new PathService { DataRootDirectory = programData },
-                programData,
-                out LogService _);
-
-            Assert.Equal(6, second.Settings.MaxParallelExtractCount);
-            Assert.False(
-                File.Exists(Path.Combine(emptyCacheRoot, "appsettings.json")),
-                "那个位置本来没有设置文件时，启动不许替用户写一份新的");
-        }
+        /*
+         * ⛔ 2026-09-30：这里原来有一条「数据根跟着缓存根目录走时_启动读的是缓存根那一份」，
+         * 随 `AppSettings.CacheRootDirectory` 设置项一起删除 ——
+         * 数据根固定 = 程序目录下的 data（唯一出口 PathService.DefaultDataRootDirectory），
+         * 设置文件只可能有一处，"启动读旧的、保存写新的"这个缺陷从结构上就不存在了。
+         */
 
         // ================================================================ 装配
 
@@ -379,11 +329,11 @@ namespace ArchiveFixer.Tests
                 AppSettings settings = AppSettings.CreateDefault();
 
                 /*
-                 * ⚠ 缓存根目录 = 这个用例自己的数据目录（与其它管线测试同一套写法）：MainViewModel
-                 * 构造时会把**数据根**按它对齐，不这么写的话数据根会被改回程序目录下的 data，
-                 * 所有用例就共用同一份 appsettings.json、互相踩（写盘也不是这个用例的那一份）。
+                 * 数据根 = 这个用例自己的数据目录（与其它管线测试同一套写法：显式塞进 PathService）。
+                 * ⛔ 2026-09-30 起 MainViewModel **不再**按任何设置项去改数据根
+                 * （原来那句 `settings.CacheRootDirectory = dataRoot` 就是为它写的，已随设置项删除），
+                 * 所以这份 settings 里不再需要"指路"的字段 —— PathService 上那一句就是唯一出口。
                  */
-                settings.CacheRootDirectory = dataRoot;
                 settings.CustomOutputDirectory = outputRoot;
                 settings.AutoScanAfterDrop = false;
                 settingsService.Save(settings);
@@ -431,12 +381,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 隔离根**必须不在 C 盘**：设置层有一条硬校验「缓存根不许放 C 盘」
-        /// （<c>SettingsViewModel.ValidateCacheRootDirectory</c>），而 harness 必须把缓存根指到
-        /// 用例自己的数据目录（理由见 <see cref="CreateHarness"/>）—— 用 %TEMP%（默认在 C 盘）的话，
-        /// 每一个"自动保存"用例都会被那条校验拦下。
+        /// 隔离根：优先用**测试程序集所在那块盘**，其次任意一块能写的固定盘，都没有才退回 %TEMP%。
         ///
-        /// <para>所以优先用**测试程序集所在那块盘**，其次任意一块能写的固定盘，都没有才退回 %TEMP%。</para>
+        /// <para>⚠ 2026-09-30：这条偏好原来是被"缓存根不许放 C 盘"那条设置校验逼出来的（用 %TEMP%
+        /// 会让每个自动保存用例被拦下）；那个设置项与那条校验都已删除。这里**保留**这套偏好 ——
+        /// 它现在只是"别把大批临时文件堆到系统盘"的工程习惯，与任何校验无关。</para>
         /// </summary>
         private static string CreateIsolatedRoot()
         {

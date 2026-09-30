@@ -118,10 +118,18 @@ namespace ArchiveFixer.Storage
              * ⛔ 不再用 `task.Status == "解压成功"` 这种中文状态字符串 ——
              * 真机日志里出现过"状态写着解压成功、校验却已判否"的那一帧，
              * 万一那种任务走到这里，用户的源包就会被永久删掉。
+             *
+             * ⚠ 2026-09-30（检验等级 L4）：判据从"校验通过"**收紧**成"可证完整"——
+             * 唯一出口 <see cref="ResultCompletenessClassifier"/>。老口径下"拿不到清单、
+             * 只做了非空底线校验"也算通过（`Verified = true`），于是**没有任何证据**的这一档
+             * 照样拿到了删源包的通行证；现在它落在"判不出"⇒ 一个字节都不删。
              */
-            if (task.OutputVerification != OutputVerificationOutcome.Passed || !task.IsOutputVerified)
+            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(task);
+
+            if (!completeness.AllowsSourceRemoval)
             {
-                return Skip($"{name}：输出校验没有通过（机器结论：{task.OutputVerification}），其余物一个字节都不删");
+                return Skip(
+                    $"{name}：{completeness.Message}（机器结论：{completeness.Evidence}），其余物一个字节都不删");
             }
 
             if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))

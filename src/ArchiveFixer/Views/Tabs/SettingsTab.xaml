@@ -5,39 +5,39 @@
 
     <!--
         ⑥ 设置页（用户 2026-09-24 第 11 条）：**只剩程序级的东西** ——
-        缓存与工作区、日志、启动时行为、扫描与识别、恢复默认、关于 / 版本 / 许可。
+        日志、启动时行为、扫描与识别、恢复默认、关于 / 版本 / 许可。
         「解压方式 / 清理与删除 / 密码 / 打包」那几类都已各自成页，这里不再重复一份。
         整页可滚（第 20 条）。
+
+        ⛔ 2026-09-30：「缓存根目录」那一格**已彻底删除**（用户："这个彻底取消，用户没有定工作区的权力，
+        就是在解压的地方设立隐形的工作区"）。这一组现在只剩一个"打开工作区目录"按钮 ——
+        工作区位置没有任何可以设的地方，它只由这一单的目标目录派生。
     -->
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
         <StackPanel>
 
-            <!-- ==================== 缓存与工作区 ==================== -->
-            <GroupBox Header="缓存与工作区目录">
+            <!-- ==================== 工作区 ==================== -->
+            <GroupBox Header="工作区目录">
                 <StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="110" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Text="缓存根目录："
+                        <TextBlock Text="位置："
                                    Style="{StaticResource LabelTextStyle}" />
 
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding SettingsEditor.CacheRootDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="{x:Static models:StatusText.SettingsCacheRootHint}" />
+                        <TextBlock Grid.Column="1"
+                                   Style="{StaticResource HintTextStyle}"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Center"
+                                   Text="只由目标目录决定，没有设置项可以改"
+                                   ToolTip="{x:Static models:StatusText.SettingsWorkDirectoryButtonHint}" />
 
                         <Button Grid.Column="2"
-                                Content="选择"
-                                MinWidth="72"
-                                Margin="8,0,0,0"
-                                Command="{Binding SettingsEditor.SelectCacheRootDirectoryCommand}" />
-
-                        <Button Grid.Column="3"
                                 Content="打开工作区目录"
                                 MinWidth="120"
                                 Margin="8,0,0,0"
@@ -49,7 +49,7 @@
                     <TextBlock Style="{StaticResource HintTextStyle}"
                                Margin="110,6,0,0"
                                TextWrapping="Wrap"
-                               Text="{x:Static models:StatusText.SettingsCacheRootHint}" />
+                               Text="{x:Static models:StatusText.SettingsWorkDirectoryButtonHint}" />
                 </StackPanel>
             </GroupBox>
 
@@ -348,9 +348,9 @@
                             Command="{Binding ResetSettingsCommand}" />
 
                     <!--
-                        「刚刚做了什么」的一行反馈（2026-09-26 同步审计）：挑缓存根目录、挑 Rar.exe、
+                        「刚刚做了什么」的一行反馈（2026-09-26 同步审计）：挑 Rar.exe、
                         恢复默认这些动作的结论原来只写在 SettingsViewModel.Message 里 —— 那个框已被用户要求删除，
-                        于是"这个位置不能用""已选择 Rar.exe"这类反馈在界面上**一句都没有**。绑在页内，就一行。
+                        于是"已选择 Rar.exe"这类反馈在界面上**一句都没有**。绑在页内，就一行。
                     -->
                     <TextBlock Style="{StaticResource HintTextStyle}"
                                Margin="0,8,0,0"

@@ -1241,7 +1241,6 @@ namespace ArchiveFixer.Tests
             var settingsService = new SettingsService(pathService);
 
             AppSettings appSettings = AppSettings.CreateDefault();
-            appSettings.CacheRootDirectory = dataRoot;
             appSettings.CustomOutputDirectory = outputRoot;
             appSettings.ExtractToOriginalDirectory = false;
             appSettings.KeepArchiveNameFolder = true;

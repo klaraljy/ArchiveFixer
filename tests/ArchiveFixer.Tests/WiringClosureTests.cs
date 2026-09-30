@@ -839,50 +839,40 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ ⑤ 设置项真正生效
 
-        [Theory]
-        [InlineData(null, true)]
-        [InlineData("", true)]
-        [InlineData("   ", true)]
-        [InlineData(@"D:\ArchiveFixer-cache", true)]
-        [InlineData(@"D:\", true)]
-        [InlineData(@"C:\ArchiveFixer-cache", false)]
-        [InlineData(@"c:\cache", false)]
-        [InlineData(@"cache", false)]
-        public void 缓存根目录校验_C盘与相对路径一律拒绝(string? path, bool expected)
-        {
-            bool valid = SettingsViewModel.ValidateCacheRootDirectory(path, out string message);
+        /*
+         * ⛔ 2026-09-30：这里原来有三条「缓存根目录」用例（C 盘 / 相对路径一律拒绝、填 C 盘保存被拦下、
+         * 合法值保存通过），随 `AppSettings.CacheRootDirectory` 设置项一起删除 ——
+         * 工作区位置不再由用户指定，那一格与它的校验都不存在了。
+         * "旧配置里的键会被安静忽略"由 `SettingsCacheRootRemovalTests` 接手钉住；
+         * 而"保存被拦下并给出原因"这道闸门本身还在（工具路径那一类），改由下面这条钉着。
+         */
 
-            Assert.Equal(expected, valid);
-
-            if (!expected)
-            {
-                Assert.False(string.IsNullOrWhiteSpace(message), "拒绝时必须说明原因与改法");
-            }
-        }
-
+        /// <summary>
+        /// 显式保存那道闸门：**工具路径指向一个不存在的文件 → 整份设置先不存，并说清原因与改法**。
+        ///
+        /// <para>为什么必须拦：<c>Normalize</c> 会把失效的工具路径**静默清空**，
+        /// 于是"填错路径 → 保存 → 看到成功"是一条静默丢弃用户输入的路（见 <c>ValidateToolExePath</c> 的注释）。</para>
+        /// </summary>
         [Fact]
-        public void 缓存根目录填C盘_保存被拦下并给出原因()
+        public void 工具路径不存在_保存被拦下并给出原因()
         {
-            var settings = new AppSettings { CacheRootDirectory = @"C:\ArchiveFixer-cache" };
-            var viewModel = new SettingsViewModel(settings, new SettingsService());
+            var viewModel = new SettingsViewModel(new AppSettings(), new SettingsService());
+
+            /*
+             * ⚠ 必须在**构造之后**才填这个路径：构造里那次 CloneSettings 会顺手 Normalize，
+             * 而 Normalize 会把"文件不存在"的工具路径直接清空 —— 装配前塞进去的非法值根本留不到保存那一刻。
+             * 真机上的顺序正是这样：用户在设置页上敲进一个坏路径，然后（或定时器）才轮到保存。
+             */
+            viewModel.Settings.CustomRarExePath = @"C:\af-not-exists\Rar.exe";
 
             viewModel.SaveCommand.Execute(null);
 
             Assert.Null(viewModel.DialogResult);
-            Assert.Contains("C 盘", viewModel.Message, StringComparison.Ordinal);
-            Assert.Equal(@"C:\ArchiveFixer-cache", viewModel.Settings.CacheRootDirectory);
-        }
+            Assert.Contains("Rar.exe", viewModel.Message, StringComparison.Ordinal);
+            Assert.Contains("设置未保存", viewModel.Message, StringComparison.Ordinal);
 
-        [Fact]
-        public void 缓存根目录合法_保存通过()
-        {
-            var settings = new AppSettings { CacheRootDirectory = @"D:\ArchiveFixer-cache" };
-            var viewModel = new SettingsViewModel(settings, new SettingsService());
-
-            viewModel.SaveCommand.Execute(null);
-
-            Assert.True(viewModel.DialogResult);
-            Assert.Equal(@"D:\ArchiveFixer-cache", viewModel.Settings.CacheRootDirectory);
+            // 内存里那份也还在（没有在"校验没过"的路上被静默清掉 —— 用户看得到自己填的是什么）。
+            Assert.Equal(@"C:\af-not-exists\Rar.exe", viewModel.Settings.CustomRarExePath);
         }
 
         [Fact]
