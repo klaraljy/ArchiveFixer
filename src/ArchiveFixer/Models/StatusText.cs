@@ -1701,6 +1701,21 @@ namespace ArchiveFixer.Models
         /// <summary>整组改到一半失败。<c>{0}</c> = 已经改好的卷数，<c>{1}</c> = 卡住的原因。</summary>
         public const string VolumeRepairGroupPartialFormat = "整组改名只完成了 {0} 卷就停下了（已改的那几卷不会再动）：{1}";
 
+        /// <summary>
+        /// 整组没改成、但**已经全部改回原名**（内容一个字节没动）。<c>{0}</c> = 卡在哪一卷、为什么。
+        /// <para>回滚是"全成或全不成"的另一半：留着半改状态比不改更糟（7-Zip 按新基名找后续卷，
+        /// 名字七零八落时整组都打不开）。</para>
+        /// </summary>
+        public const string VolumeRepairRolledBackFormat =
+            "整组改名没做成，已把改过的名字全部改回原样（内容一个字节没动）：{0}";
+
+        /// <summary>
+        /// 整组没改成、而且**有卷没能改回原名** —— 必须如实点名，⛔ 别让用户以为没动过。
+        /// <c>{0}</c> = 没改回来的卷数，<c>{1}</c> = 那几卷的名字。
+        /// </summary>
+        public const string VolumeRepairRollbackIncompleteFormat =
+            "整组改名没做成，且有 {0} 卷没能改回原名（请手动核对）：{1}";
+
         /// <summary>改名失败（日志 / 弹窗）。<c>{0}</c> = 目标名，<c>{1}</c> = 原因。</summary>
         public const string VolumeRepairRenameFailedFormat = "改名失败（目标名「{0}」）：{1}";
 
