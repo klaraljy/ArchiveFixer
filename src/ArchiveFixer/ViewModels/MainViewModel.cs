@@ -447,8 +447,6 @@ namespace ArchiveFixer.ViewModels
          */
 
         /// <summary>
-
-        /// <summary>
         /// 启动 / 保存设置时那个"当前生效的工作区根"。
         ///
         /// <para>⛔ <b>它不参与"这一批该用哪个根"的决策</b>：那个只有一条路 —— 批首按这一单的目标目录派生
@@ -4070,19 +4068,50 @@ namespace ArchiveFixer.ViewModels
             return opened;
         }
 
+        /// <summary>
+        /// 「打开工作区目录」（③ 页与 ⑥ 设置页那个按钮）。
+        ///
+        /// <para>⛔ <b>这里刻意不建目录</b>（2026-09-30 随「缓存根目录」设置项一起收紧）：
+        /// 工作区根只有一个来源 = **这一批的目标目录**，本趟还没解过东西时
+        /// <see cref="PathService.WorkDirectory"/> 取的是**升级前的老位置** <c>&lt;数据根&gt;\work</c>
+        /// （它只是"③ 页要扫哪些根"的一项）。老实现先 <c>EnsureDirectoryExists</c> 再打开 ——
+        /// 于是"点一下按钮"就会在**程序所在那块盘**上凭空造出一个工作区目录，
+        /// 正是用户点名不要的那件事（"甚至危险操作固定到了 C 盘"）。</para>
+        ///
+        /// <para>现在：目录在就打开；不在就**如实说清为什么不在**（工作区只跟目标目录走，
+        /// 成功那一趟连壳都会收掉，所以这里通常什么都不会有）。</para>
+        /// </summary>
         private void OpenWorkDirectory()
         {
+            string workDirectory = _pathService.WorkDirectory;
+
             try
             {
-                SafePathHelper.EnsureDirectoryExists(_pathService.WorkDirectory);
-                _pathService.OpenDirectory(_pathService.WorkDirectory);
+                if (!Directory.Exists(workDirectory))
+                {
+                    AppendLog(
+                        "INFO",
+                        $"工作区目录现在不存在：{workDirectory}（工作区只由这一单的目标目录派生，"
+                        + "成功那一趟连空壳都会收掉；本趟还没解过东西时这里是升级前的老位置）。");
+
+                    _dialogService.ShowInfo(
+                        $"这里现在没有工作区目录：{Environment.NewLine}{workDirectory}{Environment.NewLine}{Environment.NewLine}"
+                        + "工作区只跟目标目录走：这一单成品要落的那个目录下的 .ArchiveFixer.work"
+                        + "（点开头 + 隐藏）。解压成功的那一趟会连空壳一起收掉，所以这里通常是空的；"
+                        + "失败 / 取消留下的中间产物在「清理与删除」页看得到体积。"
+                        + "工作区位置没有任何设置项可以改 —— 想换位置就换这一批的输出位置。");
+
+                    return;
+                }
+
+                _pathService.OpenDirectory(workDirectory);
             }
             catch (Exception ex)
             {
                 AppendLog("ERROR", "打开工作区目录失败：" + ex.Message);
                 _dialogService.ShowError(
                     $"打开工作区目录失败：{ex.Message}{Environment.NewLine}"
-                    + $"目录是：{_pathService.WorkDirectory}（可以在资源管理器里手工打开；"
+                    + $"目录是：{workDirectory}（可以在资源管理器里手工打开；"
                     + "目标目录不可写时也会出现这种情况 —— 工作区位置只由目标目录决定，"
                     + "换一个能写的输出位置即可）。");
             }

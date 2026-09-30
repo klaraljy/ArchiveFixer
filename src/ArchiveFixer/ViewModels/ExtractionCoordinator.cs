@@ -1509,7 +1509,6 @@ namespace ArchiveFixer.ViewModels
             if (_spaceTightThisBatch && !_spaceTightKeepSourceThisBatch)
             {
                 /*
-                /*
                  * 「空间不足」模式（用户 2026-09-27 拍板 + 2026-09-29 第 1/4 条收紧）：
                  * **每一层跑完就删它自己那一层的源包**，不等整条续解链跑完。
                  *
@@ -2484,12 +2483,19 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            /*
+             * ⚠ 2026-09-30（检验等级 L4）：第二条判据从"校验通过"**收紧**成"可证完整"——
+             * 唯一出口 <see cref="ResultCompletenessClassifier"/>。老口径把"拿不到清单、
+             * 只做了非空底线校验"也算成通过，这一档**没有任何证据**却能走到链尾删其余物。
+             * （下游 <see cref="RestItemPurger"/> 还会再挡一次，但**同一件事只许有一个判据**：
+             * 这里留一个更弱的版本，等于给下一个人两条互相矛盾的口径。）
+             */
             if (task.Outcome != TaskOutcome.Succeeded ||
-                task.OutputVerification != OutputVerificationOutcome.Passed ||
+                !ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval ||
                 string.IsNullOrWhiteSpace(task.RestDirectoryPath) ||
                 !Directory.Exists(task.RestDirectoryPath))
             {
-                // 没成功 / 没校验通过 / 没有其余物 → 什么都不做（红线：失败一个字节都不删）。
+                // 没成功 / 完整性判不出 / 没有其余物 → 什么都不做（红线：失败一个字节都不删）。
                 return;
             }
 
@@ -2581,16 +2587,28 @@ namespace ArchiveFixer.ViewModels
              * 那个字符串**证明不了**产物是好的 —— 真机日志里恰好出现过"状态写着解压成功、校验却已判否"，
              * 万一那条路走到这儿，用户的源包就会被删掉。
              *
-             * 现在读的是**校验那一刻的事实**（`OutputVerification == Passed`，只有"产物非空且与引擎清单对得上"
-             * 才会被置成它），加上"机器终态不是部分完成/失败/取消"（<see cref="TaskOutcome.Succeeded"/>）。
-             * 两个字段都由管线在结论成立的那一刻写、之后没有任何地方会为了显示去改它们。
+             * 现在读的是**校验那一刻的事实**，而且用的是 L4 的**唯一出口**
+             * <see cref="ResultCompletenessClassifier"/>（= 可证完整）：它要求"产物非空 + 与引擎清单逐条对得上"
+             * （`ManifestCrossChecked = true`）—— **拿不到清单那一档算"判不出"，同样不许动源包**
+             * （2026-09-30 检验等级），加上"机器终态不是部分完成/失败/取消"（<see cref="TaskOutcome.Succeeded"/>）。
+             * 这些字段都由管线在结论成立的那一刻写、之后没有任何地方会为了显示去改它们。
              */
-            if (rootTask.OutputVerification != OutputVerificationOutcome.Passed)
+            /*
+             * ⚠ 2026-09-30（检验等级 L4）：从"校验通过"**收紧**成"可证完整"
+             * （唯一出口 <see cref="ResultCompletenessClassifier"/>，与链尾其余物那两道门同一口径）。
+             *
+             * 漏掉这一处会怎样：链尾补搬是**移动用户唯一无法再生的源包**。老口径下"没拿到清单、
+             * 只做了非空底线校验"也算校验通过 —— 链尾照样把源包搬进其余物，而接下来的
+             * "删除操作"档一起来就把它删了。判不出就是判不出：一个字节都不许动。
+             */
+            ResultCompletenessVerdict rootCompleteness = ResultCompletenessClassifier.Classify(rootTask);
+
+            if (!rootCompleteness.AllowsSourceRemoval)
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：根任务的输出校验没有通过（机器结论：{rootTask.OutputVerification}），" +
-                    $"链结束后不动源包（源包留在原地）。校验结论：{rootTask.VerifyMessage}"));
+                    $"{rootTask.FileName}：{rootCompleteness.Message}" +
+                    $"（机器结论：{rootCompleteness.Evidence}），链结束后不动源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -2769,7 +2787,8 @@ namespace ArchiveFixer.ViewModels
             OneClickCoordinator.ResolveContinuationOutputDirectory(task);
 
         /// <summary>
-        /// 链里的输出校验有没有缺口：**每一个**把这个目录当落点的任务都必须通过输出校验。
+        /// 链里的输出校验有没有缺口：**每一个**把这个目录当落点的任务都必须**可证完整**
+        /// （L4 唯一出口 <see cref="ResultCompletenessClassifier"/>，2026-09-30 检验等级）。
         ///
         /// <para>
         /// 为什么要看**整条链**而不是只看根任务：用户那个形状里内容物是**续解子任务**产出的，
@@ -2779,7 +2798,11 @@ namespace ArchiveFixer.ViewModels
         /// <para>
         /// 为什么是"每一个都必须过"而不是"有一个过就行"：同一个最终目录是链上所有任务共同产出的，
         /// 其中任何一个没通过校验，就没有"内容物已定稿并校验通过"这个事实 ——
-        /// 这与"本轮直接搬"那条路径的口径一致（它也要求 <c>verification.Verified</c>）。
+        /// 这与"本轮直接搬"那条路径的口径一致（它也要求 L4 = 可证完整）。
+        /// </para>
+        /// <para>
+        /// ⚠ 判据刻意**不是** <c>IsOutputVerified</c>：那个字段在"拿不到清单、只做了非空底线校验"时
+        /// 也是 true（老口径下两者长得一模一样），而这一处的下游是**移动 / 删除用户的源包**。
         /// </para>
         /// </summary>
         /// <returns>
@@ -2803,9 +2826,18 @@ namespace ArchiveFixer.ViewModels
 
                 anyLanding = true;
 
-                if (!candidate.IsOutputVerified)
+                /*
+                 * ⚠ 2026-09-30（检验等级 L4）：判据从 <c>IsOutputVerified</c>（= "校验通过"，
+                 * 含"拿不到清单只做了底线校验"那一档）**收紧**成"可证完整"——
+                 * 唯一出口 <see cref="ResultCompletenessClassifier"/>。这一处是**链尾补搬/删源**的最后一道
+                 * 前置判据，判不出 ⇒ 源包一个字节都不许动。
+                 */
+                ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(candidate);
+
+                if (!completeness.AllowsSourceRemoval)
                 {
-                    return $"{candidate.FileName} 的输出校验没通过";
+                    return $"{candidate.FileName}：{completeness.Message}"
+                           + $"（机器结论：{completeness.Evidence}）";
                 }
             }
 
