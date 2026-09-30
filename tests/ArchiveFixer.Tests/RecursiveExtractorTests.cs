@@ -830,6 +830,66 @@ namespace ArchiveFixer.Tests
             Assert.False(Directory.Exists(Path.Combine(target, "pack")), "无意义外壳应当被去掉");
         }
 
+        /// <summary>
+        /// ⛔ **展开了内层包时，发布不许摊掉"内层包自己产出的那层文件夹"**（用户 2026-09-30 红线：
+        /// 落点最少两层，最里层 = 最后一个压缩包那一层）。
+        ///
+        /// <para>
+        /// 真机现场 <c>26081118.7z</c>：里面只有一个内层包，内层包解出
+        /// <c>T 小小绘 推特大合集 330P+454V-9.31G\P|V</c>。丢 <c>T …</c> 的**真凶就是发布这一步** ——
+        /// 它把"只有一个子目录、没有同级文件"的那一层当"解压器自动加的壳"摊掉了，
+        /// 于是暂存区里只剩 <c>P</c>、<c>V</c>，定稿侧那两条分支只是补刀。
+        /// </para>
+        ///
+        /// <para>
+        /// 本用例走**整条递归**（真实 7z 造两个包），因此同时钉住
+        /// <c>RecursiveExtractor.BuildResult</c> 有没有把"展开了内层包"这一个事实传给发布 ——
+        /// 只测 <see cref="ExtractionWorkspace.Publish"/> 自己的用例（<c>TwoLayerLayoutTests</c>）
+        /// 钉不住这根线。
+        /// </para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 递归展开内层包_发布时保留内层包自己产出的那层文件夹()
+        {
+            RequireSevenZip();
+
+            // 内层包：解出来是一个文件夹 T 内层包产出\P\a.jpg（现场那个形状）。
+            string innerSource = Path.Combine(_root, "inner-src");
+            string innerFolder = Path.Combine(innerSource, "T 内层包产出", "P");
+            Directory.CreateDirectory(innerFolder);
+            File.WriteAllText(Path.Combine(innerFolder, "a.jpg"), "内容物", Utf8NoBom);
+
+            string innerArchive = Path.Combine(_root, "inner.7z");
+            Run7z("a", "-t7z", innerArchive, Path.Combine(innerSource, "*"));
+
+            // 外层包：里面只有那个内层包。
+            string outerSource = Path.Combine(_root, "outer-src");
+            Directory.CreateDirectory(outerSource);
+            File.Copy(innerArchive, Path.Combine(outerSource, "inner.7z"));
+
+            string outerArchive = Path.Combine(_root, "two-layer-outer.7z");
+            Run7z("a", "-t7z", outerArchive, Path.Combine(outerSource, "*"));
+
+            string output = Path.Combine(_root, "out", "two-layer");
+
+            RecursionResult result = await ExtractAsync(outerArchive, output, RecursionMode.SingleChain);
+
+            Assert.True(result.Completed, result.Summary);
+            Assert.Equal(2, result.Layers.Count);
+
+            // `T 内层包产出` 那一层必须还在（它就是"最里层"），P 待在它里面。
+            Assert.True(
+                File.Exists(Path.Combine(output, "T 内层包产出", "P", "a.jpg")),
+                "内层包自己产出的那层文件夹被摊掉了。实际目录树："
+                + string.Join(" | ", Directory.GetFileSystemEntries(output, "*", SearchOption.AllDirectories))
+                + $"\n结论：{result.Summary}");
+
+            // ⛔ 老形状（P 直接躺在发布目标根上）不许再出现。
+            Assert.False(
+                Directory.Exists(Path.Combine(output, "P")),
+                "P 不许被摊到发布目标根上（那正是真机上 …\\26081118\\P 的形状）");
+        }
+
         // ─────────────────── 工作区清理（成功后不留 data\work\recursive 垃圾） ───────────────────
         //
         // 这一组盯的是**磁盘泄漏**：递归工作区动辄几百 MB，成功后必须清掉；失败 / 取消 / 部分完成

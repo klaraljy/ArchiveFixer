@@ -195,11 +195,25 @@ namespace ArchiveFixer.Extraction
         /// 去掉它再发布，避免用户拿到 out\pack\pack\ 这种套娃目录。摊平最多
         /// <see cref="MaxWrapperStripDepth"/> 层，且**每层都要重新满足**上述条件才继续摊。
         ///
+        /// <para>
+        /// ⛔ <b>这一次递归展开了内层包时不摊</b>（<paramref name="stripLeafWrapper"/> 传 false）：
+        /// 那时叶子层产物里那**一个**文件夹就是"内层包自己产出的内容物那一层"，
+        /// 而它正是用户 2026-09-30 红线里"**最里层**"的那一层 —— 摊掉它，内容物就会
+        /// 直接躺在包名目录下（真机现场 <c>…\26081118\P</c>、<c>…\26081118\V</c>，
+        /// <c>T 小小绘 推特大合集 330P+454V-9.31G</c> 就是在这一步丢的）。
+        /// 重复层由定稿侧的判定表 ④（单链塌缩）负责，工作区不再提前替它拍板。
+        /// </para>
+        ///
         /// <paramref name="targetDirectory"/> 必须由调用方给出**完整目标位置**
         /// （本方法不会替它再拼一层包名）：递归模式下"叶子层产物"与"统一目标目录"的关系
         /// 由调用方决定，工作区不替用户拍板。
         /// </summary>
-        public WorkspacePublishResult Publish(string targetDirectory)
+        /// <param name="stripLeafWrapper">
+        /// 发布前要不要去掉叶子层自带的那个"无意义外壳"（默认 true = 与加"最少两层"那条红线之前
+        /// 逐字相同）。判据**不在本类**：由调用方从 <see cref="InnermostPackageLayer"/> 那**一个**
+        /// 出口读"这一次展开了内层包没有"，本类只认这一个布尔。
+        /// </param>
+        public WorkspacePublishResult Publish(string targetDirectory, bool stripLeafWrapper = true)
         {
             if (string.IsNullOrWhiteSpace(targetDirectory))
             {
@@ -263,7 +277,7 @@ namespace ArchiveFixer.Extraction
                     }
 
                     movedCount += MoveContent(
-                        ResolveContentRoot(leaf.OutputPath),
+                        ResolveContentRoot(leaf.OutputPath, stripLeafWrapper),
                         destination,
                         renamed,
                         errors);
@@ -468,10 +482,21 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 解析真正要发布的内容根目录（去掉无意义外壳）。
         /// 摊平条件苛刻是有意的：只要出现"多个条目"或"一个文件"，就说明当前目录本身是有含义的。
+        ///
+        /// <para>
+        /// <paramref name="stripWrapper"/> 为 false 时**一层都不摊**（原样发布整个产物目录）：
+        /// 这一次递归展开过内层包，叶子层的那一个文件夹就是"最里层"，
+        /// 见 <see cref="Publish"/> 的说明（用户 2026-09-30 红线）。
+        /// </para>
         /// </summary>
-        private static string ResolveContentRoot(string outputDirectory)
+        private static string ResolveContentRoot(string outputDirectory, bool stripWrapper = true)
         {
             string current = outputDirectory;
+
+            if (!stripWrapper)
+            {
+                return current;
+            }
 
             for (int i = 0; i < MaxWrapperStripDepth; i++)
             {

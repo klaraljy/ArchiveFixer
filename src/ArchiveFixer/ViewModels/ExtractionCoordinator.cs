@@ -892,7 +892,8 @@ namespace ArchiveFixer.ViewModels
                             task.OutputPath,
                             sharedOutputRoot,
                             terminalLayout,
-                            specialExtraction),
+                            specialExtraction,
+                            recursion),
                         cancellationToken);
 
                     if (precheck.TotalCount > 0)
@@ -930,7 +931,8 @@ namespace ArchiveFixer.ViewModels
                     conflictAction,
                     conflictDecision,
                     cancellationToken,
-                    specialExtraction),
+                    specialExtraction,
+                    recursion),
                 cancellationToken);
 
             // 回到 UI 线程：只做状态与日志，不再碰大盘。
@@ -1246,7 +1248,8 @@ namespace ArchiveFixer.ViewModels
             string conflictAction,
             ConflictDecision? conflictDecision,
             CancellationToken cancellationToken,
-            SpecialExtractionPlan? specialExtraction = null)
+            SpecialExtractionPlan? specialExtraction = null,
+            RecursionResult? recursion = null)
         {
             var logEntries = new List<(string Level, string Message)>();
 
@@ -1396,7 +1399,8 @@ namespace ArchiveFixer.ViewModels
                 conflictDecision,
                 cancellationToken,
                 verification.Verified,
-                specialExtraction);
+                specialExtraction,
+                recursion);
 
             if (commit.Attempted)
             {
@@ -3114,6 +3118,11 @@ namespace ArchiveFixer.ViewModels
         /// 规则生效时判定表里"要套的那一层"不再套（<c>222\1111\内容物</c>）；包内有并列的多个文件夹、
         /// 或几个包共用同一个成品目录时不塌，按原判定表套一层并写一条 WARN（见 <see cref="ResultFinalizer.Plan"/>）。
         /// </param>
+        /// <param name="innermostPackageBaseName">
+        /// **最后一个被展开的内层包**的包基名（没有内层包时传空）。
+        /// 唯一来源 = <see cref="InnermostPackageLayer.ResolveBaseName"/>（读递归结果，不自己数层数）。
+        /// 它非空 ⇒ 落点最少两层（用户 2026-09-30 红线）：destDir 里面必须还有"最后一个压缩包"那一层。
+        /// </param>
         internal static FinalLayoutPlan PlanFinalLayout(
             string stageDirectory,
             string destinationDirectory,
@@ -3121,7 +3130,8 @@ namespace ArchiveFixer.ViewModels
             string? archiveBaseName,
             TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder,
             SpecialExtractionPlan? specialExtraction = null,
-            bool suppressPackageFolderLayer = false)
+            bool suppressPackageFolderLayer = false,
+            string? innermostPackageBaseName = null)
         {
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -3273,7 +3283,8 @@ namespace ArchiveFixer.ViewModels
                 stagingRoot: stageRoot,
                 sharedOutputRoot: sharedOutputRoot,
                 specialExtraction: specialExtraction,
-                suppressPackageFolderLayer: suppressPackageFolderLayer);
+                suppressPackageFolderLayer: suppressPackageFolderLayer,
+                innermostPackageBaseName: innermostPackageBaseName);
 
             var processSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -3459,7 +3470,8 @@ namespace ArchiveFixer.ViewModels
             ConflictDecision? conflictDecision,
             CancellationToken cancellationToken,
             bool verificationPassed = true,
-            SpecialExtractionPlan? specialExtraction = null)
+            SpecialExtractionPlan? specialExtraction = null,
+            RecursionResult? recursion = null)
         {
             var logEntries = new List<(string Level, string Message)>();
 
@@ -3490,7 +3502,8 @@ namespace ArchiveFixer.ViewModels
                     destinationDirectory,
                     sharedOutputRoot,
                     terminalLayout,
-                    specialExtraction);
+                    specialExtraction,
+                    recursion);
             }
             catch (Exception ex)
             {
@@ -4943,13 +4956,19 @@ namespace ArchiveFixer.ViewModels
         /// （一部分已经落位、剩下的在等一个还没出现的答案）。
         /// 本方法只读目录、只判存在，一个字节都不写；**只允许在后台线程上跑**。
         /// </summary>
+        /// <param name="recursion">
+        /// 这一次递归的结果（与真正的定稿读**同一个**对象）：落点最少两层那条红线的判据
+        /// （"最后一个压缩包那一层"）由它算出来 —— 预检按平铺算、定稿按套层算就会得到
+        /// "预检说有冲突、实际没有"这种自相矛盾的结论。
+        /// </param>
         private ConflictPrecheck PrecheckFinalLayoutConflicts(
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
-            SpecialExtractionPlan? specialExtraction = null)
+            SpecialExtractionPlan? specialExtraction = null,
+            RecursionResult? recursion = null)
         {
             var precheck = new ConflictPrecheck();
 
@@ -4964,7 +4983,7 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                plan = PlanFinalLayoutForTask(task, stageDirectory, destinationDirectory, sharedOutputRoot, terminalLayout, specialExtraction);
+                plan = PlanFinalLayoutForTask(task, stageDirectory, destinationDirectory, sharedOutputRoot, terminalLayout, specialExtraction, recursion);
             }
             catch
             {
@@ -5043,9 +5062,24 @@ namespace ArchiveFixer.ViewModels
             string destinationDirectory,
             bool sharedOutputRoot,
             TerminalLayoutMode terminalLayout,
-            SpecialExtractionPlan? specialExtraction = null)
+            SpecialExtractionPlan? specialExtraction = null,
+            RecursionResult? recursion = null)
         {
             string archiveBaseName = OutputPlacement.ResolveArchiveBaseName(task.CurrentPath);
+
+            /*
+             * ⛔ 落点最少两层（用户 2026-09-30 真机红线）：**最里层 = 最后一个压缩包那一层**。
+             *
+             * 它的名字来源只有一处（`InnermostPackageLayer.ResolveBaseName`，读的就是这一次递归的结果）：
+             * 递归展开了内层包时非空 ⇒ 定稿那一侧任何分支都不许把最里层吃掉
+             * （真机现场 `26081118.7z` → 内层包解出 `T 小小绘 推特大合集 330P+454V-9.31G\P|V`，
+             * 定稿却只留 `P`、`V` 直接躺在 `…\26081118\` 下）。
+             * 只解了一层时是空串 ⇒ 一路照旧，与加这条红线之前逐字相同。
+             *
+             * ⚠ 它与 `suppressPackageFolderLayer` 是**两件事**：后者只免掉"包名那一层"，
+             * 最里层由这里另外钉住 —— 预检与真正的定稿走的是**同一个**方法，不会各判一套。
+             */
+            string innermostPackageBaseName = InnermostPackageLayer.ResolveBaseName(recursion?.Layers);
 
             /*
              * "要不要套包名那一层"只有这一个出口（`suppressPackageFolderLayer`），三种成因在这里合并：
@@ -5079,7 +5113,8 @@ namespace ArchiveFixer.ViewModels
                 archiveBaseName,
                 terminalLayout,
                 specialExtraction,
-                suppressPackageFolderLayer: _extractIntoSourceFolderThisRun || layerAlreadyInPath || processArtifactName);
+                suppressPackageFolderLayer: _extractIntoSourceFolderThisRun || layerAlreadyInPath || processArtifactName,
+                innermostPackageBaseName: innermostPackageBaseName);
         }
 
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>

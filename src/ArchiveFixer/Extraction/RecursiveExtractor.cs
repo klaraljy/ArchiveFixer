@@ -1748,7 +1748,17 @@ namespace ArchiveFixer.Extraction
 
             if (published)
             {
-                WorkspacePublishResult publishResult = workspace.Publish(finalOutputDirectory);
+                /*
+                 * ⛔ 展开了内层包时不摊"叶子层自带的那个文件夹"（用户 2026-09-30 红线）：
+                 * 那一个文件夹就是**内层包自己产出的内容物那一层**，也正是"最里层"，
+                 * 摊掉它内容物就会直接躺在包名目录下（真机现场 `…\26081118\P`、`…\26081118\V`）。
+                 * 判据读**唯一**那个出口（InnermostPackageLayer），本方法自己数层数会与定稿侧漂移。
+                 *
+                 * 只解了一层（没有内层包）时照旧摊：那一份口径有很多既有用例钉着，一个字都不改。
+                 */
+                WorkspacePublishResult publishResult = workspace.Publish(
+                    finalOutputDirectory,
+                    stripLeafWrapper: !InnermostPackageLayer.ExpandedInnerPackage(layers));
 
                 publishMessage = publishResult.Message;
 

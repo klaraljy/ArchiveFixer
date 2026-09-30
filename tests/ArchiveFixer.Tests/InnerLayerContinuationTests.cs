@@ -1479,9 +1479,18 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
+            /*
+             * ⛔ 落点最少两层（用户 2026-09-30 真机红线）：`outer\` = 最外层（源包包名目录）、
+             * `level2\` = **最里层**（递归链里最后一个被展开的内层包）—— 两层都不许省。
+             *
+             * 这一次展开过内层包（第 0 层 outer.7z → 第 1 层 level2.7z），终端内容物又恰好是
+             * **单个文件**：旧口径走判定表 ①"单个文件直接放 destDir"，落成 `outer\final.txt`
+             * （只剩一层）。红线把这一支也划进去了（"任何分支都不许省"），
+             * 那一层的名字取内层包的包基名 ⇒ `outer\level2\final.txt`。
+             */
             Assert.True(
-                File.Exists(Path.Combine(outputRoot, "outer", "final.txt")),
-                "最终产物应当是 level2.7z 里的 final.txt。实际目录树："
+                File.Exists(Path.Combine(outputRoot, "outer", "level2", "final.txt")),
+                "最终产物应当是 level2.7z 里的 final.txt，且待在「最后一个压缩包」那一层里面。实际目录树："
                 + string.Join(" | ", Directory.GetFileSystemEntries(outputRoot, "*", SearchOption.AllDirectories))
                 + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
 
