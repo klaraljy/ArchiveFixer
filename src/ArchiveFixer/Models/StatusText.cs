@@ -1872,6 +1872,17 @@ namespace ArchiveFixer.Models
         /// <summary>「下一步」：取消 / 没轮到的那一档。</summary>
         public const string BatchDiagnosticsActionNotFinished = "没跑完的那些（再点一次「一键处理」接着跑）";
 
+        /// <summary>
+        /// 「下一步」：**部分完成**那一档（内容物是好的、只是没做完 —— 例：源包没能移入其余物）。
+        ///
+        /// <para>为什么要单独一句（用户 2026-09-27：批末诊断只说「下一步：其他」）：
+        /// 这一档的用户动作与"归不到具体原因"完全不同 —— 东西已经解出来了，再跑一次就能收尾，
+        /// ⛔ 不该把他指去"逐条看引擎原话"。差在哪一步由清单里那一行的括号补出来
+        /// （见 <c>BatchSummaryDiagnosticsRules</c> 的 <c>DescribeDetail</c>）。</para>
+        /// </summary>
+        public const string BatchDiagnosticsActionPartiallyCompleted =
+            "做了一半的那些（内容物是好的，再点一次「一键处理」把它收尾）";
+
         /// <summary>日志里逐组那一行的前缀（弹窗里是「·」，日志里带个来源标记更好搜）。</summary>
         public const string BatchDiagnosticsLogPrefix = "批末诊断：";
 

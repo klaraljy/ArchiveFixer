@@ -175,6 +175,23 @@ namespace ArchiveFixer.Engines
         /// <summary>内存不足。</summary>
         public const string OutOfMemory = "OutOfMemory";
 
+        /// <summary>
+        /// **磁盘空间不足导致写不下去**（用户 2026-09-27 真机：递归内层包撞空间不足，
+        /// 批末诊断却把这一单归到"其他"）。
+        ///
+        /// <para>为什么不复用 <see cref="AccessDenied"/>：两者的**用户动作完全不同** ——
+        /// 权限不足要去改目录权限 / 关掉占用的程序，空间不足要去清空间 / 换盘（AGENTS.md §11.3
+        /// 那一整套空间口径也都是按"空间不足"这一档给建议的）。混成一档就会把用户引向错的方向。</para>
+        ///
+        /// <para>它必须**排在"权限不足"之前**判：7-Zip 写不下去时打的是
+        /// <c>ERROR: Can not create file : &lt;路径&gt;</c>，而紧跟着的系统错误文本才是
+        /// <c>There is not enough space on the disk.</c> —— 只看前半句会误判成权限不足。
+        /// 判据仍只读**引擎 / 系统给的原话**（英文关键字），⛔ 不比对任何中文文案。</para>
+        ///
+        /// <para>不可换引擎那一档（与 <c>AccessDenied</c> 同类）：换个引擎写同一个盘照样写不下去。</para>
+        /// </summary>
+        public const string NoDiskSpace = "NoDiskSpace";
+
         /// <summary>退出码 1 一类：发生非致命错误，产物是**部分**的（绝不算成功，不变量 6）。</summary>
         public const string NonFatalError = "NonFatalError";
 

@@ -216,6 +216,25 @@ namespace ArchiveFixer.Engines.SevenZip
             }
 
             if (ContainsAny(text,
+                    "There is not enough space on the disk",
+                    "not enough space on the disk",
+                    "There is not enough space",
+                    "Disk full",
+                    "disk full",
+                    "No space left on device",
+                    "The disk is full"))
+            {
+                /*
+                 * **必须排在"权限不足"之前**：空间不足时 7-Zip 打的是
+                 * `ERROR: Can not create file : <路径>` + 紧跟的系统错误文本
+                 * `There is not enough space on the disk.` —— 下面那一档的 "Can not create"
+                 * 会先把前半句抓走，于是这一单被报成"权限不足"，用户去改权限而盘还是满的
+                 * （用户 2026-09-27 真机：递归内层包撞空间不足，批末诊断却归到"其他"）。
+                 */
+                return EngineErrorTypes.NoDiskSpace;
+            }
+
+            if (ContainsAny(text,
                     "Access is denied",
                     "Permission denied",
                     "Cannot create",
@@ -364,6 +383,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 FatalErrorType => StatusText.ExtractFailed,
                 OutOfMemoryErrorType => StatusText.ExtractFailed,
                 "AccessDenied" => StatusText.AccessDenied,
+                EngineErrorTypes.NoDiskSpace => StatusText.DiskSpaceInsufficient,
                 "OutputConflict" => StatusText.OutputConflict,
                 "VolumeMissing" => StatusText.VolumeMissing,
                 MissingFirstVolumeErrorType => StatusText.VolumeMissing,
@@ -427,6 +447,9 @@ namespace ArchiveFixer.Engines.SevenZip
                     : $"7-Zip {SevenZipExitCodes.Describe(SevenZipExitCodes.OutOfMemory)}（退出码 {SevenZipExitCodes.OutOfMemory}），请关闭其它占用内存的程序后重试。{detail}",
 
                 "AccessDenied" => "权限不足，无法读取文件或写入输出目录",
+                EngineErrorTypes.NoDiskSpace => string.IsNullOrWhiteSpace(detail)
+                    ? "磁盘空间不足，7-Zip 写不下去（清空间或换到空间足够的盘再试）"
+                    : $"磁盘空间不足，7-Zip 写不下去（清空间或换到空间足够的盘再试）。（7-Zip：{detail}）",
                 "OutputConflict" => "输出路径存在冲突",
                 "VolumeMissing" => "分卷压缩包缺少必要分卷",
                 MissingFirstVolumeErrorType => "这是分卷压缩包的后续卷，缺少首卷（.001 / 第 1 卷）——请把同一组分卷放在同一目录后再解压",

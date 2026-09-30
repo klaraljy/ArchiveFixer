@@ -161,6 +161,24 @@ namespace ArchiveFixer.Engines.WinRar
             }
 
             if (ContainsAny(text,
+                    "There is not enough space on the disk",
+                    "not enough space on the disk",
+                    "There is not enough space",
+                    "Disk full",
+                    "disk full",
+                    "No space left on device",
+                    "The disk is full"))
+            {
+                /*
+                 * **必须排在"权限不足"之前**：写不下去时 UnRAR 打的是
+                 * `Cannot create <条目>` + 紧跟的系统错误文本 `There is not enough space on the disk.` ——
+                 * 下面那一档的 "Cannot create" 会先把前半句抓走，于是这一单被报成"权限不足"，
+                 * 用户去改权限而盘还是满的（用户 2026-09-27 真机：递归内层包撞空间不足）。
+                 */
+                return EngineErrorTypes.NoDiskSpace;
+            }
+
+            if (ContainsAny(text,
                     "Access is denied",
                     "Permission denied",
                     "Cannot create",
@@ -292,6 +310,7 @@ namespace ArchiveFixer.Engines.WinRar
                 FatalErrorType => StatusText.ExtractFailed,
                 OutOfMemoryErrorType => StatusText.ExtractFailed,
                 EngineErrorTypes.AccessDenied => StatusText.AccessDenied,
+                EngineErrorTypes.NoDiskSpace => StatusText.DiskSpaceInsufficient,
                 EngineErrorTypes.OutputConflict => StatusText.OutputConflict,
                 EngineErrorTypes.VolumeMissing => StatusText.VolumeMissing,
                 MissingFirstVolumeErrorType => StatusText.VolumeMissing,
@@ -336,6 +355,9 @@ namespace ArchiveFixer.Engines.WinRar
                 EngineErrorTypes.AccessDenied => string.IsNullOrWhiteSpace(detail)
                     ? "权限不足，无法读取文件或写入输出目录"
                     : "权限不足，无法读取文件或写入输出目录。" + detail,
+                EngineErrorTypes.NoDiskSpace => string.IsNullOrWhiteSpace(detail)
+                    ? "磁盘空间不足，UnRAR 写不下去（清空间或换到空间足够的盘再试）"
+                    : "磁盘空间不足，UnRAR 写不下去（清空间或换到空间足够的盘再试）。" + detail,
                 EngineErrorTypes.OutputConflict => "输出路径存在冲突",
                 EngineErrorTypes.VolumeMissing => string.IsNullOrWhiteSpace(detail)
                     ? "分卷压缩包缺少必要分卷"

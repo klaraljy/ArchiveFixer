@@ -105,6 +105,7 @@ namespace ArchiveFixer.Models
                 case RecursionStopReason.Corrupted:
                 case RecursionStopReason.EngineFailed:
                 case RecursionStopReason.UnsafeEntry:
+                case RecursionStopReason.DiskSpaceInsufficient:
                     /*
                      * **什么都没产出 ⇒ 这是失败，不是"部分完成"**（用户 2026-09-27 真机）：
                      * `giu.7z.001` 那一单一个文件都没解出来，①页却写「部分完成」——
@@ -123,6 +124,13 @@ namespace ArchiveFixer.Models
                         RecursionStopReason.WrongPassword => StatusText.WrongPassword,
                         RecursionStopReason.PasswordAttemptsExceeded => StatusText.PasswordAttemptLimitReached,
                         RecursionStopReason.Corrupted => StatusText.Corrupted,
+
+                        /*
+                         * 写不下盘：归档本身没问题，用户要做的是清空间 / 换盘 ——
+                         * 落「磁盘空间不足」而不是「解压失败」，批末诊断才会把它归到空间那一组
+                         * （用户 2026-09-27 真机：递归内层包撞空间不足，诊断却归"其他"）。
+                         */
+                        RecursionStopReason.DiskSpaceInsufficient => StatusText.DiskSpaceInsufficient,
 
                         // 产物越界 / 危险条目（不变量 4）：与"引擎解不开"同一档 —— 结论不成立。
                         _ => StatusText.ExtractFailed

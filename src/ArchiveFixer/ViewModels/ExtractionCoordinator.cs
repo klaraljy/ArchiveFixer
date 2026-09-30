@@ -4247,7 +4247,27 @@ namespace ArchiveFixer.ViewModels
                 case RecursionStopReason.Completed:
                     task.Status = StatusText.ExtractSuccess;
                     task.ProgressText = StatusText.ProgressCompleted;
-                    task.Outcome = TaskOutcome.Succeeded;
+
+                    /*
+                     * ⛔ 这里**只在终态还没定的时候**才补 Succeeded —— 这是一道**防回归的闸门**，
+                     * 不是当前某条路径的修复（不变量 6：部分成功不得显示为成功）。
+                     *
+                     * 实测定序（2026-09-30，本用例 `<c>递归完成但源包没搬成_终态不许是成功</c>` 的探针）：
+                     * `ApplyRecursionResult` 跑在 `PostProcessSuccessAsync` **之前**，走到这一行时
+                     * `Outcome` 一定还是初值 `Pending` —— 也就是说"源包没搬成 ⇒ 部分完成"这个结论
+                     * 由 `PostProcessSuccessAsync` 在**后面**写成，当前顺序下两边不会打架。
+                     *
+                     * 那为什么还要这道闸门：`Succeeded` 是**唯一**允许"删源 / 搬源 / 续解 / 危险模式删其余物"
+                     * 的档（不变量 1 的例外、不变量 6）。一旦将来有人把收尾顺序调过来、或在递归成功这一支
+                     * 里再插一段写终态的代码，无条件赋值就会把"这件事没做完"悄悄改写成"做完了"，
+                     * 而那四道门读的正是这一位 —— 后果是不可逆的。
+                     * 判据只读终态这一位（`Pending` = 还没有人下过结论），⛔ 不比对中文文案。
+                     */
+                    if (task.Outcome == TaskOutcome.Pending)
+                    {
+                        task.Outcome = TaskOutcome.Succeeded;
+                    }
+
                     break;
 
                 case RecursionStopReason.NeedsDecision:

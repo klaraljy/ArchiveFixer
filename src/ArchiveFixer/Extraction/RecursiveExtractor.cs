@@ -153,6 +153,15 @@ namespace ArchiveFixer.Extraction
         /// <summary>候选还有，但已经试满 MaxPasswordAttemptsPerLayer。**不是**密码错误。</summary>
         PasswordAttemptsExceeded,
 
+        /// <summary>
+        /// 解压途中**磁盘写满**（引擎报 <see cref="Engines.EngineErrorTypes.NoDiskSpace"/>）。
+        ///
+        /// <para>为什么要单列一条（用户 2026-09-27 真机：递归内层包撞空间不足，批末诊断却归到"其他"）：
+        /// 归档本身没有任何问题，用户要做的是**清空间 / 换盘**，而不是去怀疑包坏了或改权限 ——
+        /// 把它压在 <see cref="EngineFailed"/> 里，用户就看不到正确方向。</para>
+        /// </summary>
+        DiskSpaceInsufficient,
+
         /// <summary>候选全试完了都不对。</summary>
         WrongPassword,
 
@@ -1159,6 +1168,13 @@ namespace ArchiveFixer.Extraction
                 "NeedPassword" => RecursionStopReason.WrongPassword,
                 "Cancelled" => RecursionStopReason.UserCancelled,
                 "UnsafePath" => RecursionStopReason.UnsafeEntry,
+
+                /*
+                 * 写不下盘（引擎报磁盘空间不足）单独成一档：它与"引擎解不开"要用户做的事完全不同
+                 * （清空间 / 换盘 vs 查包 / 查引擎）。判据只读引擎的结构化错误码，⛔ 不比中文。
+                 */
+                EngineErrorTypes.NoDiskSpace => RecursionStopReason.DiskSpaceInsufficient,
+
                 _ => RecursionStopReason.EngineFailed
             };
         }

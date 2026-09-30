@@ -432,7 +432,7 @@ namespace ArchiveFixer.Models
             BatchProblemKind.OutputConflict => StatusText.BatchDiagnosticsActionOutputConflict,
             BatchProblemKind.SourceChanged => StatusText.BatchDiagnosticsActionSourceChanged,
             BatchProblemKind.Other => StatusText.BatchDiagnosticsActionOther,
-            BatchProblemKind.PartiallyCompleted => StatusText.BatchDiagnosticsActionOther,
+            BatchProblemKind.PartiallyCompleted => StatusText.BatchDiagnosticsActionPartiallyCompleted,
             BatchProblemKind.Cancelled => StatusText.BatchDiagnosticsActionNotFinished,
             BatchProblemKind.NotReached => StatusText.BatchDiagnosticsActionNotFinished,
 
@@ -483,8 +483,29 @@ namespace ArchiveFixer.Models
                     volumes);
             }
 
+            /*
+             * 「部分完成」这一组必须说清**差在哪一步**（用户 2026-09-27：批末诊断只说
+             * 「下一步：其他」，而这件事其实有一句现成的原因 —— 比如"内容物已好、源包未能移入其余物"）。
+             * 原因已经在任务上（`ErrorMessage`，由收尾那一刻写好的那一句），这里**原样取来**，
+             * ⛔ 不重算、不另造一套说法。
+             *
+             * 只对部分完成这一档取：其余各档的原因由上面的结构化补充或组名本身说得更准。
+             */
+            if (string.Equals(task.Status, StatusText.PartiallyCompleted, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(task.ErrorMessage))
+            {
+                return ShortenText(task.ErrorMessage.Trim());
+            }
+
             return string.Empty;
         }
+
+        /// <summary>补充那句话最多留多少个字（超出截断 —— 一行诊断不该变成一段散文）。</summary>
+        private const int MaxDetailLength = 80;
+
+        private static string ShortenText(string text) =>
+            text.Length <= MaxDetailLength ? text : text[..MaxDetailLength] + "…";
+
 
         /// <summary>文件名（没有就退回路径的文件名部分；两者都没有才写一个短横）。</summary>
         private static string ResolveName(ArchiveTask task)
