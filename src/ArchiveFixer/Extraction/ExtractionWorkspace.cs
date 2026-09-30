@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Storage;
 using System;
@@ -530,7 +531,8 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 把**已经被解开**的那个包文件从产物里删掉（它的位置让给同名目录）。
+        /// 把**已经被解开**的那个包从产物里删掉（它的位置让给同名目录）；
+        /// 它要是分卷组的一卷，**同一组的其余卷一起删**（见 <see cref="DeleteConsumedVolumeSiblings"/>）。
         ///
         /// <para>
         /// 只在它确实位于发布目标之下时才删（越界一律不碰，只记一条）—— 这是不可逆操作，
@@ -552,12 +554,12 @@ namespace ArchiveFixer.Extraction
                     return;
                 }
 
-                if (!File.Exists(publishedArchivePath))
+                if (File.Exists(publishedArchivePath))
                 {
-                    return;
+                    File.Delete(publishedArchivePath);
                 }
 
-                File.Delete(publishedArchivePath);
+                DeleteConsumedVolumeSiblings(publishedArchivePath, errors);
             }
             catch (Exception ex)
             {
@@ -566,6 +568,72 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// 被解开的分卷组是**整组**一起被消费掉的：只删掉"这一层要解的那一卷"，同组的后续卷会缺了首卷
+        /// 留在产物里 —— 而定稿那一侧的分卷完整性闸门
+        /// （<c>ExtractionCoordinator.TryConfirmVolumeGroupComplete</c>：<c>.002</c> 必须能找到同目录的
+        /// <c>.001</c>）会判定"整组不完整" ⇒ **整份计划作废、任务报失败**（2026-09-30 那 25 GB 踩的
+        /// 正是同一道闸门）。这一组卷刚刚被我们成功解开、内容物也已经落位，所以它们**整个**是过程物，
+        /// 一起清掉才不会留下半套。
+        ///
+        /// <para>
+        /// 判据全部只读盘上的事实，且**只删同目录、同族、同基名**的那些卷
+        /// （判据唯一出口 <see cref="VolumeGroupDetector.BelongsToSameGroup"/>，⛔ 不另写一套名字规则）：
+        /// 目录里别的文件（真内容物、别的组）一个都不碰；删不掉只记一条，不影响已经落位的内容物。
+        /// </para>
+        /// </summary>
+        private static void DeleteConsumedVolumeSiblings(string publishedArchivePath, List<string> errors)
+        {
+            string name = Path.GetFileName(publishedArchivePath);
+
+            if (name.Length == 0 || !FileNameHelper.IsVolumePartFileName(name))
+            {
+                // 不是分卷组：它自己删掉就是整组删掉（⛔ 绝不按"名字像"去连坐别的文件）。
+                return;
+            }
+
+            string directory = Path.GetDirectoryName(publishedArchivePath) ?? string.Empty;
+
+            if (directory.Length == 0)
+            {
+                return;
+            }
+
+            string[] siblings;
+
+            try
+            {
+                siblings = Directory.GetFiles(directory);
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{name}（同组分卷没能一起清掉：{ex.Message}）");
+                return;
+            }
+
+            foreach (string sibling in siblings)
+            {
+                string siblingName = Path.GetFileName(sibling);
+
+                if (string.Equals(siblingName, name, StringComparison.OrdinalIgnoreCase)
+                    || !FileNameHelper.IsVolumePartFileName(siblingName)
+                    || !VolumeGroupDetector.BelongsToSameGroup(name, siblingName))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    File.Delete(sibling);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{siblingName}（同一分卷组，已解开，但没能删掉：{ex.Message}）");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 删除工作区，并如实回答"删了没有、为什么"。
         ///
         /// 只在调用方**确认后**调用（AGENTS.md §6 第 13 条：清工作区必须先经用户确认）。
         /// 对"本次任务自己造出来的中间产物"来说，那个确认点就是"任务已成功、产物已经发布出去"；

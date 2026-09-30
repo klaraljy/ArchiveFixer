@@ -42,6 +42,9 @@ namespace ArchiveFixer.Tests
     /// ③ 把 <c>RecursiveExtractor.BuildResult</c> 的 <c>inPlace</c> 判据关掉（回到"把叶子层产物摊到发布目标根上"
     /// 的老口径）⇒ <c>RecursiveExtractorTests.就地替换_用户极端例子的整棵树逐字成立</c> 变红：
     /// 产物只剩顶层七个 <c>*.bin</c>，`1.mp4/2.mp4/3.mp4` 与所有层**整个不见了**。
+    /// ④ 把 <c>ExtractionWorkspace.DeleteConsumedVolumeSiblings</c> 那一行撤掉 ⇒
+    /// <c>分卷组_就地替换后产物里不许留下半套卷</c> 变红：产物里留下缺首卷的 <c>Y.7z.002</c>，
+    /// 定稿那侧直接判 <c>这一层里有分卷组不完整：Y.7z.001… 缺首卷（Y.7z.001）。已按「什么都不动」处理</c>。
     /// </para>
     /// <para>
     /// ⚠ 别把 <c>DecideLayout</c> 里那条 <c>hasInnermostPackage → WrapInFolder</c> 提前返回
@@ -444,6 +447,63 @@ namespace ArchiveFixer.Tests
                 // 两个分支的内容物绝不混进同一层。
                 Assert.False(Directory.Exists(Path.Combine(target, "内容物")));
                 Assert.False(Directory.Exists(Path.Combine(target, "BBBB", "内容物")));
+            }
+            finally
+            {
+                TryDelete(root);
+            }
+        }
+
+        [Fact]
+        public void 分卷组_就地替换后产物里不许留下半套卷()
+        {
+            /*
+             * 被解开的分卷组是**整组**一起被消费掉的。只删掉"这一层要解的那一卷"，
+             * 后续卷会缺了首卷留在产物里 —— 而定稿那一侧的分卷完整性闸门
+             * （`ExtractionCoordinator.TryConfirmVolumeGroupComplete`：`.002` 必须能找到同目录的 `.001`）
+             * 会判定"整组不完整"⇒ 整份计划作废、任务报失败（用户 2026-09-30 那 25 GB 的同一道闸门）。
+             * 这里只钉一件事：被就地替换掉的那一组卷，产物里一卷都不许剩。
+             */
+            string root = NewTempRoot();
+
+            try
+            {
+                var workspace = new ExtractionWorkspace(Path.Combine(root, "ws"), "volumes");
+                WorkspaceLayer outer = workspace.CreateNextLayer(Path.Combine(root, "AAA.7z"));
+
+                WriteFile(outer.OutputPath, "note.txt");
+                WriteFile(outer.OutputPath, "Y.7z.001");
+                WriteFile(outer.OutputPath, "Y.7z.002");
+
+                WorkspaceLayer inner = workspace.CreateNextLayer(Path.Combine(outer.OutputPath, "Y.7z.001"));
+                WriteFile(inner.OutputPath, @"内容物\payload.bin");
+
+                string target = Path.Combine(root, "stage");
+                WorkspacePublishResult published = workspace.Publish(target, inPlaceInnerPackages: true);
+
+                Assert.True(published.Success, published.Message);
+
+                // 真文件与解出来的内容物照常在。
+                Assert.True(File.Exists(Path.Combine(target, "note.txt")), published.Message);
+                Assert.True(File.Exists(Path.Combine(target, "内容物", "payload.bin")), published.Message);
+
+                // ⛔ 整组卷一个都不许留在产物里。
+                Assert.False(File.Exists(Path.Combine(target, "Y.7z.001")), "首卷已被解开、让位给了目录");
+                Assert.False(File.Exists(Path.Combine(target, "Y.7z.002")), "同一组的后续卷也已经被消费，不该留在产物里");
+
+                /*
+                 * 而且这一份产物必须**过得了定稿**：里面没有"缺首卷的残组"，
+                 * 定稿侧的分卷完整性闸门就不会把整份计划作废、把这一单判成失败。
+                 * （老行为：`Y.7z.002` 留下来 ⇒ 闸门判"缺首卷（Y.7z.001）"⇒ 计划 Failed、
+                 * 产物与源包一个字节都不动，用户看到的是"这一层里有分卷组不完整"。）
+                 */
+                ExtractionCoordinator.FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+                    target,
+                    Path.Combine(root, "out", "AAA"),
+                    sharedOutputRoot: false,
+                    archiveBaseName: "AAA");
+
+                Assert.False(plan.Failed, plan.FailureReason);
             }
             finally
             {
