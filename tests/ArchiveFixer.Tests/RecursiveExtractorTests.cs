@@ -209,6 +209,141 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        // ─────────────────── 就地替换（用户 2026-09-30 中午的整棵树例子） ───────────────────
+        //
+        // 用户给的那棵树（这里用**真 7z 造的真归档**跑整条递归链，逐字对照产物）：
+        //   AAA/  ├── 1.mp4 2.mp4 3.mp4                        # 真文件，原地不动
+        //         ├── DDDD.mp4 EEEE.mp4 FFFF.mp4                # 是压缩包 ⇒ DDDD\内容物、EEEE\内容物、FFFF\内容物
+        //         ├── BBBB/  ├── CCCCC.mp4 → BBBB\CCCCC\内容物
+        //         │          └── DDDDD.mp4 → BBBB\DDDDD\内容物
+        //         └── CCCC/  ├── EEEEE.mp4 → CCCC\EEEEE\内容物
+        //                    └── DDDDD/ └── EEEEEE.mp4 → CCCC\DDDDD\EEEEEE\内容物
+        //
+        // ⛔ 判据是"**就地**"两个字：每一个包都留在**它原来那个位置**换成一个同名文件夹，
+        // 而不是被搬到顶层再各建一层。
+
+        [SevenZipFact]
+        public async Task 就地替换_用户极端例子的整棵树逐字成立()
+        {
+            RequireSevenZip();
+
+            string source = Path.Combine(_root, "_extreme");
+            Directory.CreateDirectory(source);
+
+            foreach (string name in new[] { "1.mp4", "2.mp4", "3.mp4" })
+            {
+                File.WriteAllText(Path.Combine(source, name), "真文件，一个字节都不许动\n", Utf8NoBom);
+            }
+
+            // 七个"后缀是假的、内容是真的"的压缩包：`DDDD.mp4` 装的是 `内容物\DDDD.bin`。
+            foreach ((string archive, string relativePath) in new[]
+                     {
+                         ("DDDD", "DDDD.mp4"),
+                         ("EEEE", "EEEE.mp4"),
+                         ("FFFF", "FFFF.mp4"),
+                         ("CCCCC", @"BBBB\CCCCC.mp4"),
+                         ("DDDDD", @"BBBB\DDDDD.mp4"),
+                         ("EEEEE", @"CCCC\EEEEE.mp4"),
+                         ("EEEEEE", @"CCCC\DDDDD\EEEEEE.mp4")
+                     })
+            {
+                string target = Path.Combine(source, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(BuildInnerPackage(archive), target);
+            }
+
+            string outer = Path.Combine(_root, "AAA.zip");
+            Run7z("a", "-tzip", outer, Path.Combine(source, "*"));
+
+            string output = Path.Combine(_root, "out", "AAA");
+            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.AllBranches);
+
+            Assert.True(result.Completed, result.Summary);
+            Assert.Equal(8, result.Layers.Count);
+
+            Assert.True(
+                new[]
+                {
+                    "1.mp4",
+                    "2.mp4",
+                    "3.mp4",
+                    "BBBB",
+                    @"BBBB\CCCCC",
+                    @"BBBB\CCCCC\内容物",
+                    @"BBBB\CCCCC\内容物\CCCCC.bin",
+                    @"BBBB\DDDDD",
+                    @"BBBB\DDDDD\内容物",
+                    @"BBBB\DDDDD\内容物\DDDDD.bin",
+                    "CCCC",
+                    @"CCCC\DDDDD",
+                    @"CCCC\DDDDD\EEEEEE",
+                    @"CCCC\DDDDD\EEEEEE\内容物",
+                    @"CCCC\DDDDD\EEEEEE\内容物\EEEEEE.bin",
+                    @"CCCC\EEEEE",
+                    @"CCCC\EEEEE\内容物",
+                    @"CCCC\EEEEE\内容物\EEEEE.bin",
+                    "DDDD",
+                    @"DDDD\内容物",
+                    @"DDDD\内容物\DDDD.bin",
+                    "EEEE",
+                    @"EEEE\内容物",
+                    @"EEEE\内容物\EEEE.bin",
+                    "FFFF",
+                    @"FFFF\内容物",
+                    @"FFFF\内容物\FFFF.bin"
+                }.SequenceEqual(Tree(output)),
+                "产物树与用户给的形状不一致。实际：" + string.Join(" | ", Tree(output))
+                + "　结论：" + result.Summary);
+
+            // 被解开的包一个都不许留在产物里（原地让位给同名目录）。
+            foreach (string consumed in new[]
+                     {
+                         "DDDD.mp4", "EEEE.mp4", "FFFF.mp4",
+                         @"BBBB\CCCCC.mp4", @"BBBB\DDDDD.mp4",
+                         @"CCCC\EEEEE.mp4", @"CCCC\DDDDD\EEEEEE.mp4"
+                     })
+            {
+                Assert.False(File.Exists(Path.Combine(output, consumed)), consumed + " 应该已经被就地替换成目录");
+            }
+        }
+
+        [SevenZipFact]
+        public async Task 普通文件夹_1111里面包着真内容物_真7z下不许摊平()
+        {
+            RequireSevenZip();
+
+            /*
+             * 用户原话："如果是一个文件夹 1111 里面包裹真正的内容物，这个时候你就会把 1111 省略，
+             * 这是非常大忌。1111 只是一个文件夹名字，我们不能去假设原打包人的逻辑。"
+             *
+             * 老口径（发布侧摊"无意义外壳" + 判定表 ④ 单链塌缩）都会把 `1111\真内容` 一路摊到一层，
+             * 于是 `1111` 这个名字直接消失。这里跑真 7z，断言的是**磁盘上的产物**。
+             */
+            string source = Path.Combine(_root, "_plain-folder");
+            Directory.CreateDirectory(Path.Combine(source, "1111", "真内容"));
+            File.WriteAllText(Path.Combine(source, "1111", "真内容", "a.txt"), "1111 里面的真内容\n", Utf8NoBom);
+            File.Copy(BuildInnerPackage("inner"), Path.Combine(source, "inner.7z"));
+
+            string outer = Path.Combine(_root, "plain-folder.zip");
+            Run7z("a", "-tzip", outer, Path.Combine(source, "*"));
+
+            string output = Path.Combine(_root, "out", "plain");
+            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.AllBranches);
+
+            Assert.True(result.Completed, result.Summary);
+
+            // `1111` 与它下面那层 `真内容` 都在（一个都没被当成"无意义外壳"摊掉）。
+            Assert.True(
+                File.Exists(Path.Combine(output, "1111", "真内容", "a.txt")),
+                "`1111\\真内容` 被摊平了。实际产物：" + string.Join(" | ", Tree(output)));
+
+            Assert.False(Directory.Exists(Path.Combine(output, "真内容")), "`真内容` 不许被提上来当壳");
+            Assert.False(File.Exists(Path.Combine(output, "a.txt")), "`1111\\真内容` 两层都不许被摊平");
+
+            // 内层包就地换成了同名文件夹。
+            Assert.True(File.Exists(Path.Combine(output, "inner", "内容物", "inner.bin")), result.Summary);
+        }
+
         [SevenZipFact]
         public async Task 只有说明类文件时才自动继续_其它文件存在时改为询问()
         {
@@ -1388,6 +1523,32 @@ namespace ArchiveFixer.Tests
             Run7z("a", "-tzip", outer, Path.Combine(outerSource, "*"));
 
             return outer;
+        }
+
+        /// <summary>
+        /// 造一个"内容是 <c>内容物\&lt;名字&gt;.bin</c>"的真 7z 包，返回归档路径。
+        /// 就地替换那一组用例拿它当内层包（用户例子里每个包解出来都是一层 <c>内容物\</c>）。
+        /// </summary>
+        private string BuildInnerPackage(string name)
+        {
+            string payload = Path.Combine(_root, "_payload-" + name, "内容物");
+            Directory.CreateDirectory(payload);
+            File.WriteAllText(Path.Combine(payload, name + ".bin"), name + " 的内容\n", Utf8NoBom);
+
+            string archive = Path.Combine(_root, name + ".7z");
+            Run7z("a", "-t7z", archive, Path.Combine(Path.GetDirectoryName(payload)!, "*"));
+
+            return archive;
+        }
+
+        /// <summary>目录树里的全部条目（目录 + 文件），相对路径、序号排序 —— 用来逐字对照整棵树。</summary>
+        private static IReadOnlyList<string> Tree(string root)
+        {
+            return Directory
+                .EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(root, path))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
         }
 
         private string BuildSourceDir(params (string Name, string Content)[] files)
