@@ -1049,12 +1049,18 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 递归失败（第一层就没解开）：**两处**工作区默认都要清掉（用户 2026-09-25 第 25 条追加）。
+        /// 递归失败（第一层就没解开，一个文件都没产出）：**两处**工作区默认都要清掉
+        /// （用户 2026-09-25 第 25 条追加）。
         ///
         /// <para>用户原话：「如果解压 40G，两层，解压失败有 80G 的卸载残留，用户不得气死」——
         /// 双层包失败时留得最多的正是递归核心那份逐层工作区，所以这一条同时钉两处：
         /// ① 抠出来的过程物所在的 <c>work\&lt;任务名&gt;\</c>；② <c>work\recursive\&lt;taskId&gt;\</c>。
-        /// 结论仍是"部分完成"（绝不显示成功，不变量 6），源包一个字节不动（不变量 1）。</para>
+        /// 结论是**失败**（密码错误那一档），源包一个字节不动（不变量 1）。</para>
+        ///
+        /// <para>⚠ 状态口径 2026-09-27 改过一次（用户真机 `giu.7z.001`）：**什么都没产出**时
+        /// 过去落「部分完成」，现在落「密码错误 / 文件损坏 / 解压失败」那一档 ——
+        /// "部分完成"会让用户去暂存目录里找根本不存在的产物。
+        /// 「解出来一半再失败」仍然是「部分完成」（见 <c>BatchSummaryDiagnosticsTests</c> 那条反向对照）。</para>
         /// </summary>
         [Fact]
         public async Task 递归失败后_两处工作区默认都被清掉()
@@ -1084,8 +1090,9 @@ namespace ArchiveFixer.Tests
                 RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
             }
 
-            // 递归没走完 → 部分完成（绝不显示成功）。
-            Assert.Equal(StatusText.PartiallyCompleted, task.Status);
+            // 递归没走完、且一个文件都没产出 → **失败**（绝不显示成功，也绝不显示成"做了一半"）。
+            Assert.Equal(StatusText.WrongPassword, task.Status);
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
             Assert.False(Directory.Exists(taskWorkDirectory), $"递归失败之后中间工作区还在：{taskWorkDirectory}");
 
             // 递归核心的逐层工作区（几百 MB / 几十 GB 的那一份）也必须清干净。

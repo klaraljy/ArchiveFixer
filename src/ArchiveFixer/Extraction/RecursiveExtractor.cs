@@ -196,6 +196,19 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>一行中文结论，直接显示给用户。</summary>
         public string Summary { get; init; } = string.Empty;
+
+        /// <summary>
+        /// **这一趟有没有真的解出过东西**（任意一层成功、或任意一层的产物目录里留下了文件）。
+        ///
+        /// <para>为什么要单列一条（用户 2026-09-27 真机 `giu.7z.001`）：调用方要据此区分
+        /// "一半做完了"（<c>部分完成</c>）与"什么都没产出"（<c>失败</c>）——
+        /// 后者说成"部分完成"会让用户去工作区里找根本不存在的产物；</para>
+        ///
+        /// <para>判据只看**事实**（层的成功标记 + 产物文件数 / 字节数），⛔ 不比对任何中文文案
+        /// （AGENTS.md §7）。</para>
+        /// </summary>
+        public bool ProducedAnyLayerOutput =>
+            Layers.Any(layer => layer.Success || layer.OutputFileCount > 0 || layer.OutputSize > 0);
     }
 
     /// <summary>
@@ -294,6 +307,28 @@ namespace ArchiveFixer.Extraction
         /// </para>
         /// </summary>
         private readonly Func<ArchiveTask, Task<string?>>? _sourceCheck;
+
+        /// <summary>
+        /// **详细日志档**（⑥设置 →「详细日志（排查用）」，默认关）。
+        ///
+        /// <para>为什么递归核心要知道它（用户 2026-09-27：「开了更详细的日志选项怎么还是这么简单」）：
+        /// 递归路径以前**连一条候选日志都没有** —— 真机那次 13 分钟走的正是这条路，
+        /// 日志里连"试了几个候选"都看不出来。打开详细日志后，每个候选一条 INFO、
+        /// 每层开工一条 INFO，与单层路径同一套措辞（见 <see cref="VerboseLog"/> 的说明）。</para>
+        ///
+        /// <para>⚠ 候选日志里**只有脱敏占位符**：本类拿到的 passwordProvider 只给值，
+        /// 它自己也不知道来源，所以描述由调用方注入（<see cref="DescribeCandidate"/>）。</para>
+        /// </summary>
+        public bool VerboseLog { get; set; }
+
+        /// <summary>
+        /// 把一个密码候选描述成"能写进日志的那半句"（**必须已脱敏**）。
+        ///
+        /// <para>由调用方注入而不是本类自己拼：候选的来源（空密码 / 统一密码 / 密码本第 N 项…）
+        /// 只有 <c>PasswordService</c> 知道，递归核心只拿到值。注入方给的就是单层路径
+        /// 用的那一份 <c>BuildTryPasswordLogText</c>，于是两处口径**逐字一致**。</para>
+        /// </summary>
+        public Func<string, int, string>? DescribeCandidate { get; set; }
 
         /// <summary>
         /// passwordProvider：给定归档路径，返回按优先级排好的密码候选（**空字符串代表试空密码**）。
@@ -699,6 +734,34 @@ namespace ArchiveFixer.Extraction
             ArchiveOperationResult? success = null;
             string? succeededPassword = null;
 
+            /*
+             * 这一层的最多候选数：**与循环用的同一个上限**（`_limits.MaxPasswordAttemptsPerLayer`）。
+             * 先算出来是为了让"候选 i/N"里的 N 与真正会试的个数一致 ——
+             * 写成 candidates.Count 会在被上限截断时给出一个永远到不了的 N。
+             */
+            int layerCandidateLimit = Math.Min(candidates.Count, _limits.MaxPasswordAttemptsPerLayer);
+
+            /*
+             * 日志里的任务标签：**只写文件名 + 层号**（§8 隐私红线：完整路径不进日志）。
+             * 层号是排查多层嵌套时唯一能对号入座的信息，既有日志的行首形状就是它。
+             */
+            string layerLabel = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.RecursionLayerLogPrefixFormat,
+                item.Depth) + Path.GetFileName(item.ArchivePath);
+
+            if (VerboseLog)
+            {
+                Log(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.RecursionLayerAttemptLogFormat,
+                        layerLabel,
+                        item.Depth,
+                        Path.GetFileName(item.ArchivePath)));
+            }
+
             foreach (string candidate in candidates)
             {
                 if (attempts >= _limits.MaxPasswordAttemptsPerLayer)
@@ -710,6 +773,30 @@ namespace ArchiveFixer.Extraction
 
                 attempts++;
                 triedAny = true;
+
+                /*
+                 * ===== 候选日志（用户 2026-09-27：「试了几个候选」必须看得见）=====
+                 *
+                 * **默认档就写**：单层路径那条同类日志本来就在候选循环里（每候选一行 INFO），
+                 * 而递归路径过去**一条都没有** —— 真机那次 13 分钟走的正是递归路径，
+                 * 日志里连"试了几个候选"都看不出来。两条路的口径必须一样。
+                 *
+                 * 措辞与单层路径**共用同一个格式常量**（StatusText.PasswordCandidateAttemptLogFormat），
+                 * 来源说明也共用同一份描述器（DescribeCandidate ← PasswordService.BuildTryPasswordLogText）。
+                 */
+                int ordinal = attempts;
+                string described = DescribeCandidate?.Invoke(candidate, ordinal)
+                    ?? $"尝试密码候选第 {ordinal} 项：******";
+
+                Log(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PasswordCandidateAttemptLogFormat,
+                        layerLabel,
+                        ordinal,
+                        layerCandidateLimit,
+                        described));
 
                 /*
                  * 第一道防线（不变量 4）：解压前先列目录，把危险条目名挑出来。
@@ -772,10 +859,36 @@ namespace ArchiveFixer.Extraction
                     succeededPassword = candidate;
                     success = result;
                     lastFailure = null;
+
+                    /*
+                     * 详细日志档：成功那一次的命令行与原话也写下来 ——
+                     * 排查的人要拿"成功那次调了什么"去对照"失败那次差在哪"。
+                     * 默认档一个字都不写（成功 = 一行摘要，第 44 条）。
+                     */
+                    if (VerboseLog)
+                    {
+                        EngineOutputLog.LogVerbose(Log, layerLabel, result);
+                    }
+
                     break;
                 }
 
                 lastFailure = result;
+
+                /*
+                 * ===== 引擎原话落日志（用户 2026-09-27：「引擎原话从不落日志」）=====
+                 *
+                 * 放在 `lastFailure = result` 之后、所有 return / continue **之前**：
+                 * 三条出路（损坏停下 / 错密码继续 / 其它停下）都要留下这一次的原话。
+                 * 出口只有 <see cref="EngineOutputLog"/> 一个（与单层路径同一个），
+                 * ⛔ 这里不许自己挑行、自己拼前缀。
+                 */
+                EngineOutputLog.LogFailure(Log, layerLabel, result);
+
+                if (VerboseLog)
+                {
+                    EngineOutputLog.LogVerbose(Log, layerLabel, result);
+                }
 
                 /*
                  * ===== 报错结论要取**走得最远的那一次**，不是最后一次（用户 2026-09-30 真机）=====
@@ -801,6 +914,13 @@ namespace ArchiveFixer.Extraction
                  */
                 if (result.IsCorrupted)
                 {
+                    Log(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.CandidateStoppedByCorruptedLogFormat,
+                            layerLabel));
+
                     return LayerOutcome.Stop(
                         BuildLayerReport(item, result, succeededPassword: null),
                         RecursionStopReason.Corrupted);
@@ -809,10 +929,25 @@ namespace ArchiveFixer.Extraction
                 // 需要密码 / 密码错误 → 这个候选没用了，试下一个。
                 if (result.IsWrongPassword || result.IsNeedPassword)
                 {
+                    Log(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.PasswordCandidateRejectedLogFormat,
+                            layerLabel));
+
                     continue;
                 }
 
                 // 其余（引擎不可用、路径问题、输出冲突…）换密码也解决不了，直接停。
+                Log(
+                    "ERROR",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.CandidateStoppedByEngineErrorLogFormat,
+                        layerLabel,
+                        result.Message));
+
                 return LayerOutcome.Stop(
                     BuildLayerReport(item, result, succeededPassword: null),
                     MapEngineErrorToStopReason(result));

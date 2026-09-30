@@ -22,6 +22,20 @@ namespace ArchiveFixer.Engines.SevenZip
         public const string MissingFirstVolumeErrorType = "MissingFirstVolume";
 
         /// <summary>
+        /// 结论里那几行 7-Zip 原话之间用什么连（全角竖线，用户一眼能看出是"多行拼起来的"）。
+        /// 与 <c>UnRarOutputParser</c> 共用同一个形状（同一件事只允许一种说法）。
+        /// </summary>
+        public const string ImportantMessageSeparator = " ｜ ";
+
+        /// <summary>
+        /// 结论里最多带几行 7-Zip 原话。
+        ///
+        /// <para>为什么是 3：第一行常常只是 <c>ERROR: &lt;路径&gt;</c>，原因句在第二 / 第三行
+        /// （真机 `giu.7z.001` 实测）。再多就不是"一眼看完"了 —— 细的走日志。</para>
+        /// </summary>
+        public const int ImportantMessageMaxLines = 3;
+
+        /// <summary>
         /// 7-Zip 退出码 1：**发生非致命错误**（部分文件解出来了、部分失败）。
         ///
         /// 单独一类而不是并进"未知错误"的理由：这一类的用户动作与"解压失败"不同 ——
@@ -513,6 +527,20 @@ namespace ArchiveFixer.Engines.SevenZip
             return exitCode == 0;
         }
 
+        /// <summary>
+        /// 结论里带出的"7-Zip 原话"，**最多三行**，按重要度排序后用 ` ｜ ` 连接。
+        ///
+        /// <para><b>为什么要多行</b>（用户 2026-09-27 真机，本方法的红检现场）：
+        /// 旧实现"命中一行就 return"，而 7-Zip 打出来的第一行恰恰是
+        /// <c>ERROR: &lt;路径&gt;</c> —— 真正说明原因的那一句
+        /// （<c>Cannot open encrypted archive. Wrong password?</c>）在**后面的行**里，
+        /// 于是结论里只剩一个路径，用户什么也没多看到。</para>
+        ///
+        /// <para>排序规则与"引擎原话落日志"（<see cref="EngineOutputKeywords"/>）**同一份**：
+        /// <c>ERROR</c> 行 &gt; 说出原因的行 &gt; 其它被识别的行；
+        /// 一行都挑不出来时退回旧行为（第一行 —— 比旧代码的"最后一行"更贴结论，
+        /// 但那条路本来就极少走到）。</para>
+        /// </summary>
         public static string ExtractImportantMessage(string? text)
         {
             text = PasswordMasker.Sanitize(text);
@@ -522,69 +550,15 @@ namespace ArchiveFixer.Engines.SevenZip
                 return string.Empty;
             }
 
-            string[] lines = text
-                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim())
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .ToArray();
+            string ranked = EngineOutputKeywords.RankedMessage(
+                text,
+                ImportantMessageSeparator,
+                ImportantMessageMaxLines,
+                SevenZipKeywords.Buckets);
 
-            if (lines.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            /*
-             * 这一份的关键字只描述"7-Zip 自己可能打出来的行"，全是英文。
-             * ⛔ 不许往这里加我们自己产出的中文文案：那种行只存在于 ArchiveOperationResult.Message 里，
-             * 永远不会出现在本方法的入参上，改一个字还会静默失效。
-             */
-            string[] importantKeywords =
-            {
-                "ERROR",
-                "Error",
-                "WARNING",
-                "Warning",
-                "Wrong password",
-                "Password is incorrect",
-                "Enter password",
-                "Can not open",
-                "Cannot open",
-                "Can not create",
-                "Cannot create",
-                "Data Error",
-                "CRC Failed",
-                "Headers Error",
-                "Unexpected end",
-                "Access is denied",
-                "Permission denied",
-                "Unsupported Method",
-                "Unsupported method",
-                "Missing volume",
-                "Command Line Error",
-                "Incorrect command line",
-                "Can not read",
-                "Cannot read",
-                "Can not get password",
-                "Cannot get password",
-                "Break signaled",
-                "User break",
-                "User stopped",
-                "Operation canceled",
-                "Operation cancelled",
-                "timed out",
-                "timeout"
-            };
-
-            foreach (string line in lines)
-            {
-                if (importantKeywords.Any(k =>
-                        line.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0))
-                {
-                    return line;
-                }
-            }
-
-            return lines.LastOrDefault() ?? string.Empty;
+            return ranked.Length > 0
+                ? ranked
+                : EngineOutputKeywords.FallbackLine(text, preferFirst: true);
         }
 
         public static int? TryParseProgressPercent(string? line)

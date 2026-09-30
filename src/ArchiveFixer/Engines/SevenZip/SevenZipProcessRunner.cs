@@ -486,7 +486,8 @@ namespace ArchiveFixer.Engines.SevenZip
                     usedPassword,
                     stopwatch.Elapsed,
                     FindArchiveArgument(arguments),
-                    ResolveOperation(arguments));
+                    ResolveOperation(arguments),
+                    arguments);
             }
             catch (Exception ex)
             {
@@ -677,7 +678,8 @@ namespace ArchiveFixer.Engines.SevenZip
             string usedPassword,
             TimeSpan elapsed,
             string? archivePath,
-            EngineOperation? operation = null)
+            EngineOperation? operation = null,
+            IEnumerable<string>? arguments = null)
         {
             output = PasswordMasker.Sanitize(output);
             error = PasswordMasker.Sanitize(error);
@@ -712,8 +714,72 @@ namespace ArchiveFixer.Engines.SevenZip
                 Message = message,
                 DetectedErrorType = errorType,
                 UsedPasswordMasked = MaskPassword(usedPassword),
-                Elapsed = elapsed
+                Elapsed = elapsed,
+                CommandSummary = BuildCommandSummary(arguments)
             };
+        }
+
+        /// <summary>
+        /// "这次到底拿什么参数调的 7-Zip"（**已脱敏**，只给详细日志用）。
+        ///
+        /// <para>形状：命令 + 开关 + 归档**文件名**。刻意不带完整路径 ——
+        /// 详细日志也不该把用户的个人目录写进去（§8 隐私红线），而定位问题用文件名就够。</para>
+        ///
+        /// <para>⛔ 参数里绝不允许出现明文密码：这里再过一道 <see cref="PasswordMasker.Sanitize"/>，
+        /// 由它把 <c>-p&lt;明文&gt;</c> 改成 <c>-p******</c>（不变量 5）。</para>
+        /// </summary>
+        internal static string BuildCommandSummary(IEnumerable<string>? arguments)
+        {
+            if (arguments == null)
+            {
+                return string.Empty;
+            }
+
+            var parts = new List<string> { "7z" };
+            bool isFirst = true;
+            bool sawArchive = false;
+
+            foreach (string argument in arguments)
+            {
+                if (string.IsNullOrWhiteSpace(argument))
+                {
+                    continue;
+                }
+
+                if (isFirst)
+                {
+                    // 命令字（l / t / x / e）直接跟在 7z 后面。
+                    isFirst = false;
+                    parts.Add(argument.Trim());
+                    continue;
+                }
+
+                if (argument.StartsWith("-", StringComparison.Ordinal))
+                {
+                    // 输出目录不写进摘要（它可能很长，而且对排查"调了什么"没有信息量）。
+                    if (argument.StartsWith("-o", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    parts.Add(argument.Trim());
+                    continue;
+                }
+
+                if (!sawArchive)
+                {
+                    // 第一个非开关参数就是归档（参数拼装顺序固定，见 BuildExtractArguments）：
+                    // 只留**文件名**，完整路径不进日志（§8 隐私红线）。
+                    sawArchive = true;
+                    parts.Add(Path.GetFileName(argument));
+                    continue;
+                }
+
+                // 归档之后的位置是"要处理的条目名"（密码预检只解那一条）：保留，它能说明这次解的是什么。
+                parts.Add(argument.Trim());
+            }
+
+            return PasswordMasker.Sanitize(string.Join(" ", parts));
         }
 
         /// <summary>

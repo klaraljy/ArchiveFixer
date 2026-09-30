@@ -290,7 +290,12 @@ namespace ArchiveFixer.Models
                 return null;
             }
 
-            // ② 具体原因：只认既有状态常量（与 TaskSummaryService / OneClickCoordinator 同一批常量）。
+            /*
+             * ② 具体原因：只认既有状态常量（与 TaskSummaryService / OneClickCoordinator 同一批常量）。
+             *
+             * ⚠ 这一支刻意排在"机器终态兜底"**之前**：状态能说出具体原因时就必须说具体原因，
+             * 兜底只在状态说不出原因时才允许用（用户 2026-09-27：⛔ 不许出现"下一步：其他"这种废话兜底）。
+             */
             switch (task.Status)
             {
                 case StatusText.DiskSpaceInsufficient:
@@ -317,6 +322,21 @@ namespace ArchiveFixer.Models
                     return BatchProblemKind.SourceChanged;
 
                 case StatusText.PartiallyCompleted:
+
+                    /*
+                     * 「部分完成」这一格**要看终态**（用户 2026-09-27 真机 `giu.7z.001`）：
+                     *
+                     * · 终态 = 部分完成 → 确实做了一半，归"部分完成"组；
+                     * · 终态 = 失败 → 这一单**一个文件都没解出来**（失败才是事实），
+                     *   它还顶着「部分完成」只是老口径的残留。这时必须去认更具体的原因，
+                     *   否则它会掉进"其他失败"、日志里再打一句「下一步：其他」——
+                     *   用户点名的就是这句废话。
+                     */
+                    if (task.Outcome == TaskOutcome.Failed)
+                    {
+                        break;
+                    }
+
                     return BatchProblemKind.PartiallyCompleted;
 
                 case StatusText.Skipped:

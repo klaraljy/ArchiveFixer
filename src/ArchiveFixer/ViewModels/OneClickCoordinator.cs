@@ -2209,11 +2209,33 @@ namespace ArchiveFixer.ViewModels
             bool hitRoundLimit = false,
             int pendingContinuation = 0)
         {
-            int success = targets.Count(IsSuccessStatus);
-            int partial = targets.Count(t => t.Status == StatusText.PartiallyCompleted);
-            int cancelled = targets.Count(t => t.Status == StatusText.Cancelled);
-            int skipped = targets.Count(t => t.Status == StatusText.Skipped);
-            int failed = targets.Count(IsFailureStatus);
+            /*
+             * ===== 分项一律按**机器终态**算（用户 2026-09-27 真机：口径打架）=====
+             *
+             * 旧写法读的是状态字符串（`Status == StatusText.X`），而递归失败那条路
+             * 过去只写了状态、`Outcome` 留在 `Pending` —— 于是同一个任务：
+             * ①页说「部分完成」、这里说「未处理 1」、批末诊断说「下一步：其他」。
+             *
+             * 现在五档全部读 <see cref="ArchiveTask.Outcome"/>（唯一的机器事实），
+             * 分项之和 + 未处理 = 本次任务数这条恒等式成立：
+             * `Outcome` 非 `Pending` 的一定落在成功 / 失败 / 部分完成 / 跳过 / 取消 五档里，
+             * 一个都不会漏出去（漏出去就会变成凭空多一个"未处理"）。
+             */
+            int success = targets.Count(task =>
+                task.Outcome == TaskOutcome.Succeeded &&
+                task.OutputVerification != OutputVerificationOutcome.Failed);
+            int partial = targets.Count(task => task.Outcome == TaskOutcome.PartiallyCompleted);
+            int cancelled = targets.Count(task => task.Outcome == TaskOutcome.Cancelled);
+            int skipped = targets.Count(task => task.Outcome == TaskOutcome.Skipped);
+            int failed = targets.Count(task => task.Outcome == TaskOutcome.Failed);
+
+            /*
+             * "终态说成功、校验却判否"那一帧（真机出现过，不变量 6）：上面成功那一档已经
+             * 把它剔掉了，它必须落到失败侧 —— 否则它会从五个分项里一起漏出去，变成"未处理 +1"。
+             */
+            failed += targets.Count(task =>
+                task.Outcome == TaskOutcome.Succeeded &&
+                task.OutputVerification == OutputVerificationOutcome.Failed);
 
             // 剩下的就是"既没成功也没失败、也没跳过"的：没轮到它（例如格式未知却没被处理）。
             int untouched = targets.Count - success - partial - cancelled - skipped - failed;
@@ -2328,13 +2350,12 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal static bool IsSuccessStatus(ArchiveTask task)
         {
-            if (task == null || task.OutputVerification == OutputVerificationOutcome.Failed)
-            {
-                return false;
-            }
-
-            return task.Status == StatusText.ExtractSuccess ||
-                   task.Status == StatusText.Overwritten;
+            /*
+             * 判据本体搬到了 Models/TaskOutcomeClassifier —— 这里转调。
+             * 搬家的理由见那个类的注释：同一份名单以前在 OneClickCoordinator 与
+             * TaskSummaryService 各写了一遍，漏一条就表现为"①页算失败、一键汇总算未处理"。
+             */
+            return TaskOutcomeClassifier.IsSuccessStatus(task);
         }
 
         /// <summary>
@@ -2346,6 +2367,25 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal static bool IsHandled(ArchiveTask task)
         {
+            if (task == null)
+            {
+                return false;
+            }
+
+            /*
+             * **机器终态优先**（用户 2026-09-27 真机：口径打架的根子之一）。
+             *
+             * `Outcome` 不是 `Pending` 就说明这一单确实跑过了并落了结论 —— 这是事实，
+             * 比任何状态名单都硬。旧写法只读状态名单，于是"状态写着某个名单外的中文、
+             * 终态却已经是失败"的帧会被读成"没轮到"，汇总当场打印「未处理 1 / 已按停止后续中断」，
+             * 而用户根本没按过停止（真机 `giu.7z.001` 就是这一帧）。
+             */
+            if (task.Outcome != TaskOutcome.Pending)
+            {
+                return true;
+            }
+
+            // 终态还没落的（少数路径 / 老数据 / 测试直接造的任务）：退回状态名单判。
             return IsSuccessStatus(task) ||
                    task.Status == StatusText.PartiallyCompleted ||
                    task.Status == StatusText.Cancelled ||
@@ -2367,33 +2407,14 @@ namespace ArchiveFixer.ViewModels
         internal static bool IsFailureStatus(ArchiveTask task)
         {
             /*
-             * 「源文件已变化」（不变量 11）也在这个名单里：引擎一次都没被调用，
-             * 但它是一次**正常的失败终态** —— 用户重新扫描之后还要接着处理，汇总里必须算进"失败"，
-             * 否则分项之和与任务数对不上、IsHandled 还会把它当成"没轮到"。
+             * 名单本体只有一个出口：<see cref="TaskOutcomeClassifier"/>（本方法只转调）。
+             *
+             * 旧写法是在这里 `task.Status is …` 再写一遍名单，与 ①页那份
+             * （`TaskSummaryService.IsExtractFailureStatus`）各写各的 —— 2026-09-29 因此漏过两条，
+             * 2026-09-27 真机 `giu.7z.001` 又出现了"①页算失败、一键汇总算未处理"。
+             * ⛔ 以后加状态只改 <see cref="TaskOutcomeClassifier"/> 一处。
              */
-            return task.Status is
-                StatusText.ExtractFailed or
-                StatusText.WrongPassword or
-                StatusText.Corrupted or
-                StatusText.AccessDenied or
-                StatusText.OutputConflict or
-                StatusText.VolumeMissing or
-                StatusText.PathTooLong or
-                StatusText.SevenZipMissing or
-                StatusText.UnknownError or
-                StatusText.RenameFailed or
-                StatusText.TestFailed or
-                /*
-                 * 下面两条是 2026-09-29 复核补的（口径打架）：①页那份汇总
-                 * （TaskSummaryService.IsExtractFailureStatus）早就把「没有可用的解压引擎」与
-                 * 「磁盘空间不足」算进"解压失败"，而这里漏了 —— 同一件事两处判据不一致，
-                 * 表现为**空间门拦下的任务在一键汇总里被算成"未处理"、在①页里算成"解压失败"**。
-                 * ⛔ 两处名单必须一致；改这里请顺手看 TaskSummaryService.cs 那一份。
-                 */
-                StatusText.NoEngineAvailable or
-                StatusText.DiskSpaceInsufficient or
-                StatusText.PasswordAttemptLimitReached or
-                StatusText.SourceChanged;
+            return task != null && TaskOutcomeClassifier.IsFailureStatus(task.Status);
         }
     }
 }

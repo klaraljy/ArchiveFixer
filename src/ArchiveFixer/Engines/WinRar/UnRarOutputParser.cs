@@ -48,6 +48,12 @@ namespace ArchiveFixer.Engines.WinRar
         /// <summary>"文件名像分卷、但首卷不在"。</summary>
         public const string MissingFirstVolumeErrorType = EngineErrorTypes.MissingFirstVolume;
 
+        /// <summary>结论里那几行原话之间用什么连（与 7-Zip 侧同一个形状）。</summary>
+        public const string ImportantMessageSeparator = " ｜ ";
+
+        /// <summary>结论里最多带几行原话（理由见 7-Zip 侧同名常量）。</summary>
+        public const int ImportantMessageMaxLines = 3;
+
         /// <summary>
         /// 输出里那句"这个包加密了文件名"的显式证据（UnRAR 会直接写出来，比 7-Zip 的纯文本猜测稳）。
         /// </summary>
@@ -348,12 +354,14 @@ namespace ArchiveFixer.Engines.WinRar
         }
 
         /// <summary>
-        /// 从 UnRAR 输出里挑出**最能说明问题的那一行**（给错误消息用）。
+        /// 从 UnRAR 输出里挑出**最能说明问题的几行**（给错误消息用），最多三行、按重要度排序。
         ///
-        /// 实测要认的行：<c>Incorrect password for …</c>、<c>Cannot find volume …</c>、
+        /// <para>实测要认的行：<c>Incorrect password for …</c>、<c>Cannot find volume …</c>、
         /// <c>&lt;名&gt; - checksum error</c>、<c>Unexpected end of archive</c>、
         /// <c>Total errors: N</c>、<c>Cannot open …</c>。
-        /// 一句话都没有时退回最后一行（UnRAR 的结论常在最末尾）。
+        /// 与 7-Zip 侧同一份排序规则（<see cref="EngineOutputKeywords"/>）：
+        /// <c>ERROR</c> 行 &gt; 原因行 &gt; 其它；一行都挑不出来时退回**最后一行**
+        /// （UnRAR 的结论常在最末尾 —— 老口径，别动）。</para>
         /// </summary>
         public static string ExtractImportantMessage(string? text)
         {
@@ -364,51 +372,15 @@ namespace ArchiveFixer.Engines.WinRar
                 return string.Empty;
             }
 
-            string[] lines = text
-                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim())
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .ToArray();
+            string ranked = EngineOutputKeywords.RankedMessage(
+                text,
+                ImportantMessageSeparator,
+                ImportantMessageMaxLines,
+                UnRarKeywords.Buckets);
 
-            if (lines.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            string[] importantKeywords =
-            {
-                "Incorrect password",
-                "Wrong password",
-                "Enter password",
-                "Cannot find volume",
-                "Can not find volume",
-                "checksum error",
-                "Checksum error",
-                "CRC error",
-                "CRC failed",
-                "Unexpected end",
-                "Cannot open",
-                "Can not open",
-                "Cannot create",
-                "Can not create",
-                "Access is denied",
-                "Permission denied",
-                "is not RAR archive",
-                "Total errors",
-                "Unknown option",
-                "timed out",
-                "timeout"
-            };
-
-            foreach (string line in lines)
-            {
-                if (importantKeywords.Any(k => line.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0))
-                {
-                    return line;
-                }
-            }
-
-            return lines.LastOrDefault() ?? string.Empty;
+            return ranked.Length > 0
+                ? ranked
+                : EngineOutputKeywords.FallbackLine(text, preferFirst: false);
         }
 
         /// <summary>
