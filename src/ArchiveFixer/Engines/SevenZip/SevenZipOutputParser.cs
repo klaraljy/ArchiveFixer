@@ -22,6 +22,20 @@ namespace ArchiveFixer.Engines.SevenZip
         public const string MissingFirstVolumeErrorType = "MissingFirstVolume";
 
         /// <summary>
+        /// 结论里那几行 7-Zip 原话之间用什么连（全角竖线，用户一眼能看出是"多行拼起来的"）。
+        /// 与 <c>UnRarOutputParser</c> 共用同一个形状（同一件事只允许一种说法）。
+        /// </summary>
+        public const string ImportantMessageSeparator = " ｜ ";
+
+        /// <summary>
+        /// 结论里最多带几行 7-Zip 原话。
+        ///
+        /// <para>为什么是 3：第一行常常只是 <c>ERROR: &lt;路径&gt;</c>，原因句在第二 / 第三行
+        /// （真机 `giu.7z.001` 实测）。再多就不是"一眼看完"了 —— 细的走日志。</para>
+        /// </summary>
+        public const int ImportantMessageMaxLines = 3;
+
+        /// <summary>
         /// 7-Zip 退出码 1：**发生非致命错误**（部分文件解出来了、部分失败）。
         ///
         /// 单独一类而不是并进"未知错误"的理由：这一类的用户动作与"解压失败"不同 ——
@@ -202,6 +216,25 @@ namespace ArchiveFixer.Engines.SevenZip
             }
 
             if (ContainsAny(text,
+                    "There is not enough space on the disk",
+                    "not enough space on the disk",
+                    "There is not enough space",
+                    "Disk full",
+                    "disk full",
+                    "No space left on device",
+                    "The disk is full"))
+            {
+                /*
+                 * **必须排在"权限不足"之前**：空间不足时 7-Zip 打的是
+                 * `ERROR: Can not create file : <路径>` + 紧跟的系统错误文本
+                 * `There is not enough space on the disk.` —— 下面那一档的 "Can not create"
+                 * 会先把前半句抓走，于是这一单被报成"权限不足"，用户去改权限而盘还是满的
+                 * （用户 2026-09-27 真机：递归内层包撞空间不足，批末诊断却归到"其他"）。
+                 */
+                return EngineErrorTypes.NoDiskSpace;
+            }
+
+            if (ContainsAny(text,
                     "Access is denied",
                     "Permission denied",
                     "Cannot create",
@@ -350,6 +383,7 @@ namespace ArchiveFixer.Engines.SevenZip
                 FatalErrorType => StatusText.ExtractFailed,
                 OutOfMemoryErrorType => StatusText.ExtractFailed,
                 "AccessDenied" => StatusText.AccessDenied,
+                EngineErrorTypes.NoDiskSpace => StatusText.DiskSpaceInsufficient,
                 "OutputConflict" => StatusText.OutputConflict,
                 "VolumeMissing" => StatusText.VolumeMissing,
                 MissingFirstVolumeErrorType => StatusText.VolumeMissing,
@@ -413,6 +447,9 @@ namespace ArchiveFixer.Engines.SevenZip
                     : $"7-Zip {SevenZipExitCodes.Describe(SevenZipExitCodes.OutOfMemory)}（退出码 {SevenZipExitCodes.OutOfMemory}），请关闭其它占用内存的程序后重试。{detail}",
 
                 "AccessDenied" => "权限不足，无法读取文件或写入输出目录",
+                EngineErrorTypes.NoDiskSpace => string.IsNullOrWhiteSpace(detail)
+                    ? "磁盘空间不足，7-Zip 写不下去（清空间或换到空间足够的盘再试）"
+                    : $"磁盘空间不足，7-Zip 写不下去（清空间或换到空间足够的盘再试）。（7-Zip：{detail}）",
                 "OutputConflict" => "输出路径存在冲突",
                 "VolumeMissing" => "分卷压缩包缺少必要分卷",
                 MissingFirstVolumeErrorType => "这是分卷压缩包的后续卷，缺少首卷（.001 / 第 1 卷）——请把同一组分卷放在同一目录后再解压",
@@ -513,6 +550,20 @@ namespace ArchiveFixer.Engines.SevenZip
             return exitCode == 0;
         }
 
+        /// <summary>
+        /// 结论里带出的"7-Zip 原话"，**最多三行**，按重要度排序后用 ` ｜ ` 连接。
+        ///
+        /// <para><b>为什么要多行</b>（用户 2026-09-27 真机，本方法的红检现场）：
+        /// 旧实现"命中一行就 return"，而 7-Zip 打出来的第一行恰恰是
+        /// <c>ERROR: &lt;路径&gt;</c> —— 真正说明原因的那一句
+        /// （<c>Cannot open encrypted archive. Wrong password?</c>）在**后面的行**里，
+        /// 于是结论里只剩一个路径，用户什么也没多看到。</para>
+        ///
+        /// <para>排序规则与"引擎原话落日志"（<see cref="EngineOutputKeywords"/>）**同一份**：
+        /// <c>ERROR</c> 行 &gt; 说出原因的行 &gt; 其它被识别的行；
+        /// 一行都挑不出来时退回旧行为（第一行 —— 比旧代码的"最后一行"更贴结论，
+        /// 但那条路本来就极少走到）。</para>
+        /// </summary>
         public static string ExtractImportantMessage(string? text)
         {
             text = PasswordMasker.Sanitize(text);
@@ -522,69 +573,15 @@ namespace ArchiveFixer.Engines.SevenZip
                 return string.Empty;
             }
 
-            string[] lines = text
-                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim())
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .ToArray();
+            string ranked = EngineOutputKeywords.RankedMessage(
+                text,
+                ImportantMessageSeparator,
+                ImportantMessageMaxLines,
+                SevenZipKeywords.Buckets);
 
-            if (lines.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            /*
-             * 这一份的关键字只描述"7-Zip 自己可能打出来的行"，全是英文。
-             * ⛔ 不许往这里加我们自己产出的中文文案：那种行只存在于 ArchiveOperationResult.Message 里，
-             * 永远不会出现在本方法的入参上，改一个字还会静默失效。
-             */
-            string[] importantKeywords =
-            {
-                "ERROR",
-                "Error",
-                "WARNING",
-                "Warning",
-                "Wrong password",
-                "Password is incorrect",
-                "Enter password",
-                "Can not open",
-                "Cannot open",
-                "Can not create",
-                "Cannot create",
-                "Data Error",
-                "CRC Failed",
-                "Headers Error",
-                "Unexpected end",
-                "Access is denied",
-                "Permission denied",
-                "Unsupported Method",
-                "Unsupported method",
-                "Missing volume",
-                "Command Line Error",
-                "Incorrect command line",
-                "Can not read",
-                "Cannot read",
-                "Can not get password",
-                "Cannot get password",
-                "Break signaled",
-                "User break",
-                "User stopped",
-                "Operation canceled",
-                "Operation cancelled",
-                "timed out",
-                "timeout"
-            };
-
-            foreach (string line in lines)
-            {
-                if (importantKeywords.Any(k =>
-                        line.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0))
-                {
-                    return line;
-                }
-            }
-
-            return lines.LastOrDefault() ?? string.Empty;
+            return ranked.Length > 0
+                ? ranked
+                : EngineOutputKeywords.FallbackLine(text, preferFirst: true);
         }
 
         public static int? TryParseProgressPercent(string? line)

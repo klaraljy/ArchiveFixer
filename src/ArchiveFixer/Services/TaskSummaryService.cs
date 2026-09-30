@@ -374,31 +374,15 @@ namespace ArchiveFixer.Services
             };
         }
 
-        /// <summary>解压侧的失败状态（不含密码错误 / 文件损坏：它们各自单独成项）。</summary>
-        private static bool IsExtractFailureStatus(string status)
-        {
-            return status is
-                StatusText.ExtractFailed or
-                StatusText.AccessDenied or
-                StatusText.OutputConflict or
-                StatusText.VolumeMissing or
-                StatusText.PathTooLong or
-                StatusText.SevenZipMissing or
-                // "一个引擎都没找到"：与"7z不存在"同一侧（这一单没拿到产物），但**文案不同** ——
-                // 默认优先级是 UnRAR → 7-Zip，用户可能只缺其中一个，提示里要说"任装其一"。
-                StatusText.NoEngineAvailable or
-                StatusText.UnknownError or
-                StatusText.PasswordAttemptLimitReached or
-                // 磁盘空间不足：空间门在解压**之前**就拦下了（用户 2026-09-22 需求第 1 条），
-                // 归档本身没有任何问题 —— 但它同样是"这一单没拿到产物"，与"解压失败"同桶。
-                // 归到"解压失败"这一格是刻意的：用户要处理的事（清空间 / 换盘 / 用危险模式）
-                // 属于解压侧的动作，而不是"这个包坏了"。
-                StatusText.DiskSpaceInsufficient or
-                // 源文件已变化（不变量 11）：同样在解压之前就拦下了、引擎一次都没被调用，
-                // 归档本身也可能完全正常。归这一桶的理由与上面那条一样 ——
-                // 用户要处理的事是**解压侧的动作**（重新扫描后再处理），不是"这个包坏了"。
-                StatusText.SourceChanged;
-        }
+        /// <summary>
+        /// 解压侧的失败状态（不含密码错误 / 文件损坏：它们各自单独成项）。
+        ///
+        /// <para>⚠ 名单本体只有一处：<see cref="TaskOutcomeClassifier.IsExtractFailureStatus"/>。
+        /// 旧写法在这里自己写一份 `status is …`，与 <c>OneClickCoordinator.IsFailureStatus</c>
+        /// 各写各的 —— 漏一条就立刻表现成"①页算失败、一键汇总算未处理"（用户 2026-09-27 真机）。</para>
+        /// </summary>
+        private static bool IsExtractFailureStatus(string status) =>
+            TaskOutcomeClassifier.IsExtractFailureStatus(status);
 
         /// <summary>
         /// 获取失败任务。

@@ -566,7 +566,7 @@ namespace ArchiveFixer.Engines.WinRar
                     exitCode = -1;
                 }
 
-                return AnalyzeResult(exitCode, output, error, usedPassword, stopwatch.Elapsed, archivePath, operation);
+                return AnalyzeResult(exitCode, output, error, usedPassword, stopwatch.Elapsed, archivePath, operation, arguments);
             }
             catch (Exception ex)
             {
@@ -683,7 +683,8 @@ namespace ArchiveFixer.Engines.WinRar
             string? usedPassword,
             TimeSpan elapsed,
             string? archivePath,
-            EngineOperation? operation = null)
+            EngineOperation? operation = null,
+            IEnumerable<string>? arguments = null)
         {
             output = PasswordMasker.Sanitize(output);
             error = PasswordMasker.Sanitize(error);
@@ -728,8 +729,67 @@ namespace ArchiveFixer.Engines.WinRar
                 Message = message,
                 DetectedErrorType = errorType,
                 UsedPasswordMasked = MaskPassword(usedPassword),
-                Elapsed = elapsed
+                Elapsed = elapsed,
+                CommandSummary = BuildCommandSummary(arguments)
             };
+        }
+
+        /// <summary>
+        /// "这次到底拿什么参数调的 UnRAR"（**已脱敏**，只给详细日志用）。
+        /// 形状与 7-Zip 侧同一个口径：命令 + 开关 + 归档**文件名** + 条目名；
+        /// ⛔ 完整路径不进日志（§8），<c>-p</c> / <c>-hp</c> 由脱敏兜底（不变量 5）。
+        /// </summary>
+        internal static string BuildCommandSummary(IEnumerable<string>? arguments)
+        {
+            if (arguments == null)
+            {
+                return string.Empty;
+            }
+
+            var parts = new List<string> { "unrar" };
+            bool isFirst = true;
+            bool sawArchive = false;
+
+            foreach (string argument in arguments)
+            {
+                if (string.IsNullOrWhiteSpace(argument))
+                {
+                    continue;
+                }
+
+                if (isFirst)
+                {
+                    isFirst = false;
+                    parts.Add(argument.Trim());
+                    continue;
+                }
+
+                if (argument.StartsWith("-", StringComparison.Ordinal))
+                {
+                    parts.Add(argument.Trim());
+                    continue;
+                }
+
+                if (!sawArchive)
+                {
+                    sawArchive = true;
+                    parts.Add(Path.GetFileName(argument));
+                    continue;
+                }
+
+                /*
+                 * 归档之后的位置通常是两个东西：**输出目录**（`unrar x <包> <目录>\`）与**条目名**。
+                 * 只留条目名 —— 目录进去既没有信息量、又会把用户的个人路径写进日志（§8 隐私红线）。
+                 */
+                if (argument.Contains('\\') || argument.Contains('/'))
+                {
+                    continue;
+                }
+
+                parts.Add(argument.Trim());
+            }
+
+            return PasswordMasker.Sanitize(string.Join(" ", parts));
         }
 
         private static string MapTestStatus(string? errorType)

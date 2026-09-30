@@ -290,7 +290,12 @@ namespace ArchiveFixer.Models
                 return null;
             }
 
-            // ② 具体原因：只认既有状态常量（与 TaskSummaryService / OneClickCoordinator 同一批常量）。
+            /*
+             * ② 具体原因：只认既有状态常量（与 TaskSummaryService / OneClickCoordinator 同一批常量）。
+             *
+             * ⚠ 这一支刻意排在"机器终态兜底"**之前**：状态能说出具体原因时就必须说具体原因，
+             * 兜底只在状态说不出原因时才允许用（用户 2026-09-27：⛔ 不许出现"下一步：其他"这种废话兜底）。
+             */
             switch (task.Status)
             {
                 case StatusText.DiskSpaceInsufficient:
@@ -317,6 +322,21 @@ namespace ArchiveFixer.Models
                     return BatchProblemKind.SourceChanged;
 
                 case StatusText.PartiallyCompleted:
+
+                    /*
+                     * 「部分完成」这一格**要看终态**（用户 2026-09-27 真机 `giu.7z.001`）：
+                     *
+                     * · 终态 = 部分完成 → 确实做了一半，归"部分完成"组；
+                     * · 终态 = 失败 → 这一单**一个文件都没解出来**（失败才是事实），
+                     *   它还顶着「部分完成」只是老口径的残留。这时必须去认更具体的原因，
+                     *   否则它会掉进"其他失败"、日志里再打一句「下一步：其他」——
+                     *   用户点名的就是这句废话。
+                     */
+                    if (task.Outcome == TaskOutcome.Failed)
+                    {
+                        break;
+                    }
+
                     return BatchProblemKind.PartiallyCompleted;
 
                 case StatusText.Skipped:
@@ -412,7 +432,7 @@ namespace ArchiveFixer.Models
             BatchProblemKind.OutputConflict => StatusText.BatchDiagnosticsActionOutputConflict,
             BatchProblemKind.SourceChanged => StatusText.BatchDiagnosticsActionSourceChanged,
             BatchProblemKind.Other => StatusText.BatchDiagnosticsActionOther,
-            BatchProblemKind.PartiallyCompleted => StatusText.BatchDiagnosticsActionOther,
+            BatchProblemKind.PartiallyCompleted => StatusText.BatchDiagnosticsActionPartiallyCompleted,
             BatchProblemKind.Cancelled => StatusText.BatchDiagnosticsActionNotFinished,
             BatchProblemKind.NotReached => StatusText.BatchDiagnosticsActionNotFinished,
 
@@ -463,8 +483,29 @@ namespace ArchiveFixer.Models
                     volumes);
             }
 
+            /*
+             * 「部分完成」这一组必须说清**差在哪一步**（用户 2026-09-27：批末诊断只说
+             * 「下一步：其他」，而这件事其实有一句现成的原因 —— 比如"内容物已好、源包未能移入其余物"）。
+             * 原因已经在任务上（`ErrorMessage`，由收尾那一刻写好的那一句），这里**原样取来**，
+             * ⛔ 不重算、不另造一套说法。
+             *
+             * 只对部分完成这一档取：其余各档的原因由上面的结构化补充或组名本身说得更准。
+             */
+            if (string.Equals(task.Status, StatusText.PartiallyCompleted, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(task.ErrorMessage))
+            {
+                return ShortenText(task.ErrorMessage.Trim());
+            }
+
             return string.Empty;
         }
+
+        /// <summary>补充那句话最多留多少个字（超出截断 —— 一行诊断不该变成一段散文）。</summary>
+        private const int MaxDetailLength = 80;
+
+        private static string ShortenText(string text) =>
+            text.Length <= MaxDetailLength ? text : text[..MaxDetailLength] + "…";
+
 
         /// <summary>文件名（没有就退回路径的文件名部分；两者都没有才写一个短横）。</summary>
         private static string ResolveName(ArchiveTask task)

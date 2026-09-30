@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ArchiveFixer.Engines;
+using ArchiveFixer.Engines.SevenZip;
+using ArchiveFixer.Engines.WinRar;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
@@ -484,6 +486,360 @@ namespace ArchiveFixer.Tests
                 text => text.Contains(StatusText.BatchDiagnosticsLogPrefix, StringComparison.Ordinal));
         }
 
+        // ================================================================ ⑤ 三处口径一致
+
+        /// <summary>
+        /// **用户 2026-09-27 真机 `giu.7z.001`：同一个任务三处说三种话。**
+        ///
+        /// <para>现场：①页说「部分完成」、一键汇总说「成功 0 / 失败 0 / 未处理 1」、
+        /// 批末诊断说「下一步：其他」。根子是两处：</para>
+        /// <list type="number">
+        /// <item><description>递归失败那条路只写了状态，`Outcome` 留在 `Pending` —— 汇总把它算成"没轮到"；</description></item>
+        /// <item><description>"一个文件都没解出来"被落成了「部分完成」，用户会去暂存目录找不存在的产物。</description></item>
+        /// </list>
+        ///
+        /// <para><b>红检</b>（三处任改一处回旧行为都会红）：① `ApplyRecursionResult` 的 default 支
+        /// 改回"一律部分完成"→ 状态 + 汇总 + 诊断三处全红；② 只撤 `Outcome` 那两行 →
+        /// 汇总变「未处理 1」当场红；③ `BatchSummaryDiagnosticsRules` 把「部分完成」无条件归组
+        /// （不看终态）→ 诊断那两条红。</para>
+        /// </summary>
+        [Fact]
+        public async Task 什么都没产出_三处口径一致且点名原因()
+        {
+            Harness harness = CreateHarness(settings => settings.RecursionMode = "SingleChain");
+
+            string source = harness.CreateSource("giu.7z.001");
+
+            /*
+             * 假引擎：列目录成功、解压永远报"密码错误"，**一个字节的产物都不写** ——
+             * 这正是真机那一单的形状（走的是递归路径，不是单层候选循环）。
+             */
+            harness.Engine.Failures[Path.GetFileName(source)] = new ArchiveOperationResult
+            {
+                Success = false,
+                Status = StatusText.WrongPassword,
+                Message = "密码错误或缺少正确密码（7-Zip：Cannot open encrypted archive. Wrong password?）",
+                DetectedErrorType = "WrongPassword",
+                EngineId = "fake",
+                EngineVersion = "1.0",
+                StandardOutput = "ERROR: giu.7z.001\nCannot open encrypted archive. Wrong password?\n"
+            };
+
+            await harness.AddTasksAsync(source);
+
+            await harness.OneClick.RunAsync();
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+
+            /*
+             * 批末汇总那一行（一键汇总行）与对话框正文（批末诊断）都从日志 / 记录里取。
+             *
+             * ⚠ 汇总行在日志里出现**两次**：协调器写的原文，以及一键处理收尾把它抄一份
+             * 加上"一键处理汇总："前缀（那是给排障对照用的）。取带前缀那一份 ——
+             * 它的正文与协调器那一行**逐字相同**（同一份 <c>OneClickOutcome.Summary</c>）。
+             */
+            const string summaryLogPrefix = "一键处理汇总：";
+
+            string summaryLine = Assert.Single(
+                    harness.LogTexts,
+                    text => text.Contains(summaryLogPrefix, StringComparison.Ordinal))
+                .Split(summaryLogPrefix, 2)[1];
+
+            (string Message, BatchSummarySeverity Severity) dialog = Assert.Single(harness.Dialog.BatchSummaries);
+            string diagnostics = dialog.Message;
+
+            // ---- ①页：状态必须是**失败**那一档，不许是"部分完成"（一个文件都没解出来）
+            Assert.Equal(StatusText.WrongPassword, task.Status);
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+            Assert.False(
+                string.Equals(task.Status, StatusText.PartiallyCompleted, StringComparison.Ordinal),
+                "一个文件都没解出来时不许显示成「部分完成」");
+
+            // ---- 批汇总行：必须算进"失败 1"，⛔ 不许出现"未处理"
+            Assert.Contains("失败 1", summaryLine, StringComparison.Ordinal);
+            Assert.DoesNotContain("未处理", summaryLine, StringComparison.Ordinal);
+            Assert.DoesNotContain("已停止", summaryLine, StringComparison.Ordinal);
+
+            // ---- 批末诊断：必须**点名**"密码可能不对"，⛔ 不许落到"归不到具体原因"
+            Assert.Equal(BatchSummarySeverity.Failed, dialog.Severity);
+            Assert.Contains(StatusText.BatchDiagnosticsPasswordTitle, diagnostics, StringComparison.Ordinal);
+            Assert.Contains(StatusText.BatchDiagnosticsPasswordNote, diagnostics, StringComparison.Ordinal);
+            Assert.Contains("giu.7z.001", diagnostics, StringComparison.Ordinal);
+            Assert.Contains(
+                StatusText.BatchDiagnosticsNextStepPrefix + StatusText.BatchDiagnosticsActionPassword,
+                diagnostics,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.BatchDiagnosticsActionOther, diagnostics, StringComparison.Ordinal);
+
+            // ---- 三处说的是**同一件事**：状态名与诊断组名都指向"密码"这一档
+            Assert.Contains(StatusText.WrongPassword, diagnostics, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **递归内层包撞"磁盘空间不足"⇒ 必须归到空间那一组、点名空间，⛔ 不许落到"其他"**
+        /// （用户 2026-09-27 真机：递归路径撞空间不足，批末诊断只说「下一步：其他」——
+        /// 归档本身没问题，用户要做的是清空间，被指去"看错误信息列"等于没指路）。
+        ///
+        /// <para>判据只读引擎的**结构化错误码**（<c>EngineErrorTypes.NoDiskSpace</c> ⇒
+        /// <see cref="TaskOutcomeClassifier"/> ⇒ 状态），⛔ 不比中文文案。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>TaskOutcomeClassifier.TryResolveRecursionStop</c> 里
+        /// <c>RecursionStopReason.DiskSpaceInsufficient</c> 那一支撤掉（落回
+        /// <c>ExtractFailed</c>）⇒ 本用例当场红（①页状态、诊断分组、下一步三处一起变）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 递归撞磁盘空间不足_三处口径一致且点名空间()
+        {
+            Harness harness = CreateHarness(settings => settings.RecursionMode = "SingleChain");
+
+            string source = harness.CreateSource("full.7z");
+
+            /*
+             * 假引擎：列目录成功、解压报"写不下盘"（结构化错误码 NoDiskSpace），一个字节产物都不写 ——
+             * 这正是递归路径上撞空间不足的形状（单层路径的空间门在动手前就拦下了，
+             * 这条路是**解压途中**才写满的）。
+             */
+            harness.Engine.Failures[Path.GetFileName(source)] = new ArchiveOperationResult
+            {
+                Success = false,
+                Status = StatusText.DiskSpaceInsufficient,
+                Message = "磁盘空间不足，7-Zip 写不下去",
+                DetectedErrorType = EngineErrorTypes.NoDiskSpace,
+                EngineId = "fake",
+                EngineVersion = "1.0",
+                StandardOutput = "ERROR: Can not create file : out\\payload.bin\n" +
+                                 "There is not enough space on the disk.\n"
+            };
+
+            await harness.AddTasksAsync(source);
+
+            await harness.OneClick.RunAsync();
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+
+            string summaryLine = Assert.Single(
+                    harness.LogTexts,
+                    text => text.Contains("一键处理汇总：", StringComparison.Ordinal))
+                .Split("一键处理汇总：", 2)[1];
+
+            (string Message, BatchSummarySeverity Severity) dialog = Assert.Single(harness.Dialog.BatchSummaries);
+
+            // ---- ①页：状态必须是「磁盘空间不足」（不是「解压失败」，更不是「部分完成」）
+            Assert.Equal(StatusText.DiskSpaceInsufficient, task.Status);
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+
+            // ---- 批汇总行：算进"失败 1"，⛔ 不许出现"未处理"
+            Assert.Contains("失败 1", summaryLine, StringComparison.Ordinal);
+            Assert.DoesNotContain("未处理", summaryLine, StringComparison.Ordinal);
+
+            // ---- 批末诊断：**点名空间那一组**，⛔ 不许归"其他失败"、不许出现"下一步：其他"
+            Assert.Equal(BatchSummarySeverity.Failed, dialog.Severity);
+            Assert.Contains(StatusText.DiskSpaceInsufficient, dialog.Message, StringComparison.Ordinal);
+            Assert.Contains("full.7z", dialog.Message, StringComparison.Ordinal);
+            Assert.Contains(
+                StatusText.BatchDiagnosticsNextStepPrefix + StatusText.BatchDiagnosticsActionDiskSpace,
+                dialog.Message,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.BatchDiagnosticsOtherTitle, dialog.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.BatchDiagnosticsActionOther, dialog.Message, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 引擎两侧都要认得"写不下盘"这句**系统错误文本**，而且必须**排在"权限不足"之前** ——
+        /// 7-Zip / UnRAR 写不下去时打的都是 <c>Can not create file</c>（那一句同时是权限不足的关键字），
+        /// 只有紧跟的系统错误文本能把它俩分开。
+        ///
+        /// <para><b>红检</b>：把两个解析器里那段"空间不足"关键字撤掉 ⇒ 本用例当场红
+        /// （分类落回 <c>AccessDenied</c>，用户被指去改权限而盘还是满的）。</para>
+        /// </summary>
+        [Fact]
+        public void 引擎两侧都认得出写不下盘_且不会被误判成权限不足()
+        {
+            const string diskFull =
+                "ERROR: Can not create file : C:\\out\\payload.bin\n" +
+                "There is not enough space on the disk.\n";
+
+            Assert.Equal(
+                EngineErrorTypes.NoDiskSpace,
+                SevenZipOutputParser.DetectSevenZipErrorType(2, diskFull, string.Empty, "full.7z", EngineOperation.Extract));
+
+            // 权限不足那句仍然归权限不足（反向对照：⛔ 别把两档混成一个）
+            Assert.Equal(
+                "AccessDenied",
+                SevenZipOutputParser.DetectSevenZipErrorType(
+                    2,
+                    "ERROR: Can not create file : C:\\out\\payload.bin\nAccess is denied.\n",
+                    string.Empty,
+                    "full.7z",
+                    EngineOperation.Extract));
+
+            Assert.Equal(
+                EngineErrorTypes.NoDiskSpace,
+                UnRarOutputParser.DetectErrorType(9, "Cannot create out\\payload.bin\nThere is not enough space on the disk.\n", string.Empty, EngineOperation.Extract));
+
+            Assert.Equal(
+                EngineErrorTypes.AccessDenied,
+                UnRarOutputParser.DetectErrorType(9, "Cannot create out\\payload.bin\nAccess is denied.\n", string.Empty, EngineOperation.Extract));
+
+            // 结构化错误码 → 任务状态：两侧都落「磁盘空间不足」（⛔ 不是「解压失败」）
+            Assert.Equal(StatusText.DiskSpaceInsufficient, SevenZipOutputParser.ErrorTypeToTaskStatus(EngineErrorTypes.NoDiskSpace));
+            Assert.Equal(StatusText.DiskSpaceInsufficient, UnRarOutputParser.ErrorTypeToTaskStatus(EngineErrorTypes.NoDiskSpace));
+        }
+
+        /// <summary>
+        /// **递归 Completed 但源包没能搬进其余物 ⇒ 终态不许还是「成功」**（不变量 6：
+        /// 部分成功不得显示为成功）。
+        ///
+        /// <para>现场：递归解完了，<c>PostProcessSuccessAsync</c> 已经按"源包没搬成"落了
+        /// 「部分完成」+ 机器终态 <c>PartiallyCompleted</c>；旧写法紧接着在
+        /// <c>ApplyRecursionResult</c> 里无条件写 <c>Succeeded</c>，于是**状态说「部分完成」、
+        /// 终态说成功** —— 而删源 / 搬源 / 续解那几道门读的都是终态，一件没做完的事会被当成做完了。</para>
+        ///
+        /// <para>造法：让源包**搬不动**（用独占句柄占住它，Windows 上是确定性的失败），
+        /// 其余全走正常路径（单链递归 + 源包操作 = 放入其余物）。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>ApplyRecursionResult</c> 里那个
+        /// <c>Outcome == Pending</c> 判据撤掉（改回无条件 <c>Succeeded</c>）⇒ 本用例当场红。</para>
+        /// </summary>
+        [Fact]
+        public async Task 递归完成但源包没搬成_终态不许是成功()
+        {
+            Harness harness = CreateHarness(settings =>
+            {
+                settings.RecursionMode = "SingleChain";
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            });
+
+            string source = harness.CreateSource("pack.7z");
+
+            // 独占句柄：其余物那边一切正常，唯独这一组的源包搬不动（用户把包开着 / 杀软占用）。
+            using (var hold = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                await harness.AddTasksAsync(source);
+                await harness.OneClick.RunAsync();
+            }
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+
+            /*
+             * 内容物是好的、只是"源包没搬进其余物"：状态是「部分完成」（**不是**「解压失败」）。
+             *
+             * ⚠ 实测定序（探针，2026-09-30）：`ApplyRecursionResult` 跑在 `PostProcessSuccessAsync`
+             * **之前**，所以这个结论是后者写下的 —— 见 `ApplyRecursionResult` 里那道防回归闸门的说明。
+             */
+            Assert.Equal(StatusText.PartiallyCompleted, task.Status);
+
+            // ⛔ 机器终态必须与状态同一档：**不许是 Succeeded**（不变量 6）。
+            // 读这一位的四道门（删源 / 搬源 / 续解 / 危险模式删其余物）靠它拦下"没做完"的事。
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
+
+            // 原因写得出来（用户要能看懂为什么不是成功）
+            Assert.Contains("源包", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("其余物", task.ErrorMessage, StringComparison.Ordinal);
+
+            /*
+             * ---- 三处口径一致（①页 / 批汇总行 / 批末诊断）----
+             *
+             * ①页那一格由 `TaskSummaryService.ClassifyOutcome(task)` 决定（用户 2026-09-30
+             * 那条"批末那个汇总框要指出错在哪"的验收口径）：它必须落在"其他失败"那一桶
+             * （与①页的"失败总数"同侧），⛔ 不许被算进成功。
+             */
+            Assert.Equal(SummaryBucket.OtherFailed, TaskSummaryService.ClassifyOutcome(task));
+
+            // 批汇总行：算"部分完成 1"，⛔ 既不是"成功"也不是"未处理"
+            string summaryLine = Assert.Single(
+                    harness.LogTexts,
+                    text => text.Contains("一键处理汇总：", StringComparison.Ordinal))
+                .Split("一键处理汇总：", 2)[1];
+
+            Assert.Contains("成功 0", summaryLine, StringComparison.Ordinal);
+            Assert.Contains("部分完成 1", summaryLine, StringComparison.Ordinal);
+            Assert.DoesNotContain("未处理", summaryLine, StringComparison.Ordinal);
+
+            // 批末诊断：点名"部分完成"这一组 + 说清差在哪一步 + 给一句能行动的话
+            (string Message, BatchSummarySeverity Severity) dialog = Assert.Single(harness.Dialog.BatchSummaries);
+
+            Assert.Equal(BatchSummarySeverity.Partial, dialog.Severity);
+            Assert.Contains(StatusText.PartiallyCompleted, dialog.Message, StringComparison.Ordinal);
+            Assert.Contains("pack.7z", dialog.Message, StringComparison.Ordinal);
+            Assert.Contains("源包", dialog.Message, StringComparison.Ordinal);
+            Assert.Contains(
+                StatusText.BatchDiagnosticsNextStepPrefix + StatusText.BatchDiagnosticsActionPartiallyCompleted,
+                dialog.Message,
+                StringComparison.Ordinal);
+
+            // ⛔ 不许再落到那句"归不到具体原因"的兜底（用户点名的就是这句）
+            Assert.DoesNotContain(StatusText.BatchDiagnosticsActionOther, dialog.Message, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 反向对照：源包搬得动的时候，递归成功仍然是 <c>Succeeded</c>（⛔ 别把这一档一并改坏）。
+        /// </summary>
+        [Fact]
+        public async Task 递归完成且源包搬成了_终态仍是成功()
+        {
+            Harness harness = CreateHarness(settings =>
+            {
+                settings.RecursionMode = "SingleChain";
+                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            });
+
+            string source = harness.CreateSource("pack-ok.7z");
+
+            await harness.AddTasksAsync(source);
+            await harness.OneClick.RunAsync();
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+        }
+
+        /// <summary>
+        /// 反向：**真解出来了一半**的失败仍然是「部分完成」（不变量 6 的反面同样成立：
+        /// 不许把"做了一半"说成全盘失败）。
+        /// </summary>
+        [Fact]
+        public void 有产物时_部分完成仍然是部分完成()
+        {
+            var task = new ArchiveTask(Path.Combine(_root, "half.7z"))
+            {
+                Status = StatusText.PartiallyCompleted,
+                Outcome = TaskOutcome.PartiallyCompleted
+            };
+
+            Assert.Equal(BatchProblemKind.PartiallyCompleted, BatchSummaryDiagnosticsRules.Classify(task));
+        }
+
+        /// <summary>
+        /// 状态说「部分完成」而机器终态是**失败**时，这一单**不许被当成"做了一半"**收进
+        /// 「部分完成」那一组 —— 终态才是事实（用户 2026-09-27 真机那一帧的守门）。
+        ///
+        /// <para>⚠ 这一帧在本版里**已经造不出来**了（<c>ApplyRecursionResult</c> 一次落齐状态与终态），
+        /// 但清单的分类器仍然要挡住它：老数据 / 未来某条岔路再写出这一帧时，
+        /// 它要么按具体状态归组，要么落"归不到具体原因"那一组，⛔ 绝不能顶着一个错误的"部分完成"。
+        /// 真机那条"密码错但什么都没产出"的路走的是 <c>Status = 密码错误</c>，
+        /// 由 <see cref="什么都没产出_三处口径一致且点名原因"/> 钉住。</para>
+        /// </summary>
+        [Fact]
+        public void 状态说部分完成但终态是失败_不会被当成做了一半()
+        {
+            var task = new ArchiveTask(Path.Combine(_root, "stale.7z"))
+            {
+                // 旧口径留下的帧：状态「部分完成」、终态已经是失败。
+                Status = StatusText.PartiallyCompleted,
+                Outcome = TaskOutcome.Failed,
+                ErrorMessage = "密码错误或缺少正确密码"
+            };
+
+            Assert.NotEqual(BatchProblemKind.PartiallyCompleted, BatchSummaryDiagnosticsRules.Classify(task));
+
+            // 真解出来一半的那一帧仍然归「部分完成」（反向对照，见下一条）。
+            Assert.Equal(BatchProblemKind.Other, BatchSummaryDiagnosticsRules.Classify(task));
+        }
+
         // ================================================================ 造数据
 
         /// <summary>用户点名的那一批：1 空间不足 + 2 密码类 + 1 缺卷（含缺卷名）+ 1 损坏 + 1 成功。</summary>
@@ -559,7 +915,7 @@ namespace ArchiveFixer.Tests
         /// 假引擎 + 假盘（与 <c>SpaceRiskAndSummaryTests</c> 同一形态）：
         /// 这一组测的是**清单说了什么**，不是 7z 的能力。
         /// </summary>
-        private Harness CreateHarness()
+        private Harness CreateHarness(Action<AppSettings>? configure = null)
         {
             string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
             string outputRoot = Path.Combine(_root, "out");
@@ -581,6 +937,10 @@ namespace ArchiveFixer.Tests
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
             settings.MaxParallelExtractCount = 1;
+
+            // 逐用例的覆盖（例如"这一单要走递归路径"）—— 放最后，⛔ 别让默认值把它盖回去。
+            configure?.Invoke(settings);
+
             settingsService.Save(settings);
 
             var engine = new FakeEngine();

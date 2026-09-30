@@ -366,6 +366,115 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("HEAD-1", File.ReadAllText(withoutHeader));
         }
 
+        // ================================================================ 详细日志"到底多出什么"（用户 2026-09-27）
+
+        /// <summary>
+        /// **开了详细日志到底多出什么**（用户 2026-09-27：「开了更详细的日志选项怎么还是这么简单」）。
+        ///
+        /// <para>这一条把"两档的差别"钉死在**具体行**上：关着时日志里既没有 `引擎调用：`（参数摘要）
+        /// 也没有 `原话：`（引擎原话）；打开之后**两样都必须出现**，而成功那一行摘要照旧在。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>VerboseTaskLogEnabled</c> 那两处 <c>EngineOutputLog.LogVerbose</c>
+        /// 撤掉 → 本用例第二段当场红（这正是用户报的那个症状：勾了跟没勾一样）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 详细日志_多出引擎调用参数与引擎原话()
+        {
+            RequireSevenZip();
+
+            string package = BuildPackage("verbose-diff.7z", 64 * 1024);
+
+            // ---- 默认档：这两类行一条都不许有 ----
+            Harness plain = CreateHarness();
+            await plain.AddTaskAsync(package);
+            await plain.Coordinator.StartExtractAsync();
+
+            Assert.DoesNotContain(
+                plain.LogTexts,
+                line => line.Contains(StatusText.EngineCommandSummaryPrefix, StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                plain.LogTexts,
+                line => line.Contains("原话：", StringComparison.Ordinal));
+
+            // ---- 详细档：参数摘要 + 引擎原话都要有，而摘要那一行**照旧在** ----
+            Harness verbose = CreateHarness(settings => settings.VerboseLog = true);
+            await verbose.AddTaskAsync(package);
+            await verbose.Coordinator.StartExtractAsync();
+
+            string commandLine = Assert.Single(
+                verbose.LogTexts,
+                line => line.Contains(StatusText.EngineCommandSummaryPrefix, StringComparison.Ordinal));
+
+            // 参数摘要里要有命令字与归档名；密码只以 `-p******` 出现（⛔ 明文绝不进日志）
+            Assert.Contains("7z x", commandLine, StringComparison.Ordinal);
+            Assert.Contains("verbose-diff.7z", commandLine, StringComparison.Ordinal);
+            Assert.Contains("-p******", commandLine, StringComparison.Ordinal);
+
+            /*
+             * 成功的任务照样会走"引擎原话"那个出口，只是 `Everything is Ok` 一行关键字都不含
+             * ⇒ 那一行本身是空的（不写）。所以这里钉的是**参数摘要**这条硬差别；
+             * "失败时一定有原话"由下面那条用例钉 —— 用户的真实抱怨正是"失败了也看不到原话"。
+             */
+            Assert.Contains(
+                verbose.LogTexts,
+                line => line.Contains("] verbose-diff.7z：", StringComparison.Ordinal)
+                    && line.Contains("解压 100%", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// **失败的任务一定有引擎原话**（⛔ 不受详细日志开关影响）——
+        /// 真机那次 13 分钟白跑，日志里连一句 7-Zip 原话都没有。
+        ///
+        /// <para>造法：真 7z 造一个带口令的包，再塞一个**错**的口令进密码列表 ——
+        /// 引擎真的会被调一次并失败，于是"引擎原话那一行"必须出现在日志里
+        /// （若一个候选都没有，程序在预检就判「整包已加密、没有可用密码」，
+        /// 引擎一次都不调，那种情况下本来就没有原话可写）。</para>
+        ///
+        /// <para>红检：把 <c>ExtractionCoordinator</c> 结论那一处 <c>EngineOutputLog.LogFailure</c>
+        /// 撤掉 → 本用例当场红。</para>
+        /// </summary>
+        [Fact]
+        public async Task 失败的任务_日志里一定有引擎原话()
+        {
+            RequireSevenZip();
+
+            // 真 7z 造一个"口令不对"的包：结论必须是密码错误，而日志里必须带 7-Zip 原话。
+            string stage = Path.Combine(_root, "stage-enc-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(stage);
+            File.WriteAllText(Path.Combine(stage, "secret.txt"), "引擎原话用例\n");
+
+            string packages = Path.Combine(_root, "packages");
+            Directory.CreateDirectory(packages);
+            string encrypted = Path.Combine(packages, "enc-verbose.7z");
+
+            Run7z(stage, "a", "-t7z", "-mx0", "-p" + "RightPassword123", encrypted, "secret.txt");
+
+            Harness harness = CreateHarness(settings => settings.TryEmptyPasswordFirst = true, passwordService =>
+            {
+                // 错口令（本文档与仓库里一律用占位符，⛔ 不写真密码）。
+                passwordService.AddPassword("PlaceholderWrongPassword");
+            });
+
+            /*
+             * 加密包会撞上「解压前提醒」那个确认框。本用例要的是**解压失败现场**，
+             * 所以按一键档的口径把那个框压掉（判定与日志一条都不少，少的只是弹窗）。
+             */
+            harness.Coordinator.SuppressBatchReminderDialogForThisRun();
+
+            await harness.AddTaskAsync(encrypted);
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.True(
+                harness.LogTexts.Any(line => line.Contains("7-Zip 原话", StringComparison.Ordinal)),
+                "日志里没有引擎原话那一行：\n" + string.Join("\n", harness.LogTexts));
+
+            // ⛔ 任何一行都不许出现明文密码。
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                line => line.Contains("RightPassword123", StringComparison.Ordinal)
+                    || line.Contains("PlaceholderWrongPassword", StringComparison.Ordinal));
+        }
+
         // ================================================================ 工具
 
         private string BuildPackage(string fileName, int payloadBytes)
@@ -385,7 +494,9 @@ namespace ArchiveFixer.Tests
             return Path.Combine(packages, fileName);
         }
 
-        private Harness CreateHarness(Action<AppSettings>? configure = null)
+        private Harness CreateHarness(
+            Action<AppSettings>? configure = null,
+            Action<PasswordService>? configurePasswords = null)
         {
             string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
             string outputRoot = Path.Combine(_root, "out-" + Guid.NewGuid().ToString("N"));
@@ -412,12 +523,20 @@ namespace ArchiveFixer.Tests
             var engine = new Engines.SevenZip.SevenZipEngine();
             var logService = new LogService(pathService);
 
+            /*
+             * ⚠ 一份密码服务给两处用（与 MainViewModel 里真实接线一致）：
+             * 以前这里 new 了两个，于是"给密码列表塞一条候选"只会塞进 VM 那一份，
+             * 协调器那份照旧是空的 —— 想造"引擎真的被调了一次并失败"的现场就造不出来。
+             */
+            var passwordService = new PasswordService();
+            configurePasswords?.Invoke(passwordService);
+
             var vm = new MainViewModel(
                 new FileScanService(),
                 new ArchiveDetectService(),
                 new RenameService(),
                 engine,
-                new PasswordService(),
+                passwordService,
                 logService,
                 settingsService,
                 pathService,
@@ -428,7 +547,7 @@ namespace ArchiveFixer.Tests
             var coordinator = new ExtractionCoordinator(
                 vm,
                 engine,
-                new PasswordService(),
+                passwordService,
                 pathService,
                 new DialogService());
 

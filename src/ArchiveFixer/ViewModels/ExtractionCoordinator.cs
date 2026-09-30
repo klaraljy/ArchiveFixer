@@ -65,8 +65,9 @@ namespace ArchiveFixer.ViewModels
         /// ⚠ 一个任务一个实例：递归核心把"本次任务的工作区"记在实例上（<c>CurrentWorkspace</c>），
         /// 清理只认那一个目录。共用实例会让并发任务互相覆盖这个字段。
         /// </summary>
-        private RecursiveExtractor CreateRecursiveExtractor() =>
-            new(
+        private RecursiveExtractor CreateRecursiveExtractor()
+        {
+            var extractor = new RecursiveExtractor(
                 _archiveEngine,
                 new MagicArchiveProber(),
                 BuildRecursionPasswordCandidates,
@@ -85,6 +86,57 @@ namespace ArchiveFixer.ViewModels
                  */
                 OmitMiddlePackageLayers = Settings.OmitMiddleContinuationLayers
             };
+
+            /*
+             * 详细日志档与"候选来源描述器"（用户 2026-09-27：「开了更详细的日志选项怎么还是这么简单」）：
+             *
+             * 递归路径以前**连一条候选日志都没有**，而真机那次 13 分钟走的正是这条路 ——
+             * 打开详细日志之后，它要跟单层路径一样把每个候选写出来。
+             *
+             * ⚠ 描述器用的是**单层路径那一份** BuildTryPasswordLogText：两处的措辞必须逐字一致，
+             * 否则同一件事在日志里长成两句话（§9.5）。它只输出占位符，绝不出现明文。
+             */
+            extractor.VerboseLog = VerboseTaskLogEnabled;
+            extractor.DescribeCandidate = (value, index) =>
+                _passwordService.BuildTryPasswordLogText(
+                    new PasswordItem { Value = value, Source = ResolveCandidateSourceForLog(value) },
+                    index);
+
+            return extractor;
+        }
+
+        /// <summary>
+        /// 递归层拿到的候选**值**要能映射回"这条密码是从哪儿来的"，日志才看得懂顺序为什么是这样。
+        ///
+        /// <para>递归那条路只拿到值（<c>Func&lt;string, IReadOnlyList&lt;string&gt;&gt;</c>），
+        /// 而来源说明在 <see cref="PasswordService.BuildTryPasswordLogText"/> 里。
+        /// 这里按值回查一次**已经算好的候选表**（不重新排序、不重新组装），查不到就按空密码 / 列表项兜底 ——
+        /// ⛔ 绝不猜来源，更不写明文。</para>
+        /// </summary>
+        private string ResolveCandidateSourceForLog(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "Empty";
+            }
+
+            if (!string.IsNullOrEmpty(GlobalPassword) &&
+                Settings.UseGlobalPasswordForAllTasks &&
+                string.Equals(GlobalPassword, value, StringComparison.Ordinal))
+            {
+                return "GlobalPassword";
+            }
+
+            foreach (PasswordItem item in _passwordService.Passwords)
+            {
+                if (string.Equals(item.Value ?? string.Empty, value, StringComparison.Ordinal))
+                {
+                    return string.IsNullOrWhiteSpace(item.Source) ? "ImportedList" : item.Source;
+                }
+            }
+
+            return "ImportedList";
+        }
 
         /// <summary>
         /// 递归的硬上限（不变量 8）：层数与每层密码尝试次数都取用户的设置项。
@@ -4529,21 +4581,64 @@ namespace ArchiveFixer.ViewModels
 
             task.ErrorMessage = result.Summary;
 
+            /*
+             * ===== 状态与**机器终态**必须一次落齐（用户 2026-09-27 真机 `giu.7z.001`）=====
+             *
+             * 现场：同一个任务三处说三种话 —— ①页「部分完成」、一键汇总「未处理 1」、
+             * 批末诊断「下一步：其他」。根子有两条：
+             * ① 这里只写了 `Status`（中文），`Outcome` 留在 `Pending` ——
+             *    批末汇总读的是机器终态，于是把它算成"没轮到"；`IsHandled` 也跟着判否；
+             * ② 密码错误 / 损坏这种"一个文件都没解出来"的停因，过去一律落「部分完成」——
+             *    用户会去暂存目录里找根本不存在的产物。
+             *
+             * 现在：判据走**唯一出口** <see cref="TaskOutcomeClassifier.TryResolveRecursionStop"/>
+             * （只读停因枚举 + "有没有产出过东西"这条事实），状态与终态**同一次**写下去。
+             */
+            bool resolved = TaskOutcomeClassifier.TryResolveRecursionStop(
+                result.StopReason,
+                result.ProducedAnyLayerOutput,
+                out string stoppedStatus,
+                out TaskOutcome stoppedOutcome);
+
             switch (result.StopReason)
             {
                 case RecursionStopReason.Completed:
                     task.Status = StatusText.ExtractSuccess;
                     task.ProgressText = StatusText.ProgressCompleted;
+
+                    /*
+                     * ⛔ 这里**只在终态还没定的时候**才补 Succeeded —— 这是一道**防回归的闸门**，
+                     * 不是当前某条路径的修复（不变量 6：部分成功不得显示为成功）。
+                     *
+                     * 实测定序（2026-09-30，本用例 `<c>递归完成但源包没搬成_终态不许是成功</c>` 的探针）：
+                     * `ApplyRecursionResult` 跑在 `PostProcessSuccessAsync` **之前**，走到这一行时
+                     * `Outcome` 一定还是初值 `Pending` —— 也就是说"源包没搬成 ⇒ 部分完成"这个结论
+                     * 由 `PostProcessSuccessAsync` 在**后面**写成，当前顺序下两边不会打架。
+                     *
+                     * 那为什么还要这道闸门：`Succeeded` 是**唯一**允许"删源 / 搬源 / 续解 / 危险模式删其余物"
+                     * 的档（不变量 1 的例外、不变量 6）。一旦将来有人把收尾顺序调过来、或在递归成功这一支
+                     * 里再插一段写终态的代码，无条件赋值就会把"这件事没做完"悄悄改写成"做完了"，
+                     * 而那四道门读的正是这一位 —— 后果是不可逆的。
+                     * 判据只读终态这一位（`Pending` = 还没有人下过结论），⛔ 不比对中文文案。
+                     */
+                    if (task.Outcome == TaskOutcome.Pending)
+                    {
+                        task.Outcome = TaskOutcome.Succeeded;
+                    }
+
                     break;
 
                 case RecursionStopReason.NeedsDecision:
+                    // 多分支默认不展开 / 用户选了"只保留当前这一层"：确实是"做了一半"。
                     task.Status = StatusText.PartiallyCompleted;
                     task.ProgressText = StatusText.ProgressCompleted;
+                    task.Outcome = TaskOutcome.PartiallyCompleted;
                     break;
 
                 case RecursionStopReason.UserCancelled:
                     task.Status = StatusText.Cancelled;
                     task.ProgressText = StatusText.Cancelled;
+                    task.Outcome = TaskOutcome.Cancelled;
                     break;
 
                 /*
@@ -4559,20 +4654,43 @@ namespace ArchiveFixer.ViewModels
                 case RecursionStopReason.SourceChanged:
                     task.Operation = StatusText.OpWaiting;
                     task.ProgressText = StatusText.ProgressFailed;
+                    task.Outcome = TaskOutcome.Failed;
+                    task.ErrorMessage = result.Summary;
                     task.EndTime = DateTime.Now;
                     task.LastUpdatedTime = DateTime.Now;
                     task.ClearProgress();
                     task.UpdateElapsedText();
 
                     AppendLog("ERROR", $"{task.FileName}：{result.Summary}");
-                    AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
                     return;
 
                 default:
-                    task.Status = StatusText.PartiallyCompleted;
+                    if (resolved)
+                    {
+                        task.Status = stoppedStatus;
+                        task.Outcome = stoppedOutcome;
+                    }
+                    else
+                    {
+                        // 剩下的那些"停在中途"（层数 / 总量 / 展开比 / 内层包太多 / 分支没展开）：
+                        // 产物确实解出来了一部分，落「部分完成」是实话。
+                        task.Status = StatusText.PartiallyCompleted;
+                        task.Outcome = TaskOutcome.PartiallyCompleted;
+                    }
+
                     task.ProgressText = StatusText.ProgressFailed;
                     break;
             }
+
+            /*
+             * 收尾时间必须落（`TaskOutcome` 那一轮收口读的就是它：`EndTime` 有值 + `Outcome == Pending`
+             * 才会被补成 `Failed`）。递归这条路以前不写 `EndTime`，于是任务在界面上一直"还在跑"
+             * （耗时那一列会跟着 Now 一直涨），批末的"用时"也取不到这一单。
+             */
+            task.EndTime ??= DateTime.Now;
+            task.ElapsedText = task.StartTime.HasValue
+                ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
+                : task.ElapsedText;
 
             task.LastUpdatedTime = DateTime.Now;
 
@@ -11364,6 +11482,12 @@ namespace ArchiveFixer.ViewModels
 
                     lastResult = testResult;
 
+                    // 详细档：测试这一次的命令行与原话（与解压路径同一出口、同一措辞）。
+                    if (VerboseTaskLogEnabled)
+                    {
+                        EngineOutputLog.LogVerbose(AppendLog, task.FileName, testResult);
+                    }
+
                     if (testResult.DetectedErrorType == "Cancelled" ||
                         testResult.Status == StatusText.Cancelled ||
                         cancellationToken.IsCancellationRequested)
@@ -11817,6 +11941,18 @@ namespace ArchiveFixer.ViewModels
 
                     lastResult = extractResult;
 
+                    /*
+                     * 详细档：这一次候选的命令行与原话（**无论成败**）。
+                     *
+                     * ⚠ 失败的"关键行"刻意**不在这里**写：候选循环每试一个错密码就要报一次错，
+                     * 十个候选就是十条 ERROR —— 那是噪声，不是信号。失败原话在**结论那一处**
+                     * 写一次（见下面 `conclusionResult` 那一段）。
+                     */
+                    if (VerboseTaskLogEnabled)
+                    {
+                        EngineOutputLog.LogVerbose(AppendLog, task.FileName, extractResult);
+                    }
+
                     if (extractResult.DetectedErrorType == "Cancelled" ||
                         extractResult.Status == StatusText.Cancelled ||
                         cancellationToken.IsCancellationRequested)
@@ -12003,6 +12139,19 @@ namespace ArchiveFixer.ViewModels
 
                 if (!extractSuccess)
                 {
+                    /*
+                     * ===== 引擎原话落日志（用户 2026-09-27：「引擎原话从不落日志」）=====
+                     *
+                     * 位置刻意选在**结论已经定下来之后**（`lastResult` / `task.Status` 都写好了），
+                     * 而且整层只写一次：
+                     * · 候选循环里每个错密码都记一条 ERROR 是噪声（十个候选十条），
+                     *   而真正要看的恰恰是**最后那次**（走得最远的那一次，与失败原因同一份）；
+                     * · 详细档在循环里已经逐候选写过命令行与原话了，这里不重复。
+                     *
+                     * ⛔ 出口只有 <see cref="EngineOutputLog"/> 一个（递归路径同一个）。
+                     */
+                    EngineOutputLog.LogFailure(AppendLog, task.FileName, lastResult);
+
                     /*
                      * 产物校验始终没过的收场（用户 2026-09-24 要求）：
                      * 状态取**更准确**的那一个 —— 试过密码的用「密码错误」语义（用户会先去核对密码本），

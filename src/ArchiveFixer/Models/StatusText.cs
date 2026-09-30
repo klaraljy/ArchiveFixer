@@ -1887,13 +1887,75 @@ namespace ArchiveFixer.Models
         /// <summary>「下一步」：源文件已变化那一档（不变量 11）。</summary>
         public const string BatchDiagnosticsActionSourceChanged = "源文件变了（右键「重新扫描此文件」后再处理）";
 
-        /// <summary>「下一步」：其他失败（含校验没通过、改名/测试失败、没有可用引擎…）。</summary>
-        public const string BatchDiagnosticsActionOther = "其他（看①页「错误信息」列，或「导出失败清单」）";
+        /// <summary>
+        /// 「下一步」：其他失败（含校验没通过、改名/测试失败、没有可用引擎…）。
+        ///
+        /// <para>⚠ 这是**真说不出原因时**才允许出现的那一档（用户 2026-09-27：
+        /// 「诊断只说"下一步：其他"」就是被他点名的那句废话）。所以它必须给一个**能行动的句子**，
+        /// ⛔ 不许写成"其他"两个字了事；而且判据严格排在所有具体原因之后
+        /// （见 <see cref="BatchSummaryDiagnosticsRules.Classify"/> 的 ② 与 ③ 两支）。</para>
+        /// </summary>
+        public const string BatchDiagnosticsActionOther =
+            "归不到具体原因的那些（对照①页「错误信息」列或「导出失败清单」里的引擎原话逐条看）";
 
         /// <summary>「下一步」：取消 / 没轮到的那一档。</summary>
         public const string BatchDiagnosticsActionNotFinished = "没跑完的那些（再点一次「一键处理」接着跑）";
 
+        /// <summary>
+        /// 「下一步」：**部分完成**那一档（内容物是好的、只是没做完 —— 例：源包没能移入其余物）。
+        ///
+        /// <para>为什么要单独一句（用户 2026-09-27：批末诊断只说「下一步：其他」）：
+        /// 这一档的用户动作与"归不到具体原因"完全不同 —— 东西已经解出来了，再跑一次就能收尾，
+        /// ⛔ 不该把他指去"逐条看引擎原话"。差在哪一步由清单里那一行的括号补出来
+        /// （见 <c>BatchSummaryDiagnosticsRules</c> 的 <c>DescribeDetail</c>）。</para>
+        /// </summary>
+        public const string BatchDiagnosticsActionPartiallyCompleted =
+            "做了一半的那些（内容物是好的，再点一次「一键处理」把它收尾）";
+
         /// <summary>日志里逐组那一行的前缀（弹窗里是「·」，日志里带个来源标记更好搜）。</summary>
         public const string BatchDiagnosticsLogPrefix = "批末诊断：";
+
+        // ===== 详细日志 / 引擎原话（用户 2026-09-27：「开了更详细的日志选项怎么还是这么简单」）=====
+        //
+        // 这一组是**日志口径的唯一来源**（§9.5）：单层路径与递归路径必须逐字一致，
+        // 否则同一件事在日志里长成两句话，读的人会以为是两件事。
+
+        /// <summary>详细日志里"这次拿什么参数调的引擎"那一行的前缀。</summary>
+        public const string EngineCommandSummaryPrefix = "引擎调用：";
+
+        /// <summary>
+        /// **密码候选循环**里"开始试第 i 个候选"的格式（<c>{0}</c> = 任务名，<c>{1}</c> = 第几个，
+        /// <c>{2}</c> = 共几个，<c>{3}</c> = 候选来源说明）。
+        ///
+        /// <para>单层路径与递归路径共用这一句 —— 递归那条路以前**一条候选日志都没有**，
+        /// 真机那次 13 分钟走的是递归路径，日志里连"试了几个候选"都看不出来。</para>
+        /// </summary>
+        public const string PasswordCandidateAttemptLogFormat =
+            "{0}：开始解压，密码候选 {1}/{2}，{3}";
+
+        /// <summary>候选不对、继续试下一个（单层与递归共用）。</summary>
+        public const string PasswordCandidateRejectedLogFormat =
+            "{0}：这个密码候选不对，继续试下一个。";
+
+        /// <summary>损坏归档：不换候选、直接停（单层与递归共用）。</summary>
+        public const string CandidateStoppedByCorruptedLogFormat =
+            "{0}：这个包已损坏，换密码候选没有帮助 —— 停下（不再重试其余候选）。";
+
+        /// <summary>其余引擎错误：换密码也解决不了，直接停（单层与递归共用；<c>{1}</c> = 原因）。</summary>
+        public const string CandidateStoppedByEngineErrorLogFormat =
+            "{0}：解压失败：{1}";
+
+        /// <summary>
+        /// 递归层日志里的来源标记（<c>{0}</c> = 层号）。
+        ///
+        /// <para>为什么要前缀（与既有日志的调用处同口径）：同一个包在日志里"这一条来自第几层"
+        /// 是排查多层嵌套时唯一能对号入座的信息（既有实现用的是 <c>$"  ├ 第 {depth} 层：…"</c>，
+        /// 这里沿用同一个形状，避免同一件事出现两种行首）。</para>
+        /// </summary>
+        public const string RecursionLayerLogPrefixFormat = "  ├ 第 {0} 层：";
+
+        /// <summary>详细日志里"这一层开始解压"（递归每层一条；<c>{1}</c> = 层号，<c>{2}</c> = 归档名）。</summary>
+        public const string RecursionLayerAttemptLogFormat =
+            "{0}：递归第 {1} 层开始解压：{2}（候选顺序见下面每一条）。";
     }
 }

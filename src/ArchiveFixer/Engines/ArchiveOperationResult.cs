@@ -1,5 +1,8 @@
 using ArchiveFixer.Models;
+using ArchiveFixer.Password;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace ArchiveFixer.Engines
 {
@@ -99,6 +102,77 @@ namespace ArchiveFixer.Engines
         }
 
         public bool IsWrongPassword => DetectedErrorType == "WrongPassword";
+
+        /// <summary>
+        /// **这次引擎调用跑了什么命令**（已脱敏的一句摘要，例：<c>7z x -y -sccUTF-8 -p****** &lt;归档&gt;</c>）。
+        ///
+        /// <para>为什么要有它（用户 2026-09-27：「开了更详细的日志选项怎么还是这么简单」）：
+        /// 详细日志要能回答"程序到底拿什么参数去调的引擎"，而参数表只有运行器见过 ——
+        /// 它是一次调用的**事实**，不该在别处再拼一遍（§9.5 同一件事只有一个出口）。</para>
+        ///
+        /// <para>⚠ 只允许放**脱敏后**的文本：<c>-p&lt;明文&gt;</c> 必须已经是 <c>-p******</c>
+        /// （不变量 5：密码进进程命令行是 7z 的固有限制，但进日志是绝对禁止的）。</para>
+        /// </summary>
+        public string CommandSummary { get; set; } = string.Empty;
+
+        /// <summary>日志里"引擎原话"那一行的前缀（例：<c>7-Zip 原话</c>）。</summary>
+        public string EngineOutputLabel => EngineId switch
+        {
+            EngineIds.SevenZip => "7-Zip 原话",
+            EngineIds.WinRar => "UnRAR 原话",
+            _ => "引擎原话"
+        };
+
+        /// <summary>
+        /// 失败时挑出来的**引擎原话**（最多 <see cref="KeyOutputMaxLines"/> 行，每行截断
+        /// <see cref="KeyOutputMaxLineLength"/> 字符，已脱敏）。
+        ///
+        /// <para><b>这是"引擎原话落日志"的唯一出口</b>：单层路径（<c>ExtractionCoordinator</c>）
+        /// 与递归路径（<c>RecursiveExtractor</c>）都只调这一个方法，⛔ 谁都不许自己再挑一遍。
+        /// 挑行规则在 <see cref="EngineOutputKeywords"/>（与结论里那几行**同一份**排序）。</para>
+        ///
+        /// <para>⛔ 绝不返回整段 stdout：那是噪声，而且可能带用户名路径。</para>
+        /// </summary>
+        public IReadOnlyList<string> KeyOutputLines() => BuildKeyOutputLines(CombinedOutput, EngineId);
+
+        /// <summary>同一个出口的静态形态（测试与"结果对象还没造出来"的场合用）。</summary>
+        public static IReadOnlyList<string> BuildKeyOutputLines(string? combinedOutput, string? engineId)
+        {
+            string[][] buckets = engineId switch
+            {
+                EngineIds.WinRar => UnRarKeywords.Buckets,
+                _ => SevenZipKeywords.Buckets
+            };
+
+            return EngineOutputKeywords
+                .PickImportantLines(PasswordMasker.Sanitize(combinedOutput), KeyOutputMaxLines, buckets)
+                .Select(TruncateKeyLine)
+                .ToList();
+        }
+
+        /// <summary>原话那一行最多留多少个字符（超了截断并加省略号 —— 一行日志不该上千字符）。</summary>
+        public const int KeyOutputMaxLineLength = 300;
+
+        /// <summary>原话最多留几行。</summary>
+        public const int KeyOutputMaxLines = 3;
+
+        /// <summary>
+        /// 日志里那几行原话用什么连。
+        /// ⚠ 必须与结论里那几行（<c>SevenZipOutputParser.ImportantMessageSeparator</c> /
+        /// <c>UnRarOutputParser.ImportantMessageSeparator</c>）**同一个字符**：
+        /// 同一件事在日志与结论里长得不一样，用户会以为是两件事。
+        /// </summary>
+        public const string KeyOutputLineSeparator = " ｜ ";
+
+        private static string TruncateKeyLine(string line)
+        {
+            if (line.Length <= KeyOutputMaxLineLength)
+            {
+                return line;
+            }
+
+            return line[..KeyOutputMaxLineLength] + "…";
+        }
 
         /// <summary>
         /// 这次是"部分完成"：解出来了一部分，但绝不是成功（AGENTS.md §6 第 6 条）。
