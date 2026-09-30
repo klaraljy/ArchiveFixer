@@ -495,6 +495,9 @@ namespace ArchiveFixer.Extraction
              *
              * 特定解压例外档被这一条盖住时**绝不静默**：如实降成"这一次没生效"并写清原因，
              * 日志与结论也不会再报"规则已生效"（SpecialExtractionApplied 保持 false）。
+             *
+             * ⚠ 这一条要真的生效，还要求下面"内容物落法"那一支认 <c>wrapperName</c>
+             * （判定表 ① 原本不读它）—— 见那里 `wrapperName == null` 那段说明。
              */
             if (hasInnermostPackage
                 && wrapperName == null
@@ -531,7 +534,18 @@ namespace ArchiveFixer.Extraction
             var movedContentNodes = new List<Node>();
             string contentParent = destDir;
 
-            if (kind == FinalizeLayoutKind.SingleFileToDestination)
+            /*
+             * ⚠ 这里多一个 `wrapperName == null` 不是多余的（接手代理 2026-09-30）：
+             *
+             * 判定表 ①（单个文件直放 destDir）**不读 wrapperName** —— 上面最后那道闸门即便把
+             * "最里层"补了回来，这一支也会把内容物直接放进 destDir 里（闸门形同不存在）。
+             * 今天 `DecideLayout` 里那条 `hasInnermostPackage → WrapInFolder` 提前返回挡住了这种组合，
+             * 可"最里层不许被吃掉"这条红线**不该只挂在另一个方法的返回顺序上**：
+             * 一旦有人重排判定表，闸门就该自己生效。展开过内层包时 wrapperName 必然非空
+             * （闸门保证），于是这一支不再命中，落到下面按 wrapperName 套层的分支。
+             * 只解了一层（没有内层包）时 wrapperName 本来就是 null ⇒ 行为与加这条之前**逐字相同**。
+             */
+            if (kind == FinalizeLayoutKind.SingleFileToDestination && wrapperName == null)
             {
                 Node file = shape.Items[0];
                 contentMoves.Add(new PlannedMove(FromPath(staging, file), Unique(SafeCombine(destDir, SafeName(file.Name)), used)));

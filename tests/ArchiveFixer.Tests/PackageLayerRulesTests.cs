@@ -30,14 +30,24 @@ namespace ArchiveFixer.Tests
     /// </para>
     ///
     /// <para>
-    /// <b>红检</b>（写完把修复临时撤掉，亲眼看到用例变红）：
-    /// ① 把 <c>ResultFinalizer.DecideLayout</c> 里 <c>hasInnermostPackage</c> 那个提前返回去掉
-    /// ⇒ 判定表 ④ 重新塌缩到最深那个文件夹名，<c>普通文件夹_1111…</c> 与
-    /// <c>普通文件夹_发布侧…</c> 变红；
-    /// ② 把 <see cref="PackageLayerRules.ShouldKeepLayerFolder"/> 里 <c>!hasChildLayer</c> 那一条去掉
-    /// ⇒ 简洁档把末层也省掉，<c>五层链_省中间…</c> 变红；
-    /// ③ 把 <c>ExtractionWorkspace.PublishInPlace</c> 换回"把叶子层产物摊到发布目标根上"
-    /// ⇒ <c>就地替换_用户极端例子的整棵树逐字成立</c> 变红。
+    /// <b>红检</b>（把判据临时撤掉，亲眼看到用例变红；接手代理 2026-09-30 逐条实测，失败原文照抄）：
+    /// ① <c>ResultFinalizer</c> 里"展开了内层包 ⇒ 要套的那一层取链上**最外层**那一个"那一支
+    /// （<c>wrapperChainNode = hasInnermostPackage ? shape.Chain[0] : shape.Chain[^1]</c>）
+    /// 改回只看 <c>shape.Chain[^1]</c> ⇒ <c>普通文件夹_1111里面包着真内容物时不许把1111摊平</c> 变红：
+    /// <c>Assert.Equal() Failure: Strings differ　Expected: "内层包"　Actual: "真内容"</c>
+    /// —— 即 `内层包\1111\真内容` 被一路摊掉，`1111` 这个名字直接消失（连带 5 条变红）。
+    /// ② <see cref="PackageLayerRules.ShouldKeepLayerFolder"/> 里 <c>!hasChildLayer</c> 那一条去掉
+    /// ⇒ <c>五层链_省中间_只留首尾</c> 变红（末层 5555555 被省掉，发布树塌成 <c>内容物\payload.bin</c>）
+    /// 与 <c>唯一出口_末层永不省</c> 变红。
+    /// ③ 把 <c>RecursiveExtractor.BuildResult</c> 的 <c>inPlace</c> 判据关掉（回到"把叶子层产物摊到发布目标根上"
+    /// 的老口径）⇒ <c>RecursiveExtractorTests.就地替换_用户极端例子的整棵树逐字成立</c> 变红：
+    /// 产物只剩顶层七个 <c>*.bin</c>，`1.mp4/2.mp4/3.mp4` 与所有层**整个不见了**。
+    /// </para>
+    /// <para>
+    /// ⚠ 别把 <c>DecideLayout</c> 里那条 <c>hasInnermostPackage → WrapInFolder</c> 提前返回
+    /// 当成"普通文件夹不许摊平"的判据：实测撤掉它只让
+    /// <c>TwoLayerLayoutTests.定稿_展开了内层包时单个文件也得待在那一层里面</c> 变红
+    /// （链形状的结论由 ① 那支决定，提前返回对它没有影响）。
     /// </para>
     /// </summary>
     public class PackageLayerRulesTests
