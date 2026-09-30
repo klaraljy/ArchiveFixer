@@ -152,23 +152,21 @@ namespace ArchiveFixer.Services
         /// <para>中间产物放这里，避免直接写用户的最终目录（AGENTS.md §6 第 12 条、设计.md §十三）。
         /// 它也**不在源目录里**：源目录可能只读、可能是别人的共享、也可能是 U 盘。</para>
         ///
-        /// <para><b>默认落在这一单的目标目录里面</b>（用户 2026-09-30 明确指示）：留空缓存根目录时，
-        /// 每批开工前由 <see cref="ArchiveFixer.Storage.WorkspaceRootResolver"/> 解析成
+        /// <para><b>只有一个来源：这一单的目标目录</b>（用户 2026-09-30 明确指示）：每批开工前由
+        /// <see cref="ArchiveFixer.Storage.WorkspaceRootResolver"/> 派生
         /// <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>（点开头 + 隐藏属性）并写进这个属性
-        /// （见 <c>ExtractionCoordinator</c> 批首那一步）；用户**显式设过**
-        /// <see cref="AppSettings.CacheRootDirectory"/> 时永远以它为准
-        /// （<c>&lt;它&gt;\work</c>，与改这一条之前的路径逐字相同）。</para>
+        /// （见 <c>ExtractionCoordinator</c> 批首那一步）。⛔ 没有任何设置项 / 参数能改它。</para>
         ///
-        /// <para>⚠ 解析**定不下来**时批首会直接停手（<c>WorkspaceRootResolution.Resolved</c> 为 false），
+        /// <para>⚠ 目标位置不可用时批首会直接停手（<c>WorkspaceRootResolution.Resolved</c> 为 false），
         /// 所以生产路径上不会有人拿着"没解析过"的值去拼暂存目录。</para>
         ///
-        /// <para>没有解析过时的取值 = <c>&lt;数据根&gt;\work</c>，也就是**老行为**：
+        /// <para>没有解析过时的取值 = <c>&lt;数据根&gt;\work</c>，也就是**2026-09-30 之前的老位置**：
         /// 它现在只服务于启动时"③ 页要扫哪些根"那一档（老位置里可能还留着升级前的残留）。</para>
         /// </summary>
         public string WorkDirectory
         {
             get => string.IsNullOrWhiteSpace(_workspaceRootOverride)
-                ? Path.Combine(DataRootDirectory, WorkspaceRootResolver.ConfiguredCacheWorkspaceSubDirectoryName)
+                ? Path.Combine(DataRootDirectory, WorkspaceRootResolver.LegacyWorkspaceSubDirectoryName)
                 : _workspaceRootOverride;
             set => _workspaceRootOverride = value ?? string.Empty;
         }

@@ -253,9 +253,24 @@ namespace ArchiveFixer.Tests
             {
                 task.Outcome = TaskOutcome.Succeeded;
                 task.OutputVerification = OutputVerificationOutcome.Passed;
+
+                /*
+                 * ⚠ 2026-09-30（检验等级 L4）："成功"这一档**从"校验通过"收紧成"可证完整"**——
+                 * 只有"拿可信清单逐条核对过"（`OutputManifestCrossChecked`）才算，
+                 * "拿不到清单、只做了非空底线校验"落在"判不出" ⇒ 同样拦下。
+                 * 所以这条放行的用例必须把这个事实一起写上（只写 Passed 已经不够了）。
+                 */
+                task.OutputManifestCrossChecked = true;
             }
 
             Assert.Null(ChainCompletionGate.DescribeBlocker(root, new[] { root, innerA, innerB }));
+
+            // "判不出完整性"这一档同样拦下（与上面的"成功"是两件事，别混）。
+            innerB.OutputManifestCrossChecked = false;
+
+            Assert.NotNull(ChainCompletionGate.DescribeBlocker(root, new[] { root, innerA, innerB }));
+
+            innerB.OutputManifestCrossChecked = true;
 
             // 根任务自己混在链里也不会被当成"续解任务"重复判（它由调用方那几道门槛管）。
             Assert.Equal(2, ChainCompletionGate.CountContinuations(root, new[] { root, innerA, innerB }));

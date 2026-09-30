@@ -285,7 +285,6 @@ namespace ArchiveFixer.Tests
             var settingsService = new SettingsService(pathService);
 
             AppSettings settings = AppSettings.CreateDefault();
-            settings.CacheRootDirectory = dataRoot;
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.AutoScanAfterDrop = false;
@@ -317,7 +316,12 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        /// <summary>造一个"删除操作该动手"的现场：完成 + 校验通过 + 其余物里躺着源包与过程物。</summary>
+        /// <summary>
+        /// 造一个"删除操作该动手"的现场：完成 + **可证完整** + 其余物里躺着源包与过程物。
+        ///
+        /// <para>⚠ 2026-09-30（检验等级 L4）：只有"拿清单逐条核对过"（<c>OutputManifestCrossChecked</c>）
+        /// 才算可证完整、才允许删源包；"判不出"那一档另有用例钉着。</para>
+        /// </summary>
         private (ArchiveTask Task, string RestDirectory) CreatePurgeScenario()
         {
             string outputPath = Path.Combine(_root, "out", "222");
@@ -335,6 +339,7 @@ namespace ArchiveFixer.Tests
                 OutputPath = outputPath,
                 Status = StatusText.ExtractSuccess,
                 IsOutputVerified = true,
+                OutputManifestCrossChecked = true,
                 Outcome = TaskOutcome.Succeeded,
                 RestDirectoryPath = restDirectory,
                 VolumeGroupKey = "222"

@@ -783,6 +783,19 @@ namespace ArchiveFixer.Models
         public OutputVerificationOutcome OutputVerification { get; set; } = OutputVerificationOutcome.NotAttempted;
 
         /// <summary>
+        /// 那一次产物校验**到底有没有拿可信清单逐条核对过**（L4 完整性分类的判据之一）。
+        ///
+        /// <para><see cref="OutputVerification"/> 为 <see cref="OutputVerificationOutcome.Passed"/>
+        /// 有两种含义：核对过（可证完整）与只做了非空底线校验（**判不出**完整性）。
+        /// 老口径下两者在任务上长得一模一样，删源包那道不可逆的闸门分不开它们 ——
+        /// 用户 2026-09-30 定的红线是"判不出 ⇒ 一律不删源"，所以这个事实必须落在任务上。</para>
+        ///
+        /// <para>唯一写入点：<c>ExtractionCoordinator.RunPostProcessWork</c> 里从
+        /// <c>OutputVerificationResult.ManifestCrossChecked</c> 抄下来的那一行。</para>
+        /// </summary>
+        public bool OutputManifestCrossChecked { get; set; }
+
+        /// <summary>
         /// 任务的**机器可判终态**（AGENTS.md §7 要求的那类"能被机器判定"的状态）。
         ///
         /// <para>

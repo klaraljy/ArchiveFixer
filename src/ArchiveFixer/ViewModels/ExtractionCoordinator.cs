@@ -460,6 +460,21 @@ namespace ArchiveFixer.ViewModels
         private bool _oneClickThisBatch;
 
         /// <summary>
+        /// 本批**我们自己建出来的那个目标目录**（工作区要落在它里面，所以批首必须先建它）。
+        ///
+        /// <para>为什么要记：工作区改到目标目录里面之后（用户 2026-09-30），"最终目录连建都不该建"
+        /// 这条老口径在实现上不可能再成立 —— 不先建它就没地方放工作区。但**用户看得见的残留**
+        /// 一条都不许多：批尾如果这个目录里什么都没有（这一批什么都没解出来 / 全失败 / 被取消），
+        /// 它就是**我们自己造的一个空壳**，必须自己收掉。</para>
+        ///
+        /// <para>⛔ 只在"确实是这一次建出来的"并且"现在一个条目都没有"这两条同时成立时才删
+        /// （前者靠 <see cref="WorkspaceRootResolution.TargetDirectoryCreated"/>，
+        /// 后者靠现枚举）—— 用户本来就有的目录、或者里面有我们删不掉的东西（目录联接点），
+        /// 一律一个字节都不动。空串 = 这一批没建过任何目标目录。</para>
+        /// </summary>
+        private string _batchCreatedTargetDirectory = string.Empty;
+
+        /// <summary>
         /// 本批那条"中途空间不足"的纯提示**弹过没有**（用户 2026-09-29 第 2 条：
         /// "同一批只弹一次（合并计数）"）。
         ///
@@ -1029,6 +1044,9 @@ namespace ArchiveFixer.ViewModels
 
             task.IsOutputVerified = work.Verification.Verified;
 
+            // L4 的第二个事实：这一次"通过"是**核对过清单**还是**只做了非空底线校验**（判不出完整性）。
+            task.OutputManifestCrossChecked = work.Verification.ManifestCrossChecked;
+
             /*
              * ===== 产物校验未通过 = **结论本身不成立**（用户 2026-09-24 铁证，不变量 6）=====
              *
@@ -1514,7 +1532,6 @@ namespace ArchiveFixer.ViewModels
             if (_spaceTightThisBatch && !_spaceTightKeepSourceThisBatch)
             {
                 /*
-                /*
                  * 「空间不足」模式（用户 2026-09-27 拍板 + 2026-09-29 第 1/4 条收紧）：
                  * **每一层跑完就删它自己那一层的源包**，不等整条续解链跑完。
                  *
@@ -1639,11 +1656,17 @@ namespace ArchiveFixer.ViewModels
             bool oneClickRun,
             List<(string Level, string Message)> logEntries)
         {
-            if (!verification.Verified)
+            /*
+             * ⚠ 2026-09-30（检验等级 L4）：判据从"校验通过"**收紧**成"可证完整"（唯一出口 =
+             * <see cref="ResultCompletenessClassifier"/>）。老口径下"拿不到清单、只做了非空底线校验"
+             * 也算通过，那一档**没有任何证据**却能把源包搬走；现在它落在"判不出"⇒ 源包留在原地。
+             */
+            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(verification);
+
+            if (!completeness.AllowsSourceRemoval)
             {
-                // 校验没过就没有"这次整理完成了"这回事，源包一律不动（D-11 第 2 条）。
-                logEntries.Add(("WARN", $"{task.FileName}：输出校验未通过，源包留在原地（未移入其余物）。"));
-                return new SourcePackageMoveResult { Attempted = false, Message = "输出校验未通过，源包留在原地" };
+                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Message}，源包留在原地（未移入其余物）。"));
+                return new SourcePackageMoveResult { Attempted = false, Message = completeness.Message + "，源包留在原地" };
             }
 
             if (task.SourcePackageMove == SourcePackageMoveState.Done)
@@ -1763,10 +1786,16 @@ namespace ArchiveFixer.ViewModels
                 return null;
             }
 
-            if (verification == null || !verification.Verified)
+            /*
+             * ⚠ 2026-09-30（检验等级 L4）：判据从"校验通过"**收紧**成"可证完整"（唯一出口 =
+             * <see cref="ResultCompletenessClassifier"/>）：判不出完整性时**永久删源包**这一步不做 ——
+             * "空间不足"是让用户难受，删错源包是不可逆。
+             */
+            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(verification);
+
+            if (!completeness.AllowsSourceRemoval)
             {
-                // 校验没过就没有"这一层已经定稿"这回事 —— 源包一律不动（与 D-11 同一条红线）。
-                logEntries.Add(("WARN", $"{task.FileName}：输出校验未通过，{subject}留在原地（空间不足模式也不删）。"));
+                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Message}，{subject}留在原地（空间不足模式也不删）。"));
                 return null;
             }
 
@@ -2477,12 +2506,19 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            /*
+             * ⚠ 2026-09-30（检验等级 L4）：第二条判据从"校验通过"**收紧**成"可证完整"——
+             * 唯一出口 <see cref="ResultCompletenessClassifier"/>。老口径把"拿不到清单、
+             * 只做了非空底线校验"也算成通过，这一档**没有任何证据**却能走到链尾删其余物。
+             * （下游 <see cref="RestItemPurger"/> 还会再挡一次，但**同一件事只许有一个判据**：
+             * 这里留一个更弱的版本，等于给下一个人两条互相矛盾的口径。）
+             */
             if (task.Outcome != TaskOutcome.Succeeded ||
-                task.OutputVerification != OutputVerificationOutcome.Passed ||
+                !ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval ||
                 string.IsNullOrWhiteSpace(task.RestDirectoryPath) ||
                 !Directory.Exists(task.RestDirectoryPath))
             {
-                // 没成功 / 没校验通过 / 没有其余物 → 什么都不做（红线：失败一个字节都不删）。
+                // 没成功 / 完整性判不出 / 没有其余物 → 什么都不做（红线：失败一个字节都不删）。
                 return;
             }
 
@@ -2574,16 +2610,34 @@ namespace ArchiveFixer.ViewModels
              * 那个字符串**证明不了**产物是好的 —— 真机日志里恰好出现过"状态写着解压成功、校验却已判否"，
              * 万一那条路走到这儿，用户的源包就会被删掉。
              *
-             * 现在读的是**校验那一刻的事实**（`OutputVerification == Passed`，只有"产物非空且与引擎清单对得上"
-             * 才会被置成它），加上"机器终态不是部分完成/失败/取消"（<see cref="TaskOutcome.Succeeded"/>）。
-             * 两个字段都由管线在结论成立的那一刻写、之后没有任何地方会为了显示去改它们。
+             * 现在读的是**校验那一刻的事实**，而且用的是 L4 的**唯一出口**
+             * <see cref="ResultCompletenessClassifier"/>（= 可证完整）：它要求"产物非空 + 与引擎清单逐条对得上"
+             * （`ManifestCrossChecked = true`）—— **拿不到清单那一档算"判不出"，同样不许动源包**
+             * （2026-09-30 检验等级），加上"机器终态不是部分完成/失败/取消"（<see cref="TaskOutcome.Succeeded"/>）。
+             * 这些字段都由管线在结论成立的那一刻写、之后没有任何地方会为了显示去改它们。
              */
-            if (rootTask.OutputVerification != OutputVerificationOutcome.Passed)
+            /*
+             * ⚠ 2026-09-30（检验等级 L4）：从"校验通过"**收紧**成"可证完整"
+             * （唯一出口 <see cref="ResultCompletenessClassifier"/>，与链尾其余物那两道门同一口径）。
+             *
+             * 漏掉这一处会怎样：链尾补搬是**移动用户唯一无法再生的源包**。老口径下"没拿到清单、
+             * 只做了非空底线校验"也算校验通过 —— 链尾照样把源包搬进其余物，而接下来的
+             * "删除操作"档一起来就把它删了。判不出就是判不出：一个字节都不许动。
+             *
+             * ⚠ 与下面 `DescribeChainVerificationGap` 那一处**判据相同、刻意查两遍**：根任务总会
+             * 落进那个目录，所以严格说这一处是冗余的早退；留着的理由是它给出的是"根任务自己判不出"
+             * 这句更准的话，而且它排在分卷 / 内容物那几道门之前（红检实测：把下面那一处退回旧判据，
+             * 用例 `形状B_链上有一层判不出完整性_链尾不补搬源包` 变红；只退这一处则被下面那一处接住）。
+             * ⛔ 别为了"去重"删掉任何一处 —— 它们挡的是同一个不可逆动作，而两处的调用场景并不完全相同。
+             */
+            ResultCompletenessVerdict rootCompleteness = ResultCompletenessClassifier.Classify(rootTask);
+
+            if (!rootCompleteness.AllowsSourceRemoval)
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：根任务的输出校验没有通过（机器结论：{rootTask.OutputVerification}），" +
-                    $"链结束后不动源包（源包留在原地）。校验结论：{rootTask.VerifyMessage}"));
+                    $"{rootTask.FileName}：{rootCompleteness.Message}" +
+                    $"（机器结论：{rootCompleteness.Evidence}），链结束后不动源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -2762,7 +2816,8 @@ namespace ArchiveFixer.ViewModels
             OneClickCoordinator.ResolveContinuationOutputDirectory(task);
 
         /// <summary>
-        /// 链里的输出校验有没有缺口：**每一个**把这个目录当落点的任务都必须通过输出校验。
+        /// 链里的输出校验有没有缺口：**每一个**把这个目录当落点的任务都必须**可证完整**
+        /// （L4 唯一出口 <see cref="ResultCompletenessClassifier"/>，2026-09-30 检验等级）。
         ///
         /// <para>
         /// 为什么要看**整条链**而不是只看根任务：用户那个形状里内容物是**续解子任务**产出的，
@@ -2772,7 +2827,11 @@ namespace ArchiveFixer.ViewModels
         /// <para>
         /// 为什么是"每一个都必须过"而不是"有一个过就行"：同一个最终目录是链上所有任务共同产出的，
         /// 其中任何一个没通过校验，就没有"内容物已定稿并校验通过"这个事实 ——
-        /// 这与"本轮直接搬"那条路径的口径一致（它也要求 <c>verification.Verified</c>）。
+        /// 这与"本轮直接搬"那条路径的口径一致（它也要求 L4 = 可证完整）。
+        /// </para>
+        /// <para>
+        /// ⚠ 判据刻意**不是** <c>IsOutputVerified</c>：那个字段在"拿不到清单、只做了非空底线校验"时
+        /// 也是 true（老口径下两者长得一模一样），而这一处的下游是**移动 / 删除用户的源包**。
         /// </para>
         /// </summary>
         /// <returns>
@@ -2796,9 +2855,18 @@ namespace ArchiveFixer.ViewModels
 
                 anyLanding = true;
 
-                if (!candidate.IsOutputVerified)
+                /*
+                 * ⚠ 2026-09-30（检验等级 L4）：判据从 <c>IsOutputVerified</c>（= "校验通过"，
+                 * 含"拿不到清单只做了底线校验"那一档）**收紧**成"可证完整"——
+                 * 唯一出口 <see cref="ResultCompletenessClassifier"/>。这一处是**链尾补搬/删源**的最后一道
+                 * 前置判据，判不出 ⇒ 源包一个字节都不许动。
+                 */
+                ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(candidate);
+
+                if (!completeness.AllowsSourceRemoval)
                 {
-                    return $"{candidate.FileName} 的输出校验没通过";
+                    return $"{candidate.FileName}：{completeness.Message}"
+                           + $"（机器结论：{completeness.Evidence}）";
                 }
             }
 
@@ -8066,6 +8134,18 @@ namespace ArchiveFixer.ViewModels
                  */
                 RemoveEmptyWorkspaceShells();
 
+                /*
+                 * 再收一层：**我们自己造出来的那个目标目录壳**（用户 2026-09-30 的新收尾）。
+                 *
+                 * 顺序不能反：先收 `<目标目录>\.ArchiveFixer.work`（上一步），这一层才可能变空。
+                 * 判据两条同时成立才删 —— ① 它确实是这一次建出来的（批首记的事实）；
+                 * ② 现在一个条目都没有（现枚举）。少了任何一条都会去碰用户自己的目录。
+                 */
+                RemoveEmptyTargetShellIfWeCreatedIt();
+
+                // 批尾清掉这条批内状态（与 _spaceTightThisBatch / _oneClickThisBatch 同一口径）。
+                _batchCreatedTargetDirectory = string.Empty;
+
                 UpdateSummary();
             }
         }
@@ -8466,7 +8546,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             WorkspaceRootResolution resolution = WorkspaceRootResolver.Resolve(
-                Settings?.CacheRootDirectory,
                 destinations,
                 WorkspaceDriveOverride);
 
@@ -8484,43 +8563,26 @@ namespace ArchiveFixer.ViewModels
 
             _pathService.WorkDirectory = resolution.RootDirectory;
 
+            /*
+             * 记下"目标目录是不是我们建的"：工作区必须先有目标目录才能落在它里面，
+             * 所以这一批必然会建出那一个目录壳；批尾它要是空的，就该由我们自己收掉
+             * （见 RemoveEmptyTargetShellIfWeCreatedIt，用户 2026-09-30）。
+             */
+            _batchCreatedTargetDirectory = resolution.TargetDirectoryCreated
+                ? resolution.TargetDirectory
+                : string.Empty;
+
             // 递归核心的工作区根是进程级静态，且它自己会再挂一层 "recursive"（见 RecursiveExtractor）。
             RecursiveExtractor.ConfiguredWorkspaceRoot = resolution.RootDirectory;
 
             /*
-             * 工作区不在这批的目标盘上（用户显式设过缓存根目录）：
-             * **必须说出来**。这一档下空间门只按目标盘核算，工作区那块盘还要另留
-             * "内容物 + 过程物"（当前账本不核算它，是已知限制），而且定稿会退化成跨盘复制。
-             * 静默下去的结果就是用户看到"空间明明够，怎么还是写满了"。
+             * 工作区与目标盘的关系**永远**是"同一棵树"（工作区就建在目标目录里面），
+             * 所以这里不再有"工作区不在批目标盘上"那一档 —— 那个警告的前提（用户设过缓存根目录）
+             * 已随设置项一起删除。跨盘剩下的是**批内部**的：各任务落点在不同盘上，那个由
+             * WorkspaceRootResolver 的跨盘说明如实写出来。
              */
-            if (resolution.BatchDrives.Count > 0)
-            {
-                string workspaceDrive = ResolveDriveOf(resolution.RootDirectory);
 
-                bool onBatchDrive = false;
-
-                foreach (string drive in resolution.BatchDrives)
-                {
-                    if (string.Equals(drive, workspaceDrive, StringComparison.OrdinalIgnoreCase))
-                    {
-                        onBatchDrive = true;
-                        break;
-                    }
-                }
-
-                if (!onBatchDrive)
-                {
-                    AppendLog(
-                        "WARN",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.WorkspaceNotOnOutputDriveFormat,
-                            workspaceDrive,
-                            string.Join("、", resolution.BatchDrives)));
-                }
-            }
-
-            WorkspaceRootIndex.Remember(_pathService.DataRootDirectory, resolution.RootDirectory);
+            WorkspaceRootIndex.Remember(resolution.RootDirectory);
 
             return resolution;
         }
@@ -8797,6 +8859,53 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 把工作区根下面**空掉的壳目录**收掉（见调用点的三条安全边界）。
+        /// </summary>
+        /// <summary>
+        /// 收掉**我们自己建出来的那个空目标目录**（用户 2026-09-30：工作区改到目标目录里面之后的新收尾）。
+        ///
+        /// <para><b>为什么必须有这一步</b>：工作区要落在 <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，
+        /// 所以批首必须先建出目标目录（用户原话"原地就在原地创"）。老口径那句
+        /// "最终目录连建都不该建"在实现上因此不再成立；但**用户看得见的残留一条都不许多** ——
+        /// 一批全失败 / 被取消 / 越界时，那个目录里只剩一个空壳，留着就是"凭空多出来一个文件夹"，
+        /// 正是用户反复抱怨过的那种东西。</para>
+        ///
+        /// <para><b>三条安全边界（⛔ 一条都不许松）</b>：</para>
+        /// <list type="number">
+        /// <item><description>只处理**这一次建出来的**那一个（批首记的事实，用户本来就有的目录永远不碰）；</description></item>
+        /// <item><description>只删**空的**（现枚举；里面还有任何条目 —— 包括我们删不掉的工作区残留、
+        /// 目录联接点 —— 就一个字节都不动）；</description></item>
+        /// <item><description>**非递归**删（<c>recursive: false</c>），且整段包在 try/catch 里：
+        /// 收尾的顺手活，失败只写日志，绝不影响批结论。</description></item>
+        /// </list>
+        /// </summary>
+        private void RemoveEmptyTargetShellIfWeCreatedIt()
+        {
+            string directory = _batchCreatedTargetDirectory;
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                if (Directory.EnumerateFileSystemEntries(directory).Any())
+                {
+                    // 里面有东西（内容物 / 清不掉的工作区残留 / 用户后来放进去的）→ 一律不碰。
+                    return;
+                }
+
+                Directory.Delete(directory, recursive: false);
+                AppendLog("INFO", $"顺手收掉了这一批建出来的空目标目录：{directory}");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("INFO", $"空目标目录没清掉（不影响结果）：{directory} —— {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 收掉**空的工作区壳**（用户 2026-09-27：真机跑完 <c>…\.ArchiveFixer.work\recursive</c> 会留一个空壳）。
         /// </summary>
         private void RemoveEmptyWorkspaceShells()
         {

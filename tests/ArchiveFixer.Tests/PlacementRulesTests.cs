@@ -419,7 +419,6 @@ namespace ArchiveFixer.Tests
             var settingsService = new SettingsService(pathService);
 
             AppSettings settings = AppSettings.CreateDefault();
-            settings.CacheRootDirectory = dataRoot;
 
             /*
              * "指定位置"那一格默认**留空**：主界面的「输出目录」框一旦有值就会把

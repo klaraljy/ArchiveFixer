@@ -201,7 +201,6 @@ namespace ArchiveFixer.Tests
             var settingsService = new SettingsService(pathService);
 
             AppSettings settings = AppSettings.CreateDefault();
-            settings.CacheRootDirectory = dataRoot;
             settings.CustomOutputDirectory = Path.Combine(_root, "out");
             settings.ExtractToOriginalDirectory = false;
             settings.RecursionMode = "SingleLayer";

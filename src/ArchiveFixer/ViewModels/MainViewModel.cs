@@ -398,24 +398,22 @@ namespace ArchiveFixer.ViewModels
             EngineRuntimeSettings.Apply(_settings);
 
             /*
-             * 缓存根目录：留空就用程序目录下的 data。
-             * 绝不能默认回落到 %AppData%（C 盘）—— 用户明确要求绿色软件跟着安装位置走。
+             * 数据根**固定**是程序目录下的 data（用户 2026-09-30：删掉「缓存根目录」设置项）。
+             *
+             * ⛔ 这里刻意**不写** `_pathService.DataRootDirectory = ...`：
+             * 它本来就是 <see cref="PathService.DefaultDataRootDirectory"/>，而测试装配时会把
+             * DataRootDirectory 指到临时目录 —— 在这里"顺手复位成默认值"会把测试的数据根
+             * 顶回程序目录（真实后果：用例往测试输出目录里写日志 / 设置）。
+             * 数据根只有一个出口：PathService 自己的默认值。
              */
-            string cacheRoot = _settings?.CacheRootDirectory ?? string.Empty;
-
-            _pathService.DataRootDirectory = string.IsNullOrWhiteSpace(cacheRoot)
-                ? PathService.DefaultDataRootDirectory
-                : cacheRoot;
 
             /*
-             * 工作区根（用户 2026-09-30：**默认落在这一单的目标目录里面**）。
+             * 工作区根（用户 2026-09-30：**唯一来源 = 这一单的目标目录**）。
              *
-             * 三档，与 WorkspaceRootResolver 同一口径：
-             * ① 用户显式设过缓存根目录 → <它>\work（老行为，一个字都不改他的选择）；
-             * ② 留空 → 用**账本里记住的那个根**（上一批按目标目录定下来的那个，见 WorkspaceRootIndex）；
-             * ③ 真正"落在目标目录里"的解析发生在**每批开工前**
-             *    （ExtractionCoordinator.ApplyBatchWorkspaceRoot）—— 只有那时才知道这一批会处理哪些包、
-             *    目标目录在哪。启动 / 保存设置时根本还没有这一批的任务，所以这里只能是"上一批的根"。
+             * ⚠ 真正"落在目标目录里"的解析发生在**每批开工前**
+             * （ExtractionCoordinator.ApplyBatchWorkspaceRoot）—— 只有那时才知道这一批会处理哪些包、
+             * 目标目录在哪。启动 / 保存设置时根本还没有这一批的任务，所以这里只能取"当前生效的那个根"
+             * （本次会话用过的，见 WorkspaceRootIndex.SessionRoots；没有就是老位置 <数据根>\work）。
              *
              * ⚠ 这里**只服务于 ③ 页的残留扫描与启动日志**，不是这一批真正会用的根。
              * ⛔ 批首解析不出来时整批停手（绝不在这里替它挑一个盘）。
@@ -423,7 +421,7 @@ namespace ArchiveFixer.ViewModels
              * ⚠ 递归核心的工作区根是进程级静态（它自己会再挂一层 "recursive"），必须跟着一起换 ——
              * 不换的话递归那几百 MB 又会回到程序盘（那正是早先要改掉的老行为）。
              */
-            _pathService.WorkDirectory = ResolveStartupWorkspaceRoot(cacheRoot);
+            _pathService.WorkDirectory = ResolveStartupWorkspaceRoot();
             RecursiveExtractor.ConfiguredWorkspaceRoot = _pathService.WorkDirectory;
 
             /*
@@ -438,58 +436,31 @@ namespace ArchiveFixer.ViewModels
             ToolLocator.Default.Invalidate();
         }
 
-        /// <summary>
-        /// 数据根跟着「缓存根目录」走（见 <see cref="ApplyEngineSettings"/>），所以设置文件可能有两处：
-        /// 程序目录下的 <c>data</c>（启动时读的那一份）与缓存根目录那一份。
-        ///
-        /// <para>这个补的是**第二步读**：数据根真的换了地方、而那个位置**真的已经有一份设置**时，
-        /// 再读一次并以它为准 —— 否则会出现"启动读旧的、保存写新的"，用户改什么都记不住
-        /// （用户 2026-09-26 第 1 条要的正是"下次重启也要有"）。</para>
-        ///
-        /// <para>⛔ 那个位置**没有**文件时一个字都不写：那多半是"第一次把缓存根指过去"（或刚换过盘），
-        /// 手上这一份就是最新的，下一次自动保存自然会把它写到新位置。
-        /// 在这里顺手 <c>Save</c> 一份默认值等于把用户的设置清掉。</para>
-        /// </summary>
-        /// <returns>真的换了设置文件（并且读了新那一份）时为 true。</returns>
-        private bool ReloadSettingsFromEffectiveDataRoot(string loadedFrom)
-        {
-            string effective = _settingsService.SettingsFilePath;
-
-            if (string.Equals(loadedFrom, effective, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            if (!File.Exists(effective))
-            {
-                AppendLog("INFO", $"缓存根目录里的设置文件还不存在（{effective}），本次沿用程序目录那一份，改动会写到新位置。");
-                return false;
-            }
-
-            _settings = _settingsService.Load();
-            return true;
-        }
+        /*
+         * ⛔ 这里原来还有一个 `ReloadSettingsFromEffectiveDataRoot(loadedFrom)` 的"第二步读"，
+         * 2026-09-30 **随「缓存根目录」设置项一起删除**。
+         *
+         * 它存在的唯一理由是：数据根由设置项决定，于是设置文件可能有两处（程序目录那一份、
+         * 缓存根那一份），换了位置就得再读一次。现在数据根固定是程序目录下的 data
+         * （唯一出口 = <see cref="PathService.DefaultDataRootDirectory"/>），设置文件只有一处，
+         * "启动读旧的、保存写新的"这个缺陷从结构上就不存在了 —— 留着它只会是一条永远返回 false 的死路。
+         */
 
         /// <summary>
-        /// 启动 / 保存设置时那个"当前生效的工作区根"（详细口径见 <see cref="ApplyEngineSettings"/> 里的注释）。
+        /// 启动 / 保存设置时那个"当前生效的工作区根"。
         ///
-        /// <para>它**不是**这一批真正会用的根 —— 那个要等批首按落点盘算（见
-        /// <c>ExtractionCoordinator.ApplyBatchWorkspaceRoot</c>）。这里取的是"上一批留下的那个"
-        /// （账本 <see cref="WorkspaceRootIndex"/>），这样 ③ 页与启动日志在**重启之后**
-        /// 照样列得出上次那批的残留（默认跟输出盘之后根会随盘变，不记住就等于漏报）。</para>
+        /// <para>⛔ <b>它不参与"这一批该用哪个根"的决策</b>：那个只有一条路 —— 批首按这一单的目标目录派生
+        /// （<c>ExtractionCoordinator.ApplyBatchWorkspaceRoot</c>）。这里取的只是"本次会话用过的那一个"
+        /// （内存账本 <see cref="WorkspaceRootIndex.SessionRoots"/>），好让 ③ 页与启动日志在**同一趟运行里**
+        /// 照样列得出前几批留下的残留（根会随目标目录变，不记住就等于漏报）。</para>
+        ///
+        /// <para>本趟还没解过任何东西 → 退回**老位置** <c>&lt;数据根&gt;\work</c>：
+        /// 那是 2026-09-30 之前的工作区（升级前那批残留还在那儿，用户实测攒过 5.7 GB），
+        /// 扫它是为了清得掉，⛔ 绝不是"下一批就放这儿"。</para>
         /// </summary>
-        private string ResolveStartupWorkspaceRoot(string cacheRoot)
+        private string ResolveStartupWorkspaceRoot()
         {
-            // ① 用户显式设过缓存根目录：以它为准（老行为）。
-            if (!string.IsNullOrWhiteSpace(cacheRoot))
-            {
-                return Path.Combine(
-                    _pathService.DataRootDirectory,
-                    WorkspaceRootResolver.ConfiguredCacheWorkspaceSubDirectoryName);
-            }
-
-            // ② 留空：先看账本里记住的那个根，再退老位置 <数据根>\work。
-            foreach (string remembered in WorkspaceRootIndex.Load(_pathService.DataRootDirectory))
+            foreach (string remembered in WorkspaceRootIndex.SessionRoots)
             {
                 if (!string.IsNullOrWhiteSpace(remembered))
                 {
@@ -499,7 +470,7 @@ namespace ArchiveFixer.ViewModels
 
             return Path.Combine(
                 _pathService.DataRootDirectory,
-                WorkspaceRootResolver.ConfiguredCacheWorkspaceSubDirectoryName);
+                WorkspaceRootResolver.LegacyWorkspaceSubDirectoryName);
         }
 
         /// <summary>
@@ -514,9 +485,12 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// ③「清理与删除」页 / 启动日志要扫的**所有**工作区根（去重、当前生效的排最前）。
         ///
-        /// <para>三部分：① 当前生效的根；② 老位置 <c>&lt;数据根&gt;\work</c>（升级前那批残留还在那儿，
-        /// 用户实测攒过 5.7 GB）；③ 账本里用过的根（换了输出盘之后旧盘上的残留也要列得出来）。
-        /// 只扫其中一个是**不够**的 —— 那正是"东西明明在，界面却说没有"的来源。</para>
+        /// <para>两部分：① 当前生效的根（本次会话用过的那个，没有就是老位置）；② 老位置
+        /// <c>&lt;数据根&gt;\work</c>（2026-09-30 之前的工作区，升级前那批残留还在那儿，
+        /// 用户实测攒过 5.7 GB）。只扫其中一个是**不够**的 —— 那正是"东西明明在，界面却说没有"的来源。</para>
+        ///
+        /// <para>⛔ 这里**不读任何历史清单**（用户 2026-09-30 收口）：账本只记本次会话用过的根
+        /// （<see cref="WorkspaceRootIndex.SessionRoots"/>），重启之后不会再去猜"上次在哪开过工"。</para>
         /// </summary>
         private IReadOnlyList<string> ResolveWorkspaceScanRoots()
         {
@@ -535,9 +509,9 @@ namespace ArchiveFixer.ViewModels
 
             TryAdd(Path.Combine(
                 _pathService.DataRootDirectory,
-                WorkspaceRootResolver.ConfiguredCacheWorkspaceSubDirectoryName));
+                WorkspaceRootResolver.LegacyWorkspaceSubDirectoryName));
 
-            foreach (string remembered in WorkspaceRootIndex.Load(_pathService.DataRootDirectory))
+            foreach (string remembered in WorkspaceRootIndex.SessionRoots)
             {
                 TryAdd(remembered);
             }
@@ -915,7 +889,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 「改了就自动存」的本体：设置与上一次落盘那份不同 → 校验 → 写盘 → 记账。
         ///
-        /// <para>⛔ 两条边界：①**校验不过就不存**（缓存根目录落到 C 盘、工具路径不存在 ——
+        /// <para>⛔ 两条边界：①**校验不过就不存**（工具路径不存在 ——
         /// 与设置页「保存」同一套判据），并写一条 WARN 说清"改好就会立刻存"，绝不把不可用的值写进去；
         /// ②写盘失败只写 WARN，绝不弹框、绝不崩（自动保存不该打断用户手上的事）。</para>
         /// </summary>
@@ -986,9 +960,9 @@ namespace ArchiveFixer.ViewModels
         /// 以前各自 <c>try { Save } catch</c>，而自动保存靠的是"上一次真的写下去的那份"当指纹 ——
         /// 谁绕过它，定时器就会在 800ms 后再写一遍（内容一样、纯属白写）。</para>
         ///
-        /// <para>⛔ 那道校验（缓存根目录 / 工具路径）**只长在自动保存这一条路上**（见
+        /// <para>⛔ 那道校验（工具路径）**只长在自动保存这一条路上**（见
         /// <see cref="AutoSaveSettingsIfChanged"/>）：其余调用点写的是"用户刚在这个界面上做的选择"，
-        /// 与那两格无关 —— 把它们也拦下会让"我明明点了却没记住"重现，那正是用户 2026-09-26
+        /// 与那一格无关 —— 把它也拦下会让"我明明点了却没记住"重现，那正是用户 2026-09-26
         /// 第 1 条最反感的事。</para>
         /// </summary>
         private bool WriteSettingsToDisk(string what)
@@ -1020,7 +994,7 @@ namespace ArchiveFixer.ViewModels
          *
          * 于是：界面上**一个字都不留**（连"这一步先没存"也不提示）——
          * 代价是他自己选的，只保留日志里的那两条 WARN：
-         * · 某项不合法（缓存根目录落 C 盘 / 工具路径不存在）→ `设置暂时没有自动保存：<原因>`；
+         * · 某项不合法（工具路径不存在）→ `设置暂时没有自动保存：<原因>`；
          * · 写盘失败 → `<某处>没能写进设置（写盘失败：磁盘只读 / 被占用？）`。
          * ⛔ 不许再把"设置已自动保存"这类报平安的话挂回界面上（那是程序自己的状态）。
          */
@@ -1956,26 +1930,14 @@ namespace ArchiveFixer.ViewModels
             _taskSummaryService.EngineIdentityProvider = task => ResolveEngineIdentity(task);
 
             /*
-             * 读设置分三步，顺序不能换：
-             * ① 先读**程序目录下 data** 那一份（启动时 PathService 的默认根）—— 「缓存根目录」这个设置
-             *    本身就在它里面，不读它就不可能知道数据根该去哪儿；
-             * ② ApplyEngineSettings 按缓存根目录把数据根定下来（设置 / 日志 / 工作区都跟着它走，
-             *    见 docs/使用说明.md §2），于是设置文件可能**换了地方**；
-             * ③ 数据根真换了、且那个位置**真的有一份设置** → 再读一次，以它为准。
+             * 读设置只有一步（用户 2026-09-30：数据根固定 = 程序目录下的 data，设置文件只有一处）。
              *
-             * 少了第 ③ 步会怎样（2026-09-26 修，用户第 1 条"要有记忆性，下次重启也要有"）：
-             * 设过缓存根目录的人，**每一次启动都从程序目录读旧那份、保存写的却是缓存根那一份** ——
-             * 界面上改什么、关掉、再开，全都回到旧值，看起来就是"设置根本没保存"。
+             * 老实现要读三步：① 先读程序目录那一份 → ② 按「缓存根目录」这个设置项把数据根定下来 →
+             * ③ 数据根换了地方就再读一次。那个设置项已经删除，②③ 随之消失；
+             * 少了 ③ 也不会再出现"启动读旧的、保存写新的"（两者本来就是同一个文件了）。
              */
             _settings = _settingsService.Load();
-            string settingsLoadedFrom = _settingsService.SettingsFilePath;
             ApplyEngineSettings();
-
-            if (ReloadSettingsFromEffectiveDataRoot(settingsLoadedFrom))
-            {
-                // 缓存根那一份可能改了引擎优先级 / 日志开关 / 工具路径 —— 再推一次（幂等）。
-                ApplyEngineSettings();
-            }
 
             StartSettingsAutoSaveTimer();
 
@@ -3605,9 +3567,8 @@ namespace ArchiveFixer.ViewModels
         private void SavePackingSettings()
         {
             /*
-             * 与自动保存**同一道闸门**：设置里有非法值（缓存根目录落在 C 盘 / 工具路径指向一个不存在的
-             * 文件）时先不落盘并说清 —— ⛔ 打包这条路不许变成"把非法设置偷偷写进盘"的后门
-             * （那两格决定了数据根与引擎，写进去下次启动就照它走）。
+             * 与自动保存**同一道闸门**：设置里有非法值（工具路径指向一个不存在的文件）时先不落盘并说清 ——
+             * ⛔ 打包这条路不许变成"把非法设置偷偷写进盘"的后门（那一格决定引擎，写进去下次启动就照它走）。
              */
             string? blocked = SettingsEditor?.DescribeAutoSaveBlock();
 
@@ -4107,20 +4068,52 @@ namespace ArchiveFixer.ViewModels
             return opened;
         }
 
+        /// <summary>
+        /// 「打开工作区目录」（③ 页与 ⑥ 设置页那个按钮）。
+        ///
+        /// <para>⛔ <b>这里刻意不建目录</b>（2026-09-30 随「缓存根目录」设置项一起收紧）：
+        /// 工作区根只有一个来源 = **这一批的目标目录**，本趟还没解过东西时
+        /// <see cref="PathService.WorkDirectory"/> 取的是**升级前的老位置** <c>&lt;数据根&gt;\work</c>
+        /// （它只是"③ 页要扫哪些根"的一项）。老实现先 <c>EnsureDirectoryExists</c> 再打开 ——
+        /// 于是"点一下按钮"就会在**程序所在那块盘**上凭空造出一个工作区目录，
+        /// 正是用户点名不要的那件事（"甚至危险操作固定到了 C 盘"）。</para>
+        ///
+        /// <para>现在：目录在就打开；不在就**如实说清为什么不在**（工作区只跟目标目录走，
+        /// 成功那一趟连壳都会收掉，所以这里通常什么都不会有）。</para>
+        /// </summary>
         private void OpenWorkDirectory()
         {
+            string workDirectory = _pathService.WorkDirectory;
+
             try
             {
-                SafePathHelper.EnsureDirectoryExists(_pathService.WorkDirectory);
-                _pathService.OpenDirectory(_pathService.WorkDirectory);
+                if (!Directory.Exists(workDirectory))
+                {
+                    AppendLog(
+                        "INFO",
+                        $"工作区目录现在不存在：{workDirectory}（工作区只由这一单的目标目录派生，"
+                        + "成功那一趟连空壳都会收掉；本趟还没解过东西时这里是升级前的老位置）。");
+
+                    _dialogService.ShowInfo(
+                        $"这里现在没有工作区目录：{Environment.NewLine}{workDirectory}{Environment.NewLine}{Environment.NewLine}"
+                        + "工作区只跟目标目录走：这一单成品要落的那个目录下的 .ArchiveFixer.work"
+                        + "（点开头 + 隐藏）。解压成功的那一趟会连空壳一起收掉，所以这里通常是空的；"
+                        + "失败 / 取消留下的中间产物在「清理与删除」页看得到体积。"
+                        + "工作区位置没有任何设置项可以改 —— 想换位置就换这一批的输出位置。");
+
+                    return;
+                }
+
+                _pathService.OpenDirectory(workDirectory);
             }
             catch (Exception ex)
             {
                 AppendLog("ERROR", "打开工作区目录失败：" + ex.Message);
                 _dialogService.ShowError(
                     $"打开工作区目录失败：{ex.Message}{Environment.NewLine}"
-                    + $"目录是：{_pathService.WorkDirectory}（可以在资源管理器里手工打开；"
-                    + "缓存根目录不可写时也会出现这种情况，可在「设置 → 高级设置」里换一个位置）。");
+                    + $"目录是：{workDirectory}（可以在资源管理器里手工打开；"
+                    + "目标目录不可写时也会出现这种情况 —— 工作区位置只由目标目录决定，"
+                    + "换一个能写的输出位置即可）。");
             }
         }
 

@@ -744,14 +744,18 @@ namespace ArchiveFixer.Models
             return Math.Min(value, 1_000_000d);
         }
 
-        /// <summary>
-        /// 缓存根目录（日志 / 临时 / 递归工作区 / 配置文件都放这里）。
-        ///
-        /// 默认留空 = 用**程序目录下的 data**。
-        /// 用户明确要求：缓存绝不能默认写到 C 盘（%AppData%），绿色软件跟着安装位置走；
-        /// 要换盘就在这里填绝对路径。
-        /// </summary>
-        public string CacheRootDirectory { get; set; } = string.Empty;
+        /*
+         * ⛔ 这里原来有一个 `CacheRootDirectory`（"缓存根目录"）设置项，2026-09-30 **已彻底删除**。
+         *
+         * 用户原话："这个彻底取消，用户没有定工作区的权力，就是在解压的地方设立隐形的工作区，
+         * 这就完全不存在跨盘的操作"。
+         *
+         * 于是：① 工作区、数据根都不再由用户指定 —— 数据根固定是程序目录下的 data，
+         * 工作区固定由**这一单的目标目录**派生（<目标目录>\.ArchiveFixer.work）；
+         * ② 旧 appsettings.json 里残留的 `CacheRootDirectory` 键被**安静忽略**
+         * （System.Text.Json 默认不认未知成员也不抛），⛔ 不迁移、不报错、不警告 ——
+         * 它曾经代表的那个"用户自己挑位置"的权限已经不存在了。
+         */
 
         /// <summary>
         /// 上次导入的密码本文件路径（用户 2026-09-21 反复要求：导入一次就够了，不要每次重导）。
@@ -1047,7 +1051,6 @@ namespace ArchiveFixer.Models
                 RestHandlingAfterVerify = RestHandlingModes.Keep,
                 CollectResultsToDirectory = false,
                 CollectTargetDirectory = string.Empty,
-                CacheRootDirectory = string.Empty,
                 PasswordBookPath = string.Empty,
                 PasswordBookPaths = new List<string>(),
                 RememberPasswordList = true,
@@ -1208,7 +1211,6 @@ namespace ArchiveFixer.Models
             CustomUnRarExePath ??= string.Empty;
             CustomRarExePath ??= string.Empty;
             CollectTargetDirectory ??= string.Empty;
-            CacheRootDirectory ??= string.Empty;
             PasswordBookPath ??= string.Empty;
 
             /*

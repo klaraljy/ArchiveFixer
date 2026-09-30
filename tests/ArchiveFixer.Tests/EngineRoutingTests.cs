@@ -555,7 +555,6 @@ namespace ArchiveFixer.Tests
                 var settingsService = new SettingsService(pathService);
 
                 AppSettings settings = AppSettings.CreateDefault();
-                settings.CacheRootDirectory = dataRoot;
                 settings.CustomOutputDirectory = outputRoot;
                 settings.ExtractToOriginalDirectory = false;
                 settings.KeepArchiveNameFolder = true;
@@ -649,7 +648,6 @@ namespace ArchiveFixer.Tests
                 var settingsService = new SettingsService(pathService);
 
                 AppSettings settings = AppSettings.CreateDefault();
-                settings.CacheRootDirectory = dataRoot;
                 settings.EnginePriority = new List<string> { EngineIds.SevenZip, EngineIds.WinRar };
                 settings.KeepBrokenFiles = true;
 

@@ -802,7 +802,6 @@ namespace ArchiveFixer.Tests
 
             AppSettings settings = AppSettings.CreateDefault();
 
-            settings.CacheRootDirectory = dataRoot;
             settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 

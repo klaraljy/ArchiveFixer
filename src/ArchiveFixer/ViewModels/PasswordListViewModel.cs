@@ -588,7 +588,7 @@ namespace ArchiveFixer.ViewModels
         ///
         /// 设置文件按"数据根目录"定位：PasswordService.DataRootDirectory 与
         /// PathService.DataRootDirectory 被主界面刻意同步成同一个值（MainViewModel.ApplyEngineSettings），
-        /// 所以这里用前者构造 PathService，才不会出现用户改过缓存根目录后写到另一个盘去。
+        /// 所以这里用前者构造 PathService，两边算出来的是同一个目录。
         /// </summary>
         private void RememberPasswordBookPath(string path)
         {
