@@ -59,6 +59,16 @@ namespace ArchiveFixer.Storage
         /// </summary>
         public string TargetDirectory { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 这个目标目录**是这一次建出来的**（解析之前它还不存在）。
+        ///
+        /// <para>为什么要如实记下来：工作区要落在目标目录里面，所以批首必须先建它（用户原话
+        /// "原地就在原地创"）。代价是"最终目录连建都不该建"这条老口径在实现上不再成立 ——
+        /// 于是收尾那边必须知道"这个目录壳是不是我们自己造的"：是，而且里面什么都没有时，
+        /// 就该由我们自己收掉（⛔ 用户本来就有的目录一个字节都不许动）。</para>
+        /// </summary>
+        public bool TargetDirectoryCreated { get; init; }
+
         /// <summary>本批落点涉及到的盘（去重、按首次出现顺序）。只有一个盘时是单元素。</summary>
         public IReadOnlyList<string> BatchDrives { get; init; } = Array.Empty<string>();
 
@@ -168,6 +178,9 @@ namespace ArchiveFixer.Storage
                     continue;
                 }
 
+                // 建之前先如实记下"它本来在不在"：收尾那边要靠这个事实决定能不能收掉自己造的壳。
+                bool targetExisted = Directory.Exists(full);
+
                 /*
                  * 目标目录还不存在就**先建它**（用户原话"原地就在原地创"）：工作区要落在它里面，
                  * 连它都没有就无从谈"落在目标目录里"。建不出来说明那个位置不可写，
@@ -201,6 +214,7 @@ namespace ArchiveFixer.Storage
                     RootDirectory = root,
                     Origin = WorkspaceRootOrigin.OutputDirectory,
                     TargetDirectory = full,
+                    TargetDirectoryCreated = !targetExisted,
                     BatchDrives = drives,
                     Reason = BuildReason(full, root, drives, driveOf)
                 };

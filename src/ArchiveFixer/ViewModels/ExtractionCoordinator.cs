@@ -452,6 +452,21 @@ namespace ArchiveFixer.ViewModels
         private bool _oneClickThisBatch;
 
         /// <summary>
+        /// 本批**我们自己建出来的那个目标目录**（工作区要落在它里面，所以批首必须先建它）。
+        ///
+        /// <para>为什么要记：工作区改到目标目录里面之后（用户 2026-09-30），"最终目录连建都不该建"
+        /// 这条老口径在实现上不可能再成立 —— 不先建它就没地方放工作区。但**用户看得见的残留**
+        /// 一条都不许多：批尾如果这个目录里什么都没有（这一批什么都没解出来 / 全失败 / 被取消），
+        /// 它就是**我们自己造的一个空壳**，必须自己收掉。</para>
+        ///
+        /// <para>⛔ 只在"确实是这一次建出来的"并且"现在一个条目都没有"这两条同时成立时才删
+        /// （前者靠 <see cref="WorkspaceRootResolution.TargetDirectoryCreated"/>，
+        /// 后者靠现枚举）—— 用户本来就有的目录、或者里面有我们删不掉的东西（目录联接点），
+        /// 一律一个字节都不动。空串 = 这一批没建过任何目标目录。</para>
+        /// </summary>
+        private string _batchCreatedTargetDirectory = string.Empty;
+
+        /// <summary>
         /// 本批那条"中途空间不足"的纯提示**弹过没有**（用户 2026-09-29 第 2 条：
         /// "同一批只弹一次（合并计数）"）。
         ///
@@ -2600,6 +2615,12 @@ namespace ArchiveFixer.ViewModels
              * 漏掉这一处会怎样：链尾补搬是**移动用户唯一无法再生的源包**。老口径下"没拿到清单、
              * 只做了非空底线校验"也算校验通过 —— 链尾照样把源包搬进其余物，而接下来的
              * "删除操作"档一起来就把它删了。判不出就是判不出：一个字节都不许动。
+             *
+             * ⚠ 与下面 `DescribeChainVerificationGap` 那一处**判据相同、刻意查两遍**：根任务总会
+             * 落进那个目录，所以严格说这一处是冗余的早退；留着的理由是它给出的是"根任务自己判不出"
+             * 这句更准的话，而且它排在分卷 / 内容物那几道门之前（红检实测：把下面那一处退回旧判据，
+             * 用例 `形状B_链上有一层判不出完整性_链尾不补搬源包` 变红；只退这一处则被下面那一处接住）。
+             * ⛔ 别为了"去重"删掉任何一处 —— 它们挡的是同一个不可逆动作，而两处的调用场景并不完全相同。
              */
             ResultCompletenessVerdict rootCompleteness = ResultCompletenessClassifier.Classify(rootTask);
 
@@ -8105,6 +8126,18 @@ namespace ArchiveFixer.ViewModels
                  */
                 RemoveEmptyWorkspaceShells();
 
+                /*
+                 * 再收一层：**我们自己造出来的那个目标目录壳**（用户 2026-09-30 的新收尾）。
+                 *
+                 * 顺序不能反：先收 `<目标目录>\.ArchiveFixer.work`（上一步），这一层才可能变空。
+                 * 判据两条同时成立才删 —— ① 它确实是这一次建出来的（批首记的事实）；
+                 * ② 现在一个条目都没有（现枚举）。少了任何一条都会去碰用户自己的目录。
+                 */
+                RemoveEmptyTargetShellIfWeCreatedIt();
+
+                // 批尾清掉这条批内状态（与 _spaceTightThisBatch / _oneClickThisBatch 同一口径）。
+                _batchCreatedTargetDirectory = string.Empty;
+
                 UpdateSummary();
             }
         }
@@ -8522,6 +8555,15 @@ namespace ArchiveFixer.ViewModels
 
             _pathService.WorkDirectory = resolution.RootDirectory;
 
+            /*
+             * 记下"目标目录是不是我们建的"：工作区必须先有目标目录才能落在它里面，
+             * 所以这一批必然会建出那一个目录壳；批尾它要是空的，就该由我们自己收掉
+             * （见 RemoveEmptyTargetShellIfWeCreatedIt，用户 2026-09-30）。
+             */
+            _batchCreatedTargetDirectory = resolution.TargetDirectoryCreated
+                ? resolution.TargetDirectory
+                : string.Empty;
+
             // 递归核心的工作区根是进程级静态，且它自己会再挂一层 "recursive"（见 RecursiveExtractor）。
             RecursiveExtractor.ConfiguredWorkspaceRoot = resolution.RootDirectory;
 
@@ -8809,6 +8851,53 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 把工作区根下面**空掉的壳目录**收掉（见调用点的三条安全边界）。
+        /// </summary>
+        /// <summary>
+        /// 收掉**我们自己建出来的那个空目标目录**（用户 2026-09-30：工作区改到目标目录里面之后的新收尾）。
+        ///
+        /// <para><b>为什么必须有这一步</b>：工作区要落在 <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，
+        /// 所以批首必须先建出目标目录（用户原话"原地就在原地创"）。老口径那句
+        /// "最终目录连建都不该建"在实现上因此不再成立；但**用户看得见的残留一条都不许多** ——
+        /// 一批全失败 / 被取消 / 越界时，那个目录里只剩一个空壳，留着就是"凭空多出来一个文件夹"，
+        /// 正是用户反复抱怨过的那种东西。</para>
+        ///
+        /// <para><b>三条安全边界（⛔ 一条都不许松）</b>：</para>
+        /// <list type="number">
+        /// <item><description>只处理**这一次建出来的**那一个（批首记的事实，用户本来就有的目录永远不碰）；</description></item>
+        /// <item><description>只删**空的**（现枚举；里面还有任何条目 —— 包括我们删不掉的工作区残留、
+        /// 目录联接点 —— 就一个字节都不动）；</description></item>
+        /// <item><description>**非递归**删（<c>recursive: false</c>），且整段包在 try/catch 里：
+        /// 收尾的顺手活，失败只写日志，绝不影响批结论。</description></item>
+        /// </list>
+        /// </summary>
+        private void RemoveEmptyTargetShellIfWeCreatedIt()
+        {
+            string directory = _batchCreatedTargetDirectory;
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                if (Directory.EnumerateFileSystemEntries(directory).Any())
+                {
+                    // 里面有东西（内容物 / 清不掉的工作区残留 / 用户后来放进去的）→ 一律不碰。
+                    return;
+                }
+
+                Directory.Delete(directory, recursive: false);
+                AppendLog("INFO", $"顺手收掉了这一批建出来的空目标目录：{directory}");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("INFO", $"空目标目录没清掉（不影响结果）：{directory} —— {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 收掉**空的工作区壳**（用户 2026-09-27：真机跑完 <c>…\.ArchiveFixer.work\recursive</c> 会留一个空壳）。
         /// </summary>
         private void RemoveEmptyWorkspaceShells()
         {

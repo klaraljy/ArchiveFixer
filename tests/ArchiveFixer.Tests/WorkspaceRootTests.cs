@@ -1323,6 +1323,66 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// ⛔ **我们自己建出来的目标目录壳，批尾空着就自己收掉**（用户 2026-09-30 工作区改到目标目录内之后
+        /// 必须补上的收尾）。
+        ///
+        /// <para>为什么必须有：工作区要落在 <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，所以批首必须先建
+        /// 目标目录（用户原话"原地就在原地创"）。老口径那句"最终目录连建都不该建"因此在实现上不再成立 ——
+        /// 但**用户看得见的残留一条都不许多**：一批全失败 / 被取消时那个空壳留着，就是"凭空多一个文件夹"，
+        /// 正是他反复抱怨过的东西。</para>
+        /// </summary>
+        [Fact]
+        public async Task 自己建的目标目录_这一单没成_批尾空壳被收掉()
+        {
+            Harness harness = CreateHarness(customOutput: true);
+            string source = harness.CreateSourceFile("shell-gone.7z");
+
+            ArchiveTask task = harness.AddTask(source);
+
+            string createdTarget = Path.Combine(harness.OutputRoot, "shell-gone");
+
+            Assert.False(Directory.Exists(createdTarget), "前提：这个目标目录本来不存在（是我们建的）");
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+            Assert.True(File.Exists(source), "失败时源包必须原样保留");
+
+            Assert.False(
+                Directory.Exists(createdTarget),
+                $"我们自己建出来的空目标目录没被收掉（用户会看到一个凭空多出来的文件夹）：{createdTarget}");
+        }
+
+        /// <summary>
+        /// ⛔ **用户本来就有的目标目录一个字节都不许动**（上一条的对照面：判据必须包含"确实是我们建的"）。
+        /// </summary>
+        [Fact]
+        public async Task 用户本来就有的目标目录_没解出东西也不许被收掉()
+        {
+            Harness harness = CreateHarness(customOutput: true);
+            string source = harness.CreateSourceFile("shell-kept.7z");
+
+            ArchiveTask task = harness.AddTask(source);
+
+            string userTarget = Path.Combine(harness.OutputRoot, "shell-kept");
+
+            // 用户在解压之前自己就把这个目录建好了（里面什么都没有）。
+            Directory.CreateDirectory(userTarget);
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ => Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+            Assert.True(Directory.Exists(userTarget), "用户本来就有的目标目录绝不许被我们收掉");
+            Assert.Empty(Directory.EnumerateFileSystemEntries(userTarget));
+        }
+
+        /// <summary>
         /// ⛔ **目标目录在别的盘时，绝不回落到 C 盘 / 程序目录**（同一件事的端到端版本）。
         /// </summary>
         [Fact]
