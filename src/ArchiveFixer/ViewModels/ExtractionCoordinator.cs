@@ -6273,9 +6273,12 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 任务表的快照：这一步跑在后台线程上（解压管线），而任务表归 UI 线程写 ——
-             * 先取一份数组，避免"边枚举边被加/删"。
+             * 必须用**下标**拷贝，不能用 LINQ 的 ToArray：List 的枚举器带版本号检查，
+             * UI 线程正在导入 / 移除时枚举会抛 "Collection was modified"
+             * （AGENTS.md §11.2 记过同形状的假红），而这一抛会连带把"改名已做完"的同步丢掉。
+             * 下标拷贝最坏只是拿到一份稍微过期的名单，绝不会抛。
              */
-            ArchiveTask[] table = Tasks.ToArray();
+            ArchiveTask[] table = SnapshotTaskTable(Tasks);
 
             foreach (ArchiveTask candidate in EnumerateDistinct(primary, table))
             {
@@ -6342,6 +6345,30 @@ namespace ArchiveFixer.ViewModels
                     yield return candidate;
                 }
             }
+        }
+
+        /// <summary>
+        /// 任务表的**不会抛**的快照（下标拷贝；理由见调用处）。
+        /// 中途被 UI 线程改了就以已经拷到的那部分为准 —— 少同步一个任务，下一次改名还会再同步一遍。
+        /// </summary>
+        private static ArchiveTask[] SnapshotTaskTable(ObservableCollection<ArchiveTask> tasks)
+        {
+            var copy = new List<ArchiveTask>();
+            int count = tasks.Count;
+
+            try
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    copy.Add(tasks[i]);
+                }
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                // 名单在拷贝途中变短了：用已经拷到的部分。
+            }
+
+            return copy.ToArray();
         }
 
         /// <summary>
