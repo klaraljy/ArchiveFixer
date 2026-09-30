@@ -5,6 +5,7 @@ using System.Linq;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
+using ArchiveFixer.Storage;
 
 namespace ArchiveFixer.Extraction
 {
@@ -22,6 +23,12 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>源本来就在其余物目录里（已经归置过，不需要再搬）。</summary>
         SourceInsideArtifactDirectory,
+
+        /// <summary>
+        /// 源在**工作区那棵树**里（程序自己的中间产物，不是用户的源包）—— 用户 2026-09-30：
+        /// 工作区默认建在目标目录里面，任何"把东西搬出目标目录"的动作都必须排除它。
+        /// </summary>
+        SourceInsideWorkspace,
 
         /// <summary>相对路径不合法（越界 <c>..</c> / 绝对路径 / 盘符 / UNC / 保留名 / 结尾点空格等）。</summary>
         InvalidRelativePath,
@@ -1123,6 +1130,26 @@ namespace ArchiveFixer.Extraction
                         SourcePath = source,
                         Reason = ArtifactSkipReason.SourceInsideArtifactDirectory,
                         Message = $"源已经在其余物目录里（{restDirectory}），不需要再搬"
+                    });
+
+                    continue;
+                }
+
+                /*
+                 * ⛔ 源**落在工作区自己那棵树里** → 一个字节都不搬（用户 2026-09-30）。
+                 *
+                 * 工作区默认建在目标目录里面（<目标目录>\.ArchiveFixer.work），它和"其余物"在同一个父目录下。
+                 * 续解任务的源包路径是从产物目录扫出来的 —— 万一哪条岔路把一个中间产物当成了"内层包"，
+                 * 这一步就会把工作区里的东西搬进其余物、甚至进入可删清单：那是不可逆的事故。
+                 * 判据唯一出口 WorkspaceTree（名字 + 当前生效的根两条），兜底落在"什么都不做"那一档。
+                 */
+                if (WorkspaceTree.ShouldSkipEntry(source, RecursiveExtractor.ConfiguredWorkspaceRoot))
+                {
+                    skipped.Add(new ArtifactSkip
+                    {
+                        SourcePath = source,
+                        Reason = ArtifactSkipReason.SourceInsideWorkspace,
+                        Message = "源在工作区目录里（那是程序自己的中间产物，不是用户的源包），一个字节都不搬"
                     });
 
                     continue;
