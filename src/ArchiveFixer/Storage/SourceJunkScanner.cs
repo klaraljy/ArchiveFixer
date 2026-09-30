@@ -457,8 +457,16 @@ namespace ArchiveFixer.Storage
 
         /// <summary>
         /// 把"和 <paramref name="sourcePath"/> 同一分卷组的兄弟卷"也加进保护集。
-        /// 只按名字判（同目录 + 同组），读不到目录就安静跳过 —— 保护集少几个不会造成破坏，
-        /// 多保护几个只是"提醒少列一条"。
+        ///
+        /// <para><b>判据走唯一出口 <see cref="VolumeGroupResolver"/></b>（2026-09-30 分卷组装算法）：
+        /// 老写法只保护"名字里带卷标记、且同族同基名"的兄弟，于是
+        /// 「一卷丢了后缀变成 <c>111</c>」「末卷被改名成 <c>一只顶美.z删除ip</c>」
+        /// 「续卷伪装成 <c>.mp4</c>」这一类**名字看不出来**的兄弟一个都保护不到 ——
+        /// 而它们恰恰是最容易被当成无用物删掉、删掉就再也解不开的那一批。</para>
+        ///
+        /// <para>判定器用"基名段 + 体积 + 位置"把它们认出来（**不试开**：导入期不调引擎，
+        /// 也不该为了列个提醒去起进程）。读不到目录就安静跳过 —— 保护集少几个不会造成破坏，
+        /// 多保护几个只是"提醒少列一条"。</para>
         /// </summary>
         private static void AddSiblingVolumePaths(HashSet<string> target, string? sourcePath)
         {
@@ -493,10 +501,44 @@ namespace ArchiveFixer.Storage
                         AddProtectedPath(target, sibling);
                     }
                 }
+
+                AddResolverGroupPaths(target, sourcePath);
             }
             catch
             {
                 // 读目录失败就少保护几个：这里的方向是"宁可少列一条提醒"，不是破坏性动作。
+            }
+        }
+
+        /// <summary>
+        /// 判定器认出来的**整组**也进保护集（含名字里没有卷标记的那些兄弟）。
+        ///
+        /// <para>⛔ 这一条与"可删残留名单"是同一件事的两半（AGENTS §9.5）：判定器说"属于某个分卷组"，
+        /// 这里就一个都不许进"疑似无用物"提醒 —— 用户 2026-09-30 那 25 GB 就是被提醒框送进删除的。</para>
+        /// </summary>
+        private static void AddResolverGroupPaths(HashSet<string> target, string sourcePath)
+        {
+            var resolver = new VolumeGroupResolver();
+
+            VolumeGroupResolution resolution = resolver.Resolve(new VolumeGroupQuery
+            {
+                AnchorPath = sourcePath,
+                AllowTrialOpen = false
+            });
+
+            if (resolution.Verdict == VolumeGroupVerdict.Undetermined)
+            {
+                return;
+            }
+
+            string selfFull = SafePathHelper.GetFullPathSafe(sourcePath);
+
+            foreach (string member in resolution.GroupFilePaths)
+            {
+                if (!string.Equals(member, selfFull, StringComparison.OrdinalIgnoreCase))
+                {
+                    AddProtectedPath(target, member);
+                }
             }
         }
 

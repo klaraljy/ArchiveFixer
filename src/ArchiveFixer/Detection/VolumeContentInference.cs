@@ -395,7 +395,21 @@ namespace ArchiveFixer.Detection
         /// <summary>
         /// 试开目录：第一卷**所在卷根**下的 <c>.ArchiveFixer.work\volprobe-&lt;guid&gt;</c>；拿不到卷根返回空串。
         /// </summary>
-        public static string BuildProbeRoot(string? firstVolumePath)
+        public static string BuildProbeRoot(string? firstVolumePath) => BuildProbeRoot(firstVolumePath, null);
+
+        /// <summary>
+        /// 试开目录，**优先落在调用方给的工作区根**下（用户 2026-09-30 口径：临时物只准落
+        /// <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>）。
+        ///
+        /// <para>⛔ <b>硬链接不能跨卷</b>：给的工作区根与第一卷不在同一个卷上时，这里**如实退到**
+        /// 第一卷所在卷根下的 <c>.ArchiveFixer.work</c>（{0} 的那条老路）—— 退档的原因由调用方
+        /// 写进结论，⛔ 不许悄悄复制大文件去凑（一卷 2 GiB，复制一组要几十 GiB 和几分钟）。</para>
+        /// </summary>
+        /// <param name="firstVolumePath">第一卷（决定"必须同卷"的那个卷是哪一个）。</param>
+        /// <param name="preferredWorkRoot">
+        /// 期望的落点（通常是 <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>）。空 = 直接用卷根那一档。
+        /// </param>
+        public static string BuildProbeRoot(string? firstVolumePath, string? preferredWorkRoot)
         {
             try
             {
@@ -407,7 +421,22 @@ namespace ArchiveFixer.Detection
                     return string.Empty;
                 }
 
-                return Path.Combine(root, WorkDirectoryName, "volprobe-" + Guid.NewGuid().ToString("N"));
+                string suffix = "volprobe-" + Guid.NewGuid().ToString("N");
+
+                if (!string.IsNullOrWhiteSpace(preferredWorkRoot))
+                {
+                    string preferredFull = Path.GetFullPath(preferredWorkRoot.Trim());
+
+                    if (string.Equals(
+                        Path.GetPathRoot(preferredFull),
+                        root,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Path.Combine(preferredFull, suffix);
+                    }
+                }
+
+                return Path.Combine(root, WorkDirectoryName, suffix);
             }
             catch
             {
