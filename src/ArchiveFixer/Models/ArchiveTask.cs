@@ -964,6 +964,21 @@ namespace ArchiveFixer.Models
         public string ParentTaskName { get; set; } = string.Empty;
 
         /// <summary>
+        /// 这条续解链**根任务的身份**（= 根任务那一刻的规范化绝对路径）。
+        ///
+        /// <para><b>为什么必须按路径认链</b>（2026-09-30 真机）：链尾「删除操作」那一档原先拿
+        /// <c>ParentOutputDirectory</c>（= "是不是续解任务"）当链成员判据，而调用方传进来的是
+        /// **整批**的任务清单 —— 于是 A 目录那个 333 包的链尾，被 B 目录里同名的
+        /// <c>111.part1.rar</c>（另一个包、另一个目录）的失败挡住：
+        /// 日志原文「<c>333-Rar4.part1.rar：链尾的其余物不处理（链上的「111.part1.rar」没有成功</c>）」。
+        /// 名字相同 ≠ 同一条链，判据只能是规范化后的绝对路径。</para>
+        ///
+        /// <para>空 = 自己就是根任务（链身份回落到它自己的 <see cref="CurrentPath"/>）。
+        /// 赋值点只有一处：<c>OneClickCoordinator.AddInnerTasksAsync</c>。</para>
+        /// </summary>
+        public string RootSourcePath { get; set; } = string.Empty;
+
+        /// <summary>
         /// 本任务**这一次实际用的「本次选项」**（一键处理面板选的那一组：落点 / 终端落法 / 源包处理），
         /// 一句话形式，由 <c>OneClickRunOptions.Describe()</c> 给出；空 = 这一次没走过一键处理。
         ///
