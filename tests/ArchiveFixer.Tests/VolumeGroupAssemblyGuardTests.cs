@@ -307,12 +307,23 @@ namespace ArchiveFixer.Tests
                     VolumeContentInference.IsSameVolumeRoot(first, workRoot),
                     "源目录与工作区根落在了同一个卷上，这条用例测不到跨盘那一档");
 
-                // 前提：源卷根**现在没有**工作区壳（老写法会在那里新建一个）。
+                /*
+                 * 源卷一侧的基准快照（跑之前拍）：
+                 *   ① 源目录树（相对路径 + 字节数）；
+                 *   ② 源卷根下那个 `.ArchiveFixer.work` 壳的**内容** —— 老写法正是在那里
+                 *      `<壳>\volprobe-<guid>\…` 建硬链接的（收工只删 probe 目录、壳会留下）。
+                 *
+                 * ⚠ 本机实测：`C:\.ArchiveFixer.work` 与 `E:\.ArchiveFixer.work` **本来就存在**
+                 * （早前跑 `VolumeNameRepair` 那条**老路**留下的空壳，不是这条线新建的，本用例也不动它）。
+                 * 所以"有没有多出壳"这一条在那种机器上是弱断言；跨盘不写盘的**硬证据**是下面
+                 * ③ 的"引擎零调用 + Attempted=false"（跨盘检查排在 `Directory.CreateDirectory` **之前**）
+                 * 与 ④ 的"源目录树一字不差"。
+                 */
                 string sourceVolumeRoot = Path.GetPathRoot(first) ?? string.Empty;
                 string shell = Path.Combine(sourceVolumeRoot, VolumeContentInference.WorkDirectoryName);
-                bool shellExistedBefore = Directory.Exists(shell);
 
                 string[] treeBefore = SnapshotTree(sourceParent);
+                string[] shellBefore = SnapshotTree(shell);
 
                 var engine = new RecordingEngine();
                 var verifier = new VolumeProbeVerifier(engine);
@@ -339,9 +350,9 @@ namespace ArchiveFixer.Tests
                 Assert.Empty(engine.ListCalls);
                 Assert.False(Directory.Exists(workRoot), "跨盘这一档连工作区根都不许碰");
 
-                // ④ 源盘上什么都不会新建：源目录树一字不差，源卷根下也没多出工作区壳。
+                // ④ 源盘一侧零新建：源目录树一字不差，源卷根那个壳里也没多出任何东西。
                 Assert.Equal(treeBefore, SnapshotTree(sourceParent));
-                Assert.Equal(shellExistedBefore, Directory.Exists(shell));
+                Assert.Equal(shellBefore, SnapshotTree(shell));
             }
             finally
             {
@@ -352,16 +363,21 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ 辅助
 
-        /// <summary>目录树快照（相对路径 + 字节数，排序后比较）：用来钉"跨盘这一档一个字节都不动"。</summary>
+        /// <summary>
+        /// 目录树快照（相对路径 + 字节数，排序后比较）：用来钉"跨盘这一档一个字节都不动"。
+        /// 目录不存在时返回空数组（**不是**抛异常）—— "本来就没有"和"跑完还是没有"要能比得起来。
+        /// </summary>
         private static string[] SnapshotTree(string directory) =>
-            Directory
-                .EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories)
-                .Select(path => Path.GetRelativePath(directory, path)
-                    + "|" + (Directory.Exists(path)
-                        ? "dir"
-                        : new FileInfo(path).Length.ToString(System.Globalization.CultureInfo.InvariantCulture)))
-                .OrderBy(text => text, StringComparer.Ordinal)
-                .ToArray();
+            !Directory.Exists(directory)
+                ? Array.Empty<string>()
+                : Directory
+                    .EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories)
+                    .Select(path => Path.GetRelativePath(directory, path)
+                        + "|" + (Directory.Exists(path)
+                            ? "dir"
+                            : new FileInfo(path).Length.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                    .OrderBy(text => text, StringComparer.Ordinal)
+                    .ToArray();
 
         private static void TryDeleteDirectory(string directory)
         {
