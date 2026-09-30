@@ -2316,6 +2316,17 @@ namespace ArchiveFixer.Extraction
                 // "源文件已变化"时一层都没解是**常态**（拦在第 0 层开工之前），
                 // 所以它不走下面那句"第 1 层就没能解开" —— 那句话会让人以为解压失败。
                 RecursionStopReason.SourceChanged => $"未开始解压，原因：{reason}",
+
+                /*
+                 * 两义那一档（引擎既说密码不对、又说数据坏了）：结论里**同时**保留两种可能
+                 * 与**引擎原话**（用户 2026-09-30 真机；与 7-Zip 侧同一条口径）。
+                 * 原话取那一层自己记下来的 Message —— BuildLayerReport 写进去的就是引擎原话。
+                 */
+                RecursionStopReason.PasswordOrCorrupted => (done > 0
+                        ? $"已完成 {done} 层，停在第 {done + 1} 层，原因："
+                        : "第 1 层就没能解开，原因：")
+                    + DescribeAmbiguousPasswordFailure(layers),
+
                 _ => done > 0
                     ? $"已完成 {done} 层，停在第 {done + 1} 层，原因：{reason}"
                     : $"第 1 层就没能解开，原因：{reason}"
@@ -2379,6 +2390,11 @@ namespace ArchiveFixer.Extraction
                 RecursionStopReason.PasswordAttemptsExceeded => "已达到密码尝试次数上限（候选还有剩余）",
                 RecursionStopReason.WrongPassword => "密码错误：所有候选都试过了",
                 RecursionStopReason.Corrupted => "压缩包损坏",
+
+                // 两义那一档：两种可能都必须留着（⛔ 不许压成"损坏"或"密码错误"）。
+                // 任务级结论那一条会再带上引擎原话（见 BuildSummary 的同名分支）。
+                RecursionStopReason.PasswordOrCorrupted => "密码可能不对，也可能这个包的数据坏了",
+
                 RecursionStopReason.UnsafeEntry => "归档内存在不安全路径，已拒绝解压",
                 // 不变量 11：这一条**不是"解不开"**，而是"手上这份识别结果已经不对应这个文件了"。
                 // 措辞必须让用户知道该做什么（重新扫描），而不是去怀疑包坏了或换个引擎。
@@ -2387,6 +2403,20 @@ namespace ArchiveFixer.Extraction
                 RecursionStopReason.EngineFailed => "引擎操作失败",
                 _ => "未知原因"
             };
+        }
+
+        /// <summary>
+        /// 两义那一档的结论正文：**两种可能 + 引擎原话**（原话取那一层自己记下来的 Message）。
+        /// 拿不到原话时只写两种可能 —— ⛔ 绝不用一句"未知原因"把它盖掉。
+        /// </summary>
+        private static string DescribeAmbiguousPasswordFailure(List<RecursionLayerReport> layers)
+        {
+            RecursionLayerReport? failed = layers.LastOrDefault(
+                layer => layer != null && !layer.Success && !string.IsNullOrWhiteSpace(layer.Message));
+
+            return failed == null
+                ? "密码可能不对，也可能这个包的数据坏了"
+                : $"密码可能不对，也可能这个包的数据坏了（引擎原话：{failed.Message}）";
         }
 
         /// <summary>
