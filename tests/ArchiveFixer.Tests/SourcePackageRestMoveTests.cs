@@ -515,6 +515,71 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// ⛔ **L4（用户 2026-09-30 检验等级）：根任务"判不出完整性" ⇒ 链尾一个字节都不补搬。**
+        ///
+        /// <para>现场：校验写着通过，但那是**底线校验** —— 机器手上根本没有可信清单
+        /// （<c>OutputManifestCrossChecked = false</c>）。老口径只读
+        /// <c>OutputVerification == Passed</c>，于是这一档照样把用户唯一无法再生的源包搬进其余物；
+        /// 紧接着「删除操作」档一起效，它就没了。</para>
+        ///
+        /// <para>判据的唯一出口是 <see cref="ResultCompletenessClassifier"/>：判不出 ⇒ 不删、**也不搬**，
+        /// 结论如实写"无法确认完整性"（⛔ 既不许说成"校验通过"，也不许说成"校验失败"）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 形状B_根任务判不出完整性_链尾不补搬源包()
+        {
+            Harness harness = CreateHarness();
+            ShapeBChain chain = await BuildShapeBChainAsync(harness);
+
+            // 前提：管线本来**拿到过清单**（否则这条用例钉的就不是"判不出"那一档）。
+            Assert.True(chain.Root.IsOutputVerified);
+            Assert.True(chain.Root.OutputManifestCrossChecked);
+
+            // 把"逐条核对过清单"这个事实抹掉 = 只剩非空底线校验那一档。
+            chain.Root.OutputManifestCrossChecked = false;
+
+            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
+                new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
+
+            Assert.True(File.Exists(chain.Source), "判不出完整性时源包必须原地不动");
+            Assert.False(File.Exists(Path.Combine(chain.RestDirectory, "outer.7z")));
+            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, chain.Root.SourcePackageMove);
+
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("无法确认", StringComparison.Ordinal) &&
+                        line.Contains("源包留在原地", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// ⛔ **L4：链上任何一层判不出完整性 ⇒ 链尾同样不补搬。**
+        ///
+        /// <para>判据看的是**每一个把那个目录当落点的任务**，不是只看根任务 —— 用户那个形状里
+        /// 内容物是续解子任务产出的，只核根任务等于放行"内容物那一层根本没证据"。</para>
+        /// </summary>
+        [Fact]
+        public async Task 形状B_链上有一层判不出完整性_链尾不补搬源包()
+        {
+            Harness harness = CreateHarness();
+            ShapeBChain chain = await BuildShapeBChainAsync(harness);
+
+            Assert.True(chain.Continuation.IsOutputVerified);
+            Assert.True(chain.Continuation.OutputManifestCrossChecked);
+
+            // 产出内容物的那一层判不出 ⇒ "内容物已定稿并校验通过"这个事实不成立。
+            chain.Continuation.OutputManifestCrossChecked = false;
+
+            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
+                new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
+
+            Assert.True(File.Exists(chain.Source), "链上有判不出的层时源包必须原地不动");
+            Assert.False(File.Exists(Path.Combine(chain.RestDirectory, "outer.7z")));
+            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, chain.Root.SourcePackageMove);
+
+            Assert.Contains(harness.LogTexts, line => line.Contains("无法确认", StringComparison.Ordinal));
+        }
+
+        /// <summary>
         /// 形状 B 的"分卷组"版：源包本身是一组分卷时，补搬必须**整组**一起进其余物（决策 D-12）。
         /// </summary>
         [Fact]

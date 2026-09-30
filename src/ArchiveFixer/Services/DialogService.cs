@@ -896,8 +896,11 @@ namespace ArchiveFixer.Services
 
         /// <summary>
         /// 信息提示。
+        ///
+        /// <para><c>virtual</c> 与其他可注入对话框同理：测试要能直接断言"弹的是哪一档"，
+        /// 而不是只能读降级日志（模态框还会把用例卡死）。</para>
         /// </summary>
-        public void ShowInfo(string message)
+        public virtual void ShowInfo(string message)
         {
             ShowNotification(
                 new AppDialogRequest

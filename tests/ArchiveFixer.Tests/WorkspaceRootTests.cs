@@ -1275,6 +1275,54 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// ⛔ **点「打开工作区目录」不许凭空造出一个工作区**（用户 2026-09-30："用户没有定工作区的权力"、
+        /// "甚至危险操作固定到了 C 盘"）。
+        ///
+        /// <para>现场：本趟还没解过任何东西时，当前生效的根是**升级前的老位置** <c>&lt;数据根&gt;\work</c>
+        /// （它只是"③ 页要扫哪些根"的一项）。老实现先 <c>EnsureDirectoryExists</c> 再打开 ——
+        /// 于是"点一下按钮"就在程序所在那块盘上造出一个工作区目录，正是用户点名不要的那件事。</para>
+        ///
+        /// <para>现在：目录不在就什么都不建，只如实说清"为什么不在"。</para>
+        /// </summary>
+        [Fact]
+        public void 打开工作区目录_目录不在时不建任何目录()
+        {
+            WorkspaceRootIndex.ResetForTests();
+
+            try
+            {
+                Harness harness = CreateHarness(customOutput: true);
+                var dialog = new CapturingDialogService();
+
+                VmHarness vm = harness.CreateViewModel(dialog);
+
+                string legacyRoot = Path.Combine(harness.CacheRoot, "work");
+
+                Assert.Equal(legacyRoot, vm.Vm.CurrentWorkspaceRoot);
+                Assert.False(Directory.Exists(legacyRoot), "前提：这一趟还没解过东西，老位置本来不存在");
+
+                vm.Vm.OpenWorkDirectoryCommand.Execute(null);
+
+                Assert.False(
+                    Directory.Exists(legacyRoot),
+                    "点一下按钮就在程序那块盘上造出工作区目录 —— 用户明确否掉过这件事");
+
+                Assert.Contains(
+                    vm.LogTexts,
+                    line => line.Contains("工作区目录现在不存在", StringComparison.Ordinal) &&
+                            line.Contains(legacyRoot, StringComparison.OrdinalIgnoreCase));
+
+                // 提示框要**如实说清为什么不在**（不是"出错了"，也不是"这里就是工作区"）。
+                Assert.Contains("工作区只跟目标目录走", dialog.LastInfo, StringComparison.Ordinal);
+                Assert.Contains(".ArchiveFixer.work", dialog.LastInfo, StringComparison.Ordinal);
+            }
+            finally
+            {
+                WorkspaceRootIndex.ResetForTests();
+            }
+        }
+
+        /// <summary>
         /// ⛔ **目标目录在别的盘时，绝不回落到 C 盘 / 程序目录**（同一件事的端到端版本）。
         /// </summary>
         [Fact]
@@ -1589,6 +1637,14 @@ namespace ArchiveFixer.Tests
             public bool Answer { get; set; }
 
             public string LastDetail { get; private set; } = string.Empty;
+
+            /// <summary>最近一次信息框的正文（模态框在测试里必须被挡住，否则用例会卡死）。</summary>
+            public string LastInfo { get; private set; } = string.Empty;
+
+            public override void ShowInfo(string message)
+            {
+                LastInfo = message;
+            }
 
             public override bool ShowConfirm(
                 string message,
