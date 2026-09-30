@@ -882,8 +882,15 @@ namespace ArchiveFixer.Extraction
                  * 三条出路（损坏停下 / 错密码继续 / 其它停下）都要留下这一次的原话。
                  * 出口只有 <see cref="EngineOutputLog"/> 一个（与单层路径同一个），
                  * ⛔ 这里不许自己挑行、自己拼前缀。
+                 *
+                 * ⚠ 详细档下**不写这一条**：那时每个候选都会走下面的 LogVerbose（INFO，同样带原话），
+                 * 再补一条 ERROR 就是同一个候选同一批原话写两遍 —— 十个候选二十行，噪声压过信号
+                 * （与单层路径"失败原话只在结论那一处写一次"同一个口径）。
                  */
-                EngineOutputLog.LogFailure(Log, layerLabel, result);
+                if (!VerboseLog)
+                {
+                    EngineOutputLog.LogFailure(Log, layerLabel, result);
+                }
 
                 if (VerboseLog)
                 {

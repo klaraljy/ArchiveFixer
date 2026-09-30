@@ -21,7 +21,9 @@ namespace ArchiveFixer.Engines
     /// <para>规则（三档，与用户要求逐条对应）：</para>
     /// <list type="number">
     /// <item><description><c>ERROR</c> 开头的行（引擎自己标的错）最要紧；</description></item>
-    /// <item><description>说出**原因**的行（密码 / 校验 / 数据 / 缺卷 / 打不开）次之；</description></item>
+    /// <item><description>说出**原因**的行（密码 / 校验 / 数据 / 缺卷 / 打不开）——
+    /// 这一档**保底占一格**（见 <see cref="PickImportantLines"/> 末尾那一段），
+    /// 所以哪怕 <c>ERROR</c> 行有三条，原因句也一定看得见；</description></item>
     /// <item><description>其它被识别的行（权限 / 路径 / 取消 …）再次。</description></item>
     /// </list>
     /// <para>每档内按**出现顺序**取，去重后最多三条 —— ⛔ 绝不把整段 stdout 倾泻给用户
@@ -50,21 +52,40 @@ namespace ArchiveFixer.Engines
             var picked = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
+            /*
+             * 按桶取，每桶内部**按原出现顺序**（去重后）。取进来的是候选全集，不是最终结果 ——
+             * 最终要在这个基础上做一次"原因句保底"。
+             */
+            var perBucket = new List<List<string>>(keywordBuckets.Count);
+
             foreach (string[] bucket in keywordBuckets)
             {
-                if (bucket == null || bucket.Length == 0)
+                var bucketLines = new List<string>();
+
+                if (bucket != null && bucket.Length > 0)
                 {
-                    continue;
+                    foreach (string line in lines)
+                    {
+                        if (MatchesAny(line, bucket) && !bucketLines.Contains(line, StringComparer.Ordinal))
+                        {
+                            bucketLines.Add(line);
+                        }
+                    }
                 }
 
-                foreach (string line in lines)
+                perBucket.Add(bucketLines);
+            }
+
+            foreach (List<string> bucketLines in perBucket)
+            {
+                foreach (string line in bucketLines)
                 {
                     if (picked.Count >= maxLines)
                     {
-                        return picked;
+                        break;
                     }
 
-                    if (MatchesAny(line, bucket) && seen.Add(line))
+                    if (seen.Add(line))
                     {
                         picked.Add(line);
                     }
@@ -72,7 +93,30 @@ namespace ArchiveFixer.Engines
 
                 if (picked.Count >= maxLines)
                 {
-                    return picked;
+                    break;
+                }
+            }
+
+            /*
+             * ===== 原因句保底（用户 2026-09-27：结论里**必须**看得见原因）=====
+             *
+             * 为什么单靠"按桶取"不够：`ERROR` 那一档占满三格时，真正说明原因的那一句
+             * （`Cannot open encrypted archive. Wrong password?`）会被挤出去 ——
+             * 多文件包解压失败时 7-Zip 会为**每一个**失败文件各打一条 `ERROR:`，三条是很容易到的。
+             * 那时结论里只剩三个路径，用户还是什么也没多看到（这正是这条需求要治的病）。
+             *
+             * 办法：原因句一定占一格（第二档的第一句），第二名以后的位置让给 ERROR 行 ——
+             * 两条要求（`ERROR` 行排最前 / 原因句必须出现）就同时成立了。
+             * 只有"整份输出里一条原因句都没有"时才什么都不换。
+             */
+            if (maxLines >= 2 && perBucket.Count > 1)
+            {
+                List<string> reasonLines = perBucket[1];
+
+                if (reasonLines.Count > 0 && !picked.Any(line => reasonLines.Contains(line, StringComparer.Ordinal)))
+                {
+                    // 保底那一格给原因句；被顶掉的是"排在最后的次要行"（ERROR 行排第一，动不到它）。
+                    picked[picked.Count - 1] = reasonLines[0];
                 }
             }
 

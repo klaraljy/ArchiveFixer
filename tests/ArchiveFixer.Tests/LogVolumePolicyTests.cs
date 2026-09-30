@@ -478,7 +478,8 @@ namespace ArchiveFixer.Tests
         // ================================================================ 工具
 
         private string BuildPackage(string fileName, int payloadBytes)
-        {            string stage = Path.Combine(_root, "stage-" + Guid.NewGuid().ToString("N"));
+        {
+            string stage = Path.Combine(_root, "stage-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(stage);
 
             var payload = new byte[payloadBytes];
