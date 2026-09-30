@@ -21,7 +21,7 @@ Windows 桌面工具：把一批**来源不明、后缀被改坏、加密、分�
 
 **非目标比目标重要。** 以下都不做，且不允许"顺手"加进来：
 
-- 外接硬盘 / U 盘 / 网络路径 / 盘符变化的专门适配（不做设备身份、断连恢复、卷 GUID；只要求"不写死盘符、不在源目录建工作区"）
+- 外接硬盘 / U 盘 / 网络路径 / 盘符变化的专门适配（不做设备身份、断连恢复、卷 GUID；只要求"不写死盘符、不把工作区散在源目录里"）
 - 资源管理器右键菜单、"发送到"菜单、下载目录监控、任务模板、文件清单导出
 - 专项安装包提取（WIM/ESD、Inno Setup、InstallShield、MSI、SquashFS、LHA）—— 规则是**有真实样本才加**
 - WinRAR 的"捆绑 / 默认依赖 / 自动探测安装"；只保留"用户自装、自选路径、程序只检测与调用"
@@ -130,7 +130,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
     所有解压入口在 `ExtractSingleTaskAsync` 开头唯一收口比对，递归每层开工前再问一次。边界：**不比内容哈希**、
     **解压进行中**改源文件拦不住那一次、改名 / 源包搬进其余物**不算**变化。）
 12. **工作区、源文件、最终输出三者相互独立**：中间产物不得写进源目录，也不得直接写最终目录。
-    - 默认位置**跟着输出盘走** = `<输出盘>\.ArchiveFixer.work`（点开头的隐藏目录）；用户显式设过 `CacheRootDirectory` 时永远以它为准（`<它>\work`）；拿不到盘才回落程序目录 + WARN。
+    - 默认位置 = **本次目标目录里面**：`<目标目录>\.ArchiveFixer.work`（隐藏、走完连壳删掉 —— 用户 2026-09-30 改的口径，⛔ 不再按盘根开）；用户设过 `CacheRootDirectory` 时以它为准（`<它>\work`）；**拿不到目标目录一律报错指路，⛔ 绝不回落程序目录 / C 盘**。
     - **默认全清（含空壳）**：失败 / 取消 / 部分完成收尾时，把这一单**自己的任务工作区目录整份删掉** （含 stage、内嵌归档副本、已解出的中间件），**递归逐层工作区同样清掉**；零文件空壳无论如何都删。
       只有 `KeepFailedWorkspace`（默认 false，③页「工作区残留」）打开时才保留现场（有文件一律留，并写 INFO 说清）。
     - 三条红线不随设置变：**成功路径的清理口径一个字不改**、**源包在任何情况下原地不动**、**已定稿搬出去的内容物不受影响**； 删除前两道容器内校验（在生效的工作区根之下 + 目录里只许有我们自己造的子目录名），越界只写 WARN、一个字节都不删。
@@ -230,9 +230,9 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
 - `dotnet test` 全量：**2022 条基线（2020 通过 / 2 跳过 / 0 失败）**；2026-09-30 那轮 = **2089 条 / 2087 通过 / 0 失败 / 2 跳过**。
   两条跳过**如实跳过**（⛔ 不伪装成验过）：① `RealAmb909VolumePairTests` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests` 的真样本那条要
   `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`〔构建 / 全量测试 / 格式检查的基线数字〕
-- ⚠ **真样本用例没设环境变量时是"提前 return"，报表里同样算"通过"**（`RealEncryptionSampleTests` 3 条、`RealVolumeSampleTests` 等）—— ⛔ 别把这栏读成"真样本验过了"；要报真样本结果必须**设变量单独跑一次**并写清命中哪一份。
+- ⚠ **真样本用例没设环境变量时是"提前 return"，报表里同样算"通过"**（`RealEncryptionSampleTests` 等）—— ⛔ 别读成"真样本验过了"；要报真样本结果必须**设变量单独跑一次**并写清命中哪一份。
 - ⚠ 数字只在这里写一次。
-- **已知 flaky**（全量并发假红；先单跑确认，⛔ 别改断言）〔已知 flaky 清单（全量并发假红，单跑必过）〕
+- **已知 flaky**（全量并发假红；先单跑确认，⛔ 别改断言）〔已知 flaky 清单〕
 - ⚠ 回退代码后必须 `--no-incremental` 重编（`Copy-Item` 带回旧时间戳，MSBuild 跳过重编 → 跑的还是红检那份二进制）〔真样本验收：RAR4 / 跨盘 ZIP（2026-09-29）〕
 
 ### 11.3 空间：判据 / 模式 / 批末汇总
@@ -241,10 +241,10 @@ README 只做"一页纸 + 跳转"，⛔ 细节不许再往回收。
   - `ScheduledExtractionItem.RequiredBytes` 与 `ExtractionCoordinator.ReconcileReservation`（解压前预检那道门）都只读它； ⚠ 两处"差多少"的分母本就不同（`SpaceGate` 按可用空间、`ExtractionScheduler` 按可用 − 余量），要改先想清楚。
 - **「空间不足」模式**（`MainViewModel.SpaceTightMode`，运行期开关、**不写设置、不记忆**）一个布尔管四件事：并发（`ExtractionScheduler.ResolveSpaceTightParallelCount`，与「最大并发解压数」取小）、排序、其余物强制 `Delete`、
   定稿 + 校验通过后当场永久删源包（`PurgeSourcePackageForSpaceTight` —— `SourceCleanupService` 在管线上的**唯一**调用点）〔模式「空间不足」〕
-- **「不删原包」安全档**（`MainViewModel.SpaceTightKeepSource`）是**测试期专用**：⛔ **打包发行那一轮要整块删掉**（那颗勾、`_spaceTightKeepSourceThisBatch`、两条文案、相关用例），**届时这条结论一起删**；**空间侦察 `SpaceTrendMonitor` 保留**（只观察不判断）
+- **「不删原包」安全档**（`MainViewModel.SpaceTightKeepSource`）是**测试期专用**：⛔ **打包发行那一轮要整块删掉**（那颗勾、两条文案、相关用例）；**空间侦察 `SpaceTrendMonitor` 保留**
   〔安全档「不删原包」+ 空间侦察（含 2026-09-27 晚真机实测）〕
 - **空间回收的五条口径**（现状，⛔ 别按旧口径改回去）〔空间回收的口径与批末汇总框（2026-09-29 → 09-30）〕
-  1. **多层链每一层各删各的**：那支判据刻意排在 `task.IsContinuationTask` **之前**（峰值 ≈ 两倍单层，不是"四倍单层"）。
+  1. **多层链每一层各删各的**：那支判据刻意排在 `task.IsContinuationTask` **之前**（峰值 ≈ 两倍单层）。
   2. **某一层失败只影响那一层**：失败层源包留着，**已收走的更外层不回滚**（⛔ 别当成 bug 去"修"）。
   3. 动手前就提醒"多层可能中途空间不足"：判据唯一出口 `Storage/MultiLayerSpaceRiskRules`、文案 `StatusText.MultiLayerSpaceRiskFormat`；⛔ 只用 `Σ FreeSpaceDemandBytes` 比可用空间（**不拿 `PeakBytes`**）；只是提醒、不拦任务。
   4. 中途撞上空间不足 ⇒ **一键档弹一次纯提示**（非模态、不阻塞后续、同一批一次）；⛔ **手动档只写日志**。
