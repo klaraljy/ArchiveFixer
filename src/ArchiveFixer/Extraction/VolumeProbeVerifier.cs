@@ -28,10 +28,16 @@ namespace ArchiveFixer.Extraction
         public IReadOnlyList<VolumeCandidate> OrderedVolumes { get; init; } = Array.Empty<VolumeCandidate>();
 
         /// <summary>
-        /// **真的试过**。false = 没试成（没有可用引擎 / 拿不到卷根 / 建不出试开目录）——
+        /// **真的试过**。false = 没试成（没有可用引擎 / 拿不到卷根 / 建不出试开目录 / **跨盘**）——
         /// 这一档是"没试"，⛔ 不是"不成立"；消费方（<c>VolumeGroupResolver</c>）必须分开算。
         /// </summary>
         public bool Attempted { get; init; }
+
+        /// <summary>
+        /// 没试的**结构化**原因（⛔ 消费方不许去比 <see cref="Reason"/> 的中文）。
+        /// 只有 <see cref="VolumeTrialSkipReason.CrossVolume"/> 会改变结论：跨盘 ⇒ 判不出。
+        /// </summary>
+        public VolumeTrialSkipReason SkipReason { get; init; } = VolumeTrialSkipReason.None;
 
         /// <summary>试了几种排列。</summary>
         public int Attempts { get; init; }
@@ -71,9 +77,12 @@ namespace ArchiveFixer.Extraction
         /// <param name="orderings">后续卷的候选排列（每一组都不含第一卷）。</param>
         /// <param name="cancellationToken">取消。</param>
         /// <param name="preferredWorkRoot">
-        /// 试开临时物的期望落点（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30 口径）。
-        /// ⛔ 硬链接不能跨卷：它和第一卷不在同一个卷上时**如实退回**卷根那一档（见
-        /// <see cref="VolumeContentInference.BuildProbeRoot(string, string)"/>），⛔ 绝不复制大文件。
+        /// 试开临时物的落点（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30 口径）。
+        /// ⛔ 硬链接不能跨卷，而**跨卷时没有第二条合法出路**：退到"源卷根下的 <c>.ArchiveFixer.work</c>"
+        /// 已被否决（工作区只准设在解压的地方；在源盘开目录正是不变量 12 禁止的形态）。
+        /// 所以它和第一卷不在同一个卷上时，本方法**一次都不试**，直接如实报"跨盘 ⇒ 判不出"
+        /// （<see cref="VolumeProbeOutcome.SkipReason"/> = <see cref="VolumeTrialSkipReason.CrossVolume"/>）。
+        /// 空 = 走老路（第一卷所在卷根，<c>VolumeNameRepair</c> 那条路在用）。
         /// </param>
         public async Task<VolumeProbeOutcome> VerifyAsync(
             string? firstVolumePath,
@@ -83,24 +92,56 @@ namespace ArchiveFixer.Extraction
         {
             if (string.IsNullOrWhiteSpace(firstVolumePath) || !File.Exists(firstVolumePath))
             {
-                return Refuse(0, "第一卷不在了", attempted: false);
+                return Refuse(0, "第一卷不在了", attempted: false, VolumeTrialSkipReason.Other);
             }
 
             if (orderings == null || orderings.Count == 0)
             {
-                return Refuse(0, "同目录里没有可当后续卷的候选文件", attempted: false);
+                return Refuse(
+                    0,
+                    "同目录里没有可当后续卷的候选文件",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoOrderings);
             }
 
             if (_engine == null || !_engine.IsAvailable)
             {
-                return Refuse(0, "当前没有可用的解压引擎，没法试开验证（宁可不改，也不猜）", attempted: false);
+                return Refuse(
+                    0,
+                    "当前没有可用的解压引擎，没法试开验证（宁可不改，也不猜）",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoEngine);
             }
 
-            string probeRoot = VolumeContentInference.BuildProbeRoot(firstVolumePath, preferredWorkRoot);
+            bool hasPreferredRoot = !string.IsNullOrWhiteSpace(preferredWorkRoot);
+
+            /*
+             * ⛔ 跨盘 = 一次都不试（用户 2026-09-30 决定，见 <paramref name="preferredWorkRoot"/> 的说明）。
+             * 判据是"两个路径在不在同一个卷"，⛔ 不去比文案、也不试一次看看行不行 ——
+             * 试开的第一步就是在那个目录里建东西，那正是被否决的动作。
+             */
+            if (hasPreferredRoot &&
+                !VolumeContentInference.IsSameVolumeRoot(firstVolumePath, preferredWorkRoot))
+            {
+                return Refuse(
+                    0,
+                    "跨盘无法试开，整卷是否齐全无法确认 —— 硬链接不能跨卷（源文件与目标工作区不在同一个卷上），"
+                    + "⛔ 不复制大文件、也不在源盘上开工作区，所以这一档只能判「无法确认」",
+                    attempted: false,
+                    VolumeTrialSkipReason.CrossVolume);
+            }
+
+            string probeRoot = hasPreferredRoot
+                ? VolumeContentInference.BuildProbeRoot(firstVolumePath, preferredWorkRoot)
+                : VolumeContentInference.BuildProbeRoot(firstVolumePath);
 
             if (probeRoot.Length == 0)
             {
-                return Refuse(0, "拿不到第一卷所在的卷根，做不了硬链接（不复制大文件，所以不试）", attempted: false);
+                return Refuse(
+                    0,
+                    "拿不到可用的试开目录（工作区根给得不合法，或者第一卷的卷根取不到）—— 不复制大文件，所以不试",
+                    attempted: false,
+                    VolumeTrialSkipReason.NoProbeRoot);
             }
 
             int attempts = 0;
@@ -113,7 +154,11 @@ namespace ArchiveFixer.Extraction
                 }
                 catch (Exception ex)
                 {
-                    return Refuse(0, $"试开目录建不出来（{ex.Message}）", attempted: false);
+                    return Refuse(
+                        0,
+                        $"试开目录建不出来（{ex.Message}）",
+                        attempted: false,
+                        VolumeTrialSkipReason.NoProbeRoot);
                 }
 
                 // ① 单独一卷能不能完整打开。能 → 它本来就是个完整包，改名只会把它弄坏。
@@ -207,6 +252,7 @@ namespace ArchiveFixer.Extraction
             {
                 Confirmed = outcome.Confirmed,
                 Attempted = outcome.Attempted,
+                SkipReason = outcome.SkipReason,
                 NeedsPassword = outcome.NeedsPassword,
                 OrderedVolumePaths = ordered,
                 Attempts = outcome.Attempts,
@@ -219,6 +265,7 @@ namespace ArchiveFixer.Extraction
         {
             Confirmed = outcome.Confirmed,
             Attempted = attempted,
+            SkipReason = outcome.SkipReason,
             NeedsPassword = outcome.NeedsPassword,
             OrderedVolumes = outcome.OrderedVolumes,
             Attempts = outcome.Attempts,
@@ -370,10 +417,15 @@ namespace ArchiveFixer.Extraction
             return new TrialResult(null, false);
         }
 
-        private static VolumeProbeOutcome Refuse(int attempts, string reason, bool attempted) => new()
+        private static VolumeProbeOutcome Refuse(
+            int attempts,
+            string reason,
+            bool attempted,
+            VolumeTrialSkipReason skipReason = VolumeTrialSkipReason.None) => new()
         {
             Confirmed = false,
             Attempted = attempted,
+            SkipReason = skipReason,
             Attempts = attempts,
             Reason = reason
         };

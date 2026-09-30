@@ -243,6 +243,39 @@ namespace ArchiveFixer.Detection
         public bool AllowTrialOpen { get; init; } = true;
     }
 
+    /// <summary>
+    /// **没试开**的结构化原因。⛔ 消费方只许读这个枚举，不许去比 <see cref="VolumeTrialOutcome.Reason"/> 的中文。
+    ///
+    /// <para>为什么要分档：只有 <see cref="CrossVolume"/> 会**改变结论**（跨盘 ⇒ 判不出）；
+    /// 其余几档都是"这一次没取到证据"，结论照旧由前五条证据给（"没试 ≠ 不成立"）。</para>
+    /// </summary>
+    public enum VolumeTrialSkipReason
+    {
+        /// <summary>试过了（或者根本没走到试开这条证据）。</summary>
+        None = 0,
+
+        /// <summary>没有可用的解压引擎。</summary>
+        NoEngine = 1,
+
+        /// <summary>凑不出可试的顺序（卷号上有洞 —— 缺一卷 7-Zip 必然报 Missing volume）。</summary>
+        NoOrderings = 2,
+
+        /// <summary>拿不到合法的试开目录 / 建不出试开目录。</summary>
+        NoProbeRoot = 3,
+
+        /// <summary>
+        /// **跨盘**：源文件与工作区根不在同一个卷上 —— 而硬链接不能跨卷。
+        ///
+        /// <para>这一档**必须如实降成"判不出"**：⛔ 不许退到源卷根偷偷开工作区去试
+        /// （工作区只准设在解压的地方，在源盘开目录正是不变量 12 禁止的形态；收工删掉也一样 ——
+        /// 中途崩掉就在用户盘上留垃圾）。判不出 ⇒ 不删源、不移动源，安全结论一个字不变。</para>
+        /// </summary>
+        CrossVolume = 4,
+
+        /// <summary>别的意外（第一卷不在、试开请求为空等）。</summary>
+        Other = 5,
+    }
+
     /// <summary>一次试开的结论（由 <c>Extraction/VolumeProbeVerifier</c> 落地：硬链接 + 引擎列目录）。</summary>
     public sealed class VolumeTrialOutcome
     {
@@ -251,6 +284,9 @@ namespace ArchiveFixer.Detection
 
         /// <summary>真的试过（false = 没有可用引擎 / 做不了硬链接 —— 这一档是"没试"，不是"不成立"）。</summary>
         public bool Attempted { get; init; }
+
+        /// <summary>没试的结构化原因（跨盘那一档会改变结论，见 <see cref="VolumeTrialSkipReason"/>）。</summary>
+        public VolumeTrialSkipReason SkipReason { get; init; } = VolumeTrialSkipReason.None;
 
         /// <summary>成立但读不出清单（<c>-mhe</c> / <c>-hp</c>，要正确密码才列得出条目）。</summary>
         public bool NeedsPassword { get; init; }
@@ -471,7 +507,10 @@ namespace ArchiveFixer.Detection
         {
             string detail = trial.Attempted
                 ? $"试了 {trial.Attempts} 种排列：{trial.Reason}"
-                : $"没试成（这一档是「没试」，不是「不成立」）：{trial.Reason}";
+                : trial.SkipReason == VolumeTrialSkipReason.CrossVolume
+                    ? $"跨盘没得试（硬链接不能跨卷，而工作区只准设在解压的地方）⇒ 这一条证据**取不到**，"
+                        + $"结论如实降成「判不出」：{trial.Reason}"
+                    : $"没试成（这一档是「没试」，不是「不成立」）：{trial.Reason}";
 
             VolumeEvidence row = Row(
                 VolumeEvidenceKind.TrialOpen,
@@ -484,6 +523,37 @@ namespace ArchiveFixer.Detection
 
             if (!trial.Attempted)
             {
+                /*
+                 * ===== 跨盘 ⇒ **判不出**（用户 2026-09-30 决定，协调者 2026-09-30 复核）=====
+                 *
+                 * 硬链接不能跨卷 ⇒ 源卷与工作区不在同一个卷上时，试开**根本没有合法的落点**：
+                 * 退到"源卷根下的 .ArchiveFixer.work"已被明确否决（工作区只准设在解压的地方；
+                 * 在用户盘上开目录是**不变量 12** 禁止的形态，收工删掉也一样 —— 中途崩掉就留垃圾）。
+                 *
+                 * 于是这一档如实降级成 <see cref="VolumeGroupVerdict.Undetermined"/>：
+                 *   · 组成员的清单**照旧带出去**（GroupFilePaths 不变）⇒ 下游的保护/删除闸门一个字不放松；
+                 *   · CanEnterDeletableRestItems = false ⇒ 不删源、不移动源；
+                 *   · 文案如实写"跨盘无法试开，整卷是否齐全无法确认"，⛔ 绝不许写成"已按试开验证"。
+                 */
+                if (trial.SkipReason == VolumeTrialSkipReason.CrossVolume)
+                {
+                    return new VolumeGroupResolution
+                    {
+                        Verdict = VolumeGroupVerdict.Undetermined,
+                        AnchorPath = baseline.AnchorPath,
+                        BaseName = baseline.BaseName,
+                        Volumes = baseline.Volumes,
+                        MissingVolumeNames = Array.Empty<string>(),
+                        PositionInferredNotes = baseline.PositionInferredNotes,
+                        Evidence = Concat(baseline.Evidence, row),
+                        Reason = "判不出：跨盘无法试开，整卷是否齐全无法确认 —— " + trial.Reason
+                            + "。⛔ 判不出 ⇒ 不删源、不移动源、不改名；要确认只把这一组放到同一个盘上再来一次",
+                        GroupFilePaths = baseline.GroupFilePaths,
+                        HasRenamedVolume = baseline.HasRenamedVolume,
+                        CanEnterDeletableRestItems = false
+                    };
+                }
+
                 return AddRow(baseline, row);
             }
 
