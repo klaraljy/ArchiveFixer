@@ -5746,6 +5746,14 @@ namespace ArchiveFixer.ViewModels
 
                 VolumeNameRepairPlan? plan = null;
 
+                /*
+                 * 试开探针的落点 = **本批的目标工作区根**（`<目标目录>\.ArchiveFixer.work`，
+                 * 见 ApplyBatchWorkspaceRoot；不变量 12：需要临时物的地方一律由调用方把工作区根传进去）。
+                 * ⛔ 它不能为空时"另找一个地方"：空 / 跨盘 ⇒ VolumeNameRepair 直接不试开、如实报"无法确认"，
+                 * 代价是这一单要么按原名继续、要么报缺卷 —— 比在用户盘上开工作区划算。
+                 */
+                string volumeProbeWorkRoot = _pathService.WorkDirectory;
+
                 if (FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(current)))
                 {
                     plan = VolumeNameRepair.Plan(
@@ -5763,6 +5771,7 @@ namespace ArchiveFixer.ViewModels
                         current,
                         VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
                         _archiveEngine,
+                        volumeProbeWorkRoot,
                         cancellationToken).ConfigureAwait(false);
                 }
                 else if (plan == null)
@@ -5776,6 +5785,7 @@ namespace ArchiveFixer.ViewModels
                         current,
                         VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
                         _archiveEngine,
+                        volumeProbeWorkRoot,
                         cancellationToken).ConfigureAwait(false);
                 }
 

@@ -554,7 +554,8 @@ namespace ArchiveFixer.Tests
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 first,
                 VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(first),
-                engine: new Engines.SevenZip.SevenZipEngine());
+                engine: new Engines.SevenZip.SevenZipEngine(),
+                workRootDirectory: WorkRootFor(first));
 
             Assert.True(plan.CanRepair, plan.Reason);
             Assert.Equal(3, plan.Items.Count);
@@ -592,7 +593,8 @@ namespace ArchiveFixer.Tests
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 first,
                 VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(first),
-                engine: new Engines.SevenZip.SevenZipEngine());
+                engine: new Engines.SevenZip.SevenZipEngine(),
+                workRootDirectory: WorkRootFor(first));
 
             Assert.False(plan.CanRepair);
             Assert.Contains("amb909.part2.rar", plan.Reason, StringComparison.Ordinal);
@@ -611,7 +613,8 @@ namespace ArchiveFixer.Tests
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 solo,
                 VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(solo),
-                engine: new Engines.SevenZip.SevenZipEngine());
+                engine: new Engines.SevenZip.SevenZipEngine(),
+                workRootDirectory: WorkRootFor(solo));
 
             Assert.False(plan.CanRepair);
             Assert.True(File.Exists(solo), "单卷包被改掉了名字");
@@ -634,7 +637,8 @@ namespace ArchiveFixer.Tests
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 tail,
                 VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(tail),
-                engine: new Engines.SevenZip.SevenZipEngine());
+                engine: new Engines.SevenZip.SevenZipEngine(),
+                workRootDirectory: WorkRootFor(tail));
 
             Assert.True(plan.CanRepair, plan.Reason);
             Assert.Equal(2, plan.Items.Count);
@@ -663,13 +667,24 @@ namespace ArchiveFixer.Tests
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 solo,
                 VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(solo),
-                engine: new Engines.SevenZip.SevenZipEngine());
+                engine: new Engines.SevenZip.SevenZipEngine(),
+                workRootDirectory: WorkRootFor(solo));
 
             Assert.False(plan.CanRepair);
             Assert.True(File.Exists(solo), "单盘包被改掉了名字");
         }
 
         // ── 构造字节（测试自己算 CRC：⛔ 不调产品里那个 CRC 实现，免得"自己验自己"） ──
+
+        /// <summary>
+        /// 这一单的"目标工作区根"（同卷）：<c>&lt;样本目录&gt;\.ArchiveFixer.work</c>。
+        /// 真实调用方传的是 <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>（不变量 12：需要临时物的地方由调用方传进来）；
+        /// 用例里样本就在临时目录里，用**同一个常量**拼，⛔ 不写死名字。
+        /// </summary>
+        private static string WorkRootFor(string samplePath) =>
+            Path.Combine(
+                Path.GetDirectoryName(samplePath)!,
+                Detection.VolumeContentInference.WorkDirectoryName);
 
         /// <summary>RAR5 主归档头：签名 + CRC32 + HeaderSize(vint) + Type + Flags + [扩展区大小] + [数据区大小] + ArchiveFlags + [卷号]。</summary>
         private static byte[] Rar5MainHeader(

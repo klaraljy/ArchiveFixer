@@ -458,7 +458,8 @@ namespace ArchiveFixer.Tests
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 renamedFirst,
                 VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(renamedFirst),
-                engine: new SevenZipEngine());
+                engine: new SevenZipEngine(),
+                workRootDirectory: null);
 
             // ① 拒绝改名，而且说清是"没法确认"而不是"试开不成立"。
             Assert.False(plan.CanRepair, "没有工作区根就不许试开 ⇒ 证不出完整 ⇒ 必须拒绝改名");
@@ -475,6 +476,116 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(renamedFirst), "源文件被改名了");
             Assert.True(File.Exists(Path.Combine(directory, "包.7z.002")));
             Assert.True(File.Exists(Path.Combine(directory, "包.7z.003")));
+        }
+
+        /// <summary>
+        /// **同盘 ⇒ 改名路照旧可用**（方案 ①：工作区根由调用方传进来）。
+        ///
+        /// <para>真 7z 三卷 + 真机那种改法（<c>样本.7.01</c> / <c>样本.z.2</c> / <c>样本..3</c>），
+        /// 工作区根传**同卷**的 <c>&lt;样本目录&gt;\.ArchiveFixer.work</c> ⇒ 硬链接 + 引擎列目录跑得起来
+        /// ⇒ 出改名计划（改回 <c>样本.7z.001/.002/.003</c>）。</para>
+        ///
+        /// <para>⛔ 探针只准落在传入的工作区根之下：改名前后**样本目录本身**只多出那个工作区目录，
+        /// 源卷根侧一个字节都不许变。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 改名路_同盘工作区根_探针落在工作区里_照旧出计划()
+        {
+            string directory = NewDirectory("rename-same-volume");
+            string payload = Path.Combine(directory, "data.bin");
+
+            File.WriteAllBytes(payload, MakeBytes(2 * 1024 * 1024 + 12345));
+
+            Run7z(directory, "a", "-t7z", "-mx0", "-v1m", "样本.7z", "data.bin");
+
+            Assert.True(File.Exists(Path.Combine(directory, "样本.7z.003")), "样本不是三卷");
+
+            // 真机那种改法：三个名字全改烂（内容仍是 7z，第一卷有魔数）。
+            string first = Path.Combine(directory, "样本.7.01");
+            File.Move(Path.Combine(directory, "样本.7z.001"), first);
+            File.Move(Path.Combine(directory, "样本.7z.002"), Path.Combine(directory, "样本.z.2"));
+            File.Move(Path.Combine(directory, "样本.7z.003"), Path.Combine(directory, "样本..3"));
+
+            string sourceVolumeRoot = Path.GetPathRoot(directory) ?? string.Empty;
+            string shell = Path.Combine(sourceVolumeRoot, VolumeContentInference.WorkDirectoryName);
+            string[] shellBefore = SnapshotTree(shell);
+
+            string workRoot = Path.Combine(directory, VolumeContentInference.WorkDirectoryName);
+
+            VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
+                first,
+                VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(first),
+                engine: new SevenZipEngine(),
+                workRootDirectory: workRoot);
+
+            Assert.True(plan.CanRepair, plan.Reason);
+            Assert.True(plan.TrialAttempted, "同盘这一档试开必须要真跑过");
+            Assert.Equal(
+                new[] { "样本.7z.001", "样本.7z.002", "样本.7z.003" },
+                plan.Items.Select(item => item.SuggestedFileName).ToArray());
+
+            // ⛔ 探针只落在工作区里：源卷根侧一个字节都不许变（老写法会在这里建 volprobe-*）。
+            Assert.Equal(shellBefore, SnapshotTree(shell));
+        }
+
+        /// <summary>
+        /// **跨盘 ⇒ 不试开、不出改名计划**（方案 ① 的另一半）：源在测试程序集那个卷、工作区根在
+        /// 另一个卷上 —— 硬链接不能跨卷，于是如实报"无法确认"，⛔ 不往源卷根退、⛔ 不复制大文件。
+        /// </summary>
+        [CrossVolumeFact]
+        public async Task 改名路_跨盘_不试开_不出计划_源盘零新建()
+        {
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "rename-crossvol-" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(directory);
+
+            string workRoot = Path.Combine(Path.GetTempPath(), "rename-crossvol-work-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                string payload = Path.Combine(directory, "data.bin");
+
+                File.WriteAllBytes(payload, MakeBytes(2 * 1024 * 1024 + 12345));
+
+                Run7z(directory, "a", "-t7z", "-mx0", "-v1m", "样本.7z", "data.bin");
+
+                Assert.True(File.Exists(Path.Combine(directory, "样本.7z.003")), "样本不是三卷");
+
+                string first = Path.Combine(directory, "样本.7.01");
+                File.Move(Path.Combine(directory, "样本.7z.001"), first);
+                File.Move(Path.Combine(directory, "样本.7z.002"), Path.Combine(directory, "样本.z.2"));
+                File.Move(Path.Combine(directory, "样本.7z.003"), Path.Combine(directory, "样本..3"));
+
+                Assert.False(VolumeContentInference.IsSameVolumeRoot(first, workRoot));
+
+                string sourceVolumeRoot = Path.GetPathRoot(first) ?? string.Empty;
+                string shell = Path.Combine(sourceVolumeRoot, VolumeContentInference.WorkDirectoryName);
+
+                string[] treeBefore = SnapshotTree(directory);
+                string[] shellBefore = SnapshotTree(shell);
+
+                VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
+                    first,
+                    VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(first),
+                    engine: new SevenZipEngine(),
+                    workRootDirectory: workRoot);
+
+                Assert.False(plan.CanRepair, "跨盘试不了 ⇒ 证不出完整 ⇒ 不许改名");
+                Assert.False(plan.TrialAttempted, "跨盘一次都不许试");
+                Assert.Contains("无法确认", plan.Reason, StringComparison.Ordinal);
+
+                // 源盘一侧零新建；工作区根也不许被建出来。
+                Assert.Equal(treeBefore, SnapshotTree(directory));
+                Assert.Equal(shellBefore, SnapshotTree(shell));
+                Assert.False(Directory.Exists(workRoot), "跨盘这一档连工作区根都不许碰");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory);
+                TryDeleteDirectory(workRoot);
+            }
         }
 
         // ================================================================ 辅助
