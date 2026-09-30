@@ -926,6 +926,15 @@ namespace ArchiveFixer.Extraction
 
             long sizeBefore;
 
+            /*
+             * 已经改成功的卷（旧名 → 新名）。整组改名必须"全成或全不成"：
+             * 中途任何一卷失败，都要按这张表**倒序把名字改回去**，让盘上的状态与
+             * "一组没改"这句话一致。
+             * 真机现场（2026-09-30）：日志写「改名没成功」，盘上却已经出现 `111.part1.002` ——
+             * 半改状态比不改更糟：7-Zip 按新基名去找后续卷，名字七零八落时整组都打不开。
+             */
+            var applied = new List<(string From, string To)>();
+
             try
             {
                 if (!File.Exists(plan.CurrentPath))
@@ -946,6 +955,8 @@ namespace ArchiveFixer.Extraction
                 sizeBefore = new FileInfo(plan.CurrentPath).Length;
 
                 File.Move(plan.CurrentPath, plan.TargetPath);
+
+                applied.Add((plan.CurrentPath, plan.TargetPath));
             }
             catch (Exception ex)
             {
@@ -961,22 +972,28 @@ namespace ArchiveFixer.Extraction
             {
                 if (!File.Exists(plan.TargetPath))
                 {
-                    return Failure(string.Format(StatusText.VolumeRepairRenameFailedFormat, plan.SuggestedFileName, "改完之后新名字没找到"));
+                    return Undo(
+                        applied,
+                        string.Format(StatusText.VolumeRepairRenameFailedFormat, plan.SuggestedFileName, "改完之后新名字没找到"));
                 }
 
                 if (File.Exists(plan.CurrentPath))
                 {
-                    return Failure(string.Format(StatusText.VolumeRepairRenameFailedFormat, plan.SuggestedFileName, "旧名字还在"));
+                    return Undo(
+                        applied,
+                        string.Format(StatusText.VolumeRepairRenameFailedFormat, plan.SuggestedFileName, "旧名字还在"));
                 }
 
                 long sizeAfter = new FileInfo(plan.TargetPath).Length;
 
                 if (sizeAfter != sizeBefore)
                 {
-                    return Failure(string.Format(
-                        StatusText.VolumeRepairRenameFailedFormat,
-                        plan.SuggestedFileName,
-                        $"字节数变了（{sizeBefore} → {sizeAfter}）"));
+                    return Undo(
+                        applied,
+                        string.Format(
+                            StatusText.VolumeRepairRenameFailedFormat,
+                            plan.SuggestedFileName,
+                            $"字节数变了（{sizeBefore} → {sizeAfter}）"));
                 }
             }
             catch (Exception ex)
@@ -987,7 +1004,8 @@ namespace ArchiveFixer.Extraction
             /*
              * 还有别的卷要改（网盘给整组缀了「删除」那种）：接着一卷一卷来。
              * ⛔ 每一卷都走与上面同一套判据（源在、目标未被占、字节数不差）；
-             * 中途失败就**停下并如实报"已改了 N 卷"**，绝不假装整组都改好了。
+             * 中途任何一卷失败 ⇒ 把**已经改过的全部改回去**（<see cref="Undo"/>），再如实报"一组没改、卡在哪一卷"。
+             * ⛔ 绝不留半改状态 —— 旧口径是"已改的那几卷不会再动"，真机上正是它把用户的名字改成七零八落。
              */
             var rest = (plan.Items ?? Array.Empty<VolumeRepairItem>())
                 .Where(i => !string.Equals(i.CurrentPath, plan.CurrentPath, StringComparison.OrdinalIgnoreCase))
@@ -1001,7 +1019,7 @@ namespace ArchiveFixer.Extraction
                 {
                     if (!File.Exists(item.CurrentPath))
                     {
-                        return PartialFailure(plan, done, $"{item.CurrentFileName}：{StatusText.VolumeRepairSourceMissing}");
+                        return Undo(applied, $"{item.CurrentFileName}：{StatusText.VolumeRepairSourceMissing}");
                     }
 
                     if (string.Equals(item.CurrentPath, item.TargetPath, StringComparison.OrdinalIgnoreCase))
@@ -1011,28 +1029,29 @@ namespace ArchiveFixer.Extraction
 
                     if (File.Exists(item.TargetPath))
                     {
-                        return PartialFailure(
-                            plan,
-                            done,
+                        return Undo(
+                            applied,
                             string.Format(StatusText.VolumeRepairTargetTakenFormat, item.SuggestedFileName));
                     }
 
                     long before = new FileInfo(item.CurrentPath).Length;
                     File.Move(item.CurrentPath, item.TargetPath);
+
+                    applied.Add((item.CurrentPath, item.TargetPath));
+
                     long after = new FileInfo(item.TargetPath).Length;
 
                     if (after != before)
                     {
-                        return PartialFailure(plan, done, $"字节数变了（{before} → {after}）");
+                        return Undo(applied, $"字节数变了（{before} → {after}）");
                     }
 
                     done++;
                 }
                 catch (Exception ex)
                 {
-                    return PartialFailure(
-                        plan,
-                        done,
+                    return Undo(
+                        applied,
                         string.Format(StatusText.VolumeRepairRenameFailedFormat, item.SuggestedFileName, ex.Message));
                 }
             }
@@ -1051,9 +1070,52 @@ namespace ArchiveFixer.Extraction
             };
         }
 
-        /// <summary>整组改到一半失败：把"改了几卷、卡在哪一卷"写清楚（面向用户，不含糊）。</summary>
-        private static VolumeNameRepairResult PartialFailure(VolumeNameRepairPlan plan, int done, string why) =>
-            Failure(string.Format(StatusText.VolumeRepairGroupPartialFormat, done + 1, why));
+        /// <summary>
+        /// 整组没改成 ⇒ 把**已经改过的名字倒序改回原名**，让盘上的状态与"一组没改"这句话一致。
+        /// <para>回滚本身失败（原名被别的程序占了 / 文件被锁 / 新名字不见了）时**如实点名**，
+        /// ⛔ 绝不让用户以为"没动过"。<c>why</c> = 卡在哪一卷、为什么。</para>
+        /// </summary>
+        private static VolumeNameRepairResult Undo(IReadOnlyList<(string From, string To)> applied, string why)
+        {
+            var stuck = new List<string>();
+
+            for (int index = applied.Count - 1; index >= 0; index--)
+            {
+                (string from, string to) = applied[index];
+
+                try
+                {
+                    if (!File.Exists(to))
+                    {
+                        stuck.Add(SafeFileName(to));
+                        continue;
+                    }
+
+                    if (File.Exists(from))
+                    {
+                        // 原名又被占上了（别的程序插进来的）⇒ 不敢覆盖，只能如实点名。
+                        stuck.Add(SafeFileName(to));
+                        continue;
+                    }
+
+                    File.Move(to, from);
+                }
+                catch
+                {
+                    stuck.Add(SafeFileName(to));
+                }
+            }
+
+            if (stuck.Count == 0)
+            {
+                return Failure(string.Format(StatusText.VolumeRepairRolledBackFormat, why));
+            }
+
+            return Failure(string.Format(
+                StatusText.VolumeRepairRollbackIncompleteFormat,
+                stuck.Count,
+                string.Join("、", stuck)));
+        }
 
         /// <param name="trialAttempted">这一份"不能改"的结论是不是**试开跑过之后**下的
         /// （只有真跑过试开才值得写一行日志说清结论，见 <see cref="VolumeNameRepairPlan.TrialAttempted"/>）。</param>

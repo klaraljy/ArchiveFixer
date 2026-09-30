@@ -120,16 +120,32 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            int lastDot = standardFirst!.LastIndexOf('.');
+            /*
+             * 族必须先认出来，再按**那一族的标准名**推后续卷。
+             * ⛔ 旧代码一律"掐掉最后一个点段 + 接 .NNN"：对 RAR 的 `X.part1.rar` 会掐出基名 `X.part1`，
+             * 后续卷就被改成 `X.part1.002` —— 真机 2026-09-30 正是这样把用户的名字改成七零八落的。
+             * 认不出族 ⇒ 返回 null：**判不出就不改**（宁可照实报错，也不给一个错的名字）。
+             */
+            (string Stem, Detection.VolumeNamingFamily Family)? family = ParseStandardFirst(standardFirst!);
 
-            if (lastDot <= 0)
+            if (family is null)
             {
                 return null;
             }
 
-            string baseName = standardFirst[..lastDot];
+            int lastIndex = ordered[^1].Index;
+            IReadOnlyList<string> standardNames = Detection.VolumeNumberFromContent.BuildStandardNames(
+                family.Value.Stem,
+                family.Value.Family,
+                lastIndex);
+
+            if (standardNames.Count < lastIndex)
+            {
+                return null;
+            }
+
             string directory = Path.GetDirectoryName(archivePath) ?? string.Empty;
-            string firstVolumeAfterRename = Path.Combine(directory, standardFirst);
+            string firstVolumeAfterRename = Path.Combine(directory, standardFirst!);
 
             var renames = new List<(string, string)>();
             var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -149,7 +165,7 @@ namespace ArchiveFixer.Extraction
 
             foreach ((int index, string name) in ordered)
             {
-                AddRename(Path.Combine(directory, name), $"{baseName}.{index:D3}");
+                AddRename(Path.Combine(directory, name), standardNames[index - 1]);
             }
 
             /*
@@ -170,7 +186,7 @@ namespace ArchiveFixer.Extraction
 
             return new RenamePlan
             {
-                StandardBaseName = baseName,
+                StandardBaseName = family.Value.Stem,
                 Renames = renames,
                 FirstVolumePathAfterRename = firstVolumeAfterRename
             };
@@ -236,6 +252,52 @@ namespace ArchiveFixer.Extraction
                 Rollback(staged);
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 从"标准的第一卷名"反推这一组的**族与基名**（后续卷的名字由
+        /// <see cref="Detection.VolumeNumberFromContent.BuildStandardNames"/> 按族生成，⛔ 不在别处再拼一遍）。
+        /// <para>认不出的族一律返回 <c>null</c>：<b>判不出就不改</b>。
+        /// 已知两种标准首卷名：RAR 的 <c>X.part1.rar</c>、7z 的 <c>X.7z.001</c>。</para>
+        /// </summary>
+        private static (string Stem, Detection.VolumeNamingFamily Family)? ParseStandardFirst(string standardFirst)
+        {
+            string name = Path.GetFileName(standardFirst);
+
+            if (name.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+            {
+                int partIndex = name.LastIndexOf(".part", StringComparison.OrdinalIgnoreCase);
+
+                if (partIndex > 0)
+                {
+                    string number = name[(partIndex + ".part".Length)..^".rar".Length];
+
+                    if (number.Length > 0 && number.All(char.IsAsciiDigit) && number.TrimStart('0') == "1")
+                    {
+                        return (name[..partIndex], Detection.VolumeNamingFamily.RarPart);
+                    }
+                }
+
+                return null;
+            }
+
+            if (name.EndsWith(".001", StringComparison.Ordinal))
+            {
+                /*
+                 * 数字族的 stem 由 BuildStandardNames 自己补 `.7z.` —— 这里必须把 `.7z` 也剥掉，
+                 * 否则会拼出 `X.7z.7z.002`（实测踩到过）。
+                 */
+                string stem = name[..^4];
+
+                if (stem.EndsWith(".7z", StringComparison.OrdinalIgnoreCase))
+                {
+                    stem = stem[..^3];
+                }
+
+                return (stem, Detection.VolumeNamingFamily.SevenZipNumbered);
+            }
+
+            return null;
         }
 
         private static void Rollback(List<(string Temporary, string Target)> staged)
