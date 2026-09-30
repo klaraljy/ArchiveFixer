@@ -3118,6 +3118,9 @@ namespace ArchiveFixer.ViewModels
             long totalStageBytes = 0;
             int zeroByteArtifacts = 0;
 
+            /* 分卷组不完整的现场（见下面那道闸门）：非空 ⇒ 整份计划作废，一个字节都不动。 */
+            var incompleteVolumeGroups = new List<string>();
+
             foreach (string file in Directory.EnumerateFiles(stageRoot, "*", SearchOption.AllDirectories))
             {
                 long size = 0;
@@ -3134,6 +3137,26 @@ namespace ArchiveFixer.ViewModels
                 totalStageBytes += size;
 
                 bool isProcessArtifact = IsProcessArtifactFile(file);
+
+                /*
+                 * ===== ⛔ 分卷组的完整性闸门（用户 2026-09-30 真机：25 GB 被当"其余物"永久删除）=====
+                 *
+                 * 现场：外层 RAR 解出来的是一组 **PKZIP 跨盘**（`一只顶美.z01…z05` + 末卷 `一只顶美.zip`），
+                 * 而末卷的名字被改坏成 `一只顶美.z删除ip` ⇒ 认不出是归档。
+                 * 老判据只看**扩展名像不像分卷**，于是剩下 5 卷"每一卷单看都像待续解的过程物"，
+                 * 全被收进可删的其余物；再叠加「空间不足」模式的永久删除 ⇒ **25 GB 当场没了**，
+                 * 日志还写着"解压成功 ｜ 校验通过"。
+                 *
+                 * 现在：**分卷要进"可删的其余物"，必须先能证明整组是完整的**（判据见
+                 * <see cref="TryConfirmVolumeGroupComplete"/>，只认盘上的事实）。证明不了 ⇒
+                 * 这一份既不进其余物、也不当内容物，**整份计划作废**（下面的 Failed 分支），
+                 * 于是源包与其余物的删除一个都不会发生（它们都挂在"定稿 + 校验通过"之后）。
+                 */
+                if (isProcessArtifact && !TryConfirmVolumeGroupComplete(file, out string volumeGroupNote))
+                {
+                    incompleteVolumeGroups.Add(volumeGroupNote);
+                    continue;
+                }
 
                 /*
                  * 0 字节的**归档 / 分卷**不是有效的其余物（用户 2026-09-24 要求）。
@@ -3159,6 +3182,24 @@ namespace ArchiveFixer.ViewModels
                     Size = size,
                     IsProcessArtifact = isProcessArtifact
                 });
+            }
+
+            /*
+             * ⛔ 只要发现**任何一组分卷证明不了完整**，这一层的计划就整份作废（不定稿、不建其余物、
+             * 不搬任何文件）—— 调用方拿到 Failed 后按失败收场：源包与其余物的删除全部不发生。
+             * 理由见上面那道闸门（用户 2026-09-30：25 GB 就是这么没的）。
+             */
+            if (incompleteVolumeGroups.Count > 0)
+            {
+                string detail = string.Join("；", incompleteVolumeGroups.Distinct(StringComparer.Ordinal).Take(3));
+
+                return new FinalLayoutPlan
+                {
+                    Failed = true,
+                    FailureReason = $"这一层里有分卷组不完整：{detail}。已按「什么都不动」处理 —— "
+                        + "产物与源包一个字节都不搬、不删（补齐全套分卷后再来）",
+                    Summary = "分卷组不完整，未定稿"
+                };
             }
 
             if (zeroByteArtifacts > 0)
@@ -3255,6 +3296,123 @@ namespace ArchiveFixer.ViewModels
 
             return ExtensionHelper.IsVolumePartExtension(extension) ||
                    ExtensionHelper.IsKnownArchiveExtension(extension);
+        }
+
+        /// <summary>
+        /// **分卷组完整性确认**（用户 2026-09-30 真机铁证）：⛔ **只有确认整组完整，分卷才允许进"可删的其余物"**。
+        ///
+        /// <para><b>为什么必须有它</b>：老判据只看"扩展名像不像分卷"，于是"缺首卷 / 缺末卷的残组"里
+        /// 每一卷单看都像"待续解的过程物"，被打包收进可删的其余物；再叠加「空间不足」模式的永久删除，
+        /// 用户那 25 GB 就是这么没的（日志还写着"解压成功 ｜ 校验通过"）。</para>
+        ///
+        /// <para><b>判据只认盘上的事实</b>（不猜、不看文案）：</para>
+        /// <list type="bullet">
+        /// <item><c>.z01/.z02…</c>（PKZIP 跨盘）：**末卷是同名的 <c>.zip</c>**（中央目录在它身上）——
+        /// 缺它 ⇒ 整组不完整。</item>
+        /// <item>纯数字（<c>.001/.002…</c>）：**首卷必须在**；只剩后续卷 ⇒ 不完整。</item>
+        /// <item>卷标记夹在名字里的归档（<c>x.part01.rar</c> / <c>x.r00</c>）：必须能找到首卷。</item>
+        /// <item>确认不了（目录读不到、名字认不出）⇒ **一律按不完整处理** ——
+        /// 兜底落在"什么都不做"那一档（AGENTS §9.5）。</item>
+        /// </list>
+        /// </summary>
+        internal static bool TryConfirmVolumeGroupComplete(string filePath, out string note)
+        {
+            note = string.Empty;
+
+            string name = Path.GetFileName(filePath);
+            string? directory = Path.GetDirectoryName(filePath);
+
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrEmpty(directory))
+            {
+                note = "读不到目录，认不出这一组分卷";
+                return false;
+            }
+
+            try
+            {
+                string extension = Path.GetExtension(name);
+
+                // ① PKZIP 跨盘家族（.z01/.z02…）：末卷是同名的 .zip，必须同目录在。
+                if (extension.Length > 2 &&
+                    extension.StartsWith(".z", StringComparison.OrdinalIgnoreCase) &&
+                    extension[2..].All(char.IsDigit))
+                {
+                    string stem = name[..^extension.Length];
+
+                    if (!File.Exists(Path.Combine(directory, stem + ".zip")))
+                    {
+                        note = $"{stem}.z01… 缺末卷（{stem}.zip）";
+                        return false;
+                    }
+
+                    return true;
+                }
+
+                // ② 纯数字家族（.001/.002…）：首卷必须在。
+                if (extension.Length > 1 &&
+                    extension[1..].All(char.IsDigit) &&
+                    int.TryParse(extension[1..], out int index))
+                {
+                    if (index <= 1)
+                    {
+                        return true;
+                    }
+
+                    string stem = name[..^extension.Length];
+
+                    if (!File.Exists(Path.Combine(directory, stem + ".001")))
+                    {
+                        note = $"{stem}.001… 缺首卷（{stem}.001）";
+                        return false;
+                    }
+
+                    return true;
+                }
+
+                // ③ 卷标记夹在文件名里的归档（x.part01.rar / x.r00）：必须能找到首卷。
+                if (FileNameHelper.IsVolumePartFileName(name))
+                {
+                    string stem = name[..^extension.Length];
+
+                    if (File.Exists(Path.Combine(directory, stem + ".001")))
+                    {
+                        return true;
+                    }
+
+                    // 老式 .rar/.r00 家族：首卷是同名的 .rar。
+                    if (extension.Length > 1 &&
+                        extension.StartsWith(".r", StringComparison.OrdinalIgnoreCase) &&
+                        extension[1..].All(char.IsDigit) &&
+                        File.Exists(Path.Combine(directory, stem + ".rar")))
+                    {
+                        return true;
+                    }
+
+                    // .partNN.rar 家族：首卷是 .part1.rar / .part01.rar。
+                    int partMark = stem.LastIndexOf(".part", StringComparison.OrdinalIgnoreCase);
+
+                    if (partMark >= 0 && int.TryParse(stem[(partMark + 5)..], out _))
+                    {
+                        string baseStem = stem[..partMark];
+
+                        if (File.Exists(Path.Combine(directory, baseStem + ".part1" + extension)) ||
+                            File.Exists(Path.Combine(directory, baseStem + ".part01" + extension)))
+                        {
+                            return true;
+                        }
+                    }
+
+                    note = $"{name} 是一组分卷里的一卷，但找不到首卷";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                note = $"{name}：确认分卷组时读不到目录（{ex.GetType().Name}）";
+                return false;
+            }
         }
 
         /// <summary>
