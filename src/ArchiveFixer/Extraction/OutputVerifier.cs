@@ -267,6 +267,15 @@ namespace ArchiveFixer.Extraction
              */
             if (expected == null || !expected.Success)
             {
+                /*
+                 * 清单为什么没拿到，调用方如果说得出原因，就**必须**写出来
+                 * （用户 2026-09-30：日志不许再让人猜）。唯一来源是
+                 * `ChainManifestResolver` 给的那份空预期的 Message —— 它点名了是哪一层、为什么。
+                 */
+                string why = expected == null || string.IsNullOrWhiteSpace(expected.Message)
+                    ? string.Empty
+                    : $"（{expected.Message}）";
+
                 return new OutputVerificationResult
                 {
                     Verified = true,
@@ -280,7 +289,7 @@ namespace ArchiveFixer.Extraction
                     ActualFileCount = actualFileCount,
                     ExpectedTotalSize = 0,
                     ActualTotalSize = actualTotalSize,
-                    Message = $"未取得预期条目数，只做了非空校验：输出目录里有 {actualFileCount} 个文件 / {actualTotalSize} 字节"
+                    Message = $"未取得预期条目数{why}，只做了非空校验：输出目录里有 {actualFileCount} 个文件 / {actualTotalSize} 字节"
                 };
             }
 

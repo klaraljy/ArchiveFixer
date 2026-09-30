@@ -796,6 +796,18 @@ namespace ArchiveFixer.Models
         public bool OutputManifestCrossChecked { get; set; }
 
         /// <summary>
+        /// 这一次的 L3 预期清单**来自哪一层**（或者为什么取不到）—— 唯一写入点是
+        /// <c>ExtractionCoordinator.PostProcessSuccessAsync</c> 里
+        /// <c>ChainManifestResolver.Resolve</c> 的那一行（⛔ 别处不许再判一遍层数）。
+        ///
+        /// <para>为什么要落在任务上：L4 的唯一出口 <c>ResultCompletenessClassifier</c> 从任务上读它，
+        /// 于是"源包为什么被留下"这条结论能一路带到每一个删除闸门的日志里 ——
+        /// 用户 2026-09-30 报的现场里，日志只写了"没有可用的归档清单可核对"，
+        /// 一个字都没说"到底是哪一层、为什么"，他只能猜。</para>
+        /// </summary>
+        public ManifestExpectation ManifestExpectation { get; set; } = ManifestExpectation.None;
+
+        /// <summary>
         /// 任务的**机器可判终态**（AGENTS.md §7 要求的那类"能被机器判定"的状态）。
         ///
         /// <para>

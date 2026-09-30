@@ -1250,26 +1250,26 @@ namespace ArchiveFixer.ViewModels
 
             if (stopped)
             {
-                if (pending > 0)
-                {
-                    AppendLog(
-                        "WARN",
-                        $"一键处理：被「停止后续」中断，{pending} 个源包的补搬（移入其余物）没有执行，源包留在原地。");
-                }
-
+                /*
+                 * ⚠ 2026-09-30：**即使 pending == 0 也要写一句**。
+                 * 链没跑完 ⇒ 链尾那一档整段不执行（"按「删除操作」处理其余物"也在里面），
+                 * 于是选了「彻底删除」的人会发现过程物还留着 —— 而老写法只在 pending > 0 时才吭声，
+                 * pending == 0 时**一个字都不写**，用户只能猜（与 ApplyRestHandlingAfterChainAsync
+                 * 那处静默 return 是同一类毛病）。
+                 */
+                AppendLog(
+                    "WARN",
+                    $"一键处理：被「停止后续」中断，链尾那一档（补搬源包 / 按「删除操作」处理其余物）整段没有执行 —— "
+                    + $"源包与其余物都留在原地（{pending} 个源包本来要补搬）。");
                 return;
             }
 
             if (hitRoundLimit)
             {
-                if (pending > 0)
-                {
-                    AppendLog(
-                        "WARN",
-                        $"一键处理：还有更深的包没解（已达到 {RoundLimit} 轮上限），" +
-                        $"{pending} 个源包的补搬没有执行 —— 内容物可能还不全，此时不动源包。");
-                }
-
+                AppendLog(
+                    "WARN",
+                    $"一键处理：还有更深的包没解（已达到 {RoundLimit} 轮上限），链尾那一档整段没有执行 —— "
+                    + $"源包与其余物都留在原地（{pending} 个源包本来要补搬）；内容物可能还不全，此时不动源包。");
                 return;
             }
 

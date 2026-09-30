@@ -57,6 +57,16 @@ namespace ArchiveFixer.Extraction
         /// <summary>给人看的一句话（进日志与报告；⛔ 不许拿它当判据）。</summary>
         public string Message { get; init; } = string.Empty;
 
+        /// <summary>
+        /// **为什么没删 / 没搬源包** —— 一句话说清"哪条判据 + 哪一层 + 什么原因"
+        /// （用户 2026-09-30：日志不许再让人猜）。
+        ///
+        /// <para>它是**唯一一处**拼装这个说法的出口：所有读 L4 的删除闸门（其余物删除 / 源包搬运 /
+        /// 空间不足模式删源）写日志时都读它，⛔ 不许各自再拼一遍措辞。可证完整时它是空串
+        /// （那时本来就不该有"为什么没删"这句话）。</para>
+        /// </summary>
+        public string Blocker { get; init; } = string.Empty;
+
         /// <summary>可证完整 —— **唯一**允许删除 / 搬走源包的档。</summary>
         public bool AllowsSourceRemoval => State == ResultCompleteness.Complete;
     }
@@ -86,7 +96,13 @@ namespace ArchiveFixer.Extraction
         /// 按**产物校验结论**分类（校验那一步的原始结论，唯一入口；
         /// <paramref name="verification"/> 为 null = 没做过校验）。
         /// </summary>
-        public static ResultCompletenessVerdict Classify(OutputVerificationResult? verification)
+        /// <param name="expectation">
+        /// 这一次 L3 的预期清单来自哪一层（可选；唯一出口 <see cref="ChainManifestResolver"/>）。
+        /// 传进来只为一件事：判不出时能在"为什么没删"那句话里**点名是哪一层、为什么**。
+        /// </param>
+        public static ResultCompletenessVerdict Classify(
+            OutputVerificationResult? verification,
+            ManifestExpectation? expectation = null)
         {
             if (verification == null)
             {
@@ -94,7 +110,8 @@ namespace ArchiveFixer.Extraction
                 {
                     State = ResultCompleteness.Undeterminable,
                     Evidence = "OutputVerification=null",
-                    Message = StatusText.CompletenessUndeterminableFormat
+                    Message = StatusText.CompletenessUndeterminableFormat,
+                    Blocker = BuildBlocker(StatusText.CompletenessUndeterminableFormat, expectation)
                 };
             }
 
@@ -107,7 +124,8 @@ namespace ArchiveFixer.Extraction
                     verification.Outcome,
                     verification.ManifestCrossChecked,
                     verification.ExpectedFileCount,
-                    verification.ActualFileCount));
+                    verification.ActualFileCount),
+                expectation);
         }
 
         /// <summary>
@@ -124,7 +142,8 @@ namespace ArchiveFixer.Extraction
                 {
                     State = ResultCompleteness.Undeterminable,
                     Evidence = "task=null",
-                    Message = StatusText.CompletenessUndeterminableFormat
+                    Message = StatusText.CompletenessUndeterminableFormat,
+                    Blocker = BuildBlocker(StatusText.CompletenessUndeterminableFormat, null)
                 };
             }
 
@@ -134,7 +153,8 @@ namespace ArchiveFixer.Extraction
                 {
                     State = ResultCompleteness.Incomplete,
                     Evidence = "MissingVolumeNames=" + task.MissingVolumeNames.Count,
-                    Message = StatusText.CompletenessIncompleteFormat
+                    Message = StatusText.CompletenessIncompleteFormat,
+                    Blocker = BuildBlocker(StatusText.CompletenessIncompleteFormat, task.ManifestExpectation)
                 };
             }
 
@@ -145,7 +165,8 @@ namespace ArchiveFixer.Extraction
                     CultureInfo.CurrentCulture,
                     "OutputVerification={0};ManifestCrossChecked={1}",
                     task.OutputVerification,
-                    task.OutputManifestCrossChecked));
+                    task.OutputManifestCrossChecked),
+                task.ManifestExpectation);
         }
 
         /// <summary>
@@ -154,7 +175,8 @@ namespace ArchiveFixer.Extraction
         private static ResultCompletenessVerdict Classify(
             OutputVerificationOutcome outcome,
             bool manifestCrossChecked,
-            string evidence)
+            string evidence,
+            ManifestExpectation? expectation)
         {
             if (outcome == OutputVerificationOutcome.Failed)
             {
@@ -162,7 +184,8 @@ namespace ArchiveFixer.Extraction
                 {
                     State = ResultCompleteness.Incomplete,
                     Evidence = evidence,
-                    Message = StatusText.CompletenessIncompleteFormat
+                    Message = StatusText.CompletenessIncompleteFormat,
+                    Blocker = BuildBlocker(StatusText.CompletenessIncompleteFormat, expectation)
                 };
             }
 
@@ -188,8 +211,21 @@ namespace ArchiveFixer.Extraction
             {
                 State = ResultCompleteness.Undeterminable,
                 Evidence = evidence,
-                Message = StatusText.CompletenessUndeterminableFormat
+                Message = StatusText.CompletenessUndeterminableFormat,
+                Blocker = BuildBlocker(StatusText.CompletenessUndeterminableFormat, expectation)
             };
+        }
+
+        /// <summary>
+        /// 「为什么没删源包：&lt;判据&gt;；&lt;哪一层 + 原因&gt;」—— 全仓**唯一**一处拼这句话。
+        /// </summary>
+        private static string BuildBlocker(string criterion, ManifestExpectation? expectation)
+        {
+            string reason = expectation?.UnavailableReason ?? string.Empty;
+
+            return reason.Length == 0
+                ? string.Format(CultureInfo.CurrentCulture, StatusText.SourceRemovalBlockedFormat, criterion)
+                : string.Format(CultureInfo.CurrentCulture, StatusText.SourceRemovalBlockedDetailFormat, criterion, reason);
         }
     }
 }
