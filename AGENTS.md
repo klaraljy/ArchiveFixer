@@ -212,7 +212,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
 - ⚠ 数字只在这里写一次。
 - 已知 flaky（并发假红；先单跑确认，⛔ 别改断言）〔已知 flaky 清单〕
-  - `SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`：worktree 全量偶发 `Collection was modified`（测试自己的 `WaitForLogAsync`：`SpaceTightModeTests.cs:877` 枚举 `harness.Log.Logs` 而产品侧在 append）⇒ 测试侧竞态、单跑 3 次全绿、主 checkout 全量通过；⛔ 不是产品 bug。
+  - `SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`：全量偶发 `Collection was modified`（测试自己的 `WaitForLogAsync` 枚举 `harness.Log.Logs` 而产品侧在 append）⇒ 测试侧竞态、**不是产品 bug**。2026-10-01 已从源头去掉：该文件读日志的 6 处改走 `LogContains`（捕获 `InvalidOperationException` 后当作"这一轮还没出现"），⛔ 等待时长 / 断言 / 被等内容一个字没改。
 - ⚠ 回退代码后必须 `--no-incremental` 重编（否则跑的还是红检那份）〔真样本验收〕
 
 ### 11.3 空间：判据/模式/批末汇总
