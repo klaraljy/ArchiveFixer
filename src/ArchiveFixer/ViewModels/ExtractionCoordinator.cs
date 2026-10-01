@@ -3622,18 +3622,6 @@ namespace ArchiveFixer.ViewModels
                     else
                     {
                         isProcessArtifact = true;
-
-                        try
-                        {
-                            System.IO.File.AppendAllText(
-                                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "af-art-debug.txt"),
-                                $"file={Path.GetFileName(file)} group=[{string.Join(",", stageGroup.FilePaths.Select(Path.GetFileName))}] "
-                                + $"renamed=[{string.Join(",", renamedVolumeMembers.Select(Path.GetFileName))}]{Environment.NewLine}");
-                        }
-                        catch
-                        {
-                            // 诊断用。
-                        }
                     }
                 }
 

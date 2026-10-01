@@ -485,11 +485,11 @@ namespace ArchiveFixer.Tests
             await harness.Vm.CheckSpaceForTasksAsync(harness.Vm.Tasks.ToList(), "导入完成");
 
             Assert.True(
-                harness.Log.Logs.Any(x => x.Level == "WARN" && x.Message.Contains("空间体检（导入完成）", StringComparison.Ordinal)),
+                LogContains(harness, x => x.Level == "WARN" && x.Message.Contains("空间体检（导入完成）", StringComparison.Ordinal)),
                 "日志里没有那条空间体检 WARN。实际日志：" + DescribeLogs(harness));
 
             Assert.True(
-                harness.Log.Logs.Any(x => x.Level == "ERROR" &&
+                LogContains(harness, x => x.Level == "ERROR" &&
                                           x.Message.Contains("空间不足，这一批会跳过", StringComparison.Ordinal) &&
                                           x.Message.Contains("big.7z", StringComparison.Ordinal)),
                 "日志里没有那条点名 ERROR。实际日志：" + DescribeLogs(harness));
@@ -527,7 +527,7 @@ namespace ArchiveFixer.Tests
             Assert.NotEmpty(harness.Vm.Tasks);
 
             Assert.True(
-                harness.Log.Logs.Any(x => x.Message.Contains("空间体检（导入完成）", StringComparison.Ordinal)),
+                LogContains(harness, x => x.Message.Contains("空间体检（导入完成）", StringComparison.Ordinal)),
                 "导入完成后必须自动体检一次。实际日志：" + DescribeLogs(harness));
         }
 
@@ -847,11 +847,11 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.True(
-                harness.Log.Logs.Any(x => x.Message.Contains("按更保守的 1 个跑", StringComparison.Ordinal)),
+                LogContains(harness, x => x.Message.Contains("按更保守的 1 个跑", StringComparison.Ordinal)),
                 "用户并发档 = 1 时必须压到 1。实际日志：" + DescribeLogs(harness));
 
             Assert.True(
-                harness.Log.Logs.Any(x => x.Message.Contains("本批同时最多跑 1 个", StringComparison.Ordinal)),
+                LogContains(harness, x => x.Message.Contains("本批同时最多跑 1 个", StringComparison.Ordinal)),
                 "并发结论那一行必须是 1。实际日志：" + DescribeLogs(harness));
 
             Assert.DoesNotContain(
@@ -874,7 +874,7 @@ namespace ArchiveFixer.Tests
         {
             for (int attempt = 0; attempt < 100; attempt++)
             {
-                if (harness.Log.Logs.Any(x => x.Message.Contains(fragment, StringComparison.Ordinal)))
+                if (LogContains(harness, x => x.Message.Contains(fragment, StringComparison.Ordinal)))
                 {
                     return;
                 }
@@ -883,6 +883,30 @@ namespace ArchiveFixer.Tests
             }
 
             Assert.Fail($"等了 5 秒也没等到那条日志：{fragment}。实际日志：" + DescribeLogs(harness));
+        }
+
+        /// <summary>
+        /// 读一眼日志里有没有满足条件的那一条 —— **产品侧在后台线程 append 时也不会炸**。
+        ///
+        /// <para>为什么要有它（AGENTS §11.2 记的那条已知 flaky，2026-10-01 连着两次全量都红在这一行）：
+        /// 产品侧往 <c>LogService.Logs</c> 里 append，而这里在枚举它 —— <c>List&lt;T&gt;</c> 的枚举器带
+        /// 版本号检查，正好撞上 append 就抛 <c>Collection was modified; enumeration operation may not execute</c>。
+        /// 那是**测试自己的竞态**（产品在正常写日志），不是被测行为出错。</para>
+        ///
+        /// <para>⛔ 这里只把"读一眼"做成容忍竞态：等待时长、断言、被等的日志内容一个字没改 ——
+        /// 真等不到那条日志照样 `Assert.Fail`，⛔ 不是把红改成绿。</para>
+        /// </summary>
+        private static bool LogContains(Harness harness, Func<OperationLogItem, bool> predicate)
+        {
+            try
+            {
+                return harness.Log.Logs.Any(predicate);
+            }
+            catch (InvalidOperationException)
+            {
+                // 正好撞上产品侧 append：这一轮当作"还没出现"，下一轮再读。
+                return false;
+            }
         }
 
         /// <summary>假的文件夹选择器（只覆盖"用户挑好了哪个目录"这一步，其余行为与真实的一致）。</summary>
