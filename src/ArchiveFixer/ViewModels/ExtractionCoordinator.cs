@@ -7024,60 +7024,15 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         /// <returns>true = 已经跳过（调用方必须立刻 return，什么都不许做）。</returns>
         /// <summary>
-        /// 这一趟**真解出来的东西**够不够证明"密码是对的"（⛔ 只数事实，不比任何文案）。
+        /// 这一趟**真解出来的东西**够不够证明"密码是对的"。
         ///
-        /// <para>判据与理由（用户 2026-10-01 真机 `giu910`，17.7 GiB 的 7z `-mhe`）：</para>
-        /// <list type="bullet">
-        /// <item><description><b>密码错</b>的签名：第一份数据就过不了（7-Zip 在加密流上判死），
-        /// 暂存目录里只留 0 字节桩 / 至多一个文件 —— 这一档**必须继续试下一个候选**（正确的密码可能排在后面）。</description></item>
-        /// <item><description><b>密码对、有个别文件坏了</b>的签名：整个包基本都解了出来（真机那一单 557 个文件、
-        /// 只死在一个 mp4 的 CRC 上）—— 这一档再试密码**没有任何意义**。</description></item>
-        /// </list>
-        ///
-        /// <para>所以门槛是"**至少两个文件、且字节数 &gt; 0**"：一个文件/零字节都按老口径继续试候选（保守档），
-        /// 只有"真解出了大半个包"才敢下这个结论。</para>
+        /// <para>判据（为什么是"至少两个非空文件"、为什么⛔ 不许放宽）**唯一出口**
+        /// <see cref="ProducedContentGate"/> —— 单层这条路与递归那条路（<c>RecursiveExtractor</c>）
+        /// 问的是同一个方法，⛔ 不许各写一份（2026-10-01 只接了单层那条路，
+        /// 而真机 `giu910` 走的是递归那条 ⇒ 修复等于没生效，用户白等 13 分钟）。</para>
         /// </summary>
-        private static bool TryMeasureProducedContent(string? directory, out int files, out long bytes)
-        {
-            files = 0;
-            bytes = 0;
-
-            try
-            {
-                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-                {
-                    return false;
-                }
-
-                foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-                {
-                    long length;
-
-                    try
-                    {
-                        length = new FileInfo(file).Length;
-                    }
-                    catch
-                    {
-                        continue;
-                    }
-
-                    if (length <= 0)
-                    {
-                        continue;   // 0 字节桩文件不算"解出了东西"（错密码的典型签名）
-                    }
-
-                    files++;
-                    bytes += length;
-                }
-            }
-            catch
-            {
-                return false;   // 数不出来 ⇒ 按老口径办（继续试候选），宁可不省这一步
-            }
-
-            return files >= 2 && bytes > 0;
-        }
+        private static bool TryMeasureProducedContent(string? directory, out int files, out long bytes) =>
+            ProducedContentGate.TryMeasure(directory, out files, out bytes);
 
         private bool SkipWhenAnotherTaskOwnsThisVolumeGroup(ArchiveTask task)
         {

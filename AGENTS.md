@@ -207,7 +207,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2312 条（2309 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2315 条（2312 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -267,8 +267,14 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - **入口第三档**：`NormalizeDisguisedVolumeNamesAsync` 的判据 = 名字带卷标记 **或** 账上归过组 **或** `VolumeNameRepair.HasSpannedZipTailNearby(自己)` —— 真机那一组**扫描期归组实测 0 组**、名字里也没有卷标记，少了第三档这套算法压根不会被问到。
   - **「缺的是末片」诊断**：清一色满片 + 恰好一片开头是 `PK\x07\x08PK\x03\x04` ⇒ 结论是缺**末片**（`.zip`），由 `VolumeNameRepairPlan.SpannedTailMissing` 带出去写一行 INFO（用户要的"在引擎报缺卷之前就说清缺的是第几片"）。
   - ⛔ **统一算法一个字没动，它是保底**：索引路不适用（不是跨盘 zip / 片数 < 3 / 候选对不上）时返回 `null` 原样往下走；判不出来只出结论、**一个字节不动**。
+  - ⛔ **两道"ZIP64 收尾"的旧闸门已经拆掉**（用户 2026-10-01 真机 `一只顶美.z删除ip`，26.6 GB 的 PKZIP 跨盘末片；见 `docs/真机事故复盘.md` §44.2）：**跨盘 zip 只要超过 4 GiB，偏移就放不进 32 位字段 ⇒ 生产者必然在"中央目录"与"EOCD"之间插一段 ZIP64 收尾（记录 56 + 定位器 20 = 76 字节）**。以前两处都不认它：
+    - `Detection/EmbeddedArchiveDetector` 的 `if (!hasZip64)` 把这一档**整档跳过**（那道闸门当年是为了躲一次越界，而 `TryEvaluateSplitZipTail` 后来改成全用绝对偏移读，越界早就不成立）⇒ 末片被报 `Unknown`；
+    - `Detection/SpannedZipIndex` 要求"中央目录**正好**接在 EOCD 前面"⇒ 专属算法在真机大包上一枪不放。
+    ⇒ 后果链（真机实测）：末片被当**内容物**留下 → 同组 5 卷被当过程物收进其余物 → 一键扫描第 1 层「没有发现可继续解压的内层包」→ 链尾 ⇒ **其余物 5 项 25 GB 被整份永久删除**。⛔ 改完在真机残件上只读复核：`Unknown` → `ZIP_SPANNED`、索引读出 **250 个锚点 / 共 6 片**。
+  - ⚠ **仍未做**：更一般的那道保险 —— 「其余物里放着某分卷组的一片、而同组另一片还在成品目录里 ⇒ **绝不允许整份删除其余物**」还没加（上面那条红线目前只覆盖"改名/搬运计划"那一档）。
 - ⛔ **「密码已经证实」之后失败 = 数据层面，不许再试密码候选**（用户 2026-10-01 真机 `giu910`，19 GB 的 7z `-mhe`；用户原话「**为什么试了密码之后再去试一次，我说过要试密码的话要在最开始的时候，而不是解压完，这才 20G，大一点你这就是在浪费用户时间**」）：现场 = 候选 3 把整包解到 98%（13 分钟）、只死在一个 mp4 的 `CRC Failed in encrypted file`；老口径把这一句当成"这个候选不对" ⇒ **解压完又回去试候选 4..10**、13 分钟产物全扔、报「密码错误」。
-  - 判据唯一出口 `ExtractionCoordinator.TryMeasureProducedContent`（**只数事实**：暂存目录里**非空文件数 ≥ 2 且字节 > 0**）—— 「密码错」的签名是第一份数据就过不去（0 字节桩 / 至多一个文件），「密码对、个别文件坏」的签名是整个包基本都解出来了。
+  - 判据唯一出口 `Extraction/ProducedContentGate`（**只数事实**：产物目录里**非空文件数 ≥ 2 且字节 > 0**）—— 「密码错」的签名是第一份数据就过不去（0 字节桩 / 至多一个文件），「密码对、个别文件坏」的签名是整个包基本都解出来了。
+    - ⛔ **两条跑解压的路都必须问它**：单层 `ExtractionCoordinator` 与递归 `RecursiveExtractor`。2026-10-01 第一版只接了单层那条，而真机 `giu910` 走的是**递归**那条（SingleChain）⇒ **用户当晚重跑一次，13 分钟又白扔一遍、还是报「密码错误」**（见 `docs/真机事故复盘.md` §44.1）。⛔ 判据只此一处，别再各写一份。
   - 命中 ⇒ 两个分支（`WrongPassword` 与两义档 `PasswordOrCorrupted`）**当场 break**，收场落 `StatusText.PasswordProvenDataCorruptedFormat`（「文件损坏：密码已经证实是对的……换密码不会改变结果」）、`PasswordStatus=PasswordCorrect`、`Outcome=Failed`。
   - ⛔ **保守边界不许放宽**：只解出一个文件 / 零字节桩 / 数不出来 ⇒ 一律按老口径**继续试候选**（"11 个候选只试了第 1 个"的坑）。用例 `ExtractionPipelineFixTests.解出了大半个包之后失败_不再当密码候选不对_也不再往下试候选` + 对照 `只解出一个文件时_仍按老口径继续试下一个候选`。
   - ⚠ 缺口：那 13 分钟解出来的 557 个文件**仍然被丢弃**（完整性判不出 ⇒ 不发布）；"按「部分完成」发布已解出的内容"是**下一步**（动的是发布那条不可逆路径）。

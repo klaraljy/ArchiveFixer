@@ -111,6 +111,21 @@ namespace ArchiveFixer.Detection
         /// <summary>跨盘标记 <c>PK\x07\x08</c>（真 PKZIP 跨盘的第 1 片以它开头，实测）。</summary>
         private const uint SpannedMarkerSignature = 0x08074B50;
 
+        /// <summary>ZIP64 EOCD 记录签名 <c>PK\x06\x06</c>。</summary>
+        private const uint Zip64EocdRecordSignature = 0x06064B50;
+
+        /// <summary>ZIP64 EOCD 定位器签名 <c>PK\x06\x07</c>。</summary>
+        private const uint Zip64EocdLocatorSignature = 0x07064B50;
+
+        /// <summary>ZIP64 EOCD 记录定长（56 字节）。</summary>
+        private const int Zip64EocdRecordSize = 56;
+
+        /// <summary>ZIP64 EOCD 定位器定长（20 字节）。</summary>
+        private const int Zip64EocdLocatorSize = 20;
+
+        /// <summary>EOCD 前面可能隔着的一整段 ZIP64 收尾（记录 + 定位器 = 76 字节）。</summary>
+        private const int Zip64FooterLength = Zip64EocdRecordSize + Zip64EocdLocatorSize;
+
         /// <summary>中央目录一次读进内存的上限（条目极多的大包才会有这么大；超了如实判不出）。</summary>
         private const int CentralDirectoryReadLimit = 32 * 1024 * 1024;
 
@@ -224,8 +239,27 @@ namespace ArchiveFixer.Detection
                 return null;
             }
 
+            /*
+             * 中央目录必须**紧贴在 EOCD 之前** —— 但中间允许隔着 ZIP64 收尾
+             * （ZIP64 EOCD 记录 56 + 定位器 20 = 76 字节）。
+             *
+             * ⛔ 老口径写的是"必须正好接在 EOCD 前面"（差值必须为 0），于是**任何跨盘 zip 只要超过 4 GiB**
+             * （偏移/大小放不进 32 位 ⇒ 生产者必然写 ZIP64 收尾）在这里全部判不出 ——
+             * 真机 `一只顶美.z删除ip`（26.6 GB 的 PKZIP 跨盘末片）就是这样被判死的：
+             * 中央目录结束在 1,621,744,686，EOCD 从 1,621,744,762 开始，中间正好 76 字节的 ZIP64 收尾。
+             * 这一档必须认，否则"专属算法"在真机的大包上一枪不放。
+             */
+            long zip64Footer = 0;
+
+            if (eocd >= Zip64FooterLength
+                && IsZip64EocdLocator(tail, eocd - Zip64EocdLocatorSize)
+                && IsZip64EocdRecord(tail, eocd - Zip64FooterLength))
+            {
+                zip64Footer = Zip64FooterLength;
+            }
+
             if (centralDirectoryOffset > length
-                || centralDirectoryOffset + centralDirectorySize != length - window + eocd)
+                || centralDirectoryOffset + centralDirectorySize != length - window + eocd - zip64Footer)
             {
                 return null;
             }
@@ -600,6 +634,24 @@ namespace ArchiveFixer.Detection
                 && BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(0, 4)) == SpannedMarkerSignature
                 && BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(4, 4)) == LocalHeaderSignature;
         }
+
+        /// <summary>
+        /// 从已经读进内存的尾部窗口里认 ZIP64 收尾的两条签名（判据只此一处）。
+        ///
+        /// <para>为什么必须认它：跨盘 zip 一旦超过 4 GiB，偏移就放不进 EOCD 的 32 位字段，
+        /// 生产者必然在"中央目录"与"EOCD"之间插一段 ZIP64 收尾（记录 56 + 定位器 20）。
+        /// 不认这一段的直接后果是"专属算法"在所有真机大包上一枪不放。</para>
+        /// </summary>
+        private static bool IsZip64EocdRecord(byte[] tail, int index) =>
+            index >= 0
+            && index + 4 <= tail.Length
+            && BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(index, 4)) == Zip64EocdRecordSignature;
+
+        /// <summary>ZIP64 EOCD 定位器 <c>PK\x06\x07</c>（见上一条说明）。</summary>
+        private static bool IsZip64EocdLocator(byte[] tail, int index) =>
+            index >= 0
+            && index + 4 <= tail.Length
+            && BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(index, 4)) == Zip64EocdLocatorSignature;
 
         private static byte[] ReadBytes(string path, long offset, int count)
         {

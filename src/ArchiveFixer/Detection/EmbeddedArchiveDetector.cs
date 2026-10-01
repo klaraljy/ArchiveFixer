@@ -409,12 +409,16 @@ namespace ArchiveFixer.Detection
              * 而它**确实是一片归档**，只是"整组"要靠标准卷名（`X.zip` + `X.z01`）才能重装。
              * 判据只用**盘号事实**（ZIP 规范里"我是一片分卷"的硬证据）。
              *
-             * ⚠ 位置必须排在 ZIP64 那一档**之后**：`TryEvaluateCandidate` 只读了"候选自己那 98 字节"
-             * （ZIP64 收尾 76 + EOCD 22），没有 ZIP64 收尾时 `tail[eocdIndex - 76]` 是**越界**的 ——
-             * 先跑这一档会抛 `ArgumentOutOfRangeException`，而外层 catch 把它变成"没找到内嵌归档"，
-             * 结论就退回 `Unknown`（写完先跑用例才发现，原文失败：`末片必须被认成归档`）。
+             * ⚠ 位置必须排在 ZIP64 那一档**之后**（ZIP64 的解释先试，救得回真内嵌包）。
+             *
+             * ⛔ **`!hasZip64` 这道旧闸门已经拆掉**（用户 2026-10-01 真机 `一只顶美.z删除ip`，
+             * 26.6 GB 的 PKZIP 跨盘 zip 末片）：它把"有 ZIP64 收尾"的跨盘末片**整档跳过**，
+             * 而跨盘包一旦超过 4 GiB 就必然带 ZIP64 收尾（偏移放不进 32 位）—— 于是
+             * 真机上这一片被报成 `Unknown`（`文件尾部没有自洽的 ZIP 收尾`），
+             * 接着被当成**内容物**留下，同组那 5 卷却进了其余物、最后被整份删掉。
+             * 那道闸门当年是为了躲一次越界（"没有 ZIP64 收尾时 `tail[eocdIndex - 76]` 越界"），
+             * 而 `TryEvaluateSplitZipTail` 后来改成**全用绝对偏移读**（见那里的说明），越界这条早就不成立。
              */
-            if (!hasZip64)
             {
                 EmbeddedArchiveInfo? splitTail = TryEvaluateSplitZipTail(
                     stream,

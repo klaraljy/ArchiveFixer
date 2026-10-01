@@ -816,6 +816,168 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("Cannot open encrypted archive", result.Layers[0].Message, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// **递归那条路也要认「密码已被这一趟解压证实」**（用户 2026-10-01 真机 `giu910` 重跑一次又白等 13 分钟）。
+        ///
+        /// <para>现场：那一档修复先只接在**单层**候选循环上（`ExtractionCoordinator`），
+        /// 而真机 `giu910` 走的是**递归**那条（`SingleChain`）—— 于是候选 3 把 17.7 GiB 解到 98%、
+        /// 只死在一个 mp4 的 CRC 上，程序照样把它当成"这个密码候选不对"，回去把候选 4..10 又试一遍，
+        /// 13 分钟的产物全扔、结论写「密码错误」。用户原话：
+        /// 「**为什么试了密码之后再去试一次，我说过要试密码的话要在最开始的时候**」。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>RecursiveExtractor</c> 里那一档（<see cref="ProducedContentGate"/> 那个
+        /// <c>if</c>）撤掉 → 本用例立刻变红（只试了 1 个候选变成 3 个候选全试完、结论从"压缩包损坏"
+        /// 变回"密码错误"）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 递归候选循环_解出了大半个包之后失败_不再试下一个候选()
+        {
+            string source = Path.Combine(_root, "crc-proven-source.7z");
+            File.WriteAllText(source, "not a real archive; the engine is fake");
+
+            var engine = new FakeEngine();
+            int extractCalls = 0;
+
+            engine.OnExtractAsync = (request, options) =>
+            {
+                extractCalls++;
+
+                // 第一趟（正确密码）：真解出两个非空文件才在一个文件上 CRC 失败 —— 真机那一单的形状。
+                Directory.CreateDirectory(request.OutputPath!);
+                File.WriteAllBytes(Path.Combine(request.OutputPath!, "good-1.mp4"), new byte[8192]);
+                File.WriteAllBytes(Path.Combine(request.OutputPath!, "good-2.mp4"), new byte[4096]);
+
+                return Task.FromResult(new ArchiveOperationResult
+                {
+                    Success = false,
+                    Status = StatusText.ExtractFailed,
+                    Message = "Sub items Errors: 1 | ERROR: CRC Failed in encrypted file. Wrong password? : bad.mp4",
+                    DetectedErrorType = "WrongPassword",
+                    EngineId = engine.Id
+                });
+            };
+
+            var task = new ArchiveTask(source);
+            var extractor = new RecursiveExtractor(
+                engine,
+                new MagicAwareProber(),
+                _ => new[] { "right-password", "wrong-1", "wrong-2" });
+
+            RecursionResult result = await extractor.ExtractAsync(
+                task,
+                Path.Combine(_root, "out-crc-proven"),
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            // ⛔ 一个候选就够：密码已经被这一趟解压本身证明了，再试下去纯粹是浪费用户的时间。
+            Assert.Equal(1, extractCalls);
+
+            // 结论必须落在"数据坏了"，⛔ 不是「密码错误」（否则用户会拿着密码本白核对半天）。
+            Assert.Equal(RecursionStopReason.Corrupted, result.StopReason);
+            Assert.Contains("密码已经证实是对的", result.Layers[0].Message, StringComparison.Ordinal);
+            Assert.Contains("CRC Failed", result.Layers[0].Message, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// 对照：**只解出一个文件**时仍按老口径继续试下一个候选（保守边界，⛔ 不许放宽）。
+        ///
+        /// <para>「错密码」与「密码对、文件坏」在这一档上分不开 —— 真机那 10 个错候选里就有留下一个文件的。
+        /// 所以门槛是"至少两个非空文件"，一个文件必须继续试。</para>
+        /// </summary>
+        [Fact]
+        public async Task 递归候选循环_只解出一个文件时_仍按老口径继续试下一个候选()
+        {
+            string source = Path.Combine(_root, "one-file-source.7z");
+            File.WriteAllText(source, "not a real archive; the engine is fake");
+
+            var engine = new FakeEngine();
+            int extractCalls = 0;
+
+            engine.OnExtractAsync = (request, options) =>
+            {
+                extractCalls++;
+
+                Directory.CreateDirectory(request.OutputPath!);
+                File.WriteAllBytes(Path.Combine(request.OutputPath!, "only-one.bin"), new byte[4096]);
+
+                return Task.FromResult(new ArchiveOperationResult
+                {
+                    Success = false,
+                    Status = StatusText.WrongPassword,
+                    Message = "Cannot open encrypted archive. Wrong password?",
+                    DetectedErrorType = "WrongPassword",
+                    EngineId = engine.Id
+                });
+            };
+
+            var task = new ArchiveTask(source);
+            var extractor = new RecursiveExtractor(
+                engine,
+                new MagicAwareProber(),
+                _ => new[] { "c1", "c2", "c3" });
+
+            RecursionResult result = await extractor.ExtractAsync(
+                task,
+                Path.Combine(_root, "out-one-file"),
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.Equal(3, extractCalls);
+            Assert.Equal(RecursionStopReason.WrongPassword, result.StopReason);
+        }
+
+        /// <summary>
+        /// 两义那一档（引擎说"密码可能不对、也可能数据坏了"）在**真解出了内容**之后当场收敛成数据损坏 ——
+        /// 密码已经不需要再猜了（用户 2026-10-01 真机 `giu910` 走的就是 7-Zip 那句
+        /// `CRC Failed in encrypted file. Wrong password?`）。
+        /// </summary>
+        [Fact]
+        public async Task 递归候选循环_两义那一档解出了内容之后_当场收敛成数据损坏()
+        {
+            string source = Path.Combine(_root, "ambiguous-proven-source.rar");
+            File.WriteAllText(source, "not a real archive; the engine is fake");
+
+            var engine = new FakeEngine();
+            int extractCalls = 0;
+
+            engine.OnExtractAsync = (request, options) =>
+            {
+                extractCalls++;
+
+                Directory.CreateDirectory(request.OutputPath!);
+                File.WriteAllBytes(Path.Combine(request.OutputPath!, "a.bin"), new byte[1024]);
+                File.WriteAllBytes(Path.Combine(request.OutputPath!, "b.bin"), new byte[2048]);
+
+                return Task.FromResult(new ArchiveOperationResult
+                {
+                    Success = false,
+                    Status = StatusText.PasswordOrCorrupted,
+                    Message = "在加密文件 X 里校验和错误。文件已损坏或密码错误。",
+                    DetectedErrorType = "PasswordOrCorrupted",
+                    EngineId = engine.Id
+                });
+            };
+
+            var task = new ArchiveTask(source);
+            var extractor = new RecursiveExtractor(
+                engine,
+                new MagicAwareProber(),
+                _ => new[] { "p1", "p2", "p3" });
+
+            RecursionResult result = await extractor.ExtractAsync(
+                task,
+                Path.Combine(_root, "out-ambiguous-proven"),
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None);
+
+            Assert.Equal(1, extractCalls);
+            Assert.Equal(RecursionStopReason.Corrupted, result.StopReason);
+            Assert.Contains("密码已经证实是对的", result.Layers[0].Message, StringComparison.Ordinal);
+        }
+
         [SevenZipFact]
         public async Task 密码_候选还有剩余时报PasswordAttemptsExceeded()
         {

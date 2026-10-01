@@ -1015,6 +1015,37 @@ namespace ArchiveFixer.Extraction
                         RecursionStopReason.Corrupted);
                 }
 
+                /*
+                 * ===== 「密码其实已经对了，坏的是数据」这一档（用户 2026-10-01 真机 `giu910`）=====
+                 *
+                 * 判据与单层路径（`ExtractionCoordinator` 的候选循环）**同一个出口**
+                 * （<see cref="ProducedContentGate"/>）：这一趟在**这一层的产物目录**里真解出了多少东西。
+                 *
+                 * ⚠ 为什么必须补在这里：那一档修复（2026-10-01）先只接在**单层**那条路上，
+                 * 而真机 `giu910` 走的**是这一条**（`SingleChain` 递归）—— 结果用户当晚重跑一次，
+                 * 13 分钟、17.7 GiB 又白扔了一遍，报的还是「密码错误」（他原话：
+                 * 「为什么试了密码之后再去试一次，我说过要试密码的话要在最开始的时候」）。
+                 *
+                 * 两义那一档（`IsPasswordOrCorrupted`）一并覆盖：只要这一趟**真解出了内容**，
+                 * 两义就当场收敛成"数据坏了"——密码已经不需要再猜。
+                 */
+                if ((result.IsWrongPassword || result.IsNeedPassword || result.IsPasswordOrCorrupted)
+                    && ProducedContentGate.TryMeasure(item.Layer.OutputPath, out int provenFiles, out long provenBytes))
+                {
+                    string provenMessage = string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.PasswordProvenDataCorruptedFormat,
+                            provenFiles,
+                            provenBytes)
+                        + "（引擎原话：" + PasswordMasker.Sanitize(result.Message) + "）";
+
+                    Log("WARN", $"{layerLabel}：{provenMessage}");
+
+                    return LayerOutcome.Stop(
+                        BuildLayerReport(item, result, succeededPassword: null, overrideMessage: provenMessage),
+                        RecursionStopReason.Corrupted);
+                }
+
                 // 需要密码 / 密码错误 → 这个候选没用了，试下一个。
                 if (result.IsWrongPassword || result.IsNeedPassword)
                 {
