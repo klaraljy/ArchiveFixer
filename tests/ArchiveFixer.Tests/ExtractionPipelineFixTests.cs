@@ -358,6 +358,57 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("******", aggregated[0], StringComparison.Ordinal);
         }
 
+        // ================================================================ 先测试再解压（2026-10-01）
+
+        /// <summary>
+        /// **「先测试再解压」这条路的两义档**：引擎说"文件已损坏或密码错误"时要**继续试下一个候选**
+        /// （⛔ 不是 break 当成最终结论）。
+        ///
+        /// <para>为什么专门补这一条：这条路（<c>settings.TestBeforeExtract = true</c>）在整个测试套件里
+        /// 原来**一条用例都没有** —— 而它是用户能开的设置项、真机第 37 条要求的正是"先试密码再解压"，
+        /// 谁改坏了它都不会有人知道。</para>
+        ///
+        /// <para>判据全用机器事实：<c>TestAsync</c> 被调用**不止一次**（= 真的换了下个候选）、
+        /// 终态是两义档、且**不是**"密码错误"（⛔ 引擎只说了「可能」，不许替它下结论）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 先测试再解压_两义档要继续试下一个候选_不许当成最终结论()
+        {
+            Harness harness = CreateHarness(
+                passwords: new[] { "候选密码1", "候选密码2" },
+                configure: settings => settings.TestBeforeExtract = true);
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("test-first-two-way.rar"));
+
+            int testCalls = 0;
+
+            harness.Engine.OnTestAsync = _ =>
+            {
+                testCalls++;
+                return Task.FromResult(PasswordOrCorrupted());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            // ① 结论是两义档 —— ⛔ 既不是"密码错误"（会把真损坏说成密码问题），也不是"文件损坏"。
+            Assert.Equal(StatusText.PasswordOrCorrupted, task.Status);
+            Assert.NotEqual(StatusText.WrongPassword, task.Status);
+            Assert.NotEqual(StatusText.Corrupted, task.Status);
+
+            // ② 真的换了下个候选：测试被调用不止一次（旧口径"第 1 个候选就 break"在这里会红）。
+            Assert.True(
+                testCalls >= 2,
+                $"两义档必须继续试下一个候选（⛔ 不许 break 当结论），实际只试了 {testCalls} 次");
+
+            // ③ 一次解压都不该发生：测试没过就不进解压那一步。
+            Assert.Empty(harness.Engine.ExtractCalls);
+
+            // ④ 两义那一档必须写清"引擎只说了可能"（比泛泛的一句更能回答用户"那我该干什么"）。
+            Assert.Contains(
+                harness.Log.Logs,
+                x => x.Message.Contains("可能", StringComparison.Ordinal));
+        }
+
         // ================================================================ P1-4：密码尝试上限
 
         /// <summary>
@@ -1770,6 +1821,12 @@ namespace ArchiveFixer.Tests
 
             public Func<ArchiveRequest, Task<ArchiveListResult>>? OnListAsync { get; set; }
 
+            /// <summary>
+            /// 「先测试再解压」（<c>settings.TestBeforeExtract = true</c>）那条路要可控地给出结论 ——
+            /// 不配它时行为与以前逐字相同（一律"测试通过"）。
+            /// </summary>
+            public Func<ArchiveRequest, Task<ArchiveOperationResult>>? OnTestAsync { get; set; }
+
             public string Id => "fake";
 
             public string DisplayName => "假引擎";
@@ -1801,7 +1858,9 @@ namespace ArchiveFixer.Tests
 
             public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
             {
-                return Task.FromResult(Succeeded());
+                return OnTestAsync != null
+                    ? OnTestAsync(request)
+                    : Task.FromResult(Succeeded());
             }
 
             public Task<ArchiveOperationResult> ExtractAsync(
