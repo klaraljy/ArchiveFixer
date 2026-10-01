@@ -68,6 +68,16 @@ namespace ArchiveFixer.Extraction
         public bool ProbeNeedsPassword { get; init; }
 
         /// <summary>
+        /// 这一份"不能改"是**有结论的**：同目录里那些片全是满片、其中一片开头就是跨盘标记
+        /// ⇒ 这是一组跨盘 zip，缺的是**末片**（用户要的"说清缺的是第几片"）。
+        ///
+        /// <para>为什么单独立一位：调用方只对"值得说一句"的结论写日志（第 45 条：成功的任务只留一行），
+        /// 而这个结论与"试开跑过"是两件事 —— 它一次引擎都没调，但用户必须看到
+        /// "缺的是末片"而不是含糊的「分卷缺失」。</para>
+        /// </summary>
+        public bool SpannedTailMissing { get; init; }
+
+        /// <summary>
         /// 这次要改的**每一卷**（用户 2026-09-28 追加：网盘给整组的名字都缀了「删除」，
         /// 只改第一卷没用 —— 7-Zip 找 `.002` 时名字对不上，照样报缺卷）。
         ///
@@ -368,12 +378,18 @@ namespace ArchiveFixer.Extraction
         /// 这一单的目标工作区根（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>）。空 = 调用方拿不到工作区根
         /// ⇒ 不做试开（如实报"无法确认"）。
         /// </param>
+        /// <param name="passwordCandidates">
+        /// 密码候选（**只给值、只活在内存里**）。跨盘 zip 那一档要用它：加密的包只有用对的密码
+        /// 才验得出"这几片的先后对不对"（顺序错与密码错在引擎那儿是两句话，但没密码就两句话都听不到）。
+        /// 空 = 手上没有密码 ⇒ 加密的包只能如实报"顺序没法验证"。
+        /// </param>
         /// <param name="cancellationToken">取消。</param>
         public static async Task<VolumeNameRepairPlan> PlanByContentAsync(
             string? currentPath,
             IEnumerable<VolumeCandidate>? filesInDirectory,
             Engines.IArchiveEngine engine,
             string? workRootDirectory,
+            IReadOnlyList<string>? passwordCandidates = null,
             CancellationToken cancellationToken = default)
         {
             string path = currentPath ?? string.Empty;
@@ -384,6 +400,30 @@ namespace ArchiveFixer.Extraction
             }
 
             string fileName = Path.GetFileName(path);
+
+            /*
+             * ① **专属算法**：跨盘 zip 的"按归档自己的索引定盘"（用户 2026-10-01 真机 `FFF` 那一组 7 片）。
+             *
+             * 为什么它必须排在下面那三条统一算法的**前面**：跨盘 zip 的末片里有中央目录，
+             * 而中央目录的每一条都写着"这个文件的本地头在**第几盘**、离那一盘开头多少字节" ——
+             * 那是归档自己说的话，比"名字里的卷号""尺寸规律""试开"都硬，而且**不需要名字、不需要密码**。
+             * 名字路/内容路都判不出来的那一档（名字里一个卷号都没有），只有它能判。
+             *
+             * ⚠ 它**不抢**统一算法的活：这一档不适用（不是跨盘 zip / 片数 < 3 / 剩的候选对不上）时返回 null，
+             * 一律原样往下走 —— 老路子（RAR 内容卷号、跨盘 zip 两片消去法、7z 试开）一个字都没动。
+             */
+            VolumeNameRepairPlan? byIndex = await PlanSpannedZipByIndexAsync(
+                path,
+                filesInDirectory,
+                engine,
+                workRootDirectory,
+                passwordCandidates,
+                cancellationToken).ConfigureAwait(false);
+
+            if (byIndex != null)
+            {
+                return byIndex;
+            }
 
             /*
              * 按**内容**分派，⛔ 不按后缀、也不按"开头那几个字节"：跨盘 zip 的末片是从数据中间切出来的，
@@ -422,6 +462,343 @@ namespace ArchiveFixer.Extraction
                     return Cannot(path, StatusText.VolumeRepairContentNotAVolumeMember);
             }
         }
+
+        /// <summary>
+        /// 试拼时最多允许"定不下来"的片数：3 片 = 6 种排列，再多就不是"试一下"而是暴力搜索了
+        /// （每一种排列都要让引擎真解码一遍整组；一组 675 MB 的包，一次就是几十秒）。
+        /// </summary>
+        private const int SpannedZipTrialMaxUndecidedDisks = 3;
+
+        /// <summary>
+        /// **专属算法：跨盘 zip 按归档自己的索引定盘**（用户 2026-10-01 真机 <c>FFF</c> 那一组）。
+        ///
+        /// <para>三步，一步比一步软：</para>
+        /// <list type="number">
+        /// <item><description><b>索引定盘（硬）</b>：末片的中央目录写着"每个文件的本地头在**第几盘**、
+        /// 离那一盘开头多少字节" ⇒ 把每个候选文件当第 k 盘，去那个偏移处看是不是本地头、名字对不对得上。
+        /// 对得上就是它 —— <b>不看名字、不用引擎、不用密码</b>。全钉住时直接出计划。</description></item>
+        /// <item><description><b>缺卷（也硬）</b>：某一盘有锚点、可整个目录里没有一份对得上 ⇒ **那一片不在手上**，
+        /// 如实点名缺第几片（⛔ 不是"判不出"）。</description></item>
+        /// <item><description><b>剩下的几片（软）</b>：某一片里"一个文件都没开始"（整段夹在别的数据中间）⇒
+        /// 它没有身份证，和另一片同样空白的片**在字节上完全对称**。这时才请引擎**试拼**：
+        /// 几片就是几种排列（上限 3 片），硬链接进工作区、按标准卷名排好，让引擎**测试**一遍
+        /// （顺序错了必然 CRC 错；⛔ 列目录没用 —— 中央目录在末片里、不看中间几片的数据）。</description></item>
+        /// </list>
+        ///
+        /// <para>⛔ 这一档**不抢**统一算法的活：不适用（不是跨盘 zip / 片数 &lt; 3 / 候选对不上号）时返回
+        /// <c>null</c>，调用方原样往下走；判不出来时也**只改名一个字节都不动**。</para>
+        /// </summary>
+        private static async Task<VolumeNameRepairPlan?> PlanSpannedZipByIndexAsync(
+            string path,
+            IEnumerable<VolumeCandidate>? filesInDirectory,
+            Engines.IArchiveEngine engine,
+            string? workRootDirectory,
+            IReadOnlyList<string>? passwordCandidates,
+            CancellationToken cancellationToken)
+        {
+            List<VolumeCandidate> candidates = (filesInDirectory ?? Array.Empty<VolumeCandidate>())
+                .Where(c => c != null && !string.IsNullOrWhiteSpace(c.Path))
+                .ToList();
+
+            if (candidates.Count < 3)
+            {
+                // 两片那一档统一算法本来就会（消去法），这一档不抢。
+                return null;
+            }
+
+            /*
+             * ① 同目录里找出"自述是跨盘 zip 末片"的那一份 —— 判据**只有一处**：
+             * VolumeNumberFromContent.Read（EOCD 盘号 > 0 ⇒ Number = 盘号 + 1）。
+             * 目录里出现两个"末片"就说不清哪一片才是末片 ⇒ 不抢，交给统一算法（它也会如实拒绝）。
+             */
+            Detection.VolumeNumberReading? tail = null;
+
+            foreach (VolumeCandidate candidate in candidates)
+            {
+                Detection.VolumeNumberReading reading = Detection.VolumeNumberFromContent.Read(candidate.Path);
+
+                if (reading.Format != Detection.VolumeContentFormat.Zip
+                    || !reading.IsVolumeMember
+                    || reading.Number == null)
+                {
+                    continue;
+                }
+
+                if (tail != null)
+                {
+                    return null;
+                }
+
+                tail = reading;
+            }
+
+            if (tail == null)
+            {
+                /*
+                 * 末片不在了吗？（用户要的"说清缺的是第几片"）
+                 *
+                 * 手上的证据只有两条，但两条都硬：① 这些片**彼此等大**（跨盘 zip 的非末片都是切分上限那么大的满片）；
+                 * ② 其中一片的**开头就是跨盘标记** `PK\x07\x08`（真 PKZIP / WinRAR 造的跨盘 zip 第 1 片长这样）。
+                 * 合起来只有一个解释：这是一组跨盘 zip，缺的是**末片**（`.zip` 那一片，它有中央目录、是解压入口）。
+                 * ⛔ 这一档不试开、不改名 —— 只是把"缺什么"说清楚，免得用户去满盘找一个根本不缺的中间片。
+                 */
+                VolumeNameRepairPlan? missingTail = DescribeMissingSpannedTail(path, candidates);
+
+                if (missingTail != null)
+                {
+                    return missingTail;
+                }
+
+                return null;
+            }
+
+            Detection.SpannedZipIndex? index = Detection.SpannedZipIndex.TryRead(tail.Path);
+
+            if (index == null || index.DiskCount < 3)
+            {
+                return null;
+            }
+
+            Detection.SpannedZipPin pin = index.Pin(candidates);
+
+            /*
+             * ⛔ 不自洽（候选池里多了/少了文件、末片比满片还大）⇒ 判不出这一档，原样交给统一算法。
+             * 那**不是**"缺卷"的结论，⛔ 不能拿它去吓用户。
+             */
+            if (!pin.Consistent || !IsInSpannedGroup(pin, path))
+            {
+                return null;
+            }
+
+            // ② 有锚点却没人对得上 ⇒ 那几片**不在手上**：如实点名（这是结论，不是"判不出"）。
+            if (pin.MissingDisks.Count > 0)
+            {
+                return Cannot(
+                    path,
+                    string.Format(
+                        StatusText.VolumeRepairSpannedZipMissingFormat,
+                        pin.DiskCount,
+                        pin.MissingDisks.Count,
+                        string.Join("、", pin.MissingDisks.Select(d => (d + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)))));
+            }
+
+            IReadOnlyList<string>? ordered = pin.AllPinned
+                ? pin.Slots.Select(s => s!).ToList()
+                : null;
+            bool attempted = false;
+
+            // ③ 还有几片定不下来 ⇒ 请引擎试拼（排列数有上限）。
+            if (ordered == null)
+            {
+                if (pin.UndecidedDisks.Count > SpannedZipTrialMaxUndecidedDisks)
+                {
+                    return Cannot(
+                        path,
+                        string.Format(
+                            StatusText.VolumeRepairSpannedZipUndecidedFormat,
+                            pin.DiskCount,
+                            pin.UndecidedDisks.Count));
+                }
+
+                var verifier = new VolumeProbeVerifier(engine);
+                VolumeProbeOutcome probe = await verifier
+                    .VerifySpannedZipOrderAsync(
+                        BuildSpannedZipOrders(pin),
+                        passwordCandidates,
+                        workRootDirectory,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                attempted = probe.Attempted;
+
+                if (!probe.Confirmed)
+                {
+                    /*
+                     * ⛔ "没试"与"试过不成立"必须分开说（与 7z 那条路同一口径）：
+                     * 没有工作区根 / 跨盘 ⇒ 一次都没试，只能如实报"无法确认"。
+                     */
+                    return probe.Attempted
+                        ? Cannot(path, string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason), trialAttempted: true)
+                        : Cannot(path, string.Format(StatusText.VolumeRepairNoProbeFormat, probe.Reason));
+                }
+
+                ordered = probe.OrderedVolumes.Select(v => v.Path).ToList();
+            }
+
+            // ④ 基名从**末片**推（它的标准名就是 `X.zip`），卷名拼法只有 BuildStandardNames 一处。
+            if (!Detection.VolumeNumberFromContent.TryDeriveStem(
+                    tail.Path, Detection.VolumeContentFormat.Zip, out string stem))
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSuggestion, trialAttempted: attempted);
+            }
+
+            IReadOnlyList<string> targetNames = Detection.VolumeNumberFromContent.BuildStandardNames(
+                stem, VolumeNamingFamily.ZipSpanned, ordered.Count);
+
+            if (targetNames.Count != ordered.Count)
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSuggestion, trialAttempted: attempted);
+            }
+
+            var order = new Detection.VolumeGroupOrder
+            {
+                Confirmed = true,
+                Slots = ordered
+                    .Select((volume, i) => new Detection.VolumeGroupSlot { Path = volume, Number = i + 1 })
+                    .ToList(),
+                Fail = Detection.VolumeNumberFail.None,
+                Detail = ordered.Count
+            };
+
+            return BuildPlanFromOrder(path, order, targetNames, trialAttempted: attempted);
+        }
+
+        /// <summary>
+        /// 「末片不在了」这一档的诊断（**只出结论、不动任何文件**）。
+        ///
+        /// <para>判据两条，都要：① 同目录里至少 2 份文件**彼此等大**（满片规律 —— 跨盘 zip 除末片外都是满片）；
+        /// ② 其中**恰好一份**的开头是跨盘标记 + 本地头（<c>PK\x07\x08PK\x03\x04</c>，实测真 PKZIP / WinRAR 的第 1 片）。
+        /// 两条同时成立而目录里又没有一个自述是末片的文件 ⇒ 缺的就是末片。</para>
+        ///
+        /// <para>⚠ 这里用的是"**满片规律**"而不是"末卷更小"：后者**不是普遍成立**
+        /// （实测 WinRAR 在条目比切分大小还大时，末片可以比满片大一倍）—— 拿它当闸门会误判。</para>
+        /// </summary>
+        private static VolumeNameRepairPlan? DescribeMissingSpannedTail(string path, List<VolumeCandidate> candidates)
+        {
+            List<VolumeCandidate> files = candidates
+                .Where(c => c.Size > 0)
+                .ToList();
+
+            if (files.Count < 2)
+            {
+                return null;
+            }
+
+            long full = files
+                .GroupBy(c => c.Size)
+                .OrderByDescending(g => g.Count())
+                .ThenByDescending(g => g.Key)
+                .First()
+                .Key;
+
+            List<VolumeCandidate> fullParts = files.Where(c => c.Size == full).ToList();
+
+            if (fullParts.Count < 2 || fullParts.Count != files.Count)
+            {
+                // 不是"清一色满片"（有别的尺寸混着）⇒ 说不清，交给统一算法。
+                return null;
+            }
+
+            if (!fullParts.Any(c => SamePath(c.Path, path)))
+            {
+                return null;
+            }
+
+            List<string> marked = fullParts.Where(StartsWithSpannedMarker).Select(c => c.Path).ToList();
+
+            if (marked.Count != 1)
+            {
+                return null;
+            }
+
+            return new VolumeNameRepairPlan
+            {
+                CanRepair = false,
+                CurrentPath = path,
+                CurrentFileName = SafeFileName(path),
+                Reason = string.Format(
+                    StatusText.VolumeRepairSpannedZipTailMissingFormat,
+                    fullParts.Count,
+                    full,
+                    SafeFileName(marked[0])),
+                Siblings = fullParts.Select(c => SafeFileName(c.Path)).ToList(),
+                SpannedTailMissing = true
+            };
+        }
+
+        /// <summary>这一份的开头是不是"跨盘标记 + 本地头"（<c>PK\x07\x08PK\x03\x04</c>）。</summary>
+        private static bool StartsWithSpannedMarker(VolumeCandidate candidate)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    candidate.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
+                var head = new byte[8];
+
+                if (stream.Read(head, 0, 8) < 8)
+                {
+                    return false;
+                }
+
+                return head[0] == 0x50 && head[1] == 0x4B && head[2] == 0x07 && head[3] == 0x08
+                    && head[4] == 0x50 && head[5] == 0x4B && head[6] == 0x03 && head[7] == 0x04;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 把"已经钉住的盘"与"剩下那几片的排列"拼成一份份**完整顺序**（每份都是 第 1 片 … 末片）。
+        /// 只有定不下来的盘数 ≤ 3 时才会被调用（最多 6 份）。
+        /// </summary>
+        private static IReadOnlyList<IReadOnlyList<string>> BuildSpannedZipOrders(Detection.SpannedZipPin pin)
+        {
+            var results = new List<IReadOnlyList<string>>();
+            string?[] slots = pin.Slots.ToArray();
+            List<int> free = pin.UndecidedDisks.ToList();
+            List<string> pool = pin.UndecidedCandidates.ToList();
+
+            void Fill(int position, bool[] taken, string[] current)
+            {
+                if (position == free.Count)
+                {
+                    var snapshot = new string[slots.Length];
+
+                    for (int i = 0; i < slots.Length; i++)
+                    {
+                        int freeIndex = free.IndexOf(i);
+                        snapshot[i] = freeIndex >= 0 ? current[freeIndex] : slots[i]!;
+                    }
+
+                    results.Add(snapshot);
+                    return;
+                }
+
+                for (int i = 0; i < pool.Count; i++)
+                {
+                    if (taken[i])
+                    {
+                        continue;
+                    }
+
+                    taken[i] = true;
+                    current[position] = pool[i];
+                    Fill(position + 1, taken, current);
+                    taken[i] = false;
+                }
+            }
+
+            if (free.Count == 0 || pool.Count != free.Count)
+            {
+                return Array.Empty<IReadOnlyList<string>>();
+            }
+
+            Fill(0, new bool[pool.Count], new string[free.Count]);
+
+            return results;
+        }
+
+        /// <summary>手上的这一份在不在这一组里（钉住的片、或者"定不下来"的那几片之一）。</summary>
+        private static bool IsInSpannedGroup(Detection.SpannedZipPin pin, string path) =>
+            pin.Slots.Any(s => SamePath(s, path)) || pin.UndecidedCandidates.Any(p => SamePath(p, path));
+
+        private static bool SamePath(string? a, string? b) =>
+            !string.IsNullOrWhiteSpace(a)
+            && !string.IsNullOrWhiteSpace(b)
+            && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// **内容里带卷号**那一档（RAR 与跨盘 ZIP，用户 2026-09-29 任务）。
@@ -602,7 +979,9 @@ namespace ArchiveFixer.Extraction
         private static VolumeNameRepairPlan BuildPlanFromOrder(
             string path,
             Detection.VolumeGroupOrder order,
-            IReadOnlyList<string> targetNames)
+            IReadOnlyList<string> targetNames,
+            bool trialAttempted = false,
+            bool probeNeedsPassword = false)
         {
             string directory = Path.GetDirectoryName(path) ?? string.Empty;
             var items = new List<VolumeRepairItem>();
@@ -661,7 +1040,9 @@ namespace ArchiveFixer.Extraction
                 SuggestedFileName = self.SuggestedFileName,
                 TargetPath = self.TargetPath,
                 Siblings = items.Select(i => i.CurrentFileName).ToList(),
-                Items = items
+                Items = items,
+                TrialAttempted = trialAttempted,
+                ProbeNeedsPassword = probeNeedsPassword
             };
         }
 
@@ -925,6 +1306,11 @@ namespace ArchiveFixer.Extraction
         /// 内容级认不出来 —— 那种组必须留给名字路（卷标记就在名字里）。判据只问
         /// <see cref="Detection.VolumeNumberFromContent"/> 的结论，这里不另写一套。</para>
         /// </summary>
+        public static bool HasSpannedZipTailNearby(string? anyFileInDirectory) =>
+            HasSpannedZipTailInDirectory(
+                anyFileInDirectory ?? string.Empty,
+                EnumerateFileNamesInDirectory(anyFileInDirectory));
+
         private static bool HasSpannedZipTailInDirectory(string path, IEnumerable<string?>? fileNamesInDirectory)
         {
             string directory = Path.GetDirectoryName(path) ?? string.Empty;

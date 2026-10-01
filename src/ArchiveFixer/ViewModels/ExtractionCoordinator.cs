@@ -6812,6 +6812,14 @@ namespace ArchiveFixer.ViewModels
                 string currentName = FileNameHelper.GetFileName(current);
 
                 /*
+                 * 跨盘 zip 那一档要拿密码去**试拼验证**（末片的中央目录把大部分片钉住了，
+                 * 剩下几片"内容里一个文件都没开始"的，只能靠"按这个顺序真解一遍"来证）。
+                 * 候选与解压那一步**同一套算法**（§9.5 同一件事只有一个出口），
+                 * 密码只活在内存里、绝不进日志（不变量 5）。
+                 */
+                IReadOnlyList<string> volumeTrialPasswords = BuildRecursionPasswordCandidates(current);
+
+                /*
                  * 什么时候值得问"名字那条路"：
                  * ① 自己的名字里带卷标记（老口径）；
                  * ② **账上已经归过组**（`task.IsVolumeGroup`）—— 真机 DDD（用户 2026-10-01 18:09）：
@@ -6819,8 +6827,15 @@ namespace ArchiveFixer.ViewModels
                  *    （`222.z0删1` / `222.z除02` / `222.z文03`）。只按 ① 判 ⇒ 名字那条路**压根不跑**，
                  *    内容那条路又只支持 2 片的跨盘 zip ⇒ 两边都不动 ⇒ 7-Zip 报 `Missing volume : 222.z01`、
                  *    整包解不开（用户原话：「我这次将 zip 多分了几个卷你就弄不了了」）。
+                 * ③ **同目录里躺着一片"自述带盘号的跨盘 zip 末片"** —— 真机 FFF（用户 2026-10-01 19:23）：
+                 *    一组 7 片的名字里**一个卷号都没有**（`222.z0删除A` / `222.删除C` / `222.zDDD` …），
+                 *    扫描期按名字归组得到 **0 组**（他盘上实测就是这个数）⇒ ② 也不成立 ⇒ 这条路又一次
+                 *    压根不会被问到（新写的"按归档自己的索引定盘"再准也轮不到它跑）。
+                 *    这一档的判据只有一条事实：**目录里真有一片自述是末片**（EOCD 盘号 > 0）。
                  */
-                if (FileNameHelper.IsVolumePartFileName(currentName) || task.IsVolumeGroup)
+                if (FileNameHelper.IsVolumePartFileName(currentName)
+                    || task.IsVolumeGroup
+                    || VolumeNameRepair.HasSpannedZipTailNearby(current))
                 {
                     plan = VolumeNameRepair.Plan(
                         current,
@@ -6838,6 +6853,7 @@ namespace ArchiveFixer.ViewModels
                         VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
                         _archiveEngine,
                         volumeProbeWorkRoot,
+                        volumeTrialPasswords,
                         cancellationToken).ConfigureAwait(false);
                 }
                 else if (plan == null)
@@ -6852,6 +6868,7 @@ namespace ArchiveFixer.ViewModels
                         VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
                         _archiveEngine,
                         volumeProbeWorkRoot,
+                        volumeTrialPasswords,
                         cancellationToken).ConfigureAwait(false);
                 }
 
@@ -6866,12 +6883,19 @@ namespace ArchiveFixer.ViewModels
                      * 全都记一行会把第 45 条的日志纪律打掉（成功的任务只留一行，见 Item45LogAndPasswordTests）。
                      * 判据是 `TrialAttempted`（闸门放行过、硬链接与引擎调用真发生过），不是文案。
                      */
-                    if (plan != null && plan.TrialAttempted && !plan.CanRepair)
+                    if (plan != null && !plan.CanRepair && (plan.TrialAttempted || plan.SpannedTailMissing))
                     {
+                        /*
+                         * 两种"值得说一句"的结论共用这一行，措辞按事实分开：
+                         * ① 试开真跑过（硬链接 + 引擎列目录）而不成立；
+                         * ② 一次引擎都没调、但**判出了缺的是末片**（满片规律 + 跨盘标记，用户要的那句诊断）。
+                         */
                         AppendLog(
                             "INFO",
-                            $"{task.FileName}：按内容试开过这一组分卷（同卷硬链接 + 引擎列目录），不成立 —— "
-                            + $"{plan.Reason}；这一单按原名继续（源文件一个字节都没动）。");
+                            plan.TrialAttempted
+                                ? $"{task.FileName}：按内容试开过这一组分卷（同卷硬链接 + 引擎列目录），不成立 —— "
+                                  + $"{plan.Reason}；这一单按原名继续（源文件一个字节都没动）。"
+                                : $"{task.FileName}：没有动它 —— {plan.Reason}；这一单按原名继续（源文件一个字节都没动）。");
                     }
 
                     return;

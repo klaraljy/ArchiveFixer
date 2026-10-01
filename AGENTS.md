@@ -206,7 +206,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2298 条（2295 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2307 条（2304 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -260,7 +260,15 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - 计划出口 `VolumeNameRepair.PlanDisguisedVolumesBesideStandardSelf`（排在"名字里得有卷号 / 必须是第 1 卷"那两道门**之前**）：按"去杂质后基名逐字相等"收兄弟、各改成 `基名.规范卷标记`；⛔ 卷标记必须互不相同、目标名一个都不许被占、只改名、全成或全不成；
   - ⚠ 计划的 `CurrentPath/TargetPath` 必须指向**真要改的那一卷**（指向已经标准名的本体会被 `TryApply` 判 `AlreadyStandard` 整份拒掉）。用例 `VolumeNameRepairTests`（5 条）。
   - ⚠ 遗留：**名字里完全没有卷号的 ≥3 片跨盘 ZIP** 仍判不出（内容路对 ZIP 只支持 2 片）—— 要真修得先有真样本。
-- ⛔ **一组分卷 = 一个任务 = 从首卷启动**（现场与根因见 `修改日志.md` 2026-10-01）：① 整组改名在**批首**（`NormalizeDisguisedVolumeNamesForBatchAsync`，`ApplyBatchWorkspaceRoot` 之后 / 并发之前）；② 后续卷那一单落 `Skipped`（`SkipWhenAnotherTaskOwnsThisVolumeGroup` + `ArchiveTask.IsVolumeGroupFollower`）；③ 归组**只算不写**（`OneClickCoordinator.ResolveVolumeGroupFromDirectory`）且**只增不减**；④ 跟班**不进链尾裁决**（`DescribeChainVerificationGap` / `CompleteRootSourcePackagesAfterChainAsync`）。用例 `AaaReplayPipelineTests`。
+- ⛔ **跨盘 ZIP 的"专属算法"= 按归档自己的索引定盘 + 定不了就试拼**（用户 2026-10-01 真机 `FFF\111` 那一组 7 片、名字里一个卷号都没有；见 `docs/真机事故复盘.md` §42）：
+  - **索引定盘**（`Detection/SpannedZipIndex.cs`）：末片的中央目录每条都写着"本地头在**第几盘**、离那一盘开头多少字节" ⇒ 把候选当第 k 盘去那个偏移处验（`PK\x03\x04` + 文件名**逐字节**相等）。⛔ 不看名字、不用引擎、不用密码；三态分得很清 = **钉住 / 定不下来（那一盘内容里一个条目都没开始）/ 缺（有锚点却没人对得上，点名第几片）**。
+  - **试拼定序**（`VolumeProbeVerifier.VerifySpannedZipOrderAsync`）：定不下来的片只有"排列 + 让引擎真**测试**一遍"这一条路（⛔ 列目录验不出顺序 —— 中央目录在末片里、不看中间片的数据）。排列上限 **3 片（6 种）**，再多如实报"定不下来"；密码只在内存里、且"某次失败不是密码错"就记住它给下一个排列用。
+  - **入口第三档**：`NormalizeDisguisedVolumeNamesAsync` 的判据 = 名字带卷标记 **或** 账上归过组 **或** `VolumeNameRepair.HasSpannedZipTailNearby(自己)` —— 真机那一组**扫描期归组实测 0 组**、名字里也没有卷标记，少了第三档这套算法压根不会被问到。
+  - **「缺的是末片」诊断**：清一色满片 + 恰好一片开头是 `PK\x07\x08PK\x03\x04` ⇒ 结论是缺**末片**（`.zip`），由 `VolumeNameRepairPlan.SpannedTailMissing` 带出去写一行 INFO（用户要的"在引擎报缺卷之前就说清缺的是第几片"）。
+  - ⛔ **统一算法一个字没动，它是保底**：索引路不适用（不是跨盘 zip / 片数 < 3 / 候选对不上）时返回 `null` 原样往下走；判不出来只出结论、**一个字节不动**。
+- ⛔ **「末卷更小」这条直觉被实测否掉了一半 —— 不许拿它当闸门**（用户 2026-10-01 提的那条规则）：真造样本逐个数字节：3 个 100 KB 的条目切成 64 KB 一片时盘上是 `.z01=65536 / .z02=65536 / **.zip=176532**`（**末片比满片大一倍多**）；20 × 40 KB 那一档末片才更小。⇒ 代码里只用**真成立的那一半**：**除末片外每一片彼此等大**（`SpannedZipIndex` 的候选池 = "满片尺寸的众数"），⛔ 不要求末片更小。
+- ⛔ **一组分卷 = 一个任务 = 从首卷启动**（现场与根因见 `修改日志.md` 2026-10-01）：
+  ① 整组改名在**批首**（`NormalizeDisguisedVolumeNamesForBatchAsync`，`ApplyBatchWorkspaceRoot` 之后 / 并发之前）；② 后续卷那一单落 `Skipped`（`SkipWhenAnotherTaskOwnsThisVolumeGroup` + `ArchiveTask.IsVolumeGroupFollower`）；③ 归组**只算不写**（`OneClickCoordinator.ResolveVolumeGroupFromDirectory`）且**只增不减**；④ 跟班**不进链尾裁决**（`DescribeChainVerificationGap` / `CompleteRootSourcePackagesAfterChainAsync`）。用例 `AaaReplayPipelineTests`。
 - ⛔ **"给目标找个不撞名的名字"必须把"本计划里已经排出去的名字"也算进去**（用户 2026-10-01 第六报，`BBBB`/`CCCC` 两批的内层包残留在内容物里；见 `docs/真机事故复盘.md` §39）：让位只问文件系统（`SafePathHelper.AutoRenameFilePath`）时，**同一份计划里两条同名文件会算出同一个目标名** —— 第一条搬成功、第二条撞 `already exists` 而**留在原地**（日志：「内层包没能移入其余物：… already exists.（它留在原地）」）。唯一写法与源包搬运逐字相同：`reserved` HashSet + `ProcessArtifactLayout.MakeUniqueTarget(..., reserved, probe)`，⛔ 永远不覆盖。
   - 链尾收内层包的计划是纯函数 `ExtractionCoordinator.PlanChainInnerPackageMoves(rootTask, chainTasks, restDirectory, outputRoot, out warnings)`（抽出来就是为了测得动）；执行前**再看一眼**目标名（计划是几秒前算的）；用例 `ChainInnerPackageMovePlanTests`。
   - ⛔ 「成品目录里还留着 N 个内层包没被清理」那句 `leftBehind` 警告，判据必须与搬运那一边**同一套**（`candidateSucceeded || rootSucceeded` 都不算"还留着"）—— 否则会出现"警告说还留着、下一行就搬走删掉"的自相矛盾（真机就是这样）。
@@ -290,9 +298,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - RAR 命名：`Rar!\x1A\x07\x00`=RAR 1.5–4.x，⛔ 代码/注释/文案都不许写"这是 RAR3"；RAR5 有真样本（`H:` 两处 `-p` 包，签名 `52 61 72 21 1A 07 01 00`，只读不入库）；老式编号族 `.rar`/`.r00` 按设计不认〔真样本验收〕
 - ⛔ 验收规则（用户定）：必须真样本（或真机只读副本）跑通；合成样本通过 ≠ 问题解决；样本本体绝不进仓库、`H:` 原件只读，副本不在就跳过并说明〔验收规则：必须真样本跑通〕
 - 待修（还没做，别当成"已解决"）
-  - **「末卷更小」还没当成独立证据**（用户 2026-10-01 提的规则，认下但未做）：体积规律目前**只用于**归组（`VolumeGroupDetector.HasRegularVolumeSizes`）与 7z 内容路的候选排序（`VolumeContentInference.HasVolumeSizePattern` / `BuildOrderings`）；**没有**用它独立判定"谁是末片 / 一共几片"（那本该能在 7-Zip 报 `Missing volume` 之前就说清"缺的是第几片"）。
-  - **跨目录找同组的卷**：候选枚举与"物理同一性"只认同一目录（用户 2026-10-01 再次点名要这条）—— 现在如实落「判不出」而不是去子文件夹里按"基名 + 大小"找。
-  - **跨盘 zip ≥3 片 + 中间片名字里没有任何卷号**：内容里没有顺序、体积也分不出（除末片外等大）⇒ 现在一律不认。唯一出路是按**数据流连续性**试拼（硬链接进工作区、让引擎真开一次 —— 与 7z 那条路同一机制），⛔ **要先有那样一份真样本才做**（用户 2026-10-01 已答应造一份 zip 的：≥3 片、中间片名字不含数字）。
+  - ✅ **「末卷更小」当独立证据：已做，而且实测纠正了一半**（用户 2026-10-01 提的规则）—— 现在用在两处：① `SpannedZipIndex` 的候选池（**满片尺寸 = 众数**，只有这个尺寸的文件才可能是中间片）；② 「**缺的是末片**」诊断（清一色满片 + 一片开头是跨盘标记 ⇒ 结论是缺 `.zip`，比含糊的「分卷缺失」准）。⛔ 但**没有**要求"末片更小"（实测它不总成立，见上面那条）。
+  - **跨目录找同组的卷**：候选枚举与"物理同一性"只认同一目录（用户 2026-10-01 再次点名要这条）—— 现在如实落「判不出」而不是去子文件夹里按"基名 + 大小"找。⚠ 动手前要先定**允许搜到哪儿**（隐私红线 §8：不读工作区以外的个人目录；可接受的边界是"归档自己所在目录的子目录"）。
+  - ✅ **跨盘 zip ≥3 片 + 中间片名字里没有任何卷号：已做**（见上面"专属算法"那条；真机 `FFF\111` 那一组就是它）。⚠ 仍未做的是**排列爆炸那一档**：定不下来的片 > 3（6 种排列）时如实报"顺序定不出来"，⛔ 不猜；且**加密的包必须手上有对的密码**才验得出顺序。
   - 分卷跨目录拼装：候选枚举与"物理同一性"只认同一目录，跨目录如实落「判不出」而非靠名字硬拼。
   - 完整加密包+名字末尾纯数字 → 被 7-Zip 当"通用分片" ⇒ 误诊「分卷缺失」（别在 `RawSplitStreamDetector` 里加"看名字猜"）。
   - 伪装成 `.mp4`/`.apk` 的续卷：判定器已把"无卷号的同目录候选"按体积/位置推定+硬链接试开收进来（真案 ③），⛔ 绝不只凭后缀判；⚠ 试开做不了时（跨盘/拿不到工作区根）只到「疑缺卷」。
