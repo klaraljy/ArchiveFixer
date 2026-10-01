@@ -206,7 +206,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2241 条（2239 通过/2 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2242 条（2240 通过/2 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -274,6 +274,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - 密码三条口径〔四路只读核查一轮：三条真缺陷 + 手动密码框撤掉〕：
   - 密码口径：一键档无手动密码输入框（只写一条"去「密码」页一键导入"的 INFO）+ 确认框 B 段同一句指路 + 批末一条红字（必须写"只是可能"）；手动「只解压」无可用候选才问。
   - 密码记忆读不出来（换机器/重装系统/文件损坏）⇒ 先复制一份 `password-list.dat.unreadable-<时间戳>.bak`（`PasswordListStore.TryBackupUnreadableFile`；⛔ 只复制，绝不移动/删除原件），文案如实点名备份名。
+  - ⛔ 批末合并提示的**登记判据含三档**：`密码错误` / `密码错误或文件损坏`（`PasswordOrCorrupted`，RAR 两义句）/ `达到密码尝试上限`。漏掉两义档 ⇒ 真机那批 RAR `-p` 包**一条指路都不出现**（用户只看到红字）。`RecordPasswordFailure` 与 `ShowPasswordFailuresSummaryAsync` 的分档必须**同时**改（§9.5）；文案里"可能""不等于确认是密码问题"一个字不许省（⛔ 也不许把它算成"达到尝试上限"）。
 - 导入时的无用物弹窗已退休（导入即自动移出列表）：只剩手动「只解压」会弹，一键档并进唯一那个确认框
 
 ### 11.6 工作区/检验等级/终态口径
@@ -287,7 +288,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⛔ 预检拦下必须落 Failed 终态：唯一出口 `ExtractionCoordinator.MarkStoppedBeforeExtract`（缺卷 / 文件不存在 / 落点无效 / 源文件已变化四处共用，走既有 `ArchiveTask.MarkFailed`）；不落 `EndTime` ⇒ Outcome 永停 `Pending`（汇总说「未处理」）。Failed 仍只由唯一收口落。
 - ✅ 缺口 ⑨ 已修（2026-10-01）：递归工作区"没人配过根"时**不再回落 `%TEMP%`**——`AllowSystemTempWorkspaceFallback` 默认 false（拿不到根就报错指路），测试宿主 `TestAssemblyInitialize` 显式打开；用例 `WorkspaceTempFallbackGateTests`。
   - ⚠ 另：上一轮验收证据全是**合成样本**（形状 1/2/5），**真机验收仍空白**。
-  - ⚠ 上一轮新记：`TryRepairBrokenVolumeChainName`（内层续解链改名）残留未动；"先测试再解压"候选循环同口径改了但**无专条用例**；`RecordPasswordFailure` **未纳入两义档**；三处修复**未在真机复验**。
+  - ⚠ 上一轮新记：`TryRepairBrokenVolumeChainName`（内层续解链改名）残留未动；"先测试再解压"候选循环同口径改了但**无专条用例**；三处修复**未在真机复验**。
 
 ## 12. 细节去哪看
 

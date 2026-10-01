@@ -5822,8 +5822,19 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            /*
+             * 三档（2026-10-01）：`PasswordOrCorrupted`（RAR 那句"文件已损坏或密码错误"）也算**密码类失败**。
+             *
+             * 为什么必须算：那一档恰恰是"最可能缺密码"的一档 —— 用户真机那批 RAR `-p` 包走的全是它，
+             * 而原来它既不被登记、批末那条提示（"下一步去密码页导入 / 在确认框里填"）也就**一次都不出现**，
+             * 用户只看到一行红字，不知道下一步该干什么。
+             *
+             * ⛔ 但**不许**因此把它说成确认的密码问题：引擎在那条路上本来就没法区分"密码错"与"数据坏"
+             *（§11.4 的 RAR 两义句），批末文案里必须带着"可能"。
+             */
             if (task.Status != StatusText.WrongPassword &&
-                task.Status != StatusText.PasswordAttemptLimitReached)
+                task.Status != StatusText.PasswordAttemptLimitReached &&
+                task.Status != StatusText.PasswordOrCorrupted)
             {
                 return;
             }
@@ -7986,12 +7997,12 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 把本批"密码错误 / 达到密码尝试上限"的任务**合并成一次**提示。
+        /// 把本批"密码错误 / 密码错误或文件损坏 / 达到密码尝试上限"的任务**合并成一次**提示。
         ///
         /// 旧做法：在每个任务内部各弹一次模态框，50 个错包 = 50 次阻塞点击 ——
         /// 批量处理根本跑不动，用户看到的就是"点了没反应"。
         /// 新做法：循环里只登记（<see cref="RecordPasswordFailure"/>），批次结束后在这里一次说清：
-        /// 有几个、都是谁、其中几个是"到上限"（不是密码错误）。
+        /// 有几个、都是谁、其中几个是"到上限"（不是密码错误）、几个是"两义档"（引擎只说"可能"）。
         /// 日志与弹窗是同一句话，所以没有界面时（无头宿主）也留得下证据。
         /// </summary>
         private async Task ShowPasswordFailuresSummaryAsync(bool showDialog = true)
@@ -8009,20 +8020,63 @@ namespace ArchiveFixer.ViewModels
                 _passwordFailures.Clear();
             }
 
+            /*
+             * 三档而不是两档（2026-10-01）：`PasswordOrCorrupted`（RAR 的"文件已损坏或密码错误"）
+             * 也要算进"密码类失败"—— 它恰恰是最可能缺密码的一档。⚠ 原来只分两档时，
+             * 把它登记进来会被算成"达到密码尝试上限"，那是对用户的**误报**，
+             * 所以登记判据与这里的分档必须**同时**改（§9.5：同一件事在多处出现，值 + 通知都要钉住）。
+             */
             int wrongPasswordCount = failures.Count(f => f.Status == StatusText.WrongPassword);
-            int attemptLimitCount = failures.Count - wrongPasswordCount;
+            int ambiguousCount = failures.Count(f => f.Status == StatusText.PasswordOrCorrupted);
+            int attemptLimitCount = failures.Count - wrongPasswordCount - ambiguousCount;
 
             /*
              * 措辞有个坑：日志会被 PasswordMasker 兜底脱敏，规则是"密码 + 冒号 → 本行剩余全部打码"。
              * 所以这里**不要在"密码"后面直接跟冒号**，否则用户看到的是"本批 3 个包…密码：******"，
              * 文件名与原因全被吃掉（实测踩过）。原因写成"原因：密码错误…"这种形态是安全的。
+             *
+             * ⚠ 前两档（全是"密码错误" / 全是"到上限"）的**原话一个字都不改** ——
+             * 有用例逐字钉着它们（`ExtractionPipelineFixTests` 的"本批 3 个包没能解开"那一条）。
              */
-            string reason = attemptLimitCount == 0
-                ? "密码错误或缺少正确密码"
-                : wrongPasswordCount == 0
-                    ? $"{StatusText.PasswordAttemptLimitReached}（候选还没试完就按上限停了，不等于密码错误）"
-                    : $"密码错误 {wrongPasswordCount} 个 / {StatusText.PasswordAttemptLimitReached} {attemptLimitCount} 个" +
-                      "（后者只是候选没试完，不等于密码错误）";
+            string reason;
+
+            if (ambiguousCount == 0 && attemptLimitCount == 0)
+            {
+                reason = "密码错误或缺少正确密码";
+            }
+            else if (wrongPasswordCount == 0 && ambiguousCount == 0)
+            {
+                reason = $"{StatusText.PasswordAttemptLimitReached}（候选还没试完就按上限停了，不等于密码错误）";
+            }
+            else if (wrongPasswordCount == 0 && attemptLimitCount == 0)
+            {
+                reason = $"{StatusText.PasswordOrCorrupted}（引擎在那条路上只说了「可能」："
+                         + "要么密码不对、要么数据真的坏了，程序不当它是确认的密码问题）";
+            }
+            else
+            {
+                // 混合档：有几档说几档，每档都带上它自己的免责（⛔ 不许笼统说成"密码错误"）。
+                var parts = new List<string>();
+
+                if (wrongPasswordCount > 0)
+                {
+                    parts.Add($"密码错误 {wrongPasswordCount} 个");
+                }
+
+                if (ambiguousCount > 0)
+                {
+                    parts.Add($"{StatusText.PasswordOrCorrupted} {ambiguousCount} 个（只说了「可能」，不等于确认是密码问题）");
+                }
+
+                if (attemptLimitCount > 0)
+                {
+                    parts.Add(
+                        $"{StatusText.PasswordAttemptLimitReached} {attemptLimitCount} 个"
+                        + "（候选还没试完就按上限停了，不等于密码错误）");
+                }
+
+                reason = string.Join(" / ", parts);
+            }
 
             var builder = new StringBuilder();
 

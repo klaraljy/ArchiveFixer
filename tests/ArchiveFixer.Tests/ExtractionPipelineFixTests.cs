@@ -306,6 +306,58 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        // ================================================================ 两义档也算密码类失败（2026-10-01）
+
+        /// <summary>
+        /// **RAR 的"文件已损坏或密码错误"（两义档）也算"密码类失败"**。
+        ///
+        /// <para>原来 `RecordPasswordFailure` 只认 `密码错误` 与 `达到密码尝试上限` 两档，
+        /// 而真机那批 RAR `-p` 包走的**全是**两义档 ⇒ 批末那条"下一步去密码页导入 / 在确认框里填"
+        /// 的指路**一次都不出现**，用户只看到一行红字，不知道下一步该干什么。
+        /// 它恰恰是最可能缺密码的一档。</para>
+        ///
+        /// <para>⛔ 但**不许**因此把它说成确认的密码问题（引擎在那条路上分不出"密码错"与"数据坏"），
+        /// 也**不许**把它误算成"达到密码尝试上限"—— 那是另一个原因，会把用户指错方向。</para>
+        /// </summary>
+        [Fact]
+        public async Task 两义档也算密码类失败_批末提示给指路且不许断言就是密码问题()
+        {
+            Assert.Null(System.Windows.Application.Current);   // 前提：测试进程里没有 WPF 应用
+
+            Harness harness = CreateHarness(passwords: new[] { "候选密码1" });
+            AddTask(harness, CreateSourceFile("two-way.rar"));
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(PasswordOrCorrupted());
+            harness.Engine.OnListAsync = _ =>
+                Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            Assert.Equal(StatusText.PasswordOrCorrupted, task.Status);
+
+            string[] aggregated = harness.Log.Logs
+                .Where(x => x.Message.Contains("个包没能解开", StringComparison.Ordinal))
+                .Select(x => x.Message)
+                .ToArray();
+
+            // ① 它确实被算进"密码类失败"了（修前这里一条都没有）。
+            Assert.Single(aggregated);
+            Assert.Contains(task.FileName, aggregated[0], StringComparison.Ordinal);
+
+            // ② ⛔ 不许说成确认的密码问题：文案里必须带"可能"。
+            Assert.Contains("可能", aggregated[0], StringComparison.Ordinal);
+
+            // ③ ⛔ 也不许被误算成"达到密码尝试上限"（那是另一个原因）。
+            Assert.DoesNotContain(StatusText.PasswordAttemptLimitReached, aggregated[0], StringComparison.Ordinal);
+
+            // ④ 手动密码的出口指引照旧在 —— 这正是这一档最需要的那一句。
+            Assert.Contains("手动", aggregated[0], StringComparison.Ordinal);
+
+            // ⑤ 脱敏兜底不许把提示吃掉（"密码"后面直接跟冒号会被 PasswordMasker 整行打码）。
+            Assert.DoesNotContain("******", aggregated[0], StringComparison.Ordinal);
+        }
+
         // ================================================================ P1-4：密码尝试上限
 
         /// <summary>
@@ -1623,6 +1675,22 @@ namespace ArchiveFixer.Tests
                 Status = StatusText.WrongPassword,
                 Message = "密码错误",
                 DetectedErrorType = "WrongPassword"
+            };
+        }
+
+        /// <summary>
+        /// 引擎给出的**一句两义**（真机上由 `UnRarOutputParser` 落成它）：
+        /// 「在加密文件 X 里校验和错误。文件已损坏或密码错误。」—— 判据是退出码 3 + 加密判读，
+        /// ⛔ 不比中文（§11.4）。
+        /// </summary>
+        private static ArchiveOperationResult PasswordOrCorrupted()
+        {
+            return new ArchiveOperationResult
+            {
+                Success = false,
+                Status = StatusText.PasswordOrCorrupted,
+                Message = "在加密文件「示例条目」里校验和错误。文件已损坏或密码错误。",
+                DetectedErrorType = EngineErrorTypes.PasswordOrCorrupted
             };
         }
 
