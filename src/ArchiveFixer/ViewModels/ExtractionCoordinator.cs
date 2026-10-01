@@ -2292,20 +2292,45 @@ namespace ArchiveFixer.ViewModels
                 ? rootTask.ContentDirectoryPath
                 : rootTask.OutputPath;
 
-            List<(string From, string To)> moves = await Task.Run(() =>
+            var planningWarnings = new List<string>();
+
+            List<(string From, string To)> moves = await Task.Run(
+                () => PlanChainInnerPackageMoves(
+                    rootTask,
+                    chainTasks,
+                    restDirectory,
+                    outputRoot,
+                    out planningWarnings),
+                cancellationToken);
+
+            foreach (string warning in planningWarnings)
             {
-                var planned = new List<(string, string)>();
+                AppendLog("WARN", warning);
+            }
+
+
+            /*
+             * ⛔ **留着没跑的内层包不能当过程物清掉**（用户 2026-09-28 真机：
+             * `amb909\amb909\amb.7z.001..004` 一直留在成品目录里，他以为是"忘了搬进其余物"）。
+             *
+             * 为什么不能清：过程物（内层包）能清的前提是"它的内容物已经解出来了" ——
+             * 这一单跑成功、内层包被判**已完成**才成立。而"这一轮根本没跑"的内层包，内容还在它里面，
+             * 清掉（其余物在删除档下是**彻底删除**）等于把唯一一份内容删了。
+             *
+             * 所以这里只做一件事：**如实点名 + 告诉他怎么处理**。判据与搬运用同一套
+             * （分卷组取 VolumePaths 全卷，单文件取自己；只认在本单输出目录里的）。
+             */
+            try
+            {
+                var leftBehind = new List<string>();
 
                 /*
-                 * ⛔ 谁的"过程物"要收：**成功的**续解任务 + **这一轮根本没跑成的**内层包（用户 2026-09-28 拍板）。
+                 * ⛔ 判据与搬运那一边**同一套**（`PlanChainInnerPackageMoves`）：根任务成功且校验通过时，
+                 * 链上的内层包**都会被收进其余物** —— 在这里再点名它们就是自相矛盾的假警报。
                  *
-                 * 用户原话：「自动清掉，这个算没有成功的过程物，而且原包还在就不用怕，如果原包放在了
-                 * 其余物里面一起删除，成功了就刚好是我们要达到的地方，**失败了也不会删除**」——
-                 * 也就是：内层包本来就是"外层包解出来的过程物"，只要外层这一单**成功**了，
-                 * 它就该跟源包一起进其余物、按删除档一起清掉；外层失败/部分完成/取消时一个字节都不动。
-                 *
-                 * ⚠ 所以这里多一道自守：只有**根任务成功且校验通过**时，才把"没跑成的内层包"也算进去 ——
-                 * 不指望调用方一定在成功路径上（红线自己守，不靠上下文）。
+                 * 真机 2026-10-01：这一行写着「成品目录里还留着 2 个内层包没被清理（它们的内容还没解出来，
+                 * 清掉就等于删内容）」，紧接着两行就把那两个搬进其余物并彻底删掉了 ——
+                 * 用户读到的是"程序自己跟自己打架"，而真正没被清掉的那两个（撞名搬失败的）它反倒没说是为什么。
                  */
                 bool rootSucceeded =
                     rootTask.Outcome == TaskOutcome.Succeeded &&
@@ -2324,107 +2349,8 @@ namespace ArchiveFixer.ViewModels
                         candidate.Outcome == TaskOutcome.Succeeded &&
                         candidate.OutputVerification == OutputVerificationOutcome.Passed;
 
-                    if (!candidateSucceeded && !rootSucceeded)
-                    {
-                        continue;
-                    }
-
-                    string path = candidate.CurrentPath;
-
-                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                    {
-                        continue;
-                    }
-
-                    /*
-                     * ⛔ 分卷组必须**整组一起搬**（2026-09-28 真机：内层包是 4 卷分卷组时只搬走了
-                     * `amb.7z.001` 并把它彻底删掉，`.002/.003/.004` 留在成品目录里 —— 用户原话
-                     * "同样犯了 winrar 会犯的问题：只删除 .001 为首的分卷头文件，其他分卷还残留着"）。
-                     * 搬一半等于把一套完整的包拆成废件，比不搬糟得多。
-                     *
-                     * 判据与"源包整组一起移"**同一套**：分卷组取 VolumePaths 全卷，单文件取它自己。
-                     */
-                    var groupPaths = new List<string>();
-
-                    if (candidate.IsVolumeGroup && candidate.VolumePaths.Count > 0)
-                    {
-                        foreach (string volumePath in candidate.VolumePaths)
-                        {
-                            if (!string.IsNullOrWhiteSpace(volumePath) && File.Exists(volumePath))
-                            {
-                                groupPaths.Add(volumePath);
-                            }
-                        }
-                    }
-
-                    if (groupPaths.Count == 0)
-                    {
-                        groupPaths.Add(path);
-                    }
-
-                    /*
-                     * 兜底（**宁可不动，也不搬一半**）：分组信息没拿到（IsVolumeGroup=false），
-                     * 但名字明显是分卷、同目录里还躺着同组的别的卷 —— 这一卷不搬，写清为什么。
-                     * 留下的是一套完整的包，用户还能自己接着处理。
-                     */
-                    if (!candidate.IsVolumeGroup && HasSiblingVolumeBeside(path))
-                    {
-                        AppendLog(
-                            "WARN",
-                            $"{rootTask.FileName}：{Path.GetFileName(path)} 看着是分卷组的一卷，"
-                            + "但没拿到整组清单 —— 这次不搬它（搬一半会把一套包拆成废件）。");
-                        continue;
-                    }
-
-                    foreach (string groupPath in groupPaths)
-                    {
-                        // 已经在其余物里了（重复调用 / 上一轮搬过）：跳过。
-                        if (SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(groupPath) ?? string.Empty)
-                                .EndsWith(ProcessArtifactLayout.ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue;
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(outputRoot) &&
-                            !ArchivePathGuard.IsInsideRoot(outputRoot, groupPath, out _))
-                        {
-                            // 不在根任务的输出范围内（理论上不该发生）：不动它。
-                            continue;
-                        }
-
-                        // 撞名（同一条链里两个同名内层包）自动让位，绝不覆盖。
-                        string target = SafePathHelper.AutoRenameFilePath(
-                            Path.Combine(restDirectory, Path.GetFileName(groupPath)));
-
-                        planned.Add((groupPath, target));
-                    }
-                }
-
-                return planned;
-            }, cancellationToken);
-
-            /*
-             * ⛔ **留着没跑的内层包不能当过程物清掉**（用户 2026-09-28 真机：
-             * `amb909\amb909\amb.7z.001..004` 一直留在成品目录里，他以为是"忘了搬进其余物"）。
-             *
-             * 为什么不能清：过程物（内层包）能清的前提是"它的内容物已经解出来了" ——
-             * 这一单跑成功、内层包被判**已完成**才成立。而"这一轮根本没跑"的内层包，内容还在它里面，
-             * 清掉（其余物在删除档下是**彻底删除**）等于把唯一一份内容删了。
-             *
-             * 所以这里只做一件事：**如实点名 + 告诉他怎么处理**。判据与搬运用同一套
-             * （分卷组取 VolumePaths 全卷，单文件取自己；只认在本单输出目录里的）。
-             */
-            try
-            {
-                var leftBehind = new List<string>();
-
-                foreach (ArchiveTask? candidate in chainTasks)
-                {
-                    if (candidate == null ||
-                        ReferenceEquals(candidate, rootTask) ||
-                        !candidate.IsContinuationTask ||
-                        (candidate.Outcome == TaskOutcome.Succeeded &&
-                         candidate.OutputVerification == OutputVerificationOutcome.Passed))
+                    // 会被收走的（它自己成功，或者根任务成功 ⇒ 搬运那一边会收它）：不进"还留着"的名单。
+                    if (candidateSucceeded || rootSucceeded)
                     {
                         continue;
                     }
@@ -2475,11 +2401,34 @@ namespace ArchiveFixer.ViewModels
 
             var failures = new List<string>();
 
+            // 这一趟真正落下去的目标名（让位时也要看它，见下）。
+            var movedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach ((string from, string to) in moves)
             {
                 try
                 {
-                    SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(to) ?? string.Empty);
+                    /*
+                     * ⛔ 计划是几秒前算出来的：目标名可能在这期间被占掉（并发收同一份其余物 / 用户自己动过文件）。
+                     * 搬之前**再看一眼**，占了就现场再让一次位 —— ⛔ 仍然绝不覆盖。
+                     *
+                     * ⚠ 这是兜底，不是根因：同一份计划里两个同名内层包互相撞名，已经在
+                     * `PlanChainInnerPackageMoves` 里用 `reserved` 解决（真机 2026-10-01 那批就栽在那一处）。
+                     */
+                    string target = to;
+
+                    if (movedTargets.Contains(target) || File.Exists(target) || Directory.Exists(target))
+                    {
+                        target = ProcessArtifactLayout.MakeUniqueTarget(
+                            target,
+                            isDirectory: false,
+                            movedTargets,
+                            FileSystemArtifactTargetProbe.Instance);
+                    }
+
+                    movedTargets.Add(target);
+
+                    SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(target) ?? string.Empty);
 
                     /*
                      * 同卷直接改名（快、且失败不留半份）；跨卷 / 被占用时回落到"先复制成功再删原件"
@@ -2487,16 +2436,16 @@ namespace ArchiveFixer.ViewModels
                      */
                     try
                     {
-                        File.Move(from, to, overwrite: false);
+                        File.Move(from, target, overwrite: false);
                     }
                     catch (IOException)
                     {
-                        File.Copy(from, to, overwrite: false);
+                        File.Copy(from, target, overwrite: false);
                         File.Delete(from);
                     }
                     catch (NotSupportedException)
                     {
-                        File.Copy(from, to, overwrite: false);
+                        File.Copy(from, target, overwrite: false);
                         File.Delete(from);
                     }
 
@@ -2505,7 +2454,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         if (candidate != null && SafePathHelper.PathEquals(candidate.CurrentPath, from))
                         {
-                            candidate.CurrentPath = to;
+                            candidate.CurrentPath = target;
                         }
                     }
 
@@ -2517,7 +2466,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         $"{rootTask.FileName}：内层包已移入其余物 —— {Path.GetFileName(from)}"
-                        + $"（{Path.GetFileName(Path.GetDirectoryName(to)) ?? string.Empty} 那一层）");
+                        + $"（{Path.GetFileName(Path.GetDirectoryName(target)) ?? string.Empty} 那一层）");
                 }
                 catch (Exception ex)
                 {
@@ -2531,6 +2480,167 @@ namespace ArchiveFixer.ViewModels
                 // 只有真的搬进去了才把其余物记到根任务上（否则删除档会去删一个不存在的目录）。
                 rootTask.RestDirectoryPath = restDirectory;
             }
+        }
+
+        /// <summary>
+        /// 一条续解链里"该收进其余物的内层包"的搬运计划（**纯计划：一个字节都不动**）。
+        ///
+        /// <para>抽成静态方法是为了能被用例直接钉住（真机 2026-10-01 那一类缺陷全在"名字怎么算"上，
+        /// 而算名字这一步以前埋在 <c>Task.Run</c> 的匿名体里，谁都测不到）。</para>
+        ///
+        /// <para><b>⛔ 撞名让位必须把"本计划里前面那几条"也算进去</b>（<c>reserved</c>）：
+        /// 只问文件系统的话，**两条同名内层包会算出同一个目标** —— 第一条搬成功、第二条撞上
+        /// <c>already exists</c> 而**留在原地**。用户 2026-10-01 真机 BBBB / CCCC 两批的现场就是它：
+        /// <c>…\111\111\111\111.part1.rar</c> 与 <c>…\222\222\222\222.zip</c> 卡在内容物里没被收走，
+        /// 日志写着「内层包没能移入其余物：… The file '…\其余物\111.part1(1).rar' already exists.（它留在原地）」。
+        /// 口径与源包搬运（<c>SourcePackageMover.Plan</c>）**逐字相同**：reserved + <c>MakeUniqueTarget</c>。</para>
+        /// </summary>
+        /// <param name="rootTask">这一条链的根任务（其余物挂在它身上）。</param>
+        /// <param name="chainTasks">整条链的任务（含根任务自己，会被跳过）。</param>
+        /// <param name="restDirectory">其余物目录（定稿时算好的那一个，⛔ 不现场重算）。</param>
+        /// <param name="outputRoot">根任务的输出根（只搬这个范围里的内层包）。</param>
+        internal static List<(string From, string To)> PlanChainInnerPackageMoves(
+            ArchiveTask? rootTask,
+            IReadOnlyList<ArchiveTask>? chainTasks,
+            string? restDirectory,
+            string? outputRoot,
+            out List<string> warnings)
+        {
+            var planned = new List<(string, string)>();
+            warnings = new List<string>();
+
+            if (rootTask == null ||
+                chainTasks == null ||
+                chainTasks.Count == 0 ||
+                string.IsNullOrWhiteSpace(restDirectory))
+            {
+                return planned;
+            }
+
+            string artifactRoot = restDirectory!;
+
+            // 本计划**已经排出去的名字**（见方法注释：不问它就必然撞名）。
+            var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /*
+             * ⛔ 谁的"过程物"要收：**成功的**续解任务 + **这一轮根本没跑成的**内层包（用户 2026-09-28 拍板）。
+             *
+             * 用户原话：「自动清掉，这个算没有成功的过程物，而且原包还在就不用怕，如果原包放在了
+             * 其余物里面一起删除，成功了就刚好是我们要达到的地方，**失败了也不会删除**」——
+             * 也就是：内层包本来就是"外层包解出来的过程物"，只要外层这一单**成功**了，
+             * 它就该跟源包一起进其余物、按删除档一起清掉；外层失败/部分完成/取消时一个字节都不动。
+             *
+             * ⚠ 所以这里多一道自守：只有**根任务成功且校验通过**时，才把"没跑成的内层包"也算进去 ——
+             * 不指望调用方一定在成功路径上（红线自己守，不靠上下文）。
+             */
+            bool rootSucceeded =
+                rootTask.Outcome == TaskOutcome.Succeeded &&
+                rootTask.OutputVerification == OutputVerificationOutcome.Passed;
+
+            foreach (ArchiveTask? candidate in chainTasks)
+            {
+                if (candidate == null ||
+                    ReferenceEquals(candidate, rootTask) ||
+                    !candidate.IsContinuationTask)
+                {
+                    continue;
+                }
+
+                bool candidateSucceeded =
+                    candidate.Outcome == TaskOutcome.Succeeded &&
+                    candidate.OutputVerification == OutputVerificationOutcome.Passed;
+
+                if (!candidateSucceeded && !rootSucceeded)
+                {
+                    continue;
+                }
+
+                string path = candidate.CurrentPath;
+
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    continue;
+                }
+
+                /*
+                 * ⛔ 分卷组必须**整组一起搬**（2026-09-28 真机：内层包是 4 卷分卷组时只搬走了
+                 * `amb.7z.001` 并把它彻底删掉，`.002/.003/.004` 留在成品目录里 —— 用户原话
+                 * "同样犯了 winrar 会犯的问题：只删除 .001 为首的分卷头文件，其他分卷还残留着"）。
+                 * 搬一半等于把一套完整的包拆成废件，比不搬糟得多。
+                 *
+                 * 判据与"源包整组一起移"**同一套**：分卷组取 VolumePaths 全卷，单文件取它自己。
+                 */
+                var groupPaths = new List<string>();
+
+                if (candidate.IsVolumeGroup && candidate.VolumePaths.Count > 0)
+                {
+                    foreach (string volumePath in candidate.VolumePaths)
+                    {
+                        if (!string.IsNullOrWhiteSpace(volumePath) && File.Exists(volumePath))
+                        {
+                            groupPaths.Add(volumePath);
+                        }
+                    }
+                }
+
+                if (groupPaths.Count == 0)
+                {
+                    groupPaths.Add(path);
+                }
+
+                /*
+                 * 兜底（**宁可不动，也不搬一半**）：分组信息没拿到（IsVolumeGroup=false），
+                 * 但名字明显是分卷、同目录里还躺着同组的别的卷 —— 这一卷不搬，写清为什么。
+                 * 留下的是一套完整的包，用户还能自己接着处理。
+                 */
+                if (!candidate.IsVolumeGroup && HasSiblingVolumeBeside(path))
+                {
+                    // 日志由调用方写（纯计划里不写盘、不记日志 —— 这样它才测得动）。
+                    warnings.Add(
+                        $"{rootTask.FileName}：{Path.GetFileName(path)} 看着是分卷组的一卷，"
+                        + "但没拿到整组清单 —— 这次不搬它（搬一半会把一套包拆成废件）。");
+                    continue;
+                }
+
+                foreach (string groupPath in groupPaths)
+                {
+                    // 已经在其余物里了（重复调用 / 上一轮搬过）：跳过。
+                    if (SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(groupPath) ?? string.Empty)
+                            .EndsWith(ProcessArtifactLayout.ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(outputRoot) &&
+                        !ArchivePathGuard.IsInsideRoot(outputRoot, groupPath, out _))
+                    {
+                        // 不在根任务的输出范围内（理论上不该发生）：不动它。
+                        continue;
+                    }
+
+                    /*
+                     * 撞名（同一条链里两个同名内层包）自动让位，绝不覆盖 ——
+                     * **本计划里已经排出去的名字也算撞名**（reserved，见方法注释）。
+                     */
+                    string target = Path.Combine(
+                        artifactRoot,
+                        FileNameHelper.SanitizeFileName(Path.GetFileName(groupPath)));
+
+                    if (reserved.Contains(target) || File.Exists(target) || Directory.Exists(target))
+                    {
+                        target = ProcessArtifactLayout.MakeUniqueTarget(
+                            target,
+                            isDirectory: false,
+                            reserved,
+                            FileSystemArtifactTargetProbe.Instance);
+                    }
+
+                    reserved.Add(target);
+                    planned.Add((groupPath, target));
+                }
+            }
+
+            return planned;
         }
 
         /// <summary>
