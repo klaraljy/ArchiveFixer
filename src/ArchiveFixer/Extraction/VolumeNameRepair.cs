@@ -67,6 +67,9 @@ namespace ArchiveFixer.Extraction
         /// <summary>试开成立、但引擎读不出清单：这一组是"文件名也加密"的归档（7z <c>-mhe</c> / RAR <c>-hp</c>）。</summary>
         public bool ProbeNeedsPassword { get; init; }
 
+        /// <summary>这一份计划里**有几卷是从别的目录收过来的**（0 = 全在同一层，与老行为一样）。</summary>
+        public int GatheredVolumes { get; init; }
+
         /// <summary>
         /// 这一份"不能改"是**有结论的**：同目录里那些片全是满片、其中一片开头就是跨盘标记
         /// ⇒ 这是一组跨盘 zip，缺的是**末片**（用户要的"说清缺的是第几片"）。
@@ -160,42 +163,141 @@ namespace ArchiveFixer.Extraction
         /// <para>与 <see cref="EnumerateFileNamesInDirectory"/> 一样只有一份实现：
         /// 必须与它看到**同一个目录、同一批文件**，否则"按名字能改、按内容不能改"这类矛盾迟早冒出来。</para>
         /// </summary>
-        public static IReadOnlyList<VolumeCandidate> EnumerateVolumeCandidatesInDirectory(string? filePath)
+        public static IReadOnlyList<VolumeCandidate> EnumerateVolumeCandidatesInDirectory(string? filePath) =>
+            Detection.VolumeContentInference.EnumerateCandidatesIn(Path.GetDirectoryName(filePath ?? string.Empty));
+
+        /// <summary>
+        /// **候选池（含邻近目录）**：归档自己所在的那一层 + **它自己的直接子目录** + **"父目录这一家"**
+        /// （父目录本身 + 父目录的各直接子目录 = 自己的兄弟目录）。
+        ///
+        /// <para>为什么要有它（用户 2026-10-01 点名两次）：「跨目录找同组的卷」；他明确了两条口径 ——
+        /// ① 「**归档自己所在目录的子目录**，这个也不能少」；② 「绝大多数只会在一个**父文件夹和父文件夹的
+        /// 同级子文件夹**当中」。⚠ 后一句同时也是**代价说明**：这种形状本来就是小概率，
+        /// 所以这里的做法是"宁可多看一眼、但边界划死、粗筛挡住噪声"，⛔ 不是满盘搜。</para>
+        ///
+        /// <para><b>边界是刻意划的</b>（§8 隐私红线：不替用户在他盘上到处找文件）：</para>
+        /// <list type="number">
+        /// <item><description><b>看</b>：自己这一层 + 自己的直接子目录（这两块**不做尺寸粗筛**，
+        /// 与以前"同目录"的行为逐字一致）；再加父目录这一家（这一块过一次 ≥ 16 KiB 的粗筛 + 硬上限）。</description></item>
+        /// <item><description><b>不看</b>：祖父及以上、孙目录（自己子目录的子目录）、以及"父目录这一家"之外的目录。
+        /// 归档目录**本身就是卷根**（例如就放在 <c>H:\</c> 下）时没有父目录这一家，退化成"自己这一层 + 自己的子目录"。</description></item>
+        /// <item><description><b>候选只是候选</b>：跨目录来的文件同样要过"内容 / 尺寸 / 试开"那几道判据，
+        /// ⛔ 不会因为"它躺在附近"就被认成这一组的一员。</description></item>
+        /// </list>
+        /// </summary>
+        public static IReadOnlyList<VolumeCandidate> EnumerateVolumeCandidatesNearby(string? filePath)
         {
+            string directory = Path.GetDirectoryName(filePath ?? string.Empty) ?? string.Empty;
+
+            var candidates = new List<VolumeCandidate>(
+                Detection.VolumeContentInference.EnumerateCandidatesIn(directory));
+
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return candidates;
+            }
+
+            // ① 自己的直接子目录（用户点名不能少）：与"自己这一层"同一待遇，不做尺寸粗筛。
             try
             {
-                string directory = Path.GetDirectoryName(filePath ?? string.Empty) ?? string.Empty;
-
-                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                foreach (string sub in Directory.GetDirectories(directory))
                 {
-                    return Array.Empty<VolumeCandidate>();
+                    candidates.AddRange(Detection.VolumeContentInference.EnumerateCandidatesIn(sub));
                 }
-
-                var candidates = new List<VolumeCandidate>();
-
-                foreach (string file in Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly))
-                {
-                    long size;
-
-                    try
-                    {
-                        size = new FileInfo(file).Length;
-                    }
-                    catch
-                    {
-                        size = -1;
-                    }
-
-                    candidates.Add(new VolumeCandidate { Path = file, Size = size });
-                }
-
-                return candidates;
             }
             catch
             {
-                return Array.Empty<VolumeCandidate>();
+                // 某个子目录读不动（权限 / 半路被删）不影响已经收到的那几份候选。
             }
+
+            // ② 父目录这一家（父目录 + 它的各直接子目录）。
+            try
+            {
+                string full = Path.GetFullPath(directory);
+                string? parent = Directory.GetParent(full)?.FullName;
+
+                // 自己这一层就是卷根 ⇒ 没有"父目录这一家"可看（⛔ 绝不退化成整盘扫）。
+                if (!string.IsNullOrWhiteSpace(parent)
+                    && !string.Equals(parent, full, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(Path.GetPathRoot(full), full, StringComparison.OrdinalIgnoreCase))
+                {
+                    candidates.AddRange(EnumerateFamilyCandidates(parent, full, candidates));
+                }
+            }
+            catch
+            {
+                // 取父目录失败（路径形态怪 / 权限）⇒ 就按"自己这一层 + 自己的子目录"办，⛔ 不猜、不报错。
+            }
+
+            return candidates;
         }
+
+        /// <summary>父目录这一家（父目录 + 它的各直接子目录）里"值得读一眼"的候选。</summary>
+        private static List<VolumeCandidate> EnumerateFamilyCandidates(
+            string parent,
+            string ownDirectory,
+            List<VolumeCandidate> alreadyCollected)
+        {
+            var result = new List<VolumeCandidate>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var directories = new List<string> { parent };
+
+            try
+            {
+                foreach (string sub in Directory.GetDirectories(parent))
+                {
+                    if (directories.Count >= MaxNearbyDirectories)
+                    {
+                        break;
+                    }
+
+                    directories.Add(sub);
+                }
+            }
+            catch
+            {
+                // 父目录列不动就只留父目录这一层。
+            }
+
+            foreach (string scanned in directories)
+            {
+                if (string.Equals(scanned, ownDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;   // 自己这一层已经在上面收过了（不计入粗筛，行为与以前一致）
+                }
+
+                foreach (VolumeCandidate candidate in Detection.VolumeContentInference.EnumerateCandidatesIn(scanned))
+                {
+                    if (result.Count >= MaxNearbyCandidates)
+                    {
+                        return result;
+                    }
+
+                    if (candidate.Size < NearbyMinimumBytes || !seen.Add(candidate.Path))
+                    {
+                        continue;
+                    }
+
+                    if (alreadyCollected.Any(c => string.Equals(c.Path, candidate.Path, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
+                    result.Add(candidate);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>父目录这一家里的粗筛下限：小于它的文件不可能是分卷片（几 KB 的说明文件 / 图片）。</summary>
+        private const long NearbyMinimumBytes = 16 * 1024;
+
+        /// <summary>父目录这一家里最多收几份候选（防止"父目录是个大杂烩"时白读一大堆文件头）。</summary>
+        private const int MaxNearbyCandidates = 500;
+
+        /// <summary>父目录这一家最多看几个子目录。</summary>
+        private const int MaxNearbyDirectories = 200;
 
         /// <summary>
         /// 算出改名计划。任何 IO 意外都落成"不能改 + 原因"，绝不抛。
@@ -392,6 +494,56 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<string>? passwordCandidates = null,
             CancellationToken cancellationToken = default)
         {
+            return await PlanByContentCoreAsync(
+                    currentPath,
+                    filesInDirectory,
+                    engine,
+                    workRootDirectory,
+                    passwordCandidates,
+                    allowNearbyDirectories: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 与 <see cref="PlanByContentAsync"/> 同一份实现，只是**允许候选来自邻近目录**
+        /// （调用方用 <see cref="EnumerateVolumeCandidatesNearby"/> 收的池）。
+        ///
+        /// <para>⛔ 只有**内容能自证身份**的两条路（跨盘 ZIP 的索引、RAR 的内容卷号）才吃放宽的池：
+        /// 那两条路上"这一份是不是这一组的"由文件自己的字节回答，邻近目录里别的包的卷**冒充不了**。
+        /// <b>7z 不吃</b> —— 它的中间片内容里没有任何身份信息，"尺寸排序 + 试开"在放宽的池子里会把
+        /// 别的包的卷一起排进候选排列，既白烧引擎调用、又可能把真正那一组的顺序挤出排列上限
+        /// （真机夹具上实测：放宽后两组直接解不出来）。所以 7z 这一档**只用同目录候选**，
+        /// 判不出来就如实说判不出来。</para>
+        /// </summary>
+        public static async Task<VolumeNameRepairPlan> PlanByContentWithNearbyCandidatesAsync(
+            string? currentPath,
+            IEnumerable<VolumeCandidate>? filesInDirectory,
+            Engines.IArchiveEngine engine,
+            string? workRootDirectory,
+            IReadOnlyList<string>? passwordCandidates = null,
+            CancellationToken cancellationToken = default)
+        {
+            return await PlanByContentCoreAsync(
+                    currentPath,
+                    filesInDirectory,
+                    engine,
+                    workRootDirectory,
+                    passwordCandidates,
+                    allowNearbyDirectories: true,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        private static async Task<VolumeNameRepairPlan> PlanByContentCoreAsync(
+            string? currentPath,
+            IEnumerable<VolumeCandidate>? filesInDirectory,
+            Engines.IArchiveEngine engine,
+            string? workRootDirectory,
+            IReadOnlyList<string>? passwordCandidates,
+            bool allowNearbyDirectories,
+            CancellationToken cancellationToken)
+        {
             string path = currentPath ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
@@ -441,9 +593,18 @@ namespace ArchiveFixer.Extraction
                             return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
                         }
 
+                        /*
+                         * ⛔ 7z **不吃放宽的候选池**（理由写在 PlanByContentWithNearbyCandidatesAsync 的注释里）：
+                         * 它的中间片内容里没有任何身份信息，邻近目录里别的包的卷和它无法区分 ——
+                         * 放宽只会把别的包拖进"尺寸排序 + 试开"的排列里。这一档**只用同目录候选**。
+                         */
+                        IEnumerable<VolumeCandidate>? pool = allowNearbyDirectories
+                            ? OnlySameDirectory(filesInDirectory, path)
+                            : filesInDirectory;
+
                         return await PlanSevenZipByContentAsync(
                                 path,
-                                filesInDirectory,
+                                pool,
                                 engine,
                                 workRootDirectory,
                                 cancellationToken)
@@ -461,6 +622,22 @@ namespace ArchiveFixer.Extraction
                 default:
                     return Cannot(path, StatusText.VolumeRepairContentNotAVolumeMember);
             }
+        }
+
+        /// <summary>只留"与被修那一卷同目录"的候选（7z 那一档专用：它的内容里没有身份信息，不吃放宽的池）。</summary>
+        private static IEnumerable<VolumeCandidate> OnlySameDirectory(
+            IEnumerable<VolumeCandidate>? candidates,
+            string currentPath)
+        {
+            string directory = Path.GetDirectoryName(currentPath) ?? string.Empty;
+
+            return (candidates ?? Array.Empty<VolumeCandidate>())
+                .Where(c => c != null && !string.IsNullOrWhiteSpace(c.Path))
+                .Where(c => string.Equals(
+                    Path.GetDirectoryName(c.Path),
+                    directory,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
         }
 
         /// <summary>
@@ -650,7 +827,13 @@ namespace ArchiveFixer.Extraction
                 Detail = ordered.Count
             };
 
-            return BuildPlanFromOrder(path, order, targetNames, trialAttempted: attempted);
+            // 入口那一卷 = 末片（引擎拿 `X.zip` 打开这一组，兄弟卷要在它旁边）。
+            return BuildPlanFromOrder(
+                path,
+                order,
+                targetNames,
+                entryVolumePath: ordered[^1],
+                trialAttempted: attempted);
         }
 
         /// <summary>
@@ -852,7 +1035,8 @@ namespace ArchiveFixer.Extraction
                 return Cannot(path, StatusText.VolumeRepairNoSuggestion);
             }
 
-            return BuildPlanFromOrder(path, order, targetNames);
+            // 入口那一卷：跨盘 zip 是末片（`X.zip`），RAR 是第 1 卷（`X.part1.rar`）—— 与上面推基名用的是同一卷。
+            return BuildPlanFromOrder(path, order, targetNames, entryVolumePath: stemSource);
         }
 
         /// <summary>
@@ -972,6 +1156,12 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 由"内容定好序的整组"造计划：卷号升序、逐卷算目标名，⛔ 目标名被占 → 整组不改。
         ///
+        /// <para><b>散在两层目录里的组会被"收"到一起</b>（用户 2026-10-01：「绝大多数只会在一个父文件夹和
+        /// 父文件夹的同级子文件夹当中」）：目标目录一律取**引擎要打开的那一卷所在的目录**
+        /// （跨盘 zip 是末片 <c>X.zip</c>，RAR / 7z 是第 1 卷）——
+        /// 引擎找兄弟卷**只看入口文件旁边那一层**，散着放即使名字都对也解不开（实测 7-Zip 就是这样）。
+        /// ⛔ 只搬**同一卷**上的（跨盘搬不动，也绝不做跨盘复制）：任何一卷与目标目录不同卷 ⇒ 整组不改。</para>
+        ///
         /// <para>要改的第一卷（<c>CurrentPath</c>）优先取**调用方手上那一卷**（它在组里时），
         /// 否则取第一个真要改名的 —— <see cref="TryApply"/> 拿这一卷当入口，指到一个"名字本来就对"的卷上
         /// 会直接判"问题不在名字上"，整组就白算了。</para>
@@ -980,17 +1170,39 @@ namespace ArchiveFixer.Extraction
             string path,
             Detection.VolumeGroupOrder order,
             IReadOnlyList<string> targetNames,
+            string entryVolumePath,
             bool trialAttempted = false,
             bool probeNeedsPassword = false)
         {
-            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            // 目标目录 = 入口那一卷所在的那一层（引擎就在那儿找兄弟卷）。
+            string targetDirectory = Path.GetDirectoryName(entryVolumePath)
+                ?? Path.GetDirectoryName(path)
+                ?? string.Empty;
             var items = new List<VolumeRepairItem>();
             int primary = -1;
+            int gathered = 0;
 
             for (int i = 0; i < order.Count; i++)
             {
                 string source = order.Slots[i].Path;
-                string target = Path.Combine(directory, targetNames[i]);
+
+                if (!Detection.VolumeContentInference.IsSameVolumeRoot(source, targetDirectory))
+                {
+                    // 跨盘：搬不过去，也⛔ 绝不复制大文件 ⇒ 整组不改（判不出就不做）。
+                    return Cannot(path, string.Format(
+                        StatusText.VolumeRepairGatherAcrossVolumeFormat,
+                        SafeFileName(source),
+                        SafeFileName(entryVolumePath)));
+                }
+
+                string directory = Path.GetDirectoryName(source) ?? targetDirectory;
+
+                if (!string.Equals(directory, targetDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    gathered++;
+                }
+
+                string target = Path.Combine(targetDirectory, targetNames[i]);
 
                 if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
                 {
@@ -1042,7 +1254,8 @@ namespace ArchiveFixer.Extraction
                 Siblings = items.Select(i => i.CurrentFileName).ToList(),
                 Items = items,
                 TrialAttempted = trialAttempted,
-                ProbeNeedsPassword = probeNeedsPassword
+                ProbeNeedsPassword = probeNeedsPassword,
+                GatheredVolumes = gathered
             };
         }
 

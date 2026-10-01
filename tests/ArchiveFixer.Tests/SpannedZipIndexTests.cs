@@ -448,6 +448,131 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        /// <summary>
+        /// **跨目录找同组的卷**（用户 2026-10-01 点名两次，并明确"绝大多数只会在一个父文件夹和父文件夹的
+        /// 同级子文件夹当中"）：一组卷被拆到"父文件夹的两层里"时，候选池要能看到，而且**收进入口那一层**
+        /// —— 引擎找兄弟卷只看入口文件旁边那一层，散着放即使名字都对也解不开（改完必须真能打开）。
+        /// </summary>
+        [Fact]
+        public async System.Threading.Tasks.Task 一组卷被拆到父目录和兄弟目录里_要收进入口那一层_而且改完真能打开()
+        {
+            if (_winRar == null)
+            {
+                return;
+            }
+
+            // 形状：`包\A`（归档在自己这一层）+ `包\B`（兄弟目录，另一半在这儿）。
+            string package = Path.Combine(_root, "cross-dir", "包");
+            string own = Path.Combine(package, "A");
+            string sibling = Path.Combine(package, "B");
+
+            Directory.CreateDirectory(own);
+            Directory.CreateDirectory(sibling);
+
+            List<string> parts = MakeSpannedZip(own, "set.zip", entryCount: 20, entryBytes: 20 * 1024, volume: "64k");
+
+            Assert.True(parts.Count >= 4, "至少要 4 片");
+
+            List<string> disguised = DisguiseNames(own, parts, "set");
+            string tailBefore = FindSpannedTail(disguised);
+            string entryDirectory = Path.GetDirectoryName(tailBefore)!;
+
+            // 把一半挪到兄弟目录（末片不动，所以入口那一层就是 `A`）—— 名字已经改好（一个卷号都没有）。
+            var movedOut = new List<string>();
+
+            for (int i = 0; i < disguised.Count; i++)
+            {
+                if (i % 2 == 0 && !string.Equals(disguised[i], tailBefore, StringComparison.OrdinalIgnoreCase))
+                {
+                    string target = Path.Combine(sibling, Path.GetFileName(disguised[i]));
+                    File.Move(disguised[i], target);
+                    disguised[i] = target;
+                    movedOut.Add(target);
+                }
+            }
+
+            Assert.NotEmpty(movedOut);
+
+            string driver = disguised.First(p => !string.Equals(p, tailBefore, StringComparison.OrdinalIgnoreCase));
+
+            VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
+                driver,
+                VolumeNameRepair.EnumerateVolumeCandidatesNearby(driver),
+                new Engines.SevenZip.SevenZipEngine(),
+                workRootDirectory: WorkRootFor(driver));
+
+            Assert.True(plan.CanRepair, plan.Reason);
+            Assert.Equal(disguised.Count, plan.Items.Count);
+            Assert.True(plan.GatheredVolumes > 0, "散在兄弟目录里的卷必须被收过来（否则改名也解不开）");
+
+            foreach (VolumeRepairItem item in plan.Items)
+            {
+                Assert.True(
+                    string.Equals(Path.GetDirectoryName(item.TargetPath), entryDirectory, StringComparison.OrdinalIgnoreCase),
+                    $"「{item.CurrentFileName}」必须落到入口那一层（{entryDirectory}）");
+            }
+
+            VolumeNameRepairResult applied = VolumeNameRepair.TryApply(plan);
+            Assert.True(applied.Success, applied.Message);
+
+            // 兄弟目录里那几卷应当已经**不在原地**了（整组收进入口那一层）。
+            foreach (string moved in movedOut)
+            {
+                Assert.False(File.Exists(moved), $"「{Path.GetFileName(moved)}」应当已经收进入口那一层");
+            }
+
+            string newTail = Path.Combine(entryDirectory, "set.zip");
+
+            Assert.True(File.Exists(newTail));
+            Assert.True(CanList(entryDirectory, newTail), "收齐 + 改名之后引擎必须能列出这一组");
+        }
+
+        /// <summary>
+        /// 候选池的**边界**（用户 2026-10-01 定的）：看**自己这一层 + 自己的直接子目录 + 父目录这一家**
+        /// （父目录 + 父目录的各子目录）；⛔ 祖父及以上不看、⛔ 孙目录（自己子目录的子目录）不看、
+        /// ⛔ 与这一家无关的目录不看。
+        /// </summary>
+        [Fact]
+        public void 候选池_看自己这一层和自己的子目录和父目录这一家_但不看祖父和孙目录()
+        {
+            string grandParent = Path.Combine(_root, "nearby-scope");
+            string parent = Path.Combine(grandParent, "父目录");
+            string own = Path.Combine(parent, "自己这一层");
+            string sibling = Path.Combine(parent, "兄弟目录");
+            string ownChild = Path.Combine(own, "自己的子目录");
+            string grandChild = Path.Combine(ownChild, "孙目录");
+            string unrelated = Path.Combine(grandParent, "无关目录");
+
+            foreach (string directory in new[] { parent, own, sibling, ownChild, grandChild, unrelated })
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            // ⚠ 父目录这一家有 16 KiB 粗筛：样本都造得比它大，免得"太小被筛掉"与"范围不对"混在一起。
+            var payload = new byte[32 * 1024];
+
+            File.WriteAllBytes(Path.Combine(own, "own.bin"), payload);                  // 自己这一层 ✓
+            File.WriteAllBytes(Path.Combine(ownChild, "ownchild.bin"), payload);        // 自己的直接子目录 ✓
+            File.WriteAllBytes(Path.Combine(parent, "parent.bin"), payload);            // 父目录 ✓
+            File.WriteAllBytes(Path.Combine(sibling, "sibling.bin"), payload);          // 父目录的子目录（兄弟）✓
+            File.WriteAllBytes(Path.Combine(grandChild, "grandchild.bin"), payload);    // 孙目录 ✗
+            File.WriteAllBytes(Path.Combine(grandParent, "grandparent.bin"), payload);  // 祖父 ✗
+            File.WriteAllBytes(Path.Combine(unrelated, "unrelated.bin"), payload);      // 与这一家无关 ✗
+
+            List<string> names = VolumeNameRepair
+                .EnumerateVolumeCandidatesNearby(Path.Combine(own, "own.bin"))
+                .Select(c => Path.GetFileName(c.Path))
+                .ToList();
+
+            Assert.Contains("own.bin", names);
+            Assert.Contains("ownchild.bin", names);
+            Assert.Contains("parent.bin", names);
+            Assert.Contains("sibling.bin", names);
+            Assert.DoesNotContain("grandchild.bin", names);
+            Assert.DoesNotContain("grandparent.bin", names);
+            Assert.DoesNotContain("unrelated.bin", names);
+        }
+
         // ── 造样本 ──
 
         /// <summary>

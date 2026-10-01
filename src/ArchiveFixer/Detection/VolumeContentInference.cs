@@ -464,6 +464,48 @@ namespace ArchiveFixer.Detection
             ProbeBaseName + "." + index.ToString("D3", CultureInfo.InvariantCulture);
 
         /// <summary>
+        /// 枚举**一个目录**里的"路径 + 大小"（读不了就返回空，**绝不抛**）。
+        ///
+        /// <para>为什么单独留一个"收目录"的入口：分卷组的候选既要能按"某一卷所在目录"枚举，
+        /// 也要能按"归档目录的**子目录**"枚举（用户 2026-10-01 点名要的跨目录找卷）——
+        /// 两处必须走**同一份**实现，否则"同目录能找、子目录找不到"这种漂移迟早冒出来。</para>
+        /// </summary>
+        public static IReadOnlyList<VolumeCandidate> EnumerateCandidatesIn(string? directory)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return Array.Empty<VolumeCandidate>();
+                }
+
+                var candidates = new List<VolumeCandidate>();
+
+                foreach (string file in Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    long size;
+
+                    try
+                    {
+                        size = new FileInfo(file).Length;
+                    }
+                    catch
+                    {
+                        size = -1;
+                    }
+
+                    candidates.Add(new VolumeCandidate { Path = file, Size = size });
+                }
+
+                return candidates;
+            }
+            catch
+            {
+                return Array.Empty<VolumeCandidate>();
+            }
+        }
+
+        /// <summary>
         /// 候选里"最像末卷"的那一个：更短的里面**最大的**（并列时名字升序）。
         ///
         /// <para>为什么只认这一个：<c>-v</c> 切出来的末卷**必然比前面的卷短**，而目录里别的更短文件

@@ -6847,6 +6847,11 @@ namespace ArchiveFixer.ViewModels
                     /*
                      * 名字那条路走不通（推不出标准名）→ 再回退到内容级推断一次。
                      * ⛔ 判据与执行体仍然只有 VolumeNameRepair 那一份，这里只是换个入口。
+                     *
+                     * ⚠ 这一档**先用同目录候选**（老口径，逐字不变）：候选池一放宽，邻近目录里**别的包**的卷
+                     * 就会一起进内容判据 —— 真机夹具实测过：几组 RAR 卷大小完全一样，放宽之后
+                     * "同目录里认出 4 卷、卷号连不成 1..N" ⇒ 本来能改的组一个都不改。
+                     * 跨目录那一步只放在**下面这一次重试**里（同目录判不出来才放宽）。
                      */
                     plan = await VolumeNameRepair.PlanByContentAsync(
                         current,
@@ -6870,6 +6875,35 @@ namespace ArchiveFixer.ViewModels
                         volumeProbeWorkRoot,
                         volumeTrialPasswords,
                         cancellationToken).ConfigureAwait(false);
+                }
+
+                /*
+                 * **跨目录只在"同目录判不出来"时才放宽**（用户 2026-10-01 点名的跨目录找卷 + 「这种是小概率，
+                 * 一般都会放在一起」）。
+                 *
+                 * ⚠ 顺序很要紧：候选池一放宽，7z 那条路（"尺寸排序 + 硬链接试开"）的排列数就会跟着涨
+                 * —— 邻近目录里**别的包**的卷会一起进候选，把真正那一组的顺序挤出排列上限（`MaxOrderings`）。
+                 * 真机夹具上实测过：先放宽就直接让两组解不出来（产物 20 → 10）。
+                 * 所以：**先用老口径（只有自己这一层）试一次；判不出来，才把范围放宽到邻近目录**。
+                 */
+                if (plan == null || !plan.CanRepair)
+                {
+                    VolumeNameRepairPlan? widened = await VolumeNameRepair.PlanByContentWithNearbyCandidatesAsync(
+                        current,
+                        VolumeNameRepair.EnumerateVolumeCandidatesNearby(current),
+                        _archiveEngine,
+                        volumeProbeWorkRoot,
+                        volumeTrialPasswords,
+                        cancellationToken).ConfigureAwait(false);
+
+                    if (widened != null && widened.CanRepair)
+                    {
+                        plan = widened;
+                    }
+                    else if (plan == null)
+                    {
+                        plan = widened;
+                    }
                 }
 
                 if (plan == null || !plan.CanRepair || plan.Items.Count == 0)
@@ -6912,6 +6946,10 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(
                     "INFO",
                     $"{task.FileName}：分卷名不标准，已按标准名改好（{plan.Items.Count} 卷，只改名字、内容一个字节没动）：{plan.Describe()}"
+                    + (plan.GatheredVolumes > 0
+                        ? $"。⚠ 这一组有几卷散在别的文件夹里（{plan.GatheredVolumes} 卷），已一并收进入口那一层"
+                          + "（引擎找兄弟卷只看入口文件旁边那一层，散着放即使名字都对也解不开；⛔ 只在同一盘上收，不跨盘搬）"
+                        : string.Empty)
                     + (plan.ProbeNeedsPassword
                         ? "。⚠ 这一组是「文件名也加密」的归档（7z -mhe / RAR -hp）：试开时引擎只认得出它是一份加密归档、"
                           + "列不出清单 —— 解压那一步要靠「密码」页里的密码本，没有可用密码就会停在「密码错误」。"
