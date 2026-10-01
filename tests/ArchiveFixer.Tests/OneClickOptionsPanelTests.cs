@@ -223,19 +223,23 @@ namespace ArchiveFixer.Tests
                 line => line.Contains("没有本次选项面板", StringComparison.Ordinal));
         }
 
-        // ================================================================ ② 不写设置文件
+        // ================================================================ ② 设置记忆（默认就记住）
 
         /// <summary>
-        /// 硬要求②（本批最关键的一条）：**不勾「把本次选择存为默认」时，设置文件一个字节都不许改**。
+        /// **面板上选的那几档，默认就写回设置**（用户 2026-10-01 拍板：「这不就相当于设置记忆吗，
+        /// 这么简单的问题不要再问了」）。
         ///
-        /// 做法是跑一次真正的一键处理，前后比对设置文件的**字节哈希**；同时验证这一次确实用了面板的值
-        /// （产物落到了面板指定的目录）—— 否则"文件没变"可能只是因为流程根本没跑。
+        /// <para>老口径是"只有勾了「把本次选择存为默认」才写设置"，用户的实测感受是
+        /// **每次一键处理都要重新点一次落点**（"未选择指定位置"）。现在改成：面板确认之后
+        /// 一律记住这一组值 —— 勾选框保留（显式确认），但不再决定写不写。</para>
+        ///
+        /// <para>判据：① 这一次确实按面板的值跑（落点用了面板给的目录、源包按面板的档处理）；
+        /// ② 设置文件**变了**，而且写进去的正是面板那一组值；③ 日志说清了"已记住"。</para>
         /// </summary>
         [Fact]
-        public async Task 不勾存为默认_设置文件字节完全不变()
+        public async Task 面板选的值_默认就记进设置_下次不用再选()
         {
-            // 设置里刻意放一个**与面板不同**的源包档（第 32 条的默认是 KeepInPlace）：
-            // 只有两边不一样，下面"内存里的设置没被这一次覆盖污染"才是真的判据。
+            // 设置里刻意放一个**与面板不同**的源包档：只有这样才测得出"写回的是面板那一组"。
             Harness harness = CreateHarness(s => s.SourceHandling = nameof(SourceHandlingMode.MoveToRest));
             ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
 
@@ -262,34 +266,28 @@ namespace ArchiveFixer.Tests
             // ① 这一次确实按面板的值跑了（落点用了面板给的目录）
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
             Assert.StartsWith(flatRoot, task.OutputPath, StringComparison.OrdinalIgnoreCase);
-            Assert.False(
-                task.OutputPath.StartsWith(harness.OutputRoot, StringComparison.OrdinalIgnoreCase),
-                "面板选的落点没生效，那么'设置文件没变'就不能说明任何问题");
             Assert.Equal(1, prompts);
 
             // ② 源包处理也跟着面板走：KeepInPlace = 一个字节都不搬
             Assert.True(File.Exists(harness.SourcePath), "面板选了留在原地，源包不该被搬走");
 
-            // ③ 设置文件：字节级不变
-            Assert.Equal(before, HashFile(harness.SettingsFilePath));
+            // ③ 设置文件**变了**（这就是"记忆"），而且写入的正是面板那一组值。
+            Assert.NotEqual(before, HashFile(harness.SettingsFilePath));
+            Assert.Equal(flatRoot, harness.Vm.Settings.CustomOutputDirectory);
+            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), harness.Vm.Settings.SourceHandling);
 
-            // ④ 内存里的设置对象也没被这一次覆盖污染：设置里是 MoveToRest，面板选的是 KeepInPlace，
-            //    跑完设置里必须还是 MoveToRest（否则下一次不进面板就会静默按面板的值走）。
-            Assert.Equal(harness.OutputRoot, harness.Vm.Settings.CustomOutputDirectory);
-            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), harness.Vm.Settings.SourceHandling);
-
-            // ⑤ 日志里说清了"不写回设置"
+            // ④ 日志说清了"已记住"。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("不写回设置", StringComparison.Ordinal));
+                line => line.Contains("已记住", StringComparison.Ordinal));
         }
 
         /// <summary>
-        /// 硬要求②的另一半：勾了「存为默认」才写，而且写进去的正是面板上那一组值。
-        /// 与上一条合起来，"写 / 不写"两侧都有判据。
+        /// 硬要求②的另一半（勾选框仍可用）：勾了「存为默认」时写进去的也是面板上那一组值 ——
+        /// 与上一条合起来，"不勾也记住 / 勾了也记住"两侧行为一致。
         /// </summary>
         [Fact]
-        public async Task 勾了存为默认_才写设置文件且写入的是本次选择()
+        public async Task 勾了存为默认_写设置文件且写入的是本次选择()
         {
             Harness harness = CreateHarness();
             ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
@@ -323,14 +321,14 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 第 33 条：**弹窗里选的「删除操作」这一次就算数** —— 设置里是默认的「不动其余物」也一样，
-        /// 而且它照旧**不写设置文件**（没勾「存为默认」）。
+        /// 而且（2026-10-01 起）**默认就记住**：弹窗确认之后这一档会被写回设置。
         ///
-        /// <para>为什么必须钉：老实现里 `PrepareRestHandlingForBatch` 只读设置，而弹窗里**根本没有这一项**
-        /// （用户 2026-09-25："一键处理的弹窗也是要随着现在的设置进行更新的"）——
+        /// <para>为什么必须钉"这一次就算数"：老实现里 `PrepareRestHandlingForBatch` 只读设置，
+        /// 而弹窗里**根本没有这一项**（用户 2026-09-25："一键处理的弹窗也是要随着现在的设置进行更新的"）——
         /// 结果是"其余物到底删不删"在弹窗里既看不到、也改不了。</para>
         /// </summary>
         [Fact]
-        public async Task 弹窗里选彻底删除_这一次真的删且不写设置文件()
+        public async Task 弹窗里选彻底删除_这一次真的删且默认记进设置()
         {
             Harness harness = CreateHarness();
             ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
@@ -353,9 +351,9 @@ namespace ArchiveFixer.Tests
                 Directory.Exists(Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName)),
                 "彻底删除跑完不该还留着其余物目录");
 
-            // 没勾「存为默认」→ 设置文件与内存里的设置都不许被这一次污染。
-            Assert.Equal(before, HashFile(harness.SettingsFilePath));
-            Assert.Equal(RestHandlingModes.Keep, harness.Vm.Settings.RestHandlingAfterVerify);
+            // 默认记住：设置文件变了，而且这一档写的正是弹窗里选的那个。
+            Assert.NotEqual(before, HashFile(harness.SettingsFilePath));
+            Assert.Equal(RestHandlingModes.Delete, harness.Vm.Settings.RestHandlingAfterVerify);
         }
 
         /// <summary>

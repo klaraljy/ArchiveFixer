@@ -783,15 +783,21 @@ namespace ArchiveFixer.ViewModels
                         }
 
                         /*
-                         * 「把本次选择存为默认」是**唯一**允许写落点 / 终端落法 / 源包操作 / 删除操作
-                         * 这四个设置的分支（硬要求②）。写设置这件事只发生在用户显式勾选之后 ——
-                         * 没勾时这条路上没有写盘代码。
+                         * **把这次的选择记住**（用户 2026-10-01：「这不就相当于设置记忆吗，这么简单的问题不要再问了」）。
+                         *
+                         * <para>老口径是"只有勾了「把本次选择存为默认」才写设置"（硬要求②）。用户实测下来的感受是
+                         * 每次一键处理都要重新点一次落点（"未选择指定位置"），而**设置记忆本来就是他要的** ——
+                         * 一个要每天用的工具，不该让他每次都重选一遍。</para>
+                         *
+                         * <para>⛔ 记忆的**范围**只有弹窗上他看得见的那几档：落点（含指定位置那一格）、
+                         * 源包处理、删除操作。⛔ 不碰其它任何设置；⛔ 取消 / 没弹框这两条路一个字节都不写。</para>
                          */
-                        if (runOptions.SaveAsDefault)
-                        {
-                            _vm.SaveOneClickOptionsAsDefaults(runOptions);
-                            AppendLog("INFO", $"本次选项已存为默认（写入设置）：{runOptions.Describe()}");
-                        }
+                        _vm.SaveOneClickOptionsAsDefaults(runOptions);
+
+                        AppendLog(
+                            "INFO",
+                            $"本次选项已记住（写入设置，下次不用再选）：{runOptions.Describe()}"
+                            + (runOptions.SaveAsDefault ? string.Empty : "（勾选框留作显式确认，行为已统一为记住）"));
                     }
                     else
                     {
