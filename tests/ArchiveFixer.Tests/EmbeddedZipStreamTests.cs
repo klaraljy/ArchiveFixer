@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -579,6 +580,81 @@ namespace ArchiveFixer.Tests
             Assert.Equal(0, directRoute.ProcessArtifactBytes);
             Assert.Equal(carveRoute.PeakBytes - 4096, directRoute.PeakBytes);
             Assert.Contains("不需要", directRoute.Basis, StringComparison.Ordinal);
+        }
+
+        // ================================================================ ⑭ 内嵌 ZIP 的加密判读（2026-10-01）
+
+        /// <summary>
+        /// **内嵌的 AES ZIP 要如实报"加密"**（以前这里写死 <c>IsProbablyEncrypted = false</c> ——
+        /// 那是**误报"没加密"**，比"不知道"还糟：下游会按"不用密码"去排任务）。
+        ///
+        /// <para>判据现成：直读探针已经知道"里面是 AES 条目、这次没给候选密码"（<c>RequiresPassword</c>），
+        /// 那正是"这一份是加密的"这条事实。真机形状就是网盘那种分享包（假视频 + 尾部加密 ZIP）。
+        /// §11.4 的红线：读不出来一律说「不知道」，⛔ 不猜、不误报。</para>
+        ///
+        /// <para><b>对照组</b>：普通（不加密）内嵌 ZIP **仍必须是 false** ——
+        /// ⛔ 不许为了"更保守"把普通包也报成加密（那会把一堆正常包推进密码候选那条路）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 内嵌的AES_ZIP_要如实报加密_普通的不许误报()
+        {
+            string sevenZip = SevenZipFactAttribute.LocateSevenZipPath()!;
+
+            string seed = Path.Combine(_root, "seed.txt");
+            File.WriteAllText(seed, "内嵌 AES 样本", new UTF8Encoding(false));
+
+            // ① 加密的那一份：7z 造 AES-256 的 ZIP（与网盘分享包同一档）。
+            //    ⚠ 密码用**纯 ASCII** 占位符：中文密码经 ArgumentList 传给 7z 会报「参数错误」（实测）。
+            string aesZip = Path.Combine(_root, "aes.zip");
+            RunSevenZip(sevenZip, new[] { "a", "-tzip", aesZip, seed, "-psample-password", "-mem=AES256" });
+
+            string aesPolyglot = BuildPolyglot(File.ReadAllBytes(aesZip), 4096, TailAfterEocdLength, "aes-polyglot");
+
+            Harness encrypted = CreateHarness();
+            await encrypted.AddPathsAsync(aesPolyglot);
+
+            ArchiveTask encryptedTask = Assert.Single(encrypted.Vm.Tasks);
+            Assert.True(encryptedTask.EmbeddedArchiveOffset > 0, "前提：要认出尾部有内嵌归档");
+            Assert.True(
+                encryptedTask.IsEncrypted,
+                "内嵌的 AES ZIP 必须如实报「加密」—— ⛔ 不许说「没加密」（§11.4：不猜、不误报）");
+
+            // ② 对照：不加密的内嵌 ZIP —— 必须是 false（⛔ 不许矫枉过正）。
+            byte[] plainZip = BuildZipBytes((PayloadEntryName, Encoding.UTF8.GetBytes(PayloadText), CompressionLevel.Optimal));
+            string plainPolyglot = BuildPolyglot(plainZip, 4096, TailAfterEocdLength, "plain-polyglot");
+
+            Harness plain = CreateHarness();
+            await plain.AddPathsAsync(plainPolyglot);
+
+            ArchiveTask plainTask = Assert.Single(plain.Vm.Tasks);
+            Assert.True(plainTask.EmbeddedArchiveOffset > 0, "前提：要认出尾部有内嵌归档");
+            Assert.False(plainTask.IsEncrypted, "不加密的内嵌 ZIP 不许被误报成加密");
+        }
+
+        /// <summary>调真 7z.exe（用 <c>ArgumentList</c> 安全传参，⛔ 不拼命令行字符串 —— 不变量 10）。</summary>
+        private static void RunSevenZip(string sevenZipPath, string[] arguments)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = sevenZipPath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            foreach (string argument in arguments)
+            {
+                psi.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(psi)!;
+
+            string stdout = process.StandardOutput.ReadToEnd();
+            string stderr = process.StandardError.ReadToEnd();
+
+            Assert.True(process.WaitForExit(120_000), "7z 超时");
+            Assert.True(process.ExitCode == 0, $"7z 失败（{process.ExitCode}）：{stdout}{stderr}");
         }
 
         // ================================================================ ⑬ 端到端

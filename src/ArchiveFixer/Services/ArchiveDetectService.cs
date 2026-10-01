@@ -575,7 +575,19 @@ namespace ArchiveFixer.Services
                 SuggestedExtension = ".zip",
                 IsArchive = true,
                 IsKnownFormat = true,
-                IsProbablyEncrypted = false,
+                /*
+                 * 内嵌 ZIP 的加密判读（2026-10-01）：以前这里**写死 false** —— 那是**误报"没加密"**。
+                 *
+                 * 判据现成：探针在上面已经告诉我们"里面是 AES 条目、这次没给候选密码"（`RequiresPassword`），
+                 * 那正是"这一份是加密的"这条事实；而 §11.4 的红线是"读不出来一律说不知道，
+                 * ⛔ 不猜、不误报" —— 写死 false 比"不知道"还糟：它会让下游按"不用密码"去排任务
+                 * （百度网盘那种分享包本来就是 AES 内嵌，见上面那段注释）。
+                 *
+                 * ⛔ 只在这一档给 true：探针**判不出**时 `RequiresPassword` 也是 false，
+                 * 那时如实落在"没加密"这一档是既有口径（`IsProbablyEncrypted` 是 bool，没有第三态），
+                 * ⛔ 不许为了"更保守"就把它当成 true —— 那会把一堆普通包误报成加密。
+                 */
+                IsProbablyEncrypted = directRead.RequiresPassword,
                 Message = info.Message,
                 HeaderHex = headerResult.HeaderHex,
                 Confidence = 80,
