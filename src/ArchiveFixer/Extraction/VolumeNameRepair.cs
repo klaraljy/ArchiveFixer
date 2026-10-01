@@ -218,6 +218,23 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
+             * 「本体是标准名、只有几个续卷的名字被改坏」这一档（用户 2026-10-01 真机 DDD：跨盘 ZIP 分了 4 片，
+             * 本体 `222.zip` 干净、三个续卷叫 `222.z0删1` / `222.z除02` / `222.z文03`；7-Zip 报
+             * `ERROR = Missing volume : 222.z01` ⇒ 整包解不开、源包四个都不进其余物）。
+             *
+             * ⛔ 必须排在下面两道门**之前**：那两道门（"名字里得有卷号"、"必须是第 1 卷 / 得找得到兄弟"）
+             * 都是为"**本体自己**被改坏"设计的，而这一档里本体本来就是对的 —— 走到下面只会被
+             * `FindSiblingVolumes`（**按标准名**找兄弟）判成"没有兄弟"，于是整组一个名字都不改。
+             */
+            VolumeNameRepairPlan? disguisedVolumes =
+                PlanDisguisedVolumesBesideStandardSelf(path, fileName, fileNamesInDirectory);
+
+            if (disguisedVolumes != null)
+            {
+                return disguisedVolumes;
+            }
+
+            /*
              * 「名字里得有卷号、而且必须是第 1 卷」这两条是**这道门的核心**：
              * 名字里没有卷号的文件（普通包）改名只会把它弄坏；不是第一卷的（.002 之类）
              * 改名解决不了"缺第一卷"的问题 —— 那种情况该做的是把它放回原组，不是改它的名字。
@@ -665,6 +682,115 @@ namespace ArchiveFixer.Extraction
                 string.Format(StatusText.VolumeRepairContentGroupNotContiguousFormat, detail),
             _ => StatusText.VolumeRepairContentNotAVolumeMember
         };
+
+        /// <summary>
+        /// 「**本体是标准名，只有几个续卷的名字被改坏**」这一档的计划（用户 2026-10-01 真机 DDD）。
+        ///
+        /// <para>现场：跨盘 ZIP 分了 4 片 —— 本体 `222.zip`（标准名，7-Zip 打开这一组的入口），
+        /// 三片续卷叫 `222.z0删1` / `222.z除02` / `222.z文03`（字被塞进卷标记里）。7-Zip 找 `222.z01` 找不到 ⇒
+        /// 「分卷压缩包缺少必要分卷」⇒ 整包解不开。用户原话：「我这次将 zip 多分了几个卷你就弄不了了」。</para>
+        ///
+        /// <para>判据（只用名字，不读内容、不试开）：</para>
+        /// <list type="number">
+        /// <item><description>自己**不是**"被伪装的卷名"（那种形状归 <see cref="PlanJunkTailGroup"/> 管，它在另一条路上）；</description></item>
+        /// <item><description>自己的基名（剥卷标记 + 剥已知归档后缀，唯一出口 <see cref="OutputPlacement.ResolveArchiveBaseName"/>）
+        /// 与某个同目录兄弟"去杂质之后的基名"**逐字相等**；</description></item>
+        /// <item><description>这些兄弟去杂质之后得到的**规范卷标记互不相同**（两个文件还原成同一个卷名 ⇒ 有歧义 ⇒ 整组不动）；</description></item>
+        /// <item><description>每一卷的目标名**都没被占用**（⛔ 绝不覆盖；占了一个 ⇒ 整组不动）。</description></item>
+        /// </list>
+        ///
+        /// <para>⛔ 与其余改名路同一条纪律：只改名字、内容一个字节不动；全成或全不成（执行体仍是
+        /// <see cref="TryApply"/>，中途失败倒序改回原名）。</para>
+        /// </summary>
+        private static VolumeNameRepairPlan? PlanDisguisedVolumesBesideStandardSelf(
+            string path,
+            string fileName,
+            IEnumerable<string?>? fileNamesInDirectory)
+        {
+            // ① 自己带垃圾 ⇒ 不是这一档（那是 PlanJunkTailGroup 的形状）。
+            if (TrySplitDisguised(fileName, out _, out _))
+            {
+                return null;
+            }
+
+            string selfBase = OutputPlacement.ResolveArchiveBaseName(fileName);
+
+            if (selfBase.Length == 0)
+            {
+                return null;
+            }
+
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            var items = new List<VolumeRepairItem>();
+            var marks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string? sibling in fileNamesInDirectory ?? Array.Empty<string?>())
+            {
+                if (string.IsNullOrWhiteSpace(sibling))
+                {
+                    continue;
+                }
+
+                if (!TrySplitDisguised(sibling, out string siblingBase, out string siblingMark) ||
+                    !string.Equals(siblingBase, selfBase, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (string.Equals(sibling, fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // 两个文件去杂质之后是同一个卷名 ⇒ 推不出"谁是谁"，整组不动（判不出就不改）。
+                if (!marks.Add(siblingMark))
+                {
+                    return Cannot(path, StatusText.VolumeRepairNoSuggestion);
+                }
+
+                string targetName = selfBase + "." + siblingMark;
+
+                if (File.Exists(Path.Combine(directory, targetName)))
+                {
+                    return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, targetName));
+                }
+
+                items.Add(new VolumeRepairItem
+                {
+                    CurrentPath = Path.Combine(directory, sibling),
+                    CurrentFileName = sibling,
+                    SuggestedFileName = targetName,
+                    TargetPath = Path.Combine(directory, targetName)
+                });
+            }
+
+            if (items.Count == 0)
+            {
+                return null;
+            }
+
+            /*
+             * 第一卷先改（`TryApply` 按 CurrentPath/TargetPath 起手，再走 Items 里剩下的）。
+             * ⚠ CurrentPath 必须指向**真要改的那一卷**，不能指向调用方手上那个已经标准名的本体：
+             * TryApply 见到"源 == 目标"会直接判 AlreadyStandard 并把整份计划拒掉。
+             */
+            List<VolumeRepairItem> ordered = items
+                .OrderBy(i => i.CurrentFileName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            VolumeRepairItem first = ordered[0];
+
+            return new VolumeNameRepairPlan
+            {
+                CanRepair = true,
+                CurrentPath = first.CurrentPath,
+                CurrentFileName = first.CurrentFileName,
+                SuggestedFileName = first.SuggestedFileName,
+                TargetPath = first.TargetPath,
+                Siblings = ordered.Select(i => i.CurrentFileName).ToList(),
+                Items = ordered
+            };
+        }
 
         /// <summary>
         /// 「整组名字的卷号后面都粘着垃圾」这一档的计划：<c>giu910.7z.001删除</c> →

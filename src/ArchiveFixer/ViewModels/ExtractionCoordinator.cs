@@ -6809,8 +6809,18 @@ namespace ArchiveFixer.ViewModels
                  * 代价是这一单要么按原名继续、要么报缺卷 —— 比在用户盘上开工作区划算。
                  */
                 string volumeProbeWorkRoot = _pathService.WorkDirectory;
+                string currentName = FileNameHelper.GetFileName(current);
 
-                if (FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(current)))
+                /*
+                 * 什么时候值得问"名字那条路"：
+                 * ① 自己的名字里带卷标记（老口径）；
+                 * ② **账上已经归过组**（`task.IsVolumeGroup`）—— 真机 DDD（用户 2026-10-01 18:09）：
+                 *    跨盘 ZIP 分了 4 片，本体 `222.zip` 是**标准名**（它不是卷标记），被改坏的是三个续卷
+                 *    （`222.z0删1` / `222.z除02` / `222.z文03`）。只按 ① 判 ⇒ 名字那条路**压根不跑**，
+                 *    内容那条路又只支持 2 片的跨盘 zip ⇒ 两边都不动 ⇒ 7-Zip 报 `Missing volume : 222.z01`、
+                 *    整包解不开（用户原话：「我这次将 zip 多分了几个卷你就弄不了了」）。
+                 */
+                if (FileNameHelper.IsVolumePartFileName(currentName) || task.IsVolumeGroup)
                 {
                     plan = VolumeNameRepair.Plan(
                         current,

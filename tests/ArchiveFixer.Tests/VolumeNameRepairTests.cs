@@ -265,6 +265,105 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ 工具
 
+        // ================================================================ 本体干净、只有续卷被改坏（真机 DDD）
+
+        /// <summary>
+        /// **真机 DDD（用户 2026-10-01 18:09）**：跨盘 ZIP 分了 **4 片** —— 本体 `222.zip` 是干净的标准名，
+        /// 三个续卷的名字里被塞了字（`222.z0删1` / `222.z除02` / `222.z文03`）。
+        ///
+        /// <para>现场：7-Zip 报 <c>ERROR = Missing volume : 222.z01</c> ⇒ 整包解不开、任务落 Failed，
+        /// 源包四个文件一个都没进 `其余物`。用户原话：「我这次将 zip 多分了几个卷你就弄不了了」。</para>
+        ///
+        /// <para><b>根因</b>：名字那条路的两道门都把这个形状挡在外面 ——
+        /// ① 调用方的入口判据是 `IsVolumePartFileName(自己的名字)`，而 `222.zip` **不是**卷标记 ⇒ 名字路压根没跑；
+        /// ② 就算跑了，`PlanJunkTailGroup` 要求**自己**的名字里带垃圾（`TrySplitDisguised(222.zip)` = false），
+        ///    而 `FindSiblingVolumes` 只按**标准名**找兄弟 ⇒ 认不出 `z0删1` 这种"垃圾塞在卷标记里面"的续卷。
+        /// 内容那条路又只支持 **2 片**的跨盘 zip（末片 EOCD 的盘号 + 消去法）⇒ 4 片判不出顺序 ⇒ 两边都不动。</para>
+        ///
+        /// <para>这一条钉的就是：**本体干净、续卷带垃圾**时，照样要把整组按标准名改好（只改名、不覆盖）。</para>
+        /// </summary>
+        [Fact]
+        public void 计划_本体干净而续卷的名字被改坏_整组按标准名改好()
+        {
+            string directory = NewDirectory("clean-body-disguised-volumes");
+
+            string body = CreateFile(directory, "222.zip", 64, seed: 1);
+            CreateFile(directory, "222.z0删1", 128, seed: 2);
+            CreateFile(directory, "222.z除02", 128, seed: 3);
+            CreateFile(directory, "222.z文03", 128, seed: 4);
+
+            string bodyHash = Sha256(body);
+
+            VolumeNameRepairPlan? plan = VolumeNameRepair.Plan(body, NamesIn(directory));
+
+            Assert.NotNull(plan);
+            Assert.True(plan!.CanRepair, $"本体干净 + 续卷带垃圾必须能改：{plan.Reason}");
+
+            // 要改的是**三个续卷**（本体已经是标准名，不该动它）。
+            Assert.Equal(3, plan.Items.Count);
+            Assert.Equal(
+                new[] { "222.z01", "222.z02", "222.z03" },
+                plan.Items.Select(i => i.SuggestedFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray());
+            Assert.DoesNotContain(plan.Items, i => string.Equals(i.CurrentFileName, "222.zip", StringComparison.OrdinalIgnoreCase));
+
+            VolumeNameRepairResult result = VolumeNameRepair.TryApply(plan);
+
+            Assert.True(result.Success, result.Message);
+
+            // 盘上：三个标准卷名都在、旧名都没了、**本体一个字节没动**。
+            Assert.True(File.Exists(Path.Combine(directory, "222.z01")));
+            Assert.True(File.Exists(Path.Combine(directory, "222.z02")));
+            Assert.True(File.Exists(Path.Combine(directory, "222.z03")));
+            Assert.False(File.Exists(Path.Combine(directory, "222.z0删1")));
+            Assert.False(File.Exists(Path.Combine(directory, "222.z除02")));
+            Assert.False(File.Exists(Path.Combine(directory, "222.z文03")));
+            Assert.Equal(bodyHash, Sha256(body));
+        }
+
+        /// <summary>
+        /// **对照**：续卷的名字本来就标准（`222.z01`…）⇒ 一个名字都不许改（⛔ 别把"没垃圾"也当成要改）。
+        /// </summary>
+        [Fact]
+        public void 计划_本体干净且续卷也标准_一个名字都不改()
+        {
+            string directory = NewDirectory("clean-body-clean-volumes");
+
+            string body = CreateFile(directory, "222.zip", 64, seed: 1);
+            CreateFile(directory, "222.z01", 128, seed: 2);
+            CreateFile(directory, "222.z02", 128, seed: 3);
+
+            VolumeNameRepairPlan? plan = VolumeNameRepair.Plan(body, NamesIn(directory));
+
+            Assert.True(plan == null || !plan.CanRepair, "名字本来就标准时不该出改名计划");
+
+            // 名字一个都没动。
+            Assert.True(File.Exists(Path.Combine(directory, "222.z01")));
+            Assert.True(File.Exists(Path.Combine(directory, "222.z02")));
+        }
+
+        /// <summary>
+        /// **绝不覆盖**：某个标准卷名已经被别的文件占着 ⇒ 整组不改、一个字节都不动（老红线）。
+        /// </summary>
+        [Fact]
+        public void 计划_本体干净而目标卷名被占_整组不改()
+        {
+            string directory = NewDirectory("clean-body-target-taken");
+
+            string body = CreateFile(directory, "222.zip", 64, seed: 1);
+            CreateFile(directory, "222.z0删1", 128, seed: 2);
+            string occupier = CreateFile(directory, "222.z01", 256, seed: 9);
+
+            string occupierHash = Sha256(occupier);
+
+            VolumeNameRepairPlan? plan = VolumeNameRepair.Plan(body, NamesIn(directory));
+
+            Assert.True(plan == null || !plan.CanRepair, "目标卷名被占时必须拒绝");
+
+            // 名字一个都没动、占位者内容不变。
+            Assert.True(File.Exists(Path.Combine(directory, "222.z0删1")));
+            Assert.Equal(occupierHash, Sha256(occupier));
+        }
+
         private string NewDirectory(string name)
         {
             string path = Path.Combine(_root, name);
@@ -329,6 +428,97 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(directory, archiveName + ".001")), "第一卷没造出来");
             Assert.True(File.Exists(Path.Combine(directory, archiveName + ".002")), "第二卷没造出来");
             Assert.True(File.Exists(Path.Combine(directory, archiveName + ".003")), "第三卷没造出来");
+        }
+
+        /// <summary>
+        /// **协调器那一层的入口判据**（真机 DDD 的另一半）：本体是标准名（`222.zip` —— 它**不是**卷标记）时，
+        /// 批首那道"整组改名"必须**照样跑**。
+        ///
+        /// <para>修之前那个入口是 `IsVolumePartFileName(自己的名字)` ⇒ `.zip` 判 false ⇒ 名字路**压根不跑**
+        /// （只靠单元测试钉 `Plan` 是不够的：计划再好，调用方不问也是白搭）。</para>
+        ///
+        /// <para>同时钉"任务账跟着改"：`SyncTasksAfterVolumeRename` 必须把 `VolumePaths` 里的旧名换成新名
+        /// —— 否则这一单后面按旧名字找卷、报「分卷缺失」。</para>
+        /// </summary>
+        [Fact]
+        public async Task 批首整组改名_本体是标准zip时也要跑_盘上与任务账一起改成标准名()
+        {
+            Harness harness = CreateHarness();
+            string directory = NewDirectory("coordinator-disguised-volumes");
+
+            string v1 = CreateFile(directory, "222.z0删1", 128, seed: 2);
+            string v2 = CreateFile(directory, "222.z除02", 128, seed: 3);
+            string v3 = CreateFile(directory, "222.z文03", 128, seed: 4);
+            string body = CreateFile(directory, "222.zip", 64, seed: 1);
+
+            var task = new ArchiveTask(body) { IsVolumeGroup = true };
+            task.VolumePaths.Add(v1);
+            task.VolumePaths.Add(v2);
+            task.VolumePaths.Add(v3);
+            task.VolumePaths.Add(body);
+
+            await harness.Coordinator.NormalizeDisguisedVolumeNamesForBatchAsync(new[] { task });
+
+            // 盘上：三个标准卷名都在、旧名都没了、**本体与内容一个字节没动**。
+            Assert.True(File.Exists(Path.Combine(directory, "222.z01")), "续卷没被改回标准名");
+            Assert.True(File.Exists(Path.Combine(directory, "222.z02")));
+            Assert.True(File.Exists(Path.Combine(directory, "222.z03")));
+            Assert.False(File.Exists(v1));
+            Assert.False(File.Exists(v2));
+            Assert.False(File.Exists(v3));
+            Assert.True(File.Exists(body));
+
+            // 任务账也跟上了（否则后面按旧名字找卷 ⇒ 假报缺卷）。
+            Assert.Contains(Path.Combine(directory, "222.z01"), task.VolumePaths);
+            Assert.DoesNotContain(v1, task.VolumePaths);
+            Assert.True(task.VolumeNameAutoRenamed);
+        }
+
+        /// <summary>
+        /// **同一族的另一个形状**（提前钉住，免得用户下次换个样本又踩）：本体干净（`111.part1.rar`）、
+        /// 后面几卷的名字里被塞了字（`111.part删2.rar` / `111.part文3.rar`）。
+        ///
+        /// <para>与 ZIP 那条的区别：RAR 的卷标记是 `partN`（后面还跟着归档后缀 `.rar`），
+        /// 而"去杂质"那一步（<c>TrySplitDisguised</c>）只认"卷标记后面没有别的点段"的形状；
+        /// 所以这一档**不一定**走得通名字路 —— 走不通时必须老老实实返回"不改"，
+        /// 由内容那条路（RAR 的卷号写在内容里）接手。⛔ 无论走哪条，都不许改错名字。</para>
+        /// </summary>
+        [Fact]
+        public void 计划_本体干净的RAR而续卷带垃圾_要么整组改对要么什么都不改()
+        {
+            string directory = NewDirectory("clean-rar-body-disguised-volumes");
+
+            string first = CreateFile(directory, "111.part1.rar", 64, seed: 1);
+            string second = CreateFile(directory, "111.part删2.rar", 128, seed: 2);
+            string third = CreateFile(directory, "111.part文3.rar", 128, seed: 3);
+
+            string firstHash = Sha256(first);
+
+            VolumeNameRepairPlan? plan = VolumeNameRepair.Plan(first, NamesIn(directory));
+
+            if (plan == null || !plan.CanRepair)
+            {
+                // 判不出 ⇒ 一个名字都不许改（后面交给内容那条路）。
+                Assert.True(File.Exists(second));
+                Assert.True(File.Exists(third));
+                Assert.Equal(firstHash, Sha256(first));
+                return;
+            }
+
+            // 走通了就必须**改对**：每一卷的目标名都等于 基名 + 自己的标准卷段。
+            Assert.All(
+                plan.Items,
+                item => Assert.Matches(@"^111\.part[1-9][0-9]*\.rar$", item.SuggestedFileName));
+
+            VolumeNameRepairResult result = VolumeNameRepair.TryApply(plan);
+
+            Assert.True(result.Success, result.Message);
+            Assert.True(File.Exists(Path.Combine(directory, "111.part1.rar")));
+            Assert.True(File.Exists(Path.Combine(directory, "111.part2.rar")));
+            Assert.True(File.Exists(Path.Combine(directory, "111.part3.rar")));
+            Assert.False(File.Exists(second));
+            Assert.False(File.Exists(third));
+            Assert.Equal(firstHash, Sha256(first));
         }
 
         private Harness CreateHarness()
