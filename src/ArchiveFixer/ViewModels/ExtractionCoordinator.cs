@@ -7023,6 +7023,62 @@ namespace ArchiveFixer.ViewModels
         /// （既不是成功也不是失败）：批末汇总与批末诊断读的都是它。</para>
         /// </summary>
         /// <returns>true = 已经跳过（调用方必须立刻 return，什么都不许做）。</returns>
+        /// <summary>
+        /// 这一趟**真解出来的东西**够不够证明"密码是对的"（⛔ 只数事实，不比任何文案）。
+        ///
+        /// <para>判据与理由（用户 2026-10-01 真机 `giu910`，17.7 GiB 的 7z `-mhe`）：</para>
+        /// <list type="bullet">
+        /// <item><description><b>密码错</b>的签名：第一份数据就过不了（7-Zip 在加密流上判死），
+        /// 暂存目录里只留 0 字节桩 / 至多一个文件 —— 这一档**必须继续试下一个候选**（正确的密码可能排在后面）。</description></item>
+        /// <item><description><b>密码对、有个别文件坏了</b>的签名：整个包基本都解了出来（真机那一单 557 个文件、
+        /// 只死在一个 mp4 的 CRC 上）—— 这一档再试密码**没有任何意义**。</description></item>
+        /// </list>
+        ///
+        /// <para>所以门槛是"**至少两个文件、且字节数 &gt; 0**"：一个文件/零字节都按老口径继续试候选（保守档），
+        /// 只有"真解出了大半个包"才敢下这个结论。</para>
+        /// </summary>
+        private static bool TryMeasureProducedContent(string? directory, out int files, out long bytes)
+        {
+            files = 0;
+            bytes = 0;
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return false;
+                }
+
+                foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                {
+                    long length;
+
+                    try
+                    {
+                        length = new FileInfo(file).Length;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (length <= 0)
+                    {
+                        continue;   // 0 字节桩文件不算"解出了东西"（错密码的典型签名）
+                    }
+
+                    files++;
+                    bytes += length;
+                }
+            }
+            catch
+            {
+                return false;   // 数不出来 ⇒ 按老口径办（继续试候选），宁可不省这一步
+            }
+
+            return files >= 2 && bytes > 0;
+        }
+
         private bool SkipWhenAnotherTaskOwnsThisVolumeGroup(ArchiveTask task)
         {
             try
@@ -13171,6 +13227,14 @@ namespace ArchiveFixer.ViewModels
                 ArchiveOperationResult? ambiguousResult = null;
 
                 /*
+                 * 「密码已经证实、坏的是数据」这一档（用户 2026-10-01 真机 `giu910`，17.7 GiB 解了 13 分钟）：
+                 * true = 某一趟**真解出了内容**之后才失败的 ⇒ 密码不是问题，不再往下试候选。
+                 * 判据见下面候选循环里那两处 `TryMeasureProducedContent`。
+                 */
+                bool passwordProvenDataFailed = false;
+                (int Files, long Bytes) provenProducts = (0, 0);
+
+                /*
                  * ===== 先试密码，再解整包（用户 2026-09-25 第 37 条）=====
                  *
                  * 两条纪律，缺一条他那个 12 GiB 的包就又要白跑一整包：
@@ -13590,6 +13654,29 @@ namespace ArchiveFixer.ViewModels
 
                     if (extractResult.DetectedErrorType == "WrongPassword")
                     {
+                        /*
+                         * ===== 「密码其实已经对了，坏的是数据」这一档（用户 2026-10-01 真机 `giu910`）=====
+                         *
+                         * 现场：一组 17.7 GiB 的 7z `-mhe`（19 GB 源包）——
+                         * 候选 1/2 秒级失败（头没打开），**候选 3 把整个包解到 98%**（13 分钟），
+                         * 最后 `CRC Failed in encrypted file. Wrong password? : giu\V\fulibl.net (15).mp4`。
+                         * 老口径把这一句当成"这个候选不对"，于是**解压完又回去试密码**（候选 4..10），
+                         * 13 分钟的产物全部丢弃、最后报「密码错误」。用户原话：
+                         * 「**为什么试了密码之后再去试一次，我说过要试密码的话要在最开始的时候，而不是解压完，
+                         * 这才 20G，大一点你这就是在浪费用户时间**」。
+                         *
+                         * 判据**只读事实**（⛔ 不比任何文案）：这一趟在暂存目录里**真解出来的东西**有多少。
+                         * 「密码错」的签名是"第一份数据就过不了 ⇒ 只留 0 字节桩 / 至多一个文件"；
+                         * 「密码对、有个别文件坏了」的签名是"整个包基本都解出来了、只死在那一个坏文件上"。
+                         * 后者再往下试密码**没有任何意义**（密码已经被这天趟解压本身证明了）。
+                         */
+                        if (TryMeasureProducedContent(engineOutputPath, out int wrongPwFiles, out long wrongPwBytes))
+                        {
+                            passwordProvenDataFailed = true;
+                            provenProducts = (wrongPwFiles, wrongPwBytes);
+                            break;
+                        }
+
                         hasWrongPassword = true;
                         task.PasswordStatus = StatusText.WrongPassword;
 
@@ -13609,6 +13696,14 @@ namespace ArchiveFixer.ViewModels
                      */
                     if (extractResult.DetectedErrorType == EngineErrorTypes.PasswordOrCorrupted)
                     {
+                        // 与上面"密码错误"那一支同一条判据：**真解出了东西** ⇒ 密码已经证实，别再试候选。
+                        if (TryMeasureProducedContent(engineOutputPath, out int ambiguousFiles, out long ambiguousBytes))
+                        {
+                            passwordProvenDataFailed = true;
+                            provenProducts = (ambiguousFiles, ambiguousBytes);
+                            break;
+                        }
+
                         ambiguousResult ??= extractResult;
                         task.PasswordStatus = StatusText.PasswordNeed;
 
@@ -13728,6 +13823,29 @@ namespace ArchiveFixer.ViewModels
                             task.PasswordStatus = StatusText.PasswordNeed;
                             task.ErrorMessage =
                                 $"已达到密码尝试上限：本层试了 {maxPasswordAttempts} 个候选（共 {candidates.Count} 个），未能确认密码。";
+                        }
+                        else if (passwordProvenDataFailed)
+                        {
+                            /*
+                             * 密码**已经证实**（这一趟真解出了内容）之后的失败 = 数据层面。
+                             * 收场落「文件损坏」而⛔ 不是「密码错误」（用户会拿着密码本白核对半天），
+                             * 并如实点名"解出了多少、失败的是数据"——用户 2026-10-01 真机那一单就是
+                             * 「1 个文件 CRC 失败、另外 557 个都好好的」。
+                             */
+                            task.Status = StatusText.Corrupted;
+                            task.PasswordStatus = StatusText.PasswordCorrect;
+                            task.ErrorMessage = string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.PasswordProvenDataCorruptedFormat,
+                                provenProducts.Files,
+                                provenProducts.Bytes);
+                            task.Outcome = TaskOutcome.Failed;
+
+                            AppendLog(
+                                "WARN",
+                                $"{task.FileName}：{task.ErrorMessage}"
+                                + "（密码已经由这一趟解压本身证实 —— 不再往下试密码候选，"
+                                + "也不再把已经解出来的内容当成'密码候选不对'的牺牲品）");
                         }
                         else if (ambiguousResult != null)
                         {

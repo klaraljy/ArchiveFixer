@@ -3900,6 +3900,86 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 「导出日志」对话框的**起始目录**（用户 2026-10-01 真机 `giu910` 那一单问的"为什么这里有个 txt"）。
+        ///
+        /// <para>现场：导出对话框默认开在"上次用过的那个文件夹"，而那一批的源包正好在
+        /// <c>…\giu910\giu910\其余物\</c> 里（他把上一轮被收进其余物的包再跑了一次）⇒ 日志就落在了
+        /// **其余物**里。那个文件夹是程序自己会**整份删掉**的地方，日志落在那儿哪天就跟着没了。</para>
+        ///
+        /// <para>两条口径：① 记住**上一次成功导出到哪个目录**，下次就从那儿开（他习惯把日志放哪儿就一直在那儿，
+        /// ⛔ 不在代码里写死任何个人路径 —— §8）；② 记着的目录若落在**其余物 / 工作区**里，**一律不采用**
+        /// （退回系统默认），⛔ 绝不把用户往那两个会被清掉的地方引。</para>
+        /// </summary>
+        private string? ResolveLogExportInitialDirectory()
+        {
+            string remembered = Settings.LastLogExportDirectory ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(remembered) || !Directory.Exists(remembered))
+            {
+                return null;
+            }
+
+            string full;
+
+            try
+            {
+                full = Path.GetFullPath(remembered);
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (IsInsideDeletableProcessFolders(full))
+            {
+                return null;
+            }
+
+            return full;
+        }
+
+        /// <summary>
+        /// 这个目录是不是落在"程序自己会整份删掉"的地方（**其余物** / **工作区**）——
+        /// 日志导出**不记**这种目录、也不用它当起始目录（用户 2026-10-01 真机就是导出落进了其余物）。
+        /// 判据只有一处：<see cref="ProcessArtifactLayout.IsInsideDeletableProcessFolders"/>。
+        /// </summary>
+        private static bool IsInsideDeletableProcessFolders(string fullPath) =>
+            ProcessArtifactLayout.IsInsideDeletableProcessFolders(fullPath);
+
+        /// <summary>导出成功后记住这个目录（下次对话框从这儿开）。⛔ 其余物 / 工作区那一档一个字节都不记。</summary>
+        private void RememberLogExportDirectory(string? exportedFilePath)
+        {
+            try
+            {
+                string? directory = Path.GetDirectoryName(exportedFilePath ?? string.Empty);
+
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                string full = Path.GetFullPath(directory);
+
+                if (IsInsideDeletableProcessFolders(full))
+                {
+                    return;
+                }
+
+                if (string.Equals(Settings.LastLogExportDirectory, full, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                Settings.LastLogExportDirectory = full;
+                WriteSettingsToDisk("记住日志导出目录");
+            }
+            catch
+            {
+                // 记不住只是下次少一点方便，⛔ 不许因为它把导出本身搞失败。
+            }
+        }
+
         private void ExportLog()
         {
             /*
@@ -3910,7 +3990,8 @@ namespace ArchiveFixer.ViewModels
             string path = _dialogService.ShowSaveFileDialog(
                 "导出日志（本次操作）",
                 "日志文件 (*.log)|*.log|文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
-                $"ArchiveFixer-本次操作_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                $"ArchiveFixer-本次操作_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+                ResolveLogExportInitialDirectory());
 
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -3922,6 +4003,8 @@ namespace ArchiveFixer.ViewModels
                 (int lineCount, bool fromMarker) = _logService.ExportOperationLog(path, BuildLogExportHeader());
 
                 AppendLog("INFO", $"日志已导出（本次操作）：{path}（{lineCount} 行）");
+
+                RememberLogExportDirectory(path);
 
                 _dialogService.ShowInfo(
                     fromMarker

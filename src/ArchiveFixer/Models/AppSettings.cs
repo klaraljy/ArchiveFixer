@@ -476,6 +476,14 @@ namespace ArchiveFixer.Models
         public bool RememberLastOutputDirectory { get; set; } = true;
 
         /// <summary>
+        /// 「导出日志」对话框**上次成功导出到的目录**（用户 2026-10-01 真机 `giu910`：导出落进了其余物）。
+        ///
+        /// <para>只服务一件事：下次打开保存对话框时从这儿开始（⛔ 不是"默认导出到这儿"、⛔ 不是任何自动行为）。
+        /// 落进其余物 / 工作区的目录**不记**——那两个地方程序自己会整份删掉，日志落那儿哪天就跟着没了。</para>
+        /// </summary>
+        public string LastLogExportDirectory { get; set; } = string.Empty;
+
+        /// <summary>
         /// 扫描时是否包含隐藏文件（默认否）。设置界面在⑥设置页的「扫描与识别」里。
         /// </summary>
         public bool IncludeHiddenFiles { get; set; } = false;

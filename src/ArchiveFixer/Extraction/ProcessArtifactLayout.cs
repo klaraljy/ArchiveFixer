@@ -237,6 +237,23 @@ namespace ArchiveFixer.Extraction
         private const int MaxRenameAttempts = 10000;
 
         /// <summary>
+        /// 这个路径是不是落在"**程序自己会整份删掉**"的地方 —— 其余物（含旧名过程物）或工作区
+        /// （<c>.ArchiveFixer.work</c>）。
+        ///
+        /// <para>为什么要这个判据（用户 2026-10-01 真机 `giu910`）：他把上一轮被收进其余物的源包又跑了一遍，
+        /// 于是"导出日志"的保存对话框默认开在**其余物**里，那份 txt 就落在了一个**下一批成功就会被整份删掉**的地方。
+        /// 判据只有一个出口（这里），导出的起始目录与"记住上次导出到哪儿"都读它。</para>
+        /// </summary>
+        public static bool IsInsideDeletableProcessFolders(string? fullPath)
+        {
+            string path = fullPath ?? string.Empty;
+
+            return path.Contains(ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
+                || path.Contains(LegacyArtifactDirectoryName, StringComparison.OrdinalIgnoreCase)
+                || path.Contains(Detection.VolumeContentInference.WorkDirectoryName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// 这个名字算不算"其余物目录"：**新旧两个名字都算**（决策 D-8）。
         /// 传名字或完整路径都行（只比较最后一段）—— 调用方手上往往是 <c>D\其余物</c> 这种完整路径。
         /// </summary>

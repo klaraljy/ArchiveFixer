@@ -306,6 +306,104 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        // ================================================================ 密码已证实的失败不再试候选（2026-10-01 真机 giu910）
+
+        /// <summary>
+        /// **密码已经证实之后，失败不再算"密码候选不对"、也不再往下试候选**（用户 2026-10-01 真机 `giu910`）。
+        ///
+        /// <para>现场：一组 17.7 GiB 的 7z `-mhe`，候选 3 把整包解到 98%（13 分钟），
+        /// 最后只有一个 mp4 报 `CRC Failed in encrypted file. Wrong password?` ——
+        /// 老口径把这一句当成"这个候选不对"，于是**解压完又回去试了 7 个候选**、13 分钟的产物全扔，
+        /// 最后报「密码错误」。用户原话：「**为什么试了密码之后再去试一次，我说过要试密码的话要在最开始的时候，
+        /// 而不是解压完，这才 20G，大一点你这就是在浪费用户时间**」。</para>
+        ///
+        /// <para>判据**只读事实**：这一趟在暂存目录里真解出了 ≥2 个非空文件 ⇒ 密码不是问题
+        /// （错密码连第一份数据都过不去、只留 0 字节桩）。⛔ 不比任何文案。</para>
+        /// </summary>
+        [Fact]
+        public async Task 解出了大半个包之后失败_不再当密码候选不对_也不再往下试候选()
+        {
+            Assert.Null(System.Windows.Application.Current);
+
+            Harness harness = CreateHarness(passwords: new[] { "候选密码1", "候选密码2", "候选密码3" });
+            ArchiveTask task = AddTask(harness, CreateSourceFile("giu.7z.001"));
+
+            // 假引擎：这一趟真的解出了两个非空文件（= 加密头已经打开、数据在往外流），
+            // 然后像真机那样报"这个候选不对"（CRC 那句在解析层就落成 WrongPassword）。
+            harness.Engine.OnExtractAsync = request =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 2);
+                return Task.FromResult(WrongPassword());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            // ① 只试了**一个**候选（修前：三个候选各解一遍）。
+            Assert.Single(harness.Engine.ExtractCalls);
+
+            // ② 结论是「文件损坏」，⛔ 不是「密码错误」（用户会拿着密码本白核对半天）。
+            Assert.Equal(StatusText.Corrupted, task.Status);
+            Assert.Contains("密码已经证实", task.ErrorMessage, StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.WrongPassword, task.ErrorMessage, StringComparison.Ordinal);
+
+            // ③ 终态必须是失败（既不许成功，也不许"部分完成"——产物没发布，源包原地不动）。
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+        }
+
+        /// <summary>
+        /// **对照组：真的只解出一个文件**（错密码的典型签名 = 第一份数据就过不去）⇒ 照老口径**继续试下一个候选**。
+        /// ⛔ 这条挡的是"把错密码误判成文件损坏"——真机那 11 个候选只试第 1 个的坑不许重演。
+        /// </summary>
+        [Fact]
+        public async Task 只解出一个文件时_仍按老口径继续试下一个候选()
+        {
+            Assert.Null(System.Windows.Application.Current);
+
+            Harness harness = CreateHarness(passwords: new[] { "候选密码1", "候选密码2", "候选密码3" });
+            ArchiveTask task = AddTask(harness, CreateSourceFile("one-file.7z"));
+
+            harness.Engine.OnExtractAsync = request =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 1);
+                return Task.FromResult(WrongPassword());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            // ⛔ 不许把它当成"密码已证实"：候选得继续往下试（试几个由候选表决定，只钉"不止一个"）。
+            Assert.True(
+                harness.Engine.ExtractCalls.Count > 1,
+                $"只解出一个文件 ⇒ 必须继续试下一个候选，实际只试了 {harness.Engine.ExtractCalls.Count} 次");
+            Assert.Equal(StatusText.WrongPassword, task.Status);
+        }
+
+        // ================================================================ 日志导出的落点（2026-10-01 真机 giu910）
+
+        /// <summary>
+        /// **日志导出不许落在"程序自己会整份删掉"的地方**（其余物 / 工作区）。
+        ///
+        /// <para>用户 2026-10-01 真机 `giu910` 问「**这个是为什么，为什么**」：他把上一轮被收进其余物的源包
+        /// 又跑了一遍，于是"导出日志"的保存对话框默认开在其余物里，那份 txt 就落在了一个
+        /// **下一批成功就会被整份删掉**的文件夹里。</para>
+        ///
+        /// <para>判据唯一出口 <c>ProcessArtifactLayout.IsInsideDeletableProcessFolders</c>：
+        /// 导出的**起始目录**与"记住上次导出到哪儿"都读它（⛔ 用户自己在对话框里挑哪儿，程序不干预）。</para>
+        /// </summary>
+        [Fact]
+        public void 日志导出不记其余物和工作区这种会被删掉的目录()
+        {
+            Assert.True(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\其余物"));
+            Assert.True(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\其余物\giu"));
+            Assert.True(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\过程物"));
+            Assert.True(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\.ArchiveFixer.work\recursive"));
+
+            Assert.False(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\BaiduNetdiskDownload\日志"));
+            Assert.False(ProcessArtifactLayout.IsInsideDeletableProcessFolders(@"H:\pkg\普通目录"));
+            Assert.False(ProcessArtifactLayout.IsInsideDeletableProcessFolders(null));
+        }
+
         // ================================================================ 两义档也算密码类失败（2026-10-01）
 
         /// <summary>

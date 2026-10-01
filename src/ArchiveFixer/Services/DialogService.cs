@@ -247,10 +247,16 @@ namespace ArchiveFixer.Services
         /// <summary>
         /// 选择保存文件路径。
         /// </summary>
+        /// <param name="initialDirectory">
+        /// 起始目录（可空 = 系统默认的"上次用过的那个文件夹"）。用户 2026-10-01 真机 `giu910`：
+        /// 上次那个文件夹正好是**其余物**（源包被收进去过），日志就落在了那个"程序自己会整份删掉"的地方 ——
+        /// 所以调用方现在会传"上次成功导出到哪儿"，并保证它不在其余物 / 工作区里。
+        /// </param>
         public string ShowSaveFileDialog(
             string title = "保存文件",
             string filter = "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
-            string defaultFileName = "")
+            string defaultFileName = "",
+            string? initialDirectory = null)
         {
             return ShowFileDialog(
                 () =>
@@ -263,6 +269,11 @@ namespace ArchiveFixer.Services
                         AddExtension = true,
                         OverwritePrompt = true
                     };
+
+                    if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+                    {
+                        dialog.InitialDirectory = initialDirectory;
+                    }
 
                     return dialog.ShowDialog() == true ? dialog.FileName : string.Empty;
                 },
