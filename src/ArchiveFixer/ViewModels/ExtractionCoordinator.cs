@@ -5211,9 +5211,48 @@ namespace ArchiveFixer.ViewModels
             bool oneClickRun,
             CancellationToken cancellationToken)
         {
-            RecursionMode mode = string.Equals(Settings.RecursionMode, "AllBranches", StringComparison.OrdinalIgnoreCase)
-                ? RecursionMode.AllBranches
-                : RecursionMode.SingleChain;
+            /*
+             * ②页「嵌套压缩包」那三档 → 递归核心的模式。**三档三义，一档都不许合并**。
+             *
+             * ⛔ 2026-10-01 修：这里原来是 `AllBranches ? AllBranches : SingleChain` ——
+             * 把出厂默认的 **「只解当前这一层」也当成「单链自动展开」**跑了：界面上写着"只解当前这一层"、
+             * `docs/使用说明.md` §10.1 写着"里面的包原样留着、你自己决定下一步"、人工测试清单 C35 也写着
+             * "默认档下只解一层"，而程序实际上一条链往下解到底（并且顺带把默认档承诺的"快路"
+             * ——第 0 层走 ZIP 直读、每层交给一键处理的一轮——整个绕过去了，见 `DirectReadAppliesTo`）。
+             * 用户 2026-10-01 追问"开了续解和不开续解会不会有 bug"，指的就是这个：
+             * 两档当时**行为完全相同**。
+             *
+             * 语义（与界面逐字对齐）：
+             * · `SingleLayer`（默认）= 只解当前这一层，内层包**原样留着**（继续解交给一键处理的轮次 / 手动「继续解」）；
+             * · `SingleChain` = 只跟一条链；一层里出现多个包 ⇒ 第 0 层问用户，更深的层停在那一层并**如实报停因**；
+             * · `AllBranches` = 内层有多个包也全部解开（仍受每层内层包数量上限约束）。
+             */
+            /*
+             * 走到这里说明 `Settings.RecursionMode != SingleLayer` —— **出厂默认那一档在上游 `:12718` 那道闸门
+             * 就走了"单层路径"（只解当前这一层，内层包原样留着当内容物）**，根本到不了这里。
+             *
+             * ⚠ 2026-10-01 核查记录（用户问"开了续解和不开续解会不会有 bug"）：这里原来写的是
+             * `AllBranches ? AllBranches : SingleChain`，看上去像"把 SingleLayer 也当 SingleChain 跑"，
+             * 但**实际不是缺陷** —— 真的闸门在 `:12718`（`RecursionMode != "SingleLayer"` 才进递归核心），
+             * 撤掉这一处的改动跑守门用例照旧全绿（红检否掉了那个怀疑）。这一支**只有一个入口是 SingleChain 语义**，
+             * 把它写成显式三档只是为了"以后谁动了那道闸门，这里不会静默降级成别的档"。
+             */
+            /*
+             * ②页「嵌套压缩包」那三档 → 递归核心的模式（见上面那段核查记录：默认档到不了这里）。
+             *
+             * 语义（与界面逐字对齐）：
+             * · `SingleLayer`（默认）= 只解当前这一层，内层包**原样留着**（继续解交给一键处理的轮次 / 手动「继续解」）；
+             * · `SingleChain` = 只跟一条链；一层里出现多个包 ⇒ 第 0 层问用户，更深的层停在那一层并**如实报停因**；
+             * · `AllBranches` = 内层有多个包也全部解开（仍受每层内层包数量上限约束）。
+             */
+            RecursionMode mode = Settings.RecursionMode switch
+            {
+                var value when string.Equals(value, "AllBranches", StringComparison.OrdinalIgnoreCase)
+                    => RecursionMode.AllBranches,
+                var value when string.Equals(value, "SingleChain", StringComparison.OrdinalIgnoreCase)
+                    => RecursionMode.SingleChain,
+                _ => RecursionMode.SingleLayer
+            };
 
             // 上限（层数 / 每层密码尝试次数）当场从设置里取，并交给**本次**的递归核心：
             // 构造时固定一份的话，用户改完设置不重启就不生效（见字段上的说明）。

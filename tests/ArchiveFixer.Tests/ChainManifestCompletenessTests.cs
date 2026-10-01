@@ -423,6 +423,82 @@ namespace ArchiveFixer.Tests
             Assert.Single(Directory.GetFiles(harness.OutputRoot, "file.bin", SearchOption.AllDirectories));
         }
 
+        // ================================================================ ②页「嵌套压缩包」三档必须**真的是三档**
+
+        /// <summary>
+        /// **默认档「只解当前这一层」= 只解一层**（用户 2026-10-01 追问"开了续解和不开续解会不会有 bug"）。
+        ///
+        /// <para>修之前：`ExtractionCoordinator.RunRecursiveAsync` 把设置里的 <c>SingleLayer</c> 也映射成
+        /// <c>RecursionMode.SingleChain</c> ⇒ **「只解当前这一层」与「单链自动展开」跑的是同一件事** ——
+        /// 而界面上写着"只解当前这一层"、`docs/使用说明.md` §10.1 写着"里面的包原样留着、你自己决定下一步"、
+        /// 人工测试清单 C35 写着"默认档下只解一层"。用户看到的那个下拉框**有一档是假的**。</para>
+        ///
+        /// <para><b>判据</b>：走**手动「只解压」**那条路（<c>ExtractionCoordinator.StartExtractAsync</c>）——
+        /// 那条路没有一键处理的"轮次续解"，看到的就只有**这一单自己解到第几层**。
+        /// 默认档下叶子层的内容物一个字节都不该出现，内层包必须**原样留着**
+        /// （它是当前这一层的内容物，不是待清理的过程物）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 默认档只解当前这一层_手动只解压时内层包原样留着()
+        {
+            string outer = BuildTwoLayerPlainChain("outer-onelayer.7z", "leaf-onelayer.7z");
+
+            Harness harness = CreateHarness(
+                string.Empty,
+                settings =>
+                {
+                    settings.RecursionMode = "SingleLayer";   // ②页「嵌套压缩包」的出厂默认那一档
+                    settings.VerboseLog = true;
+                });
+
+            await harness.AddPathsAsync(outer);
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            task.IsSelected = true;
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+
+            // 第 1 层（leaf.7z 里的 content.txt）一个字节都不许出现。
+            Assert.Empty(Directory.GetFiles(harness.OutputRoot, "content.txt", SearchOption.AllDirectories));
+
+            // 内层包原样留着（"里面的包原样留着，你自己决定下一步"）。
+            Assert.NotEmpty(Directory.GetFiles(harness.OutputRoot, "leaf-onelayer.7z", SearchOption.AllDirectories));
+        }
+
+        /// <summary>
+        /// **对照组**：同一份夹具、同一条手动路，选「单链自动展开」就必须一路解到叶子层。
+        ///
+        /// <para>两条合起来才说明那个下拉框的三档**真是三档**（只钉"默认档只解一层"是不够的 ——
+        /// 把递归整个关掉也能让它变绿，而那是把功能删了，不是修好）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 单链自动展开_同一份夹具手动只解压也要解到叶子层()
+        {
+            string outer = BuildTwoLayerPlainChain("outer-chain.7z", "leaf-chain.7z");
+
+            Harness harness = CreateHarness(
+                string.Empty,
+                settings =>
+                {
+                    settings.RecursionMode = "SingleChain";
+                    settings.VerboseLog = true;
+                });
+
+            await harness.AddPathsAsync(outer);
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            task.IsSelected = true;
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+
+            // 两层的产物都在：第 0 层（leaf.7z）与第 1 层（content.txt）在一单里跑完。
+            Assert.Single(Directory.GetFiles(harness.OutputRoot, "content.txt", SearchOption.AllDirectories));
+        }
+
         // ================================================================ 样本
 
         private const string OuterVolumePassword = "OuterPass1";
@@ -730,22 +806,31 @@ namespace ArchiveFixer.Tests
             var extraction = new ExtractionCoordinator(vm, engine, passwordService, pathService, new DialogService());
             var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
 
-            return new Harness(vm, oneClick, outputRoot, logService);
+            return new Harness(vm, oneClick, extraction, outputRoot, logService);
         }
 
         private sealed class Harness
         {
             private readonly OneClickCoordinator _oneClick;
 
-            public Harness(MainViewModel vm, OneClickCoordinator oneClick, string outputRoot, LogService log)
+            public Harness(
+                MainViewModel vm,
+                OneClickCoordinator oneClick,
+                ExtractionCoordinator coordinator,
+                string outputRoot,
+                LogService log)
             {
                 Vm = vm;
                 _oneClick = oneClick;
+                Coordinator = coordinator;
                 OutputRoot = outputRoot;
                 Log = log;
             }
 
             public MainViewModel Vm { get; }
+
+            /// <summary>手动「只解压」那条路（⛔ 没有一键处理的轮次续解，用来单独看"这一单自己解到第几层"）。</summary>
+            public ExtractionCoordinator Coordinator { get; }
 
             public string OutputRoot { get; }
 
