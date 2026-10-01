@@ -1117,6 +1117,23 @@ namespace ArchiveFixer.Models
         public bool IsContinuationTask => !string.IsNullOrWhiteSpace(ParentOutputDirectory);
 
         /// <summary>
+        /// **同一分卷组的后续卷、整组已经由首卷那一单负责** —— 这一单不参与解压，也不参与链尾裁决。
+        ///
+        /// <para>用户 2026-10-01 真机（`AAA` 那批）定的口径：一个包的两卷是**两个任务**
+        /// （扫描期按名字归组，而那一批名字被网盘改坏了，认不出来），改名之后整组由首卷那一单
+        /// 从第一卷启动解一次，后续卷那一单落「已跳过」。</para>
+        ///
+        /// <para><b>为什么要单独记一位、而不是让消费方各自去推</b>：链尾那两道门槛读的都是"任务"这个集合，
+        /// 而跟班任务**没有产物**（它压根没解压）—— 拿它去比"链上的输出校验"，必然得出
+        /// "链里有一层校验没过"，于是整组的源包一个都不删（真机现象：源包全留在原地）。
+        /// 判据只有写在产生它的那一刻才是事实，绕一圈去推必然推歪。</para>
+        ///
+        /// <para>每次开工都会重算（任务对象是复用的）：由
+        /// <c>ExtractionCoordinator.SkipWhenAnotherTaskOwnsThisVolumeGroup</c> 一处写。</para>
+        /// </summary>
+        public bool IsVolumeGroupFollower { get; set; }
+
+        /// <summary>
         /// 创建任务。
         /// </summary>
         public ArchiveTask()

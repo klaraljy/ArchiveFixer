@@ -1463,11 +1463,36 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            ArchiveFixer.Detection.VolumeGroup? group = ResolveVolumeGroupFromDirectory(task);
+
+            if (group != null)
+            {
+                new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
+            }
+        }
+
+        /// <summary>
+        /// **只算不写**：按一个任务**所在目录里的真实文件**算出它属于哪一组（算不出返回 <c>null</c>）。
+        ///
+        /// <para>为什么要把"算"和"写"分开（用户 2026-10-01）：调用方有两种 ——
+        /// 一种要**把结论记到任务上**（续解层补组信息、开工前补整组清单），另一种只想**看一眼**
+        /// （"我是不是这一组的后续卷"）。后者若顺手把账改了，就会把别处已经算好的清单**砍短**：
+        /// 两卷分处两个目录时，按目录归组只会给出 1 卷，而任务账上那份（来自改名同步 /
+        /// 扫描期归组）本来是完整的 —— 那会把"源包按整组搬"变成"只搬第一卷"。
+        /// 判据只有这一份（<see cref="VolumeGroupDetector.Group"/>）。</para>
+        /// </summary>
+        internal static ArchiveFixer.Detection.VolumeGroup? ResolveVolumeGroupFromDirectory(ArchiveTask? task)
+        {
+            if (task == null)
+            {
+                return null;
+            }
+
             string path = task.CurrentPath;
 
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             {
-                return;
+                return null;
             }
 
             string directory = Path.GetDirectoryName(path) ?? string.Empty;
@@ -1491,15 +1516,9 @@ namespace ArchiveFixer.ViewModels
 
             string fullPath = Path.GetFullPath(path);
 
-            ArchiveFixer.Detection.VolumeGroup? group =
-                ArchiveFixer.Detection.VolumeGroupDetector.Group(candidates)
-                    .FirstOrDefault(g => g.Volumes.Any(
-                        v => string.Equals(Path.GetFullPath(v.Path), fullPath, StringComparison.OrdinalIgnoreCase)));
-
-            if (group != null)
-            {
-                new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
-            }
+            return ArchiveFixer.Detection.VolumeGroupDetector.Group(candidates)
+                .FirstOrDefault(g => g.Volumes.Any(
+                    v => string.Equals(Path.GetFullPath(v.Path), fullPath, StringComparison.OrdinalIgnoreCase)));
         }
         /// <summary>
         /// 只对"还没识别"的任务重扫：

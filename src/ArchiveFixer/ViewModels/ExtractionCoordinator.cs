@@ -2180,6 +2180,18 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
+                /*
+                 * 同一分卷组的后续卷**不当根任务处理**（用户 2026-10-01）：它没有解压过、没有产物、
+                 * 源包也不归它管 —— 整组（含它自己那一卷）由首卷那一单一起搬、一起删。
+                 * 不排除它的话，它会走到下面那些"根任务"判据上写一条噪音 WARN
+                 *（"链尾没有按「删除操作」处理其余物 / 源包 —— 任务没有成功（机器终态：Skipped）"），
+                 * 用户读到的却是一个"没做成的包"，而它其实早就被同组的首卷那一单处理干净了。
+                 */
+                if (rootTask.IsVolumeGroupFollower)
+                {
+                    continue;
+                }
+
                 if (rootTask.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd)
                 {
                     /*
@@ -3097,6 +3109,17 @@ namespace ArchiveFixer.ViewModels
 
             foreach (ArchiveTask? candidate in EnumerateChainTasks(rootTask, chainTasks))
             {
+                /*
+                 * 同一分卷组的后续卷**不算这一条链上的产物**（用户 2026-10-01）：它没有解压过、
+                 * 没有产物、也没有自己的落点目录 —— 它的落点是用同一套路径算法**重算**出来的，
+                 * 于是必然与首卷那一单重合，拿它去比"链上的输出校验"必然得出"链里有一层没过"，
+                 * 整组的源包就一个都删不掉了（真机现象）。
+                 */
+                if (candidate.IsVolumeGroupFollower)
+                {
+                    continue;
+                }
+
                 if (!SafePathHelper.PathEquals(
                         ResolveContinuationOutputDirectory(candidate), destinationDirectory))
                 {
@@ -6234,6 +6257,220 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **批级整组改名**：在**任何任务开工之前**，把这一批里"名字被改坏的分卷组"改回标准名。
+        ///
+        /// <para>为什么必须串行、必须在批首（而不是每个任务开工前各改各的）：并发跑 N 个任务时，
+        /// "改名 → 归组 → 解压"三步不是原子的，而同一个包的多卷是**多个任务** ——
+        /// 谁先开工不定，另一单就可能拿着**旧名字**判完归组（认不出组）再往下跑，
+        /// 于是同一组被解两遍、第二棵产物树落成 `名字(1)`、后续卷那一单报「分卷缺失」，
+        /// 连整组的链尾处理也被它拦住（用户 2026-10-01 真机现场）。</para>
+        ///
+        /// <para>位置要求两条：① 工作区根**已经定下来**（名字路不用试开，但内容级推断要拿工作区
+        /// 做硬链接试开，拿不到就只能降级成"无法确认"）；② **并发启动之前**。
+        /// 调用点只有 <c>StartExtractForOneClickAsync</c> 里、<c>ApplyBatchWorkspaceRoot</c> 之后那一处。</para>
+        /// </summary>
+        internal async Task NormalizeDisguisedVolumeNamesForBatchAsync(
+            IReadOnlyList<ArchiveTask>? tasks,
+            CancellationToken cancellationToken = default)
+        {
+            if (tasks == null || tasks.Count == 0)
+            {
+                return;
+            }
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                await NormalizeDisguisedVolumeNamesAsync(task, cancellationToken).ConfigureAwait(true);
+            }
+        }
+
+        /// <summary>
+        /// **这一单是不是"同一分卷组的后续卷"** —— 是就跳过，不重复解一遍（一组只解一次）。
+        ///
+        /// <para>判据只读事实，两步：① 先按**当前真实文件名**重新归组
+        /// （<see cref="OneClickCoordinator.ApplyVolumeGroupingFromDirectory"/>，与扫描期、
+        /// 与手动档补救走的是同一条路 —— 扫描期那一份是按改名**前**的名字算的，已经过期）；
+        /// ② 再看这一组的**第一卷**是不是任务表里**另一个任务**在负责。</para>
+        ///
+        /// <para>⛔ 首卷不在任务表里时**不跳**（用户只把 `.002` 拖进来那一档）：照旧让引擎去报缺卷，
+        /// 绝不因为"组里没人负责"就把这一单静默吞掉 —— 那等于把一个真失败说成"已跳过"。</para>
+        ///
+        /// <para>跳过的这一单**不拍快照、不碰盘、不写任何产物**；它的源包跟着整组一起被处理
+        /// （首卷那一单的 <c>VolumePaths</c> 记的是整组）。终态落 <see cref="TaskOutcome.Skipped"/>
+        /// （既不是成功也不是失败）：批末汇总与批末诊断读的都是它。</para>
+        /// </summary>
+        /// <returns>true = 已经跳过（调用方必须立刻 return，什么都不许做）。</returns>
+        private bool SkipWhenAnotherTaskOwnsThisVolumeGroup(ArchiveTask task)
+        {
+            try
+            {
+                string currentPath = task.CurrentPath ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(currentPath))
+                {
+                    return false;
+                }
+
+                // 每次开工重算（任务对象是复用的：上一次的结论不能留到这一次）。
+                task.IsVolumeGroupFollower = false;
+
+                /*
+                 * 只有"看着像分卷"或"扫描期已经被归过组"的任务才值得重新归组：
+                 * 普通单卷包每次开工都去扫一遍目录，换不来任何结论。
+                 */
+                bool looksLikeVolume = task.IsVolumeGroup
+                    || FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(currentPath));
+
+                if (!looksLikeVolume)
+                {
+                    return false;
+                }
+
+                List<string> pathsBeforeGrouping = task.GetSnapshotPaths();
+
+                /*
+                 * **只看不写**：按本目录算一次组，用来判"自己是不是这一组的后续卷"。
+                 * ⛔ 不用 `ApplyVolumeGroupingFromDirectory`：那个会把结论写回任务账上，
+                 * 而账上那份可能来自改名同步 / 扫描期归组（认得出跨目录的整组）——
+                 * 按目录归组只会给出本目录里那几卷，照它覆盖就把"整组一起搬"砍成"只搬第一卷"。
+                 */
+                ArchiveFixer.Detection.VolumeGroup? group =
+                    OneClickCoordinator.ResolveVolumeGroupFromDirectory(task);
+
+                if (group == null)
+                {
+                    return false;
+                }
+
+                string firstVolume = group.FirstVolumePath;
+
+                if (string.Equals(firstVolume, currentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    /*
+                     * 自己就是首卷：把**整组清单**补到账上（缺卷预检、源包搬运都按整组走）。
+                     *
+                     * ⚠ **只增不减**：新的归组结果不比账上多时，一个字都不动 ——
+                     * 账上那份可能更全（见上面那段），而且"少"往往只是因为别的卷不在这个目录里。
+                     * 这条也顺手保住了既有用例的语义：手工构造的组信息不会被这里悄悄改写
+                     *（`整组改名之后_同批别的任务也要搬到新名字` 那条当场逮到过被砍短）。
+                     */
+                    if (group.Volumes.Count > task.VolumePaths.Count)
+                    {
+                        new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
+
+                        /*
+                         * 账变长了 ⇒ 源文件快照盯的路径集合也变了，必须跟着重拍。
+                         *
+                         * 快照是**按位**比对的（GetSnapshotPaths() = CurrentPath + VolumePaths，顺序即比对位置）。
+                         * 名单一变长，按位比对必然错位 ⇒ 误报「源文件已变化（修改时间（没有记录）→ …）」——
+                         * 这一版第一次回归时就是这样：整批 4 个任务全红，根因就在这一句之前。
+                         *
+                         * ⛔ 这不叫"放宽不变量 11"：变的这一项是**程序自己刚记的账**
+                         *（VolumePaths 是按目录里真实存在的文件填的），不是用户改了文件；
+                         * 而且只在真的写长了时才重拍 —— 用户改文件仍然照旧被拦下。
+                         */
+                        if (!SamePaths(pathsBeforeGrouping, task.GetSnapshotPaths()))
+                        {
+                            task.CaptureSourceSnapshot();
+                        }
+                    }
+
+                    return false;
+                }
+
+                ArchiveTask[] table = SnapshotTaskTable(Tasks);
+                bool ownedByAnotherTask = false;
+
+                foreach (ArchiveTask candidate in table)
+                {
+                    if (candidate == null || ReferenceEquals(candidate, task))
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(candidate.CurrentPath, firstVolume, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ownedByAnotherTask = true;
+                        break;
+                    }
+                }
+
+                if (!ownedByAnotherTask)
+                {
+                    return false;
+                }
+
+                string ownerName = FileNameHelper.GetFileName(firstVolume);
+
+                /*
+                 * 这一轮没有任何产物、也没有任何校验：上一轮留下的校验结论与落点都要清干净
+                 * （任务对象是复用的 —— 不清的话界面上会挂着一条已经不成立的"输出目录"）。
+                 */
+                task.IsOutputVerified = false;
+                task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                task.OutputPath = string.Empty;
+                task.Outcome = TaskOutcome.Skipped;
+                task.IsVolumeGroupFollower = true;
+
+                task.MarkSkipped(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.VolumeGroupFollowerSkippedFormat,
+                    ownerName));
+
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeGroupFollowerSkippedLogFormat,
+                        task.FileName,
+                        ownerName));
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // 判不出来就**照常解**（保守一侧：宁可让引擎去报缺卷，也不静默吞掉一单）。
+                AppendLog("WARN", $"{task.FileName}：分卷归组跳过判定失败（{ex.Message}），这一单按原名照常处理。");
+
+                return false;
+            }
+        }
+
+        /// <summary>两份路径名单是不是**逐位相同**（大小写不敏感，与 Windows 上其它路径比较同一口径）。</summary>
+        private static bool SamePaths(IReadOnlyList<string>? left, IReadOnlyList<string>? right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+
+            if (left == null || right == null || left.Count != right.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < left.Count; i++)
+            {
+                if (!string.Equals(left[i], right[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// **一次改名之后，谁负责把任务路径 + 源文件快照更新到新名字** —— 全仓唯一出口。
         ///
         /// <para><b>为什么必须覆盖整个任务表、而不是"驱动改名的那一单"</b>（用户 2026-09-30 真机）：
@@ -8466,6 +8703,23 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
+                 * ===== 批级整组改名：把"名字被改坏的分卷组"改回标准名（在**任何任务开工之前**）=====
+                 *
+                 * 旧位置是"每个任务开工前各改各的"（2026-09-28 起，见 NormalizeDisguisedVolumeNamesAsync）。
+                 * 那个位置在并发下不成立：一个包的两卷是**两个任务**，谁先开工不定 ——
+                 * 先开工的那一单改名成功、把两卷都改成标准名，而另一单可能在同一瞬间已经按**旧名字**
+                 * 判过归组（名字太烂，认不出组）并接着往下跑，于是它拿着旧名一路走到「分卷缺失」，
+                 * 还把整组的链尾处理一起拦住（用户 2026-10-01 真机：三棵一模一样的产物树 +
+                 * `111(1)` / `333-Rar4(1)`，源包一个都没删）。
+                 *
+                 * 挪到批首之后，"这一批文件叫什么名字"在开工前就是定稿的：归组、源文件快照、
+                 * 落点、链尾闸门读到的都是同一份事实。开工时那一次照旧留着（幂等：名字已标准就快速返回），
+                 * 手动档「只解压」也只有那一次（单任务，本来就没有竞争）。
+                 */
+                await NormalizeDisguisedVolumeNamesForBatchAsync(selectedTasks, _operationCts.Token)
+                    .ConfigureAwait(true);
+
+                /*
                  * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
                  * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
                  * 后面那一行是它的**安全档**（「不删原包」）—— 两档一起钉，同一批口径一致。
@@ -10524,6 +10778,34 @@ namespace ArchiveFixer.ViewModels
              * 手动档「修复分卷名并重试」调的是**同一对**判据与执行体（VolumeNameRepair）。
              */
             await NormalizeDisguisedVolumeNamesAsync(task, cancellationToken).ConfigureAwait(true);
+
+            /*
+             * ===== 一组分卷 = 一个任务 = 只从**首卷**启动 =====
+             *
+             * 用户 2026-10-01 真机（`AAA` 那批）：盘上出现三棵一模一样的产物树，外加
+             * `111(1)` / `333-Rar4(1)`。根因不在解压，在**归组只做过一次** ——
+             * 扫描期 `FileScanService` → `VolumeGroupingService.ApplyVolumeGrouping` 按
+             * **文件名**把同组的多卷合成一行，可这一批的名字是被网盘改坏的
+             *（`111.parts1.racr` / `111.part删2.ra除r`），那次归组认不出来 ⇒ 同一个包的两卷各占一行。
+             * 等开工前的自动改名把它们改成标准名（`111.part1.rar` / `111.part2.rar`）之后，
+             * **没有任何一处重新归组** —— 于是两行都去解压：
+             *
+             *   ① 后续卷那一单必然失败（7-Zip：`Missing volume` / 引擎：`这是分卷压缩包的后续卷`）；
+             *   ② 它失败以后，整组的**链尾处理**被"链上有任务没成功"拦住 ⇒ 源包一个都不删；
+             *   ③ 两个任务各自算落点 ⇒ 第二棵产物树落成 `名字(1)`（"绝不覆盖"那条路是给
+             *      **不同来源**准备的，同一个包的两卷不该走到那里）。
+             *
+             * 这里落的口径与手动档「我手动指定缺失卷所在目录」那一段**完全相同**
+             *（同样是 `ApplyGroupInfo` + 起点用 `group.FirstVolumePath`）：
+             * 一组分卷 = 一个任务 = 从首卷启动，其余卷跟着整组一起被处理。
+             *
+             * 位置：改名之后（名字才是判据）、快照与任何引擎调用之前（跳过的这一单不拍快照、
+             * 不碰盘、不产生任何结论）。
+             */
+            if (SkipWhenAnotherTaskOwnsThisVolumeGroup(task))
+            {
+                return;
+            }
 
             /*
              * ===== 不变量 11 的**第一道**（也是唯一收口的那一道）：源文件变化 = 立刻停下 =====
