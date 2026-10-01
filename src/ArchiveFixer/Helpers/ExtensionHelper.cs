@@ -665,6 +665,152 @@ namespace ArchiveFixer.Helpers
         }
 
         /// <summary>
+        /// 这一段是**归档本体后缀**、而且只有"多了几个字符"的差别时，把那个规范后缀还原出来。
+        ///
+        /// <code>
+        /// zi删除p → (zip, "删除")     zscip → (zip, "sc")     z删除ip → (zip, "删除")
+        /// ziɾ��p → (zip, ...)         7删除z → (7z, "删除")     zip → false（本来就是干净的）
+        /// </code>
+        ///
+        /// <para><b>为什么必须有这一条</b>（2026-09-27 真机 `222.zscip` / 内层 `222.zi删除p`）：
+        /// 网盘把中文塞进**后缀内部**是常规操作（`222.zip` → `222.zi删除p`），而底下那条
+        /// <see cref="TrySplitVolumeSegmentLoose"/> 的骨架档只把还原结果拿去比**分卷标记**
+        /// （`.001`/`.z01`/`.r00`/`.partN`）—— `zip` 是**归档后缀**，于是当场被扔，
+        /// 这个名字就退化成"一个没有卷标记的普通文件"，**基名被算成 `222.zscip`**，
+        /// 整组改名之后产出的 `222.zscip.zip` 与归档内部记的 `222.zip` 对不上，
+        /// 定稿闸门当场判"缺 `222.zip`"，整层作废（源包一个字节都没动，但用户的产物也没落地）。</para>
+        ///
+        /// <para>判据与容错档**同一套口径**：允许删掉**最多 2 个**"多余字符"，被删掉的字符
+        /// **不全都是数字**（否则 `0012` 会被读成 `001`+`2`），而且**只有一种删法**时才返回
+        /// —— 有歧义一律不认（宁可不动，AGENTS §9.5）。</para>
+        ///
+        /// <para>⛔ 这一步只回答"这个名字去掉杂质之后**是什么**"，**不回答"该不该改"** ——
+        /// 真要改名字，调用方还得有兄弟卷佐证 / 尺寸规律 / 用户授权那几道。</para>
+        /// </summary>
+        public static bool TryRecoverDisguisedArchiveBody(
+            string? segment,
+            out string canonicalSegment,
+            out string removedCharacters)
+        {
+            canonicalSegment = string.Empty;
+            removedCharacters = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(segment))
+            {
+                return false;
+            }
+
+            string s = segment.Trim().TrimStart('.');
+
+            if (s.Length == 0)
+            {
+                return false;
+            }
+
+            // 本来就是干净的归档后缀（`zip` / `rar`）：**不认**——这一档由调用方按原样处理。
+            if (IsKnownArchiveExtension("." + s))
+            {
+                return false;
+            }
+
+            List<string> known = KnownArchiveExtensions
+                .Select(e => e.TrimStart('.'))
+                .Where(name => name.Length >= 2)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            string? unique = null;
+            string uniqueRemoved = string.Empty;
+            bool ambiguous = false;
+
+            // 删一个字符
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (char.IsAsciiDigit(s[i]))
+                {
+                    continue; // 删掉的是数字 → 更像另一套位宽，不猜（与容错档同一条）
+                }
+
+                Consider(s.Remove(i, 1), s[i].ToString());
+
+                if (ambiguous)
+                {
+                    return false;
+                }
+            }
+
+            // 删两个字符（`zi删除p` / `zscip` 都落在这里）
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (char.IsAsciiDigit(s[i]))
+                {
+                    continue;
+                }
+
+                for (int j = i + 1; j < s.Length; j++)
+                {
+                    if (char.IsAsciiDigit(s[j]))
+                    {
+                        continue;
+                    }
+
+                    string removed = string.Concat(s[i], s[j]);
+
+                    if (removed.All(char.IsAsciiDigit))
+                    {
+                        continue;
+                    }
+
+                    Consider(s.Remove(i, 1).Remove(j - 1, 1), removed);
+
+                    if (ambiguous)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if (unique == null)
+            {
+                return false;
+            }
+
+            canonicalSegment = unique;
+            removedCharacters = uniqueRemoved;
+            return true;
+
+            void Consider(string candidate, string removed)
+            {
+                if (!known.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                if (unique != null)
+                {
+                    /*
+                     * 能删出两种规范后缀 ⇒ 有歧义 ⇒ 一律不认。
+                     * 与容错档的不同：这里**必须是同一个后缀**才算歧义（`zi删除p` 删「删除」或「除p」
+                     * 都得到 `zip`，那是同一种变法，不算歧义）。
+                     */
+                    if (!string.Equals(unique, candidate, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ambiguous = true;
+                    }
+
+                    return;
+                }
+
+                unique = candidate;
+                uniqueRemoved = removed;
+            }
+        }
+
+        /// <summary>这一段是不是"去掉杂质后是合法分卷标记"（底层判据 = <see cref="TrySplitVolumeSegmentLoose"/>）。</summary>
+        public static bool IsVolumeSegment(string? segment) =>
+            TrySplitVolumeSegmentLoose(segment, out _, out _);
+
+        /// <summary>
         /// **容错**版（用户 2026-09-28 第三次真机：`amb909.7sz.00c1` / `amb909.7删z.00除2`）：
         /// 干扰字符被**塞进卷号内部**、甚至是**字母**（`001`→`00c1`）时也要认出来。
         ///

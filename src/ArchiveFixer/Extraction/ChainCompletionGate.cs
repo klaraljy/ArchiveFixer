@@ -76,6 +76,23 @@ namespace ArchiveFixer.Extraction
                 }
 
                 /*
+                 * ⛔ **跟班卷不算链上成员**（用户 2026-09-27 真机：111 / 333 明明解压成功、其余物却一删不掉）。
+                 *
+                 * 现场：一组分卷从首卷那一单启动，**后续卷那一单一律落「已跳过」**
+                 * （`IsVolumeGroupFollower`，见 `ExtractionCoordinator.SkipWhenAnotherTaskOwnsThisVolumeGroup`）。
+                 * 那是**设计**，不是失败 —— 可这道闸门只问"你是不是 Succeeded"，于是每一批都会
+                 * 被自己组里的跟班卷拦下，日志写着「链上的「111.part2.rar」没有成功（机器终态：Skipped）」，
+                 * 其余物一个字节都不删。116 与 333 两组因此全部卡住。
+                 *
+                 * "整条链都成功"要防的是**续解链断了**（2026-09-25 那次 12 GiB 其余物被删）；
+                 * 跟班卷根本没解、也不该解 —— 它**不在链上**，排除它不放松任何一条红线。
+                 */
+                if (candidate.IsVolumeGroupFollower)
+                {
+                    continue;
+                }
+
+                /*
                  * 链身份按**路径**认（真机 2026-09-30：另一个目录里同名的包把这条链的链尾挡下了 ——
                  * 日志原文「333-Rar4.part1.rar：链尾的其余物不处理（链上的「111.part1.rar」没有成功）」）。
                  *

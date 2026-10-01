@@ -162,6 +162,15 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public IReadOnlyList<string> GroupFilePaths { get; init; } = Array.Empty<string>();
 
+        /// <summary>
+        /// **同一卷的名字变体**（`222.zip` 与 `222.zi删除p` 是同一个逻辑卷的两个名字）。
+        ///
+        /// <para>它们也算组成员（<see cref="IsGroupMember"/> 认它们），但**不占独立卷号** ——
+        /// 所以它们既不进 <see cref="Volumes"/>、也不构成"缺了一卷"的证据。
+        /// 判据见 <c>ResolveGroup</c> 里"名字变体"那一段。</para>
+        /// </summary>
+        public IReadOnlyList<string> VariantFilePaths { get; init; } = Array.Empty<string>();
+
         /// <summary>组里有没有"名字不标准"的成员（靠推定/试开才认进来的，或卷名里夹了垃圾）。</summary>
         public bool HasRenamedVolume { get; init; }
 
@@ -755,6 +764,24 @@ namespace ArchiveFixer.Detection
 
             var unrecognized = new List<VolumeGroupEntry>();
 
+            /*
+             * **同一卷的名字变体**（用户 2026-09-27 真机）。
+             *
+             * 现场：暂存目录里同时有 `222.zip` 与 `222.zi删除p` —— 它们是**同一个逻辑卷的两个名字**
+             * （`zi删除p` 就是 `zip` 被塞了两个中文字），而不是"第 1 卷 + 一个不认识的兄弟"。
+             * 老判据只看"基名段相同 + 体积对得上"，于是把后者当成"没有卷号的候选"，
+             * 推进边界槽 1，再据此写出**自相矛盾**的那句话：
+             * 「名字上看缺 `222.zip`；同目录的 `222.zi删除p` 按体积 + 位置推定是第 1 卷」
+             * —— 组里那一位就是 `222.zip`，它却报"缺"。整层定稿因此作废，用户的产物一个字节没落地。
+             *
+             * 判据：候选"去掉杂质之后的后缀"若与该槽**规范名逐字相等**（`222.zi删除p` → `222.zip`、
+             * `222.zscip` → `222.zip`），它就是那一卷的名字变体：
+             *   · 算组成员（保护名单照旧，⛔ 更不会进可删过程物）；
+             *   · **不占独立卷号、不进推断清单** —— 组齐不齐由真实在位的那些卷回答。
+             */
+            var variantPaths = new List<string>();
+            bool variantHasDisguisedName = false;
+
             foreach (VolumeGroupEntry entry in entries)
             {
                 string full = SafePathHelper.GetFullPathSafe(entry.Path);
@@ -763,6 +790,30 @@ namespace ArchiveFixer.Detection
                     !string.Equals(StemOf(Path.GetFileName(full)), groupStem, StringComparison.OrdinalIgnoreCase) ||
                     !LooksLikeVolumeCandidate(entry.Size, fullSize))
                 {
+                    continue;
+                }
+
+                if (TryMatchVolumeVariant(Path.GetFileName(full), located, out bool variantIsDisguised))
+                {
+                    variantPaths.Add(full);
+
+                    /*
+                     * 同号的那个名字**不是这一族的规范名** ⇒ 整组算"组里有名字不标准的卷"。
+                     *
+                     * 为什么必须这样（用户 2026-09-27 真机）：`222.zip` 与 `222.zi删除p` 是同一个逻辑卷的
+                     * 两个名字，可**只有一份**是引擎认得的那个（7-Zip 按原名只认 `.zip`）。真机里源包被改名
+                     * 成 `222.zscip.zip`（见 `VolumeNameRepair`：目标名被占就不改），所以盘上那个
+                     * `222.zi删除p` 很可能就是**没被改到名的另一卷** —— 它名字不标准，整组就不许进
+                     * 可删的其余物（25 GB 那次的同一条红线）。
+                     *
+                     * ⛔ 反过来，同号两个名字**都标准**时（`x.7z.001` 与 `x.7z.001副本` 这种）不算 ——
+                     * 那一档是"同一个文件被列了两次"，按规范名办事没有任何歧义。
+                     */
+                    if (variantIsDisguised)
+                    {
+                        variantHasDisguisedName = true;
+                    }
+
                     continue;
                 }
 
@@ -899,7 +950,8 @@ namespace ArchiveFixer.Detection
 
             allVolumes.Sort((a, b) => a.Index.CompareTo(b.Index));
 
-            bool hasRenamedVolume = allVolumes.Any(v => !v.NameCarriesVolumeNumber)
+            bool hasRenamedVolume = variantHasDisguisedName
+                || allVolumes.Any(v => !v.NameCarriesVolumeNumber)
                 || group.Volumes.Any(v => !IsCanonicalVolumeName(Path.GetFileName(v.Path), baseName));
 
             var groupPaths = allVolumes
@@ -1022,7 +1074,8 @@ namespace ArchiveFixer.Detection
                     allVolumes,
                     Array.Empty<string>(),
                     inferredNotes,
-                    hasRenamedVolume),
+                    hasRenamedVolume,
+                    variantPaths),
                 evidence,
                 baseName);
         }
@@ -1034,7 +1087,8 @@ namespace ArchiveFixer.Detection
             IReadOnlyList<ResolvedVolume> volumes,
             IReadOnlyList<string> missingNames,
             IReadOnlyList<string> inferredNotes,
-            bool hasRenamedVolume) => new()
+            bool hasRenamedVolume,
+            IReadOnlyList<string>? variantPaths = null) => new()
             {
                 Verdict = verdict,
                 Volumes = volumes,
@@ -1043,9 +1097,11 @@ namespace ArchiveFixer.Detection
                 Reason = reason,
                 GroupFilePaths = volumes
                     .Select(v => v.Path)
+                    .Concat(variantPaths ?? Array.Empty<string>())
                     .Where(p => p.Length > 0)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList(),
+                VariantFilePaths = variantPaths ?? Array.Empty<string>(),
                 HasRenamedVolume = hasRenamedVolume,
 
                 /*
@@ -1297,6 +1353,91 @@ namespace ArchiveFixer.Detection
             && junk.Length == 0
             && mark.Length > 0
             && mark.Equals(segment, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 这个名字是不是**已在位的那一卷的另一个名字**（用户 2026-09-27 真机：`222.zip` 与 `222.zi删除p`）。
+        ///
+        /// <para>判据只有一条：把"被塞了杂质的后缀"还原（唯一出口
+        /// <see cref="ExtensionHelper.TryRecoverDisguisedArchiveBody"/>），还原结果与某一卷**规范名逐字相等**
+        /// ⇒ 它就是那一卷的名字变体，**不占独立卷号、也不构成"缺了一卷"的证据**
+        /// （老判据把它当"没有卷号的候选"推定进边界槽，于是同一句话里既说"缺 `222.zip`"、
+        /// 又说那个文件"就是第 1 卷"，整层定稿作废）。</para>
+        ///
+        /// <para>⛔ 变体**不会**让那一卷变成"可以删"：它进 <c>GroupFilePaths</c> 与
+        /// <c>VariantFilePaths</c>，而可删资格仍由磁盘上的真名字回答（<see cref="IsCanonicalVolumeName"/>）
+        /// —— 名字不标准就一个字节都不许删。</para>
+        /// </summary>
+        private static bool TryMatchVolumeVariant(
+            string? fileName,
+            IReadOnlyList<ResolvedVolume> located,
+            out bool disguisedName)
+        {
+            disguisedName = false;
+
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return false;
+            }
+
+            // ⛔ 只喂**末尾那一段**（`222.zi删除p` 的 `zi删除p`）：还原函数回答的是"这一段是什么后缀"，
+            //    整条文件名进去只会把它当成一个含点的名字，永远还原不出来（写成这样踩过一次）。
+            string segment = Path.GetExtension(fileName).TrimStart('.');
+
+            /*
+             * ⛔ 只有"归档本体那一档"（不带卷标记的名字）才走这条：带卷标记的照旧走老路 ——
+             * 那一档的名字变体（`x.7z.001删除`）本来就是"缺卷证据"的来源，动它等于拆红线。
+             */
+            if (ExtensionHelper.IsVolumeSegment(segment))
+            {
+                return false;
+            }
+
+            if (!ExtensionHelper.TryRecoverDisguisedArchiveBody(segment, out string suffix, out _))
+            {
+                return false;
+            }
+
+            /*
+             * ⛔ 只认**本体那一族**（`zip` / `rar`）：它们的卷号 1 就是"名字里带本体后缀"的那一份，
+             * 所以"同基名段 + 同后缀"只可能指同一个逻辑卷。其余后缀（`7z` / `tar` / 数字族…）的本体
+             * 是"卷号 1"，而 `x.7z.002` 这种**带卷标记**的名字本来就不走这条（上面已经挡掉），
+             * 万一漏进来也不是"另一个名字"，不许当变体（认错组比不认糟得多）。
+             */
+            if (!suffix.Equals("zip", StringComparison.OrdinalIgnoreCase)
+                && !suffix.Equals("rar", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            foreach (ResolvedVolume volume in located)
+            {
+                string volumeName = Path.GetFileName(volume.Path);
+                string volumeStem = StemOf(volumeName);
+
+                if (!string.Equals(volumeStem, StemOf(fileName), StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                /*
+                 * 只比"本体那一档"的规范名（`x.zip` / `x.rar`）：还原出来的后缀是 `zip` 时，
+                 * 只有 `…zip` 这一位算它的家；`x.z01` / `x.7z.001` 各有各的族，⛔ 不许跨族认亲
+                 * （跨族认亲会让"另一套命名的第一卷"被误判成"同名的变体"，那比不认糟得多）。
+                 *
+                 * ⚠ 在位的这一卷**自己的名字也可能不标准**（真机里那一卷叫 `222.zi删除p`）——
+                 * 那也照样认：判据是"两个文件是同一个卷号上的两个名字"，不是"在位那个必须标准"。
+                 * 它们两个都留在保护名单里，可删资格仍由磁盘上的真名字回答（都不标准 ⇒ 一个都不删）。
+                 */
+                if (volumeName.Equals(volumeStem + "." + suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    // 这个名字本身是不是这一族的规范写法（`222.zip` 是、`222.zi删除p` 不是）。
+                    disguisedName = !string.Equals(fileName, volumeStem + "." + suffix, StringComparison.Ordinal);
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         /// <summary>这个文件的"基名段"：去掉最后一段后缀。无后缀时就是原名本身。</summary>
         private static string StemOf(string fileName)

@@ -418,6 +418,14 @@ namespace ArchiveFixer.Detection
              * 从右往左一段一段剥：卷号段（01 / 001）、卷标记段（part1 / z01 / r00）、
              * 以及"本来就该是归档后缀"的那一段（7z / 只差一个字符的 7）。
              * ⛔ 剥不动就停手 —— 基名只影响改完像不像人写的，绝不为它硬剪名字。
+             *
+             * ⚠ 2026-09-27 真机补的那一条（`222.zscip`）：网盘会把中文塞进**后缀内部**
+             * （`222.zip` → `222.zi删除p` → 去掉中文之后是 `222.zscip`）。老判据只认
+             * "本来就等于后缀"和"只差一个字符"，`zscip` 差两个字符（`sc`）⇒ 剥不动 ⇒
+             * 基名原样留着 `222.zscip` ⇒ 整组改名产出 `222.zscip.zip`，与归档内部记的
+             * `222.zip` 对不上 ⇒ 定稿闸门判"缺 `222.zip`"、整层作废。
+             * 判据转调唯一出口（<see cref="Helpers.ExtensionHelper.TryRecoverDisguisedArchiveBody"/>），
+             * ⛔ 不在这里再写一份"删几个字符"的规则。
              */
             while (keep >= 2)
             {
@@ -426,7 +434,9 @@ namespace ArchiveFixer.Detection
                 if (IsOrdinalSegment(last)
                     || IsVolumeMarkerSegment(last)
                     || string.Equals(last, extension, StringComparison.OrdinalIgnoreCase)
-                    || IsUniqueOneEditAway(last, extension))
+                    || IsUniqueOneEditAway(last, extension)
+                    || Helpers.ExtensionHelper.TryRecoverDisguisedArchiveBody(last, out string recovered, out _)
+                       && string.Equals(recovered, extension, StringComparison.OrdinalIgnoreCase))
                 {
                     keep--;
                     continue;

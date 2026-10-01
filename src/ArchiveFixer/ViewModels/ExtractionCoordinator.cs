@@ -3472,6 +3472,13 @@ namespace ArchiveFixer.ViewModels
         /// 唯一来源 = <see cref="PackageLayerRules.ResolveBaseName"/>（读递归结果，不自己数层数）。
         /// 它非空 ⇒ 落点最少两层（用户 2026-09-30 红线）：destDir 里面必须还有"最后一个压缩包"那一层。
         /// </param>
+        /// <param name="engineOutput">
+        /// 这一单的递归结果。**只用来回答一件事**：暂存目录里某个文件是不是"引擎这一趟自己写出来的"
+        /// —— 是 ⇒ 它是内容物，⛔ 不许当成待续解的过程物（用户 2026-09-27 真机：外层跨盘 zip 解出来的
+        /// <c>222.zip</c> + <c>222.zi删除p</c> 本身就是一份完整的两卷 split zip，老判据把
+        /// <c>222.zip</c> 当过程物、把另一卷当"名字不标准的残组"⇒ 整层定稿作废，678 MB 产物没落地）。
+        /// 传 null（预检那一档）⇒ 退回老判据，一个字不变。
+        /// </param>
         internal static FinalLayoutPlan PlanFinalLayout(
             string stageDirectory,
             string destinationDirectory,
@@ -3480,7 +3487,8 @@ namespace ArchiveFixer.ViewModels
             TerminalLayoutMode terminalLayout = TerminalLayoutMode.KeepLastFolder,
             SpecialExtractionPlan? specialExtraction = null,
             bool suppressPackageFolderLayer = false,
-            string? innermostPackageBaseName = null)
+            string? innermostPackageBaseName = null,
+            RecursionResult? engineOutput = null)
         {
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -3525,7 +3533,25 @@ namespace ArchiveFixer.ViewModels
 
                 totalStageBytes += size;
 
-                bool isProcessArtifact = IsProcessArtifactFile(file);
+                /*
+                 * ===== ⛔ 引擎这一趟自己写出来的文件**不是过程物**（用户 2026-09-27 真机：222 那一单）=====
+                 *
+                 * 现场：外层跨盘 zip（`222.zscip.zip` + `222.zscip.z01`）解出来的两个条目叫
+                 * `222.zip` 与 `222.zi删除p`（网盘把中文塞进了内层后缀）。这两个**本身就是一份完整的
+                 * 两卷 split zip**（7-Zip 自己认：「Multivolume = + / Volumes = 2」）。
+                 *
+                 * 老判据只看"后缀像不像归档" ⇒ `222.zip` 被算成"待续解的过程物"，随后下面那道
+                 * 分卷组闸门看见同目录还有名字不标准的一卷 ⇒ 判"不完整" ⇒ **整份计划作废**：
+                 * 内容物一个字节没搬、源包没进其余物、链尾的其余物一个都删不掉（日志还写着
+                 * "解压成功 ｜ 校验通过"，用户却什么也没拿到）。
+                 *
+                 * 判据只有一条：**这个文件在不在这一趟引擎的产物清单里**（唯一事实来源 = 递归结果
+                 * 指向的那一层产物目录）。在 ⇒ 它是内容物：既不是过程物，**也不进分卷组那两道闸门**
+                 * —— 那两道问的是"这一堆是不是待续解的分卷"，引擎自己刚写出来的东西根本不是。
+                 */
+                bool isProcessArtifact = IsProcessArtifactFile(file)
+                    && !IsEngineOutputFile(file, stageRoot, engineOutput);
+
 
                 /*
                  * ===== ⛔ 分卷组的完整性闸门（用户 2026-09-30 真机：25 GB 被当"其余物"永久删除）=====
@@ -3543,7 +3569,13 @@ namespace ArchiveFixer.ViewModels
                  */
                 StageVolumeGroupView? stageGroup = FindStageVolumeGroup(stageVolumeScan.Groups, file);
 
-                if (stageGroup != null)
+                /*
+                 * ⛔ 这一道同样只问**过程物**（引擎这一趟自己写出来的东西已经在上面的 isProcessArtifact
+                 * 里被摘掉了）：那两道闸门要回答的是"这一堆是不是待续解的分卷"，引擎刚解出来的产物
+                 * 根本不是 —— 真机 222 那一单就是被这里拦下的（`222\222.zip` 与 `222\222.zi删除p`
+                 * 是一份完整的两卷 split zip，判定器说"名字不标准"⇒ 整层作废、产物没落地）。
+                 */
+                if (isProcessArtifact && stageGroup != null)
                 {
                     if (!stageGroup.Resolution.CanEnterDeletableRestItems)
                     {
@@ -3739,6 +3771,51 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal static bool IsVolumePartFile(string filePath) =>
             ExtensionHelper.IsVolumePartExtension(Path.GetExtension(filePath));
+
+        /// <summary>
+        /// 这个暂存文件是不是**这一趟引擎自己写出来的产物**（用户 2026-09-27 真机：222 那一单）。
+        ///
+        /// <para>事实来源只有一处：<see cref="RecursionResult.FinalOutputPath"/> 指向的那一层产物目录
+        /// —— 引擎解出来的东西就是它们，别的一律是让这一单能开工的过程物（源包 / 分卷 / 内层包）。</para>
+        ///
+        /// <para>⛔ 为什么必须问这一句：外层跨盘 zip 解出来的 <c>222.zip</c> 后缀就是归档后缀，
+        /// 老判据当场把它当"待续解的过程物"，随后那道分卷组闸门看见同目录还有一卷名字不标准
+        /// ⇒ 整层定稿作废 ⇒ 用户的 678 MB 产物一个字节都没落地（日志还写着"解压成功 ｜ 校验通过"）。
+        /// 后缀骗人这件事在别处已经吃过很多次亏了，这里按**产物清单**判。</para>
+        ///
+        /// <para>拿不到递归结果（预检那一档、或引擎没报产物目录）⇒ 一律 false：退回老判据，
+        /// 一个字都不变（兜底落在"什么都不做"那一档）。</para>
+        /// </summary>
+        private static bool IsEngineOutputFile(string filePath, string stageRoot, RecursionResult? engineOutput)
+        {
+            string outputRoot = engineOutput?.FinalOutputPath ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(outputRoot) || !Directory.Exists(outputRoot))
+            {
+                return false;
+            }
+
+            string full = SafePathHelper.GetFullPathSafe(filePath);
+            string root = SafePathHelper.GetFullPathSafe(stageRoot);
+
+            if (full.Length == 0 || root.Length == 0 || !full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string relative = full[root.Length..].TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (relative.Length == 0)
+            {
+                return false;
+            }
+
+            string candidate = SafePathHelper.GetFullPathSafe(Path.Combine(outputRoot, relative));
+
+            return candidate.Length > 0
+                   && File.Exists(candidate)
+                   && string.Equals(candidate, full, StringComparison.OrdinalIgnoreCase);
+        }
 
         /// <summary>
         /// **解前预检用的那一问**：这一单所在的目录里，围绕它到底组成了哪一组、齐不齐。
@@ -5811,7 +5888,17 @@ namespace ArchiveFixer.ViewModels
                 terminalLayout,
                 specialExtraction,
                 suppressPackageFolderLayer: _extractIntoSourceFolderThisRun || layerAlreadyInPath || processArtifactName,
-                innermostPackageBaseName: innermostPackageBaseName);
+                innermostPackageBaseName: innermostPackageBaseName,
+                /*
+                 * ⛔ 引擎自己写出来的东西**不是过程物**（用户 2026-09-27 真机 222 那一单）。
+                 *
+                 * 现场：外层跨盘 zip 解出来的两个条目叫 `222.zip` 与 `222.zi删除p`（名字里嵌了中文），
+                 * 它们**本身就是一份完整的两卷 split zip**。老判据只看后缀像不像归档 ⇒ `222.zip`
+                 * 被当成"待续解的过程物"，而旁边那一卷名字不标准 ⇒ 整层定稿作废，
+                 * 用户的 678 MB 产物一个字节都没落地。判据见
+                 * <see cref="IsEngineOutputFile"/>：这一单引擎这一趟写出来的，就不是过程物。
+                 */
+                engineOutput: recursion);
         }
 
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>

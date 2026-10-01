@@ -119,23 +119,27 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// **真案 ②**（用户机器上 25 GB 那次）：跨盘的末卷被重命名成 <c>一只顶美.z删除ip</c>。
         ///
-        /// <para>没有试开时只能是"疑缺卷（弱证据）"：名字上看缺 <c>一只顶美.zip</c>，
-        /// 同目录那个文件基名段对得上、体积也对得上，但名字里没有卷号 —— 弱证据**只报不删**。
-        /// 判 <c>完整</c> 的资格只由试开给。</para>
+        /// <para>⚠ 2026-09-27 修正：这一档现在判 <c>完整</c>，判据是**名字本身的证据** ——
+        /// <c>z删除ip</c> 去掉中文字符就是 <c>zip</c>，而 PKZIP 跨盘的 <c>.zip</c> 恰恰就是"名字里带本体后缀"
+        /// 的那一卷（<c>.z01…</c> 只是续卷）。改名**没有把这一卷弄丢**，它就在组里。
+        /// 老口径把"本体后缀被塞了垃圾"的名字整个当成"一个没有卷标记的普通文件"，于是只能报"疑缺卷"
+        /// —— 那一档在真机上会把用户**已经解压成功**的东西挡在定稿门外（`222.zscip` 那一单）。</para>
+        ///
+        /// <para>⛔ 但这一组**永远不许进可删的其余物** —— 它的名字不是标准卷名，7-Zip 按原名根本打不开，
+        /// 删了就是不可逆的数据丢失（25 GB 那次事故）。下面那条断言才是这次事故的守门。</para>
         /// </summary>
         [Fact]
-        public void 真案二_末卷被改名_没试开时只报疑缺卷_不许说完整()
+        public void 真案二_末卷被改名_判完整但那一卷永远不许进可删残留()
         {
             string directory = NewDirectory("case2-weak");
             string renamed = BuildRenamedTailGroup(directory);
 
             VolumeGroupResolution resolution = Resolve(Path.Combine(directory, "一只顶美.z01"));
 
-            Assert.Equal(VolumeGroupVerdict.IncompleteSuspected, resolution.Verdict);
-            Assert.Contains("疑缺卷", resolution.Reason, StringComparison.Ordinal);
+            Assert.Equal(VolumeGroupVerdict.Complete, resolution.Verdict);
             Assert.Empty(resolution.MissingVolumeNames);
 
-            // ⛔ 弱证据不许进可删的其余物（25 GB 那次就是在这里丢的）。
+            // ⛔ 弱证据/名字不标准一律不进可删的其余物（25 GB 那次就是在这里丢的）。
             Assert.False(resolution.CanEnterDeletableRestItems);
             Assert.True(resolution.IsGroupMember(renamed), "被改名的那一卷必须被认成同一组");
             Assert.True(resolution.HasRenamedVolume);

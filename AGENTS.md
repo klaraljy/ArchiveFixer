@@ -206,7 +206,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2246 条（2244 通过/2 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2264 条（2262 通过/2 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -242,6 +242,23 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - 分卷组装判定器 `Detection/VolumeGroupResolver`：六条证据（基名/卷号连续/体积规律/物理同一性/位置推定/硬链接试开）+ 四档结论（`Complete`/`IncompleteMissingVolume`/`IncompleteSuspected`/`Undetermined`）+ 唯一可删出口 `CanEnterDeletableRestItems`（弱证据/判不出=false ⇒ 不删源、不移源）；跨盘或拿不到工作区根 ⇒ 不试开、降「判不出」（硬链接不能跨卷；⛔ 不许退到源卷根偷开工作区）；详见 `docs/分卷组装算法.md` §6.10/§6.11。
 - ✅ 带垃圾尾巴的组（`111.parts1.racr` 这种"另起一段的后缀"）交给 7-Zip 会报缺卷 ⇒ 由 `VolumeNameRepair` 在开工前改回标准名（只改名、不覆盖、判不出就不改）。
 - ⛔ **一组分卷 = 一个任务 = 从首卷启动**（现场与根因见 `修改日志.md` 2026-10-01）：① 整组改名在**批首**（`NormalizeDisguisedVolumeNamesForBatchAsync`，`ApplyBatchWorkspaceRoot` 之后 / 并发之前）；② 后续卷那一单落 `Skipped`（`SkipWhenAnotherTaskOwnsThisVolumeGroup` + `ArchiveTask.IsVolumeGroupFollower`）；③ 归组**只算不写**（`OneClickCoordinator.ResolveVolumeGroupFromDirectory`）且**只增不减**；④ 跟班**不进链尾裁决**（`DescribeChainVerificationGap` / `CompleteRootSourcePackagesAfterChainAsync`）。用例 `AaaReplayPipelineTests`。
+- ✅ **"去杂质之后是什么"只有一个出口**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`，用户 2026-10-01 真机 `222` 那一组）：
+  删掉**最多 2 个非数字字符**后若**唯一地**变成**已知归档后缀**才算（`222.zi删除p` / `222.zscip` → `zip`、
+  `ra删除r` → `rar`、`7删除z` → `7z`；本来就干净、或删出来有歧义 ⇒ 一律不认）。它同时喂三个消费点：
+  ① `VolumeGroupDetector.Analyze` 的"脏本体名 = 第 1 卷本体"（算分卷成员，但 `HasCanonicalName=false`，⛔ 不算名字标准）；
+  ② `VolumeNumberFromContent.TryDeriveStem` 的基名（`222.zscip` → 基名 `222`，⛔ 不许产出 `222.zscip.zip` 这种脏基名）；
+  ③ 判定器的**名字变体**一档（`VolumeGroupResolver.TryMatchVolumeVariant` + `VariantFilePaths`：去杂质后与某位规范名
+  逐字相等 ⇒ 是那一卷的另一个名字，算组成员、**不占独立卷号、不进推断清单**）。
+  ⛔ 三条红线一个字没放宽：变体名字不标准 ⇒ `HasRenamedVolume=true` ⇒ **整组不许进可删的其余物**；
+  ⛔ 老口径"脏的**分卷标记**（`.z删除01`）本来就认"照旧；⛔ 尺子只加在**归档本体**那一档上。
+- ⛔ **引擎这一趟写出来的东西不是过程物**（`ExtractionCoordinator.IsEngineOutputFile`，唯一事实来源 =
+  `RecursionResult.FinalOutputPath` 指向的那一层产物目录）：定稿那两道分卷组闸门（组完整性 / 孤儿卷）**都要先问它**
+  —— 真机 `222` 那一单里 `222\222.zip` 是**引擎刚解出来的产物**（它旁边那一卷名字不标准），老判据把它当
+  "待续解的过程物"⇒ 整层作废、678 MB 产物一个字节没落地，日志还写着"解压成功 ｜ 校验通过"。
+  ⛔ 拿不到递归结果（预检那一档）⇒ 退回老判据，一个字不变。
+- ⛔ **跟班卷不在续解链上**（`ChainCompletionGate` 排除 `IsVolumeGroupFollower`）：一组分卷的后续卷那一单
+  **按设计**落 `Skipped`，链尾闸门若把它算成"链没跑完"⇒ **每一批都会被自己组里的跟班卷拦下**，
+  111 / 333 的其余物一个都删不掉（用户 2026-10-01 真机先看到的就是这个）。真·续解成员 `Skipped` 照旧拦。
 - RAR 命名：`Rar!\x1A\x07\x00`=RAR 1.5–4.x，⛔ 代码/注释/文案都不许写"这是 RAR3"；RAR5 有真样本（`H:` 两处 `-p` 包，签名 `52 61 72 21 1A 07 01 00`，只读不入库）；老式编号族 `.rar`/`.r00` 按设计不认〔真样本验收〕
 - ⛔ 验收规则（用户定）：必须真样本（或真机只读副本）跑通；合成样本通过 ≠ 问题解决；样本本体绝不进仓库、`H:` 原件只读，副本不在就跳过并说明〔验收规则：必须真样本跑通〕
 - 待修（还没做，别当成"已解决"）

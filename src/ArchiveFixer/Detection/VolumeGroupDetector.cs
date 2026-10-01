@@ -289,6 +289,25 @@ namespace ArchiveFixer.Detection
             /// <summary>是不是"名字被伪装过"的分卷标记（夹了垃圾 `001删除`、或标记后面挂点段 `001.txt`）。</summary>
             public bool IsDisguised { get; init; }
 
+            /// <summary>
+            /// 这个名字是不是"**本体后缀被塞了垃圾**"（<c>222.zi删除p</c> / <c>222.zscip</c>）。
+            ///
+            /// <para>它与"干净的本体"（<c>222.zip</c>）**一样算分卷成员**：真机里那一组的另一个成员
+            /// 恰恰就是 <c>222.zip</c>，靠它才认得出"这是一组"（只有一对光杆本体时不许成组 ——
+            /// 一份单独的 <c>.zip</c> 后面还有没有卷，名字给不出答案）。</para>
+            /// </summary>
+            public bool IsDisguisedBody { get; init; }
+
+            /// <summary>
+            /// 这个名字是不是**这一族的规范名、一字不差**（<c>x.zip</c> / <c>x.rar</c> / <c>x.z01</c> / <c>x.part1.rar</c>）。
+            ///
+            /// <para>⛔ 靠容错/骨架**还原**出来的（<c>222.zi删除p</c> → <c>zip</c>、<c>222.z0sc1</c> → <c>z01</c>）
+            /// 一律为 false —— 它只用来决定"同一个卷号上有两个文件时先认谁"（规范名优先，见
+            /// <see cref="VolumeBucket.Add"/>），⛔ 不许拿它当"可以删"的资格（那个唯一出口是
+            /// <c>VolumeGroupResolver.CanEnterDeletableRestItems</c>）。</para>
+            /// </summary>
+            public bool HasCanonicalName { get; init; }
+
             /// <summary>按本族命名规则写出"第 index 卷"的文件名；该族表示不了这个卷号时返回 false。</summary>
             public bool TryFormat(int index, out string fileName)
             {
@@ -352,6 +371,21 @@ namespace ArchiveFixer.Detection
         {
             private readonly Dictionary<int, VolumeCandidate> _byIndex = new Dictionary<int, VolumeCandidate>();
 
+            /// <summary>已经有"规范名"占住的卷号（后来者即使也是规范名也不抢，先到先得）。</summary>
+            private readonly HashSet<int> _canonicalIndices = new HashSet<int>();
+
+            /// <summary>进过这个桶的全部路径（判"桶里有没有真正的分卷标记"用）。</summary>
+            private readonly HashSet<string> _allPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>其中属于"本体"那一档的路径（<c>x.zip</c> / <c>x.rar</c>，含被塞了杂质的本体名）。</summary>
+            private readonly HashSet<string> _bodyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>其中"被塞了杂质的本体名"（<c>222.zi删除p</c>）—— 它也算分卷成员，只是名字不标准。</summary>
+            private readonly HashSet<string> _disguisedBodyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>名字不标准的卷（脏本体名 / 容错还原出来的卷标记）—— 尺寸规律不拿它们当基准。</summary>
+            private readonly HashSet<string> _disguisedVolumePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             public VolumeBucket(string directoryPath, string baseName, VolumeFamily family)
             {
                 DirectoryPath = directoryPath;
@@ -365,8 +399,34 @@ namespace ArchiveFixer.Detection
 
             public VolumeFamily Family { get; }
 
-            /// <summary>桶里出现过"真正的分卷标记"（区别于 <c>x.zip</c> / <c>x.rar</c> 本体）。</summary>
-            public bool HasVolumeMark { get; private set; }
+            /// <summary>
+            /// 这个桶里除了"干净的本体"以外，还有没有别的分卷成员
+            /// （干净的后续卷 <c>x.z01</c>，或者**被塞了杂质的本体名** <c>222.zi删除p</c>）。
+            ///
+            /// <para>只有一对光杆本体（<c>x.zip</c> + <c>x.zi删除p</c>）时这一条才算成立 ——
+            /// 老口径"只有本体不算分卷组"必须留着：一份单独的 <c>.zip</c> 后面还有没有卷，
+            /// 名字给不出答案，认成组就会去改用户的名字（宁可判不出）。</para>
+            /// </summary>
+            public bool HasVolumeMark
+            {
+                get
+                {
+                    if (_disguisedBodyPaths.Count > 0)
+                    {
+                        return true;
+                    }
+
+                    foreach (string path in _allPaths)
+                    {
+                        if (!_bodyPaths.Contains(path))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+            }
 
             /// <summary>桶里出现过"名字被伪装过"的卷标记（<c>001删除</c> / <c>001.txt</c>）。</summary>
             public bool HasDisguisedName { get; private set; }
@@ -380,7 +440,19 @@ namespace ArchiveFixer.Detection
             {
                 get
                 {
-                    var ordered = SortedIndices.Select(i => this[i]).ToList();
+                    /*
+                     * ⛔ 只拿"**卷标记后面粘着尾巴**"的排除在外（`giu910.7z.001删除`）—— 那种卷的位置
+                     * 与卷号天然对不上，尺寸规律不该由它回答（老口径）。
+                     *
+                     * ⚠ 另外两档**不排除**，否则真机 222 那一组会被尺寸规律判死：
+                     *   · 脏**本体**名（`222.zi删除p`）—— 名字里没有卷标记，与满卷等大是正常的；
+                     *   · 容错还原出来的卷标记（`222.z0sc1`）—— 真机上它与满卷等大，拿它当"满卷"基准
+                     *     会把"最后一卷更小"那条判成不成立。
+                     */
+                    var ordered = SortedIndices
+                        .Where(i => !_disguisedVolumePaths.Contains(this[i].Path))
+                        .Select(i => this[i])
+                        .ToList();
 
                     if (ordered.Count < 2)
                     {
@@ -423,9 +495,11 @@ namespace ArchiveFixer.Detection
 
             public void Add(VolumeCandidate candidate, VolumeNameInfo info)
             {
-                if (!info.IsBody)
+                _allPaths.Add(candidate.Path);
+
+                if (info.IsBody)
                 {
-                    HasVolumeMark = true;
+                    _bodyPaths.Add(candidate.Path);
                 }
 
                 if (info.Tail.Length > 0)
@@ -438,15 +512,49 @@ namespace ArchiveFixer.Detection
                     HasDisguisedName = true;
                 }
 
+                /*
+                 * ⛔ 尺寸规律（与名字无关的那条硬证据）**只把"脏本体名"排除在外**：
+                 * `222.zi删除p` 这种名字里根本没有卷标记，它在目录里的位置（最后一个）与它声称的
+                 * 卷序（1）天然对不上；真机上它与另一卷等大，拿它当"满卷"基准会把"最后一卷更小"
+                 * 那一条判死 ⇒ 整桶被丢 ⇒ 归组为空 ⇒ 定稿判"判不出"。
+                 *
+                 * ⚠ 卷标记后面粘着尾巴的那一档（`giu910.7z.001删除`）**照旧参与** —— 三卷等大时
+                 * 它必须过得了这一关（用户 2026-09-28 报的那一组就是靠它才成组的）。
+                 */
+                if (info.IsDisguisedBody)
+                {
+                    _disguisedBodyPaths.Add(candidate.Path);
+                    _disguisedVolumePaths.Add(candidate.Path);
+                }
+
                 if (info.DigitWidth > DigitWidth)
                 {
                     DigitWidth = info.DigitWidth;
                 }
 
-                // 一个卷号只留第一个（大小写不同的同名路径已在上游按路径去重）。
-                if (!_byIndex.ContainsKey(info.Index))
+                /*
+                 * 一个卷号只留第一个 —— **但规范名优先**（用户 2026-09-27 真机）。
+                 *
+                 * 现场：暂存目录里同时有 `222.zip`（规范名）与 `222.zi删除p`（同一个名字被塞了中文的
+                 * **另一个文件**），两个都声称自己是第 1 卷。老写法"先到先得" ⇒ 谁先列到谁当第 1 卷：
+                 *   · 认到 `222.zi删除p` ⇒ 组里那一卷名字不标准 ⇒ 整层不定稿（产物落地失败）；
+                 *   · 认到 `222.zip` 也不对劲 —— 它会去按体积/位置**推定** `222.zi删除p` 是"缺的第 1 卷"，
+                 *     于是同一句话里既说"缺 `222.zip`"、又说那个文件"就是第 1 卷"。
+                 * 规范名优先把这一档定死：**名字一字不差的那个才是这一卷**，其余照旧当"没有卷号的候选"，
+                 * 由判定器如实报"这一组有同号的两个文件"（⛔ 绝不当成可删过程物 —— 那 25 GB 就是这么没的）。
+                 */
+                if (!_byIndex.TryGetValue(info.Index, out VolumeCandidate? existing))
                 {
                     _byIndex.Add(info.Index, candidate);
+                }
+                else if (info.HasCanonicalName && !_canonicalIndices.Contains(info.Index))
+                {
+                    _byIndex[info.Index] = candidate;
+                }
+
+                if (info.HasCanonicalName)
+                {
+                    _canonicalIndices.Add(info.Index);
                 }
             }
         }
@@ -504,6 +612,13 @@ namespace ArchiveFixer.Detection
             // ⛔ 容错档只多认"删少量非纯数字字符后是合法卷标记"，认不出就照旧 null（宁可不动）。
             bool isVolumeSegment = TryParseVolumeSegment(last, out VolumeFamily family, out int index, out int digitWidth, out string junkTail);
 
+            /*
+             * 这一段是**靠容错档**（删掉 1~2 个字符）才认出来的（`z0sc1` → `z01`）——
+             * 它算分卷成员，但**名字不是规范名**：尺寸规律那一道不许拿它当"满卷"基准
+             * （真机 222 那一组里 `222.z0sc1` 与本体等大，拿它当满卷会让整桶被尺寸规律判死）。
+             */
+            bool volumeSegmentByTolerance = false;
+
             if (!isVolumeSegment &&
                 ExtensionHelper.TrySplitVolumeSegmentTolerant(last, out string tolerantMark, out string tolerantJunk) &&
                 TryParseVolumeSegment(tolerantMark, out family, out index, out digitWidth, out _))
@@ -513,6 +628,7 @@ namespace ArchiveFixer.Detection
                 _ = tolerantJunk;
                 junkTail = string.Empty;
                 isVolumeSegment = true;
+                volumeSegmentByTolerance = true;
             }
 
             if (isVolumeSegment)
@@ -527,7 +643,8 @@ namespace ArchiveFixer.Detection
                         Index = index,
                         DigitWidth = digitWidth,
                         Tail = junkTail,
-                        IsDisguised = junkTail.Length > 0
+                        IsDisguised = junkTail.Length > 0 || volumeSegmentByTolerance,
+                        HasCanonicalName = junkTail.Length == 0 && !volumeSegmentByTolerance
                     };
                 }
             }
@@ -607,7 +724,46 @@ namespace ArchiveFixer.Detection
                             ? VolumeFamily.ZipSpanned
                             : VolumeFamily.RarOld,
                         Index = 1,
-                        IsBody = true
+                        IsBody = true,
+                        HasCanonicalName = true
+                    };
+                }
+            }
+
+            /*
+             * ③b **本体后缀被塞了垃圾**（`222.zi删除p` / `222.zscip`）—— 用户 2026-09-27 真机。
+             *
+             * 现场：外层跨盘 zip 解出来的两个条目叫 `222.zi删除p` 与 `222.z0sc1`（网盘把中文塞进后缀），
+             * 这一支**以前根本不存在** ⇒ `222.zi删除p` 被判成"一个没有卷标记的普通文件"，
+             * 归组时基名算成 `222.zscip`（去掉最后一段），整组改名产出 `222.zscip.zip`，
+             * 与归档内部记的 `222.zip` 对不上 ⇒ 定稿闸门判"缺 `222.zip`"、整层作废。
+             *
+             * 判据只有一条（唯一出口 <see cref="ExtensionHelper.TryRecoverDisguisedArchiveBody"/>）：
+             * 去掉最多 2 个非数字字符后**唯一地**变成本族的规范后缀。还原出来的名字照旧算
+             * "第 1 卷本体"，但 <see cref="VolumeNameInfo.HasCanonicalName"/> = false ——
+             * 它够资格**参与归组**，不够资格被当成"名字标准、可以删"（那一条只由
+             * <c>VolumeGroupResolver</c> 按磁盘上的真名字回答）。
+             */
+            if (!ExtensionHelper.IsVolumeSegment(last) &&
+                ExtensionHelper.TryRecoverDisguisedArchiveBody(last, out string bodySuffix, out _) &&
+                (bodySuffix.Equals("zip", StringComparison.OrdinalIgnoreCase)
+                 || bodySuffix.Equals("rar", StringComparison.OrdinalIgnoreCase)))
+            {
+                string bodyBaseName = JoinBaseName(parts, 1);
+
+                if (bodyBaseName.Length > 0)
+                {
+                    return new VolumeNameInfo
+                    {
+                        BaseName = bodyBaseName,
+                        Family = bodySuffix.Equals("zip", StringComparison.OrdinalIgnoreCase)
+                            ? VolumeFamily.ZipSpanned
+                            : VolumeFamily.RarOld,
+                        Index = 1,
+                        IsBody = true,
+                        IsDisguised = true,
+                        IsDisguisedBody = true,
+                        HasCanonicalName = false
                     };
                 }
             }
