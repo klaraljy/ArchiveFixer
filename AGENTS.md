@@ -239,7 +239,18 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - 卷名判据唯一出口 `ExtensionHelper.TrySplitVolumeSegment`（三处转调它）〔分卷名粘垃圾〕
   - ⛔ 老口径不许回退：另起一段的后缀（`x.7z.001.txt`/`x.001.bak`）不算分卷；纯数字尾巴（`0012`）不猜。
   - ⛔ 不许"一见 zip 成员就让位"：让位条件只看"目录里真有一片自述带盘号的跨盘 zip 末片"（`HasSpannedZipTailInDirectory`）。
-- ⛔ 不要再给"短数字卷号"另加名字判据（内容路 `Detection/VolumeContentInference` 就能认）；要动就动"谁先跑、谁不许动名字"〔短数字卷号：内容路本来就能认〕
+- ⛔ **三种分卷格式的"内容级自述能力"差得很远 —— ⛔ 不许当成一样**（用户 2026-10-01 追问「7z / rar / zip 假设都是一样的」，实测把它否掉了；用例 `VolumeContentProbeCapabilityTests`，真造 7z / zip / RAR 分卷各跑一遍）：
+
+  | 能不能判出… | 7z（`-v`） | ZIP（7-Zip `-tzip -v`） | ZIP（**PKZIP 跨盘**） | RAR（RAR4 新编号） |
+  |---|---|---|---|---|
+  | 是"这一组的一员" | ✗（内容里没有任何卷标记） | 首片 ✓（本地头）／中间·末片 ✗ | 首片 ✓（`PK\x07\x08`+本地头）／中间片 ✗ | **每一卷 ✓** |
+  | **是第 1 卷/首卷** | 只能靠魔数 `37 7A BC AF 27 1C`（⇒ 必是首卷，但探针不当字段输出） | ✗ | ✗（只到"成员"） | **✓（主头"首卷"位）** |
+  | **是第几卷** | ✗ | ✗ | ✗（非末片内容里没有盘号） | **✓（卷号写在内容里：0 基，实测 0/1/2/3）** |
+  | **是末卷** | ✗（靠"尺寸更小"或硬链接试开） | ✗（末片 EOCD 的盘号字段写的是 **0/0** —— 7-Zip 就这么写的） | **✓（EOCD 自述盘号；顺带给出总片数）** | ✓（卷号最大／无"还有下一卷"） |
+  | 总片数 | ✗（要靠尺寸规律算） | ✗ | **✓（末片 EOCD 的盘号 + 1）** | ✗（要看整组取最大卷号） |
+
+  - ⇒ **定序能力**：RAR 靠内容就能定序（不需要名字）；PKZIP 跨盘 zip 只有 **2 片**能靠内容消去法定序（≥3 片的中间片顺序**只有名字能回答** —— `VolumeNumberFromContent.ResolveZipGroup` 里 `total > 2` 直接 `Refuse(ZipTooManyDisks)`，用户 2026-09-29 定的规矩）；7z 只能"尺寸排序候补 + 硬链接试开"。
+  - ⛔ 别再写"三种格式一样"的代码或注释：`VolumeNumberFromContent` 的三个分支就是按这份表写的。
 - 缺卷补救：候选池只收"不是已识别的归档"的；⛔ 放宽的只是"敢不敢试"：成不成立只由 `VolumeProbeVerifier` 硬链接试开回答（⛔ 绝不复制大文件、不改用户文件）〔缺卷补救：第二次真机报〕
   - 头加密那一档也算肯定回答（`EngineErrorTypes.EncryptedHeaders`，结构化结论、不比文案）；单卷试开就报"加密归档" ⇒ 拒绝改名（它本身就是完整包）〔假绿复核：-mhe 两卷〕
 - 分卷组装判定器 `Detection/VolumeGroupResolver`：六条证据（基名/卷号连续/体积规律/物理同一性/位置推定/硬链接试开）+ 四档结论（`Complete`/`IncompleteMissingVolume`/`IncompleteSuspected`/`Undetermined`）+ 唯一可删出口 `CanEnterDeletableRestItems`（弱证据/判不出=false ⇒ 不删源、不移源）；跨盘或拿不到工作区根 ⇒ 不试开、降「判不出」（硬链接不能跨卷；⛔ 不许退到源卷根偷开工作区）；详见 `docs/分卷组装算法.md` §6.10/§6.11。
