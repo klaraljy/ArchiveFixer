@@ -1,4 +1,5 @@
 using System.IO;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 
@@ -282,6 +283,65 @@ public class RenameServiceTests
             {
                 Directory.Delete(dir, true);
             }
+        }
+    }
+
+    /// <summary>
+    /// **用户 2026-10-01 真机第五轮留下的那 400 MB**（`AAAA\222\222.z01`）：
+    /// 跨盘 zip 的**本体**被「按真实格式修正」改名之后，<see cref="ArchiveTask.VolumePaths"/>
+    /// 里那份旧名字必须一起改掉。
+    ///
+    /// <para><b>现场</b>：`222.zscip`（本体，名字被改坏的那一份）+ `222.z删除01`（续卷）→ 批首改名成
+    /// `222.zip` + `222.z01`。可本体那次改名只写了 <c>CurrentPath</c>，清单里还留着 `222.zscip`
+    /// ⇒ 账上成了 <c>[222.zscip（盘上已经没有了）, 222.z01]</c>；
+    /// `SourcePackageMover.ResolveSourceGroup` 于是判"清单非空、却不含任务自己"⇒ 按**单文件**办
+    /// ⇒ 只搬 247 MB 的本体，400 MB 的 `222.z01` 留在源目录（日志里那句"已把 **1** 个源包移入其余物"
+    /// 就是它）。而"清单能变多才补"那道闸门按**条数**比（2 条 vs 2 条 = 没变多）也补不上。</para>
+    ///
+    /// <para><b>这条钉的验收</b>：改名之后，这一组**两卷都要能被搬走** —— 少一卷就是用户要自己动手清。</para>
+    /// </summary>
+    [Fact]
+    public async Task ExecuteRenameAsync_分卷组本体改名_清单里的旧名字也要跟着改()
+    {
+        string dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(dir);
+
+            string body = Path.Combine(dir, "222.zscip");
+            string volume = Path.Combine(dir, "222.z删除01");
+            File.WriteAllText(body, "body");
+            File.WriteAllText(volume, "vol");
+
+            var task = CreateTask(body, "ZIP_SPANNED", ".zip");
+            task.IsVolumeGroup = true;
+            task.VolumePaths.Add(body);
+            task.VolumePaths.Add(volume);
+
+            var service = new RenameService();
+            var preview = service.BuildPreview(new[] { task }, CreateFixOptions());
+
+            await service.ExecuteRenameAsync(preview, new[] { task });
+
+            string renamed = Path.Combine(dir, "222.zip");
+
+            Assert.Equal(renamed, task.CurrentPath);
+
+            // 清单里那份旧名字必须换成新名字（否则搬运退化成"只搬本体"）。
+            Assert.Contains(renamed, task.VolumePaths);
+            Assert.DoesNotContain(body, task.VolumePaths);
+            Assert.Contains(volume, task.VolumePaths);
+
+            // 用户真正在意的验收：整组两卷都得在搬运范围内。
+            IReadOnlyList<string> group = SourcePackageMover.ResolveSourceGroup(task);
+
+            Assert.Equal(2, group.Count);
+            Assert.Contains(renamed, group);
+            Assert.Contains(volume, group);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
         }
     }
 

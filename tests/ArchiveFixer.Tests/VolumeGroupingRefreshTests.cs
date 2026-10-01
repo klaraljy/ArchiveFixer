@@ -151,6 +151,47 @@ namespace ArchiveFixer.Tests
                 plain));
         }
 
+        /// <summary>
+        /// **两个归组来源取更全的那一份**：判据只有一句"谁卷数多就用谁"，
+        /// 这条用例把三种组合都钉住（一边更全 / 一边为空 / 两边一样）。
+        ///
+        /// <para>⚠ 如实记：真机上按目录归组给的**只有 1 卷**（`222.zip` 自己成一组、`222.z01` 只是
+        /// "没卷号的候选"），而合成样本里按目录归组**给了 2 卷** —— 这条用例因此只钉
+        /// `PickFullerGroup` 这个纯函数本身，真机那条路的状态另由 `SkipWhenAnotherTaskOwnsThisVolumeGroup`
+        /// 的现场诊断确认（见 `修改日志.md` 2026-10-01 那两条）。</para>
+        /// </summary>
+        [Fact]
+        public void 两个来源取更全的那一份()
+        {
+            string directory = NewDirectory("case-fuller");
+
+            string body = WriteFile(directory, "222.zip", 64);
+            WriteFile(directory, "222.z01", 64);
+
+            var task = new ArchiveTask(body, 1) { IsArchive = true, DetectedFormat = "ZIP" };
+
+            ArchiveFixer.Detection.VolumeGroup? byDirectory =
+                OneClickCoordinator.ResolveVolumeGroupFromDirectory(task);
+            ArchiveFixer.Detection.VolumeGroup? byName =
+                OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, body);
+
+            Assert.NotNull(byDirectory);
+            Assert.NotNull(byName);
+
+            // 按名字那份看得出两卷（这一条是稳定的判据）。
+            Assert.Equal(2, byName!.Volumes.Count);
+
+            ArchiveFixer.Detection.VolumeGroup picked =
+                OneClickCoordinator.PickFullerGroup(byDirectory, byName)!;
+
+            Assert.True(picked.Volumes.Count >= byDirectory!.Volumes.Count);
+
+            // 一边为空 / 两边一样：取有结果的那边、一样全时保留按目录那份。
+            Assert.Same(byName, OneClickCoordinator.PickFullerGroup(null, byName));
+            Assert.Same(byDirectory, OneClickCoordinator.PickFullerGroup(byDirectory, null));
+            Assert.Same(byDirectory, OneClickCoordinator.PickFullerGroup(byDirectory, byDirectory));
+        }
+
         // ================================================================ 辅助
 
         private string NewDirectory(string name)

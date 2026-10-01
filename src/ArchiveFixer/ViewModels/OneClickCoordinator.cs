@@ -1527,6 +1527,36 @@ namespace ArchiveFixer.ViewModels
                     v => string.Equals(Path.GetFullPath(v.Path), fullPath, StringComparison.OrdinalIgnoreCase)));
         }
         /// <summary>
+        /// **两个归组来源取更全的那一份**（用户 2026-10-01 第三 / 第四 / 第五次真机踩出来的唯一正确问法）。
+        ///
+        /// <para>现场（`222.zip` + `222.z01`，都是批首改好的标准名）：
+        /// <see cref="ResolveVolumeGroupFromDirectory"/> 拿 `222.zip` **返回的不是 null，而是一个"只有 1 卷"的组**
+        /// —— 因为按名字归组时 `.zip` 自己成一组、`222.z01` 只是它"没卷号的候选"；而
+        /// <see cref="ResolveVolumeGroupFromDirectoryByName"/> 能看出两卷同基名。
+        /// 前两轮白改的根因都是"只看能不能归出组"：第一次写成"自己的名字带卷标记"（`.zip` 不是 ⇒ 恒 false），
+        /// 第二次写成"归不出组时才问按名字"（这里**归得出**，只是少一卷）⇒ 补清单永远轮不到。</para>
+        ///
+        /// <para>⛔ 判据只有一句：**谁卷数多就用谁**；一样多时保留按名字归的那份（它对"脏名兄弟"更敏感）。
+        /// 调用方仍然走"只增不减"的闸门 —— 这个方法只回答"该用哪份清单"，不写任何账。</para>
+        /// </summary>
+        internal static ArchiveFixer.Detection.VolumeGroup? PickFullerGroup(
+            ArchiveFixer.Detection.VolumeGroup? byDirectory,
+            ArchiveFixer.Detection.VolumeGroup? byName)
+        {
+            if (byDirectory == null)
+            {
+                return byName;
+            }
+
+            if (byName == null)
+            {
+                return byDirectory;
+            }
+
+            return byName.Volumes.Count >= byDirectory.Volumes.Count ? byName : byDirectory;
+        }
+
+        /// <summary>
         /// **这一单一开工就必须按名字重算一次分卷清单吗**（用户 2026-10-01 第三 / 第四次真机）。
         ///
         /// <para>判据只有一条：**同目录里有没有和它同基名、名字带卷标记的兄弟**

@@ -401,6 +401,115 @@ namespace ArchiveFixer.Tests
             Assert.Contains("ExtractionTabItem", code, StringComparison.Ordinal);
         }
 
+        // ================================================================ ④ 记忆：启动填回地址**不许**动落点档位
+
+        /// <summary>
+        /// **用户 2026-10-01 真机连着两轮报的那一条**（原话：<i>"这个位置的选择你也要弄记忆模式，
+        /// 要不然每次解压都要点击一下未指定指定位置"</i> / <i>"我单独点击未指定位置还是没有用，
+        /// 无论操作文件还是没有操作文件，下次点开依旧没有记忆"</i>）。
+        ///
+        /// <para><b>现场（程序自己的日志，第 5 轮 <c>ArchiveFixer_20261001_155136.log</c>）</b>：
+        /// 设置文件里 <c>ExtractToOriginalDirectory: true</c>（= 用户上回选的正是「未指定位置」），
+        /// 可 15:51:43 那一行「输出位置：未指定 —— 产物落在每个包自己所在的目录」说明他**又点了一次**
+        /// —— 启动时那一格被改成了"指定位置"，所以他才要重点。</para>
+        ///
+        /// <para><b>根因</b>：启动填回"上次记住的输出目录"走的是
+        /// <see cref="MainViewModel.SelectedOutputDirectory"/> 的 setter，而那个 setter 的语义是
+        /// "用户指定了一个位置"（顺手把 <c>ExtractToOriginalDirectory</c> 改成 false）。
+        /// 于是**每次启动**都把用户的选择悄悄翻面：①页显示成"指定位置"、
+        /// 一键处理弹窗预选"解压到指定位置"（下一批就会解到那个旧地址去）。</para>
+        ///
+        /// <para>这条钉的是**用户真正在意的验收**：不碰任何按钮，下次打开弹窗预选的就是他上回选的那一档。</para>
+        /// </summary>
+        [Fact]
+        public void 启动填回记住的输出目录_不许把未指定位置改成指定位置()
+        {
+            const string remembered = @"<测试目录>\上次用过\BBB";
+
+            CapturingClipboardViewModel vm = CreateViewModel(
+                out _,
+                folderToChoose: null,
+                configure: settings =>
+                {
+                    settings.ExtractToOriginalDirectory = true;   // 用户上回选的是「未指定位置」
+                    settings.CustomOutputDirectory = remembered;  // 同时设置里还记着他更早挑过的那个地址
+                    settings.RememberLastOutputDirectory = true;
+                });
+
+            // 地址照样填回那一格（值没丢）……
+            Assert.Equal(remembered, vm.SelectedOutputDirectory);
+
+            // ……但落点档位一个字都不许变：①页开关还在勾着、那一行还写着"未指定"。
+            Assert.True(vm.Settings.ExtractToOriginalDirectory);
+            Assert.True(vm.OutputLocationFollowsArchive);
+            Assert.Equal(StatusText.OutputLocationUnspecifiedText, vm.OutputLocationDisplay);
+
+            // ②页读同一份真值（不能出现"①页未指定、②页指定位置"）。
+            Assert.Equal(OutputPlacementOption.ArchiveNamedSubfolder, vm.SettingsEditor.OutputPlacement);
+            Assert.False(vm.SettingsEditor.IsCustomOutputEnabled);
+
+            // 一键处理弹窗的初值就是这一份（OneClickCoordinator 那一行：FromSettings(设置, ①页那一格)）——
+            // 用户不用再点一次「未指定位置」。
+            OneClickRunOptions seed = OneClickRunOptions.FromSettings(vm.Settings, vm.SelectedOutputDirectory);
+
+            Assert.Equal(OutputPlacementMode.PerArchiveSubfolder, seed.PlacementMode);
+        }
+
+        /// <summary>
+        /// 反过来那一档也要记：设置里是"指定位置 + 这个根" → 启动后①页显示这个根、弹窗预选"指定位置"。
+        ///
+        /// <para>两个方向都要钉住，否则"修成永远未指定"也能让上一条测试变绿 —— 那是把记忆删掉，不是修记忆。</para>
+        /// </summary>
+        [Fact]
+        public void 启动填回记住的输出目录_指定位置那一档也要照样记住()
+        {
+            const string remembered = @"<测试目录>\上次用过\CCC";
+
+            CapturingClipboardViewModel vm = CreateViewModel(
+                out _,
+                folderToChoose: null,
+                configure: settings =>
+                {
+                    settings.ExtractToOriginalDirectory = false;  // 用户上回选的是「指定位置」
+                    settings.CustomOutputDirectory = remembered;
+                    settings.RememberLastOutputDirectory = true;
+                });
+
+            Assert.Equal(remembered, vm.SelectedOutputDirectory);
+            Assert.False(vm.Settings.ExtractToOriginalDirectory);
+            Assert.False(vm.OutputLocationFollowsArchive);
+            Assert.Contains("CCC", vm.OutputLocationToolTip, StringComparison.Ordinal);
+            Assert.Equal(OutputPlacementOption.CustomNamedSubfolder, vm.SettingsEditor.OutputPlacement);
+
+            OneClickRunOptions seed = OneClickRunOptions.FromSettings(vm.Settings, vm.SelectedOutputDirectory);
+
+            Assert.Equal(OutputPlacementMode.CustomRootPerArchive, seed.PlacementMode);
+            Assert.Equal(remembered, seed.CustomRoot);
+        }
+
+        /// <summary>
+        /// 「记住上次输出目录」关掉 = 这一格空着（本次运行按"包旁边"算落点），
+        /// **但设置里那个地址一个字都不许动** —— 关掉的是"启动填回"，不是"删除我挑过的地址"。
+        /// </summary>
+        [Fact]
+        public void 关掉记住上次输出目录_只是不填回那一格_地址仍在设置里()
+        {
+            const string remembered = @"<测试目录>\上次用过\DDD";
+
+            CapturingClipboardViewModel vm = CreateViewModel(
+                out _,
+                folderToChoose: null,
+                configure: settings =>
+                {
+                    settings.ExtractToOriginalDirectory = false;
+                    settings.CustomOutputDirectory = remembered;
+                    settings.RememberLastOutputDirectory = false;
+                });
+
+            Assert.Equal(string.Empty, vm.SelectedOutputDirectory);
+            Assert.Equal(remembered, vm.Settings.CustomOutputDirectory);
+        }
+
         // ================================================================ 装配
 
         private CapturingClipboardViewModel CreateViewModel()
@@ -418,7 +527,14 @@ namespace ArchiveFixer.Tests
         /// —— 无界面宿主下真 <see cref="DialogService.ShowFolderBrowserDialog"/> 一律返回空串，
         /// 那样①页「选择…」这条真实路径根本走不到（2026-09-25 第 31 条就是为了走通它才把它改成 virtual）。
         /// </summary>
-        private CapturingClipboardViewModel CreateViewModel(out LogService logService, string? folderToChoose)
+        /// <param name="configure">
+        /// 落盘**之前**改设置（模拟"用户上次留下的设置文件"）。为什么必须在这里改：
+        /// 这一组要验的正是"启动读设置时会不会把它改掉"，先构造再改就验不到了。
+        /// </param>
+        private CapturingClipboardViewModel CreateViewModel(
+            out LogService logService,
+            string? folderToChoose,
+            Action<AppSettings>? configure = null)
         {
             string cacheRoot = Path.Combine(_root, "data");
 
@@ -429,6 +545,9 @@ namespace ArchiveFixer.Tests
 
             AppSettings settings = AppSettings.CreateDefault();
             settings.AutoScanAfterDrop = false;
+
+            configure?.Invoke(settings);
+
             settingsService.Save(settings);
 
             string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;

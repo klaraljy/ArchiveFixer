@@ -6856,23 +6856,19 @@ namespace ArchiveFixer.ViewModels
                     OneClickCoordinator.ResolveVolumeGroupFromDirectory(task);
 
                 /*
-                 * ⚠ 2026-10-01（用户真机第三 / 第四次报）：归组归不出组时**也必须往下走一次**。
+                 * ⚠ 2026-10-01（用户真机第三 / 第四 / 第五次报）：**两个来源都要问，取更全的那份**
+                 * （`OneClickCoordinator.PickFullerGroup`，判据只此一份、有用例钉着）。
                  *
-                 * 现场：批首整组改名把 `222.zscip` → `222.zip`、`222.z删除01` → `222.z01`（改对了），
-                 * 可任务账上的分卷清单只是**扫描期那一份**（那时 `222.zscip` 还是 unrecognized，
-                 * 归组只给出 1 卷）⇒ 这里 `ResolveVolumeGroupFromDirectory` 拿 `222.zip` 单看归不出组
-                 * ⇒ 老写法直接 return ⇒ **补清单那一步永远走不到** ⇒ 源包搬运只搬了 `222.zip` 自己，
-                 * 400 MB 的 `222.z01` **留在源目录里**（用户看到的就是这个）。
-                 *
-                 * ⛔ 判据**不能**写 `IsVolumePartFileName(自己)`：跨盘 zip 的**本体**叫 `222.zip`，
-                 * `.zip` 不是卷标记 ⇒ 那条判断恒为 false，补清单永远跑不到（第三报就是这样白改了一轮）。
-                 * 正确的问法是"**同目录里有没有和它同基名、名字带卷标记的兄弟**"——
-                 * 这正是下面那个按名字补清单的出口回答的问题，所以这里改成**先问它**。
+                 * 现场：批首整组改名把 `222.zscip` → `222.zip`、`222.z删除01` → `222.z01`（都改对了），
+                 * 可任务账上的清单只是扫描期那一份（1 卷）。而 `ResolveVolumeGroupFromDirectory(222.zip)`
+                 * **返回的不是 null，而是一个"只有 1 卷"的组** ⇒ 老写法下"只增不减"的闸门 `1 > 1` 不成立
+                 * ⇒ 按名字补清单（2 卷）那一路永远轮不到 ⇒ 源包搬运只搬 `222.zip` 自己，
+                 * 400 MB 的 `222.z01` 留在源目录。
                  */
-                if (group == null)
-                {
-                    group = OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, currentPath);
-                }
+                ArchiveFixer.Detection.VolumeGroup? byName =
+                    OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, currentPath);
+
+                group = OneClickCoordinator.PickFullerGroup(group, byName);
 
                 if (group == null)
                 {
@@ -6891,9 +6887,42 @@ namespace ArchiveFixer.ViewModels
                      * 这条也顺手保住了既有用例的语义：手工构造的组信息不会被这里悄悄改写
                      *（`整组改名之后_同批别的任务也要搬到新名字` 那条当场逮到过被砍短）。
                      */
+                    /*
+                     * ⚠ 2026-10-01（用户真机第五次，诊断日志给出答案）：**补清单的判据不能只看"自己是不是首卷"**。
+                     *
+                     * 诊断现场：`[222.zip] isGroup=True volPaths=2[222.zscip,222.z01] byName=2[222.z01,222.zip]`
+                     * —— 按名字补出来的清单把**续卷排在了第 1 位**（`FirstVolumePath` 落到 `222.z01` 头上），
+                     * 于是下面那个"自己是不是首卷"判不过（自己叫 `222.zip`）⇒ 清单一条都没写进账 ⇒
+                     * `ResolveSourceGroup` 发现"自己的路径不在清单里"⇒ 只搬了 `222.zip` 自己，
+                     * 400 MB 的 `222.z01` 留在源目录（用户连报三次的就是它）。
+                     *
+                     * 判据改成：**账里的卷数确实能变多**就补（这正是本方法的唯一目的）。
+                     * "自己是不是首卷"只用来决定**要不要把自己也拒掉**（下面那段跟班判定），不再拦补账。
+                     */
                     if (group.Volumes.Count > task.VolumePaths.Count)
                     {
-                        new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
+                        /* 清单必须"自己在前、其余按卷序跟在后"：源包搬运按顺序读它。 */
+                        var ordered = new List<ArchiveFixer.Detection.VolumeCandidate>();
+
+                        ordered.Add(new ArchiveFixer.Detection.VolumeCandidate { Path = currentPath, Size = -1 });
+                        ordered.AddRange(group.Volumes.Where(
+                            v => !string.Equals(v.Path, currentPath, StringComparison.OrdinalIgnoreCase)));
+
+                        new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(
+                            task,
+                            new ArchiveFixer.Detection.VolumeGroup
+                            {
+                                GroupKey = group.GroupKey,
+                                DirectoryPath = group.DirectoryPath,
+                                BaseName = group.BaseName,
+                                Volumes = ordered,
+                                FirstVolumePath = currentPath,
+                                KnownVolumeCount = group.KnownVolumeCount,
+                                ExpectedVolumeCount = group.ExpectedVolumeCount,
+                                IsComplete = group.IsComplete,
+                                MissingVolumeNames = group.MissingVolumeNames,
+                                Note = group.Note
+                            });
 
                         /*
                          * 账变长了 ⇒ 源文件快照盯的路径集合也变了，必须跟着重拍。
@@ -9150,7 +9179,7 @@ namespace ArchiveFixer.ViewModels
                  * 本次选项进日志（规格 §9.2 硬要求⑥）：用户事后要能回答"这次为什么解到这里"。
                  * 逐任务那一行在 ExtractSingleTaskAsync 里写（带实际落点），这一行是本批的总纲。
                  */
-                AppendLog("INFO", $"本次一键处理按「本次选项」执行（不写回设置）：{runOptions.Describe()}");
+                AppendLog("INFO", $"本次一键处理按「本次选项」执行：{runOptions.Describe()}");
 
                 if (!runOptions.IsPlacementValid)
                 {

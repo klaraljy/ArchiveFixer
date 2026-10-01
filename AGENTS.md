@@ -206,7 +206,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2264 条（2262 通过/2 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2282 条（2279 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -242,6 +242,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - 分卷组装判定器 `Detection/VolumeGroupResolver`：六条证据（基名/卷号连续/体积规律/物理同一性/位置推定/硬链接试开）+ 四档结论（`Complete`/`IncompleteMissingVolume`/`IncompleteSuspected`/`Undetermined`）+ 唯一可删出口 `CanEnterDeletableRestItems`（弱证据/判不出=false ⇒ 不删源、不移源）；跨盘或拿不到工作区根 ⇒ 不试开、降「判不出」（硬链接不能跨卷；⛔ 不许退到源卷根偷开工作区）；详见 `docs/分卷组装算法.md` §6.10/§6.11。
 - ✅ 带垃圾尾巴的组（`111.parts1.racr` 这种"另起一段的后缀"）交给 7-Zip 会报缺卷 ⇒ 由 `VolumeNameRepair` 在开工前改回标准名（只改名、不覆盖、判不出就不改）。
 - ⛔ **一组分卷 = 一个任务 = 从首卷启动**（现场与根因见 `修改日志.md` 2026-10-01）：① 整组改名在**批首**（`NormalizeDisguisedVolumeNamesForBatchAsync`，`ApplyBatchWorkspaceRoot` 之后 / 并发之前）；② 后续卷那一单落 `Skipped`（`SkipWhenAnotherTaskOwnsThisVolumeGroup` + `ArchiveTask.IsVolumeGroupFollower`）；③ 归组**只算不写**（`OneClickCoordinator.ResolveVolumeGroupFromDirectory`）且**只增不减**；④ 跟班**不进链尾裁决**（`DescribeChainVerificationGap` / `CompleteRootSourcePackagesAfterChainAsync`）。用例 `AaaReplayPipelineTests`。
+- ⛔ **改名之后，任务上每一处指向这个文件的旧路径都要改过来**（用户 2026-10-01 第四 / 第五报，400 MB 的 `222.z01` 连留三次的真根因；见 `docs/真机事故复盘.md` §38）：`RenameService.UpdateTaskRenameSuccess(task, oldPath, newPath)` 必须**同时**改 `CurrentPath` 与 `VolumePaths` 里那一项 —— 只改一条 ⇒ 账上留下一个"盘上已经不存在"的旧名字 ⇒ `ProcessArtifactLayout.SourcePackageMover.ResolveSourceGroup` 判"清单非空、却不含任务自己" ⇒ **整组搬运退化成只搬一份**，而日志只写"已把 1 个源包移入其余物"（用户要自己动手清剩下的）。
+  - ⛔ **"清单够不够全"不许按条数比**（`SkipWhenAnotherTaskOwnsThisVolumeGroup` 的 `group.Volumes.Count > task.VolumePaths.Count`）：一条不存在的旧名字照样占一个位 —— 2 条 vs 2 条看着"没变多"，实际只有 1 条是真的。这条闸门只负责"账上真的只有 1 卷"那一档。
+  - ⚠ 未修的同形状残留（⛔ 别当成"已解决"）：`SourcePackageMover.ResolveSourceGroup` 那条"清单不含自己就按单文件办"的兜底**仍然静默**；`ExtractionCoordinator.cs:2503-2510`（内层包搬进其余物）同样只改 `CurrentPath`。
 - ✅ **"去杂质之后是什么"只有一个出口**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`，用户 2026-10-01 真机 `222` 那一组）：
   删掉**最多 2 个非数字字符**后若**唯一地**变成**已知归档后缀**才算（`222.zi删除p` / `222.zscip` → `zip`、
   `ra删除r` → `rar`、`7删除z` → `7z`；本来就干净、或删出来有歧义 ⇒ 一律不认）。它同时喂三个消费点：
@@ -283,6 +286,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - ⛔ 落点最少两层文件夹：最外层=包名目录、最里层=最后一个内层包层，⛔ 塌缩/不套层分支不许吃掉最里层；省层只能省中间的内层包层，⛔ 普通文件夹永不摊平（唯一出口 `Extraction/PackageLayerRules.cs`；递归=就地替换）
 - 落点模型 v2：判据出口三处——`OutputPlacement.ResolveDestinationDirectory`（落点）、`OneClickCoordinator.ShouldAddContinuationLevelLayer`（续解层）、`ResultFinalizer.Plan(..., suppressPackageFolderLayer:)`（定稿套层）；契约 `docs/输出与整理模型.md` §1.1/§3.1/§3.3.1〔落点模型 v2〕
+- ⛔ **落点这一档是"记忆"的：用户上回选的那一档，下次打开就是那一档**（用户 2026-10-01：「要不然每次解压都要点击一下未选择指定位置」；现场见 `docs/真机事故复盘.md` §38.5）。两条口径：
+  - 一键处理确认框 → `Confirmed` 之后**一律** `SaveOneClickOptionsAsDefaults`（记忆范围只有面板上看得见的那几档；⛔ 取消 / 没弹框时一个字节都不写）；面板初值 = `OneClickRunOptions.FromSettings(settings, _vm.SelectedOutputDirectory)`。
+  - ⛔ **"搬值"不许走 `SelectedOutputDirectory` 的 setter**（它的语义是"用户指定了一个位置"，会顺手把 `ExtractToOriginalDirectory` 改成 false）：启动填回记住的目录 / 写盘后收尾 / 恢复默认三处一律走 `MainViewModel.SyncOutputLocationFromSettings(rememberedDirectory = null)`（只搬值 + 发通知，不改档位、不写设置）。⛔ 别再让"填回一个记住的路径"把用户选的「未指定位置」翻面 —— 那正是他连报两轮"下次点开依旧没有记忆"的根因。用例 `OutputLocationOnTaskTabTests`（两个方向都钉 + 关掉「记住上次输出目录」时设置里那个地址一个字不动）。
 - ⛔ 整组改名（`VolumeNameRepair` 改整组**每一卷**）后必须**同步全表任务路径+快照**：唯一出口 `ExtractionCoordinator.SyncTasksAfterVolumeRename`（按 plan.Items 重写全表 CurrentPath/VolumePaths + 重拍快照；调用点 `:6227`、`MainViewModel.cs:5360` 手动「修复分卷名并重试」）；只同步驱动那一单 ⇒ 兄弟任务下一次比对假报「源文件已变化」。不变量 11 口径一个字没放宽。
 - ⛔ 两处"整组改名"实现都**必须全成或全不成**：`VolumeNameRepair.TryApply`（源包）与 `BrokenVolumeChainRepair.TryApply`（内层续解链）—— 中途失败要**倒序改回原名**（⛔ 不是"改回目标名"：那等于接着把改名做完，日志说失败、盘上却变了）、回滚失败**如实点名**。用例 `VolumeNameRepairRollbackTests` / `BrokenVolumeChainRepairRollbackTests`。
 - 一键处理期间零弹窗（唯一例外=批末汇总框）：`ExtractionCoordinator.SuppressDecisionPromptsForOneClickRun()` 一处收口，且必须排在 `ResetBatchConflictState()` 之后（先抑制后清零=没抑制）；⛔ 不许在一键档批中间新增任何"要点一下"的框〔一键处理零弹窗（唯一例外：批末汇总）〕

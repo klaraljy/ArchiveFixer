@@ -511,7 +511,7 @@ namespace ArchiveFixer.Services
 
                 try
                 {
-                    UpdateTaskRenameSuccess(matchedTask, finalPath);
+                    UpdateTaskRenameSuccess(matchedTask, sourcePath, finalPath);
                 }
                 catch
                 {
@@ -1368,11 +1368,37 @@ namespace ArchiveFixer.Services
                 string.Equals(x.RenamePreviewPath, path, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static void UpdateTaskRenameSuccess(ArchiveTask? task, string newPath)
+        private static void UpdateTaskRenameSuccess(ArchiveTask? task, string oldPath, string newPath)
         {
             if (task == null)
             {
                 return;
+            }
+
+            /*
+             * ⚠ **分卷清单里那份旧名字也要一起改掉**（用户 2026-10-01 真机第五轮：400 MB 的 `222.z01`
+             * 又被留在源目录里，而他报的是"这东西还在，你浪费了我两次操作"）。
+             *
+             * 现场：`222.zscip`（跨盘 zip 的**本体**，名字是被改坏的那一份）被「按真实格式修正」
+             * 改成 `222.zip` —— 这条改名以前只写 <c>CurrentPath</c>；同一个文件在
+             * <see cref="ArchiveTask.VolumePaths"/> 里**还叫 `222.zscip`**。后面批首那次整组改名
+             * 只按自己那份计划的"旧名 → 新名"映射回填（`222.z删除01 → 222.z01`），
+             * 那个盘上已经不存在的 `222.zscip` 没人管 ⇒ 账上成了
+             * <c>[222.zscip（盘上没有）, 222.z01]</c>。
+             *
+             * 后果（`SourcePackageMover.ResolveSourceGroup` 的判据）：清单非空、却不含任务自己
+             * ⇒ 这一单按**单文件**办 ⇒ 只搬 `222.zip`，`222.z01` 原地不动；
+             * 而"清单能变多才补"那道闸门按**条数**比（2 条 vs 2 条 = 不变）也补不上。
+             *
+             * ⛔ 口径与本项目"整组改名必须同步全表任务路径 + 快照"（`SyncTasksAfterVolumeRename`）
+             * 完全一致：改名之后，任务上**每一处**指向这个文件的旧路径都必须改过来。
+             */
+            for (int i = 0; i < task.VolumePaths.Count; i++)
+            {
+                if (string.Equals(task.VolumePaths[i], oldPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    task.VolumePaths[i] = newPath;
+                }
             }
 
             task.CurrentPath = newPath;

@@ -1007,7 +1007,12 @@ namespace ArchiveFixer.ViewModels
         {
             ApplyEngineSettings();
 
-            SelectedOutputDirectory = Settings.CustomOutputDirectory ?? string.Empty;
+            /*
+             * ⛔ 这里**只搬值**（走 SyncOutputLocationFromSettings），不许走 SelectedOutputDirectory 的 setter：
+             * 那个 setter 会把"未指定位置"改成"指定位置" —— 而这一跳是**每次写盘之后**都跑的，
+             * 用户勾完「未指定位置」刚存下去就被它改回来（详见 SyncOutputLocationFromSettings 的说明）。
+             */
+            SyncOutputLocationFromSettings();
 
             ApplyRememberedBookPathsFromSettings();
 
@@ -1026,6 +1031,19 @@ namespace ArchiveFixer.ViewModels
             AutoSaveSettingsIfChanged();
         }
 
+        /// <summary>
+        /// ①页「输出位置」那一格显示的那个值（用户 2026-09-25 第 27 条）。
+        ///
+        /// <para><b>⚠ 这个 setter 是"用户指定了一个位置"这一档专用门</b>：赋一个非空值 =
+        /// 把落点切到"指定位置"（顺手写 <c>Settings.CustomOutputDirectory</c> +
+        /// <c>ExtractToOriginalDirectory = false</c>）。目前唯一的调用方是①页那颗「选择…」
+        /// （<c>SelectOutputDirectory</c>，它还会显式再写一次那两个值，语义一致）。</para>
+        ///
+        /// <para>⛔ <b>凡是"搬值"（启动填回记住的目录 / 写盘后的收尾 / 恢复默认 / ②页改路径的联动）
+        /// 一律走 <see cref="SyncOutputLocationFromSettings"/></b> —— 它只碰界面字段、不改落点档位。
+        /// 2026-10-01 真机那条"点了「未指定位置」还是没有记忆"就是踩了这个 setter
+        /// （现场与根因见 <see cref="SyncOutputLocationFromSettings"/> 的说明）。</para>
+        /// </summary>
         public string SelectedOutputDirectory
         {
             get => _selectedOutputDirectory;
@@ -1172,17 +1190,35 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// ②页改了落点之后，把①页那一行拉回同一个真值。
+        /// 把①页那一格的「当前输出目录」搬成给定值（不给就取设置里记住的那个），**只搬运**：
+        /// ⛔ 不改落点档位（<c>ExtractToOriginalDirectory</c>）、⛔ 不写设置文件。
         ///
         /// <para>为什么必须显式同步：<see cref="AppSettings"/> 是普通 POCO（不实现 INotifyPropertyChanged），
         /// 而②页的「选择」是直接写 <c>Settings.CustomOutputDirectory</c> 的（走 SettingsViewModel），
         /// 不会经过 <see cref="SelectedOutputDirectory"/> 的 setter —— 不同步的话
         /// ①页那一行会一直显示旧路径（用户会以为"改了没反应"）。
         /// 这里只搬运、不回写设置，所以不可能形成两步循环。</para>
+        ///
+        /// <para><b>⛔ 三条"搬值"的路都不许走 <see cref="SelectedOutputDirectory"/> 的 setter</b>
+        /// （用户 2026-10-01 真机连着两轮报的那条：<i>"我单独点击未指定位置还是没有用，
+        /// 下次点开依旧没有记忆"</i>）：那个 setter 的语义是"**用户指定了一个位置**"，
+        /// 它顺手把 <c>Settings.ExtractToOriginalDirectory</c> 改成 false（切到"指定位置"档）。
+        /// 而"启动时填回上次记住的目录 / 设置落盘后收尾 / 恢复默认"这三处只是**搬值** ——
+        /// 用户上回明明选的是「未指定位置」、设置文件里也是 <c>true</c>，却会被它悄悄改成 false：
+        /// 每次启动界面都变成"指定位置"（①页那一格显示路径、一键处理弹窗预选"解压到指定位置"），
+        /// 用户必须再点一次「未指定位置」。</para>
+        ///
+        /// <para>真机日志（第 5 轮，<c>ArchiveFixer_20261001_155136.log</c>）：设置文件里是
+        /// <c>ExtractToOriginalDirectory: true</c>，可启动 7 秒后用户仍要手动点一次
+        /// （15:51:43 那一行「输出位置：未指定」正是他点出来的）—— 那次点击就是本缺陷的现场。</para>
         /// </summary>
-        private void SyncOutputLocationFromSettings()
+        /// <param name="rememberedDirectory">
+        /// 要搬进那一格的地址；<c>null</c> = 取 <c>Settings.CustomOutputDirectory</c>。
+        /// 传空串是合法的（「记住上次输出目录」关掉时就是"这一格空着"，**不是**"把设置抹掉"）。
+        /// </param>
+        private void SyncOutputLocationFromSettings(string? rememberedDirectory = null)
         {
-            string folder = Settings?.CustomOutputDirectory ?? string.Empty;
+            string folder = rememberedDirectory ?? Settings?.CustomOutputDirectory ?? string.Empty;
 
             if (!string.Equals(_selectedOutputDirectory, folder, StringComparison.Ordinal))
             {
@@ -1990,10 +2026,17 @@ namespace ArchiveFixer.ViewModels
              * 关掉之后，启动时**不**把上次的输出目录填回 SelectedOutputDirectory，
              * 这一次运行按"输出位置"那一档的规则算落点（默认 = 压缩包同目录）。
              * 之前这个开关只存在于界面上，改了什么都不会发生。
+             *
+             * ⛔ 两条边界（2026-10-01 修；现场见 SyncOutputLocationFromSettings 的说明）：
+             * ① **不许走 SelectedOutputDirectory 的 setter** —— 它的语义是"用户指定了一个位置"，
+             *    会把用户上回选的「未指定位置」在启动时悄悄改成"指定位置"，于是"下次点开没有记忆"；
+             * ② 关掉这个开关只是"这一格空着"，⛔ 不许顺手去动设置里的 CustomOutputDirectory
+             *    （搬值的那条路只碰界面字段，绝不写设置）。
              */
-            SelectedOutputDirectory = _settings.RememberLastOutputDirectory
-                ? _settings.CustomOutputDirectory ?? string.Empty
-                : string.Empty;
+            SyncOutputLocationFromSettings(
+                _settings.RememberLastOutputDirectory
+                    ? _settings.CustomOutputDirectory ?? string.Empty
+                    : string.Empty);
 
             AddFilesCommand = new AsyncRelayCommand(_scanCoordinator.AddFilesAsync, CanRunNormalCommand);
             AddFolderCommand = new AsyncRelayCommand(_scanCoordinator.AddFolderAsync, CanRunNormalCommand);
@@ -3598,7 +3641,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             Settings = _settingsService.ResetToDefault();
-            SelectedOutputDirectory = Settings.CustomOutputDirectory ?? string.Empty;
+
+            // ⛔ 恢复默认也是"搬值"：走 SyncOutputLocationFromSettings，不许让 setter 把落点档位再改一遍。
+            SyncOutputLocationFromSettings();
             RefreshOutputPaths();
 
             /*
