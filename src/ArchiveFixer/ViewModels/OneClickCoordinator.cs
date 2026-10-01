@@ -1521,6 +1521,39 @@ namespace ArchiveFixer.ViewModels
                     v => string.Equals(Path.GetFullPath(v.Path), fullPath, StringComparison.OrdinalIgnoreCase)));
         }
         /// <summary>
+        /// **这一单一开工就必须按名字重算一次分卷清单吗**（用户 2026-10-01 第三 / 第四次真机）。
+        ///
+        /// <para>判据只有一条：**同目录里有没有和它同基名、名字带卷标记的兄弟**
+        /// （`222.zip` 旁边躺着 `222.z01`）。⛔ 不能写成"自己的名字里带卷标记" ——
+        /// 跨盘 zip 的**本体**叫 `222.zip`，`.zip` 不是卷标记 ⇒ 那条判断恒为 false，
+        /// 补清单永远跑不到（第三报就是这样白改了一轮：400 MB 的 `222.z01` 照旧留在源目录）。</para>
+        ///
+        /// <para>抽成 internal 静态是为了让守门用例**直接钉这个判据**（不必构造整个 MainViewModel）。</para>
+        /// </summary>
+        internal static bool NeedsVolumeGroupRefreshByName(ArchiveTask? task, string? currentPath)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(currentPath))
+            {
+                return false;
+            }
+
+            // 扫描期已经归过组的照旧要重算（账上那份可能只有一卷）。
+            if (task.IsVolumeGroup)
+            {
+                return true;
+            }
+
+            // 标准卷名的续卷（`.001` / `.z01` / `.part2`）也要重算。
+            if (FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(currentPath)))
+            {
+                return true;
+            }
+
+            // 剩下这一档就是真机那个形状：本体叫 `222.zip`，靠"同目录有没有卷兄弟"回答。
+            return ResolveVolumeGroupFromDirectoryByName(task, currentPath) != null;
+        }
+
+        /// <summary>
         /// **按名字补整组清单**（用户 2026-10-01 第三报）：账上的分卷清单可能过期（改名 / 扫描期只认出一卷），
         /// 而 `222.zip` 单看又归不出组 ⇒ 这一档按"本目录里基名相同、名字里带卷标记"的文件重新支一组出来。
         ///

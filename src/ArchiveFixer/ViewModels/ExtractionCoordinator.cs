@@ -6831,9 +6831,13 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * 只有"看着像分卷"或"扫描期已经被归过组"的任务才值得重新归组：
                  * 普通单卷包每次开工都去扫一遍目录，换不来任何结论。
+                 *
+                 * ⚠ 2026-10-01 补第三档：**同目录里有没有和它同基名、名字带卷标记的兄弟**
+                 * （`222.zip` 旁边躺着 `222.z01`）—— 这一档名字上看不出来（`.zip` 不是卷标记），
+                 * 而真机上恰恰就是它（用户第三 / 第四次报的那 400 MB 源卷）。
+                 * 判据抽在 `OneClickCoordinator.NeedsVolumeGroupRefreshByName`（唯一出口，有用例钉着）。
                  */
-                bool looksLikeVolume = task.IsVolumeGroup
-                    || FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(currentPath));
+                bool looksLikeVolume = OneClickCoordinator.NeedsVolumeGroupRefreshByName(task, currentPath);
 
                 if (!looksLikeVolume)
                 {
@@ -6852,22 +6856,21 @@ namespace ArchiveFixer.ViewModels
                     OneClickCoordinator.ResolveVolumeGroupFromDirectory(task);
 
                 /*
-                 * ⚠ 2026-10-01（用户真机第三报）：归组归不出组时**也必须往下走一次**。
+                 * ⚠ 2026-10-01（用户真机第三 / 第四次报）：归组归不出组时**也必须往下走一次**。
                  *
                  * 现场：批首整组改名把 `222.zscip` → `222.zip`、`222.z删除01` → `222.z01`（改对了），
                  * 可任务账上的分卷清单只是**扫描期那一份**（那时 `222.zscip` 还是 unrecognized，
                  * 归组只给出 1 卷）⇒ 这里 `ResolveVolumeGroupFromDirectory` 拿 `222.zip` 单看归不出组
                  * ⇒ 老写法直接 return ⇒ **补清单那一步永远走不到** ⇒ 源包搬运只搬了 `222.zip` 自己，
                  * 400 MB 的 `222.z01` **留在源目录里**（用户看到的就是这个）。
+                 *
+                 * ⛔ 判据**不能**写 `IsVolumePartFileName(自己)`：跨盘 zip 的**本体**叫 `222.zip`，
+                 * `.zip` 不是卷标记 ⇒ 那条判断恒为 false，补清单永远跑不到（第三报就是这样白改了一轮）。
+                 * 正确的问法是"**同目录里有没有和它同基名、名字带卷标记的兄弟**"——
+                 * 这正是下面那个按名字补清单的出口回答的问题，所以这里改成**先问它**。
                  */
-                if (group == null
-                    && task.VolumePaths.Count > 0
-                    && FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(currentPath)))
+                if (group == null)
                 {
-                    /*
-                     * 自己名字里带卷标记、账上却只有一卷 ⇒ 账的那一份可能已经过期（改名 / 扫描期），
-                     * 按"本目录里真实存在的名字"重新归一次。⛔ 仍然只增不减（下面那个比较就是闸门）。
-                     */
                     group = OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, currentPath);
                 }
 
