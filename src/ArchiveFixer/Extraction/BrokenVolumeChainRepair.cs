@@ -217,7 +217,18 @@ namespace ArchiveFixer.Extraction
                 return plan != null;
             }
 
-            var staged = new List<(string Temporary, string Target)>();
+            /*
+             * 每一项记三件事：临时名、**原名**、目标名。
+             *
+             * ⚠ 旧写法只记 `(临时名, 目标名)`，于是那个叫 `Rollback` 的方法实际是把临时名改成
+             * **目标名** —— 那根本不是回滚，是**接着把改名做完**：方法返回 false（调用方照实写
+             * "改名没成功"），盘上却已经换了名字。真机 2026-09-30 那句「日志说改名失败、盘上文件名
+             * 却变了」就是这个形状；`VolumeNameRepair.TryApply` 同形状的缺口 2026-10-01 已修
+             * （见它的 `Undo`），这里就是当时记下的那处残留。
+             *
+             * 半改比不改更糟：7-Zip 按新基名去找后续卷，名字七零八落时整组都打不开。
+             */
+            var staged = new List<(string Temporary, string Original, string Target)>();
 
             try
             {
@@ -226,7 +237,7 @@ namespace ArchiveFixer.Extraction
                     if (!File.Exists(sourcePath))
                     {
                         failure = $"要改名的分卷不在了：{sourcePath}";
-                        Rollback(staged);
+                        Rollback(staged, ref failure);
                         return false;
                     }
 
@@ -236,10 +247,10 @@ namespace ArchiveFixer.Extraction
                         $"~afxvol~{Guid.NewGuid():N}~{Path.GetFileName(sourcePath)}");
 
                     File.Move(sourcePath, temporary);
-                    staged.Add((temporary, Path.Combine(directory, targetName)));
+                    staged.Add((temporary, sourcePath, Path.Combine(directory, targetName)));
                 }
 
-                foreach ((string temporary, string target) in staged)
+                foreach ((string temporary, string _, string target) in staged)
                 {
                     File.Move(temporary, target);
                 }
@@ -249,7 +260,7 @@ namespace ArchiveFixer.Extraction
             catch (Exception ex)
             {
                 failure = ex.Message;
-                Rollback(staged);
+                Rollback(staged, ref failure);
                 return false;
             }
         }
@@ -300,22 +311,64 @@ namespace ArchiveFixer.Extraction
             return null;
         }
 
-        private static void Rollback(List<(string Temporary, string Target)> staged)
+        /// <summary>
+        /// 整组没改成 ⇒ 把**已经动过的名字倒序改回原名**，让盘上的状态与"一组没改"这句话一致。
+        ///
+        /// <para>口径与 <c>VolumeNameRepair.Undo</c> 完全相同（同一类动作只允许有一套判据）：
+        /// ⛔ 倒序、⛔ 原名已被占就不敢覆盖、回滚失败**如实点名**（拼进 <paramref name="failure"/>），
+        /// 绝不让用户以为"没动过"。</para>
+        ///
+        /// <para>要能回**两种状态**：还没走完第二步的（文件在临时名上）、以及第二步已经成功的
+        /// （文件在目标名上）—— 后者正是旧写法漏掉的那一半。</para>
+        /// </summary>
+        private static void Rollback(
+            List<(string Temporary, string Original, string Target)> staged,
+            ref string failure)
         {
-            // 尽量把还在临时名上的文件改回它原来的名字（改不回去只写日志，绝不抛）。
-            foreach ((string temporary, string target) in staged)
+            var stuck = new List<string>();
+
+            for (int index = staged.Count - 1; index >= 0; index--)
             {
+                (string temporary, string original, string target) = staged[index];
+
                 try
                 {
-                    if (File.Exists(temporary) && !File.Exists(target))
+                    // 这一项本来就标准（目标名 == 原名）：没有"改回去"这回事。
+                    if (string.Equals(target, original, StringComparison.OrdinalIgnoreCase))
                     {
-                        File.Move(temporary, target);
+                        continue;
                     }
+
+                    string current = File.Exists(temporary) ? temporary
+                        : File.Exists(target) ? target
+                        : string.Empty;
+
+                    if (current.Length == 0)
+                    {
+                        // 临时名与目标名都不在了：只能如实点名，绝不假装回滚成功。
+                        stuck.Add(Path.GetFileName(original));
+                        continue;
+                    }
+
+                    if (File.Exists(original))
+                    {
+                        // 原名又被占上了（别的程序插进来的）⇒ 不敢覆盖。
+                        stuck.Add(Path.GetFileName(original));
+                        continue;
+                    }
+
+                    File.Move(current, original);
                 }
                 catch
                 {
-                    // 回滚失败：上面那一步的日志已经把路径写清楚了。
+                    stuck.Add(Path.GetFileName(original));
                 }
+            }
+
+            if (stuck.Count > 0)
+            {
+                failure += $"；已动过的那几卷没能全部改回原名（{stuck.Count} 卷：{string.Join("、", stuck)}）"
+                           + " —— 盘上可能是半改状态，请手工核对";
             }
         }
     }
