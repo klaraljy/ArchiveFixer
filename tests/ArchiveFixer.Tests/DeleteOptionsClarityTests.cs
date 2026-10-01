@@ -257,6 +257,35 @@ namespace ArchiveFixer.Tests
             Assert.Contains("彻底删除", result.Message, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// **第六道门槛**（用户 2026-09-30 真机，25 GB 被误删）：其余物里是**半套**分卷
+        /// （同组的另一片还在成品目录里）⇒ 整份删除必须被拦下、一个字节都不动。
+        ///
+        /// <para>现场：内层包是一组 6 片跨盘 ZIP，末片当时没被认出来（ZIP64 收尾那两条闸门）⇒
+        /// 末片被当**内容物**留在成品目录、同组 5 卷被当**过程物**收进其余物，
+        /// 于是上面五道门槛全都过得去、其余物被整份彻底删除 —— 一组包被拆开、谁都再也解不开。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>RestItemPurger</c> 里那次调用撤掉 ⇒ 本用例立刻变红
+        /// （`Attempted` 收到 true、其余物目录已经不在）。</para>
+        /// </summary>
+        [Fact]
+        public void 其余物里是半套分卷_整份删除被拦下()
+        {
+            (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
+
+            File.Delete(Path.Combine(restDirectory, "inner-222.7z.001"));
+
+            File.WriteAllText(Path.Combine(restDirectory, "一组素材.z01"), "内层分卷（过程物）");
+            File.WriteAllText(Path.Combine(task.OutputPath!, "一组素材.z删除ip"), "末片（名字被改坏，被当内容物留在这里）");
+
+            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false, DeleteMode.Permanent);
+
+            Assert.False(result.Attempted, result.Message);
+            Assert.True(Directory.Exists(restDirectory), "半套分卷绝不允许整份删除");
+            Assert.True(File.Exists(Path.Combine(restDirectory, "一组素材.z01")));
+            Assert.Contains("一组素材", result.Message, StringComparison.Ordinal);
+        }
+
         /// <summary>同一现场走「移入回收站」那一档：消息必须说"回收站"（而不是"彻底删除"）。</summary>
         [Fact]
         public void 回收站档_消息说清是回收站()

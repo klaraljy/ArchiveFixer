@@ -161,6 +161,25 @@ namespace ArchiveFixer.Storage
                 return Skip($"{name}：其余物目录不在本任务的输出范围之内，已拒绝删除 —— {outsideReason}");
             }
 
+            /*
+             * ===== 第六道门槛：其余物里的分卷**不许是"半套"**（用户 2026-09-30 真机，25 GB 被误删）=====
+             *
+             * 现场：内层包是一组 6 片跨盘 ZIP，末片当时没被认出来（ZIP64 收尾那两条闸门，见
+             * `docs/真机事故复盘.md` §44.2）⇒ 末片被当**内容物**留在成品目录，同组 5 卷被当**过程物**
+             * 收进其余物；上面五道门槛全都过得去，于是其余物被整份彻底删除 ——
+             * 一组包被拆开、末片 1.62 GB 留下、另外 25 GB 永久消失，谁都再也解不开。
+             *
+             * 判据本体是公开纯函数 <see cref="Extraction.RestVolumeCompletenessGate"/>（单独可测）；
+             * ⛔ 放在**这里**而不是各个调用点：其余物的删除只有这一个执行体，
+             * 三处调用（链尾 / 任务收尾 / 链尾清扫）都要过它，放调用点等于漏两处。
+             */
+            string? splitGroupBlocker = Extraction.RestVolumeCompletenessGate.DescribeBlocker(directory);
+
+            if (splitGroupBlocker != null)
+            {
+                return Skip($"{name}：{splitGroupBlocker}");
+            }
+
             // logSink 传 null：删除日志由调用方（协调器）原样写进界面与文件日志，
             // 不在这里另开一个落点（两处各写一份会让日志出现两个时间戳）。
             string reason = mode == DeleteMode.RecycleBin ? AutoRecycleReason : AutoPurgeReason;

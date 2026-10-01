@@ -207,7 +207,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2315 条（2312 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2322 条（2319 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -215,6 +215,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - 已知 flaky（并发假红；先单跑确认，⛔ 别改断言）〔已知 flaky 清单〕
   - `SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`：全量偶发 `Collection was modified`（测试自己的 `WaitForLogAsync` 枚举 `harness.Log.Logs` 而产品侧在 append）⇒ 测试侧竞态、**不是产品 bug**。2026-10-01 已从源头去掉：该文件读日志的 6 处改走 `LogContains`（捕获 `InvalidOperationException` 后当作"这一轮还没出现"），⛔ 等待时长 / 断言 / 被等内容一个字没改。
 - ⚠ 回退代码后必须 `--no-incremental` 重编（否则跑的还是红检那份）〔真样本验收〕
+- 已知 flaky（第二条 2026-10-01 全量偶发一次、**单跑 8/8 绿**；两条都先单跑确认，⛔ 别改断言）
+  - `SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`：全量并发下偶发（计时敏感，等采样周期与取消的时序被别的用例抢 CPU 时判否）。
 
 ### 11.3 空间：判据/模式/批末汇总
 
@@ -271,7 +273,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
     - `Detection/EmbeddedArchiveDetector` 的 `if (!hasZip64)` 把这一档**整档跳过**（那道闸门当年是为了躲一次越界，而 `TryEvaluateSplitZipTail` 后来改成全用绝对偏移读，越界早就不成立）⇒ 末片被报 `Unknown`；
     - `Detection/SpannedZipIndex` 要求"中央目录**正好**接在 EOCD 前面"⇒ 专属算法在真机大包上一枪不放。
     ⇒ 后果链（真机实测）：末片被当**内容物**留下 → 同组 5 卷被当过程物收进其余物 → 一键扫描第 1 层「没有发现可继续解压的内层包」→ 链尾 ⇒ **其余物 5 项 25 GB 被整份永久删除**。⛔ 改完在真机残件上只读复核：`Unknown` → `ZIP_SPANNED`、索引读出 **250 个锚点 / 共 6 片**。
-  - ⚠ **仍未做**：更一般的那道保险 —— 「其余物里放着某分卷组的一片、而同组另一片还在成品目录里 ⇒ **绝不允许整份删除其余物**」还没加（上面那条红线目前只覆盖"改名/搬运计划"那一档）。
+  - ✅ **"其余物里的分卷是半套"这道保险已加**（2026-10-01，同日补）：判据唯一出口 `Extraction/RestVolumeCompletenessGate.DescribeBlocker`（公开纯函数）—— 其余物**顶层**每一个归档件算一个**包基名**，只要成品目录这一棵树里（其余物之外）还有**同基名的归档件**，就说明这一组被拆在两边 ⇒ **整份处理其余物等于毁掉这一组** ⇒ 什么都不做、写一行 WARN 点名两边。⛔ 只认"看起来是归档件"的东西（分卷片 / 已知归档后缀 / 去杂质后是归档后缀）：普通内容文件（`X.mp4`）与同名**目录**都不算伙伴 —— 包基名与内容文件名撞车是常态（`111\111\内容物`），拿它当伙伴会把正常清理全拦死。
+    - ⛔ 放在 `Storage/RestItemPurger.Purge` 里（第六道门槛），**不是**放在调用点：其余物的删除只有这一个执行体，三处调用（链尾 / 任务收尾 / 链尾清扫）都要过它。用例 `RestVolumeCompletenessGateTests`（6 条：半套必拦 + 整组/普通内容/同名目录/空其余物四种不许误拦）+ 接线用例 `DeleteOptionsClarityTests.其余物里是半套分卷_整份删除被拦下`；红检两条（撤判据 ⇒ 必拦那 2 条红、放行那 4 条照绿；撤接线 ⇒ 接线用例红）。
 - ⛔ **「密码已经证实」之后失败 = 数据层面，不许再试密码候选**（用户 2026-10-01 真机 `giu910`，19 GB 的 7z `-mhe`；用户原话「**为什么试了密码之后再去试一次，我说过要试密码的话要在最开始的时候，而不是解压完，这才 20G，大一点你这就是在浪费用户时间**」）：现场 = 候选 3 把整包解到 98%（13 分钟）、只死在一个 mp4 的 `CRC Failed in encrypted file`；老口径把这一句当成"这个候选不对" ⇒ **解压完又回去试候选 4..10**、13 分钟产物全扔、报「密码错误」。
   - 判据唯一出口 `Extraction/ProducedContentGate`（**只数事实**：产物目录里**非空文件数 ≥ 2 且字节 > 0**）—— 「密码错」的签名是第一份数据就过不去（0 字节桩 / 至多一个文件），「密码对、个别文件坏」的签名是整个包基本都解出来了。
     - ⛔ **两条跑解压的路都必须问它**：单层 `ExtractionCoordinator` 与递归 `RecursiveExtractor`。2026-10-01 第一版只接了单层那条，而真机 `giu910` 走的是**递归**那条（SingleChain）⇒ **用户当晚重跑一次，13 分钟又白扔一遍、还是报「密码错误」**（见 `docs/真机事故复盘.md` §44.1）。⛔ 判据只此一处，别再各写一份。
