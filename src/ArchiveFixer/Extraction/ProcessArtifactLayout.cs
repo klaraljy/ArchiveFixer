@@ -1037,8 +1037,22 @@ namespace ArchiveFixer.Extraction
         /// 本任务的源包清单：分卷组 = 整组各卷；单文件任务 = 它自己。
         ///
         /// 与 <c>SourceCleanupService.BuildTargetList</c> 同一口径（那边是删、这边是移，清单必须一致）：
-        /// 分卷组只认 <see cref="ArchiveTask.VolumePaths"/>，为空时**不回退**到 CurrentPath ——
+        /// 分卷组只认 <see cref="ArchiveTask.VolumePaths"/>，清单为空时**不回退**到 CurrentPath ——
         /// 那说明分组信息不完整，少搬一卷比"整组散在两个目录里"更糟，所以宁可什么都不搬。
+        ///
+        /// <para>
+        /// ⚠ 2026-10-01 补一条（`AaaReplayPipelineTests` 逮到）：清单**非空、却不含任务自己的文件**时，
+        /// 这一单按单文件办。现场形状：夹具里 `222.zscip`（真 7z）被「修正后缀」改成 `222.7z`，
+        /// 认组时按名字把旁边的 `222.z删除01` 当成同一族的第 2 卷（基名都是 `222`）⇒
+        /// `VolumePaths` 里只有兄弟卷、**没有任务自己**。老口径在"清单不完整"这一档什么都不搬，
+        /// 结果：成功任务报「已把 1 个源包移入其余物」，而**它自己那份 `222.7z` 一个字节都没动**，
+        /// 留在源目录里被下一轮又扫一遍（真机上就是"同一份东西反复解"）。
+        /// 判据只用事实：清单非空 + `CurrentPath` 在盘上 + 它不在清单里 ⇒ 这份清单代表不了这一单。
+        /// </para>
+        /// <para>
+        /// ⛔ 清单**为空**那一档一个字不改：分组信息根本没有时一律不搬（老红线，
+        /// 用例 `计划_分卷清单不完整时什么都不搬` 钉着）。
+        /// </para>
         /// </summary>
         public static IReadOnlyList<string> ResolveSourceGroup(ArchiveTask? task)
         {
@@ -1050,9 +1064,21 @@ namespace ArchiveFixer.Extraction
                 return targets;
             }
 
-            IEnumerable<string> candidates = task.IsVolumeGroup
-                ? task.VolumePaths
-                : new[] { task.CurrentPath };
+            bool treatAsSingleFile = !task.IsVolumeGroup;
+
+            if (task.IsVolumeGroup
+                && task.VolumePaths.Count > 0
+                && !string.IsNullOrWhiteSpace(task.CurrentPath)
+                && !task.VolumePaths.Any(
+                    path => string.Equals(path, task.CurrentPath, StringComparison.OrdinalIgnoreCase))
+                && File.Exists(task.CurrentPath))
+            {
+                treatAsSingleFile = true;
+            }
+
+            IEnumerable<string> candidates = treatAsSingleFile
+                ? new[] { task.CurrentPath }
+                : task.VolumePaths;
 
             foreach (string path in candidates)
             {

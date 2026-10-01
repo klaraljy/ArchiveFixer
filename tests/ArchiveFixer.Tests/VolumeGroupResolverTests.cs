@@ -364,9 +364,18 @@ namespace ArchiveFixer.Tests
         // ================================================================ 删除闸门（唯一出口的下游）
         // ⛔ 判不出 / 弱证据 ⇒ 整份定稿计划作废：不搬、不删（含源包与其余物）
 
-        /// <summary>真案 ② 的暂存目录 ⇒ 整份计划作废，一卷都不许当成可删的其余物。</summary>
+        /// <summary>
+        /// 真案 ② 的暂存目录（改名末卷那一组）⇒ 现在**整组改回标准卷名**，而且**一卷都不许当成可删的其余物**。
+        ///
+        /// <para>⚠ 2026-10-01 口径更新（真机 `222` 那一单）：改名的那个名字（`一只顶美.z删除ip`）
+        /// 去杂质就是 `zip`，而 PKZIP 跨盘的 `.zip` 恰恰就是"本体后缀"那一卷 —— 改名**没有把这一卷弄丢**。
+        /// 老口径把这一档判成"不完整 ⇒ 整份计划作废"，后果是真机上**引擎已经解出来的产物一个字节都落不了地**
+        /// （日志写着"解压成功 ｜ 校验通过"）。现在改成：**名字改回标准的、内容一个字节不动**。</para>
+        ///
+        /// <para>⛔ **这次事故的守门一个字没动**：这一组仍然**不许进"可删的其余物"**（下面那条断言）。</para>
+        /// </summary>
         [Fact]
-        public void 真案二_暂存目录里是改名末卷_整份计划作废()
+        public void 真案二_暂存目录里是改名末卷_整组改回标准卷名且一卷都不许删()
         {
             string stage = NewDirectory("stage-case2");
 
@@ -381,13 +390,20 @@ namespace ArchiveFixer.Tests
                 sharedOutputRoot: false,
                 "一只顶美");
 
-            Assert.True(plan.Failed, "被改名的末卷那一组必须让整份计划作废");
-            Assert.Contains("不完整", plan.FailureReason, StringComparison.Ordinal);
-            Assert.Empty(plan.ProcessArtifactSources);
-            Assert.Empty(plan.Moves);
+            Assert.False(plan.Failed, plan.FailureReason);
 
-            // ⛔ 连"内容物"都不许搬：那一卷不是内容物，它是这一组的一卷。
+            // 那一卷被改回标准名（只改名字、内容不动），另外三卷本来就是标准名、原地不动。
+            Assert.True(File.Exists(Path.Combine(stage, "一只顶美.zip")), "被改名的末卷必须改回 一只顶美.zip");
+            Assert.False(File.Exists(renamed));
+            Assert.Equal(1024, new FileInfo(Path.Combine(stage, "一只顶美.zip")).Length);
+
+            // ⛔ 可删的其余物名单里一个都不许有（25 GB 那次事故的形状）。
+            Assert.True(
+                plan.ProcessArtifactSources.Count == 0,
+                "可删名单必须为空，实际：" + string.Join(" | ", plan.ProcessArtifactSources.Select(Path.GetFileName)));
             Assert.DoesNotContain(renamed, plan.ProcessArtifactSources);
+            Assert.DoesNotContain(Path.Combine(stage, "一只顶美.zip"), plan.ProcessArtifactSources);
+            Assert.DoesNotContain(Path.Combine(stage, "一只顶美.z01"), plan.ProcessArtifactSources);
         }
 
         /// <summary>真案 ① 的暂存目录（无后缀那一卷）⇒ 同样整份作废。</summary>

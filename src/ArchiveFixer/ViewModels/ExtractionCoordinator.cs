@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -3498,6 +3499,27 @@ namespace ArchiveFixer.ViewModels
             }
 
             string stageRoot = SafePathHelper.GetFullPathSafe(stageDirectory);
+
+            /*
+             * ===== 整组改名也要覆盖"引擎刚解出来的那一层"（用户 2026-10-01 真机）=====
+             *
+             * 现场：外层跨盘 zip 解出来的两个条目本身**又是一份完整的两卷 split zip**，可它们的名字
+             * 是归档内部记的原名（`222.zi删除p` + `222.z0sc1`，网盘把中文/缩写塞进了后缀）。
+             * 整组改名的两个调用点（批首 / 手动修复）**都只对"已经在任务表里"的文件动手**，
+             * 这一对是递归产物、从没进过任务表 ⇒ 名字原样落地 ⇒ 7-Zip 按标准卷名找不到兄弟 ⇒ 打不开。
+             *
+             * 判据一个字不放宽（唯一出口仍是 VolumeGroupResolver + IsCanonicalVolumeName）：
+             *   · 这一组必须**结论完整**、而且**每一卷都能唯一推出规范名**（判不出 / 缺卷 / 推不出 ⇒ 一个字都不改）；
+             *   · 只改名字、内容一个字节不动；目标名被占 ⇒ 这一卷跳过（绝不覆盖）；
+             *   · 全部改完再复查一遍（中途任何一卷不到位 ⇒ 倒序改回原名，⛔ 绝不留下半改状态）；
+             *   · ⛔ **刚改过名的那一组不许进"可删的其余物"**（见下面 `renamedVolumeMembers`）——
+             *     它是**内容物**（用户要拿去打开的那一份），不是待清理的过程物。
+             */
+            var volumeRenameChanges = new List<(string Level, string Message)>();
+            var renamedVolumeMembers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            NormalizeEngineOutputVolumeNames(stageRoot, volumeRenameChanges, renamedVolumeMembers);
+
             var staged = new List<StagedEntry>();
             var warnings = new List<string>();
             long totalStageBytes = 0;
@@ -3583,8 +3605,36 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    // 整组完整、名字也标准 ⇒ 它就是"其余物"（与老行为一致：源包走完可以进其余物再删）。
-                    isProcessArtifact = true;
+                    /*
+                     * 整组完整、名字也标准 ⇒ 照老路算"其余物"（源包走完可以进其余物再删）。
+                     *
+                     * ⚠ **但引擎刚解出来的那一组不算**（用户 2026-10-01 真机）：它是**内容物**
+                     * —— 真机里 `222\222.zip` + `222\222.z01` 就是用户要拿去打开的那一份，
+                     * 被算进"可删的其余物"就是把它删掉。判据只有一条事实：
+                     * 这一组的成员**都是刚刚由本方法改回标准名的那一批**（`renamedVolumeMembers`）
+                     * —— "刚改过名"正是"这是我们自己解出来的、名字不标准的那一组"的直接证据。
+                     */
+                    if (stageGroup.FilePaths.All(
+                            member => renamedVolumeMembers.Contains(SafePathHelper.GetFullPathSafe(member))))
+                    {
+                        isProcessArtifact = false;
+                    }
+                    else
+                    {
+                        isProcessArtifact = true;
+
+                        try
+                        {
+                            System.IO.File.AppendAllText(
+                                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "af-art-debug.txt"),
+                                $"file={Path.GetFileName(file)} group=[{string.Join(",", stageGroup.FilePaths.Select(Path.GetFileName))}] "
+                                + $"renamed=[{string.Join(",", renamedVolumeMembers.Select(Path.GetFileName))}]{Environment.NewLine}");
+                        }
+                        catch
+                        {
+                            // 诊断用。
+                        }
+                    }
                 }
 
 
@@ -3604,6 +3654,20 @@ namespace ArchiveFixer.ViewModels
                 {
                     zeroByteArtifacts++;
                     continue;
+                }
+
+                /*
+                 * ===== ⛔ 刚改过名的那一组是**内容物**，不是过程物（用户 2026-10-01 真机）=====
+                 *
+                 * 它们在上一段（`NormalizeEngineOutputVolumeNames`）里被改成标准卷名，
+                 * 于是下面那道"整组完整 + 名字标准"的闸门会顺理成章地把它们算成"可删的其余物"
+                 * —— 而用户要的恰恰是**拿到这一组去打开**（它是内容物）。
+                 * 判据只有一条事实：这个文件是不是**刚刚由本方法改名的那一批**。
+                 */
+                if (isProcessArtifact
+                    && renamedVolumeMembers.Contains(SafePathHelper.GetFullPathSafe(file)))
+                {
+                    isProcessArtifact = false;
                 }
 
                 /*
@@ -3721,6 +3785,12 @@ namespace ArchiveFixer.ViewModels
                 suppressPackageFolderLayer: suppressPackageFolderLayer,
                 innermostPackageBaseName: innermostPackageBaseName);
 
+            /*
+             * 整组改名那一档也进 warnings（调用方按既有口径逐条写日志：
+             * 成功那一条是 INFO、没改成那一条是 WARN，见 ApplyStageCommitAsync 里 plan.Warnings 的消费）。
+             */
+            warnings.AddRange(volumeRenameChanges.Select(change => change.Message));
+
             var processSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (PlannedMove move in finalize.ProcessArtifactMoves)
@@ -3773,7 +3843,343 @@ namespace ArchiveFixer.ViewModels
             ExtensionHelper.IsVolumePartExtension(Path.GetExtension(filePath));
 
         /// <summary>
-        /// 这个暂存文件是不是**这一趟引擎自己写出来的产物**（用户 2026-09-27 真机：222 那一单）。
+        /// 把暂存目录里"**名字不标准的一整套分卷**"整组改回标准卷名（用户 2026-10-01 真机）。
+        ///
+        /// <para><b>为什么需要它</b>：外层跨盘 zip（`222.zscip.zip` + `222.zscip.z01`）解出来的两个条目
+        /// 本身**又是一份完整的两卷 split zip**，而它们的名字是归档内部记的原名（`222.zi删除p` + `222.z0sc1`）。
+        /// 跨盘 zip 只按**标准卷名**找兄弟（末片 `X.zip`、首片 `X.z01`），名字不对**谁**都打不开
+        /// —— 7-Zip / WinRAR / UnRAR 实测给的是同一句"打不开"。整组改名的两个调用点都在
+        /// "任务表"那一侧（批首 / 手动修复），递归产物从没进过任务表 ⇒ 名字原样落地。</para>
+        ///
+        /// <para><b>放哪一步</b>：定稿规划的最开头（暂存目录已经定下来、还没做任何分类与套层）。
+        /// 这样后面的分卷组闸门、套层判定、搬运看到的都是标准名，不必在四处各补一次特例。</para>
+        ///
+        /// <para><b>判据不放宽一个字节</b>（唯一出口 = <see cref="VolumeGroupResolver"/> 的结论 +
+        /// <see cref="VolumeGroupResolution.IsGroupMember"/> 认下来的那一卷）：</para>
+        /// <list type="bullet">
+        /// <item><description>这一组必须**结论完整**（判不出 / 缺卷 / 疑缺 ⇒ 一个字都不改）；</description></item>
+        /// <item><description>每一卷的**规范名都真的在盘上**（`X.zip` / `X.z01` …）—— 这一条正是"名字变体那一档"的解药：</description></item>
+        /// </list>
+        /// 现场那一组是 `222.zip`（另一个文件）+ `222.zi删除p`（这个名字本身是那一卷的另一个写法），
+        /// 规范名 `222.zip` 在盘上、变体 `222.zi删除p` 也在盘上 ⇒ 把后者改回 `222.zip` 不成立（会覆盖），
+        /// 这一组**保持原样**（它的内容一个字节都不丢，用户自己看得见）。
+        ///
+        /// <para>⛔ 全成或全不成：任何一卷没到位就**倒序改回原名**（与 <c>VolumeNameRepair.TryApply</c>
+        /// 同一条纪律）；目标名被占的那一卷跳过、其余照改；改名失败只写 WARN，⛔ 绝不拖垮定稿。</para>
+        /// </summary>
+        private static void NormalizeEngineOutputVolumeNames(
+            string stageRoot,
+            List<(string Level, string Message)>? changes,
+            HashSet<string>? renamedMembers)
+        {
+            if (string.IsNullOrWhiteSpace(stageRoot) || !Directory.Exists(stageRoot))
+            {
+                return;
+            }
+
+            foreach (string directory in EnumerateDirectoriesSafe(stageRoot))
+            {
+                RenameVolumeGroupInDirectory(directory, changes, renamedMembers);
+            }
+        }
+
+        /// <summary>这一层（含根）的每个目录各判一次：这个目录里有没有"名字不标准但规范名齐全"的一整套分卷。</summary>
+        private static void RenameVolumeGroupInDirectory(
+            string directory,
+            List<(string Level, string Message)>? changes,
+            HashSet<string>? renamedMembers)
+        {
+            IReadOnlyList<VolumeGroupEntry> entries;
+
+            try
+            {
+                var list = new List<VolumeGroupEntry>();
+                int order = 0;
+
+                foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    long size;
+
+                    try
+                    {
+                        size = new FileInfo(file).Length;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    list.Add(new VolumeGroupEntry
+                    {
+                        Path = SafePathHelper.GetFullPathSafe(file),
+                        Size = size,
+                        LastWriteTimeUtc = File.GetLastWriteTimeUtc(file),
+                        OrderIndex = order++
+                    });
+                }
+
+                entries = list;
+            }
+            catch
+            {
+                return;
+            }
+
+            if (entries.Count < 2)
+            {
+                return;
+            }
+
+            var candidates = entries
+                .Select(e => new VolumeCandidate { Path = e.Path, Size = e.Size })
+                .ToList();
+
+            foreach (VolumeGroup group in VolumeGroupDetector.Group(candidates))
+            {
+                VolumeGroupResolution resolution = new VolumeGroupResolver().Resolve(new VolumeGroupQuery
+                {
+                    AnchorPath = group.FirstVolumePath,
+                    DirectoryEntries = entries,
+                    AllowTrialOpen = false
+                });
+
+                TryRenameVolumeGroupToStandardNames(resolution, changes, renamedMembers);
+            }
+        }
+
+        /// <summary>
+        /// 把一组改回标准卷名；判据不成立就原样返回（不写日志、不动盘）。
+        ///
+        /// <para>闸门只用"这一组**已经是完整的一组**"（<see cref="VolumeGroupVerdict.Complete"/>）+
+        /// "**每一个成员**都能唯一推出一个规范名"两条：</para>
+        /// <list type="bullet">
+        /// <item><description>⛔ **不拿 `HasRenamedVolume` 当拦下条件** —— 它说的正是"这个名字不标准"，
+        /// 而本方法的全部目的就是把不标准的名字改成标准的（拿它当拦下条件等于这个方法永远不干活）；
+        /// 真机那一组（`222.zi删除p` + `222.z0sc1`）就是被它拦下的。</description></item>
+        /// <item><description>⛔ 只要有一个成员推不出规范名、或两个成员推出同一个名字，**整组不动**
+        /// （宁可保持原样，也不猜着改用户的名字）。</description></item>
+        /// </list>
+        /// </summary>
+        private static void TryRenameVolumeGroupToStandardNames(
+            VolumeGroupResolution resolution,
+            List<(string Level, string Message)>? changes,
+            HashSet<string>? renamedMembers)
+        {
+            if (resolution.Verdict != VolumeGroupVerdict.Complete)
+            {
+                return;
+            }
+
+            var onDisk = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string member in resolution.GroupFilePaths)
+            {
+                if (File.Exists(member))
+                {
+                    onDisk.Add(member);
+                }
+            }
+
+            if (onDisk.Count < 2)
+            {
+                return;
+            }
+
+            var moves = new List<(string From, string To)>();
+            var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string member in onDisk)
+            {
+                string fileName = Path.GetFileName(member);
+                string directory = Path.GetDirectoryName(member) ?? string.Empty;
+
+                if (directory.Length == 0)
+                {
+                    return;
+                }
+
+                if (!TryResolveStandardVolumeName(fileName, out string target))
+                {
+                    return;
+                }
+
+                string targetPath = Path.Combine(directory, target);
+
+                // 已经是标准名 ⇒ 这一卷不动（但它也占住了这个目标名）。
+                if (string.Equals(fileName, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!targets.Add(targetPath))
+                    {
+                        return;
+                    }
+
+                    continue;
+                }
+
+                // 目标名被别的文件占着 ⇒ 这一卷跳过（绝不覆盖用户的数据）。
+                if (File.Exists(targetPath) || Directory.Exists(targetPath))
+                {
+                    continue;
+                }
+
+                if (!targets.Add(targetPath))
+                {
+                    // 两个成员推出同一个名字 ⇒ 这一组认不清，整组不动。
+                    return;
+                }
+
+                moves.Add((member, targetPath));
+            }
+
+            if (moves.Count == 0)
+            {
+                return;
+            }
+
+            var done = new List<(string From, string To)>();
+
+            try
+            {
+                foreach ((string from, string to) in moves)
+                {
+                    File.Move(from, to);
+                    done.Add((from, to));
+                }
+
+                // 全成或全不成：全部改完之后复查一遍（另一个进程可能刚好插手）。
+                foreach ((_, string to) in done)
+                {
+                    if (!File.Exists(to))
+                    {
+                        throw new IOException($"改名后找不到目标：{Path.GetFileName(to)}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                for (int i = done.Count - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        File.Move(done[i].To, done[i].From);
+                    }
+                    catch
+                    {
+                        // 回滚失败如实写进下面那条 WARN 里，⛔ 不假装成功。
+                    }
+                }
+
+                if (changes != null)
+                {
+                    changes.Add((
+                        "WARN",
+                        $"这一层有一组分卷的名字没能改回标准名（{ex.Message}），已尽量改回原名；"
+                        + "这一组要打开得手工把名字改成标准卷名（末片 X.zip、首片 X.z01…）。"));
+                }
+
+                return;
+            }
+
+            if (changes != null)
+            {
+                changes.Add((
+                    "INFO",
+                    $"这一层有一组跨盘分卷的名字不是标准名，已改回标准名（{done.Count} 卷，只改名字、内容一个字节没动）："
+                    + string.Join("、", done.Select(m => $"{Path.GetFileName(m.From)} → {Path.GetFileName(m.To)}"))));
+            }
+
+            /* 记下"刚改过名"的那几个新路径：它们**不许进可删的其余物**（它们是内容物，不是过程物）。 */
+            if (renamedMembers != null)
+            {
+                /*
+                 * 整组都记进来（不只是真被改名的那几卷）：调用方据此判"这一组是内容物、不许进可删的其余物"，
+                 * 而本来就标准的那几卷（`一只顶美.z01`）同样是这一组的内容物，漏掉它们等于把它们删掉。
+                 */
+                foreach (string member in onDisk)
+                {
+                    renamedMembers.Add(SafePathHelper.GetFullPathSafe(member));
+                }
+
+                foreach ((_, string to) in done)
+                {
+                    renamedMembers.Add(SafePathHelper.GetFullPathSafe(to));
+                }
+            }
+        }
+
+        /// <summary>
+        /// 这一卷按跨盘 zip 的族规则该叫什么。
+        ///
+        /// <para>基名就是**文件名去掉最后一段后缀**（`222.zi删除p` → `222`；`222.z0sc1` → `222`）——
+        /// 与归档内部记的名字对不上时也只影响"改完像不像人写的"，能不能打开由"标准卷名"这一条决定。</para>
+        ///
+        /// <para>认不出来就返回 false ⇒ 调用方**整组不动**（宁可保持原样，也不猜着改用户的名字）。</para>
+        /// </summary>
+        private static bool TryResolveStandardVolumeName(string fileName, out string target)
+        {
+            target = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return false;
+            }
+
+            int dot = fileName.IndexOf('.');
+
+            if (dot <= 0)
+            {
+                return false;
+            }
+
+            string stem = fileName[..dot];
+            string last = fileName[(dot + 1)..];
+
+            // 脏本体名（`222.zi删除p`：还原出来是 `zip`）⇒ 它就是末片 `.zip`。
+            if (ExtensionHelper.TryRecoverDisguisedArchiveBody(last, out string suffix, out _)
+                && suffix.Equals("zip", StringComparison.OrdinalIgnoreCase))
+            {
+                target = stem + ".zip";
+                return true;
+            }
+
+            // 干净的末片。
+            if (last.Equals("zip", StringComparison.OrdinalIgnoreCase))
+            {
+                target = stem + ".zip";
+                return true;
+            }
+
+            // 卷标记（`z01` / `z0sc1` / `z删除01`）⇒ 一律按标准 `.zNN` 写。
+            if (ExtensionHelper.TrySplitVolumeSegmentTolerant(last, out string mark, out _)
+                && mark.Length == 3
+                && (mark[0] == 'z' || mark[0] == 'Z')
+                && int.TryParse(mark.AsSpan(1), out int ordinal)
+                && ordinal >= 1)
+            {
+                target = stem + ".z" + ordinal.ToString("D2", CultureInfo.InvariantCulture);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>暂存树里的全部目录（含根；读不到就是空的 —— 什么都不做）。</summary>
+        private static IEnumerable<string> EnumerateDirectoriesSafe(string root)
+        {
+            var result = new List<string> { root };
+
+            try
+            {
+                result.AddRange(Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories));
+            }
+            catch
+            {
+                // 读不全就按已经拿到的那些判：宁可少改，也绝不乱改。
+            }
+
+            return result;
+        }
+
         ///
         /// <para>事实来源只有一处：<see cref="RecursionResult.FinalOutputPath"/> 指向的那一层产物目录
         /// —— 引擎解出来的东西就是它们，别的一律是让这一单能开工的过程物（源包 / 分卷 / 内层包）。</para>

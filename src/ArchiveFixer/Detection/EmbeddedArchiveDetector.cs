@@ -45,6 +45,18 @@ namespace ArchiveFixer.Detection
 
         /// <summary>给人看的中文说明，直接写进任务/日志。</summary>
         public string Message { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 这一片是**跨盘 ZIP 的最后一片**（用户 2026-10-01 真机：`222.zi删除p`）。
+        ///
+        /// <para>它与"内嵌归档"是**两种东西**，判据也完全不同：内嵌归档要求"ZIP 前面垫着别的数据"
+        /// （所以必须有本地文件头、`delta &gt; 0`）；跨盘末片**没有本地文件头**（本地头都在第 1 片里），
+        /// 它只有中央目录 + EOCD，靠 EOCD 的**盘号字段**说明"我是一片分卷"。</para>
+        ///
+        /// <para>⛔ 为 true 时 <see cref="Offset"/> 恒为 0（**不是**内嵌，不许按偏移抠）；
+        /// 调用方据此落 `ZIP_SPANNED` 而不是"内嵌归档"。</para>
+        /// </summary>
+        public bool IsVolumePart { get; init; }
     }
 
     /// <summary>
@@ -390,6 +402,35 @@ namespace ArchiveFixer.Detection
              * ③ ZIP64 那套值算出来的位置对不上（工具写歪了），而 32 位字段是对的。
              * 三种情况都要求同一组签名校验通过 —— 多试一种解释只会多救回真文件，不会放大误报。
              */
+            /*
+             * ===== 跨盘 ZIP 的**最后一片**（用户 2026-10-01 真机：`222.zi删除p`）=====
+             *
+             * 它没有本地文件头（本地头都在第 1 片里），所以下面那两条"内嵌归档"的判据必然判死它；
+             * 而它**确实是一片归档**，只是"整组"要靠标准卷名（`X.zip` + `X.z01`）才能重装。
+             * 判据只用**盘号事实**（ZIP 规范里"我是一片分卷"的硬证据）。
+             *
+             * ⚠ 位置必须排在 ZIP64 那一档**之后**：`TryEvaluateCandidate` 只读了"候选自己那 98 字节"
+             * （ZIP64 收尾 76 + EOCD 22），没有 ZIP64 收尾时 `tail[eocdIndex - 76]` 是**越界**的 ——
+             * 先跑这一档会抛 `ArgumentOutOfRangeException`，而外层 catch 把它变成"没找到内嵌归档"，
+             * 结论就退回 `Unknown`（写完先跑用例才发现，原文失败：`末片必须被认成归档`）。
+             */
+            if (!hasZip64)
+            {
+                EmbeddedArchiveInfo? splitTail = TryEvaluateSplitZipTail(
+                    stream,
+                    tail,
+                    tailStart,
+                    eocdAbs,
+                    eocdIndex,
+                    fileLength,
+                    archiveEnd);
+
+                if (splitTail != null)
+                {
+                    return splitTail;
+                }
+            }
+
             if (cdSize32 != uint.MaxValue && cdOffset32 != uint.MaxValue && entryCount16 != ushort.MaxValue)
             {
                 return Validate(
@@ -409,6 +450,98 @@ namespace ArchiveFixer.Detection
              * 这正是"宁可漏报也不误报"的落点 —— 绝不用 0xFFFFFFFF 当数字去算一个乱指的偏移。
              */
             return null;
+        }
+
+        /// <summary>
+        /// 这个 EOCD 候选是不是**跨盘 ZIP 的最后一片**（用户 2026-10-01 真机：内层 `222.zi删除p`）。
+        ///
+        /// <para><b>现场</b>：外层跨盘 zip 解出来的两个条目里，末片叫 <c>222.zi删除p</c>（名字被塞了中文），
+        /// 它有中央目录 + EOCD、**没有本地文件头**。识别阶段因此走到"内嵌归档"这条路上来，
+        /// 而那条路的两条判据（<c>delta &gt; 0</c>、"起点必须是本地文件头"）把它判死 ⇒ 结论 `Unknown`
+        /// ⇒ 续解扫描落「按内容认不出是归档」⇒ 这一组永远进不了任务表 ⇒ 名字没人改 ⇒ 7-Zip 打不开。</para>
+        ///
+        /// <para><b>判据（三条，全部只读事实）</b>：</para>
+        /// <list type="number">
+        /// <item><description>EOCD 自洽：注释长度算出来的收尾正好落在文件内（调用方已算好 <paramref name="archiveEnd"/>）；</description></item>
+        /// <item><description>**盘号字段说自己是分卷**：`本盘号 != 中央目录起始盘号` 或 `总盘数 &gt; 1`
+        /// —— 这是 ZIP 规范里唯一能机器判定的"我是一片分卷"；</description></item>
+        /// <item><description>声明的中央目录位置上真的是中央目录签名（`PK\x01\x02`）。</description></item>
+        /// </list>
+        ///
+        /// <para>⛔ **不放宽成"只要有 EOCD 就算归档"**：普通单体 zip（`盘 0 / 共 1 盘`）照旧交给文件头那条路，
+        /// 这里只多认"盘号自己承认是分卷"的那一档。</para>
+        /// </summary>
+        private static EmbeddedArchiveInfo? TryEvaluateSplitZipTail(
+            FileStream stream,
+            byte[] tail,
+            long tailStart,
+            long eocdAbs,
+            int eocdIndex,
+            long fileLength,
+            long archiveEnd)
+        {
+            if (tail == null || eocdIndex < 0 || eocdIndex + EndOfCentralDirectoryLength > tail.Length)
+            {
+                return null;
+            }
+
+            long cdOffset = BitConverter.ToUInt32(tail, eocdIndex + 16);
+            long cdSize = BitConverter.ToUInt32(tail, eocdIndex + 12);
+            long entryCount = BitConverter.ToUInt16(tail, eocdIndex + 10);
+
+            /*
+             * ⚠ 盘号字段必须用**绝对**偏移读：`TryEvaluateCandidate` 的 `tail` 是"候选自己那 98 字节"的
+             * 窗口（`DetectAt` 那条路），窗口起点 `tailStart = eocdAbs - 76` 在 ZIP64 收尾不存在时是**负数**
+             * ⇒ 窗口可能是从文件头开始的（短文件），`tail[eocdIndex - 76]` 就越界。
+             * 写完先跑用例才发现（外层 catch 会把越界吞成"没找到内嵌归档"，结论静默退回 `Unknown`）。
+             */
+            long diskNumberAbsolute = eocdAbs + 4;
+            long cdStartDiskAbsolute = eocdAbs + 6;
+
+            if (diskNumberAbsolute + 2 > fileLength || cdStartDiskAbsolute + 2 > fileLength)
+            {
+                return null;
+            }
+
+            byte[] diskFields = ReadAt(stream, diskNumberAbsolute, 4);
+
+            if (diskFields.Length < 4)
+            {
+                return null;
+            }
+
+            int diskNumber = BitConverter.ToUInt16(diskFields, 0);
+            int cdStartDisk = BitConverter.ToUInt16(diskFields, 2);
+
+            bool saysSplit = diskNumber != cdStartDisk || diskNumber > 0 || cdStartDisk > 0;
+
+            if (!saysSplit || entryCount <= 0 || cdSize <= 0 || cdOffset < 0)
+            {
+                return null;
+            }
+
+            // 声明的中央目录位置必须真的是中央目录签名 —— 与"内嵌归档"同一把尺子（判据只有一处）。
+            if (!HasSignatureAt(stream, cdOffset, CentralDirectorySignature))
+            {
+                return null;
+            }
+
+            return new EmbeddedArchiveInfo
+            {
+                Found = true,
+                IsVolumePart = true,
+
+                // ⛔ 不是内嵌：偏移 0、结束取 EOCD 收尾（调用方在"分卷"这一档不许按偏移抠）。
+                Offset = 0,
+                ArchiveEnd = archiveEnd,
+                ArchiveLength = archiveEnd,
+                Format = "ZIP",
+                SuggestedExtension = ".zip",
+                EntryCount = (int)Math.Min(entryCount, int.MaxValue),
+                Message = $"这是一片跨盘 ZIP（本盘号 {diskNumber}、中央目录在第 {cdStartDisk} 片、"
+                    + $"共 {entryCount} 个条目）—— 它不是独立归档，"
+                    + "要连同同组的其它片按标准卷名（X.zip + X.z01）放在一起才能解开。"
+            };
         }
 
         /// <summary>

@@ -545,6 +545,36 @@ namespace ArchiveFixer.Services
         private static DetectResult BuildEmbeddedResult(string filePath, EmbeddedArchiveInfo info, DetectResult headerResult)
         {
             /*
+             * ===== 跨盘 ZIP 的最后一片（用户 2026-10-01 真机：内层 `222.zi删除p`）=====
+             *
+             * 它与"双面文件"共用同一个检测器（都是"尾部有 EOCD"），但**结论完全不同**：
+             *   · 双面文件 = 前面垫着别的数据 + 一个**完整** ZIP ⇒ 要按偏移抠出来才能解（下面那一大段）；
+             *   · 跨盘末片 = **整组的一片**，自己没有本地文件头 ⇒ 抠出来也没用，只能按标准卷名跟兄弟重装。
+             * 所以这里**先分叉**：分卷这一档不进直读探查（对一片分卷做"抠取直读"没有任何意义），
+             * 也**不设** `EmbeddedArchiveOffset`（偏移恒为 0，设了反而会让下游去抠一个不存在的区间）。
+             *
+             * ⛔ 只在这一档分叉：`IsVolumePart` 只由 EOCD 的盘号字段为真时置起（见检测器里的判据）。
+             */
+            if (info.IsVolumePart)
+            {
+                return new DetectResult
+                {
+                    Format = "ZIP_SPANNED",
+                    SuggestedExtension = ".zip",
+                    IsArchive = true,
+                    IsKnownFormat = true,
+                    IsProbablyEncrypted = false,
+                    Message = info.Message,
+                    HeaderHex = headerResult.HeaderHex,
+                    Confidence = 90,
+                    EmbeddedArchiveOffset = 0,
+                    EmbeddedArchiveEnd = 0,
+                    EmbeddedDirectReadSupported = false,
+                    EmbeddedDirectReadReason = "这一片是跨盘 ZIP 的一片，不是内嵌归档：没有可抠出来的独立区间"
+                };
+            }
+
+            /*
              * 顺手做一次**只读**的直读探查（用户 2026-09-24 需求第 7 条）。
              *
              * 为什么要在这里探：空间核算必须在**排任务之前**就知道"这一次要不要那份等大的临时副本"，
