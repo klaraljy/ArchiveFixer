@@ -2388,7 +2388,7 @@ namespace ArchiveFixer.ViewModels
         /// 撞到轮数上限时"已加进列表、这一批没解"的内层包个数（用户 2026-09-24 第 16 条追加）。
         /// 大于 0 时汇总里必须写出**还剩多少 + 怎么继续** —— 到顶静默停下正是他要修的那件事。
         /// </param>
-        private string BuildSummaryLine(
+        internal string BuildSummaryLine(
             IReadOnlyList<ArchiveTask> targets,
             bool stopped = false,
             bool stopRequestedByUser = false,
@@ -2413,7 +2413,20 @@ namespace ArchiveFixer.ViewModels
                 task.OutputVerification != OutputVerificationOutcome.Failed);
             int partial = targets.Count(task => task.Outcome == TaskOutcome.PartiallyCompleted);
             int cancelled = targets.Count(task => task.Outcome == TaskOutcome.Cancelled);
-            int skipped = targets.Count(task => task.Outcome == TaskOutcome.Skipped);
+
+            /*
+             * ⚠ 「跳过」必须分成两档（用户 2026-10-01 第三报 + 第五报的日志：
+             * 真机那批 10 个任务里 **4 个是各组的分卷后续卷**，一行「跳过 4」被他读成"还有 4 个没弄完"。
+             * 他原话：「这四个应该是要跳过的，我绝对没必要，你这样会让用户觉得还有任务没弄完」）。
+             *
+             * 判据只读事实位 `CountsTowardBatchOutcome`（跟班卷 = false，与批末色带 / 批末诊断同一个出口）：
+             * 跟班卷单列一句解释，**不混进"跳过"那一档**；而它在总数里仍然占一个名额，
+             * 所以下面 `untouched` 要把这一档减掉 —— 各分项之和 + 未处理 = 本次任务数这条恒等式不能破。
+             */
+            int followerSkipped = targets.Count(task =>
+                task.Outcome == TaskOutcome.Skipped && !task.CountsTowardBatchOutcome);
+            int skipped = targets.Count(task =>
+                task.Outcome == TaskOutcome.Skipped && task.CountsTowardBatchOutcome);
             int failed = targets.Count(task => task.Outcome == TaskOutcome.Failed);
 
             /*
@@ -2425,7 +2438,7 @@ namespace ArchiveFixer.ViewModels
                 task.OutputVerification == OutputVerificationOutcome.Failed);
 
             // 剩下的就是"既没成功也没失败、也没跳过"的：没轮到它（例如格式未知却没被处理）。
-            int untouched = targets.Count - success - partial - cancelled - skipped - failed;
+            int untouched = targets.Count - followerSkipped - success - partial - cancelled - skipped - failed;
 
             var parts = new List<string> { $"成功 {success}", $"失败 {failed}", $"跳过 {skipped}" };
 
@@ -2462,11 +2475,22 @@ namespace ArchiveFixer.ViewModels
             }
 
             // 跳过必须说清为什么，否则"跳过 2"等于没说
-            int notArchive = targets.Count(t => t.Status == StatusText.Skipped && !t.IsArchive);
+            // ⚠ 跟班卷单独说（下一句），⛔ 不许在这里再算一遍 —— 它跳过的理由不是"7-Zip 说它不是压缩包"。
+            int notArchive = targets.Count(t =>
+                t.Status == StatusText.Skipped && !t.IsArchive && t.CountsTowardBatchOutcome);
 
             if (notArchive > 0)
             {
                 line += $" 跳过的 {notArchive} 个已由 7-Zip 确认不是压缩包。";
+            }
+
+            /*
+             * 跟班卷单独一句：它**不是**"没做成"（整组由第一卷那一单解完，它按设计不重复解）。
+             * 见上面 `followerSkipped` 那段 —— 用户真正会读错的就是这个数字。
+             */
+            if (followerSkipped > 0)
+            {
+                line += $" 另有 {followerSkipped} 个是同一分卷组的后续卷 —— 整组由第一卷那一单解完，按设计跳过（不是没做成）。";
             }
 
             int passwordError = targets.Count(t => t.Status == StatusText.WrongPassword);

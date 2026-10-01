@@ -272,6 +272,47 @@ namespace ArchiveFixer.Tests
             Assert.Contains("junk.txt", control.Text, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// **那一行汇总本身**也要按同一个事实位算（用户 2026-10-01 第三报 + 第五报的日志）：
+        /// 跟班卷从"跳过"那一档剔出去、单列一句解释，而**各分项之和 + 未处理 = 本次任务数**这条恒等式
+        /// 一个字都不许破（破了用户根本没法判断到底发生了什么 —— 这一行当初就是为它重写的）。
+        ///
+        /// <para>第五报真机日志里那一行是「一键处理完成：成功 6 / 失败 0 / **跳过 4**（本次 10 个任务）」，
+        /// 而 4 个全是各组后续卷 —— 用户会再报一次「这四个应该是要跳过的，我绝对没必要」。</para>
+        /// </summary>
+        [Fact]
+        public void 汇总那一行_跟班卷从跳过里剔出去_且恒等式不许破()
+        {
+            Harness harness = CreateHarness();
+
+            var owner = Succeeded("111.part1.rar");
+
+            ArchiveTask follower = Skipped("111.part2.rar");
+            follower.IsVolumeGroupFollower = true;
+
+            // 用户自己在冲突框里选的"跳过"：照旧算在"跳过"那一档里（⛔ 不许被这一改顺手吞掉）。
+            ArchiveTask userSkip = Skipped("junk.txt");
+
+            string line = harness.OneClick.BuildSummaryLine(new[] { owner, follower, userSkip });
+
+            // 跟班卷不许混进"跳过"那一档。
+            Assert.Contains("跳过 1", line, StringComparison.Ordinal);
+
+            // 但它要说清是什么、以及"不是没做成"。
+            Assert.Contains("另有 1 个是同一分卷组的后续卷", line, StringComparison.Ordinal);
+            Assert.Contains("不是没做成", line, StringComparison.Ordinal);
+
+            // 恒等式：成功 1 + 跳过 1 + 跟班 1 = 3 = 本次任务数（⛔ 不许凭空多一个"未处理"）。
+            // （夹具里列表是空的，所以 scope 会写「本次 3 个 / 列表共 0 个」—— 这里只钉前半截。）
+            Assert.Contains("本次 3 个", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("未处理", line, StringComparison.Ordinal);
+
+            // ⛔ 对照：一个跟班卷都没有时，这一句一个字都不该出现。
+            string withoutFollowers = harness.OneClick.BuildSummaryLine(new[] { owner, userSkip });
+
+            Assert.DoesNotContain("同一分卷组的后续卷", withoutFollowers, StringComparison.Ordinal);
+        }
+
         // ================================================================ ② 判据只有一处
 
         /// <summary>
