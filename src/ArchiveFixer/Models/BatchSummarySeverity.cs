@@ -59,6 +59,17 @@ namespace ArchiveFixer.Models
                     continue;
                 }
 
+                /*
+                 * ⛔ 同一分卷组的后续卷（跟班）**不代表"这一批有东西没做成"**（用户 2026-10-01 第三报）：
+                 * 它是这一组的一部分、已经由首卷那一单整组负责了，把它算进来会让整批变橙
+                 * 并显示「跳过 4 个」，用户读成"还有 4 个没弄完"。
+                 * 判据只有一位事实（`CountsTowardBatchOutcome`），不在这里另推。
+                 */
+                if (!task.CountsTowardBatchOutcome)
+                {
+                    continue;
+                }
+
                 outcomes.Add(task.Outcome);
 
                 /*

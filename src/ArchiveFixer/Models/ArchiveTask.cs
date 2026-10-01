@@ -1134,6 +1134,20 @@ namespace ArchiveFixer.Models
         public bool IsVolumeGroupFollower { get; set; }
 
         /// <summary>
+        /// 这一单**算不算"这一批要做的事"**（用户 2026-10-01 第三报：批末那句"跳过 4 个"让他以为还有活没干）。
+        ///
+        /// <para><b>为什么跟班卷不算</b>：同一分卷组的后续卷（<see cref="IsVolumeGroupFollower"/>）
+        /// 不是"一件没做成的事" —— 它是**这一组的一部分**，已经由首卷那一单整组负责了；
+        /// 把它算进批末的"跳过 / 部分完成"，用户看到的就是"还有 4 个没弄完"，
+        /// 而实际上**那一批该做的全做完了**。用户原话：「这四个应该是要跳过的，我绝对没必要（提醒），
+        /// 你这样会让用户觉得还有任务没弄完」。</para>
+        ///
+        /// <para>⛔ 只排除跟班卷这一档：用户在同名冲突框里选的"跳过"、部分完成、取消、失败
+        /// 一律照旧计入（那些确实意味着"有东西没做成"）。</para>
+        /// </summary>
+        public bool CountsTowardBatchOutcome => !IsVolumeGroupFollower;
+
+        /// <summary>
         /// 创建任务。
         /// </summary>
         public ArchiveTask()

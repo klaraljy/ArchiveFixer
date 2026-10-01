@@ -291,6 +291,17 @@ namespace ArchiveFixer.Models
             }
 
             /*
+             * ①b **跟班卷不算"问题"**（用户 2026-10-01 第三报：「这四个应该是要跳过的，我绝对没必要
+             * （提醒），你这样会让用户觉得还有任务没弄完」）：同一分卷组的后续卷已经由首卷那一单
+             * 整组负责了，它不是一件没做成的事 ⇒ 不进任何问题组、也不进批末"已跳过"那一行。
+             * 判据只有一位事实（`ArchiveTask.CountsTowardBatchOutcome`），⛔ 不在这里另推。
+             */
+            if (!task.CountsTowardBatchOutcome)
+            {
+                return null;
+            }
+
+            /*
              * ② 具体原因：只认既有状态常量（与 TaskSummaryService / OneClickCoordinator 同一批常量）。
              *
              * ⚠ 这一支刻意排在"机器终态兜底"**之前**：状态能说出具体原因时就必须说具体原因，

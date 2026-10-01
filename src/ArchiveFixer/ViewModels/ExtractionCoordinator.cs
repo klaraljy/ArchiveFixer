@@ -6851,6 +6851,26 @@ namespace ArchiveFixer.ViewModels
                 ArchiveFixer.Detection.VolumeGroup? group =
                     OneClickCoordinator.ResolveVolumeGroupFromDirectory(task);
 
+                /*
+                 * ⚠ 2026-10-01（用户真机第三报）：归组归不出组时**也必须往下走一次**。
+                 *
+                 * 现场：批首整组改名把 `222.zscip` → `222.zip`、`222.z删除01` → `222.z01`（改对了），
+                 * 可任务账上的分卷清单只是**扫描期那一份**（那时 `222.zscip` 还是 unrecognized，
+                 * 归组只给出 1 卷）⇒ 这里 `ResolveVolumeGroupFromDirectory` 拿 `222.zip` 单看归不出组
+                 * ⇒ 老写法直接 return ⇒ **补清单那一步永远走不到** ⇒ 源包搬运只搬了 `222.zip` 自己，
+                 * 400 MB 的 `222.z01` **留在源目录里**（用户看到的就是这个）。
+                 */
+                if (group == null
+                    && task.VolumePaths.Count > 0
+                    && FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(currentPath)))
+                {
+                    /*
+                     * 自己名字里带卷标记、账上却只有一卷 ⇒ 账的那一份可能已经过期（改名 / 扫描期），
+                     * 按"本目录里真实存在的名字"重新归一次。⛔ 仍然只增不减（下面那个比较就是闸门）。
+                     */
+                    group = OneClickCoordinator.ResolveVolumeGroupFromDirectoryByName(task, currentPath);
+                }
+
                 if (group == null)
                 {
                     return false;

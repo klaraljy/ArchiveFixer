@@ -1521,9 +1521,120 @@ namespace ArchiveFixer.ViewModels
                     v => string.Equals(Path.GetFullPath(v.Path), fullPath, StringComparison.OrdinalIgnoreCase)));
         }
         /// <summary>
-        /// 只对"还没识别"的任务重扫：
-        /// 一律重扫会把已经识别好的、甚至已经解压完的任务重新洗一遍，白费时间还冲掉结果。
+        /// **按名字补整组清单**（用户 2026-10-01 第三报）：账上的分卷清单可能过期（改名 / 扫描期只认出一卷），
+        /// 而 `222.zip` 单看又归不出组 ⇒ 这一档按"本目录里基名相同、名字里带卷标记"的文件重新支一组出来。
+        ///
+        /// <para><b>为什么需要它</b>：整组改名把 `222.zscip` → `222.zip`、`222.z删除01` → `222.z01` 都改对了，
+        /// 可任务账上的清单还是扫描期那一份（1 卷）⇒ 源包搬运只搬了 `222.zip` 自己，
+        /// 400 MB 的 `222.z01` 留在源目录里。</para>
+        ///
+        /// <para><b>判据只用事实</b>：基名相同（点号之前那一段）+ 名字里带卷标记（转调
+        /// <see cref="ExtensionHelper.TrySplitVolumeSegmentTolerant"/> 这个唯一出口 —— `z01` 与 `z0sc1` 都认）
+        /// + 文件真的在盘上。⛔ 目标名 / 卷序都不猜：这里只回答"本目录里哪些文件与它同属一组"，
+        /// 整组搬不搬仍由调用方"只增不减"的闸门决定。</para>
         /// </summary>
+        internal static ArchiveFixer.Detection.VolumeGroup? ResolveVolumeGroupFromDirectoryByName(
+            ArchiveTask? task,
+            string currentPath)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(currentPath) || !File.Exists(currentPath))
+            {
+                return null;
+            }
+
+            string directory = Path.GetDirectoryName(currentPath) ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return null;
+            }
+
+            string fileName = Path.GetFileName(currentPath);
+            int dot = fileName.IndexOf('.');
+
+            if (dot <= 0)
+            {
+                return null;
+            }
+
+            string stem = fileName[..dot];
+
+            var volumes = new List<ArchiveFixer.Detection.VolumeCandidate>();
+            int maxIndex = 0;
+
+            foreach (string sibling in Directory.EnumerateFiles(directory))
+            {
+                string siblingName = Path.GetFileName(sibling);
+                int siblingDot = siblingName.IndexOf('.');
+
+                if (siblingDot <= 0
+                    || !string.Equals(siblingName[..siblingDot], stem, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string segment = siblingName[(siblingDot + 1)..];
+                int index;
+
+                if (segment.Equals("zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    index = 1;
+                }
+                else if (ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out string mark, out _)
+                         && mark.Length == 3
+                         && (mark[0] == 'z' || mark[0] == 'Z')
+                         && int.TryParse(mark.AsSpan(1), out int ordinal)
+                         && ordinal >= 1)
+                {
+                    index = ordinal + 1;
+                }
+                else
+                {
+                    continue;
+                }
+
+                long size = -1;
+
+                try
+                {
+                    size = new FileInfo(sibling).Length;
+                }
+                catch
+                {
+                    // 量不出大小不影响"这一卷在不在"这条事实。
+                }
+
+                volumes.Add(new ArchiveFixer.Detection.VolumeCandidate { Path = sibling, Size = size });
+                maxIndex = Math.Max(maxIndex, index);
+            }
+
+            if (volumes.Count < 2)
+            {
+                return null;
+            }
+
+            /*
+             * 组对象只填"清单"这三件事（基名 / 各卷 / 首卷 = 本体那一份）——
+             * ⛔ 不编缺卷名、不编卷总数：调用方要的只是"这一组有哪些文件"。
+             */
+            string body = Path.Combine(directory, stem + ".zip");
+            string firstVolumePath = File.Exists(body) ? body : volumes[0].Path;
+
+            return new ArchiveFixer.Detection.VolumeGroup
+            {
+                GroupKey = directory + "|" + stem,
+                DirectoryPath = directory,
+                BaseName = stem,
+                Volumes = volumes,
+                FirstVolumePath = firstVolumePath,
+                KnownVolumeCount = maxIndex,
+                ExpectedVolumeCount = 0,
+                IsComplete = true,
+                MissingVolumeNames = Array.Empty<string>(),
+                Note = $"按名字补出来的清单：同目录里 {volumes.Count} 个文件与「{fileName}」同基名（{stem}）且带卷标记"
+            };
+        }
+
         private static bool NeedsScan(ArchiveTask task)
         {
             return task.ExtensionStatus == StatusText.NotChecked ||

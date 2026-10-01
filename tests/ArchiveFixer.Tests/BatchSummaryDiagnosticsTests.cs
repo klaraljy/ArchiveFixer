@@ -237,6 +237,41 @@ namespace ArchiveFixer.Tests
             Assert.Equal(150, password.TotalCount);
         }
 
+        // ================================================================ ②b 跟班卷不算"没做成"
+
+        /// <summary>
+        /// **同一分卷组的后续卷（跟班卷）不进批末的"没做成"**（用户 2026-10-01 第三报）：
+        /// 真机上一批 10 个任务里 4 个是各组后续卷（同组已由首卷那一单整组解完），
+        /// 汇总却报成「成功 6 / 跳过 4」、框是橙的、诊断还写「已跳过：4 个」——
+        /// 用户读成"还有 4 个没弄完"（原话：「这四个应该是要跳过的，我绝对没必要，你这样会让用户觉得还有任务没弄完」）。
+        ///
+        /// <para>两条一起钉：① 严重度是**蓝**（全成功）；② 诊断文案里**一个跟班卷都不许出现**。
+        /// ⛔ 对照组：用户自己在冲突框里选的"跳过"照旧算橙并点名（那一档确实有东西没做成）。</para>
+        /// </summary>
+        [Fact]
+        public void 跟班卷不算没做成_整批该是蓝的且不点名()
+        {
+            var owner = Succeeded("111.part1.rar");
+
+            ArchiveTask follower = Skipped("111.part2.rar");
+            follower.IsVolumeGroupFollower = true;
+
+            List<ArchiveTask> tasks = new() { owner, follower };
+
+            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(tasks);
+
+            Assert.Equal(BatchSummarySeverity.Success, report.Severity);
+            Assert.DoesNotContain("111.part2.rar", report.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.Skipped, report.Text, StringComparison.Ordinal);
+
+            // ⛔ 对照：不是跟班卷的"跳过"照旧算橙并点名。
+            BatchSummaryReport control = BatchSummaryDiagnosticsRules.Build(
+                new[] { Succeeded("a.7z"), Skipped("junk.txt") });
+
+            Assert.Equal(BatchSummarySeverity.Partial, control.Severity);
+            Assert.Contains("junk.txt", control.Text, StringComparison.Ordinal);
+        }
+
         // ================================================================ ② 判据只有一处
 
         /// <summary>
