@@ -207,14 +207,13 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2388 条（2385 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2393 条（2390 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
   - ⛔ **源包在任何一档下原地不动**；其余物只留**最外层源包**，**它不在盘上 ⇒ 其余物一个字节都不删**（`RestItemPurger.PurgeExcept`，与整份删除同一个执行体）。
   - ⛔ **与「空间不足」模式硬互斥**（判据 `ExtractionCoordinator.PartialPublishActive`；只写一行 INFO，⛔ 不改设置）+ **空间账加一整个源包**（`TaskSpaceEstimate.CountsSourceAsNewOccupancy` ⇒ `FreeSpaceDemandBytes`，精估与同卷补写都继承）。
   - ⛔ **取消闸门读的是任务自己的取消令牌**，⛔ 不是中文、也不是终态：单层取消路径只落中文状态、终态会被兜底改成「失败」，只读终态就会把半成品摆进目标目录。
   - ⚠ **真机未验**；递归那条路只覆盖"最深那一层失败"这一档。
-  - 批末诊断（`Models/BatchSummaryDiagnosticsRules`）对进组且发布过的任务补一句「其中 N 个已经按「部分完成」发布出来了（共 K 个文件）」—— 判据只读任务上那一刻写下的 `ArchiveTask.PartialPublishedCount`（⛔ 不重算、不看中文）。
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按 `ArchiveFixer.slnx` 父目录解析（worktree 里解不出来）；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`（或 `<slnx父目录>\_tmp\ArchiveFixer\space-real`）。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -280,12 +279,11 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
     - ⛔ **两条跑解压的路都必须问它**：单层 `ExtractionCoordinator` 与递归 `RecursiveExtractor`（只接一条的代价见 `docs/真机事故复盘.md` §44.1）。⛔ 判据只此一处，别再各写一份。
   - 命中 ⇒ 两个分支（`WrongPassword` 与两义档 `PasswordOrCorrupted`）**当场 break**，收场落 `StatusText.PasswordProvenDataCorruptedFormat`（「文件损坏：密码已经证实是对的……换密码不会改变结果」）、`PasswordStatus=PasswordCorrect`、`Outcome=Failed`。
   - ⛔ **保守边界不许放宽**：只解出一个文件 / 零字节桩 / 数不出来 ⇒ 一律按老口径**继续试候选**。用例 `ExtractionPipelineFixTests.解出了大半个包之后失败_不再当密码候选不对_也不再往下试候选` + 对照 `只解出一个文件时_仍按老口径继续试下一个候选`。
-  - ✅ 缺口已补（2026-10-02）：已解出的内容按「部分完成」发布（见 §11.2）。
+  - ✅ 缺口已补（2026-10-02）：已解出的内容按「部分完成」发布（见 §11.2）。该档的结论连同 §11.4 那条一起看。
 - ⛔ **日志导出不许落在"程序自己会整份删掉"的地方**：保存对话框默认开在"上次用过的文件夹" ⇒ 导出曾经落进 `…\其余物\`（见 §48.4）。
   - 判据唯一出口 `ProcessArtifactLayout.IsInsideDeletableProcessFolders`（其余物 / 旧名过程物 / `.ArchiveFixer.work`）。
   - `AppSettings.LastLogExportDirectory` **只**决定"下次对话框从哪开"（⛔ 不是默认导出位置、⛔ 不是自动行为）；命中上面那一档的目录**不记也不用作起始目录**（退回系统默认）。用例 `ExtractionPipelineFixTests.日志导出不记其余物和工作区这种会被删掉的目录`。
 - ⛔ **"是源包坏了还是程序坏了"有一个只读、免密码的判据**：**读 7z 的 Start Header（32 字节，`-mhe` 也不加密）**——自述 `NextHeaderOffset` + `NextHeaderSize` 加 32 =**整包应当有的字节数**；与各卷字节数一比就知道**卷齐不齐**。再配上能列出/解开大部分条目、**`Sub items Errors: 1`**、空间曲线没触底三条 ⇒ **是源包那一段字节坏了，不是程序**。⚠ 排除不掉"瞬时位翻转 / 引擎解错那一个文件"，验证办法 = **同一个包再跑一遍**。⇒ 逐条只读审计见 §43。
-- ✅ **「按部分完成发布」已实施**（2026-10-02）—— 见 §11.2；⛔ 要动它先读那一条与 `docs/部分完成发布方案.md` §7。
 - ⛔ **「末卷更小」这条直觉被实测否掉了一半 —— 不许拿它当闸门**：实测它只成立一半（数字见 §48.1）。⇒ 代码里只用**真成立的那一半**：**除末片外每一片彼此等大**（`SpannedZipIndex` 的候选池 = "满片尺寸的众数"），⛔ 不要求末片更小。
 - ⛔ **一组分卷 = 一个任务 = 从首卷启动**（见 `修改日志.md`）：
   ① 整组改名在**批首**（`NormalizeDisguisedVolumeNamesForBatchAsync`，`ApplyBatchWorkspaceRoot` 之后 / 并发之前）；② 后续卷那一单落 `Skipped`（`SkipWhenAnotherTaskOwnsThisVolumeGroup` + `ArchiveTask.IsVolumeGroupFollower`）；③ 归组**只算不写**（`OneClickCoordinator.ResolveVolumeGroupFromDirectory`）且**只增不减**；④ 跟班**不进链尾裁决**（`DescribeChainVerificationGap` / `CompleteRootSourcePackagesAfterChainAsync`）。用例 `AaaReplayPipelineTests`。
@@ -298,7 +296,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - 用例 `ChainManifestCompletenessTests`：`默认档只解当前这一层_手动只解压时内层包原样留着` + 对照 `单链自动展开_同一份夹具手动只解压也要解到叶子层`（用**手动「只解压」**隔离掉轮次续解）。用户文档 `docs/使用说明.md` §10.1.0 有两张表的白话版。
 - ⛔ **改名之后，任务上每一处指向这个文件的旧路径都要改过来**（见 §38）：`RenameService.UpdateTaskRenameSuccess(task, oldPath, newPath)` 必须**同时**改 `CurrentPath` 与 `VolumePaths` 里那一项 —— 只改一条 ⇒ 账上留下"盘上已不存在"的旧名字 ⇒ `ProcessArtifactLayout.SourcePackageMover.ResolveSourceGroup` 判"清单非空、却不含任务自己" ⇒ **整组搬运退化成只搬一份**。
   - ⛔ **"清单够不够全"不许按条数比**（`SkipWhenAnotherTaskOwnsThisVolumeGroup` 的 `group.Volumes.Count > task.VolumePaths.Count`）：一条不存在的旧名字照样占一个位 —— 2 条 vs 2 条看着"没变多"，实际只有 1 条是真的。这条闸门只负责"账上真的只有 1 卷"那一档。
-  - ✅ **收口**：`SourcePackageMover.ResolveSourceGroup` 那条"清单非空、却不含自己 ⇒ 降级成只搬自己一份"的**静默兜底已经改掉** —— 现在**整组一份都不搬**（按红线「判不出 ⇒ 什么都不做」），计划里写明「账上的分卷清单里没有它自己」、源包留在原地。用例 `SourcePackageMoverTests.计划_分卷清单非空却不含自己时_整组一份都不搬且说明原因`（红检：改回降级 ⇒ 变红）。⚠ **仍未修**：`ExtractionCoordinator` 里"内层包搬进其余物"那一处（原 `:2503-2510`）同样只改 `CurrentPath`，不改 `VolumePaths`。
+  - ✅ **收口**：`SourcePackageMover.ResolveSourceGroup` 那条"清单非空、却不含自己 ⇒ 降级成只搬自己一份"的**静默兜底已经改掉** —— 现在**整组一份都不搬**（按红线「判不出 ⇒ 什么都不做」），计划里写明「账上的分卷清单里没有它自己」、源包留在原地。用例 `SourcePackageMoverTests.计划_分卷清单非空却不含自己时_整组一份都不搬且说明原因`（红检：改回降级 ⇒ 变红）。
+  - ✅ **"搬走之后改账"已收敛到唯一出口**（2026-10-02）：`Extraction/TaskPathSync`（⛔ 别再自己写"只改 `CurrentPath`"）—— 三处调用：源包搬进其余物（`ApplySourceMoveResult`）、**内层包搬进其余物**（原 `:2503-2510`，上面那条"仍未修"已补齐）、整组改名同步。用例 `TaskPathSyncTests`(4) + `InnerLayerContinuationTests.内层包搬进其余物之后_账上每一条路径都指向真实存在的位置`；红检：撤掉"改分卷清单"那一半 ⇒ 前 3 条 + `形状A…整组移入其余物` 一起红。
 - ✅ **"去杂质之后是什么"只有一个出口**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`；真机现场见 `docs/真机事故复盘.md` §48.1）：
   删掉**最多 2 个非数字字符**后若**唯一地**变成**已知归档后缀**才算（`222.zi删除p` / `222.zscip` → `zip`、
   `ra删除r` → `rar`、`7删除z` → `7z`；本来就干净、或删出来有歧义 ⇒ 一律不认）。它同时喂三个消费点：

@@ -2457,14 +2457,19 @@ namespace ArchiveFixer.ViewModels
                         File.Delete(from);
                     }
 
-                    // 任务对象跟着改位置：续解扫描靠它把"刚搬走的内层包"排除掉。
-                    foreach (ArchiveTask? candidate in chainTasks)
-                    {
-                        if (candidate != null && SafePathHelper.PathEquals(candidate.CurrentPath, from))
-                        {
-                            candidate.CurrentPath = target;
-                        }
-                    }
+                    /*
+                     * 任务对象跟着改位置：续解扫描靠它把"刚搬走的内层包"排除掉。
+                     *
+                     * ⚠ 2026-10-02 补齐：这里原来**只改 CurrentPath**，而任务上指向同一个文件的地方有两处
+                     * （另一处是分卷清单 `VolumePaths`）—— 只改一条就会在账上留下"盘上已不存在"的旧名字，
+                     * 下一次按分卷组搬源包时 `SourcePackageMover.ResolveSourceGroup` 判"清单非空、却不含自己"
+                     * ⇒ **整组一份都不搬**（用户 2026-10-02 收口后的保守档），源包留在原地还要解释一遍。
+                     * 现在与"源包搬进其余物"（ApplySourceMoveResult）、"整组改名"（SyncTasksAfterVolumeRename）
+                     * 走同一个出口：`TaskPathSync.ApplyMove`。
+                     */
+                    TaskPathSync.ApplyMoves(
+                        chainTasks,
+                        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [from] = target });
 
                     /*
                      * 一行说完，**不写两条完整绝对路径**（用户 2026-09-26 第 45 条：
@@ -3502,6 +3507,9 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <c>task.FileName</c> 不变（只是换目录），所以界面上的名字照旧，路径列会显示新位置 ——
         /// 这是诚实的：源包确实已经在其余物里了。
+        ///
+        /// <para>⚠ 判据只有一处：<see cref="TaskPathSync.ApplyMove"/>（⛔ 别再自己写一遍"只改 CurrentPath"
+        /// —— 那样账上会留下盘上已不存在的旧名字，见 §38 与内层包那一处 2026-10-02 的补齐）。</para>
         /// </summary>
         private static void ApplySourceMoveResult(ArchiveTask task, SourcePackageMoveResult result)
         {
@@ -3512,21 +3520,7 @@ namespace ArchiveFixer.ViewModels
                 byOldPath[move.SourcePath] = move.TargetPath;
             }
 
-            if (task.VolumePaths.Count > 0)
-            {
-                for (int i = 0; i < task.VolumePaths.Count; i++)
-                {
-                    if (byOldPath.TryGetValue(task.VolumePaths[i], out string? movedVolume))
-                    {
-                        task.VolumePaths[i] = movedVolume;
-                    }
-                }
-            }
-
-            if (byOldPath.TryGetValue(task.CurrentPath, out string? movedCurrent))
-            {
-                task.CurrentPath = movedCurrent;
-            }
+            TaskPathSync.ApplyMove(task, byOldPath);
         }
 
         /// <summary>

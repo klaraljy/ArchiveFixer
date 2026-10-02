@@ -335,6 +335,67 @@ namespace ArchiveFixer.Tests
             Assert.False(Directory.Exists(Path.Combine(harness.OutputRoot, "outer (1)")), "不该出现重复解压留下的副本目录");
         }
 
+        /// <summary>
+        /// **跑完一条链之后，账上每一条路径都必须指向盘上真实存在的东西**。
+        ///
+        /// <para>为什么值得钉：任务上指向同一个文件的地方有 <c>CurrentPath</c> 与 <c>VolumePaths</c> 两处，
+        /// 搬走（改名 / 搬进其余物）之后**只改一处**就会留下"盘上已不存在"的旧名字 ⇒
+        /// 下一次按分卷组搬源包时 <c>SourcePackageMover.ResolveSourceGroup</c> 判
+        /// "清单非空、却不含自己" ⇒ **整组一份都不搬**（用户 2026-10-02 收口后的保守档），
+        /// 用户看到"该搬的没搬"、日志还要解释一遍（AGENTS.md §38 的同一形状）。</para>
+        ///
+        /// <para>判据只读事实：这一条覆盖**续解出来的内层包**那一档；根任务那一档由
+        /// <c>形状A_第一层直接出内容物_真7z分卷组整组移入其余物</c> 钉着，
+        /// "两处一起改"这个口径本身由 <c>TaskPathSyncTests</c> 四条钉着
+        /// （红检：撤掉 <see cref="TaskPathSync"/> 里改分卷清单那一半 ⇒ 那三条 + 形状A 一起红）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 内层包搬进其余物之后_账上每一条路径都指向真实存在的位置()
+        {
+            BuildInnerVolumeGroup();
+            string outer = BuildPackageFromInnerStage("outer.7z");
+
+            Harness harness = CreateHarness($"outer:{OuterPassword}\ninner:{InnerPassword}\n");
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            // 前提：真的续解了、内层包真的进了其余物（否则这条用例什么都没测到）。
+            Assert.Equal(2, outcome.Rounds);
+            Assert.True(
+                File.Exists(Path.Combine(harness.OutputRoot, "outer", "其余物", "inner.7z.001")),
+                $"内层分卷应该在其余物里。{DiagnoseOutput(harness)}");
+
+            var stale = new List<string>();
+
+            foreach (ArchiveTask task in harness.Vm.Tasks)
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(task.CurrentPath) && !File.Exists(task.CurrentPath))
+                {
+                    stale.Add($"{task.FileName} 的 CurrentPath 指向盘上不存在的位置：{task.CurrentPath}");
+                }
+
+                foreach (string volume in task.VolumePaths)
+                {
+                    if (!File.Exists(volume))
+                    {
+                        stale.Add($"{task.FileName} 的分卷清单里留着盘上不存在的旧名字：{volume}");
+                    }
+                }
+            }
+
+            Assert.True(
+                stale.Count == 0,
+                "搬进其余物之后账上还留着旧路径（下一次按分卷组搬源包会整组不动）："
+                + string.Join("；", stale)
+                + $"。【现场】{DiagnoseOutput(harness)}");
+        }
+
         // ---------------------------------------------------------------- 第三步：轮数硬上限
 
         [Fact]
