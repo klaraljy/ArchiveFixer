@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace ArchiveFixer.Helpers
@@ -489,6 +490,76 @@ namespace ArchiveFixer.Helpers
         public static string GetSafeArchiveBaseName(string filePath)
         {
             return SanitizeFileName(GetArchiveBaseName(filePath));
+        }
+
+        /// <summary>
+        /// 这个文件是不是**分卷的后续卷**（组的起点不是它）：<c>.002</c> 及更大的三位数字卷、
+        /// <c>.z01</c>/<c>.r00</c>、<c>.part2</c> 及更大的分卷段都算；<c>.001</c> / <c>.zip</c> 本体 /
+        /// <c>.part1</c> / <c>.rar</c>（起点）不算。
+        ///
+        /// <para><b>为什么判据只能有一份</b>（2026-09-28 审计 + 2026-10-02 真机）：全项目曾经三处各写一遍
+        /// "分卷名判断"，两处不同步就会出"同一份包，扫描说它是后续卷、续解说它是内层包"这种自相矛盾。
+        /// 现在的真实判据 = <see cref="ExtensionHelper.TrySplitVolumeSegmentTolerant"/> + "001 才是起点"，
+        /// 由本方法一处给出：续解扫描（<c>OneClickCoordinator</c>）与递归的**单链判定**
+        /// （<c>RecursiveExtractor.HasOnlyInformationalSiblings</c>）都读它。</para>
+        ///
+        /// <para><b>为什么递归的"单链判定"也需要它</b>（用户 2026-10-02 真机 `1-6 电磁感应定律（1）`）：
+        /// 那一层里是 <c>51658213.7z.001</c>（**唯一**的内层归档）+ <c>51658213.7z.002</c>（**同一组**的后续卷），
+        /// 老判据只跳过"内层归档那一个文件"，于是 <c>.002</c> 被算成"别的文件"⇒ 单链不成立 ⇒
+        /// 报「这一层里有 1 个内层归档（多分支）」并**保守停在那一层**：一键档白白多跑一轮，
+        /// 手动档还会拿"要不要展开多分支"去问用户 —— 而他看到的只有一个包。</para>
+        /// </summary>
+        public static bool IsVolumeContinuationPart(string? filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                return false;
+            }
+
+            string fileName = GetFileName(filePath);
+            string extension = Path.GetExtension(fileName);
+
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                return false;
+            }
+
+            /*
+             * ⚠ 判据用**容差档**（2026-09-28 审计：这是全项目最后一处还在用"前缀档"的分卷名判断）。
+             * 老写法 `IsVolumePartExtension(extension)` 只认干净的 `.001`/`.z01`，于是名字被伪装过的后续卷
+             * （`amb909.7删z.00除2`、`amb909.7z.002sc`）在这里判成"不是后续卷" —— 与探测器、改名闸门
+             * 的口径不一致（同一判据第三次翻车就是这种"两处不同步"）。判据只留 `ExtensionHelper` 一份。
+             */
+            if (ExtensionHelper.TrySplitVolumeSegmentTolerant(extension.TrimStart('.'), out string volumeMark, out _))
+            {
+                // 三位数字分卷里只有 001 是起点；.z01 / .r00 这类也不是组的开头（老口径不变）。
+                return !string.Equals(volumeMark, "001", StringComparison.OrdinalIgnoreCase);
+            }
+
+            // xxx.part2.rar 的最后后缀是 .rar，编号在倒数第二个后缀上。
+            return GetPartSegmentNumber(fileName) > 1;
+        }
+
+        /// <summary>取 <c>xxx.part01.rar</c> 里的 1；不是 part 命名返回 0。</summary>
+        private static int GetPartSegmentNumber(string fileName)
+        {
+            string partSegment = Path.GetExtension(Path.GetFileNameWithoutExtension(fileName));
+
+            if (string.IsNullOrWhiteSpace(partSegment))
+            {
+                return 0;
+            }
+
+            string digits = partSegment.TrimStart('.');
+
+            if (digits.Length < 5 ||
+                !digits.StartsWith("part", StringComparison.OrdinalIgnoreCase) ||
+                !digits.Skip(4).All(char.IsDigit))
+            {
+                return 0;
+            }
+
+            return int.TryParse(digits.Substring(4), out int number) ? number : 0;
         }
     }
 }

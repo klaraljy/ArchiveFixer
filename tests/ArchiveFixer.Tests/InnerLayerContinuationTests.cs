@@ -146,6 +146,94 @@ namespace ArchiveFixer.Tests
             Assert.Equal(Path.Combine(rest, "outer.7z"), outerTask.CurrentPath);
         }
 
+        /// <summary>
+        /// **一层里的一组分卷 = 一个内层归档，不许当成"多分支"**（用户 2026-10-02 真机
+        /// `1-6 电磁感应定律（1）`，现场见 `docs/真机事故复盘.md` §47.3）。
+        ///
+        /// <para>现场：那一层里是 <c>51658213.7z.001</c>（**唯一**的内层归档）+ <c>51658213.7z.002</c>
+        /// （同组后续卷），日志却写「这一层里有 **1 个**内层归档（多分支）—— 一键处理不弹确认框，
+        /// 按保守档只保留当前这一层的结果」⇒ 同一组卷被拆成两轮跑（第 2 轮才解出来）；
+        /// 手动档还会拿"要不要展开多分支"去问用户，而他看到的只有一个包。</para>
+        ///
+        /// <para>⚠ <b>必须把递归模式设成 SingleChain 才测得到</b>：出厂默认档是 <c>SingleLayer</c>，
+        /// 那条路上递归核心根本不进"要不要继续"的判定（续解交给一键处理的轮次），
+        /// 所以本类别的用例一直没碰到这个缺陷 —— 真机上是用户选了「单链自动展开」才撞上的。</para>
+        ///
+        /// <para>判据只读机器事实：轮数、汇总里的续解层数、日志里有没有「多分支」、
+        /// 内容物是否解出来、分卷组有没有留半套、源包按设置去了哪。</para>
+        /// </summary>
+        [Fact]
+        public async Task 单链模式_一层里是分卷组_算一个内层归档_一轮跑完且不说多分支()
+        {
+            BuildInnerVolumeGroup();
+            string outer = BuildPackageFromInnerStage("outer.7z");
+
+            Harness harness = CreateHarness(
+                $"outer:{OuterPassword}\ninner:{InnerPassword}\n",
+                settings =>
+                {
+                    // 真机那道开关：只有这两档才进递归核心的"要不要继续"判定。
+                    settings.RecursionMode = "SingleChain";
+                    settings.VerboseLog = true;
+                });
+
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            /*
+             * ① 一轮跑完，而且**不许**报"多分支"。
+             * 老口径这里会 Rounds = 2（第一轮保守停在分卷那一层、第二轮才把分卷解开）。
+             *
+             * ⚠ 判据只认那句**逐层的**结论（`…：这一层里有 N 个内层归档（多分支）…`）——
+             * ⛔ 不能拿"多分支"两个字全文搜：一键档开头那行固定提示里本来就有
+             * 「本次不弹任何确认框（多分支不展开、…）」，那样写会永远红（自测踩到过）。
+             */
+            Assert.Equal(1, outcome.Rounds);
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                line => line.Contains("个内层归档（多分支）", StringComparison.Ordinal));
+
+            // ② 分卷里的内容物真的解出来了（一层里那组卷被当成"这一层的内层归档"继续展开）。
+            string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
+
+            Assert.True(
+                payloads.Length == 1,
+                $"第二层应该产出一份 payload.txt，实际 {payloads.Length} 份。{DiagnoseOutput(harness)}");
+
+            Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
+
+            // ③ 被消费掉的分卷组不许留半套在成品目录里（`ExtractionWorkspace.TryDeleteConsumedPackage`
+            //    连同一组的后续卷一起清）。
+            Assert.Empty(Directory.GetFiles(harness.OutputRoot, "inner.7z.*", SearchOption.AllDirectories));
+
+            // ④ 源包照旧按设置进其余物（内层包怎么处理不改变源包那条口径）。
+            Assert.False(File.Exists(outer), $"源包应该已经被搬进其余物。{DiagnoseOutput(harness)}");
+
+            Assert.True(
+                File.Exists(Path.Combine(harness.OutputRoot, "outer", "其余物", "outer.7z")),
+                $"源包应该落在 outer\\其余物 里。{DiagnoseOutput(harness)}");
+        }
+
+        /// <summary>失败时把目录树与日志一起带出来（本类别每个用例都用它，省得靠猜）。</summary>
+        private static string DiagnoseOutput(Harness harness)
+        {
+            string tree;
+
+            try
+            {
+                tree = string.Join(
+                    " | ",
+                    Directory.GetFileSystemEntries(harness.OutputRoot, "*", SearchOption.AllDirectories));
+            }
+            catch (Exception ex)
+            {
+                tree = $"（目录树读不出来：{ex.Message}）";
+            }
+
+            return $"\n目录树：{tree}\n日志：\n{string.Join("\n", harness.LogTexts)}";
+        }
+
         // ---------------------------------------------------------------- 形状 A：第一层直接出内容物
 
         /// <summary>

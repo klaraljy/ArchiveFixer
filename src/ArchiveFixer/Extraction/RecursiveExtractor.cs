@@ -1610,12 +1610,16 @@ namespace ArchiveFixer.Extraction
         /// 只要冒出一个别的类型的文件，就说明这层产物本身就是"用户要的东西"，
         /// 里面那个归档未必是主角 —— 这种情况必须问，不能替用户决定。
         ///
-        /// <para>⚠ 已知缺口（2026-10-02 真机 `1-6 电磁感应定律（1）` 那份日志，见 `docs/真机事故复盘.md` §47.3）：
-        /// **同一组的分卷后续卷**（这一层里是 `51658213.7z.001` + `51658213.7z.002`）也会被这里算成"别的文件"
-        /// ⇒ 单链不成立 ⇒ 报「这一层里有 1 个内层归档（多分支）」并保守停在那一层：
-        /// 一键档白白多跑一轮（真机上第 2 轮才解出来），手动档还会拿"要不要展开多分支"去问用户，
-        /// 而他看到的只有一个包。修法要动"续解链怎么走"（会改掉 4 条既有守门用例钉住的轮数/续解层数），
-        /// 所以**单独立项**，⛔ 不夹在别的修复里顺手改。</para>
+        /// <para>⚠ 2026-10-02 修（用户真机 `1-6 电磁感应定律（1）`，见 `docs/真机事故复盘.md` §47.3）：
+        /// **同一组的后续卷算那一份归档的一部分，不算"别的文件"**。现场 = 这一层里是
+        /// <c>51658213.7z.001</c>（**唯一**的内层归档）+ <c>51658213.7z.002</c>（同组后续卷），
+        /// 老判据只跳过"内层归档那一个文件"，于是 <c>.002</c> 被算成另一个分支 ⇒ 单链不成立 ⇒
+        /// 日志写着「这一层里有 **1 个**内层归档（多分支）」并保守停在那一层：一键档白白多跑一轮
+        /// （真机上第 2 轮才解出来），手动档还会拿"要不要展开多分支"去问用户 —— 而他看到的只有一个包。</para>
+        ///
+        /// <para>⛔ 认的只有**同目录 + 同包基名 + 是后续卷**三条同时成立的文件
+        /// （<see cref="IsSameGroupContinuationVolume"/>）：别的目录、别的基名的 <c>.002</c>
+        /// 照旧算"别的文件"，宁可多问一句也不替用户决定。</para>
         /// </summary>
         private static bool HasOnlyInformationalSiblings(RecursionLayerReport report, string innerArchivePath)
         {
@@ -1672,6 +1676,12 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
+                    if (IsSameGroupContinuationVolume(entry, archivePath))
+                    {
+                        // 同目录、同包基名的后续卷 = 这一份归档自己的另一片，不是另一个分支。
+                        continue;
+                    }
+
                     if (!IsInformationalFile(entry))
                     {
                         return false;
@@ -1680,6 +1690,46 @@ namespace ArchiveFixer.Extraction
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 候选文件是不是**内层归档那一组的后续卷**：同目录 + 同包基名 + 名字是后续卷，三条同时成立。
+        ///
+        /// <para>判据全部转调既有出口（⛔ 这里不许自带第二套名字规则）：
+        /// 「是不是后续卷」= <see cref="FileNameHelper.IsVolumeContinuationPart"/>（与续解扫描同一份），
+        /// 「包基名」= <see cref="FileNameHelper.GetArchiveBaseName"/>（它内部剥分卷标记用的也是唯一那份
+        /// <c>ExtensionHelper.TrySplitVolumeSegmentTolerant</c>）。</para>
+        ///
+        /// <para>为什么要"同目录"这一条：引擎找兄弟卷**只看入口文件旁边那一层**（AGENTS.md §11.4），
+        /// 别的目录里那个 <c>.002</c> 不可能是这一组的可用分片 —— 那种情况照旧按"别的文件"处理。</para>
+        /// </summary>
+        private static bool IsSameGroupContinuationVolume(string candidate, string innerArchivePath)
+        {
+            if (!FileNameHelper.IsVolumeContinuationPart(candidate))
+            {
+                return false;
+            }
+
+            string candidateFull = SafePathHelper.GetFullPathSafe(candidate);
+            string archiveFull = SafePathHelper.GetFullPathSafe(innerArchivePath);
+
+            if (candidateFull.Length == 0 || archiveFull.Length == 0)
+            {
+                return false;
+            }
+
+            string candidateDirectory = Path.GetDirectoryName(candidateFull) ?? string.Empty;
+            string archiveDirectory = Path.GetDirectoryName(archiveFull) ?? string.Empty;
+
+            if (!string.Equals(candidateDirectory, archiveDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return string.Equals(
+                FileNameHelper.GetArchiveBaseName(candidateFull),
+                FileNameHelper.GetArchiveBaseName(archiveFull),
+                StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsInformationalFile(string filePath)

@@ -2290,33 +2290,15 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal static bool IsVolumeContinuationPart(string filePath)
         {
-            if (string.IsNullOrWhiteSpace(filePath))
-            {
-                return false;
-            }
-
-            string fileName = Path.GetFileName(filePath);
-            string extension = Path.GetExtension(fileName);
-
-            if (string.IsNullOrWhiteSpace(extension))
-            {
-                return false;
-            }
-
             /*
-             * ⚠ 判据改用**容差档**（2026-09-28 审计：这是全项目最后一处还在用"前缀档"的分卷名判断）。
-             * 老写法 `IsVolumePartExtension(extension)` 只认干净的 `.001`/`.z01`，于是名字被伪装过的后续卷
-             * （`amb909.7删z.00除2`、`amb909.7z.002sc`）在这里判成"不是后续卷" —— 与探测器、改名闸门
-             * 的口径不一致（同一判据第三次翻车就是这种"两处不同步"）。判据只留 `ExtensionHelper` 一份。
+             * ⚠ 2026-10-02：实现搬到 `Helpers/FileNameHelper.IsVolumeContinuationPart`，这里只留一个转调。
+             *
+             * 理由不是"换个地方放"，而是**同一条规则现在有两个消费者**：续解扫描（这里）与递归的
+             * 单链判定（`RecursiveExtractor.HasOnlyInformationalSiblings` —— 分卷组过去会被那一边
+             * 当成"多分支"）。而 `Extraction` 不许反向引用 `ViewModels`（分层铁律），
+             * 所以规则必须落在两边都能读的 `Helpers` 里 —— ⛔ 不许在那边再写第二份。
              */
-            if (ExtensionHelper.TrySplitVolumeSegmentTolerant(extension.TrimStart('.'), out string volumeMark, out _))
-            {
-                // 三位数字分卷里只有 001 是起点；.z01 / .r00 这类也不是组的开头（老口径不变）。
-                return !string.Equals(volumeMark, "001", StringComparison.OrdinalIgnoreCase);
-            }
-
-            // xxx.part2.rar 的最后后缀是 .rar，编号在倒数第二个后缀上。
-            return GetPartSegmentNumber(fileName) > 1;
+            return FileNameHelper.IsVolumeContinuationPart(filePath);
         }
 
         /// <summary>
