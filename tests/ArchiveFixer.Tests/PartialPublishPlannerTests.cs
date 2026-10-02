@@ -147,7 +147,8 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 清单拿不到_一个字节都不发布()        {
+        public void 清单拿不到_一个字节都不发布()
+        {
             PartialPublishVerdict verdict = PartialPublishPlanner.Plan(
                 manifestEntries: null,
                 sizeProbe: Disk(),

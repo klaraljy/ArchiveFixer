@@ -209,25 +209,25 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
 - `dotnet test` 全量（主 checkout 内）：2362 条（2359 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - 🔧 **在做（未完成）「部分完成也把已解出的内容放进目标目录」**：口径与冲突见 `docs/部分完成发布方案.md`（用户 2026-10-02 已把三件事全拍板：口径 A 固定子目录 / 阈值缺 ≤5 或 ≥95% / 留"最外层源包+已解出内容物"、其余物其他项与工作区都删）。**已落地两块地基**：`ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（引擎点名的坏条目 + 自报计数，两个运行器的唯一出口填；⚠ **中文版 UnRAR 点不出名**）+ **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）。⛔ 判据里没有"引擎没报错就算好"这种话：**大小对得上且引擎没点名**才算可发布。**未做**：发布动作本身（子目录 + 让位 + 二次空间体检 + 其余物/工作区清理）、③页开关与四句说明、与空间不足模式的硬互斥。
-- ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
-- 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
+- ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按 `ArchiveFixer.slnx` 父目录解析，worktree 里解成不存在的路径；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
+- 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
 - ⚠ 数字只在这里写一次。
 - 已知 flaky（并发假红；先单跑确认，⛔ 别改断言）〔已知 flaky 清单〕
-  - `SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`：全量偶发 `Collection was modified`（测试自己的 `WaitForLogAsync` 枚举 `harness.Log.Logs` 而产品侧在 append）⇒ 测试侧竞态、**不是产品 bug**。2026-10-01 已从源头去掉：该文件读日志的 6 处改走 `LogContains`（捕获 `InvalidOperationException` 后当作"这一轮还没出现"），⛔ 等待时长 / 断言 / 被等内容一个字没改。
+  - `SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`：全量偶发 `Collection was modified` ⇒ 测试侧竞态、**不是产品 bug**（读日志改走 `LogContains`），⛔ 等待时长 / 断言 / 被等内容一个字没改。
 - ⚠ 回退代码后必须 `--no-incremental` 重编（否则跑的还是红检那份）〔真样本验收〕
-- 已知 flaky（第二条 2026-10-01 全量偶发一次、**单跑 8/8 绿**；第三条 2026-10-02 全量偶发一次、**单跑绿 + 复跑全量绿**；三条都先单跑确认，⛔ 别改断言）
-  - `SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`：全量并发下偶发（计时敏感，等采样周期与取消的时序被别的用例抢 CPU 时判否）。
-  - `SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`：它读的是**真实盘**的可用空间、需求取"可用 + 1 字节"，而并行跑时别的用例正在建/删临时文件 ⇒ 盘上多出 1 个字节就翻盘。2026-10-02 已从**测试侧**修掉（需求改成"可用 + 60 GiB"，断言一个字没改）。
+- 已知 flaky（后两条全量偶发、单跑绿；三条都先单跑确认，⛔ 别改断言）
+  - `SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`：计时敏感，全量并发下偶发。
+  - `SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`：读**真实盘**可用空间、与并行用例抢盘 ⇒ 偶发；已从**测试侧**修掉（需求改成"可用 + 60 GiB"，断言一个字没改）。
 
 ### 11.3 空间：判据/模式/批末汇总
 
 - ⛔ 源包不许算两遍：唯一出口 `TaskSpaceEstimate.FreeSpaceDemandBytes`=`ContentBytes+ProcessArtifactBytes`（`ScheduledExtractionItem.RequiredBytes` 与 `ExtractionCoordinator.ReconcileReservation` 都只读它）；`PeakBytes`（含源包）只作描述，⛔ 不许拿它比可用空间〔源包不许算两遍（2026-09-29）〕
 - 「空间不足」模式（`MainViewModel.SpaceTightMode`：运行期开关、不写盘、不记忆）一个布尔管四件事：并发（`ExtractionScheduler.ResolveSpaceTightParallelCount` 与「最大并发解压数」取小）、排序、其余物强制 `Delete`、定稿+校验通过后当场永久删源包（`PurgeSourcePackageForSpaceTight`=`SourceCleanupService` 唯一调用点）〔空间不足模式〕
 - 「不删原包」安全档（`MainViewModel.SpaceTightKeepSource`）测试期专用：⛔ 发行那轮整块删掉；`SpaceTrendMonitor` 保留〔安全档「不删原包」〕
-- ⛔ **「启动前空间不够」不是终态，只是"现在排不上"**（用户 2026-10-02 真机：14 个任务里 6 个白没做；见 `docs/真机事故复盘.md` §45.1）：并发 8 时账本里"已经在跑的任务预留"会把整块盘许光（35.11 GiB / 可用 35.86 GiB），于是第 9 个包自己只要 851.45 MiB 也被判「还差 9.77 MiB」。⇒ 拒下的任务进"等空间"名单（**不记失败、不改状态**，只写一行 INFO），**每跑完一个任务就重试一遍**；没人跑了才走 `MarkSpaceBlocked` 如实报。⛔ 两条铁律：**补跑环必须与"等所有任务结束"写在同一个环里**（写在它之后 ⇒ `runningTasks` 已空、一次都不进）；**每跑完一个要当场 `RefreshAvailable` 重探一次**（账本平时 5 秒一针，而释放预留是立刻发生的）。放行判据仍然只有 `TryReserve` 一个，一个字没放宽。用例 `SpaceTightModeTests.启动前空间不够_先排队不记失败_等腾出空间后自动补跑`（红检：改回 `MarkSpaceBlocked + continue` ⇒ 变红）。
-- ⛔ **多层递归：每一层开头都要把进度基准拉回来**（用户 2026-10-02：「解压完成到真正的解释有个 8 分钟的差距」；同 §45.2）：进度条记的是"引擎最后一次报的百分比"，第 0 层结束时是 100%，第 1 层从头开始却没有任何一帧拉回基准 ⇒ 那一层跑多久界面就停在 100% 多久（真机 4 分 34 秒、日志一条进度都没有）。⇒ `RecursiveExtractor.ExtractLayerAsync` 每层开头合成一帧 `Percent=0`、当前条目写「第 N 层：<内层包名>」。⛔ 只补这一帧，引擎报的数一个都不改。
-- ⛔ **「空间不足」的机器终态只有一个：`MarkSpaceBlockedCore` 里显式落 `Failed`**（2026-10-02 收口）：过去它只写 `Status` 不写 `Outcome` ⇒ 同一个"空间不足"在真机那批（预检那条路）报**失败 6**、在用例里（启动前那道门）批末汇总是**未处理 1**，同一批日志里还有一行写**跳过 N 个** —— 三种说法指同一件事。⛔ 落 `Failed` 的同时**源包一个字节都没动**（原地、其余物不生成），这两件事不矛盾。同批那行清单的措辞也从「跳过」改成「没做成」。用例 `SpaceRiskAndSummaryTests.中途空间不足_一键档只弹一次纯提示` / `_手动档照旧只写日志`（场景 = 两个各自比整块盘还大的包）。
+- ⛔ **「启动前空间不够」不是终态，只是"现在排不上"**（现场与数字见 `docs/真机事故复盘.md` §45.1）：并发高时"已在跑的预留"会把整块盘许光 ⇒ 后面小包也被判「还差…」；⇒ 拒下的任务进"等空间"名单（**不记失败、不改状态**，只写一行 INFO），**每跑完一个就重试一遍**，没人跑了才走 `MarkSpaceBlocked` 如实报。⛔ 两条铁律：**补跑环必须与"等所有任务结束"写在同一个环里**、**每跑完一个当场 `RefreshAvailable` 重探一次**。放行判据仍然只有 `TryReserve` 一个。用例 `SpaceTightModeTests.启动前空间不够_先排队不记失败_等腾出空间后自动补跑`（红检：改回 `MarkSpaceBlocked + continue` ⇒ 变红）。
+- ⛔ **多层递归：每一层开头都要把进度基准拉回来**（同 §45.2）：进度条记的是"引擎最后一次报的百分比"，第 0 层结束时是 100%，第 1 层从头开始却没有任何一帧拉回基准 ⇒ 那一层跑多久界面就停在 100% 多久。⇒ `RecursiveExtractor.ExtractLayerAsync` 每层开头合成一帧 `Percent=0`、当前条目写「第 N 层：<内层包名>」。⛔ 只补这一帧，引擎报的数一个都不改。
+- ⛔ **「空间不足」的机器终态只有一个：`MarkSpaceBlockedCore` 里显式落 `Failed`**：过去它只写 `Status` 不写 `Outcome` ⇒ 同一个"空间不足"在三条路上有三种说法（失败 / 未处理 / 跳过），指的是同一件事。⛔ 落 `Failed` 的同时**源包一个字节都没动**（原地、其余物不生成）。同批那行清单的措辞也从「跳过」改成「没做成」。用例 `SpaceRiskAndSummaryTests.中途空间不足_一键档只弹一次纯提示` / `_手动档照旧只写日志`（场景 = 两个各自比整块盘还大的包）。
 - 空间回收的五条口径（⛔ 别按旧口径改回去）〔空间回收与批末汇总〕
   1. 多层链每一层各删各的：判据排在 `task.IsContinuationTask` 之前（峰值 ≈ 两倍单层）。
   2. 某一层失败只影响那一层：失败层源包留着，已收走的更外层不回滚（⛔ 别当 bug 去"修"）。
@@ -237,7 +237,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⭐ 同一个框还要"具体指出错在哪"〔复盘同上一节〕
   - 唯一出口 `Models/BatchSummaryDiagnosticsRules.Build`：`BatchProblemKind` 12 档（顺序=显示顺序）、`Severity` 与文字同一次调用；每组最多 3 个名字（其余「还有 K 个」）、只写文件名（§8）；全成功/空批不写；密码那组注脚必须带"可能"（⛔ 不许断言"就是密码问题"）。
   - 分组不新造第二套分类（只读状态常量/机器终态兜底 ⇒ 没做成的不会消失；`Succeeded` 且校验没判否的不进任何组）；补充数只取现成的（`ArchiveTask.SpaceBlocked`、`MissingVolumeNames`，⛔ 不重算）；⚠ 未做：色带+清单真机 GUI 没看过、第 3 条那句是上界（⛔ 不许改成"精确预测"）、中途提示只带第一个。
-- ⛔ **跟班卷（`CountsTowardBatchOutcome == false`）在三处消费点都不算"没做成"**：① 色带 `BatchSummarySeverityRules`；② 批末诊断 `BatchSummaryDiagnosticsRules`；③ 一键处理那一行汇总 `OneClickCoordinator.BuildSummaryLine`（"跳过"分成两档，跟班卷单列一句「另有 N 个是同一分卷组的后续卷 …… 按设计跳过（不是没做成）」）。真机第五报的日志里那行是「成功 6 / 失败 0 / **跳过 4**」，4 个全是后续卷 —— 用户会读成"还有 4 个没弄完"。
+- ⛔ **跟班卷（`CountsTowardBatchOutcome == false`）在三处消费点都不算"没做成"**：① 色带 `BatchSummarySeverityRules`；② 批末诊断 `BatchSummaryDiagnosticsRules`；③ 一键处理那一行汇总 `OneClickCoordinator.BuildSummaryLine`（"跳过"分成两档，跟班卷单列一句「另有 N 个是同一分卷组的后续卷 …… 按设计跳过（不是没做成）」）。
   - ⛔ `BuildSummaryLine` 里 **各分项之和 + 未处理 = 本次任务数** 这条恒等式不许破：跟班卷从"跳过"剔出去之后，`untouched` 必须把它减掉（否则凭空多出一个"未处理"）。用例 `BatchSummaryDiagnosticsTests.汇总那一行_跟班卷从跳过里剔出去_且恒等式不许破`。
   - ⛔ 同一行的 `notArchive`（"跳过的 N 个已由 7-Zip 确认不是压缩包"）也要排除跟班卷 —— 它跳过的理由不是"不是压缩包"。
 
@@ -247,87 +247,77 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - 卷名判据唯一出口 `ExtensionHelper.TrySplitVolumeSegment`（三处转调它）〔分卷名粘垃圾〕
   - ⛔ 老口径不许回退：另起一段的后缀（`x.7z.001.txt`/`x.001.bak`）不算分卷；纯数字尾巴（`0012`）不猜。
   - ⛔ 不许"一见 zip 成员就让位"：让位条件只看"目录里真有一片自述带盘号的跨盘 zip 末片"（`HasSpannedZipTailInDirectory`）。
-- ⛔ **三种分卷格式的"内容级自述能力"差得很远 —— ⛔ 不许当成一样**（用户 2026-10-01 追问「7z / rar / zip 假设都是一样的」，实测把它否掉了；用例 `VolumeContentProbeCapabilityTests`，真造 7z / zip / RAR 分卷各跑一遍）：
-
-  | 能不能判出… | 7z（`-v`） | ZIP（7-Zip `-tzip -v`） | ZIP（**PKZIP 跨盘**） | RAR（RAR4 新编号） |
-  |---|---|---|---|---|
-  | 是"这一组的一员" | ✗（内容里没有任何卷标记） | 首片 ✓（本地头）／中间·末片 ✗ | 首片 ✓（`PK\x07\x08`+本地头）／中间片 ✗ | **每一卷 ✓** |
-  | **是第 1 卷/首卷** | 只能靠魔数 `37 7A BC AF 27 1C`（⇒ 必是首卷，但探针不当字段输出） | ✗ | ✗（只到"成员"） | **✓（主头"首卷"位）** |
-  | **是第几卷** | ✗ | ✗ | ✗（非末片内容里没有盘号） | **✓（卷号写在内容里：0 基，实测 0/1/2/3）** |
-  | **是末卷** | ✗（靠"尺寸更小"或硬链接试开） | ✗（末片 EOCD 的盘号字段写的是 **0/0** —— 7-Zip 就这么写的） | **✓（EOCD 自述盘号；顺带给出总片数）** | ✓（卷号最大／无"还有下一卷"） |
-  | 总片数 | ✗（要靠尺寸规律算） | ✗ | **✓（末片 EOCD 的盘号 + 1）** | ✗（要看整组取最大卷号） |
+- ⛔ **三种分卷格式的"内容级自述能力"差得很远 —— ⛔ 不许当成一样**（实测否掉了"7z / rar / zip 一样"这个假设；逐格实测表见 `docs/真机事故复盘.md` §48.1；用例 `VolumeContentProbeCapabilityTests`，真造 7z / zip / RAR 分卷各跑一遍）：
 
   - ⇒ **定序能力**：RAR 靠内容就能定序（不需要名字）；PKZIP 跨盘 zip 只有 **2 片**能靠内容消去法定序（≥3 片的中间片顺序**只有名字能回答** —— `VolumeNumberFromContent.ResolveZipGroup` 里 `total > 2` 直接 `Refuse(ZipTooManyDisks)`，用户 2026-09-29 定的规矩）；7z 只能"尺寸排序候补 + 硬链接试开"。
   - ⛔ 别再写"三种格式一样"的代码或注释：`VolumeNumberFromContent` 的三个分支就是按这份表写的。
 - 缺卷补救：候选池只收"不是已识别的归档"的；⛔ 放宽的只是"敢不敢试"：成不成立只由 `VolumeProbeVerifier` 硬链接试开回答（⛔ 绝不复制大文件、不改用户文件）〔缺卷补救：第二次真机报〕
   - 头加密那一档也算肯定回答（`EngineErrorTypes.EncryptedHeaders`，结构化结论、不比文案）；单卷试开就报"加密归档" ⇒ 拒绝改名（它本身就是完整包）〔假绿复核：-mhe 两卷〕
-- 分卷组装判定器 `Detection/VolumeGroupResolver`：六条证据（基名/卷号连续/体积规律/物理同一性/位置推定/硬链接试开）+ 四档结论（`Complete`/`IncompleteMissingVolume`/`IncompleteSuspected`/`Undetermined`）+ 唯一可删出口 `CanEnterDeletableRestItems`（弱证据/判不出=false ⇒ 不删源、不移源）；跨盘或拿不到工作区根 ⇒ 不试开、降「判不出」（硬链接不能跨卷；⛔ 不许退到源卷根偷开工作区）；详见 `docs/分卷组装算法.md` §6.10/§6.11。
+- 分卷组装判定器 `Detection/VolumeGroupResolver`：六条证据（基名/卷号连续/体积规律/物理同一性/位置推定/硬链接试开）+ 四档结论（`Complete`/`IncompleteMissingVolume`/`IncompleteSuspected`/`Undetermined`）+ 唯一可删出口 `CanEnterDeletableRestItems`（弱证据/判不出=false ⇒ 不删源、不移源）；跨盘或拿不到工作区根 ⇒ 不试开、降「判不出」（⛔ 不许退到源卷根偷开工作区）；详见 `docs/分卷组装算法.md` §6.10/§6.11。
 - ✅ 带垃圾尾巴的组（`111.parts1.racr` 这种"另起一段的后缀"）交给 7-Zip 会报缺卷 ⇒ 由 `VolumeNameRepair` 在开工前改回标准名（只改名、不覆盖、判不出就不改）。
-- ⛔ **"本体干净、只有几个续卷被改坏"也要修**（用户 2026-10-01 第七报，`DDD` 那组 4 片跨盘 ZIP：本体 `222.zip` 标准名、续卷叫 `222.z0删1`/`222.z除02`/`222.z文03` ⇒ 7-Zip `Missing volume : 222.z01`、整包解不开；见 `docs/真机事故复盘.md` §41）：
+- ⛔ **"本体干净、只有几个续卷被改坏"也要修**（见 `docs/真机事故复盘.md` §41）：
   - 入口判据是 `IsVolumePartFileName(自己) || task.IsVolumeGroup`（⛔ 只看前面那一档就漏 —— `.zip` 是本体后缀、不是卷标记）；
   - 计划出口 `VolumeNameRepair.PlanDisguisedVolumesBesideStandardSelf`（排在"名字里得有卷号 / 必须是第 1 卷"那两道门**之前**）：按"去杂质后基名逐字相等"收兄弟、各改成 `基名.规范卷标记`；⛔ 卷标记必须互不相同、目标名一个都不许被占、只改名、全成或全不成；
   - ⚠ 计划的 `CurrentPath/TargetPath` 必须指向**真要改的那一卷**（指向已经标准名的本体会被 `TryApply` 判 `AlreadyStandard` 整份拒掉）。用例 `VolumeNameRepairTests`（5 条）。
   - ⚠ 遗留：**名字里完全没有卷号的 ≥3 片跨盘 ZIP** 仍判不出（内容路对 ZIP 只支持 2 片）—— 要真修得先有真样本。
-- ⛔ **跨盘 ZIP 的"专属算法"= 按归档自己的索引定盘 + 定不了就试拼**（用户 2026-10-01 真机 `FFF\111` 那一组 7 片、名字里一个卷号都没有；见 `docs/真机事故复盘.md` §42）：
-  - **索引定盘**（`Detection/SpannedZipIndex.cs`）：末片的中央目录每条都写着"本地头在**第几盘**、离那一盘开头多少字节" ⇒ 把候选当第 k 盘去那个偏移处验（`PK\x03\x04` + 文件名**逐字节**相等）。⛔ 不看名字、不用引擎、不用密码；三态分得很清 = **钉住 / 定不下来（那一盘内容里一个条目都没开始）/ 缺（有锚点却没人对得上，点名第几片）**。
-  - **试拼定序**（`VolumeProbeVerifier.VerifySpannedZipOrderAsync`）：定不下来的片只有"排列 + 让引擎真**测试**一遍"这一条路（⛔ 列目录验不出顺序 —— 中央目录在末片里、不看中间片的数据）。排列上限 **3 片（6 种）**，再多如实报"定不下来"；密码只在内存里、且"某次失败不是密码错"就记住它给下一个排列用。
-  - **入口第三档**：`NormalizeDisguisedVolumeNamesAsync` 的判据 = 名字带卷标记 **或** 账上归过组 **或** `VolumeNameRepair.HasSpannedZipTailNearby(自己)` —— 真机那一组**扫描期归组实测 0 组**、名字里也没有卷标记，少了第三档这套算法压根不会被问到。
-  - **「缺的是末片」诊断**：清一色满片 + 恰好一片开头是 `PK\x07\x08PK\x03\x04` ⇒ 结论是缺**末片**（`.zip`），由 `VolumeNameRepairPlan.SpannedTailMissing` 带出去写一行 INFO（用户要的"在引擎报缺卷之前就说清缺的是第几片"）。
-  - ⛔ **统一算法一个字没动，它是保底**：索引路不适用（不是跨盘 zip / 片数 < 3 / 候选对不上）时返回 `null` 原样往下走；判不出来只出结论、**一个字节不动**。
-  - ⛔ **两道"ZIP64 收尾"的旧闸门已经拆掉**（用户 2026-10-01 真机 `一只顶美.z删除ip`，26.6 GB 的 PKZIP 跨盘末片；见 `docs/真机事故复盘.md` §44.2）：**跨盘 zip 只要超过 4 GiB，偏移就放不进 32 位字段 ⇒ 生产者必然在"中央目录"与"EOCD"之间插一段 ZIP64 收尾（记录 56 + 定位器 20 = 76 字节）**。以前两处都不认它：
-    - `Detection/EmbeddedArchiveDetector` 的 `if (!hasZip64)` 把这一档**整档跳过**（那道闸门当年是为了躲一次越界，而 `TryEvaluateSplitZipTail` 后来改成全用绝对偏移读，越界早就不成立）⇒ 末片被报 `Unknown`；
+- ⛔ **跨盘 ZIP 的"专属算法"= 按归档自己的索引定盘 + 定不了就试拼**（见 `docs/真机事故复盘.md` §42）：
+  - **索引定盘**（`Detection/SpannedZipIndex.cs`）：末片的中央目录写着"本地头在**第几盘**、离盘开头多少字节" ⇒ 把候选当第 k 盘到那个偏移处验（`PK\x03\x04` + 文件名**逐字节**相等）。⛔ 不看名字、不用引擎、不用密码；三态 = **钉住 / 定不下来 / 缺（点名第几片）**。
+  - **试拼定序**（`VolumeProbeVerifier.VerifySpannedZipOrderAsync`）：定不下来的片只能"排列 + 让引擎真**测试**一遍"（⛔ 列目录验不出顺序）。排列上限 **3 片（6 种）**，再多如实报"定不下来"；密码只在内存里。
+  - **入口第三档**：`NormalizeDisguisedVolumeNamesAsync` 的判据 = 名字带卷标记 **或** 账上归过组 **或** `VolumeNameRepair.HasSpannedZipTailNearby(自己)`。
+  - **「缺的是末片」诊断**：清一色满片 + 恰好一片开头是 `PK\x07\x08PK\x03\x04` ⇒ 结论是缺**末片**（`.zip`），由 `VolumeNameRepairPlan.SpannedTailMissing` 带出去写一行 INFO。
+  - ⛔ **统一算法一个字没动，它是保底**：索引路不适用时返回 `null` 原样往下走；判不出来只出结论、**一个字节不动**。
+  - ⛔ **两道"ZIP64 收尾"的旧闸门已经拆掉**（见 `docs/真机事故复盘.md` §44.2）：**跨盘 zip 只要超过 4 GiB，生产者必然在"中央目录"与"EOCD"之间插一段 ZIP64 收尾（记录 56 + 定位器 20 = 76 字节）**。以前两处都不认它：
+    - `Detection/EmbeddedArchiveDetector` 的 `if (!hasZip64)` 把这一档**整档跳过** ⇒ 末片被报 `Unknown`；
     - `Detection/SpannedZipIndex` 要求"中央目录**正好**接在 EOCD 前面"⇒ 专属算法在真机大包上一枪不放。
-    ⇒ 后果链（真机实测）：末片被当**内容物**留下 → 同组 5 卷被当过程物收进其余物 → 一键扫描第 1 层「没有发现可继续解压的内层包」→ 链尾 ⇒ **其余物 5 项 25 GB 被整份永久删除**。⛔ 改完在真机残件上只读复核：`Unknown` → `ZIP_SPANNED`、索引读出 **250 个锚点 / 共 6 片**。
-  - ✅ **"其余物里的分卷是半套"这道保险已加**（2026-10-01，同日补）：判据唯一出口 `Extraction/RestVolumeCompletenessGate.DescribeBlocker`（公开纯函数）—— 其余物**顶层**每一个归档件算一个**包基名**，只要成品目录这一棵树里（其余物之外）还有**同基名的归档件**，就说明这一组被拆在两边 ⇒ **整份处理其余物等于毁掉这一组** ⇒ 什么都不做、写一行 WARN 点名两边。⛔ 只认"看起来是归档件"的东西（分卷片 / 已知归档后缀 / 去杂质后是归档后缀）：普通内容文件（`X.mp4`）与同名**目录**都不算伙伴 —— 包基名与内容文件名撞车是常态（`111\111\内容物`），拿它当伙伴会把正常清理全拦死。
-    - ⛔ 放在 `Storage/RestItemPurger.Purge` 里（第六道门槛），**不是**放在调用点：其余物的删除只有这一个执行体，三处调用（链尾 / 任务收尾 / 链尾清扫）都要过它。用例 `RestVolumeCompletenessGateTests`（6 条：半套必拦 + 整组/普通内容/同名目录/空其余物四种不许误拦）+ 接线用例 `DeleteOptionsClarityTests.其余物里是半套分卷_整份删除被拦下`；红检两条（撤判据 ⇒ 必拦那 2 条红、放行那 4 条照绿；撤接线 ⇒ 接线用例红）。
-- ⛔ **本地化界面的 UnRAR 列出的清单认不出来时，绝不许当成"这个包是空的"**（用户 2026-10-02 真机：日志里出现过「完整性：可证完整（…清单 0 个文件 / 0 字节…Expected=0;Actual=5）」—— **0 比 5，那句"对得上"是假的**，而这一档正是唯一允许搬走/永久删除源包的判据；同一份假清单还让**解压前的条目名预检静默失效**、`IsEncrypted` 被读成 false）。判据 = `UnRarListParser.ParsedListing.HeaderRecognized`（**见没见过 `Archive:` 这一行**；⛔ 不许用"认出了任意一个键"—— 中文输出里 `Pack-CRC32:` 照样匹配英文字典）；认不出 ⇒ `UnRarEngine.InterpretListing` 返 `ParserRejected`（既有"可换引擎"那一档）⇒ `EngineRouter` 改问 7-Zip（`-slt` 键名不随界面语言变），**解压仍优先 UnRAR**（退出码与错误分类不受本地化影响）。兜底两道：`LayerManifest.From` 与 `OutputVerifier.Verify` 把"成功但 0 个文件 0 字节"一律按**没有清单**办（`ManifestCrossChecked=false` ⇒ 判不出 ⇒ 什么都不做）〔本地化 UnRAR 的假清单〕
-- ⛔ **「密码已经证实」之后失败 = 数据层面，不许再试密码候选**（用户 2026-10-01 真机 `giu910`，19 GB 的 7z `-mhe`；用户原话「**为什么试了密码之后再去试一次，我说过要试密码的话要在最开始的时候，而不是解压完，这才 20G，大一点你这就是在浪费用户时间**」）：现场 = 候选 3 把整包解到 98%（13 分钟）、只死在一个 mp4 的 `CRC Failed in encrypted file`；老口径把这一句当成"这个候选不对" ⇒ **解压完又回去试候选 4..10**、13 分钟产物全扔、报「密码错误」。
+    ⇒ 这两道闸门合起来会让整个跨盘组被当过程物收进其余物、最终**整份永久删除**（真机后果链与只读复核的数字见 `docs/真机事故复盘.md` §48.1）。
+  - ✅ **"其余物里的分卷是半套"这道保险已加**：判据唯一出口 `Extraction/RestVolumeCompletenessGate.DescribeBlocker`（公开纯函数）—— 其余物**顶层**每个归档件算一个**包基名**；只要成品目录这一棵树里（其余物之外）还有**同基名的归档件**，就说明这一组被拆在两边 ⇒ 什么都不做、写一行 WARN 点名两边。⛔ 只认"看起来是归档件"的东西（分卷片 / 已知归档后缀 / 去杂质后是归档后缀）：普通内容文件（`X.mp4`）与同名**目录**都不算伙伴（包基名与内容文件名撞车是常态）。
+    - ⛔ 放在 `Storage/RestItemPurger.Purge` 里（第六道门槛），**不是**放在调用点：其余物的删除只有这一个执行体，三处调用（链尾 / 任务收尾 / 链尾清扫）都要过它。用例 `RestVolumeCompletenessGateTests`（6 条：半套必拦 + 整组/普通内容/同名目录/空其余物四种不许误拦）+ 接线用例 `DeleteOptionsClarityTests.其余物里是半套分卷_整份删除被拦下`；红检：撤判据 ⇒ 必拦那 2 条红、放行那 4 条照绿；撤接线 ⇒ 接线用例红。
+- ⛔ **本地化界面的 UnRAR 列出的清单认不出来时，绝不许当成"这个包是空的"**（这一档是唯一允许搬走/永久删除源包的判据；现场见 §48.4）。判据 = `UnRarListParser.ParsedListing.HeaderRecognized`（**见没见过 `Archive:` 这一行**；⛔ 不许用"认出了任意一个键"）；认不出 ⇒ `UnRarEngine.InterpretListing` 返 `ParserRejected` ⇒ `EngineRouter` 改问 7-Zip，**解压仍优先 UnRAR**。兜底两道：`LayerManifest.From` 与 `OutputVerifier.Verify` 把"成功但 0 个文件 0 字节"一律按**没有清单**办（`ManifestCrossChecked=false` ⇒ 判不出 ⇒ 什么都不做）〔本地化 UnRAR 的假清单〕
+- ⛔ **「密码已经证实」之后失败 = 数据层面，不许再试密码候选**（现场、用户原话与推演见 `docs/真机事故复盘.md` §48.4）：老口径把 `CRC Failed in encrypted file` 当成"这个候选不对" ⇒ **解压完又回去试剩下的候选**、已解出的产物全扔、报「密码错误」。
   - 判据唯一出口 `Extraction/ProducedContentGate`（**只数事实**：产物目录里**非空文件数 ≥ 2 且字节 > 0**）—— 「密码错」的签名是第一份数据就过不去（0 字节桩 / 至多一个文件），「密码对、个别文件坏」的签名是整个包基本都解出来了。
-    - ⛔ **两条跑解压的路都必须问它**：单层 `ExtractionCoordinator` 与递归 `RecursiveExtractor`。2026-10-01 第一版只接了单层那条，而真机 `giu910` 走的是**递归**那条（SingleChain）⇒ **用户当晚重跑一次，13 分钟又白扔一遍、还是报「密码错误」**（见 `docs/真机事故复盘.md` §44.1）。⛔ 判据只此一处，别再各写一份。
+    - ⛔ **两条跑解压的路都必须问它**：单层 `ExtractionCoordinator` 与递归 `RecursiveExtractor`（只接一条的代价见 `docs/真机事故复盘.md` §44.1）。⛔ 判据只此一处，别再各写一份。
   - 命中 ⇒ 两个分支（`WrongPassword` 与两义档 `PasswordOrCorrupted`）**当场 break**，收场落 `StatusText.PasswordProvenDataCorruptedFormat`（「文件损坏：密码已经证实是对的……换密码不会改变结果」）、`PasswordStatus=PasswordCorrect`、`Outcome=Failed`。
-  - ⛔ **保守边界不许放宽**：只解出一个文件 / 零字节桩 / 数不出来 ⇒ 一律按老口径**继续试候选**（"11 个候选只试了第 1 个"的坑）。用例 `ExtractionPipelineFixTests.解出了大半个包之后失败_不再当密码候选不对_也不再往下试候选` + 对照 `只解出一个文件时_仍按老口径继续试下一个候选`。
-  - ⚠ 缺口：那 13 分钟解出来的 557 个文件**仍然被丢弃**（完整性判不出 ⇒ 不发布）；"按「部分完成」发布已解出的内容"是**下一步**（动的是发布那条不可逆路径）。
-- ⛔ **日志导出不许落在"程序自己会整份删掉"的地方**（用户 2026-10-01 真机 `giu910`：导出落进了 `…\其余物\`）：他把上一轮被收进其余物的源包又跑了一遍 ⇒ 保存对话框默认开在"上次用过的文件夹"（= 其余物）。
+  - ⛔ **保守边界不许放宽**：只解出一个文件 / 零字节桩 / 数不出来 ⇒ 一律按老口径**继续试候选**。用例 `ExtractionPipelineFixTests.解出了大半个包之后失败_不再当密码候选不对_也不再往下试候选` + 对照 `只解出一个文件时_仍按老口径继续试下一个候选`。
+  - ⚠ 缺口：已解出的内容**仍然被丢弃**（完整性判不出 ⇒ 不发布）；"按「部分完成」发布"是**下一步**（动的是发布那条不可逆路径）。
+- ⛔ **日志导出不许落在"程序自己会整份删掉"的地方**：保存对话框默认开在"上次用过的文件夹" ⇒ 导出曾经落进 `…\其余物\`（现场见 `docs/真机事故复盘.md` §48.4）。
   - 判据唯一出口 `ProcessArtifactLayout.IsInsideDeletableProcessFolders`（其余物 / 旧名过程物 / `.ArchiveFixer.work`）。
   - `AppSettings.LastLogExportDirectory` **只**决定"下次对话框从哪开"（⛔ 不是默认导出位置、⛔ 不是自动行为）；命中上面那一档的目录**不记也不用作起始目录**（退回系统默认）。用例 `ExtractionPipelineFixTests.日志导出不记其余物和工作区这种会被删掉的目录`。
-- ⛔ **"是源包坏了还是程序坏了"有一个只读、免密码的判据**（用户 2026-10-01 真机 `giu910` 追问「CRC Failed … 这根本不应该啊」）：**读 7z 的 Start Header（32 字节，`-mhe` 也不加密）**——它自述 `NextHeaderOffset` + `NextHeaderSize`，加上 32 就是**整包应当有的字节数**；与实际各卷字节数一比，就知道**卷齐不齐**（`giu910` 那一单：自述 19,008,319,509 = 盘上四卷合计，差 0 ⇒ 卷齐、组对）。再配合三条事实——**能列出/解开大部分条目**（⇒ 密码对）、**`Sub items Errors: 1`**（⇒ 只有那一个条目坏）、**空间曲线没触底 + 没报"源文件已变化"**（⇒ 不是磁盘满、源没被改）——就能下结论：**是源包那一段字节坏了，不是程序**（程序对源包只读、产物全在工作区）。⚠ 唯一排除不掉的是"瞬时位翻转 / 引擎解错那一个文件"，验证办法 = **同一个包再跑一遍**（同处再失败 ⇒ 源包确实坏）。⇒ **"程序会不会写坏源包"的逐条只读审计在 `docs/真机事故复盘.md` §43**（七类碰源包的地方一个都不写字节 + 盘上 `LastWriteTime` 没翻新）。
-- ⚠ **「按部分完成发布已解出的内容」：用户 2026-10-01 明确"现在不做、以后要改"**（原话：「**不用，要不然空间不好弄**」+「**这个东西记住，以后我们肯定会修改的**」）。⇒ 现状不变：`giu910` 那 13 分钟解出来的 557 个文件仍然是**整份丢弃**（完整性判不出 ⇒ 不发布、源包原地不动）。⛔ 谁要动这一条，先看这一行 —— 用户要的改法是"以后"，且**必须先把空间账（峰值/预留/其余物）一起想清楚**（他自己点出的顾虑就是空间）。⇒ **要动之前先读 `docs/部分完成发布方案.md`**：那里把会撞上的 12 处既有判据逐条列了（发布闸门 / 落点套层 / 校验口径 / 终态报告 / 源包与其余物 / 空间账 / 续解链 / 同名冲突 / 清理 / 文案 / 红线用例 / 阈值），并给了三种口径与**要他拍板的三件事**（口径 A/B/C、阈值、过程物留删）。
-- ⛔ **「末卷更小」这条直觉被实测否掉了一半 —— 不许拿它当闸门**（用户 2026-10-01 提的那条规则）：真造样本逐个数字节：3 个 100 KB 的条目切成 64 KB 一片时盘上是 `.z01=65536 / .z02=65536 / **.zip=176532**`（**末片比满片大一倍多**）；20 × 40 KB 那一档末片才更小。⇒ 代码里只用**真成立的那一半**：**除末片外每一片彼此等大**（`SpannedZipIndex` 的候选池 = "满片尺寸的众数"），⛔ 不要求末片更小。
+- ⛔ **"是源包坏了还是程序坏了"有一个只读、免密码的判据**：**读 7z 的 Start Header（32 字节，`-mhe` 也不加密）**——它自述 `NextHeaderOffset` + `NextHeaderSize`，加上 32 就是**整包应当有的字节数**；与各卷字节数一比就知道**卷齐不齐**。再配上能列出/解开大部分条目、`Sub items Errors: 1`、空间曲线没触底 + 没报"源文件已变化"三条 ⇒ 结论是**源包那一段字节坏了，不是程序**。⚠ 排除不掉"瞬时位翻转 / 引擎解错那一个文件"，验证办法 = **同一个包再跑一遍**。⇒ 逐条只读审计见 `docs/真机事故复盘.md` §43。
+- ⚠ **「按部分完成发布已解出的内容」：用户明确"现在不做、以后要改"**（原话见 §48.3）。⇒ 现状不变：已解出的内容仍然**整份丢弃**（完整性判不出 ⇒ 不发布、源包原地不动）。⛔ 谁要动这一条，先看这一行 —— 用户要的改法是"以后"，且**必须先把空间账（峰值/预留/其余物）一起想清楚**。⇒ **要动之前先读 `docs/部分完成发布方案.md`**：那里把会撞上的 12 处既有判据逐条列了，并给了三种口径与**要他拍板的三件事**（口径 A/B/C、阈值、过程物留删）。
+- ⛔ **「末卷更小」这条直觉被实测否掉了一半 —— 不许拿它当闸门**：真造样本逐片数字节，实测它只成立一半（数字见 `docs/真机事故复盘.md` §48.1）。⇒ 代码里只用**真成立的那一半**：**除末片外每一片彼此等大**（`SpannedZipIndex` 的候选池 = "满片尺寸的众数"），⛔ 不要求末片更小。
 - ⛔ **一组分卷 = 一个任务 = 从首卷启动**（现场与根因见 `修改日志.md` 2026-10-01）：
   ① 整组改名在**批首**（`NormalizeDisguisedVolumeNamesForBatchAsync`，`ApplyBatchWorkspaceRoot` 之后 / 并发之前）；② 后续卷那一单落 `Skipped`（`SkipWhenAnotherTaskOwnsThisVolumeGroup` + `ArchiveTask.IsVolumeGroupFollower`）；③ 归组**只算不写**（`OneClickCoordinator.ResolveVolumeGroupFromDirectory`）且**只增不减**；④ 跟班**不进链尾裁决**（`DescribeChainVerificationGap` / `CompleteRootSourcePackagesAfterChainAsync`）。用例 `AaaReplayPipelineTests`。
-  - ⛔ **递归层里的一组分卷也算"一个内层归档"**（`RecursiveExtractor.IsSameGroupContinuationVolume`：**同目录 + 同包基名 + 是后续卷**三条同时成立 ⇒ 那一份归档自己的另一片）：不加这一条就会报「这一层里有 **1 个**内层归档（多分支）」并保守停住 —— 一键档白跑一轮、**手动档还问用户一个假问题**（用户 2026-10-02 真机 `1-6 电磁感应定律（1）`）。⚠ 只在递归 `SingleChain` 档走到这条判据（默认 `SingleLayer` 档压根不进，所以既有 45 条续解用例一条都没碰到它）。用例 `InnerLayerContinuationTests.单链模式_一层里是分卷组_…`（红检：撤判据 ⇒ `Rounds` 2→变红）〔分卷组不是多分支〕
-- ⛔ **"给目标找个不撞名的名字"必须把"本计划里已经排出去的名字"也算进去**（用户 2026-10-01 第六报，`BBBB`/`CCCC` 两批的内层包残留在内容物里；见 `docs/真机事故复盘.md` §39）：让位只问文件系统（`SafePathHelper.AutoRenameFilePath`）时，**同一份计划里两条同名文件会算出同一个目标名** —— 第一条搬成功、第二条撞 `already exists` 而**留在原地**（日志：「内层包没能移入其余物：… already exists.（它留在原地）」）。唯一写法与源包搬运逐字相同：`reserved` HashSet + `ProcessArtifactLayout.MakeUniqueTarget(..., reserved, probe)`，⛔ 永远不覆盖。
-  - 链尾收内层包的计划是纯函数 `ExtractionCoordinator.PlanChainInnerPackageMoves(rootTask, chainTasks, restDirectory, outputRoot, out warnings)`（抽出来就是为了测得动）；执行前**再看一眼**目标名（计划是几秒前算的）；用例 `ChainInnerPackageMovePlanTests`。
-  - ⛔ 「成品目录里还留着 N 个内层包没被清理」那句 `leftBehind` 警告，判据必须与搬运那一边**同一套**（`candidateSucceeded || rootSucceeded` 都不算"还留着"）—— 否则会出现"警告说还留着、下一行就搬走删掉"的自相矛盾（真机就是这样）。
-- ⛔ **"续解开 / 不开"只有一个开关，别到处找**（用户 2026-10-01 追问后的核查，见 `docs/真机事故复盘.md` §40）：`ExtractionCoordinator.cs:12718` 的 `Settings.RecursionMode != "SingleLayer"` —— 出厂默认档**不进递归核心**，走单层路径（内层包原样留着当**内容物**，继续解交给一键处理的轮次 / 手动「继续解」）；选了递归那两档才进 `RunRecursiveAsync`。⛔ `RunRecursiveAsync` 里那个 `AllBranches ? AllBranches : SingleChain` **不是缺陷**（红检证明那条分支到不了 —— 上游已经分流），别再去"修"它。
-  - 两条路各自谁清内层包：**不开续解** ⇒ 内层包是下一轮的**源包** ⇒ `SourcePackageMover.Plan`（`reserved` 早就有）；**开续解** ⇒ 内层包是**链上过程物** ⇒ `PlanChainInnerPackageMoves`（`reserved` 见上一条）。⇒ 撞名这一类缺陷两条路都堵住了。
+  - ⛔ **递归层里的一组分卷也算"一个内层归档"**（`RecursiveExtractor.IsSameGroupContinuationVolume`：**同目录 + 同包基名 + 是后续卷**三条同时成立）：不加这一条就会报「这一层里有 **1 个**内层归档（多分支）」而保守停住（现场见 `docs/真机事故复盘.md` §47）。⚠ 只在递归 `SingleChain` 档走到这条判据。用例 `InnerLayerContinuationTests.单链模式_一层里是分卷组_…`（红检：撤判据 ⇒ `Rounds` 2→变红）〔分卷组不是多分支〕
+- ⛔ **"给目标找个不撞名的名字"必须把"本计划里已经排出去的名字"也算进去**（见 `docs/真机事故复盘.md` §39）：让位只问文件系统（`SafePathHelper.AutoRenameFilePath`）时，**同一份计划里两条同名文件会算出同一个目标名** —— 第一条搬成功、第二条撞 `already exists` 而**留在原地**。唯一写法与源包搬运逐字相同：`reserved` HashSet + `ProcessArtifactLayout.MakeUniqueTarget(..., reserved, probe)`，⛔ 永远不覆盖。
+  - 链尾收内层包的计划是纯函数 `ExtractionCoordinator.PlanChainInnerPackageMoves(rootTask, chainTasks, restDirectory, outputRoot, out warnings)`；执行前**再看一眼**目标名；用例 `ChainInnerPackageMovePlanTests`。
+  - ⛔ 「成品目录里还留着 N 个内层包没被清理」那句 `leftBehind` 警告，判据必须与搬运那一边**同一套**（`candidateSucceeded || rootSucceeded` 都不算"还留着"）—— 否则会出现"警告说还留着、下一行就搬走删掉"的自相矛盾。
+- ⛔ **"续解开 / 不开"只有一个开关，别到处找**（见 `docs/真机事故复盘.md` §40）：`ExtractionCoordinator.cs:12718` 的 `Settings.RecursionMode != "SingleLayer"` —— 出厂默认档**不进递归核心**，走单层路径（内层包原样留着当**内容物**，继续解交给一键处理的轮次 / 手动「继续解」）；选了递归那两档才进 `RunRecursiveAsync`。⛔ `RunRecursiveAsync` 里那个 `AllBranches ? AllBranches : SingleChain` **不是缺陷**（红检证明那条分支到不了），别再去"修"它。
+  - 两条路各自谁清内层包：**不开续解** ⇒ 内层包是下一轮的**源包** ⇒ `SourcePackageMover.Plan`；**开续解** ⇒ 内层包是**链上过程物** ⇒ `PlanChainInnerPackageMoves`。⇒ 撞名这一类缺陷两条路都堵住了。
   - 用例 `ChainManifestCompletenessTests`：`默认档只解当前这一层_手动只解压时内层包原样留着` + 对照 `单链自动展开_同一份夹具手动只解压也要解到叶子层`（用**手动「只解压」**隔离掉轮次续解）。用户文档 `docs/使用说明.md` §10.1.0 有两张表的白话版。
-- ⛔ **改名之后，任务上每一处指向这个文件的旧路径都要改过来**（用户 2026-10-01 第四 / 第五报，400 MB 的 `222.z01` 连留三次的真根因；见 `docs/真机事故复盘.md` §38）：`RenameService.UpdateTaskRenameSuccess(task, oldPath, newPath)` 必须**同时**改 `CurrentPath` 与 `VolumePaths` 里那一项 —— 只改一条 ⇒ 账上留下一个"盘上已经不存在"的旧名字 ⇒ `ProcessArtifactLayout.SourcePackageMover.ResolveSourceGroup` 判"清单非空、却不含任务自己" ⇒ **整组搬运退化成只搬一份**，而日志只写"已把 1 个源包移入其余物"（用户要自己动手清剩下的）。
+- ⛔ **改名之后，任务上每一处指向这个文件的旧路径都要改过来**（见 `docs/真机事故复盘.md` §38）：`RenameService.UpdateTaskRenameSuccess(task, oldPath, newPath)` 必须**同时**改 `CurrentPath` 与 `VolumePaths` 里那一项 —— 只改一条 ⇒ 账上留下一个"盘上已经不存在"的旧名字 ⇒ `ProcessArtifactLayout.SourcePackageMover.ResolveSourceGroup` 判"清单非空、却不含任务自己" ⇒ **整组搬运退化成只搬一份**。
   - ⛔ **"清单够不够全"不许按条数比**（`SkipWhenAnotherTaskOwnsThisVolumeGroup` 的 `group.Volumes.Count > task.VolumePaths.Count`）：一条不存在的旧名字照样占一个位 —— 2 条 vs 2 条看着"没变多"，实际只有 1 条是真的。这条闸门只负责"账上真的只有 1 卷"那一档。
-  - ✅ **2026-10-02 收口**：`SourcePackageMover.ResolveSourceGroup` 那条"清单非空、却不含自己 ⇒ 降级成只搬自己一份"的**静默兜底已经改掉** —— 现在这一档**整组一份都不搬**（按红线「判不出 ⇒ 什么都不做」），计划里写明「任务账上的分卷清单里没有它自己（清单可能过期，例如改名之后没同步）—— 分卷组整组一律不搬，源包全部留在原地」，调用方那行日志会把它带出来（⛔ 不再静默、也不再"只搬一份、其余让用户自己清"）。用例 `SourcePackageMoverTests.计划_分卷清单非空却不含自己时_整组一份都不搬且说明原因`（红检：改回降级 ⇒ 变红）。⚠ **仍未修**：`ExtractionCoordinator` 里"内层包搬进其余物"那一处（原 `:2503-2510`）同样只改 `CurrentPath`，不改 `VolumePaths`。
-- ✅ **"去杂质之后是什么"只有一个出口**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`，用户 2026-10-01 真机 `222` 那一组）：
+  - ✅ **收口**：`SourcePackageMover.ResolveSourceGroup` 那条"清单非空、却不含自己 ⇒ 降级成只搬自己一份"的**静默兜底已经改掉** —— 现在**整组一份都不搬**（按红线「判不出 ⇒ 什么都不做」），计划里写明「任务账上的分卷清单里没有它自己（清单可能过期）」、源包全部留在原地。用例 `SourcePackageMoverTests.计划_分卷清单非空却不含自己时_整组一份都不搬且说明原因`（红检：改回降级 ⇒ 变红）。⚠ **仍未修**：`ExtractionCoordinator` 里"内层包搬进其余物"那一处（原 `:2503-2510`）同样只改 `CurrentPath`，不改 `VolumePaths`。
+- ✅ **"去杂质之后是什么"只有一个出口**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`；真机现场见 `docs/真机事故复盘.md` §48.1）：
   删掉**最多 2 个非数字字符**后若**唯一地**变成**已知归档后缀**才算（`222.zi删除p` / `222.zscip` → `zip`、
   `ra删除r` → `rar`、`7删除z` → `7z`；本来就干净、或删出来有歧义 ⇒ 一律不认）。它同时喂三个消费点：
   ① `VolumeGroupDetector.Analyze` 的"脏本体名 = 第 1 卷本体"（算分卷成员，但 `HasCanonicalName=false`，⛔ 不算名字标准）；
   ② `VolumeNumberFromContent.TryDeriveStem` 的基名（`222.zscip` → 基名 `222`，⛔ 不许产出 `222.zscip.zip` 这种脏基名）；
   ③ 判定器的**名字变体**一档（`VolumeGroupResolver.TryMatchVolumeVariant` + `VariantFilePaths`：去杂质后与某位规范名
-  逐字相等 ⇒ 是那一卷的另一个名字，算组成员、**不占独立卷号、不进推断清单**）。
+  逐字相等 ⇒ 算组成员、**不占独立卷号、不进推断清单**）。
   ⛔ 三条红线一个字没放宽：变体名字不标准 ⇒ `HasRenamedVolume=true` ⇒ **整组不许进可删的其余物**；
   ⛔ 老口径"脏的**分卷标记**（`.z删除01`）本来就认"照旧；⛔ 尺子只加在**归档本体**那一档上。
 - ⛔ **引擎这一趟写出来的东西不是过程物**（`ExtractionCoordinator.IsEngineOutputFile`，唯一事实来源 =
   `RecursionResult.FinalOutputPath` 指向的那一层产物目录）：定稿那两道分卷组闸门（组完整性 / 孤儿卷）**都要先问它**
-  —— 真机 `222` 那一单里 `222\222.zip` 是**引擎刚解出来的产物**（它旁边那一卷名字不标准），老判据把它当
-  "待续解的过程物"⇒ 整层作废、678 MB 产物一个字节没落地，日志还写着"解压成功 ｜ 校验通过"。
+  —— 引擎刚解出来的产物被老判据当成"待续解的过程物" ⇒ 整层作废、产物一个字节没落地，日志还写着"解压成功 ｜ 校验通过"（真机现场见 `docs/真机事故复盘.md` §48.3）。
   ⛔ 拿不到递归结果（预检那一档）⇒ 退回老判据，一个字不变。
 - ⛔ **跟班卷不在续解链上**（`ChainCompletionGate` 排除 `IsVolumeGroupFollower`）：一组分卷的后续卷那一单
-  **按设计**落 `Skipped`，链尾闸门若把它算成"链没跑完"⇒ **每一批都会被自己组里的跟班卷拦下**，
-  111 / 333 的其余物一个都删不掉（用户 2026-10-01 真机先看到的就是这个）。真·续解成员 `Skipped` 照旧拦。
+  **按设计**落 `Skipped`，链尾闸门若把它算成"链没跑完"⇒ **每一批都会被自己组里的跟班卷拦下**，其余物一个都删不掉。真·续解成员 `Skipped` 照旧拦。
 - RAR 命名：`Rar!\x1A\x07\x00`=RAR 1.5–4.x，⛔ 代码/注释/文案都不许写"这是 RAR3"；RAR5 有真样本（`H:` 两处 `-p` 包，签名 `52 61 72 21 1A 07 01 00`，只读不入库）；老式编号族 `.rar`/`.r00` 按设计不认〔真样本验收〕
 - ⛔ 验收规则（用户定）：必须真样本（或真机只读副本）跑通；合成样本通过 ≠ 问题解决；样本本体绝不进仓库、`H:` 原件只读，副本不在就跳过并说明〔验收规则：必须真样本跑通〕
 - 待修（还没做，别当成"已解决"）
-  - ✅ **「末卷更小」当独立证据：已做，而且实测纠正了一半**（用户 2026-10-01 提的规则）—— 现在用在两处：① `SpannedZipIndex` 的候选池（**满片尺寸 = 众数**，只有这个尺寸的文件才可能是中间片）；② 「**缺的是末片**」诊断（清一色满片 + 一片开头是跨盘标记 ⇒ 结论是缺 `.zip`，比含糊的「分卷缺失」准）。⛔ 但**没有**要求"末片更小"（实测它不总成立，见上面那条）。
-  - **跨目录找同组的卷：已做**（用户 2026-10-01 点名两次 + 两轮补充口径：「**归档自己所在目录的子目录**，这个也不能少」「**父文件夹和父文件夹的同级子文件夹**当中」「这种是小概率，一般都会放在一起」）。候选池唯一出口 `VolumeNameRepair.EnumerateVolumeCandidatesNearby`：**看** = 自己这一层 + 自己的直接子目录（这两块不过滤，与"同目录"老行为逐字一致）+ 父目录这一家（父目录本身 + 它的各直接子目录；这一块过 ≥ 16 KiB 粗筛 + 上限 500 份 / 200 个目录）；**不看** = 祖父及以上、孙目录、与这一家无关的目录（⛔ §8：不替用户满盘找文件；归档目录本身就是卷根时退化成"自己这一层 + 自己的子目录"）。
-    - ⛔ **光改名不够：散在两层目录里的卷必须"收进入口那一层"**（`BuildPlanFromOrder` 的目标目录 = **引擎要打开的那一卷**所在目录：跨盘 zip 是末片 `X.zip`、RAR/7z 是第 1 卷）—— 引擎找兄弟卷**只看入口文件旁边那一层**，散着放即使名字都对也解不开（实测 7-Zip 就是这样，合成样本上验过）。计划里记 `GatheredVolumes`（> 0 时日志明说"几卷散在别的文件夹里、已一并收进来"）。
+  - ✅ **「末卷更小」当独立证据：已做，而且实测纠正了一半** —— 现在用在两处：① `SpannedZipIndex` 的候选池（**满片尺寸 = 众数**，只有这个尺寸的文件才可能是中间片）；② 「**缺的是末片**」诊断（清一色满片 + 一片开头是跨盘标记 ⇒ 结论是缺 `.zip`，比含糊的「分卷缺失」准）。⛔ 但**没有**要求"末片更小"（实测它不总成立）。
+  - **跨目录找同组的卷：已做**（原话见 §48.1）。候选池唯一出口 `VolumeNameRepair.EnumerateVolumeCandidatesNearby`：**看** = 自己这一层 + 自己的直接子目录 + 父目录这一家（父目录本身 + 它的各直接子目录；这一块过 ≥ 16 KiB 粗筛 + 上限 500 份 / 200 个目录）；**不看** = 祖父及以上、孙目录、与这一家无关的目录（⛔ §8：不替用户满盘找文件；归档目录本身就是卷根时退化成"自己这一层 + 自己的子目录"）。
+    - ⛔ **光改名不够：散在两层目录里的卷必须"收进入口那一层"**（`BuildPlanFromOrder` 的目标目录 = **引擎要打开的那一卷**所在目录：跨盘 zip 是末片 `X.zip`、RAR/7z 是第 1 卷）—— 引擎找兄弟卷**只看入口文件旁边那一层**，散着放即使名字都对也解不开（实测 7-Zip 就是这样）。计划里记 `GatheredVolumes`（> 0 时日志明说"几卷散在别的文件夹里、已一并收进来"）。
     - ⛔ **只收同一盘上的**：任何一卷与目标目录不同卷 ⇒ **整组不改**（`VolumeRepairGatherAcrossVolumeFormat`）—— ⛔ 不跨盘搬、绝不复制大文件；"改了名却还是解不开"等于骗用户。
   - ✅ **跨盘 zip ≥3 片 + 中间片名字里没有任何卷号：已做**（见上面"专属算法"那条；真机 `FFF\111` 那一组就是它）。⚠ 仍未做的是**排列爆炸那一档**：定不下来的片 > 3（6 种排列）时如实报"顺序定不出来"，⛔ 不猜；且**加密的包必须手上有对的密码**才验得出顺序。
   - 完整加密包+名字末尾纯数字 → 被 7-Zip 当"通用分片" ⇒ 误诊「分卷缺失」（别在 `RawSplitStreamDetector` 里加"看名字猜"）。
@@ -335,21 +325,19 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - 7z 头部被压缩时读不出加密（`-p` 与不加密包 64 KiB 内逐字节同构；不引依赖/不调引擎 ⇒ 如实不报）
   - 7z `-mhe` 与 ZIP AES 没有真样本；跨盘 zip 中间片一律 Unknown
 - ✅ 加密判读=只读头/尾（RAR/ZIP/7z）：判据器 `Detection/{Rar,Zip,SevenZip}EncryptionReader`（词表 `ArchiveEncryptionState/Reading`，不调引擎/不引依赖）；唯一出口 `ArchiveDetectService.ApplyEncryptionVerdict`。
-  - RAR：RAR5 类型 4 ⇒ `-hp`、扩展区 `0x01` ⇒ `-p`；RAR 1.5–4.x 主头 `MHD_PASSWORD(0x0080)` ⇒ `-hp`、文件头 `LHD_PASSWORD(0x0004)` ⇒ `-p`。⚠ `ArchiveFlags` 的 `0x0004` 是 Solid、不是"有密码"（⛔ 别按记忆改）；多卷只看第 1 卷。
-  - ZIP：看中央目录通用位 bit0；⚠ `0x0800` 是 UTF-8 文件名标志、不是加密位；中央目录读不出 ⇒ 兜底第一个本地头，那一档只给"加密"或"不知道"，绝不说"没加密"。
-  - 7z：AES-256 coder（大端 `0x06F10701`）：`kEncodedHeader(0x17)`+AES ⇒ `-mhe`、`kHeader(0x01)`+AES ⇒ `-p`。
+  - 三种格式逐条判据（RAR 的 `MHD_PASSWORD(0x0080)` ⇒ `-hp` / `LHD_PASSWORD(0x0004)` ⇒ `-p`、ZIP 中央目录 bit0、7z `kEncodedHeader(0x17)`+AES ⇒ `-mhe` / `kHeader(0x01)`+AES ⇒ `-p`）见 `docs/真机事故复盘.md` §48.4。⚠ `ArchiveFlags` 的 `0x0004` 是 Solid、不是"有密码"（⛔ 别按记忆改）；多卷只看第 1 卷；⚠ `0x0800` 是 UTF-8 文件名标志、不是加密位；中央目录读不出 ⇒ 兜底第一个本地头，那一档只给"加密"或"不知道"，绝不说"没加密"。
   - ⛔ 读不出来一律"不知道"（`Unknown` ≠ `NotEncrypted`，⛔ 不猜、不误报）：7z 头被压缩、多卷 7z 只给第 1 卷、截断/布局不符。
   - ⛔ 分卷要进"可删的其余物"，必须先证明整组完整（缺卷 ⇒ 计划作废、什么都不动）〔真机 2026-09-30：25 GB 被误删〕
   - ⛔ `CRC Failed in encrypted file` 不许单独定原因（"密码错"与"数据坏"同一句，`Item37SafetyTests` 钉着）；结论必须带出 7-Zip 原话〔真机 2026-09-30〕
   - ⛔ RAR 两义句：错密码 = **退出码 3** + 「校验和错误。文件已损坏或密码错误。」（中英同句，正确密码 0）⇒ 判据 = 退出码 3 + `Detection/RarEncryptionReader` 判"不是明确没加密"（⛔ 不比中文）落 `EngineErrorTypes.PasswordOrCorrupted`，候选循环**继续试下一个**；**非加密包退出码 3 仍是「文件损坏」**。
   - 用例 `{Rar,Zip,SevenZip}EncryptionReaderTests`；真样本 3 条走 `ARCHIVEFIXER_REAL_ENCRYPTION_{7Z,ZIP_PLAIN,RAR}`〔加密识别扩到 ZIP 与 7z〕
-  - ✅ 内嵌 ZIP 也接了加密判读（2026-10-01）：`BuildEmbeddedResult` 原来**写死 `IsProbablyEncrypted = false`** —— 那是**误报"没加密"**（比"不知道"还糟：下游按"不用密码"排任务）；现在读直读探针的 `RequiresPassword`（= 里面是 AES 条目、这次没给候选密码）。用例 `EmbeddedZipStreamTests.内嵌的AES_ZIP_要如实报加密_普通的不许误报`（含"普通内嵌 ⛔ 不许被误报成加密"的对照）。
-- ✅ 识别提速：① `Detection/DetectResultCache`：结论按（字节数+修改时间+头指纹+尾指纹）缓存；② `TailArchiveScanner` 改按 `IndexOfAny` 跳候选首字节。⛔ 识别结论一个字都不许变（逐字段对照"开/关缓存"两跑）、缓存不含 RAR 加密标志（每次现算）、修改时间进键（不变量 11）。用例 `DetectResultCacheTests`+`TailArchiveScannerBoundaryTests`〔识别提速〕
+  - ✅ 内嵌 ZIP 也接了加密判读：`BuildEmbeddedResult` 原来**写死 `IsProbablyEncrypted = false`** —— 那是**误报"没加密"**（比"不知道"还糟）；现在读直读探针的 `RequiresPassword`（= 里面是 AES 条目、这次没给候选密码）。用例 `EmbeddedZipStreamTests.内嵌的AES_ZIP_要如实报加密_普通的不许误报`（含"普通内嵌 ⛔ 不许被误报成加密"的对照）。
+- ✅ 识别提速：① `Detection/DetectResultCache`：结论按（字节数+修改时间+头指纹+尾指纹）缓存；② `TailArchiveScanner` 改按 `IndexOfAny` 跳候选首字节。⛔ 识别结论一个字都不许变、缓存不含 RAR 加密标志（每次现算）、修改时间进键（不变量 11）。用例 `DetectResultCacheTests`+`TailArchiveScannerBoundaryTests`〔识别提速〕
 
 ### 11.5 管线（落点/弹窗/校验/显示/密码）
 
 - ⛔ 落点最少两层文件夹：最外层=包名目录、最里层=最后一个内层包层，⛔ 塌缩/不套层分支不许吃掉最里层；省层只能省中间的内层包层，⛔ 普通文件夹永不摊平（唯一出口 `Extraction/PackageLayerRules.cs`；递归=就地替换）
-- ⛔ **展开恰好一层时，L3 预期取"这一层解压前就列过的那份清单"**（`ChainManifestResolver.Resolve`：`knownList` → **本层清单** → 才现问引擎）：递归那条路的调用方给"现问"传的是**空密码**，`-mhe` / `-hp` 的包**必然**问不出来 ⇒「完整性：无法确认」⇒ 链尾拒删 ⇒ 其余物留在用户目录里（用户 2026-10-02 真机 `1-6 电磁感应定律（1）`）。用例 `ChainManifestResolverTests`(5) + `ChainManifestCompletenessTests.形状6_单层加密头包_…`（红检 2 红）〔其余物为什么不删〕
+- ⛔ **展开恰好一层时，L3 预期取"这一层解压前就列过的那份清单"**（`ChainManifestResolver.Resolve`：`knownList` → **本层清单** → 才现问引擎）：递归那条路的调用方给"现问"传的是**空密码**，`-mhe` / `-hp` 的包**必然**问不出来 ⇒「完整性：无法确认」⇒ 链尾拒删 ⇒ 其余物留在用户目录里（现场见 `docs/真机事故复盘.md` §47）。用例 `ChainManifestResolverTests`(5) + `ChainManifestCompletenessTests.形状6_单层加密头包_…`（红检 2 红）〔其余物为什么不删〕
 - 落点模型 v2：判据出口三处——`OutputPlacement.ResolveDestinationDirectory`（落点）、`OneClickCoordinator.ShouldAddContinuationLevelLayer`（续解层）、`ResultFinalizer.Plan(..., suppressPackageFolderLayer:)`（定稿套层）；契约 `docs/输出与整理模型.md` §1.1/§3.1/§3.3.1〔落点模型 v2〕
 - ⛔ **落点这一档是"记忆"的：用户上回选的那一档，下次打开就是那一档**（用户 2026-10-01：「要不然每次解压都要点击一下未选择指定位置」；现场见 `docs/真机事故复盘.md` §38.5）。两条口径：
   - 一键处理确认框 → `Confirmed` 之后**一律** `SaveOneClickOptionsAsDefaults`（记忆范围只有面板上看得见的那几档；⛔ 取消 / 没弹框时一个字节都不写）；面板初值 = `OneClickRunOptions.FromSettings(settings, _vm.SelectedOutputDirectory)`。
