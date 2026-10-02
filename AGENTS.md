@@ -207,7 +207,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2322 条（2319 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2323 条（2320 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -223,6 +223,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⛔ 源包不许算两遍：唯一出口 `TaskSpaceEstimate.FreeSpaceDemandBytes`=`ContentBytes+ProcessArtifactBytes`（`ScheduledExtractionItem.RequiredBytes` 与 `ExtractionCoordinator.ReconcileReservation` 都只读它）；`PeakBytes`（含源包）只作描述，⛔ 不许拿它比可用空间〔源包不许算两遍（2026-09-29）〕
 - 「空间不足」模式（`MainViewModel.SpaceTightMode`：运行期开关、不写盘、不记忆）一个布尔管四件事：并发（`ExtractionScheduler.ResolveSpaceTightParallelCount` 与「最大并发解压数」取小）、排序、其余物强制 `Delete`、定稿+校验通过后当场永久删源包（`PurgeSourcePackageForSpaceTight`=`SourceCleanupService` 唯一调用点）〔空间不足模式〕
 - 「不删原包」安全档（`MainViewModel.SpaceTightKeepSource`）测试期专用：⛔ 发行那轮整块删掉；`SpaceTrendMonitor` 保留〔安全档「不删原包」〕
+- ⛔ **「启动前空间不够」不是终态，只是"现在排不上"**（用户 2026-10-02 真机：14 个任务里 6 个白没做；见 `docs/真机事故复盘.md` §45.1）：并发 8 时账本里"已经在跑的任务预留"会把整块盘许光（35.11 GiB / 可用 35.86 GiB），于是第 9 个包自己只要 851.45 MiB 也被判「还差 9.77 MiB」。⇒ 拒下的任务进"等空间"名单（**不记失败、不改状态**，只写一行 INFO），**每跑完一个任务就重试一遍**；没人跑了才走 `MarkSpaceBlocked` 如实报。⛔ 两条铁律：**补跑环必须与"等所有任务结束"写在同一个环里**（写在它之后 ⇒ `runningTasks` 已空、一次都不进）；**每跑完一个要当场 `RefreshAvailable` 重探一次**（账本平时 5 秒一针，而释放预留是立刻发生的）。放行判据仍然只有 `TryReserve` 一个，一个字没放宽。用例 `SpaceTightModeTests.启动前空间不够_先排队不记失败_等腾出空间后自动补跑`（红检：改回 `MarkSpaceBlocked + continue` ⇒ 变红）。
+- ⛔ **多层递归：每一层开头都要把进度基准拉回来**（用户 2026-10-02：「解压完成到真正的解释有个 8 分钟的差距」；同 §45.2）：进度条记的是"引擎最后一次报的百分比"，第 0 层结束时是 100%，第 1 层从头开始却没有任何一帧拉回基准 ⇒ 那一层跑多久界面就停在 100% 多久（真机 4 分 34 秒、日志一条进度都没有）。⇒ `RecursiveExtractor.ExtractLayerAsync` 每层开头合成一帧 `Percent=0`、当前条目写「第 N 层：<内层包名>」。⛔ 只补这一帧，引擎报的数一个都不改。
 - 空间回收的五条口径（⛔ 别按旧口径改回去）〔空间回收与批末汇总〕
   1. 多层链每一层各删各的：判据排在 `task.IsContinuationTask` 之前（峰值 ≈ 两倍单层）。
   2. 某一层失败只影响那一层：失败层源包留着，已收走的更外层不回滚（⛔ 别当 bug 去"修"）。

@@ -926,6 +926,101 @@ namespace ArchiveFixer.Tests
                 " ｜ ",
                 harness.Log.Logs.Select(entry => entry.Level + ":" + entry.Message));
 
+        /// <summary>
+        /// **启动前空间不够 ≠ 这个任务没做成**（用户 2026-10-02 真机：14 个任务里 6 个白没做）。
+        ///
+        /// <para>现场：并发档 8、盘上 35.86 GiB 可用，前 8 个一开跑，"已经在跑的任务预留"就顶到 35.11 GiB；
+        /// 第 9 个包自己只要新写 851.45 MiB，却被判「还差 9.77 MiB」**当场记成失败**。
+        /// 那 8 个要跑 30 多分钟、其间陆续把预留放出来（最大的一个一个人就放开 15.71 GiB），
+        /// 可被拒的 6 个再也没人回头看 —— 批末报「失败 6」，那 6 个视频一个都没解。</para>
+        ///
+        /// <para>判据上的错：**"此刻空间不够"是一个会变的瞬时事实，不是终态。**
+        /// 所以拒下的任务要排队等空间，等有任务跑完（预留释放）再重试；
+        /// 一直等到没人跑、空间不会再变多，剩下那些才如实报「空间不足」。</para>
+        ///
+        /// <para><b>红检</b>：把那条"排队"改回 `MarkSpaceBlocked(...) + continue` ⇒ 本用例立刻变红
+        /// （第二个任务落成失败、日志里出现「空间不足，未解压」）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 启动前空间不够_先排队不记失败_等腾出空间后自动补跑()
+        {
+            Harness harness = CreateHarness(settings => settings.MaxParallelExtractCount = 2);
+
+            /*
+             * 假盘：一开始只剩 210 MiB —— 够第一个包（200 MiB），两个一起就不够了。
+             * 过 50 ms 之后盘上"腾空"（真机里就是那个 15.71 GiB 的大包跑完放开空间）。
+             *
+             * ⚠ 启动前那道门的需求是**按源文件大小**粗估的（那时还没列目录），所以这里必须真有一个
+             * 200 MiB 的源文件 —— `SetLength` 只改文件长度、不写数据，落盘代价很小。
+             */
+            const long twoHundredMiB = 200L * 1024 * 1024;
+
+            DateTime started = DateTime.UtcNow;
+            harness.Coordinator.SpaceProbeOverride = _ =>
+                DateTime.UtcNow - started > TimeSpan.FromMilliseconds(200)
+                    ? 2L * 1024 * 1024 * 1024
+                    : 210L * 1024 * 1024;
+            harness.Coordinator.SpaceReserveOverride = 0;
+
+            string folderA = Path.Combine(_root, "排队-甲");
+            string folderB = Path.Combine(_root, "排队-乙");
+            Directory.CreateDirectory(folderA);
+            Directory.CreateDirectory(folderB);
+
+            foreach (string path in new[]
+                     {
+                         Path.Combine(folderA, "aaa.7z"),
+                         Path.Combine(folderB, "bbb.7z")
+                     })
+            {
+                using FileStream source = File.Create(path);
+                source.SetLength(twoHundredMiB);
+            }
+
+            ArchiveTask first = await harness.ScanFolderAndAddTask(folderA);
+            ArchiveTask second = await harness.ScanFolderAndAddTask(folderB);
+
+            harness.Engine.OnExtract = request =>
+            {
+                if ((request.ArchivePath ?? string.Empty).EndsWith("aaa.7z", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 第一个包慢慢跑：第二个包就是在"它在跑、盘上没有余量"的那一刻被评估的。
+                    Thread.Sleep(400);
+                }
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            string dump = string.Join(
+                " ｜ ",
+                harness.Log.Logs
+                    .Select(x => x.Level + ":" + x.Message)
+                    .Where(m => m.Contains("空间", StringComparison.Ordinal)
+                        || m.Contains("排队", StringComparison.Ordinal)
+                        || m.Contains("腾出", StringComparison.Ordinal)
+                        || m.Contains("汇总", StringComparison.Ordinal)
+                        || m.Contains("顺序 ", StringComparison.Ordinal)
+                        || m.Contains("失败", StringComparison.Ordinal)));
+
+            File.WriteAllText(
+                Path.Combine(Path.GetTempPath(), "archivefixer-space-queue-test.log"),
+                string.Join(Environment.NewLine, harness.Log.Logs.Select(x => x.Level + ":" + x.Message)));
+
+            // 先看"排队"这条路有没有被走到（没走到就说明空间门压根没拦，测试的假盘设歪了）。
+            Assert.True(
+                harness.Log.Logs.Any(x => x.Message.Contains("先排队等空间", StringComparison.Ordinal)),
+                dump);
+
+            // 两个都做成了 —— 第二个是"等腾出空间后补跑"的那一个。
+            Assert.True(first.Outcome == TaskOutcome.Succeeded, dump);
+            Assert.True(second.Outcome == TaskOutcome.Succeeded, dump);
+
+            Assert.Contains(harness.Log.Logs, x => x.Message.Contains("腾出空间了，现在补跑它", StringComparison.Ordinal));
+
+            // ⛔ 一个都不许落到「空间不足，未解压」那一档。
+            Assert.DoesNotContain(harness.Log.Logs, x => x.Message.Contains("空间不足，未解压", StringComparison.Ordinal));
+        }
+
         private Harness CreateHarness(Action<AppSettings>? configure = null)
         {
             string dataRoot = Path.Combine(_root, "data");

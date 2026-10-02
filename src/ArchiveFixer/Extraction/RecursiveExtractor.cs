@@ -775,6 +775,25 @@ namespace ArchiveFixer.Extraction
 
             options.Normalize();
 
+            /*
+             * ===== 每一层开头先报一帧"本层 0%"（用户 2026-10-02 真机）=====
+             *
+             * 现场：`P.7z.001` 第 0 层到 100% 之后，界面**停在 100% 一动不动**，
+             * 直到 4 分 34 秒后整条链才结束 —— 那 4 分半其实是在解内层包（`P.ra` → 2735 个文件）。
+             * 用户的原话是"解压完成到真正的解释有个 8 分钟的差距，这个会比较影响用户使用"。
+             *
+             * 成因：进度条记的是"引擎最后一次报的百分比"，而第 0 层结束时它是 100%；
+             * 第 1 层从头开始时没有任何一帧把基准拉回来，于是那一层跑多久、界面就停在 100% 多久。
+             * 所以每一层进来先合成一帧 Percent = 0（当前条目换成本层的说明）：
+             * 进度条从这一层重新起算，日志里也会多一行「进度 0%（当前：第 N 层 …）」。
+             * ⛔ 只补这一帧，引擎报的进度一个数都不改。
+             */
+            progress?.Report(new ArchiveProgress
+            {
+                Percent = 0,
+                CurrentEntry = $"第 {item.Depth} 层：{Path.GetFileName(item.ArchivePath)}"
+            });
+
             IReadOnlyList<string> candidates = BuildPasswordCandidates(item.ArchivePath);
 
             int attempts = 0;

@@ -311,6 +311,12 @@ namespace ArchiveFixer.Tests
         /// 中途真撞上空间不足：一键档弹**一次**纯提示（非模态、一个按钮、不阻塞后续任务），
         /// 后面同样被拦下的任务**不再弹**（用户："同一批只弹一次（合并计数）"）。
         ///
+        /// <para>⚠ 2026-10-02 改过场景：以前这里是"3 个 2000 字节的包 + 盘上 3000 字节"，
+        /// 靠"后两个被拦下"来触发提示 —— 可那两个包**自己单独放得下**，按现在的口径会排队等空间、
+        /// 等前面跑完就补跑成功（那正是用户 2026-10-02 真机报的缺陷：6 个包白没做）。
+        /// 所以现在用**两个真正放不下的包**（各 5000 字节 > 盘上 3000 字节）——
+        /// 这才是"空间不足"本身，提示与终态都该出现。</para>
+        ///
         /// <para>判据读的是 <see cref="DialogService.FallbackLog"/>：测试宿主没有 WPF 界面，
         /// 通知型对话框在那里降级成一条记录 —— 弹了几次、弹的是哪一类框都看得见
         /// （与既有 <c>SpaceTightModeTests</c> 同一套做法）。</para>
@@ -320,17 +326,17 @@ namespace ArchiveFixer.Tests
         {
             DialogService.ClearFallbackLog();
 
-            Harness harness = CreateHarness();
+            Harness harness = CreateHarness(availableBytes: 3000);
 
-            string[] sources = Enumerable.Range(0, 3)
-                .Select(i => harness.CreateSource($"pack-{i}.7z", 2000))
+            string[] sources = Enumerable.Range(0, 2)
+                .Select(i => harness.CreateSource($"pack-{i}.7z", 5000))
                 .ToArray();
 
             await harness.AddTasksAsync(sources);
 
             await harness.OneClick.RunPipelineAsync(harness.Vm.Tasks.ToList());
 
-            // 三个包、可用空间只够一个 → 后两个被空间门拦下。
+            // 两个包各自都比整块盘大 → 谁都排不上，终态就是「磁盘空间不足」。
             Assert.Contains(
                 harness.Vm.Tasks,
                 task => task.Status == StatusText.DiskSpaceInsufficient);
@@ -352,16 +358,18 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// 手动档**照旧只写日志**（用户原话："手动档照旧"）：他坐在屏幕前，任务状态当场变红，
         /// 不需要再飘一个非模态窗口。
+        ///
+        /// <para>⚠ 场景同 <see cref="中途空间不足_一键档只弹一次纯提示"/>（2026-10-02 改）：用真正放不下的包。</para>
         /// </summary>
         [Fact]
         public async Task 中途空间不足_手动档照旧只写日志()
         {
             DialogService.ClearFallbackLog();
 
-            Harness harness = CreateHarness();
+            Harness harness = CreateHarness(availableBytes: 3000);
 
-            string[] sources = Enumerable.Range(0, 3)
-                .Select(i => harness.CreateSource($"pack-{i}.7z", 2000))
+            string[] sources = Enumerable.Range(0, 2)
+                .Select(i => harness.CreateSource($"pack-{i}.7z", 5000))
                 .ToArray();
 
             await harness.AddTasksAsync(sources);

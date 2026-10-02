@@ -382,7 +382,22 @@ namespace ArchiveFixer.ViewModels
 
                     try
                     {
-                        await _archiveDetectService.ApplyDetectResultAsync(task, _operationCts.Token);
+                        /*
+                         * ===== 识别整段挪到线程池（用户 2026-10-02 真机：「导入的文件比较多，一开始就卡死，
+                         * 未响应有一分多钟」）=====
+                         *
+                         * 识别一次要做三件 CPU 密集的事：解析文件头、**扫尾部**（认不出格式时要顺序扫到 512 MiB）、
+                         * 加密判读（读头/尾再解析结构）。它们过去全都跑在**调用方线程**上 —— 而调用方就是 UI 线程，
+                         * 只有里面的文件 I/O 是 await 出去的。于是每读一个文件、UI 就卡一段；
+                         * 几百个文件排队走完，界面上就是"未响应"。
+                         *
+                         * 放进 `Task.Run` 之后：`await` 一返回就**自动回到 UI 线程**（捕获的同步上下文），
+                         * 所以下面那些碰 `Tasks` 集合的动作（并组、写日志、刷汇总）照旧在 UI 线程上做。
+                         * ⛔ 识别结论一个字都没改，只是换了个线程去算。
+                         */
+                        await Task.Run(
+                            () => _archiveDetectService.ApplyDetectResultAsync(task, _operationCts.Token),
+                            _operationCts.Token);
 
                         // 「首卷补齐后并组」：这一行若是"只有后续卷"，而它的首卷就在列表里 → 并入首卷那一行。
                         MergeLaterVolumeIntoFirstVolumeRow(task);

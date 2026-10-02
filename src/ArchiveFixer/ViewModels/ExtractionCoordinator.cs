@@ -9637,6 +9637,24 @@ namespace ArchiveFixer.ViewModels
                 int throttledTasks = 0;
                 bool throttleExplained = false;
 
+                /*
+                 * ===== 空间门拒了 ≠ 这个任务没做成（用户 2026-10-02 真机，14 任务里 6 个白没做）=====
+                 *
+                 * 现场：14 个任务、并发档 8、盘上 35.86 GiB 可用。前 8 个一开跑，账本里"已经在跑的任务
+                 * 预留"就顶到 35.11 GiB（那 8 个各自的全额需求之和本来就接近整块盘）—— 于是第 9 个包
+                 * 哪怕自己只要新写 851.45 MiB，也被判「还差 9.77 MiB」**当场记成失败**。
+                 * 那 8 个要跑 30 多分钟，其间陆续跑完、把预留一笔笔放出来（最大的那个一个人就放开 15.71 GiB），
+                 * 可被拒的那 6 个**再也没人回头看它们**：批末报「失败 6」、诊断「磁盘空间不足：6 个」。
+                 *
+                 * 判据上的错在哪：**"此刻空间不够"是一个会变的瞬时事实，不是一个终态**。
+                 * 所以拒下的任务进这张名单**等空间**，等有任务跑完（预留释放）再按原顺序（小→大）重试；
+                 * 一直等到没人跑、空间不会再变多为止，剩下那些才如实报「空间不足」。
+                 *
+                 * ⛔ 两条不变：① 排队**不占并发位**（不会因为排队把盘跑满）；
+                 * ② 真正开跑前仍然要过账本（`TryReserve`），**放行判据一个字没放宽**。
+                 */
+                var spaceWaiting = new List<(ArchiveTask Task, ScheduledExtractionItem Item, SpaceGateDecision Gate)>();
+
                 foreach (ScheduledExtractionItem item in plan.Ordered)
                 {
                     ArchiveTask task = item.Task;
@@ -9764,7 +9782,27 @@ namespace ArchiveFixer.ViewModels
 
                     if (!gate.Allowed)
                     {
-                        MarkSpaceBlocked(task, item, gate);
+                        /*
+                         * 不记失败、不改任务状态 —— 先挂进"等空间"名单（见上面那段说明）。
+                         * 只写一行 INFO 说清"它在等什么"，用户才不会以为这个包已经被判死刑了。
+                         */
+                        spaceWaiting.Add((task, item, gate));
+
+                        AppendLog(
+                            "INFO",
+                            $"{task.FileName}：现在空间不够（{gate.Reason}）—— 先排队等空间，"
+                            + "等已经在跑的任务收尾把预留放出来就自动补跑（不是失败，也不会漏掉它）。");
+
+                        /*
+                         * 「中途撞上空间不足」那一次纯提示**照旧当场发**（用户 2026-09-29 第 2 条：
+                         * 一键档弹一次、后面被拦下的不再弹；手动档只写日志）。
+                         *
+                         * 为什么不挪到批末"确实排不上"那一刻再发：那一刻整批已经结束了，
+                         * 用户坐在屏幕前等着的时候**什么都不知道** —— 而这条提示的全部意义就是
+                         * "现在告诉你一声，别干等"。排队不等于没空间不足，这一条该说还得说。
+                         */
+                        NotifySpaceBlockedOnce(task, item.RequiredBytes, gate.AvailableBytes, gate.ShortfallBytes);
+
                         continue;
                     }
 
@@ -9774,12 +9812,85 @@ namespace ArchiveFixer.ViewModels
                     runningTasks.Add(RunScheduledTaskAsync(task, oneClickRun, runtime));
                 }
 
-                // 等待所有已启动的任务结束（包括“停止后续”后仍在运行的任务）。
+                /*
+                 * ===== 等待所有已启动的任务结束 + **等空间的补跑环**（用户 2026-10-02 真机）=====
+                 *
+                 * 两件事必须在**同一个环**里做，这是踩过一次才定下来的：补跑环如果写在"等所有任务结束"
+                 * **之后**，轮到它时 `runningTasks` 已经空了 —— 那个 `while` 一次都不进，
+                 * 被拒的任务照样在批末被记成「空间不足」（红检现场：用例里第二个包一直是"未处理"）。
+                 *
+                 * 规则：**每跑完一个任务就重试一遍等待名单**（它一收尾就把预留放出来了，空间是真变多了）；
+                 * 只要还有人在跑，空间就还可能变多，就继续等。没人跑了 ⇒ 空间不会再变多 ⇒ 剩下的如实报。
+                 *
+                 * ⛔ 三点纪律：① 重试仍然走同一个 `TryReserve`（放行判据一个字没放宽）；
+                 * ② 名单里的任务**不占并发位**，只有真排上了才进 `runningTasks`；
+                 * ③ 用户点「停止后续」⇒ 立刻停（剩下的照旧什么都不做、如实落状态）。
+                 */
                 while (runningTasks.Count > 0)
                 {
                     Task finished = await Task.WhenAny(runningTasks);
                     runningTasks.Remove(finished);
                     await finished;
+
+                    if (IsStopping || _operationCts.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    if (spaceWaiting.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * 刚跑完一个任务 ⇒ **当场再探一次可用空间**，再拿它重试等待名单。
+                     *
+                     * 账本平时由空间侦察每 5 秒刷一针；可"任务收尾把预留放出来"这件事是**立刻**发生的，
+                     * 如果这里不重探，补跑环会拿着 5 秒前的旧数字白等一轮（真机上就是"明明跑完了一个大包、
+                     * 空间已经回来了，那个小包还在等"）。
+                     */
+                    _spaceLedger.RefreshAvailable(ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)));
+
+                    for (int i = 0; i < spaceWaiting.Count;)
+                    {
+                        if (runningTasks.Count >= maxParallel)
+                        {
+                            break;   // 并发位又满了：等下一轮（跑完一个再来看）
+                        }
+
+                        (ArchiveTask waitingTask, ScheduledExtractionItem waitingItem, SpaceGateDecision waitingGate) = spaceWaiting[i];
+
+                        SpaceGateDecision retry = _spaceLedger.TryReserve(
+                            waitingItem.RequiredBytes,
+                            waitingItem.Estimate.ReclaimableBytes);
+
+                        if (!retry.Allowed)
+                        {
+                            i++;
+                            continue;
+                        }
+
+                        ScheduledTaskRuntime waitingRuntime = GetOrCreateRuntime(waitingTask);
+                        waitingRuntime.ReservedBytes = retry.ProbeFailed ? 0L : waitingItem.RequiredBytes;
+                        waitingRuntime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
+
+                        spaceWaiting.RemoveAt(i);
+
+                        AppendLog(
+                            "INFO",
+                            $"{waitingTask.FileName}：腾出空间了，现在补跑它（它刚才被拒的原因：{waitingGate.Reason}）");
+
+                        runningTasks.Add(RunScheduledTaskAsync(waitingTask, oneClickRun, waitingRuntime));
+                    }
+                }
+
+                /*
+                 * 等到最后还是排不上的：**这时候才**如实记「空间不足」（状态 / 错误信息 / 日志 / 批末清单
+                 * 走同一个落点 `MarkSpaceBlocked`）。⛔ 这些任务从头到尾一个字节都没动。
+                 */
+                foreach ((ArchiveTask waitingTask, ScheduledExtractionItem waitingItem, SpaceGateDecision waitingGate) in spaceWaiting)
+                {
+                    MarkSpaceBlocked(waitingTask, waitingItem, waitingGate);
                 }
 
                 AppendLog("INFO", "批量解压完成");
