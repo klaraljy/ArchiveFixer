@@ -1673,6 +1673,90 @@ namespace ArchiveFixer.Tests
             return (outer, branchA);
         }
 
+        /// <summary>
+        /// **每一层开头都要把进度基准拉回本层**（用户 2026-10-02：「解压完成到真正的解释有个 8 分钟的差距」）。
+        ///
+        /// <para>现场：`P.7z.001` 第 0 层 09:47:18 到 100%，09:47:23 才开始解内层 `P.ra`，
+        /// 09:51:57 才结束 —— 中间 **4 分 34 秒**界面上停在 100%、日志里一条进度都没有。
+        /// 成因：进度条记的是"引擎最后一次报的百分比"，第 1 层从头开始时没有任何一帧把基准拉回来。</para>
+        ///
+        /// <para><b>红检</b>：把 `RecursiveExtractor.ExtractLayerAsync` 里那一帧（`progress?.Report(...)`）
+        /// 撤掉 ⇒ 本用例立刻变红（找不到"第 1 层 + 0%"那一帧）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 每一层开头_进度基准都要拉回本层()
+        {
+            string source = Path.Combine(_root, "layer-progress-source.7z");
+            File.WriteAllText(source, "not a real archive; the engine is fake");
+
+            var engine = new FakeEngine();
+            var recorded = new List<ArchiveProgress>();
+            int calls = 0;
+
+            engine.OnExtractAsync = (request, options) =>
+            {
+                calls++;
+                Directory.CreateDirectory(request.OutputPath!);
+
+                if (calls == 1)
+                {
+                    // 第 0 层：解出一个内层包（按后缀就能被认成归档 ⇒ 会有第 1 层），
+                    // 并把进度推到 100% —— 真机上第 0 层结束时就是这样。
+                    File.WriteAllText(Path.Combine(request.OutputPath!, "inner.7z"), "假内层包");
+                    request.Progress?.Report(new ArchiveProgress { Percent = 100, CurrentEntry = "第 0 层的最后一个文件" });
+                }
+                else
+                {
+                    File.WriteAllText(Path.Combine(request.OutputPath!, "leaf.bin"), "叶子内容");
+                }
+
+                return Task.FromResult(Succeeded());
+            };
+
+            var task = new ArchiveTask(source);
+            var extractor = new RecursiveExtractor(
+                engine,
+                new MagicAwareProber(),
+                _ => new[] { string.Empty });
+
+            await extractor.ExtractAsync(
+                task,
+                Path.Combine(_root, "out-layer-progress"),
+                RecursionMode.SingleChain,
+                null,
+                CancellationToken.None,
+                new RecordingProgress(recorded));
+
+            Assert.Equal(2, calls);   // 内外两层都真的解了
+
+            int layerZeroDone = recorded.FindIndex(p => p.Percent == 100);
+            int layerOneStart = recorded.FindIndex(
+                p => p.Percent == 0 && p.CurrentEntry.Contains("第 1 层", StringComparison.Ordinal));
+
+            Assert.True(layerZeroDone >= 0, "第 0 层的引擎进度必须透传出来");
+            Assert.True(
+                layerOneStart > layerZeroDone,
+                "第 1 层开头必须报一帧 0%（当前条目点名第 1 层），而且必须排在第 0 层的 100% 之后 —— "
+                + "少了它，界面就会停在 100% 一动不动。实际收到的帧："
+                + string.Join("；", recorded.Select(p => $"{p.Percent}%/{p.CurrentEntry}")));
+        }
+
+        /// <summary>同步记账的进度接收器（不用 <see cref="Progress{T}"/>：它会把回调甩到线程池，顺序就不好断言了）。</summary>
+        private sealed class RecordingProgress : IProgress<ArchiveProgress>
+        {
+            private readonly List<ArchiveProgress> _sink;
+
+            public RecordingProgress(List<ArchiveProgress> sink) => _sink = sink;
+
+            public void Report(ArchiveProgress? value)
+            {
+                if (value != null)
+                {
+                    _sink.Add(value);
+                }
+            }
+        }
+
         /// <summary>造一个"外层不加密 zip + 内层加密 7z"的包，用于验证密码重试链路。</summary>
         private string BuildEncryptedInnerPackage()
         {
