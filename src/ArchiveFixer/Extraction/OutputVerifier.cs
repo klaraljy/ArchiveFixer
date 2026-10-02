@@ -264,8 +264,18 @@ namespace ArchiveFixer.Extraction
              * 规则 3：没有可信的预期条目（没列过目录，或列目录失败）时，
              * 只能做"输出目录非空"的底线校验。
              * Message 必须写明这一点，否则用户会以为做过完整校验、进而相信后面的删源包。
+             *
+             * ⚠ 2026-10-02：**「清单成功但一个条目都没有」与「没有清单」是同一件事** ——
+             * 空清单能核对的东西是零，而下面的 `<c>actual &gt;= expected</c>`（规则 4）在两个 0 面前
+             * **天然成立** ⇒ 老口径会落 `ManifestCrossChecked = true` ⇒ 报「可证完整（拿归档清单逐条核对过，
+             * 文件数与总字节都对得上）」并放行"搬走 + 永久删除源包"。真机现场（`（3399）…mp4` 那一族）：
+             * 中文界面的 UnRAR 6.11 把 lt 的键名本地化了，一份 5 个文件的包被读成"清单 0 个文件 / 0 字节"，
+             * 于是日志里写着「0 比 5 对得上」。⇒ 空清单一律按这一档办：底线校验 + 不算核对过。
+             * （第一道修在 `UnRarEngine.InterpretListing`：那种输出根本不该被当成清单；这一条是兜底。）
              */
-            if (expected == null || !expected.Success)
+            bool expectedIsEmpty = expected is { Success: true } && expectedFileCount == 0 && expectedTotalSize == 0;
+
+            if (expected == null || !expected.Success || expectedIsEmpty)
             {
                 /*
                  * 清单为什么没拿到，调用方如果说得出原因，就**必须**写出来
@@ -289,7 +299,10 @@ namespace ArchiveFixer.Extraction
                     ActualFileCount = actualFileCount,
                     ExpectedTotalSize = 0,
                     ActualTotalSize = actualTotalSize,
-                    Message = $"未取得预期条目数{why}，只做了非空校验：输出目录里有 {actualFileCount} 个文件 / {actualTotalSize} 字节"
+                    Message = expectedIsEmpty
+                        ? $"引擎给的清单里一个条目都没有（0 个文件 / 0 字节），核对不了产物，"
+                          + $"只做了非空校验：输出目录里有 {actualFileCount} 个文件 / {actualTotalSize} 字节"
+                        : $"未取得预期条目数{why}，只做了非空校验：输出目录里有 {actualFileCount} 个文件 / {actualTotalSize} 字节"
                 };
             }
 

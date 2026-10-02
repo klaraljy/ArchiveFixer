@@ -280,6 +280,73 @@ namespace ArchiveFixer.Tests
             Assert.Contains("产物为空", result.Message, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// ⛔ **清单"成功"但一个条目都没有 = 没有清单**（用户 2026-10-02 真机实锤）。
+        ///
+        /// <para>现场：中文界面的 UnRAR 6.11 把 <c>lt</c> 的键名本地化了，一份 5 个文件的包被读成
+        /// "清单 0 个文件 / 0 字节"，而 `产物 ≥ 0` 天然成立 ⇒ 上报
+        /// 「完整性：可证完整（拿归档清单逐条核对过，文件数与总字节都对得上）」并放行"搬走 + 永久删除源包"。
+        /// 真机日志原文：<c>…清单 0 个文件 / 0 字节；机器结论：OutputVerification=Passed;ManifestCrossChecked=True;Expected=0;Actual=5</c>。</para>
+        ///
+        /// <para>红检：把 `OutputVerifier.Verify` 里 `expectedIsEmpty` 那一支撤掉 ⇒ `ManifestCrossChecked` 变回 true、
+        /// 分类器变回「可证完整」⇒ 本用例变红。</para>
+        /// </summary>
+        [Fact]
+        public void 校验_清单成功但一个条目都没有_按没清单办_不算逐条核对过()
+        {
+            string output = Path.Combine(_root, "empty-manifest");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Combine(output, "payload.bin"), "这是一份真的产物");
+
+            var expected = new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 0,
+                TotalUncompressedSize = 0,
+                Entries = new List<ArchiveEntry>(),
+                Message = "本层清单：0 个文件 / 0 字节"
+            };
+
+            OutputVerificationResult result = OutputVerifier.Verify(output, expected);
+
+            // 不是新加一道拦截：非空产物照旧过底线校验（解压该成还是成）。
+            Assert.True(result.Verified, result.Message);
+
+            Assert.False(result.ManifestCrossChecked, "空清单核对不了任何东西 ⇒ 绝不许算「逐条核对过」");
+            Assert.Contains("一个条目都没有", result.Message, StringComparison.Ordinal);
+
+            // 「逐条核对过」正是唯一允许删源的那一档 ⇒ 分类器必须落「判不出」。
+            ResultCompletenessVerdict verdict = ResultCompletenessClassifier.Classify(result);
+
+            Assert.Equal(ResultCompleteness.Undeterminable, verdict.State);
+        }
+
+        /// <summary>对照：真有清单时照旧算"逐条核对过"（别为了堵空清单把正常那档也判成判不出）。</summary>
+        [Fact]
+        public void 校验_清单非空时照旧算逐条核对过()
+        {
+            string output = Path.Combine(_root, "normal-manifest");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Combine(output, "payload.bin"), "这是一份真的产物");
+
+            var expected = new ArchiveListResult
+            {
+                Success = true,
+                FileCount = 1,
+                TotalUncompressedSize = 9,
+                Entries = new List<ArchiveEntry>()
+            };
+
+            OutputVerificationResult result = OutputVerifier.Verify(output, expected);
+
+            Assert.True(result.Verified, result.Message);
+            Assert.True(result.ManifestCrossChecked);
+
+            ResultCompletenessVerdict verdict = ResultCompletenessClassifier.Classify(result);
+
+            Assert.Equal(ResultCompleteness.Complete, verdict.State);
+        }
+
         // ================================================================ ③ 删除裁决读事实：校验没过一次都不许删
 
         /// <summary>

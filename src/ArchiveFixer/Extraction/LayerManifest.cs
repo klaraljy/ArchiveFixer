@@ -35,6 +35,21 @@ namespace ArchiveFixer.Extraction
 
             (int fileCount, long totalSize, _, _) = OutputVerifier.CollapseCaseOnlyDuplicates(list);
 
+            /*
+             * ⛔ 清单"成功但一个条目都没有" = **没有清单**（2026-10-02 真机：中文界面 UnRAR 的 lt 键名
+             * 全被本地化，按英文键读出来就是这份 0 个文件 / 0 字节的假清单 —— 见
+             * UnRarListParser.ParsedListing.HeaderRecognized 与 UnRarEngine.InterpretListing）。
+             *
+             * 为什么必须在这一层就掐掉：空清单能核对的东西是零，而 `<c>actual &gt;= expected</c>`
+             * 在 expected 两个 0 时**天然成立** ⇒ 下游 `ManifestCrossChecked=true`
+             * ⇒ 报「完整性：可证完整（拿归档清单逐条核对过…对得上）」并放行"搬走 + 永久删除源包"。
+             * 兜底只有一条：算"取不到清单" ⇒ L4 判不出 ⇒ 什么都不做（红线）。
+             */
+            if (fileCount == 0 && totalSize == 0)
+            {
+                return Unavailable("引擎报回来的清单是空的（0 个文件 / 0 字节）—— 空清单核对不了产物，按「判不出」处理");
+            }
+
             return new LayerManifest
             {
                 Available = true,

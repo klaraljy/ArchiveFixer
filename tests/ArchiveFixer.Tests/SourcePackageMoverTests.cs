@@ -150,6 +150,40 @@ namespace ArchiveFixer.Tests
             Assert.Contains("源包一律不动", plan.Message);
         }
 
+        /// <summary>
+        /// **账上不一致**（分卷清单非空、却不含任务自己）⇒ 整组一份都不搬，而且**不许静默**
+        /// （用户 2026-10-02 改）。
+        ///
+        /// <para>老口径是"降级成只搬它自己一份" —— 那正是用户 2026-10-01 第四 / 第五报抱怨的形状：
+        /// 一组分卷只搬走一份、其余留在源目录里等他手工清（「**`222\222.z01` 依旧还在，你浪费了我两次操作**」）。
+        /// 清单不含自己说明**账上已经过期**（现实里就是"改了名没同步"那一类），
+        /// 按红线「判不出 ⇒ 什么都不做」：整组留在原地，并在计划里写清原因。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>ResolveSourceGroup</c> 里那一档改回"降级成只搬自己" ⇒ 本用例变红
+        /// （`Moves` 会收到那一条）。</para>
+        /// </summary>
+        [Fact]
+        public void 计划_分卷清单非空却不含自己时_整组一份都不搬且说明原因()
+        {
+            string self = WriteFile(@"src\222.7z.001", "aaaa");
+            string sibling = WriteFile(@"src\222.7z.002", "bbbbbb");
+
+            // 账上写着"这一组是 self + sibling"，而 CurrentPath 是 self —— 这里刻意把清单换成
+            // "另一个名字"（现实中就是改名之后没同步的那份旧名字），制造"清单不含自己"。
+            var task = new ArchiveTask(self) { IsVolumeGroup = true };
+            task.VolumePaths.Add(PathOf(@"src\222.7z.002"));
+            task.VolumePaths.Add(PathOf(@"src\222.7z.003"));
+
+            SourcePackageMovePlan plan = new SourcePackageMover().Plan(task, PathOf(@"out\222\其余物"));
+
+            Assert.Empty(plan.Moves);
+            Assert.Contains("没有它自己", plan.Message, StringComparison.Ordinal);
+
+            // ⛔ 两个源文件一个都不许动。
+            Assert.True(File.Exists(self));
+            Assert.True(File.Exists(sibling));
+        }
+
         // ---------- ② 执行：同盘改名 ----------
 
         [Fact]

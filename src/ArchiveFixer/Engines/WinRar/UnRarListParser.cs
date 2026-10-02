@@ -78,6 +78,18 @@ namespace ArchiveFixer.Engines.WinRar
 
             /// <summary>归档格式描述原文（<c>RAR 5</c> / <c>RAR 1.5</c> …），只用于日志与消息。</summary>
             public string Details { get; set; } = string.Empty;
+
+            /// <summary>
+            /// 这份输出**我们看懂了吗**：见没见到归档级表头 <c>Archive:</c>（本解析器唯一认得的键名形状）。
+            ///
+            /// <para><b>为什么要单独立一位</b>（2026-10-02 真机实锤）：中文版 WinRAR 自带的那份
+            /// <c>UnRAR.exe</c>（用户机器上是 6.11）把 <c>lt</c> 的**键名也本地化了** ——
+            /// 表头是「压缩文件:」、条目行是「名称: / 类型: / 大小: / 旗标: 已加密」，
+            /// 于是本解析器一条都认不出来，却因为退出码是 0 被当成"列目录成功、0 个条目"。
+            /// 假清单比没有清单更危险：它让"产物 ≥ 0"天然成立 ⇒ 报出「可证完整」并放行删源。
+            /// ⛔ 判据只看表头这一条：表头与条目行出自同一张字符串表，表头是英文时条目行也是英文。</para>
+            /// </summary>
+            public bool HeaderRecognized { get; set; }
         }
 
         public static ParsedListing Parse(string? output, string archivePath)
@@ -113,6 +125,8 @@ namespace ArchiveFixer.Engines.WinRar
                 // 归档级信息（只在第一个条目之前出现）。
                 if (string.Equals(key, "Archive", StringComparison.OrdinalIgnoreCase))
                 {
+                    // 见到它 = 这份输出是英文键名的 lt（本解析器唯一认得的形状，见 HeaderRecognized）。
+                    parsed.HeaderRecognized = true;
                     continue;
                 }
 

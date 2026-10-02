@@ -1071,8 +1071,22 @@ namespace ArchiveFixer.Extraction
         /// 用例 `计划_分卷清单不完整时什么都不搬` 钉着）。
         /// </para>
         /// </summary>
-        public static IReadOnlyList<string> ResolveSourceGroup(ArchiveTask? task)
+        public static IReadOnlyList<string> ResolveSourceGroup(ArchiveTask? task) =>
+            ResolveSourceGroup(task, out _);
+
+        /// <summary>
+        /// 同上，另外回答"账上不一致"这一档：**分卷清单非空、却不含任务自己**。
+        ///
+        /// <para>⛔ 这一档现在**什么都不搬**（用户 2026-10-02 改；老口径是"静默降级成只搬它自己一份"）：
+        /// 那正是用户 2026-10-01 第四 / 第五报抱怨的形状 —— 一组分卷只搬走一份、其余留在源目录里
+        /// 等他手工清（「**`222\222.z01` 依旧还在，你浪费了我两次操作**」）。清单不含自己 =
+        /// **账上已经过期**（现实里就是"改了名没同步"那一类），按红线「判不出 ⇒ 什么都不做」，
+        /// 整组留在原地、并让调用方把原因写进日志（⛔ 不再静默）。</para>
+        /// </summary>
+        public static IReadOnlyList<string> ResolveSourceGroup(ArchiveTask? task, out bool groupListInconsistent)
         {
+            groupListInconsistent = false;
+
             var targets = new List<string>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1081,28 +1095,41 @@ namespace ArchiveFixer.Extraction
                 return targets;
             }
 
-            bool treatAsSingleFile = !task.IsVolumeGroup;
-
-            if (task.IsVolumeGroup
-                && task.VolumePaths.Count > 0
-                && !string.IsNullOrWhiteSpace(task.CurrentPath)
-                && !task.VolumePaths.Any(
-                    path => string.Equals(path, task.CurrentPath, StringComparison.OrdinalIgnoreCase))
-                && File.Exists(task.CurrentPath))
+            void Add(string? path)
             {
-                treatAsSingleFile = true;
+                if (!string.IsNullOrWhiteSpace(path) && seen.Add(path!))
+                {
+                    targets.Add(path!);
+                }
             }
 
-            IEnumerable<string> candidates = treatAsSingleFile
-                ? new[] { task.CurrentPath }
-                : task.VolumePaths;
-
-            foreach (string path in candidates)
+            if (!task.IsVolumeGroup)
             {
-                if (!string.IsNullOrWhiteSpace(path) && seen.Add(path))
-                {
-                    targets.Add(path);
-                }
+                // 本来就不是分卷组：只搬它自己（老口径，一个字没改）。
+                Add(task.CurrentPath);
+                return targets;
+            }
+
+            if (task.VolumePaths.Count == 0)
+            {
+                // 分组信息根本不完整（老红线）：一份都不搬。见 计划_分卷清单不完整时什么都不搬。
+                return targets;
+            }
+
+            bool selfListed = !string.IsNullOrWhiteSpace(task.CurrentPath)
+                && task.VolumePaths.Any(
+                    path => string.Equals(path, task.CurrentPath, StringComparison.OrdinalIgnoreCase));
+
+            if (!selfListed && File.Exists(task.CurrentPath))
+            {
+                // 清单非空、却不含自己，而自己确实还在盘上 ⇒ 账上过期：整组不搬（见上面那段说明）。
+                groupListInconsistent = true;
+                return targets;
+            }
+
+            foreach (string path in task.VolumePaths)
+            {
+                Add(path);
             }
 
             return targets;
@@ -1126,14 +1153,17 @@ namespace ArchiveFixer.Extraction
                 return new SourcePackageMovePlan { Message = "任务为空，没有规划任何源包搬运" };
             }
 
-            IReadOnlyList<string> sources = ResolveSourceGroup(task);
+            IReadOnlyList<string> sources = ResolveSourceGroup(task, out bool groupListInconsistent);
 
             if (sources.Count == 0)
             {
                 return new SourcePackageMovePlan
                 {
                     ArtifactDirectory = artifactDirectory ?? string.Empty,
-                    Message = "任务没有可搬运的源包路径（分卷清单可能不完整），源包一律不动"
+                    Message = groupListInconsistent
+                        ? "任务账上的分卷清单里没有它自己（清单可能过期，例如改名之后没同步）—— "
+                          + "分卷组整组一律不搬，源包全部留在原地"
+                        : "任务没有可搬运的源包路径（分卷清单可能不完整），源包一律不动"
                 };
             }
 

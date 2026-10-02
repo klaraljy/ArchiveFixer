@@ -207,7 +207,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2324 条（2321 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2340 条（2337 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -215,8 +215,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - 已知 flaky（并发假红；先单跑确认，⛔ 别改断言）〔已知 flaky 清单〕
   - `SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`：全量偶发 `Collection was modified`（测试自己的 `WaitForLogAsync` 枚举 `harness.Log.Logs` 而产品侧在 append）⇒ 测试侧竞态、**不是产品 bug**。2026-10-01 已从源头去掉：该文件读日志的 6 处改走 `LogContains`（捕获 `InvalidOperationException` 后当作"这一轮还没出现"），⛔ 等待时长 / 断言 / 被等内容一个字没改。
 - ⚠ 回退代码后必须 `--no-incremental` 重编（否则跑的还是红检那份）〔真样本验收〕
-- 已知 flaky（第二条 2026-10-01 全量偶发一次、**单跑 8/8 绿**；两条都先单跑确认，⛔ 别改断言）
+- 已知 flaky（第二条 2026-10-01 全量偶发一次、**单跑 8/8 绿**；第三条 2026-10-02 全量偶发一次、**单跑绿 + 复跑全量绿**；三条都先单跑确认，⛔ 别改断言）
   - `SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`：全量并发下偶发（计时敏感，等采样周期与取消的时序被别的用例抢 CPU 时判否）。
+  - `SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`：它读的是**真实盘**的可用空间、需求取"可用 + 1 字节"，而并行跑时别的用例正在建/删临时文件 ⇒ 盘上多出 1 个字节就翻盘。2026-10-02 已从**测试侧**修掉（需求改成"可用 + 60 GiB"，断言一个字没改）。
 
 ### 11.3 空间：判据/模式/批末汇总
 
@@ -278,6 +279,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
     ⇒ 后果链（真机实测）：末片被当**内容物**留下 → 同组 5 卷被当过程物收进其余物 → 一键扫描第 1 层「没有发现可继续解压的内层包」→ 链尾 ⇒ **其余物 5 项 25 GB 被整份永久删除**。⛔ 改完在真机残件上只读复核：`Unknown` → `ZIP_SPANNED`、索引读出 **250 个锚点 / 共 6 片**。
   - ✅ **"其余物里的分卷是半套"这道保险已加**（2026-10-01，同日补）：判据唯一出口 `Extraction/RestVolumeCompletenessGate.DescribeBlocker`（公开纯函数）—— 其余物**顶层**每一个归档件算一个**包基名**，只要成品目录这一棵树里（其余物之外）还有**同基名的归档件**，就说明这一组被拆在两边 ⇒ **整份处理其余物等于毁掉这一组** ⇒ 什么都不做、写一行 WARN 点名两边。⛔ 只认"看起来是归档件"的东西（分卷片 / 已知归档后缀 / 去杂质后是归档后缀）：普通内容文件（`X.mp4`）与同名**目录**都不算伙伴 —— 包基名与内容文件名撞车是常态（`111\111\内容物`），拿它当伙伴会把正常清理全拦死。
     - ⛔ 放在 `Storage/RestItemPurger.Purge` 里（第六道门槛），**不是**放在调用点：其余物的删除只有这一个执行体，三处调用（链尾 / 任务收尾 / 链尾清扫）都要过它。用例 `RestVolumeCompletenessGateTests`（6 条：半套必拦 + 整组/普通内容/同名目录/空其余物四种不许误拦）+ 接线用例 `DeleteOptionsClarityTests.其余物里是半套分卷_整份删除被拦下`；红检两条（撤判据 ⇒ 必拦那 2 条红、放行那 4 条照绿；撤接线 ⇒ 接线用例红）。
+- ⛔ **本地化界面的 UnRAR 列出的清单认不出来时，绝不许当成"这个包是空的"**（用户 2026-10-02 真机：日志里出现过「完整性：可证完整（…清单 0 个文件 / 0 字节…Expected=0;Actual=5）」—— **0 比 5，那句"对得上"是假的**，而这一档正是唯一允许搬走/永久删除源包的判据；同一份假清单还让**解压前的条目名预检静默失效**、`IsEncrypted` 被读成 false）。判据 = `UnRarListParser.ParsedListing.HeaderRecognized`（**见没见过 `Archive:` 这一行**；⛔ 不许用"认出了任意一个键"—— 中文输出里 `Pack-CRC32:` 照样匹配英文字典）；认不出 ⇒ `UnRarEngine.InterpretListing` 返 `ParserRejected`（既有"可换引擎"那一档）⇒ `EngineRouter` 改问 7-Zip（`-slt` 键名不随界面语言变），**解压仍优先 UnRAR**（退出码与错误分类不受本地化影响）。兜底两道：`LayerManifest.From` 与 `OutputVerifier.Verify` 把"成功但 0 个文件 0 字节"一律按**没有清单**办（`ManifestCrossChecked=false` ⇒ 判不出 ⇒ 什么都不做）〔本地化 UnRAR 的假清单〕
 - ⛔ **「密码已经证实」之后失败 = 数据层面，不许再试密码候选**（用户 2026-10-01 真机 `giu910`，19 GB 的 7z `-mhe`；用户原话「**为什么试了密码之后再去试一次，我说过要试密码的话要在最开始的时候，而不是解压完，这才 20G，大一点你这就是在浪费用户时间**」）：现场 = 候选 3 把整包解到 98%（13 分钟）、只死在一个 mp4 的 `CRC Failed in encrypted file`；老口径把这一句当成"这个候选不对" ⇒ **解压完又回去试候选 4..10**、13 分钟产物全扔、报「密码错误」。
   - 判据唯一出口 `Extraction/ProducedContentGate`（**只数事实**：产物目录里**非空文件数 ≥ 2 且字节 > 0**）—— 「密码错」的签名是第一份数据就过不去（0 字节桩 / 至多一个文件），「密码对、个别文件坏」的签名是整个包基本都解出来了。
     - ⛔ **两条跑解压的路都必须问它**：单层 `ExtractionCoordinator` 与递归 `RecursiveExtractor`。2026-10-01 第一版只接了单层那条，而真机 `giu910` 走的是**递归**那条（SingleChain）⇒ **用户当晚重跑一次，13 分钟又白扔一遍、还是报「密码错误」**（见 `docs/真机事故复盘.md` §44.1）。⛔ 判据只此一处，别再各写一份。
@@ -300,7 +302,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - 用例 `ChainManifestCompletenessTests`：`默认档只解当前这一层_手动只解压时内层包原样留着` + 对照 `单链自动展开_同一份夹具手动只解压也要解到叶子层`（用**手动「只解压」**隔离掉轮次续解）。用户文档 `docs/使用说明.md` §10.1.0 有两张表的白话版。
 - ⛔ **改名之后，任务上每一处指向这个文件的旧路径都要改过来**（用户 2026-10-01 第四 / 第五报，400 MB 的 `222.z01` 连留三次的真根因；见 `docs/真机事故复盘.md` §38）：`RenameService.UpdateTaskRenameSuccess(task, oldPath, newPath)` 必须**同时**改 `CurrentPath` 与 `VolumePaths` 里那一项 —— 只改一条 ⇒ 账上留下一个"盘上已经不存在"的旧名字 ⇒ `ProcessArtifactLayout.SourcePackageMover.ResolveSourceGroup` 判"清单非空、却不含任务自己" ⇒ **整组搬运退化成只搬一份**，而日志只写"已把 1 个源包移入其余物"（用户要自己动手清剩下的）。
   - ⛔ **"清单够不够全"不许按条数比**（`SkipWhenAnotherTaskOwnsThisVolumeGroup` 的 `group.Volumes.Count > task.VolumePaths.Count`）：一条不存在的旧名字照样占一个位 —— 2 条 vs 2 条看着"没变多"，实际只有 1 条是真的。这条闸门只负责"账上真的只有 1 卷"那一档。
-  - ⚠ 未修的同形状残留（⛔ 别当成"已解决"）：`SourcePackageMover.ResolveSourceGroup` 那条"清单不含自己就按单文件办"的兜底**仍然静默**；`ExtractionCoordinator.cs:2503-2510`（内层包搬进其余物）同样只改 `CurrentPath`。
+  - ✅ **2026-10-02 收口**：`SourcePackageMover.ResolveSourceGroup` 那条"清单非空、却不含自己 ⇒ 降级成只搬自己一份"的**静默兜底已经改掉** —— 现在这一档**整组一份都不搬**（按红线「判不出 ⇒ 什么都不做」），计划里写明「任务账上的分卷清单里没有它自己（清单可能过期，例如改名之后没同步）—— 分卷组整组一律不搬，源包全部留在原地」，调用方那行日志会把它带出来（⛔ 不再静默、也不再"只搬一份、其余让用户自己清"）。用例 `SourcePackageMoverTests.计划_分卷清单非空却不含自己时_整组一份都不搬且说明原因`（红检：改回降级 ⇒ 变红）。⚠ **仍未修**：`ExtractionCoordinator` 里"内层包搬进其余物"那一处（原 `:2503-2510`）同样只改 `CurrentPath`，不改 `VolumePaths`。
 - ✅ **"去杂质之后是什么"只有一个出口**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`，用户 2026-10-01 真机 `222` 那一组）：
   删掉**最多 2 个非数字字符**后若**唯一地**变成**已知归档后缀**才算（`222.zi删除p` / `222.zscip` → `zip`、
   `ra删除r` → `rar`、`7删除z` → `7z`；本来就干净、或删出来有歧义 ⇒ 一律不认）。它同时喂三个消费点：
@@ -345,6 +347,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 ### 11.5 管线（落点/弹窗/校验/显示/密码）
 
 - ⛔ 落点最少两层文件夹：最外层=包名目录、最里层=最后一个内层包层，⛔ 塌缩/不套层分支不许吃掉最里层；省层只能省中间的内层包层，⛔ 普通文件夹永不摊平（唯一出口 `Extraction/PackageLayerRules.cs`；递归=就地替换）
+- ⛔ **展开恰好一层时，L3 预期取"这一层解压前就列过的那份清单"**（`ChainManifestResolver.Resolve`：`knownList` → **本层清单** → 才现问引擎）：递归那条路的调用方给"现问"传的是**空密码**，`-mhe` / `-hp` 的包**必然**问不出来 ⇒「完整性：无法确认」⇒ 链尾拒删 ⇒ 其余物留在用户目录里（用户 2026-10-02 真机 `1-6 电磁感应定律（1）`）。用例 `ChainManifestResolverTests`(5) + `ChainManifestCompletenessTests.形状6_单层加密头包_…`（红检 2 红）〔其余物为什么不删〕
 - 落点模型 v2：判据出口三处——`OutputPlacement.ResolveDestinationDirectory`（落点）、`OneClickCoordinator.ShouldAddContinuationLevelLayer`（续解层）、`ResultFinalizer.Plan(..., suppressPackageFolderLayer:)`（定稿套层）；契约 `docs/输出与整理模型.md` §1.1/§3.1/§3.3.1〔落点模型 v2〕
 - ⛔ **落点这一档是"记忆"的：用户上回选的那一档，下次打开就是那一档**（用户 2026-10-01：「要不然每次解压都要点击一下未选择指定位置」；现场见 `docs/真机事故复盘.md` §38.5）。两条口径：
   - 一键处理确认框 → `Confirmed` 之后**一律** `SaveOneClickOptionsAsDefaults`（记忆范围只有面板上看得见的那几档；⛔ 取消 / 没弹框时一个字节都不写）；面板初值 = `OneClickRunOptions.FromSettings(settings, _vm.SelectedOutputDirectory)`。

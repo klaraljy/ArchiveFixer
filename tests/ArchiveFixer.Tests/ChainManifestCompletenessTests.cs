@@ -499,6 +499,70 @@ namespace ArchiveFixer.Tests
             Assert.Single(Directory.GetFiles(harness.OutputRoot, "content.txt", SearchOption.AllDirectories));
         }
 
+        // ================================================================ 形状 6：展开**恰好一层** + 加密头
+
+        /// <summary>
+        /// **展开恰好一层时，必须用"这一层解压前就列过的那份清单"** —— ⛔ 不许再去"现问引擎列一份"。
+        ///
+        /// <para><b>现场</b>（用户 2026-10-02 真机 `1-6 电磁感应定律（1）`，那一单的其余物留在目录里没被删）：
+        /// 内层包 <c>51658213.7z.001</c> 是 7z <c>-mhe</c>（连文件名一起加密）。用户设了
+        /// "源包放入其余物 + 其余物彻底删除"，包也用密码本第 3 个候选完整解出了 6 个文件，
+        /// 可日志里结果校验写着「未取得预期条目数（…没能取得清单：该包可能加密了文件名…）」⇒
+        /// <c>ManifestCrossChecked = false</c> ⇒「完整性：无法确认」⇒ 链尾
+        /// 「链上的「51658213.7z.001」完整性：无法确认…这条链没跑完…一个字节都不删」
+        /// ⇒ 原包与内层包全留在 <c>其余物</c> 里。</para>
+        ///
+        /// <para><b>根因</b>：递归那条路的调用方给"现问引擎"传的是**空密码**
+        /// （<c>ExtractionCoordinator</c> 的递归分支 <c>PostProcessSuccessAsync(…, string.Empty, …)</c>）——
+        /// 加密头的包拿空密码**必然**列不出来。而证据其实一直都在兜里：这一层解压前就用**对的那个候选**
+        /// 列过一次（<see cref="RecursionLayerReport.Manifest"/>）。</para>
+        ///
+        /// <para>判据：<c>-mhe</c> 的单层包走递归档 ⇒ 预期必须来自**本层清单**、真的逐条核对过、
+        /// 按设置把源包与其余物处理掉。修复前它落 <c>QueryArchive</c>（然后失败）⇒ 本用例红。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 形状6_单层加密头包_必须用本层清单_不许因为空密码现问不出来就判不出()
+        {
+            string package = BuildEncryptedHeadersPackage("single-hp.7z");
+
+            Harness harness = CreateHarness(
+                $"{InnerPassword}\n",
+                settings =>
+                {
+                    // 走递归核心（真机上"一键处理"就是这条：递归模式 SingleChain）。
+                    settings.RecursionMode = "SingleChain";
+                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+                    settings.VerboseLog = true;
+                });
+
+            await harness.AddPathsAsync(package);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+
+            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+            Assert.Equal(OutputVerificationOutcome.Passed, task.OutputVerification);
+
+            // ⛔ 本次 bug 的开关：修复前 Source = QueryArchive（随后被空密码问成 Unavailable）、
+            // ManifestCrossChecked = false、L4 判「判不出」。
+            Assert.Equal(ManifestExpectationSource.LeafLayer, task.ManifestExpectation.Source);
+            Assert.Equal(0, task.ManifestExpectation.LayerDepth);
+            Assert.True(
+                task.OutputManifestCrossChecked,
+                "这一层解压前就用对的那个候选列过清单，必须真的逐条核对过。" + Diagnose(harness));
+
+            Assert.Equal(ResultCompleteness.Complete, ResultCompletenessClassifier.Classify(task).State);
+
+            // 内容物在、源包按设置被彻底删除、其余物不留在盘上。
+            Assert.Single(Directory.GetFiles(harness.OutputRoot, "file.bin", SearchOption.AllDirectories));
+            Assert.False(File.Exists(package), $"源包应该已按设置被彻底删除。{Diagnose(harness)}");
+            Assert.Empty(FindRestDirectories(harness.OutputRoot));
+
+            Assert.Equal(0, outcome.ContinuationLayers);
+        }
+
         // ================================================================ 样本
 
         private const string OuterVolumePassword = "OuterPass1";
@@ -581,6 +645,30 @@ namespace ArchiveFixer.Tests
 
             // 相对名传给 7z（工作目录就是 stage），归档里的条目名才稳定。
             Run7z(stage, "a", "-t7z", package, "Y");
+
+            return package;
+        }
+
+        /// <summary>
+        /// `single-hp.7z` = 一条 `Y\file.bin` 的真 7z，**加密头（`-mhe=on`）**、密码 = <see cref="InnerPassword"/>。
+        ///
+        /// <para>与 <see cref="BuildPlainPackage"/> 的唯一区别就是 <c>-mhe=on</c> —— 而这一条正是形状 6 的关键：
+        /// 不给密码（空密码）连**目录**都列不出来，所以"现问引擎列一份"必然失败，
+        /// 只有用"解压时那个正确候选列出来的本层清单"才拿得到预期。</para>
+        /// </summary>
+        private string BuildEncryptedHeadersPackage(string name)
+        {
+            string stage = Path.Combine(_root, name + "-stage");
+            Directory.CreateDirectory(Path.Combine(stage, "Y"));
+
+            File.WriteAllBytes(Path.Combine(stage, "Y", "file.bin"), new byte[2048]);
+
+            string packageDirectory = Path.Combine(_root, "packages");
+            Directory.CreateDirectory(packageDirectory);
+
+            string package = Path.Combine(packageDirectory, name);
+
+            Run7z(stage, "a", "-t7z", package, "-p" + InnerPassword, "-mhe=on", "Y");
 
             return package;
         }

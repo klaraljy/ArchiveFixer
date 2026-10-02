@@ -492,7 +492,16 @@ namespace ArchiveFixer.Tests
                 MinFreeSpaceReserveBytes = 1
             };
 
-            long required = freeSpace.Value + 1;
+            /*
+             * ⚠ 需求取「可用 + 60 GiB」而不是「可用 + 1 字节」（2026-10-02 改）。
+             *
+             * 这里读的是**真实盘**的可用空间，而全量并行跑的时候别的用例正在建/删临时文件 ——
+             * "+1 字节"这种写法只要盘上多出 1 个字节（另一个用例删掉了自己的临时文件）就翻盘：
+             * 估算值反而变得"放得下"，`Assert.False(result.Allowed)` 当场失败
+             * （现场：全量偶发 1 条红、单跑 32 ms 绿、复跑全量也绿 ⇒ 测试自己的竞态，不是产品问题）。
+             * 加到 60 GiB 之后，任何瞬时抖动都翻不过去，而**断言一个字没改**。
+             */
+            long required = freeSpace.Value + (60L * 1024 * 1024 * 1024);
             ArchiveListResult list = ArchiveList(Entry("huge.bin", required));
 
             BudgetCheckResult result = new ResourceBudget(options).CheckBeforeExtract(list, 0, tempPath);

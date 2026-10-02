@@ -94,10 +94,20 @@ namespace ArchiveFixer.Extraction
             int expandedLayers = recursion?.Layers.Count(layer => layer.Success) ?? 0;
 
             /*
-             * 展开 0~1 层：**老口径一个字不改** ——
-             * 第 0 层的清单就是最终产物的清单（只有一层，两者本来就是同一回事）。
-             * 直读路线把清单直接带进来了就用它（它必须与真正解出来的东西是同一份），
-             * 否则让调用方现问引擎列一份。
+             * 展开 0~1 层：**先看有没有现成的清单** ——
+             * ① 直读路线把第 0 层的清单直接带进来了就用它（它必须与真正解出来的东西是同一份）；
+             * ② 否则用**这一层解压前就列过的那份清单**（`RecursionLayerReport.Manifest`）——
+             *    展开 1 层时"这一层的清单"与"最终产物"本来就是同一回事（老口径这句判断不变）。
+             *
+             * ⚠ 2026-10-02 修（用户真机 `1-6 电磁感应定律（1）` 那一单，其余物没被删）：
+             * 过去这一档直接落「现问引擎列一份」，而递归那条路的调用方传的是**空密码**
+             * （`ExtractionCoordinator` 的递归分支 `PostProcessSuccessAsync(…, string.Empty, …)`）——
+             * 加密头（7z `-mhe` / RAR `-hp`）的包拿空密码**必然**列不出来 ⇒ `ManifestCrossChecked = false`
+             * ⇒「完整性：无法确认」⇒ 源包与其余物一个字节都不动。
+             * 真机现场：`51658213.7z.001`（`-mhe`）用密码本第 3 个候选完整解出 6 个文件（996,484,903 字节），
+             * 结果校验却写着「未取得预期条目数（…没能取得清单：该包可能加密了文件名…）」，
+             * 整条链因此被判没跑完，其余物留在用户目录里。
+             * ⇒ 证据其实一直都在兜里（用对的那个候选列出来的本层清单），**别再问第二遍**。
              */
             if (expandedLayers <= 1)
             {
@@ -108,6 +118,22 @@ namespace ArchiveFixer.Extraction
                         Source = ManifestExpectationSource.OuterList,
                         Expected = knownList,
                         LayerDepth = expandedLayers == 1 ? 0 : NoLayer
+                    };
+                }
+
+                RecursionLayerReport? onlyLayer = recursion?.Layers
+                    .Where(layer => layer.Success)
+                    .OrderByDescending(layer => layer.Depth)
+                    .FirstOrDefault();
+
+                if (onlyLayer?.Manifest is { Available: true } layerManifest)
+                {
+                    return new ManifestExpectation
+                    {
+                        Source = ManifestExpectationSource.LeafLayer,
+                        Expected = layerManifest.ToExpected(),
+                        LayerDepth = onlyLayer.Depth,
+                        LayerLabel = DescribeLayer(onlyLayer)
                     };
                 }
 

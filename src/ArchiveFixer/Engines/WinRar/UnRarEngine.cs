@@ -126,7 +126,47 @@ namespace ArchiveFixer.Engines.WinRar
                     Version);
             }
 
-            UnRarListParser.ParsedListing parsed = UnRarListParser.Parse(result.StandardOutput, request.ArchivePath);
+            return InterpretListing(result, request.ArchivePath);
+        }
+
+        /// <summary>
+        /// 把一次 <c>unrar lt</c> 的结果翻成列目录结论 —— **本引擎唯一的解释出口**
+        /// （抽出来是为了能直接喂文本测：真机那一份中文清单不该靠"本机正好装了中文 WinRAR"才测得到）。
+        /// </summary>
+        internal ArchiveListResult InterpretListing(ArchiveOperationResult result, string archivePath)
+        {
+            UnRarListParser.ParsedListing parsed = UnRarListParser.Parse(result.StandardOutput, archivePath);
+
+            /*
+             * ⛔ 输出"看不懂"绝不许当成"这个包是空的"（2026-10-02 真机实锤，判据见 ParsedListing.HeaderRecognized）。
+             *
+             * 现场：用户机器上装的 WinRAR 自带 UnRAR 6.11 是**中文界面**那一份，`lt` 的键名全被本地化
+             * （压缩文件: / 名称: / 类型: / 大小: / 旗标: 已加密），解析器按英文键读 ⇒ **0 个条目**；
+             * 退出码是 0 ⇒ 老口径落成"列目录成功、清单 0 个文件 / 0 字节"。于是真机上：
+             *   ① L4 拿这份空清单当预期，`产物 ≥ 0` 天然成立 ⇒ `ManifestCrossChecked=true`
+             *      ⇒ 报「完整性：可证完整（拿归档清单逐条核对过…对得上）」—— 0 比 5，那句话是假的，
+             *      而这一档正是**唯一**允许把源包搬进其余物并永久删除的判据；
+             *   ② 解压前的路径预检（不变量 4 的第一道）拿到 0 个条目 ⇒ **静默失效**；
+             *   ③ `IsEncrypted` 被读成 false（比"不知道"更糟：下游按"不用密码"排任务）；
+             *   ④ 卷号读不出来 ⇒「从第 N 卷启动」那条诊断也一并没了。
+             *
+             * ⇒ 只能如实报**"这次列目录不算数"**：`ParserRejected` 是既有口径里"可以换引擎"那一档
+             * （`EngineSelector.ShouldTryFallback`），调用方 `EngineRouter` 会照既有规则改问下一个引擎 ——
+             * RAR 上就是 7-Zip，它的 `-slt` 键名不随界面语言变，于是清单、条目名、加密位全都回来。
+             * ⛔ 解压照旧优先走 UnRAR：退出码与错误分类不受界面语言影响，一个字都不用改。
+             */
+            if (!parsed.HeaderRecognized)
+            {
+                return ArchiveListResult.Failure(
+                    EngineErrorTypes.ParserRejected,
+                    "UnRAR 列出的清单认不出来：这一份 UnRAR 的界面语言不是英文"
+                    + "（表头写成「压缩文件:」而不是 Archive:，条目行写成「名称: / 大小:」而不是 Name: / Size:），"
+                    + "按英文键解析只会得到「0 个条目」这种假清单 —— 假清单比没有清单更危险，所以这里如实报「列不出来」。"
+                    + "只要 7-Zip 可用，列清单会自动改用它（解压仍然可以用 UnRAR）；"
+                    + "若想彻底少这一趟，可在⑥设置 → 引擎路径里把 UnRAR 指向内置的那一份（英文界面）。",
+                    Id,
+                    Version);
+            }
 
             ArchiveListResult listing = new()
             {
