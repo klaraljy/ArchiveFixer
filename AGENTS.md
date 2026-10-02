@@ -207,13 +207,13 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2393 条（2390 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：**2411 条（2408 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 旧基线 2393 条是修 ① 之前的数（① 的三条 + 本轮 17 条随之进来）。⛔ 数字只在这里写一次。
+  - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
-  - ⛔ **源包在任何一档下原地不动**；其余物只留**最外层源包**，**它不在盘上 ⇒ 其余物一个字节都不删**（`RestItemPurger.PurgeExcept`，与整份删除同一个执行体）。
-  - ⛔ **与「空间不足」模式硬互斥**（判据 `ExtractionCoordinator.PartialPublishActive`；只写一行 INFO，⛔ 不改设置）+ **空间账加一整个源包**（`TaskSpaceEstimate.CountsSourceAsNewOccupancy` ⇒ `FreeSpaceDemandBytes`，精估与同卷补写都继承）。
-  - ⛔ **取消闸门读的是任务自己的取消令牌**，⛔ 不是中文、也不是终态：单层取消路径只落中文状态、终态会被兜底改成「失败」，只读终态就会把半成品摆进目标目录。
-  - ⚠ **真机未验**；递归那条路只覆盖"最深那一层失败"这一档。
+  - ⛔ **源包在任何一档下原地不动**；其余物只留**最外层源包**，**它不在盘上 ⇒ 其余物一个字节都不删**（`RestItemPurger.PurgeExcept`）；⛔ **与「空间不足」模式硬互斥**（`PartialPublishActive`）+ **空间账加一整个源包**（`TaskSpaceEstimate.CountsSourceAsNewOccupancy`）。
+  - ⛔ **取消闸门读的是任务自己的取消令牌**（⛔ 不是中文、也不是终态：单层取消只落中文状态、终态会被兜底改成「失败」）。⚠ **真机未验**；递归那条路只覆盖"最深那一层失败"这一档。
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按 `ArchiveFixer.slnx` 父目录解析（worktree 里解不出来）；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`（或 `<slnx父目录>\_tmp\ArchiveFixer\space-real`）。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
@@ -238,9 +238,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⭐ 同一个框还要"具体指出错在哪"〔复盘同上一节〕
   - 唯一出口 `Models/BatchSummaryDiagnosticsRules.Build`：`BatchProblemKind` 12 档（顺序=显示顺序）、`Severity` 与文字同一次调用；每组最多 3 个名字（其余「还有 K 个」）、只写文件名（§8）；全成功/空批不写；密码那组注脚必须带"可能"（⛔ 不许断言"就是密码问题"）。
   - 分组不新造第二套分类（只读状态常量/机器终态兜底 ⇒ 没做成的不会消失；`Succeeded` 且校验没判否的不进任何组）；补充数只取现成的（`ArchiveTask.SpaceBlocked`、`MissingVolumeNames`，⛔ 不重算）；⚠ 未做：色带+清单真机 GUI 没看过、第 3 条那句是上界（⛔ 不许改成"精确预测"）、中途提示只带第一个。
-- ⛔ **跟班卷（`CountsTowardBatchOutcome == false`）在三处消费点都不算"没做成"**：① 色带 `BatchSummarySeverityRules`；② 批末诊断 `BatchSummaryDiagnosticsRules`；③ 一键处理汇总行 `OneClickCoordinator.BuildSummaryLine`（跟班卷单列一句「另有 N 个是同一分卷组的后续卷 …… 按设计跳过（不是没做成）」）。
-  - ⛔ `BuildSummaryLine` 里 **各分项之和 + 未处理 = 本次任务数** 这条恒等式不许破：跟班卷从"跳过"剔出去之后，`untouched` 必须把它减掉（否则凭空多出一个"未处理"）。用例 `BatchSummaryDiagnosticsTests.汇总那一行_跟班卷从跳过里剔出去_且恒等式不许破`。
-  - ⛔ 同一行的 `notArchive`（"跳过的 N 个已由 7-Zip 确认不是压缩包"）也要排除跟班卷 —— 它跳过的理由不是"不是压缩包"。
+- ⛔ **跟班卷（`CountsTowardBatchOutcome == false`）在四处消费点都不算"没做成"**：① 色带 `BatchSummarySeverityRules`；② 批末诊断 `BatchSummaryDiagnosticsRules`；③ 一键汇总行 `OneClickCoordinator.BuildSummaryLine`；④ **批末「本批汇总」**（`ExtractionCoordinator.AppendBatchSummary`，见 §49.4）。③④ 用**同一句文案**（唯一出口 `StatusText.VolumeGroupFollowerSummaryFormat`）；⛔ **恒等式「各分项之和 + 未处理 = 本次任务数」两处都不许破**（跟班卷从"跳过"剔出去后 `pending`/`untouched` 要减掉它）；⛔ `notArchive` 也排除跟班卷。用例 `BatchSummaryDiagnosticsTests.汇总那一行_跟班卷从跳过里剔出去_且恒等式不许破` + `RealMachine20261002FixesTests.本批汇总与一键汇总_跟班卷都不算跳过且恒等式不破`。
+- ⛔ **空间曲线要在"其余物处理完之后"补一针**（见 §49.1）：批末曲线的"收"由 `StartExtractAsync` 收尾写，而**其余物删除在更晚**的 `OneClickCoordinator` 链尾 ⇒ 真机「收 26.3 GiB」之后又删掉约 6 GB。唯一出口 `ExtractionCoordinator.RecordSpaceTrendPostscript(note)`（**取走即清 = 一批一针**）+ `SpaceTrendMonitor.DescribePostscript` + `StatusText.SpaceCurvePostscriptFormat`；⛔ **不许新开第二套取数或第二套文案**；没有侦察器 / 取不到 ⇒ 什么都不写。用例 `RealMachine20261002FixesTests.一键处理_其余物处理完之后补记一针真实可用空间`。
+- ⛔ **空间门放行那一行的"可用"是账面值**（见 §49.2）：账本只在**有任务等空间**时才重探（`:9861`），平时是批首那一针（`:9623`）。唯一出口 `SpaceGate.Check(..., availableIsBookValue)`：账本路传 true ⇒ `StatusText.SpaceGatePassedBookValueFormat`（「……账面可用 X（……不是此刻的真实可用 —— 实时可用看日志里的「空间变化」行）……」）；打包路（刚探到）照旧 `SpaceGatePassedFormat`。⛔ 这个开关**只管措辞**。
 
 ### 11.4 分卷/格式识别
 
@@ -333,7 +333,11 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - ⛔ RAR 两义句：错密码 = **退出码 3** + 「校验和错误。文件已损坏或密码错误。」（中英同句，正确密码 0）⇒ 判据 = 退出码 3 + `Detection/RarEncryptionReader` 判"不是明确没加密"（⛔ 不比中文）落 `EngineErrorTypes.PasswordOrCorrupted`，候选循环**继续试下一个**；**非加密包退出码 3 仍是「文件损坏」**。
   - 用例 `{Rar,Zip,SevenZip}EncryptionReaderTests`；真样本 3 条走 `ARCHIVEFIXER_REAL_ENCRYPTION_{7Z,ZIP_PLAIN,RAR}`〔加密识别扩到 ZIP 与 7z〕
   - ✅ 内嵌 ZIP 也接了加密判读：`BuildEmbeddedResult` 原来**写死 `IsProbablyEncrypted = false`**（误报"没加密"，比"不知道"还糟）；现在读直读探针的 `RequiresPassword`。用例 `EmbeddedZipStreamTests.内嵌的AES_ZIP_要如实报加密_普通的不许误报`（含"普通内嵌 ⛔ 不许被误报成加密"的对照）。
-- ✅ 识别提速：① `Detection/DetectResultCache`：结论按（字节数+修改时间+头指纹+尾指纹）缓存；② `TailArchiveScanner` 改按 `IndexOfAny` 跳候选首字节。⛔ 识别结论一个字都不许变、缓存不含 RAR 加密标志（每次现算）、修改时间进键（不变量 11）。用例 `DetectResultCacheTests`+`TailArchiveScannerBoundaryTests`〔识别提速〕
+- ✅ **列表显示：名字上明确是同一组的分卷 ⇒ 一律只留一行，并在那一行注明「共 N 卷」**（用户 2026-10-02 拍板；取证与实测见 §49.5）。
+  - 归组走 `FileScanService.cs:114` → `VolumeGroupingService.ApplyVolumeGrouping` → `VolumeGroupDetector.Group`，**只看名字**：`partN.rar` / `.z01…+.zip` / `.7z.001…` 各归一组，**每卷带不带签名一律不影响**（RAR 每卷都有签名是物理事实）。⛔ 红线不动：判不出 ⇒ 什么都不做（不硬凑组）、`VolumeGroupResolver` 四档 / `CanEnterDeletableRestItems` / 六条证据一个字没放宽。
+  - 「共 N 卷」的唯一出口 = `VolumeGroupingService.BuildVolumeInfoText`（①页「分卷」列**已放出来**，原来 `Collapsed` ⇒ 那行字读不到）；⛔ 卷数仍是"按名字找到的这几卷"，总数推不出来这句 Note 照旧带着。用例 `RealMachine20261002FixesTests`（RAR5/RAR4 / 跨盘 zip / 7z 三种"只留一行" + 两条对照：同名非分卷不许归组、光杆 `.zip` 不成组）。
+  - ⚠ **"RAR 两套 4 卷各自成一行"在 HEAD 上复现不出来**（两次实测都是每组一行、代表 = 首卷）—— 用户当时看到的那一行按 §49.5 的推演意味着"那一刻首卷不在任务表里"。⛔ 不许写成"已复现并修好"。
+
 
 ### 11.5 管线（落点/弹窗/校验/显示/密码）
 

@@ -236,31 +236,7 @@ namespace ArchiveFixer.Storage
                     return lines;
                 }
 
-                first = null;
-                last = null;
-                low = null;
-                high = null;
-
-                foreach (SpaceTrendSample sample in samples)
-                {
-                    if (sample.FreeBytes < 0)
-                    {
-                        continue;
-                    }
-
-                    first ??= sample;
-                    last = sample;
-
-                    if (low == null || sample.FreeBytes < low.FreeBytes)
-                    {
-                        low = sample;
-                    }
-
-                    if (high == null || sample.FreeBytes > high.FreeBytes)
-                    {
-                        high = sample;
-                    }
-                }
+                (first, last, low, high) = ResolveExtremes(samples);
             }
 
             int unavailable = 0;
@@ -293,6 +269,78 @@ namespace ArchiveFixer.Storage
             }
 
             return lines;
+        }
+
+        /// <summary>
+        /// 批末那条曲线**之后**再补一针真实可用空间时说的一句话（用户 2026-10-02 真机）。
+        ///
+        /// <para><b>为什么必须有它</b>：批末"收"那一针打的时候，这一批的源包 / 过程物**还在盘上**
+        /// （其余物的删除发生在那之后）—— 于是"收"比真实可用少一大截。真机那批：曲线写
+        /// 「起 31.85 GiB → 最低 20.55 GiB → 收 26.3 GiB」，随后 10 份其余物被彻底删除（合计约 6 GB）
+        /// ⇒ 真实收尾约 32.4 GiB（那一批其实净省 0.5 GB，按日志读却像净吃掉 5.5 GB）。</para>
+        ///
+        /// <para>⚠ 调用方必须先自己采一针（<see cref="Record"/>，走的是**同一个探测函数**）；
+        /// 这个方法只负责把它说成一行 —— 起 / 最低 与 <see cref="DescribeReport"/> 用同一份采样表、
+        /// 同一套字（⛔ 不是第二套取数、也不是第二套曲线文案）。</para>
+        /// </summary>
+        /// <param name="note">这一针的来由（例如"其余物处理之后"）。</param>
+        /// <returns>那一行；一次都没采到可用空间时返回 null（如实不写，绝不拿别的数字充数）。</returns>
+        public string? DescribePostscript(string note)
+        {
+            SpaceTrendSample[] samples;
+
+            lock (_sync)
+            {
+                samples = _samples.ToArray();
+            }
+
+            (SpaceTrendSample? first, SpaceTrendSample? last, SpaceTrendSample? low, _) = ResolveExtremes(samples);
+
+            if (first == null || last == null || low == null)
+            {
+                return null;
+            }
+
+            return string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                Models.StatusText.SpaceCurvePostscriptFormat,
+                note ?? string.Empty,
+                TaskSpaceEstimate.FormatSize(last.FreeBytes),
+                TaskSpaceEstimate.FormatSize(first.FreeBytes),
+                TaskSpaceEstimate.FormatSize(low.FreeBytes));
+        }
+
+        /// <summary>从采样表里取"起 / 收 / 最低 / 最高"（取不到可用空间的那几针跳过）。</summary>
+        private static (SpaceTrendSample? First, SpaceTrendSample? Last, SpaceTrendSample? Low, SpaceTrendSample? High)
+            ResolveExtremes(IReadOnlyList<SpaceTrendSample> samples)
+        {
+            SpaceTrendSample? first = null;
+            SpaceTrendSample? last = null;
+            SpaceTrendSample? low = null;
+            SpaceTrendSample? high = null;
+
+            foreach (SpaceTrendSample sample in samples)
+            {
+                if (sample.FreeBytes < 0)
+                {
+                    continue;
+                }
+
+                first ??= sample;
+                last = sample;
+
+                if (low == null || sample.FreeBytes < low.FreeBytes)
+                {
+                    low = sample;
+                }
+
+                if (high == null || sample.FreeBytes > high.FreeBytes)
+                {
+                    high = sample;
+                }
+            }
+
+            return (first, last, low, high);
         }
 
         /// <summary>

@@ -767,6 +767,43 @@ namespace ArchiveFixer.Models
             + "想腾空间，从这几条里挑一条：清理「其余物」/ 换一个空间更大的输出盘 / "
             + "开①页的「空间不足」模式（每解完一层立刻回收那一层的源包，⚠ 会永久删除源包）。";
 
+        /// <summary>
+        /// 空间门**放行**那一行的账面口径（用户 2026-10-02 真机）。
+        ///
+        /// <para>现场：同一分钟里「空间门通过（精确）…… 可用 31.85 GiB」与空间趋势的
+        /// 「空间变化：目标盘 可用 26.91 GiB」差了 5 GiB —— 因为前者那个数是**账本上的数**
+        /// （批首那一针，之后只在"有任务在等空间"时才重探），不是此刻的真实可用。
+        /// 用户按日志读会以为程序把盘算错了（"少算 6 GB"那一条就是这么读出来的）。</para>
+        ///
+        /// <para>⛔ 只改措辞：判据、比较、数字来源一个字都没动。这一档由
+        /// <c>SpaceReservationLedger</c>（账本）发起；打包那条路是**刚刚探到的**，
+        /// 照旧用 <see cref="SpaceGatePassedFormat"/>。</para>
+        ///
+        /// <c>{0}</c> = 需要多少，<c>{1}</c> = 账面可用，<c>{2}</c> = 余下，<c>{3}</c> = 要保留的余量。
+        /// </summary>
+        public const string SpaceGatePassedBookValueFormat =
+            "空间门通过：需要 {0}，账面可用 {1}"
+            + "（这是本次判断用的账面数字，不是此刻的真实可用 —— 实时可用看日志里的「空间变化」行），"
+            + "余下 {2}（保留 {3}）";
+
+        /// <summary>空间门**放行**那一行的普通口径（那个可用空间是刚刚探到的；打包走它）。</summary>
+        public const string SpaceGatePassedFormat =
+            "空间门通过：需要 {0}，可用 {1}，余下 {2}（保留 {3}）";
+
+        /// <summary>
+        /// 空间曲线**补记**那一针（用户 2026-10-02 真机）。
+        ///
+        /// <para>批末那条空间曲线的"收"是在**其余物删除之前**打的：随后那些源包 / 过程物被彻底删掉，
+        /// 盘上真实可用比曲线里的"收"多出一大截 —— 用户按日志读会以为"这一批净吃掉 5.5 GB"
+        /// （他那一批实际净省 0.5 GB）。所以其余物处理完之后**再补一针**，并如实标注它的位置。</para>
+        ///
+        /// <para>⛔ 这一针走的是**本批那个侦察器自己的探测函数**（不是第二套取数），
+        /// 文案也由 <c>SpaceTrendMonitor</c> 产出（不是第二套曲线）。</para>
+        ///
+        /// <c>{0}</c> = 这一针的来由，<c>{1}</c> = 现在真实可用，<c>{2}</c> = 本批起，<c>{3}</c> = 本批最低。
+        /// </summary>
+        public const string SpaceCurvePostscriptFormat = "空间曲线补记：{0} 可用 {1}（本批起 {2} / 最低 {3}）";
+
         /// <summary>落点算不出来时的那一行（**不许**静默显示一个假路径）。</summary>
         public const string OneClickConfirmDestinationUnknownFormat = "暂时算不出来：{0}";
 
@@ -1776,8 +1813,14 @@ namespace ArchiveFixer.Models
         /// <summary>改名成功（写进日志 / 状态栏）。</summary>
         public const string VolumeRepairDoneFormat = "已按建议改名：{0} → {1}";
 
-        /// <summary>整组改名成功（网盘给每卷缀了垃圾那种）。<c>{0}</c>/<c>{1}</c> = 第一卷一旧一新，<c>{2}</c> = 一共改了几卷。</summary>
-        public const string VolumeRepairGroupDoneFormat = "已按建议改名（整组 {2} 卷）：{0} → {1} 等";
+        /// <summary>
+        /// 整组改名成功（网盘给每卷缀了垃圾那种）。<c>{0}</c> = **逐条** `旧名 → 新名`
+        /// （<c>VolumeNameRepairPlan.Describe()</c>），<c>{1}</c> = 一共改了几卷。
+        ///
+        /// <para>⚠ <c>{0}</c> 里已经是"每一卷都点名"的整串：老写法写的是"第一卷一旧一新 + 等"
+        /// （真机上另一卷 `风景02.mp4` 因此一个字都没出现在日志里，用户对不上账）。</para>
+        /// </summary>
+        public const string VolumeRepairGroupDoneFormat = "已按建议改名（整组 {1} 卷）：{0}";
 
         /// <summary>整组改到一半失败。<c>{0}</c> = 已经改好的卷数，<c>{1}</c> = 卡住的原因。</summary>
         public const string VolumeRepairGroupPartialFormat = "整组改名只完成了 {0} 卷就停下了（已改的那几卷不会再动）：{1}";
@@ -1969,6 +2012,20 @@ namespace ArchiveFixer.Models
         public const string VolumeGroupFollowerSkippedLogFormat =
             "{0}：这一卷是分卷组的后续卷，整组由「{1}」那一单从首卷启动 —— 本单不重复解"
             + "（同一份内容解两遍会多出一棵产物树，还会把整组的链尾处理拦住，源包就一个都删不掉了）。";
+
+        /// <summary>
+        /// 汇总里**跟班卷**那一句 —— 「一键处理完成」那一行与批末「本批汇总」那一行**共用同一句**
+        /// （用户 2026-10-02 真机：同一份日志里两处口径打架，一处「跳过 1」、一处「跳过 0」）。
+        ///
+        /// <para>判据是事实位 <c>ArchiveTask.CountsTowardBatchOutcome</c>（跟班卷 = false）：
+        /// 它们**不算"跳过"**（不是没做成 —— 整组已经由第一卷那一单解完了），
+        /// 但要在总数里占一个名额，所以汇总里"未处理"那一档要把它们减掉，
+        /// 否则恒等式「各分项之和 + 未处理 = 本次任务数」当场破掉。</para>
+        ///
+        /// <c>{0}</c> = 几个跟班卷。
+        /// </summary>
+        public const string VolumeGroupFollowerSummaryFormat =
+            "另有 {0} 个是同一分卷组的后续卷 —— 整组由第一卷那一单解完，按设计跳过（不是没做成）。";
 
         // ── 「容器里装的是分卷第一卷」（用户 2026-09-25 第 42 条：探针查出来的实话） ──
 

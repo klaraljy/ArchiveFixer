@@ -33,6 +33,12 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public sealed class VolumeNameRepairPlan
     {
+        /// <summary>
+        /// <see cref="Describe"/> 里最多列几条 `旧名 → 新名`（用户 2026-10-02：整组改名必须点名）。
+        /// 超过它才折成「等 N 卷」—— 一行日志读得完，又不至于把名字全藏起来。
+        /// </summary>
+        private const int MaxNamesInDescribe = 3;
+
         /// <summary>能不能改（false 时看 <see cref="Reason"/>）。</summary>
         public bool CanRepair { get; init; }
 
@@ -89,11 +95,38 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public IReadOnlyList<VolumeRepairItem> Items { get; init; } = Array.Empty<VolumeRepairItem>();
 
-        /// <summary>一行给人看：<c>旧名 → 新名</c>（整组时写出卷数）。</summary>
-        public string Describe() =>
-            Items.Count > 1
-                ? $"{CurrentFileName} → {SuggestedFileName} 等 {Items.Count} 卷"
-                : $"{CurrentFileName} → {SuggestedFileName}";
+        /// <summary>
+        /// 一行给人看：**每一卷都点名**（`旧名 → 新名`）—— 列全 / 折起来都写出这一组共几卷。
+        ///
+        /// <para><b>为什么必须逐条点名</b>（用户 2026-10-02 真机）：老写法只报第一项、其余折成
+        /// 「等 N 卷」，于是真机日志里那一行是
+        /// 「风景01.7z：分卷名不标准，已按标准名改好（2 卷……）：风景01.7z → 风景01.7z.001 等 2 卷」
+        /// —— 另一卷原本叫 **`风景02.mp4`**（被改成 `风景01.7z.002`），日志里**一个字都查不到**，
+        /// 而它随后被彻底删除了。用户对不上账："我的风景02.mp4 去哪了"。</para>
+        ///
+        /// <para>规则：≤ <see cref="MaxNamesInDescribe"/> 项**全列**（末尾写「（共 N 卷）」）；
+        /// 更多时只列前 <see cref="MaxNamesInDescribe"/> 条 + 「等 N 卷」（N 仍是**总卷数**，
+        /// 与老口径一致 —— 绝不静默截断、也不假称只有列出来的那几卷）。</para>
+        /// </summary>
+        public string Describe()
+        {
+            if (Items.Count <= 1)
+            {
+                return $"{CurrentFileName} → {SuggestedFileName}";
+            }
+
+            IEnumerable<VolumeRepairItem> listed = Items.Count > MaxNamesInDescribe
+                ? Items.Take(MaxNamesInDescribe)
+                : Items;
+
+            string body = string.Join(
+                "；",
+                listed.Select(item => $"{item.CurrentFileName} → {item.SuggestedFileName}"));
+
+            return Items.Count > MaxNamesInDescribe
+                ? $"{body}；等 {Items.Count} 卷"
+                : $"{body}（共 {Items.Count} 卷）";
+        }
     }
 
     /// <summary>一组里的一卷：现在叫什么、该叫什么。</summary>
@@ -1787,11 +1820,7 @@ namespace ArchiveFixer.Extraction
                 NewPath = plan.TargetPath,
                 Message = done == 0
                     ? string.Format(StatusText.VolumeRepairDoneFormat, plan.CurrentFileName, plan.SuggestedFileName)
-                    : string.Format(
-                        StatusText.VolumeRepairGroupDoneFormat,
-                        plan.CurrentFileName,
-                        plan.SuggestedFileName,
-                        done + 1)
+                    : string.Format(StatusText.VolumeRepairGroupDoneFormat, plan.Describe(), done + 1)
             };
         }
 

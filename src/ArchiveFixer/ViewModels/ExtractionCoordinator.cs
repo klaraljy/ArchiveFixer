@@ -5901,10 +5901,26 @@ namespace ArchiveFixer.ViewModels
 
             int succeeded = tasks.Count(task => task.Outcome == TaskOutcome.Succeeded);
             int failed = tasks.Count(task => task.Outcome == TaskOutcome.Failed);
-            int skipped = tasks.Count(task => task.Outcome == TaskOutcome.Skipped);
             int cancelled = tasks.Count(task => task.Outcome == TaskOutcome.Cancelled);
             int partial = tasks.Count(task => task.Outcome == TaskOutcome.PartiallyCompleted);
-            int pending = tasks.Count - succeeded - failed - skipped - cancelled - partial;
+
+            /*
+             * ⚠ 「跳过」必须分成两档（用户 2026-10-02 真机：同一份日志里两处口径打架）：
+             *
+             * 现场：批末这行写「本批汇总：11 个任务 —— 成功 10 / 失败 0 / 跳过 1」，而同一批的
+             * 「一键处理完成」那行写「成功 10 / 失败 0 / 跳过 0 …… 另有 1 个是同一分卷组的后续卷
+             * ……按设计跳过（不是没做成）」。同一个"跳过 1"在用户眼里两种意思，他没法判断
+             * 到底有没有东西没做成（`CountsTowardBatchOutcome == false` 的跟班卷不是"没做成"）。
+             *
+             * 判据只读**事实位**（与批末色带 / 批末诊断 / 一键汇总行同一个出口）：
+             * 跟班卷从"跳过"里剔出去、单列一句；它在总数里仍占一个名额，
+             * 所以下面 `pending` 必须把它减掉 —— 恒等式「各分项之和 + 未处理 = 本次任务数」不许破。
+             */
+            int followerSkipped = tasks.Count(task =>
+                task.Outcome == TaskOutcome.Skipped && !task.CountsTowardBatchOutcome);
+            int skipped = tasks.Count(task =>
+                task.Outcome == TaskOutcome.Skipped && task.CountsTowardBatchOutcome);
+            int pending = tasks.Count - succeeded - failed - skipped - followerSkipped - cancelled - partial;
 
             DateTime? first = tasks.Where(task => task.StartTime.HasValue).Min(task => task.StartTime);
             DateTime? last = tasks.Where(task => task.EndTime.HasValue).Max(task => task.EndTime);
@@ -5948,7 +5964,13 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 failed > 0 ? "WARN" : "INFO",
-                $"本批汇总：{tasks.Count} 个任务 —— {string.Join(" / ", parts)}。");
+                $"本批汇总：{tasks.Count} 个任务 —— {string.Join(" / ", parts)}。"
+                + (followerSkipped > 0
+                    ? " " + string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeGroupFollowerSummaryFormat,
+                        followerSkipped)
+                    : string.Empty));
 
             /*
              * 批末那条**红字**（用户 2026-09-29 要求）：把"可能是没有密码 / 密码不对"的那些单独点出来，
@@ -10192,6 +10214,13 @@ namespace ArchiveFixer.ViewModels
         private SpaceTrendMonitor? _spaceTrend;
         private CancellationTokenSource? _spaceTrendCts;
 
+        /// <summary>
+        /// 批末收工之后**还留着**的那个侦察器：等一键处理把其余物处理完，再补一针真实可用空间
+        /// （见 <see cref="RecordSpaceTrendPostscript"/>）。它是**同一个**侦察器（同一个探测函数、
+        /// 同一份采样表），不是第二套取数；一批只补一针，下一批开工时清掉。
+        /// </summary>
+        private SpaceTrendMonitor? _spaceTrendPostscript;
+
         /// <summary>周期采样的间隔（用户要的是"时刻"，但一秒一针又纯属噪声 —— 5 秒够看清曲线）。</summary>
         internal static readonly TimeSpan SpaceTrendInterval = TimeSpan.FromSeconds(5);
 
@@ -10199,6 +10228,12 @@ namespace ArchiveFixer.ViewModels
         private void StartSpaceTrendMonitor(string probePath)
         {
             StopSpaceTrendMonitor();
+
+            /*
+             * 新一批开工 ⇒ 上一批那个"等着补记一针"的侦察器作废（它探的是上一批的盘、
+             * 采样表也是上一批的）。不清掉的话，这一批跑完时补出来的可能是上一批的数字。
+             */
+            _spaceTrendPostscript = null;
 
             if (string.IsNullOrWhiteSpace(probePath))
             {
@@ -10261,6 +10296,57 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog("INFO", line);
             }
+
+            /*
+             * 侦察器**不丢**：批末那条曲线的"收"是在**其余物删除之前**打的（删其余物发生在
+             * `OneClickCoordinator` 的链尾那一步，比这里更晚）—— 真机上那一针因此比真实可用少 6 GB，
+             * 用户按日志读成"这一批净吃掉 5.5 GB"（实际净省 0.5 GB）。
+             *
+             * 留着它，等一键处理把其余物处理完之后由 <see cref="RecordSpaceTrendPostscript"/> 补一针：
+             * **同一个探测函数、同一份采样表、同一套曲线文案** —— 不新开第二套取数。
+             * 下一批开工时 `StartSpaceTrendMonitor` 会先把它清掉，所以它只服务这一批的收尾。
+             */
+            _spaceTrendPostscript = monitor;
+        }
+
+        /// <summary>
+        /// **其余物处理完之后**补一针真实可用空间并写一行 INFO（用户 2026-10-02 真机）。
+        ///
+        /// <para>为什么要补：批末那条空间曲线的"收"打在其余物删除**之前**，随后那些源包 / 过程物
+        /// 被彻底删掉，盘上真实可用比曲线里的"收"多一大截 —— 不补这一针，用户会把这一批读成
+        /// "净吃掉好几 GB"（真机那一批实际净省 0.5 GB）。</para>
+        ///
+        /// <para>⛔ 三条纪律：① 这一针走的是**本批那个侦察器自己的探测函数**（与每 5 秒那一针、
+        /// 与每个任务开工 / 收尾那一针完全同源），不是第二套取数；② 文案由 <c>SpaceTrendMonitor</c>
+        /// 产出，不是第二套曲线；③ **一批只补一针**（取走即清），没有侦察器（手动档 / 单包重试）
+        /// 时什么都不写 —— 绝不编一个数字。</para>
+        /// </summary>
+        /// <param name="note">这一针的来由（写进那一行）。</param>
+        /// <returns>真的写了一行才返回 true。</returns>
+        internal bool RecordSpaceTrendPostscript(string note)
+        {
+            SpaceTrendMonitor? monitor = _spaceTrendPostscript;
+
+            // 取走即清：同一批里被调用两次也不会补出两针（第二针的数字没有意义）。
+            _spaceTrendPostscript = null;
+
+            if (monitor == null)
+            {
+                return false;
+            }
+
+            monitor.Record(note, at: null, notify: false);
+
+            string? line = monitor.DescribePostscript(note);
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                // 这一针与之前的针都取不到可用空间：如实不写（DescribePostscript 已经说明了原因）。
+                return false;
+            }
+
+            AppendLog("INFO", line!);
+            return true;
         }
 
         /// <summary>

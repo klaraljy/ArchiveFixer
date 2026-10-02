@@ -540,11 +540,23 @@
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
 
+                            <!--
+                                分卷这一列**必须看得见**（用户 2026-10-02 拍板："名字上明确是同一组的分卷
+                                ⇒ 一律只留一行，并在那一行注明「这一组共 N 卷」"）：以前它
+                                Visibility="Collapsed"，"4 卷"这几个字只藏在悬停提示与详情窗里，
+                                用户在①页读到的是"两个一模一样的 111.part1.rar"——看不出这一行代表几卷。
+                            -->
                             <DataGridTextColumn Header="分卷"
                                                 Binding="{Binding VolumeInfoText}"
                                                 Width="200"
-                                                Visibility="Collapsed"
-                                                IsReadOnly="True" />
+                                                IsReadOnly="True">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                        <Setter Property="ToolTip" Value="{Binding VolumeInfoText}" />
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
 
                             <DataGridTextColumn Header="密码状态"
                                                 Binding="{Binding PasswordStatus}"

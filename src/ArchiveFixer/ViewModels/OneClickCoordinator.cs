@@ -1212,6 +1212,21 @@ namespace ArchiveFixer.ViewModels
             AppendLog("INFO", summary);
 
             /*
+             * ===== 空间曲线的**补记那一针**（用户 2026-10-02 真机）=====
+             *
+             * 批末那条曲线的"收"是在**上面这次其余物处理之前**打的（`StartExtractAsync` 收尾时就写了），
+             * 而其余物的删除发生在那之后 —— 真机日志因此写着「起 31.85 GiB → 最低 20.55 GiB → 收 26.3 GiB」，
+             * 可随后 10 份其余物被彻底删除（合计约 6 GB）⇒ 真实收尾约 32.4 GiB。
+             * 用户按日志读会以为这一批净吃掉 5.5 GB（实际净省 0.5 GB）。
+             *
+             * 所以**其余物处理完之后**再补一针真实可用空间。三条纪律：
+             * ① 这一针走的是本批那个侦察器自己的探测函数（不是第二套取数）；
+             * ② 文案由 `SpaceTrendMonitor` 产出（不是第二套曲线）；
+             * ③ 没有侦察器（手动档 / 单包重试）时什么都不写 —— 绝不编一个数字。
+             */
+            _extractionCoordinator.RecordSpaceTrendPostscript("其余物处理之后");
+
+            /*
              * 批末的**一份**结论（用户 2026-09-30 第 3 条："严重度管颜色、诊断管文字，
              * 两者都从同一份任务终态算出来，⛔ 不许各算一遍"）：
              * 颜色（Severity）与"出错在哪"那份文字清单（Text）都从**这一个**对象里取 ——
@@ -2469,10 +2484,16 @@ namespace ArchiveFixer.ViewModels
             /*
              * 跟班卷单独一句：它**不是**"没做成"（整组由第一卷那一单解完，它按设计不重复解）。
              * 见上面 `followerSkipped` 那段 —— 用户真正会读错的就是这个数字。
+             *
+             * ⚠ 文案与批末「本批汇总」那一行**共用同一句**（用户 2026-10-02 真机：同一份日志里
+             * 一处「跳过 1」、一处「跳过 0」，两个口径；现在两处读同一个事实位、写同一句话）。
              */
             if (followerSkipped > 0)
             {
-                line += $" 另有 {followerSkipped} 个是同一分卷组的后续卷 —— 整组由第一卷那一单解完，按设计跳过（不是没做成）。";
+                line += " " + string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.VolumeGroupFollowerSummaryFormat,
+                    followerSkipped);
             }
 
             int passwordError = targets.Count(t => t.Status == StatusText.WrongPassword);

@@ -145,7 +145,18 @@ namespace ArchiveFixer.Services
             task.VolumeInfoText = BuildVolumeInfoText(group);
         }
 
-        /// <summary>给用户看的一句话，直接显示在任务行上。</summary>
+        /// <summary>
+        /// 给用户看的一句话，直接显示在任务行上（①页「分卷」列 + 悬停提示 + 详情窗）。
+        ///
+        /// <para><b>用户 2026-10-02 拍板</b>："名字上明确是同一组的分卷 ⇒ 一律只留一行，
+        /// 并在那一行注明「这一组共 N 卷」" —— 所以这一档统一以「共 N 卷」开头，
+        /// 让用户一眼看出"这一行代表的是几卷"（老写法只写"N 卷"，
+        /// 而那一列在①页是折叠的，他根本读不到）。</para>
+        ///
+        /// <para>⛔ 卷数仍然是"**按名字找到的**这几卷"，不是"这一组一共就这么多"：
+        /// 总数推不出来这件事不许藏（见 <see cref="VolumeGroup.Note"/> 与
+        /// <c>VolumeGroupDetector</c> 类注释第 2 条）—— 所以完整那一档照样把 Note 带在括号里。</para>
+        /// </summary>
         public static string BuildVolumeInfoText(VolumeGroup group)
         {
             if (group == null)
@@ -155,7 +166,7 @@ namespace ArchiveFixer.Services
 
             if (group.MissingVolumeNames.Count > 0)
             {
-                return $"{group.Volumes.Count} 卷，缺 {string.Join("、", group.MissingVolumeNames)}";
+                return $"共 {group.Volumes.Count} 卷，缺 {string.Join("、", group.MissingVolumeNames)}";
             }
 
             if (group.Volumes.Count <= 1)
@@ -165,7 +176,7 @@ namespace ArchiveFixer.Services
 
             string note = string.IsNullOrWhiteSpace(group.Note) ? string.Empty : $"（{group.Note}）";
 
-            return $"{group.Volumes.Count} 卷{note}";
+            return $"共 {group.Volumes.Count} 卷{note}";
         }
 
         private static long TryGetFileSize(string path)

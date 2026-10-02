@@ -494,11 +494,20 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        /// <summary>
+        /// ⛔ **只解了一层时发布侧也不摊外壳**（2026-10-02 修 ① 的第二半，见
+        /// <c>PackageLayerRulesTests.无内层包_发布侧也不摊外壳_文件夹原样保留</c> 与
+        /// <c>RecursiveExtractorTests.工作区_Publish不摊任何外壳_归档自带的文件夹原样保留</c>）。
+        ///
+        /// <para>⚠ 这条用例原先断言的是**老口径**（"没有内层包 ⇒ 照旧摊掉无意义外壳"），
+        /// 而 ① 把发布侧那次摊平**整个删掉**了（真机 `风景01.7z.001` 的 `风景\` 就是这么被吃掉的：
+        /// 用户的红线是"这是非常大忌"）—— 26 版那条提交漏改了它，于是它一直红着。
+        /// 现在它与另外两条同口径：归档自带的文件夹原样保留，摊不摊由唯一出口
+        /// <c>ResultFinalizer</c> 决定（同名套娃由它自己的"同名不套层"收掉）。</para>
+        /// </summary>
         [Fact]
-        public void 发布_只解了一层时照旧摊掉无意义外壳()
+        public void 发布_只解了一层时也不摊外壳_文件夹原样保留()
         {
-            // ⛔ 边界（既有用例 `工作区_Publish去掉一层无意义外壳` 的同一口径）：
-            // 没有内层包 ⇒ 照旧摊，一个字都不改。
             string root = NewTempRoot();
 
             try
@@ -513,8 +522,15 @@ namespace ArchiveFixer.Tests
                 WorkspacePublishResult published = workspace.Publish(Path.Combine(root, "stage"));
 
                 Assert.True(published.Success, published.Message);
-                Assert.True(System.IO.File.Exists(Path.Combine(root, "stage", "a.txt")), published.Message);
-                Assert.False(Directory.Exists(Path.Combine(root, "stage", "pack")), "无意义外壳应当被去掉");
+
+                // 归档自带的那层文件夹必须原样保留（⛔ 发布侧不摊了）。
+                Assert.True(
+                    System.IO.File.Exists(Path.Combine(root, "stage", "pack", "a.txt")),
+                    "归档自带的文件夹必须原样保留：" + published.Message);
+
+                Assert.False(
+                    System.IO.File.Exists(Path.Combine(root, "stage", "a.txt")),
+                    "⛔ 只解一层时也不许把归档自带的文件夹摊平");
             }
             finally
             {

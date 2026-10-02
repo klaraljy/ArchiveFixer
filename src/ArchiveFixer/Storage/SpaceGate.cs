@@ -93,12 +93,22 @@ namespace ArchiveFixer.Storage
         /// 它只用于**建议文案**（"开那个模式可以少要多少"），绝不参与放行判断 ——
         /// 判断必须按"这些字节此刻还在盘上"来算。
         /// </param>
+        /// <param name="availableIsBookValue">
+        /// <paramref name="availableBytes"/> 是不是**账本上的数**（批首那一针，之后只在"有任务等空间"
+        /// 时才重探）而不是此刻刚探到的。
+        ///
+        /// <para>⚠ 这个开关**只影响放行那一行的措辞**（用户 2026-10-02 真机：同一分钟里
+        /// 「空间门通过……可用 31.85 GiB」与空间趋势的「可用 26.91 GiB」差了 5 GiB，
+        /// 他按日志读成"程序把盘算错了"）。⛔ 判据、比较、数字来源一个字都没动 ——
+        /// 传进来的还是同一个 <paramref name="availableBytes"/>。</para>
+        /// </param>
         public static SpaceGateDecision Check(
             long requiredBytes,
             long? availableBytes,
             long reserveBytes,
             long alreadyReservedBytes = 0,
-            long reclaimableBytes = 0)
+            long reclaimableBytes = 0,
+            bool availableIsBookValue = false)
         {
             long required = requiredBytes > 0 ? requiredBytes : 0L;
             long reserve = reserveBytes > 0 ? reserveBytes : 0L;
@@ -167,9 +177,27 @@ namespace ArchiveFixer.Storage
                 AvailableBytes = available,
                 ReserveBytes = reserve,
                 ShortfallBytes = 0,
-                Reason = $"空间门通过：需要 {TaskSpaceEstimate.FormatSize(total)}，"
-                         + $"可用 {TaskSpaceEstimate.FormatSize(available)}，"
-                         + $"余下 {TaskSpaceEstimate.FormatSize(remaining)}（保留 {TaskSpaceEstimate.FormatSize(reserve)}）"
+
+                /*
+                 * 两个数（需要 / 可用）都取既有口径，⛔ 一个都没动；变的只是"这个可用是哪来的"这句话 ——
+                 * 账本那条路（并发解压）与打包那条路（刚探到）**必须说得不一样**，
+                 * 否则用户会拿一个批首的数去比同一分钟的空间趋势（2026-10-02 真机）。
+                 */
+                Reason = availableIsBookValue
+                    ? string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        Models.StatusText.SpaceGatePassedBookValueFormat,
+                        TaskSpaceEstimate.FormatSize(total),
+                        TaskSpaceEstimate.FormatSize(available),
+                        TaskSpaceEstimate.FormatSize(remaining),
+                        TaskSpaceEstimate.FormatSize(reserve))
+                    : string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        Models.StatusText.SpaceGatePassedFormat,
+                        TaskSpaceEstimate.FormatSize(total),
+                        TaskSpaceEstimate.FormatSize(available),
+                        TaskSpaceEstimate.FormatSize(remaining),
+                        TaskSpaceEstimate.FormatSize(reserve))
             };
         }
 
@@ -323,7 +351,8 @@ namespace ArchiveFixer.Storage
                     _availableBytes >= 0 ? _availableBytes : null,
                     ReserveBytes,
                     _reservedBytes,
-                    reclaimableBytes);
+                    reclaimableBytes,
+                    availableIsBookValue: true);
 
                 if (decision.Allowed && !decision.ProbeFailed)
                 {
@@ -390,7 +419,8 @@ namespace ArchiveFixer.Storage
                     _availableBytes >= 0 ? _availableBytes : null,
                     ReserveBytes,
                     0,
-                    reclaimableBytes);
+                    reclaimableBytes,
+                    availableIsBookValue: true);
             }
         }
 
