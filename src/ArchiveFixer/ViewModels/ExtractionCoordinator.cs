@@ -5899,28 +5899,19 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            int succeeded = tasks.Count(task => task.Outcome == TaskOutcome.Succeeded);
-            int failed = tasks.Count(task => task.Outcome == TaskOutcome.Failed);
-            int cancelled = tasks.Count(task => task.Outcome == TaskOutcome.Cancelled);
-            int partial = tasks.Count(task => task.Outcome == TaskOutcome.PartiallyCompleted);
-
             /*
-             * ⚠ 「跳过」必须分成两档（用户 2026-10-02 真机：同一份日志里两处口径打架）：
+             * 数法只有一份（`Models/BatchOutcomeTally`）—— 这一行、一键汇总那一行、
+             * 以及导出的日志头部读的都是它，⛔ 不许在这里再写一遍 `Count(task => …)`。
              *
-             * 现场：批末这行写「本批汇总：11 个任务 —— 成功 10 / 失败 0 / 跳过 1」，而同一批的
-             * 「一键处理完成」那行写「成功 10 / 失败 0 / 跳过 0 …… 另有 1 个是同一分卷组的后续卷
-             * ……按设计跳过（不是没做成）」。同一个"跳过 1"在用户眼里两种意思，他没法判断
-             * 到底有没有东西没做成（`CountsTowardBatchOutcome == false` 的跟班卷不是"没做成"）。
+             * 现场（用户 2026-10-02 真机日志）：这两行各写了一遍数法，于是同一份日志里
+             * ① 同一个"跳过"一处算跟班卷、一处不算（`CountsTowardBatchOutcome == false` 的跟班卷
+             *    不是"没做成"）；②「终态说成功、校验却判否」那一帧在一处算成功、另一处算失败。
+             *    ⇒ 两个"失败的数"，用户拿哪一行去对数都对不上。
              *
-             * 判据只读**事实位**（与批末色带 / 批末诊断 / 一键汇总行同一个出口）：
-             * 跟班卷从"跳过"里剔出去、单列一句；它在总数里仍占一个名额，
-             * 所以下面 `pending` 必须把它减掉 —— 恒等式「各分项之和 + 未处理 = 本次任务数」不许破。
+             * 跟班卷单独一句、仍占总数一个名额，所以"未处理"那一档要把它们减掉 ——
+             * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底，两处都不许破。
              */
-            int followerSkipped = tasks.Count(task =>
-                task.Outcome == TaskOutcome.Skipped && !task.CountsTowardBatchOutcome);
-            int skipped = tasks.Count(task =>
-                task.Outcome == TaskOutcome.Skipped && task.CountsTowardBatchOutcome);
-            int pending = tasks.Count - succeeded - failed - skipped - followerSkipped - cancelled - partial;
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(tasks);
 
             DateTime? first = tasks.Where(task => task.StartTime.HasValue).Min(task => task.StartTime);
             DateTime? last = tasks.Where(task => task.EndTime.HasValue).Max(task => task.EndTime);
@@ -5928,34 +5919,7 @@ namespace ArchiveFixer.ViewModels
                 ? (last.Value - first.Value).ToString(@"hh\:mm\:ss")
                 : string.Empty;
 
-            var parts = new List<string>
-            {
-                $"成功 {succeeded}",
-                $"失败 {failed}",
-                $"跳过 {skipped}"
-            };
-
-            if (cancelled > 0)
-            {
-                parts.Add($"取消 {cancelled}");
-            }
-
-            /*
-             * 「部分完成」单独一档（用户 2026-09-27："统一成「部分完成」可以"）。
-             *
-             * 以前它被算进 `pending`（= 总数 − 成功 − 失败 − 跳过 − 取消），于是同一件事
-             * 批末说"未处理 1"、一键处理汇总说"部分完成 1" —— 两个说法，用户对着日志看会以为
-             * 有一单压根没跑。现在两处口径一致。
-             */
-            if (partial > 0)
-            {
-                parts.Add($"部分完成 {partial}");
-            }
-
-            if (pending > 0)
-            {
-                parts.Add($"未处理 {pending}");
-            }
+            var parts = new List<string>(tally.BuildParts());
 
             if (!string.IsNullOrWhiteSpace(elapsed))
             {
@@ -5963,14 +5927,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             AppendLog(
-                failed > 0 ? "WARN" : "INFO",
-                $"本批汇总：{tasks.Count} 个任务 —— {string.Join(" / ", parts)}。"
-                + (followerSkipped > 0
-                    ? " " + string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.VolumeGroupFollowerSummaryFormat,
-                        followerSkipped)
-                    : string.Empty));
+                tally.Failed > 0 ? "WARN" : "INFO",
+                $"本批汇总：{tally.Total} 个任务 —— {string.Join(" / ", parts)}。"
+                + (tally.FollowerSkipped > 0 ? " " + tally.DescribeFollowerNote() : string.Empty));
 
             /*
              * 批末那条**红字**（用户 2026-09-29 要求）：把"可能是没有密码 / 密码不对"的那些单独点出来，
@@ -5997,19 +5956,24 @@ namespace ArchiveFixer.ViewModels
                         string.Join("、", passwordSuspects.Take(MaxBatchSummaryFailures).Select(task => task.FileName))));
             }
 
-            if (failed == 0)
+            if (tally.Failed == 0)
             {
                 return;
             }
 
-            foreach (ArchiveTask task in tasks.Where(task => task.Outcome == TaskOutcome.Failed).Take(MaxBatchSummaryFailures))
+            /*
+             * 逐条列的判据与上面那个数字**同一个出口**（`BatchOutcomeTally.IsCountedAsFailure`）——
+             * 否则"终态说成功、校验却判否"那一帧会被算进失败数、却不在失败清单里，
+             * 用户数一遍名字发现少一个。
+             */
+            foreach (ArchiveTask task in tasks.Where(BatchOutcomeTally.IsCountedAsFailure).Take(MaxBatchSummaryFailures))
             {
                 AppendLog("WARN", $"  失败：{task.FileName} —— {task.Status}");
             }
 
-            if (failed > MaxBatchSummaryFailures)
+            if (tally.Failed > MaxBatchSummaryFailures)
             {
-                AppendLog("WARN", $"  …还有 {failed - MaxBatchSummaryFailures} 个失败没列出来（完整清单见「导出失败清单」）");
+                AppendLog("WARN", $"  …还有 {tally.Failed - MaxBatchSummaryFailures} 个失败没列出来（完整清单见「导出失败清单」）");
             }
         }
 

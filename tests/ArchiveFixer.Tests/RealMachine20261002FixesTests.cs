@@ -414,6 +414,140 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("未处理", line, StringComparison.Ordinal);
         }
 
+        // ================================================================ ⑦ 「一批任务怎么数」只剩一个出口
+
+        /// <summary>
+        /// **数法只有一份**（<see cref="BatchOutcomeTally"/>）：跟班卷单列一档、
+        /// 「未处理」按"总数 − 各分项"倒推 ⇒ 恒等式「各分项之和 + 未处理 = 任务数」永远成立。
+        /// </summary>
+        [Fact]
+        public void 数法_跟班卷单列一档_且各分项加未处理等于任务数()
+        {
+            var owner = new ArchiveTask(@"C:\t\set.7z.001", 1)
+            {
+                Status = StatusText.ExtractSuccess,
+                Outcome = TaskOutcome.Succeeded
+            };
+
+            // 跟班卷：同一分卷组的后续卷，按设计落 Skipped，但**不是"没做成"**。
+            var follower = new ArchiveTask(@"C:\t\set.7z.002", 2)
+            {
+                Status = StatusText.Skipped,
+                Outcome = TaskOutcome.Skipped,
+                IsVolumeGroupFollower = true
+            };
+
+            // 用户在同名冲突框里自己选的"跳过"：照旧算"跳过"那一档。
+            var userSkip = new ArchiveTask(@"C:\t\junk.txt", 3)
+            {
+                Status = StatusText.Skipped,
+                Outcome = TaskOutcome.Skipped
+            };
+
+            // 还没轮到的那一单（真机导入完就先导日志，整批都是这一档）。
+            var pending = new ArchiveTask(@"C:\t\later.zip", 4) { Outcome = TaskOutcome.Pending };
+
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(new[] { owner, follower, userSkip, pending });
+
+            Assert.Equal(4, tally.Total);
+            Assert.Equal(1, tally.Succeeded);
+            Assert.Equal(0, tally.Failed);
+            Assert.Equal(1, tally.Skipped);
+            Assert.Equal(1, tally.FollowerSkipped);
+            Assert.Equal(0, tally.PartiallyCompleted);
+            Assert.Equal(0, tally.Cancelled);
+            Assert.Equal(1, tally.Untouched);
+
+            // 恒等式（用户 2026-10-02 定：两个汇总行都不许破）。
+            Assert.Equal(
+                tally.Total,
+                tally.Succeeded + tally.Failed + tally.Skipped + tally.FollowerSkipped
+                    + tally.PartiallyCompleted + tally.Cancelled + tally.Untouched);
+        }
+
+        /// <summary>
+        /// **"终态说成功、校验却判否"那一帧落失败侧**（不变量 6 的真机违反）——
+        /// 旧写法下批末「本批汇总」把它算成功、一键汇总那一行算失败，同一份日志两个"失败 N"。
+        /// </summary>
+        [Fact]
+        public void 数法_终态说成功但校验判否_落失败侧()
+        {
+            var bad = new ArchiveTask(@"C:\t\half.7z", 1)
+            {
+                Status = StatusText.ExtractSuccess,
+                Outcome = TaskOutcome.Succeeded,
+                OutputVerification = OutputVerificationOutcome.Failed
+            };
+
+            Assert.True(BatchOutcomeTally.IsCountedAsFailure(bad));
+            Assert.False(BatchOutcomeTally.IsCountedAsSuccess(bad));
+
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(new[] { bad });
+
+            Assert.Equal(0, tally.Succeeded);
+            Assert.Equal(1, tally.Failed);
+
+            // 逐条列名字那份清单读的是**同一个**判据（否则数字与名字会差一个）。
+            Assert.Contains(bad, new[] { bad }.Where(BatchOutcomeTally.IsCountedAsFailure));
+        }
+
+        /// <summary>
+        /// **导出头部照同一份数法**：跟班卷不算"跳过"、单列一句，
+        /// 而"既没成功也没失败也没跳过"的那些任务必须落「未处理」——
+        /// 否则头部的三个分项加起来对不上任务数（真机那份导入完的日志就是
+        /// 「任务数：10（成功 0 / 失败 0 / 跳过 0）」，读的人当场对不上账）。
+        /// </summary>
+        [Fact]
+        public void 导出头部_导入完还没跑时_未处理那一档必须写出来()
+        {
+            Harness harness = CreateHarness();
+
+            harness.AddTask(harness.CreateSource("a.7z"));
+            harness.AddTask(harness.CreateSource("b.7z"));
+
+            string text = string.Join("\n", harness.Vm.BuildLogExportHeader());
+
+            Assert.Contains("任务数：2（成功 0 / 失败 0 / 跳过 0 / 未处理 2）", text, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **三处口径逐个相同**：同一批任务，「本批汇总」那一行、一键汇总那一行、
+        /// 以及导出的日志头部，分项数字与跟班卷那一句必须**一个字都不差**。
+        /// </summary>
+        [Fact]
+        public async Task 三处口径一致_本批汇总与一键汇总与导出头部()
+        {
+            Harness harness = CreateHarness();
+
+            string first = harness.CreateSource("set.7z.001");
+            string second = harness.CreateSource("set.7z.002");
+
+            harness.AddTask(first);
+            ArchiveTask follower = harness.AddTask(second);
+
+            await harness.OneClick.RunAsync();
+
+            List<string> lines = harness.LogTexts.ToList();
+
+            string batch = Assert.Single(lines
+                .Where(line => line.Contains("本批汇总：", StringComparison.Ordinal))
+                .ToList());
+            string done = lines.First(line => line.Contains("一键处理完成：", StringComparison.Ordinal));
+            string header = string.Join("\n", harness.Vm.BuildLogExportHeader());
+
+            Assert.True(follower.IsVolumeGroupFollower);
+
+            foreach (string line in new[] { batch, done })
+            {
+                Assert.Contains("成功 1 / 失败 0 / 跳过 0", line, StringComparison.Ordinal);
+                Assert.Contains("另有 1 个是同一分卷组的后续卷", line, StringComparison.Ordinal);
+                Assert.DoesNotContain("未处理", line, StringComparison.Ordinal);
+            }
+
+            Assert.Contains("任务数：2（成功 1 / 失败 0 / 跳过 0）", header, StringComparison.Ordinal);
+            Assert.Contains("另有 1 个是同一分卷组的后续卷", header, StringComparison.Ordinal);
+        }
+
         // ================================================================ ⑥ 列表显示统一：一组只留一行
 
         /// <summary>

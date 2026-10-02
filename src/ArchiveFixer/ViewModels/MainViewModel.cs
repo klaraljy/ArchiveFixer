@@ -3822,9 +3822,18 @@ namespace ArchiveFixer.ViewModels
                 lines.Add($"导出时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             }
 
-            int succeeded = Tasks.Count(task => task.Outcome == TaskOutcome.Succeeded);
-            int failed = Tasks.Count(task => task.Outcome == TaskOutcome.Failed);
-            int skipped = Tasks.Count(task => task.Outcome == TaskOutcome.Skipped);
+            /*
+             * 数法只有一份（`Models/BatchOutcomeTally`）：批末「本批汇总」那一行、一键汇总那一行、
+             * 以及这里三处共用，⛔ 别在这里再写一遍 `Count(task => …)`。
+             *
+             * 旧写法（2026-10-02 真机日志里读出来的）漏了两件事：
+             * ① 跟班卷（同一分卷组的后续卷）被算进"跳过" —— 同一份日志里批末说"跳过 0"、
+             *    头部却会把每一卷都数成一次"跳过"；
+             * ② 只报成功 / 失败 / 跳过三档 —— "既没成功、也没失败、也没跳过"的那些任务
+             *    （例如导入完还没跑）一个数都不占，于是头部写着
+             *    「任务数：10（成功 0 / 失败 0 / 跳过 0）」，读的人当场对不上账。
+             */
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(Tasks);
 
             /*
              * 任务数要分两层说（用户 2026-09-26 第 45 条的真机现场）：他跑 38 个包，头部却写"任务数：76" ——
@@ -3833,8 +3842,17 @@ namespace ArchiveFixer.ViewModels
             int continuation = Tasks.Count(task => task.IsContinuationTask);
 
             lines.Add(
-                $"任务数：{Tasks.Count}（成功 {succeeded} / 失败 {failed} / 跳过 {skipped}）"
+                $"任务数：{tally.Total}（{string.Join(" / ", tally.BuildParts())}）"
                 + (continuation > 0 ? $"；其中续解出来的内层包 {continuation} 个" : string.Empty));
+
+            /*
+             * 跟班卷那一句与两个汇总行**共用同一句**（`DescribeFollowerNote`）：
+             * 数字从"跳过"里剔出去之后，它必须在头部里出现一次，否则三个分项加起来又对不上任务数。
+             */
+            if (tally.FollowerSkipped > 0)
+            {
+                lines.Add(tally.DescribeFollowerNote());
+            }
 
             string engine = DescribeEngineIdentity();
 

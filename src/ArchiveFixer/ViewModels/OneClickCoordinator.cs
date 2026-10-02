@@ -2394,65 +2394,25 @@ namespace ArchiveFixer.ViewModels
             int pendingContinuation = 0)
         {
             /*
-             * ===== 分项一律按**机器终态**算（用户 2026-09-27 真机：口径打架）=====
+             * ===== 分项一律按**机器终态**算，而且**数法只有一份** =====
              *
-             * 旧写法读的是状态字符串（`Status == StatusText.X`），而递归失败那条路
-             * 过去只写了状态、`Outcome` 留在 `Pending` —— 于是同一个任务：
-             * ①页说「部分完成」、这里说「未处理 1」、批末诊断说「下一步：其他」。
+             * 这份数法（<see cref="BatchOutcomeTally"/>）是本行、批末「本批汇总」那一行、
+             * 以及导出的日志头部**共用**的：三处读同一对字段（`Outcome` + `OutputVerification`）
+             * 与同一个事实位（`CountsTowardBatchOutcome`），⛔ 不许哪一处再自己 `Count(task => …)`。
              *
-             * 现在五档全部读 <see cref="ArchiveTask.Outcome"/>（唯一的机器事实），
-             * 分项之和 + 未处理 = 本次任务数这条恒等式成立：
-             * `Outcome` 非 `Pending` 的一定落在成功 / 失败 / 部分完成 / 跳过 / 取消 五档里，
-             * 一个都不会漏出去（漏出去就会变成凭空多一个"未处理"）。
-             */
-            int success = targets.Count(task =>
-                task.Outcome == TaskOutcome.Succeeded &&
-                task.OutputVerification != OutputVerificationOutcome.Failed);
-            int partial = targets.Count(task => task.Outcome == TaskOutcome.PartiallyCompleted);
-            int cancelled = targets.Count(task => task.Outcome == TaskOutcome.Cancelled);
-
-            /*
-             * ⚠ 「跳过」必须分成两档（用户 2026-10-01 第三报 + 第五报的日志：
-             * 真机那批 10 个任务里 **4 个是各组的分卷后续卷**，一行「跳过 4」被他读成"还有 4 个没弄完"。
-             * 他原话：「这四个应该是要跳过的，我绝对没必要，你这样会让用户觉得还有任务没弄完」）。
+             * 为什么收敛（用户 2026-10-02 真机日志）：过去三处各写一遍，于是同一批里
+             * ①「跳过」一处算跟班卷、一处不算（2026-10-01 第三报的现场：
+             *   10 个任务里 4 个是各组的分卷后续卷，一行「跳过 4」被他读成"还有 4 个没弄完"）；
+             * ②「终态说成功、校验却判否」那一帧在一处算成功、另一处算失败
+             *   （旧写法这里读的是状态字符串，而递归失败那条路过去只写状态、`Outcome` 留在 `Pending`
+             *   ⇒ ①页说「部分完成」、这里说「未处理 1」、批末诊断说「下一步：其他」）。
              *
-             * 判据只读事实位 `CountsTowardBatchOutcome`（跟班卷 = false，与批末色带 / 批末诊断同一个出口）：
-             * 跟班卷单列一句解释，**不混进"跳过"那一档**；而它在总数里仍然占一个名额，
-             * 所以下面 `untouched` 要把这一档减掉 —— 各分项之和 + 未处理 = 本次任务数这条恒等式不能破。
+             * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底：
+             * 跟班卷单列一档、`untouched` 按"总数 − 各分项"倒推，所以将来加了新终态也不会凭空漏一个数。
              */
-            int followerSkipped = targets.Count(task =>
-                task.Outcome == TaskOutcome.Skipped && !task.CountsTowardBatchOutcome);
-            int skipped = targets.Count(task =>
-                task.Outcome == TaskOutcome.Skipped && task.CountsTowardBatchOutcome);
-            int failed = targets.Count(task => task.Outcome == TaskOutcome.Failed);
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(targets);
 
-            /*
-             * "终态说成功、校验却判否"那一帧（真机出现过，不变量 6）：上面成功那一档已经
-             * 把它剔掉了，它必须落到失败侧 —— 否则它会从五个分项里一起漏出去，变成"未处理 +1"。
-             */
-            failed += targets.Count(task =>
-                task.Outcome == TaskOutcome.Succeeded &&
-                task.OutputVerification == OutputVerificationOutcome.Failed);
-
-            // 剩下的就是"既没成功也没失败、也没跳过"的：没轮到它（例如格式未知却没被处理）。
-            int untouched = targets.Count - followerSkipped - success - partial - cancelled - skipped - failed;
-
-            var parts = new List<string> { $"成功 {success}", $"失败 {failed}", $"跳过 {skipped}" };
-
-            if (partial > 0)
-            {
-                parts.Add($"部分完成 {partial}");
-            }
-
-            if (cancelled > 0)
-            {
-                parts.Add($"取消 {cancelled}");
-            }
-
-            if (untouched > 0)
-            {
-                parts.Add($"未处理 {untouched}");
-            }
+            var parts = new List<string>(tally.BuildParts());
 
             string scope = targets.Count == Tasks.Count
                 ? $"本次 {targets.Count} 个任务"
@@ -2483,17 +2443,15 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 跟班卷单独一句：它**不是**"没做成"（整组由第一卷那一单解完，它按设计不重复解）。
-             * 见上面 `followerSkipped` 那段 —— 用户真正会读错的就是这个数字。
+             * 用户真正会读错的就是这个数字。
              *
-             * ⚠ 文案与批末「本批汇总」那一行**共用同一句**（用户 2026-10-02 真机：同一份日志里
-             * 一处「跳过 1」、一处「跳过 0」，两个口径；现在两处读同一个事实位、写同一句话）。
+             * ⚠ 文案与批末「本批汇总」那一行、日志导出头部**共用同一句**
+             * （`BatchOutcomeTally.DescribeFollowerNote` —— 用户 2026-10-02 真机：同一份日志里
+             * 一处「跳过 1」、一处「跳过 0」，两个口径；现在三处读同一个事实位、写同一句话）。
              */
-            if (followerSkipped > 0)
+            if (tally.FollowerSkipped > 0)
             {
-                line += " " + string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.VolumeGroupFollowerSummaryFormat,
-                    followerSkipped);
+                line += " " + tally.DescribeFollowerNote();
             }
 
             int passwordError = targets.Count(t => t.Status == StatusText.WrongPassword);
