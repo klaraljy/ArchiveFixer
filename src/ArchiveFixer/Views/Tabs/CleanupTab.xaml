@@ -233,6 +233,26 @@
                     </WrapPanel>
                 </StackPanel>
             </GroupBox>
+
+            <!-- ==================== 部分完成也把已解出的内容放进目标目录（用户 2026-10-02） ==================== -->
+            <GroupBox Header="{x:Static models:StatusText.SettingsPartialPublishGroupHeader}">
+                <StackPanel>
+                    <!--
+                        用户 2026-10-02 原话：「这个的操作最少差不多就占了两份原包的空间要在开启界面详细写清楚」。
+                        ⇒ 开关下面那段小字必须说清四件事（两份空间 / 源包一定不删 / 与「空间不足」互斥 /
+                        落点固定且重跑不撞名），文案唯一出口 = StatusText.SettingsPartialPublishHint。
+                    -->
+                    <CheckBox Margin="0,0,0,0"
+                              Content="{x:Static models:StatusText.SettingsPartialPublishLabel}"
+                              IsChecked="{Binding SettingsEditor.Settings.PartialPublishEnabled, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.SettingsPartialPublishTooltip}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="22,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.SettingsPartialPublishHint}" />
+                </StackPanel>
+            </GroupBox>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

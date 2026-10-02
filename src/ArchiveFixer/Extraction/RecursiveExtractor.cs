@@ -111,6 +111,24 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public LayerManifest Manifest { get; init; } = LayerManifest.Unavailable("这一层没有列过清单");
 
+        /// <summary>
+        /// **本层清单的逐条形状**（相对路径 + 解压后字节），部分完成发布（<see cref="PartialPublishPlanner"/>）
+        /// 要靠它逐条对账。
+        ///
+        /// <para>为什么要单独带一份：<see cref="Manifest"/> 只有两个总数（条目数 / 总字节），
+        /// 而"哪些文件敢发布"必须逐条回答（缺的 / 大小不符的 / 被引擎点名的）。取的是
+        /// **这一层列目录成功的那一次**（<see cref="CheckEntriesBeforeExtractAsync"/> 的原始结论）——
+        /// 密码不对时候选连目录都列不出来，那一档自然就是空表 ⇒ 判"没有清单" ⇒ 什么都不发布。</para>
+        /// </summary>
+        public IReadOnlyList<(string Path, long Size)> ManifestEntries { get; init; } =
+            Array.Empty<(string, long)>();
+
+        /// <summary>这一层失败时**引擎点名**的坏条目（点不出名时是空集合，见 <c>ArchiveOperationResult.FailedEntryNames</c>）。</summary>
+        public IReadOnlyList<string> FailedEntryNames { get; init; } = Array.Empty<string>();
+
+        /// <summary>这一层失败时引擎**自报**的出错条目数（闸门：比点得出名的多 ⇒ 一个字节都不发布）。</summary>
+        public int ReportedSubItemErrors { get; init; }
+
         /// <summary>只用 "空密码" 或 "******"；本层没试过密码时为空串。</summary>
         public string UsedPasswordMasked { get; init; } = string.Empty;
     }
@@ -819,6 +837,13 @@ namespace ArchiveFixer.Extraction
             LayerManifest layerManifest = LayerManifest.Unavailable("这一层没能列出清单（解压前那次列目录没成功）");
 
             /*
+             * 本层"最近一次列目录成功的逐条清单"（部分完成发布的输入，见 ManifestEntries）。
+             * 只记**成功**的那一次：列不出来（密码不对 / 加密头）时盘上那份清单根本不存在，
+             * 记一份空的/残缺的只会让下游把"缺得太多"当成"包坏了"。
+             */
+            IReadOnlyList<(string Path, long Size)> lastListedEntries = Array.Empty<(string, long)>();
+
+            /*
              * 这一层的最多候选数：**与循环用的同一个上限**（`_limits.MaxPasswordAttemptsPerLayer`）。
              * 先算出来是为了让"候选 i/N"里的 N 与真正会试的个数一致 ——
              * 写成 candidates.Count 会在被上限截断时给出一个永远到不了的 N。
@@ -906,6 +931,11 @@ namespace ArchiveFixer.Extraction
                 candidateManifest = listedThisCandidate is { Success: true }
                     ? LayerManifest.From(listedThisCandidate)
                     : LayerManifest.Unavailable(LayerManifest.DescribeListFailure(listedThisCandidate));
+
+                if (listedThisCandidate is { Success: true })
+                {
+                    lastListedEntries = PartialPublishPlanner.ToManifestEntries(listedThisCandidate);
+                }
 
                 if (unsafeSummary != null)
                 {
@@ -1030,7 +1060,7 @@ namespace ArchiveFixer.Extraction
                             layerLabel));
 
                     return LayerOutcome.Stop(
-                        BuildLayerReport(item, result, succeededPassword: null),
+                        BuildLayerReport(item, result, succeededPassword: null, manifestEntries: lastListedEntries),
                         RecursionStopReason.Corrupted);
                 }
 
@@ -1061,7 +1091,12 @@ namespace ArchiveFixer.Extraction
                     Log("WARN", $"{layerLabel}：{provenMessage}");
 
                     return LayerOutcome.Stop(
-                        BuildLayerReport(item, result, succeededPassword: null, overrideMessage: provenMessage),
+                        BuildLayerReport(
+                            item,
+                            result,
+                            succeededPassword: null,
+                            overrideMessage: provenMessage,
+                            manifestEntries: lastListedEntries),
                         RecursionStopReason.Corrupted);
                 }
 
@@ -1114,7 +1149,7 @@ namespace ArchiveFixer.Extraction
                         result.Message));
 
                 return LayerOutcome.Stop(
-                    BuildLayerReport(item, result, succeededPassword: null),
+                    BuildLayerReport(item, result, succeededPassword: null, manifestEntries: lastListedEntries),
                     MapEngineErrorToStopReason(result));
             }
 
@@ -1130,7 +1165,11 @@ namespace ArchiveFixer.Extraction
                 ArchiveOperationResult? conclusion =
                     ambiguousPasswordFailure ?? informativeFailure ?? lastFailure;
 
-                RecursionLayerReport failureReport = BuildLayerReport(item, conclusion, succeededPassword: null);
+                RecursionLayerReport failureReport = BuildLayerReport(
+                    item,
+                    conclusion,
+                    succeededPassword: null,
+                    manifestEntries: lastListedEntries);
 
                 RecursionStopReason reason = ResolvePasswordStopReason(
                     candidates.Count,
@@ -2007,13 +2046,15 @@ namespace ArchiveFixer.Extraction
         private RecursionLayerReport BuildLayerReport(
             WorkItem item,
             ArchiveOperationResult? result,
-            string? succeededPassword)
+            string? succeededPassword,
+            IReadOnlyList<(string Path, long Size)>? manifestEntries = null)
         {
             return BuildLayerReport(
                 item,
                 result,
                 succeededPassword,
-                PasswordMasker.Sanitize(result?.Message));
+                PasswordMasker.Sanitize(result?.Message),
+                manifestEntries);
         }
 
         /// <summary>
@@ -2024,7 +2065,8 @@ namespace ArchiveFixer.Extraction
             WorkItem item,
             ArchiveOperationResult? result,
             string? succeededPassword,
-            string? overrideMessage)
+            string? overrideMessage,
+            IReadOnlyList<(string Path, long Size)>? manifestEntries = null)
         {
             string message = overrideMessage
                 ?? (result == null ? "引擎没有返回结果" : PasswordMasker.Sanitize(result.Message));
@@ -2043,6 +2085,14 @@ namespace ArchiveFixer.Extraction
 
                 // 失败层没有可信清单（它压根没解开）：L3 不会拿它当预期，原因如实写。
                 Manifest = LayerManifest.Unavailable("这一层没有成功解压，没有可信清单"),
+
+                /*
+                 * 但"逐条清单"要带上（部分完成发布的输入）：它是**解压前**列出来的那一份，
+                 * 与"这一层解开了没有"无关 —— 密码对、坏在个别条目上时，它正是逐条对账唯一能用的尺子。
+                 */
+                ManifestEntries = manifestEntries ?? Array.Empty<(string, long)>(),
+                FailedEntryNames = result?.FailedEntryNames ?? Array.Empty<string>(),
+                ReportedSubItemErrors = result?.ReportedSubItemErrors ?? 0,
                 UsedPasswordMasked = succeededPassword == null ? string.Empty : PasswordMasker.Mask(succeededPassword)
             };
         }

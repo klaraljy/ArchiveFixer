@@ -142,8 +142,23 @@ namespace ArchiveFixer.Storage
         /// <para>并发的账也按它记：同时在跑的几个任务，各自"新写"的量之和才是那一刻盘上多出来的量。
         /// ①页「空间不足」模式**不需要另立一套判据** —— 源包在两种档下都不进需求；
         /// 那个模式的差别只体现在"跑完把源包收回来、下一个包更宽"（账本每个任务收尾都真实重探可用空间）。</para>
+        ///
+        /// <para><b>唯一的例外 = 部分完成发布（<see cref="CountsSourceAsNewOccupancy"/>）</b>：
+        /// 那一档跑完源包**一定还在盘上**（用户定的红线），也就是说这一单跑完盘上会多留一整个源包的占用
+        /// ⇒ 需求要加上它。⛔ 不加就等于把"两份"的承诺按"一份"排计划（用户 2026-10-02 顾虑 2 点名的
+        /// 危险组合：空间不足 + 大容量 + 多份相同文件一起开）。</para>
         /// </summary>
-        public long FreeSpaceDemandBytes => StagingBytes;
+        public long FreeSpaceDemandBytes =>
+            CountsSourceAsNewOccupancy ? SaturatingSum(StagingBytes, SourceBytes) : StagingBytes;
+
+        /// <summary>
+        /// **部分完成发布开着**：这一单跑完源包仍然占着盘（那一档一律不搬不删源包）
+        /// ⇒ <see cref="FreeSpaceDemandBytes"/> 要把整份源包算进来。
+        ///
+        /// <para>它只影响"要不要启动这个任务"这一个判断；<see cref="PeakBytes"/> /
+        /// <see cref="ReclaimableBytes"/> 这些描述性的数一个都不改（口径仍然是"盘上同时有什么"）。</para>
+        /// </summary>
+        public bool CountsSourceAsNewOccupancy { get; init; }
 
         /// <summary>
         /// ①页「空间不足」模式在定稿 + 校验通过之后能收回的字节数（源包 + 过程物）。
@@ -189,6 +204,7 @@ namespace ArchiveFixer.Storage
                 ProcessArtifactBytes = ProcessArtifactBytes,
                 ContentEstimated = ContentEstimated,
                 HasListing = HasListing,
+                CountsSourceAsNewOccupancy = CountsSourceAsNewOccupancy,
                 WorkspaceSharesTargetVolume = workspaceSharesTargetVolume,
                 Basis = string.IsNullOrWhiteSpace(Basis) ? note : Basis + "；" + note
             };
@@ -318,7 +334,6 @@ namespace ArchiveFixer.Storage
         /// </summary>
         /// <param name="directReadAvailable">
         /// 这个任务的内嵌归档能不能走**直读**（<c>Extraction/EmbeddedZipStreamExtractor</c>）。
-        ///
         /// <para>为 true 时**不记**那笔抠取副本 —— 直读路线一个字节的过程物都不产生
         /// （用户 2026-09-24 需求第 7 条：账面上必须与真实发生的动作一致，
         /// 不许一边说"省了副本"一边又把它预留出来）。判别由调用方给
@@ -326,7 +341,16 @@ namespace ArchiveFixer.Storage
         /// 估算器本身不碰文件、不读设置。真回落时由抠取器自己那道空间预检兜底：
         /// 那一刻会如实报"取出内嵌归档需要约 X MB 临时空间"，而不是把盘写满。</para>
         /// </param>
-        public static TaskSpaceEstimate FromSourceFiles(ArchiveTask? task, bool directReadAvailable = false)
+        /// <param name="countsSourceAsNewOccupancy">
+        /// 本批开着「部分完成发布」（③页那个开关）—— 那一档跑完源包**一定还在盘上**，
+        /// 所以放行判据要按"多留一整个源包"算（见 <see cref="TaskSpaceEstimate.CountsSourceAsNewOccupancy"/>）。
+        /// 精估（<see cref="RefineWithListing"/>）从这一份**继承**这个事实，⛔ 不需要也不许再传一次
+        /// （同一件事的判据只允许有一个来源）。
+        /// </param>
+        public static TaskSpaceEstimate FromSourceFiles(
+            ArchiveTask? task,
+            bool directReadAvailable = false,
+            bool countsSourceAsNewOccupancy = false)
         {
             if (task == null)
             {
@@ -363,6 +387,7 @@ namespace ArchiveFixer.Storage
                 ProcessArtifactBytes = carvedBytes,
                 ContentEstimated = true,
                 HasListing = false,
+                CountsSourceAsNewOccupancy = countsSourceAsNewOccupancy,
                 Basis = basis
             };
         }
@@ -396,6 +421,7 @@ namespace ArchiveFixer.Storage
                     ProcessArtifactBytes = Math.Max(basis.ProcessArtifactBytes, carvedBytes > 0 ? carvedBytes : 0L),
                     ContentEstimated = true,
                     HasListing = false,
+                    CountsSourceAsNewOccupancy = basis.CountsSourceAsNewOccupancy,
                     Basis = basis.Basis + "；本次仍没拿到条目清单，内容物维持估算值"
                 };
             }
@@ -428,6 +454,7 @@ namespace ArchiveFixer.Storage
                 ProcessArtifactBytes = processBytes,
                 ContentEstimated = false,
                 HasListing = true,
+                CountsSourceAsNewOccupancy = basis.CountsSourceAsNewOccupancy,
                 Basis = basis2
             };
         }

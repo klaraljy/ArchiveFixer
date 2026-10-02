@@ -506,6 +506,14 @@ namespace ArchiveFixer.ViewModels
         private readonly System.Collections.Concurrent.ConcurrentDictionary<ArchiveTask, string> _taskWorkspaceDirectories = new();
 
         /// <summary>
+        /// 部分完成发布的候选（**失败路径**填、收尾处发布；见 <see cref="TryPublishPartialProductsAsync"/>）。
+        ///
+        /// <para>键用任务对象本身（理由与上面两张表一样）；条目在收尾时移除 ——
+        /// 不清掉的话同一个任务对象重跑时会把上一轮的清单当成这一轮的（那是"拿旧识别结果解新文件"的翻版）。</para>
+        /// </summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ArchiveTask, PartialPublishCandidate> _partialPublishCandidates = new();
+
+        /// <summary>
         /// 本次运行里每个任务用过的**递归核心**（<see cref="RecursiveExtractor"/> 实例）。
         ///
         /// <para>为什么要在收尾处留着它：递归核心的逐层工作区不在任务工作区里，而是它自己的
@@ -5401,6 +5409,13 @@ namespace ArchiveFixer.ViewModels
             }
 
             ApplyRecursionResult(task, result);
+
+            /*
+             * 部分完成发布（用户 2026-10-02）：递归这条路上"解了一半的现场"是**最深那一层失败时**
+             * 留在它自己产物目录里的东西。登记在这里、真发布在任务收尾（清工作区之前）——
+             * 那之前还有链尾的定稿与清理，现场随时可能变。
+             */
+            RecordRecursivePartialPublishCandidate(task, result);
 
             return result;
         }
@@ -10558,7 +10573,7 @@ namespace ArchiveFixer.ViewModels
 
             return ExtractionScheduler.Build(
                 tasks,
-                task => SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task))
+                task => SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task), PartialPublishActive)
                     .WithVolumeLayout(ResolveWorkspaceVolumeShare(ResolveSpaceProbePathOrBatch(task))),
                 ProbeAvailableSpace(_spaceProbePath),
                 ReserveSpaceBytes,
@@ -11438,7 +11453,6 @@ namespace ArchiveFixer.ViewModels
                  * 都要走到它 —— 尤其是取消那一条：用户点停之后留下的残留正是他最不想看到的。
                  * 成功路径不从这里走（那一支的清理在 PostProcessSuccessAsync 里按"校验通过"删）。
                  */
-                CleanupFailedTaskWorkspace(task);
 
                 /*
                  * 机器终态收口（第 44 条追加）：任务已经结束（`EndTime` 有值）而 `Outcome` 还停在 `Pending`，
@@ -11447,6 +11461,10 @@ namespace ArchiveFixer.ViewModels
                  *
                  * 汇总 / 失败清单 / 四道删除门读的都是这一位，⛔ 一律不许靠比对中文。
                  * 判据用"没通过输出校验"这条事实，只有真正的失败才会落进来。
+                 *
+                 * ⚠ 这一步**刻意排在下面两件事之前**（2026-10-02 部分完成发布）：那一档只认机器终态
+                 * （失败 / 部分完成），而这一位此刻还是 `Pending` 的话，一个字节都不会发布 ——
+                 * 顺序错了就等于"这一档在对绝大多数失败分支上不生效"。
                  */
                 if (task.Outcome == TaskOutcome.Pending
                     && task.EndTime.HasValue
@@ -11455,11 +11473,436 @@ namespace ArchiveFixer.ViewModels
                     task.Outcome = TaskOutcome.Failed;
                 }
 
+                /*
+                 * 部分完成发布（用户 2026-10-02 拍板的口径 A）：把已经解出来、逐条核对过的那部分
+                 * 放进 <c>&lt;目标&gt;\&lt;包名&gt;\部分完成\</c>。**必须排在清工作区之前** ——
+                 * 那些内容此刻还在这一单的暂存目录里，清掉就再也没有了（老口径正是这么丢的）。
+                 * 返回值 = "内容没全发布，工作区不能清"（见 PartialPublisher.Result.AllMoved）。
+                 */
+                bool keepWorkspaceForUnpublished = await TryPublishPartialProductsAsync(
+                    task,
+                    cancelled: taskCts.IsCancellationRequested);
+
+                CleanupFailedTaskWorkspace(task, keepWorkspaceForUnpublished);
+
                 // 日志收尾：成功 → 只留一行摘要（细节全丢）；失败 / 取消 → 细节全吐出来再收摘要。
                 EndTaskLogCapture(task);
 
                 UpdateSummary();
             }
+        }
+
+        /// <summary>
+        /// 本批「部分完成发布」生不生效（**唯一判据**）。
+        ///
+        /// <para>= ③页那个开关打开 **且** 本批不是「空间不足」模式。用户 2026-10-02 顾虑 2 点名的危险组合
+        /// （空间不足 + 大容量 + 多份相同文件一起开）就靠这一条**硬互斥**挡住：那一档的全部价值是
+        /// "定稿 + 校验通过后当场删源包回收空间"，而部分完成**天然回收不了源包**（缺的那些条目只在源包里）
+        /// ⇒ 两者目的正好相反。⛔ 只让行为失效，**绝不去改用户的设置**（勾还勾着，只是这一轮不生效）。</para>
+        /// </summary>
+        private bool PartialPublishActive => Settings?.PartialPublishEnabled == true && !_spaceTightThisBatch;
+
+        /// <summary>
+        /// 部分完成发布的候选：**失败路径**填进来，收尾处（清工作区之前）真发布。
+        ///
+        /// <para>为什么用"候选"而不是就地发布：发布要读到三样只有收尾那一刻才齐的东西 ——
+        /// 机器终态（失败 / 部分完成才算数）、最终输出目录（同名冲突可能刚改过名）、
+        /// 以及"这一单到底还剩哪些产物"（候选循环里每个候选都会清一次产物目录）。</para>
+        /// </summary>
+        private sealed class PartialPublishCandidate
+        {
+            /// <summary>已解出来的东西在哪（暂存目录 / 这一层的产物目录）。</summary>
+            public string StagingRoot { get; init; } = string.Empty;
+
+            /// <summary>交给引擎的那个归档（懒取清单时要用；内嵌归档这一档是抠出来的临时文件）。</summary>
+            public string ArchivePath { get; init; } = string.Empty;
+
+            /// <summary>这一层最后用的密码（懒取清单时用；只在内存里，⛔ 永不落日志）。</summary>
+            public string Password { get; init; } = string.Empty;
+
+            /// <summary>引擎点名的坏条目 / 自报的出错数 / 这一趟是不是报了失败（三道闸门）。</summary>
+            public IReadOnlyList<string> EngineFailedEntries { get; init; } = Array.Empty<string>();
+
+            public int EngineReportedErrorCount { get; init; }
+
+            public bool EngineReportedFailure { get; init; }
+
+            /// <summary>
+            /// 逐条清单（相对路径 + 解压后字节）。**空表 = 手上没有清单** ⇒ 收尾时用这一层的密码
+            /// 现问引擎一次（见 <see cref="TryListForPartialPublishAsync"/>）；再拿不到就什么都不发布。
+            /// </summary>
+            public IReadOnlyList<(string Path, long Size)> ManifestEntries { get; init; } =
+                Array.Empty<(string, long)>();
+        }
+
+        /// <summary>
+        /// 记下"这一单失败时盘上还剩什么"（部分完成发布的输入）。**失败路径调用**，成功路径一次都不调。
+        ///
+        /// <para>⛔ 这里刻意**不看③页那个开关**：开关在收尾那一刻才读（见 <see cref="PartialPublishActive"/>），
+        /// 否则"开着空间不足模式时本开关不生效"这句说明就没机会写出来了
+        /// （一个候选都没记下来 ⇒ 收尾时连"为什么没发布"都答不上）。记的都是引用，没有额外的磁盘开销。</para>
+        /// </summary>
+        /// <param name="stagingRoot">已解出来的东西在哪（暂存目录 / 这一层的产物目录）。</param>
+        /// <param name="manifestEntries">逐条清单（递归那条路直接带过来；没有就传 null，收尾时懒取一次）。</param>
+        private void RecordPartialPublishCandidate(
+            ArchiveTask task,
+            string stagingRoot,
+            string archivePath,
+            string password,
+            IReadOnlyList<(string Path, long Size)>? manifestEntries,
+            IReadOnlyList<string>? engineFailedEntries,
+            int engineReportedErrorCount,
+            bool engineReportedFailure)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(stagingRoot))
+            {
+                return;
+            }
+
+            _partialPublishCandidates[task] = new PartialPublishCandidate
+            {
+                StagingRoot = stagingRoot,
+                ArchivePath = archivePath ?? string.Empty,
+                Password = password ?? string.Empty,
+                ManifestEntries = manifestEntries ?? Array.Empty<(string, long)>(),
+                EngineFailedEntries = engineFailedEntries ?? Array.Empty<string>(),
+                EngineReportedErrorCount = engineReportedErrorCount,
+                EngineReportedFailure = engineReportedFailure
+            };
+        }
+
+        /// <summary>
+        /// 递归那条路的登记（<see cref="RunRecursiveAsync"/> 收尾时调用）。
+        ///
+        /// <para>只认"**最深的那一层失败了**"这一档：那一层的产物才是"解了一半的现场"。
+        /// 层成功、只是整条链按上限 / 多分支停住的那些情形**不登记** —— 它们的产物该走既有的
+        /// 定稿与链尾口径（那是另一条路，⛔ 不许被这一档抢过来当成"部分完成"发布）。</para>
+        /// </summary>
+        private void RecordRecursivePartialPublishCandidate(ArchiveTask task, RecursionResult? result)
+        {
+            if (task == null || result == null || string.IsNullOrWhiteSpace(task.CurrentPath))
+            {
+                return;
+            }
+
+            RecursionLayerReport? failedLayer = null;
+
+            foreach (RecursionLayerReport layer in result.Layers)
+            {
+                if (!layer.Success)
+                {
+                    failedLayer = layer;
+                }
+            }
+
+            if (failedLayer == null || string.IsNullOrWhiteSpace(failedLayer.OutputPath))
+            {
+                return;
+            }
+
+            /*
+             * 密码传空串：这一层的候选是递归核心自己挑的，它只把**脱敏**的占位符交出来
+             * （报告里绝不出现明文密码）。所以这一档要么拿现成的逐条清单（正常情形：
+             * 解压前列目录那一次就是拿对的密码列的），要么什么都不发布 —— ⛔ 不去猜密码。
+             */
+            RecordPartialPublishCandidate(
+                task,
+                failedLayer.OutputPath,
+                failedLayer.ArchivePath,
+                string.Empty,
+                failedLayer.ManifestEntries,
+                failedLayer.FailedEntryNames,
+                failedLayer.ReportedSubItemErrors,
+                engineReportedFailure: true);
+        }
+
+        /// <summary>
+        /// **部分完成发布的唯一入口**（收尾处调用）：逐条对账 → 二次空间体检 → 真搬 → 其余物/工作区收尾。
+        /// </summary>
+        /// <returns>
+        /// true = 这一单的工作区**不能清**（有内容没能发布，它们只在那里）；false = 按既有口径清。
+        /// </returns>
+        /// <param name="cancelled">
+        /// 这一单是不是被用户取消的（判据 = **任务自己的取消令牌**，⛔ 不是比对中文文案）。
+        ///
+        /// <para>为什么必须单独传这一位：单层那条取消路径（<c>ProcessExtractTaskAsync</c> 的
+        /// <c>catch (OperationCanceledException)</c>）只落了中文状态、没落机器终态，而收尾那一步会把
+        /// `Pending` 兜底改成 `Failed` ⇒ "取消"在终态上与"失败"分不开。拿终态当唯一判据的话，
+        /// 用户按下取消之后，半成品照样会被摆进目标目录 —— 那正是他要停下来的东西。</para>
+        /// </param>
+        private async Task<bool> TryPublishPartialProductsAsync(ArchiveTask task, bool cancelled)
+        {
+            if (task == null || !_partialPublishCandidates.TryRemove(task, out PartialPublishCandidate? candidate))
+            {
+                return false;
+            }
+
+            if (cancelled)
+            {
+                return false;
+            }
+
+            if (cancelled)
+            {
+                return false;
+            }
+
+            /*
+             * ⛔ 只认机器终态（判据是枚举，⛔ 不比中文）：失败 / 部分完成才谈得上"发布已解出的那部分"。
+             * 成功走定稿那条路（早就有内容物落地了，不需要这一档）；取消 / 跳过一个字节都不许发布
+             * —— 用户按了取消，他要的是"停下来"，不是"把半成品摆进目标目录"。
+             */
+            if (task.Outcome is not (TaskOutcome.Failed or TaskOutcome.PartiallyCompleted))
+            {
+                return false;
+            }
+
+            if (Settings?.PartialPublishEnabled != true)
+            {
+                return false;
+            }
+
+            if (_spaceTightThisBatch)
+            {
+                // 硬互斥（见 PartialPublishActive）。写一行 INFO 说清为什么没生效，⛔ 设置一个字都不改。
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishSpaceTightBlockedFormat,
+                        task.FileName));
+
+                return false;
+            }
+
+            string packageOutputRoot = task.OutputPath;
+
+            if (string.IsNullOrWhiteSpace(packageOutputRoot))
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishSkippedFormat,
+                        task.FileName,
+                        "这一单没有可用的成品目录（拿不到落点），按「判不出 ⇒ 什么都不做」处理"));
+
+                return false;
+            }
+
+            IReadOnlyList<(string Path, long Size)> manifestEntries = candidate.ManifestEntries;
+
+            if (manifestEntries.Count == 0 && !string.IsNullOrWhiteSpace(candidate.ArchivePath))
+            {
+                /*
+                 * 手上没有清单，现问一次引擎（**只在这一档**、只问一次）。
+                 *
+                 * 为什么必须补这一次：真机 `giu910` 那一单是 7z `-mhe`（文件名也加密）——
+                 * 前面几个候选连目录都列不出来，而**把包解到 98% 的那个候选**从没列过目录
+                 * （解压成功才会走校验、校验里才列目录，而它恰恰没成功）⇒ 不补这一问，
+                 * 这一档在最需要它的那个场景上永远拿不到清单、永远不发布。
+                 *
+                 * 密码用的是**这一趟最后那个候选**的：密码不对时它照样列不出来（返回失败），
+                 * 于是下游按"没有清单"办 —— ⛔ 绝不因为"列不出来"就放松任何一道闸门。
+                 */
+                manifestEntries = await TryListForPartialPublishAsync(task, candidate);
+            }
+
+            PartialPublishOutcome outcome = PartialPublishRunner.Run(
+                candidate.StagingRoot,
+                packageOutputRoot,
+                manifestEntries,
+                candidate.EngineFailedEntries,
+                candidate.EngineReportedErrorCount,
+                candidate.EngineReportedFailure);
+
+            if (!outcome.Published)
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        outcome.BlockedBySpace
+                            ? StatusText.PartialPublishSpaceBlockedFormat
+                            : StatusText.PartialPublishSkippedFormat,
+                        task.FileName,
+                        outcome.Reason));
+
+                return false;
+            }
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.PartialPublishedFormat,
+                    task.FileName,
+                    outcome.PublishedCount,
+                    TaskSpaceEstimate.FormatSize(outcome.PublishedBytes),
+                    outcome.DestinationDirectory,
+                    outcome.Verdict.Entries.Count,
+                    TaskSpaceEstimate.FormatSize(outcome.Verdict.ExpectedBytes),
+                    outcome.Verdict.Rejected.Count));
+
+            if (outcome.Publish.RenamedCount > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishedRenamedFormat,
+                        task.FileName,
+                        outcome.Publish.RenamedCount));
+            }
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.PartialPublishSourceKeptFormat,
+                    task.FileName));
+
+            /*
+             * 全部搬成之后才动其余物与工作区（「宁可少删」）：
+             * 有文件没能发布时它们还在工作区里，那是这一份唯一的线索 —— 删掉等于丢用户的产物。
+             */
+            if (!outcome.Publish.AllMoved)
+            {
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishRestKeptFormat,
+                        task.FileName,
+                        $"计划里有 {outcome.Publish.Failures.Count} 个文件没能发布（{DescribeFirstFailures(outcome.Publish.Failures)}），"
+                        + "所以其余物与工作区都原样留着"));
+
+                return true;
+            }
+
+            PurgeRestItemsExceptChainRootSource(task);
+
+            return false;
+        }
+
+        /// <summary>
+        /// 懒取清单（**只服务部分完成发布**）：拿最后那个候选的密码问一次引擎。
+        /// 列不出来（密码不对 / 加密头 / 引擎不可用）时返回空表 ⇒ 下游按"没有清单"办、什么都不发布。
+        /// </summary>
+        private async Task<IReadOnlyList<(string Path, long Size)>> TryListForPartialPublishAsync(
+            ArchiveTask task,
+            PartialPublishCandidate candidate)
+        {
+            try
+            {
+                ArchiveListResult list = await _archiveEngine.ListAsync(
+                    ArchiveRequest.For(candidate.ArchivePath, candidate.Password),
+                    CancellationToken.None);
+
+                return PartialPublishPlanner.ToManifestEntries(list);
+            }
+            catch (Exception ex)
+            {
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishSkippedFormat,
+                        task.FileName,
+                        $"为了逐条核对清单又列了一次目录，这次列目录出错了（{ex.Message}）—— 判不出 ⇒ 什么都不发布"));
+
+                return Array.Empty<(string, long)>();
+            }
+        }
+
+        /// <summary>把发布失败的头几条拼成一句话（最多 3 条，详情在日志里，⛔ 不刷屏）。</summary>
+        private static string DescribeFirstFailures(IReadOnlyList<(string Path, string Reason)> failures)
+        {
+            if (failures == null || failures.Count == 0)
+            {
+                return "原因没有记下来";
+            }
+
+            var parts = new List<string>();
+
+            foreach ((string path, string reason) in failures.Take(3))
+            {
+                parts.Add($"{path}：{reason}");
+            }
+
+            if (failures.Count > 3)
+            {
+                parts.Add($"还有 {failures.Count - 3} 个");
+            }
+
+            return string.Join("；", parts);
+        }
+
+        /// <summary>
+        /// 部分完成收尾：把其余物里**除这条链最外层源包以外**的项删掉（用户 2026-10-02 改的口径）。
+        ///
+        /// <para><b>为什么可以删</b>：其余物里装的都是过程物（内层包、抠出来的内嵌归档副本），
+        /// 全都能从最外层源包重新解出来；用户原话是「我建议源包 + 已解出的内容物留着，其他的都删掉」——
+        /// 这样盘上正好是"两份"，与③页小字那句承诺对得上。</para>
+        ///
+        /// <para><b>⛔ 安全闸门（这一条我来守）</b>：只有"这条链的最外层源包**此刻还在盘上**"时才动手；
+        /// 它不在了（已被删 / 路径失效）⇒ **一个字节都不删**（判不出 ⇒ 什么都不做）——
+        /// 源包是唯一能重建整条链的东西，它都没了还清过程物，等于把最后一份可恢复路径也删掉。</para>
+        /// </summary>
+        private void PurgeRestItemsExceptChainRootSource(ArchiveTask task)
+        {
+            string rootSource = task.ChainRootIdentity;
+
+            if (string.IsNullOrWhiteSpace(rootSource))
+            {
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishRestKeptFormat,
+                        task.FileName,
+                        "算不出这条链的最外层源包是谁"));
+
+                return;
+            }
+
+            string rootSourceFull = SafePathHelper.GetFullPathSafe(rootSource);
+
+            if (rootSourceFull.Length == 0 || !SafePathHelper.FileExists(rootSourceFull))
+            {
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishRestKeptFormat,
+                        task.FileName,
+                        $"这条链的最外层源包不在盘上了（{rootSource}）—— 它是唯一能把整条链重新解出来的东西，"
+                        + "所以其余物里的过程物一个都不删"));
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                // 这一单压根没建过其余物（部分完成这一档不生成其余物）⇒ 没事可做，不写日志。
+                return;
+            }
+
+            RestPurgeOutcome purge = new RestItemPurger().PurgeExcept(
+                task,
+                new[] { rootSourceFull },
+                DeleteMode.Permanent);
+
+            AppendLog(
+                purge.Succeeded ? "INFO" : "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    purge.Succeeded
+                        ? StatusText.PartialPublishRestPurgedFormat
+                        : StatusText.PartialPublishRestKeptFormat,
+                    task.FileName,
+                    purge.EntryCount,
+                    purge.Message));
         }
 
         /// <summary>
@@ -11488,7 +11931,12 @@ namespace ArchiveFixer.ViewModels
         /// 源包、已经定稿搬出去的内容物、<c>&lt;数据根&gt;</c>（日志 / 密码列表 / 设置）一个字节都不动。</description></item>
         /// </list>
         /// </summary>
-        private void CleanupFailedTaskWorkspace(ArchiveTask task)
+        /// <param name="keepWorkspace">
+        /// true = 这一单**不许清**（部分完成发布时"有文件没能发布"的那一档：没搬走的内容只在这里，
+        /// 删掉等于丢用户的产物）。判据由 <see cref="TryPublishPartialProductsAsync"/> 给
+        /// （<c>PartialPublisher.Result.AllMoved</c>），⛔ 不在这里自己猜。
+        /// </param>
+        private void CleanupFailedTaskWorkspace(ArchiveTask task, bool keepWorkspace = false)
         {
             if (task == null)
             {
@@ -11510,6 +11958,26 @@ namespace ArchiveFixer.ViewModels
                  * 成功：这一支的清理在 PostProcessSuccessAsync 里（按"校验通过"删），
                  * 递归核心的工作区也由它自己在 FinalizeRun 里清掉了。这里什么都不做。
                  */
+                return;
+            }
+
+            if (keepWorkspace)
+            {
+                /*
+                 * 部分完成发布时"有文件没能发布"的那一档：工作区原样留着。
+                 * 两层理由：① 没搬走的内容只在这里（删掉就是丢用户的产物）；
+                 * ② ③页的「失败时保留中间产物」本来就是"要留现场"，这一档比它更强 ——
+                 *    现场里躺着的是**已经解出来、核对过**的真内容，不是中间垃圾。
+                 * 递归逐层工作区同样不动（那些层的内容可能正是下一份要发布的）。
+                 */
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishRestKeptFormat,
+                        task.FileName,
+                        "有内容没能按「部分完成」发布，工作区与递归逐层工作区都原样留着（那是它们唯一的落点）"));
+
                 return;
             }
 
@@ -12775,7 +13243,7 @@ namespace ArchiveFixer.ViewModels
                  * （判据是 FreeSpaceDemandBytes = 内容物 + 过程物；见 TaskSpaceEstimate 里的说明）。
                  */
                 TaskSpaceEstimate refined = SpaceEstimator.RefineWithListing(
-                    SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task)),
+                    SpaceEstimator.FromSourceFiles(task, DirectReadAppliesTo(task), PartialPublishActive),
                     preflightList,
                     directZip != null ? 0 : SpaceEstimator.EstimateCarvedBytes(task, archiveSize),
                     carvedBytesNotNeeded: directZip != null)
@@ -13425,6 +13893,14 @@ namespace ArchiveFixer.ViewModels
                 int attemptedCandidates = 0;
 
                 /*
+                 * 这一层的**逐条清单**（部分完成发布的尺子）：优先取"带着密码列出来的那一份"
+                 * （校验里那次 list），没有就退回解压前那一次预检清单 —— 未加密的包两者本来就一样。
+                 * ⛔ 只留最近一次成功的：候选循环里每个候选都会重列一次，留错哪一份就对着错的尺子量。
+                 */
+                IReadOnlyList<(string Path, long Size)>? lastLayerManifestEntries =
+                    PartialPublishPlanner.ToManifestEntries(preflightList);
+
+                /*
                  * 2026-09-27 真机（`rar-android-722.132.apk`）加的两笔账：
                  *
                  * · previousVerification —— 上一个候选的校验数字。**连续两个候选结果一模一样**时，
@@ -13599,6 +14075,12 @@ namespace ArchiveFixer.ViewModels
                             selectedPassword,
                             engineOutputPath,
                             cancellationToken);
+
+                        // 这一层的尺子换成"用这个候选的密码列出来的那一份"（部分完成发布要用它逐条对账）。
+                        if (stage.List is { Success: true })
+                        {
+                            lastLayerManifestEntries = PartialPublishPlanner.ToManifestEntries(stage.List);
+                        }
 
                         if (stage.Verification.Verified)
                         {
@@ -13813,6 +14295,28 @@ namespace ArchiveFixer.ViewModels
 
                 if (!extractSuccess)
                 {
+                    /*
+                     * ===== 登记"失败时盘上还剩什么"（部分完成发布的输入，用户 2026-10-02）=====
+                     *
+                     * 位置刻意选在**候选循环已经跑完、结论已经定下来之后**：
+                     * · 产物目录里此刻留着的是**最后一个候选**留下的东西（每个候选开工前会清一次），
+                     *   所以尺子与现场必须是同一次候选的 —— `lastLayerManifestEntries` 与
+                     *   `lastResult` 都跟着循环滚动，天然对齐；
+                     * · 密码取 `selectedPassword`（最后一个候选的）：密码不对时收尾那次懒取清单
+                     *   照样列不出来 ⇒ 判"没有清单" ⇒ 一个字节都不发布。
+                     *
+                     * ⛔ 这里不判断③页开关（收尾时才读）—— 详见 RecordPartialPublishCandidate 的说明。
+                     */
+                    RecordPartialPublishCandidate(
+                        task,
+                        engineOutputPath,
+                        engineArchivePath,
+                        selectedPassword,
+                        lastLayerManifestEntries,
+                        lastResult?.FailedEntryNames,
+                        lastResult?.ReportedSubItemErrors ?? 0,
+                        engineReportedFailure: lastResult != null && !lastResult.Success);
+
                     /*
                      * ===== 引擎原话落日志（用户 2026-09-27：「引擎原话从不落日志」）=====
                      *

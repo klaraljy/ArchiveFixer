@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using ArchiveFixer.Engines;
 
 namespace ArchiveFixer.Extraction
 {
@@ -250,6 +251,49 @@ namespace ArchiveFixer.Extraction
                 PublishableBytes = publishableBytes,
                 ExpectedBytes = expectedBytes
             };
+        }
+
+        /// <summary>
+        /// 把引擎的清单结论折成 <see cref="Plan"/> 要的那份"逐条预期"（**纯函数**）。
+        ///
+        /// <para>两条口径：</para>
+        /// <list type="number">
+        /// <item><description>**目录条目不算**：清单里的目录解压后不产生文件，拿它去比盘上必然"缺"；</description></item>
+        /// <item><description>**仅大小写不同的重复条目只留第一条**：Windows 上物理放不下两个同名文件
+        /// （与 <c>OutputVerifier.CollapseCaseOnlyDuplicates</c> 同一精神，但那边只回两个计数，
+        /// 这里要的是逐条清单，所以按同一个口径各算各的 —— 折算口径本身没有第二套定义）。</description></item>
+        /// </list>
+        ///
+        /// <para>清单取不到（列不出来）时返回**空表**：`Plan` 会把空表判成"没有清单"⇒ 什么都不发布。</para>
+        /// </summary>
+        public static IReadOnlyList<(string Path, long Size)> ToManifestEntries(ArchiveListResult? list)
+        {
+            if (list == null || !list.Success || list.Entries == null || list.Entries.Count == 0)
+            {
+                return Array.Empty<(string, long)>();
+            }
+
+            var entries = new List<(string Path, long Size)>(list.Entries.Count);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ArchiveEntry entry in list.Entries)
+            {
+                if (entry == null || entry.IsDirectory)
+                {
+                    continue;
+                }
+
+                string path = Normalize(entry.Path);
+
+                if (path.Length == 0 || !seen.Add(path))
+                {
+                    continue;
+                }
+
+                entries.Add((path, entry.Size));
+            }
+
+            return entries;
         }
 
         /// <summary>路径归一（去掉开头的 <c>./</c>、把 <c>/</c> 统一成 <c>\</c>）：清单与盘上两侧的写法可能不同。</summary>

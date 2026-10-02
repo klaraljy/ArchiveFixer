@@ -847,6 +847,27 @@ namespace ArchiveFixer.Models
         /// </summary>
         public bool KeepFailedWorkspace { get; set; }
 
+        /// <summary>
+        /// **部分完成也把已解出的内容放进目标目录**（用户 2026-10-02 拍板的口径 A；**默认关**）。
+        ///
+        /// <para><b>用户原话</b>（`docs/部分完成发布方案.md` §6）：「这个的操作最少差不多就占了两份原包的空间
+        /// 要在开启界面详细写清楚」。他要的场景：一个 558 个条目的包解到 557 个时坏在最后一条上，
+        /// 老口径把已经解出来的 557 个文件**整份丢弃**、报「文件损坏」—— 十几分钟与十几 GiB 白扔。</para>
+        ///
+        /// <para><b>开了它之后的行为</b>（三条一起，缺一不可）：</para>
+        /// <list type="number">
+        /// <item><description>逐条对账（<c>Extraction/PartialPublishPlanner</c>）通过的条目发布到
+        /// <c>&lt;目标&gt;\&lt;包名&gt;\部分完成\</c>（固定子目录，⛔ 不参与落点规则、重跑不撞名）；</description></item>
+        /// <item><description>**源包一定不搬也不删**（哪怕设了「彻底删除」）—— 缺的那些条目只存在源包里；</description></item>
+        /// <item><description>其余物里**除最外层源包以外**的项与这一单的工作区删掉（"留源包 + 已解出内容物"两份）；</description></item>
+        /// </list>
+        ///
+        /// <para><b>它跟「空间不足」模式互斥</b>（用户 2026-10-02 顾虑 2）：那一档的全部价值就是
+        /// "定稿 + 校验通过后当场删源包"回收空间，而部分完成天然回收不了 ⇒ 那一档开着时**本开关不生效**
+        /// （写一行 INFO 说明，⛔ 不偷偷改用户的设置）；同时空间账按"源包还占着"多要一整个源包。</para>
+        /// </summary>
+        public bool PartialPublishEnabled { get; set; }
+
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
@@ -1090,7 +1111,17 @@ namespace ArchiveFixer.Models
 
                 // 失败 / 取消不留中间产物（用户 2026-09-25 第 25 条追加）：默认关闭，
                 // 老配置里没有这个字段时反序列化出来也是 false —— 与默认档一致，不需要迁移标记。
-                KeepFailedWorkspace = false
+                KeepFailedWorkspace = false,
+
+                /*
+                 * 部分完成发布（用户 2026-10-02 拍板，口径见 StatusText 那一组常量与
+                 * `docs/部分完成发布方案.md` §6）：**默认关**。
+                 *
+                 * 为什么默认关、而且不能顺手打开：它让"跑完之后盘上从 1 份变成 2 份"
+                 * （源包 + 已解出的内容物，而且源包一定不删）—— 用户点名的顾虑就是这条
+                 * （"空间不足加上大容量多相同文件一起开"）。要开是他自己的选择，程序不替他决定。
+                 */
+                PartialPublishEnabled = false
             };
         }
 

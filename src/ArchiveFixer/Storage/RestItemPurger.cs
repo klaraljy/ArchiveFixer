@@ -85,6 +85,197 @@ namespace ArchiveFixer.Storage
             "删除操作=移入回收站：内容物已定稿并按落点策略排好、输出校验通过、未取消 —— 把本任务的其余物（源包 + 过程物）移入回收站（可还原；空间要等清空回收站才释放）";
 
         /// <summary>
+        /// 部分完成收尾那一档的理由（用户 2026-10-02：「我建议源包 + 已解出的内容物留着，其他的都删掉」）。
+        /// </summary>
+        public const string PartialPurgeReason =
+            "部分完成收尾：已解出的内容物按「部分完成」发布进了目标目录，这条链的最外层源包仍在盘上（它是唯一能重建整条链的东西）"
+            + " —— 所以其余物里「除它以外」的过程物（内层包、抠出来的内嵌归档副本）都删掉，盘上只留「源包 + 内容物」两份";
+
+        /// <summary>
+        /// **部分完成之后的"半份清理"**：其余物里除 <paramref name="keepPaths"/> 以外全删。
+        ///
+        /// <para><b>为什么是同一个执行体</b>：其余物的删除只有这一个类（AGENTS.md：「其余物的删除只有这一个执行体，
+        /// 三处调用都要过它」）—— 新口径要删的只是"其余的项"，但那仍然是其余物，走别处等于又开了一个删删除体。</para>
+        ///
+        /// <para><b>门槛（与 <see cref="Purge"/> 同一套容器内校验，判据另立两条）</b>：</para>
+        /// <list type="number">
+        /// <item><description>`其余物` 目录**是本次真的记下来的那一个**（<see cref="ArchiveTask.RestDirectoryPath"/>），
+        /// 形状必须是其余物、必须在自己输出根之内 —— 与 <see cref="Purge"/> 逐字相同；</description></item>
+        /// <item><description>第六道门槛（分卷半套，<see cref="Extraction.RestVolumeCompletenessGate"/>）照过；</description></item>
+        /// <item><description>**要保留的东西里至少有一个此刻真的在盘上** —— 调用方传进来的判据是
+        /// "这条链的最外层源包"。它不在 ⇒ 判不出 ⇒ **一个字节都不删**（源包是唯一能重建整条链的东西，
+        /// 它都没了还清过程物，等于把最后一份可恢复路径也删掉）；</description></item>
+        /// <item><description>要保留的那一项**在其余物里面**时按项保留（不会被当成"别的项"顺手删掉）。</description></item>
+        /// </list>
+        /// </summary>
+        public RestPurgeOutcome PurgeExcept(
+            ArchiveTask? task,
+            IReadOnlyList<string>? keepPaths,
+            DeleteMode mode = DeleteMode.Permanent)
+        {
+            if (task == null)
+            {
+                return Skip("没有任务，未删除任何东西");
+            }
+
+            string name = string.IsNullOrWhiteSpace(task.FileName)
+                ? Path.GetFileName(task.CurrentPath)
+                : task.FileName;
+
+            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                return Skip($"{name}：没记下本次定稿实际用的其余物目录，不敢猜路径，一个字节都不删");
+            }
+
+            string directory = SafePathHelper.GetFullPathSafe(task.RestDirectoryPath);
+
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return Skip($"{name}：其余物目录不存在（{task.RestDirectoryPath}），没有可删除的内容");
+            }
+
+            if (!TryResolveAllowedRoot(task, directory, out string allowedRoot, out string why))
+            {
+                return Skip($"{name}：{why}，已拒绝删除");
+            }
+
+            if (!LooksLikeArtifactDirectory(directory))
+            {
+                return Skip(
+                    $"{name}：{directory} 的形状不像「其余物」目录（既不是 {ProcessArtifactLayout.ArtifactDirectoryName}，"
+                    + "上一级也不是），已拒绝删除");
+            }
+
+            if (!ArchivePathGuard.IsInsideRoot(allowedRoot, directory, out string outsideReason))
+            {
+                return Skip($"{name}：其余物目录不在本任务的输出范围之内，已拒绝删除 —— {outsideReason}");
+            }
+
+            string? splitGroupBlocker = Extraction.RestVolumeCompletenessGate.DescribeBlocker(directory);
+
+            if (splitGroupBlocker != null)
+            {
+                return Skip($"{name}：{splitGroupBlocker}");
+            }
+
+            var keep = new List<string>();
+
+            foreach (string path in keepPaths ?? Array.Empty<string>())
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
+                string full = SafePathHelper.GetFullPathSafe(path).TrimEnd('\\', '/');
+
+                if (full.Length > 0 && (File.Exists(full) || Directory.Exists(full)))
+                {
+                    keep.Add(full);
+                }
+            }
+
+            if (keep.Count == 0)
+            {
+                return Skip(
+                    $"{name}：要保留的东西（这条链的最外层源包）一个都不在盘上 —— 判不出 ⇒ 其余物一个字节都不删");
+            }
+
+            var targets = new List<string>();
+
+            try
+            {
+                foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
+                {
+                    string full = entry.TrimEnd('\\', '/');
+
+                    // 要保留的那一项（或它的祖先 / 后代）跳过 —— 其余的一律是过程物。
+                    if (keep.Any(item => IsSameOrUnder(full, item) || IsSameOrUnder(item, full)))
+                    {
+                        continue;
+                    }
+
+                    targets.Add(full);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Skip($"{name}：读不了其余物目录（{ex.Message}），一个字节都不删");
+            }
+
+            if (targets.Count == 0)
+            {
+                return Skip($"{name}：其余物里除了要保留的以外没有别的项，没有可删除的内容");
+            }
+
+            var service = new RecycleBinService(_executor, null, _probe);
+
+            var requests = targets
+                .Select(path => new DeleteRequest(path, PartialPurgeReason))
+                .ToList();
+
+            DeleteResult result;
+
+            try
+            {
+                result = service.Delete(
+                    requests,
+                    new DeleteOptions
+                    {
+                        AllowedRoot = allowedRoot,
+                        UserConfirmed = true,
+                        Mode = mode,
+                        Reason = PartialPurgeReason
+                    });
+            }
+            catch (Exception ex)
+            {
+                return Skip($"{name}：清理其余物里的过程物时出现意外错误（{ex.Message}），一个字节都没删");
+            }
+
+            var logLines = result.LogEntries.Select(entry => entry.ToDisplayText()).ToList();
+            int entryCount = result.Outcomes.Sum(outcome => outcome.EntryCount);
+
+            if (result.SuccessCount <= 0)
+            {
+                string failure = result.FailureReasons.Count > 0
+                    ? string.Join("；", result.FailureReasons)
+                    : result.Message;
+
+                return new RestPurgeOutcome
+                {
+                    Attempted = true,
+                    Succeeded = false,
+                    Directory = directory,
+                    Message = $"{name}：其余物里的 {targets.Count} 个过程物没能删掉（{failure}）—— "
+                              + "内容物与源包都不受影响",
+                    LogLines = logLines
+                };
+            }
+
+            return new RestPurgeOutcome
+            {
+                Attempted = true,
+                Succeeded = true,
+                Directory = directory,
+                FreedBytes = result.FreedBytes,
+                EntryCount = entryCount,
+                Message = $"{name}：其余物里除要保留的以外已删掉 {result.SuccessCount} / {targets.Count} 个项"
+                          + $"（{entryCount} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(result.FreedBytes)}，不进回收站）"
+                          + $"，保留的那一份仍在盘上：{string.Join("、", keep)}",
+                LogLines = logLines
+            };
+        }
+
+        /// <summary><paramref name="candidate"/> 就是 <paramref name="root"/>，或者在它之下。</summary>
+        private static bool IsSameOrUnder(string candidate, string root)
+        {
+            return string.Equals(candidate, root, StringComparison.OrdinalIgnoreCase) ||
+                   candidate.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase) ||
+                   candidate.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// 试着删除一个任务的其余物。**任何一条门槛不成立都返回"没动"**，并给出原因（不抛异常）。
         /// </summary>
         /// <param name="task">目标任务。</param>
