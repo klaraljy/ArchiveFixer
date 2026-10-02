@@ -730,7 +730,15 @@ namespace ArchiveFixer.Engines.WinRar
                 DetectedErrorType = errorType,
                 UsedPasswordMasked = MaskPassword(usedPassword),
                 Elapsed = elapsed,
-                CommandSummary = BuildCommandSummary(arguments)
+                CommandSummary = BuildCommandSummary(arguments),
+
+                /*
+                 * 「哪些条目坏了」与"引擎自报坏了几个" —— 部分完成发布那块功能的地基
+                 * （见 ArchiveOperationResult.FailedEntryNames 的说明）。
+                 * ⚠ 中文版 UnRAR 打的是中文 ⇒ 这里可能是空的，调用方必须靠"清单 vs 盘上实际"对账 + 计数闸门。
+                 */
+                FailedEntryNames = UnRarOutputParser.ExtractFailedEntryNames(combined),
+                ReportedSubItemErrors = UnRarOutputParser.ExtractTotalErrorCount(combined)
             };
         }
 

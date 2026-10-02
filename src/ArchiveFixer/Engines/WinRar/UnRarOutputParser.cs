@@ -540,6 +540,100 @@ namespace ArchiveFixer.Engines.WinRar
             return names;
         }
 
+        /// <summary>
+        /// 引擎**点名**的坏条目。实测本机 UnRAR 7.23（<c>x</c> 打坏一个条目）：
+        /// <code>
+        /// Total errors: 1
+        /// bad.bin              - checksum error
+        /// </code>
+        /// ⇒ 行形状 = <c>&lt;条目名&gt;  -  &lt;原因&gt;</c>；原因白名单 = checksum error / CRC error / corrupt。
+        ///
+        /// <para>⚠ <b>中文版 UnRAR 这些词也是中文的</b>（用户机器上装的就是中文 6.11，见
+        /// <see cref="LooksLikePasswordOrCorrupted"/> 的实测记录）⇒ 那台机器上这里会**点不出名**。
+        /// 所以调用方必须：① 用 <see cref="ExtractTotalErrorCount"/> 当闸门（自报有错却点不出名 ⇒ 不发布）；
+        /// ② 拿"清单 vs 盘上实际"逐条对账（UnRAR 默认**不写**坏文件 ⇒ 坏条目在盘上是"缺失"）。</para>
+        /// </summary>
+        public static IReadOnlyList<string> ExtractFailedEntryNames(string? combinedOutput)
+        {
+            var names = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(combinedOutput))
+            {
+                return names;
+            }
+
+            foreach (string rawLine in combinedOutput.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string line = rawLine.Trim();
+
+                int separator = line.LastIndexOf(" - ", StringComparison.Ordinal);
+
+                if (separator <= 0)
+                {
+                    continue;
+                }
+
+                string reason = line[(separator + 3)..].Trim();
+
+                if (!IsItemLevelErrorReason(reason))
+                {
+                    continue;
+                }
+
+                string name = line[..separator].Trim();
+
+                if (name.Length == 0)
+                {
+                    continue;
+                }
+
+                if (!names.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    names.Add(name);
+                }
+            }
+
+            return names;
+        }
+
+        private static bool IsItemLevelErrorReason(string reason)
+        {
+            return reason.StartsWith("checksum error", StringComparison.OrdinalIgnoreCase)
+                || reason.StartsWith("CRC error", StringComparison.OrdinalIgnoreCase)
+                || reason.StartsWith("CRC failed", StringComparison.OrdinalIgnoreCase)
+                || reason.StartsWith("corrupt", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>引擎自报的出错条目数（<c>Total errors: N</c>）；没自报 ⇒ 0（⛔ 不等于没有错）。</summary>
+        public static int ExtractTotalErrorCount(string? combinedOutput)
+        {
+            int count = 0;
+
+            if (string.IsNullOrWhiteSpace(combinedOutput))
+            {
+                return count;
+            }
+
+            foreach (string rawLine in combinedOutput.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string line = rawLine.Trim();
+
+                if (!line.StartsWith("Total errors:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string value = line["Total errors:".Length..].Trim();
+
+                if (int.TryParse(value, out int parsed) && parsed > count)
+                {
+                    count = parsed;
+                }
+            }
+
+            return count;
+        }
+
         /// <summary>把 stdout / stderr 合成一段（分类只看这一段）。</summary>
         public static string CombineOutput(string? output, string? error)
         {

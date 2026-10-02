@@ -715,7 +715,14 @@ namespace ArchiveFixer.Engines.SevenZip
                 DetectedErrorType = errorType,
                 UsedPasswordMasked = MaskPassword(usedPassword),
                 Elapsed = elapsed,
-                CommandSummary = BuildCommandSummary(arguments)
+                CommandSummary = BuildCommandSummary(arguments),
+
+                /*
+                 * 「哪些条目坏了」与"引擎自报坏了几个" —— 部分完成发布那块功能的地基（见
+                 * ArchiveOperationResult.FailedEntryNames 的说明）。原文已经脱敏，解析在引擎目录内完成。
+                 */
+                FailedEntryNames = SevenZipOutputParser.ExtractFailedEntryNames(combined),
+                ReportedSubItemErrors = SevenZipOutputParser.ExtractSubItemErrorCount(combined)
             };
         }
 

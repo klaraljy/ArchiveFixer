@@ -97,6 +97,114 @@ namespace ArchiveFixer.Engines.SevenZip
             return VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(archivePath)) != null;
         }
 
+        /// <summary>
+        /// 条目级错误行左边那几种"原因"（**前缀**匹配）。实测本机 7-Zip 26.03：
+        /// <code>
+        /// ERROR: Data Error : good.bin
+        /// ERROR: Data Error in encrypted file. Wrong password? : good.bin
+        /// ERROR: CRC Failed : report.txt
+        /// ERROR: Can not create file : out\x.bin        ← 写不下去（磁盘满 / 权限）
+        /// </code>
+        /// ⛔ 归档级那一档长得不一样（<c>ERROR: &lt;归档路径&gt; : Cannot open encrypted archive. Wrong password?</c>
+        /// —— **路径在左边**），所以判据必须是白名单前缀，不能"见冒号就当条目名"。
+        /// </summary>
+        private static readonly string[] ItemLevelErrorPrefixes =
+        {
+            "Data Error",
+            "CRC Failed",
+            "Can not create file",
+            "Cannot create file",
+            "Can not open output file"
+        };
+
+        /// <summary>
+        /// 引擎**点名**的坏条目（包内相对路径，按出现顺序、去重）。
+        ///
+        /// <para>行形状 = <c>ERROR: &lt;原因&gt; : &lt;条目名&gt;</c>：原因取**第一个**冒号之前那一段
+        /// （白名单前缀），名字取剩下的全部（⛔ 名字里可能还有冒号，所以只切第一刀）。</para>
+        ///
+        /// <para>⚠ 名字拿不到时返回空集合，**不代表没有坏条目** —— 调用方必须同时看
+        /// <see cref="ExtractSubItemErrorCount"/>：自报有错却点不出名 ⇒ 一律不发布。</para>
+        /// </summary>
+        public static IReadOnlyList<string> ExtractFailedEntryNames(string? combinedOutput)
+        {
+            var names = new List<string>();
+
+            foreach (string rawLine in (combinedOutput ?? string.Empty).Split('\n'))
+            {
+                string line = rawLine.TrimEnd('\r').Trim();
+
+                if (!line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string rest = line["ERROR:".Length..].Trim();
+                int separator = rest.IndexOf(':');
+
+                if (separator <= 0)
+                {
+                    continue;
+                }
+
+                string reason = rest[..separator].Trim();
+                string name = rest[(separator + 1)..].Trim();
+
+                if (name.Length == 0 || !IsItemLevelErrorReason(reason))
+                {
+                    continue;
+                }
+
+                if (!names.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    names.Add(name);
+                }
+            }
+
+            return names;
+        }
+
+        private static bool IsItemLevelErrorReason(string reason)
+        {
+            foreach (string prefix in ItemLevelErrorPrefixes)
+            {
+                if (reason.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 引擎自报的"出错的子项数"（<c>Sub items Errors: N</c>）。实测它在结尾出现两次（值一样），
+        /// 取**最大**的那一个；一行都没有 ⇒ 0（没自报，不等于没有错）。
+        /// </summary>
+        public static int ExtractSubItemErrorCount(string? combinedOutput)
+        {
+            int count = 0;
+
+            foreach (string rawLine in (combinedOutput ?? string.Empty).Split('\n'))
+            {
+                string line = rawLine.Trim();
+
+                if (!line.StartsWith("Sub items Errors:", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string value = line["Sub items Errors:".Length..].Trim();
+
+                if (int.TryParse(value, out int parsed) && parsed > count)
+                {
+                    count = parsed;
+                }
+            }
+
+            return count;
+        }
+
         public static string DetectSevenZipErrorType(
             int exitCode,
             string? output,

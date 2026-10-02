@@ -203,6 +203,31 @@ namespace ArchiveFixer.Engines
 
         public bool IsTimedOut => DetectedErrorType == "TimedOut";
 
+        /// <summary>
+        /// 引擎**点名**的坏条目（包内相对路径；点不出名时是空集合）。
+        ///
+        /// <para><b>为什么要结构化这一份</b>（「部分完成也把已解出的内容放进目标目录」那块功能的地基）：
+        /// 引擎解一个包解到一半失败时，退出码只说"有错"，**说清"哪一个条目坏了"的只有它打的那几行字**；
+        /// 而"哪些文件敢发布"必须逐条回答，所以要在引擎目录内（⛔ 只有那里允许解析引擎文本）把它读成数据。
+        /// 实测形状（本机 7-Zip 26.03 / UnRAR 7.23 真样本，见两个解析器的注释）：
+        /// <c>ERROR: Data Error : good.bin</c>、<c>bad.bin  -  checksum error</c>。</para>
+        ///
+        /// <para>⛔ <b>不许拿它单独当"可以发布"的依据</b>：中文版 UnRAR 打的是中文，这里会是空的 ——
+        /// 调用方必须拿"清单 vs 盘上实际"逐条对账（缺 / 大小不符），并用
+        /// <see cref="ReportedSubItemErrors"/> 做闸门（自报有错却点不出名 ⇒ 什么都不发布）。</para>
+        ///
+        /// <para>默认空集合：别的引擎与手写的结果对象不填这一位，行为与从前逐字相同。</para>
+        /// </summary>
+        public IReadOnlyList<string> FailedEntryNames { get; set; } = Array.Empty<string>();
+
+        /// <summary>
+        /// 引擎**自报**的"出错的子项数"（7-Zip 的 <c>Sub items Errors: N</c> / UnRAR 的 <c>Total errors: N</c>）。
+        ///
+        /// <para>它是**闸门不是清单**：拿不到某几个坏条目的名字时，靠它知道"确实还有坏东西没点名"
+        /// ⇒ 那一档一律**不发布**（判不出 ⇒ 什么都不做）。<c>0</c> = 没自报或确实没有错误。</para>
+        /// </summary>
+        public int ReportedSubItemErrors { get; set; }
+
         public static ArchiveOperationResult CreateSuccess(
             int exitCode,
             string output,
