@@ -389,10 +389,15 @@ namespace ArchiveFixer.Tests
             Assert.Equal(@"C:\out\222\999", plan.ContentParentDirectory);
         }
 
+        /// <summary>
+        /// ⛔ **只解了一层时发布侧也不摊外壳**（2026-10-02 真机修，与"就地替换"那一档对齐）：
+        /// 归档自带的文件夹原样保留 —— 摊平它是用户的红线（"这是非常大忌"），
+        /// 而且真机 <c>风景01.7z.001</c> 就是被这一步吃掉了 <c>风景\</c> 这一层。
+        /// 摊不摊由唯一出口 <c>ResultFinalizer</c> 决定（同名套娃由它自己的"同名不套层"收掉）。
+        /// </summary>
         [Fact]
-        public void 无内层包_发布侧照旧摊掉无意义外壳()
+        public void 无内层包_发布侧也不摊外壳_文件夹原样保留()
         {
-            // 与"就地替换"那一档对照：只解了一层时发布侧**照旧**摊外壳，一个字都不改。
             string root = NewTempRoot();
 
             try
@@ -406,8 +411,13 @@ namespace ArchiveFixer.Tests
                 WorkspacePublishResult published = workspace.Publish(target);
 
                 Assert.True(published.Success, published.Message);
-                Assert.True(File.Exists(Path.Combine(target, "a.txt")), published.Message);
-                Assert.False(Directory.Exists(Path.Combine(target, "pack")), "无意义外壳应当被去掉");
+                Assert.True(
+                    File.Exists(Path.Combine(target, "pack", "a.txt")),
+                    "归档自带的文件夹必须原样保留：" + published.Message);
+
+                Assert.False(
+                    File.Exists(Path.Combine(target, "a.txt")),
+                    "⛔ 只解一层时也不许把归档自带的文件夹摊平");
             }
             finally
             {

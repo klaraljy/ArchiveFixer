@@ -1128,13 +1128,24 @@ namespace ArchiveFixer.Tests
             Assert.Contains("a(1).txt", published.Message, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// ⛔ **发布这一步一个外壳都不摊**（2026-10-02 真机修）：归档自带的文件夹原样保留。
+        ///
+        /// <para>老口径把"只有一个子目录、没有同级文件"的那一层当"解压器自动加的壳"摊掉 ——
+        /// 真机现场 <c>风景01.7z.001</c>（只解一层、内容全在一个 <c>风景\</c> 文件夹里）就这样变成了
+        /// <c>&lt;包名&gt;\1.mp4</c>，用户的文件夹被吃过一层、日志里一个字都没提。用户 2026-09-30 的红线：
+        /// 「如果是一个文件夹 1111 里面包裹真正的内容物，这个时候你就会把 1111 省略，这是非常大忌」。</para>
+        ///
+        /// <para>摊不摊"哪一层留"由**唯一出口** <c>ResultFinalizer</c> 决定（同名套娃 <c>pack\pack\</c>
+        /// 由它自己的"同名不套层"那一条收掉）。</para>
+        /// </summary>
         [Fact]
-        public void 工作区_Publish去掉一层无意义外壳()
+        public void 工作区_Publish不摊任何外壳_归档自带的文件夹原样保留()
         {
             var workspace = new ExtractionWorkspace(Path.Combine(_root, "pub-ws2"), "task-shell");
             WorkspaceLayer layer = workspace.CreateNextLayer(Path.Combine(_root, "pack.zip"));
 
-            // out\pack\文件：外面那层 pack 只是解压器自动加的壳，发布时应当去掉。
+            // out\pack\文件：这一层 `pack` 是打包人自己的结构，发布时**原样保留**。
             string shell = Path.Combine(layer.OutputPath, "pack");
             Directory.CreateDirectory(shell);
             File.WriteAllText(Path.Combine(shell, "a.txt"), "内容", Utf8NoBom);
@@ -1143,8 +1154,14 @@ namespace ArchiveFixer.Tests
             WorkspacePublishResult published = workspace.Publish(target);
 
             Assert.True(published.Success, published.Message);
-            Assert.True(File.Exists(Path.Combine(target, "a.txt")), published.Message);
-            Assert.False(Directory.Exists(Path.Combine(target, "pack")), "无意义外壳应当被去掉");
+
+            Assert.True(
+                File.Exists(Path.Combine(target, "pack", "a.txt")),
+                "归档自带的文件夹必须原样保留（摊平它是用户的红线）：" + published.Message);
+
+            Assert.False(
+                File.Exists(Path.Combine(target, "a.txt")),
+                "⛔ 不许把归档自带的文件夹摊平到发布目标根上");
         }
 
         /// <summary>

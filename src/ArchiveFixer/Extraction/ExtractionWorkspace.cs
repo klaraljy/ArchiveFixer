@@ -114,13 +114,6 @@ namespace ArchiveFixer.Extraction
         /// <summary>report.json 的文件名（崩溃后恢复时按这个约定去找）。</summary>
         private const string ReportFileName = "report.json";
 
-        /// <summary>
-        /// 摊平"无意义外壳"的最大层数。
-        /// 不设成无限：外壳通常只有一层，真的套了十层说明这个包的目录结构本身有含义
-        /// （例如按日期分层的备份包），继续摊只会把用户的目录结构拆散。
-        /// </summary>
-        private const int MaxWrapperStripDepth = 3;
-
         private readonly List<WorkspaceLayer> _layers = new();
 
         /// <summary>创建并准备一个工作区（<c>&lt;rootDirectory&gt;\&lt;清洗后的 taskId&gt;</c> 会被建出来）。</summary>
@@ -205,10 +198,15 @@ namespace ArchiveFixer.Extraction
         /// 只发布叶子、不发布全部层，是为了不让"已经被展开掉的中间归档"混进最终产物 ——
         /// 用户要的是解到底的东西，不是半路的压缩包。
         ///
-        /// 每一层在发布前都会去掉自己的"无意义外壳"：如果它里面**恰好只有一个子目录、
-        /// 没有任何同级文件**，那一层就是这个包自带的壳（典型：<c>out\pack\pack\文件</c>），
-        /// 去掉它再发布，避免用户拿到 out\pack\pack\ 这种套娃目录。摊平最多
-        /// <see cref="MaxWrapperStripDepth"/> 层，且**每层都要重新满足**上述条件才继续摊。
+        /// ⛔ <b>发布这一步**一个外壳都不摊**</b>（2026-10-02 真机修）：这一层的产物**原样**搬进
+        /// <paramref name="targetDirectory"/>。理由有两条，缺一不可：
+        /// ① "哪一层留、那一层叫什么"的**唯一出口**是 <see cref="ResultFinalizer"/>（判定表 ①③④ 与
+        /// "同名不套层"都在那里；套娃目录 <c>pack\pack\</c> 由它自己的同名那一档收掉）；
+        /// 两处各摊一次 = 同一个事实两个判据，真机上表现为"用户的文件夹被吃过一层"，而且没有日志。
+        /// ② 用户 2026-09-30 的红线原话："如果是一个文件夹 <c>1111</c> 里面包裹真正的内容物，
+        /// 这个时候你就会把 <c>1111</c> 省略，这是非常大忌" —— 现场就是
+        /// <c>风景01.7z.001</c>（只解一层、内容全在一个 <c>风景\</c> 文件夹里）被摊成了
+        /// <c>&lt;包名&gt;\1.mp4</c>。
         ///
         /// <para>
         /// ⛔ <b>这一次递归展开了内层包时走"就地替换"那一档</b>（<paramref name="inPlaceInnerPackages"/>
@@ -216,8 +214,7 @@ namespace ArchiveFixer.Extraction
         /// **以它命名的文件夹**（去掉假后缀的基名）放内容物，真文件原地不动 ——
         /// 形状 <c>AAA\DDDD\内容物</c>、<c>AAA\BBBB\CCCCC\内容物</c>。
         /// ⛔ 老口径"把所有叶子层产物摊到发布目标根上"（等于把它们都搬到顶层）**只有在这一档之外**
-        /// 才是对的；摊平"无意义外壳"这一档在就地替换里**一层都不做** ——
-        /// 那些文件夹是打包人自己的结构，见 <see cref="PackageLayerRules"/>。
+        /// 才是对的；两档现在都不摊"外壳" —— 那些文件夹是打包人自己的结构，见 <see cref="PackageLayerRules"/>。
         /// </para>
         ///
         /// <paramref name="targetDirectory"/> 必须由调用方给出**完整目标位置**
@@ -304,8 +301,20 @@ namespace ArchiveFixer.Extraction
                             continue;
                         }
 
+                        /*
+                         * ⛔ **发布这一步一个外壳都不摊**（2026-10-02 真机修，用户原话见
+                         * PackageLayerRules 第 1 条："如果是一个文件夹 1111 里面包裹真正的内容物，
+                         * 这个时候你就会把 1111 省略，这是非常大忌"）。
+                         *
+                         * 现场：`风景01.7z.001`（只解一层、内容全在一个 `风景\` 文件夹里）——
+                         * 这里以前传 `stripWrapper: true`，把 `风景\` 当"无意义外壳"摊掉，
+                         * 落地成 `<包名>\1.mp4`；而"哪一层留、那一层叫什么"的**唯一出口**是
+                         * <see cref="ResultFinalizer"/>（它本来就会正确处理：同名套娃 `pack\pack\`
+                         * 由它自己的"同名不套层"那条收掉，普通文件夹则原样保留）。
+                         * 两处各摊一次 ⇒ 用户的文件夹被吃过一层，而且**没有任何日志**。
+                         */
                         movedCount += MoveContent(
-                            ResolveContentRoot(leaf.OutputPath, stripWrapper: true),
+                            leaf.OutputPath,
                             destination,
                             renamed,
                             errors);
@@ -443,7 +452,7 @@ namespace ArchiveFixer.Extraction
                     destinationOf[layer] = destination;
 
                     movedCount += MoveContent(
-                        ResolveContentRoot(layer.OutputPath, stripWrapper: false),
+                        layer.OutputPath,
                         destination,
                         renamed,
                         errors);
@@ -478,7 +487,7 @@ namespace ArchiveFixer.Extraction
                 destinationOf[layer] = layerDirectory;
 
                 movedCount += MoveContent(
-                    ResolveContentRoot(layer.OutputPath, stripWrapper: false),
+                    layer.OutputPath,
                     layerDirectory,
                     renamed,
                     errors);
@@ -811,67 +820,6 @@ namespace ArchiveFixer.Extraction
             }
 
             return leaves;
-        }
-
-        /// <summary>
-        /// 解析真正要发布的内容根目录（去掉无意义外壳）。
-        /// 摊平条件苛刻是有意的：只要出现"多个条目"或"一个文件"，就说明当前目录本身是有含义的。
-        ///
-        /// <para>
-        /// <paramref name="stripWrapper"/> 为 false 时**一层都不摊**（原样发布整个产物目录）：
-        /// 这一次递归展开过内层包，叶子层的那一个文件夹就是"最里层"，
-        /// 见 <see cref="Publish"/> 的说明（用户 2026-09-30 红线）。
-        /// </para>
-        /// </summary>
-        private static string ResolveContentRoot(string outputDirectory, bool stripWrapper = true)
-        {
-            string current = outputDirectory;
-
-            if (!stripWrapper)
-            {
-                return current;
-            }
-
-            for (int i = 0; i < MaxWrapperStripDepth; i++)
-            {
-                string[] entries;
-
-                try
-                {
-                    entries = Directory.GetFileSystemEntries(current);
-                }
-                catch
-                {
-                    return current;
-                }
-
-                if (entries.Length != 1)
-                {
-                    return current;
-                }
-
-                string onlyEntry = entries[0];
-
-                if (!TryGetAttributes(onlyEntry, out FileAttributes attributes))
-                {
-                    return current;
-                }
-
-                if ((attributes & FileAttributes.Directory) == 0)
-                {
-                    return current;
-                }
-
-                // 外壳是符号链接 / 联接点时不当外壳：跟着它搬等于把别处的文件挪走。
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
-                {
-                    return current;
-                }
-
-                current = onlyEntry;
-            }
-
-            return current;
         }
 
         /// <summary>把内容根目录下的条目搬进目标目录，返回真正移动成功的文件数。</summary>

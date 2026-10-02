@@ -1366,6 +1366,49 @@ namespace ArchiveFixer.Tests
         // ---------------------------------------------------------------- 落点模型 v2：续解层的两种档位
 
         /// <summary>
+        /// ⛔ **只解一层 + 内容全在一个文件夹里时，那个文件夹必须原样保留**（2026-10-02 真机修）。
+        ///
+        /// <para>真机现场：<c>风景01.7z.001</c>（2 卷、<c>-mhe</c>、内容全在 <c>风景\</c> 里）在
+        /// 「单链自动展开」下解完，落点却是 <c>&lt;包名&gt;\1.mp4</c> —— <c>风景\</c> 这一层被发布那一步
+        /// 当"无意义外壳"摊掉了（用户原话："这是非常大忌"）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 只解一层_内容全在一个文件夹里_那一层必须原样保留()
+        {
+            string build = Path.Combine(_root, "single-folder-shape");
+            Directory.CreateDirectory(Path.Combine(build, "风景"));
+
+            WriteText(Path.Combine(build, "风景", "1.mp4"), InnerPayloadText);
+            WriteText(Path.Combine(build, "风景", "说明.txt"), InnerPayloadText);
+
+            string outputRoot = Path.Combine(_root, "single-folder-out");
+
+            Harness harness = CreateHarness(
+                $"{OuterPassword}\n",
+                settings =>
+                {
+                    settings.RecursionMode = "SingleChain";
+                    settings.CustomOutputDirectory = outputRoot;
+                });
+
+            await harness.AddPathsAsync(BuildPackage("风景01.7z", build, "风景"));
+            await harness.RunOneClickAsync();
+
+            string tree = string.Join(
+                " | ",
+                Directory.GetFileSystemEntries(outputRoot, "*", SearchOption.AllDirectories)
+                    .Select(path => path.Replace(outputRoot, string.Empty)));
+
+            Assert.True(
+                File.Exists(Path.Combine(outputRoot, "风景01", "风景", "1.mp4")),
+                "归档自带的那一层文件夹必须原样保留（摊平它是用户的红线）。实际目录树：" + tree);
+
+            Assert.False(
+                File.Exists(Path.Combine(outputRoot, "风景01", "1.mp4")),
+                "⛔ 不许把归档自带的文件夹摊到包名目录下。实际目录树：" + tree);
+        }
+
+        /// <summary>
         /// **续解层"首尾必留、中间看开关"的真 7z 端到端**（用户 2026-09-27 拍板）：
         /// 同一条**单链**样本，开关关着 = 忠实档（每个内层包各占一层），打开 = 简洁档
         /// （中间那些"只出过程物"的过路层省掉，第一层与最后一层永远保留）。
