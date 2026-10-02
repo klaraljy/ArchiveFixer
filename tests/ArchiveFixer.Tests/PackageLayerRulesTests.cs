@@ -57,6 +57,53 @@ namespace ArchiveFixer.Tests
     {
         private const string Staging = @"C:\work\t1";
 
+        // ═════════════════ ⓪ 「搬运 N 个」不许读成"落点里有 N 个" ═════════════════
+
+        /// <summary>
+        /// **就地替换那一档的发布数**含"位置让给同名目录、随后被拿掉"的内层包，
+        /// 所以它**大于**落点里最终的文件数。
+        ///
+        /// <para>2026-10-02 真机现场：日志写「已发布 146 个文件到 …\stage」，紧接着下一行就是
+        /// 「结果校验 —— 校验通过：预期 145 个文件 / 实际 145 个」，两行互相打脸。
+        /// 数字本身没错（146 = 145 个内容物 + 1 个被替换掉的内层包），错的是那句话让人读成
+        /// "落点里有 146 个"。</para>
+        ///
+        /// <para>红检：把 <c>ExtractionWorkspace.Publish</c> 里传的
+        /// <c>countsMovedNotLanded</c> 撤掉（退回老句「已发布 N 个文件到 …」）⇒ 本条变红。</para>
+        /// </summary>
+        [Fact]
+        public void 就地替换_发布那句话必须说清数字含被替换掉的内层包()
+        {
+            string root = NewTempRoot();
+
+            try
+            {
+                var workspace = new ExtractionWorkspace(Path.Combine(root, "ws"), "publish-message");
+                WorkspaceLayer outer = workspace.CreateNextLayer(Path.Combine(root, "AAA.rar"));
+
+                WriteFile(outer.OutputPath, "1.mp4");
+                WriteFile(outer.OutputPath, "DDDD.mp4");
+                Extract(workspace, outer, "DDDD.mp4", "DDDD");   // → DDDD\内容物\DDDD.bin
+
+                string target = Path.Combine(root, "stage");
+                WorkspacePublishResult published = workspace.Publish(target, inPlaceInnerPackages: true);
+
+                Assert.True(published.Success, published.Message);
+
+                // 搬动过 = 1.mp4 + DDDD.mp4（内层包）+ DDDD.bin = 3；落点里最终只剩 2 个文件。
+                Assert.Equal(3, published.MovedFileCount);
+                Assert.Equal(2, Directory.GetFiles(target, "*", SearchOption.AllDirectories).Length);
+
+                Assert.Contains("搬运 3 个文件到", published.Message, StringComparison.Ordinal);
+                Assert.Contains("含已被同名目录替换掉的内层包", published.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain("已发布 3 个文件", published.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                TryDelete(root);
+            }
+        }
+
         // ═════════════════ ① 用户极端例子：整棵树逐字对照 ═════════════════
         //
         // 用户给的那棵树（必须逐字成立）：

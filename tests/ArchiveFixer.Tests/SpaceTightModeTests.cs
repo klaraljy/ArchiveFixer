@@ -999,7 +999,7 @@ namespace ArchiveFixer.Tests
                         || m.Contains("排队", StringComparison.Ordinal)
                         || m.Contains("腾出", StringComparison.Ordinal)
                         || m.Contains("汇总", StringComparison.Ordinal)
-                        || m.Contains("顺序 ", StringComparison.Ordinal)
+                        || m.Contains("位（本批第", StringComparison.Ordinal)
                         || m.Contains("失败", StringComparison.Ordinal)));
 
             File.WriteAllText(

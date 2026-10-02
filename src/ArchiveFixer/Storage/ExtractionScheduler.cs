@@ -144,9 +144,21 @@ namespace ArchiveFixer.Storage
                 "空间调度依据：" + Basis
             };
 
+            /*
+             * 「第 N 位」= **按空间需求排出来的真实位次**（明细本来就是升序印的，它必须跟着递增）；
+             * 「本批第 M 个」= 它在本批任务清单里的序号（`ScheduledExtractionItem.OriginalIndex`，
+             * 那个字段的固有用途是"需求相同时的兜底 tiebreaker"）。
+             *
+             * ⛔ 别再把 OriginalIndex 单独写成「顺序 N」：2026-10-02 真机日志里因此出现
+             * 「顺序 6」排在「顺序 5」前面 —— 排序其实是对的，读的人却当场得出"程序排错了"的结论。
+             * ⛔ 也不写"①页第 M 行"：一键处理可能只跑勾选的那几个，那时 M 只是本批内的序号。
+             */
+            int position = 0;
+
             foreach (ScheduledExtractionItem item in Ordered.Take(SpacePlanDetailLimit))
             {
-                lines.Add($"  顺序 {item.OriginalIndex + 1}：{item.Estimate.Describe()}");
+                position++;
+                lines.Add($"  第 {position} 位（本批第 {item.OriginalIndex + 1} 个）：{item.Estimate.Describe()}");
             }
 
             /*

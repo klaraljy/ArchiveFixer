@@ -456,6 +456,60 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("******", aggregated[0], StringComparison.Ordinal);
         }
 
+        // ================================================================ 撞上密码尝试上限时的指路（2026-10-02 真机）
+
+        /// <summary>
+        /// **撞上「每层密码尝试上限」要给一条指路**（用户 2026-10-02 要求）：没试出来**不等于**
+        /// 这些包一定需要密码 —— 可能它们本来就没有密码，也可能对的密码排在候选更靠后（被上限截断了），
+        /// 所以要让用户去④页调顺序 / 把上限调大。
+        ///
+        /// <para>⛔ 三条边界：①仍不许说成确认的密码问题（必须带「可能」）；②上限那两句**原话一个字不改**
+        /// （有用例逐字钉着），这一句只是**补在后面**；③不许被 PasswordMasker 吃掉。</para>
+        ///
+        /// <para>红检：把 <c>ExtractionCoordinator</c> 里那段 <c>if (attemptLimitCount &gt; 0)</c>
+        /// 撤掉 ⇒ 本条变红（汇总里再没有"按上限停下"那句指路）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 撞上密码尝试上限_批末要给可能是没有密码或排在更靠后的指路()
+        {
+            Assert.Null(System.Windows.Application.Current);   // 前提：测试进程里没有 WPF 应用
+
+            // 4 个候选（空密码 + 3 条）而单层上限设成 2 ⇒ 一定被上限截断。
+            Harness harness = CreateHarness(
+                passwords: new[] { "候选密码1", "候选密码2", "候选密码3" },
+                configure: settings => settings.MaxPasswordAttemptsPerLayer = 2);
+
+            AddTask(harness, CreateSourceFile("locked.7z"));
+
+            harness.Engine.OnExtractAsync = _ => Task.FromResult(WrongPassword());
+            harness.Engine.OnListAsync = _ =>
+                Task.FromResult(ArchiveListResult.Failure("WrongPassword", "密码错误", "fake", "1.0"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            ArchiveTask task = Assert.Single(harness.Vm.Tasks);
+            Assert.Equal(StatusText.PasswordAttemptLimitReached, task.Status);
+
+            string[] aggregated = harness.Log.Logs
+                .Where(x => x.Message.Contains("个包没能解开", StringComparison.Ordinal))
+                .Select(x => x.Message)
+                .ToArray();
+
+            string text = Assert.Single(aggregated);
+
+            // ① 老口径那两句一个字没改（也不许被算成"密码错误"）。
+            Assert.Contains("候选还没试完就按上限停了，不等于密码错误", text, StringComparison.Ordinal);
+
+            // ② 新增的指路：可能是没有密码 / 可能排在更靠后 + 去④页调顺序（数字取设置里那个上限）。
+            Assert.Contains("可能它们本来就没有密码", text, StringComparison.Ordinal);
+            Assert.Contains("也可能正确的密码排在候选里更靠后的位置", text, StringComparison.Ordinal);
+            Assert.Contains("每层最多只试前 2 条", text, StringComparison.Ordinal);
+            Assert.Contains("④页", text, StringComparison.Ordinal);
+
+            // ③ 不许被脱敏兜底吃掉。
+            Assert.DoesNotContain("******", text, StringComparison.Ordinal);
+        }
+
         // ================================================================ 先测试再解压（2026-10-01）
 
         /// <summary>

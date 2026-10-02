@@ -1085,22 +1085,46 @@ namespace ArchiveFixer.ViewModels
         /// <c>Settings.ExtractToOriginalDirectory</c>），不新开字段、不各存一份：
         /// 两处改哪一处，另一处与这一行立刻跟着变（SettingsEditor 的属性变更会回来通知这里）。</para>
         /// </summary>
-        public string OutputLocationDisplay
+        public string OutputLocationDisplay => ResolveOutputLocationText(forLog: false);
+
+        /// <summary>
+        /// 日志导出头部那一行要用的输出位置（**整行、完整路径不省略**）。
+        ///
+        /// <para>判据与 <see cref="OutputLocationDisplay"/> 是**同一份**（三档：未指定 / 还没选 / 指定），
+        /// 只有"给界面还是给日志"不同。2026-10-02 真机那份日志里头部写着上一批记住的
+        /// <c>H:\…\测试\BBB</c>，而这一批 8 个任务的产物全在 <c>H:\…\222\…</c> 底下 ——
+        /// 老写法只读 <see cref="SelectedOutputDirectory"/> 这一个字段，压根没看落点档位
+        /// （"记住的目录"会把那个字段填上，落点却仍是"每个包自己旁边"）。</para>
+        /// </summary>
+        internal string OutputLocationForLog => ResolveOutputLocationText(forLog: true);
+
+        /// <summary>
+        /// 三档落点的**同一份判据**（①页那一格与日志头部共用）。
+        /// ⛔ 别在别处再写一遍这几个分支：两处判据分叉正是上面那个真机缺陷的根因。
+        /// </summary>
+        private string ResolveOutputLocationText(bool forLog)
         {
-            get
+            if (Settings == null || Settings.ExtractToOriginalDirectory)
             {
-                if (Settings == null || Settings.ExtractToOriginalDirectory)
-                {
-                    return StatusText.OutputLocationUnspecifiedText;
-                }
-
-                if (string.IsNullOrWhiteSpace(SelectedOutputDirectory))
-                {
-                    return StatusText.OutputLocationNotChosenText;
-                }
-
-                return PathMiddleEllipsis.Elide(SelectedOutputDirectory);
+                /*
+                 * ①页那一格要短句（它左边就是「输出位置：」那个标签）；
+                 * 日志要整行 —— 用①页切档时写进日志的**同一句原话**，不新编一句。
+                 */
+                return forLog
+                    ? StatusText.OutputLocationSwitchedToOriginalLog
+                    : StatusText.OutputLocationUnspecifiedText;
             }
+
+            if (string.IsNullOrWhiteSpace(SelectedOutputDirectory))
+            {
+                return forLog
+                    ? StatusText.OutputLocationLabel + StatusText.OutputLocationNotChosenText
+                    : StatusText.OutputLocationNotChosenText;
+            }
+
+            return forLog
+                ? StatusText.OutputLocationLabel + SelectedOutputDirectory
+                : PathMiddleEllipsis.Elide(SelectedOutputDirectory);
         }
 
         /// <summary>完整路径的 ToolTip（界面上那一行是省略过的，这里给全文）。</summary>
@@ -3861,13 +3885,17 @@ namespace ArchiveFixer.ViewModels
                 lines.Add("引擎：" + engine);
             }
 
-            string outputRoot = !string.IsNullOrWhiteSpace(SelectedOutputDirectory)
-                ? SelectedOutputDirectory
-                : (Tasks.FirstOrDefault(task => !string.IsNullOrWhiteSpace(task.OutputPath))?.OutputPath ?? string.Empty);
+            /*
+             * ⛔ 读的是①页那一格的**同一份判据**（`ResolveOutputLocationText`），
+             * 不是 `SelectedOutputDirectory` 这个字段本身：字段会被"记住的目录"填上，
+             * 而这一批的落点可能压根不用它 —— 老写法因此在真机日志里写出上一批的
+             * <c>…\测试\BBB</c>，与正文每一行"本次实际输出目录 …\222\…"互相打脸。
+             */
+            string outputRoot = OutputLocationForLog;
 
             if (!string.IsNullOrWhiteSpace(outputRoot))
             {
-                lines.Add("输出位置：" + outputRoot);
+                lines.Add(outputRoot);
             }
 
             lines.Add(

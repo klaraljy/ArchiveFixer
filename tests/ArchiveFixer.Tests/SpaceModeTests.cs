@@ -415,6 +415,44 @@ namespace ArchiveFixer.Tests
                 plan.Ordered.Select(item => item.Task.FileName).ToArray());
         }
 
+        /// <summary>
+        /// **明细那一行的前缀是"排出来的位次"，不是"本批第几个"**（2026-10-02 真机日志：明细按空间需求
+        /// 升序印，前缀却写的是任务在本批清单里的序号 ⇒ 出现「顺序 6」排在「顺序 5」前面，
+        /// 读的人当场以为程序把顺序排错了）。
+        ///
+        /// <para>红检：把 <c>ExtractionScheduler.DescribeLines</c> 那一行改回
+        /// <c>$"  顺序 {item.OriginalIndex + 1}："</c> ⇒ 本条前两条断言变红。</para>
+        /// </summary>
+        [Fact]
+        public void 调度明细_前缀是位次_而位次必须跟着需求升序递增()
+        {
+            // 本批清单顺序：第 1 个 = 6G、第 2 个 = 1G、第 3 个 = 4G。
+            List<ArchiveTask> tasks = new()
+            {
+                CreateLazyTask("big.7z", 6 * Gib),
+                CreateLazyTask("small.7z", 1 * Gib),
+                CreateLazyTask("middle.7z", 4 * Gib)
+            };
+
+            ExtractionSchedulePlan plan = ExtractionScheduler.Build(
+                tasks,
+                LazyEstimate,
+                availableBytes: 100 * Gib,
+                reserveBytes: 0,
+                requestedParallelCount: 1);
+
+            List<string> details = plan.DescribeLines()
+                .Where(line => line.Contains("位（本批第", StringComparison.Ordinal))
+                .ToList();
+
+            Assert.Equal(3, details.Count);
+
+            // 位次跟着排序键（需求）走；括号里那个才是"本批第几个"。
+            Assert.StartsWith("  第 1 位（本批第 2 个）：", details[0], StringComparison.Ordinal);
+            Assert.StartsWith("  第 2 位（本批第 3 个）：", details[1], StringComparison.Ordinal);
+            Assert.StartsWith("  第 3 位（本批第 1 个）：", details[2], StringComparison.Ordinal);
+        }
+
         [Fact]
         public void 调度_用户点名的反例_一开始绝不能排上5G加6G()
         {

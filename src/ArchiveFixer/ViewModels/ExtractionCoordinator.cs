@@ -8866,6 +8866,20 @@ namespace ArchiveFixer.ViewModels
              * 只写"可以用手动密码"而不说怎么再触发，等于没说。
              */
             builder.AppendLine();
+
+            /*
+             * 撞上「每层密码尝试上限」时的指路（用户 2026-10-02 真机要求）：没试出来**不等于**这些包
+             * 一定需要密码 —— 可能本来就没有密码，也可能对的密码排在候选更靠后（上限截断了）。
+             * ⛔ 只在真的有包撞上限时写；⛔ 上面那两句 reason 原话一个字不动（有用例逐字钉着）。
+             */
+            if (attemptLimitCount > 0)
+            {
+                builder.AppendLine(string.Format(
+                    CultureInfo.CurrentCulture,
+                    StatusText.PasswordAttemptLimitHintFormat,
+                    MaxPasswordAttemptsPerLayer));
+            }
+
             builder.AppendLine(
                 _manualBatchPasswords.Count > 0
                     ? "本次运行你已经手动给过密码；如果还是解不开，说明它不是这些包的密码 —— 换一个再试，或者去核对密码本。"

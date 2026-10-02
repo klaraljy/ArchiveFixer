@@ -511,6 +511,40 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **头部的「输出位置」读的是落点档位，不是"记住的目录"那个字段**（2026-10-02 真机那份日志：
+        /// 头部写 <c>…\测试\BBB</c>，而这一批 8 个任务的产物全在 <c>…\222\…</c> 底下 ——
+        /// "记住的目录"会把 <c>SelectedOutputDirectory</c> 填上，落点却仍是"每个包自己旁边"）。
+        ///
+        /// <para>红检：把 <c>BuildLogExportHeader</c> 那一行改回只读 <c>SelectedOutputDirectory</c>
+        /// ⇒ 前两条断言变红（头部又出现上一批那个目录、且不再是「未指定」那句）。</para>
+        /// </summary>
+        [Fact]
+        public void 导出头部_未指定位置时不许写记住的目录_指定位置时才写完整路径()
+        {
+            Harness harness = CreateHarness();
+            harness.AddTask(harness.CreateSource("a.7z"));
+
+            /*
+             * 造出真机那个状态：字段里留着"记住的目录"，而落点档是「未指定位置」。
+             * 先选一个目录（setter 会顺手把档位切到"指定位置"），再把①页那颗开关勾回去。
+             */
+            harness.Vm.SelectedOutputDirectory = @"C:\上一批\记住的目录";
+            harness.Vm.OutputLocationFollowsArchive = true;
+
+            string header = string.Join("\n", harness.Vm.BuildLogExportHeader());
+
+            Assert.Contains(StatusText.OutputLocationSwitchedToOriginalLog, header, StringComparison.Ordinal);
+            Assert.DoesNotContain(@"记住的目录", header, StringComparison.Ordinal);
+
+            // 反过来：切到「指定位置」时头部必须给**完整路径**（日志里不省略中间段）。
+            harness.Vm.OutputLocationFollowsArchive = false;
+
+            string custom = string.Join("\n", harness.Vm.BuildLogExportHeader());
+
+            Assert.Contains(@"输出位置：C:\上一批\记住的目录", custom, StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// **三处口径逐个相同**：同一批任务，「本批汇总」那一行、一键汇总那一行、
         /// 以及导出的日志头部，分项数字与跟班卷那一句必须**一个字都不差**。
         /// </summary>

@@ -326,7 +326,12 @@ namespace ArchiveFixer.Extraction
                     Success = movedCount > 0,
                     DestinationPath = destination,
                     MovedFileCount = movedCount,
-                    Message = BuildPublishMessage(destination, movedCount, renamed, errors)
+                    Message = BuildPublishMessage(
+                        destination,
+                        movedCount,
+                        renamed,
+                        errors,
+                        countsMovedNotLanded: inPlaceInnerPackages)
                 };
             }
             catch (Exception ex)
@@ -923,17 +928,39 @@ namespace ArchiveFixer.Extraction
             }
         }
 
+        /// <summary>发布结果那句话（数字口径与实际搬运一致，见下面那个开关）。</summary>
+        /// <param name="countsMovedNotLanded">
+        /// 就地替换那一档（<c>inPlaceInnerPackages</c>）传 true：搬动的文件里**包含**那些
+        /// "落位之后位置让给同名目录、随后被拿掉"的内层包，所以那个数**大于**落点里最终的文件数。
+        ///
+        /// <para>2026-10-02 真机现场：日志写「已发布 146 个文件到 …\stage」，紧接着下一行就是
+        /// 「结果校验 —— 校验通过：预期 145 个文件 / 实际 145 个」—— 两行互相打脸。
+        /// 数字本身没错（146 = 145 个内容物 + 1 个被替换掉的内层包），错的是那句话让人读成
+        /// "落点里有 146 个"。</para>
+        /// </param>
         private static string BuildPublishMessage(
             string destination,
             int movedCount,
             List<string> renamed,
-            List<string> errors)
+            List<string> errors,
+            bool countsMovedNotLanded = false)
         {
             var parts = new List<string>();
 
-            parts.Add(movedCount > 0
-                ? $"已发布 {movedCount} 个文件到 {destination}"
-                : "没有可发布的产物文件");
+            if (movedCount <= 0)
+            {
+                parts.Add("没有可发布的产物文件");
+            }
+            else if (countsMovedNotLanded)
+            {
+                parts.Add(
+                    $"搬运 {movedCount} 个文件到 {destination}"
+                    + "（含已被同名目录替换掉的内层包，所以比落点里最终的文件数多 —— 落点里几个看校验那一行）");
+            }
+            else
+            {
+                parts.Add($"已发布 {movedCount} 个文件到 {destination}");
+            }
 
             if (renamed.Count > 0)
             {
