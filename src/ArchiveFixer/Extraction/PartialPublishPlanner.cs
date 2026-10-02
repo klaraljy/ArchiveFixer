@@ -93,6 +93,13 @@ namespace ArchiveFixer.Extraction
 
         public const string ReasonTooMuchMissing = "TooMuchMissing";
 
+        /// <summary>
+        /// 引擎明明说"这一趟失败了"，可我们在盘上**一条缺口都对不上**（没缺、没截断、没点名）
+        /// ⇒ 那个坏东西在盘上"看着是对的"（典型：本地化 UnRAR 的报错既读不出名字也读不出计数）
+        /// ⇒ 一律不发布。
+        /// </summary>
+        public const string ReasonUnreconciledEngineFailure = "UnreconciledEngineFailure";
+
         /// <summary>缺多少条以内还值得发布（用户口径：个位数）。</summary>
         public const int MaxMissingEntries = 5;
 
@@ -122,7 +129,8 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<(string Path, long Size)>? manifestEntries,
             SizeProbe sizeProbe,
             IReadOnlyList<string>? engineFailedEntries = null,
-            int engineReportedErrorCount = 0)
+            int engineReportedErrorCount = 0,
+            bool engineReportedFailure = false)
         {
             if (sizeProbe == null)
             {
@@ -203,6 +211,20 @@ namespace ArchiveFixer.Extraction
             if (publishable.Count == 0)
             {
                 return Fail(ReasonNothingPublishable, "清单里的条目一个都没能完整解出来，没有可发布的内容");
+            }
+
+            /*
+             * ⛔ 闸门 5（补 2026-10-02，专治**本地化引擎**那一档）：引擎说"这一趟失败了"，可我们在盘上
+             * **一条缺口都对不上** —— 没缺条目、没大小不符、也没点名。那只剩一种解释：坏的那个东西
+             * 在盘上"看着是对的"（CRC 坏、长度没变），而本地化 UnRAR 的报错既读不出名字也读不出计数，
+             * 所以闸门 2 也拦不住它。这一档一律不发布 —— 判不出 ⇒ 什么都不做。
+             */
+            if (engineReportedFailure && rejected.Count == 0)
+            {
+                return Fail(
+                    ReasonUnreconciledEngineFailure,
+                    "引擎报告这一趟解压失败，但清单里的条目在盘上一条缺口都对不上"
+                    + "（既没缺、也没截断、引擎又点不出名）—— 那个坏东西可能「看着是对的」，所以一个字节都不发布");
             }
 
             bool withinCount = rejected.Count <= MaxMissingEntries;

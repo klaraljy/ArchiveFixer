@@ -110,9 +110,44 @@ namespace ArchiveFixer.Tests
             Assert.Empty(verdict.Publishable);
         }
 
+        /// <summary>
+        /// **本地化引擎那一档**（补 2026-10-02）：引擎说失败了，可盘上一条缺口都对不上 ——
+        /// 坏的那个东西"看着是对的"（CRC 坏、长度没变），而中文版 UnRAR 的报错既读不出名字也读不出计数
+        /// ⇒ 闸门 2 拦不住它，只能靠这一条 ⇒ **一个字节都不发布**。
+        /// </summary>
         [Fact]
-        public void 清单拿不到_一个字节都不发布()
+        public void 引擎说失败了但盘上对不上账_一个字节都不发布()
         {
+            PartialPublishVerdict verdict = PartialPublishPlanner.Plan(
+                new List<(string, long)> { ("a.bin", 100), ("b.bin", 100) },
+                Disk(("a.bin", 100), ("b.bin", 100)),
+                engineFailedEntries: System.Array.Empty<string>(),
+                engineReportedErrorCount: 0,
+                engineReportedFailure: true);
+
+            _output.WriteLine($"{verdict.ReasonCode}：{verdict.Reason}");
+
+            Assert.False(verdict.CanPublish);
+            Assert.Equal(PartialPublishPlanner.ReasonUnreconciledEngineFailure, verdict.ReasonCode);
+        }
+
+        /// <summary>对照：失败 + 盘上确实有缺口（缺了一条）⇒ 对得上账，照发其余。</summary>
+        [Fact]
+        public void 引擎说失败但盘上有缺口对得上账_照发其余()
+        {
+            PartialPublishVerdict verdict = PartialPublishPlanner.Plan(
+                new List<(string, long)> { ("a.bin", 100), ("b.bin", 100) },
+                Disk(("a.bin", 100)),
+                engineFailedEntries: System.Array.Empty<string>(),
+                engineReportedErrorCount: 0,
+                engineReportedFailure: true);
+
+            Assert.True(verdict.CanPublish, verdict.Reason);
+            Assert.Equal("a.bin", Assert.Single(verdict.Publishable).Path);
+        }
+
+        [Fact]
+        public void 清单拿不到_一个字节都不发布()        {
             PartialPublishVerdict verdict = PartialPublishPlanner.Plan(
                 manifestEntries: null,
                 sizeProbe: Disk(),
