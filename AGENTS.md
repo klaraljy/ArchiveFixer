@@ -207,7 +207,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`（漏洞数据下载 404，环境/网络）——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2341 条（2338 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2362 条（2359 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- 🔧 **在做（未完成）「部分完成也把已解出的内容放进目标目录」**：口径与冲突见 `docs/部分完成发布方案.md`（用户 2026-10-02 已把三件事全拍板：口径 A 固定子目录 / 阈值缺 ≤5 或 ≥95% / 留"最外层源包+已解出内容物"、其余物其他项与工作区都删）。**已落地两块地基**：`ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（引擎点名的坏条目 + 自报计数，两个运行器的唯一出口填；⚠ **中文版 UnRAR 点不出名**）+ **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）。⛔ 判据里没有"引擎没报错就算好"这种话：**大小对得上且引擎没点名**才算可发布。**未做**：发布动作本身（子目录 + 让位 + 二次空间体检 + 其余物/工作区清理）、③页开关与四句说明、与空间不足模式的硬互斥。
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按「`ArchiveFixer.slnx` 的父目录 `\_tmp\ArchiveFixer\{aaa-real,amb909-copy}`」解析，worktree 解成不存在的 `<wt>\_tmp\…`；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`；全仓无 `[Fact(Skip=…)]`、无 `Skip.If`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`，或 `<slnx父目录>\_tmp\ArchiveFixer\space-real` 存在。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
