@@ -1148,6 +1148,21 @@ namespace ArchiveFixer.Models
         public bool CountsTowardBatchOutcome => !IsVolumeGroupFollower;
 
         /// <summary>
+        /// 这一单按「部分完成」发布了多少个文件（<c>0</c> = 没发布）—— 用户 2026-10-02 那一档。
+        ///
+        /// <para><b>为什么记在任务上</b>：批末诊断要说清"这一单不是全丢，已经救回来多少"，
+        /// 而那一刻发布早就做完了（判据只有写在产生它的那一刻才是事实）。
+        /// 由 <c>ExtractionCoordinator.TryPublishPartialProductsAsync</c> 一处写；每次开工由它自己重置。</para>
+        /// </summary>
+        public int PartialPublishedCount { get; set; }
+
+        /// <summary>
+        /// 部分完成的发布落点（<c>&lt;目标&gt;\&lt;包名&gt;\部分完成</c>）；没发布时为空串。
+        /// 与 <see cref="PartialPublishedCount"/> 同时写、同时清。
+        /// </summary>
+        public string PartialPublishDirectoryPath { get; set; } = string.Empty;
+
+        /// <summary>
         /// 创建任务。
         /// </summary>
         public ArchiveTask()

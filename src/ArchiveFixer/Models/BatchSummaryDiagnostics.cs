@@ -239,7 +239,9 @@ namespace ArchiveFixer.Models
                 {
                     Kind = kind,
                     Title = DescribeKind(kind),
-                    Note = kind == BatchProblemKind.Password ? StatusText.BatchDiagnosticsPasswordNote : string.Empty,
+                    Note = kind == BatchProblemKind.Password
+                        ? StatusText.BatchDiagnosticsPasswordNote
+                        : DescribePartialPublishNote(bucket),
                     TotalCount = bucket.Count,
                     Items = bucket.Take(limit).Select(BuildItem).ToList()
                 });
@@ -268,8 +270,39 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
-        /// 一个任务该进哪一组；<c>null</c> = 这一条**不进清单**（唯一的一档就是"成功"）。
+        /// 这一组里"部分完成发布救回来多少"的补充一句（没有就返回空串，⛔ 不写空话）。
         ///
+        /// <para>为什么要有（用户 2026-10-02 那一档）：批末只数"失败 / 部分完成几个"，
+        /// 用户看到"3 个没做成"会以为那些包一个字节都没救回来 —— 而实际上有的已经发布了
+        /// 557 个文件、现在就能用。判据只读任务上那一刻写下的两个字段（
+        /// <see cref="ArchiveTask.PartialPublishedCount"/> / <see cref="ArchiveTask.PartialPublishDirectoryPath"/>），
+        /// ⛔ 不去重算、也不看中文状态。</para>
+        /// </summary>
+        private static string DescribePartialPublishNote(List<ArchiveTask> bucket)
+        {
+            int publishedTasks = 0;
+            long publishedFiles = 0;
+
+            foreach (ArchiveTask task in bucket)
+            {
+                if (task.PartialPublishedCount > 0)
+                {
+                    publishedTasks++;
+                    publishedFiles += task.PartialPublishedCount;
+                }
+            }
+
+            return publishedTasks == 0
+                ? string.Empty
+                : string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.BatchDiagnosticsPartialPublishedNoteFormat,
+                    publishedTasks,
+                    publishedFiles);
+        }
+
+        /// <summary>
+        /// 一个任务该进哪一组；<c>null</c> = 这一条**不进清单**（唯一的一档就是"成功"）。        ///
         /// <para>判定顺序是刻意的：先剔掉成功，再按状态找具体原因，最后按机器终态兜底 ——
         /// 这样"状态说不出原因"的失败不会消失，而"状态是失败、终态却写着成功"的怪帧
         /// （真机出现过，见 <c>OneClickCoordinator.IsSuccessStatus</c>）也不会被当成成功放过去。</para>

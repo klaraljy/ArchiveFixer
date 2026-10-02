@@ -499,6 +499,48 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(task.CurrentPath), "最外层源包必须还在，而且原地不动");
         }
 
+        // ================================================================ 五、批末诊断（用户要看得见"救回来多少"）
+
+        /// <summary>
+        /// 批末诊断要在那一组下面补一句"其中 N 个已经按「部分完成」发布出来了（共 K 个文件）"——
+        /// 否则用户看到"1 个没做成"会以为那一个包一个字节都没救回来。
+        ///
+        /// <para>对照：没发布过的任务**一个字都不加**（⛔ 不写空话、不许无中生有）。</para>
+        /// </summary>
+        [Fact]
+        public void 批末诊断_部分完成发布过的要说清救回来多少()
+        {
+            var published = new ArchiveTask(@"C:\t\a.7z", 1)
+            {
+                FileName = "a.7z",
+                Status = StatusText.Corrupted,
+                Outcome = TaskOutcome.Failed,
+                EndTime = DateTime.Now,
+                PartialPublishedCount = 557,
+                PartialPublishDirectoryPath = @"C:\out\a\部分完成"
+            };
+
+            var plain = new ArchiveTask(@"C:\t\b.7z", 2)
+            {
+                FileName = "b.7z",
+                Status = StatusText.Corrupted,
+                Outcome = TaskOutcome.Failed,
+                EndTime = DateTime.Now
+            };
+
+            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(new[] { published, plain });
+            string all = string.Join(" | ", report.Lines);
+
+            Assert.Contains("已经按「部分完成」发布出来了", all, StringComparison.Ordinal);
+            Assert.Contains("557", all, StringComparison.Ordinal);
+
+            // 对照：只有没发布过的那一单时，那句话一个字都不许出现。
+            BatchSummaryReport nonePublished = BatchSummaryDiagnosticsRules.Build(new[] { plain });
+            string plainLines = string.Join(" | ", nonePublished.Lines);
+
+            Assert.DoesNotContain("部分完成」发布出来了", plainLines, StringComparison.Ordinal);
+        }
+
         // ================================================================ 装配
 
         private (string Staging, string Output) CreatePublishScenario(int payloadCount, int manifestCount)

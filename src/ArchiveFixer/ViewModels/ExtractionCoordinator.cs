@@ -11763,6 +11763,13 @@ namespace ArchiveFixer.ViewModels
                     task.FileName));
 
             /*
+             * 把"这一单救回来多少"记在任务上（批末诊断要用它说清"不是全丢"）。
+             * 判据只有写在产生它的那一刻才是事实 —— 批末那一刻发布早就做完了，绕一圈去推必然推歪。
+             */
+            task.PartialPublishedCount = outcome.PublishedCount;
+            task.PartialPublishDirectoryPath = outcome.DestinationDirectory;
+
+            /*
              * 全部搬成之后才动其余物与工作区（「宁可少删」）：
              * 有文件没能发布时它们还在工作区里，那是这一份唯一的线索 —— 删掉等于丢用户的产物。
              */

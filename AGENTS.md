@@ -207,13 +207,14 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：2387 条（2386 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：2388 条（2385 通过/3 跳过/0 失败）〔构建 / 测试 / 格式基线〕
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
   - ⛔ **源包在任何一档下原地不动**；其余物只留**最外层源包**，**它不在盘上 ⇒ 其余物一个字节都不删**（`RestItemPurger.PurgeExcept`，与整份删除同一个执行体）。
   - ⛔ **与「空间不足」模式硬互斥**（判据 `ExtractionCoordinator.PartialPublishActive`；只写一行 INFO，⛔ 不改设置）+ **空间账加一整个源包**（`TaskSpaceEstimate.CountsSourceAsNewOccupancy` ⇒ `FreeSpaceDemandBytes`，精估与同卷补写都继承）。
   - ⛔ **取消闸门读的是任务自己的取消令牌**，⛔ 不是中文、也不是终态：单层取消路径只落中文状态、终态会被兜底改成「失败」，只读终态就会把半成品摆进目标目录。
   - ⚠ **真机未验**；递归那条路只覆盖"最深那一层失败"这一档。
+  - 批末诊断（`Models/BatchSummaryDiagnosticsRules`）对进组且发布过的任务补一句「其中 N 个已经按「部分完成」发布出来了（共 K 个文件）」—— 判据只读任务上那一刻写下的 `ArchiveTask.PartialPublishedCount`（⛔ 不重算、不看中文）。
 - ⚠ worktree 里跑全量多 6 条跳过（共 8）：真样本根按 `ArchiveFixer.slnx` 父目录解析（worktree 里解不出来）；设 `ARCHIVEFIXER_REAL_SAMPLE_DIR`/`ARCHIVEFIXER_REAL_VOLUME_PAIR_DIR` 复原 2 条。⛔ 这 6 条是"样本路径解不出来"、不是样本不在。
 - 2 条跳过=发现阶段条件跳过（⛔ 不伪装成验过；条件式 `FactAttribute` 构造时设 `Skip`）：① `RealAmb909VolumePairTests.真机副本_有密码时_既有管线真的解出这一组的内容` 要 `ARCHIVEFIXER_REAL_VOLUME_PASSWORD`；② `SpaceDemandAccountingTests.真样本只读_那一组真实分卷_判据里不含源包_真机可用空间下必须放行` 要 `ARCHIVEFIXER_REAL_SPACE_CASE_DIR`（或 `<slnx父目录>\_tmp\ArchiveFixer\space-real`）。
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
