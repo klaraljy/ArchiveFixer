@@ -62,7 +62,7 @@ src/ArchiveFixer/              工具本体（WPF + 纯逻辑分层）
 tests/ArchiveFixer.Tests/      xUnit（与本体分开；跑不起真 7z 的用例自己跳过）
 docs/                          规格与文档（见 §10 文档地图）
 samples/                       只放生成脚本 + 清单，样本本体不入仓库
-scripts/package.ps1            生成 dist 发行包（**用户说暂不打包**）
+scripts/package.ps1            生成 dist 发行包（发布时才跑；**用户说"打包"才打**）
 scripts/installer.ps1          出 .exe 安装包（NSIS）
 installer/ArchiveFixer.nsi      安装包脚本（⚠ 必须 UTF-8 **带 BOM**，否则 makensis 报 Bad text encoding）
 scripts/make-icon.ps1 + icon-gen/  重生成 `Assets/ArchiveFixer.ico`（⛔ icon-gen **不在解决方案里**）
@@ -82,7 +82,7 @@ pwsh scripts/make-icon.ps1                                           # 重新生
 pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出一张预览图，自己看一眼
 ```
 
-- **⛔ 用户说暂不打包**：不生成 `dist\*.zip` 发行包；构建只用于刷新绿色目录；**等用户明说"打包"再打**。
+- **⛔ 打包只在用户明说时做**：他明确说"打包"才出 `dist\*.zip` / 安装包 / Release（v0.1.1 = 2026-10-02 那一轮）；平时构建只用于刷新绿色目录。
 - 换了 `.ico` 之后**必须重新构建**（图标由 `/win32icon` 在编译期塞进 exe）+ 刷新绿色目录；核对办法：从 `E:\ArchiveFixer\ArchiveFixer.exe` 抽图标出来看（`ExtractAssociatedIcon`）。
 - 代码风格：4 空格缩进、私有字段 `_camelCase`、`Nullable` + `ImplicitUsings` 开启；注释写**为什么**（"旧逻辑 → 新逻辑"这类踩坑记录要保留），不写"这行在做什么"。
 
@@ -195,7 +195,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 ### 11.1 版本/发布/安装包
 
 - v0.1.0=第一个对外版本（`ArchiveFixer.csproj` 三处版本号=0.1.0）〔v0.1.0：第一个对外版本〕
-- 已发布：`https://github.com/klaraljy/ArchiveFixer`（MIT、公开）+ Release v0.1.0〔已发布：仓库 / Release v0.1.0〕
+- v0.1.1=真机缺陷修复轮（**2026-10-02 用户拍板**；只修问题、默认档一个都没变，逐条见 `CHANGELOG.md`）
+- 已发布：`https://github.com/klaraljy/ArchiveFixer`（MIT、公开）+ Release v0.1.0 / v0.1.1（三个资产：`setup.exe` + `standalone.zip` + `framework-dependent.zip`）〔已发布：仓库 / Release v0.1.0〕
   - ⛔ 资产名=「ASCII 文件名+中文 label」；⛔ 大资产直连传（清 `HTTP_PROXY`/`HTTPS_PROXY`）；⛔ `gh release upload --clobber` 会连别的资产一起删。
 - 安装包=`installer\ArchiveFixer.nsi`+`scripts\installer.ps1`（NSIS；免 UAC、每用户）〔安装包（NSIS .exe）〕
   - ⛔ 默认安装目录不许是 `C:\Program Files\`；⛔ 卸载默认保留 `data\`。

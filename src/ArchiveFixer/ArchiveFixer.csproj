@@ -10,12 +10,14 @@
     <RootNamespace>ArchiveFixer</RootNamespace>
     <ApplicationIcon>Assets\ArchiveFixer.ico</ApplicationIcon>
     <!--
-      版本号（用户 2026-09-27 定）：第一个对外版本就叫 v0.1.0 —— 不再用旧的那串 11.0.0
+      版本号（用户 2026-09-27 定）：第一个对外版本 v0.1.0 —— 不再用旧的那串 11.0.0
       （那串只是开发期的编号，从没发布过）。「帮助 → 关于」读的就是这三个值。
+      v0.1.1（用户 2026-10-02 拍板）：v0.1.0 之后那一轮真机缺陷修复（空间/分卷/加密识别/
+      密码/落点/批末汇总/日志口径，逐条见 CHANGELOG.md）。
     -->
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>0.1.1</Version>
+    <AssemblyVersion>0.1.1.0</AssemblyVersion>
+    <FileVersion>0.1.1.0</FileVersion>
     <Authors>ArchiveFixer</Authors>
     <Company>ArchiveFixer</Company>
     <Product>ArchiveFixer</Product>
