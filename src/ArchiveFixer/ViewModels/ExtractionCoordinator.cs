@@ -10725,6 +10725,18 @@ namespace ArchiveFixer.ViewModels
             task.LastUpdatedTime = DateTime.Now;
 
             /*
+             * 终态**显式落 Failed**（用户 2026-10-02 真机暴露出来的不一致）：这个方法过去只写 Status，
+             * 不写 Outcome —— 于是同一个"空间不足"在不同路径下落出两种机器终态：
+             * 真机那批（解压前预检那条路）报**失败 6**，而用例里（启动前那道门）批末汇总是**未处理 1**，
+             * 同一批日志里还有一行写着**跳过 N 个** —— 三种说法指同一件事。
+             *
+             * 为什么是 Failed 而不是 Skipped：它**没有做成**、而且是要用户动手（清空间 / 换盘）的那种，
+             * 落 Skipped 会被汇总与色带读成"按设计跳过、不用管"。⛔ 落 Failed 也绝不等于"源包动了"——
+             * 这一档从头到尾一个字节都没动（源包原地、其余物不生成）。
+             */
+            task.Outcome = TaskOutcome.Failed;
+
+            /*
              * 用户 2026-09-30 第 1 条：批末那个汇总框要"点名差多少"。
              * 这三个数**就是这里手上的**（空间门刚算出来的），原样记到任务上 ——
              * 批末诊断清单只读它（Models\BatchSummaryDiagnostics.cs），⛔ 不重算一遍。
@@ -10911,13 +10923,13 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "WARN",
-                $"空间不足，本批跳过 {_spaceBlockedTasks.Count} 个任务（一个字节都没动过）：");
+                $"空间不足，本批没做成 {_spaceBlockedTasks.Count} 个任务（一个字节都没动过）：");
 
             foreach ((string name, long required, long available, long shortfall) in _spaceBlockedTasks)
             {
                 AppendLog(
                     "WARN",
-                    $"  跳过：{name} —— 需要 {TaskSpaceEstimate.FormatSize(required)}，"
+                    $"  没做成：{name} —— 需要 {TaskSpaceEstimate.FormatSize(required)}，"
                     + $"当时可用 {(available < 0 ? "未知" : TaskSpaceEstimate.FormatSize(available))}，"
                     + $"差 {TaskSpaceEstimate.FormatSize(shortfall)}");
             }
