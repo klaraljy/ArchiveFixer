@@ -292,6 +292,30 @@ namespace ArchiveFixer.Helpers
                     continue;
                 }
 
+                // xxx.part1.rar：分卷段在倒数第二段上，光看最后一段（.rar）看不出来。
+                // ⚠ 必须要求分卷段**前面还有内容**（previousDot > 0），否则 "222.rar" 里的 "222"
+                // 会被当成三位数字分卷段，整个名字被吃光。
+                //
+                // ⚠ 2026-10-03（真机 §51）：**尾巴粘垃圾的也要剥**（`X.part1.rar删除`，网盘给每卷缀「删除」），
+                // 标记里夹垃圾的（`111.parts1.rar`）同理。判据转调唯一出口
+                // `TrySplitPartNumberedVolume`（"前面还有内容"那一条它内含），
+                // ⛔ 这里不再自己写一遍"最后一段是不是 rar"——那正是同一个形状被写了三遍、
+                // 三处一起失效的那一格。
+                //
+                // ⛔ 位置必须在下面"跨段伪装"那段搜索**之前**：那段搜索会一边找一边改 `lastDot`，
+                // 等它跑完，`lastDot` 已经不是"最后一个点"了 —— 实测踩到过：挪到 `stripped:` 之后，
+                // `previousDot` 算成 -1 ⇒ 一个名字都剥不掉（名字不变）。
+                if (ExtensionHelper.TrySplitPartNumberedVolume(current, out _, out _, out _, out _, out _))
+                {
+                    int previousDot = current.LastIndexOf('.', lastDot - 1);
+
+                    if (previousDot > 0)
+                    {
+                        current = current[..previousDot];
+                        continue;
+                    }
+                }
+
                 // 卷标记后面还挂着别的点段（`x.7z.001.txt`）：从右往左找到"紧跟在压缩后缀后的卷标记"，
                 // 把标记及其右边全剥掉。判据与 IsVolumePartFileName 里那条**同一份**。
                 if (tail.Length > 0 && !ExtensionHelper.IsKnownArchiveExtension("." + tail))
@@ -316,21 +340,6 @@ namespace ArchiveFixer.Helpers
                 }
 
             stripped:
-
-                // xxx.part1.rar：分卷段在倒数第二段上，光看最后一段（.rar）看不出来。
-                // ⚠ 必须要求分卷段**前面还有内容**（previousDot > 0），否则 "222.rar" 里的 "222"
-                // 会被当成三位数字分卷段，整个名字被吃光。
-                if (tail.Equals("rar", StringComparison.OrdinalIgnoreCase))
-                {
-                    int previousDot = current.LastIndexOf('.', lastDot - 1);
-
-                    if (previousDot > 0 &&
-                        ExtensionHelper.IsVolumePartExtension("." + current[(previousDot + 1)..lastDot]))
-                    {
-                        current = current[..previousDot];
-                        continue;
-                    }
-                }
 
                 break;
             }
@@ -421,9 +430,10 @@ namespace ArchiveFixer.Helpers
             }
 
             // xxx.part1.rar
-            if (parts.Length >= 3 &&
-                ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^2], out _, out _) &&
-                string.Equals(parts[^1], "rar", StringComparison.OrdinalIgnoreCase))
+            // ⚠ 2026-10-03（真机 §51）：尾巴粘垃圾的（`xxx.part1.rar删除`）与标记里夹垃圾的
+            // （`111.parts1.rar`）同属这一族 —— 判据同样转调唯一出口，⛔ 不再自己写一遍
+            // "最后一段是不是 rar"（三处一起失效的那一格）。
+            if (ExtensionHelper.TrySplitPartNumberedVolume(fileName, out _, out _, out _, out _, out _))
             {
                 return true;
             }

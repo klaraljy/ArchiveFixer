@@ -591,22 +591,31 @@ namespace ArchiveFixer.Detection
             // ① <基名>.<分卷段>.rar：分卷段后面还挂着一个 .rar 尾巴（x.part1.rar）。
             //    这里只认 partN 与三位数字两种分卷段 —— x.z01.rar / x.r00.rar 不是真实存在的写法，
             //    与其猜，不如让它落到 ③ 的"普通 rar 本体"分支（那样不会成组）。
-            if (parts.Length >= 3
-                && last.Equals("rar", StringComparison.OrdinalIgnoreCase)
-                && TryParseNumberedSegment(parts[^2], out VolumeFamily tailFamily, out int tailIndex, out int tailWidth))
+            //
+            //    ⚠ 2026-10-03（真机 §51）：**尾巴上粘垃圾的也算**（`X.part1.rar删除` —— 网盘给每卷缀「删除」）。
+            //    老写法把 `last == "rar"` 写死在这一行，于是这种名字掉到 ③b 被当成"本体后缀被塞了垃圾"，
+            //    基名算成 `X.part1`、卷序 1 ⇒ 一组 4 卷各自成一组（列表四行、递归四个分支）。
+            //    判据转调**唯一出口** `ExtensionHelper.TrySplitPartNumberedVolume` —— 与
+            //    `FileNameHelper.StripVolumeMarkers` / `IsVolumePartFileName` 那两处**同一份**。
+            if (ExtensionHelper.TrySplitPartNumberedVolume(
+                    fileName,
+                    out string partBase,
+                    out string partMark,
+                    out int partIndex,
+                    out string partTail,
+                    out bool partDisguised))
             {
-                string tailBase = JoinBaseName(parts, 2);
-                if (tailBase.Length > 0)
+                bool markIsPartNumbered = partMark.StartsWith("part", StringComparison.OrdinalIgnoreCase);
+
+                return new VolumeNameInfo
                 {
-                    return new VolumeNameInfo
-                    {
-                        BaseName = tailBase,
-                        Family = tailFamily,
-                        Index = tailIndex,
-                        DigitWidth = tailWidth,
-                        Tail = ".rar"
-                    };
-                }
+                    BaseName = partBase,
+                    Family = markIsPartNumbered ? VolumeFamily.PartNumbered : VolumeFamily.Numeric,
+                    Index = partIndex,
+                    DigitWidth = markIsPartNumbered ? partMark.Length - 4 : partMark.Length,
+                    Tail = "." + partTail,
+                    IsDisguised = partDisguised
+                };
             }
 
             // ② 末尾一段自己就是分卷标记：volume.7z.001 / archive.001 / x.z01 / x.r00 / x.part1。

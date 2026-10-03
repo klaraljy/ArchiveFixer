@@ -1627,6 +1627,38 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
+            /*
+             * ⓪ <基名>.partN.rar（**卷标记与 rar 尾巴都可以粘垃圾**）：目标名必须**连 `.rar` 一起**保留。
+             *
+             * ⛔ 老写法把它当"标记后面挂着别的点段"处理，只把卷标记接回去 ⇒ 目标名算成 `X.part1`，
+             * 等于把 RAR 的族后缀吃掉：改完 7-Zip / UnRAR 更打不开这一组（改名是**不可逆**动作，
+             * 比"一个都不改"更糟）。判据与归组 / 包基名转调**同一份**
+             * <see cref="ExtensionHelper.TrySplitPartNumberedVolume"/>。
+             */
+            if (ExtensionHelper.TrySplitPartNumberedVolume(
+                    fileName,
+                    out string partBase,
+                    out string partMark,
+                    out _,
+                    out string partTail,
+                    out _)
+                && !partTail.Equals("rar", StringComparison.OrdinalIgnoreCase))
+            {
+                /*
+                 * ⚠ 只接"**尾巴确实粘着垃圾**"那一档（`X.part1.rar删除`，网盘缀的「删除」）。
+                 *
+                 * 尾巴干净的（`X.part1.rar` / `444.pa删rt2.rar`）**必须留给下面既有那两条路**：
+                 * 真机夹具（AAA）里 `444.p1art2.ra3r` 那一组，卷标记前面还有一段属于基名的
+                 * `p1art2` —— 这里若抢着按"倒数第二段就是卷标记"去拆，基名会被算成 `444`、
+                 * 改名产出 `444.part1.rar`（错），而正解是 `444.p1art2.part1.rar`。
+                 * 实测：抢这一档 ⇒ `AaaReplayPipelineTests.夹具验收_一组分卷只解一次…` 当场变红
+                 * （全量回归逮到，已收窄）。
+                 */
+                baseName = partBase;
+                canonicalSegment = partMark + ".rar";
+                return true;
+            }
+
             // ① 最后一段自己就是"带垃圾的卷标记"（001删除 / 删除001 / z0删除3）
             if (!ExtensionHelper.IsVolumePartExtension("." + parts[^1]) &&
                 ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^1], out string mark, out _))

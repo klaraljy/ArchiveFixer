@@ -221,4 +221,181 @@ namespace ArchiveFixer.Tests
             Assert.Empty(groups);
         }
     }
+
+    /// <summary>
+    /// <c>partN</c> 族的**尾巴上粘垃圾**这一档（2026-10-03 真机：他把一个 rar 里的 4 卷传给我，
+    /// 名字是 <c>X.part1.rar删除</c> … <c>.part4.rar删除</c>，网盘给每卷缀了「删除」）。
+    ///
+    /// <para>老写法在**三处**各写了一遍、都硬编码 <c>尾巴 == "rar"</c>：
+    /// <c>VolumeGroupDetector.Analyze</c>（卷序 / 归组）、<c>FileNameHelper.StripVolumeMarkers</c>
+    /// （包基名 ⇒ 同组判定与落点）、<c>FileNameHelper.IsVolumePartFileName</c>（拦住会破坏分卷链的改名）。
+    /// 尾巴一粘垃圾三处同时失效 ⇒ 4 卷被判成"四个基名互不相同的第 1 卷本体"：列表四行、
+    /// 递归四个分支（同一组解 4 遍）、引擎那边拼不起整组。</para>
+    ///
+    /// <para>现在三处 + 改名目标 + 递归折叠都转调同一个出口
+    /// <c>ExtensionHelper.TrySplitPartNumberedVolume</c>。这组用例把五个观察点一次钉住，
+    /// 并附三条"不许剥坏"的对照（⛔ 那几条是既有红线，别被这次放宽连累）。</para>
+    /// </summary>
+    public class PartNumberedVolumeJunkTailTests
+    {
+        private const string Base = @"C:\t\X";
+
+        private static List<VolumeCandidate> FourVolumes()
+        {
+            return new List<VolumeCandidate>
+            {
+                new() { Path = Base + ".part1.rar删除", Size = 1000 },
+                new() { Path = Base + ".part2.rar删除", Size = 1000 },
+                new() { Path = Base + ".part3.rar删除", Size = 1000 },
+                new() { Path = Base + ".part4.rar删除", Size = 400 }
+            };
+        }
+
+        [Fact]
+        public void rar尾巴粘垃圾_四卷仍然是一组_基名去掉partN与rar()
+        {
+            VolumeGroup group = Assert.Single(VolumeGroupDetector.Group(FourVolumes()));
+
+            Assert.Equal("X", group.BaseName);
+            Assert.Equal(4, group.KnownVolumeCount);
+            Assert.Empty(group.MissingVolumeNames);
+            Assert.Equal(Base + ".part1.rar删除", group.FirstVolumePath);
+        }
+
+        [Fact]
+        public void rar尾巴粘垃圾_卷序与首卷名都对着盘上的真名()
+        {
+            Assert.Equal(1, VolumeGroupDetector.TryGetVolumeIndex(Base + ".part1.rar删除"));
+            Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex(Base + ".part2.rar删除"));
+            Assert.Equal(4, VolumeGroupDetector.TryGetVolumeIndex(Base + ".part4.rar删除"));
+
+            // 补缺失卷名要拼回**磁盘上的真名**（尾巴连垃圾一起带着），否则报出来的名字盘上不存在。
+            // ⚠ 它返回的是**文件名**（内部会剥掉目录）。
+            Assert.Equal(
+                "X.part1.rar删除",
+                VolumeGroupDetector.TryGetFirstVolumeName(Base + ".part2.rar删除"));
+        }
+
+        [Fact]
+        public void rar尾巴粘垃圾_包基名一组一个_而且算得上分卷名()
+        {
+            foreach (string name in new[]
+                     {
+                         "X.part1.rar删除", "X.part2.rar删除",
+                         "X.part3.rar删除", "X.part4.rar删除"
+                     })
+            {
+                Assert.Equal("X", FileNameHelper.StripVolumeMarkers(name));
+                Assert.Equal("X", FileNameHelper.GetArchiveBaseName(name));
+                Assert.True(FileNameHelper.IsVolumePartFileName(name), name);
+            }
+        }
+
+        [Fact]
+        public void rar尾巴粘垃圾_改名目标必须连rar一起保留()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "af-partjunk-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+
+            try
+            {
+                foreach (VolumeCandidate candidate in FourVolumes())
+                {
+                    File.WriteAllBytes(Path.Combine(dir, Path.GetFileName(candidate.Path)), new byte[16]);
+                }
+
+                string first = Path.Combine(dir, Path.GetFileName(Base + ".part1.rar删除"));
+                VolumeNameRepairPlan plan = VolumeNameRepair.Plan(first, VolumeNameRepair.EnumerateFileNamesInDirectory(first));
+
+                Assert.True(plan.CanRepair);
+                Assert.Equal(4, plan.Items.Count);
+
+                // ⛔ 目标名**不许**是 `…part1`（把族后缀吃掉 = 改完引擎更打不开，比不改更糟）。
+                Assert.Equal(
+                    new[]
+                    {
+                        "X.part1.rar", "X.part2.rar",
+                        "X.part3.rar", "X.part4.rar"
+                    },
+                    plan.Items.Select(i => i.SuggestedFileName).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+                catch
+                {
+                    // 清理失败不影响判据
+                }
+            }
+        }
+
+        [Fact]
+        public void 标记里夹垃圾也认_AAA夹具同形()
+        {
+            Assert.Equal(1, VolumeGroupDetector.TryGetVolumeIndex("111.parts1.racr"));
+            Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("111.part删2.ra除r"));
+            Assert.Equal("111", FileNameHelper.StripVolumeMarkers("111.parts1.rar"));
+            Assert.Equal("111", FileNameHelper.StripVolumeMarkers("111.parts1.racr"));
+        }
+
+        [Fact]
+        public void 递归层里一组卷只算一个内层归档()
+        {
+            var found = new List<string>
+            {
+                Base + ".part1.rar删除",
+                Base + ".part2.rar删除",
+                Base + ".part3.rar删除",
+                Base + ".part4.rar删除"
+            };
+
+            List<string> collapsed = RecursiveExtractor.CollapseSameGroupVolumes(found);
+
+            Assert.Equal(new[] { Base + ".part1.rar删除" }, collapsed.ToArray());
+        }
+
+        [Fact]
+        public void 折叠不许连累别的归档_不同组的卷与普通包一个都不动()
+        {
+            var mixed = new List<string>
+            {
+                @"C:\t\a.part1.rar",
+                @"C:\t\a.part2.rar",
+                @"C:\t\b.7z",
+                @"C:\t\c.7z"
+            };
+
+            List<string> collapsed = RecursiveExtractor.CollapseSameGroupVolumes(mixed);
+
+            Assert.Equal(3, collapsed.Count);
+            Assert.Contains(@"C:\t\a.part1.rar", collapsed);
+            Assert.DoesNotContain(@"C:\t\a.part2.rar", collapsed);
+            Assert.Contains(@"C:\t\b.7z", collapsed);
+            Assert.Contains(@"C:\t\c.7z", collapsed);
+        }
+
+        // ── 三条"不许剥坏"的对照（既有红线，别被这次放宽连累）──
+
+        [Fact]
+        public void 对照_普通文件名不许被剥()
+        {
+            // 2026-09-28 全量回归逮到的真回归：`.apk` 里那串数字不是卷号。
+            Assert.Equal("rar-android-722.132.apk", FileNameHelper.StripVolumeMarkers("rar-android-722.132.apk"));
+
+            // 本体后缀被塞垃圾（zip 族）走的是另一条路，这里不许被当成 partN。
+            Assert.Equal("222.zi删除p", FileNameHelper.StripVolumeMarkers("222.zi删除p"));
+        }
+
+        [Fact]
+        public void 对照_数字族与标准partN照旧()
+        {
+            Assert.Equal("giu910.7z", FileNameHelper.StripVolumeMarkers("giu910.7z.001删除"));
+            Assert.Equal("giu910", FileNameHelper.GetArchiveBaseName("giu910.7z.002删除"));
+            Assert.Equal("X", FileNameHelper.StripVolumeMarkers("X.part2.rar"));
+            Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("X.part2.rar"));
+        }
+    }
 }

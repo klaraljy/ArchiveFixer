@@ -665,6 +665,139 @@ namespace ArchiveFixer.Helpers
         }
 
         /// <summary>
+        /// 拆开 <c>&lt;基名&gt;.&lt;卷标记&gt;.rar</c> 这一族 —— **卷标记与 rar 尾巴都可以粘少量垃圾**。
+        ///
+        /// <code>
+        /// X.part1.rar      → 基名 X、卷标记 part1、尾巴 rar        （干净）
+        /// X.part1.rar删除   → 基名 X、卷标记 part1、尾巴 rar删除     （垃圾粘在 .rar 上）
+        /// 111.parts1.racr  → 基名 111、卷标记 parts1、尾巴 racr     （两边都夹垃圾）
+        /// X.001.rar        → 基名 X、卷标记 001、尾巴 rar          （数字族同理）
+        /// </code>
+        ///
+        /// <para><b>为什么必须只有这一份实现</b>（2026-10-03 真机）：这个形状原先在**三个地方各写过一遍**，
+        /// 三处都硬编码了 <c>尾巴 == "rar"</c> ——
+        /// <c>VolumeGroupDetector.Analyze</c>（卷序 / 归组）、
+        /// <c>FileNameHelper.StripVolumeMarkers</c>（包基名 ⇒ 同组判定与落点）、
+        /// <c>FileNameHelper.IsVolumePartFileName</c>（拦住会破坏分卷链的改名）。
+        /// 尾巴一粘垃圾（网盘给每卷缀「删除」⇒ <c>X.part1.rar删除</c>），**三处同时失效**：
+        /// 一组 4 卷被判成"四个基名互不相同的第 1 卷本体" —— 列表里四行、递归里四个分支、
+        /// 引擎那边因为名字对不上而拼不起整组（现场见 <c>docs/真机事故复盘.md</c> §51）。</para>
+        ///
+        /// <para>判据（全部要成立，⛔ 不给"看着像"开口子）：① 末尾那段要么逐字是 <c>rar</c>、
+        /// 要么按 <see cref="TryRecoverDisguisedArchiveBody"/> **唯一地**还原成 <c>rar</c>；
+        /// ② 倒数第二段要么逐字是合法卷标记、要么按 <see cref="TrySplitVolumeSegmentTolerant"/>
+        /// 唯一地还原成合法卷标记（<c>partN</c> / 三位数字）；③ 两段之前必须还有基名（⛔ 不许把名字吃光）。
+        /// 两处"去杂质"都沿用既有那两把尺子（≤2 个多余字符、必须唯一），⛔ 这里不另立第三把。</para>
+        /// </summary>
+        /// <param name="baseName">去掉卷标记与 rar 尾巴的基名（磁盘上的写法，不含尾部的点）。</param>
+        /// <param name="canonicalMark">还原后的规范卷标记（<c>part1</c> / <c>001</c>）。</param>
+        /// <param name="index">卷序（1 起）。</param>
+        /// <param name="tailSegment">磁盘上原样的尾巴段（<c>rar</c> 或 <c>rar删除</c>）—— 补缺失卷名时要用它。</param>
+        /// <param name="disguised">卷标记或尾巴是不是"去杂质"才认出来的（名字不标准 ⇒ 不许当可删的本体名）。</param>
+        public static bool TrySplitPartNumberedVolume(
+            string? fileName,
+            out string baseName,
+            out string canonicalMark,
+            out int index,
+            out string tailSegment,
+            out bool disguised)
+        {
+            baseName = string.Empty;
+            canonicalMark = string.Empty;
+            index = 0;
+            tailSegment = string.Empty;
+            disguised = false;
+
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return false;
+            }
+
+            string[] parts = fileName.Split('.');
+
+            if (parts.Length < 3)
+            {
+                return false;
+            }
+
+            string tail = parts[^1];
+            string mark = parts[^2];
+            bool tailDisguised = false;
+
+            if (!tail.Equals("rar", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryRecoverDisguisedArchiveBody(tail, out string recoveredTail, out _) ||
+                    !recoveredTail.Equals("rar", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                tailDisguised = true;
+            }
+
+            string canonical = mark;
+
+            if (!IsVolumePartExtension("." + mark))
+            {
+                if (!TrySplitVolumeSegmentTolerant(mark, out canonical, out _) ||
+                    !IsVolumePartExtension("." + canonical))
+                {
+                    return false;
+                }
+            }
+
+            /*
+             * 卷号：partN 取 part 后面那串数字，数字族整段就是号码。
+             * ⛔ 不用 int.Parse/LINQ：这里手算并卡上限，免得为一行逻辑多引一个 using。
+             */
+            string digits = canonical.StartsWith("part", StringComparison.OrdinalIgnoreCase)
+                ? canonical[4..]
+                : canonical;
+
+            if (digits.Length == 0)
+            {
+                return false;
+            }
+
+            int parsed = 0;
+
+            foreach (char c in digits)
+            {
+                if (!char.IsAsciiDigit(c))
+                {
+                    return false;
+                }
+
+                parsed = (parsed * 10) + (c - '0');
+
+                if (parsed > 9999)
+                {
+                    return false;
+                }
+            }
+
+            if (parsed < 1)
+            {
+                return false;
+            }
+
+            string stem = string.Join('.', parts, 0, parts.Length - 2);
+
+            if (stem.Length == 0)
+            {
+                return false;
+            }
+
+            baseName = stem;
+            canonicalMark = canonical;
+            index = parsed;
+            tailSegment = tail;
+            disguised = tailDisguised
+                        || !string.Equals(canonical, mark, StringComparison.OrdinalIgnoreCase);
+            return true;
+        }
+
+        /// <summary>
         /// 这一段是**归档本体后缀**、而且只有"多了几个字符"的差别时，把那个规范后缀还原出来。
         ///
         /// <code>

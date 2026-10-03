@@ -208,8 +208,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2419 条（2416 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 旧基线 2415 / 2411 / 2393 条分别是"修本轮四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（本轮 +4 条 = ①②③④ 各一条守门用例）。⛔ 数字只在这里写一次。
+- `dotnet test` 全量（主 checkout 内）：**2428 条（2425 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 旧基线 2419 / 2415 / 2411 / 2393 条分别是"修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（本轮 +9 = `PartNumberedVolumeJunkTailTests` 那一组）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
@@ -249,6 +249,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⛔ 「修正后缀」不许动分卷名：两道闸门=格式未知 → 一个字都不改 + 末尾是纯数字（那是卷号）→ 不许当后缀替换〔修正后缀不动分卷名〕
 - 卷名判据唯一出口 `ExtensionHelper.TrySplitVolumeSegment`（三处转调它）〔分卷名粘垃圾〕
   - ⛔ 老口径不许回退：另起一段的后缀（`x.7z.001.txt`/`x.001.bak`）不算分卷；纯数字尾巴（`0012`）不猜。
+  - ⛔ **`partN` 族的"尾巴粘垃圾"（`X.part1.rar删除`）**（见 §51）：判据唯一出口 `ExtensionHelper.TrySplitPartNumberedVolume`（**卷标记与 rar 尾巴都可粘 ≤2 个字符的垃圾**，只用既有那两把尺子还原），**三处转调同一份** —— `VolumeGroupDetector.Analyze`（卷序/归组）、`FileNameHelper.StripVolumeMarkers`（包基名 ⇒ 同组判定与落点，⚠ 位置必须在"跨段伪装"搜索**之前**）、`FileNameHelper.IsVolumePartFileName`（批首改名的放行门）。改名目标**必须连 `.rar` 一起保留**（`VolumeNameRepair.TrySplitDisguised` ⓪ 档，且**只接"尾巴真的脏"那一档** —— 尾巴干净的留给既有那两条路，否则 `444.p1art2.partN.rar` 这种"基名自己还带一段"的会被拆错）。递归层里**一组卷只算一个内层归档**（`RecursiveExtractor.CollapseSameGroupVolumes`，复用 `IsSameGroupContinuationVolume`）。⛔ 老写法在三处各写一遍 `tail == "rar"` ⇒ 尾巴一粘垃圾**三处同时失效**（4 卷 = 4 个"第 1 卷本体"、递归 4 个分支、改名还会把 `.rar` 吃掉）；⚠ 包**里面**的伪装名没有「修正后缀」这一步先擦尾巴，所以这条路是它们唯一的救法。
   - ⛔ 不许"一见 zip 成员就让位"：让位条件只看"目录里真有一片自述带盘号的跨盘 zip 末片"（`HasSpannedZipTailInDirectory`）。
 - ⛔ **三种分卷格式的"内容级自述能力"差得很远 —— ⛔ 不许当成一样**（逐格实测表见 `docs/真机事故复盘.md` §48.1；用例 `VolumeContentProbeCapabilityTests`）：
 

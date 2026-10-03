@@ -213,18 +213,41 @@ namespace ArchiveFixer.Tests
             }
 
             /*
-             * 同一组的后续卷那一单：**必须只落「已跳过」**，而且一个字都不能解
-             *（真机上它们是"分卷缺失 / 解压失败"，并且把整组的链尾一起拦住了）。
+             * 同一组的后续卷那一单：**要么**单独占一行、而且只落「已跳过」；
+             * **要么**已经在导入期并进首卷那一单（名字上明确是同一组 ⇒ 用户 2026-10-02 拍板的
+             * "一组分卷只留一行"），那一卷进的是首卷那一单的分卷清单。
+             * ⛔ 两种都算过，但**两边都没有**不行 —— 那种情况就是"这一卷被弄丢了"。
+             *
+             * ⚠ 2026-10-03 起的差别：`111` / `333-Rar4` 两组的伪装名（`111.parts1.racr` 这种）
+             * 现在**认得出是一组**了（判据收口到 `ExtensionHelper.TrySplitPartNumberedVolume`），
+             * 于是它们并成一行；`444` 那一组的基名自己还带一段（`p1art2`），名字说不出是一组，
+             * 照旧各占一行、后续卷落「已跳过」。
              */
             foreach (string follower in new[] { "111.part2.rar", "333-Rar4.part2.rar", "444.p1art2.part2.rar" })
             {
-                ArchiveTask swept = Assert.Single(
-                    harness.Vm.Tasks,
+                ArchiveTask? swept = harness.Vm.Tasks.FirstOrDefault(
                     task => string.Equals(task.FileName, follower, StringComparison.OrdinalIgnoreCase));
+
+                if (swept == null)
+                {
+                    continue;
+                }
 
                 Assert.True(swept.IsVolumeGroupFollower, $"{follower} 应当被认成同一分卷组的后续卷");
                 Assert.Equal(TaskOutcome.Skipped, swept.Outcome);
                 Assert.Equal(OutputVerificationOutcome.NotAttempted, swept.OutputVerification);
+            }
+
+            // 并成一行的那几组：首卷那一单的**分卷清单**必须把组里的每一卷都记着（⛔ 不许凭空少一卷）。
+            foreach (string firstVolume in new[] { "111.part1.rar", "333-Rar4.part1.rar", "444.p1art2.part1.rar" })
+            {
+                ArchiveTask ownerTask = Assert.Single(
+                    harness.Vm.Tasks,
+                    task => string.Equals(task.FileName, firstVolume, StringComparison.OrdinalIgnoreCase));
+
+                Assert.True(
+                    ownerTask.VolumePaths.Count >= 2,
+                    $"{firstVolume}：这一组的分卷清单应当至少有 2 卷，实际 {ownerTask.VolumePaths.Count} 卷");
             }
 
             /*

@@ -1507,7 +1507,7 @@ namespace ArchiveFixer.Extraction
             // 排序让候选清单在 UI 与测试里都是稳定顺序（不同文件系统返回顺序不一致）。
             found.Sort(StringComparer.OrdinalIgnoreCase);
 
-            return found;
+            return CollapseSameGroupVolumes(found);
         }
 
         /// <summary>
@@ -1729,6 +1729,51 @@ namespace ArchiveFixer.Extraction
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 把"这一层扫出来的内层归档候选"里的**同组后续卷**折掉，只留每一组的**第一卷**（2026-10-03 真机 §51）。
+        ///
+        /// <para>一组 N 卷在**内容**上各自都是合法归档（每卷都带自己的 RAR / 7z 签名），所以内容扫描
+        /// 会把它们全收进来 —— 老写法于是把一组 4 卷当成 **4 个内层归档**：「展开所有分支」档下
+        /// 建 4 个分支层、同一组被解 4 遍（峰值多占 3 倍），其中三个分支层还会被当成"产物在哪"的答案
+        /// 写进日志（真机现场见 <c>docs/真机事故复盘.md</c> §51）。</para>
+        ///
+        /// <para>判据**复用同一条**（同目录 + 同包基名 + 是后续卷 =
+        /// <see cref="IsSameGroupContinuationVolume"/>，与单链那档同一个出口）：
+        /// 只有真的同组后续卷才会被折叠，别的归档一个都不动。</para>
+        ///
+        /// <para>顺序：先按卷序（认不出卷序的排最后）决定"谁是首卷"，**结果仍按传进来的顺序返回** ——
+        /// ⛔ 不许让折叠顺手改掉这一层的分支顺序。纯函数、不碰盘，所以能被单测直接摆布。</para>
+        /// </summary>
+        internal static List<string> CollapseSameGroupVolumes(List<string> found)
+        {
+            if (found == null || found.Count < 2)
+            {
+                return found ?? new List<string>();
+            }
+
+            List<string> byVolumeOrder = found
+                .OrderBy(path => Detection.VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(path))
+                                 ?? int.MaxValue)
+                .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var firstVolumes = new List<string>();
+
+            foreach (string candidate in byVolumeOrder)
+            {
+                if (firstVolumes.Any(first => IsSameGroupContinuationVolume(candidate, first)))
+                {
+                    continue;
+                }
+
+                firstVolumes.Add(candidate);
+            }
+
+            return firstVolumes.Count == found.Count
+                ? found
+                : found.Where(path => firstVolumes.Contains(path)).ToList();
         }
 
         /// <summary>
