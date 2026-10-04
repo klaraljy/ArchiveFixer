@@ -124,7 +124,12 @@ Write-Step '4/4 完成'
 Write-Host ''
 Write-Host '安装包已生成（本脚本只编译，没动本机任何目录、没写注册表）' -ForegroundColor Green
 Write-Host "  安装包      : $($item.FullName)"
-Write-Host "  装到哪      : 默认 %LOCALAPPDATA%\ArchiveFixer（每用户、免 UAC），安装时可以改"
-Write-Host "  卸载        : 控制面板「应用和功能」里那一项 / 安装目录下的 Uninstall.exe"
+Write-Host "  装到哪      : 默认「本机第一个非系统固定盘」上的 <盘>:\ArchiveFixer（例如 D:\ArchiveFixer）——"
+Write-Host "                用户的密码本 / 设置 / 日志写在 <安装目录>\data\，不往 C 盘塞；"
+Write-Host "                本机没有第二个固定盘时才退 %LOCALAPPDATA%\Programs\ArchiveFixer，向导会明说。"
+Write-Host "                每用户安装、免 UAC，安装时可以改目录。"
+Write-Host "  升级        : 装过就插一页问一次（①升级覆盖保留 data\ = 默认 ②先卸载旧版 ③取消）"
+Write-Host "  卸载        : 控制面板「应用和功能」里那一项 / 开始菜单 / 安装目录下的 Uninstall.exe；"
+Write-Host "                卸载页问一次「保留 data\（默认）还是全部删除」，静默卸载一律保留。"
 Write-Host "  验证办法    : <安装包> /S /D=<临时目录>  （静默安装不建快捷方式），再看目录里有没有 ArchiveFixer.exe"
 Write-Host ''

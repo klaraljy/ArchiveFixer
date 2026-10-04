@@ -333,6 +333,18 @@ $distDocs = Join-Path $distDir 'docs'
 New-Item -ItemType Directory -Force -Path $distDocs | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\使用说明.md') -Destination (Join-Path $distDocs '使用说明.md') -Force
 
+# ⚠ 另外几份面向用户的文档（csproj 会把它们复制到**发布目录**的 docs\ 下）在这里**强制从仓库再拷一遍**：
+#   `dotnet publish` 对 <None> 项用的是 PreserveNewest，仓库里改了文档、发布目录里那份时间戳又不比它旧时
+#   **会跳过复制** ⇒ 包里留着上一版的文档（2026-10-04 实测踩到：改了《功能一览》正文，
+#   打出来的包里还是旧句子）。判据只能是内容，不能是时间戳，所以这里无条件重来一遍。
+$userDocs = @('功能一览.md', '设置项.md')
+foreach ($userDoc in $userDocs) {
+    $src = Join-Path $repoRoot "docs\$userDoc"
+    if (-not (Test-Path -LiteralPath $src)) { continue }
+    Copy-Item -LiteralPath $src -Destination (Join-Path $distDocs $userDoc) -Force
+    Write-Detail "强制同步：docs\$userDoc"
+}
+
 # 开发期文档不进发行包（用户 2026-09-27："旧AGENTS.md + 大量『用户第 N 条』式历史……不发，这个只是我们的开发痕迹"）：
 # 发布输出里带着 csproj 复制的四份面向用户的文档，其中《人工测试清单》是给作者照着点的测试清单，属于开发材料。
 $devOnlyDocs = @('人工测试清单.md')

@@ -2,25 +2,55 @@
 
 **把一批来源不明、后缀被改坏、加密、分卷、层层嵌套的压缩包，用最少的操作变成整理好、结果可追踪的文件。**
 
-当前版本：**v0.1.1**（v0.1.0 之后那一轮真机缺陷修复，见 [CHANGELOG](CHANGELOG.md)）
+当前版本：**v0.1.2**（分卷识别系统化 + 安装器升级/卸载，见 [CHANGELOG](CHANGELOG.md)）
 
-> v0.1.1 是**真机缺陷修复轮**：空间判据、分卷改名与跨盘 ZIP、加密识别、密码流程、落点整理、
-> 列表显示与批末汇总的一批真机缺陷全部修掉，日志口径也统一了；**只修问题、不加新玩法，默认档一个都没变**。
+> v0.1.2 做两件事：① 把**分卷族的识别与改名**收成一整套（基名唯一出口 / 递归层还原伪装名 /
+> 改名不再反向 / 骨架相似 / **真 7-Zip 与真 UnRAR 端到端验证解得开**），外加逐层回收、
+> 空壳不进回收站、空间需求改按净增量算；② 把**安装包**补成能正经升级的：默认装到第一个非系统盘
+> （不再往 C 盘塞你的密码本）、装新版本时问一次"覆盖还是先卸载旧版"、卸载时问一次"保留还是全删"。
+> ⚠ **真机未验** —— 证据是合成夹具 + 本机真引擎用例。
 
 Windows 桌面工具（C# / .NET 8 + WPF）· 中文单语 · 纯本地、不联网 · **绿色目录版**解压即用、**不写注册表**（**安装包**会写 `HKCU` 两条键：卸载信息 + `Software\ArchiveFixer`）
+
+---
+
+## 这一版修了什么
+
+| 修的地方 | 一句话 |
+|---|---|
+| 分卷改名 | 不再出现"把干净名改成脏名"；相似算法认得 `333.78a8fuaz.003` 这种被改烂的卷标记，且**必须整组自洽**才改名 |
+| 分卷解开 | 改名之后**真 7-Zip / 真 UnRAR 确实解得开**（端到端用例，不是只断言到计划层）；7z"中间卷名字全丢"也接住了 |
+| 空间 | 需求**按净增量**算（内层包不再被算两遍），实测同一套三层链的放行需求减半 |
+| 回收 | 续解链**逐层**回收过程物（只在「彻底删除」档）；空壳不再往回收站里堆 |
+| 安装包 | 默认装到**第一个非系统盘**；装新版本**问一次**（覆盖 / 先卸旧版 / 取消）；卸载**问一次**（保留 `data\` 默认 / 全删） |
+
+细节逐条见 [CHANGELOG](CHANGELOG.md) 的 v0.1.2 段。
 
 ---
 
 ## 30 秒上手
 
 1. **拿到程序**：到 [**Releases**](https://github.com/klaraljy/ArchiveFixer/releases) 下
-   `ArchiveFixer-0.1.1-setup.exe`（**安装包**，双击一路下一步，默认装到 `%LOCALAPPDATA%\ArchiveFixer`，
-   会建快捷方式、控制面板里能卸载）、`ArchiveFixer-0.1.1-standalone.zip`（**独立版**，什么都不用装，解压即用）
-   或 `ArchiveFixer-0.1.1-framework-dependent.zip`（**框架依赖版**，需 .NET 8 桌面运行时 x64，体积最小）；
+   `ArchiveFixer-0.1.2-setup.exe`（**安装包**，双击一路下一步）、
+   `ArchiveFixer-0.1.2-standalone.zip`（**独立版**，什么都不用装，解压即用）
+   或 `ArchiveFixer-0.1.2-framework-dependent.zip`（**框架依赖版**，需 .NET 8 桌面运行时 x64，体积最小）；
    自己构建出的包在 `dist\`（`dist` 不入库），文件名是中文的
-   `ArchiveFixer-0.1.1-框架依赖.zip` / `ArchiveFixer-0.1.1-独立.zip` / `ArchiveFixer-0.1.1-setup.exe`
+   `ArchiveFixer-0.1.2-框架依赖.zip` / `ArchiveFixer-0.1.2-独立.zip` / `ArchiveFixer-0.1.2-setup.exe`
    —— ⚠️ GitHub 会把资源名里的非 ASCII 字符抹掉，所以发布件用 ASCII 文件名、中文名挂在资源标签上。
-   ⛔ 无论哪种装法，**都不要放进 `C:\Program Files\`**（程序要在自己目录下写 `data\`）。
+
+   **安装包怎么用**（`ArchiveFixer-0.1.2-setup.exe`）：
+
+   - **装到哪**：默认装到**本机第一个非系统固定盘**的 `\ArchiveFixer`（例如 `D:\ArchiveFixer`）；
+     本机没有第二个固定盘时才退到 `%LOCALAPPDATA%\Programs\ArchiveFixer`，向导会**明说**这一点。
+     免 UAC、每用户安装，安装时随时可以自己改目录。
+     ⛔ 别放进 `C:\Program Files\` —— 程序要在自己目录下写 `data\`（日志 / 设置 / 密码本）。
+   - **升级**：直接双击新版本的 `.exe` 就行。检测到已经装过会**问你一次**：
+     ① 升级覆盖（默认，**保留 `data\`** 里的密码本与设置）② 先卸载旧版本再装 ③ 取消。
+     已装过的机器默认接着装到**原来的目录**（升级不搬家）。
+   - **卸载**：控制面板「应用和功能」里的 `ArchiveFixer`、开始菜单里的「卸载 ArchiveFixer」、
+     或安装目录下的 `Uninstall.exe`。卸载时会问你一次「**保留密码本与设置（`data\`）**」还是「全部删除」，
+     **默认保留**，并在界面上写清保留了什么、在哪个目录。
+   - 绿色目录版（两个 zip）解压即用、什么都不写；想换地方直接把整个目录搬走。
 2. **双击启动** → ①「任务」页点「**添加文件夹**」（也可以直接把文件夹拖进窗口）。
 3. 勾上要处理的包 → 点「**一键处理**」→ 确认框里看一眼落点 → 确定。
 4. 干完看①页结果区；失败的在 `ArchiveFixer-失败清单.txt`，要发给我排查看「**导出日志（本次）**」。
@@ -99,7 +129,9 @@ dotnet format ArchiveFixer.slnx --verify-no-changes                     # 格式
 - **出发行包**：`pwsh -File scripts/package.ps1`（框架依赖版）/ `pwsh -File scripts/package.ps1 -SelfContained`（独立版），
   产物在 `dist\ArchiveFixer-<版本>-<档>.zip`，脚本自带自检（四样关键文件齐 + 包里绝不含 `data\` / 日志 / 样本）。
   安装包：`pwsh -File scripts/installer.ps1`（NSIS，拿独立版那一份当内容 → `dist\ArchiveFixer-<版本>-setup.exe`；
-  每用户安装、免 UAC、卸载默认保留 `data\`）。
+  每用户安装、免 UAC；**默认装到第一个非系统固定盘上的 `\ArchiveFixer`**，本机没有第二个盘才退
+  `%LOCALAPPDATA%\Programs\ArchiveFixer`；装新版本时问一次"覆盖 / 先卸旧版 / 取消"，卸载时问一次
+  "保留 `data\`（默认）/ 全部删除"）。
   发行包用的是**发行档**（`-p:ArchiveFixerEdition=Release`）：①页那颗测试期专用的「不删原包」在发行包里不出现。
 
 ## 目录结构

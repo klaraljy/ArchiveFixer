@@ -196,11 +196,15 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - v0.1.0=第一个对外版本（`ArchiveFixer.csproj` 三处版本号=0.1.0）〔v0.1.0：第一个对外版本〕
 - v0.1.1=真机缺陷修复轮（**2026-10-02 用户拍板**；只修问题、默认档一个都没变，逐条见 `CHANGELOG.md`）
+- v0.1.2=分卷识别系统化＋安装器升级/卸载（**2026-10-04 用户拍板**"打包"；分卷族 A~D＋骨架相似＋改名反向＋真引擎端到端＋逐层回收/空壳不进回收站/空间净增量，外加安装器三件事；⚠ 真机未验，逐条见 `CHANGELOG.md`）
 - 已发布：`https://github.com/klaraljy/ArchiveFixer`（MIT、公开）+ Release v0.1.0 / v0.1.1（三个资产：`setup.exe` + `standalone.zip` + `framework-dependent.zip`）〔已发布：仓库 / Release v0.1.0〕
   - ⛔ 资产名=「ASCII 文件名+中文 label」；⛔ 大资产直连传（清 `HTTP_PROXY`/`HTTPS_PROXY`）；⛔ `gh release upload --clobber` 会连别的资产一起删。
 - 安装包=`installer\ArchiveFixer.nsi`+`scripts\installer.ps1`（NSIS；免 UAC、每用户）〔安装包（NSIS .exe）〕
-  - ⛔ 默认安装目录不许是 `C:\Program Files\`；⛔ 卸载默认保留 `data\`。
+  - ⛔ 默认安装目录不许是 `C:\Program Files\`，**也不默认往 C 盘放**（用户 2026-10-04：「这些是比较重要的记忆」）⇒ 默认 = **第一个非系统固定盘上的 `<盘>:\ArchiveFixer`**（`.onInit` 里 `ResolveDefaultInstallDir` 用 `kernel32::GetDriveType` 逐个问 D→Z，只认 `3`=固定盘，⛔ 不写死盘符）；本机确实没有第二个固定盘 ⇒ 退 `%LOCALAPPDATA%\Programs\ArchiveFixer`，欢迎页**明说**数据会落在 C 盘。装过的机器按注册表接着装老地方（升级不搬家）。
+  - 升级：装过（注册表 / exe 两条证据）就插一页问一次 —— ① 升级覆盖（默认，保留 `data\`）② 先卸载旧版（`Uninstall.exe /S`）③ 取消；静默档不问，走默认。⛔ 绝不静默删用户数据。
+  - ⛔ 卸载默认保留 `data\`：卸载页两个单选（保留=默认 / 全部删除）并写清保留了什么、在哪；静默卸载一律保留。
   - `.nsi` 必须 UTF-8 带 BOM；注释行末尾不留反斜杠；开关判据只读 `${GetOptions}` 返回值；卸载删桌面 `.lnk` 前看 `DesktopShortcut` 标记。
+  - ⚠ 三个 NSIS 坑（都是实测踩到的）：`InstallDir <函数名>` **不是调用**（makensis 当字面量，函数被当未引用代码丢掉）⇒ 默认目录只能在 `.onInit` 里设 `$INSTDIR`；`PageEx un.custom` 的 `PageCallbacks` **只认两个**回调（塞三个报 `Usage: PageCallbacks`）；`$mui.WelcomePage.*` 要等 `MUI_PAGE_WELCOME` 展开才 Var 出来 ⇒ 页面回调函数体必须写在**文件末尾**（写前面报 warning 6000 并整句忽略）。
 - 面向用户的截图与文档脱敏（⛔ 个人路径/样本包名/站点名/作者邮箱都不进仓库）〔开源前的脱敏〕
 - 「说明」窗=`HelpContent.Features`（17 条）+`Glossary`〔说明窗〕
 
