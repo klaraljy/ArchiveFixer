@@ -175,16 +175,78 @@ namespace ArchiveFixer.Tests
         {
             var service = new TaskSummaryService();
 
-            string text = service.BuildFailedListText(new[]
-            {
-                Failed("a.7z", StatusText.ExtractFailed, "解压失败"),
-                Failed("b.7z", StatusText.Corrupted, "文件损坏"),
-                Failed("c.7z", StatusText.ExtractSuccess, string.Empty) // 成功的（构造函数里只是名字，状态会被改成成功）
-            });
+            ArchiveTask a = Failed("a.7z", StatusText.ExtractFailed, "解压失败");
+            ArchiveTask b = Failed("b.7z", StatusText.Corrupted, "文件损坏");
+            ArchiveTask c = Failed("c.7z", StatusText.ExtractSuccess, string.Empty);
 
-            // 生成时间是固定格式（不随区域设置变），失败数按实际失败任务算。
+            a.Outcome = TaskOutcome.Failed;
+            b.Outcome = TaskOutcome.Failed;
+            c.Outcome = TaskOutcome.Succeeded;
+
+            string text = service.BuildFailedListText(new[] { a, b, c });
+
+            // 生成时间是固定格式（不随区域设置变）；数法**转调 BatchOutcomeTally**（用户 2026-10-04 真机）。
             Assert.Matches(@"生成时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text);
-            Assert.Contains("失败：2 个任务（共 3 个）", text);
+            Assert.Contains("本次逐条列出：2 个（全批 3 个 —— 成功 1 / 失败 2 / 跳过 0）", text);
+        }
+
+        /// <summary>
+        /// **表头口径与批末汇总必须是同一套数法**（用户 2026-10-04 真机）：
+        /// 那份清单过去写「失败：2 个任务」，可其中 `第6集.7z` 的机器终态是**部分完成**
+        /// （批末汇总是"部分完成 1"）—— 用户拿清单去对批末那行怎么都对不上。
+        ///
+        /// <para><b>红检</b>：把表头改回自己 `failedTasks.Count` 那一套
+        /// （不转调 <see cref="BatchOutcomeTally"/>）⇒ 本用例当场红（会写成"失败：2 个任务"）。</para>
+        /// </summary>
+        [Fact]
+        public void 表头按机器终态数_部分完成不算失败()
+        {
+            var service = new TaskSummaryService();
+
+            ArchiveTask ok = Failed("ok.7z", StatusText.ExtractSuccess, string.Empty);
+            ArchiveTask partial = Failed("partial.7z", StatusText.PartiallyCompleted, "部分完成");
+            ArchiveTask broken = Failed("broken.7z", StatusText.ExtractFailed, "解压失败");
+
+            ok.Outcome = TaskOutcome.Succeeded;
+            partial.Outcome = TaskOutcome.PartiallyCompleted;
+            broken.Outcome = TaskOutcome.Failed;
+
+            string text = service.BuildFailedListText(new[] { ok, partial, broken });
+
+            // 逐条列出的是"要看原因的那两个"（失败 + 部分完成），而全批的分项按机器终态数。
+            Assert.Contains("本次逐条列出：2 个（全批 3 个 —— 成功 1 / 失败 1 / 跳过 0 / 部分完成 1）", text);
+
+            // ⛔ 不许再把「部分完成」算进"失败"。
+            Assert.DoesNotContain("失败：2 个任务", text);
+        }
+
+        /// <summary>
+        /// **其余物为什么还在要进失败清单**（用户 2026-10-04 真机）：那一句可能落在**成功**的那个任务上
+        /// （真机 `Sociology.7z` 解压成功、只是链上另一层没成功 ⇒ 其余物一个字节都不删），
+        /// 所以它必须**单独一段**列出来，⛔ 不能塞进逐归档的第二级（塞了就一个字都不会出现）。
+        ///
+        /// <para><b>红检</b>：撤掉 <c>AppendRestKeptSection</c> 那次调用 ⇒ 本用例当场红。</para>
+        /// </summary>
+        [Fact]
+        public void 其余物没处理要单独一段_成功的那一单也会出现()
+        {
+            var service = new TaskSummaryService();
+
+            ArchiveTask ok = Failed("outer.7z", StatusText.ExtractSuccess, string.Empty);
+            ok.Outcome = TaskOutcome.Succeeded;
+            ok.RestDirectoryPath = @"E:\x\outer\其余物";
+            ok.RestKeptReason = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.RestKeptNoteFormat,
+                ok.RestDirectoryPath,
+                "链上的「inner.7z」没有成功（机器终态：Failed）");
+
+            string text = service.BuildFailedListText(new[] { ok });
+
+            Assert.Contains("其余物没有处理（1 条）", text);
+            Assert.Contains("outer.7z：", text);
+            Assert.Contains(@"E:\x\outer\其余物", text);
+            Assert.Contains("没有成功", text);
         }
 
         [Fact]

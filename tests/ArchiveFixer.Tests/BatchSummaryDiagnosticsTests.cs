@@ -450,6 +450,102 @@ namespace ArchiveFixer.Tests
             Assert.Contains("engine.7z", report.Text, StringComparison.Ordinal);
         }
 
+        // ================================================================ ③' 2026-10-04 真机的两档
+
+        /// <summary>
+        /// **定稿搬运失败那一档不许被指去"看引擎原话"**（用户 2026-10-04 真机）：
+        /// 这一类失败**根本没有引擎原话**（引擎那一步早就成功、校验也通过了，是程序自己搬不动），
+        /// 而原来那一组的「下一步」只有 <see cref="StatusText.BatchDiagnosticsActionOther"/>
+        /// —— 用户翻遍日志也找不到那句话。
+        ///
+        /// <para><b>红检</b>：把 <c>DescribeAction</c> 里那一支撤掉（回到底部的原句）
+        /// ⇒ 本用例当场红（`Assert.DoesNotContain() Failure: BatchDiagnosticsActionOther`）。</para>
+        /// </summary>
+        [Fact]
+        public void 定稿搬运失败_下一步不许指去看引擎原话()
+        {
+            var commitFailed = new ArchiveTask(Path.Combine(_root, "apk.7z"))
+            {
+                Status = StatusText.ExtractFailed,
+                Outcome = TaskOutcome.Failed,
+                CommitMoveFailed = true,
+                ErrorMessage = StatusText.FinalizeMoveFailedPrefix + "内容物 6 个文件 → E:\\x；6 项没能搬运；没能搬运的前 5 项：c01.txt（挪开旧文件失败）"
+            };
+
+            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(new[] { commitFailed });
+
+            BatchProblemGroup other = Assert.Single(report.Groups);
+            Assert.Equal(BatchProblemKind.Other, other.Kind);
+
+            // 组注脚点出"这一类失败没有引擎原话"。
+            Assert.Contains(StatusText.BatchDiagnosticsCommitMoveFailedNoteFormat.Replace("{0}", "1"), report.Text, StringComparison.Ordinal);
+
+            // 「下一步」换成定稿那一句，⛔ 不许再出现"看引擎原话"那句。
+            Assert.Contains(StatusText.BatchDiagnosticsActionCommitMoveFailed, report.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.BatchDiagnosticsActionOther, report.Text, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **引擎类失败照旧用原句**（反向对照）：组里不是定稿搬运失败时，
+        /// 「下一步」必须还是原来那一句 —— ⛔ 别把对的东西一刀切改掉。
+        /// </summary>
+        [Fact]
+        public void 引擎类失败_下一步照旧用原句()
+        {
+            var noEngine = new ArchiveTask(Path.Combine(_root, "engine.7z"))
+            {
+                Status = StatusText.NoEngineAvailable,
+                Outcome = TaskOutcome.Failed
+            };
+
+            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(new[] { noEngine });
+
+            Assert.Contains(StatusText.BatchDiagnosticsActionOther, report.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.BatchDiagnosticsActionCommitMoveFailed, report.Text, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **其余物没处理要进批末诊断**（用户 2026-10-04 真机）：那一批的日志写着
+        /// 「Sociology.7z：链尾的其余物不处理（链上的「老王.apk」没有成功…）」，可这个框里一个字都没有。
+        ///
+        /// <para><b>红检</b>：撤掉 <c>BuildRestKeptLines</c> 那两处调用 ⇒ 本用例当场红。</para>
+        /// </summary>
+        [Fact]
+        public void 其余物没处理_批末诊断逐条点名()
+        {
+            var root = new ArchiveTask(Path.Combine(_root, "sociology.7z"))
+            {
+                // ⚠ 关键：这一单**是成功的**（内容物出来了），只有链上另一层没成功 ⇒
+                // 它按口径不进任何问题组，所以这一句必须独立成行才会出现。
+                Status = StatusText.ExtractSuccess,
+                Outcome = TaskOutcome.Succeeded,
+                RestDirectoryPath = @"E:\x\sociology\其余物",
+                RestKeptReason = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.RestKeptNoteFormat,
+                    @"E:\x\sociology\其余物",
+                    "链上的「老王.apk」没有成功（机器终态：Failed）")
+            };
+
+            var failed = new ArchiveTask(Path.Combine(_root, "老王.apk"))
+            {
+                Status = StatusText.ExtractFailed,
+                Outcome = TaskOutcome.Failed
+            };
+
+            BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(new[] { root, failed });
+
+            Assert.Contains(
+                report.Lines,
+                line => line.Contains("其余物没有处理", StringComparison.Ordinal)
+                        && line.Contains("sociology.7z", StringComparison.Ordinal));
+
+            // 成功的那一单照旧不进任何问题组（⛔ 这一条不许被这次改动破掉）。
+            Assert.DoesNotContain(
+                report.Groups,
+                group => group.Kind != BatchProblemKind.Other);
+        }
+
         // ================================================================ ③ 隐私与排版
 
         /// <summary>

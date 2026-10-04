@@ -135,6 +135,15 @@ namespace ArchiveFixer.Services
         private const string FailedCountLabel = "失败：";
         private const string NoFailedTaskText = "没有失败任务。";
 
+        /// <summary>
+        /// 表头那一行：<c>{0}</c> = 下面逐条列了几个，<c>{1}</c> = 全批几个，<c>{2}</c> = 全批的分项
+        /// （分项由 <see cref="BatchOutcomeTally.BuildParts"/> 给，⛔ 不在这里自己数）。
+        /// </summary>
+        private const string FailedListScopeFormat = "本次逐条列出：{0} 个（全批 {1} 个 —— {2}）";
+
+        /// <summary>末尾那一段的标题（<c>{0}</c> = 几条链）。</summary>
+        private const string RestKeptSectionTitleFormat = "其余物没有处理（{0} 条）：";
+
         private EngineIdentity? _engineIdentity;
 
         /// <summary>
@@ -421,10 +430,35 @@ namespace ArchiveFixer.Services
             if (failedTasks.Count == 0)
             {
                 builder.Append(NoFailedTaskText);
+                builder.AppendLine();
+                AppendRestKeptSection(builder, allTasks);
                 return builder.ToString().TrimEnd();
             }
 
-            builder.AppendLine($"{FailedCountLabel}{failedTasks.Count} 个任务（共 {allTasks.Count} 个）");
+            /*
+             * 表头口径**转调 <see cref="BatchOutcomeTally"/>**（用户 2026-10-04 真机）。
+             *
+             * 现场：这份表头写着「失败：2 个任务（共 4 个）」，可其中 `第6集.7z` 的机器终态是
+             * **部分完成**（批末汇总是"部分完成 1"）—— 同一个词在两处指的不是一件事，
+             * 用户拿这份清单去对批末那行"本批汇总"，怎么都对不上。
+             * ⛔ 这里不再自己 `Count(...)`、也不再自己分类：数法只有 `BatchOutcomeTally` 一份。
+             */
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(allTasks);
+
+            builder.AppendLine(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                FailedListScopeFormat,
+                failedTasks.Count,
+                tally.Total,
+                string.Join(" / ", tally.BuildParts())));
+
+            string followerNote = tally.DescribeFollowerNote();
+
+            if (!string.IsNullOrWhiteSpace(followerNote))
+            {
+                builder.AppendLine(followerNote);
+            }
+
             builder.AppendLine();
 
             foreach (ArchiveTask task in failedTasks)
@@ -449,7 +483,55 @@ namespace ArchiveFixer.Services
                 builder.AppendLine();
             }
 
+            AppendRestKeptSection(builder, allTasks);
+
             return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>
+        /// 失败清单末尾那一段：**哪几条链的其余物原封不动地留着、为什么**（用户 2026-10-04 真机）。
+        ///
+        /// <para>为什么要单独一段而不是塞进逐归档的第二级：那一句可能落在**成功**的那个任务上
+        /// （真机 `Sociology.7z` 就是解压成功、只是链上另一层没成功 ⇒ 其余物一个字节都不删），
+        /// 而成功任务按口径不进这份清单 —— 塞进第二级等于一个字都不会出现。</para>
+        ///
+        /// <para>文字取任务上那一句现成的话（<see cref="ArchiveTask.RestKeptReason"/>，
+        /// 与①页「错误信息」列、批末诊断**同一份**），⛔ 这里不重推判据。</para>
+        /// </summary>
+        private static void AppendRestKeptSection(StringBuilder builder, List<ArchiveTask> tasks)
+        {
+            var lines = new List<string>();
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (string.IsNullOrWhiteSpace(task.RestKeptReason))
+                {
+                    continue;
+                }
+
+                string name = !string.IsNullOrWhiteSpace(task.FileName)
+                    ? task.FileName
+                    : Path.GetFileName(task.CurrentPath);
+
+                lines.Add(DetailIndent + (string.IsNullOrWhiteSpace(name) ? "-" : name) + "："
+                          + task.RestKeptReason.Trim());
+            }
+
+            if (lines.Count == 0)
+            {
+                return;
+            }
+
+            builder.AppendLine();
+            builder.AppendLine(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                RestKeptSectionTitleFormat,
+                lines.Count));
+
+            foreach (string line in lines)
+            {
+                builder.AppendLine(line);
+            }
         }
 
         /// <summary>

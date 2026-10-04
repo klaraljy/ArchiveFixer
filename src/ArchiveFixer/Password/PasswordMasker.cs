@@ -37,6 +37,14 @@ namespace ArchiveFixer.Password
         ///   因为 <c>-</c> 后面跟的是 <c>h</c> —— 少了这一条，rar 的命令行会原样进日志）
         /// - <c>password=xxx</c> / <c>password: xxx</c>（脚本与配置文件风格）
         /// - 本项目自己写的中文日志口径"使用密码 / 尝试密码 / 密码："
+        ///
+        /// <para><b>⚠ 2026-10-04（真机）："尝试密码"那条规则过去把**整行**吃掉</b>
+        /// （<c>尝试密码\s*[^\r\n]+</c> ⇒ <c>尝试密码 ******</c>），于是
+        /// 「密码候选 3/10，尝试密码列表第 3 项：******」在日志 / 屏幕 / 导出三处都只剩
+        /// 「尝试密码 ******」—— 用户看不出**试的是第几项、什么来源**，"为什么试这么多次"就没法回答。
+        /// 现在只擦**密码本体**：产出方（<c>PasswordService.BuildTryPasswordLogText</c>）写的一律是
+        /// <c>描述：******</c> 这个形状，**描述原样保留**、冒号后面一律擦成 <c>******</c>；
+        /// 形状对不上的（真有明文夹在里面）照旧整行擦掉 —— 兜底一寸都不放松。</para>
         /// </summary>
         public static string Sanitize(string? text)
         {
@@ -68,7 +76,20 @@ namespace ArchiveFixer.Password
             result = System.Text.RegularExpressions.Regex.Replace(result, @"(?i)(password\s*=\s*)([^\s;]+)", "$1******");
             result = System.Text.RegularExpressions.Regex.Replace(result, @"(?i)(password\s*:\s*)([^\r\n]+)", "$1******");
             result = System.Text.RegularExpressions.Regex.Replace(result, @"使用密码\s*[^\r\n]+", "使用密码 ******");
-            result = System.Text.RegularExpressions.Regex.Replace(result, @"尝试密码\s*[^\r\n]+", "尝试密码 ******");
+
+            /*
+             * 尝试密码：**只保留"描述 + ：******"那个已知安全的形状**，其余照旧整行擦掉。
+             *
+             * 负向断言里的 {0,40} 是给描述留的上限（"列表第 3 项"这种最长也就十几个字）：
+             * 超过它、或者没有冒号收尾的，一律按"里面可能有明文"处理。
+             * Multiline：导出全部日志时是整份文件一起过这里，`$` 必须按行匹配。
+             */
+            result = System.Text.RegularExpressions.Regex.Replace(
+                result,
+                @"尝试密码(?![^\r\n：:]{0,40}[:：]\*{6}[ \t]*$)[^\r\n]*",
+                "尝试密码 ******",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
+
             result = System.Text.RegularExpressions.Regex.Replace(result, @"密码\s*[:：]\s*[^\r\n]+", "密码：******");
 
             return result;

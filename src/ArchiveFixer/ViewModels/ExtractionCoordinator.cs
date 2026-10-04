@@ -1171,6 +1171,12 @@ namespace ArchiveFixer.ViewModels
                 task.Outcome = TaskOutcome.Failed;
                 task.LastUpdatedTime = DateTime.Now;
 
+                /*
+                 * 这一类失败的事实位（唯一写入点）：批末诊断靠它把"定稿搬运失败"单独点出来 ——
+                 * 它的原因**不是引擎报的**，⛔ 不许被指去"看引擎原话"（用户 2026-10-04 真机）。
+                 */
+                task.CommitMoveFailed = true;
+
                 return false;
             }
 
@@ -1619,8 +1625,13 @@ namespace ArchiveFixer.ViewModels
                  * 计划里的内容物一条都没搬过去、而且全是失败：这次"定稿"等于没发生。
                  * 不能再报成功（不变量 6 的反面：跑完了不许说成成功，跑失败了也不许）——
                  * 结论落成失败，产物留在暂存区供用户自己取。
+                 *
+                 * ⚠ 这一句**带着明细**（用户 2026-10-04 真机）：它是①页「错误信息」列与日志里
+                 * 那一行的**唯一**来源（`commit.Message` 里已经按前 5 条补上了"文件名（原因原文）"，
+                 * 见 ExecuteFinalLayout 里那个 summary）—— 老写法只写"10 项没能搬运"，
+                 * 用户拿不到任何可行动的线索，批末诊断还把他指去看"引擎原话"（这一类失败没有引擎原话）。
                  */
-                string failureMessage = "定稿搬运失败，产物没能写进输出目录：" + commit.Message;
+                string failureMessage = StatusText.FinalizeMoveFailedPrefix + commit.Message;
 
                 logEntries.Add(("ERROR", $"{task.FileName}：{failureMessage}"));
 
@@ -3184,6 +3195,9 @@ namespace ArchiveFixer.ViewModels
 
             if (chainBlocker != null)
             {
+                // 日志 + ①页「错误信息」列 + 批末诊断 + 失败清单读的是同一份文字（用户 2026-10-04 真机）。
+                RecordRestKept(task, chainBlocker);
+
                 AppendLog(
                     "WARN",
                     $"{task.FileName}：链尾的其余物不处理（{chainBlocker}）—— 这条链没跑完，"
@@ -3203,6 +3217,53 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **其余物为什么原封不动地留着** —— 那一句话的唯一出口（用户 2026-10-04 真机）。
+        ///
+        /// <para>现场：日志 271/272 里写着「<c>Sociology.7z：链尾的其余物不处理（链上的「老王.apk」没有成功…）</c>」、
+        /// 「<c>第6集.7z：链尾没有按「删除操作」处理其余物 / 源包 —— 任务没有成功…</c>」，
+        /// 可①页、批末诊断、失败清单里**一个字都没有** —— 用户看到的是"解压成功、其余物还在"，
+        /// 只能自己去猜。这一句把那条日志里的事实搬到他能看见的三个地方（同一份文字，⛔ 不各写一遍）。</para>
+        /// </summary>
+        private static string DescribeRestKeptNote(ArchiveTask task, string reason)
+        {
+            if (task == null)
+            {
+                return string.Empty;
+            }
+
+            return string.IsNullOrWhiteSpace(task.RestDirectoryPath)
+                ? string.Format(CultureInfo.CurrentCulture, StatusText.RestKeptNoteNoPathFormat, reason)
+                : string.Format(CultureInfo.CurrentCulture, StatusText.RestKeptNoteFormat, task.RestDirectoryPath, reason);
+        }
+
+        /// <summary>
+        /// 把"其余物没处理 + 为什么"记到任务上（①页「错误信息」列读 <c>ErrorMessage</c>，
+        /// 批末诊断与失败清单读 <c>RestKeptReason</c> —— 三处同一份文字）。
+        ///
+        /// <para>⚠ 刻意**不改**任务的终态 / 状态：内容物是好的（这一单确实成功），
+        /// 只是"其余物这一档没做" —— 改终态会连带改掉批末计数与四条删除裁决，那不是措辞的事。
+        /// 幂等：同一句只写一次（链尾可能两条路都判到）。</para>
+        /// </summary>
+        private static void RecordRestKept(ArchiveTask task, string reason)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(reason))
+            {
+                return;
+            }
+
+            string note = DescribeRestKeptNote(task, reason);
+
+            task.RestKeptReason = note;
+
+            if (!task.ErrorMessage.Contains(note, StringComparison.Ordinal))
+            {
+                task.ErrorMessage = string.IsNullOrWhiteSpace(task.ErrorMessage)
+                    ? note
+                    : task.ErrorMessage + "；" + note;
+            }
+        }
+
+        /// <summary>
         /// 链尾"按档处理其余物 / 源包"被某一条判据拦下时的**唯一**一行日志
         /// （用户 2026-09-30：源包被留下时必须说清是哪一条判据 —— ⛔ 不许静默 return）。
         ///
@@ -3211,6 +3272,9 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void AppendRemovalBlocked(ArchiveTask task, string why)
         {
+            // 这条 WARN 就是"其余物为什么还在"的答案 ⇒ 同一句话也要落到①页与报告里（用户 2026-10-04 真机）。
+            RecordRestKept(task, why);
+
             AppendLog(
                 "WARN",
                 $"{task.FileName}：{StatusText.ChainRestBlockedPrefix} —— {why}；"
@@ -3503,6 +3567,9 @@ namespace ArchiveFixer.ViewModels
 
             if (chainBlocker != null)
             {
+                // 与上面那一条同口径：这句话也要落到①页 / 批末诊断 / 失败清单（用户 2026-10-04 真机）。
+                RecordRestKept(rootTask, chainBlocker);
+
                 logEntries.Add((
                     "WARN",
                     $"{rootTask.FileName}：链尾的其余物不处理（{chainBlocker}）—— 这条链没跑完，一个字节都不删。"));
@@ -5324,6 +5391,19 @@ namespace ArchiveFixer.ViewModels
                 ? Path.Combine(destinationDirectory, ProcessArtifactDirectoryName)
                 : plan.ProcessArtifactDirectory;
 
+            /*
+             * 定稿摘要 —— **"没能搬运"那几条必须带上明细**（用户 2026-10-04 真机）。
+             *
+             * 现场：`老王.apk` 那一单写着「定稿搬运失败，产物没能写进输出目录：…；10 项没能搬运」，
+             * ①页「错误信息」列与日志里都只有这一个数字 —— 那 10 条 `文件名（原因原文）` 在收集处
+             * （上面的 `failures`）就已经拿到了，却在 CommitFailed 的提前 return 那条路上被丢掉，
+             * 用户手里没有任何可行动的线索（而批末诊断还指着他去看"引擎原话"，定稿类失败没有引擎原话）。
+             *
+             * 为什么补在摘要里而不是另写一行：摘要这一份字符串**同时**是日志那一行
+             * （"定稿完成 —— …"）与①页「错误信息」列（`StageCommitResult.Message` →
+             * `CommitFailureMessage`）的来源 ⇒ 一处出口、两个消费点，不会各写一份、也不会对不上。
+             * ⛔ 判据一个都没动：这里只把**已经收集到的**事实说出来。
+             */
             string summary =
                 $"内容物 {plan.ContentFileCount} 个文件 → {destinationDirectory}" +
                 (movedProcess > 0
@@ -5332,7 +5412,14 @@ namespace ArchiveFixer.ViewModels
                 (renamed > 0 ? $"；{renamed} 项同名，已改名未覆盖" : string.Empty) +
                 (overwritten.Count > 0 ? $"；{overwritten.Count} 项同名，按你的选择覆盖（已写日志）" : string.Empty) +
                 (skippedContent + skippedProcess > 0 ? $"；{skippedContent + skippedProcess} 项同名，按你的选择跳过" : string.Empty) +
-                (failures.Count > 0 ? $"；{failures.Count} 项没能搬运" : string.Empty);
+                (failures.Count > 0 ? $"；{failures.Count} 项没能搬运" : string.Empty) +
+                (failures.Count > 0
+                    ? string.Format(
+                        CultureInfo.CurrentCulture,
+                        StatusText.FinalizeMoveFailureDetailFormat,
+                        MaxFinalizeContentNameLines,
+                        DescribeFinalizeMoveFailures(failures))
+                    : string.Empty);
 
             /*
              * 「定稿完成」这句话**不许在"没解出东西"时读成正常完成**（用户 2026-09-24 要求）。
@@ -5407,6 +5494,32 @@ namespace ArchiveFixer.ViewModels
                 Message = summary,
                 LogEntries = logEntries
             };
+        }
+
+        /// <summary>
+        /// 定稿**没能搬运**的那几条明细（<c>文件名（原因原文）</c>），最多前
+        /// <see cref="MaxFinalizeContentNameLines"/> 条，多出来的折成"还有 K 项没列出来"。
+        ///
+        /// <para>为什么是 5 条：与「本次内容物 —— 名字、名字…」同一个理由（前 5 个足够定性，
+        /// 几十个同名文件全列出来只会把日志与①页那一格撑爆）。</para>
+        ///
+        /// <para>⛔ 这里一个字都不改判据、也不重算原因：明细就是 <c>failures</c> 里已经收好的那一份
+        /// （来源：`无法创建目标目录` / 两阶段覆盖的失败原因 / `File.Move` / `Directory.Move` 的异常原文）。</para>
+        /// </summary>
+        private static string DescribeFinalizeMoveFailures(IReadOnlyList<string> failures)
+        {
+            List<string> shown = failures.Take(MaxFinalizeContentNameLines).ToList();
+            string text = string.Join("、", shown);
+
+            if (failures.Count <= shown.Count)
+            {
+                return text;
+            }
+
+            return text + string.Format(
+                CultureInfo.CurrentCulture,
+                StatusText.FinalizeMoveFailureHiddenFormat,
+                failures.Count - shown.Count);
         }
 
         /// <summary>
@@ -5655,10 +5768,26 @@ namespace ArchiveFixer.ViewModels
 
                 if (oneClickRun)
                 {
+                    /*
+                     * ⚠ 2026-10-04（真机）：这一行过去写死"（多分支）"，而真实判据是
+                     * "同层除该包以外**不全是说明类文件**"（`RecursiveExtractor.HasOnlyInformationalSiblings`）——
+                     * 一层里**只有 1 个**内层归档、旁边有个视频，也会停在这一档：
+                     * 说"多个 / 多分支"会让用户去找那个根本不存在的第二个包。
+                     */
+                    int candidateCount = result.Decision.CandidateArchives.Count;
+
                     AppendLog(
                         "WARN",
-                        $"{task.FileName}：这一层里有 {result.Decision.CandidateArchives.Count} 个内层归档（多分支）——"
-                        + "一键处理不弹确认框，按保守档只保留当前这一层的结果；要展开就再手动解一次。");
+                        candidateCount > 1
+                            ? string.Format(
+                                CultureInfo.CurrentCulture,
+                                StatusText.RecursionBranchHeldBackMultipleFormat,
+                                task.FileName,
+                                candidateCount)
+                            : string.Format(
+                                CultureInfo.CurrentCulture,
+                                StatusText.RecursionBranchHeldBackSingleFormat,
+                                task.FileName));
                 }
 
                 if (expandAll)
@@ -5900,19 +6029,34 @@ namespace ArchiveFixer.ViewModels
                  * 递归按"多分支默认不展开"停在第 3 层 → 这一单落「部分完成」、产物没搬出、工作区按默认清掉，
                  * 而日志里只有"停在第 3 层"这种**技术结论**，没有一个字告诉他该怎么办）。
                  *
+                 * ⚠ 2026-10-04（真机）：这一句过去**只给 `NeedsDecision`** —— 而一键处理档不弹确认框，
+                 * 多分支那一档的停因是 **`BranchNotExpanded`**（真机 `第6集.7z`：两层已成功、停在第 3 层、
+                 * 产物被清掉），于是用户一条出路都看不到。两档给同一份「两条出路」。
+                 *
+                 * ⚠ 措辞按**真实数量**说（同一次真机：日志写着"多个"，实际只有 1 个）：
+                 * 1 个那一档的真实原因是"它旁边还有别的文件"。
+                 *
                  * 两条出路都写清（用户拍板："或在汇总里明确说「这单要去②页开『展开所有分支』」"）：
                  * ① 要一次解到底 → ②页 →「嵌套与压缩包」改成「展开所有分支」再重跑这一单；
                  * ② 只想先把已经解出来的东西留下来 → ③页打开「失败时保留中间产物」，产物就留在上面那个暂存目录里。
                  */
-                if (result.StopReason == RecursionStopReason.NeedsDecision)
+                if (result.StopReason is RecursionStopReason.NeedsDecision or RecursionStopReason.BranchNotExpanded)
                 {
+                    int unexpanded = result.UnexpandedNames.Count;
+
                     AppendLog(
                         "WARN",
-                        $"{task.FileName}：这一单里有多个内层包（多分支默认不展开），所以停在了半路。"
-                        + "两条出路：① 想一次解到底 —— ②页 →「嵌套与压缩包」把那一档改成「展开所有分支」"
-                        + "（也可以把「最大嵌套层数」调大）后，单独重跑这一单；"
-                        + "② 只想先把已经解出来的东西留下 —— ③页打开「失败时保留中间产物」，"
-                        + "产物就留在上面那个暂存目录里。");
+                        (unexpanded > 1
+                            ? string.Format(
+                                CultureInfo.CurrentCulture,
+                                StatusText.RecursionBranchAdviceMultipleFormat,
+                                task.FileName,
+                                unexpanded)
+                            : string.Format(
+                                CultureInfo.CurrentCulture,
+                                StatusText.RecursionBranchAdviceSingleFormat,
+                                task.FileName))
+                        + StatusText.RecursionBranchAdviceTail);
                 }
             }
         }
@@ -9779,6 +9923,13 @@ namespace ArchiveFixer.ViewModels
             // 本批的密码失败登记从零开始：上一批的残留不能让这一批多弹一次提示。
             ClearPasswordFailures();
 
+            /*
+             * "复用本批已成功的密码"这一档**只在本批内生效**（用户 2026-10-04：
+             * "不同次文件一律严格按我列表顺序"）⇒ 批首清一次：
+             * 同一批里后面的包照旧复用前面刚解开的密码，而**下一批**回到④页列表顺序。
+             */
+            _passwordService.BeginBatch();
+
             // 同名冲突的记账同样从零开始：上一批答过的「全部覆盖」绝不许延续到这一批。
             ResetBatchConflictState();
 
@@ -11436,13 +11587,31 @@ namespace ArchiveFixer.ViewModels
                      * 老文案"整条续解链跑完后再按「删除操作」处理"在这一档下就是**假话**
                      * （用户照它去等，什么都不会再发生）。
                      * ⛔ 只改这一支的措辞；最外层那一单照旧（它的其余物确实要等链尾）。
+                     *
+                     * ⚠ 2026-10-04（同一天的真机）：这一句以前是**无条件**的 —— 续解层「定稿搬运失败」
+                     * 时它照样写着"已当场回收"，而那一刻回收判据一条都没过（`PurgeLayerSourcePackage`
+                     * 要么被 `commit.FailedCount > 0` 挡下、要么根本走不到），过程物**原封不动躺在盘上**。
+                     * 现在**按事实说**（用户要求：真删了才说已回收，被拒就如实说没回收 + 原因）。
+                     *
+                     * 事实位 = `task.SourcePackageMove == Done`：对续解任务它**只可能**由
+                     * `PurgeLayerSourcePackage` 写（`MoveSourcePackageIntoRest` 那一支对续解任务走不到，
+                     * 上面那个 `else if (task.IsContinuationTask)` 先接住了），而它只在
+                     * "真的删掉了至少一个文件、且一个都没失败"时才落 —— 正是"真删了"。
                      */
                     if (_layerReclaimThisBatch && task.IsContinuationTask)
                     {
                         AppendLog(
                             "INFO",
-                            $"{task.FileName}：这一层的过程物已按「删除操作 = 彻底删除」当场回收（逐层回收）；"
-                            + "最外层源包留到整条续解链跑完后处理。");
+                            task.SourcePackageMove == SourcePackageMoveState.Done
+                                ? string.Format(
+                                    CultureInfo.CurrentCulture,
+                                    StatusText.LayerProcessReclaimedFormat,
+                                    task.FileName)
+                                : string.Format(
+                                    CultureInfo.CurrentCulture,
+                                    StatusText.LayerProcessNotReclaimedFormat,
+                                    task.FileName,
+                                    DescribeLayerReclaimBlocker(task)));
 
                         return;
                     }
@@ -11542,7 +11711,41 @@ namespace ArchiveFixer.ViewModels
 
             runtime.PurgeNote = outcome.Message;
 
+            // 其余物没删成也是"其余物还在"的一个答案 ⇒ 同一句话落到①页 / 批末诊断 / 失败清单。
+            RecordRestKept(task, outcome.Message);
+
             AppendLog(outcome.Attempted ? "ERROR" : "INFO", outcome.Message);
+        }
+
+        /// <summary>
+        /// 逐层回收那一句里"**为什么没回收**"（只有 <c>SourcePackageMove != Done</c> 时才会问到这里）。
+        ///
+        /// <para>三档都只读**任务上已有的**事实（状态常量 / 机器终态），⛔ 不重推判据、不重算原因：</para>
+        /// <list type="number">
+        /// <item><description><b>部分完成</b>（删了一部分没删完，占用 / 只读 / 权限）——
+        /// 这时候那一层已经写过一行 ERROR，指过去。</description></item>
+        /// <item><description><b>终态成功</b> ⇒ 这一层跑成了，是回收判据没放行（完整性判不出 / 半套分卷闸门 /
+        /// 源包清单是空的）—— 那一层也各写了一行 WARN，指过去。</description></item>
+        /// <item><description><b>其余</b> ⇒ 这一层自己没跑成（定稿搬运失败 / 校验没过 / 已取消），
+        /// 回收那一步**根本没走到** ⇒ 原因在①页「错误信息」列（用户 2026-10-04 真机正是这一档）。</description></item>
+        /// </list>
+        /// </summary>
+        private static string DescribeLayerReclaimBlocker(ArchiveTask task)
+        {
+            if (string.Equals(task.Status, StatusText.PartiallyCompleted, StringComparison.Ordinal))
+            {
+                return StatusText.LayerReclaimPartialBlockedReason;
+            }
+
+            if (task.Outcome == TaskOutcome.Succeeded)
+            {
+                return StatusText.LayerReclaimGateBlockedReason;
+            }
+
+            return string.Format(
+                CultureInfo.CurrentCulture,
+                StatusText.LayerReclaimLayerFailedReasonFormat,
+                task.Status);
         }
 
         /// <summary>
@@ -12856,6 +13059,12 @@ namespace ArchiveFixer.ViewModels
             task.OutputVerification = OutputVerificationOutcome.NotAttempted;
             task.Outcome = TaskOutcome.Pending;
             task.VerifyMessage = string.Empty;
+
+            // 上一轮"定稿搬运失败"那个事实位也要清掉（批末诊断读它，留着会把这一轮指错方向）。
+            task.CommitMoveFailed = false;
+
+            // 同理：上一轮"其余物为什么留着"那句话也要清掉（这一轮它会重新写）。
+            task.RestKeptReason = string.Empty;
 
             task.LastUpdatedTime = DateTime.Now;
 

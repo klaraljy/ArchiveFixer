@@ -827,6 +827,34 @@ namespace ArchiveFixer.Models
         public string VerifyMessage { get; set; } = string.Empty;
 
         /// <summary>
+        /// 这一次是**定稿搬运整体失败**（暂存区 → 输出目录一条内容物都没搬过去）。
+        ///
+        /// <para>为什么要单独一个事实位（用户 2026-10-04 真机）：这类失败的结论与原因**不是引擎报的**
+        /// （引擎那一步早就成功了、校验也通过了），于是批末诊断把它兜底归进「其他失败」，
+        /// 「下一步」再让人去"看引擎原话" —— 而它根本没有引擎原话，用户被指错了方向。
+        /// 批末诊断靠这一位把它单独点出来（<c>BatchSummaryDiagnosticsRules</c>，⛔ 那里不比中文文案）。</para>
+        ///
+        /// <para>唯一写入点：<c>ExtractionCoordinator</c> 处理 <c>PostProcessWorkResult.CommitFailed</c>
+        /// 的那一支；唯一清零点 = <c>ExtractionCoordinator.ExtractSingleTaskAsync</c> 开工时清
+        /// "上一轮结论"的那一处（任务对象是复用的）。</para>
+        /// </summary>
+        public bool CommitMoveFailed { get; set; }
+
+        /// <summary>
+        /// **这一单的其余物为什么原封不动地留着**（非空 = 没按「删除操作」处理过，文字里带路径与原因）。
+        ///
+        /// <para>为什么要单列一条（用户 2026-10-04 真机）：日志 271/272 明明写着
+        /// 「<c>Sociology.7z：链尾的其余物不处理（链上的「老王.apk」没有成功…）</c>」，
+        /// 而①页、批末诊断、失败清单里**一个字都没有** —— 他在界面上看到的是
+        /// "解压成功、其余物还在"，只能自己去猜为什么。</para>
+        ///
+        /// <para>写法：唯一出口 = <c>ExtractionCoordinator.DescribeRestKeptNote</c>（那一句就是
+        /// <c>StatusText.RestKeptNoteFormat</c>），三处消费者读的是**同一份文字**；
+        /// 唯一清零点 = <c>ExtractSingleTaskAsync</c> 开工时清"上一轮结论"的那一处。</para>
+        /// </summary>
+        public string RestKeptReason { get; set; } = string.Empty;
+
+        /// <summary>
         /// 引擎对"这到底是不是能解的容器"下的结论（例如"7-Zip 命令行 26.01 能打开：16 个文件"）。
         /// 魔数说不认识时，以引擎的结论为准 —— 这也是"结果可追溯"的一部分（不变量 14）。
         /// </summary>

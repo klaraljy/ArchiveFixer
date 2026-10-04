@@ -585,6 +585,341 @@ namespace ArchiveFixer.Tests
                 entry => entry.Level == "WARN" && entry.Message.Contains("读不动", StringComparison.Ordinal));
         }
 
+        // ================================================================ 用例 J（定稿搬运失败：原因必须让用户看得见）
+
+        /// <summary>
+        /// <b>用例 J1（用户 2026-10-04 真机 · 缺陷 1）</b>：续解层「定稿搬运失败」时，
+        /// **前 5 条明细（文件名 + 原因原文）必须落到①页「错误信息」列与日志里** ——
+        /// 老写法只有一句「10 项没能搬运」，用户手里没有任何可行动的线索。
+        ///
+        /// <para><b>造法</b>（⛔ 绝不碰用户目录：全在本次临时根里）：续解层的 6 个内容物落点
+        /// （`out\outer\level2\c0N.txt`）**预先用独占句柄占住**，③档同名冲突设成「覆盖」
+        /// ⇒ 定稿走的正是"挪开旧的再落位"，而旧的挪不动 ⇒ 6 条搬运全失败、一条内容物都没落位。
+        /// 这正是真机那一单的形状（10 项没能搬运 / 定稿搬运失败）。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>ExtractionCoordinator</c> 里 summary 的明细那一段撤掉
+        /// （回到"只写个数"）⇒ 本用例当场红（`Assert.Contains() Failure: c01.txt（`）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例J1_定稿搬运失败_前5条明细进错误信息列与日志()
+        {
+            (Harness harness, ArchiveTask failed, _) = await RunFinalizeMoveFailureAsync();
+
+            _output.WriteLine($"[①页] {failed.ErrorMessage}");
+
+            Assert.Equal(TaskOutcome.Failed, failed.Outcome);
+
+            // 这一类失败的事实位（批末诊断靠它把"没有引擎原话"的那一档单独点出来）。
+            Assert.True(failed.CommitMoveFailed, "定稿搬运失败必须落成事实位（批末诊断读它）");
+
+            // ---- ①页「错误信息」列：结论 + 计数 + **前 5 条明细**
+            Assert.StartsWith(StatusText.FinalizeMoveFailedPrefix, failed.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("6 项没能搬运", failed.ErrorMessage, StringComparison.Ordinal);
+
+            foreach (string name in new[] { "c01.txt", "c02.txt", "c03.txt", "c04.txt", "c05.txt" })
+            {
+                // 明细的形状 = `文件名（原因原文）`。
+                Assert.Contains(name + "（", failed.ErrorMessage, StringComparison.Ordinal);
+            }
+
+            // 原因原文（两阶段覆盖挪不开旧文件时那句包装 + 它带的系统原话）。
+            Assert.Contains("挪开旧文件失败", failed.ErrorMessage, StringComparison.Ordinal);
+
+            // ⛔ 只列前 5 条，多出来的折成"还有 K 项"（不许把几十条全塞进那一格）。
+            Assert.DoesNotContain("c06.txt", failed.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("还有 1 项没列出来", failed.ErrorMessage, StringComparison.Ordinal);
+
+            // ---- 日志里必须有**同样内容**（①页 / 失败清单 / 日志读的是同一份文字）。
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains(failed.ErrorMessage, StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// <b>用例 J2（同一次真机 · 缺陷 2）</b>：定稿搬运失败之后，那句
+        /// 「这一层的过程物已按『删除操作 = 彻底删除』当场回收」**一个字都不许出现** ——
+        /// 那一刻回收判据一条都没过（定稿失败），过程物**原封不动躺在盘上**；
+        /// 必须如实写「这一层的过程物没有回收（原因）」。
+        ///
+        /// <para><b>造法</b>：与用例 J1 同一个夹具（同一份 7z 造包 + 同一批占位）。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>RunRestHandlingAsync</c> 那一句改回**无条件**的"已当场回收"
+        /// ⇒ 本用例当场红（`Assert.DoesNotContain() Failure`）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例J2_定稿搬运失败_不许说已回收_源包仍在原地()
+        {
+            (Harness harness, ArchiveTask failed, _) = await RunFinalizeMoveFailureAsync();
+
+            foreach (var entry in harness.Log.Logs.Where(e => e.Message.Contains("过程物", StringComparison.Ordinal)))
+            {
+                _output.WriteLine($"[{entry.Level}] {entry.Message}");
+            }
+
+            // ① ⛔ 假话不许出现：这一层**没有**回收（判据没过、一个字节都没删）。
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("这一层的过程物已按", StringComparison.Ordinal));
+
+            // ② 如实那一句必须在，而且**说清了原因**（这一层自己没跑成 ⇒ 指向①页）。
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("这一层的过程物没有回收", StringComparison.Ordinal)
+                         && entry.Message.Contains(failed.Status, StringComparison.Ordinal));
+
+            // ③ 不可逆动作零调用（逐层回收那个执行体一次都没被叫）。
+            Assert.Empty(harness.SourceDeletes.DeletedPaths);
+
+            // ④ 源包（内层包）仍在原地 —— 红线：失败 ⇒ 源包一个字节都不动。
+            Assert.NotEmpty(FindFiles("level2.7z"));
+        }
+
+        /// <summary>
+        /// 用例 J 的夹具：`outer.7z → level2.7z → c01..c06.txt`，续解层那 6 个落点被独占句柄占住
+        /// ⇒ 定稿搬运 6 条全失败。返回（夹具、失败的那一单、最外层源包路径）。
+        /// </summary>
+        private async Task<(Harness Harness, ArchiveTask Failed, string Outer)> RunFinalizeMoveFailureAsync()
+        {
+            Harness harness = CreateHarness(
+                RestHandlingModes.Delete,
+                SourceHandlingMode.KeepInPlace,
+                settings => settings.ConflictAction = ConflictActions.Overwrite);
+
+            string outer = BuildFinalizeFailureChain();
+
+            string layerDirectory = Path.Combine(_root, "out", "outer", "level2");
+            Directory.CreateDirectory(layerDirectory);
+
+            var holds = new List<FileStream>();
+
+            try
+            {
+                for (int i = 1; i <= 6; i++)
+                {
+                    string placeholder = Path.Combine(layerDirectory, $"c{i:00}.txt");
+                    File.WriteAllText(placeholder, "占位（不是解压产物）\n", new UTF8Encoding(false));
+                    holds.Add(new FileStream(placeholder, FileMode.Open, FileAccess.Read, FileShare.None));
+                }
+
+                await harness.AddPathsAsync(outer);
+
+                await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+            }
+            finally
+            {
+                foreach (FileStream hold in holds)
+                {
+                    hold.Dispose();
+                }
+            }
+
+            ArchiveTask failed = Assert.Single(harness.Vm.Tasks, task => task.IsContinuationTask);
+
+            return (harness, failed, outer);
+        }
+
+        /// <summary>
+        /// 夹具：<c>outer.7z → level2.7z → c01..c06.txt</c>，而且**最外层自己也有内容物**
+        /// （`layer1.txt`）⇒ 续解那一层按既有判据**不另建层**（父层已产出内容物），
+        /// 它那 6 个文件的落点 = 父层内容目录下面那一层（`out\outer\level2\`）。
+        /// </summary>
+        private string BuildFinalizeFailureChain()
+        {
+            string build = Path.Combine(_root, "ff-build");
+            Directory.CreateDirectory(build);
+
+            for (int i = 1; i <= 6; i++)
+            {
+                File.WriteAllText(
+                    Path.Combine(build, $"c{i:00}.txt"),
+                    $"第 2 层的内容 {i}\n",
+                    new UTF8Encoding(false));
+            }
+
+            Run7z(build, "a", "-t7z", "level2.7z", "c01.txt", "c02.txt", "c03.txt", "c04.txt", "c05.txt", "c06.txt");
+
+            File.WriteAllText(Path.Combine(build, "layer1.txt"), "第 1 层自己的内容\n", new UTF8Encoding(false));
+
+            string sourceDirectory = Path.Combine(_root, "src");
+            Directory.CreateDirectory(sourceDirectory);
+
+            string outer = Path.Combine(sourceDirectory, "outer.7z");
+            Run7z(build, "a", "-t7z", outer, "level2.7z", "layer1.txt");
+
+            Directory.Delete(build, recursive: true);
+
+            return outer;
+        }
+
+        // ================================================================ 用例 K（措辞与事实对齐：用户 2026-10-04 真机）
+
+        /// <summary>
+        /// <b>用例 K1（A3）</b>：这一层里**只有 1 个**内层归档、可它旁边还有个视频 ⇒
+        /// 一键处理按保守档不展开，而那一行**不许**说"多个 /（多分支）"——
+        /// 真实判据是"同层除该包以外不全是说明类文件"，用户看到的只有一个包。
+        ///
+        /// <para><b>红检</b>：把 <c>ExtractionCoordinator</c> 那一行改回写死的"（多分支）"
+        /// ⇒ 本用例当场红（`Assert.DoesNotContain() Failure: 多分支`）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例K1_只1个内层包但旁边有别的文件_措辞不许说多分支()
+        {
+            Harness harness = CreateHarness(
+                RestHandlingModes.Delete,
+                SourceHandlingMode.KeepInPlace,
+                settings => settings.RecursionMode = "SingleChain");
+
+            string outer = BuildSingleInnerWithSiblingChain();
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            foreach (var entry in harness.Log.Logs.Where(e => e.Message.Contains("内层归档", StringComparison.Ordinal)))
+            {
+                _output.WriteLine($"[{entry.Level}] {entry.Message}");
+            }
+
+            // ① 真的走到了"这一层有内层归档、按保守档不展开"那一支。
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("除了那个内层归档还有别的文件", StringComparison.Ordinal));
+
+            // ② ⛔ 不许说"多个 /（多分支）"（这一层只有一个内层包）。
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("个内层归档（多分支）", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// <b>用例 K2（A4）</b>：多分支出现在**更深的层**（一键档不弹框 ⇒ 停因是
+        /// <c>BranchNotExpanded</c>）时，「两条出路」那一句**也必须给** ——
+        /// 真机上用户两层已成功、停半路、产物被清，却一条出路都看不到。
+        ///
+        /// <para><b>红检</b>：把那一支的判据改回只认 <c>NeedsDecision</c>
+        /// ⇒ 本用例当场红（`Assert.Contains() Failure: 两条出路`）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例K2_更深层多分支停半路_必须给两条出路()
+        {
+            Harness harness = CreateHarness(
+                RestHandlingModes.Delete,
+                SourceHandlingMode.KeepInPlace,
+                settings => settings.RecursionMode = "SingleChain");
+
+            string outer = BuildDeepBranchChain();
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            foreach (var entry in harness.Log.Logs.Where(e => e.Message.Contains("出路", StringComparison.Ordinal)))
+            {
+                _output.WriteLine($"[{entry.Level}] {entry.Message}");
+            }
+
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains(StatusText.RecursionBranchAdviceTail, StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// <b>用例 K3（A5）</b>：链上有一层没成功 ⇒ 其余物一个字节都不删 ——
+        /// 那句"其余物留在哪、为什么"**必须同时进①页「错误信息」列与批末诊断**，
+        /// ⛔ 不许只躺在日志里（真机：界面上只看到"解压成功、其余物还在"）。
+        ///
+        /// <para><b>红检</b>：把链尾那两处的 <c>RecordRestKept</c> 撤掉 ⇒ 本用例当场红。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例K3_链没跑完其余物没删_原因要进错误信息列与批末诊断()
+        {
+            const int layers = 4;
+
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
+            string outer = BuildChain(layers, passwordLevel: 3);
+
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            ArchiveTask root = harness.Vm.Tasks.First(task => !task.IsContinuationTask);
+
+            foreach (var entry in harness.Log.Logs.Where(e => e.Message.Contains("其余物", StringComparison.Ordinal)))
+            {
+                _output.WriteLine($"[{entry.Level}] {entry.Message}");
+            }
+
+            // ① ①页「错误信息」列里必须有那一句（含原因）。
+            Assert.Contains("其余物没有处理", root.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains("没有成功", root.ErrorMessage, StringComparison.Ordinal);
+
+            // ② 批末诊断（弹窗正文与日志逐行同一份文字）里也要有。
+            Assert.Contains(
+                outcome.DiagnosticLines,
+                line => line.Contains("其余物没有处理", StringComparison.Ordinal));
+
+            // ③ 红线：链没跑完 ⇒ **最外层源包**一个字节都没删（已成功那几层各收各的是设计）。
+            Assert.DoesNotContain(harness.SourceDeletes.DeletedPaths, path => IsNamed(path, "outer.7z"));
+            Assert.NotEmpty(FindFiles("outer.7z"));
+        }
+
+        /// <summary>
+        /// 夹具（用例 K1）：<c>outer.7z → level2.7z + movie.mp4</c> —— 这一层里**只有 1 个**内层归档，
+        /// 可它旁边有个**非说明类**文件（`.mp4`）⇒ 按既有判据"不是单链"，一键档按保守档不展开。
+        /// 真机那批（`第6集.7z`）就是这个形状。
+        /// </summary>
+        private string BuildSingleInnerWithSiblingChain()
+        {
+            string build = Path.Combine(_root, "k1-build");
+            Directory.CreateDirectory(build);
+
+            File.WriteAllText(Path.Combine(build, "payload.txt"), "内层的内容\n", new UTF8Encoding(false));
+            Run7z(build, "a", "-t7z", "level2.7z", "payload.txt");
+            File.Delete(Path.Combine(build, "payload.txt"));
+
+            File.WriteAllBytes(Path.Combine(build, "movie.mp4"), new byte[4096]);
+
+            string sourceDirectory = Path.Combine(_root, "src");
+            Directory.CreateDirectory(sourceDirectory);
+
+            string outer = Path.Combine(sourceDirectory, "outer.7z");
+            Run7z(build, "a", "-t7z", outer, "level2.7z", "movie.mp4");
+
+            Directory.Delete(build, recursive: true);
+
+            return outer;
+        }
+
+        /// <summary>
+        /// 夹具（用例 K2）：<c>outer.7z → level2.7z →（level3.7z + movie.mp4）</c> ——
+        /// 多分支出现在**第 1 层**（更深的层）⇒ 一键档不弹框、停因是 <c>BranchNotExpanded</c>。
+        /// </summary>
+        private string BuildDeepBranchChain()
+        {
+            string build = Path.Combine(_root, "k2-build");
+            Directory.CreateDirectory(build);
+
+            File.WriteAllText(Path.Combine(build, "leaf.txt"), "最深一层\n", new UTF8Encoding(false));
+            Run7z(build, "a", "-t7z", "level3.7z", "leaf.txt");
+
+            File.WriteAllBytes(Path.Combine(build, "movie.mp4"), new byte[4096]);
+            File.Delete(Path.Combine(build, "leaf.txt"));
+
+            Run7z(build, "a", "-t7z", "level2.7z", "level3.7z", "movie.mp4");
+            File.Delete(Path.Combine(build, "level3.7z"));
+            File.Delete(Path.Combine(build, "movie.mp4"));
+
+            string sourceDirectory = Path.Combine(_root, "src");
+            Directory.CreateDirectory(sourceDirectory);
+
+            string outer = Path.Combine(sourceDirectory, "outer.7z");
+            Run7z(build, "a", "-t7z", outer, "level2.7z");
+
+            Directory.Delete(build, recursive: true);
+
+            return outer;
+        }
+
         // ================================================================ 用例 D（三处消费点同一数字）
 
         /// <summary>
@@ -959,7 +1294,10 @@ namespace ArchiveFixer.Tests
                 ? Directory.GetDirectories(_root, name, SearchOption.AllDirectories)
                 : Array.Empty<string>();
 
-        private Harness CreateHarness(string restMode, SourceHandlingMode sourceMode)
+        private Harness CreateHarness(
+            string restMode,
+            SourceHandlingMode sourceMode,
+            Action<AppSettings>? tweak = null)
         {
             string dataRoot = Path.Combine(_root, "data");
             string outputRoot = Path.Combine(_root, "out");
@@ -980,6 +1318,8 @@ namespace ArchiveFixer.Tests
             settings.SourceHandling = sourceMode.ToString();
             settings.RestHandlingAfterVerify = restMode;
             settings.CustomSevenZipExePath = string.Empty;
+
+            tweak?.Invoke(settings);
 
             settingsService.Save(settings);
 

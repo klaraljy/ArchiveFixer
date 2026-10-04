@@ -240,6 +240,15 @@ namespace ArchiveFixer.Extraction
 
         public IReadOnlyList<RecursionLayerReport> Layers { get; init; } = Array.Empty<RecursionLayerReport>();
 
+        /// <summary>
+        /// 停下来时**这一层还有哪几个内层归档没展开**（完整路径；空 = 没有未展开的分支）。
+        ///
+        /// <para>为什么要带上名单（用户 2026-10-04 真机）：过去只有个数，Summary 里也只写个数 ——
+        /// 用户看不出是哪个包没展开，只能自己去工作区里翻。调用方（协调器的「两条出路」那一条）
+        /// 也读这一份，⛔ 不许自己再数一遍。</para>
+        /// </summary>
+        public IReadOnlyList<string> UnexpandedNames { get; init; } = Array.Empty<string>();
+
         /// <summary>指向**已完成的最深一层**产物；部分完成时这里是工作区里的路径。</summary>
         public string FinalOutputPath { get; init; } = string.Empty;
 
@@ -289,6 +298,17 @@ namespace ArchiveFixer.Extraction
         {
             ".txt", ".nfo", ".url", ".md", ".sfv", ".jpg", ".png"
         };
+
+        /// <summary>
+        /// 「该层还有哪几个内层包没展开」最多点几个名字（多出来的折成"…还有 K 个"）。
+        ///
+        /// <para>与「本次内容物」「定稿没能搬运的明细」同一个数字：**前 5 个足够定性**，
+        /// 一层里几十个内层包时全列出来只会把摘要撑爆（用户 2026-09-25 第 44 条）。</para>
+        /// </summary>
+        private const int MaxUnexpandedNameLines = 5;
+
+        /// <summary>密码探针目录名（建在这一层产物目录**之外**，⛔ 不许混进产物）。</summary>
+        private const string ProbeDirectoryName = "_密码预检";
 
         /// <summary>展开比检查的上限保护：只对最大若干层做（防止有人把上限配得极大时白算）。</summary>
         private const int MaxExpansionRatioChecks = 20;
@@ -465,8 +485,11 @@ namespace ArchiveFixer.Extraction
             int totalFiles = 0;
             long totalSize = 0;
 
-            // 第 1 层起停下来时要能说清"还有多少个内层归档没展开"（不变量 8：多分支默认不展开，必须问）。
-            int unexpandedCount = 0;
+            /*
+             * 第 1 层起停下来时要能说清"还有**哪几个**内层归档没展开"（不变量 8：多分支默认不展开，
+             * 必须问；用户 2026-10-04 真机：只报个数时他看不出是哪一个）。
+             */
+            IReadOnlyList<string> unexpandedNames = Array.Empty<string>();
 
             /*
              * 因"源文件已变化"停下时，那句话就是本次的结论（不变量 11）。
@@ -645,8 +668,7 @@ namespace ArchiveFixer.Extraction
 
                     var enqueueState = new EnqueueState
                     {
-                        Pending = pending,
-                        UnexpandedCount = 0
+                        Pending = pending
                     };
 
                     if (!TryEnqueueNextLayers(
@@ -658,7 +680,7 @@ namespace ArchiveFixer.Extraction
                             out RecursionDecisionRequest? askUser,
                             out RecursionStopReason enqueueStopReason))
                     {
-                        unexpandedCount = enqueueState.UnexpandedCount;
+                        unexpandedNames = enqueueState.UnexpandedNames.ToList();
 
                         if (askUser != null)
                         {
@@ -692,7 +714,7 @@ namespace ArchiveFixer.Extraction
                         // "源文件已变化"那句话由调用方给（快照与状态都在协调器那边），原样带进结论。
                         sourceChangedReason,
                         publish,
-                        unexpandedCount),
+                        unexpandedNames),
                     workspace,
                     task.FileName,
                     cancellationToken);
@@ -712,7 +734,7 @@ namespace ArchiveFixer.Extraction
                         finalOutputDirectory,
                         string.Empty,
                         published: false,
-                        unexpandedCount),
+                        unexpandedNames),
                     workspace,
                     task.FileName,
                     cancellationToken);
@@ -729,7 +751,7 @@ namespace ArchiveFixer.Extraction
                         finalOutputDirectory,
                         PasswordMasker.Sanitize(ex.Message),
                         published: false,
-                        unexpandedCount),
+                        unexpandedNames),
                     workspace,
                     task.FileName,
                     cancellationToken);
@@ -851,6 +873,13 @@ namespace ArchiveFixer.Extraction
             int layerCandidateLimit = Math.Min(candidates.Count, _limits.MaxPasswordAttemptsPerLayer);
 
             /*
+             * 「加密包不试空密码」要用到的一个事实（用户 2026-10-04 真机）：
+             * 这一层**除空密码以外还有没有候选可试**（一个都不剩时不许跳 —— 与单层路径同一条边界，
+             * 见 `ExtractionCoordinator` 的 `skippedOnlyEmptyPasswordBecauseEncrypted`）。
+             */
+            int usableCandidates = candidates.Count(candidate => !string.IsNullOrEmpty(candidate));
+
+            /*
              * 日志里的任务标签：**只写文件名 + 层号**（§8 隐私红线：完整路径不进日志）。
              * 层号是排查多层嵌套时唯一能对号入座的信息，既有日志的行首形状就是它。
              */
@@ -937,11 +966,83 @@ namespace ArchiveFixer.Extraction
                     lastListedEntries = PartialPublishPlanner.ToManifestEntries(listedThisCandidate);
                 }
 
+                /*
+                 * ===== 加密包不试空密码（用户 2026-10-04 真机；**唯一判据** = PasswordProbe）=====
+                 *
+                 * 现场：真机日志「第 0 层：第6集.zip：开始解压，密码候选 1/10，尝试空密码」——
+                 * 一个**已加密**的包先拿空密码白跑一整包。单层路径 2026-09-25 就修掉了这一档
+                 * （`PasswordProbe.ShouldSkipEmptyPassword`），可**递归这条路没接**：
+                 * 一键处理里内层包走的正是递归，于是同一件事在两条路上长成两种行为。
+                 *
+                 * 判据只读引擎给的事实（清单里有没有加密条目），⛔ 不比中文、也不自己猜；
+                 * 边界与单层路径**逐字相同**：还有别的候选可试才跳（一个都不剩时照旧试空密码，
+                 * 否则收场会落到一句更难懂的"未知解压失败"）。
+                 *
+                 * 账目：这一档**没解过任何东西**，所以不占尝试次数（撤掉 `attempts` 那一格）、
+                 * 也不算"试过了"（`triedAny` 跟着退回去），候选总数 N 也跟着减 1 ——
+                 * 否则日志里的「候选 i/N」会给出一个永远到不了的 N。
+                 */
+                if (string.IsNullOrEmpty(candidate)
+                    && usableCandidates > 0
+                    && PasswordProbe.ShouldSkipEmptyPassword(listedThisCandidate))
+                {
+                    attempts--;
+                    triedAny = attempts > 0;
+                    layerCandidateLimit = Math.Max(1, layerCandidateLimit - 1);
+
+                    Log(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.RecursionSkippedEmptyPasswordLogFormat,
+                            layerLabel,
+                            Math.Min(usableCandidates, _limits.MaxPasswordAttemptsPerLayer)));
+
+                    continue;
+                }
+
                 if (unsafeSummary != null)
                 {
                     return LayerOutcome.Stop(
                         BuildLayerReport(item, lastFailure, succeededPassword: null, unsafeSummary),
                         RecursionStopReason.UnsafeEntry);
+                }
+
+                /*
+                 * ===== 先只解最小的那个条目（探针），再解整包 =====
+                 *
+                 * 与单层路径**同一个出口**（<see cref="PasswordProbe"/>）：清单里那个最小的文件能解开
+                 * = 这个候选是对的；解不开（引擎明确说密码不对）= 这个候选不对 ——
+                 * 一个字节的整包数据都没动。挑不出探针、或引擎给不出确定结论 ⇒ 照旧解整包。
+                 *
+                 * 为什么递归这条路也必须接（用户 2026-10-04 真机）：递归里每个候选过去都是**一次完整解压**，
+                 * 大包 + 多个候选 = 几十分钟白跑（单层路径 2026-09-25 修的就是这个）。
+                 *
+                 * 探针失败的结论**原样当成"这个候选不对"**（`lastFailure` 收那一份引擎结果）⇒
+                 * 收尾的停因、两义那一档、失败清单的口径一个字都不用改。
+                 */
+                ArchiveOperationResult? probeFailure = await ProbeCandidateAsync(
+                        item,
+                        options,
+                        listedThisCandidate,
+                        candidate,
+                        progress,
+                        stalled,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (probeFailure != null)
+                {
+                    lastFailure = probeFailure;
+
+                    Log(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.PasswordCandidateRejectedLogFormat,
+                            layerLabel));
+
+                    continue;
                 }
 
                 /*
@@ -1287,7 +1388,160 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 第二道防线：逐个核对产物真实落点是否都在本层产物目录之内。
+        /// **先只解清单里最小的那个条目**（探针），再决定要不要解整包（用户 2026-10-04 真机）。
+        ///
+        /// <para>判据全部来自唯一出口 <see cref="PasswordProbe"/>（值不值得探 / 挑哪一个条目 ——
+        /// ⛔ 这里不另写一份）：</para>
+        /// <list type="bullet">
+        /// <item><description>不值得探（没有加密条目 / 包不大）或挑不出条目 ⇒ 返回 <c>null</c>（调用方照旧解整包）；</description></item>
+        /// <item><description>探针**解不开且引擎明说密码不对** ⇒ 返回那一份引擎结果（调用方当"这个候选不对"处理，
+        /// 一个字节的整包数据都没动）；</description></item>
+        /// <item><description>探针解开 / 给不出确定结论 / 探针自己出错 ⇒ 返回 <c>null</c>（照旧解整包，
+        /// 结论仍然由整包那一步说了算）。</description></item>
+        /// </list>
+        ///
+        /// <para>探针目录建在**这一层产物目录之外**（同层的兄弟目录）：产物目录里的东西要参与
+        /// 结果校验与发布，⛔ 一个字节都不能混进去；用完就整份删掉。</para>
+        /// </summary>
+        private async Task<ArchiveOperationResult?> ProbeCandidateAsync(
+            WorkItem item,
+            ExtractOptions options,
+            ArchiveListResult? listed,
+            string candidate,
+            IProgress<ArchiveProgress>? progress,
+            Action<ArchiveStallNotice>? stalled,
+            CancellationToken cancellationToken)
+        {
+            if (!PasswordProbe.IsWorthProbing(listed, listed?.TotalUncompressedSize ?? 0))
+            {
+                return null;
+            }
+
+            string? probeEntry = PasswordProbe.ChooseProbeEntry(listed);
+
+            if (string.IsNullOrWhiteSpace(probeEntry))
+            {
+                return null;
+            }
+
+            string layerDirectory = Path.GetDirectoryName(item.Layer.OutputPath) ?? item.Layer.OutputPath;
+            string probeDirectory = Path.Combine(layerDirectory, ProbeDirectoryName);
+
+            try
+            {
+                Directory.CreateDirectory(probeDirectory);
+            }
+            catch
+            {
+                // 建不出目录（权限 / 盘）：探针做不了 ⇒ 退回整包试解（结论不会被这里改掉）。
+                return null;
+            }
+
+            IReadOnlyList<string> previousEntries = options.IncludeEntries;
+
+            try
+            {
+                options.IncludeEntries = new[] { probeEntry };
+
+                ArchiveOperationResult result = await _engine.ExtractAsync(
+                        new ArchiveRequest
+                        {
+                            ArchivePath = item.ArchivePath,
+                            OutputPath = probeDirectory,
+                            Password = candidate,
+                            Progress = progress,
+                            Stalled = stalled
+                        },
+                        options,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (result.DetectedErrorType == "Cancelled" || result.Status == StatusText.Cancelled)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+
+                if (result.Success)
+                {
+                    Log(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.PasswordProbePassedLogFormat,
+                            DescribeProbeLabel(item),
+                            PasswordProbe.Describe(probeEntry, ResolveProbeEntrySize(listed, probeEntry))));
+
+                    return null;
+                }
+
+                if (result.IsWrongPassword || result.IsNeedPassword)
+                {
+                    Log(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.PasswordProbeRejectedLogFormat,
+                            DescribeProbeLabel(item),
+                            PasswordProbe.Describe(probeEntry, ResolveProbeEntrySize(listed, probeEntry))));
+
+                    return result;
+                }
+
+                // 给不出确定结论（损坏 / 权限 / 引擎怪话）：不拦，照旧解整包。
+                return null;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                // 探针自己出错不是"这个包失败"：退回整包试解。
+                return null;
+            }
+            finally
+            {
+                options.IncludeEntries = previousEntries;
+
+                try
+                {
+                    if (Directory.Exists(probeDirectory))
+                    {
+                        Directory.Delete(probeDirectory, recursive: true);
+                    }
+                }
+                catch
+                {
+                    // 删不掉只是工作区里多一个空目录（它不进产物、也不进发布）。
+                }
+            }
+        }
+
+        /// <summary>探针日志里的层标签（与候选日志同一个形状：`├ 第 N 层：包名`）。</summary>
+        private static string DescribeProbeLabel(WorkItem item) =>
+            string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.RecursionLayerLogPrefixFormat,
+                item.Depth) + Path.GetFileName(item.ArchivePath);
+
+        private static long ResolveProbeEntrySize(ArchiveListResult? listed, string probeEntry)
+        {
+            if (listed?.Entries == null)
+            {
+                return 0;
+            }
+
+            foreach (ArchiveEntry? entry in listed.Entries)
+            {
+                if (entry != null && string.Equals(entry.Path, probeEntry, StringComparison.Ordinal))
+                {
+                    return entry.Size;
+                }
+            }
+
+            return 0;
+        }
+
         /// 返回 null = 都老实待在该待的地方；否则返回第一条越界说明（给用户看的）。
         ///
         /// 判两件事：
@@ -1605,7 +1859,7 @@ namespace ArchiveFixer.Extraction
              */
             if (toProcess.Count > _limits.MaxInnerArchivesPerLayer)
             {
-                state.UnexpandedCount = toProcess.Count;
+                state.MarkUnexpanded(toProcess);
                 stopReason = RecursionStopReason.TooManyInnerArchives;
                 return false;
             }
@@ -1632,13 +1886,13 @@ namespace ArchiveFixer.Extraction
                          * 而这一层里其实还有 K 个内层包没展开 —— 他以为拿到的是最终数据。
                          * 这里是明确的停因 + 明确的数量，Summary 里会写"第 N 层还有 K 个内层包未展开"。
                          */
-                        state.UnexpandedCount = innerArchives.Count;
+                        state.MarkUnexpanded(innerArchives);
                         stopReason = RecursionStopReason.BranchNotExpanded;
                         return false;
                     }
 
                     decision = BuildDecision(item, innerArchives);
-                    state.UnexpandedCount = innerArchives.Count;
+                    state.MarkUnexpanded(innerArchives);
                     return false;
                 }
             }
@@ -1655,7 +1909,7 @@ namespace ArchiveFixer.Extraction
                  */
                 if (item.Depth + 1 >= _limits.MaxDepth)
                 {
-                    state.UnexpandedCount = toProcess.Count;
+                    state.MarkUnexpanded(toProcess);
                     stopReason = RecursionStopReason.MaxDepthReached;
                     return false;
                 }
@@ -2274,7 +2528,7 @@ namespace ArchiveFixer.Extraction
             string finalOutputDirectory,
             string extraMessage,
             bool published,
-            int unexpandedCount = 0)
+            IReadOnlyList<string>? unexpandedNames = null)
         {
             bool completed = stopReason == RecursionStopReason.Completed;
             bool partiallyCompleted = !completed && layers.Any(layer => layer.Success);
@@ -2352,6 +2606,7 @@ namespace ArchiveFixer.Extraction
                 Decision = decision,
                 Layers = layers.ToList(),
                 FinalOutputPath = finalOutputPath,
+                UnexpandedNames = unexpandedNames?.ToList() ?? new List<string>(),
                 Summary = BuildSummary(
                     stopReason,
                     layers,
@@ -2360,7 +2615,7 @@ namespace ArchiveFixer.Extraction
                     completed,
                     publishMessage,
                     extraMessage,
-                    unexpandedCount)
+                    unexpandedNames ?? Array.Empty<string>())
             };
         }
 
@@ -2581,11 +2836,11 @@ namespace ArchiveFixer.Extraction
             bool completed,
             string publishMessage,
             string extraMessage,
-            int unexpandedCount)
+            IReadOnlyList<string> unexpandedNames)
         {
             int done = layers.Count(layer => layer.Success);
 
-            string reason = DescribeStopReason(stopReason);
+            string reason = DescribeStopReason(stopReason, unexpandedNames.Count);
 
             string head = stopReason switch
             {
@@ -2613,13 +2868,21 @@ namespace ArchiveFixer.Extraction
             var parts = new List<string> { head };
 
             /*
-             * "还有多少内层包没展开"必须写出来（不变量 8）。
+             * "还有哪几个内层包没展开"必须写出来（不变量 8）。
              * 只报"已完成"而把没展开的分支咽下去，用户会以为这就是最终数据 ——
              * 这与"部分成功不得显示为成功"是同一类问题。
+             *
+             * ⚠ 2026-10-04（真机）：过去只写**个数**（"该层还有 1 个内层包未展开"），
+             * 用户看不出是哪一个 —— 他只能自己去工作区里翻。现在**点名**（前
+             * <see cref="MaxUnexpandedNameLines"/> 个，多出来的折成"…还有 K 个"）。
              */
-            if (unexpandedCount > 0)
+            if (unexpandedNames.Count > 0)
             {
-                parts.Add($"该层还有 {unexpandedCount} 个内层包未展开，需要时可对它们单独发起解压");
+                parts.Add(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.RecursionUnexpandedListFormat,
+                    unexpandedNames.Count,
+                    DescribeUnexpandedNames(unexpandedNames)));
             }
 
             if (completed && !string.IsNullOrWhiteSpace(finalOutputPath))
@@ -2653,13 +2916,62 @@ namespace ArchiveFixer.Extraction
             return string.Join("；", parts);
         }
 
-        private static string DescribeStopReason(RecursionStopReason stopReason)
+        /// <summary>
+        /// 「这一层还有哪几个内层包没展开」的名单（前 <see cref="MaxUnexpandedNameLines"/> 个，
+        /// 多出来的折成"…还有 K 个"）。
+        ///
+        /// <para>只写**文件名**（§8 隐私红线），而且用**包基名之外的原文文件名**：
+        /// 用户拿着它才能在目录里对上号（这正是"看不出是哪个"要治的那件事）。</para>
+        /// </summary>
+        private static string DescribeUnexpandedNames(IReadOnlyList<string> names)
+        {
+            var shown = new List<string>();
+
+            foreach (string name in names.Take(MaxUnexpandedNameLines))
+            {
+                string fileName = Path.GetFileName(name);
+
+                shown.Add(fileName.Length == 0 ? name : fileName);
+            }
+
+            string text = string.Join("、", shown);
+
+            if (names.Count <= shown.Count)
+            {
+                return text;
+            }
+
+            return text + string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.RecursionUnexpandedMoreFormat,
+                names.Count - shown.Count);
+        }
+
+        /// <summary>
+        /// 停因那句话。<paramref name="unexpandedCount"/> 只用于"多分支"那两档的**真实数量**。
+        ///
+        /// <para>⚠ 2026-10-04（真机）：这两档过去写死"多个"，而判据其实是
+        /// <see cref="HasOnlyInformationalSiblings"/> —— **1 个内层归档 + 它旁边还有别的文件**
+        /// 也会停在这一档，于是日志里出现"多个内层归档未展开；该层还有 **1 个**内层包未展开"
+        /// 这种自相矛盾。现在按真实数量说，并且把 1 个那一档的**真实理由**说出来。</para>
+        /// </summary>
+        private static string DescribeStopReason(RecursionStopReason stopReason, int unexpandedCount = 0)
         {
             return stopReason switch
             {
                 RecursionStopReason.Completed => "没有更多内层归档",
-                RecursionStopReason.NeedsDecision => "检测到多个内层归档，等待用户决定是否继续展开",
-                RecursionStopReason.BranchNotExpanded => "更深的层里还有多个内层归档未展开（多分支默认不展开）",
+                RecursionStopReason.NeedsDecision => unexpandedCount > 1
+                    ? string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.RecursionNeedsDecisionReasonMultipleFormat,
+                        unexpandedCount)
+                    : StatusText.RecursionNeedsDecisionReasonSingle,
+                RecursionStopReason.BranchNotExpanded => unexpandedCount > 1
+                    ? string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.RecursionBranchStopReasonMultipleFormat,
+                        unexpandedCount)
+                    : StatusText.RecursionBranchStopReasonSingle,
                 RecursionStopReason.MaxDepthReached => "已达到最大递归层数",
                 RecursionStopReason.MaxTotalFilesReached => "已达到累计输出文件数上限",
                 RecursionStopReason.MaxTotalSizeReached => "已达到累计输出总大小上限",
@@ -2798,15 +3110,41 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>
         /// 入队这一步的可变状态。用一个对象而不是三个 out 参数，
-        /// 是为了让"这一层还有几个内层包没展开"在每条提前返回的分支上都必须显式写一次 ——
-        /// 忘了写就是 0，而 0 会让 Summary 少掉那句提示，所以每处都写清楚。
+        /// 是为了让"这一层还有哪几个内层包没展开"在每条提前返回的分支上都必须显式写一次 ——
+        /// 忘了写就是空的，而空的会让 Summary 少掉那句提示，所以每处都写清楚。
+        ///
+        /// <para>⚠ 2026-10-04（真机）：过去这里只记**个数**，于是 Summary 里只有"该层还有 1 个内层包未展开"，
+        /// 用户看不出**是哪一个**（他要自己去工作区里翻）。现在**名单是唯一事实**，个数由名单长度推出来
+        /// （<see cref="UnexpandedCount"/>）—— 数与名不可能对不上。</para>
         /// </summary>
         private sealed class EnqueueState
         {
             public Queue<WorkItem> Pending { get; init; } = new();
 
-            /// <summary>本层没有入队的内层归档数量（停因是"多分支不展开"时才有意义）。</summary>
-            public int UnexpandedCount { get; set; }
+            /// <summary>本层没有入队的内层归档（停因是"多分支不展开"时才有意义）。</summary>
+            public List<string> UnexpandedNames { get; } = new();
+
+            /// <summary>本层没有入队的内层归档数量（= <see cref="UnexpandedNames"/> 的长度，⛔ 不另数一遍）。</summary>
+            public int UnexpandedCount => UnexpandedNames.Count;
+
+            /// <summary>这一层哪几个没入队（唯一写入点：四条提前返回各自调一次）。</summary>
+            public void MarkUnexpanded(IEnumerable<string>? archivePaths)
+            {
+                UnexpandedNames.Clear();
+
+                if (archivePaths == null)
+                {
+                    return;
+                }
+
+                foreach (string path in archivePaths)
+                {
+                    if (!string.IsNullOrWhiteSpace(path))
+                    {
+                        UnexpandedNames.Add(path);
+                    }
+                }
+            }
         }
 
         /// <summary>队列里的一项：一个待解的归档 + 它在第几层 + 它的工作区目录。</summary>

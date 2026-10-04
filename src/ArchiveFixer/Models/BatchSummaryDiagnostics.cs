@@ -88,6 +88,15 @@ namespace ArchiveFixer.Models
         public int HiddenCount => Math.Max(0, TotalCount - Items.Count);
 
         /// <summary>
+        /// 这一组里**定稿搬运失败**的有几个（事实位 <see cref="ArchiveTask.CommitMoveFailed"/>，⛔ 不比中文）。
+        ///
+        /// <para>为什么要它在组上（用户 2026-10-04 真机）：这一类失败**没有引擎原话**（是程序自己搬不动），
+        /// 而「其他失败」那一组的指路是"去对照引擎原话逐条看" —— 组里全是它时那句话就是错的指路。
+        /// 组注脚与「下一步」都读这一个数（同一份事实，⛔ 不各推一遍）。</para>
+        /// </summary>
+        public int CommitMoveFailedCount { get; init; }
+
+        /// <summary>
         /// 渲染成一行，形状与用户在需求里给的一致：
         /// <c>密码问题（可能是没有密码、或者密码不对）：3 个 —— a.rar、b.rar（还有 1 个）</c>。
         /// </summary>
@@ -220,7 +229,18 @@ namespace ArchiveFixer.Models
                 bucket.Add(task);
             }
 
-            if (buckets.Count == 0)
+            /*
+             * 「其余物为什么还在」逐链点名（用户 2026-10-04 真机）：那一批的日志写着
+             * 「Sociology.7z：链尾的其余物不处理（链上的「老王.apk」没有成功…）」，
+             * 可这个框里一个字都没有 —— 他在界面上看到的是"解压成功、其余物还在"。
+             *
+             * 事实位 = `ArchiveTask.RestKeptReason`（唯一写入点在协调器，读的是一句现成的话，⛔ 这里不重推）。
+             * 它**独立成行**而不是挂进某个组：链尾那一条判据可能落在**成功**的那个任务上，
+             * 而成功的任务按口径一个字都不进任何组（见 Classify 的第一条）。
+             */
+            List<string> restKeptLines = BuildRestKeptLines(list);
+
+            if (buckets.Count == 0 && restKeptLines.Count == 0)
             {
                 // 全成功（或空批）：**一个字都不写**，连标题都不许出现。
                 return new BatchSummaryReport { Severity = severity };
@@ -239,10 +259,9 @@ namespace ArchiveFixer.Models
                 {
                     Kind = kind,
                     Title = DescribeKind(kind),
-                    Note = kind == BatchProblemKind.Password
-                        ? StatusText.BatchDiagnosticsPasswordNote
-                        : DescribePartialPublishNote(bucket),
+                    Note = BuildGroupNote(kind, bucket),
                     TotalCount = bucket.Count,
+                    CommitMoveFailedCount = bucket.Count(task => task.CommitMoveFailed),
                     Items = bucket.Take(limit).Select(BuildItem).ToList()
                 });
             }
@@ -253,6 +272,17 @@ namespace ArchiveFixer.Models
             {
                 lines.Add(group.ToLine());
             }
+
+            /*
+             * 「其余物为什么还在」逐链点名（用户 2026-10-04 真机）：那一批的日志写着
+             * 「Sociology.7z：链尾的其余物不处理（链上的「老王.apk」没有成功…）」，
+             * 可这个框里一个字都没有 —— 他在界面上看到的是"解压成功、其余物还在"。
+             *
+             * 事实位 = `ArchiveTask.RestKeptReason`（唯一写入点在协调器，读的是一句现成的话，⛔ 这里不重推）。
+             * 它**独立成行**而不是挂进某个组：链尾那一条判据可能落在**成功**的那个任务上，
+             * 而成功的任务按口径一个字都不进任何组（见 Classify 的第一条）。
+             */
+            lines.AddRange(restKeptLines);
 
             string nextStep = BuildNextStepLine(groups);
 
@@ -267,6 +297,86 @@ namespace ArchiveFixer.Models
                 Groups = groups,
                 Lines = lines
             };
+        }
+
+        /// <summary>
+        /// 「其余物为什么还在」逐条那一行（没有就返回空清单，⛔ 不写空话）：
+        /// <c>· 任务名 —— 其余物没有处理：留在 …，原因：…；一个字节都没动。</c>
+        ///
+        /// <para>只读任务上那一句现成的话（<see cref="ArchiveTask.RestKeptReason"/>）——
+        /// 判据与措辞的唯一出口在协调器（<c>DescribeRestKeptNote</c>），这里只负责摆出来。</para>
+        /// </summary>
+        private static List<string> BuildRestKeptLines(List<ArchiveTask> tasks)
+        {
+            var lines = new List<string>();
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (string.IsNullOrWhiteSpace(task.RestKeptReason))
+                {
+                    continue;
+                }
+
+                lines.Add(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.BatchDiagnosticsRestKeptLineFormat,
+                    Shorten(ResolveName(task)),
+                    task.RestKeptReason.Trim()));
+            }
+
+            return lines;
+        }
+
+        /// <summary>
+        /// 这一组的注脚（可能不止一句，按"先部分完成、后定稿搬运失败"的顺序用「；」连起来；
+        /// 一句都没有时返回空串，⛔ 不写空话）。
+        ///
+        /// <para>密码那一组是固定的那一句（必须带"可能"，见 <see cref="StatusText.BatchDiagnosticsPasswordNote"/>）。</para>
+        /// </summary>
+        private static string BuildGroupNote(BatchProblemKind kind, List<ArchiveTask> bucket)
+        {
+            if (kind == BatchProblemKind.Password)
+            {
+                return StatusText.BatchDiagnosticsPasswordNote;
+            }
+
+            var notes = new List<string>();
+
+            string partialPublished = DescribePartialPublishNote(bucket);
+
+            if (!string.IsNullOrWhiteSpace(partialPublished))
+            {
+                notes.Add(partialPublished);
+            }
+
+            string commitMoveFailed = DescribeCommitMoveFailedNote(bucket);
+
+            if (!string.IsNullOrWhiteSpace(commitMoveFailed))
+            {
+                notes.Add(commitMoveFailed);
+            }
+
+            return string.Join("；", notes);
+        }
+
+        /// <summary>
+        /// 这一组里"定稿搬运失败"那几个的补充一句（没有就返回空串）。
+        ///
+        /// <para>为什么要它（用户 2026-10-04 真机）：那一批的「其他失败」里就是 `老王.apk` 这一单
+        /// 「定稿搬运失败」，而组里/「下一步」原来的说法把人指去"看引擎原话" —— 这一类失败**根本没有
+        /// 引擎原话**（引擎那一步早就成功、校验也通过了，是程序自己搬不动）。判据只读任务上的事实位
+        /// <see cref="ArchiveTask.CommitMoveFailed"/>，⛔ 不比中文文案。</para>
+        /// </summary>
+        private static string DescribeCommitMoveFailedNote(List<ArchiveTask> bucket)
+        {
+            int count = bucket.Count(task => task.CommitMoveFailed);
+
+            return count == 0
+                ? string.Empty
+                : string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.BatchDiagnosticsCommitMoveFailedNoteFormat,
+                    count);
         }
 
         /// <summary>
@@ -441,7 +551,7 @@ namespace ArchiveFixer.Models
 
             foreach (BatchProblemGroup group in groups)
             {
-                string? action = DescribeAction(group.Kind);
+                string? action = DescribeAction(group);
 
                 if (string.IsNullOrWhiteSpace(action) || phrases.Contains(action))
                 {
@@ -471,10 +581,15 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
-        /// 每一档对应的**动作**（与各档现有的处置建议同一口径：空间那几条引空间门/中途提示的说法，
+        /// 每一组对应的**动作**（与各档现有的处置建议同一口径：空间那几条引空间门/中途提示的说法，
         /// 密码那一条引"到「密码」页一键导入"）。返回 <c>null</c> = 这一档没有需要用户做的事。
+        ///
+        /// <para>⚠ 「其他失败」那一档**按事实分派**（用户 2026-10-04 真机）：组里全是**定稿搬运失败**时，
+        /// 原来那句"对照…引擎原话逐条看"就是错的指路（这一类失败没有引擎原话）⇒ 换成
+        /// <see cref="StatusText.BatchDiagnosticsActionCommitMoveFailed"/>；
+        /// 混合档与引擎类失败**照旧用原句**（⛔ 一个字都没删，它对引擎类失败是对的）。</para>
         /// </summary>
-        private static string? DescribeAction(BatchProblemKind kind) => kind switch
+        private static string? DescribeAction(BatchProblemGroup group) => group.Kind switch
         {
             BatchProblemKind.DiskSpace => StatusText.BatchDiagnosticsActionDiskSpace,
             BatchProblemKind.Password => StatusText.BatchDiagnosticsActionPassword,
@@ -483,7 +598,9 @@ namespace ArchiveFixer.Models
             BatchProblemKind.AccessDenied => StatusText.BatchDiagnosticsActionAccessDenied,
             BatchProblemKind.OutputConflict => StatusText.BatchDiagnosticsActionOutputConflict,
             BatchProblemKind.SourceChanged => StatusText.BatchDiagnosticsActionSourceChanged,
-            BatchProblemKind.Other => StatusText.BatchDiagnosticsActionOther,
+            BatchProblemKind.Other => group.CommitMoveFailedCount > 0 && group.CommitMoveFailedCount == group.TotalCount
+                ? StatusText.BatchDiagnosticsActionCommitMoveFailed
+                : StatusText.BatchDiagnosticsActionOther,
             BatchProblemKind.PartiallyCompleted => StatusText.BatchDiagnosticsActionPartiallyCompleted,
             BatchProblemKind.Cancelled => StatusText.BatchDiagnosticsActionNotFinished,
             BatchProblemKind.NotReached => StatusText.BatchDiagnosticsActionNotFinished,

@@ -792,6 +792,25 @@ namespace ArchiveFixer.Services
             PersistPasswordList();
         }
 
+        /// <summary>
+        /// **本批开工**：把"本批已成功的密码"清空（用户 2026-10-04 的口径）。
+        ///
+        /// <para>用户原话：「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
+        /// 不同次文件一律严格按我列表顺序**」⇒ "复用本批已成功的密码"这一档
+        /// **只在本批内生效**：⛔ 不许写回设置、⛔ 不许影响下一批。</para>
+        ///
+        /// <para>唯一调用点 = <c>ExtractionCoordinator.StartExtractAsync</c> 批首那一串清零
+        /// （与"本批的密码失败登记从零开始"同一处）—— 一批只清一次，所以一键处理同一批里
+        /// 后面的包照旧复用前面刚解开的密码。</para>
+        /// </summary>
+        public void BeginBatch()
+        {
+            lock (_passwordStatsLock)
+            {
+                _batchVerifiedPasswords.Clear();
+            }
+        }
+
         /// <summary>这条密码成功解开过多少次（0 = 没有记录）。给测试与排障用。</summary>
         public int GetSuccessCount(string? password)
         {
@@ -813,6 +832,13 @@ namespace ArchiveFixer.Services
         /// 用户原话："我这个在用特定解压，是多相同文件，密码都是一样的，你这个复用本批次已成功的密码，
         /// 不就是在放屁吗，每次都是重新一轮密码检测"。有已知密码时，空密码**根本不再进候选**
         /// （加密包的空密码永远不可能对，见第 37 条实测）。</para>
+        /// </summary>
+        /// <summary>
+        /// 「本批已成功的密码」这一档的**唯一出口**（候选顺序读它）——
+        /// 顺序 = 本批内首次成功的先后；每批开工由 <see cref="BeginBatch"/> 清空。
+        ///
+        /// <para>⛔ 这里（以及任何读它的地方）都不许再按**历史成功次数**排序：那是跨任务重排，
+        /// 用户 2026-10-04 明确否掉（"不同次文件一律严格按我列表顺序"）。</para>
         /// </summary>
         public IReadOnlyList<string> BatchVerifiedPasswords
         {
@@ -908,8 +934,13 @@ namespace ArchiveFixer.Services
              *
              * ⛔ 保留的边界：本批**还没有**成功过密码时，顺序与从前逐字相同（空密码仍在最前，`tryEmptyFirst` 说了算）——
              * 第一条候选怎么来的这件事不许变，否则"第一条就是密码本第一条"这类现场会再次说不清。
+             *
+             * ⚠ 2026-10-04（用户当天第二次口述，推翻 2026-09-24 第 14 条那一半）：
+             * 「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
+             * 不同次文件一律严格按我列表顺序**」⇒ 这一档只保留**本批内**的复用（`BeginBatch` 每批清一次），
+             * ⛔ 不再按历史成功次数排序（那正是跨任务重排）。
              */
-            IReadOnlyList<string> verifiedPasswords = OrderBySuccessCount(BatchVerifiedPasswords, value => value)
+            IReadOnlyList<string> verifiedPasswords = BatchVerifiedPasswords
                 .Where(value => !string.IsNullOrEmpty(value))
                 .ToList();
 
@@ -921,7 +952,7 @@ namespace ArchiveFixer.Services
             }
 
             /*
-             * 多条时按成功次数从多到少（次数相同按首次成功的先后）—— 与同层级排序同一口径。
+             * 本批内先成功的先试（顺序 = 首次成功的先后）—— ⛔ 不再读历史成功次数（那是跨任务的口径）。
              */
             foreach (string verified in verifiedPasswords)
             {
@@ -934,7 +965,11 @@ namespace ArchiveFixer.Services
                 AddCandidate(recentPassword ?? string.Empty, "RecentSuccess", "本任务最近成功的密码");
             }
 
-            foreach (PasswordEntry entry in OrderBySuccessCount(MatchMappedEntries(archiveFileName), entry => entry.Password))
+            /*
+             * 密码本里按归档名命中的那几条：**按密码本自己的顺序**（用户 2026-10-04 的口径：
+             * 不同次文件一律严格按列表顺序，⛔ 不许按历史成功次数重排）。
+             */
+            foreach (PasswordEntry entry in MatchMappedEntries(archiveFileName))
             {
                 string remark = string.IsNullOrWhiteSpace(entry.Name)
                     ? "密码本命中"
@@ -956,10 +991,14 @@ namespace ArchiveFixer.Services
             if (passwordList != null)
             {
                 /*
-                 * 密码列表这一层：先按**成功次数从多到少**排，再逐个加进候选。
+                 * 密码列表这一层：**严格按用户在④页排的顺序**逐条加进候选。
                  *
-                 * 原始序号（"密码列表第 N 项"）跟着一起带过去：备注里写的是它在**用户列表里**的位置，
-                 * 而不是排序后的位置 —— 用户拿着日志回列表里找那一条时才找得到。
+                 * ⚠ 2026-10-04（用户当天第二次口述）：这里过去是"先按成功次数从多到少排"，
+                 * 用户原话：「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
+                 * 不同次文件一律严格按我列表顺序**」⇒ **不同次任务之间一个字都不许重排**。
+                 * （历史成功次数仍然记账、仍然落盘、`GetSuccessCount` 仍然可查 —— 只是不再拿它改顺序。）
+                 *
+                 * 原始序号（"密码列表第 N 项"）= 它在**用户列表里**的位置，现在也正好就是尝试顺序。
                  */
                 var indexed = new List<(PasswordItem Item, int Index)>();
 
@@ -977,9 +1016,7 @@ namespace ArchiveFixer.Services
                     indexed.Add((item, index));
                 }
 
-                foreach ((PasswordItem item, int originalIndex) in OrderBySuccessCount(
-                    indexed,
-                    pair => pair.Item.Value))
+                foreach ((PasswordItem item, int originalIndex) in indexed)
                 {
                     /*
                      * 注意：

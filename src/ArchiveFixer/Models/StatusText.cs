@@ -1088,6 +1088,163 @@ namespace ArchiveFixer.Models
         public const string ChainRestBlockedRestMissingFormat = "记下来的其余物目录已经不在盘上（{0}）";
 
         // ================================================================
+        // 定稿搬运失败的原因（用户 2026-10-04 真机：原因被程序自己丢掉）
+        // ================================================================
+        //
+        // 现场：`老王.apk` 那一单「定稿搬运失败，产物没能写进输出目录」，日志与①页「错误信息」列
+        // 都只写着「10 项没能搬运」—— 明细（文件名 + 原因原文）在收集处就已经拿到了，却在
+        // `CommitFailed` 的提前 return 那条路上被丢掉，用户拿不到任何可行动的线索。
+        // 这一组常量就是那句话的唯一出口（①页「错误信息」列与日志读的是**同一份**文字）。
+
+        /// <summary>定稿搬运整体失败那句话的开头（后接定稿摘要 + 明细）。</summary>
+        public const string FinalizeMoveFailedPrefix = "定稿搬运失败，产物没能写进输出目录：";
+
+        /// <summary>
+        /// 定稿摘要里补上**明细**那一节：<c>{0}</c> = 最多列几条，<c>{1}</c> = 明细串。
+        ///
+        /// <para>上限与「本次内容物」同一个数字（前 5 条足够定性），多出来的折成
+        /// <see cref="FinalizeMoveFailureHiddenFormat"/> —— ⛔ 不许只写个数。</para>
+        /// </summary>
+        public const string FinalizeMoveFailureDetailFormat = "；没能搬运的前 {0} 项：{1}";
+
+        /// <summary>明细被截断时那一句（<c>{0}</c> = 还有几项没列出来）。</summary>
+        public const string FinalizeMoveFailureHiddenFormat = "（还有 {0} 项没列出来）";
+
+        // ================================================================
+        // 逐层回收那一句（同一次真机：定稿失败时它还写着"已当场回收"）
+        // ================================================================
+        //
+        // 现场：续解层「定稿搬运失败」之后，日志照样写着「这一层的过程物已按『删除操作 = 彻底删除』
+        // 当场回收」—— 而回收判据（定稿成功 / 可证完整 / 半套分卷闸门）一个都没过，
+        // 那一层的过程物**原封不动躺在盘上**。这一组常量把"已回收"改成**按事实说**。
+
+        /// <summary>真的删掉了这一层的过程物时才写这一句（唯一判据 = <c>SourcePackageMove == Done</c>）。</summary>
+        public const string LayerProcessReclaimedFormat =
+            "{0}：这一层的过程物已按「删除操作 = 彻底删除」当场回收（逐层回收）；"
+            + "最外层源包留到整条续解链跑完后处理。";
+
+        /// <summary>
+        /// 没回收时那一句（措辞就是结论，⛔ 不许在"没删"时说"已回收"）：
+        /// <c>{0}</c> = 任务名，<c>{1}</c> = 没回收的原因（见下面三条）。
+        /// </summary>
+        public const string LayerProcessNotReclaimedFormat =
+            "{0}：这一层的过程物没有回收（{1}）；最外层源包留到整条续解链跑完后处理。";
+
+        /// <summary>没回收的原因之一：这一层自己没跑成（定稿搬运失败 / 校验没通过 / 已取消…）。{0} = 状态。</summary>
+        public const string LayerReclaimLayerFailedReasonFormat =
+            "这一层自己没跑成（{0}）：过程物一个字节都没动，原因见①页「错误信息」列";
+
+        /// <summary>没回收的原因之二：这一层跑成了，但回收判据没放行（完整性 / 半套分卷那几道闸门）。</summary>
+        public const string LayerReclaimGateBlockedReason =
+            "回收判据没放行：原因见这一层那行 WARN / ERROR";
+
+        /// <summary>没回收的原因之三：删了一部分、没删完（占用 / 只读 / 权限）。</summary>
+        public const string LayerReclaimPartialBlockedReason =
+            "只删掉了一部分、没删完：原因见这一层那行 ERROR";
+
+        // ================================================================
+        // 递归停因：未展开的内层包（用户 2026-10-04 真机：写死"多个"、还看不出是哪个）
+        // ================================================================
+        //
+        // 现场：`第6集.7z` 那一单的日志写着「停在第 3 层，原因：更深的层里还有**多个**内层归档未展开
+        // （多分支默认不展开）；该层还有 **1 个**内层包未展开」—— 数量自相矛盾，而且**是哪一个**一个字都没有。
+        // 真实判据不是"有多个"，而是"同层除该包以外不全是说明类文件"（`HasOnlyInformationalSiblings`）：
+        // **1 个内层归档 + 它旁边还有别的文件**也会停在这一档。
+
+        /// <summary>
+        /// 未展开那一句：<c>{0}</c> = 个数，<c>{1}</c> = 点名（前几个 + "…还有 K 个"）。
+        /// </summary>
+        public const string RecursionUnexpandedListFormat =
+            "该层还有 {0} 个内层包未展开（{1}），需要时可对它们单独发起解压";
+
+        /// <summary>名单被截断时那半句（<c>{0}</c> = 还有几个没列出来）。</summary>
+        public const string RecursionUnexpandedMoreFormat = "…还有 {0} 个";
+
+        /// <summary>停因（多分支那一档，真有多个时）：<c>{0}</c> = 真实个数。</summary>
+        public const string RecursionBranchStopReasonMultipleFormat =
+            "更深的层里还有 {0} 个内层归档未展开（多分支默认不展开）";
+
+        /// <summary>
+        /// 停因（多分支那一档，其实只有 1 个时）：真正的原因是**它旁边还有别的文件** ——
+        /// 程序不替用户决定"那个包算不算主角"。
+        /// </summary>
+        public const string RecursionBranchStopReasonSingle =
+            "更深的层里还有 1 个内层归档未展开（它旁边还有别的文件，不是一条单链 —— 程序不替你决定要不要继续解）";
+
+        /// <summary>停因（等待用户决定那一档，真有多个时）。</summary>
+        public const string RecursionNeedsDecisionReasonMultipleFormat =
+            "检测到 {0} 个内层归档，等待用户决定是否继续展开";
+
+        /// <summary>停因（等待用户决定那一档，其实只有 1 个时）。</summary>
+        public const string RecursionNeedsDecisionReasonSingle =
+            "检测到 1 个内层归档（它旁边还有别的文件，不是一条单链），要不要继续展开请你决定";
+
+        /// <summary>
+        /// 一键处理档里"这一层有内层归档、但按保守档没展开"那一行（**真有多个**内层归档时）：
+        /// <c>{0}</c> = 任务名，<c>{1}</c> = 个数。
+        /// </summary>
+        public const string RecursionBranchHeldBackMultipleFormat =
+            "{0}：这一层里有 {1} 个内层归档（多分支）——"
+            + "一键处理不弹确认框，按保守档只保留当前这一层的结果；要展开就再手动解一次。";
+
+        /// <summary>
+        /// 同一行，但这一层其实**只有 1 个**内层归档 —— 那真正的原因是
+        /// "它旁边还有别的文件（不是一条单链）"，⛔ 不许再说"多个 /（多分支）"。
+        /// <c>{0}</c> = 任务名。
+        /// </summary>
+        public const string RecursionBranchHeldBackSingleFormat =
+            "{0}：这一层里除了那个内层归档还有别的文件（不是一条单链）——"
+            + "程序不替你决定要不要继续解；一键处理按保守档只保留当前这一层的结果，要展开就再手动解一次。";
+
+        /// <summary>
+        /// 停在半路之后「下一步该怎么办」那一句的前半（**真有多个**内层包没展开）：
+        /// <c>{0}</c> = 任务名，<c>{1}</c> = 没展开的个数。
+        /// </summary>
+        public const string RecursionBranchAdviceMultipleFormat =
+            "{0}：这一单里有 {1} 个内层包没展开（多分支默认不展开），所以停在了半路。";
+
+        /// <summary>
+        /// 同一句，但只有 1 个内层包没展开 —— 真实原因是"它旁边还有别的文件"。
+        /// <c>{0}</c> = 任务名。
+        /// </summary>
+        public const string RecursionBranchAdviceSingleFormat =
+            "{0}：这一单里那个内层包旁边还有别的文件（不是一条单链），"
+            + "程序不替你决定要不要继续解，所以停在了半路。";
+
+        /// <summary>
+        /// 「两条出路」那半句（措辞与原来逐字相同，两个停因共用）—— ⛔ 一个字都没改。
+        /// </summary>
+        public const string RecursionBranchAdviceTail =
+            "两条出路：① 想一次解到底 —— ②页 →「嵌套与压缩包」把那一档改成「展开所有分支」"
+            + "（也可以把「最大嵌套层数」调大）后，单独重跑这一单；"
+            + "② 只想先把已经解出来的东西留下 —— ③页打开「失败时保留中间产物」，"
+            + "产物就留在上面那个暂存目录里。";
+
+        // ================================================================
+        // 递归路的两条省时判据（用户 2026-10-04 真机；判据仍是 PasswordProbe 那一份）
+        // ================================================================
+        //
+        // 现场：真机日志「第 0 层：第6集.zip：开始解压，密码候选 1/10，尝试空密码」——
+        // 递归这条路过去**既不免掉空密码、也没有"先解最小条目"的探针**，
+        // 于是每个候选都是一次完整解压（大包 = 几十分钟白跑），而单层路径 2026-09-25 就修好了。
+        // 措辞与单层路径同一口径，⛔ 判据不另写一份（都走 `Extraction/PasswordProbe`）。
+
+        /// <summary>
+        /// 递归层里"整包已加密 ⇒ 跳过空密码"那一行：<c>{0}</c> = 层标签，<c>{1}</c> = 还有几个候选可试。
+        /// </summary>
+        public const string RecursionSkippedEmptyPasswordLogFormat =
+            "{0}：整包已加密 —— 跳过「空密码」这一档（引擎造不出用空密码加密的包，试它必然白跑一整包）；"
+            + "还有 {1} 个候选可试。";
+
+        /// <summary>密码预检通过那一行（只解了最小那个条目）：<c>{0}</c> = 层标签，<c>{1}</c> = 条目说明。</summary>
+        public const string PasswordProbePassedLogFormat =
+            "{0}：密码预检通过（只解了 {1}）—— 接着解整包。";
+
+        /// <summary>密码预检不通过那一行（那个候选不对，整包一个字节都没动）。</summary>
+        public const string PasswordProbeRejectedLogFormat =
+            "{0}：密码预检不通过（只解了 {1}，没有解整包）—— 这个候选不对。";
+
+        // ================================================================
         // 工作区残留（用户 2026-09-24 第 22 条）
         // ================================================================
         //
@@ -1564,10 +1721,32 @@ namespace ArchiveFixer.Models
         ///
         /// <para>改之前写的是"密码只存在内存里" —— 那是 2026-09-24 之前的实话，现在已经不准确了；
         /// 界面上留着一句过期的话，比没有那句话更糟（用户会照着它做判断）。</para>
+        ///
+        /// <para>⚠ 2026-10-04（真机）又改了一次：原来写"列表自上而下就是尝试顺序"，而**事实不是**——
+        /// 空密码优先（<c>TryEmptyPasswordFirst</c> 默认开），列表内部按**历史成功次数从多到少**排
+        /// （<c>PasswordService.OrderBySuccessCount</c>），这张表的顺序只在次数相同时才生效。
+        /// 用户按表头那句话去推理"为什么试了这么多条"，推出来的结论必然是错的。</para>
+        ///
+        /// <para>⚠ 2026-10-04 第二次口述（当天）：用户明确否掉了"跨任务按成功次数排序"——
+        /// 「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
+        /// 不同次文件一律严格按我列表顺序**」⇒ 表里就是严格顺序，"按成功次数排"这一档**已被删掉**。</para>
         /// </summary>
         public const string PasswordListPrivacyHint =
             "列表按本机加密保存（机器范围 DPAPI，跟 Windows 账号无关；关掉「记住密码列表」则只在本次运行内有效）；"
-            + "日志不记明文。导入时保留密码中的空格；列表自上而下就是尝试顺序。";
+            + "日志不记明文。导入时保留密码中的空格。"
+            + "⚠ 实际尝试顺序：先试一次空密码，再试密码本里命中名称的，最后严格按这张表自上而下的顺序逐条试；"
+            + "同一批里前面刚解开的密码会先试一次（只在本次运行内，下一批回到这张表的顺序）。";
+
+        /// <summary>
+        /// ④页那张表的列头（**必须与真实顺序一致**，用户 2026-10-04 真机 + 当天第二次口述）。
+        /// </summary>
+        public const string PasswordListOrderHeader = "密码（严格按本表顺序尝试）";
+
+        /// <summary>
+        /// 「上移 / 下移」按钮的提示 —— 这张表的顺序**就是尝试顺序**（用户 2026-10-04 第二次口述后
+        /// 不再有"按成功次数排序"那一档）。
+        /// </summary>
+        public const string PasswordListMoveHint = "越靠前的越先被尝试（这张表的顺序就是尝试顺序）";
 
         /// <summary>密码列表窗口顶部的"当前列表"摘要：总数 / 启动时由记忆恢复的条数 / 记住的密码本本数。</summary>
         public const string PasswordListMemorySummaryFormat =
@@ -2268,6 +2447,43 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string BatchDiagnosticsActionPartiallyCompleted =
             "做了一半的那些（内容物是好的，再点一次「一键处理」把它收尾）";
+
+        /// <summary>
+        /// 「下一步」：**定稿搬运失败**那一档。
+        ///
+        /// <para>为什么要单独一句（用户 2026-10-04 真机）：那一批的「下一步」只写了
+        /// <see cref="BatchDiagnosticsActionOther"/>，而它让人去"看引擎原话" —— 定稿搬运失败
+        /// **根本没有引擎原话**（它是程序自己搬不动，原因由程序写在①页「错误信息」列里）。
+        /// 指路指错方向，用户翻遍日志也找不到那句话。</para>
+        ///
+        /// <para>⛔ <see cref="BatchDiagnosticsActionOther"/> 一个字都不许删：它对引擎类失败是对的；
+        /// 这一句只在"那一组全是定稿搬运失败"时顶替它（判据 = <c>ArchiveTask.CommitMoveFailed</c>）。</para>
+        /// </summary>
+        public const string BatchDiagnosticsActionCommitMoveFailed =
+            "定稿搬运失败的那些（这一类失败没有引擎原话：原因就在①页「错误信息」列）";
+
+        /// <summary>
+        /// 「其他失败」那一组的注脚：组里混着引擎类失败与定稿搬运失败时，把后者单独点出来
+        /// （混合档下「下一步」照旧用 <see cref="BatchDiagnosticsActionOther"/>，靠这一句补充指路）。
+        /// <c>{0}</c> = 其中定稿搬运失败的有几个。
+        /// </summary>
+        public const string BatchDiagnosticsCommitMoveFailedNoteFormat =
+            "其中 {0} 个是定稿搬运失败（这一类失败没有引擎原话，原因在①页「错误信息」列）";
+
+        /// <summary>
+        /// 「其余物为什么原封不动地留着」那一句（**唯一出口**：①页「错误信息」列、批末诊断、
+        /// 失败清单三处打印的是同一份文字）。
+        ///
+        /// <para>用户 2026-10-04 真机：日志里写着「链尾的其余物不处理（链上的「老王.apk」没有成功…）」，
+        /// 而界面上只看到"解压成功、其余物还在"。<c>{0}</c> = 其余物目录，<c>{1}</c> = 原因。</para>
+        /// </summary>
+        public const string RestKeptNoteFormat = "其余物没有处理：留在 {0}，原因：{1}；一个字节都没动。";
+
+        /// <summary>同一句，但这一单没记下其余物目录（只写得清原因）。<c>{0}</c> = 原因。</summary>
+        public const string RestKeptNoteNoPathFormat = "其余物没有处理：{0}；一个字节都没动。";
+
+        /// <summary>批末诊断里那一行（<c>{0}</c> = 任务名，<c>{1}</c> = <see cref="RestKeptNoteFormat"/>）。</summary>
+        public const string BatchDiagnosticsRestKeptLineFormat = "· {0} —— {1}";
 
         /// <summary>日志里逐组那一行的前缀（弹窗里是「·」，日志里带个来源标记更好搜）。</summary>
         public const string BatchDiagnosticsLogPrefix = "批末诊断：";

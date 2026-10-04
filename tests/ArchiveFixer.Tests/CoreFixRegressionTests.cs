@@ -247,8 +247,15 @@ namespace ArchiveFixer.Tests
 
         // ────────────────────────── P2：更深的层多分支不得静默 ──────────────────────────
 
+        /// <summary>
+        /// 更深的层出现多分支 ⇒ 停下，而且**按真实数量说、还点名是哪几个没展开**
+        /// （用户 2026-10-04 真机：过去只写"该层还有 N 个内层包未展开"，N 与"多个"还互相打架）。
+        ///
+        /// <para><b>红检</b>：把 <c>BuildSummary</c> 里的名单/数量换回写死的"多个"
+        /// ⇒ 本用例当场红（`Assert.Contains() Failure: 还有 2 个内层归档未展开`）。</para>
+        /// </summary>
         [Fact]
-        public async Task 更深的层出现多分支_停下来并说清还有几个没展开()
+        public async Task 更深的层出现多分支_停下来按真实数量说并点名没展开的包()
         {
             string archivePath = Path.Combine(_root, "branches.7z");
             File.WriteAllBytes(archivePath, new byte[256]);
@@ -261,7 +268,150 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(RecursionStopReason.BranchNotExpanded, result.StopReason);
             Assert.False(result.Completed);
-            Assert.Contains("未展开", result.Summary, StringComparison.Ordinal);
+
+            // 真实数量（不是写死的"多个"）。
+            Assert.Contains("还有 2 个内层归档未展开", result.Summary, StringComparison.Ordinal);
+
+            // 点名：用户要能拿这两个名字去目录里对上号。
+            Assert.Equal(2, result.UnexpandedNames.Count);
+            Assert.Contains("a.7z", result.Summary, StringComparison.Ordinal);
+            Assert.Contains("b.7z", result.Summary, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **只有 1 个**内层归档、可它旁边还有个别的东西（非说明类文件）⇒ 同样停在这一档，
+        /// 而措辞**不许**说"多个 / 多分支"：真实原因是"它旁边还有别的文件，程序不替你决定"。
+        ///
+        /// <para>真机 `第6集.7z` 就是这个形状（日志自相矛盾地写着"多个…；该层还有 **1 个**内层包未展开"）。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>DescribeStopReason(BranchNotExpanded)</c> 改回写死的"多个"
+        /// ⇒ 本用例当场红（`Assert.DoesNotContain() Failure: 多个`）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 更深的层只1个内层归档但旁边有别的文件_不许说多个()
+        {
+            string archivePath = Path.Combine(_root, "single-branch.7z");
+            File.WriteAllBytes(archivePath, new byte[256]);
+
+            RecursionResult result = await RunRecursiveAsync(
+                archivePath,
+                "branch-single",
+                new SingleInnerWithSiblingEngine(),
+                Path.Combine(_root, "out_branch_single"));
+
+            Assert.Equal(RecursionStopReason.BranchNotExpanded, result.StopReason);
+            Assert.Single(result.UnexpandedNames);
+
+            // 数量如实：1 个。
+            Assert.Contains("还有 1 个内层归档未展开", result.Summary, StringComparison.Ordinal);
+
+            // ⛔ 不许说"多个 / 多分支"（这一层只有一个内层包）。
+            Assert.DoesNotContain("个内层归档未展开（多分支", result.Summary, StringComparison.Ordinal);
+
+            // 真实理由必须说出来，而且点名是哪一个。
+            Assert.Contains("它旁边还有别的文件", result.Summary, StringComparison.Ordinal);
+            Assert.Contains("a.7z", result.Summary, StringComparison.Ordinal);
+        }
+
+        // ────────────────────────── 递归路的密码两条省时判据（2026-10-04 真机） ──────────────────────────
+
+        /// <summary>
+        /// **递归层里整包加密时不试空密码**（用户 2026-10-04 真机：真机日志第一行就是
+        /// 「第 0 层：第6集.zip：开始解压，密码候选 1/10，尝试空密码」—— 一个字节都解不出来还白跑一整包）。
+        ///
+        /// <para>判据与单层路径**同一个出口**（<c>PasswordProbe.ShouldSkipEmptyPassword</c>）。</para>
+        ///
+        /// <para><b>红检</b>：把递归候选循环里那一段撤掉 ⇒ 本用例当场红
+        /// （`Assert.DoesNotContain() Failure: 空密码被真的拿去解过整包`）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 递归层_整包加密时不试空密码()
+        {
+            string archivePath = Path.Combine(_root, "encrypted.7z");
+            File.WriteAllBytes(archivePath, new byte[256]);
+
+            var engine = new EncryptedPackageEngine();
+
+            RecursionResult result = await RunRecursiveAsync(
+                archivePath,
+                "encrypted",
+                engine,
+                Path.Combine(_root, "out_encrypted"),
+                new[] { string.Empty, "占位密码" });
+
+            // ① ⛔ 空密码那一次**根本没有解过整包**（白跑一整包正是要治的）。
+            Assert.DoesNotContain(engine.ExtractCalls, call => string.IsNullOrEmpty(call));
+
+            // ② 真的有别的候选被试过（不是"什么都没跑"）。
+            Assert.Contains(engine.ExtractCalls, call => !string.IsNullOrEmpty(call));
+
+            Assert.NotNull(result);
+        }
+
+        /// <summary>
+        /// **只有一个空密码候选时不许跳**（与单层路径同一条边界）：跳了会让收场落到
+        /// 一句更难懂的"未知解压失败"，比多跑一次更糟。
+        /// </summary>
+        [Fact]
+        public async Task 递归层_只有空密码候选时照旧要试()
+        {
+            string archivePath = Path.Combine(_root, "encrypted-only-empty.7z");
+            File.WriteAllBytes(archivePath, new byte[256]);
+
+            var engine = new EncryptedPackageEngine();
+
+            RecursionResult result = await RunRecursiveAsync(
+                archivePath,
+                "encrypted-only-empty",
+                engine,
+                Path.Combine(_root, "out_encrypted_only_empty"),
+                new[] { string.Empty });
+
+            Assert.Contains(engine.ExtractCalls, call => string.IsNullOrEmpty(call));
+
+            Assert.NotNull(result);
+        }
+
+        /// <summary>
+        /// **递归层里先只解最小的那个条目（探针），探针说密码不对就不再解整包**（同一天真机）。
+        /// 判据同样只有 <c>Extraction/PasswordProbe</c> 一份。
+        ///
+        /// <para><b>红检</b>：把递归候选循环里那次 <c>ProbeCandidateAsync</c> 撤掉 ⇒ 本用例当场红
+        /// （探针之后仍然解了整包）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 递归层_探针不通过就不解整包()
+        {
+            // ⚠ 1 MiB 的"包"：清单自述 64 MiB（探针门槛）时展开比 ≈ 64 倍 —— 不触发压缩炸弹闸门（500 倍）。
+            string archivePath = Path.Combine(_root, "probe.7z");
+            File.WriteAllBytes(archivePath, new byte[1024 * 1024]);
+
+            var engine = new ProbeRejectingEngine();
+            var log = new List<(string Level, string Message)>();
+
+            RecursionResult result = await RunRecursiveAsync(
+                archivePath,
+                "probe",
+                engine,
+                Path.Combine(_root, "out_probe"),
+                new[] { "占位密码" },
+                log);
+
+            // ① 探针（只解最小条目）跑过。
+            Assert.True(
+                engine.ProbeEntryCalls.Count > 0,
+                $"探针一次都没被调用：stop={result.StopReason} layers={result.Layers.Count} "
+                + $"listCalls={engine.ListCalls} fullExtracts={engine.FullExtractCalls.Count} summary={result.Summary}");
+
+            // ② ⛔ 探针说不通过之后**没有再去解整包**。
+            Assert.Empty(engine.FullExtractCalls);
+
+            // ③ 日志里如实写着"密码预检不通过"。
+            Assert.Contains(
+                log,
+                entry => entry.Message.Contains("密码预检不通过", StringComparison.Ordinal));
+
+            Assert.NotNull(result);
         }
 
         // ────────────────────────── 工具方法 ──────────────────────────
@@ -270,7 +420,9 @@ namespace ArchiveFixer.Tests
             string archivePath,
             string tag,
             IArchiveEngine? engine = null,
-            string? output = null)
+            string? output = null,
+            IReadOnlyList<string>? passwordCandidates = null,
+            List<(string Level, string Message)>? log = null)
         {
             string? previousRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
 
@@ -283,7 +435,9 @@ namespace ArchiveFixer.Tests
                 var extractor = new RecursiveExtractor(
                     effectiveEngine,
                     new MagicArchiveProber(),
-                    _ => new[] { string.Empty });
+                    _ => passwordCandidates ?? new[] { string.Empty },
+                    log: log == null ? null : (level, message) => log.Add((level, message)));
+
                 return await extractor.ExtractAsync(
                     new ArchiveTask(archivePath),
                     output ?? Path.Combine(_root, "out_" + tag),
@@ -625,6 +779,221 @@ namespace ArchiveFixer.Tests
             private static void WriteFake7z(string path)
             {
                 File.WriteAllBytes(path, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04 });
+            }
+        }
+
+        /// <summary>
+        /// 假引擎（2026-10-04 真机那一档）：第 1 层只解出 **1 个**内层归档 + 一个**非说明类**文件
+        /// （`movie.mp4`）⇒ 按既有判据"不是单链"，多分支那一档停下，而没展开的**只有 1 个**。
+        /// </summary>
+        private sealed class SingleInnerWithSiblingEngine : IArchiveEngine
+        {
+            public string Id => "single-inner-with-sibling";
+
+            public string DisplayName => "单内层包+旁文件假引擎（仅测试用）";
+
+            public string Version => "0.0";
+
+            public bool IsAvailable => true;
+
+            public EngineCapabilities Capabilities { get; } = new();
+
+            public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                Task.FromResult(new ArchiveProbeResult { IsArchive = true, Format = "7Z" });
+
+            public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                Task.FromResult(new ArchiveListResult
+                {
+                    Success = true,
+                    FileCount = 1,
+                    TotalUncompressedSize = 16,
+                    EngineId = Id,
+                    EngineVersion = Version
+                });
+
+            public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
+
+            public Task<ArchiveOperationResult> ExtractAsync(
+                ArchiveRequest request,
+                ExtractOptions options,
+                CancellationToken cancellationToken = default)
+            {
+                string outputPath = request.OutputPath ?? string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(outputPath))
+                {
+                    Directory.CreateDirectory(outputPath);
+
+                    if (request.ArchivePath.EndsWith("single-branch.7z", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 第 0 层：一个内层包（单链，自动往下走）。
+                        WriteFake7z(Path.Combine(outputPath, "level1.7z"));
+                    }
+                    else
+                    {
+                        // 第 1 层：**1 个**内层归档 + 一个非说明类文件 ⇒ 不是单链（但没展开的只有 1 个）。
+                        WriteFake7z(Path.Combine(outputPath, "a.7z"));
+                        File.WriteAllBytes(Path.Combine(outputPath, "movie.mp4"), new byte[64]);
+                    }
+                }
+
+                return Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
+            }
+
+            private static void WriteFake7z(string path)
+            {
+                File.WriteAllBytes(path, new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04 });
+            }
+        }
+
+        /// <summary>
+        /// 假引擎（B9）：清单说"整包加密"，解压只有**非空候选**才成功；
+        /// 记下每次解压用的是哪个候选 —— 用例据此断言"空密码一次都没被拿去解整包"。
+        /// </summary>
+        private sealed class EncryptedPackageEngine : IArchiveEngine
+        {
+            public List<string> ExtractCalls { get; } = new();
+
+            public string Id => "encrypted-package";
+
+            public string DisplayName => "加密包假引擎（仅测试用）";
+
+            public string Version => "0.0";
+
+            public bool IsAvailable => true;
+
+            public EngineCapabilities Capabilities { get; } = new();
+
+            public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                Task.FromResult(new ArchiveProbeResult { IsArchive = true, Format = "7Z" });
+
+            public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                Task.FromResult(new ArchiveListResult
+                {
+                    Success = true,
+                    IsEncrypted = true,
+                    FileCount = 1,
+                    TotalUncompressedSize = 8,
+                    EngineId = Id,
+                    EngineVersion = Version
+                });
+
+            public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
+
+            public Task<ArchiveOperationResult> ExtractAsync(
+                ArchiveRequest request,
+                ExtractOptions options,
+                CancellationToken cancellationToken = default)
+            {
+                string password = request.Password ?? string.Empty;
+                ExtractCalls.Add(password);
+
+                if (string.IsNullOrEmpty(password))
+                {
+                    return Task.FromResult(new ArchiveOperationResult
+                    {
+                        Success = false,
+                        Status = StatusText.WrongPassword,
+                        Message = "Wrong password",
+                        DetectedErrorType = "WrongPassword"
+                    });
+                }
+
+                string outputPath = request.OutputPath ?? string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(outputPath))
+                {
+                    Directory.CreateDirectory(outputPath);
+                    File.WriteAllText(Path.Combine(outputPath, "payload.txt"), "内容\n", Utf8NoBom);
+                }
+
+                return Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
+            }
+        }
+
+        /// <summary>
+        /// 假引擎（B9 探针）：清单说加密、总量够大（&gt; 64 MiB）⇒ 值得做探针；
+        /// **探针一律报密码不对**，整包解压一次都不该发生。记下两类调用供断言。
+        /// </summary>
+        private sealed class ProbeRejectingEngine : IArchiveEngine
+        {
+            public int ListCalls { get; private set; }
+
+            public List<string> ProbeEntryCalls { get; } = new();
+
+            public List<string> FullExtractCalls { get; } = new();
+
+            public string Id => "probe-rejecting";
+
+            public string DisplayName => "探针拒绝假引擎（仅测试用）";
+
+            public string Version => "0.0";
+
+            public bool IsAvailable => true;
+
+            public EngineCapabilities Capabilities { get; } = new();
+
+            public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                Task.FromResult(new ArchiveProbeResult { IsArchive = true, Format = "7Z" });
+
+            public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
+            {
+                ListCalls++;
+
+                return Task.FromResult(new ArchiveListResult
+                {
+                    Success = true,
+                    IsEncrypted = true,
+                    FileCount = 2,
+                    TotalUncompressedSize = 64L * 1024 * 1024,
+                    Entries = new List<ArchiveEntry>
+                    {
+                        new() { Path = "small.txt", Size = 8 },
+                        new() { Path = "big.bin", Size = 64L * 1024 * 1024 }
+                    },
+                    EngineId = Id,
+                    EngineVersion = Version
+                });
+            }
+
+            public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
+
+            public Task<ArchiveOperationResult> ExtractAsync(
+                ArchiveRequest request,
+                ExtractOptions options,
+                CancellationToken cancellationToken = default)
+            {
+                IReadOnlyList<string>? include = options.IncludeEntries;
+
+                if (include is { Count: > 0 })
+                {
+                    // 探针：只解点名的那一个条目 ⇒ 一律报"密码不对"。
+                    ProbeEntryCalls.Add(include[0]);
+
+                    return Task.FromResult(new ArchiveOperationResult
+                    {
+                        Success = false,
+                        Status = StatusText.WrongPassword,
+                        Message = "Wrong password",
+                        DetectedErrorType = "WrongPassword"
+                    });
+                }
+
+                // 整包解压：这一档**不该发生**（探针已经否掉了候选）。
+                FullExtractCalls.Add(request.Password ?? string.Empty);
+
+                string outputPath = request.OutputPath ?? string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(outputPath))
+                {
+                    Directory.CreateDirectory(outputPath);
+                    File.WriteAllText(Path.Combine(outputPath, "payload.bin"), "内容\n", Utf8NoBom);
+                }
+
+                return Task.FromResult(ArchiveOperationResult.CreateSuccess(0, "OK", string.Empty, TimeSpan.Zero));
             }
         }
     }

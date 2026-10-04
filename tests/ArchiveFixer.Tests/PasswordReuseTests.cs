@@ -259,17 +259,23 @@ namespace ArchiveFixer.Tests
             Assert.Contains("<示例密码B>", secondAttempts);
         }
 
-        // ================================================================ ④ 按使用次数排序
+        // ================================================================ ④ 顺序：严格按④页列表
 
         /// <summary>
-        /// 同层级按成功次数从多到少（次数相同保持原顺序）。
+        /// **跨任务一律严格按④页列表顺序**（用户 2026-10-04 口述，推翻了 2026-09-24 第 14 条那一半）：
         ///
-        /// <para>这里刻意**从落盘的记忆里恢复次数**（新服务 + <c>LoadRememberedList</c>）：
-        /// 于是"本批已成功"那一条提前项为空，验的就是纯粹的**频率排序**本身 ——
-        /// 也正是用户跨重启时期望的那个行为。</para>
+        /// <para>用户原话：「谁规定你可以在**不同次任务**中降序排列的，**同一次任务中是可以这样，
+        /// 不同次文件一律严格按我列表顺序**」。</para>
+        ///
+        /// <para>造法：**从落盘的记忆里恢复成功次数**（新服务 + <c>LoadRememberedList</c>），
+        /// 再收一批（<c>BeginBatch</c>）—— 于是"本批已成功"那一档为空，
+        /// 验的就是纯粹的**跨任务顺序**：历史成功次数再高，也不许把列表里的位置换掉。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>GetPasswordCandidates</c> 里列表那一层改回
+        /// <c>OrderBySuccessCount</c> ⇒ 本用例当场红（顺序会变成 7 次→3 次→1 次→0 次）。</para>
         /// </summary>
         [Fact]
-        public void 候选排序_成功次数多的在前_次数相同保持原顺序()
+        public void 候选排序_严格按列表顺序_历史成功次数不许改顺序()
         {
             string dataRoot = Path.Combine(_root, "ordering");
             Directory.CreateDirectory(dataRoot);
@@ -293,31 +299,34 @@ namespace ArchiveFixer.Tests
             Assert.Equal(PasswordListLoadStatus.Loaded, service.LoadRememberedList());
             Assert.Empty(service.BatchVerifiedPasswords);
 
+            // 本批开工（与协调器批首同一个出口）。
+            service.BeginBatch();
+
             List<PasswordItem> candidates = service.GetPasswordCandidates(
                 new ArchiveTask(@"C:\whatever.7z"),
                 globalPassword: string.Empty,
                 passwordList: service.Passwords,
                 tryEmptyFirst: true);
 
-            // 空密码仍在最前（这一档没被动过）。
+            // 空密码仍在最前（这一档没被动过 —— 用户没点名反对"空密码先试一次"）。
             Assert.Equal(string.Empty, candidates[0].Value);
 
-            // 列表那一层：7 次 → 3 次 → 1 次 → 0 次。
+            // 列表那一层：**严格按列表顺序**（不是 7 次→3 次→1 次→0 次）。
             List<string> listLevel = candidates
                 .Where(candidate => candidate.Source == "ImportedList")
                 .Select(candidate => candidate.Value ?? string.Empty)
                 .ToList();
 
             Assert.Equal(
-                new[] { "<示例密码1>", "<示例密码3>", "<示例密码2>", "<示例密码4>" },
+                new[] { "<示例密码1>", "<示例密码2>", "<示例密码3>", "<示例密码4>" },
                 listLevel);
 
-            // 备注里的序号仍是用户在**列表里**看到的位置（排序不改变"第几项"，否则回列表里找不到）。
+            // 备注里的序号仍是用户在**列表里**看到的位置（现在它同时就是尝试顺序）。
             Assert.Equal(
                 "密码列表第 3 项",
                 candidates.Single(candidate => candidate.Value == "<示例密码3>").Remark);
 
-            // 次数相同 → 保持原顺序（稳定排序）。
+            // 次数相同 → 保持原顺序。
             var ties = new PasswordService();
             ties.AddPassword("<示例密码甲>");
             ties.AddPassword("<示例密码乙>");
@@ -332,6 +341,55 @@ namespace ArchiveFixer.Tests
                 .ToList();
 
             Assert.Equal(new[] { "<示例密码甲>", "<示例密码乙>" }, tieOrder);
+        }
+
+        /// <summary>
+        /// **"复用本批已成功的密码"只在本批内生效**（用户 2026-10-04）：
+        /// 同一批里第二个包能看到它（<c>BatchSuccess</c> 排在最前，省掉一轮轮询）；
+        /// 而 <c>BeginBatch</c>（下一批开工）之后**它就不见了**，顺序回到④页列表顺序。
+        ///
+        /// <para><b>红检</b>：把 <c>BeginBatch</c> 里那次 <c>Clear</c> 撤掉 ⇒ 本用例当场红
+        /// （下一批的候选里仍然带着上一批那条）。</para>
+        /// </summary>
+        [Fact]
+        public void 本批复用只在本批内_下一批回到列表顺序()
+        {
+            var service = new PasswordService();
+
+            service.AddPassword("<示例密码1>");
+            service.AddPassword("<示例密码2>");
+            service.AddPassword("<示例密码3>");
+
+            // 第一个包用第 3 条解开 ⇒ 记进"本批已成功"。
+            service.RecordPasswordSuccess(@"C:\a.7z", "<示例密码3>");
+
+            List<string> sameBatch = service
+                .GetPasswordCandidates(
+                    new ArchiveTask(@"C:\b.7z"),
+                    globalPassword: string.Empty,
+                    passwordList: service.Passwords,
+                    tryEmptyFirst: true)
+                .Select(candidate => candidate.Value ?? string.Empty)
+                .ToList();
+
+            // 同一批：复用那条排在最前（空密码不再进候选）。
+            Assert.Equal("<示例密码3>", sameBatch[0]);
+
+            // 下一批开工：复用清单清空 ⇒ 回到④页列表顺序。
+            service.BeginBatch();
+
+            Assert.Empty(service.BatchVerifiedPasswords);
+
+            List<string> nextBatch = service
+                .GetPasswordCandidates(
+                    new ArchiveTask(@"C:\c.7z"),
+                    globalPassword: string.Empty,
+                    passwordList: service.Passwords,
+                    tryEmptyFirst: true)
+                .Select(candidate => candidate.Value ?? string.Empty)
+                .ToList();
+
+            Assert.Equal(new[] { string.Empty, "<示例密码1>", "<示例密码2>", "<示例密码3>" }, nextBatch);
         }
 
         /// <summary>
