@@ -111,8 +111,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
    - 允许按本机 **DPAPI（机器范围）**加密落盘到 `<程序目录>\data\password-list.dat`（**绝不写 C 盘**、绝不进日志），由 `RememberPasswordList`（默认开）整个关掉（关掉 = **既不写也不读**）。**代价（实现与文档都必须如实写明）**：同机任何用户都可能解开；换机器 / 重装系统解不开 —— 那时一律"忽略并提示"（不崩、不覆盖、不删文件），出路是「写回密码本」。
 6. **部分成功不得显示为成功**；取消、超时、设备离线、分卷缺失一律不得显示成功。
 7. **分卷缺失不得开始不可完成的任务**，必须报"缺哪几个"。
-8. **递归必须有硬上限**（层数 / 文件数 / 总大小 / 单文件 / 展开比 / 密码尝试次数），且**多分支默认不展开**，必须问。
-   - ⚠ **例外（一键处理档）**：一键档**批中间零弹窗**，多分支不问 —— 按保守档办（不展开）+ 写日志（判据 `expandAll = !oneClickRun` 与 `SuppressDecisionPromptsForOneClickRun()`，见 §11.5）。手动档照旧**必须问**。
+8. **递归必须有硬上限**（层数 / 文件数 / 总大小 / 单文件 / 展开比 / 密码尝试次数）。⚠ **默认档 = 「展开所有分支」**（用户 2026-10-04 改口径，原话「就应该有压缩包就解压啊，现在将默认设为全文件解压」，②页三档照旧可选；⛔ 不动用户已存过的档位值）。
+   - ⚠ **例外（一键处理档）**：一键档**批中间零弹窗**这条**不变**，但**按用户所选递归档走**（默认 = 展开所有分支 ⇒ **不再"保守不展开"**，2026-10-04 用户改口径「就应该有压缩包就解压啊」）；手动档照旧**必须问**。**单链档**只在"同层 **≥2 个真归档**"时才停（旁边有非归档文件**不停**；⛔ 判据只数真归档，不许再拿"说明类后缀表"当停的理由）；停下时**点名**未展开的包（`DescribeUnexpandedNames`）。
    - 上限**必须存在，但不许写死在代码里**：解压前那四条（单文件 / 总大小 / 文件数 / 展开比）是**用户设置**（⑥设置 →「安全上限」，默认 **64 GiB / 512 GiB / 20 万 / 1000 倍**），唯一出口 `ResourceBudgetOptions.FromSettings` + `ExtractionCoordinator.BudgetLimits`。超范围一律**夹回并说明**；上限类拒绝文案必须带 `StatusText.SecurityCapHint`（**空间不足那一档刻意不带**）。
    - 默认最大嵌套层数 = **5**（用户 2026-09-26 定）；一键处理每批轮数 = `OneClickCoordinator.RoundLimit`（1~10）；⛔ **不许再有第二套轮数**（"界面写 5、程序按 10 跑"正是被拆掉的东西）。到顶把剩余内层包加进列表并勾好 + ①页「继续解」。
 9. **单个任务失败不得中断整批**；反过来，用户点"停止后续"不得变成"强杀当前"（两者是独立取消源）。
@@ -212,7 +212,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2620 条（2617 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：**2659 条（2656 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
   - ⚠ 旧基线 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
@@ -297,9 +297,10 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⛔ **"给目标找个不撞名的名字"必须把"本计划里已经排出去的名字"也算进去**（见 §39）：让位只问文件系统（`SafePathHelper.AutoRenameFilePath`）时，**同一份计划里两条同名文件会算出同一个目标名** ⇒ 第二条撞 `already exists` 而**留在原地**。唯一写法与源包搬运逐字相同：`reserved` HashSet + `ProcessArtifactLayout.MakeUniqueTarget(..., reserved, probe)`，⛔ 永远不覆盖。
   - 链尾收内层包的计划是纯函数 `ExtractionCoordinator.PlanChainInnerPackageMoves(rootTask, chainTasks, restDirectory, outputRoot, out warnings)`；执行前**再看一眼**目标名；用例 `ChainInnerPackageMovePlanTests`。
   - ⛔ 「成品目录里还留着 N 个内层包没被清理」那句 `leftBehind` 警告，判据必须与搬运那一边**同一套**（`candidateSucceeded || rootSucceeded` 都不算"还留着"）—— 否则会出现"警告说还留着、下一行就搬走删掉"的自相矛盾。
-- ⛔ **"续解开 / 不开"只有一个开关，别到处找**（见 §40）：`ExtractionCoordinator.cs:12718` 的 `Settings.RecursionMode != "SingleLayer"` —— 出厂默认档**不进递归核心**，走单层路径（内层包原样留着当**内容物**，继续解交给一键处理的轮次 / 手动「继续解」）；选了递归那两档才进 `RunRecursiveAsync`。⛔ `RunRecursiveAsync` 里那个 `AllBranches ? AllBranches : SingleChain` **不是缺陷**（红检证明那条分支到不了），别再去"修"它。
+- ⛔ **"续解开 / 不开"只有一个开关，别到处找**（见 §40）：`ExtractionCoordinator.cs:12718` 的 `Settings.RecursionMode != "SingleLayer"` —— **出厂默认档 = 「展开所有分支」**（2026-10-04 用户改口径「就应该有压缩包就解压啊」）⇒ 默认直接进 `RunRecursiveAsync`；选「只解当前这一层」才走单层路径（内层包原样留着当**内容物**，继续解交给一键处理的轮次 / 手动「继续解」）。⛔ `RunRecursiveAsync` 里那个 `AllBranches ? AllBranches : SingleChain` **不是缺陷**（红检证明那条分支到不了），别再去"修"它。
   - 两条路各自谁清内层包：**不开续解** ⇒ 内层包是下一轮的**源包** ⇒ `SourcePackageMover.Plan`；**开续解** ⇒ 内层包是**链上过程物** ⇒ `PlanChainInnerPackageMoves`。⇒ 撞名这一类缺陷两条路都堵住了。
   - 用例 `ChainManifestCompletenessTests`：`默认档只解当前这一层_手动只解压时内层包原样留着` + 对照 `单链自动展开_同一份夹具手动只解压也要解到叶子层`（用**手动「只解压」**隔离掉轮次续解）。用户文档 `docs/使用说明.md` §10.1.0 有两张表的白话版。
+- ✅ **从未解开过的内层包不算过程物**（2026-10-04 用户原话：「不是没解开你为什么要放在其余物里面，啊」）⇒ 只有**真被展开过**的内层包才进 `其余物`、才可能被"删除操作"带走；**未展开的**（停半路剩下的分支 / 命中③页「内容物保留关键词」的 / 到上限没展开的）**原样留在成品目录当内容物**，⛔ 不进 `其余物`（判据沿用既有事实 —— 那两条同源名单一起改，§9.5；⛔ 不按名字猜、⛔ 不在删除侧事后补救）。用例 `ChainInnerPackageMovePlanTests` / `ChainRestSweepTests` / `InnerLayerContinuationTests` 各一条。
 - ⛔ **改名之后，任务上每一处指向这个文件的旧路径都要改过来**（见 §38；展开见 §50.4）：`RenameService.UpdateTaskRenameSuccess(task, oldPath, newPath)` 必须**同时**改 `CurrentPath` 与 `VolumePaths` 里那一项 —— 只改一条 ⇒ 账上留下"盘上已不存在"的旧名字 ⇒ `ProcessArtifactLayout.SourcePackageMover.ResolveSourceGroup` 判"清单非空、却不含任务自己" ⇒ **整组搬运退化成只搬一份**。
   - ⛔ **"清单够不够全"不许按条数比**；⛔ "只改 `CurrentPath`"这种写法已被 `Extraction/TaskPathSync`（**唯一出口**，三处调用）取代，兜底一律"整组一份都不搬"。
 - ✅ **"去杂质之后是什么"只有一个出口**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`；真机现场见 `docs/真机事故复盘.md` §48.1）：删掉**最多 2 个非数字字符**后若**唯一地**变成**已知归档后缀**才算（本来就干净、或删出来有歧义 ⇒ 一律不认）。它同时喂三个消费点（见 §50.3）；⛔ 红线一个字没放宽：变体名字不标准 ⇒ `HasRenamedVolume=true` ⇒ **整组不许进可删的其余物**；⛔ 尺子只加在**归档本体**那一档上。
