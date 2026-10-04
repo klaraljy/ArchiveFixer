@@ -208,7 +208,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2519 条（2516 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：**2530 条（2527 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
   - ⚠ 旧基线 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
@@ -328,6 +328,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - ✅ **基名只有一个出口**（2026-10-03，阶段 A）：`Helpers/FileNameHelper.cs:344 TryResolveVolumeBaseName`（5 档：组键 / 剥标记 / 包名 / 锚点 / 伪装卷），5 处旧实现全部转调（`VolumeGroupDetector` / `StripVolumeMarkersCore` / `OutputPlacement` / `VolumeNameRepair` / `VolumeNumberFromContent`，私有助手全删）；**只搬家、不改结论**（改前改后 45 名字 × 11 列逐字相同，`ArchiveBaseNameTests` 52 条）。⚠ **两档本来就是两件事、⛔ 别合并**：**组键**保留归档后缀段（`giu910.7z`）、**包名 / 锚点**剥掉它（`giu910`）；另有"跨段保不保留后缀段""杂质归不归一"两格差异仍未合并（合并＝改结论，要用户拍板）。守卫 `StripVolumeMarkersCore(` 只许出现在 1 个文件里。
 - ✅ **「还原」工序进了递归层**（2026-10-03，阶段 B0；口径全文见 `_tmp\方案-分卷族系统化识别.md` §2.1）：递归层**组卷之前**先「按魔数认底层（续卷退到同组第 1 卷的魔数）→ 改回规范名（**替换不追加**、基名不动）→ **回族证据重判**」，执行体仍只有既有 `TryApply`（全成或全不成、绝不覆盖、目标名被占 ⇒ 整份不做），⛔ 只碰本层产物目录（**用户源目录一个字节不动**，有用例的 SHA256 快照钉住）。用例 `InnerLayerDisguiseRestoreTests`(7)（红检：撤掉那次调用 ⇒ 7z 红在**内容断言**、RAR 红在**日志断言**）。⚠ 批首挂点①未动；真机未验。
+- ✅ **阶段 C+D（2026-10-04）**：**RAR 族的入口放开** —— `Detection/VolumeNumberFromContent.cs` 的 `ResolveGroup` 新增 `requireCurrentFirstVolume`（默认 true = 老口径），改名那条路传 false ⇒ **入口可以是"调用方手上那一卷"**（跨盘 zip 仍是末片）。⛔ **卷号证据一个字没放宽**（仍只由内容给出、仍连成 1..N、RAR4 基数两解仍拒、`MHD_FIRSTVOLUME` 仍交叉核对）；⛔ 跨盘 ZIP 索引路 / 试拼 3 片上限 / `total > 2 ⇒ Refuse` 原样；⛔ RAR 老式编号族（`.rar`/`.r00`）按设计不认；⛔ 数字弱线索仍排在内容证据之后。**D 没有新造第三把尺子**：批首链 `Services/RenameService.cs` 本来就转调同一把（两道闸门「格式未知 ⇒ 不改」「末尾纯数字＝卷号」未动）⇒ D 只钉口径 + 补用例（批首预览与还原工序给出**逐字同一份目标名**）。用例 `VolumeEntryPointTests`(11)。⚠ **未验**：真机；「入口那一卷」这条路径**只有推理没有用例**（`BuildPlanFromOrder` 的 primary 本来就挑要改名的那一卷 ⇒ 只有"手上那卷在别的目录"时才分叉）。
 
 ### 11.5 管线（落点/弹窗/校验/显示/密码）
 
