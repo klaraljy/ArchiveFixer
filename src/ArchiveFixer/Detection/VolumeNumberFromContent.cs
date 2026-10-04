@@ -398,57 +398,19 @@ namespace ArchiveFixer.Detection
         ///
         /// <para>⛔ 推不出来（名字里已经是后缀 / 认不出）就原样留着，绝不硬剪：基名只影响
         /// "改完的名字像不像人写的"，正确性由卷号与"绝不覆盖"两条钉着。</para>
+        ///
+        /// <para>⚠ 2026-10-03 阶段 A 收口：判据整体搬进**唯一基名出口**
+        /// <see cref="Helpers.FileNameHelper.TryResolveVolumeBaseName"/> 的
+        /// <see cref="Helpers.VolumeBaseNameLevel.AnchorStem"/> 档（要传本族的规范后缀），
+        /// 本方法只转调（⛔ 这里不再算一遍基名）。</para>
         /// </summary>
-        public static bool TryDeriveStem(string? filePath, VolumeContentFormat format, out string stem)
-        {
-            stem = string.Empty;
-
-            string fileName = SafeFileName(filePath);
-            string extension = VolumeContentInference.ExtensionFor(format);
-
-            if (fileName.Length == 0 || extension.Length == 0)
-            {
-                return false;
-            }
-
-            string[] parts = fileName.Split('.');
-            int keep = parts.Length;
-
-            /*
-             * 从右往左一段一段剥：卷号段（01 / 001）、卷标记段（part1 / z01 / r00）、
-             * 以及"本来就该是归档后缀"的那一段（7z / 只差一个字符的 7）。
-             * ⛔ 剥不动就停手 —— 基名只影响改完像不像人写的，绝不为它硬剪名字。
-             *
-             * ⚠ 2026-09-27 真机补的那一条（`222.zscip`）：网盘会把中文塞进**后缀内部**
-             * （`222.zip` → `222.zi删除p` → 去掉中文之后是 `222.zscip`）。老判据只认
-             * "本来就等于后缀"和"只差一个字符"，`zscip` 差两个字符（`sc`）⇒ 剥不动 ⇒
-             * 基名原样留着 `222.zscip` ⇒ 整组改名产出 `222.zscip.zip`，与归档内部记的
-             * `222.zip` 对不上 ⇒ 定稿闸门判"缺 `222.zip`"、整层作废。
-             * 判据转调唯一出口（<see cref="Helpers.ExtensionHelper.TryRecoverDisguisedArchiveBody"/>），
-             * ⛔ 不在这里再写一份"删几个字符"的规则。
-             */
-            while (keep >= 2)
-            {
-                string last = parts[keep - 1];
-
-                if (IsOrdinalSegment(last)
-                    || IsVolumeMarkerSegment(last)
-                    || string.Equals(last, extension, StringComparison.OrdinalIgnoreCase)
-                    || IsUniqueOneEditAway(last, extension)
-                    || Helpers.ExtensionHelper.TryRecoverDisguisedArchiveBody(last, out string recovered, out _)
-                       && string.Equals(recovered, extension, StringComparison.OrdinalIgnoreCase))
-                {
-                    keep--;
-                    continue;
-                }
-
-                break;
-            }
-
-            stem = keep > 0 ? string.Join('.', parts, 0, keep) : fileName;
-
-            return stem.Length > 0 && stem.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
-        }
+        public static bool TryDeriveStem(string? filePath, VolumeContentFormat format, out string stem) =>
+            Helpers.FileNameHelper.TryResolveVolumeBaseName(
+                filePath,
+                Helpers.VolumeBaseNameLevel.AnchorStem,
+                out stem,
+                out _,
+                VolumeContentInference.ExtensionFor(format));
 
         // ── RAR ──
 
@@ -1222,93 +1184,5 @@ namespace ArchiveFixer.Detection
             && !string.IsNullOrWhiteSpace(b)
             && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
-        /// <summary>1~4 位纯数字段 = 像是被改烂的卷号。</summary>
-        private static bool IsOrdinalSegment(string segment)
-        {
-            if (segment.Length == 0 || segment.Length > 4)
-            {
-                return false;
-            }
-
-            foreach (char ch in segment)
-            {
-                if (ch < '0' || ch > '9')
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        /// <summary>这一段是不是卷标记（<c>001</c> / <c>z01</c> / <c>part1</c> / <c>r00</c>，容忍卷号后面粘着垃圾）。判据转调唯一出口。</summary>
-        private static bool IsVolumeMarkerSegment(string segment) =>
-            Helpers.ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out _, out _);
-
-        /// <summary>这一段是不是"只差一个字符"就能变成本族后缀，而且**只有这一种变法**。</summary>
-        private static bool IsUniqueOneEditAway(string segment, string extension)
-        {
-            string? unique = null;
-
-            foreach (string known in Helpers.ExtensionHelper.KnownArchiveExtensions
-                .Select(e => e.TrimStart('.'))
-                .Where(name => name.Length >= 2)
-                .Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                if (!IsOneEditAway(segment, known))
-                {
-                    continue;
-                }
-
-                if (unique != null)
-                {
-                    return false;
-                }
-
-                unique = known;
-            }
-
-            return unique != null && string.Equals(unique, extension, StringComparison.OrdinalIgnoreCase);
-        }
-
-        /// <summary>两段之间差**恰好一个**字符（插入或删除 1 个字符）。</summary>
-        private static bool IsOneEditAway(string a, string b)
-        {
-            if (Math.Abs(a.Length - b.Length) != 1)
-            {
-                return false;
-            }
-
-            string longer = a.Length > b.Length ? a : b;
-            string shorter = a.Length > b.Length ? b : a;
-            int i = 0;
-
-            while (i < shorter.Length && char.ToLowerInvariant(longer[i]) == char.ToLowerInvariant(shorter[i]))
-            {
-                i++;
-            }
-
-            for (int j = i; j < shorter.Length; j++)
-            {
-                if (char.ToLowerInvariant(longer[j + 1]) != char.ToLowerInvariant(shorter[j]))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private static string SafeFileName(string? path)
-        {
-            try
-            {
-                return string.IsNullOrWhiteSpace(path) ? string.Empty : Path.GetFileName(path);
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
     }
 }

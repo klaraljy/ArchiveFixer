@@ -952,7 +952,16 @@ namespace ArchiveFixer.Detection
             return true;
         }
 
-        /// <summary>把末尾 <paramref name="trailingCount"/> 段之外的片段拼回基名。</summary>
+        /// <summary>
+        /// 把末尾 <paramref name="trailingCount"/> 段之外的片段拼回基名。
+        ///
+        /// <para>⚠ <b>基名的判据不在这里</b>：这一处只做"拼"，拼完交给**唯一基名出口**
+        /// <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的
+        /// <see cref="VolumeBaseNameLevel.VolumeGroupKey"/> 档（2026-10-03 阶段 A 收口：
+        /// 原先这里自带一份与 <c>FileNameHelper.StripVolumeMarkers</c> 逐字不同的副本）。
+        /// 为什么是"归组键"那一档而不是"剥标记"那一档：同一组各卷的基名必须**逐字相等**，
+        /// 所以它比剥法出口多两步归一（见那一档的注释）。</para>
+        /// </summary>
         private static string JoinBaseName(string[] parts, int trailingCount)
         {
             int count = parts.Length - trailingCount;
@@ -961,108 +970,25 @@ namespace ArchiveFixer.Detection
                 return string.Empty;
             }
 
-            string baseName = string.Join(".", parts, 0, count);
+            string joined = string.Join(".", parts, 0, count);
 
             /*
-             * ⛔ 剥掉"粘在压缩后缀上的垃圾"（2026-09-28 真机）：
-             * `amb909.7z删除.001` 的基名老算法算成 `amb909.7z删除`，而同组的 `amb909.7z.002sc`
-             * 算成 `amb909.7z` —— **两个基名不同 → 同一组的两卷被分到两个组**，
-             * 于是第二卷自己单干、报"缺第一卷"，一键处理里就出现"跳过但名字确实改了"那种看不懂的场面。
-             *
-             * 判据很窄：基名的**最后一段**必须以已知压缩后缀开头、后面只跟非字母数字的垃圾
-             * （`7z删除` → `7z`）。正常名字（`rar-android-722.132`）不受影响 —— 那一段不是"后缀+垃圾"。
+             * 基名不 Trim：文件名里的首尾空格是真的会改变归组的字符。
+             * 但"全是空白"的基名（例如文件名叫 ".zip"）没有意义，直接不认 —— 那条判据在出口里。
              */
-            baseName = StripJunkAfterArchiveExtension(baseName);
-            baseName = NormalizeArchiveExtensionSegment(baseName);
-
-            // 基名不 Trim：文件名里的首尾空格是真的会改变归组的字符。
-            // 但"全是空白"的基名（例如文件名叫 ".zip"）没有意义，直接不认。
-            return string.IsNullOrWhiteSpace(baseName) ? string.Empty : baseName;
+            return FileNameHelper.TryResolveVolumeBaseName(
+                joined,
+                VolumeBaseNameLevel.VolumeGroupKey,
+                out string baseName,
+                out _)
+                ? baseName
+                : string.Empty;
         }
 
-        /// <summary>
-        /// 把基名最后一段里"夹在压缩后缀**内部**的垃圾"归一：`x.7sz` → `x.7z`、`x.7删z` → `x.7z`。
-        ///
-        /// <para>为什么需要（用户 2026-09-28 第三次真机）：两卷分别被伪装成 `amb909.7sz.00c1` 与
-        /// `amb909.7删z.00除2`，后缀段里各塞了一个字符 → 基名成了 `amb909.7sz` / `amb909.7删z`，
-        /// **两个基名不同 → 同一组两卷散成两组**。这里只做"删 1 个字符后是不是已知压缩后缀"，
-        /// 候选**唯一**才认（有歧义就不动）。</para>
-        /// </summary>
-        internal static string NormalizeArchiveExtensionSegment(string baseName)
-        {
-            int lastDot = baseName.LastIndexOf('.');
-
-            if (lastDot <= 0 || lastDot == baseName.Length - 1)
-            {
-                return baseName;
-            }
-
-            string segment = baseName[(lastDot + 1)..];
-
-            if (ExtensionHelper.IsKnownArchiveExtension("." + segment))
-            {
-                return baseName;
-            }
-
-            string? unique = null;
-
-            for (int i = 0; i < segment.Length; i++)
-            {
-                string candidate = segment.Remove(i, 1);
-
-                if (!ExtensionHelper.IsKnownArchiveExtension("." + candidate))
-                {
-                    continue;
-                }
-
-                if (unique != null)
-                {
-                    return baseName; // 有歧义：宁可不归一
-                }
-
-                unique = candidate;
-            }
-
-            return unique == null ? baseName : baseName[..(lastDot + 1)] + unique;
-        }
-
-        /// <summary>
-        /// 把"压缩后缀后面粘着垃圾"的最后一段清干净：<c>x.7z删除</c> → <c>x.7z</c>；<c>y.rar副本</c> → <c>y.rar</c>。
-        /// 段里没有已知压缩后缀、或后缀后面还跟着字母数字的，一律原样返回（宁可不动，也不乱剪）。
-        /// </summary>
-        private static string StripJunkAfterArchiveExtension(string baseName)
-        {
-            int lastDot = baseName.LastIndexOf('.');
-
-            if (lastDot <= 0 || lastDot == baseName.Length - 1)
-            {
-                return baseName;
-            }
-
-            string segment = baseName[(lastDot + 1)..];
-            int letterCount = 0;
-
-            while (letterCount < segment.Length && char.IsAsciiLetterOrDigit(segment[letterCount]))
-            {
-                letterCount++;
-            }
-
-            if (letterCount == 0 || letterCount == segment.Length)
-            {
-                // 整段都是字母数字（`7z` / `132`）：要么本来就是干净后缀，要么根本不是"后缀+垃圾"
-                return baseName;
-            }
-
-            string extension = "." + segment[..letterCount];
-
-            if (!ExtensionHelper.IsKnownArchiveExtension(extension) &&
-                !ExtensionHelper.IsVolumePartExtension(extension))
-            {
-                return baseName;
-            }
-
-            return baseName[..(lastDot + 1 + letterCount)];
-        }
+        // ⚠ 2026-10-03 阶段 A 收口：原先这里有一份 `NormalizeArchiveExtensionSegment`（:991）与
+        // `StripJunkAfterArchiveExtension`（:1033），已搬进**唯一基名出口**
+        // `FileNameHelper.TryResolveVolumeBaseName`（`VolumeBaseNameLevel.VolumeGroupKey` 档那一份归一化）。
+        // ⛔ 别在这里再加第二份：归组键与包基名对同一个包算出不同的名字，落点/归组就会各指一处。
 
         private static VolumeGroup BuildGroup(VolumeBucket bucket, Dictionary<string, int> familyCounts)
         {

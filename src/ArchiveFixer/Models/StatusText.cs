@@ -1867,6 +1867,23 @@ namespace ArchiveFixer.Models
         /// <summary>不能改名的原因：目标名被占用。<c>{0}</c> = 目标名。</summary>
         public const string VolumeRepairTargetTakenFormat = "目标名「{0}」已经被别的文件占用了，程序不会覆盖它";
 
+        /*
+         * ── 递归层内的「还原」工序（方案 §2.1 挂点②，用户 2026-10-03）──
+         *
+         * 为什么必须留痕：包**里面**那一层过去没有任何一步先擦伪装尾巴（`RecursiveExtractor` 对
+         * `VolumeNameRepair` 零引用），引擎按标准名找不到兄弟卷、只报「分卷缺失」，
+         * 用户对着日志查不出断在哪（AGENTS.md §11.4 §51 的现场就是它）。改完必须写清"改了哪些"。
+         */
+
+        /// <summary>递归层内还原成功那一行。<c>{0}</c> = 整组的「旧名 → 新名」。</summary>
+        public const string InnerRestoreDoneFormat = "还原伪装后缀（只改名、内容一个字节不动）：{0}";
+
+        /// <summary>递归层内还原**没做**那一行。<c>{0}</c> = 涉及的旧名，<c>{1}</c> = 为什么不做。</summary>
+        public const string InnerRestoreBlockedFormat = "还原伪装后缀没做（整组一个名字都没改）：{0} —— {1}";
+
+        /// <summary>还原之后两份候选会撞成同一个名字。<c>{0}</c> = 那个名字。</summary>
+        public const string InnerRestoreCollisionFormat = "两份候选还原之后会撞成同一个名字「{0}」，程序不猜";
+
         // ── 「名字完全靠不住 → 靠内容 + 尺寸 + 试开」这一档（用户 2026-09-28 三层方案） ──
 
         // ── 「内容里有卷号」这一档（用户 2026-09-29：RAR / ZIP 的分卷号写在内容里） ──

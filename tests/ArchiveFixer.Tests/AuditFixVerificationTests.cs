@@ -148,8 +148,13 @@ namespace ArchiveFixer.Tests
             // 旧副本的形态就是"同文件里再写一个同名私有方法"。
             Assert.DoesNotContain("string StripVolumeMarkers(string fileName)", placement, StringComparison.Ordinal);
 
-            // 转调，而不是"行为碰巧一样"。
-            Assert.Contains("FileNameHelper.StripVolumeMarkers(", placement, StringComparison.Ordinal);
+            /*
+             * 2026-10-03 阶段 A 收口：包基名不再"先转调剥法出口、再自己剥一层归档后缀"，
+             * 而是整条交给**唯一基名出口**的 `PackageName` 档 —— 判据仍只有一份，而且归档基名 /
+             * 包基名 / 归组键三处现在共用同一个出口。
+             */
+            Assert.Contains("FileNameHelper.TryResolveVolumeBaseName(", placement, StringComparison.Ordinal);
+            Assert.Contains("VolumeBaseNameLevel.PackageName", placement, StringComparison.Ordinal);
 
             int definitions = ProductionSourceFiles()
                 .Count(p => File.ReadAllText(p).Contains(
@@ -157,6 +162,14 @@ namespace ArchiveFixer.Tests
                     StringComparison.Ordinal));
 
             Assert.Equal(1, definitions);
+
+            // 剥法的**档体**（那个循环）也只有一处：⛔ 不许在别的文件里再抄一遍。
+            int cores = ProductionSourceFiles()
+                .Count(p => File.ReadAllText(p).Contains(
+                    "StripVolumeMarkersCore(",
+                    StringComparison.Ordinal));
+
+            Assert.Equal(1, cores);
         }
 
         // ================================================================ ② 同名冲突判定表：只有一份

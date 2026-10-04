@@ -669,55 +669,18 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * 分卷标记这一层**转调 FileNameHelper.StripVolumeMarkers**（体检报告 §2 第 2 条）：
-             * 这里原来有一份与它逐字相同的 40 行副本。两份必须永远剥得一样 ——
-             * 归档基名与包基名对同一个包算出不同的名字，落点就会指到两个不同的目录。
+             * 分卷标记 + 归档后缀这两层都交给**唯一基名出口**（2026-10-03 阶段 A 收口）：
+             * 这里原先一份"剥分卷标记"的 40 行副本 + 一份"剥归档后缀"的私有实现。
+             * 剥法必须永远只有一处 —— 归档基名与包基名对同一个包算出不同的名字，
+             * 落点就会指到两个不同的目录。
              */
-            return StripArchiveExtensions(FileNameHelper.StripVolumeMarkers(fileName));
-        }
-
-        /// <summary>
-        /// 剥掉末尾的归档后缀（<c>.rar</c> / <c>.7z</c> / <c>.zip</c> / <c>.tar.gz</c> …），最多 3 段。
-        ///
-        /// 两条经验规则：
-        /// ① 只剥**已知归档后缀**。用 <c>Path.GetFileNameWithoutExtension</c> 无脑剥会把
-        ///    <c>movie.2024</c> 变成 <c>movie</c> —— 数字结尾的名字太常见了；
-        /// ② 若第一段剥掉的是**伪装后缀**（<c>222.rar.jpg</c>），允许继续剥下一段，
-        ///    但只在"还没剥到归档后缀"时允许一次，避免把 <c>movie.mkv.rar</c> 的名字特征也啃掉。
-        /// </summary>
-        private static string StripArchiveExtensions(string name)
-        {
-            string current = name;
-            bool strippedArchiveExtension = false;
-
-            for (int guard = 0; guard < 3; guard++)
-            {
-                int lastDot = current.LastIndexOf('.');
-
-                if (lastDot <= 0)
-                {
-                    break;
-                }
-
-                string extension = "." + current[(lastDot + 1)..];
-
-                if (ExtensionHelper.IsKnownArchiveExtension(extension))
-                {
-                    current = current[..lastDot];
-                    strippedArchiveExtension = true;
-                    continue;
-                }
-
-                if (!strippedArchiveExtension && ExtensionHelper.IsSuspiciousFakeExtension(extension))
-                {
-                    current = current[..lastDot];
-                    continue;
-                }
-
-                break;
-            }
-
-            return current;
+            return FileNameHelper.TryResolveVolumeBaseName(
+                fileName,
+                VolumeBaseNameLevel.PackageName,
+                out string baseName,
+                out _)
+                ? baseName
+                : string.Empty;
         }
 
         /// <summary>校验自定义根：空 / 相对路径 / 盘根本身 / 盘符不存在，四类都返回明确原因。</summary>

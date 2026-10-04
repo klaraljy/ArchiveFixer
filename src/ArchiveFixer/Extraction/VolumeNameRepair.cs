@@ -1613,93 +1613,395 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 把"被伪装的卷名"拆开：<c>giu910.7z.001删除</c> → 基名 <c>giu910.7z</c>、标准卷段 <c>001</c>；
         /// <c>x.7z.001.txt</c> → 基名 <c>x.7z</c>、卷段 <c>001</c>；<c>y.z0删除3</c> → 基名 <c>y</c>、<c>z03</c>。
-        /// 判据转调 <see cref="ExtensionHelper.TrySplitVolumeSegmentLoose"/>（只此一处）。
+        ///
+        /// <para>⚠ 2026-10-03 阶段 A 收口：判据整体搬进**唯一基名出口**
+        /// <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的
+        /// <see cref="VolumeBaseNameLevel.DisguisedVolume"/> 档，本方法只转调（⛔ 这里不再算一遍基名）。</para>
         /// </summary>
-        private static bool TrySplitDisguised(string fileName, out string baseName, out string canonicalSegment)
-        {
-            baseName = string.Empty;
-            canonicalSegment = string.Empty;
+        private static bool TrySplitDisguised(string fileName, out string baseName, out string canonicalSegment) =>
+            FileNameHelper.TryResolveVolumeBaseName(
+                fileName,
+                VolumeBaseNameLevel.DisguisedVolume,
+                out baseName,
+                out canonicalSegment);
 
+        // ══════════════ 「还原」工序的**递归层挂点**（方案 §2.1 挂点②，用户 2026-10-03）══════════════
+        //
+        // 顺序不可颠倒：**① 按魔数认出底层 → ② 还原名字 → ③ 才回到第 1 层用该族专属证据重判一次**。
+        // 用户原话：「我们首先第一步就是识别底层文件找出伪装文件，然后还原，再接着匹配」。
+        //
+        // 为什么要有这一步：包**里面**解出来的那一层，过去没有任何一步先擦伪装尾巴
+        // （`RecursiveExtractor` 对 `VolumeNameRepair` / `RenameService` 零引用）——
+        // 引擎按标准名去找兄弟卷，找不到就只报「分卷缺失」，那 12 GiB 的内容永远出不来
+        // （AGENTS.md §11.4 §51 的现场就是它）。
+        //
+        // ⛔ 铁律（一条都不许放宽）：
+        //   ① 只对**我们自己产出的内层包副本**做（调用方传进来的必须是这一层的产物目录里的文件）；
+        //      用户源目录那一档归批首的「修正后缀」管（`RenameService.BuildFixByDetectedFormatFileName`）；
+        //   ② 只改名、**全成或全不成**、**绝不覆盖**（任何一份的目标名被占 ⇒ 整组一个名字都不改）；
+        //   ③ 执行体只有 <see cref="TryApply"/> 一套（只 `File.Move`，改完核对"新名在、旧名没了、字节数不差"，
+        //      中途失败倒序改回原名）—— ⛔ 这里不再写第二套改名；
+        //   ④ 判据只转调既有那两把尺子：**骨架化**（经唯一基名出口的 `DisguisedVolume` 档）与
+        //      **归档体还原**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`），⛔ 不新造第三把；
+        //   ⑤ 认出底层**只认魔数**（`VolumeContentInference.SniffFormat`），认不出 ⇒ 什么都不做。
+
+        /// <summary>
+        /// 递归层内的「还原」：把这一层里内层包副本的**伪装后缀换成规范形态**（替换，⛔ 不是追加；
+        /// 基名一个字不动），然后由调用方**回到第 1 层重判一次**（那一步就是方案说的"回环"）。
+        ///
+        /// <para>⚠ 7z / 跨盘 zip 的**续卷没有魔数**（只有第 1 卷带魔数），所以"认出底层"这一步
+        /// 按组做：自己认不出时退到**同组第 1 卷**那一份的魔数 —— 那仍然是魔数证据，只是取自锚点那一卷。
+        /// 两处都认不出 ⇒ 整组什么都不做。</para>
+        /// </summary>
+        /// <param name="candidatePaths">这一层产物目录里已被认成归档的候选（我们自己解出来的副本）。</param>
+        /// <param name="log">日志回调 (级别, 文案)；为空则不写日志。</param>
+        /// <returns>还原之后的路径清单（顺序与数量与入参完全一致；没还原的项原样返回）。</returns>
+        public static IReadOnlyList<string> RestoreDisguisedInnerPackageNames(
+            IReadOnlyList<string>? candidatePaths,
+            Action<string, string>? log = null)
+        {
+            if (candidatePaths == null || candidatePaths.Count == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var renamed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var handledGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string? candidate in candidatePaths)
+            {
+                if (string.IsNullOrWhiteSpace(candidate) || !File.Exists(candidate))
+                {
+                    continue;
+                }
+
+                IReadOnlyList<string> members = EnumerateRestoreGroupMembers(candidate);
+
+                if (members.Count == 0)
+                {
+                    continue;
+                }
+
+                if (!handledGroups.Add(BuildRestoreGroupKey(members)))
+                {
+                    continue;
+                }
+
+                // ① 认出底层（魔数；续卷退到同组第 1 卷那一份）
+                VolumeContentFormat format = ResolveRestoreFormat(members);
+
+                if (format == VolumeContentFormat.Unknown)
+                {
+                    continue;
+                }
+
+                // ② 算规范名（只换后缀那一段，基名一个字不动）
+                string directory = Path.GetDirectoryName(candidate) ?? string.Empty;
+                var items = new List<RestoreRenameItem>();
+
+                foreach (string member in members)
+                {
+                    string memberName = Path.GetFileName(member);
+
+                    if (!TryBuildRestoredName(memberName, format, out string canonical) ||
+                        string.Equals(memberName, canonical, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    items.Add(new RestoreRenameItem(member, Path.Combine(directory, canonical), memberName, canonical));
+                }
+
+                if (items.Count == 0)
+                {
+                    continue;
+                }
+
+                // ③ 全成或全不成 / 绝不覆盖
+                string? blocker = DescribeRestoreBlocker(items);
+
+                if (blocker != null)
+                {
+                    log?.Invoke(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.InnerRestoreBlockedFormat,
+                            string.Join("；", items.Select(i => i.FromName)),
+                            blocker));
+                    continue;
+                }
+
+                // ④ 执行体只有既有那一套（TryApply：只 File.Move、字节数核对、失败倒序改回）
+                VolumeNameRepairPlan plan = BuildRestorePlan(items);
+                VolumeNameRepairResult applied = TryApply(plan);
+
+                if (!applied.Success)
+                {
+                    log?.Invoke(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.InnerRestoreBlockedFormat,
+                            string.Join("；", items.Select(i => i.FromName)),
+                            applied.Message));
+                    continue;
+                }
+
+                foreach (RestoreRenameItem item in items)
+                {
+                    renamed[item.From] = item.To;
+                }
+
+                log?.Invoke(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.InnerRestoreDoneFormat,
+                        plan.Describe()));
+            }
+
+            var result = new List<string>(candidatePaths.Count);
+
+            foreach (string candidate in candidatePaths)
+            {
+                result.Add(renamed.TryGetValue(candidate, out string? updated) ? updated : candidate);
+            }
+
+            return result;
+        }
+
+        /// <summary>一次还原里的一卷：现在叫什么、该叫什么。</summary>
+        private sealed record RestoreRenameItem(string From, string To, string FromName, string ToName);
+
+        /// <summary>
+        /// 这一份候选所属的**一组**（含自己）：同目录 + 卷序认得出 + **包基名逐字相等**
+        /// （判据全在既有出口里：卷序 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/>、
+        /// 包基名 <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的 `PackageName` 档）。
+        ///
+        /// <para>为什么必须把兄弟一起收进来：7z / 跨盘 zip 的续卷没有魔数、探测器根本不会把它们当候选，
+        /// 而引擎找兄弟卷**只看入口文件旁边那一层** —— 只改第一卷的名字，整组照样打不开。</para>
+        ///
+        /// <para>没有卷号的那种（本体后缀被伪装，<c>222.zscip</c>）自己就是一组。</para>
+        /// </summary>
+        private static IReadOnlyList<string> EnumerateRestoreGroupMembers(string candidate)
+        {
+            var members = new List<string> { candidate };
+
+            string candidateName = Path.GetFileName(candidate);
+            string directory = Path.GetDirectoryName(candidate) ?? string.Empty;
+
+            if (directory.Length == 0 ||
+                VolumeGroupDetector.TryGetVolumeIndex(candidateName) == null ||
+                !TryResolvePackageBaseName(candidateName, out string candidateBase))
+            {
+                return members;
+            }
+
+            string[] entries;
+
+            try
+            {
+                entries = Directory.GetFiles(directory);
+            }
+            catch
+            {
+                // 读不了目录 ⇒ 只处理自己（判不出就少做，绝不多做）。
+                return members;
+            }
+
+            foreach (string entry in entries)
+            {
+                if (string.Equals(entry, candidate, StringComparison.OrdinalIgnoreCase) ||
+                    VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(entry)) == null ||
+                    !TryResolvePackageBaseName(Path.GetFileName(entry), out string siblingBase))
+                {
+                    continue;
+                }
+
+                if (string.Equals(siblingBase, candidateBase, StringComparison.OrdinalIgnoreCase))
+                {
+                    members.Add(entry);
+                }
+            }
+
+            return members;
+        }
+
+        private static bool TryResolvePackageBaseName(string fileName, out string baseName) =>
+            FileNameHelper.TryResolveVolumeBaseName(
+                fileName,
+                VolumeBaseNameLevel.PackageName,
+                out baseName,
+                out _);
+
+        /// <summary>同一组只还原一次：键 = 目录 + 第 1 卷的包基名。</summary>
+        private static string BuildRestoreGroupKey(IReadOnlyList<string> members)
+        {
+            string directory = Path.GetDirectoryName(members[0]) ?? string.Empty;
+            string anchor = members
+                .OrderBy(member => VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(member)) ?? int.MaxValue)
+                .First();
+
+            TryResolvePackageBaseName(Path.GetFileName(anchor), out string baseName);
+
+            return directory + "|" + baseName;
+        }
+
+        /// <summary>
+        /// 认出这一组的底层：**只认魔数**。第 1 卷那一份的魔数优先（7z / 跨盘 zip 只有它带魔数）；
+        /// 一个魔数都认不出 ⇒ <see cref="VolumeContentFormat.Unknown"/> ⇒ 调用方什么都不做。
+        /// </summary>
+        private static VolumeContentFormat ResolveRestoreFormat(IReadOnlyList<string> members)
+        {
+            VolumeContentFormat anyRecognized = VolumeContentFormat.Unknown;
+
+            foreach (string member in members)
+            {
+                VolumeContentFormat format = VolumeContentInference.SniffFormat(member);
+
+                if (format == VolumeContentFormat.Unknown)
+                {
+                    continue;
+                }
+
+                if (VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(member)) == 1)
+                {
+                    return format;
+                }
+
+                if (anyRecognized == VolumeContentFormat.Unknown)
+                {
+                    anyRecognized = format;
+                }
+            }
+
+            return anyRecognized;
+        }
+
+        /// <summary>
+        /// 算出"规范形态"的文件名：**只换后缀那一段**（替换，⛔ 不是追加），基名一个字不动。
+        ///
+        /// <para>两条路各自转调一把既有尺子：
+        /// ㈠ 卷标记段被伪装（<c>X.part1.rar删除</c> / <c>x.7z.001.txt</c> / <c>111.parst1.racr</c>）
+        ///    —— 骨架化，经唯一基名出口的 `DisguisedVolume` 档；
+        /// ㈡ 本体后缀被伪装（<c>222.zscip</c>）—— 归档体还原 <c>TryRecoverDisguisedArchiveBody</c>。</para>
+        ///
+        /// <para>⚠ 还原出来的名字必须与**认出来的底层**同族（RAR 的 <c>partN.rar</c> 不能扣到 7z 内容上），
+        /// 族对不上就判"不还原" —— 改错名字比不改更糟（改名不可逆）。</para>
+        /// </summary>
+        private static bool TryBuildRestoredName(string fileName, VolumeContentFormat format, out string canonical)
+        {
+            canonical = string.Empty;
+
+            if (FileNameHelper.TryResolveVolumeBaseName(
+                    fileName,
+                    VolumeBaseNameLevel.DisguisedVolume,
+                    out string baseName,
+                    out string segment) &&
+                baseName.Length > 0 &&
+                segment.Length > 0 &&
+                IsSegmentFamilyOfFormat(segment, format))
+            {
+                canonical = baseName + "." + segment;
+                return true;
+            }
+
+            string extension = VolumeContentInference.ExtensionFor(format);
             string[] parts = fileName.Split('.');
 
-            if (parts.Length < 2)
+            if (extension.Length == 0 || parts.Length < 2)
             {
                 return false;
             }
 
-            /*
-             * ⓪ <基名>.partN.rar（**卷标记与 rar 尾巴都可以粘垃圾**）：目标名必须**连 `.rar` 一起**保留。
-             *
-             * ⛔ 老写法把它当"标记后面挂着别的点段"处理，只把卷标记接回去 ⇒ 目标名算成 `X.part1`，
-             * 等于把 RAR 的族后缀吃掉：改完 7-Zip / UnRAR 更打不开这一组（改名是**不可逆**动作，
-             * 比"一个都不改"更糟）。判据与归组 / 包基名转调**同一份**
-             * <see cref="ExtensionHelper.TrySplitPartNumberedVolume"/>。
-             */
-            if (ExtensionHelper.TrySplitPartNumberedVolume(
-                    fileName,
-                    out string partBase,
-                    out string partMark,
-                    out _,
-                    out string partTail,
-                    out _)
-                && !partTail.Equals("rar", StringComparison.OrdinalIgnoreCase))
+            if (ExtensionHelper.TryRecoverDisguisedArchiveBody(parts[^1], out string recovered, out _) &&
+                string.Equals(recovered, extension, StringComparison.OrdinalIgnoreCase))
             {
-                /*
-                 * ⚠ 只接"**尾巴确实粘着垃圾**"那一档（`X.part1.rar删除`，网盘缀的「删除」）。
-                 *
-                 * 尾巴干净的（`X.part1.rar` / `444.pa删rt2.rar`）**必须留给下面既有那两条路**：
-                 * 真机夹具（AAA）里 `444.p1art2.ra3r` 那一组，卷标记前面还有一段属于基名的
-                 * `p1art2` —— 这里若抢着按"倒数第二段就是卷标记"去拆，基名会被算成 `444`、
-                 * 改名产出 `444.part1.rar`（错），而正解是 `444.p1art2.part1.rar`。
-                 * 实测：抢这一档 ⇒ `AaaReplayPipelineTests.夹具验收_一组分卷只解一次…` 当场变红
-                 * （全量回归逮到，已收窄）。
-                 */
-                baseName = partBase;
-                canonicalSegment = partMark + ".rar";
+                canonical = string.Join('.', parts, 0, parts.Length - 1) + "." + recovered;
                 return true;
             }
 
-            // ① 最后一段自己就是"带垃圾的卷标记"（001删除 / 删除001 / z0删除3）
-            if (!ExtensionHelper.IsVolumePartExtension("." + parts[^1]) &&
-                ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^1], out string mark, out _))
+            return false;
+        }
+
+        /// <summary>规范卷段是不是**该族**的写法（`partN.rar` / `NNN` / `zNN`）—— 族对不上就不还原。</summary>
+        private static bool IsSegmentFamilyOfFormat(string segment, VolumeContentFormat format)
+        {
+            if (segment.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
             {
-                baseName = VolumeGroupDetector.NormalizeArchiveExtensionSegment(string.Join('.', parts, 0, parts.Length - 1));
-                canonicalSegment = mark;
-                return baseName.Length > 0;
+                return format == VolumeContentFormat.Rar;
             }
 
-            // ② 卷标记后面还挂着别的点段（x.7z.001.txt）
-            //    ⚠ 别去查卷标记自己是不是"已知压缩后缀" —— `.001` 本身就在那份名单里，
-            //      拿它当闸门会把 `.001.txt` 全挡掉（实测踩到过）。
-            for (int i = parts.Length - 2; i >= 1; i--)
+            if (segment.Length == 3 && segment[0] is 'z' or 'Z' &&
+                char.IsAsciiDigit(segment[1]) && char.IsAsciiDigit(segment[2]))
             {
-                if (!ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[i], out string innerMark, out _))
-                {
-                    continue;
-                }
+                return format == VolumeContentFormat.Zip;
+            }
 
-                bool onlyPlainTails = true;
-
-                for (int j = i + 1; j < parts.Length; j++)
-                {
-                    if (ExtensionHelper.IsKnownArchiveExtension("." + parts[j]))
-                    {
-                        onlyPlainTails = false;
-                        break;
-                    }
-                }
-
-                if (!onlyPlainTails)
-                {
-                    continue;
-                }
-
-                baseName = VolumeGroupDetector.NormalizeArchiveExtensionSegment(string.Join('.', parts, 0, i));
-                canonicalSegment = innerMark;
-                return baseName.Length > 0;
+            if (segment.Length == 3 && char.IsAsciiDigit(segment[0]) &&
+                char.IsAsciiDigit(segment[1]) && char.IsAsciiDigit(segment[2]))
+            {
+                return format == VolumeContentFormat.SevenZip;
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// 全成或全不成的两道闸门：① 目标名一个都不许被占（⛔ 绝不覆盖）；
+        /// ② 两份候选还原之后不许撞成同一个名字。任一不过 ⇒ 返回原因（整组一个都不改）。
+        /// </summary>
+        private static string? DescribeRestoreBlocker(IReadOnlyList<RestoreRenameItem> items)
+        {
+            var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (RestoreRenameItem item in items)
+            {
+                if (!targets.Add(item.To))
+                {
+                    return string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.InnerRestoreCollisionFormat,
+                        item.ToName);
+                }
+
+                if (File.Exists(item.To))
+                {
+                    return string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeRepairTargetTakenFormat,
+                        item.ToName);
+                }
+            }
+
+            return null;
+        }
+
+        private static VolumeNameRepairPlan BuildRestorePlan(IReadOnlyList<RestoreRenameItem> items)
+        {
+            List<RestoreRenameItem> ordered = items
+                .OrderBy(i => i.FromName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return new VolumeNameRepairPlan
+            {
+                CanRepair = true,
+                CurrentPath = ordered[0].From,
+                CurrentFileName = ordered[0].FromName,
+                SuggestedFileName = ordered[0].ToName,
+                TargetPath = ordered[0].To,
+                Siblings = ordered.Select(i => i.FromName).ToList(),
+                Items = ordered
+                    .Select(i => new VolumeRepairItem
+                    {
+                        CurrentPath = i.From,
+                        CurrentFileName = i.FromName,
+                        SuggestedFileName = i.ToName,
+                        TargetPath = i.To
+                    })
+                    .ToList()
+            };
         }
 
         /// <summary>

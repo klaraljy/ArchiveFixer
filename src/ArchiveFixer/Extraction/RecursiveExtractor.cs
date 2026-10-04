@@ -1218,6 +1218,7 @@ namespace ArchiveFixer.Extraction
 
             IReadOnlyList<string> innerArchives = await ProbeInnerArchivesAsync(
                     item.Layer.OutputPath,
+                    layerLabel,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -1425,8 +1426,12 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 探测本层产物里的内层归档（**递归**找所有文件，跳过 0 字节与工作区自身）。
         /// </summary>
+        /// <param name="outputDirectory">这一层的产物目录（**我们自己解出来的副本**）。</param>
+        /// <param name="layerLabel">日志行首那个"第 N 层：包名"标签（与这一层其它日志同形）。</param>
+        /// <param name="cancellationToken">取消令牌。</param>
         private async Task<IReadOnlyList<string>> ProbeInnerArchivesAsync(
             string outputDirectory,
+            string layerLabel,
             CancellationToken cancellationToken)
         {
             var found = new List<string>();
@@ -1507,7 +1512,30 @@ namespace ArchiveFixer.Extraction
             // 排序让候选清单在 UI 与测试里都是稳定顺序（不同文件系统返回顺序不一致）。
             found.Sort(StringComparer.OrdinalIgnoreCase);
 
-            return CollapseSameGroupVolumes(found);
+            /*
+             * ===== 「还原」工序：先擦掉伪装尾巴，再回到第 1 层重判一次（方案 §2.1 挂点②）=====
+             *
+             * 用户 2026-10-03 的口径：「首先第一步就是识别底层文件找出伪装文件，然后还原，再接着匹配」。
+             * 顺序不可颠倒：**① 按魔数认出底层 → ② 还原名字 → ③ 才进族骨架匹配（组卷 / 定序 / 试开）**。
+             *
+             * 为什么挂在这里：包**里面**解出来的这一层，过去没有任何一步先擦伪装尾巴 ——
+             * 一组 `风景01.part1.rar删除` / `.part2.rar删除` 解出来之后名字还是脏的，引擎按标准名
+             * 找不到兄弟卷，只报「分卷缺失」，里面的内容永远出不来（AGENTS.md §11.4 §51 的现场）。
+             *
+             * ⛔ 只碰**我们自己产出的副本**：这里的路径全部来自本层产物目录（外层包刚解出来的东西），
+             * 用户源目录里那一档归批首的「修正后缀」管，一步都不越界。
+             * ⛔ 执行体与判据都不在这里：整件事转调 `VolumeNameRepair.RestoreDisguisedInnerPackageNames`
+             * （它自己再转调 `VolumeNameRepair.TryApply` 与既有的两把去杂质尺子）。
+             * ⛔ 认不出底层 / 目标名被占 / 有一份改不动 ⇒ 那**一组**一个名字都不改（全成或全不成）。
+             *
+             * "回环"就在下一行：还原完照旧走 `CollapseSameGroupVolumes`（它按**还原之后**的名字
+             * 重新判"谁是首卷、哪些是它的续卷"）—— 一步都不跳。
+             */
+            IReadOnlyList<string> restored = VolumeNameRepair.RestoreDisguisedInnerPackageNames(
+                found,
+                (level, message) => Log(level, layerLabel + "：" + message));
+
+            return CollapseSameGroupVolumes(restored.ToList());
         }
 
         /// <summary>
