@@ -208,8 +208,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2453 条（2450 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 旧基线 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（本轮 +20 = `NamelessMiddleVolumeContentPathTests` 2 + `ChainLayerReclaimTests` 11 + `RestEmptyShellPurgeTests` 5 + `SpaceNetIncrementTests` 2；再 +5 = `ChainLayerReclaimTests` 的 H2 与 `PackageLayerRulesTests` 四条）。⛔ 数字只在这里写一次。
+- `dotnet test` 全量（主 checkout 内）：**2512 条（2509 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 旧基线 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
@@ -325,6 +325,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - **实测确认**（2026-10-02 19:21 那次导入，他原话「其实屏幕上显示没有毛病」）：`测试\BBB` 6 套样本 = **10 行 = 5 个归档组各一行 + 5 个 mp4**（盘上 25 个文件、一卷都没多出一行）；空间体检「10 个源包共 3.79 GiB」与盘上 4,071,857,429 字节逐字对上。
   - 归组**只看名字**（`FileScanService.cs:114` → `VolumeGroupingService.ApplyVolumeGrouping`），「共 N 卷」唯一出口 `VolumeGroupingService.BuildVolumeInfoText`（①页「分卷」列已放出来）；⛔ 红线不动：判不出 ⇒ 什么都不做、`VolumeGroupResolver` 四档 / 六条证据一个字没放宽。⚠ **"RAR 两套 4 卷各自成一行"在 HEAD 上复现不出来**（⛔ 不许写成"已复现并修好"）。
 
+
+- ✅ **基名只有一个出口**（2026-10-03，阶段 A）：`Helpers/FileNameHelper.cs:344 TryResolveVolumeBaseName`（5 档：组键 / 剥标记 / 包名 / 锚点 / 伪装卷），5 处旧实现全部转调（`VolumeGroupDetector` / `StripVolumeMarkersCore` / `OutputPlacement` / `VolumeNameRepair` / `VolumeNumberFromContent`，私有助手全删）；**只搬家、不改结论**（改前改后 45 名字 × 11 列逐字相同，`ArchiveBaseNameTests` 52 条）。⚠ **两档本来就是两件事、⛔ 别合并**：**组键**保留归档后缀段（`giu910.7z`）、**包名 / 锚点**剥掉它（`giu910`）；另有"跨段保不保留后缀段""杂质归不归一"两格差异仍未合并（合并＝改结论，要用户拍板）。守卫 `StripVolumeMarkersCore(` 只许出现在 1 个文件里。
+- ✅ **「还原」工序进了递归层**（2026-10-03，阶段 B0；口径全文见 `_tmp\方案-分卷族系统化识别.md` §2.1）：递归层**组卷之前**先「按魔数认底层（续卷退到同组第 1 卷的魔数）→ 改回规范名（**替换不追加**、基名不动）→ **回族证据重判**」，执行体仍只有既有 `TryApply`（全成或全不成、绝不覆盖、目标名被占 ⇒ 整份不做），⛔ 只碰本层产物目录（**用户源目录一个字节不动**，有用例的 SHA256 快照钉住）。用例 `InnerLayerDisguiseRestoreTests`(7)（红检：撤掉那次调用 ⇒ 7z 红在**内容断言**、RAR 红在**日志断言**）。⚠ 批首挂点①未动；真机未验。
 
 ### 11.5 管线（落点/弹窗/校验/显示/密码）
 
