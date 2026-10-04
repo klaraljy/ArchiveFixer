@@ -309,6 +309,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - ✅ **跨盘 zip ≥3 片 + 中间片名字里没有任何卷号：已做**（见上面"专属算法"那条）。⚠ 仍未做的是**排列爆炸那一档**：定不下来的片 > 3（6 种排列）时如实报"顺序定不出来"，⛔ 不猜；且**加密的包必须手上有对的密码**才验得出顺序。
   - 完整加密包+名字末尾纯数字 → 被 7-Zip 当"通用分片" ⇒ 误诊「分卷缺失」（别在 `RawSplitStreamDetector` 里加"看名字猜"）。
   - 伪装成 `.mp4`/`.apk` 的续卷：判定器已把"无卷号的同目录候选"按体积/位置推定+硬链接试开收进来（真案 ③），⛔ 绝不只凭后缀判；⚠ 试开做不了时（跨盘/拿不到工作区根）只到「疑缺卷」。
+  - 7z「标准名第 1 卷 + 中间卷名字全丢（`111`）+ 标准名末卷」**两条路都不接**（实测 `CanRepair=False` + `TrialAttempted=False`）：名字路要兄弟卷名里还留卷标记、内容路只认"手上这一卷名字被改坏"的入口（`VolumeNameRepair.cs:624` 判"名字里已有卷号 ⇒ 不抢"）；要接须另加判据（入口是标准名第 1 卷时，同目录"不是已识别归档"的候选也纳入试开）。用例 `NamelessMiddleVolumeContentPathTests`（钉现状 = 不认）
   - 7z 头部被压缩时读不出加密（`-p` 与不加密包 64 KiB 内逐字节同构；不引依赖/不调引擎 ⇒ 如实不报）
   - 7z `-mhe` 与 ZIP AES 没有真样本；跨盘 zip 中间片一律 Unknown
 - ✅ 加密判读=只读头/尾（RAR/ZIP/7z）：判据器 `Detection/{Rar,Zip,SevenZip}EncryptionReader`（词表 `ArchiveEncryptionState/Reading`，不调引擎/不引依赖）；唯一出口 `ArchiveDetectService.ApplyEncryptionVerdict`。逐条判据 / 用例 / 真样本变量见 §48.4 + §50.2。
