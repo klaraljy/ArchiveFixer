@@ -20,8 +20,9 @@ namespace ArchiveFixer.Tests
     ///
     /// <para>三条硬约束（一条都不许松）：① **唯一**（一段命中多个骨架 ⇒ 判不出 ⇒ 什么都不做）；
     /// ② 放宽只作用在**已经有外部证据**的那条路（见 <c>放宽的代价</c> 那条用例把闸门链列清楚）；
-    /// ③ 判不出 ⇒ 什么都不做。另外骨架必须**首尾对齐**（杂质只能夹在**中间**）——
-    /// 用户口径就是"**中间**夹的任何字符都当杂质剔除"。</para>
+    /// ③ 判不出 ⇒ 什么都不做。另外两条纪律：骨架必须**首尾对齐**（杂质只能夹在**中间** ——
+    /// 用户口径就是"**中间**夹的任何字符都当杂质剔除"）；卷标记段那一档还要**取最右**
+    /// （<c>pa8rt1</c> ⇒ <c>part1</c> 只对"末尾那段真的脏"生效，左边剩下来的段照旧不吃骨架档）。</para>
     /// </summary>
     public class VolumeSkeletonMatchTests : IDisposable
     {
@@ -97,21 +98,26 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// ⛔ **partN 骨架刻意不放开**（用户点名的 `pa8rt1` ⇒ `part1` 这一格按不下去）：
-        /// `p1art2`（AAA 真夹具 `444.p1art2.part2.rar` 的**基名段**）与 `pa8rt1` 是**同一个形状**
-        /// —— 字母序列都是 `part`、都夹一个数字，任何按形状的判据都分不开。
+        /// ⛔ **partN 骨架只在"取最右"那一格放开**（用户 2026-10-04 第二轮拍板）：`pa8rt1` ⇒ `part1`
+        /// 只对 <c>&lt;基名&gt;.&lt;卷标记&gt;.rar</c>（尾巴逐字 <c>rar</c>）生效；**裸的末尾段不吃**
+        /// （<c>TrySplitVolumeSegmentTolerant</c> 默认档 = 老口径）。
         ///
-        /// <para>放开它 ⇒ `444.p1art2.part2.rar` 的基名从 `444.p1art2` 变成 `444`
-        /// （RAR 族"基名 = partN 段之前的所有点段"那条不变量当场破，`ArchiveBaseNameTests`
-        /// 三行 + `AaaReplayPipelineTests` 夹具一起红）。这一条用例把"两格都舍"钉住。</para>
+        /// <para>为什么必须这么切：`pa8rt1`（该认成 `part1`）与 `p1art2`（AAA 真夹具
+        /// `444.p1art2.part2.rar` 的**基名段**，⛔ 不许认成卷标记）是**同一个形状** ——
+        /// 字母序列都是 `part`、都夹一个数字，任何按形状的判据都分不开。
+        /// 裸的末尾段一旦也吃骨架档，`444.p1art2.part2.rar` 剥完 `part2.rar` 之后剩下的
+        /// `444.p1art2` 会被**再剥一次** ⇒ 基名从 `444.p1art2` 变成 `444`
+        /// （RAR 族"基名 = partN 段之前的所有点段"那条不变量当场破）。
+        /// 红检：把这一格改回"也吃骨架档" ⇒ 本条与
+        /// <see cref="卷标记段_取最右_末尾干净时左边那段不许再吃骨架档"/> 一起变红。</para>
         /// </summary>
         [Fact]
-        public void 卷标记段_partN骨架不放开_保住RAR基名规则()
+        public void 卷标记段_partN骨架只在最右那一格_保住RAR基名规则()
         {
             Assert.False(ExtensionHelper.TrySplitVolumeSegmentTolerant("pa8rt1", out _, out _));
             Assert.False(ExtensionHelper.TrySplitVolumeSegmentTolerant("p1art2", out _, out _));
 
-            // 基名规则本身（这才是"不肯放开 partN 骨架"要保住的东西）。
+            // 基名规则本身（这才是"只在最右那一格放开"要保住的东西）。
             Assert.Equal("444.p1art2", FileNameHelper.StripVolumeMarkers("444.p1art2.part2.rar"));
             Assert.Equal("444.p1art2", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
         }
@@ -253,12 +259,13 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// AAA 夹具那一组的**合成复刻**（真夹具不在本机 ⇒ 端到端未验）：`444.p1art2.part1.rar` +
-        /// `444.p1art2.part2.rar` 是 partN 族的一对；旁边那个 `444.p1art2.ra3r`（骨架档现在认得出
-        /// 它的后缀是 `rar`）**不许**跟它们并成一组，更不许改变那一对的基名。
+        /// AAA 那一组的**合成复刻**（真夹具 `_tmp\ArchiveFixer\aaa-replay\AAA\444` 那几个文件的形状）：
+        /// `444.p1art2.part1.rar` + `444.p1art2.part2.rar` 是 partN 族的一对；旁边那个 `444.p1art2.ra3r`
+        /// （骨架档认得出它的后缀是 `rar`）**不许**跟它们并成一组，更不许改变那一对的基名。
         ///
-        /// <para>为什么单独钉这一条：`444.p1art2.ra3r` 是探针表里唯一被这轮放宽改掉一格的名字
-        /// （首卷名从 `null` 变成 `444.p1art2.rar`）—— 要证明"改了那一格"不会顺带把真夹具那一组拆散。</para>
+        /// <para>为什么单独钉这一条：`444.p1art2.ra3r` 是探针表里唯一被上一轮放宽改掉一格的名字
+        /// （首卷名从 `null` 变成 `444.p1art2.rar`，`ArchiveBaseNameTests` 第 64 行）——
+        /// 要证明"改了那一格"不会顺带把真夹具那一组拆散。</para>
         /// </summary>
         [Fact]
         public void AAA形状_ra3r被认成本体后缀之后_不许跟partN那一对并组()
@@ -283,6 +290,122 @@ namespace ArchiveFixer.Tests
             // 基名规则一个字没动（RAR = partN 段**之前**的所有点段）。
             Assert.Equal("444.p1art2", FileNameHelper.StripVolumeMarkers("444.p1art2.part2.rar"));
             Assert.Equal("444.p1art2", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
+        }
+
+        // ================================================================ 卷标记段的 partN 骨架（"取最右"，2026-10-04 第二轮）
+
+        /// <summary>
+        /// ① **末尾那段真的脏**（用户点名的 `444.pa8rt1.rar`）：靠骨架命中认出卷标记 `part1`、基名 `444`。
+        ///
+        /// <para>判据只在**"取最右"那一格**（<c>&lt;基名&gt;.&lt;卷标记&gt;.rar</c>，尾巴逐字是 <c>rar</c>）
+        /// 才吃 partN 骨架 —— 理由见下一条对照用例。</para>
+        /// </summary>
+        [Fact]
+        public void 卷标记段_partN骨架_末尾段真脏时要认出来()
+        {
+            Assert.True(
+                ExtensionHelper.TrySplitPartNumberedVolume(
+                    "444.pa8rt1.rar",
+                    out string baseName,
+                    out string mark,
+                    out int index,
+                    out string tail,
+                    out bool disguised),
+                "`444.pa8rt1.rar` 的卷标记段应当靠骨架命中认出来");
+
+            Assert.Equal("444", baseName);
+            Assert.Equal("part1", mark);
+            Assert.Equal(1, index);
+            Assert.Equal("rar", tail);
+            Assert.True(disguised, "名字不标准 ⇒ 不许被当成「名字标准、可以删」的那一档");
+
+            // 整条链上的公开观测面：卷序 / 首卷名 / 剥标记 / 包基名。
+            Assert.Equal(1, VolumeGroupDetector.TryGetVolumeIndex("444.pa8rt1.rar"));
+            Assert.Equal("444.part1.rar", VolumeGroupDetector.TryGetFirstVolumeName("444.pa8rt1.rar"));
+            Assert.Equal("444", FileNameHelper.StripVolumeMarkers("444.pa8rt1.rar"));
+            Assert.Equal("444", OutputPlacement.ResolveArchiveBaseName("444.pa8rt1.rar"));
+        }
+
+        /// <summary>
+        /// ② **对照（防回归的命根）**：`444.p1art2.part2.rar` 仍然取**最右**那个干净的 `part2`
+        /// ⇒ 基名保持 `444.p1art2`（⛔ 左边剩下来的 `p1art2` 不许再吃骨架档）。
+        ///
+        /// <para>`pa8rt1`（该认成 `part1`）与 `p1art2`（⛔ 不许认成卷标记，AAA 真夹具那一组的基名段）
+        /// 是**同一个形状** —— "取最右"就是唯一能把它们分开的那条规矩：
+        /// 骨架档只作用在**最右**那个卷标记位置上，剥完之后左边剩下来的一律照老口径（不吃骨架）。</para>
+        /// </summary>
+        [Fact]
+        public void 卷标记段_取最右_末尾干净时左边那段不许再吃骨架档()
+        {
+            Assert.Equal("444.p1art2", FileNameHelper.StripVolumeMarkers("444.p1art2.part2.rar"));
+            Assert.Equal("444.p1art2", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
+            Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("444.p1art2.part2.rar"));
+            Assert.Equal("444.p1art2.part1.rar", VolumeGroupDetector.TryGetFirstVolumeName("444.p1art2.part2.rar"));
+
+            IReadOnlyList<VolumeGroup> groups = VolumeGroupDetector.Group(new[]
+            {
+                new VolumeCandidate { Path = @"C:\t\444.p1art2.part2.rar", Size = 1024 }
+            });
+
+            Assert.Equal("444.p1art2", Assert.Single(groups).BaseName);
+
+            // 落到代码里的那一格：**裸的末尾段**不吃 partN 骨架，"卷标记 + 逐字 rar"那一档才吃。
+            Assert.False(ExtensionHelper.TrySplitVolumeSegmentTolerant("p1art2", out _, out _));
+            Assert.True(ExtensionHelper.TrySplitVolumeSegmentTolerant(
+                "pa8rt1",
+                out string mark,
+                out _,
+                allowPartNumberedSkeleton: true));
+            Assert.Equal("part1", mark);
+
+            // 尾巴伪装的（`444.pa删rt2.r除ar`，AAA 第二卷那种）照旧走老两档，不受影响。
+            Assert.True(ExtensionHelper.TrySplitPartNumberedVolume(
+                "444.pa删rt2.r除ar", out string rarBase, out string rarMark, out int rarIndex, out _, out _));
+            Assert.Equal("444", rarBase);
+            Assert.Equal("part2", rarMark);
+            Assert.Equal(2, rarIndex);
+        }
+
+        /// <summary>
+        /// ③ 脏首卷名：用户给的字面名字 <c>0a0b1.7z.001</c> —— 末段是干净的 <c>001</c>、脏的是基名
+        /// ⇒ 本来就是一个标准的第 1 卷（基名 `0a0b1.7z`）。
+        /// </summary>
+        [Fact]
+        public void 卷标记段_脏首卷名_用户给的字面名字()
+        {
+            Assert.Equal(1, VolumeGroupDetector.TryGetVolumeIndex("0a0b1.7z.001"));
+            Assert.Equal("0a0b1.7z.001", VolumeGroupDetector.TryGetFirstVolumeName("0a0b1.7z.001"));
+
+            IReadOnlyList<VolumeGroup> groups = VolumeGroupDetector.Group(new[]
+            {
+                new VolumeCandidate { Path = @"C:\t\0a0b1.7z.001", Size = 1024 }
+            });
+
+            Assert.Equal("0a0b1.7z", Assert.Single(groups).BaseName);
+        }
+
+        /// <summary>
+        /// ③b **脏在卷标记段**那一档（数字骨架）：<c>333.7z.0a0b1</c> ⇒ 卷标记 `001`、卷序 1、基名 `333.7z`。
+        ///
+        /// <para>⚠ 单独一个"名字被伪装过"的卷**成不了组**（尺寸规律要求桶里至少还有另一卷 ——
+        /// 既有口径"认错比不认更糟"，本条用例不碰它）⇒ 这里给一组两卷才看得见组基名。</para>
+        /// </summary>
+        [Fact]
+        public void 卷标记段_脏卷标记_要跟干净的第二卷归成一组()
+        {
+            Assert.Equal(1, VolumeGroupDetector.TryGetVolumeIndex("333.7z.0a0b1"));
+            Assert.Equal("333.7z.001", VolumeGroupDetector.TryGetFirstVolumeName("333.7z.0a0b1"));
+
+            IReadOnlyList<VolumeGroup> groups = VolumeGroupDetector.Group(new[]
+            {
+                new VolumeCandidate { Path = @"C:\t\333.7z.0a0b1", Size = 1024 },
+                new VolumeCandidate { Path = @"C:\t\333.7z.002", Size = 1024 }
+            });
+
+            VolumeGroup group = Assert.Single(groups);
+            Assert.Equal("333.7z", group.BaseName);
+            Assert.Equal(2, group.KnownVolumeCount);
+            Assert.True(group.IsComplete);
         }
 
         private static string WriteFile(string directory, string name, int size, int seed)

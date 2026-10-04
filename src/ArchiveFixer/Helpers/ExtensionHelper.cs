@@ -739,7 +739,23 @@ namespace ArchiveFixer.Helpers
 
             if (!IsVolumePartExtension("." + mark))
             {
-                if (!TrySplitVolumeSegmentTolerant(mark, out canonical, out _) ||
+                /*
+                 * ⛔ **"取最右"那一格**（用户 2026-10-04 拍板：「放开，但规定取最右边那个能自洽的卷标记」）：
+                 * 卷标记段走**通用骨架命中**（`pa8rt1` → `part1`），但**只对"尾巴逐字是 `rar`"这一档生效**。
+                 *
+                 * 为什么尾巴一脏就不吃骨架档：`pa8rt1`（该认成 `part1`）与 `p1art2`
+                 * （AAA 真夹具 `444.p1art2.ra3r` 的**基名段**，⛔ 不许认成卷标记）是**同一个形状** ——
+                 * 字母序列都是 `part`、都夹一个数字，任何按形状的判据都分不开。
+                 * 尾巴干净（`444.pa8rt1.rar`）时它是这一组**最右**的那个卷标记位置，
+                 * 认下来不会动到别人；尾巴是伪装的（`444.p1art2.ra3r`）时同一格会给出
+                 * "基名 `444`、卷标记 `part2`"—— 那一格是基名表第 64 行与 AAA 夹具的命根，照旧不认。
+                 * 尾巴伪装的**干净卷标记**（`444.pa删rt2.r除ar`）走的是上面那两档，一个字没动。
+                 */
+                if (!TrySplitVolumeSegmentTolerant(
+                        mark,
+                        out canonical,
+                        out _,
+                        allowPartNumberedSkeleton: !tailDisguised) ||
                     !IsVolumePartExtension("." + canonical))
                 {
                     return false;
@@ -1078,17 +1094,24 @@ namespace ArchiveFixer.Helpers
 
         /// <summary>
         /// 卷标记骨架命中（<see cref="TrySplitVolumeSegmentTolerant"/> 的第三档）：
-        /// <c>0a0b1</c> → <c>001</c>、<c>z0a1</c> → <c>z01</c>、<c>r0a1</c> → <c>r01</c>。
+        /// <c>0a0b1</c> → <c>001</c>、<c>z0a1</c> → <c>z01</c>、<c>r0a1</c> → <c>r01</c>；
+        /// <paramref name="allowPartNumberedSkeleton"/> = true 时连 <c>pa8rt1</c> → <c>part1</c> 也认。
         /// 与归档后缀那一档**同一条纪律**：**首尾对齐**（杂质只夹在中间）、多个候选 ⇒ 判不出。
         ///
-        /// <para>⛔ <b>partN 骨架**故意不放开**</b>（用户 2026-10-04 点名的 `pa8rt1` ⇒ `part1` 这一格按不下去）：
-        /// `p1art2`（RAR 真夹具 `444.p1art2.part2.rar` 的**基名段**）与 `pa8rt1` 是**同一个形状**
-        /// （字母序列都是 <c>part</c>、都夹一个数字），任何按形状的判据都分不开它们。放开它
-        /// ⇒ `444.p1art2.part2.rar` 的基名从 `444.p1art2` 变成 `444`（RAR 族"基名 = partN 段之前的所有点段"
-        /// 这条不变量当场破，`ArchiveBaseNameTests` 三行 + `AaaReplayPipelineTests` 夹具一起红）。
-        /// 要么两格都要、要么两格都舍 —— 舍掉的是"名字像",保住的是基名规则。</para>
+        /// <para>⛔ <b>partN 骨架按"取最右"规矩放开</b>（用户 2026-10-04 拍板：「放开，但规定取最右边那个
+        /// 能自洽的卷标记 —— 可以」）：只有调用方**已经站定"这一段就是最右那个卷标记"**时才传 true
+        /// （眼下只有 <see cref="TrySplitPartNumberedVolume"/> 那一处：<c>&lt;基名&gt;.&lt;卷标记&gt;.rar</c>，
+        /// 尾巴**逐字**是 <c>rar</c>）。理由是 `p1art2`（RAR 真夹具 `444.p1art2.part2.rar` 的**基名段**）
+        /// 与 `pa8rt1` 是**同一个形状**（字母序列都是 <c>part</c>、都夹一个数字），任何按形状的判据都分不开
+        /// 它们 —— 裸的末尾段一旦也吃骨架档，`444.p1art2.part2.rar` 剥完 `part2.rar` 之后剩下的
+        /// `444.p1art2` 会被再剥一次 ⇒ 基名从 `444.p1art2` 变成 `444`（RAR 族"基名 = partN 段**之前**的
+        /// 所有点段"这条不变量当场破）。⇒ "取最右"就是这条：**左边剩下来的段不许再吃骨架档**。</para>
         /// </summary>
-        private static bool TryMatchVolumeMarkerSkeleton(string s, out string canonicalSegment, out string junk)
+        private static bool TryMatchVolumeMarkerSkeleton(
+            string s,
+            bool allowPartNumberedSkeleton,
+            out string canonicalSegment,
+            out string junk)
         {
             canonicalSegment = string.Empty;
             junk = string.Empty;
@@ -1111,6 +1134,22 @@ namespace ArchiveFixer.Helpers
 
                 unique = byRar;
                 uniqueJunk = rarJunk;
+            }
+
+            /*
+             * partN 骨架（"取最右"那一档）：`part` 四个字母按顺序**从段首**开始，后面**一路到段末全是数字**
+             * （`pa8rt1` → `part1`、`0a0b1` 那种由上面的三位数字骨架管）。
+             */
+            if (allowPartNumberedSkeleton
+                && TryMatchPartNumberedSkeleton(s, out string byPart, out string partJunk))
+            {
+                if (unique != null)
+                {
+                    return false;
+                }
+
+                unique = byPart;
+                uniqueJunk = partJunk;
             }
 
             // 三位数字骨架：段里按顺序出现 3 个 ASCII 数字（`0a0b1` → `001`）。
@@ -1145,6 +1184,80 @@ namespace ArchiveFixer.Helpers
 
             canonicalSegment = unique;
             junk = uniqueJunk;
+            return true;
+        }
+
+        /// <summary>
+        /// <c>partN</c> 骨架：<c>part</c> 四个字母按顺序**从段首**开始、后面**一路到段末全是 ASCII 数字**
+        /// （<c>pa8rt1</c> → <c>part1</c>、<c>paart02</c> → <c>part02</c>）。
+        ///
+        /// <para>⛔ 与另外几档同一条纪律：**首尾对齐**（字母在段首、数字在段末）、没有数字 ⇒ 不认
+        /// （<c>partN</c> 这种"字母尾巴"不是卷标记）；⛔ 只由 <see cref="TrySplitPartNumberedVolume"/>
+        /// 在"尾巴逐字是 <c>rar</c>"那一档转调（"取最右"，见 <see cref="TryMatchVolumeMarkerSkeleton"/>）。</para>
+        /// </summary>
+        private static bool TryMatchPartNumberedSkeleton(string s, out string canonicalSegment, out string junk)
+        {
+            canonicalSegment = string.Empty;
+            junk = string.Empty;
+
+            int[] positions = new int[4];
+            int cursor = 0;
+
+            for (int k = 0; k < 4; k++)
+            {
+                char letter = "part"[k];
+                int found = -1;
+
+                for (int i = cursor; i < s.Length; i++)
+                {
+                    if (char.ToLowerInvariant(s[i]) == letter)
+                    {
+                        found = i;
+                        break;
+                    }
+                }
+
+                if (found < 0)
+                {
+                    return false;
+                }
+
+                positions[k] = found;
+                cursor = found + 1;
+            }
+
+            // 首尾对齐：字母序列从段首开始、数字一路到段末（中间夹什么都算杂质）。
+            if (positions[0] != 0 || cursor >= s.Length)
+            {
+                return false;
+            }
+
+            for (int i = cursor; i < s.Length; i++)
+            {
+                if (!char.IsAsciiDigit(s[i]))
+                {
+                    return false;
+                }
+            }
+
+            string canonical = "part" + s[cursor..];
+
+            if (!IsVolumePartExtension("." + canonical))
+            {
+                return false;
+            }
+
+            var all = new int[positions.Length + (s.Length - cursor)];
+
+            Array.Copy(positions, all, positions.Length);
+
+            for (int i = cursor; i < s.Length; i++)
+            {
+                all[positions.Length + i - cursor] = i;
+            }
+
+            canonicalSegment = canonical;
+            junk = BuildSkeletonJunk(s, all);
             return true;
         }
 
@@ -1299,7 +1412,21 @@ namespace ArchiveFixer.Helpers
         /// <para>⛔ **只回答"像不像卷标记"，不负责敢不敢用** —— 真要据此改名字，调用方还必须拿到
         /// "兄弟卷佐证 + 尺寸规律"两条证据（子卷归组那三层判据里另外两层）。</para>
         /// </summary>
-        public static bool TrySplitVolumeSegmentTolerant(string? segment, out string canonicalSegment, out string junk)
+        /// <param name="segment">待判的那一段（不含点）。</param>
+        /// <param name="canonicalSegment">还原出来的规范卷标记。</param>
+        /// <param name="junk">被当成杂质剔掉的字符（转调 <see cref="TrySplitVolumeSegmentLoose"/> 那颗时按它的口径，可为空串）。</param>
+        /// <param name="allowPartNumberedSkeleton">
+        /// 允不允许吃 **<c>partN</c> 骨架**（<c>pa8rt1</c> → <c>part1</c>）。
+        /// ⛔ 默认 false = 老口径；**只有"取最右"那一处**（<see cref="TrySplitPartNumberedVolume"/>：
+        /// 尾巴逐字是 <c>rar</c> 的 <c>&lt;基名&gt;.&lt;卷标记&gt;.rar</c>）才传 true ——
+        /// 理由见 <see cref="TryMatchVolumeMarkerSkeleton"/>（`p1art2` 与 `pa8rt1` 同形，
+        /// 裸的末尾段吃了骨架档，`444.p1art2.part2.rar` 的基名就会变成 `444`）。
+        /// </param>
+        public static bool TrySplitVolumeSegmentTolerant(
+            string? segment,
+            out string canonicalSegment,
+            out string junk,
+            bool allowPartNumberedSkeleton = false)
         {
             canonicalSegment = string.Empty;
             junk = string.Empty;
@@ -1390,11 +1517,13 @@ namespace ArchiveFixer.Helpers
              * 第三档（2026-10-04，用户拍板）：**通用骨架命中** —— `0a0b1` → `001`、`z0a1` → `z01`。
              *
              * ⛔ 顺序不变（用户口径）：前面那两档是**更快更保守的前置档**，它们判得出来就不用这一档。
-             * ⛔ 这一档**不含** partN 骨架 —— 理由写在 `TryMatchVolumeMarkerSkeleton` 上（`p1art2` 与 `pa8rt1` 同形）。
+             * ⛔ partN 骨架（`pa8rt1` → `part1`）**默认不吃**，只有 <paramref name="allowPartNumberedSkeleton"/>
+             *    为 true 时才吃 —— 那一位只由"取最右"那一处（`TrySplitPartNumberedVolume`）传，
+             *    理由写在 `TryMatchVolumeMarkerSkeleton` 上（`p1art2` 与 `pa8rt1` 同形）。
              */
             if (!ambiguous &&
                 uniqueMark == null &&
-                TryMatchVolumeMarkerSkeleton(s, out string skeletonMark, out string skeletonJunk))
+                TryMatchVolumeMarkerSkeleton(s, allowPartNumberedSkeleton, out string skeletonMark, out string skeletonJunk))
             {
                 uniqueMark = skeletonMark;
                 uniqueJunk = skeletonJunk;
