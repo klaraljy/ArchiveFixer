@@ -170,6 +170,14 @@ namespace ArchiveFixer.Tests
                     StringComparison.Ordinal));
 
             Assert.Equal(1, cores);
+
+            /*
+             * 2026-10-04（两个都叫"包基名"的量收口）：`GetArchiveBaseName` 原先自己跑一遍
+             * "剥标记 + 天真剥一层后缀" —— 现在整条交给**唯一基名出口**的 `ArchiveBaseName` 档，
+             * 本方法只剩转调。⛔ 这一档与 `PackageName`（落点用）是两个用途，不许合并成一个值。
+             */
+            Assert.Contains("VolumeBaseNameLevel.ArchiveBaseName", helper, StringComparison.Ordinal);
+            Assert.Contains("TryResolveVolumeBaseName(fileName, VolumeBaseNameLevel.ArchiveBaseName", helper, StringComparison.Ordinal);
         }
 
         // ================================================================ ② 同名冲突判定表：只有一份

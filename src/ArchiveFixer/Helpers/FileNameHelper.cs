@@ -58,7 +58,27 @@ namespace ArchiveFixer.Helpers
         /// 标记紧跟在已知归档后缀后面（那道闸门是 2026-09-28 真机事故后**只加在归组那一处**的）——
         /// ⛔ 本轮照原样保留，顺手加会改变结论。
         /// </summary>
-        DisguisedVolume
+        DisguisedVolume,
+
+        /// <summary>
+        /// **归档基名**（<c>FileNameHelper.GetArchiveBaseName</c> / <c>GetSafeArchiveBaseName</c>）：
+        /// 在 <see cref="StripMarkers"/> 之上**天真剥一层后缀**（<c>Path.GetFileNameWithoutExtension</c>
+        /// 那一刀；<c>.tar.gz</c> 一族按已知组合多剥几段）。
+        ///
+        /// <para><b>用途</b>：给"同一个包的不同成员"当**匹配键** —— <c>EngineRouter</c> 找"抠出来的内嵌归档
+        /// 与源包同名"、<c>RecursiveExtractor</c> 判"这一份是不是内组那一组的后续卷"、
+        /// <c>RestVolumeCompletenessGate</c> 判"其余物里的片与成品里的片是不是同一组"。</para>
+        ///
+        /// <para>⚠ <b>它与 <see cref="PackageName"/>（包基名，只剥**已知归档后缀**）故意不是一回事</b>
+        /// （2026-10-04 探针实测 + <c>VolumeBaseNameTests</c> 逐格钉住）：
+        /// <c>movie.2024</c> → <c>movie</c>（本档）vs <c>movie.2024</c>（包基名）；
+        /// <c>222.rar.jpg</c> → <c>222.rar</c>（本档）vs <c>222</c>（包基名）；
+        /// <c>444.p1art2.part2.rar</c> → <c>444</c>（本档）vs <c>444.p1art2</c>（包基名）。
+        /// ⛔ **合并成一个值会改结论**：最要命的一格是脏本体名（<c>222.zscip</c> / <c>一只顶美.z删除ip</c>）——
+        /// 本档把它与 <c>222.z01</c> 归一成同一个基名（那道"半套不删"的防数据丢失闸门就靠这一格），
+        /// 包基名那一档不归一 ⇒ 闸门当场放行。合并要用户拍板，⛔ 不许顺手统一。</para>
+        /// </summary>
+        ArchiveBaseName
     }
 
     /// <summary>
@@ -264,48 +284,20 @@ namespace ArchiveFixer.Helpers
                 return "未命名";
             }
 
-            fileName = StripVolumeMarkers(fileName);
-
-            string lower = fileName.ToLowerInvariant();
-
-            if (lower.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
-            {
-                return fileName[..^7];
-            }
-
-            if (lower.EndsWith(".tar.bz2", StringComparison.OrdinalIgnoreCase))
-            {
-                return fileName[..^8];
-            }
-
-            if (lower.EndsWith(".tar.xz", StringComparison.OrdinalIgnoreCase))
-            {
-                return fileName[..^7];
-            }
-
-            if (lower.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
-            {
-                return fileName[..^4];
-            }
-
-            if (lower.EndsWith(".tbz2", StringComparison.OrdinalIgnoreCase))
-            {
-                return fileName[..^5];
-            }
-
-            if (lower.EndsWith(".txz", StringComparison.OrdinalIgnoreCase))
-            {
-                return fileName[..^4];
-            }
-
-            string withoutExt = Path.GetFileNameWithoutExtension(fileName);
-
-            if (string.IsNullOrWhiteSpace(withoutExt))
-            {
-                return fileName;
-            }
-
-            return withoutExt;
+            /*
+             * ⚠ 2026-10-04 收口：本方法原先**自己**跑一遍"剥分卷标记 + 天真剥一层后缀"（`StripVolumeMarkers`
+             * 之后再来一刀 `Path.GetFileNameWithoutExtension`）—— 与 `OutputPlacement.ResolveArchiveBaseName`
+             * 那一档并排放在仓库里，两个都叫"包基名"却对同一串名字给出不同的值（探针实测 3 组不等）。
+             * 现在整条规则搬进**唯一基名出口**的 `ArchiveBaseName` 档，本方法只转调（判据一个字没改，
+             * `ArchiveBaseNameTests` 53 行逐字钉住）。
+             *
+             * ⛔ 这里**不是**把两档合成一个：`ArchiveBaseName`（本方法，匹配键）与 `PackageName`
+             * （包基名，落点用）是两个用途，合并会改结论（含一道防数据丢失闸门）—— 见枚举上那两条注释。
+             */
+            return TryResolveVolumeBaseName(fileName, VolumeBaseNameLevel.ArchiveBaseName, out string baseName, out _)
+                   && baseName.Length > 0
+                ? baseName
+                : fileName;
         }
 
         // ══════════════════ 唯一基名出口（阶段 A 收口，2026-10-03）══════════════════
@@ -378,9 +370,66 @@ namespace ArchiveFixer.Helpers
                 case VolumeBaseNameLevel.DisguisedVolume:
                     return TryResolveDisguisedVolume(name, out baseName, out canonicalSegment);
 
+                case VolumeBaseNameLevel.ArchiveBaseName:
+                    return TryResolveArchiveBaseName(name, out baseName);
+
                 default:
                     return false;
             }
+        }
+
+        /// <summary>
+        /// 归档基名（<see cref="VolumeBaseNameLevel.ArchiveBaseName"/> 的档体）：原先整段写在
+        /// <see cref="GetArchiveBaseName"/> 里（2026-10-04 按 §9.5 搬进唯一出口，**判据一个字没改**）。
+        /// </summary>
+        private static bool TryResolveArchiveBaseName(string fileName, out string baseName)
+        {
+            baseName = string.Empty;
+
+            string stripped = StripVolumeMarkersCore(fileName);
+            string lower = stripped.ToLowerInvariant();
+
+            if (lower.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
+            {
+                baseName = stripped[..^7];
+                return baseName.Length > 0;
+            }
+
+            if (lower.EndsWith(".tar.bz2", StringComparison.OrdinalIgnoreCase))
+            {
+                baseName = stripped[..^8];
+                return baseName.Length > 0;
+            }
+
+            if (lower.EndsWith(".tar.xz", StringComparison.OrdinalIgnoreCase))
+            {
+                baseName = stripped[..^7];
+                return baseName.Length > 0;
+            }
+
+            if (lower.EndsWith(".tgz", StringComparison.OrdinalIgnoreCase))
+            {
+                baseName = stripped[..^4];
+                return baseName.Length > 0;
+            }
+
+            if (lower.EndsWith(".tbz2", StringComparison.OrdinalIgnoreCase))
+            {
+                baseName = stripped[..^5];
+                return baseName.Length > 0;
+            }
+
+            if (lower.EndsWith(".txz", StringComparison.OrdinalIgnoreCase))
+            {
+                baseName = stripped[..^4];
+                return baseName.Length > 0;
+            }
+
+            string withoutExt = Path.GetFileNameWithoutExtension(stripped);
+
+            baseName = string.IsNullOrWhiteSpace(withoutExt) ? stripped : withoutExt;
+
+            return baseName.Length > 0;
         }
 
         /// <summary>
@@ -476,7 +525,29 @@ namespace ArchiveFixer.Helpers
                 unique = candidate;
             }
 
-            return unique == null ? baseName : baseName[..(lastDot + 1)] + unique;
+            if (unique != null)
+            {
+                return baseName[..(lastDot + 1)] + unique;
+            }
+
+            /*
+             * 第三档（2026-10-04，用户拍板）：**通用骨架命中** —— `333.78a8fuaz` → `333.7z`、
+             * `x.7_______z` → `x.7z`（用户原话要的就是"识别到伪装的后缀里面有 `7_______z` 的内容"）。
+             *
+             * ⛔ 判据转调**唯一出口** <see cref="ExtensionHelper.TryMatchKnownSkeleton"/>：
+             * 骨架规则、唯一性、纯数字尾那三条红线都只有那一份，这里不再写第二份。
+             * ⛔ 顺序：排在既有那道"删 1 个字符"**之后**（前两档更快更保守，用户口径：判断顺序不变）。
+             */
+            if (ExtensionHelper.TryMatchKnownSkeleton(
+                    segment,
+                    ExtensionHelper.KnownArchiveExtensions.Select(e => e.TrimStart('.')),
+                    out string bySkeleton,
+                    out _))
+            {
+                return baseName[..(lastDot + 1)] + bySkeleton;
+            }
+
+            return baseName;
         }
 
         /// <summary>

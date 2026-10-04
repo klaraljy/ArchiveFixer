@@ -345,6 +345,40 @@ namespace ArchiveFixer.Extraction
         private const int MaxNearbyDirectories = 200;
 
         /// <summary>
+        /// 这个名字是不是**规范名**（一点杂质都没有）：`x.7z.001` / `x.zip` / `x.rar` / `X.part1.rar` ✓；
+        /// `x.7z.001.txt`（另起一段的尾巴）/ `x.7z.001删除`（粘着垃圾）/ `x.z0删1`（靠容错才认出来）✗。
+        ///
+        /// <para><b>为什么必须把它当第二道闸门</b>（用户 2026-10-04）：改名是**不可逆**动作，
+        /// 而"建议名"是从名字推出来的 —— 只要它自己还带着脏尾巴，就说明这份计划在拿一个
+        /// **没被证实干净**的名字去覆盖一个**可能本来就对**的名字（探针实测：`x.7z.001 → x.7z.001.txt`）。
+        /// 判不出 ⇒ 整份计划不成立。</para>
+        ///
+        /// <para>判据**只转调既有出口**（⛔ 不新造第三把尺子）：末段逐字就是卷标记
+        /// （<see cref="ExtensionHelper.IsVolumePartExtension"/>），或者末段逐字是本体后缀（`zip` / `rar`）。
+        /// ⚠ 刻意**不用**容错档：`x.7z.001.txt` 在 `IsVolumePartFileName` 那儿是"算分卷"的
+        /// （另起一段的尾巴归**还原工序**管），拿它当闸门等于没闸门。</para>
+        /// </summary>
+        private static bool IsCanonicalVolumeName(string fileName)
+        {
+            string[] parts = fileName.Split('.');
+
+            if (parts.Length < 2)
+            {
+                return false;
+            }
+
+            string last = parts[^1];
+
+            if (ExtensionHelper.IsVolumePartExtension("." + last))
+            {
+                return true;
+            }
+
+            return last.Equals("zip", StringComparison.OrdinalIgnoreCase)
+                   || last.Equals("rar", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// 算出改名计划。任何 IO 意外都落成"不能改 + 原因"，绝不抛。
         /// </summary>
         /// <param name="currentPath">那一卷现在的完整路径。</param>
@@ -439,6 +473,24 @@ namespace ArchiveFixer.Extraction
             if (string.Equals(suggested, fileName, StringComparison.OrdinalIgnoreCase))
             {
                 return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+            }
+
+            /*
+             * ⛔ **第二道闸门（用户 2026-10-04 点名）：建议名自己必须是规范名。**
+             *
+             * 现场（2026-10-04 只读探针实测，同一组 `x.7z.001` + `x.7z.002.txt`）：
+             * 建议名是从**兄弟卷的名字**推出来的（`TryGetFirstVolumeName('x.7z.002.txt')` ⇒ `x.7z.001.txt`）
+             * —— **脏尾巴被原样继承**；而下面那道"兄弟基名逐字相等"的闸门用的又是**剥标记档**
+             * （跨段形状两边都退化成 `x`）⇒ 放行 ⇒ 计划把**干净的名字改成脏名字**（方向反了）。
+             * 入口换成那个脏兄弟时反而给出正确方向 —— 同一个判据在两种入口下给出相反结论。
+             *
+             * 判据只转调既有出口（见 <see cref="IsCanonicalVolumeName"/>）：`x.7z.001` / `x.zip` / `X.part1.rar`
+             * 算规范；`x.7z.001.txt`（另起一段的尾巴）、`x.7z.001删除`（粘着垃圾）、`x.z0删1` 一律不算
+             * ⇒ **整份计划不成立**（判不出就什么都不做，兜底落在"不改名"那一档）。
+             */
+            if (!IsCanonicalVolumeName(suggested))
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSuggestion);
             }
 
             /*
@@ -1704,7 +1756,19 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            string selfBase = OutputPlacement.ResolveArchiveBaseName(fileName);
+            /*
+             * ⛔ 2026-10-04：**同档比较**（"哪一档比就跟同一档比"）。
+             *
+             * 老写法是 `PackageName(本体)` 比 `DisguisedVolume(兄弟)` —— **跨档**：这两档对
+             * "保不保留归档后缀段"这一格答得不一样（包名档：不保留 `x`；伪装卷档：保留 `x.7z`），
+             * 于是 7z / rar 形状**永远配不上**（`111.7z.001` + `111.7z.002.txt` 判 `CanRepair=False`），
+             * 只有 zip 形状恰好撞对（两边都掉后缀）。同一份判据"同形状换后缀就换结论"。
+             *
+             * 现在两边都取**锚点那一档**：本体名（`x.zip` / `x.rar`，后缀段属于它自己）⇒ 剥掉后缀段；
+             * 末段逐字就是卷标记（`x.7z.001`）⇒ **保留**后缀段（`x.7z`，与兄弟卷的伪装卷档同解）。
+             * ⛔ 两个用途（归组键 / 落点名）的语义一个字没动 —— 这里只用同一个出口算、不合并档位。
+             */
+            string selfBase = ResolveAnchorBaseName(fileName);
 
             if (selfBase.Length == 0)
             {
@@ -1781,6 +1845,29 @@ namespace ArchiveFixer.Extraction
                 Siblings = ordered.Select(i => i.CurrentFileName).ToList(),
                 Items = ordered
             };
+        }
+
+        /// <summary>
+        /// **锚点那一卷的组基名**（<see cref="PlanDisguisedVolumesBesideStandardSelf"/> 用来跟兄弟卷
+        /// **同一档**比的那个量）：
+        /// <list type="bullet">
+        /// <item><description>本体名（<c>x.zip</c> / <c>x.rar</c>，末尾一段是后缀不是卷标记）⇒
+        /// 后缀段属于本体自己 ⇒ 基名 = <c>OutputPlacement.ResolveArchiveBaseName</c>（包名档，<c>x</c>）；</description></item>
+        /// <item><description>末段**逐字就是卷标记**（<c>x.7z.001</c>）⇒ 后缀段属于整组 ⇒ 基名 =
+        /// <see cref="FileNameHelper.StripVolumeMarkers"/>（剥标记档，<c>x.7z</c>，与兄弟卷的伪装卷档同解）。</description></item>
+        /// </list>
+        ///
+        /// <para>⛔ 判据只转调既有出口，不新造尺子；⛔ 这里**不合并**组键与包名两个用途
+        /// （见 <c>VolumeBaseNameLevel</c> 上的说明）。</para>
+        /// </summary>
+        private static string ResolveAnchorBaseName(string fileName)
+        {
+            string[] parts = fileName.Split('.');
+            string last = parts.Length > 0 ? parts[^1] : string.Empty;
+
+            return last.Length > 0 && ExtensionHelper.IsVolumePartExtension("." + last)
+                ? FileNameHelper.StripVolumeMarkers(fileName)
+                : OutputPlacement.ResolveArchiveBaseName(fileName);
         }
 
         /// <summary>

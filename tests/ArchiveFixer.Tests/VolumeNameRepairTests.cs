@@ -364,6 +364,134 @@ namespace ArchiveFixer.Tests
             Assert.Equal(occupierHash, Sha256(occupier));
         }
 
+        // ================================================================ 反向改名（2026-10-04 只读探针量出来的硬缺陷）
+
+        /// <summary>
+        /// **入口给干净的第 1 卷**（用户 2026-10-04 点名的第一条）：同一组 <c>x.7z.001</c>（干净）
+        /// + <c>x.7z.002.txt</c>（名字被改坏），计划**绝不许**把干净的那个改成脏名字
+        /// （探针实测的老行为：`x.7z.001 → x.7z.001.txt` —— 方向反了）。
+        ///
+        /// <para>两种结果都算过：**只改脏的那一卷**（`x.7z.002.txt → x.7z.002`）或**整份计划不成立**
+        /// （判不出就什么都不做）。⛔ 只有"把干净名改成脏名"这一种结果必须红。</para>
+        ///
+        /// <para>根因链四条（都在这一条里被挡住）：① 建议名从兄弟卷的名字推、**继承了它的脏尾巴**；
+        /// ② <c>VolumeNameRepair.Plan</c> 里那道"兄弟基名逐字相等"用**剥标记档**比，跨段形状两边都
+        /// 退化成 <c>x</c> ⇒ 放行；③ 缺"**建议名自己必须是规范名**"的第二道闸门；④
+        /// <c>PlanDisguisedVolumesBesideStandardSelf</c> 拿**包名档**比**伪装卷档**（跨档）。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("x.7z", ".002.txt")]
+        [InlineData("x.7z", ".002.bak")]
+        [InlineData("x.7z", ".002删除")]
+        public void 反向改名_入口给干净的第1卷_只许改脏的那一卷(string stem, string dirtyTail)
+        {
+            string directory = NewDirectory("reverse-clean-first-" + dirtyTail.Replace(".", string.Empty));
+
+            string clean = CreateFile(directory, stem + ".001", 64, seed: 1);
+            string dirty = CreateFile(directory, stem + dirtyTail, 64, seed: 2);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(clean, NamesIn(directory));
+
+            // ⛔ 这一条是被点名的那一格：绝不许把干净的名字改成脏名字。
+            Assert.DoesNotContain(".001.txt", plan.SuggestedFileName);
+            Assert.DoesNotContain(".001.bak", plan.SuggestedFileName);
+            Assert.DoesNotContain(".001删除", plan.SuggestedFileName);
+            Assert.DoesNotContain(
+                plan.Items,
+                item => string.Equals(item.CurrentFileName, stem + ".001", StringComparison.OrdinalIgnoreCase));
+
+            if (plan.CanRepair)
+            {
+                // 能改时，改的必须是**脏的那一卷**，而且目标名是规范名。
+                VolumeRepairItem only = Assert.Single(plan.Items);
+                Assert.Equal(stem + dirtyTail, only.CurrentFileName);
+                Assert.Equal(stem + ".002", only.SuggestedFileName);
+            }
+
+            // 计划阶段一个字节都不写：两个文件都还在原地、名字一个都没变。
+            Assert.True(File.Exists(clean));
+            Assert.True(File.Exists(dirty));
+        }
+
+        /// <summary>
+        /// **入口给那个脏兄弟**（探针里本来就正确的那一格，照旧不许回退）：`x.7z.002.txt → x.7z.002`。
+        /// </summary>
+        [Fact]
+        public void 反向改名_入口给脏兄弟_照旧给出正确方向()
+        {
+            string directory = NewDirectory("reverse-dirty-entry");
+
+            CreateFile(directory, "x.7z.001", 64, seed: 1);
+            string dirty = CreateFile(directory, "x.7z.002.txt", 64, seed: 2);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(dirty, NamesIn(directory));
+
+            Assert.True(plan.CanRepair, plan.Reason);
+            Assert.Equal("x.7z.002", plan.SuggestedFileName);
+            Assert.Equal(Path.Combine(directory, "x.7z.002"), plan.TargetPath);
+        }
+
+        /// <summary>
+        /// **三卷混脏**（`.001` 标准 + `.002.txt` 跨段 + `.003` 标准）：探针实测老行为是
+        /// <c>CanRepair=False</c>（"推不出标准名"）—— 同一份判据在不同夹具上时好时坏。
+        /// 现在要求：**要么**只把脏的那一卷改成标准名、**要么**如实说不成立；
+        /// ⛔ 两个干净卷的名字一个都不许动。
+        /// </summary>
+        [Fact]
+        public void 反向改名_三卷混脏_不许退化成判不出()
+        {
+            string directory = NewDirectory("reverse-three-volumes");
+
+            string v1 = CreateFile(directory, "111.7z.001", 64, seed: 1);
+            string v2 = CreateFile(directory, "111.7z.002.txt", 64, seed: 2);
+            string v3 = CreateFile(directory, "111.7z.003", 64, seed: 3);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(v1, NamesIn(directory));
+
+            Assert.True(plan.CanRepair, $"三卷里只有一卷名字脏，必须能修：{plan.Reason}");
+
+            VolumeRepairItem only = Assert.Single(plan.Items);
+            Assert.Equal("111.7z.002.txt", only.CurrentFileName);
+            Assert.Equal("111.7z.002", only.SuggestedFileName);
+
+            // 两个标准名的卷一个都没被列进计划（⛔ 更不许被当成"要改的"）。
+            Assert.DoesNotContain(
+                plan.Items,
+                item => string.Equals(item.CurrentFileName, "111.7z.001", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(item.CurrentFileName, "111.7z.003", StringComparison.OrdinalIgnoreCase));
+
+            Assert.True(File.Exists(v2));
+            Assert.True(File.Exists(v3));
+        }
+
+        /// <summary>
+        /// **第二道闸门的那一格**（"建议名自己必须是规范名"）：这一组里**干净的那一卷**是
+        /// <c>x.001</c>（数字族第 1 卷），兄弟卷叫 <c>x.7z.002.txt</c>（名字被改坏）。
+        ///
+        /// <para>老行为：建议名从兄弟卷的名字推 ⇒ <c>x.7z.001.txt</c>，而"兄弟基名逐字相等"那道闸门
+        /// 用剥标记档比时两边都退化成 <c>x</c> ⇒ **放行** ⇒ 计划是 <c>x.001 → x.7z.001.txt</c>
+        /// （把干净名改成脏名）。</para>
+        ///
+        /// <para>⚠ 为什么用这个形状而不是 <c>x.7z.001</c> + <c>x.7z.002.txt</c>：后者现在被
+        /// <see cref="VolumeNameRepair.PlanDisguisedVolumesBesideStandardSelf"/> 那条**同档比较**
+        /// 当场接住（直接给出正确方向），走不到这条从名字推建议名的老路 —— 两条防线是叠加的，
+        /// 这一条专钉**第二道**。</para>
+        /// </summary>
+        [Fact]
+        public void 反向改名_建议名不是规范名时_整份计划不成立()
+        {
+            string directory = NewDirectory("reverse-gate2");
+
+            string clean = CreateFile(directory, "x.001", 64, seed: 1);
+            CreateFile(directory, "x.7z.002.txt", 64, seed: 2);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(clean, NamesIn(directory));
+
+            Assert.False(plan.CanRepair, $"建议名 `x.7z.001.txt` 不是规范名 ⇒ 整份计划不成立，实际：{plan.Describe()}");
+            Assert.Equal(StatusText.VolumeRepairNoSuggestion, plan.Reason);
+            Assert.True(File.Exists(clean));
+        }
+
         private string NewDirectory(string name)
         {
             string path = Path.Combine(_root, name);

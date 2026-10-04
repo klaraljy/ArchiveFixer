@@ -19,6 +19,12 @@ namespace ArchiveFixer.Tests
     ///
     /// <para>⛔ 期望值一个都不许"顺手调准"：改了哪一格，就是改了既有结论，必须先拍板。</para>
     ///
+    /// <para>⚠ <b>2026-10-04 改了一格</b>（`444.p1art2.ra3r` 的「首卷名」：<c>null</c> → <c>444.p1art2.rar</c>）：
+    /// 用户当天拍板给"去杂质之后是什么"加了**第三档（通用骨架命中）** —— `ra3r` 里 `r`…`a`…`r` 按序出现
+    /// ⇒ 命中 `rar` ⇒ 这个文件被 <c>VolumeGroupDetector.Analyze</c> 的 ③b 认成"本体后缀被塞了杂质的 RAR 本体"
+    /// ⇒ 首卷名是 `444.p1art2.rar`。这正是用户点名的 `ra31415926535r` 那条口径的**代价**（同一条规则的短版本），
+    /// 如实钉在这里；其余 52 行逐字未动（正反例见 <c>VolumeSkeletonMatchTests</c>）。</para>
+    ///
     /// <para>三族的基名规则（方案 §1 ②）：
     /// RAR = <c>partN</c> 段**之前的所有点段**（<c>444.p1art2.part2.rar</c> → <c>444.p1art2</c>，
     /// ⛔ 不是 <c>.rar</c> 前面那段）；7z / ZIP = 锚点名剥掉**卷标记段 + 归档后缀段**
@@ -61,7 +67,7 @@ namespace ArchiveFixer.Tests
             Row("movie.mkv.rar", "movie.mkv.rar", "movie.mkv", "movie.mkv.rar", "movie.mkv.rar", "movie.mkv", "movie.mkv.rar", null, null, "movie.mkv"),
             Row("222.rar.jpg", "222.rar.jpg", "222", "222.rar.jpg", "222.rar.jpg", "222.rar.jpg", null, null, null, "222.rar"),
             Row("444.p1art2.part1.rar", "444.p1art2", "444.p1art2", "444.p1art2.part1.rar", "444.p1art2.part1.rar", "444.p1art2", "444.p1art2.part1.rar", null, null, "444"),
-            Row("444.p1art2.ra3r", "444.p1art2.ra3r", "444.p1art2.ra3r", "444.p1art2.ra3r", "444.p1art2.ra3r", "444.p1art2", null, null, null, "444.p1art2"),
+            Row("444.p1art2.ra3r", "444.p1art2.ra3r", "444.p1art2.ra3r", "444.p1art2.ra3r", "444.p1art2.ra3r", "444.p1art2", "444.p1art2.rar", null, null, "444.p1art2"),
             Row("111.parst1.racr", "111", "111", "111.parst1.racr", "111.parst1.racr", "111", "111.part1.racr", "111", "part1.rar", "111"),
             Row("x.part1.rar", "x", "x", "x.part1.rar", "x.part1.rar", "x", "x.part1.rar", null, null, "x"),
             Row("111.part1.rar", "111", "111", "111.part1.rar", "111.part1.rar", "111", "111.part1.rar", null, null, "111"),
@@ -173,6 +179,43 @@ namespace ArchiveFixer.Tests
                 VolumeBaseNameLevel.AnchorStem,
                 out _,
                 out _));
+        }
+
+        /// <summary>
+        /// **两个都叫"包基名"的量**（2026-10-04 只读探针实测：同一串名字给出不同的值）—— 逐格钉住
+        /// "它们各自是什么"，并说明**为什么不能合成一个值**。
+        ///
+        /// <list type="bullet">
+        /// <item><description><see cref="VolumeBaseNameLevel.PackageName"/>（包基名）←
+        /// <c>OutputPlacement.ResolveArchiveBaseName</c>：落点/包目名用，只剥**已知归档后缀**。</description></item>
+        /// <item><description><see cref="VolumeBaseNameLevel.ArchiveBaseName"/>（归档基名）←
+        /// <c>FileNameHelper.GetArchiveBaseName</c>：给"同一个包的不同成员"当**匹配键**
+        /// （`EngineRouter` / `RecursiveExtractor` / `RestVolumeCompletenessGate`），天真剥一层后缀。</description></item>
+        /// </list>
+        ///
+        /// <para>⛔ **合并成一个值 = 改结论**，最要命的是 `222.zscip` 那一格：归档基名把它与 `222.z01`
+        /// 归一成同一个基名 —— `RestVolumeCompletenessGate`（"其余物里的分卷是半套就什么都不做"
+        /// 那道防数据丢失闸门）就靠这一格；包基名那一档不归一 ⇒ 闸门当场放行（2026-09-30 真机
+        /// 25 GB 被永久删除正是这个形状）。合并要用户拍板，⛔ 不许顺手统一。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("444.p1art2.part2.rar", "444.p1art2", "444")]
+        [InlineData("222.rar.jpg", "222", "222.rar")]
+        [InlineData("amb909.7sz.00c1", "amb909.7sz", "amb909")]
+        [InlineData("222.zscip", "222.zscip", "222")]
+        [InlineData("222.z01", "222", "222")]
+        [InlineData("movie.2024", "movie.2024", "movie")]
+        public void 包基名与归档基名是两个问题_各自的值逐格钉住(
+            string name,
+            string expectedPackageName,
+            string expectedArchiveBaseName)
+        {
+            Assert.Equal(expectedPackageName, OutputPlacement.ResolveArchiveBaseName(name));
+            Assert.Equal(expectedArchiveBaseName, FileNameHelper.GetArchiveBaseName(name));
+
+            // 两个值都必须由**唯一基名出口**的两档算出来（⛔ 不许任何一处自己再算一遍）。
+            Assert.Equal(expectedPackageName, Resolve(name, VolumeBaseNameLevel.PackageName));
+            Assert.Equal(expectedArchiveBaseName, Resolve(name, VolumeBaseNameLevel.ArchiveBaseName));
         }
 
         private static string Resolve(string name, VolumeBaseNameLevel level, string? extension = null) =>
