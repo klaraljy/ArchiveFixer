@@ -2282,6 +2282,25 @@ namespace ArchiveFixer.Extraction
 
                 publishMessage = publishResult.Message;
 
+                /*
+                 * ⛔ 发布侧"判不出就没动"的那几件事**必须一条一条说出来**（2026-10-03 就地替换那一档）：
+                 * 典型是"这一组卷本该被替换掉，但同组有一片不在我们这一步搬进来的名单里（可能在别的目录 /
+                 * 名字认不出）⇒ 一个字节都不删"。不写出来，用户只会看到"产物里怎么还留着几个包"，
+                 * 而原因（我们不敢动）一个字都没有 —— 这正是 §9.5 那条"要删的动作判不出就什么都不做，
+                 * 而且要留证据"。⛔ 只是日志，不改任务结论（发布成功仍然是成功）。
+                 */
+                foreach (string warning in publishResult.Warnings)
+                {
+                    /*
+                     * 前缀用**本次递归那个归档的文件名**（`BuildResult` 这一层拿不到任务的显示名，
+                     * 调用方会在汇总那一行自己加任务名）—— 没有它，一批里几十个包的 WARN 会混在一起，
+                     * 谁也认不出是哪一单。
+                     */
+                    string label = Path.GetFileName(_lastRunArchivePath);
+
+                    Log("WARN", label.Length == 0 ? warning : $"{label}：{warning}");
+                }
+
                 if (publishResult.Success)
                 {
                     // 只有真的发出去了才改指向：发布失败时 FinalOutputPath 仍指向工作区里的产物，

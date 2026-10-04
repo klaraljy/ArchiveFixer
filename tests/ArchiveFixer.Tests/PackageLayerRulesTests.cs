@@ -568,6 +568,215 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        // ═════════════════ 就地替换的"半套分卷"兜底（2026-10-03 第三轮） ═════════════════
+
+        /// <summary>
+        /// **用例 ①（撞名残留不是我们的）**：交付前暂存里已经躺着一份**同名残留**（不是我们这一步搬来的）⇒
+        /// <list type="number">
+        /// <item><description>它**一个字节都不动**（老写法只问 <c>File.Exists</c>，会把这份别人的东西删掉）；</description></item>
+        /// <item><description>我们**真搬进来的那一份**（撞名 ⇒ 被改成 `Y.7z(1).001`）照旧被清掉，同组的 `Y.7z.002` 也照旧清掉。</description></item>
+        /// </list>
+        ///
+        /// <para><b>红检</b>：把 <c>ExtractionWorkspace.TryDeleteConsumedPackage</c> 里那道"是不是我们这一步搬进来的那一份"
+        /// （<c>movedFromTo</c> 查表）撤掉、改回只问 <c>File.Exists(publishedArchivePath)</c> ⇒ 本条变红：
+        /// 残留那份被删掉（<c>Assert.Equal() Failure</c>：读出来是空 / 抛 <c>FileNotFoundException</c>），
+        /// 而我们那一份 `Y.7z(1).001` 反而留在产物里。</para>
+        /// </summary>
+        [Fact]
+        public void 撞名残留_不是我们搬来的那一份_一个字节都不动_我们那一份照旧清掉()
+        {
+            string root = NewTempRoot();
+
+            try
+            {
+                var workspace = new ExtractionWorkspace(Path.Combine(root, "ws"), "stale-entry");
+                WorkspaceLayer outer = workspace.CreateNextLayer(Path.Combine(root, "AAA.7z"));
+
+                WriteFile(outer.OutputPath, "note.txt");
+                WriteFile(outer.OutputPath, "Y.7z.001");
+                WriteFile(outer.OutputPath, "Y.7z.002");
+
+                WorkspaceLayer inner = workspace.CreateNextLayer(Path.Combine(outer.OutputPath, "Y.7z.001"));
+                WriteFile(inner.OutputPath, @"内容物\payload.bin");
+
+                string target = Path.Combine(root, "stage");
+                Directory.CreateDirectory(target);
+
+                // 上一趟留下的同名残留（内容刻意不一样，好逐字认出来）。
+                string leftover = Path.Combine(target, "Y.7z.001");
+                File.WriteAllText(leftover, "上一趟留下的同名残留");
+
+                WorkspacePublishResult published = workspace.Publish(target, inPlaceInnerPackages: true);
+
+                Assert.True(published.Success, published.Message);
+
+                // ① ⛔ 残留一个字节都不动（内容逐字还在）。
+                Assert.Equal("上一趟留下的同名残留", File.ReadAllText(leftover));
+
+                // ② 我们真搬进来的那一份（撞名 ⇒ `Y.7z(1).001`）照旧被清掉，同组那一卷也照旧被清掉。
+                Assert.False(
+                    File.Exists(Path.Combine(target, "Y.7z(1).001")),
+                    "我们这一步搬进来的那一份才是这一档该清的那一份");
+                Assert.False(File.Exists(Path.Combine(target, "Y.7z.002")));
+
+                // ③ 内容物照常落位。
+                Assert.True(File.Exists(Path.Combine(target, "内容物", "payload.bin")));
+
+                // ④ 有一条 WARN 说清"那个位置上的同名文件不是我们的"。
+                Assert.Contains(
+                    published.Warnings,
+                    warning => warning.Contains("不是我们这一步搬进来的那一份", StringComparison.Ordinal));
+            }
+            finally
+            {
+                TryDelete(root);
+            }
+        }
+
+        /// <summary>
+        /// **用例 ②（同组另一片在别的目录）**：`AAA\Y.7z.001/.002` 要解，而同组的 `Y.7z.003` 落在
+        /// **另一条分支** `BBB\` 里 ⇒ 只清 `AAA\` 那两片就留下**半套**（定稿侧的分卷完整性闸门随后会把整份计划作废）。
+        ///
+        /// <para>断言：**一片都不删**（连被消费的那一份也不删 —— 只删一半就是半套）+ 一条 WARN **点名两边**；
+        /// 内容物照常落位。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>DeleteConsumedVolumeSiblings</c> 里那道"这一棵树里不许还有同基名的归档件"
+        /// （<c>RestVolumeCompletenessGate.DescribeBlockerForCandidates</c>）撤掉 ⇒ 本条变红：
+        /// `AAA\Y.7z.001/.002` 被删光，产物里只剩一条孤零零的 `BBB\Y.7z.003`。</para>
+        /// </summary>
+        [Fact]
+        public void 同组另一片在别的目录_一片都不删_并点名两边()
+        {
+            string root = NewTempRoot();
+
+            try
+            {
+                var workspace = new ExtractionWorkspace(Path.Combine(root, "ws"), "split-branch");
+                WorkspaceLayer outer = workspace.CreateNextLayer(Path.Combine(root, "AAA.7z"));
+
+                WriteFile(outer.OutputPath, @"AAA\Y.7z.001");
+                WriteFile(outer.OutputPath, @"AAA\Y.7z.002");
+                WriteFile(outer.OutputPath, @"BBB\Y.7z.003");
+
+                WorkspaceLayer inner = workspace.CreateNextLayer(Path.Combine(outer.OutputPath, @"AAA\Y.7z.001"));
+                WriteFile(inner.OutputPath, @"内容物\payload.bin");
+
+                string target = Path.Combine(root, "stage");
+                WorkspacePublishResult published = workspace.Publish(target, inPlaceInnerPackages: true);
+
+                Assert.True(published.Success, published.Message);
+
+                // ① ⛔ 一片都不删（含被消费的那一份）。
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.001")));
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.002")));
+                Assert.True(File.Exists(Path.Combine(target, "BBB", "Y.7z.003")));
+
+                // ② 内容物照常落位（判据拦的是"删"，不是"解"）。
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "内容物", "payload.bin")));
+
+                // ③ WARN 两边都点到了名。
+                Assert.Contains(
+                    published.Warnings,
+                    warning => warning.Contains("是一组分卷的一片", StringComparison.Ordinal)
+                               && warning.Contains("Y.7z.001", StringComparison.Ordinal)
+                               && warning.Contains("Y.7z.003", StringComparison.Ordinal));
+            }
+            finally
+            {
+                TryDelete(root);
+            }
+        }
+
+        /// <summary>
+        /// **用例 ②-2（同组那一片的名字认不出）**：`AAA\Y.7z.001/.002` 旁边还躺着一片**名字被改坏**的
+        /// `Y.z删除ip`（§44.2 的真机形状）。老写法只按 `IsVolumePartFileName` 认兄弟 ⇒ 认不出它、
+        /// 把 `.001/.002` 删掉，留下这一片 = **半套**。
+        ///
+        /// <para>断言：**一片都不删** + 一条 WARN（点名这一片认不出/还在树里）。</para>
+        ///
+        /// <para><b>红检</b>：同用例 ② 那道闸门撤掉 ⇒ 本条变红（`.001/.002` 被删，`Y.z删除ip` 孤零零留下）。</para>
+        /// </summary>
+        [Fact]
+        public void 同组那一片名字认不出_一片都不删_并点名()
+        {
+            string root = NewTempRoot();
+
+            try
+            {
+                var workspace = new ExtractionWorkspace(Path.Combine(root, "ws"), "disguised-piece");
+                WorkspaceLayer outer = workspace.CreateNextLayer(Path.Combine(root, "AAA.7z"));
+
+                WriteFile(outer.OutputPath, @"AAA\Y.7z.001");
+                WriteFile(outer.OutputPath, @"AAA\Y.7z.002");
+                WriteFile(outer.OutputPath, @"AAA\Y.z删除ip");
+
+                WorkspaceLayer inner = workspace.CreateNextLayer(Path.Combine(outer.OutputPath, @"AAA\Y.7z.001"));
+                WriteFile(inner.OutputPath, @"内容物\payload.bin");
+
+                string target = Path.Combine(root, "stage");
+                WorkspacePublishResult published = workspace.Publish(target, inPlaceInnerPackages: true);
+
+                Assert.True(published.Success, published.Message);
+
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.001")));
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.002")));
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.z删除ip")));
+
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "内容物", "payload.bin")));
+
+                Assert.Contains(
+                    published.Warnings,
+                    warning => warning.Contains("Y.z删除ip", StringComparison.Ordinal));
+            }
+            finally
+            {
+                TryDelete(root);
+            }
+        }
+
+        /// <summary>
+        /// **用例 ③（对照，⛔ 不许放宽）**：整组都在、名字都认得出、也没有撞名残留 ⇒ **照旧整组清掉**，
+        /// 而且**一条 WARN 都不许有**（新加的两道闸门不许把合法的清理拦下来 —— 这是防"多拦"的守门断言）。
+        /// </summary>
+        [Fact]
+        public void 整组都在且都认得出_照旧整组清掉_且一条WARN都没有()
+        {
+            string root = NewTempRoot();
+
+            try
+            {
+                var workspace = new ExtractionWorkspace(Path.Combine(root, "ws"), "clean-group");
+                WorkspaceLayer outer = workspace.CreateNextLayer(Path.Combine(root, "AAA.7z"));
+
+                WriteFile(outer.OutputPath, @"AAA\Y.7z.001");
+                WriteFile(outer.OutputPath, @"AAA\Y.7z.002");
+                WriteFile(outer.OutputPath, @"AAA\note.txt");
+
+                WorkspaceLayer inner = workspace.CreateNextLayer(Path.Combine(outer.OutputPath, @"AAA\Y.7z.001"));
+                WriteFile(inner.OutputPath, @"内容物\payload.bin");
+
+                string target = Path.Combine(root, "stage");
+                WorkspacePublishResult published = workspace.Publish(target, inPlaceInnerPackages: true);
+
+                Assert.True(published.Success, published.Message);
+
+                // ① 整组一个都不许留在产物里（老口径一个字没变）。
+                Assert.False(File.Exists(Path.Combine(target, "AAA", "Y.7z.001")));
+                Assert.False(File.Exists(Path.Combine(target, "AAA", "Y.7z.002")));
+
+                // ② 别的东西照旧在。
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "note.txt")));
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "内容物", "payload.bin")));
+
+                // ③ ⛔ 一次都没被拦（多拦 = 逐层回收整体失效的那条路）。
+                Assert.Empty(published.Warnings);
+            }
+            finally
+            {
+                TryDelete(root);
+            }
+        }
+
         [Fact]
         public void 多分支_两个分支都在同一层时各自一层()
         {

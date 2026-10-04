@@ -466,6 +466,59 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **用例 H2（深嵌套 + 同级另一条分支，2026-10-03 第三轮：取消 3 层上限）**：候选比成品根**深三层**
+        /// （`&lt;成品根&gt;\X\AAA\BBB\mid.7z.001`），而同组的另一片在**另一条分支**
+        /// （`&lt;成品根&gt;\Y\CCC\mid.z删除ip`）⇒ 只上溯 3 层时第 3 层那个祖先（`X`）虽然也是递归扫的，
+        /// 但 `Y` 不在它里面 ⇒ 四个根一个都盖不到 ⇒ **放行 = 不可逆删除**。
+        ///
+        /// <para>断言：**零删除** + 内层包整组与源包都还在（被改坏的那一片也在）+ 有那一行 WARN 点名两边。</para>
+        ///
+        /// <para><b>红检</b>：把层数上限加回去（`EnumerateSplitGateArtifactRoots` 里那个
+        /// <c>level &lt; SplitGateAncestorLevels</c> / "不在目标根里就最多上溯 3 层"那一脚）⇒ 本用例变红
+        /// （`Assert.Empty() Failure: Collection was not empty` —— 整组内层包被当场删掉，§44.2 的灾难重演）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例H2_半套的另一片深三层且在同级另一条分支_也要拦下()
+        {
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
+            string outer = BuildSplitVolumeChain(nestedDepth: 3);
+
+            var fakeRestExecutor = new FakeDeleteExecutor();
+            harness.Coordinator.RestDeleteExecutor = fakeRestExecutor;
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            foreach (var entry in harness.Log.Logs.Where(e => e.Message.Contains("mid", StringComparison.Ordinal)))
+            {
+                _output.WriteLine($"[{entry.Level}] {entry.Message}");
+            }
+
+            // ① 这一层真的解开了（不然"没删"可能只是整条链没跑）。
+            Assert.NotEmpty(FindFiles("final.txt"));
+
+            // ② ⛔ 零删除：这一层与链尾那两条路都要被闸门拦下。
+            Assert.Empty(harness.SourceDeletes.DeletedPaths);
+            Assert.Empty(fakeRestExecutor.PermanentCalls);
+            Assert.Empty(fakeRestExecutor.RecycleCalls);
+
+            // ③ 内层包整组（含被改坏的那一片）与源包都还在。
+            Assert.NotEmpty(FindFiles("mid.7z.001"));
+            Assert.NotEmpty(FindFiles("mid.7z.002"));
+            Assert.NotEmpty(FindFiles("mid.z删除ip"));
+            Assert.NotEmpty(FindFiles("outer.7z"));
+
+            // ④ 有一行 WARN，而且**两边都点到了名**。
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Level == "WARN"
+                         && entry.Message.Contains("是一组分卷的一片", StringComparison.Ordinal)
+                         && entry.Message.Contains("mid", StringComparison.Ordinal)
+                         && entry.Message.Contains("成品目录", StringComparison.Ordinal));
+        }
+
+        /// <summary>
         /// <b>用例 I（成品目录树读不动，2026-10-03 第二轮复核）</b>：闸门扫不到那棵树时**必须拦下**
         /// （原来 `catch ⇒ 当没有外面` = 放行，与类注释自称的"读不动就拦"相反）。
         ///
@@ -713,7 +766,7 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **用例 G 的夹具**（复刻 §44.2）：`outer.7z` 里装着
+        /// **用例 G / H / H2 共用的夹具**（复刻 §44.2）：`outer.7z` 里装着
         /// 「一组真 7z 分卷 `mid.7z.001/.002/...`」＋「同组一片、名字被改坏的 `mid.z删除ip`」＋`layer1.txt`。
         ///
         /// <para>那一组里是第 2 层的内容（`final.txt` + `layer2.txt` + 5 KiB 不可压数据，保证真的切成多片）；
@@ -736,19 +789,29 @@ namespace ArchiveFixer.Tests
             Run7z(build, "a", "-t7z", "-mx0", "-v2k", "mid.7z", "final.txt", "layer2.txt", "blob.bin");
 
             /*
-             * `nestedDepth = 2` 时用**复核给的那个形状**（用例 H）：
-             * 分卷组在 `AAA\BBB\` 里（候选比成品根深两层），另一片在**同级另一条分支** `CCC\` 里。
-             * ⚠ 刻意**不再多套一层**（第一版套了 `pieces\AAA\BBB\`，候选比成品根深三层 ⇒
-             * 祖先链上溯三层刚好差一层，闸门扫不到 `CCC\` ⇒ 用例红 —— 实测踩过这一脚；
-             * 详见 §9「已知上界」）。
+             * 三档形状（**只看"候选离那两条分支的共同祖先有多远"**）：
+             *
+             * · `nestedDepth = 1`（用例 G）：分卷组与另一片各在一层里（`pieces\` vs `stray\`）。
+             * · `nestedDepth = 2`（用例 H）：组在 `AAA\BBB\`、另一片在**同级另一条分支** `CCC\` ——
+             *   第一版套了 `pieces\AAA\BBB\`（候选比共同祖先深三层）时，祖先链上溯三层刚好差一层、
+             *   扫不到 `CCC\` ⇒ 用例红（实测踩过这一脚），所以这一档刻意只套两层。
+             * · `nestedDepth = 3`（用例 H2，2026-10-03 第三轮）：组在 `X\AAA\BBB\`、另一片在
+             *   **另一条分支** `Y\CCC\` —— 候选离共同祖先（那个同时含 `X` 与 `Y` 的目录）**四层**，
+             *   3 层上限必然漏扫（这正是用户批准「取消 3 层上限」要关掉的那个口子）。
              */
-            string piecesDirectory = nestedDepth <= 1
-                ? Path.Combine(build, "pieces")
-                : Path.Combine(build, "AAA", "BBB");
+            string piecesDirectory = nestedDepth switch
+            {
+                <= 1 => Path.Combine(build, "pieces"),
+                2 => Path.Combine(build, "AAA", "BBB"),
+                _ => Path.Combine(build, "X", "AAA", "BBB")
+            };
 
-            string strayDirectory = nestedDepth <= 1
-                ? Path.Combine(build, "stray")
-                : Path.Combine(build, "CCC");
+            string strayDirectory = nestedDepth switch
+            {
+                <= 1 => Path.Combine(build, "stray"),
+                2 => Path.Combine(build, "CCC"),
+                _ => Path.Combine(build, "Y", "CCC")
+            };
 
             Directory.CreateDirectory(piecesDirectory);
             Directory.CreateDirectory(strayDirectory);

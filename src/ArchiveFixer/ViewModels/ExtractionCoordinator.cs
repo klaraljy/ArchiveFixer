@@ -2157,6 +2157,11 @@ namespace ArchiveFixer.ViewModels
         /// 于是"候选比成品根深 ≥2 层、另一片在同一个成品根下的**另一条分支**"这个形状
         /// （`&lt;pkg&gt;\AAA\BBB\mid.7z.001` vs `&lt;pkg&gt;\CCC\mid.z删除ip`）四个根一个都盖不到 ⇒ 放行。
         /// 现在**对每一个候选**沿祖先链上溯，逐层当扫描根，遇到"任务记下来的那几处"就停住。</para>
+        ///
+        /// <para><b>2026-10-03 第三轮（用户批准「取消 3 层上限」）</b>：候选落在这一批的目标根里面时，
+        /// 上溯**不再有层数上限**，一路爬到目标根为止 —— 深 ≥3 层 + 同级另一条分支那个形状
+        /// （`&lt;成品根&gt;\X\AAA\BBB\mid.7z.001` vs `&lt;成品根&gt;\Y\CCC\mid.z删除ip`）因此盖得住。
+        /// ⛔ 目标根与盘根这两条界一个字都没动（详见方法体里那段说明）。</para>
         /// </summary>
         private IReadOnlyList<string> EnumerateSplitGateArtifactRoots(
             ArchiveTask task,
@@ -2199,13 +2204,38 @@ namespace ArchiveFixer.ViewModels
             string batchRoot = SafePathHelper.GetFullPathSafe(Settings?.CustomOutputDirectory ?? string.Empty)
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-            // 每个候选沿祖先链上溯（见 SplitGateAncestorLevels 的说明）。
+            /*
+             * 每个候选沿祖先链上溯。
+             *
+             * ===== 2026-10-03 第三轮：**去掉 3 层上限**（用户批准的原话：「①（上界）取消 3 层上限」）=====
+             *
+             * 漏的形状（只读复核给的现场）：要删的候选比成品根深 ≥3 层、同组另一片落在**同级另一条分支** ——
+             * `<成品根>\X\AAA\BBB\mid.7z.001` 要删 vs `<成品根>\Y\CCC\mid.z删除ip` 留在成品里。
+             * 第 3 层那个祖先（`X`）虽然是递归扫的，但 `Y` 不在它里面 ⇒ 上溯出来的几个根一个都盖不到
+             * ⇒ 判成"不是半套" ⇒ **放行 = 不可逆删除**（用例 `ChainLayerReclaimTests.用例H2` 钉的就是它：
+             * 加回 3 层上限时那一组三卷当场被删光）。
+             *
+             * 改法：候选**落在这一批的目标根里面**时，从它自己那一层一路上溯，**直到目标根为止**（含），
+             * 不再有层数上限。⛔ 两条界一个字都没动：**目标根**（不许爬进用户源目录的那一脚）与
+             * **盘根**（循环的绝对兜底，见下面 `parent == current` 那个 `break`）。
+             *
+             * ⚠ 候选**不在**目标根里面时仍按老口径最多上溯 `SplitGateAncestorLevels` 层，一个字不改：
+             * `Settings.CustomOutputDirectory` 并不总是"这一批的目标根" —— 「未指定位置」档只关开关、
+             * **不清这个字段**（`MainViewModel.SaveOneClickOptionsAsDefaults` 只在"指定位置"那两档里写它），
+             * 所以它可能是一份**上一次留下的旧地址**，而最外层**源包**那个候选本来就在源目录里、不在它里面。
+             * 这一档若顺着盘符一路爬到盘根，`DescribeBlockerForCandidates` 就会把 `C:\Users\…` 这种整棵巨树
+             * 扫一遍 —— 扫不动 ⇒ 判据兜底成"拦下" ⇒ 逐层回收**整体失效**，而扫到的全是对不上本批的东西。
+             * 多扫只该多拦，不该把功能扫死。
+             */
             foreach (string candidate in candidates)
             {
                 string full = SafePathHelper.GetFullPathSafe(candidate);
                 string? directory = Path.GetDirectoryName(full);
 
-                for (int level = 0; level < SplitGateAncestorLevels && !string.IsNullOrWhiteSpace(directory); level++)
+                bool insideBatchRoot = batchRoot.Length > 0
+                    && ArchivePathGuard.IsInsideRoot(batchRoot, directory, out _);
+
+                for (int level = 0; !string.IsNullOrWhiteSpace(directory); level++)
                 {
                     string current = directory!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
@@ -2222,7 +2252,12 @@ namespace ArchiveFixer.ViewModels
                     if (string.IsNullOrWhiteSpace(parent) ||
                         string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
                     {
-                        break;   // 到盘根了
+                        break;   // 到盘根了（绝对兜底）
+                    }
+
+                    if (!insideBatchRoot && level + 1 >= SplitGateAncestorLevels)
+                    {
+                        break;   // 不在目标根里面 ⇒ 老口径：候选那一层 + 往上两层
                     }
 
                     directory = parent;
@@ -2247,15 +2282,20 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 每个候选沿祖先链最多上溯几层（含它自己所在那一层）。
+        /// 候选**不在这一批的目标根里面**时，每个候选沿祖先链最多上溯几层（含它自己所在那一层）。
         ///
-        /// <para>取 3 = 候选自己那一层 + 往上两层：递归建出来的那几层子目录
-        /// （真机形状 `&lt;成品根&gt;\AAA\BBB\mid.7z.001` 而另一片在 `&lt;成品根&gt;\CCC\`）刚好在这个范围里。
-        /// ⛔ 这一档**不能**在"任务记下来的那几处"停下 —— 实测（2026-10-03）那几处
+        /// <para>⚠ 2026-10-03 第三轮起，这个数**只管"候选不在目标根里面"那一档**（典型：最外层**源包**自己，
+        /// 它就躺在用户的源目录里，而 `Settings.CustomOutputDirectory` 记的是别处的落点，甚至是一份旧地址）。
+        /// 候选落在目标根里面时**不再有层数上限** —— 一路上溯到目标根为止（用户批准的原话：
+        /// 「①（上界）取消 3 层上限」；漏的形状与用例见 <see cref="EnumerateSplitGateArtifactRoots"/> 里那段说明）。</para>
+        ///
+        /// <para>这一档取 3 = 候选自己那一层 + 往上两层：源包那一组卷都摆在源目录这一层（或它的子目录里），
+        /// 而真机上再往上就是用户的私人目录 —— 顺着盘符一路爬到盘根只会把整棵巨树扫一遍（扫不动就整体失效）。</para>
+        ///
+        /// <para>⛔ 这一档**不能**在"任务记下来的那几处"停下 —— 实测（2026-10-03）那几处
         /// （`OutputPath` / `ContentDirectoryPath` / `ParentOutputDirectory`）在续解层上**就是那个太深的目录**
         /// （`ParentOutputDirectory` 是"父任务交出来的落点"，`PathService.BuildOutputPath` 见到它就直接返回它，
-        /// 于是任务自己的输出目录 = 它），在它那儿停住等于又回到"只扫候选自己那一层"那个漏扫。
-        /// ⛔ 再往上就是别的任务 / 别的包的地盘，扫上去只会拖慢并误拦（所以有上限）。</para>
+        /// 于是任务自己的输出目录 = 它），在它那儿停住等于又回到"只扫候选自己那一层"那个漏扫。</para>
         /// </summary>
         private const int SplitGateAncestorLevels = 3;
 

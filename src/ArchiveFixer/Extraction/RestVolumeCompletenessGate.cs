@@ -112,12 +112,21 @@ namespace ArchiveFixer.Extraction
         /// <c>true</c>（逐层回收那一档）= 拦 —— 那一档要删的是"我们自己解出来的内层包"，
         /// 连它是不是某组卷的一片都判不出就**不许删**（2026-10-03 第二轮复核）。
         /// </param>
+        /// <param name="excludedPaths">
+        /// 额外要**排除在扫描之外**的路径（默认没有）。
+        ///
+        /// <para>就地替换那一档用它：撞名时"按相对路径算出来的那个落点"上站的是一份**不是我们搬来的**
+        /// 同名残留 —— 我们已经决定一个字节都不动它（用户 2026-10-03 批准的用例 ①），
+        /// 那它就不该被读成"同组另一片落在别处"、把这一组的清理整个拦下。
+        /// ⛔ 只排除**明确列出来的**那些路径，别的照旧一律算"外面还有一片"。</para>
+        /// </param>
         public static string? DescribeBlockerForCandidates(
             IEnumerable<string>? candidatePaths,
             string? artifactRoot,
             string candidatePrefix = RestDirectoryCandidatePrefix,
             string blockerTail = RestDirectoryBlockerTail,
-            bool requireRecognizedCandidates = false)
+            bool requireRecognizedCandidates = false,
+            IEnumerable<string>? excludedPaths = null)
         {
             if (candidatePaths == null ||
                 string.IsNullOrWhiteSpace(artifactRoot) ||
@@ -129,9 +138,17 @@ namespace ArchiveFixer.Extraction
             // 候选自己产出来的那些卷：基名 -> 第一个见到的名字（用来点名）
             var candidatePieces = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            // 候选自己（或候选目录里的一切）不算"还留在成品目录里"。
+            // 候选自己（或候选目录里的一切）不算"还留在成品目录里"；另外几个明确列出来的路径同样不算。
             var candidateFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var candidateDirectories = new List<string>();
+
+            foreach (string? excluded in excludedPaths ?? Array.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(excluded))
+                {
+                    candidateFiles.Add(SafePathHelper.GetFullPathSafe(excluded));
+                }
+            }
 
             foreach (string? candidate in candidatePaths)
             {
@@ -205,6 +222,12 @@ namespace ArchiveFixer.Extraction
                     + "（删除不可恢复；先解决那个目录的读取问题再来）";
             }
 
+            /*
+             * 扫描根本身就在工作区里时（就地替换那一档要扫的就是本任务自己的暂存树 `stage\`），
+             * 下面那条"工作区里的东西不算"必须让位 —— 见循环里那一档的说明。
+             */
+            bool rootInsideWorkspace = IsInsideWorkspace(artifactRoot);
+
             foreach (string file in files)
             {
                 string fullFile = SafePathHelper.GetFullPathSafe(file);
@@ -219,7 +242,7 @@ namespace ArchiveFixer.Extraction
                     continue;   // 候选目录里面的不算"在外面"
                 }
 
-                if (IsInsideWorkspace(file))
+                if (IsInsideWorkspace(file) && !rootInsideWorkspace)
                 {
                     /*
                      * ⛔ 工作区（`<目标目录>\.ArchiveFixer.work\…`）是我们自己的暂存区、收尾时整份删掉，
@@ -227,6 +250,11 @@ namespace ArchiveFixer.Extraction
                      * 2026-10-03 实测踩过：内层包改名（`inner.7删除z` → `inner.7z`）之前的那份**暂存副本**
                      * 就躺在工作区的 `stage\` 里，只按名字判会把同一份包当成"半套"⇒ 把一次合法的
                      * 逐层回收误拦下来（既有用例 `InnerLayerContinuationTests.彻底删除档_链尾把内层包连其余物一起删掉` 当场变红）。
+                     *
+                     * ⚠ 2026-10-03 第三轮补的一档：**扫描根本身就在工作区里面**时（就地替换那一档要扫的
+                     * 就是本任务自己的暂存树 `stage\`）这一条跳过必须让位 —— 那里面的东西正是这一次要判的对象，
+                     * 全跳等于把这道闸门整个作废（判据变成恒真）。别的调用点传的都是成品目录树，
+                     * `rootInsideWorkspace` 恒为 false，行为一个字没变。
                      */
                     continue;
                 }
