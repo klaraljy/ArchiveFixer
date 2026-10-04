@@ -208,7 +208,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2512 条（2509 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：**2519 条（2516 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
   - ⚠ 旧基线 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
@@ -315,7 +315,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - ✅ **跨盘 zip ≥3 片 + 中间片名字里没有任何卷号：已做**（见上面"专属算法"那条）。⚠ 仍未做的是**排列爆炸那一档**：定不下来的片 > 3（6 种排列）时如实报"顺序定不出来"，⛔ 不猜；且**加密的包必须手上有对的密码**才验得出顺序。
   - 完整加密包+名字末尾纯数字 → 被 7-Zip 当"通用分片" ⇒ 误诊「分卷缺失」（别在 `RawSplitStreamDetector` 里加"看名字猜"）。
   - 伪装成 `.mp4`/`.apk` 的续卷：判定器已把"无卷号的同目录候选"按体积/位置推定+硬链接试开收进来（真案 ③），⛔ 绝不只凭后缀判；⚠ 试开做不了时（跨盘/拿不到工作区根）只到「疑缺卷」。
-  - 7z「标准名第 1 卷 + 中间卷名字全丢（`111`）+ 标准名末卷」**两条路都不接**（实测 `CanRepair=False` + `TrialAttempted=False`）：名字路要兄弟卷名里还留卷标记、内容路只认"手上这一卷名字被改坏"的入口（`VolumeNameRepair.cs:624` 判"名字里已有卷号 ⇒ 不抢"）；要接须另加判据（入口是标准名第 1 卷时，同目录"不是已识别归档"的候选也纳入试开）。用例 `NamelessMiddleVolumeContentPathTests`（钉现状 = 不认）
+  - ✅ **7z「标准名第 1 卷 + 中间卷名字全丢（`111`）+ 标准名末卷」已接住**（2026-10-04，阶段 B）：入口判据从"**手上这一卷**名字里有没有卷号"换成"**这一组的名字自不自洽**"（`Detection/VolumeContentInference.cs:299 ReadSiblingShape`：基名逐字相同 / 卷标记连续 / 除末片外等大 **三条同时成立** + 组里真有丢名成员；⛔ 不是"入口是标准名第 1 卷就放宽"）；手上这卷没魔数时去同目录找锚点（两个锚点 ⇒ 判不出 ⇒ 什么都不做）。新增 `Detection/SevenZipStartHeader.cs`（只读 32 字节）拿起始头自述的 `32+NextHeaderOffset+NextHeaderSize` 比 Σ 卷长：**小于 ⇒ 如实报"还差 N 字节"且一次引擎都不调**（事实位 `ByteBudgetMismatch`）、**正好 ⇒ 字节数证据成立**、**大于 ⇒ 只接受唯一说得通的缩池**。基名与试开**都从锚点推**（⛔ 不再从"手上这卷"的名字推）。⛔ **改名仍只有硬链接试开成功才认**（试不开 / 判不出 ⇒ 一个名字都不改）。实测：入口 `.001` 与入口 `111` 得**同一份计划**（`CanRepair=True`、`111→111.7z.002`、另两卷不动、出计划不碰盘）。用例 `NamelessMiddleVolumeContentPathTests`(4) + `SevenZipStartHeaderCompletenessTests`(2) + `SuffixMarkerDigitHintTests`(3)。⚠ 真机未验（用户 5G/5G/3G 真样本没跑）。
   - 7z 头部被压缩时读不出加密（`-p` 与不加密包 64 KiB 内逐字节同构；不引依赖/不调引擎 ⇒ 如实不报）
   - 7z `-mhe` 与 ZIP AES 没有真样本；跨盘 zip 中间片一律 Unknown
 - ✅ 加密判读=只读头/尾（RAR/ZIP/7z）：判据器 `Detection/{Rar,Zip,SevenZip}EncryptionReader`（词表 `ArchiveEncryptionState/Reading`，不调引擎/不引依赖）；唯一出口 `ArchiveDetectService.ApplyEncryptionVerdict`。逐条判据 / 用例 / 真样本变量见 §48.4 + §50.2。
