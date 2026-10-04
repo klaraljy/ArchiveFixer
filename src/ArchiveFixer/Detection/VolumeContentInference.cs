@@ -3,9 +3,45 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using ArchiveFixer.Helpers;
 
 namespace ArchiveFixer.Detection
 {
+    /// <summary>
+    /// 同目录"兄弟卷"的**形状读数**：基名逐字相同 / 卷标记连续 / 除末片外等大（方案 §4 阶段 B 的 (e) 闸门）。
+    ///
+    /// <para><b>为什么要有这份读数</b>：一串文件里"有数字"从来不是证据（<c>风景01</c> 里也有 <c>01</c>）。
+    /// 只有当同目录真能配出一组**形状自洽**的兄弟卷时，后缀段里的数字才允许参与"谁是首卷 / 怎么排"的判断；
+    /// ⛔ 基名正文里的数字**永远不构成任何证据**（本类只看卷标记段，而卷标记段是
+    /// <see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 认出来的，基名里的 <c>01</c> 根本进不了那个判据）。</para>
+    ///
+    /// <para>⛔ <see cref="SelfConsistent"/> 只是**闸门**：它证明"这组名字自洽"，⛔ 不证明"这几片就是一组"——
+    /// 成不成立仍然只由硬链接试开回答（<see cref="Extraction.VolumeProbeVerifier"/>）。</para>
+    /// </summary>
+    public sealed class SiblingVolumeShape
+    {
+        /// <summary>这一组的基名（唯一基名出口算出来的**包基名**，剥掉卷标记与归档后缀）。</summary>
+        public string BaseName { get; init; } = string.Empty;
+
+        /// <summary>成员总数（含锚点自己、含名字丢了的那几片）。</summary>
+        public int MemberCount { get; init; }
+
+        /// <summary>名字里**自报卷标记**的成员（升序）—— 「后缀段里的数字」只从这一份来。</summary>
+        public IReadOnlyList<int> Markers { get; init; } = Array.Empty<int>();
+
+        /// <summary>1..N 里没有任何成员自报的卷位（= 缺的那几卷，名字是已知的）。</summary>
+        public IReadOnlyList<int> MissingMarkers { get; init; } = Array.Empty<int>();
+
+        /// <summary>**名字整个丢了**的成员（基名逐字相同、但没有卷标记、也没有归档魔数）。</summary>
+        public IReadOnlyList<VolumeCandidate> NamelessFillers { get; init; } = Array.Empty<VolumeCandidate>();
+
+        /// <summary>三条同时成立：① 基名逐字相同（≥ 2 个成员）② 卷标记连续（1..N 无重复）③ 除末片外等大。</summary>
+        public bool SelfConsistent { get; init; }
+
+        /// <summary>判不出时的一句话（面向日志；成立时为空）。</summary>
+        public string Blocker { get; init; } = string.Empty;
+    }
+
     /// <summary>文件头能直接回答的那几种格式（只读前几个字节，不解析归档）。</summary>
     public enum VolumeContentFormat
     {
@@ -235,6 +271,237 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// 读同目录这一组**兄弟卷的形状**（方案 §4 阶段 B 的 (e)：它是一条**闸门**，不是结论）。
+        ///
+        /// <para>三条同时成立才算 <see cref="SiblingVolumeShape.SelfConsistent"/>：</para>
+        /// <list type="number">
+        /// <item><description><b>基名逐字相同</b>：每个成员的**包基名**（唯一出口
+        /// <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的 <see cref="VolumeBaseNameLevel.PackageName"/> 档）
+        /// 与锚点逐字相等，且成员至少两个（只有一个成员谈不上"一组"）。</description></item>
+        /// <item><description><b>卷标记连续</b>：自报卷标记的成员互不撞号、从 <c>1</c> 起，
+        /// 而名字丢了的那几片正好把剩下的卷位补齐（<c>N = 自报卷标记的个数 + 名字丢了的个数</c>）。</description></item>
+        /// <item><description><b>除末片外等大</b>：至多只有一个成员的体积与其余所有成员不同，而且它更小
+        /// （⛔ 不要求末片更小 —— 实测"末卷更小"只成立一半，见 <c>AGENTS.md</c> §11.4）。</description></item>
+        /// </list>
+        ///
+        /// <para><b>为什么"名字丢了的成员"只能算基名逐字相同的那几个</b>：真机形状是
+        /// <c>111.7z.001</c> / <c>111</c>（本该叫 <c>111.7z.002</c>）/ <c>111.7z.003</c> —— 名字整个丢了之后
+        /// 剩下的正是**基名本身**。名字不沾边的文件（<c>readme.txt</c>）进不了这一组，
+        /// 目录里躺着别的包也不会被拖进来。⛔ 这一条是纯名字 + 体积的事实，不试开、不调引擎。</para>
+        ///
+        /// <para>⛔ 与 <see cref="SniffFormat"/> 的关系：名字丢了的成员必须**认不出归档魔数**
+        /// （认得出就说明它是另一个独立的包，不是这一组的续卷）—— 候选池本来就按这一条筛过，
+        /// 这里再筛一次是为了让"直接喂一个目录清单"的调用方也拿到同一个答案。</para>
+        /// </summary>
+        /// <param name="anchorPath">锚点（7z 里 = 带起始头的那一卷，也就是第 1 卷）。</param>
+        /// <param name="filesInDirectory">同目录的候选（路径 + 大小；拿不到就传 null ⇒ 判不出）。</param>
+        /// <param name="archiveExtension">该族的规范归档后缀（7z 数字族传 <c>7z</c>）。</param>
+        public static SiblingVolumeShape ReadSiblingShape(
+            string? anchorPath,
+            IEnumerable<VolumeCandidate>? filesInDirectory,
+            string archiveExtension)
+        {
+            var none = new SiblingVolumeShape
+            {
+                SelfConsistent = false,
+                Blocker = "拿不到这一卷的信息（读不出名字或同目录清单）"
+            };
+
+            string? anchorBase = TryResolvePackageBaseName(anchorPath, archiveExtension);
+
+            if (string.IsNullOrWhiteSpace(anchorPath) || anchorBase == null)
+            {
+                return none;
+            }
+
+            string directory = DirectoryOf(anchorPath);
+
+            if (directory.Length == 0)
+            {
+                return none;
+            }
+
+            // 成员候选：同一层 + 包基名与锚点逐字相等。
+            var members = new List<VolumeCandidate>();
+
+            foreach (VolumeCandidate candidate in filesInDirectory ?? Array.Empty<VolumeCandidate>())
+            {
+                if (candidate == null || string.IsNullOrWhiteSpace(candidate.Path) || candidate.Size <= 0)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(DirectoryOf(candidate.Path), directory, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string? baseName = TryResolvePackageBaseName(candidate.Path, archiveExtension);
+
+                if (baseName != null && string.Equals(baseName, anchorBase, StringComparison.OrdinalIgnoreCase))
+                {
+                    members.Add(candidate);
+                }
+            }
+
+            if (!members.Any(m => SamePath(m.Path, anchorPath)))
+            {
+                long anchorSize = SizeOf(anchorPath);
+
+                if (anchorSize <= 0)
+                {
+                    return none;
+                }
+
+                members.Add(new VolumeCandidate { Path = anchorPath!, Size = anchorSize });
+            }
+
+            if (members.Count < 2)
+            {
+                return new SiblingVolumeShape
+                {
+                    BaseName = anchorBase,
+                    MemberCount = members.Count,
+                    SelfConsistent = false,
+                    Blocker = "同目录里只有这一份的基名对得上，配不成一组"
+                };
+            }
+
+            var named = new List<(int Marker, VolumeCandidate Candidate)>();
+            var fillers = new List<VolumeCandidate>();
+
+            foreach (VolumeCandidate member in members)
+            {
+                int? marker = VolumeGroupDetector.TryGetVolumeIndex(SafeFileName(member.Path));
+
+                if (marker is int number)
+                {
+                    named.Add((number, member));
+
+                    continue;
+                }
+
+                // 名字丢了的那几片：必须认不出归档魔数（认得出 = 另一个独立的包，不是这一组的续卷）。
+                if (SniffFormat(member.Path) == VolumeContentFormat.Unknown)
+                {
+                    fillers.Add(member);
+                }
+            }
+
+            if (named.Count == 0)
+            {
+                return new SiblingVolumeShape
+                {
+                    BaseName = anchorBase,
+                    MemberCount = members.Count,
+                    NamelessFillers = fillers,
+                    SelfConsistent = false,
+                    Blocker = "这一组里没有一份的名字自报卷标记（谁都不说自己排第几）"
+                };
+            }
+
+            var markers = named.Select(n => n.Marker).OrderBy(m => m).ToList();
+
+            if (markers.Distinct().Count() != markers.Count || markers[0] != 1)
+            {
+                return new SiblingVolumeShape
+                {
+                    BaseName = anchorBase,
+                    MemberCount = members.Count,
+                    Markers = markers,
+                    NamelessFillers = fillers,
+                    SelfConsistent = false,
+                    Blocker = "这一组的卷标记不连续（撞号，或者不是从 1 起）"
+                };
+            }
+
+            int slots = named.Count + fillers.Count;
+
+            if (markers[^1] > slots)
+            {
+                return new SiblingVolumeShape
+                {
+                    BaseName = anchorBase,
+                    MemberCount = members.Count,
+                    Markers = markers,
+                    NamelessFillers = fillers,
+                    SelfConsistent = false,
+                    Blocker = "自报卷标记比手上的片数还大（中间还缺着几卷，那几卷的名字无从知道）"
+                };
+            }
+
+            var missing = Enumerable.Range(1, slots).Where(slot => !markers.Contains(slot)).ToList();
+
+            // 除末片外等大：至多一份的体积与其余不同，而且它更小。
+            // ⚠ 并列时取**更大**的那个当"满片尺寸"：满片是重复出现的那个尺寸，末片只会更小 ——
+            // 两份各出现一次时（两卷形状）取小的会把满片当成"多余的那一份"。
+            List<long> sizes = members.Select(m => m.Size).OrderBy(s => s).ToList();
+            long common = sizes
+                .GroupBy(s => s)
+                .OrderByDescending(g => g.Count())
+                .ThenByDescending(g => g.Key)
+                .First()
+                .Key;
+
+            bool sizePattern = sizes.Count(s => s == common) >= sizes.Count - 1
+                               && sizes.All(s => s == common || s < common);
+
+            if (!sizePattern)
+            {
+                return new SiblingVolumeShape
+                {
+                    BaseName = anchorBase,
+                    MemberCount = members.Count,
+                    Markers = markers,
+                    MissingMarkers = missing,
+                    NamelessFillers = fillers,
+                    SelfConsistent = false,
+                    Blocker = "这一组里有不止一份的体积与其余不同（看不出哪一份是末片）"
+                };
+            }
+
+            return new SiblingVolumeShape
+            {
+                BaseName = anchorBase,
+                MemberCount = members.Count,
+                Markers = markers,
+                MissingMarkers = missing,
+                NamelessFillers = fillers,
+                SelfConsistent = true
+            };
+        }
+
+        /// <summary>包基名（唯一出口 <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的 <see cref="VolumeBaseNameLevel.PackageName"/> 档）；判不出返回 null。</summary>
+        private static string? TryResolvePackageBaseName(string? path, string archiveExtension) =>
+            !string.IsNullOrWhiteSpace(path)
+            && FileNameHelper.TryResolveVolumeBaseName(
+                path,
+                VolumeBaseNameLevel.PackageName,
+                out string baseName,
+                out _,
+                archiveExtension)
+            && baseName.Length > 0
+                ? baseName
+                : null;
+
+        private static string DirectoryOf(string? path)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(path) ? string.Empty : Path.GetDirectoryName(path) ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static bool SamePath(string? a, string? b) =>
+            !string.IsNullOrWhiteSpace(a)
+            && !string.IsNullOrWhiteSpace(b)
+            && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
         /// **「两卷形状」这张门票**（用户 2026-09-29 现场：<c>amb909.7.01</c> 正好 2 GiB、
         /// <c>amb909.z.2</c> 1.89 GB —— 一组两卷的包，能救却救不回来）。
         ///
@@ -248,7 +515,9 @@ namespace ArchiveFixer.Detection
         /// <list type="number">
         /// <item><description><b>名字里的短数字尾巴接得上</b>：第一卷有尾巴时要求"候选 = 它 + 1"
         /// （<c>.01</c> → <c>.2</c>），第一卷没尾巴时要求候选的号 ≥ 2（用户原话："可以靠后缀数字
-        /// 2 的情况猜一猜是第二卷"）；</description></item>
+        /// 2 的情况猜一猜是第二卷"）。⚠ 2026-10-03 阶段 B 起它**还要过形状闸门**
+        /// （<see cref="ReadSiblingShape"/> 的 <see cref="SiblingVolumeShape.SelfConsistent"/>）——
+        /// 后缀段里的数字要参与"谁是首卷"就必须先有一组形状自洽的兄弟卷（方案 §1.3 第 3 层 / §4 阶段 B 的 (e)）；</description></item>
         /// <item><description><b>体积规律</b>：第一卷是**整数 MiB** —— 7z 的切分上限永远是整数 MiB
         /// （<c>-v1m</c> / <c>-v2g</c> / <c>-v100m</c>），所以"它是满片、这个更短的是末卷"在体积上说得通
         /// （用户原话："对不上再用体积规律（7z <c>-v</c> 的除末卷外都是满片：正好等于切分上限，例如 2 GiB）"）。
@@ -287,9 +556,17 @@ namespace ArchiveFixer.Detection
             int? firstTail = TryReadShortNumberTail(firstVolumePath);
             int? partialTail = TryReadShortNumberTail(partial.Path);
 
+            /*
+             * ⛔ 这一条是「后缀段里的数字」在**定首卷**（"手上这一卷是第 1 卷、这个更短的接在它后面"）：
+             * 方案 §4 阶段 B 的 (e) 规定它**必须先过形状闸门**（基名逐字相同 + 卷标记连续 + 除末片外等大），
+             * 否则一个碰巧带数字的文件（`风景01` 那种）就能冒充首卷。
+             * ⛔ 它不是被提到内容证据之前：闸门只在**没有内容证据**（没有等长满片）时才会被问到，
+             * 而且放行之后仍然要由硬链接试开裁决。
+             */
             if (partialTail is int number
                 && number >= 2
-                && (firstTail == null || firstTail.Value == number - 1))
+                && (firstTail == null || firstTail.Value == number - 1)
+                && ReadSiblingShape(firstVolumePath, candidates, ExtensionFor(VolumeContentFormat.SevenZip)).SelfConsistent)
             {
                 return true;
             }

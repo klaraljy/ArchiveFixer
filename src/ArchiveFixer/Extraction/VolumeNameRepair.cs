@@ -87,6 +87,18 @@ namespace ArchiveFixer.Extraction
         public bool SpannedTailMissing { get; init; }
 
         /// <summary>
+        /// 这一份"不能改"是**字节数那条硬证据**给的结论：7z 起始头自述的整包字节数与手上这几卷对不上
+        /// （缺多少 / 多出多少都如实写在 <see cref="Reason"/> 里），所以**一次引擎都没调**。
+        ///
+        /// <para>为什么单独立一位（2026-10-03 阶段 B）：调用方按"值不值得说一句"决定写不写日志
+        /// （第 45 条），而这一档的结论是用户最需要看见的那句"还差多少字节" —— 它既不是
+        /// <see cref="TrialAttempted"/>（⛔ 一次引擎都没调，不许说成"试过"），也不是
+        /// <see cref="SpannedTailMissing"/>（那是跨盘 zip 的事）。⛔ 它只影响**怎么写这句话**，
+        /// 不参与任何删除 / 搬运的判据（方案 §4 阶段 B 的 (d)）。</para>
+        /// </summary>
+        public bool ByteBudgetMismatch { get; init; }
+
+        /// <summary>
         /// 这次要改的**每一卷**（用户 2026-09-28 追加：网盘给整组的名字都缀了「删除」，
         /// 只改第一卷没用 —— 7-Zip 找 `.002` 时名字对不上，照样报缺卷）。
         ///
@@ -616,26 +628,57 @@ namespace ArchiveFixer.Extraction
              */
             Detection.VolumeNumberReading self = Detection.VolumeNumberFromContent.Read(path);
 
+            /*
+             * ⛔ 7z **不吃放宽的候选池**（理由写在 PlanByContentWithNearbyCandidatesAsync 的注释里）：
+             * 它的中间片内容里没有任何身份信息，邻近目录里别的包的卷和它无法区分 ——
+             * 放宽只会把别的包拖进"尺寸排序 + 试开"的排列里。这一档**只用同目录候选**。
+             */
+            IEnumerable<VolumeCandidate>? pool = allowNearbyDirectories
+                ? OnlySameDirectory(filesInDirectory, path)
+                : filesInDirectory;
+
             switch (self.Format)
             {
                 case Detection.VolumeContentFormat.SevenZip:
                     {
-                        // 名字里已经有卷号 → 那是 Plan 的活，这里不抢（判据出口只有一个）。
+                        /*
+                         * **入口判据换对象**（2026-10-03 阶段 B 的 (a)，方案 §0 结论 3）。
+                         *
+                         * 老口径问的是"**手上这一卷**的名字里有没有卷号"：
+
+                         *     if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != null) return Cannot(AlreadyStandard);
+                         *
+                         * 于是真机那一档当场被拒 —— `111.7z.001`（标准名第 1 卷）+ `111`（名字整个丢了，
+                         * 本该叫 `111.7z.002`）+ `111.7z.003`：手上这一卷的名字**本来就是标准的**，
+                         * 而"要改的那一卷"是它旁边那个丢了名字的兄弟，这条路连内容都没看就返回了。
+                         *
+                         * 新口径问的是"**这一组的名字自不自洽**"（判据只有一处：
+                         * VolumeContentInference.ReadSiblingShape 的三条 —— 基名逐字相同 / 卷标记连续 /
+                         * 除末片外等大），而且**这一组里得真有一片名字丢了**（NamelessFillers > 0）
+                         * ⇒ 这时"缺的那一卷叫什么"是**已知的**，才值得进内容路去定序 + 试开。
+                         *
+                         * ⛔ 两者都不成立时照旧返回老结论（名字本来就标准、没有要补的名字）——
+                         * 这样"一组名字齐全的标准分卷"不会被拖去白试开一次（第 45 条：成功的任务只留一行）。
+                         */
+                        Detection.SiblingVolumeShape shape = Detection.VolumeContentInference.ReadSiblingShape(
+                            path,
+                            pool,
+                            Detection.VolumeContentInference.ExtensionFor(Detection.VolumeContentFormat.SevenZip));
+
                         if (VolumeGroupDetector.TryGetVolumeIndex(fileName) != null)
                         {
-                            return Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+                            if (!shape.SelfConsistent || shape.NamelessFillers.Count == 0)
+                            {
+                                return shape.NamelessFillers.Count > 0 && !shape.SelfConsistent
+                                    ? Cannot(
+                                        path,
+                                        string.Format(StatusText.VolumeRepairGroupShapeUnclearFormat, shape.Blocker))
+                                    : Cannot(path, StatusText.VolumeRepairAlreadyStandard);
+                            }
                         }
 
-                        /*
-                         * ⛔ 7z **不吃放宽的候选池**（理由写在 PlanByContentWithNearbyCandidatesAsync 的注释里）：
-                         * 它的中间片内容里没有任何身份信息，邻近目录里别的包的卷和它无法区分 ——
-                         * 放宽只会把别的包拖进"尺寸排序 + 试开"的排列里。这一档**只用同目录候选**。
-                         */
-                        IEnumerable<VolumeCandidate>? pool = allowNearbyDirectories
-                            ? OnlySameDirectory(filesInDirectory, path)
-                            : filesInDirectory;
-
                         return await PlanSevenZipByContentAsync(
+                                path,
                                 path,
                                 pool,
                                 engine,
@@ -653,7 +696,131 @@ namespace ArchiveFixer.Extraction
                         path, filesInDirectory, VolumeNamingFamily.ZipSpanned, Detection.VolumeContentFormat.Zip);
 
                 default:
-                    return Cannot(path, StatusText.VolumeRepairContentNotAVolumeMember);
+                    /*
+                     * 内容不是 RAR / 跨盘 zip 的片，也**没有 7z 起始头** —— 但 7z 的**中间片与末片本来就是裸字节流**
+                     * （内容里没有任何身份信息），所以"手上这一卷没有魔数"绝不等于"它不属于任何一组"。
+                     *
+                     * 真机那一档（`111.7z.001` / `111` / `111.7z.003`）里，用户手上完全可能就是那个名字丢了的
+                     * `111`：这时**锚点去同目录找**（有 7z 起始头、基名与它逐字相同、这一组名字自洽、
+                     * 而且它就是这组里名字丢了的那一片）⇒ 才按 7z 内容路走，基名从**锚点**推。
+                     *
+                     * ⛔ 找不到 / 找到两个说不清 ⇒ 照旧如实说"它的内容没说自己是分卷组的一员"，一个字节都不动。
+                     */
+                    string? sevenZipAnchor = TryFindSevenZipAnchor(path, pool);
+
+                    if (sevenZipAnchor == null)
+                    {
+                        return Cannot(path, StatusText.VolumeRepairContentNotAVolumeMember);
+                    }
+
+                    return await PlanSevenZipByContentAsync(
+                            sevenZipAnchor,
+                            path,
+                            pool,
+                            engine,
+                            workRootDirectory,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// 手上这一卷**自己没有 7z 起始头**时，去同目录找这一组的**锚点**（= 带起始头的那一卷 = 第 1 卷）。
+        ///
+        /// <para>判据四条同时成立，缺一条就不算（⛔ 判不出 ⇒ 返回 null，"什么都不做"）：</para>
+        /// <list type="number">
+        /// <item><description>它**有 7z 起始头**（魔数，方案 §1.3 第 0 层：只认魔数，⛔ 不按后缀猜）；</description></item>
+        /// <item><description>它的**包基名**与手上这一卷逐字相同（唯一出口 <see cref="FileNameHelper.TryResolveVolumeBaseName"/>）；
+        /// —— 这一条把"另一个包的同目录文件"挡在门外，而且只用名字，不读写别的文件；</description></item>
+        /// <item><description>这一组的**名字自洽**且**真有一片名字丢了**（<see cref="Detection.VolumeContentInference.ReadSiblingShape"/>）；</description></item>
+        /// <item><description>**手上这一卷正是那一片名字丢了的成员**（否则它不属于这一组）。</description></item>
+        /// </list>
+        ///
+        /// <para>找到两个锚点 ⇒ 说不清 ⇒ 返回 null（判不出就不做）。</para>
+        /// </summary>
+        private static string? TryFindSevenZipAnchor(string path, IEnumerable<VolumeCandidate>? filesInDirectory)
+        {
+            const Detection.VolumeContentFormat format = Detection.VolumeContentFormat.SevenZip;
+            string extension = Detection.VolumeContentInference.ExtensionFor(format);
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+
+            var pool = (filesInDirectory ?? Array.Empty<VolumeCandidate>())
+                .Where(c => c != null && !string.IsNullOrWhiteSpace(c.Path))
+                .Where(c => c.Size > 0)
+                .Where(c => string.Equals(
+                    Path.GetDirectoryName(c.Path), directory, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            string? selfBase = TryResolvePackageBaseName(path, extension);
+
+            if (selfBase == null)
+            {
+                return null;
+            }
+
+            if (!pool.Any(c => SamePath(c.Path, path)))
+            {
+                pool.Add(new VolumeCandidate { Path = path, Size = LengthOf(path) });
+            }
+
+            string? found = null;
+
+            foreach (VolumeCandidate candidate in pool)
+            {
+                if (SamePath(candidate.Path, path)
+                    || Detection.VolumeContentInference.SniffFormat(candidate.Path) != format
+                    || !string.Equals(
+                        TryResolvePackageBaseName(candidate.Path, extension),
+                        selfBase,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                Detection.SiblingVolumeShape shape = Detection.VolumeContentInference.ReadSiblingShape(
+                    candidate.Path, pool, extension);
+
+                if (!shape.SelfConsistent
+                    || shape.NamelessFillers.Count == 0
+                    || !shape.NamelessFillers.Any(f => SamePath(f.Path, path)))
+                {
+                    continue;
+                }
+
+                if (found != null)
+                {
+                    // 同目录里有两个都说得通的锚点 ⇒ 说不清，判不出（⛔ 不挑一个）。
+                    return null;
+                }
+
+                found = candidate.Path;
+            }
+
+            return found;
+        }
+
+        /// <summary>包基名（唯一基名出口的 <see cref="VolumeBaseNameLevel.PackageName"/> 档）；判不出返回 null。</summary>
+        private static string? TryResolvePackageBaseName(string? path, string archiveExtension) =>
+            !string.IsNullOrWhiteSpace(path)
+            && FileNameHelper.TryResolveVolumeBaseName(
+                path,
+                VolumeBaseNameLevel.PackageName,
+                out string baseName,
+                out _,
+                archiveExtension)
+            && baseName.Length > 0
+                ? baseName
+                : null;
+
+        private static long LengthOf(string? path)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(path) ? 0 : new FileInfo(path!).Length;
+            }
+            catch
+            {
+                return 0;
             }
         }
 
@@ -1073,10 +1240,21 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 7z：内容认第一卷 + 同目录尺寸规律（或**两卷形状**，用户 2026-09-29 放宽）+ 硬链接试开验证。
+        /// 7z：内容认第一卷 + 同目录尺寸规律（或**两卷形状**，用户 2026-09-29 放宽）
+        /// + **起始头自述的整包字节数**（2026-10-03 阶段 B）+ 硬链接试开验证（决定性）。
         /// </summary>
+        /// <param name="anchorPath">
+        /// **锚点** = 带 7z 起始头的那一卷 = 第 1 卷。⛔ 基名只从它推（方案 §4 阶段 B 的 (b)）：
+        /// 名字丢了的那一片（<c>111</c>）身上没有任何"这一组叫什么"的信息，拿它推基名等于把标准名建立在
+        /// 一个名字已经丢了的东西上。⛔ 引擎也只从这里开（找兄弟卷只看入口旁边那一层）。
+        /// </param>
+        /// <param name="entryPath">
+        /// 调用方**手上这一卷**（可能就等于锚点，也可能就是那一片名字丢了的中间卷 —— 真机形状）。
+        /// 它只用于"这句话该怎么说"（计划的 <c>CurrentPath</c> 与日志里的名字），⛔ 不参与定名。
+        /// </param>
         private static async Task<VolumeNameRepairPlan> PlanSevenZipByContentAsync(
-            string path,
+            string anchorPath,
+            string entryPath,
             IEnumerable<VolumeCandidate>? filesInDirectory,
             Engines.IArchiveEngine engine,
             string? workRootDirectory,
@@ -1085,7 +1263,7 @@ namespace ArchiveFixer.Extraction
             Detection.VolumeContentFormat format = Detection.VolumeContentFormat.SevenZip;
 
             IReadOnlyList<VolumeCandidate> candidates =
-                Detection.VolumeContentInference.BuildCandidates(path, filesInDirectory);
+                Detection.VolumeContentInference.BuildCandidates(anchorPath, filesInDirectory);
 
             /*
              * 「值不值得试开一次」的闸门 = **两张门票取或**（用户 2026-09-29 放宽，理由写在
@@ -1098,18 +1276,68 @@ namespace ArchiveFixer.Extraction
              * ⛔ 放宽的只是**"敢不敢试一次"**这一道：成不成立仍然只由下面的硬链接试开回答，
              * 试不出来就一个字节都不动（判据仍然只有一处，就是这两张门票 + 试开）。
              */
-            if (!Detection.VolumeContentInference.HasVolumeSizePattern(path, candidates)
-                && !Detection.VolumeContentInference.HasTwoVolumeShapeEvidence(path, candidates))
+            if (!Detection.VolumeContentInference.HasVolumeSizePattern(anchorPath, candidates)
+                && !Detection.VolumeContentInference.HasTwoVolumeShapeEvidence(anchorPath, candidates))
             {
-                return Cannot(path, StatusText.VolumeRepairContentNoSizePattern);
+                return Cannot(entryPath, StatusText.VolumeRepairContentNoSizePattern);
+            }
+
+            /*
+             * **起始头那条硬证据**（2026-10-03 阶段 B 的 (d)，方案 §1 表格 ①）：
+             * `32 + NextHeaderOffset + NextHeaderSize` = 整包应当有的字节数，**与顺序无关**。
+             * 拿它与"手上这几卷加起来"比，三档各有各的用处（⛔ 全都只读，⛔ 不拿它猜"哪一卷是第几卷"）：
+             *   · **小于** ⇒ 缺卷，如实报"还差多少字节"，一次引擎都不调；
+             *   · **正好** ⇒ 字节数这一条证据成立（"整组齐了"），顺序仍由名字 / 试开回答；
+             *   · **大于** ⇒ 候选池里混进了不属于这一组的文件 ⇒ **缩池重来**（只接受唯一说得通的那种缩法）。
+             */
+            Detection.SevenZipByteBudget budget = Detection.SevenZipStartHeader.Measure(
+                anchorPath,
+                new[] { anchorPath }.Concat(candidates.Select(c => c.Path)));
+
+            IReadOnlyList<VolumeCandidate> pool = candidates;
+
+            if (budget.Known && budget.Verdict == Detection.SevenZipByteBudgetVerdict.Excess)
+            {
+                IReadOnlyList<VolumeCandidate>? shrunk = TryShrinkToExactByteBudget(
+                    anchorPath, candidates, budget.ExpectedBytes);
+
+                if (shrunk == null)
+                {
+                    return Cannot(
+                        entryPath,
+                        string.Format(
+                            StatusText.VolumeRepairContentBytesExcessFormat,
+                            budget.ExpectedBytes,
+                            budget.ActualBytes,
+                            budget.DifferenceBytes),
+                        byteBudgetMismatch: true);
+                }
+
+                pool = shrunk;
+
+                budget = Detection.SevenZipStartHeader.Measure(
+                    anchorPath,
+                    new[] { anchorPath }.Concat(pool.Select(c => c.Path)));
+            }
+
+            if (budget.Known && budget.Verdict == Detection.SevenZipByteBudgetVerdict.Short)
+            {
+                return Cannot(
+                    entryPath,
+                    string.Format(
+                        StatusText.VolumeRepairContentBytesMissingFormat,
+                        budget.ExpectedBytes,
+                        budget.ActualBytes,
+                        budget.DifferenceBytes),
+                    byteBudgetMismatch: true);
             }
 
             IReadOnlyList<IReadOnlyList<VolumeCandidate>> orderings =
-                Detection.VolumeContentInference.BuildOrderings(path, candidates);
+                Detection.VolumeContentInference.BuildOrderings(anchorPath, pool);
 
             var verifier = new VolumeProbeVerifier(engine);
             VolumeProbeOutcome probe = await verifier
-                .VerifyAsync(path, orderings, cancellationToken, workRootDirectory)
+                .VerifyAsync(anchorPath, orderings, cancellationToken, workRootDirectory)
                 .ConfigureAwait(false);
 
             if (!probe.Confirmed || probe.OrderedVolumes.Count < 2)
@@ -1122,25 +1350,32 @@ namespace ArchiveFixer.Extraction
                  */
                 return probe.Attempted
                     ? Cannot(
-                        path,
+                        entryPath,
                         string.Format(StatusText.VolumeRepairContentProbeFailedFormat, probe.Reason),
                         trialAttempted: true)
                     : Cannot(
-                        path,
+                        entryPath,
                         string.Format(StatusText.VolumeRepairNoProbeFormat, probe.Reason),
                         trialAttempted: false);
             }
 
-            if (!Detection.VolumeNumberFromContent.TryDeriveStem(path, format, out string stem))
+            /*
+             * 基名从**锚点**推（⛔ 不从"手上这一卷"推）：试开把顺序钉住了，第 1 卷就是锚点自己
+             * （`VerifyAsync` 永远把锚点放在第一位），它的名字才是这一组标准名的来源。
+             */
+            string stemSource = probe.OrderedVolumes[0].Path;
+
+            if (!Detection.VolumeNumberFromContent.TryDeriveStem(stemSource, format, out string stem))
             {
-                return Cannot(path, StatusText.VolumeRepairNoSuggestion, trialAttempted: true);
+                return Cannot(entryPath, StatusText.VolumeRepairNoSuggestion, trialAttempted: true);
             }
 
             IReadOnlyList<string> targetNames = Detection.VolumeNumberFromContent.BuildStandardNames(
                 stem, VolumeNamingFamily.SevenZipNumbered, probe.OrderedVolumes.Count);
 
-            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            string directory = Path.GetDirectoryName(stemSource) ?? string.Empty;
             var items = new List<VolumeRepairItem>();
+            int primary = -1;
 
             for (int i = 0; i < probe.OrderedVolumes.Count && i < targetNames.Count; i++)
             {
@@ -1149,14 +1384,27 @@ namespace ArchiveFixer.Extraction
 
                 if (string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
                 {
-                    return Cannot(path, StatusText.VolumeRepairAlreadyStandard, trialAttempted: true);
+                    /*
+                     * 这一卷的名字**本来就是对的**（真机那一档的第 1 卷 `111.7z.001` 与末卷 `111.7z.003`）：
+                     * 留在组里（调用方要按整份计划同步任务路径），但⛔ 不改它 —— 老写法在这里整份拒掉，
+                     * 于是"只差中间那一卷名字"的组一个名字都改不成。
+                     */
+                    items.Add(new VolumeRepairItem
+                    {
+                        CurrentPath = source,
+                        CurrentFileName = Path.GetFileName(source),
+                        SuggestedFileName = targetNames[i],
+                        TargetPath = target
+                    });
+
+                    continue;
                 }
 
                 // ⛔ 绝不覆盖：任何一个目标名被占，整组不改。
                 if (File.Exists(target))
                 {
                     return Cannot(
-                        path,
+                        entryPath,
                         string.Format(StatusText.VolumeRepairTargetTakenFormat, targetNames[i]),
                         trialAttempted: true);
                 }
@@ -1168,9 +1416,20 @@ namespace ArchiveFixer.Extraction
                     SuggestedFileName = targetNames[i],
                     TargetPath = target
                 });
+
+                if (primary < 0 || SamePath(source, entryPath))
+                {
+                    primary = i;
+                }
             }
 
-            VolumeRepairItem self = items[0];
+            if (primary < 0)
+            {
+                // 组里没有一卷真的要改（名字本来就都对）⇒ 什么都不做。
+                return Cannot(entryPath, StatusText.VolumeRepairAlreadyStandard, trialAttempted: true);
+            }
+
+            VolumeRepairItem self = items[primary];
 
             return new VolumeNameRepairPlan
             {
@@ -1184,6 +1443,99 @@ namespace ArchiveFixer.Extraction
                 TrialAttempted = true,
                 ProbeNeedsPassword = probe.NeedsPassword
             };
+        }
+
+        /// <summary>
+        /// 「手上的字节数**多于**整包自述的字节数」⇒ **缩池重来**（方案 §4 阶段 B 的 (d) 第三档）。
+        ///
+        /// <para>7z 的 <c>-v</c> 切法给了一个很硬的形状：**除末片外每一片彼此等大**，
+        /// 所以"多出来的"无非两种：多算了那个更短的候选（它不是末片），或者多算了一个满片
+        /// （它不是这一组的卷）。于是只试这两种**各去掉一份**的缩法，而且要求**只有一种**能对上整包字节数 ——
+        /// 两种都对得上、或者一种都对不上 ⇒ 返回 null（判不出 ⇒ 上层如实报"多出多少字节"、一个字节不动）。</para>
+        ///
+        /// <para>⚠ 满片有 <b>两份以上</b>时"去掉哪一份"无从知道（它们一样大），所以那一档也返回 null ——
+        /// ⛔ 不挑一个去试。</para>
+        /// </summary>
+        private static IReadOnlyList<VolumeCandidate>? TryShrinkToExactByteBudget(
+            string anchorPath,
+            IReadOnlyList<VolumeCandidate> candidates,
+            long expectedBytes)
+        {
+            long anchorSize = LengthOf(anchorPath);
+
+            if (anchorSize <= 0)
+            {
+                return null;
+            }
+
+            List<VolumeCandidate> full = candidates.Where(c => c.Size == anchorSize).ToList();
+            List<VolumeCandidate> rest = candidates.Where(c => c.Size != anchorSize).ToList();
+
+            var exact = new List<List<VolumeCandidate>>();
+
+            // ① 去掉"最像末片的那一个"（更短的那些里最大的那一个）。
+            VolumeCandidate? partial = rest
+                .Where(c => c.Size < anchorSize)
+                .OrderByDescending(c => c.Size)
+                .ThenBy(c => SafeFileName(c.Path), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+
+            if (partial != null)
+            {
+                List<VolumeCandidate> withoutPartial = candidates
+                    .Where(c => !SamePath(c.Path, partial.Path))
+                    .ToList();
+
+                if (SumBytes(anchorPath, withoutPartial) == expectedBytes)
+                {
+                    exact.Add(withoutPartial);
+                }
+            }
+
+            // ② 去掉一个满片（只有"满片恰好一份"时才知道去掉的是哪一个）。
+            if (full.Count == 1)
+            {
+                List<VolumeCandidate> withoutFull = candidates
+                    .Where(c => !SamePath(c.Path, full[0].Path))
+                    .ToList();
+
+                if (withoutFull.Count > 0 && SumBytes(anchorPath, withoutFull) == expectedBytes)
+                {
+                    exact.Add(withoutFull);
+                }
+            }
+
+            if (exact.Count != 1)
+            {
+                return null;
+            }
+
+            return exact[0];
+        }
+
+        /// <summary>锚点 + 这几份的字节数之和（读不到任何一份 ⇒ 0，调用方按"对不上"处理）。</summary>
+        private static long SumBytes(string anchorPath, IReadOnlyList<VolumeCandidate> volumes)
+        {
+            long total = LengthOf(anchorPath);
+
+            if (total <= 0)
+            {
+                return 0;
+            }
+
+            foreach (VolumeCandidate volume in volumes)
+            {
+                long size = LengthOf(volume.Path);
+
+                if (size <= 0)
+                {
+                    return 0;
+                }
+
+                total += size;
+            }
+
+            return total;
         }
 
         /// <summary>
@@ -2207,14 +2559,21 @@ namespace ArchiveFixer.Extraction
 
         /// <param name="trialAttempted">这一份"不能改"的结论是不是**试开跑过之后**下的
         /// （只有真跑过试开才值得写一行日志说清结论，见 <see cref="VolumeNameRepairPlan.TrialAttempted"/>）。</param>
-        private static VolumeNameRepairPlan Cannot(string path, string reason, bool trialAttempted = false) => new()
-        {
-            CanRepair = false,
-            Reason = reason,
-            CurrentPath = path,
-            CurrentFileName = SafeFileName(path),
-            TrialAttempted = trialAttempted
-        };
+        /// <param name="byteBudgetMismatch">结论是不是 7z 起始头那条**字节数**证据给的（见
+        /// <see cref="VolumeNameRepairPlan.ByteBudgetMismatch"/>：一次引擎都没调，但必须如实报出差的字节数）。</param>
+        private static VolumeNameRepairPlan Cannot(
+            string path,
+            string reason,
+            bool trialAttempted = false,
+            bool byteBudgetMismatch = false) => new()
+            {
+                CanRepair = false,
+                Reason = reason,
+                CurrentPath = path,
+                CurrentFileName = SafeFileName(path),
+                TrialAttempted = trialAttempted,
+                ByteBudgetMismatch = byteBudgetMismatch
+            };
 
         private static VolumeNameRepairResult Failure(string message) => new()
         {

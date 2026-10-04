@@ -7246,12 +7246,16 @@ namespace ArchiveFixer.ViewModels
                      * 全都记一行会把第 45 条的日志纪律打掉（成功的任务只留一行，见 Item45LogAndPasswordTests）。
                      * 判据是 `TrialAttempted`（闸门放行过、硬链接与引擎调用真发生过），不是文案。
                      */
-                    if (plan != null && !plan.CanRepair && (plan.TrialAttempted || plan.SpannedTailMissing))
+                    if (plan != null
+                        && !plan.CanRepair
+                        && (plan.TrialAttempted || plan.SpannedTailMissing || plan.ByteBudgetMismatch))
                     {
                         /*
-                         * 两种"值得说一句"的结论共用这一行，措辞按事实分开：
+                         * 三种"值得说一句"的结论共用这一行，措辞按事实分开：
                          * ① 试开真跑过（硬链接 + 引擎列目录）而不成立；
-                         * ② 一次引擎都没调、但**判出了缺的是末片**（满片规律 + 跨盘标记，用户要的那句诊断）。
+                         * ② 一次引擎都没调、但**判出了缺的是末片**（满片规律 + 跨盘标记，用户要的那句诊断）；
+                         * ③ 一次引擎都没调、但**按 7z 起始头算出了还差多少字节**（2026-10-03 阶段 B：
+                         *    起始头是明文、与卷序无关，"缺多少"是算得出来的事实 —— 用户问过"到底缺多少"）。
                          */
                         AppendLog(
                             "INFO",
