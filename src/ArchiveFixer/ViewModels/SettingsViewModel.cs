@@ -2,6 +2,7 @@ using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
+using ArchiveFixer.Security;
 using ArchiveFixer.Services;
 using System;
 using System.Collections.Generic;
@@ -313,6 +314,61 @@ namespace ArchiveFixer.ViewModels
             RestHandlingModes.Delete => StatusText.OneClickConfirmRestAutoDelete,
             _ => StatusText.OneClickConfirmRestKeep
         };
+
+        /// <summary>
+        /// 「内容物保留关键词（内容物压缩文件不解压）」——**⑥设置页那一栏的多行文本框**（用户 2026-10-04 拍板）。
+        ///
+        /// <para><b>用户原话</b>：「现在出现一个功能叫做"内容物压缩文件不解压"，这个功能同样要有记忆功能，
+        /// 用户可以在里面输入像，<c>1_名字里面包含特定字符的压缩文件不解压</c>……只要内容物里面有文件的名称
+        /// 包含了"小明"的这些压缩文件碰都不要碰」。</para>
+        ///
+        /// <para>界面上是**一行一个关键词**的多行框，读写的仍是设置里那一个字符串数组
+        /// （<see cref="AppSettings.ContentKeepKeywords"/>）—— 「记忆」由自动保存负责，
+        /// 与其它设置项同一条路。判据唯一出口 <see cref="ContentKeepRules"/>（包含即命中、大小写不敏感、
+        /// 空行忽略、⛔ 不做通配 / 正则、只吃文件名）。</para>
+        ///
+        /// <para>写回时**当场归一化**（Trim、丢空行、去重），并把归一化后的文本**再刷回界面**
+        /// —— 否则界面上留着"输入了却没生效"的样子（AGENTS.md §9.5：值对而界面不刷新 = 用户读成"没生效"）。
+        /// 绑定用默认的 LostFocus 触发（不是每敲一个字就归一化），免得打字中途被改写。</para>
+        /// </summary>
+        public string ContentKeepKeywordsText
+        {
+            get => string.Join(Environment.NewLine, Settings.ContentKeepKeywords ?? new List<string>());
+
+            set
+            {
+                List<string> normalized = ContentKeepRules.NormalizeKeywords(
+                    (value ?? string.Empty).Split('\n'));
+
+                if (Settings.ContentKeepKeywords != null &&
+                    Settings.ContentKeepKeywords.Count == normalized.Count &&
+                    Settings.ContentKeepKeywords.SequenceEqual(normalized, StringComparer.Ordinal))
+                {
+                    return;
+                }
+
+                Settings.ContentKeepKeywords = normalized;
+
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(ContentKeepKeywordsSummary));
+            }
+        }
+
+        /// <summary>
+        /// 那一栏下面那句白话说明 + 当前生效几条（**同一份真值**，不给用户一个"填了不知道有没有用"的框）。
+        /// </summary>
+        public string ContentKeepKeywordsSummary
+        {
+            get
+            {
+                int count = ContentKeepRules.NormalizeKeywords(Settings.ContentKeepKeywords).Count;
+
+                return count == 0
+                    ? "现在是空的：这个功能不生效，程序行为与以前完全一样。"
+                    : $"当前生效 {count} 个关键词：内容物里凡是「名字包含」其中任意一个的文件（压缩包也是、普通文件也是），"
+                      + "程序都不解开、不改名、不搬进其余物、也不删 —— 也就是「碰都不碰」。";
+            }
+        }
 
         /// <summary>
         /// ②页「特定解压」那一栏里的**一行**（一条规则 = 名称 + 说明 + 开关 + ToolTip）。

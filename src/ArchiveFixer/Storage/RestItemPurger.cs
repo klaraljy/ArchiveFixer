@@ -78,13 +78,36 @@ namespace ArchiveFixer.Storage
     /// </summary>
     public sealed class RestItemPurger
     {
+        /// <summary>
+        /// 点名时最多写几个名字（多出来折成"还有 K 个"）—— 与批末诊断的"每组最多 3 个名字"同一口径。
+        /// </summary>
+        private const int MaxContentKeepNames = 3;
+
         private readonly IDeleteExecutor _executor;
         private readonly IDeleteFileSystemProbe _probe;
+        private readonly ContentKeepRules _keepRules;
 
-        public RestItemPurger(IDeleteExecutor? executor = null, IDeleteFileSystemProbe? probe = null)
+        /// <param name="executor">删除执行体（默认真实文件系统 / 回收站）。</param>
+        /// <param name="probe">文件系统探测器（默认 Windows 实现）。</param>
+        /// <param name="keepRules">
+        /// 「内容物保留关键词」判据（用户 2026-10-04 的新功能；唯一出口 <see cref="ContentKeepRules"/>）。
+        ///
+        /// <para>⛔ 判据放在**执行体里**（不是各个调用点）：其余物的删除只有这一个类，
+        /// 三处调用（链尾 / 任务收尾 / 链尾补搬）都要过它 —— 放调用点等于漏两处。
+        /// 生产路径三处构造点都从设置里取（<c>ContentKeepRules.FromSettings</c>）；
+        /// 传 <c>null</c> / 空列表 ⇒ **一个都不拦**（行为与加这条功能之前逐字相同）。</para>
+        ///
+        /// <para>命中之后的口径：**整份不删 + 一行点名**（用户要求"碰都不碰"，而"整目录删"与
+        /// "里面有命中项"冲突时，兜底永远落在"什么都不做"那一档）。</para>
+        /// </param>
+        public RestItemPurger(
+            IDeleteExecutor? executor = null,
+            IDeleteFileSystemProbe? probe = null,
+            ContentKeepRules? keepRules = null)
         {
             _executor = executor ?? new ShellDeleteExecutor();
             _probe = probe ?? WindowsDeleteFileSystemProbe.Instance;
+            _keepRules = keepRules ?? ContentKeepRules.Empty;
         }
 
         /// <summary>彻底删除那一档的理由（写进删除日志）。必须写清"为什么可以删"与"进了哪里"。</summary>
@@ -167,6 +190,28 @@ namespace ArchiveFixer.Storage
             if (splitGroupBlocker != null)
             {
                 return Skip($"{name}：{splitGroupBlocker}");
+            }
+
+            /*
+             * ===== 「内容物保留关键词」：其余物里有命中项 ⇒ 整份不删（用户 2026-10-04 的新功能）=====
+             *
+             * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
+             * 其余物里躺着的是**过程物 / 内容物**（内层包、抠出来的内嵌归档副本）—— 命中关键词的那些
+             * 一个字节都不许删；而这一档删的是**整个目录**，两件事冲突 ⇒ 兜底落在"什么都不做"：
+             * **整份不删 + 一行点名**。
+             *
+             * ⚠ 唯一豁免：**这一单自己的源包**（<see cref="ArchiveTask.CurrentPath"/> /
+             * <see cref="ArchiveTask.VolumePaths"/>）。用户明确划的界是"只管内容物" ——
+             * 别人给的 `小明.zip` 作为源包被搬进其余物时照常按设置处理。
+             * 判据读的是任务上的**事实路径**（搬完之后管线会把它们改成其余物里的新位置），⛔ 不猜名字。
+             */
+            string? contentKeepBlocker = DescribeContentKeepBlocker(
+                directory,
+                EnumerateTaskSourcePaths(task));
+
+            if (contentKeepBlocker != null)
+            {
+                return Skip($"{name}：{contentKeepBlocker}");
             }
 
             var keep = new List<string>();
@@ -327,6 +372,105 @@ namespace ArchiveFixer.Storage
             };
         }
 
+        /// <summary>
+        /// 「内容物保留关键词」这一档的**唯一判据**（用户 2026-10-04 的新功能，执行体里判）：
+        /// 其余物这棵树里**有没有**名字命中关键词的文件 —— 有 ⇒ 返回一句话（点名哪几个 + 命中哪个词），
+        /// 调用方**整份不删**；没有 ⇒ <c>null</c>（照旧按档删）。
+        ///
+        /// <para><b>三条口径</b>：① 空关键词列表 ⇒ 直接 <c>null</c>（连扫都不扫，行为与加这条功能之前
+        /// 逐字相同）；② <paramref name="exemptPaths"/> 里的是**这一单自己的源包**（用户划的界：
+        /// 只管内容物，源包照常处理）；③ **扫不动（权限 / 目录读不了）⇒ 当作"有命中项"拦下**
+        /// —— 兜底永远落在"什么都不做"那一档（AGENTS.md §9.5）。</para>
+        /// </summary>
+        private string? DescribeContentKeepBlocker(string directory, IReadOnlyList<string> exemptPaths)
+        {
+            if (_keepRules.IsEmpty)
+            {
+                return null;
+            }
+
+            var exempt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string path in exemptPaths)
+            {
+                string full = SafePathHelper.GetFullPathSafe(path);
+
+                if (full.Length > 0)
+                {
+                    exempt.Add(full);
+                }
+            }
+
+            var hits = new List<string>();
+            string? hitKeyword = null;
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                {
+                    if (exempt.Contains(SafePathHelper.GetFullPathSafe(file)))
+                    {
+                        // 这一单自己的源包：不套用关键词（见方法注释第 ② 条）。
+                        continue;
+                    }
+
+                    string? keyword = _keepRules.FindMatch(file);
+
+                    if (keyword == null)
+                    {
+                        continue;
+                    }
+
+                    hitKeyword ??= keyword;
+                    hits.Add(file);
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"其余物里有「内容物保留关键词」这一档，但这棵树扫不动（{ex.Message}）"
+                       + " —— 判不出里面有没有命中项，所以一个字节都不删（宁可不动，也不误删）";
+            }
+
+            if (hits.Count == 0)
+            {
+                return null;
+            }
+
+            return $"其余物里有 {hits.Count} 个文件命中「内容物保留关键词」（{hitKeyword}）："
+                   + $"{ContentKeepRules.DescribeHitNames(hits, MaxContentKeepNames)}"
+                   + " —— 按设置这些文件碰都不碰，所以这一份其余物整份不删（一个字节都没动）";
+        }
+
+        /// <summary>
+        /// 这一单**自己的源包路径**（搬进其余物之后 <see cref="ArchiveTask.CurrentPath"/> 与
+        /// <see cref="ArchiveTask.VolumePaths"/> 已经是新位置）—— 它们是关键词这一档的**豁免项**：
+        /// 用户划的界是"只管内层包这类内容物"，别人给的 `小明.zip` 当源包时照常按设置处理。
+        /// </summary>
+        private static List<string> EnumerateTaskSourcePaths(ArchiveTask? task)
+        {
+            var paths = new List<string>();
+
+            if (task == null)
+            {
+                return paths;
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.CurrentPath))
+            {
+                paths.Add(task.CurrentPath);
+            }
+
+            foreach (string volumePath in task.VolumePaths)
+            {
+                if (!string.IsNullOrWhiteSpace(volumePath))
+                {
+                    paths.Add(volumePath);
+                }
+            }
+
+            return paths;
+        }
+
         /// <summary><paramref name="candidate"/> 就是 <paramref name="root"/>，或者在它之下。</summary>
         private static bool IsSameOrUnder(string candidate, string root)
         {
@@ -429,6 +573,29 @@ namespace ArchiveFixer.Storage
             if (splitGroupBlocker != null)
             {
                 return Skip($"{name}：{splitGroupBlocker}");
+            }
+
+            /*
+             * ===== 「内容物保留关键词」：其余物里有命中项 ⇒ 整份不删（用户 2026-10-04 的新功能）=====
+             *
+             * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
+             * 这一档删的是**整个其余物目录**（源包 + 过程物一起），而里面有命中项时两件事冲突
+             * ⇒ 兜底落在"什么都不做"：**整份不删 + 一行点名**（用户要求"碰都不碰"）。
+             *
+             * ⚠ 唯一豁免：**这一单自己的源包**（<see cref="ArchiveTask.CurrentPath"/> /
+             * <see cref="ArchiveTask.VolumePaths"/>）—— 用户划的界是"只管内容物"，
+             * 别人给的 `小明.zip` 作为源包被搬进其余物时照常按设置处理。
+             *
+             * ⛔ 判据放在这里（执行体）而不是调用点：其余物的删除只有这一个类，三处调用都得过它。
+             * ⛔ 空关键词列表 ⇒ 连扫都不扫（行为与加这条功能之前逐字相同）。
+             */
+            string? contentKeepBlocker = DescribeContentKeepBlocker(
+                directory,
+                EnumerateTaskSourcePaths(task));
+
+            if (contentKeepBlocker != null)
+            {
+                return Skip($"{name}：{contentKeepBlocker}");
             }
 
             /*

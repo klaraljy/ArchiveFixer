@@ -89,6 +89,16 @@ namespace ArchiveFixer.ViewModels
             };
 
             /*
+             * 「内容物保留关键词」（用户 2026-10-04 的新功能「内容物压缩文件不解压」）：
+             * 命中关键词的内层归档**不当内层归档**（不展开、也不改名）。
+             *
+             * ⛔ 判据只有一处（ContentKeepRules.FromSettings → ContentKeepRules），递归核心只拿到结果；
+             * 空列表 ⇒ 判据是 Empty ⇒ 行为与加这条功能之前逐字相同。
+             * 与上面那一档同一个理由：**每次任务现建一个实例、当场从设置里取**（改完设置不重启也要生效）。
+             */
+            extractor.KeepRules = ContentKeepRules.FromSettings(Settings);
+
+            /*
              * 详细日志档与"候选来源描述器"（用户 2026-09-27：「开了更详细的日志选项怎么还是这么简单」）：
              *
              * 递归路径以前**连一条候选日志都没有**，而真机那次 13 分钟走的正是这条路 ——
@@ -2653,6 +2663,7 @@ namespace ArchiveFixer.ViewModels
                     chainTasks,
                     restDirectory,
                     outputRoot,
+                    ContentKeepRules.FromSettings(Settings),
                     out planningWarnings),
                 cancellationToken);
 
@@ -2857,15 +2868,23 @@ namespace ArchiveFixer.ViewModels
         /// <param name="chainTasks">整条链的任务（含根任务自己，会被跳过）。</param>
         /// <param name="restDirectory">其余物目录（定稿时算好的那一个，⛔ 不现场重算）。</param>
         /// <param name="outputRoot">根任务的输出根（只搬这个范围里的内层包）。</param>
+        /// <param name="keepRules">
+        /// 「内容物保留关键词」判据（用户 2026-10-04 的新功能；唯一出口 <see cref="ContentKeepRules"/>）。
+        /// 命中它的内层包**不搬进其余物**（"碰都不碰"），整组一起留；空判据 ⇒ 一个都不拦（老行为）。
+        /// 传 <c>null</c> 等价于 <see cref="ContentKeepRules.Empty"/>。
+        /// </param>
         internal static List<(string From, string To)> PlanChainInnerPackageMoves(
             ArchiveTask? rootTask,
             IReadOnlyList<ArchiveTask>? chainTasks,
             string? restDirectory,
             string? outputRoot,
+            ContentKeepRules? keepRules,
             out List<string> warnings)
         {
             var planned = new List<(string, string)>();
             warnings = new List<string>();
+
+            ContentKeepRules rules = keepRules ?? ContentKeepRules.Empty;
 
             if (rootTask == null ||
                 chainTasks == null ||
@@ -2957,6 +2976,29 @@ namespace ArchiveFixer.ViewModels
                     warnings.Add(
                         $"{rootTask.FileName}：{Path.GetFileName(path)} 看着是分卷组的一卷，"
                         + "但没拿到整组清单 —— 这次不搬它（搬一半会把一套包拆成废件）。");
+                    continue;
+                }
+
+                /*
+                 * ===== 「内容物保留关键词」：命中就**整组都不搬**（用户 2026-10-04 的新功能）=====
+                 *
+                 * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
+                 * 链尾把内层包收进其余物，是为了让「删除操作」那一档把它们清掉；命中关键词的既然
+                 * "碰都不碰"，那就**一步都不动**：不搬、不改名、后面的删除也删不到它（它不在其余物里）。
+                 *
+                 * ⛔ 判据唯一出口 <see cref="ContentKeepRules"/>（包含即命中 / 大小写不敏感 / 不做通配正则）。
+                 * ⛔ 分卷组**整组一起判**：一卷命中就整组留着，绝不只留一半。
+                 * ⛔ 空关键词列表 ⇒ 这里一个都不拦（行为与以前逐字相同）。
+                 */
+                string? keepKeyword = groupPaths
+                    .Select(groupPath => rules.FindMatch(groupPath))
+                    .FirstOrDefault(keyword => keyword != null);
+
+                if (keepKeyword != null)
+                {
+                    warnings.Add(
+                        $"{rootTask.FileName}：{Path.GetFileName(path)} 命中「内容物保留关键词」（{keepKeyword}）"
+                        + " —— 按设置碰都不碰，这次不搬进其余物（它留在原处，也不参与后面的删除）。");
                     continue;
                 }
 
@@ -3110,14 +3152,20 @@ namespace ArchiveFixer.ViewModels
         /// 链尾对**单个**成功任务补做「删除操作」那一档（一键处理专用；幂等：已处理过的直接跳过）。
         /// </summary>
         /// <param name="chainTasks">
-        /// 整条链的全部任务（根 + 续解子任务）。**必须传**：链尾这一档除了看根任务自己，
-        /// 还要看"这条链是不是整条都成功了"（见 <see cref="DescribeChainBlocker"/>）。
+        /// 整条链的全部任务（根 + 续解子任务）。**调用方照旧按位置传**（同一批的链信息在别处还要用），
+        /// 但本档 2026-10-04 起**不再读它** —— 判据只问"这一单自己的根源包那一层"，
+        /// 不再要求链上每个内层包都成功（用户原话：「你不会读设置吗，我勾选了保留吗，没勾选你留着干什么」，
+        /// 见下面那一段长注释）。
         /// </param>
+        /// <param name="cancellationToken">取消令牌（取消那一档由执行体 <c>RestItemPurger</c> 第 3 道门槛判）。</param>
         private async Task ApplyRestHandlingAfterChainAsync(
             ArchiveTask task,
             IReadOnlyList<ArchiveTask>? chainTasks,
             CancellationToken cancellationToken)
         {
+            _ = chainTasks;
+            _ = cancellationToken;
+
             string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
 
             if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
@@ -3182,30 +3230,33 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * ===== 链尾「删除操作」的第六道门槛：**整条链都得成功**（用户 2026-09-25 第 37 条真机故障）=====
+             * ===== 「整条链都得成功」那道门槛 2026-10-04 **被用户推翻**（原第 37 条）=====
              *
-             * 现场：他那个 12.22 GiB 的容器（`1-20+IF1-3.7z`）第一层**成功**了、三个分卷也进了其余物；
-             * 下一层 `Code Complete-BZ.7z(删掉.001` 判「分卷缺失」**失败**。链尾这一档当时只看根任务自己
-             * （Succeeded + 校验通过 + 其余物在）→ 把那一份 12.22 GiB 的其余物**彻底删了**。
-             * 用户看到的是"20 G 的素材只出来 8 G"，而且那 12 G 连过程物都不在了（只剩源容器）。
+             * 老口径（2026-09-25 第 37 条那次 12.22 GiB 事故之后加的）：链上**每一个**续解任务都成功
+             * 且可证完整，链尾才按「删除操作」处理其余物 —— 理由是"链没跑完时过程物是唯一的产物线索"。
              *
-             * 判据只读机器事实（终态枚举 + 校验枚举，⛔ 不比对中文文案）。
+             * 用户 2026-10-04 真机（日志 271/272）否掉了它，原话：
+             * 「你不会读设置吗，我勾选了保留吗，没勾选你留着干什么」——
+             * 他选了「其余物 = 彻底删除」，只因为**内层包**失败（根源包自己那一层是成功的、
+             * 输出校验也过了）就整份留着，在他眼里就是"设置没生效"。
+             *
+             * 现在的口径：**判据只问"这一单自己的根源包那一层"** ——
+             * ① 根源包成功（<see cref="TaskOutcome.Succeeded"/>，上面已查）；
+             * ② 输出校验通过且**完整性可证**（L4 唯一出口，上面已查）；
+             * ③ 未取消（<c>RestItemPurger</c> 第 3 道门槛，执行体里查）；
+             * ④ 其余物目录是定稿那一刻记下来的那一个（上面已查 + 执行体第 4/5 道门槛）。
+             * ⛔ **不再要求链上每个内层包都成功**。
+             *
+             * 红线一个字没动（全部由下面这些闸门继续钉着，与哪一档无关）：
+             * · 失败 / 部分完成 / 取消的**那一单** ⇒ 源包原地不动、其余物不生成（上面两条早退 + 执行体）；
+             * · 其余物删除只有 <c>RestItemPurger</c> 一个执行体，六道门槛（含「半套分卷」
+             *   <c>RestVolumeCompletenessGate</c>）照旧全过；
+             * · 「空间不足」模式与其余物处理的口径不变；
+             * · 判据只读事实（枚举终态 / 校验结果 / 取消令牌），⛔ 不比中文。
+             *
+             * 确实不满足上面四条而没处理其余物时，仍然**逐链点名**说清原因 + 路径
+             * （<see cref="AppendRemovalBlocked"/> / <see cref="RecordRestKept"/>，三处消费）。
              */
-            string? chainBlocker = DescribeChainBlocker(task, chainTasks);
-
-            if (chainBlocker != null)
-            {
-                // 日志 + ①页「错误信息」列 + 批末诊断 + 失败清单读的是同一份文字（用户 2026-10-04 真机）。
-                RecordRestKept(task, chainBlocker);
-
-                AppendLog(
-                    "WARN",
-                    $"{task.FileName}：链尾的其余物不处理（{chainBlocker}）—— 这条链没跑完，"
-                    + "过程物是这条链唯一的产物线索，一个字节都不删（失败 / 取消 / 没跑完一律不动）。");
-
-                return;
-            }
-
             ScheduledTaskRuntime runtime = GetOrCreateRuntime(task);
 
             if (runtime.PurgedBytes > 0 || runtime.RestPurged)
@@ -3336,17 +3387,6 @@ namespace ArchiveFixer.ViewModels
                     $"引擎对这份归档现列出来的清单",
                 _ => expectation.UnavailableReason
             };
-        }
-
-        /// <summary>
-        /// 这条续解链上有没有"没成功"的任务（链尾「删除操作」的第六道门槛，用户 2026-09-25 第 37 条）。
-        ///
-        /// <para>判据本体在 <see cref="ChainCompletionGate"/>（公开的纯函数，单独可测）：
-        /// 链上每个续解任务都要 Succeeded + 输出校验 Passed，"还没跑过"同样算拦下。</para>
-        /// </summary>
-        private static string? DescribeChainBlocker(ArchiveTask rootTask, IReadOnlyList<ArchiveTask>? chainTasks)
-        {
-            return ChainCompletionGate.DescribeBlocker(rootTask, chainTasks);
         }
 
         /// <summary>
@@ -3559,23 +3599,14 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 与 ApplyRestHandlingAfterChainAsync 同一道门槛（第 37 条）：这条链没整条成功就一个字节都不删。
-             * 这里虽然已经被 DescribeChainVerificationGap 挡过一道，但两者的判据不同（那道只看"落在同一目录"），
-             * 删除这种事宁可多挡一次。
+             * 与 ApplyRestHandlingAfterChainAsync **同一道判据**（2026-10-04 起都一样）：
+             * 只问"这一单自己的根源包那一层"——根源包成功 + 输出校验通过 + 未取消 + 完整性可证
+             * ⇒ 按本批「删除操作」档处理其余物；⛔ 不再要求链上每个内层包都成功。
+             *
+             * 到得了这里就说明上面那条路已经把源包搬进其余物了；而删除动作本身的门槛全在
+             * <c>RestItemPurger</c> 里（终态 / 可证完整 / 未取消 / 路径形状 / 半套分卷），
+             * 这一处只负责"什么时候试"。
              */
-            string? chainBlocker = DescribeChainBlocker(rootTask, chainTasks);
-
-            if (chainBlocker != null)
-            {
-                // 与上面那一条同口径：这句话也要落到①页 / 批末诊断 / 失败清单（用户 2026-10-04 真机）。
-                RecordRestKept(rootTask, chainBlocker);
-
-                logEntries.Add((
-                    "WARN",
-                    $"{rootTask.FileName}：链尾的其余物不处理（{chainBlocker}）—— 这条链没跑完，一个字节都不删。"));
-                return;
-            }
-
             bool cancelled = cancellationToken.IsCancellationRequested ||
                              IsStopping ||
                              _operationCts?.IsCancellationRequested == true;
@@ -3585,7 +3616,11 @@ namespace ArchiveFixer.ViewModels
                 : DeleteMode.Permanent;
 
             RestPurgeOutcome outcome = await Task.Run(
-                () => new RestItemPurger(RestDeleteExecutor).Purge(rootTask, cancelled, deleteMode),
+                () => new RestItemPurger(
+                        RestDeleteExecutor,
+                        null,
+                        ContentKeepRules.FromSettings(Settings))
+                    .Purge(rootTask, cancelled, deleteMode),
                 CancellationToken.None);
 
             logEntries.Add((
@@ -3625,7 +3660,7 @@ namespace ArchiveFixer.ViewModels
         /// null = 这条链在这个目录上校验齐了（且至少有一个任务确实落在这里）；
         /// 非 null = 说给用户听的原因（哪个任务没通过 / 压根没有任务落在这里）。
         /// </returns>
-        private static string? DescribeChainVerificationGap(
+        internal static string? DescribeChainVerificationGap(
             string destinationDirectory,
             ArchiveTask rootTask,
             IReadOnlyList<ArchiveTask>? chainTasks)
@@ -3725,6 +3760,10 @@ namespace ArchiveFixer.ViewModels
             {
                 int count = 0;
 
+                // 「内容物保留关键词」判据：命中它的那些**就是内容物**（用户 2026-10-04 的新功能），
+                // 所以"这一层有没有内容物"这件事要把它们数进去（判据唯一出口 ContentKeepRules）。
+                ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
+
                 foreach (string file in Directory.EnumerateFiles(destinationDirectory, "*", SearchOption.AllDirectories))
                 {
                     if (WorkspaceTree.ShouldSkipEntry(file, workRoot))
@@ -3737,7 +3776,7 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    if (IsProcessArtifactFile(file))
+                    if (IsProcessArtifactFile(file) && !keepRules.ShouldKeep(file))
                     {
                         continue;
                     }
@@ -4002,7 +4041,8 @@ namespace ArchiveFixer.ViewModels
             SpecialExtractionPlan? specialExtraction = null,
             bool suppressPackageFolderLayer = false,
             string? innermostPackageBaseName = null,
-            RecursionResult? engineOutput = null)
+            RecursionResult? engineOutput = null,
+            ContentKeepRules? contentKeepRules = null)
         {
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -4012,6 +4052,12 @@ namespace ArchiveFixer.ViewModels
             }
 
             string stageRoot = SafePathHelper.GetFullPathSafe(stageDirectory);
+
+            /*
+             * 「内容物保留关键词」判据（用户 2026-10-04 的新功能）：整个循环只算一次；
+             * 没传（null）/ 空列表 ⇒ 一个都不拦（行为与加这条功能之前逐字相同）。
+             */
+            ContentKeepRules keepRules = contentKeepRules ?? ContentKeepRules.Empty;
 
             /*
              * ===== 整组改名也要覆盖"引擎刚解出来的那一层"（用户 2026-10-01 真机）=====
@@ -4085,7 +4131,17 @@ namespace ArchiveFixer.ViewModels
                  * —— 那两道问的是"这一堆是不是待续解的分卷"，引擎自己刚写出来的东西根本不是。
                  */
                 bool isProcessArtifact = IsProcessArtifactFile(file)
-                    && !IsEngineOutputFile(file, stageRoot, engineOutput);
+                    && !IsEngineOutputFile(file, stageRoot, engineOutput)
+                    /*
+                     * ⛔ 命中「内容物保留关键词」的**不是过程物**（用户 2026-10-04 的新功能
+                     * 「内容物压缩文件不解压」）：它是用户点名"碰都不碰"的内容物 ⇒
+                     * 跟着内容物一起定稿落盘，**不进其余物**（进了就会被链尾那一档按设置删掉）。
+                     *
+                     * 现场形状：外层包里就装着一个 `小明.zip`（用户要留的那一份）—— 老判据只看
+                     * "像不像归档"，把它当"待续解的过程物"收进其余物 ⇒ 选了「彻底删除」就没了。
+                     * 判据唯一出口 <see cref="ContentKeepRules"/>（包含即命中 / 大小写不敏感 / 不通配正则）。
+                     */
+                    && !keepRules.ShouldKeep(file);
 
 
                 /*
@@ -6914,7 +6970,13 @@ namespace ArchiveFixer.ViewModels
                  * 用户的 678 MB 产物一个字节都没落地。判据见
                  * <see cref="IsEngineOutputFile"/>：这一单引擎这一趟写出来的，就不是过程物。
                  */
-                engineOutput: recursion);
+                engineOutput: recursion,
+                /*
+                 * ⛔ 「内容物保留关键词」的那一份判据（用户 2026-10-04 的新功能「内容物压缩文件不解压」）：
+                 * 命中关键词的内容文件**不算过程物** ⇒ 它跟着内容物一起定稿落盘、一个字节都不动
+                 * （不进其余物、也不参与后面的删除）。判据唯一出口仍是 <see cref="ContentKeepRules"/>。
+                 */
+                contentKeepRules: ContentKeepRules.FromSettings(Settings));
         }
 
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
@@ -11667,7 +11729,12 @@ namespace ArchiveFixer.ViewModels
             try
             {
                 // 磁盘活（量大小 + 删目录）→ 放后台，别占住 UI 线程。
-                outcome = await Task.Run(() => new RestItemPurger(RestDeleteExecutor).Purge(task, cancelled, deleteMode));
+                outcome = await Task.Run(
+                    () => new RestItemPurger(
+                            RestDeleteExecutor,
+                            null,
+                            ContentKeepRules.FromSettings(Settings))
+                        .Purge(task, cancelled, deleteMode));
             }
             catch (Exception ex)
             {
@@ -12557,7 +12624,11 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            RestPurgeOutcome purge = new RestItemPurger().PurgeExcept(
+            RestPurgeOutcome purge = new RestItemPurger(
+                    null,
+                    null,
+                    ContentKeepRules.FromSettings(Settings))
+                .PurgeExcept(
                 task,
                 new[] { rootSourceFull },
                 DeleteMode.Permanent);

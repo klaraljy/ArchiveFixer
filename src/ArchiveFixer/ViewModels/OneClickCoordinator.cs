@@ -2009,6 +2009,12 @@ namespace ArchiveFixer.ViewModels
             var skippedLines = new List<string>();
             int newFileCount = 0;
 
+            /*
+             * 「内容物保留关键词」判据（用户 2026-10-04 的新功能「内容物压缩文件不解压」）：
+             * 一轮扫下来只算一次（设置在一轮里不会变），空列表 ⇒ 一个都不拦。
+             */
+            ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
+
             foreach ((ArchiveTask task, string outputDirectory) in parents)
             {
                 List<string>? files = scanned
@@ -2045,6 +2051,24 @@ namespace ArchiveFixer.ViewModels
                     if (knownTaskPaths.Contains(file))
                     {
                         skippedLines.Add($"{file}（已经在任务列表里）");
+                        continue;
+                    }
+
+                    /*
+                     * ===== 「内容物保留关键词」：命中就**不当内层归档**（用户 2026-10-04 的新功能）=====
+                     *
+                     * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
+                     * 出厂默认档（RecursionMode = SingleLayer）**不进递归核心**，内层包由这里按轮次继续解
+                     * —— 所以这条设置必须在这条路也生效，否则默认档下它等于没做。
+                     *
+                     * 判据唯一出口 <see cref="ContentKeepRules"/>（包含即命中、大小写不敏感、
+                     * ⛔ 不做通配 / 正则、只吃文件名）；空关键词列表 ⇒ 一个都不拦（行为与以前逐字相同）。
+                     */
+                    string? keepsKeyword = keepRules.FindMatch(file);
+
+                    if (keepsKeyword != null)
+                    {
+                        skippedLines.Add($"{file}（名字命中「内容物保留关键词」：{keepsKeyword} —— 按设置不解开也不改名）");
                         continue;
                     }
 

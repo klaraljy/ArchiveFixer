@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
+using ArchiveFixer.Security;
 using ArchiveFixer.ViewModels;
 using Xunit;
 
@@ -100,6 +101,7 @@ namespace ArchiveFixer.Tests
                 chain,
                 restDirectory,
                 rootOutput,
+                ContentKeepRules.Empty,
                 out List<string> warnings);
 
             Assert.Empty(warnings);
@@ -151,6 +153,7 @@ namespace ArchiveFixer.Tests
                 chain,
                 restDirectory,
                 rootOutput,
+                ContentKeepRules.Empty,
                 out _);
 
             Assert.Equal(2, moves.Count);
@@ -179,6 +182,7 @@ namespace ArchiveFixer.Tests
                 chain,
                 restDirectory,
                 Path.Combine(_root, "222", "222"),
+                ContentKeepRules.Empty,
                 out _);
 
             Assert.Empty(moves);
@@ -204,6 +208,7 @@ namespace ArchiveFixer.Tests
                 chain,
                 restDirectory,
                 Path.Combine(_root, "222", "222"),
+                ContentKeepRules.Empty,
                 out _);
 
             Assert.Single(moves);

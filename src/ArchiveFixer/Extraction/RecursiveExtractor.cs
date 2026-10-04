@@ -355,6 +355,19 @@ namespace ArchiveFixer.Extraction
         public bool OmitMiddlePackageLayers { get; set; }
 
         /// <summary>
+        /// **「内容物保留关键词」判据**（用户 2026-10-04 的新功能「内容物压缩文件不解压」）。
+        ///
+        /// <para>命中关键词的内层归档**不当内层归档**：不展开、也不改名（还原工序那一步也不碰它），
+        /// 它就当一件普通内容物留在结果里。判据唯一出口 <see cref="ContentKeepRules"/>
+        /// （包含即命中、大小写不敏感、⛔ 不做通配 / 正则）。</para>
+        ///
+        /// <para>由调用方按设置当场赋值（与 <see cref="OmitMiddlePackageLayers"/>、<see cref="RecursionLimits"/>
+        /// 同一个理由：改完设置不重启也要生效）。默认 <see cref="ContentKeepRules.Empty"/> =
+        /// 一个关键词都没有 = 行为与以前**逐字相同**。</para>
+        /// </summary>
+        public ContentKeepRules KeepRules { get; set; } = ContentKeepRules.Empty;
+
+        /// <summary>
         /// 上一次运行留下、已被本次续跑取代的工作区（多分支询问 → 用户确认继续这一条路）。
         ///
         /// 为什么是**列表**而不是一个槽位：一个实例上可能出现"询问 → 续跑"这样的多次运行，
@@ -1763,6 +1776,22 @@ namespace ArchiveFixer.Extraction
                 }
             }
 
+            /*
+             * ===== 「内容物保留关键词」：命中就**不当内层归档**（用户 2026-10-04 的新功能）=====
+             *
+             * 用户原话：「只要文件名里面包含着这个字符就不能动……这些压缩文件碰都不要碰」。
+             * 所以这一步要**排在还原改名那一步之前**：命中它的既不解开、也不改名 ——
+             * 只把它当一件普通内容物留在这一层的结果里（定稿归位到目标目录不算碰）。
+             *
+             * ⛔ 判据只有一处（<see cref="ContentKeepRules"/>，包含即命中 / 大小写不敏感 / 不做通配正则）；
+             * 这里只做两件事：把命中的摘出去、并如实说一句"因为哪个词"。
+             * 空关键词列表 ⇒ 一个都不摘（行为与以前逐字相同）。
+             *
+             * ⚠ 连**同组的兄弟卷**一起摘：一组分卷（`小明.part1.rar` + 后续卷）是**一个**归档，
+             * 只摘其中一卷会让引擎拿剩下的残卷去试开（既打不开，还会在日志里留下一条看不懂的失败）。
+             */
+            found = ApplyContentKeepRules(found, layerLabel);
+
             // 排序让候选清单在 UI 与测试里都是稳定顺序（不同文件系统返回顺序不一致）。
             found.Sort(StringComparer.OrdinalIgnoreCase);
 
@@ -2011,6 +2040,89 @@ namespace ArchiveFixer.Extraction
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 把这一层扫出来的候选里**命中「内容物保留关键词」**的那些摘掉（连同**同组的兄弟卷**）——
+        /// 它们**不当内层归档**：不解开、也不改名，只当普通内容物留在这一层的结果里。
+        ///
+        /// <para>用户 2026-10-04 的新功能原话：「只要文件名里面包含着这个字符就不能动……
+        /// 这些压缩文件碰都不要碰」「包含的也同样是」。判据唯一出口 <see cref="ContentKeepRules"/>
+        /// （包含即命中、<see cref="StringComparison.OrdinalIgnoreCase"/>、空关键词忽略、⛔ 不做通配 / 正则）。</para>
+        ///
+        /// <para>⛔ **空关键词列表 = 一个都不摘**（原样返回，行为与加这条功能之前逐字相同）。
+        /// 这一条是回归命根，别为了"顺手清理"改动它。</para>
+        ///
+        /// <para>⛔ 为什么不跟引擎、文件内容打交道：用户明确说"你甚至不用去检测他是否是压缩文件" ——
+        /// 判据**只看文件名**（内容探测在这一步之前已经做完了，这里只决定"要不要当内层归档"）。</para>
+        /// </summary>
+        private List<string> ApplyContentKeepRules(List<string> found, string layerLabel)
+        {
+            if (KeepRules.IsEmpty || found.Count == 0)
+            {
+                return found;
+            }
+
+            var hitKeywords = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string path in found)
+            {
+                string? keyword = KeepRules.FindMatch(path);
+
+                if (keyword != null)
+                {
+                    hitKeywords[path] = keyword;
+                }
+            }
+
+            if (hitKeywords.Count == 0)
+            {
+                return found;
+            }
+
+            var kept = new List<string>(found.Count);
+
+            foreach (string path in found)
+            {
+                if (hitKeywords.TryGetValue(path, out string? ownKeyword))
+                {
+                    Log(
+                        "INFO",
+                        $"{layerLabel}：按「内容物保留关键词」原样留着，不解开也不改名 —— "
+                        + $"{Path.GetFileName(path)}（命中「{ownKeyword}」）");
+
+                    continue;
+                }
+
+                // 同组的兄弟卷：整组是一个归档，一卷命中就整组都不当内层归档。
+                string? siblingKeyword = null;
+                string? siblingHit = null;
+
+                foreach (string hit in hitKeywords.Keys)
+                {
+                    if (IsSameGroupContinuationVolume(path, hit))
+                    {
+                        siblingKeyword = hitKeywords[hit];
+                        siblingHit = hit;
+                        break;
+                    }
+                }
+
+                if (siblingKeyword != null)
+                {
+                    Log(
+                        "INFO",
+                        $"{layerLabel}：按「内容物保留关键词」原样留着，不解开也不改名 —— "
+                        + $"{Path.GetFileName(path)}（与 {Path.GetFileName(siblingHit!)} 是同一组，"
+                        + $"那一组命中「{siblingKeyword}」）");
+
+                    continue;
+                }
+
+                kept.Add(path);
+            }
+
+            return kept;
         }
 
         /// <summary>

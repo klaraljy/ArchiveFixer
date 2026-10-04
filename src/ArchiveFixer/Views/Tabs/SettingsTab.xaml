@@ -233,6 +233,37 @@
                 </StackPanel>
             </GroupBox>
 
+            <!-- ==================== 内容物保留关键词（用户 2026-10-04：内容物压缩文件不解压） ==================== -->
+            <GroupBox Header="内容物保留关键词（内容物压缩文件不解压）">
+                <StackPanel>
+                    <!--
+                        用户原话：「现在出现一个功能叫做"内容物压缩文件不解压"，这个功能同样要有记忆功能，
+                        用户可以在里面输入像，1_名字里面包含特定字符的压缩文件不解压，你甚至不用去检测他是否是
+                        压缩文件，只要文件名里面包含着这个字符就不能动，例如 小明，只要内容物里面有文件的名称
+                        包含了"小明"的这些压缩文件碰都不要碰……包含的也同样是」。
+
+                        ⛔ 这一栏是这条设置的**唯一入口**（别在②页再放一个同样的框）。
+                    -->
+                    <TextBox AcceptsReturn="True"
+                             MinHeight="72"
+                             MaxHeight="140"
+                             VerticalScrollBarVisibility="Auto"
+                             FontFamily="Consolas"
+                             Text="{Binding SettingsEditor.ContentKeepKeywordsText, Mode=TwoWay}"
+                             ToolTip="一行一个关键词。留空 = 这个功能不生效（程序行为与以前完全一样）。" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.ContentKeepKeywordsSummary}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="一行一个关键词，填完点开别处就自动存（有记忆，下次启动还在）。规则只有一条：内容物里的文件名「包含」这个词就算命中（不分大小写），不用填星号、也不认正则 —— 例如填「小明」，那么 小明.zip、小明.part1.rar、小明和小红.7z、小明.txt 都命中。命中的文件程序不解开、不改名、不搬进其余物、也不删，就当普通文件留在结果里。⚠ 只管「内容物」：你自己导入的那个源包不套用这条（比如别人给你的 小明.zip 仍会照常识别与解压）。" />
+                </StackPanel>
+            </GroupBox>
+
             <!-- ==================== 安全上限（解压前预算，第 36 条） ==================== -->
             <GroupBox Header="安全上限（解压前预算）">
                 <StackPanel>

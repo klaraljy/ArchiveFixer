@@ -149,8 +149,16 @@ namespace ArchiveFixer.Tests
         /// <b>用例 B</b>：四层真链 + 普通档 + 「彻底删除」，但**第三层解不开**（那一层的包设了密码、
         /// 密码本里没有它）⇒
         /// ① 第二层（成功的那一层）当场回收了它自己的源（level2.7z）—— 已回收的不回滚（用户明确接受）；
-        /// ② **第三层**的过程物（level3.7z）与它产出的 level4.7z **一个字节都不动**；
-        /// ③ 最外层源包原地不动；④ 其余物一个都不生成。
+        /// ② 第三层那一层**自己**没有被回收（那一层的回收判据一条都没过）；
+        /// ③ 最外层源包原地不动（本档「留在原地」⇒ 一个字节都没搬）；④ 失败那一层的内容物没出来。
+        ///
+        /// <para><b>⚠ 2026-10-04 口径变更（用户推翻"整链成功"那道闸门）</b>：老版本这一档写着
+        /// "失败层的过程物一个字节都不动、其余物一个都不生成"。现在链尾**只问根源包那一层** ——
+        /// 根源包（<c>outer.7z</c>）那一层是成功的 ⇒ 按③页「彻底删除」把它那一份其余物整份删掉，
+        /// 而**失败那一层的包 <c>level3.7z</c> 正躺在其余物里**（它是上一层定稿时收进去的待续解过程物）
+        /// ⇒ 它**跟着一起被删了**（它的内容从未被解出来）。
+        /// ⚠ 代价如实记在这里：这一层的唯一副本随其余物永久消失，能重建它的只有最外层源包
+        /// （本档「留在原地」⇒ 还在盘上，见 ⑤）。要改这个取舍得先让用户拍板。</para>
         /// </summary>
         [SevenZipFact]
         public async Task 用例B_中间那一层失败_那一层的过程物一个字节不动_源包原地不动()
@@ -177,58 +185,59 @@ namespace ArchiveFixer.Tests
 
             Assert.Contains(harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level2.7z"));
 
-            // ② 失败那一层的过程物一个字节都不动（level3.7z 就是它的源；第四层的包根本没被解出来）。
-            string[] failedLayerSources = FindFiles("level3.7z");
-
-            Assert.NotEmpty(failedLayerSources);
+            /*
+             * ② 失败那一层**自己没被回收**（逐层回收那一支的判据一条都没过）：
+             * 判据取那一段唯一的日志（"这一层的过程物没有回收"）—— 它不在，就说明那一层被误当成"跑成了"。
+             */
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("这一层的过程物没有回收", StringComparison.Ordinal));
 
             /*
-             * ⚠ 2026-10-03（第 ② 条）：链尾那一档**只处理最外层源包** —— 内层包已经在各层回收过了，
-             * 链尾⛔ 不许再走"把内层包收进其余物"那一段（老口径是攒到链尾统一收）。
-             * 判据取那一段唯一的日志（"内层包已移入其余物"）：它在，就说明链尾又去搬内层包了。
+             * ③ 链尾那一档**按设置做了**（2026-10-04 新口径）：根源包那一层成功 ⇒ 其余物整份彻底删除。
+             * ⚠ 失败那一层的包也在这份其余物里 ⇒ 一起没了（见上面 doc 的代价说明）。
              */
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("彻底删除：", StringComparison.Ordinal));
+
+            Assert.Empty(FindFiles("level3.7z"));
+
+            // ④ 链尾⛔ 不再走"把内层包收进其余物"那一段（那一档下逐层回收已经各收各的）。
             Assert.DoesNotContain(
                 harness.Log.Logs,
                 entry => entry.Message.Contains("内层包已移入其余物", StringComparison.Ordinal));
 
-            // ③ 失败那一层的内容物当然也没出来（这一层真的失败了，不是"其实成功了"）。
+            // ⑤ 失败那一层的内容物当然也没出来（这一层真的失败了，不是"其实成功了"）。
             Assert.Empty(FindFiles("layer3.txt"));
             Assert.Empty(FindFiles("final.txt"));
 
-            // ④ 已成功回收的上一层**不回滚**（用户 2026-09-29 明确接受："原包是已经没有了但是留下的不会破"）。
+            // ⑥ 已成功回收的上一层**不回滚**（用户 2026-09-29 明确接受："原包是已经没有了但是留下的不会破"）。
             Assert.Empty(FindFiles("level2.7z"));
 
-            // ⑤ 源包原地不动（⛔ 红线 1）。
+            // ⑦ 最外层源包原地不动（⛔ 红线 1：本档「留在原地」⇒ 它从没进过其余物）。
             Assert.True(File.Exists(outer), "失败 / 部分完成 ⇒ 源包必须原地不动");
 
-            // ⑥ 链没跑完 ⇒ 链尾那一档**什么都没做**：没有任何"整份删除 / 搬进回收站"的动作。
-            Assert.DoesNotContain(
-                harness.Log.Logs,
-                entry => entry.Message.Contains("彻底删除：", StringComparison.Ordinal)
-                         || entry.Message.Contains("移入回收站：", StringComparison.Ordinal));
+            // ⑧ 其余物那一份已经按设置删掉了（根源包那一层成功），盘上不再有其余物目录。
+            Assert.Empty(FindDirectories(ProcessArtifactLayout.ArtifactDirectoryName));
 
-            /*
-             * ⑦ 其余物里只有过程物：源包是「留在原地」档，**一个字节都没进其余物**
-             * （其余物本身会为过程物而存在 —— 那是既有机制，与"失败不删东西"不冲突）。
-             */
-            foreach (string restDirectory in FindDirectories(ProcessArtifactLayout.ArtifactDirectoryName))
-            {
-                Assert.DoesNotContain(
-                    Directory.GetFiles(restDirectory, "*", SearchOption.AllDirectories),
-                    path => IsNamed(path, "outer.7z"));
-            }
-
-            // ⑧ 失败那一层要落成失败（不变量 6），而不是"成功"或"部分完成"。
+            // ⑨ 失败那一层要落成失败（不变量 6），而不是"成功"或"部分完成"。
             Assert.Contains(harness.Vm.Tasks, task => task.Outcome == TaskOutcome.Failed);
         }
 
         /// <summary>
         /// <b>红线守门（「移入回收站」档 + 中间那一层失败）</b>：那一档不逐层回收，内层包要等链尾 ——
-        /// 而链没跑完 ⇒ 链尾那一档整段不执行 ⇒ **一个字节都不许被删 / 不许被回收**，
-        /// 源包那一份也**必须还在盘上**（用户 2026-10-03 的原话："原包还是比较重要的"）。
+        ///
+        /// <para><b>⚠ 2026-10-04 口径变更（用户推翻"整链成功"那道闸门）</b>：老版本在这里断言
+        /// "链没跑完 ⇒ 链尾那一档整段不执行、一个字节都不删、源包还在盘上"。现在链尾**只问根源包那一层**：
+        /// 根源包成功 ⇒ 按档把整份其余物（含<b>已经搬进其余物的最外层源包</b>）**一次**移入回收站。</para>
+        ///
+        /// <para><b>这一档仍然是"可还原"的那一档</b>（用户 2026-10-03 的原话："原包还是比较重要的"）：
+        /// 因此这里钉的是 —— 回收站**只调一次**（整份一次搬走）、**永久删除零调用**、
+        /// 而且⛔ 失败那一层自己**没有**被逐层回收（零个源包删除记录）。</para>
         /// </summary>
         [SevenZipFact]
-        public async Task 用例B2_移入回收站档_中间那一层失败_源包还在_回收站零调用()
+        public async Task 用例B2_移入回收站档_中间那一层失败_整份一次进回收站_绝不永久删()
         {
             const int layers = 4;
             const int failingLevel = 3;
@@ -243,16 +252,20 @@ namespace ArchiveFixer.Tests
 
             await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
 
-            // ① 源包那一份还在盘上（第 1 层自己成功过 ⇒ 它按用户选的档进了其余物；谁都没删它）。
-            Assert.NotEmpty(FindFiles("outer.7z"));
+            // ① 源包那一份**进了回收站**：它先按"源包操作 = 放入其余物"进其余物，链尾整份一次搬走。
+            Assert.Single(recycleExecutor.RecycleCalls);
 
-            // ② 一个字节都没被回收 / 永久删除（链没跑完 ⇒ 链尾那一档整段不执行）。
-            Assert.Empty(recycleExecutor.RecycleCalls);
+            Assert.True(
+                IsNamed(recycleExecutor.RecycleCalls[0], ProcessArtifactLayout.ArtifactDirectoryName),
+                "整份其余物一次搬走（不是逐个条目），实际：" + recycleExecutor.RecycleCalls[0]);
+
+            Assert.Empty(FindFiles("outer.7z"));
+
+            // ② ⛔ 永久删除**一次都不许有**（这一档是可还原的那一档）。
             Assert.Empty(recycleExecutor.PermanentCalls);
-            Assert.Empty(harness.SourceDeletes.DeletedPaths);
 
-            // ③ 失败那一层的过程物还在（红线 3：那一层的过程物一个字节都不动）。
-            Assert.NotEmpty(FindFiles("level3.7z"));
+            // ③ 逐层回收那一支一次都没被调用（「移入回收站」档不逐层回收 —— B 档位分叉不变）。
+            Assert.Empty(harness.SourceDeletes.DeletedPaths);
 
             // ④ 失败那一层要落成失败（不变量 6）。
             Assert.Contains(harness.Vm.Tasks, task => task.Outcome == TaskOutcome.Failed);
@@ -670,8 +683,19 @@ namespace ArchiveFixer.Tests
             // ③ 不可逆动作零调用（逐层回收那个执行体一次都没被叫）。
             Assert.Empty(harness.SourceDeletes.DeletedPaths);
 
-            // ④ 源包（内层包）仍在原地 —— 红线：失败 ⇒ 源包一个字节都不动。
-            Assert.NotEmpty(FindFiles("level2.7z"));
+            /*
+             * ④ 这一层**自己**没跑成 ⇒ 它的源（level2.7z）**没有**被逐层回收那一步删掉。
+             *
+             * ⚠ 2026-10-04 口径变更：老版本在这里断言"源包仍在原地"。现在链尾只问**根源包那一层** ——
+             * 根源包（outer.7z）成功 ⇒ 按③页「彻底删除」把它那一份其余物整份删掉，而 level2.7z
+             * 正是上层定稿时收进其余物的待续解过程物 ⇒ 它跟着一起没了（它的内容从未被定稿出来）。
+             * 判据用**日志**而不是"文件在不在"：逐层回收那一支确实没删过它（③ 已经钉了零调用）。
+             */
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("这一层的过程物没有回收", StringComparison.Ordinal));
+
+            Assert.DoesNotContain(harness.SourceDeletes.DeletedPaths, path => IsNamed(path, "level2.7z"));
         }
 
         /// <summary>
@@ -824,19 +848,21 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// <b>用例 K3（A5）</b>：链上有一层没成功 ⇒ 其余物一个字节都不删 ——
-        /// 那句"其余物留在哪、为什么"**必须同时进①页「错误信息」列与批末诊断**，
+        /// <b>用例 K3（A5）</b>：**其余物没处理时，那句"为什么"必须同时进①页「错误信息」列与批末诊断**，
         /// ⛔ 不许只躺在日志里（真机：界面上只看到"解压成功、其余物还在"）。
+        ///
+        /// <para><b>⚠ 2026-10-04 口径变更</b>：老版本用"链上有一层没成功"当那个原因 ——
+        /// 用户当天的原话（「你不会读设置吗，我勾选了保留吗，没勾选你留着干什么」）把那条整链闸门推翻了
+        /// ⇒ 现在**只有根源包自己那一层不成立**时才会写这句话。所以这一条改用
+        /// **根源包自己失败**（外层包设了密码、密码本里没有它）来触发同一套 A5 机制。</para>
         ///
         /// <para><b>红检</b>：把链尾那两处的 <c>RecordRestKept</c> 撤掉 ⇒ 本用例当场红。</para>
         /// </summary>
         [SevenZipFact]
-        public async Task 用例K3_链没跑完其余物没删_原因要进错误信息列与批末诊断()
+        public async Task 用例K3_其余物没处理_原因要进错误信息列与批末诊断()
         {
-            const int layers = 4;
-
             Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
-            string outer = BuildChain(layers, passwordLevel: 3);
+            string outer = BuildChain(2, passwordOuter: true);
 
             await harness.AddPathsAsync(outer);
 
@@ -851,14 +877,14 @@ namespace ArchiveFixer.Tests
 
             // ① ①页「错误信息」列里必须有那一句（含原因）。
             Assert.Contains("其余物没有处理", root.ErrorMessage, StringComparison.Ordinal);
-            Assert.Contains("没有成功", root.ErrorMessage, StringComparison.Ordinal);
+            Assert.Contains(StatusText.ChainRestBlockedTaskOutcomeFormat, root.ErrorMessage, StringComparison.Ordinal);
 
             // ② 批末诊断（弹窗正文与日志逐行同一份文字）里也要有。
             Assert.Contains(
                 outcome.DiagnosticLines,
                 line => line.Contains("其余物没有处理", StringComparison.Ordinal));
 
-            // ③ 红线：链没跑完 ⇒ **最外层源包**一个字节都没删（已成功那几层各收各的是设计）。
+            // ③ 红线：根源包那一单失败 ⇒ **一个字节都不删**（源包原地不动）。
             Assert.DoesNotContain(harness.SourceDeletes.DeletedPaths, path => IsNamed(path, "outer.7z"));
             Assert.NotEmpty(FindFiles("outer.7z"));
         }
@@ -1198,9 +1224,11 @@ namespace ArchiveFixer.Tests
         /// 而且这样最外层那一单第 1 轮就有内容物可定稿（源包搬运因此走"本轮直接搬"）。
         ///
         /// <para><paramref name="passwordLevel"/> 指定的那一层用密码包（<c>-mhe=on</c>）造，
-        /// 密码刻意不进密码本 ⇒ 轮到那一层必然失败（用例 B 用）。</para>
+        /// 密码刻意不进密码本 ⇒ 轮到那一层必然失败（用例 B 用）。
+        /// <paramref name="passwordOuter"/> = true ⇒ **最外层源包自己**用密码包造
+        /// ⇒ 根源包那一层就失败（用例 K3 用：只有这一档才会触发"其余物没处理"那句点名）。</para>
         /// </summary>
-        private string BuildChain(int levelCount, int? passwordLevel = null)
+        private string BuildChain(int levelCount, int? passwordLevel = null, bool passwordOuter = false)
         {
             Assert.True(levelCount >= 2, "至少要有 outer + 一层内层包");
 
@@ -1236,7 +1264,15 @@ namespace ArchiveFixer.Tests
             Directory.CreateDirectory(sourceDirectory);
 
             string outer = Path.Combine(sourceDirectory, "outer.7z");
-            Run7z(build, "a", "-t7z", outer, "level2.7z", "layer1.txt");
+
+            if (passwordOuter)
+            {
+                Run7z(build, "a", "-t7z", outer, "-p" + UnknownLayerPassword, "-mhe=on", "level2.7z", "layer1.txt");
+            }
+            else
+            {
+                Run7z(build, "a", "-t7z", outer, "level2.7z", "layer1.txt");
+            }
 
             /*
              * 造包用的中间层（level2..levelN）是"造样本的脚手架"，不是管线产物 ——

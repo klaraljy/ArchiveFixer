@@ -213,68 +213,21 @@ namespace ArchiveFixer.Tests
                 "错密码解出来的是随机字节，看不出是文件开头 —— 靠这一点就能把它排到最后");
         }
 
-        // ================================================================ ② 链尾删除要看整条链
+        // ================================================================ ② 链尾删除：判据 2026-10-04 被用户推翻
 
-        [Fact]
-        public void 链上有失败的任务时_链尾不许动其余物()
-        {
-            ArchiveTask root = Task("容器.7z", continuation: false);
-            root.Outcome = TaskOutcome.Succeeded;
-            root.OutputVerification = OutputVerificationOutcome.Passed;
-
-            ArchiveTask inner = Task("内层.7z.001", continuation: true);
-            inner.Outcome = TaskOutcome.Failed;
-            inner.OutputVerification = OutputVerificationOutcome.Failed;
-
-            string? blocker = ChainCompletionGate.DescribeBlocker(root, new[] { root, inner });
-
-            Assert.NotNull(blocker);
-            Assert.Contains("内层.7z.001", blocker!, StringComparison.Ordinal);
-        }
-
-        [Fact]
-        public void 链上还有没跑完的任务时_也不许动其余物()
-        {
-            ArchiveTask root = Task("容器.7z", continuation: false);
-            ArchiveTask pending = Task("下一层.7z.001", continuation: true);
-
-            // 没跑过：Outcome 还是 Pending、校验 NotAttempted —— 链显然没跑完。
-            Assert.NotNull(ChainCompletionGate.DescribeBlocker(root, new[] { root, pending }));
-        }
-
-        [Fact]
-        public void 整条链都成功才放行()
-        {
-            ArchiveTask root = Task("容器.7z", continuation: false);
-            ArchiveTask innerA = Task("内层A.7z.001", continuation: true);
-            ArchiveTask innerB = Task("内层B.7z.001", continuation: true);
-
-            foreach (ArchiveTask task in new[] { root, innerA, innerB })
-            {
-                task.Outcome = TaskOutcome.Succeeded;
-                task.OutputVerification = OutputVerificationOutcome.Passed;
-
-                /*
-                 * ⚠ 2026-09-30（检验等级 L4）："成功"这一档**从"校验通过"收紧成"可证完整"**——
-                 * 只有"拿可信清单逐条核对过"（`OutputManifestCrossChecked`）才算，
-                 * "拿不到清单、只做了非空底线校验"落在"判不出" ⇒ 同样拦下。
-                 * 所以这条放行的用例必须把这个事实一起写上（只写 Passed 已经不够了）。
-                 */
-                task.OutputManifestCrossChecked = true;
-            }
-
-            Assert.Null(ChainCompletionGate.DescribeBlocker(root, new[] { root, innerA, innerB }));
-
-            // "判不出完整性"这一档同样拦下（与上面的"成功"是两件事，别混）。
-            innerB.OutputManifestCrossChecked = false;
-
-            Assert.NotNull(ChainCompletionGate.DescribeBlocker(root, new[] { root, innerA, innerB }));
-
-            innerB.OutputManifestCrossChecked = true;
-
-            // 根任务自己混在链里也不会被当成"续解任务"重复判（它由调用方那几道门槛管）。
-            Assert.Equal(2, ChainCompletionGate.CountContinuations(root, new[] { root, innerA, innerB }));
-        }
+        /*
+         * ⛔ 这一节原来钉的是「链上有失败的任务时，链尾一个字节都不许动」那道**整链闸门**
+         * （`ChainCompletionGate`，2026-09-25 第 37 条那次 12.22 GiB 事故之后加的）。
+         *
+         * 用户 2026-10-04 真机（日志 271/272）亲自推翻了它，原话：
+         * 「你不会读设置吗，我勾选了保留吗，没勾选你留着干什么」——
+         * 他选了「其余物 = 彻底删除」，只因为**内层包**失败（根源包自己那一层是成功的、输出校验也过了）
+         * 就整份留着，在他眼里就是"设置没生效"。
+         *
+         * 现在的口径：**只问"这一单自己的根源包那一层"**（根源包成功 + 输出校验通过 + 未取消 +
+         * 完整性可证）⇒ 按③页「删除操作」处理其余物；⛔ 不再要求链上每个内层包都成功。
+         * 判据与红检见 `ChainRestHandlingSettingTests`（真 7z 端到端，四个用例）。
+         */
 
         // ================================================================ ③ 第一卷名字被改坏 → 摆正我们自己的产物
 

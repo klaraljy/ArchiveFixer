@@ -5,6 +5,7 @@ using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Storage;
+using ArchiveFixer.ViewModels;
 using Xunit;
 
 namespace ArchiveFixer.Tests
@@ -232,9 +233,17 @@ namespace ArchiveFixer.Tests
             Assert.False(File.Exists(sourcePath));
         }
 
-        /// <summary>链尾那道门（<see cref="ChainCompletionGate"/>）同样收紧到"可证完整"。</summary>
+        /// <summary>
+        /// ⛔ **"判不出时也删源"的守门用例（链上那一层）**：链里**任何一个**把同一个目录当落点的任务
+        /// 判不出完整性 ⇒ 那一份源包**一个字节都不许动**（这条是"链尾补搬源包"的闸门，
+        /// <c>ExtractionCoordinator.DescribeChainVerificationGap</c>，2026-09-30 收紧到"可证完整"）。
+        ///
+        /// <para>⚠ 与"其余物按不按设置处理"是**两件事**：后者 2026-10-04 起只问根源包自己那一层
+        /// （用户原话：「你不会读设置吗，我勾选了保留吗，没勾选你留着干什么」）——
+        /// 但**搬源包**这一档照样要求"这个目录上所有定稿过的任务都可证完整"，一个字没放宽。</para>
+        /// </summary>
         [Fact]
-        public void 链上有一个判不出的_整条链的其余物都不动()
+        public void 链尾搬源包_链上有一个判不出的_源包不动()
         {
             var root = new ArchiveTask(Path.Combine(_root, "root.7z"), 1)
             {
@@ -252,20 +261,24 @@ namespace ArchiveFixer.Tests
                 OutputManifestCrossChecked = false,
 
                 // 续解任务的判据就是这个字段（内层包沿用父任务的落点）。
-                ParentOutputDirectory = Path.Combine(_root, "out", "root")
+                ParentOutputDirectory = Path.Combine(_root, "out", "root"),
+                ContentDirectoryPath = Path.Combine(_root, "out", "root")
             };
 
             Assert.True(inner.IsContinuationTask);
 
-            string? blocker = ChainCompletionGate.DescribeBlocker(root, new[] { root, inner });
+            string destination = Path.Combine(_root, "out", "root");
+
+            root.OutputPath = destination;
+            string? blocker = ExtractionCoordinator.DescribeChainVerificationGap(destination, root, new[] { root, inner });
 
             Assert.NotNull(blocker);
             Assert.Contains("无法确认", blocker!, StringComparison.Ordinal);
 
-            // 补上那个事实之后这条链就放行了 —— 拦下的原因确实只有"判不出完整性"。
+            // 补上那个事实之后这一档就放行了 —— 拦下的原因确实只有"判不出完整性"。
             inner.OutputManifestCrossChecked = true;
 
-            Assert.Null(ChainCompletionGate.DescribeBlocker(root, new[] { root, inner }));
+            Assert.Null(ExtractionCoordinator.DescribeChainVerificationGap(destination, root, new[] { root, inner }));
         }
 
         /// <summary>造一个"该动手的其余物现场"：成功终态 + 其余物里有源包 + 内容物已定稿。</summary>

@@ -205,13 +205,18 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// **111 / 333 的其余物为什么一删不掉**（用户在真机上先看到的就是这个）：
         /// 一组分卷的第二卷那一单**按设计**落「已跳过」（它由首卷那一单启动，不重复解），
-        /// 可链尾闸门把"已跳过"当成"链没跑完" ⇒ 每一批都被自己组里的跟班卷拦下。
+        /// 可链尾那道**整链闸门**把"已跳过"当成"链没跑完" ⇒ 每一批都被自己组里的跟班卷拦下。
         ///
-        /// <para>跟班卷**不在续解链上**，排除它不放松任何一条红线（2026-09-25 那次 12 GiB
-        /// 事故防的是"续解链断了"，跟这条无关）。</para>
+        /// <para>⚠ 那道整链闸门本身 2026-10-04 被用户推翻（「你不会读设置吗，我勾选了保留吗，
+        /// 没勾选你留着干什么」）⇒ 链尾「删除操作」只问**根源包自己那一层**，
+        /// 跟班卷的终态是"已跳过"这件事**再也不参与**那个裁决。</para>
+        ///
+        /// <para>但"跟班卷**不在链上**"这条口径**一个字没改**，而且仍然在别处生效：
+        /// 输出校验缺口（<c>DescribeChainVerificationGap</c>）、逐层回收、批末计数都排除它。
+        /// 这一条用例钉的就是这个事实 —— 它判的已经不是"其余物删不删"。</para>
         /// </summary>
         [Fact]
-        public void 链尾闸门_跟班卷不算链上成员()
+        public void 跟班卷不算链上成员_真续解成员照旧算()
         {
             var root = new ArchiveTask { FileName = "111.part1.rar", CurrentPath = @"C:\x\111.part1.rar" };
 
@@ -220,25 +225,35 @@ namespace ArchiveFixer.Tests
                 FileName = "111.part2.rar",
                 CurrentPath = @"C:\x\111.part2.rar",
                 ParentOutputDirectory = @"C:\out\111\111",
+                ContentDirectoryPath = @"C:\out\111\111",
                 RootSourcePath = @"C:\x\111.part1.rar",
                 IsVolumeGroupFollower = true
             };
 
-            // 跟班卷的终态就是「已跳过」（设计如此），而且它**不在链上**。
-            Assert.Equal(0, ChainCompletionGate.CountContinuations(root, new[] { root, follower }));
-            Assert.Null(ChainCompletionGate.DescribeBlocker(root, new[] { root, follower }));
+            // 跟班卷的终态就是「已跳过」（设计如此），而且它**不在链上** ⇒ 不参与链尾的输出校验缺口。
+            string destination = @"C:\out\111\111";
 
-            // 反过来：真·续解成员「已跳过」照样拦（老红线一个字不放宽）。
+            root.OutputPath = destination;
+            follower.OutputVerification = OutputVerificationOutcome.NotAttempted;
+            root.IsOutputVerified = true;
+            root.OutputManifestCrossChecked = true;
+
+            Assert.Null(ExtractionCoordinator.DescribeChainVerificationGap(destination, root, new[] { root, follower }));
+
+            // 反过来：真·续解成员判不出完整性 ⇒ 照样拦（老红线一个字不放宽）。
             var realContinuation = new ArchiveTask
             {
                 FileName = "inner.7z",
                 CurrentPath = @"C:\out\111\111\inner.7z",
                 ParentOutputDirectory = @"C:\out\111\111",
-                RootSourcePath = @"C:\x\111.part1.rar"
+                ContentDirectoryPath = @"C:\out\111\111",
+                RootSourcePath = @"C:\x\111.part1.rar",
+                OutputVerification = OutputVerificationOutcome.Passed,
+                OutputManifestCrossChecked = false,
+                IsOutputVerified = true
             };
 
-            Assert.Equal(1, ChainCompletionGate.CountContinuations(root, new[] { root, realContinuation }));
-            Assert.NotNull(ChainCompletionGate.DescribeBlocker(root, new[] { root, realContinuation }));
+            Assert.NotNull(ExtractionCoordinator.DescribeChainVerificationGap(destination, root, new[] { root, realContinuation }));
         }
 
         // ================================================================ ⑥ 定稿：引擎写出来的东西不是过程物
