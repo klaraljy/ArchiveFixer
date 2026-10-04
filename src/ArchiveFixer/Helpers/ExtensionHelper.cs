@@ -1188,6 +1188,52 @@ namespace ArchiveFixer.Helpers
         }
 
         /// <summary>
+        /// 这个 <c>partN</c> 名字的**卷标记段**是不是"靠**骨架档**才认出来"的（末尾那段本身脏，例 <c>444.pa8rt1.rar</c>）。
+        ///
+        /// <para>判据两道（都转调既有出口，⛔ 不新造尺子）：① 倒数第二段**逐字不是**合法卷标记
+        /// （<see cref="IsVolumePartExtension"/>）；② 它按 <see cref="TryMatchPartNumberedSkeleton"/> 命中骨架。
+        /// 这一位**只回答"卷标记这一格"** —— 尾巴那一段是不是 <c>rar</c>、要不要改名，由调用方自己判。</para>
+        ///
+        /// <para>⚠ 为什么要单独立这一位（用户 2026-10-04 第二轮口径）：这一段既可能是**真脏的卷标记**
+        /// （<c>444.pa8rt1.rar</c> ⇒ 该认成 <c>part1</c>），也可能是**基名自己的一段**
+        /// （<c>444.p1art2.part2.rar</c> 里那个 <c>p1art2</c>）—— 形状分不开，只能靠"它是不是这一组
+        /// **最右**那个卷标记 + 同目录能不能配出**一组自洽的兄弟卷**"来分（「整组自洽」那道判据
+        /// 落在 <c>VolumeNameRepair</c> 的改名链上）。</para>
+        /// </summary>
+        /// <param name="fileName">文件名（可含路径，内部只取文件名）。</param>
+        /// <param name="canonicalMark">骨架命中的规范卷标记（<c>pa8rt1</c> ⇒ <c>part1</c>）。</param>
+        public static bool IsPartNumberedMarkBySkeleton(string? fileName, out string canonicalMark)
+        {
+            canonicalMark = string.Empty;
+
+            string name = string.IsNullOrWhiteSpace(fileName)
+                ? string.Empty
+                : System.IO.Path.GetFileName(fileName);
+
+            if (name.Length == 0)
+            {
+                return false;
+            }
+
+            string[] parts = name.Split('.');
+
+            if (parts.Length < 3)
+            {
+                return false;
+            }
+
+            string mark = parts[^2];
+
+            // 逐字就合法 ⇒ 老口径那两档管它，⛔ 这里不抢（`444.p1art2.part2.rar` 的 `part2` 走这条）。
+            if (IsVolumePartExtension("." + mark))
+            {
+                return false;
+            }
+
+            return TryMatchPartNumberedSkeleton(mark, out canonicalMark, out _);
+        }
+
+        /// <summary>
         /// <c>partN</c> 骨架：<c>part</c> 四个字母按顺序**从段首**开始、后面**一路到段末全是 ASCII 数字**
         /// （<c>pa8rt1</c> → <c>part1</c>、<c>paart02</c> → <c>part02</c>）。
         ///
@@ -1195,7 +1241,7 @@ namespace ArchiveFixer.Helpers
         /// （<c>partN</c> 这种"字母尾巴"不是卷标记）；⛔ 只由 <see cref="TrySplitPartNumberedVolume"/>
         /// 在"尾巴逐字是 <c>rar</c>"那一档转调（"取最右"，见 <see cref="TryMatchVolumeMarkerSkeleton"/>）。</para>
         /// </summary>
-        private static bool TryMatchPartNumberedSkeleton(string s, out string canonicalSegment, out string junk)
+        public static bool TryMatchPartNumberedSkeleton(string s, out string canonicalSegment, out string junk)
         {
             canonicalSegment = string.Empty;
             junk = string.Empty;

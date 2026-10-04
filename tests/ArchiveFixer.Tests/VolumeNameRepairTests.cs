@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
@@ -490,6 +492,163 @@ namespace ArchiveFixer.Tests
             Assert.False(plan.CanRepair, $"建议名 `x.7z.001.txt` 不是规范名 ⇒ 整份计划不成立，实际：{plan.Describe()}");
             Assert.Equal(StatusText.VolumeRepairNoSuggestion, plan.Reason);
             Assert.True(File.Exists(clean));
+        }
+
+        // ================================================================ 末尾段本身脏 + 「整组自洽」（2026-10-04 第三轮）
+
+        /// <summary>
+        /// ① **末尾段本身脏**（用户点名的 `444.pa8rt1.rar`）+ 同目录真有一组自洽的兄弟卷
+        /// （`444.pa8rt2.rar`，末片更小）⇒ 骨架档读出卷标记 `part1` / `part2`，**整组自洽**成立
+        /// ⇒ 两卷都改回 `444.part1.rar` / `444.part2.rar`，基名 `444`。
+        ///
+        /// <para>用户 2026-10-04 原话：「`444.pa8rt1.rar` 和 `444.p1art2.part2.rar`，不不不，你不会觉得这两个
+        /// 会放在一起吧……实际情况下那两个东西不可能是同一个包」⇒ 判据换成**整组自洽**（不听形状）。</para>
+        /// </summary>
+        [Fact]
+        public void 整组自洽_末尾段真脏的一对_两卷都改回标准名()
+        {
+            string directory = NewDirectory("skeleton-part-pair");
+
+            string v1 = CreateFile(directory, "444.pa8rt1.rar", 4096, seed: 1);
+            string v2 = CreateFile(directory, "444.pa8rt2.rar", 2048, seed: 2);
+
+            string h1 = Sha256(v1);
+            string h2 = Sha256(v2);
+
+            // 名字级：卷标记靠骨架档才读得出来（末段逐字不是合法卷标记）。
+            Assert.True(ExtensionHelper.IsPartNumberedMarkBySkeleton("444.pa8rt1.rar", out string mark));
+            Assert.Equal("part1", mark);
+            Assert.Equal("444", FileNameHelper.StripVolumeMarkers("444.pa8rt1.rar"));
+            Assert.Equal("444", OutputPlacement.ResolveArchiveBaseName("444.pa8rt1.rar"));
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(v1, NamesIn(directory));
+
+            Assert.True(plan.CanRepair, plan.Reason);
+            Assert.Equal(2, plan.Items.Count);
+            Assert.Equal(
+                new[] { "444.part1.rar", "444.part2.rar" },
+                plan.Items.Select(i => i.SuggestedFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray());
+
+            VolumeNameRepairResult result = VolumeNameRepair.TryApply(plan);
+
+            Assert.True(result.Success, result.Message);
+            Assert.True(File.Exists(Path.Combine(directory, "444.part1.rar")));
+            Assert.True(File.Exists(Path.Combine(directory, "444.part2.rar")));
+            Assert.False(File.Exists(v1));
+            Assert.False(File.Exists(v2));
+
+            // 只改名字（内容逐字节不变），基名是 `444`。
+            Assert.Equal(h1, Sha256(Path.Combine(directory, "444.part1.rar")));
+            Assert.Equal(h2, Sha256(Path.Combine(directory, "444.part2.rar")));
+        }
+
+        /// <summary>
+        /// ①b 更常见的形状：**只有中间那一卷的名字脏**（`444.part1.rar` 干净 + `444.pa8rt2.rar` 脏）
+        /// ⇒ 整组自洽成立 ⇒ **只改脏的那一卷**，干净的那一卷一个字节都不动。
+        /// </summary>
+        [Fact]
+        public void 整组自洽_只有一卷脏_只改那一卷()
+        {
+            string directory = NewDirectory("skeleton-part-mixed");
+
+            string clean = CreateFile(directory, "444.part1.rar", 4096, seed: 1);
+            string dirty = CreateFile(directory, "444.pa8rt2.rar", 2048, seed: 2);
+
+            string cleanHash = Sha256(clean);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(dirty, NamesIn(directory));
+
+            Assert.True(plan.CanRepair, plan.Reason);
+
+            VolumeRepairItem only = Assert.Single(plan.Items);
+            Assert.Equal("444.pa8rt2.rar", only.CurrentFileName);
+            Assert.Equal("444.part2.rar", only.SuggestedFileName);
+
+            Assert.True(VolumeNameRepair.TryApply(plan).Success);
+
+            Assert.True(File.Exists(Path.Combine(directory, "444.part2.rar")));
+            Assert.True(File.Exists(clean));
+            Assert.Equal(cleanHash, Sha256(clean));
+            Assert.False(File.Exists(dirty));
+        }
+
+        /// <summary>
+        /// ② **对照（防回归的命根）**：`444.p1art2.part2.rar` 的末尾段**逐字就是**合法卷标记
+        /// ⇒ 一律走老口径、⛔ 不吃骨架档 ⇒ 基名保持 `444.p1art2`、**一句话都不改**
+        /// （哪怕旁边真配着 `444.p1art2.part1.rar`）。
+        /// </summary>
+        [Fact]
+        public void 整组自洽_末尾段逐字干净时_一个字都不改()
+        {
+            string directory = NewDirectory("skeleton-part-clean-tail");
+
+            string v1 = CreateFile(directory, "444.p1art2.part1.rar", 4096, seed: 1);
+            string v2 = CreateFile(directory, "444.p1art2.part2.rar", 2048, seed: 2);
+
+            // 名字级：末尾那段逐字干净 ⇒ 不看骨架档。
+            Assert.False(ExtensionHelper.IsPartNumberedMarkBySkeleton("444.p1art2.part2.rar", out _));
+            Assert.Equal("444.p1art2", FileNameHelper.StripVolumeMarkers("444.p1art2.part2.rar"));
+            Assert.Equal("444.p1art2", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
+            Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("444.p1art2.part2.rar"));
+            Assert.Equal("444.p1art2.part1.rar", VolumeGroupDetector.TryGetFirstVolumeName("444.p1art2.part2.rar"));
+
+            // 第一卷第名字本来就标准 ⇒ 不改；后续卷那一单也不改（改名解决不了"缺第一卷"）。
+            VolumeNameRepairPlan first = VolumeNameRepair.Plan(v1, NamesIn(directory));
+            VolumeNameRepairPlan second = VolumeNameRepair.Plan(v2, NamesIn(directory));
+
+            Assert.False(first.CanRepair, first.Describe());
+            Assert.False(second.CanRepair, second.Describe());
+
+            Assert.True(File.Exists(v1));
+            Assert.True(File.Exists(v2));
+            Assert.False(File.Exists(Path.Combine(directory, "444.part1.rar")));
+        }
+
+        /// <summary>
+        /// ③ 孤零零一个 `444.pa8rt1.rar`（同目录里配不出**一组自洽的兄弟卷**）⇒ **一个字都不改**，
+        /// 如实说"同目录里没有找到像后续卷的文件"（判不出 ⇒ 什么都不做）。
+        ///
+        /// <para>⚠ 红检就打在<b>这一格</b>：把「整组自洽」那道判据撤掉（只看形状就改名）⇒ 本条必红。</para>
+        /// </summary>
+        [Fact]
+        public void 整组自洽_孤零零一个脏卷标记_什么都不做()
+        {
+            string directory = NewDirectory("skeleton-part-lone");
+            string lone = CreateFile(directory, "444.pa8rt1.rar", 4096, seed: 1);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(lone, NamesIn(directory));
+
+            Assert.False(plan.CanRepair, $"配不出一组自洽的兄弟卷 ⇒ 不许改名，实际：{plan.Describe()}");
+            Assert.Equal(StatusText.VolumeRepairNoSiblings, plan.Reason);
+
+            Assert.True(File.Exists(lone));
+            Assert.False(File.Exists(Path.Combine(directory, "444.part1.rar")));
+        }
+
+        /// <summary>
+        /// ③b 有兄弟但**卷标记连不成 1..N**（`444.pa8rt2.rar` + `444.pa8rt4.rar`，缺 1 与 3）
+        /// ⇒ 整组自洽不成立 ⇒ 一个字都不改。另：**尺寸不规律**（两卷不等大且大的那卷在前）
+        /// 同样判不出 ⇒ 也不改。
+        /// </summary>
+        [Fact]
+        public void 整组自洽_卷标记不连续或尺寸不规律_都不改()
+        {
+            string notContiguous = NewDirectory("skeleton-part-not-contiguous");
+            string a = CreateFile(notContiguous, "444.pa8rt2.rar", 2048, seed: 1);
+            CreateFile(notContiguous, "444.pa8rt4.rar", 1024, seed: 2);
+
+            Assert.False(VolumeNameRepair.Plan(a, NamesIn(notContiguous)).CanRepair);
+
+            string irregular = NewDirectory("skeleton-part-irregular-size");
+            string b = CreateFile(irregular, "444.pa8rt1.rar", 1024, seed: 1);
+            CreateFile(irregular, "444.pa8rt2.rar", 4096, seed: 2);
+
+            Assert.False(VolumeNameRepair.Plan(b, NamesIn(irregular)).CanRepair);
+
+            Assert.True(File.Exists(a));
+            Assert.True(File.Exists(b));
+            Assert.False(File.Exists(Path.Combine(notContiguous, "444.part2.rar")));
+            Assert.False(File.Exists(Path.Combine(irregular, "444.part1.rar")));
         }
 
         private string NewDirectory(string name)

@@ -338,6 +338,66 @@ namespace ArchiveFixer.Extraction
         /// <summary>父目录这一家里的粗筛下限：小于它的文件不可能是分卷片（几 KB 的说明文件 / 图片）。</summary>
         private const long NearbyMinimumBytes = 16 * 1024;
 
+        /// <summary>
+        /// **整组自洽**（用户 2026-10-04 拍板）：<paramref name="candidatePaths"/> 里能不能配出**一组自洽的兄弟卷**
+        /// —— **基名逐字相同 + 卷标记连续（除末片外等大）**，而且 <paramref name="selfPath"/> 必须在这一组里。
+        ///
+        /// <para>判据整体转调**既有出口** <see cref="VolumeGroupDetector.Group"/>：桶键 = 目录 + 基名 + 命名族
+        /// （那一条就是"基名逐字相同"）、<c>IsComplete</c> = 从第 1 卷起**连续无缺号**（"卷标记连续"）、
+        /// 尺寸规律 = **除最后一卷外彼此等大**；⛔ 这里不另写一套，⛔ 也不放宽它（认错比不认更糟）。</para>
+        ///
+        /// <para>候选池**只喂调用方手上那一层**（批首 / 手动那档 = 入口那一卷所在目录；还原工序那档 =
+        /// 已经认出来的这一组成员）—— ⛔ 不替用户满盘找文件。量不出大小 ⇒ 尺寸规律不过 ⇒ 判不出
+        /// ⇒ **调用方什么都不做**（兜底落在"不改名"那一档）。</para>
+        /// </summary>
+        private static bool TryConfirmSelfConsistentVolumeGroup(
+            IEnumerable<string>? candidatePaths,
+            string selfPath,
+            string expectedBaseName)
+        {
+            if (candidatePaths == null || string.IsNullOrWhiteSpace(selfPath) || string.IsNullOrWhiteSpace(expectedBaseName))
+            {
+                return false;
+            }
+
+            string selfName = FileNameHelper.GetFileName(selfPath);
+            var candidates = new List<VolumeCandidate>();
+
+            foreach (string? candidate in candidatePaths)
+            {
+                if (string.IsNullOrWhiteSpace(candidate))
+                {
+                    continue;
+                }
+
+                candidates.Add(new VolumeCandidate { Path = candidate, Size = LengthOf(candidate) });
+            }
+
+            if (candidates.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (VolumeGroup group in VolumeGroupDetector.Group(candidates))
+            {
+                if (!group.IsComplete ||
+                    !string.Equals(group.BaseName, expectedBaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (group.Volumes.Any(v => string.Equals(
+                        SafeFileName(v.Path),
+                        selfName,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>父目录这一家里最多收几份候选（防止"父目录是个大杂烩"时白读一大堆文件头）。</summary>
         private const int MaxNearbyCandidates = 500;
 
@@ -1971,6 +2031,27 @@ namespace ArchiveFixer.Extraction
                 .OrderBy(i => i.CurrentFileName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            /*
+             * ⛔ **「末尾那段本身脏」那一档必须先过"整组自洽"**（用户 2026-10-04 拍板）：
+             * `444.pa8rt1.rar` 这种卷标记是靠**骨架档**才读出来的名字（<see cref="ExtensionHelper.IsPartNumberedMarkBySkeleton"/>
+             * 为 true），而同一段也可能是**基名自己的一段**（`444.p1art2.part2.rar` 里的 `p1art2`）——
+             * 形状分不开，所以只听**整组**的话：同一目录里配得出一组自洽的兄弟卷
+             * （基名逐字相同 + 卷标记连续 + 除末片外等大）才允许改；**配不出 ⇒ 一个字都不改**
+             * （判不出 ⇒ 什么都不做；兜底落在"不改名"那一档）。
+             */
+            if (ordered.Any(i => ExtensionHelper.IsPartNumberedMarkBySkeleton(i.CurrentFileName, out _)) &&
+                !TryConfirmSelfConsistentVolumeGroup(
+                    ordered
+                        .Select(i => i.CurrentPath)
+                        .Concat((fileNamesInDirectory ?? Array.Empty<string?>())
+                            .Where(n => !string.IsNullOrWhiteSpace(n))
+                            .Select(n => Path.Combine(directory, n!))),
+                    path,
+                    baseName))
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSiblings);
+            }
+
             return new VolumeNameRepairPlan
             {
                 CanRepair = true,
@@ -2143,6 +2224,30 @@ namespace ArchiveFixer.Extraction
 
                 if (format == VolumeContentFormat.Unknown)
                 {
+                    continue;
+                }
+
+                /*
+                 * ①b ⛔ **「末尾那段本身脏」那一档必须先过"整组自洽"**（用户 2026-10-04 拍板）：
+                 * `444.pa8rt1.rar` 这种卷标记是靠**骨架档**才读出来的名字，而同一段也可能是**基名自己的一段**
+                 * （`444.p1art2.part2.rar` 里的 `p1art2`）—— 形状分不开，所以只听**整组**的话：
+                 * 同一层里配得出一组自洽的兄弟卷才允许还原，**配不出 ⇒ 整组一个字节都不动**。
+                 */
+                string selfBase = TryResolvePackageBaseName(Path.GetFileName(candidate), out string restoreBase)
+                    ? restoreBase
+                    : string.Empty;
+
+                if (members.Any(m => ExtensionHelper.IsPartNumberedMarkBySkeleton(Path.GetFileName(m), out _)) &&
+                    !TryConfirmSelfConsistentVolumeGroup(members, candidate, selfBase))
+                {
+                    log?.Invoke(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.InnerRestoreBlockedFormat,
+                            string.Join("；", members.Select(m => Path.GetFileName(m))),
+                            StatusText.VolumeRepairNoSiblings));
+
                     continue;
                 }
 

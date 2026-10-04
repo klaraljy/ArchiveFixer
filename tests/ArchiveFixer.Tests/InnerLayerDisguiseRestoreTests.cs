@@ -318,6 +318,50 @@ namespace ArchiveFixer.Tests
 
         private static readonly byte[] SevenZipMagic = { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C };
 
+        /// <summary>RAR 1.5–4.x 的签名（<c>Rar!\x1A\x07\x00</c>）—— 还原只读魔数，不读整个包。</summary>
+        private static readonly byte[] RarMagic = { 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00 };
+
+        /// <summary>
+        /// **还原工序也过同一道「整组自洽」**（用户 2026-10-04）：「末尾段本身脏」的 `444.pa8rt1.rar`
+        /// 孤零零一个（同目录里配不出自洽的一组）⇒ **一个名字都不改**（只写一行 WARN）；
+        /// 旁边真有 `444.pa8rt2.rar` 配成一组（基名逐字相同 + 卷标记连续 + 除末片外等大）⇒ 两卷都还原。
+        ///
+        /// <para>⛔ 判据只有一处（`VolumeNameRepair` 里那个 <c>TryConfirmSelfConsistentVolumeGroup</c>），
+        /// 批首/手动那条改名链与这里走的是**同一份**。</para>
+        /// </summary>
+        [Fact]
+        public void 还原_末尾段本身脏时要过整组自洽()
+        {
+            string loneDirectory = Path.Combine(_root, "restore-skeleton-lone");
+            Directory.CreateDirectory(loneDirectory);
+            string lone = WriteFakeArchive(Path.Combine(loneDirectory, "444.pa8rt1.rar"), RarMagic);
+
+            List<string> loneLogs = RunRestore(new[] { lone });
+
+            Assert.True(File.Exists(lone), "配不出自洽的一组 ⇒ 原样不动");
+            Assert.False(File.Exists(Path.Combine(loneDirectory, "444.part1.rar")));
+            Assert.Contains(
+                loneLogs,
+                line => line.StartsWith("WARN|", StringComparison.Ordinal) &&
+                        line.Contains(StatusText.VolumeRepairNoSiblings, StringComparison.Ordinal));
+
+            // 对照组：真配得出一组 ⇒ 两卷都还原成标准名。
+            string pairDirectory = Path.Combine(_root, "restore-skeleton-pair");
+            Directory.CreateDirectory(pairDirectory);
+            string p1 = WriteFakeArchive(Path.Combine(pairDirectory, "444.pa8rt1.rar"), RarMagic);
+            string p2 = WriteFakeArchive(Path.Combine(pairDirectory, "444.pa8rt2.rar"), RarMagic);
+
+            List<string> pairLogs = RunRestore(new[] { p1 });
+
+            Assert.True(File.Exists(Path.Combine(pairDirectory, "444.part1.rar")), "整组自洽成立 ⇒ 该还原");
+            Assert.True(File.Exists(Path.Combine(pairDirectory, "444.part2.rar")));
+            Assert.False(File.Exists(p1));
+            Assert.False(File.Exists(p2));
+            Assert.Contains(
+                pairLogs,
+                line => line.Contains("444.pa8rt1.rar → 444.part1.rar", StringComparison.Ordinal));
+        }
+
         /// <summary>调一次「还原」（递归层挂点用的那条公开入口），把日志收成 `级别|文案`。</summary>
         private static List<string> RunRestore(IReadOnlyList<string> candidates)
         {

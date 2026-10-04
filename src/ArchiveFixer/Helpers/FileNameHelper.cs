@@ -679,15 +679,21 @@ namespace ArchiveFixer.Helpers
                     out _,
                     out string partTail,
                     out _)
-                && !partTail.Equals("rar", StringComparison.OrdinalIgnoreCase))
+                && (!partTail.Equals("rar", StringComparison.OrdinalIgnoreCase)
+                    || ExtensionHelper.IsPartNumberedMarkBySkeleton(fileName, out _)))
             {
                 /*
-                 * ⚠ 只接"**尾巴确实粘着垃圾**"那一档（`X.part1.rar删除`，网盘缀的「删除」）。
+                 * ⚠ 只接两种"**这一段确实脏**"的形状：
+                 *   ㈠ **尾巴粘着垃圾**（`X.part1.rar删除`，网盘缀的「删除」）；
+                 *   ㈡ **卷标记本身脏**（`444.pa8rt1.rar` —— 末尾那段靠**骨架档**才读成 `part1`，
+                 *      用户 2026-10-04 拍板：「放开，但规定取最右边那个能自洽的卷标记」）。
+                 *       ⛔ 这一档**还要过「整组自洽」那道判据**才允许改名 —— 判据在
+                 *       `VolumeNameRepair`（这里只是**名字级**的拆解，⛔ 一个字节都不动盘）。
                  *
-                 * 尾巴干净的（`X.part1.rar` / `444.pa删rt2.rar`）**必须留给下面既有那两条路**：
-                 * 真机夹具（AAA）里 `444.p1art2.ra3r` 那一组，卷标记前面还有一段属于基名的
-                 * `p1art2` —— 这里若抢着按"倒数第二段就是卷标记"去拆，基名会被算成 `444`、
-                 * 改名产出 `444.part1.rar`（错），而正解是 `444.p1art2.part1.rar`。
+                 * 尾巴干净、卷标记也逐字干净的（`X.part1.rar` / `444.p1art2.part2.rar` 的 `part2`）
+                 * **必须留给下面既有那两条路**：真机夹具（AAA）里 `444.p1art2.ra3r` 那一组，
+                 * 卷标记前面还有一段属于基名的 `p1art2` —— 这里若抢着按"倒数第二段就是卷标记"去拆，
+                 * 基名会被算成 `444`、改名产出 `444.part1.rar`（错），而正解是 `444.p1art2.part1.rar`。
                  * 实测：抢这一档 ⇒ `AaaReplayPipelineTests.夹具验收_一组分卷只解一次…` 当场变红
                  * （全量回归逮到，已收窄）。
                  */
