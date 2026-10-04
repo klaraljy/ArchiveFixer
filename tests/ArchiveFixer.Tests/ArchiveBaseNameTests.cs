@@ -60,7 +60,17 @@ namespace ArchiveFixer.Tests
             Row("222.7z.001", "222.7z", "222", "222", "222.7z", "222.7z", "222.7z.001", null, null, "222"),
             Row("222.7z.001.txt", "222", "222", "222.7z.001.txt", "222.7z.001.txt", "222.7z.001.txt", "222.7z.001.txt", "222.7z", "001", "222"),
             Row("x.7z.001.txt", "x", "x", "x.7z.001.txt", "x.7z.001.txt", "x.7z.001.txt", "x.7z.001.txt", "x.7z", "001", "x"),
-            Row("amb909.7z删除.001", "amb909.7z删除", "amb909.7z删除", "amb909", "amb909.7z删除", "amb909.7z删除", "amb909.7z.001", null, null, "amb909"),
+            /*
+             * ⚠ 这一格 2026-10-04 第六轮**按新结论改过一次**（旧值：伪装基名/卷段都是 null）。
+             *
+             * `amb909.7z删除.001` 脏的是**归档后缀段**（`7z删除` → `7z`）、末段 `001` 逐字就是合法卷标记
+             * —— 这种形状以前 `DisguisedVolume` 档认不出来，于是它跟同一行的 `TryGetFirstVolumeName`
+             * （`amb909.7z.001`，那一列一直是对的）**自相矛盾**。第六轮把"脏归档后缀段"接进这一档
+             * （`FileNameHelper.TryResolveDisguisedVolume` 新增形状③，判据仍只转调
+             * `ExtensionHelper.TryRecoverDisguisedArchiveBody` 那把尺子）⇒ 这一格与首卷名列**对齐**了。
+             * ⛔ 不是放宽：改名那条路对"猜出来的名字"另有一道「整组自洽」闸门。
+             */
+            Row("amb909.7z删除.001", "amb909.7z删除", "amb909.7z删除", "amb909", "amb909.7z删除", "amb909.7z删除", "amb909.7z.001", "amb909.7z", "001", "amb909"),
             Row("amb909.7sz.00c1", "amb909.7sz", "amb909.7sz", "amb909", "amb909.7sz", "amb909.7sz", "amb909.7z.001", "amb909.7z", "001", "amb909"),
             Row("x.001.bak", "x.001.bak", "x.001.bak", "x.001.bak", "x.001.bak", "x.001.bak", null, "x", "001", "x.001"),
             Row("movie.rar", "movie.rar", "movie", "movie.rar", "movie.rar", "movie", "movie.rar", null, null, "movie"),

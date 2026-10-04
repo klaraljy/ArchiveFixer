@@ -651,6 +651,158 @@ namespace ArchiveFixer.Tests
             Assert.False(File.Exists(Path.Combine(irregular, "444.part1.rar")));
         }
 
+        // ══════════════════ 闸门扩面：**所有"猜出来的"名字**都要过「整组自洽」（2026-10-04 第六轮） ══════════════════
+
+        /// <summary>
+        /// ① **7z 数字族的卷标记段脏**（`set.7z.0a0b1`：卷标记靠容错/骨架档读成 `001`）
+        /// **孤零零一个 ⇒ 一个字都不改** —— 与 partN 那一档同一道闸门
+        /// （<c>VolumeNameRepair.IsGuessedVolumeName</c> 转调 <c>ExtensionHelper.IsVolumeMarkByDisguise</c>）。
+        ///
+        /// <para>用户 2026-10-04 第六轮原话：「孤立一个 <c>set.7z.0a0b1</c> ⇒ 不改（<c>VolumeRepairNoSiblings</c>）；
+        /// 配得出整组 ⇒ 照旧改」。</para>
+        /// </summary>
+        [Fact]
+        public void 整组自洽_数字族脏卷标记_孤立一个什么都不做()
+        {
+            string directory = NewDirectory("numeric-mark-lone");
+            string lone = CreateFile(directory, "set.7z.0a0b1", 4096, seed: 1);
+
+            string before = Sha256(lone);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(lone, NamesIn(directory));
+
+            Assert.False(plan.CanRepair, $"配不出整组 ⇒ 不许改名，实际：{plan.Describe()}");
+            Assert.Equal(StatusText.VolumeRepairNoSiblings, plan.Reason);
+            Assert.Empty(plan.Items);
+
+            Assert.True(File.Exists(lone));
+            Assert.False(File.Exists(Path.Combine(directory, "set.7z.001")));
+            Assert.Equal(before, Sha256(lone));
+        }
+
+        /// <summary>
+        /// ② **对照**：`set.7z.001`（干净首卷）+ `set.7z.0a0b2`（卷标记段脏）⇒ 配得出整组
+        /// ⇒ 照旧出计划，而且**只改脏的那一卷**，干净的那一卷一个字节都不动。
+        /// </summary>
+        [Fact]
+        public void 整组自洽_数字族脏卷标记_配得出组就只改那一卷()
+        {
+            string directory = NewDirectory("numeric-mark-pair");
+
+            string clean = CreateFile(directory, "set.7z.001", 1024, seed: 1);
+            string dirty = CreateFile(directory, "set.7z.0a0b2", 512, seed: 2);
+
+            string cleanHash = Sha256(clean);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(clean, NamesIn(directory));
+
+            Assert.True(plan.CanRepair, $"配得出整组 ⇒ 该改，实际：{plan.Describe()}");
+
+            VolumeRepairItem only = Assert.Single(plan.Items);
+            Assert.Equal("set.7z.0a0b2", only.CurrentFileName);
+            Assert.Equal("set.7z.002", only.SuggestedFileName);
+
+            Assert.True(VolumeNameRepair.TryApply(plan).Success);
+
+            Assert.True(File.Exists(Path.Combine(directory, "set.7z.002")));
+            Assert.False(File.Exists(dirty));
+            Assert.True(File.Exists(clean), "干净的那一卷原地不动");
+            Assert.Equal(cleanHash, Sha256(clean));
+        }
+
+        // ══════════════════ 「只脏归档后缀段」进计划（2026-10-04 第六轮） ══════════════════
+
+        /// <summary>
+        /// **只脏归档后缀段**（`set.7aaaaz.002` / `set.7_______z.002` / `333.78a8fuaz.003`）：
+        /// 骨架档读出那一段的真实身份 ⇒ 规范名 = <c>&lt;基名&gt;.7z.&lt;卷标记&gt;</c>
+        /// （**替换不追加**、基名一个字不动）。
+        ///
+        /// <para>用户 2026-10-04 第六轮原话：「把这一形状接进改名计划……判据照既有口径、⛔ 不许新造第三把尺子」。
+        /// 判据落在 <c>FileNameHelper.TryResolveDisguisedVolume</c> 新增的形状③（转调
+        /// <c>ExtensionHelper.TryRecoverDisguisedArchiveBody</c>）。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("set.7z", "set.7aaaaz.002", "set.7z.002", 2)]
+        [InlineData("set.7z", "set.7_______z.002", "set.7z.002", 2)]
+        [InlineData("333.7z", "333.78a8fuaz.003", "333.7z.003", 3)]
+        public void 只脏归档后缀段_给出规范名(string stem, string dirtyName, string expectedName, int dirtyIndex)
+        {
+            string directory = NewDirectory("archive-segment-" + dirtyName.Replace(".", "_"));
+
+            // 一整组四卷（1..4 连续、除末片外等大）—— 把**中间那一卷**改成脏名。
+            string first = CreateFile(directory, stem + ".001", 1024, seed: 1);
+            CreateFile(directory, stem + ".002", 1024, seed: 2);
+            CreateFile(directory, stem + ".003", 1024, seed: 3);
+            string last = CreateFile(directory, stem + ".004", 512, seed: 4);
+
+            string dirty = Path.Combine(directory, dirtyName);
+            File.Move(Path.Combine(directory, stem + "." + dirtyIndex.ToString("000", System.Globalization.CultureInfo.InvariantCulture)), dirty);
+
+            Assert.True(
+                ExtensionHelper.IsArchiveSegmentByDisguise(dirtyName, out string recovered),
+                $"`{dirtyName}` 的归档后缀段应当靠容错/骨架档读得出来");
+            Assert.Equal("7z", recovered);
+
+            string dirtyHash = Sha256(dirty);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(first, NamesIn(directory));
+
+            Assert.True(plan.CanRepair, $"这一组必须出得来计划，实际：{plan.Describe()}");
+
+            VolumeRepairItem only = Assert.Single(plan.Items);
+            Assert.Equal(dirtyName, only.CurrentFileName);
+            Assert.Equal(expectedName, only.SuggestedFileName);
+
+            // 包基名一个字不动（`set` / `333`）—— 只换那一段。
+            Assert.Equal(
+                OutputPlacement.ResolveArchiveBaseName(first),
+                OutputPlacement.ResolveArchiveBaseName(only.SuggestedFileName));
+
+            VolumeNameRepairResult applied = VolumeNameRepair.TryApply(plan);
+
+            Assert.True(applied.Success, applied.Message);
+            Assert.True(File.Exists(Path.Combine(directory, expectedName)));
+            Assert.False(File.Exists(dirty));
+
+            // 只改名字：内容逐字节不变；另外两卷原地不动。
+            Assert.Equal(dirtyHash, Sha256(Path.Combine(directory, expectedName)));
+            Assert.True(File.Exists(first));
+            Assert.True(File.Exists(last));
+        }
+
+        /// <summary>
+        /// **反例**（用户 2026-10-04 第六轮点名）：`x.rarity` / `x.zipper` 这种"恰好含 rar / zip 三个字母"
+        /// 的段**连命中都不算**（骨架没走到段末）⇒ 一个名字都不改。
+        ///
+        /// <para>与 <c>VolumeSkeletonMatchTests.放宽的代价_含rar或zip字母的普通文件名</c> 同一口径，
+        /// 这里补的是**新形状那一格**：`<基名>.rarity.002` / `<基名>.zipper.002` 也不许被当成"脏归档后缀段"。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("set.rarity.002")]
+        [InlineData("set.zipper.002")]
+        [InlineData("set.7zip.002")]     // 同时命中 7z 与 zip ⇒ 歧义 ⇒ 判不出
+        public void 只脏归档后缀段_反例_半个骨架不算命中(string mimicName)
+        {
+            string directory = NewDirectory("archive-segment-mimic-" + mimicName.Replace(".", "_"));
+
+            string first = CreateFile(directory, "set.7z.001", 1024, seed: 1);
+            string mimic = CreateFile(directory, mimicName, 1024, seed: 2);
+            CreateFile(directory, "set.7z.003", 512, seed: 3);
+
+            Assert.False(
+                ExtensionHelper.IsArchiveSegmentByDisguise(mimicName, out _),
+                $"`{mimicName}` 不该被当成「脏归档后缀段」（骨架没走到段末 / 有歧义）");
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(first, NamesIn(directory));
+
+            // ⛔ 那个仿名一个字节都不许动；计划里也不许出现它。
+            Assert.DoesNotContain(
+                plan.Items,
+                item => string.Equals(item.CurrentFileName, mimicName, StringComparison.OrdinalIgnoreCase));
+
+            Assert.True(File.Exists(mimic));
+        }
+
         private string NewDirectory(string name)
         {
             string path = Path.Combine(_root, name);

@@ -339,6 +339,24 @@ namespace ArchiveFixer.Extraction
         private const long NearbyMinimumBytes = 16 * 1024;
 
         /// <summary>
+        /// 这一卷的名字里，**卷标记段或归档后缀段**是不是"要**重建**才读得出来"的
+        /// （<c>444.pa8rt1.rar</c> / <c>333.7z.0a0b1</c> / <c>222.z0删1</c> / <c>set.7aaaaz.002</c>）。
+        ///
+        /// <para>要重建的名字**必须**再过「整组自洽」（<see cref="TryConfirmSelfConsistentVolumeGroup"/>）
+        /// 才允许改名 —— 用户 2026-10-04 第六轮把这条闸门从 partN 那一档**扩到全部"要重建"的名字**：
+        /// 形状判据只回答"它像什么"，**够不够改**要另有一条与名字无关的证据
+        /// （组自洽 / 硬链接试开），判不出 ⇒ 什么都不做。</para>
+        ///
+        /// <para>⛔ 判据只有两个既有出口（<see cref="ExtensionHelper.IsVolumeMarkByDisguise"/> 与
+        /// <see cref="ExtensionHelper.IsArchiveSegmentByDisguise"/>），⛔ 这里不新造尺子；
+        /// ⛔ 逐字干净的名字（<c>x.7z.001</c> / <c>x.7z.002.txt</c>）与**「逐字标记 + 粘着的垃圾」**
+        /// （<c>giu910.7z.001删除</c>，2026-09-28 起"只删尾巴不动卷号"的老口径）一律 false，照旧走老口径。</para>
+        /// </summary>
+        private static bool IsGuessedVolumeName(string fileName) =>
+            ExtensionHelper.IsVolumeMarkByDisguise(fileName, out _) ||
+            ExtensionHelper.IsArchiveSegmentByDisguise(fileName, out _);
+
+        /// <summary>
         /// **整组自洽**（用户 2026-10-04 拍板）：<paramref name="candidatePaths"/> 里能不能配出**一组自洽的兄弟卷**
         /// —— **基名逐字相同 + 卷标记连续（除末片外等大）**，而且 <paramref name="selfPath"/> 必须在这一组里。
         ///
@@ -1893,6 +1911,27 @@ namespace ArchiveFixer.Extraction
                 .OrderBy(i => i.CurrentFileName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            /*
+             * ⛔ **兄弟卷的名字是靠"猜"出来的 ⇒ 必须再过「整组自洽」**（用户 2026-10-04 第六轮：
+             * 「兜底仍要有"敢不敢改"的证据 …… 判不出 ⇒ 什么都不做」）。
+             *
+             * 这一档（本体/入口是标准名、脏的是兄弟卷）原先只有"基名对得上"一条证据；而
+             * `set.7aaaaz.002` 这种**后缀段靠容错/骨架档猜出来**的名字，光凭基名吻合不足以证明
+             * "这一堆文件真是一组卷"—— 判据与 `PlanJunkTailGroup` 那道**完全同一份**
+             * （<see cref="IsGuessedVolumeName"/> + <see cref="TryConfirmSelfConsistentVolumeGroup"/>），
+             * ⛔ 不新造第二套；⛔ 逐字干净的兄弟卷（`x.7z.002` / `x.7z.002.txt`）照旧不受影响。
+             */
+            if (ordered.Any(i => IsGuessedVolumeName(i.CurrentFileName)) &&
+                !TryConfirmSelfConsistentVolumeGroup(
+                    (fileNamesInDirectory ?? Array.Empty<string?>())
+                        .Where(n => !string.IsNullOrWhiteSpace(n))
+                        .Select(n => Path.Combine(directory, n!)),
+                    path,
+                    selfBase))
+            {
+                return Cannot(path, StatusText.VolumeRepairNoSiblings);
+            }
+
             VolumeRepairItem first = ordered[0];
 
             return new VolumeNameRepairPlan
@@ -2032,14 +2071,21 @@ namespace ArchiveFixer.Extraction
                 .ToList();
 
             /*
-             * ⛔ **「末尾那段本身脏」那一档必须先过"整组自洽"**（用户 2026-10-04 拍板）：
-             * `444.pa8rt1.rar` 这种卷标记是靠**骨架档**才读出来的名字（<see cref="ExtensionHelper.IsPartNumberedMarkBySkeleton"/>
-             * 为 true），而同一段也可能是**基名自己的一段**（`444.p1art2.part2.rar` 里的 `p1art2`）——
-             * 形状分不开，所以只听**整组**的话：同一目录里配得出一组自洽的兄弟卷
-             * （基名逐字相同 + 卷标记连续 + 除末片外等大）才允许改；**配不出 ⇒ 一个字都不改**
-             * （判不出 ⇒ 什么都不做；兜底落在"不改名"那一档）。
+             * ⛔ **名字要"重建"才读得出来的那一档必须先过"整组自洽"**（用户 2026-10-04 第四轮起、第六轮扩面）：
+             *
+             * ① partN 骨架那一档（`444.pa8rt1.rar`）：同一段也可能是**基名自己的一段**
+             *    （`444.p1art2.part2.rar` 里的 `p1art2`）—— 形状分不开；
+             * ② **卷标记段要重建的数字族**（`333.7z.0a0b1` ⇒ `001`、`222.z0删1` ⇒ `z01`）：
+             *    孤立一个也会被形状判据说成"第 1 卷"；
+             * ③ **归档后缀段要重建的**（`set.7aaaaz.002` ⇒ `set.7z.002`）：后缀段的真实身份同样是猜的。
+             *
+             * ⇒ 三者只听**整组**的话：同一目录里配得出一组自洽的兄弟卷（基名逐字相同 + 卷标记连续 +
+             * 除末片外等大）才允许改；**配不出 ⇒ 一个字都不改**（判不出 ⇒ 什么都不做）。
+             * ⛔ 判据只有 <see cref="IsGuessedVolumeName"/> 一处（转调两个既有出口），
+             * ⛔ 逐字干净的名字（`x.7z.001` / `x.7z.002.txt`）与**「逐字标记 + 粘着的垃圾」**
+             * （`giu910.7z.001删除`，老口径）都不进这道闸门，一个字节的老口径都不动。
              */
-            if (ordered.Any(i => ExtensionHelper.IsPartNumberedMarkBySkeleton(i.CurrentFileName, out _)) &&
+            if (ordered.Any(i => IsGuessedVolumeName(i.CurrentFileName)) &&
                 !TryConfirmSelfConsistentVolumeGroup(
                     ordered
                         .Select(i => i.CurrentPath)

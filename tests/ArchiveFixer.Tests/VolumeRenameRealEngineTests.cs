@@ -29,10 +29,10 @@ namespace ArchiveFixer.Tests
     /// <para>样本全是**真实工具现造**的：7z 分卷由内置 <c>7z.exe</c>（<c>-mx0 -v1m</c>）造、
     /// RAR 分卷由本机 <c>Rar.exe</c> 造（⛔ 绝不进仓库，没装就跳过并说明）。</para>
     ///
-    /// <para>⚠ <b>钉住现状</b>那一格（<see cref="钉住现状_中间卷只脏在后缀段时_改名计划不成立_但真7zip按标准名解得开"/>）：
-    /// 用户举例的 <c>set.7aaaaz.002</c> / <c>set.7_______z.002</c>（只脏**归档后缀段**）**不在**
-    /// 改名计划的覆盖范围里 —— 如实钉住 + 用真引擎证明"引擎那一侧没问题、缺口只在计划层"。
-    /// ⛔ 本轮只加测试、产品代码一个字节没动（要不要补这一档得用户拍板）。</para>
+    /// <para>⚠ 第五轮在这里**钉住过两处计划层缺口**（只脏归档后缀段不给计划 / 7z 数字族卷标记脏没有「整组自洽」闸门）；
+    /// 用户 2026-10-04 第六轮把两处都补上了 ⇒ 那两条**按新结论改写**
+    /// （<see cref="结论已变_只脏归档后缀段的两条入口给出同一份规范名_真7zip按新名字解得开"/>
+    /// 与 <see cref="反面_孤零零一个脏名卷_计划阶段就停_没有任何标准名入口可开"/> 末段），⛔ 不是放宽断言。</para>
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
     public sealed class VolumeRenameRealEngineTests : IDisposable
@@ -102,6 +102,24 @@ namespace ArchiveFixer.Tests
             RepairSevenZipVolumesAndOpenWithRealEngineAsync("set.7z.002.txt", "卷标记后另起一段后缀");
 
         /// <summary>
+        /// **只脏归档后缀段**（<c>set.7aaaaz.002</c>：后缀段靠骨架档读成 <c>7z</c>、卷号段是干净的 <c>002</c>）
+        /// —— 用户 2026-10-04 第六轮点名要接进改名计划的那一档。
+        ///
+        /// <para>⚠ 本条的前身是第五轮那条「**钉住现状**：这一档计划不成立」（当时计划层没覆盖，实测
+        /// 计划给不出名字、真 7-Zip 打不开；手工改回规范名后立刻解得开）。第六轮把这一形状接进了
+        /// <c>FileNameHelper.TryResolveDisguisedVolume</c> 的形状③ ⇒ **结论变了**，断言按新结论改写
+        /// （⛔ 不是放宽，是缺口补上了）：计划成立 → 改名 → 真 7-Zip 按新名字解得开 → 字节逐字节相同。</para>
+        /// </summary>
+        [SevenZipFact]
+        public Task 真7z_中间卷只脏归档后缀段_改名之后真7zip按新名字解得开() =>
+            RepairSevenZipVolumesAndOpenWithRealEngineAsync("set.7aaaaz.002", "只脏归档后缀段（7aaaaz ⇒ 7z）");
+
+        /// <summary>同上，换成**下划线骨架**（<c>7_______z</c> ⇒ <c>7z</c>）—— 用户原话里点名的另一个形状。</summary>
+        [SevenZipFact]
+        public Task 真7z_中间卷后缀段被下划线伪装_改名之后真7zip按新名字解得开() =>
+            RepairSevenZipVolumesAndOpenWithRealEngineAsync("set.7_______z.002", "只脏归档后缀段（7_______z ⇒ 7z）");
+
+        /// <summary>
         /// 五条断言的共用实现（见类注释）：真 7z 造四卷 → 把**中间那卷**改名成 <paramref name="dirtyName"/> →
         /// 计划 → 真改名 → 真引擎按新名字列出 / 解出 → 逐字节比对 + SHA256 快照比对。
         /// </summary>
@@ -133,6 +151,9 @@ namespace ArchiveFixer.Tests
             Assert.Equal("set.7z.002", only.SuggestedFileName);
             Assert.Equal(dirty, plan.CurrentPath);
             Assert.Equal(Path.Combine(directory, "set.7z.002"), plan.TargetPath);
+
+            // 包基名（用户口径里的"基名"）：计划里那个规范名剥到最后一层必须是 `set`。
+            Assert.Equal("set", OutputPlacement.ResolveArchiveBaseName(only.SuggestedFileName));
 
             /*
              * 卷序（识别那一层）：脏名也必须读得出"这是第 2 卷"。
@@ -304,11 +325,12 @@ namespace ArchiveFixer.Tests
             Assert.Equal(loneHash, Sha256Of(lone));
 
             /*
-             * ⚠ **顺带如实钉住另一格（⛔ 不是认可）**：同一件事在 **7z 数字族**上**不成立** ——
-             * 卷号段是被**骨架档**认出来的那种脏名（`set.7z.0a0b1`，骨架 `0a0b1` ⇒ `001`），
-             * **孤零零一个也会被改名**：那条路（`PlanJunkTailGroup`）眼下**没有**「整组自洽」那道闸门
-             * （闸门只长在 partN 骨架那一档上，见 `VolumeNameRepair` 的 `TryConfirmSelfConsistentVolumeGroup`）。
-             * ⇒ 这里只钉事实：计划**成立**、目标名 `set.7z.001`；⛔ 本轮不改产品代码（要不要收紧得用户拍板）。
+             * ⚠ **顺带钉住另一格：7z 数字族的"卷标记段脏"也要过同一道闸门**（用户 2026-10-04 第六轮拍板）。
+             *
+             * 第五轮这里写的是「孤零零一个 `set.7z.0a0b1` **也会被改名**」（当时闸门只长在 partN 那一档上，
+             * 如实钉住的现状）。第六轮把闸门扩到**全部"猜出来的"名字**（`VolumeNameRepair.IsGuessedVolumeName`
+             * 转调 `ExtensionHelper` 的三个既有出口）⇒ 孤立一个的改名计划**不成立**
+             * （`VolumeRepairNoSiblings`）—— 断言按新结论改写，⛔ 不是放宽。
              *
              * 样本用**真 7z 卷**（内容与名字同族），只搬来第 1 卷并把它改成脏名 —— 同目录照样配不出整组。
              */
@@ -320,32 +342,34 @@ namespace ArchiveFixer.Tests
 
             File.Copy(Path.Combine(sevenZipStage, "set.7z.001"), loneSevenZip);
 
+            string loneSevenZipHash = Sha256Of(loneSevenZip);
+
             VolumeNameRepairPlan loneSevenZipPlan = VolumeNameRepair.Plan(loneSevenZip, NamesIn(loneSevenZipDirectory));
 
-            Assert.True(
+            Assert.False(
                 loneSevenZipPlan.CanRepair,
-                $"钉住现状：7z 数字族的卷号段骨架档那一格没有「整组自洽」闸门，实际：{loneSevenZipPlan.Describe()}");
-            Assert.Equal("set.7z.001", loneSevenZipPlan.SuggestedFileName);
-            Assert.True(File.Exists(loneSevenZip), "计划阶段照旧一个字节都不碰盘");
+                $"孤立一个「卷标记段靠骨架档认出来」的脏名 ⇒ 一个字都不许改，实际：{loneSevenZipPlan.Describe()}");
+            Assert.Equal(StatusText.VolumeRepairNoSiblings, loneSevenZipPlan.Reason);
+            Assert.Empty(loneSevenZipPlan.Items);
+            Assert.True(File.Exists(loneSevenZip), "原样原地不动");
+            Assert.False(File.Exists(Path.Combine(loneSevenZipDirectory, "set.7z.001")), "不许造出一个标准名入口");
+            Assert.Equal(loneSevenZipHash, Sha256Of(loneSevenZip));
         }
 
-        // ════════════════════════════ ④ 钉住现状：只脏在**归档后缀段** ════════════════════════════
+        // ════════════ ④ 「只脏归档后缀段」接进计划之后（第五轮那条"钉住现状"按新结论改写） ════════════
 
         /// <summary>
-        /// **钉住现状（⛔ 不是认可）**：用户举例的 <c>set.7aaaaz.002</c> / <c>set.7_______z.002</c>
-        /// （中间那一卷**只**脏在归档后缀段 <c>7z</c>、卷号段是干净的 <c>002</c>）**当前不在**
-        /// <see cref="VolumeNameRepair.Plan"/> 的覆盖范围里 —— 两条入口（干净首卷 / 脏的那一卷）都判"不改"。
+        /// **只脏归档后缀段**（<c>set.7aaaaz.002</c>：后缀段靠骨架档读成 <c>7z</c>、卷号段是干净的 <c>002</c>）
+        /// —— 用户 2026-10-04 第六轮把这一形状接进了改名计划。
         ///
-        /// <para><b>为什么走不到</b>：<c>TrySplitDisguised</c>（唯一基名出口的 <c>DisguisedVolume</c> 档）
-        /// 只有两条形状入口 —— ① 末段自己带垃圾（`set.7z.0a0b2`）/ ② 卷标记后面还挂着点段
-        /// （`set.7z.002.txt`）；而"末段干净、脏的是**它前面那个后缀段**"既不属于 ① 也不属于 ②
-        /// （`7aaaaz` 不是卷标记）⇒ 这一卷在计划眼里就是"名字本来就标准"。</para>
-        ///
-        /// <para><b>后半段用真引擎证明"缺口只在计划层、不在引擎那一侧"</b>：把那一卷**手工**改成规范名
-        /// （测试脚手架，⛔ 不是产品代码的行为）⇒ 真 7-Zip 立刻解得开、内容逐字节相同。</para>
+        /// <para>⚠ <b>本条是第五轮那条「钉住现状：改名计划不成立」按新结论改写的</b>（⛔ 不是放宽断言）：
+        /// 当时的实测是"识别层认得出、计划层给不出名字 ⇒ 真 7-Zip 打不开这一组；手工把那一卷改回规范名之后
+        /// 立刻解得开 ⇒ 缺口只在计划层"。第六轮在 <c>FileNameHelper.TryResolveDisguisedVolume</c> 加了
+        /// 形状③（**脏归档后缀段**，判据仍只转调既有的归档体还原那把尺子）⇒ 缺口补上了：
+        /// 两条入口（干净首卷 / 脏的那一卷）给出**同一份规范名**，改名之后真 7-Zip 解得开、字节逐字节相同。</para>
         /// </summary>
         [SevenZipFact]
-        public async Task 钉住现状_中间卷只脏在后缀段时_改名计划不成立_但真7zip按标准名解得开()
+        public async Task 结论已变_只脏归档后缀段的两条入口给出同一份规范名_真7zip按新名字解得开()
         {
             RequireSevenZip();
 
@@ -362,38 +386,54 @@ namespace ArchiveFixer.Tests
 
             Dictionary<string, string> before = SnapshotHashes(directory);
 
-            // ── 钉住：两条入口都判"不改"，盘上一个名字都不动 ──
+            // ── 两条入口现在**都**给出计划，而且是逐字同一份规范名（第五轮这两条都是"不改"） ──
             VolumeNameRepairPlan fromFirst = VolumeNameRepair.Plan(first, NamesIn(directory));
             VolumeNameRepairPlan fromDirty = VolumeNameRepair.Plan(dirty, NamesIn(directory));
 
-            Assert.False(
-                fromFirst.CanRepair,
-                $"钉住现状：只脏归档后缀段这一档当前不接（要接得先让用户拍板），实际：{fromFirst.Describe()}");
-            Assert.False(
-                fromDirty.CanRepair,
-                $"钉住现状：从脏的那一卷进去也不接，实际：{fromDirty.Describe()}");
-            Assert.Empty(fromFirst.Items);
-            Assert.Empty(fromDirty.Items);
-            AssertHashesUnchanged(directory, before);
+            Assert.True(fromFirst.CanRepair, $"从干净首卷进去必须出得来计划，实际：{fromFirst.Describe()}");
+            Assert.True(fromDirty.CanRepair, $"从脏的那一卷进去也必须出得来计划，实际：{fromDirty.Describe()}");
 
-            // 卷序 / 首卷名这两条**认得出来**（归组那一档）；认不出的只有"改名计划"这一档。
+            Assert.Equal("set.7z.002", fromFirst.SuggestedFileName);
+            Assert.Equal("set.7z.002", fromDirty.SuggestedFileName);
+
+            VolumeRepairItem fromFirstItem = Assert.Single(fromFirst.Items);
+            VolumeRepairItem fromDirtyItem = Assert.Single(fromDirty.Items);
+
+            Assert.Equal("set.7aaaaz.002", fromFirstItem.CurrentFileName);
+            Assert.Equal("set.7aaaaz.002", fromDirtyItem.CurrentFileName);
+            Assert.Equal("set.7z.002", fromFirstItem.SuggestedFileName);
+            Assert.Equal("set.7z.002", fromDirtyItem.SuggestedFileName);
+
+            // 卷序 / 首卷名这两条照旧认得出来（归组那一档）。
             Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("set.7aaaaz.002"));
             Assert.Equal("set.7z.001", VolumeGroupDetector.TryGetFirstVolumeName("set.7aaaaz.002"));
 
-            /*
-             * ── 对照组（测试脚手架手工改名，⛔ 不是产品行为）：证明引擎那一侧没问题 ──
-             * 把这一卷改回规范名之后，真 7-Zip 用同一条生产路径打开**首卷**，照样列出 / 解出。
-             */
-            File.Move(dirty, Path.Combine(directory, "set.7z.002"));
+            // 出计划这一步**一个字节都不碰盘**。
+            AssertHashesUnchanged(directory, before);
 
+            // ── ② 真改名 ──
+            VolumeNameRepairResult applied = VolumeNameRepair.TryApply(fromFirst);
+
+            Assert.True(applied.Success, applied.Message);
+            Assert.True(File.Exists(Path.Combine(directory, "set.7z.002")));
+            Assert.False(File.Exists(dirty));
+
+            // ── ⑤ 内容一个字节没变（名字变了、内容不动；同组其余卷也不动） ──
+            Assert.Equal(before["set.7aaaaz.002"], Sha256Of(Path.Combine(directory, "set.7z.002")));
+            Assert.Equal(
+                before.Values.OrderBy(hash => hash, StringComparer.Ordinal),
+                Directory.GetFiles(directory).Select(Sha256Of).OrderBy(hash => hash, StringComparer.Ordinal));
+
+            // ── ③④ 真 7-Zip 打开改过名的首卷、解出来的字节与原始负载逐字节相同 ──
             string outputDirectory = Path.Combine(_root, "out-suffix-segment-only");
+
             (ArchiveListResult list, ArchiveOperationResult _) = await OpenWithRealEngineAsync(
                 first,
                 outputDirectory,
-                "只脏归档后缀段（手工改回规范名后的对照）");
+                "只脏归档后缀段（第六轮接进计划之后）");
 
             Assert.Equal(EngineIds.SevenZip, list.EngineId);
-            AssertPayloadRoundTripped(outputDirectory, payload, "只脏归档后缀段（手工改回规范名后的对照）");
+            AssertPayloadRoundTripped(outputDirectory, payload, "只脏归档后缀段（第六轮接进计划之后）");
         }
 
         // ════════════════════════════ 基础设施 ════════════════════════════

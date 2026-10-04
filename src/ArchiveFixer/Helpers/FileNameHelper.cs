@@ -742,6 +742,34 @@ namespace ArchiveFixer.Helpers
                 return baseName.Length > 0;
             }
 
+            /*
+             * ③ **末段逐字就是合法卷标记，脏的是它前面那一段"归档后缀段"**
+             *    （`set.7aaaaz.002` / `333.78a8fuaz.003` / `set.7_______z.002`）。
+             *
+             * 用户 2026-10-04 第六轮点名：这一档在**识别层面**一直认得出来（归组键那一档早就把后缀段
+             * 归一了 —— `VolumeSkeletonMatchTests.用户原话形状_伪装后缀里的7z分卷要认得出来`），
+             * 但**改名计划**层给不出名字 ⇒ 7-Zip 按脏名找不到兄弟卷、整组打不开；
+             * 手工把那一卷改回 `set.7z.002` 之后立刻解得开（真引擎实测）⇒ 缺口只在计划层。
+             *
+             * 判据**只转调既有那把尺子**（⛔ 不新造第三把）：`TryRecoverDisguisedArchiveBody`
+             * （剔非字母数字 / 删 ≤2 个字符 / 通用骨架，三档 + 首尾对齐 + 结果唯一）读出这一段
+             * **归一之后的真实身份**，只把**那一段**换成它 —— **替换不追加**，基名其余部分一个字不动。
+             * ⛔ 本来就干净的（`set.7z.002` 的 `7z`）不走这一档；⛔ 不是卷标记形状的不走这一档。
+             *
+             * ⚠ 这里只是**名字级**的拆解（一个字节都不动盘）：敢不敢改由 `VolumeNameRepair` 那两道
+             * 闸门回答（名字是靠猜出来的 ⇒ 必须过「整组自洽」或硬链接试开）。
+             */
+            if (parts.Length >= 3 &&
+                parts[0].Length > 0 &&
+                ExtensionHelper.IsVolumePartExtension("." + parts[^1]) &&
+                !ExtensionHelper.IsKnownArchiveExtension("." + parts[^2]) &&
+                ExtensionHelper.TryRecoverDisguisedArchiveBody(parts[^2], out string recoveredExtension, out _))
+            {
+                baseName = string.Join('.', parts, 0, parts.Length - 2) + "." + recoveredExtension;
+                canonicalSegment = parts[^1];
+                return true;
+            }
+
             return false;
         }
 

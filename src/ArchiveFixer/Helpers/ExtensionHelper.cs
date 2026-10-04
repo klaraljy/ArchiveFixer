@@ -1234,6 +1234,117 @@ namespace ArchiveFixer.Helpers
         }
 
         /// <summary>
+        /// 这个名字的**卷标记段本身**是不是"要**重建**才读得出来"的
+        /// （<c>333.7z.0a0b1</c> ⇒ <c>001</c>、<c>222.z0删1</c> ⇒ <c>z01</c>、<c>444.pa8rt1.rar</c> ⇒ <c>part1</c>）。
+        ///
+        /// <para>判据（全部转调既有出口）：① 那一段**逐字不是**合法卷标记
+        /// （<see cref="IsVolumePartExtension"/>）；② **也不是**"逐字标记 + 粘着的垃圾"
+        /// （<see cref="TrySplitVolumeSegment"/>：<c>001删除</c> / <c>001(1)</c>）；③ 容错档
+        /// <see cref="TrySplitVolumeSegmentTolerant"/> 命中。partN 族由
+        /// <see cref="IsPartNumberedMarkBySkeleton"/> 先回答（本方法转调它）。</para>
+        ///
+        /// <para>⛔ 它**只回答"卷标记这一格要不要重建"** —— 敢不敢改名由调用方那几道闸门回答
+        /// （用户 2026-10-04 第六轮：「孤立一个 <c>set.7z.0a0b1</c> ⇒ 不改」：要重建的名字必须再过
+        /// 「整组自洽」，判据在 <c>VolumeNameRepair.TryConfirmSelfConsistentVolumeGroup</c>）。</para>
+        ///
+        /// <para>⚠ 末段逐字就合法（<c>x.7z.001</c> / <c>x.7z.001.txt</c>）一律 false ——
+        /// 那一档不是猜的，⛔ 不许顺手把闸门加到它头上（`x.7z.001.txt` 那一组照旧按老口径改）。</para>
+        ///
+        /// <para>⛔ **「逐字标记 + 粘着的垃圾」也不算要重建**（<c>001删除</c> / <c>001(1)</c>）：
+        /// 那一段的**开头就是一个逐字合法的卷标记**、尾巴是垃圾 ⇒ 改名只删尾巴、**卷号一个字符都不动**
+        /// —— 这是 2026-09-28（网盘缀「删除」）起的**老口径**，与 partN 那一档**同一条纪律**
+        /// （<c>X.part1.rar删除</c> 的标记 <c>part1</c> 逐字干净 ⇒ <see cref="IsPartNumberedMarkBySkeleton"/>
+        /// 同样是 false）。⚠ 实测记帐（2026-10-04 第六轮）：把这一档也收进闸门 ⇒
+        /// <c>VolumeNameRepairGroupTests</c> / <c>RealMachine20261002FixesTests</c> /
+        /// <c>RealMachineDefectFixesTests</c> **3 条既有用例变红**（夹具是"网盘缀删除 + 尺寸不规律 /
+        /// 散在两个目录"）⇒ 闸门只管**要重建卷标记**的那一档，这一档照旧只按名字改。</para>
+        /// </summary>
+        public static bool IsVolumeMarkByDisguise(string? fileName, out string canonicalMark)
+        {
+            canonicalMark = string.Empty;
+
+            string name = string.IsNullOrWhiteSpace(fileName)
+                ? string.Empty
+                : System.IO.Path.GetFileName(fileName);
+
+            if (name.Length == 0)
+            {
+                return false;
+            }
+
+            // partN 族：卷标记 = 倒数第二段（尾巴是 rar 那一族），判据已在既有出口里。
+            if (IsPartNumberedMarkBySkeleton(name, out canonicalMark))
+            {
+                return true;
+            }
+
+            string[] parts = name.Split('.');
+
+            if (parts.Length < 2)
+            {
+                return false;
+            }
+
+            string last = parts[^1];
+
+            // 末段逐字就是合法卷标记 ⇒ 这一格不是猜出来的（`x.7z.001` / `x.7z.001.txt` 走这条）。
+            if (IsVolumePartExtension("." + last))
+            {
+                return false;
+            }
+
+            // 「逐字标记 + 粘着的垃圾」（`001删除` / `001(1)`）⇒ 老口径，不算"要重建"（见上面那段说明）。
+            if (TrySplitVolumeSegment(last, out _, out _))
+            {
+                return false;
+            }
+
+            return TrySplitVolumeSegmentTolerant(last, out canonicalMark, out _);
+        }
+
+        /// <summary>
+        /// 这个名字的**归档后缀段**是不是"靠容错/骨架档才读出来"的
+        /// （<c>set.7aaaaz.002</c> ⇒ <c>7z</c>、<c>333.78a8fuaz.003</c> ⇒ <c>7z</c>、<c>set.7_______z.002</c> ⇒ <c>7z</c>）。
+        ///
+        /// <para>形状两道：① 末段**逐字就是**合法卷标记（<c>.002</c>）；② 它前面那一段逐字**不是**
+        /// 已知归档后缀、却归一得出一个（<see cref="TryRecoverDisguisedArchiveBody"/>，
+        /// 三档 + 首尾对齐 + 结果唯一）。⛔ <c>set.7z.002</c>（后缀段本来就干净）一律 false。</para>
+        ///
+        /// <para>⛔ 同 <see cref="IsVolumeMarkByDisguise"/>：只回答"这一格是不是猜出来的"，
+        /// 敢不敢改名由调用方那几道闸门回答（用户 2026-10-04 第六轮：这一档也要过「整组自洽」）。</para>
+        /// </summary>
+        public static bool IsArchiveSegmentByDisguise(string? fileName, out string canonicalExtension)
+        {
+            canonicalExtension = string.Empty;
+
+            string name = string.IsNullOrWhiteSpace(fileName)
+                ? string.Empty
+                : System.IO.Path.GetFileName(fileName);
+
+            if (name.Length == 0)
+            {
+                return false;
+            }
+
+            string[] parts = name.Split('.');
+
+            if (parts.Length < 3 || !IsVolumePartExtension("." + parts[^1]))
+            {
+                return false;
+            }
+
+            string segment = parts[^2];
+
+            // 本来就干净 ⇒ 不是猜的。
+            if (IsKnownArchiveExtension("." + segment))
+            {
+                return false;
+            }
+
+            return TryRecoverDisguisedArchiveBody(segment, out canonicalExtension, out _);
+        }
+
+        /// <summary>
         /// <c>partN</c> 骨架：<c>part</c> 四个字母按顺序**从段首**开始、后面**一路到段末全是 ASCII 数字**
         /// （<c>pa8rt1</c> → <c>part1</c>、<c>paart02</c> → <c>part02</c>）。
         ///

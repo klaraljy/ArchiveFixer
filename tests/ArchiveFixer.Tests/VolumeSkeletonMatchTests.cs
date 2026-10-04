@@ -139,6 +139,92 @@ namespace ArchiveFixer.Tests
             Assert.Equal(expectedIndex, VolumeGroupDetector.TryGetVolumeIndex("x." + segment));
         }
 
+        // ================================================================ 「脏归档后缀段」那一档（2026-10-04 第六轮）
+
+        /// <summary>
+        /// **只脏归档后缀段**（末段逐字就是合法卷标记，脏的是它前面那一段）：
+        /// 判据 <see cref="ExtensionHelper.IsArchiveSegmentByDisguise"/> 读出那一段的真实身份
+        /// ⇒ 名字级拆解给出 <c>&lt;基名&gt;.7z.&lt;卷标记&gt;</c>（**替换不追加**、基名一个字不动）。
+        ///
+        /// <para>用户 2026-10-04 第六轮原话：「把这一形状接进改名计划（<c>VolumeNameRepair</c> 那条路），
+        /// 判据照既有口径、⛔ 不许新造第三把尺子」。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("set.7aaaaz.002", "set.7z", "002")]
+        [InlineData("set.7_______z.002", "set.7z", "002")]
+        [InlineData("333.78a8fuaz.003", "333.7z", "003")]
+        [InlineData("a.b.c.7sz.005", "a.b.c.7z", "005")]
+        public void 归档后缀段_脏的那一段要归一成真实身份(string fileName, string expectedBase, string expectedSegment)
+        {
+            Assert.True(
+                ExtensionHelper.IsArchiveSegmentByDisguise(fileName, out string recovered),
+                $"`{fileName}` 的归档后缀段应当靠容错/骨架档读得出来");
+            Assert.Equal("7z", recovered);
+
+            Assert.True(
+                FileNameHelper.TryResolveVolumeBaseName(
+                    fileName,
+                    VolumeBaseNameLevel.DisguisedVolume,
+                    out string baseName,
+                    out string segment),
+                $"`{fileName}` 应当拆得出来");
+            Assert.Equal(expectedBase, baseName);
+            Assert.Equal(expectedSegment, segment);
+
+            // 归组那一档照旧（这一格本来就对，第六轮只把**计划**那一档补齐）。
+            Assert.Equal("333.7z.001", VolumeGroupDetector.TryGetFirstVolumeName("333.78a8fuaz.003"));
+        }
+
+        /// <summary>
+        /// **反例**（用户 2026-10-04 第六轮点名"`x.rarity` / `x.zipper` 连命中都不算"）：
+        /// 半个骨架（没走到段末）或有歧义的段（`7zip` 同时命中 `7z` 与 `zip`）**都不算**"脏归档后缀段"，
+        /// 而**本来就干净**的（`set.7z.002`）也不算。
+        /// </summary>
+        [Theory]
+        [InlineData("set.rarity.002")]
+        [InlineData("set.zipper.002")]
+        [InlineData("set.7zip.002")]
+        [InlineData("set.7z.002")]        // 本来就干净 ⇒ 不是"猜出来的"
+        [InlineData("set.002")]           // 没有后缀段这一格
+        public void 归档后缀段_仿名与干净名都不算猜出来的(string fileName)
+        {
+            Assert.False(
+                ExtensionHelper.IsArchiveSegmentByDisguise(fileName, out _),
+                $"`{fileName}` 不该被当成「脏归档后缀段」");
+        }
+
+        /// <summary>
+        /// **卷标记段要"重建"**那一档的谓词（<see cref="ExtensionHelper.IsVolumeMarkByDisguise"/>）：
+        /// `0a0b1` / `z0删1` / `pa8rt1` 都算"要重建"，逐字干净的一律不算。
+        ///
+        /// <para>用户 2026-10-04 第六轮：「孤立一个 <c>set.7z.0a0b1</c> ⇒ 不改」——
+        /// 闸门就是按这一位开的（闸门本体在 <c>VolumeNameRepair.IsGuessedVolumeName</c>）。</para>
+        ///
+        /// <para>⛔ **边界（与 partN 同口径）**：「**逐字标记 + 粘着的垃圾**」（<c>001删除</c> / <c>001(1)</c>）
+        /// **不算要重建** —— 那一段开头就是一个逐字合法的卷标记、改名只删尾巴、卷号一个字符都不动，
+        /// 是 2026-09-28 起的老口径（网盘缀「删除」），照旧只按名字改。⚠ 实测：把它也收进闸门 ⇒
+        /// <c>VolumeNameRepairGroupTests</c> / <c>RealMachine20261002FixesTests</c> /
+        /// <c>RealMachineDefectFixesTests</c> 3 条既有用例变红（夹具是"尺寸不规律 / 散在两个目录"）。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("set.7z.0a0b1", "001", true)]
+        [InlineData("222.z0删1", "z01", true)]      // 垃圾夹在卷标记**里面** ⇒ 要重建
+        [InlineData("444.pa8rt1.rar", "part1", true)]
+        [InlineData("set.7z.001", null, false)]
+        [InlineData("x.7z.001.txt", null, false)]   // 脏的是"另起一段的尾巴"，不是卷标记这一格
+        [InlineData("set.7aaaaz.002", null, false)] // 脏的是归档后缀段那一格（由另一位回答）
+        [InlineData("giu910.7z.001删除", null, false)] // 逐字标记 + 尾巴垃圾 ⇒ 老口径，不过闸门
+        [InlineData("x.7z.001(1)", null, false)]
+        public void 卷标记段_要重建的与逐字干净的要分得开(string fileName, string? expectedMark, bool expected)
+        {
+            Assert.Equal(expected, ExtensionHelper.IsVolumeMarkByDisguise(fileName, out string mark));
+
+            if (expected)
+            {
+                Assert.Equal(expectedMark, mark);
+            }
+        }
+
         // ================================================================ 用户原话形状
 
         /// <summary>
