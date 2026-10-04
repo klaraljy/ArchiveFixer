@@ -308,14 +308,15 @@ namespace ArchiveFixer.Tests
 
                 /*
                  * 2026-09-24 第 15 / 17 条补的两个开关：
-                 * · RemindJunkAfterImport —— 导入文件夹后就提醒无用物。⚠ 2026-09-28：那个提醒框**退休**了
-                 *   （用户：「为什么不在检测到的时候就直接移除」），无用物改成**导入一完成就自动移出列表**，
-                 *   这个开关**不再控制**导入时的行为；设置项与界面上这一格先留着（不动设置序列化），
-                 *   所以它仍然要在界面上找得到 —— 这一条断言的是"界面上有这一格 + AppSettings 里有这个属性"。
-                 * · SkipOneClickConfirm   —— 一键处理不再弹确认框（OneClickCoordinator 真的读它）。
-                 * 两个都必须在界面上有"再打开"的入口，否则勾一次就再也回不来了。
+                 * · SkipOneClickConfirm —— 一键处理不再弹确认框（OneClickCoordinator 真的读它），
+                 *   必须在界面上有"再打开"的入口，否则勾一次就再也回不来了。
+                 * · RemindJunkAfterImport —— ⛔ 2026-10-04 已按用户口径**从界面上整格删掉**
+                 *   （原话：「要删除的是第二个你已经停止显示的，就是底层自动会做的」）：
+                 *   无用物是"导入一完成就自动移出列表"这件事底层自动做的，界面不再摆那一格。
+                 *   ⚠ `AppSettings.RemindJunkAfterImport` 属性**留着**（不动设置序列化，旧键安静忽略），
+                 *   所以它不在这份"界面上必须找得到"的清单里。
                  */
-                "RemindJunkAfterImport", "SkipOneClickConfirm",
+                "SkipOneClickConfirm",
 
                 /*
                  * 2026-09-24「特定解压」的总开关（①任务页、一键处理旁边）。

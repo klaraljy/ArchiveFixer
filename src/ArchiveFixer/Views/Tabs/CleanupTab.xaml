@@ -163,6 +163,13 @@
             <!-- ==================== 解压前的提醒 ==================== -->
             <GroupBox Header="提醒">
                 <StackPanel>
+                    <!--
+                        第 15 条那两格里的**第二格**（「导入文件夹后提醒一次『疑似无用物』（已停用）」）
+                        已按用户 2026-10-04 的口径**整格删掉**：无用物现在是"导入一完成就自动移出任务列表"
+                        这种事底层自动做的活，界面上再摆一个"改了什么都不影响"的开关只是噪声。
+                        ⛔ 设置项 `AppSettings.RemindJunkAfterImport` 本身留着（不动设置序列化，旧键安静忽略），
+                        ⛔ 那句"已把 N 个无用物移出列表"的**日志保留**（用户：「提示还是要有的」）。
+                    -->
                     <CheckBox Content="{x:Static models:StatusText.SettingsRemindBeforeExtractLabel}"
                               IsChecked="{Binding SettingsEditor.Settings.RemindBeforeExtract, Mode=TwoWay}"
                               ToolTip="{x:Static models:StatusText.SettingsRemindBeforeExtractHint}" />
@@ -171,20 +178,6 @@
                                Margin="22,4,0,0"
                                TextWrapping="Wrap"
                                Text="{x:Static models:StatusText.SettingsRemindBeforeExtractHint}" />
-
-                    <!--
-                        第 15 条：导入文件夹后**立刻**提醒一次无用物（与上面那条解压前的提醒是两件事：
-                        这一条管"选完文件夹就说"，上面那条管"动手解压前再说一次"，两个开关各自可关）。
-                    -->
-                    <CheckBox Margin="0,10,0,0"
-                              Content="{x:Static models:StatusText.SettingsRemindJunkAfterImportLabel}"
-                              IsChecked="{Binding SettingsEditor.Settings.RemindJunkAfterImport, Mode=TwoWay}"
-                              ToolTip="{x:Static models:StatusText.SettingsRemindJunkAfterImportHint}" />
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="22,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="{x:Static models:StatusText.SettingsRemindJunkAfterImportHint}" />
                 </StackPanel>
             </GroupBox>
 

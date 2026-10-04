@@ -212,8 +212,11 @@ namespace ArchiveFixer.Tests
                 harness.Vm.Tasks,
                 task => task.FileName.Equals("说明.txt", StringComparison.OrdinalIgnoreCase));
 
-            // 设置项照旧：能写、能落盘、能读回来（"先留着、别动设置序列化"）。
-            harness.Vm.SaveRemindJunkAfterImport(true);
+            // 设置项照旧：能写、能落盘、能读回来（"先留着、别动设置序列化"）——
+            // ⚠ 2026-10-04 起界面上已经没有那一格了（底层自动做的事），所以这里直接改设置 + 走自动保存，
+            //    走的就是其它设置项同一条落盘路径。
+            harness.Vm.Settings.RemindJunkAfterImport = true;
+            harness.Vm.FlushSettingsAutoSave();
 
             Assert.True(new SettingsService(harness.PathService).Load().RemindJunkAfterImport);
         }

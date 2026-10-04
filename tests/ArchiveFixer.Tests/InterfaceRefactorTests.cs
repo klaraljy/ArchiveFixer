@@ -454,10 +454,11 @@ namespace ArchiveFixer.Tests
                  * 与解压时的口径同一份实现），而这份清单钉的是 "Settings.<原名>" 这种直接绑定。
                  * 它们的界面落点由 危险模式那一套已退役_界面上一个字都不留 那一条钉住。
                  */
+                // ③ 的第 15 条那一格：解压前提醒无用物 / 没有可用密码的包
+                // ⚠ 同一组里那格「导入文件夹后提醒一次『疑似无用物』（已停用）」已按用户 2026-10-04
+                //   的口径**整格删掉**（那是底层自动做的事，界面上摆一个改了没影响的开关只是噪声），
+                //   所以它不在这份清单里 —— `AppSettings.RemindJunkAfterImport` 属性照旧留着（旧键安静忽略）。
                 ["RemindBeforeExtract"] = "CleanupTab",
-
-                // ③ 的第 15 条那一格：导入文件夹后就提醒无用物
-                ["RemindJunkAfterImport"] = "CleanupTab",
 
                 // ④ 密码
                 ["UseGlobalPasswordForAllTasks"] = "PasswordTab",

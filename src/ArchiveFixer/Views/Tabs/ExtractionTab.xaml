@@ -158,30 +158,29 @@
                     </Grid>
 
                     <!--
-                        用户 2026-10-04：「并且在选择旁边详细说明情况」——
-                        三档各写清**它怎么走 / 什么时候会停 / 空间与时间代价**。
-                        文案唯一来源 = StatusText（⛔ 这里不许手写中文、不许写 Markdown 强调）。
+                        用户 2026-10-04（当天第三次改口径）：「这个嵌套与覆盖你的文字这么多，你就不会放到说明里面
+                        或者是在旁边弄一个小弹窗点击一下就会出来详细解释」⇒ 他当场选「就地折叠」
+                        （①页「手动操作」已经是这个手法，不新开窗口）。
+                        ⛔ 三档的说明**一个字没改**，改的只是默认收起来、点一下才展开。
                     -->
-                    <StackPanel Margin="110,0,0,8">
-                        <TextBlock Style="{StaticResource HintTextStyle}"
-                                   TextWrapping="Wrap"
-                                   Text="{x:Static models:StatusText.RecursionModeHintLabel}" />
+                    <Expander Margin="110,0,0,8"
+                              Header="{x:Static models:StatusText.RecursionModeHintLabel}">
+                        <StackPanel Margin="0,6,0,0">
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       TextWrapping="Wrap"
+                                       Text="{x:Static models:StatusText.RecursionModeAllBranchesHint}" />
 
-                        <TextBlock Style="{StaticResource HintTextStyle}"
-                                   Margin="0,2,0,0"
-                                   TextWrapping="Wrap"
-                                   Text="{x:Static models:StatusText.RecursionModeAllBranchesHint}" />
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap"
+                                       Text="{x:Static models:StatusText.RecursionModeSingleChainHint}" />
 
-                        <TextBlock Style="{StaticResource HintTextStyle}"
-                                   Margin="0,2,0,0"
-                                   TextWrapping="Wrap"
-                                   Text="{x:Static models:StatusText.RecursionModeSingleChainHint}" />
-
-                        <TextBlock Style="{StaticResource HintTextStyle}"
-                                   Margin="0,2,0,0"
-                                   TextWrapping="Wrap"
-                                   Text="{x:Static models:StatusText.RecursionModeSingleLayerHint}" />
-                    </StackPanel>
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap"
+                                       Text="{x:Static models:StatusText.RecursionModeSingleLayerHint}" />
+                        </StackPanel>
+                    </Expander>
 
                     <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
@@ -208,11 +207,13 @@
                         续解的中间层（用户 2026-09-27 拍板）：首尾两层**永远保留**，中间那些"包里套包"的层
                         默认照忠实档一层一层建出来；勾上这一格 = 简洁档，单链时把中间层省掉。
                         出现分支（那一层里有多个包 / 还有别的文件）时**那一层照建**，并在日志里说明为什么没省。
+                        ⚠ 完整说明（两种档位的目录形状）已按用户 2026-10-04 的口径挪进本组最下面的折叠区，
+                        这里只留一句短的（⛔ 不是删掉）。
                     -->
                     <CheckBox Content="续解时省略中间层（只留第一层与最后一层）"
                               Margin="0,0,0,8"
                               IsChecked="{Binding SettingsEditor.OmitMiddleContinuationLayers, Mode=TwoWay}"
-                              ToolTip="默认不勾 = 忠实档：111\222\333\444\555\666\内容物；勾上 = 简洁档：111\222\666\内容物。只在单链续解时生效，第一层与最后一层永远保留。" />
+                              ToolTip="{x:Static models:StatusText.NestedMiddleLayerShortHint}" />
 
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -233,20 +234,40 @@
                         </ComboBox>
                     </Grid>
 
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="110,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="RAR 包默认走 UnRAR，而它没有「自动重命名已存在文件」这一档 —— 那里的实际行为是「跳过已存在文件」。要覆盖就选「覆盖全部」。" />
-
                     <!--
                         第 42 条的全自动拼装（用户 2026-09-25 选的方案 A：做，默认关）。
                         说明必须把代价写清：它会读源目录、并在工作区里造名字 / 复制卷；
                         判不准的场合一律不动，源文件一个字节不改。
+                        ⚠ 完整说明已按用户 2026-10-04 的口径挪进本组最下面的折叠区。
                     -->
                     <CheckBox Content="容器里装的是分卷第 1 卷时，自动接上同目录的后续卷"
                               Margin="0,12,0,0"
                               IsChecked="{Binding SettingsEditor.Settings.AssembleSplitVolumesFromContainer, Mode=TwoWay}"
-                              ToolTip="有些包的形状是：一个文件（例如 封面.jpg）里装着的正是 set.7z.001，而 set.7z.002/.003 就在同一个文件夹里。默认关：程序只把话说清（首卷在容器里、外面缺的是后续卷）并给改名建议，不会动。打开：程序在工作区里接出一套名字成套的卷再解压 —— 同一块盘只接名字（硬链接，不复制字节、不改你的文件），跨盘才复制且先查空间；同族两组以上缺首卷或认不准时一律不做。" />
+                              ToolTip="{x:Static models:StatusText.NestedVolumeAssemblyShortHint}" />
+
+                    <!--
+                        本组的长说明统一收在这里（用户 2026-10-04：「你这个嵌套与覆盖你的文字这么多」）——
+                        覆盖策略 / 中间层 / 分卷拼装三件事，默认收起、点一下才展开。
+                        ⛔ 文字一个字没删，只是不再摊在页面上。
+                    -->
+                    <Expander Margin="0,10,0,0"
+                              Header="{x:Static models:StatusText.NestedExtrasDetailHeader}">
+                        <StackPanel Margin="0,6,0,0">
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       TextWrapping="Wrap"
+                                       Text="{x:Static models:StatusText.NestedOverwriteDetail}" />
+
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap"
+                                       Text="{x:Static models:StatusText.NestedMiddleLayerDetail}" />
+
+                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                       Margin="0,4,0,0"
+                                       TextWrapping="Wrap"
+                                       Text="{x:Static models:StatusText.NestedVolumeAssemblyDetail}" />
+                        </StackPanel>
+                    </Expander>
                 </StackPanel>
             </GroupBox>
 

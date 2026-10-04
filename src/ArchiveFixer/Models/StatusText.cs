@@ -1150,8 +1150,12 @@ namespace ArchiveFixer.Models
         // 出厂默认 = 「展开所有分支」（见 AppSettings.RecursionMode 的说明），所以第二段先给默认那档。
         // ⛔ 用户可见串里不许写 Markdown（强调用「」），下面这几条由 UserFacingTextTests 全量扫。
 
-        /// <summary>②页三档说明的小标题。</summary>
-        public const string RecursionModeHintLabel = "这三档各自怎么走：";
+        /// <summary>
+        /// ②页三档说明的那个**折叠区标题**（用户 2026-10-04 第二次改口径：「这个嵌套与覆盖你的文字这么多，
+        /// 你就不会放到说明里面或者是在旁边弄一个小弹窗点击一下就会出来详细解释」⇒ 他当场选「就地折叠」）。
+        /// ⛔ 三档的说明一个字没改，改的只是**默认收起来、点一下才展开**。
+        /// </summary>
+        public const string RecursionModeHintLabel = "详细说明：这三档各自怎么走（点一下展开）";
 
         /// <summary>「展开所有分支」（出厂默认）那一档的说明。</summary>
         public const string RecursionModeAllBranchesHint =
@@ -1219,6 +1223,43 @@ namespace ArchiveFixer.Models
         public const string ContentKeepKeywordsActiveSummaryFormat =
             "当前生效 {0} 个关键词：内容物里凡是「名字包含」其中任意一个的文件（压缩包也是、普通文件也是），"
             + "程序都不解开、不改名、不搬进其余物、也不删 —— 也就是「碰都不碰」。";
+
+        // ================================================================
+        // ②页「嵌套与覆盖」里剩下的那些长说明（用户 2026-10-04：整组一起收进折叠区）
+        // ================================================================
+        //
+        // 原话：「这个嵌套与覆盖你的文字这么多，你就不会放到说明里面或者是在旁边弄一个小弹窗
+        // 点击一下就会出来详细解释」⇒ 他当场选「就地折叠」（①页「手动操作」同一种手法）。
+        // ⛔ 一个字都没删、没改口径：长说明从"摊在页面上"改成"点一下才展开"，
+        // 控件旁边留一句短的（ToolTip 也只留短的），详细的那份在本组最下面那个折叠区里。
+
+        /// <summary>「嵌套与覆盖」最下面那个折叠区的标题（里面装覆盖策略 / 中间层 / 分卷拼装三件事）。</summary>
+        public const string NestedExtrasDetailHeader = "详细说明：覆盖策略 / 中间层 / 分卷拼装（点一下展开）";
+
+        /// <summary>覆盖策略那段（原来摊在「解压覆盖策略」下面）。</summary>
+        public const string NestedOverwriteDetail =
+            "覆盖策略：RAR 包默认走 UnRAR，而它没有「自动重命名已存在文件」这一档 —— 那里的实际行为是"
+            + "「跳过已存在文件」。要覆盖就选「覆盖全部」。";
+
+        /// <summary>「续解时省略中间层」那格的完整说明（原来整段挂在 ToolTip 上）。</summary>
+        public const string NestedMiddleLayerDetail =
+            "续解时省略中间层：默认不勾 = 忠实档（111\\222\\333\\444\\555\\666\\内容物）；"
+            + "勾上 = 简洁档（111\\222\\666\\内容物）。只在单链续解时生效，第一层与最后一层永远保留。";
+
+        /// <summary>「容器里装的是分卷第 1 卷」那格的完整说明（原来整段挂在 ToolTip 上）。</summary>
+        public const string NestedVolumeAssemblyDetail =
+            "容器里装的是分卷第 1 卷：有些包的形状是——一个文件（例如 封面.jpg）里装着的正是 set.7z.001，"
+            + "而 set.7z.002/.003 就在同一个文件夹里。默认关：程序只把话说清（首卷在容器里、外面缺的是后续卷）"
+            + "并给改名建议，不会动。打开：程序在工作区里接出一套名字成套的卷再解压 —— 同一块盘只接名字"
+            + "（硬链接，不复制字节、不改你的文件），跨盘才复制且先查空间；同族两组以上缺首卷或认不准时一律不做。";
+
+        /// <summary>「续解时省略中间层」那格**留着的那句短提示**（长的在折叠区里）。</summary>
+        public const string NestedMiddleLayerShortHint =
+            "只留第一层与最后一层；详细说明见本组最下面那个折叠区。";
+
+        /// <summary>「容器里装的是分卷第 1 卷」那格**留着的那句短提示**（长的在折叠区里）。</summary>
+        public const string NestedVolumeAssemblyShortHint =
+            "默认关，只提示不动手；打开后在工作区里按名字接出后续卷再解压。详细说明见本组最下面的折叠区。";
 
         // ================================================================
         // 递归停因：未展开的内层包（用户 2026-10-04 真机 + 当天推翻旧口径）
@@ -1490,6 +1531,13 @@ namespace ArchiveFixer.Models
         //
         // 与 §9.7「解压前的提醒」仍是**同一个判据**（SourceJunkScanner）；程序对无用物依旧
         // **一个都不动**（不删/不改名/不搬），"移出列表"动的只是任务列表。
+        //
+        // ⚠ 2026-10-04 用户真机：「要删除的是第二个你已经停止显示的，就是底层自动会做的」
+        // ⇒ ③页那一格（`SettingsRemindJunkAfterImportLabel/Hint`）**连同两条文案一起删掉**：
+        // 一个"写着已停用、改了什么都不影响"的开关对用户只是噪声。
+        // ⛔ `AppSettings.RemindJunkAfterImport` 属性**留着**（不动设置序列化：用户盘上那份
+        // appsettings.json 里这个键照旧读得进来，只是安静忽略）；⛔ 那句"已把 N 个无用物移出列表"
+        // 的**日志保留**（用户：「提示还是要有的」）。
 
         /// <summary>
         /// 导入完成时**自动**把无用物从任务列表里移出（用户 2026-09-28）。
@@ -1510,22 +1558,6 @@ namespace ArchiveFixer.Models
 
         /// <summary>一个都没勾时点「移除勾选的」。</summary>
         public const string RemoveCheckedTasksNoneText = "没有勾选任何任务，没有可移除的。";
-
-        /// <summary>
-        /// ③「清理与删除」页那个开关的文案。
-        ///
-        /// <para>⚠ <b>2026-09-28：它已经不再控制任何行为</b> —— 那个「导入后提醒」弹窗退休了，
-        /// 无用物改成**导入一完成就自动移出列表**（<c>ScanCoordinator.AddPathsAsync</c>），
-        /// 与这个开关的开关状态无关。设置项本身先留着（⛔ 不动设置序列化，用户盘上的
-        /// <c>appsettings.json</c> 里这个键还得读得进来），界面上这一格也留着，
-        /// 但文案如实说明它现在不生效 —— 一个写着"关了就不提醒"却什么都不管的开关，对用户就是一句谎。</para>
-        /// </summary>
-        public const string SettingsRemindJunkAfterImportLabel = "导入文件夹后提醒一次「疑似无用物」（已停用）";
-
-        /// <summary>它的说明（如实写明：2026-09-28 起这个开关不再控制导入时的行为）。</summary>
-        public const string SettingsRemindJunkAfterImportHint =
-            "已停用：无用物现在是「导入一完成就自动从任务列表里移出」（只动列表，源文件一个字节都不动），"
-            + "跟这个开关无关。这一格先留着（设置文件不动），改它现在什么都不影响。";
 
         /// <summary>③ 页「工作区残留」那一组的标题。</summary>
         public const string WorkspaceLeftoverGroupHeader = "工作区残留（失败 / 取消留下的中间产物）";
@@ -1953,13 +1985,20 @@ namespace ArchiveFixer.Models
         /// 但一直只能在弹窗里勾"本次运行不再提示"（只记内存）。用户第 15 条要求它可关，
         /// 于是补上这个设置项 —— 关掉就是**不再扫、不再弹**。
         /// </para>
+        ///
+        /// <para>⚠ 2026-10-04 用户真机：「你这个提醒里面第一个是什么意思，我现在打勾，是开还是关，
+        /// 我自己都看不懂」⇒ 标签里**明写勾选的方向**（勾上 = 开启提醒），⛔ 不许再只写一个名词短语
+        /// 让用户自己猜 —— 复选框既能表示"开启某功能"也能表示"以后不再提醒"，光看标签猜不出来。</para>
         /// </summary>
-        public const string SettingsRemindBeforeExtractLabel = "解压前提醒可能的无用物与没有可用密码的包";
+        public const string SettingsRemindBeforeExtractLabel =
+            "解压前提醒可能的无用物与没有可用密码的包（勾上 = 开启提醒）";
 
-        /// <summary>开关下面那一行说明（说清"关掉之后会少了什么"）。</summary>
+        /// <summary>开关下面那一行说明（**第一句就说清这个勾是开还是关**，再说什么被提醒）。</summary>
         public const string SettingsRemindBeforeExtractHint =
-            "开：每次解压前先扫一遍源目录，把「看起来像打包者附带的说明 / 网址 / 工具」的文件与「一个可用密码都没有」的包列出来，"
-            + "让你先看一眼再决定（这两个提醒都不影响解压本身）。关：这一遍扫描与弹窗都不做，直接开始。";
+            "这个勾就是开关：勾上 = 每次解压前先提醒一次；取消 = 不提醒（连那一遍扫描都不做）。"
+            + "提醒的内容：源目录里「看起来像打包者附带的说明 / 网址 / 工具」的文件，"
+            + "以及「一个可用密码都没有」的包 —— 只是列出来让你先看一眼再决定，"
+            + "这两类提醒都不影响解压本身，程序也不会去动那些文件。默认勾上。";
 
         /// <summary>关掉提醒时写一条日志：事后能判断"这次为什么没弹提醒"。</summary>
         public const string RemindBeforeExtractDisabledLog =

@@ -212,8 +212,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2666 条（2663 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 旧基线 2659 / 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"「内容物保留关键词」从⑥设置搬到②页那一轮之前 / 分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前 / …"的数（关键词那一栏搬家 +7；逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
+- `dotnet test` 全量（主 checkout 内）：**2671 条（2668 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 旧基线 2666 / 2659 / 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"②页长说明收进折叠区 + ③页删掉「已停用」那格那一轮之前 / 「内容物保留关键词」从⑥设置搬到②页那一轮之前 / 分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前 / …"的数（折叠区那轮 +5；关键词那一栏搬家 +7；逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
@@ -359,7 +359,11 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - 密码记忆读不出来（换机器/重装系统/文件损坏）⇒ 先复制一份 `password-list.dat.unreadable-<时间戳>.bak`（`PasswordListStore.TryBackupUnreadableFile`；⛔ 只复制，绝不移动/删除原件），文案如实点名备份名。
   - ⛔ 批末合并提示的**登记判据含三档**：`密码错误` / `密码错误或文件损坏`（`PasswordOrCorrupted`，RAR 两义句）/ `达到密码尝试上限`。漏掉两义档 ⇒ 真机那批 RAR `-p` 包**一条指路都不出现**。`RecordPasswordFailure` 与 `ShowPasswordFailuresSummaryAsync` 的分档必须**同时**改（§9.5）；文案里"可能""不等于确认是密码问题"一个字不许省（⛔ 也不许算成"达到尝试上限"）。
   - ⛔ **撞上「每层密码尝试上限」时批末必须补一句指路**（用户 2026-10-02 原话："如果没有试出来可以提醒用户可能是没有密码，或者密码位置在 10 条之后，让用户调整顺序"）：唯一出口 `StatusText.PasswordAttemptLimitHintFormat`（`{0}` = 上限），只在 `attemptLimitCount > 0` 时补一行 —— "可能本来就没有密码 / 也可能对的密码排在候选更靠后 ⇒ 去④页调顺序或调大上限"。⛔ 上限**保持默认 10**（他："10 条刚好"，④页可改 1–1000）；⛔ 不新增状态（终态仍是 `达到密码尝试上限`）；⛔ 既有"候选还没试完就按上限停了，不等于密码错误"那两句原话一个字不改。
+- ⛔ **②页「嵌套与覆盖」的长说明一律收进折叠区**（用户 2026-10-04 当天第三次改口径：「这个嵌套与覆盖你的文字这么多，你就不会放到说明里面或者是在旁边弄一个小弹窗点击一下就会出来详细解释」⇒ 他当场选**就地折叠**，①页「手动操作」同一种手法）：递归三档那三段在一个 `Expander` 里（标题 = `StatusText.RecursionModeHintLabel`），覆盖策略 / 中间层 / 分卷拼装三件事在本组最下面那个 `Expander` 里（标题 = `StatusText.NestedExtrasDetailHeader`）；⛔ **默认收起**（本页不许出现 `IsExpanded="True"`），控件旁边只留短句（那两格的长 ToolTip 已换成 `NestedMiddleLayerShortHint` / `NestedVolumeAssemblyShortHint`）。⛔ **文字一个字没删**（折叠只改"默认看不看得见"）。用例 `NestedGroupCollapseTests`(3)（红检：把三档说明挪回页面 ⇒ 界面落点那条红）。
 - 导入时的无用物弹窗已退休（导入即自动移出列表）：只剩手动「只解压」会弹，一键档并进唯一那个确认框
+- ⛔ **③页「提醒」那一组只剩一格**（2026-10-04 用户原话：「你这个提醒里面第一个是什么意思，我现在打勾，是开还是关，我自己都看不懂，要删除的是第二个你已经停止显示的，就是底层自动会做的」）：
+  - **第一格**（`RemindBeforeExtract`，仍是活的）= 解压前那一次提醒；标签与说明**第一句就写清勾选方向**（「勾上 = 每次解压前先提醒一次 / 取消 = 不提醒」）；⛔ 不许再写"开：…关：…"那种对不上勾选框的措辞。
+  - **第二格**（`RemindJunkAfterImport`）**整格撤掉**（连同 `SettingsRemindJunkAfterImportLabel/Hint` 两条文案与写盘入口 `MainViewModel.SaveRemindJunkAfterImport`）：那是"导入一完成就自动移出列表"这种底层自动做的事，界面上摆一个改了没影响的开关只是噪声；⛔ **属性留着**（不动设置序列化，旧键安静忽略）；⛔ 那两句"已把 N 个无用物移出列表"的**日志照旧保留**（用户：「提示还是要有的」，而且「不是让你换掉无用物」）。用例 `ReminderGroupTests`(2)。
 
 ### 11.6 工作区/检验等级/终态口径
 

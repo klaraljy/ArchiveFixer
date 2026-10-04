@@ -258,8 +258,12 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 弹窗里勾了「以后不再询问」之后，②页那个同义开关必须跟着刷新（值写对了、界面显示旧值 = 用户读成"没生效"）。
-        /// ③页的「导入后提醒」同理。判据是**通知**（SettingsViewModel 里那张清单），不是值。
+        /// 弹窗里勾了「以后不再询问」之后，②页那个同义开关必须跟着刷新
+        /// （值写对了、界面显示旧值 = 用户读成"没生效"）。判据是**通知**（SettingsViewModel 里那张清单），不是值。
+        ///
+        /// <para>⚠ 2026-10-04：原来这里还有半条「③页的导入后提醒同理」，随那一格一起删掉了 ——
+        /// 那格已按用户口径从界面上撤掉（那是底层自动做的事），写盘入口
+        /// <c>MainViewModel.SaveRemindJunkAfterImport</c> 也一并删除，设置属性本身留着（旧键安静忽略）。</para>
         /// </summary>
         [Fact]
         public void 弹窗里勾了以后不再询问_解压方式页那个开关要跟着刷新()
@@ -270,11 +274,6 @@ namespace ArchiveFixer.Tests
             harness.Vm.SettingsEditor.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? string.Empty);
 
             harness.Vm.SaveSkipOneClickConfirm(true);
-
-            Assert.Contains(nameof(harness.Vm.SettingsEditor.Settings), raised);
-
-            raised.Clear();
-            harness.Vm.SaveRemindJunkAfterImport(false);
 
             Assert.Contains(nameof(harness.Vm.SettingsEditor.Settings), raised);
         }

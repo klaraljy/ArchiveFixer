@@ -62,6 +62,9 @@ namespace ArchiveFixer.Tests
             Assert.Contains("出厂默认", xaml, StringComparison.Ordinal);
 
             // ③ 「在选择旁边详细说明情况」：三档的说明都真的渲染出来（文案出自 StatusText，⛔ 不手写中文）。
+            //    ⚠ 2026-10-04 当天用户又提「这个嵌套与覆盖你的文字这么多」⇒ 这三段现在装在一个
+            //    **默认收起**的折叠区里（挂在②页上这件事没变；"默认收起 / 页面上只剩一行标题"由
+            //    `NestedGroupCollapseTests` 钉住）。
             Assert.Contains("StatusText.RecursionModeHintLabel", xaml, StringComparison.Ordinal);
             Assert.Contains("StatusText.RecursionModeAllBranchesHint", xaml, StringComparison.Ordinal);
             Assert.Contains("StatusText.RecursionModeSingleChainHint", xaml, StringComparison.Ordinal);

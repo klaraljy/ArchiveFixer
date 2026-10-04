@@ -3505,36 +3505,6 @@ namespace ArchiveFixer.ViewModels
             SettingsEditor?.NotifyProcessingOptionsChanged();
         }
 
-        /// <summary>
-        /// 写"导入之后不再弹无用物提醒"这个设置项（用户 2026-09-24 第 15 条：
-        /// "用户可以选中关闭以后就不用触发了"）。
-        ///
-        /// <para>⚠ <b>2026-09-28：这个开关已经不再控制任何行为</b> —— 那个提醒框退休了，
-        /// 无用物改成**导入一完成就自动移出任务列表**（<c>ScanCoordinator.AddPathsAsync</c>），
-        /// 与开关状态无关。设置项与这个写入入口先留着（⛔ 不动设置序列化：用户盘上的
-        /// <c>appsettings.json</c> 里这个键还得读写得动）。</para>
-        ///
-        /// <para>写失败只写 WARN：导入本身已经成功，不该因为记不住一个偏好就变成失败。</para>
-        /// </summary>
-        internal void SaveRemindJunkAfterImport(bool remind)
-        {
-            if (Settings == null || Settings.RemindJunkAfterImport == remind)
-            {
-                return;
-            }
-
-            Settings.RemindJunkAfterImport = remind;
-
-            if (!WriteSettingsToDisk("「无用物提醒」开关"))
-            {
-                return;
-            }
-
-            // ③页那个同义开关同理（同步审计逮到：勾了"以后不再提醒"，那一格还显示着还会提醒）。
-            OnPropertyChanged(nameof(Settings));
-            SettingsEditor?.NotifyProcessingOptionsChanged();
-        }
-
         internal void RefreshOutputPaths()
         {
             var options = new ExtractOptions
