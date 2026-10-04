@@ -208,8 +208,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2428 条（2425 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 旧基线 2419 / 2415 / 2411 / 2393 条分别是"修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（本轮 +9 = `PartNumberedVolumeJunkTailTests` 那一组）。⛔ 数字只在这里写一次。
+- `dotnet test` 全量（主 checkout 内）：**2448 条（2445 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 旧基线 2428 / 2419 / 2415 / 2411 / 2393 条分别是"逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（本轮 +20 = `NamelessMiddleVolumeContentPathTests` 2 + `ChainLayerReclaimTests` 11 + `RestEmptyShellPurgeTests` 5 + `SpaceNetIncrementTests` 2）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
@@ -225,7 +225,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 ### 11.3 空间：判据/模式/批末汇总
 
 - ⛔ 源包不许算两遍：唯一出口 `TaskSpaceEstimate.FreeSpaceDemandBytes`=`ContentBytes+ProcessArtifactBytes`（`ScheduledExtractionItem.RequiredBytes` 与 `ExtractionCoordinator.ReconcileReservation` 都只读它）；`PeakBytes`（含源包）只作描述，⛔ 不许拿它比可用空间〔源包不许算两遍（2026-09-29）〕
-- 「空间不足」模式（`MainViewModel.SpaceTightMode`）一个布尔管四件事：并发（`ExtractionScheduler.ResolveSpaceTightParallelCount` 与「最大并发解压数」取小）、排序、其余物强制 `Delete`、定稿+校验通过后当场永久删源包（`PurgeSourcePackageForSpaceTight`=`SourceCleanupService` 唯一调用点）〔空间不足模式〕
+- 「空间不足」模式（`MainViewModel.SpaceTightMode`）一个布尔管四件事：并发（`ExtractionScheduler.ResolveSpaceTightParallelCount` 与「最大并发解压数」取小）、排序、其余物强制 `Delete`、定稿+校验通过后当场永久删源包（`PurgeLayerSourcePackage(..., LayerPurgeTrigger.SpaceTight)` → `SourceCleanupService`；⚠ 它现在有**两个触发点**，另一个是 `LayerPurgeTrigger.LayerReclaim`＝普通档逐层回收，见 §11.3 末两条）〔空间不足模式〕
 - 「不删原包」安全档（`MainViewModel.SpaceTightKeepSource`）测试期专用：⛔ 发行那轮整块删掉；`SpaceTrendMonitor` 保留〔安全档「不删原包」〕
 - ⛔ **「启动前空间不够」不是终态，只是"现在排不上"**（现场与数字见 `docs/真机事故复盘.md` §45.1）：并发高时"已在跑的预留"会把整块盘许光 ⇒ 后面小包也被判「还差…」；⇒ 拒下的任务进"等空间"名单（**不记失败、不改状态**，只写一行 INFO），**每跑完一个就重试一遍**，没人跑了才走 `MarkSpaceBlocked` 如实报。⛔ 两条铁律：**补跑环必须与"等所有任务结束"写在同一个环里**、**每跑完一个当场 `RefreshAvailable` 重探一次**。放行判据仍然只有 `TryReserve` 一个。用例 `SpaceTightModeTests.启动前空间不够_先排队不记失败_等腾出空间后自动补跑`（红检：改回 `MarkSpaceBlocked + continue` ⇒ 变红）。
 - ⛔ **多层递归：每一层开头都要把进度基准拉回来**（同 §45.2）：进度条记的是"引擎最后一次报的百分比"，第 0 层结束时是 100%，第 1 层从头开始却没有任何一帧拉回基准 ⇒ 那一层跑多久界面就停在 100% 多久。⇒ `RecursiveExtractor.ExtractLayerAsync` 每层开头合成一帧 `Percent=0`、当前条目写「第 N 层：<内层包名>」。⛔ 只补这一帧，引擎报的数一个都不改。
@@ -243,6 +243,11 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⛔ **「一批任务怎么数」也只有一个出口**（见 §49.6）：`Models/BatchOutcomeTally`（`Count` / `BuildParts` / `DescribeFollowerNote` / `IsCountedAsSuccess` / `IsCountedAsFailure`）—— 批末「本批汇总」、一键汇总行、**日志导出头部**三处转调，⛔ 不许再自己 `Count(task => …)`；判据只有 `Outcome` + `OutputVerification` + 事实位 `CountsTowardBatchOutcome`；「未处理」= 总数 − 各分项（恒等式永远成立）；「终态说成功、校验却判否」落**失败**侧（失败逐条清单读同一个判据）；分项顺序三处统一。⚠ ①页顶部那排统计（`Summary.SkippedCount`，标签「已跳过」）**照旧含跟班卷** —— 那是"行状态人口普查"，与"有没有活没干"不是一回事，⛔ 别顺手改。
 - ⛔ **空间曲线要在"其余物处理完之后"补一针**（见 §49.1）：批末曲线的"收"由 `StartExtractAsync` 收尾写，而**其余物删除在更晚**的 `OneClickCoordinator` 链尾 ⇒ 真机「收 26.3 GiB」之后又删掉约 6 GB。唯一出口 `ExtractionCoordinator.RecordSpaceTrendPostscript(note)`（**取走即清 = 一批一针**）+ `SpaceTrendMonitor.DescribePostscript` + `StatusText.SpaceCurvePostscriptFormat`；⛔ **不许新开第二套取数或第二套文案**；没有侦察器 / 取不到 ⇒ 什么都不写。用例 `RealMachine20261002FixesTests.一键处理_其余物处理完之后补记一针真实可用空间`。
 - ⛔ **空间门放行那一行的"可用"是账面值**（见 §49.2）：账本只在**有任务等空间**时才重探（`:9861`），平时是批首那一针（`:9623`）。唯一出口 `SpaceGate.Check(..., availableIsBookValue)`：账本路传 true ⇒ `StatusText.SpaceGatePassedBookValueFormat`（「……账面可用 X（……不是此刻的真实可用 —— 实时可用看日志里的「空间变化」行）……」）；打包路（刚探到）照旧 `SpaceGatePassedFormat`。⛔ 这个开关**只管措辞**。
+
+- ⛔ **空间需求按"净增量"算**（用户 2026-10-03 拍板）：唯一出口仍是 `TaskSpaceEstimate.FreeSpaceDemandBytes`，但 `NestedExpansionAllowance` **1.0 → 0.0**（内层包本体已算在内容物里，再按整份扣一遍＝重复计）⇒ 真三层链实测「放行需求 4,195,346 → 2,097,673（−50%）」；⛔ **需求 ≥ 内容物**永远成立；⛔ 「空间不足」模式口径一个字不改。用例 `SpaceNetIncrementTests`(2)（红检：改回 1.0 ⇒ D 红）。
+- ⛔ **逐层回收其余物（普通档，用户 2026-10-03 拍板；A/B/② 三条见方案书 §7）**：续解链**每一层**「定稿 + 输出校验通过 + 未取消 + 可证完整」之后**当场**按「删除操作」处理这一层的过程物；**最外层源包只留到链尾**。**只在「彻底删除」档生效**（批内唯一事实位 `_layerReclaimThisBatch`，写入点唯一 `PrepareRestHandlingForBatch`）；**「移入回收站」档照旧链尾一次**（回收站不释放盘上空间，逐层做零收益只多造条目）；「空间不足」模式照旧每层各删各的（含源包当场删）。用例 `ChainLayerReclaimTests`(11)。⚠ **已知上界**：扫描根 = 每个候选上溯 ≤3 层 + 以目标根为界 ⇒ 候选比成品根深 ≥3 层时仍可能漏扫同级另一分支。
+- ⛔ **其余物的空壳不进回收站**（用户 2026-10-03 真机：回收站里堆了很多 1 KB 的同名「其余物」文件夹）：递归地一个文件都没有 ⇒ **就地永久删掉空目录**（判据唯一出口 `RestItemPurger.IsFileFreeDirectoryTree`，`Purge`/`PurgeExcept` 两处转调，排在六道门槛之后）；那一行文案按**事实位** `RestPurgeOutcome.RemovedAsEmptyShell` 选（唯一出口 `ExtractionCoordinator.DescribeRestPurgedLine`，⛔ 不许按「0 项 0 B」猜）。用例 `RestEmptyShellPurgeTests`(5)。
+- ⚠ **「不动其余物」档随层清中间件 = 实测为空操作**：跑完一层后 `.ArchiveFixer.work` 整棵已不在、全程只有工作区里 `stage\<产物>` 一种形状 ⇒ 没有残渣可清（⛔ 没硬加删除点）；用例里那条只读实测钉住现状。
 
 ### 11.4 分卷/格式识别
 
@@ -268,7 +273,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - 索引定盘 `Detection/SpannedZipIndex.cs`（⛔ 不看名字、不用引擎、不用密码）；试拼定序上限 **3 片**、再多如实报"定不下来"；统一算法是**保底**（索引路不适用 ⇒ 返回 `null` 原样往下走；判不出来只出结论、**一个字节不动**）。
   - ⛔ **两道"ZIP64 收尾"的旧闸门已拆**（见 §44.2）：**跨盘 zip 超 4 GiB 必然在"中央目录"与"EOCD"之间插 76 字节 ZIP64 收尾**（记录 56 + 定位器 20），老两处都不认它 ⇒ 整个跨盘组被当过程物、最终**整份永久删除**（后果链与只读复核数字见 §48.1）。
   - ✅ **"其余物里的分卷是半套"这道保险已加**：判据唯一出口 `Extraction/RestVolumeCompletenessGate.DescribeBlocker`（公开纯函数，其余物顶层每个归档件算一个包基名，成品目录树里还有同基名的归档件 ⇒ 什么都不做 + 一行 WARN 点名两边；⛔ 普通内容文件与同名**目录**都不算伙伴）。
-    - ⛔ 放在 `Storage/RestItemPurger.Purge` 里（**第六道门槛**），**不是**放在调用点：其余物的删除只有这一个执行体，三处调用都要过它。用例 `RestVolumeCompletenessGateTests`(6) + 接线用例 `DeleteOptionsClarityTests.其余物里是半套分卷_整份删除被拦下`（红检见 §50.1）。
+    - ⛔ **这道闸门现在也管"逐层回收"那条路**（2026-10-03）：判据本体抽成公开纯函数 `RestVolumeCompletenessGate.DescribeBlockerForCandidates(候选清单, 成品根, requireRecognizedCandidates)`，「其余物」那一档转调它（文案逐字不变），逐层那一档走 `DescribeLayerReclaimBlocker`（候选清单 = 真删清单，同调 `SourceCleanupService.BuildTargetList`；**认不出就拦**）。⛔ 两条兜底都必须落在"拦下"：**某棵树读不动 ⇒ 拦下**（`TryEnumerateFilesSafe`，⛔ 不许再 `catch ⇒ 空`）、**一棵能扫的树都取不到 ⇒ 拦下**；⛔ 扫到 `.ArchiveFixer.work` 里的文件一律跳过（改名前的暂存副本会被误判成"成品里的另一片"）；⛔ 扫描上界 = 这一批的目标根（爬进用户的源目录会误拦合法回收）。用例 `ChainLayerReclaimTests` 的 G/H/I（各自红检成立）。
+    - ⚠ **仍未过闸门的邻路**（只读确认、未改）：递归"就地替换" `Extraction/ExtractionWorkspace.cs:571-576` 无条件删掉被消费的那一份、`:598-647` 再删**同目录**同族同基名的兄弟卷 ⇒ 同组另一片在别的目录（或名字认不出）时留下半套；它只受"这一层真的解开了"与定稿侧整组完整性保护。
 - ⛔ **本地化界面的 UnRAR 列出的清单认不出来时，绝不许当成"这个包是空的"**（唯一允许搬走/永久删除源包的判据；见 §48.4）。判据 = `UnRarListParser.ParsedListing.HeaderRecognized`（**见没见过 `Archive:` 这一行**；⛔ 不许用"认出了任意一个键"）；认不出 ⇒ `UnRarEngine.InterpretListing` 返 `ParserRejected` ⇒ `EngineRouter` 改问 7-Zip，**解压仍优先 UnRAR**。兜底两道：`LayerManifest.From` 与 `OutputVerifier.Verify` 把"成功但 0 个文件 0 字节"按**没有清单**办（`ManifestCrossChecked=false` ⇒ 判不出 ⇒ 什么都不做）〔本地化 UnRAR 的假清单〕
 - ⛔ **「密码已经证实」之后失败 = 数据层面，不许再试密码候选**（现场见 §48.4）：老口径把 `CRC Failed in encrypted file` 当成"这个候选不对" ⇒ **解压完又回去试剩下的候选**、已解出的产物全扔、报「密码错误」。
   - 判据唯一出口 `Extraction/ProducedContentGate`（**只数事实**：产物目录里**非空文件数 ≥ 2 且字节 > 0**）—— 「密码错」的签名是第一份数据就过不去（0 字节桩 / 至多一个文件），「密码对、个别文件坏」的签名是整个包基本都解出来了。
