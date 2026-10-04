@@ -279,16 +279,25 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **只有 1 个**内层归档、可它旁边还有个别的东西（非说明类文件）⇒ 同样停在这一档，
-        /// 而措辞**不许**说"多个 / 多分支"：真实原因是"它旁边还有别的文件，程序不替你决定"。
+        /// **只有 1 个**内层归档、可它旁边还有个别的东西（非说明类文件）⇒ **照旧往下解**
+        /// （不再停在这一档）。
         ///
-        /// <para>真机 `第6集.7z` 就是这个形状（日志自相矛盾地写着"多个…；该层还有 **1 个**内层包未展开"）。</para>
+        /// <para><b>⚠ 2026-10-04 改结论（用户当场推翻旧口径）</b>：老用例断言的是"停在 <c>BranchNotExpanded</c>、
+        /// 理由 = 它旁边还有别的文件" —— 用户原话（真机 `第6集.7z`）：「那层内层包只有 1 个，
+        /// 但旁边还有不属于"说明类"的文件 ⇒ 被算成"多分支" —— **这是压缩包吗，不是那你停什么**」。
+        /// 现在单链档的判据只看**内层归档的数量**：1 个一律继续解，所以这个夹具会一路解到**层数上限**
+        /// 才停（每一层都还是 1 个内层包 + 一个 `.mp4`）。</para>
         ///
-        /// <para><b>红检</b>：把 <c>DescribeStopReason(BranchNotExpanded)</c> 改回写死的"多个"
-        /// ⇒ 本用例当场红（`Assert.DoesNotContain() Failure: 多个`）。</para>
+        /// <para><b>新判据</b>：① 停因是「到层数上限」，不是「多分支不展开」；
+        /// ② 结论里⛔ 不许出现"多分支"或"它旁边还有别的文件"那套旧说法；
+        /// ③ 到上限时照旧点名没展开的是哪一个。</para>
+        ///
+        /// <para><b>红检</b>：把判据改回"同层除该包以外全是说明类文件"
+        /// （`toProcess.Count == 1 &amp;&amp; HasOnlyInformationalSiblings(…)`）⇒ 本用例当场红
+        /// （`Assert.Equal() Failure: Expected MaxDepthReached / Actual BranchNotExpanded`）。</para>
         /// </summary>
         [Fact]
-        public async Task 更深的层只1个内层归档但旁边有别的文件_不许说多个()
+        public async Task 更深的层只1个内层归档_旁边有别的文件也照旧往下解_到上限才停()
         {
             string archivePath = Path.Combine(_root, "single-branch.7z");
             File.WriteAllBytes(archivePath, new byte[256]);
@@ -299,17 +308,15 @@ namespace ArchiveFixer.Tests
                 new SingleInnerWithSiblingEngine(),
                 Path.Combine(_root, "out_branch_single"));
 
-            Assert.Equal(RecursionStopReason.BranchNotExpanded, result.StopReason);
-            Assert.Single(result.UnexpandedNames);
+            // ① 一路往下解，直到层数上限（不再因为"旁边有别的文件"停下）。
+            Assert.Equal(RecursionStopReason.MaxDepthReached, result.StopReason);
+            Assert.True(result.Layers.Count > 1, $"至少要真的解开一层，实际 {result.Layers.Count} 层：{result.Summary}");
 
-            // 数量如实：1 个。
-            Assert.Contains("还有 1 个内层归档未展开", result.Summary, StringComparison.Ordinal);
+            // ② ⛔ 旧判据那套说法一个字都不许再出现。
+            Assert.DoesNotContain("多分支", result.Summary, StringComparison.Ordinal);
+            Assert.DoesNotContain("它旁边还有别的文件", result.Summary, StringComparison.Ordinal);
 
-            // ⛔ 不许说"多个 / 多分支"（这一层只有一个内层包）。
-            Assert.DoesNotContain("个内层归档未展开（多分支", result.Summary, StringComparison.Ordinal);
-
-            // 真实理由必须说出来，而且点名是哪一个。
-            Assert.Contains("它旁边还有别的文件", result.Summary, StringComparison.Ordinal);
+            // ③ 到上限照样点名（用户要能拿名字去目录里对上号）。
             Assert.Contains("a.7z", result.Summary, StringComparison.Ordinal);
         }
 

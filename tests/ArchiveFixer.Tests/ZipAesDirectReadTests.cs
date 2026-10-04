@@ -537,6 +537,14 @@ namespace ArchiveFixer.Tests
             settings.KeepArchiveNameFolder = true;
             settings.PasswordBookPath = bookPath;
             settings.CustomSevenZipExePath = string.Empty;
+
+            /*
+             * ⚠ 2026-10-04（出厂默认档改成「展开所有分支」）：**ZIP 直读只在「只解当前这一层」这一档生效**
+             * （递归模式第 0 层必须交给 7-Zip 逐层展开）。本类测的正是"直读那条快路"，
+             * 所以夹具显式钉住那一档 —— 否则整类用例会悄悄改成在测递归内核（本组的中文密码
+             * 真 7-Zip 解不开，会红成"达到密码尝试上限"，与要验的东西无关）。
+             */
+            settings.RecursionMode = "SingleLayer";
             settingsService.Save(settings);
 
             var engine = new SevenZipEngine();

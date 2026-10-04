@@ -2689,17 +2689,18 @@ namespace ArchiveFixer.ViewModels
                 var leftBehind = new List<string>();
 
                 /*
-                 * ⛔ 判据与搬运那一边**同一套**（`PlanChainInnerPackageMoves`）：根任务成功且校验通过时，
-                 * 链上的内层包**都会被收进其余物** —— 在这里再点名它们就是自相矛盾的假警报。
+                 * ⛔ 判据与搬运那一边**同一套**（`PlanChainInnerPackageMoves`）：只有"自己这一单成功且校验通过"
+                 * 的内层包才会被收进其余物 —— 在这里再点名它们就是自相矛盾的假警报。
+                 *
+                 * ⚠ 2026-10-04 起"根任务成功 ⇒ 链上内层包都会被收走"这半句**不再成立**：
+                 * 未解开过的内层包一条都不搬（用户当场推翻旧口径，见 PlanChainInnerPackageMoves）。
+                 * 两边必须同时改（§9.5：同一件事只能有一个判据），否则又会出现
+                 * "警告说还留着、下一行就搬走删掉"那种自相矛盾。
                  *
                  * 真机 2026-10-01：这一行写着「成品目录里还留着 2 个内层包没被清理（它们的内容还没解出来，
                  * 清掉就等于删内容）」，紧接着两行就把那两个搬进其余物并彻底删掉了 ——
                  * 用户读到的是"程序自己跟自己打架"，而真正没被清掉的那两个（撞名搬失败的）它反倒没说是为什么。
                  */
-                bool rootSucceeded =
-                    rootTask.Outcome == TaskOutcome.Succeeded &&
-                    rootTask.OutputVerification == OutputVerificationOutcome.Passed;
-
                 foreach (ArchiveTask? candidate in chainTasks)
                 {
                     if (candidate == null ||
@@ -2713,8 +2714,8 @@ namespace ArchiveFixer.ViewModels
                         candidate.Outcome == TaskOutcome.Succeeded &&
                         candidate.OutputVerification == OutputVerificationOutcome.Passed;
 
-                    // 会被收走的（它自己成功，或者根任务成功 ⇒ 搬运那一边会收它）：不进"还留着"的名单。
-                    if (candidateSucceeded || rootSucceeded)
+                    // 会被收走的（**只有它自己成功那一种**）：不进"还留着"的名单。
+                    if (candidateSucceeded)
                     {
                         continue;
                     }
@@ -2900,20 +2901,24 @@ namespace ArchiveFixer.ViewModels
             var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             /*
-             * ⛔ 谁的"过程物"要收：**成功的**续解任务 + **这一轮根本没跑成的**内层包（用户 2026-09-28 拍板）。
+             * ⛔ 谁的"过程物"要收：**只有真的被解开过的**续解任务（内容已经落盘）。
              *
-             * 用户原话：「自动清掉，这个算没有成功的过程物，而且原包还在就不用怕，如果原包放在了
-             * 其余物里面一起删除，成功了就刚好是我们要达到的地方，**失败了也不会删除**」——
-             * 也就是：内层包本来就是"外层包解出来的过程物"，只要外层这一单**成功**了，
-             * 它就该跟源包一起进其余物、按删除档一起清掉；外层失败/部分完成/取消时一个字节都不动。
+             * <para>用户 2026-10-04 当场推翻 2026-09-28 的旧口径 —— 原话：
+             * 「链上那个从未解开过的内层包（它躺在其余物里）—— **不是没解开你为什么要放在其余物里面，啊**」。
+             * 老写法是 `if (!candidateSucceeded && !rootSucceeded) continue;`：根任务一成功，
+             * 链上**所有**续解任务（失败的 / 这一轮没跑的 / 跳过的）都被当过程物收走，
+             * 而链尾「其余物按设置处理」那一档在「彻底删除」下是**永久删除**
+             * ⇒ 还没解出来的内容连包一起没了（不可逆）。
              *
-             * ⚠ 所以这里多一道自守：只有**根任务成功且校验通过**时，才把"没跑成的内层包"也算进去 ——
-             * 不指望调用方一定在成功路径上（红线自己守，不靠上下文）。
+             * 新口径（与"内层包按有没有被解开过分类"同一句话）：
+             * · **解开过的**（自己这一单成功 + 输出校验通过 ⇒ 内容已落盘）= 过程物 ⇒ 收进其余物、照旧按档处理；
+             * · **从未解开过的**（停在半路留下的分支 / 命中「内容物保留关键词」的 / 到上限没展开的 /
+             *   失败与没跑成的）= **还没处理的内容** ⇒ 原样留在成品目录里，⛔ 一条都不进其余物。
+             *
+             * 判据**不新造**：就是本方法一直在用的那条既有事实（`Succeeded` + `Passed`），
+             * 以及上面「内容物保留关键词」那一档；⛔ 绝不按"名字像不像归档"去猜。
+             * ⚠ 与 `CollectChainInnerPackagesIntoRestAsync` 里那份"还留着"名单**同一套判据**（§9.5）。
              */
-            bool rootSucceeded =
-                rootTask.Outcome == TaskOutcome.Succeeded &&
-                rootTask.OutputVerification == OutputVerificationOutcome.Passed;
-
             foreach (ArchiveTask? candidate in chainTasks)
             {
                 if (candidate == null ||
@@ -2927,7 +2932,7 @@ namespace ArchiveFixer.ViewModels
                     candidate.Outcome == TaskOutcome.Succeeded &&
                     candidate.OutputVerification == OutputVerificationOutcome.Passed;
 
-                if (!candidateSucceeded && !rootSucceeded)
+                if (!candidateSucceeded)
                 {
                     continue;
                 }
@@ -5703,7 +5708,8 @@ namespace ArchiveFixer.ViewModels
         /// 定稿那一步才把它们搬进 <see cref="ArchiveTask.OutputPath"/>。
         /// </param>
         /// <param name="oneClickRun">
-        /// 这一批是不是「一键处理」/「继续解」发起的（**决定要不要弹多分支确认框**，见方法说明）。
+        /// 这一批是不是「一键处理」/「继续解」发起的（**只决定"要不要弹框"**，⛔ 不再决定展开策略 ——
+        /// 展开一律按②页所选档位，见方法说明与 <c>expandAll</c> 那一段）。
         /// </param>
         /// <returns>
         /// 递归结论（调用方要用它判断"展开了几层"——结果校验拿什么当预期全靠这个，见
@@ -5720,35 +5726,25 @@ namespace ArchiveFixer.ViewModels
              * ②页「嵌套压缩包」那三档 → 递归核心的模式。**三档三义，一档都不许合并**。
              *
              * ⛔ 2026-10-01 修：这里原来是 `AllBranches ? AllBranches : SingleChain` ——
-             * 把出厂默认的 **「只解当前这一层」也当成「单链自动展开」**跑了：界面上写着"只解当前这一层"、
+             * 把 **「只解当前这一层」也当成「单链自动展开」**跑了：界面上写着"只解当前这一层"、
              * `docs/使用说明.md` §10.1 写着"里面的包原样留着、你自己决定下一步"、人工测试清单 C35 也写着
-             * "默认档下只解一层"，而程序实际上一条链往下解到底（并且顺带把默认档承诺的"快路"
+             * "默认档下只解一层"，而程序实际上一条链往下解到底（并且顺带把单层档承诺的"快路"
              * ——第 0 层走 ZIP 直读、每层交给一键处理的一轮——整个绕过去了，见 `DirectReadAppliesTo`）。
-             * 用户 2026-10-01 追问"开了续解和不开续解会不会有 bug"，指的就是这个：
-             * 两档当时**行为完全相同**。
+             * 用户 2026-10-01 追问"开了续解和不开续解会不会有 bug"，指的就是这个：两档当时**行为完全相同**。
              *
-             * 语义（与界面逐字对齐）：
-             * · `SingleLayer`（默认）= 只解当前这一层，内层包**原样留着**（继续解交给一键处理的轮次 / 手动「继续解」）；
-             * · `SingleChain` = 只跟一条链；一层里出现多个包 ⇒ 第 0 层问用户，更深的层停在那一层并**如实报停因**；
-             * · `AllBranches` = 内层有多个包也全部解开（仍受每层内层包数量上限约束）。
-             */
-            /*
-             * 走到这里说明 `Settings.RecursionMode != SingleLayer` —— **出厂默认那一档在上游 `:12718` 那道闸门
-             * 就走了"单层路径"（只解当前这一层，内层包原样留着当内容物）**，根本到不了这里。
+             * ⚠ 2026-10-04（用户当场推翻默认档）：出厂默认改成 **`AllBranches`**（"有压缩包就解压"），
+             * 所以走到这一段的**常态**就是全部分支。三档语义（与②页逐字对齐）：
+             * · `SingleLayer` = 只解当前这一层，内层包**原样留着**（继续解交给一键处理的轮次 / 手动「继续解」）
+             *   —— 上游那道闸门（`RecursionMode != "SingleLayer"`）就把它挡在递归核心之外，到不了这里；
+             * · `SingleChain` = 只跟一条链；一层里出现 **≥2 个真归档** ⇒ 第 0 层问用户，
+             *   更深的层停在那一层并**如实报停因**（旁边是什么文件都不影响这条判据）；
+             * · `AllBranches`（出厂默认）= 内层有多个包也全部解开（仍受每层内层包数量上限约束）。
              *
-             * ⚠ 2026-10-01 核查记录（用户问"开了续解和不开续解会不会有 bug"）：这里原来写的是
+             * ⚠ 2026-10-01 核查记录（用户问"开了续解和不开续解会不会有 bug"）：下面这条 switch 曾经写成
              * `AllBranches ? AllBranches : SingleChain`，看上去像"把 SingleLayer 也当 SingleChain 跑"，
-             * 但**实际不是缺陷** —— 真的闸门在 `:12718`（`RecursionMode != "SingleLayer"` 才进递归核心），
-             * 撤掉这一处的改动跑守门用例照旧全绿（红检否掉了那个怀疑）。这一支**只有一个入口是 SingleChain 语义**，
-             * 把它写成显式三档只是为了"以后谁动了那道闸门，这里不会静默降级成别的档"。
-             */
-            /*
-             * ②页「嵌套压缩包」那三档 → 递归核心的模式（见上面那段核查记录：默认档到不了这里）。
-             *
-             * 语义（与界面逐字对齐）：
-             * · `SingleLayer`（默认）= 只解当前这一层，内层包**原样留着**（继续解交给一键处理的轮次 / 手动「继续解」）；
-             * · `SingleChain` = 只跟一条链；一层里出现多个包 ⇒ 第 0 层问用户，更深的层停在那一层并**如实报停因**；
-             * · `AllBranches` = 内层有多个包也全部解开（仍受每层内层包数量上限约束）。
+             * 但**实际不是缺陷** —— 真的闸门在上游（`RecursionMode != "SingleLayer"` 才进递归核心），
+             * 撤掉这一处的改动跑守门用例照旧全绿（红检否掉了那个怀疑）。把它写成显式三档只是为了
+             * "以后谁动了那道闸门，这里不会静默降级成别的档"。
              */
             RecursionMode mode = Settings.RecursionMode switch
             {
@@ -5813,22 +5809,35 @@ namespace ArchiveFixer.ViewModels
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
                 /*
-                 * 一键处理期间**不弹这个框**（用户 2026-09-27：一键解压 = 用户走开，不许有弹窗）。
-                 * 保守档 = 与"用户在框里点取消"同一件事：只保留当前这一层的结果，
-                 * 剩下的分支不展开，并在日志里说清还剩几个（汇总行也会带上）。
+                 * 递归核心在问"这些内层归档要不要也解开"（只有②页「单链自动展开」那一档会问）。
+                 *
+                 * ⛔ 2026-10-04（用户当场推翻旧口径）：一键档**不再**走"保守不展开、只留当前这一层"。
+                 * 老写法是 `bool expandAll = !oneClickRun && await ShowConfirmOnUiThreadAsync(…)` ——
+                 * 一键档不看用户在②页选了哪一档，永远只保留当前这一层，日志还写着"按保守档"：
+                 * 一键处理因此成了比手动档**更弱**的档位（真机 `第6集.7z` 就是这么停的；
+                 * 用户原话「就应该有压缩包就解压啊」）。
+                 *
+                 * 现在一键档与手动档的差别**只剩"问不问"**（红线：批中间零弹窗，见
+                 * `SuppressDecisionPromptsForOneClickRun`），展开策略一律按**用户所选档位**：
+                 * · `AllBranches`（出厂默认）：递归核心根本不会给出这个询问（它已经把每个分支都入队了），
+                 *   下面那一支只是"哪天门开了"的兜底 —— 全展开，与用户选的那一档一致；
+                 * · `SingleChain`：那一档的语义就是"一层里出现 **≥2 个**真归档就停"，
+                 *   一键档没法问 ⇒ 与手动档里用户点「取消」同一结果：保留当前这一层 + 如实写日志。
                  */
-                bool expandAll = !oneClickRun
-                    && await ShowConfirmOnUiThreadAsync(
+                bool expandAll = oneClickRun
+                    ? mode != RecursionMode.SingleChain
+                    : await ShowConfirmOnUiThreadAsync(
                         result.Decision.Prompt + Environment.NewLine + Environment.NewLine +
                         "选“确定”：把这些内层归档也解开。选“取消”：只保留当前这一层的结果。");
 
                 if (oneClickRun)
                 {
                     /*
-                     * ⚠ 2026-10-04（真机）：这一行过去写死"（多分支）"，而真实判据是
-                     * "同层除该包以外**不全是说明类文件**"（`RecursiveExtractor.HasOnlyInformationalSiblings`）——
-                     * 一层里**只有 1 个**内层归档、旁边有个视频，也会停在这一档：
-                     * 说"多个 / 多分支"会让用户去找那个根本不存在的第二个包。
+                     * ⚠ 2026-10-04（真机）：这一行过去写死"（多分支）… 按保守档" ——
+                     * 措辞与档位两处都不准：
+                     * ① 判据只看**内层归档的数量**（≥2 才停；1 个 + 旁边一个 `.mp4` 会被"这是压缩包吗，
+                     *    不是那你停什么"顶回来），所以数量要按真实的说；
+                     * ② 停下来的理由不是"一键档保守"，而是**用户在②页选的那一档**如此。
                      */
                     int candidateCount = result.Decision.CandidateArchives.Count;
 
@@ -5839,7 +5848,8 @@ namespace ArchiveFixer.ViewModels
                                 CultureInfo.CurrentCulture,
                                 StatusText.RecursionBranchHeldBackMultipleFormat,
                                 task.FileName,
-                                candidateCount)
+                                candidateCount,
+                                RecursiveExtractor.DescribeUnexpandedNames(result.Decision.CandidateArchives))
                             : string.Format(
                                 CultureInfo.CurrentCulture,
                                 StatusText.RecursionBranchHeldBackSingleFormat,
@@ -9453,6 +9463,11 @@ namespace ArchiveFixer.ViewModels
         /// "问不到就走保守档（自动重命名、绝不覆盖）"，所以这里不需要第二套逻辑。
         /// 其余几个框（多分支 / 缺卷补救 / 批次结束提示）各自在调用点上读 <c>oneClickRun</c>。
         /// </para>
+        ///
+        /// <para>
+        /// ⚠ 2026-10-04：这一行过去写着"多分支不展开" —— 那是"一键档一律保守"的旧口径
+        /// （用户当场推翻：一键档只决定"问不问"，展开策略按②页所选档位）。
+        /// </para>
         /// </summary>
         private void SuppressDecisionPromptsForOneClickRun()
         {
@@ -9463,8 +9478,8 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                "一键处理：本次不弹任何确认框（多分支不展开、冲突走自动重命名、缺卷不补救、结束提示只写日志）——"
-                + "该问的事按保守档办，理由逐条写在日志里。");
+                "一键处理：本次不弹任何确认框（多分支按②页所选档位办、冲突走自动重命名、缺卷不补救、结束提示只写日志）——"
+                + "该问的事一律按设置里你选的那一档办，理由逐条写在日志里。");
         }
 
         private string GlobalPassword => _vm.GlobalPassword;
@@ -9932,9 +9947,11 @@ namespace ArchiveFixer.ViewModels
              * 以后不要出现弹窗"。他那一批 13 个任务一共被打断 8–9 次（多分支确认框 ×6–7 +
              * 批次结束的提示 ×1）—— 每一次都要他回来点一下，而"一键"的全部意义就是不回来。
              *
-             * 处置：凡是"需要用户回答"的框，一键档一律走**保守档**（照旧做最不意外的那件事），
+             * 处置：凡是"需要用户回答"的框，一键档一律**不弹**（照旧做最不意外的那件事），
              * 并把"本来要问什么、按什么办了"写进日志：
-             *   · 多分支要不要展开 → 不展开，只保留当前这一层（见 RunRecursiveAsync）；
+             *   · 多分支要不要展开 → **按②页所选档位**（用户 2026-10-04 推翻"一键档一律保守不展开"：
+             *     默认档「展开所有分支」下递归核心根本不会问；只有用户显式选了「单链自动展开」时
+             *     才会停在这一层，见 RunRecursiveAsync 里 `expandAll` 那一段）；
              *   · 同名冲突怎么处理 → 自动重命名、绝不覆盖（走既有的 ConflictActions 保守档）；
              *   · 分卷缺失要不要指定目录 → 不补救，照旧落「分卷缺失」（不变量 7 不放松）；
              *   · 批次结束的密码提示 → 只写日志（含"再点一次可手动输密码"的出路）。

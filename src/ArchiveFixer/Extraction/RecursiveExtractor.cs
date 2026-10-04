@@ -15,7 +15,11 @@ using System.Threading.Tasks;
 namespace ArchiveFixer.Extraction
 {
     /// <summary>
-    /// 递归展开策略（设计.md §十–§十四、AGENTS.md §6 第 8 条：多分支默认不展开，必须问）。
+    /// 递归展开策略（设计.md §十–§十四、AGENTS.md §6 第 8 条：硬上限一条都不能少）。
+    ///
+    /// <para>⚠ 2026-10-04（用户当场推翻旧口径）：出厂默认 = <see cref="AllBranches"/> ——
+    /// "有压缩包就解压"。旧口径的"多分支默认不展开、必须问"只留在
+    /// <see cref="SingleChain"/> 这一档里（用户显式选了它才生效）。</para>
     /// </summary>
     public enum RecursionMode
     {
@@ -23,12 +27,12 @@ namespace ArchiveFixer.Extraction
         SingleLayer,
 
         /// <summary>
-        /// 默认：只有一个"主要内层归档"（同层其它文件都是说明类文件）时才自动继续。
-        /// 出现多个内层归档就停下来问用户，绝不替他决定。
+        /// 只跟一条链：一层里**只有 1 个真归档**时才自动继续（旁边是什么文件都不影响）；
+        /// 出现 **≥2 个**真归档就停下来等用户拍板，绝不替他决定。
         /// </summary>
         SingleChain,
 
-        /// <summary>展开所有内层归档（必须由用户显式选择），仍受全部上限约束。</summary>
+        /// <summary>展开所有内层归档（**出厂默认**，用户 2026-10-04 拍板），仍受全部上限约束。</summary>
         AllBranches
     }
 
@@ -1895,9 +1899,37 @@ namespace ArchiveFixer.Extraction
 
             if (!decidedByUser && mode == RecursionMode.SingleChain)
             {
-                bool isSingleChain = toProcess.Count == 1 && HasOnlyInformationalSiblings(report, toProcess[0]);
+                /*
+                 * ⛔ 2026-10-04（用户当场推翻旧口径）：「单链」的判据**只看这一层里有几个真归档**：
+                 * **1 个 ⇒ 继续解**（旁边是什么文件都不影响）；**≥2 个 ⇒ 该档下才停**。
+                 *
+                 * 旧判据是"同层除该包以外**全是说明类文件**"（`HasOnlyInformationalSiblings`）⇒
+                 * 一层里只有 1 个内层包、旁边放着一个 `.mp4` / `.pdf`，就被算成"多分支"停在那一层。
+                 * 用户原话（真机 `第6集.7z`）：「那层内层包只有 1 个，但旁边还有不属于"说明类"的文件
+                 * ⇒ 被算成"多分支" —— **这是压缩包吗，不是那你停什么**」。
+                 *
+                 * ⛔ 说明类后缀表**没有删**（`InformationalExtensions` / `IsInformationalFile` 仍在，
+                 * 现在只决定下面那句日志要不要提"旁边还有别的文件"），改的只是"停 / 不停"的判据。
+                 */
+                bool isSingleChain = toProcess.Count == 1;
 
-                if (!isSingleChain)
+                if (isSingleChain)
+                {
+                    /*
+                     * 继续解这一支也要**留一句**：不然用户下次翻日志只看到"开始解第 N 层"，
+                     * 看不出旁边那个 `.mp4` 为什么没拦住它（那一格正是他点名的地方）。
+                     * 判据仍是既有出口：只有"旁边确实还有别的文件"时才多这一句，⛔ 不新造判据。
+                     */
+                    if (!HasOnlyInformationalSiblings(report, toProcess[0]))
+                    {
+                        Log(
+                            "INFO",
+                            $"{DescribeProbeLabel(item)}：这一层里只有 1 个内层归档"
+                            + $"（{Path.GetFileName(toProcess[0])}）——"
+                            + "「单链自动展开」只看内层归档的数量，旁边还有别的文件也照旧继续解。");
+                    }
+                }
+                else
                 {
                     /*
                      * 多分支询问只在第 0 层发生。
@@ -1956,9 +1988,13 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 单链判定：同层除内层归档外，其余文件必须都是说明类文件（.txt/.nfo/.url/.md/.sfv/.jpg/.png）。
-        /// 只要冒出一个别的类型的文件，就说明这层产物本身就是"用户要的东西"，
-        /// 里面那个归档未必是主角 —— 这种情况必须问，不能替用户决定。
+        /// 同层除内层归档外，其余文件是不是都是说明类文件（.txt/.nfo/.url/.md/.sfv/.jpg/.png）。
+        ///
+        /// <para>⚠ <b>2026-10-04 起它不再是"单链判定"</b>（用户当场推翻旧口径：「这是压缩包吗，
+        /// 不是那你停什么」）：停 / 不停的判据已经改成**只看这一层里有几个真归档**
+        /// （见 <see cref="TryEnqueueNextLayers"/> 里 <c>isSingleChain</c> 那一段）。
+        /// 它现在的唯一用途是：那一层**只有 1 个内层归档**时，决定要不要多写一句
+        /// "旁边还有别的文件也照旧继续解" —— 说明类后缀表因此**一个字都没删**。</para>
         ///
         /// <para>⚠ 2026-10-02 修（用户真机 `1-6 电磁感应定律（1）`，见 `docs/真机事故复盘.md` §47.3）：
         /// **同一组的后续卷算那一份归档的一部分，不算"别的文件"**。现场 = 这一层里是
@@ -1969,7 +2005,7 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>⛔ 认的只有**同目录 + 同包基名 + 是后续卷**三条同时成立的文件
         /// （<see cref="IsSameGroupContinuationVolume"/>）：别的目录、别的基名的 <c>.002</c>
-        /// 照旧算"别的文件"，宁可多问一句也不替用户决定。</para>
+        /// 照旧算"别的文件"，宁可多写一句也不当作没看见。</para>
         /// </summary>
         private static bool HasOnlyInformationalSiblings(RecursionLayerReport report, string innerArchivePath)
         {
@@ -3032,10 +3068,15 @@ namespace ArchiveFixer.Extraction
         /// 「这一层还有哪几个内层包没展开」的名单（前 <see cref="MaxUnexpandedNameLines"/> 个，
         /// 多出来的折成"…还有 K 个"）。
         ///
+        /// <para><c>internal</c>（2026-10-04）：一键档停在这一层的那一行也要点名（用户原话
+        /// 「停因里要点名那个未展开的包」），而那一支会把递归结论改写成"只解了当前这一层"、
+        /// 正文里那份名单到不了用户眼前 ⇒ 由 <c>ExtractionCoordinator</c> 转调**这一个**出口，
+        /// ⛔ 不另写一份"前 5 个 + …还有 K 个"。</para>
+        ///
         /// <para>只写**文件名**（§8 隐私红线），而且用**包基名之外的原文文件名**：
         /// 用户拿着它才能在目录里对上号（这正是"看不出是哪个"要治的那件事）。</para>
         /// </summary>
-        private static string DescribeUnexpandedNames(IReadOnlyList<string> names)
+        internal static string DescribeUnexpandedNames(IReadOnlyList<string> names)
         {
             var shown = new List<string>();
 

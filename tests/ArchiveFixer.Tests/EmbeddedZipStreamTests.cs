@@ -1115,6 +1115,13 @@ namespace ArchiveFixer.Tests
             settings.KeepArchiveNameFolder = true;
             settings.PasswordBookPath = bookPath;
             settings.CustomSevenZipExePath = string.Empty;
+
+            /*
+             * ⚠ 2026-10-04（出厂默认档改成「展开所有分支」）：**ZIP 直读只在「只解当前这一层」这一档生效**
+             * （递归模式第 0 层必须交给 7-Zip 逐层展开、照旧抠一份副本）。本类测的正是"直读那条快路"，
+             * 所以夹具显式钉住那一档 —— 否则"工作区里没有抠出来的 zip"这类断言会被递归模式推翻。
+             */
+            settings.RecursionMode = "SingleLayer";
             settingsService.Save(settings);
 
             var engine = new SevenZipEngine();

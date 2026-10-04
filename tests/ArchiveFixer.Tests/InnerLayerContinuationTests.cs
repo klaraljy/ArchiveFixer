@@ -54,6 +54,12 @@ namespace ArchiveFixer.Tests
         /// <summary>续解链测试用的统一密码（列表式密码本，一行一个）。</summary>
         private const string ChainPassword = "ChainPass9";
 
+        /// <summary>
+        /// 故意**不写进密码本**的密码：给某一层加它 ⇒ 那一层必然解不开
+        /// （用来复现"从未解开过的内层包"那一格，缺陷用例①）。
+        /// </summary>
+        private const string UnknownInnerPassword = "测试用未知密码";
+
         private const string InnerPayloadText = "第二层才有的最终数据\n";
 
         /// <summary>假视频头长度：与 EmbeddedArchiveTests 一致（34 KB 的文件头读不到尾部的 ZIP）。</summary>
@@ -1713,10 +1719,18 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// **一键处理期间不弹"要不要展开多分支"的确认框**（用户 2026-09-27："一键解压 = 用户走开，
-        /// 以后不要出现弹窗"）：多分支时按保守档只保留当前这一层，并把这件事写进日志。
+        /// 以后不要出现弹窗"），而停下来之后**按②页所选档位办、并把包名点出来**。
+        ///
+        /// <para><b>⚠ 2026-10-04 改结论（用户当场推翻旧口径）</b>：老用例名与断言都是
+        /// "按保守档只留当前层" —— 那套口径把"一键档"当成了比手动档更弱的档位
+        /// （用户在②页选了「展开所有分支」也照样停）。现在：一键档与手动档的差别**只剩"问不问"**，
+        /// 展开策略一律按②页所选档位。
+        /// 本用例的场景是「单链自动展开」那一档 + 这一层有 **2 个真归档** ⇒
+        /// **该档自己的语义**就是停在这一层（与手动档里用户点「取消」同一结果），
+        /// 所以"停"这个结论没变，变的是**理由**（不再是一键档保守）与**要求点名**。</para>
         /// </summary>
         [Fact]
-        public async Task 一键处理遇到多分支_不弹确认框_按保守档只留当前层()
+        public async Task 一键处理遇到多分支_不弹确认框_单链档按档位停在该层并点名()
         {
             string build = Path.Combine(_root, "multibranch-build");
             Directory.CreateDirectory(build);
@@ -1742,13 +1756,27 @@ namespace ArchiveFixer.Tests
             await harness.AddPathsAsync(outer);
             await harness.RunOneClickAsync();
 
-            // 保守档的痕迹必须在日志里（⛔ 不许静默）。
+            /*
+             * ① 停下来的理由必须写清"是你选的档位如此"，⛔ 不许再写"按保守档"，
+             * 而且必须**点名是哪几个包**（用户当天原话：「停因里要点名那个未展开的包」）。
+             */
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("一键处理不弹确认框", StringComparison.Ordinal));
+                line => line.Contains("单链自动展开", StringComparison.Ordinal)
+                        && line.Contains("只保留了当前这一层", StringComparison.Ordinal));
+
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("innerA.7z", StringComparison.Ordinal)
+                        && line.Contains("innerB.7z", StringComparison.Ordinal));
+
+            // ② ⛔ 一键档批中间不许有"要用户点一下"的框（红线：只保留批末那一个汇总框）。
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                line => line.Contains("按保守档", StringComparison.Ordinal));
 
             /*
-             * 而且**不能**因此判失败：当前这一层的结果照样定稿（两个内层包本身）；
+             * ③ 而且**不能**因此判失败：当前这一层的结果照样定稿（两个内层包本身）；
              * 接着续解链会把这两个内层包各自当成一个任务继续解（各占一层），
              * 所以任务数会变成 3 —— 这里断言的是"没有一个是失败/部分完成"。
              */
@@ -1757,6 +1785,260 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain(
                 harness.Vm.Tasks,
                 task => task.Status == StatusText.ExtractFailed || task.Status == StatusText.PartiallyCompleted);
+        }
+
+        /// <summary>
+        /// <b>用例②（用户 2026-10-04）</b>：**默认档**（出厂默认 = 「展开所有分支」）+ 一键处理 +
+        /// 这一层里有 **2 个真归档** ⇒ **真全部展开**（不再是"停住只留当前层"）。
+        ///
+        /// <para>用户原话：「就应该有压缩包就解压啊，现在将默认设为全文件解压，要不然出现了上面的情况你就没有了」。</para>
+        ///
+        /// <para><b>判据</b>：① <c>Rounds == 1</c> —— 一轮就把两个内层包都解开了（走的是递归核心，
+        /// 而不是"停住 + 靠轮次续解补"）；② 两个内层包的内容物都在；③ 日志里走的是
+        /// <c>AllBranches</c> 那一档；④ 全程没有"未展开"这一档的停因。</para>
+        ///
+        /// <para><b>红检</b>：把"一键档保守不展开"加回去（一键档一律只解当前这一层）⇒ 本用例当场红
+        /// （`Assert.Equal() Failure: Expected 1 / Actual 2`）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例2_一键档默认档一层里有2个真归档_一轮全部展开()
+        {
+            string outer = BuildTwoPlainInnerPackages();
+
+            string outputRoot = Path.Combine(_root, "out-default-allbranches");
+
+            /*
+             * 「默认档」= **出厂默认那一档**。这里显式从 `CreateDefault()` 取，而不是写成字面量：
+             * 本类夹具为了走路 1 统一钉了「只解当前这一层」（见 CreateHarness），
+             * 而这一条要的恰恰是**默认档**的行为 —— 顺便也让"默认档被人改回去"在这里立刻变红。
+             */
+            string defaultRecursionMode = AppSettings.CreateDefault().RecursionMode;
+
+            Harness harness = CreateHarness(
+                string.Empty,
+                settings =>
+                {
+                    settings.RecursionMode = defaultRecursionMode;
+                    settings.CustomOutputDirectory = outputRoot;
+                    settings.VerboseLog = true;
+                });
+
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            // ① 一轮解到底（老口径：默认档 = 只解当前这一层 ⇒ 2 轮）。
+            Assert.Equal(1, outcome.Rounds);
+
+            // ② 两个内层包的内容物都出来了。
+            Assert.Equal(
+                2,
+                Directory.GetFiles(outputRoot, "payload*.txt", SearchOption.AllDirectories).Length);
+
+            // ③ 走的是「展开所有分支」那一档。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("模式 AllBranches", StringComparison.Ordinal));
+
+            // ④ 没有任何"没展开"的停因。
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                line => line.Contains("未展开", StringComparison.Ordinal));
+
+            Assert.DoesNotContain(
+                harness.Vm.Tasks,
+                task => task.Status == StatusText.ExtractFailed || task.Status == StatusText.PartiallyCompleted);
+        }
+
+        /// <summary>
+        /// <b>缺陷用例①（用户 2026-10-04 当场点名）</b>：**从未解开过的内层包不许进「其余物」**。
+        ///
+        /// <para>用户原话：「链上那个从未解开过的内层包（它躺在其余物里）—— <b>不是没解开你为什么要放在
+        /// 其余物里面，啊</b>」。</para>
+        ///
+        /// <para><b>夹具</b>：<c>outer.7z</c> 里是 <c>innerA.7z</c>（能解开）+ <c>innerB.7z</c>
+        /// （设了密码、密码本里没有它 ⇒ 这一单必然解不开）。走**单链档** ⇒ 第 0 层停住（2 个真归档），
+        /// 第 2 轮把它们各自当任务继续解：innerA 成功、innerB 失败。</para>
+        ///
+        /// <para><b>判据</b>：① <c>innerB.7z</c> 还在成品目录里、**不在**「其余物」里；
+        /// ② <c>innerA.7z</c>（解开过的那一个）照旧进「其余物」；③ 内容物都在。</para>
+        ///
+        /// <para><b>红检</b>：把"没解开过的也一并收进其余物"改回去
+        /// （<c>if (!candidateSucceeded &amp;&amp; !rootSucceeded) continue;</c>）⇒ 本用例当场红。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 缺陷1_从未解开过的内层包不许进其余物()
+        {
+            string outer = BuildHalfBrokenInnerPackage();
+
+            string outputRoot = Path.Combine(_root, "out-unexpanded-rest");
+
+            Harness harness = CreateHarness(
+                string.Empty,
+                settings =>
+                {
+                    settings.RecursionMode = "SingleChain";
+                    settings.CustomOutputDirectory = outputRoot;
+
+                    // 「不动其余物」：这一档才留得下其余物给我们断言（其余两档会把它清掉）。
+                    settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+                    settings.VerboseLog = true;
+                });
+
+            await harness.AddPathsAsync(outer);
+
+            OneClickOutcome outcome = await harness.RunOneClickAsync();
+
+            string[] innerB = Directory.GetFiles(outputRoot, "innerB.7z", SearchOption.AllDirectories);
+            string[] innerA = Directory.GetFiles(outputRoot, "innerA.7z", SearchOption.AllDirectories);
+
+            // ① 从未解开过的那个包：原样留在产品目录里，⛔ 一个字节都不许进其余物。
+            Assert.Equal(2, outcome.Rounds);
+            Assert.Single(innerB);
+            Assert.False(IsInRestDirectory(innerB[0]), $"没解开过的内层包不许进其余物，实际在：{innerB[0]}");
+
+            // ② 解开过的那一个（innerA）照旧进其余物 —— 这一条不许放宽。
+            Assert.Single(innerA);
+            Assert.True(IsInRestDirectory(innerA[0]), $"解开过的内层包照旧进其余物，实际在：{innerA[0]}");
+
+            // ③ 已经解出来的内容物都在。
+            Assert.NotEmpty(Directory.GetFiles(outputRoot, "payloadA.txt", SearchOption.AllDirectories));
+
+            // ④ 那一行"还留着"的提示必须与搬运那一边同一套判据（否则又是自相矛盾的假警报）。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("成品目录里还留着", StringComparison.Ordinal)
+                        && line.Contains("innerB.7z", StringComparison.Ordinal));
+
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                line => line.Contains("内层包已移入其余物", StringComparison.Ordinal)
+                        && line.Contains("innerB.7z", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// <b>缺陷用例③（对照，⛔ 这一条不许放宽）</b>：**解开过的**内层包照旧进「其余物」，
+        /// 并照旧按③页「删除操作」被处理掉。
+        ///
+        /// <para>判据：链跑完 + 「彻底删除」档 ⇒ 解开了的内层包在盘上**一个都不剩**
+        /// （它既不在成品目录、也不在其余物里 —— 其余物已被按档清掉）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 缺陷3_解开过的内层包照旧进其余物并按设置被处理()
+        {
+            string outer = BuildTwoPlainInnerPackages();
+
+            string outputRoot = Path.Combine(_root, "out-extracted-rest-delete");
+
+            Harness harness = CreateHarness(
+                string.Empty,
+                settings =>
+                {
+                    settings.CustomOutputDirectory = outputRoot;
+                    settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+                    settings.VerboseLog = true;
+                });
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync();
+
+            // ① 内容物在（说明这一批真的做完了）。
+            Assert.Equal(
+                2,
+                Directory.GetFiles(outputRoot, "payload*.txt", SearchOption.AllDirectories).Length);
+
+            // ② 两个内层包都被收进其余物、并按「彻底删除」处理掉了：产物树里一个归档都不剩
+            //    （老口径与它一致 —— 解开过的内层包照旧是过程物，⛔ 这一条不许被这次改动放宽）。
+            Assert.Empty(Directory.GetFiles(outputRoot, "*.7z", SearchOption.AllDirectories));
+
+            // ③ 其余物那一档真的走过了（不是"什么都没发生"式的假绿）。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("其余物", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 造一个**平铺的两分支**包（不加密）：<c>outer.7z</c> = <c>innerA.7z</c>（payloadA.txt）
+        /// + <c>innerB.7z</c>（payloadB.txt）。
+        /// </summary>
+        private string BuildTwoPlainInnerPackages()
+        {
+            string build = Path.Combine(_root, "two-plain");
+            Directory.CreateDirectory(build);
+
+            WriteText(Path.Combine(build, "payloadA.txt"), "分支 A 的内容\n");
+            WriteText(Path.Combine(build, "payloadB.txt"), "分支 B 的内容\n");
+
+            Run7z(build, "a", "-t7z", "innerA.7z", "payloadA.txt");
+            Run7z(build, "a", "-t7z", "innerB.7z", "payloadB.txt");
+
+            string outerDirectory = Path.Combine(_root, "two-plain-outer");
+            Directory.CreateDirectory(outerDirectory);
+
+            File.Copy(Path.Combine(build, "innerA.7z"), Path.Combine(outerDirectory, "innerA.7z"), overwrite: true);
+            File.Copy(Path.Combine(build, "innerB.7z"), Path.Combine(outerDirectory, "innerB.7z"), overwrite: true);
+
+            string outer = Path.Combine(_root, "packages", "two-plain-outer.7z");
+            Directory.CreateDirectory(Path.GetDirectoryName(outer)!);
+
+            Run7z(outerDirectory, "a", "-t7z", outer, "innerA.7z", "innerB.7z");
+
+            return outer;
+        }
+
+        /// <summary>
+        /// 造一个"**一半解不开**"的两分支包：<c>outer.7z</c> = <c>innerA.7z</c>（明文）
+        /// + <c>innerB.7z</c>（**设了密码、密码本里没有它** ⇒ 这一单必然解不开）。
+        ///
+        /// <para>用它来复现用户 2026-10-04 的真机现象：链尾把**从未解开过**的内层包也收进了其余物，
+        /// 而其余物在「彻底删除」档下是永久删除。</para>
+        /// </summary>
+        private string BuildHalfBrokenInnerPackage()
+        {
+            string build = Path.Combine(_root, "half-broken");
+            Directory.CreateDirectory(build);
+
+            WriteText(Path.Combine(build, "payloadA.txt"), "A 的内容\n");
+            WriteText(Path.Combine(build, "payloadB.txt"), "B 的内容\n");
+
+            Run7z(build, "a", "-t7z", "innerA.7z", "payloadA.txt");
+
+            // ⛔ 密码故意**不写进密码本**：这一单必然落在"密码错误"上，内容永远解不出来。
+            Run7z(build, "a", "-t7z", "innerB.7z", "-p" + UnknownInnerPassword, "-mhe=on", "payloadB.txt");
+
+            string outerDirectory = Path.Combine(_root, "half-broken-outer");
+            Directory.CreateDirectory(outerDirectory);
+
+            File.Copy(Path.Combine(build, "innerA.7z"), Path.Combine(outerDirectory, "innerA.7z"), overwrite: true);
+            File.Copy(Path.Combine(build, "innerB.7z"), Path.Combine(outerDirectory, "innerB.7z"), overwrite: true);
+
+            string outer = Path.Combine(_root, "packages", "half-broken-outer.7z");
+            Directory.CreateDirectory(Path.GetDirectoryName(outer)!);
+
+            Run7z(outerDirectory, "a", "-t7z", outer, "innerA.7z", "innerB.7z");
+
+            return outer;
+        }
+
+        /// <summary>这一份文件是不是躺在「其余物」/「过程物」目录里（只看路径层级，不看名字像不像）。</summary>
+        private static bool IsInRestDirectory(string path)
+        {
+            string? directory = Path.GetDirectoryName(path);
+
+            while (!string.IsNullOrWhiteSpace(directory))
+            {
+                string name = Path.GetFileName(directory);
+
+                if (ProcessArtifactLayout.IsArtifactDirectoryName(name))
+                {
+                    return true;
+                }
+
+                directory = Path.GetDirectoryName(directory);
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -2121,6 +2403,15 @@ namespace ArchiveFixer.Tests
              * （含链尾补搬），所以在这里显式选上「放入其余物」，免得用例变成在测默认档。
              */
             settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+
+            /*
+             * ⚠ 2026-10-04（用户当场推翻出厂默认档）：默认从「只解当前这一层」改成「展开所有分支」。
+             * 本类钉的是**路 1**（一键处理的「轮次续解」：一轮 = 一层，每层都看得见）——
+             * 那条路现在是②页「只解当前这一层」这一档，所以夹具在这里显式钉住它。
+             * 不钉的话整类用例会悄悄改成在测递归内核（`Rounds` / `ContinuationLayers` / 目录树全都不一样）。
+             * 单个用例仍可用 configure 覆盖（如 `SingleChain` / `AllBranches`）。
+             */
+            settings.RecursionMode = "SingleLayer";
 
             // 7z 路径留空 = 用 ToolLocator 解析出的内置路径。测试目录里也有一份 tools\7zip
             // （由 ArchiveFixer.csproj 的 CopyToOutputDirectory 带过来），所以真引擎在测试里是可用的。

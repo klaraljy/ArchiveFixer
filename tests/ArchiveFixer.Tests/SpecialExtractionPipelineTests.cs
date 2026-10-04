@@ -288,6 +288,13 @@ namespace ArchiveFixer.Tests
 
                 // 默认档就应该是"自动改名"（绝不覆盖）——这里显式钉一遍，免得将来默认值被人改掉。
                 settings.ConflictAction = ConflictActions.AutoRename;
+
+                /*
+                 * ⚠ 2026-10-04（出厂默认档改成「展开所有分支」）：本用例钉的是**轮次续解**那条路
+                 * （"第 2 轮 = 内层包续解"，内外两份落到同一层由冲突档兜住）——
+                 * 那条路现在是②页「只解当前这一层」这一档，所以这里显式钉住它。
+                 */
+                settings.RecursionMode = "SingleLayer";
             });
 
             await harness.AddPathsAsync(BuildNestedSameNamePackage(harness.SourceRoot, "1111.7z"));
@@ -311,7 +318,12 @@ namespace ArchiveFixer.Tests
                 File.ReadAllText(Path.Combine(contentDirectory, "payload(1).txt")));
 
             // 反向对照：**关掉规则**时内层会多留一层 `X`，于是不撞名（两份都在、都不改名）。
-            Harness off = CreateHarness("222-off", settings => settings.UseSpecialExtraction = false);
+            // ⚠ 同样钉住「只解当前这一层」那一档（见上面那段说明：本用例测的是轮次续解那条路）。
+            Harness off = CreateHarness("222-off", settings =>
+            {
+                settings.UseSpecialExtraction = false;
+                settings.RecursionMode = "SingleLayer";
+            });
 
             await off.AddPathsAsync(BuildNestedSameNamePackage(off.SourceRoot, "1111.7z"));
             await off.RunOneClickAsync();

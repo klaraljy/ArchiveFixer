@@ -778,15 +778,23 @@ namespace ArchiveFixer.Tests
         // ================================================================ 用例 K（措辞与事实对齐：用户 2026-10-04 真机）
 
         /// <summary>
-        /// <b>用例 K1（A3）</b>：这一层里**只有 1 个**内层归档、可它旁边还有个视频 ⇒
-        /// 一键处理按保守档不展开，而那一行**不许**说"多个 /（多分支）"——
-        /// 真实判据是"同层除该包以外不全是说明类文件"，用户看到的只有一个包。
+        /// <b>用例 K1（A3，2026-10-04 改结论）</b>：这一层里**只有 1 个**内层归档、可它旁边还有个视频 ⇒
+        /// **继续解**（不再是"按保守档停在那一层"）。
         ///
-        /// <para><b>红检</b>：把 <c>ExtractionCoordinator</c> 那一行改回写死的"（多分支）"
-        /// ⇒ 本用例当场红（`Assert.DoesNotContain() Failure: 多分支`）。</para>
+        /// <para><b>⚠ 用户当场推翻旧口径</b>：老用例断言的是"走到了不展开那一支"、日志里写
+        /// "除了那个内层归档还有别的文件（不是一条单链）" —— 用户原话：
+        /// 「那层内层包只有 1 个，但旁边还有不属于"说明类"的文件 ⇒ 被算成"多分支" ——
+        /// **这是压缩包吗，不是那你停什么**」。现在单链档的判据只看**内层归档的数量**：
+        /// 1 个 ⇒ 一律继续解（旁边是什么文件都不影响）。</para>
+        ///
+        /// <para><b>新判据</b>：① 内层包的内容真的解出来了；② 日志里那句"只有 1 个内层归档…继续解"
+        /// 出现；③ ⛔ 不再有任何"未展开 / 停在半路"的痕迹。</para>
+        ///
+        /// <para><b>红检</b>：把判据改回"同层除该包以外全是说明类文件"
+        /// （`toProcess.Count == 1 &amp;&amp; HasOnlyInformationalSiblings(…)`）⇒ 本用例当场红。</para>
         /// </summary>
         [SevenZipFact]
-        public async Task 用例K1_只1个内层包但旁边有别的文件_措辞不许说多分支()
+        public async Task 用例K1_只1个内层包但旁边有别的文件_照旧继续解()
         {
             Harness harness = CreateHarness(
                 RestHandlingModes.Delete,
@@ -804,12 +812,19 @@ namespace ArchiveFixer.Tests
                 _output.WriteLine($"[{entry.Level}] {entry.Message}");
             }
 
-            // ① 真的走到了"这一层有内层归档、按保守档不展开"那一支。
+            // ① 这一层只有 1 个内层归档 ⇒ 继续解，日志如实说明判据。
             Assert.Contains(
                 harness.Log.Logs,
-                entry => entry.Message.Contains("除了那个内层归档还有别的文件", StringComparison.Ordinal));
+                entry => entry.Message.Contains("只看内层归档的数量", StringComparison.Ordinal));
 
-            // ② ⛔ 不许说"多个 /（多分支）"（这一层只有一个内层包）。
+            // ② 内层包的内容真的解出来了（`.mp4` 不是理由，别停）。
+            Assert.NotEmpty(FindFiles("payload.txt"));
+
+            // ③ ⛔ 不许再出现"旁边有别的文件所以停下"那套旧判据，也不许说"多分支"。
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("不是一条单链", StringComparison.Ordinal));
+
             Assert.DoesNotContain(
                 harness.Log.Logs,
                 entry => entry.Message.Contains("个内层归档（多分支）", StringComparison.Ordinal));
@@ -891,8 +906,8 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 夹具（用例 K1）：<c>outer.7z → level2.7z + movie.mp4</c> —— 这一层里**只有 1 个**内层归档，
-        /// 可它旁边有个**非说明类**文件（`.mp4`）⇒ 按既有判据"不是单链"，一键档按保守档不展开。
-        /// 真机那批（`第6集.7z`）就是这个形状。
+        /// 旁边有个**非说明类**文件（`.mp4`）。真机那批（`第6集.7z`）就是这个形状：
+        /// ⚠ 2026-10-04 起它**不再**是停下来的理由（判据只看内层归档的数量，1 个一律继续解）。
         /// </summary>
         private string BuildSingleInnerWithSiblingChain()
         {
@@ -917,8 +932,12 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 夹具（用例 K2）：<c>outer.7z → level2.7z →（level3.7z + movie.mp4）</c> ——
+        /// 夹具（用例 K2）：<c>outer.7z → level2.7z →（level3.7z + level4.7z + movie.mp4）</c> ——
         /// 多分支出现在**第 1 层**（更深的层）⇒ 一键档不弹框、停因是 <c>BranchNotExpanded</c>。
+        ///
+        /// <para>⚠ 2026-10-04：原来那一层的"多分支"是 **1 个内层包 + 一个 `.mp4`**（旧判据）；
+        /// 用户当场推翻之后判据只看**内层归档的数量**（1 个一律继续解）⇒ 那个夹具不再会停，
+        /// 本用例也就测不到"停半路要给两条出路"。现在这一层放**两个**内层包，才真的构成多分支。</para>
         /// </summary>
         private string BuildDeepBranchChain()
         {
@@ -927,12 +946,17 @@ namespace ArchiveFixer.Tests
 
             File.WriteAllText(Path.Combine(build, "leaf.txt"), "最深一层\n", new UTF8Encoding(false));
             Run7z(build, "a", "-t7z", "level3.7z", "leaf.txt");
-
-            File.WriteAllBytes(Path.Combine(build, "movie.mp4"), new byte[4096]);
             File.Delete(Path.Combine(build, "leaf.txt"));
 
-            Run7z(build, "a", "-t7z", "level2.7z", "level3.7z", "movie.mp4");
+            File.WriteAllText(Path.Combine(build, "leaf2.txt"), "另一个分支\n", new UTF8Encoding(false));
+            Run7z(build, "a", "-t7z", "level4.7z", "leaf2.txt");
+            File.Delete(Path.Combine(build, "leaf2.txt"));
+
+            File.WriteAllBytes(Path.Combine(build, "movie.mp4"), new byte[4096]);
+
+            Run7z(build, "a", "-t7z", "level2.7z", "level3.7z", "level4.7z", "movie.mp4");
             File.Delete(Path.Combine(build, "level3.7z"));
+            File.Delete(Path.Combine(build, "level4.7z"));
             File.Delete(Path.Combine(build, "movie.mp4"));
 
             string sourceDirectory = Path.Combine(_root, "src");

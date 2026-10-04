@@ -152,10 +152,36 @@
                                   SelectedValue="{Binding SettingsEditor.Settings.RecursionMode, Mode=TwoWay}"
                                   SelectedValuePath="Tag">
                             <ComboBoxItem Content="只解当前这一层" Tag="SingleLayer" />
-                            <ComboBoxItem Content="单链自动展开（推荐：只有一个内层包时才继续）" Tag="SingleChain" />
-                            <ComboBoxItem Content="展开所有分支（内层有多个包时全部解开）" Tag="AllBranches" />
+                            <ComboBoxItem Content="单链自动展开（只有一个内层包时才继续）" Tag="SingleChain" />
+                            <ComboBoxItem Content="展开所有分支（出厂默认：有压缩包就解压）" Tag="AllBranches" />
                         </ComboBox>
                     </Grid>
+
+                    <!--
+                        用户 2026-10-04：「并且在选择旁边详细说明情况」——
+                        三档各写清**它怎么走 / 什么时候会停 / 空间与时间代价**。
+                        文案唯一来源 = StatusText（⛔ 这里不许手写中文、不许写 Markdown 强调）。
+                    -->
+                    <StackPanel Margin="110,0,0,8">
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   TextWrapping="Wrap"
+                                   Text="{x:Static models:StatusText.RecursionModeHintLabel}" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,2,0,0"
+                                   TextWrapping="Wrap"
+                                   Text="{x:Static models:StatusText.RecursionModeAllBranchesHint}" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,2,0,0"
+                                   TextWrapping="Wrap"
+                                   Text="{x:Static models:StatusText.RecursionModeSingleChainHint}" />
+
+                        <TextBlock Style="{StaticResource HintTextStyle}"
+                                   Margin="0,2,0,0"
+                                   TextWrapping="Wrap"
+                                   Text="{x:Static models:StatusText.RecursionModeSingleLayerHint}" />
+                    </StackPanel>
 
                     <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>

@@ -601,14 +601,17 @@ namespace ArchiveFixer.Models
 
         /// <summary>
         /// 递归解压模式（AGENTS.md §6 第 8 条、设计.md §十）：
-        /// SingleLayer = 只解当前层；SingleChain = 只有一个主要内层归档时自动继续（默认）；
-        /// AllBranches = 展开所有内层归档（必须由用户显式选择）。
+        /// SingleLayer = 只解当前这一层；SingleChain = 一层里只有 <b>1 个</b>真归档时自动继续；
+        /// AllBranches = 展开所有内层归档（**出厂默认**）。
         /// </summary>
-        /// 注意：**默认已改成 SingleLayer**。
-        /// 递归解压在 2026-09-21 出现"点了就整机无响应"的故障，
-        /// 排查期间先让默认流程走单层（单层已用真实文件验证通过），
-        /// 递归修好后再改回来 —— 不能让用户替我的 bug 买单。
-        public string RecursionMode { get; set; } = "SingleLayer";
+        /// <remarks>
+        /// ⚠ 2026-10-04（用户当场推翻旧口径）：默认从 <c>SingleLayer</c> 改成 <c>AllBranches</c>。
+        /// 他原话：「那你为什么会将这个单链解压设为默认……现在将默认设为全文件解压，要不然出现了上面的情况你就没有了」。
+        /// 旧注释里那段"排查卡死期间先走单层"的历史理由已经过期：递归内核的卡死与结果校验都修过了，
+        /// 而默认只解一层会让用户以为"里面那个包的内容没拿到"。
+        /// ⛔ 只动**出厂默认**：`Normalize` 不迁移用户存过的值。
+        /// </remarks>
+        public string RecursionMode { get; set; } = "AllBranches";
 
         /// <summary>
         /// 递归最大层数（1~10）。到顶就停并报告，不做无限展开（不变量 8）。
@@ -1108,7 +1111,15 @@ namespace ArchiveFixer.Models
                 RememberPasswordList = true,
                 SkipOneClickConfirm = false,
                 RemindJunkAfterImport = true,
-                RecursionMode = "SingleLayer",
+                /*
+                 * 递归模式出厂默认（用户 2026-10-04 当场推翻旧口径）：
+                 * 「那你为什么会将这个**单链解压设为默认**……现在**将默认设为全文件解压**」——
+                 * 出厂默认 = 「展开所有分支」（有压缩包就解压），②页那三档照旧都可选。
+                 *
+                 * ⛔ 只改**出厂默认**：用户自己存过的档一个字都不动（`Normalize` 里也不做迁移）——
+                 * 他机器上那份 appsettings.json 里选的是哪一档，就还是哪一档。
+                 */
+                RecursionMode = "AllBranches",
 
                 // 默认层数 = 5（用户 2026-09-26："从 10 改到 5 吧，用户有需要自己会改的"）。
                 MaxRecursionDepth = 5,
@@ -1312,7 +1323,8 @@ namespace ArchiveFixer.Models
 
             if (string.IsNullOrWhiteSpace(RecursionMode))
             {
-                RecursionMode = "SingleLayer";
+                // 缺字段（老配置 / 手改空）= 回到**出厂默认**那一档（用户 2026-10-04：默认全部分支）。
+                RecursionMode = "AllBranches";
             }
 
             /*

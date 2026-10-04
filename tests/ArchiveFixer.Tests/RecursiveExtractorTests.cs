@@ -165,6 +165,85 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(output, "b.7z")));
         }
 
+        // ────────────── 单链档的判据：只看**有几个真归档**（用户 2026-10-04 当场推翻旧口径） ──────────────
+
+        /// <summary>
+        /// <b>用例③（用户点名的那一格）</b>：单链档 + 这一层里**只有 1 个**内层归档 + 旁边还有
+        /// **非说明类**文件（`.mp4` / `.pdf`）⇒ **必须继续解**。
+        ///
+        /// <para>用户原话：「第6集.7z 那层内层包只有 1 个，但旁边还有不属于"说明类"的文件 ⇒ 被算成"多分支"
+        /// —— <b>这是压缩包吗，不是那你停什么</b>」。</para>
+        ///
+        /// <para><b>红检</b>：把判据改回旧的"同层除该包以外全是说明类文件"
+        /// （<c>toProcess.Count == 1 &amp;&amp; HasOnlyInformationalSiblings(…)</c>）⇒ 本用例当场红。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 单链档_一层里只有1个内层包_旁边有非归档文件也照旧继续解()
+        {
+            RequireSevenZip();
+
+            (string outer, _) = BuildSingleInnerWithNonInformationalSiblings();
+
+            string output = Path.Combine(_root, "out", "single-inner-noninfo");
+            var logLines = new List<(string Level, string Message)>();
+
+            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleChain, logLines);
+
+            // ① 真的往下解了：内层包的内容落到"内层包自己那一层"里。
+            Assert.True(result.Completed, result.Summary);
+            Assert.Equal(RecursionStopReason.Completed, result.StopReason);
+            Assert.Empty(result.UnexpandedNames);
+            Assert.True(
+                File.Exists(Path.Combine(output, "sibling-inner", "data.txt")),
+                "单链档遇到「1 个内层包 + 旁边有 .mp4/.pdf」必须继续解，实际产物树："
+                + string.Join(" | ", Directory.GetFileSystemEntries(output, "*", SearchOption.AllDirectories))
+                + $"\n{result.Summary}");
+
+            // ② 旁边那两个非归档文件照旧留在这一层（它们不是内层归档，也不该被吃掉）。
+            Assert.True(File.Exists(Path.Combine(output, "movie.mp4")), result.Summary);
+
+            // ③ 判据只看归档数量 —— 日志里要能看出这一点（⛔ 不许静默改了行为）。
+            Assert.Contains(
+                logLines,
+                line => line.Message.Contains("只看内层归档的数量", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// <b>用例④</b>：单链档 + 这一层里有 **2 个真归档** ⇒ 停在该层，并**点名**是哪几个包
+        /// （<see cref="RecursionResult.UnexpandedNames"/> 那套已有出口）。
+        ///
+        /// <para>判据的三条：① 停因是"多分支"那一档；② 两个包**都被点到名**（用户 2026-10-04 真机：
+        /// 只给个数他看不出是哪一个）；③ 产物里一个内层包都没被解开。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 单链档_一层里有2个内层包_停下并点名()
+        {
+            RequireSevenZip();
+
+            (string outer, _) = BuildTwoBranchPackage();
+
+            string output = Path.Combine(_root, "out", "two-branches-single-chain");
+            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleChain);
+
+            // ① 停在第 0 层（多分支要用户拍板这一档）。
+            Assert.False(result.Completed);
+            Assert.Equal(RecursionStopReason.NeedsDecision, result.StopReason);
+            Assert.NotNull(result.Decision);
+
+            // ② 点名：两个内层包都在这份名单里（⛔ 不是只给个数）。
+            Assert.Equal(2, result.UnexpandedNames.Count);
+            Assert.Contains(result.UnexpandedNames, path => path.EndsWith("a.7z", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(result.UnexpandedNames, path => path.EndsWith("b.7z", StringComparison.OrdinalIgnoreCase));
+
+            // ③ 用户看得到的那一句里也要有名字（结论正文，不只躺在结构化字段里）。
+            Assert.Contains("a.7z", result.Summary, StringComparison.Ordinal);
+            Assert.Contains("b.7z", result.Summary, StringComparison.Ordinal);
+
+            // ④ 谁都没被解开：只解了第 0 层。
+            Assert.Single(result.Layers);
+            Assert.False(File.Exists(Path.Combine(output, "a", "a.txt")));
+        }
+
         // ────────────────────────────── 单链嵌套 ──────────────────────────────
 
         [SevenZipFact]
@@ -349,13 +428,22 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(output, "inner", "内容物", "inner.bin")), result.Summary);
         }
 
+        /// <summary>
+        /// **单链档的判据只看"这一层有几个真归档"** —— 同层出现一个**非说明类**文件（`.bin`）
+        /// **不再**是停下来的理由。
+        ///
+        /// <para><b>⚠ 2026-10-04 改结论（用户当场推翻旧口径）</b>：老用例名与断言是
+        /// "只有说明类文件时才自动继续 / 其它文件存在时改为询问" —— 用户原话（真机 `第6集.7z`）：
+        /// 「那层内层包只有 1 个，但旁边还有不属于"说明类"的文件 ⇒ 被算成"多分支" ——
+        /// **这是压缩包吗，不是那你停什么**」。
+        /// 现在 1 个内层归档一律继续解（旁边是什么文件都不影响），≥2 个才停。</para>
+        /// </summary>
         [SevenZipFact]
-        public async Task 只有说明类文件时才自动继续_其它文件存在时改为询问()
+        public async Task 单链档_旁边有非说明类文件也照旧继续解()
         {
             RequireSevenZip();
 
-            // 同层除内层归档外出现一个"非说明类"文件（.bin）：说明这层产物本身就是用户要的东西，
-            // 里面那个归档未必是主角 —— 不能替用户决定，必须问。
+            // 同层除内层归档外出现一个"非说明类"文件（.bin）：旧口径会拿它当"多分支"停下。
             string source = BuildSourceDir(("data.txt", "内层内容\n"));
             string innerSevenZip = Path.Combine(_root, "inner.7z");
             Run7z("a", "-t7z", innerSevenZip, Path.Combine(source, "*"));
@@ -371,7 +459,18 @@ namespace ArchiveFixer.Tests
             string output = Path.Combine(_root, "out", "mixed");
             RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleChain);
 
-            Assert.Equal(RecursionStopReason.NeedsDecision, result.StopReason);
+            Assert.Equal(RecursionStopReason.Completed, result.StopReason);
+            Assert.Empty(result.UnexpandedNames);
+
+            // 内层包真的被解开了（旁边那个 .bin 没有拦住它）。
+            Assert.True(
+                FindFileUnder(output, "data.txt") != null,
+                $"内层包的内容必须解出来，实际产物树："
+                + string.Join(" | ", Directory.GetFileSystemEntries(output, "*", SearchOption.AllDirectories))
+                + $"\n{result.Summary}");
+
+            // 旁边那个非说明类文件照旧留着。
+            Assert.True(FindFileUnder(output, "payload.bin") != null, result.Summary);
         }
 
         // ────────────────────────────── 多分支 ──────────────────────────────
@@ -1620,11 +1719,26 @@ namespace ArchiveFixer.Tests
 
         private async Task<RecursionResult> ExtractAsync(string archivePath, string outputDirectory, RecursionMode mode)
         {
+            return await ExtractAsync(archivePath, outputDirectory, mode, logLines: null);
+        }
+
+        /// <summary>
+        /// 同上，另收一份日志（判据要说清"为什么这么走"时用得上；<paramref name="logLines"/> 传 null = 不记日志，
+        /// 与只传三个参数的那个重载**逐字相同**）。
+        /// </summary>
+        private async Task<RecursionResult> ExtractAsync(
+            string archivePath,
+            string outputDirectory,
+            RecursionMode mode,
+            List<(string Level, string Message)>? logLines)
+        {
             var task = new ArchiveTask(archivePath);
             var extractor = new RecursiveExtractor(
                 new SevenZipEngine(),
                 new MagicAwareProber(),
-                _ => new[] { string.Empty });
+                _ => new[] { string.Empty },
+                limits: null,
+                log: logLines == null ? null : (level, message) => logLines.Add((level, message)));
 
             return await extractor.ExtractAsync(task, outputDirectory, mode, null, CancellationToken.None);
         }
@@ -1662,6 +1776,32 @@ namespace ArchiveFixer.Tests
             File.Copy(inner, Path.Combine(outerSource, "inner.7z"));
 
             string outer = Path.Combine(_root, "chain.zip");
+            Run7z("a", "-tzip", outer, Path.Combine(outerSource, "*"));
+
+            return (outer, inner);
+        }
+
+        /// <summary>
+        /// 造"1 个内层归档 + 旁边两个**非说明类**文件"的包：<c>siblings.zip</c> 里是
+        /// <c>sibling-inner.7z</c>（里面有 data.txt）+ <c>movie.mp4</c> + <c>手册.pdf</c>。
+        ///
+        /// <para>这正是用户 2026-10-04 点名的那一格（真机 `第6集.7z`）：旧判据把"
+        /// 旁边有非说明类文件"当成"多分支"停下，而这一层其实**只有一个**压缩包。</para>
+        /// </summary>
+        private (string Outer, string Inner) BuildSingleInnerWithNonInformationalSiblings()
+        {
+            string source = BuildSourceDir(new[] { ("data.txt", "内层包里的内容\n") }, "_sibling_src");
+
+            string inner = Path.Combine(_root, "sibling-inner.7z");
+            Run7z("a", "-t7z", inner, Path.Combine(source, "*"));
+
+            string outerSource = Path.Combine(_root, "_sibling_outer");
+            Directory.CreateDirectory(outerSource);
+            File.Copy(inner, Path.Combine(outerSource, "sibling-inner.7z"));
+            File.WriteAllBytes(Path.Combine(outerSource, "movie.mp4"), new byte[4096]);
+            File.WriteAllText(Path.Combine(outerSource, "手册.pdf"), "假装是 PDF\n", Utf8NoBom);
+
+            string outer = Path.Combine(_root, "siblings.zip");
             Run7z("a", "-tzip", outer, Path.Combine(outerSource, "*"));
 
             return (outer, inner);

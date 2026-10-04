@@ -189,11 +189,16 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 根任务成功、但链上层那一单**没成功** ⇒ 照旧搬（用户 2026-09-28 拍板：内层包本来就是外层解出来的过程物，
-        /// 外层成功了它就该跟源包一起进其余物 —— "成功了就刚好是我们要达到的地方，失败了也不会删除"）。
+        /// 根任务成功、但链上那一单**没成功** ⇒ **什么都不搬**。
+        ///
+        /// <para><b>⚠ 2026-10-04 改结论（用户当场推翻 2026-09-28 的口径）</b>：老用例断言"照旧搬"
+        /// （外层成功了它就该跟源包一起进其余物）。用户原话：
+        /// 「链上那个从未解开过的内层包（它躺在其余物里）—— <b>不是没解开你为什么要放在其余物里面，啊</b>」。
+        /// 其余物在「彻底删除」档下是永久删除 ⇒ 搬它 = 把还没解出来的内容删了。
+        /// 现在的口径：只有**自己这一单成功 + 输出校验通过**（内容已落盘）的续解任务才算过程物。</para>
         /// </summary>
         [Fact]
-        public void 根任务成功而链上那一单没成功_照旧搬()
+        public void 根任务成功而链上那一单没成功_什么都不搬()
         {
             string restDirectory = Path.Combine(_root, "222", "其余物");
             Directory.CreateDirectory(restDirectory);
@@ -211,8 +216,7 @@ namespace ArchiveFixer.Tests
                 ContentKeepRules.Empty,
                 out _);
 
-            Assert.Single(moves);
-            Assert.Equal(inner, moves[0].From);
+            Assert.Empty(moves);
         }
     }
 }
