@@ -62,10 +62,22 @@ namespace ArchiveFixer.Extraction
     /// </para>
     ///
     /// <para>
-    /// ✅ <b>2026-09-27 起它有一个、也只有一个在管线上的调用点</b>：①页「空间不足」模式
-    /// （<c>ExtractionCoordinator.PurgeSourcePackageForSpaceTight</c>）—— 那个模式的**全部机制**
-    /// 就是"定稿 + 校验通过之后立刻永久删源包"，把空间当场还给后面的包。
-    /// ⛔ 除了那一个调用点，别再往管线里接它：两条删除路径并存正是"到底谁在删"这类问题的温床。
+    /// ✅ <b>它在管线上有、且只有两个调用点</b>，两处都是同一件事"**这一层跑完就删它自己那一层的源**"，
+    /// 由 <c>ExtractionCoordinator.PurgeLayerSourcePackage</c> 一处承载（触发点与措辞分档）：
+    /// ① ①页「空间不足」模式（<c>LayerPurgeTrigger.SpaceTight</c>）—— 那个模式的**全部机制**
+    /// 就是"定稿 + 校验通过之后立刻永久删源包"，把空间当场还给后面的包；
+    /// ② 普通档 + ③页「删除操作 = 彻底删除」（<c>LayerPurgeTrigger.LayerReclaim</c>，用户 2026-10-03 拍板的
+    /// **逐层回收**）—— 续解层当场删掉上一层交给它的那个内层包；最外层源包仍留到链尾由
+    /// <see cref="ArchiveFixer.Storage.RestItemPurger"/> 按「源包操作 + 删除操作」两档处理。
+    /// ⛔ 除了这两处，别再往管线里接它：两条以上删除路径并存正是"到底谁在删"这类问题的温床。
+    /// </para>
+    ///
+    /// <para>
+    /// ⚠ <b>调用方必须替它把住这几道门（它自己只看"开关 + 校验 + 清单"）</b>：定稿成功、输出校验通过、
+    /// 未取消、**可证完整**（<c>ResultCompletenessClassifier</c>）、以及**「半套分卷」那道闸门**
+    /// （<see cref="RestVolumeCompletenessGate.DescribeLayerReclaimBlocker"/> —— 2026-10-03 独立复核查出的缺口：
+    /// 本类只逐个 <c>File.Delete</c>，**不知道**同一组卷有没有被拆在两边，而 §44.2 那次 25 GB 永久消失
+    /// 正是那个形状）。
     /// </para>
     ///
     /// <para>
@@ -261,11 +273,16 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 生成"要删哪些文件"的清单。
         ///
-        /// 这是本类最关键的安全边界：清单**只能**来自任务自身记录，
+        /// <para>这是本类最关键的安全边界：清单**只能**来自任务自身记录，
         /// 分卷组 = <see cref="ArchiveTask.VolumePaths"/> 整组，单文件任务 = <see cref="ArchiveTask.CurrentPath"/>。
-        /// 绝不扫描目录去"顺便"删掉旁边的同名文件、说明文件或目录。
+        /// 绝不扫描目录去"顺便"删掉旁边的同名文件、说明文件或目录。</para>
+        ///
+        /// <para>⚠ 2026-10-03：改成 <c>internal</c> 是因为**「半套分卷」那道闸门要读同一份清单**
+        /// （<see cref="RestVolumeCompletenessGate.DescribeLayerReclaimBlocker"/> 的候选 = 这里要删的那几个文件）
+        /// —— 判据与实际删除必须看同一份清单（AGENTS.md §9.5：同一件事的真值只允许有一个出口），
+        /// ⛔ 不许在上层另抄一份"分卷组 = VolumePaths，单文件 = CurrentPath"。</para>
         /// </summary>
-        private static List<string> BuildTargetList(ArchiveTask task)
+        internal static List<string> BuildTargetList(ArchiveTask task)
         {
             var targets = new List<string>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

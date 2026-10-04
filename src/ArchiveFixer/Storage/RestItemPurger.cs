@@ -27,6 +27,17 @@ namespace ArchiveFixer.Storage
         /// <summary>顶层条目数。</summary>
         public int EntryCount { get; init; }
 
+        /// <summary>
+        /// **这一档是"空壳就地删"**（用户 2026-10-03）：其余物里递归地一个文件都没有 ⇒ 直接
+        /// <c>Directory.Delete(recursive: true)</c> 掉，**一个字节都没进回收站**。
+        ///
+        /// <para>为什么要这个事实位、而不是让调用方看 <c>EntryCount == 0 &amp;&amp; FreedBytes == 0</c>：
+        /// 那两个数**证明不了**"没进回收站"（别的原因也能是 0），而调用方要据此选文案 ——
+        /// 选了「移入回收站」档时照旧写"已移入回收站"就是一句**假话**
+        /// （AGENTS.md §9.5：要删 / 要写盘的动作判据只准读事实，⛔ 不许比数字猜）。</para>
+        /// </summary>
+        public bool RemovedAsEmptyShell { get; init; }
+
         /// <summary>一句话结论（进日志与任务详情）。</summary>
         public string Message { get; init; } = string.Empty;
 
@@ -208,6 +219,55 @@ namespace ArchiveFixer.Storage
                 return Skip($"{name}：其余物里除了要保留的以外没有别的项，没有可删除的内容");
             }
 
+            /*
+             * ===== 空壳就地删掉，不进回收站（用户 2026-10-03 真机）=====
+             *
+             * 与 <see cref="Purge"/> 那一档**同一份判据、同一条路**：按 keepPaths 排除之后剩下的
+             * 如果**全是**空目录（递归一个文件都没有），就一个个就地删掉，⛔ 不再逐个条目送回收站
+             * —— 那就是回收站里那堆 1 KB 同名「其余物」文件夹的另一半来源。
+             *
+             * ⛔ keepPaths 的语义一个字不改：要保留的那一份（这条链的最外层源包）怎么算、怎么排除，
+             * 全在上面，这里只决定"剩下这些怎么删"。目标里只要有一个是真文件，
+             * <see cref="IsFileFreeDirectoryTree"/> 就对它返回 false ⇒ 整个 targets 照旧走回收站。
+             */
+            if (targets.All(target => IsFileFreeDirectoryTree(target)))
+            {
+                int removedCount = 0;
+
+                foreach (string target in targets)
+                {
+                    try
+                    {
+                        // 判据已证明这一个递归无文件 ⇒ 只剩空目录结构，就地删掉（不进回收站）。
+                        Directory.Delete(target, recursive: true);
+                        removedCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        return Skip(
+                            $"{name}：其余物里剩下的全是空壳，但就地删空目录失败（{target}：{ex.Message}）"
+                            + $" —— 已就地删掉 {removedCount} / {targets.Count} 个空目录，没有送进回收站，"
+                            + "没删掉的项仍在原处");
+                    }
+                }
+
+                string shellLine =
+                    $"{name}：其余物里除要保留的以外只剩下空壳（0 个文件），已就地删掉 {removedCount} 个空目录，"
+                    + "没有送进回收站";
+
+                return new RestPurgeOutcome
+                {
+                    Attempted = true,
+                    Succeeded = true,
+                    Directory = directory,
+                    FreedBytes = 0,
+                    EntryCount = 0,
+                    RemovedAsEmptyShell = true,
+                    Message = shellLine + $"，保留的那一份仍在盘上：{string.Join("、", keep)}",
+                    LogLines = new[] { shellLine }
+                };
+            }
+
             var service = new RecycleBinService(_executor, null, _probe);
 
             var requests = targets
@@ -371,6 +431,48 @@ namespace ArchiveFixer.Storage
                 return Skip($"{name}：{splitGroupBlocker}");
             }
 
+            /*
+             * ===== 空壳就地删掉，不进回收站（用户 2026-10-03 真机）=====
+             *
+             * 现场：用户用「删除操作 = 移入回收站」跑完一批之后，回收站里堆了非常多 1 KB 的同名
+             * 「其余物」文件夹 —— 本方法把**整个 `其余物\` 目录当一个条目**送回收站，而每个任务
+             * （递归时每层）各送一次，里面往往只剩空壳 / 极小中间件，**空目录也照送**。
+             * 空目录没有"可还原"的价值，送回收站只是往用户的回收站里塞垃圾。
+             *
+             * 判据唯一出口 <see cref="IsFileFreeDirectoryTree"/>：**递归地一个文件都没有**
+             * （只剩空目录结构，含嵌套空目录）。⛔ 排在上面六道门槛**全部通过之后** ——
+             * 这一条只决定"怎么删"，绝不决定"能不能删"：越界 / 形状不像 / 半套分卷照旧 Skip、什么都不做。
+             */
+            if (IsFileFreeDirectoryTree(directory))
+            {
+                try
+                {
+                    // 判据已证明这一棵递归无文件，目录本身又过了六道门槛 ⇒ 这里只可能是空目录结构。
+                    Directory.Delete(directory, recursive: true);
+                }
+                catch (Exception ex)
+                {
+                    return Skip(
+                        $"{name}：其余物里只剩下空壳（0 个文件），但就地删空目录失败（{ex.Message}）"
+                        + " —— 没有送进回收站，盘上可能还剩一部分空目录");
+                }
+
+                string shellLine =
+                    $"{name}：其余物目录里只剩下空壳（0 个文件），已就地删掉空目录，没有送进回收站";
+
+                return new RestPurgeOutcome
+                {
+                    Attempted = true,
+                    Succeeded = true,
+                    Directory = directory,
+                    FreedBytes = 0,
+                    EntryCount = 0,
+                    RemovedAsEmptyShell = true,
+                    Message = shellLine,
+                    LogLines = new[] { shellLine }
+                };
+            }
+
             // logSink 传 null：删除日志由调用方（协调器）原样写进界面与文件日志，
             // 不在这里另开一个落点（两处各写一份会让日志出现两个时间戳）。
             string reason = mode == DeleteMode.RecycleBin ? AutoRecycleReason : AutoPurgeReason;
@@ -501,6 +603,56 @@ namespace ArchiveFixer.Storage
 
                 return !string.IsNullOrWhiteSpace(parent) &&
                        ProcessArtifactLayout.IsArtifactDirectoryName(parent);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// **空壳判据（唯一出口）**：这个目录**递归地一个文件都没有**（只剩空目录结构，含嵌套空目录）。
+        ///
+        /// <para><b>为什么要它</b>（用户 2026-10-03 真机）：删除操作 = 移入回收站跑完一批之后，回收站里堆了
+        /// 非常多 1 KB 的同名「其余物」文件夹 —— <see cref="Purge"/> 把整个 `其余物\` 目录当一个条目送回收站、
+        /// 每个任务（递归时每层）各送一次，而里面往往只剩空壳。空目录没有"可还原"的价值
+        /// ⇒ 这一档改为**就地永久删掉、不进回收站**。</para>
+        ///
+        /// <para>两个执行体（<see cref="Purge"/> 与 <see cref="PurgeExcept"/>）都转调这一份，
+        /// ⛔ 不许各写一遍（AGENTS.md §9.5：同一件事的真值只允许有一个出口）。</para>
+        ///
+        /// <para><b>判据只读文件系统事实</b>：数"这一棵下面有没有文件"
+        /// （⛔ 不比中文名、⛔ 不看时间戳、⛔ 不看大小）。见到第一个文件就返回 false，不必数到底。
+        /// 目录不在 / 读不动（枚举中途抛异常）⇒ 一律 false = **判不出就当它不空** ——
+        /// 于是 <c>Directory.Delete(recursive: true)</c> 只可能作用在**已被本判据证明递归无文件**的那个目录上。</para>
+        ///
+        /// <para>⚠ 目录联接点（junction）会被枚举跟着进去（实测 .NET 如此）：所以"链到别处一棵有文件的树"
+        /// 会被正确判成不空；而链到一棵空树时本判据会说"是空壳"，随后的
+        /// <c>Directory.Delete(recursive: true)</c> 会因为重解析点报"拒绝访问"抛出来
+        /// —— 由调用点的 catch 兜住（实测：.NET 的递归删除**不跟着重解析点删**，链接目标不会被删）。</para>
+        /// </summary>
+        private static bool IsFileFreeDirectoryTree(string? directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return false;
+            }
+
+            try
+            {
+                foreach (string entry in Directory.EnumerateFileSystemEntries(
+                             directory,
+                             "*",
+                             SearchOption.AllDirectories))
+                {
+                    // 只认文件：`File.Exists` 对目录恒为 false（枚举里的目录一律放过）。
+                    if (File.Exists(entry))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
             }
             catch
             {

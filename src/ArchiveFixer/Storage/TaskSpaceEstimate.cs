@@ -35,7 +35,8 @@ namespace ArchiveFixer.Storage
     /// <item><description>分卷各卷只进 <see cref="SourceBytes"/>，**绝不**再按"过程物"算第二遍
     /// （旧 `解压7z分卷文件.bat` 的场景里，分卷既被当成源包又被当成过程物，很容易重复计）。</description></item>
     /// <item><description>内层归档自身已在 <see cref="ContentBytes"/> 里，<see cref="ProcessArtifactBytes"/>
-    /// 只计它的**展开增量**。</description></item>
+    /// 只计它的**净增量**（展开后 − 包本体 ≈ 0，见 <see cref="SpaceEstimator.NestedExpansionAllowance"/>；
+    /// 用户 2026-10-03 第 ③ 条把老口径的"整份再扣一遍"改掉了）。</description></item>
     /// </list>
     ///
     /// <para><b>峰值（描述）</b>：<see cref="PeakBytes"/> = 源包 + 过程物 + 内容物，即"这一切同时存在"的那一刻。
@@ -323,11 +324,24 @@ namespace ArchiveFixer.Storage
         /// <summary>
         /// 内层包**再展开**的增量按它自身体积的几倍估（0 = 不计）。
         ///
-        /// <para>取 1.0 = "内层包解出来最多再多占它自己那么多"。理由：内层包自身已经算在内容物里，
-        /// 它展开之后多出来的那一份没有清单可查（要再列一次目录才知道），
-        /// 而空间判断宁可高估也不能低估（<c>SpaceChecker</c> 同一条价值观："不敢说够"）。</para>
+        /// <para><b>取 0 = 按「净增量」估（用户 2026-10-03 拍板，第 ③ 条）</b>：要的是
+        /// <b>展开后 − 包本体</b>那一份，而不是"整份再扣一遍"。内层包**自身**已经算在
+        /// <see cref="TaskSpaceEstimate.ContentBytes"/> 里，而它展开出来的内容与它同量级
+        /// （资源包本来就是"已经压过一遍的东西再打包一次"）⇒ 净增量 ≈ 0。</para>
+        ///
+        /// <para><b>为什么老口径（1.0）是错的</b>：等于把内层包算了两遍（内容物里一遍 + 增量里一遍），
+        /// 四层链的需求会被抬到"层数 × 单层"；朋友那台真机就是这么被抬高的
+        /// （程序要 57.29 GiB、真实峰值 42.85 GiB —— 见 <c>_tmp\方案-普通档逐层回收其余物.md</c> §1）。</para>
+        ///
+        /// <para><b>为什么敢取 0</b>：普通档从 2026-10-03 起**逐层回收**（<c>ExtractionCoordinator</c>
+        /// 在每一层定稿 + 校验通过之后当场删掉这一层的过程物），盘上同一时刻只有"当前层 + 下一层"
+        /// ⇒ 展开内层包时，上一层的那些字节已经还回来了，不需要为"所有内层包同时展开"留余量。</para>
+        ///
+        /// <para>⚠ 下界仍然守得住：放行判据 <see cref="TaskSpaceEstimate.FreeSpaceDemandBytes"/>
+        /// 是"内容物 + 过程物"的饱和加法，⛔ **永远 ≥ 内容物**；真正的硬门照旧是解压前那一遍
+        /// list 算出来的精确值（<see cref="RefineWithListing"/>）与 <c>ResourceBudget</c>。</para>
         /// </summary>
-        public const double NestedExpansionAllowance = 1.0d;
+        public const double NestedExpansionAllowance = 0.0d;
 
         /// <summary>
         /// 粗估：只读文件大小，不碰引擎。分卷组按 <see cref="ArchiveTask.VolumePaths"/> 求和（路径去重）。
@@ -429,8 +443,9 @@ namespace ArchiveFixer.Storage
             (long contentBytes, long innerArchiveBytes) = SumListing(list);
 
             /*
-             * 内层包再展开的增量：内层包**自身**已经在 contentBytes 里，这里只加它再解一次的增量
-             * （见 NestedExpansionAllowance 的说明）。没有内层包条目时是 0 —— 不凭空加。
+             * 内层包再展开的**净增量**（用户 2026-10-03 第 ③ 条）：内层包**自身**已经在 contentBytes 里，
+             * 这里只加"展开后 − 包本体"那一份 —— 见 NestedExpansionAllowance 的说明。
+             * 没有内层包条目时是 0 —— 不凭空加。
              */
             long nestedExtra = (long)Math.Min(
                 long.MaxValue,
@@ -441,7 +456,8 @@ namespace ArchiveFixer.Storage
             string basis2 =
                 $"清单 {list.FileCount} 个文件 / 解压后 {TaskSpaceEstimate.FormatSize(contentBytes)}"
                 + (innerArchiveBytes > 0
-                    ? $"，其中内层包 {TaskSpaceEstimate.FormatSize(innerArchiveBytes)}（再展开按 {NestedExpansionAllowance:0.##} 倍估增量）"
+                    ? $"，其中内层包 {TaskSpaceEstimate.FormatSize(innerArchiveBytes)}"
+                      + "（它本体已算在内容物里，再展开按「净增量」估、不再按整份扣一遍）"
                     : "，没有内层包")
                 + DescribeCarvedBytes(carvedBytes, null, carvedBytesNotNeeded);
 

@@ -28,8 +28,26 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public static class RestVolumeCompletenessGate
     {
+        /// <summary>「其余物」那一档的措辞（候选 = 整个其余物目录）。</summary>
+        private const string RestDirectoryCandidatePrefix = "其余物里的";
+
+        private const string RestDirectoryBlockerTail =
+            "整份处理其余物就等于把这一组拆开，所以这一档什么都不做（删除不可恢复；要清就先确认这一组到底还要不要）";
+
+        /// <summary>
+        /// **逐层回收**那一档的措辞（候选 = 这一层要删的那几个内层包文件，不是一个其余物目录）。
+        /// </summary>
+        private const string LayerReclaimCandidatePrefix = "逐层回收准备删的";
+
+        private const string LayerReclaimBlockerTail =
+            "当场删掉这一份就等于把这一组拆开，所以这一层一个字节都不删"
+            + "（删除不可恢复；这一份留到链尾按老口径处理 —— 而链尾那一档也要过同一道闸门，半套同样不删）";
+
         /// <summary>
         /// 其余物能不能整份处理。返回 <c>null</c> = 可以；返回一段话 = **拦下的具体理由**（调用方必须原样写进日志）。
+        ///
+        /// <para>⚠ 2026-10-03：判据本体搬到了 <see cref="DescribeBlockerForCandidates"/>（逐层回收那一档也要过同一道闸门），
+        /// 这里只保留原签名与**逐字相同**的文案 —— 其余物那一档的调用点一个字都不用改。</para>
         /// </summary>
         /// <param name="restDirectory">其余物目录（`<成品目录>\其余物`）。</param>
         public static string? DescribeBlocker(string? restDirectory)
@@ -44,43 +62,183 @@ namespace ArchiveFixer.Extraction
 
             string? outputRoot = Path.GetDirectoryName(fullRest.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
 
-            if (string.IsNullOrWhiteSpace(outputRoot) || !Directory.Exists(outputRoot))
+            return DescribeBlockerForCandidates(new[] { fullRest }, outputRoot);
+        }
+
+        /// <summary>
+        /// **逐层回收**那一档：这一层准备删的那几个内层包，跟成品目录树里还留着的同组归档件是不是"半套"。
+        ///
+        /// <para>与 <see cref="DescribeBlocker"/> **同一份判据**，只是候选从"一个其余物目录"换成
+        /// "这一层要删的那几个文件"、措辞换成逐层回收那套（⛔ 不许另写一份判断 —— §44.2 那次
+        /// "一组卷被拆在两边、剩下的被整份删掉"正是这道闸门专治的形状）。</para>
+        /// </summary>
+        /// <param name="candidatePaths">这一层准备删的文件（就是 <c>SourceCleanupService</c> 要删的那一份清单）。</param>
+        /// <param name="artifactRoot">成品目录树根（同组的另一片可能还在里面）。</param>
+        public static string? DescribeLayerReclaimBlocker(IReadOnlyList<string>? candidatePaths, string? artifactRoot)
+        {
+            return DescribeBlockerForCandidates(
+                candidatePaths,
+                artifactRoot,
+                LayerReclaimCandidatePrefix,
+                LayerReclaimBlockerTail,
+                requireRecognizedCandidates: true);
+        }
+
+        /// <summary>
+        /// **判据本体（唯一出口）**：<paramref name="candidatePaths"/>（准备删的那些文件或目录）
+        /// 与 <paramref name="artifactRoot"/>（成品目录树根）是不是**同一组分卷被拆在两边**。
+        ///
+        /// <para><b>判据（只读盘上事实，⛔ 不猜、不调引擎）</b>：候选里每一个"归档件"
+        /// （分卷的一片 / 归档本体 / 名字被改坏的归档本体）算出一个**基名**；
+        /// 只要成品目录这一棵树里（**候选自己与候选目录之内除外**）还存在**同基名的归档件**，
+        /// 就说明这一组被拆在两边 ⇒ 删掉候选等于把这一组毁掉 ⇒ 什么都不做。</para>
+        ///
+        /// <para>⛔ 只认"看起来是归档件"的东西：普通内容文件（`X.mp4` / `X.jpg`）**不算伙伴** ——
+        /// 包基名与内容文件名撞车是常态（`111\111\内容物`），拿它当伙伴会把正常的清理全拦死。
+        /// 目录同理（同名目录不算伙伴）。</para>
+        ///
+        /// <para>⚠ 保守方向是刻意的：判不出 / 读不动 ⇒ 返回拦下的理由（**什么都不做**），
+        /// 而不是放行 —— 删除是不可恢复的，这一档宁可多留一份过程物。</para>
+        /// </summary>
+        /// <param name="candidatePaths">
+        /// 准备删的那些：传**目录**时按"它顶层的文件"算基名、并把整个目录排除在扫描之外
+        /// （其余物那一档就是这种用法）；传**文件**时按这些文件自身算基名、只把这几个路径排除。
+        /// </param>
+        /// <param name="artifactRoot">成品目录树根（扫描范围）。</param>
+        /// <param name="candidatePrefix">措辞：候选那一侧怎么称呼（默认是其余物那一档的原话）。</param>
+        /// <param name="blockerTail">措辞：结论那半句（默认是其余物那一档的原话）。</param>
+        /// <param name="requireRecognizedCandidates">
+        /// 候选里**一个归档件都认不出**时算不算拦下。<c>false</c>（默认，其余物那一档）= 不拦；
+        /// <c>true</c>（逐层回收那一档）= 拦 —— 那一档要删的是"我们自己解出来的内层包"，
+        /// 连它是不是某组卷的一片都判不出就**不许删**（2026-10-03 第二轮复核）。
+        /// </param>
+        public static string? DescribeBlockerForCandidates(
+            IEnumerable<string>? candidatePaths,
+            string? artifactRoot,
+            string candidatePrefix = RestDirectoryCandidatePrefix,
+            string blockerTail = RestDirectoryBlockerTail,
+            bool requireRecognizedCandidates = false)
+        {
+            if (candidatePaths == null ||
+                string.IsNullOrWhiteSpace(artifactRoot) ||
+                !Directory.Exists(artifactRoot))
             {
                 return null;
             }
 
-            // 其余物自己造出来的那些卷：基名 -> 第一个见到的文件名（用来点名）
-            var restPieces = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // 候选自己产出来的那些卷：基名 -> 第一个见到的名字（用来点名）
+            var candidatePieces = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (string file in EnumerateTopLevelFiles(fullRest))
+            // 候选自己（或候选目录里的一切）不算"还留在成品目录里"。
+            var candidateFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var candidateDirectories = new List<string>();
+
+            foreach (string? candidate in candidatePaths)
             {
-                if (TryGetArchivePieceBaseName(file, out string baseName))
-                {
-                    restPieces.TryAdd(baseName, Path.GetFileName(file));
-                }
-            }
-
-            if (restPieces.Count == 0)
-            {
-                return null;   // 其余物里没有分卷/归档件（例如全是别的东西）⇒ 不拦
-            }
-
-            foreach (string file in EnumerateFilesSafe(outputRoot))
-            {
-                if (IsInside(fullRest, file))
-                {
-                    continue;   // 其余物自己里面的不算"在外面"
-                }
-
-                if (!TryGetArchivePieceBaseName(file, out string baseName)
-                    || !restPieces.TryGetValue(baseName, out string? restName))
+                if (string.IsNullOrWhiteSpace(candidate))
                 {
                     continue;
                 }
 
-                return $"其余物里的「{restName}」是一组分卷的一片，而同组的另一片「{Path.GetFileName(file)}」"
-                    + $"还在成品目录里（两边基名都是「{baseName}」）—— 整份处理其余物就等于把这一组拆开，"
-                    + "所以这一档什么都不做（删除不可恢复；要清就先确认这一组到底还要不要）";
+                string fullCandidate = SafePathHelper.GetFullPathSafe(candidate);
+
+                if (Directory.Exists(fullCandidate))
+                {
+                    candidateDirectories.Add(fullCandidate);
+
+                    foreach (string file in EnumerateTopLevelFiles(fullCandidate))
+                    {
+                        if (TryGetArchivePieceBaseName(file, out string baseName))
+                        {
+                            candidatePieces.TryAdd(baseName, Path.GetFileName(file));
+                        }
+                    }
+
+                    continue;
+                }
+
+                candidateFiles.Add(fullCandidate);
+
+                if (TryGetArchivePieceBaseName(fullCandidate, out string fileBaseName))
+                {
+                    candidatePieces.TryAdd(fileBaseName, Path.GetFileName(fullCandidate));
+                }
+            }
+
+            if (candidatePieces.Count == 0)
+            {
+                /*
+                 * 候选里一个"归档件"都认不出来 —— 这是"确实是别的东西"还是"我们认不出"？
+                 *
+                 * ⛔ 2026-10-03 第二轮复核：**认不出就拦**（兜底一律落在"什么都不做"），
+                 * 但只对**逐层回收**那一档（`requireRecognizedCandidates = true`）：
+                 * 那一档要删的是"我们自己解出来的内层包"，连它是不是某组卷的一片都判不出 ⇒ 不许删。
+                 * 「其余物」那一档保持既有口径（一个其余物目录里压根没有归档件 ⇒ 不拦，
+                 * 这一条从 §44.2 落地起就是如此、有用例钉着）。
+                 */
+                if (!requireRecognizedCandidates)
+                {
+                    return null;
+                }
+
+                var names = new List<string>();
+
+                foreach (string candidate in candidateFiles.Concat(candidateDirectories))
+                {
+                    names.Add(Path.GetFileName(candidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+                }
+
+                return $"{candidatePrefix}「{string.Join("、", names)}」一个都认不出是归档件"
+                    + "（既不是分卷的一片、也不是归档本体、名字去杂质之后也不是已知归档后缀）—— "
+                    + "判不出它是不是某组卷的一片，所以这一个字节都不删"
+                    + "（删除不可恢复；拿不准就先自己看一眼这一份到底是什么）";
+            }
+
+            /*
+             * ⛔ 2026-10-03 第二轮复核：**这棵树读不动 = 拦下**（原来是 `catch ⇒ 当没有`，
+             * 那等于把"判不出"当成了"外面没有同组的片"⇒ 放行）。与类注释那句"读不动就拦"对齐。
+             */
+            if (!TryEnumerateFilesSafe(artifactRoot, out IReadOnlyList<string> files, out string enumerationError))
+            {
+                return $"成品目录树读不动（{artifactRoot}：{enumerationError}）—— "
+                    + "判不出同组还有没有别的片留在里面，所以这一个字节都不删"
+                    + "（删除不可恢复；先解决那个目录的读取问题再来）";
+            }
+
+            foreach (string file in files)
+            {
+                string fullFile = SafePathHelper.GetFullPathSafe(file);
+
+                if (candidateFiles.Contains(fullFile))
+                {
+                    continue;   // 候选自己
+                }
+
+                if (candidateDirectories.Exists(directory => IsInside(directory, file)))
+                {
+                    continue;   // 候选目录里面的不算"在外面"
+                }
+
+                if (IsInsideWorkspace(file))
+                {
+                    /*
+                     * ⛔ 工作区（`<目标目录>\.ArchiveFixer.work\…`）是我们自己的暂存区、收尾时整份删掉，
+                     * 里面的东西**不算"成品目录里的另一片"**。
+                     * 2026-10-03 实测踩过：内层包改名（`inner.7删除z` → `inner.7z`）之前的那份**暂存副本**
+                     * 就躺在工作区的 `stage\` 里，只按名字判会把同一份包当成"半套"⇒ 把一次合法的
+                     * 逐层回收误拦下来（既有用例 `InnerLayerContinuationTests.彻底删除档_链尾把内层包连其余物一起删掉` 当场变红）。
+                     */
+                    continue;
+                }
+
+                if (!TryGetArchivePieceBaseName(file, out string baseName)
+                    || !candidatePieces.TryGetValue(baseName, out string? candidateName))
+                {
+                    continue;
+                }
+
+                return $"{candidatePrefix}「{candidateName}」是一组分卷的一片，而同组的另一片「{Path.GetFileName(file)}」"
+                    + $"还在成品目录里（两边基名都是「{baseName}」）—— {blockerTail}";
             }
 
             return null;
@@ -151,25 +309,38 @@ namespace ArchiveFixer.Extraction
             }
         }
 
-        /// <summary>成品这一棵树里的所有文件；读不动就当"没有外面"（上游判据与保守方向兜底）。</summary>
-        private static IEnumerable<string> EnumerateFilesSafe(string directory)
+        /// <summary>
+        /// 列一棵树的文件清单。
+        ///
+        /// <para>⛔ <b>读不动 = 返回 false</b>（2026-10-03 第二轮复核改的）：原来是 <c>catch ⇒ yield break</c>，
+        /// 那等于把"这棵树读不动"当成了"外面没有同组的片" ⇒ **放行** —— 与"兜底一律落在什么都不做"相反。
+        /// 现在由调用方返回一句拦下的理由（写清是**哪一棵树**读不动、所以一个字节都不删）。</para>
+        /// </summary>
+        private static bool TryEnumerateFilesSafe(string directory, out IReadOnlyList<string> files, out string error)
         {
-            string[] files;
-
             try
             {
-                files = Directory.GetFiles(directory, "*", SearchOption.AllDirectories);
-            }
-            catch
-            {
-                yield break;
-            }
+                files = EnumerateFilesForTest?.Invoke(directory)
+                        ?? Directory.GetFiles(directory, "*", SearchOption.AllDirectories);
 
-            foreach (string file in files)
+                error = string.Empty;
+                return true;
+            }
+            catch (Exception ex)
             {
-                yield return file;
+                files = Array.Empty<string>();
+                error = ex.Message;
+                return false;
             }
         }
+
+        /// <summary>
+        /// **只为单测留的缝**：造"这棵树读不动"那一档（⛔ 绝不去改用户目录的权限 / ACL）。
+        ///
+        /// <para>默认 null = 走真实文件系统。注入的假实现**必须对其它路径原样转调真实实现** ——
+        /// 否则会串到并发跑的别的用例上去（这个静态缝是进程级的）。</para>
+        /// </summary>
+        internal static Func<string, IReadOnlyList<string>>? EnumerateFilesForTest { get; set; }
 
         /// <summary>这个路径是不是在那个目录之下（含相等判定用不上：这里比的是文件与目录）。</summary>
         private static bool IsInside(string directory, string path)
@@ -179,6 +350,20 @@ namespace ArchiveFixer.Extraction
                 + Path.DirectorySeparatorChar;
 
             return full.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 这个文件是不是落在**我们自己的工作区**里（`&lt;目标目录&gt;\.ArchiveFixer.work\…`，含它的任一层子目录）。
+        /// 工作区是程序自己的暂存区、收尾时整份删掉 ⇒ 里面的东西不算"成品目录里的另一片"
+        /// （判据唯一出口 = <see cref="VolumeContentInference.WorkDirectoryName"/>，⛔ 不另写一个字面量）。
+        /// </summary>
+        private static bool IsInsideWorkspace(string path)
+        {
+            string marker = Path.DirectorySeparatorChar
+                + Detection.VolumeContentInference.WorkDirectoryName
+                + Path.DirectorySeparatorChar;
+
+            return path.Contains(marker, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

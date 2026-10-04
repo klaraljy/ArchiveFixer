@@ -170,8 +170,16 @@ namespace ArchiveFixer.Tests
             Assert.Equal(6000, refined.PeakBytes);
         }
 
+        /// <summary>
+        /// 精估里的内层包**只计净增量**（用户 2026-10-03 第 ③ 条改的口径）。
+        ///
+        /// <para>⚠ 这条断言**按新口径改过**（不是放宽）：老口径是"内层包再展开按 1.0 倍另算一份增量"
+        /// （= 把内层包算了两遍，四层链会被抬到"层数 × 单层"）；现在要的是「展开后 − 包本体」，
+        /// 而内层包本体已经在内容物里、展开出来的量与它同量级 ⇒ 净增量 ≈ 0。
+        /// ⛔ 铁律仍然守得住：放行需求 = 内容物 + 过程物，**永远 ≥ 内容物**（下面那条断言就是它）。</para>
+        /// </summary>
         [Fact]
-        public void 精估_内层包只计再展开的增量_不重复计它自身()
+        public void 精估_内层包只计净增量_不按整份再扣一遍()
         {
             string file = CreateSizedFile("outer.7z", 1000);
 
@@ -196,11 +204,19 @@ namespace ArchiveFixer.Tests
             // 内容物 = 2500（内层包自身**在**里面）
             Assert.Equal(2500, refined.ContentBytes);
 
-            // 过程物 = 内层包的**再展开增量**（2000 × 1.0），不是 2000 的重复计自身。
-            Assert.Equal(2000, refined.ProcessArtifactBytes);
+            // 过程物 = 内层包的**净增量**（展开后 − 包本体 ≈ 0），⛔ 不是 2000 的重复计。
+            Assert.Equal(0, refined.ProcessArtifactBytes);
 
-            // 峰值 = 源包 1000 + 过程物 2000 + 内容物 2500
-            Assert.Equal(5500, refined.PeakBytes);
+            // 口径恒等式：放行需求就是"内容物 + 过程物"（⛔ 不加源包）—— 前面那条只钉了过程物为 0，
+            // 这一条钉的是**判据本身**（别把源包加回来、也别另立第二套算法）。
+            Assert.Equal(refined.ContentBytes + refined.ProcessArtifactBytes, refined.FreeSpaceDemandBytes);
+
+            // 峰值 = 源包 1000 + 过程物 0 + 内容物 2500
+            Assert.Equal(3500, refined.PeakBytes);
+
+            // 铁律：放行需求不得小于内容物（口径怎么改都不许破）。
+            Assert.Equal(2500, refined.FreeSpaceDemandBytes);
+            Assert.True(refined.FreeSpaceDemandBytes >= refined.ContentBytes);
         }
 
         [Fact]

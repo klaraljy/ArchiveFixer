@@ -2092,6 +2092,17 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string RestPurgedCompactFormat = "{0}：{1}（{2} 项 / {3}）";
 
+        /// <summary>
+        /// 其余物处理的**空壳那一行**（用户 2026-10-03）：其余物里递归地一个文件都没有 ⇒
+        /// 已就地删掉空目录，**一个字节都没进回收站**。<c>{0}</c> = 短路径。
+        ///
+        /// <para>⛔ 这一句**不许**复用 <see cref="RestPurgedCompactFormat"/>：那一句的第一个槽是**档名**，
+        /// 选了「移入回收站」时会写成"移入回收站：…（0 项 / 0 B）"，而空壳档**根本没进回收站**
+        /// —— 那就是一句假话。选哪一句只读 <c>RestPurgeOutcome.RemovedAsEmptyShell</c> 这个**事实位**，
+        /// ⛔ 不许拿"0 项 0 B"去猜（那几个数证明不了"没进回收站"）。</para>
+        /// </summary>
+        public const string RestPurgedEmptyShellFormat = "其余物里只剩空壳：已就地删掉空目录、没有进回收站 —— {0}";
+
         /// <summary>批末的其余物汇总（一条顶掉几十行）：<c>{0}</c> = 任务数，<c>{1}</c> = 合计大小。</summary>
         public const string RestPurgedBatchSummaryFormat = "本批其余物已处理：{0} 个任务，合计 {1}。";
 
