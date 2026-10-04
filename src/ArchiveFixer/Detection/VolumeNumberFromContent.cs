@@ -289,7 +289,18 @@ namespace ArchiveFixer.Detection
         /// <para>只拿与 <paramref name="currentPath"/> **同格式**的读数参与：目录里同时躺着 RAR 与跨盘 zip 时
         /// 不混组（混起来就没有"连成 1..N"可言，那正是最该拒绝的情形）。</para>
         /// </summary>
-        public static VolumeGroupOrder ResolveGroup(string? currentPath, IEnumerable<VolumeNumberReading>? readings)
+        /// <param name="requireCurrentFirstVolume">
+        /// 手上这一卷**必须**是第 1 卷吗？默认 <c>true</c>（老口径，一个字节没放宽）。
+        /// <c>false</c> 只给**改名计划**那一处用（方案《分卷族系统化识别》§4 阶段 C）：
+        /// RAR <c>partN</c> 族的族标记 <c>partN</c> 本身就是"我是第 1 卷"的同义语，所以
+        /// 「谁拿着这一组」这一层判据照旧（<c>OneClickCoordinator</c> 与归组按名字算），
+        /// 而"要不要改名"是用户点的那一下 —— 他手上可能是 <c>.part2.rar</c>。
+        /// ⛔ 这一档**不是**放宽结论：卷号仍由内容给出、仍要求连成 1..N、改名仍只由
+        /// <c>TryApply</c> 全成或全不成地执行（判不出 ⇒ 什么都不做）。</param>
+        public static VolumeGroupOrder ResolveGroup(
+            string? currentPath,
+            IEnumerable<VolumeNumberReading>? readings,
+            bool requireCurrentFirstVolume = true)
         {
             var list = (readings ?? Array.Empty<VolumeNumberReading>())
                 .Where(r => r != null && !string.IsNullOrWhiteSpace(r.Path))
@@ -314,7 +325,7 @@ namespace ArchiveFixer.Detection
             switch (current.Format)
             {
                 case VolumeContentFormat.Rar:
-                    return ResolveRarGroup(list, path);
+                    return ResolveRarGroup(list, path, requireCurrentFirstVolume);
 
                 case VolumeContentFormat.Zip:
                     return ResolveZipGroup(list, path);
@@ -831,9 +842,14 @@ namespace ArchiveFixer.Detection
         /// RAR 组：RAR5 的内容里就是绝对卷号；RAR 1.5–4.x（RAR4）的字段基数待定 →
         /// 用"整组必须连成 1..N"判，再用主头的"这是第 1 卷"标记交叉核对。
         /// </summary>
+        /// <param name="requireCurrentFirstVolume">
+        /// 见 <see cref="ResolveGroup"/> 的同名参数：<c>false</c> = 改名计划那一档（用户手上可能是
+        /// <c>.part2.rar</c>，卷号照样只由内容回答）。⛔ 卷号的证据一个字没放宽。
+        /// </param>
         private static VolumeGroupOrder ResolveRarGroup(
             IReadOnlyList<VolumeNumberReading> list,
-            string currentPath)
+            string currentPath,
+            bool requireCurrentFirstVolume = true)
         {
             List<VolumeNumberReading> members = list
                 .Where(r => r.Format == VolumeContentFormat.Rar && r.IsVolumeMember)
@@ -915,8 +931,16 @@ namespace ArchiveFixer.Detection
                 return Refuse(VolumeNumberFail.CurrentNotFirstVolume, members.Count);
             }
 
-            // RAR 的入口就是第 1 卷：调用方手上这一卷不是第 1 卷时改名解决不了问题。
-            if (!SamePath(currentPath, slots[0].Path))
+            /*
+             * 第 1 卷不在手上（老口径）⇒ 不认。
+             *
+             * ⚠ 这一档从 2026-10-04（方案 §4 阶段 C）起**只对"谁拿着这一组"那一层成立**，
+             * 改名计划那一档走 `requireCurrentFirstVolume: false` —— 用户点的是他自己手上那一卷
+             * （可能就是 `.part2.rar`），而"要不要改名"由内容卷号 + 全成或全不成两把尺子回答，
+             * 与"入口是不是第 1 卷"无关。⛔ 判据本身一个字没放宽：卷号仍只由内容给出，
+             * 仍要求连成 1..N；`OneClickCoordinator` 照旧只让第 1 卷那一单负责整组。
+             */
+            if (requireCurrentFirstVolume && !SamePath(currentPath, slots[0].Path))
             {
                 return Refuse(VolumeNumberFail.CurrentNotFirstVolume, members.Count);
             }

@@ -1208,7 +1208,10 @@ namespace ArchiveFixer.Extraction
                 readings.Add(Detection.VolumeNumberFromContent.Read(candidate.Path));
             }
 
-            Detection.VolumeGroupOrder order = Detection.VolumeNumberFromContent.ResolveGroup(path, readings);
+            Detection.VolumeGroupOrder order = Detection.VolumeNumberFromContent.ResolveGroup(
+                path,
+                readings,
+                requireCurrentFirstVolume: false);
 
             if (!order.Confirmed || order.Count < 2)
             {
@@ -1235,8 +1238,17 @@ namespace ArchiveFixer.Extraction
                 return Cannot(path, StatusText.VolumeRepairNoSuggestion);
             }
 
-            // 入口那一卷：跨盘 zip 是末片（`X.zip`），RAR 是第 1 卷（`X.part1.rar`）—— 与上面推基名用的是同一卷。
-            return BuildPlanFromOrder(path, order, targetNames, entryVolumePath: stemSource);
+            /*
+             * 入口那一卷（引擎要打开的那一份，同时也是"计划里当前这一项"）：
+             *   · 跨盘 zip = 末片（`X.zip`）—— 中央目录在它身上，7-Zip 从它开始拼这一组；
+             *   · RAR = **调用方手上那一卷**（方案 §4 阶段 C）：族标记 `partN` 已经把"第 1 卷是谁"
+             *     写死了，计划的目标名仍从第 1 卷推（上面那句），⛔ 不因为入口不是第 1 卷就少改一卷。
+             *     ⚠ 老写法在这里传的是第 1 卷 ⇒ 手上是 `.part2.rar` 时计划里的"当前项"指向别人的名字，
+             *     调用方（`TryApply` / 任务路径同步）拿它当入口就会指到一个"名字本来就对"的卷上。
+             */
+            string entryVolumePath = family == VolumeNamingFamily.ZipSpanned ? stemSource : path;
+
+            return BuildPlanFromOrder(path, order, targetNames, entryVolumePath: entryVolumePath);
         }
 
         /// <summary>
