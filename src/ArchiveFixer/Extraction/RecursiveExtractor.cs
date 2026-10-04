@@ -314,6 +314,14 @@ namespace ArchiveFixer.Extraction
         /// <summary>密码探针目录名（建在这一层产物目录**之外**，⛔ 不许混进产物）。</summary>
         private const string ProbeDirectoryName = "_密码预检";
 
+        /// <summary>
+        /// 内层"双面文件"抠出来的副本放在这一层的这个兄弟目录里（<c>layer-XXX\carved\</c>）。
+        ///
+        /// <para>⛔ 与 <see cref="ProbeDirectoryName"/> 同一个道理：**绝不放产物目录**
+        /// （产物目录里的东西要参与结果校验与发布，一个字节都不能混进去）。</para>
+        /// </summary>
+        private const string CarveDirectoryName = "carved";
+
         /// <summary>展开比检查的上限保护：只对最大若干层做（防止有人把上限配得极大时白算）。</summary>
         private const int MaxExpansionRatioChecks = 20;
 
@@ -820,8 +828,29 @@ namespace ArchiveFixer.Extraction
             WorkItem item,
             CancellationToken cancellationToken,
             IProgress<ArchiveProgress>? progress = null,
-            Action<ArchiveStallNotice>? stalled = null)
+            Action<ArchiveStallNotice>? stalled = null,
+            string? carvedSource = null)
         {
+            /*
+             * ===== 这一层到底交给引擎哪一个文件（2026-10-04 真机，用户报"密码是对的怎么解压不了"）=====
+             *
+             * 现场：`HK.7z.001` 第 0 层解出 3 个 4K 视频（7.11 GiB，全部正常），第 1 层探到
+             * `4K (11)_2.mp4` 是内层包 → 直接把**原文件**交给 7-Zip → 7-Zip 回
+             * `Cannot open the file as archive` → 整条链判"部分完成" ⇒ 已解出的 7.11 GiB 一个字节都不发布、
+             * 工作区整份被清掉（14 分钟白跑）。
+             *
+             * 根因：那个 mp4 是**双面文件**（真视频 + 尾部一整个 ZIP，用户资源包里的常见形态）。
+             * 7-Zip 只在"前面垫的数据 ≤ 8 MiB"时才容忍这种整体偏移，超过就报上面那句原话；
+             * 单层路径早就接了这一档（先按偏移抠出来再解），**递归这条路一直没接** ——
+             * 而 2026-10-04 起出厂默认档正是"展开所有分支"，于是这条路成了默认路径。
+             *
+             * 修法：本方法多一个"改用哪一份"的参数。正常传 null（照旧用 <see cref="WorkItem.ArchivePath"/>）；
+             * 引擎回过"这不是归档"、而它又确实是双面文件时，外层用
+             * <see cref="TryCarveEmbeddedInnerArchiveAsync"/> 抠出副本，再带这个参数重跑一次本方法。
+             * ⛔ 抠出来的只是**副本**，原文件一个字节都不动；⛔ 判不出是不是双面文件 ⇒ 什么都不做（照旧失败）。
+             */
+            string archivePath = string.IsNullOrWhiteSpace(carvedSource) ? item.ArchivePath : carvedSource!;
+
             var options = new ExtractOptions
             {
                 // 每层都是全新目录，正常情况下不会撞名；万一撞上（归档内有重复条目）
@@ -964,7 +993,7 @@ namespace ArchiveFixer.Extraction
                  */
                 (string? unsafeSummary, ArchiveListResult? listedThisCandidate) =
                     await CheckEntriesBeforeExtractAsync(
-                            item.ArchivePath,
+                            archivePath,
                             candidate,
                             cancellationToken)
                         .ConfigureAwait(false);
@@ -1040,6 +1069,7 @@ namespace ArchiveFixer.Extraction
                  */
                 ArchiveOperationResult? probeFailure = await ProbeCandidateAsync(
                         item,
+                        archivePath,
                         options,
                         listedThisCandidate,
                         candidate,
@@ -1078,7 +1108,7 @@ namespace ArchiveFixer.Extraction
                 ArchiveOperationResult result = await _engine.ExtractAsync(
                         new ArchiveRequest
                         {
-                            ArchivePath = item.ArchivePath,
+                            ArchivePath = archivePath,
                             OutputPath = item.Layer.OutputPath,
                             Password = candidate,
 
@@ -1266,6 +1296,28 @@ namespace ArchiveFixer.Extraction
                         layerLabel,
                         result.Message));
 
+                /*
+                 * 例外：引擎说"这根本不是归档"时，先看一眼它是不是**双面文件**
+                 * （真视频 / 图片 + 尾部一整个 ZIP）—— 是的话抠出副本再解一次，
+                 * 而不是把它当"这一层失败"（那样会把整条链判成部分完成、已解出的内容全丢）。
+                 * 只在第一次（还没抠过）时试，⛔ 不会套娃重试。
+                 */
+                if (carvedSource == null
+                    && string.Equals(result.DetectedErrorType, EngineErrorTypes.UnsupportedFormat, StringComparison.Ordinal))
+                {
+                    LayerOutcome? retried = await RetryWithCarvedEmbeddedArchiveAsync(
+                            item,
+                            cancellationToken,
+                            progress,
+                            stalled)
+                        .ConfigureAwait(false);
+
+                    if (retried != null)
+                    {
+                        return retried;
+                    }
+                }
+
                 return LayerOutcome.Stop(
                     BuildLayerReport(item, result, succeededPassword: null, manifestEntries: lastListedEntries),
                     MapEngineErrorToStopReason(result));
@@ -1422,6 +1474,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private async Task<ArchiveOperationResult?> ProbeCandidateAsync(
             WorkItem item,
+            string archivePath,
             ExtractOptions options,
             ArchiveListResult? listed,
             string candidate,
@@ -1463,7 +1516,7 @@ namespace ArchiveFixer.Extraction
                 ArchiveOperationResult result = await _engine.ExtractAsync(
                         new ArchiveRequest
                         {
-                            ArchivePath = item.ArchivePath,
+                            ArchivePath = archivePath,
                             OutputPath = probeDirectory,
                             Password = candidate,
                             Progress = progress,
@@ -1541,9 +1594,126 @@ namespace ArchiveFixer.Extraction
                 StatusText.RecursionLayerLogPrefixFormat,
                 item.Depth) + Path.GetFileName(item.ArchivePath);
 
-        private static long ResolveProbeEntrySize(ArchiveListResult? listed, string probeEntry)
+        /// <summary>
+        /// 引擎回过"这根本不是归档"之后的一次补救：这个内层包是不是**双面文件**
+        /// （真视频 / 图片 + 尾部一整个 ZIP）？是的话按偏移抠出副本、带副本重跑这一层。
+        ///
+        /// <para><b>为什么必须有这一步</b>（用户 2026-10-04 真机原话：「这么简单的操作，密码也是对的，
+        /// 怎么解压不了」）：<c>HK.7z.001</c> 第 0 层正常解出 3 个 4K 视频（7.11 GiB），第 1 层探到
+        /// <c>4K (11)_2.mp4</c> 是内层包，把它**原样**交给 7-Zip ⇒ <c>Cannot open the file as archive</c>
+        /// ⇒ 整条链判"部分完成" ⇒ 已经解出来的 7.11 GiB 一个字节都不发布、工作区整份删掉（白跑 14 分钟）。
+        /// 那个 mp4 是真视频 + 尾部一个完整 ZIP，而 <b>7-Zip 只在前面垫的数据 ≤ 8 MiB 时才容忍这种整体偏移</b>
+        /// （实测边界见 <see cref="EmbeddedArchiveCarver"/> 的类注释）—— 单层路径早就接了这一档
+        /// （<c>ExtractionCoordinator</c> 里那句"仍按偏移取出内嵌归档"），**递归这条路一直没接**；
+        /// 而 2026-10-04 起出厂默认档正是"展开所有分支"，于是它成了默认路径。</para>
+        ///
+        /// <para>判据全部转调既有出口：是不是双面文件问 <see cref="EmbeddedArchiveDetector"/>
+        /// （与识别阶段同一个检测器），抠取用 <see cref="EmbeddedArchiveCarver"/>（与单层路径同一个执行体）。
+        /// ⛔ 判不出 / 抠不动 ⇒ 返回 <c>null</c>，调用方照旧按失败处置（口径一个字不改）；
+        /// ⛔ 抠出来的只是**副本**（落在这一层的 <c>carved\</c> 兄弟目录里，不在产物目录里），原文件一个字节都不动。</para>
+        /// </summary>
+        private async Task<LayerOutcome?> RetryWithCarvedEmbeddedArchiveAsync(
+            WorkItem item,
+            CancellationToken cancellationToken,
+            IProgress<ArchiveProgress>? progress,
+            Action<ArchiveStallNotice>? stalled)
         {
-            if (listed?.Entries == null)
+            string layerLabel = DescribeProbeLabel(item);
+
+            EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(item.ArchivePath);
+
+            /*
+             * 不是双面文件 ⇒ 什么都不做。
+             * · `IsVolumePart`（跨盘 ZIP 的最后一片）也在这里排除：它没有"可抠出来的独立区间"，
+             *   抠了只会得到一个解不开的半套。
+             */
+            if (!info.Found || info.IsVolumePart || info.Offset <= 0)
+            {
+                return null;
+            }
+
+            string layerDirectory = Path.GetDirectoryName(item.Layer.OutputPath) ?? item.Layer.OutputPath;
+            string carveDirectory = Path.Combine(layerDirectory, CarveDirectoryName);
+
+            try
+            {
+                Directory.CreateDirectory(carveDirectory);
+            }
+            catch
+            {
+                // 建不出目录（权限 / 盘）⇒ 补救做不了，按原样失败（绝不因此改结论）。
+                return null;
+            }
+
+            CarveResult carve = EmbeddedArchiveCarver.Carve(
+                item.ArchivePath,
+                info.Offset,
+                Path.Combine(carveDirectory, Path.GetFileName(item.ArchivePath)),
+                info.ArchiveEnd,
+                progress: null,
+                cancellationToken);
+
+            if (!carve.Success)
+            {
+                Log(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.InnerEmbeddedCarveFailedFormat,
+                        layerLabel,
+                        carve.Message));
+
+                return null;
+            }
+
+            Log(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.InnerEmbeddedCarveRetryFormat,
+                    layerLabel,
+                    info.Offset,
+                    carve.BytesWritten,
+                    info.EntryCount));
+
+            LayerOutcome retried = await ExtractLayerAsync(
+                    item,
+                    cancellationToken,
+                    progress,
+                    stalled,
+                    carve.OutputPath)
+                .ConfigureAwait(false);
+
+            /*
+             * 重解成功 ⇒ 抠出来的副本用完就删（它可能有几个 GB，成功路径上不该留）。
+             * 失败 ⇒ 留着：③页「失败时保留中间产物」打开时，那份副本是排查"到底抠对没抠对"的直接证据。
+             */
+            if (retried.Report is { Success: true })
+            {
+                TryDeleteDirectoryQuietly(carveDirectory);
+            }
+
+            return retried;
+        }
+
+        /// <summary>删一个目录，删不掉就算了（它只是工作区里的副本，不影响任何结论）。</summary>
+        private static void TryDeleteDirectoryQuietly(string directory)
+        {
+            try
+            {
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch
+            {
+                // 删不掉只是工作区里多占一份副本，工作区收尾时会一起清掉。
+            }
+        }
+
+        private static long ResolveProbeEntrySize(ArchiveListResult? listed, string probeEntry)
+        {            if (listed?.Entries == null)
             {
                 return 0;
             }
