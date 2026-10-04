@@ -1181,6 +1181,46 @@ namespace ArchiveFixer.Models
             + "手动「只解压」则停在这一层，剩下的内层包你自己决定要不要「继续解」。";
 
         // ================================================================
+        // ②页「内容物保留关键词」（用户 2026-10-04 当天第二次改口径：**从⑥设置搬到②页、改成一条条加**）
+        // ================================================================
+        //
+        // 原话：「你这个内容物保留关键词的输入框这么弄的这么大，你应该弄的像密码一样，而且是放在解压方式里面」。
+        // ⇒ 形态 = 单行输入框 +「添加」+ 一条条带「移除」的列表；位置 = ②解压方式页；
+        // ⛔ ⑥设置里那一栏**整块搬走**（用户当场选的"只在②页留一处"），界面入口只有这一处。
+        // 判据本身一个字没动（唯一出口仍是 Security\ContentKeepRules.cs），改的只是它长在哪、长什么样。
+
+        /// <summary>这一栏干什么用的（第一句白话）。</summary>
+        public const string ContentKeepKeywordsIntro =
+            "内容物里凡是文件名「包含」下面任意一个词的文件，程序都不解开、不改名、不搬进其余物、也不删 —— "
+            + "也就是碰都不碰。填一个词，回车或点「添加」就进列表；列表里每一条右边都能「移除」。";
+
+        /// <summary>单行输入框的提示。</summary>
+        public const string ContentKeepKeywordsInputToolTip =
+            "填一个词，回车或点「添加」。只填词本身就行 —— 名字里含它的全都算命中，不用写星号。";
+
+        /// <summary>规则那一段（原来⑥设置那一栏的白话说明，跟着这一栏一起搬过来）。</summary>
+        public const string ContentKeepKeywordsRulesHint =
+            "规则只有一条：文件名「包含」这个词就算命中（不分大小写），不用填星号、也不认正则 —— "
+            + "例如加「小明」，那么 小明.zip、小明.part1.rar、小明和小红.7z、小明.txt 都命中。"
+            + "⚠ 只管「内容物」：你自己导入的那个源包不套用这条规则（例如别人给你的 小明.zip 仍会照常识别与解压）。"
+            + "列表空着 = 这个功能不生效，程序行为与没有它的时候完全一样。";
+
+        /// <summary>「添加」按钮的字。</summary>
+        public const string ContentKeepKeywordsAddButtonText = "添加";
+
+        /// <summary>每一条右边那个「移除」按钮的字。</summary>
+        public const string ContentKeepKeywordsRemoveButtonText = "移除";
+
+        /// <summary>一条都没有时那句（唯一出口 = <c>SettingsViewModel.ContentKeepKeywordsSummary</c>）。</summary>
+        public const string ContentKeepKeywordsEmptySummary =
+            "现在是空的：这个功能不生效，程序行为与以前完全一样。";
+
+        /// <summary>已经有几条时那句：<c>{0}</c> = 条数。</summary>
+        public const string ContentKeepKeywordsActiveSummaryFormat =
+            "当前生效 {0} 个关键词：内容物里凡是「名字包含」其中任意一个的文件（压缩包也是、普通文件也是），"
+            + "程序都不解开、不改名、不搬进其余物、也不删 —— 也就是「碰都不碰」。";
+
+        // ================================================================
         // 递归停因：未展开的内层包（用户 2026-10-04 真机 + 当天推翻旧口径）
         // ================================================================
         //

@@ -250,6 +250,91 @@
                 </StackPanel>
             </GroupBox>
 
+            <!--
+                ==================== 内容物保留关键词（用户 2026-10-04 第二次改口径） ====================
+                原话：「你这个内容物保留关键词的输入框这么弄的这么大，你应该弄的像密码一样，
+                而且是放在解压方式里面」。
+                ⇒ 从⑥设置整块搬到这里（⛔ 那边已删掉，入口只有这一处），形态改成与④页密码清单同一种手感：
+                单行输入 + 「添加」（回车也行）+ 一行一个词、每条右边能「移除」。
+                ⛔ 判据一个字没动（唯一出口 Security\ContentKeepRules.cs），落盘的键也没变。
+            -->
+            <GroupBox Header="内容物保留关键词（名字里含这些词的内容物一律不碰）">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.ContentKeepKeywordsIntro}" />
+
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBox Grid.Column="0"
+                                 Text="{Binding SettingsEditor.NewContentKeepKeyword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="{x:Static models:StatusText.ContentKeepKeywordsInputToolTip}">
+                            <!-- 回车 = 点「添加」（手不用离开键盘） -->
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Enter"
+                                            Command="{Binding SettingsEditor.AddContentKeepKeywordCommand}" />
+                            </TextBox.InputBindings>
+                        </TextBox>
+
+                        <Button Grid.Column="1"
+                                Content="{x:Static models:StatusText.ContentKeepKeywordsAddButtonText}"
+                                MinWidth="72"
+                                Margin="8,0,0,0"
+                                IsEnabled="{Binding SettingsEditor.CanAddContentKeepKeyword}"
+                                Command="{Binding SettingsEditor.AddContentKeepKeywordCommand}" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.ContentKeepKeywordsSummary}" />
+
+                    <!-- 一行一个词；空列表时这一段自然什么都没有（上面那句已经说了"现在是空的"）。 -->
+                    <ItemsControl ItemsSource="{Binding SettingsEditor.ContentKeepKeywordItems}"
+                                  Margin="0,6,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource OptionRowStyle}"
+                                        Background="{StaticResource PanelSunkenBrush}"
+                                        BorderBrush="{StaticResource PanelBorderBrush}"
+                                        Margin="0,0,0,4"
+                                        Padding="8,4">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding}"
+                                                   FontFamily="{StaticResource MonoFontFamily}"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
+
+                                        <Button Grid.Column="1"
+                                                MinWidth="64"
+                                                Margin="10,0,0,0"
+                                                Style="{StaticResource ToolbarButtonStyle}"
+                                                Content="{x:Static models:StatusText.ContentKeepKeywordsRemoveButtonText}"
+                                                Command="{Binding DataContext.SettingsEditor.RemoveContentKeepKeywordCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.ContentKeepKeywordsRulesHint}" />
+                </StackPanel>
+            </GroupBox>
+
             <!-- ==================== 解压前与完成后 ==================== -->
             <GroupBox Header="解压前与完成后">
                 <StackPanel>

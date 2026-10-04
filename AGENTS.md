@@ -212,8 +212,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2659 条（2656 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 旧基线 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前"的数（逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
+- `dotnet test` 全量（主 checkout 内）：**2666 条（2663 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 旧基线 2659 / 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"「内容物保留关键词」从⑥设置搬到②页那一轮之前 / 分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前 / …"的数（关键词那一栏搬家 +7；逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
@@ -300,7 +300,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⛔ **"续解开 / 不开"只有一个开关，别到处找**（见 §40）：`ExtractionCoordinator.cs:12718` 的 `Settings.RecursionMode != "SingleLayer"` —— **出厂默认档 = 「展开所有分支」**（2026-10-04 用户改口径「就应该有压缩包就解压啊」）⇒ 默认直接进 `RunRecursiveAsync`；选「只解当前这一层」才走单层路径（内层包原样留着当**内容物**，继续解交给一键处理的轮次 / 手动「继续解」）。⛔ `RunRecursiveAsync` 里那个 `AllBranches ? AllBranches : SingleChain` **不是缺陷**（红检证明那条分支到不了），别再去"修"它。
   - 两条路各自谁清内层包：**不开续解** ⇒ 内层包是下一轮的**源包** ⇒ `SourcePackageMover.Plan`；**开续解** ⇒ 内层包是**链上过程物** ⇒ `PlanChainInnerPackageMoves`。⇒ 撞名这一类缺陷两条路都堵住了。
   - 用例 `ChainManifestCompletenessTests`：`默认档只解当前这一层_手动只解压时内层包原样留着` + 对照 `单链自动展开_同一份夹具手动只解压也要解到叶子层`（用**手动「只解压」**隔离掉轮次续解）。用户文档 `docs/使用说明.md` §10.1.0 有两张表的白话版。
-- ✅ **从未解开过的内层包不算过程物**（2026-10-04 用户原话：「不是没解开你为什么要放在其余物里面，啊」）⇒ 只有**真被展开过**的内层包才进 `其余物`、才可能被"删除操作"带走；**未展开的**（停半路剩下的分支 / 命中③页「内容物保留关键词」的 / 到上限没展开的）**原样留在成品目录当内容物**，⛔ 不进 `其余物`（判据沿用既有事实 —— 那两条同源名单一起改，§9.5；⛔ 不按名字猜、⛔ 不在删除侧事后补救）。用例 `ChainInnerPackageMovePlanTests` / `ChainRestSweepTests` / `InnerLayerContinuationTests` 各一条。
+- ✅ **从未解开过的内层包不算过程物**（2026-10-04 用户原话：「不是没解开你为什么要放在其余物里面，啊」）⇒ 只有**真被展开过**的内层包才进 `其余物`、才可能被"删除操作"带走；**未展开的**（停半路剩下的分支 / 命中②页「内容物保留关键词」的 / 到上限没展开的）**原样留在成品目录当内容物**，⛔ 不进 `其余物`（判据沿用既有事实 —— 那两条同源名单一起改，§9.5；⛔ 不按名字猜、⛔ 不在删除侧事后补救）。用例 `ChainInnerPackageMovePlanTests` / `ChainRestSweepTests` / `InnerLayerContinuationTests` 各一条。
+- ✅ **「内容物保留关键词」的家在②页，不在⑥设置**（2026-10-04 用户原话：「你这个内容物保留关键词的输入框这么弄的这么大，你应该弄的像密码一样，而且是放在解压方式里面」）⇒ ②解压方式页「嵌套与覆盖」下面：**单行输入 +「添加」（回车也行）+ 一行一个词、每条右边「移除」**（与④页密码清单同一种手感）；⛔ ⑥设置里那一栏已整块搬走、**入口只有这一处**（两处入口 = 用户看到"改了没反应"）。⛔ **判据与落盘的键一个字没动**（仍是 `Security\ContentKeepRules.cs` + `ContentKeepKeywords`，加减两步都转调 `NormalizeKeywords`）。用例 `ContentKeepKeywordEditorTests`(7)；红检：⑥设置里放回一个绑 `NewContentKeepKeyword` 的框 ⇒ 界面落点那条红。
 - ⛔ **改名之后，任务上每一处指向这个文件的旧路径都要改过来**（见 §38；展开见 §50.4）：`RenameService.UpdateTaskRenameSuccess(task, oldPath, newPath)` 必须**同时**改 `CurrentPath` 与 `VolumePaths` 里那一项 —— 只改一条 ⇒ 账上留下"盘上已不存在"的旧名字 ⇒ `ProcessArtifactLayout.SourcePackageMover.ResolveSourceGroup` 判"清单非空、却不含任务自己" ⇒ **整组搬运退化成只搬一份**。
   - ⛔ **"清单够不够全"不许按条数比**；⛔ "只改 `CurrentPath`"这种写法已被 `Extraction/TaskPathSync`（**唯一出口**，三处调用）取代，兜底一律"整组一份都不搬"。
 - ✅ **"去杂质之后是什么"只有一个出口**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`；真机现场见 `docs/真机事故复盘.md` §48.1）：删掉**最多 2 个非数字字符**后若**唯一地**变成**已知归档后缀**才算（本来就干净、或删出来有歧义 ⇒ 一律不认）。它同时喂三个消费点（见 §50.3）；⛔ 红线一个字没放宽：变体名字不标准 ⇒ `HasRenamedVolume=true` ⇒ **整组不许进可删的其余物**；⛔ 尺子只加在**归档本体**那一档上。

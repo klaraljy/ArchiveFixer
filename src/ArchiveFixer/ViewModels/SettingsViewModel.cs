@@ -316,43 +316,45 @@ namespace ArchiveFixer.ViewModels
         };
 
         /// <summary>
-        /// 「内容物保留关键词（内容物压缩文件不解压）」——**⑥设置页那一栏的多行文本框**（用户 2026-10-04 拍板）。
+        /// ②页「内容物保留关键词」那一栏**列出来的关键词**（顺序 = 用户加的顺序，与落盘那份逐字相同）。
         ///
-        /// <para><b>用户原话</b>：「现在出现一个功能叫做"内容物压缩文件不解压"，这个功能同样要有记忆功能，
-        /// 用户可以在里面输入像，<c>1_名字里面包含特定字符的压缩文件不解压</c>……只要内容物里面有文件的名称
-        /// 包含了"小明"的这些压缩文件碰都不要碰」。</para>
+        /// <para><b>用户原话（2026-10-04 第二次改口径）</b>：「你这个内容物保留关键词的输入框这么弄的这么大，
+        /// 你应该弄的像密码一样，而且是放在解压方式里面」。</para>
         ///
-        /// <para>界面上是**一行一个关键词**的多行框，读写的仍是设置里那一个字符串数组
-        /// （<see cref="AppSettings.ContentKeepKeywords"/>）—— 「记忆」由自动保存负责，
-        /// 与其它设置项同一条路。判据唯一出口 <see cref="ContentKeepRules"/>（包含即命中、大小写不敏感、
-        /// 空行忽略、⛔ 不做通配 / 正则、只吃文件名）。</para>
+        /// <para>所以形态改成<b>一条条加</b>：上面一个单行输入框 + 「添加」（回车也行），下面一行一个词、
+        /// 每条右边一个「移除」—— 与④页密码清单同一种手感（不再是那个能顶到 140 px 高的多行框）。
+        /// 位置也整块搬到②解压方式页（<c>ExtractionTab.xaml</c>），⛔ ⑥设置里那一栏已经删掉，
+        /// 界面入口**只有这一处**（两处入口 = 两个控件改同一个值，用户会看到"改了没反应"）。</para>
         ///
-        /// <para>写回时**当场归一化**（Trim、丢空行、去重），并把归一化后的文本**再刷回界面**
-        /// —— 否则界面上留着"输入了却没生效"的样子（AGENTS.md §9.5：值对而界面不刷新 = 用户读成"没生效"）。
-        /// 绑定用默认的 LostFocus 触发（不是每敲一个字就归一化），免得打字中途被改写。</para>
+        /// <para>真值仍然是设置里那一个字符串数组（<see cref="AppSettings.ContentKeepKeywords"/>，
+        /// 落盘的键一个字符都没变）—— 「记忆」由自动保存负责，与其它设置项同一条路。
+        /// 判据唯一出口仍是 <see cref="ContentKeepRules"/>（包含即命中、大小写不敏感、空项忽略、
+        /// ⛔ 不做通配 / 正则、只吃文件名）；加减两步都**当场归一化**（Trim / 丢空项 / 去重），
+        /// 再把归一化后的清单**刷回界面**（AGENTS.md §9.5：值对而界面不刷新 = 用户读成"没生效"）。</para>
         /// </summary>
-        public string ContentKeepKeywordsText
+        public ObservableCollection<string> ContentKeepKeywordItems { get; } = new();
+
+        private string _newContentKeepKeyword = string.Empty;
+
+        /// <summary>单行输入框里正在敲的那个词（回车 = 添加，见 <c>ExtractionTab.xaml</c> 的 KeyBinding）。</summary>
+        public string NewContentKeepKeyword
         {
-            get => string.Join(Environment.NewLine, Settings.ContentKeepKeywords ?? new List<string>());
+            get => _newContentKeepKeyword;
 
             set
             {
-                List<string> normalized = ContentKeepRules.NormalizeKeywords(
-                    (value ?? string.Empty).Split('\n'));
-
-                if (Settings.ContentKeepKeywords != null &&
-                    Settings.ContentKeepKeywords.Count == normalized.Count &&
-                    Settings.ContentKeepKeywords.SequenceEqual(normalized, StringComparer.Ordinal))
+                if (SetProperty(ref _newContentKeepKeyword, value ?? string.Empty))
                 {
-                    return;
+                    OnPropertyChanged(nameof(CanAddContentKeepKeyword));
                 }
-
-                Settings.ContentKeepKeywords = normalized;
-
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(ContentKeepKeywordsSummary));
             }
         }
+
+        /// <summary>
+        /// 「添加」按钮能不能点（输入框空白 ⇒ 禁用）。点了什么都不会发生，不如一开始就说清楚 ——
+        /// 否则用户会读成"这个按钮坏了"。
+        /// </summary>
+        public bool CanAddContentKeepKeyword => !string.IsNullOrWhiteSpace(NewContentKeepKeyword);
 
         /// <summary>
         /// 那一栏下面那句白话说明 + 当前生效几条（**同一份真值**，不给用户一个"填了不知道有没有用"的框）。
@@ -361,13 +363,78 @@ namespace ArchiveFixer.ViewModels
         {
             get
             {
-                int count = ContentKeepRules.NormalizeKeywords(Settings.ContentKeepKeywords).Count;
+                int count = ContentKeepRules.NormalizeKeywords(Settings?.ContentKeepKeywords).Count;
 
                 return count == 0
-                    ? "现在是空的：这个功能不生效，程序行为与以前完全一样。"
-                    : $"当前生效 {count} 个关键词：内容物里凡是「名字包含」其中任意一个的文件（压缩包也是、普通文件也是），"
-                      + "程序都不解开、不改名、不搬进其余物、也不删 —— 也就是「碰都不碰」。";
+                    ? StatusText.ContentKeepKeywordsEmptySummary
+                    : string.Format(StatusText.ContentKeepKeywordsActiveSummaryFormat, count);
             }
+        }
+
+        /// <summary>
+        /// 「添加」：把输入框里那个词并进设置（归一化 + 大小写不敏感去重仍走 <see cref="ContentKeepRules"/>），
+        /// 然后清空输入框、刷新列表。
+        ///
+        /// <para>输入框是空白 / 已经有过同一个词 ⇒ 列表一个字节都不变（幂等），但输入框照样清空 ——
+        /// 不留一个"我按了、却好像没反应"的词在里面。</para>
+        /// </summary>
+        private void AddContentKeepKeyword()
+        {
+            string keyword = ContentKeepRules.NormalizeKeywords(new[] { NewContentKeepKeyword })
+                .FirstOrDefault() ?? string.Empty;
+
+            if (keyword.Length == 0)
+            {
+                return;
+            }
+
+            Settings.ContentKeepKeywords = ContentKeepRules.NormalizeKeywords(
+                (Settings.ContentKeepKeywords ?? new List<string>()).Append(keyword));
+
+            NewContentKeepKeyword = string.Empty;
+
+            RefreshContentKeepKeywords();
+        }
+
+        /// <summary>「移除」：只从清单里去掉这一个（大小写不敏感），别的一个都不动。</summary>
+        private void RemoveContentKeepKeyword(object? parameter)
+        {
+            string keyword = parameter as string ?? string.Empty;
+
+            if (keyword.Length == 0)
+            {
+                return;
+            }
+
+            var remaining = new List<string>();
+
+            foreach (string existing in ContentKeepRules.NormalizeKeywords(Settings.ContentKeepKeywords))
+            {
+                if (!string.Equals(existing, keyword, StringComparison.OrdinalIgnoreCase))
+                {
+                    remaining.Add(existing);
+                }
+            }
+
+            Settings.ContentKeepKeywords = remaining;
+
+            RefreshContentKeepKeywords();
+        }
+
+        /// <summary>
+        /// 把关键词列表刷成设置里的真实内容（不猜、不缓存）—— 装载设置、恢复默认、加一条、移除一条都走它。
+        /// </summary>
+        private void RefreshContentKeepKeywords()
+        {
+            ContentKeepKeywordItems.Clear();
+
+            foreach (string keyword in ContentKeepRules.NormalizeKeywords(Settings?.ContentKeepKeywords))
+            {
+                ContentKeepKeywordItems.Add(keyword);
+            }
+
+            OnPropertyChanged(nameof(ContentKeepKeywordsSummary));
+            OnPropertyChanged(nameof(CanAddContentKeepKeyword));
         }
 
         /// <summary>
@@ -524,6 +591,7 @@ namespace ArchiveFixer.ViewModels
             OnPropertyChanged(nameof(Settings));
             RefreshRememberedBooks();
             RefreshSpecialExtractionRules();
+            RefreshContentKeepKeywords();
             RaiseOutputPlacementChanged();
         }
 
@@ -718,6 +786,12 @@ namespace ArchiveFixer.ViewModels
         /// <summary>把一本"已记住的密码本"从清单里移除（**只影响自动加载，磁盘上的文件一个字节都不动**）。</summary>
         public ICommand RemoveRememberedBookCommand { get; }
 
+        /// <summary>把输入框里那个词加进「内容物保留关键词」（②页那一栏）。</summary>
+        public ICommand AddContentKeepKeywordCommand { get; }
+
+        /// <summary>从「内容物保留关键词」里移除一个词（参数 = 那个词本身）。</summary>
+        public ICommand RemoveContentKeepKeywordCommand { get; }
+
         public SettingsViewModel()
             : this(new AppSettings(), new SettingsService())
         {
@@ -746,6 +820,8 @@ namespace ArchiveFixer.ViewModels
             SelectCollectTargetDirectoryCommand = new RelayCommand(SelectCollectTargetDirectory);
             SelectRarExeCommand = new RelayCommand(SelectRarExe);
             RemoveRememberedBookCommand = new RelayCommand(RemoveRememberedBook);
+            AddContentKeepKeywordCommand = new RelayCommand(AddContentKeepKeyword);
+            RemoveContentKeepKeywordCommand = new RelayCommand(RemoveContentKeepKeyword);
             MoveEngineUpCommand = new RelayCommand(parameter => MoveEngine(parameter, -1));
             MoveEngineDownCommand = new RelayCommand(parameter => MoveEngine(parameter, +1));
 
@@ -753,6 +829,7 @@ namespace ArchiveFixer.ViewModels
             RefreshRarStatus();
             RefreshRememberedBooks();
             RefreshSpecialExtractionRules();
+            RefreshContentKeepKeywords();
 
             Message = "设置已加载（改哪一项都会自动存，不用点保存）。";
         }
@@ -981,6 +1058,7 @@ namespace ArchiveFixer.ViewModels
             Settings = _settingsService.CreateDefault();
             RefreshRememberedBooks();
             RefreshSpecialExtractionRules();
+            RefreshContentKeepKeywords();
             Message = "已恢复默认设置，点击保存后生效。";
         }
 
