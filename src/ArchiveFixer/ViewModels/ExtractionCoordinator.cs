@@ -6216,6 +6216,15 @@ namespace ArchiveFixer.ViewModels
                 recursionProgressSink,
                 notice => OnEngineStalled(task, notice));
 
+            /*
+             * ===== 跨链收卷（2026-10-05 真机第九批 CCCC）=====
+             *
+             * 位置必须在**工作区被清掉之前**：这一趟没走完时，工作区里那一片（真机上是末片 `111.zip`）
+             * 可能正是"同一分卷组"里别单缺的那一片，而链一收尾工作区就整份删掉 ⇒ 批末那一站到盘上一看，
+             * 缺的东西刚刚被自己扔掉（真机 22:06:02「已清理工作区：2 个文件 / 48.35 MiB」就是这么把末片带走的）。
+             */
+            AdoptUnresolvedVolumePieces(result);
+
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
                 /*
@@ -7508,6 +7517,15 @@ namespace ArchiveFixer.ViewModels
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 这一批里"某一组由谁在解"（组基名 → 消费方任务名）——跨链收卷那一条用（真机第九批 CCCC）。
+        ///
+        /// <para>用途只有一件：同一组的**别的单**在这个消费方收尾之前**不许落任何结论**
+        /// （否则会得到一句"分卷缺失、未开始解压"，而那一刻内容正在被解开）。</para>
+        /// </summary>
+        private readonly Dictionary<string, string> _groupConsumerByName =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 已经在"批末补判"里跑过一遍的任务：⛔ 不许再记一次缺口（否则它会永远留在
         /// <see cref="_volumeDeficitDeferred"/> 里、永远不落结论）。</summary>
         private readonly HashSet<ArchiveTask> _volumeDeficitFinalPass = new();
@@ -8023,6 +8041,186 @@ namespace ArchiveFixer.ViewModels
         // ================================================================
 
         /// <summary>
+        /// **跨链收卷**（2026-10-05 真机第九批 CCCC；用户口径：「现在找不到的先跳过，等全部结束之后再看看」
+        /// 「让批末那一站去查本批各单已经解出来的片」）。
+        ///
+        /// <para><b>现场</b>：一组跨盘 ZIP 四片分在四户人家 —— <c>.z02</c>/<c>.z03</c> 在用户源目录、
+        /// 第 1 片 <c>111.z01</c> 压在 <c>111(2)_.zip</c> 里、末片 <c>111.zip</c> 压在 <c>111.rar</c> 里。
+        /// 两条链各自把**对方缺的那一片解了出来**，可两条链自己都没走完（互相等对方）⇒ 收尾时工作区整份删掉
+        /// ⇒ 批末那一站到盘上一看：缺的东西刚刚被自己扔掉（真机 22:06:02 与 22:06:12 那两行「已清理工作区」）。</para>
+        ///
+        /// <para>做法只有一件事：把这一趟**打不开的那几片**按**规范卷名**硬链接到"这一组还缺卷"的那一单
+        /// 自己所在的目录里（真机 = <c>111(4)\</c>，与那两片源卷同一个目录），随后**转调既有出口**
+        /// <see cref="VolumeNameRepair.ResolveSpannedZipDiskGather"/> 把这一组其余的片（散在兄弟目录里的）
+        /// 也按规范名接过来 —— 判据（末片自述 / 一片对一片 / 除末片外等大 / 同盘）一条都没另写。</para>
+        ///
+        /// <para>⛔ 只是**硬链接**（零字节）：不改名、不搬、不覆盖、不删用户的任何文件；跨盘 / 判不出 /
+        /// 建不了 ⇒ 什么都不做（⛔ 绝不复制大文件）。这几片按用户 2026-10-05 的拍板算**源包**：
+        /// 这一组真解开之后，它们跟着一起进其余物、按删除档处理。</para>
+        /// </summary>
+        private void AdoptUnresolvedVolumePieces(RecursionResult? recursion)
+        {
+            if (recursion == null || recursion.UnresolvedVolumePieces.Count == 0)
+            {
+                return;
+            }
+
+            foreach (string piece in recursion.UnresolvedVolumePieces)
+            {
+                try
+                {
+                    TryAdoptUnresolvedVolumePiece(piece);
+                }
+                catch (Exception ex)
+                {
+                    // 加法：判不出来一律退回"照旧"（这一片跟着工作区一起消失，与改动前一个字都不差）。
+                    AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
+                }
+            }
+        }
+
+        /// <summary>收**一片**：按规范卷名接到"这一组还缺卷"那一单的目录里；末片在手时顺手把整组接齐。</summary>
+        private bool TryAdoptUnresolvedVolumePiece(string piecePath)
+        {
+            if (string.IsNullOrWhiteSpace(piecePath) || !File.Exists(piecePath))
+            {
+                return false;
+            }
+
+            string baseName = FileNameHelper.GetArchiveBaseName(piecePath);
+            int? familyIndex = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(piecePath));
+
+            if (baseName.Length == 0 || familyIndex == null)
+            {
+                return false;
+            }
+
+            /*
+             * 跨盘 ZIP 这一族的编号：`.zip` = 1（**末片**，也正是引擎要打开的入口）、`.zNN` = NN + 1
+             * ⇒ 真实盘序 = 编号 - 1（同一句规则也写在 VolumeNameRepair.ResolveSpannedZipDiskGather 里）。
+             */
+            int disk = familyIndex.Value - 1;
+
+            if (disk < 0)
+            {
+                return false;
+            }
+
+            // 目标目录 = 这一组**那几片自己所在的目录**（任务表里第一单，顺序稳定 ⇒ 每次同一个）。
+            //
+            // ⚠ 判据读的是**整个任务表**（导入进来就在表里），⛔ 不是"缺卷留到最后再判"那份名单 ——
+            // 名单要等每一单**开工**才写得进去，而这条链很可能跑在那一单开工之前（夹具里就是这样：
+            // 包先跑、片子后开工）⇒ 只看名单会静默什么都不做。
+            string targetDir = ResolveBatchGroupDirectory(baseName);
+
+            if (targetDir.Length == 0)
+            {
+                return false;
+            }
+
+            string canonical = disk == 0 ? baseName + ".zip" : VolumeNameRepair.CanonicalDiskName(baseName, disk);
+            string target = Path.Combine(targetDir, canonical);
+            bool adopted = false;
+
+            if (!File.Exists(target)
+                && HardLinkHelper.CanHardLink(piecePath, targetDir)
+                && HardLinkHelper.TryCreateHardLink(target, piecePath))
+            {
+                adopted = true;
+
+                AppendLog(
+                    "INFO",
+                    $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
+                    + "零字节的硬链接：你的源文件一个字节没动、名字也一个字符没改）—— 这一组留到这一批都跑完再一起判。");
+            }
+
+            // 末片在哪一层，整组就得凑到哪一层（引擎只看入口旁边那一层）⇒ 末片到手就顺手把整组接齐。
+            string tail = Path.Combine(targetDir, baseName + ".zip");
+
+            if (!File.Exists(tail))
+            {
+                return adopted;
+            }
+
+            VolumeNameRepair.SpannedZipDiskGather gather = VolumeNameRepair.ResolveSpannedZipDiskGather(
+                tail,
+                VolumeNameRepair.EnumerateVolumeCandidatesNearby(tail));
+
+            if (gather.Applicable && gather.LinkedCount > 0)
+            {
+                AppendLog("INFO", $"「{baseName}」这一组又接过来 {gather.LinkedCount} 片：{gather.Detail}");
+            }
+
+            if (gather.Applicable && gather.Complete)
+            {
+                AppendLog(
+                    "INFO",
+                    $"「{baseName}」这一组现在凑齐了 —— 等这一批的解压都跑完，批末那一站会直接把这一组解开。");
+            }
+
+            return adopted || (gather.Applicable && gather.Complete);
+        }
+
+        /// <summary>
+        /// 这一组**那几片自己所在的目录**（任务表里第一单；判据用既有那把"同一组"的尺子
+        /// <see cref="VolumeGroupDetector.BelongsToSameGroup"/>，所以脏名（`111.z0删除2`）照样认得出）。
+        /// 找不到 ⇒ 空串 = 什么都不做。
+        /// </summary>
+        private string ResolveBatchGroupDirectory(string baseName)
+        {
+            string tailName = baseName + ".zip";
+
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                string path = candidate?.CurrentPath ?? string.Empty;
+
+                if (path.Length == 0
+                    || !VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                {
+                    continue;
+                }
+
+                string? directory = Path.GetDirectoryName(path);
+
+                if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+                {
+                    return directory!;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// 把"这一组**其余的片**"记进既有那份"借来用过的源片"账（消费方 = <paramref name="consumer"/>）。
+        ///
+        /// <para>⛔ 只记**同一组**、且不是消费方自己那一条；⛔ 一个字节都不动 —— 搬运与删除仍旧由既有出口
+        /// 在消费方**真的成功**之后按那六道闸门办（见 <see cref="CollectConsumedSourcePiecesIntoRest"/>）。</para>
+        /// </summary>
+        private void RememberGroupPiecesConsumedBy(ArchiveTask consumer)
+        {
+            string tailName = FileNameHelper.GetArchiveBaseName(consumer.CurrentPath) + ".zip";
+
+            foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
+            {
+                if (other == null || ReferenceEquals(other, consumer))
+                {
+                    continue;
+                }
+
+                string path = other.CurrentPath ?? string.Empty;
+
+                if (path.Length == 0
+                    || !VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                {
+                    continue;
+                }
+
+                _consumedVolumeSources[path] = consumer.FileName;
+            }
+        }
+
+        /// <summary>
         /// **批首只记缺口**（用户 2026-10-05 原话：「所以你开始就得突破所有的伪装和压缩，这种分卷找不到的
         /// 情况可以留在最后做」）：⛔ 不落 Failed、⛔ 不写"本次不开始"、⛔ 不跳过 —— 只记进名单。
         ///
@@ -8093,6 +8291,24 @@ namespace ArchiveFixer.ViewModels
                 // ① 再收一次卷：那时缺的那几卷可能已经被解出来 / 被收拢到位。
                 TryGatherVolumesBeforeExtract(task, out _);
 
+                /*
+                 * ①.5 这一组的内容**正在由本批另一单解出来**、而它还没收尾 ⇒ 这一单**先不落结论**。
+                 *
+                 * 真机第九批 CCCC 的形状：同一组的片各自是一单（`111.z0删除2` / `111.z0删除3`），
+                 * 批末补齐之后只有其中一单去把整组解开；另一单若在**同一趟**里就去判"仍然缺"，
+                 * 会得到一句"分卷缺失、未开始解压"—— 而那一刻内容正在被解开（用户原话：
+                 * 别在解压过程中就报分卷缺失）。等消费方收尾之后，下一次重判会走既有的
+                 * <see cref="TryResolveConsumedByAnotherTask"/> 把它按**跟班卷**收场。
+                 */
+                if (TryGetGroupConsumerPending(task, out string pendingConsumer))
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{task.FileName}：这一组的内容正在由「{pendingConsumer}」解出来 —— 这一单先不动，等它收尾再判（不提前把话说死）。");
+
+                    continue;
+                }
+
                 // ② 现归一次组（盘上事实）。
                 VolumeGroup? group = ResolveCompleteGroupFromDisk(task);
 
@@ -8136,6 +8352,20 @@ namespace ArchiveFixer.ViewModels
                     _volumeDeficitDeferred.Remove(task);
                     _volumeDeficitFinalPass.Add(task);
                     toRun.Add(task);
+
+                    /*
+                     * 这一组**其余的片**：内容已经由这一单解出来 ⇒ 记进既有那份"借来用过的源片"账
+                     * （`_consumedVolumeSources`），让它们按**跟班卷**收场
+                     * （`TryResolveConsumedByAnotherTask` 读的就是它；⛔ 不另造第二套判据）。
+                     *
+                     * 真机第九批 CCCC 的现场：这一档必须也覆盖"批末补判才补上的那一组" ——
+                     * 否则同一组里另一单在批末仍然会如实报「分卷缺失」，而内容其实刚刚被这一单解出来了
+                     * （用户原话：别在解压过程中就报分卷缺失）。
+                     */
+                    RememberGroupPiecesConsumedBy(task);
+
+                    // 这一组的消费方是谁：同一组别的单在它收尾之前**不落任何结论**（见下面的判据）。
+                    _groupConsumerByName[FileNameHelper.GetArchiveBaseName(task.CurrentPath)] = task.FileName;
                     continue;
                 }
 
@@ -8279,7 +8509,47 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这一单的分卷，**是不是已经被本批另一个任务解出来了**（2026-10-05 真机第八批）。
+        /// 这一单所在的那一组，**是不是正在被本批另一单解**（而它还没收尾）⇒ 这一单先不落结论。
+        /// 判据只有两条事实位：① 组基名在那份"谁在解"的账上；② 那位消费方**还没有机器终态**。
+        /// </summary>
+        private bool TryGetGroupConsumerPending(ArchiveTask task, out string consumer)
+        {
+            consumer = string.Empty;
+
+            string baseName = FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty);
+
+            if (baseName.Length == 0
+                || !_groupConsumerByName.TryGetValue(baseName, out string? name)
+                || string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            if (string.Equals(name, task.FileName, StringComparison.Ordinal))
+            {
+                return false;   // 自己就是那个消费方
+            }
+
+            ArchiveTask? owner = SnapshotTaskTable(Tasks).FirstOrDefault(
+                candidate => candidate != null && string.Equals(candidate.FileName, name, StringComparison.Ordinal));
+
+            bool unfinished = owner == null
+                || owner.Outcome is not (TaskOutcome.Succeeded
+                    or TaskOutcome.Failed
+                    or TaskOutcome.PartiallyCompleted
+                    or TaskOutcome.Cancelled
+                    or TaskOutcome.Skipped);
+
+            if (!unfinished)
+            {
+                return false;
+            }
+
+            consumer = name;
+            return true;
+        }
+
+        /// <summary>这一单的分卷，**是不是已经被本批另一个任务解出来了**（2026-10-05 真机第八批）。
         ///
         /// <para><b>现场</b>：一组跨盘 ZIP 的末片压在两层层层加密的 RAR 里、其余三片散在三个源目录里。
         /// 递归层用硬链接把那三片接过来、整组解开、结果发布成功 —— 可那三片自己那一单在批末仍然
@@ -11272,6 +11542,7 @@ namespace ArchiveFixer.ViewModels
             {
                 _volumeDeficitDeferred.Clear();
                 _consumedVolumeSources.Clear();
+                _groupConsumerByName.Clear();
                 _volumeDeficitFinalPass.Clear();
             }
 

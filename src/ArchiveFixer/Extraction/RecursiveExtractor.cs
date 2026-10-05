@@ -352,6 +352,15 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public IReadOnlyList<string> ConsumedVolumeSources { get; init; } = Array.Empty<string>();
 
+        /// <summary>
+        /// 这一趟停下时**打不开的那几片**（工作区里的绝对路径；空 = 没有）。
+        ///
+        /// <para>唯一用途：协调器把它们按规范卷名**接到"这一组还缺卷"的那一单旁边**
+        /// （跨链收卷，真机第九批 CCCC）—— 不然这条链一收尾，工作区连同刚解出来的那一片一起被删，
+        /// 而它可能正是同批另一组缺的那一片。</para>
+        /// </summary>
+        public IReadOnlyList<string> UnresolvedVolumePieces { get; init; } = Array.Empty<string>();
+
         /// <summary>一行中文结论，直接显示给用户。</summary>
         public string Summary { get; init; } = string.Empty;
 
@@ -550,6 +559,19 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private readonly List<string> _consumedVolumeSources = new();
 
+        /// <summary>
+        /// 这一趟停下时**打不开的那几片**（工作区里的绝对路径）—— 跨链收卷用（2026-10-05 真机第九批 CCCC）。
+        ///
+        /// <para><b>为什么必须记</b>：真机上这一组跨盘 ZIP 的四片分别在四户人家里 —— `.z02`/`.z03` 在用户源目录、
+        /// 第 1 片 `111.z01` 压在 `111(2)_.zip` 里、末片 `111.zip` 压在 `111.rar` 里。两条链各自把对方缺的那一片
+        /// **解出来了**，可两条链自己都没走完（互相等对方）⇒ 收尾时工作区整份删掉 ⇒ 那两片在批末之前就被自己删了，
+        /// "等全部跑完再判"那一站到盘上一看：缺的东西刚刚被自己扔掉。</para>
+        ///
+        /// <para>⛔ 这里只**记账**（路径列表）：不复制、不搬、不改名、不删 —— 怎么用由协调器决定
+        /// （见 <c>ExtractionCoordinator.AdoptUnresolvedVolumePieces</c>）。</para>
+        /// </summary>
+        private readonly List<string> _unresolvedVolumePieces = new();
+
         /// <summary>找卷窗口里那批候选（见 <see cref="_rootSourcePath"/> 的说明；算不出来就是空池）。</summary>
         private IReadOnlyList<VolumeCandidate> RootSourceCandidates
         {
@@ -572,6 +594,28 @@ namespace ArchiveFixer.Extraction
 
                 return _rootSourceCandidates;
             }
+        }
+
+        /// <summary>
+        /// 记下"这一片是一条**还没凑齐**的分卷组里的片"（去重；只记路径，什么都不碰）。
+        /// 见 <see cref="_unresolvedVolumePieces"/> 的说明。
+        /// </summary>
+        private void RememberUnresolvedVolumePiece(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            foreach (string existing in _unresolvedVolumePieces)
+            {
+                if (string.Equals(existing, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            _unresolvedVolumePieces.Add(path!);
         }
 
         /// <summary>
@@ -785,6 +829,7 @@ namespace ArchiveFixer.Extraction
              */
             _crossBoundaryLinks.Clear();
             _consumedVolumeSources.Clear();
+            _unresolvedVolumePieces.Clear();
 
             /*
              * 换引擎兜底那句结论也**每次运行从零开始**：同一个实例可能被同一个包的续跑复用
@@ -1432,6 +1477,13 @@ namespace ArchiveFixer.Extraction
 
                     Log("WARN", blocked);
 
+                    /*
+                     * 这一片（真机上是末片 `111.zip`）**还在工作区里**，而这一组缺的那几片可能正是
+                     * 同批别单刚解出来的东西 ⇒ 记下来交给协调器收（见 `_unresolvedVolumePieces` 的说明）。
+                     * ⛔ 只是记账：这一层照旧停下、一次引擎调用都不做（不变量 7）。
+                     */
+                    RememberUnresolvedVolumePiece(archivePath);
+
                     return LayerOutcome.Stop(
                         BuildLayerReport(
                             item,
@@ -2072,9 +2124,22 @@ namespace ArchiveFixer.Extraction
                     }
                 }
 
+                RecursionStopReason engineStop = MapEngineErrorToStopReason(result);
+
+                /*
+                 * 引擎说"分卷缺失"时，把**这一层打不开的那一片**记下来（跨链收卷，2026-10-05 真机第九批 CCCC）：
+                 * 这一片可能正是**同批另一组**缺的那一片（真机：`111(2)_.zip` 解出来的 `111.z01`，
+                 * 而 `111.rar` 那一组的末片正等着它）—— 这条链一收尾工作区就整份删掉了，
+                 * 不记下来的话，批末那一站到盘上一看：缺的东西刚刚被自己扔掉。
+                 */
+                if (engineStop == RecursionStopReason.MissingVolume)
+                {
+                    RememberUnresolvedVolumePiece(archivePath);
+                }
+
                 return LayerOutcome.Stop(
                     BuildLayerReport(item, result, succeededPassword: null, manifestEntries: lastListedEntries),
-                    MapEngineErrorToStopReason(result));
+                    engineStop);
             }
 
             if (succeededPassword == null)
@@ -4423,6 +4488,7 @@ namespace ArchiveFixer.Extraction
                 Layers = layers.ToList(),
                 FinalOutputPath = finalOutputPath,
                 ConsumedVolumeSources = _consumedVolumeSources.ToList(),
+                UnresolvedVolumePieces = _unresolvedVolumePieces.ToList(),
                 UnexpandedNames = unexpandedNames?.ToList() ?? new List<string>(),
                 Summary = BuildSummary(
                     stopReason,

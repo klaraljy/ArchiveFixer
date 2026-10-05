@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
@@ -594,6 +595,145 @@ namespace ArchiveFixer.Tests
             return task;
         }
 
+        // ================================================================ ③ 跨链收卷（真机第九批 CCCC）
+
+        /// <summary>
+        /// **真机 CCCC 的形状 + 真管线**：一组跨盘 ZIP 的四片分在四户人家 —— 第 1 片（名字还改坏了）
+        /// 压在一个包里、末片压在另一个包里、`.z02`/`.z03` 散在**两个兄弟目录**里。
+        ///
+        /// <para>两条链各自把**对方缺的那一片解了出来**，可两条链自己都没走完 ⇒ 旧行为是"收尾时工作区整份删掉"
+        /// ⇒ 批末那一站到盘上一看：缺的东西刚刚被自己扔掉（真机 22:06:02 / 22:06:12 那两行「已清理工作区」，
+        /// 那一批 0 成功）。现在链一收工就把这一片按**规范卷名硬链接**到"这一组还缺卷"那一单的目录里，
+        /// 批末那一站据此把整组解开。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>AdoptUnresolvedVolumePieces</c> 关掉（一开头就 return）⇒
+        /// 这一组凑不齐 ⇒ 产物找不到（见 <c>修改日志.md</c> 第三十一轮记的红检原文）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真机形状_一组跨盘ZIP的片分别压在两个包里_批末照样解开()
+        {
+            RequireSevenZip();
+
+            /*
+             * 造夹具要用**真**跨盘 ZIP（`.z01..` + 末片 `.zip`）：7-Zip 只会切出 `111.zip.001` 那种
+             * **通用分片**（不是这一族），所以这里借用户自装的 WinRAR 造 —— 它是**夹具**，
+             * 与产品路径无关（产品里 WinRAR 只用于密码兜底）。没有 WinRAR ⇒ 如实跳过（⛔ 不假装跑过）。
+             */
+            string? winRar = new ToolLocator().WinRarExePath;
+
+            if (string.IsNullOrWhiteSpace(winRar) || !File.Exists(winRar))
+            {
+                _output.WriteLine("这台机器没有 WinRAR ⇒ 造不出真跨盘 ZIP，本条跳过（不是验过了）。");
+                return;
+            }
+
+            (string pieceTwo, string pieceThree, string innerPackage, string tailPackage, byte[] payload, string payloadName) =
+                BuildCrossChainSpannedZipSet("跨链收卷", winRar!);
+
+            Harness harness = CreateHarness("AllBranches");
+
+            ArchiveTask innerTask = await AddTaskAsync(harness, innerPackage);
+            ArchiveTask tailTask = await AddTaskAsync(harness, tailPackage);
+            ArchiveTask pieceTwoTask = await AddTaskAsync(harness, pieceTwo);
+            ArchiveTask pieceThreeTask = await AddTaskAsync(harness, pieceThree);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(
+                new[] { innerTask, tailTask, pieceTwoTask, pieceThreeTask });
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Log(harness, "跨链收卷");
+
+            // ① 这一组**真的解开了**（内容物与原始字节逐字节一致）—— 这正是真机那一批 0 成功的地方。
+            string? produced = FindFileUnder(harness.OutputRoot, payloadName);
+
+            Assert.NotNull(produced);
+            Assert.Equal(payload, File.ReadAllBytes(produced!));
+
+            // ② 那一片是"接到"那一组旁边的（零字节硬链接）。
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("这一组缺的那一片解出来了", StringComparison.Ordinal));
+
+            // ③ 用户的源片一个字节都没动、也没改名（接的是**另起的规范卷名**）。
+            Assert.True(File.Exists(pieceTwo), "用户的源片不许动");
+            Assert.True(File.Exists(pieceThree), "用户的源片不许动");
+            Assert.Equal(new FileInfo(pieceTwo).Length, new FileInfo(pieceThree).Length);
+
+            // ④ 过程中**不许**把"分卷缺失"当结论落给他（口径：等这一批都跑完再判）。
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                text => text.Contains("分卷缺失，未开始解压", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 造真机 CCCC 的形状：用**真 WinRAR**（`-afzip -v1m`）切一组**真跨盘 ZIP**
+        /// （`111.z01..` + 末片 `111.zip`），然后把四片分开 —— 第 1 片改成脏名压进一个包、
+        /// 末片压进另一个包、另两片改成脏名散在两个兄弟目录里。
+        /// </summary>
+        private (string PieceTwo, string PieceThree, string InnerPackage, string TailPackage, byte[] Payload, string PayloadName)
+            BuildCrossChainSpannedZipSet(string name, string winRar)
+        {
+            string baseDirectory = Path.Combine(_root, name);
+            string source = Path.Combine(baseDirectory, "源");
+            Directory.CreateDirectory(source);
+
+            string payloadName = "payload.bin";
+            byte[] payload = new byte[(3 * 1024 * 1024) + (512 * 1024)];
+            new Random(20261005).NextBytes(payload);
+            File.WriteAllBytes(Path.Combine(source, payloadName), payload);
+
+            // 真跨盘 zip：`-v1m` ⇒ `111.z01` / `111.z02` / `111.z03` + 末片 `111.zip`
+            // （⚠ 这一族里**末片才是引擎的入口**，`.z01` 只是第 1 片）。
+            RunWinRar(winRar, source, "a", "-cfg-", "-ibck", "-afzip", "-m0", "-v1m", "111.zip", payloadName);
+            File.Delete(Path.Combine(source, payloadName));
+
+            string tail = Path.Combine(source, "111.zip");
+            string diskOne = Path.Combine(source, "111.z01");
+            string diskTwo = Path.Combine(source, "111.z02");
+            string diskThree = Path.Combine(source, "111.z03");
+
+            Assert.True(
+                File.Exists(diskOne) && File.Exists(diskTwo) && File.Exists(diskThree),
+                "造样本失败：真 7-Zip 没切出 4 片（z01/z02/z03 + 末片）");
+
+            // 第 1 片：名字改坏 + 压进一个包（真机上它压在 `111(2)_.zip` 里）。
+            string innerDirectory = Path.Combine(baseDirectory, "111(2)");
+            Directory.CreateDirectory(innerDirectory);
+
+            string disguisedDiskOne = Path.Combine(innerDirectory, "111.z0删除1");
+            File.Move(diskOne, disguisedDiskOne);
+
+            string innerPackage = Path.Combine(innerDirectory, "111(2)_.zip");
+            Run7zIn(innerDirectory, "a", "-tzip", "-mx0", innerPackage, "111.z0删除1");
+            File.Delete(disguisedDiskOne);
+
+            // 末片：压进另一个包（真机上它压在两层层层加密的 RAR 里）。
+            string tailDirectory = Path.Combine(baseDirectory, "111");
+            Directory.CreateDirectory(tailDirectory);
+
+            string movedTail = Path.Combine(tailDirectory, "111.zip");
+            File.Move(tail, movedTail);
+
+            string tailPackage = Path.Combine(tailDirectory, "111_outer.zip");
+            Run7zIn(tailDirectory, "a", "-tzip", "-mx0", tailPackage, "111.zip");
+            File.Delete(movedTail);
+
+            // 另两片：名字改坏、散在**两个兄弟目录**里（真机 `111(3)` / `111(4)`）。
+            string siblingOne = Path.Combine(baseDirectory, "111(3)");
+            string siblingTwo = Path.Combine(baseDirectory, "111(4)");
+            Directory.CreateDirectory(siblingOne);
+            Directory.CreateDirectory(siblingTwo);
+
+            string pieceTwo = Path.Combine(siblingOne, "111.z0删除2");
+            string pieceThree = Path.Combine(siblingTwo, "111.z0删除3");
+            File.Move(diskTwo, pieceTwo);
+            File.Move(diskThree, pieceThree);
+
+            return (pieceTwo, pieceThree, innerPackage, tailPackage, payload, payloadName);
+        }
+
         /// <summary>
         /// 归组之后统一拍快照（真实管线的顺序：扫描 → 归组 → 拍基准）。
         /// ⛔ 顺序反了会被不变量 11 判成「源文件已变化（修改时间（没有记录）→ …）」——
@@ -712,6 +852,36 @@ namespace ArchiveFixer.Tests
             {
                 throw new InvalidOperationException(
                     $"7z {string.Join(' ', psi.ArgumentList)} 退出码 {process.ExitCode}：{stdout}{stderr}");
+            }
+        }
+
+        /// <summary>
+        /// 跑一次真 WinRAR —— **只用于造夹具**：真跨盘 ZIP（`.z01..` + 末片 `.zip`）只有它能切出来
+        /// （7-Zip 的 `-v` 切的是 `111.zip.001` 那种通用分片，不属于这一族）。⛔ 产品路径与此无关。
+        /// </summary>
+        private static void RunWinRar(string winRar, string workDirectory, params string[] args)
+        {
+            var psi = new ProcessStartInfo(winRar)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = workDirectory
+            };
+
+            foreach (string arg in args)
+            {
+                psi.ArgumentList.Add(arg);
+            }
+
+            using Process process = Process.Start(psi)
+                ?? throw new InvalidOperationException("起不来 WinRAR.exe");
+
+            process.WaitForExit();
+
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"WinRAR {string.Join(' ', psi.ArgumentList)} 退出码 {process.ExitCode}");
             }
         }
 
