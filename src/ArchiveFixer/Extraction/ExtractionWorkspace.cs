@@ -865,8 +865,13 @@ namespace ArchiveFixer.Extraction
         /// <para>判据只有 <see cref="FileNameHelper.IsVolumePartFileName"/> +
         /// <see cref="VolumeGroupDetector.BelongsToSameGroup"/> 两个既有出口
         /// （⛔ 不在这里另写一套名字/分族规则）；目录用规范化全路径比。</para>
+        ///
+        /// <para><b>为什么是 internal</b>（2026-10-05）：<c>VolumeGroupRulerParityTests</c> 要把这一把尺子与
+        /// 递归折叠那一把（<c>RecursiveExtractor.IsSameGroupContinuationVolume</c>）放在**同一份名字语料**上
+        /// 逐格比对。⛔ 那个用例里**不许复制一份判据**（复制出来的守卫拦不住真身漂移）—— 所以只放宽可见性，
+        /// 判据本体一个字没动。</para>
         /// </summary>
-        private static bool IsSameGroupMemberInSameDirectory(
+        internal static bool IsSameGroupMemberInSameDirectory(
             string candidatePath,
             string consumedSourceFullPath,
             string consumedSourceName)

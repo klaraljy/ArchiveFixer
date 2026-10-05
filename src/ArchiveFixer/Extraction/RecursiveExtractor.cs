@@ -2697,8 +2697,13 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>为什么要"同目录"这一条：引擎找兄弟卷**只看入口文件旁边那一层**（AGENTS.md §11.4），
         /// 别的目录里那个 <c>.002</c> 不可能是这一组的可用分片 —— 那种情况照旧按"别的文件"处理。</para>
+        ///
+        /// <para><b>为什么是 internal</b>（2026-10-05）：<c>VolumeGroupRulerParityTests</c> 要把这一把尺子与
+        /// 搬运/删除那一把（<c>ExtractionWorkspace.IsSameGroupMemberInSameDirectory</c>）放在**同一份名字语料**上
+        /// 逐格比对。⛔ 那个用例里**不许复制一份判据**（复制出来的守卫拦不住真身漂移）—— 所以只放宽可见性，
+        /// 判据本体一个字没动。</para>
         /// </summary>
-        private static bool IsSameGroupContinuationVolume(string candidate, string innerArchivePath)
+        internal static bool IsSameGroupContinuationVolume(string candidate, string innerArchivePath)
         {
             if (!FileNameHelper.IsVolumeContinuationPart(candidate))
             {

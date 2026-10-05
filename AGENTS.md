@@ -212,8 +212,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2704 条（2701 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 旧基线 2698 / 2694 / 2673 / 2671 / 2666 / 2659 / 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"密码来源日志/探针落点那一轮之前 / 加密头包结论那一轮之前 / 两条解压路同步补齐那一轮之前 / 内层双面文件抠取那一轮之前 / ②页长说明收进折叠区 + ③页删掉「已停用」那格那一轮之前 / 「内容物保留关键词」从⑥设置搬到②页那一轮之前 / 分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前 / …"的数（来源日志+探针落点 +6；加密头结论 +4；同步补齐 +21；双面文件抠取 +2；折叠区那轮 +5；关键词那一栏搬家 +7；逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
+- `dotnet test` 全量（主 checkout 内）：**2707 条（2704 通过 / 3 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 旧基线 2704 / 2698 / 2694 / 2673 / 2671 / 2666 / 2659 / 2453 / 2448 / 2428 / 2419 / 2415 / 2411 / 2393 条分别是"分卷两把尺子守门用例（`VolumeGroupRulerParityTests`）那一轮之前 / 密码来源日志+探针落点那一轮之前 / 加密头包结论那一轮之前 / 两条解压路同步补齐那一轮之前 / 内层双面文件抠取那一轮之前 / ②页长说明收进折叠区 + ③页删掉「已停用」那格那一轮之前 / 「内容物保留关键词」从⑥设置搬到②页那一轮之前 / 分卷族系统化 A+B0 之前 / 逐层回收闸门收尾（①上界 ②邻路）之前 / 逐层回收那一轮之前 / 修 §51 那组分卷名之前 / 修四处日志口径之前 / 修 ① 与 ⑦ 之前 / …"的数（两把尺子守门用例 +3；来源日志+探针落点 +6；加密头结论 +4；同步补齐 +21；双面文件抠取 +2；折叠区那轮 +5；关键词那一栏搬家 +7；逐层回收那轮 +20、闸门收尾 +5；A+B0 +59 = `ArchiveBaseNameTests` 52 + `InnerLayerDisguiseRestoreTests` 7）。⛔ 数字只在这里写一次。
   - ⚠ **修 ① 漏改的一条用例**（`TwoLayerLayoutTests.发布_只解了一层时照旧摊掉无意义外壳`，断言的是已删掉的"发布侧摊外壳"）一直红着，本轮才改成同口径；确认办法 = 在干净 HEAD 上 `git stash` 后单跑（红与本轮改动无关）。
 - ✅ **「部分完成也把已解出的内容放进目标目录」已做完**（2026-10-02，口径 A；取舍/红线/红检见 `docs/部分完成发布方案.md` §7）。四块：① 引擎点名的坏条目 `ArchiveOperationResult.{FailedEntryNames,ReportedSubItemErrors}`（⚠ **中文版 UnRAR 点不出名**）；② **纯函数** `Extraction/PartialPublishPlanner`（逐条对账 + **五道闸门**：无清单 / 自报计数对不上 / 一个都发不出 / 阈值不过 / **引擎说失败但盘上对不上账**）；③ `Extraction/PartialPublishRunner`（对账 → **发布前二次空间体检** → 真搬）；④ 收尾接线 + 其余物半份清理。
   - ⛔ **判据里没有"引擎没报错就算好"这种话**：**大小对得上且引擎没点名**才算可发布；判不出（拿不到清单 / 点不出名 / 缺 >5 且 <95% / **被取消** / 空间不够）一律**一个字节都不发布**。
@@ -260,6 +260,12 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - ⛔ 老口径不许回退：另起一段的后缀（`x.7z.001.txt`/`x.001.bak`）不算分卷；纯数字尾巴（`0012`）不猜。
   - ⛔ **`partN` 族的"尾巴粘垃圾"（`X.part1.rar删除`）**（见 §51）：判据唯一出口 `ExtensionHelper.TrySplitPartNumberedVolume`（**卷标记与 rar 尾巴都可粘 ≤2 个字符的垃圾**，只用既有那两把尺子还原），**三处转调同一份** —— `VolumeGroupDetector.Analyze`（卷序/归组）、`FileNameHelper.StripVolumeMarkers`（包基名 ⇒ 同组判定与落点，⚠ 位置必须在"跨段伪装"搜索**之前**）、`FileNameHelper.IsVolumePartFileName`（批首改名的放行门）。改名目标**必须连 `.rar` 一起保留**（`VolumeNameRepair.TrySplitDisguised` ⓪ 档，且**只接"尾巴真的脏"那一档** —— 尾巴干净的留给既有那两条路，否则 `444.p1art2.partN.rar` 这种"基名自己还带一段"的会被拆错）。递归层里**一组卷只算一个内层归档**（`RecursiveExtractor.CollapseSameGroupVolumes`，复用 `IsSameGroupContinuationVolume`）。⛔ 老写法在三处各写一遍 `tail == "rar"` ⇒ 尾巴一粘垃圾**三处同时失效**（4 卷 = 4 个"第 1 卷本体"、递归 4 个分支、改名还会把 `.rar` 吃掉）；⚠ 包**里面**的伪装名没有「修正后缀」这一步先擦尾巴，所以这条路是它们唯一的救法。
   - ⛔ 不许"一见 zip 成员就让位"：让位条件只看"目录里真有一片自述带盘号的跨盘 zip 末片"（`HasSpannedZipTailInDirectory`）。
+- ⛔ **「这几片是不是同一个包」有两把尺子，宽窄不同是刻意设计 —— ⛔ 不许"顺手统一"**（2026-10-05 用户拍板 A：只加守门用例、不合并）：
+  - **折叠尺** `RecursiveExtractor.IsSameGroupContinuationVolume`（同目录 + `FileNameHelper.IsVolumeContinuationPart`【**只看最后一个扩展名**】+ `GetArchiveBaseName` 逐字相等）= 递归层把一组卷折叠成**一个**内层归档。答错 = 少折叠一片 ⇒ 多当一个分支 / 多解一次（慢，**不丢数据**）。
+  - **搬运删除尺** `ExtractionWorkspace.IsSameGroupMemberInSameDirectory`（同目录 + `FileNameHelper.IsVolumePartFileName`【**含"跨段伪装"分支**】+ `VolumeGroupDetector.BelongsToSameGroup`）= 整组一起进「其余物」/ 整组一起删（不可逆）。答错 = 少带走或多带走一片；兜底两道闸门照旧（事实表 `movedFromTo` + `RestVolumeCompletenessGate`，判不出整组一个字节都不删）。
+  - 为什么宽窄不同是**对的**：后者是**改名保护闸门**（宁可多认一片，也绝不把分卷名改坏 —— `RenameService` / `SourceJunkScanner` / `ExtractionCoordinator` 也在用它）⇒ **宽**；前者管**组卷**（别把普通文件当续卷）⇒ **窄**。
+  - **允许的差异恰好 4 格**，全在 7z 数字族「卷标记后面还挂着一个点段」（`x.7z.002.txt` / `.bak` / `.rar`、`x.7z.001.txt`）。**盘上后果一样**：真 7z `-v2m` 打 4 卷实测**只有第 1 卷带魔数 `37 7A BC AF 27 1C`**，第 2 卷起是纯中间字节（`A3 21 41 FD …`）⇒ 递归那份内层包名单只收 `MagicArchiveProber.IsArchiveAsync` 认的，折叠尺窄不窄在那儿看不见。
+  - 守门用例 `VolumeGroupRulerParityTests`(3)：33 格名字语料逐格钉住答案 + 「允许的差异恰好那四格」+ 真调用点 `CollapseSameGroupVolumes` 的折叠行为。红检：把折叠尺换成搬运删除尺（= 那种"合并"改法）⇒ 3 红；撤掉 `IsVolumePartFileName` 的"跨段伪装"档 ⇒ 2 红。⚠ 两处判据只为这条用例放宽成 `internal`（判据本体一个字没动；⛔ 用例不许复制一份判据）。
 - ⛔ **三种分卷格式的"内容级自述能力"差得很远 —— ⛔ 不许当成一样**（逐格实测表见 `docs/真机事故复盘.md` §48.1；用例 `VolumeContentProbeCapabilityTests`）：
 
   - ⇒ **定序能力**：RAR 靠内容就能定序（不需要名字）；PKZIP 跨盘 zip 只有 **2 片**能靠内容消去法定序（≥3 片的中间片顺序**只有名字能回答** —— `VolumeNumberFromContent.ResolveZipGroup` 里 `total > 2` 直接 `Refuse(ZipTooManyDisks)`，用户 2026-09-29 定的规矩）；7z 只能"尺寸排序候补 + 硬链接试开"。
