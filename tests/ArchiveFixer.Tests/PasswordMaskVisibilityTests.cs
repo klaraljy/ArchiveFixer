@@ -106,6 +106,42 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **导出的是 CRLF 行尾，描述一样要留住**（用户 2026-10-05 真机第七批）。
+        ///
+        /// <para>现场：`555` 那一批导出的日志（623 行、**CRLF**）里，「尝试密码列表第 N 项」**一次都没出现**，
+        /// 39 条候选日志全被擦成「尝试密码 ******」⇒ 用户问"密码怎么会错"时，日志答不出"试的是第几项"。
+        /// 根因：那条规则的负向断言写成 `[ \t]*$`，而 .NET 的 `$`（Multiline）只认 `\n` 之前 ——
+        /// `******\r\n` 这种行尾**永远不匹配** ⇒ 负向断言恒成立 ⇒ 每一行都被整段擦掉。
+        /// 单测当时用的是 LF，所以一直绿的。⇒ 这一格专门钉 CRLF。</para>
+        ///
+        /// <para><b>红检</b>：把那句 `\r?` 撤掉 ⇒ 本用例当场红。</para>
+        /// </summary>
+        [Fact]
+        public void 导出用的CRLF行尾也要留住第几项()
+        {
+            string exportWithCrLf = string.Join(
+                "\r\n",
+                "第一行",
+                "开始解压，密码候选 3/10，尝试密码列表第 3 项：******",
+                "开始解压，密码候选 4/10，复用本批已成功的密码：******",
+                "");
+
+            string masked = PasswordMasker.Sanitize(exportWithCrLf);
+
+            Assert.Contains("尝试密码列表第 3 项", masked, StringComparison.Ordinal);
+            Assert.Contains("复用本批已成功的密码", masked, StringComparison.Ordinal);
+            Assert.DoesNotContain("尝试密码 ******", masked, StringComparison.Ordinal);
+
+            // 屏幕/导出那一路（LogService.Sanitize）同样要留住。
+            var logService = new LogService(new PathService { DataRootDirectory = _root });
+
+            Assert.Contains(
+                "尝试密码列表第 3 项",
+                logService.Sanitize(exportWithCrLf),
+                StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// **④页表头与页内说明必须如实描述真实顺序**（用户 2026-10-04 真机 + 当天第二条口述）：
         /// 实际顺序 = 空密码 → 密码本命中 → **这张表（严格按表里顺序）**；
         /// 而"按历史成功次数自动排序"这一档已被用户明确否掉。
