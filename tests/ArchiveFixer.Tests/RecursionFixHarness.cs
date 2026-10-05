@@ -62,12 +62,14 @@ namespace ArchiveFixer.Tests
         /// 数据目录 / 输出目录 / 密码本全部落在 <paramref name="root"/> 里（绝不碰用户目录）。
         /// </summary>
         /// <param name="engine">不传 = 真 7-Zip（只有"要验整条管线"的用例才需要它）。</param>
+        /// <param name="configure">建完之后、写盘之前改设置（例：打开旁路说明文件、保留失败现场）。</param>
         public static RecursionFixHarness Create(
             string root,
             IReadOnlyList<string> candidates,
             int attemptLimit,
             string recursionMode = "SingleLayer",
-            IArchiveEngine? engine = null)
+            IArchiveEngine? engine = null,
+            Action<AppSettings>? configure = null)
         {
             string dataRoot = Path.Combine(root, "data-" + Guid.NewGuid().ToString("N"));
             string outputRoot = Path.Combine(root, "out-" + Guid.NewGuid().ToString("N"));
@@ -89,6 +91,8 @@ namespace ArchiveFixer.Tests
             settings.TryEmptyPasswordFirst = true;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+
+            configure?.Invoke(settings);
 
             settingsService.Save(settings);
 
@@ -299,6 +303,13 @@ namespace ArchiveFixer.Tests
 
             public Func<ArchiveRequest, ArchiveOperationResult>? OnExtract { get; set; }
 
+            /// <summary>
+            /// 需要看这一次解压的**参数**时用它（优先于 <see cref="OnExtract"/>）。
+            /// 用途：把"探针那一次"（<c>ExtractOptions.IncludeEntries</c> 非空）与"解整包那一次"分开 ——
+            /// 探针落点正是拿这两次请求的 <c>OutputPath</c> 对照出来的。
+            /// </summary>
+            public Func<ArchiveRequest, ExtractOptions, ArchiveOperationResult>? OnExtractWithOptions { get; set; }
+
             /// <summary>每次解压用的密码（按调用顺序）—— 用例靠它数"到底试了几个候选"。</summary>
             public List<string> Extracted { get; } = new();
 
@@ -341,6 +352,11 @@ namespace ArchiveFixer.Tests
                 CancellationToken cancellationToken = default)
             {
                 Extracted.Add(request.Password ?? string.Empty);
+
+                if (OnExtractWithOptions != null)
+                {
+                    return Task.FromResult(OnExtractWithOptions(request, options));
+                }
 
                 return Task.FromResult(
                     OnExtract?.Invoke(request)

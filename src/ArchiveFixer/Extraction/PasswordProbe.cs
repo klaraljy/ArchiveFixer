@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using ArchiveFixer.Engines;
 
 namespace ArchiveFixer.Extraction
@@ -276,6 +277,29 @@ namespace ArchiveFixer.Extraction
         private static bool ContainsWildcard(string path)
         {
             return path.IndexOfAny(new[] { '*', '?', '[' }) >= 0;
+        }
+
+        /// <summary>
+        /// **探针目录的落点**（两条解压路共用这一处判据，2026-10-05 统一）。
+        ///
+        /// <para>口径以递归那侧为准：探针是"只解一个条目"的临时产物，必须落在**产物目录的外面**
+        /// （同级兄弟位置）。为什么不能放里面：产物目录里的东西要参与**结果校验与发布** ——
+        /// 探针文件混进去会让"这一层到底解出了什么"数错；万一 finally 那次删除失败
+        /// （占用 / 权限），残留还会被当成本层的产物搬进最终目录。</para>
+        ///
+        /// <para>拿不到父目录（相对路径这种畸形输入）时退回产物目录**里面**：宁可靠老位置，
+        /// 也不要把临时目录建到一个说不清的地方。</para>
+        /// </summary>
+        /// <param name="productDirectory">这一层的**产物目录**（单层路是暂存目录，递归路是 <c>layer-NNN\output</c>）。</param>
+        public static string ResolveProbeDirectory(string productDirectory)
+        {
+            string product = productDirectory ?? string.Empty;
+
+            string? parent = string.IsNullOrWhiteSpace(product) ? null : Path.GetDirectoryName(product);
+
+            return Path.Combine(
+                string.IsNullOrWhiteSpace(parent) ? product : parent,
+                RecursiveExtractor.ProbeDirectoryName);
         }
 
         /// <summary>探针条目的说明（日志用；把"只解了哪一个"说清，用户才对得上时间）。</summary>

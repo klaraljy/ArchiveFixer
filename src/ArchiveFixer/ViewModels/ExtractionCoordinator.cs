@@ -68,13 +68,23 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private RecursiveExtractor CreateRecursiveExtractor()
         {
+            /*
+             * 这一趟递归的「候选值 → 来源」映射：递归层只拿得到值，来源说明只能由**算候选时**
+             * 顺手记下来（见 BuildRecursionPasswordCandidates 与 ResolveCandidateSourceForLog）。
+             *
+             * ⚠ 必须**每个递归实例一份**（即每个任务一份）：协调器是 ViewModel 层的单例，
+             * 并发跑两个任务时共用一份映射会让 A 任务的候选来源印到 B 任务的日志上；
+             * 而且旁路说明文件是按归档路径算的 —— 跨任务共用等于按别人的包说话。
+             */
+            var candidateSources = new Dictionary<string, string>(StringComparer.Ordinal);
+
             var extractor = new RecursiveExtractor(
                 _archiveEngine,
                 new MagicArchiveProber(),
-                BuildRecursionPasswordCandidates,
+                archivePath => BuildRecursionPasswordCandidates(archivePath, candidateSources),
                 BuildRecursionLimits(),
                 AppendLog,
-                // 不变量 11 在**每一层**上的落点：递归核心每解一层之前都会问一次
+                // 不变量 11 在**第 0 层**上的落点：递归核心每解一层之前都会问一次
                 // "这一层要解的那个源文件还是原来那一份吗"。只有第 0 层（用户给的源包）
                 // 会真的比对 —— 第 1 层起解的是工作区里我们自己产出的过程物，
                 // 它们本来就不在快照里（详见 CheckRootSourceUnchangedAsync）。
@@ -106,11 +116,15 @@ namespace ArchiveFixer.ViewModels
              *
              * ⚠ 描述器用的是**单层路径那一份** BuildTryPasswordLogText：两处的措辞必须逐字一致，
              * 否则同一件事在日志里长成两句话（§9.5）。它只输出占位符，绝不出现明文。
+             *
+             * ⚠ 2026-10-05：来源必须取自**这一趟算候选时记下的映射**（candidateSources）——
+             * 只按值回查密码列表的话，「本批已成功 / 密码本命中 / 密码本整行 / 说明文件旁路 /
+             * 手动输入的密码」全都会被印成"尝试密码列表第 N 项"（说话不实，排障时看错方向）。
              */
             extractor.VerboseLog = VerboseTaskLogEnabled;
             extractor.DescribeCandidate = (value, index) =>
                 _passwordService.BuildTryPasswordLogText(
-                    new PasswordItem { Value = value, Source = ResolveCandidateSourceForLog(value) },
+                    new PasswordItem { Value = value, Source = ResolveCandidateSourceForLog(value, candidateSources) },
                     index);
 
             /*
@@ -137,27 +151,43 @@ namespace ArchiveFixer.ViewModels
         /// 递归层拿到的候选**值**要能映射回"这条密码是从哪儿来的"，日志才看得懂顺序为什么是这样。
         ///
         /// <para>递归那条路只拿到值（<c>Func&lt;string, IReadOnlyList&lt;string&gt;&gt;</c>），
-        /// 而来源说明在 <see cref="PasswordService.BuildTryPasswordLogText"/> 里。
-        /// 这里按值回查一次**已经算好的候选表**（不重新排序、不重新组装），查不到就按空密码 / 列表项兜底 ——
-        /// ⛔ 绝不猜来源，更不写明文。</para>
+        /// 而来源说明在 <see cref="PasswordService.BuildTryPasswordLogText"/> 里。</para>
+        ///
+        /// <para><b>先查"算这一层候选时顺手记下来的映射"</b>（<paramref name="candidateSources"/>）：
+        /// 按值回查密码列表**答不了**好几档 —— 同一个值可能既是"密码本命中"又是"本批已成功"
+        /// （密码列表里的同一条），而"说明文件旁路 / 手动输入 / 密码本整行"根本不在密码列表里，
+        /// 一律落兜底 ⇒ 日志把它们印成"尝试密码列表第 N 项"（说话不实）。
+        /// 查不到才退回按值回查（不变量 5：⛔ 绝不猜来源，更不写明文）。</para>
         /// </summary>
-        private string ResolveCandidateSourceForLog(string value)
+        /// <param name="candidateSources">算候选时记下的「值 → 来源」；null = 只按值回查（老路）。</param>
+        internal string ResolveCandidateSourceForLog(
+            string value,
+            IReadOnlyDictionary<string, string>? candidateSources = null)
         {
-            if (string.IsNullOrEmpty(value))
+            string exact = value ?? string.Empty;
+
+            if (candidateSources != null &&
+                candidateSources.TryGetValue(exact, out string? recorded) &&
+                !string.IsNullOrWhiteSpace(recorded))
+            {
+                return recorded;
+            }
+
+            if (string.IsNullOrEmpty(exact))
             {
                 return "Empty";
             }
 
             if (!string.IsNullOrEmpty(GlobalPassword) &&
                 Settings.UseGlobalPasswordForAllTasks &&
-                string.Equals(GlobalPassword, value, StringComparison.Ordinal))
+                string.Equals(GlobalPassword, exact, StringComparison.Ordinal))
             {
                 return "GlobalPassword";
             }
 
             foreach (PasswordItem item in _passwordService.Passwords)
             {
-                if (string.Equals(item.Value ?? string.Empty, value, StringComparison.Ordinal))
+                if (string.Equals(item.Value ?? string.Empty, exact, StringComparison.Ordinal))
                 {
                     return string.IsNullOrWhiteSpace(item.Source) ? "ImportedList" : item.Source;
                 }
@@ -5714,7 +5744,14 @@ namespace ArchiveFixer.ViewModels
         /// 否则 <c>VolumeProbeVerifier</c> 会对"每种排列 × 整份候选表"跑一遍试开，工作量放大几十倍。</item>
         /// </list>
         /// </summary>
-        internal IReadOnlyList<string> BuildRecursionPasswordCandidates(string archivePath)
+        /// <param name="sourceSink">
+        /// 可空：算完之后把这一层的「候选值 → 来源」写进去（先清空再写）。
+        /// 递归层的日志只能靠它说清来源（见 <see cref="ResolveCandidateSourceForLog"/>）——
+        /// 「本批已成功 / 密码本命中 / 说明文件旁路 / 手动输入」这些按值回查密码列表是答不出来的。
+        /// </param>
+        internal IReadOnlyList<string> BuildRecursionPasswordCandidates(
+            string archivePath,
+            IDictionary<string, string>? sourceSink = null)
         {
             var probe = new ArchiveTask(archivePath);
 
@@ -5726,6 +5763,21 @@ namespace ArchiveFixer.ViewModels
                 Settings.EnableSidecarPassword);
 
             InsertManualPasswordCandidates(candidates, _manualBatchPasswords);
+
+            /*
+             * 顺手记一份「值 → 来源」：来源本来就由 PasswordService 给（它的候选表里带着 Source），
+             * 这里只是**搬一次**，⛔ 不重新推、也不猜。每次算候选都整份重建 ——
+             * 上一层（或上一个包）的来源不许留到这一层来（旁路说明文件就是按归档路径算的）。
+             */
+            if (sourceSink != null)
+            {
+                sourceSink.Clear();
+
+                foreach (PasswordItem item in candidates)
+                {
+                    sourceSink[item.Value ?? string.Empty] = item.Source ?? string.Empty;
+                }
+            }
 
             return candidates
                 .Select(p => p.Value ?? string.Empty)
@@ -10143,10 +10195,16 @@ namespace ArchiveFixer.ViewModels
                  * ③ **无 UI 宿主不弹窗、不死等** —— 判定见 PromptForManualBatchPasswordAsync。
                  *
                  * ⚠ **一键档不再走这个框**（用户 2026-09-29 拍板）：一键处理的红线是"批中间零弹窗"，
-                 * 而这个框恰好卡在开工前，等于给一键档开了第二个口子。现在一键档的手动密码
-                 * 从**确认面板**（<c>OneClickRunOptions.ManualPasswords</c>）来，而且填进去的会
-                 * **追加到「密码」页那份列表的末尾**（用户要求存下来）；没填就按老顺序试，
-                 * 只写一条日志说清"要手动给去哪儿给"。
+                 * 而这个框恰好卡在开工前，等于给一键档开了第二个口子。一键档**没有手动密码入口**
+                 * （当时那个输入框是整块撤掉的，不是搬去了别处），只写一条"要手动给就去「密码」页
+                 * 一键导入"的日志 —— 见 LogOneClickPasswordHint。
+                 *
+                 * ⇒ 由此可以断定：一键档下 `_manualBatchPasswords` **恒为空**，所以每轮开头那次
+                 * `ResetManualBatchPassword()`（StartExtractForOneClickAsync 的批首）清掉的是"空表"，
+                 * 不会丢任何输入。
+                 * ⚠ 以后若真要把输入框加回一键档，**必须同时改那一处清空**：一键处理一轮 = 一次
+                 * `StartExtractForOneClickAsync`，不清就等于用户在某一轮填的密码到下一轮就没了
+                 * （而"每轮都问"又违反零弹窗）。
                  */
                 if (oneClickRun)
                 {
@@ -15551,8 +15609,10 @@ namespace ArchiveFixer.ViewModels
         /// <para>真机代价对比：他那个 12.22 GiB 的包（名字可见、条目加密）用空密码解整包花了 **10 分 18 秒**
         /// 并写出 12 GiB 垃圾，最后才报密码错误；本方法解一个 1 KiB 的说明文件，**毫秒级**就能否掉同一个候选。</para>
         ///
-        /// <para>落点：探针产物写在**本任务暂存目录**下的私有子目录里（不变量 12：绝不写工作区之外），
-        /// 无论成败都在 finally 里删掉 —— 校验 / 定稿那两步看到的是"什么都没多出来"的暂存目录。</para>
+        /// <para>落点：探针产物写在**产物（暂存）目录外面的兄弟位置**，判据只有一处
+        /// （<see cref="PasswordProbe.ResolveProbeDirectory"/>，递归那条路用同一个出口）——
+        /// 产物目录里的东西要参与校验与发布，探针文件一个字节都不许混进去；
+        /// 无论成败都在 finally 里删掉（不变量 12：绝不写工作区之外）。</para>
         ///
         /// <para>三种结论的边界刻意保守：**只有引擎明说"密码错误"才判 Rejected**；
         /// 别的错误（不支持单条目解、读不了、超时）一律 Inconclusive，退回整包试解 ——
@@ -15567,7 +15627,13 @@ namespace ArchiveFixer.ViewModels
             TaskProgressSink progressSink,
             CancellationToken cancellationToken)
         {
-            string probeDirectory = Path.Combine(stageDirectory, "_密码预检");
+            /*
+             * ⚠ 2026-10-05：落点与递归那条路**统一成一个出口**（`PasswordProbe.ResolveProbeDirectory`）——
+             * 以前单层路把它建在**暂存（产物）目录里面**，而暂存目录里的东西要参与结果校验与发布；
+             * 万一 finally 那次删除失败（占用 / 权限），探针文件会被当成本层的产物一起数、一起搬。
+             * 现在两条路都是"产物目录的**兄弟位置**"（还在本任务的工作区里，不变量 12 不变）。
+             */
+            string probeDirectory = PasswordProbe.ResolveProbeDirectory(stageDirectory);
 
             try
             {
@@ -16356,13 +16422,19 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 这个子目录名是不是"我们自己造的"（决定清工作区时敢不敢整份删）。
         ///
-        /// <para>现在只认两个：<c>stage</c>（暂存/入仓）与 <c>volumes</c>（第 42 条的拼装目录）。
+        /// <para>现在认三个：<c>stage</c>（暂存/入仓）、<c>volumes</c>（第 42 条的拼装目录）、
+        /// <c>_密码预检</c>（密码探针 —— 2026-10-05 起单层路也建在**产物目录外面**的兄弟位置，
+        /// 名字与递归那侧同一个常量；⛔ 漏了它，异常退出留下的探针目录会把整份清理拦下）。
         /// ⛔ 出现别的子目录一律不删 —— 那最典型的情况是"任务名撞上了递归工作区的 <c>recursive</c>"，
         /// 顺着删会把别人的东西删掉。以后每加一个我们自己造的子目录，都要加到这里。</para>
+        ///
+        /// <para><c>internal</c>（2026-10-05）：白名单本身要能被守门用例直接钉住
+        /// （它决定"删不删"，⛔ 不能只靠间接行为验）。</para>
         /// </summary>
-        private static bool IsOurWorkspaceSubdirectory(string name) =>
+        internal static bool IsOurWorkspaceSubdirectory(string name) =>
             string.Equals(name, PathService.StageDirectoryName, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(name, SplitVolumeAssembler.AssemblyDirectoryName, StringComparison.OrdinalIgnoreCase);
+            || string.Equals(name, SplitVolumeAssembler.AssemblyDirectoryName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, RecursiveExtractor.ProbeDirectoryName, StringComparison.OrdinalIgnoreCase);
 
         public void StopAfterCurrent()
         {

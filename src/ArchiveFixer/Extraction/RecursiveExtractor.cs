@@ -435,18 +435,20 @@ namespace ArchiveFixer.Extraction
         /// **不变量 11 的检查口**（AGENTS.md §6 第 11 条），可空。
         ///
         /// <para>
-        /// 每一层**开工之前**问一次："这一层要解的那个源文件还是原来那一份吗？"
+        /// ⚠ **只在第 0 层**（用户给的源包）开工之前问一次："这一层要解的那个源文件还是原来那一份吗？"
         /// 返回非 null = 已经拦下，本层不解、整条递归停下，那句话就是这次的结论。
+        /// 实现上的闸门就是主循环里那句 <c>item.IsRoot &amp;&amp; _sourceCheck != null</c>。
+        /// </para>
+        /// <para>
+        /// 为什么第 1 层起不问：那几层解的是**我们自己产出的过程物**（工作区里的内层包），
+        /// 它们本来就不在源包快照里 —— 拿源包的快照去比只会得出一句必然错误的结论
+        /// （判据与快照都在协调器，见 <c>ExtractionCoordinator.CheckRootSourceUnchangedAsync</c>）。
         /// </para>
         /// <para>
         /// 为什么由调用方注入而不是递归核心自己判：快照挂在 <see cref="ArchiveTask"/> 上、
         /// 判据与状态落法都在协调器（同一句话要同时出现在任务状态、失败清单与日志里）。
         /// 递归核心只知道"要解哪个归档"，它不认识快照，也不该认识 ——
         /// 与引擎 / 探测器 / 密码来源全部注入是同一个理由。
-        /// </para>
-        /// <para>
-        /// ⚠ 注入方要**自己判断是不是第 0 层**：第 1 层起解的是工作区里的过程物，
-        /// 拿源包的快照去比它们只会得出一句必然错误的结论（见 ExtractionCoordinator）。
         /// </para>
         /// </summary>
         private readonly Func<ArchiveTask, Task<string?>>? _sourceCheck;
@@ -1802,8 +1804,8 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
-            string layerDirectory = Path.GetDirectoryName(item.Layer.OutputPath) ?? item.Layer.OutputPath;
-            string probeDirectory = Path.Combine(layerDirectory, ProbeDirectoryName);
+            // 落点与单层路径**同一个出口**（2026-10-05 统一）：产物目录的兄弟位置，绝不放产物目录里。
+            string probeDirectory = PasswordProbe.ResolveProbeDirectory(item.Layer.OutputPath);
 
             try
             {

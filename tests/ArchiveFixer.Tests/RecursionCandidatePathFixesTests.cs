@@ -163,7 +163,7 @@ namespace ArchiveFixer.Tests
 
             RecursiveExtractor extractor = CreateExtractor(
                 engine,
-                harness.Coordinator.BuildRecursionPasswordCandidates,
+                archivePath => harness.Coordinator.BuildRecursionPasswordCandidates(archivePath),
                 new RecursionLimits { MaxPasswordAttemptsPerLayer = 10 },
                 out _);
 
