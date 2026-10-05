@@ -665,6 +665,20 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain(
                 harness.LogTexts,
                 text => text.Contains("分卷缺失，未开始解压", StringComparison.Ordinal));
+
+            /*
+             * ⑤ **吐出那两片的两单也按跟班卷收场**（真机第九批 CCCC 的第二个现场问题：
+             * 「111.rar」「111(2)_.zip」两个原包为什么还留着）—— 它们各自只吐一片、自己停在中途，
+             * 可整组已经由别单解开、校验通过 ⇒ 内容全在解出来的那一组里了，这一单不该再挂着「部分完成」。
+             */
+            Assert.True(innerTask.IsVolumeGroupFollower, "吐出第 1 片的那一单应当按跟班卷收场");
+            Assert.Equal(TaskOutcome.Skipped, innerTask.Outcome);
+            Assert.True(tailTask.IsVolumeGroupFollower, "吐出末片的那一单应当按跟班卷收场");
+            Assert.Equal(TaskOutcome.Skipped, tailTask.Outcome);
+
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("里那一片已经跟着", StringComparison.Ordinal));
         }
 
         /// <summary>

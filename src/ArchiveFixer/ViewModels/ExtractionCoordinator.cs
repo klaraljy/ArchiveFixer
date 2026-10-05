@@ -6241,7 +6241,7 @@ namespace ArchiveFixer.ViewModels
              * 可能正是"同一分卷组"里别单缺的那一片，而链一收尾工作区就整份删掉 ⇒ 批末那一站到盘上一看，
              * 缺的东西刚刚被自己扔掉（真机 22:06:02「已清理工作区：2 个文件 / 48.35 MiB」就是这么把末片带走的）。
              */
-            AdoptUnresolvedVolumePieces(result);
+            AdoptUnresolvedVolumePieces(result, task);
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
@@ -7544,6 +7544,18 @@ namespace ArchiveFixer.ViewModels
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 这一批里"哪一单吐出了某一组的片"（组基名 → 那一单）——跨链收卷用（真机第九批 CCCC）。
+        ///
+        /// <para>用途：整组由别单解开、而且**可证完整**之后，这些"只是包装"的单也按**跟班卷**收场
+        /// （它的内容已经全在解出来的那一组里了）—— 否则真机上 `111.rar` / `111(2)_.zip` 会一直留着，
+        /// 用户当场就问"为什么这两个原包还留着"。</para>
+        /// </summary>
+        private readonly Dictionary<string, List<ArchiveTask>> _groupPieceProducers = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>这些生产者的源包**已经交给既有出口搬过了**（幂等：搬一次就够，⛔ 不重复搬）。</summary>
+        private readonly HashSet<ArchiveTask> _producerSourcesCollected = new();
+
+        /// <summary>
         /// 已经在"批末补判"里跑过一遍的任务：⛔ 不许再记一次缺口（否则它会永远留在
         /// <see cref="_volumeDeficitDeferred"/> 里、永远不落结论）。</summary>
         private readonly HashSet<ArchiveTask> _volumeDeficitFinalPass = new();
@@ -8108,7 +8120,7 @@ namespace ArchiveFixer.ViewModels
                             continue;
                         }
 
-                        TryAdoptUnresolvedVolumePiece(file);
+                        TryAdoptUnresolvedVolumePiece(file, task);
                     }
                 }
                 catch (Exception ex)
@@ -8155,7 +8167,7 @@ namespace ArchiveFixer.ViewModels
         /// 建不了 ⇒ 什么都不做（⛔ 绝不复制大文件）。这几片按用户 2026-10-05 的拍板算**源包**：
         /// 这一组真解开之后，它们跟着一起进其余物、按删除档处理。</para>
         /// </summary>
-        private void AdoptUnresolvedVolumePieces(RecursionResult? recursion)
+        private void AdoptUnresolvedVolumePieces(RecursionResult? recursion, ArchiveTask? owner)
         {
             if (recursion == null || recursion.UnresolvedVolumePieces.Count == 0)
             {
@@ -8166,7 +8178,7 @@ namespace ArchiveFixer.ViewModels
             {
                 try
                 {
-                    TryAdoptUnresolvedVolumePiece(piece);
+                    TryAdoptUnresolvedVolumePiece(piece, owner);
                 }
                 catch (Exception ex)
                 {
@@ -8176,8 +8188,31 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 记下"**这一单**吐出了「<paramref name="baseName"/>」这一组的一片"（去重；⛔ 只记账，不动盘上任何东西）。
+        /// 整组由别单解开之后由 <see cref="CollectConsumedSourcePiecesIntoRest"/> 让它按跟班卷收场。
+        /// </summary>
+        private void RememberGroupPieceProducer(string baseName, ArchiveTask? owner)
+        {
+            if (owner == null || baseName.Length == 0)
+            {
+                return;
+            }
+
+            if (!_groupPieceProducers.TryGetValue(baseName, out List<ArchiveTask>? producers))
+            {
+                producers = new List<ArchiveTask>();
+                _groupPieceProducers[baseName] = producers;
+            }
+
+            if (!producers.Contains(owner))
+            {
+                producers.Add(owner);
+            }
+        }
+
         /// <summary>收**一片**：按规范卷名接到"这一组还缺卷"那一单的目录里；末片在手时顺手把整组接齐。</summary>
-        private bool TryAdoptUnresolvedVolumePiece(string piecePath)
+        private bool TryAdoptUnresolvedVolumePiece(string piecePath, ArchiveTask? owner)
         {
             if (string.IsNullOrWhiteSpace(piecePath) || !File.Exists(piecePath))
             {
@@ -8242,6 +8277,16 @@ namespace ArchiveFixer.ViewModels
                         $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
                         + "零字节的硬链接：你的源文件一个字节没动、名字也一个字符没改）—— 这一组留到这一批都跑完再一起判。");
                 }
+            }
+
+            if (adopted)
+            {
+                /*
+                 * 记下"是这一单吐出了这一片"：整组由别单解开、而且**可证完整**之后，这一单也按跟班卷收场
+                 * （真机第九批 CCCC：`111.rar` / `111(2)_.zip` 各吐一片，整组解开并校验通过了，
+                 * 这两个原包却因为自己"部分完成"一直留在盘上 —— 用户当场就问为什么）。
+                 */
+                RememberGroupPieceProducer(baseName, owner);
             }
 
             // 末片在哪一层，整组就得凑到哪一层（引擎只看入口旁边那一层）⇒ 末片到手就顺手把整组接齐。
@@ -8384,6 +8429,13 @@ namespace ArchiveFixer.ViewModels
         private List<ArchiveTask> RecheckDeferredVolumeDeficits(bool finalPass)
         {
             var toRun = new List<ArchiveTask>();
+
+            /*
+             * 先给"吐出这一片的那几单"收场（真机第九批 CCCC 的第二个现场问题：`111.rar` / `111(2)_.zip`
+             * 两个原包为什么还留着）。判据只有两条事实位：那份"谁在解"的账 + 消费方的**机器终态**（成功）。
+             * 位置在名单判据之前 —— 与"缺卷留到最后再判"那份名单无关，幂等。
+             */
+            SettleSucceededGroupPieceProducers();
 
             if (_volumeDeficitDeferred.Count == 0)
             {
@@ -8574,12 +8626,24 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void CollectConsumedSourcePiecesIntoRest(ArchiveTask consumer)
         {
-            if (consumer == null || _consumedVolumeSources.Count == 0)
+            if (consumer == null)
             {
                 return;
             }
 
             var logEntries = new List<(string Level, string Message)>();
+
+            SettleGroupPieceProducers(consumer, moveSources: true, logEntries);
+
+            if (_consumedVolumeSources.Count == 0)
+            {
+                foreach ((string level, string message) in logEntries)
+                {
+                    AppendLog(level, message);
+                }
+
+                return;
+            }
 
             foreach ((string piecePath, string ownerName) in _consumedVolumeSources.ToList())
             {
@@ -8610,6 +8674,102 @@ namespace ArchiveFixer.ViewModels
                     logEntries);
 
                 _consumedVolumeSources.Remove(piecePath);
+            }
+
+            foreach ((string level, string message) in logEntries)
+            {
+                AppendLog(level, message);
+            }
+        }
+
+        /// <summary>
+        /// **吐出这一组某一片的那几单**按跟班卷收场（真机第九批 CCCC：`111.rar` / `111(2)_.zip`）。
+        ///
+        /// <para>它们各自只吐一片、自己因为缺对方那一片停在中途 ⇒ 落成「部分完成」⇒ 源包照"没成功就不动"
+        /// 留在盘上（用户当场问：为什么这两个原包还留着）。可整组已经由 <paramref name="consumer"/> 解开、
+        /// **可证完整** ⇒ 它们的内容**全在解出来的那一组里了**。</para>
+        ///
+        /// <para>⛔ 只认记账里那几单（<see cref="RememberGroupPieceProducer"/> 写、这里读）；⛔ 不碰消费方自己；
+        /// ⛔ 搬运仍只有既有出口 <c>ExecuteSourcePackageMove</c>（六道闸门一条都不绕过）；
+        /// ⛔ 已经收过场的（跟班 + 已搬）不重复做。</para>
+        /// </summary>
+        private void SettleGroupPieceProducers(
+            ArchiveTask consumer,
+            bool moveSources,
+            List<(string Level, string Message)> logEntries)
+        {
+            string groupBaseName = FileNameHelper.GetArchiveBaseName(consumer.CurrentPath ?? string.Empty);
+
+            if (groupBaseName.Length == 0
+                || !_groupPieceProducers.TryGetValue(groupBaseName, out List<ArchiveTask>? producers))
+            {
+                return;
+            }
+
+            foreach (ArchiveTask producer in producers.ToList())
+            {
+                if (producer == null || ReferenceEquals(producer, consumer))
+                {
+                    continue;
+                }
+
+                if (!producer.IsVolumeGroupFollower || producer.Outcome != TaskOutcome.Skipped)
+                {
+                    string consumedNote = string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumePieceProducerConsumedByOtherTaskFormat,
+                        producer.FileName,
+                        consumer.FileName,
+                        groupBaseName);
+
+                    /*
+                     * 与既有那条跳过路**逐行同一套**（清校验 / 清落点 + 落终态 + 标跟班）：
+                     * `MarkSkipped` 只写 Status，机器终态必须显式落 `Skipped`，四处消费点才算得对。
+                     */
+                    producer.IsOutputVerified = false;
+                    producer.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                    producer.OutputPath = string.Empty;
+                    producer.Outcome = TaskOutcome.Skipped;
+                    producer.IsVolumeGroupFollower = true;
+                    producer.MarkSkipped(consumedNote);
+
+                    AppendLog("INFO", consumedNote);
+                }
+
+                if (!moveSources || !_producerSourcesCollected.Add(producer))
+                {
+                    continue;
+                }
+
+                ExecuteSourcePackageMove(
+                    producer,
+                    consumer.RestDirectoryPath,
+                    SourceMoveTrigger.AfterChain,
+                    logEntries);
+            }
+        }
+
+        /// <summary>遍历"谁在解"的账：消费方**已经成功**的那几组，给它们的生产者收场（幂等；见 <see cref="SettleGroupPieceProducers"/>）。</summary>
+        private void SettleSucceededGroupPieceProducers()
+        {
+            if (_groupConsumerByName.Count == 0 || _groupPieceProducers.Count == 0)
+            {
+                return;
+            }
+
+            var logEntries = new List<(string Level, string Message)>();
+
+            foreach (string consumerName in _groupConsumerByName.Values.ToList())
+            {
+                ArchiveTask? consumer = SnapshotTaskTable(Tasks).FirstOrDefault(
+                    candidate => candidate != null && string.Equals(candidate.FileName, consumerName, StringComparison.Ordinal));
+
+                if (consumer == null || consumer.Outcome != TaskOutcome.Succeeded)
+                {
+                    continue;
+                }
+
+                SettleGroupPieceProducers(consumer, moveSources: true, logEntries);
             }
 
             foreach ((string level, string message) in logEntries)
@@ -11653,6 +11813,8 @@ namespace ArchiveFixer.ViewModels
                 _volumeDeficitDeferred.Clear();
                 _consumedVolumeSources.Clear();
                 _groupConsumerByName.Clear();
+                _groupPieceProducers.Clear();
+                _producerSourcesCollected.Clear();
                 _volumeDeficitFinalPass.Clear();
             }
 
