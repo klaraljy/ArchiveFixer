@@ -217,6 +217,19 @@ namespace ArchiveFixer.Extraction
         /// <summary>候选全试完了都不对。</summary>
         WrongPassword,
 
+        /// <summary>
+        /// **文件名已加密**（7z `-mhe` / RAR `-hp`）：这一层从头到尾**就没列出过清单**，
+        /// 而引擎在列目录那一步说的是"加密头"（用户 2026-10-05 拍板：递归路也要与单层路同结论）。
+        ///
+        /// <para>为什么必须与 <see cref="WrongPassword"/> 分开：用户要做的动作完全不同 ——
+        /// 密码错误是"去核对 / 补密码本"，而这一档是"**先给它一个密码，它才肯把内容清单给你看**"。
+        /// 判据与单层路径同一套（列目录失败 + 引擎给的结构化错误类型是
+        /// <see cref="EngineErrorTypes.EncryptedHeaders"/>，⛔ 不比中文）；
+        /// ⛔ 只要**任何一个候选成功列出过清单**，这一档就不成立（那时失败在解压阶段，
+        /// 结论照旧走密码错误 / 两义 / 损坏）。</para>
+        /// </summary>
+        EncryptedHeaders,
+
         Corrupted,
 
         /// <summary>
@@ -1002,6 +1015,24 @@ namespace ArchiveFixer.Extraction
             int skippedCandidates = 0;
 
             /*
+             * ===== 这一层"到底有没有列出过清单"（用户 2026-10-05 拍板的那半条）=====
+             *
+             * `-mhe`（7z）/ `-hp`（RAR）的包**每个候选都列不出来**，引擎在列目录那一步就说"加密头"。
+             * 这是「文件名已加密」唯一的证据来源（与单层路径同一个判据）：
+             * ① 从头到尾**一次都没列成功**；② 引擎说的确实是加密头（结构化错误类型，⛔ 不比中文）；
+             * ③ 没出现过**别的**列目录错误 —— 三条同时成立才认（证据混了 / 判不出 ⇒ 退回既有口径）。
+             *
+             * ⛔ 只要任何一个候选成功列出过清单，这一档就不成立：那时失败发生在**解压**阶段，
+             * 结论照旧走密码错误 / 两义 / 损坏 —— 别把"密码试错了但清单列得出来"的普通加密包说成它。
+             */
+            bool listedAnyCandidate = false;
+            bool sawEncryptedHeadersListFailure = false;
+            bool sawOtherListFailure = false;
+
+            /* 引擎在列目录那一步的原话（加密头那一档要带进结论里，与单层路径同一句文案）。 */
+            string encryptedHeadersListMessage = string.Empty;
+
+            /*
              * 日志里的任务标签：**只写文件名 + 层号**（§8 隐私红线：完整路径不进日志）。
              * 层号是排查多层嵌套时唯一能对号入座的信息，既有日志的行首形状就是它。
              */
@@ -1112,6 +1143,8 @@ namespace ArchiveFixer.Extraction
 
                 if (listedThisCandidate is { Success: true })
                 {
+                    listedAnyCandidate = true;
+
                     lastListedEntries = PartialPublishPlanner.ToManifestEntries(listedThisCandidate);
 
                     /*
@@ -1137,6 +1170,23 @@ namespace ArchiveFixer.Extraction
                                 listedThisCandidate.Entries,
                                 ReportDangerousEntries));
                     }
+                }
+                else if (string.Equals(
+                    listedThisCandidate?.ErrorType,
+                    EngineErrorTypes.EncryptedHeaders,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    // 这一次列目录失败是"加密头"：它是「文件名已加密」那一档的证据（见上面的说明）。
+                    sawEncryptedHeadersListFailure = true;
+                    encryptedHeadersListMessage = listedThisCandidate?.Message ?? string.Empty;
+                }
+                else
+                {
+                    /*
+                     * 别的列目录失败（引擎抛异常时为 null、损坏、超时…）：证据混了 ⇒ 那一档不成立，
+                     * 结论退回既有的密码口径（"判不出就什么都不改"）。
+                     */
+                    sawOtherListFailure = true;
                 }
 
                 /*
@@ -1548,17 +1598,62 @@ namespace ArchiveFixer.Extraction
                 ArchiveOperationResult? conclusion =
                     ambiguousPasswordFailure ?? informativeFailure ?? lastFailure;
 
-                RecursionLayerReport failureReport = BuildLayerReport(
-                    item,
-                    conclusion,
-                    succeededPassword: null,
-                    manifestEntries: lastListedEntries);
-
                 RecursionStopReason reason = ResolvePasswordStopReason(
                     candidates.Count - skippedCandidates,
                     attempts,
                     conclusion,
                     triedAny);
+
+                /*
+                 * ===== 「文件名已加密」在递归路也要成立（2026-10-05 用户拍板）=====
+                 *
+                 * 现场：同一个 `-mhe` / `-hp` 的包，单层路报「文件名已加密」，而递归路
+                 * （出厂默认档 = 展开所有分支）报「密码错误」—— 用户被指去翻密码本，
+                 * 而他要做的是"先给它一个密码"（这个包连内容清单都读不出来）。
+                 *
+                 * 判据 = 四件事**同时**成立：
+                 * ① 收尾本来就落在**「密码错误」**那一档（候选全试完了都不对）；
+                 * ② 这一层从头到尾**一次都没列成功**；③ 引擎说的是**加密头**（结构化错误类型，⛔ 不比中文）；
+                 * ④ 没出现过别的列目录错误（证据混了 ⇒ 判不出 ⇒ 退回既有口径）。
+                 *
+                 * ⚠ ① 是照单层路径**逐字对齐**的：那边恢复这个结论的条件是
+                 * `preflightSaidEncryptedHeaders && (密码错误 || 解压失败)`，而它**刻意不覆盖**
+                 * 「达到密码尝试上限」（那边原话："那是更具体的结论，不动"）—— 候选还有剩、再试就能开，
+                 * 说成"文件名已加密"会把用户从"去补候选"引开。同理也不覆盖两义与损坏（各自断言了别的原因）。
+                 */
+                bool encryptedHeadersConclusion =
+                    reason == RecursionStopReason.WrongPassword
+                    && !listedAnyCandidate
+                    && sawEncryptedHeadersListFailure
+                    && !sawOtherListFailure;
+
+                string? encryptedHeadersMessage = null;
+
+                if (encryptedHeadersConclusion)
+                {
+                    reason = RecursionStopReason.EncryptedHeaders;
+
+                    encryptedHeadersMessage = string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.RecursionEncryptedHeadersMessageFormat,
+                        encryptedHeadersListMessage);
+
+                    Log(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.RecursionEncryptedHeadersLogFormat,
+                            layerLabel,
+                            StatusText.EncryptedHeaders));
+                }
+
+                RecursionLayerReport failureReport = BuildLayerReport(
+                    item,
+                    conclusion,
+                    succeededPassword: null,
+                    overrideMessage: encryptedHeadersMessage,
+                    manifestEntries: lastListedEntries,
+                    overrideStatus: encryptedHeadersConclusion ? StatusText.EncryptedHeaders : null);
 
                 return LayerOutcome.Stop(failureReport, reason);
             }
@@ -2919,13 +3014,18 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 带"失败原因覆盖"的层报告：预检/落点校验这类**不是引擎给出**的失败，
         /// 原因来自安全检查，必须原样写进报告（Message 会被 PasswordMasker 再洗一遍，防密码泄漏）。
+        ///
+        /// <para><paramref name="overrideStatus"/> 同理：像「文件名已加密」这种结论，
+        /// 引擎最后一次给的往往是"密码错误"那一档（那是候选循环的驱动信号），
+        /// 直接照抄会让层报告与结论自相矛盾。</para>
         /// </summary>
         private RecursionLayerReport BuildLayerReport(
             WorkItem item,
             ArchiveOperationResult? result,
             string? succeededPassword,
             string? overrideMessage,
-            IReadOnlyList<(string Path, long Size)>? manifestEntries = null)
+            IReadOnlyList<(string Path, long Size)>? manifestEntries = null,
+            string? overrideStatus = null)
         {
             string message = overrideMessage
                 ?? (result == null ? "引擎没有返回结果" : PasswordMasker.Sanitize(result.Message));
@@ -2936,7 +3036,7 @@ namespace ArchiveFixer.Extraction
                 ArchivePath = item.ArchivePath,
                 OutputPath = item.Layer.OutputPath,
                 Success = false,
-                Status = result?.Status ?? StatusText.ExtractFailed,
+                Status = overrideStatus ?? result?.Status ?? StatusText.ExtractFailed,
                 Message = PasswordMasker.Sanitize(message),
                 InnerArchives = Array.Empty<string>(),
                 OutputFileCount = 0,
@@ -3589,6 +3689,8 @@ namespace ArchiveFixer.Extraction
                 RecursionStopReason.MaxTotalSizeReached => "已达到累计输出总大小上限",
                 // 与上一条同档（都是"撞上程序的安全上限，不是包坏了"）：措辞统一走 StatusText。
                 RecursionStopReason.MaxSingleFileSizeReached => StatusText.RecursionSingleFileSizeReachedReason,
+                // 文件名已加密（-mhe / -hp）：与自己"密码错误"那一档分开说（措辞与单层路径同一句）。
+                RecursionStopReason.EncryptedHeaders => StatusText.RecursionEncryptedHeadersReason,
                 RecursionStopReason.ExpansionRatioExceeded => "单层展开比超限，疑似压缩炸弹",
                 RecursionStopReason.TooManyInnerArchives => "本层内层归档数量超过上限",
                 RecursionStopReason.PasswordAttemptsExceeded => "已达到密码尝试次数上限（候选还有剩余）",

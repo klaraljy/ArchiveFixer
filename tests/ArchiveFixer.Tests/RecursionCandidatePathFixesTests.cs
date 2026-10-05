@@ -253,14 +253,17 @@ namespace ArchiveFixer.Tests
             Assert.Contains(logs, line => line.Contains("跳过「空密码」", StringComparison.Ordinal));
 
             /*
-             * 结论仍是「密码错误」那一档：被跳过的空密码**没试过**，所以收尾比"候选总数 vs 试过几个"
-             * 时必须把它减掉（同一个意思在单层路径那边是"先 RemoveAll 再重算 maxPasswordAttempts"）——
-             * 不减就会把"两个候选都试完了都不对"误报成「达到密码尝试上限（候选还有剩余）」。
+             * ⚠ 2026-10-05 第二轮：这一档的**最终结论**已经改成「文件名已加密」那一档了
+             * （这条假引擎的每一候选都列不出清单、错误类型都是加密头 ⇒ 判据成立）。
+             * 本用例钉的仍是上面那句"空密码一次都没解过"；结论那一档由
+             * `RecursionGateAndHintFixesTests` 里那几条（真 7z `-mhe` + 对照组 + 边界）专钉。
              *
-             * ⚠ 本条与 `RecursiveExtractorTests.密码_候选全试完仍失败报WrongPassword` /
-             * `递归失败_工作区保留` 是同一条既定口径（那两条在加修复 4 之前就是绿的，不许被改红）。
+             * 顺带说明：被跳过的空密码**没试过**，所以收尾比"候选总数 vs 试过几个"时必须把它减掉
+             * （同一个意思在单层路径那边是"先 RemoveAll 再重算 maxPasswordAttempts"）——
+             * 不减就会把"两个候选都试完了都不对"误报成「达到密码尝试上限（候选还有剩余）」
+             * （`RecursiveExtractorTests.密码_候选全试完仍失败报WrongPassword` / `递归失败_工作区保留` 钉着）。
              */
-            Assert.Equal(RecursionStopReason.WrongPassword, result.StopReason);
+            Assert.Equal(RecursionStopReason.EncryptedHeaders, result.StopReason);
         }
 
         /// <summary>

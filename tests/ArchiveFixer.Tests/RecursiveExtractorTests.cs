@@ -827,7 +827,14 @@ namespace ArchiveFixer.Tests
         {
             RequireSevenZip();
 
-            string outer = BuildEncryptedInnerPackage();
+            /*
+             * ⚠ 内层包刻意**不用** `-mhe`（头不加密 ⇒ 清单列得出来）：`-mhe` 的包连清单都读不出来，
+             * 2026-10-05 起收尾落的是「文件名已加密」那一档（与单层路径对齐，见
+             * `RecursionGateAndHintFixesTests` 那三条），轮不到这里要验的"密码错误 / 达到上限"。
+             *
+             * 本用例要钉的是：**候选全试完了都不对 ⇒ 密码错误**（不是「达到尝试上限」）。
+             */
+            string outer = BuildEncryptedInnerPackage(encryptFileNames: false);
 
             // 两个候选都错 + 上限 8 → 候选被试完，属于"密码错误"，不是"达到尝试上限"。
             var task = new ArchiveTask(outer);
@@ -1082,11 +1089,18 @@ namespace ArchiveFixer.Tests
         {
             RequireSevenZip();
 
+            /*
+             * ⚠ 这个包**保持** `-mhe`（连文件名一起加密）：正因为它连清单都读不出来，
+             * 第 1 层才会"一个候选都没成功"就撞上"每层只试 1 个"的上限 —— 收尾必须是
+             * 「达到密码尝试上限」（候选还有剩、再试就能开），⛔ **不许**被「文件名已加密」那一档盖掉
+             * （判据只覆盖"密码错误"那一档，见 RecursiveExtractor 里那段说明）。
+             */
             string outer = BuildEncryptedInnerPackage();
 
             /*
              * 三个候选（空、错、对），但每层只允许试 1 个。
-             * 第 0 层用空密码就成功了，所以"试 1 个"的限制落在第 1 层：它只试了空密码就停手，
+             * 第 0 层用空密码就成功了，所以"试 1 个"的限制落在第 1 层：它先是跳过空密码
+             * （`-mhe` 那一档：列目录报加密头 ⇒ 空密码必然白跑），再试了第一个非空候选就停手，
              * 而候选还有剩 —— 这正是"达到密码尝试上限"，与"密码错误"必须区分开（AGENTS.md §9.2）。
              */
             var task = new ArchiveTask(outer);
@@ -1388,7 +1402,7 @@ namespace ArchiveFixer.Tests
         {
             RequireSevenZip();
 
-            // 外层没加密能解开、内层加密只给错密码 → 停在第 1 层（部分完成），这一份工作区必须留着。
+            // 外层没加密能解开、内层加密（-mhe）只给错密码 → 停在第 1 层，这一份工作区必须留着。
             string outer = BuildEncryptedInnerPackage();
 
             var task = new ArchiveTask(outer);
@@ -1404,7 +1418,13 @@ namespace ArchiveFixer.Tests
                 null,
                 CancellationToken.None);
 
-            Assert.Equal(RecursionStopReason.WrongPassword, result.StopReason);
+            /*
+             * ⚠ 2026-10-05：这个内层包是 `-mhe`（连文件名一起加密）⇒ 每个候选都列不出清单、
+             * 引擎给的结构化错误类型是"加密头" ⇒ 收尾落「文件名已加密」那一档
+             * （与单层路径对齐；以前这里落的是「密码错误」）。
+             * 本用例钉的是**工作区保留**，与结论落在哪一档无关 —— 所以只跟着改这一个期望值。
+             */
+            Assert.Equal(RecursionStopReason.EncryptedHeaders, result.StopReason);
             Assert.False(result.Completed);
 
             string workspaceDirectory = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
@@ -1914,14 +1934,32 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        /// <summary>造一个"外层不加密 zip + 内层加密 7z"的包，用于验证密码重试链路。</summary>
-        private string BuildEncryptedInnerPackage()
+        /// <summary>
+        /// 造一个"外层不加密 zip + 内层加密 7z"的包，用于验证密码重试链路。
+        /// </summary>
+        /// <param name="encryptFileNames">
+        /// 内层包是否**连文件名一起加密**（<c>-mhe=on</c>，默认 true）。
+        ///
+        /// <para>默认 true 的理由：这样"密码错"与"密码对"的差异没有别的旁路可看。
+        /// ⚠ 2026-10-05 起它还决定**结论落在哪一档**：`-mhe` 的包连内容清单都列不出来 ⇒
+        /// 收尾是「文件名已加密」（与单层路径对齐）；要验"密码错误 / 达到密码尝试上限"那几档
+        /// 必须传 false（头不加密 ⇒ 清单列得出来，失败发生在解压阶段）。
+        /// 这也是 `密码_候选全试完仍失败报WrongPassword` 显式传 false 的原因。</para>
+        /// </param>
+        private string BuildEncryptedInnerPackage(bool encryptFileNames = true)
         {
             string source = BuildSourceDir(("secret.txt", "加密内容\n"));
 
-            // -mhe=on：连文件头一起加密，这样"密码错"与"密码对"的差异没有别的旁路可看。
             string inner = Path.Combine(_root, "secret.7z");
-            Run7z("a", "-t7z", inner, "-p" + TestPass123, "-mhe=on", Path.Combine(source, "*"));
+
+            if (encryptFileNames)
+            {
+                Run7z("a", "-t7z", inner, "-p" + TestPass123, "-mhe=on", Path.Combine(source, "*"));
+            }
+            else
+            {
+                Run7z("a", "-t7z", inner, "-p" + TestPass123, Path.Combine(source, "*"));
+            }
 
             string outerSource = Path.Combine(_root, "_enc");
             Directory.CreateDirectory(outerSource);

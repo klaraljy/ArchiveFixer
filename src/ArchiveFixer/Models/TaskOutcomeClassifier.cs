@@ -104,6 +104,13 @@ namespace ArchiveFixer.Models
             {
                 case RecursionStopReason.WrongPassword:
                 case RecursionStopReason.PasswordAttemptsExceeded:
+
+                /*
+                 * 文件名已加密（-mhe / -hp）：与密码那两档**同一处置**（一个字节都没产出就是失败、
+                 * 产出过东西才叫部分完成），但**状态另算**（见下面那张表）——
+                 * 用户要做的动作不同："先给它一个密码"而不是去翻密码本。
+                 */
+                case RecursionStopReason.EncryptedHeaders:
                 case RecursionStopReason.Corrupted:
                 case RecursionStopReason.PasswordOrCorrupted:
                 case RecursionStopReason.EngineFailed:
@@ -126,6 +133,13 @@ namespace ArchiveFixer.Models
                     {
                         RecursionStopReason.WrongPassword => StatusText.WrongPassword,
                         RecursionStopReason.PasswordAttemptsExceeded => StatusText.PasswordAttemptLimitReached,
+
+                        /*
+                         * 文件名已加密：与单层路径**逐字同一个状态**（`StatusText.EncryptedHeaders`，
+                         * 值 = 文件名已加密）—— 单层路 2026-09-26 就落它，递归路 2026-10-05 才对齐
+                         * （用户拍板）。⛔ 不许折成"密码错误"：那会把用户指去翻密码本。
+                         */
+                        RecursionStopReason.EncryptedHeaders => StatusText.EncryptedHeaders,
                         RecursionStopReason.Corrupted => StatusText.Corrupted,
 
                         /*

@@ -14,16 +14,21 @@ namespace ArchiveFixer.Tests
     /// <summary>
     /// 2026-10-05 只读审计：**递归那条路（出厂默认档 = 展开所有分支）缺的闸门与提示**。
     ///
-    /// <para>这一组钉三件事（每一条都有对应的红检：撤掉修复 ⇒ 用例变红）：</para>
+    /// <para>这一组钉四件事（每一条都有对应的红检：撤掉修复 ⇒ 用例变红）：</para>
     /// <list type="number">
     /// <item>单文件大小上限：递归上限要映设置里那一条，且拿本层清单真判、点名是哪个条目（拿不到清单 ⇒ 不拦）；</item>
     /// <item>可疑条目提示：递归层拿到清单后回传结论，由协调器写进与单层路径同一个字段（关掉设置就一个字都不写）；</item>
-    /// <item>清工作区前的**第二道**容器内校验：目录里只许有我们自己造的子目录（越界只写 WARN、一个字节都不删）。</item>
+    /// <item>清工作区前的**第二道**容器内校验：目录里只许有我们自己造的子目录（越界只写 WARN、一个字节都不删）；</item>
+    /// <item>「文件名已加密」：`-mhe` / `-hp` 的包在递归路的**最终结论**也要是它（不是「密码错误」），
+    /// 而普通 `-p` 加密包密码全不对时照旧是「密码错误」（对照组）。</item>
     /// </list>
     /// </summary>
     [Collection("ArchiveFixerGlobalState")]
     public class RecursionGateAndHintFixesTests : IDisposable
     {
+        /// <summary>测试专用合成密码；只出现在测试数据里，不是任何真实凭据。</summary>
+        private const string RightPassword = "Right-Pass-2026";
+
         private readonly string _root;
 
         public RecursionGateAndHintFixesTests()
@@ -268,6 +273,140 @@ namespace ArchiveFixer.Tests
                 StringComparison.Ordinal);
         }
 
+        // ================================================================ ④b 加密头包的最终结论
+
+        /// <summary>
+        /// **`-mhe=on`（连文件名一起加密）的包走递归路，最终结论必须是「文件名已加密」**，
+        /// 而不是泛泛的「密码错误」（用户 2026-10-05 拍板：递归路要与单层路同结论）。
+        ///
+        /// <para>为什么这条重要：出厂默认档 = 展开所有分支 ⇒ 内层包与源包都走递归；
+        /// 报「密码错误」会把用户指去翻密码本，而他要做的是"先给它一个密码"——
+        /// 这个包连内容清单都读不出来。</para>
+        ///
+        /// <para><b>红检</b>：把递归层那个新判据（`encryptedHeadersConclusion`）撤成恒假 ⇒
+        /// 本用例变红（<c>Expected: 文件名已加密 / Actual: 密码错误</c>）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 加密头包走递归路_最终结论是文件名已加密而不是密码错误()
+        {
+            RecursionFixHarness.RequireSevenZip();
+
+            string archive = BuildEncryptedHeadersPackage();
+
+            RecursionFixHarness harness = RecursionFixHarness.Create(
+                _root,
+                new[] { "错的密码-2026" },
+                attemptLimit: 10,
+                recursionMode: "AllBranches");
+
+            ArchiveTask task = await harness.AddTaskAsync(archive);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.EncryptedHeaders, task.Status);
+            Assert.NotEqual(StatusText.WrongPassword, task.Status);
+
+            // 一个字节都没解出来 ⇒ 这是失败，不是"部分完成"（不变量 6 的反面）。
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+
+            // 与单层路径同一句话（"先给它一个密码，它才肯把清单给你看"）。
+            Assert.Contains("连内容清单都读不出来", task.ErrorMessage, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **对照**（⛔ 防矫枉过正）：普通 `-p` 加密包（文件名不加密 ⇒ 清单列得出来），
+        /// 候选密码全不对时**仍然**是「密码错误」—— 不许被上面那条新判据吃掉。
+        ///
+        /// <para>它同时钉住新判据的边界：只要**任何一个候选成功列出过清单**，那一档就不成立
+        /// （那时失败发生在解压阶段，结论照旧走密码口径）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 对照_普通加密包密码全不对时仍然是密码错误()
+        {
+            RecursionFixHarness.RequireSevenZip();
+
+            string archive = BuildPlainEncryptedPackage();
+
+            RecursionFixHarness harness = RecursionFixHarness.Create(
+                _root,
+                new[] { "错的密码-2026" },
+                attemptLimit: 10,
+                recursionMode: "AllBranches");
+
+            ArchiveTask task = await harness.AddTaskAsync(archive);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.WrongPassword, task.Status);
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+        }
+
+        /// <summary>
+        /// 判据边界（假引擎，结论完全确定）：空密码那一次列目录失败（引擎说加密头），
+        /// 但**第二个候选把清单列出来了**（只是解压时密码不对）⇒ 结论必须回到「密码错误」。
+        ///
+        /// <para><b>红检</b>：把新判据里的 <c>!listedAnyCandidate</c> 那一条去掉 ⇒ 本用例变红
+        /// （变成 <c>EncryptedHeaders</c>）—— 那正是"把普通加密包说成文件名已加密"的矫枉过正。</para>
+        /// </summary>
+        [Fact]
+        public async Task 加密头结论_只要有一个候选列出过清单就不成立()
+        {
+            var engine = new ScriptedEngine
+            {
+                OnList = request => string.IsNullOrEmpty(request.Password)
+                    ? ListingFailure(EngineErrorTypes.EncryptedHeaders)
+                    : PlainListing(("data.bin", 512L)),
+                OnExtract = _ => WrongPassword()
+            };
+
+            RecursiveExtractor extractor = CreateExtractor(
+                engine,
+                _ => new[] { string.Empty, "错的密码" },
+                limits: null,
+                out _);
+
+            RecursionResult result = await RunRecursionAsync(extractor, _root, "listed-once.7z");
+
+            Assert.Equal(RecursionStopReason.WrongPassword, result.StopReason);
+        }
+
+        /// <summary>
+        /// 结论要**点名说清**（⛔ 不许只丢一句"密码错误"）：层报告的状态与原因都换成
+        /// 「文件名已加密」那一档，日志里也写明白——判据与文案与单层路径逐字同一套。
+        /// </summary>
+        [Fact]
+        public async Task 加密头结论_层报告点名连清单都读不出来()
+        {
+            var engine = new ScriptedEngine
+            {
+                OnList = _ => ListingFailure(EngineErrorTypes.EncryptedHeaders),
+                OnExtract = _ => WrongPassword()
+            };
+
+            RecursiveExtractor extractor = CreateExtractor(
+                engine,
+                _ => new[] { string.Empty, "错的密码" },
+                limits: null,
+                out List<string> logs);
+
+            RecursionResult result = await RunRecursionAsync(extractor, _root, "encrypted-headers-conclusion.7z");
+
+            Assert.Equal(RecursionStopReason.EncryptedHeaders, result.StopReason);
+
+            RecursionLayerReport layer = Assert.Single(result.Layers);
+
+            Assert.Equal(StatusText.EncryptedHeaders, layer.Status);
+            Assert.Contains("连内容清单都读不出来", layer.Message, StringComparison.Ordinal);
+            Assert.Contains("需要正确密码", layer.Message, StringComparison.Ordinal);
+
+            // ⛔ 不许把它说成"密码错误"。
+            Assert.DoesNotContain(StatusText.WrongPassword, layer.Message, StringComparison.Ordinal);
+
+            // 停因那句与结论那一行都要出现（用户看得到方向）。
+            Assert.Contains(StatusText.EncryptedHeaders, result.Summary, StringComparison.Ordinal);
+            Assert.Contains(logs, line => line.Contains(StatusText.EncryptedHeaders, StringComparison.Ordinal));
+        }
+
         // ================================================================ ⑦b 工作区清理第二道校验
 
         /// <summary>
@@ -387,6 +526,67 @@ namespace ArchiveFixer.Tests
         }
 
         // ================================================================ 样本与夹具
+
+        /// <summary>
+        /// 造一个**文件名也加密**的真 7z 包（<c>-mhe=on</c>：连内容清单都列不出来）。
+        /// 密码故意不给对的 ⇒ 走的就是"给不出密码就解不了"那条路。
+        /// </summary>
+        private string BuildEncryptedHeadersPackage()
+        {
+            string stage = Path.Combine(_root, "mhe-stage-" + Guid.NewGuid().ToString("N"));
+            string packages = Path.Combine(_root, "pkg-" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(stage);
+            Directory.CreateDirectory(packages);
+
+            File.WriteAllText(Path.Combine(stage, "payload.bin"), "encrypted-headers-payload");
+
+            string archive = Path.Combine(packages, "encrypted-headers.7z");
+
+            RecursionFixHarness.Run7z(
+                stage,
+                "a",
+                "-t7z",
+                "-mx0",
+                "-mhe=on",
+                "-p" + RightPassword,
+                archive,
+                "payload.bin");
+
+            Assert.True(File.Exists(archive), "加密头包没造出来：" + archive);
+
+            return archive;
+        }
+
+        /// <summary>
+        /// 造一个**只加密条目、不加密文件名**的真 7z 包（<c>-p</c>）：清单列得出来，
+        /// 只是解压要密码 —— 对照组的样本。
+        /// </summary>
+        private string BuildPlainEncryptedPackage()
+        {
+            string stage = Path.Combine(_root, "plain-stage-" + Guid.NewGuid().ToString("N"));
+            string packages = Path.Combine(_root, "pkg-" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(stage);
+            Directory.CreateDirectory(packages);
+
+            File.WriteAllText(Path.Combine(stage, "payload.bin"), "plain-encrypted-payload");
+
+            string archive = Path.Combine(packages, "plain-encrypted.7z");
+
+            RecursionFixHarness.Run7z(
+                stage,
+                "a",
+                "-t7z",
+                "-mx0",
+                "-p" + RightPassword,
+                archive,
+                "payload.bin");
+
+            Assert.True(File.Exists(archive), "加密包没造出来：" + archive);
+
+            return archive;
+        }
 
         /// <summary>跑一次"必定失败"的递归（密码不对），返回手上还有工作区的那个递归核心。</summary>
         private async Task<(RecursiveExtractor Extractor, List<string> Logs)> CreateFailingExtractorAsync()

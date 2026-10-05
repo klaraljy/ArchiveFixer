@@ -39,7 +39,16 @@ namespace ArchiveFixer.Tests
     /// 撤掉（连同 <c>archivePath</c> 那个参数一起退回按 <c>item.ArchivePath</c> 解）⇒
     /// <see cref="内层是双面文件_递归层要先抠出尾部归档再解_整链不再判部分完成"/> 当场红
     /// （链停在 EngineFailed、内容物一个都没有）。</para>
+    ///
+    /// <para>⚠ 2026-10-05：本类**必须**与改写 <c>RecursiveExtractor.ConfiguredWorkspaceRoot</c>（进程级静态）
+    /// 的那些用例类**串行**跑 —— 本类只读它，而别的类会把它改成自己的临时目录、跑完又整棵删掉。
+    /// 不串行时的现场（全量跑实测两次）：工作区落到**别人的临时目录**里
+    /// （`Temp\ArchiveFixerKeepKeyword\…` / `Temp\ArchiveFixerChainRest\…`），对方 Dispose 一删，
+    /// 这一边就报 <c>Cannot open output file : 系统找不到指定的路径</c> 或"第 0 层的产物目录不存在"。
+    /// 约定与 <c>RecursiveExtractorTests</c> 顶部那段说明同一条，见
+    /// <c>InnerLayerContinuationTests</c> 顶部的 CollectionDefinition。</para>
     /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
     public class InnerDoubleFacedCarveTests : IDisposable
     {
         /// <summary>7-Zip 容忍的"前面垫的数据"上限（实测边界见 <c>EmbeddedArchiveCarver</c> 类注释）：9 MiB 必然落在拒绝区。</summary>

@@ -6129,6 +6129,17 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * 「文件名已加密」那一档还要落**密码状态**（2026-10-05，与单层路径逐字对齐）：
+             * 单层路在预检认下这一档时同时写 `PasswordStatus = PasswordNeed`（见那一处），
+             * 意思不是"密码错了"，而是"**需要正确密码才能列出内容**" ——
+             * 少了这一格，①页「密码」那一列对同一个包在两条路上会说两种话。
+             */
+            if (task.Status == StatusText.EncryptedHeaders)
+            {
+                task.PasswordStatus = StatusText.PasswordNeed;
+            }
+
+            /*
              * 收尾时间必须落（`TaskOutcome` 那一轮收口读的就是它：`EndTime` 有值 + `Outcome == Pending`
              * 才会被补成 `Failed`）。递归这条路以前不写 `EndTime`，于是任务在界面上一直"还在跑"
              * （耗时那一列会跟着 Now 一直涨），批末的"用时"也取不到这一单。

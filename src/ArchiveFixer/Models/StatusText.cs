@@ -2748,5 +2748,38 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string WorkspaceForeignSubdirectoryLogFormat =
             "{0}：工作区目录里有非本任务造的子目录（{1}），为安全起见不清：{2}";
+
+        // ================================================================
+        // 「文件名已加密」在递归层也要成立（2026-10-05 用户拍板；措辞与单层路径逐字对齐）
+        // ================================================================
+        //
+        // 现场：同一个 `-mhe`（7z）/ `-hp`（RAR）的包，单层路报「文件名已加密」，
+        // 而递归路（出厂默认档 = 展开所有分支）报「密码错误」—— 用户被指去翻密码本，
+        // 而他要做的是"先给它一个密码"（连清单都读不出来）。
+        // 判据与单层路径同一套（列目录失败 + 引擎说加密头），文案也照它那一句。
+
+        /// <summary>
+        /// 递归层"文件名已加密"那一档的**结论文案**（<c>{0}</c> = 引擎列目录时的原话）。
+        ///
+        /// <para>逐字照单层路径那一句（<c>ExtractionCoordinator</c> 的
+        /// "这个包可能加密了文件名（RAR -hp / 7z -mhe），所以连内容清单都读不出来，需要正确密码才能列出内容。"）——
+        /// 同一个事实在两条路上必须说同一句话。</para>
+        /// </summary>
+        public const string RecursionEncryptedHeadersMessageFormat =
+            "这个包可能加密了文件名（RAR -hp / 7z -mhe），所以连内容清单都读不出来，需要正确密码才能列出内容。{0}";
+
+        /// <summary>
+        /// 递归层落「文件名已加密」那一行日志（<c>{0}</c> = 层标签，<c>{1}</c> = <see cref="EncryptedHeaders"/>）。
+        /// 同样照单层路径恢复结论时那一句（"这次拿到的是「文件名已加密」的结论（不是泛泛的密码错误）……"）。
+        /// </summary>
+        public const string RecursionEncryptedHeadersLogFormat =
+            "{0}：这次拿到的是「{1}」的结论（不是泛泛的密码错误）—— 连内容清单都读不出来，需要正确密码才能列出内容。";
+
+        /// <summary>
+        /// 递归层的**停因**那一句（<c>DescribeStopReason</c> 用；与"密码错误"必须分开：
+        /// 用户要做的不是去翻密码本，而是先给它一个密码）。
+        /// </summary>
+        public const string RecursionEncryptedHeadersReason =
+            EncryptedHeaders + " —— 连内容清单都读不出来（需要正确密码）";
     }
 }
