@@ -3572,6 +3572,20 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * ===== 借来用过的用户源片**也算源包**：跟这一组一起进其余物、一起按删除档处理 =====
+             * （用户 2026-10-05 拍板原话：「那肯定啊，这个算原包，最后放到其余物里面一同删除」）
+             *
+             * 现场：一组跨盘 ZIP 的末片压在包里、其余三片散在三个源目录里 —— 递归层把三片硬链接过来
+             * 凑齐、整组解开、结果发布成功。那三片就是**这一组的源包**，不能因为"它们自己那一单是跟班卷"
+             * 就永远留在用户目录里。
+             *
+             * 位置刻意排在上面那几道判据**之后**（消费方成功 + 可证完整 + 其余物目录在）：判据一条都不放宽；
+             * 搬运本体仍是既有出口 `ExecuteSourcePackageMove`（整组一起移、绝不覆盖、跨盘先复制再删原件、
+             * 单个失败不影响其余），⛔ 不另写一套搬运动作。
+             */
+            CollectConsumedSourcePiecesIntoRest(task);
+
+            /*
              * ===== 「整条链都得成功」那道门槛 2026-10-04 **被用户推翻**（原第 37 条）=====
              *
              * 老口径（2026-09-25 第 37 条那次 12.22 GiB 事故之后加的）：链上**每一个**续解任务都成功
@@ -8204,6 +8218,64 @@ namespace ArchiveFixer.ViewModels
             }
 
             return toRun;
+        }
+
+        /// <summary>
+        /// **已由本批另一单解出的"借来用过的源片"**（如那三片散在源目录里的跨盘 ZIP 分卷）——
+        /// 它们也算**源包**，跟着这一组一起进其余物、一起按删除档处理
+        /// （用户 2026-10-05 拍板原话：「那肯定啊，这个算原包，最后放到其余物里面一同删除」）。
+        ///
+        /// <para>判据只有两件事：① 这一片在 <see cref="_consumedVolumeSources"/> 里、且消费方正是
+        /// <paramref name="consumer"/> 这一单；② 这一片自己的任务**确实是**按"内容已由别单解出"收场的
+        /// 跟班卷（<see cref="ArchiveTask.IsVolumeGroupFollower"/>、终态 <see cref="TaskOutcome.Skipped"/>）。
+        /// 搬运与删除全部交给既有出口（<see cref="ExecuteSourcePackageMove"/> → `SourcePackageMover`，
+        /// 六道闸门一条都不绕过；后面那一段"按删除档处理其余物"照旧跑）。
+        /// ⛔ 判不出 / 找不到那一单 ⇒ 什么都不做（源片留在原地）。</para>
+        /// </summary>
+        private void CollectConsumedSourcePiecesIntoRest(ArchiveTask consumer)
+        {
+            if (consumer == null || _consumedVolumeSources.Count == 0)
+            {
+                return;
+            }
+
+            var logEntries = new List<(string Level, string Message)>();
+
+            foreach ((string piecePath, string ownerName) in _consumedVolumeSources.ToList())
+            {
+                if (!string.Equals(ownerName, consumer.FileName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                ArchiveTask? pieceTask = _vm.Tasks.FirstOrDefault(
+                    candidate => candidate != null &&
+                                 candidate.IsVolumeGroupFollower &&
+                                 candidate.Outcome == TaskOutcome.Skipped &&
+                                 EnumerateTaskPaths(candidate).Any(
+                                     path => string.Equals(
+                                         SafePathHelper.GetFullPathSafe(path),
+                                         SafePathHelper.GetFullPathSafe(piecePath),
+                                         StringComparison.OrdinalIgnoreCase)));
+
+                if (pieceTask == null)
+                {
+                    continue;
+                }
+
+                ExecuteSourcePackageMove(
+                    pieceTask,
+                    consumer.RestDirectoryPath,
+                    SourceMoveTrigger.AfterChain,
+                    logEntries);
+
+                _consumedVolumeSources.Remove(piecePath);
+            }
+
+            foreach ((string level, string message) in logEntries)
+            {
+                AppendLog(level, message);
+            }
         }
 
         /// <summary>

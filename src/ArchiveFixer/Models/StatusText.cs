@@ -3024,10 +3024,14 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 跨盘 ZIP 那一族缺 `.zip` 时的那一句（见 <see cref="VolumeDeficitNoTailNearbyFormat"/>）——
         /// 这一条是"内容其实已经解出来了"的收场：<c>{0}</c> = 这一单的文件名，<c>{1}</c> = 解出它的那一单。
+        ///
+        /// <para>⚠ 用词沿用既有那两句（<see cref="VolumeGroupFollowerSkippedFormat"/> /
+        /// <see cref="VolumeGroupFollowerSummaryFormat"/>）：**「同一分卷组的后续卷」** ——
+        /// ⛔ 不许另造新说法（用户 2026-10-05：「记住不要有新创的专有名词」）。</para>
         /// </summary>
         public const string VolumeDeficitConsumedByOtherTaskFormat =
             "「{0}」这一组的内容已经由「{1}」那一单解出来了（缺的那一片就压在它里面）—— "
-            + "这一单按跟班卷处理：不用再跑，也不算没做成。";
+            + "这一单是同一分卷组的后续卷：不用再跑，也不算没做成。";
 
         // ── 跨盘 ZIP：末片在手、其余几片散在源目录里（2026-10-05 真机第八批） ──
         //
