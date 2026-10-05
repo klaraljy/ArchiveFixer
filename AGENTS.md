@@ -222,8 +222,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2798 条（2786 通过 / 12 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 这一轮（2026-10-05：全库口径对账 + 设置里那一格「推荐装 WinRAR」）的账：**2794 → 2798 = +4**（全部来自新文件 `WinRarRecommendationTests`；文档与用例改口径不增减）。
+- `dotnet test` 全量（主 checkout 内）：**2804 条（2792 通过 / 12 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 这一轮（2026-10-05：真机第八批"跨盘 ZIP 末片在包里、其余片在源目录"）的账：**2798 → 2804 = +6**（新文件 `SpannedZipCrossBoundaryGatherTests`）。
+  - ⚠ 上一轮（2026-10-05：全库口径对账 + 设置里那一格「推荐装 WinRAR」）的账：**2794 → 2798 = +4**（全部来自新文件 `WinRarRecommendationTests`；文档与用例改口径不增减）。
   - ⚠ 上一轮（2026-10-05：分卷两条口径落地 + 两条旧用例按新口径重写）的账：**2786 → 2794 = +8**（新文件 `SiblingFolderVolumeGatherTests` 7 条 + 改写时新增的 1 条上限守门用例；两条旧用例是**重写**不增减）。先跑出来是 2793（2 条红 —— 旧用例跟新口径正面冲突），改完用例 +1 = 2794。
   - ⚠ 再上一轮（2026-10-05：WinRAR 兜底 + 那两条真回归修复）的账：**2746 → 2786 = +40**（全部来自新文件 `WinRarFallbackTests`，含后补的 3 条守门用例）；先跑出来是 2783（2 条红），修完 +3 = 2786。
   - ⚠ **跳过从 3 变 12 是"样本被我删了"，⛔ 别读成"验过了"**：用户 2026-10-05 让我清 `E:\DeepSeekProjects\_tmp\ArchiveFixer` 占空间 ⇒ 我删了 `aaa-real` / `aaa-replay` / `amb909-copy` 三份**真样本夹具副本**（另加本次新加的 env-gated 真样本用例 1 条）⇒ 那些"真样本"用例**条件跳过**（不失败）。要复原：从 `H:` 重新拷一份到 `_tmp\ArchiveFixer\`（`aaa-real` / `aaa-replay\AAA` / `amb909-copy`），或按用例说明设 `ARCHIVEFIXER_REAL_*` 环境变量。
@@ -328,6 +329,13 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - ⛔ **凑不齐 ⇒ 一次引擎调用都不做**（不变量 7）：只有**硬证据**那一档免试（7z + 起始头读得出 + 不是"多出来且缩不出唯一解释"），如实报**缺哪几片** + 还差多少字节，落 `StatusText.VolumeMissing`（⛔ 不落「解压失败」、⛔ 不说成"试过了"）。**多出来的那一档刻意不免试**（判不出时误报缺卷比多跑一次引擎糟）；RAR / 跨盘 zip 本轮不接（没有字节数证据，现有用例断言的是引擎原话那条口径）。
   - ⛔ **说话要对**：`.001` 自己打不开时**不许**再说「这是后续卷、缺少首卷」—— `SevenZipOutputParser.LooksLikeMissingVolumePart` 只认**卷号 ≥ 2**，卷号 == 1 落既有的 `"VolumeMissing"`。（旧写法只要名字像分卷就报"缺首卷"，正好把用户指反。）
   - ⚠ **未验**：真机复跑（内层三片已被上一次清掉，只能等下一批）；免试只接递归路（「只解当前这一层」的单层路未接）。
+- ✅ **跨盘 ZIP：末片在手、其余几片散在源目录里 —— 硬链接接上（2026-10-05 真机第八批；用户原话「赶紧修，按照现在程序应有的功能是解压的出来的」「这不是让你看着答案写过程」）**：
+  - **现场**：`111.rar`（RAR5、只加密数据）→ 内含 `111\111.rar`（同名、AES）→ 内含 `111.zip`（跨盘 ZIP 的**末片**）；而 `111.z0删除1/2/3`（各 209,715,200 字节、首片开头是跨盘标记 `PK\x07\x08`）散在**三个源目录**里 ⇒ 全批 0 成功（7-Zip：`ERROR = Missing volume : 111.z01`）。**两条收卷路各自封闭**：批首那一刻末片还在包里（源包那条路看不见它），链把末片解出来之后其余片又全在用户源目录里（递归那条路的池刻意不碰源目录）。
+  - **判据 = 末片的 EOCD 是明文**（`-p` 只加密数据）⇒ 它自述"我是第 k 片、共 n 片"，这是**硬证据**，⛔ 不是"看着答案写过程"。**四条同时成立才动**：自述是末片且 `n ≥ 2` / 池里一片对一片凑得出第 1..n-1 片（同一卷号两份候选 ⇒ 判不出）/ 除末片外那几片**彼此等大** / **同一卷**（跨盘 ⇒ 不做，⛔ 绝不复制大文件）。
+  - **动作 = 硬链接**（唯一出口 `Helpers/HardLinkHelper.cs`，`CreateHardLinkW` 只许出现在它里面）：给源目录里那几片在**入口那一层**多起一个规范卷名（`111.z0删除1` ⇒ 旁边多一个 `111.z01`），零字节、瞬时 —— ⛔ **不改名、不搬、绝不把用户的源片搬进工作区**（工作区收尾是整份删的，搬进去等于删数据）；链接随工作区一起消失，源文件一个字节不动、名字一个字符不改。唯一实现 `VolumeNameRepair.ResolveSpannedZipDiskGather`；挂点 `RecursiveExtractor.ExtractLayerAsync`（排在既有跨层收卷**之前**，因为末片自述比"名字自洽"更强）；凑不齐 / 判不出 ⇒ **一次引擎调用都不做**（不变量 7）。用例 `SpannedZipCrossBoundaryGatherTests`(6)；红检：整档撤掉 ⇒ 5 条红。⚠ **未验**：真机复跑（H: 只读、且这一档要在他目录里建链接 ⇒ 只能由他重跑验证）；三片外壳那一单在批末仍会落「分卷缺失（缺末片）」——内容其实已由 `111.rar` 那一单解出，**"已由谁解出 ⇒ 那一单按跟班卷跳过"这一档还没做**。
+- ⛔ **「缺卷留到最后再判」那条口径的最后一站，差点被它自己的守卫挡死**（2026-10-05 真机第八批）：延迟中的缺卷任务**按设计没有机器终态**，而一键档"这一轮有任务没轮到"那道守卫读的正是终态 ⇒ `stopped = true` ⇒ `CompleteRootSourcePackagesAsync` 整段早退 ⇒ `FinalizeDeferredVolumeDeficits` **永远跑不到**（三个同形任务因此落三种说法：分卷缺失 ×2 / 已识别 + 没轮到 ×1）。⇒ 两处一起钉：守卫里 **在册的延迟任务不算"没轮到"**（唯一判据 = 那份名单，`ExtractionCoordinator.IsDeferredVolumeDeficit`），而且**用户没按停止**时链尾那一站照跑（`FinalizeDeferredVolumeDeficits` 为 `internal`，在 `stopped && !stopRequested` 那一支调）；⛔ 用户真按了「停止后续」照旧什么都不做（如实留「未处理」）。
+- ⛔ **引擎说「分卷缺失」时，停链原因不许落成「引擎操作失败」**（同上一批）：`RecursiveExtractor.MapEngineErrorToStopReason` 漏了 `EngineErrorTypes.VolumeMissing` ⇒ 相邻两行两种说法（`第 2 层：111.zip → 分卷缺失` / `已完成 2 层…原因：引擎操作失败`），用户会被指去查包换引擎，而不是去补那几片。判据只读结构化错误码。
+- ⛔ **跨盘 ZIP 族的头尾在名字编号里是反的**（`.zip` 是**末片**、`z01` 才是第 1 片）⇒ 说"缺哪一片"必须分族：那一族缺 `.zip` 时说「缺的是**末片**」（`StatusText.VolumeDeficitNoTailNearbyFormat`，判据 = `BelongsToSameGroup(手上这一份, <基名>.zip)`），⛔ 不许说成「缺的是第 1 卷」—— 真机上第一片就躺在隔壁文件夹里，那句话会把人指去一个根本不缺的东西。
 - ⛔ **"给目标找个不撞名的名字"必须把"本计划里已经排出去的名字"也算进去**（见 §39）：让位只问文件系统（`SafePathHelper.AutoRenameFilePath`）时，**同一份计划里两条同名文件会算出同一个目标名** ⇒ 第二条撞 `already exists` 而**留在原地**。唯一写法与源包搬运逐字相同：`reserved` HashSet + `ProcessArtifactLayout.MakeUniqueTarget(..., reserved, probe)`，⛔ 永远不覆盖。
   - 链尾收内层包的计划是纯函数 `ExtractionCoordinator.PlanChainInnerPackageMoves(rootTask, chainTasks, restDirectory, outputRoot, out warnings)`；执行前**再看一眼**目标名；用例 `ChainInnerPackageMovePlanTests`。
   - ⛔ 「成品目录里还留着 N 个内层包没被清理」那句 `leftBehind` 警告，判据必须与搬运那一边**同一套**（`candidateSucceeded || rootSucceeded` 都不算"还留着"）—— 否则会出现"警告说还留着、下一行就搬走删掉"的自相矛盾。

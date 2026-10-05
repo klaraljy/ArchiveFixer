@@ -509,6 +509,44 @@ namespace ArchiveFixer.Extraction
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 这条链**最外层源包**在哪（绝对路径；每次 <see cref="ExtractAsync"/> 开始时按调用方给的任务定下来）。
+        ///
+        /// <para>唯一消费点是"跨盘 ZIP 末片在手、其余几片散在源目录里"那一档：它的**找卷窗口**必须从
+        /// **用户导入进来的那个位置**算起（用户 2026-10-05 口径：「你要以一开始的分卷文件为准，不要以 001
+        /// 为准，否则这时的第一层父文件夹就探测不到」）—— 窗口是既有出口
+        /// <see cref="VolumeNameRepair.EnumerateVolumeCandidatesNearby"/> 算的（自己这一层 + 子目录递归 +
+        /// 第一层父文件夹这一家），⛔ 不扫全盘、⛔ 不递归到祖父及以上。</para>
+        /// </summary>
+        private string _rootSourcePath = string.Empty;
+
+        /// <summary>上面那个窗口里那批候选（懒算一次：同一条链里每一层都问同一份答案）。</summary>
+        private IReadOnlyList<VolumeCandidate>? _rootSourceCandidates;
+
+        /// <summary>找卷窗口里那批候选（见 <see cref="_rootSourcePath"/> 的说明；算不出来就是空池）。</summary>
+        private IReadOnlyList<VolumeCandidate> RootSourceCandidates
+        {
+            get
+            {
+                if (_rootSourceCandidates == null)
+                {
+                    try
+                    {
+                        _rootSourceCandidates = string.IsNullOrWhiteSpace(_rootSourcePath)
+                            ? Array.Empty<VolumeCandidate>()
+                            : VolumeNameRepair.EnumerateVolumeCandidatesNearby(_rootSourcePath);
+                    }
+                    catch
+                    {
+                        // 枚举不动 = 判不出：空池 ⇒ 那一档什么都不做。
+                        _rootSourceCandidates = Array.Empty<VolumeCandidate>();
+                    }
+                }
+
+                return _rootSourceCandidates;
+            }
+        }
+
+        /// <summary>
         /// 上一次运行留下、已被本次续跑取代的工作区（多分支询问 → 用户确认继续这一条路）。
         ///
         /// 为什么是**列表**而不是一个槽位：一个实例上可能出现"询问 → 续跑"这样的多次运行，
@@ -736,6 +774,13 @@ namespace ArchiveFixer.Extraction
              */
             string runArchivePath = SafePathHelper.GetFullPathSafe(task.CurrentPath);
             ExtractionWorkspace? previousWorkspace = CurrentWorkspace;
+
+            /*
+             * 这一趟"找卷窗口"的基准 = 最外层源包（用户 2026-10-05 口径）。每趟重算一次：
+             * 续跑时源包可能已经被改名 / 搬走，拿上一趟的路径去枚举就是拿一份过期读数。
+             */
+            _rootSourcePath = runArchivePath;
+            _rootSourceCandidates = null;
 
             bool continuesSameArchive = previousDecision != null &&
                 previousWorkspace != null &&
@@ -1276,6 +1321,57 @@ namespace ArchiveFixer.Extraction
              * （`CurrentWorkspace.Layers`，⛔ 不递归、⛔ 不含 `carved` 这种我们自造的兄弟目录、
              * ⛔ 绝不碰用户源目录）；跨盘一律不收（`BuildPlanFromOrder` 里判）。</para>
              */
+            /*
+             * ===== 跨盘 ZIP：末片在手、其余几片散在源目录里（2026-10-05 真机第八批）=====
+             *
+             * 现场：`111.z0删除1/2/3` 三片散在三个源目录里，而这一组的末片 `111.zip` 压在两层层层加密的
+             * RAR 里面。批首那一刻末片还在包里 ⇒ 源包那条路看不见它；链把末片解出来之后，其余几片又全在
+             * 用户源目录里 ⇒ 上面那条跨层收卷（候选池 = 工作区各层产物）也看不见它们。两条路各自封闭，
+             * 结果就是 7-Zip 报 `Missing volume : 111.z01`、整条链判「部分完成」、什么都没发布。
+             *
+             * 判据是**硬证据**：末片的 EOCD 是明文（`-p` 只加密数据），它自己写着"我是第 k 片、一共 n 片"。
+             * 动作 = 给源目录里那几片在入口这一层**多起一个规范卷名**（硬链接，零字节；⛔ 不改名、不搬、
+             * 绝不把用户的源片搬进工作区 —— 工作区是整份删的）。凑不齐 ⇒ 一次引擎调用都不做（不变量 7）。
+             */
+            VolumeNameRepair.SpannedZipDiskGather spannedDisks =
+                VolumeNameRepair.ResolveSpannedZipDiskGather(archivePath, RootSourceCandidates);
+
+            if (spannedDisks.Applicable)
+            {
+                if (!spannedDisks.Complete)
+                {
+                    string blocked = string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.SpannedZipDisksLayerBlockedFormat,
+                        layerLabel,
+                        spannedDisks.Detail);
+
+                    Log("WARN", blocked);
+
+                    return LayerOutcome.Stop(
+                        BuildLayerReport(
+                            item,
+                            result: null,
+                            succeededPassword: null,
+                            overrideMessage: blocked,
+                            manifestEntries: null,
+                            overrideStatus: StatusText.VolumeMissing),
+                        RecursionStopReason.MissingVolume);
+                }
+
+                if (spannedDisks.LinkedCount > 0)
+                {
+                    Log(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.SpannedZipDisksLayerLinkedFormat,
+                            layerLabel,
+                            Path.GetFileName(archivePath),
+                            spannedDisks.Detail));
+                }
+            }
+
             if (!TryGatherCrossLayerVolumes(item, archivePath, layerLabel, out string? missingVolumeMessage))
             {
                 /*
@@ -2998,6 +3094,15 @@ namespace ArchiveFixer.Extraction
                  * （清空间 / 换盘 vs 查包 / 查引擎）。判据只读引擎的结构化错误码，⛔ 不比中文。
                  */
                 EngineErrorTypes.NoDiskSpace => RecursionStopReason.DiskSpaceInsufficient,
+
+                /*
+                 * 分卷缺失（2026-10-05 真机第八批当场逮到）：引擎的结构化错误类型里**本来就有**
+                 * `MissingVolume`，可这份映射漏了它 ⇒ 掉进 `_ => EngineFailed`，于是同一件事
+                 * 在相邻两行里有两种说法：上一层那行写「分卷缺失，分卷压缩包缺少必要分卷」，
+                 * 下一行却写「已完成 2 层，停在第 3 层，原因：引擎操作失败」—— 用户会去查包、
+                 * 换引擎，而不是去把缺的那几片补上。⛔ 判据只读结构化错误码，不比中文。
+                 */
+                EngineErrorTypes.VolumeMissing => RecursionStopReason.MissingVolume,
 
                 _ => RecursionStopReason.EngineFailed
             };

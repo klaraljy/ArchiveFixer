@@ -3010,6 +3010,74 @@ namespace ArchiveFixer.Models
             + "判不出该怎么收，所以整组一个字节都没动。";
 
         /// <summary>
+        /// **跨盘 ZIP 那一族**的同义句（那一族的头尾是反的：`.zip` 是**末片**，`z01` 才是第 1 片）：
+        /// <c>{0}</c> = 这一单的文件名。
+        ///
+        /// <para>为什么必须分开说（2026-10-05 真机第八批）：按名字编号，`.zip` 是"第 1 卷"⇒ 于是
+        /// 手上明明拿着第 1 片（`111.z01`）也会被说成"缺第 1 卷"。真机上用户会拿着这句话去找一个
+        /// 就在隔壁文件夹里的东西。⛔ 判据只看"是不是同族同基名"，不比中文。</para>
+        /// </summary>
+        public const string VolumeDeficitNoTailNearbyFormat =
+            "「{0}」这一组缺的是末片（跨盘 ZIP 的 `.zip`，它是引擎的入口），而它那一层附近"
+            + "（父一层 + 自己这一层 + 自己的子目录）里没有末片 —— 判不出该怎么收，所以整组一个字节都没动。";
+
+        // ── 跨盘 ZIP：末片在手、其余几片散在源目录里（2026-10-05 真机第八批） ──
+        //
+        // 现场：`111.z0删除1/2/3` 三片散在三个源目录里，而这一组的末片 `111.zip` 压在两层层层加密的
+        // RAR 里面。末片的 EOCD 是明文（`-p` 只加密数据）⇒ 它自述「我是第 k 片、一共 n 片」是**硬证据**。
+        // 这一组文案就是"按这条证据把其余几片接到它旁边"时说的话（动作 = 硬链接，⛔ 不改名、不搬用户文件）。
+
+        /// <summary>入口那一层本来就摆着规范名的其余几片（不用收）。</summary>
+        public const string SpannedZipDisksAlreadyBeside =
+            "这一组的分卷本来就摆在入口旁边（都是逐字规范名），不用收。";
+
+        /// <summary>同一卷号两份候选 ⇒ 判不出（整档不做）。</summary>
+        public const string SpannedZipDisksAmbiguous =
+            "同一个卷号上冒出两份候选 —— 判不出哪一份属于这一组，整组一个字节都没动。";
+
+        /// <summary>其余几片在另一块盘上 ⇒ 不做（⛔ 不跨盘搬、也绝不复制大文件）。</summary>
+        public const string SpannedZipDisksAcrossVolume =
+            "其余几片在另一块盘上 —— 不跨盘搬，也绝不复制大文件，所以整组一个字节都没动。";
+
+        /// <summary>除末片外那几片大小对不上 ⇒ 判不出（整档不做）。</summary>
+        public const string SpannedZipDisksSizeMismatch =
+            "除末片外那几片的大小彼此对不上（不像同一组的满片）—— 判不出，整组一个字节都没动。";
+
+        /// <summary>入口那一层已经有同名的规范卷名文件 ⇒ 绝不覆盖（整档不做）。</summary>
+        public const string SpannedZipDisksTargetOccupied =
+            "入口那一层已经有同名的规范卷名文件 —— 绝不覆盖，整组一个字节都没动。";
+
+        /// <summary>建硬链接失败（已把建好的回滚）⇒ 整档不做。</summary>
+        public const string SpannedZipDisksLinkFailed =
+            "在入口那一层给它多起一个规范卷名失败（建好的链接已经回滚）—— 整组一个字节都没动。";
+
+        /// <summary>
+        /// 收成功了那一句：<c>{0}</c> = 自述的总片数，<c>{1}</c> = 接过来几片（动作 = 硬链接）。
+        /// ⛔ 不说成"搬进来"、⛔ 不说"改名"：源文件的位置与名字一个字符都没改。
+        /// </summary>
+        public const string SpannedZipDisksLinkedFormat =
+            "这一份自述是跨盘 ZIP 的末片（一共 {0} 片）—— 已把同一组的另外 {1} 片按规范卷名硬链接到它旁边"
+            + "（零字节、瞬时；你源目录里的文件一个字节都没动、名字也一个字符没改）。";
+
+        /// <summary>
+        /// 凑不齐那一句：<c>{0}</c> = 自述的总片数，<c>{1}</c> = 还缺哪几片。
+        /// 这一档**一次引擎调用都不做**（不变量 7：缺卷不开始解）。
+        /// </summary>
+        public const string SpannedZipDisksStillMissingFormat =
+            "这一份自述是跨盘 ZIP 的末片（一共 {0} 片），可同一组还缺 {1} —— "
+            + "判不出该怎么收，一次引擎调用都不做。";
+
+        /// <summary>
+        /// 递归层那一行"凑不齐 ⇒ 免试"：<c>{0}</c> = 层标签（<c>第 2 层</c>），<c>{1}</c> = 上面那句细节。
+        /// </summary>
+        public const string SpannedZipDisksLayerBlockedFormat = "{0}：{1}";
+
+        /// <summary>
+        /// 递归层那一行"接上了"：<c>{0}</c> = 层标签，<c>{1}</c> = 末片的名字，<c>{2}</c> = 上面那句细节。
+        /// </summary>
+        public const string SpannedZipDisksLayerLinkedFormat = "{0}：{1}：{2}";
+
+        /// <summary>
         /// 找卷的**基准**那一句（用户 2026-10-05 口径：「你要以一开始的分卷文件为准，不要以 001 为准」）：
         /// <c>{0}</c> = 基准那一卷的名字，<c>{1}</c> = 基准所在的那一层。
         /// </summary>

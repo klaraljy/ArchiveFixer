@@ -1064,7 +1064,13 @@ namespace ArchiveFixer.ViewModels
                     // 「停止后续」之后不许再续解：按下过停止，或者这一轮有任务根本没轮到。
                     // ⚠ 用 roundStartTargets（本轮开跑时的快照），不用实时 roundTargets ——
                     //    理由见上面那段注释：中途加进来的下一轮任务不该算"这一轮没轮到"。
-                    if (stopRequested || roundStartTargets.Any(t => !IsHandled(t)))
+                    //
+                    // ⛔ **在册的"缺卷留到最后再判"任务不算"没轮到"**（2026-10-05 真机第八批）：
+                    //    它们**按设计**就是没有机器终态的（先记缺口、等批末再判）—— 老写法把它们读成
+                    //    "没轮到" ⇒ 这一轮判成"被停止" ⇒ 链尾整段不跑 ⇒ **补判永远不发生**，
+                    //    汇总还把一单"缺末片"报成「没轮到」。判据只读那份名单（事实位）。
+                    if (stopRequested
+                        || roundStartTargets.Any(t => !IsHandled(t) && !_extractionCoordinator.IsDeferredVolumeDeficit(t)))
                     {
                         stopped = true;
                         break;
@@ -1327,6 +1333,15 @@ namespace ArchiveFixer.ViewModels
                     + $"源包与其余物都留在原地（{pending} 个源包本来要补搬）。");
                 return;
             }
+
+            /*
+             * ⚠ 停下来的原因**不是**用户按了停止时（"这一轮有任务没轮到"），
+             * 「缺卷留到最后再判」那一站照旧要跑（2026-10-05 真机第八批）：
+             * 那一站是那几单唯一的结论出口 —— 不跑，它们就永远停在「未处理」，
+             * 而汇总会把"缺末片"报成「没轮到」（真机现场）。⛔ 用户真按了停止时**不跑**
+             * （取消语义：如实留在「未处理」，不替用户做决定）。
+             */
+            _extractionCoordinator.FinalizeDeferredVolumeDeficits();
 
             if (hitRoundLimit)
             {

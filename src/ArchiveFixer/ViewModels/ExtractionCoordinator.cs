@@ -7748,11 +7748,29 @@ namespace ArchiveFixer.ViewModels
                     && VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(current)) != 1
                     && task.IsVolumeGroup)
                 {
+                    /*
+                     * 说话要对（2026-10-05 真机第八批）：**跨盘 ZIP 那一族的头尾是反的** ——
+                     * 它的第 1 片叫 `111.z01`，而 `.zip` 是**末片**（7-Zip 就是拿 `.zip` 当入口的）。
+                     * 按名字编号说话时"缺 index 1"其实等于"缺 `.zip`" ⇒ 对它必须说「缺的是末片」，
+                     * ⛔ 不许说成「缺的是第 1 卷」：真机上那三片的第一片就躺在隔壁文件夹里，
+                     * 用户会拿着"缺第 1 卷"这句去找一个根本不缺的东西。
+                     *
+                     * 判据只看一件事：手上这一份与 `<基名>.zip` **是不是同一族同基名**
+                     * （既有出口 `BelongsToSameGroup`；⛔ 不新造family判据）。
+                     */
+                    string baseName = FileNameHelper.GetArchiveBaseName(current);
+                    bool spannedZipFamily = baseName.Length > 0
+                        && VolumeGroupDetector.BelongsToSameGroup(
+                            Path.GetFileName(current),
+                            baseName + ".zip");
+
                     AppendLog(
                         "INFO",
                         string.Format(
                             System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.VolumeDeficitNoFirstVolumeNearbyFormat,
+                            spannedZipFamily
+                                ? StatusText.VolumeDeficitNoTailNearbyFormat
+                                : StatusText.VolumeDeficitNoFirstVolumeNearbyFormat,
                             task.FileName));
                 }
 
@@ -8202,8 +8220,14 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>已经补齐、但这一批已经没有机会再跑它的，**如实说清"这一次没跑"**（⛔ 不假装跑过、
         /// ⛔ 也不改机器终态：它仍然是「未处理」，再点一次就会跑）。</para>
+        ///
+        /// <para><b>它必须有机会跑到</b>（2026-10-05 真机第八批当场逮到的那条死路）：延迟中的任务
+        /// **按设计就是没有机器终态**，而一键档那道"这一轮有没有任务没轮到"的守卫读的正是终态 ——
+        /// 于是"延迟"本身把整条链判成"没轮到"，链尾整段不执行 ⇒ 补判永远不发生、汇总把它报成「没轮到」。
+        /// ⇒ 两处一起改：守卫不再把在册的延迟任务算成"没轮到"（<see cref="IsDeferredVolumeDeficit"/>），
+        /// 而且**用户没按停止**时这一步照跑（<c>internal</c> 就是给那条路用的）。</para>
         /// </summary>
-        private void FinalizeDeferredVolumeDeficits()
+        internal void FinalizeDeferredVolumeDeficits()
         {
             foreach (ArchiveTask task in RecheckDeferredVolumeDeficits(finalPass: true))
             {
@@ -8215,6 +8239,15 @@ namespace ArchiveFixer.ViewModels
                         task.FileName));
             }
         }
+
+        /// <summary>
+        /// 这一单是不是"缺卷留到最后再判"名单里那一单（**事实位**，供一键档那道守卫用）。
+        ///
+        /// <para>⛔ 只读这份名单本身：不看状态、不看终态、不重推判据 —— 名单的写入点唯一
+        /// （<see cref="RecordDeferredVolumeDeficit"/>）。</para>
+        /// </summary>
+        internal bool IsDeferredVolumeDeficit(ArchiveTask? task) =>
+            task != null && _volumeDeficitDeferred.Contains(task);
 
         /// <summary>
         /// 同目录里还有没有"同一分卷组的别的卷"（只按名字判，**只用于兜底拒搬**）。

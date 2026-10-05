@@ -3034,6 +3034,324 @@ namespace ArchiveFixer.Extraction
             };
         }
 
+        // ================================================================
+        // 跨盘 ZIP：末片在手、其余几片散在源目录里（2026-10-05 真机第八批）
+        // ================================================================
+
+        /// <summary>**跨盘 ZIP 收卷**的结论（纯事实 + 已经建好的链接；用户的源文件一个字节都不动）。</summary>
+        internal sealed class SpannedZipDiskGather
+        {
+            /// <summary>这一档适不适用：入口必须**自述是跨盘 zip 的末片**（EOCD 盘号 &gt; 0 且总片数 ≥ 2）。</summary>
+            public bool Applicable { get; init; }
+
+            /// <summary>入口那一层现在**逐字规范名**地摆着第 1..n-1 片（引擎解得开）。</summary>
+            public bool Complete { get; init; }
+
+            /// <summary>入口自述的总片数（含末片）。</summary>
+            public int DiskCount { get; init; }
+
+            /// <summary>这一趟真建了几条链接。</summary>
+            public int LinkedCount { get; init; }
+
+            /// <summary>点名还缺哪几片（规范卷名）。</summary>
+            public IReadOnlyList<string> MissingNames { get; init; } = Array.Empty<string>();
+
+            /// <summary>给人看的一句话。</summary>
+            public string Detail { get; init; } = string.Empty;
+        }
+
+        /// <summary>
+        /// **入口是跨盘 ZIP 的末片时，把同一组的其余几片"接"到它旁边**（用户 2026-10-05 真机第八批：
+        /// `111.z0删除1/2/3` 三片散在三个源目录里，末片 `111.zip` 压在两层层层加密的 RAR 里）。
+        ///
+        /// <para><b>为什么只有这一步做得成</b>：批首那一刻末片还在包里（没解出来）⇒ 源包那条路看不见它；
+        /// 递归链把末片解出来之后，其余几片又全在用户源目录里（⛔ 那条路的候选池刻意不碰源目录）。
+        /// 而末片的 EOCD 是**明文**（`-p` 加密的是数据，不影响它）⇒ 它自己写着"我是第 k 片、一共 n 片" ——
+        /// 这是**硬证据**，不是猜（用户原话：「这不是让你看着答案写过程」）。</para>
+        ///
+        /// <para><b>四条同时成立才动</b>：① 入口自述 `k == n`（它是末片）且 <c>n ≥ 2</c>；
+        /// ② 池里能一片对一片地凑出第 1..n-1 片（同一卷号两份候选 ⇒ 判不出 ⇒ 整档不做）；
+        /// ③ 除末片外那几片**彼此等大**（既有实测口径：只有这一半真成立）；
+        /// ④ **同一卷**（跨盘 ⇒ 判不出 ⇒ 整档不做，⛔ 绝不复制大文件）。</para>
+        ///
+        /// <para><b>动作 = 硬链接，不是搬、不是复制、不改名</b>：给用户源目录里那几片在**入口那一层**
+        /// 多起一个规范卷名（`111.z0删除1` ⇒ 旁边多一个 `111.z01`），零字节、瞬时，
+        /// 源文件一个字节不动、名字一个字符不改；链接随工作区收尾一起消失。
+        /// ⛔ 绝不把用户的源片搬进工作区（工作区是整份删的 —— 搬进去等于删数据）。</para>
+        ///
+        /// <para>判不出 / 凑不齐 ⇒ 什么都不做（<see cref="SpannedZipDiskGather.Complete"/> = false，
+        /// 如实报缺哪几片）。</para>
+        /// </summary>
+        internal static SpannedZipDiskGather ResolveSpannedZipDiskGather(
+            string? entryPath,
+            IEnumerable<VolumeCandidate>? crossCandidates)
+        {
+            var notApplicable = new SpannedZipDiskGather { Applicable = false };
+
+            if (string.IsNullOrWhiteSpace(entryPath) || !File.Exists(entryPath))
+            {
+                return notApplicable;
+            }
+
+            Detection.SpannedZipIndex? index = Detection.SpannedZipIndex.TryRead(entryPath);
+
+            // 只有"自述是跨盘 zip 的末片、而且不止一片"才进这一档；单盘 zip / 不是 zip ⇒ 不适用。
+            if (index == null || index.DiskCount < 2)
+            {
+                return notApplicable;
+            }
+
+            string entryFull = SafePathHelper.GetFullPathSafe(entryPath);
+            string entryName = SafeFileName(entryFull);
+            string entryDirectory = Path.GetDirectoryName(entryFull) ?? string.Empty;
+            string baseName = Path.GetFileNameWithoutExtension(entryName);
+            int diskCount = index.DiskCount;
+
+            if (entryDirectory.Length == 0 || baseName.Length == 0)
+            {
+                return notApplicable;
+            }
+
+            /*
+             * 入口那一层现在有哪些盘：**只认逐字规范名** —— 脏名（`111.z0删除1`）对引擎不算数，
+             * 拿它当"这一片已经在旁边"会让引擎照样报 `Missing volume`。
+             */
+            var presentSizes = new Dictionary<int, long>();
+
+            foreach (string? name in EnumerateFileNamesInDirectory(entryFull))
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                for (int disk = 1; disk < diskCount; disk++)
+                {
+                    if (string.Equals(name, CanonicalDiskName(baseName, disk), StringComparison.OrdinalIgnoreCase))
+                    {
+                        presentSizes[disk] = LengthOf(Path.Combine(entryDirectory, name!));
+                    }
+                }
+            }
+
+            var missing = new List<int>();
+
+            for (int disk = 1; disk < diskCount; disk++)
+            {
+                if (!presentSizes.ContainsKey(disk))
+                {
+                    missing.Add(disk);
+                }
+            }
+
+            if (missing.Count == 0)
+            {
+                return new SpannedZipDiskGather
+                {
+                    Applicable = true,
+                    Complete = true,
+                    DiskCount = diskCount,
+                    Detail = StatusText.SpannedZipDisksAlreadyBeside
+                };
+            }
+
+            // 池里找缺的那几片：一片对一片（同一卷号两份候选 ⇒ 判不出 ⇒ 整档不做）。
+            var picked = new Dictionary<int, VolumeCandidate>();
+            bool ambiguous = false;
+            bool acrossVolume = false;
+
+            foreach (VolumeCandidate? candidate in crossCandidates ?? Array.Empty<VolumeCandidate>())
+            {
+                if (candidate == null || string.IsNullOrWhiteSpace(candidate.Path) || !File.Exists(candidate.Path))
+                {
+                    continue;
+                }
+
+                string candidateName = SafeFileName(candidate.Path);
+
+                if (!VolumeGroupDetector.BelongsToSameGroup(entryName, candidateName))
+                {
+                    continue;
+                }
+
+                int? familyIndex = VolumeGroupDetector.TryGetVolumeIndex(candidateName);
+
+                if (familyIndex == null)
+                {
+                    continue;
+                }
+
+                // 这一族的编号：`.zip` = 1（本体 / 末片）、`.zNN` = NN + 1 ⇒ 真实盘序 = 编号 - 1。
+                int disk = familyIndex.Value - 1;
+
+                if (disk < 1 || disk >= diskCount || !missing.Contains(disk) || LengthOf(candidate.Path) <= 0)
+                {
+                    continue;
+                }
+
+                if (!HardLinkHelper.CanHardLink(candidate.Path, entryDirectory))
+                {
+                    // 跨盘：⛔ 不复制大文件 ⇒ 整档不做（如实说）。
+                    acrossVolume = true;
+                    continue;
+                }
+
+                if (picked.TryGetValue(disk, out VolumeCandidate? existing))
+                {
+                    if (!SamePath(existing.Path, candidate.Path))
+                    {
+                        ambiguous = true;
+                    }
+
+                    continue;
+                }
+
+                picked[disk] = candidate;
+            }
+
+            if (ambiguous || acrossVolume)
+            {
+                return new SpannedZipDiskGather
+                {
+                    Applicable = true,
+                    DiskCount = diskCount,
+                    MissingNames = missing.Select(disk => CanonicalDiskName(baseName, disk)).ToList(),
+                    Detail = ambiguous
+                        ? StatusText.SpannedZipDisksAmbiguous
+                        : StatusText.SpannedZipDisksAcrossVolume
+                };
+            }
+
+            List<string> unresolved = missing
+                .Where(disk => !picked.ContainsKey(disk))
+                .Select(disk => CanonicalDiskName(baseName, disk))
+                .ToList();
+
+            if (unresolved.Count > 0)
+            {
+                return new SpannedZipDiskGather
+                {
+                    Applicable = true,
+                    DiskCount = diskCount,
+                    MissingNames = unresolved,
+                    Detail = DescribeStillMissing(diskCount, unresolved)
+                };
+            }
+
+            // ③ 除末片外那几片彼此等大（已有的 + 要接的，一起比）。
+            var sizes = new List<long>(presentSizes.Values);
+
+            foreach (VolumeCandidate candidate in picked.Values)
+            {
+                sizes.Add(LengthOf(candidate.Path));
+            }
+
+            if (sizes.Count > 1 && sizes.Distinct().Count() > 1)
+            {
+                return new SpannedZipDiskGather
+                {
+                    Applicable = true,
+                    DiskCount = diskCount,
+                    MissingNames = missing.Select(disk => CanonicalDiskName(baseName, disk)).ToList(),
+                    Detail = StatusText.SpannedZipDisksSizeMismatch
+                };
+            }
+
+            // 动作：给这几片在入口那一层多起一个规范卷名（硬链接；全成或全不成，失败把建好的删掉）。
+            var created = new List<string>();
+
+            foreach ((int disk, VolumeCandidate candidate) in picked.OrderBy(pair => pair.Key))
+            {
+                string canonical = CanonicalDiskName(baseName, disk);
+                string target = Path.Combine(entryDirectory, canonical);
+
+                if (File.Exists(target) || !HardLinkHelper.TryCreateHardLink(target, candidate.Path))
+                {
+                    RollBack();
+                    return new SpannedZipDiskGather
+                    {
+                        Applicable = true,
+                        DiskCount = diskCount,
+                        MissingNames = new[] { canonical },
+                        Detail = File.Exists(target)
+                            ? StatusText.SpannedZipDisksTargetOccupied
+                            : StatusText.SpannedZipDisksLinkFailed
+                    };
+                }
+
+                created.Add(target);
+            }
+
+            /*
+             * 建完**重新读一次盘上事实**：这一组到底齐不齐，只能由那个目录里现在有什么回答 ——
+             * ⛔ 不拿"刚刚链接成功了"当结论。
+             */
+            var nowPresent = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string? name in EnumerateFileNamesInDirectory(entryFull))
+            {
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    nowPresent.Add(name!);
+                }
+            }
+
+            var stillMissing = new List<string>();
+
+            for (int disk = 1; disk < diskCount; disk++)
+            {
+                string canonical = CanonicalDiskName(baseName, disk);
+
+                if (!nowPresent.Contains(canonical))
+                {
+                    stillMissing.Add(canonical);
+                }
+            }
+
+            return new SpannedZipDiskGather
+            {
+                Applicable = true,
+                Complete = stillMissing.Count == 0,
+                DiskCount = diskCount,
+                LinkedCount = created.Count,
+                MissingNames = stillMissing,
+                Detail = stillMissing.Count == 0
+                    ? string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.SpannedZipDisksLinkedFormat,
+                        diskCount,
+                        created.Count)
+                    : DescribeStillMissing(diskCount, stillMissing)
+            };
+
+            void RollBack()
+            {
+                foreach (string path in created)
+                {
+                    try
+                    {
+                        File.Delete(path);
+                    }
+                    catch
+                    {
+                        // 删不掉就留着 —— 它只是多出来的一个名字，不碰数据。
+                    }
+                }
+
+                created.Clear();
+            }
+        }
+
+        /// <summary>这一族第 <paramref name="disk"/> 片的规范卷名（<c>111</c> + 1 ⇒ <c>111.z01</c>）。</summary>
+        internal static string CanonicalDiskName(string baseName, int disk) => $"{baseName}.z{disk:00}";
+
+        private static string DescribeStillMissing(int diskCount, IReadOnlyList<string> missing) =>
+            string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.SpannedZipDisksStillMissingFormat,
+                diskCount,
+                string.Join("、", missing));
+
         /// <summary>
         /// 找卷的**基准** = 手上**最浅的那一卷**（用户 2026-10-05 口径：「你要以一开始的分卷文件为准，
         /// 不要以 001 为准，否则这时的第一层父文件夹就探测不到」）。
