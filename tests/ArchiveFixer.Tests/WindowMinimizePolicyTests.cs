@@ -47,16 +47,9 @@ namespace ArchiveFixer.Tests
             Assert.Contains("WindowMinimizePolicy.Apply(this)", source);
         }
 
-        [Theory]
-        [MemberData(nameof(ModalWindows))]
-        public void 模态子窗_都不开任务栏按钮(string windowName)
-        {
-            // 模态子窗开着任务栏按钮 = 主窗口被禁用时任务栏上多出一个点了也没用的入口；
-            // 关掉它，同时"不许最小化"保证用户不会因此把它弄丢。
-            string source = File.ReadAllText(RepoPath("src", "ArchiveFixer", "Views", windowName + ".xaml"));
-
-            Assert.Contains("ShowInTaskbar=\"False\"", source);
-        }
+        // ⛔ 这里原本有一条"模态子窗都不开任务栏按钮"（把 8 个窗的 ShowInTaskbar 统一成 False）。
+        // 2026-10-05 真机当场撤掉：任务栏入口是用户**找回窗口**的手段（他原话「之前还能在状态栏里面」），
+        // 各窗口保持自己原本的值 —— 换成"策略文件里不许动这个属性"那条断言钉住。
 
         /// <summary>
         /// ⛔ **代码里内联建的**模态子窗也要挂同一条策略（它们不在 XAML 名单里，最容易漏）。
@@ -96,31 +89,34 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 判据四格（自己最小化 / 主窗口最小化）。后两格防的是"最小化整个程序被搅成闪烁"：
-        /// 用户点主窗口的最小化 / 按 Win+D 时主窗口也是 <see cref="WindowState.Minimized"/>，那时按兵不动。
+        /// ⛔ <b>策略里不许有"强行还原"那一套</b>（2026-10-05 真机当场踩到、当天撤掉）：
+        /// 用户最小化主窗口 / 按 Win+D 时，子窗的 <c>StateChanged</c> 可能**先于**主窗口状态更新触发
+        /// ⇒ 判据看到"主窗口还没最小化"就把子窗弹回来 ⇒ 系统又把它跟着缩下去 ⇒ **弹回/缩下反复 = 一闪一闪**。
+        /// 用户原话：「之前还能在状态栏里面现在就直接一闪一闪的，密码本也是这样全都有问题」。
+        /// ⇒ 只保留 Win32 置灰那一道；⛔ 这条用例就是那道闸门（以后谁再"顺手加个兜底还原"当场红）。
         /// </summary>
-        [Theory]
-        [InlineData(WindowState.Minimized, WindowState.Normal, true)]
-        [InlineData(WindowState.Minimized, WindowState.Minimized, false)]
-        [InlineData(WindowState.Normal, WindowState.Normal, false)]
-        [InlineData(WindowState.Normal, WindowState.Minimized, false)]
-        public void 判据_自己被单独最小化时才还原(WindowState self, WindowState owner, bool expected)
+        [Fact]
+        public void 策略里不许有强行还原的逻辑()
         {
-            Assert.Equal(expected, WindowMinimizePolicy.ShouldRestoreOnMinimize(self, owner));
+            string source = string.Join("\n", NonCommentLines(File.ReadAllLines(
+                RepoPath("src", "ArchiveFixer", "Views", "WindowMinimizePolicy.cs"))));
+
+            Assert.DoesNotContain("StateChanged", source);
+            Assert.DoesNotContain("WindowState", source);
         }
 
+        /// <summary>
+        /// ⛔ <b>不许拿"统一口径"当理由去关任务栏按钮</b>（同一次真机）：任务栏上那个入口是用户**找回窗口**的手段
+        /// （他原话「之前还能在状态栏里面」）。各窗口保持自己原本的 <c>ShowInTaskbar</c>，这一条只钉住
+        /// "策略文件里不许出现这个属性"——⛔ 别在策略里改它。
+        /// </summary>
         [Fact]
-        public void 判据_没有主窗口时也还原()
+        public void 策略里不许动任务栏按钮()
         {
-            // 没 Owner（null）= 不存在"主窗口也被最小化"这件事 ⇒ 按还原办。
-            Assert.True(WindowMinimizePolicy.ShouldRestoreOnMinimize(WindowState.Minimized, null));
-        }
+            string source = string.Join("\n", NonCommentLines(File.ReadAllLines(
+                RepoPath("src", "ArchiveFixer", "Views", "WindowMinimizePolicy.cs"))));
 
-        [Fact]
-        public void 判据_最大化与普通都不还原()
-        {
-            Assert.False(WindowMinimizePolicy.ShouldRestoreOnMinimize(WindowState.Maximized, WindowState.Normal));
-            Assert.False(WindowMinimizePolicy.ShouldRestoreOnMinimize(WindowState.Normal, null));
+            Assert.DoesNotContain("ShowInTaskbar", source);
         }
 
         [Fact]

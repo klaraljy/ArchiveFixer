@@ -7,7 +7,6 @@
         Height="660"
         MinWidth="720"
         MinHeight="520"
-        ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner">
 
     <!--
