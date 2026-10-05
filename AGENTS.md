@@ -240,6 +240,7 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 - ⚠ 真样本用例没设环境变量时提前 return，报表照样算"通过"——⛔ 别读成"验过了"；要报真样本结果必须设变量单跑并写清命中哪份。
 - ⚠ 数字只在这里写一次。
 - 已知 flaky（并发假红；先单跑确认，⛔ 别改断言）〔已知 flaky 清单〕：`SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`（测试侧竞态、**不是产品 bug**，读日志已改走 `LogContains`）、`SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`（计时敏感）、`SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`（真实盘可用空间；需求改成"可用 + 60 GiB"，断言一个字没改）；⛔ 等待时长 / 断言 / 被等内容一个字没改；三条现场见 `docs/真机事故复盘.md` §48.5。
+  - ⚠ **2026-10-05 新记一条（顺序/隔离相关，未定位完）**：`EngineRoutingTests.MainViewModel把分派引擎接进流水线` —— **单跑红（`Expected "解压成功" / Actual "解压失败"`，ZIP 那一单）、全量里绿**；**在上一轮已提交、且那一轮全量绿的提交（`3f6f55d`）上 `git stash` 后单跑同样红** ⇒ **不是本轮改动引起的**，是这条用例依赖"别的用例先跑过的某个全局状态"（⛔ 断言一个字没改、产品代码也没动）。下次碰它先单跑确认。
 - ⚠ 回退代码后必须 `--no-incremental` 重编（否则跑的还是红检那份）〔真样本验收〕
 
 ### 11.3 空间：判据/模式/批末汇总

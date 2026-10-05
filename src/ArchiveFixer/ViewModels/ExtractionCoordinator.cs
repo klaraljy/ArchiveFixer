@@ -6490,6 +6490,25 @@ namespace ArchiveFixer.ViewModels
              * 旧写法 `task.OutputPath = result.FinalOutputPath` 在这里会把任务指向暂存区：
              * 用户点"打开输出目录"会看到工作区里的过程物，续解也会去暂存区里找内层包。
              */
+            /*
+             * ===== 这一趟**借来用过的用户源片**记账（2026-10-05 真机第八批）=====
+             *
+             * 跨盘 ZIP 的末片压在包里、其余几片散在用户目录里时，递归层是用**硬链接**把那几片接过来
+             * 凑齐再解的 ⇒ 那几片自己那一单在批末不该再报「分卷缺失」（内容已经出来了），
+             * 按跟班卷收场（`TryResolveConsumedByAnotherTask` 读的就是这份账）。
+             * ⛔ 只在**这一趟真的成功**时记：没解出来就不算"已由谁解出"。
+             */
+            if (result.Completed && result.ConsumedVolumeSources.Count > 0)
+            {
+                foreach (string consumed in result.ConsumedVolumeSources)
+                {
+                    if (!string.IsNullOrWhiteSpace(consumed))
+                    {
+                        _consumedVolumeSources[consumed] = task.FileName;
+                    }
+                }
+            }
+
             if (!result.Completed)
             {
                 // 没走完（上限 / 密码 / 需要决定）：产物留在暂存区，如实说清它在哪。
@@ -7465,6 +7484,16 @@ namespace ArchiveFixer.ViewModels
         private readonly List<ArchiveTask> _volumeDeficitDeferred = new();
 
         /// <summary>
+        /// **本批"借来用过的用户源片" → 解出它的那一单**（唯一写入点 = 递归结果带回来那份名单，
+        /// 见 <see cref="RecursiveExtractor.RecursionResult.ConsumedVolumeSources"/>）。
+        ///
+        /// <para>用途只有一个：那一单自己不该再报「分卷缺失」（内容已经出来了），按跟班卷收场
+        /// （<see cref="TryResolveConsumedByAnotherTask"/>）。⛔ 它不改任何删除 / 搬运判据。</para>
+        /// </summary>
+        private readonly Dictionary<string, string> _consumedVolumeSources =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 已经在"批末补判"里跑过一遍的任务：⛔ 不许再记一次缺口（否则它会永远留在
         /// <see cref="_volumeDeficitDeferred"/> 里、永远不落结论）。</summary>
         private readonly HashSet<ArchiveTask> _volumeDeficitFinalPass = new();
@@ -8098,6 +8127,35 @@ namespace ArchiveFixer.ViewModels
 
                 string missing = DescribeMissingVolumeNames(task);
 
+                /*
+                 * ===== 这一组的内容**已经由本批另一个任务解出来了** ⇒ 按跟班卷收场（2026-10-05 真机第八批）=====
+                 *
+                 * 位置刻意排在"仍缺 ⇒ 如实报缺卷"**之前**：那三片确实还没在同一个目录里凑齐，
+                 * 但它们的末片是从包里解出来的、整组已经解开并发布 —— 这一单再报「分卷缺失」就是一句
+                 * 会把人指错的话（汇总写"失败 3"，批末还教用户去搬卷）。
+                 */
+                if (TryResolveConsumedByAnotherTask(task, out string consumerName))
+                {
+                    string consumedNote = string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeDeficitConsumedByOtherTaskFormat,
+                        task.FileName,
+                        consumerName);
+
+                    /*
+                     * 跟班卷 = **不算没做成**（唯一事实位 `IsVolumeGroupFollower` ⇒ `CountsTowardBatchOutcome`）：
+                     * 四处消费点（色带 / 批末诊断 / 一键汇总行 / 本批汇总）读的都是它。
+                     */
+                    task.IsVolumeGroupFollower = true;
+                    task.MarkSkipped(consumedNote);
+
+                    AppendLog("INFO", consumedNote);
+
+                    _volumeDeficitDeferred.Remove(task);
+                    _volumeDeficitFinalPass.Add(task);
+                    continue;
+                }
+
                 if (!finalPass)
                 {
                     // 还有后续轮次 ⇒ 继续留着（⛔ 不提前把话说死）。
@@ -8138,6 +8196,71 @@ namespace ArchiveFixer.ViewModels
             }
 
             return toRun;
+        }
+
+        /// <summary>
+        /// 这一单的分卷，**是不是已经被本批另一个任务解出来了**（2026-10-05 真机第八批）。
+        ///
+        /// <para><b>现场</b>：一组跨盘 ZIP 的末片压在两层层层加密的 RAR 里、其余三片散在三个源目录里。
+        /// 递归层用硬链接把那三片接过来、整组解开、结果发布成功 —— 可那三片自己那一单在批末仍然
+        /// 如实报「分卷缺失」⇒ 汇总写成「成功 1 / 失败 3」，批末还指路"把缺的那几卷放到同一个目录里"
+        /// （用户按这条去搬，只会白忙一场：内容已经在出来了）。</para>
+        ///
+        /// <para>判据只有两件事，都是**事实位**：① 这一单自己（或账上那几卷）出现在
+        /// <see cref="_consumedVolumeSources"/> 里（写入点唯一 = 递归结果带回来的那份名单）；
+        /// ② 那个消费方这一批**真的成功了**（机器终态）。两条都成立 ⇒ 按跟班卷处理。</para>
+        /// </summary>
+        private bool TryResolveConsumedByAnotherTask(ArchiveTask task, out string consumerName)
+        {
+            consumerName = string.Empty;
+
+            if (task == null || _consumedVolumeSources.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (string path in EnumerateTaskPaths(task))
+            {
+                if (string.IsNullOrWhiteSpace(path)
+                    || !_consumedVolumeSources.TryGetValue(path, out string? consumer)
+                    || string.IsNullOrWhiteSpace(consumer))
+                {
+                    continue;
+                }
+
+                ArchiveTask? owner = _vm.Tasks.FirstOrDefault(
+                    candidate => candidate != null &&
+                                 string.Equals(candidate.FileName, consumer, StringComparison.Ordinal));
+
+                if (owner == null || owner.Outcome != TaskOutcome.Succeeded)
+                {
+                    continue;
+                }
+
+                consumerName = consumer;
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>这一单自己的全部路径（<c>CurrentPath</c> + 账上那几卷；去重）。</summary>
+        private static IEnumerable<string> EnumerateTaskPaths(ArchiveTask task)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (!string.IsNullOrWhiteSpace(task.CurrentPath) && seen.Add(task.CurrentPath))
+            {
+                yield return task.CurrentPath;
+            }
+
+            foreach (string path in task.VolumePaths ?? (IReadOnlyList<string>)Array.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(path) && seen.Add(path))
+                {
+                    yield return path;
+                }
+            }
         }
 
         /// <summary>
@@ -11068,6 +11191,7 @@ namespace ArchiveFixer.ViewModels
             if (!continueDeferredVolumeDeficits)
             {
                 _volumeDeficitDeferred.Clear();
+                _consumedVolumeSources.Clear();
                 _volumeDeficitFinalPass.Clear();
             }
 

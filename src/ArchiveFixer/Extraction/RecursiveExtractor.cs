@@ -343,6 +343,15 @@ namespace ArchiveFixer.Extraction
         /// <summary>指向**已完成的最深一层**产物；部分完成时这里是工作区里的路径。</summary>
         public string FinalOutputPath { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 这一趟**借来用过的用户源片**（绝对路径；空 = 没用过）。
+        ///
+        /// <para>唯一用途是给协调器记账：跨盘 ZIP 的末片压在包里、其余几片散在用户目录里时，
+        /// 那几片是**被这条链凑齐并解开**的 —— 它们自己那一单就不该再报「分卷缺失」，
+        /// 而应按跟班卷处理（真机第八批：内容已经解出来了，三片却全报失败）。</para>
+        /// </summary>
+        public IReadOnlyList<string> ConsumedVolumeSources { get; init; } = Array.Empty<string>();
+
         /// <summary>一行中文结论，直接显示给用户。</summary>
         public string Summary { get; init; } = string.Empty;
 
@@ -522,6 +531,25 @@ namespace ArchiveFixer.Extraction
         /// <summary>上面那个窗口里那批候选（懒算一次：同一条链里每一层都问同一份答案）。</summary>
         private IReadOnlyList<VolumeCandidate>? _rootSourceCandidates;
 
+        /// <summary>
+        /// **这一趟为"跨盘 ZIP 末片"建出来的临时链接**（绝对路径）。
+        ///
+        /// <para><b>必须删掉，否则它们会被当成内容物发布出去</b>（2026-10-05 真机当场逮到）：链接就建在
+        /// 那一层的产物目录里（7-Zip 只认"入口旁边那几片"），而发布侧搬的是"这一层产物目录里的文件" ⇒
+        /// 用户目录里凭空多出三个 200 MiB 的同名副本；更糟的是它们会让「半套分卷」闸门以为这一组被拆开了，
+        /// 于是**逐层回收**与**链尾其余物处理**全都拦下（真机：源包留在其余物里没删、诊断写着"其余物没有处理"）。
+        /// ⇒ 这一层一跑完（成功或失败）就删；<see cref="ExtractAsync"/> 收尾再兜一次。</para>
+        ///
+        /// <para>⛔ 删的只是**我们自己刚建的那几个名字**（硬链接：删名字不动数据），源目录里的源片一个字节不动。</para>
+        /// </summary>
+        private readonly List<string> _crossBoundaryLinks = new();
+
+        /// <summary>
+        /// 这一趟**被这条链借来用过的用户源片**（绝对路径）—— 用于"这一组的内容已由谁解出"的记账
+        /// （真机第八批：三片外壳那一单在批末还报「分卷缺失」，可内容其实已经解出来了）。
+        /// </summary>
+        private readonly List<string> _consumedVolumeSources = new();
+
         /// <summary>找卷窗口里那批候选（见 <see cref="_rootSourcePath"/> 的说明；算不出来就是空池）。</summary>
         private IReadOnlyList<VolumeCandidate> RootSourceCandidates
         {
@@ -544,6 +572,48 @@ namespace ArchiveFixer.Extraction
 
                 return _rootSourceCandidates;
             }
+        }
+
+        /// <summary>
+        /// 把"跨盘 ZIP 末片"那一档建出来的临时链接删掉（**只删我们刚建的那几个名字**；
+        /// 硬链接删名字不动数据，用户的源片一个字节不动）。
+        ///
+        /// <para>⛔ 只在这个工作区里动手：路径必须以 <see cref="ExtractionWorkspace.RootDirectory"/> 开头，
+        /// 越界的一律不碰（兜底永远落"什么都不做"）。</para>
+        /// </summary>
+        private void RemoveCrossBoundaryLinks()
+        {
+            if (_crossBoundaryLinks.Count == 0)
+            {
+                return;
+            }
+
+            string root = CurrentWorkspace?.RootDirectory ?? string.Empty;
+
+            foreach (string path in _crossBoundaryLinks)
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(path)
+                        || root.Length == 0
+                        || !SafePathHelper.GetFullPathSafe(path)
+                            .StartsWith(
+                                SafePathHelper.GetFullPathSafe(root) + Path.DirectorySeparatorChar,
+                                StringComparison.OrdinalIgnoreCase)
+                        || !File.Exists(path))
+                    {
+                        continue;
+                    }
+
+                    File.Delete(path);
+                }
+                catch
+                {
+                    // 删不掉就留着 —— 它只是多出来的一个名字；工作区收尾照样整份清掉。
+                }
+            }
+
+            _crossBoundaryLinks.Clear();
         }
 
         /// <summary>
@@ -708,6 +778,13 @@ namespace ArchiveFixer.Extraction
              * 一份**还好好在盘上**的包当成"我们自己回收过"，从而不再如实点名（假话）。
              */
             ReclaimedProcessArtifacts.Clear();
+
+            /*
+             * 这一趟的两本账也从零开始（同一个实例可能被续跑复用）：临时链接（必须删干净）与
+             * "借来用过的用户源片"（给协调器记"这一组已由谁解出"）。
+             */
+            _crossBoundaryLinks.Clear();
+            _consumedVolumeSources.Clear();
 
             /*
              * 换引擎兜底那句结论也**每次运行从零开始**：同一个实例可能被同一个包的续跑复用
@@ -891,6 +968,13 @@ namespace ArchiveFixer.Extraction
 
                     LayerOutcome outcome = await ExtractLayerAsync(item, cancellationToken, progress, stalled)
                         .ConfigureAwait(false);
+
+                    /*
+                     * 这一层用完就把"跨盘 ZIP 末片"那一档建的**临时链接**删掉（删名字不动数据）：
+                     * 留着会被发布侧当成品搬进用户目录，还会把「半套分卷」闸门自己绊倒。
+                     * ⛔ 位置就在这里（层一跑完，不管成没成）—— 排在发布与逐层回收之前。
+                     */
+                    RemoveCrossBoundaryLinks();
 
                     if (outcome.Report != null)
                     {
@@ -1361,6 +1445,9 @@ namespace ArchiveFixer.Extraction
 
                 if (spannedDisks.LinkedCount > 0)
                 {
+                    _crossBoundaryLinks.AddRange(spannedDisks.LinkedPaths);
+                    _consumedVolumeSources.AddRange(spannedDisks.LinkedSources);
+
                     Log(
                         "INFO",
                         string.Format(
@@ -4321,6 +4408,12 @@ namespace ArchiveFixer.Extraction
 
             WriteRecoveryReport(stopReason, layers, workspace, finalOutputPath, completed, partiallyCompleted);
 
+            /*
+             * 临时链接的最后一道兜底：正常路径上每一层跑完就删了（主循环里那一处），
+             * 这里再兜一次（异常 / 提前 return 的那些路）—— ⛔ 绝不把我们的临时名字留在盘上。
+             */
+            RemoveCrossBoundaryLinks();
+
             return new RecursionResult
             {
                 StopReason = stopReason,
@@ -4329,6 +4422,7 @@ namespace ArchiveFixer.Extraction
                 Decision = decision,
                 Layers = layers.ToList(),
                 FinalOutputPath = finalOutputPath,
+                ConsumedVolumeSources = _consumedVolumeSources.ToList(),
                 UnexpandedNames = unexpandedNames?.ToList() ?? new List<string>(),
                 Summary = BuildSummary(
                     stopReason,

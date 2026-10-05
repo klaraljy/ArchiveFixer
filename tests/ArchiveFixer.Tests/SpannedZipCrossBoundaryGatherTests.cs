@@ -97,6 +97,64 @@ namespace ArchiveFixer.Tests
             Assert.Equal(fromSource, fromLink);
         }
 
+        /// <summary>
+        /// **接出来的那几个名字必须报给调用方，而且用完删掉之后源片一个字节都不少**（2026-10-05 真机第八批
+        /// 当场踩到的坑）：它们是**临时名字**，留在那一层产物目录里会被发布侧当成品搬进用户目录
+        /// （真机：成品里凭空多出三个 200 MiB 的同名副本），还会把「半套分卷」闸门自己绊倒
+        /// （逐层回收与链尾其余物处理全被拦下）。⇒ 契约是"**谁建的谁删**"，这条用例把它钉住。
+        /// </summary>
+        [Fact]
+        public void 接出来的名字要报给调用方_删掉之后源片一个字节都不少()
+        {
+            string entryDirectory = Path.Combine(_root, "入口");
+            string sourceDirectory = Path.Combine(_root, "源");
+            Directory.CreateDirectory(entryDirectory);
+            Directory.CreateDirectory(sourceDirectory);
+
+            string tail = WriteSpannedZipTail(entryDirectory, "111.zip", disk: 3);
+            var sources = new List<string>();
+
+            foreach (string name in new[] { "111.z0删除1", "111.z0删除2", "111.z0删除3" })
+            {
+                string path = Path.Combine(sourceDirectory, name);
+                File.WriteAllBytes(path, new byte[4096]);
+                sources.Add(path);
+            }
+
+            VolumeNameRepair.SpannedZipDiskGather result = VolumeNameRepair.ResolveSpannedZipDiskGather(
+                tail,
+                sources.Select(p => new VolumeCandidate { Path = p, Size = 4096 }).ToList());
+
+            Assert.Equal(3, result.LinkedPaths.Count);
+            Assert.Equal(3, result.LinkedSources.Count);
+
+            foreach (string link in result.LinkedPaths)
+            {
+                Assert.True(File.Exists(link));
+                Assert.Equal(
+                    Path.GetFullPath(entryDirectory),
+                    Path.GetFullPath(Path.GetDirectoryName(link)!),
+                    ignoreCase: true);
+            }
+
+            // 调用方（RecursiveExtractor）在这一层用完就删：删名字不动数据。
+            foreach (string link in result.LinkedPaths)
+            {
+                File.Delete(link);
+            }
+
+            foreach (string source in sources)
+            {
+                Assert.True(File.Exists(source), $"源片必须还在：{Path.GetFileName(source)}");
+                Assert.Equal(4096, new FileInfo(source).Length);
+            }
+
+            // 入口那一层现在只剩末片自己（临时名字一个都不留）。
+            Assert.Equal(
+                new[] { "111.zip" },
+                Directory.GetFiles(entryDirectory).Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        }
+
         /// <summary>已经逐字规范名地摆在末片旁边 ⇒ 一个链接都不建（不必收）。</summary>
         [Fact]
         public void 其余几片本来就摆在末片旁边_一条链接都不建()
