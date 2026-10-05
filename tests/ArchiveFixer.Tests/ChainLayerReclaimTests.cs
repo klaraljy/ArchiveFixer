@@ -48,6 +48,9 @@ namespace ArchiveFixer.Tests
         /// <summary>拿它给某一层加密码、密码本里没有 ⇒ 那一层必然失败（用例 B）。</summary>
         private const string UnknownLayerPassword = "测试用未知密码";
 
+        /// <summary>③页「删除操作 = 彻底删除」那一档（唯一决定"逐层回收开不开"的事实位就是它）。</summary>
+        private const string PermanentDeleteRestMode = RestHandlingModes.Delete;
+
         private readonly string _root;
         private readonly string _sevenZip;
         private readonly ITestOutputHelper _output;
@@ -1252,18 +1255,41 @@ namespace ArchiveFixer.Tests
         /// <paramref name="passwordOuter"/> = true ⇒ **最外层源包自己**用密码包造
         /// ⇒ 根源包那一层就失败（用例 K3 用：只有这一档才会触发"其余物没处理"那句点名）。</para>
         /// </summary>
-        private string BuildChain(int levelCount, int? passwordLevel = null, bool passwordOuter = false)
+        /// <summary>
+        /// 造一条嵌套链（旧签名，等价于"在当前临时根里造"）：<c>outer.7z → level2.7z → … → levelN.7z → final.txt</c>，
+        /// **每一层都另外带一个自己的内容文件**（`layerN.txt`）—— 真实机器上的包大多如此，
+        /// 而且这样最外层那一单第 1 轮就有内容物可定稿（源包搬运因此走"本轮直接搬"）。
+        ///
+        /// <para><paramref name="passwordLevel"/> 指定的那一层用密码包（<c>-mhe=on</c>）造，
+        /// 密码刻意不进密码本 ⇒ 轮到那一层必然失败（用例 B 用）。
+        /// <paramref name="passwordOuter"/> = true ⇒ **最外层源包自己**用密码包造
+        /// ⇒ 根源包那一层就失败（用例 K3 用：只有这一档才会触发"其余物没处理"那句点名）。</para>
+        /// </summary>
+        private string BuildChain(int levelCount, int? passwordLevel = null, bool passwordOuter = false) =>
+            BuildChainInto(_root, levelCount, passwordLevel, passwordOuter);
+
+        /// <summary>
+        /// 「造一条嵌套链」的**唯一实现**（<paramref name="rootDirectory"/> 决定样本落在哪个临时根里）。
+        ///
+        /// <para>为什么要带根：递归路那一组用例要**跑两遍对照**（逐层回收开 / 关），
+        /// 两遍必须各有各的临时根 —— 共用一份会让第二遍看到第一遍留下的其余物与工作区，
+        /// 而"两遍产物逐字节相同"那条判据正是靠"两遍互不干扰"才成立的。</para>
+        /// </summary>
+        private string BuildChainInto(
+            string rootDirectory,
+            int levelCount,
+            int? passwordLevel = null,
+            bool passwordOuter = false)
         {
             Assert.True(levelCount >= 2, "至少要有 outer + 一层内层包");
 
-            string build = Path.Combine(_root, "chain-build");
+            string build = Path.Combine(rootDirectory, "chain-build");
             Directory.CreateDirectory(build);
 
             File.WriteAllText(Path.Combine(build, "final.txt"), "最深一层的内容\n", new UTF8Encoding(false));
 
             for (int level = levelCount; level >= 2; level--)
             {
-                // 每一层自己的内容文件（✔ 让"第一层只出过程物"这个形状不至于遮住别的路径）。
                 File.WriteAllText(
                     Path.Combine(build, $"layer{level}.txt"),
                     $"第 {level} 层自己的内容\n",
@@ -1281,10 +1307,9 @@ namespace ArchiveFixer.Tests
                 }
             }
 
-            // 最外层自己也带一个内容文件（第 1 轮就有内容物定稿）。
             File.WriteAllText(Path.Combine(build, "layer1.txt"), "第 1 层自己的内容\n", new UTF8Encoding(false));
 
-            string sourceDirectory = Path.Combine(_root, "src");
+            string sourceDirectory = Path.Combine(rootDirectory, "src");
             Directory.CreateDirectory(sourceDirectory);
 
             string outer = Path.Combine(sourceDirectory, "outer.7z");
@@ -1298,10 +1323,6 @@ namespace ArchiveFixer.Tests
                 Run7z(build, "a", "-t7z", outer, "level2.7z", "layer1.txt");
             }
 
-            /*
-             * 造包用的中间层（level2..levelN）是"造样本的脚手架"，不是管线产物 ——
-             * 留着的话"盘上还剩几个包"这类断言会自欺欺人（实测：四层链会多数出好几个）。
-             */
             Directory.Delete(build, recursive: true);
 
             return outer;
@@ -1357,7 +1378,8 @@ namespace ArchiveFixer.Tests
         private Harness CreateHarness(
             string restMode,
             SourceHandlingMode sourceMode,
-            Action<AppSettings>? tweak = null)
+            Action<AppSettings>? tweak = null,
+            IArchiveEngine? engineOverride = null)
         {
             string dataRoot = Path.Combine(_root, "data");
             string outputRoot = Path.Combine(_root, "out");
@@ -1383,7 +1405,7 @@ namespace ArchiveFixer.Tests
 
             settingsService.Save(settings);
 
-            var engine = new SevenZipEngine();
+            var engine = engineOverride ?? new SevenZipEngine();
             var passwordService = new PasswordService();
             var logService = new LogService(pathService);
 
@@ -1601,6 +1623,561 @@ namespace ArchiveFixer.Tests
                     // 采样是观测行为：目录正在被搬动时读不到就当这一帧没看见。
                 }
             }
+        }
+
+        // ==================================================================================
+        // 递归路（一条链是**一个任务**、层是工作区目录）—— 用户 2026-10-05：「两条路要同步」
+        //
+        // 上面那一整组钉的是**续解链**（层 = 任务）。而「展开所有分支」那条 4 层链是**一个任务**内
+        // 由 `RecursiveExtractor` 展开的（层 = 工作区目录），过去**没有**逐层回收 —— 过程物一直攒到
+        // 定稿那一刻才释放（真机第六批：空间曲线 13:39:32 最低 62.48 GiB → 13:40:57 回到 82.63 GiB，
+        // 峰值 26.94 GiB 而结果只有 7.28 GB）。
+        //
+        // ⛔ 这一组**不是新功能**：AGENTS.md §11.3 早就写定「续解链每一层『定稿 + 输出校验通过 +
+        // 未取消 + 可证完整』之后当场按『删除操作』处理这一层的过程物」，只是**只在一条路上落了地**。
+        // ==================================================================================
+
+        /// <summary>
+        /// <b>用例 R1（递归路逐层回收）</b>：四层真链 + ②页「展开所有分支」（**出厂默认档**）+
+        /// ③页「彻底删除」⇒
+        ///
+        /// <list type="number">
+        /// <item><description><b>链还没跑完的那一刻，已经被解开的那一层的内层包在盘上已经没了</b> ——
+        /// 判据不在"最后删干净了"（那可能只是链尾清得好），而在**中途那一帧**：
+        /// 注入的假引擎在**每一次开始解压之前**拍一帧盘上事实，于是"层 3 开工时
+        /// <c>level2.7z</c> 已经不在了"这件事只能由"它是在层 2 那一步被删的"来解释。</description></item>
+        /// <item><description>同一个任务、同一条链里，**三个内层包各删各的**（层 1/2/3 各一次），
+        /// 走的是"删这一层的源"那一个既有执行体。</description></item>
+        /// <item><description><b>最外层源包留到链尾</b>（红线：它不在递归工作区里，这一档永远不碰它）。</description></item>
+        /// <item><description><b>最终产物逐字节不变</b>：同一份样本跑两遍（回收开 / 关），
+        /// 两遍的 ① 文件数 ② 相对路径清单 ③ 每个文件的 SHA256 必须逐项相同。</description></item>
+        /// </list>
+        ///
+        /// <para>⚠ 这里刻意**不用**计时 / 内存 / 峰值字节断言（那是脆的）：判据全是"盘上有没有这个文件"。
+        /// 峰值那件事由峰值的**机制**回答 —— 过程物在下一层开工前就没了，峰值自然从"四层全攒着"
+        /// 降到"源包 + 当前层 + 下一层"。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例R1_递归路每一层当场回收内层包_链没跑完就已经没了_产物逐字节不变()
+        {
+            const int layers = 4;
+
+            /*
+             * 两遍跑同一份**代码路径**、同一份样本，唯一的差别是那个事实位：
+             * 一遍「彻底删除」（逐层回收开），一遍「不动其余物」（逐层回收关）。
+             * 两遍的最终产物必须逐字节相同 —— 这就是"逐层回收只是把过程物早点还回去，
+             * 不是换一套产物"的机器判据。⚠ 两遍都用「源包留在原地」：源包要留在原处做第二次跑。
+             */
+            RecursionReclaimRun deleted = await RunRecursionChainAsync(PermanentDeleteRestMode);
+
+            RecursionReclaimRun untouched = await RunRecursionChainAsync(RestHandlingModes.Keep);
+
+            _output.WriteLine(
+                $"【用例R1】彻底删除档：解压调用 {deleted.Probe.ExtractStarts.Count} 次 ｜ 逐层回收删了 "
+                + $"{deleted.Harness.SourceDeletes.DeletedPaths.Count} 个："
+                + string.Join("、", deleted.Harness.SourceDeletes.DeletedPaths.Select(Path.GetFileName)));
+
+            foreach ((string archive, IReadOnlyList<string> snapshot) in deleted.Probe.ExtractStarts)
+            {
+                _output.WriteLine($"　　开始解压 {archive} 时盘上的 level*.7z：{string.Join("、", snapshot)}");
+            }
+
+            foreach (OperationLogItem entry in deleted.Harness.Log.Logs)
+            {
+                _output.WriteLine($"　　[{entry.Level}] {entry.Message}");
+            }
+
+            // ① 内容物出来了（不然"内层包都没了"可能只是整条链没跑）。
+            Assert.NotEmpty(deleted.ProducedFiles);
+
+            /*
+             * ② **核心断言（红检点，刻意放在最前面）**：链还没跑完的那一刻，
+             * 已经被解开的那一层的内层包在盘上**已经没了**。
+             *
+             * 取"开始解压 level3.7z"那一帧：那一刻 `level2.7z` 必须在**上一层跑完时**就被删掉了，
+             * 而 `level3.7z`（这一层要解的）当然还在。老口径（攒到链尾）这一帧里三个都还在
+             * —— 红检实测的失败原文就是这一条：
+             * `Assert.DoesNotContain() Failure: Filter matched in collection`，帧快照 =
+             * `level2.7z、level3.7z`。
+             */
+            (string Archive, IReadOnlyList<string> Snapshot) frame =
+                deleted.Probe.ExtractStarts.FirstOrDefault(f => IsNamed(f.Archive, "level3.7z"));
+
+            Assert.False(
+                string.IsNullOrEmpty(frame.Archive),
+                "假引擎没拍到「开始解压 level3.7z」那一帧 —— 这条链根本没走到第 3 层，"
+                + "拍到的是：" + string.Join("、", deleted.Probe.ExtractStarts.Select(f => Path.GetFileName(f.Archive))));
+
+            Assert.DoesNotContain("level2.7z", frame.Snapshot);
+
+            Assert.Contains("level3.7z", frame.Snapshot);
+
+            // ③ **对照（判据不许恒真）**：同一帧在"不逐层回收"那一遍里，level2.7z 必须还在盘上。
+            (string Archive, IReadOnlyList<string> Snapshot) comparisonFrame =
+                untouched.Probe.ExtractStarts.FirstOrDefault(f => IsNamed(f.Archive, "level3.7z"));
+
+            Assert.False(string.IsNullOrEmpty(comparisonFrame.Archive), "对照那一遍也没走到第 3 层");
+
+            Assert.Contains("level2.7z", comparisonFrame.Snapshot);
+
+            /*
+             * ④ 三个内层包各删各的（层 1/2/3 各一次）：判据是"删这一层的源"那个执行体被调了三次，
+             * 而且点的正是那三个内层包；⛔ 最外层源包**一次都不在里面**。
+             */
+            Assert.Equal(layers - 1, deleted.Harness.SourceDeletes.DeletedPaths.Count);
+
+            Assert.Contains(deleted.Harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level2.7z"));
+            Assert.Contains(deleted.Harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level3.7z"));
+            Assert.Contains(deleted.Harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level4.7z"));
+            Assert.DoesNotContain(deleted.Harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "outer.7z"));
+
+            // ⑤ 那一句话每一层都要说（"我的内层包哪去了"必须能事后回答）。
+            int reclaimLines = deleted.Harness.Log.Logs.Count(
+                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已按", StringComparison.Ordinal));
+
+            Assert.True(
+                reclaimLines == layers - 1,
+                $"该有 {layers - 1} 条递归路逐层回收日志，实际 {reclaimLines} 条。");
+
+            // ⑥ **最终产物逐字节不变**（文件数 + 相对路径清单 + 每个文件的 SHA256）。
+            Assert.Equal(untouched.ProducedFiles.Count, deleted.ProducedFiles.Count);
+
+            Assert.Equal(
+                untouched.ProducedFiles.Select(p => Path.GetRelativePath(untouched.Root, p)).OrderBy(p => p, StringComparer.Ordinal),
+                deleted.ProducedFiles.Select(p => Path.GetRelativePath(deleted.Root, p)).OrderBy(p => p, StringComparer.Ordinal));
+
+            foreach (string relative in deleted.Digest.Keys.OrderBy(p => p, StringComparer.Ordinal))
+            {
+                Assert.True(
+                    untouched.Digest.TryGetValue(relative, out string? expected),
+                    $"对照那一遍的产物里没有 {relative}");
+
+                Assert.Equal(expected, deleted.Digest[relative]);
+            }
+
+            // ⑦ 最终产物里**一个内层包都不该留**（内容是解到底的东西）。
+            Assert.All(deleted.ProducedFiles, file => Assert.EndsWith(".txt", file, StringComparison.OrdinalIgnoreCase));
+
+            _output.WriteLine($"【用例R1】两遍产物逐字节相同：{deleted.ProducedFiles.Count} 个文件");
+        }
+
+        /// <summary>
+        /// <b>用例 R2（红线：这一层没跑成 ⇒ 一个字节都不动）</b>：同一条四层真链，但**第三层**解不开
+        /// （那一层的包设了密码、密码本里没有它）⇒
+        ///
+        /// <list type="number">
+        /// <item><description>**只有第二层那一层回收成功过**（它自己那一层的输入 = <c>level2.7z</c>）：
+        /// 第三层的回收要等第三层跑成，而链在第二层就停了。</description></item>
+        /// <item><description>第三层那一层的输入包**一个字节都没被这一档碰过**
+        /// （判据 = 删除执行体没被点到它，而且"已回收"那句话只出现一次）。</description></item>
+        /// <item><description>最外层源包原地不动；失败层没有内容物落地。</description></item>
+        /// </list>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例R2_递归路中间那一层失败_一个字节都不动()
+        {
+            Harness harness = CreateHarness(
+                PermanentDeleteRestMode,
+                SourceHandlingMode.KeepInPlace,
+                settings => settings.RecursionMode = "AllBranches");
+
+            string outer = BuildChain(4, passwordLevel: 3);
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            _output.WriteLine(
+                $"【用例R2】删除执行体被调用 {harness.SourceDeletes.DeletedPaths.Count} 次："
+                + string.Join("、", harness.SourceDeletes.DeletedPaths.Select(Path.GetFileName)));
+
+            /*
+             * ① 只有第二层那一层回收成功过（它自己那一层的输入 = level2.7z）。
+             * 第三层的回收要等**第三层跑成**才发生，而链在第二层就停了 ⇒ 它一次都没发生。
+             */
+            Assert.Single(harness.SourceDeletes.DeletedPaths);
+
+            Assert.Contains(harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level2.7z"));
+
+            // ② 第三层那一层的输入包**一个字节都没被这一档碰过**（判据 = 删除执行体没被点到它）。
+            Assert.DoesNotContain(harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level3.7z"));
+            Assert.DoesNotContain(harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level4.7z"));
+
+            /*
+             * ③ 而且**回收回调根本没资格被调**：它排在"这一层跑成了"之后，本层没跑成 ⇒ 一次都不调。
+             * 证据是那一行"已回收"只出现**一次**（第二层那一次），第三层那一层一个字都没说。
+             */
+            int reclaimLines = harness.Log.Logs.Count(
+                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已按", StringComparison.Ordinal));
+
+            Assert.Equal(1, reclaimLines);
+
+            // ④ 最外层源包原地不动（本档「留在原地」）。
+            Assert.True(File.Exists(outer), "失败 / 部分完成 ⇒ 源包必须原地不动");
+
+            // ⑤ 失败层没有内容物落地（这一层真的失败了）。
+            Assert.Empty(FindFiles("layer3.txt"));
+        }
+
+        /// <summary>
+        /// <b>用例 R3（B 档位分叉在递归路上同样成立）</b>：③页「移入回收站」档**一层都不当场回收** ——
+        /// 递归路的回收只认那**一个**事实位（<c>_layerReclaimThisBatch</c>），
+        /// ⛔ 不许在递归里另算一遍（§9.5：同一件事只有一个出口）。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例R3_递归路移入回收站档_一层都不当场回收()
+        {
+            Harness harness = CreateHarness(
+                RestHandlingModes.RecycleBin,
+                SourceHandlingMode.MoveToRest,
+                settings => settings.RecursionMode = "AllBranches");
+
+            string outer = BuildChain(4);
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(240));
+
+            _output.WriteLine($"【用例R3】回收站档下逐层回收删了 {harness.SourceDeletes.DeletedPaths.Count} 个");
+
+            // ⛔ 零个当场回收（回收站不释放盘上空间 ⇒ 逐层做零收益、只多造条目）。
+            Assert.Empty(harness.SourceDeletes.DeletedPaths);
+
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已按", StringComparison.Ordinal));
+
+            // 内容物照旧出来了（不是"整条链没跑"）。
+            Assert.NotEmpty(FindFiles("final.txt"));
+        }
+
+        /// <summary>
+        /// <b>用例 R4（分卷组整组一起还）</b>：第一层的内层包是**一组真 7z 分卷**
+        /// （`level2.7z.001` / `.002` / `.003`，`-v16k` 切出来的）⇒
+        /// ① 递归层把这一组折叠成**一个**内层归档（既有那把折叠尺）、
+        /// ② 这一层跑成时**整组三片一起**被回收（只删首卷会留下再也拼不起来的碎片）、
+        /// ③ 最外层源包一次都不在那份名单里、④ 产物照旧解到底。
+        ///
+        /// <para>⚠ 真机第六批那条 4 层链里内层包正是"3 片分卷 + 3 个 mp4 + zip"的形状
+        /// （6.8 GB 的分卷一直留到定稿那一刻），所以这条用例钉的是"分卷组也一起还"。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例R4_内层包是一组分卷时_整组三片一起当场回收()
+        {
+            Harness harness = CreateHarness(
+                PermanentDeleteRestMode,
+                SourceHandlingMode.KeepInPlace,
+                settings => settings.RecursionMode = "AllBranches");
+
+            string outer = BuildVolumeGroupChain();
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(240));
+
+            List<string> deletedNames = harness.SourceDeletes.DeletedPaths
+                .Select(path => Path.GetFileName(path) ?? string.Empty)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _output.WriteLine($"【用例R4】逐层回收删了 {deletedNames.Count} 个：{string.Join("、", deletedNames)}");
+
+            // ① 内容物出来了（说明这一组真被解开过 —— 不是"没解所以没删"）。
+            Assert.NotEmpty(FindFiles("final.txt"));
+            Assert.NotEmpty(FindFiles("layer2.txt"));
+
+            /*
+             * ② 整组三片**一起**被回收：判据是删除清单里那三片一个不少。
+             * 只删首卷 = 留下一组再也拼不起来的碎片（`SourceCleanupService` 在这里看的是分卷组清单）。
+             */
+            Assert.Equal(3, deletedNames.Count(name => name.StartsWith("level2.7z.00", StringComparison.OrdinalIgnoreCase)));
+
+            Assert.Contains("level2.7z.001", deletedNames);
+            Assert.Contains("level2.7z.002", deletedNames);
+            Assert.Contains("level2.7z.003", deletedNames);
+
+            // ③ ⛔ 最外层源包一次都不在那份名单里。
+            Assert.DoesNotContain("outer.7z", deletedNames);
+
+            // ④ 最外层源包原地不动（本档「留在原地」）。
+            Assert.True(File.Exists(outer), "源包必须原地不动");
+
+            /*
+             * ⑤ 这一组的三片与内层包 <c>mid.7z</c> 都**不在了**（内容物留下、过程物走光）。
+             * ⚠ 判据按**名字**点这四个（⛔ 不写"盘上一个 *.7z 都没有"：本类几十条用例共用同一个临时根，
+             * 别的用例留下的 <c>其余物</c> 里本来就有包 —— 那样的断言量的是别人的残渣，不是本用例的结论）。
+             */
+            Assert.Empty(FindFiles("level2.7z.00*"));
+            Assert.Empty(FindFiles("mid.7z"));
+        }
+
+        /// <summary>
+        /// 造一条"第一层的内层包是**一组三片分卷**"的链：
+        /// <c>outer.7z → level2.7z.001/.002/.003 → mid.7z → final.txt</c>（外加各层自己的 txt）。
+        ///
+        /// <para><c>-v16k</c> 切出来的三片在同一层里，入口是 <c>.001</c>（自报第 1 卷）——
+        /// 与真机那条链（3 片 7z 分卷）同形。⚠ 分卷本体只有第 1 片带魔数，
+        /// 所以"这一组算一个内层归档"靠的是既有折叠尺（同目录 + 同基名 + 是后续卷）。</para>
+        /// </summary>
+        private string BuildVolumeGroupChain()
+        {
+            string build = Path.Combine(_root, "vol-build");
+            Directory.CreateDirectory(build);
+
+            File.WriteAllText(Path.Combine(build, "final.txt"), "最深一层的内容\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(build, "layer2.txt"), "第 2 层自己的内容\n", new UTF8Encoding(false));
+
+            // 32 KiB 不可压数据：`-v16k` 下必然切出 ≥3 片（不然就不是"一组分卷"了）。
+            byte[] blob = new byte[32 * 1024];
+            new Random(20261005).NextBytes(blob);
+            File.WriteAllBytes(Path.Combine(build, "blob.bin"), blob);
+
+            // 第 2 层（最内层）自己的包：装 final.txt + layer2.txt + blob（分卷那一组要装它）。
+            Run7z(build, "a", "-t7z", "-mx0", "mid.7z", "final.txt", "layer2.txt", "blob.bin");
+
+            File.WriteAllText(Path.Combine(build, "layer1.txt"), "第 1 层自己的内容\n", new UTF8Encoding(false));
+
+            // 第 1 层的内层包 = 一组三片分卷（装 mid.7z + layer1.txt…… 用 layer2.txt 做陪衬）。
+            Run7z(build, "a", "-t7z", "-mx0", "-v16k", "level2.7z", "mid.7z", "layer2.txt");
+
+            string[] parts = Directory.GetFiles(build, "level2.7z.*");
+
+            Assert.True(
+                parts.Length >= 3,
+                "`-v16k` 下应当切出至少三片，实际 " + parts.Length + " 片：" + string.Join("、", parts.Select(Path.GetFileName)));
+
+            string sourceDirectory = Path.Combine(_root, "src");
+            Directory.CreateDirectory(sourceDirectory);
+
+            string outer = Path.Combine(sourceDirectory, "outer.7z");
+
+            var outerArgs = new List<object> { "a", "-t7z", outer };
+
+            foreach (string part in parts.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                outerArgs.Add(Path.GetRelativePath(build, part));
+            }
+
+            outerArgs.Add("layer1.txt");
+
+            Run7z(build, outerArgs.ToArray());
+
+            Directory.Delete(build, recursive: true);
+
+            return outer;
+        }
+
+        /// <summary>
+        /// 跑一遍"递归展开一条四层链"（②页「展开所有分支」），把判据需要的事实全部带回来：
+        /// 那一次跑的临时根、产物文件清单、逐字节指纹、假引擎拍到的每一帧、以及记账式删除执行体。
+        ///
+        /// <para>⚠ 每一次都在**自己那一个临时根**里跑：两遍对照必须互不干扰（源包要留在原处）。</para>
+        /// </summary>
+        private async Task<RecursionReclaimRun> RunRecursionChainAsync(string restMode)
+        {
+            string runRoot = Path.Combine(_root, "run-" + Guid.NewGuid().ToString("N")[..8]);
+
+            Directory.CreateDirectory(runRoot);
+
+            var run = new RecursionReclaimRun(runRoot);
+
+            string buildSource = Path.Combine(runRoot, "src");
+
+            Directory.CreateDirectory(buildSource);
+
+            (Harness harness, ExtractionProbeEngine probe, string outer) = CreateProbeHarness(runRoot, restMode);
+
+            run.Harness = harness;
+            run.Probe = probe;
+            run.SourcePackage = outer;
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(240));
+
+            run.ProducedFiles = Directory.Exists(runRoot)
+                ? Directory.GetFiles(runRoot, "*", SearchOption.AllDirectories)
+                    .Where(file => !IsNamed(file, "outer.7z"))
+
+                    /*
+                     * 只比**内容物**（`out\` 那棵树）：另两个是每次跑都必然不同的运行时文件 ——
+                     * `data\logs\...<时间戳>.log`（日志文件名带跑的时间）与
+                     * `data\appsettings.json` / `data\password-list.dat`（运行期写盘的状态）。
+                     * ⛔ 把它们算进"逐字节不变"只会让判据变脆，与"过程物早删晚删不影响产物"这件事无关。
+                     */
+                    .Where(file => !file.Contains(
+                        Path.DirectorySeparatorChar + "data" + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+                    .ToList()
+                : new List<string>();
+
+            foreach (string file in run.ProducedFiles)
+            {
+                run.Digest[Path.GetRelativePath(runRoot, file)] = Sha256(file);
+            }
+
+            return run;
+        }
+
+        /// <summary>
+        /// 在一个**给定的临时根**里造一条四层真链 + 一套带假引擎的测试宿主
+        /// （样本来源目录、数据目录、输出目录全在那一个根下面 —— 两遍对照因此互不干扰）。
+        /// </summary>
+        private (Harness Harness, ExtractionProbeEngine Probe, string Outer) CreateProbeHarness(
+            string runRoot,
+            string restMode)
+        {
+            string dataRoot = Path.Combine(runRoot, "data");
+            string outputRoot = Path.Combine(runRoot, "out");
+
+            Directory.CreateDirectory(dataRoot);
+            Directory.CreateDirectory(outputRoot);
+
+            var pathService = new PathService { DataRootDirectory = dataRoot };
+            var settingsService = new SettingsService(pathService);
+
+            AppSettings settings = AppSettings.CreateDefault();
+            settings.CustomOutputDirectory = outputRoot;
+            settings.ExtractToOriginalDirectory = false;
+            settings.KeepArchiveNameFolder = true;
+
+            // ★ 出厂默认档：展开所有分支 ⇒ 整条链由 **RecursiveExtractor** 在一个任务里展开。
+            settings.RecursionMode = "AllBranches";
+
+            settings.AutoScanAfterDrop = false;
+            settings.TryEmptyPasswordFirst = false;
+            settings.SourceHandling = SourceHandlingMode.KeepInPlace.ToString();
+            settings.RestHandlingAfterVerify = restMode;
+            settings.CustomSevenZipExePath = string.Empty;
+
+            settingsService.Save(settings);
+
+            var probe = new ExtractionProbeEngine(new SevenZipEngine(), runRoot);
+            var logService = new LogService(pathService);
+
+            var vm = new MainViewModel(
+                new FileScanService(),
+                new ArchiveDetectService(),
+                new RenameService(),
+                probe,
+                new PasswordService(),
+                logService,
+                settingsService,
+                pathService,
+                new TaskSummaryService(),
+                new ClipboardService(),
+                new DialogService());
+
+            var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new DialogService());
+            var rename = new RenameCoordinator(vm, scan, new RenameService(), new DialogService());
+            var extraction = new ExtractionCoordinator(vm, probe, new PasswordService(), pathService, new DialogService());
+
+            var sourceDeletes = new RecordingDeleteFileSystem(runRoot);
+
+            extraction.SourcePackageDeleteFileSystem = sourceDeletes;
+            extraction.KeepTaskDetailInLog = true;
+
+            var oneClick = new OneClickCoordinator(vm, scan, rename, extraction, new DialogService());
+
+            string outer = BuildChainInto(runRoot, 4);
+
+            return (new Harness(vm, oneClick, extraction, logService, sourceDeletes), probe, outer);
+        }
+
+        /// <summary>一次"递归跑一条四层链"的全部事实（见 <see cref="RunRecursionChainAsync"/>）。</summary>
+        private sealed class RecursionReclaimRun
+        {
+            public RecursionReclaimRun(string root) => Root = root;
+
+            public string Root { get; }
+
+            public Harness Harness { get; set; } = null!;
+
+            public ExtractionProbeEngine Probe { get; set; } = null!;
+
+            public string SourcePackage { get; set; } = string.Empty;
+
+            public IReadOnlyList<string> ProducedFiles { get; set; } = Array.Empty<string>();
+
+            public Dictionary<string, string> Digest { get; } = new(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 假的引擎包装（**只观测、不改变任何结论**）：每一次开始解压之前，把"这一次跑的临时根下面
+        /// 还剩哪几个 <c>level*.7z</c>"记一帧 —— 递归路逐层回收的判据就是这一帧。
+        /// ⛔ 它原样转发给真 7-Zip，不拼参数、不改结论（AGENTS.md §3 四条禁止项）。
+        /// </summary>
+        private sealed class ExtractionProbeEngine : IArchiveEngine
+        {
+            private readonly IArchiveEngine _inner;
+            private readonly string _root;
+
+            public ExtractionProbeEngine(IArchiveEngine inner, string root)
+            {
+                _inner = inner;
+                _root = root;
+            }
+
+            /// <summary>每一次开始解压：要解的归档 + 那一刻盘上还剩哪几个 <c>level*.7z</c>（按名字）。</summary>
+            public List<(string Archive, IReadOnlyList<string> Snapshot)> ExtractStarts { get; } = new();
+
+            public string Name => _inner.Id;
+
+            public string Id => _inner.Id;
+
+            public string DisplayName => _inner.DisplayName;
+
+            public string Version => _inner.Version;
+
+            public bool IsAvailable => _inner.IsAvailable;
+
+            public EngineCapabilities Capabilities => _inner.Capabilities;
+
+            public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                _inner.ProbeAsync(request, cancellationToken);
+
+            public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                _inner.ListAsync(request, cancellationToken);
+
+            public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default) =>
+                _inner.TestAsync(request, cancellationToken);
+
+            public Task<ArchiveOperationResult> ExtractAsync(
+                ArchiveRequest request,
+                ExtractOptions options,
+                CancellationToken cancellationToken = default)
+            {
+                ExtractStarts.Add((request.ArchivePath, SnapshotLevelPackages()));
+
+                return _inner.ExtractAsync(request, options, cancellationToken);
+            }
+
+            private IReadOnlyList<string> SnapshotLevelPackages()
+            {
+                try
+                {
+                    return Directory.Exists(_root)
+                        ? Directory.GetFiles(_root, "level*.7z", SearchOption.AllDirectories)
+                            .Select(path => Path.GetFileName(path) ?? string.Empty)
+                            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                            .ToList()
+                        : new List<string>();
+                }
+                catch
+                {
+                    // 观测失败就当这一帧什么都没看见（判据会因此变红时宁可红，也不许猜）。
+                    return new List<string>();
+                }
+            }
+        }
+
+        private static string Sha256(string path)
+        {
+            using var stream = File.OpenRead(path);
+            using var sha = System.Security.Cryptography.SHA256.Create();
+
+            return Convert.ToHexString(sha.ComputeHash(stream));
         }
     }
 }

@@ -36,6 +36,18 @@ namespace ArchiveFixer.Extraction
         public string InputPath { get; init; } = string.Empty;
 
         /// <summary>
+        /// 这一层的产物目录里**解完那一刻**有几个条目（<c>null</c> = 没记过）。
+        ///
+        /// <para><b>为什么要记</b>（2026-10-05，递归路逐层回收）：发布侧要回答"这一层除了交给下一层的
+        /// 内层包，还有没有别的东西"（判据 <see cref="PackageLayerRules.ProducedOwnContent"/>，
+        /// 决定该不该给这一层留一个包名目录），而那条链的过程物现在会被**当场删掉** ——
+        /// 发布时再读盘，中间层的目录已经空了 ⇒ 判成"没出内容物" ⇒ 该留的层目录被摊掉
+        /// （实测：两遍对照的产物路径从 <c>…\level2\level3\…</c> 变成 <c>…\level3\…</c>）。
+        /// 所以递归核心在**动手回收之前**把那一刻的条目数记在这里，判据本身一个字没改。</para>
+        /// </summary>
+        public int? EntryCountBeforeReclaim { get; set; }
+
+        /// <summary>
         /// 这一层到底解开了没有。**就地替换发布**只搬"真的解开了"的层
         /// （见 <see cref="Publish"/> 的三条边界）：失败的那一层没产出任何东西，
         /// 把它的包删掉、或者把它的空目录搬出去，都只会让用户唯一的那一份线索消失。
@@ -247,7 +259,8 @@ namespace ArchiveFixer.Extraction
         public WorkspacePublishResult Publish(
             string targetDirectory,
             bool inPlaceInnerPackages = false,
-            bool omitMiddlePackageLayers = false)
+            bool omitMiddlePackageLayers = false,
+            IReadOnlyCollection<string>? alreadyReclaimedPaths = null)
         {
             if (string.IsNullOrWhiteSpace(targetDirectory))
             {
@@ -320,7 +333,8 @@ namespace ArchiveFixer.Extraction
                         omitMiddlePackageLayers,
                         renamed,
                         errors,
-                        warnings);
+                        warnings,
+                        alreadyReclaimedPaths);
                 }
                 else
                 {
@@ -397,13 +411,22 @@ namespace ArchiveFixer.Extraction
         /// 本方法不自己判。
         /// </para>
         /// </summary>
+        /// <param name="alreadyReclaimedPaths">
+        /// **已经被"逐层回收"当场删掉的那些内层包**（默认 null = 没有这一档，行为与以前逐字相同）。
+        ///
+        /// <para>判据与执行体都在协调器那一个出口里（<c>ExtractionCoordinator.PurgeLayerSourcePackage</c>），
+        /// 本类只把这一份事实用在**一处**：`TryDeleteConsumedPackage` 里那句
+        /// "它已经被解开，但这一步没能把它搬进产物" —— 那一份是**我们自己按口径删掉的**，
+        /// 不是搬运失败，照旧写那条 WARN 就是一句假话（用户在日志里会去找一个根本没发生的失败）。</para>
+        /// </param>
         private int PublishInPlace(
             string destination,
             Dictionary<string, string> movedFromTo,
             bool omitMiddlePackageLayers,
             List<string> renamed,
             List<string> errors,
-            List<string> warnings)
+            List<string> warnings,
+            IReadOnlyCollection<string>? alreadyReclaimedPaths = null)
         {
             List<WorkspaceLayer> successful = _layers
                 .Where(layer => layer.Successful)
@@ -459,8 +482,9 @@ namespace ArchiveFixer.Extraction
                     ? siblings.Count
                     : 0;
 
-                bool parentProducedContent = PackageLayerRules.ProducedOwnContent(parent.OutputPath, siblingCount);
-
+                bool parentProducedContent = PackageLayerRules.ProducedOwnContentFromEntryCount(
+                    parent.EntryCountBeforeReclaim ?? PackageLayerRules.CountEntriesOrUnknown(parent.OutputPath),
+                    siblingCount);
                 keepFolderOf[layer] = PackageLayerRules.ShouldKeepLayerFolder(
                     omitMiddlePackageLayers,
                     parentProducedContent,
@@ -534,7 +558,8 @@ namespace ArchiveFixer.Extraction
                     movedFromTo,
                     destination,
                     errors,
-                    warnings);
+                    warnings,
+                    alreadyReclaimedPaths);
 
                 destinationOf[layer] = layerDirectory;
 
@@ -619,7 +644,8 @@ namespace ArchiveFixer.Extraction
             Dictionary<string, string> movedFromTo,
             string artifactRoot,
             List<string> errors,
-            List<string> warnings)
+            List<string> warnings,
+            IReadOnlyCollection<string>? alreadyReclaimedPaths = null)
         {
             if (string.IsNullOrWhiteSpace(publishedArchivePath) ||
                 string.IsNullOrWhiteSpace(consumedSourcePath))
@@ -638,17 +664,30 @@ namespace ArchiveFixer.Extraction
                 }
 
                 /*
-                 * 事实：这一份到底搬到哪去了？查不到 = 这一步没把它搬进产物（移动失败 / 不在本步范围内）
-                 * ⇒ 判不出哪一份是我们自己的 ⇒ **什么都不做**（连同这一组的分卷一起放弃）。
+                 * ⛔ 事实：这一份到底搬到哪去了？查不到 = 这一步没把它搬进产物 ——
+                 * 但**"查不到"有两种完全不同的原因**，说话必须分开（用户 2026-10-05）：
+                 *
+                 * ① **它已经被"逐层回收"当场删掉了**（`alreadyReclaimedPaths` 里点名的那一份）——
+                 *    那是这一档**要的**结果（AGENTS.md §11.3：每一层当场回收这一层的过程物）。
+                 *    照旧写"判不出哪一份才是我们自己搬进来的那一份"就是一句假话，
+                 *    用户会当成一次失败的搬运去找原因。
+                 * ② 别的（撞名 / 占用 / 移动失败）⇒ 维持原话，如实点名（那才是"判不出"）。
                  */
+                bool reclaimedOnPurpose =
+                    SafeFileWasReclaimed(alreadyReclaimedPaths, consumedSourcePath) &&
+                    !File.Exists(consumedSourcePath);
+
                 if (!movedFromTo.TryGetValue(
                         SafePathHelper.GetFullPathSafe(consumedSourcePath),
                         out string? actual))
                 {
-                    warnings.Add(
-                        $"{Path.GetFileName(consumedSourcePath)}（它已经被解开，但这一步没能把它搬进产物"
-                        + "（撞名、占用或移动失败）—— 判不出哪一份才是我们自己搬进来的那一份，"
-                        + "所以这一份连同同组的分卷一个字节都不删；删除不可恢复）");
+                    if (!reclaimedOnPurpose)
+                    {
+                        warnings.Add(
+                            $"{Path.GetFileName(consumedSourcePath)}（它已经被解开，但这一步没能把它搬进产物"
+                            + "（撞名、占用或移动失败）—— 判不出哪一份才是我们自己搬进来的那一份，"
+                            + "所以这一份连同同组的分卷一个字节都不删；删除不可恢复）");
+                    }
 
                     return;
                 }
@@ -688,6 +727,31 @@ namespace ArchiveFixer.Extraction
             {
                 errors.Add($"{Path.GetFileName(publishedArchivePath)}（已解开，但原文件没能删掉：{ex.Message}）");
             }
+        }
+
+        /// <summary>
+        /// 这一份是不是**逐层回收按口径当场删掉的那一份**（判据 = 调用方给的清单 + 盘上事实）。
+        ///
+        /// <para>⛔ 两个条件缺一不可：清单里点名了它，**而且它确实已经不在盘上**。
+        /// 只信清单会把"删失败（占用 / 只读）"也读成"已回收"；只信"不在盘上"会把用户自己删掉的
+        /// 也算进来。两个一起看才是事实（AGENTS.md §9.5：要删 / 要写盘的动作判据只准读事实）。</para>
+        /// </summary>
+        private static bool SafeFileWasReclaimed(IReadOnlyCollection<string>? reclaimedPaths, string path)
+        {
+            if (reclaimedPaths == null || reclaimedPaths.Count == 0 || string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            foreach (string reclaimed in reclaimedPaths)
+            {
+                if (string.Equals(reclaimed, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

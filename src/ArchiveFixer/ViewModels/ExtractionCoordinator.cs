@@ -144,7 +144,133 @@ namespace ArchiveFixer.ViewModels
              */
             extractor.ReportDangerousEntries = Settings.ReportDangerousEntries;
 
+            /*
+             * ===== 递归路「逐层回收」的落点（用户 2026-10-05：「这个我不是说了要同步吗」）=====
+             *
+             * AGENTS.md §11.3 那条口径（每一层「定稿 + 输出校验通过 + 未取消 + 可证完整」之后当场回收
+             * 这一层的过程物）以前只接在**轮次续解**那条路上；「展开所有分支」这条链是**一个任务**内
+             * 由 RecursiveExtractor 展开的（层是工作区目录、不是任务），过去整条链的过程物一直攒到
+             * 定稿那一刻才释放（真机第六批：空间曲线 13:39:32 最低 62.48 GiB → 13:40:57 回到 82.63 GiB，
+             * 峰值 26.94 GiB 而结果只有 7.28 GB）。
+             *
+             * ⛔ **判据只有既有那一个事实位**（`_layerReclaimThisBatch`，写入点唯一
+             * `PrepareRestHandlingForBatch`）—— 递归路**不另算一遍**：「移入回收站」档照旧链尾一次
+             * （回收站不释放盘上空间），「空间不足」档照旧走它自己那一支（每层各删各的、含源包），
+             * 「不动其余物」档更不动内层包。挂钩子这一行读的就是它。
+             */
+            if (_layerReclaimThisBatch)
+            {
+                extractor.LayerReclaim = OnRecursiveLayerReclaim;
+            }
+
             return extractor;
+        }
+
+        /// <summary>
+        /// **递归路「逐层回收」的执行口**（每次回调 = 一条递归链里某一层**跑成之后**、
+        /// 该把上一层交出来的那个内层包还回去的时候）。
+        ///
+        /// <para>判据与执行体**全部转调既有出口**，这里只做三件接线的事：</para>
+        /// <list type="number">
+        /// <item><description>把"要还的那几个文件"拼成一个只用于**取清单**的任务对象
+        /// （<c>SourceCleanupService.BuildTargetList</c> 是"要删哪些文件"的唯一出口，
+        /// 而它读的是任务的 <c>VolumePaths</c> / <c>CurrentPath</c> —— 那份清单同时喂给
+        /// 「半套分卷」闸门，⛔ 判据与实际删除必须看同一份清单）；</description></item>
+        /// <item><description>把上一层的说法与"这一层可证完整吗"的结论原样喂给
+        /// <see cref="PurgeLayerSourcePackage"/>（它自己那几道门槛一条都不绕过，只是**多**了一档
+        /// 由调用方给出的完整性结论）；</description></item>
+        /// <item><description>按事实说话：删了才写「已回收」，没删就写清为什么（⛔ 不静默 return）。</description></item>
+        /// </list>
+        ///
+        /// <para><b>⛔ 最外层源包永远不在这条路上</b>：<paramref name="request"/>.GroupFiles 里装的全是
+        /// 递归工作区里的内层包（入队时算好的），而 <c>reclaimRootSource: false</c> 是第二道保险。</para>
+        /// </summary>
+        private void OnRecursiveLayerReclaim(RecursiveLayerReclaimRequest request)
+        {
+            if (request == null)
+            {
+                return;
+            }
+
+            if (!request.Verdict.AllowsSourceRemoval)
+            {
+                /*
+                 * L4 判不出 / 判否 ⇒ **什么都不做**，但必须留一行（AGENTS.md §9.5：判不出 ⇒ 什么都不做
+                 * **+ 如实写一行**）。写的是 `Blocker`（唯一出口拼的那句"为什么没删"），
+                 * 这里不另拼一套措辞。
+                 */
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        CultureInfo.CurrentCulture,
+                        StatusText.RecursionLayerNotReclaimedFormat,
+                        request.ChildLayerLabel,
+                        request.Verdict.Blocker.Length > 0
+                            ? request.Verdict.Blocker
+                            : StatusText.RecursionLayerReclaimNotVerifiedReason));
+
+                return;
+            }
+
+            var logEntries = new List<(string Level, string Message)>();
+
+            string? failure = PurgeLayerSourcePackage(
+                BuildInnerPackageReclaimTask(request),
+                verification: null,
+                commit: null,
+                logEntries,
+                LayerPurgeTrigger.LayerReclaim,
+                reclaimVerdict: request.Verdict,
+                reclaimRootSource: false,
+                reclaimLabel: request.ChildLayerLabel,
+                reclaimWorkspaceDirectory: request.WorkspaceTaskDirectory);
+
+            foreach ((string level, string message) in logEntries)
+            {
+                AppendLog(level, message);
+            }
+
+            /*
+             * ⛔ 递归路**不**把"过程物没删掉"升级成任务结论（与续解那条路刻意不同）：
+             * 续解层那一份 `sourceMoveFailure` 会落到任务上的「部分完成」，而递归路是一条链里的一层，
+             * 删不掉只是"这一份过程物多留一会儿"，工作区收尾照样会整份清掉 —— 拿它把已经跑通的
+             * 内容物标成"部分完成"只会误导用户（不变量 6 讲的是**内容物**没做完的情形）。
+             */
+            if (failure != null)
+            {
+                AppendLog("WARN", $"{request.ChildLayerLabel}：{failure}");
+            }
+        }
+
+        /// <summary>
+        /// 把"递归层要还回去的那几个文件"包成一个**只用来取清单**的任务对象。
+        ///
+        /// <para>为什么非要一个任务对象：要删哪些文件这件事**只有一个出口**
+        /// （<see cref="SourceCleanupService.BuildTargetList"/>，它读 <c>VolumePaths</c> / <c>CurrentPath</c>），
+        /// 而同一份清单还要喂给「半套分卷」闸门 —— 判据与实际删除必须看同一份清单（AGENTS.md §9.5）。
+        /// 这个对象不登记进任务列表、不进界面、不参与统计，用完即弃。</para>
+        ///
+        /// <para>一条以上 ⇒ 按**分卷组**算（整组一起判、一起删）；只有一条 ⇒ 单文件任务。</para>
+        /// </summary>
+        private static ArchiveTask BuildInnerPackageReclaimTask(RecursiveLayerReclaimRequest request)
+        {
+            IReadOnlyList<string> files = request.GroupFiles;
+
+            string first = files.Count > 0 ? files[0] : string.Empty;
+
+            var task = new ArchiveTask(first)
+            {
+                FileName = Path.GetFileName(first),
+                IsArchive = true
+            };
+
+            if (files.Count > 1)
+            {
+                task.IsVolumeGroup = true;
+                task.VolumePaths.AddRange(files);
+            }
+
+            return task;
         }
 
         /// <summary>
@@ -2068,10 +2194,14 @@ namespace ArchiveFixer.ViewModels
         /// <returns>失败时返回一句"内容物已好、源包没删掉"的说明（调用方据此标「部分完成」）；正常返回 null。</returns>
         private string? PurgeLayerSourcePackage(
             ArchiveTask task,
-            OutputVerificationResult verification,
-            StageCommitResult commit,
+            OutputVerificationResult? verification,
+            StageCommitResult? commit,
             List<(string Level, string Message)> logEntries,
-            LayerPurgeTrigger trigger)
+            LayerPurgeTrigger trigger,
+            ResultCompletenessVerdict? reclaimVerdict = null,
+            bool reclaimRootSource = true,
+            string? reclaimLabel = null,
+            string? reclaimWorkspaceDirectory = null)
         {
             if (task == null)
             {
@@ -2084,35 +2214,90 @@ namespace ArchiveFixer.ViewModels
              * 日志措辞按"这一层的源包是什么"分开说：最外层是用户拖进来的那个包，
              * 续解层是上一层解出来的内层包（对用户来说是过程物，但对这一层就是它的源）。
              * 一句"源包"盖两种东西，真机上就会有人问"其余物里的内层包怎么也叫源包"。
+             *
+             * ⚠ 递归路（<paramref name="reclaimLabel"/> 非空）更要说清：那里的"这一层"是**工作区的一层**
+             * （不是任务），说"源包"会让人以为在动用户拖进来的那个包。所以说法由调用方给（唯一出口 =
+             * <c>RecursiveExtractor.DescribeProbeLabel</c>，如「第 1 层：level2.7z」）。
              */
-            string subject = task.IsContinuationTask ? "内层包（这一层的源）" : "源包";
-
-            if (commit == null || !commit.Attempted || commit.FailedCount > 0)
-            {
-                // 定稿没发生 / 有搬运失败 → 与搬运那一档同一条红线：源包一个字节都不动。
-                logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，{subject}留在原地（{triggerLabel}也不删）。"));
-                return null;
-            }
+            string subject = reclaimLabel != null
+                ? "内层包（上一层的输入）"
+                : task.IsContinuationTask ? "内层包（这一层的源）" : "源包";
 
             /*
-             * ⚠ 2026-09-30（检验等级 L4）：判据从"校验通过"**收紧**成"可证完整"（唯一出口 =
-             * <see cref="ResultCompletenessClassifier"/>）：判不出完整性时**永久删源包**这一步不做 ——
-             * "空间不足"是让用户难受，删错源包是不可逆。
+             * ===== 递归路：门槛由调用方按**每一层**喂进来，本方法不再看"定稿 / 校验"这两件任务级事实 =====
+             *
+             * 递归路的层是**工作区目录、不是任务**：那条路上没有 `StageCommitResult`（整条链最后才定稿一次），
+             * 而"这一层可证完整吗"是**按层**判的（拿这一层的清单逐条核对过，唯一出口
+             * `ResultCompletenessClassifier`，见 `RecursiveExtractor.BuildLayerReclaim`）。
+             * 所以这一档只认调用方给出的那份三态结论 —— ⛔ 这里不许再造一个"默认放行"的兜底：
+             * 传进来的是 `Undeterminable`（默认值）就什么都不做。
              */
-            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(
-                verification,
-                task.ManifestExpectation);
-
-            if (!completeness.AllowsSourceRemoval)
+            if (reclaimVerdict != null)
             {
-                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Blocker}，{subject}留在原地（{triggerLabel}也不删）。"));
-                return null;
+                if (!reclaimVerdict.AllowsSourceRemoval)
+                {
+                    logEntries.Add((
+                        "WARN",
+                        $"{reclaimLabel ?? task.FileName}：{reclaimVerdict.Blocker}，{subject}留在原地（{triggerLabel}也不删）。"));
+
+                    return null;
+                }
+            }
+            else
+            {
+                if (commit == null || !commit.Attempted || commit.FailedCount > 0)
+                {
+                    // 定稿没发生 / 有搬运失败 → 与搬运那一档同一条红线：源包一个字节都不动。
+                    logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，{subject}留在原地（{triggerLabel}也不删）。"));
+                    return null;
+                }
+
+                /*
+                 * ⚠ 2026-09-30（检验等级 L4）：判据从"校验通过"**收紧**成"可证完整"（唯一出口 =
+                 * <see cref="ResultCompletenessClassifier"/>）：判不出完整性时**永久删源包**这一步不做 ——
+                 * "空间不足"是让用户难受，删错源包是不可逆。
+                 */
+                ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(
+                    verification,
+                    task.ManifestExpectation);
+
+                if (!completeness.AllowsSourceRemoval)
+                {
+                    logEntries.Add(("WARN", $"{task.FileName}：{completeness.Blocker}，{subject}留在原地（{triggerLabel}也不删）。"));
+                    return null;
+                }
             }
 
             if (task.SourcePackageMove == SourcePackageMoveState.Done)
             {
                 // 幂等：已经处理过了（删过 / 搬过），绝不第二次。
                 logEntries.Add(("INFO", $"{task.FileName}：{subject}已经处理过（删过或搬过），不再动第二次。"));
+                return null;
+            }
+
+            /*
+             * ⛔ **最外层源包留到链尾**（用户 2026-10-03 的原话："原包还是比较重要的"）——
+             * 递归路那一条只允许删**我们自己产出的过程物**（内层包就在递归工作区里），
+             * 所以这里上一道显式的保险：调用方说"这一档不碰源包"时，
+             * 候选里出现**任何一份不在递归工作区里**的文件就直接停手。
+             *
+             * 判据用**路径事实**（那一份在不在 `.ArchiveFixer.work` 之下）而不是"它是不是源包"：
+             * 递归工作区之外的文件这一档本来就不该碰 —— 源包（用户拖进来的那个）在源目录里，
+             * 它**永远不在**工作区之下；而这一档要删的内层包**永远在**工作区之下
+             * （`<目标目录>\.ArchiveFixer.work\recursive\<id>\layer-NNN\output\…`）。
+             * 判不出 / 拿不到路径 ⇒ 落在"什么都不做"那一档（删除不可恢复）。
+             *
+             * 为什么不是"没事，反正传进来的清单里没有它"：这是**不可逆**操作，
+             * 多一道"值不值得信"的检查比事后解释便宜得多（AGENTS.md §9.5）。
+             */
+            if (!reclaimRootSource && !IsInsideRecursionWorkspace(task.CurrentPath))
+            {
+                logEntries.Add((
+                    "WARN",
+                    $"{reclaimLabel ?? task.FileName}：候选里的「{Path.GetFileName(task.CurrentPath)}」不在递归工作区里"
+                    + "（它可能是用户拖进来的源包）—— 判不出它是不是本层的过程物，所以这一个字节都不删"
+                    + "（最外层源包只留到链尾处理；删除不可恢复）。"));
+
                 return null;
             }
 
@@ -2134,7 +2319,7 @@ namespace ArchiveFixer.ViewModels
              * 拦下就**一个字节都不删**（兜底落在"什么都不做"）：这一层的过程物照旧留到链尾按老口径处理，
              * 而链尾那一档本来就会再过一次同一道闸门（`RestItemPurger.Purge` 第六道门槛）。
              */
-            string? splitBlocker = DescribeLayerSplitBlocker(task);
+            string? splitBlocker = DescribeLayerSplitBlocker(task, reclaimWorkspaceDirectory);
 
             if (splitBlocker != null)
             {
@@ -2177,11 +2362,26 @@ namespace ArchiveFixer.ViewModels
                 ? "（不进回收站、不可恢复；最外层源包留到链尾按「源包操作 + 删除操作」处理）。"
                 : "（不进回收站、不可恢复；这份空间马上给后面的包用）。";
 
+            /*
+             * 两种说法的分叉只有一个理由：**递归路的"这一层"是工作区的一层、不是任务**
+             * （`reclaimLabel` = 「第 1 层：level2.7z」），而且那条路上**没有"定稿"这一步**
+             * —— 整条链最后才发布一次，所以那句"定稿 + 校验通过"在递归路上是一句**假话**
+             * （用户 2026-10-04 真机为"说话不实"挨过骂）。递归路说的事实是
+             * "这一层已经证明可证完整（拿这一层的清单逐条核对过）"。
+             * ⛔ 续解那条路一个字都没改（既有用例按"定稿 + 校验通过"与"已立刻永久删除"点名）。
+             */
             logEntries.Add((
                 "INFO",
-                $"{task.FileName}：{triggerLabel} —— 定稿 + 校验通过，已立刻永久删除{subject} "
-                + $"{cleanup.DeletedFiles.Count} 个，收回 {WorkspaceCleanupService.FormatSize(cleanup.FreedBytes)}"
-                + tail));
+                reclaimLabel != null
+                    ? string.Format(
+                        CultureInfo.CurrentCulture,
+                        StatusText.RecursionLayerReclaimedFormat,
+                        reclaimLabel,
+                        cleanup.DeletedFiles.Count,
+                        WorkspaceCleanupService.FormatSize(cleanup.FreedBytes))
+                    : $"{task.FileName}：{triggerLabel} —— 定稿 + 校验通过，已立刻永久删除{subject} "
+                      + $"{cleanup.DeletedFiles.Count} 个，收回 {WorkspaceCleanupService.FormatSize(cleanup.FreedBytes)}"
+                      + tail));
 
             return null;
         }
@@ -2194,7 +2394,7 @@ namespace ArchiveFixer.ViewModels
         /// （⛔ 不在这里另写一份）；候选清单也转调删除侧那一个出口
         /// <see cref="SourceCleanupService.BuildTargetList"/>（判据与真删看同一份清单）。</para>
         /// </summary>
-        private string? DescribeLayerSplitBlocker(ArchiveTask task)
+        private string? DescribeLayerSplitBlocker(ArchiveTask task, string? reclaimWorkspaceDirectory = null)
         {
             List<string> candidates = SourceCleanupService.BuildTargetList(task);
 
@@ -2215,9 +2415,21 @@ namespace ArchiveFixer.ViewModels
                     + "所以这一个字节都不删（删除不可恢复）";
             }
 
+            /*
+             * 递归路要排掉**本次递归的工作区**（见 DescribeLayerReclaimBlocker 的 excludedPaths 说明）：
+             * 那一棵树是程序的暂存区、收尾整份删掉，里面的东西不是"成品目录里留下的另一片"。
+             * ⛔ 只有递归路传得进来；续解那条路（默认 null）行为一个字没变。
+             */
+            IReadOnlyList<string>? excluded = string.IsNullOrWhiteSpace(reclaimWorkspaceDirectory)
+                ? null
+                : new[] { reclaimWorkspaceDirectory! };
+
             foreach (string artifactRoot in artifactRoots)
             {
-                string? blocker = RestVolumeCompletenessGate.DescribeLayerReclaimBlocker(candidates, artifactRoot);
+                string? blocker = RestVolumeCompletenessGate.DescribeLayerReclaimBlocker(
+                    candidates,
+                    artifactRoot,
+                    excluded);
 
                 if (blocker != null)
                 {
@@ -2226,6 +2438,32 @@ namespace ArchiveFixer.ViewModels
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// 这一份是不是落在**递归工作区**里（<c>&lt;目标目录&gt;\.ArchiveFixer.work\…</c> 的任一层子目录）。
+        ///
+        /// <para>递归路「逐层回收」只允许删这一棵树里的东西：那一层的过程物是我们自己刚解出来的内层包
+        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work\recursive\&lt;id&gt;\layer-NNN\output\…</c>）；
+        /// **用户拖进来的源包永远不在它下面**（它在用户的源目录里）⇒ 这条判据就是"最外层源包留到链尾"
+        /// 那道保险的落点。判不出 / 拿不到路径 ⇒ 返回 false ⇒ 上层什么都不做（删除不可恢复）。</para>
+        ///
+        /// <para>标记的唯一出口是 <see cref="VolumeContentInference.WorkDirectoryName"/>
+        /// （AGENTS.md §9.5：⛔ 不另写一个字面量）。</para>
+        /// </summary>
+        private static bool IsInsideRecursionWorkspace(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            string marker = Path.DirectorySeparatorChar
+                + VolumeContentInference.WorkDirectoryName
+                + Path.DirectorySeparatorChar;
+
+            return SafePathHelper.GetFullPathSafe(path)
+                .Contains(marker, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

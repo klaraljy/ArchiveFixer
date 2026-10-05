@@ -74,14 +74,27 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         /// <param name="candidatePaths">这一层准备删的文件（就是 <c>SourceCleanupService</c> 要删的那一份清单）。</param>
         /// <param name="artifactRoot">成品目录树根（同组的另一片可能还在里面）。</param>
-        public static string? DescribeLayerReclaimBlocker(IReadOnlyList<string>? candidatePaths, string? artifactRoot)
+        /// <param name="excludedPaths">
+        /// 额外要**排除在扫描之外**的路径（默认没有）。
+        ///
+        /// <para><b>递归路逐层回收</b>用它排掉**本次递归的工作区**（<c>&lt;目标目录&gt;\.ArchiveFixer.work\…</c>）：
+        /// 那条路的候选本来就在工作区里逐层产出，而递归**还没发布** —— 同一条链里别的层产物目录里
+        /// 出现同基名的归档件，不是"成品目录里留下的另一片"（"成品目录"在这一刻还是空的），
+        /// 拿它当伙伴会把每一次合法的回收全拦死（用户 2026-10-05：递归那 4 层链要逐层回收）。
+        /// ⛔ 只排除调用方**明确列出来**的那一棵；别的照旧一律算（宁可多拦，绝不漏拦）。</para>
+        /// </param>
+        public static string? DescribeLayerReclaimBlocker(
+            IReadOnlyList<string>? candidatePaths,
+            string? artifactRoot,
+            IEnumerable<string>? excludedPaths = null)
         {
             return DescribeBlockerForCandidates(
                 candidatePaths,
                 artifactRoot,
                 LayerReclaimCandidatePrefix,
                 LayerReclaimBlockerTail,
-                requireRecognizedCandidates: true);
+                requireRecognizedCandidates: true,
+                excludedPaths);
         }
 
         /// <summary>

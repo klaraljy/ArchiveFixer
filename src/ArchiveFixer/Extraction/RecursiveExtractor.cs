@@ -149,6 +149,50 @@ namespace ArchiveFixer.Extraction
     }
 
     /// <summary>
+    /// **递归路「逐层回收」的一次请求**（用户 2026-10-05：「这个我不是说了要同步吗」）。
+    ///
+    /// <para><b>它是什么</b>：一条递归链里，**上一层交出来的那个内层包**——它已经被这一层
+    /// 真的解开、这一层也已经证明是完整的（<see cref="Verdict"/>），所以它对本层就是
+    /// "解出这一层内容所消耗掉的那份源"，用完了就该当场还回去（AGENTS.md §11.3 的口径）。</para>
+    ///
+    /// <para>⛔ 递归核心**不删任何东西**：它只把"哪几个文件 + 这一层的完整性结论"交给调用方
+    /// （<see cref="RecursiveExtractor.LayerReclaim"/>），删除判据与执行体仍然只有既有那一套
+    /// （<c>ExtractionCoordinator.PurgeLayerSourcePackage</c> → <c>SourceCleanupService</c>）。</para>
+    /// </summary>
+    public sealed class RecursiveLayerReclaimRequest
+    {
+        /// <summary>动这一层的时候用来说话（唯一出口 <c>RecursiveExtractor.DescribeProbeLabel</c>）。</summary>
+        public string ChildLayerLabel { get; init; } = string.Empty;
+
+        /// <summary>
+        /// **要删的那几个文件**（绝对路径，已经去重）：上一层交出来的那个内层归档，
+        /// 是分卷组时**整组一起**（组员判据转调既有那一把尺子，⛔ 这里不另写一套名字规则）。
+        ///
+        /// <para>⛔ 只装**真被解开过**的那些：从未入队（停在多分支 / 到层数上限 / 超过每层数量上限）
+        /// 的内层包一个都不在里面 —— 它们原样留在成品目录里当内容物（用户 2026-10-04 那条口径）。</para>
+        /// </summary>
+        public IReadOnlyList<string> GroupFiles { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// **这一层自己能不能被证明是完整的**（L4 三态，唯一出口
+        /// <c>ResultCompletenessClassifier</c>；判据 = 拿**这一层的清单**逐条核对过）。
+        /// 判不出 / 判否 ⇒ 调用方什么都不做（兜底落在"什么都不做"那一档）。
+        /// </summary>
+        public ResultCompletenessVerdict Verdict { get; init; } =
+            new() { State = ResultCompleteness.Undeterminable };
+
+        /// <summary>
+        /// 这一层工作区所在的**任务工作区目录**（<c>&lt;工作区根&gt;\&lt;taskId&gt;</c>）。
+        ///
+        /// <para>用途只有一个：定稿侧那道「半套分卷」闸门扫"成品目录树"时要把它排除掉 ——
+        /// 递归还没发布，同一条递归链里别的层产物目录里的同基名归档件**不是"成品目录里留下的另一片"**，
+        /// 拿它当伙伴会把每一次合法的逐层回收全拦死（与 <c>RestVolumeCompletenessGate</c> 里
+        /// "工作区里的东西不算"同一条道理；⛔ 只排除这一棵，别的照旧一律算）。</para>
+        /// </summary>
+        public string WorkspaceTaskDirectory { get; init; } = string.Empty;
+    }
+
+    /// <summary>
     /// 需要用户拍板的多分支询问。字段是给 GUI 直接用的：<see cref="Prompt"/> 就是弹窗正文。
     /// </summary>
     public sealed class RecursionDecisionRequest
@@ -428,6 +472,43 @@ namespace ArchiveFixer.Extraction
         public ContentKeepRules KeepRules { get; set; } = ContentKeepRules.Empty;
 
         /// <summary>
+        /// **递归路「逐层回收」的落点**（用户 2026-10-05：「这个我不是说了要同步吗，你当我放屁呢」）。
+        ///
+        /// <para><b>为什么要有它</b>：AGENTS.md §11.3 早就写定「续解链每一层『定稿 + 输出校验通过 +
+        /// 未取消 + 可证完整』之后当场按『删除操作』处理这一层的过程物；最外层源包只留到链尾」——
+        /// 但那条实现只接在**轮次续解**那条路上（层是**任务**），而「展开所有分支」那条链是
+        /// **一个任务**内由本类展开的（层是**工作区目录**、不是任务）⇒ 递归路没接，于是 4 层链的
+        /// 过程物一直攒到定稿那一刻才释放（真机第六批：峰值 26.94 GiB 而结果只有 7.28 GB）。
+        /// 这一档就是给递归路补的同一个落点。</para>
+        ///
+        /// <para><b>谁在什么时候调</b>：某一层**跑成之后、它的下一层队列排好之前**（那一刻这一层的
+        /// 输入包才真的用完）—— 位置由主循环里那一段说明逐条钉住（排在失败 / 上限 / 不变量 11 三关
+        /// **之后**，所以"失败 / 部分完成 / 取消 ⇒ 一个字节都不动"是由位置本身保证的）。
+        /// 判据与执行体都不在本类 —— 判据（批内那个事实位 / 「半套分卷」闸门 / 完整性三态）与删除执行体
+        /// 全在协调器那一个出口里（AGENTS.md §9.5），本类只回答"哪几个文件"和"这一层可证完整吗"。
+        /// 回调为 null = **一个字节都不动**（默认就是 null）。</para>
+        ///
+        /// <para>⛔ 最外层源包永远不在 <c>GroupFiles</c> 里（第 0 层压根不建回收项）。</para>
+        /// </summary>
+        public Action<RecursiveLayerReclaimRequest>? LayerReclaim { get; set; }
+
+        /// <summary>
+        /// **曾经交给"逐层回收"去处理的那几个过程物**（绝对路径）—— 唯一消费点是发布那一步
+        /// （<see cref="ExtractionWorkspace.Publish"/> 的 <c>alreadyReclaimedPaths</c>）。
+        ///
+        /// <para><b>为什么要记</b>：最后被消费掉的那个内层包，在发布那一刻**要么按这一档被当场删了、
+        /// 要么被闸门拦下还在盘上**。前者没有这份账的话，发布侧会把它读成"搬运失败"并白写一条
+        /// "判不出哪一份才是我们自己搬进来的那一份"的 WARN —— 那是一句**假话**，
+        /// 用户会当成一次失败的搬运去找原因（AGENTS.md §9.5：删 / 写盘的判据只准读事实）。</para>
+        ///
+        /// <para>⛔ 它不是判据、也不生成判据：这里只是把"这一份交给回收那一档了"记下来
+        /// （登记的时机是**调回调之前**，因为回调自己可能一整份都删掉）；
+        /// "到底删没删"仍由发布侧读**盘上事实**回答（<c>!File.Exists</c>）。</para>
+        /// </summary>
+        internal HashSet<string> ReclaimedProcessArtifacts { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 上一次运行留下、已被本次续跑取代的工作区（多分支询问 → 用户确认继续这一条路）。
         ///
         /// 为什么是**列表**而不是一个槽位：一个实例上可能出现"询问 → 续跑"这样的多次运行，
@@ -581,6 +662,14 @@ namespace ArchiveFixer.Extraction
         {
             var layers = new List<RecursionLayerReport>();
             var stopReason = RecursionStopReason.None;
+
+            /*
+             * 逐层回收那本账**每次运行从零开始**：这个实例可能被同一个包的续跑复用
+             * （多分支询问 → 用户确认继续，见 `_supersededWorkspaces` 的说明），
+             * 上一趟记下的路径在这一趟就是别人的事了 —— 带着它只会让发布侧把
+             * 一份**还好好在盘上**的包当成"我们自己回收过"，从而不再如实点名（假话）。
+             */
+            ReclaimedProcessArtifacts.Clear();
 
             /*
              * 这个字段只表示"这一次运行有没有产生新的、还没回答的询问"。
@@ -767,6 +856,59 @@ namespace ArchiveFixer.Extraction
                     {
                         stopReason = outcome.StopReason;
                         break;
+                    }
+
+                    /*
+                     * ⛔ **先记事实，再动手删任何东西**：发布侧要回答"这一层除了交给下一层的内层包，
+                     * 还有没有别的东西"（判据 <see cref="PackageLayerRules.ProducedOwnContent"/>，
+                     * 决定该不该给它留一个包名目录），而它的过程物在**下面那一支**里就要被删掉了 ——
+                     * 发布时再读盘只会读到空目录（实测：该留的层目录被摊掉，
+                     * 两遍对照的产物路径因此不一致，而这不是"逐层回收"该改变的东西）。
+                     *
+                     * 位置在**停因检查之后、回收之前**，而且对**每一层**都记（第 0 层也要）：
+                     * 记的时机是"这一层刚跑成、它的产物还没被动过"那一刻 —— 与判据原来的读法
+                     * （发布时读一次盘）语义完全相同，只是把那一刻的读数留住了。判据一个字没改。
+                     */
+                    item.Layer.EntryCountBeforeReclaim ??=
+                        PackageLayerRules.CountEntriesOrUnknown(item.Layer.OutputPath);
+
+                    /*
+                     * ===== 递归路「逐层回收」：这一层跑成了，就把**上一层交出来的那个内层包**还回去 =====
+                     *
+                     * 位置是刻意的，四条理由缺一不可（AGENTS.md §11.3 的口径 + 两条红线）：
+                     *
+                     * ① **排在 `ExtractLayerAsync` 之后**：这一刻这一层的输入包才真的用完了。
+                     *    ⚠ 2026-10-05 实测踩过：写到它**之前**时，回调会把 `level2.7z` 删掉，
+                     *    紧接着本层就要解 `level2.7z` ⇒ 引擎报「压缩包文件不存在」、
+                     *    整条链停在"已完成 1 层"（第一次跑 R1 就是这个形状）。
+                     * ② **排在停因检查之后**：本层失败 / 被上限拦下 ⇒ 链就停在这里，后面全不跑 ——
+                     *    那一刻上一层的包**留着**才是对的（红线：失败 / 部分完成 / 取消 ⇒ 一个字节都不动）。
+                     * ③ **排在"上限 / 展开比 / 不变量 11"之后**：那三关任意一关拦下就是"这一层没跑"，
+                     *    同样属于"这一趟没成"，一样不许动字节。
+                     * ④ **第 0 层（用户给的源包）永远没有回收项** —— 它的输入是源包，
+                     *    口径是"最外层源包只留到链尾"，所以入队时压根不会给它建回收项；
+                     *    这里再查一次 `!item.IsRoot` 是兜底：谁哪天把回收项挂到第 0 层上，
+                     *    最坏也只是这一层不回收，绝不会碰到源包。
+                     *
+                     * ⛔ 回调自己不删任何东西（判据与执行体都在协调器那一个出口里）；
+                     * 回调为 null（没接 / 不是「彻底删除」档）= 一次都不调。
+                     */
+                    if (!item.IsRoot && item.Reclaims.Count > 0 && LayerReclaim != null)
+                    {
+                        foreach (RecursiveLayerReclaimRequest reclaimRequest in item.Reclaims)
+                        {
+                            /*
+                             * 先登记、再回调：回调可能把这一份整份删掉，而发布那一步要在
+                             * "它已经不在了"时知道"那是我们自己决定的"（见 ReclaimedProcessArtifacts）。
+                             * ⛔ 登记不是判据 —— 真删没删由发布侧读盘上事实回答。
+                             */
+                            foreach (string groupFile in reclaimRequest.GroupFiles)
+                            {
+                                ReclaimedProcessArtifacts.Add(groupFile);
+                            }
+
+                            LayerReclaim(reclaimRequest);
+                        }
                     }
 
                     RecursionLayerReport report = outcome.Report!;
@@ -2981,7 +3123,15 @@ namespace ArchiveFixer.Extraction
                     Depth = item.Depth + 1,
                     ArchivePath = innerArchivePath,
                     Layer = workspace.CreateNextLayer(innerArchivePath),
-                    IsRoot = false
+                    IsRoot = false,
+
+                    /*
+                     * 递归路逐层回收：这一项开工时该当场还回去的那一份（= 它要解的那个内层包，
+                     * 分卷组则整组）。**只有在真入队的分支上才建项** —— 上面四条提前返回
+                     * （多分支不展开 / 到层数上限 / 超过每层数量上限 / 用户只点名了几个）
+                     * 各自 `return false`，那几种情况下没入队的归档要原样留着当内容物。
+                     */
+                    Reclaims = new[] { BuildLayerReclaim(item, innerArchivePath, workspace, report) }
                 });
             }
 
@@ -2989,7 +3139,78 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 同层除内层归档外，其余文件是不是都是说明类文件（.txt/.nfo/.url/.md/.sfv/.jpg/.png）。
+        /// 给"刚刚入队的那一项"备一份**进场时要还回去的过程物**（递归路逐层回收的候选）。
+        ///
+        /// <para><b>这一层自己能不能被证明完整</b>（L4）：判据与单层路径**同一套**（AGENTS.md §11.6）——
+        /// 拿**这一层的清单**（<see cref="RecursionLayerReport.Manifest"/>，解压前那次列目录的结论）
+        /// 过 <see cref="OutputVerifier.Verify"/>，再过 <c>ResultCompletenessClassifier</c>。
+        /// ⛔ 这里不另写一份"完整不完整"的判据；拿不到清单 / 没能逐条核对 ⇒ 判「判不出」⇒
+        /// 调用方什么都不做（红线：判不出 ⇒ 一个字节都不动）。</para>
+        ///
+        /// <para><b>要还哪几个文件</b>：入队的那一个内层归档 + **同组的其余卷**
+        /// （组员判据转调既有那一把折叠尺 <see cref="IsSameGroupContinuationVolume"/>，
+        /// ⛔ 不在这里另写一套名字规则）。为什么要连整组：只删首卷会留下再也拼不起来的碎片，
+        /// 而它们本来就被同一次解压消费掉了。判不出组员 ⇒ 少删几个（宁可少删，绝不误删）。</para>
+        ///
+        /// <para><b>拿不到层号 / 不是在入队那一刻</b>都不会走到这里：本方法是入队的**从属动作**，
+        /// 读的全是调用方刚拿在手上的事实（<paramref name="layerReport"/> 是这一层的报告、
+        /// <paramref name="workspace"/> 是本次运行的工作区）。</para>
+        /// </summary>
+        private static RecursiveLayerReclaimRequest BuildLayerReclaim(
+            WorkItem item,
+            string innerArchivePath,
+            ExtractionWorkspace workspace,
+            RecursionLayerReport layerReport)
+        {
+            var groupFiles = new List<string> { innerArchivePath };
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { innerArchivePath };
+
+            /*
+             * 同组的其余卷：**只在那一层里认**（引擎找兄弟卷也只看入口文件旁边那一层）。
+             * 读不动 / 一个都认不出 ⇒ 就只还首卷这一份（少删是安全的，误删不是）。
+             */
+            string? directory = Path.GetDirectoryName(innerArchivePath);
+
+            if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+            {
+                string[] siblings;
+
+                try
+                {
+                    siblings = Directory.GetFiles(directory!);
+                }
+                catch
+                {
+                    siblings = Array.Empty<string>();
+                }
+
+                foreach (string sibling in siblings)
+                {
+                    if (seen.Add(sibling) && IsSameGroupContinuationVolume(sibling, innerArchivePath))
+                    {
+                        groupFiles.Add(sibling);
+                    }
+                }
+            }
+
+            /*
+             * 这一层的完整性结论（唯一判据出口与单层路径同一个）：
+             * 有可信清单（`LayerManifest.Available`）才拿它当预期，否则照旧喂"没有清单"那一档
+             * —— `OutputVerifier.Verify` 对 null 与"空清单"的处理就是"只做非空底线校验"，
+             * 而 `ResultCompletenessClassifier` 把那一档判成「判不出」。
+             */
+            OutputVerificationResult verification = OutputVerifier.Verify(
+                item.Layer.OutputPath,
+                layerReport.Manifest.Available ? layerReport.Manifest.ToExpected() : null);
+
+            return new RecursiveLayerReclaimRequest
+            {
+                ChildLayerLabel = DescribeProbeLabel(item),
+                GroupFiles = groupFiles,
+                Verdict = ResultCompletenessClassifier.Classify(verification),
+                WorkspaceTaskDirectory = workspace.TaskDirectory
+            };
+        }
         ///
         /// <para>⚠ <b>2026-10-04 起它不再是"单链判定"</b>（用户当场推翻旧口径：「这是压缩包吗，
         /// 不是那你停什么」）：停 / 不停的判据已经改成**只看这一层里有几个真归档**
@@ -3719,7 +3940,8 @@ namespace ArchiveFixer.Extraction
                 WorkspacePublishResult publishResult = workspace.Publish(
                     finalOutputDirectory,
                     inPlaceInnerPackages: inPlace,
-                    omitMiddlePackageLayers: inPlace && OmitMiddlePackageLayers);
+                    omitMiddlePackageLayers: inPlace && OmitMiddlePackageLayers,
+                    alreadyReclaimedPaths: ReclaimedProcessArtifacts);
 
                 publishMessage = publishResult.Message;
 
@@ -4431,6 +4653,20 @@ namespace ArchiveFixer.Extraction
 
             /// <summary>是否是任务自己的那个包（第 0 层）。</summary>
             public bool IsRoot { get; init; }
+
+            /// <summary>
+            /// **本层开工时该当场回收的过程物**（递归路逐层回收，见 <see cref="LayerReclaim"/>）。
+            ///
+            /// <para>由**父层**入队这一项时一并算好、写死在项上：那些文件全部来自父层的产物目录，
+            /// 而入队那一刻父层已经跑完、盘上事实就在眼前 —— 等到本层开工时再去父层目录里"重新认一遍"
+            /// 只会读到已经被搬走的现状（`CrossLayerVolumeGather` 就可能动过那些片）。
+            /// ⛔ 只在真正入队的那几个归档上建项：没入队的（多分支不展开 / 到层数上限 /
+            /// 超过每层数量上限）一个都不建 —— 它们要原样留在成品目录里当内容物。</para>
+            ///
+            /// <para>第 0 层**永远为空**：它的输入是用户给的源包，口径是"最外层源包只留到链尾"。</para>
+            /// </summary>
+            public IReadOnlyList<RecursiveLayerReclaimRequest> Reclaims { get; init; } =
+                Array.Empty<RecursiveLayerReclaimRequest>();
 
             /// <summary>
             /// 非 null 表示"只处理用户点名的这几个归档"。

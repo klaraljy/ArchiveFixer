@@ -237,23 +237,50 @@ namespace ArchiveFixer.Extraction
         /// <param name="innerArchiveCount">本层认出来、要交给下一层去解的内层包个数。</param>
         public static bool ProducedOwnContent(string? layerOutputDirectory, int innerArchiveCount)
         {
+            /*
+             * ⚠ 路径为空时返回 false —— 与这条判据落地时**逐字相同**（那一条有用例钉着，一个字都不许改）。
+             * 那与本类"读不了目录 ⇒ 按出了内容物处理"并不矛盾：路径为空是**调用方没给**，
+             * 不是"给了但读不动"；后者走 ProducedOwnContentFromEntryCount 的 null 那一档。
+             */
             if (string.IsNullOrWhiteSpace(layerOutputDirectory))
             {
                 return false;
             }
 
-            string[] entries;
+            return ProducedOwnContentFromEntryCount(CountEntriesOrUnknown(layerOutputDirectory), innerArchiveCount);
+        }
+
+        /// <summary>
+        /// 同一个判据的**另一种入口**：条目数由调用方给（<c>null</c> = 数不出来 ⇒ 按"出了内容物"处理）。
+        ///
+        /// <para><b>为什么需要它</b>（2026-10-05，递归路逐层回收）：这个判据问的是"**解完这一层的那一刻**
+        /// 它除了内层包还有没有别的东西"，而那条链的过程物现在会被**当场删掉** —— 等到发布时再去读盘，
+        /// 中间层的目录已经被删空了，<c>entries.Length</c> 变成 0 ⇒ 判成"没出内容物" ⇒
+        /// 该留的层目录被摊掉（实测：两遍对照的产物路径从 <c>…\level2\level3\…</c> 变成 <c>…\level3\…</c>）。
+        /// 所以调用方要在**动手回收之前**把那一刻的条目数记下来，判据本身一个字没改。</para>
+        /// </summary>
+        public static bool ProducedOwnContentFromEntryCount(int? layerEntryCount, int innerArchiveCount)
+        {
+            // 数不出来（目录不在 / 权限）⇒ 保守一侧：宁可多留一层，也不要把用户的东西并进别人的目录里。
+            return layerEntryCount == null || layerEntryCount.Value > innerArchiveCount;
+        }
+
+        /// <summary>这一层产物目录下的条目数；读不了 / 目录不在返回 <c>null</c>（⛔ 不返回 0 —— 0 是"空目录"，两者含义不同）。</summary>
+        internal static int? CountEntriesOrUnknown(string? layerOutputDirectory)
+        {
+            if (string.IsNullOrWhiteSpace(layerOutputDirectory))
+            {
+                return null;
+            }
 
             try
             {
-                entries = System.IO.Directory.GetFileSystemEntries(layerOutputDirectory);
+                return System.IO.Directory.GetFileSystemEntries(layerOutputDirectory).Length;
             }
             catch
             {
-                return true;
+                return null;
             }
-
-            return entries.Length > innerArchiveCount;
         }
     }
 }
