@@ -1771,6 +1771,34 @@ namespace ArchiveFixer.Models
         /// <summary>工具状态那一行的前缀（说明"当前用的是哪一份"）。</summary>
         public const string SettingsRarExePathStatusPrefix = "当前 Rar.exe：";
 
+        // ── 设置界面：「推荐另外装一个 WinRAR（可选）」+ 官方下载页（用户 2026-10-05 拍板） ──
+        //
+        // 起因：真机上一个 WinZip AES 的 ZIP，内置 7-Zip 26.03 对**正确**的密码报「Wrong password」，
+        // 用户自己用 WinRAR 十秒就打开了（现场见 AGENTS.md §11.5 最后一条）。于是程序多了一条
+        // 「候选试完仍失败 ⇒ 换本机装的 WinRAR 再试同一批候选」的兜底 —— 而那一条**得有 WinRAR 才跑得起来**。
+        // 这一格就是把"为什么值得装、程序绝不捆绑、不改他的设置"如实讲清楚的地方。
+
+        /// <summary>那一格的标题（**可选**写在标题里，用户一眼看得懂；⛔ 不许写成"必须安装"）。</summary>
+        public const string SettingsWinRarRecommendLabel = "推荐另外装一个 WinRAR（可选）";
+
+        /// <summary>那一格的说明全文（为什么值得装 + 许可边界 + 不装会怎样）。</summary>
+        public const string SettingsWinRarRecommendHint =
+            "有些加密 ZIP（WinZip AES 那一类）7-Zip 打不开、WinRAR 却能打开：本程序在主引擎把密码候选试完之后，"
+            + "会自动换本机装的 WinRAR 把同一批候选再试一遍 —— 只有装了它，这一档兜底才跑得起来。"
+            + "WinRAR 是共享软件：本程序只检测与调用你自己装的那一份，绝不捆绑、绝不随包分发，"
+            + "也不改你的 WinRAR 设置（调用时按参数走，不受界面里那些选项影响）。不装也能用，只是少这一档兜底。";
+
+        /// <summary>按钮文案：打开发布方官网的下载页（⛔ 只指路，不下载、不代装、不捆绑）。</summary>
+        public const string SettingsWinRarDownloadButtonText = "打开 WinRAR 官方下载页";
+
+        /// <summary>打开成功那一行反馈（下载与安装都由用户自己在浏览器里做，程序不代劳）。</summary>
+        public const string SettingsWinRarDownloadOpenedMessage =
+            "已在浏览器里打开 WinRAR 官方下载页（rarlab.com）。装好之后程序会自动找到它，不需要在这里填路径。";
+
+        /// <summary>打不开浏览器时如实说清（⛔ 不静默失败）。<c>{0}</c> = 失败原因。</summary>
+        public const string SettingsWinRarDownloadFailedFormat =
+            "打不开浏览器（{0}）。请自己访问 WinRAR 官网 rarlab.com 的下载页。";
+
         // ================================================================
         // 「写回密码本…」（密码列表管理窗口）—— 用户 2026-09-24 反馈
         // ================================================================

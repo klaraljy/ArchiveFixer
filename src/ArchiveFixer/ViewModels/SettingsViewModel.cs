@@ -725,6 +725,25 @@ namespace ArchiveFixer.ViewModels
         /// <summary>那一格的完整说明（**许可边界**写在这里；界面提示与校验失败共用同一份措辞）。</summary>
         public string RarExePathHint => StatusText.SettingsRarExePathHint;
 
+        // ── 「推荐另外装一个 WinRAR（可选）」+ 官方下载页（用户 2026-10-05 拍板） ──
+
+        /// <summary>
+        /// 官方下载页地址（**唯一出口**）。
+        ///
+        /// <para>⛔ 只指路：不下载、不代装、不把安装包打进我们自己的 `setup.exe` / `dist` 里
+        /// （RARLAB EULA §3b/§3c 明令禁止 bundling，见 AGENTS.md §5.1.1）。</para>
+        /// </summary>
+        internal const string WinRarDownloadUrl = "https://www.rarlab.com/download.htm";
+
+        /// <summary>那一格的标题（界面上的小标题，走 StatusText 唯一出口）。</summary>
+        public string WinRarRecommendLabel => StatusText.SettingsWinRarRecommendLabel;
+
+        /// <summary>那一格的说明全文（为什么值得装 + 许可边界 + 不装会怎样）。</summary>
+        public string WinRarRecommendHint => StatusText.SettingsWinRarRecommendHint;
+
+        /// <summary>按钮文案。</summary>
+        public string WinRarDownloadButtonText => StatusText.SettingsWinRarDownloadButtonText;
+
         /// <summary>保留受损文件（-kb，默认关）。只影响半成品留不留，绝不影响成败判定。</summary>
         public bool KeepBrokenFiles
         {
@@ -783,6 +802,12 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         public ICommand SelectRarExeCommand { get; }
 
+        /// <summary>
+        /// 打开 WinRAR 官方下载页（用户 2026-10-05：「在设置里面写一个推荐一同安装 WinRAR」）。
+        /// ⛔ 只开浏览器指路 —— 不下载、不静默安装、不捆绑（EULA §3b/§3c）。
+        /// </summary>
+        public ICommand OpenWinRarDownloadPageCommand { get; }
+
         /// <summary>把一本"已记住的密码本"从清单里移除（**只影响自动加载，磁盘上的文件一个字节都不动**）。</summary>
         public ICommand RemoveRememberedBookCommand { get; }
 
@@ -819,6 +844,7 @@ namespace ArchiveFixer.ViewModels
             SelectOutputDirectoryCommand = new RelayCommand(SelectOutputDirectory);
             SelectCollectTargetDirectoryCommand = new RelayCommand(SelectCollectTargetDirectory);
             SelectRarExeCommand = new RelayCommand(SelectRarExe);
+            OpenWinRarDownloadPageCommand = new RelayCommand(OpenWinRarDownloadPage);
             RemoveRememberedBookCommand = new RelayCommand(RemoveRememberedBook);
             AddContentKeepKeywordCommand = new RelayCommand(AddContentKeepKeyword);
             RemoveContentKeepKeywordCommand = new RelayCommand(RemoveContentKeepKeyword);
@@ -1384,6 +1410,37 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 Message = "选择 Rar.exe 失败：" + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// 打开 WinRAR 官方下载页（用户 2026-10-05：「在设置里面写一个推荐一同安装 WinRAR」）。
+        ///
+        /// <para>⛔ 只**指路**：网址走 <see cref="SafePathHelper.OpenExternalLink"/> 的白名单出口
+        /// （不下载、不代装、不把安装包打进我们自己的 setup.exe —— RARLAB EULA §3b/§3c 禁止 bundling）。
+        /// 打不开浏览器 ⇒ 如实说清并给出官网域名，⛔ 不静默失败。</para>
+        /// </summary>
+        private void OpenWinRarDownloadPage()
+        {
+            try
+            {
+                if (SafePathHelper.OpenExternalLink(WinRarDownloadUrl))
+                {
+                    Message = StatusText.SettingsWinRarDownloadOpenedMessage;
+                    return;
+                }
+
+                Message = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.SettingsWinRarDownloadFailedFormat,
+                    "系统里没有可用的浏览器关联");
+            }
+            catch (Exception ex)
+            {
+                Message = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.SettingsWinRarDownloadFailedFormat,
+                    ex.Message);
             }
         }
 

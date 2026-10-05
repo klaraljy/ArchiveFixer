@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace ArchiveFixer.Helpers
@@ -264,6 +265,61 @@ namespace ArchiveFixer.Helpers
                 psi.ArgumentList.Add(filePath);
 
                 Process.Start(psi);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 允许交给默认浏览器打开的**外部网址白名单**（用户 2026-10-05：设置里那句"推荐另外装一个 WinRAR"
+        /// 要能一键打开发布方官网）。
+        ///
+        /// <para><b>为什么必须白名单</b>：<c>UseShellExecute = true</c> 是把字符串直接交给 shell 的出口 ——
+        /// 拿它开任意 URL 等于给程序开一个"什么都能执行"的后门。这里只认 <c>https</c>，且主机名必须**正好是**
+        /// 白名单里的那一个（⛔ 不用 <c>EndsWith</c> 判：`rarlab.com.evil.tld` 会跟着过）。</para>
+        /// </summary>
+        private static readonly string[] AllowedExternalLinkHosts =
+        {
+            "rarlab.com",
+            "www.rarlab.com"
+        };
+
+        /// <summary>这个网址允不允许交给浏览器（纯判据，测试直接喂它，不起进程）。</summary>
+        public static bool IsAllowedExternalLink(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)
+                || !Uri.TryCreate(url, UriKind.Absolute, out Uri? uri)
+                || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return AllowedExternalLinkHosts.Any(
+                host => string.Equals(uri.Host, host, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// 用默认浏览器打开一个**白名单里**的网址；不在白名单 / 起不来 ⇒ 返回 false（⛔ 静默失败由调用方说出来）。
+        /// </summary>
+        public static bool OpenExternalLink(string? url)
+        {
+            try
+            {
+                if (!IsAllowedExternalLink(url))
+                {
+                    return false;
+                }
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                };
+
+                using Process? process = Process.Start(psi);
                 return true;
             }
             catch

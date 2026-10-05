@@ -645,6 +645,23 @@
                                TextWrapping="Wrap"
                                Text="{Binding SettingsEditor.RarToolStatusText}" />
 
+                    <!-- 推荐另外装一个 WinRAR（可选）：只指路，⛔ 不下载、不代装、不捆绑（EULA §3b/§3c） -->
+                    <TextBlock Style="{StaticResource LabelTextStyle}"
+                               Margin="0,4,0,2"
+                               Text="{Binding SettingsEditor.WinRarRecommendLabel}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="150,0,0,4"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.WinRarRecommendHint}" />
+
+                    <Button Content="{Binding SettingsEditor.WinRarDownloadButtonText}"
+                            HorizontalAlignment="Left"
+                            Margin="150,0,0,10"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Command="{Binding SettingsEditor.OpenWinRarDownloadPageCommand}"
+                            ToolTip="{Binding SettingsEditor.WinRarRecommendHint}" />
+
                     <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150" />
