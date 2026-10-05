@@ -395,6 +395,27 @@ namespace ArchiveFixer.Engines
         };
 
         /// <summary>
+        /// 记下"这个归档这一次是**换引擎兜底**（用户自己装的 <c>WinRAR.exe</c>）干的活"（不变量 14）。
+        ///
+        /// <para>与 <see cref="RememberEmbeddedZipDirectRead"/> 同一条理由，但后果更重：兜底那一档
+        /// 恰恰发生在"主引擎（7-Zip / UnRAR）一个候选都打不开"之后 —— 报告里若照旧写 7-Zip，
+        /// 事后追查"这个包当时是怎么解出来的"会得到**完全相反**的答案（用户会以为 7-Zip 能解它，
+        /// 而这正是这次要修的那条假结论）。版本取 <c>WinRAR.exe</c> 文件版本（取不到就是 unknown，不编造）。</para>
+        /// </summary>
+        internal void RememberWinRarFallback(string? archivePath, string? winRarVersion)
+        {
+            RememberUsed(
+                archivePath,
+                new EngineIdentity
+                {
+                    EngineId = EngineIds.WinRarFallback,
+                    DisplayName = "WinRAR 命令行（本机自装，换引擎兜底用）",
+                    Version = string.IsNullOrWhiteSpace(winRarVersion) ? "unknown" : winRarVersion!,
+                    IsAvailable = true
+                });
+        }
+
+        /// <summary>
         /// 记下"这个归档这一次是谁干的"。每次尝试都写，于是：
         /// 成功时留下的是成功那个引擎，全失败时留下的是**最后尝试**的那个 ——
         /// 正是任务上那条错误信息来自的引擎。

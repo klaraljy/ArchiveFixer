@@ -120,6 +120,14 @@ namespace ArchiveFixer.Engines
         {
             EngineIds.SevenZip => "7-Zip 原话",
             EngineIds.WinRar => "UnRAR 原话",
+
+            /*
+             * 换引擎兜底那一档（用户自己装的 WinRAR.exe）。⚠ 实测它**不往 stdout/stderr 写任何东西**
+             * （GUI 版，两个管道全程 0 字节，-ierr 也一样），所以这一行正常情况下不会出现；
+             * 留着它是为了"哪一天它真写了"时日志不说错人（不变量 14）。
+             */
+            EngineIds.WinRarFallback => "WinRAR 原话",
+
             _ => "引擎原话"
         };
 

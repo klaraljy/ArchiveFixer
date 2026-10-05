@@ -672,6 +672,13 @@ namespace ArchiveFixer.Extraction
             ReclaimedProcessArtifacts.Clear();
 
             /*
+             * 换引擎兜底那句结论也**每次运行从零开始**：同一个实例可能被同一个包的续跑复用
+             * （多分支询问 → 用户确认继续），上一趟留下的"已换 WinRAR 再试过一遍"在这一趟
+             * 就是一句不成立的话（这一趟压根没兜底）。
+             */
+            _passwordFallbackNote = string.Empty;
+
+            /*
              * 这个字段只表示"这一次运行有没有产生新的、还没回答的询问"。
              * 刻意不从 previousDecision 起手：传了 previousDecision 就说明用户已经回答过了，
              * 把它原样塞回结果会让调用方以为"还得再问一次"（RecursionResult.Decision 的约定是
@@ -964,7 +971,8 @@ namespace ArchiveFixer.Extraction
                         // "源文件已变化"那句话由调用方给（快照与状态都在协调器那边），原样带进结论。
                         sourceChangedReason,
                         publish,
-                        unexpandedNames),
+                        unexpandedNames,
+                        passwordFallbackNote: _passwordFallbackNote),
                     workspace,
                     task.FileName,
                     cancellationToken);
@@ -1125,6 +1133,26 @@ namespace ArchiveFixer.Extraction
             string? succeededPassword = null;
 
             /*
+             * ===== 换引擎兜底要用的两笔账（用户 2026-10-05 拍板"补"）=====
+             *
+             * · <c>triedCandidates</c> —— 这一层**真正试过**的那几个候选（保序）。
+             *   兜底要把"同一批候选"再试一遍，所以⛔ 不能拿 `candidates`（那张表可能更长：
+             *   含被跳过的空密码、也含被每层上限截掉的尾巴）—— 两处的候选集合必须逐字相同。
+             * · <c>sawEncryptedArchive</c> —— 这一层的归档**确实加密**（判据第三条）。
+             *   只读结构化事实：清单里的加密位 / 引擎报的加密头。⛔ 不比中文、⛔ 不自己猜。
+             */
+            var triedCandidates = new List<string>();
+            bool sawEncryptedArchive = false;
+
+            /*
+             * 候选循环**走到过的最后一个候选**在 <see cref="candidates"/> 里的下标
+             * （-1 = 一个都还没碰）。收尾点名"哪几条没试到"要用它算起点：
+             * 上限卡住时循环是在**还没碰那一条**的时候就 break 的（break 在尝试之前），
+             * 所以起点 = 它 + 1；被跳过的空密码也算"碰过"（它不是"没试到"，是"按规矩跳过"）。
+             */
+            int lastConsumedCandidateIndex = -1;
+
+            /*
              * 两义那一档的"第一次出现"（引擎既说密码不对、又说数据坏了）：
              * 收尾时优先拿它当结论（<see cref="ResolvePasswordStopReason"/>），
              * 于是结论与日志同时保留两种可能，⛔ 不会退化成一句"文件损坏"或"密码错误"。
@@ -1274,6 +1302,9 @@ namespace ArchiveFixer.Extraction
                     break;
                 }
 
+                // 这一条**被循环碰过了**（无论后面是试、还是按规矩跳过）——收尾点名"哪几条没试到"的起点靠它。
+                lastConsumedCandidateIndex++;
+
                 /*
                  * ===== 「停止后续」在候选之间生效（2026-10-05 只读审计）=====
                  *
@@ -1389,6 +1420,12 @@ namespace ArchiveFixer.Extraction
 
                     lastListedEntries = PartialPublishPlanner.ToManifestEntries(listedThisCandidate);
 
+                    // 「这一层的归档是加密的」（换引擎兜底判据的第三条）：只读清单里的结构化加密位。
+                    if (listedThisCandidate.IsEncrypted)
+                    {
+                        sawEncryptedArchive = true;
+                    }
+
                     /*
                      * ===== 可疑条目提示（2026-10-05 只读审计）=====
                      *
@@ -1420,6 +1457,9 @@ namespace ArchiveFixer.Extraction
                 {
                     // 这一次列目录失败是"加密头"：它是「文件名已加密」那一档的证据（见上面的说明）。
                     sawEncryptedHeadersListFailure = true;
+
+                    // 加密头的包当然**是加密的**（换引擎兜底判据的第三条，与上一条同一性质）。
+                    sawEncryptedArchive = true;
                     encryptedHeadersListMessage = listedThisCandidate?.Message ?? string.Empty;
                 }
                 else
@@ -1558,6 +1598,13 @@ namespace ArchiveFixer.Extraction
                         BuildLayerReport(item, lastFailure, succeededPassword: null, unsafeSummary),
                         RecursionStopReason.UnsafeEntry);
                 }
+
+                /*
+                 * 走到这里 = 这个候选**真的会被拿去解**（上面那几档"按规矩跳过"的都没命中）
+                 * ⇒ 记进"这一层真正试过的候选"：换引擎兜底要拿**同一批**再试一遍，
+                 * ⛔ 不能把被跳过的空密码也算进去（加密包拿空密码去问 WinRAR 必然是白跑一次）。
+                 */
+                triedCandidates.Add(candidate);
 
                 /*
                  * ===== 先只解最小的那个条目（探针），再解整包 =====
@@ -1864,6 +1911,171 @@ namespace ArchiveFixer.Extraction
                     attempts,
                     conclusion,
                     triedAny);
+
+                /*
+                 * ===== 换引擎再试一遍（用户 2026-10-05 拍板"补"；唯一实现 PasswordEngineFallback）=====
+                 *
+                 * <para><b>真机现场</b>（AGENTS.md §11.5 最后一条）：同一个包、同一条密码 ——
+                 * WinRAR 6.11 退出码 0、两卷原样解出；内置 7-Zip 26.03 退出码 2、<c>Wrong password</c>、
+                 * 一个字节都没出来。候选循环只用 7-Zip，而 <c>WrongPassword</c> 落在"不换引擎"那一档
+                 * ⇒ 程序把"这个引擎吃不下这个 ZIP"如实报成了「密码错误 / 达到上限」——一条假结论。</para>
+                 *
+                 * <para>⛔ **正常路径一个字不改**：循环**内部**遇到 <c>WrongPassword</c> 照旧换下一个候选、
+                 * 照旧不换引擎（省时间）。而且这一档**只在**"循环跑完 + 失败是密码类 + 归档确实加密 +
+                 * 本机有 WinRAR"四条同时成立时才动，用的还是**同一批候选**（<c>triedCandidates</c>）。</para>
+                 *
+                 * <para>位置：紧跟候选循环之后、结论组装之前。命中 ⇒ 按"这个密码是对的"走
+                 * <see cref="FinishSuccessfulLayerAsync"/>（与循环里成功那一支**同一个出口**）；
+                 * 没命中 ⇒ 落到下面那段**原样的**失败结论（⛔ 一个字都不改，只多一句"已经换引擎试过"）。</para>
+                 */
+                bool passwordClassFailure =
+                    conclusion != null &&
+                    (conclusion.IsWrongPassword || conclusion.IsNeedPassword || conclusion.IsPasswordOrCorrupted) &&
+                    reason is RecursionStopReason.WrongPassword
+                        or RecursionStopReason.PasswordAttemptsExceeded
+                        or RecursionStopReason.PasswordOrCorrupted;
+
+                PasswordFallbackTriggerFacts fallbackFacts = new()
+                {
+                    AlreadySucceeded = false,
+                    PasswordClassFailure = passwordClassFailure,
+                    ArchiveEncrypted = sawEncryptedArchive,
+
+                    /*
+                     * "候选跑完" = 该试的都试了（每层上限内）：试过的个数 ≥ min(候选数 − 被跳过的, 每层上限)。
+                     * ⛔ 一条都没试（没候选 / 上限 0）不算 —— 那时兜底无事可做。
+                     */
+                    CandidatesFinished = triedCandidates.Count > 0
+                        && reason is RecursionStopReason.WrongPassword
+                            or RecursionStopReason.PasswordAttemptsExceeded
+                            or RecursionStopReason.PasswordOrCorrupted,
+
+                    UserAskedToStop = StopRequested?.Invoke() == true,
+                    HasCandidates = triedCandidates.Count > 0,
+                    EngineAvailable = PasswordEngineFallback.IsEngineAvailable,
+
+                    /*
+                     * ===== 主引擎写出过字节 ⇒ 不认 WinRAR 的命中（2026-10-05 实测，见那个属性的说明）=====
+                     *
+                     * `informativeFailure` 就是"某一次候选失败时，这一层的产物目录里已经留下了字节"
+                     * （同一个事实位，见上面 `informativeFailure` 那一段）—— 它非空即"主引擎进得去这一份的
+                     * 数据流"。而 WinRAR 用错密码时也会按原大小把乱码写进同一个目录（名字 / 大小 /
+                     * 时间戳与真产物一样）⇒ 这一档两个引擎给不出可分辨的证据 ⇒ 判不出 ⇒ 不换引擎、结论照旧。
+                     */
+                    MainEngineWroteBytes = informativeFailure != null
+                };
+
+                if (PasswordEngineFallback.ShouldFallBack(fallbackFacts))
+                {
+                    PasswordEngineFallbackOutcome fallback = await PasswordEngineFallback
+                        .TryAsync(new PasswordFallbackRequest
+                        {
+                            ArchivePath = archivePath,
+                            Candidates = triedCandidates,
+                            TargetDirectory = item.Layer.OutputPath,
+                            Label = layerLabel,
+                            FailedEngineName = ResolveFailedEngineName(conclusion),
+                            FailedErrorType = conclusion?.DetectedErrorType,
+
+                            // 与循环里同一个清法（⛔ 不在这里另写一份"怎么清"）。
+                            ResetTarget = _ =>
+                            {
+                                TryResetLayerOutputDirectory(item.Layer.OutputPath);
+                                return Task.CompletedTask;
+                            },
+
+                            DescribeCandidate = DescribeCandidate,
+                            Log = Log,
+                            MainEngine = _engine,
+                            CancellationToken = cancellationToken
+                        })
+                        .ConfigureAwait(false);
+
+                    if (fallback.Succeeded)
+                    {
+                        succeededPassword = fallback.HitPassword;
+
+                        /*
+                         * 这一层**不是主引擎解的** ⇒ 报告里不带主引擎那次的结果（`success: null` 让状态
+                         * 落在既有的「解压成功」上，与直读那条近路同一种做法）。
+                         * 清单照旧取"这一层列过的那一份"：列目录与密码无关，能列出来的包任何候选都列得出来；
+                         * 列不出来的（`-mhe`）本来就是 Unavailable ⇒ 下游落"判不出 ⇒ 什么都不做"。
+                         */
+                        success = null;
+                        layerManifest = listedAnyCandidate && candidateManifest.Available
+                            ? candidateManifest
+                            : LayerManifest.Unavailable("这一层没能列出清单（换引擎兜底解开的，主引擎没列出过）");
+
+                        return await FinishSuccessfulLayerAsync(
+                                item,
+                                success,
+                                layerManifest,
+                                succeededPassword,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    _passwordFallbackNote = fallback.Note;
+                }
+                else if (PasswordEngineFallback.ShouldReportMissingEngine(fallbackFacts))
+                {
+                    /*
+                     * 判据成立、本机没有 WinRAR ⇒ 不跑，**但必须说清**（用户 2026-10-05 口径：
+                     * ⛔ 不许静默跳过、⛔ 不许把没跑过的兜底说成跑过了）。
+                     */
+                    _passwordFallbackNote = PasswordEngineFallback
+                        .ReportMissingEngine(layerLabel, ResolveFailedEngineName(conclusion), Log)
+                        .Note;
+                }
+                else if (PasswordEngineFallback.ShouldReportIndistinguishableEvidence(fallbackFacts))
+                {
+                    /*
+                     * 判据成立、但**主引擎已经写出过字节** ⇒ 不换引擎（证据分辨不出来，
+                     * 见 `PasswordFallbackTriggerFacts.MainEngineWroteBytes`）。
+                     * ⛔ 什么都不做、⛔ 结论一个字都不改，只写一行如实说明（不许静默跳过）。
+                     */
+                    PasswordEngineFallback.ReportIndistinguishableEvidence(
+                        layerLabel,
+                        ResolveFailedEngineName(conclusion),
+                        Log);
+                }
+
+                /*
+                 * ===== 收尾那行要点名"哪几条候选没试到"（用户 2026-10-05 真机第七批，要求 ①）=====
+                 *
+                 * 与单层路**同一个出口**（`PasswordCandidateGap`）：候选共 12 个、每层上限 10 ⇒
+                 * **第 11 条从没被试过**，只写一句「达到密码尝试上限」用户看不出是哪一条。
+                 * ⛔ 只在**真被每层上限截断**时才说（`PasswordAttemptsExceeded`）——
+                 * 用户点了「停止后续」时剩余候选同样没试到，但那是另一回事（循环里已经写过它）。
+                 *
+                 * ⚠ 序号从**循环自己的计数**接着往下数（`triedCandidates.Count + 1`）：
+                 * 被跳过的空密码不占序号（循环里那行"候选 i/N"也是这么数的），
+                 * 拿列表下标当序号会与日志里已经出现过的那几行对不上。
+                 */
+                if (reason == RecursionStopReason.PasswordAttemptsExceeded)
+                {
+                    int firstUntriedIndex = Math.Min(candidates.Count, lastConsumedCandidateIndex + 1);
+
+                    PasswordCandidateGap.Gap? untriedCandidates = PasswordCandidateGap.Describe(
+                        candidates,
+                        firstUntriedIndex,
+                        triedCandidates.Count + 1,
+                        (value, ordinal) => DescribeCandidate?.Invoke(value, ordinal)
+                            ?? $"尝试密码候选第 {ordinal} 项：******");
+
+                    if (untriedCandidates.HasValue)
+                    {
+                        Log(
+                            "WARN",
+                            PasswordCandidateGap.BuildLogLine(
+                                layerLabel,
+                                _limits.MaxPasswordAttemptsPerLayer,
+                                untriedCandidates.Value));
+
+                        _passwordFallbackNote = _passwordFallbackNote
+                            + PasswordCandidateGap.BuildConclusionSuffix(untriedCandidates.Value);
+                    }
+                }
 
                 /*
                  * ===== 「文件名已加密」在递归路也要成立（2026-10-05 用户拍板）=====
@@ -3825,6 +4037,30 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// 结论里点名"是哪个引擎报的密码错"（换引擎兜底那一档要用）。
+        /// 优先取**引擎自己盖的戳**（不变量 14），取不到才退回注入的那个引擎实例的显示名。
+        /// </summary>
+        private string ResolveFailedEngineName(ArchiveOperationResult? result)
+        {
+            if (!string.IsNullOrWhiteSpace(result?.EngineDisplayName))
+            {
+                return result!.EngineDisplayName;
+            }
+
+            return string.IsNullOrWhiteSpace(_engine.DisplayName) ? EngineIds.SevenZip : _engine.DisplayName;
+        }
+
+        /// <summary>
+        /// 上一次运行里"换引擎兜底"留下的那句话（"已换 WinRAR 再试过一遍" / "没找到 WinRAR，所以没换引擎再试"）。
+        ///
+        /// <para>为什么要实例字段：结论（<see cref="RecursionResult.Summary"/>）是在
+        /// <see cref="BuildResult"/> 里拼的，而现场（候选循环那一层）在 <see cref="ExtractLayerAsync"/> 里 ——
+        /// 中间隔着好几层返回值。兜底只可能发生在**整条链停下来的那一层**，所以一个字段就够，
+        /// 每次运行开始时清空（见 <see cref="ExtractAsync"/>）。</para>
+        /// </summary>
+        private string _passwordFallbackNote = string.Empty;
+
+        /// <summary>
         /// 递归工作区的根目录，由调用方在启动时指定（批首 <c>ApplyBatchWorkspaceRoot</c> 会设成
         /// <c>&lt;目标目录&gt;\.ArchiveFixer.work</c>；<c>MainViewModel</c> 构造时设成 <c>PathService.WorkDirectory</c>）。
         /// </summary>
@@ -3908,7 +4144,8 @@ namespace ArchiveFixer.Extraction
             string finalOutputDirectory,
             string extraMessage,
             bool published,
-            IReadOnlyList<string>? unexpandedNames = null)
+            IReadOnlyList<string>? unexpandedNames = null,
+            string passwordFallbackNote = "")
         {
             bool completed = stopReason == RecursionStopReason.Completed;
             bool partiallyCompleted = !completed && layers.Any(layer => layer.Success);
@@ -3996,7 +4233,8 @@ namespace ArchiveFixer.Extraction
                     completed,
                     publishMessage,
                     extraMessage,
-                    unexpandedNames ?? Array.Empty<string>())
+                    unexpandedNames ?? Array.Empty<string>(),
+                    passwordFallbackNote)
             };
         }
 
@@ -4292,7 +4530,8 @@ namespace ArchiveFixer.Extraction
             bool completed,
             string publishMessage,
             string extraMessage,
-            IReadOnlyList<string> unexpandedNames)
+            IReadOnlyList<string> unexpandedNames,
+            string passwordFallbackNote = "")
         {
             int done = layers.Count(layer => layer.Success);
 
@@ -4376,6 +4615,19 @@ namespace ArchiveFixer.Extraction
             if (!string.IsNullOrWhiteSpace(extraMessage))
             {
                 parts.Add(extraMessage);
+            }
+
+            /*
+             * ===== 换引擎兜底那句必须进结论（用户 2026-10-05 口径）=====
+             *
+             * 跑过 ⇒ 写清"是哪个引擎报的密码错、已经换 WinRAR 把同一批候选再试过一遍"；
+             * 没跑成（本机没找到 WinRAR）⇒ 写清"所以没换引擎再试"。
+             * ⛔ 不许静默跳过：不写这一句，用户会以为程序压根没换过引擎（而 7-Zip 那句"密码错"
+             * 会被读成"密码真的不对"）。
+             */
+            if (!string.IsNullOrWhiteSpace(passwordFallbackNote))
+            {
+                parts.Add(passwordFallbackNote);
             }
 
             return string.Join("；", parts);

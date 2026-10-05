@@ -36,6 +36,13 @@ namespace ArchiveFixer.Engines
     /// ⚠ 第 2 档只找 RARLAB 的**免费件** <c>UnRAR.exe</c>（解压引擎）；同一目录里的
     /// <c>Rar.exe</c> / <c>WinRAR.exe</c> 只在**打包**这一条路上被调用（见
     /// docs/引擎与外部工具.md §4）。
+    ///
+    /// <para><b>WinRAR.exe 解析顺序</b>（用户 2026-10-05 拍板的"换引擎再试一遍"那一档；
+    /// ⛔ 不进引擎优先级表、⛔ 平时不参与任何解压）：
+    /// 1. 用户自选路径里**确实叫 WinRAR.exe** 的那一份（见 <see cref="WinRarExePath"/> 的说明）
+    /// 2. 注册表 <c>HKLM\SOFTWARE\WinRAR</c> / <c>WOW6432Node</c> 的 <c>exe64</c> / <c>exe32</c>
+    /// 3. <c>%ProgramFiles%\WinRAR\WinRAR.exe</c>、<c>%ProgramFiles(x86)%\WinRAR\WinRAR.exe</c>
+    /// 4. 都没有 → 返回 <c>null</c>：兜底落在"什么都不做"，并如实报"本机没找到 WinRAR"</para>
     /// </summary>
     public sealed class ToolLocator
     {
@@ -59,6 +66,10 @@ namespace ArchiveFixer.Engines
         private bool _rarResolved;
         private bool _usingCustomRarPath;
         private bool _usingWinRarGuiForRar;
+
+        private string? _resolvedWinRarGuiPath;
+        private bool _winRarGuiResolved;
+        private bool _usingCustomWinRarGuiPath;
 
         /// <summary>
         /// 要不要探测"用户已装的 WinRAR 目录"这一档（默认 true）。
@@ -302,6 +313,8 @@ namespace ArchiveFixer.Engines
             _unRarResolved = false;
             _resolvedRarPath = null;
             _rarResolved = false;
+            _resolvedWinRarGuiPath = null;
+            _winRarGuiResolved = false;
         }
 
         // ================================================================
@@ -540,6 +553,251 @@ namespace ArchiveFixer.Engines
              */
             _resolvedRarPath = null;
             _rarResolved = true;
+        }
+
+        // ================================================================
+        // WinRAR.exe（**只给"换引擎再试一遍"那一档用**）
+        // ================================================================
+        //
+        // ⛔ 它与 Rar.exe 的性质完全一样：共享软件，绝不分发、绝不复制、绝不捆绑
+        //    （AGENTS.md §2 / §3.1，docs/引擎与外部工具.md §4）—— 这里只做"本机装没装、装在哪"的
+        //    只读探测，调用点只有一处（换引擎兜底，见 Extraction/PasswordEngineFallback）。
+        //
+        // ⛔ **不参与引擎优先级**：EngineIds.DefaultPriority 照旧 [winrar, sevenzip]，那底下的
+        //    `winrar` 是 UnRAR.exe（只认 RAR）。这一份是"主引擎吃不下这一包"时的兜底，
+        //    ⛔ 不是"Zip 平时也交给 WinRAR 解"（7-Zip 才有可解析的进度输出）。
+
+        /// <summary>
+        /// 实际可用的 <c>WinRAR.exe</c> 路径；**找不到时返回 <c>null</c>**（兜底那边据此什么都不做）。
+        ///
+        /// <para><b>解析顺序</b>（用户 2026-10-05 拍板的口径）：
+        /// ① 用户自选路径 —— 本程序**没有**"WinRAR.exe 自选"这一格设置项，唯一可能指向它的
+        ///    既有字段是 <see cref="CustomRarExePath"/>（②页「引擎」里那一格，它的解析顺序里本来就
+        ///    会退到 <c>WinRAR.exe</c>）；这里**只认那一位确实叫 WinRAR.exe** 的情形（它指向
+        ///    <c>Rar.exe</c> 时是"打包用的控制台版"，与这条路无关）；
+        /// ② 注册表 <c>HKLM\SOFTWARE\WinRAR</c> 与 <c>HKLM\SOFTWARE\WOW6432Node\WinRAR</c> 的
+        ///    <c>exe64</c> / <c>exe32</c>（安装器写的那两个值；本机实测 exe64 = 完整路径）；
+        /// ③ <c>%ProgramFiles%\WinRAR\WinRAR.exe</c>、<c>%ProgramFiles(x86)%\WinRAR\WinRAR.exe</c>。</para>
+        ///
+        /// <para>每一档都要求文件**真的存在**（注册表里留着卸载后的旧路径时继续往下找）——
+        /// 全都没命中就是 <c>null</c>：兜底落在"什么都不做"那一档，并如实说清"没找到 WinRAR"。</para>
+        /// </summary>
+        public string? WinRarExePath
+        {
+            get
+            {
+                EnsureWinRarGuiResolved();
+                return _resolvedWinRarGuiPath;
+            }
+        }
+
+        /// <summary>
+        /// 这台机器上有没有可用的 <c>WinRAR.exe</c>。
+        ///
+        /// ⚠ 与 <see cref="UnRarExists"/> 同一个写法：判据是"解析结果非空且文件真的在"，
+        /// ⛔ 不拿 <c>File.Exists(WinRarExePath)</c> 代替（<see cref="UseWinRarInstallation"/> 关掉时
+        /// 解析结果就该是"没找到"，哪怕那个路径上恰好有个文件）。
+        /// </summary>
+        public bool WinRarExeExists
+        {
+            get
+            {
+                EnsureWinRarGuiResolved();
+                return _resolvedWinRarGuiPath != null && File.Exists(_resolvedWinRarGuiPath);
+            }
+        }
+
+        /// <summary>用的是用户自选路径（<see cref="CustomRarExePath"/> 指向的就是 WinRAR.exe）。</summary>
+        public bool IsUsingCustomWinRarGuiPath
+        {
+            get
+            {
+                EnsureWinRarGuiResolved();
+                return _usingCustomWinRarGuiPath;
+            }
+        }
+
+        /// <summary>WinRAR.exe 的文件版本（取不到返回 "unknown"，⛔ 不编造）。</summary>
+        public string WinRarVersion
+        {
+            get
+            {
+                try
+                {
+                    string? path = WinRarExePath;
+
+                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    {
+                        return "unknown";
+                    }
+
+                    string? version = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileVersion;
+
+                    return string.IsNullOrWhiteSpace(version) ? "unknown" : version;
+                }
+                catch
+                {
+                    return "unknown";
+                }
+            }
+        }
+
+        /// <summary>
+        /// 兜底那边写日志用的一句话（"用的是哪一个、从哪来的"）。
+        /// 没找到时写清"期望位置"（用户要知道该往哪儿装）。
+        /// </summary>
+        public string DescribeWinRarResolution()
+        {
+            if (!WinRarExeExists)
+            {
+                return "未找到 WinRAR（本机没装 / 没在预期位置）：期望位置 "
+                     + $"{Path.Combine(ExpectedProgramFilesRoot(), "WinRAR", "WinRAR.exe")}";
+            }
+
+            string source = IsUsingCustomWinRarGuiPath
+                ? "使用自选的 WinRAR.exe（设置里那一格指向的就是它）"
+                : "使用本机已装 WinRAR 目录中的 WinRAR.exe";
+
+            return $"{source}：{WinRarExePath}（版本 {WinRarVersion}）";
+        }
+
+        /// <summary>
+        /// WinRAR.exe 的三档解析（自选 → 注册表 → ProgramFiles）。
+        ///
+        /// 与 UnRAR / Rar 那两段同一口径：**找不到就显式"没找到"**（<c>_resolvedWinRarGuiPath = null</c>），
+        /// ⛔ 绝不悄悄回落到一个存在的路径上 —— 兜底会以为换得动引擎，然后在真正开跑时才炸。
+        /// </summary>
+        private void EnsureWinRarGuiResolved()
+        {
+            if (_winRarGuiResolved)
+            {
+                return;
+            }
+
+            _usingCustomWinRarGuiPath = false;
+
+            /*
+             * ① 用户自选：只认 CustomRarExePath 指向的确实是 WinRAR.exe 的那一种。
+             *    为什么不一并接受 Rar.exe：它的语义是"打包用的命令行版"，而这条路要的是
+             *    GUI 版才有的 -ibck 后台模式（实测 Rar.exe 见到 -ibck 直接报命令行错误、退出码 7）。
+             */
+            if (!string.IsNullOrWhiteSpace(_customRarExePath)
+                && IsWinRarGuiExecutable(_customRarExePath))
+            {
+                _resolvedWinRarGuiPath = _customRarExePath;
+                _usingCustomWinRarGuiPath = true;
+                _winRarGuiResolved = true;
+                return;
+            }
+
+            if (UseWinRarInstallation)
+            {
+                foreach (string candidate in WinRarGuiInstallationCandidates())
+                {
+                    if (File.Exists(candidate))
+                    {
+                        _resolvedWinRarGuiPath = candidate;
+                        _winRarGuiResolved = true;
+                        return;
+                    }
+                }
+            }
+
+            _resolvedWinRarGuiPath = null;
+            _winRarGuiResolved = true;
+        }
+
+        /// <summary>这个名字确实是 GUI 版（<c>WinRAR.exe</c>）—— 只有它支持 <c>-ibck</c> 后台模式。</summary>
+        private static bool IsWinRarGuiExecutable(string path)
+        {
+            try
+            {
+                return File.Exists(path)
+                    && string.Equals(Path.GetFileName(path), "WinRAR.exe", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// WinRAR.exe 的候选（只读探测，按优先级排好）：
+        /// 注册表 <c>HKLM\SOFTWARE\WinRAR</c> → <c>HKLM\SOFTWARE\WOW6432Node\WinRAR</c>（各取
+        /// <c>exe64</c> / <c>exe32</c>）→ <c>%ProgramFiles%\WinRAR\WinRAR.exe</c> →
+        /// <c>%ProgramFiles(x86)%\WinRAR\WinRAR.exe</c>。
+        ///
+        /// <para>注册表整段都在 try 里：读注册表可能因策略 / 权限抛异常，而那**不是**"这个包解不开"
+        /// 的理由 —— 抛了就跳过这一档，继续按 ProgramFiles 找（大不了返回"没找到"，兜底什么都不做）。</para>
+        /// </summary>
+        public IReadOnlyList<string> WinRarGuiInstallationCandidates()
+        {
+            var candidates = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void Add(string? path)
+            {
+                if (!string.IsNullOrWhiteSpace(path) && seen.Add(path!))
+                {
+                    candidates.Add(path!);
+                }
+            }
+
+            Add(ReadWinRarRegistryValue(@"SOFTWARE\WinRAR", "exe64"));
+            Add(ReadWinRarRegistryValue(@"SOFTWARE\WinRAR", "exe32"));
+            Add(ReadWinRarRegistryValue(@"SOFTWARE\WOW6432Node\WinRAR", "exe64"));
+            Add(ReadWinRarRegistryValue(@"SOFTWARE\WOW6432Node\WinRAR", "exe32"));
+
+            foreach (string? programFiles in ProgramFilesRoots())
+            {
+                try
+                {
+                    Add(Path.Combine(programFiles!, "WinRAR", "WinRAR.exe"));
+                }
+                catch
+                {
+                    // 路径拼不出来（畸形环境变量）就跳过这一档。
+                }
+            }
+
+            return candidates;
+        }
+
+        private static string? ReadWinRarRegistryValue(string subKey, string valueName)
+        {
+            try
+            {
+                using Microsoft.Win32.RegistryKey? key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(subKey);
+
+                return key?.GetValue(valueName) as string;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>ProgramFiles 的两个来源（64 位优先；取不到的跳过）。</summary>
+        private static IEnumerable<string?> ProgramFilesRoots()
+        {
+            yield return Environment.GetEnvironmentVariable("ProgramW6432");
+            yield return Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            yield return Environment.GetEnvironmentVariable("ProgramFiles");
+            yield return Environment.GetEnvironmentVariable("ProgramFiles(x86)");
+        }
+
+        /// <summary>"本来应该在的位置"（只用于"未找到"的提示，不参与可用性判定）。</summary>
+        private static string ExpectedProgramFilesRoot()
+        {
+            foreach (string? root in ProgramFilesRoots())
+            {
+                if (!string.IsNullOrWhiteSpace(root))
+                {
+                    return root!;
+                }
+            }
+
+            return string.Empty;
         }
 
         /// <summary>

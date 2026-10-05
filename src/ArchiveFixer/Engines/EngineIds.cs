@@ -23,6 +23,18 @@ namespace ArchiveFixer.Engines
         public const string SevenZip = "sevenzip";
 
         /// <summary>
+        /// **换引擎兜底**那一档用的机器标识（<c>Engines/WinRar/WinRarProcessRunner</c>）：
+        /// 主引擎把这一包的所有密码候选都试完仍失败、而失败是密码类时，用**用户自己装的**
+        /// <c>WinRAR.exe</c> 把同一批候选再试一遍（用户 2026-10-05 拍板"补"）。
+        ///
+        /// <para>⛔ 它**不在** <see cref="DefaultPriority"/> 里、也不进任何引擎优先级表：
+        /// 平时 Zip / 7z 照旧由 7-Zip 解（它才有可解析的进度输出），这一份只在兜底那一档上场。
+        /// 它存在的唯一理由是**溯源**（不变量 14）：报告里那一行"引擎：…"必须写清
+        /// "这个包到底是谁解开的"，⛔ 不能把 WinRAR 干的活记在 7-Zip 头上。</para>
+        /// </summary>
+        public const string WinRarFallback = "winrar-fallback";
+
+        /// <summary>
         /// 默认优先级（用户 2026-09-22 指示："先是 winrar、7z、然后就是后面的引擎"）。
         ///
         /// ⚠ 它只是**顺序**，不是"只能用第一个"：选择规则是"先按能力筛，再用优先级做 tiebreaker"，
