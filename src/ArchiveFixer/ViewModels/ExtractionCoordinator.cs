@@ -8145,7 +8145,15 @@ namespace ArchiveFixer.ViewModels
                     /*
                      * 跟班卷 = **不算没做成**（唯一事实位 `IsVolumeGroupFollower` ⇒ `CountsTowardBatchOutcome`）：
                      * 四处消费点（色带 / 批末诊断 / 一键汇总行 / 本批汇总）读的都是它。
+                     *
+                     * ⚠ **机器终态必须显式落 `Skipped`**（2026-10-05 真机复跑当场逮到）：`MarkSkipped` 只写
+                     * `Status`，不写 `Outcome` ⇒ 汇总照旧把它们算成「未处理 3」。这里与既有那条跳过路
+                     * （`SkipWhenAnotherTaskOwnsThisVolumeGroup`）**逐行同一套**：清校验 / 清落点 + 落终态 + 标跟班。
                      */
+                    task.IsOutputVerified = false;
+                    task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                    task.OutputPath = string.Empty;
+                    task.Outcome = TaskOutcome.Skipped;
                     task.IsVolumeGroupFollower = true;
                     task.MarkSkipped(consumedNote);
 
