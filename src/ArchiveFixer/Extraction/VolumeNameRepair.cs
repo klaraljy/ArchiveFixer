@@ -212,8 +212,17 @@ namespace ArchiveFixer.Extraction
             Detection.VolumeContentInference.EnumerateCandidatesIn(Path.GetDirectoryName(filePath ?? string.Empty));
 
         /// <summary>
-        /// **候选池（含邻近目录）**：归档自己所在的那一层 + **它自己的直接子目录** + **"父目录这一家"**
-        /// （父目录本身 + 父目录的各直接子目录 = 自己的兄弟目录）。
+        /// **候选池（含邻近目录）**：找卷的**基准**是**手上最浅的那一卷**（用户导入进来的那个位置），
+        /// 窗口 = **它的第一层父文件夹这一家**（父目录本身 + 父目录的各直接子目录 = 兄弟目录）
+        /// + **它自己那一层** + **它的子目录（递归，到 <see cref="NearbyMaxSubdirectoryLevels"/> 为止）**。
+        ///
+        /// <para><b>为什么基准必须是"最浅的那一卷"、⛔ 绝不是 001</b>（用户 2026-10-05 原话：
+        /// 「你要以一开始的分卷文件为准，不要以 001 为准，否则这时的第一层父文件夹就探测不到了」）：
+        /// 真正要看的父文件夹是**最外层那个分卷**的父文件夹。若拿一个**解出来的** <c>001</c>
+        /// 当基准（它躺在产物树深处），窗口的"第一层父文件夹"就成了那个深层目录，
+        /// 而散在旁边的 <c>.002</c> / <c>.003</c> 一个都探测不到 —— 他给的恶心形状是
+        /// <c>111\1111.7z.002删除</c> + <c>111\1111.7z.003删除</c> + <c>111\222.zip</c>，
+        /// 而真正的 <c>001</c> 压在 <c>222.zip</c> 里面（解开后是 <c>111\222\333\1111.7z.001删除</c>）。</para>
         ///
         /// <para>为什么要有它（用户 2026-10-01 点名两次）：「跨目录找同组的卷」；他明确了两条口径 ——
         /// ① 「**归档自己所在目录的子目录**，这个也不能少」；② 「绝大多数只会在一个**父文件夹和父文件夹的
@@ -222,10 +231,12 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para><b>边界是刻意划的</b>（§8 隐私红线：不替用户在他盘上到处找文件）：</para>
         /// <list type="number">
-        /// <item><description><b>看</b>：自己这一层 + 自己的直接子目录（这两块**不做尺寸粗筛**，
-        /// 与以前"同目录"的行为逐字一致）；再加父目录这一家（这一块过一次 ≥ 16 KiB 的粗筛 + 硬上限）。</description></item>
-        /// <item><description><b>不看</b>：祖父及以上、孙目录（自己子目录的子目录）、以及"父目录这一家"之外的目录。
-        /// 归档目录**本身就是卷根**（例如就放在 <c>H:\</c> 下）时没有父目录这一家，退化成"自己这一层 + 自己的子目录"。</description></item>
+        /// <item><description><b>看</b>：自己这一层（不做尺寸粗筛，与以前"同目录"的行为逐字一致）
+        /// + 自己的子目录（**递归**到 <see cref="NearbyMaxSubdirectoryLevels"/> 层，自己这一层算第 1 层）
+        /// + 父目录这一家（这一块过一次 ≥ 16 KiB 的粗筛 + 硬上限）。</description></item>
+        /// <item><description><b>不看</b>：祖父及以上、比 <see cref="NearbyMaxSubdirectoryLevels"/> 更深的子目录、
+        /// 以及"父目录这一家"之外的目录。归档目录**本身就是卷根**（例如就放在 <c>H:\</c> 下）时
+        /// 没有父目录这一家，退化成"自己这一层 + 自己的子目录"。</description></item>
         /// <item><description><b>候选只是候选</b>：跨目录来的文件同样要过"内容 / 尺寸 / 试开"那几道判据，
         /// ⛔ 不会因为"它躺在附近"就被认成这一组的一员。</description></item>
         /// </list>
@@ -242,12 +253,54 @@ namespace ArchiveFixer.Extraction
                 return candidates;
             }
 
-            // ① 自己的直接子目录（用户点名不能少）：与"自己这一层"同一待遇，不做尺寸粗筛。
+            /*
+             * ① 自己的子目录**递归**（2026-10-05 从"只看直接子目录"放宽到"看到第 3 层"）。
+             *
+             * 用户点名的那条理由：真正的第 1 卷常常压在**里面那个包**里，解开之后落在
+             * `111\222\333\` 这种**子目录的子目录**里 —— 只看直接子目录就永远看不见它。
+             * 深度常量见 NearbyMaxSubdirectoryLevels（到顶就是"判不出 ⇒ 什么都不做"）。
+             */
             try
             {
-                foreach (string sub in Directory.GetDirectories(directory))
+                var scanned = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { directory };
+                var frontier = new List<string> { directory };
+                int directoriesSeen = 0;
+
+                for (int level = 1; level < NearbyMaxSubdirectoryLevels && frontier.Count > 0; level++)
                 {
-                    candidates.AddRange(Detection.VolumeContentInference.EnumerateCandidatesIn(sub));
+                    var next = new List<string>();
+
+                    foreach (string current in frontier)
+                    {
+                        foreach (string sub in Directory.GetDirectories(current))
+                        {
+                            if (++directoriesSeen > MaxNearbyDirectories)
+                            {
+                                break;
+                            }
+
+                            if (scanned.Add(sub))
+                            {
+                                next.Add(sub);
+                            }
+                        }
+                    }
+
+                    foreach (string sub in next)
+                    {
+                        foreach (VolumeCandidate candidate in Detection.VolumeContentInference.EnumerateCandidatesIn(sub))
+                        {
+                            // 与"父目录这一家"同一道上限（沿用既有 500 份，⛔ 不新造第二套）。
+                            if (candidates.Count >= MaxNearbyCandidates)
+                            {
+                                return candidates;
+                            }
+
+                            candidates.Add(candidate);
+                        }
+                    }
+
+                    frontier = next;
                 }
             }
             catch
@@ -255,7 +308,7 @@ namespace ArchiveFixer.Extraction
                 // 某个子目录读不动（权限 / 半路被删）不影响已经收到的那几份候选。
             }
 
-            // ② 父目录这一家（父目录 + 它的各直接子目录）。
+            // ② 父目录这一家（父目录 + 它的各直接子目录 = 兄弟目录）。
             try
             {
                 string full = Path.GetFullPath(directory);
@@ -337,6 +390,19 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>父目录这一家里的粗筛下限：小于它的文件不可能是分卷片（几 KB 的说明文件 / 图片）。</summary>
         private const long NearbyMinimumBytes = 16 * 1024;
+
+        /// <summary>
+        /// 找卷窗口里**往下递归的层数**：自己这一层算**第 1 层**，所以这个值 = 能看到"子目录的子目录"
+        /// （第 2、3 层）。
+        ///
+        /// <para><b>为什么定 3</b>（用户 2026-10-05 口径：「它的子文件夹（递归，⛔ 不是只看直接子目录）」）：
+        /// 他给的那个形状里，<c>111\222.zip</c> 解开之后第 1 卷落在 <c>111\222\333\</c> ——
+        /// 那正是"自己这一层（<c>111</c>）往下第 3 层"，只看直接子目录（旧行为）永远够不着。
+        /// 再深就当**判不出**（⛔ 什么都不做）：越往下越接近"替用户满盘找文件"（§8），
+        /// 而且每多一层，邻近目录里**别的包**的卷被拖进候选池的概率就高一截
+        /// （7z 那条路"尺寸排序 + 试开"的排列数会跟着涨）。</para>
+        /// </summary>
+        private const int NearbyMaxSubdirectoryLevels = 3;
 
         /// <summary>
         /// 这一卷的名字里，**卷标记段或归档后缀段**是不是"要**重建**才读得出来"的
@@ -2663,6 +2729,12 @@ namespace ArchiveFixer.Extraction
             /// <summary>能点名的缺卷（规范卷名；空 = "缺的是末卷之后的卷"，名字里看不出来）。</summary>
             public IReadOnlyList<string> MissingNames { get; init; } = Array.Empty<string>();
 
+            /// <summary>
+            /// 这一趟**找卷用的基准**（用户 2026-10-05 口径：手上最浅的那一卷，⛔ 绝不是 001）。
+            /// 空 = 这一档没跑到判基准那一步（不适用 / 判不出）。
+            /// </summary>
+            public string? AnchorPath { get; init; }
+
             /// <summary>给人看的一句话（收了哪几卷 / 为什么没收 / 缺哪几片）。</summary>
             public string Detail { get; init; } = string.Empty;
         }
@@ -2682,15 +2754,24 @@ namespace ArchiveFixer.Extraction
         /// <para><b>三条边界</b>（不可逆动作，兜底一律落"什么都不做"）：</para>
         /// <list type="number">
         /// <item><description>候选池 = **入口自己那一层**（只读，引擎唯一会去找兄弟卷的地方）
-        /// + 调用方给的**这条链的各层产物目录**（只读枚举，搬的来源）；
-        /// ⛔ 不递归、⛔ 不含 <c>carved</c> 这种我们自造的兄弟目录、⛔ 绝不碰用户源目录、⛔ 不跨盘。</description></item>
+        /// + 调用方给的**这条链的各层产物目录**（只读枚举，搬的来源）
+        /// + 调用方给的**找卷窗口**（<paramref name="nearbyCandidates"/>；批首那条链给的是
+        /// <see cref="EnumerateVolumeCandidatesNearby"/> 收的池，于是"两半分在两个兄弟文件夹里"
+        /// 这种真机形状也能收）；
+        /// ⛔ 不递归着往下满盘找、⛔ 不含 <c>carved</c> 这种我们自造的兄弟目录、⛔ 不跨盘。</description></item>
         /// <item><description>闸门（全过才动）：**整组自洽**（把"移动之后的样子"虚拟出来交给既有出口
         /// <see cref="VolumeGroupDetector.Group"/>：基名逐字相同 + 卷标记连续 + 完整且含自己）
         /// **并且**（7z）起始头自述的整包字节数 **==** 这几片字节数之和；目标名被占 / 入口自己的名字不标准
         /// / 不同盘 ⇒ **整组不动**。</description></item>
-        /// <item><description>只移动**我们自己解出来的中间产物**：入口那一卷所在的层产物目录里的文件。
-        /// ⛔ 绝不覆盖任何已存在的文件（<see cref="TryApply"/> 全成或全不成）。</description></item>
+        /// <item><description>只移动**已经判定成这一组成员的那几片**（入口那一卷所在的目录里的文件，
+        /// 以及收进来的那几片）。⛔ 绝不覆盖任何已存在的文件（<see cref="TryApply"/> 全成或全不成）。</description></item>
         /// </list>
+        ///
+        /// <para><b>找卷的基准</b>（用户 2026-10-05 口径：「你要以一开始的分卷文件为准，不要以 001 为准，
+        /// 否则这时的第一层父文件夹就探测不到」）：先把手上这几份过一遍，取**最浅的那一卷**当基准
+        /// （<see cref="ResolveShallowestAnchor"/>）；基准与入口不在同一层时，**再按基准收一次窗口**
+        /// （<see cref="EnumerateVolumeCandidatesNearby"/>）—— 那是"最外层那个分卷的第一层父文件夹"
+        /// 唯一能被带出来的地方。⚠ 「修复后缀之后」也不许改用 001 当基准：基准只由**手上这几卷的路径**回答。</para>
         ///
         /// <para><b>免试</b>（同一批用户口径：「要不然你在分开了你还会继续解压单独的001」）：
         /// 入口这一层配不出完整一组、又收不到一起时，**一次引擎调用都不做**，按不变量 7 如实报"缺哪几片"。
@@ -2705,9 +2786,14 @@ namespace ArchiveFixer.Extraction
         /// 这条递归链**各层产物目录**里的直接子文件（调用方枚举，通常带真实尺寸）。
         /// 传 null / 空 ⇒ 只看入口自己那一层（不会搬任何东西）。
         /// </param>
+        /// <param name="nearbyCandidates">
+        /// **找卷窗口**里那一批候选（调用方用 <see cref="EnumerateVolumeCandidatesNearby"/> 收的池，
+        /// 基准 = 手上最浅的那一卷）。传 null / 空 ⇒ 与以前逐字一致（只看入口自己那一层 + 链池）。
+        /// </param>
         internal static CrossLayerVolumeGather ResolveCrossLayerVolumeGather(
             string? entryVolumePath,
-            IEnumerable<VolumeCandidate>? chainPoolCandidates)
+            IEnumerable<VolumeCandidate>? chainPoolCandidates,
+            IEnumerable<VolumeCandidate>? nearbyCandidates = null)
         {
             var notApplicable = new CrossLayerVolumeGather { Applicable = false };
 
@@ -2774,6 +2860,29 @@ namespace ArchiveFixer.Extraction
 
             Collect(EnumerateVolumeCandidatesInDirectory(entryPath), applySizeFilter: false);
             Collect(chainPoolCandidates, applySizeFilter: true);
+            Collect(nearbyCandidates, applySizeFilter: true);
+
+            /*
+             * ===== 找卷的基准 = 手上**最浅的那一卷**（用户 2026-10-05 口径）=====
+             *
+             * ⛔ 绝不是 001：真机上真正该被看见的父文件夹是**最外层那个分卷**的父文件夹。拿一个解出来的
+             * `001`（它躺在产物树深处）当基准时，窗口的"第一层父文件夹"成了那个深层目录 ⇒
+             * `111\1111.7z.002删除` / `.003删除` 一个都探测不到。
+             *
+             * 做法：从**手上这几份**（入口 + 链池 + 窗口池）里挑路径最浅的那一卷当基准；
+             * 它与入口不在同一层时，**再按基准收一次窗口**（`EnumerateVolumeCandidatesNearby`）——
+             * "最外层那个分卷的第一层父文件夹"只有这一条路能带出来。
+             *
+             * ⚠ **只补一轮**（不迭代）：这一档是加法，多收一轮窗口的代价是目录枚举；
+             * 收进来的每一份仍然要过下面那三道闸门（同组 / 卷号一份对一份 / 整组自洽 + 字节数），
+             * 判不出就整档不做 —— 兜底永远落在"什么都不做"。
+             */
+            string anchorPath = ResolveShallowestAnchor(entryPath, pool);
+
+            if (!SameDirectory(anchorPath, entryPath))
+            {
+                Collect(EnumerateVolumeCandidatesNearby(anchorPath), applySizeFilter: true);
+            }
 
             bool hasEntry = pool.Any(piece => SamePath(piece.Path, entryPath));
 
@@ -2848,6 +2957,7 @@ namespace ArchiveFixer.Extraction
                 return new CrossLayerVolumeGather
                 {
                     Applicable = true,
+                    AnchorPath = anchorPath,
                     Detail = string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.CrossLayerGatherEntryNameNotCanonicalFormat,
@@ -2868,6 +2978,7 @@ namespace ArchiveFixer.Extraction
                 return new CrossLayerVolumeGather
                 {
                     Applicable = true,
+                    AnchorPath = anchorPath,
                     CompleteBesideEntry = true,
                     Detail = besideEvidence.Describe()
                 };
@@ -2894,6 +3005,7 @@ namespace ArchiveFixer.Extraction
                 return new CrossLayerVolumeGather
                 {
                     Applicable = true,
+                    AnchorPath = anchorPath,
                     Plan = plan,
                     MovedCount = plan.Items.Count(item => !string.Equals(
                         item.CurrentPath,
@@ -2915,10 +3027,54 @@ namespace ArchiveFixer.Extraction
             return new CrossLayerVolumeGather
             {
                 Applicable = true,
+                AnchorPath = anchorPath,
                 ShouldSkipTrial = hardEvidence,
                 MissingNames = allEvidence.MissingNames,
                 Detail = gatherBlocker
             };
+        }
+
+        /// <summary>
+        /// 找卷的**基准** = 手上**最浅的那一卷**（用户 2026-10-05 口径：「你要以一开始的分卷文件为准，
+        /// 不要以 001 为准，否则这时的第一层父文件夹就探测不到」）。
+        ///
+        /// <para>判据只读**路径事实**：目录层数最少的那一份；层数相同优先取**入口自己**
+        /// （入口是调用方手上那一份，语义最稳），再按卷号、名字定序 —— 于是同一批候选每次得到**同一个**基准
+        /// （⛔ 不随机、⛔ 不依赖枚举顺序）。判不出（池子空）⇒ 退回入口。</para>
+        /// </summary>
+        private static string ResolveShallowestAnchor(string entryPath, IReadOnlyList<GatherPiece> pool)
+        {
+            GatherPiece? shallowest = pool
+                .OrderBy(p => Depth(p.Path))
+                .ThenBy(p => SamePath(p.Path, entryPath) ? 0 : 1)
+                .ThenBy(p => p.Index)
+                .ThenBy(p => SafeFileName(p.Path), StringComparer.OrdinalIgnoreCase)
+                .Cast<GatherPiece?>()
+                .FirstOrDefault();
+
+            return shallowest?.Path ?? entryPath;
+
+            static int Depth(string path)
+            {
+                int count = 0;
+                string current = SafePathHelper.GetFullPathSafe(path);
+
+                while (!string.IsNullOrEmpty(current))
+                {
+                    count++;
+
+                    string? parent = Path.GetDirectoryName(current);
+
+                    if (string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+
+                    current = parent;
+                }
+
+                return count;
+            }
         }
 
         /// <summary>一次"这一组齐不齐"的读数（纯事实）。</summary>

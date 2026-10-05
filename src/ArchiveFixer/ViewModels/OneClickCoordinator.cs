@@ -1051,7 +1051,13 @@ namespace ArchiveFixer.ViewModels
                     // （默认移入其余物，决策 D-9/D-11/D-12）。手动「只解压」按钮走的
                     // StartExtractAsync 是地基路径，永远不动源包 —— 两者只在这一件事上不同。
                     AppendLog("INFO", round == 1 ? "一键处理：开始解压。" : $"一键处理：第 {round} 层开始解压。");
-                    await _extractionCoordinator.StartExtractForOneClickAsync(runOptions);
+
+                    /*
+                     * ⚠ `continuationRound`（2026-10-05 口径 2）：第 2 轮起**不清**"缺卷留到最后再判"
+                     * 的那份名单（第 1 轮没解出来的第 1 卷很可能这一轮才出现）。
+                     * ⛔ 它不改任何解压行为、更不是第二套轮数 —— 轮数仍然只有 `RoundLimit` 一个出口。
+                     */
+                    await _extractionCoordinator.StartExtractForOneClickAsync(runOptions, continuationRound: round > 1);
 
                     UpdateSummary();
 

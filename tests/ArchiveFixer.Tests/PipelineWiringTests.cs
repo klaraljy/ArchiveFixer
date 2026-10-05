@@ -716,15 +716,31 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **解前预检要说得对**（用户 2026-09-30 分卷组装算法）：真案 ① 的现场 ——
+        /// **缺卷要说得对**（用户 2026-09-30 分卷组装算法）：真案 ① 的现场 ——
         /// <c>111.7z.001</c> + 没有后缀的 <c>111</c> + <c>111.7z.003</c>。
         ///
-        /// <para>报出来的必须是**缺哪一卷**（<c>111.7z.002</c>）+ 为什么这样判（卷号上有洞，
-        /// 而那个没有卷号的 <c>111</c> 只能算"按体积 + 位置推定"，采信它就得先改用户的名字 ——
-        /// 程序永远不改用户文件名）。而且**一次引擎调用都不许发生**：缺卷不开解（不变量 7）。</para>
+        /// <para>报出来的必须是**缺哪一卷**（<c>111.7z.002</c>），而且**一次引擎调用都不许发生**：
+        /// 缺卷不开解（不变量 7）。</para>
+        ///
+        /// <para><b>⚠ 旧断言里"解前拦下"那半条为什么改成"批末补判才拦下"</b>
+        /// （用户 2026-10-05 口径 2，见 AGENTS.md §11.4）：他原话是
+        /// 「<b>所以你开始就得突破所有的伪装和压缩，这种分卷找不到的情况可以留在最后做</b>」——
+        /// 批首那一刻的"缺"只是**当时的读数**，同一批里另一个包解出来的第 1 卷可能正好补上它
+        /// （真机 <c>B250135.7z.002</c> 16:29:33 就被判「分卷不完整……本次不开始」，
+        /// 而它的 <c>.001</c> 正躺在同一棵树里、由同批另一个包解出来）。所以现在批首**只记缺口**、
+        /// ⛔ 不落 Failed、⛔ 不写"本次不开始"、⛔ 不跳过；**等这一批的解压都跑完再补判一次**，
+        /// 到那时仍然凑不齐才如实报缺卷。⇒ 断言从"解前就落结论"改成"这一组**最终没有开解**、
+        /// 结论在批末才落"。</para>
+        ///
+        /// <para>⛔ 不变量 7 **一条都没少**（下面逐条钉住）：① 这一组**最终没有开解** ——
+        /// "不提前把话说死"绝不等于"带着缺卷开始解"；② 缺的是哪一卷**点得出名**（<c>111.7z.002</c>）；
+        /// ③ 源包**一个字节都没动**。
+        /// ⚠ 旧断言里那句「缺第 2 卷 …… 推定」来自**批首**那条诊断（<c>VolumeGroupResolver</c> 的证据句），
+        /// 批末补判这条走的是账上那份缺卷清单 ⇒ 证据句换成了「先把缺口记下来 …… 批末仍然缺」这一对；
+        /// 报出来的**缺哪一卷**一个字没少（这就是本条要钉的那条不变量）。</para>
         /// </summary>
         [Fact]
-        public async Task 缺卷_真案一的现场_解前拦下并点名缺第2卷()
+        public async Task 缺卷_真案一的现场_批末补判才拦下并点名缺第2卷()
         {
             Harness harness = CreateHarness();
 
@@ -738,17 +754,42 @@ namespace ArchiveFixer.Tests
             task.VolumePaths.Add(first);
             task.VolumeInfoText = "3 卷，缺 111.7z.002";
 
+            string sourceDirectory = Path.GetDirectoryName(first)!;
+            List<string> sourcesBefore = SourceContentDigests(sourceDirectory);
+
             await harness.Coordinator.StartExtractAsync();
 
             Assert.Equal(StatusText.VolumeMissing, task.Status);
 
-            // 说清缺哪一卷 + 依据（判定器的结论，不再是含糊的"分卷不完整"）。
+            // 说清缺哪一卷（缺卷清单点得出名）。
             Assert.Contains("111.7z.002", task.ErrorMessage);
-            Assert.Contains("缺第 2 卷", task.ErrorMessage);
-            Assert.Contains("推定", task.ErrorMessage);
 
-            // 解前就拦下：一次都没真的去解压（不变量 7）。
+            // ① 批首**只记缺口**：⛔ 没有"本次不开始"，⛔ 也没有当场落死的结论。
+            Assert.Contains(
+                harness.Log.Logs,
+                item => item.Message.Contains("先把缺口记下来", StringComparison.Ordinal));
+
+            Assert.DoesNotContain(
+                harness.Log.Logs,
+                item => item.Message.Contains("本次不开始", StringComparison.Ordinal));
+
+            // ② 结论是**批末补判**落的（这一批的解压都跑完之后）。
+            Assert.Contains("批末补判", task.ErrorMessage);
+            Assert.Contains(
+                harness.Log.Logs,
+                item => item.Message.Contains("批末补判", StringComparison.Ordinal) &&
+                        item.Message.Contains("仍然缺", StringComparison.Ordinal));
+
+            // ③ 这一组**最终没有开解**：引擎一次都没被调用（不变量 7）。
             Assert.Empty(harness.Engine.ExtractCalls);
+            Assert.Empty(harness.Engine.AllCalls);
+
+            // ④ 机器终态跟着落 Failed（不许停在"未处理"）。
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+
+            // ⑤ 源包**一个字节都没动**（不变量 1）：按"内容指纹的多重集"比对 ——
+            //    逐字节钉住"没改内容、没删、没多出东西"（批首那一步允许改卷名，所以不按文件名比）。
+            Assert.Equal(sourcesBefore, SourceContentDigests(sourceDirectory));
         }
 
         /// <summary>
@@ -1390,6 +1431,21 @@ namespace ArchiveFixer.Tests
             return path;
         }
 
+        /// <summary>
+        /// 一个目录的**内容指纹快照**：这一层每个文件的 SHA256，排序之后按多重集比对。
+        ///
+        /// <para>为什么按内容而不是按文件名："源包一个字节都没动"（不变量 1）说的是**字节**；
+        /// 而批首那一步允许**改卷名**（AGENTS.md §11.4「一组分卷 = 一个任务 = 从首卷启动」①整组改名在批首）
+        /// ⇒ 按名字比会把一次合法的改名误报成"动了源包"，按内容比才既严又准
+        /// （改名不改内容、删一个 / 加一个 / 改一个字节都会露出来）。</para>
+        /// </summary>
+        private static List<string> SourceContentDigests(string directory) =>
+            Directory.GetFiles(directory)
+                .Select(path => Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))))
+                .OrderBy(hash => hash, StringComparer.Ordinal)
+                .ToList();
+
         private static ArchiveTask RenameTask(string filePath) => new(filePath)
         {
             DetectedFormat = "ZIP",
@@ -1534,6 +1590,15 @@ namespace ArchiveFixer.Tests
         {
             public List<string> ExtractCalls { get; } = new();
 
+            /// <summary>
+            /// 这个引擎**被调用过的全部方法**（probe / list / test / extract，逐次一条）。
+            ///
+            /// <para>为什么除了 <see cref="ExtractCalls"/> 还要记它：不变量 7 说的"缺卷不得开始不可完成的任务"
+            /// 是"**一次都不许碰这个包**"（列目录也算碰过 —— 见不变量 11 那段"必须在任何引擎调用之前"）。
+            /// 只看 <see cref="ExtractCalls"/> 会把"只列了一次目录"这种越界放过去。</para>
+            /// </summary>
+            public List<string> AllCalls { get; } = new();
+
             public Func<ArchiveRequest, Task<ArchiveOperationResult>>? OnExtractAsync { get; set; }
 
             public Func<ArchiveRequest, Task<ArchiveListResult>>? OnListAsync { get; set; }
@@ -1556,25 +1621,44 @@ namespace ArchiveFixer.Tests
             };
 
             public Task<ArchiveProbeResult> ProbeAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
-                => Task.FromResult(new ArchiveProbeResult { IsArchive = true, Format = "7Z" });
+            {
+                Record("probe", request.ArchivePath);
+                return Task.FromResult(new ArchiveProbeResult { IsArchive = true, Format = "7Z" });
+            }
 
             public Task<ArchiveListResult> ListAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
-                => OnListAsync != null ? OnListAsync(request) : Task.FromResult(ListResult("content.txt"));
+            {
+                Record("list", request.ArchivePath);
+                return OnListAsync != null ? OnListAsync(request) : Task.FromResult(ListResult("content.txt"));
+            }
 
             public Task<ArchiveOperationResult> TestAsync(ArchiveRequest request, CancellationToken cancellationToken = default)
-                => Task.FromResult(Succeeded());
+            {
+                Record("test", request.ArchivePath);
+                return Task.FromResult(Succeeded());
+            }
 
             public Task<ArchiveOperationResult> ExtractAsync(
                 ArchiveRequest request,
                 ExtractOptions options,
                 CancellationToken cancellationToken = default)
             {
+                Record("extract", request.ArchivePath);
+
                 lock (ExtractCalls)
                 {
                     ExtractCalls.Add(request.ArchivePath);
                 }
 
                 return OnExtractAsync != null ? OnExtractAsync(request) : Task.FromResult(Succeeded());
+            }
+
+            private void Record(string method, string? archivePath)
+            {
+                lock (AllCalls)
+                {
+                    AllCalls.Add(method + ":" + archivePath);
+                }
             }
         }
     }

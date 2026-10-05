@@ -422,6 +422,34 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// <b>机器终态收口</b>（第 44 条追加；⚠ 唯一出口 —— 单任务收尾与批末补判都转调它）：
+        /// 任务已经结束（<c>EndTime</c> 有值）而 <see cref="TaskOutcome"/> 还停在 <c>Pending</c>，
+        /// 说明它走的是那些"只写了中文状态、没写终态"的失败分支（实测：识别不出格式的包
+        /// 状态是「解压失败」，<c>Outcome</c> 却是 <c>Pending</c>，于是批末汇总把它算进"未处理"）。
+        ///
+        /// <para>汇总 / 失败清单 / 四道删除门读的都是这一位，⛔ 一律不许靠比对中文。
+        /// 判据用"没通过输出校验"这条事实，只有真正的失败才会落进来。</para>
+        ///
+        /// <para>⚠ 2026-10-05：批末补判那一档（缺卷留到最后再判）是**在任务收尾之后**才落状态的，
+        /// 它走不到原来那个 <c>finally</c> 里 ⇒ 少了这一句，真机那种"批末才报缺卷"的任务
+        /// 会一直停在「未处理」（机器终态没落，汇总与诊断当场打架）。所以判据抽到这里共用。</para>
+        /// </summary>
+        private static void FinalizeOutcomeIfPending(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            if (task.Outcome == TaskOutcome.Pending
+                && task.EndTime.HasValue
+                && task.OutputVerification != OutputVerificationOutcome.Passed)
+            {
+                task.Outcome = TaskOutcome.Failed;
+            }
+        }
+
+        /// <summary>
         /// **真正调引擎之前**比一次：变了就当场停下（不变量 11）。
         ///
         /// <para><b>为什么落在这里</b>：<see cref="ExtractSingleTaskAsync"/> 是**所有**解压入口的
@@ -2815,6 +2843,16 @@ namespace ArchiveFixer.ViewModels
             CancellationToken cancellationToken = default,
             OneClickRunOptions? runOptions = null)
         {
+            /*
+             * 「缺卷留到最后再判」的**最后一站**（用户 2026-10-05 口径 2）：整条续解链跑完了 ⇒
+             * 名单里剩下的那几单到这一步才如实报缺卷（跨轮活下来的那份名单也在这里收口）。
+             * 已经补齐、但这一批已经没有机会再跑它的会写一行"这一次没跑"（⛔ 不假装跑过）。
+             *
+             * 位置刻意在最前面：它不看 rootTasks / chainTasks（那是源包搬运那一档的事），
+             * 而下面那个 `rootTasks.Count == 0` 的早退**不能**把这件收口一起吞掉。
+             */
+            FinalizeDeferredVolumeDeficits();
+
             if (rootTasks == null || rootTasks.Count == 0)
             {
                 return;
@@ -7409,6 +7447,28 @@ namespace ArchiveFixer.ViewModels
         /// <summary>本批已经为哪几个任务问过"缺失卷在哪"（同一个包重试时不再重复打扰）。</summary>
         private readonly HashSet<ArchiveTask> _volumeRepairAsked = new();
 
+        // ================================================================
+        // 「缺卷不许在批首一次判死」+ 开工前跨目录收卷（用户 2026-10-05 两条口径）
+        // ================================================================
+
+        /// <summary>
+        /// 这一批里"手上有、但这一组还缺几卷"的任务（**批首只记缺口**那一档）。
+        ///
+        /// <para>口径（用户 2026-10-05 原话：「所以你开始就得突破所有的伪装和压缩，这种分卷找不到的情况
+        /// 可以留在最后做」）：批首**不落 Failed、不写"本次不开始"、不跳过** —— 只把缺口记在这里；
+        /// 等这一批的解压都跑完之后再判一次（那时缺的那几卷可能已经被解出来 / 被收拢到位）。
+        /// 补齐了 ⇒ 照常跑这一组；仍然缺 ⇒ 到那时才如实报缺卷（不变量 7 一个字没放松）。</para>
+        ///
+        /// <para>寿命：一键处理的**同一条续解链跨轮有效**（第 2 轮起不清空 —— 第 1 轮没解出来的
+        /// 第 1 卷很可能在第 2 轮才出现），下一次**用户发起**的批次开始时清空。</para>
+        /// </summary>
+        private readonly List<ArchiveTask> _volumeDeficitDeferred = new();
+
+        /// <summary>
+        /// 已经在"批末补判"里跑过一遍的任务：⛔ 不许再记一次缺口（否则它会永远留在
+        /// <see cref="_volumeDeficitDeferred"/> 里、永远不落结论）。</summary>
+        private readonly HashSet<ArchiveTask> _volumeDeficitFinalPass = new();
+
         /// <summary>
         /// 「我手动指定缺失卷所在目录」——WinRAR 参考 §2 G 组 / §3 第 2 条的采纳项。
         ///
@@ -7641,6 +7701,521 @@ namespace ArchiveFixer.ViewModels
                 v => string.Equals(SafePathHelper.GetFullPathSafe(v.Path), currentPath, StringComparison.OrdinalIgnoreCase)));
         }
 
+        // ================================================================
+        // 开工前跨目录收卷（用户 2026-10-05 口径 1）
+        // ================================================================
+
+        /// <summary>
+        /// **开工前跨目录收卷**（用户 2026-10-05 原话：「各分卷在不同的目录，你就将其全部移动到头文件 .001
+        /// 同级目录里面去」）。
+        ///
+        /// <para><b>判据与执行体都是既有出口</b>（§9.5）：<see cref="VolumeNameRepair.ResolveCrossLayerVolumeGather"/>
+        /// 出纯计划、<see cref="VolumeNameRepair.TryApply"/> 动手（全成或全不成、绝不覆盖、失败倒序回滚、
+        /// 只同盘）。这里只做三件事：**给窗口**、**同步任务路径**、**收完重新读一次盘上事实**。</para>
+        ///
+        /// <para><b>找卷的基准 = 手上那一卷</b>（用户口径：手上最浅的那一卷，⛔ 绝不是 001）：
+        /// 窗口由 <see cref="VolumeNameRepair.EnumerateVolumeCandidatesNearby"/> 按**这一单手上那一卷**
+        /// 算出来 —— 真机形状是 <c>555\B250135(1)\B250135.7z.001</c> + <c>555\B250135(2)\B250135.7z.002</c>
+        /// （两半在两个兄弟文件夹里），窗口的"父一层"正好把兄弟目录带进来；
+        /// 拿一个解出来的 <c>001</c> 当基准就看不到那个父文件夹。</para>
+        ///
+        /// <para>⛔ 兜底一律落"什么都不做"：任何意外 ⇒ 返回 false，后面的流程照旧（让引擎去判）。
+        /// ⛔ 不动内容：只搬 + 改规范卷名，绝不覆盖任何已存在的文件。</para>
+        /// </summary>
+        /// <returns>true = 入口那一层现在**自证完整**（引擎解得开）。false = 不确定 / 没收成。</returns>
+        private bool TryGatherVolumesBeforeExtract(ArchiveTask task, out string detail)
+        {
+            detail = string.Empty;
+
+            try
+            {
+                string current = task.CurrentPath ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(current) || !File.Exists(current))
+                {
+                    return false;
+                }
+
+                /*
+                 * 入口 = 引擎这一趟要打开的那一份（分卷组只有"第 1 卷"这一个入口）。
+                 * 手上是后续卷（用户只把 `.002` 拖进来）时，先在**找卷窗口**里找同一组的第 1 卷 ——
+                 * 找得到就以它为入口（收卷的目标目录 = 它的那一层），找不到就退回自己
+                 * （`ResolveCrossLayerVolumeGather` 会判"不适用"，一个字节都不动）。
+                 */
+                string entryPath = ResolveGatherEntryPath(current);
+
+                if (string.Equals(entryPath, current, StringComparison.OrdinalIgnoreCase)
+                    && VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(current)) != 1
+                    && task.IsVolumeGroup)
+                {
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.VolumeDeficitNoFirstVolumeNearbyFormat,
+                            task.FileName));
+                }
+
+                /*
+                 * 窗口的基准 = **手上那一卷**（口径 1）。⛔ 它只"看"：候选还要过下面那三道闸门
+                 * （同族同基名 / 卷号一份对一份 / 整组自洽 + 7z 起始头字节数证据）。
+                 */
+                IReadOnlyList<VolumeCandidate> window = VolumeNameRepair.EnumerateVolumeCandidatesNearby(current);
+
+                VolumeNameRepair.CrossLayerVolumeGather decision =
+                    VolumeNameRepair.ResolveCrossLayerVolumeGather(entryPath, null, window);
+
+                if (!decision.Applicable)
+                {
+                    return false;
+                }
+
+                if (decision.Plan is { CanRepair: true })
+                {
+                    int count = decision.MovedCount;
+                    VolumeNameRepairResult applied = VolumeNameRepair.TryApply(decision.Plan);
+
+                    if (!applied.Success)
+                    {
+                        // 全成或全不成（TryApply 自己倒序回滚）：盘上仍是"没收"那一档，如实写。
+                        AppendLog(
+                            "WARN",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.VolumeGatherBeforeExtractBlockedFormat,
+                                task.FileName,
+                                applied.Message));
+
+                        return false;
+                    }
+
+                    string anchorNote = DescribeGatherAnchor(decision, entryPath);
+
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.VolumeGatherBeforeExtractDoneFormat,
+                            task.FileName,
+                            count,
+                            Path.GetFileName(entryPath),
+                            decision.Detail)
+                        + anchorNote);
+
+                    /*
+                     * 任务表里指着这几卷的路径**一起**改过来（唯一出口）；它会顺手重拍快照
+                     * （不变量 11 的口径一个字没放宽：变的只是"谁的名字 / 在哪一层"）。
+                     */
+                    SyncTasksAfterVolumeRename(decision.Plan.Items, task);
+
+                    // 起点必须是这一组的第 1 卷（用户只把 `.002` 拖进来时，要解的是旁边那个 `.001`）。
+                    //
+                    // ⚠ 只在这一单**不是跟班卷**时才改起点：第 1 卷已经被**同批另一个任务**负责时，
+                    // 改过去会让两单指着同一个文件（那一组的活该由首卷那一单干，这一单按既有口径
+                    // 落成「跟班卷」并跳过 —— 见 SkipWhenAnotherTaskOwnsThisVolumeGroup）。
+                    if (!string.Equals(
+                            SafePathHelper.GetFullPathSafe(task.CurrentPath),
+                            SafePathHelper.GetFullPathSafe(entryPath),
+                            StringComparison.OrdinalIgnoreCase)
+                        && !IsFirstVolumeOwnedByAnotherTask(task, entryPath))
+                    {
+                        AppendLog(
+                            "INFO",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.VolumeGatherEntryRepointLogFormat,
+                                task.FileName,
+                                Path.GetFileName(entryPath)));
+
+                        // CurrentPath 的 setter 会顺手刷新文件名 / 目录 / 后缀 / 体积。
+                        task.CurrentPath = entryPath;
+                        task.CaptureSourceSnapshot();
+                    }
+
+                    /*
+                     * 收完**重新读一次盘上事实**（⛔ 不拿"刚刚搬成功了"当结论）——
+                     * 这一组现在到底齐不齐，只能由盘上那几份回答。
+                     */
+                    VolumeNameRepair.CrossLayerVolumeGather after =
+                        VolumeNameRepair.ResolveCrossLayerVolumeGather(
+                            entryPath,
+                            null,
+                            VolumeNameRepair.EnumerateVolumeCandidatesNearby(entryPath));
+
+                    detail = after.Detail;
+                    return after.CompleteBesideEntry;
+                }
+
+                if (!decision.CompleteBesideEntry)
+                {
+                    detail = decision.Detail;
+                }
+
+                return decision.CompleteBesideEntry;
+            }
+            catch (Exception ex)
+            {
+                // 这一档是**加法**：判不出来一律退回"照旧让引擎去判"，⛔ 绝不把本来能解的包挡下来。
+                AppendLog("WARN", $"{task.FileName}：开工前跨目录收卷跳过（{ex.Message}）。");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 这一组的第 1 卷是不是**同批另一个任务**在负责（判据与
+        /// <see cref="SkipWhenAnotherTaskOwnsThisVolumeGroup"/> 同一个口径：任务表里有没有别人指着它）。
+        /// 是 ⇒ 这一单不许把起点改过去（那一组只解一次，别的卷按「跟班卷」跳过）。
+        /// </summary>
+        private bool IsFirstVolumeOwnedByAnotherTask(ArchiveTask task, string firstVolumePath)
+        {
+            string first = SafePathHelper.GetFullPathSafe(firstVolumePath);
+
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                if (candidate == null || ReferenceEquals(candidate, task))
+                {
+                    continue;
+                }
+
+                if (string.Equals(
+                        SafePathHelper.GetFullPathSafe(candidate.CurrentPath),
+                        first,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 引擎这一趟该打开的那一份：手上就是第 1 卷 ⇒ 它自己；手上是后续卷 ⇒ 在
+        /// <see cref="VolumeNameRepair.EnumerateVolumeCandidatesNearby"/> 的窗口里找同一组的第 1 卷
+        /// （窗口里自己那一层排在最前，所以"同一层优先"是白拿的）；判不出 ⇒ 退回手上那一份。
+        /// </summary>
+        private static string ResolveGatherEntryPath(string current)
+        {
+            try
+            {
+                string name = Path.GetFileName(current);
+
+                if (VolumeGroupDetector.TryGetVolumeIndex(name) == 1)
+                {
+                    return current;
+                }
+
+                foreach (VolumeCandidate candidate in VolumeNameRepair.EnumerateVolumeCandidatesNearby(current))
+                {
+                    if (candidate == null || string.IsNullOrWhiteSpace(candidate.Path))
+                    {
+                        continue;
+                    }
+
+                    string candidateName = Path.GetFileName(candidate.Path);
+
+                    if (VolumeGroupDetector.TryGetVolumeIndex(candidateName) == 1
+                        && VolumeGroupDetector.BelongsToSameGroup(name, candidateName)
+                        && File.Exists(candidate.Path))
+                    {
+                        return candidate.Path;
+                    }
+                }
+            }
+            catch
+            {
+                // 判不出 ⇒ 什么都不做（收卷那一档会因为"入口不是第 1 卷"整档不适用）。
+            }
+
+            return current;
+        }
+
+        /// <summary>
+        /// 找卷的基准那一句（只在**基准不是入口那一卷**时补出来）：用户口径是"以一开始的分卷文件为准，
+        /// 不要以 001 为准" —— 这一行就是它落地的证据（窗口的父文件夹是**基准**那一层的父文件夹）。
+        /// ⛔ 只写目录名，不写完整路径（§8）。
+        /// </summary>
+        private static string DescribeGatherAnchor(
+            VolumeNameRepair.CrossLayerVolumeGather decision,
+            string entryPath)
+        {
+            string? anchor = decision.AnchorPath;
+
+            if (string.IsNullOrWhiteSpace(anchor)
+                || string.Equals(
+                    SafePathHelper.GetFullPathSafe(anchor),
+                    SafePathHelper.GetFullPathSafe(entryPath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            return "。" + string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.VolumeGatherAnchorFormat,
+                Path.GetFileName(anchor),
+                Path.GetFileName(Path.GetDirectoryName(anchor) ?? string.Empty));
+        }
+
+        // ================================================================
+        // 「缺卷不许在批首一次判死」（用户 2026-10-05 口径 2）
+        // ================================================================
+
+        /// <summary>
+        /// **批首只记缺口**（用户 2026-10-05 原话：「所以你开始就得突破所有的伪装和压缩，这种分卷找不到的
+        /// 情况可以留在最后做」）：⛔ 不落 Failed、⛔ 不写"本次不开始"、⛔ 不跳过 —— 只记进名单。
+        ///
+        /// <para>不变量 7 **一个字都没放松**：这一单现在**确实没有开始解压**（一个字节都没动），
+        /// 只是"还缺哪几卷"这句话留到这一批的解压都跑完之后再说 —— 那时缺的第 1 卷可能已经被同批另一个包
+        /// 解出来、或者已经被收拢到位（真机 `B250135.7z.002` 16:29:33 就被判死，而它的 `.001`
+        /// 正躺在同一个目录树里没被解出来）。</para>
+        /// </summary>
+        private void RecordDeferredVolumeDeficit(ArchiveTask task, string missingNames)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            if (!_volumeDeficitDeferred.Contains(task))
+            {
+                _volumeDeficitDeferred.Add(task);
+            }
+
+            AppendLog(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.VolumeDeficitDeferredLogFormat,
+                    task.FileName,
+                    missingNames));
+        }
+
+        /// <summary>缺卷清单那一句话（任务账上那份；空 ⇒ 如实说"名字上看不出"）。</summary>
+        private static string DescribeMissingVolumeNames(ArchiveTask task)
+        {
+            IReadOnlyList<string> names = task == null ? Array.Empty<string>() : task.MissingVolumeNames;
+
+            return names.Count > 0
+                ? string.Join("、", names)
+                : StatusText.CrossLayerGatherNoMissingNames;
+        }
+
+        /// <summary>
+        /// **批末补判**：把名单里那几个任务逐条重判一次（用户口径 2 的后半句）。
+        ///
+        /// <para>三步，全部读**盘上事实**：① 再收一次卷（<see cref="TryGatherVolumesBeforeExtract"/>）；
+        /// ② 现归一次组（<see cref="RebuildVolumeGroup"/>，既有出口）—— 看这一组现在齐不齐；
+        /// ③ 齐了 ⇒ 把这一单的起点改到第 1 卷、返回给调用方**照常跑这一组**；
+        /// 仍然缺 ⇒ <paramref name="finalPass"/> 为 true 才如实报缺卷，否则继续留在名单里。</para>
+        ///
+        /// <para>⛔ 判据只有"盘上有没有那几卷"，⛔ 不比任何中文文案、⛔ 不拿任务账上那份过期结论当数。</para>
+        /// </summary>
+        /// <returns>现在该补跑的那几个任务（调用方负责启动 + 等它们收尾）。</returns>
+        private List<ArchiveTask> RecheckDeferredVolumeDeficits(bool finalPass)
+        {
+            var toRun = new List<ArchiveTask>();
+
+            if (_volumeDeficitDeferred.Count == 0)
+            {
+                return toRun;
+            }
+
+            foreach (ArchiveTask task in _volumeDeficitDeferred.ToList())
+            {
+                if (task == null)
+                {
+                    _volumeDeficitDeferred.Remove(task!);
+                    continue;
+                }
+
+                // ① 再收一次卷：那时缺的那几卷可能已经被解出来 / 被收拢到位。
+                TryGatherVolumesBeforeExtract(task, out _);
+
+                // ② 现归一次组（盘上事实）。
+                VolumeGroup? group = ResolveCompleteGroupFromDisk(task);
+
+                if (group != null)
+                {
+                    string firstVolume = group.FirstVolumePath;
+
+                    /*
+                     * 补齐了 ⇒ 收拢 + 正常跑这一组（起点改到第 1 卷、快照重拍）。
+                     *
+                     * ⚠ 第 1 卷已经由**同批另一个任务**负责时**不改起点、也不改账**：那一组的活该由
+                     * 首卷那一单干（很可能它刚刚已经解成功了）。这一单照旧按"跟班卷"走既有的跳过口径 ——
+                     * 改起点会让两单指着同一个文件、把同一份内容解第二遍。
+                     */
+                    if (IsFirstVolumeOwnedByAnotherTask(task, firstVolume))
+                    {
+                        task.CaptureSourceSnapshot();
+                    }
+                    else
+                    {
+                        if (!string.Equals(
+                                SafePathHelper.GetFullPathSafe(task.CurrentPath),
+                                SafePathHelper.GetFullPathSafe(firstVolume),
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
+                            task.CurrentPath = firstVolume;
+                        }
+
+                        task.CaptureSourceSnapshot();
+                    }
+
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.VolumeDeficitRecheckResolvedFormat,
+                            task.FileName,
+                            task.VolumeInfoText));
+
+                    _volumeDeficitDeferred.Remove(task);
+                    _volumeDeficitFinalPass.Add(task);
+                    toRun.Add(task);
+                    continue;
+                }
+
+                string missing = DescribeMissingVolumeNames(task);
+
+                if (!finalPass)
+                {
+                    // 还有后续轮次 ⇒ 继续留着（⛔ 不提前把话说死）。
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.VolumeDeficitStillDeferredLogFormat,
+                            task.FileName,
+                            missing));
+
+                    continue;
+                }
+
+                // ③ 到这一步才如实报缺卷（不变量 7：从头到尾没有"带着缺卷开始解"这回事）。
+                string diagnosis = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.VolumeDeficitFinalDiagnosisFormat,
+                    task.FileName,
+                    missing);
+
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeDeficitRecheckStillFormat,
+                        task.FileName,
+                        missing));
+
+                MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+                AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
+
+                // 机器终态收口：这一单是在**任务收尾之后**才落的状态，走不到单任务那个 finally ⇒ 这里补。
+                FinalizeOutcomeIfPending(task);
+
+                _volumeDeficitDeferred.Remove(task);
+                _volumeDeficitFinalPass.Add(task);
+            }
+
+            return toRun;
+        }
+
+        /// <summary>
+        /// 这一单现在**能不能**凑出完整的一组（只读盘上事实）：候选 = 账上那几卷 + 自己那一层 +
+        /// 找卷窗口，交给既有出口 <see cref="RebuildVolumeGroup"/> 归组；补齐且第 1 卷真的在盘上 ⇒ 返回那一组。
+        /// 判不出（归不出组 / 仍然不完整 / 第 1 卷不在）⇒ null（⛔ 什么都不做）。
+        /// </summary>
+        private static VolumeGroup? ResolveCompleteGroupFromDisk(ArchiveTask task)
+        {
+            try
+            {
+                var extra = new List<string>();
+                string? directory = Path.GetDirectoryName(task.CurrentPath ?? string.Empty);
+
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    extra.AddRange(CollectVolumeFilesInDirectory(directory));
+                }
+
+                foreach (VolumeCandidate candidate in VolumeNameRepair.EnumerateVolumeCandidatesNearby(task.CurrentPath))
+                {
+                    if (candidate != null && !string.IsNullOrWhiteSpace(candidate.Path))
+                    {
+                        extra.Add(candidate.Path);
+                    }
+                }
+
+                VolumeGroup? group = RebuildVolumeGroup(task, extra);
+
+                if (group == null || !group.IsComplete || string.IsNullOrWhiteSpace(group.FirstVolumePath))
+                {
+                    return null;
+                }
+
+                if (!File.Exists(group.FirstVolumePath))
+                {
+                    return null;
+                }
+
+                /*
+                 * ⛔ **账上点过名的缺卷必须真的出现**才叫"补齐了"。
+                 *
+                 * 为什么不能只看 `group.IsComplete`：命名里**没有"共几卷"这个信息**
+                 * （`VolumeGroupDetector` 类注释第 2 条），所以"只有一个 `.001`"在名字上看起来
+                 * 就是一组完整的卷 —— 而账上明明白白记着"缺 `.002`"。
+                 * 少了这一条，真机那种"缺一卷"的包会被当成"已经补齐"直接开跑
+                 *（2026-10-05 复核逮到：`RealMachineDefectFixesTests.缺卷预检拦下_机器终态必须是失败` 当场变红）。
+                 */
+                foreach (string missing in task.MissingVolumeNames)
+                {
+                    if (string.IsNullOrWhiteSpace(missing))
+                    {
+                        continue;
+                    }
+
+                    bool appeared = group.Volumes.Any(v => string.Equals(
+                        SafeFileNameOf(v.Path),
+                        SafeFileNameOf(missing),
+                        StringComparison.OrdinalIgnoreCase));
+
+                    if (!appeared)
+                    {
+                        return null;
+                    }
+                }
+
+                return group;
+            }
+            catch
+            {
+                return null;
+            }
+
+            static string SafeFileNameOf(string? path) =>
+                Path.GetFileName(SafePathHelper.GetFullPathSafe(path ?? string.Empty));
+        }
+
+        /// <summary>
+        /// **链尾**：整条续解链跑完之后，名单里剩下的那几个才如实报缺卷（用户口径 2 的最后一站）。
+        ///
+        /// <para>已经补齐、但这一批已经没有机会再跑它的，**如实说清"这一次没跑"**（⛔ 不假装跑过、
+        /// ⛔ 也不改机器终态：它仍然是「未处理」，再点一次就会跑）。</para>
+        /// </summary>
+        private void FinalizeDeferredVolumeDeficits()
+        {
+            foreach (ArchiveTask task in RecheckDeferredVolumeDeficits(finalPass: true))
+            {
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeDeficitChainEndCompleteLogFormat,
+                        task.FileName));
+            }
+        }
+
         /// <summary>
         /// 同目录里还有没有"同一分卷组的别的卷"（只按名字判，**只用于兜底拒搬**）。
         ///
@@ -7822,6 +8397,41 @@ namespace ArchiveFixer.ViewModels
 
                 if (plan == null || !plan.CanRepair || plan.Items.Count == 0)
                 {
+                    /*
+                     * ===== 名字路 / 内容路都改不出来 ⇒ 再试**跨目录收卷**（2026-10-05 口径 1）=====
+                     *
+                     * 真机形状：`555\B250135(1)\B250135.7z.001` + `555\B250135(2)\B250135.7z.002`
+                     * —— 两半被网盘拆到两个**兄弟文件夹**里。这一档两条改名路都插不上手
+                     *（`.001` 的名字本来就是标准的 ⇒ 内容路判"问题不在名字上"直接返回），
+                     * 而 7-Zip 找兄弟卷**只看入口文件旁边那一层** ⇒ 引擎只看到一片 ⇒ 必然解不开。
+                     *
+                     * 判据与执行体都是既有出口（`ResolveCrossLayerVolumeGather` + `TryApply`），
+                     * 这里给的是**找卷窗口**（基准 = 手上那一卷，⛔ 绝不是 001）；收完重新读一次盘上事实。
+                     * ⛔ 判不出 / 收不成 ⇒ 一个字节都不动，照旧往下走（让引擎去判）。
+                     */
+                    if (task.IsVolumeGroup)
+                    {
+                        if (TryGatherVolumesBeforeExtract(task, out string gatheredDetail))
+                        {
+                            /*
+                             * 收完并且**盘上自证完整** ⇒ 这一档的活干完了：名字与位置都对，
+                             * 下面的流程照旧（引擎自己解得开）。
+                             */
+                            return;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(gatheredDetail))
+                        {
+                            AppendLog(
+                                "WARN",
+                                string.Format(
+                                    System.Globalization.CultureInfo.CurrentCulture,
+                                    StatusText.VolumeGatherBeforeExtractBlockedFormat,
+                                    task.FileName,
+                                    gatheredDetail));
+                        }
+                    }
+
                     /*
                      * ⚠ 这里**只**对"试开真跑过、结论是不成立"的情形写一行 —— 用户 2026-09-29 真机
                      * 查不出断在哪，正是因为这条路上从前**一句日志都没有**（内容级推断默默返回，
@@ -10234,7 +10844,6 @@ namespace ArchiveFixer.ViewModels
         /// </param>
         public Task StartExtractAsync(bool extractIntoSourceFolder = false) =>
             StartExtractCoreAsync(oneClickRun: false, runOptions: null, extractIntoSourceFolder: extractIntoSourceFolder);
-
         /// <summary>
         /// 「一键处理」的显式入口：与 <see cref="StartExtractAsync"/> 同一个本体，
         /// 差别只在"有续解链"这件事上（见 <see cref="StartExtractAsync"/> 的说明）。
@@ -10249,13 +10858,22 @@ namespace ArchiveFixer.ViewModels
         /// **不勾"存为默认"时设置文件一个字节都不会被写**，因为这条路径上没有任何写设置的代码。
         /// </para>
         /// </param>
-        public Task StartExtractForOneClickAsync(OneClickRunOptions? runOptions = null) =>
-            StartExtractCoreAsync(oneClickRun: true, runOptions);
+        /// <param name="continuationRound">
+        /// 这一次是**同一条续解链的后续轮次**（一键处理第 2 轮起）。
+        ///
+        /// <para>它只决定一件事：批首要不要清掉"缺卷留到最后再判"的那份名单（用户 2026-10-05 口径 2）。
+        /// 第 1 轮没解出来的第 1 卷很可能在第 2 轮才出现 ⇒ 那份名单必须**跨轮活到链尾**；
+        /// 而用户重新点一次就是新的一批 ⇒ 那时清空（旧结论不许留到新批次上）。
+        /// ⛔ 不改任何解压行为、不改轮数（轮数只有一个出口 <c>OneClickCoordinator.RoundLimit</c>）。</para>
+        /// </param>
+        public Task StartExtractForOneClickAsync(OneClickRunOptions? runOptions = null, bool continuationRound = false) =>
+            StartExtractCoreAsync(oneClickRun: true, runOptions, continueDeferredVolumeDeficits: continuationRound);
 
         private async Task StartExtractCoreAsync(
             bool oneClickRun,
             OneClickRunOptions? runOptions = null,
-            bool extractIntoSourceFolder = false)
+            bool extractIntoSourceFolder = false,
+            bool continueDeferredVolumeDeficits = false)
         {
             if (_isExtracting)
             {
@@ -10406,6 +11024,19 @@ namespace ArchiveFixer.ViewModels
 
             // 空间规划与本批记账清零（见 finally 里的说明：清在**批首**，自测才读得到这一批的证据）。
             ResetSpacePlanningState();
+
+            /*
+             * 「缺卷留到最后再判」那份名单的清空点（用户 2026-10-05 口径 2）。
+             *
+             * ⛔ 一键处理的**后续轮次不清**：第 1 轮没解出来的第 1 卷很可能第 2 轮才出现，
+             * 清了就等于把"留到最后"变成"留到本轮末尾"（真机那条 `.002` 正是跨轮才补上的形状）。
+             * 用户重新点一次 = 新的一批 ⇒ 清空（旧批次的缺口结论不许活到新批次上）。
+             */
+            if (!continueDeferredVolumeDeficits)
+            {
+                _volumeDeficitDeferred.Clear();
+                _volumeDeficitFinalPass.Clear();
+            }
 
             try
             {
@@ -10784,62 +11415,105 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 三点纪律：① 重试仍然走同一个 `TryReserve`（放行判据一个字没放宽）；
                  * ② 名单里的任务**不占并发位**，只有真排上了才进 `runningTasks`；
                  * ③ 用户点「停止后续」⇒ 立刻停（剩下的照旧什么都不做、如实落状态）。
+                 *
+                 * ⚠ 2026-10-05 外面又套了一层（同一个环，⛔ 不是第二套批末流程）：**批末补判「缺卷」**
+                 * （用户口径 2）。它只能在"这一批的解压**都跑完**之后"判（那时缺的那几卷可能已经被解出来 /
+                 * 被收拢到位）；判出来"补齐了"的那几组要**照常跑**，所以它们必须回到**这个环**里等收尾 ——
+                 * 这也是"补跑环必须与等所有任务结束写在同一个环里"那条纪律的同一条道理。
                  */
-                while (runningTasks.Count > 0)
+                while (true)
                 {
-                    Task finished = await Task.WhenAny(runningTasks);
-                    runningTasks.Remove(finished);
-                    await finished;
+                    while (runningTasks.Count > 0)
+                    {
+                        Task finished = await Task.WhenAny(runningTasks);
+                        runningTasks.Remove(finished);
+                        await finished;
 
+                        if (IsStopping || _operationCts.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
+                        if (spaceWaiting.Count == 0)
+                        {
+                            continue;
+                        }
+
+                        /*
+                         * 刚跑完一个任务 ⇒ **当场再探一次可用空间**，再拿它重试等待名单。
+                         *
+                         * 账本平时由空间侦察每 5 秒刷一针；可"任务收尾把预留放出来"这件事是**立刻**发生的，
+                         * 如果这里不重探，补跑环会拿着 5 秒前的旧数字白等一轮（真机上就是"明明跑完了一个大包、
+                         * 空间已经回来了，那个小包还在等"）。
+                         */
+                        _spaceLedger.RefreshAvailable(ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)));
+
+                        for (int i = 0; i < spaceWaiting.Count;)
+                        {
+                            if (runningTasks.Count >= maxParallel)
+                            {
+                                break;   // 并发位又满了：等下一轮（跑完一个再来看）
+                            }
+
+                            (ArchiveTask waitingTask, ScheduledExtractionItem waitingItem, SpaceGateDecision waitingGate) = spaceWaiting[i];
+
+                            SpaceGateDecision retry = _spaceLedger.TryReserve(
+                                waitingItem.RequiredBytes,
+                                waitingItem.Estimate.ReclaimableBytes);
+
+                            if (!retry.Allowed)
+                            {
+                                i++;
+                                continue;
+                            }
+
+                            ScheduledTaskRuntime waitingRuntime = GetOrCreateRuntime(waitingTask);
+                            waitingRuntime.ReservedBytes = retry.ProbeFailed ? 0L : waitingItem.RequiredBytes;
+                            waitingRuntime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
+
+                            spaceWaiting.RemoveAt(i);
+
+                            AppendLog(
+                                "INFO",
+                                $"{waitingTask.FileName}：腾出空间了，现在补跑它（它刚才被拒的原因：{waitingGate.Reason}）");
+
+                            runningTasks.Add(RunScheduledTaskAsync(waitingTask, oneClickRun, waitingRuntime));
+                        }
+                    }
+
+                    /*
+                     * 用户点了「停止后续」⇒ 批末补判整段不做（不变量 9：停止后续只阻止**启动后续**，
+                     * 不许变成"强杀当前"，也不许在停下之后又去起新的任务）。
+                     * 名单里那几单照旧什么都不做、状态留在「未处理」—— 如实反映"这一批没轮到它"。
+                     */
                     if (IsStopping || _operationCts.IsCancellationRequested)
                     {
                         break;
                     }
 
-                    if (spaceWaiting.Count == 0)
+                    /*
+                     * ===== 批末补判「缺卷」（用户 2026-10-05 口径 2）=====
+                     *
+                     * 判据与执行体都在 `RecheckDeferredVolumeDeficits` 里：再收一次卷 → 现归一次组
+                     * → 齐了就返回该补跑的那几单；仍然缺 ⇒ 一键档留给链尾（还有后续轮次）、
+                     * 手动档**到这里**才如实报缺卷。
+                     *
+                     * ⛔ 兜底：这个方法要么给出"该跑的那几单"，要么把状态落定 —— 绝不会让名单里的任务
+                     * 停在"没人管"那一档（唯一例外是整条链被用户停下，那时它如实留在「未处理」）。
+                     */
+                    List<ArchiveTask> deferredVolumeTasks = RecheckDeferredVolumeDeficits(finalPass: !oneClickRun);
+
+                    if (deferredVolumeTasks.Count == 0)
                     {
-                        continue;
+                        break;
                     }
 
-                    /*
-                     * 刚跑完一个任务 ⇒ **当场再探一次可用空间**，再拿它重试等待名单。
-                     *
-                     * 账本平时由空间侦察每 5 秒刷一针；可"任务收尾把预留放出来"这件事是**立刻**发生的，
-                     * 如果这里不重探，补跑环会拿着 5 秒前的旧数字白等一轮（真机上就是"明明跑完了一个大包、
-                     * 空间已经回来了，那个小包还在等"）。
-                     */
-                    _spaceLedger.RefreshAvailable(ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)));
-
-                    for (int i = 0; i < spaceWaiting.Count;)
+                    foreach (ArchiveTask deferredTask in deferredVolumeTasks)
                     {
-                        if (runningTasks.Count >= maxParallel)
-                        {
-                            break;   // 并发位又满了：等下一轮（跑完一个再来看）
-                        }
-
-                        (ArchiveTask waitingTask, ScheduledExtractionItem waitingItem, SpaceGateDecision waitingGate) = spaceWaiting[i];
-
-                        SpaceGateDecision retry = _spaceLedger.TryReserve(
-                            waitingItem.RequiredBytes,
-                            waitingItem.Estimate.ReclaimableBytes);
-
-                        if (!retry.Allowed)
-                        {
-                            i++;
-                            continue;
-                        }
-
-                        ScheduledTaskRuntime waitingRuntime = GetOrCreateRuntime(waitingTask);
-                        waitingRuntime.ReservedBytes = retry.ProbeFailed ? 0L : waitingItem.RequiredBytes;
-                        waitingRuntime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
-
-                        spaceWaiting.RemoveAt(i);
-
-                        AppendLog(
-                            "INFO",
-                            $"{waitingTask.FileName}：腾出空间了，现在补跑它（它刚才被拒的原因：{waitingGate.Reason}）");
-
-                        runningTasks.Add(RunScheduledTaskAsync(waitingTask, oneClickRun, waitingRuntime));
+                        runningTasks.Add(RunScheduledTaskAsync(
+                            deferredTask,
+                            oneClickRun,
+                            GetOrCreateRuntime(deferredTask)));
                     }
                 }
 
@@ -12594,13 +13268,7 @@ namespace ArchiveFixer.ViewModels
                  * （失败 / 部分完成），而这一位此刻还是 `Pending` 的话，一个字节都不会发布 ——
                  * 顺序错了就等于"这一档在对绝大多数失败分支上不生效"。
                  */
-                if (task.Outcome == TaskOutcome.Pending
-                    && task.EndTime.HasValue
-                    && task.OutputVerification != OutputVerificationOutcome.Passed)
-                {
-                    task.Outcome = TaskOutcome.Failed;
-                }
-
+                FinalizeOutcomeIfPending(task);
                 /*
                  * 部分完成发布（用户 2026-10-02 拍板的口径 A）：把已经解出来、逐条核对过的那部分
                  * 放进 <c>&lt;目标&gt;\&lt;包名&gt;\部分完成\</c>。**必须排在清工作区之前** ——
@@ -13397,56 +14065,112 @@ namespace ArchiveFixer.ViewModels
             {
                 /*
                  * 一键处理期间**不问**"缺失卷在哪个目录"（用户 2026-09-27：一键解压不许弹窗）。
-                 * 保守档 = 不补救，照旧落「分卷缺失」并点名缺哪几个 —— 那本来就是"不问"时的结论，
-                 * 一个字都不放松（不变量 7）；用户回来看到红色任务，手动「只解压」时才会被问，
-                 * 那时他就在旁边。
+                 * 手动档问一次（用户就在旁边），一键档直接按"不问"往下走 ——
+                 * ⚠ 但结论**不再当场落死**了，见下面那两段（用户 2026-10-05 口径 2）。
                  */
                 bool repaired = !oneClickRun
                     && await TryRepairMissingVolumesAsync(task, cancellationToken);
 
-                if (oneClickRun)
-                {
-                    AppendLog(
-                        "WARN",
-                        $"{task.FileName}：分卷不完整（{task.VolumeInfoText}）——一键处理不弹补救询问，"
-                        + "本次不开始；要指定缺失卷所在目录，请手动「只解压」这一单。");
-                }
-
                 if (!repaired)
                 {
                     /*
-                     * ===== ① 解前预检：**缺卷就别开解，而且要直接说清缺哪一卷 / 为什么这样判** =====
+                     * ===== 补齐了就先跑（用户 2026-10-05：「补齐了就收拢 + 正常跑这一组」）=====
                      *
-                     * 判据走唯一出口 <see cref="VolumeGroupResolver"/>（分卷组装判定器）：
-                     * 它把六条证据（基名 / 卷号 / 体积 / 位置 / 物理同一性 / 试开）收在一处，
-                     * 只吐一个结论。试开那一档在**这里**做（有引擎、且是只读的硬链接试开）——
-                     * 于是"末卷被改名成 一只顶美.z删除ip"这种情形能被认出来是**齐的**，
-                     * 而不是像老判据那样一律报「分卷缺失」把用户指去满盘找卷。
-                     *
-                     * ⛔ 不管判出什么，**都不改变"这一单开不开"**：名字不标准 ⇒ 7-Zip 按原名打不开 ⇒
-                     * 照旧不开始（不变量 7）。这里换掉的只是**诊断**：说得对不对、依据在不在。
+                     * `task.IsVolumeComplete` 是**扫描期**（或者上一轮）算出来的账，可能已经过期：
+                     * 同一批里另一个包刚把缺的那一卷解出来、或者开工前那次跨目录收卷刚把整组收齐 ——
+                     * 那种时候照旧报"缺卷"就是拿一份过期读数把本来能解的包挡下来。
+                     * 所以这里**现读一次盘上事实**（既有出口 `RebuildVolumeGroup`）：
+                     * 真齐了就把账更新掉、照常往下解（⛔ 不变量 7 没被绕过 —— 这一组现在真的齐了）。
                      */
-                    VolumeGroupResolution volumeVerdict = await ResolveVolumeGroupAsync(task, cancellationToken)
-                        .ConfigureAwait(true);
+                    VolumeGroup? regrouped = ResolveCompleteGroupFromDisk(task);
 
-                    string diagnosis = BuildVolumeVerdictMessage(task, volumeVerdict);
+                    if (regrouped != null)
+                    {
+                        string regroupedFirst = regrouped.FirstVolumePath;
 
-                    /*
-                     * 判据走**开工前拦下的统一收口**（与"源文件已变化"同一个出口）：
-                     * 状态照旧是「分卷缺失」（中文一个字不改），但"这一单已经结束"这件事必须一起落 ——
-                     * 少了结束时间，机器终态的唯一收口补不了 Failed，它就一直停在 Pending：
-                     * 批末汇总说「未处理 1」、批末诊断说「分卷缺失」，两处口径当场打架
-                     * （2026-09-30 真机 `222.z01`）。
-                     */
-                    MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+                        new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, regrouped);
 
-                    AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
-                    LogVolumeGroupEvidence(task, volumeVerdict);
-                    return;
+                        if (!string.Equals(
+                                SafePathHelper.GetFullPathSafe(task.CurrentPath),
+                                SafePathHelper.GetFullPathSafe(regroupedFirst),
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            // CurrentPath 的 setter 会顺手刷新文件名 / 目录 / 后缀 / 体积。
+                            task.CurrentPath = regroupedFirst;
+                        }
+
+                        task.CaptureSourceSnapshot();
+
+                        AppendLog(
+                            "INFO",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.VolumeDeficitRecheckResolvedFormat,
+                                task.FileName,
+                                task.VolumeInfoText));
+
+                        // 补齐了 ⇒ **照常往下解**（不 return：下面还有快照重拍与真正的解压）。
+                    }
+                    else
+                    {
+                        /*
+                         * ===== 缺卷**不许在批首一次判死**（用户 2026-10-05 口径 2）=====
+                         *
+                         * 旧写法在这里当场写一句"分卷不完整 …… 本次不开始"并把这一单落成失败 —— 真机上
+                         * `.002` 就是这么在 16:29:33（批首那一刻）被判死的，而它的 `.001` 正躺在同一棵树里、
+                         * 由同一批的另一个包解出来。
+                         *
+                         * 现在的口径：这一单**现在确实没有开始解压**（一个字节都没动，不变量 7 一个字节没放松），
+                         * 但"还缺哪几卷"这句话留到最后再说 —— 先记进名单，等这一批的解压都跑完之后由
+                         * `RecheckDeferredVolumeDeficits` 再判一次（那时缺的那几卷可能已经被解出来 / 收拢到位）。
+                         *
+                         * ⚠ 兜底：批末补判**必须**给名单里每一条一个结论（补齐 ⇒ 跑；仍然缺 ⇒ 如实报缺卷）。
+                         * 唯一"没有结论"的出口是"整条链跑到一半被用户停下 / 撞上轮数上限" —— 那时它留在
+                         * 「未处理」那一档，如实反映"这一批没轮到它"。
+                         */
+                        if (!_volumeDeficitFinalPass.Contains(task))
+                        {
+                            RecordDeferredVolumeDeficit(task, DescribeMissingVolumeNames(task));
+                            return;
+                        }
+
+                        /*
+                         * ===== ① 解前预检：**缺卷就别开解，而且要直接说清缺哪一卷 / 为什么这样判** =====
+                         *
+                         * 走到这里 = 批末补判已经跑过它一遍、盘上仍然凑不齐 ⇒ **这才如实报缺卷**。
+                         *
+                         * 判据走唯一出口 <see cref="VolumeGroupResolver"/>（分卷组装判定器）：
+                         * 它把六条证据（基名 / 卷号 / 体积 / 位置 / 物理同一性 / 试开）收在一处，
+                         * 只吐一个结论。试开那一档在**这里**做（有引擎、且是只读的硬链接试开）——
+                         * 于是"末卷被改名成 一只顶美.z删除ip"这种情形能被认出来是**齐的**，
+                         * 而不是像老判据那样一律报「分卷缺失」把用户指去满盘找卷。
+                         *
+                         * ⛔ 不管判出什么，**都不改变"这一单开不开"**：名字不标准 ⇒ 7-Zip 按原名打不开 ⇒
+                         * 照旧不开始（不变量 7）。这里换掉的只是**诊断**：说得对不对、依据在不在。
+                         */
+                        VolumeGroupResolution volumeVerdict = await ResolveVolumeGroupAsync(task, cancellationToken)
+                            .ConfigureAwait(true);
+
+                        string diagnosis = BuildVolumeVerdictMessage(task, volumeVerdict);
+
+                        /*
+                         * 判据走**开工前拦下的统一收口**（与"源文件已变化"同一个出口）：
+                         * 状态照旧是「分卷缺失」（中文一个字不改），但"这一单已经结束"这件事必须一起落 ——
+                         * 少了结束时间，机器终态的唯一收口补不了 Failed，它就一直停在 Pending：
+                         * 批末汇总说「未处理 1」、批末诊断说「分卷缺失」，两处口径当场打架
+                         * （2026-09-30 真机 `222.z01`）。
+                         */
+                        MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+
+                        AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
+                        LogVolumeGroupEvidence(task, volumeVerdict);
+                        return;
+                    }
                 }
 
                 /*
-                 * 用户刚把缺的卷找回来了：基准必须**跟着重拍**（不变量 11 与这条补救出口的和解）。
+                 * 用户刚把缺的卷找回来了（或者刚由"现读一次盘上事实"确认它已经齐了）：
+                 * 基准必须**跟着重拍**（不变量 11 与这条补救出口的和解）。
                  *
                  * 不重拍的话，新找回来的那一卷不在快照里，比对时它会被算成"新出现的文件" →
                  * 用户按提示把卷补齐了，反而被"源文件已变化"拦下，而且再补多少次都一样 ——

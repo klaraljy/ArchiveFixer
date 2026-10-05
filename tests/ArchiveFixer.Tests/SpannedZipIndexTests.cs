@@ -528,22 +528,40 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 候选池的**边界**（用户 2026-10-01 定的）：看**自己这一层 + 自己的直接子目录 + 父目录这一家**
-        /// （父目录 + 父目录的各子目录）；⛔ 祖父及以上不看、⛔ 孙目录（自己子目录的子目录）不看、
+        /// 候选池的**范围与深度边界**：看**自己这一层 + 自己的子目录（递归到第 3 层）+ 父目录这一家**
+        /// （父目录 + 父目录的各直接子目录）；⛔ 祖父及以上不看、⛔ 第 4 层及更深的子目录不看、
         /// ⛔ 与这一家无关的目录不看。
+        ///
+        /// <para><b>"孙目录"为什么从"不看"翻成"要看"</b>（用户 2026-10-05 口径，见 AGENTS.md §11.4）：
+        /// 他原话是「<b>归档自己所在目录的子目录，这个也不能少</b>」，2026-10-05 又补了一句
+        /// 「<b>它的子文件夹（递归，⛔ 不是只看直接子目录）</b>」—— 真正的第 1 卷常常压在**里面那个包**里，
+        /// 解开之后落在 <c>111\222\333\</c> 这种"子目录的子目录"里；只看直接子目录就永远够不着它。</para>
+        ///
+        /// <para>深度上限就是 <see cref="VolumeNameRepair.NearbyMaxSubdirectoryLevels"/>（自己这一层算第 1 层
+        /// ⇒ 看得到第 2、3 层，第 4 层起够不着 ⇒ 判不出 ⇒ 什么都不做）——
+        /// 所以本用例**两头都要钉**：第 3 层必须看得到，第 4 层必须看不到
+        ///（只钉"看得到"那一头，等于把递归改成恒真）。</para>
+        ///
+        /// <para>⚠ 递归**不等于**满盘搜：窗口照样受"500 份候选 / 200 个目录"两道硬上限约束
+        ///（下一步 <see cref="候选池_子目录递归也照样受份数与目录数上限约束"/> 钉住），
+        /// 而且候选只是候选 —— 跨目录来的文件还要过"内容 / 尺寸 / 试开"那几道判据。</para>
         /// </summary>
         [Fact]
-        public void 候选池_看自己这一层和自己的子目录和父目录这一家_但不看祖父和孙目录()
+        public void 候选池_看自己这一层和子目录递归到第3层和父目录这一家_但不看祖父和第4层()
         {
             string grandParent = Path.Combine(_root, "nearby-scope");
             string parent = Path.Combine(grandParent, "父目录");
             string own = Path.Combine(parent, "自己这一层");
             string sibling = Path.Combine(parent, "兄弟目录");
-            string ownChild = Path.Combine(own, "自己的子目录");
-            string grandChild = Path.Combine(ownChild, "孙目录");
+            string ownChild = Path.Combine(own, "自己的子目录");              // 第 2 层
+            string grandChild = Path.Combine(ownChild, "孙目录");            // 第 3 层（新口径要看）
+            string greatGrandChild = Path.Combine(grandChild, "曾孙目录");   // 第 4 层（深度上限外）
             string unrelated = Path.Combine(grandParent, "无关目录");
 
-            foreach (string directory in new[] { parent, own, sibling, ownChild, grandChild, unrelated })
+            foreach (string directory in new[]
+            {
+                parent, own, sibling, ownChild, grandChild, greatGrandChild, unrelated
+            })
             {
                 Directory.CreateDirectory(directory);
             }
@@ -551,26 +569,103 @@ namespace ArchiveFixer.Tests
             // ⚠ 父目录这一家有 16 KiB 粗筛：样本都造得比它大，免得"太小被筛掉"与"范围不对"混在一起。
             var payload = new byte[32 * 1024];
 
-            File.WriteAllBytes(Path.Combine(own, "own.bin"), payload);                  // 自己这一层 ✓
-            File.WriteAllBytes(Path.Combine(ownChild, "ownchild.bin"), payload);        // 自己的直接子目录 ✓
-            File.WriteAllBytes(Path.Combine(parent, "parent.bin"), payload);            // 父目录 ✓
-            File.WriteAllBytes(Path.Combine(sibling, "sibling.bin"), payload);          // 父目录的子目录（兄弟）✓
-            File.WriteAllBytes(Path.Combine(grandChild, "grandchild.bin"), payload);    // 孙目录 ✗
-            File.WriteAllBytes(Path.Combine(grandParent, "grandparent.bin"), payload);  // 祖父 ✗
-            File.WriteAllBytes(Path.Combine(unrelated, "unrelated.bin"), payload);      // 与这一家无关 ✗
+            File.WriteAllBytes(Path.Combine(own, "own.bin"), payload);                    // 自己这一层 ✓
+            File.WriteAllBytes(Path.Combine(ownChild, "ownchild.bin"), payload);          // 第 2 层 ✓
+            File.WriteAllBytes(Path.Combine(grandChild, "grandchild.bin"), payload);      // 第 3 层 ✓
+            File.WriteAllBytes(Path.Combine(greatGrandChild, "greatgrand.bin"), payload); // 第 4 层 ✗
+            File.WriteAllBytes(Path.Combine(parent, "parent.bin"), payload);              // 父目录 ✓
+            File.WriteAllBytes(Path.Combine(sibling, "sibling.bin"), payload);            // 父目录的子目录（兄弟）✓
+            File.WriteAllBytes(Path.Combine(grandParent, "grandparent.bin"), payload);    // 祖父 ✗
+            File.WriteAllBytes(Path.Combine(unrelated, "unrelated.bin"), payload);        // 与这一家无关 ✗
 
             List<string> names = VolumeNameRepair
                 .EnumerateVolumeCandidatesNearby(Path.Combine(own, "own.bin"))
                 .Select(c => Path.GetFileName(c.Path))
                 .ToList();
 
+            // 自己这一层 + 子目录（递归到第 3 层）+ 父目录这一家。
             Assert.Contains("own.bin", names);
             Assert.Contains("ownchild.bin", names);
+            Assert.Contains("grandchild.bin", names);
             Assert.Contains("parent.bin", names);
             Assert.Contains("sibling.bin", names);
-            Assert.DoesNotContain("grandchild.bin", names);
+
+            // ⛔ 深度上限：第 4 层够不着（否则"递归"就成了恒真的满盘搜）。
+            Assert.DoesNotContain("greatgrand.bin", names);
+
+            // ⛔ 祖父及以上、以及与这一家无关的目录都不看。
             Assert.DoesNotContain("grandparent.bin", names);
             Assert.DoesNotContain("unrelated.bin", names);
+        }
+
+        /// <summary>
+        /// 子目录递归**不等于满盘搜**：窗口那两道硬上限（**500 份候选 / 200 个目录**，用户 2026-10-01 定、
+        /// 2026-10-05 放宽到"递归第 3 层"时原样沿用）**必须仍然生效**。
+        ///
+        /// <para>判据刻意写成"上限真的拦住了"而不是"恰好等于某个数"：盘上摆得比上限多，
+        /// 池子里就必须**严格少于**摆出来的数量。⛔ 这正是"别把看孙目录改成恒真"的另一半 ——
+        /// 只钉深度、不钉份数，等于把窗口放开成"整棵子树全收"（AGENTS.md §8：不替用户满盘找文件）。</para>
+        /// </summary>
+        [Fact]
+        public void 候选池_子目录递归也照样受份数与目录数上限约束()
+        {
+            var payload = new byte[1024];
+
+            // ① 目录数上限：第 2 层摆 260 个子目录、每个里面一份文件 —— 池子里不可能 260 份都在。
+            const int directoryCaseCount = 260;
+            string dirsCase = Path.Combine(_root, "nearby-dir-cap");
+            string dirsOwn = Path.Combine(dirsCase, "父", "自己");
+
+            Directory.CreateDirectory(dirsOwn);
+            File.WriteAllBytes(Path.Combine(dirsOwn, "anchor.bin"), payload);
+
+            for (int i = 0; i < directoryCaseCount; i++)
+            {
+                string directory = Path.Combine(dirsOwn, "子" + i);
+
+                Directory.CreateDirectory(directory);
+                File.WriteAllBytes(Path.Combine(directory, "dircap" + i + ".bin"), payload);
+            }
+
+            List<string> dirNames = VolumeNameRepair
+                .EnumerateVolumeCandidatesNearby(Path.Combine(dirsOwn, "anchor.bin"))
+                .Select(c => Path.GetFileName(c.Path))
+                .ToList();
+
+            int dirCapFiles = dirNames.Count(name => name.StartsWith("dircap", StringComparison.Ordinal));
+
+            // 样本本身是有效的（池子确实收到了子目录里的东西），只是**没有全收**。
+            Assert.True(dirCapFiles > 0, "子目录里的候选一份都没进池子 —— 样本造错了，不是上限在起作用");
+            Assert.True(
+                dirCapFiles < directoryCaseCount,
+                $"第 2 层摆了 {directoryCaseCount} 个子目录，池子里却收了 {dirCapFiles} 份 —— 目录数上限没生效");
+
+            // ② 份数上限：一个子目录里摆 700 份 —— 池子里不可能 700 份都在。
+            const int fileCaseCount = 700;
+            string filesCase = Path.Combine(_root, "nearby-file-cap");
+            string filesOwn = Path.Combine(filesCase, "父", "自己");
+            string filesChild = Path.Combine(filesOwn, "子");
+
+            Directory.CreateDirectory(filesOwn);
+            File.WriteAllBytes(Path.Combine(filesOwn, "anchor.bin"), payload);
+            Directory.CreateDirectory(filesChild);
+
+            for (int i = 0; i < fileCaseCount; i++)
+            {
+                File.WriteAllBytes(Path.Combine(filesChild, "filecap" + i + ".bin"), payload);
+            }
+
+            List<string> fileNames = VolumeNameRepair
+                .EnumerateVolumeCandidatesNearby(Path.Combine(filesOwn, "anchor.bin"))
+                .Select(c => Path.GetFileName(c.Path))
+                .ToList();
+
+            int fileCapFiles = fileNames.Count(name => name.StartsWith("filecap", StringComparison.Ordinal));
+
+            Assert.True(fileCapFiles > 0, "子目录里的候选一份都没进池子 —— 样本造错了，不是上限在起作用");
+            Assert.True(
+                fileCapFiles < fileCaseCount,
+                $"一个子目录里摆了 {fileCaseCount} 份，池子里却收了 {fileCapFiles} 份 —— 份数上限没生效");
         }
 
         // ── 造样本 ──
