@@ -668,6 +668,63 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **对应第三条路**：②页选「只解当前这一层」+ 一键处理（轮次续解）—— 同一份真机形状也必须由
+        /// "本批各单解出来的片"在批末凑齐并解开（用户 2026-10-05：「赶紧同步」）。
+        ///
+        /// <para>这条路上没有"链把片解出来"这个过程物：片子是**成品内容物**（真机里名字还脏，
+        /// `111(2)_.zip` 解出来的是 `111.z0删除1`）⇒ 每一单定稿收尾时按规范卷名接进这一组的目录
+        /// （<c>AdoptPublishedVolumePieces</c>），批末那一站照常收齐、解开。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真机形状_只解当前这一层_一键处理_批末照样把这一组解开()
+        {
+            RequireSevenZip();
+
+            string? winRar = new ToolLocator().WinRarExePath;
+
+            if (string.IsNullOrWhiteSpace(winRar) || !File.Exists(winRar))
+            {
+                _output.WriteLine("这台机器没有 WinRAR ⇒ 造不出真跨盘 ZIP，本条跳过（不是验过了）。");
+                return;
+            }
+
+            (string pieceTwo, string pieceThree, string innerPackage, string tailPackage, byte[] payload, string payloadName) =
+                BuildCrossChainSpannedZipSet("跨链收卷-单层", winRar!);
+
+            Harness harness = CreateHarness("SingleLayer");
+
+            ArchiveTask innerTask = await AddTaskAsync(harness, innerPackage);
+            ArchiveTask tailTask = await AddTaskAsync(harness, tailPackage);
+            ArchiveTask pieceTwoTask = await AddTaskAsync(harness, pieceTwo);
+            ArchiveTask pieceThreeTask = await AddTaskAsync(harness, pieceThree);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(
+                new[] { innerTask, tailTask, pieceTwoTask, pieceThreeTask });
+            CaptureSnapshots(harness);
+
+            await harness.RunOneClickAsync();
+
+            Log(harness, "跨链收卷-单层");
+
+            string? produced = FindFileUnder(harness.OutputRoot, payloadName);
+
+            Assert.NotNull(produced);
+            Assert.Equal(payload, File.ReadAllBytes(produced!));
+
+            /*
+             * ⚠ 这里断言的是**批末那一站把它收齐了**这一行，而不是收卷那句 INFO：
+             * 「详细日志」关着的时候，**成功任务**的逐行 INFO 会被日志策略丢掉（用户文档里写明的那条），
+             * 所以"接住那一片"的过程行在这一档看不见 —— 看得见的是批末那一行的结论。
+             */
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("这一组现在齐了", StringComparison.Ordinal));
+
+            Assert.True(File.Exists(pieceTwo), "用户的源片不许动");
+            Assert.True(File.Exists(pieceThree), "用户的源片不许动");
+        }
+
+        /// <summary>
         /// 造真机 CCCC 的形状：用**真 WinRAR**（`-afzip -v1m`）切一组**真跨盘 ZIP**
         /// （`111.z01..` + 末片 `111.zip`），然后把四片分开 —— 第 1 片改成脏名压进一个包、
         /// 末片压进另一个包、另两片改成脏名散在两个兄弟目录里。
@@ -797,7 +854,15 @@ namespace ArchiveFixer.Tests
                 pathService,
                 new ConfirmingDialogService());
 
-            return new Harness(vm, coordinator, logService, outputRoot);
+            /*
+             * 一键处理那一套（轮次续解）也要能用：②页「只解当前这一层」+ 一键处理是**第三条路**，
+             * 跨链收卷必须在那条路上同样成立（用户 2026-10-05：「赶紧同步」）。
+             */
+            var scan = new ScanCoordinator(vm, new FileScanService(), new ArchiveDetectService(), new ConfirmingDialogService());
+            var rename = new RenameCoordinator(vm, scan, new RenameService(), new ConfirmingDialogService());
+            var oneClick = new OneClickCoordinator(vm, scan, rename, coordinator, new ConfirmingDialogService());
+
+            return new Harness(vm, coordinator, oneClick, logService, outputRoot);
         }
 
         private void RequireSevenZip()
@@ -902,10 +967,18 @@ namespace ArchiveFixer.Tests
 
         private sealed class Harness
         {
-            public Harness(MainViewModel vm, ExtractionCoordinator coordinator, LogService log, string outputRoot)
+            private readonly OneClickCoordinator _oneClick;
+
+            public Harness(
+                MainViewModel vm,
+                ExtractionCoordinator coordinator,
+                OneClickCoordinator oneClick,
+                LogService log,
+                string outputRoot)
             {
                 Vm = vm;
                 Coordinator = coordinator;
+                _oneClick = oneClick;
                 Log = log;
                 OutputRoot = outputRoot;
             }
@@ -913,6 +986,9 @@ namespace ArchiveFixer.Tests
             public MainViewModel Vm { get; }
 
             public ExtractionCoordinator Coordinator { get; }
+
+            /// <summary>一键处理（轮次续解）那一整条路 —— 与产品里那颗按钮同一个入口。</summary>
+            public Task<OneClickOutcome> RunOneClickAsync() => _oneClick.RunPipelineAsync(Vm.Tasks.ToList());
 
             public LogService Log { get; }
 

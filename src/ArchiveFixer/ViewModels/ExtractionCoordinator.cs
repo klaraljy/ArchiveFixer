@@ -1558,6 +1558,24 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * ===== 跨链收卷：**单层路也要做**（用户 2026-10-05：「赶紧同步」）=====
+             *
+             * 单层路（②页「只解当前这一层」，以及一键处理的轮次续解**每一轮**）解出来的东西是**成品**、
+             * 直接落在用户目录里 —— 真机 CCCC 的形状下，`111(2)_.zip` 解出来的正是这一组的第 1 片
+             * （名字还脏，真机是 `111.z0删除1`），末片则由同批另一个包解出来。
+             * 这一段把它们按规范卷名接进"这一组"的目录，于是批末那一站
+             * （<see cref="RecheckDeferredVolumeDeficits"/>）能照常把整组收齐、解开。
+             *
+             * ⛔ 只扫**这一单刚发布的那一层**（不递归：§8 不替用户满盘找）；⛔ 只硬链接
+             * （零字节、不改名、不搬、不覆盖）；判据与执行体仍然只有一份
+             * （<see cref="TryAdoptUnresolvedVolumePiece"/>，与递归路**同一份**）。
+             */
+            if (work.Verification.Verified)
+            {
+                AdoptPublishedVolumePieces(task);
+            }
+
+            /*
              * 中间工作区清理（P1，端到端验收实测一次成功就留下近 1 GB 垃圾）。
              *
              * 位置与条件都在这里定死：**解压成功 + 输出校验通过 + 没被取消**。
@@ -8041,6 +8059,85 @@ namespace ArchiveFixer.ViewModels
         // ================================================================
 
         /// <summary>
+        /// 这一单**刚发布出来的成品**里，有没有"某一组还缺的那一片" —— 有就按规范卷名接到那一组的目录里。
+        ///
+        /// <para>挂点 = <see cref="PostProcessSuccessAsync"/> 的收尾（校验通过之后、清理工作区之前）⇒
+        /// **单层路与轮次续解那条路自动都在内**（它们每一轮都走这一个收尾）。⛔ 判据与执行体与递归路
+        /// 是同一份 <see cref="TryAdoptUnresolvedVolumePiece"/> —— 这里只负责"挑出像分卷片的文件"。</para>
+        ///
+        /// <para>⛔ 只扫这一层（不递归）；⛔ 一个字节都不复制、不改名、不覆盖：`TryAdoptUnresolvedVolumePiece`
+        /// 只在"那一组的目录里还没有这个规范卷名 + 同一个盘"时才建一个零字节硬链接，
+        /// 所以那一组已经齐的时候这一档是**空操作**。</para>
+        /// </summary>
+        private void AdoptPublishedVolumePieces(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            /*
+             * 两处都要看（真机 CCCC 单层路实测）：
+             * · **成品那一层**（`ContentDirectoryPath`）—— 内容物里的片；
+             * · **过程物那一层**（`RestDirectoryPath`）—— 单层路把"内层包"当过程物放进其余物，
+             *   而这一组的片**恰恰就是内层包**（`111.zip` 就是在那儿被下一轮当新任务又解了一次）。
+             * 这些片由 `TryAdoptUnresolvedVolumePiece` 按"过程物目录里的用移动"那一条接走。
+             */
+            foreach (string directory in new[] { task.ContentDirectoryPath, task.RestDirectoryPath })
+            {
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    foreach (string file in Directory.EnumerateFiles(directory))
+                    {
+                        string name = Path.GetFileName(file);
+
+                        /*
+                         * 只挑"像分卷片"的：名字带卷标记（`.z01` / `.001` / `part1` …），
+                         * 或者它自己自述是跨盘 ZIP 的末片（末片的 EOCD 是明文 ⇒ 这一条是**硬证据**）。
+                         */
+                        bool plausible = VolumeGroupDetector.TryGetVolumeIndex(name) != null
+                            || Detection.SpannedZipIndex.TryRead(file) != null;
+
+                        if (!plausible)
+                        {
+                            continue;
+                        }
+
+                        TryAdoptUnresolvedVolumePiece(file);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 加法：判不出来一律退回"照旧"（这一片就留在原地当内容物 / 过程物）。
+                    AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 把一片从**我们自己的过程物目录**挪进这一组的目录（同盘改名、零字节；失败 ⇒ false 由调用方退回硬链接）。
+        /// ⛔ 只用于过程物：用户目录里的片从这条路走不进来。
+        /// </summary>
+        private static bool TryMovePieceIntoGroup(string piecePath, string target)
+        {
+            try
+            {
+                File.Move(piecePath, target);
+                return File.Exists(target);
+            }
+            catch
+            {
+                // 挪不动（被占用 / 目标刚出现）⇒ 交给调用方退回"建硬链接"那一档。
+                return false;
+            }
+        }
+
+        /// <summary>
         /// **跨链收卷**（2026-10-05 真机第九批 CCCC；用户口径：「现在找不到的先跳过，等全部结束之后再看看」
         /// 「让批末那一站去查本批各单已经解出来的片」）。
         ///
@@ -8122,16 +8219,29 @@ namespace ArchiveFixer.ViewModels
             string target = Path.Combine(targetDir, canonical);
             bool adopted = false;
 
-            if (!File.Exists(target)
-                && HardLinkHelper.CanHardLink(piecePath, targetDir)
-                && HardLinkHelper.TryCreateHardLink(target, piecePath))
+            if (!File.Exists(target) && HardLinkHelper.CanHardLink(piecePath, targetDir))
             {
-                adopted = true;
+                /*
+                 * 这一片还在**我们自己的过程物目录**里（`.ArchiveFixer.work` / 其余物）⇒ 用**移动**
+                 * （同盘改名、零字节）。为什么不能只建链接：那些目录收尾会整份删掉 / 按删除档处理，
+                 * 留一份在里面等于"接了一个马上就要消失的名字"，而且轮次续解下一轮还会把剩下的那一份
+                 * 当成一个"内层包"再去解一次（真机上就是那句「111.zip：分卷缺失」，用户最烦看到它）。
+                 *
+                 * 用户目录里的片一律**只硬链接**：⛔ 名字一个字符都不许改、文件不搬。
+                 */
+                bool fromProcessFolder = ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath);
 
-                AppendLog(
-                    "INFO",
-                    $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
-                    + "零字节的硬链接：你的源文件一个字节没动、名字也一个字符没改）—— 这一组留到这一批都跑完再一起判。");
+                adopted = fromProcessFolder
+                    ? TryMovePieceIntoGroup(piecePath, target) || HardLinkHelper.TryCreateHardLink(target, piecePath)
+                    : HardLinkHelper.TryCreateHardLink(target, piecePath);
+
+                if (adopted)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
+                        + "零字节的硬链接：你的源文件一个字节没动、名字也一个字符没改）—— 这一组留到这一批都跑完再一起判。");
+                }
             }
 
             // 末片在哪一层，整组就得凑到哪一层（引擎只看入口旁边那一层）⇒ 末片到手就顺手把整组接齐。

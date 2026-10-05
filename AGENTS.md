@@ -222,9 +222,10 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2807 条（2795 通过 / 12 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：**2808 条（2796 通过 / 12 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
   - ⚠ 这一轮（2026-10-05：真机第九批 `CCCC` —— **跨链收卷**：一组跨盘 ZIP 的片分别压在两个包里 + 散在兄弟目录里，批末凑齐再解）的账：**2806 → 2807 = +1**（`SiblingFolderVolumeGatherTests.真机形状_一组跨盘ZIP的片分别压在两个包里_批末照样解开`）。
-  - ⚠ 这一轮（2026-10-05：真机第九批 `CCCC` —— 7-Zip 同时报「缺卷」与「密码」字样时的判读次序）的账：**2805 → 2806 = +1**（`SevenZipExitCodeTests.同时出现缺卷与密码字样时_缺卷优先`）；⚠ 上一轮（真机第八批复跑复检补的那条守门用例）**2804 → 2805 = +1** 当时漏记，一并补上。
+  - ⚠ 这一轮（2026-10-05：真机第九批 `CCCC` —— 跨链收卷**同步到「只解当前这一层」那条路**：成品那一层 + 过程物那一层里的片也要接住）的账：**2807 → 2808 = +1**（`SiblingFolderVolumeGatherTests.真机形状_只解当前这一层_一键处理_批末照样把这一组解开`）。
+  - ⚠ 上一轮（2026-10-05：真机第九批 `CCCC` —— 7-Zip 同时报「缺卷」与「密码」字样时的判读次序）的账：**2805 → 2806 = +1**（`SevenZipExitCodeTests.同时出现缺卷与密码字样时_缺卷优先`）；⚠ 上一轮（真机第八批复跑复检补的那条守门用例）**2804 → 2805 = +1** 当时漏记，一并补上。
   - ⚠ 上一轮（2026-10-05：真机第八批"跨盘 ZIP 末片在包里、其余片在源目录"）的账：**2798 → 2804 = +6**（新文件 `SpannedZipCrossBoundaryGatherTests`）。
   - ⚠ 上一轮（2026-10-05：全库口径对账 + 设置里那一格「推荐装 WinRAR」）的账：**2794 → 2798 = +4**（全部来自新文件 `WinRarRecommendationTests`；文档与用例改口径不增减）。
   - ⚠ 上一轮（2026-10-05：分卷两条口径落地 + 两条旧用例按新口径重写）的账：**2786 → 2794 = +8**（新文件 `SiblingFolderVolumeGatherTests` 7 条 + 改写时新增的 1 条上限守门用例；两条旧用例是**重写**不增减）。先跑出来是 2793（2 条红 —— 旧用例跟新口径正面冲突），改完用例 +1 = 2794。
@@ -341,7 +342,8 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
   - **判据与执行体**：`RecursiveExtractor._unresolvedVolumePieces`（这一趟**打不开的那一片**的路径；两处记录 = 跨盘末片收卷判不齐、引擎报缺卷）→ `RecursionResult.UnresolvedVolumePieces` → `ExtractionCoordinator.AdoptUnresolvedVolumePieces`（挂在 `RunRecursiveAsync` 拿到结果之后、**工作区被清掉之前**）：按**规范卷名硬链接**到"这一组那几片自己所在的目录"（判据 = **任务表**里 `BelongsToSameGroup` 的**第一单** —— ⛔ 不是"缺卷名单"：名单要等那一单**开工**才写得进去，而链常常跑在它前面），末片到手再转调既有出口 `ResolveSpannedZipDiskGather` 把整组接齐。⛔ 零字节硬链接：不改名、不搬、不覆盖、跨盘不做、判不出什么都不做。
   - ⛔ **一批里同一组只有一单去解**：`_groupConsumerByName`（组基名 → 消费方）+ `TryGetGroupConsumerPending` —— 消费方**收尾之前**，同一组别的单**不落任何结论**（⛔ 否则会得到"分卷缺失、未开始解压"，而那一刻内容正在被解开）；消费方成功之后走既有 `_consumedVolumeSources` + `TryResolveConsumedByAnotherTask` ⇒ 其余片按**跟班卷**收场，并随这一组一起进其余物、按删除档处理。
   - **用例** `SiblingFolderVolumeGatherTests.真机形状_一组跨盘ZIP的片分别压在两个包里_批末照样解开`（夹具用**真 WinRAR** `-afzip -v1m` 造**真**跨盘 ZIP —— 7-Zip 的 `-v` 只切 `111.zip.001` 那种**通用分片**，不属于这一族；本机没有 WinRAR ⇒ **如实跳过**）。**红检**：把 `AdoptUnresolvedVolumePieces` 临时关掉 ⇒ `Assert.NotNull() Failure: Value is null`（产物找不到），批末汇总逐字回到真机那一行「成功 0 / 失败 2 / 跳过 0 / 部分完成 2」。
-  - ⚠ **未验**：真机 CCCC **没复跑**（H: 只读，只能由他重跑）；②页选「只解当前这一层」的**单层路没接**这一档（那一档没有"链把片解出来"这个过程物）。
+  - ✅ **单层路已同步**（2026-10-05 用户原话「赶紧同步」）：`AdoptPublishedVolumePieces` 挂在 `PostProcessSuccessAsync` 的收尾（校验通过之后）—— 单层路与轮次续解**每一轮**都走它；扫**成品那一层 + 过程物那一层**（只扫这一层），片还在**我们自己的过程物目录**里就用**移动**（同盘改名、零字节；⛔ 用户目录里的片只硬链接、名字一个字符都不改）。用例 `真机形状_只解当前这一层_一键处理_批末照样把这一组解开`；红检：关掉这一档 ⇒ `Assert.NotNull() Failure: Value is null`。⚠ 接住那一片的 INFO 行在「详细日志」关着时会被丢掉（成功任务只留一行）⇒ 这一档看得见的是批末那句「这一组现在齐了」。
+  - ⚠ **未验**：真机 CCCC **没复跑**（H: 只读，只能由他重跑）。
 - ⛔ **「缺卷留到最后再判」那条口径的最后一站，差点被它自己的守卫挡死**（2026-10-05 真机第八批）：延迟中的缺卷任务**按设计没有机器终态**，而一键档"这一轮有任务没轮到"那道守卫读的正是终态 ⇒ `stopped = true` ⇒ `CompleteRootSourcePackagesAsync` 整段早退 ⇒ `FinalizeDeferredVolumeDeficits` **永远跑不到**（三个同形任务因此落三种说法：分卷缺失 ×2 / 已识别 + 没轮到 ×1）。⇒ 两处一起钉：守卫里 **在册的延迟任务不算"没轮到"**（唯一判据 = 那份名单，`ExtractionCoordinator.IsDeferredVolumeDeficit`），而且**用户没按停止**时链尾那一站照跑（`FinalizeDeferredVolumeDeficits` 为 `internal`，在 `stopped && !stopRequested` 那一支调）；⛔ 用户真按了「停止后续」照旧什么都不做（如实留「未处理」）。
 - ⛔ **引擎说「分卷缺失」时，停链原因不许落成「引擎操作失败」**（同上一批）：`RecursiveExtractor.MapEngineErrorToStopReason` 漏了 `EngineErrorTypes.VolumeMissing` ⇒ 相邻两行两种说法（`第 2 层：111.zip → 分卷缺失` / `已完成 2 层…原因：引擎操作失败`），用户会被指去查包换引擎，而不是去补那几片。判据只读结构化错误码。
 - ⛔ **跨盘 ZIP 族的头尾在名字编号里是反的**（`.zip` 是**末片**、`z01` 才是第 1 片）⇒ 说"缺哪一片"必须分族：那一族缺 `.zip` 时说「缺的是**末片**」（`StatusText.VolumeDeficitNoTailNearbyFormat`，判据 = `BelongsToSameGroup(手上这一份, <基名>.zip)`），⛔ 不许说成「缺的是第 1 卷」—— 真机上第一片就躺在隔壁文件夹里，那句话会把人指去一个根本不缺的东西。
