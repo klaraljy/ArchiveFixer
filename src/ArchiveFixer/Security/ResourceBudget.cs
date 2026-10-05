@@ -254,9 +254,7 @@ namespace ArchiveFixer.Security
             if (largestFileSize > _options.MaxSingleFileSize)
             {
                 return Reject(
-                    $"单个文件解压后 {largestFileSize} 字节（{FormatSize(largestFileSize)}）超过单文件上限 " +
-                    $"{_options.MaxSingleFileSize} 字节（{FormatSize(_options.MaxSingleFileSize)}）：条目「{largestFilePath}」" +
-                    CapHint,
+                    DescribeSingleFileOverLimit(largestFileSize, largestFilePath, _options.MaxSingleFileSize),
                     totalSize,
                     expansionRatio,
                     freeSpaceBytes,
@@ -426,6 +424,64 @@ namespace ArchiveFixer.Security
             }
 
             return current > long.MaxValue - delta ? long.MaxValue : current + delta;
+        }
+
+        /// <summary>
+        /// 「单个文件解压后超过单文件上限」那一句（**唯一出口**：解压前预算与递归层都转调它）。
+        ///
+        /// <para>为什么要抽出来（2026-10-05 只读审计）：递归那条路（出厂默认档 = 展开所有分支）过去
+        /// **完全没有**单文件上限这道闸门；补上它时若各自拼一句话，同一个上限在两条路上就会长成两种说法
+        /// （AGENTS.md §9.5：同一件事的真值只允许有一个出口）。</para>
+        /// </summary>
+        internal static string DescribeSingleFileOverLimit(
+            long largestFileSize,
+            string largestFilePath,
+            long maxSingleFileSize)
+        {
+            return $"单个文件解压后 {largestFileSize} 字节（{FormatSize(largestFileSize)}）超过单文件上限 " +
+                   $"{maxSingleFileSize} 字节（{FormatSize(maxSingleFileSize)}）：条目「{largestFilePath}」" +
+                   CapHint;
+        }
+
+        /// <summary>
+        /// 清单里**最大的那个文件条目**（目录与负数大小不计 —— 与 <see cref="CheckBeforeExtract"/>
+        /// 数最大条目时同一条口径）。拿不到清单 / 一个文件条目都没有 ⇒ <c>Size = 0</c>，
+        /// 调用方据此**不拦**（"判不出来就什么都不做"）。
+        /// </summary>
+        internal static (string Path, long Size) FindLargestFileEntry(ArchiveListResult? list)
+        {
+            string largestPath = string.Empty;
+            long largestSize = 0;
+
+            if (list == null || !list.Success)
+            {
+                return (largestPath, largestSize);
+            }
+
+            IReadOnlyList<ArchiveEntry>? entries = list.Entries;
+
+            if (entries == null)
+            {
+                return (largestPath, largestSize);
+            }
+
+            foreach (ArchiveEntry? entry in entries)
+            {
+                if (entry == null || entry.IsDirectory)
+                {
+                    continue;
+                }
+
+                long size = entry.Size > 0 ? entry.Size : 0L;
+
+                if (size > largestSize)
+                {
+                    largestSize = size;
+                    largestPath = entry.Path ?? string.Empty;
+                }
+            }
+
+            return (largestPath, largestSize);
         }
 
         /// <summary>把字节数说成人话（"20 GiB"）。换算只用展示，判断一律用原始字节数。</summary>

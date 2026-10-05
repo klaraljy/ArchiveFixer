@@ -1120,6 +1120,20 @@ namespace ArchiveFixer.ViewModels
                             + $"但已达到 {RoundLimit} 轮上限，本批先停在这里 —— "
                             + $"{pendingContinuation.Count} 个内层包已加进列表并勾好，点「继续解」接着解（每次最多再解 {RoundLimit} 轮）。");
 
+                        /*
+                         * ===== 到顶这一支也必须取消已处理任务的勾选（2026-10-05 只读审计）=====
+                         *
+                         * 现场：正常续解那一支在加下一轮任务之前会做这一步，而**到顶这一支没有** ——
+                         * 于是用户点①页「继续解」时，上一批**最后一轮**已经解过的包仍处于勾选态，
+                         * 会被**再解一遍**：产物同名时定稿走 AutoRename 生成 "(1)" 垃圾副本
+                         * （一键档的冲突框被抑制，不走改名询问），若那一层的包已被"逐层回收"删掉，
+                         * 还会落一句「文件不存在」。
+                         *
+                         * 顺序安全：`processed` 里只有**已经解过**的任务，`pendingContinuation`
+                         * （刚 AddInnerTasksAsync 加进来的那些）不在其中 —— 它们照旧保持勾选。
+                         */
+                        DeselectProcessedTasks(processed);
+
                         break;
                     }
 
@@ -1132,17 +1146,10 @@ namespace ArchiveFixer.ViewModels
                          * 不这样做，下一轮会把它们**重新解压一遍**，产出 "(1)" 这样的垃圾副本 ——
                          * 解压流程只认勾选状态，这正是它该有的样子（不偷偷处理没勾的）。
                          *
-                         * 必须走批量守卫（用户 2026-09-24 第 12 条"卡死"的修法之一）：逐项改勾选
-                         * 会让**每一项**都触发一次全表汇总重算 + 38 条命令重查，
-                         * 几百项的任务列表在这一步就是几百次 O(N) 扫描（O(N²)）。
+                         * 判据与做法收在 DeselectProcessedTasks 一处：到顶停下那一支走的是**同一个出口**
+                         * （2026-10-05 只读审计 —— 那一支过去漏了这一步，"继续解"会把最后一轮重解一遍）。
                          */
-                        _vm.RunBulkSelectionUpdate(() =>
-                        {
-                            foreach (ArchiveTask task in processed)
-                            {
-                                task.IsSelected = false;
-                            }
-                        });
+                        DeselectProcessedTasks(processed);
 
                         nextRound = await AddInnerTasksAsync(innerArchives);
                     }
@@ -1356,6 +1363,28 @@ namespace ArchiveFixer.ViewModels
             {
                 await _scanCoordinator.RescanTaskAsync(task);
             }
+        }
+
+        /// <summary>
+        /// 把**已经处理过**的任务全部取消勾选（续解的每一步之前都要做，见调用处的说明）。
+        ///
+        /// <para><b>为什么收成一个出口</b>（2026-10-05 只读审计）：到顶停下那一支过去漏了这一步，
+        /// 于是"继续解"会把上一批最后一轮已经解过的包再解一遍（产物同名 ⇒ <c>(1)</c> 垃圾副本）。
+        /// 两处各写一遍的话，下次再有人加一支"停下"的分支照样会漏 —— 这里只留一份做法。</para>
+        ///
+        /// <para>必须走批量守卫（用户 2026-09-24 第 12 条"卡死"的修法之一）：逐项改勾选
+        /// 会让**每一项**都触发一次全表汇总重算 + 38 条命令重查，
+        /// 几百项的任务列表在这一步就是几百次 O(N) 扫描（O(N²)）。</para>
+        /// </summary>
+        private void DeselectProcessedTasks(List<ArchiveTask> processed)
+        {
+            _vm.RunBulkSelectionUpdate(() =>
+            {
+                foreach (ArchiveTask task in processed)
+                {
+                    task.IsSelected = false;
+                }
+            });
         }
 
         /// <summary>

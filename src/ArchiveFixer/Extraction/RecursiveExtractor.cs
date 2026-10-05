@@ -54,6 +54,17 @@ namespace ArchiveFixer.Extraction
         public long MaxTotalSize { get; init; } = 50L * 1024 * 1024 * 1024;
 
         /// <summary>
+        /// 单个条目**解压后**的字节上限（默认 64 GiB —— 与⑥设置「安全上限」里那一格的默认值同一口径）。
+        ///
+        /// <para>为什么要单列一条（2026-10-05 只读审计）：递归这条路（出厂默认档 = 展开所有分支）
+        /// 过去**一处都没引用 ResourceBudget**，于是"单文件"这道闸门在默认档下等于不存在 ——
+        /// 一个含 200 GiB 单文件的包既不会被拦、事后报的还不是这一条。
+        /// 判据与文案都转调解压前预算那一份（<see cref="Security.ResourceBudget.DescribeSingleFileOverLimit"/>），
+        /// ⛔ 不许在这里再拼一句。</para>
+        /// </summary>
+        public long MaxSingleFileSize { get; init; } = 64L * 1024 * 1024 * 1024;
+
+        /// <summary>
         /// 单层展开比上限：该层解压后总大小 / 该层归档文件大小。
         /// 500 倍对正常资源包足够宽松（视频、图片再压也到不了），超了就是"疑似压缩炸弹"。
         /// </summary>
@@ -177,6 +188,14 @@ namespace ArchiveFixer.Extraction
         MaxTotalFilesReached,
 
         MaxTotalSizeReached,
+
+        /// <summary>
+        /// 本层清单里最大的那个条目超过单文件上限（不变量 8 的"单文件"那一条）。
+        ///
+        /// <para>与 <see cref="MaxTotalSizeReached"/> 同一档处置：**不是"包坏了"**，而是撞上了程序的安全上限，
+        /// 用户要动的是⑥设置「安全上限」（或先看看这个包本身是不是有问题）。</para>
+        /// </summary>
+        MaxSingleFileSizeReached,
 
         /// <summary>单层展开比超限，疑似压缩炸弹。</summary>
         ExpansionRatioExceeded,
@@ -311,8 +330,13 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private const int MaxUnexpandedNameLines = 5;
 
-        /// <summary>密码探针目录名（建在这一层产物目录**之外**，⛔ 不许混进产物）。</summary>
-        private const string ProbeDirectoryName = "_密码预检";
+        /// <summary>
+        /// 密码探针目录名（建在这一层产物目录**之外**，⛔ 不许混进产物）。
+        ///
+        /// <para><c>internal</c>：清工作区前的第二道容器内校验要认它（<see cref="WorkspaceCleanupGuard"/>），
+        /// ⛔ 名字只能在这里写一次。</para>
+        /// </summary>
+        internal const string ProbeDirectoryName = "_密码预检";
 
         /// <summary>
         /// 内层"双面文件"抠出来的副本放在这一层的这个兄弟目录里（<c>layer-XXX\carved\</c>）。
@@ -320,7 +344,7 @@ namespace ArchiveFixer.Extraction
         /// <para>⛔ 与 <see cref="ProbeDirectoryName"/> 同一个道理：**绝不放产物目录**
         /// （产物目录里的东西要参与结果校验与发布，一个字节都不能混进去）。</para>
         /// </summary>
-        private const string CarveDirectoryName = "carved";
+        internal const string CarveDirectoryName = "carved";
 
         /// <summary>展开比检查的上限保护：只对最大若干层做（防止有人把上限配得极大时白算）。</summary>
         private const int MaxExpansionRatioChecks = 20;
@@ -435,6 +459,39 @@ namespace ArchiveFixer.Extraction
         /// 用的那一份 <c>BuildTryPasswordLogText</c>，于是两处口径**逐字一致**。</para>
         /// </summary>
         public Func<string, int, string>? DescribeCandidate { get; set; }
+
+        /// <summary>
+        /// 「停止后续」的信号（可空）。为真 = 用户想让一切都停下来，**不是**取消当前任务。
+        ///
+        /// <para>为什么要这个口子（2026-10-05 只读审计）：单层路径在候选之间看 <c>IsStopping</c>
+        /// （语义：正在解的那一次不打断，下一个密码不再试），而递归这条路**拿不到这个信号** ——
+        /// 用户点了「停止后续」，这一层剩下的候选照样一个一个试完。</para>
+        ///
+        /// <para>为什么是**可选属性**、不是构造参数：测试里有 20 多处直接 <c>new RecursiveExtractor(...)</c>，
+        /// 加参数会把它们全部改一遍；属性不传 = 行为与从前逐字相同。由调用方注入（协调器接
+        /// <c>() =&gt; IsStopping</c>），与 <see cref="VerboseLog"/> 同一套注入方式：
+        /// 递归核心不认识 GUI，也不该认识。</para>
+        /// </summary>
+        internal Func<bool>? StopRequested { get; set; }
+
+        /// <summary>
+        /// 「可疑条目提示」的**回传口**（可空）：本层清单里若有可执行 / 脚本类条目，
+        /// 这里收到那句话（非空），由调用方写进任务字段与日志。
+        ///
+        /// <para>为什么要回传而不是本类自己写（2026-10-05 只读审计）：那条提示的**判据与文案**
+        /// 只有一处（<c>ExtractionCoordinator.AnalyzeDangerousEntries</c>，internal static），
+        /// 写进哪个字段也只有一处（<c>PublishDangerousEntriesHint</c>）—— 递归层只管"这一层的清单里有"，
+        /// ⛔ 不复制第二份判据、也不自己决定显示在哪。</para>
+        /// </summary>
+        internal Action<string>? DangerousEntriesReported { get; set; }
+
+        /// <summary>
+        /// 要不要统计可疑条目（⑥设置 →「可疑条目提示」，默认开）。
+        ///
+        /// <para>注入方式照 <see cref="VerboseLog"/>：由调用方按设置当场赋值（改完设置不重启也要生效）。
+        /// 关掉时判据返回空串 ⇒ 一个字段都不写、一行日志都不打，与加这条之前逐字相同。</para>
+        /// </summary>
+        public bool ReportDangerousEntries { get; set; }
 
         /// <summary>
         /// passwordProvider：给定归档路径，返回按优先级排好的密码候选（**空字符串代表试空密码**）。
@@ -912,6 +969,12 @@ namespace ArchiveFixer.Extraction
             IReadOnlyList<(string Path, long Size)> lastListedEntries = Array.Empty<(string, long)>();
 
             /*
+             * 「可疑条目提示」每层只回传一次（见下面那一段的说明）：它是"这个包里有什么"，
+             * 与用哪个密码打开无关，逐候选重报只会把日志刷成噪声。
+             */
+            bool dangerousEntriesHintReported = false;
+
+            /*
              * 这一层的最多候选数：**与循环用的同一个上限**（`_limits.MaxPasswordAttemptsPerLayer`）。
              * 先算出来是为了让"候选 i/N"里的 N 与真正会试的个数一致 ——
              * 写成 candidates.Count 会在被上限截断时给出一个永远到不了的 N。
@@ -924,6 +987,19 @@ namespace ArchiveFixer.Extraction
              * 见 `ExtractionCoordinator` 的 `skippedOnlyEmptyPasswordBecauseEncrypted`）。
              */
             int usableCandidates = candidates.Count(candidate => !string.IsNullOrEmpty(candidate));
+
+            /*
+             * 这一层**跳过**了几个候选（"整包已加密" / "文件名已加密"两档：它们一个字节都没解）。
+             *
+             * <para>为什么要单独记一笔（与单层路径同一条口径）：收尾的
+             * <see cref="ResolvePasswordStopReason"/> 是拿"候选总数 vs 试过几个"判断
+             * "是不是被每层上限截断了"的，而被跳过的那几个**根本没试** ——
+             * 不把它们从总数里减掉，就会把"候选全试完了都不对"误报成
+             * 「达到密码尝试上限（候选还有剩余）」。单层路径那边是"先 RemoveAll 再重算
+             * maxPasswordAttempts"（见 <c>ExtractionCoordinator</c> 候选循环里那一段），
+             * 同一个意思。</para>
+             */
+            int skippedCandidates = 0;
 
             /*
              * 日志里的任务标签：**只写文件名 + 层号**（§8 隐私红线：完整路径不进日志）。
@@ -950,6 +1026,33 @@ namespace ArchiveFixer.Extraction
             {
                 if (attempts >= _limits.MaxPasswordAttemptsPerLayer)
                 {
+                    break;
+                }
+
+                /*
+                 * ===== 「停止后续」在候选之间生效（2026-10-05 只读审计）=====
+                 *
+                 * 单层路径 2026-09-27 就修掉了这一档（用户原话：「我都暂停了，你还在尝试新的密码」），
+                 * 判据是"正在解的那一个不打断、下一个密码一个都不再试"；可递归这条路**拿不到那个信号**，
+                 * 于是用户点了「停止后续」，这一层剩下的候选照样一个一个试完（大包就是几十分钟）。
+                 *
+                 * 位置刻意在 `attempts` 递增**之前**、与单层路径同一个落点（候选之间）：
+                 * 已经试过至少一个候选（`attempts > 0`）才看信号 —— 一个都没试就停会让收场落到
+                 * `triedAny == false`（"没有可用密码"），那是对用户的误报。
+                 *
+                 * ⛔ 停下之后按"候选还有、只是不再试"收尾（`attempts < candidates.Count` ⇒
+                 * 「达到密码尝试上限」那一档），**不许报成密码错误** —— 候选根本没试完。
+                 */
+                if (attempts > 0 && StopRequested?.Invoke() == true)
+                {
+                    Log(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.RecursionStoppedByStopRequestLogFormat,
+                            layerLabel,
+                            Math.Max(0, layerCandidateLimit - attempts)));
+
                     break;
                 }
 
@@ -1010,6 +1113,30 @@ namespace ArchiveFixer.Extraction
                 if (listedThisCandidate is { Success: true })
                 {
                     lastListedEntries = PartialPublishPlanner.ToManifestEntries(listedThisCandidate);
+
+                    /*
+                     * ===== 可疑条目提示（2026-10-05 只读审计）=====
+                     *
+                     * 单层路径在源包预检之后就会统计"可执行 / 脚本类条目"并写进任务字段
+                     * （`ExtractionCoordinator.AnalyzeDangerousEntries` + `PublishDangerousEntriesHint`），
+                     * 而递归这条路**一次都不做** —— 出厂默认档（展开所有分支）下，内层包里的
+                     * `.exe / .bat / .ps1` 一个提示都没有。
+                     *
+                     * ⛔ 判据与文案仍只有那一处（转调同一个 static，不复制第二份）；
+                     * 本类只负责"这一层的清单里有"，显示在哪由调用方决定（<see cref="DangerousEntriesReported"/>）。
+                     *
+                     * 每层只回传一次：同一份清单每个候选都列得出来，逐候选重报只会把日志刷成噪声
+                     * （提示说的是这个包有什么，与用哪个密码打开无关）。
+                     */
+                    if (!dangerousEntriesHintReported)
+                    {
+                        dangerousEntriesHintReported = true;
+
+                        DangerousEntriesReported?.Invoke(
+                            ViewModels.ExtractionCoordinator.AnalyzeDangerousEntries(
+                                listedThisCandidate.Entries,
+                                ReportDangerousEntries));
+                    }
                 }
 
                 /*
@@ -1035,6 +1162,7 @@ namespace ArchiveFixer.Extraction
                     attempts--;
                     triedAny = attempts > 0;
                     layerCandidateLimit = Math.Max(1, layerCandidateLimit - 1);
+                    skippedCandidates++;
 
                     Log(
                         "INFO",
@@ -1045,6 +1173,91 @@ namespace ArchiveFixer.Extraction
                             Math.Min(usableCandidates, _limits.MaxPasswordAttemptsPerLayer)));
 
                     continue;
+                }
+
+                /*
+                 * ===== 加密头包也不试空密码（2026-10-05 只读审计；**只补"跳过"这一半**）=====
+                 *
+                 * 上一条靠"清单里的加密条目标记"判（列得出来才能判），而**文件名也加密**
+                 * （7z `-mhe=on` / RAR `-hp`）时**清单根本列不出来** —— 引擎在列目录这一步就报
+                 * "加密头"（结构化结论 <see cref="EngineErrorTypes.EncryptedHeaders"/>）。单层路径
+                 * 2026-09-26 就补了这一档（`ExtractionCoordinator` 里的 `lastListErrorType ==
+                 * SevenZipOutputParser.EncryptedHeadersErrorType`），递归这条路一直没接：
+                 * 出厂默认档下，一个 `-mhe` 的内层包先拿空密码白跑一整包。
+                 *
+                 * 判据只读引擎给的结构化错误类型（⛔ 不比中文、也不自己猜）；记账口径与上一条
+                 * **逐字相同**：没解过任何东西 ⇒ 不占尝试次数、不算"试过了"、候选总数 N 减 1。
+                 * 边界也相同：还有别的候选可试才跳（一个都不剩时照旧试空密码，
+                 * 否则收场会落到一句更难懂的"未知解压失败"）。
+                 *
+                 * ⚠ **本层的最终结论仍是"密码错误"那一档**（不会变成「文件名已加密」）：把结论也改掉
+                 * 属于新增状态，要同时改 StatusText / StatusToBrushConverter / TaskSummaryService /
+                 * TaskOutcomeClassifier 四处，超出本次修复范围 —— 如实记在报告里，别当成做完了。
+                 */
+                if (string.IsNullOrEmpty(candidate)
+                    && usableCandidates > 0
+                    && listedThisCandidate is { Success: false }
+                    && string.Equals(
+                        listedThisCandidate.ErrorType,
+                        EngineErrorTypes.EncryptedHeaders,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    attempts--;
+                    triedAny = attempts > 0;
+                    layerCandidateLimit = Math.Max(1, layerCandidateLimit - 1);
+                    skippedCandidates++;
+
+                    Log(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.RecursionSkippedEmptyPasswordEncryptedHeadersLogFormat,
+                            layerLabel,
+                            listedThisCandidate.ErrorType));
+
+                    continue;
+                }
+
+                /*
+                 * ===== 单文件上限：本层清单里最大的那个条目（2026-10-05 只读审计）=====
+                 *
+                 * 不变量 8 的四条"解压前"上限（单文件 / 总大小 / 文件数 / 展开比）里，递归这条路
+                 * 过去只映了三条（见 `ExtractionCoordinator.BuildRecursionLimits`）——
+                 * 出厂默认档下，一个含 200 GiB 单文件的包不会被这道闸门拦下，事后报的还不是这一条。
+                 *
+                 * 判据与文案**都转调解压前预算那一份**（<see cref="ResourceBudget.FindLargestFileEntry"/>
+                 * / <see cref="ResourceBudget.DescribeSingleFileOverLimit"/>）：同一个上限在两条路上
+                 * 必须用同一把尺子、同一句话（§9.5）。
+                 *
+                 * ⛔ 拿不到清单 ⇒ **不拦**（与 <see cref="IsExpansionRatioExceededAsync"/> 的兜底同口径）：
+                 * 加密头包 / 列目录失败时盘上那份清单根本不存在，凭"不知道"去拦会把正常包误杀。
+                 */
+                if (listedThisCandidate is { Success: true })
+                {
+                    (string largestEntryPath, long largestEntrySize) =
+                        ResourceBudget.FindLargestFileEntry(listedThisCandidate);
+
+                    if (largestEntrySize > _limits.MaxSingleFileSize)
+                    {
+                        string singleFileReason = ResourceBudget.DescribeSingleFileOverLimit(
+                            largestEntrySize,
+                            largestEntryPath,
+                            _limits.MaxSingleFileSize);
+
+                        Log("ERROR", $"{layerLabel}：{singleFileReason}");
+
+                        /*
+                         * 报告里**不带这一层的逐条清单**：这一层一个字节都没解（拦在解压之前），
+                         * 拿一份"预期清单"去对账等于给部分完成发布递一把没有产物的尺子。
+                         */
+                        return LayerOutcome.Stop(
+                            BuildLayerReport(
+                                item,
+                                result: null,
+                                succeededPassword: null,
+                                overrideMessage: singleFileReason),
+                            RecursionStopReason.MaxSingleFileSizeReached);
+                    }
                 }
 
                 if (unsafeSummary != null)
@@ -1342,7 +1555,7 @@ namespace ArchiveFixer.Extraction
                     manifestEntries: lastListedEntries);
 
                 RecursionStopReason reason = ResolvePasswordStopReason(
-                    candidates.Count,
+                    candidates.Count - skippedCandidates,
                     attempts,
                     conclusion,
                     triedAny);
@@ -1713,7 +1926,8 @@ namespace ArchiveFixer.Extraction
         }
 
         private static long ResolveProbeEntrySize(ArchiveListResult? listed, string probeEntry)
-        {            if (listed?.Entries == null)
+        {
+            if (listed?.Entries == null)
             {
                 return 0;
             }
@@ -3003,7 +3217,8 @@ namespace ArchiveFixer.Extraction
         /// <c>ExtractionCoordinator.CleanupFailedTaskWorkspace</c> 里，一处收口）。</para>
         ///
         /// <para>安全口径与 <see cref="CleanupWorkspace"/> 完全一致：容器内校验先做一遍
-        /// （必须在工作区根目录之下）、<see cref="ExtractionWorkspace.Cleanup"/> 内部再独立校验一遍、
+        /// （必须在工作区根目录之下 + 目录里只许有我们自己造的子目录，见
+        /// <see cref="WorkspaceCleanupGuard"/>）、<see cref="ExtractionWorkspace.Cleanup"/> 内部再独立校验一遍、
         /// 只认本实例持有的那一个目录（绝不按目录名 / "最新目录"去扫 <c>work\recursive</c> ——
         /// 并发跑两个递归任务时，扫描式删除会把对方正在写的工作区端掉）、
         /// 删不掉只写 WARN（绝不改任务结论）。</para>
@@ -3032,6 +3247,15 @@ namespace ArchiveFixer.Extraction
                     "WARN",
                     $"{taskLabel}：工作区不在工作区根目录之下，已跳过清理 —— {guardReason}：{workspace.TaskDirectory}");
 
+                return false;
+            }
+
+            /*
+             * 第二道容器内校验（与 CleanupWorkspace 同一处判据）：目录里只许有我们自己造的子目录。
+             * 见 WorkspaceCleanupGuard 的说明 —— 这道以前只有单层路径有，递归这两次删工作区一直缺它。
+             */
+            if (!HasOnlyOwnedWorkspaceSubdirectories(workspace.TaskDirectory, taskLabel))
+            {
                 return false;
             }
 
@@ -3066,7 +3290,8 @@ namespace ArchiveFixer.Extraction
         /// · 删的是本实例手上的那个工作区对象（本次运行开头建出来的那一个），**不按目录名、
         ///   也不按"最新目录"去扫** <c>data\work\recursive</c> —— 并发跑两个递归任务时，
         ///   扫描式删除会把对方正在写的工作区端掉；
-        /// · 容器内校验先在这里做一遍（必须在工作区根目录之下），
+        /// · 容器内校验先在这里做一遍（必须在工作区根目录之下 **+ 目录里只许有我们自己造的子目录**，
+        ///   见 <see cref="HasOnlyOwnedWorkspaceSubdirectories"/>），
         ///   <see cref="ExtractionWorkspace.Cleanup"/> 内部还会再独立校验一遍，越界时一个字节都不动；
         /// · 删不掉只写 WARN：清工作区失败绝不该让**已经成功**的任务变成失败
         ///   （与 AGENTS.md §6 第 9 条同一精神）。
@@ -3087,6 +3312,16 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
+            /*
+             * 第二道容器内校验（2026-10-05 只读审计）：目录里只许有我们自己造的子目录。
+             * 单层路径一直有两道，递归这条路（两次删工作区）以前只有上一道 ——
+             * 判据本体是同一个纯函数（<see cref="WorkspaceCleanupGuard"/>），⛔ 不在这里再写一遍。
+             */
+            if (!HasOnlyOwnedWorkspaceSubdirectories(workspace.TaskDirectory, taskLabel))
+            {
+                return false;
+            }
+
             // 删除是**不可逆**的：动手之前先把"删什么、为什么、多大"写进日志（AGENTS.md §9.5 同一要求）。
             (int fileCount, long totalSize) = OutputVerifier.Measure(workspace.TaskDirectory);
 
@@ -3100,6 +3335,60 @@ namespace ArchiveFixer.Extraction
             Log(cleanup.Cleaned ? "INFO" : "WARN", $"{taskLabel}：{cleanup.Message}");
 
             return cleanup.Cleaned;
+        }
+
+        /// <summary>
+        /// 第二道容器内校验：这个工作区目录里**只许有我们自己造的子目录**（<c>layer-NNN</c> /
+        /// <c>carved</c> / <c>_密码预检</c>）。返回 false = 发现外来的，调用方一律**一个字节都不删**。
+        ///
+        /// <para>判据本体是 <see cref="WorkspaceCleanupGuard"/> 里那个纯函数（单层路径也用它），
+        /// 这里只负责"读目录 + 写 WARN"这两件与日志出口绑定的事。
+        /// 白名单刻意**不是**单层路径那一套（<c>stage</c>/<c>volumes</c>）：递归工作区的形状是层的目录，
+        /// 套用别人的白名单会把每一次清理都拦下 —— 那等于把清理整块关掉。</para>
+        ///
+        /// <para>读不动目录（占用 / 权限）时也拦下：这是"要删东西"的动作，判不出来就什么都不做
+        /// （与 <see cref="CleanupWorkspace"/> 的兜底同一条口径）。</para>
+        /// </summary>
+        private bool HasOnlyOwnedWorkspaceSubdirectories(string taskDirectory, string taskLabel)
+        {
+            string[] subdirectories;
+
+            try
+            {
+                if (!Directory.Exists(taskDirectory))
+                {
+                    // 本来就不在：没有"删了什么"需要交代，交给 Cleanup() 那一边如实回答。
+                    return true;
+                }
+
+                subdirectories = Directory.GetDirectories(taskDirectory);
+            }
+            catch (Exception ex)
+            {
+                Log("WARN", $"{taskLabel}：读不了工作区目录（{ex.Message}），已跳过清理：{taskDirectory}");
+
+                return false;
+            }
+
+            string? foreign = WorkspaceCleanupGuard.FindForeignSubdirectory(
+                subdirectories,
+                WorkspaceCleanupGuard.IsOwnedRecursiveWorkspaceDirectory);
+
+            if (foreign == null)
+            {
+                return true;
+            }
+
+            Log(
+                "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.WorkspaceForeignSubdirectoryLogFormat,
+                    taskLabel,
+                    foreign,
+                    taskDirectory));
+
+            return false;
         }
 
         /// <summary>
@@ -3298,6 +3587,8 @@ namespace ArchiveFixer.Extraction
                 RecursionStopReason.MaxDepthReached => "已达到最大递归层数",
                 RecursionStopReason.MaxTotalFilesReached => "已达到累计输出文件数上限",
                 RecursionStopReason.MaxTotalSizeReached => "已达到累计输出总大小上限",
+                // 与上一条同档（都是"撞上程序的安全上限，不是包坏了"）：措辞统一走 StatusText。
+                RecursionStopReason.MaxSingleFileSizeReached => StatusText.RecursionSingleFileSizeReachedReason,
                 RecursionStopReason.ExpansionRatioExceeded => "单层展开比超限，疑似压缩炸弹",
                 RecursionStopReason.TooManyInnerArchives => "本层内层归档数量超过上限",
                 RecursionStopReason.PasswordAttemptsExceeded => "已达到密码尝试次数上限（候选还有剩余）",

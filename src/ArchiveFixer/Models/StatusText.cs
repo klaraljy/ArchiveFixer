@@ -2707,5 +2707,46 @@ namespace ArchiveFixer.Models
         /// <summary>详细日志里"这一层开始解压"（递归每层一条；<c>{1}</c> = 层号，<c>{2}</c> = 归档名）。</summary>
         public const string RecursionLayerAttemptLogFormat =
             "{0}：递归第 {1} 层开始解压：{2}（候选顺序见下面每一条）。";
+
+        // ================================================================
+        // 递归层缺的那几道闸门（2026-10-05 只读审计；措辞与单层路径同一口径）
+        // ================================================================
+
+        /// <summary>
+        /// 递归层"**文件名也加密**（<c>-mhe</c> / <c>-hp</c>）⇒ 跳过空密码"那一行
+        /// （<c>{0}</c> = 层标签，<c>{1}</c> = 引擎给的错误类型）。
+        ///
+        /// <para>与 <see cref="RecursionSkippedEmptyPasswordLogFormat"/> 是**两回事**：那一条靠清单里的
+        /// 加密条目标记（列得出来），这一条连清单都列不出来（引擎报加密头）—— 但结论相同：
+        /// 空密码必然失败，白跑一整包。措辞照单层路径那一句（<c>ExtractionCoordinator</c> 的
+        /// "这一包连文件名都加密（引擎说 …）—— 同样跳过「空密码」这一档"）。</para>
+        /// </summary>
+        public const string RecursionSkippedEmptyPasswordEncryptedHeadersLogFormat =
+            "{0}：这一包连文件名都加密（引擎说 {1}）—— 同样跳过「空密码」这一档。";
+
+        /// <summary>
+        /// 「停止后续」在递归候选循环里的落点（<c>{0}</c> = 层标签，<c>{1}</c> = 还剩几个候选没试）。
+        ///
+        /// <para>措辞与单层路径同一句（<c>ExtractionCoordinator</c> 的"已按「停止后续」中断 ——
+        /// 剩余 N 个候选密码不再尝试"）：正在解的那一次不打断，下一个密码一个都不再试。</para>
+        /// </summary>
+        public const string RecursionStoppedByStopRequestLogFormat =
+            "{0}：已按「停止后续」中断 —— 剩余 {1} 个候选密码不再尝试。";
+
+        /// <summary>
+        /// 递归层的**单文件大小上限**停因（<c>DescribeStopReason</c> 用；与
+        /// "已达到累计输出总大小上限"同档：都是"程序的安全上限，不是包坏了"）。
+        /// </summary>
+        public const string RecursionSingleFileSizeReachedReason = "已达到单个文件解压后大小上限";
+
+        /// <summary>
+        /// 清工作区前的**第二道容器内校验**没过那一行（<c>{0}</c> = 任务名，<c>{1}</c> = 那个外来子目录，
+        /// <c>{2}</c> = 工作区目录）。
+        ///
+        /// <para>措辞与单层路径同一句（"工作区目录里有非本任务造的子目录（…），为安全起见不清：…"）：
+        /// 越界**只写 WARN、一个字节都不删**。</para>
+        /// </summary>
+        public const string WorkspaceForeignSubdirectoryLogFormat =
+            "{0}：工作区目录里有非本任务造的子目录（{1}），为安全起见不清：{2}";
     }
 }

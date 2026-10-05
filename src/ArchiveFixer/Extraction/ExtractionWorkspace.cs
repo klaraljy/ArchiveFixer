@@ -115,8 +115,13 @@ namespace ArchiveFixer.Extraction
     /// </summary>
     public sealed class ExtractionWorkspace
     {
-        /// <summary>工作区目录名前缀。带序号且补零，是为了在资源管理器里天然按层序排好。</summary>
-        private const string LayerDirectoryPrefix = "layer-";
+        /// <summary>
+        /// 工作区目录名前缀。带序号且补零，是为了在资源管理器里天然按层序排好。
+        ///
+        /// <para><c>internal</c>：清工作区前的第二道容器内校验要认它（<see cref="WorkspaceCleanupGuard"/>），
+        /// ⛔ 前缀只能在这里写一次。</para>
+        /// </summary>
+        internal const string LayerDirectoryPrefix = "layer-";
 
         /// <summary>每层的产物子目录名。固定叫 output，方便"某一层的产物"被直接指认。</summary>
         private const string OutputDirectoryName = "output";

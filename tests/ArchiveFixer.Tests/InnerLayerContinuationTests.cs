@@ -495,6 +495,80 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **到顶停下那一支也要取消已处理任务的勾选**（2026-10-05 只读审计）。
+        ///
+        /// <para>现场：正常续解那一支在加下一轮任务之前会取消勾选（见上面那条用例），
+        /// 而"到顶"这一支直接 <c>break</c> —— 于是用户点①页「继续解」时，上一批**最后一轮**
+        /// 已经解过的包仍在勾选态，会被**再解一遍**：产物同名时定稿走 AutoRename 生成
+        /// <c>(1)</c> 垃圾副本（一键档的冲突框被抑制、不走改名询问），
+        /// 若那一层的包已被"逐层回收"删掉，还会落一句「文件不存在」。</para>
+        ///
+        /// <para>判据只读两个事实：到顶停下之后**已处理的任务处于未勾选态**；
+        /// 再点一次「继续解」不会把最后一轮解过的包重解（产物目录里不出现 <c>(1)</c> 副本）。</para>
+        ///
+        /// <para><b>红检</b>：撤掉到顶支路那次 <c>DeselectProcessedTasks(processed)</c> ⇒
+        /// 本用例变红（<c>Assert.False() Failure … 已处理的任务必须取消勾选</c>）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 到顶停下之后_已处理的任务也要取消勾选_继续解不许重解最后一轮()
+        {
+            Harness harness = CreateHarness(ChainPassword + "\n");
+
+            // 上限取生效值（②页「最大嵌套层数」）：链比它多一层，第一轮必然撞上限。
+            int roundLimit = harness.OneClick.RoundLimit;
+            int lastLevel = roundLimit + 1;
+
+            string outer = BuildChain(lastLevel);
+
+            await harness.AddPathsAsync(outer);
+
+            ArchiveTask outerTask = Assert.Single(harness.Vm.Tasks);
+
+            OneClickOutcome first = await harness.RunOneClickAsync();
+
+            Assert.True(first.HitRoundLimit);
+
+            // ① 到顶停下时，**已经解过**的那些任务（含最外层那一单）必须处于未勾选态。
+            Assert.False(
+                outerTask.IsSelected,
+                "到顶停下之后已处理的任务必须取消勾选，否则「继续解」会把最后一轮重解一遍、产出 (1) 垃圾副本");
+
+            foreach (ArchiveTask processed in harness.Vm.Tasks.Where(t => t != outerTask))
+            {
+                bool isPending = processed.CurrentPath.EndsWith(
+                    $"level{lastLevel}.7z",
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (!isPending)
+                {
+                    Assert.False(processed.IsSelected, $"已处理的任务没取消勾选：{processed.FileName}");
+                }
+            }
+
+            // ② 再点一次「继续解」：把剩下那一层解完，而**最后一轮解过的那些包不许被重解**。
+            int callsBeforeSecondRun = harness.Engine.ExtractCalls.Count;
+
+            OneClickOutcome second = await harness.RunOneClickAsync();
+
+            Assert.False(second.HitRoundLimit, "剩下那一层解完就到底了，不该再报上限");
+
+            /*
+             * 重解的判据（与上面那条用例同一个思路）：一个"还没解过"的包最多被提交几次
+             * （每个密码候选一次：空密码 + 密码本命中 = 2 次）。第二趟只该解**剩下的那一层**，
+             * 所以新增调用数不超过 2；真要是把最后一轮重解一遍，这里会翻倍。
+             */
+            int callsInSecondRun = harness.Engine.ExtractCalls.Count - callsBeforeSecondRun;
+
+            Assert.True(
+                callsInSecondRun <= 2,
+                $"第二次「继续解」把已经解过的包重解了：新增 ExtractAsync {callsInSecondRun} 次");
+
+            // 产物目录里没有 "(1)" 这种自动改名副本（重解最典型的痕迹）。
+            Assert.Empty(Directory.GetDirectories(harness.OutputRoot, "*(1)*"));
+            Assert.Empty(Directory.GetDirectories(harness.OutputRoot, "*(1)"));
+        }
+
+        /// <summary>
         /// 轮数上限**只有一个真值来源**：②页「最大嵌套层数」（<c>AppSettings.MaxRecursionDepth</c>）。
         ///
         /// <para>用户 2026-09-26 原话：<i>"现在将默认的最大的解压层数改成 5，用户有需要自己会改的"</i>——

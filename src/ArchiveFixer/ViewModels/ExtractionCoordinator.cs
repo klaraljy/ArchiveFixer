@@ -113,6 +113,23 @@ namespace ArchiveFixer.ViewModels
                     new PasswordItem { Value = value, Source = ResolveCandidateSourceForLog(value) },
                     index);
 
+            /*
+             * 「停止后续」在**递归**候选循环里的落点（2026-10-05 只读审计）。
+             *
+             * 单层路径在候选之间看 IsStopping（语义：正在解的那一次不打断，下一个密码不再试），
+             * 而递归这条路过去拿不到这个信号 —— 用户点了「停止后续」，这一层剩下的候选照样一个个试完
+             * （大包就是几十分钟）。这里只把同一个信号接过去：判据与措辞都在递归核心那一处，
+             * ⛔ 协调器不再自己判一遍。
+             */
+            extractor.StopRequested = () => IsStopping;
+
+            /*
+             * 「可疑条目提示」的开关（2026-10-05 只读审计）：递归层拿到本层清单之后要统计
+             * 可执行 / 脚本类条目，而"要不要统计"是用户设置（注入方式照 VerboseLog：当场取值）。
+             * 结论怎么显示由 RunRecursiveAsync 那一边决定（写的是单层路径同一个字段）。
+             */
+            extractor.ReportDangerousEntries = Settings.ReportDangerousEntries;
+
             return extractor;
         }
 
@@ -155,8 +172,11 @@ namespace ArchiveFixer.ViewModels
         /// 旧实现的坑：调用方 new 的时候没传 limits，递归核心一直用 <c>RecursionLimits.Default</c> ——
         /// 于是"最大嵌套层数"改成 5 也照样只解 3 层，而每层密码上限被悄悄压到 8
         /// （设置项缺省是 10，用户调大更是不生效）。设置项必须真的管用，不能只是界面上的数字。
+        ///
+        /// ⚠ <c>internal</c>（2026-10-05）：单测要钉住"四条上限一条都不许漏映"——
+        /// 单文件那一条正是这么漏掉的（递归核心过去一处都没引用 ResourceBudget）。
         /// </summary>
-        private RecursionLimits BuildRecursionLimits() => new()
+        internal RecursionLimits BuildRecursionLimits() => new()
         {
             MaxDepth = Math.Clamp(Settings.MaxRecursionDepth, 1, 10),
             MaxPasswordAttemptsPerLayer = MaxPasswordAttemptsPerLayer,
@@ -168,7 +188,14 @@ namespace ArchiveFixer.ViewModels
              */
             MaxTotalSize = BudgetLimits.MaxTotalSize,
             MaxTotalFiles = BudgetLimits.MaxFileCount,
-            MaxExpansionRatio = BudgetLimits.MaxExpansionRatio
+            MaxExpansionRatio = BudgetLimits.MaxExpansionRatio,
+
+            /*
+             * 单文件那一条（2026-10-05 只读审计）：递归核心过去**一处都没映** ——
+             * 出厂默认档（展开所有分支）下，一个含 200 GiB 单文件的包不会被这道闸门拦下。
+             * 上限只有 BudgetLimits 这一个出口（与上面三条同一个理由：改了设置不重启也要生效）。
+             */
+            MaxSingleFileSize = BudgetLimits.MaxSingleFileSize
         };
 
         /// <summary>解压前预检最多试几个密码候选去列表：试太多次会让"一键"变成等待。</summary>
@@ -428,8 +455,11 @@ namespace ArchiveFixer.ViewModels
          * 为什么需要它：密码本没命中、统一密码也不对时，用户以前只能"改设置再重跑整批"。
          * 现在整批**一次性**问一次，输入的值当成本批所有任务的候选（排在空密码之后、
          * 密码本之前 —— 它比密码本更"新"，是用户刚给出的信息）。
+         *
+         * ⚠ <c>internal</c>（2026-10-05）：单测要钉住"它必须同时进**递归**那条路的候选表"——
+         * 只靠公开入口造不出"本批手动输过密码"这个状态（无界面宿主不会弹那个框）。
          */
-        private readonly List<string> _manualBatchPasswords = new();
+        internal readonly List<string> _manualBatchPasswords = new();
 
         /// <summary>本批是否已经问过手动密码（一次性：问过就不再问，无论用户填没填）。</summary>
         private bool _manualPasswordPrompted;
@@ -5670,25 +5700,52 @@ namespace ArchiveFixer.ViewModels
         /// 给递归层提供密码候选（只给值，不给来源说明）。
         /// 顺序与单层解压完全一致 —— 递归的内层包同样是"用户的包"，不该用另一套规则。
         ///
-        /// 这里就截到每层上限（同 <see cref="MaxPasswordAttemptsPerLayer"/> 这个设置项）：
-        /// 递归里每个候选同样是一次完整解压尝试，让几百个候选排着队进去
-        /// 等于把"一键处理"变成没人看得懂的长时间等待（AGENTS.md §9.2）。
+        /// <para>⚠ 2026-10-05（只读审计）这一处改了两件事，两件都关系到"用户刚输的密码到底试没试"：</para>
+        /// <list type="number">
+        /// <item><b>本批手动输入的密码也要进来</b>：它过去只插进单层路径的候选表
+        /// （<c>_manualBatchPasswords</c> 的唯一使用点），递归这条路拿不到 ⇒ 用户刚输对密码、
+        /// 内层包照样报「密码错误」。做法是**转调同一个** <see cref="InsertManualPasswordCandidates"/>
+        /// （插在空密码之后 + 去重，⛔ 不抄第二份判据）。</item>
+        /// <item><b>这里不再截断</b>：老写法 <c>.Take(MaxPasswordAttemptsPerLayer)</c> 在递归内部
+        /// "跳过空密码"那一步**之前**执行，而跳空密码只减账不减表 ⇒ 真实候选最多只试到 9 个
+        /// （每层上限 10）。截断改由各调用方自己按同一个上限做：递归核心的层循环本来就有
+        /// <c>attempts &gt;= MaxPasswordAttemptsPerLayer</c> 这一道，而"分卷试开"那三条调用点
+        /// 必须自己截（见 <see cref="BuildVolumeProbePasswordCandidates"/>）——
+        /// 否则 <c>VolumeProbeVerifier</c> 会对"每种排列 × 整份候选表"跑一遍试开，工作量放大几十倍。</item>
+        /// </list>
         /// </summary>
-        private IReadOnlyList<string> BuildRecursionPasswordCandidates(string archivePath)
+        internal IReadOnlyList<string> BuildRecursionPasswordCandidates(string archivePath)
         {
             var probe = new ArchiveTask(archivePath);
 
-            return _passwordService
-                .GetPasswordCandidates(
-                    probe,
-                    Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
-                    _passwordService.Passwords,
-                    Settings.TryEmptyPasswordFirst,
-                    Settings.EnableSidecarPassword)
-                .Take(MaxPasswordAttemptsPerLayer)
+            List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
+                probe,
+                Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
+                _passwordService.Passwords,
+                Settings.TryEmptyPasswordFirst,
+                Settings.EnableSidecarPassword);
+
+            InsertManualPasswordCandidates(candidates, _manualBatchPasswords);
+
+            return candidates
                 .Select(p => p.Value ?? string.Empty)
                 .ToList();
         }
+
+        /// <summary>
+        /// 「分卷试开」（<c>VolumeNameRepair.PlanByContentAsync</c> 系列）用的候选表：
+        /// **同一个 provider，但在这里截到每层上限**。
+        ///
+        /// <para>为什么要单独一个出口：<see cref="BuildRecursionPasswordCandidates"/> 现在给的是
+        /// **不截断**的完整候选表（递归核心内部自己按上限停手），而试开那一步的对账方式是
+        /// "每种卷序 × 每个候选都真跑一次 <c>TestAsync</c>" —— 几百个候选进去就是几十倍的无谓引擎调用。
+        /// 三条调用点（同目录 / 无名那两档 + 跨目录放宽那一档）全部走这一个方法，
+        /// ⛔ 不许各自 <c>.Take</c> 一遍（那正是"同一件事两个出口"的起点）。</para>
+        /// </summary>
+        internal IReadOnlyList<string> BuildVolumeProbePasswordCandidates(string archivePath) =>
+            BuildRecursionPasswordCandidates(archivePath)
+                .Take(MaxPasswordAttemptsPerLayer)
+                .ToList();
 
         /// <summary>
         /// 递归解压一个任务，并把结果落到任务状态上。
@@ -5759,6 +5816,16 @@ namespace ArchiveFixer.ViewModels
             // 构造时固定一份的话，用户改完设置不重启就不生效（见字段上的说明）。
             RecursionLimits limits = BuildRecursionLimits();
             RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor();
+
+            /*
+             * 「可疑条目提示」的回传口（2026-10-05 只读审计）：递归核心在拿到本层清单时算出那句话，
+             * 这里把它写进**与单层路径同一个字段**、走**同一个出口**（PublishDangerousEntriesHint）——
+             * 于是默认档下内层包里的 `.exe / .bat / .ps1` 也会像源包那样被点名。
+             *
+             * ⚠ 写的是**协调器手上这个 task**（递归核心拿到的可能是内嵌归档的探针任务），
+             * 提示属于用户看到的那一行。
+             */
+            recursiveExtractor.DangerousEntriesReported = hint => PublishDangerousEntriesHint(task, hint, "INFO");
 
             /*
              * 记下"这一单用的是哪个递归核心"：它手上的逐层工作区要在任务收尾时按结论处理
@@ -7362,7 +7429,7 @@ namespace ArchiveFixer.ViewModels
                  * 候选与解压那一步**同一套算法**（§9.5 同一件事只有一个出口），
                  * 密码只活在内存里、绝不进日志（不变量 5）。
                  */
-                IReadOnlyList<string> volumeTrialPasswords = BuildRecursionPasswordCandidates(current);
+                IReadOnlyList<string> volumeTrialPasswords = BuildVolumeProbePasswordCandidates(current);
 
                 /*
                  * 什么时候值得问"名字那条路"：
@@ -12764,8 +12831,13 @@ namespace ArchiveFixer.ViewModels
             {
                 string[] subdirectories = Directory.GetDirectories(taskDirectory);
 
-                string? foreign = subdirectories.FirstOrDefault(
-                    directory => !IsOurWorkspaceSubdirectory(Path.GetFileName(directory)));
+                /*
+                 * 第二道容器内校验：目录里只许有我们自己造的子目录（判据本体在 Extraction 层的纯函数里，
+                 * 递归那条路转调同一个 —— 2026-10-05 只读审计）。
+                 */
+                string? foreign = WorkspaceCleanupGuard.FindForeignSubdirectory(
+                    subdirectories,
+                    IsOurWorkspaceSubdirectory);
 
                 if (foreign != null)
                 {
@@ -14200,6 +14272,20 @@ namespace ArchiveFixer.ViewModels
                         AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
                     }
                 }
+
+                /*
+                 * ===== 递归这条路的密码类失败也要登记到本批（2026-10-05 只读审计）=====
+                 *
+                 * 现场：<see cref="RecordPasswordFailure"/> 过去只有单层路径的两个调用点，而这一支解完就 return ——
+                 * 于是出厂默认档（展开所有分支 ⇒ 内层包走递归）下，用户 2026-10-02 明确要的批末指路
+                 * （「可能本来就没有密码 / 也可能对的密码排在候选更靠后 ⇒ 去④页调顺序或调大上限」）
+                 * 与"本批 N 个包没能解开"整句**一次都不出现**。
+                 *
+                 * 判据**不在**这里重写：<see cref="RecordPasswordFailure"/> 自己就只认三个状态常量
+                 * （密码错误 / 密码可能不对也可能数据坏了 / 达到密码尝试上限），不是那一档就什么都不做 ——
+                 * 转调它 = 登记判据与批末分档仍然只有一处（§9.5）。
+                 */
+                RecordPasswordFailure(task);
 
                 return;
             }
@@ -16219,8 +16305,10 @@ namespace ArchiveFixer.ViewModels
             {
                 string[] subdirectories = Directory.GetDirectories(taskDirectory);
 
-                string? foreign = subdirectories.FirstOrDefault(
-                    directory => !IsOurWorkspaceSubdirectory(Path.GetFileName(directory)));
+                // 判据本体同上（一处纯函数，两条路径转调）。
+                string? foreign = WorkspaceCleanupGuard.FindForeignSubdirectory(
+                    subdirectories,
+                    IsOurWorkspaceSubdirectory);
 
                 if (foreign != null)
                 {
