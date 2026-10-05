@@ -536,7 +536,6 @@ namespace ArchiveFixer.ViewModels
                 SizeToContent = SizeToContent.Height,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 ResizeMode = ResizeMode.CanResize,
-                ShowInTaskbar = false,
                 Owner = Application.Current?.MainWindow
             };
 

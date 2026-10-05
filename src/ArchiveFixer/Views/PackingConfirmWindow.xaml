@@ -5,8 +5,7 @@
         Width="620"
         SizeToContent="Height"
         ResizeMode="NoResize"
-        WindowStartupLocation="CenterOwner"
-        ShowInTaskbar="False">
+        WindowStartupLocation="CenterOwner">
     <Window.Resources>
         <!-- 统一的排版：标题块（加粗 + 上间距 14 / 下间距 6）、说明块（灰字）、小卡片边框。 -->
         <Style x:Key="ConfirmLabelStyle" TargetType="TextBlock">

@@ -8,8 +8,7 @@
         Height="720"
         MinWidth="640"
         MinHeight="480"
-        WindowStartupLocation="CenterOwner"
-        ShowInTaskbar="False">
+        WindowStartupLocation="CenterOwner">
 
     <!--
         「说明」窗（用户 2026-09-27："在选项卡那一行在设置右边弄一个说明，说明里面包含着对我们这项工具的

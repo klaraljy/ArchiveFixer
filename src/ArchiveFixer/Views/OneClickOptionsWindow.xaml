@@ -8,7 +8,6 @@
         MaxHeight="780"
         SizeToContent="Height"
         ResizeMode="NoResize"
-        ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner">
 
     <!--
