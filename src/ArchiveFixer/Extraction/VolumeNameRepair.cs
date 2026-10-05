@@ -357,46 +357,33 @@ namespace ArchiveFixer.Extraction
             ExtensionHelper.IsArchiveSegmentByDisguise(fileName, out _);
 
         /// <summary>
-        /// **整组自洽**（用户 2026-10-04 拍板）：<paramref name="candidatePaths"/> 里能不能配出**一组自洽的兄弟卷**
-        /// —— **基名逐字相同 + 卷标记连续（除末片外等大）**，而且 <paramref name="selfPath"/> 必须在这一组里。
+        /// 照计划里那把"整组自洽"再判一次（**候选直接给对象**，尺寸由调用方填）。
         ///
-        /// <para>判据整体转调**既有出口** <see cref="VolumeGroupDetector.Group"/>：桶键 = 目录 + 基名 + 命名族
-        /// （那一条就是"基名逐字相同"）、<c>IsComplete</c> = 从第 1 卷起**连续无缺号**（"卷标记连续"）、
-        /// 尺寸规律 = **除最后一卷外彼此等大**；⛔ 这里不另写一套，⛔ 也不放宽它（认错比不认更糟）。</para>
-        ///
-        /// <para>候选池**只喂调用方手上那一层**（批首 / 手动那档 = 入口那一卷所在目录；还原工序那档 =
-        /// 已经认出来的这一组成员）—— ⛔ 不替用户满盘找文件。量不出大小 ⇒ 尺寸规律不过 ⇒ 判不出
-        /// ⇒ **调用方什么都不做**（兜底落在"不改名"那一档）。</para>
+        /// <para>为什么要这个重载：跨层收卷那一档的候选**躺在不同的层产物目录里**，而
+        /// <see cref="VolumeGroupDetector.Group"/> 的分桶键是「目录 + 基名 + 命名族」——
+        /// 直接喂一堆真路径，三片会各自成一个"完整"的单卷桶（一片自己也是"从 1 起、无缺号"），
+        /// 这条闸门就退化成恒真。收卷判的本来就是「**移动之后的样子**」：
+        /// 调用方因此喂"入口那一层 + 规范卷名"的虚拟候选，尺寸用各片**实际**字节数。</para>
         /// </summary>
         private static bool TryConfirmSelfConsistentVolumeGroup(
-            IEnumerable<string>? candidatePaths,
+            IEnumerable<VolumeCandidate>? candidates,
             string selfPath,
             string expectedBaseName)
         {
-            if (candidatePaths == null || string.IsNullOrWhiteSpace(selfPath) || string.IsNullOrWhiteSpace(expectedBaseName))
+            if (candidates == null || string.IsNullOrWhiteSpace(selfPath) || string.IsNullOrWhiteSpace(expectedBaseName))
             {
                 return false;
             }
 
             string selfName = FileNameHelper.GetFileName(selfPath);
-            var candidates = new List<VolumeCandidate>();
+            var list = candidates.Where(c => c != null && !string.IsNullOrWhiteSpace(c.Path)).ToList();
 
-            foreach (string? candidate in candidatePaths)
-            {
-                if (string.IsNullOrWhiteSpace(candidate))
-                {
-                    continue;
-                }
-
-                candidates.Add(new VolumeCandidate { Path = candidate, Size = LengthOf(candidate) });
-            }
-
-            if (candidates.Count == 0)
+            if (list.Count == 0)
             {
                 return false;
             }
 
-            foreach (VolumeGroup group in VolumeGroupDetector.Group(candidates))
+            foreach (VolumeGroup group in VolumeGroupDetector.Group(list))
             {
                 if (!group.IsComplete ||
                     !string.Equals(group.BaseName, expectedBaseName, StringComparison.OrdinalIgnoreCase))
@@ -414,6 +401,38 @@ namespace ArchiveFixer.Extraction
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// **整组自洽**（用户 2026-10-04 拍板）：<paramref name="candidatePaths"/> 里能不能配出**一组自洽的兄弟卷**
+        /// —— **基名逐字相同 + 卷标记连续（除末片外等大）**，而且 <paramref name="selfPath"/> 必须在这一组里。
+        ///
+        /// <para>判据整体转调**既有出口** <see cref="VolumeGroupDetector.Group"/>：桶键 = 目录 + 基名 + 命名族
+        /// （那一条就是"基名逐字相同"）、<c>IsComplete</c> = 从第 1 卷起**连续无缺号**（"卷标记连续"）、
+        /// 尺寸规律 = **除最后一卷外彼此等大**；⛔ 这里不另写一套，⛔ 也不放宽它（认错比不认更糟）。</para>
+        ///
+        /// <para>候选池**只喂调用方手上那一层**（批首 / 手动那档 = 入口那一卷所在目录；还原工序那档 =
+        /// 已经认出来的这一组成员）—— ⛔ 不替用户满盘找文件。量不出大小 ⇒ 尺寸规律不过 ⇒ 判不出
+        /// ⇒ **调用方什么都不做**（兜底落在"不改名"那一档）。</para>
+        /// </summary>
+        private static bool TryConfirmSelfConsistentVolumeGroup(
+            IEnumerable<string>? candidatePaths,
+            string selfPath,
+            string expectedBaseName)
+        {
+            var candidates = new List<VolumeCandidate>();
+
+            foreach (string? candidate in candidatePaths ?? Array.Empty<string>())
+            {
+                if (string.IsNullOrWhiteSpace(candidate))
+                {
+                    continue;
+                }
+
+                candidates.Add(new VolumeCandidate { Path = candidate, Size = LengthOf(candidate) });
+            }
+
+            return TryConfirmSelfConsistentVolumeGroup(candidates, selfPath, expectedBaseName);
         }
 
         /// <summary>父目录这一家里最多收几份候选（防止"父目录是个大杂烩"时白读一大堆文件头）。</summary>
@@ -2605,6 +2624,585 @@ namespace ArchiveFixer.Extraction
                     .ToList()
             };
         }
+
+        // ================================================================ 跨层收卷（2026-10-05 真机）
+
+        /// <summary>
+        /// 池里的一份候选（路径 + 名字自报的卷号 + 实际字节数）。
+        /// 单独一个类型只为了让下面那几段读起来不必到处写三元组。
+        /// </summary>
+        private readonly record struct GatherPiece(string Path, int Index, long Size);
+
+        /// <summary>
+        /// **跨层收卷**的结论（纯事实 + 一张计划；<see cref="ResolveCrossLayerVolumeGather"/> 一个字节都不动）。
+        /// </summary>
+        internal sealed class CrossLayerVolumeGather
+        {
+            /// <summary>
+            /// 这一档适不适用：手上这一份必须是某组的**第 1 卷**（卷号 == 1）。
+            /// 不适用 ⇒ 调用方照旧走今天那条路（⛔ 一个字节都不动、也不免试）。
+            /// </summary>
+            public bool Applicable { get; init; }
+
+            /// <summary>要把这几卷**搬进入口那一层**（<c>CanRepair = true</c> 才有值）；执行体仍是
+            /// <see cref="TryApply"/>（全成或全不成、绝不覆盖、失败倒序回滚）。</summary>
+            public VolumeNameRepairPlan? Plan { get; init; }
+
+            /// <summary>这一趟真要动的卷数（搬过来的 + 原地改名的；入口那一卷不算）。</summary>
+            public int MovedCount { get; init; }
+
+            /// <summary>入口那一层**已经自证完整** ⇒ 引擎直接解得开（既不用搬、也不该免试）。</summary>
+            public bool CompleteBesideEntry { get; init; }
+
+            /// <summary>
+            /// **不许再拿单独一片去试**（用户 2026-10-05 拍板）：有硬证据说这一组凑不齐、
+            /// 或者凑得齐却收不到入口这一层。判据只有 7z 起始头那条字节数证据（见方法注释的"免试"一节）。
+            /// </summary>
+            public bool ShouldSkipTrial { get; init; }
+
+            /// <summary>能点名的缺卷（规范卷名；空 = "缺的是末卷之后的卷"，名字里看不出来）。</summary>
+            public IReadOnlyList<string> MissingNames { get; init; } = Array.Empty<string>();
+
+            /// <summary>给人看的一句话（收了哪几卷 / 为什么没收 / 缺哪几片）。</summary>
+            public string Detail { get; init; } = string.Empty;
+        }
+
+        /// <summary>
+        /// **跨层收卷**（用户 2026-10-05 真机原话：「各分卷在不同的目录，你就将其全部移动到头文件 .001
+        /// 同级目录里面去」）。
+        ///
+        /// <para><b>现场</b>：三卷 7z 的三片分别躺在**三个不同的层产物目录**里
+        /// （<c>layer-001\output\HK.7z.002</c>、<c>layer-002\output\HK.7z.003</c>、
+        /// <c>layer-003\output\HK.7z.001</c>）。引擎找兄弟卷**只看入口文件旁边那一层** ——
+        /// 所以第 2 层把 <c>HK.7z.001</c> 单独交给 7-Zip 必然打不开，而它回的那句
+        /// <c>Open ERROR: Cannot open the file as [7z] archive</c> 还被说成「缺少首卷」（说反了，见
+        /// <see cref="Engines.SevenZip.SevenZipOutputParser.LooksLikeMissingVolumePart"/>）——
+        /// 整条链判「部分完成」，工作区 7 个文件 / 13.48 GiB 整份删掉，什么都没发布。</para>
+        ///
+        /// <para><b>三条边界</b>（不可逆动作，兜底一律落"什么都不做"）：</para>
+        /// <list type="number">
+        /// <item><description>候选池 = **入口自己那一层**（只读，引擎唯一会去找兄弟卷的地方）
+        /// + 调用方给的**这条链的各层产物目录**（只读枚举，搬的来源）；
+        /// ⛔ 不递归、⛔ 不含 <c>carved</c> 这种我们自造的兄弟目录、⛔ 绝不碰用户源目录、⛔ 不跨盘。</description></item>
+        /// <item><description>闸门（全过才动）：**整组自洽**（把"移动之后的样子"虚拟出来交给既有出口
+        /// <see cref="VolumeGroupDetector.Group"/>：基名逐字相同 + 卷标记连续 + 完整且含自己）
+        /// **并且**（7z）起始头自述的整包字节数 **==** 这几片字节数之和；目标名被占 / 入口自己的名字不标准
+        /// / 不同盘 ⇒ **整组不动**。</description></item>
+        /// <item><description>只移动**我们自己解出来的中间产物**：入口那一卷所在的层产物目录里的文件。
+        /// ⛔ 绝不覆盖任何已存在的文件（<see cref="TryApply"/> 全成或全不成）。</description></item>
+        /// </list>
+        ///
+        /// <para><b>免试</b>（同一批用户口径：「要不然你在分开了你还会继续解压单独的001」）：
+        /// 入口这一层配不出完整一组、又收不到一起时，**一次引擎调用都不做**，按不变量 7 如实报"缺哪几片"。
+        /// ⛔ 只对**有硬证据**的那一档免试：名字自报第 1 卷 + <see cref="SevenZipStartHeader"/> 能读出
+        /// 起始头（<c>32 + NextHeaderOffset + NextHeaderSize</c> = 整包应当有的字节数，<c>-mhe</c> 也不加密）。
+        /// 其他族（RAR / 跨盘 zip）**本轮不做免试**（它们的内容里没有"整包多长"这个自述数），
+        /// 照旧让引擎去试、按引擎原话给结论 —— 那几条既有用例断言的就是那条口径，⛔ 别顺手改。
+        /// 起始头读不出来 / 字节数**多于**自述且缩不出唯一解释 ⇒ 判不出 ⇒ 也不免试（照旧解）。</para>
+        /// </summary>
+        /// <param name="entryVolumePath">引擎这一趟要打开的那一份（这一层的输入；名字自报卷号 1）。</param>
+        /// <param name="chainPoolCandidates">
+        /// 这条递归链**各层产物目录**里的直接子文件（调用方枚举，通常带真实尺寸）。
+        /// 传 null / 空 ⇒ 只看入口自己那一层（不会搬任何东西）。
+        /// </param>
+        internal static CrossLayerVolumeGather ResolveCrossLayerVolumeGather(
+            string? entryVolumePath,
+            IEnumerable<VolumeCandidate>? chainPoolCandidates)
+        {
+            var notApplicable = new CrossLayerVolumeGather { Applicable = false };
+
+            if (string.IsNullOrWhiteSpace(entryVolumePath) || !File.Exists(entryVolumePath))
+            {
+                return notApplicable;
+            }
+
+            string entryPath = SafePathHelper.GetFullPathSafe(entryVolumePath);
+            string entryName = SafeFileName(entryPath);
+            string entryDirectory = Path.GetDirectoryName(entryPath) ?? string.Empty;
+
+            // 只接"手上这一份就是某组的第 1 卷"：入口是后续卷时该做的事完全不同（缺的是首卷）。
+            if (entryDirectory.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(entryName) != 1)
+            {
+                return notApplicable;
+            }
+
+            VolumeContentFormat format = VolumeContentInference.SniffFormat(entryPath);
+
+            /*
+             * 候选池：同族同基名（唯一出口 BelongsToSameGroup）+ 卷号读得出来。
+             * ⛔ 两处来源都只"看"：入口那一层用既有的同目录枚举、链池由调用方给。
+             *
+             * ⚠ **≥ 16 KiB 粗筛只加在"别的层产物目录"那一份上**（用户给的口径：跨目录找卷要挡噪声）——
+             * 入口自己那一层**一个都不许滤掉**：那一层正是引擎要读的地方，漏掉一份小的末卷
+             * 会让下面的字节数证据判成"缺卷"（免试）而其实它就在旁边。几 KB 的说明文件靠
+             * `BelongsToSameGroup`（同族同基名、名字里得有卷标记）挡住，不需要尺寸这一刀。
+             */
+            var pool = new List<GatherPiece>();
+            var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void Collect(IEnumerable<VolumeCandidate>? candidates, bool applySizeFilter)
+            {
+                foreach (VolumeCandidate? candidate in candidates ?? Array.Empty<VolumeCandidate>())
+                {
+                    if (candidate == null || string.IsNullOrWhiteSpace(candidate.Path))
+                    {
+                        continue;
+                    }
+
+                    string full = SafePathHelper.GetFullPathSafe(candidate.Path);
+
+                    if (full.Length == 0 || !seenPaths.Add(full) || !File.Exists(full))
+                    {
+                        continue;
+                    }
+
+                    string name = SafeFileName(full);
+                    int? index = VolumeGroupDetector.TryGetVolumeIndex(name);
+                    long size = LengthOf(full);
+
+                    if (index == null
+                        || size <= 0
+                        || (applySizeFilter && size < NearbyMinimumBytes)
+                        || !VolumeGroupDetector.BelongsToSameGroup(entryName, name))
+                    {
+                        continue;
+                    }
+
+                    pool.Add(new GatherPiece(full, index.Value, size));
+                }
+            }
+
+            Collect(EnumerateVolumeCandidatesInDirectory(entryPath), applySizeFilter: false);
+            Collect(chainPoolCandidates, applySizeFilter: true);
+
+            bool hasEntry = pool.Any(piece => SamePath(piece.Path, entryPath));
+
+            /*
+             * 卷号只能一份对一个：同一个卷号上冒出两份候选（同目录里的 `HK.7z.002` 与 `HK.7z.00删除2`、
+             * 或者别的分支里另一组同名卷）⇒ 判不出哪一份属于这一组 ⇒ 整档不做（照旧让引擎去判）。
+             */
+            var byIndex = new Dictionary<int, GatherPiece>();
+            bool ambiguousIndex = false;
+
+            foreach (GatherPiece piece in pool
+                         .OrderBy(p => p.Index)
+                         .ThenBy(p => SafeFileName(p.Path), StringComparer.OrdinalIgnoreCase))
+            {
+                if (!byIndex.TryAdd(piece.Index, piece))
+                {
+                    ambiguousIndex = true;
+                }
+            }
+
+            if (!hasEntry || ambiguousIndex || byIndex.Count == 0 || !byIndex.ContainsKey(1))
+            {
+                return notApplicable;
+            }
+
+            /*
+             * 期望基名 = 与 <see cref="VolumeGroupDetector.Group"/> **同一条代码路径**算出来的那个基名
+             * （组键那一档本身**不剥卷标记**：`TryResolveVolumeBaseName("HK.7z.001", VolumeGroupKey)`
+             * 原样返回 `HK.7z.001`，而组里算出来的是 `HK.7z` —— 必须交给同一个出口判）。
+             * 拿不到（这一份的名字/尺寸进不了任何一个桶）⇒ 判不出 ⇒ 这一档整个不做。
+             */
+            string? expectedBaseName = ResolveGatherBaseName(pool, entryName);
+
+            if (string.IsNullOrWhiteSpace(expectedBaseName))
+            {
+                return notApplicable;
+            }
+
+            /*
+             * 规范卷名 = "移动之后该叫什么"：认得出伪装的按既有还原尺子还原（`HK.7z.00删除2` → `HK.7z.002`），
+             * 认不出的保持原名。⛔ 不在这里拼名字（`TryBuildRestoredName` 是唯一出口）。
+             */
+            var targetNames = new Dictionary<int, string>();
+            var targetNamesSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (GatherPiece piece in byIndex.Values)
+            {
+                string canonical = SafeFileName(piece.Path);
+
+                if (TryBuildRestoredName(canonical, format, out string restored))
+                {
+                    canonical = restored;
+                }
+
+                if (!targetNamesSeen.Add(canonical))
+                {
+                    // 两份还原成同一个名字 ⇒ 判不出（⛔ 绝不覆盖）。
+                    return notApplicable;
+                }
+
+                targetNames[piece.Index] = canonical;
+            }
+
+            /*
+             * ⛔ **入口那一卷自己的名字**必须是规范名：这一档只搬兄弟卷，**不改入口的名字** ——
+             * 调用方手上那个 `item.ArchivePath` 是改名之前抓下来的，改了它就等于带着一个失效的路径
+             * 往下走（改名是「还原」工序的活，不是这一档的）。
+             */
+            if (!SamePath(byIndex[1].Path, entryPath)
+                || !SamePath(entryPath, Path.Combine(entryDirectory, targetNames[1])))
+            {
+                return new CrossLayerVolumeGather
+                {
+                    Applicable = true,
+                    Detail = string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.CrossLayerGatherEntryNameNotCanonicalFormat,
+                        entryName)
+                };
+            }
+
+            List<GatherPiece> beside = byIndex.Values
+                .Where(piece => SameDirectory(piece.Path, entryPath))
+                .ToList();
+
+            // ① 入口这一层**已经自证完整** ⇒ 什么都不用做（正常分卷 / 完整单卷包走的都是这一支）。
+            GroupEvidence besideEvidence = EvaluateGatherGroup(
+                beside, entryPath, entryDirectory, expectedBaseName, targetNames, format);
+
+            if (besideEvidence.NeedsNoWork && besideEvidence.Complete)
+            {
+                return new CrossLayerVolumeGather
+                {
+                    Applicable = true,
+                    CompleteBesideEntry = true,
+                    Detail = besideEvidence.Describe()
+                };
+            }
+
+            // ② 不齐 / 名字不标准 ⇒ 试着把链池里那几份收过来（纯计划）。
+            GroupEvidence allEvidence = EvaluateGatherGroup(
+                byIndex.Values.ToList(), entryPath, entryDirectory, expectedBaseName, targetNames, format);
+
+            VolumeNameRepairPlan? plan = null;
+            string gatherBlocker;
+
+            if (allEvidence.Complete)
+            {
+                plan = TryBuildGatherPlan(entryPath, byIndex.Values.ToList(), targetNames, out gatherBlocker);
+            }
+            else
+            {
+                gatherBlocker = allEvidence.Describe();
+            }
+
+            if (plan is { CanRepair: true })
+            {
+                return new CrossLayerVolumeGather
+                {
+                    Applicable = true,
+                    Plan = plan,
+                    MovedCount = plan.Items.Count(item => !string.Equals(
+                        item.CurrentPath,
+                        item.TargetPath,
+                        StringComparison.OrdinalIgnoreCase)),
+                    Detail = DescribeGatherPlan(plan, entryDirectory)
+                };
+            }
+
+            /*
+             * ③ 收不成 ⇒ 报"缺哪几片"。免试**只认 7z 那条硬证据**（见方法注释）：
+             * 起始头读得出来、而且池子自证不是整包（少了字节）或已是整包却收不到一起。
+             * 判不出（读不出起始头 / 多出来的那份缩不出唯一解释）⇒ 不免试，照旧让引擎去判。
+             */
+            bool hardEvidence = format == VolumeContentFormat.SevenZip
+                && allEvidence.BytesBudgetKnown
+                && !allEvidence.Ambiguous;
+
+            return new CrossLayerVolumeGather
+            {
+                Applicable = true,
+                ShouldSkipTrial = hardEvidence,
+                MissingNames = allEvidence.MissingNames,
+                Detail = gatherBlocker
+            };
+        }
+
+        /// <summary>一次"这一组齐不齐"的读数（纯事实）。</summary>
+        private readonly record struct GroupEvidence(
+            bool Complete,
+            bool NeedsNoWork,
+            bool BytesBudgetKnown,
+            bool Ambiguous,
+            IReadOnlyList<string> MissingNames,
+            string Detail)
+        {
+            public string Describe() => Detail;
+        }
+
+        /// <summary>
+        /// 期望基名：把池里那几片**只按文件名**喂给 <see cref="VolumeGroupDetector.Group"/>
+        /// （目录无所谓 —— 这一问只想知道"这一组叫什么"），取含入口那一份的那个组的基名。
+        ///
+        /// <para>⛔ 与下面那道闸门**同一条代码路径**：那样才不会被"组键档不剥卷标记"这类档位差异坑到
+        /// （实测 `TryResolveVolumeBaseName("HK.7z.001", VolumeGroupKey)` 原样返回 `HK.7z.001`，
+        /// 而组里算出来的是 `HK.7z`）。判不出来 ⇒ 返回 null（调用方整档不做）。</para>
+        /// </summary>
+        private static string? ResolveGatherBaseName(IReadOnlyList<GatherPiece> pool, string entryName)
+        {
+            try
+            {
+                var named = pool
+                    .Select(piece => new VolumeCandidate { Path = SafeFileName(piece.Path), Size = piece.Size })
+                    .ToList();
+
+                foreach (VolumeGroup group in VolumeGroupDetector.Group(named))
+                {
+                    if (group.Volumes.Any(v => string.Equals(
+                            SafeFileName(v.Path),
+                            entryName,
+                            StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return group.BaseName;
+                    }
+                }
+            }
+            catch
+            {
+                // 判不出来 ⇒ 什么都不做（调用方退回"照旧让引擎去判"）。
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 判"这几片是不是完整的一组"：⛔ 判据只用既有出口，⛔ 不另写尺子。
+        ///
+        /// <list type="number">
+        /// <item><description><b>结构自洽</b>：把这几片按"**移动之后的样子**"虚拟出来
+        /// （路径 = 入口那一层 + 规范卷名，尺寸 = 各片实际字节数）喂给
+        /// <see cref="TryConfirmSelfConsistentVolumeGroup(IEnumerable{VolumeCandidate}, string, string)"/>。
+        /// 为什么必须虚拟：真实的几片躺在不同目录里，而 <see cref="VolumeGroupDetector.Group"/>
+        /// 按"目录 + 基名 + 族"分桶 —— 直接喂真路径的话每一片都会自成一个"从 1 起、无缺号"的完整桶，
+        /// 这条闸门就成了恒真。</description></item>
+        /// <item><description><b>字节数硬证据</b>（7z）：起始头自述的整包长度 vs 这几片之和。
+        /// 少了 ⇒ 缺卷（报"还差 N 字节"）；多了 ⇒ 只接受既有那把"唯一说得通的缩池"
+        /// （<see cref="TryShrinkToExactByteBudget"/>），缩不出来 ⇒ <c>Ambiguous</c>（判不出，不免试）。</description></item>
+        /// <item><description><b>名字上的洞</b>：同一命名空间里配一次组，<c>MissingVolumeNames</c> 就是
+        /// "能点名的缺卷"。⚠ 名字里没有"共几卷"这个信息，末卷之后的缺号**一个字都不编**。</description></item>
+        /// </list>
+        /// </summary>
+        private static GroupEvidence EvaluateGatherGroup(
+            IReadOnlyList<GatherPiece> pieces,
+            string entryPath,
+            string entryDirectory,
+            string expectedBaseName,
+            IReadOnlyDictionary<int, string> targetNames,
+            VolumeContentFormat format)
+        {
+            var missing = new List<string>();
+
+            if (pieces.Count == 0)
+            {
+                return new GroupEvidence(false, false, false, true, missing, StatusText.CrossLayerGatherNoCandidates);
+            }
+
+            List<VolumeCandidate> Project() => pieces
+                .Where(piece => targetNames.ContainsKey(piece.Index))
+                .Select(piece => new VolumeCandidate
+                {
+                    Path = Path.Combine(entryDirectory, targetNames[piece.Index]),
+                    Size = piece.Size
+                })
+                .ToList();
+
+            List<VolumeCandidate> virtualCandidates = Project();
+
+            bool selfConsistent = TryConfirmSelfConsistentVolumeGroup(
+                virtualCandidates, entryPath, expectedBaseName);
+
+            // 名字上的洞（同一命名空间里配组）：能从名字上看出来的缺卷逐个点名。
+            try
+            {
+                foreach (VolumeGroup group in VolumeGroupDetector.Group(Project()))
+                {
+                    if (group.Volumes.Any(v => string.Equals(
+                            SafeFileName(v.Path),
+                            SafeFileName(entryPath),
+                            StringComparison.OrdinalIgnoreCase)))
+                    {
+                        missing.AddRange(group.MissingVolumeNames);
+                    }
+                }
+            }
+            catch
+            {
+                // 配不出来就是"点不了名"，不影响任何结论。
+            }
+
+            bool needsNoWork = pieces.All(piece =>
+                targetNames.ContainsKey(piece.Index) &&
+                SamePath(piece.Path, Path.Combine(entryDirectory, targetNames[piece.Index])));
+
+            if (format != VolumeContentFormat.SevenZip)
+            {
+                /*
+                 * 其他族没有"整包多长"这个自述数 ⇒ 只有名字这一条证据（与今天的行为一致：
+                 * 完整一组就解、不完整就让引擎去报它自己那句"分卷缺失"）。
+                 */
+                return new GroupEvidence(
+                    selfConsistent,
+                    needsNoWork,
+                    BytesBudgetKnown: false,
+                    Ambiguous: false,
+                    missing,
+                    selfConsistent
+                        ? StatusText.CrossLayerGatherSelfConsistent
+                        : StatusText.CrossLayerGatherNotSelfConsistent);
+            }
+
+            SevenZipByteBudget budget = SevenZipStartHeader.Measure(
+                entryPath,
+                pieces.Select(piece => piece.Path).ToList());
+
+            if (!budget.Known)
+            {
+                // 读不出起始头（入口这一份没有 7z 魔数）⇒ 这条证据缺席 ⇒ 照旧走名字那条。
+                return new GroupEvidence(
+                    selfConsistent,
+                    needsNoWork,
+                    BytesBudgetKnown: false,
+                    Ambiguous: false,
+                    missing,
+                    StatusText.CrossLayerGatherNoStartHeader);
+            }
+
+            if (budget.Verdict == SevenZipByteBudgetVerdict.Excess)
+            {
+                List<VolumeCandidate> others = pieces
+                    .Where(piece => !SamePath(piece.Path, entryPath))
+                    .Select(piece => new VolumeCandidate { Path = piece.Path, Size = piece.Size })
+                    .ToList();
+
+                IReadOnlyList<VolumeCandidate>? shrunk = TryShrinkToExactByteBudget(
+                    entryPath, others, budget.ExpectedBytes);
+
+                if (shrunk == null)
+                {
+                    // 判不出多出来的是哪一份 ⇒ 不下任何结论（照旧让引擎去试）。
+                    return new GroupEvidence(
+                        selfConsistent,
+                        needsNoWork,
+                        BytesBudgetKnown: true,
+                        Ambiguous: true,
+                        missing,
+                        budget.Describe());
+                }
+
+                budget = SevenZipStartHeader.Measure(
+                    entryPath,
+                    new[] { entryPath }.Concat(shrunk.Select(c => c.Path)));
+            }
+
+            return new GroupEvidence(
+                selfConsistent && budget.Verdict == SevenZipByteBudgetVerdict.Exact,
+                needsNoWork,
+                BytesBudgetKnown: true,
+                Ambiguous: false,
+                missing,
+                budget.Describe());
+        }
+
+        /// <summary>
+        /// 造"把这几卷收进入口那一层"的计划。执行体仍是 <see cref="TryApply"/>；
+        /// <paramref name="blocker"/> = 为什么收不成（跨盘 / 目标名被占 / 没什么可做）。
+        /// </summary>
+        private static VolumeNameRepairPlan? TryBuildGatherPlan(
+            string entryPath,
+            IReadOnlyList<GatherPiece> pieces,
+            IReadOnlyDictionary<int, string> targetNames,
+            out string blocker)
+        {
+            blocker = string.Empty;
+
+            string entryDirectory = Path.GetDirectoryName(entryPath) ?? string.Empty;
+            var slots = new List<VolumeGroupSlot>();
+            var names = new List<string>();
+            string? primary = null;
+
+            foreach (GatherPiece piece in pieces.OrderBy(p => p.Index))
+            {
+                if (!targetNames.TryGetValue(piece.Index, out string? canonical))
+                {
+                    blocker = StatusText.CrossLayerGatherNoCandidates;
+                    return null;
+                }
+
+                slots.Add(new VolumeGroupSlot { Path = piece.Path, Number = piece.Index });
+                names.Add(canonical);
+
+                if (primary == null && !SamePath(piece.Path, Path.Combine(entryDirectory, canonical)))
+                {
+                    // 计划里的"当前项"必须指向**真要动的那一卷**（不然 TryApply 一进来就判"名字本来就对"）。
+                    primary = piece.Path;
+                }
+            }
+
+            if (primary == null)
+            {
+                blocker = StatusText.VolumeRepairAlreadyStandard;
+                return null;
+            }
+
+            var order = new VolumeGroupOrder { Confirmed = true, Slots = slots };
+            VolumeNameRepairPlan plan = BuildPlanFromOrder(primary, order, names, entryPath);
+
+            if (!plan.CanRepair)
+            {
+                blocker = plan.Reason;
+                return null;
+            }
+
+            return plan;
+        }
+
+        /// <summary>
+        /// 收卷那一行日志要说的内容（"收了几卷、**从哪**收到哪"）：逐卷写
+        /// <c>旧名（从 &lt;那一层&gt; 收来）→ 新名</c>；原地只改名的写 <c>（原地改名）</c>。
+        ///
+        /// <para>⛔ 只写**目录名**（<c>layer-001</c> 这种），不写完整路径 —— §8 隐私红线与既有日志口径
+        /// （"内层包已移入其余物 …（&lt;那一层&gt; 那一层）"）同一条。</para>
+        /// </summary>
+        private static string DescribeGatherPlan(VolumeNameRepairPlan plan, string entryDirectory)
+        {
+            var parts = new List<string>();
+
+            foreach (VolumeRepairItem item in plan.Items ?? Array.Empty<VolumeRepairItem>())
+            {
+                if (string.Equals(item.CurrentPath, item.TargetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string folder = SafeFileName(Path.GetDirectoryName(item.CurrentPath) ?? string.Empty);
+                bool renamed = !string.Equals(
+                    item.CurrentFileName,
+                    item.SuggestedFileName,
+                    StringComparison.OrdinalIgnoreCase);
+
+                bool sameDirectory = string.Equals(
+                    Path.GetDirectoryName(item.CurrentPath),
+                    entryDirectory,
+                    StringComparison.OrdinalIgnoreCase);
+
+                string where = sameDirectory ? "原地改名" : $"从 {folder} 收来";
+
+                parts.Add(renamed
+                    ? $"{item.CurrentFileName} → {item.SuggestedFileName}（{where}）"
+                    : $"{item.CurrentFileName}（{where}）");
+            }
+
+            return parts.Count == 0 ? StatusText.VolumeRepairAlreadyStandard : string.Join("；", parts);
+        }
+
+        private static bool SameDirectory(string a, string b) =>
+            string.Equals(
+                Path.GetDirectoryName(SafePathHelper.GetFullPathSafe(a)),
+                Path.GetDirectoryName(SafePathHelper.GetFullPathSafe(b)),
+                StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 照着计划**只改名字**。⛔ 绝无覆盖、绝无删除、绝不改内容：

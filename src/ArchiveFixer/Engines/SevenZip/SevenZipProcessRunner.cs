@@ -797,6 +797,13 @@ namespace ArchiveFixer.Engines.SevenZip
         /// 纯关键字分类一定会把缺卷误报成"不支持该格式"，用户就会以为文件坏了。
         /// 唯一可靠的判据是**文件名 + 同目录里有没有这一组的其它卷**：
         /// 目录里数出缺号 → 缺卷；数不出缺号但文件本身就叫 .001/.002/… → 缺首卷。
+        ///
+        /// <para>⚠ 2026-10-05：入口那一档已经**在纯文本分类里就分好**了
+        /// （<see cref="SevenZipOutputParser.LooksLikeMissingVolumePart"/> 只认卷号 ≥ 2；
+        /// 卷号 == 1 由分类器直接返 <c>"VolumeMissing"</c>，真机 `HK.7z.001` 报"缺少首卷"就是说反了）。
+        /// 本方法因此**照旧自洽**：<c>"VolumeMissing"</c> 在第一行原样返回，
+        /// <c>MissingFirstVolume</c> 仍走下面的"数缺号"二次判定；两个码对上层是同一类
+        /// （<c>ExtractionCoordinator.IsVolumeMissingErrorType</c> 两个都收）。</para>
         /// </summary>
         private static string ResolveVolumeMissingErrorType(
             string errorType,

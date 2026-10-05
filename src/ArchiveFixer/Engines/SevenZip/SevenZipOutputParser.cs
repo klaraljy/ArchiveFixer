@@ -78,24 +78,43 @@ namespace ArchiveFixer.Engines.SevenZip
         public const string EncryptedHeadersErrorType = "EncryptedHeaders";
 
         /// <summary>
-        /// 判定"文件名是分卷、且首卷看不到"。
+        /// 判定"文件名是分卷的**后续卷**（卷号 ≥ 2）、且首卷看不到"。
         ///
         /// <paramref name="archivePath"/> 为 null 时不做这个判定（老调用方按纯文本分类，行为不变）；
         /// 分卷的头信息在**最后一卷**里，缺后续卷时连列目录都会失败 ——
         /// 宁可判成缺卷，也不要误报成"不支持该格式"（不变量 7 要求报缺哪几个）。
         ///
-        /// 注意：这里只按**文件名**判定，判不出"首卷到底在不在"。真正的二次判定（数目录里的缺号）
-        /// 在 <c>SevenZipProcessRunner.ResolveVolumeMissingErrorType</c>，那里才有文件系统可用。
+        /// <para>⛔ <b>卷号 == 1 的那一份不算</b>（2026-10-05 真机修正）。现场：三卷 7z 的
+        /// <c>HK.7z.001</c>（它**自己就是第 1 卷**，只是兄弟卷躺在别的层产物目录里）单独交给 7-Zip，
+        /// 退出码 2 + <c>Open ERROR: Cannot open the file as [7z] archive</c>（26.03 实测）——
+        /// 老判据"名字像分卷就返 <see cref="MissingFirstVolumeErrorType"/>"于是对它报
+        /// 「这是分卷压缩包的后续卷，缺少首卷」：**说反了**（后续卷 / 缺首卷两条都不成立）。
+        /// 现在只有卷号 ≥ 2 才下这个断言；卷号 == 1 走 <see cref="SevenZipVolumeMissingErrorType"/>
+        /// （「分卷缺失」——不含任何错误断言，上层同一档处理，见
+        /// <c>ExtractionCoordinator.IsVolumeMissingErrorType</c> 与
+        /// <c>SevenZipProcessRunner.ResolveVolumeMissingErrorType</c>，两处都已把两个码算进同一类）。</para>
+        ///
+        /// <para>注意：这里只按**文件名**判定，判不出"首卷到底在不在"。真正的二次判定（数目录里的缺号）
+        /// 在 <c>SevenZipProcessRunner.ResolveVolumeMissingErrorType</c>，那里才有文件系统可用。</para>
         /// </summary>
-        public static bool LooksLikeMissingVolumePart(string? archivePath)
-        {
-            if (string.IsNullOrWhiteSpace(archivePath))
-            {
-                return false;
-            }
+        public static bool LooksLikeMissingVolumePart(string? archivePath) => TryGetVolumeIndex(archivePath) >= 2;
 
-            return VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(archivePath)) != null;
-        }
+        /// <summary>
+        /// 文件名自称的卷号（1 起）；不是分卷 / 名字没带卷号 ⇒ null。
+        /// 判据只有既有出口 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/>（⛔ 不另写一套名字规则）。
+        /// </summary>
+        private static int? TryGetVolumeIndex(string? archivePath) =>
+            string.IsNullOrWhiteSpace(archivePath)
+                ? null
+                : VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(archivePath));
+
+        /// <summary>
+        /// 归档**打不开**、而名字是分卷时统一落的那一档（不变量 7：报"分卷缺失"，⛔ 不编缺卷清单）。
+        ///
+        /// <para>它就是 <c>SevenZipProcessRunner</c> 与协调器都认识的那个既有字符串
+        /// （判据里⛔ 不比中文，只比这个机器可比的值）。</para>
+        /// </summary>
+        public const string SevenZipVolumeMissingErrorType = "VolumeMissing";
 
         /// <summary>
         /// 条目级错误行左边那几种"原因"（**前缀**匹配）。实测本机 7-Zip 26.03：
@@ -317,10 +336,21 @@ namespace ArchiveFixer.Engines.SevenZip
              * 只给非首卷时报的是 "Cannot open the file as archive"（26.01 实测，退出码 2），
              * 字面上与"这不是归档"完全一样。判据不能用关键字，只能用**文件名是不是分卷**：
              * 一个本身就叫 .001/.002/… 的文件打不开，最可能的原因是同组的卷不在同目录里。
+             *
+             * ⚠ 两种卷号要分开说（2026-10-05 真机）：卷号 ≥ 2 ⇒ "后续卷、缺首卷"成立；
+             * 卷号 == 1 ⇒ **它自己就是首卷**，再说"缺首卷"是自相矛盾（真机 `HK.7z.001` 报的就是那句），
+             * 只能如实说「分卷缺失」（同状态、同用户动作，且上层本就把两者算成一类）。
              */
-            if (LooksLikeMissingVolumePart(archivePath))
+            int? volumeIndex = TryGetVolumeIndex(archivePath);
+
+            if (volumeIndex >= 2)
             {
                 return MissingFirstVolumeErrorType;
+            }
+
+            if (volumeIndex == 1)
+            {
+                return SevenZipVolumeMissingErrorType;
             }
 
             if (ContainsAny(text,

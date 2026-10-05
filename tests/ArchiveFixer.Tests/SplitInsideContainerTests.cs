@@ -199,9 +199,26 @@ namespace ArchiveFixer.Tests
             Assert.False(zipNamed.Success, "只有第一卷时当然列不出来（这条只证明'结论拿得到'）");
             Assert.False(sevenZipNamed.Success);
 
-            // 机器可比的那两位（实测）：叫 `.zip` → 落进"缺少首卷"这一类（管线据此报「分卷缺失」，
-            // 成因说得对）；叫 `.7z` → 引擎改口说"损坏"（管线上就是「文件损坏」，会让人去怀疑文件）。
-            Assert.Equal(Engines.SevenZip.SevenZipOutputParser.MissingFirstVolumeErrorType, zipNamed.ErrorType);
+            /*
+             * 机器可比的那两位（实测）：叫 `.zip` → 落进**「分卷缺失」这一族**（管线据此报「分卷缺失」，
+             * 成因说得对）；叫 `.7z` → 引擎改口说"损坏"（管线上就是「文件损坏」，会让人去怀疑文件）。
+             *
+             * ⚠ 2026-10-05（真机 `HK.7z.001`）：这一份**自己就是第 1 卷**（`第一卷.zip` 的卷号也是 1），
+             * 所以那一族里现在落的是 `VolumeMissing`（「分卷压缩包缺少必要分卷」）而不是
+             * `MissingFirstVolume`（「这是**后续卷**，缺少首卷」—— 对第 1 卷本身是**说反了**）。
+             * 两个码对上层是同一档（`ExtractionCoordinator.IsVolumeMissingErrorType` 都收），
+             * 本条只钉"落进这一族、且与'损坏'那一档分得开"。
+             */
+            Assert.Contains(
+                zipNamed.ErrorType,
+                new[]
+                {
+                    Engines.SevenZip.SevenZipOutputParser.SevenZipVolumeMissingErrorType,
+                    Engines.SevenZip.SevenZipOutputParser.MissingFirstVolumeErrorType
+                });
+            Assert.Equal(
+                StatusText.VolumeMissing,
+                Engines.SevenZip.SevenZipOutputParser.ErrorTypeToTaskStatus(zipNamed.ErrorType!));
             Assert.Equal(EngineErrorTypes.CorruptedArchive, sevenZipNamed.ErrorType);
         }
 

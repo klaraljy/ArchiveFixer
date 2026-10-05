@@ -116,6 +116,13 @@ namespace ArchiveFixer.Models
                 case RecursionStopReason.EngineFailed:
                 case RecursionStopReason.UnsafeEntry:
                 case RecursionStopReason.DiskSpaceInsufficient:
+
+                /*
+                 * 分卷缺失（免试那一档，用户 2026-10-05 拍板）：这一组凑不齐 —— 一个字节都没产出就是失败、
+                 * 产出过东西才叫部分完成，与上面几档同一处置；但**状态另算**（见下面那张表）——
+                 * 用户要做的是"把同一组分卷凑到一个目录里"，不是去怀疑包坏了或换引擎。
+                 */
+                case RecursionStopReason.MissingVolume:
                     /*
                      * **什么都没产出 ⇒ 这是失败，不是"部分完成"**（用户 2026-09-27 真机）：
                      * `giu.7z.001` 那一单一个文件都没解出来，①页却写「部分完成」——
@@ -155,6 +162,13 @@ namespace ArchiveFixer.Models
                          * （用户 2026-09-27 真机：递归内层包撞空间不足，诊断却归"其他"）。
                          */
                         RecursionStopReason.DiskSpaceInsufficient => StatusText.DiskSpaceInsufficient,
+
+                        /*
+                         * 分卷缺失：与单层路径**逐字同一个状态**（`StatusText.VolumeMissing` = 分卷缺失）——
+                         * 不变量 7 要的就是"报缺哪几个"，而 ⛔ 不许落「解压失败」
+                         * （那会让人以为这个包本身有问题）。
+                         */
+                        RecursionStopReason.MissingVolume => StatusText.VolumeMissing,
 
                         // 产物越界 / 危险条目（不变量 4）：与"引擎解不开"同一档 —— 结论不成立。
                         _ => StatusText.ExtractFailed

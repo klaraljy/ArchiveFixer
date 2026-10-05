@@ -124,6 +124,36 @@ namespace ArchiveFixer.Tests
             Assert.Equal(StatusText.VolumeMissing, SevenZipOutputParser.ErrorTypeToTaskStatus(type));
         }
 
+        /// <summary>
+        /// **第 1 卷自己打不开时不许说"缺少首卷"**（2026-10-05 真机）。
+        ///
+        /// <para>现场：三卷 7z 的三片躺在三个层产物目录里，<c>HK.7z.001</c>（**它自己就是第 1 卷**）
+        /// 单独交给 7-Zip 报 <c>Open ERROR: Cannot open the file as [7z] archive</c>，
+        /// 老判据"名字像分卷 ⇒ MissingFirstVolume"于是说「这是分卷压缩包的**后续卷**，缺少首卷」——
+        /// 两条都不成立（它既不是后续卷、也不缺首卷）⇒ 用户被指去找一个**就在手上**的东西。</para>
+        ///
+        /// <para>判据只读名字与既有出口：卷号 ≥ 2 才允许下"缺首卷"的断言；卷号 == 1 一律落既有的
+        /// <c>"VolumeMissing"</c>（「分卷缺失」，不含任何错误断言，上层同一档处理）。</para>
+        /// </summary>
+        [Fact]
+        public void 第一卷自己打不开_不许报缺少首卷()
+        {
+            const string error =
+                "ERROR: C:\\t\\only\\HK.7z.001 ｜ Open ERROR: Cannot open the file as [7z] archive ｜ ERRORS:";
+
+            string type = SevenZipOutputParser.DetectSevenZipErrorType(2, string.Empty, error, "C:\\t\\only\\HK.7z.001");
+
+            Assert.Equal(SevenZipOutputParser.SevenZipVolumeMissingErrorType, type);
+            Assert.Equal(StatusText.VolumeMissing, SevenZipOutputParser.ErrorTypeToTaskStatus(type));
+
+            // ⛔ 文案里不许再出现"缺少首卷"那种反过来的断言。
+            Assert.DoesNotContain("缺少首卷", SevenZipOutputParser.ErrorTypeToMessage(type), StringComparison.Ordinal);
+
+            // 对照：卷号 ≥ 2 的那一档照旧（判据只按卷号分档，⛔ 不按中文）。
+            Assert.True(SevenZipOutputParser.LooksLikeMissingVolumePart("volume.7z.002"));
+            Assert.False(SevenZipOutputParser.LooksLikeMissingVolumePart("volume.7z.001"));
+        }
+
         [Fact]
         public async Task 只给非首卷_分类为分卷缺失并报出缺哪一卷()
         {

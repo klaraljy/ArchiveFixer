@@ -2792,5 +2792,71 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string RecursionEncryptedHeadersReason =
             EncryptedHeaders + " —— 连内容清单都读不出来（需要正确密码）";
+
+        // ================================================================ 跨层收卷（2026-10-05 真机）
+
+        /// <summary>
+        /// 跨层收卷那一行 INFO：<c>{0}</c> = 层标签，<c>{1}</c> = 收了几卷，<c>{2}</c> = 入口那一卷的名字，
+        /// <c>{3}</c> = 逐卷 `旧名 → 新名`。
+        ///
+        /// <para>必须同时说清三件事：收了**几卷**、收进**哪一卷所在的那一层**、
+        /// 以及"只动我们自己解出来的中间产物"（用户 2026-10-05 原话：
+        /// 「各分卷在不同的目录，你就将其全部移动到头文件 .001 同级目录里面去」）。</para>
+        /// </summary>
+        public const string CrossLayerGatherDoneFormat =
+            "{0}：各分卷没在同一个目录里 —— 已把同组的 {1} 卷收进入口「{2}」所在的那一层"
+            + "（只移动我们自己解出来的中间产物，源目录一个字节都没动）：{3}";
+
+        /// <summary>
+        /// 跨层收卷**没收成**那一行 WARN：<c>{0}</c> = 层标签，<c>{1}</c> = 为什么。
+        /// 一个字节都没动，所以要如实说清"没收"而不是悄悄放过。
+        /// </summary>
+        public const string CrossLayerGatherBlockedFormat =
+            "{0}：同组的分卷不在同一层里，而这一次收不到一起 —— 整组一个字节都没动。原因：{1}";
+
+        /// <summary>
+        /// **免试**那一行（不变量 7）：<c>{0}</c> = 层标签，<c>{1}</c> = 入口那一卷，
+        /// <c>{2}</c> = 缺哪几片（或"名字上看不出"），<c>{3}</c> = 字节数证据 + 为什么没收。
+        ///
+        /// <para>⛔ 措辞必须点明"引擎一次都没被调用"：用户看到的不能是「引擎操作失败」
+        /// （那会把他引去怀疑包坏了或换引擎），而是"这一组凑不齐，先凑齐再来"。</para>
+        /// </summary>
+        public const string CrossLayerGatherSkipTrialFormat =
+            "{0}：分卷缺失 —— 「{1}」这一组凑不齐，所以没有拿单独一片去试（引擎一次都没被调用）。{2}{3}";
+
+        /// <summary>能点名的缺卷（规范卷名）：<c>{0}</c> = 名字清单。</summary>
+        public const string CrossLayerGatherMissingNamesFormat = "缺的卷（名字上看得出来）：{0}。";
+
+        /// <summary>
+        /// 缺的是**末卷之后的卷**时的如实说法（命名里没有"共几卷"，⛔ 一个字都不编）。
+        /// </summary>
+        public const string CrossLayerGatherNoMissingNames =
+            "缺的是末卷之后的卷 —— 名字里没有「共几卷」这个信息，所以不编缺卷清单，请按字节数差额自己核对。";
+
+        /// <summary>入口那一卷自己的名字不是规范名 ⇒ 这一档只搬兄弟卷、⛔ 不改入口的名字：<c>{0}</c> = 入口名字。</summary>
+        public const string CrossLayerGatherEntryNameNotCanonicalFormat =
+            "入口那一卷自己的名字不是规范名（{0}）—— 这一档只把兄弟卷收过来、⛔ 不改入口的名字"
+            + "（改名是「还原」工序的活），所以整组一个字节都没动";
+
+        /// <summary>池子里一份同组候选都没有（判不出 ⇒ 什么都不做）。</summary>
+        public const string CrossLayerGatherNoCandidates = "池子里没有配得上这一组的候选（判不出）";
+
+        /// <summary>名字这一条证据成立（基名逐字相同 + 卷标记连续 + 含自己）。</summary>
+        public const string CrossLayerGatherSelfConsistent = "名字这一条证据成立（基名、卷标记连续、含自己）";
+
+        /// <summary>名字这一条证据不成立（组不齐 / 基名对不上 / 尺寸不规律）。</summary>
+        public const string CrossLayerGatherNotSelfConsistent = "名字这一条证据不成立（组不齐或基名对不上）";
+
+        /// <summary>读不出 7z 起始头 ⇒ 字节数这条证据缺席（照旧走名字那条）。</summary>
+        public const string CrossLayerGatherNoStartHeader =
+            "读不出 7z 起始头（这一份没有 7z 魔数）—— 字节数这条证据缺席，只按名字判";
+
+        /// <summary>
+        /// 递归层的**停因**：这一组缺卷，连试都没试（用户 2026-10-05 拍板：
+        /// 「要不然你在分开了你还会继续解压单独的001」）。
+        /// ⛔ 与「引擎操作失败」必须分开：引擎压根没被调用过。
+        /// </summary>
+        public const string RecursionMissingVolumeReason =
+            VolumeMissing + "：这一组凑不齐，没有拿单独一片去试（引擎未被调用）";
     }
 }

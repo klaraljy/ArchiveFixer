@@ -255,6 +255,17 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         SourceChanged,
 
+        /// <summary>
+        /// **分卷缺失（免试那一档）**：这一组凑不齐，所以**一次引擎调用都没做**（用户 2026-10-05 拍板：
+        /// 「要不然你在分开了你还会继续解压单独的001」）。
+        ///
+        /// <para>与 <see cref="EngineFailed"/> 分开的理由：用户要做的动作完全不同 ——
+        /// EngineFailed 指向"查包 / 换引擎"，而这一档是"把同一组分卷凑到同一个目录里再来"。
+        /// 判据只有一条硬证据（7z 起始头自述的整包字节数对不上），见
+        /// <c>VolumeNameRepair.ResolveCrossLayerVolumeGather</c>；⛔ 其他族本轮不做这一档。</para>
+        /// </summary>
+        MissingVolume,
+
         UserCancelled,
 
         EngineFailed
@@ -1053,6 +1064,49 @@ namespace ArchiveFixer.Extraction
                         layerLabel,
                         item.Depth,
                         Path.GetFileName(item.ArchivePath)));
+            }
+
+            /*
+             * ===== 跨层收卷 + 凑不齐就别试（用户 2026-10-05 真机）=====
+             *
+             * 现场：三卷 7z 的三片分别躺在**三个不同的层产物目录**里（`layer-001\output\HK.7z.002`、
+             * `layer-002\output\HK.7z.003`、`layer-003\output\HK.7z.001`）。引擎找兄弟卷**只看入口文件
+             * 旁边那一层** ⇒ 第 2 层拿 `HK.7z.001` 单独去解必然报
+             * `Open ERROR: Cannot open the file as [7z] archive` ⇒ 整条链判「部分完成」、
+             * 工作区 7 个文件 / 13.48 GiB 整份删掉、什么都没发布。用户原话：
+             * 「各分卷在不同的目录，你就将其全部移动到头文件 .001 同级目录里面去」、
+             * 「要不然你在分开了你还会继续解压单独的001」。
+             *
+             * <para>挂点为什么在**这里**（而不是 `ProbeInnerArchivesAsync` 的「还原」工序之后）：
+             * ① 收卷要的是"**到解这一层时**兄弟卷都齐了"—— 三片由三个同深度的分支各自产出，
+             * 谁先谁后由队列决定，在"产出"那一刻收会漏掉后面才产出 / 才被抠出来的那几片；
+             * 解这一层是**唯一**能确定"该在的都在了"的时刻。
+             * ② "凑不齐就别试"本来就只能在**调用引擎之前**判（这里正是引擎调用之前、候选循环之外）。
+             * ③ 「还原」工序那一挂点照旧不动：它管的是本层产物的名字，与收卷互不干扰。</para>
+             *
+             * <para>⛔ 判据与执行体都不在这里：整件事转调 `VolumeNameRepair.ResolveCrossLayerVolumeGather`
+             * （纯计划）+ `VolumeNameRepair.TryApply`（全成或全不成、绝不覆盖、失败倒序回滚）。
+             * ⛔ 候选池只有两处：**入口自己那一层**（只读）+ **这条链的各层产物目录的直接子文件**
+             * （`CurrentWorkspace.Layers`，⛔ 不递归、⛔ 不含 `carved` 这种我们自造的兄弟目录、
+             * ⛔ 绝不碰用户源目录）；跨盘一律不收（`BuildPlanFromOrder` 里判）。</para>
+             */
+            if (!TryGatherCrossLayerVolumes(item, archivePath, layerLabel, out string? missingVolumeMessage))
+            {
+                /*
+                 * 这一组凑不齐、而且有硬证据 ⇒ **一次引擎调用都不做**，如实报"缺哪几片"
+                 * （不变量 7）。⛔ 绝不让它落到「引擎操作失败」：引擎压根没被调用过。
+                 */
+                Log("WARN", missingVolumeMessage!);
+
+                return LayerOutcome.Stop(
+                    BuildLayerReport(
+                        item,
+                        result: null,
+                        succeededPassword: null,
+                        overrideMessage: missingVolumeMessage,
+                        manifestEntries: null,
+                        overrideStatus: StatusText.VolumeMissing),
+                    RecursionStopReason.MissingVolume);
             }
 
             foreach (string candidate in candidates)
@@ -2004,6 +2058,166 @@ namespace ArchiveFixer.Extraction
             }
 
             return retried;
+        }
+
+        /// <summary>
+        /// 引擎调用之前的那一道：**跨层收卷**（把同组散在别的层产物目录里的卷收进入口那一层），
+        /// 以及收不到一起时的**免试**判定。
+        ///
+        /// <para>返回 false = 这一组凑不齐、而且有硬证据 ⇒ **一次引擎都不许调**，
+        /// <paramref name="missingVolumeMessage"/> 就是那句"缺哪几片"（写日志 + 当层结论）。</para>
+        ///
+        /// <para>⛔ 任何意外（列目录失败、判据内部异常）一律返回 true：这一档是**加法**，
+        /// 判不出来时必须退回"照旧让引擎去判"，⛔ 绝不能让一个新的判据把本来能解的包挡下来。</para>
+        /// </summary>
+        private bool TryGatherCrossLayerVolumes(
+            WorkItem item,
+            string archivePath,
+            string layerLabel,
+            out string? missingVolumeMessage)
+        {
+            missingVolumeMessage = null;
+
+            try
+            {
+                string? skippedReason = null;
+
+                /*
+                 * 候选池 = 这条链各层产物目录的直接子文件（没有工作区就是空池 ⇒ 只按入口那一层判、
+                 * 一个字节都不搬）。每次重判都**重新枚举**：搬完之后盘上的事实变了。
+                 */
+                if (Evaluate(EnumerateWorkspacePool(CurrentWorkspace)))
+                {
+                    return true;
+                }
+
+                missingVolumeMessage = skippedReason;
+                return false;
+
+                bool Evaluate(IReadOnlyList<VolumeCandidate> poolCandidates)
+                {
+                    VolumeNameRepair.CrossLayerVolumeGather decision =
+                        VolumeNameRepair.ResolveCrossLayerVolumeGather(archivePath, poolCandidates);
+
+                    if (!decision.Applicable)
+                    {
+                        return true;
+                    }
+
+                    if (decision.Plan is { CanRepair: true })
+                    {
+                        int count = decision.MovedCount;
+
+                        VolumeNameRepairResult applied = VolumeNameRepair.TryApply(decision.Plan);
+
+                        if (applied.Success)
+                        {
+                            Log(
+                                "INFO",
+                                string.Format(
+                                    System.Globalization.CultureInfo.CurrentCulture,
+                                    StatusText.CrossLayerGatherDoneFormat,
+                                    layerLabel,
+                                    count,
+                                    Path.GetFileName(archivePath),
+                                    decision.Detail));
+                        }
+                        else
+                        {
+                            // 全成或全不成（TryApply 自己倒序回滚）：盘上仍是"没收"那一档，如实写。
+                            Log(
+                                "WARN",
+                                string.Format(
+                                    System.Globalization.CultureInfo.CurrentCulture,
+                                    StatusText.CrossLayerGatherBlockedFormat,
+                                    layerLabel,
+                                    applied.Message));
+                        }
+
+                        /*
+                         * 收完（或回滚完）**重新读一次事实**：这一组现在到底齐不齐，
+                         * 只能由盘上那几份回答 —— ⛔ 不拿"刚刚搬成功了"当结论。
+                         */
+                        decision = VolumeNameRepair.ResolveCrossLayerVolumeGather(
+                            archivePath,
+                            EnumerateWorkspacePool(CurrentWorkspace));
+                    }
+
+                    if (!decision.ShouldSkipTrial)
+                    {
+                        if (!decision.CompleteBesideEntry && !string.IsNullOrWhiteSpace(decision.Detail))
+                        {
+                            // 判不出 / 其他族（本轮不做免试）：如实写"为什么没收"，然后照旧让引擎去判。
+                            Log(
+                                "WARN",
+                                string.Format(
+                                    System.Globalization.CultureInfo.CurrentCulture,
+                                    StatusText.CrossLayerGatherBlockedFormat,
+                                    layerLabel,
+                                    decision.Detail));
+                        }
+
+                        return true;
+                    }
+
+                    skippedReason = BuildMissingVolumeMessage(archivePath, layerLabel, decision);
+                    return false;
+                }
+            }
+            catch
+            {
+                // 见方法注释：这一档判不出来时，退回"照旧让引擎去判"。
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// 这条链**各层产物目录的直接子文件**（跨层收卷的候选池）。
+        ///
+        /// <para>⛔ 只这一处枚举：<c>layer-NNN\output</c> 的**直接**子文件 —— 不递归、不含
+        /// <c>carved</c>（它挂在层目录下、是产物目录的兄弟）、不碰用户源目录（源包不在工作区里）。</para>
+        /// </summary>
+        private static List<VolumeCandidate> EnumerateWorkspacePool(ExtractionWorkspace? workspace)
+        {
+            var pool = new List<VolumeCandidate>();
+
+            if (workspace == null)
+            {
+                // 拿不到工作区 ⇒ 空池（只按入口那一层判；⛔ 不替用户满盘找文件）。
+                return pool;
+            }
+
+            foreach (WorkspaceLayer layer in workspace.Layers)
+            {
+                pool.AddRange(VolumeContentInference.EnumerateCandidatesIn(layer.OutputPath));
+            }
+
+            return pool;
+        }
+
+        /// <summary>
+        /// 免试那一句"缺哪几片"：能点名的逐个点名（名字上的洞），点不了名的**如实说点不了**
+        /// （命名里没有"共几卷"这个信息，⛔ 不编），再带上字节数那条证据与"为什么没收"。
+        /// </summary>
+        private static string BuildMissingVolumeMessage(
+            string archivePath,
+            string layerLabel,
+            VolumeNameRepair.CrossLayerVolumeGather decision)
+        {
+            string names = decision.MissingNames.Count > 0
+                ? string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.CrossLayerGatherMissingNamesFormat,
+                    string.Join("、", decision.MissingNames))
+                : StatusText.CrossLayerGatherNoMissingNames;
+
+            return string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.CrossLayerGatherSkipTrialFormat,
+                layerLabel,
+                Path.GetFileName(archivePath),
+                names,
+                decision.Detail);
         }
 
         /// <summary>删一个目录，删不掉就算了（它只是工作区里的副本，不影响任何结论）。</summary>
@@ -3574,6 +3788,15 @@ namespace ArchiveFixer.Extraction
                         : "第 1 层就没能解开，原因：")
                     + DescribeAmbiguousPasswordFailure(layers),
 
+                /*
+                 * 分卷缺失（免试那一档）：结论里必须带上**缺哪几片**（不变量 7 要的就是"缺哪几个"），
+                 * 而那段证据在那一层的 Message 里 —— 与两义那一档同一个写法：取那一层自己记下来的正文。
+                 */
+                RecursionStopReason.MissingVolume => (done > 0
+                        ? $"已完成 {done} 层，停在第 {done + 1} 层，原因："
+                        : "第 1 层就没能解开，原因：")
+                    + DescribeMissingVolumeFailure(layers),
+
                 _ => done > 0
                     ? $"已完成 {done} 层，停在第 {done + 1} 层，原因：{reason}"
                     : $"第 1 层就没能解开，原因：{reason}"
@@ -3698,6 +3921,12 @@ namespace ArchiveFixer.Extraction
                 RecursionStopReason.MaxSingleFileSizeReached => StatusText.RecursionSingleFileSizeReachedReason,
                 // 文件名已加密（-mhe / -hp）：与自己"密码错误"那一档分开说（措辞与单层路径同一句）。
                 RecursionStopReason.EncryptedHeaders => StatusText.RecursionEncryptedHeadersReason,
+
+                /*
+                 * 分卷缺失（免试那一档）：详细证据（缺哪几片 / 还差多少字节）在那一层的 Message 里，
+                 * 由 `BuildSummary` 的同一个分支取出来（与两义那一档同一种写法）。
+                 */
+                RecursionStopReason.MissingVolume => StatusText.RecursionMissingVolumeReason,
                 RecursionStopReason.ExpansionRatioExceeded => "单层展开比超限，疑似压缩炸弹",
                 RecursionStopReason.TooManyInnerArchives => "本层内层归档数量超过上限",
                 RecursionStopReason.PasswordAttemptsExceeded => "已达到密码尝试次数上限（候选还有剩余）",
@@ -3716,6 +3945,21 @@ namespace ArchiveFixer.Extraction
                 RecursionStopReason.EngineFailed => "引擎操作失败",
                 _ => "未知原因"
             };
+        }
+
+        /// <summary>
+        /// 分卷缺失（免试那一档）的结论正文：**缺哪几片 + 字节数证据**（取那一层自己记下来的 Message）。
+        /// 拿不到正文时退回停因那句话 —— ⛔ 绝不用一句"未知原因"把它盖掉，也⛔ 不许说成"引擎解不开"
+        /// （引擎一次都没被调用过）。
+        /// </summary>
+        private static string DescribeMissingVolumeFailure(List<RecursionLayerReport> layers)
+        {
+            RecursionLayerReport? failed = layers.LastOrDefault(
+                layer => layer != null && !layer.Success && !string.IsNullOrWhiteSpace(layer.Message));
+
+            return failed == null
+                ? StatusText.RecursionMissingVolumeReason
+                : failed.Message;
         }
 
         /// <summary>
