@@ -222,8 +222,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2804 条（2792 通过 / 12 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 这一轮（2026-10-05：真机第八批"跨盘 ZIP 末片在包里、其余片在源目录"）的账：**2798 → 2804 = +6**（新文件 `SpannedZipCrossBoundaryGatherTests`）。
+- `dotnet test` 全量（主 checkout 内）：**2806 条（2794 通过 / 12 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 这一轮（2026-10-05：真机第九批 `CCCC` —— 7-Zip 同时报「缺卷」与「密码」字样时的判读次序）的账：**2805 → 2806 = +1**（`SevenZipExitCodeTests.同时出现缺卷与密码字样时_缺卷优先`）；⚠ 上一轮（真机第八批复跑复检补的那条守门用例）**2804 → 2805 = +1** 当时漏记，一并补上。
+  - ⚠ 上一轮（2026-10-05：真机第八批"跨盘 ZIP 末片在包里、其余片在源目录"）的账：**2798 → 2804 = +6**（新文件 `SpannedZipCrossBoundaryGatherTests`）。
   - ⚠ 上一轮（2026-10-05：全库口径对账 + 设置里那一格「推荐装 WinRAR」）的账：**2794 → 2798 = +4**（全部来自新文件 `WinRarRecommendationTests`；文档与用例改口径不增减）。
   - ⚠ 上一轮（2026-10-05：分卷两条口径落地 + 两条旧用例按新口径重写）的账：**2786 → 2794 = +8**（新文件 `SiblingFolderVolumeGatherTests` 7 条 + 改写时新增的 1 条上限守门用例；两条旧用例是**重写**不增减）。先跑出来是 2793（2 条红 —— 旧用例跟新口径正面冲突），改完用例 +1 = 2794。
   - ⚠ 再上一轮（2026-10-05：WinRAR 兜底 + 那两条真回归修复）的账：**2746 → 2786 = +40**（全部来自新文件 `WinRarFallbackTests`，含后补的 3 条守门用例）；先跑出来是 2783（2 条红），修完 +3 = 2786。

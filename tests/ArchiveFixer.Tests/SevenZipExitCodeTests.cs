@@ -174,6 +174,37 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **缺卷的签名必须压过"密码错误"**（2026-10-05 真机 CCCC 当场逮到，用户原话「按道理不可能会错」）。
+        ///
+        /// <para><b>现场</b>：一组跨盘 ZIP 少一片（第 1 片在另一个包里）时，7-Zip 的输出里**同时**出现
+        /// 缺卷与密码两类字样。老顺序先命中密码那一档 ⇒ 上层把它读成「这个密码候选不对」，
+        /// 把 10 个候选全试一遍、白跑 10 次进程，最后结论写「密码错误或缺少正确密码」——
+        /// **说反了**（缺的是卷，跟密码没关系），用户会去反复核对密码本。</para>
+        ///
+        /// <para>判据只读引擎自己那句话；两个签名列表本来就不重叠，换顺序不会把真正的密码错吞掉。</para>
+        /// </summary>
+        [Fact]
+        public void 同时出现缺卷与密码字样时_缺卷优先()
+        {
+            // 真机上那两行就是长这样（密码那行是 7-Zip 对被跨盘切断的加密条目顺手说的）。
+            const string output =
+                "ERRORS:\r\n"
+                + "ERROR = Missing volume : 111.zip\r\n"
+                + "ERROR: Data Error in encrypted file. Wrong password? : 111\\111.mp4\r\n"
+                + "Sub items Errors: 1\r\n";
+
+            Assert.Equal("VolumeMissing", SevenZipOutputParser.DetectSevenZipErrorType(2, output, string.Empty));
+
+            // 对照：只有密码那一行时，照旧是密码错（这条闸门不许把真的密码错吞掉）。
+            Assert.Equal(
+                "WrongPassword",
+                SevenZipOutputParser.DetectSevenZipErrorType(
+                    2,
+                    "ERROR: Data Error in encrypted file. Wrong password? : 111\\111.mp4",
+                    string.Empty));
+        }
+
+        /// <summary>
         /// **用户 2026-09-30 真机事故留下的教训**：7-Zip 的
         /// <c>CRC Failed in encrypted file. Wrong password? : &lt;条目&gt;</c> **不能单独用来定原因** ——
         /// 合成样本实测：①"密码错"（数据是 stored 时会走 CRC 这条路，`Item37SafetyTests` 钉着它）

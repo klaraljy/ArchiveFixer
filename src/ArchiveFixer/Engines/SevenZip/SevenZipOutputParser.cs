@@ -288,6 +288,35 @@ namespace ArchiveFixer.Engines.SevenZip
                 return EncryptedHeadersErrorType;
             }
 
+            /*
+             * ===== 缺卷的签名必须排在"密码错误"**之前**判（2026-10-05 真机 CCCC 当场逮到）=====
+             *
+             * 现场：一组跨盘 ZIP 少一片时，7-Zip 的输出里**同时**出现缺卷与密码两类字样
+             * （`ERROR = Missing volume : 111.zip` 加一条带 `Wrong password` 的行）⇒ 老顺序先命中
+             * 密码那一档 ⇒ 上层把"缺卷"读成"这个密码候选不对"，把 10 个候选全试一遍、白跑 10 次进程，
+             * 最后结论写成「密码错误或缺少正确密码」——**说反了**：缺的是卷，跟密码一点关系都没有。
+             *
+             * 判据只读**引擎自己那句话**（这两个签名列表本来就不重叠，换顺序不会把真正的密码错吞掉；
+             * 真的只错密码时这里一条都命不中）。上层据此**当场停**（不换候选、不换引擎），落「分卷缺失」。
+             */
+            if (ContainsAny(text,
+                    "Missing volume",
+                    "Cannot find archive part",
+                    "Can not open file as archive part",
+                    "Can not open the file as archive part",
+                    "No more files"))
+            {
+                return "VolumeMissing";
+            }
+
+            if (ContainsAny(text, "Can not open file", "Cannot open file"))
+            {
+                if (ContainsAny(text, "archive part", "volume", ".001", ".002", ".003", "No more files"))
+                {
+                    return "VolumeMissing";
+                }
+            }
+
             if (ContainsAny(text,
                     "Wrong password",
                     "ERROR: Wrong password",
@@ -312,24 +341,6 @@ namespace ArchiveFixer.Engines.SevenZip
             if (ContainsAny(text, "encrypted archive", "Encrypted archive", "is encrypted", "encrypted file"))
             {
                 return "NeedPassword";
-            }
-
-            if (ContainsAny(text,
-                    "Missing volume",
-                    "Cannot find archive part",
-                    "Can not open file as archive part",
-                    "Can not open the file as archive part",
-                    "No more files"))
-            {
-                return "VolumeMissing";
-            }
-
-            if (ContainsAny(text, "Can not open file", "Cannot open file"))
-            {
-                if (ContainsAny(text, "archive part", "volume", ".001", ".002", ".003", "No more files"))
-                {
-                    return "VolumeMissing";
-                }
             }
 
             /*
