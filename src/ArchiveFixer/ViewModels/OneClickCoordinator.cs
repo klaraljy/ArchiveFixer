@@ -1265,6 +1265,27 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 这个产物文件要不要进这一轮「内层包扫描」的**统计与日志**（唯一出口）。
+        ///
+        /// <para>2026-10-05 真机：那一轮扫出 857 个文件，其中 2 个是 <c>其余物\HK.7z.001/.002</c>
+        /// （**本批的源包**）—— 它们永远只会落一句"跳过"，却把"新文件"这个数字和日志行都撑大了
+        /// （用户点名的"857 个文件、20 行日志"）。所以这里把"已经是我们自己的东西"挡在统计之外：
+        /// 本批的源包、以及已经登记过路径的文件（在任务列表里 / 本轮已加进来的）。</para>
+        ///
+        /// <para>⛔ <b>只过滤"已知的"，绝不整棵排除「其余物」</b>：默认档（只解当前这一层 + 一键处理续解）下，
+        /// 上一层产出的内层包正是**收进其余物之后**才被这一轮扫描认出来、当下一个任务接着解的
+        /// （`InnerLayerContinuationTests` 那条 <c>outer.7z → inner.7z.001</c> 的链就是它）——
+        /// 把整棵树排掉等于把续解链砍掉（2026-10-05 实测：18 条用例当场红）。</para>
+        /// </summary>
+        internal static bool ShouldScanProducedFile(
+            string file,
+            IReadOnlyCollection<string> sourcePaths,
+            IReadOnlyCollection<string> knownTaskPaths)
+        {
+            return !sourcePaths.Contains(file) && !knownTaskPaths.Contains(file);
+        }
+
+        /// <summary>
         /// 续解链跑完之后，对"本轮没有内容物、记账成待补搬"的**最外层源包**再给一次机会
         /// （2026-09-22 修复的真实缺陷，见调用点的说明）。
         ///
@@ -2014,10 +2035,14 @@ namespace ArchiveFixer.ViewModels
                          * 里面躺着抠出来的内嵌归档副本、逐层的中间包 —— 它们**全都能被识别成归档**。
                          * 不排除的话，程序会把工作区里的中间产物当成"用户的内层包"继续解，
                          * 解完再把它们当内容物搬出去：不可逆的事故。
+                         *
+                         * ⚠ 「其余物」**不许整棵排除**（2026-10-05 实测）：默认档（只解当前这一层 +
+                         * 一键处理续解）下，上一层产出的内层包正是**收进其余物之后**才被这一轮扫描认出来、
+                         * 当下一个任务接着解的 —— 排掉整棵树等于把续解链砍掉
+                         * （`InnerLayerContinuationTests` / `ChainManifestCompletenessTests` 当场 18 条红）。
+                         * 真机那 857 vs 855 的噪声改由 <see cref="ShouldScanProducedFile"/> 那一处收口。
                          */
-                        results.Add((
-                            outputDirectory,
-                            WorkspaceTree.EnumerateFiles(outputDirectory, workRoot).ToList()));
+                        results.Add((outputDirectory, WorkspaceTree.EnumerateFiles(outputDirectory, workRoot).ToList()));
                     }
                     catch
                     {
@@ -2068,20 +2093,21 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
+                    /*
+                     * ⛔ 已经是我们自己的东西（本批的源包 / 已经登记过路径的文件）**不进这一轮的统计与日志**
+                     * （用户 2026-10-05 真机）：真机那一轮扫出 857 个文件，其中 2 个是
+                     * `其余物\HK.7z.001/.002`（本批的源包）—— 它们永远只会是"跳过"，
+                     * 却把"新文件"这个数字与日志行都撑大了（用户点名的"857 个文件、20 行日志"）。
+                     *
+                     * ⚠ 判据只过滤**已知的**（见 <see cref="ShouldScanProducedFile"/>）：
+                     * ⛔ 不许顺手把整个「其余物」目录排除掉 —— 里面**没登记过**的包正是默认档续解链的输入。
+                     */
+                    if (!ShouldScanProducedFile(file, sourcePaths, knownTaskPaths))
+                    {
+                        continue;
+                    }
+
                     newFileCount++;
-
-                    // 源文件本身（含分卷各卷）不算内层包。
-                    if (sourcePaths.Contains(file))
-                    {
-                        skippedLines.Add($"{file}（是本批的源包）");
-                        continue;
-                    }
-
-                    if (knownTaskPaths.Contains(file))
-                    {
-                        skippedLines.Add($"{file}（已经在任务列表里）");
-                        continue;
-                    }
 
                     /*
                      * ===== 「内容物保留关键词」：命中就**不当内层归档**（用户 2026-10-04 的新功能）=====

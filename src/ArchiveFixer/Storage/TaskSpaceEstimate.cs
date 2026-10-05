@@ -458,7 +458,13 @@ namespace ArchiveFixer.Storage
                 + (innerArchiveBytes > 0
                     ? $"，其中内层包 {TaskSpaceEstimate.FormatSize(innerArchiveBytes)}"
                       + "（它本体已算在内容物里，再展开按「净增量」估、不再按整份扣一遍）"
-                    : "，没有内层包")
+                    /*
+                     * ⛔ 这里**只能**说"按名字看不出"，不能说"没有内层包"（用户 2026-10-05 真机：
+                     * 那句"没有内层包"是假话 —— 那个包里有 3 层内层包，只是第 0 层清单里那三个
+                     * `.mp4` 的名字看不出是归档，它们其实是"尾部藏着归档"的双面文件）。
+                     * ⛔ 只改措辞，预算口径一个字都不动（这一档本来就是 0 净增量）。
+                     */
+                    : "，按名字看不出内层包（真正的内层包要解出来才知道）")
                 + DescribeCarvedBytes(carvedBytes, null, carvedBytesNotNeeded);
 
             return new TaskSpaceEstimate

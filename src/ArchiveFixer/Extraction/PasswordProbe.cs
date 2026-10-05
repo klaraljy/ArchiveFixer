@@ -52,7 +52,22 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// 挑探针时看**归档顺序里最靠前的几个**条目（见 <see cref="ChooseProbeEntry"/>）。
+        /// </summary>
+        public const int ProbeOrderWindow = 3;
+
+        /// <summary>
         /// 从清单里挑"最便宜的探针条目"的名字；挑不出来返回 <c>null</c>。
+        ///
+        /// <para><b>2026-10-05 真机改口径：按"归档顺序靠前"挑，不再挑全局最小的那个。</b>
+        /// 现场（`ArchiveFixer-本次操作_20261005_134118.txt` 第 2 层）：为了验一个 **173 字节**的
+        /// 说明文件，7-Zip 把前面 **6.84 GB** 的 solid 包整解了一遍 —— **56 秒**（13:31:19 → 13:32:15）。
+        /// 道理：探针的代价 ≈ **它前面还有多少数据要被读出来**（7-Zip 只解开头那几个字节，
+        /// 但必须先把前面那段解开），与"它自己多大"基本无关；而"最小的那个条目"完全可能排在几十 GB 之后。</para>
+        ///
+        /// <para>规则（用户 2026-10-05 原话："优先挑归档顺序里靠前的条目（第一个，或前几个里最小的）"）：
+        /// 按清单顺序取**前 <see cref="ProbeOrderWindow"/> 个合格条目**，在其中挑最小的那一个。
+        /// 拿不到顺序（没有清单 / 一个合格的都没有）⇒ 照旧什么都不挑（调用方退回整包试解）。</para>
         ///
         /// <para>跳过目录、0 字节与超限的条目；也跳过名字里带通配符（<c>* ? [</c>）的条目 ——
         /// 7-Zip 的条目过滤是**模式匹配**，把这种名字交回去会误伤别的条目。</para>
@@ -64,8 +79,13 @@ namespace ArchiveFixer.Extraction
                 return null;
             }
 
+            /*
+             * 窗口内挑最小：⛔ 不是"全局最小"。窗口满了就不再往后看 —— 位置越靠后越贵，
+             * 为一个 1 KB 的条目多读几十 GB 正是这次要修的东西。
+             */
             string? best = null;
             long bestSize = long.MaxValue;
+            int window = 0;
 
             foreach (ArchiveEntry? entry in list.Entries)
             {
@@ -74,7 +94,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                if (entry.Size <= 0 || entry.Size > MaxProbeEntryBytes || entry.Size >= bestSize)
+                if (entry.Size <= 0 || entry.Size > MaxProbeEntryBytes)
                 {
                     continue;
                 }
@@ -84,8 +104,20 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                best = entry.Path;
-                bestSize = entry.Size;
+                if (entry.Size < bestSize)
+                {
+                    best = entry.Path;
+                    bestSize = entry.Size;
+                }
+
+                /*
+                 * 只数"合格的"：不合格的条目（目录 / 0 字节 / 超限 / 通配符）不占窗口 ——
+                 * 它们是跳过，不是"看过了"。
+                 */
+                if (++window >= ProbeOrderWindow)
+                {
+                    break;
+                }
             }
 
             return best;

@@ -963,6 +963,16 @@ namespace ArchiveFixer.Extraction
                 CurrentEntry = $"第 {item.Depth} 层：{Path.GetFileName(item.ArchivePath)}"
             });
 
+            /*
+             * ===== 双面文件 + 尾部只有一个原样存的条目 ⇒ 直接取那一段（2026-10-05 真机第六批）=====
+             *
+             * ⛔ 挂点在**引擎列不出清单之后**（见候选循环里那一段），不在这里先试：
+             * 只有"引擎读不动这一份"才轮得到近路 —— 反例当场就有（真机同形夹具的外层 7z：
+             * 它内部**存着**那些 mp4 的尾部 ZIP，`EmbeddedArchiveDetector` 会在它的数据流里
+             * 找到一个自洽的 ZIP，先试近路就会"抢在引擎前面"把外层 7z 当成双面文件、
+             * 只取出那一个条目并判这一层成功）。
+             */
+
             IReadOnlyList<string> candidates = BuildPasswordCandidates(item.ArchivePath);
 
             int attempts = 0;
@@ -999,6 +1009,12 @@ namespace ArchiveFixer.Extraction
              * 与用哪个密码打开无关，逐候选重报只会把日志刷成噪声。
              */
             bool dangerousEntriesHintReported = false;
+
+            /*
+             * 「引擎读不动 + 双面文件 + 单条目原样存 ⇒ 直接取那一段」这条近路，**这一层只试一次**
+             * （挂点在候选循环里"引擎列不出清单"那一刻；试不成 ⇒ 照旧走老路，不逐候选重试）。
+             */
+            bool attemptedDirectTake = false;
 
             /*
              * 这一层的最多候选数：**与循环用的同一个上限**（`_limits.MaxPasswordAttemptsPerLayer`）。
@@ -1196,6 +1212,34 @@ namespace ArchiveFixer.Extraction
                 candidateManifest = listedThisCandidate is { Success: true }
                     ? LayerManifest.From(listedThisCandidate)
                     : LayerManifest.Unavailable(LayerManifest.DescribeListFailure(listedThisCandidate));
+
+                /*
+                 * ===== 引擎读不动它 + 它确实是双面文件 ⇒ 直接按偏移取出那唯一一个原样存的条目 =====
+                 *
+                 * 真机现场（`ArchiveFixer-本次操作_20261005_134118.txt`）：第 1 层三个双面视频，
+                 * 每个都先白试一次引擎（`Cannot open the file as archive`，写盘的那一次解压，
+                 * 日志里留下三条假 ERROR），再把尾部归档整份抠成副本（78/48/83 秒），
+                 * 然后让 7-Zip 从副本里**再解一遍**那唯一一个条目（88/48/92 秒）—— 同一份字节写了两遍、读了两遍。
+                 *
+                 * 判据三条缺一不可：① 引擎**列不出**这一份（列得出来就说明引擎本来读得动它 ⇒ 照旧走原路，
+                 * ⛔ 近路绝不抢在引擎前面）；② 尾部确实有一个自洽的内嵌归档（识别阶段同一个检测器）；
+                 * ③ 里面**恰好一个原样存的条目**（见 <see cref="TryTakeSingleStoredEntryAsync"/>）。
+                 * 判不出来 ⇒ 一个字都不改，照旧走今天这条路。
+                 */
+                if (carvedSource == null
+                    && !attemptedDirectTake
+                    && listedThisCandidate is { Success: false })
+                {
+                    attemptedDirectTake = true;
+
+                    LayerOutcome? taken = await TryTakeSingleStoredEntryAsync(item, progress, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (taken != null)
+                    {
+                        return taken;
+                    }
+                }
 
                 if (listedThisCandidate is { Success: true })
                 {
@@ -1606,14 +1650,33 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                // 其余（引擎不可用、路径问题、输出冲突…）换密码也解决不了，直接停。
-                Log(
-                    "ERROR",
-                    string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.CandidateStoppedByEngineErrorLogFormat,
-                        layerLabel,
-                        result.Message));
+                /*
+                 * ===== 引擎说"这根本不是归档"时**不写 ERROR**（用户 2026-10-05：三条假 ERROR）=====
+                 *
+                 * 现场：第 1 层三个双面视频各留了一行
+                 * `[ERROR] 解压失败：7-Zip 无法识别或不支持该格式`，而下面紧接着就是
+                 * "已按偏移把归档那一段取出成副本……再解一次"并且真的解开了 —— 那是**已知原因**的一步，
+                 * 用户读到的却是一句"包坏了"。识别阶段本来就是靠"尾部有归档"把这个文件认成归档的，
+                 * 这个事实在交引擎之前就在手上 ⇒ 命中就不报失败，改由补救那一行 INFO 说清。
+                 *
+                 * ⛔ 对照（用户点名要保留的）：**普通"名字像归档其实不是"的文件**照旧走引擎、照旧报 ERROR ——
+                 * 判据只认"尾部确实有一个自洽的内嵌归档"，看不出就是看不懂，一个字都不许放宽。
+                 */
+                bool looksDoubleFaced = carvedSource == null
+                    && string.Equals(result.DetectedErrorType, EngineErrorTypes.UnsupportedFormat, StringComparison.Ordinal)
+                    && IsDoubleFacedEmbeddedArchive(item.ArchivePath);
+
+                if (!looksDoubleFaced)
+                {
+                    // 其余（引擎不可用、路径问题、输出冲突…）换密码也解决不了，直接停。
+                    Log(
+                        "ERROR",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.CandidateStoppedByEngineErrorLogFormat,
+                            layerLabel,
+                            result.Message));
+                }
 
                 /*
                  * 例外：引擎说"这根本不是归档"时，先看一眼它是不是**双面文件**
@@ -1713,6 +1776,32 @@ namespace ArchiveFixer.Extraction
 
                 return LayerOutcome.Stop(failureReport, reason);
             }
+
+            return await FinishSuccessfulLayerAsync(
+                    item,
+                    success,
+                    layerManifest,
+                    succeededPassword,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 这一层**真的解开了**之后的共同收尾：量产物 → 落点校验 → 探内层包 → 出层报告。
+        ///
+        /// <para><b>为什么把它抽出来</b>（2026-10-05 真机第六批）：多了一条**不经过引擎**的成功路
+        /// （尾部归档里只有一个原样存的条目 ⇒ 直接按偏移把那一段取出来，见
+        /// <see cref="TryTakeSingleStoredEntryAsync"/>）。两条路必须交出**同一形状**的层报告 ——
+        /// 落点校验、内层包探测、清单口径一个字都不许分叉（§9.5）。</para>
+        /// </summary>
+        private async Task<LayerOutcome> FinishSuccessfulLayerAsync(
+            WorkItem item,
+            ArchiveOperationResult? success,
+            LayerManifest layerManifest,
+            string? succeededPassword,
+            CancellationToken cancellationToken)
+        {
+            string layerLabel = DescribeProbeLabel(item);
 
             (int fileCount, long outputSize) = OutputVerifier.Measure(item.Layer.OutputPath);
 
@@ -1959,6 +2048,203 @@ namespace ArchiveFixer.Extraction
                 item.Depth) + Path.GetFileName(item.ArchivePath);
 
         /// <summary>
+        /// **尾部归档里只有一个原样存（stored）的条目 ⇒ 直接按偏移把那一段取出来。**
+        ///
+        /// <para><b>真机现场</b>（`ArchiveFixer-本次操作_20261005_134118.txt`，一键处理 21 分 34 秒）：
+        /// 第 1 层三个双面视频，每个都先白试一次引擎（`Cannot open the file as archive`，0 秒），
+        /// 再把尾部归档**整份抠成副本**（78 / 48 / 83 秒），然后让 7-Zip 从那个副本里**再解一遍**
+        /// 那唯一一个条目（88 / 48 / 92 秒）—— 同一份字节写了两遍、读了两遍，约 3.8 分钟纯浪费。
+        /// 而那段归档里其实只有一个**原样存**的条目：它的字节就是源文件里一段连续区间，
+        /// 直接取出来就是产物（一次写、一次读、**一次引擎都不调**）。</para>
+        ///
+        /// <para><b>⛔ 只在能证明的前提下走这条路</b>（任何一条不成立都返回 <c>null</c> ⇒
+        /// 原样退回今天那条"抠副本 + 引擎"的路，行为与加这一段之前逐字相同）：</para>
+        /// <list type="number">
+        /// <item><description>识别阶段那条只读判据成立：尾部有**自洽的** ZIP（<see cref="EmbeddedArchiveDetector"/>，
+        /// 与识别阶段同一个检测器）、<c>Offset &gt; 0</c>、不是跨盘 ZIP 的末片；</description></item>
+        /// <item><description><see cref="EmbeddedZipStreamExtractor.Probe"/> 说这份内嵌 ZIP 可直读
+        /// （自洽 + 每个本地头是 <c>PK\x03\x04</c> + 方法 ∈ {stored, deflate} + 无加密位 + ZIP64 占位符取得到真值
+        /// + 数据区不越过中央目录 + 条目名过既有的落点校验）；</description></item>
+        /// <item><description>清单里**恰好一个**条目、不是目录、**没有加密**、压缩方法是 **stored（0）**、
+        /// 且 <c>Size == CompressedSize</c>（原样存）—— 与"抠出来再让引擎解"得到的东西逐字节相同；</description></item>
+        /// <item><description>条目大小不越过本层的单文件上限（越过的交给既有那道闸门照旧报，⛔ 不在这里抢着判）。</description></item>
+        /// </list>
+        ///
+        /// <para><b>⚠ 与老路唯一的行为差别</b>（如实记在这里）：<see cref="EmbeddedZipStreamExtractor"/>
+        /// 不校验 stored 条目的 CRC32，所以"结构自洽但字节坏了"的包在老路上会被 7-Zip 报 CRC 错误、
+        /// 在这里会照旧成功。判据收得这么窄（单条目 + 原样存 + 无加密）就是为了把这一档压到最小。</para>
+        ///
+        /// <para>⛔ 成功时**不写 ERROR**：用户看到的必须是"为什么引擎打不开 + 我们换了什么办法"，
+        /// 而不是一句会被读成"包坏了"的失败。</para>
+        /// </summary>
+        private async Task<LayerOutcome?> TryTakeSingleStoredEntryAsync(
+            WorkItem item,
+            IProgress<ArchiveProgress>? progress,
+            CancellationToken cancellationToken)
+        {
+            string layerLabel = DescribeProbeLabel(item);
+
+            try
+            {
+                EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(item.ArchivePath);
+
+                if (!info.Found || info.IsVolumePart || info.Offset <= 0)
+                {
+                    return null;
+                }
+
+                /*
+                 * ⛔ 传 passwords: null —— 探针阶段不猜密码：加密的（AES）内嵌包会返回"不支持"
+                 * 这个**回落信号**，于是原样走"抠副本 + 引擎"那条路（那时密码候选由既有的候选循环管）。
+                 */
+                EmbeddedZipProbeResult probe = EmbeddedZipStreamExtractor.Probe(
+                    item.ArchivePath,
+                    info.Offset,
+                    info.ArchiveEnd,
+                    item.Layer.OutputPath,
+                    passwords: null,
+                    cancellationToken);
+
+                if (!probe.Supported || probe.List == null || probe.Entries.Count != 1)
+                {
+                    return null;
+                }
+
+                EmbeddedZipEntry entry = probe.Entries[0];
+
+                if (entry.IsDirectory
+                    || entry.IsEncrypted
+                    || entry.Method != 0
+                    || entry.Size <= 0
+                    || entry.Size != entry.CompressedSize
+                    || string.IsNullOrWhiteSpace(entry.RelativePath))
+                {
+                    return null;
+                }
+
+                // 单文件上限：越过的交给既有那道闸门（它的文案与判据只有一处，⛔ 不在这里抢着判）。
+                if (entry.Size > _limits.MaxSingleFileSize)
+                {
+                    return null;
+                }
+
+                string entryDescription = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    "{0}（{1}）",
+                    entry.Name,
+                    TaskSpaceEstimate.FormatSize(entry.Size));
+
+                Log(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.InnerEmbeddedSingleEntryTakeFormat,
+                        layerLabel,
+                        info.Offset,
+                        entryDescription));
+
+                /*
+                 * 界面也得有动静：这一段真机上是 48–83 秒的纯读写，引擎一个字都不报
+                 * （用户 2026-10-05：那几十秒日志里一行进度都没有）。
+                 */
+                progress?.Report(new ArchiveProgress
+                {
+                    Percent = 0,
+                    CurrentEntry = $"第 {item.Depth} 层：正在按偏移取出「{entry.Name}」"
+                });
+
+                EmbeddedZipExtractResult take = EmbeddedZipStreamExtractor.Extract(
+                    item.ArchivePath,
+                    info.Offset,
+                    info.ArchiveEnd,
+                    item.Layer.OutputPath,
+                    progress: null,
+                    cancellationToken,
+                    budgetOptions: new ResourceBudgetOptions
+                    {
+                        MaxSingleFileSize = _limits.MaxSingleFileSize,
+                        MaxTotalSize = _limits.MaxTotalSize,
+                        MaxFileCount = _limits.MaxTotalFiles
+                    },
+                    passwords: null);
+
+                if (!take.Success || take.FileCount != 1 || take.WrittenBytes != entry.Size)
+                {
+                    /*
+                     * 没取成（或取出来的与清单对不上）⇒ 如实写一行 WARN 后**退回老路**：
+                     * 半成品由直读器自己删干净（它保证"失败不留半成品"），接着走的
+                     * "抠副本 + 引擎"那条路开头还会把这一层的产物目录整份重置一次。
+                     */
+                    Log(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.InnerEmbeddedSingleEntryTakeFailedFormat,
+                            layerLabel,
+                            string.IsNullOrWhiteSpace(take.Message) ? "取出来的字节数与清单对不上" : take.Message));
+
+                    return null;
+                }
+
+                /*
+                 * 可疑条目提示（与既有那一处**同一个出口**）：直读这条路跳过了引擎列目录那一段，
+                 * 但"这个包里有什么"的结论必须照旧回传一次 —— 否则同一件事在两条路上只有一条会提示。
+                 */
+                DangerousEntriesReported?.Invoke(
+                    ViewModels.ExtractionCoordinator.AnalyzeDangerousEntries(
+                        probe.List.Entries,
+                        ReportDangerousEntries));
+
+                return await FinishSuccessfulLayerAsync(
+                        item,
+                        new ArchiveOperationResult
+                        {
+                            Success = true,
+                            Status = StatusText.ExtractSuccess,
+                            EngineDisplayName = EmbeddedZipStreamExtractor.ReaderDisplayName
+                        },
+                        LayerManifest.From(probe.List),
+                        succeededPassword: null,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 取消照旧往上抛（不变量 6：取消不得显示成成功）。
+                throw;
+            }
+            catch (Exception ex)
+            {
+                /*
+                 * 这一档是**加法**：判据里任何意外（读不到源文件、探测内部异常…）都只能得出
+                 * "这条路走不通"，⛔ 绝不能让一条新的近路把本来能解开的包挡下来。
+                 */
+                Log(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.InnerEmbeddedSingleEntryTakeFailedFormat,
+                        layerLabel,
+                        ex.Message));
+
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 只读判据：这个文件是不是「双面文件」（尾部藏着**自洽的** ZIP，而且不是跨盘 ZIP 的末片）。
+        ///
+        /// <para>与补救那一处**同一个检测器**（<see cref="EmbeddedArchiveDetector"/>，⛔ 不另写一份判据）；
+        /// 它只读文件尾部那段（默认 256 KB），不建目录、不改名字、不调引擎。</para>
+        /// </summary>
+        private static bool IsDoubleFacedEmbeddedArchive(string archivePath)
+        {
+            EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(archivePath);
+
+            return info.Found && !info.IsVolumePart && info.Offset > 0;
+        }
+
+        /// <summary>
         /// 引擎回过"这根本不是归档"之后的一次补救：这个内层包是不是**双面文件**
         /// （真视频 / 图片 + 尾部一整个 ZIP）？是的话按偏移抠出副本、带副本重跑这一层。
         ///
@@ -2008,6 +2294,26 @@ namespace ArchiveFixer.Extraction
                 // 建不出目录（权限 / 盘）⇒ 补救做不了，按原样失败（绝不因此改结论）。
                 return null;
             }
+
+            /*
+             * ===== 抠取这一段的进度（用户 2026-10-05 真机）=====
+             *
+             * 现场：第 1 层三个双面视频的抠取分别跑了 78 / 48 / 83 秒，日志里**一行都没有** ——
+             * 上一行是"开始解压，密码候选 1/10"，下一行就是"已按偏移取出来……再解一次"，
+             * 中间那几十秒读起来像卡死。⛔ 不报百分比（抠取没有"第几个条目"这种语义），
+             * 只说清在做什么、大概多少量。
+             */
+            long carveBytes = info.ArchiveLength > 0
+                ? info.ArchiveLength
+                : Math.Max(0, new FileInfo(item.ArchivePath).Length - info.Offset);
+
+            Log(
+                "INFO",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.InnerEmbeddedCarveProgressFormat,
+                    layerLabel,
+                    TaskSpaceEstimate.FormatSize(carveBytes)));
 
             CarveResult carve = EmbeddedArchiveCarver.Carve(
                 item.ArchivePath,

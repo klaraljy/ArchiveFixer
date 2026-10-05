@@ -311,8 +311,19 @@ namespace ArchiveFixer.Extraction
              * ① 用户可能把产物解压进一个本来就有东西的目录；
              * ② 归档里可能有重复条目（同名同内容的多份），展开后的数量与条目数未必一一对应。
              * 用 == 会把这两种正常情况判成"解压不完整"，白白拦下清理源包。
+             *
+             * 2026-10-05 真机补一句**归因**（用户报："判通过却没说多出来的 4 个是什么"）：
+             * 多层递归时**叶子层的清单只描述它自己那一层**，而产物树里还留着别的层解出来的内容物
+             * （真机：预期 851 / 实际 855，多出来的 4 个是上一层包里那几个说明 txt）。
+             * 判据一个字没放宽（仍然是 >=），只是把"多的是谁"如实点名前几个 ——
+             * 用户看到"实际多于预期也算通过"才不会以为程序没核对。
              */
             bool verified = actualFileCount >= expectedFileCount && actualTotalSize >= expectedTotalSize;
+
+            string surplusNote = verified
+                && (actualFileCount > expectedFileCount || actualTotalSize > expectedTotalSize)
+                    ? DescribeSurplus(outputDirectory, expected, actualFileCount - expectedFileCount)
+                    : string.Empty;
 
             return new OutputVerificationResult
             {
@@ -329,8 +340,115 @@ namespace ArchiveFixer.Extraction
                 Message = (verified
                     ? $"校验通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节"
                     : $"校验未通过：预期 {expectedFileCount} 个文件 / {expectedTotalSize} 字节，实际 {actualFileCount} 个 / {actualTotalSize} 字节")
+                    + surplusNote
                     + caseNote
             };
+        }
+
+        /// <summary>
+        /// 「实际比预期多」时多出来的那些文件是谁（用户 2026-10-05 真机：判了通过却没说多出来的是什么）。
+        ///
+        /// <para>判据只读盘上事实：把产物树里的文件逐个跟**这一层的清单**对（路径按平台分隔符归一、
+        /// 忽略大小写），对不上的就是"多出来的"。⛔ 只说事实与最可能的解释（别的层留下来的内容物 /
+        /// 目录里本来就有的东西），⛔ 不替用户下结论说"这就是 XX 层留下的"。</para>
+        ///
+        /// <para>只在"确实多出来"这一档才走这一遍目录：正常情况下一个字节都不多读。</para>
+        /// </summary>
+        private static string DescribeSurplus(string? outputDirectory, ArchiveListResult? expected, int extraFileCount)
+        {
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ArchiveEntry? entry in expected?.Entries ?? (IReadOnlyList<ArchiveEntry>)Array.Empty<ArchiveEntry>())
+            {
+                if (entry == null || entry.IsDirectory || string.IsNullOrWhiteSpace(entry.Path))
+                {
+                    continue;
+                }
+
+                known.Add(NormalizeRelativePath(entry.Path));
+            }
+
+            var names = new List<string>();
+
+            foreach (string file in EnumerateFilesSafe(outputDirectory))
+            {
+                string relative = NormalizeRelativePath(Path.GetRelativePath(outputDirectory!, file));
+
+                if (known.Contains(relative))
+                {
+                    continue;
+                }
+
+                names.Add(relative);
+
+                if (names.Count >= 3)
+                {
+                    break;
+                }
+            }
+
+            if (names.Count == 0)
+            {
+                // 名字一个都不多（只是字节更多）：如实说"多的是字节"，不编文件名。
+                return "（实际比预期多出来的只有字节数 —— 产物里没有清单之外的额外文件）";
+            }
+
+            string listed = string.Join("、", names);
+            string more = extraFileCount > names.Count ? $"，还有 {extraFileCount - names.Count} 个" : string.Empty;
+
+            return $"（实际比预期多 {extraFileCount} 个文件 —— 多出来的这些不在这一层的清单里，"
+                + "多半是别的层解出来、仍留在产物树里的内容物（也可能目录里本来就有）："
+                + listed + more + "；判据是「实际多于预期也算通过」，所以照旧通过）";
+        }
+
+        /// <summary>路径归一：反斜杠统一成正斜杠、去掉开头的分隔符，比较时再忽略大小写。</summary>
+        private static string NormalizeRelativePath(string path)
+        {
+            return (path ?? string.Empty).Replace('\\', '/').TrimStart('/');
+        }
+
+        /// <summary>产物树里的文件（不跟随符号链接 / 联接点；读不了的目录跳过 —— 与 <see cref="Measure"/> 同一口径）。</summary>
+        private static IEnumerable<string> EnumerateFilesSafe(string? directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !SafeDirectoryExists(directory))
+            {
+                yield break;
+            }
+
+            var pending = new Stack<string>();
+            pending.Push(directory!);
+
+            while (pending.Count > 0)
+            {
+                string current = pending.Pop();
+                string[] entries;
+
+                try
+                {
+                    entries = Directory.GetFileSystemEntries(current);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (string entry in entries)
+                {
+                    if (!TryGetAttributes(entry, out FileAttributes attributes)
+                        || (attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        continue;
+                    }
+
+                    if ((attributes & FileAttributes.Directory) != 0)
+                    {
+                        pending.Push(entry);
+                        continue;
+                    }
+
+                    yield return entry;
+                }
+            }
         }
 
         /// <summary>

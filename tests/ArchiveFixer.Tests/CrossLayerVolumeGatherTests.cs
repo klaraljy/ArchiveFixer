@@ -85,12 +85,20 @@ namespace ArchiveFixer.Tests
             (string first, string second, string third, long total) = BuildRealThreeVolumeSet("三目录");
             var pieces = new List<VolumeCandidate>();
 
-            // 真机形状：三片分别在三个层产物目录里（谁都不是入口那一层）。
-            pieces.Add(Piece(MoveToLayer(second, "layer-001")));
-            pieces.Add(Piece(MoveToLayer(third, "layer-002")));
+            // 真机形状：三片分别在三个层产物目录里（谁都不是入口那一层）——
+            // 层产物目录是 `<layer-NNN>\output`（真机日志里两卷都印成"从 output 收来"，
+            // 用户看不出是哪一层 ⇒ T7 要印出层号，见下面那条断言）。
+            pieces.Add(Piece(MoveToLayer(second, Path.Combine("layer-001", "output"))));
+            pieces.Add(Piece(MoveToLayer(third, Path.Combine("layer-002", "output"))));
 
             VolumeNameRepair.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(first, pieces);
+
+            // T7（2026-10-05 真机）：收卷那一行必须说清**是从哪一层收来的** ——
+            // 只印最后一段目录名时两边都是 "output"，等于没说。
+            Assert.Contains("从 layer-001 收来", decision.Detail, StringComparison.Ordinal);
+            Assert.Contains("从 layer-002 收来", decision.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain("从 output 收来", decision.Detail, StringComparison.Ordinal);
 
             Assert.True(decision.Applicable, decision.Detail);
             Assert.False(decision.CompleteBesideEntry, decision.Detail);

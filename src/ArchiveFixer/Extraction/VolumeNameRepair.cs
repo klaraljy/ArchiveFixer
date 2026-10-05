@@ -3177,7 +3177,7 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                string folder = SafeFileName(Path.GetDirectoryName(item.CurrentPath) ?? string.Empty);
+                string folder = DescribeSourceLayer(item.CurrentPath);
                 bool renamed = !string.Equals(
                     item.CurrentFileName,
                     item.SuggestedFileName,
@@ -3196,6 +3196,34 @@ namespace ArchiveFixer.Extraction
             }
 
             return parts.Count == 0 ? StatusText.VolumeRepairAlreadyStandard : string.Join("；", parts);
+        }
+
+        /// <summary>
+        /// 这一卷**原来在哪一层**（写进收卷那一行日志的"从 &lt;哪&gt; 收来"）。
+        ///
+        /// <para>⛔ 为什么不直接写"最后一段目录名"（用户 2026-10-05 真机）：层产物目录固定叫
+        /// <c>output</c>（<c>…\recursive\&lt;任务id&gt;\layer-001\output</c>），于是两卷分别来自
+        /// <c>layer-001</c> 与 <c>layer-002</c> 时，日志两边都印成"从 output 收来" ——
+        /// 用户根本看不出是哪一层（他点名要求："要印出是哪一层"）。</para>
+        ///
+        /// <para>判据只读路径事实：最后一段是层目录（<see cref="ExtractionWorkspace.LayerDirectoryPrefix"/>）
+        /// 就用它；否则往上看一层，那一层是层目录就用它；都不是 ⇒ 退回最后一段目录名（⛔ 不编）。</para>
+        /// </summary>
+        private static string DescribeSourceLayer(string filePath)
+        {
+            string directory = SafePathHelper.GetFullPathSafe(Path.GetDirectoryName(filePath) ?? string.Empty);
+            string leaf = SafeFileName(directory);
+
+            if (leaf.StartsWith(ExtractionWorkspace.LayerDirectoryPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return leaf;
+            }
+
+            string parent = SafeFileName(Path.GetDirectoryName(directory) ?? string.Empty);
+
+            return parent.StartsWith(ExtractionWorkspace.LayerDirectoryPrefix, StringComparison.OrdinalIgnoreCase)
+                ? parent
+                : leaf;
         }
 
         private static bool SameDirectory(string a, string b) =>
