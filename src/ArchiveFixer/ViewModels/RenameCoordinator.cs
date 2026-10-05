@@ -542,6 +542,13 @@ namespace ArchiveFixer.ViewModels
 
             window.SetResourceReference(FrameworkElement.StyleProperty, "AppWindowStyle");
 
+            /*
+             * ⛔ 模态子窗一律不许最小化（用户 2026-10-05 拍板 A2；口径与 8 个 XAML 子窗同一份策略）。
+             * 这个框是**代码里内联建的**，不在 XAML 名单里，漏了它就等于留着"最小化以后任务栏没有按钮、
+             * 主窗口又被模态禁用 ⇒ 窗口找不回来"那个陷阱（它正是 `CanResize` + 不显示任务栏按钮那种形状）。
+             */
+            ArchiveFixer.Views.WindowMinimizePolicy.Apply(window);
+
             var root = new System.Windows.Controls.Grid
             {
                 Margin = new Thickness(18, 16, 18, 14)

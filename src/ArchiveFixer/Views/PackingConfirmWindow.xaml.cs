@@ -25,6 +25,9 @@ namespace ArchiveFixer.Views
 
             InitializeComponent();
 
+            // 模态子窗：不许最小化（A2），但保留拖边框改大小。
+            WindowMinimizePolicy.Apply(this);
+
             HeadList.ItemsSource = _request.BuildHeadLines();
             SourceExplanationText.Text = _request.SourceExplanation;
             RestExplanationText.Text = _request.RestExplanation;

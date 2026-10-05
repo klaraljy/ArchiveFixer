@@ -28,6 +28,9 @@ namespace ArchiveFixer.Views
         {
             InitializeComponent();
 
+            // 模态子窗：不许最小化（A2），但保留拖边框改大小。
+            WindowMinimizePolicy.Apply(this);
+
             _clipboardService = new ClipboardService();
             _dialogService = new DialogService();
 
@@ -37,6 +40,9 @@ namespace ArchiveFixer.Views
         public TaskDetailWindow(ArchiveTask task)
         {
             InitializeComponent();
+
+            // 模态子窗：不许最小化（A2），但保留拖边框改大小。
+            WindowMinimizePolicy.Apply(this);
 
             _clipboardService = new ClipboardService();
             _dialogService = new DialogService();

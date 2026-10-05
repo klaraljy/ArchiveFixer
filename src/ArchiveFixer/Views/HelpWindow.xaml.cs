@@ -18,6 +18,9 @@ namespace ArchiveFixer.Views
         public HelpWindow()
         {
             InitializeComponent();
+
+            // 模态子窗：不许最小化（A2），但保留拖边框改大小。
+            WindowMinimizePolicy.Apply(this);
         }
 
         /// <summary>把整份说明（介绍 + 功能详解 + 术语表）拼成一段纯文本 —— 「复制全部说明」用。</summary>

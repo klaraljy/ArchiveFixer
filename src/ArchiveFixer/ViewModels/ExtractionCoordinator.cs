@@ -9229,6 +9229,13 @@ namespace ArchiveFixer.ViewModels
                 Background = System.Windows.Media.Brushes.White
             };
 
+            /*
+             * ⛔ 模态子窗一律不许最小化（用户 2026-10-05 拍板 A2）—— 这个框也是**代码里内联建的**，
+             * 不在 XAML 名单里。它现在是 `NoResize`（压根点不动最小化），接上策略是为了①系统菜单那一项
+             * 也置灰、②万一被 Win+D 这类系统级操作最小化，只要主窗口没跟着最小化就立刻还原。
+             */
+            ArchiveFixer.Views.WindowMinimizePolicy.Apply(window);
+
             var root = new System.Windows.Controls.Grid { Margin = new System.Windows.Thickness(16) };
 
             for (int i = 0; i < 3; i++)

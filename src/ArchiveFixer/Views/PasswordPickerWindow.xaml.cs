@@ -16,6 +16,9 @@ namespace ArchiveFixer.Views
         {
             InitializeComponent();
 
+            // 模态子窗：不许最小化（A2），但保留拖边框改大小。
+            WindowMinimizePolicy.Apply(this);
+
             Title = string.IsNullOrWhiteSpace(title) ? "从密码列表里选" : title;
 
             foreach (string password in passwords ?? Array.Empty<string>())

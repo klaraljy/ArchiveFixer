@@ -43,6 +43,9 @@ namespace ArchiveFixer.Views
         {
             InitializeComponent();
 
+            // 模态子窗：不许最小化（A2），但保留拖边框改大小。
+            WindowMinimizePolicy.Apply(this);
+
             DataContextChanged += PasswordListWindow_DataContextChanged;
 
             /*
@@ -65,6 +68,9 @@ namespace ArchiveFixer.Views
         public PasswordListWindow(PasswordListViewModel viewModel)
         {
             InitializeComponent();
+
+            // 模态子窗：不许最小化（A2），但保留拖边框改大小。
+            WindowMinimizePolicy.Apply(this);
 
             DataContextChanged += PasswordListWindow_DataContextChanged;
 
