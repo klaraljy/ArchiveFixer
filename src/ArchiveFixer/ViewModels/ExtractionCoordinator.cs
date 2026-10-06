@@ -8540,10 +8540,20 @@ namespace ArchiveFixer.ViewModels
 
                 if (adopted)
                 {
+                    /*
+                     * ⚠ **说话要分两种，别一句话糊过去**（用户 2026-10-06 在追"暗链当出口"这件事）：
+                     * · 过程物目录里那一份是**我们自己的东西** ⇒ 是"搬过去改名"（`TryMovePieceIntoGroup`），
+                     *   原位置**没有**它了 —— 旧文案一律写"零字节硬链接、名字一个字符没改"是**假话**；
+                     * · 用户源目录里那一份**确实**只多起了一个规范卷名（硬链接），一个字节没动。
+                     * ⇒ 两句分开写，各自只说自己那种。
+                     */
                     AppendLog(
                         "INFO",
-                        $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
-                        + "零字节的硬链接：你的源文件一个字节没动、名字也一个字符没改）—— 这一组留到这一批都跑完再一起判。");
+                        fromProcessFolder
+                            ? $"「{baseName}」这一组缺的那一片解出来了（按规范卷名 {canonical} 收进「{Path.GetFileName(targetDir)}」这一层；"
+                              + "它是我们自己解出来的过程物，用的是同盘改名的「移动」，原位置不再留一份）。"
+                            : $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
+                              + "零字节的硬链接：你的源文件一个字节没动、名字也一个字符没改）。");
                 }
             }
 
