@@ -13675,6 +13675,7 @@ namespace ArchiveFixer.ViewModels
             RunOptions?.ApplyTo(options);
 
             var destinations = new List<string>();
+            var unresolvedGroupDestinations = new List<string>();
 
             foreach (ArchiveTask task in tasks ?? Array.Empty<ArchiveTask>())
             {
@@ -13685,10 +13686,47 @@ namespace ArchiveFixer.ViewModels
 
                 OutputPlacementResult placement = _pathService.ResolveOutputPlacement(task, options);
 
-                if (placement.Success && !string.IsNullOrWhiteSpace(placement.DestinationDirectory))
+                if (!placement.Success || string.IsNullOrWhiteSpace(placement.DestinationDirectory))
                 {
-                    destinations.Add(placement.DestinationDirectory);
+                    continue;
                 }
+
+                /*
+                 * ===== 工作区根**不许**由"这一组的入口包还不在盘上"那一单来定 =====
+                 *
+                 * 真机 `CCCC`（2026-10-06，用户当场问「批的工作区根/落点还是按任务表里这一组第一单选的，
+                 * 你到底改没改」）：表里第一单是散在 `111(4)` 的 `111.z0删除3`，它那一组的**入口包
+                 * `111.zip` 正压在 `111.rar` 里、还没被解出来** ⇒ 落点退回旧口径（源包自己那一层 +
+                 * 包名）⇒ `111(4)\111`。工作区根取"第一个算得出落点的目标目录"，于是整批的中间产物
+                 * 全落在 `CCCC\111(4)\111\.ArchiveFixer.work` —— 用户目录里凭空多出这一层，
+                 * 而真正该落的地方（`111.rar` 自己那条链的落点 `CCCC\111\111`）一个字节都没用上。
+                 *
+                 * ⇒ 判据只有一条：**这一单的入口包现在在不在盘上**（唯一出口
+                 * `Detection.GroupVolumeDirectory.Resolve`，与落点实现读的是同一个事实位）。
+                 * 不在 ⇒ 这一单的"目标目录"只是个占位值，排到最后当兜底；等入口包被解出来之后，
+                 * 它的落点会由 `ResolveBatchGroupDirectory` 收敛到产出方那一条链上（与工作区根同一个答案）。
+                 *
+                 * ⛔ 这一档**只影响"挑哪个目录当工作区根"**：落点实现、发布、收卷判据一个字都不改。
+                 * ⛔ 一句都不删：实在只有这一种任务时，兜底照旧用它的目录（绝不因为挑不出根就整批停手）。
+                 */
+                if (IsUnresolvedVolumeGroupMember(task))
+                {
+                    unresolvedGroupDestinations.Add(placement.DestinationDirectory);
+                    continue;
+                }
+
+                destinations.Add(placement.DestinationDirectory);
+            }
+
+            if (unresolvedGroupDestinations.Count > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    $"本批有 {unresolvedGroupDestinations.Count} 单是分卷组的成员、而这一组的入口包还没被解出来"
+                    + "（现在挑不出它的落点）—— 工作区根改用别的单来定；等入口包解出来之后，"
+                    + "这一组的产物照样落在入口包所在的那一层。");
+
+                destinations.AddRange(unresolvedGroupDestinations);
             }
 
             /*
@@ -13751,6 +13789,42 @@ namespace ArchiveFixer.ViewModels
             WorkspaceRootIndex.Remember(resolution.RootDirectory);
 
             return resolution;
+        }
+
+        /// <summary>
+        /// 这一单是不是**分卷组的成员、而这一组的入口包现在还没被解出来**（真机 `CCCC` 2026-10-06）。
+        ///
+        /// <para>判据与落点实现**同一个事实位**：<see cref="Detection.GroupVolumeDirectory.Resolve"/>
+        /// 在这一单自己的成员名单里找"引擎要打开、要对它输密码的那一份"（跨盘 ZIP 族 = 本体 <c>X.zip</c>、
+        /// 7z 族 = <c>X.001</c>、RAR 族 = 第 1 卷）；判不出 ⇒ 它的落点只是**占位值**
+        /// （退回"源包自己那一层 + 包名"那个旧口径），不足以当整批工作区根的锚点。</para>
+        ///
+        /// <para>⛔ 只有"分卷组"才问这一句；⛔ 判不出不等于失败 —— 调用方只是把它排到候选末尾，
+        /// 实在没有别的单时照旧用它（⛔ 绝不因为挑不出根就整批停手）。</para>
+        /// </summary>
+        private bool IsUnresolvedVolumeGroupMember(ArchiveTask task)
+        {
+            if (!task.IsVolumeGroup)
+            {
+                return false;
+            }
+
+            var members = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(task.CurrentPath))
+            {
+                members.Add(task.CurrentPath);
+            }
+
+            foreach (string volumePath in task.VolumePaths)
+            {
+                if (!string.IsNullOrWhiteSpace(volumePath))
+                {
+                    members.Add(volumePath);
+                }
+            }
+
+            return members.Count > 0 && Detection.GroupVolumeDirectory.Resolve(members).Path.Length == 0;
         }
 
         private ScheduledTaskRuntime GetOrCreateRuntime(ArchiveTask task)

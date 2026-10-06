@@ -629,6 +629,106 @@ namespace ArchiveFixer.Tests
                         line.Contains("输出位置", StringComparison.Ordinal));
         }
 
+        // ================================ ④补 工作区根**不许**由"入口包还没解出来"那一单来定
+
+        /// <summary>
+        /// 真机 `CCCC`（2026-10-06，用户当场问「批的工作区根 / 落点还是按"任务表里这一组第一单"选的，
+        /// 你到底改没改」）：表里第一单是散在 `111(4)` 的 `111.z0删除3`，它那一组的**入口包 `111.zip`
+        /// 正压在 `111.rar` 里、还没解出来** ⇒ 落点退回旧口径 ⇒ `111(4)\111`；而工作区根取"第一个算得出
+        /// 落点的目标目录" ⇒ 整批的中间产物落在 `CCCC\111(4)\111\.ArchiveFixer.work`，用户目录里凭空多出这一层。
+        ///
+        /// <para>判据只有一条：**这一单的入口包现在在不在盘上**（唯一出口
+        /// <c>GroupVolumeDirectory.Resolve</c>，与落点实现同一个事实位）。不在 ⇒ 它的"目标目录"只是占位值，
+        /// 排到最后当兜底。于是工作区根落在**能真解出东西的那一单**自己那条链上（`out\pack`）。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>IsUnresolvedVolumeGroupMember</c> 那一档拿掉（回到"按任务表顺序取第一个"）
+        /// ⇒ 第三条断言变红（根落在 <c>out\pack(2)\pack</c>，也就是真机那个 <c>111(4)\111</c> 的同一形状）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 管线_入口包还没解出来那一单不当工作区根的锚点()
+        {
+            Harness harness = CreateHarness(customOutput: true);
+
+            // 第 1 单：这一组散着的一片（`other.z02`），而入口包 `other.zip` 还在别处的包里没解出来。
+            Directory.CreateDirectory(Path.Combine(harness.SourceRoot, "other(2)"));
+            string scattered = harness.CreateSourceFile(Path.Combine("other(2)", "other.z0删除2"));
+            ArchiveTask unresolved = harness.AddTask(scattered);
+
+            unresolved.IsVolumeGroup = true;
+            unresolved.VolumePaths.Add(scattered);
+
+            // 第 2 单：真能解出东西的那一份（另一个包名 ⇒ 落点必然不同，"挑错人"才看得见）。
+            string producer = harness.CreateSourceFile("pack.rar");
+            ArchiveTask producing = harness.AddTask(producer);
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                WriteFiles(request.OutputPath!, 2);
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(2));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            string placeholderRoot = Path.Combine(harness.OutputRoot, "other", ".ArchiveFixer.work");
+            string expectedRoot = Path.Combine(harness.OutputRoot, "pack", ".ArchiveFixer.work");
+
+            // ① 这一单确实"拿不到入口包"（前提成立，否则这条用例什么也没验）。
+            Assert.True(unresolved.IsVolumeGroup);
+            Assert.Empty(Detection.GroupVolumeDirectory.Resolve(new[] { scattered }).Path);
+
+            // ② 工作区根落在**能解出东西的那一单**那条链上，⛔ 不是"表里第一单"那一层。
+            Assert.Equal(expectedRoot, harness.PathService.WorkDirectory);
+            Assert.Equal(expectedRoot, RecursiveExtractor.ConfiguredWorkspaceRoot);
+
+            // ③ 用户目录里那层占位目录**没有**成为整批工作区（这就是真机 `111(4)\111` 的同一形状）。
+            Assert.NotEqual(placeholderRoot, harness.PathService.WorkDirectory);
+
+            // ④ 如实说清为什么没用它（判据是"入口包还没被解出来"，不是"这单被跳过了"）。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("入口包还没被解出来", StringComparison.Ordinal));
+
+            // ⑤ 两个任务照旧各自跑完 —— 这一档**只影响挑哪个目录当工作区根**。
+            Assert.Equal(StatusText.ExtractSuccess, producing.Status);
+            Assert.Equal(StatusText.ExtractSuccess, unresolved.Status);
+        }
+
+        /// <summary>
+        /// 兜底那一档不许丢：**整批只有"入口包还没解出来"的分卷组成员**时，照旧拿它的目标目录当工作区根
+        /// —— ⛔ 绝不因为"挑不出更好的根"就整批停手（用户 2026-09-30 的红线只针对"一个目标目录都算不出来"）。
+        /// </summary>
+        [Fact]
+        public async Task 管线_整批只有拿不到入口包的分卷组_照旧用它的目标目录当根()
+        {
+            Harness harness = CreateHarness(customOutput: true);
+
+            Directory.CreateDirectory(Path.Combine(harness.SourceRoot, "other(2)"));
+            string scattered = harness.CreateSourceFile(Path.Combine("other(2)", "other.z0删除2"));
+            ArchiveTask only = harness.AddTask(scattered);
+
+            only.IsVolumeGroup = true;
+            only.VolumePaths.Add(scattered);
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                WriteFiles(request.OutputPath!, 1);
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(1));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(
+                Path.Combine(harness.OutputRoot, "other", ".ArchiveFixer.work"),
+                harness.PathService.WorkDirectory);
+
+            // 引擎真的被调过（不是"整批没开工"）。
+            Assert.Equal(StatusText.ExtractSuccess, only.Status);
+        }
+
         // ================================================================ ⑤ 空壳工作区
 
         /// <summary>
