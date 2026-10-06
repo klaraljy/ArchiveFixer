@@ -12667,6 +12667,17 @@ namespace ArchiveFixer.ViewModels
                     .ConfigureAwait(true);
 
                 /*
+                 * 落点这一档要能回答"入口包还压在包里时，它将来落在哪"（真机 CCCC 2026-10-06：
+                 * 用户连着追问的"批的落点还是按任务表里这一组第一单选"）。
+                 *
+                 * 位置：**改名归一之后**（名字定了才谈得上推标准入口包名）、**工作区根之前**
+                 * （ApplyBatchWorkspaceRoot 里那一遍落点计算也要读到同一个答案）。
+                 * ⛔ 挂的就是"唯一出口"那个方法本身，判据一个字都不在这里写。
+                 */
+                _pathService.GroupProducerEntryResolver =
+                    (task, options, archivePath) => ResolveProducerEntryArchivePathCore(task, options, archivePath, 0);
+
+                /*
                  * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
                  * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
                  * 后面那一行是它的**安全档**（「不删原包」）—— 两档一起钉，同一批口径一致。
@@ -13789,6 +13800,113 @@ namespace ArchiveFixer.ViewModels
             WorkspaceRootIndex.Remember(resolution.RootDirectory);
 
             return resolution;
+        }
+
+        /// <summary>
+        /// **预判入口包将来落在哪** —— 落点跟"产出它的那一单"那条链（真机 `CCCC` 2026-10-06）。
+        ///
+        /// <para>现场（用户连着追问的那一条）：任务表里第一单是散在 `CCCC\111(4)` 的 `111.z0删除3`，
+        /// 而这一组的**入口包**（跨盘 ZIP 的末片 `111.zip`）正压在 `CCCC\111\111.rar` 里、还没被解出来 ⇒
+        /// <see cref="Detection.GroupVolumeDirectory.Resolve"/> 如实回空 ⇒ 落点退回"源包自己那一层 + 包名"
+        /// ⇒ 产物与"其余物"全挂到 `111(4)` 上（而它们该在 `CCCC\111\111`）。</para>
+        ///
+        /// <para><b>怎么预判</b>：① 这一组那几片里任意一份 → `VolumeGroupDetector.TryGetFirstVolumeName`
+        /// 直接给出**入口包的标准名**（跨盘 ZIP 族：`111.z0删除2` ⇒ `111.zip`；7z 族 ⇒ `X.7z.001`；
+        /// RAR 族 ⇒ 第 1 卷）—— ⛔ 不靠后缀猜、不另写按族的规则；② 在**任务表**里找"同包基名、又不是本组成员、
+        /// 自己也不是在等入口包的那一单"（真机 = `111.rar`）；③ 它的落点就是这个包的落点 ⇒
+        /// 拼出"入口包将来会落在哪"（`&lt;产出方落点&gt;\&lt;入口包名&gt;`），再交给**同一个**落点实现。</para>
+        ///
+        /// <para>⛔ 判不出（找不到产出方 / 产出方自己也在等入口包 / 名字推不出标准名）⇒ 空串
+        /// ⇒ 落点与改动前逐字相同（兜底落在"什么都不做"那一档）。⛔ 深度上限 2 层，防互相等成环。</para>
+        /// </summary>
+        private string ResolveProducerEntryArchivePathCore(
+            ArchiveTask task,
+            ExtractOptions options,
+            string archivePath,
+            int depth)
+        {
+            if (depth > 2)
+            {
+                return string.Empty;
+            }
+
+            string entryName = VolumeGroupDetector.TryGetFirstVolumeName(FileNameHelper.GetFileName(archivePath))
+                ?? string.Empty;
+
+            if (entryName.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            string baseName = FileNameHelper.GetArchiveBaseName(archivePath);
+
+            if (baseName.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            ArchiveTask? producer = null;
+
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                if (candidate == null || ReferenceEquals(candidate, task))
+                {
+                    continue;
+                }
+
+                string candidatePath = candidate.CurrentPath;
+
+                if (string.IsNullOrWhiteSpace(candidatePath))
+                {
+                    continue;
+                }
+
+                string candidateName = FileNameHelper.GetFileName(candidatePath);
+
+                // 本组成员（收在同一组里的那几片）跳过 —— 它们自己就在等入口包。
+                if (VolumeGroupDetector.BelongsToSameGroup(candidateName, entryName))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(
+                        FileNameHelper.GetArchiveBaseName(candidatePath),
+                        baseName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // 产出方自己也在等它那一组的入口包 ⇒ 它算不出真落点，别拿它当锚点。
+                if (candidate.IsVolumeGroup && IsUnresolvedVolumeGroupMember(candidate))
+                {
+                    continue;
+                }
+
+                producer = candidate;
+                break;
+            }
+
+            if (producer == null)
+            {
+                return string.Empty;
+            }
+
+            OutputPlacementResult producerPlacement = _pathService.ResolveOutputPlacement(producer, options);
+
+            if (!producerPlacement.Success || string.IsNullOrWhiteSpace(producerPlacement.DestinationDirectory))
+            {
+                return string.Empty;
+            }
+
+            string predicted = Path.Combine(producerPlacement.DestinationDirectory, entryName);
+
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：这一组的入口包（{entryName}）现在还没被解出来 —— 落点按"
+                + $"「产出它的那一单」（{producer.FileName}）推：{predicted}。");
+
+            return predicted;
         }
 
         /// <summary>

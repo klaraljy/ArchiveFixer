@@ -353,6 +353,24 @@ namespace ArchiveFixer.Services
                 {
                     entryArchivePath = entry.Path;
                 }
+                else
+                {
+                    /*
+                     * ===== 入口包**还没被解出来**：落点跟"产出它的那一单"那条链（真机 CCCC） =====
+                     *
+                     * 用户 2026-10-06 连着追问的那一条：任务表里第一单是散在 `111(4)` 的 `111.z0删除3`，
+                     * 而这一组的入口包（跨盘 ZIP 的末片 `111.zip`）正压在 `111.rar` 里 ⇒ 上面那一句
+                     * 如实回空 ⇒ 落点退回旧口径（源包自己那一层 + 包名）⇒ `111(4)\111`，
+                     * 产物与"其余物"全挂到 `111(4)` 上。
+                     *
+                     * 判据：这一组**自己那几片**都不是入口 ⇒ 去**任务表**里找"同一个包基名、
+                     * 又不是本组成员"的那一单（真机 = `111.rar`）⇒ 落点就取**它**算出来的目标目录
+                     * （`CCCC\111\111`）。⛔ 不靠名字猜格式、⛔ 不自己拼路径（转调同一个
+                     * `ResolveOutputPlacement`），⛔ 找不到 ⇒ 原样退回旧口径（行为与改动前逐字相同）。
+                     * ⛔ 这一档**只影响「未指定位置」那一档的目标根**（与 `entryArchivePath` 同一条路）。
+                     */
+                    entryArchivePath = ResolveProducerEntryArchivePath(task, options, archivePath);
+                }
             }
 
             return OutputPlacement.ResolveDestinationDirectory(
@@ -365,6 +383,44 @@ namespace ArchiveFixer.Services
                 selectionRoot: task.SourceSelectionRoot,
                 flattenIntoSourceFolder: options.ExtractIntoSourceFolder,
                 entryArchivePath: entryArchivePath);
+        }
+
+        /// <summary>
+        /// **"产出入口包的那一单"推得出来的入口包路径**（唯一出口，真机 `CCCC` 2026-10-06）。
+        ///
+        /// <para>给定时（由 <c>ExtractionCoordinator</c> 在批首挂上）：这一组的入口包还不在盘上时，
+        /// 用它**预判**入口包将来落在哪 —— 落点于是跟"产出它的那一单"那条链走，
+        /// ⛔ 不再退回"任务表里这一组第一单所在目录"那个旧口径（真机就是它把产物带到 `111(4)\111`）。</para>
+        ///
+        /// <para>返回**空**（没挂 / 判不出 / 产出方自己也在等它的入口包）⇒ 一个字都不改，
+        /// 落点与改动前逐字相同。</para>
+        /// </summary>
+        public Func<ArchiveTask, ExtractOptions, string, string>? GroupProducerEntryResolver { get; set; }
+
+        /// <summary>
+        /// 入口包不在盘上时问一次"产出它的那一单"（见 <see cref="GroupProducerEntryResolver"/>）。
+        /// 判不出 ⇒ <c>null</c>（= 不传，落点退回源包自己那一层）。
+        /// </summary>
+        private string? ResolveProducerEntryArchivePath(ArchiveTask task, ExtractOptions options, string archivePath)
+        {
+            Func<ArchiveTask, ExtractOptions, string, string>? resolver = GroupProducerEntryResolver;
+
+            if (resolver == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                string resolved = resolver(task, options, archivePath);
+
+                return string.IsNullOrWhiteSpace(resolved) ? null : resolved;
+            }
+            catch
+            {
+                // 兜底落在"什么都不做"那一档：预判失败只能让落点回到老口径，绝不能让它把落点算崩。
+                return null;
+            }
         }
 
         /// <summary>

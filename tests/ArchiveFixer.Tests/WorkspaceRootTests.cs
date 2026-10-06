@@ -729,6 +729,76 @@ namespace ArchiveFixer.Tests
             Assert.Equal(StatusText.ExtractSuccess, only.Status);
         }
 
+        /// <summary>
+        /// 真机 `CCCC`（2026-10-06）：入口包（跨盘 ZIP 的末片 `111.zip`）还压在 `111.rar` 里时，
+        /// 那一组散着的片**落点要跟"产出它的那一单"那条链**，⛔ 不是"任务表里这一组第一单所在目录"。
+        ///
+        /// <para>这就是用户连着追问的那一条：旧口径把 `111.zip` 与产物一起带到 `111(4)\111`。
+        /// 现在：`pack.z0删除2` 这一单（唯一在盘上的片是续卷）⇒ 入口包标准名 = `pack.zip`
+        /// （`VolumeGroupDetector.TryGetFirstVolumeName`）⇒ 产出方 = 同基名、又不是本组成员的 `111.rar`
+        /// ⇒ 落点 = `&lt;产出方落点&gt;`（`out\111`）—— 与产出方**同一层**。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>GroupProducerEntryResolver</c> 那一挂拿掉（或让它恒返回空）
+        /// ⇒ 落点退回 `out\pack`（源包自己那一层 + 包名）⇒ 这条断言变红。</para>
+        /// </summary>
+        [Fact]
+        public async Task 管线_入口包还没解出来时_落点跟产出它的那一单那条链()
+        {
+            Harness harness = CreateHarness(customOutput: true);
+
+            // 产出方：`111.rar`（真机上它把入口包 `111.zip` 解出来、落在 out\111）。
+            // 名字刻意与那一组同基名（`111`）—— 判据不是"名字像"，而是"同包基名 + 不是本组成员"。
+            Directory.CreateDirectory(Path.Combine(harness.SourceRoot, "111"));
+            string producer = harness.CreateSourceFile(Path.Combine("111", "111.rar"));            ArchiveTask producing = harness.AddTask(producer);
+
+            // 那一组散着的一片（续卷）：入口包本体不在盘上。
+            Directory.CreateDirectory(Path.Combine(harness.SourceRoot, "111(4)"));
+            string scattered = harness.CreateSourceFile(Path.Combine("111(4)", "111.z0删除2"));
+            ArchiveTask unresolved = harness.AddTask(scattered);
+
+            unresolved.IsVolumeGroup = true;
+            unresolved.VolumePaths.Add(scattered);
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                WriteFiles(request.OutputPath!, 1);
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(1));
+
+            // 前提成立：这一组自己那几片里没有入口包（唯一在盘上的是一片续卷）。
+            Assert.Empty(Detection.GroupVolumeDirectory.Resolve(new[] { scattered }).Path);
+            Assert.Equal(
+                "111.zip",
+                Detection.VolumeGroupDetector.TryGetFirstVolumeName("111.z0删除2"));
+
+            await harness.Coordinator.StartExtractAsync();
+
+            // 产出方那一单自己那条链的落点（`out\111`）—— 入口包将来就落在它这一层。
+            string producerLanding = Path.Combine(harness.OutputRoot, "111");
+
+            // ① 这一组的片落点 = 入口包**将来**所在的那一层，⛔ 不是 `out\111(4)\111`。
+            Assert.Equal(producerLanding, unresolved.OutputPath);
+
+            // 对照组：旧口径（源包自己那一层 + 包名）必须**不是**这个答案。
+            Assert.NotEqual(Path.Combine(harness.OutputRoot, "111(4)", "111"), unresolved.OutputPath);
+
+            // ② 工作区根也跟着落到产出方那一层（与落点同一个事实位）。
+            Assert.Equal(
+                Path.Combine(producerLanding, ".ArchiveFixer.work"),
+                harness.PathService.WorkDirectory);
+
+            // ③ 如实说清"为什么落在那一层"（判据是"入口包还没被解出来 + 产出它的那一单"）。
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("入口包", StringComparison.Ordinal) &&
+                        line.Contains("现在还没被解出来", StringComparison.Ordinal) &&
+                        line.Contains("产出它的那一单", StringComparison.Ordinal));
+
+            Assert.Equal(StatusText.ExtractSuccess, producing.Status);
+        }
+
         // ================================================================ ⑤ 空壳工作区
 
         /// <summary>
