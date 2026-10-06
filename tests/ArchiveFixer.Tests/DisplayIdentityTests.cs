@@ -1,0 +1,107 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using ArchiveFixer.Models;
+using Xunit;
+
+namespace ArchiveFixer.Tests
+{
+    /// <summary>
+    /// **列表那一行"显示谁"**（用户 2026-10-06：「列表里面显示的没有一个是对的」「后缀也不同步」）。
+    ///
+    /// <para>规矩只有两条：① 记下来的那份文件**必须还在盘上**才算数（改名 / 被搬走 / 被删 ⇒ 回落这一行自己的当前值，
+    /// ⛔ 绝不显示一个已经不存在的名字）；② 改名 / 重扫之后**五列一起发变更通知**，否则行会停在旧名字上。</para>
+    ///
+    /// <para><b>红检</b>：把 <c>DisplaySourcePath</c> 的核盘那一句改成直接返回 <c>_userFacingFilePath</c> ⇒
+    /// <c>记下来的那份不在了_回落当前值_不许显示旧名</c> 变红；把 <c>NotifyDisplayIdentityChanged</c> 那一调注掉 ⇒
+    /// <c>改名之后_显示那几列要一起发通知</c> 变红。</para>
+    /// </summary>
+    public class DisplayIdentityTests : IDisposable
+    {
+        private readonly string _root;
+
+        public DisplayIdentityTests()
+        {
+            _root = Path.Combine(Path.GetTempPath(), "af-display-identity-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(_root);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (Directory.Exists(_root))
+                {
+                    Directory.Delete(_root, recursive: true);
+                }
+            }
+            catch
+            {
+                // 临时目录清不掉不影响结论。
+            }
+        }
+
+        /// <summary>⛔ 记下来的那份**不在了** ⇒ 回落当前值（不许继续显示旧名 / 旧大小 / 旧后缀）。</summary>
+        [Fact]
+        public void 记下来的那份不在了_回落当前值_不许显示旧名()
+        {
+            string original = Path.Combine(_root, "111(4)", "111.z03");
+            string renamed = Path.Combine(_root, "111(4)", "111.z03.renamed");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+            File.WriteAllBytes(original, new byte[2048]);
+
+            var task = new ArchiveTask(original, 1);
+
+            // 起点被改写到别处的入口包上（真机那一格）⇒ 显示身份记成"盘上那一份"。
+            string entry = Path.Combine(_root, "111", "111", "111.zip");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(entry)!);
+            File.WriteAllBytes(entry, new byte[4096]);
+
+            // 真机顺序：**先把起点改写到入口包上**，再记显示身份（那一行仍显示用户自己那个文件）。
+            task.CurrentPath = entry;
+            task.ShowUserFileIdentity(entry);
+
+            Assert.Equal("111.z03", task.DisplayFileName);
+            Assert.Equal(".z03", task.DisplayExtension);
+            Assert.EndsWith("111.z03", task.DisplayPath, StringComparison.Ordinal);
+
+            // 那一份被改名搬走了 ⇒ 显示必须回落到这一行自己的当前值（入口包），⛔ 不许再显示旧名。
+            File.Move(original, renamed);
+
+            Assert.NotEqual("111.z03", task.DisplayFileName);
+            Assert.Equal(task.FileName, task.DisplayFileName);
+            Assert.Equal(task.CurrentExtension, task.DisplayExtension);
+        }
+
+        /// <summary>⛔ 改名 / 重扫之后**五列一起发通知**（否则行停在旧名字上 —— 真机截图里第 2、3 行）。</summary>
+        [Fact]
+        public void 改名之后_显示那几列要一起发通知()
+        {
+            string file = Path.Combine(_root, "111.z0删除2");
+
+            File.WriteAllBytes(file, new byte[1024]);
+
+            var task = new ArchiveTask(file, 1);
+            var changed = new List<string>();
+
+            ((INotifyPropertyChanged)task).PropertyChanged += (_, e) => changed.Add(e.PropertyName ?? string.Empty);
+
+            string renamed = Path.Combine(_root, "111.z02");
+
+            File.Move(file, renamed);
+            task.CurrentPath = renamed;
+
+            Assert.Contains(nameof(ArchiveTask.DisplayFileName), changed);
+            Assert.Contains(nameof(ArchiveTask.DisplaySizeText), changed);
+            Assert.Contains(nameof(ArchiveTask.DisplayExtension), changed);
+            Assert.Contains(nameof(ArchiveTask.DisplayPath), changed);
+
+            // 显示值与盘上那份一致。
+            Assert.Equal("111.z02", task.DisplayFileName);
+            Assert.Equal(".z02", task.DisplayExtension);
+        }
+    }
+}

@@ -249,27 +249,72 @@ namespace ArchiveFixer.Models
         /// <see cref="FileName"/> / <see cref="SourceSizeText"/> 逐字相同（绝大多数任务都是这一档）。
         /// </summary>
         private string _userFacingFilePath = string.Empty;
+        /// <summary>
+        /// 这一刻**真正拿来显示**的那份文件：记下来的那条**还在盘上**才算数。
+        ///
+        /// <para>⛔ 为什么要核盘（用户 2026-10-06：「列表里面显示的没有一个是对的」「后缀也不同步」）：
+        /// 记下来的路径会**过期**（改名 / 被搬走 / 被删）—— 拿一个已经不存在的名字去显示，
+        /// 那一行就成了"名字是旧的、别的列是新的"的自相矛盾。核不到 ⇒ 回落这一行自己的当前值。</para>
+        /// </summary>
+        private string DisplaySourcePath
+        {
+            get
+            {
+                if (_userFacingFilePath.Length == 0)
+                {
+                    return string.Empty;
+                }
+
+                try
+                {
+                    return File.Exists(_userFacingFilePath) ? _userFacingFilePath : string.Empty;
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }
+        }
 
         /// <summary>列表「文件名」那一格显示什么（默认 = <see cref="FileName"/>）。</summary>
         public string DisplayFileName =>
-            _userFacingFilePath.Length == 0 ? FileName : Path.GetFileName(_userFacingFilePath);
+            DisplaySourcePath is { Length: > 0 } path ? Path.GetFileName(path) : FileName;
 
         /// <summary>列表「大小」那一格显示什么（默认 = <see cref="SourceSizeText"/>）。</summary>
         public string DisplaySizeText =>
-            _userFacingFilePath.Length == 0 ? SourceSizeText : DescribeSize(_userFacingFilePath);
+            DisplaySourcePath is { Length: > 0 } path ? DescribeSize(path) : SourceSizeText;
 
-        /// <summary>「文件名」那一格悬停提示（默认 = <see cref="CurrentPath"/>）。</summary>
+        /// <summary>「文件名」那一格悬停提示 / 「完整路径」那一列（默认 = <see cref="CurrentPath"/>）。</summary>
         public string DisplayPathToolTip =>
-            _userFacingFilePath.Length == 0 ? CurrentPath : _userFacingFilePath;
+            DisplaySourcePath is { Length: > 0 } path ? path : CurrentPath;
+
         /// <summary>「完整路径」那一列显示什么（同上：这一行属于**用户自己那个文件**）。</summary>
         public string DisplayPath => DisplayPathToolTip;
 
         /// <summary>「当前后缀」那一列显示什么（⛔ 必须与 <see cref="DisplayFileName"/> 同步：
         /// 显示 `111.z02` 却把后缀写成 `.zip` 就是自相矛盾 —— 用户 2026-10-06 当场报的"后缀也不同步"）。</summary>
         public string DisplayExtension =>
-            _userFacingFilePath.Length == 0
-                ? CurrentExtension
-                : (Path.GetExtension(_userFacingFilePath) is { Length: > 0 } ext ? ext : "无");
+            DisplaySourcePath is { Length: > 0 } path
+                ? (Path.GetExtension(path) is { Length: > 0 } ext ? ext : "无")
+                : CurrentExtension;
+
+        /// <summary>
+        /// **显示那几列一起发变更通知**（⛔ 一处改动、五列同步）。
+        ///
+        /// <para>为什么必须显式发：这几列是**计算属性**（依赖 <see cref="_userFacingFilePath"/> 与当前路径），
+        /// 而改名 / 重扫走的是 <see cref="RefreshPathRelatedProperties"/> —— 它只会为
+        /// `FileName` / `DirectoryPath` / `CurrentExtension` 发通知，计算属性收不到
+        /// ⇒ **那一行就停在旧名字上**（用户 2026-10-06 截图里第 2、3 行正是如此：
+        /// 盘上已改成 `111.z02` / `111(2)_.zip`，列表还显示脏名）。</para>
+        /// </summary>
+        public void NotifyDisplayIdentityChanged()
+        {
+            OnPropertyChanged(nameof(DisplayFileName));
+            OnPropertyChanged(nameof(DisplaySizeText));
+            OnPropertyChanged(nameof(DisplayPathToolTip));
+            OnPropertyChanged(nameof(DisplayPath));
+            OnPropertyChanged(nameof(DisplayExtension));
+        }
 
         /// <summary>
         /// **这一行仍旧显示"用户自己那个文件"**（真机 CCCC 2026-10-06，用户原话：
@@ -1465,6 +1510,9 @@ namespace ArchiveFixer.Models
             }
 
             RefreshSourceSize();
+
+            // ⛔ 显示那几列是计算属性：这里不显式通知，改名之后列表会停在旧名字上（真机 2026-10-06 实测）。
+            NotifyDisplayIdentityChanged();
         }
 
         /// <summary>
