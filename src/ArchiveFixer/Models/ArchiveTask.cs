@@ -245,6 +245,129 @@ namespace ArchiveFixer.Models
         public string SourceSizeText => _sourceSizeBytes > 0 ? FormatSizeText(_sourceSizeBytes) : "-";
 
         /// <summary>
+        /// 这一行**在列表里显示谁**（见 <see cref="ShowUserFileIdentity"/>）；空 = 与
+        /// <see cref="FileName"/> / <see cref="SourceSizeText"/> 逐字相同（绝大多数任务都是这一档）。
+        /// </summary>
+        private string _userFacingFilePath = string.Empty;
+
+        /// <summary>列表「文件名」那一格显示什么（默认 = <see cref="FileName"/>）。</summary>
+        public string DisplayFileName =>
+            _userFacingFilePath.Length == 0 ? FileName : Path.GetFileName(_userFacingFilePath);
+
+        /// <summary>列表「大小」那一格显示什么（默认 = <see cref="SourceSizeText"/>）。</summary>
+        public string DisplaySizeText =>
+            _userFacingFilePath.Length == 0 ? SourceSizeText : DescribeSize(_userFacingFilePath);
+
+        /// <summary>「文件名」那一格悬停提示（默认 = <see cref="CurrentPath"/>）。</summary>
+        public string DisplayPathToolTip =>
+            _userFacingFilePath.Length == 0 ? CurrentPath : _userFacingFilePath;
+
+        /// <summary>
+        /// **这一行仍旧显示"用户自己那个文件"**（真机 CCCC 2026-10-06，用户原话：
+        /// 「48MB 在列表里面显示到了 111(4)，也就是列表里面第一个……这个你到目前还没改回来」
+        /// 「也就是你没有真正的移动只是显示问题的情况，赶紧修」）。
+        ///
+        /// <para><b>现场</b>：批末补判把这一单的**起点**改写到"别的包解出来的入口包"上
+        /// （`…\111(4)\111.z03` → `…\111\111\111.zip`，48.35 MB）—— `CurrentPath` 的 setter 顺手把
+        /// 名称 / 目录 / 体积整行刷新成那一份过程物 ⇒ 用户导入的那个文件在列表里"变成了 48MB 的东西"。</para>
+        ///
+        /// <para>⛔ **只改显示**：<see cref="CurrentPath"/>（真正拿去解压的起点）、`Outcome`、
+        /// 借片账、落点……一个字节都不动；⛔ 起点与用户自己的文件**在同一层**（同一组里自己人的另一卷，
+        /// `set.7z.002` → `set.7z.001`）时显示照旧；⛔ 认不出用户那个文件（哪条路径都不在盘上）⇒
+        /// 什么都不做（显示照旧，⛔ 不猜）。</para>
+        /// </summary>
+        /// <param name="startPointPath">改写之后的起点（那一份过程物）；与它同名的那条路径不会被选中。</param>
+        /// <param name="hintPath">
+        /// 调用方替我们找到的"用户自己那一份现在在哪"（改名之后 `OriginalPath` 会过期，
+        /// 而账上那几卷可能散在别的目录 ⇒ 只有调用方拿得到"同目录 + 同族"那个判据）。
+        /// 它会被**优先**采用；⛔ 仍然要求它在最初导入的那个目录里。
+        /// </param>
+        public void ShowUserFileIdentity(string? startPointPath, string? hintPath = null)
+        {
+            if (string.IsNullOrWhiteSpace(OriginalPath))
+            {
+                return;
+            }
+
+            string originalDirectory = Path.GetDirectoryName(OriginalPath) ?? string.Empty;
+            string startDirectory = string.IsNullOrWhiteSpace(startPointPath)
+                ? string.Empty
+                : Path.GetDirectoryName(startPointPath) ?? string.Empty;
+
+            if (string.Equals(originalDirectory, startDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                // 起点就在自己旁边（自己人另一卷）⇒ 显示照旧（用户要看的是"程序真去解的那一份"）。
+                return;
+            }
+
+            foreach (string path in EnumerateOwnPathsForDisplay().Prepend(hintPath ?? string.Empty))
+            {
+                if (string.IsNullOrWhiteSpace(path)
+                    || string.Equals(path, startPointPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                /*
+                 * ⛔ **只认"和最初导入那一份同一个目录"的候选**：用户可以改名
+                 * （`111.z0删除2` → `111.z02`），但那一份东西一直在他放的那个目录里；
+                 * 账上那几卷可能散在**别的目录**（别的单的片）—— 拿它们顶替就成了"这一行显示别人"。
+                 */
+                if (!string.Equals(
+                        Path.GetDirectoryName(path) ?? string.Empty,
+                        originalDirectory,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (!File.Exists(path))
+                    {
+                        continue;
+                    }
+                }
+                catch
+                {
+                    continue;
+                }
+
+                _userFacingFilePath = path;
+                OnPropertyChanged(nameof(DisplayFileName));
+                OnPropertyChanged(nameof(DisplaySizeText));
+                OnPropertyChanged(nameof(DisplayPathToolTip));
+                return;
+            }
+        }
+
+        /// <summary>这一单"自己那个文件"可能在哪几条路径上（最初导入的那一份 + 账上那几卷 + 当前路径）。</summary>
+        private IEnumerable<string> EnumerateOwnPathsForDisplay()
+        {
+            yield return OriginalPath;
+
+            foreach (string path in VolumePaths)
+            {
+                yield return path;
+            }
+
+            yield return CurrentPath;
+        }
+
+        /// <summary>读一个文件的体积文字（读不到 ⇒ 短横，⛔ 不显示 0 字节）。</summary>
+        private static string DescribeSize(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? FormatSizeText(new FileInfo(path).Length) : "-";
+            }
+            catch
+            {
+                return "-";
+            }
+        }
+
+        /// <summary>
         /// 人读的字节数（列表列宽有限，所以最多两位小数、单位取最合适的那一档）。
         /// 单位与 <c>Storage/TaskSpaceEstimate.FormatSize</c> **完全一致**（KiB / MiB / GiB / 字节）——
         /// 界面上两处对同一块盘报出两种单位，用户会以为程序在算两个不同的数（历史上被投诉过）。

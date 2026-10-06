@@ -1257,6 +1257,21 @@ namespace ArchiveFixer.Tests
             Assert.Contains(
                 harness.LogTexts,
                 text => text.Contains($"{innerTask.FileName}：结果校验 —— 校验通过", StringComparison.Ordinal));
+
+            /*
+             * ④ **列表那一行显示的仍是你自己那个文件**（真机 CCCC 2026-10-06 用户第二次追问的
+             * 「48MB 在列表里面显示到了 111(4)……这个你到目前还没改回来」）。
+             *
+             * 起点被改写到"别的包解出来的入口包"上之后：`FileName` 变成那一份过程物（内部起点，照旧），
+             * 而**列表显示**必须还是这一单自己那一片 —— 用户导进来的那个文件。
+             *
+             * <para><b>红检</b>：把 `ShowUserFileIdentity` 那一调注掉 ⇒ 本条变红（显示名称会变成 `111.zip`）。</para>
+             */
+            ArchiveTask repointed = harness.Vm.Tasks.Single(task => task.OriginalPath.Contains("111(3)"));
+
+            Assert.Equal("111.zip", repointed.FileName);            // 内部起点 = 入口包（一个字符没改）
+            Assert.Equal("111.z02", repointed.DisplayFileName);     // 列表显示 = 这一单自己那一片
+            Assert.NotEqual(repointed.SourceSizeText, repointed.DisplaySizeText);
         }
 
         /// <summary>

@@ -8196,6 +8196,14 @@ namespace ArchiveFixer.ViewModels
                         // CurrentPath 的 setter 会顺手刷新文件名 / 目录 / 后缀 / 体积。
                         task.CurrentPath = entryPath;
                         task.CaptureSourceSnapshot();
+
+                        /*
+                         * ⛔ 列表那一行**仍旧显示"用户自己那个文件"**（真机 CCCC 2026-10-06，
+                         * 用户原话：「48MB 在列表里面显示到了 111(4)……这个你到目前还没改回来」）。
+                         * 起点是**内部细节**（本方法上面那行日志"起点由 X 改为它"已经写清），
+                         * ⛔ 不许把这一行的名称 / 大小整行变成那一份过程物；⛔ CurrentPath 一个字不动。
+                         */
+                        task.ShowUserFileIdentity(entryPath, FindUserOwnFileBesideItsDirectory(task, entryPath));
                     }
 
                     /*
@@ -8702,6 +8710,55 @@ namespace ArchiveFixer.ViewModels
             }
 
             return adopted || (gather.Applicable && gather.Complete);
+        }
+
+        /// <summary>
+        /// **用户自己那一份现在在哪**（改名之后也要找得到）：他最初放的那个目录里、
+        /// 与起点（这一组的入口包）**同族**、且**包基名与最初导入那一份相同**的那个文件。
+        ///
+        /// <para>为什么要这么找：`OriginalPath` 是"最初导入路径"（改名不会跟着变，真机实测），
+        /// 而账上那几卷可能散在别的目录（别的单的片）⇒ 只有"同目录 + 同族 + 同基名"这一条
+        /// 能把"用户自己那一片"认出来（⛔ 只用于**列表显示**，不参与任何搬运 / 删除判据）。</para>
+        /// <para>判不出 ⇒ 空串（调用方那一行显示照旧，⛔ 不猜）。</para>
+        /// </summary>
+        private static string FindUserOwnFileBesideItsDirectory(ArchiveTask task, string startPointPath)
+        {
+            string original = task.OriginalPath ?? string.Empty;
+            string directory = Path.GetDirectoryName(original) ?? string.Empty;
+
+            if (directory.Length == 0 || string.IsNullOrWhiteSpace(startPointPath) || !Directory.Exists(directory))
+            {
+                return string.Empty;
+            }
+
+            string startName = FileNameHelper.GetFileName(startPointPath);
+            string originalBaseName = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(original));
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(directory))
+                {
+                    string name = FileNameHelper.GetFileName(file);
+
+                    if (string.Equals(name, startName, StringComparison.OrdinalIgnoreCase)
+                        || !VolumeGroupDetector.BelongsToSameGroup(name, startName)
+                        || !string.Equals(
+                            FileNameHelper.GetArchiveBaseName(name),
+                            originalBaseName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    return file;
+                }
+            }
+            catch
+            {
+                // 读不动 ⇒ 判不出。
+            }
+
+            return string.Empty;
         }
 
         /// <summary>
@@ -9812,6 +9869,12 @@ namespace ArchiveFixer.ViewModels
                              */
                             new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
                             task.CurrentPath = firstVolume;
+
+                            /*
+                             * ⛔ 起点改了，但**列表那一行仍旧显示"用户自己那个文件"**（真机 CCCC 2026-10-06：
+                             * "48MB 在列表里面显示到了 111(4) 那一行"）。只改显示，⛔ 起点口径一个字不动。
+                             */
+                            task.ShowUserFileIdentity(firstVolume, FindUserOwnFileBesideItsDirectory(task, firstVolume));
                         }
 
                         task.CaptureSourceSnapshot();
@@ -16957,6 +17020,9 @@ namespace ArchiveFixer.ViewModels
                         {
                             // CurrentPath 的 setter 会顺手刷新文件名 / 目录 / 后缀 / 体积。
                             task.CurrentPath = regroupedFirst;
+
+                            // ⛔ 同上：起点改了，列表那一行仍旧显示"用户自己那个文件"（只改显示）。
+                            task.ShowUserFileIdentity(regroupedFirst, FindUserOwnFileBesideItsDirectory(task, regroupedFirst));
                         }
 
                         task.CaptureSourceSnapshot();

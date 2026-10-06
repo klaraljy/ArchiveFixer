@@ -278,23 +278,6 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                /*
-                 * ===== **同名的不是"另一片"**（真机 CCCC 2026-10-06，用户两次追问的 48.35 MB）=====
-                 *
-                 * 一组分卷里每一片的**文件名互不相同** ⇒ 名字一样只可能是**同一份包在别处还有一个名字**
-                 * （硬链接双胞胎：暂存那一份被定稿搬进其余物之后，落点那一份还在成品目录里）。
-                 * 那不是"整组被拆开"，一个字节都不会丢，所以这一档不拦。
-                 *
-                 * 现场：其余物里的入口包 `111.zip` 与成品目录里那一份同名同源 ⇒ 老写法判成
-                 * "同组还有一片在外面" ⇒ `111\111\其余物\111.zip`（48.35 MB）永远删不掉。
-                 * ⛔ 这条不放松红线：真正被拆开的形状是 `.z01..z05` 对末片 `.zip`（**名字不同**），
-                 * 那一种照旧一律拦下。
-                 */
-                if (string.Equals(Path.GetFileName(file), candidateName, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
                 return $"{candidatePrefix}「{candidateName}」是一组分卷的一片，而同组的另一片「{Path.GetFileName(file)}」"
                     + $"还在成品目录里（两边基名都是「{baseName}」）—— {blockerTail}";
             }

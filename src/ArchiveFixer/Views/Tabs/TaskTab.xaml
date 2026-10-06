@@ -466,13 +466,13 @@
                             </DataGridTemplateColumn>
 
                             <DataGridTextColumn Header="文件名"
-                                                Binding="{Binding FileName}"
+                                                Binding="{Binding DisplayFileName}"
                                                 Width="180"
                                                 IsReadOnly="True">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                        <Setter Property="ToolTip" Value="{Binding CurrentPath}" />
+                                        <Setter Property="ToolTip" Value="{Binding DisplayPathToolTip}" />
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
@@ -489,7 +489,7 @@
                                 之前 90 会把它截成 `312.64Mi…`。⛔ 别再收窄。
                             -->
                             <DataGridTextColumn Header="大小"
-                                                Binding="{Binding SourceSizeText}"
+                                                Binding="{Binding DisplaySizeText}"
                                                 Width="118"
                                                 MinWidth="118"
                                                 IsReadOnly="True">
