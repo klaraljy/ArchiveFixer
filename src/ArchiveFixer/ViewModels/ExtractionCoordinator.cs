@@ -7820,12 +7820,12 @@ namespace ArchiveFixer.ViewModels
         /// ⇒ 半套分卷那道闸门**拦得对**（删了就等于把这一组拆开）；等整组解完、那几片也搬走之后
         /// 就没有任何障碍了，可旧写法只试一次 ⇒ `111\111\其余物\111.zip`（48.35 MB）永远留着。</para>
         /// </summary>
-        private readonly List<(ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName)> _pendingPassThroughRest = new();
+        private readonly List<(ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName, string AllowedRoot)> _pendingPassThroughRest = new();
 
         /// <summary>把"这次没删成"的那一单排进批末重试名单（⛔ 同一个生产者只排一次）。</summary>
-        private void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
+        private void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName, string allowedRoot)
         {
-            foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _pendingPassThroughRest)
+            foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName, string AllowedRoot) item in _pendingPassThroughRest)
             {
                 if (ReferenceEquals(item.Producer, producer))
                 {
@@ -7833,7 +7833,7 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            _pendingPassThroughRest.Add((producer, consumer, groupBaseName));
+            _pendingPassThroughRest.Add((producer, consumer, groupBaseName, allowedRoot));
         }
 
         /// <summary>
@@ -7843,7 +7843,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void RetryPendingPassThroughRestPurges()
         {
-            foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _pendingPassThroughRest.ToList())
+            foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName, string AllowedRoot) item in _pendingPassThroughRest.ToList())
             {
                 if (string.IsNullOrWhiteSpace(item.Producer.RestDirectoryPath)
                     || !Directory.Exists(item.Producer.RestDirectoryPath))
@@ -7852,7 +7852,7 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                PurgePassThroughRestOfSettledProducer(item.Producer, item.Consumer, item.GroupBaseName);
+                PurgePassThroughRestOfSettledProducer(item.Producer, item.Consumer, item.GroupBaseName, item.AllowedRoot);
             }
         }
 
@@ -9695,7 +9695,8 @@ namespace ArchiveFixer.ViewModels
         private void PurgePassThroughRestOfSettledProducer(
             ArchiveTask producer,
             ArchiveTask consumer,
-            string groupBaseName)
+            string groupBaseName,
+            string allowedRoot)
         {
             if (producer == null || !_passThroughRestHandled.Add(producer))
             {
@@ -9766,7 +9767,7 @@ namespace ArchiveFixer.ViewModels
                          * （跟班卷没有自己的成品目录）⇒ 用**唯一落点出口**现算一份它那条链的落点目录
                          * —— 其余物正是建在那一层底下（真机 `111\111\其余物`）。
                          */
-                        ResolveOwnerChainDirectory(producer));
+                        allowedRoot);
             }
             catch (Exception ex)
             {
@@ -10226,7 +10227,7 @@ namespace ArchiveFixer.ViewModels
              * 这一单的**其余物**也要按档处理（用户 2026-10-06 两次追问的那 48.35 MB）：
              * 它只出过程物、那份过程物已被这一组那次**可证完整**的解压接手 ⇒ 它的其余物不再有用了。
              */
-            PurgePassThroughRestOfSettledProducer(piece, consumer, groupBaseName);
+            PurgePassThroughRestOfSettledProducer(piece, consumer, groupBaseName, ResolveOwnerChainDirectory(piece));
 
             /*
              * ⛔ **这一趟没删成就解除"已处理"标记、排进批末重试**（真机 2026-10-06 20:07 实测）：
@@ -10238,7 +10239,7 @@ namespace ArchiveFixer.ViewModels
             if (!string.IsNullOrWhiteSpace(piece.RestDirectoryPath) && Directory.Exists(piece.RestDirectoryPath))
             {
                 _passThroughRestHandled.Remove(piece);
-                RememberPendingPassThroughRest(piece, consumer, groupBaseName);
+                RememberPendingPassThroughRest(piece, consumer, groupBaseName, ResolveOwnerChainDirectory(piece));
             }
 
             if (!moveSources || !_producerSourcesCollected.Add(piece))
