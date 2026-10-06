@@ -572,6 +572,16 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private readonly List<string> _unresolvedVolumePieces = new();
 
+        /// <summary>
+        /// **这一趟打不开的那几片，抢救到哪个目录**（调用方在跑之前给；⛔ 空 = 不抢救）。
+        ///
+        /// <para>真机 2026-10-06：那一片（`111.zip`）是下一轮那一组的入口包，而本类收尾会把自己的工作区
+        /// 清掉 ⇒ 协调器拿到结论时它已经不在了 ⇒ 整条"入口包留在它自己那条链里"的路都断了。
+        /// ⇒ 调用方把它自己的**暂存目录**传进来，本类在**记下那片的同时**复制一份过去
+        /// （见 <see cref="RememberUnresolvedVolumePiece"/>）。⛔ 只复制、不改名、不删原件。</para>
+        /// </summary>
+        public string? UnresolvedPieceRescueDirectory { get; set; }
+
         /// <summary>找卷窗口里那批候选（见 <see cref="_rootSourcePath"/> 的说明；算不出来就是空池）。</summary>
         private IReadOnlyList<VolumeCandidate> RootSourceCandidates
         {
@@ -599,6 +609,14 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 记下"这一片是一条**还没凑齐**的分卷组里的片"（去重；只记路径，什么都不碰）。
         /// 见 <see cref="_unresolvedVolumePieces"/> 的说明。
+        ///
+        /// <para>⚠ <b>顺手抢救一份到调用方给的落点</b>（用户 2026-10-06 真机：那一片是 `111.zip`、
+        /// 它是下一轮那一组跨盘 ZIP 的入口包）：本类收尾会把这个工作区清掉，
+        /// 而协调器拿到结论时它**已经不在盘上了**（排障日志逐字：`那一片已经不在盘上（…\output\111.zip）`）
+        /// ⇒ 协调器那一档永远搬不到东西、"结果校验"因此看到空目录 ⇒ 列表显示「解压失败」+ 源包不处理。
+        /// ⇒ **谁建谁负责**：记下它的同时就把它复制一份到 <see cref="UnresolvedPieceRescueDirectory"/>
+        /// （那个目录是协调器给的、在它自己的暂存目录下，不随本类的工作区一起消失）。
+        /// ⛔ 只复制、⛔ 不改名、⛔ 不删原件（本类照旧按原口径处置自己的东西）。</para>
         /// </summary>
         private void RememberUnresolvedVolumePiece(string? path)
         {
@@ -606,6 +624,8 @@ namespace ArchiveFixer.Extraction
             {
                 return;
             }
+
+            RescueUnresolvedPiece(path!);
 
             foreach (string existing in _unresolvedVolumePieces)
             {
@@ -616,6 +636,41 @@ namespace ArchiveFixer.Extraction
             }
 
             _unresolvedVolumePieces.Add(path!);
+        }
+
+        /// <summary>
+        /// 把这一片复制一份到 <see cref="UnresolvedPieceRescueDirectory"/>（见
+        /// <see cref="RememberUnresolvedVolumePiece"/> 的说明）。判不出 / 拷不动 ⇒ 什么都不做。
+        /// </summary>
+        private void RescueUnresolvedPiece(string piece)
+        {
+            string? rescueDirectory = UnresolvedPieceRescueDirectory;
+
+            if (string.IsNullOrWhiteSpace(rescueDirectory))
+            {
+                return;
+            }
+
+            try
+            {
+                if (!File.Exists(piece))
+                {
+                    return;
+                }
+
+                Directory.CreateDirectory(rescueDirectory);
+
+                string target = Path.Combine(rescueDirectory, Path.GetFileName(piece));
+
+                if (!File.Exists(target))
+                {
+                    File.Copy(piece, target, overwrite: false);
+                }
+            }
+            catch
+            {
+                // 拷不动（占用 / 权限 / 空间）⇒ 什么都不做：协调器那一档照旧按"判不出就不做"处置。
+            }
         }
 
         /// <summary>

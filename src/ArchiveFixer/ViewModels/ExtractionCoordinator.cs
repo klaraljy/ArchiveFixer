@@ -1590,14 +1590,6 @@ namespace ArchiveFixer.ViewModels
                 CleanupTaskWorkspaceDirectory(task, stageDirectory);
             }
 
-            /* 收卷排障（⛔ 排查用，定论后删）：校验那一刻，两个目录里各有什么。 */
-            AppendLog(
-                "WARN",
-                $"[收卷排障] {task.FileName}：校验={(work.Verification.Verified ? "过" : "未过")}"
-                + $"（{work.Verification.Message}）；"
-                + $"暂存目录 {stageDirectory} 里 {SafeCount(stageDirectory)} 个文件；"
-                + $"递归产物 {recursion?.FinalOutputPath ?? "（无）"} 里 {SafeCount(recursion?.FinalOutputPath)} 个文件。");
-
             /*
              * 「定稿完成后打开输出目录」（设置项 OpenOutputFolderWhenDone，**默认关**）。
              *
@@ -6187,6 +6179,16 @@ namespace ArchiveFixer.ViewModels
             RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor();
 
             /*
+             * **这一趟打不开的那几片，抢救到哪儿**（真机 2026-10-06）：
+             * 那一片（`111.zip`）是下一轮那一组的入口包，而递归核心收尾会清掉它自己的工作区
+             * ⇒ 协调器拿到结论时它已经不在了（排障日志逐字：`那一片已经不在盘上（…\output\111.zip）`）
+             * ⇒ "入口包留在它自己那条链里"整条路断掉 ⇒ 结果校验看到空目录 ⇒ 列表显示「解压失败」+ 源包不处理。
+             * ⇒ 把这一单的**暂存目录**给它（收尾链读的就是它），它在记下那片的同时复制一份过去。
+             */
+            recursiveExtractor.UnresolvedPieceRescueDirectory = stageDirectory;
+
+
+            /*
              * 「可疑条目提示」的回传口（2026-10-05 只读审计）：递归核心在拿到本层清单时算出那句话，
              * 这里把它写进**与单层路径同一个字段**、走**同一个出口**（PublishDangerousEntriesHint）——
              * 于是默认档下内层包里的 `.exe / .bat / .ps1` 也会像源包那样被点名。
@@ -8412,6 +8414,21 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>顶层文件名（排障用）。</summary>
+        private static string SafeNames(string? directory)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
+                    ? "（无）"
+                    : string.Join(", ", Directory.GetFiles(directory).Select(Path.GetFileName));
+            }
+            catch
+            {
+                return "（读不动）";
+            }
+        }
+
         private string ResolveOwnerChainDirectory(ArchiveTask? owner)
         {
             if (owner == null || string.IsNullOrWhiteSpace(owner.CurrentPath))
@@ -8429,6 +8446,27 @@ namespace ArchiveFixer.ViewModels
                 {
                     return placement.DestinationDirectory;
                 }
+
+                /*
+                 * ⛔ **这一刻 `task.OutputPath` 往往还没落**（真机 2026-10-06 当场逮到：这一档"搬了 0 份"，
+                 * 就是因为这里返回空 ⇒ 目标层算不出来 ⇒ 整档静默不做）。⇒ 按**同一套落点公式现算一份**：
+                 * 未指定位置那一档 = `源包所在目录 + 包名文件夹`（`111\111.rar` ⇒ `111\111\`），
+                 * 与 <see cref="OutputPlacement.ResolveDestinationDirectory"/> 的公式逐字同口径
+                 * （用包基名，⛔ 不是"剥后缀再加一层"的自创写法）。
+                 */
+                string? ownerDirectory = Path.GetDirectoryName(owner.CurrentPath);
+
+                if (string.IsNullOrWhiteSpace(ownerDirectory))
+                {
+                    return string.Empty;
+                }
+
+                string packageName = FileNameHelper.GetArchiveBaseName(
+                    FileNameHelper.GetFileName(owner.CurrentPath));
+
+                return packageName.Length > 0
+                    ? Path.Combine(ownerDirectory, packageName)
+                    : ownerDirectory;
             }
             catch (Exception ex)
             {
@@ -8489,28 +8527,82 @@ namespace ArchiveFixer.ViewModels
                 return published;
             }
 
-            foreach (string piece in recursion.UnresolvedVolumePieces)
+            foreach (string pieceFromResult in recursion.UnresolvedVolumePieces)
             {
                 try
                 {
+                    string piece = pieceFromResult;
+
                     if (!File.Exists(piece))
                     {
-                        continue;
+                        /*
+                         * ⚠ 原路径经常已经不在（递归核心收尾会清自己的工作区）—— 那一刻它已经把这一片
+                         * **抢救复制**到我们的暂存目录里了（`RecursiveExtractor.UnresolvedPieceRescueDirectory`）
+                         * ⇒ 这里改用抢救副本，别当成"没东西可搬"（真机 2026-10-06 排障日志逐字：
+                         * `那一片已经不在盘上（…\output\111.zip）` ⇒ 搬了 0 份 ⇒ 落地那一层永远没有入口包）。
+                         */
+                        string rescued = Path.Combine(stage, FileNameHelper.GetFileName(pieceFromResult));
+
+                        if (!File.Exists(rescued))
+                        {
+                            continue;
+                        }
+
+                        piece = rescued;
                     }
 
                     string name = FileNameHelper.GetFileName(piece);
+
+                    /*
+                     * ===== 目的地 = **它自己那条链那一层**（用户 2026-10-06：「你把分卷移过来不就是了吗」）=====
+                     *
+                     * ⛔ 两个地方都要有，缺一不可（真机 2026-10-06 逐条踩出来）：
+                     * ① **暂存目录** —— 收尾链（结果校验 / 定稿）读的就是它；不放进去 ⇒
+                     *    「校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」+ 源包不处理；
+                     * ② **落点目录**（`111\111.rar` ⇒ `111\111\`）—— 用户要看见的那一层、
+                     *    也是下一轮那一组要收卷的那一层。
+                     * ②用**硬链接**（零字节、删名字不动数据），于是工作区收尾清掉暂存那一份之后，
+                     * 落地那一份照样在。
+                     */
+                    string landing = ResolveOwnerChainDirectory(owner);
+
+                    if (landing.Length > 0)
+                    {
+                        try
+                        {
+                            Directory.CreateDirectory(landing);
+
+                            string landingPath = Path.Combine(landing, name);
+
+                            if (!File.Exists(landingPath))
+                            {
+                                HardLinkHelper.TryCreateHardLink(landingPath, piece);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog("WARN", $"{owner.FileName}：落地那一份没建出来（{ex.Message}）。");
+                        }
+                    }
+
                     string target = Path.Combine(stage, name);
 
                     /*
                      * ⛔ 已经在那一层了就什么都不做（幂等）；目标被占（文件或目录）⇒ 一个字节都不动。
+                     * ⚠ 但**"已经在暂存目录里"这一档仍然要进 [收片] 与 [记账]**：它是入口包，
+                     * 后面那一站要靠这份账收卷（2026-10-06：抢救副本本来就落在暂存目录 ⇒ 走到这里就 continue
+                     * ⇒ 收片那一档与"吐出这一片的那一单"那份账一起被跳过）。
                      */
-                    if (File.Exists(target)
-                        || Directory.Exists(target)
-                        || SafePathHelper.PathEquals(piece, target))
+                    if (File.Exists(target) || Directory.Exists(target) || SafePathHelper.PathEquals(piece, target))
                     {
-                        // 已经在那一层了（幂等）⇒ 仍然要把它交给收片那一档：它就是入口。
-                        if (File.Exists(target) && SafePathHelper.PathEquals(piece, target))
+                        if (File.Exists(target))
                         {
+                            /*
+                             * ⛔ 这里**不写日志**：真机那一批是**成功**任务，而"成功任务只留一行摘要"是既有红线
+                             * （`LogVolumePolicyTests` / `ProgressVisibilityTests` / `Item45LogAndPasswordTests`
+                             * 等 6 条守门用例钉着）。"落地那一份真的在"由**用例断言文件**，不靠日志。
+                             */
+                            RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
                             published.Add(target);
                         }
 
@@ -8525,28 +8617,6 @@ namespace ArchiveFixer.ViewModels
                             "INFO",
                             $"{owner.FileName}：这一步解出来的「{name}」留在它自己那条链里（下一轮解压要用的就是它；"
                             + "⛔ 不是失败、也不算残缺）。");
-
-                        /*
-                         * ⚠ **再在"它自己那条链的落点目录"里起一个名字**（用户 2026-10-06：
-                         * 「你把分卷移过来不就是了吗」）：暂存目录是**收尾链读的**（校验 / 定稿），
-                         * 而用户要看见的那个位置是落点目录（真机 `CCCC\111\111\`）——两个都要有。
-                         * ⛔ 用**硬链接**（零字节、瞬时、删名字不动数据）：工作区收尾时暂存那一份被删掉，
-                         * 落地那一份照样在 —— 这正是"入口包留在它自己那条链里"。
-                         */
-                        string landing = ResolveOwnerChainDirectory(owner);
-
-                        if (landing.Length > 0 && HardLinkHelper.CanHardLink(target, landing))
-                        {
-                            try
-                            {
-                                Directory.CreateDirectory(landing);
-                                HardLinkHelper.TryCreateHardLink(Path.Combine(landing, name), target);
-                            }
-                            catch (Exception ex)
-                            {
-                                AppendLog("WARN", $"{owner.FileName}：落地那一份没建出来（{ex.Message}）。");
-                            }
-                        }
 
                         RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
                         published.Add(target);
@@ -8845,7 +8915,14 @@ namespace ArchiveFixer.ViewModels
         /// <returns>搬成功（或本来就在那儿）⇒ 落地之后的路径；没搬 ⇒ 空串。</returns>
         private string TryCarryPieceHome(string piece, ArchiveTask? owner)
         {
-            if (owner == null || string.IsNullOrWhiteSpace(piece) || !File.Exists(piece))
+            if (owner == null || string.IsNullOrWhiteSpace(piece))
+            {
+                return string.Empty;
+            }
+
+            bool exists = File.Exists(piece);
+
+            if (!exists)
             {
                 return string.Empty;
             }
@@ -16758,7 +16835,6 @@ namespace ArchiveFixer.ViewModels
              */
             if (!string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase))
             {
-                AppendLog("WARN", $"[收卷排障] {task.FileName}：进入递归分支（模式 {Settings.RecursionMode}）。");
 
                 RecursionResult? recursion;
 
@@ -16769,14 +16845,9 @@ namespace ArchiveFixer.ViewModels
                 }
                 catch (Exception ex)
                 {
-                    AppendLog("WARN", $"[收卷排障] {task.FileName}：递归调用抛异常 —— {ex.GetType().Name}：{ex.Message}");
+                    AppendLog("ERROR", $"{task.FileName}：递归解压异常 —— {ex.GetType().Name}：{ex.Message}");
                     throw;
                 }
-
-                AppendLog(
-                    "WARN",
-                    $"[收卷排障] {task.FileName}：递归返回 —— {(recursion == null ? "null" : $"停因={recursion.StopReason}、层={recursion.Layers.Count}、片={recursion.UnresolvedVolumePieces.Count}")}"
-                    + $"；此刻状态={task.Status}、终态={task.Outcome}。");
 
                 // 这一趟有没有**可发布的产物**（用户 2026-10-06：「上一步得到的产物下一步就有可能成为
                 // 所需要解压的文件」）—— ⛔ 发布与否只由产物事实回答，⛔ 不再由终态标签兼任开关：
@@ -16801,14 +16872,6 @@ namespace ArchiveFixer.ViewModels
                 {
                     List<string> carried = PublishUnresolvedVolumePieces(recursion, task);
                     AdoptUnresolvedVolumePieces(recursion, task, carried);
-                }
-                else
-                {
-                    AppendLog(
-                        "WARN",
-                        $"[收卷排障] {task.FileName}：递归结果里的分卷片名单是空的"
-                        + $"（UnresolvedVolumePieces = {(recursion == null ? "结果为空" : recursion.UnresolvedVolumePieces.Count.ToString())}）"
-                        + $"；停因 = {recursion?.StopReason.ToString() ?? "（无）"}；层数 = {recursion?.Layers.Count ?? 0}。");
                 }
 
                 if (task.Status == StatusText.ExtractSuccess || hasPublishableProducts)

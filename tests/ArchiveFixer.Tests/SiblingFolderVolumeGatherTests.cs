@@ -662,13 +662,15 @@ namespace ArchiveFixer.Tests
             /*
              * ①.5 **入口包要落在它自己那条链的落点目录里**，而且**不许把这一步的校验搞崩**
              * （2026-10-06 真机两个 bug 的守门）：
-             *   · 落地放在**校验之前** ⇒ 那一层产物目录被搬空 ⇒「校验未通过：输出目录是空目录，没有产物」
-             *     ⇒ 列表显示「**解压失败**」+ 「完整性：可证不完整」⇒ 源包一个字节都不处理（用户报的两件事）。
-             * ⇒ 两处一起钉：① 落地那一行确实出现；② 这条链上**不许**出现「解压失败 ｜ 校验未通过」。
+             *   · 落地放在**校验之前 / 把暂存目录搬空** ⇒「校验未通过：输出目录是空目录，没有产物」
+             *     ⇒ 列表显示「**解压失败**」+「完整性：可证不完整」⇒ 源包一个字节都不处理（用户报的两件事）。
+             * ⇒ 三处一起钉：① 入口包**真的落在它自己那条链那一层**（断言文件，⛔ 不靠日志 ——
+             *   成功档的 INFO 会被"只留一行"策略丢掉）；② 这条链上**不许**出现校验判否那两句；
+             *   ③ 源包**真的按「删除操作」处理了**（进了其余物）—— 这正是真机"原包没删"那一半。
              */
-            Assert.Contains(
-                harness.LogTexts,
-                text => text.Contains("留在它自己那条链的落点目录里", StringComparison.Ordinal));
+            Assert.True(
+                File.Exists(Path.Combine(harness.OutputRoot, "111_outer", "111.zip")),
+                "入口包要落在它自己那条链的落点目录里（111_outer\\111.zip）");
 
             Assert.DoesNotContain(
                 harness.LogTexts,
@@ -677,6 +679,10 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain(
                 harness.LogTexts,
                 text => text.Contains("输出目录是空目录，没有产物", StringComparison.Ordinal));
+
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("源包移入其余物", StringComparison.Ordinal));
 
             // ② 那一片是"接到"那一组旁边的（零字节硬链接）。
             Assert.Contains(
