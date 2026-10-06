@@ -468,6 +468,11 @@ namespace ArchiveFixer.Extraction
         /// ⛔ 只有手动操作会传 true —— 一键处理/批量永远是"外面裹一层包名目录"。
         /// </param>
         /// <param name="driveExists">盘符存在性探针，见 <see cref="ResolveDestinationRoot"/>。</param>
+        /// <param name="entryArchivePath">
+        /// **入口包**（这一组里引擎要打开的那一份，见 <see cref="Detection.EntryPackage"/>）—— 只影响
+        /// 「未指定位置」那一档的目标根：用户 2026-10-05 的口径是"落在**入口包所在目录**"。
+        /// 留空 / 与 <paramref name="sourceArchivePath"/> 同一层 ⇒ 结果一个字不变（⛔ 不做任何猜测）。
+        /// </param>
         public static OutputPlacementResult ResolveDestinationDirectory(
             string? sourceArchivePath,
             OutputPlacementMode mode,
@@ -476,11 +481,31 @@ namespace ArchiveFixer.Extraction
             Func<string, bool>? driveExists = null,
             SourceSelectionKind selectionKind = SourceSelectionKind.File,
             string? selectionRoot = null,
-            bool flattenIntoSourceFolder = false)
+            bool flattenIntoSourceFolder = false,
+            string? entryArchivePath = null)
         {
             mode = NormalizeLegacyMode(mode);
 
-            OutputPlacementResult root = ResolveDestinationRoot(sourceArchivePath, mode, customRoot, driveExists);
+            /*
+             * 「未指定位置」那一档的目标根 = **入口包**所在目录（用户 2026-10-05 落点口径）。
+             *
+             * 为什么只动这一档：指定位置那一档的根是用户自己选的（`customRoot`），与入口包无关；
+             * 而入口包**跟源包不在同一层**只有一种成因 —— 整组被收拢到了入口那一层（真机 `CCCC`：
+             * 末片 `111.zip` 被接进 `111(4)\`，而这一单自己的文件还散在 `111(3)\`）。
+             * ⛔ 传进来的入口包与源包同一层时不改任何东西（绝大多数调用点就是这一档）。
+             */
+            string? rootSourcePath = sourceArchivePath;
+
+            if (!string.IsNullOrWhiteSpace(entryArchivePath)
+                && !string.Equals(
+                    FileNameHelper.GetDirectoryName(entryArchivePath),
+                    FileNameHelper.GetDirectoryName(sourceArchivePath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                rootSourcePath = entryArchivePath;
+            }
+
+            OutputPlacementResult root = ResolveDestinationRoot(rootSourcePath, mode, customRoot, driveExists);
 
             if (!root.Success)
             {

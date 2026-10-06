@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
@@ -329,6 +330,31 @@ namespace ArchiveFixer.Services
                 options.KeepArchiveNameFolder,
                 options.CustomOutputDirectory);
 
+            /*
+             * 第 1 卷（用户 2026-10-05 落点口径："落在**第一卷的位置**"，而且他点名了现场：
+             * "你又把 `111.zip` 移到 `111(4)`，然后你当时又在 `111(4)` 里面解压的"）。
+             * 跨盘 ZIP 族 = 第 1 片 `.z01`、7z 族 = `.001`、RAR 族 = 第 1 卷 —— 判据只有一处
+             * （`Detection.GroupVolumeDirectory`，转调 `VolumeGroupDetector` / `FileNameHelper` 那几把既有尺子），
+             * 本方法只把结论喂给落点那一处实现。
+             *
+             * ⛔ 只对**分卷组**问这件事；⛔ 判不出（第 1 卷还压在包里 / 那一单不是卷成员）⇒ 传空串
+             * ⇒ `ResolveDestinationDirectory` 原样退回源包自己那一层（行为与改动前逐字相同）。
+             */
+            string? entryArchivePath = null;
+
+            if (task.IsVolumeGroup)
+            {
+                var members = new List<string> { archivePath };
+                members.AddRange(task.VolumePaths.Where(path => !string.IsNullOrWhiteSpace(path)));
+
+                GroupVolumeDirectory.Entry entry = GroupVolumeDirectory.Resolve(members);
+
+                if (entry.Path.Length > 0)
+                {
+                    entryArchivePath = entry.Path;
+                }
+            }
+
             return OutputPlacement.ResolveDestinationDirectory(
                 archivePath,
                 mode,
@@ -337,7 +363,8 @@ namespace ArchiveFixer.Services
                 driveExists: null,
                 selectionKind: task.SourceSelectionKind,
                 selectionRoot: task.SourceSelectionRoot,
-                flattenIntoSourceFolder: options.ExtractIntoSourceFolder);
+                flattenIntoSourceFolder: options.ExtractIntoSourceFolder,
+                entryArchivePath: entryArchivePath);
         }
 
         /// <summary>

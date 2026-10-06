@@ -8238,11 +8238,16 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            // 目标目录 = 这一组**那几片自己所在的目录**（任务表里第一单，顺序稳定 ⇒ 每次同一个）。
-            //
-            // ⚠ 判据读的是**整个任务表**（导入进来就在表里），⛔ 不是"缺卷留到最后再判"那份名单 ——
-            // 名单要等每一单**开工**才写得进去，而这条链很可能跑在那一单开工之前（夹具里就是这样：
-            // 包先跑、片子后开工）⇒ 只看名单会静默什么都不做。
+            /*
+             * 目标层 = 这一组**该落的那一层**（用户 2026-10-05 口径：「谁可以输入密码，就解压到谁那边」——
+             * 入口包所在那一层，由 `ResolveBatchGroupDirectory` → `Detection.GroupVolumeDirectory` 回答）。
+             *
+             * ⛔ 为什么不按"产出它的那个包自己的落点"算：入口包必须在**引擎要找它的那一层**
+             * （引擎找兄弟卷只看入口文件旁边那一层），而"产它的那个包"结束时常常连自己都没解完
+             * （真机 `111.rar` 就是「部分完成」⇒ 它那一层根本没建出来，硬链接无处可放）。
+             * 所以落点与拼装点是同一个事实位，由同一个出口回答 —— 这一片接进去之后，
+             * 后面每一次落点推导读到的都是"入口包在这儿"，两边永远一致。
+             */
             string targetDir = ResolveBatchGroupDirectory(baseName);
 
             if (targetDir.Length == 0)
@@ -8253,6 +8258,12 @@ namespace ArchiveFixer.ViewModels
             string canonical = disk == 0 ? baseName + ".zip" : VolumeNameRepair.CanonicalDiskName(baseName, disk);
             string target = Path.Combine(targetDir, canonical);
             bool adopted = false;
+
+            if (Directory.Exists(target))
+            {
+                // 目标名被一个**目录**占着：硬链接建不出来（⛔ 绝不删、绝不覆盖）。
+                return false;
+            }
 
             if (!File.Exists(target) && HardLinkHelper.CanHardLink(piecePath, targetDir))
             {
@@ -8317,25 +8328,49 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这一组**那几片自己所在的目录**（任务表里第一单；判据用既有那把"同一组"的尺子
-        /// <see cref="VolumeGroupDetector.BelongsToSameGroup"/>，所以脏名（`111.z0删除2`）照样认得出）。
-        /// 找不到 ⇒ 空串 = 什么都不做。
+        /// 这一组该**拼到哪一层** = 入口包（引擎要打开、要对它输密码的那一份）所在目录，
+        /// 也就是这一组该**落**的那一层（用户 2026-10-05 口径：「谁可以输入密码，就解压到谁那边」；
+        /// 见 <see cref="Detection.GroupVolumeDirectory"/>：RAR 分卷 = `.part1.rar`、7z 分卷 = `.7z.001`、
+        /// zip 分卷 = `.zip`（跨盘那一族）或 `.zip.001`（7-Zip 切的通用分片））。
+        ///
+        /// <para>入口包已经在盘上（第一次接片之后就一直在了）⇒ 按它的位置收；还不在盘上
+        /// （真机 CCCC 批首那一刻：末片 `111.zip` 正压在 `111.rar` 里）⇒ 退回旧口径
+        /// （任务表里这一组第一单那一层）当兜底 —— 兜底那一档是**同一个事实位**：
+        /// 那一片接进去之后，入口包就在那一层，落点推导与这里读到的答案永远一致。</para>
+        ///
+        /// <para>判据全部转调既有那几把尺子（<see cref="VolumeGroupDetector.BelongsToSameGroup"/> 认"同一组"，
+        /// 所以脏名 `111.z0删除2` 照样认得出；<see cref="Detection.GroupVolumeDirectory.Resolve"/> 认"入口包在哪儿"），
+        /// ⛔ 这里不自己拼族规则、⛔ 不看盘上还有没有别的兄弟（那件事属于收卷，见 <c>ResolveSpannedZipDiskGather</c>）。
+        /// 找不到 ⇒ 空串 = 什么都不做。</para>
         /// </summary>
         private string ResolveBatchGroupDirectory(string baseName)
         {
             string tailName = baseName + ".zip";
+            var members = new List<string>();
 
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
             {
                 string path = candidate?.CurrentPath ?? string.Empty;
 
-                if (path.Length == 0
-                    || !VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                if (path.Length > 0
+                    && VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                 {
-                    continue;
+                    members.Add(path);
                 }
+            }
 
-                string? directory = Path.GetDirectoryName(path);
+            Detection.GroupVolumeDirectory.Entry entry = Detection.GroupVolumeDirectory.Resolve(members);
+
+            if (entry.Directory.Length > 0 && Directory.Exists(entry.Directory))
+            {
+                return entry.Directory;
+            }
+
+            // 第 1 卷还不在盘上（真机 CCCC 批首那一刻就是这样）⇒ 退回旧口径（任务表里第一单那一层）——
+            // 兜底，行为与改动前逐字相同；等第 1 卷解出来之后的每一次重判都会走上面那一支。
+            foreach (string member in members)
+            {
+                string? directory = Path.GetDirectoryName(member);
 
                 if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
                 {
@@ -15098,6 +15133,41 @@ namespace ArchiveFixer.ViewModels
             string requestedOutputPath = placement.DestinationDirectory;
             string outputPath = requestedOutputPath;
             string outputRedirectNote = string.Empty;
+
+            /*
+             * 落点为什么在这一层（用户 2026-10-05 口径："落在**第一卷的位置**"，而且他点名了现场：
+             * "你又把 `111.zip` 移到 `111(4)`，然后你当时又在 `111(4)` 里面解压的"）。
+             *
+             * 只在"这一组第 1 卷与这一单自己的文件不在同一层"时补这一行 —— 那一档正是用户会问
+             * "为什么解到这里"的形状（真机 `CCCC`：第 1 片 `111.z0删除1` 在 `111(2)\`，而这一单自己的文件
+             * 还散在别处；产物因此落在 `111(2)\111`）。判据与落点推导共用同一个出口
+             * （`PathService.ResolveOutputPlacement` → `Detection.GroupVolumeDirectory`），⛔ 这里不另算一遍。
+             */
+            if (task.IsVolumeGroup
+                && placement.Success
+                && !string.IsNullOrWhiteSpace(outputPath))
+            {
+                var groupMembers = new List<string> { task.CurrentPath };
+                groupMembers.AddRange(task.VolumePaths.Where(path => !string.IsNullOrWhiteSpace(path)));
+
+                Detection.GroupVolumeDirectory.Entry entry =
+                    Detection.GroupVolumeDirectory.Resolve(groupMembers);
+
+                if (entry.Path.Length > 0
+                    && entry.Directory.Length > 0
+                    && !SafePathHelper.PathEquals(entry.Directory, FileNameHelper.GetDirectoryName(task.CurrentPath)))
+                {
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.VolumeGroupFirstVolumeLandingFormat,
+                            task.FileName,
+                            outputPath,
+                            Path.GetFileName(entry.Path),
+                            Path.GetFileName(entry.Directory)));
+                }
+            }
 
             /*
              * 落点算不出来时必须**当场停下**（必修项，2026-09-21）。
