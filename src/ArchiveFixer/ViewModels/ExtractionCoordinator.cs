@@ -8137,6 +8137,106 @@ namespace ArchiveFixer.ViewModels
                     AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
                 }
             }
+
+            /*
+             * **入口包也要落地**（用户 2026-10-06：「第一步就让你将能解压的统统解压了」
+             * 「这个根本就不是部分完成 …… 只不过这个内容物又是下一轮解压需要的东西」）。
+             *
+             * 单层这条路没有 `RecursionResult.UnresolvedVolumePieces`（那是递归核心记的），
+             * 可它的入口包（真机 `111.zip`）正躺在**我们自己的过程物目录**（其余物 / 成品）里 ——
+             * 收尾一到就整份删掉。⇒ 认得出是第一卷/末片的那一份，搬到**它自己那条链的落点目录**
+             * （`111\111.rar` ⇒ `111\111\`），与递归路**同一个出口**（`TryCarryPieceHome`），
+             * ⛔ 两条路不许各写一套。
+             */
+            PublishEntryPackageFromProcessFolders(task);
+        }
+
+        /// <summary>
+        /// 单层路那一档：**这一单吐出来的入口包**（第一卷第 1 片 / 跨盘 ZIP 的末片）如果在
+        /// **我们自己的过程物目录**里，就把它搬到这一单自己那条链的落点目录（与递归路同一个出口）。
+        ///
+        /// <para>⛔ 只认得出第一份（见 <see cref="Detection.GroupVolumeDirectory"/>）：判不出 ⇒ 什么都不做；
+        /// ⛔ 只移动我们自己的过程物（用户源目录里的文件这一档碰都不碰）。</para>
+        /// </summary>
+        private void PublishEntryPackageFromProcessFolders(ArchiveTask task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            var members = new List<string> { task.CurrentPath };
+            members.AddRange(task.VolumePaths.Where(path => !string.IsNullOrWhiteSpace(path)));
+
+            Detection.GroupVolumeDirectory.Entry entry = Detection.GroupVolumeDirectory.Resolve(members);
+
+            if (entry.Path.Length == 0 || !ProcessArtifactLayout.IsInsideDeletableProcessFolders(entry.Path))
+            {
+                return;
+            }
+
+            TryCarryPieceHome(entry.Path, task);
+        }
+
+        /// <summary>
+        /// **把一片搬回它自己那条链的家**（唯一出口：递归路的 <see cref="PublishUnresolvedVolumePieces"/>
+        /// 与单层路的 <see cref="PublishEntryPackageFromProcessFolders"/> 都转调它）。
+        /// </summary>
+        /// <returns>搬成功（或本来就在那儿）⇒ 落地之后的路径；没搬 ⇒ 空串。</returns>
+        private string TryCarryPieceHome(string piece, ArchiveTask? owner)
+        {
+            if (owner == null || string.IsNullOrWhiteSpace(piece) || !File.Exists(piece))
+            {
+                return string.Empty;
+            }
+
+            string home = ResolveOwnerChainDirectory(owner);
+
+            if (home.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                Directory.CreateDirectory(home);
+
+                string name = FileNameHelper.GetFileName(piece);
+                string target = Path.Combine(home, name);
+
+                if (SafePathHelper.PathEquals(piece, target))
+                {
+                    return target;
+                }
+
+                if (File.Exists(target) || Directory.Exists(target))
+                {
+                    // 目标被占 ⇒ 一个字节都不动（⛔ 绝不覆盖）。
+                    return string.Empty;
+                }
+
+                File.Move(piece, target);
+
+                if (!File.Exists(target))
+                {
+                    return string.Empty;
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"{owner.FileName}：这一步解出来的「{name}」留在它自己那条链的落点目录里 —— "
+                    + $"{Path.GetFileName(home)}（下一轮解压要用的就是它；⛔ 不是失败、也不算残缺）。");
+
+                RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
+
+                return target;
+            }
+            catch (Exception ex)
+            {
+                // 加法：搬不动 ⇒ 退回"什么都不做"（这一片仍留在原处，行为与改动前一个字不差）。
+                AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
+                return string.Empty;
+            }
         }
 
         /// <summary>
