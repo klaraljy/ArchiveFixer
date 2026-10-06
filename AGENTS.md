@@ -222,7 +222,14 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2830 条（2817 通过 / 13 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+- `dotnet test` 全量（主 checkout 内）：**2840 条（2827 通过 / 13 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 这一轮（2026-10-06：**用户拍板的五条 CCCC 解压链口径** —— 逐条见下）的账：**2830 → 2840 = +10**（`PassThroughRestSweepTests` 3 条新文件 + `SiblingFolderVolumeGatherTests` 加 2 条夹具 + `VolumeNameRepairTests` 加 2 条 + `WorkspaceRootTests` 加 1 条 + 两条真机形状 E2E 按新口径重写不增减）。
+  - ✅ **五条的落地状态（照实记，⛔ 不写成"全好了"）**：
+    1. **续卷改名**：拆掉 `VolumeNameRepair` 里那条"`index != 1` ⇒ 不改名"的私自闸门（**红检成立，6 条变红**）；容忍/骨架命中的卷名**任何一卷**都在批首改回标准名。保留 amb909 那条"卷号不许当后缀改"的安全闸门。三条 2026-10-04 的旧用例按新指令改写（原处写明冲突）。
+    2. **落点逐层叠**：`ResolveProducerEntryArchivePathCore` 改成沿产出链一层一层追（`MaxProducerChainDepth=6` 防环），并拆掉 `ResolveBatchGroupDirectory` 里"退回任务表第一单那一层"那条旧兜底（真机就是它把入口包接到 `111(4)`）。四族入口判据写进 `docs/输出与整理模型.md` §1.1.1（实现与守门用例早已各就各位，⛔ 不再写第二份）。
+    3. **其余物逐层处理**：新增 `SweepPassThroughRestDirectoriesAsync` + 唯一纯函数 `CanSweepPassThroughRest`（放行判据 = 没失败没取消 **且** 其余物里每一个文件都已被下游接手）；**红检成立**（换回"只放行成功"⇒ `PassThroughRestSweepTests` 那条真机格变红）。⚠ 第一版"批末对全表扫一遍"被三条红线用例打红、已撤回 —— 教训：**这一档必须按"这一条链 / 这一棵树"做**。
+    4. **去掉暗链当出口**：⚠ **未完成**。两次试做（只同步 owner / 对全表同步）都把真机形状两条 E2E 打红 ⇒ 查明**还有第三处在读改名前的名字**（组卷/找卷那条路，不在任务账上），⛔ 没找到它之前不许再改这一行。本轮只落地了"收片那一行按事实分两种说法"（旧文案一律写"零字节硬链接"，而过程物那一档走的是移动 —— 那是假话）。
+    5. **守门 + 红检**：真机四片形状的两条 E2E 已在（其中一条因本机没 WinRAR 而跳过，⛔ 不许读成验过）；红检在判据层成立，**真机端到端仍未复跑**（`H:` 只读，只能由用户重跑）。
   - ⚠ 这一轮（2026-10-06：**批的落点收集层跟"产出入口包的那一单"那条链** + 借出去的源片按跟班卷收场）的账：**2827 → 2830 = +3**（`WorkspaceRootTests.管线_入口包还没解出来时_落点跟产出它的那一单那条链`、`SiblingFolderVolumeGatherTests.批末_借出去的源片按跟班卷收场_而且源包真的进了其余物`、外加那条**标了 Skip 的已知缺口** `真机形状_源包处理选放入其余物时_整组源包真的进其余物并按档删除`）。⛔ 跳过从 12 变 13 是"那条缺口如实标 Skip"，**别读成验过了**。
   - ⚠ **⚠ 本轮的已知缺口（下一轮第一件事）**：`111.z0删除2` 那一片在真机形状下仍留在盘上 —— 批末补判那一站把它的 `CurrentPath` 改到了**入口包** `111.zip` 上，而 `_groupConsumerByName["111"] = "111.zip"` 与它自己的文件名相撞 ⇒ 借片收场那一档判"自己就是在解的那一单"而跳过。试过"入口包在别的目录时不动 `CurrentPath`"⇒ 两条真机形状 E2E 当场**零产物**，已撤回（现场写在 `SiblingFolderVolumeGatherTests` 那条 Skip 用例的注释里）。
   - ⚠ **本轮（第四十二轮 / C5）已落地**：源目录树里**不许有**工作区壳 `.ArchiveFixer.work`、**不许**多出任何文件（那两条路径事实断言就在 `真机形状_一组跨盘ZIP的片分别压在两个包里_批末照样解开` 里，**红检**逐字：`Assert.All() Failure: … Item: "排障临时名.zip" / Error: 源目录里多出了不该有的东西`）。**C4 查证结论**：真机上不存在"片被搬走/被改名"的残留；`AdoptPublishedVolumePieces` → `TryAdoptUnresolvedVolumePiece` 只从**我们自己的过程物目录**搬，用户目录里的片只硬链接（`TryMovePieceIntoGroup` 的注释与调用点写死了这一条）。

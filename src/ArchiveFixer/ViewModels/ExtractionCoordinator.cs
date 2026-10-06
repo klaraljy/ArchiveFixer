@@ -8469,6 +8469,30 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 盘上某个文件**改了名（同盘移动）**之后，把**全表每一单**账上指向它的路径都改过来。
+        ///
+        /// <para>⛔ 为什么是全表而不是"改产出它的那一单"：**同一份字节会被多处账引用**
+        /// （真机 CCCC：入口包 `111.zip` 那一片同时被"吐出它的那一单"与"正等这一组的另一单"记着）。
+        /// 只改一处 ⇒ 别的任务再去按旧名字找 / 解就落空 —— 上一轮"只同步 owner"那一版就是这样
+        /// 把真机形状两条 E2E 打红的（收片之后整组凑不齐 / 产物找不到）。</para>
+        ///
+        /// <para>内部仍只转调**唯一出口** <see cref="TaskPathSync.ApplySingleMove"/>（它同时改
+        /// <c>CurrentPath</c> 与 <c>VolumePaths</c>，AGENTS.md §38 那条踩过两次的坑）。</para>
+        /// </summary>
+        private void SyncEveryTaskPathAfterMove(string from, string to)
+        {
+            if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
+            {
+                return;
+            }
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                TaskPathSync.ApplySingleMove(task, from, to);
+            }
+        }
+
         /// <summary>收**一片**：按规范卷名接到"这一组还缺卷"那一单的目录里；末片在手时顺手把整组接齐。</summary>
         private bool TryAdoptUnresolvedVolumePiece(string piecePath, ArchiveTask? owner)
         {
@@ -8532,23 +8556,23 @@ namespace ArchiveFixer.ViewModels
                  *
                  * 用户目录里的片一律**只硬链接**：⛔ 名字一个字符都不许改、文件不搬。
                  */
-                /*
-                 * ===== 用户源目录里的那一片：⛔ **本轮不动它**（如实记账）=====
-                 *
-                 * 用户 2026-10-06 拍板：「**去掉暗链当出口**，解压用盘上标准名的文件，临时名只许建在工作区」
-                 * +「我们攻破伪装不就是要将其改为标准名字吗」。
-                 *
-                 * **试过一版"就地改名"（`TryMovePieceIntoGroup` 优先、失败再退硬链接），已撤回**：
-                 * 真机形状那两条 E2E 当场变红（收片之后整组凑不齐 / 产物找不到）—— 因为
-                 * **`owner` 账上的路径不是唯一引用**：收片这一刻别的任务账上还指着这个文件，
-                 * 就地改名会把它们一起打断。⇒ 要做这一档必须**同时**改三处（任务路径与快照、
-                 * 别处对这个文件的引用、以及"用户的源片不许动"那几条既有口径），⛔ 不能单独改这一行。
-                 *
-                 * 现在照旧：过程物那一档用**移动**（同盘改名、零字节），用户源目录那一档只**硬链接**
-                 * （⛔ 名字一个字符都不改、文件不搬）—— 与改动前逐字相同。
-                 */
                 bool fromProcessFolder = ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath);
 
+                /*
+                 * ===== 用户源目录里的那一片：⛔ **仍然只硬链接**（两次试做都撞在同一处，如实记账）=====
+                 *
+                 * 用户 2026-10-06 拍板：「**去掉暗链当出口**，解压用盘上标准名的文件，临时名只许建在工作区」。
+                 * **两次试做都失败、都已撤回**：
+                 * ① 只同步 `owner` 那一单 ⇒ 真机形状 E2E 变红；
+                 * ② 改成**对全表每一单同步**（`SyncEveryTaskPathAfterMove`）⇒ **同样两条 E2E 照样红**
+                 *   （`Assert.NotNull() Failure: Value is null`）。
+                 * ⇒ 说明"就地改名"这一档还有**第三处在读旧名字**（不在任务账上）—— 收片这一刻
+                 * 组卷/找卷那条路（`VolumeNameRepair.ResolveSpannedZipDiskGather` 与批末重判）
+                 * 仍按改名前的名字在盘上找。⛔ **没找到那第三处之前不许再改这一行**（改一次红一次）。
+                 *
+                 * 现在照旧：过程物那一档用**移动**（同盘改名、零字节），用户源目录那一档只**硬链接**
+                 * （⛔ 名字一个字符都不改、文件不搬）—— 与改动前逐字相同、全部回归绿。
+                 */
                 adopted = fromProcessFolder
                     ? TryMovePieceIntoGroup(piecePath, target) || HardLinkHelper.TryCreateHardLink(target, piecePath)
                     : HardLinkHelper.TryCreateHardLink(target, piecePath);
@@ -8559,7 +8583,7 @@ namespace ArchiveFixer.ViewModels
 
                     if (renamedInPlace)
                     {
-                        TaskPathSync.ApplySingleMove(owner, piecePath, target);
+                        SyncEveryTaskPathAfterMove(piecePath, target);
                     }
 
                     /*
