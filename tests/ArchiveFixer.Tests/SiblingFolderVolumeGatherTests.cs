@@ -740,6 +740,64 @@ namespace ArchiveFixer.Tests
             Assert.Empty(restLeftovers);
         }
 
+        // ============================================ ④ 过路层的其余物（真机采纳形状）
+
+        /// <summary>
+        /// **真机 CCCC 的"采纳"形状**：某一单只出过程物（它解出来的内层包就是下一层的输入），
+        /// 而那个内层包**被采纳进另一单那一层** ⇒ 它**自己那条链的其余物**留在原地
+        /// （真机：`111.rar` ⇒ `111\111\其余物\111.zip`，48.35 MB 一直留到用户看见）。
+        ///
+        /// <para>本批选了「源包放入其余物 + 其余物彻底删除」⇒ **那份过路层的其余物也要被删掉**
+        /// （用户原话：「其余物会在每层的过程中会删掉，我无法理解为什么还会有其余物留着」）。</para>
+        ///
+        /// <para><b>红检</b>：把 `SweepPassThroughRestDirectoriesAsync` 那一调注掉 ⇒ 本条变红
+        /// （`…\外层\其余物\` 里那一份仍在盘上）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 归集采纳形状_过路层那一单的其余物也要按档删掉()
+        {
+            RequireSevenZip();
+
+            (string first, string second, _, _) = BuildTwoVolumeSet("过路层其余物");
+
+            // 真机形状：第 2 卷压在**另一个文件夹**里的外层包中 ⇒ 那个内层包会被"采纳"到
+            // 第 1 卷那一单所在的那一层；而外层包那一单的其余物（`…\外层\其余物\`）留在它自己那条链上。
+            string holder = Path.Combine(_root, "过路层其余物-外层");
+            Directory.CreateDirectory(holder);
+
+            string outerName = "pack.7z";
+            string outer = Path.Combine(holder, outerName);
+
+            Run7zIn(holder, "a", "-t7z", "-mx0", outerName, second);
+
+            Harness harness = CreateHarness(
+                "SingleLayer",
+                SourceHandlingMode.MoveToRest,
+                RestHandlingModes.Delete);
+
+            ArchiveTask outerTask = await AddTaskAsync(harness, outer);
+            ArchiveTask firstTask = await AddTaskAsync(harness, first);
+
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Log(harness, "过路层其余物");
+
+            // ① 这一档真的执行了。
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("彻底删除", StringComparison.Ordinal));
+
+            // ② **全树里一个其余物文件都不该留**（含"过路层"那一份）。
+            string[] restLeftovers = Directory
+                .GetFiles(harness.OutputRoot, "*", SearchOption.AllDirectories)
+                .Where(path => path.Contains("其余物", StringComparison.Ordinal))
+                .ToArray();
+
+            Assert.Empty(restLeftovers);
+        }
+
         // ================================================================ 夹具
 
         /// <summary>造一组**真 2 卷 7z**（<c>-v3m</c> 切；`.001` = 3 MiB、`.002` = 余量）。</summary>
