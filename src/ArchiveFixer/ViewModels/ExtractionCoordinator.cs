@@ -4416,7 +4416,8 @@ namespace ArchiveFixer.ViewModels
             bool suppressPackageFolderLayer = false,
             string? innermostPackageBaseName = null,
             RecursionResult? engineOutput = null,
-            ContentKeepRules? contentKeepRules = null)
+            ContentKeepRules? contentKeepRules = null,
+            IReadOnlyCollection<string>? assembledVolumeBaseNames = null)
         {
             if (string.IsNullOrWhiteSpace(stageDirectory) ||
                 string.IsNullOrWhiteSpace(destinationDirectory) ||
@@ -4620,6 +4621,24 @@ namespace ArchiveFixer.ViewModels
                  */
                 if (isProcessArtifact && stageGroup == null && IsVolumePartFile(file))
                 {
+                    /*
+                     * ⚠ 例外：这一片正是**我们已经在收的那一组**的片（用户 2026-10-06 真机：
+                     * `111(2)_.zip` 解出来的 `111.z01` 就是那一组跨盘 ZIP 的第 1 片，收卷那一档
+                     * 已经把它接到入口包那一层、整组由批末那一站解开）。
+                     * ⇒ 那不叫"分卷组不完整"，叫"这一组正在收" ⇒ ⛔ 不许拿这道闸门把整层定稿拦死
+                     * （真机症状：`定稿布局规划失败：这一层里有分卷组不完整：111` ⇒ 整层不定稿 ⇒
+                     * 其余物与源包全留着不动）。
+                     * ⛔ 判据只读**既有账**（`_groupPieceProducers` 的组基名），⛔ 不放宽"证明完整"那一步。
+                     */
+                    string thisBaseName = FileNameHelper.GetArchiveBaseName(Path.GetFileName(file));
+
+                    if (assembledVolumeBaseNames != null
+                        && thisBaseName.Length > 0
+                        && assembledVolumeBaseNames.Contains(thisBaseName))
+                    {
+                        continue;
+                    }
+
                     VolumeGroupResolution orphan = new VolumeGroupResolver().Resolve(new VolumeGroupQuery
                     {
                         AnchorPath = file,
@@ -7495,7 +7514,14 @@ namespace ArchiveFixer.ViewModels
                  * 命中关键词的内容文件**不算过程物** ⇒ 它跟着内容物一起定稿落盘、一个字节都不动
                  * （不进其余物、也不参与后面的删除）。判据唯一出口仍是 <see cref="ContentKeepRules"/>。
                  */
-                contentKeepRules: ContentKeepRules.FromSettings(Settings));
+                contentKeepRules: ContentKeepRules.FromSettings(Settings),
+                /*
+                 * ⛔ **正在收的那几组不许被"分卷组不完整"那道闸门拦死**（用户 2026-10-06 真机：
+                 * `111(2)_.zip` 的定稿被判「这一层里有分卷组不完整：111」⇒ 整层不定稿 ⇒
+                 * 其余物与源包全留着不动）。判据只读既有账：这一批已经登记过"谁吐出了哪一组的片"
+                 * （`_groupPieceProducers`）⇒ 那些组基名的片一律放行，交给收卷那一档。
+                 */
+                assembledVolumeBaseNames: _groupPieceProducers.Keys.ToList());
         }
 
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
