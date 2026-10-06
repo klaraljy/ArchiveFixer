@@ -6241,6 +6241,13 @@ namespace ArchiveFixer.ViewModels
              * 可能正是"同一分卷组"里别单缺的那一片，而链一收尾工作区就整份删掉 ⇒ 批末那一站到盘上一看，
              * 缺的东西刚刚被自己扔掉（真机 22:06:02「已清理工作区：2 个文件 / 48.35 MiB」就是这么把末片带走的）。
              */
+            /*
+             * ⚠ 顺序硬要求：**先让这一步解出来的东西落地，再交给既有的收片那一档**
+             * （用户 2026-10-06：「第一步就让你将能解压的统统解压了」「你把分卷移过来不就是了吗」）。
+             * 旧顺序（只有接片、没有落地）⇒ 入口包 `111.zip` 跟着工作区一起被删，
+             * 批末那一站到了盘上一看：这一组连入口都没有。
+             */
+            PublishUnresolvedVolumePieces(result, task);
             AdoptUnresolvedVolumePieces(result, task);
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
@@ -8239,14 +8246,13 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 目标层 = 这一组**该落的那一层**（用户 2026-10-05 口径：「谁可以输入密码，就解压到谁那边」——
-             * 入口包所在那一层，由 `ResolveBatchGroupDirectory` → `Detection.GroupVolumeDirectory` 回答）。
+             * 目标层 = **入口包所在的那一层**（用户 2026-10-06：「你把分卷移过来不就是了吗」）——
+             * 入口包（跨盘 ZIP 族 = 末片 `X.zip`）由 `PublishUnresolvedVolumePieces` 先落在
+             * **产出它的那个包自己那条链的落点目录**里，`ResolveBatchGroupDirectory` 读的就是它；
+             * 于是"收片层 = 入口层 = 落点层"三处是同一个事实位，⛔ 不再看任务表顺序。
              *
-             * ⛔ 为什么不按"产出它的那个包自己的落点"算：入口包必须在**引擎要找它的那一层**
-             * （引擎找兄弟卷只看入口文件旁边那一层），而"产它的那个包"结束时常常连自己都没解完
-             * （真机 `111.rar` 就是「部分完成」⇒ 它那一层根本没建出来，硬链接无处可放）。
-             * 所以落点与拼装点是同一个事实位，由同一个出口回答 —— 这一片接进去之后，
-             * 后面每一次落点推导读到的都是"入口包在这儿"，两边永远一致。
+             * 入口包还不在盘上（批首那一刻 / 它没被解出来）⇒ 退回旧口径（任务表里第一单那一层），
+             * 那一档行为与改动前逐字相同。
              */
             string targetDir = ResolveBatchGroupDirectory(baseName);
 
@@ -8325,6 +8331,125 @@ namespace ArchiveFixer.ViewModels
             }
 
             return adopted || (gather.Applicable && gather.Complete);
+        }
+
+        /// <summary>
+        /// **这一片自己那条链的家** = 产出它的那个包（<paramref name="owner"/>）自己那一层的**子文件夹**
+        /// （<c>111\111.rar</c> ⇒ <c>111\111\</c>），由**唯一落点实现** <see cref="PathService.ResolveOutputPlacement"/>
+        /// 算出来 —— ⛔ 这里不自己拼路径（AGENTS.md §9.5）。
+        ///
+        /// <para>用户 2026-10-06 原话：「`111.rar` 原本就在文件夹 `111` 里面，按照程序你就应该在文件夹 `111`
+        /// 的子文件夹里面得到 `111.zip`，而不是这种情况（`111.zip` 所在那一层 `111(4)`），**这种情况是你私自
+        /// 移动 `111.zip` 到了 `111(4)`，这是不应该存在的 bug**」。</para>
+        ///
+        /// <para>拿不到 `owner` / 算不出落点 ⇒ 空串，由调用方退回既有口径。</para>
+        /// </summary>
+        private string ResolveOwnerChainDirectory(ArchiveTask? owner)
+        {
+            if (owner == null || string.IsNullOrWhiteSpace(owner.CurrentPath))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                OutputPlacementResult placement = _pathService.ResolveOutputPlacement(
+                    owner,
+                    BuildExtractOptions(tryExtractUnknownFormat: false));
+
+                if (placement.Success && !string.IsNullOrWhiteSpace(placement.DestinationDirectory))
+                {
+                    return placement.DestinationDirectory;
+                }
+            }
+            catch (Exception ex)
+            {
+                // 加法：算不出落点 ⇒ 退回既有口径（这一片落在哪儿与改动前一个字都不差）。
+                AppendLog("WARN", $"跨链收卷算不出这一片的落点（{ex.Message}）。");
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// **链因「分卷缺失」停下时，把它已经解出来、下一步要用的产物搬回它自己那条链的家**
+        /// （用户 2026-10-06 口径：「第一步就让你将能解压的统统解压了」「这个根本就不是部分完成，
+        /// 对于 `111.rar` 这个就是成功了，只不过这个内容物又是下一轮解压需要的东西」）。
+        ///
+        /// <para><b>现场</b>：`111.rar` 第 0 层解出 `111\111.rar`、第 1 层解出 **`111\111.zip`**，
+        /// 第 2 层要开 `111.zip` 时缺 `.z01` ⇒ 这一层不开（不试）。而 `111.zip` 是下一轮**那一组跨盘 ZIP
+        /// 的入口包** —— 旧口径把它当"没走完的现场"，收尾连工作区一起删掉（真机磁盘上四个文件夹里
+        /// **一个 `111.zip` 都没有**，就是这个原因）。⇒ 现在：**认得出是分卷片/入口包的，一律搬到
+        /// `owner` 自己那条链的落点目录**（`CCCC\111\111\`），随后的收片与整组解压都在那一层。</para>
+        ///
+        /// <para>⛔ 动作只有"同卷改名"（我们自己工作区里的文件，零字节代价）；⛔ 用户源目录里的片
+        /// 这一档碰都不碰（名字与字节都不动）；⛔ 搬不动（占用 / 目标被目录占着）⇒ 留在原地、
+        /// 什么都不做（随后由既有的接片那一档按规范卷名处理）。</para>
+        /// </summary>
+        private void PublishUnresolvedVolumePieces(RecursionResult? recursion, ArchiveTask? owner)
+        {
+            if (recursion == null || recursion.UnresolvedVolumePieces.Count == 0 || owner == null)
+            {
+                return;
+            }
+
+            string home = ResolveOwnerChainDirectory(owner);
+
+            if (home.Length == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.CreateDirectory(home);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{owner.FileName}：这一片的落点目录建不出来（{ex.Message}），按原样留着。");
+                return;
+            }
+
+            foreach (string piece in recursion.UnresolvedVolumePieces)
+            {
+                try
+                {
+                    if (!File.Exists(piece))
+                    {
+                        continue;
+                    }
+
+                    string name = FileNameHelper.GetFileName(piece);
+                    string target = Path.Combine(home, name);
+
+                    /*
+                     * ⛔ 已经在那一层了就什么都不做（幂等）；目标被占（文件或目录）⇒ 一个字节都不动。
+                     */
+                    if (File.Exists(target)
+                        || Directory.Exists(target)
+                        || SafePathHelper.PathEquals(piece, target))
+                    {
+                        continue;
+                    }
+
+                    File.Move(piece, target);
+
+                    if (File.Exists(target))
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"{owner.FileName}：这一步解出来的「{name}」留在它自己那条链的落点目录里 —— "
+                            + $"{Path.GetFileName(home)}（下一轮解压要用的就是它；⛔ 不是失败、也不算残缺）。");
+
+                        RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 加法：搬不动 ⇒ 退回"什么都不做"（这一片仍留在工作区，行为与改动前一个字不差）。
+                    AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
+                }
+            }
         }
 
         /// <summary>
