@@ -8766,32 +8766,67 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            // 连产出方都问不出来（批首那一刻 / 这一组谁都没吐过片）⇒ 退回旧口径（任务表里第一单那一层）——
-            // 兜底，行为与改动前逐字相同；等入口包落地之后的每一次重判都会走上面那两支。
+            /*
+             * ===== 入口包**还没落地**：按产出链**一层一层**推它将来落在哪一层（用户 2026-10-06 拍板）=====
+             *
+             * ⛔ **旧口径（"任务表里第一单那一层"）已作废**：真机 2026-10-06 14:33 那次就是它把入口包
+             * `111.zip` 接到了 `111(4)`（日志逐字：`已按规范卷名 111.zip 接到「111(4)」这一层`），
+             * 于是列表第一项挂着 48 MB、产物也跟着落错层。用户原话：「**我说过多少遍在 `111.zip` 所在位置**，
+             * 你为什么还解压在列表第一项」。
+             *
+             * 现在只认一个出口（与落点实现同一份判据 `ResolveProducerEntryArchivePathCore`）：
+             * 沿产出链把入口包的落点**逐层叠**出来，取它所在那一层。
+             * 判不出（谁都没吐过片 / 拿不到产出方）⇒ 空串 ⇒ 调用方什么都不做。
+             */
             foreach (string member in members)
             {
-                string? directory = Path.GetDirectoryName(member);
+                string predicted = ResolveProducerEntryArchivePathCore(
+                    task ?? FindTaskByPath(member) ?? new ArchiveTask(member, 0),
+                    BuildExtractOptions(tryExtractUnknownFormat: false),
+                    member,
+                    0);
 
-                if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+                if (predicted.Length == 0)
                 {
-                    return directory!;
+                    continue;
+                }
+
+                string? layer = Path.GetDirectoryName(predicted);
+
+                if (!string.IsNullOrWhiteSpace(layer))
+                {
+                    return layer!;
                 }
             }
 
             /*
-             * ⚠ 最后一道兜底：**产出方那条链的落点目录**（即使那里暂时还没有入口包）。
+             * 最后一道兜底：**产出方那条链的落点目录**（即使那里暂时还没有入口包）。
              *
-             * 为什么必须有：单层路里入口包（`111.zip`）是**下一轮的内层包**，还躺在"其余物"里没落地
+             * 为什么留着它：单层路里入口包（`111.zip`）是**下一轮的内层包**，还躺在"其余物"里没落地
              * （那条路承诺"内层包原样留着"，见 `InnerLayerContinuationTests` —— 那条红线不能碰）。
              * 可"收片要收到哪一层"这件事**与入口包当前在哪儿无关**：它该去的是**产出它的那一单
-             * 自己那条链**（`111\111.rar` ⇒ `111\111\`）。⛔ 少了这一档，收片会退回"任务表里第一单那一层"
-             * （散着的那片所在的 `111(3)\`）—— 那正是把入口包搬去别人家的旧机制。
+             * 自己那条链**（`111\111.rar` ⇒ `111\111\`）。
              */
-            string producerHome = ResolveGroupProducerDirectory(baseName);
+            return ResolveGroupProducerDirectory(baseName);
+        }
 
-            return producerHome.Length > 0 && Directory.Exists(producerHome)
-                ? producerHome
-                : string.Empty;
+        /// <summary>按路径找任务表里那一单（找不到 ⇒ null；⛔ 只读，不新建）。</summary>
+        private ArchiveTask? FindTaskByPath(string path)
+        {
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (SafePathHelper.PathEquals(candidate.CurrentPath, path))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
