@@ -337,6 +337,19 @@ namespace ArchiveFixer.ViewModels
                 return 0;
             }
 
+            /*
+             * ⛔ **临时排障（用完删）**：只在⑥设置「详细日志（排查用）」打开时写一行，打出
+             * "给了几单、扫到几条" —— 目的：一次分清"扫不到"还是"扫到了没移掉"
+             * （真机 2026-10-07：提醒那条报了 13 个无用物，两个"移出列表"调用点一个都没移，
+             * 日志里也没有"已把 N 个无用物移出列表"）。
+             */
+            if (Settings?.VerboseLog == true)
+            {
+                AppendLog(
+                    "WARN",
+                    $"[排障·无用物] 传入 {tasks.Count} 单；扫到总 {junk?.TotalCount ?? 0} 条（明细 {junk?.Items.Count ?? 0} 条）");
+            }
+
             if (junk == null || !junk.HasAnything || junk.Items.Count == 0)
             {
                 return 0;
@@ -344,6 +357,11 @@ namespace ArchiveFixer.ViewModels
 
             int removed = _vm.RemoveTasksBySourcePaths(junk.Items.Select(item => item.FullPath));
 
+
+            if (Settings?.VerboseLog == true)
+            {
+                AppendLog("WARN", $"[排障·无用物] 真移掉 {removed} 个");
+            }
             if (removed > 0)
             {
                 AppendLog(
