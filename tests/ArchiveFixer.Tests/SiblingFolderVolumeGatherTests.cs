@@ -1275,6 +1275,21 @@ namespace ArchiveFixer.Tests
 
             // ⚠ 三列必须**同一个人**：文件名 / 后缀 / 完整路径（用户 2026-10-06：「后缀也不同步，
             //   列表里面显示的没有一个是对的」）。显示 `111.z02` 却把后缀写成 `.zip` 就是自相矛盾。
+            /*
+             * ⑤ **持有用户源片的那一单必须收场**（真机 CCCC 2026-10-06 22:50：`111(4)\111.z03`
+             * 一直留在盘上 —— 批末按路径 / 文件名回查它"这一片借给谁了"，而它起点被改写到入口包上、
+             * 最初路径还停在改名前的脏名上 ⇒ 判不出 ⇒ 红线「什么都不做」）。
+             * 现在接片那一刻就**按任务身份**把它记进"谁吐出了这一组的片"的账 ⇒ 批末按引用收场。
+             *
+             * <para><b>红检</b>：把 `RememberPieceSupplyingTask` 那一调注掉 ⇒ 本条变红。</para>
+             */
+            ArchiveTask pieceHolder = harness.Vm.Tasks.Single(task => task.OriginalPath.Contains("111(4)"));
+
+            Assert.True(pieceHolder.IsVolumeGroupFollower, "持有用户源片的那一单应当按跟班卷收场");
+            Assert.Equal(TaskOutcome.Succeeded, pieceHolder.Outcome);
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains($"「{pieceHolder.FileName}」里那一片已经跟着", StringComparison.Ordinal));
             Assert.Equal(".z02", repointed.DisplayExtension);
             Assert.EndsWith("111.z02", repointed.DisplayPath, StringComparison.Ordinal);
         }

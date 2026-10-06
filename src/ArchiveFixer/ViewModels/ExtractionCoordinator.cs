@@ -8521,6 +8521,50 @@ namespace ArchiveFixer.ViewModels
         /// 记下"**这一单**吐出了「<paramref name="baseName"/>」这一组的一片"（去重；⛔ 只记账，不动盘上任何东西）。
         /// 整组由别单解开之后由 <see cref="CollectConsumedSourcePiecesIntoRest"/> 让它按跟班卷收场。
         /// </summary>
+        /// <summary>
+        /// **这一片是从哪一单自己的源片库里来的** ⇒ 把**那一单**记成"这一组的一片由它供给"
+        /// （唯一出口 <see cref="RememberGroupPieceProducer"/>，⛔ 记的是**任务身份**）。
+        ///
+        /// <para><b>真机 CCCC 2026-10-06 22:50</b>（用户原话：「`111(4)\111.z03` 留着干什么」）：
+        /// 那一单永远收不了场 —— 批末是**按路径 / 文件名**回查它"这一片借给谁了"，
+        /// 而它的起点已被改写到入口包上、`OriginalPath` 还停在改名前的脏名上
+        /// ⇒ 判不出 ⇒ 红线「什么都不做」⇒ 用户的源片一直留着。
+        /// 按身份记进既有那份账之后，批末由 <see cref="SettleGroupPieceProducers"/> **按引用**收场，
+        /// ⛔ 再也不用事后反推（路径会过期、文件会被删，身份不会）。</para>
+        ///
+        /// <para>⛔ 只认"账上某条路径 = 这一片"或"与这一片是**同一份文件**"（唯一判据
+        /// <see cref="FileIdentity"/>）；⛔ 判不出就什么都不记（照旧走老路，行为与改动前一致）。</para>
+        /// </summary>
+        private void RememberPieceSupplyingTask(string baseName, string piecePath)
+        {
+            if (string.IsNullOrWhiteSpace(baseName) || string.IsNullOrWhiteSpace(piecePath))
+            {
+                return;
+            }
+
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                foreach (string path in EnumerateTaskPaths(candidate).Concat(EnumerateOwnPaths(candidate)))
+                {
+                    if (string.IsNullOrWhiteSpace(path))
+                    {
+                        continue;
+                    }
+
+                    if (SafePathHelper.PathEquals(path, piecePath) || FileIdentity.IsSamePhysicalFile(path, piecePath))
+                    {
+                        RememberGroupPieceProducer(baseName, candidate);
+                        return;
+                    }
+                }
+            }
+        }
+
         private void RememberGroupPieceProducer(string baseName, ArchiveTask? owner)
         {
             if (owner == null || baseName.Length == 0)
@@ -8727,6 +8771,15 @@ namespace ArchiveFixer.ViewModels
                  * 这两个原包却因为自己"部分完成"一直留在盘上 —— 用户当场就问为什么）。
                  */
                 RememberGroupPieceProducer(baseName, owner);
+
+                /*
+                 * ⛔ **这一片是从哪一单自己的源片库里来的** ⇒ 把**那一单**也记成"这一组的一片由它供给"
+                 * （按**任务身份**，⛔ 不按路径、⛔ 不按文件名）。真机 CCCC 2026-10-06：`111(4)\111.z03`
+                 * 那一单永远收不了场 —— 因为批末按路径/文件名回查（它起点被改写到入口包上、最初路径还是
+                 * 改名前的脏名），而物理同一性在"组层那个链接已经被删掉"之后也无从判定
+                 * ⇒ 红线「判不出 ⇒ 什么都不做」，源片一直留着。按身份记，这一档从此不依赖事后反推。
+                 */
+                RememberPieceSupplyingTask(baseName, piecePath);
             }
 
             // 末片在哪一层，整组就得凑到哪一层（引擎只看入口旁边那一层）⇒ 末片到手就顺手把整组接齐。
@@ -10401,9 +10454,23 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private static string ResolveOwnPiecePath(ArchiveTask task)
         {
-            if (!string.IsNullOrWhiteSpace(task.OriginalPath))
+            /*
+             * ⛔ **先问"这一份还在不在"**（真机 CCCC 2026-10-06 22:50）：`OriginalPath` 是**最初导入路径**，
+             * 而已知改名/搬运**不会**把它改过来（实测它一直停在改名前的脏名 `111.z0删除3` 上）。
+             * 拿一个不存在的路径去判"源片还在不在"、去搬源片 ⇒ 一定落空 ⇒ 源片永远留在盘上。
+             * ⇒ 顺序：账上那条**真的在**就用它；不在就按"同目录同包基名"问盘（`FindOwnPieceOnDisk`）；
+             * 再不行才退回 `CurrentPath`。⛔ 只读、⛔ 一个字都不改。
+             */
+            if (!string.IsNullOrWhiteSpace(task.OriginalPath) && File.Exists(task.OriginalPath))
             {
                 return task.OriginalPath;
+            }
+
+            string onDisk = FindOwnPieceOnDisk(task);
+
+            if (onDisk.Length > 0)
+            {
+                return onDisk;
             }
 
             return task.CurrentPath ?? string.Empty;
