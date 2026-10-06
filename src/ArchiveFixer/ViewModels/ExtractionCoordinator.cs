@@ -6242,13 +6242,14 @@ namespace ArchiveFixer.ViewModels
              * 缺的东西刚刚被自己扔掉（真机 22:06:02「已清理工作区：2 个文件 / 48.35 MiB」就是这么把末片带走的）。
              */
             /*
-             * ⚠ 顺序硬要求：**先让这一步解出来的东西落地，再交给既有的收片那一档**
-             * （用户 2026-10-06：「第一步就让你将能解压的统统解压了」「你把分卷移过来不就是了吗」）。
+             * ⚠ 顺序与取值都是硬要求：**先让这一步解出来的东西落地，再拿"落地之后的那份路径"交给收片那一档**。
              * 旧顺序（只有接片、没有落地）⇒ 入口包 `111.zip` 跟着工作区一起被删，
              * 批末那一站到了盘上一看：这一组连入口都没有。
+             * ⚠ 而且**不能把原路径再喂给接片那一档**：落地是 `File.Move` ⇒ 那个路径已经不存在了
+             * （实测踩到：接片那一档一开头 `File.Exists` 就 false，整组静默不接）。
              */
-            PublishUnresolvedVolumePieces(result, task);
-            AdoptUnresolvedVolumePieces(result, task);
+            List<string> publishedPieces = PublishUnresolvedVolumePieces(result, task);
+            AdoptUnresolvedVolumePieces(result, task, publishedPieces);
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
@@ -8174,14 +8175,34 @@ namespace ArchiveFixer.ViewModels
         /// 建不了 ⇒ 什么都不做（⛔ 绝不复制大文件）。这几片按用户 2026-10-05 的拍板算**源包**：
         /// 这一组真解开之后，它们跟着一起进其余物、按删除档处理。</para>
         /// </summary>
-        private void AdoptUnresolvedVolumePieces(RecursionResult? recursion, ArchiveTask? owner)
+        /// <param name="publishedPieces">
+        /// <see cref="PublishUnresolvedVolumePieces"/> 刚落地的那几份（**落地之后的路径**）。
+        /// ⛔ 不许拿 <see cref="RecursionResult.UnresolvedVolumePieces"/> 里那份原路径代替 ——
+        /// 落地是移动，原路径已经不存在了。
+        /// </param>
+        private void AdoptUnresolvedVolumePieces(
+            RecursionResult? recursion,
+            ArchiveTask? owner,
+            IReadOnlyList<string>? publishedPieces = null)
         {
-            if (recursion == null || recursion.UnresolvedVolumePieces.Count == 0)
+            var pieces = new List<string>();
+
+            if (publishedPieces != null)
+            {
+                pieces.AddRange(publishedPieces);
+            }
+
+            if (recursion != null)
+            {
+                pieces.AddRange(recursion.UnresolvedVolumePieces);
+            }
+
+            if (pieces.Count == 0)
             {
                 return;
             }
 
-            foreach (string piece in recursion.UnresolvedVolumePieces)
+            foreach (string piece in pieces)
             {
                 try
                 {
@@ -8386,18 +8407,20 @@ namespace ArchiveFixer.ViewModels
         /// 这一档碰都不碰（名字与字节都不动）；⛔ 搬不动（占用 / 目标被目录占着）⇒ 留在原地、
         /// 什么都不做（随后由既有的接片那一档按规范卷名处理）。</para>
         /// </summary>
-        private void PublishUnresolvedVolumePieces(RecursionResult? recursion, ArchiveTask? owner)
+        private List<string> PublishUnresolvedVolumePieces(RecursionResult? recursion, ArchiveTask? owner)
         {
+            var published = new List<string>();
+
             if (recursion == null || recursion.UnresolvedVolumePieces.Count == 0 || owner == null)
             {
-                return;
+                return published;
             }
 
             string home = ResolveOwnerChainDirectory(owner);
 
             if (home.Length == 0)
             {
-                return;
+                return published;
             }
 
             try
@@ -8407,7 +8430,7 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 AppendLog("WARN", $"{owner.FileName}：这一片的落点目录建不出来（{ex.Message}），按原样留着。");
-                return;
+                return published;
             }
 
             foreach (string piece in recursion.UnresolvedVolumePieces)
@@ -8429,6 +8452,12 @@ namespace ArchiveFixer.ViewModels
                         || Directory.Exists(target)
                         || SafePathHelper.PathEquals(piece, target))
                     {
+                        // 已经在那一层了（幂等）⇒ 仍然要把它交给收片那一档：它就是入口。
+                        if (File.Exists(target) && SafePathHelper.PathEquals(piece, target))
+                        {
+                            published.Add(target);
+                        }
+
                         continue;
                     }
 
@@ -8442,6 +8471,7 @@ namespace ArchiveFixer.ViewModels
                             + $"{Path.GetFileName(home)}（下一轮解压要用的就是它；⛔ 不是失败、也不算残缺）。");
 
                         RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
+                        published.Add(target);
                     }
                 }
                 catch (Exception ex)
@@ -8450,6 +8480,8 @@ namespace ArchiveFixer.ViewModels
                     AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
                 }
             }
+
+            return published;
         }
 
         /// <summary>
@@ -8491,8 +8523,23 @@ namespace ArchiveFixer.ViewModels
                 return entry.Directory;
             }
 
-            // 第 1 卷还不在盘上（真机 CCCC 批首那一刻就是这样）⇒ 退回旧口径（任务表里第一单那一层）——
-            // 兜底，行为与改动前逐字相同；等第 1 卷解出来之后的每一次重判都会走上面那一支。
+            /*
+             * 入口包还不在**任务表**那几层里 ⇒ 问**产出它的那一单**：它自己那条链的落点目录
+             * （`111.rar` ⇒ `111\111\`）。真机 CCCC 的第一步修好之后就是这一档：
+             * `111.zip` 由 `111.rar` 那一单解出来、并由 `PublishUnresolvedVolumePieces` 落在
+             * `CCCC\111\111\`，而"这一组还缺卷"那两单是散在 `111(3)`/`111(4)` 的源片 ——
+             * ⛔ 收片层必须是入口所在那一层（用户 2026-10-06：「你把分卷移过来不就是了吗」），
+             * 不能退回"任务表里第一单那一层"（那正是把 `111.zip` 搬去 `111(4)` 的旧机制）。
+             */
+            string fromProducer = ResolveGroupProducerDirectory(baseName);
+
+            if (fromProducer.Length > 0)
+            {
+                return fromProducer;
+            }
+
+            // 连产出方都问不出来（批首那一刻 / 这一组谁都没吐过片）⇒ 退回旧口径（任务表里第一单那一层）——
+            // 兜底，行为与改动前逐字相同；等入口包落地之后的每一次重判都会走上面那两支。
             foreach (string member in members)
             {
                 string? directory = Path.GetDirectoryName(member);
@@ -8500,6 +8547,30 @@ namespace ArchiveFixer.ViewModels
                 if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
                 {
                     return directory!;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// **产出这一组某一片的那一单**自己那条链的落点目录（唯一出口 <see cref="ResolveOwnerChainDirectory"/>）。
+        /// 找不到产出方 ⇒ 空串（调用方退回旧口径）。
+        /// </summary>
+        private string ResolveGroupProducerDirectory(string baseName)
+        {
+            if (!_groupPieceProducers.TryGetValue(baseName, out List<ArchiveTask>? producers) || producers == null)
+            {
+                return string.Empty;
+            }
+
+            foreach (ArchiveTask producer in producers.ToList())
+            {
+                string directory = ResolveOwnerChainDirectory(producer);
+
+                if (directory.Length > 0)
+                {
+                    return directory;
                 }
             }
 
