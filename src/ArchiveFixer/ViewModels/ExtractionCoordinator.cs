@@ -8780,8 +8780,15 @@ namespace ArchiveFixer.ViewModels
              */
             foreach (string member in members)
             {
+                /*
+                 * ⚠ 必须传**这一片自己那一单**（找不到就退回调用方给的那一单）：产出方的判据里有一条
+                 * `ReferenceEquals(candidate, task)` —— 传个临时对象进去，等于把"产出方是不是我自己"
+                 * 判错（实测踩到：单层路这一档因此拿到空串，收片层退回旧口径、整组凑不齐）。
+                 */
+                ArchiveTask owner = FindTaskByPath(member) ?? task ?? new ArchiveTask(member, 0);
+
                 string predicted = ResolveProducerEntryArchivePathCore(
-                    task ?? FindTaskByPath(member) ?? new ArchiveTask(member, 0),
+                    owner,
                     BuildExtractOptions(tryExtractUnknownFormat: false),
                     member,
                     0);

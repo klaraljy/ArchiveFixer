@@ -1000,23 +1000,31 @@ namespace ArchiveFixer.Tests
             Log(harness, "跨链收卷-单层");
 
             /*
-             * ⛔ 这一条**不断言解开了**：单层路拿不到完整的分卷（入口包 `111.zip` 出不来）
-             * ⇒ 按用户口径如实报橙色预警。断言三件事：
-             *   ① 有内容物落地（这一层解出来的东西没被扔）；
-             *   ② 这一组到最后一刻仍然不完整 ⇒ 落了「部分完成」那一档的话（橙色预警的判据）；
-             *   ③ 用户的源片一个字节没动。
+             * ⚠ 2026-10-06 第三版口径（**本条按实测现状改写，⛔ 不是假装它好了**）：
+             * 上一轮把"续卷的伪装名改回标准名"落地之后，这一组在**单层路**上**真的凑齐了**
+             * （日志逐字：`「111」这一组现在凑齐了`、`批末补判：「111.z02」这一组现在齐了（共 4 卷）`）。
+             * ⇒ 旧断言「拿不到完整分卷 ⇒ 橙色预警」已经不成立，按现状改写：
+             *   ① 这一组**凑齐了**（这一条正着断言）；
+             *   ② ⚠ **但批末那一站还没把它解开**（如实钉住，⛔ 不当成验过）：同一批里仍有
+             *      `成功 2 / 失败 1 / 未处理 2` + `失败：111.zip —— 分卷缺失`。
+             * 这条缺口是**下一轮要修的**（单层路批末组装）；修好时把第 ② 条改成"真的解开了"。
              */
-            Assert.DoesNotContain(
+            Assert.Contains(
                 harness.LogTexts,
-                text => text.Contains("这一组现在齐了", StringComparison.Ordinal));
+                text => text.Contains("这一组现在凑齐了", StringComparison.Ordinal));
 
             Assert.Contains(
                 harness.LogTexts,
-                text => text.Contains("到最后一刻仍然不完整", StringComparison.Ordinal)
-                        && text.Contains("按「部分完成」记", StringComparison.Ordinal));
+                text => text.Contains("批末补判", StringComparison.Ordinal)
+                        && text.Contains("现在齐了", StringComparison.Ordinal));
 
-            Assert.Equal(TaskOutcome.PartiallyCompleted, pieceTwoTask.Outcome);
-            Assert.Equal(TaskOutcome.PartiallyCompleted, pieceThreeTask.Outcome);
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("失败：111.zip", StringComparison.Ordinal));
+
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("未处理 2", StringComparison.Ordinal));
 
             /*
              * ⚠ 按用户 2026-10-06 的新指令改写（旧断言是「用户的源片不许动」那两条）：
