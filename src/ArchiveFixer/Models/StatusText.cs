@@ -3001,6 +3001,16 @@ namespace ArchiveFixer.Models
             + "等这一批的解压都跑完再判一次（那时缺的那几卷可能已经被解出来、或者已经被收拢到位）。";
 
         /// <summary>
+        /// 批首"记下缺口"时写在**错误信息**那一格的话（<c>{0}</c> = 还缺哪几卷）。
+        ///
+        /// <para>⛔ 状态那一格用的是中性档 <see cref="WaitingExtract"/>，**不是**
+        /// <see cref="VolumeMissing"/>：后者在红色映射与失败名单里，批中间亮出来就是"判死"
+        /// （用户 2026-10-06：「我说了不要显示红色的分卷缺失，你还没有压倒最后就跳过」）。</para>
+        /// </summary>
+        public const string VolumeDeficitDeferredNoteFormat =
+            "这一组还缺 {0} —— 先记下来不判死：这一批跑完再判一次（缺的那几卷可能已经被同批别的包解出来）。";
+
+        /// <summary>
         /// 批末补判**补齐了**那一行：<c>{0}</c> = 这一单的文件名，<c>{1}</c> = 现在这一组的状态。
         /// </summary>
         public const string VolumeDeficitRecheckResolvedFormat =

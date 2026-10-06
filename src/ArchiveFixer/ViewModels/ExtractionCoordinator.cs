@@ -9598,6 +9598,23 @@ namespace ArchiveFixer.ViewModels
                 _volumeDeficitDeferred.Add(task);
             }
 
+            /*
+             * ⛔ **批中间不许顶着红色「分卷缺失」**（用户 2026-10-06 原话：
+             * 「我说了不要显示红色的分卷缺失，你还没有压倒最后就跳过，你是听不懂吗」）。
+             *
+             * 批首只是"先把缺口记下来"：这一单**这一批确实还没开工**，但它既没失败也不该被判死
+             * —— 缺的那几卷可能马上就被同批另一个包解出来（真机 `111.z03` 就是），
+             * 也可能在批末"这一组其实已由别单解开"那一档按跟班卷收场。
+             * ⇒ 状态用既有的**中性档** `等待解压`（不是 `分卷缺失`：那个进了红色映射与失败名单，
+             * 在批中间亮出来就是一句会把用户指错的话）；"还缺哪几个"写在 `ErrorMessage` 里、
+             * 日志里也有一条，信息一个字没少。批末那一站仍在缺 ⇒ 才由它落最终结论（跳过）。
+             */
+            task.Status = StatusText.WaitingExtract;
+            task.ErrorMessage = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.VolumeDeficitDeferredNoteFormat,
+                missingNames);
+
             AppendLog(
                 "INFO",
                 string.Format(
@@ -9649,10 +9666,14 @@ namespace ArchiveFixer.ViewModels
         /// <summary>单测用：把一单放进"缺卷留到最后再判"那份名单（写入点唯一 = <see cref="RecordDeferredVolumeDeficit"/>）。</summary>
         internal void RecordDeferredVolumeDeficitForTests(ArchiveTask task)
         {
-            if (task != null && !_volumeDeficitDeferred.Contains(task))
+            if (task == null)
             {
-                _volumeDeficitDeferred.Add(task);
+                return;
             }
+
+            // ⛔ 走**真实那条路**（同一个出口）：批首记缺口 = 中性状态 + 缺口写进错误信息 + 一条日志。
+            // 只把任务塞进名单的旧写法会让"批中间顶着红色的分卷缺失"这条口径**没有守门**。
+            RecordDeferredVolumeDeficit(task, DescribeMissingVolumeNames(task));
         }
 
         /// <summary>缺卷清单那一句话（任务账上那份；空 ⇒ 如实说"名字上看不出"）。</summary>
