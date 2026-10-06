@@ -401,6 +401,15 @@ namespace ArchiveFixer.Services
         /// 入口包不在盘上时问一次"产出它的那一单"（见 <see cref="GroupProducerEntryResolver"/>）。
         /// 判不出 ⇒ <c>null</c>（= 不传，落点退回源包自己那一层）。
         /// </summary>
+        /// <summary>
+        /// 预判链里的诊断出口（可选；由协调器挂上自己的日志）。
+        ///
+        /// <para>为什么要有它：这条预判跑在**落点解析里面**，而落点解析是纯函数层、拿不到日志服务；
+        /// 一旦抛异常，下面的 `catch` 会把它悄悄吞掉（兜底"什么都不做"是对的，但**排障时看不见**——
+        /// 实测踩过：真机形状的用例绿着，日志里却什么都没有，追了半天才发现异常被吃了）。</para>
+        /// </summary>
+        public Action<string>? DiagnosticLog { get; set; }
+
         private string? ResolveProducerEntryArchivePath(ArchiveTask task, ExtractOptions options, string archivePath)
         {
             Func<ArchiveTask, ExtractOptions, string, string>? resolver = GroupProducerEntryResolver;
@@ -416,9 +425,16 @@ namespace ArchiveFixer.Services
 
                 return string.IsNullOrWhiteSpace(resolved) ? null : resolved;
             }
-            catch
+            catch (Exception ex)
             {
-                // 兜底落在"什么都不做"那一档：预判失败只能让落点回到老口径，绝不能让它把落点算崩。
+                /*
+                 * 兜底落在"什么都不做"那一档：预判失败只能让落点回到老口径，绝不能让它把落点算崩。
+                 * ⛔ 但**必须留下痕迹**（WARN + 异常原话）—— 静默吞掉异常会让"没生效"看起来跟"没跑"一样。
+                 */
+                DiagnosticLog?.Invoke(
+                    $"{task.FileName}：入口包落点预判这一步没算成（{ex.GetType().Name}：{ex.Message}）—— "
+                    + "落点退回源包自己那一层。");
+
                 return null;
             }
         }

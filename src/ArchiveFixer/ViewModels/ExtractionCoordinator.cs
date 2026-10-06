@@ -13179,6 +13179,8 @@ namespace ArchiveFixer.ViewModels
                 _pathService.GroupProducerEntryResolver =
                     (task, options, archivePath) => ResolveProducerEntryArchivePathCore(task, options, archivePath, 0);
 
+                _pathService.DiagnosticLog = message => AppendLog("WARN", message);
+
                 /*
                  * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
                  * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
@@ -14347,7 +14349,120 @@ namespace ArchiveFixer.ViewModels
                 return string.Empty;
             }
 
-            ArchiveTask? producer = null;
+            ArchiveTask? producer = FindProducerTaskForPackage(task, archivePath, entryName);
+
+            if (producer == null)
+            {
+                return string.Empty;
+            }
+
+            /*
+             * ===== 落点**一层一层往上叠**（用户 2026-10-06 拍板）=====
+             *
+             * 现场：`111.rar` → 里面是 `111.zip` → 里面是 `111.rar`（2 卷）→ 里面才是那一组跨盘 ZIP 的
+             * 入口 `111.zip`。用户原话：「**我问你，你要想得到 `111.zip` 你是不是得按规则解压得到，
+             * 之前的规矩就是一层层解压**，人工如果想得到 `111.zip` 就得中间有这么多的文件夹」。
+             *
+             * ⇒ 判据只有一条、只用一个出口：**落点 = 入口包所在那一层 + 一层包名目录**
+             * （`ResolveOutputPlacement` 自己就是这条规则），于是：
+             *   ① 找到"产出这一份的那一单"（同一个包基名、又不是本组成员）；
+             *   ② 算**它**的落点（递归 —— 它自己也可能还在等它的入口包）；
+             *   ③ 这一份就落在**它的落点**目录里（那正是"它解出来之后会待着的那一层"）；
+             *   ④ 拿这一层当新的起点，继续往下追，直到追到"盘上真有这一份"或追不动为止。
+             * ⛔ 不是"产出方落点 + 包名"那种一步猜测（那一步在真机上算出来正好差一层）。
+             * ⛔ 追不动 / 判不出 ⇒ 原样退回旧口径（什么都不做那一档）。
+             */
+            OutputPlacementResult producerPlacement = ResolveOutputPlacementForProducer(producer, options, depth);
+
+            if (!producerPlacement.Success || string.IsNullOrWhiteSpace(producerPlacement.DestinationDirectory))
+            {
+                return string.Empty;
+            }
+
+            string landingLayer = producerPlacement.DestinationDirectory;
+            string? nextPackage = FindNextPackageInProducerChain(producer, archivePath);
+            int guard = 0;
+
+            while (nextPackage != null && guard++ < MaxProducerChainDepth)
+            {
+                string nextEntryName = TryGetEntryPackageName(nextPackage);
+
+                if (nextEntryName.Length == 0)
+                {
+                    break;
+                }
+
+                // 入口包**已经真的在盘上**了（真机第二次及以后重算时会走到这里）⇒ 落点就是它自己那一层。
+                string onDisk = Path.Combine(landingLayer, nextEntryName);
+
+                if (File.Exists(onDisk))
+                {
+                    return onDisk;
+                }
+
+                ArchiveTask? nextProducer = FindProducerTaskForPackage(task, nextPackage, nextEntryName);
+
+                if (nextProducer == null)
+                {
+                    return Path.Combine(landingLayer, nextEntryName);
+                }
+
+                OutputPlacementResult nextPlacement = ResolveOutputPlacementForProducer(nextProducer, options, depth + 1);
+
+                if (!nextPlacement.Success || string.IsNullOrWhiteSpace(nextPlacement.DestinationDirectory))
+                {
+                    return Path.Combine(landingLayer, nextEntryName);
+                }
+
+                landingLayer = nextPlacement.DestinationDirectory;
+                nextPackage = FindNextPackageInProducerChain(nextProducer, nextPackage);
+            }
+
+            string predicted = Path.Combine(landingLayer, entryName);
+
+            AppendLog(
+                "INFO",
+                $"{task.FileName}：这一组的入口包（{entryName}）现在还没被解出来 —— 落点按"
+                + $"「产出它的那一单」（{producer.FileName}）那条链「一层一层」推：{predicted}。");
+
+            return predicted;
+        }
+
+        /// <summary>
+        /// 产出方的落点（唯一实现仍是 <see cref="PathService.ResolveOutputPlacement"/>）。
+        ///
+        /// <para>⚠ 这一调会再次走进本方法所在的这条预测链（产出方自己也可能在等它的入口包）——
+        /// 递归由 `depth` 与 <see cref="MaxProducerChainDepth"/> 双重兜住，⛔ 不会自环。</para>
+        /// </summary>
+        private OutputPlacementResult ResolveOutputPlacementForProducer(
+            ArchiveTask producer,
+            ExtractOptions options,
+            int depth)
+        {
+            _ = depth;
+
+            return _pathService.ResolveOutputPlacement(producer, options);
+        }
+
+        /// <summary>产出方那条链最多追几层（防环、防病态输入；真机这一条链是 3 层）。</summary>
+        private const int MaxProducerChainDepth = 6;
+
+        /// <summary>这一份的**入口包名字**（跨盘 ZIP = 末片 `X.zip`、7z = `X.7z.001`、ZIP 通用分片 = `X.zip.001`、RAR = 第 1 卷）；判不出 ⇒ 空串。</summary>
+        private static string TryGetEntryPackageName(string packagePath) =>
+            VolumeGroupDetector.TryGetFirstVolumeName(FileNameHelper.GetFileName(packagePath)) ?? string.Empty;
+
+        /// <summary>
+        /// **产出方那一单**：同一个包基名、又不是本组成员、自己也不是"在等入口包"的那一单（真机 = `111.rar`）。
+        /// 找不到 ⇒ null（调用方退回旧口径）。
+        /// </summary>
+        private ArchiveTask? FindProducerTaskForPackage(ArchiveTask task, string packagePath, string entryName)
+        {
+            string baseName = FileNameHelper.GetArchiveBaseName(packagePath);
+
+            if (baseName.Length == 0)
+            {
+                return null;
+            }
 
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
             {
@@ -14385,30 +14500,38 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                producer = candidate;
-                break;
+                return candidate;
             }
 
-            if (producer == null)
+            return null;
+        }
+
+        /// <summary>
+        /// **这一条链上的下一份**（产出方交出来的那一份）。
+        ///
+        /// <para>判据 = 产出方手上那份的**入口包规范名**（`TryGetFirstVolumeName`）拼回它自己那一层：
+        /// `111.rar` ⇒ `…\111\111.zip`；`111(2)_.zip` ⇒ `…\111(2)\111(2)_\111.z01`。
+        /// ⛔ 与手上这一份同名（或名字推不出来）⇒ 返回 null ⇒ **链到此为止**（⛔ 不许自己套自己）。</para>
+        /// </summary>
+        private static string? FindNextPackageInProducerChain(ArchiveTask producer, string currentPackagePath)
+        {
+            string name = TryGetEntryPackageName(producer.CurrentPath ?? string.Empty);
+
+            if (name.Length == 0)
             {
-                return string.Empty;
+                return null;
             }
 
-            OutputPlacementResult producerPlacement = _pathService.ResolveOutputPlacement(producer, options);
+            string? directory = Path.GetDirectoryName(producer.CurrentPath ?? string.Empty);
 
-            if (!producerPlacement.Success || string.IsNullOrWhiteSpace(producerPlacement.DestinationDirectory))
+            if (string.IsNullOrWhiteSpace(directory))
             {
-                return string.Empty;
+                return null;
             }
 
-            string predicted = Path.Combine(producerPlacement.DestinationDirectory, entryName);
+            string next = Path.Combine(directory, name);
 
-            AppendLog(
-                "INFO",
-                $"{task.FileName}：这一组的入口包（{entryName}）现在还没被解出来 —— 落点按"
-                + $"「产出它的那一单」（{producer.FileName}）推：{predicted}。");
-
-            return predicted;
+            return SafePathHelper.PathEquals(next, currentPackagePath) ? null : next;
         }
 
         /// <summary>
