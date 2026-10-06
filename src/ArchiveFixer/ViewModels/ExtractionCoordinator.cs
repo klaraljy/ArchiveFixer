@@ -14428,6 +14428,25 @@ namespace ArchiveFixer.ViewModels
                             : "下次想全程不排队：②页 →「并发与空间」勾上「全速（本批不节流）」（勾上当场生效）。"));
                 }
 
+                /*
+                 * ⛔ **临时排障（用完删）**：把①页每一行**实际显示的那几格**写进日志 ——
+                 * 用户 2026-10-07：「你日志里面能否看清楚列表里面显示什么内容」。
+                 * 显示层（列绑定 / 行刷新）本来不进日志，于是"列表显示对不对"只能靠截图；
+                 * 这一行把名称 / 大小 / 当前后缀 / 完整路径 / 状态 / 错误信息 原样打出来，一次对齐。
+                 */
+                foreach (ArchiveTask row in SnapshotTaskTable(Tasks))
+                {
+                    if (row == null)
+                    {
+                        continue;
+                    }
+
+                    AppendLog(
+                        "WARN",
+                        $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
+                        + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.ErrorMessage}");
+                }
+
                 AppendBatchSummary(selectedTasks);
 
                 /*
