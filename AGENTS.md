@@ -222,8 +222,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 - `dotnet build ArchiveFixer.slnx`=0 错误 0 警告；`dotnet format ArchiveFixer.slnx --verify-no-changes`=通过。
   - ⚠ 警告口径：日常构建 0 警告；**强制还原**那档多 4 条 `warning NU1900`——⛔ 不许写成"0 警告一定成立"。
-- `dotnet test` 全量（主 checkout 内）：**2808 条（2796 通过 / 12 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
-  - ⚠ 这一轮（2026-10-05：真机第九批 `CCCC` —— **跨链收卷**：一组跨盘 ZIP 的片分别压在两个包里 + 散在兄弟目录里，批末凑齐再解）的账：**2806 → 2807 = +1**（`SiblingFolderVolumeGatherTests.真机形状_一组跨盘ZIP的片分别压在两个包里_批末照样解开`）。
+- `dotnet test` 全量（主 checkout 内）：**2813 条（2801 通过 / 12 跳过 / 0 失败）**〔构建 / 测试 / 格式基线〕
+  - ⚠ 这一轮（2026-10-06：**落点口径落地 —— 「谁可以输入密码，就解压到谁那边」**）的账：改口径前全量实测 **2810**（2801 通过 / 12 跳过 / 0 失败，那时新文件是 16 条），补上 `.zip.001`（7-Zip 切的 zip 通用分片）那条守门用例之后 **2812 → 2813**。⚠ 走错的第一版判据文件（`EntryPackageTests` 13 条）已随实现重做一起删掉，那一版的账不再另记 —— 最终数只认 **2813**。
+  - ⚠ 上一轮（2026-10-05：真机第九批 `CCCC` —— **跨链收卷**：一组跨盘 ZIP 的片分别压在两个包里 + 散在兄弟目录里，批末凑齐再解）的账：**2806 → 2807 = +1**（`SiblingFolderVolumeGatherTests.真机形状_一组跨盘ZIP的片分别压在两个包里_批末照样解开`）。
   - ⚠ 这一轮（2026-10-05：真机第九批 `CCCC` —— 跨链收卷**同步到「只解当前这一层」那条路**：成品那一层 + 过程物那一层里的片也要接住）的账：**2807 → 2808 = +1**（`SiblingFolderVolumeGatherTests.真机形状_只解当前这一层_一键处理_批末照样把这一组解开`）。
   - ⚠ 上一轮（2026-10-05：真机第九批 `CCCC` —— 7-Zip 同时报「缺卷」与「密码」字样时的判读次序）的账：**2805 → 2806 = +1**（`SevenZipExitCodeTests.同时出现缺卷与密码字样时_缺卷优先`）；⚠ 上一轮（真机第八批复跑复检补的那条守门用例）**2804 → 2805 = +1** 当时漏记，一并补上。
   - ⚠ 上一轮（2026-10-05：真机第八批"跨盘 ZIP 末片在包里、其余片在源目录"）的账：**2798 → 2804 = +6**（新文件 `SpannedZipCrossBoundaryGatherTests`）。
@@ -410,6 +411,9 @@ pwsh scripts/make-icon.ps1 -Preview D:\tmp\icon.png                  # 顺带出
 
 ### 11.5 管线（落点/弹窗/校验/显示/密码）
 
+- ⛔ **落点 = 「谁可以输入密码，就解压到谁那边」的那个包所在的那一层**（用户 2026-10-05→10-06 连着澄清三遍，最后一版原话：「现在目前的内容物落处你就按照，谁可以输入密码，就解压到谁那边，rar 分卷是 `.part1.rar`，7z 分卷是 `.7z.001`，而 zip 分卷是 `.zip` 或者 `.zip.001`（这个是 7z 压缩的 zip 分卷）」；⚠ 中途我自己读成过"第 1 片 `.z01`"与"产出它的那个包自己的落点"两版，**都被用户否掉 / 实测失败**，⛔ 别照着改回去）
+  - 唯一出口 `Detection/GroupVolumeDirectory.cs`（纯函数：只读名字 + `File.Exists`，转调既有 `VolumeGroupDetector.TryGetVolumeIndex == 1` 与 `BelongsToSameGroup`，⛔ 不另写按族规则）；消费点两处、**必须是同一个事实位**：`PathService.ResolveOutputPlacement`（喂给落点实现 `OutputPlacement.ResolveDestinationDirectory` 的新可选参数 `entryArchivePath` —— **只影响「未指定位置」那一档的目标根**，指定位置那一档一个字不动）与 `ExtractionCoordinator.ResolveBatchGroupDirectory`（**拼装点**：入口包接进哪一层，落点就是哪一层；⛔ 旧口径"任务表里这一组第一单所在目录"已作废 —— 真机 `CCCC` 就是它把 `111.zip` 搬进 `111(4)`、产物跟着落 `111(4)\111`）。
+  - 判不出（入口包还压在包里 / 那一单不是卷成员）⇒ 传空 ⇒ **原样退回源包自己那一层**（行为与改动前逐字相同）。用例 `GroupVolumeDirectoryTests`(17)；红检：让 `Resolve` 恒返回空 ⇒ 6 红（`Expected "…\111\111\inner\111" / Actual "…\111(3)\111"`）。
 - ⛔ 落点最少两层文件夹：最外层=包名目录、最里层=最后一个内层包层，⛔ 塌缩/不套层分支不许吃掉最里层；省层只能省中间的内层包层，⛔ 普通文件夹永不摊平（唯一出口 `Extraction/PackageLayerRules.cs`；递归=就地替换）
 - ⛔ **展开恰好一层时，L3 预期取"这一层解压前就列过的那份清单"**（`ChainManifestResolver.Resolve`：`knownList` → **本层清单** → 才现问引擎）：递归那条路的调用方给"现问"传的是**空密码**，`-mhe` / `-hp` 的包**必然**问不出来 ⇒「完整性：无法确认」⇒ 链尾拒删 ⇒ 其余物留在用户目录里（见 §47）。用例 `ChainManifestResolverTests`(5) + `ChainManifestCompletenessTests.形状6_单层加密头包_…`（红检 2 红）〔其余物为什么不删〕
 - 落点模型 v2：判据出口三处——`OutputPlacement.ResolveDestinationDirectory`（落点）、`OneClickCoordinator.ShouldAddContinuationLevelLayer`（续解层）、`ResultFinalizer.Plan(..., suppressPackageFolderLayer:)`（定稿套层）；契约 `docs/输出与整理模型.md` §1.1/§3.1/§3.3.1〔落点模型 v2〕
