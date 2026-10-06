@@ -10280,12 +10280,23 @@ namespace ArchiveFixer.ViewModels
             bool moveSources,
             List<(string Level, string Message)> logEntries)
         {
-            if (piece == null || ReferenceEquals(piece, consumer))
+            if (piece == null)
             {
                 return;
             }
 
-            if (!piece.IsVolumeGroupFollower || piece.Outcome != TaskOutcome.Succeeded)
+            /*
+             * ⛔ **"自己解开的组"也要收自己那一片**（真机 CCCC 2026-10-07 00:15，排障行逮到）：
+             * 批末会有一单被借去当"解开这一组的单元"；如果**供给这一片的就是它自己**
+             * （排障行逐字：`Original=…\111(4)\111.z0删除3`、`Current=…\其余物\111.zip`、
+             * `组生产者账=111`、`账里是本单的键=空`），老写法在这里一句 `ReferenceEquals` 就返回了
+             * ⇒ 它的源片 `…\111(4)\111.z03` 一直留在盘上（用户连问三次的那一个）。
+             * ⇒ 分开处理：**"标跟班"那一套只对别的单做**（它自己是单元，结论是"这一组解压成功"）；
+             * **源片搬运照做**（这一组确实已经解开、那一片已被接手）。
+             */
+            bool selfConsumed = ReferenceEquals(piece, consumer);
+
+            if (!selfConsumed && (!piece.IsVolumeGroupFollower || piece.Outcome != TaskOutcome.Succeeded))
             {
                 string consumedNote = string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
