@@ -7809,8 +7809,52 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 这些"过路层"生产者的**其余物已经按档处理过了**（幂等：⛔ 不重复删、不重复写日志）。
         /// 见 <see cref="PurgePassThroughRestOfSettledProducer"/>（真机 CCCC 2026-10-06 的 48.35 MB）。
+        /// ⚠ **没删成的会被移除**、排进 <see cref="_pendingPassThroughRest"/> 等批末重试。
         /// </summary>
         private readonly HashSet<ArchiveTask> _passThroughRestHandled = new();
+
+        /// <summary>
+        /// "这一刻还删不成"的过路层其余物（生产者 + 接手它的那一单 + 组基名）——批末再试一次。
+        ///
+        /// <para><b>真机 2026-10-06 20:07 现场</b>：收场那一刻同组的 `111.z01` 还在成品树里
+        /// ⇒ 半套分卷那道闸门**拦得对**（删了就等于把这一组拆开）；等整组解完、那几片也搬走之后
+        /// 就没有任何障碍了，可旧写法只试一次 ⇒ `111\111\其余物\111.zip`（48.35 MB）永远留着。</para>
+        /// </summary>
+        private readonly List<(ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName)> _pendingPassThroughRest = new();
+
+        /// <summary>把"这次没删成"的那一单排进批末重试名单（⛔ 同一个生产者只排一次）。</summary>
+        private void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
+        {
+            foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _pendingPassThroughRest)
+            {
+                if (ReferenceEquals(item.Producer, producer))
+                {
+                    return;
+                }
+            }
+
+            _pendingPassThroughRest.Add((producer, consumer, groupBaseName));
+        }
+
+        /// <summary>
+        /// **批末重试**：所有链都跑完之后，再试一次"过路层其余物按档删"（唯一执行体不变 —— 仍转调
+        /// <see cref="PurgePassThroughRestOfSettledProducer"/>，六道门槛一条不绕过）。判据全在盘上：
+        /// 目录已经不在 ⇒ 从名单里划掉；还在 ⇒ 再试一次（还是不成 ⇒ 留在名单里，如实不动）。
+        /// </summary>
+        private void RetryPendingPassThroughRestPurges()
+        {
+            foreach ((ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName) item in _pendingPassThroughRest.ToList())
+            {
+                if (string.IsNullOrWhiteSpace(item.Producer.RestDirectoryPath)
+                    || !Directory.Exists(item.Producer.RestDirectoryPath))
+                {
+                    _pendingPassThroughRest.RemoveAll(pending => ReferenceEquals(pending.Producer, item.Producer));
+                    continue;
+                }
+
+                PurgePassThroughRestOfSettledProducer(item.Producer, item.Consumer, item.GroupBaseName);
+            }
+        }
 
         /// <summary>
         /// 已经在"批末补判"里跑过一遍的任务：⛔ 不许再记一次缺口（否则它会永远留在
@@ -10183,6 +10227,19 @@ namespace ArchiveFixer.ViewModels
              * 它只出过程物、那份过程物已被这一组那次**可证完整**的解压接手 ⇒ 它的其余物不再有用了。
              */
             PurgePassThroughRestOfSettledProducer(piece, consumer, groupBaseName);
+
+            /*
+             * ⛔ **这一趟没删成就解除"已处理"标记、排进批末重试**（真机 2026-10-06 20:07 实测）：
+             * 这一刻半套分卷那道闸门**拦得对** —— 同组的 `111.z01`（名字不同的一片）还在成品树里，
+             * 删掉装着**入口包**的其余物就等于把这一组拆开。可那一组随后就解完了
+             * （`彻底删除：111\其余物（7 项 / 1.07 GB）`），而旧写法把它钉在"已处理"上
+             * ⇒ `111\111\其余物\111.zip`（48.35 MB）从此没有任何人再看一眼。
+             */
+            if (!string.IsNullOrWhiteSpace(piece.RestDirectoryPath) && Directory.Exists(piece.RestDirectoryPath))
+            {
+                _passThroughRestHandled.Remove(piece);
+                RememberPendingPassThroughRest(piece, consumer, groupBaseName);
+            }
 
             if (!moveSources || !_producerSourcesCollected.Add(piece))
             {
@@ -14164,6 +14221,13 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 AppendBatchSummary(selectedTasks);
+
+                /*
+                 * ⛔ **批末重试"过路层其余物按档删"**（真机 2026-10-06 20:07 的 48.35 MB）：
+                 * 收场那一刻半套分卷闸门拦得对（同组的片还在成品树里），可那一组随后就解完了
+                 * ⇒ 到这里障碍已经消失；不补这一次，那份其余物就永远没人再看一眼。
+                 */
+                RetryPendingPassThroughRestPurges();
 
                 // 其余物处理的批末汇总（第 44 条：逐任务一行 + 这里一条，替掉以前几十行长文案）。
                 (int purgedTasks, long purgedBytes, bool purgedPermanently) = ReadBatchPurge();
