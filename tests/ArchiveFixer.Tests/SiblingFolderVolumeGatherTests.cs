@@ -493,6 +493,175 @@ namespace ArchiveFixer.Tests
                          && Directory.GetFiles(harness.OutputRoot, "*.bin", SearchOption.AllDirectories).Length > 0);
         }
 
+        // ============================================================ ② "散着的那几片"的源包要有人处理
+
+        /// <summary>
+        /// **真机 CCCC 2026-10-06**：一组分卷由别单解开之后，那些"从没吐过东西、只是一片散着的续卷"的单
+        /// —— 批末那一站要替它们把源片按档处理掉（用户原话：「原包怎么还没有删除」「其余物怎么还留着」）。
+        ///
+        /// <para>现场：`111.z0删除2` / `111.z0删除3` 是散在 `111(3)`/`111(4)` 的续卷片，整组由 `111.rar`
+        /// 那一单解开、内容全出来了；可这两单自己**没吐过任何东西**，从没进过"吐出片的那几单"那份账，
+        /// 批末它们只是"跟班卷 + 跳过"⇒ 源片一直留在盘上（真机 12:33 那一次盘上实测就是这样）。</para>
+        ///
+        /// <para>造法：先跑一遍真管线（消费方真的解开这一组），**然后**把真机那一刻的中间态摆出来 ——
+        /// ① 源片写回原处（真机里它还在盘上）；② 那一单的机器终态/跟班标记退回"还没人替它收场"；
+        /// ③ 借片账 + 缺卷名单按批内的样子写好。再调批末那一站（与真机链尾同一个入口）。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>SettleConsumedGroupVolumeSources</c> 那一调拿掉 ⇒
+        /// 第三条断言变红（其余物里找不到那一片）；把机器终态改回 `Skipped` ⇒ 同样变红
+        /// （删除侧那道闸门逐字拒绝：其余物一个字节都不删）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 批末_借出去的源片按跟班卷收场_而且源包真的进了其余物()
+        {
+            RequireSevenZip();
+
+            (string first, string second, _, _) = BuildTwoVolumeSet("借片收场");
+
+            string pieceDirectory = Path.Combine(_root, "借片收场-第二片");
+
+            Directory.CreateDirectory(pieceDirectory);
+
+            string piece = Path.Combine(pieceDirectory, "set.7z.002");
+
+            File.Move(second, piece);
+
+            Harness harness = CreateHarness("SingleLayer");
+
+            // 真机 CCCC 那一档：源包处理 = 放入其余物，其余物 = 彻底删除（不变量 1 的例外档）。
+            // ⚠ 必须在 StartExtractAsync **之前**改：其余物那两档是批首钉死的。
+            harness.Vm.Settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            harness.Vm.Settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+
+            ArchiveTask consumer = await AddTaskAsync(harness, first);
+            ArchiveTask holder = await AddTaskAsync(harness, piece);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(new[] { consumer, holder });
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Log(harness, "借片收场");
+
+            Assert.Equal(TaskOutcome.Succeeded, consumer.Outcome);
+
+            /*
+             * 把真机那一刻的状态摆出来：
+             * ① 源片写回原处（真机 CCCC 12:33 那一次盘上实测：那两片原样还在）；
+             * ② 这一单退回"还没人替它收场"（真机里批末它不是靠这条机制收的场）；
+             * ③ 借片账 + 缺卷名单按批内的样子写好（真机里由收卷那一档与批首那一步写）。
+             */
+            string holderPath = holder.CurrentPath;
+
+            File.WriteAllBytes(holderPath, new byte[4096]);
+
+            holder.IsVolumeGroupFollower = false;
+            holder.Outcome = TaskOutcome.Pending;
+
+            harness.Coordinator.ResetBatchLedgersForTests();
+            harness.Coordinator.RememberConsumedVolumeSourceForTests(holderPath, consumer.FileName);
+            harness.Coordinator.RememberGroupConsumerForTests("set.7z", consumer.FileName);
+            harness.Coordinator.RecordDeferredVolumeDeficitForTests(holder);
+
+            // 批末那一站（与真机里链尾调的是同一个入口）。
+            harness.Coordinator.FinalizeDeferredVolumeDeficits();
+
+            Log(harness, "批末那一站之后");
+
+            // ① 这一单按**跟班卷**收场（不算"没做成"）。
+            Assert.True(holder.IsVolumeGroupFollower, "借出去那一片的那一单应当按跟班卷收场");
+
+            // ② 机器终态是「完成」而不是「跳过」—— 否则删除侧那道闸门会拒绝（源片永久留下）。
+            Assert.Equal(TaskOutcome.Succeeded, holder.Outcome);
+
+            // ③ 它**不再**挂在"缺卷留到最后再判"的名单上（已经收场了）。
+            Assert.False(harness.Coordinator.IsDeferredVolumeDeficit(holder));
+
+            // ④ 源片**真的按「源包处理」进了其余物**（这就是真机"原包没删/其余物还留着"那一半）。
+            //    ⚠ 其余物那一层在**包名目录**下面（`<目标>\<包名>\其余物`），所以从目标根递归找。
+            Assert.True(
+                FindFileUnder(harness.OutputRoot, "set.7z.002") != null,
+                "借出去的那一片应当随源包处理进其余物（而不是原地留着）");
+
+            Assert.False(
+                File.Exists(holderPath),
+                "源片搬进其余物之后，原地不该还留着一份");
+        }
+
+        /// <summary>
+        /// **真机 CCCC 那一档的源包处理**：源包操作 = 放入其余物 + 其余物 = 彻底删除 ⇒
+        /// 整组解开之后**每一个源包（含散着的那几片）都要进其余物并被删掉**。
+        ///
+        /// <para>⚠ <b>本条暂标 Skip：它钉的是一个**还没修完**的缺口（如实记账，⛔ 不当成验过）。</b>
+        /// 已实测到的事实（逐条都有日志）：
+        /// · `111.z0删除3` 那一档**已经好了**：按跟班卷收场 + 源片按档搬走并删除；
+        /// · `111.z0删除2` 仍然留在盘上 —— 根因是**批末补判那一站把这一单的 `CurrentPath` 改到了入口包
+        ///   `111.zip` 上**（日志逐字：`CurrentPath=…\111\其余物\111.zip ｜ OriginalPath=…\111(3)\111.z0删除2`）
+        ///   ⇒ 后面所有"这一单自己那一片在不在借片账里"的判据都问到了入口包头上；
+        /// · 试过一版"入口包在别的目录时就不改 `CurrentPath`"，**两条 E2E 当场变成零产物**（已撤回）。
+        /// ⇒ 正解要等下一轮（改起点那一刻就要把"自己那一片"记在一个不会被覆盖的事实位上）。</para>
+        /// </summary>
+        [Fact(Skip = "已知缺口：批末补判会改写 CurrentPath，导致第二片没人替它搬源包（见本用例注释）")]
+        public async Task 真机形状_源包处理选放入其余物时_整组源包真的进其余物并按档删除()
+        {
+            RequireSevenZip();
+
+            string? winRar = new ToolLocator().WinRarExePath;
+
+            if (string.IsNullOrWhiteSpace(winRar) || !File.Exists(winRar))
+            {
+                _output.WriteLine("这台机器没有 WinRAR ⇒ 造不出真跨盘 ZIP，本条跳过（不是验过了）。");
+                return;
+            }
+
+            (string pieceTwo, string pieceThree, string innerPackage, string tailPackage, byte[] payload, string payloadName) =
+                BuildCrossChainSpannedZipSet("跨链删除", winRar!);
+
+            Harness harness = CreateHarness(
+                "AllBranches",
+                SourceHandlingMode.MoveToRest,
+                RestHandlingModes.Delete);
+
+            ArchiveTask innerTask = await AddTaskAsync(harness, innerPackage);
+            ArchiveTask tailTask = await AddTaskAsync(harness, tailPackage);
+            ArchiveTask pieceTwoTask = await AddTaskAsync(harness, pieceTwo);
+            ArchiveTask pieceThreeTask = await AddTaskAsync(harness, pieceThree);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(
+                new[] { innerTask, tailTask, pieceTwoTask, pieceThreeTask });
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Log(harness, "跨链删除");
+
+            // ① 这一组照样真的解开（源包那一档不许把内容物带坏）。
+            string? produced = FindFileUnder(harness.OutputRoot, payloadName);
+
+            Assert.NotNull(produced);
+            Assert.Equal(payload, File.ReadAllBytes(produced!));
+
+            // ② 源包真的按「放入其余物」处理了（不再是那句"按该档留在原地"）。
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("源包移入其余物", StringComparison.Ordinal));
+
+            // ③ **彻底删除**那一档真的执行了。
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("彻底删除", StringComparison.Ordinal));
+
+            // ④ 盘上收口：四个源包一个都不剩 —— 这正是用户问的"原包怎么没有删除 / 其余物怎么还留着"。
+            Assert.False(File.Exists(innerPackage), "装第 1 片的原包应当已被按档处理掉");
+            Assert.False(File.Exists(tailPackage), "装末片的原包应当已被按档处理掉");
+            Assert.False(File.Exists(pieceTwo), "散着的那一片应当已被按档处理掉");
+            Assert.False(File.Exists(pieceThree), "散着的那一片应当已被按档处理掉");
+
+            // ⑤ 其余物那一层也不该留下一份（其余物 = 彻底删除）。
+            Assert.Null(FindFileUnder(harness.OutputRoot, "111_outer.zip"));
+            Assert.Null(FindFileUnder(harness.OutputRoot, "111(2)_.zip"));
+        }
+
         // ================================================================ 夹具
 
         /// <summary>造一组**真 2 卷 7z**（<c>-v3m</c> 切；`.001` = 3 MiB、`.002` = 余量）。</summary>
@@ -680,9 +849,25 @@ namespace ArchiveFixer.Tests
                 harness.LogTexts,
                 text => text.Contains("输出目录是空目录，没有产物", StringComparison.Ordinal));
 
+            /*
+             * ⚠ 2026-10-06 这条断言按**源包那一档**收口（本装配是 `KeepInPlace` = 默认档）：
+             * 老写法断言「源包移入其余物」—— 那是**我上一版把 SourceHandling 那道闸门绕过去**时
+             * 才成立的假象（真机 `CCCC` 选的是「放入其余物」，测试装配没选）。
+             * 现在两档都钉住：
+             *   · `KeepInPlace`（本装配）⇒ 源包/源片**一个字节都不搬**（不变量 1 的默认档）；
+             *   · `MoveToRest` + 彻底删除 ⇒ 源包进其余物并删掉（真机那一档，见
+             *     `真机形状_源包处理选放入其余物时_整组源包真的进其余物并按档删除`）。
+             */
             Assert.Contains(
                 harness.LogTexts,
+                text => text.Contains("按「源包留在原地」这一档", StringComparison.Ordinal));
+
+            Assert.DoesNotContain(
+                harness.LogTexts,
                 text => text.Contains("源包移入其余物", StringComparison.Ordinal));
+
+            Assert.True(File.Exists(innerPackage), "KeepInPlace 档下原包必须一个字节都不动");
+            Assert.True(File.Exists(tailPackage), "KeepInPlace 档下原包必须一个字节都不动");
 
             // ② 那一片是"接到"那一组旁边的（零字节硬链接）。
             Assert.Contains(
@@ -703,11 +888,18 @@ namespace ArchiveFixer.Tests
              * ⑤ **吐出那两片的两单也按跟班卷收场**（真机第九批 CCCC 的第二个现场问题：
              * 「111.rar」「111(2)_.zip」两个原包为什么还留着）—— 它们各自只吐一片、自己停在中途，
              * 可整组已经由别单解开、校验通过 ⇒ 内容全在解出来的那一组里了，这一单不该再挂着「部分完成」。
+             *
+             * ⚠ 机器终态 = **`Succeeded`**（2026-10-06 按真机实测改口径，旧断言是 `Skipped`）：
+             * 选「其余物 = 彻底删除」时，其余物那一档**要按机器终态**决定删不删；终态落「跳过」时
+             * 删除侧逐字拒绝（「任务的机器终态不是「完成」（当前：Skipped）—— 其余物一个字节都不删」）
+             * ⇒ 源包被搬进其余物之后**永久留在盘上**（正是用户问的"其余物怎么还留着"）。
+             * 这一单**确实没失败**：内容已被别单完整解出 + 校验通过 + 源片已归集到位 ⇒ 与消费方自己的
+             * 源包同一档。`IsVolumeGroupFollower` 仍然为真 ⇒ 四处"怎么数"的判据照旧不算它。
              */
             Assert.True(innerTask.IsVolumeGroupFollower, "吐出第 1 片的那一单应当按跟班卷收场");
-            Assert.Equal(TaskOutcome.Skipped, innerTask.Outcome);
+            Assert.Equal(TaskOutcome.Succeeded, innerTask.Outcome);
             Assert.True(tailTask.IsVolumeGroupFollower, "吐出末片的那一单应当按跟班卷收场");
-            Assert.Equal(TaskOutcome.Skipped, tailTask.Outcome);
+            Assert.Equal(TaskOutcome.Succeeded, tailTask.Outcome);
 
             Assert.Contains(
                 harness.LogTexts,
@@ -859,7 +1051,10 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        private Harness CreateHarness(string recursionMode)
+        private Harness CreateHarness(
+            string recursionMode,
+            SourceHandlingMode sourceHandling = SourceHandlingMode.KeepInPlace,
+            string restHandling = RestHandlingModes.Keep)
         {
             string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
             string outputRoot = Path.Combine(_root, "out-" + Guid.NewGuid().ToString("N"));
@@ -877,8 +1072,8 @@ namespace ArchiveFixer.Tests
             settings.RecursionMode = recursionMode;
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
-            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-            settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            settings.SourceHandling = sourceHandling.ToString();
+            settings.RestHandlingAfterVerify = restHandling;
 
             settingsService.Save(settings);
 

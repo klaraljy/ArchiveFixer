@@ -9056,6 +9056,20 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 记**一条**"这一份源片借给了谁用"（与 <see cref="RememberGroupPiecesConsumedBy"/> 写的是同一份账）。
+        /// 单独一条是为了"补记"那一档：批末才发现某一单的路径没进账，而它的组确实由某个已成功的消费方解开。
+        /// </summary>
+        private void RememberOneConsumedVolumeSource(string? piecePath, string consumerName)
+        {
+            if (string.IsNullOrWhiteSpace(piecePath) || string.IsNullOrWhiteSpace(consumerName))
+            {
+                return;
+            }
+
+            _consumedVolumeSources[piecePath] = consumerName;
+        }
+
+        /// <summary>
         /// **批首只记缺口**（用户 2026-10-05 原话：「所以你开始就得突破所有的伪装和压缩，这种分卷找不到的
         /// 情况可以留在最后做」）：⛔ 不落 Failed、⛔ 不写"本次不开始"、⛔ 不跳过 —— 只记进名单。
         ///
@@ -9083,6 +9097,54 @@ namespace ArchiveFixer.ViewModels
                     StatusText.VolumeDeficitDeferredLogFormat,
                     task.FileName,
                     missingNames));
+        }
+
+        /// <summary>
+        /// 批量清账（单测用）。
+        ///
+        /// <para>为什么需要它：这几份账都是**批首清、批内攒**的，于是"批末那一站该不该给某几单收场"
+        /// 这件事在单测里造不出中间态 —— 除非能像批内那样先把账写好、再把消费方的终态摆成成功。
+        /// ⛔ 只做"写入既有那几份账"，⛔ 一点判据都不复制。</para>
+        /// </summary>
+        internal void ResetBatchLedgersForTests()
+        {
+            _volumeDeficitDeferred.Clear();
+            _volumeDeficitFinalPass.Clear();
+            _groupPieceProducers.Clear();
+            _groupConsumerByName.Clear();
+            _consumedVolumeSources.Clear();
+            _producerSourcesCollected.Clear();
+        }
+
+        /// <summary>单测用：把"这一片是借某个消费方用过的源片"记进既有那份账。</summary>
+        internal void RememberConsumedVolumeSourceForTests(string piecePath, string consumerName)
+        {
+            if (string.IsNullOrWhiteSpace(piecePath) || string.IsNullOrWhiteSpace(consumerName))
+            {
+                return;
+            }
+
+            _consumedVolumeSources[piecePath] = consumerName;
+        }
+
+        /// <summary>单测用：把"这一组谁在解"记进既有那份账。</summary>
+        internal void RememberGroupConsumerForTests(string baseName, string consumerName)
+        {
+            if (string.IsNullOrWhiteSpace(baseName) || string.IsNullOrWhiteSpace(consumerName))
+            {
+                return;
+            }
+
+            _groupConsumerByName[baseName] = consumerName;
+        }
+
+        /// <summary>单测用：把一单放进"缺卷留到最后再判"那份名单（写入点唯一 = <see cref="RecordDeferredVolumeDeficit"/>）。</summary>
+        internal void RecordDeferredVolumeDeficitForTests(ArchiveTask task)
+        {
+            if (task != null && !_volumeDeficitDeferred.Contains(task))
+            {
+                _volumeDeficitDeferred.Add(task);
+            }
         }
 
         /// <summary>缺卷清单那一句话（任务账上那份；空 ⇒ 如实说"名字上看不出"）。</summary>
@@ -9116,6 +9178,20 @@ namespace ArchiveFixer.ViewModels
              * 位置在名单判据之前 —— 与"缺卷留到最后再判"那份名单无关，幂等。
              */
             SettleSucceededGroupPieceProducers();
+
+            /*
+             * 再给"这一组的内容已经由本批另一单解出来了"的那几单收场（真机 CCCC 2026-10-06）。
+             *
+             * 现场（用户：「原包怎么还没有删除」「其余物怎么还留着」）：`111.z0删除2` / `111.z0删除3`
+             * 是散在 `111(3)`/`111(4)` 的**续卷片**，整组由 `111.rar` 那一单解开 ⇒ 它们按跟班卷收场、
+             * **源片却一直留在盘上** —— 因为上面那一档只认"吐出过片的那几单"（`_groupPieceProducers`），
+             * 而这两单自己没吐过任何东西，从没进过那份账。
+             *
+             * 判据只有两条**事实位**：① 这一单的路径在既有那份"借来用过的源片"账（`_consumedVolumeSources`）
+             * 里；② 那位消费方**真的成功了**（机器终态）。⛔ 与"如实报缺卷"那条路**同一个事实位**，
+             * ⛔ 不另造第二套判据；⛔ 搬运仍只有既有出口（六道闸门一条都不绕过）。
+             */
+            SettleConsumedGroupVolumeSources(logEntries: null);
 
             if (_volumeDeficitDeferred.Count == 0)
             {
@@ -9202,6 +9278,13 @@ namespace ArchiveFixer.ViewModels
                                 SafePathHelper.GetFullPathSafe(firstVolume),
                                 StringComparison.OrdinalIgnoreCase))
                         {
+                            /*
+                             * ⚠ 2026-10-06 试过一版"入口包在别的目录时不动 CurrentPath"，**已撤回**：
+                             * 真机形状那两条 E2E 当场变成"产物一个都没有"（`Assert.NotNull` 失败）——
+                             * 这一单正是靠改到入口包那一份才能把整组解开。⇒ 起点照旧改，
+                             * "批末给它收场 / 搬源片"那一档改用 `OriginalPath` 判它自己那一片
+                             * （见 `ResolveOwnPiecePath`），⛔ 不再动这里的起点口径。
+                             */
                             new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
                             task.CurrentPath = firstVolume;
                         }
@@ -9453,44 +9536,310 @@ namespace ArchiveFixer.ViewModels
 
             foreach (ArchiveTask producer in producers.ToList())
             {
-                if (producer == null || ReferenceEquals(producer, consumer))
+                SettleOneConsumedPieceTask(producer, consumer, groupBaseName, moveSources, logEntries);
+            }
+        }
+
+        /// <summary>
+        /// **一单"已经借给本批另一单用过的源片/片"的收场 + 搬运**（唯一实现，两处转调：
+        /// <see cref="SettleGroupPieceProducers"/> 遍历那份"吐出过片"的账，
+        /// <see cref="SettleConsumedGroupVolumeSources"/> 处理"从没吐过东西、只是一片散着的续卷"那几单）。
+        ///
+        /// <para><b>机器终态为什么是「完成」而不是「跳过」</b>（真机 CCCC 2026-10-06 实测逮到）：
+        /// 它的源片要随这一组进其余物、再按「删除操作」删掉，而删除侧那道闸门读的正是机器终态
+        /// —— 终态落「跳过」时实测逐字写着「任务的机器终态不是「完成」（当前：Skipped）—— 其余物一个字节都不删」
+        /// ⇒ 源片被搬进其余物之后**永久留在盘上**（用户问的"其余物怎么还留着"）。
+        /// 这一单**确实没有失败**：它的内容已经被本批另一单完整解出来、校验通过、源片也已经归集到位
+        /// —— 与消费方自己的源包同一档，所以终态落 <see cref="TaskOutcome.Succeeded"/>，
+        /// 同时保留 <see cref="ArchiveTask.IsVolumeGroupFollower"/>（四处"怎么数"的判据照旧不算它）。</para>
+        /// </summary>
+        private void SettleOneConsumedPieceTask(
+            ArchiveTask piece,
+            ArchiveTask consumer,
+            string groupBaseName,
+            bool moveSources,
+            List<(string Level, string Message)> logEntries)
+        {
+            if (piece == null || ReferenceEquals(piece, consumer))
+            {
+                return;
+            }
+
+            if (!piece.IsVolumeGroupFollower || piece.Outcome != TaskOutcome.Succeeded)
+            {
+                string consumedNote = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.VolumePieceProducerConsumedByOtherTaskFormat,
+                    piece.FileName,
+                    consumer.FileName,
+                    groupBaseName);
+
+                /*
+                 * 与既有那条跳过路**逐行同一套**（清校验 / 清落点 + 落终态 + 标跟班）：
+                 * `MarkSkipped` 只写 Status，机器终态必须显式落，四处消费点才算得对。
+                 */
+                piece.IsOutputVerified = false;
+                piece.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                piece.OutputPath = string.Empty;
+                piece.Outcome = TaskOutcome.Succeeded;
+                piece.IsVolumeGroupFollower = true;
+
+                // `MarkSkipped` 写的是"跳过"那句话；这里要的是"内容已由别单解出"的如实说法。
+                piece.MarkSkipped(consumedNote);
+
+                AppendLog("INFO", consumedNote);
+            }
+
+            if (!moveSources || !_producerSourcesCollected.Add(piece))
+            {
+                return;
+            }
+
+            /*
+             * ⛔ **源包那一档的闸门不许绕过**（与 `PostProcessSuccessAsync` 里那三支**逐字同一套**）：
+             * 「不动其余物」= 源包一个字节都不搬（不变量 1 的默认档）；「空间不足 + 不删原包」= 安全档，
+             * 同样什么都不做。少了这一道，`KeepInPlace` 下**用户的源片会被搬走** —— 真回归，
+             * 守门用例 `真机形状_一组跨盘ZIP的片分别压在两个包里_批末照样解开`
+             * 那句「用户的源片不许动」当场变红（实测逮到）。
+             */
+            SourceHandlingMode sourceHandling = _spaceTightThisBatch
+                ? SourceHandlingMode.MoveToRest
+                : (Settings.SourceHandling ?? string.Empty).Equals(
+                    nameof(SourceHandlingMode.MoveToRest),
+                    StringComparison.OrdinalIgnoreCase)
+                    ? SourceHandlingMode.MoveToRest
+                    : SourceHandlingMode.KeepInPlace;
+
+            if (_spaceTightThisBatch && _spaceTightKeepSourceThisBatch)
+            {
+                logEntries.Add((
+                    "INFO",
+                    $"{piece.FileName}：不删原包 —— 源片一个字节都不动（空间不足的安全档）。"));
+
+                return;
+            }
+
+            if (sourceHandling != SourceHandlingMode.MoveToRest)
+            {
+                logEntries.Add((
+                    "INFO",
+                    $"{piece.FileName}：按「源包留在原地」这一档，源片一个字节都不搬（留在原处，随时可手工处理）。"));
+
+                return;
+            }
+
+            ExecuteSourcePackageMove(
+                piece,
+                consumer.RestDirectoryPath,
+                SourceMoveTrigger.AfterChain,
+                logEntries);
+        }
+
+        /// <summary>
+        /// **"这一组的内容已经由本批另一单解出来了"的那几单：源包按跟班卷收场 + 按删除档处理**
+        /// （真机 CCCC 2026-10-06，用户原话「原包怎么还没有删除」「其余物怎么还留着」）。
+        ///
+        /// <para>与 <see cref="SettleGroupPieceProducers"/> 的分工：那一档管"**吐出过片**的那几单"
+        /// （它自己解到一半停了、源包留在盘上）；这一档管"**从没吐过东西、只是一片散着的续卷**"的那几单
+        /// —— 它们整组由别人解开，按跟班卷收场，可源片一直没人处理。</para>
+        ///
+        /// <para>判据只有两条事实位（<see cref="TryResolveConsumedByAnotherTask"/> 用的**同一对**）：
+        /// ① 这一单的路径在既有那份"借来用过的源片"账 <see cref="_consumedVolumeSources"/> 里；
+        /// ② 那位消费方**真的成功了**（机器终态）。⛔ 不碰消费方自己、⛔ 幂等、⛔ 搬运仍只有既有出口。</para>
+        /// </summary>
+        /// <param name="logEntries">非空 ⇒ 日志先攒起来交给调用方统一落（批内并发路径要回 UI 线程）；空 ⇒ 这里直接落。</param>
+        private void SettleConsumedGroupVolumeSources(List<(string Level, string Message)>? logEntries)
+        {
+            if (_consumedVolumeSources.Count == 0)
+            {
+                return;
+            }
+
+            var collected = logEntries == null ? new List<(string Level, string Message)>() : null;
+
+            foreach (ArchiveTask task in EnumerateCandidateTasksForConsumedSettle())
+            {
+                if (task == null)
                 {
                     continue;
                 }
 
-                if (!producer.IsVolumeGroupFollower || producer.Outcome != TaskOutcome.Skipped)
+                /*
+                 * 兜底必须比"借片账"宽一档：这一组**确实由某个已成功的消费方解开**时，就算这一单的路径
+                 * 没记进那份账，也照样收场 —— 判据仍是两个**事实位**（账上那一组谁在解 + 消费方成功）。
+                 *
+                 * 真机 CCCC 的 `111.z0删除2` 就是这样：同组的 `111.z0删除3` 走了账、被处理掉了，
+                 * 而它没进账（收卷那一刻它那一片还没被采纳）⇒ 源片一直留在盘上。
+                 */
+                bool consumedHit = TryResolveConsumedByAnotherTask(task, out string consumerName);
+                string owner = consumedHit ? consumerName : ResolveSuccessfulGroupConsumerName(task);
+
+                if (owner.Length == 0)
                 {
-                    string consumedNote = string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.VolumePieceProducerConsumedByOtherTaskFormat,
-                        producer.FileName,
-                        consumer.FileName,
-                        groupBaseName);
+                    (collected ?? logEntries!).Add((
+                        "INFO",
+                        $"{task.FileName}：这一组的源片先不动 —— 既有账里查不到「这一组由哪个已成功的单解开」"
+                        + "（判不出 ⇒ 什么都不做，源片原样留在原处）。"));
 
-                    /*
-                     * 与既有那条跳过路**逐行同一套**（清校验 / 清落点 + 落终态 + 标跟班）：
-                     * `MarkSkipped` 只写 Status，机器终态必须显式落 `Skipped`，四处消费点才算得对。
-                     */
-                    producer.IsOutputVerified = false;
-                    producer.OutputVerification = OutputVerificationOutcome.NotAttempted;
-                    producer.OutputPath = string.Empty;
-                    producer.Outcome = TaskOutcome.Skipped;
-                    producer.IsVolumeGroupFollower = true;
-                    producer.MarkSkipped(consumedNote);
-
-                    AppendLog("INFO", consumedNote);
+                    continue;
                 }
 
-                if (!moveSources || !_producerSourcesCollected.Add(producer))
+                if (!consumedHit)
+                {
+                    // 记账与收场一起补（唯一不变量：两边同时写，⛔ 不留下写了一半的账）。
+                    // 记的是**它自己那一片**的路径（`OriginalPath` 优先）—— 批末补判可能已经把
+                    // `CurrentPath` 改到入口包上了（真机实测），记错了下一步就会去搬入口包。
+                    RememberOneConsumedVolumeSource(ResolveOwnPiecePath(task), owner);
+                }
+
+                ArchiveTask? consumer = null;
+
+                foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+                {
+                    if (candidate != null && string.Equals(candidate.FileName, consumerName, StringComparison.Ordinal))
+                    {
+                        consumer = candidate;
+                        break;
+                    }
+                }
+
+                if (consumer == null || consumer.Outcome != TaskOutcome.Succeeded)
                 {
                     continue;
                 }
 
-                ExecuteSourcePackageMove(
-                    producer,
-                    consumer.RestDirectoryPath,
-                    SourceMoveTrigger.AfterChain,
-                    logEntries);
+                // 记账 + 收场 + 搬源包：唯一实现 SettleOneConsumedPieceTask（跟班 / 幂等都只有那一处写）。
+                SettleOneConsumedPieceTask(
+                    task,
+                    consumer,
+                    FileNameHelper.GetArchiveBaseName(consumer.CurrentPath ?? string.Empty),
+                    moveSources: true,
+                    collected ?? logEntries!);
+
+                if (task.IsVolumeGroupFollower)
+                {
+                    _volumeDeficitDeferred.Remove(task);
+                    _volumeDeficitFinalPass.Add(task);
+                }
+            }
+
+            if (collected != null)
+            {
+                foreach ((string level, string message) in collected)
+                {
+                    AppendLog(level, message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// **这一单自己那一片在盘上的路径**（优先 <c>OriginalPath</c>）。
+        ///
+        /// <p>⚠ 为什么不能直接用 <c>CurrentPath</c>：批末补判那一站会把补齐了的那一单的起点改到
+        /// **入口包**上（真机 CCCC 的 `111.z0删除2` 实测：`CurrentPath` 变成了
+        /// `…\111\其余物\111.zip`）—— 拿它去判"这一单的源片还在不在"会判到入口包头上。
+        /// `OriginalPath` 是**最初导入路径**（搬运成功后才跟着更新）。判不出 ⇒ 空串。</p>
+        /// </summary>
+        private static string ResolveOwnPiecePath(ArchiveTask task)
+        {
+            if (!string.IsNullOrWhiteSpace(task.OriginalPath))
+            {
+                return task.OriginalPath;
+            }
+
+            return task.CurrentPath ?? string.Empty;
+        }
+
+        /// <summary>
+        /// **这一单所在那一组的消费方是谁**（只读既有那份"谁在解"的账 `_groupConsumerByName`），
+        /// 而且那位消费方**真的成功了**（机器终态）。判不出 / 还没成功 ⇒ 空串 ⇒ 调用方什么都不做。
+        /// </summary>
+        private string ResolveSuccessfulGroupConsumerName(ArchiveTask task)
+        {
+            string baseName = FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty);
+
+            if (baseName.Length == 0
+                || !_groupConsumerByName.TryGetValue(baseName, out string? name)
+                || string.IsNullOrWhiteSpace(name)
+                || string.Equals(name, task.FileName, StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                if (candidate != null
+                    && string.Equals(candidate.FileName, name, StringComparison.Ordinal)
+                    && candidate.Outcome == TaskOutcome.Succeeded)
+                {
+                    return name;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// 这一趟该检查哪些单：**在册的延迟缺卷单** + **记账里那几单的生产者** + **全表**（三处并集，去重）。
+        ///
+        /// <para>为什么要有"全表"那一档：真机那一批里那两单在批末已经是「跟班卷 + 跳过」了
+        /// （`TryResolveConsumedByAnotherTask` 那条路给它们落的），既不在延迟名单里、也从没吐过片
+        /// —— 只有"全表"才扫得到它们。代价可控：真正的判据是"这一单的路径在不在这份借片账里"，
+        /// 绝大多数单第一条就 false；搬过的由 <c>_producerSourcesCollected</c> 挡住，不会搬第二遍。</para>
+        /// </summary>
+        private IEnumerable<ArchiveTask> EnumerateCandidateTasksForConsumedSettle()
+        {
+            var seen = new HashSet<ArchiveTask>();
+
+            foreach (ArchiveTask task in _volumeDeficitDeferred.ToList())
+            {
+                if (task != null && seen.Add(task))
+                {
+                    yield return task;
+                }
+            }
+
+            foreach (List<ArchiveTask> producers in _groupPieceProducers.Values)
+            {
+                foreach (ArchiveTask producer in producers.ToList())
+                {
+                    if (producer != null && seen.Add(producer))
+                    {
+                        yield return producer;
+                    }
+                }
+            }
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                if (task != null && seen.Add(task))
+                {
+                    yield return task;
+                }
+            }
+
+            /*
+             * 还有一档非扫不可：**名字出现在"借片账"里的那些路径**对应的单。
+             *
+             * 真机 CCCC 的 `111.z0删除2` 就是这样：它的路径在账上（借给消费方用过），可那一单既不在
+             * 延迟名单里（已经被别的分支收场过了）、也没吐过片 ⇒ 上面三处一处都覆盖不到它
+             * ⇒ 源片留在盘上（实测：同组的 `111.z0删除3` 被处理了，它没有）。
+             */
+            foreach (string piecePath in _consumedVolumeSources.Keys.ToList())
+            {
+                foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+                {
+                    if (task == null || seen.Contains(task))
+                    {
+                        continue;
+                    }
+
+                    if (EnumerateTaskPaths(task).Any(path => SafePathHelper.PathEquals(path, piecePath)))
+                    {
+                        seen.Add(task);
+                        yield return task;
+                    }
+                }
             }
         }
 
@@ -9609,7 +9958,16 @@ namespace ArchiveFixer.ViewModels
             return false;
         }
 
-        /// <summary>这一单自己的全部路径（<c>CurrentPath</c> + 账上那几卷；去重）。</summary>
+        /// <summary>
+        /// 这一单自己的全部路径（<c>CurrentPath</c> + 账上那几卷 + <c>OriginalPath</c>；去重）。
+        ///
+        /// <p>⚠ <b>`OriginalPath` 这一档是 2026-10-06 真机 CCCC 实测补上的</b>：批末补判那一站会把
+        /// 补齐了的这一单的 <c>CurrentPath</c> 改到**入口包**（跨盘 ZIP 的末片 `111.zip`）上 ——
+        /// 于是"这一单的源片在不在借片账里"这个问题，拿 <c>CurrentPath</c> 去问必然问不出来
+        /// （那条路径是入口包、不是它自己那一片），源片就留在盘上了。
+        /// `OriginalPath` 是**最初导入路径**，搬到其余物之前一直指向它自己那一片
+        /// （搬运成功后会跟着更新，见 <c>ExecuteSourcePackageMove</c>）。</p>
+        /// </summary>
         private static IEnumerable<string> EnumerateTaskPaths(ArchiveTask task)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -9625,6 +9983,11 @@ namespace ArchiveFixer.ViewModels
                 {
                     yield return path;
                 }
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.OriginalPath) && seen.Add(task.OriginalPath))
+            {
+                yield return task.OriginalPath;
             }
         }
 
