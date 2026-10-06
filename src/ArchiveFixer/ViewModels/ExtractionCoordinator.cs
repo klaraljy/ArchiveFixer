@@ -2964,16 +2964,73 @@ namespace ArchiveFixer.ViewModels
                  * 过程物那几份一直留着。
                  */
                 await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
+
+                /*
+                 * ===== 再补**这一条链自己那些"过路层"的其余物**（用户 2026-10-06 拍板）=====
+                 *
+                 * ⛔ **试过一版"批末对全表每一单再扫一遍"，已撤回**（如实记账）：它当场把三条既有红线的
+                 * 守门用例打红 —— `ChainRestHandlingSettingTests.用例1`、
+                 * `ChainSpaceReclaimTests.空间不足模式…不回滚`、`ChainManifestCompletenessTests.形状3对照`
+                 * （"链中途失败 ⇒ 源包与其余物一个字节都不动"）。⇒ **不能靠"对全表补一遍"来做**。
+                 *
+                 * 真机现场：`111.rar` 这一单只出过程物（它解出来的 `111.zip` 就是下一层的输入）
+                 * ⇒ 它的其余物在**它自己那条链的落点那一层**（`111\111\其余物`），而上面那一调只处理
+                 * `rootTask` 自己的其余物 ⇒ `111\111\其余物\111.zip`（48.35 MB）一直留到用户看见
+                 * （他原话：「其余物会在每层的过程中会删掉，我无法理解为什么还会有其余物留着」）。
+                 *
+                 * ⇒ 这里只补**落在这个根任务那棵树里、且自己成功**的那几单；判据与执行体仍是既有出口。
+                 */
+                await SweepPassThroughRestDirectoriesAsync(rootTask, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// 把**这一个根任务那条链里"过路层"的其余物**按档处理掉（含 `111\111\其余物` 这种中间层）。
+        ///
+        /// <para>只处理"落在根任务那棵树里、且自己成功"的那几单 —— 这是与"对全表扫一遍"的关键差别：
+        /// 后者会碰到别的链、也会碰到链中途失败要留现场的那几单（实测把三条红线用例打红）。</para>
+        /// </summary>
+        private async Task SweepPassThroughRestDirectoriesAsync(ArchiveTask rootTask, CancellationToken cancellationToken)
+        {
+            string? rootDirectory = Path.GetDirectoryName(rootTask.OutputPath);
+
+            if (string.IsNullOrWhiteSpace(rootDirectory))
+            {
+                string contentRoot = rootTask.ContentDirectoryPath;
+
+                rootDirectory = string.IsNullOrWhiteSpace(contentRoot)
+                    ? null
+                    : Path.GetDirectoryName(contentRoot);
             }
 
-            /*
-             * ⛔ **2026-10-06 试过一版"批末对全表每一单再扫一遍其余物"，已撤回**（如实记账）：
-             * 它当场把三条既有红线的守门用例打红 —— `ChainRestHandlingSettingTests.用例1`、
-             * `ChainSpaceReclaimTests.空间不足模式…不回滚`、`ChainManifestCompletenessTests.形状3对照`
-             * （"链中途失败 ⇒ 源包与其余物一个字节都不动"）。⇒ **这一档不能靠"对全表补一遍"来做**，
-             * 得在"那一单自己收尾时"就把**它自己那条链的其余物**按档处理掉（下一轮按这个方向做）。
-             * ⚠ 真机那个现场（`111\111\其余物\111.zip` 留着）**仍然没修好**，⛔ 不许当成已解决。
-             */
+            if (string.IsNullOrWhiteSpace(rootDirectory) || !Directory.Exists(rootDirectory))
+            {
+                return;
+            }
+
+            foreach (ArchiveTask restOwner in SnapshotTaskTable(Tasks))
+            {
+                if (restOwner == null
+                    || ReferenceEquals(restOwner, rootTask)
+                    || string.IsNullOrWhiteSpace(restOwner.RestDirectoryPath))
+                {
+                    continue;
+                }
+
+                if (restOwner.Outcome != TaskOutcome.Succeeded
+                    || restOwner.OutputVerification == OutputVerificationOutcome.Failed)
+                {
+                    continue;
+                }
+
+                // ⛔ 只碰**这个根任务那棵树里**的其余物（别的链、别的包一律不动）。
+                if (!ArchivePathGuard.IsInsideRoot(restOwner.RestDirectoryPath, rootDirectory, out _))
+                {
+                    continue;
+                }
+
+                await ApplyRestHandlingAfterChainAsync(restOwner, null, cancellationToken);
+            }
         }
 
         /// <summary>
