@@ -10653,11 +10653,42 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            foreach (string path in EnumerateTaskPaths(task).Prepend(FindOwnPieceOnDisk(task)))
+            /*
+             * ===== 判据 = **这一单自己那一片**有没有进过那份"借片账" =====
+             *
+             * ⛔ 比的是**同一份文件**，⛔ 不是路径字符串（真机 CCCC 2026-10-06 20:55，用户原话：
+             * 「为什么文件真正的名字不看」）：接片那一档在"这一组该在的那一层"另起了一个**零字节硬链接**
+             * （`…\111\111\111.z03`），而用户那一份还在他自己那个目录里（`…\111(4)\111.z03`）
+             * —— 两条路径指着**同一份字节**。账里记的可能只是其中一条 ⇒ 按路径比永远对不上
+             * ⇒ 那一单落到「判不出 ⇒ 什么都不做」，源片一直留着。
+             */
+            var ownPaths = new List<string>(EnumerateTaskPaths(task));
+            string ownOnDisk = FindOwnPieceOnDisk(task);
+
+            if (ownOnDisk.Length > 0)
             {
-                if (string.IsNullOrWhiteSpace(path)
-                    || !_consumedVolumeSources.TryGetValue(path, out string? consumer)
-                    || string.IsNullOrWhiteSpace(consumer))
+                ownPaths.Add(ownOnDisk);
+            }
+
+            foreach ((string piecePath, string ownerName) in _consumedVolumeSources.ToList())
+            {
+                bool mine = false;
+
+                foreach (string path in ownPaths)
+                {
+                    if (string.IsNullOrWhiteSpace(path))
+                    {
+                        continue;
+                    }
+
+                    if (SafePathHelper.PathEquals(path, piecePath) || FileIdentity.IsSamePhysicalFile(path, piecePath))
+                    {
+                        mine = true;
+                        break;
+                    }
+                }
+
+                if (!mine || string.IsNullOrWhiteSpace(ownerName))
                 {
                     continue;
                 }
@@ -10666,16 +10697,14 @@ namespace ArchiveFixer.ViewModels
 
                 foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
                 {
-                    if (candidate == null || !string.Equals(candidate.FileName, consumer, StringComparison.Ordinal))
+                    if (candidate == null || !string.Equals(candidate.FileName, ownerName, StringComparison.Ordinal))
                     {
                         continue;
                     }
 
                     /*
                      * ⛔ **借片的那一单不是消费方**（真机 CCCC 2026-10-06 实测）：批末补判会把补齐了那一单的
-                     * `CurrentPath` 改到入口包上 ⇒ 它与真正的消费方**撞名**（两个都叫 `111.zip`）
-                     * ⇒ 按名字回查必须先认出"这是借片的那一单"（判据 = 它自己那一片也在账里）。
-                     * ⛔ 只多这一条，别的一字不改。
+                     * `CurrentPath` 改到入口包上 ⇒ 它与真正的消费方**撞名**（两个都叫 `111.zip`）。
                      */
                     if (IsBorrowedPieceTask(candidate))
                     {
@@ -10691,7 +10720,7 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                consumerName = consumer;
+                consumerName = ownerName;
                 return true;
             }
 
