@@ -10363,13 +10363,17 @@ namespace ArchiveFixer.ViewModels
              * 守门用例 `真机形状_一组跨盘ZIP的片分别压在两个包里_批末照样解开`
              * 那句「用户的源片不许动」当场变红（实测逮到）。
              */
+            /*
+             * ⛔ **源包那一档必须读"本批的选择"，⛔ 不是⑥页那份常驻设置**（真机 2026-10-07 07:49 逮到）：
+             * 一键处理的「本次选项」放在 `RunOptions` 里（同一表达式在别处用了两处：`:1235` / `:2881`），
+             * 而这一档原来直接读 `Settings.SourceHandling` ⇒ 用户在本次选项里选了「放入其余物」，
+             * 收场这条路却按默认档「留在原地」判 ⇒ 源片一个字节都不搬
+             * （同一批里 `111.zip` 那一单却搬了 4 个 —— 它走的是读 `RunOptions` 的那条路）。
+             * 这就是"一处改动要落到每一条路径上"那条规矩的反面现场。
+             */
             SourceHandlingMode sourceHandling = _spaceTightThisBatch
                 ? SourceHandlingMode.MoveToRest
-                : (Settings?.SourceHandling ?? string.Empty).Equals(
-                    nameof(SourceHandlingMode.MoveToRest),
-                    StringComparison.OrdinalIgnoreCase)
-                    ? SourceHandlingMode.MoveToRest
-                    : SourceHandlingMode.KeepInPlace;
+                : RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
 
             if (_spaceTightThisBatch && _spaceTightKeepSourceThisBatch)
             {
