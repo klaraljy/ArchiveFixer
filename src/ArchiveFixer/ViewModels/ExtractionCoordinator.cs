@@ -8491,6 +8491,33 @@ namespace ArchiveFixer.ViewModels
             {
                 TaskPathSync.ApplySingleMove(task, from, to);
             }
+
+            /*
+             * ⚠ **账上的键也要跟着搬**（2026-10-06 实测：这是"第三处读旧名"的候选之一）：
+             * `_consumedVolumeSources` 的**键就是那一份源片的路径**（`RememberOneConsumedVolumeSource`
+             * 与 `RememberGroupPiecesConsumedBy` 两处写入）。源片就地改名之后键还指着旧名字 ⇒
+             * 批末重判再问"这一单那一片在不在借片账里"必然问不出来 ⇒ 整组凑不齐、产物出不来
+             * （真机形状 E2E 的 `Assert.NotNull()` 就是这样红的）。
+             * ⇒ 这里把键一起重映射（值 = 消费方名字，不动）。
+             */
+            if (_consumedVolumeSources.Count > 0)
+            {
+                string? consumer = null;
+
+                foreach ((string path, string owner) in _consumedVolumeSources.ToList())
+                {
+                    if (SafePathHelper.PathEquals(path, from))
+                    {
+                        consumer = owner;
+                        _consumedVolumeSources.Remove(path);
+                    }
+                }
+
+                if (consumer != null)
+                {
+                    _consumedVolumeSources[to] = consumer;
+                }
+            }
         }
 
         /// <summary>收**一片**：按规范卷名接到"这一组还缺卷"那一单的目录里；末片在手时顺手把整组接齐。</summary>
@@ -8559,16 +8586,15 @@ namespace ArchiveFixer.ViewModels
                 bool fromProcessFolder = ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath);
 
                 /*
-                 * ===== 用户源目录里的那一片：⛔ **仍然只硬链接**（两次试做都撞在同一处，如实记账）=====
+                 * ===== 用户源目录里的那一片：⛔ **仍然只硬链接**（三次试做都撞在同一处，如实记账）=====
                  *
                  * 用户 2026-10-06 拍板：「**去掉暗链当出口**，解压用盘上标准名的文件，临时名只许建在工作区」。
-                 * **两次试做都失败、都已撤回**：
-                 * ① 只同步 `owner` 那一单 ⇒ 真机形状 E2E 变红；
-                 * ② 改成**对全表每一单同步**（`SyncEveryTaskPathAfterMove`）⇒ **同样两条 E2E 照样红**
-                 *   （`Assert.NotNull() Failure: Value is null`）。
-                 * ⇒ 说明"就地改名"这一档还有**第三处在读旧名字**（不在任务账上）—— 收片这一刻
-                 * 组卷/找卷那条路（`VolumeNameRepair.ResolveSpannedZipDiskGather` 与批末重判）
-                 * 仍按改名前的名字在盘上找。⛔ **没找到那第三处之前不许再改这一行**（改一次红一次）。
+                 * **三次试做都失败、都已撤回**：
+                 * ① 只同步 `owner` 那一单 ⇒ 真机形状 E2E 红；
+                 * ② 改成**对全表每一单同步** ⇒ 同样两条 E2E 红；
+                 * ③ 再把**借片账的键一起重映射**（`_consumedVolumeSources` 的键就是那一份的路径）⇒ **还是红**。
+                 * ⇒ 已排除"账上路径 / 借片账键"这两处；**剩下的第三处不在这些账上**（从形状看是收片那一刻
+                 * 盘上按名字找片的那条路）。⛔ **没找到它之前不许再改这一行**（改一次红一次，三次都白改）。
                  *
                  * 现在照旧：过程物那一档用**移动**（同盘改名、零字节），用户源目录那一档只**硬链接**
                  * （⛔ 名字一个字符都不改、文件不搬）—— 与改动前逐字相同、全部回归绿。
