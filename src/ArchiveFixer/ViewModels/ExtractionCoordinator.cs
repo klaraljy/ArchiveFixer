@@ -16758,8 +16758,25 @@ namespace ArchiveFixer.ViewModels
              */
             if (!string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase))
             {
-                RecursionResult? recursion = await RunRecursiveAsync(
-                    task, engineArchivePath, engineOutputPath, oneClickRun, cancellationToken);
+                AppendLog("WARN", $"[收卷排障] {task.FileName}：进入递归分支（模式 {Settings.RecursionMode}）。");
+
+                RecursionResult? recursion;
+
+                try
+                {
+                    recursion = await RunRecursiveAsync(
+                        task, engineArchivePath, engineOutputPath, oneClickRun, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("WARN", $"[收卷排障] {task.FileName}：递归调用抛异常 —— {ex.GetType().Name}：{ex.Message}");
+                    throw;
+                }
+
+                AppendLog(
+                    "WARN",
+                    $"[收卷排障] {task.FileName}：递归返回 —— {(recursion == null ? "null" : $"停因={recursion.StopReason}、层={recursion.Layers.Count}、片={recursion.UnresolvedVolumePieces.Count}")}"
+                    + $"；此刻状态={task.Status}、终态={task.Outcome}。");
 
                 // 这一趟有没有**可发布的产物**（用户 2026-10-06：「上一步得到的产物下一步就有可能成为
                 // 所需要解压的文件」）—— ⛔ 发布与否只由产物事实回答，⛔ 不再由终态标签兼任开关：
@@ -16789,7 +16806,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "WARN",
-                        $"[收卷排障] {task.FileName}：递归结果里没有任何打不开的片"
+                        $"[收卷排障] {task.FileName}：递归结果里的分卷片名单是空的"
                         + $"（UnresolvedVolumePieces = {(recursion == null ? "结果为空" : recursion.UnresolvedVolumePieces.Count.ToString())}）"
                         + $"；停因 = {recursion?.StopReason.ToString() ?? "（无）"}；层数 = {recursion?.Layers.Count ?? 0}。");
                 }
