@@ -8500,7 +8500,7 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 这里不自己拼族规则、⛔ 不看盘上还有没有别的兄弟（那件事属于收卷，见 <c>ResolveSpannedZipDiskGather</c>）。
         /// 找不到 ⇒ 空串 = 什么都不做。</para>
         /// </summary>
-        private string ResolveBatchGroupDirectory(string baseName)
+        private string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null)
         {
             string tailName = baseName + ".zip";
             var members = new List<string>();
@@ -8524,18 +8524,46 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 入口包还不在**任务表**那几层里 ⇒ 问**产出它的那一单**：它自己那条链的落点目录
-             * （`111.rar` ⇒ `111\111\`）。真机 CCCC 的第一步修好之后就是这一档：
-             * `111.zip` 由 `111.rar` 那一单解出来、并由 `PublishUnresolvedVolumePieces` 落在
-             * `CCCC\111\111\`，而"这一组还缺卷"那两单是散在 `111(3)`/`111(4)` 的源片 ——
-             * ⛔ 收片层必须是入口所在那一层（用户 2026-10-06：「你把分卷移过来不就是了吗」），
-             * 不能退回"任务表里第一单那一层"（那正是把 `111.zip` 搬去 `111(4)` 的旧机制）。
+             * 入口包**不在任务表那几层里**：它由 `PublishUnresolvedVolumePieces` 落在
+             * **产出它的那一单**自己那条链的落点目录里（真机 CCCC：`111.zip` 由 `111.rar` 解出来、
+             * 落在 `CCCC\111\111\`，而"还缺卷"那两单是散在 `111(3)`/`111(4)` 的源片）。
+             * ⇒ 到那一层再找一遍入口（用户 2026-10-06：「111.zip 的位置已经确定，你把分卷移过来不就是了吗」）。
              */
-            string fromProducer = ResolveGroupProducerDirectory(baseName);
+            string producerDirectory = ResolveGroupProducerDirectory(baseName);
 
-            if (fromProducer.Length > 0)
+            if (producerDirectory.Length > 0)
             {
-                return fromProducer;
+                var nearby = new List<string>(members);
+
+                // 这一单账上那几卷也要喂进去：`GroupVolumeDirectory.Resolve` 要看到"入口 + 至少一个组内成员"。
+                if (task != null)
+                {
+                    foreach (string volumePath in task.VolumePaths)
+                    {
+                        nearby.Add(volumePath);
+                    }
+                }
+
+                foreach (string candidate in CollectVolumeFilesInDirectory(producerDirectory))
+                {
+                    if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(candidate), tailName))
+                    {
+                        nearby.Add(candidate);
+                    }
+                }
+
+                Detection.GroupVolumeDirectory.Entry fromProducer =
+                    Detection.GroupVolumeDirectory.Resolve(nearby);
+
+                if (fromProducer.Directory.Length > 0 && Directory.Exists(fromProducer.Directory))
+                {
+                    return fromProducer.Directory;
+                }
+
+                if (Directory.Exists(producerDirectory))
+                {
+                    return producerDirectory;
+                }
             }
 
             // 连产出方都问不出来（批首那一刻 / 这一组谁都没吐过片）⇒ 退回旧口径（任务表里第一单那一层）——
@@ -8551,6 +8579,95 @@ namespace ArchiveFixer.ViewModels
             }
 
             return string.Empty;
+        }
+
+        /// <summary>
+        /// **把这一单手上那几片按规范卷名接到入口包那一层**（用户 2026-10-06：「你把分卷移过来不就是了吗」）。
+        ///
+        /// <para>⛔ 判据与执行体都不在这里：整件事转调 <see cref="TryAdoptUnresolvedVolumePiece"/>
+        /// （它自己会判"同一组吗 / 目标名占没占 / 同不同盘"，也只硬链接，⛔ 用户源文件一个字节不动）。
+        /// 这一档只是把"手上那几片"再喂一遍 —— 因为批末那一刻"入口包那一层"才刚确定下来。</para>
+        ///
+        /// <para>⛔ 一个都收不动 / 判不出来 ⇒ 什么都不做（调用方照旧读盘上事实下结论）。</para>
+        /// </summary>
+        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
+            {
+                return;
+            }
+
+            foreach (string path in task.VolumePaths.ToList())
+            {
+                try
+                {
+                    TryAdoptUnresolvedVolumePiece(path, task);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
+                }
+            }
+        }
+
+        /// <summary>
+        /// **整组已经在入口那一层凑齐了吗**（只看那一层，⛔ 不看这一单自己那一层）。
+        ///
+        /// <para>用户 2026-10-06：「111.zip 的位置已经确定，你把分卷移过来不就是了吗」——
+        /// 收片那一档按规范卷名把片接进入口那一层之后，那一层里就是**一个目录里的一整组**；
+        /// 而这一单自己那一层永远只有它自己一片。⇒ 判据只在入口那一层问，返回的组直接可以拿去开解。</para>
+        ///
+        /// <para>⛔ 判据本体一个字没改：仍然由 <see cref="VolumeGroupDetector.Group"/> 的
+        /// "完整 / 卷号连续 / 除末片外等大"回答；⛔ 这一层里没有入口包 / 不完整 ⇒ 返回 null，
+        /// 由调用方退回既有口径。</para>
+        /// </summary>
+        private static VolumeGroup? ResolveGatheredGroupFromEntryLayer(ArchiveTask task, string? entryLayer)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
+            {
+                return null;
+            }
+
+            try
+            {
+                string tailName = FileNameHelper.GetArchiveBaseName(task.CurrentPath) + ".zip";
+                var candidates = new List<VolumeCandidate>();
+
+                foreach (string path in CollectVolumeFilesInDirectory(entryLayer))
+                {
+                    if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                    {
+                        long size = -1;
+
+                        try
+                        {
+                            size = new FileInfo(path).Length;
+                        }
+                        catch
+                        {
+                            // 量不出大小不影响归组。
+                        }
+
+                        candidates.Add(new VolumeCandidate { Path = path, Size = size });
+                    }
+                }
+
+                foreach (VolumeGroup group in VolumeGroupDetector.Group(candidates))
+                {
+                    if (group.IsComplete
+                        && !string.IsNullOrWhiteSpace(group.FirstVolumePath)
+                        && File.Exists(group.FirstVolumePath))
+                    {
+                        return group;
+                    }
+                }
+            }
+            catch
+            {
+                // 判不出 ⇒ 什么都不做（调用方退回既有口径）。
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -8702,12 +8819,38 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                // ② 现归一次组（盘上事实）。
-                VolumeGroup? group = ResolveCompleteGroupFromDisk(task);
+                /*
+                 * ② 现归一次组（盘上事实）—— **先把散着的片收到入口包那一层，再看齐不齐**
+                 * （用户 2026-10-06：「111.zip 的位置已经确定，你把分卷移过来不就是了吗」）。
+                 *
+                 * 为什么必须先收：`VolumeGroupDetector.Group` 的桶键是**目录 + 基名 + 族** ⇒
+                 * 片散在 `111(3)\`、入口在 `111\111\` 时，两边会各自成一个"不完整桶"，
+                 * 直接问它必然回"仍然缺卷"（一句会把人指错的结论）。
+                 * ⛔ 判据一个字没放宽：收完仍然只由它回答"齐不齐"。
+                 */
+                string entryLayer = ResolveBatchGroupDirectory(
+                    FileNameHelper.GetArchiveBaseName(task.CurrentPath),
+                    task);
+
+                if (entryLayer.Length > 0)
+                {
+                    TryGatherGroupPiecesInto(task, entryLayer);
+                }
+
+                VolumeGroup? group = ResolveGatheredGroupFromEntryLayer(task, entryLayer)
+                    ?? ResolveCompleteGroupFromDisk(task, entryLayer);
 
                 if (group != null)
                 {
                     string firstVolume = group.FirstVolumePath;
+
+                    /*
+                     * 收齐之后**当场把这一组的状态写回任务**（`ApplyGroupInfo`：卷清单 / 缺卷名单 /
+                     * 「共 N 卷」那一句）。⛔ 不能省：下一步 `ResolveCompleteGroupFromDisk` 的
+                     * "账上点过名的缺卷必须真的出现"读的就是这份**名单** —— 盘上明明已经收齐、
+                     * 名单却还是批首那一份（`111.zip`、`111.z01`…），就会把"已经齐了"判成"仍然缺"。
+                     */
+                    new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
 
                     /*
                      * 补齐了 ⇒ 收拢 + 正常跑这一组（起点改到第 1 卷、快照重拍）。
@@ -9119,7 +9262,15 @@ namespace ArchiveFixer.ViewModels
         /// 找卷窗口，交给既有出口 <see cref="RebuildVolumeGroup"/> 归组；补齐且第 1 卷真的在盘上 ⇒ 返回那一组。
         /// 判不出（归不出组 / 仍然不完整 / 第 1 卷不在）⇒ null（⛔ 什么都不做）。
         /// </summary>
-        private static VolumeGroup? ResolveCompleteGroupFromDisk(ArchiveTask task)
+        /// <param name="preferDirectory">
+        /// 另外再看一层（用户 2026-10-06：「你把分卷移过来不就是了吗」）：这一组**入口包所在的那一层**
+        /// （<c>ResolveBatchGroupDirectory</c> 的回答）。收片那一档已经把散着的片按规范卷名接到那一层了，
+        /// 而这一单自己那一层（散着一片的那一层）永远凑不齐 —— 只看自己那一层就会得出
+        /// "仍然缺卷"这种**会把人指错**的结论。判据本身一个字没放宽：补齐与否仍然只由
+        /// <see cref="VolumeGroupDetector.Group"/> 的"完整 / 卷号连续 / 除末片外等大"回答，
+        /// ⛔ 这里只是**把候选池看宽一层**（多喂一个目录）。
+        /// </param>
+        private static VolumeGroup? ResolveCompleteGroupFromDisk(ArchiveTask task, string? preferDirectory = null)
         {
             try
             {
@@ -9129,6 +9280,11 @@ namespace ArchiveFixer.ViewModels
                 if (!string.IsNullOrWhiteSpace(directory))
                 {
                     extra.AddRange(CollectVolumeFilesInDirectory(directory));
+                }
+
+                if (!string.IsNullOrWhiteSpace(preferDirectory) && Directory.Exists(preferDirectory))
+                {
+                    extra.AddRange(CollectVolumeFilesInDirectory(preferDirectory));
                 }
 
                 foreach (VolumeCandidate candidate in VolumeNameRepair.EnumerateVolumeCandidatesNearby(task.CurrentPath))
