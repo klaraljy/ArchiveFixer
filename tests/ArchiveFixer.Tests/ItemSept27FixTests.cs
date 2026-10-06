@@ -283,7 +283,15 @@ namespace ArchiveFixer.Tests
             Assert.True(name > 0 && size > name, "「大小」列必须在「文件名」后面（用户点名要的位置）");
             Assert.True(extension > size, "「大小」必须紧跟在「文件名」后面，别被别的列插进来");
 
-            Assert.Contains("SourceSizeText", taskTab, StringComparison.Ordinal);
+            /*
+             * ⚠ 2026-10-06：列绑定从 `SourceSizeText` 改成 `DisplaySizeText`（同一个出口的显示层）——
+             * 那一行**显示的是"用户自己那个文件"**：批末补判会把起点改写到"别的包解出来的入口包"上
+             * （真机 CCCC：`…\111(4)\111.z03` → `…\111\111\111.zip`，48.35 MB），老绑定会让这一行
+             * 整行变成那一份过程物（用户原话「48MB 在列表里面显示到了 111(4)」）。
+             * `DisplaySizeText` / `DisplayFileName` 没设过时**与 <see cref="ArchiveTask.SourceSizeText"/> /
+             * `FileName` 逐字相同**（绝大多数任务都是这一档），所以"大小列 + 勾选合计"的口径一个字没改。
+             */
+            Assert.Contains("DisplaySizeText", taskTab, StringComparison.Ordinal);
             Assert.Contains("SelectedTasksSummary", taskTab, StringComparison.Ordinal);
         }
 
