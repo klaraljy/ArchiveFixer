@@ -8797,6 +8797,14 @@ namespace ArchiveFixer.ViewModels
             }
 
             string tailName = FileNameHelper.GetArchiveBaseName(task.CurrentPath) + ".zip";
+            string chainHome = ResolveOwnerChainDirectory(task);
+
+            /* 排障用（⛔ 不是给人看的常态日志）：扫了哪两棵树、各几个文件、这一单的链家在哪。 */
+            AppendLog(
+                "INFO",
+                $"[收卷排障] {task.FileName}：链家 = {(chainHome.Length > 0 ? Path.GetFileName(chainHome) : "（判不出）")}"
+                + $"；成品层 = {(string.IsNullOrWhiteSpace(task.ContentDirectoryPath) ? "（空）" : Path.GetFileName(task.ContentDirectoryPath))}"
+                + $"；其余物层 = {(string.IsNullOrWhiteSpace(task.RestDirectoryPath) ? "（空）" : Path.GetFileName(task.RestDirectoryPath))}");
 
             foreach (string directory in new[] { task.ContentDirectoryPath, task.RestDirectoryPath })
             {
