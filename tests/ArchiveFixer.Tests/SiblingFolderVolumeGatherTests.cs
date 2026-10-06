@@ -874,10 +874,29 @@ namespace ArchiveFixer.Tests
                 harness.LogTexts,
                 text => text.Contains("这一组缺的那一片解出来了", StringComparison.Ordinal));
 
-            // ③ 用户的源片一个字节都没动、也没改名（接的是**另起的规范卷名**）。
-            Assert.True(File.Exists(pieceTwo), "用户的源片不许动");
-            Assert.True(File.Exists(pieceThree), "用户的源片不许动");
-            Assert.Equal(new FileInfo(pieceTwo).Length, new FileInfo(pieceThree).Length);
+            string sourceTree = Path.Combine(_root, "跨链收卷");
+
+            /*
+             * ③ **用户的源片名字要改回标准名**（用户 2026-10-06 拍板：「只修一卷这是你私自弄的，重大危险」
+             * 「我们攻破伪装不就是要将其改为标准名字吗」）—— `111.z0删除2` ⇒ `111.z02`、
+             * `111.z0删除3` ⇒ `111.z03`；**内容一个字节不动**（只是名字归一）。
+             *
+             * ⚠ 旧断言是「源片一个字节没动、也没改名」，与新指令正面冲突，按新指令重写。
+             */
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("111.z02", StringComparison.Ordinal));
+
+            string? renamedTwo = FindFileUnder(sourceTree, "111.z02");
+            string? renamedThree = FindFileUnder(sourceTree, "111.z03");
+
+            Assert.NotNull(renamedTwo);
+            Assert.NotNull(renamedThree);
+            Assert.Equal(new FileInfo(renamedTwo!).Length, new FileInfo(renamedThree!).Length);
+
+            // 旧名字不许还留着一份（那是"改了一半"的形状）。
+            Assert.False(File.Exists(pieceTwo), "改回标准名之后旧名不该还在");
+            Assert.False(File.Exists(pieceThree), "改回标准名之后旧名不该还在");
 
             /*
              * ③.5 **C5：收卷临时物一个都不许留在用户的源目录里**（用户 2026-10-06 报的那一格）。
@@ -887,8 +906,6 @@ namespace ArchiveFixer.Tests
              * · 源目录树里除了**原来那几份**（外加"接片时另起的规范卷名"硬链接）**不许再多出任何文件**
              *   —— 尤其不许出现"被搬过来又忘了清"的临时名（真机曾经出现过的形状：`111(4)\111.zip`）。
              */
-            string sourceTree = Path.Combine(_root, "跨链收卷");
-
             Assert.DoesNotContain(
                 Directory.EnumerateDirectories(sourceTree, "*", SearchOption.AllDirectories),
                 path => string.Equals(
@@ -905,12 +922,12 @@ namespace ArchiveFixer.Tests
             Assert.Contains("111_outer.zip", sourceFiles);
             Assert.Contains("111(2)_.zip", sourceFiles);
 
-            // 源目录里**只许**有那两份原包、那两片源文件、以及接片时另起的规范卷名（`111.z01` / `111.z02`）。
+            // 源目录里**只许**有那两份原包、那两片源文件（**已改回标准名**）、以及接片时另起的规范卷名。
             Assert.All(
                 sourceFiles,
                 name => Assert.True(
-                    name is "111_outer.zip" or "111(2)_.zip" or "111.z0删除2" or "111.z0删除3"
-                        or "111.z01" or "111.z02" or "111.zip",
+                    name is "111_outer.zip" or "111(2)_.zip"
+                        or "111.z01" or "111.z02" or "111.z03" or "111.zip",
                     $"源目录里多出了不该有的东西：{name}"));
 
             // ④ 过程中**不许**把"分卷缺失"当结论落给他（口径：等这一批都跑完再判）。
@@ -1001,8 +1018,18 @@ namespace ArchiveFixer.Tests
             Assert.Equal(TaskOutcome.PartiallyCompleted, pieceTwoTask.Outcome);
             Assert.Equal(TaskOutcome.PartiallyCompleted, pieceThreeTask.Outcome);
 
-            Assert.True(File.Exists(pieceTwo), "用户的源片不许动");
-            Assert.True(File.Exists(pieceThree), "用户的源片不许动");
+            /*
+             * ⚠ 按用户 2026-10-06 的新指令改写（旧断言是「用户的源片不许动」那两条）：
+             * 名字要**改回标准名**，**内容一个字节不动**；⛔ 失败 / 部分完成时源包照旧原地不动（这里就是
+             * "部分完成"那一档，所以文件必须还在原处那一层，只是名字变成了标准的）。
+             */
+            string? standardTwo = FindFileUnder(Path.Combine(_root, "跨链收卷-单层"), "111.z02");
+            string? standardThree = FindFileUnder(Path.Combine(_root, "跨链收卷-单层"), "111.z03");
+
+            Assert.NotNull(standardTwo);
+            Assert.NotNull(standardThree);
+            Assert.False(File.Exists(pieceTwo), "改回标准名之后旧名不该还在");
+            Assert.False(File.Exists(pieceThree), "改回标准名之后旧名不该还在");
         }
 
         /// <summary>

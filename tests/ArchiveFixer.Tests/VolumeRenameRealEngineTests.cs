@@ -286,17 +286,18 @@ namespace ArchiveFixer.Tests
         // ════════════════════════════ ③ 反面对照：孤零零一个脏名卷 ════════════════════════════
 
         /// <summary>
-        /// **孤零零一个脏名卷**（<c>444.pa8rt1.rar</c>，同目录里配不出整组）⇒ **什么都不做**：
-        /// 计划阶段就停（<see cref="StatusText.VolumeRepairNoSiblings"/>），盘上名字一个都不改
-        /// ⇒ **真引擎那条路根本不会被走到**（盘上不存在任何"标准名"的入口可开）。
+        /// **孤零零一个脏名卷**（<c>444.pa8rt1.rar</c>，同目录里配不出整组）⇒ **照样改回标准名**
+        /// （用户 2026-10-06 拍板：「**只修一卷这是你私自弄的，重大危险**」「我们攻破伪装不就是要将其
+        /// 改为标准名字吗」）。
         ///
-        /// <para>样本仍是**真 RAR 分卷**：造一组四卷，只把其中一卷（改名成脏名）单独放进一个目录。</para>
+        /// <para>⚠ <b>本条按新指令改写</b>（旧断言是「计划阶段就停 + 不许造出标准名入口」，
+        /// 那是 2026-10-04 第六条口径；新指令覆盖旧指令，见 §9.5）。改名只动**卷标记那一段**：
+        /// 基名不动、内容一个字节不动、可逆、绝不覆盖 ⇒ 与"配不配得出整组"无关。</para>
         ///
-        /// <para>⚠ 同一个用例末尾**如实钉住**反过来的那一格（7z 数字族的卷号段骨架档没有这道闸门），
-        /// 见那一段注释。</para>
+        /// <para>样本仍是**真 RAR 分卷**：造一组四卷，只把其中一卷（改成脏名）单独放进一个目录。</para>
         /// </summary>
         [RarVolumeFact]
-        public void 反面_孤零零一个脏名卷_计划阶段就停_没有任何标准名入口可开()
+        public void 孤零零一个脏名卷_照样改回标准名_内容一个字节不动()
         {
             RequireSevenZip();
             RequireRar();
@@ -315,24 +316,23 @@ namespace ArchiveFixer.Tests
 
             VolumeNameRepairPlan plan = VolumeNameRepair.Plan(lone, NamesIn(directory));
 
-            Assert.False(plan.CanRepair, $"配不出整组 ⇒ 一个字都不许改，实际：{plan.Describe()}");
-            Assert.Equal(StatusText.VolumeRepairNoSiblings, plan.Reason);
+            Assert.True(plan.CanRepair, plan.Describe());
+            Assert.Equal("444.part1.rar", plan.SuggestedFileName);
+            Assert.Single(plan.Items);
 
-            // 计划阶段就停：⛔ 没有执行体、盘上没有任何标准名可开（真引擎那条路压根不会被走到）。
-            Assert.Empty(plan.Items);
-            Assert.True(File.Exists(lone), "原样原地不动");
-            Assert.False(File.Exists(Path.Combine(directory, "444.part1.rar")), "不许造出一个标准名入口");
-            Assert.Equal(loneHash, Sha256Of(lone));
+            Assert.True(VolumeNameRepair.TryApply(plan).Success);
+
+            string applied = Path.Combine(directory, "444.part1.rar");
+
+            Assert.True(File.Exists(applied), "名字要真的改成标准名");
+            Assert.False(File.Exists(lone), "旧名不该还在");
+            Assert.Equal(loneHash, Sha256Of(applied));   // ✅ 内容一个字节不动
 
             /*
-             * ⚠ **顺带钉住另一格：7z 数字族的"卷标记段脏"也要过同一道闸门**（用户 2026-10-04 第六轮拍板）。
-             *
-             * 第五轮这里写的是「孤零零一个 `set.7z.0a0b1` **也会被改名**」（当时闸门只长在 partN 那一档上，
-             * 如实钉住的现状）。第六轮把闸门扩到**全部"猜出来的"名字**（`VolumeNameRepair.IsGuessedVolumeName`
-             * 转调 `ExtensionHelper` 的三个既有出口）⇒ 孤立一个的改名计划**不成立**
-             * （`VolumeRepairNoSiblings`）—— 断言按新结论改写，⛔ 不是放宽。
-             *
-             * 样本用**真 7z 卷**（内容与名字同族），只搬来第 1 卷并把它改成脏名 —— 同目录照样配不出整组。
+             * ⚠ **同一族的另一格：7z 数字族的"卷标记段脏"**（`set.7z.0a0b1`）—— 同一条新口径覆盖它。
+             * 第五轮这里写的是「会被改名」、第六轮改成「计划不成立」，**本轮按用户 2026-10-06 的新指令
+             * 再改回"照样改回标准名"**（⛔ 不是放宽断言：判据仍是"容忍/骨架命中算得出规范卷标记"）。
+             * 样本用**真 7z 卷**（内容与名字同族），只搬来第 1 卷并改成脏名。
              */
             string sevenZipStage = NewDirectory("lone-7z-stage");
             CreateSevenZipVolumes(sevenZipStage, CreatePayload("stage-lone-7z"));
@@ -346,14 +346,16 @@ namespace ArchiveFixer.Tests
 
             VolumeNameRepairPlan loneSevenZipPlan = VolumeNameRepair.Plan(loneSevenZip, NamesIn(loneSevenZipDirectory));
 
-            Assert.False(
-                loneSevenZipPlan.CanRepair,
-                $"孤立一个「卷标记段靠骨架档认出来」的脏名 ⇒ 一个字都不许改，实际：{loneSevenZipPlan.Describe()}");
-            Assert.Equal(StatusText.VolumeRepairNoSiblings, loneSevenZipPlan.Reason);
-            Assert.Empty(loneSevenZipPlan.Items);
-            Assert.True(File.Exists(loneSevenZip), "原样原地不动");
-            Assert.False(File.Exists(Path.Combine(loneSevenZipDirectory, "set.7z.001")), "不许造出一个标准名入口");
-            Assert.Equal(loneSevenZipHash, Sha256Of(loneSevenZip));
+            Assert.True(loneSevenZipPlan.CanRepair, loneSevenZipPlan.Describe());
+            Assert.Equal("set.7z.001", loneSevenZipPlan.SuggestedFileName);
+
+            Assert.True(VolumeNameRepair.TryApply(loneSevenZipPlan).Success);
+
+            string appliedSevenZip = Path.Combine(loneSevenZipDirectory, "set.7z.001");
+
+            Assert.True(File.Exists(appliedSevenZip), "名字要真的改成标准名");
+            Assert.False(File.Exists(loneSevenZip), "旧名不该还在");
+            Assert.Equal(loneSevenZipHash, Sha256Of(appliedSevenZip));
         }
 
         // ════════════ ④ 「只脏归档后缀段」接进计划之后（第五轮那条"钉住现状"按新结论改写） ════════════

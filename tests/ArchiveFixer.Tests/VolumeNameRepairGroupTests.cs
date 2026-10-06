@@ -109,18 +109,31 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 目标名被占用_整组都不改()
+        public void 目标名被占用_那一卷不动_别的卷照旧各改各的()
         {
             Make("giu910.7z.001删除");
             Make("giu910.7z.002删除");
-            Make("giu910.7z.002");      // ⛔ 目标名被占
+            Make("giu910.7z.002");      // ⛔ `.002` 的目标名被占
 
             string first = Path.Combine(_dir, "giu910.7z.001删除");
             VolumeNameRepairPlan plan = VolumeNameRepair.Plan(first, VolumeNameRepair.EnumerateFileNamesInDirectory(first));
 
-            Assert.False(plan.CanRepair);
-            Assert.Contains("giu910.7z.002", plan.Reason);
-            Assert.Contains("giu910.7z.001删除", AllNames());
+            /*
+             * ⚠ 按用户 2026-10-06 的新指令改口径（旧断言是「整组一个都不改」）：
+             * 改名是**一件一件各自可证**的 —— `.002` 的目标名被占 ⇒ **那一卷不动**（⛔ 绝不覆盖），
+             * 而 `.001删除` 的目标名空着 ⇒ 它照样改回 `giu910.7z.001`。
+             * ⛔ 红线不变：**任何被占的目标名都不许被覆盖**。
+             */
+            Assert.True(plan.CanRepair, plan.Describe());
+            Assert.Equal("giu910.7z.001", plan.SuggestedFileName);
+            Assert.Single(plan.Items);
+            Assert.DoesNotContain(plan.Items, item => item.CurrentFileName.Contains("002", StringComparison.Ordinal));
+
+            Assert.True(VolumeNameRepair.TryApply(plan).Success);
+
+            Assert.Contains("giu910.7z.001", AllNames());
+            Assert.Contains("giu910.7z.002", AllNames());
+            Assert.Contains("giu910.7z.002删除", AllNames());   // 目标被占 ⇒ 这一卷原样不动
         }
 
         [Fact]
