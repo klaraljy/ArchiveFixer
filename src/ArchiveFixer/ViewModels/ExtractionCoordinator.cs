@@ -8532,6 +8532,21 @@ namespace ArchiveFixer.ViewModels
                  *
                  * 用户目录里的片一律**只硬链接**：⛔ 名字一个字符都不许改、文件不搬。
                  */
+                /*
+                 * ===== 用户源目录里的那一片：⛔ **本轮不动它**（如实记账）=====
+                 *
+                 * 用户 2026-10-06 拍板：「**去掉暗链当出口**，解压用盘上标准名的文件，临时名只许建在工作区」
+                 * +「我们攻破伪装不就是要将其改为标准名字吗」。
+                 *
+                 * **试过一版"就地改名"（`TryMovePieceIntoGroup` 优先、失败再退硬链接），已撤回**：
+                 * 真机形状那两条 E2E 当场变红（收片之后整组凑不齐 / 产物找不到）—— 因为
+                 * **`owner` 账上的路径不是唯一引用**：收片这一刻别的任务账上还指着这个文件，
+                 * 就地改名会把它们一起打断。⇒ 要做这一档必须**同时**改三处（任务路径与快照、
+                 * 别处对这个文件的引用、以及"用户的源片不许动"那几条既有口径），⛔ 不能单独改这一行。
+                 *
+                 * 现在照旧：过程物那一档用**移动**（同盘改名、零字节），用户源目录那一档只**硬链接**
+                 * （⛔ 名字一个字符都不改、文件不搬）—— 与改动前逐字相同。
+                 */
                 bool fromProcessFolder = ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath);
 
                 adopted = fromProcessFolder
@@ -8540,20 +8555,24 @@ namespace ArchiveFixer.ViewModels
 
                 if (adopted)
                 {
+                    bool renamedInPlace = !File.Exists(piecePath);
+
+                    if (renamedInPlace)
+                    {
+                        TaskPathSync.ApplySingleMove(owner, piecePath, target);
+                    }
+
                     /*
-                     * ⚠ **说话要分两种，别一句话糊过去**（用户 2026-10-06 在追"暗链当出口"这件事）：
-                     * · 过程物目录里那一份是**我们自己的东西** ⇒ 是"搬过去改名"（`TryMovePieceIntoGroup`），
-                     *   原位置**没有**它了 —— 旧文案一律写"零字节硬链接、名字一个字符没改"是**假话**；
-                     * · 用户源目录里那一份**确实**只多起了一个规范卷名（硬链接），一个字节没动。
-                     * ⇒ 两句分开写，各自只说自己那种。
+                     * ⚠ **说话要按事实分两种**（旧文案一律写"零字节的硬链接、名字一个字符没改"，
+                     * 而过程物那一档走的是移动 —— 那是假话；用户 2026-10-06 正是拿这一点追问的）。
                      */
                     AppendLog(
                         "INFO",
-                        fromProcessFolder
-                            ? $"「{baseName}」这一组缺的那一片解出来了（按规范卷名 {canonical} 收进「{Path.GetFileName(targetDir)}」这一层；"
+                        renamedInPlace
+                            ? $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 落到「{Path.GetFileName(targetDir)}」这一层；"
                               + "它是我们自己解出来的过程物，用的是同盘改名的「移动」，原位置不再留一份）。"
                             : $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
-                              + "零字节的硬链接：你的源文件一个字节没动、名字也一个字符没改）。");
+                              + "零字节的硬链接：源文件一个字节没动、名字也一个字符没改）。");
                 }
             }
 
