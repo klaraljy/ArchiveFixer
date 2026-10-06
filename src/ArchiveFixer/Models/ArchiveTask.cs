@@ -314,6 +314,7 @@ namespace ArchiveFixer.Models
             OnPropertyChanged(nameof(DisplayPathToolTip));
             OnPropertyChanged(nameof(DisplayPath));
             OnPropertyChanged(nameof(DisplayExtension));
+            OnPropertyChanged(nameof(StatusDisplayText));
         }
 
         /// <summary>
@@ -699,7 +700,17 @@ namespace ArchiveFixer.Models
         {
             get
             {
-                string text = Status;
+                /*
+                 * ===== 口径①（用户 2026-10-06 拍板）：一行只讲"你导进来的那个文件" =====
+                 *
+                 * 批末会有一行被"借去"当**解开这一组的那个单元**（起点被改写到入口包上，
+                 * 见 <see cref="_userFacingFilePath"/> 的说明）。那一行顶上写的是你的文件，
+                 * 状态却写"解压成功" —— 读起来像"你这一片被单独解成功了"。⇒ 这一档改说
+                 * **这一组**（显示文案而已，`Status` 一个字不动 ⇒ 判据 / 名单 / 配色全不受影响）。
+                 */
+                string text = _userFacingFilePath.Length > 0 && Status == StatusText.ExtractSuccess
+                    ? StatusText.ExtractSuccessAsGroup
+                    : Status;
 
                 /*
                  * 百分比什么时候显示（用户 2026-09-27 真机："上面怎么都显示解压成功 99%，

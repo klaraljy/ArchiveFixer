@@ -80,6 +80,16 @@ namespace ArchiveFixer.Models
 
         public const string AccessDenied = "权限不足";
         public const string OutputConflict = "输出路径冲突";
+        /// <summary>
+        /// **列表那一格"这一组解压成功"**（用户 2026-10-06 拍板的口径①：一行只讲"你导进来的那个文件"，
+        /// 而"这一组由这一行发起解开"写进状态那一格）。
+        ///
+        /// <para>⛔ **它只是显示文案，不是机器状态**：`ArchiveTask.Status` 一个字不改
+        /// （仍是 <see cref="ExtractSuccess"/>）⇒ 所有 `== ExtractSuccess` 的判断、失败名单、
+        /// 汇总与配色全都不受影响。⛔ 别把它塞进任何判据里。</para>
+        /// </summary>
+        public const string ExtractSuccessAsGroup = "这一组解压成功";
+
         public const string VolumeMissing = "分卷缺失";
         public const string PathTooLong = "路径过长";
         public const string UnknownError = "未知错误";

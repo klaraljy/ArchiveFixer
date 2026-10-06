@@ -42,6 +42,43 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        /// <summary>
+        /// **口径①：那一行被借去当"解开这一组的单元"时，状态那一格改说"这一组"**
+        /// （用户 2026-10-06 拍板；⛔ `Status` 一个字不动 ⇒ 判据 / 名单 / 配色不受影响）。
+        ///
+        /// <para><b>红检</b>：把 `StatusDisplayText` 里那一档撤掉 ⇒ 本条变红
+        /// （会显示成"解压成功 100%"，读起来像"你这一片被单独解成功了"）。</para>
+        /// </summary>
+        [Fact]
+        public void 被借去当单元的那一行_状态改说这一组()
+        {
+            string own = Path.Combine(_root, "111(4)", "111.z03");
+            string entry = Path.Combine(_root, "111", "111", "111.zip");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(own)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(entry)!);
+            File.WriteAllBytes(own, new byte[2048]);
+            File.WriteAllBytes(entry, new byte[4096]);
+
+            var unit = new ArchiveTask(own, 1);
+
+            unit.CurrentPath = entry;
+            unit.ShowUserFileIdentity(entry);
+            unit.Outcome = TaskOutcome.Succeeded;
+            unit.Status = StatusText.ExtractSuccess;
+
+            Assert.StartsWith(StatusText.ExtractSuccessAsGroup, unit.StatusDisplayText, StringComparison.Ordinal);
+            Assert.Equal(StatusText.ExtractSuccess, unit.Status);   // ⛔ 机器状态一个字没改
+
+            // 对照：没被借去的那一行，状态照旧。
+            var plain = new ArchiveTask(own, 2);
+
+            plain.Outcome = TaskOutcome.Succeeded;
+            plain.Status = StatusText.ExtractSuccess;
+
+            Assert.StartsWith(StatusText.ExtractSuccess, plain.StatusDisplayText, StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.ExtractSuccessAsGroup, plain.StatusDisplayText, StringComparison.Ordinal);
+        }
         /// <summary>⛔ 记下来的那份**不在了** ⇒ 回落当前值（不许继续显示旧名 / 旧大小 / 旧后缀）。</summary>
         [Fact]
         public void 记下来的那份不在了_回落当前值_不许显示旧名()
