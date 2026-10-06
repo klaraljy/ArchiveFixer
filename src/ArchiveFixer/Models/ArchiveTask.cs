@@ -261,6 +261,15 @@ namespace ArchiveFixer.Models
         /// <summary>「文件名」那一格悬停提示（默认 = <see cref="CurrentPath"/>）。</summary>
         public string DisplayPathToolTip =>
             _userFacingFilePath.Length == 0 ? CurrentPath : _userFacingFilePath;
+        /// <summary>「完整路径」那一列显示什么（同上：这一行属于**用户自己那个文件**）。</summary>
+        public string DisplayPath => DisplayPathToolTip;
+
+        /// <summary>「当前后缀」那一列显示什么（⛔ 必须与 <see cref="DisplayFileName"/> 同步：
+        /// 显示 `111.z02` 却把后缀写成 `.zip` 就是自相矛盾 —— 用户 2026-10-06 当场报的"后缀也不同步"）。</summary>
+        public string DisplayExtension =>
+            _userFacingFilePath.Length == 0
+                ? CurrentExtension
+                : (Path.GetExtension(_userFacingFilePath) is { Length: > 0 } ext ? ext : "无");
 
         /// <summary>
         /// **这一行仍旧显示"用户自己那个文件"**（真机 CCCC 2026-10-06，用户原话：
@@ -337,6 +346,8 @@ namespace ArchiveFixer.Models
                 OnPropertyChanged(nameof(DisplayFileName));
                 OnPropertyChanged(nameof(DisplaySizeText));
                 OnPropertyChanged(nameof(DisplayPathToolTip));
+                OnPropertyChanged(nameof(DisplayPath));
+                OnPropertyChanged(nameof(DisplayExtension));
                 return;
             }
         }

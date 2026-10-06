@@ -1272,6 +1272,11 @@ namespace ArchiveFixer.Tests
             Assert.Equal("111.zip", repointed.FileName);            // 内部起点 = 入口包（一个字符没改）
             Assert.Equal("111.z02", repointed.DisplayFileName);     // 列表显示 = 这一单自己那一片
             Assert.NotEqual(repointed.SourceSizeText, repointed.DisplaySizeText);
+
+            // ⚠ 三列必须**同一个人**：文件名 / 后缀 / 完整路径（用户 2026-10-06：「后缀也不同步，
+            //   列表里面显示的没有一个是对的」）。显示 `111.z02` 却把后缀写成 `.zip` 就是自相矛盾。
+            Assert.Equal(".z02", repointed.DisplayExtension);
+            Assert.EndsWith("111.z02", repointed.DisplayPath, StringComparison.Ordinal);
         }
 
         /// <summary>

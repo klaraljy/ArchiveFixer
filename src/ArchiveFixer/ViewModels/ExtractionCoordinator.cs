@@ -10582,6 +10582,61 @@ namespace ArchiveFixer.ViewModels
         /// <para><b>现场</b>：一组跨盘 ZIP 的末片压在两层层层加密的 RAR 里、其余三片散在三个源目录里。
         /// 递归层用硬链接把那三片接过来、整组解开、结果发布成功 —— 可那三片自己那一单在批末仍然
         /// 如实报「分卷缺失」⇒ 汇总写成「成功 1 / 失败 3」，批末还指路"把缺的那几卷放到同一个目录里"
+        /// <summary>
+        /// **这一单自己那一片在盘上的真实路径**（⛔ 不看账上那两个可能过期的名字）。
+        ///
+        /// <para>为什么要问盘：真机 CCCC 2026-10-06 20:07 —— 持有 `111(4)\111.z03` 的那一单，
+        /// `OriginalPath` 还留着**改名前的脏名**（`111.z0删除3`），`CurrentPath` 又被批末补判
+        /// **改写到入口包**（`…\111\111\111.zip`）上 ⇒ 账上两条路径都不是盘上那一片
+        /// ⇒ "谁接手了这一组"回查必然落空 ⇒ 源片按红线「判不出 ⇒ 什么都不做」一直留着
+        /// （用户原话：「`111(4)\111.z03` 留着干什么」「为什么文件真正的名字不看」）。</para>
+        ///
+        /// <para>判据只有"文件真的在、且与最初那一份**同目录同包基名**"（改名不动目录、
+        /// 也不动包基名）。判不出 ⇒ 空串（调用方照旧按账上那两条问）。</para>
+        /// </summary>
+        private static string FindOwnPieceOnDisk(ArchiveTask task)
+        {
+            string original = task.OriginalPath ?? string.Empty;
+            string directory = Path.GetDirectoryName(original) ?? string.Empty;
+
+            if (original.Length == 0 || directory.Length == 0 || !Directory.Exists(directory))
+            {
+                return string.Empty;
+            }
+
+            if (File.Exists(original))
+            {
+                return original;
+            }
+
+            string baseName = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(original));
+
+            if (baseName.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(directory))
+                {
+                    if (string.Equals(
+                            FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(file)),
+                            baseName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return file;
+                    }
+                }
+            }
+            catch
+            {
+                // 读不动 ⇒ 判不出。
+            }
+
+            return string.Empty;
+        }
+
         /// （用户按这条去搬，只会白忙一场：内容已经在出来了）。</para>
         ///
         /// <para>判据只有两件事，都是**事实位**：① 这一单自己（或账上那几卷）出现在
@@ -10597,7 +10652,7 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            foreach (string path in EnumerateTaskPaths(task))
+            foreach (string path in EnumerateTaskPaths(task).Prepend(FindOwnPieceOnDisk(task)))
             {
                 if (string.IsNullOrWhiteSpace(path)
                     || !_consumedVolumeSources.TryGetValue(path, out string? consumer)

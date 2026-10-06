@@ -503,13 +503,13 @@
                             </DataGridTextColumn>
 
                             <DataGridTextColumn Header="完整路径"
-                                                Binding="{Binding CurrentPath}"
+                                                Binding="{Binding DisplayPath}"
                                                 Width="200"
                                                 Visibility="Collapsed"
                                                 IsReadOnly="True" />
 
                             <DataGridTextColumn Header="当前后缀"
-                                                Binding="{Binding CurrentExtension}"
+                                                Binding="{Binding DisplayExtension}"
                                                 Width="100"
                                                 IsReadOnly="True" />
 
