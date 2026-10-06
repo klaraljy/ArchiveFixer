@@ -14434,17 +14434,22 @@ namespace ArchiveFixer.ViewModels
                  * 显示层（列绑定 / 行刷新）本来不进日志，于是"列表显示对不对"只能靠截图；
                  * 这一行把名称 / 大小 / 当前后缀 / 完整路径 / 状态 / 错误信息 原样打出来，一次对齐。
                  */
-                foreach (ArchiveTask row in SnapshotTaskTable(Tasks))
+                if (Settings.VerboseLog)
                 {
-                    if (row == null)
+                    // ⛔ 只在「详细日志（排查用）」打开时才写：默认关（成功任务只留一行是既有红线，
+                    //    有守门用例钉着），所以这一行默认不出现。
+                    foreach (ArchiveTask row in SnapshotTaskTable(Tasks))
                     {
-                        continue;
-                    }
+                        if (row == null)
+                        {
+                            continue;
+                        }
 
-                    AppendLog(
-                        "WARN",
-                        $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
-                        + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.ErrorMessage}");
+                        AppendLog(
+                            "WARN",
+                            $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
+                                + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.ErrorMessage}");
+                    }
                 }
 
                 AppendBatchSummary(selectedTasks);
