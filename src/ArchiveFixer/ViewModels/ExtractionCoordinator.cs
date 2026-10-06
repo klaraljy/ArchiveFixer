@@ -6398,7 +6398,7 @@ namespace ArchiveFixer.ViewModels
                     "INFO",
                     deferredHere
                         ? $"{task.FileName}：这一单该解的都解出来了，停下的那一层要开的是这一组的分卷片，"
-                          + "缺的是同一组别的片 —— 这一组先记着（**跳过**），等这一批的解压都跑完再判一次（⛔ 不是失败）。"
+                          + "缺的是同一组别的片 —— 这一组先记着（跳过），等这一批的解压都跑完再判一次（⛔ 不是失败）。"
                         : $"{task.FileName}：这一单该解的都解出来了；停下的那一层要开的是这一组的分卷片，"
                           + "而这一组到最后一刻仍然没凑齐（缺哪几片见下面的缺卷结论）。");
             }
@@ -16537,7 +16537,15 @@ namespace ArchiveFixer.ViewModels
                 RecursionResult? recursion = await RunRecursiveAsync(
                     task, engineArchivePath, engineOutputPath, oneClickRun, cancellationToken);
 
-                if (task.Status == StatusText.ExtractSuccess)
+                // 这一趟有没有**可发布的产物**（用户 2026-10-06：「上一步得到的产物下一步就有可能成为
+                // 所需要解压的文件」）—— ⛔ 发布与否只由产物事实回答，⛔ 不再由终态标签兼任开关：
+                // `111.rar` 解出 `111.zip` 后因缺 `.z01` 停下时，旧写法把状态记成「部分完成」⇒
+                // 校验 / 定稿 / 发布整条链一次都不跑 ⇒ 已经解出来的 `111.zip` 一个字节都不落地。
+                bool hasPublishableProducts = recursion != null
+                    && recursion.Layers.Any(layer => layer.Success)
+                    && !string.IsNullOrWhiteSpace(recursion.FinalOutputPath);
+
+                if (task.Status == StatusText.ExtractSuccess || hasPublishableProducts)
                 {
                     // 递归产物同样要走"校验 → 定稿 → 归集 → 源包处理"，与单层路径一个字都不差。
                     bool recursionConclusionStands = await PostProcessSuccessAsync(
