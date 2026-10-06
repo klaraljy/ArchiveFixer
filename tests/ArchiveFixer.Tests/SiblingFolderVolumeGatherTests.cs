@@ -660,6 +660,84 @@ namespace ArchiveFixer.Tests
             // ⑤ 其余物那一层也不该留下一份（其余物 = 彻底删除）。
             Assert.Null(FindFileUnder(harness.OutputRoot, "111_outer.zip"));
             Assert.Null(FindFileUnder(harness.OutputRoot, "111(2)_.zip"));
+
+            /*
+             * ⑥ **C3（用户 2026-10-06 拍板：「其余物会在每层的过程中会删掉」）**：本装配就是
+             * 「源包放入其余物 + 其余物彻底删除」那一档 ⇒ **全树里一个其余物文件都不该留**
+             * —— 尤其 `111.rar` 那一单的其余物在**更深一层**（`111\111\其余物`，真机 14:33 那次
+             * 就是它漏在外面：48 MB 的 `111.zip` 一直留着）。
+             *
+             * <para><b>红检</b>：把批末那遍"每一单自己的其余物"扫尾撤掉 ⇒ 本条变红
+             * （`111\111\其余物\111.zip` 还在）。</para>
+             */
+            string[] restLeftovers = Directory
+                .GetFiles(harness.OutputRoot, "*", SearchOption.AllDirectories)
+                .Where(path => path.Contains("其余物", StringComparison.Ordinal))
+                .ToArray();
+
+            Assert.Empty(restLeftovers);
+        }
+
+        // ============================================ ④ 每一单自己的其余物都要按档处理（C3）
+
+        /// <summary>
+        /// **C3：其余物在每一层都要按「删除操作」处理掉**（用户 2026-10-06 原话：
+        /// 「**其余物会在每层的过程中会删掉**，我无法理解为什么还会有其余物留着」）。
+        ///
+        /// <para>形状（**只用真 7z 造、⛔ 不需要 WinRAR ⇒ 这台机器上真的会跑**）：
+        /// 一组真 2 卷 7z 的第 2 卷被压进一个外层 7z 里 ⇒ 外层那一单解出来的东西是**过程物**
+        /// （它自己的其余物在 `…\外层\其余物`，比根任务的其余物**深一层**）。</para>
+        ///
+        /// <para><b>红检</b>：把批末那遍"每一单自己的其余物"扫尾撤掉 ⇒ 本条变红
+        /// （`…\其余物\` 里那一份仍在盘上）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 每一单自己的其余物都按档删掉_深层那一份也不例外()
+        {
+            RequireSevenZip();
+
+            (string first, string second, _, _) = BuildTwoVolumeSet("深层其余物");
+
+            // 把第 2 卷压进一个外层包（外层那一单解出来的就是过程物）。
+            string holder = Path.Combine(_root, "深层其余物-外层");
+            Directory.CreateDirectory(holder);
+
+            string outerName = "pack.7z";
+            string outer = Path.Combine(holder, outerName);
+
+            Run7zIn(holder, "a", "-t7z", "-mx0", outerName, second);
+
+            Harness harness = CreateHarness(
+                "SingleLayer",
+                SourceHandlingMode.MoveToRest,
+                RestHandlingModes.Delete);
+
+            ArchiveTask outerTask = await AddTaskAsync(harness, outer);
+            ArchiveTask firstTask = await AddTaskAsync(harness, first);
+
+            CaptureSnapshots(harness);
+
+            /*
+             * ⚠ 必须走**一键处理**那条路（`RunOneClickAsync`）：真机 14:33 那次就是它 ——
+             * 一键档在任务收尾时**故意不处理其余物**（那一刻里面还躺着下一层要解的内层包），
+             * 全部留到链尾；手动档则在任务收尾就当场处理掉了（所以走手动档复现不出这个缺陷）。
+             */
+            await harness.RunOneClickAsync();
+
+            Log(harness, "深层其余物");
+
+            // ① 这一档真的执行了（有"彻底删除"那一步）。
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("彻底删除", StringComparison.Ordinal));
+
+            // ② 全树里**一个其余物文件都不该留**（含外层那一层更深的那份）。
+            string[] restLeftovers = Directory
+                .GetFiles(harness.OutputRoot, "*", SearchOption.AllDirectories)
+                .Where(path => path.Contains("其余物", StringComparison.Ordinal))
+                .ToArray();
+
+            Assert.Empty(restLeftovers);
         }
 
         // ================================================================ 夹具
@@ -897,6 +975,16 @@ namespace ArchiveFixer.Tests
             // 旧名字不许还留着一份（那是"改了一半"的形状）。
             Assert.False(File.Exists(pieceTwo), "改回标准名之后旧名不该还在");
             Assert.False(File.Exists(pieceThree), "改回标准名之后旧名不该还在");
+
+            /*
+             * ③.6 ⛔ **本装配是「不动其余物」档** ⇒ 这里**不许**断言"其余物被删掉"（那是另一档的事）：
+             * 该断言在装配了「放入其余物 + 彻底删除」的那条 E2E 里
+             * （`真机形状_源包处理选放入其余物时_整组源包真的进其余物并按档删除`）。
+             * ⚠ 本条原来写成"全树不许有其余物文件"，与这一档的设置直接冲突（实测当场红）—— 已改。
+             */
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("其余物：本批保留", StringComparison.Ordinal));
 
             /*
              * ③.5 **C5：收卷临时物一个都不许留在用户的源目录里**（用户 2026-10-06 报的那一格）。

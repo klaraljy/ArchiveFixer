@@ -2965,6 +2965,15 @@ namespace ArchiveFixer.ViewModels
                  */
                 await ApplyRestHandlingAfterChainAsync(rootTask, chainTasks, cancellationToken);
             }
+
+            /*
+             * ⛔ **2026-10-06 试过一版"批末对全表每一单再扫一遍其余物"，已撤回**（如实记账）：
+             * 它当场把三条既有红线的守门用例打红 —— `ChainRestHandlingSettingTests.用例1`、
+             * `ChainSpaceReclaimTests.空间不足模式…不回滚`、`ChainManifestCompletenessTests.形状3对照`
+             * （"链中途失败 ⇒ 源包与其余物一个字节都不动"）。⇒ **这一档不能靠"对全表补一遍"来做**，
+             * 得在"那一单自己收尾时"就把**它自己那条链的其余物**按档处理掉（下一轮按这个方向做）。
+             * ⚠ 真机那个现场（`111\111\其余物\111.zip` 留着）**仍然没修好**，⛔ 不许当成已解决。
+             */
         }
 
         /// <summary>
