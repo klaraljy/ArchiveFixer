@@ -10101,6 +10101,13 @@ namespace ArchiveFixer.ViewModels
                         task.FileName,
                         missing));
 
+                /*
+                 * ⚠ 2026-10-06 试过一版"批末这一档也改成「部分完成」+ WARN"，**已撤回**：
+                 * 全量当场 6 条红线用例变红（`对照_一直补不上_批末才如实报缺卷`、
+                 * `PipelineWiringTests.缺卷_真案一的现场_批末补判才拦下并点名缺第2卷` 等）——
+                 * **"缺卷不开始解 + 如实报缺卷"是用户早先拍过并有用例钉住的口径**，
+                 * 真正该改的是"内容已被接手的那些单不该走到这一支"（见下面那行排障）。
+                 */
                 MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
                 AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
 
@@ -10406,6 +10413,17 @@ namespace ArchiveFixer.ViewModels
                 bool consumedHit = TryResolveConsumedByAnotherTask(task, out string consumerName);
 
                 string owner = consumedHit ? consumerName : ResolveSuccessfulGroupConsumerName(task);
+
+                /*
+                 * ⛔ **临时排障**（用完删）：判不出时把这一单的账与盘上实况打出来，一次定位卡在哪一步。
+                 * 只在"判不出"这一支写一行 WARN（不改变任何行为）。
+                 */
+                (collected ?? logEntries!).Add((
+                    "WARN",
+                    $"[排障] {task.FileName}：Original={task.OriginalPath}；Current={task.CurrentPath}"
+                    + $"；卷账={string.Join("、", task.VolumePaths)}；盘上自己那一片={FindOwnPieceOnDisk(task)}"
+                    + $"；账里是本单的键={string.Join("、", _consumedVolumeSources.Keys.Where(key => EnumerateTaskPaths(task).Concat(EnumerateOwnPaths(task)).Any(path => SafePathHelper.PathEquals(path, key) || FileIdentity.IsSamePhysicalFile(path, key))))}"
+                    + $"；组生产者账={string.Join("、", _groupPieceProducers.Where(pair => pair.Value.Contains(task)).Select(pair => pair.Key))}"));
 
                 if (owner.Length == 0)
                 {
