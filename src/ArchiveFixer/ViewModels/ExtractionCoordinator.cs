@@ -6242,14 +6242,13 @@ namespace ArchiveFixer.ViewModels
              * 缺的东西刚刚被自己扔掉（真机 22:06:02「已清理工作区：2 个文件 / 48.35 MiB」就是这么把末片带走的）。
              */
             /*
-             * ⚠ 顺序与取值都是硬要求：**先让这一步解出来的东西落地，再拿"落地之后的那份路径"交给收片那一档**。
-             * 旧顺序（只有接片、没有落地）⇒ 入口包 `111.zip` 跟着工作区一起被删，
-             * 批末那一站到了盘上一看：这一组连入口都没有。
-             * ⚠ 而且**不能把原路径再喂给接片那一档**：落地是 `File.Move` ⇒ 那个路径已经不存在了
-             * （实测踩到：接片那一档一开头 `File.Exists` 就 false，整组静默不接）。
+             * ⛔ **落地不能放在这里**（2026-10-06 真机当场踩到）：`PublishUnresolvedVolumePieces`
+             * 把入口包（`111.zip`）从这一层的产物目录里**搬走**了，而紧接着的结果校验看的正是那个目录
+             * ⇒ 「校验未通过：输出目录是空目录，没有产物」⇒ ① 列表里显示「解压失败」② 「完整性：可证不完整」
+             * ⇒ 源包一个字节都不处理。落地挪到 `PostProcessSuccessAsync` 里**校验与定稿都过了之后**做
+             * （那时 `task.CurrentPath` 已改到入口、也不再有任何校验读那个目录）。
              */
-            List<string> publishedPieces = PublishUnresolvedVolumePieces(result, task);
-            AdoptUnresolvedVolumePieces(result, task, publishedPieces);
+            AdoptUnresolvedVolumePieces(result, task);
 
             if (result.StopReason == RecursionStopReason.NeedsDecision && result.Decision != null)
             {
@@ -16734,6 +16733,21 @@ namespace ArchiveFixer.ViewModels
                     if (recursionConclusionStands && task.Status == StatusText.ExtractSuccess)
                     {
                         AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
+                    }
+
+                    /*
+                     * ⚠ **整条收尾（校验 / 定稿 / 源包处理）都跑完之后**，才把这一趟没走完、可下一步要用的
+                     * 那片（入口包）搬回它自己那条链的落点目录（用户 2026-10-06：「你把分卷移过来不就是了吗」）。
+                     *
+                     * ⛔ 位置是硬要求（真机 2026-10-06 11:22 当场踩到 + 守门用例当场逮到）：
+                     * 放在**校验之前**会把这一层的产物目录搬空 ⇒「结果校验 —— 校验未通过：输出目录是空目录，
+                     * 没有产物」⇒ ① 列表里显示「**解压失败**」② 「完整性：可证不完整」③ 源包一个字节都不处理
+                     * （用户报的"成功了但原包没删"+"列表显示解压失败"就是这一处）。
+                     */
+                    if (recursion != null && recursion.UnresolvedVolumePieces.Count > 0)
+                    {
+                        List<string> carried = PublishUnresolvedVolumePieces(recursion, task);
+                        AdoptUnresolvedVolumePieces(recursion, task, carried);
                     }
                 }
 

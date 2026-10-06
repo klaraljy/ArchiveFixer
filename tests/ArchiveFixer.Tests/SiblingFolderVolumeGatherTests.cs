@@ -659,6 +659,25 @@ namespace ArchiveFixer.Tests
             Assert.NotNull(produced);
             Assert.Equal(payload, File.ReadAllBytes(produced!));
 
+            /*
+             * ①.5 **入口包要落在它自己那条链的落点目录里**，而且**不许把这一步的校验搞崩**
+             * （2026-10-06 真机两个 bug 的守门）：
+             *   · 落地放在**校验之前** ⇒ 那一层产物目录被搬空 ⇒「校验未通过：输出目录是空目录，没有产物」
+             *     ⇒ 列表显示「**解压失败**」+ 「完整性：可证不完整」⇒ 源包一个字节都不处理（用户报的两件事）。
+             * ⇒ 两处一起钉：① 落地那一行确实出现；② 这条链上**不许**出现「解压失败 ｜ 校验未通过」。
+             */
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("留在它自己那条链的落点目录里", StringComparison.Ordinal));
+
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                text => text.Contains("解压失败 ｜ 校验未通过", StringComparison.Ordinal));
+
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                text => text.Contains("输出目录是空目录，没有产物", StringComparison.Ordinal));
+
             // ② 那一片是"接到"那一组旁边的（零字节硬链接）。
             Assert.Contains(
                 harness.LogTexts,
