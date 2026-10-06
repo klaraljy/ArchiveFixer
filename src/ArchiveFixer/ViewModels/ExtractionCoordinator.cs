@@ -8873,7 +8873,7 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 判据一个字没放宽：收完仍然只由它回答"齐不齐"。
                  */
                 string entryLayer = ResolveBatchGroupDirectory(
-                    FileNameHelper.GetArchiveBaseName(task.CurrentPath),
+                    FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty),
                     task);
 
                 if (entryLayer.Length > 0)
@@ -9019,6 +9019,45 @@ namespace ArchiveFixer.ViewModels
 
                 MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
                 AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
+
+                /*
+                 * ===== 到最后一刻仍然不完整 ⇒ **部分完成**，⛔ 不是失败（用户 2026-10-06）=====
+                 *
+                 * 用户原话：「假如，1_最后剩一个 `111.7z.001` 你不能说是解压失败了，这应该是部分完成，
+                 * 因为这个分卷不完整，到了最后检测不到完整的；2_如果最后完整了，但是解压不出来，那才是失败了」。
+                 *
+                 * 判据只读**盘上事实**（`VolumeGroupDetector` 的结论）：这一组到底完不完整 ——
+                 * · 不完整（缺片）⇒ `PartiallyCompleted`：我们**根本没拿到全部数据**，不是"解压失败"；
+                 * · 完整了却解不出来 ⇒ 走既有的失败收口 ⇒ `Failed`（那才是真失败）。
+                 * ⛔ 「源包一个字节都不动」这条红线一个字不改（下面既有的收尾照旧）。
+                 */
+                var leftoverCandidates = new List<VolumeCandidate>();
+
+                foreach (string path in task.VolumePaths)
+                {
+                    if (File.Exists(path))
+                    {
+                        leftoverCandidates.Add(new VolumeCandidate { Path = path });
+                    }
+                }
+
+                foreach (string path in CollectVolumeFilesInDirectory(
+                             Path.GetDirectoryName(task.CurrentPath ?? string.Empty) ?? string.Empty))
+                {
+                    leftoverCandidates.Add(new VolumeCandidate { Path = path });
+                }
+
+                bool stillIncomplete = VolumeGroupDetector
+                    .Group(leftoverCandidates)
+                    .Any(candidateGroup => !candidateGroup.IsComplete);
+
+                if (stillIncomplete)
+                {
+                    task.Outcome = TaskOutcome.PartiallyCompleted;
+                    AppendLog(
+                        "WARN",
+                        $"{task.FileName}：这一组到最后一刻仍然不完整（缺 {missing}）—— 按「部分完成」记，⛔ 不是解压失败。");
+                }
 
                 // 机器终态收口：这一单是在**任务收尾之后**才落的状态，走不到单任务那个 finally ⇒ 这里补。
                 FinalizeOutcomeIfPending(task);

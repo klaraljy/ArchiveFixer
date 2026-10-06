@@ -784,8 +784,15 @@ namespace ArchiveFixer.Tests
             Assert.Empty(harness.Engine.ExtractCalls);
             Assert.Empty(harness.Engine.AllCalls);
 
-            // ④ 机器终态跟着落 Failed（不许停在"未处理"）。
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+            /*
+             * ④ 机器终态跟着落（不许停在"未处理"）。
+             *
+             * ⚠ 2026-10-06 按**用户新指令**改口径（旧断言是 `TaskOutcome.Failed`）：他原话
+             * 「假如，1_最后剩一个 `111.7z.001` **你不能说是解压失败了，这应该是部分完成**，
+             * 因为这个分卷不完整 …；2_如果最后完整了，但是解压不出来，那才是失败了」。
+             * ⇒ 到最后一刻仍然缺片 = 没拿到全部数据 ⇒ `PartiallyCompleted`（本条走的就是这一档）。
+             */
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
 
             // ⑤ 源包**一个字节都没动**（不变量 1）：按"内容指纹的多重集"比对 ——
             //    逐字节钉住"没改内容、没删、没多出东西"（批首那一步允许改卷名，所以不按文件名比）。

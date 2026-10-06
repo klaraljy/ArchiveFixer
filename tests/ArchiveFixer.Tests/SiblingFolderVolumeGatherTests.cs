@@ -477,7 +477,15 @@ namespace ArchiveFixer.Tests
                         && text.Contains("仍然缺", StringComparison.Ordinal));
 
             Assert.Equal(StatusText.VolumeMissing, task.Status);
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+
+            /*
+             * ⚠ 2026-10-06 按**用户新指令**改口径（旧断言是 `TaskOutcome.Failed`）：
+             * 他原话「假如，1_最后剩一个 `111.7z.001` **你不能说是解压失败了，这应该是部分完成**，
+             * 因为这个分卷不完整，到了最后检测不到完整的；2_如果最后完整了，但是解压不出来，那才是失败了」。
+             * ⇒ 到最后仍然缺片 = **没拿到全部数据** ⇒ `PartiallyCompleted`；
+             * 只有"卷齐了却解不出来"才是 `Failed`（那条判据在既有失败收口那一处，本用例到不了）。
+             */
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
 
             // ③ 不变量 7：一个字节都没动、一次引擎都没被调（没有产物）。
             Assert.True(File.Exists(loneVolume));
