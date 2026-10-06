@@ -3018,7 +3018,7 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 // ⛔ 只碰**这个根任务那棵树里**的其余物（别的链、别的包一律不动）。
-                if (!ArchivePathGuard.IsInsideRoot(restOwner.RestDirectoryPath, rootDirectory, out _))
+                if (!IsRestInsideRootTree(rootDirectory, restOwner.RestDirectoryPath))
                 {
                     continue;
                 }
@@ -3051,6 +3051,19 @@ namespace ArchiveFixer.ViewModels
         /// 只要有一个文件没进账 ⇒ 判不出 ⇒ **什么都不做**。</description></item>
         /// </list>
         /// </summary>
+        /// <summary>
+        /// **这一份其余物是不是落在"根任务那棵树"里**（⛔ 只碰这一棵树：别的链、别的包一律不动）。
+        ///
+        /// <para>⚠ 参数顺序按 <see cref="ArchivePathGuard.IsInsideRoot"/> 的定义来：**第一个是根、第二个是待查路径**。
+        /// 真机 CCCC 2026-10-06 18:13 那一批：这里两个参数写反了 ⇒ 每一份过路层其余物都被判成"不在树里"
+        /// ⇒ <see cref="SweepPassThroughRestDirectoriesAsync"/> 整段成了死代码 ⇒
+        /// `111\111\其余物\111.zip`（48.35 MB）一直留到用户看见（他原话：「**还有 48MB 的问题**」）。</para>
+        /// </summary>
+        internal static bool IsRestInsideRootTree(string? rootDirectory, string? restDirectory)
+            => !string.IsNullOrWhiteSpace(rootDirectory)
+               && !string.IsNullOrWhiteSpace(restDirectory)
+               && ArchivePathGuard.IsInsideRoot(rootDirectory, restDirectory, out _);
+
         internal static bool CanSweepPassThroughRest(
             ArchiveTask? task,
             IReadOnlyDictionary<string, string>? consumedVolumeSources)
@@ -8595,9 +8608,14 @@ namespace ArchiveFixer.ViewModels
                  * 留一份在里面等于"接了一个马上就要消失的名字"，而且轮次续解下一轮还会把剩下的那一份
                  * 当成一个"内层包"再去解一次（真机上就是那句「111.zip：分卷缺失」，用户最烦看到它）。
                  *
+                 * ⛔ **唯一的例外 = 本单自己的暂存目录**（见 `ShouldMovePieceIntoGroup`）：
+                 * 那是收尾链（结果校验 / 定稿）要读的那一份，搬走 = 把自己这一单唯一的产物拿走。
+                 *
                  * 用户目录里的片一律**只硬链接**：⛔ 名字一个字符都不许改、文件不搬。
                  */
                 bool fromProcessFolder = ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath);
+                string ownerStage = ResolveOwnerStageDirectory(owner);
+                bool moveIntoGroup = ShouldMovePieceIntoGroup(piecePath, ownerStage);
 
                 /*
                  * ===== 用户源目录里的那一片：⛔ **仍然只硬链接**（四次试做都撞在同一处，如实记账）=====
@@ -8611,7 +8629,7 @@ namespace ArchiveFixer.ViewModels
                  * 现在照旧：过程物那一档用**移动**（同盘改名、零字节），用户源目录那一档只**硬链接**
                  * （⛔ 名字一个字符都不改、文件不搬）—— 与改动前逐字相同、全部回归绿。
                  */
-                adopted = fromProcessFolder
+                adopted = moveIntoGroup
                     ? TryMovePieceIntoGroup(piecePath, target) || HardLinkHelper.TryCreateHardLink(target, piecePath)
                     : HardLinkHelper.TryCreateHardLink(target, piecePath);
 
@@ -8625,16 +8643,21 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     /*
-                     * ⚠ **说话要按事实分两种**（旧文案一律写"零字节的硬链接、名字一个字符没改"，
+                     * ⚠ **说话要按事实分三种**（旧文案一律写"零字节的硬链接、名字一个字符没改"，
                      * 而过程物那一档走的是移动 —— 那是假话；用户 2026-10-06 正是拿这一点追问的）。
+                     * 第三种 = "本单自己的暂存目录里的那一份只建链接"（见 `ShouldMovePieceIntoGroup`）：
+                     * 它既不是搬走、也不是"用户的源文件"，照实说。
                      */
                     AppendLog(
                         "INFO",
                         renamedInPlace
                             ? $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 落到「{Path.GetFileName(targetDir)}」这一层；"
                               + "它是我们自己解出来的过程物，用的是同盘改名的「移动」，原位置不再留一份）。"
-                            : $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
-                              + "零字节的硬链接：源文件一个字节没动、名字也一个字符没改）。");
+                            : fromProcessFolder
+                                ? $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
+                                  + "这一片还在我们自己的工作区暂存目录里，只建了一个零字节的硬链接 —— 一个字节都没动）。"
+                                : $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
+                                  + "零字节的硬链接：源文件一个字节没动、名字也一个字符没改）。");
                 }
             }
 
@@ -8673,6 +8696,46 @@ namespace ArchiveFixer.ViewModels
             }
 
             return adopted || (gather.Applicable && gather.Complete);
+        }
+
+        /// <summary>
+        /// **这一片该"搬"还是该"只建链接"** —— 判据只有两条，都是路径事实：
+        /// ① 落在**会被整份删掉的过程物目录**里（`.ArchiveFixer.work` / 其余物）⇒ 倾向搬
+        ///    （留一份在那种目录里，等于接了一个马上就要消失的名字）；
+        /// ② ⛔ **但它正躺在"本单自己的暂存目录"里 ⇒ 只建链接、绝不搬走**：那是收尾链
+        ///    （结果校验 / 定稿）要读的那一份，搬走 = 把自己这一单唯一的产物拿走。
+        ///
+        /// <para><b>真机 CCCC 2026-10-06 18:13</b>（用户原话：「出现了解压失败的文字，明明成功了」）：
+        /// 某一单（`111(2)_.zip`）自己解出来的那一片先被"接片"那一档从**它的暂存目录**里搬走，
+        /// 收尾链紧接着读暂存目录读到空 ⇒「校验未通过：输出目录是空目录，没有产物」⇒ 列表显示
+        /// 「解压失败」+ 源包一个字节都不处理。触发它是一段**竞态**：同一批另一单（`111.rar`）恰好在
+        /// 两次接片调用之间把入口包 `111.zip` 落到了落点层 ⇒ 第一次接片还不认识那一层（什么都不做）、
+        /// 第二次已经认识 ⇒ 搬走的就是暂存目录里那一份。</para>
+        ///
+        /// <para>⛔ 这条判据**不看顺序、不看时序**：暂存目录里的那一份永远不搬
+        /// （它随任务收尾一起清掉，落点那一份是硬链接、零字节、照样在）。</para>
+        /// </summary>
+        internal static bool ShouldMovePieceIntoGroup(string piecePath, string ownerStageDirectory)
+            => ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath)
+               && !(ownerStageDirectory.Length > 0
+                    && ArchivePathGuard.IsInsideRoot(ownerStageDirectory, piecePath, out _));
+
+        /// <summary>本单自己的暂存目录（算不出来 / 判不出 ⇒ 空串 = 调用方落回老口径"按过程物目录那一档"）。</summary>
+        private string ResolveOwnerStageDirectory(ArchiveTask? owner)
+        {
+            if (owner == null)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return _pathService.BuildTaskStageDirectory(owner);
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         /// <summary>

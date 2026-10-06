@@ -1104,6 +1104,73 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **真机 CCCC 2026-10-06 18:13 的现场**（用户原话：「出现了解压失败的文字，明明成功了」）：
+        /// 末片那一单（真机 `111.rar`）**先**跑完，把这一组的入口包 `111.zip` 落在自己那条链的落点层；
+        /// 随后另一单（真机 `111(2)_.zip`）才走到"接着收片"那一步 —— 那一刻落点层已经算得出来，
+        /// 于是它把**自己刚解出来的那一片**从**自己的暂存目录**里搬走（`TryAdoptUnresolvedVolumePiece`
+        /// 对"过程物目录"用的是**移动**）⇒ 收尾链读暂存目录读到空 ⇒
+        /// 「校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」+ 源包一个字节都不处理。
+        ///
+        /// <para>与上一条的差别**只有任务顺序**（本条把末片那一单排在前面 = 真机并发下的实际顺序）——
+        /// 两条一起钉住"顺序不许改变结论"。</para>
+        ///
+        /// <para><b>红检</b>：把"暂存目录里的那一份只建链接、不搬走"那一条判据撤掉 ⇒ 本条当场变红
+        /// （两条 <c>DoesNotContain</c> 同时命中）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真机形状_末片那一单先跑完_另一单的产物不许被搬空当失败()
+        {
+            RequireSevenZip();
+
+            string? winRar = new ToolLocator().WinRarExePath;
+
+            if (string.IsNullOrWhiteSpace(winRar) || !File.Exists(winRar))
+            {
+                _output.WriteLine("这台机器没有 WinRAR ⇒ 造不出真跨盘 ZIP，本条跳过（不是验过了）。");
+                return;
+            }
+
+            (string pieceTwo, string pieceThree, string innerPackage, string tailPackage, byte[] payload, string payloadName) =
+                BuildCrossChainSpannedZipSet("末片先跑", winRar!);
+
+            Harness harness = CreateHarness("AllBranches");
+
+            // ⚠ 顺序 = 真机那一刻的顺序：末片那一单先落盘，另一单才去收片。
+            ArchiveTask tailTask = await AddTaskAsync(harness, tailPackage);
+            ArchiveTask innerTask = await AddTaskAsync(harness, innerPackage);
+            ArchiveTask pieceTwoTask = await AddTaskAsync(harness, pieceTwo);
+            ArchiveTask pieceThreeTask = await AddTaskAsync(harness, pieceThree);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(
+                new[] { tailTask, innerTask, pieceTwoTask, pieceThreeTask });
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Log(harness, "末片先跑");
+
+            // ① 这一组照样解开（顺序不许改变结论）。
+            string? produced = FindFileUnder(harness.OutputRoot, payloadName);
+
+            Assert.NotNull(produced);
+            Assert.Equal(payload, File.ReadAllBytes(produced!));
+
+            // ② 用户看见的那两句一条都不许出现（这就是"明明成功了却写着解压失败"）。
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                text => text.Contains("解压失败 ｜ 校验未通过", StringComparison.Ordinal));
+
+            Assert.DoesNotContain(
+                harness.LogTexts,
+                text => text.Contains("输出目录是空目录，没有产物", StringComparison.Ordinal));
+
+            // ③ 收片那一单自己的校验要真的通过（产物没被搬空）。
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains($"{innerTask.FileName}：结果校验 —— 校验通过", StringComparison.Ordinal));
+        }
+
+        /// <summary>
         /// **对应第三条路**：②页选「只解当前这一层」+ 一键处理（轮次续解）—— 同一份真机形状也必须由
         /// "本批各单解出来的片"在批末凑齐并解开（用户 2026-10-05：「赶紧同步」）。
         ///

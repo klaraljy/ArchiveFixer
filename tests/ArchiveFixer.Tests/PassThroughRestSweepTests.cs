@@ -190,5 +190,38 @@ namespace ArchiveFixer.Tests
 
             Assert.False(ExtractionCoordinator.CanSweepPassThroughRest(emptyTask, consumed));
         }
+
+        /// <summary>
+        /// **真机那一格的几何**：根任务的成品树是 `…\111\111\111`，于是"过路层"那一单的其余物
+        /// （`…\111\111\其余物`）正好落在**根任务那棵树的父层**里 ⇒ 必须认成"在树里"，
+        /// 否则整段扫描一次都不跑。
+        ///
+        /// <para><b>红检</b>：把 <see cref="ExtractionCoordinator.IsRestInsideRootTree"/> 里两个参数写反
+        /// （`IsInsideRoot(rest, root)`）⇒ 本条变红 —— 真机 CCCC 2026-10-06 18:13 就是这样：
+        /// `111\111\其余物\111.zip`（48.35 MB）一直留到用户看见（他原话：「**还有 48MB 的问题**」）。</para>
+        /// </summary>
+        [Fact]
+        public void 过路层其余物落在根任务那棵树里_认成在树里()
+        {
+            string root = Path.Combine(_root, "111", "111");
+            string rest = Path.Combine(root, "其余物");
+
+            Directory.CreateDirectory(rest);
+
+            Assert.True(ExtractionCoordinator.IsRestInsideRootTree(root, rest));
+
+            // ⛔ 别的链 / 别的包：一律不动；判不出（空串）⇒ 也不动。
+            Assert.False(ExtractionCoordinator.IsRestInsideRootTree(
+                root,
+                Path.Combine(_root, "111(2)", "其余物")));
+
+            Assert.False(ExtractionCoordinator.IsRestInsideRootTree(root, string.Empty));
+            Assert.False(ExtractionCoordinator.IsRestInsideRootTree(string.Empty, rest));
+
+            // 前缀相同但不是同一棵树（`1112` 不是 `111` 的子目录）⇒ 不许误判。
+            Assert.False(ExtractionCoordinator.IsRestInsideRootTree(
+                root,
+                Path.Combine(_root, "111", "1112", "其余物")));
+        }
     }
 }
