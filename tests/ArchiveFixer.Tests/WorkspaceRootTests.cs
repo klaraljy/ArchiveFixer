@@ -749,7 +749,7 @@ namespace ArchiveFixer.Tests
             // 产出方：`111.rar`（真机上它把入口包 `111.zip` 解出来、落在 out\111）。
             // 名字刻意与那一组同基名（`111`）—— 判据不是"名字像"，而是"同包基名 + 不是本组成员"。
             Directory.CreateDirectory(Path.Combine(harness.SourceRoot, "111"));
-            string producer = harness.CreateSourceFile(Path.Combine("111", "111.rar"));            ArchiveTask producing = harness.AddTask(producer);
+            string producer = harness.CreateSourceFile(Path.Combine("111", "111.rar")); ArchiveTask producing = harness.AddTask(producer);
 
             // 那一组散着的一片（续卷）：入口包本体不在盘上。
             Directory.CreateDirectory(Path.Combine(harness.SourceRoot, "111(4)"));

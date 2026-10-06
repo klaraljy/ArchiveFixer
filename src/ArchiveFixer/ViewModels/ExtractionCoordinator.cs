@@ -7004,6 +7004,32 @@ namespace ArchiveFixer.ViewModels
                 + (tally.FollowerSkipped > 0 ? " " + tally.DescribeFollowerNote() : string.Empty));
 
             /*
+             * 用户 2026-10-06 报的那一格：**"`111.z0删除2` 没改名"** —— 那一行是"如设计"，
+             * 但列表上看不出来，很容易被读成漏改。⇒ 批末补一句说清这类文件是**分卷的片**：
+             * 按设计**不改名**（不变量 1：默认不改源文件），整组随源包处理。
+             *
+             * ⛔ 只补一句说明，一个判据都不放宽；名字标准 / 没有分卷组的批不写（那是噪声）。
+             */
+            List<ArchiveTask> volumePieces = tasks
+                .Where(task => task != null
+                               && !string.IsNullOrWhiteSpace(task.CurrentPath)
+                               && FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(task.CurrentPath))
+                               && task.VolumePaths.Count > 1)
+                .ToList();
+
+            if (volumePieces.Count > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.BatchVolumePiecesKeptNameFormat,
+                        volumePieces.Count,
+                        string.Join("、", volumePieces.Take(3).Select(task => task.FileName))
+                        + (volumePieces.Count > 3 ? $"（还有 {volumePieces.Count - 3} 个）" : string.Empty)));
+            }
+
+            /*
              * 批末那条**红字**（用户 2026-09-29 要求）：把"可能是没有密码 / 密码不对"的那些单独点出来，
              * 好让他一眼知道"该去补密码"而不是去怀疑文件坏了。
              *
