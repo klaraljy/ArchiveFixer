@@ -1590,6 +1590,14 @@ namespace ArchiveFixer.ViewModels
                 CleanupTaskWorkspaceDirectory(task, stageDirectory);
             }
 
+            /* 收卷排障（⛔ 排查用，定论后删）：校验那一刻，两个目录里各有什么。 */
+            AppendLog(
+                "WARN",
+                $"[收卷排障] {task.FileName}：校验={(work.Verification.Verified ? "过" : "未过")}"
+                + $"（{work.Verification.Message}）；"
+                + $"暂存目录 {stageDirectory} 里 {SafeCount(stageDirectory)} 个文件；"
+                + $"递归产物 {recursion?.FinalOutputPath ?? "（无）"} 里 {SafeCount(recursion?.FinalOutputPath)} 个文件。");
+
             /*
              * 「定稿完成后打开输出目录」（设置项 OpenOutputFolderWhenDone，**默认关**）。
              *
@@ -8389,6 +8397,21 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>拿不到 `owner` / 算不出落点 ⇒ 空串，由调用方退回既有口径。</para>
         /// </summary>
+        /// <summary>目录里有多少个文件（判不出 ⇒ -1；⛔ 只给排障用）。</summary>
+        private static int SafeCount(string? directory)
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
+                    ? 0
+                    : Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
         private string ResolveOwnerChainDirectory(ArchiveTask? owner)
         {
             if (owner == null || string.IsNullOrWhiteSpace(owner.CurrentPath))
@@ -8502,6 +8525,28 @@ namespace ArchiveFixer.ViewModels
                             "INFO",
                             $"{owner.FileName}：这一步解出来的「{name}」留在它自己那条链里（下一轮解压要用的就是它；"
                             + "⛔ 不是失败、也不算残缺）。");
+
+                        /*
+                         * ⚠ **再在"它自己那条链的落点目录"里起一个名字**（用户 2026-10-06：
+                         * 「你把分卷移过来不就是了吗」）：暂存目录是**收尾链读的**（校验 / 定稿），
+                         * 而用户要看见的那个位置是落点目录（真机 `CCCC\111\111\`）——两个都要有。
+                         * ⛔ 用**硬链接**（零字节、瞬时、删名字不动数据）：工作区收尾时暂存那一份被删掉，
+                         * 落地那一份照样在 —— 这正是"入口包留在它自己那条链里"。
+                         */
+                        string landing = ResolveOwnerChainDirectory(owner);
+
+                        if (landing.Length > 0 && HardLinkHelper.CanHardLink(target, landing))
+                        {
+                            try
+                            {
+                                Directory.CreateDirectory(landing);
+                                HardLinkHelper.TryCreateHardLink(Path.Combine(landing, name), target);
+                            }
+                            catch (Exception ex)
+                            {
+                                AppendLog("WARN", $"{owner.FileName}：落地那一份没建出来（{ex.Message}）。");
+                            }
+                        }
 
                         RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
                         published.Add(target);
@@ -16724,6 +16769,31 @@ namespace ArchiveFixer.ViewModels
                     && recursion.Layers.Any(layer => layer.Success)
                     && !string.IsNullOrWhiteSpace(recursion.FinalOutputPath);
 
+                /*
+                 * ⚠ **一拿到递归结果就搬**（位置三条硬要求，全是实测踩出来的）：
+                 * ① **必须在工作区被清掉之前**：那一片（`111.zip`）就活在工作区的递归层目录里，
+                 *    收尾一清它就没了 ⇒ 放到最后再搬会静默搬不到（守门用例当场逮到：
+                 *    "这一步解出来的"那一行压根没出现、"结果校验 —— 输出目录是空目录"照旧）。
+                 * ② **必须在结果校验之前**：校验读的是**暂存目录**，那一片不搬进去 ⇒ 校验看到空目录 ⇒
+                 *    「校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」+「完整性：可证不完整」
+                 *    ⇒ 源包一个字节都不处理（真机 2026-10-06 11:24 那两个 bug 就是这一处）。
+                 * ③ **必须在"成功才进"那一支的外面**：`111.rar` 这类是「部分完成」⇒ 进不去那一支。
+                 * ⇒ 三条一起满足的唯一位置就是这里（拿到结果之后、进任何收尾分支之前）。
+                 */
+                if (recursion != null && recursion.UnresolvedVolumePieces.Count > 0)
+                {
+                    List<string> carried = PublishUnresolvedVolumePieces(recursion, task);
+                    AdoptUnresolvedVolumePieces(recursion, task, carried);
+                }
+                else
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[收卷排障] {task.FileName}：递归结果里没有任何打不开的片"
+                        + $"（UnresolvedVolumePieces = {(recursion == null ? "结果为空" : recursion.UnresolvedVolumePieces.Count.ToString())}）"
+                        + $"；停因 = {recursion?.StopReason.ToString() ?? "（无）"}；层数 = {recursion?.Layers.Count ?? 0}。");
+                }
+
                 if (task.Status == StatusText.ExtractSuccess || hasPublishableProducts)
                 {
                     // 递归产物同样要走"校验 → 定稿 → 归集 → 源包处理"，与单层路径一个字都不差。
@@ -16746,22 +16816,9 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * ⚠ **整条收尾（校验 / 定稿 / 源包处理）都跑完之后**，才把这一趟没走完、可下一步要用的
-                 * 那片（入口包）搬回它自己那条链（用户 2026-10-06：「你把分卷移过来不就是了吗」）。
-                 *
-                 * ⛔ 位置两条硬要求，都是实测踩出来的：
-                 * ① **必须在结果校验之后**：放在校验之前会把这一层的产物目录搬空 ⇒
-                 *    「结果校验 —— 校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」
-                 *    + 「完整性：可证不完整」+ 源包一个字节都不处理（真机 2026-10-06 11:24 那两个 bug）；
-                 * ② **不能放进"成功才进"的那一支**：`111.rar` 这类是「部分完成」（它解出来的东西是下一轮的输入）
-                 *    ⇒ 进不去那一支 ⇒ 落地一次都不跑（守门用例当场逮到："这一步解出来的"那一行压根没出现）。
-                 * ⛔ 搬进**暂存目录**（收尾链读的就是它、定稿再按落点公式落到 `111\111\`）。
+                 * ⚠ 落地那一档**已经在上面搬过了**（拿到递归结果就搬 —— 必须在工作区被清掉之前）。
+                 * ⛔ 这里不要再搬一遍。
                  */
-                if (recursion != null && recursion.UnresolvedVolumePieces.Count > 0)
-                {
-                    List<string> carried = PublishUnresolvedVolumePieces(recursion, task);
-                    AdoptUnresolvedVolumePieces(recursion, task, carried);
-                }
 
                 /*
                  * ===== 递归这条路的密码类失败也要登记到本批（2026-10-05 只读审计）=====
