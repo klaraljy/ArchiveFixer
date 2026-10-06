@@ -609,9 +609,63 @@ namespace ArchiveFixer.Extraction
              */
             VolumeNameRepairPlan? groupPlan = PlanJunkTailGroup(path, fileName, fileNamesInDirectory);
 
+            if (groupPlan != null && groupPlan.CanRepair)
+            {
+                // 能**一次把整组改干净** ⇒ 走它（那一份计划最完整）。
+                return groupPlan;
+            }
+
+            /*
+             * ⛔ **"整组一起改"拿不出计划时，要接着让"只改这一卷"那条路试**（用户 2026-10-06 拍板）。
+             *
+             * 现场（真机 CCCC）：`111(3)\111.z0删除2` / `111(4)\111.z0删除3` 这两片各自单独躺在一个目录里
+             * ⇒ 上面那一档必然拿不出计划（它要有兄弟卷才成立）⇒ **过去直接 return 掉**
+             * ⇒ 下面那条"只把这一卷的名字归一"的路**永远走不到**，那两片就永远带着伪装名。
+             * ⇒ 这里把"拿不出计划"与"一次改干净"分开：拿不出 ⇒ 继续往下试单卷那条；
+             * ⛔ 只在**它自己确实算得出这个卷的标准名**时才改（判据仍在 `PlanDisguisedRenamedSelf` 里）。
+             */
+            VolumeNameRepairPlan? singleVolumePlan = PlanDisguisedRenamedSelf(path, fileName, index.Value);
+
+            if (singleVolumePlan != null)
+            {
+                return singleVolumePlan;
+            }
+
             if (groupPlan != null)
             {
+                // 单卷那条也拿不出计划 ⇒ 照旧如实回报"整组那一档"的原因（诊断信息更全）。
                 return groupPlan;
+            }
+
+            /*
+             * ⛔ **「卷标记自己粘着垃圾」的续卷也要能改回标准名**（用户 2026-10-06 拍板，原话
+             * 「只修一卷这是你私自弄的，重大危险」「我们攻破伪装不就是要将其改为标准名字吗」）。
+             *
+             * 现场（真机 CCCC）：`111(3)\111.z0删除2` + `111(4)\111.z0删除3` 是跨盘 ZIP 的续片，
+             * 容忍解析**早就认得出**它们是 `111.z02` / `111.z03`（`ExtensionHelper.cs:585` 的注释里
+             * 逐字就是这个例子），可改名这一层过去只放行"第 1 卷" ⇒ 这两片**从来没被改成标准名**，
+             * 一直带着伪装名躺在用户目录里（列表上那两行"没改名"就是它）。
+             *
+             * 老的那道"必须是第 1 卷"是为**换归档格式后缀**那条路写的顾虑（改格式后缀解决不了缺首卷）；
+             * 而这里要做的是**只把卷标记那一段归一**（`z0删除2` → `z02`）：基名不动、族不动、
+             * 卷序不动、可逆、绝不覆盖 ⇒ 与"缺不缺第 1 卷"毫无关系。
+             *
+             * 判据（三条同时成立才改，一条不成立就什么都不做）：
+             * ① 容忍解析/骨架命中的**规范卷标记**算得出来（`TrySplitDisguised`）；
+             * ② 推出来的名字**不是**它现在的名字（名字本来就标准 ⇒ 没有可修的东西）；
+             * ③ 推出来的名字**自己是规范卷名**（`IsCanonicalVolumeName` —— ⛔ 不许把脏名写回去）；
+             * 另外照旧：目标名**被占 ⇒ 不改**（下面 `File.Exists` 那一关）。
+             * ⛔ 不需要兄弟卷在场、也不动别的卷：一件是一件，各自可证。
+             *
+             * ⚠ 这一调**必须排在 `PlanJunkTailGroup` 那个早退之前**（实测踩到）：那一档在"这一卷自己
+             * 单独躺在一个目录里"时拿不出计划，老写法直接 `return` 掉它 ⇒ 这条路永远走不到。
+             * 现在那里改成"拿不出计划就继续往下"，这里就是它继续下来的第一站。
+             */
+            VolumeNameRepairPlan? singleVolume = PlanDisguisedRenamedSelf(path, fileName, index.Value);
+
+            if (singleVolume != null)
+            {
+                return singleVolume;
             }
 
             if (index.Value != 1)
@@ -1908,6 +1962,74 @@ namespace ArchiveFixer.Extraction
         /// <para>⛔ 与其余改名路同一条纪律：只改名字、内容一个字节不动；全成或全不成（执行体仍是
         /// <see cref="TryApply"/>，中途失败倒序改回原名）。</para>
         /// </summary>
+        /// <summary>
+        /// **只把这一个卷名归一**（"卷标记段自己粘着垃圾"的续卷）：`X.z0删除2` → `X.z02`、`X.7z.00删2` → `X.7z.002`。
+        ///
+        /// <para>用户 2026-10-06 拍板：容忍解析/骨架命中已经认得出规范卷标记，就该**任何一卷**都改回标准名
+        /// （⛔ 不再是"只有第 1 卷能修"—— 那条是我私自收窄的）。判据三条同时成立才给计划：
+        /// ① 规范卷标记算得出来；② 推出来的名字与现在的名字不同；③ 推出来的名字自己是规范卷名。
+        /// 目标名被占 ⇒ 什么都不做（⛔ 绝不覆盖）。⛔ 不要求兄弟卷在场：只动这一个名字。</para>
+        /// </summary>
+        private static VolumeNameRepairPlan? PlanDisguisedRenamedSelf(string path, string fileName, int index)
+        {
+            _ = index;
+
+            if (!TrySplitDisguised(fileName, out string baseName, out string canonicalMark))
+            {
+                return null;
+            }
+
+            if (baseName.Length == 0 || canonicalMark.Length == 0)
+            {
+                return null;
+            }
+
+            /*
+             * 推出来的名字：**基名逐字保留**（含归档后缀段）+ 规范卷标记。
+             * ⚠ 两族同一个拼法都对：`X.zip` / `X.rar` 的基名不含卷标记；`X.7z.001` 这一族的
+             * `TrySplitDisguised` 给出的基名已经含 `.7z`。
+             */
+            string suggested = baseName + "." + canonicalMark;
+
+            if (string.Equals(suggested, fileName, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;   // 名字本来就标准 ⇒ 没有可修的东西
+            }
+
+            if (!IsCanonicalVolumeName(suggested))
+            {
+                return null;   // ⛔ 绝不把脏名写回去（"改名方向"那把尺子）
+            }
+
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            string targetPath = Path.Combine(directory, suggested);
+
+            if (File.Exists(targetPath))
+            {
+                return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, suggested));
+            }
+
+            return new VolumeNameRepairPlan
+            {
+                CanRepair = true,
+                CurrentPath = path,
+                CurrentFileName = fileName,
+                SuggestedFileName = suggested,
+                TargetPath = targetPath,
+                Siblings = Array.Empty<string>(),
+                Items = new[]
+                {
+                    new VolumeRepairItem
+                    {
+                        CurrentPath = path,
+                        CurrentFileName = fileName,
+                        SuggestedFileName = suggested,
+                        TargetPath = targetPath
+                    }
+                }
+            };
+        }
+
         private static VolumeNameRepairPlan? PlanDisguisedVolumesBesideStandardSelf(
             string path,
             string fileName,

@@ -605,50 +605,64 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// ③ 孤零零一个 `444.pa8rt1.rar`（同目录里配不出**一组自洽的兄弟卷**）⇒ **一个字都不改**，
-        /// 如实说"同目录里没有找到像后续卷的文件"（判不出 ⇒ 什么都不做）。
+        /// ③ 孤零零一个 `444.pa8rt1.rar`（同目录里没有兄弟）⇒ **也要改名**（用户 2026-10-06 拍板）。
         ///
-        /// <para>⚠ 红检就打在<b>这一格</b>：把「整组自洽」那道判据撤掉（只看形状就改名）⇒ 本条必红。</para>
+        /// <para>⚠ <b>本条与旧口径正面冲突，按新指令重写</b>（旧断言是「配不出自洽的一整组 ⇒ 一个字都不改」，
+        /// 见 `修改日志.md` 2026-10-04 第六轮）。用户原话：「**只修一卷这是你私自弄的，重大危险**」
+        /// 「我们攻破伪装不就是要将其改为标准名字吗」 —— 改名只动**卷标记那一段**：基名不动、族不动、
+        /// 卷序不动、内容一个字节不动、可逆，且**绝不覆盖**；这与"缺不缺它那几个兄弟"无关。</para>
+        ///
+        /// <para>⛔ 真正不许放宽的是另一半：**干净的名字绝不许改成脏名字**（那条守门用例在下一条）。</para>
         /// </summary>
         [Fact]
-        public void 整组自洽_孤零零一个脏卷标记_什么都不做()
+        public void 续卷改名_孤零零一个脏卷标记_照样改回标准名()
         {
             string directory = NewDirectory("skeleton-part-lone");
             string lone = CreateFile(directory, "444.pa8rt1.rar", 4096, seed: 1);
+            string before = Sha256(lone);
 
             VolumeNameRepairPlan plan = VolumeNameRepair.Plan(lone, NamesIn(directory));
 
-            Assert.False(plan.CanRepair, $"配不出一组自洽的兄弟卷 ⇒ 不许改名，实际：{plan.Describe()}");
-            Assert.Equal(StatusText.VolumeRepairNoSiblings, plan.Reason);
+            Assert.True(plan.CanRepair, plan.Describe());
+            Assert.Equal("444.part1.rar", plan.SuggestedFileName);
 
-            Assert.True(File.Exists(lone));
-            Assert.False(File.Exists(Path.Combine(directory, "444.part1.rar")));
+            // 只改这一个名字，而且**只动卷标记那一段**（基名 `444` 一个字不动）。
+            Assert.Single(plan.Items);
+            Assert.Equal("444", FileNameHelper.GetArchiveBaseName("444.pa8rt1.rar"));
+
+            Assert.True(File.Exists(lone), "计划阶段一个字节都不许动盘上的文件");
+            Assert.Equal(before, Sha256(lone));
         }
 
         /// <summary>
-        /// ③b 有兄弟但**卷标记连不成 1..N**（`444.pa8rt2.rar` + `444.pa8rt4.rar`，缺 1 与 3）
-        /// ⇒ 整组自洽不成立 ⇒ 一个字都不改。另：**尺寸不规律**（两卷不等大且大的那卷在前）
-        /// 同样判不出 ⇒ 也不改。
+        /// ③b 有兄弟但**卷标记连不成 1..N**（`444.pa8rt2.rar` + `444.pa8rt4.rar`，缺 1 与 3）——
+        /// ⚠ <b>按用户 2026-10-06 的新指令改口径</b>：单卷改名只动**卷标记那一段**，
+        /// 与"这一组连不连得成 1..N"无关 ⇒ **各自照样改回标准名**（`part2` / `part4`）。
+        /// 尺寸不规律同理。⛔ 真正不许放宽的是「干净的名字不许改成脏名字」那一条。
         /// </summary>
         [Fact]
-        public void 整组自洽_卷标记不连续或尺寸不规律_都不改()
+        public void 续卷改名_卷标记不连续或尺寸不规律_照样各改各的()
         {
             string notContiguous = NewDirectory("skeleton-part-not-contiguous");
             string a = CreateFile(notContiguous, "444.pa8rt2.rar", 2048, seed: 1);
             CreateFile(notContiguous, "444.pa8rt4.rar", 1024, seed: 2);
 
-            Assert.False(VolumeNameRepair.Plan(a, NamesIn(notContiguous)).CanRepair);
+            VolumeNameRepairPlan planA = VolumeNameRepair.Plan(a, NamesIn(notContiguous));
+
+            Assert.True(planA.CanRepair, planA.Describe());
+            Assert.Equal("444.part2.rar", planA.SuggestedFileName);
 
             string irregular = NewDirectory("skeleton-part-irregular-size");
             string b = CreateFile(irregular, "444.pa8rt1.rar", 1024, seed: 1);
             CreateFile(irregular, "444.pa8rt2.rar", 4096, seed: 2);
 
-            Assert.False(VolumeNameRepair.Plan(b, NamesIn(irregular)).CanRepair);
+            VolumeNameRepairPlan planB = VolumeNameRepair.Plan(b, NamesIn(irregular));
 
-            Assert.True(File.Exists(a));
+            Assert.True(planB.CanRepair, planB.Describe());
+            Assert.Equal("444.part1.rar", planB.SuggestedFileName);
+
+            Assert.True(File.Exists(a), "计划阶段一个字节都不许动盘上的文件");
             Assert.True(File.Exists(b));
-            Assert.False(File.Exists(Path.Combine(notContiguous, "444.part2.rar")));
-            Assert.False(File.Exists(Path.Combine(irregular, "444.part1.rar")));
         }
 
         // ══════════════════ 闸门扩面：**所有"猜出来的"名字**都要过「整组自洽」（2026-10-04 第六轮） ══════════════════
@@ -658,11 +672,12 @@ namespace ArchiveFixer.Tests
         /// **孤零零一个 ⇒ 一个字都不改** —— 与 partN 那一档同一道闸门
         /// （<c>VolumeNameRepair.IsGuessedVolumeName</c> 转调 <c>ExtensionHelper.IsVolumeMarkByDisguise</c>）。
         ///
-        /// <para>用户 2026-10-04 第六轮原话：「孤立一个 <c>set.7z.0a0b1</c> ⇒ 不改（<c>VolumeRepairNoSiblings</c>）；
-        /// 配得出整组 ⇒ 照旧改」。</para>
+        /// <para>⚠ <b>本条与旧口径正面冲突，按新指令重写</b>（旧断言是「孤立一个 ⇒ 不改」，
+        /// 原话见 `修改日志.md` 2026-10-04 第六轮）。用户 2026-10-06 的新指令覆盖它：
+        /// 容忍解析/骨架命中算得出规范卷标记 ⇒ **任何一卷都改回标准名**。</para>
         /// </summary>
         [Fact]
-        public void 整组自洽_数字族脏卷标记_孤立一个什么都不做()
+        public void 续卷改名_数字族脏卷标记_孤立一个也改回标准名()
         {
             string directory = NewDirectory("numeric-mark-lone");
             string lone = CreateFile(directory, "set.7z.0a0b1", 4096, seed: 1);
@@ -671,12 +686,11 @@ namespace ArchiveFixer.Tests
 
             VolumeNameRepairPlan plan = VolumeNameRepair.Plan(lone, NamesIn(directory));
 
-            Assert.False(plan.CanRepair, $"配不出整组 ⇒ 不许改名，实际：{plan.Describe()}");
-            Assert.Equal(StatusText.VolumeRepairNoSiblings, plan.Reason);
-            Assert.Empty(plan.Items);
+            Assert.True(plan.CanRepair, plan.Describe());
+            Assert.Equal("set.7z.001", plan.SuggestedFileName);
+            Assert.Single(plan.Items);
 
-            Assert.True(File.Exists(lone));
-            Assert.False(File.Exists(Path.Combine(directory, "set.7z.001")));
+            Assert.True(File.Exists(lone), "计划阶段一个字节都不许动盘上的文件");
             Assert.Equal(before, Sha256(lone));
         }
 
@@ -801,6 +815,78 @@ namespace ArchiveFixer.Tests
                 item => string.Equals(item.CurrentFileName, mimicName, StringComparison.OrdinalIgnoreCase));
 
             Assert.True(File.Exists(mimic));
+        }
+
+        // ============================== 续卷的名字被改坏：任何一卷都要能改回标准名（用户 2026-10-06 拍板）
+
+        /// <summary>
+        /// **续卷的卷标记段自己粘着垃圾 ⇒ 也要改回标准名**（真机 CCCC 的 `111(3)\111.z0删除2` /
+        /// `111(4)\111.z0删除3`）。
+        ///
+        /// <para>用户原话：「**只修一卷这是你私自弄的，重大危险**」「我们攻破伪装不就是要将其改为标准名字吗」。
+        /// 容忍解析/骨架命中**早就认得出**这两片是 `111.z02` / `111.z03`
+        /// （<c>ExtensionHelper</c> 的注释里逐字就是这个例子），过去被"必须是第 1 卷"那一行挡回去了。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>PlanDisguisedRenamedSelf</c> 那一调撤掉（回到"只有第 1 卷能修"）
+        /// ⇒ 前两条断言当场变红（`CanRepair=False` + 理由「不是第一卷」）。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("111.z0删除2", "111.z02")]
+        [InlineData("111.z0删除3", "111.z03")]
+        [InlineData("set.7z.00删2", "set.7z.002")]
+        [InlineData("111.part删2.ra除r", "111.part2.rar")]
+        public void 计划_续卷的卷标记粘着垃圾_照样推出标准名(string mangledName, string expected)
+        {
+            string directory = NewDirectory("续卷改名-" + expected.Replace('.', '_') + "-" + Guid.NewGuid().ToString("N")[..6]);
+
+            string mangled = CreateFile(directory, mangledName, 4096);
+
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(mangled, NamesIn(directory));
+
+            Assert.True(plan.CanRepair, plan.Reason);
+            Assert.Equal(expected, plan.SuggestedFileName);
+            Assert.Equal(Path.Combine(directory, expected), plan.TargetPath);
+
+            // 只改这一个名字（⛔ 不许顺手把别人也改一遍）。
+            Assert.Single(plan.Items);
+            Assert.Equal(mangledName, plan.Items[0].CurrentFileName);
+        }
+
+        /// <summary>
+        /// ⛔ **不许把已经标准的名字当成"待改"**，⛔ **不许把脏名写回去**，⛔ **目标名被占就什么都不做**
+        /// —— 三条兜底都落在"什么都不做"那一档。
+        /// </summary>
+        [Fact]
+        public void 计划_续卷改名_三条兜底都不许动别人的东西()
+        {
+            // ① 名字本来就标准 ⇒ 没有可修的东西。
+            string standardDirectory = NewDirectory("续卷改名-已标准");
+            string standard = CreateFile(standardDirectory, "111.z02", 4096);
+
+            VolumeNameRepairPlan already = VolumeNameRepair.Plan(standard, NamesIn(standardDirectory));
+
+            Assert.False(already.CanRepair);
+
+            // ② 目标名被占（`111.z02` 已经在了）⇒ 什么都不做，⛔ 绝不覆盖。
+            string takenDirectory = NewDirectory("续卷改名-目标被占");
+            string mangled = CreateFile(takenDirectory, "111.z0删除2", 4096, seed: 7);
+
+            CreateFile(takenDirectory, "111.z02", 4096, seed: 8);
+
+            VolumeNameRepairPlan taken = VolumeNameRepair.Plan(mangled, NamesIn(takenDirectory));
+
+            Assert.False(taken.CanRepair);
+            Assert.Contains("111.z02", taken.Reason, StringComparison.Ordinal);
+
+            // ③ 普通包（名字里没有卷标记）⇒ 这条路一个字都不改（那是"修正后缀"那条路的事）。
+            string plainDirectory = NewDirectory("续卷改名-普通包");
+            string plain = CreateFile(plainDirectory, "111.zip", 4096);
+
+            VolumeNameRepairPlan notVolume = VolumeNameRepair.Plan(plain, NamesIn(plainDirectory));
+
+            Assert.False(notVolume.CanRepair);
+            Assert.Empty(notVolume.Items);
+            Assert.True(File.Exists(plain), "普通包在这条路上一个字节都不许动");
         }
 
         private string NewDirectory(string name)
