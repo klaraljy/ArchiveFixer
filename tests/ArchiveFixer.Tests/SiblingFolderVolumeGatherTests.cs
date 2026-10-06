@@ -678,7 +678,96 @@ namespace ArchiveFixer.Tests
             Assert.Empty(restLeftovers);
         }
 
-        // ============================================ ④ 每一单自己的其余物都要按档处理（C3）
+        // ============================================ ④ 过路层的其余物按档删掉（真机 48.35 MB）
+
+        /// <summary>
+        /// **真机 CCCC 2026-10-06 那 48.35 MB**（用户两次追问：「这个为什么还留着」「你其余物的问题别想逃脱」）：
+        /// 装入口包的那一单（真机 `111.rar`）只出**过程物**，自己因此停在中途 ⇒ **它自己的完整性判不出来**
+        /// ⇒ 其余物那一档一律停在"一个字节都不删" ⇒ `111\111\其余物\111.zip` 一直留到用户看见。
+        ///
+        /// <para>它与分卷判据无关：那一份就是这单这一次解压产出的过程物，而整组已经由**另一个当场核过清单、
+        /// 可证完整**的消费方解开 ⇒ 证据该按消费方那一份，六道门槛一条不绕过。</para>
+        ///
+        /// <para><b>红检</b>：把 `PurgePassThroughRestOfSettledProducer` 那一调注掉 ⇒ 本条变红
+        /// （`…\其余物\` 里那一份仍在盘上）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真机形状_过路层那一单的其余物按档删掉_48MB那处()
+        {
+            RequireSevenZip();
+
+            string? winRar = new ToolLocator().WinRarExePath;
+
+            if (string.IsNullOrWhiteSpace(winRar) || !File.Exists(winRar))
+            {
+                _output.WriteLine("这台机器没有 WinRAR ⇒ 造不出真跨盘 ZIP，本条跳过（不是验过了）。");
+                return;
+            }
+
+            (string pieceTwo, string pieceThree, string innerPackage, string tailPackage, byte[] payload, string payloadName) =
+                BuildCrossChainSpannedZipSet("过路层48MB", winRar!);
+
+            Harness harness = CreateHarness(
+                "AllBranches",
+                SourceHandlingMode.MoveToRest,
+                RestHandlingModes.Delete);
+
+            ArchiveTask innerTask = await AddTaskAsync(harness, innerPackage);
+            ArchiveTask tailTask = await AddTaskAsync(harness, tailPackage);
+            ArchiveTask pieceTwoTask = await AddTaskAsync(harness, pieceTwo);
+            ArchiveTask pieceThreeTask = await AddTaskAsync(harness, pieceThree);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(
+                new[] { innerTask, tailTask, pieceTwoTask, pieceThreeTask });
+            CaptureSnapshots(harness);
+
+            // ⚠ 必须走**一键处理**那条路（真机 18:13 那次就是它）：一键档在任务收尾时故意不处理其余物，
+            // 全部留到链尾 / 批末 —— 手动档复现不出真机那一刻的次序。
+            await harness.RunOneClickAsync();
+
+            Log(harness, "过路层48MB");
+
+            // ① 这一组照样真的解开（删其余物不许把内容物带坏）。
+            string? produced = FindFileUnder(harness.OutputRoot, payloadName);
+
+            Assert.NotNull(produced);
+            Assert.Equal(payload, File.ReadAllBytes(produced!));
+
+            // ② 全树里**一个其余物文件都不该留** —— 包括"只出过程物"那一单自己那份（真机 48.35 MB 那一格）。
+            string[] restLeftovers = Directory
+                .GetFiles(harness.OutputRoot, "*", SearchOption.AllDirectories)
+                .Where(path => path.Contains("其余物", StringComparison.Ordinal))
+                .ToArray();
+
+            foreach (string leftover in restLeftovers)
+            {
+                _output.WriteLine("还留着的其余物：" + leftover);
+            }
+
+            Assert.Empty(restLeftovers);
+
+            /*
+             * ③ **盘上收口：只剩成品本身**（真机 2026-10-06 第二次追问的 `111(2)\111(2)_\111.z01`，200 MiB）：
+             * 接片成功之后，产出它的那一单自己的落点里**不该再留一个没人认领的名字**
+             * —— 老写法在这里就先建一份硬链接，于是收尾谁也不认它，用户只看到 200 MiB 残留。
+             *
+             * <para><b>红检</b>：把 `PublishUnresolvedPieceLandingCopies` 那一调改成"接片之前就建"
+             * （= 恢复老写法）⇒ 本条变红（那两个名字留在盘上）。</para>
+             */
+            string[] remaining = Directory
+                .GetFiles(harness.OutputRoot, "*", SearchOption.AllDirectories)
+                .Where(path => !path.EndsWith(payloadName, StringComparison.Ordinal))
+                .ToArray();
+
+            foreach (string file in remaining)
+            {
+                _output.WriteLine("树里还剩：" + file[(harness.OutputRoot.Length + 1)..]);
+            }
+
+            Assert.Empty(remaining);
+        }
+
+        // ============================================ ⑤ 每一单自己的其余物都要按档处理（C3）
 
         /// <summary>
         /// **C3：其余物在每一层都要按「删除操作」处理掉**（用户 2026-10-06 原话：
@@ -1526,3 +1615,4 @@ namespace ArchiveFixer.Tests
         }
     }
 }
+

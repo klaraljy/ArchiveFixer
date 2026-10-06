@@ -7807,6 +7807,12 @@ namespace ArchiveFixer.ViewModels
         private readonly HashSet<ArchiveTask> _producerSourcesCollected = new();
 
         /// <summary>
+        /// 这些"过路层"生产者的**其余物已经按档处理过了**（幂等：⛔ 不重复删、不重复写日志）。
+        /// 见 <see cref="PurgePassThroughRestOfSettledProducer"/>（真机 CCCC 2026-10-06 的 48.35 MB）。
+        /// </summary>
+        private readonly HashSet<ArchiveTask> _passThroughRestHandled = new();
+
+        /// <summary>
         /// 已经在"批末补判"里跑过一遍的任务：⛔ 不许再记一次缺口（否则它会永远留在
         /// <see cref="_volumeDeficitDeferred"/> 里、永远不落结论）。</summary>
         private readonly HashSet<ArchiveTask> _volumeDeficitFinalPass = new();
@@ -8904,37 +8910,19 @@ namespace ArchiveFixer.ViewModels
                     string name = FileNameHelper.GetFileName(piece);
 
                     /*
-                     * ===== 目的地 = **它自己那条链那一层**（用户 2026-10-06：「你把分卷移过来不就是了吗」）=====
+                     * ===== 两个目的地，职责分开（真机 CCCC 2026-10-06 第二次追问后拆开）=====
                      *
-                     * ⛔ 两个地方都要有，缺一不可（真机 2026-10-06 逐条踩出来）：
-                     * ① **暂存目录** —— 收尾链（结果校验 / 定稿）读的就是它；不放进去 ⇒
-                     *    「校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」+ 源包不处理；
-                     * ② **落点目录**（`111\111.rar` ⇒ `111\111\`）—— 用户要看见的那一层、
-                     *    也是下一轮那一组要收卷的那一层。
-                     * ②用**硬链接**（零字节、删名字不动数据），于是工作区收尾清掉暂存那一份之后，
-                     * 落地那一份照样在。
+                     * ① **暂存目录**（这里就建 / 搬）—— 收尾链（结果校验 / 定稿）读的就是它；
+                     *    不放进 ⇒「校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」+ 源包不处理。
+                     * ② **"这一组该在的那一层" / 产出它的那一单自己的落点** —— 交给
+                     *    `AdoptUnresolvedVolumePieces`（接片那一档，唯一出口）去接；
+                     *    只有它接不进去（那一层还认不出来 / 被占）时，才由
+                     *    `PublishUnresolvedPieceLandingCopies` 在产出它的那一单自己的落点里补一份。
+                     *
+                     * ⛔ 老写法**在这里就先建一份落点的硬链接**，于是接片成功之后那一份成了没人认领的
+                     * 多余名（真机 `111(2)\111(2)_\111.z01`，200 MiB 一直留在盘上 —— 用户第二次追问）。
+                     * 顺序必须是"先接、接不进再补"，⛔ 不是"先补、接完不管"。
                      */
-                    string landing = ResolveOwnerChainDirectory(owner);
-
-                    if (landing.Length > 0)
-                    {
-                        try
-                        {
-                            Directory.CreateDirectory(landing);
-
-                            string landingPath = Path.Combine(landing, name);
-
-                            if (!File.Exists(landingPath))
-                            {
-                                HardLinkHelper.TryCreateHardLink(landingPath, piece);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            AppendLog("WARN", $"{owner.FileName}：落地那一份没建出来（{ex.Message}）。");
-                        }
-                    }
-
                     string target = Path.Combine(stage, name);
 
                     /*
@@ -9524,6 +9512,177 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **接片接不进去时，才在"产出它的那一单自己的落点"里补一份**（真机 CCCC 2026-10-06 第二次追问的
+        /// `111(2)\111(2)_\111.z01`，200 MiB）。
+        ///
+        /// <para>为什么要补这一份：工作区收尾会把暂存那一份整份删掉；如果那一刻"这一组该在的那一层"
+        /// 还认不出来（入口包还没被解出来 / 目录被占），这一片就会跟着工作区一起消失
+        /// ⇒ 批末那一站到盘上再也找不到它（真机 `那一片已经不在盘上（…\output\111.zip）` 那一次）。</para>
+        ///
+        /// <para>⛔ **只在"那一层还没有它"时补**：接片成功之后那一层已经有同一个名字了
+        /// （硬链接、零字节），再在落点里留一个名字就是**没人认领的多余名**
+        /// —— 收尾谁也不认它，用户只会看到 200 MiB 的残留。⛔ 这里只建链接，不改名、不搬、不覆盖。</para>
+        /// </summary>
+        /// <param name="pieces">暂存目录里的那几份（<see cref="PublishUnresolvedVolumePieces"/> 的返回值）。</param>
+        private void PublishUnresolvedPieceLandingCopies(IReadOnlyList<string>? pieces, ArchiveTask? owner)
+        {
+            if (owner == null || pieces == null || pieces.Count == 0)
+            {
+                return;
+            }
+
+            string landing = ResolveOwnerChainDirectory(owner);
+
+            if (landing.Length == 0)
+            {
+                return;
+            }
+
+            foreach (string piece in pieces)
+            {
+                try
+                {
+                    if (!File.Exists(piece))
+                    {
+                        continue;
+                    }
+
+                    string name = FileNameHelper.GetFileName(piece);
+                    string baseName = FileNameHelper.GetArchiveBaseName(name);
+
+                    // 这一组那一层已经有同一个名字 ⇒ 不再在产出它的那一单自己的落点里多留一份。
+                    string groupDirectory = ResolveBatchGroupDirectory(baseName);
+
+                    if (groupDirectory.Length > 0 && File.Exists(Path.Combine(groupDirectory, name)))
+                    {
+                        continue;
+                    }
+
+                    Directory.CreateDirectory(landing);
+
+                    string landingPath = Path.Combine(landing, name);
+
+                    if (!File.Exists(landingPath))
+                    {
+                        HardLinkHelper.TryCreateHardLink(landingPath, piece);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 判不出 / 建不出来 ⇒ 什么都不做（与改动前"落地那一份没建出来"同一档）。
+                    AppendLog("WARN", $"{owner.FileName}：落地那一份没建出来（{ex.Message}）。");
+                }
+            }
+        }
+
+        /// <summary>
+        /// **过路层那一单的其余物按档处理**（用户 2026-10-06 拍板：「其余物会在每层的过程中会删掉，
+        /// 我无法理解为什么还会有其余物留着」；他两次追问的 `111\111\其余物\111.zip`（48.35 MB）就是这一格）。
+        ///
+        /// <para><b>形状</b>：某一单只出**过程物**（它解出来的入口包 / 分卷片就是下一层的输入），
+        /// 自己因此停在中途；那一组后来由**另一个当场核过清单、可证完整**的消费方解开
+        /// ⇒ 它自己那份其余物不再有用，按「删除操作」处理。</para>
+        ///
+        /// <para>⛔ **六道门槛一条不绕过**（机器终态 / 完整性证据 / 其余物目录 / 形状 / 输出范围 /
+        /// 半套分卷），唯一差别是**证据来源**：这一单自己停在中途 ⇒ 它自己的完整性判不出来，
+        /// 该按证据的是**接手它的那一单**（`completenessEvidence`）。⛔ 那条证据只用于这一次删除，
+        /// 不写回它自己的账。</para>
+        ///
+        /// <para>⛔ 放行之前还要逐条确认：其余物里**每一个文件的名字都属于这一组**
+        /// （= 都是被那次成功解压接手的过程物）；只要有一个不属于 ⇒ 什么都不做（判不出就不动）。</para>
+        /// </summary>
+        private void PurgePassThroughRestOfSettledProducer(
+            ArchiveTask producer,
+            ArchiveTask consumer,
+            string groupBaseName)
+        {
+            if (producer == null || !_passThroughRestHandled.Add(producer))
+            {
+                return;
+            }
+
+            string restDirectory = producer.RestDirectoryPath;
+
+            if (string.IsNullOrWhiteSpace(restDirectory) || !Directory.Exists(restDirectory))
+            {
+                return;
+            }
+
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+            {
+                // 「不动其余物」这一档：一个字节都不删（不变量 1 的默认档）。
+                return;
+            }
+
+            string tailName = groupBaseName + ".zip";
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(restDirectory, "*", SearchOption.AllDirectories))
+                {
+                    if (!VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), tailName))
+                    {
+                        // 里面还有不属于这一组的东西 ⇒ 判不出 ⇒ 什么都不做（原样留着）。
+                        return;
+                    }
+                }
+            }
+            catch
+            {
+                return;
+            }
+
+            ResultCompletenessVerdict evidence = ResultCompletenessClassifier.Classify(consumer);
+
+            if (!evidence.AllowsSourceRemoval)
+            {
+                return;
+            }
+
+            bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
+            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
+                ? DeleteMode.RecycleBin
+                : DeleteMode.Permanent;
+
+            RestPurgeOutcome outcome;
+
+            try
+            {
+                outcome = new RestItemPurger(
+                        RestDeleteExecutor,
+                        null,
+                        ContentKeepRules.FromSettings(Settings))
+                    .Purge(
+                        producer,
+                        cancelled,
+                        deleteMode,
+                        evidence,
+
+                        /*
+                         * 输出范围那一道门槛的锚点：这一单被收场时 `OutputPath` 已经被清空
+                         * （跟班卷没有自己的成品目录）⇒ 用**唯一落点出口**现算一份它那条链的落点目录
+                         * —— 其余物正是建在那一层底下（真机 `111\111\其余物`）。
+                         */
+                        ResolveOwnerChainDirectory(producer));
+            }
+            catch (Exception ex)
+            {
+                // 删东西绝不许把已经成立的结论拖成异常：落成"没删成"，别的什么都不变。
+                AppendLog("WARN", $"{producer.FileName}：处理过路层的其余物时出现意外错误：{ex.Message}");
+                return;
+            }
+
+            AppendLog(
+                outcome.Succeeded ? "INFO" : "WARN",
+                outcome.Succeeded
+                    ? $"{producer.FileName}：过路层的其余物已按「删除操作」处理（{outcome.EntryCount} 项 / {outcome.FreedBytes} 字节）"
+                      + $"—— 这一组的内容已由「{consumer.FileName}」解开。"
+                    : $"{producer.FileName}：过路层的其余物这次没删成 —— {outcome.Message}");
+        }
+
+        /// <summary>
         /// **批末补判**：把名单里那几个任务逐条重判一次（用户口径 2 的后半句）。
         ///
         /// <para>三步，全部读**盘上事实**：① 再收一次卷（<see cref="TryGatherVolumesBeforeExtract"/>）；
@@ -9955,6 +10114,12 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog("INFO", consumedNote);
             }
+
+            /*
+             * 这一单的**其余物**也要按档处理（用户 2026-10-06 两次追问的那 48.35 MB）：
+             * 它只出过程物、那份过程物已被这一组那次**可证完整**的解压接手 ⇒ 它的其余物不再有用了。
+             */
+            PurgePassThroughRestOfSettledProducer(piece, consumer, groupBaseName);
 
             if (!moveSources || !_producerSourcesCollected.Add(piece))
             {
@@ -18055,6 +18220,9 @@ namespace ArchiveFixer.ViewModels
                 {
                     List<string> carried = PublishUnresolvedVolumePieces(recursion, task);
                     AdoptUnresolvedVolumePieces(recursion, task, carried);
+
+                    // 接片接不进去的那几份，才在产出它的那一单自己的落点里补一份（顺序不许反过来）。
+                    PublishUnresolvedPieceLandingCopies(carried, task);
                 }
 
                 if (task.Status == StatusText.ExtractSuccess || hasPublishableProducts)

@@ -147,6 +147,9 @@ namespace ArchiveFixer.Storage
             IReadOnlyList<string>? keepPaths,
             DeleteMode mode = DeleteMode.Permanent)
         {
+            // 这一档（部分完成发布）没有"换证据来源"的需求：输出范围按本任务自己的算。
+            string? allowedRootEvidence = null;
+
             if (task == null)
             {
                 return Skip("没有任务，未删除任何东西");
@@ -168,7 +171,7 @@ namespace ArchiveFixer.Storage
                 return Skip($"{name}：其余物目录不存在（{task.RestDirectoryPath}），没有可删除的内容");
             }
 
-            if (!TryResolveAllowedRoot(task, directory, out string allowedRoot, out string why))
+            if (!TryResolveAllowedRoot(task, directory, allowedRootEvidence, out string allowedRoot, out string why))
             {
                 return Skip($"{name}：{why}，已拒绝删除");
             }
@@ -485,7 +488,31 @@ namespace ArchiveFixer.Storage
         /// <param name="task">目标任务。</param>
         /// <param name="cancelled">这一刻是不是已经被取消（用户按了「取消当前」/「停止后续」）。</param>
         /// <param name="mode">怎么处理：<see cref="DeleteMode.RecycleBin"/> 或 <see cref="DeleteMode.Permanent"/>。</param>
-        public RestPurgeOutcome Purge(ArchiveTask? task, bool cancelled, DeleteMode mode = DeleteMode.Permanent)
+        /// <param name="completenessEvidence">
+        /// **完整性证据的来源**。默认（null）= 本任务自己那一份（<see cref="ResultCompletenessClassifier.Classify"/>）。
+        ///
+        /// <para>唯一需要换来源的形状（真机 CCCC 2026-10-06 18:13，用户两次追问的 48.35 MB
+        /// `111\111\其余物\111.zip`）：某一单只出**过程物**（它解出来的入口包就是下一层的输入）、
+        /// 自己因此停在中途 ⇒ **它自己的完整性永远判不出来**，而那一组后来由**另一个当场核过清单、
+        /// 可证完整**的消费方解开 ⇒ 该按证据的是**消费方那一份**。</para>
+        ///
+        /// <para>⛔ 换的只是"证据从哪来"，**六道门槛一条都不绕过**；⛔ 这条证据只用于这一次删除，
+        /// 不许写回任务自己的账（伪造记录是更坏的事）。</para>
+        /// </param>
+        /// <param name="allowedRootEvidence">
+        /// **"本任务输出范围"这一道门槛的锚点**（默认 null = 用本任务自己的 `CollectedPath` / `OutputPath`）。
+        ///
+        /// <para>同上那一格：过路层那一单被收场时 `OutputPath` 已经被**显式清空**
+        /// （它是跟班卷，没有自己的成品目录）⇒ 老写法会拒绝删除（"不在本任务的输出目录（）之内"）。
+        /// 调用方用**唯一落点出口**现算一份它那条链的落点目录传进来即可
+        /// —— 其余物正是建在那一层底下。</para>
+        /// </param>
+        public RestPurgeOutcome Purge(
+            ArchiveTask? task,
+            bool cancelled,
+            DeleteMode mode = DeleteMode.Permanent,
+            ResultCompletenessVerdict? completenessEvidence = null,
+            string? allowedRootEvidence = null)
         {
             if (task == null)
             {
@@ -519,7 +546,8 @@ namespace ArchiveFixer.Storage
              * 只做了非空底线校验"也算通过（`Verified = true`），于是**没有任何证据**的这一档
              * 照样拿到了删源包的通行证；现在它落在"判不出"⇒ 一个字节都不删。
              */
-            ResultCompletenessVerdict completeness = ResultCompletenessClassifier.Classify(task);
+            ResultCompletenessVerdict completeness = completenessEvidence
+                ?? ResultCompletenessClassifier.Classify(task);
 
             if (!completeness.AllowsSourceRemoval)
             {
@@ -539,7 +567,7 @@ namespace ArchiveFixer.Storage
                 return Skip($"{name}：其余物目录不存在（{task.RestDirectoryPath}），没有可删除的内容");
             }
 
-            if (!TryResolveAllowedRoot(task, directory, out string allowedRoot, out string why))
+            if (!TryResolveAllowedRoot(task, directory, allowedRootEvidence, out string allowedRoot, out string why))
             {
                 return Skip($"{name}：{why}，已拒绝删除");
             }
@@ -710,6 +738,7 @@ namespace ArchiveFixer.Storage
         private static bool TryResolveAllowedRoot(
             ArchiveTask task,
             string directory,
+            string? allowedRootEvidence,
             out string allowedRoot,
             out string why)
         {
@@ -717,6 +746,15 @@ namespace ArchiveFixer.Storage
             why = string.Empty;
 
             var candidates = new List<string>();
+
+            /*
+             * 调用方给的锚点（见 `Purge` 的 `allowedRootEvidence`）：只在过路层那一格用得上
+             * —— 那一单被收场时 `OutputPath` 已被显式清空，自己的两个候选都是空的。
+             */
+            if (!string.IsNullOrWhiteSpace(allowedRootEvidence))
+            {
+                candidates.Add(SafePathHelper.GetFullPathSafe(allowedRootEvidence));
+            }
 
             if (!string.IsNullOrWhiteSpace(task.CollectedPath))
             {
