@@ -592,16 +592,16 @@ namespace ArchiveFixer.Tests
         /// **真机 CCCC 那一档的源包处理**：源包操作 = 放入其余物 + 其余物 = 彻底删除 ⇒
         /// 整组解开之后**每一个源包（含散着的那几片）都要进其余物并被删掉**。
         ///
-        /// <para>⚠ <b>本条暂标 Skip：它钉的是一个**还没修完**的缺口（如实记账，⛔ 不当成验过）。</b>
-        /// 已实测到的事实（逐条都有日志）：
+        /// <para>⚠ <b>本条仍标 Skip：它钉的那个缺口**只解决了一半**（如实记账，⛔ 不当成验过）。</b>
+        /// 已实测到的账（每条都有日志）：
         /// · `111.z0删除3` 那一档**已经好了**：按跟班卷收场 + 源片按档搬走并删除；
-        /// · `111.z0删除2` 仍然留在盘上 —— 根因是**批末补判那一站把这一单的 `CurrentPath` 改到了入口包
-        ///   `111.zip` 上**（日志逐字：`CurrentPath=…\111\其余物\111.zip ｜ OriginalPath=…\111(3)\111.z0删除2`）
-        ///   ⇒ 后面所有"这一单自己那一片在不在借片账里"的判据都问到了入口包头上；
-        /// · 试过一版"入口包在别的目录时就不改 `CurrentPath`"，**两条 E2E 当场变成零产物**（已撤回）。
-        /// ⇒ 正解要等下一轮（改起点那一刻就要把"自己那一片"记在一个不会被覆盖的事实位上）。</para>
+        /// · `111.z0删除2`（它是"起头被改写到入口包上"的那一单，`CurrentPath=111.zip`、
+        ///   `OriginalPath=111.z0删除2`）仍然留在盘上。**根因已收窄到最后一条**：
+        ///   那份"借片账"里存的消费方是**文件名**（`111.zip`），而这一单因为起点被改写**也叫 `111.zip`**
+        ///   ⇒ 按名字回查永远查到"它自己"或另一个同名的单 ⇒ 判不出真正的消费方 ⇒ 源片没人搬。
+        ///   ⛔ 账里存名字这一条不改掉，这个撞名就解不开（下一轮第一件事）。</para>
         /// </summary>
-        [Fact(Skip = "已知缺口：批末补判会改写 CurrentPath，导致第二片没人替它搬源包（见本用例注释）")]
+        [Fact(Skip = "已知缺口：借片账里存的是文件名，而这一单被改写到入口包后与消费方撞名（见本用例注释）")]
         public async Task 真机形状_源包处理选放入其余物时_整组源包真的进其余物并按档删除()
         {
             RequireSevenZip();
@@ -878,6 +878,40 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(pieceTwo), "用户的源片不许动");
             Assert.True(File.Exists(pieceThree), "用户的源片不许动");
             Assert.Equal(new FileInfo(pieceTwo).Length, new FileInfo(pieceThree).Length);
+
+            /*
+             * ③.5 **C5：收卷临时物一个都不许留在用户的源目录里**（用户 2026-10-06 报的那一格）。
+             *
+             * 判据只有两条，都是路径事实：
+             * · 源目录树里**不许有**我们的工作区壳（`.ArchiveFixer.work`）—— 工作区只许建在**目标目录**里；
+             * · 源目录树里除了**原来那几份**（外加"接片时另起的规范卷名"硬链接）**不许再多出任何文件**
+             *   —— 尤其不许出现"被搬过来又忘了清"的临时名（真机曾经出现过的形状：`111(4)\111.zip`）。
+             */
+            string sourceTree = Path.Combine(_root, "跨链收卷");
+
+            Assert.DoesNotContain(
+                Directory.EnumerateDirectories(sourceTree, "*", SearchOption.AllDirectories),
+                path => string.Equals(
+                    Path.GetFileName(path),
+                    PathService.DefaultWorkspaceDirectoryName,
+                    StringComparison.OrdinalIgnoreCase));
+
+            string[] sourceFiles = Directory
+                .GetFiles(sourceTree, "*", SearchOption.AllDirectories)
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray()!;
+
+            Assert.Contains("111_outer.zip", sourceFiles);
+            Assert.Contains("111(2)_.zip", sourceFiles);
+
+            // 源目录里**只许**有那两份原包、那两片源文件、以及接片时另起的规范卷名（`111.z01` / `111.z02`）。
+            Assert.All(
+                sourceFiles,
+                name => Assert.True(
+                    name is "111_outer.zip" or "111(2)_.zip" or "111.z0删除2" or "111.z0删除3"
+                        or "111.z01" or "111.z02" or "111.zip",
+                    $"源目录里多出了不该有的东西：{name}"));
 
             // ④ 过程中**不许**把"分卷缺失"当结论落给他（口径：等这一批都跑完再判）。
             Assert.DoesNotContain(

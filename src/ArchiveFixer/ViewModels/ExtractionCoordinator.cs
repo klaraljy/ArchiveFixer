@@ -9698,6 +9698,7 @@ namespace ArchiveFixer.ViewModels
                  * 而它没进账（收卷那一刻它那一片还没被采纳）⇒ 源片一直留在盘上。
                  */
                 bool consumedHit = TryResolveConsumedByAnotherTask(task, out string consumerName);
+
                 string owner = consumedHit ? consumerName : ResolveSuccessfulGroupConsumerName(task);
 
                 if (owner.Length == 0)
@@ -9786,17 +9787,29 @@ namespace ArchiveFixer.ViewModels
 
             if (baseName.Length == 0
                 || !_groupConsumerByName.TryGetValue(baseName, out string? name)
-                || string.IsNullOrWhiteSpace(name)
-                || string.Equals(name, task.FileName, StringComparison.Ordinal))
+                || string.IsNullOrWhiteSpace(name))
             {
                 return string.Empty;
             }
 
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
             {
-                if (candidate != null
-                    && string.Equals(candidate.FileName, name, StringComparison.Ordinal)
-                    && candidate.Outcome == TaskOutcome.Succeeded)
+                if (candidate == null || !string.Equals(candidate.FileName, name, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                /*
+                 * ⛔ **借片的那一单不是消费方**（真机 CCCC 2026-10-06 实测）：批末补判会把补齐了那一单的
+                 * `CurrentPath` 改到入口包上 ⇒ 它与真正的消费方**撞名**（两个都叫 `111.zip`）。
+                 * 判据 = 它自己那一片也在"借片账"的键里（`IsBorrowedPieceTask`）。
+                 */
+                if (ReferenceEquals(candidate, task) || IsBorrowedPieceTask(candidate))
+                {
+                    continue;
+                }
+
+                if (candidate.Outcome == TaskOutcome.Succeeded)
                 {
                     return name;
                 }
@@ -9968,9 +9981,29 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                ArchiveTask? owner = _vm.Tasks.FirstOrDefault(
-                    candidate => candidate != null &&
-                                 string.Equals(candidate.FileName, consumer, StringComparison.Ordinal));
+                ArchiveTask? owner = null;
+
+                foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+                {
+                    if (candidate == null || !string.Equals(candidate.FileName, consumer, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * ⛔ **借片的那一单不是消费方**（真机 CCCC 2026-10-06 实测）：批末补判会把补齐了那一单的
+                     * `CurrentPath` 改到入口包上 ⇒ 它与真正的消费方**撞名**（两个都叫 `111.zip`）
+                     * ⇒ 按名字回查必须先认出"这是借片的那一单"（判据 = 它自己那一片也在账里）。
+                     * ⛔ 只多这一条，别的一字不改。
+                     */
+                    if (IsBorrowedPieceTask(candidate))
+                    {
+                        continue;
+                    }
+
+                    owner = candidate;
+                    break;
+                }
 
                 if (owner == null || owner.Outcome != TaskOutcome.Succeeded)
                 {
@@ -9985,18 +10018,103 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这一单自己的全部路径（<c>CurrentPath</c> + 账上那几卷 + <c>OriginalPath</c>；去重）。
+        /// 这一单**自己那一片借给过别的单**吗（判据只有一条：它自己的某条路径是那份"借片账"的**键**）。
         ///
-        /// <p>⚠ <b>`OriginalPath` 这一档是 2026-10-06 真机 CCCC 实测补上的</b>：批末补判那一站会把
-        /// 补齐了的这一单的 <c>CurrentPath</c> 改到**入口包**（跨盘 ZIP 的末片 `111.zip`）上 ——
-        /// 于是"这一单的源片在不在借片账里"这个问题，拿 <c>CurrentPath</c> 去问必然问不出来
-        /// （那条路径是入口包、不是它自己那一片），源片就留在盘上了。
+        /// <p>为什么要它：那份账记的消费方是文件名，而"补齐之后起点被改到入口包上"的那一单会与真正的
+        /// 消费方**撞名** ⇒ 按名字回查必须先认出"这是借片的那一单，不是消费方"（真机 CCCC 2026-10-06）。</p>
+        /// </summary>
+        private bool IsBorrowedPieceTask(ArchiveTask task)
+        {
+            if (task == null || _consumedVolumeSources.Count == 0)
+            {
+                return false;
+            }
+
+            /*
+             * ⚠ **只问"它自己那一份"两条路径**（`OriginalPath` / `CurrentPath`），⛔ **不许连 `VolumePaths` 一起问**：
+             * `VolumePaths` 是"这一组那几卷"的账，里面有**别的单**的片（真机：消费方 `111.zip` 那一单的
+             * `VolumePaths` 里就有 `111.z0删除2/3`）—— 一起问会把**真正的消费方**误判成"借片的那一单"，
+             * 于是谁也当不成消费方（实测踩到）。
+             */
+            foreach (string path in EnumerateOwnPaths(task))
+            {
+                if (!string.IsNullOrWhiteSpace(path) && _consumedVolumeSources.ContainsKey(path))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 这一单**自己那一份**的两条路径（<c>OriginalPath</c> 在前、<c>CurrentPath</c> 在后；去重，且**不含**分卷账）。
+        /// </summary>
+        private static IEnumerable<string> EnumerateOwnPaths(ArchiveTask task)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (!string.IsNullOrWhiteSpace(task.OriginalPath) && seen.Add(task.OriginalPath))
+            {
+                yield return task.OriginalPath;
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.CurrentPath) && seen.Add(task.CurrentPath))
+            {
+                yield return task.CurrentPath;
+            }
+        }
+
+        /// <summary>
+        /// 这一单**自己最初那一片**在盘上的路径（<c>OriginalPath</c>；它同时必须真的不是入口包）。
+        ///
+        /// <p>判据两条：① `OriginalPath` 非空；② 它的**文件基名与 <c>CurrentPath</c> 的基名不同**
+        /// （批末补判会把 `CurrentPath` 改到入口包上 —— 那时 `OriginalPath` 才是"它自己那一片"）。</p>
+        /// </summary>
+        private static bool TryGetOwnPiecePath(ArchiveTask task, out string ownPiece)
+        {
+            ownPiece = string.Empty;
+
+            string original = task.OriginalPath ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(original))
+            {
+                return false;
+            }
+
+            string current = task.CurrentPath ?? string.Empty;
+
+            if (string.Equals(
+                    FileNameHelper.GetFileName(original),
+                    FileNameHelper.GetFileName(current),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                // 两条路径同名 ⇒ 它没有"被改到别的文件上"这回事，不构成"自己那一片"的证据。
+                return false;
+            }
+
+            ownPiece = original;
+            return true;
+        }
+
+        /// <summary>
+        /// 这一单自己的全部路径（<c>OriginalPath</c> + <c>CurrentPath</c> + 账上那几卷；去重）。
+        ///
+        /// <p>⚠ <b>`OriginalPath` 必须排在**最前**（2026-10-06 真机 CCCC 实测）</b>：批末补判那一站会把
+        /// 补齐了的这一单的 <c>CurrentPath</c> 改到**入口包**（跨盘 ZIP 的末片 `111.zip`）上 ⇒
+        /// 拿 <c>CurrentPath</c> 去问"这一单自己那一片在不在借片账里"必然问不出来（那是入口包、不是它那一片），
+        /// 源片就留在盘上了（真机盘上实测：`111.z0删除3` 被处理了，`111.z0删除2` 留在原处）。
         /// `OriginalPath` 是**最初导入路径**，搬到其余物之前一直指向它自己那一片
         /// （搬运成功后会跟着更新，见 <c>ExecuteSourcePackageMove</c>）。</p>
         /// </summary>
         private static IEnumerable<string> EnumerateTaskPaths(ArchiveTask task)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (!string.IsNullOrWhiteSpace(task.OriginalPath) && seen.Add(task.OriginalPath))
+            {
+                yield return task.OriginalPath;
+            }
 
             if (!string.IsNullOrWhiteSpace(task.CurrentPath) && seen.Add(task.CurrentPath))
             {
@@ -10009,11 +10127,6 @@ namespace ArchiveFixer.ViewModels
                 {
                     yield return path;
                 }
-            }
-
-            if (!string.IsNullOrWhiteSpace(task.OriginalPath) && seen.Add(task.OriginalPath))
-            {
-                yield return task.OriginalPath;
             }
         }
 
