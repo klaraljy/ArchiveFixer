@@ -8440,20 +8440,29 @@ namespace ArchiveFixer.ViewModels
                 return published;
             }
 
-            string home = ResolveOwnerChainDirectory(owner);
+            /*
+             * ⛔ **搬进"暂存目录"，不是搬进落点目录**（2026-10-06 真机 + 守门用例当场逮到）：
+             * 收尾那条链（结果校验 / 定稿 / 源包处理）读的是 `<任务工作区>\stage`，
+             * 而落点目录要等**定稿**按落点公式才建。上一版直接搬进落点目录 ⇒ 校验看到的是**空的暂存目录**
+             * ⇒「校验未通过：输出目录是空目录，没有产物」⇒ ① 列表显示「解压失败」② 源包一个字节都不处理
+             * （真机 `ArchiveFixer-本次操作_20261006_112403.txt` 第 121/123/127 行）。
+             *
+             * ⇒ 搬进暂存目录之后：校验看得见它、定稿按落点公式把它落到 `111\111\`、源包照常处理。
+             */
+            string stage = _pathService.BuildTaskStageDirectory(owner);
 
-            if (home.Length == 0)
+            if (string.IsNullOrWhiteSpace(stage))
             {
                 return published;
             }
 
             try
             {
-                Directory.CreateDirectory(home);
+                Directory.CreateDirectory(stage);
             }
             catch (Exception ex)
             {
-                AppendLog("WARN", $"{owner.FileName}：这一片的落点目录建不出来（{ex.Message}），按原样留着。");
+                AppendLog("WARN", $"{owner.FileName}：暂存目录建不出来（{ex.Message}），按原样留着。");
                 return published;
             }
 
@@ -8467,7 +8476,7 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     string name = FileNameHelper.GetFileName(piece);
-                    string target = Path.Combine(home, name);
+                    string target = Path.Combine(stage, name);
 
                     /*
                      * ⛔ 已经在那一层了就什么都不做（幂等）；目标被占（文件或目录）⇒ 一个字节都不动。
@@ -8491,8 +8500,8 @@ namespace ArchiveFixer.ViewModels
                     {
                         AppendLog(
                             "INFO",
-                            $"{owner.FileName}：这一步解出来的「{name}」留在它自己那条链的落点目录里 —— "
-                            + $"{Path.GetFileName(home)}（下一轮解压要用的就是它；⛔ 不是失败、也不算残缺）。");
+                            $"{owner.FileName}：这一步解出来的「{name}」留在它自己那条链里（下一轮解压要用的就是它；"
+                            + "⛔ 不是失败、也不算残缺）。");
 
                         RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
                         published.Add(target);
@@ -16734,21 +16743,24 @@ namespace ArchiveFixer.ViewModels
                     {
                         AppendLog("INFO", $"解压成功：{task.FileName} -> {task.OutputPath}");
                     }
+                }
 
-                    /*
-                     * ⚠ **整条收尾（校验 / 定稿 / 源包处理）都跑完之后**，才把这一趟没走完、可下一步要用的
-                     * 那片（入口包）搬回它自己那条链的落点目录（用户 2026-10-06：「你把分卷移过来不就是了吗」）。
-                     *
-                     * ⛔ 位置是硬要求（真机 2026-10-06 11:22 当场踩到 + 守门用例当场逮到）：
-                     * 放在**校验之前**会把这一层的产物目录搬空 ⇒「结果校验 —— 校验未通过：输出目录是空目录，
-                     * 没有产物」⇒ ① 列表里显示「**解压失败**」② 「完整性：可证不完整」③ 源包一个字节都不处理
-                     * （用户报的"成功了但原包没删"+"列表显示解压失败"就是这一处）。
-                     */
-                    if (recursion != null && recursion.UnresolvedVolumePieces.Count > 0)
-                    {
-                        List<string> carried = PublishUnresolvedVolumePieces(recursion, task);
-                        AdoptUnresolvedVolumePieces(recursion, task, carried);
-                    }
+                /*
+                 * ⚠ **整条收尾（校验 / 定稿 / 源包处理）都跑完之后**，才把这一趟没走完、可下一步要用的
+                 * 那片（入口包）搬回它自己那条链（用户 2026-10-06：「你把分卷移过来不就是了吗」）。
+                 *
+                 * ⛔ 位置两条硬要求，都是实测踩出来的：
+                 * ① **必须在结果校验之后**：放在校验之前会把这一层的产物目录搬空 ⇒
+                 *    「结果校验 —— 校验未通过：输出目录是空目录，没有产物」⇒ 列表显示「解压失败」
+                 *    + 「完整性：可证不完整」+ 源包一个字节都不处理（真机 2026-10-06 11:24 那两个 bug）；
+                 * ② **不能放进"成功才进"的那一支**：`111.rar` 这类是「部分完成」（它解出来的东西是下一轮的输入）
+                 *    ⇒ 进不去那一支 ⇒ 落地一次都不跑（守门用例当场逮到："这一步解出来的"那一行压根没出现）。
+                 * ⛔ 搬进**暂存目录**（收尾链读的就是它、定稿再按落点公式落到 `111\111\`）。
+                 */
+                if (recursion != null && recursion.UnresolvedVolumePieces.Count > 0)
+                {
+                    List<string> carried = PublishUnresolvedVolumePieces(recursion, task);
+                    AdoptUnresolvedVolumePieces(recursion, task, carried);
                 }
 
                 /*
