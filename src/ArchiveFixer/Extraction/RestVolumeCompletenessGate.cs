@@ -272,6 +272,23 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
+                /*
+                 * ===== **已经在"其余物"里的，不算"成品目录里留着的另一片"** =====
+                 *
+                 * 真机 CCCC 2026-10-06 22:22：其余物里那一份（入口包 `111.zip`，48.35 MB）删不掉，
+                 * 外面被点名的两样 `111.z01`、`111.rar` **全都躺在组层其余物里**
+                 * —— 那是**已经收拢好、正等着按档删掉**的过程物，拿它们当"外面还留着一片"
+                 * 就把同一次收尾里的删除全拦死（批末重试 4 次全被同一句挡住）。
+                 *
+                 * ⛔ 红线一个字不放松：25 GB 那一次外面留下的是**成品目录里的内容物**
+                 * （不在任何其余物里）⇒ 照旧一律拦下；`.z01..z05` 对末片 `.zip` 那种真被拆开的形状
+                 * 只要有一片还躺在成品目录里，这道闸门照样拦。
+                 */
+                if (ProcessArtifactLayout.IsInsideDeletableProcessFolders(file))
+                {
+                    continue;
+                }
+
                 if (!TryGetArchivePieceBaseName(file, out string baseName)
                     || !candidatePieces.TryGetValue(baseName, out string? candidateName))
                 {
