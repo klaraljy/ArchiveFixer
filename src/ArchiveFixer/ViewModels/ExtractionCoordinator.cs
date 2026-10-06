@@ -10295,6 +10295,17 @@ namespace ArchiveFixer.ViewModels
              * **源片搬运照做**（这一组确实已经解开、那一片已被接手）。
              */
             bool selfConsumed = ReferenceEquals(piece, consumer);
+            // ⛔ 临时排障（用完删）：只在⑥设置「详细日志（排查用）」打开时写 ——
+            //    一次看清"自己解开的组"这条收场链到底有没有走到、走到了哪一档。
+            if (Settings?.VerboseLog == true)
+            {
+                AppendLog(
+                    "WARN",
+                    $"[排障·收场] piece={piece.FileName} ｜ consumer={consumer.FileName} ｜ self={selfConsumed}"
+                    + $" ｜ moveSources={moveSources} ｜ 自己的其余物={piece.RestDirectoryPath}"
+                    + $" ｜ 自己那一片={ResolveOwnPiecePath(piece)}");
+            }
+
 
             if (!selfConsumed && (!piece.IsVolumeGroupFollower || piece.Outcome != TaskOutcome.Succeeded))
             {
@@ -10354,7 +10365,7 @@ namespace ArchiveFixer.ViewModels
              */
             SourceHandlingMode sourceHandling = _spaceTightThisBatch
                 ? SourceHandlingMode.MoveToRest
-                : (Settings.SourceHandling ?? string.Empty).Equals(
+                : (Settings?.SourceHandling ?? string.Empty).Equals(
                     nameof(SourceHandlingMode.MoveToRest),
                     StringComparison.OrdinalIgnoreCase)
                     ? SourceHandlingMode.MoveToRest
