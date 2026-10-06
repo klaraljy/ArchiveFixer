@@ -8597,7 +8597,26 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            foreach (string path in task.VolumePaths.ToList())
+            /*
+             * 候选 = ①这一单账上那几卷 + ②**全表里同组的每一条**（真机 CCCC：`.z03` 那一单在
+             * `111(4)\`，它自己还没轮到重判 ⇒ 只看这一单的账就会漏掉它，整组永远停在 3 卷）。
+             * ⛔ "同组"仍由既有尺子回答（`BelongsToSameGroup`），⛔ 接片仍只硬链接、绝不搬用户文件。
+             */
+            string tailName = FileNameHelper.GetArchiveBaseName(task.CurrentPath) + ".zip";
+            var sources = new List<string>(task.VolumePaths);
+
+            foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
+            {
+                string path = other?.CurrentPath ?? string.Empty;
+
+                if (path.Length > 0
+                    && VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                {
+                    sources.Add(path);
+                }
+            }
+
+            foreach (string path in sources.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
             {
                 try
                 {
