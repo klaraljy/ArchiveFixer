@@ -1573,20 +1573,6 @@ namespace ArchiveFixer.ViewModels
             if (work.Verification.Verified)
             {
                 AdoptPublishedVolumePieces(task);
-
-                /*
-                 * ⚠ 还要把**这一单的入口包/片**接进"它自己那条链"那一层（用户 2026-10-06：
-                 * 「111.zip 的位置已经确定，你把分卷移过来不就是了吗」）。
-                 *
-                 * 单层路的现场：`111_outer.zip` 只解一层 ⇒ 它解出来的 `111.zip` 被当**内层包**放进
-                 * "其余物"（那条路承诺"内层包原样留着当内容物"，`InnerLayerContinuationTests` 钉着这条红线）。
-                 * 可 `111.zip` 正是下一组跨盘 ZIP 的入口包 —— 它必须出现在**产出它的那一单自己那条链**
-                 * 那一层（`111\111\`），别人才收得动这一组。
-                 *
-                 * ⛔ 这一步只**硬链接**（零字节、不改名、不搬、不覆盖）：其余物里那一份一个字节不动、
-                 * 名字一个字符不改，它的去留仍由既有口径决定（轮次续解会把剩下的当内层包接着解）。
-                 */
-                LinkEntryPackageIntoOwnChain(task);
             }
 
             /*
@@ -8779,75 +8765,6 @@ namespace ArchiveFixer.ViewModels
             return null;
         }
 
-        /// <summary>
-        /// **把这一单吐出来的入口包/分卷片接进"它自己那条链"那一层**（单层路专用；递归路走
-        /// <see cref="PublishUnresolvedVolumePieces"/>，两条路共用 <see cref="TryAdoptUnresolvedVolumePiece"/>）。
-        ///
-        /// <para>用户 2026-10-06：「111.zip 的位置已经确定，你把分卷移过来不就是了吗」。</para>
-        ///
-        /// <para>⛔ 只扫**这一单自己那两棵树**（成品那一层 + 其余物那一层，不递归：§8 不替用户满盘找）；
-        /// ⛔ 只硬链接（零字节、不改名、不搬、不覆盖）—— 其余物里那一份原样留着，
-        /// 它是"下一轮的内层包"这件事一个字都不变（`InnerLayerContinuationTests` 那条红线）。</para>
-        /// </summary>
-        private void LinkEntryPackageIntoOwnChain(ArchiveTask task)
-        {
-            if (task == null || string.IsNullOrWhiteSpace(task.CurrentPath))
-            {
-                return;
-            }
-
-            string tailName = FileNameHelper.GetArchiveBaseName(task.CurrentPath) + ".zip";
-            string chainHome = ResolveOwnerChainDirectory(task);
-
-            /* 排障用（⛔ 不是给人看的常态日志）：扫了哪两棵树、各几个文件、这一单的链家在哪。 */
-            AppendLog(
-                "INFO",
-                $"[收卷排障] {task.FileName}：链家 = {(chainHome.Length > 0 ? Path.GetFileName(chainHome) : "（判不出）")}"
-                + $"；成品层 = {(string.IsNullOrWhiteSpace(task.ContentDirectoryPath) ? "（空）" : Path.GetFileName(task.ContentDirectoryPath))}"
-                + $"；其余物层 = {(string.IsNullOrWhiteSpace(task.RestDirectoryPath) ? "（空）" : Path.GetFileName(task.RestDirectoryPath))}");
-
-            foreach (string directory in new[] { task.ContentDirectoryPath, task.RestDirectoryPath })
-            {
-                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-                {
-                    continue;
-                }
-
-                foreach (string file in Directory.EnumerateFiles(directory))
-                {
-                    string name = FileNameHelper.GetFileName(file);
-
-                    /*
-                     * 只挑"这一组的分卷片"：名字带卷标记（`.z01` / `.001` / `part1` …）或者
-                     * 自述是跨盘 ZIP 的末片（末片 EOCD 是明文 ⇒ 硬证据），而且必须与这一单同组。
-                     */
-                    bool plausible = VolumeGroupDetector.TryGetVolumeIndex(name) != null
-                        || Detection.SpannedZipIndex.TryRead(file) != null;
-
-                    if (!plausible || !VolumeGroupDetector.BelongsToSameGroup(name, tailName))
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        TryAdoptUnresolvedVolumePiece(file, task);
-                    }
-                    catch (Exception ex)
-                    {
-                        AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// 单层路那一档：**这一单吐出来的入口包**（第一卷第 1 片 / 跨盘 ZIP 的末片）如果在
-        /// **我们自己的过程物目录**里，就把它搬到这一单自己那条链的落点目录（与递归路同一个出口）。
-        ///
-        /// <para>⛔ 只认得出第一份（见 <see cref="Detection.GroupVolumeDirectory"/>）：判不出 ⇒ 什么都不做；
-        /// ⛔ 只移动我们自己的过程物（用户源目录里的文件这一档碰都不碰）。</para>
-        /// </summary>
         private void PublishEntryPackageFromProcessFolders(ArchiveTask task)
         {
             if (task == null)
@@ -9160,7 +9077,7 @@ namespace ArchiveFixer.ViewModels
                     RememberGroupPiecesConsumedBy(task);
 
                     // 这一组的消费方是谁：同一组别的单在它收尾之前**不落任何结论**（见下面的判据）。
-                    _groupConsumerByName[FileNameHelper.GetArchiveBaseName(task.CurrentPath)] = task.FileName;
+                    _groupConsumerByName[FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty)] = task.FileName;
                     continue;
                 }
 

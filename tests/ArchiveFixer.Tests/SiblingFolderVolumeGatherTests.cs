@@ -693,12 +693,15 @@ namespace ArchiveFixer.Tests
         /// **对应第三条路**：②页选「只解当前这一层」+ 一键处理（轮次续解）—— 同一份真机形状也必须由
         /// "本批各单解出来的片"在批末凑齐并解开（用户 2026-10-05：「赶紧同步」）。
         ///
-        /// <para>这条路上没有"链把片解出来"这个过程物：片子是**成品内容物**（真机里名字还脏，
-        /// `111(2)_.zip` 解出来的是 `111.z0删除1`）⇒ 每一单定稿收尾时按规范卷名接进这一组的目录
-        /// （<c>AdoptPublishedVolumePieces</c>），批末那一站照常收齐、解开。</para>
+        /// <para>⚠ <b>2026-10-06 按用户口径重写预期</b>（旧断言是"照样把这一组解开"）：他原话
+        /// 「**关键是单层路都拿不到完整的分卷**，`111.z01` 这个是能够解压出来的，但是 `111.zip` 你弄不了，
+        /// 你就连完整的分卷都弄不到，**那就是没有，就是橙色预警了**」。
+        /// 单层路只解一层 ⇒ 入口包（跨盘 ZIP 的末片）出不来、"下一轮的内层包"也还没被当输入解过
+        /// ⇒ 这一组在**这一条路上**就是凑不齐 ⇒ 如实报**橙色预警**（「部分完成」+「分卷缺失」），
+        /// ⛔ 不是失败、也⛔ 不许假装解开了。要它真解开，走递归路（含单链）—— 那两条 E2E 见上一条。</para>
         /// </summary>
         [SevenZipFact]
-        public async Task 真机形状_只解当前这一层_一键处理_批末照样把这一组解开()
+        public async Task 真机形状_只解当前这一层_这一组拿不到完整分卷_如实报橙色预警()
         {
             RequireSevenZip();
 
@@ -728,19 +731,24 @@ namespace ArchiveFixer.Tests
 
             Log(harness, "跨链收卷-单层");
 
-            string? produced = FindFileUnder(harness.OutputRoot, payloadName);
-
-            Assert.NotNull(produced);
-            Assert.Equal(payload, File.ReadAllBytes(produced!));
-
             /*
-             * ⚠ 这里断言的是**批末那一站把它收齐了**这一行，而不是收卷那句 INFO：
-             * 「详细日志」关着的时候，**成功任务**的逐行 INFO 会被日志策略丢掉（用户文档里写明的那条），
-             * 所以"接住那一片"的过程行在这一档看不见 —— 看得见的是批末那一行的结论。
+             * ⛔ 这一条**不断言解开了**：单层路拿不到完整的分卷（入口包 `111.zip` 出不来）
+             * ⇒ 按用户口径如实报橙色预警。断言三件事：
+             *   ① 有内容物落地（这一层解出来的东西没被扔）；
+             *   ② 这一组到最后一刻仍然不完整 ⇒ 落了「部分完成」那一档的话（橙色预警的判据）；
+             *   ③ 用户的源片一个字节没动。
              */
-            Assert.Contains(
+            Assert.DoesNotContain(
                 harness.LogTexts,
                 text => text.Contains("这一组现在齐了", StringComparison.Ordinal));
+
+            Assert.Contains(
+                harness.LogTexts,
+                text => text.Contains("到最后一刻仍然不完整", StringComparison.Ordinal)
+                        && text.Contains("按「部分完成」记", StringComparison.Ordinal));
+
+            Assert.Equal(TaskOutcome.PartiallyCompleted, pieceTwoTask.Outcome);
+            Assert.Equal(TaskOutcome.PartiallyCompleted, pieceThreeTask.Outcome);
 
             Assert.True(File.Exists(pieceTwo), "用户的源片不许动");
             Assert.True(File.Exists(pieceThree), "用户的源片不许动");
