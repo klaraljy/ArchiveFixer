@@ -1127,6 +1127,16 @@ namespace ArchiveFixer.Extraction
                 return targets;
             }
 
+            /*
+             * ⛔ **"这一单自己那一份"必须按盘上的真实名字加进来**（真机 2026-10-07 08:20 逮到）：
+             * 起点被改写到入口包上之后 `CurrentPath` 指向别处、`OriginalPath` 还停在改名前的脏名上
+             * ⇒ 盘上那一片（`…\111(4)\111.z03`）两条都不沾 ⇒ 清单里没有它 ⇒ 整组搬运搬不到它、
+             * 源片永远留在用户目录里。同批里**没被改写起点**的那一单（`111.z02`）清单命中 ⇒ 搬走了
+             * —— 这就是"同样两片、结局不同"的唯一变量。
+             * ⚠ 这一处与 `ExtractionCoordinator.FindOwnPieceOnDisk` 是同一条判据（下一步统一到一处出口）。
+             */
+            Add(ResolveOwnFileOnDisk(task));
+
             foreach (string path in task.VolumePaths)
             {
                 Add(path);
@@ -1565,6 +1575,52 @@ namespace ArchiveFixer.Extraction
             }
 
             return string.Join("；", parts);
+        }
+        /// <summary>
+        /// 这一单自己那一份**在盘上的真实路径**（改名之后也找得到）：最初导入那个目录里、**同包基名**的那个文件。
+        /// 判不出 ⇒ 空串（调用方照旧按账上那几条走）。
+        /// </summary>
+        private static string ResolveOwnFileOnDisk(ArchiveTask task)
+        {
+            string original = task.OriginalPath ?? string.Empty;
+            string directory = Path.GetDirectoryName(original) ?? string.Empty;
+
+            if (original.Length == 0 || directory.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            if (File.Exists(original))
+            {
+                return original;
+            }
+
+            string baseName = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(original));
+
+            if (baseName.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(directory))
+                {
+                    if (string.Equals(
+                            FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(file)),
+                            baseName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return file;
+                    }
+                }
+            }
+            catch
+            {
+                // 读不动 ⇒ 判不出。
+            }
+
+            return string.Empty;
         }
     }
 }
