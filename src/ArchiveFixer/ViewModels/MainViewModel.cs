@@ -5688,8 +5688,14 @@ namespace ArchiveFixer.ViewModels
                 return 0;
             }
 
+            /*
+             * ⛔ **按规范化路径比，⛔ 不比裸字符串**（真机 2026-10-07：无用物扫描认得出 15 个，
+             * 可"移出列表"一个都没匹配上 ⇒ 那些 `.txt` 一直挂在列表里、还顶出"未处理 N"）。
+             * 裸 `HashSet<string>` 比 `CurrentPath` 对大小写/分隔符/`..` 一律敏感 ——
+             * 用既有出口 `SafePathHelper.PathEquals`（与全项目其它地方同一把尺子）。
+             */
             List<ArchiveTask> matched = Tasks
-                .Where(task => wanted.Contains(task.CurrentPath ?? string.Empty))
+                .Where(task => wanted.Any(path => SafePathHelper.PathEquals(path, task.CurrentPath)))
                 .ToList();
 
             if (matched.Count == 0)

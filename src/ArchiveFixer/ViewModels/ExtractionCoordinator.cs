@@ -12455,6 +12455,14 @@ namespace ArchiveFixer.ViewModels
             {
                 int junkRemoved = _vm.RemoveTasksBySourcePaths(facts.Junk.Items.Select(item => item.FullPath));
 
+                if (junkRemoved == 0 && Settings?.VerboseLog == true)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"[排障·无用物] 扫到 {facts.Junk.TotalCount} 条（明细 {facts.Junk.Items.Count} 条），移掉 0 个 —— 前 3 条路径："
+                        + string.Join("、", facts.Junk.Items.Take(3).Select(item => item.FullPath)));
+                }
+
                 if (junkRemoved > 0)
                 {
                     AppendLog(
