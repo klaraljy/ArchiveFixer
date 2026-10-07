@@ -307,6 +307,40 @@ namespace ArchiveFixer.Tests
                 task => task.FileName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>
+        /// ⛔ **批末要把"名字被改过的那些行"重新算一遍检测格式 / 后缀状态**（用户 2026-10-07：
+        /// 「文件名、大小、后缀、检测格式、状态，每个都有问题」）。
+        ///
+        /// <para>真机现场：`111(2)_.zi删除p` 扫描那一刻写着「后缀不匹配」，随后被改回
+        /// `111(2)_.zip` —— 不重算，列表里就一直挂着一句过期的话。</para>
+        ///
+        /// <para><b>红检</b>：把 `ScanCoordinator.RefreshRenamedRowFactsAsync` 里那一句
+        /// `task.ExtensionStatus = _archiveDetectService.GetExtensionStatus(...)` 撤掉 ⇒ 本条变红。</para>
+        /// </summary>
+        [Fact]
+        public async Task 批末重算改过名那一行的后缀状态()
+        {
+            Harness harness = CreateHarness("renamed-facts");
+
+            string dirty = CreateFile(harness, "111(2)_.zi删除p", ZipHeaderBytes());
+            ArchiveTask task = AddTask(harness, dirty);
+
+            // 扫描那一刻的结论（按旧名字）：格式未知 + 后缀不匹配。
+            task.DetectedFormat = "Unknown";
+            task.ExtensionStatus = StatusText.ExtensionMismatch;
+
+            // 修好后缀之后：盘上的名字变了，这一行的显示身份也跟着它走。
+            string renamed = Path.Combine(harness.SourceDirectory, "111(2)_.zip");
+
+            File.Move(dirty, renamed);
+            task.CurrentPath = renamed;
+
+            await harness.Vm.RefreshRenamedRowFactsAsync();
+
+            Assert.Equal("ZIP", task.DetectedFormat);
+            Assert.NotEqual(StatusText.ExtensionMismatch, task.ExtensionStatus);
+        }
+
         // ================================================================ ④ B 段判据
 
         [Fact]

@@ -149,6 +149,36 @@ namespace ArchiveFixer.Tests
             Assert.Contains(nameof(ArchiveTask.DisplayExtension), seen);
         }
         /// <summary>
+        /// ⛔ **改名那一步的链只许来自改名记录本身，不许"账上字段比对"推**（用户 2026-10-07：
+        /// 「你不要给我瞎猜，看程序怎么弄」＋「最简单的改名操作你都要有一个变换的过程」）。
+        ///
+        /// <para>现场：任务账上"最初导入名"与"最新已知名"不同**不能**当作发生过改名的证据 ——
+        /// 那可能只是显示层跟着盘上走的副产物。⇒ 没有记录就没有这一步。</para>
+        ///
+        /// <para><b>红检</b>：把 `DisplayTransformationText` 改回"比对两个名字推一步" ⇒ 本条变红
+        /// （那条推出来的 `111.z0删除3 → 111.z03` 会冒出来）。</para>
+        /// </summary>
+        [Fact]
+        public void 没有改名记录时_链里不许凭空冒出改名那一步()
+        {
+            string dirty = Path.Combine(_root, "111", "111.z0删除3");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dirty)!);
+            File.WriteAllBytes(dirty, new byte[1024]);
+
+            var task = new ArchiveTask(dirty, 1);
+
+            // 盘上被改了名（显示层会跟着走），但**没有任何改名记录**写进链里。
+            string renamed = Path.Combine(_root, "111", "111.z03");
+
+            File.Move(dirty, renamed);
+            task.CurrentPath = renamed;
+
+            Assert.Equal("111.z03", task.DisplayFileName);              // 显示确实跟着盘上走了
+            Assert.Equal(string.Empty, task.DisplayTransformationText); // 但链里不许凭空多一步
+        }
+
+        /// <summary>
         /// ⛔ **变换链只写程序自己的记录**：改名（最初导入名 → 最新已知名）、续解每一层
         /// （递归报上来的那一帧原文）、这一片被谁解开的那一组接手（收场记下的事实）——
         /// 用户 2026-10-07：「我们最后想看到 `111.rar` 通过解压缩两层变换到 `111.zip`」＋
@@ -167,11 +197,12 @@ namespace ArchiveFixer.Tests
 
             var task = new ArchiveTask(dirty, 1);
 
-            // ① 改名（同目录 ⇒ 账上跟着走）
+            // ① 改名（这一步的链由**改名记录本身**写进来：RenameService.UpdateTaskRenameSuccess）
             string renamed = Path.Combine(_root, "111", "111.z03");
 
             File.Move(dirty, renamed);
             task.CurrentPath = renamed;
+            task.AppendTransformationStep("111.z0删除3 → 111.z03");
 
             // ② 续解两层（协调器把递归报上来的帧原样落到任务上）
             task.Status = StatusText.Extracting;
@@ -223,6 +254,35 @@ namespace ArchiveFixer.Tests
 
             Assert.DoesNotContain("整组第", task.StatusDisplayText, StringComparison.Ordinal);
             Assert.Contains("100%", task.StatusDisplayText, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// ⛔ **「分卷」那一列不许把扫描那一刻的"缺 …"留在已经解开整组的行上**（用户 2026-10-07：
+        /// 三列过期里点名的「分卷」）。判据只用结构化事实（被整组接手过 / 跟班卷且已完成），
+        /// ⛔ 不重跑归组、⛔ 不动 `VolumePaths`。
+        ///
+        /// <para><b>红检</b>：把 `DisplayVolumeInfoText` 那一档撤掉（直接 `=> VolumeInfoText`）⇒ 本条变红。</para>
+        /// </summary>
+        [Fact]
+        public void 分卷列_整组解开之后不许再写缺卷()
+        {
+            string piece = Path.Combine(_root, "111", "111.rar");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(piece)!);
+            File.WriteAllBytes(piece, new byte[2048]);
+
+            var row = new ArchiveTask(piece, 1);
+
+            row.VolumeInfoText = "共 1 卷，缺 111.zip、111.z01、111.z02";
+
+            Assert.Equal("共 1 卷，缺 111.zip、111.z01、111.z02", row.DisplayVolumeInfoText);   // 没被接手前照旧
+
+            row.Outcome = TaskOutcome.Succeeded;
+            row.MarkSkipped(StatusText.VolumePieceProducerConsumedByOtherTaskFormat);
+            row.SettledWithGroupUnitName = "111.z03";
+
+            Assert.Equal(StatusText.VolumeInfoSettledWithGroupText, row.DisplayVolumeInfoText);
+            Assert.Contains("缺", row.VolumeInfoText, StringComparison.Ordinal);   // ⛔ 账上的原始值一个字没改
         }
 
         /// <summary>

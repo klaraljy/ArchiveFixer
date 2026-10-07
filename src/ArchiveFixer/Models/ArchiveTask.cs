@@ -1141,6 +1141,32 @@ namespace ArchiveFixer.Models
         private readonly List<string> _transformationSteps = new();
 
         /// <summary>
+        /// **记下一步变换**（唯一写入出口）：调用方必须是"程序自己那条记录"的持有者 ——
+        /// 改名 = <c>RenameCoordinator</c> 里那条 <c>OriginalFileName → NewFileName</c> 记录；
+        /// 续解 = 递归每层报上来的那一帧（本类内部在 <see cref="ApplyProgress"/> 里记）。
+        /// ⛔ 不许拿"账上两个字段比对"推出来当记录（用户 2026-10-07：「你不要给我瞎猜，看程序怎么弄」）。
+        /// </summary>
+        public void AppendTransformationStep(string step)
+        {
+            if (string.IsNullOrWhiteSpace(step))
+            {
+                return;
+            }
+
+            string trimmed = step.Trim();
+
+            if (_transformationSteps.Count > 0
+                && string.Equals(_transformationSteps[^1], trimmed, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _transformationSteps.Add(trimmed);
+            OnPropertyChanged(nameof(DisplayTransformationText));
+            OnPropertyChanged(nameof(StatusDisplayText));
+        }
+
+        /// <summary>
         /// 变换链给用户看的那一行（空 = 这一步什么都没发生，不写"无"）。
         /// 例：<c>111.z0删除3 → 111.z03；第 1 层：111.rar → 第 2 层：111.zip；由「111.z03」那一单解开整组</c>。
         /// </summary>
@@ -1150,26 +1176,13 @@ namespace ArchiveFixer.Models
             {
                 var parts = new List<string>();
 
-                string originalName = Path.GetFileName(OriginalPath);
-
-                // ① 改名（两个名字都取自任务账：最初导入的 vs 最新已知的）。
-                if (originalName.Length > 0 && _ownFilePath.Length > 0)
-                {
-                    string ownName = Path.GetFileName(_ownFilePath);
-
-                    if (ownName.Length > 0 && !string.Equals(originalName, ownName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        parts.Add($"{originalName} → {ownName}");
-                    }
-                }
-
-                // ② 续解每一层（程序自己报的帧原文）。
+                // ① 改名 / 续解每一步：**程序自己记下来的**（唯一写入出口见 AppendTransformationStep）。
                 if (_transformationSteps.Count > 0)
                 {
                     parts.Add(string.Join(" → ", _transformationSteps));
                 }
 
-                // ③ 这一片被整组接手（收场那一刻记下的事实）。
+                // ② 这一片被整组接手（收场那一刻记下的事实）。
                 if (SettledWithGroupUnitName.Length > 0)
                 {
                     parts.Add(string.Format(
@@ -1298,6 +1311,20 @@ namespace ArchiveFixer.Models
 
         /// <summary>分卷情况的一句话说明，直接显示给用户。</summary>
         public string VolumeInfoText { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 「分卷」那一列**显示**什么（用户 2026-10-07：三列过期里点名的「分卷」—— 已经解开整组的行
+        /// 上还留着扫描那一刻的「共 1 卷，缺 111.zip、111.z01…」）。
+        ///
+        /// <para>判据只用**结构化事实**：这一片被整组接手过（<see cref="SettledWithGroupUnitName"/> 非空，
+        /// 收场那一刻记下的）或它本身就是跟班卷、且已按"完成"收场 ⇒ 那一组已经不缺卷了，如实说一声。
+        /// ⛔ 不重跑归组、⛔ 不动 <see cref="VolumePaths"/>（归组结果是收场判据的输入）、⛔ 不比中文文案。</para>
+        /// </summary>
+        public string DisplayVolumeInfoText =>
+            SettledWithGroupUnitName.Length > 0
+            || (IsVolumeGroupFollower && Outcome == TaskOutcome.Succeeded)
+                ? StatusText.VolumeInfoSettledWithGroupText
+                : VolumeInfoText;
 
         /// <summary>
         /// 被**空间门**拦下时那一刻的三个数（需求 / 可用 / 差多少）；<c>null</c> = 这一单不是被空间门拦下的。
@@ -2078,6 +2105,8 @@ namespace ArchiveFixer.Models
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayPathToolTip)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusDisplayText)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayErrorMessage)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayTransformationText)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayVolumeInfoText)));
             }
         }
     }

@@ -11647,6 +11647,15 @@ namespace ArchiveFixer.ViewModels
                     {
                         // CurrentPath 的 setter 会顺手刷新文件名 / 目录 / 后缀 / 体积。
                         candidate.CurrentPath = move.TargetPath;
+
+                        /*
+                         * **这一步变换也要记进那一行的链里**（唯一写入出口）：整组改名走的是这条路，
+                         * 只有"改名记录"本身的两个名字 —— ⛔ 不许靠账上字段比对推
+                         * （用户 2026-10-07：「最简单的改名操作你都要有一个变换的过程」）。
+                         */
+                        candidate.AppendTransformationStep(
+                            $"{Path.GetFileName(move.CurrentPath)} → {Path.GetFileName(move.TargetPath)}");
+
                         touched = true;
                     }
 
@@ -14408,6 +14417,14 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("INFO", "批量解压完成");
 
                 /*
+                 * **批末把"改过名的行"那三列重算一遍**（检测格式 / 建议后缀 / 后缀状态）——
+                 * 用户 2026-10-07 点名的三列过期：扫描那一刻写的是**旧名字**下的结论
+                 * （真机 `111(2)_.zi删除p` 写着「后缀不匹配」，而我们随后把它改回了 `111(2)_.zip`）。
+                 * ⛔ 只重算这几个纯事实字段、走扫描那边唯一的出口；⛔ 不碰 Status / 进度 / 落点 / 归组。
+                 */
+                await _vm.RefreshRenamedRowFactsAsync().ConfigureAwait(true);
+
+                /*
                  * 并发排队的批末汇总（用户 2026-09-26 第 45 条）：过程里只在第一次排队时说一句，
                  * 这里把"到底有几个等过"一次说清 —— 比 74 行同义反复有用得多。
                  */
@@ -14428,8 +14445,7 @@ namespace ArchiveFixer.ViewModels
                  * 用户导出的日志就能与界面逐格对齐（⛔ 取的是同一批计算属性，不另算一套）。
                  */
                 if (Settings.VerboseLog)
-                {
-                    // ⛔ 只在「详细日志（排查用）」打开时才写：默认关（成功任务只留一行是既有红线，
+                {                    // ⛔ 只在「详细日志（排查用）」打开时才写：默认关（成功任务只留一行是既有红线，
                     //    有守门用例钉着），所以这一行默认不出现。
                     foreach (ArchiveTask row in SnapshotTaskTable(Tasks))
                     {

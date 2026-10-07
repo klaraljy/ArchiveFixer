@@ -5672,6 +5672,11 @@ namespace ArchiveFixer.ViewModels
         /// 按源路径移除任务（导入后的无用物提醒里点"从列表里移除这些"走这条）。
         /// </summary>
         /// <returns>真的移掉了几个（路径对不上的不算）。</returns>
+        /// <summary>
+        /// **批末重算"改过名那些行"的检测格式 / 后缀状态**（用户 2026-10-07 点名的三列过期）。
+        /// 转调扫描那边唯一的出口，⛔ 这里不另写判据。
+        /// </summary>
+        internal Task RefreshRenamedRowFactsAsync() => _scanCoordinator.RefreshRenamedRowFactsAsync();
         internal int RemoveTasksBySourcePaths(IEnumerable<string>? paths)
         {
             if (paths == null)

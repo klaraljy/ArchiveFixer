@@ -1,4 +1,5 @@
 using ArchiveFixer.Detection;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.Storage;
@@ -517,6 +518,69 @@ namespace ArchiveFixer.ViewModels
                     firstVolumeName));
 
             return true;
+        }
+
+        /// <summary>
+        /// **批末把"名字被改过的那些行"重算一遍「检测格式 / 建议后缀 / 后缀状态」**
+        /// （用户 2026-10-07 点名的三列过期：「文件名、大小、后缀、检测格式、状态，每个都有问题」）。
+        ///
+        /// <para>为什么会过期：这三列写的是**扫描那一刻、按当时那个名字**得出的结论。真机上
+        /// `111(2)_.zi删除p` 那一刻是「后缀不匹配」，随后我们把它改回了 `111(2)_.zip` ⇒ 不重算，
+        /// 列表里就一直挂着一句已经不对的话。</para>
+        ///
+        /// <para>判据（只看结构化事实）：**最初导入的名字 ≠ 这一行现在显示的那份文件的名字** ⇒ 被改过名。
+        /// ⛔ 只重算这三个纯事实字段（走既有出口 <see cref="ArchiveDetectService.GetExtensionStatus"/>，
+        /// 与扫描那一刻同一处判据）；⛔ 不碰 Status / Operation / 进度 / 落点 / VolumePaths；
+        /// ⛔ 文件不在（判不出）就什么都不做。</para>
+        /// </summary>
+        public async Task RefreshRenamedRowFactsAsync()
+        {
+            foreach (ArchiveTask task in Tasks.ToList())
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                string displayPath = task.DisplayPath;
+
+                if (string.IsNullOrWhiteSpace(displayPath))
+                {
+                    continue;
+                }
+
+                string importName = Path.GetFileName(task.OriginalPath);
+                string currentName = Path.GetFileName(displayPath);
+
+                if (importName.Length == 0
+                    || string.Equals(importName, currentName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // 名字没变过 ⇒ 这三列不会过期（绝大多数行都是这一档）。
+                    continue;
+                }
+
+                try
+                {
+                    if (!File.Exists(displayPath))
+                    {
+                        // 判不出 ⇒ 什么都不做（保持扫描那一刻的原样）。
+                        continue;
+                    }
+
+                    DetectResult result = await _archiveDetectService.DetectAsync(displayPath).ConfigureAwait(true);
+
+                    task.DetectedFormat = result.Format;
+                    task.SuggestedExtension = result.SuggestedExtension;
+                    task.ExtensionStatus = _archiveDetectService.GetExtensionStatus(
+                        currentName,
+                        ExtensionHelper.GetLastExtensionDisplay(displayPath),
+                        result);
+                }
+                catch
+                {
+                    // 这几列只是给人看的：重算失败一律保持原样，⛔ 不许让它影响这一批的结论。
+                }
+            }
         }
 
         internal async Task RescanTaskAsync(object? parameter)

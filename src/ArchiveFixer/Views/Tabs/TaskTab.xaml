@@ -532,7 +532,7 @@
                                                     <Run Text="当前后缀：" /><Run Text="{Binding CurrentExtension, Mode=OneWay}" /><LineBreak />
                                                     <Run Text="检测格式：" /><Run Text="{Binding DetectedFormat, Mode=OneWay}" /><LineBreak />
                                                     <Run Text="建议后缀：" /><Run Text="{Binding SuggestedExtension, Mode=OneWay}" /><LineBreak />
-                                                    <Run Text="分卷：" /><Run Text="{Binding VolumeInfoText, Mode=OneWay}" />
+                                                    <Run Text="分卷：" /><Run Text="{Binding DisplayVolumeInfoText, Mode=OneWay}" />
                                                 </TextBlock>
                                             </Setter.Value>
                                         </Setter>
@@ -547,13 +547,13 @@
                                 用户在①页读到的是"两个一模一样的 111.part1.rar"——看不出这一行代表几卷。
                             -->
                             <DataGridTextColumn Header="分卷"
-                                                Binding="{Binding VolumeInfoText}"
+                                                Binding="{Binding DisplayVolumeInfoText}"
                                                 Width="200"
                                                 IsReadOnly="True">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                        <Setter Property="ToolTip" Value="{Binding VolumeInfoText}" />
+                                        <Setter Property="ToolTip" Value="{Binding DisplayVolumeInfoText}" />
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>

@@ -1413,6 +1413,14 @@ namespace ArchiveFixer.Services
             task.Status = StatusText.RenameSuccess;
             task.ErrorMessage = string.Empty;
             task.LastUpdatedTime = DateTime.Now;
+
+            /*
+             * **记下这一步变换**（唯一写入出口 `ArchiveTask.AppendTransformationStep`）：用的就是
+             * 这条改名记录自己的两个名字（旧名 → 新名）—— ⛔ 不是拿账上字段比对推出来的
+             * （用户 2026-10-07：「你不要给我瞎猜，看程序怎么弄」；①页那一行靠这条链说明
+             * 「最简单的改名操作也要有一个变换的过程」）。
+             */
+            task.AppendTransformationStep($"{Path.GetFileName(oldPath)} → {Path.GetFileName(newPath)}");
         }
 
         private static void UpdateTaskRenameFailed(ArchiveTask? task, string errorMessage)

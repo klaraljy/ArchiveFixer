@@ -3110,6 +3110,15 @@ namespace ArchiveFixer.Models
         /// <summary>状态格把变换链接在后面时用的分隔符（半角竖线，与批末汇总同一套观感）。</summary>
         public const string TransformationChainSeparator = " ｜ ";
 
+        /// <summary>
+        /// 「分卷」那一列在**这一片已经被整组接手**时的如实说法（用户 2026-10-07：三列过期里点名的
+        /// 「分卷」—— 已经解开整组的行上还写着扫描那一刻的「共 1 卷，缺 111.zip、111.z01…」）。
+        ///
+        /// <para>判据是**结构化事实**（收场那一刻记下的"是谁解开整组"+ 机器终态），⛔ 不重跑归组、
+        /// ⛔ 不动 `VolumePaths`（那正是收场判据的输入）；也 ⛔ 不去比中文文案。</para>
+        /// </summary>
+        public const string VolumeInfoSettledWithGroupText = "这一组已由整组解开（不缺卷了）";
+
         // ── 跨盘 ZIP：末片在手、其余几片散在源目录里（2026-10-05 真机第八批） ──
         //
         // 现场：`111.z0删除1/2/3` 三片散在三个源目录里，而这一组的末片 `111.zip` 压在两层层层加密的
