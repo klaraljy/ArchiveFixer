@@ -1690,6 +1690,24 @@ namespace ArchiveFixer.Models
             return true;
         }
 
+        /// <summary>
+        /// 属性变更通知 —— ⛔ **显示那几列在这里统一"顺带"通知**（用户 2026-10-07：
+        /// 「一直都是界面的问题，我看着日志还好好的，你为什么没有同步」）。
+        ///
+        /// <para>为什么必须在这一处统一做：`DisplayFileName / DisplaySizeText / DisplayExtension /
+        /// DisplayPath / StatusDisplayText / DisplayErrorMessage` 都是**计算属性**
+        /// （读 `_userFacingFilePath` + 当前路径 + 状态 + 错误信息）—— 绑定只认 `PropertyChanged`，
+        /// 而改动底层字段的地方很多（收场、批末补判、改名、重扫、清校验…）。靠"每个调用点记得叫一声"
+        /// 一定会漏（实测就漏了：日志是现算的、永远最新，界面留着旧值）。
+        /// ⇒ 判据放在这里：**只要动到这几列的输入，就把这几列一起通知**。
+        /// ⛔ 通知列表里不许再出现触发项自己（否则自激）。</para>
+        /// </summary>
+        private static readonly string[] DisplayColumnTriggers =
+        {
+            nameof(Status), nameof(ErrorMessage), nameof(FileName), nameof(DirectoryPath),
+            nameof(CurrentExtension), nameof(SourceSizeBytes), nameof(CurrentPath), nameof(Outcome)
+        };
+
         protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
             if (string.IsNullOrWhiteSpace(propertyName))
@@ -1698,6 +1716,18 @@ namespace ArchiveFixer.Models
             }
 
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+
+            if (DisplayColumnTriggers.Contains(propertyName, StringComparer.Ordinal))
+            {
+                // ⛔ 只发那几列（不递归、不发触发项自己）。
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayFileName)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplaySizeText)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayExtension)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayPath)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayPathToolTip)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusDisplayText)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayErrorMessage)));
+            }
         }
     }
 }

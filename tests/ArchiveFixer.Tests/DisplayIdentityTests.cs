@@ -117,6 +117,37 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal("普通结论", plain.DisplayErrorMessage);
         }
+        /// <summary>
+        /// **改底层字段也要刷新显示那几列**（用户 2026-10-07：「一直都是界面的问题，我看着日志还好好的，
+        /// 你为什么没有同步」）。判据统一在 <c>OnPropertyChanged</c> 一处 ⇒ 任何动到
+        /// Status / ErrorMessage / FileName / CurrentPath / SourceSizeBytes 的地方都会带上显示列。
+        ///
+        /// <para><b>红检</b>：把 <c>DisplayColumnTriggers</c> 那一段撤掉 ⇒ 本条变红。</para>
+        /// </summary>
+        [Fact]
+        public void 改底层字段时_显示那几列一起发通知()
+        {
+            string file = Path.Combine(_root, "111.z03");
+
+            File.WriteAllBytes(file, new byte[1024]);
+
+            var task = new ArchiveTask(file, 1);
+            var seen = new List<string>();
+
+            ((INotifyPropertyChanged)task).PropertyChanged += (_, e) => seen.Add(e.PropertyName ?? string.Empty);
+
+            task.ErrorMessage = "改一下";
+            Assert.Contains(nameof(ArchiveTask.DisplayErrorMessage), seen);
+
+            seen.Clear();
+            task.Status = StatusText.ExtractSuccess;
+            Assert.Contains(nameof(ArchiveTask.StatusDisplayText), seen);
+
+            seen.Clear();
+            task.CurrentPath = Path.Combine(_root, "111.z02");
+            Assert.Contains(nameof(ArchiveTask.DisplayFileName), seen);
+            Assert.Contains(nameof(ArchiveTask.DisplayExtension), seen);
+        }
         /// <summary>⛔ 记下来的那份**不在了** ⇒ 回落当前值（不许继续显示旧名 / 旧大小 / 旧后缀）。</summary>
         [Fact]
         public void 记下来的那份不在了_回落当前值_不许显示旧名()
