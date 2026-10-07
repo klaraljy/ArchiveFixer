@@ -105,6 +105,8 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 - 改不可逆路径前先过 `archivefixer-unsafe-paths` 那份闸门清单；用真样本做只读验收走 `archivefixer-real-samples`；交付/刷新绿色目录走 `archivefixer-delivery`。
 - 同一件事的真值只允许有一个出口（轮数、上限、落点、容器、候选顺序、命名…）；发现第二份实现按缺陷处理。
 - 要删/要写盘的动作判据只准读事实（枚举终态、结构化错误码），⛔ 不许比中文文案；判不出 ⇒ 什么都不做。
+- **一行"你的文件"经历过的变换只从程序记录拼**（改名：最初导入名 → 最新已知名；续解：递归报上来的 `第 N 层：<包>` 那一帧；接手：收场记下的是谁解开整组）——⛔ 不许复述、不许推算、不许替程序补细节。唯一出口 `ArchiveTask.DisplayTransformationText`。
+- **写给人看的名字只有一个出口** `ArchiveTask.LogName`（= ①页那一行的显示名）：日志前缀、跟班文案、详情窗、复制任务信息都用它；⛔ 裸 `FileName`/`CurrentPath` 只留给内部判据与原始值那几行。
 - 新指令覆盖旧指令：按新口径改旧用例/旧文档时**必须汇报四件事** —— 冲突在哪（文件:行号）、怎么判的、还有哪些地方没同步、哪些仍是实现缺口。
 
 **落点与分卷（本项目特有判据）**
@@ -126,7 +128,7 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 **验证与基线（本项目数字）**
 - 构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过。
-- 全量测试基线：**2861 条（2848 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
+- 全量测试基线：**2864 条（2851 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
 - 行尾：仓库工作区是 **CRLF**（`core.autocrlf=true`）。⛔ 别用 PowerShell `-join "`n"` 整份重写 `.cs`（写出 LF ⇒ `dotnet format` 报一串 WHITESPACE）；已写出就按 CRLF 重写一遍再验。
 - 已知 flaky（并发/计时相关，先单跑确认，⛔ 别改断言）：`SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`、`SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`、`SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`、`EngineRoutingTests.MainViewModel把分派引擎接进流水线`（单跑红/全量绿）。
 - 回退代码后必须 `--no-incremental` 重编，否则跑的还是红检那一份。

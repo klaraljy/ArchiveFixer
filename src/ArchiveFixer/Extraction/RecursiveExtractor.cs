@@ -1339,6 +1339,7 @@ namespace ArchiveFixer.Extraction
             progress?.Report(new ArchiveProgress
             {
                 Percent = 0,
+                Layer = item.Depth,
                 CurrentEntry = $"第 {item.Depth} 层：{Path.GetFileName(item.ArchivePath)}"
             });
 

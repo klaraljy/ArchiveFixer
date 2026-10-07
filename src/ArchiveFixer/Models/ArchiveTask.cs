@@ -699,6 +699,17 @@ namespace ArchiveFixer.Models
         public bool VolumeNameAutoRenamed { get; set; }
 
         /// <summary>
+        /// **把这一组解开的那一单**的名字（显示名）—— 收场那一刻发现"这一片已经被整组接手"时记下，
+        /// 空 = 没这回事（绝大多数任务都是空）。
+        ///
+        /// <para>为什么要有这个结构化事实（用户 2026-10-07：「列表里面最下面的两个，从来没有变化」）：
+        /// 那两行（`111.rar` / `111(2)_.zip`）的状态格原来永远写「已跳过 100%」—— 判据只剩文案可读，
+        /// 而项目规矩 ⛔ 不许拿中文文案当判据。记下"是谁解的"之后，状态格能如实说
+        /// 「这一片随整组解开（由「111.z03」那一单解的）」，⛔ `Status` / `Outcome` 不动。</para>
+        /// </summary>
+        public string SettledWithGroupUnitName { get; set; } = string.Empty;
+
+        /// <summary>
         /// 「检测格式」那一列**给用户看的**说法（用户 2026-09-28：续卷显示 Unknown 会读成"没认出来"）。
         ///
         /// <para>续卷（`x.7z.002`）是裸切块、**没有文件头魔数**，所以内容格式本来就判不了 ——
@@ -926,6 +937,23 @@ namespace ArchiveFixer.Models
                     : Status;
 
                 /*
+                 * ===== 「这一片已经被整组接手」的行不许永远停在「已跳过」=====
+                 *
+                 * 用户 2026-10-07 原话：「列表里面最下面的两个，从来没有变化」—— `111.rar` 与
+                 * `111(2)_.zip` 两行各自只吐出一片、那片被接进整组解开了，可它们的状态格一直写着
+                 * 「已跳过 100%」，读起来像"程序什么都没干"。⇒ 有那条**结构化事实**
+                 * （<see cref="SettledWithGroupUnitName"/> 非空 = 收场那一刻记下的"是谁把整组解开的"）
+                 * 时，状态格如实说这件事。⛔ `Status` / `Outcome` 一个字不动 ⇒ 统计、名单、配色不受影响。
+                 */
+                if (SettledWithGroupUnitName.Length > 0 && Status == StatusText.Skipped)
+                {
+                    text = string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PieceSettledWithGroupFormat,
+                        SettledWithGroupUnitName);
+                }
+
+                /*
                  * 百分比什么时候显示（用户 2026-09-27 真机："上面怎么都显示解压成功 99%，
                  * 连一个 100% 的都没有"）：
                  *
@@ -943,6 +971,20 @@ namespace ArchiveFixer.Models
                 int? percent = HasLiveProgress
                     ? _progressPercent
                     : Outcome == TaskOutcome.Succeeded ? 100 : null;
+
+                /*
+                 * 续解链的第几层说在括号里（用户 2026-10-07：「111.z03 显示解压了三遍 100%」）：
+                 * 递归每开一层都会补一帧 0%（否则进度条会停在上一层的 100%），行里看不出"换层了"
+                 * ⇒ 同一行就像被解了三遍。层号是从引擎进度那一帧里**结构化**传上来的
+                 * （<see cref="ApplyProgress"/> 的 layer），⛔ 不去解析条目文字。
+                 */
+                if (HasLiveProgress && _liveLayer > 0)
+                {
+                    text += string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.LiveLayerSuffixFormat,
+                        _liveLayer);
+                }
 
                 if (percent.HasValue)
                 {
@@ -962,6 +1004,16 @@ namespace ArchiveFixer.Models
                 if (VolumeNameAutoRenamed)
                 {
                     text += "（已改回标准名）";
+                }
+
+                /*
+                 * 最后把**这一行经历过的变换**接上（用户 2026-10-07：「我们最后想看到 111.rar 通过解压缩
+                 * 两层变换到 111.zip，用户如果看到你什么都不动就会以为你什么都没改变」）——
+                 * 链本身只由 <see cref="DisplayTransformationText"/> 从程序记录里拼，⛔ 这里不编内容。
+                 */
+                if (DisplayTransformationText.Length > 0)
+                {
+                    text += StatusText.TransformationChainSeparator + DisplayTransformationText;
                 }
 
                 return text;
@@ -999,7 +1051,12 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 把引擎报上来的进度落到任务上（只允许在 UI 线程调用 —— 协调器负责投递）。
         /// </summary>
-        public void ApplyProgress(int percent, string? entry)
+        /// <param name="layer">
+        /// 这一帧属于续解链的第几层（&gt;0 才认；0 = 不是递归层 / 不知道）。
+        /// 一旦记下就**粘住**到收尾（<see cref="ClearProgress"/> 才清）：引擎后续那些帧不带层号，
+        /// 不粘住的话状态格里那半句"（整组第 2 层）"会一闪就没。
+        /// </param>
+        public void ApplyProgress(int percent, string? entry, int layer = 0)
         {
             if (percent >= 0)
             {
@@ -1009,6 +1066,36 @@ namespace ArchiveFixer.Models
             if (!string.IsNullOrWhiteSpace(entry))
             {
                 ProgressEntry = entry.Trim();
+            }
+
+            if (layer > 0 && layer != _liveLayer)
+            {
+                _liveLayer = layer;
+
+                /*
+                 * 变换链的第几步：**只记程序自己那一帧说的**（`第 N 层：<那一层的包>`），
+                 * ⛔ 不在这里推算、不猜名字（用户 2026-10-07：「谁和你说第一层得到 111.part1.rar，
+                 * 你不要给我瞎猜，看程序怎么弄」）。
+                 */
+                string step = string.IsNullOrWhiteSpace(entry)
+                    ? string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.LiveLayerSuffixFormat,
+                        layer)
+                    : entry.Trim();
+
+                if (_transformationSteps.Count == 0 || !string.Equals(_transformationSteps[^1], step, StringComparison.Ordinal))
+                {
+                    _transformationSteps.Add(step);
+                }
+
+                OnPropertyChanged(nameof(StatusDisplayText));
+                OnPropertyChanged(nameof(DisplayTransformationText));
+            }
+            else if (layer > 0)
+            {
+                _liveLayer = layer;
+                OnPropertyChanged(nameof(StatusDisplayText));
             }
 
             // 有进度就说明引擎还活着：把上一次的"长时间无响应"提示撤掉。
@@ -1024,6 +1111,75 @@ namespace ArchiveFixer.Models
             ProgressPercent = NoProgress;
             ProgressEntry = string.Empty;
             ResponsivenessHint = string.Empty;
+            _liveLayer = 0;
+        }
+
+        /// <summary>续解链当前在第几层（0 = 不在递归层里 / 不知道）。见 <see cref="ApplyProgress"/>。</summary>
+        private int _liveLayer;
+
+        /// <summary>
+        /// **日志与面向用户的文案里该写哪个名字**（唯一出口）= 与①页那一行**同一个名字**
+        /// （<see cref="DisplayFileName"/>）。
+        ///
+        /// <para>来由（用户 2026-10-07）：「为什么是 `111.z03` 不是 `111.zip`」—— 上一版①页写的是
+        /// 你自己那个文件（`111.z03`），日志前缀却还在用**内部名**（批末补判把起点改写到入口包后的
+        /// `111.zip`），同一件事在屏幕上和日志里是两个名字。⛔ `FileName` / `CurrentPath` 一个字不动，
+        /// 内部逻辑照旧读它们；只有"写给人看的那一处"走这里。</para>
+        /// </summary>
+        public string LogName => string.IsNullOrWhiteSpace(DisplayFileName) ? FileName : DisplayFileName;
+
+        /// <summary>
+        /// **这一行"你的文件"经历过的变换**（改名 / 续解每一层），一步一步攒起来，**全是程序自己的记录**：
+        /// 改名那一步 = 「最初导入的名字 → 最新已知的名字」（两个名字都是任务账上的事实字段），
+        /// 续解那几步 = 递归每层开头报上来的那一帧原文（`第 N 层：<那一层的包>`）。
+        ///
+        /// <para>来由（用户 2026-10-07）：「我们最后想看到 `111.rar` 通过解压缩两层变换到 `111.zip`，
+        /// 用户如果看到你什么都不动就会以为你什么都没改变」；同一轮他还点名 ⛔ 不许我复述或猜测这条链
+        /// （「谁和你说第一层得到 `111.part1.rar`，你不要给我瞎猜，看程序怎么弄」）。
+        /// ⇒ 只做拼接，⛔ 一个字都不编。</para>
+        /// </summary>
+        private readonly List<string> _transformationSteps = new();
+
+        /// <summary>
+        /// 变换链给用户看的那一行（空 = 这一步什么都没发生，不写"无"）。
+        /// 例：<c>111.z0删除3 → 111.z03；第 1 层：111.rar → 第 2 层：111.zip；由「111.z03」那一单解开整组</c>。
+        /// </summary>
+        public string DisplayTransformationText
+        {
+            get
+            {
+                var parts = new List<string>();
+
+                string originalName = Path.GetFileName(OriginalPath);
+
+                // ① 改名（两个名字都取自任务账：最初导入的 vs 最新已知的）。
+                if (originalName.Length > 0 && _ownFilePath.Length > 0)
+                {
+                    string ownName = Path.GetFileName(_ownFilePath);
+
+                    if (ownName.Length > 0 && !string.Equals(originalName, ownName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        parts.Add($"{originalName} → {ownName}");
+                    }
+                }
+
+                // ② 续解每一层（程序自己报的帧原文）。
+                if (_transformationSteps.Count > 0)
+                {
+                    parts.Add(string.Join(" → ", _transformationSteps));
+                }
+
+                // ③ 这一片被整组接手（收场那一刻记下的事实）。
+                if (SettledWithGroupUnitName.Length > 0)
+                {
+                    parts.Add(string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.SettledWithGroupChainFormat,
+                        SettledWithGroupUnitName));
+                }
+
+                return parts.Count == 0 ? string.Empty : string.Join("；", parts);
+            }
         }
 
         /// <summary>

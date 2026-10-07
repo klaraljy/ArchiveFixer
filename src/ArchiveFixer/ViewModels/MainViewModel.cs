@@ -5799,6 +5799,12 @@ namespace ArchiveFixer.ViewModels
             builder.AppendLine("状态：" + (task.Status ?? string.Empty));
             builder.AppendLine("进度：" + (task.ProgressText ?? string.Empty));
             builder.AppendLine("错误信息：" + (task.DisplayErrorMessage ?? string.Empty));
+
+            // 这一行经历过的变换（改名 / 续解每一层 / 谁解开整组）；空着就不写行。
+            if (task.DisplayTransformationText.Length > 0)
+            {
+                builder.AppendLine("过程：" + task.DisplayTransformationText);
+            }
             builder.AppendLine("耗时：" + (task.ElapsedText ?? string.Empty));
 
             /*

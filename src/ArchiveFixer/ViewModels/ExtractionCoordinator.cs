@@ -383,7 +383,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：开工前补拍源文件快照（这份任务过去没有基准），"
+                $"{task.LogName}：开工前补拍源文件快照（这份任务过去没有基准），"
                 + "从这一刻起按源文件大小 / 修改时间判断它有没有被改动。");
         }
 
@@ -1462,7 +1462,7 @@ namespace ArchiveFixer.ViewModels
                 task.Outcome = TaskOutcome.Failed;
                 task.LastUpdatedTime = DateTime.Now;
 
-                AppendLog("ERROR", $"{task.FileName}：{work.Verification.FailureMessage}；不落「解压成功」，源包一个字节都不动。");
+                AppendLog("ERROR", $"{task.LogName}：{work.Verification.FailureMessage}；不落「解压成功」，源包一个字节都不动。");
                 return false;
             }
 
@@ -1616,7 +1616,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
-                AppendLog("WARN", $"{task.FileName}：打开输出目录失败（不影响解压结论）：{ex.Message}");
+                AppendLog("WARN", $"{task.LogName}：打开输出目录失败（不影响解压结论）：{ex.Message}");
             }
 
             // 走到这里说明"解压成功"这个结论没有被越界 / 超预算 / 校验未通过顶掉。
@@ -1729,7 +1729,7 @@ namespace ArchiveFixer.ViewModels
                     + "不定稿（输出目录里不会多出这个垃圾文件）、不生成其余物、源包一个字节都不动。"
                     + "请把这一组的后续卷放回同目录（或先按内容级卷号把整组名字改回标准名）再重试。";
 
-                logEntries.Add(("ERROR", $"{task.FileName}：{echoMessage}"));
+                logEntries.Add(("ERROR", $"{task.LogName}：{echoMessage}"));
 
                 return new PostProcessWorkResult
                 {
@@ -1778,7 +1778,7 @@ namespace ArchiveFixer.ViewModels
                     "。⚠ 解压是外部 7-Zip 进程写的盘，越界的那一次写入拦不住；" +
                     "这次的结果不能承认，产物留在暂存目录里供你自行判断，请先确认包里有没有异常条目。";
 
-                logEntries.Add(("ERROR", $"{task.FileName}：{landingMessage}"));
+                logEntries.Add(("ERROR", $"{task.LogName}：{landingMessage}"));
 
                 return new PostProcessWorkResult
                 {
@@ -1805,7 +1805,7 @@ namespace ArchiveFixer.ViewModels
                     $"（上限 {budgetLimits.MaxFileCount} 个 / {budgetLimits.MaxTotalSize} 字节）。已按「停止后续」停下。"
                     + ResourceBudget.CapHint;
 
-                logEntries.Add(("ERROR", $"{task.FileName}：{budgetMessage}"));
+                logEntries.Add(("ERROR", $"{task.LogName}：{budgetMessage}"));
 
                 return new PostProcessWorkResult
                 {
@@ -1816,7 +1816,7 @@ namespace ArchiveFixer.ViewModels
                 };
             }
 
-            logEntries.Add((verification.Verified ? "INFO" : "WARN", $"{task.FileName}：结果校验 —— {verification.Message}"));
+            logEntries.Add((verification.Verified ? "INFO" : "WARN", $"{task.LogName}：结果校验 —— {verification.Message}"));
 
             /*
              * 2) 定稿（契约 §2.2）：把暂存产物**一次性**搬到最终目录，过程物归入 <c>其余物</c>。
@@ -1852,7 +1852,7 @@ namespace ArchiveFixer.ViewModels
             if (commit.Cancelled)
             {
                 // 取消：搬过去的已经搬回暂存区，最终目录没有半成品。结论由上层落成"已取消"。
-                logEntries.Add(("WARN", $"{task.FileName}：定稿被取消，产物已退回暂存目录，未写入最终目录。"));
+                logEntries.Add(("WARN", $"{task.LogName}：定稿被取消，产物已退回暂存目录，未写入最终目录。"));
 
                 return new PostProcessWorkResult
                 {
@@ -1876,7 +1876,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 string failureMessage = StatusText.FinalizeMoveFailedPrefix + commit.Message;
 
-                logEntries.Add(("ERROR", $"{task.FileName}：{failureMessage}"));
+                logEntries.Add(("ERROR", $"{task.LogName}：{failureMessage}"));
 
                 return new PostProcessWorkResult
                 {
@@ -1901,19 +1901,19 @@ namespace ArchiveFixer.ViewModels
              */
             if (collectResults && task.IsContinuationTask)
             {
-                logEntries.Add(("INFO", $"{task.FileName}：内层包，产物与父任务同一个目录，跳过结果归集。"));
+                logEntries.Add(("INFO", $"{task.LogName}：内层包，产物与父任务同一个目录，跳过结果归集。"));
             }
             else if (collectResults)
             {
                 if (!verification.Verified)
                 {
-                    logEntries.Add(("WARN", $"{task.FileName}：校验未通过，已跳过结果归集。"));
+                    logEntries.Add(("WARN", $"{task.LogName}：校验未通过，已跳过结果归集。"));
                 }
                 else
                 {
                     collected = new ResultCollector().Collect(task, collectTargetDirectory);
 
-                    logEntries.Add((collected.Success ? "INFO" : "WARN", $"{task.FileName}：结果归集 —— {collected.Message}"));
+                    logEntries.Add((collected.Success ? "INFO" : "WARN", $"{task.LogName}：结果归集 —— {collected.Message}"));
                 }
             }
 
@@ -2008,7 +2008,7 @@ namespace ArchiveFixer.ViewModels
                 }
                 else if (sourceHandling != SourceHandlingMode.KeepInPlace)
                 {
-                    logEntries.Add(("INFO", $"{task.FileName}：内层包，源文件属于其余物里的过程物，已跳过源包处理。"));
+                    logEntries.Add(("INFO", $"{task.LogName}：内层包，源文件属于其余物里的过程物，已跳过源包处理。"));
                 }
             }
             else if (_spaceTightThisBatch && _spaceTightKeepSourceThisBatch)
@@ -2026,7 +2026,7 @@ namespace ArchiveFixer.ViewModels
                  * 默认档（会删的那一档）已经被上面的第一支接走了 —— 它连内层包一起收，
                  * 两个分支合起来才是"删的那一档"，所以这里不再重复判一次 `_spaceTightThisBatch`。
                  */
-                logEntries.Add(("INFO", $"{task.FileName}：不删原包 —— 源包一个字节都不动（空间不足的安全档）。"));
+                logEntries.Add(("INFO", $"{task.LogName}：不删原包 —— 源包一个字节都不动（空间不足的安全档）。"));
             }
             else if (sourceHandling == SourceHandlingMode.MoveToRest)
             {
@@ -2110,7 +2110,7 @@ namespace ArchiveFixer.ViewModels
 
             if (!completeness.AllowsSourceRemoval)
             {
-                logEntries.Add(("WARN", $"{task.FileName}：{completeness.Blocker} —— 源包留在原地（未移入其余物）。"));
+                logEntries.Add(("WARN", $"{task.LogName}：{completeness.Blocker} —— 源包留在原地（未移入其余物）。"));
                 return new SourcePackageMoveResult { Attempted = false, Message = completeness.Message + "，源包留在原地" };
             }
 
@@ -2125,14 +2125,14 @@ namespace ArchiveFixer.ViewModels
                  * **再搬一次**，用户看到的是"源包又跑回来了 / 凭空多一份"。
                  * 判据只认这个显式标记，不认"文件还在不在"：文件不在时同样可能什么都没搬成过。
                  */
-                logEntries.Add(("INFO", $"{task.FileName}：源包已经搬进其余物，本次不再搬（幂等）。"));
+                logEntries.Add(("INFO", $"{task.LogName}：源包已经搬进其余物，本次不再搬（幂等）。"));
                 return new SourcePackageMoveResult { Attempted = false, Message = "源包已经搬进其余物，不再搬第二次" };
             }
 
             if (!commit.Attempted || commit.FailedCount > 0)
             {
                 // 定稿没发生 / 有搬运失败：内容物没定稿成功，源包不动，其余物也不生成（D-11 第 1 条）。
-                logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，源包留在原地（未移入其余物）。"));
+                logEntries.Add(("WARN", $"{task.LogName}：内容物未全部定稿，源包留在原地（未移入其余物）。"));
                 return new SourcePackageMoveResult { Attempted = false, Message = "内容物未全部定稿，源包留在原地" };
             }
 
@@ -2150,7 +2150,7 @@ namespace ArchiveFixer.ViewModels
 
                 logEntries.Add((
                     "INFO",
-                    $"{task.FileName}：本轮产出的都是待续解的过程物（没有内容物定稿），" +
+                    $"{task.LogName}：本轮产出的都是待续解的过程物（没有内容物定稿），" +
                     $"源包先留在原地，等整条续解链跑完后再按设置搬进其余物。"));
 
                 return new SourcePackageMoveResult { Attempted = false, Message = "本轮没有内容物，源包搬运留到链结束后补搬" };
@@ -2160,7 +2160,7 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrWhiteSpace(artifactRoot))
             {
-                logEntries.Add(("WARN", $"{task.FileName}：其余物目录算不出来，源包留在原地。"));
+                logEntries.Add(("WARN", $"{task.LogName}：其余物目录算不出来，源包留在原地。"));
                 return new SourcePackageMoveResult { Attempted = false, Message = "其余物目录算不出来" };
             }
 
@@ -2295,7 +2295,7 @@ namespace ArchiveFixer.ViewModels
                 if (commit == null || !commit.Attempted || commit.FailedCount > 0)
                 {
                     // 定稿没发生 / 有搬运失败 → 与搬运那一档同一条红线：源包一个字节都不动。
-                    logEntries.Add(("WARN", $"{task.FileName}：内容物未全部定稿，{subject}留在原地（{triggerLabel}也不删）。"));
+                    logEntries.Add(("WARN", $"{task.LogName}：内容物未全部定稿，{subject}留在原地（{triggerLabel}也不删）。"));
                     return null;
                 }
 
@@ -2310,7 +2310,7 @@ namespace ArchiveFixer.ViewModels
 
                 if (!completeness.AllowsSourceRemoval)
                 {
-                    logEntries.Add(("WARN", $"{task.FileName}：{completeness.Blocker}，{subject}留在原地（{triggerLabel}也不删）。"));
+                    logEntries.Add(("WARN", $"{task.LogName}：{completeness.Blocker}，{subject}留在原地（{triggerLabel}也不删）。"));
                     return null;
                 }
             }
@@ -2318,7 +2318,7 @@ namespace ArchiveFixer.ViewModels
             if (task.SourcePackageMove == SourcePackageMoveState.Done)
             {
                 // 幂等：已经处理过了（删过 / 搬过），绝不第二次。
-                logEntries.Add(("INFO", $"{task.FileName}：{subject}已经处理过（删过或搬过），不再动第二次。"));
+                logEntries.Add(("INFO", $"{task.LogName}：{subject}已经处理过（删过或搬过），不再动第二次。"));
                 return null;
             }
 
@@ -2370,7 +2370,7 @@ namespace ArchiveFixer.ViewModels
 
             if (splitBlocker != null)
             {
-                logEntries.Add(("WARN", $"{task.FileName}：{splitBlocker}"));
+                logEntries.Add(("WARN", $"{task.LogName}：{splitBlocker}"));
                 return null;
             }
 
@@ -2383,7 +2383,7 @@ namespace ArchiveFixer.ViewModels
             if (cleanup.DeletedFiles.Count == 0 && cleanup.FailedFiles.Count == 0)
             {
                 // 没有可删的路径（分卷清单不完整）→ 如实说，不假装删过了。
-                logEntries.Add(("WARN", $"{task.FileName}：{triggerLabel}要删{subject}，但任务的源包清单是空的 —— {cleanup.Message}"));
+                logEntries.Add(("WARN", $"{task.LogName}：{triggerLabel}要删{subject}，但任务的源包清单是空的 —— {cleanup.Message}"));
                 return null;
             }
 
@@ -2391,7 +2391,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "ERROR",
-                    $"{task.FileName}：{triggerLabel}删除{subject}有 {cleanup.FailedFiles.Count} 个失败"
+                    $"{task.LogName}：{triggerLabel}删除{subject}有 {cleanup.FailedFiles.Count} 个失败"
                     + $"（{string.Join("、", cleanup.FailedFiles.Take(3).Select(path => Path.GetFileName(path)))}）—— {subject}仍在原处。"));
 
                 return $"{triggerLabel}：内容物已好，但{subject}没能全部删除（" + cleanup.Message + $"）；{subject}仍在原处，内容物不受影响";
@@ -2426,7 +2426,7 @@ namespace ArchiveFixer.ViewModels
                         reclaimLabel,
                         cleanup.DeletedFiles.Count,
                         WorkspaceCleanupService.FormatSize(cleanup.FreedBytes))
-                    : $"{task.FileName}：{triggerLabel} —— 定稿 + 校验通过，已立刻永久删除{subject} "
+                    : $"{task.LogName}：{triggerLabel} —— 定稿 + 校验通过，已立刻永久删除{subject} "
                       + $"{cleanup.DeletedFiles.Count} 个，收回 {WorkspaceCleanupService.FormatSize(cleanup.FreedBytes)}"
                       + tail));
 
@@ -2745,7 +2745,7 @@ namespace ArchiveFixer.ViewModels
 
             foreach (string line in result.LogLines)
             {
-                logEntries.Add(("INFO", $"{task.FileName}：{line}"));
+                logEntries.Add(("INFO", $"{task.LogName}：{line}"));
             }
 
             // 日志口径要能区分"本轮直接搬"与"链结束后的补搬"（用户明确要求）。
@@ -2753,24 +2753,24 @@ namespace ArchiveFixer.ViewModels
 
             if (result.Attempted)
             {
-                logEntries.Add((result.FailedCount == 0 ? "INFO" : "WARN", $"{task.FileName}：{label} —— {result.Message}"));
+                logEntries.Add((result.FailedCount == 0 ? "INFO" : "WARN", $"{task.LogName}：{label} —— {result.Message}"));
 
                 if (result.FailedCount > 0)
                 {
                     // 失败必须写 WARN 并说清原因（不许只留一句汇总）。
                     logEntries.Add((
                         "WARN",
-                        $"{task.FileName}：{label}没能完成 —— {string.Join("；", result.Failures)}" +
+                        $"{task.LogName}：{label}没能完成 —— {string.Join("；", result.Failures)}" +
                         $"（源包仍在原处，内容物不受影响）"));
                 }
             }
             else
             {
-                logEntries.Add(("INFO", $"{task.FileName}：{label} —— {plan.Message}"));
+                logEntries.Add(("INFO", $"{task.LogName}：{label} —— {plan.Message}"));
 
                 foreach (ArtifactSkip skip in plan.Skipped)
                 {
-                    logEntries.Add(("WARN", $"{task.FileName}：{skip.Message}：{skip.SourcePath}"));
+                    logEntries.Add(("WARN", $"{task.LogName}：{skip.Message}：{skip.SourcePath}"));
                 }
             }
 
@@ -3255,7 +3255,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "WARN",
-                        $"{rootTask.FileName}：成品目录里还留着 {leftBehind.Count} 个内层包没被清理（它们的内容还没解出来，"
+                        $"{rootTask.LogName}：成品目录里还留着 {leftBehind.Count} 个内层包没被清理（它们的内容还没解出来，"
                         + $"清掉就等于删内容）：{string.Join("、", leftBehind.Take(5))}"
                         + $"{(leftBehind.Count > 5 ? " 等" : string.Empty)}"
                         + " —— 要解就把它们加进任务列表；删除档只清「内容物已经解出来」的过程物。");
@@ -3263,7 +3263,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
-                AppendLog("WARN", $"{rootTask.FileName}：清点留在成品目录里的内层包失败（不影响这一单）：{ex.Message}");
+                AppendLog("WARN", $"{rootTask.LogName}：清点留在成品目录里的内层包失败（不影响这一单）：{ex.Message}");
             }
             if (moves.Count == 0)
             {
@@ -3272,7 +3272,7 @@ namespace ArchiveFixer.ViewModels
 
             if (cancellationToken.IsCancellationRequested)
             {
-                AppendLog("WARN", $"{rootTask.FileName}：链尾收内层包之前被取消，内层包留在原地（其余物不生成）。");
+                AppendLog("WARN", $"{rootTask.LogName}：链尾收内层包之前被取消，内层包留在原地（其余物不生成）。");
                 return;
             }
 
@@ -3347,13 +3347,13 @@ namespace ArchiveFixer.ViewModels
                      */
                     AppendLog(
                         "INFO",
-                        $"{rootTask.FileName}：内层包已移入其余物 —— {Path.GetFileName(from)}"
+                        $"{rootTask.LogName}：内层包已移入其余物 —— {Path.GetFileName(from)}"
                         + $"（{Path.GetFileName(Path.GetDirectoryName(target)) ?? string.Empty} 那一层）");
                 }
                 catch (Exception ex)
                 {
                     failures.Add($"{Path.GetFileName(from)}（{ex.Message}）");
-                    AppendLog("WARN", $"{rootTask.FileName}：内层包没能移入其余物：{from} —— {ex.Message}（它留在原地）");
+                    AppendLog("WARN", $"{rootTask.LogName}：内层包没能移入其余物：{from} —— {ex.Message}（它留在原地）");
                 }
             }
 
@@ -3491,7 +3491,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     // 日志由调用方写（纯计划里不写盘、不记日志 —— 这样它才测得动）。
                     warnings.Add(
-                        $"{rootTask.FileName}：{Path.GetFileName(path)} 看着是分卷组的一卷，"
+                        $"{rootTask.LogName}：{Path.GetFileName(path)} 看着是分卷组的一卷，"
                         + "但没拿到整组清单 —— 这次不搬它（搬一半会把一套包拆成废件）。");
                     continue;
                 }
@@ -3514,7 +3514,7 @@ namespace ArchiveFixer.ViewModels
                 if (keepKeyword != null)
                 {
                     warnings.Add(
-                        $"{rootTask.FileName}：{Path.GetFileName(path)} 命中「内容物保留关键词」（{keepKeyword}）"
+                        $"{rootTask.LogName}：{Path.GetFileName(path)} 命中「内容物保留关键词」（{keepKeyword}）"
                         + " —— 按设置碰都不碰，这次不搬进其余物（它留在原处，也不参与后面的删除）。");
                     continue;
                 }
@@ -3623,7 +3623,7 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：这一卷的名字看着被改坏了（{plan.Describe()}），但改名没成功：{failure}"
+                    $"{task.LogName}：这一卷的名字看着被改坏了（{plan.Describe()}），但改名没成功：{failure}"
                     + " —— 保持原样继续，下面会如实报结论。");
 
                 return engineArchivePath;
@@ -3631,7 +3631,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：分卷名字被改坏，已在自己的产物里摆正 —— {plan.Describe()}"
+                $"{task.LogName}：分卷名字被改坏，已在自己的产物里摆正 —— {plan.Describe()}"
                 + $"（源包一个字节都没动；改的是上一层解出来的过程物）。原位置：{task.CurrentPath}");
 
             string previousPath = task.CurrentPath;
@@ -3859,7 +3859,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "WARN",
-                $"{task.FileName}：{StatusText.ChainRestBlockedPrefix} —— {why}；"
+                $"{task.LogName}：{StatusText.ChainRestBlockedPrefix} —— {why}；"
                 + "一个字节都没动（失败 / 取消 / 判不出完整性一律不动）。");
         }
 
@@ -3893,7 +3893,7 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog(
                     "INFO",
-                    $"{task.FileName}：{verdict.Message}（L3 核对依据：{DescribeManifestBasis(task.ManifestExpectation)}；"
+                    $"{task.LogName}：{verdict.Message}（L3 核对依据：{DescribeManifestBasis(task.ManifestExpectation)}；"
                     + $"机器结论：{verdict.Evidence}）");
 
                 return;
@@ -3901,7 +3901,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "WARN",
-                $"{task.FileName}：{verdict.Blocker}（机器结论：{verdict.Evidence}）");
+                $"{task.LogName}：{verdict.Blocker}（机器结论：{verdict.Evidence}）");
         }
 
         /// <summary>L3 的预期清单是从哪一层来的（给人看的一句话；取不到时说清是哪一层、为什么）。</summary>
@@ -3941,7 +3941,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "INFO",
-                    $"{rootTask.FileName}：源包处理档是「留在原地」，链结束后的补做按该档不动源包。"));
+                    $"{rootTask.LogName}：源包处理档是「留在原地」，链结束后的补做按该档不动源包。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -3953,7 +3953,7 @@ namespace ArchiveFixer.ViewModels
 
             if (cancellationToken.IsCancellationRequested)
             {
-                logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的补搬被取消，源包留在原地（其余物不生成）。"));
+                logEntries.Add(("WARN", $"{rootTask.LogName}：链结束后的补搬被取消，源包留在原地（其余物不生成）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -3991,7 +3991,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：{rootCompleteness.Blocker}" +
+                    $"{rootTask.LogName}：{rootCompleteness.Blocker}" +
                     $"（机器结论：{rootCompleteness.Evidence}），链结束后不动源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
@@ -4000,7 +4000,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：根任务的机器终态不是「完成」（当前：{rootTask.Outcome}），" +
+                    $"{rootTask.LogName}：根任务的机器终态不是「完成」（当前：{rootTask.Outcome}），" +
                     $"链结束后不动源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
@@ -4009,7 +4009,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：分卷组不完整" +
+                    $"{rootTask.LogName}：分卷组不完整" +
                     (string.IsNullOrWhiteSpace(rootTask.VolumeInfoText) ? string.Empty : $"（{rootTask.VolumeInfoText}）") +
                     "，链结束后不动源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
@@ -4019,7 +4019,7 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrWhiteSpace(destinationDirectory))
             {
-                logEntries.Add(("WARN", $"{rootTask.FileName}：算不出根任务的最终输出目录，链结束后不补搬源包。"));
+                logEntries.Add(("WARN", $"{rootTask.LogName}：算不出根任务的最终输出目录，链结束后不补搬源包。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
@@ -4029,7 +4029,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：链里的输出校验没有全部通过（{verificationGap}），" +
+                    $"{rootTask.LogName}：链里的输出校验没有全部通过（{verificationGap}），" +
                     $"链结束后不补搬源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
@@ -4041,7 +4041,7 @@ namespace ArchiveFixer.ViewModels
                 // 内容物压根没出现（例如第二层解压失败 / 密码不对）：源包留在原地，其余物不为它生成。
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：{destinationDirectory} 里没有内容物（只有过程物），" +
+                    $"{rootTask.LogName}：{destinationDirectory} 里没有内容物（只有过程物），" +
                     $"链结束后不补搬源包（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
@@ -4067,20 +4067,20 @@ namespace ArchiveFixer.ViewModels
                 // 定稿计划没留下其余物目录：宁可不搬，也不要把用户的源包扔到一个猜出来的位置。
                 logEntries.Add((
                     "WARN",
-                    $"{rootTask.FileName}：这一轮的其余物目录没有被记下来，为避免把源包搬到别处，" +
+                    $"{rootTask.LogName}：这一轮的其余物目录没有被记下来，为避免把源包搬到别处，" +
                     $"链结束后不补搬（源包留在原地）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
             if (cancellationToken.IsCancellationRequested)
             {
-                logEntries.Add(("WARN", $"{rootTask.FileName}：链结束后的补搬被取消，源包留在原地（其余物不生成）。"));
+                logEntries.Add(("WARN", $"{rootTask.LogName}：链结束后的补搬被取消，源包留在原地（其余物不生成）。"));
                 return new DeferredSourceMoveWork(logEntries);
             }
 
             logEntries.Add((
                 "INFO",
-                $"{rootTask.FileName}：链结束后的补搬 —— 整条续解链已跑完，{destinationDirectory} 里有 " +
+                $"{rootTask.LogName}：链结束后的补搬 —— 整条续解链已跑完，{destinationDirectory} 里有 " +
                 $"{contentFiles} 个内容物且输出校验通过；本轮没有内容物可定稿、留到现在的源包按设置移入其余物。"));
 
             SourcePackageMoveResult result = ExecuteSourcePackageMove(
@@ -4156,7 +4156,7 @@ namespace ArchiveFixer.ViewModels
 
             logEntries.Add((
                 outcome.Succeeded ? "INFO" : "WARN",
-                $"{rootTask.FileName}：链结束后的其余物处理 —— {outcome.Message}"));
+                $"{rootTask.LogName}：链结束后的其余物处理 —— {outcome.Message}"));
         }
 
         /// <summary>
@@ -4229,7 +4229,7 @@ namespace ArchiveFixer.ViewModels
 
                 if (!completeness.AllowsSourceRemoval)
                 {
-                    return $"{candidate.FileName}：{completeness.Message}"
+                    return $"{candidate.LogName}：{completeness.Message}"
                            + $"（机器结论：{completeness.Evidence}）";
                 }
             }
@@ -5374,7 +5374,7 @@ namespace ArchiveFixer.ViewModels
                  * 判定器本身出错**不许改变"开不开"**（那不变量由上面那段负责），也不许把整单拖垮：
                  * 退回老口径的那句话，并把出错写清楚（判不出就是判不出）。
                  */
-                AppendLog("WARN", $"{task.FileName}：分卷组装判定没能做完（{ex.GetType().Name}），按老口径报缺卷。");
+                AppendLog("WARN", $"{task.LogName}：分卷组装判定没能做完（{ex.GetType().Name}），按老口径报缺卷。");
 
                 return new VolumeGroupResolution
                 {
@@ -5445,7 +5445,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            AppendLog("INFO", $"{task.FileName}：分卷组装判定 = {resolution.Reason}");
+            AppendLog("INFO", $"{task.LogName}：分卷组装判定 = {resolution.Reason}");
 
             foreach (VolumeEvidence row in resolution.Evidence)
             {
@@ -5730,7 +5730,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string readFailure = $"读取暂存目录失败：{ex.Message}";
 
-                logEntries.Add(("ERROR", $"{task.FileName}：{readFailure}"));
+                logEntries.Add(("ERROR", $"{task.LogName}：{readFailure}"));
 
                 return new StageCommitResult
                 {
@@ -5746,7 +5746,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string planFailure = "定稿布局规划失败：" + plan.FailureReason;
 
-                logEntries.Add(("ERROR", $"{task.FileName}：{planFailure}"));
+                logEntries.Add(("ERROR", $"{task.LogName}：{planFailure}"));
 
                 return new StageCommitResult
                 {
@@ -5760,7 +5760,7 @@ namespace ArchiveFixer.ViewModels
 
             foreach (string warning in plan.Warnings)
             {
-                logEntries.Add(("WARN", $"{task.FileName}：定稿提醒 —— {warning}"));
+                logEntries.Add(("WARN", $"{task.LogName}：定稿提醒 —— {warning}"));
             }
 
             if (plan.Moves.Count == 0)
@@ -5776,7 +5776,7 @@ namespace ArchiveFixer.ViewModels
                     ? "暂存目录里只有 0 字节产物 —— 校验未通过，产物视为无效：不定稿、不生成其余物、源包留在原地。"
                     : "暂存目录里没有产物，没有需要定稿的内容。";
 
-                logEntries.Add(("WARN", $"{task.FileName}：{emptyMessage}"));
+                logEntries.Add(("WARN", $"{task.LogName}：{emptyMessage}"));
 
                 return new StageCommitResult
                 {
@@ -5792,7 +5792,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string createFailure = $"最终目录不存在且创建失败：{destinationDirectory}";
 
-                logEntries.Add(("ERROR", $"{task.FileName}：{createFailure}"));
+                logEntries.Add(("ERROR", $"{task.LogName}：{createFailure}"));
 
                 return new StageCommitResult
                 {
@@ -5821,7 +5821,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     RollBackFinalLayout(moved, destinationDirectory, destinationExisted);
 
-                    logEntries.Add(("WARN", $"{task.FileName}：定稿被取消，已把 {moved.Count} 项退回暂存目录。"));
+                    logEntries.Add(("WARN", $"{task.LogName}：定稿被取消，已把 {moved.Count} 项退回暂存目录。"));
 
                     return new StageCommitResult
                     {
@@ -5879,7 +5879,7 @@ namespace ArchiveFixer.ViewModels
                                 skippedContent++;
                             }
 
-                            logEntries.Add(("WARN", $"{task.FileName}：同名冲突，按你的选择跳过：{target}"));
+                            logEntries.Add(("WARN", $"{task.LogName}：同名冲突，按你的选择跳过：{target}"));
                             continue;
                         }
 
@@ -5908,7 +5908,7 @@ namespace ArchiveFixer.ViewModels
 
                             logEntries.Add((
                                 "WARN",
-                                $"{task.FileName}：同名冲突，按你的选择覆盖：{target}（{overwriteNote}）"));
+                                $"{task.LogName}：同名冲突，按你的选择覆盖：{target}（{overwriteNote}）"));
                         }
                         else
                         {
@@ -5920,7 +5920,7 @@ namespace ArchiveFixer.ViewModels
                                 renamed++;
                             }
 
-                            logEntries.Add(("INFO", $"{task.FileName}：同名冲突，改名落位（绝不覆盖）：{renamedTarget}"));
+                            logEntries.Add(("INFO", $"{task.LogName}：同名冲突，改名落位（绝不覆盖）：{renamedTarget}"));
 
                             target = renamedTarget;
                         }
@@ -6042,7 +6042,7 @@ namespace ArchiveFixer.ViewModels
                     ? "（⚠ 这次没有内容物，只有其余物）"
                     : "（⚠ 校验未通过，产物视为无效；不定稿有效内容、不搬源包）";
 
-            logEntries.Add((failures.Count == 0 ? "INFO" : "WARN", $"{task.FileName}：定稿完成{contentNote} —— {summary}"));
+            logEntries.Add((failures.Count == 0 ? "INFO" : "WARN", $"{task.LogName}：定稿完成{contentNote} —— {summary}"));
 
             /*
              * 产物**点名**（用户 2026-09-25："出问题我看日志就能知道"）。
@@ -6067,7 +6067,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     logEntries.Add((
                         "INFO",
-                        $"{task.FileName}：本次内容物 —— {string.Join("、", contentNames)}"
+                        $"{task.LogName}：本次内容物 —— {string.Join("、", contentNames)}"
                         + (contentMoves.Count > contentNames.Count
                             ? $"（…还有 {contentMoves.Count - contentNames.Count} 项没列出来）"
                             : string.Empty)));
@@ -6077,7 +6077,7 @@ namespace ArchiveFixer.ViewModels
             // 覆盖留痕：被顶掉的落点单独再写一条，用户事后追查"我原来那份去哪了"时有据可依。
             foreach (string overwrittenPath in overwritten)
             {
-                logEntries.Add(("WARN", $"{task.FileName}：已覆盖（原文件按两阶段落位删除）：{overwrittenPath}"));
+                logEntries.Add(("WARN", $"{task.LogName}：已覆盖（原文件按两阶段落位删除）：{overwrittenPath}"));
             }
 
             return new StageCommitResult
@@ -6399,7 +6399,7 @@ namespace ArchiveFixer.ViewModels
                 ? task
                 : new ArchiveTask(engineArchivePath);
 
-            AppendLog("INFO", $"{task.FileName}：开始递归解压（模式 {mode}，最大 {limits.MaxDepth} 层）。");
+            AppendLog("INFO", $"{task.LogName}：开始递归解压（模式 {mode}，最大 {limits.MaxDepth} 层）。");
 
             /*
              * 递归内层的进度（2026-09-22 补）：复用**同一个** TaskProgressSink，
@@ -6556,7 +6556,7 @@ namespace ArchiveFixer.ViewModels
                     else
                     {
                         // 第 0 层本身就没成功：保持原结论（部分完成），让它如实报告。
-                        AppendLog("WARN", $"{task.FileName}：当前这一层没有可用产物，保留原结论。");
+                        AppendLog("WARN", $"{task.LogName}：当前这一层没有可用产物，保留原结论。");
                     }
                 }
             }
@@ -6582,9 +6582,9 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(
                     "INFO",
                     deferredHere
-                        ? $"{task.FileName}：这一单该解的都解出来了，停下的那一层要开的是这一组的分卷片，"
+                        ? $"{task.LogName}：这一单该解的都解出来了，停下的那一层要开的是这一组的分卷片，"
                           + "缺的是同一组别的片 —— 这一组先记着（跳过），等这一批的解压都跑完再判一次（⛔ 不是失败）。"
-                        : $"{task.FileName}：这一单该解的都解出来了；停下的那一层要开的是这一组的分卷片，"
+                        : $"{task.LogName}：这一单该解的都解出来了；停下的那一层要开的是这一组的分卷片，"
                           + "而这一组到最后一刻仍然没凑齐（缺哪几片见下面的缺卷结论）。");
             }
 
@@ -6695,7 +6695,7 @@ namespace ArchiveFixer.ViewModels
                     task.ClearProgress();
                     task.UpdateElapsedText();
 
-                    AppendLog("ERROR", $"{task.FileName}：{result.Summary}");
+                    AppendLog("ERROR", $"{task.LogName}：{result.Summary}");
                     return;
 
                 default:
@@ -6739,7 +6739,7 @@ namespace ArchiveFixer.ViewModels
 
             task.LastUpdatedTime = DateTime.Now;
 
-            AppendLog(result.Completed ? "INFO" : "WARN", $"{task.FileName}：{result.Summary}");
+            AppendLog(result.Completed ? "INFO" : "WARN", $"{task.LogName}：{result.Summary}");
 
             /*
              * task.OutputPath **不跟着递归结论走**。
@@ -6773,7 +6773,7 @@ namespace ArchiveFixer.ViewModels
                 // 没走完（上限 / 密码 / 需要决定）：产物留在暂存区，如实说清它在哪。
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：这次没有走完，产物仍在暂存目录，未搬进输出目录：{result.FinalOutputPath}");
+                    $"{task.LogName}：这次没有走完，产物仍在暂存目录，未搬进输出目录：{result.FinalOutputPath}");
 
                 /*
                  * 「下一步该怎么办」必须写出来（用户 2026-09-27 真机：018.7z 的 .rar 里是 **37 个内层包**，
@@ -7035,7 +7035,7 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                Task.ApplyProgress(progress.Percent, progress.CurrentEntry);
+                Task.ApplyProgress(progress.Percent, progress.CurrentEntry, progress.Layer);
 
                 // 详情窗口的「耗时」也跟着走：不然任务在跑的时候那一格一直停在 00:00:00。
                 Task.UpdateElapsedText();
@@ -7076,8 +7076,8 @@ namespace ArchiveFixer.ViewModels
 
                         _owner.AppendHeartbeat(
                             string.IsNullOrWhiteSpace(heartbeatEntry)
-                                ? $"{Task.FileName}：仍在解压 {progress.Percent}%"
-                                : $"{Task.FileName}：仍在解压 {progress.Percent}%（当前：{heartbeatEntry}）");
+                                ? $"{Task.LogName}：仍在解压 {progress.Percent}%"
+                                : $"{Task.LogName}：仍在解压 {progress.Percent}%（当前：{heartbeatEntry}）");
                     }
 
                     return;
@@ -7089,8 +7089,8 @@ namespace ArchiveFixer.ViewModels
                 _owner.AppendLog(
                     "INFO",
                     string.IsNullOrWhiteSpace(DescribeEntry(progress.CurrentEntry))
-                        ? $"{Task.FileName}：进度 {progress.Percent}%"
-                        : $"{Task.FileName}：进度 {progress.Percent}%（当前：{DescribeEntry(progress.CurrentEntry)}）");
+                        ? $"{Task.LogName}：进度 {progress.Percent}%"
+                        : $"{Task.LogName}：进度 {progress.Percent}%（当前：{DescribeEntry(progress.CurrentEntry)}）");
             }
 
             /// <summary>当前条目名（超长截断）—— 进度行与心跳共用同一份口径。</summary>
@@ -7292,7 +7292,7 @@ namespace ArchiveFixer.ViewModels
                 // WARN 只写一次（引擎层对同一段沉默只报一次），所以不会刷屏。
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：{StatusText.LongTimeNoResponse} —— 已 {idleSeconds} 秒没有任何引擎输出" +
+                    $"{task.LogName}：{StatusText.LongTimeNoResponse} —— 已 {idleSeconds} 秒没有任何引擎输出" +
                     $"（阈值 {thresholdSeconds} 秒），进程仍在运行。程序不会自动结束它；需要中止请点「取消当前」。");
             });
         }
@@ -7412,7 +7412,7 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：同名冲突问不到答案（当前宿主没有界面或等待超时），已按保守档继续 —— " +
+                    $"{task.LogName}：同名冲突问不到答案（当前宿主没有界面或等待超时），已按保守档继续 —— " +
                     "同名条目自动重命名落位，已有文件一个字节都不动。");
 
                 return null;
@@ -7423,7 +7423,7 @@ namespace ArchiveFixer.ViewModels
             if (answered.IsCancel)
             {
                 // 「取消本批」= 既有的两套取消语义一起用：停止后续（不再启动新任务）+ 取消当前（正在跑的这个）。
-                AppendLog("WARN", $"{task.FileName}：你在同名冲突询问里选择了「取消本批」，停止后续并取消当前任务。");
+                AppendLog("WARN", $"{task.LogName}：你在同名冲突询问里选择了「取消本批」，停止后续并取消当前任务。");
 
                 StopAfterCurrent();
                 CancelCurrentTask();
@@ -7444,7 +7444,7 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            AppendLog("INFO", $"{task.FileName}：同名冲突 —— 你的选择：{answered.Describe()}");
+            AppendLog("INFO", $"{task.LogName}：同名冲突 —— 你的选择：{answered.Describe()}");
 
             if (answered.ApplyToAll)
             {
@@ -7908,7 +7908,7 @@ namespace ArchiveFixer.ViewModels
 
             if (!wantPick)
             {
-                AppendLog("INFO", $"{task.FileName}：没有手动指定缺失卷所在目录，按缺卷处理（不启动）。");
+                AppendLog("INFO", $"{task.LogName}：没有手动指定缺失卷所在目录，按缺卷处理（不启动）。");
                 return false;
             }
 
@@ -7916,7 +7916,7 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrWhiteSpace(directory))
             {
-                AppendLog("INFO", $"{task.FileName}：没有选择目录，按缺卷处理（不启动）。");
+                AppendLog("INFO", $"{task.LogName}：没有选择目录，按缺卷处理（不启动）。");
                 return false;
             }
 
@@ -7930,7 +7930,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：在 {directory} 里找到 {volumeFiles.Count} 个分卷文件，正在重新归组判定。");
+                $"{task.LogName}：在 {directory} 里找到 {volumeFiles.Count} 个分卷文件，正在重新归组判定。");
 
             VolumeGroup? group = RebuildVolumeGroup(task, volumeFiles);
 
@@ -7951,7 +7951,7 @@ namespace ArchiveFixer.ViewModels
                 task.ErrorMessage =
                     $"分卷仍然不完整：{summary}。已找过：{directory}（{volumeFiles.Count} 个候选分卷）。";
 
-                AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage} 仍然不启动（不变量 7）。");
+                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage} 仍然不启动（不变量 7）。");
                 return false;
             }
 
@@ -7971,7 +7971,7 @@ namespace ArchiveFixer.ViewModels
 
             if (!File.Exists(firstVolume))
             {
-                AppendLog("ERROR", $"{task.FileName}：归组给出的第一卷不存在（{firstVolume}），按缺卷处理（不启动）。");
+                AppendLog("ERROR", $"{task.LogName}：归组给出的第一卷不存在（{firstVolume}），按缺卷处理（不启动）。");
                 return false;
             }
 
@@ -7983,7 +7983,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：分卷已找齐（{task.VolumeCount} 卷，起点 {firstVolume}）" +
+                $"{task.LogName}：分卷已找齐（{task.VolumeCount} 卷，起点 {firstVolume}）" +
                 (string.Equals(previousPath, firstVolume, StringComparison.OrdinalIgnoreCase)
                     ? "，开始解压。"
                     : $"，起点由 {previousPath} 改为它（OriginalPath 仍指向你最初给的那个文件），开始解压。"));
@@ -8274,7 +8274,7 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 // 这一档是**加法**：判不出来一律退回"照旧让引擎去判"，⛔ 绝不把本来能解的包挡下来。
-                AppendLog("WARN", $"{task.FileName}：开工前跨目录收卷跳过（{ex.Message}）。");
+                AppendLog("WARN", $"{task.LogName}：开工前跨目录收卷跳过（{ex.Message}）。");
                 return false;
             }
         }
@@ -9033,7 +9033,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
-                AppendLog("WARN", $"{owner.FileName}：暂存目录建不出来（{ex.Message}），按原样留着。");
+                AppendLog("WARN", $"{owner.LogName}：暂存目录建不出来（{ex.Message}），按原样留着。");
                 return published;
             }
 
@@ -9107,7 +9107,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         AppendLog(
                             "INFO",
-                            $"{owner.FileName}：这一步解出来的「{name}」留在它自己那条链里（下一轮解压要用的就是它；"
+                            $"{owner.LogName}：这一步解出来的「{name}」留在它自己那条链里（下一轮解压要用的就是它；"
                             + "⛔ 不是失败、也不算残缺）。");
 
                         RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
@@ -9495,7 +9495,7 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog(
                     "INFO",
-                    $"{owner.FileName}：这一步解出来的「{name}」留在它自己那条链的落点目录里 —— "
+                    $"{owner.LogName}：这一步解出来的「{name}」留在它自己那条链的落点目录里 —— "
                     + $"{Path.GetFileName(home)}（下一轮解压要用的就是它；⛔ 不是失败、也不算残缺）。");
 
                 RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
@@ -9745,7 +9745,7 @@ namespace ArchiveFixer.ViewModels
                 catch (Exception ex)
                 {
                     // 判不出 / 建不出来 ⇒ 什么都不做（与改动前"落地那一份没建出来"同一档）。
-                    AppendLog("WARN", $"{owner.FileName}：落地那一份没建出来（{ex.Message}）。");
+                    AppendLog("WARN", $"{owner.LogName}：落地那一份没建出来（{ex.Message}）。");
                 }
             }
         }
@@ -9852,16 +9852,16 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 // 删东西绝不许把已经成立的结论拖成异常：落成"没删成"，别的什么都不变。
-                AppendLog("WARN", $"{producer.FileName}：处理过路层的其余物时出现意外错误：{ex.Message}");
+                AppendLog("WARN", $"{producer.LogName}：处理过路层的其余物时出现意外错误：{ex.Message}");
                 return;
             }
 
             AppendLog(
                 outcome.Succeeded ? "INFO" : "WARN",
                 outcome.Succeeded
-                    ? $"{producer.FileName}：过路层的其余物已按「删除操作」处理（{outcome.EntryCount} 项 / {outcome.FreedBytes} 字节）"
+                    ? $"{producer.LogName}：过路层的其余物已按「删除操作」处理（{outcome.EntryCount} 项 / {outcome.FreedBytes} 字节）"
                       + $"—— 这一组的内容已由「{consumer.FileName}」解开。"
-                    : $"{producer.FileName}：过路层的其余物这次没删成 —— {outcome.Message}");
+                    : $"{producer.LogName}：过路层的其余物这次没删成 —— {outcome.Message}");
         }
 
         /// <summary>
@@ -9929,7 +9929,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：这一组的内容正在由「{pendingConsumer}」解出来 —— 这一单先不动，等它收尾再判（不提前把话说死）。");
+                        $"{task.LogName}：这一组的内容正在由「{pendingConsumer}」解出来 —— 这一单先不动，等它收尾再判（不提前把话说死）。");
 
                     continue;
                 }
@@ -10147,7 +10147,7 @@ namespace ArchiveFixer.ViewModels
                     task.Outcome = TaskOutcome.PartiallyCompleted;
                     AppendLog(
                         "WARN",
-                        $"{task.FileName}：这一组到最后一刻仍然不完整（缺 {missing}）—— 按「部分完成」记，⛔ 不是解压失败。");
+                        $"{task.LogName}：这一组到最后一刻仍然不完整（缺 {missing}）—— 按「部分完成」记，⛔ 不是解压失败。");
                 }
 
                 // 机器终态收口：这一单是在**任务收尾之后**才落的状态，走不到单任务那个 finally ⇒ 这里补。
@@ -10301,8 +10301,8 @@ namespace ArchiveFixer.ViewModels
                 string consumedNote = string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
                     StatusText.VolumePieceProducerConsumedByOtherTaskFormat,
-                    piece.FileName,
-                    consumer.FileName,
+                    piece.LogName,
+                    consumer.LogName,
                     groupBaseName);
 
                 /*
@@ -10314,6 +10314,15 @@ namespace ArchiveFixer.ViewModels
                 piece.OutputPath = string.Empty;
                 piece.Outcome = TaskOutcome.Succeeded;
                 piece.IsVolumeGroupFollower = true;
+
+                /*
+                 * ⛔ 记下"是谁把这一组解开的"（显示名）—— 状态格靠这条**结构化事实**如实说
+                 * 「这一片随整组解开（由「X」那一单解的）」，不再永远停在「已跳过 100%」
+                 * （用户 2026-10-07：「列表里面最下面的两个，从来没有变化」）。
+                 */
+                piece.SettledWithGroupUnitName = string.IsNullOrWhiteSpace(consumer.DisplayFileName)
+                    ? consumer.FileName
+                    : consumer.DisplayFileName;
 
                 // `MarkSkipped` 写的是"跳过"那句话；这里要的是"内容已由别单解出"的如实说法。
                 piece.MarkSkipped(consumedNote);
@@ -10368,7 +10377,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "INFO",
-                    $"{piece.FileName}：不删原包 —— 源片一个字节都不动（空间不足的安全档）。"));
+                    $"{piece.LogName}：不删原包 —— 源片一个字节都不动（空间不足的安全档）。"));
 
                 return;
             }
@@ -10377,7 +10386,7 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add((
                     "INFO",
-                    $"{piece.FileName}：按「源包留在原地」这一档，源片一个字节都不搬（留在原处，随时可手工处理）。"));
+                    $"{piece.LogName}：按「源包留在原地」这一档，源片一个字节都不搬（留在原处，随时可手工处理）。"));
 
                 return;
             }
@@ -10433,7 +10442,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     (collected ?? logEntries!).Add((
                         "INFO",
-                        $"{task.FileName}：这一组的源片先不动 —— 既有账里查不到「这一组由哪个已成功的单解开」"
+                        $"{task.LogName}：这一组的源片先不动 —— 既有账里查不到「这一组由哪个已成功的单解开」"
                         + "（判不出 ⇒ 什么都不做，源片原样留在原处）。"));
 
                     continue;
@@ -11262,9 +11271,9 @@ namespace ArchiveFixer.ViewModels
                         AppendLog(
                             "INFO",
                             plan.TrialAttempted
-                                ? $"{task.FileName}：按内容试开过这一组分卷（同卷硬链接 + 引擎列目录），不成立 —— "
+                                ? $"{task.LogName}：按内容试开过这一组分卷（同卷硬链接 + 引擎列目录），不成立 —— "
                                   + $"{plan.Reason}；这一单按原名继续（源文件一个字节都没动）。"
-                                : $"{task.FileName}：没有动它 —— {plan.Reason}；这一单按原名继续（源文件一个字节都没动）。");
+                                : $"{task.LogName}：没有动它 —— {plan.Reason}；这一单按原名继续（源文件一个字节都没动）。");
                     }
 
                     return;
@@ -11274,13 +11283,13 @@ namespace ArchiveFixer.ViewModels
 
                 if (!result.Success)
                 {
-                    AppendLog("WARN", $"{task.FileName}：分卷名没改（{result.Message}），这一单可能因此解不开。");
+                    AppendLog("WARN", $"{task.LogName}：分卷名没改（{result.Message}），这一单可能因此解不开。");
                     return;
                 }
 
                 AppendLog(
                     "INFO",
-                    $"{task.FileName}：分卷名不标准，已按标准名改好（{plan.Items.Count} 卷，只改名字、内容一个字节没动）：{plan.Describe()}"
+                    $"{task.LogName}：分卷名不标准，已按标准名改好（{plan.Items.Count} 卷，只改名字、内容一个字节没动）：{plan.Describe()}"
                     + (plan.GatheredVolumes > 0
                         ? $"。⚠ 这一组有几卷散在别的文件夹里（{plan.GatheredVolumes} 卷），已一并收进入口那一层"
                           + "（引擎找兄弟卷只看入口文件旁边那一层，散着放即使名字都对也解不开；⛔ 只在同一盘上收，不跨盘搬）"
@@ -11300,7 +11309,7 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 // 改名失败不该拖垮整单：写清楚，后面的流程按原名去跑（它会如实报缺卷 / 打不开）。
-                AppendLog("WARN", $"{task.FileName}：分卷名自动修正跳过（{ex.Message}）。");
+                AppendLog("WARN", $"{task.LogName}：分卷名自动修正跳过（{ex.Message}）。");
             }
         }
 
@@ -11551,7 +11560,7 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 // 判不出来就**照常解**（保守一侧：宁可让引擎去报缺卷，也不静默吞掉一单）。
-                AppendLog("WARN", $"{task.FileName}：分卷归组跳过判定失败（{ex.Message}），这一单按原名照常处理。");
+                AppendLog("WARN", $"{task.LogName}：分卷归组跳过判定失败（{ex.Message}），这一单按原名照常处理。");
 
                 return false;
             }
@@ -11668,7 +11677,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     AppendLog(
                         "INFO",
-                        $"{candidate.FileName}：这一卷在同一个改名批次里被改成了标准名，"
+                        $"{candidate.LogName}：这一卷在同一个改名批次里被改成了标准名，"
                         + "任务路径与源文件快照已同步到新名字（内容一个字节没动）。");
                 }
             }
@@ -13146,7 +13155,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             task.DangerousEntriesWarning = hint;
-            AppendLog(level, $"{task.FileName}：{hint}");
+            AppendLog(level, $"{task.LogName}：{hint}");
         }
 
         /// <summary>
@@ -13497,7 +13506,7 @@ namespace ArchiveFixer.ViewModels
                 parts.Add("用时 " + task.ElapsedText);
             }
 
-            return $"{task.FileName}：{string.Join(" ｜ ", parts)}";
+            return $"{task.LogName}：{string.Join(" ｜ ", parts)}";
         }
 
         /// <summary>
@@ -14250,7 +14259,7 @@ namespace ArchiveFixer.ViewModels
 
                         AppendLog(
                             "INFO",
-                            $"{task.FileName}：现在空间不够（{gate.Reason}）—— 先排队等空间，"
+                            $"{task.LogName}：现在空间不够（{gate.Reason}）—— 先排队等空间，"
                             + "等已经在跑的任务收尾把预留放出来就自动补跑（不是失败，也不会漏掉它）。");
 
                         /*
@@ -14345,7 +14354,7 @@ namespace ArchiveFixer.ViewModels
 
                             AppendLog(
                                 "INFO",
-                                $"{waitingTask.FileName}：腾出空间了，现在补跑它（它刚才被拒的原因：{waitingGate.Reason}）");
+                                $"{waitingTask.LogName}：腾出空间了，现在补跑它（它刚才被拒的原因：{waitingGate.Reason}）");
 
                             runningTasks.Add(RunScheduledTaskAsync(waitingTask, oneClickRun, waitingRuntime));
                         }
@@ -14931,7 +14940,7 @@ namespace ArchiveFixer.ViewModels
 
                             AppendLog(
                                 "WARN",
-                                $"{task.FileName}：同一个名字的包正在并行解压，为避免两个任务写进同一个目录，" +
+                                $"{task.LogName}：同一个名字的包正在并行解压，为避免两个任务写进同一个目录，" +
                                 $"本次落成 {candidate}（绝不合并、绝不覆盖）。");
                         }
 
@@ -15270,7 +15279,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：这一组的入口包（{entryName}）现在还没被解出来 —— 落点按"
+                $"{task.LogName}：这一组的入口包（{entryName}）现在还没被解出来 —— 落点按"
                 + $"「产出它的那一单」（{producer.FileName}）那条链「一层一层」推：{predicted}。");
 
             return predicted;
@@ -15962,9 +15971,9 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         string.IsNullOrWhiteSpace(task.RestDirectoryPath)
-                            ? $"{task.FileName}：这一轮没有产生其余物（过程物就是内容物里的那个内层包）；"
+                            ? $"{task.LogName}：这一轮没有产生其余物（过程物就是内容物里的那个内层包）；"
                               + "整条续解链跑完后按「删除操作」处理内层包。"
-                            : $"{task.FileName}：其余物先留着（里面还有要接着解的内层包），"
+                            : $"{task.LogName}：其余物先留着（里面还有要接着解的内层包），"
                               + "整条续解链跑完后再按「删除操作」处理。");
                 }
 
@@ -16018,7 +16027,7 @@ namespace ArchiveFixer.ViewModels
                 // 绝不允许把已经成功的解压拖成异常：结论落成"没删成"，内容物不受影响。
                 outcome = new RestPurgeOutcome
                 {
-                    Message = $"{task.FileName}：处理其余物时出现意外错误：{ex.Message}"
+                    Message = $"{task.LogName}：处理其余物时出现意外错误：{ex.Message}"
                 };
             }
 
@@ -17008,7 +17017,7 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：要清的工作区目录不在工作区根之下，已跳过 —— {guardReason}：{taskDirectory}");
+                    $"{task.LogName}：要清的工作区目录不在工作区根之下，已跳过 —— {guardReason}：{taskDirectory}");
 
                 return;
             }
@@ -17029,14 +17038,14 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "WARN",
-                        $"{task.FileName}：工作区目录里有非本任务造的子目录（{foreign}），为安全起见不清：{taskDirectory}");
+                        $"{task.LogName}：工作区目录里有非本任务造的子目录（{foreign}），为安全起见不清：{taskDirectory}");
 
                     return;
                 }
             }
             catch (Exception ex)
             {
-                AppendLog("WARN", $"{task.FileName}：读不了工作区目录（{ex.Message}），已跳过清理：{taskDirectory}");
+                AppendLog("WARN", $"{task.LogName}：读不了工作区目录（{ex.Message}），已跳过清理：{taskDirectory}");
 
                 return;
             }
@@ -17385,7 +17394,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 task.CaptureSourceSnapshot();
 
-                AppendLog("INFO", $"{task.FileName}：分卷已补齐，源文件快照重新记录（{task.VolumeCount} 卷）。");
+                AppendLog("INFO", $"{task.LogName}：分卷已补齐，源文件快照重新记录（{task.VolumeCount} 卷）。");
             }
 
             bool tryExtractUnknown = Settings.UnknownFormatAction == "TryExtract";
@@ -17415,7 +17424,7 @@ namespace ArchiveFixer.ViewModels
                         task.IsArchive = true;
                         task.EngineVerdict = $"{_archiveEngine.DisplayName} {_archiveEngine.Version} 能打开：{probe.FileCount} 个文件";
 
-                        AppendLog("INFO", $"{task.FileName}：文件头不在签名表里，但 7-Zip 能打开（{probe.FileCount} 个文件），继续处理。");
+                        AppendLog("INFO", $"{task.LogName}：文件头不在签名表里，但 7-Zip 能打开（{probe.FileCount} 个文件），继续处理。");
                     }
                     else
                     {
@@ -17575,7 +17584,7 @@ namespace ArchiveFixer.ViewModels
                     StatusText.ExtractFailed,
                     "输出目录无效（未设置或不可用），请在设置里选择输出目录后重试");
 
-                AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
                 return;
             }
 
@@ -17605,7 +17614,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：内层包，产物归入父任务输出目录 {outputPath}（不再另建目录）。");
+                        $"{task.LogName}：内层包，产物归入父任务输出目录 {outputPath}（不再另建目录）。");
                 }
                 else if (landsInSourceDirectory)
                 {
@@ -17623,7 +17632,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：落点就是源包所在目录 {outputPath}（解压到当前文件夹 / 就地整理），不套用“目录已存在就改名”的规则。");
+                        $"{task.LogName}：落点就是源包所在目录 {outputPath}（解压到当前文件夹 / 就地整理），不套用“目录已存在就改名”的规则。");
                 }
                 else if (sharedOutputRoot)
                 {
@@ -17636,7 +17645,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：落点是本次导入共用的目标目录 {outputPath}（添加文件夹 + 指定位置），" +
+                        $"{task.LogName}：落点是本次导入共用的目标目录 {outputPath}（添加文件夹 + 指定位置），" +
                         "不套用“目录已存在就改名”的规则。");
                 }
                 else if (!string.IsNullOrWhiteSpace(outputPath) &&
@@ -17673,7 +17682,7 @@ namespace ArchiveFixer.ViewModels
                             : "-";
                         task.LastUpdatedTime = DateTime.Now;
 
-                        AppendLog("WARN", $"{task.FileName}：同名冲突按你的选择跳过，本任务不解压（输出目录：{outputPath}）。");
+                        AppendLog("WARN", $"{task.LogName}：同名冲突按你的选择跳过，本任务不解压（输出目录：{outputPath}）。");
                         return;
                     }
 
@@ -17687,7 +17696,7 @@ namespace ArchiveFixer.ViewModels
                          */
                         AppendLog(
                             "WARN",
-                            $"{task.FileName}：输出目录已存在且非空，按你的选择「覆盖」沿用该目录：{outputPath}" +
+                            $"{task.LogName}：输出目录已存在且非空，按你的选择「覆盖」沿用该目录：{outputPath}" +
                             "（目录里已有的同名条目会在定稿时按同一决定处理）。");
 
                         outputRedirectNote = $"原定输出目录 {outputPath} 已存在且非空，按你的选择覆盖进该目录";
@@ -17708,7 +17717,7 @@ namespace ArchiveFixer.ViewModels
                          */
                         outputRedirectNote = $"原定输出目录 {requestedOutputPath} 已存在且非空，本次实际输出到 {newOutputPath}";
 
-                        AppendLog("WARN", $"{task.FileName}：{outputRedirectNote}。自动续解按解压前的目录查找内层包，若内层包落在新目录里可能不会被继续解开。");
+                        AppendLog("WARN", $"{task.LogName}：{outputRedirectNote}。自动续解按解压前的目录查找内层包，若内层包落在新目录里可能不会被继续解开。");
 
                         outputPath = newOutputPath;
                     }
@@ -17779,8 +17788,8 @@ namespace ArchiveFixer.ViewModels
             AppendLog(
                 "INFO",
                 RunOptions == null
-                    ? $"{task.FileName}：本次实际输出目录 {outputPath}"
-                    : $"{task.FileName}：本次实际输出目录 {outputPath}（依据 → {RunOptions.Describe()}）");
+                    ? $"{task.LogName}：本次实际输出目录 {outputPath}"
+                    : $"{task.LogName}：本次实际输出目录 {outputPath}（依据 → {RunOptions.Describe()}）");
 
             /*
              * ===== 阶段一：入仓（stage，契约 §2.1）=====
@@ -17800,7 +17809,7 @@ namespace ArchiveFixer.ViewModels
                 task.Status = StatusText.ExtractFailed;
                 task.ProgressText = StatusText.ProgressFailed;
                 task.ErrorMessage = "无法确定暂存目录（工作区不可用）";
-                AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
                 return;
             }
 
@@ -17815,14 +17824,14 @@ namespace ArchiveFixer.ViewModels
                 task.Status = StatusText.ExtractFailed;
                 task.ProgressText = StatusText.ProgressFailed;
                 task.ErrorMessage = stageFailure;
-                AppendLog("ERROR", $"{task.FileName}：{stageFailure}");
+                AppendLog("ERROR", $"{task.LogName}：{stageFailure}");
                 return;
             }
 
             // 引擎写盘的地方 = 暂存目录。**不是** outputPath —— 那是定稿的目标。
             string engineOutputPath = stageDirectory;
 
-            AppendLog("INFO", $"{task.FileName}：入仓目录 {stageDirectory}（中间产物先落这里，定稿时才搬进 {outputPath}）");
+            AppendLog("INFO", $"{task.LogName}：入仓目录 {stageDirectory}（中间产物先落这里，定稿时才搬进 {outputPath}）");
 
             /*
              * 内嵌归档（双面文件）：先按偏移把尾部那段真正的 ZIP 抠出来，
@@ -17937,7 +17946,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：递归模式（{Settings.RecursionMode}）下第 0 层要交给 7-Zip 逐层展开，" +
+                        $"{task.LogName}：递归模式（{Settings.RecursionMode}）下第 0 层要交给 7-Zip 逐层展开，" +
                         $"本次不走 ZIP 直读，仍按偏移取出内嵌归档（需要约 {carveBytes / 1024 / 1024} MB 临时空间）。");
                 }
                 else
@@ -17972,14 +17981,14 @@ namespace ArchiveFixer.ViewModels
                              */
                             AppendLog(
                                 "INFO",
-                                $"{task.FileName}：内嵌归档是加密包（AES），直读已用第 {directZip.ResolvedPasswordIndex} 个候选密码" +
+                                $"{task.LogName}：内嵌归档是加密包（AES），直读已用第 {directZip.ResolvedPasswordIndex} 个候选密码" +
                                 $"（按{ZipAesCrypto.DescribeEncoding(directZip.ResolvedPasswordEncoding)}）通过校验与认证码 —— " +
                                 "7-Zip 对这类包只按 ANSI 字节派生密码，交给它会一律报密码错误，所以本次由内置读取器解。");
                         }
 
                         AppendLog(
                             "INFO",
-                            $"{task.FileName}：内嵌归档可以 ZIP 直读（{directZip.List?.FileCount ?? 0} 个文件 / " +
+                            $"{task.LogName}：内嵌归档可以 ZIP 直读（{directZip.List?.FileCount ?? 0} 个文件 / " +
                             $"{TaskSpaceEstimate.FormatSize(directZip.TotalBytes)}）—— 本次不需要那份等大的临时副本" +
                             $"（原本要抠 {TaskSpaceEstimate.FormatSize(directZip.ArchiveLength)}）。");
 
@@ -18000,7 +18009,7 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = directZip.Message;
                         task.LastUpdatedTime = DateTime.Now;
 
-                        AppendLog("ERROR", $"{task.FileName}：{directZip.Message}");
+                        AppendLog("ERROR", $"{task.LogName}：{directZip.Message}");
                         return;
                     }
                     else if (directZip.PasswordRejected)
@@ -18018,12 +18027,12 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = directZip.Message;
                         task.LastUpdatedTime = DateTime.Now;
 
-                        AppendLog("ERROR", $"{task.FileName}：{directZip.Message}");
+                        AppendLog("ERROR", $"{task.LogName}：{directZip.Message}");
                         return;
                     }
                     else
                     {
-                        AppendLog("INFO", $"{task.FileName}：内嵌归档直读不支持（{directZip.Reason}），已回落到抠取。");
+                        AppendLog("INFO", $"{task.LogName}：内嵌归档直读不支持（{directZip.Reason}），已回落到抠取。");
                         directZip = null;
                     }
                 }
@@ -18054,13 +18063,13 @@ namespace ArchiveFixer.ViewModels
                             $"但系统盘只剩 {carveFree.Value / 1024 / 1024} MB。请先清理空间再试。";
                         task.LastUpdatedTime = DateTime.Now;
 
-                        AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                        AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
                         return;
                     }
 
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：正在取出内嵌归档（约 {carveBytes / 1024 / 1024} MB），这一步在后台做，界面不会卡住。");
+                        $"{task.LogName}：正在取出内嵌归档（约 {carveBytes / 1024 / 1024} MB），这一步在后台做，界面不会卡住。");
 
                     /*
                      * 关键修复：抠出是**同步磁盘拷贝**（几百 MB 量级），必须扔到后台线程。
@@ -18076,7 +18085,7 @@ namespace ArchiveFixer.ViewModels
                         if (percent >= lastPercent + 20 || percent >= 100)
                         {
                             lastPercent = percent;
-                            AppendLog("INFO", $"{task.FileName}：取出内嵌归档 {percent}%");
+                            AppendLog("INFO", $"{task.LogName}：取出内嵌归档 {percent}%");
                         }
                     });
 
@@ -18098,7 +18107,7 @@ namespace ArchiveFixer.ViewModels
                             : "取出内嵌归档失败：" + carve.Message;
                         task.LastUpdatedTime = DateTime.Now;
 
-                        AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                        AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
                         return;
                     }
 
@@ -18129,7 +18138,7 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：密码候选共 {candidates.Count} 个，超过单层上限 {attemptLimit} 个，" +
+                    $"{task.LogName}：密码候选共 {candidates.Count} 个，超过单层上限 {attemptLimit} 个，" +
                     $"本层只试前 {maxPasswordAttempts} 个（到上限会明确报“{StatusText.PasswordAttemptLimitReached}”，不会报成密码错误）。");
             }
 
@@ -18165,7 +18174,7 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog(
                     "INFO",
-                    $"{task.FileName}：直读清单 {preflightList?.FileCount ?? 0} 个文件 / " +
+                    $"{task.LogName}：直读清单 {preflightList?.FileCount ?? 0} 个文件 / " +
                     $"{TaskSpaceEstimate.FormatSize(preflightList?.TotalUncompressedSize ?? 0)}（未调用 7-Zip 列目录）。");
             }
             else
@@ -18248,12 +18257,12 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog(
                         "WARN",
-                        $"{task.FileName}：{StatusText.EncryptedHeaders} —— 连内容清单都读不出来（需要正确密码），" +
+                        $"{task.LogName}：{StatusText.EncryptedHeaders} —— 连内容清单都读不出来（需要正确密码），" +
                         $"本次跳过路径预检与资源预算，解压后仍会校验落点。原因：{lastListMessage}");
                 }
                 else
                 {
-                    AppendLog("WARN", $"{task.FileName}：没能列出归档内容（可能是加密头或文件损坏），本次跳过路径预检与资源预算，解压后仍会校验落点。");
+                    AppendLog("WARN", $"{task.LogName}：没能列出归档内容（可能是加密头或文件损坏），本次跳过路径预检与资源预算，解压后仍会校验落点。");
                 }
             }
             else
@@ -18307,7 +18316,7 @@ namespace ArchiveFixer.ViewModels
                         + siblingText + advice
                         + "程序不会自己改源文件（不变量 1）：只有你点那个按钮，它才会改这一个名字。";
 
-                    AppendLog("ERROR", $"{task.FileName}：{task.ErrorMessage}");
+                    AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
                     return;
                 }
 
@@ -18318,7 +18327,7 @@ namespace ArchiveFixer.ViewModels
                     task.Status = StatusText.ExtractFailed;
                     task.ErrorMessage = "归档里有不安全的条目，已拒绝解压：" + pathReport.Summary;
 
-                    AppendLog("ERROR", $"{task.FileName}：路径预检未通过 —— {pathReport.Summary}");
+                    AppendLog("ERROR", $"{task.LogName}：路径预检未通过 —— {pathReport.Summary}");
                     return;
                 }
 
@@ -18392,7 +18401,7 @@ namespace ArchiveFixer.ViewModels
                     task.Status = StatusText.ExtractFailed;
                     task.ErrorMessage = "资源预算未通过：" + budget.Reason;
 
-                    AppendLog("ERROR", $"{task.FileName}：资源预算未通过 —— {budget.Reason}");
+                    AppendLog("ERROR", $"{task.LogName}：资源预算未通过 —— {budget.Reason}");
                     return;
                 }
 
@@ -18415,7 +18424,7 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                AppendLog("INFO", $"{task.FileName}：空间门通过（精确） —— {preciseGate.Reason}；{refined.Basis}");
+                AppendLog("INFO", $"{task.LogName}：空间门通过（精确） —— {preciseGate.Reason}；{refined.Basis}");
 
                 if (!string.Equals(
                         RestHandlingModes.Normalize(_restHandlingThisBatch),
@@ -18440,7 +18449,7 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog(
                         "INFO",
-                        $"{task.FileName}：定稿 + 校验通过之后会按「删除操作」"
+                        $"{task.LogName}：定稿 + 校验通过之后会按「删除操作」"
                         + (string.Equals(RestHandlingModes.Normalize(_restHandlingThisBatch), RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
                             ? "把其余物移入回收站"
                             : "彻底删除其余物")
@@ -18456,7 +18465,7 @@ namespace ArchiveFixer.ViewModels
                      *    于是 68 个包每个都把十几行样板全吐了出来（实测就是被这一条挡住的）。
                      * 真正被预算挡下时走的是 ERROR（"安全上限"/"磁盘空间不足"那几支），一个字都不少。
                      */
-                    AppendLog("INFO", $"{task.FileName}：资源预算提示 —— {budget.Reason}");
+                    AppendLog("INFO", $"{task.LogName}：资源预算提示 —— {budget.Reason}");
                 }
 
                 /*
@@ -18539,7 +18548,7 @@ namespace ArchiveFixer.ViewModels
                 }
                 catch (Exception ex)
                 {
-                    AppendLog("ERROR", $"{task.FileName}：递归解压异常 —— {ex.GetType().Name}：{ex.Message}");
+                    AppendLog("ERROR", $"{task.LogName}：递归解压异常 —— {ex.GetType().Name}：{ex.Message}");
                     throw;
                 }
 
@@ -18691,7 +18700,7 @@ namespace ArchiveFixer.ViewModels
                 task.ProgressText = StatusText.ProgressProcessing;
                 task.LastUpdatedTime = DateTime.Now;
 
-                AppendLog("INFO", $"{task.FileName}：开始解压前测试。");
+                AppendLog("INFO", $"{task.LogName}：开始解压前测试。");
 
                 for (int i = 0; i < maxPasswordAttempts; i++)
                 {
@@ -18700,7 +18709,7 @@ namespace ArchiveFixer.ViewModels
                     PasswordItem candidate = candidates[i];
                     string password = candidate.Value ?? string.Empty;
 
-                    AppendLog("INFO", $"{task.FileName}：测试密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
+                    AppendLog("INFO", $"{task.LogName}：测试密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
                     ArchiveOperationResult testResult = await _archiveEngine.TestAsync(
                         BuildTrackedRequest(engineArchivePath, password, null, progressSink),
@@ -18731,7 +18740,7 @@ namespace ArchiveFixer.ViewModels
                         task.ErrorMessage = string.Empty;
                         task.LastUpdatedTime = DateTime.Now;
 
-                        AppendLog("INFO", $"{task.FileName}：测试通过。");
+                        AppendLog("INFO", $"{task.LogName}：测试通过。");
                         break;
                     }
 
@@ -18746,7 +18755,7 @@ namespace ArchiveFixer.ViewModels
                          * 本次内容物 / 结果校验几十行样板全写了出来（也是他看到的 246 KB 的主要来源）。
                          * 用 INFO 之后：这个候选错了就错了，任务最后**成功** → 细节照样丢；**失败** → 细节照样全留。
                          */
-                        AppendLog("INFO", $"{task.FileName}：这个密码候选不对，继续试下一个。");
+                        AppendLog("INFO", $"{task.LogName}：这个密码候选不对，继续试下一个。");
                         continue;
                     }
 
@@ -18776,7 +18785,7 @@ namespace ArchiveFixer.ViewModels
                     task.ProgressText = StatusText.ProgressCompleted;
                     task.LastUpdatedTime = DateTime.Now;
 
-                    AppendLog("ERROR", $"{task.FileName}：测试失败，原因：{testResult.Message}");
+                    AppendLog("ERROR", $"{task.LogName}：测试失败，原因：{testResult.Message}");
                     break;
                 }
 
@@ -18849,7 +18858,7 @@ namespace ArchiveFixer.ViewModels
                 task.ProgressText = StatusText.ProgressProcessing;
                 task.LastUpdatedTime = DateTime.Now;
 
-                AppendLog("INFO", $"{task.FileName}：测试通过，开始正式解压。");
+                AppendLog("INFO", $"{task.LogName}：测试通过，开始正式解压。");
 
                 ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
      BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),
@@ -18896,7 +18905,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         AppendLog(
                             "WARN",
-                            $"{task.FileName}：结果校验 —— {stage.Verification.Message}" +
+                            $"{task.LogName}：结果校验 —— {stage.Verification.Message}" +
                             "（密码是对的，但产物不完整，按失败收场）");
                     }
 
@@ -19011,7 +19020,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         AppendLog(
                             "INFO",
-                            $"{task.FileName}：整包已加密 —— 跳过「空密码」这一档（引擎造不出用空密码加密的包，"
+                            $"{task.LogName}：整包已加密 —— 跳过「空密码」这一档（引擎造不出用空密码加密的包，"
                             + "试它必然白跑一整包）。"
                             + (candidates.Count == 0 ? "这次没有任何可用密码。" : $"还有 {Math.Min(candidates.Count, maxPasswordAttempts)} 个候选可试。"));
                     }
@@ -19042,7 +19051,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         AppendLog(
                             "INFO",
-                            $"{task.FileName}：这一包连文件名都加密（引擎说 {lastListErrorType}）—— 同样跳过「空密码」这一档。");
+                            $"{task.LogName}：这一包连文件名都加密（引擎说 {lastListErrorType}）—— 同样跳过「空密码」这一档。");
                     }
                 }
 
@@ -19146,7 +19155,7 @@ namespace ArchiveFixer.ViewModels
 
                         AppendLog(
                             "WARN",
-                            $"{task.FileName}：已按「停止后续」中断 —— 剩余 "
+                            $"{task.LogName}：已按「停止后续」中断 —— 剩余 "
                             + $"{maxPasswordAttempts - attemptedCandidates} 个候选密码不再尝试。");
 
                         break;
@@ -19187,7 +19196,7 @@ namespace ArchiveFixer.ViewModels
 
                             AppendLog(
                                 "WARN",
-                                $"{task.FileName}：密码预检不通过（只解了 {PasswordProbe.Describe(probeEntryPath, probeEntrySize)}，"
+                                $"{task.LogName}：密码预检不通过（只解了 {PasswordProbe.Describe(probeEntryPath, probeEntrySize)}，"
                                 + "整包一个字节都没动）—— 这个候选不对，试下一个。");
 
                             continue;
@@ -19197,12 +19206,12 @@ namespace ArchiveFixer.ViewModels
                         {
                             AppendLog(
                                 "INFO",
-                                $"{task.FileName}：密码预检通过（{PasswordProbe.Describe(probeEntryPath, probeEntrySize)} 解开了）"
+                                $"{task.LogName}：密码预检通过（{PasswordProbe.Describe(probeEntryPath, probeEntrySize)} 解开了）"
                                 + "—— 这个候选是对的，开始解整包。");
                         }
                     }
 
-                    AppendLog("INFO", $"{task.FileName}：开始解压，密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
+                    AppendLog("INFO", $"{task.LogName}：开始解压，密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
                     /*
                      * ===== 每换一个候选，先把暂存产物清空（用户 2026-09-25 真机铁证）=====
@@ -19368,7 +19377,7 @@ namespace ArchiveFixer.ViewModels
                             {
                                 AppendLog(
                                     "WARN",
-                                    $"{task.FileName}：结果校验 —— {stage.Verification.Message}" +
+                                    $"{task.LogName}：结果校验 —— {stage.Verification.Message}" +
                                     "（这个候选不算数，继续尝试下一个候选密码）");
 
                                 await DiscardStageProductsAsync(task, engineOutputPath, cancellationToken);
@@ -19392,7 +19401,7 @@ namespace ArchiveFixer.ViewModels
 
                             AppendLog(
                                 "WARN",
-                                $"{task.FileName}：结果校验 —— {stage.Verification.Message}" +
+                                $"{task.LogName}：结果校验 —— {stage.Verification.Message}" +
                                 "（" + (landingViolation != null
                                     ? "产物越界，按越界收场，不再换密码"
                                     : stopReason ?? "按失败收场") + "）");
@@ -19447,7 +19456,7 @@ namespace ArchiveFixer.ViewModels
                         task.PasswordStatus = StatusText.WrongPassword;
 
                         // 同上：候选不对是预期之内，⛔ 不许记 WARN（那会让"成功就丢"整条失效）。
-                        AppendLog("INFO", $"{task.FileName}：这个密码候选不对，继续试下一个。");
+                        AppendLog("INFO", $"{task.LogName}：这个密码候选不对，继续试下一个。");
                         continue;
                     }
 
@@ -19749,7 +19758,7 @@ namespace ArchiveFixer.ViewModels
 
                             AppendLog(
                                 "WARN",
-                                $"{task.FileName}：{task.ErrorMessage}"
+                                $"{task.LogName}：{task.ErrorMessage}"
                                 + "（密码已经由这一趟解压本身证实 —— 不再往下试密码候选，"
                                 + "也不再把已经解出来的内容当成'密码候选不对'的牺牲品）");
                         }
@@ -19870,7 +19879,7 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：这次拿到的是「{StatusText.EncryptedHeaders}」的结论" +
+                    $"{task.LogName}：这次拿到的是「{StatusText.EncryptedHeaders}」的结论" +
                     "（不是泛泛的密码错误）—— 连内容清单都读不出来，需要正确密码才能列出内容。");
             }
 
@@ -20116,7 +20125,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：换引擎兜底解出来的产物没有通过结果校验 —— {stage.Verification.Message}"
+                    $"{task.LogName}：换引擎兜底解出来的产物没有通过结果校验 —— {stage.Verification.Message}"
                     + "（这个候选不算数：不发布、结论照旧）。");
 
                 return false;
@@ -20260,7 +20269,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：密码预检 —— 只读「{entryPath}」解密后的开头 {PasswordProbe.PrefixProbeBytes} 字节"
+                $"{task.LogName}：密码预检 —— 只读「{entryPath}」解密后的开头 {PasswordProbe.PrefixProbeBytes} 字节"
                 + $"（与包多大无关，一个字节都不落盘）：看着像正常文件开头 {plausible.Count} 个"
                 + $"（先试），说不准 {unknown.Count} 个，看不出是文件开头 {implausible.Count} 个（排到最后再试）。"
                 + "⛔ 一个候选都不会被丢掉。");
@@ -20418,7 +20427,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch (Exception ex)
             {
-                AppendLog("WARN", $"{task.FileName}：清理候选产物失败（{ex.Message}），继续尝试下一个候选。");
+                AppendLog("WARN", $"{task.LogName}：清理候选产物失败（{ex.Message}），继续尝试下一个候选。");
             }
         }
 
@@ -20525,7 +20534,7 @@ namespace ArchiveFixer.ViewModels
 
                 if (!ArchivePathGuard.IsInsideRoot(_pathService.WorkDirectory, carvedPath, out string reason))
                 {
-                    AppendLog("WARN", $"{task.FileName}：上次留下的抠取副本不在工作区根之下，已跳过清理 —— {reason}");
+                    AppendLog("WARN", $"{task.LogName}：上次留下的抠取副本不在工作区根之下，已跳过清理 —— {reason}");
                     return;
                 }
 
@@ -20533,13 +20542,13 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog(
                     "INFO",
-                    $"{task.FileName}：已清掉上一次回落留下的抠取副本（本次走直读，不需要它）：{Path.GetFileName(carvedPath)}");
+                    $"{task.LogName}：已清掉上一次回落留下的抠取副本（本次走直读，不需要它）：{Path.GetFileName(carvedPath)}");
             }
             catch (Exception ex)
             {
                 AppendLog(
                     "WARN",
-                    $"{task.FileName}：上次留下的抠取副本没清掉（{ex.Message}），它会在定稿时被当成其余物搬走。");
+                    $"{task.LogName}：上次留下的抠取副本没清掉（{ex.Message}），它会在定稿时被当成其余物搬走。");
             }
         }
 
@@ -20572,7 +20581,7 @@ namespace ArchiveFixer.ViewModels
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：开始 ZIP 直读解压（{plan.List?.FileCount ?? 0} 个文件 / " +
+                $"{task.LogName}：开始 ZIP 直读解压（{plan.List?.FileCount ?? 0} 个文件 / " +
                 $"{TaskSpaceEstimate.FormatSize(plan.TotalBytes)}，不生成等大临时副本）。");
 
             var progress = new DirectReadProgressBridge(progressSink);
@@ -20614,13 +20623,13 @@ namespace ArchiveFixer.ViewModels
                 task.ErrorMessage = extract.Message;
                 task.LastUpdatedTime = DateTime.Now;
 
-                AppendLog("ERROR", $"{task.FileName}：ZIP 直读失败 —— {extract.Message}");
+                AppendLog("ERROR", $"{task.LogName}：ZIP 直读失败 —— {extract.Message}");
                 return;
             }
 
             AppendLog(
                 "INFO",
-                $"{task.FileName}：ZIP 直读完成 —— {extract.Message}"
+                $"{task.LogName}：ZIP 直读完成 —— {extract.Message}"
                 + $"；用时 {directReadWatch.Elapsed.TotalSeconds:0.0} 秒 ≈ {DescribeThroughput(extract.WrittenBytes, directReadWatch.Elapsed)}"
                 + "（直读就是「读出来再写进去」的一次拷贝，速度上限由这块盘决定）");
 
@@ -20767,7 +20776,7 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "WARN",
-                        $"{task.FileName}：同目录里有 {orphans.Count} 组缺首卷的分卷，无法确定容器里装的是哪一组；" +
+                        $"{task.LogName}：同目录里有 {orphans.Count} 组缺首卷的分卷，无法确定容器里装的是哪一组；" +
                         "这一条补充说明就不给了（失败原因仍是引擎报的那一条）。");
 
                     return string.Empty;
@@ -20854,7 +20863,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 if (!TryResetAssemblyDirectory(assemblyDirectory, workDirectory))
                 {
-                    AppendLog("WARN", $"{task.FileName}：拼装目录里已经有程序没造过的东西，本次不拼（一个字节都不动）。");
+                    AppendLog("WARN", $"{task.LogName}：拼装目录里已经有程序没造过的东西，本次不拼（一个字节都不动）。");
                     return (null, null);
                 }
 
@@ -20869,13 +20878,13 @@ namespace ArchiveFixer.ViewModels
 
                 if (!plan.CanAssemble)
                 {
-                    AppendLog("INFO", $"{task.FileName}：没有自动把两边的分卷接起来 —— {plan.Reason}");
+                    AppendLog("INFO", $"{task.LogName}：没有自动把两边的分卷接起来 —— {plan.Reason}");
                     return (null, null);
                 }
 
                 AppendLog(
                     "INFO",
-                    $"{task.FileName}：{plan.Reason}正在工作区里接起来（你的源文件只读，一个字节都不动）。");
+                    $"{task.LogName}：{plan.Reason}正在工作区里接起来（你的源文件只读，一个字节都不动）。");
 
                 /*
                  * 进度用 Progress<long>（回调回到捕获的上下文，与"抠取内嵌归档"那处的写法一致）——
@@ -20889,7 +20898,7 @@ namespace ArchiveFixer.ViewModels
                     if (copied - logged >= 1024L * 1024 * 1024)
                     {
                         logged = copied;
-                        AppendLog("INFO", $"{task.FileName}：正在复制后续卷 …已复制 {TaskSpaceEstimate.FormatSize(copied)}");
+                        AppendLog("INFO", $"{task.LogName}：正在复制后续卷 …已复制 {TaskSpaceEstimate.FormatSize(copied)}");
                     }
                 });
 
@@ -20903,13 +20912,13 @@ namespace ArchiveFixer.ViewModels
 
                 if (!assembled.Success)
                 {
-                    AppendLog("WARN", $"{task.FileName}：自动拼装没做成 —— {assembled.Reason}照旧按「分卷缺失」处理。");
+                    AppendLog("WARN", $"{task.LogName}：自动拼装没做成 —— {assembled.Reason}照旧按「分卷缺失」处理。");
                     return (null, null);
                 }
 
                 foreach (string line in assembled.LogLines)
                 {
-                    AppendLog("INFO", $"{task.FileName}：{line}");
+                    AppendLog("INFO", $"{task.LogName}：{line}");
                 }
 
                 /*
@@ -20941,14 +20950,14 @@ namespace ArchiveFixer.ViewModels
                 {
                     AppendLog(
                         "WARN",
-                        $"{task.FileName}：接上后续卷之后引擎仍然打不开这一套（可能这一组本身就是坏的），" +
+                        $"{task.LogName}：接上后续卷之后引擎仍然打不开这一套（可能这一组本身就是坏的），" +
                         "退回原路，照旧按「分卷缺失」报。");
                     return (null, null);
                 }
 
                 AppendLog(
                     "INFO",
-                    $"{task.FileName}：接上后续卷之后引擎能打开了（{assembledList.FileCount} 个文件），" +
+                    $"{task.LogName}：接上后续卷之后引擎能打开了（{assembledList.FileCount} 个文件），" +
                     "本次就用工作区里那一套解压（源目录里一个字节都没动）。");
 
                 return (assembled.FirstVolumePath, assembledList);
@@ -20960,7 +20969,7 @@ namespace ArchiveFixer.ViewModels
             catch (Exception ex)
             {
                 // 拼装是"锦上添花"：出任何错都退回原路，⛔ 绝不让它改变任务的结论。
-                AppendLog("WARN", $"{task.FileName}：自动拼装时出错（{ex.Message}），退回原路（结论不受影响）。");
+                AppendLog("WARN", $"{task.LogName}：自动拼装时出错（{ex.Message}），退回原路（结论不受影响）。");
                 return (null, null);
             }
         }
@@ -21049,7 +21058,7 @@ namespace ArchiveFixer.ViewModels
 
             if (!ArchivePathGuard.IsInsideRoot(workRoot, taskDirectory, out string reason))
             {
-                AppendLog("WARN", $"{task.FileName}：中间工作区目录不在工作区根目录之下，已跳过清理 —— {reason}");
+                AppendLog("WARN", $"{task.LogName}：中间工作区目录不在工作区根目录之下，已跳过清理 —— {reason}");
                 return;
             }
 
@@ -21069,13 +21078,13 @@ namespace ArchiveFixer.ViewModels
 
                 if (foreign != null)
                 {
-                    AppendLog("WARN", $"{task.FileName}：中间工作区目录里有非本任务造的子目录（{foreign}），为安全起见不清理：{taskDirectory}");
+                    AppendLog("WARN", $"{task.LogName}：中间工作区目录里有非本任务造的子目录（{foreign}），为安全起见不清理：{taskDirectory}");
                     return;
                 }
             }
             catch (Exception ex)
             {
-                AppendLog("WARN", $"{task.FileName}：读不了中间工作区目录（{ex.Message}），已跳过清理：{taskDirectory}");
+                AppendLog("WARN", $"{task.LogName}：读不了中间工作区目录（{ex.Message}），已跳过清理：{taskDirectory}");
                 return;
             }
 
@@ -21086,16 +21095,16 @@ namespace ArchiveFixer.ViewModels
                 // 删除是**不可逆**的：动手之前先把"删什么、为什么"写进日志（AGENTS.md §9.5 的同一要求）。
                 AppendLog(
                     "INFO",
-                    $"{task.FileName}：解压成功且输出校验通过，清理本任务的中间工作区（{fileCount} 个文件 / {totalSize} 字节）：{taskDirectory}");
+                    $"{task.LogName}：解压成功且输出校验通过，清理本任务的中间工作区（{fileCount} 个文件 / {totalSize} 字节）：{taskDirectory}");
 
                 Directory.Delete(taskDirectory, recursive: true);
 
-                AppendLog("INFO", $"{task.FileName}：中间工作区已清理：{taskDirectory}");
+                AppendLog("INFO", $"{task.LogName}：中间工作区已清理：{taskDirectory}");
             }
             catch (Exception ex)
             {
                 // 删不掉只是"垃圾多留一会儿"，不影响任务结论（同 ExtractionWorkspace.Cleanup 的口径）。
-                AppendLog("WARN", $"{task.FileName}：清理中间工作区失败（{ex.Message}），目录保留：{taskDirectory}");
+                AppendLog("WARN", $"{task.LogName}：清理中间工作区失败（{ex.Message}），目录保留：{taskDirectory}");
             }
         }
 

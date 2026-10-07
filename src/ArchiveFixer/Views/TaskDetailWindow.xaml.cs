@@ -175,6 +175,15 @@ namespace ArchiveFixer.Views
             builder.AppendLine("错误信息：" + Safe(task.DisplayErrorMessage));
 
             /*
+             * 这一行经历过的变换（改名 / 续解每一层 / 谁解开整组）—— 用户 2026-10-07：
+             * 「我们最后想看到 111.rar 通过解压缩两层变换到 111.zip」。空着就不写行。
+             */
+            if (task.DisplayTransformationText.Length > 0)
+            {
+                builder.AppendLine("过程：" + task.DisplayTransformationText);
+            }
+
+            /*
              * 解压前那一遍条目预检算出来的两条提示（可疑条目 / 路径过长）。
              * 窗口里空着就收起，但**复制出去的那一份要能带走完整的排障信息** ——
              * 用户把详情粘给我时，"这个包里有 3 个 exe"往往就是关键线索。

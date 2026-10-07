@@ -28,6 +28,16 @@ namespace ArchiveFixer.Engines
         /// <summary>当前正在处理的条目名（引擎给的是相对/绝对路径都可能；没有时为空串）。</summary>
         public string CurrentEntry { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 这一帧属于**续解链的第几层**（0 = 第 0 层 / 不知道）。
+        ///
+        /// <para>为什么要**结构化**地带上它（用户 2026-10-07：「111.z03 显示解压了三遍 100%」）：
+        /// 递归每开一层都会先补一帧 0%（否则进度条会停在上一层的 100% 好几分钟），于是同一行看起来
+        /// 像"被解了三遍"。层号落在任务上之后，状态格能如实写成「解压中（整组第 2 层）45%」——
+        /// ⛔ 百分比一个数不改，只是把"这是第二层"说清楚。</para>
+        /// </summary>
+        public int Layer { get; init; }
+
         /// <summary>已处理字节；引擎不报时为 <see cref="UnknownBytes"/>。</summary>
         public long ProcessedBytes { get; init; } = UnknownBytes;
 
