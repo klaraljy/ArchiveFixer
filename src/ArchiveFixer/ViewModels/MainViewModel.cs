@@ -5771,7 +5771,14 @@ namespace ArchiveFixer.ViewModels
             var builder = new StringBuilder();
 
             builder.AppendLine("序号：" + task.Index);
-            builder.AppendLine("文件名：" + (task.FileName ?? string.Empty));
+
+            /*
+             * ⛔ 与屏幕上一致（用户 2026-10-07：「这个显示的问题，根本就没有同步」）：
+             * 名称 / 体积 / 路径 / 错误信息取**显示口径**那一份；裸值在下面三行里一个字不少。
+             */
+            builder.AppendLine("文件名：" + (task.DisplayFileName ?? string.Empty));
+            builder.AppendLine("大小：" + (task.DisplaySizeText ?? string.Empty));
+            builder.AppendLine("界面显示路径：" + (task.DisplayPath ?? string.Empty));
             builder.AppendLine("原始路径：" + (task.OriginalPath ?? string.Empty));
             builder.AppendLine("当前路径：" + (task.CurrentPath ?? string.Empty));
             builder.AppendLine("当前后缀：" + (task.CurrentExtension ?? string.Empty));
@@ -5791,7 +5798,7 @@ namespace ArchiveFixer.ViewModels
             builder.AppendLine("操作：" + (task.Operation ?? string.Empty));
             builder.AppendLine("状态：" + (task.Status ?? string.Empty));
             builder.AppendLine("进度：" + (task.ProgressText ?? string.Empty));
-            builder.AppendLine("错误信息：" + (task.ErrorMessage ?? string.Empty));
+            builder.AppendLine("错误信息：" + (task.DisplayErrorMessage ?? string.Empty));
             builder.AppendLine("耗时：" + (task.ElapsedText ?? string.Empty));
 
             /*

@@ -46,6 +46,17 @@ namespace ArchiveFixer.Storage
         /// </summary>
         public IReadOnlyList<SourceJunkItem> AllItems { get; init; } = Array.Empty<SourceJunkItem>();
 
+        /// <summary>
+        /// **要拿去移出任务列表的那份名单**（唯一出口）：<see cref="AllItems"/> 非空就用它，
+        /// 否则退回 <see cref="Items"/>（手工构造的结论 / 老调用方只填了 `Items`）。
+        ///
+        /// <para>⛔ 两个消费点（导入 / 一键处理开工前，以及批末那一步）**必须都读这一个属性**：
+        /// 真机 2026-10-07 10:15 那一批就是"只改了其中一条路"—— 导入那条仍按 `Items`（上限 10 条）
+        /// 移，于是 17 个无用物先只走了 10 个、剩下 7 个要等点「一键处理」才被移掉，
+        /// 用户当场问「为什么一开始只清理 10 个」。</para>
+        /// </summary>
+        public IReadOnlyList<SourceJunkItem> AllHits => AllItems.Count > 0 ? AllItems : Items;
+
         /// <summary>超过上限、只报了个数的那部分（提示里写成"还有 N 个"）。</summary>
         public int ExtraCount { get; init; }
 

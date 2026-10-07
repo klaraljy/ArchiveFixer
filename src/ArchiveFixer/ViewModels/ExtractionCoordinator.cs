@@ -12375,34 +12375,17 @@ namespace ArchiveFixer.ViewModels
              * 移了谁、移了几个**逐条写日志**。⛔ 不在这里另写一套扫描判据（唯一实现仍是 SourceJunkScanner）。
              */
             /*
-             * ⛔ 判据用**全部命中**（`AllItems`），⛔ 不是那份"最多列 10 条"的提示名单（`Items`）：
-             * 真机 CCCC 2026-10-07 实测扫到 16 条、`Items` 只有前 10 条，而用户列表里那几个 `.txt`
-             * 恰好在后 6 条里 ⇒ 日志写"移掉 0 个"、列表一个都没动（他当场问"无用物怎么还在"）。
+             * ⛔ 判据用**唯一出口** `AllHits`（= 全部命中），⛔ 不是那份"最多列 10 条"的提示名单（`Items`）：
+             * 真机 CCCC 2026-10-07 实测扫到 17 条、`Items` 只有前 10 条 ⇒ 按 `Items` 移就会剩下几条
+             * 留在列表里（用户当场问「为什么一开始只清理 10 个」）。
              */
-            IReadOnlyList<SourceJunkItem> junkHits = facts.Junk.AllItems.Count > 0
-                ? facts.Junk.AllItems
-                : facts.Junk.Items;
+            IReadOnlyList<SourceJunkItem> junkHits = facts.Junk.AllHits;
 
             if (junkHits.Count > 0)
             {
                 int junkRemoved = _vm.RemoveTasksBySourcePaths(junkHits.Select(item => item.FullPath));
 
-                if (junkRemoved == 0)
-                {
-                    /*
-                     * 一条都没对上 ⇒ **如实说一声**（WARN，看得见）：这多半是"扫到的是源目录里的文件，
-                     * 而任务列表里没有它们"（用户没把它们导进来）—— 那就不该假装做过什么。
-                     * ⛔ 只写日志，⛔ 不动磁盘上任何文件。
-                     */
-                    AppendLog(
-                        "WARN",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.OneClickJunkUnmatchedLogFormat,
-                            junkHits.Count,
-                            string.Join("、", junkHits.Take(5).Select(item => item.FileName))));
-                }
-                else
+                if (junkRemoved > 0)
                 {
                     AppendLog(
                         "INFO",
@@ -12410,6 +12393,20 @@ namespace ArchiveFixer.ViewModels
                             System.Globalization.CultureInfo.CurrentCulture,
                             StatusText.OneClickJunkRemovedLogFormat,
                             junkRemoved,
+                            string.Join("、", junkHits.Take(5).Select(item => item.FileName))));
+                }
+                else
+                {
+                    /*
+                     * 列表里一条都没对上 ⇒ **中性地说一声**（INFO）：正常情形就是"导入那一步已经把它们
+                     * 移走了"（用户看到的"两波"正是这两条路各移一部分）。⛔ 只写日志，⛔ 不动磁盘上任何文件。
+                     */
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.JunkAlreadyOffListLogFormat,
+                            junkHits.Count,
                             string.Join("、", junkHits.Take(5).Select(item => item.FileName))));
                 }
             }

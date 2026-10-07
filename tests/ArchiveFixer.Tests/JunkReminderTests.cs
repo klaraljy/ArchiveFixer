@@ -277,6 +277,36 @@ namespace ArchiveFixer.Tests
             Assert.Equal(StatusText.Recognized, task.Status);
         }
 
+        /// <summary>
+        /// **导入那一步也要把无用物全部移出列表**（⛔ 不是只移前 10 条）。
+        ///
+        /// <para>用户 2026-10-07：「为什么一开始只清理 10 个无用物，日志里面也是这么显示的，在我点了
+        /// 一键处理才能全部清理干净」。根因：两个消费点里只有一个改成了"全部命中"（批末那条），
+        /// 导入这条仍在读那份"最多列 10 条"的提示名单 ⇒ 17 个里先只走 10 个，剩下 7 个等到点
+        /// 「一键处理」才被移掉。⛔ 两条路必须读同一个出口 <c>SourceJunkScanResult.AllHits</c>。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>ScanCoordinator.RemoveJunkTasksFromListAsync</c> 里的
+        /// <c>junk.AllHits</c> 改回 <c>junk.Items</c> ⇒ 本条变红（列表里还剩 4 个 <c>.txt</c>）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 导入时把无用物全部移出列表_不是只移前10条()
+        {
+            Harness harness = CreateHarness("import-junk");
+
+            CreateSourceFile(harness, "包.7z");
+
+            for (int i = 1; i <= 14; i++)
+            {
+                CreateTextFile(harness, $"log{i:00}.txt");
+            }
+
+            await harness.Vm.AddPathsAsync(new[] { harness.SourceDirectory }, ImportMode.Replace);
+
+            Assert.DoesNotContain(
+                harness.Vm.Tasks,
+                task => task.FileName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
+        }
+
         // ================================================================ ④ B 段判据
 
         [Fact]

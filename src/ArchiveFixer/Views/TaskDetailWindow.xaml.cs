@@ -131,7 +131,15 @@ namespace ArchiveFixer.Views
 
             builder.AppendLine("【基本信息】");
             builder.AppendLine("序号：" + task.Index);
-            builder.AppendLine("文件名：" + Safe(task.FileName));
+
+            /*
+             * ⛔ 名称 / 体积 / 路径 / 错误信息一律取**界面上真正显示的那一份**（用户 2026-10-07：
+             * 「这个显示的问题，根本就没有同步」）—— 详情窗与「复制任务信息」是用户贴回来排障的文本，
+             * 与屏幕上不一致等于白贴。裸值仍然看得到（原始路径 / 当前路径 / 所在目录三行就是它）。
+             */
+            builder.AppendLine("文件名：" + Safe(task.DisplayFileName));
+            builder.AppendLine("大小：" + Safe(task.DisplaySizeText));
+            builder.AppendLine("界面显示路径：" + Safe(task.DisplayPath));
             builder.AppendLine("原始路径：" + Safe(task.OriginalPath));
             builder.AppendLine("当前路径：" + Safe(task.CurrentPath));
             builder.AppendLine("所在目录：" + Safe(task.DirectoryPath));
@@ -164,7 +172,7 @@ namespace ArchiveFixer.Views
              */
             builder.AppendLine("状态：" + Safe(task.StatusDisplayText));
             builder.AppendLine("进度：" + Safe(task.ProgressDetail));
-            builder.AppendLine("错误信息：" + Safe(task.ErrorMessage));
+            builder.AppendLine("错误信息：" + Safe(task.DisplayErrorMessage));
 
             /*
              * 解压前那一遍条目预检算出来的两条提示（可疑条目 / 路径过长）。

@@ -338,30 +338,17 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * ⛔ **临时排障（用完删）**：只在⑥设置「详细日志（排查用）」打开时写一行，打出
-             * "给了几单、扫到几条" —— 目的：一次分清"扫不到"还是"扫到了没移掉"
-             * （真机 2026-10-07：提醒那条报了 13 个无用物，两个"移出列表"调用点一个都没移，
-             * 日志里也没有"已把 N 个无用物移出列表"）。
+             * ⛔ 判据读**唯一出口** `AllHits`（= 全部命中，不是那份"最多列 10 条"的提示名单）：
+             * 真机 2026-10-07 10:15 那一批，导入这条路按 `Items` 只移走了 10 个（上限），
+             * 剩下的 7 个要等用户点「一键处理」才被批末那一步移掉 ⇒ 他问「为什么一开始只清理 10 个」。
              */
-            if (Settings?.VerboseLog == true)
-            {
-                AppendLog(
-                    "WARN",
-                    $"[排障·无用物] 传入 {tasks.Count} 单；扫到总 {junk?.TotalCount ?? 0} 条（明细 {junk?.Items.Count ?? 0} 条）");
-            }
-
-            if (junk == null || !junk.HasAnything || junk.Items.Count == 0)
+            if (junk == null || !junk.HasAnything || junk.AllHits.Count == 0)
             {
                 return 0;
             }
 
-            int removed = _vm.RemoveTasksBySourcePaths(junk.Items.Select(item => item.FullPath));
+            int removed = _vm.RemoveTasksBySourcePaths(junk.AllHits.Select(item => item.FullPath));
 
-
-            if (Settings?.VerboseLog == true)
-            {
-                AppendLog("WARN", $"[排障·无用物] 真移掉 {removed} 个");
-            }
             if (removed > 0)
             {
                 AppendLog(
@@ -370,7 +357,7 @@ namespace ArchiveFixer.ViewModels
                         System.Globalization.CultureInfo.CurrentCulture,
                         removedLogFormat ?? StatusText.OneClickJunkRemovedLogFormat,
                         removed,
-                        string.Join("、", junk.Items.Take(5).Select(item => item.FileName))));
+                        string.Join("、", junk.AllHits.Take(5).Select(item => item.FileName))));
             }
 
             return removed;

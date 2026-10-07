@@ -330,22 +330,44 @@ namespace ArchiveFixer.Models
         /// <summary>④ 源包按设置搬进**它自己的**「其余物」之后，用户那一份就在那儿（搬运不改名）。</summary>
         private string FindOwnFileInRestDirectory()
         {
-            string name = Path.GetFileName(OriginalPath);
-
-            if (name.Length == 0 || string.IsNullOrWhiteSpace(RestDirectoryPath))
+            if (string.IsNullOrWhiteSpace(RestDirectoryPath))
             {
                 return string.Empty;
             }
 
-            try
+            /*
+             * ⛔ 名字要试**两个**：最初导入那个名字（`OriginalPath`）与**最新已知的那个名字**
+             * （`_ownFilePath` —— 改名之后就是它）。只试前者会漏掉"先改名、后被搬进其余物"那一档，
+             * 于是那一行还停在旧位置（真机 2026-10-07：`111.z03` 已经在 `…\其余物\111.z03`，
+             * 那一行却还写着 `111(4)\111.z03` ⇒ 用户说"显示没同步"）。
+             */
+            foreach (string name in new[]
+                     {
+                         Path.GetFileName(_ownFilePath),
+                         Path.GetFileName(OriginalPath)
+                     })
             {
-                string candidate = Path.Combine(RestDirectoryPath, name);
-                return File.Exists(candidate) ? candidate : string.Empty;
+                if (name.Length == 0)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    string candidate = Path.Combine(RestDirectoryPath, name);
+
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+                catch
+                {
+                    // 路径形状不合法 ⇒ 试下一个名字。
+                }
             }
-            catch
-            {
-                return string.Empty;
-            }
+
+            return string.Empty;
         }
 
         private static bool ExistsOnDisk(string? path)

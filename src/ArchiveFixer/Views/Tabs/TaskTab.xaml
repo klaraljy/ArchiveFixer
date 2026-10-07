@@ -597,7 +597,13 @@
                                         -->
                                         <Setter Property="ToolTip">
                                             <Setter.Value>
-                                                <TextBlock Text="{Binding ErrorMessage}"
+                                                <!--
+                                                    ⛔ 悬停提示必须绑**显示口径**的那一份（`DisplayErrorMessage`）：
+                                                    绑裸 `ErrorMessage` 时，格子里是空的、气泡里却冒出
+                                                    "已完成 3 层递归解压…"（用户 2026-10-07：「显示的问题，
+                                                    根本就没有同步」）。
+                                                -->
+                                                <TextBlock Text="{Binding DisplayErrorMessage}"
                                                            TextWrapping="Wrap"
                                                            MaxWidth="560" />
                                             </Setter.Value>
