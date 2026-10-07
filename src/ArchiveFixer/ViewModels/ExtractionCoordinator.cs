@@ -12442,6 +12442,31 @@ namespace ArchiveFixer.ViewModels
             }
 
             LogReminderFindings(facts.Junk, facts.NoUsablePassword);
+            /*
+             * ⛔ **"无用物移出任务列表"也挂在这里**（真机 2026-10-07 07:49）：
+             * 判据与结论**这一处已经算好了**（上面那句提醒用的就是 `facts.Junk`）；
+             * 而 `ScanCoordinator.RemoveJunkTasksFromListAsync` 那两个调用点（导入 / 一键处理）
+             * 在真机那一批里**一次都没进到扫描**（我加的排障行没出现，列表里那 4 个 `.txt` 也没被移走）
+             * ⇒ 与其去猜它们为什么没跑，不如在"结论已经在手上"的这一刻**直接落一步**：
+             * 复用既有出口 `RemoveTasksBySourcePaths`（⛔ 只动列表、⛔ 不删/不改名/不搬磁盘上的文件），
+             * 移了谁、移了几个**逐条写日志**。⛔ 不在这里另写一套扫描判据（唯一实现仍是 SourceJunkScanner）。
+             */
+            if (facts.Junk.Items.Count > 0)
+            {
+                int junkRemoved = _vm.RemoveTasksBySourcePaths(facts.Junk.Items.Select(item => item.FullPath));
+
+                if (junkRemoved > 0)
+                {
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.OneClickJunkRemovedLogFormat,
+                            junkRemoved,
+                            string.Join("、", facts.Junk.Items.Take(5).Select(item => item.FileName))));
+                }
+            }
+
 
             if (_callerHandlesBatchReminderDialog)
             {
