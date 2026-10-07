@@ -79,6 +79,44 @@ namespace ArchiveFixer.Tests
             Assert.StartsWith(StatusText.ExtractSuccess, plain.StatusDisplayText, StringComparison.Ordinal);
             Assert.DoesNotContain(StatusText.ExtractSuccessAsGroup, plain.StatusDisplayText, StringComparison.Ordinal);
         }
+        /// <summary>
+        /// **被借去当单元的那一行，不该把单元的内部过程详情挂在"错误信息"格里**
+        /// （用户 2026-10-07：「列表里面还是显示 111.z03 解压了三次」—— 他看到的就是那格里的
+        /// 「已完成 3 层递归解压…」）。⛔ `ErrorMessage` 一个字不动，只改显示。
+        ///
+        /// <para><b>红检</b>：把 `DisplayErrorMessage` 里那一档撤掉 ⇒ 本条变红。</para>
+        /// </summary>
+        [Fact]
+        public void 被借去当单元的那一行_错误信息格不显示单元的过程详情()
+        {
+            string own = Path.Combine(_root, "111(4)", "111.z03");
+            string entry = Path.Combine(_root, "111", "111", "111.zip");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(own)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(entry)!);
+            File.WriteAllBytes(own, new byte[2048]);
+            File.WriteAllBytes(entry, new byte[4096]);
+
+            var unit = new ArchiveTask(own, 1);
+
+            unit.CurrentPath = entry;
+            unit.ShowUserFileIdentity(entry);
+            unit.Outcome = TaskOutcome.Succeeded;
+            unit.Status = StatusText.ExtractSuccess;
+            unit.ErrorMessage = "已完成 3 层递归解压（没有更多内层归档）；产物：X；搬运 5 个文件";
+
+            Assert.Equal(string.Empty, unit.DisplayErrorMessage);
+            Assert.NotEqual(string.Empty, unit.ErrorMessage);   // ⛔ 账上的值一个字没改
+
+            // 对照：普通那一行照旧显示。
+            var plain = new ArchiveTask(own, 2);
+
+            plain.Outcome = TaskOutcome.Succeeded;
+            plain.Status = StatusText.ExtractSuccess;
+            plain.ErrorMessage = "普通结论";
+
+            Assert.Equal("普通结论", plain.DisplayErrorMessage);
+        }
         /// <summary>⛔ 记下来的那份**不在了** ⇒ 回落当前值（不许继续显示旧名 / 旧大小 / 旧后缀）。</summary>
         [Fact]
         public void 记下来的那份不在了_回落当前值_不许显示旧名()

@@ -307,6 +307,20 @@ namespace ArchiveFixer.Models
         /// ⇒ **那一行就停在旧名字上**（用户 2026-10-06 截图里第 2、3 行正是如此：
         /// 盘上已改成 `111.z02` / `111(2)_.zip`，列表还显示脏名）。</para>
         /// </summary>
+        /// <summary>
+        /// 「错误信息」那一列显示什么：**被借去当单元的那一行不显示单元的内部过程详情**
+        /// （用户 2026-10-07 原话：「列表里面还是显示 111.z03 解压了三次」—— 他看到的正是那一格里的
+        /// 「已完成 3 层递归解压…」）。
+        ///
+        /// <para>口径①：这一行属于**你导入的那个文件**，它的结论就是"这一组解压成功"；
+        /// 递归分几层、产物从哪个工作区搬出来，属于**单元的过程详情**，⛔ 不该占用户这一行
+        /// （要看全过程去①页「详情 / 右键复制任务信息」或日志）。⛔ 只改显示，`ErrorMessage` 一个字不动。</para>
+        /// </summary>
+        public string DisplayErrorMessage =>
+            _userFacingFilePath.Length > 0 && Status == StatusText.ExtractSuccess
+                ? string.Empty
+                : ErrorMessage;
+
         public void NotifyDisplayIdentityChanged()
         {
             OnPropertyChanged(nameof(DisplayFileName));
@@ -315,6 +329,7 @@ namespace ArchiveFixer.Models
             OnPropertyChanged(nameof(DisplayPath));
             OnPropertyChanged(nameof(DisplayExtension));
             OnPropertyChanged(nameof(StatusDisplayText));
+            OnPropertyChanged(nameof(DisplayErrorMessage));
         }
 
         /// <summary>
@@ -594,6 +609,7 @@ namespace ArchiveFixer.Models
                 if (SetProperty(ref _status, string.IsNullOrWhiteSpace(value) ? StatusText.WaitingScan : value))
                 {
                     OnPropertyChanged(nameof(StatusDisplayText));
+                    OnPropertyChanged(nameof(DisplayErrorMessage));
                 }
             }
         }
@@ -628,6 +644,7 @@ namespace ArchiveFixer.Models
                 {
                     OnPropertyChanged(nameof(HasLiveProgress));
                     OnPropertyChanged(nameof(StatusDisplayText));
+                    OnPropertyChanged(nameof(DisplayErrorMessage));
                     OnPropertyChanged(nameof(ProgressDetail));
                 }
             }
@@ -664,6 +681,7 @@ namespace ArchiveFixer.Models
                 {
                     OnPropertyChanged(nameof(HasResponsivenessHint));
                     OnPropertyChanged(nameof(StatusDisplayText));
+                    OnPropertyChanged(nameof(DisplayErrorMessage));
                     OnPropertyChanged(nameof(ProgressDetail));
                 }
             }
@@ -872,6 +890,7 @@ namespace ArchiveFixer.Models
                     // 跑完的任务不该还挂着"解压中 45%"）。
                     OnPropertyChanged(nameof(HasLiveProgress));
                     OnPropertyChanged(nameof(StatusDisplayText));
+                    OnPropertyChanged(nameof(DisplayErrorMessage));
                     OnPropertyChanged(nameof(ProgressDetail));
                 }
             }

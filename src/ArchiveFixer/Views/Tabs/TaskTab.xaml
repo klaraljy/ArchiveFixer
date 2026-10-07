@@ -583,7 +583,7 @@
                             </DataGridTemplateColumn>
 
                             <DataGridTextColumn Header="错误信息"
-                                                Binding="{Binding ErrorMessage}"
+                                                Binding="{Binding DisplayErrorMessage}"
                                                 Width="*"
                                                 MinWidth="200"
                                                 IsReadOnly="True">
