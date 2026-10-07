@@ -221,8 +221,19 @@ namespace ArchiveFixer.Tests
             Assert.Equal(5, scanned.ExtraCount);
             Assert.Equal(15, scanned.TotalCount);
             Assert.False(scanned.Truncated);
+
+            /*
+             * ⛔ **命中名单不截断**（用户 2026-10-07：「无用物怎么还在列表里」）：
+             * `Items` 那份上限是给提示框看的（最多 10 条），而"把无用物从任务列表里移出去"必须按
+             * **全部命中**来做 —— 真机上扫到 16 条、`Items` 只有前 10 条，而列表里那几个 `.txt`
+             * 恰好在后 6 条里 ⇒ 日志写"移掉 0 个"、列表一个都没动。
+             * 红检：把 `AllItems` 那两处 `allItems.Add(...)` 撤掉（或让它等于 `items`）⇒ 本条变红。
+             */
+            Assert.Equal(15, scanned.AllItems.Count);
+            Assert.Contains(scanned.AllItems, item => item.FileName.Contains("d12", StringComparison.Ordinal));
+            Assert.Contains(scanned.AllItems, item => item.FileName.Contains("d11", StringComparison.Ordinal));
             Assert.DoesNotContain(
-                scanned.Items,
+                scanned.AllItems,
                 item => item.FileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ||
                         item.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
                         item.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));

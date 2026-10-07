@@ -36,6 +36,16 @@ namespace ArchiveFixer.Storage
         /// <summary>要报出来的条目（最多 <see cref="SourceJunkScanner.MaxReportedItems"/> 条）。</summary>
         public IReadOnlyList<SourceJunkItem> Items { get; init; } = Array.Empty<SourceJunkItem>();
 
+        /// <summary>
+        /// **这次认出来的全部条目**（⛔ 不受 <see cref="SourceJunkScanner.MaxReportedItems"/> 截断）。
+        ///
+        /// <para>为什么要留一份不截断的：那份上限是**给提示框看的**（提示要短），可"把无用物从任务列表里
+        /// 移出去"要按**全部**命中来做 —— 真机 CCCC 2026-10-07 实测：扫到 16 条、`Items` 只有 10 条
+        /// （前 10 个按名字序），而用户列表里那几个 `.txt` 恰好在后 6 条里 ⇒ 日志写"移掉 0 个"，
+        /// 他看到的列表一个都没动。判据仍只有 `SourceJunkScanner` 这一处（⛔ 不在这里另写一套）。</para>
+        /// </summary>
+        public IReadOnlyList<SourceJunkItem> AllItems { get; init; } = Array.Empty<SourceJunkItem>();
+
         /// <summary>超过上限、只报了个数的那部分（提示里写成"还有 N 个"）。</summary>
         public int ExtraCount { get; init; }
 
@@ -235,6 +245,7 @@ namespace ArchiveFixer.Storage
             var protectedPaths = CollectProtectedPaths(tasks);
 
             var items = new List<SourceJunkItem>();
+            var allItems = new List<SourceJunkItem>();
             int extra = 0;
             int scannedDirectories = 0;
             int probesLeft = MaxMagicProbesPerBatch;
@@ -266,15 +277,19 @@ namespace ArchiveFixer.Storage
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
+                    var hintDirectory = new SourceJunkItem
+                    {
+                        DirectoryPath = directory,
+                        FileName = Path.GetFileName(childDirectory),
+                        FullPath = childDirectory,
+                        IsDirectory = true
+                    };
+
+                    allItems.Add(hintDirectory);
+
                     if (items.Count < MaxReportedItems)
                     {
-                        items.Add(new SourceJunkItem
-                        {
-                            DirectoryPath = directory,
-                            FileName = Path.GetFileName(childDirectory),
-                            FullPath = childDirectory,
-                            IsDirectory = true
-                        });
+                        items.Add(hintDirectory);
                     }
                     else
                     {
@@ -315,14 +330,18 @@ namespace ArchiveFixer.Storage
                         continue;
                     }
 
+                    var fileItem = new SourceJunkItem
+                    {
+                        DirectoryPath = directory,
+                        FileName = Path.GetFileName(path),
+                        FullPath = path
+                    };
+
+                    allItems.Add(fileItem);
+
                     if (items.Count < MaxReportedItems)
                     {
-                        items.Add(new SourceJunkItem
-                        {
-                            DirectoryPath = directory,
-                            FileName = Path.GetFileName(path),
-                            FullPath = path
-                        });
+                        items.Add(fileItem);
                     }
                     else
                     {
@@ -334,6 +353,7 @@ namespace ArchiveFixer.Storage
             return new SourceJunkScanResult
             {
                 Items = items,
+                AllItems = allItems,
                 ExtraCount = extra,
                 DirectoryCount = scannedDirectories,
                 SkippedDirectoryCount = skippedDirectories,

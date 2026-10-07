@@ -1653,6 +1653,14 @@ namespace ArchiveFixer.Models
         public const string OneClickJunkRemovedLogFormat =
             "一键处理：先把 {0} 个无用物从列表里移掉（它们对解压没用；源文件一个字节都没动）：{1}";
 
+        /// <summary>
+        /// 扫到了无用物，可它们在任务列表里**一条都没对上**（用户没把它们导入进来）
+        /// —— 如实说一声，⛔ 不假装做过什么。磁盘上一个文件都没动。
+        /// <c>{0}</c> = 扫到几条，<c>{1}</c> = 前几个名字（最多 5 个）。
+        /// </summary>
+        public const string OneClickJunkUnmatchedLogFormat =
+            "无用物：源目录里扫到 {0} 个（{1} …），但它们不在任务列表里，没有可移的（源文件一个字节都没动）。";
+
         /// <summary>列表里手动移除任务（右键 / 「移除勾选的」）。</summary>
         public const string RemoveTasksLogFormat = "已从任务列表里移除 {0} 个（源文件一个字节都没动）。";
 

@@ -10295,17 +10295,6 @@ namespace ArchiveFixer.ViewModels
              * **源片搬运照做**（这一组确实已经解开、那一片已被接手）。
              */
             bool selfConsumed = ReferenceEquals(piece, consumer);
-            // ⛔ 临时排障（用完删）：只在⑥设置「详细日志（排查用）」打开时写 ——
-            //    一次看清"自己解开的组"这条收场链到底有没有走到、走到了哪一档。
-            if (Settings?.VerboseLog == true)
-            {
-                AppendLog(
-                    "WARN",
-                    $"[排障·收场] piece={piece.FileName} ｜ consumer={consumer.FileName} ｜ self={selfConsumed}"
-                    + $" ｜ moveSources={moveSources} ｜ 自己的其余物={piece.RestDirectoryPath}"
-                    + $" ｜ 自己那一片={ResolveOwnPiecePath(piece)}");
-            }
-
 
             if (!selfConsumed && (!piece.IsVolumeGroupFollower || piece.Outcome != TaskOutcome.Succeeded))
             {
@@ -10440,17 +10429,6 @@ namespace ArchiveFixer.ViewModels
 
                 string owner = consumedHit ? consumerName : ResolveSuccessfulGroupConsumerName(task);
 
-                /*
-                 * ⛔ **临时排障**（用完删）：判不出时把这一单的账与盘上实况打出来，一次定位卡在哪一步。
-                 * 只在"判不出"这一支写一行 WARN（不改变任何行为）。
-                 */
-                (collected ?? logEntries!).Add((
-                    "WARN",
-                    $"[排障] {task.FileName}：Original={task.OriginalPath}；Current={task.CurrentPath}"
-                    + $"；卷账={string.Join("、", task.VolumePaths)}；盘上自己那一片={FindOwnPieceOnDisk(task)}"
-                    + $"；账里是本单的键={string.Join("、", _consumedVolumeSources.Keys.Where(key => EnumerateTaskPaths(task).Concat(EnumerateOwnPaths(task)).Any(path => SafePathHelper.PathEquals(path, key) || FileIdentity.IsSamePhysicalFile(path, key))))}"
-                    + $"；组生产者账={string.Join("、", _groupPieceProducers.Where(pair => pair.Value.Contains(task)).Select(pair => pair.Key))}"));
-
                 if (owner.Length == 0)
                 {
                     (collected ?? logEntries!).Add((
@@ -10531,7 +10509,7 @@ namespace ArchiveFixer.ViewModels
                 return task.OriginalPath;
             }
 
-            string onDisk = FindOwnPieceOnDisk(task);
+            string onDisk = SourcePackageMover.ResolveOwnFileOnDisk(task);
 
             if (onDisk.Length > 0)
             {
@@ -10721,61 +10699,6 @@ namespace ArchiveFixer.ViewModels
         /// <para><b>现场</b>：一组跨盘 ZIP 的末片压在两层层层加密的 RAR 里、其余三片散在三个源目录里。
         /// 递归层用硬链接把那三片接过来、整组解开、结果发布成功 —— 可那三片自己那一单在批末仍然
         /// 如实报「分卷缺失」⇒ 汇总写成「成功 1 / 失败 3」，批末还指路"把缺的那几卷放到同一个目录里"
-        /// <summary>
-        /// **这一单自己那一片在盘上的真实路径**（⛔ 不看账上那两个可能过期的名字）。
-        ///
-        /// <para>为什么要问盘：真机 CCCC 2026-10-06 20:07 —— 持有 `111(4)\111.z03` 的那一单，
-        /// `OriginalPath` 还留着**改名前的脏名**（`111.z0删除3`），`CurrentPath` 又被批末补判
-        /// **改写到入口包**（`…\111\111\111.zip`）上 ⇒ 账上两条路径都不是盘上那一片
-        /// ⇒ "谁接手了这一组"回查必然落空 ⇒ 源片按红线「判不出 ⇒ 什么都不做」一直留着
-        /// （用户原话：「`111(4)\111.z03` 留着干什么」「为什么文件真正的名字不看」）。</para>
-        ///
-        /// <para>判据只有"文件真的在、且与最初那一份**同目录同包基名**"（改名不动目录、
-        /// 也不动包基名）。判不出 ⇒ 空串（调用方照旧按账上那两条问）。</para>
-        /// </summary>
-        private static string FindOwnPieceOnDisk(ArchiveTask task)
-        {
-            string original = task.OriginalPath ?? string.Empty;
-            string directory = Path.GetDirectoryName(original) ?? string.Empty;
-
-            if (original.Length == 0 || directory.Length == 0 || !Directory.Exists(directory))
-            {
-                return string.Empty;
-            }
-
-            if (File.Exists(original))
-            {
-                return original;
-            }
-
-            string baseName = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(original));
-
-            if (baseName.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            try
-            {
-                foreach (string file in Directory.EnumerateFiles(directory))
-                {
-                    if (string.Equals(
-                            FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(file)),
-                            baseName,
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        return file;
-                    }
-                }
-            }
-            catch
-            {
-                // 读不动 ⇒ 判不出。
-            }
-
-            return string.Empty;
-        }
-
         /// （用户按这条去搬，只会白忙一场：内容已经在出来了）。</para>
         ///
         /// <para>判据只有两件事，都是**事实位**：① 这一单自己（或账上那几卷）出现在
@@ -10801,7 +10724,7 @@ namespace ArchiveFixer.ViewModels
              * ⇒ 那一单落到「判不出 ⇒ 什么都不做」，源片一直留着。
              */
             var ownPaths = new List<string>(EnumerateTaskPaths(task));
-            string ownOnDisk = FindOwnPieceOnDisk(task);
+            string ownOnDisk = SourcePackageMover.ResolveOwnFileOnDisk(task);
 
             if (ownOnDisk.Length > 0)
             {
@@ -12451,19 +12374,35 @@ namespace ArchiveFixer.ViewModels
              * 复用既有出口 `RemoveTasksBySourcePaths`（⛔ 只动列表、⛔ 不删/不改名/不搬磁盘上的文件），
              * 移了谁、移了几个**逐条写日志**。⛔ 不在这里另写一套扫描判据（唯一实现仍是 SourceJunkScanner）。
              */
-            if (facts.Junk.Items.Count > 0)
-            {
-                int junkRemoved = _vm.RemoveTasksBySourcePaths(facts.Junk.Items.Select(item => item.FullPath));
+            /*
+             * ⛔ 判据用**全部命中**（`AllItems`），⛔ 不是那份"最多列 10 条"的提示名单（`Items`）：
+             * 真机 CCCC 2026-10-07 实测扫到 16 条、`Items` 只有前 10 条，而用户列表里那几个 `.txt`
+             * 恰好在后 6 条里 ⇒ 日志写"移掉 0 个"、列表一个都没动（他当场问"无用物怎么还在"）。
+             */
+            IReadOnlyList<SourceJunkItem> junkHits = facts.Junk.AllItems.Count > 0
+                ? facts.Junk.AllItems
+                : facts.Junk.Items;
 
-                if (junkRemoved == 0 && Settings?.VerboseLog == true)
+            if (junkHits.Count > 0)
+            {
+                int junkRemoved = _vm.RemoveTasksBySourcePaths(junkHits.Select(item => item.FullPath));
+
+                if (junkRemoved == 0)
                 {
+                    /*
+                     * 一条都没对上 ⇒ **如实说一声**（WARN，看得见）：这多半是"扫到的是源目录里的文件，
+                     * 而任务列表里没有它们"（用户没把它们导进来）—— 那就不该假装做过什么。
+                     * ⛔ 只写日志，⛔ 不动磁盘上任何文件。
+                     */
                     AppendLog(
                         "WARN",
-                        $"[排障·无用物] 扫到 {facts.Junk.TotalCount} 条（明细 {facts.Junk.Items.Count} 条），移掉 0 个 —— 前 3 条路径："
-                        + string.Join("、", facts.Junk.Items.Take(3).Select(item => item.FullPath)));
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.OneClickJunkUnmatchedLogFormat,
+                            junkHits.Count,
+                            string.Join("、", junkHits.Take(5).Select(item => item.FileName))));
                 }
-
-                if (junkRemoved > 0)
+                else
                 {
                     AppendLog(
                         "INFO",
@@ -12471,7 +12410,7 @@ namespace ArchiveFixer.ViewModels
                             System.Globalization.CultureInfo.CurrentCulture,
                             StatusText.OneClickJunkRemovedLogFormat,
                             junkRemoved,
-                            string.Join("、", facts.Junk.Items.Take(5).Select(item => item.FileName))));
+                            string.Join("、", junkHits.Take(5).Select(item => item.FileName))));
                 }
             }
 
@@ -14477,10 +14416,10 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * ⛔ **临时排障（用完删）**：把①页每一行**实际显示的那几格**写进日志 ——
-                 * 用户 2026-10-07：「你日志里面能否看清楚列表里面显示什么内容」。
-                 * 显示层（列绑定 / 行刷新）本来不进日志，于是"列表显示对不对"只能靠截图；
-                 * 这一行把名称 / 大小 / 当前后缀 / 完整路径 / 状态 / 错误信息 原样打出来，一次对齐。
+                 * **把①页每一行实际显示的那几格写进日志**（用户 2026-10-07：「你日志里面能否看清楚列表里面
+                 * 显示什么内容」）。显示层（列绑定 / 行刷新）本来不进日志，于是"列表显示对不对"只能靠截图；
+                 * 这一行把名称 / 大小 / 当前后缀 / 完整路径 / 状态 / 错误信息**按显示口径**原样打出来，
+                 * 用户导出的日志就能与界面逐格对齐（⛔ 取的是同一批计算属性，不另算一套）。
                  */
                 if (Settings.VerboseLog)
                 {
@@ -14496,7 +14435,7 @@ namespace ArchiveFixer.ViewModels
                         AppendLog(
                             "WARN",
                             $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
-                                + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.ErrorMessage}");
+                                + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.DisplayErrorMessage}");
                     }
                 }
 

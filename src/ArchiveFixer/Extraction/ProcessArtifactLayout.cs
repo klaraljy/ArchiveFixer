@@ -1133,7 +1133,7 @@ namespace ArchiveFixer.Extraction
              * ⇒ 盘上那一片（`…\111(4)\111.z03`）两条都不沾 ⇒ 清单里没有它 ⇒ 整组搬运搬不到它、
              * 源片永远留在用户目录里。同批里**没被改写起点**的那一单（`111.z02`）清单命中 ⇒ 搬走了
              * —— 这就是"同样两片、结局不同"的唯一变量。
-             * ⚠ 这一处与 `ExtractionCoordinator.FindOwnPieceOnDisk` 是同一条判据（下一步统一到一处出口）。
+             * ⛔ 这是"这一单自己那一份在盘上"的**唯一出口**（`SourcePackageMover.ResolveOwnFileOnDisk`）—— 协调器那边原来的两份同名实现已删。
              */
             Add(ResolveOwnFileOnDisk(task));
 
@@ -1580,7 +1580,7 @@ namespace ArchiveFixer.Extraction
         /// 这一单自己那一份**在盘上的真实路径**（改名之后也找得到）：最初导入那个目录里、**同包基名**的那个文件。
         /// 判不出 ⇒ 空串（调用方照旧按账上那几条走）。
         /// </summary>
-        private static string ResolveOwnFileOnDisk(ArchiveTask task)
+        public static string ResolveOwnFileOnDisk(ArchiveTask task)
         {
             string original = task.OriginalPath ?? string.Empty;
             string directory = Path.GetDirectoryName(original) ?? string.Empty;

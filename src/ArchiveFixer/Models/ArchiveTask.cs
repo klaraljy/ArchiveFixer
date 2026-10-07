@@ -166,7 +166,13 @@ namespace ArchiveFixer.Models
         public string OriginalPath
         {
             get => _originalPath;
-            set => SetProperty(ref _originalPath, value ?? string.Empty);
+            set
+            {
+                if (SetProperty(ref _originalPath, value ?? string.Empty))
+                {
+                    RememberOwnFile(_originalPath, allowReplace: _ownFilePath.Length == 0);
+                }
+            }
         }
 
         /// <summary>
@@ -181,6 +187,17 @@ namespace ArchiveFixer.Models
                 if (SetProperty(ref _currentPath, value ?? string.Empty))
                 {
                     RefreshPathRelatedProperties();
+
+                    /*
+                     * 只有**同一个目录里**的改写才算"用户那个文件的新名字"（改名 / 组内换卷）。
+                     * 跨目录改写（批末补判把起点指到入口包 `…\111\111\111.zip`）⛔ 一律不采纳 ——
+                     * 那一份是过程物，采纳了列表那一行就变成"48MB 的入口包"（用户 2026-10-07 当场报的）。
+                     */
+                    if (_ownFilePath.Length == 0
+                        || IsSameDirectory(_ownFilePath, _currentPath))
+                    {
+                        RememberOwnFile(_currentPath, allowReplace: true);
+                    }
                 }
             }
         }
@@ -249,54 +266,209 @@ namespace ArchiveFixer.Models
         /// <see cref="FileName"/> / <see cref="SourceSizeText"/> 逐字相同（绝大多数任务都是这一档）。
         /// </summary>
         private string _userFacingFilePath = string.Empty;
+
         /// <summary>
-        /// 这一刻**真正拿来显示**的那份文件：记下来的那条**还在盘上**才算数。
+        /// **用户那个文件的最新已知位置**（改名跟着走、被搬进其余物跟着走、被删也照旧记着）——
+        /// 只给显示用，⛔ 不参与任何判据。
+        ///
+        /// <para>为什么需要它（用户 2026-10-07：「文件名、大小、后缀、检测格式、状态，每个都有问题，
+        /// 现在居然还是 <c>111.rar</c>，你是不是一直锁定到原包，根本就没有看最新的东西」）：
+        /// 批末补判会把这一单的**起点**改写到入口包上（真机那一行就成了 48.35 MiB 的
+        /// <c>111\111\111.zip</c>）；那一份**不是用户的文件**，可它一改写就把
+        /// <see cref="FileName"/> / <see cref="SourceSizeText"/> 整行刷新成过程物。
+        /// 老写法在"记着的那条已经不在了"时正是回落到这些被改写的值 ⇒ 列表里那一行变成 48MB 的入口包。</para>
+        ///
+        /// <para>维护点只有三处（⛔ 不新增第四个写入点）：构造时 = 最初导入路径；<see cref="CurrentPath"/>
+        /// **同目录**改写时跟着走（改名 / 组内换卷）；<see cref="ShowUserFileIdentity"/> 采纳提示时。
+        /// 跨目录改写（补判指向入口包）**一律不采纳** —— 那已经不是用户那个文件了。</para>
+        /// </summary>
+        private string _ownFilePath = string.Empty;
+
+        /// <summary>上一条那个文件最后一次被看到时的字节数（0 = 从来没看到过）。</summary>
+        private long _ownFileSizeBytes;
+        /// <summary>
+        /// 这一刻**真正拿来显示**的那份文件：按"最新的盘上事实"逐条问，问不到才算空。
         ///
         /// <para>⛔ 为什么要核盘（用户 2026-10-06：「列表里面显示的没有一个是对的」「后缀也不同步」）：
         /// 记下来的路径会**过期**（改名 / 被搬走 / 被删）—— 拿一个已经不存在的名字去显示，
-        /// 那一行就成了"名字是旧的、别的列是新的"的自相矛盾。核不到 ⇒ 回落这一行自己的当前值。</para>
+        /// 那一行就成了"名字是旧的、别的列是新的"的自相矛盾。</para>
+        ///
+        /// <para>⛔ 为什么要**跟着文件走**（用户 2026-10-07：「你是不是一直锁定到原包，根本就没有看最新的
+        /// 东西」）：这一行属于**用户导入的那个文件**，而它在程序手里会改名（改回标准卷名）、
+        /// 会按设置搬进它自己的「其余物」—— 只认"最初导入那一刻的那条路径"就会一直显示旧名字、旧位置。
+        /// 判定顺序（先用先赢，⛔ 只读、一个字节都不改盘上任何东西）：① 记着的那条（还在 ⇒ 就是它）→
+        /// ② 最初导入那条 → ③ 当前处理路径（**只在同一目录里**才认：批末补判会把起点改写到别的目录的
+        /// 过程物上，那已经不是用户那个文件了）→ ④ 它自己的「其余物」目录里同名的那一份。</para>
         /// </summary>
         private string DisplaySourcePath
         {
             get
             {
-                if (_userFacingFilePath.Length == 0)
+                if (_userFacingFilePath.Length > 0 && ExistsOnDisk(_userFacingFilePath))
                 {
-                    return string.Empty;
+                    return _userFacingFilePath;
                 }
 
-                try
+                if (ExistsOnDisk(OriginalPath))
                 {
-                    return File.Exists(_userFacingFilePath) ? _userFacingFilePath : string.Empty;
+                    return OriginalPath;
                 }
-                catch
+
+                string originalDirectory = GetDirectorySafe(OriginalPath);
+
+                if (originalDirectory.Length > 0
+                    && ExistsOnDisk(CurrentPath)
+                    && string.Equals(GetDirectorySafe(CurrentPath), originalDirectory, StringComparison.OrdinalIgnoreCase))
                 {
-                    return string.Empty;
+                    return CurrentPath;
                 }
+
+                return FindOwnFileInRestDirectory();
+            }
+        }
+
+        /// <summary>④ 源包按设置搬进**它自己的**「其余物」之后，用户那一份就在那儿（搬运不改名）。</summary>
+        private string FindOwnFileInRestDirectory()
+        {
+            string name = Path.GetFileName(OriginalPath);
+
+            if (name.Length == 0 || string.IsNullOrWhiteSpace(RestDirectoryPath))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                string candidate = Path.Combine(RestDirectoryPath, name);
+                return File.Exists(candidate) ? candidate : string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static bool ExistsOnDisk(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                return File.Exists(path);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string GetDirectorySafe(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return Path.GetDirectoryName(path) ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static bool IsSameDirectory(string? left, string? right)
+        {
+            string leftDirectory = GetDirectorySafe(left);
+
+            return leftDirectory.Length > 0
+                && string.Equals(leftDirectory, GetDirectorySafe(right), StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 记住"用户那个文件"的最新位置与体积（<see cref="_ownFilePath"/> 的**唯一**写入实现）。
+        ///
+        /// <para>体积只在文件真的在时更新（被搬走 / 被删之后保留最后一次看到的那个数 ——
+        /// 那一格要写的是"你那个文件多大"，⛔ 不是"现在盘上还剩什么"）。任何 IO 意外都吞掉：
+        /// 这是显示，⛔ 绝不允许因为读不到就影响解压。</para>
+        /// </summary>
+        private void RememberOwnFile(string? path, bool allowReplace)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            if (!allowReplace && _ownFilePath.Length > 0)
+            {
+                return;
+            }
+
+            bool changed = !string.Equals(_ownFilePath, path, StringComparison.OrdinalIgnoreCase);
+
+            _ownFilePath = path!;
+
+            try
+            {
+                if (File.Exists(path))
+                {
+                    _ownFileSizeBytes = new FileInfo(path!).Length;
+                }
+            }
+            catch
+            {
+                // 读不到就保留上一次记下的体积。
+            }
+
+            if (changed)
+            {
+                // 显示那几列是计算属性（读 _ownFilePath）⇒ 必须显式发通知，否则行停在旧名字上。
+                NotifyDisplayIdentityChanged();
             }
         }
 
         /// <summary>列表「文件名」那一格显示什么（默认 = <see cref="FileName"/>）。</summary>
         public string DisplayFileName =>
-            DisplaySourcePath is { Length: > 0 } path ? Path.GetFileName(path) : FileName;
+            DisplaySourcePath is { Length: > 0 } path
+                ? Path.GetFileName(path)
+                : (_ownFilePath.Length > 0 ? Path.GetFileName(_ownFilePath) : FileName);
 
         /// <summary>列表「大小」那一格显示什么（默认 = <see cref="SourceSizeText"/>）。</summary>
         public string DisplaySizeText =>
-            DisplaySourcePath is { Length: > 0 } path ? DescribeSize(path) : SourceSizeText;
+            DisplaySourcePath is { Length: > 0 } path
+                ? DescribeSize(path)
+                : (_ownFileSizeBytes > 0 ? FormatSizeText(_ownFileSizeBytes) : SourceSizeText);
 
         /// <summary>「文件名」那一格悬停提示 / 「完整路径」那一列（默认 = <see cref="CurrentPath"/>）。</summary>
         public string DisplayPathToolTip =>
-            DisplaySourcePath is { Length: > 0 } path ? path : CurrentPath;
+            DisplaySourcePath is { Length: > 0 } path
+                ? path
+                : (_ownFilePath.Length > 0 ? _ownFilePath : CurrentPath);
 
         /// <summary>「完整路径」那一列显示什么（同上：这一行属于**用户自己那个文件**）。</summary>
         public string DisplayPath => DisplayPathToolTip;
 
         /// <summary>「当前后缀」那一列显示什么（⛔ 必须与 <see cref="DisplayFileName"/> 同步：
         /// 显示 `111.z02` 却把后缀写成 `.zip` 就是自相矛盾 —— 用户 2026-10-06 当场报的"后缀也不同步"）。</summary>
-        public string DisplayExtension =>
-            DisplaySourcePath is { Length: > 0 } path
-                ? (Path.GetExtension(path) is { Length: > 0 } ext ? ext : "无")
-                : CurrentExtension;
+        public string DisplayExtension
+        {
+            get
+            {
+                string name = DisplayFileName;
+
+                if (name.Length == 0)
+                {
+                    return CurrentExtension;
+                }
+
+                return Path.GetExtension(name) is { Length: > 0 } extension ? extension : "无";
+            }
+        }
 
         /// <summary>
         /// **显示那几列一起发变更通知**（⛔ 一处改动、五列同步）。
@@ -404,6 +576,7 @@ namespace ArchiveFixer.Models
                 }
 
                 _userFacingFilePath = path;
+                RememberOwnFile(path, allowReplace: true);
                 OnPropertyChanged(nameof(DisplayFileName));
                 OnPropertyChanged(nameof(DisplaySizeText));
                 OnPropertyChanged(nameof(DisplayPathToolTip));

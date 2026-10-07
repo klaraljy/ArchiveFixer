@@ -148,9 +148,19 @@ namespace ArchiveFixer.Tests
             Assert.Contains(nameof(ArchiveTask.DisplayFileName), seen);
             Assert.Contains(nameof(ArchiveTask.DisplayExtension), seen);
         }
-        /// <summary>⛔ 记下来的那份**不在了** ⇒ 回落当前值（不许继续显示旧名 / 旧大小 / 旧后缀）。</summary>
+        /// <summary>
+        /// ⛔ **用户那个文件被程序搬走 / 删掉之后，那一行仍旧显示"他的文件"，不许变成入口包**
+        /// （用户 2026-10-07：「文件名、大小、后缀、检测格式、状态，每个都有问题，现在居然还是 `111.rar`，
+        /// 你是不是一直锁定到原包，根本就没有看最新的东西」）。
+        ///
+        /// <para><b>口径冲突（新指令覆盖旧指令，必须报）</b>：本条原来是
+        /// `记下来的那份不在了_回落当前值_不许显示旧名` —— 老口径是"那份不在了就回落到这一行自己的当前值"，
+        /// 而"当前值"在真机上正是**被批末补判改写过的入口包**（48.35 MiB 的 `111\111\111.zip`），
+        /// 用户看到的就是"48MB 又出现在第一行"。新口径：回落顺序是
+        /// 「最新已知的**自己那个文件**的名字 / 体积 / 最后位置」，入口包一个字节都不参与显示。</para>
+        /// </summary>
         [Fact]
-        public void 记下来的那份不在了_回落当前值_不许显示旧名()
+        public void 自己那份被搬走之后_仍旧显示用户那个文件_不许变成入口包()
         {
             string original = Path.Combine(_root, "111(4)", "111.z03");
             string renamed = Path.Combine(_root, "111(4)", "111.z03.renamed");
@@ -164,7 +174,7 @@ namespace ArchiveFixer.Tests
             string entry = Path.Combine(_root, "111", "111", "111.zip");
 
             Directory.CreateDirectory(Path.GetDirectoryName(entry)!);
-            File.WriteAllBytes(entry, new byte[4096]);
+            File.WriteAllBytes(entry, new byte[48 * 1024 * 1024]);
 
             // 真机顺序：**先把起点改写到入口包上**，再记显示身份（那一行仍显示用户自己那个文件）。
             task.CurrentPath = entry;
@@ -174,12 +184,76 @@ namespace ArchiveFixer.Tests
             Assert.Equal(".z03", task.DisplayExtension);
             Assert.EndsWith("111.z03", task.DisplayPath, StringComparison.Ordinal);
 
-            // 那一份被改名搬走了 ⇒ 显示必须回落到这一行自己的当前值（入口包），⛔ 不许再显示旧名。
+            // 那一份被改名搬走了（= 用户那个文件已经不在原位）⇒ 仍旧显示**他的文件**的名字、后缀、体积。
             File.Move(original, renamed);
 
-            Assert.NotEqual("111.z03", task.DisplayFileName);
-            Assert.Equal(task.FileName, task.DisplayFileName);
-            Assert.Equal(task.CurrentExtension, task.DisplayExtension);
+            Assert.Equal("111.z03", task.DisplayFileName);
+            Assert.Equal(".z03", task.DisplayExtension);
+            Assert.Equal("2 KiB", task.DisplaySizeText);            // ⛔ 不是入口包的 48 MiB
+            Assert.EndsWith("111.z03", task.DisplayPath, StringComparison.Ordinal);
+            Assert.DoesNotContain("111.zip", task.DisplayPath, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// **源包按设置搬进它自己的「其余物」之后，那一行跟着那份文件走**（位置换成其余物里那一条，
+        /// 名称 / 后缀一个字不变）—— 用户 2026-10-07：「根本就没有看最新的东西」。
+        /// </summary>
+        [Fact]
+        public void 源包被搬进其余物之后_那一行显示其余物里那一份()
+        {
+            string original = Path.Combine(_root, "111(4)", "111.z03");
+            string rest = Path.Combine(_root, "111", "其余物");
+            string moved = Path.Combine(rest, "111.z03");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+            Directory.CreateDirectory(rest);
+            File.WriteAllBytes(original, new byte[2048]);
+
+            var task = new ArchiveTask(original, 1);
+
+            task.RestDirectoryPath = rest;
+
+            // 搬运：原件走、其余物里多一份同名的。
+            File.Move(original, moved);
+
+            Assert.Equal("111.z03", task.DisplayFileName);
+            Assert.Equal(".z03", task.DisplayExtension);
+            Assert.Equal("2 KiB", task.DisplaySizeText);
+            Assert.Equal(moved, task.DisplayPath);
+        }
+
+        /// <summary>
+        /// ⛔ **批末补判把起点跨目录改写到入口包时，绝不许把"用户那个文件"的记录一起改掉**
+        /// （真机：`111(4)\111.z0删除3` → 改名成 `111.z03` → 起点被指到 `…\111\111\111.rar`）。
+        /// </summary>
+        [Fact]
+        public void 起点被跨目录改写到入口包_那一行不许跟着变成48MB()
+        {
+            string dirty = Path.Combine(_root, "111(4)", "111.z0删除3");
+            string renamed = Path.Combine(_root, "111(4)", "111.z03");
+            string entry = Path.Combine(_root, "111", "111", "111.rar");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(dirty)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(entry)!);
+            File.WriteAllBytes(dirty, new byte[2048]);
+            File.WriteAllBytes(entry, new byte[48 * 1024 * 1024]);
+
+            var task = new ArchiveTask(dirty, 1);
+
+            // ① 改回标准卷名（同目录）⇒ 显示跟着走到新名字。
+            File.Move(dirty, renamed);
+            task.CurrentPath = renamed;
+
+            Assert.Equal("111.z03", task.DisplayFileName);
+            Assert.Equal("2 KiB", task.DisplaySizeText);
+
+            // ② 批末补判把起点指到入口包（跨目录）⇒ 显示**不许**跟着变。
+            task.CurrentPath = entry;
+
+            Assert.Equal("111.z03", task.DisplayFileName);
+            Assert.Equal(".z03", task.DisplayExtension);
+            Assert.Equal("2 KiB", task.DisplaySizeText);
+            Assert.EndsWith("111.z03", task.DisplayPath, StringComparison.Ordinal);
         }
 
         /// <summary>⛔ 改名 / 重扫之后**五列一起发通知**（否则行停在旧名字上 —— 真机截图里第 2、3 行）。</summary>
