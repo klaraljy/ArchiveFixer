@@ -493,6 +493,63 @@ namespace ArchiveFixer.Tests
                          && Directory.GetFiles(harness.OutputRoot, "*.bin", SearchOption.AllDirectories).Length > 0);
         }
 
+        /// <summary>
+        /// **一键档：导出的日志里，最后一份「①页行快照」必须是链尾定稿之后的终态**（2026-10-08 EEEE 真机）。
+        ///
+        /// <para>真机现象：用户导出的日志里那两行写着 <c>状态=等待解压</c>，他据此判定"界面显示不对"。
+        /// 界面上那一格其实是**活绑定**，日志里那一行才是过期的 —— 老写法只在批循环收尾取一次快照，
+        /// 而一键档的定稿在**整批跑完之后**（`FinalizeDeferredVolumeDeficits`，由一键档调到链尾）。</para>
+        ///
+        /// <para>⛔ **必须走一键档**：手动档那次批内补判就是 <c>finalPass: true</c>（当场定稿），
+        /// 批循环里那份快照已经是终态 ⇒ 只有一键档（批内 <c>finalPass: false</c>）才暴露这一档。
+        /// 这一点是实做红检时发现的：把本条这组断言放进手动档那条用例里，**撤掉修复也不会变红**。</para>
+        ///
+        /// <para><b>红检</b>：撤掉 <c>FinalizeDeferredVolumeDeficits</c> 里那次 <c>AppendTaskRowSnapshot()</c>
+        /// ⇒ 本条变红（最后一份快照仍写着「等待解压」）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 一键档_最后一份行快照必须是链尾定稿后的终态()
+        {
+            RequireSevenZip();
+
+            (string first, string second, _, _) = BuildTwoVolumeSet("一键一直缺");
+
+            string work = Path.Combine(_root, "一键一直缺-单");
+
+            Directory.CreateDirectory(work);
+
+            string loneVolume = Path.Combine(work, "set.7z.002");
+
+            File.Move(second, loneVolume);
+
+            // ⛔ 第 1 卷必须真的不在盘上（同手动档那条用例）：留着它，找卷窗口会把它找回来。
+            File.Delete(first);
+
+            Harness harness = CreateHarness("SingleLayer");
+
+            // 「详细日志（排查用）」打开 ⇒ 收尾会写"①页每一行显示什么"那份快照。
+            harness.Vm.Settings.VerboseLog = true;
+
+            ArchiveTask task = await AddTaskAsync(harness, loneVolume);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(new[] { task });
+            CaptureSnapshots(harness);
+
+            await harness.RunOneClickAsync();
+
+            Log(harness, "一键一直缺");
+
+            Assert.Equal(StatusText.VolumeMissing, task.Status);
+
+            string[] rowSnapshots = harness.LogTexts
+                .Where(text => text.Contains("[行]", StringComparison.Ordinal))
+                .ToArray();
+
+            Assert.NotEmpty(rowSnapshots);
+            Assert.Contains(StatusText.VolumeMissing, rowSnapshots[^1], StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.WaitingExtract, rowSnapshots[^1], StringComparison.Ordinal);
+        }
+
         // ============================================================ ② "散着的那几片"的源包要有人处理
 
         /// <summary>

@@ -11021,6 +11021,46 @@ namespace ArchiveFixer.ViewModels
                         StatusText.VolumeDeficitChainEndCompleteLogFormat,
                         task.FileName));
             }
+
+            /*
+             * ⚠ 2026-10-08（EEEE 真机）：上面这一趟是**整批跑完之后**才改状态的那一处 ——
+             * 导出的日志若在这里就结束，"①页每一行显示什么"那份快照会停在批首的中性档
+             * （真机那两行写着「等待解压」，用户据此判定"显示不对"）。⇒ 补一份定稿后的快照。
+             */
+            AppendTaskRowSnapshot();
+        }
+
+        /// <summary>
+        /// **把①页每一行实际显示的那几格写进日志**（用户 2026-10-07：「你日志里面能否看清楚列表里面
+        /// 显示什么内容」）。显示层（列绑定 / 行刷新）本来不进日志，于是"列表显示对不对"只能靠截图；
+        /// 这一行把名称 / 大小 / 当前后缀 / 完整路径 / 状态 / 错误信息**按显示口径**原样打出来，
+        /// 用户导出的日志就能与界面逐格对齐（⛔ 取的是同一批计算属性，不另算一套）。
+        ///
+        /// <para>两处调用：批循环收尾那一处、<see cref="FinalizeDeferredVolumeDeficits"/> 那一处
+        /// （整批跑完之后的定稿）。⛔ 快照格式只此一个出口。</para>
+        ///
+        /// <para>⛔ 只在「详细日志（排查用）」打开时才写：默认关（成功任务只留一行是既有红线，
+        /// 有守门用例钉着），所以这些行默认不出现。</para>
+        /// </summary>
+        private void AppendTaskRowSnapshot()
+        {
+            if (!Settings.VerboseLog)
+            {
+                return;
+            }
+
+            foreach (ArchiveTask row in SnapshotTaskTable(Tasks))
+            {
+                if (row == null)
+                {
+                    continue;
+                }
+
+                AppendLog(
+                    "WARN",
+                    $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
+                        + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.DisplayErrorMessage}");
+            }
         }
 
         /// <summary>
@@ -14443,23 +14483,13 @@ namespace ArchiveFixer.ViewModels
                  * 显示什么内容」）。显示层（列绑定 / 行刷新）本来不进日志，于是"列表显示对不对"只能靠截图；
                  * 这一行把名称 / 大小 / 当前后缀 / 完整路径 / 状态 / 错误信息**按显示口径**原样打出来，
                  * 用户导出的日志就能与界面逐格对齐（⛔ 取的是同一批计算属性，不另算一套）。
+                 *
+                 * ⚠ 2026-10-08（EEEE 真机）：快照**必须取在"事实定稿之后"**。老写法只有这一处，
+                 * 而链尾补判（`FinalizeDeferredVolumeDeficits`，由一键档在整批跑完之后调）还会改写几行的
+                 * 状态 ⇒ 导出的日志里最后一份快照停在批首的中性档（真机那两行写着「等待解压」，
+                 * 用户据此判定"显示不对"）。⇒ 收成唯一出口 `AppendTaskRowSnapshot`，两处都调它。
                  */
-                if (Settings.VerboseLog)
-                {                    // ⛔ 只在「详细日志（排查用）」打开时才写：默认关（成功任务只留一行是既有红线，
-                    //    有守门用例钉着），所以这一行默认不出现。
-                    foreach (ArchiveTask row in SnapshotTaskTable(Tasks))
-                    {
-                        if (row == null)
-                        {
-                            continue;
-                        }
-
-                        AppendLog(
-                            "WARN",
-                            $"[行] 名={row.DisplayFileName} ｜ 大小={row.DisplaySizeText} ｜ 后缀={row.DisplayExtension}"
-                                + $" ｜ 路径={row.DisplayPath} ｜ 状态={row.StatusDisplayText} ｜ 错误={row.DisplayErrorMessage}");
-                    }
-                }
+                AppendTaskRowSnapshot();
 
                 AppendBatchSummary(selectedTasks);
 
