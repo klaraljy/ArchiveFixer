@@ -573,7 +573,7 @@
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding StatusDisplayText}"
-                                                   Foreground="{Binding Status, Converter={StaticResource StatusToBrushConverter}}"
+                                                   Foreground="{Binding StatusColorKey, Converter={StaticResource StatusToBrushConverter}}"
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis"

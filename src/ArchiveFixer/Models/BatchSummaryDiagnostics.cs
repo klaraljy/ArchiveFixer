@@ -445,6 +445,18 @@ namespace ArchiveFixer.Models
             }
 
             /*
+             * ①c **「缺卷待批末判」那一档不算"问题"**（用户 2026-10-08：「没有到最后一步都是先跳过」）。
+             *
+             * 批中间它既不是缺卷结论、也不该出现在「分卷缺失」那一组里（那一行会让用户以为已经判死了）；
+             * 到批末定稿时协调器会把这个事实位清掉，届时按真结论分组（真缺卷 ⇒ 那一组 + 「下一步：补卷」）。
+             * 判据只有一位事实（<see cref="ArchiveTask.IsVolumeDeficitDeferred"/>），⛔ 不在这里另推。
+             */
+            if (task.IsVolumeDeficitDeferred)
+            {
+                return BatchProblemKind.Skipped;
+            }
+
+            /*
              * ② 具体原因：只认既有状态常量（与 TaskSummaryService / OneClickCoordinator 同一批常量）。
              *
              * ⚠ 这一支刻意排在"机器终态兜底"**之前**：状态能说出具体原因时就必须说具体原因，

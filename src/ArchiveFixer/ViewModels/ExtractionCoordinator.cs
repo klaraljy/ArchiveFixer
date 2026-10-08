@@ -445,7 +445,18 @@ namespace ArchiveFixer.ViewModels
                 && task.EndTime.HasValue
                 && task.OutputVerification != OutputVerificationOutcome.Passed)
             {
-                task.Outcome = TaskOutcome.Failed;
+                /*
+                 * ⚠ 2026-10-08 用户拍板：**缺卷落「部分完成」**——「最后一轮检测到了缺失分卷，这就是部分完成，
+                 * 因为连完整的都没有，这就不是程序的错误」；「如果是完整的…但是有错误，比如说密码、
+                 * 和压缩包卷尾缺失了一块，这就是失败的情况了」。
+                 *
+                 * 这一位是"终态由谁落"的**唯一出口**，缺卷那几条路（批首预检 / 批末补判 / 只写了中文状态
+                 * 没写终态的分支）全都要经过它 ⇒ 在这里按**状态常量**分流，就不必去每一处各写一遍
+                 * （⛔ 不比中文文案：判据是 `StatusText.VolumeMissing` 这个常量本身）。
+                 */
+                task.Outcome = task.Status == StatusText.VolumeMissing
+                    ? TaskOutcome.PartiallyCompleted
+                    : TaskOutcome.Failed;
             }
         }
 
@@ -10086,6 +10097,9 @@ namespace ArchiveFixer.ViewModels
 
                     AppendLog("INFO", consumedNote);
 
+                    // ⚠ 2026-10-08：离开名单 ⇒ 事实位一起清（理由见下面那一处）。
+                    task.IsVolumeDeficitDeferred = false;
+
                     _volumeDeficitDeferred.Remove(task);
                     _volumeDeficitFinalPass.Add(task);
                     continue;
@@ -10171,6 +10185,13 @@ namespace ArchiveFixer.ViewModels
 
                 // 机器终态收口：这一单是在**任务收尾之后**才落的状态，走不到单任务那个 finally ⇒ 这里补。
                 FinalizeOutcomeIfPending(task);
+
+                /*
+                 * ⚠ 2026-10-08：离开"缺卷待批末判"名单的**那一刻**就要把显示/统计事实位清掉
+                 * （手动档不走链尾 `FinalizeDeferredVolumeDeficits`，只靠那一处会漏 ⇒ 真机表现是
+                 * 诊断里仍按"跳过"分组、拿不到"缺哪几卷 + 下一步：补卷"）。
+                 */
+                task.IsVolumeDeficitDeferred = false;
 
                 _volumeDeficitDeferred.Remove(task);
                 _volumeDeficitFinalPass.Add(task);

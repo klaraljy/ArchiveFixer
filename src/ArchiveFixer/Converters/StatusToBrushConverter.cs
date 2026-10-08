@@ -117,7 +117,11 @@ namespace ArchiveFixer.Converters
                 StatusText.PasswordOrCorrupted or
                 StatusText.AccessDenied or
                 StatusText.OutputConflict or
-                StatusText.VolumeMissing or
+                /*
+                 * ⚠ 2026-10-08 用户拍板：**缺卷不再是"错误色"** —— 「最后一轮检测到了缺失分卷，这就是部分完成，
+                 * 因为连完整的都没有，这就不是程序的错误」；失败只留给"完整却解不开"（密码 / 卷尾缺块）。
+                 * ⇒ `VolumeMissing` 移到下面的警告色（与「部分完成」同一个色）。
+                 */
                 StatusText.PathTooLong or
                 StatusText.UnknownError or
                 StatusText.SevenZipMissing or
@@ -150,6 +154,11 @@ namespace ArchiveFixer.Converters
                 StatusText.PasswordNeed or
                 // 部分完成是"要人看一眼"的状态：不是失败（东西解出来了一些），也绝不是成功。
                 StatusText.PartiallyCompleted or
+                /*
+                 * 缺卷（用户 2026-10-08 拍板）：**不完整 ⇒ 部分完成**，不是失败 —— 「连完整的都没有，
+                 * 这就不是程序的错误」。与「部分完成」同色同档；"缺哪几卷 + 下一步：补卷"写在错误信息与批末诊断里。
+                 */
+                StatusText.VolumeMissing or
                 // 文件名已加密同理：包本身可能没问题，只是内容无法判定、需要正确密码 ——
                 // 给警告色（与"部分完成"同分桶同色），不要用"文件损坏"的错误色把人引去重下。
                 StatusText.EncryptedHeaders or

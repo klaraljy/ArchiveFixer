@@ -246,10 +246,19 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// 真机现场（日志 L71-L72 / L112 / L124 / L130）：缺卷预检把任务拦下了（判得对），
         /// 但机器终态留在 <c>Pending</c> —— 汇总说「未处理 1」、批末诊断说「分卷缺失：1 个 —— 222.z01」。
-        /// 修完必须是**失败**终态（与批末诊断同一口径）。
+        ///
+        /// <para>⚠ **口径变更（2026-10-08 用户拍板，本条按新口径改写）**：原断言是"终态必须是失败"，
+        /// 用户新指令：「最后一轮检测到了缺失分卷，**这就是部分完成**，因为连完整的都没有，这就不是程序的错误」；
+        /// 「如果是完整的…但是有错误，比如说密码、和压缩包卷尾缺失了一块，这就是失败的情况了」。
+        /// ⇒ 判据是**完整性**：缺卷落「部分完成」，失败只留给"完整却解不开"。</para>
+        ///
+        /// <para><b>怎么判的</b>：`TaskOutcomeClassifier`（递归停因 `MissingVolume` ⇒ `PartiallyCompleted`）、
+        /// `StatusToBrushConverter`（缺卷从错误色移到警告色）、`IsFailureStatus`/`IsExtractFailureStatus`
+        /// （缺卷移出失败名单）、`OneClickCoordinator.IsHandled`（单列它，免得被读成"没轮到"）、
+        /// `TaskSummaryService`（失败清单移出 + 与"部分完成"同桶）。冲突就在本条与它断言的四处。</para>
         /// </summary>
         [Fact]
-        public async Task 缺卷预检拦下_机器终态必须是失败()
+        public async Task 缺卷预检拦下_机器终态必须是部分完成()
         {
             Harness harness = CreateHarness();
 
@@ -268,16 +277,15 @@ namespace ArchiveFixer.Tests
             Assert.Equal(StatusText.VolumeMissing, task.Status);
             Assert.Contains("vol.7z.002", task.ErrorMessage);
 
-            // ② 机器终态必须是失败，而且"这一单已经结束"（EndTime）也要落 ——
-            //    汇总那一行按 Outcome 分档（OneClickCoordinator.BuildSummaryLine）：
-            //    Outcome = Failed ⇒ 失败 1 / 未处理 0，与批末诊断的"分卷缺失"同口径。
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
-            Assert.True(task.EndTime.HasValue, "开工前拦下的任务同样要落结束时间（否则终态收口补不上 Failed）");
+            // ② 机器终态 = **部分完成**（用户 2026-10-08 口径），而且"这一单已经结束"（EndTime）也要落。
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
+            Assert.True(task.EndTime.HasValue, "开工前拦下的任务同样要落结束时间（否则终态收口补不上）");
 
-            // ③ 汇总那一行的分档判据（唯一出口 <see cref="TaskOutcomeClassifier"/>）与批末诊断一致。
+            // ③ 缺卷**仍在"要处理的清单"里**（不变量 7：必须报"缺哪几个"），但"处理过"这件事也要成立
+            //    （否则汇总会说"一键处理已停止/未处理 N"）。⚠ 2026-10-08：用户口径把它的**分桶与配色**
+            //    挪成"部分完成"，⛔ 没有把它从清单里拿掉。
             Assert.True(TaskOutcomeClassifier.IsFailureStatus(task.Status));
             Assert.True(OneClickCoordinator.IsHandled(task));
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
 
             BatchSummaryReport report = BatchSummaryDiagnosticsRules.Build(new[] { task });
 

@@ -735,6 +735,7 @@ namespace ArchiveFixer.Models
                 _isVolumeDeficitDeferred = value;
                 OnPropertyChanged(nameof(IsVolumeDeficitDeferred));
                 OnPropertyChanged(nameof(StatusDisplayText));
+                OnPropertyChanged(nameof(StatusColorKey));
             }
         }
 
@@ -949,6 +950,17 @@ namespace ArchiveFixer.Models
         /// <c>StatusText</c> 常量），这里只做拼接，所以统计与配色（都看 <see cref="Status"/>）完全不受影响。
         /// </para>
         /// </summary>
+        /// <summary>
+        /// **状态那一格配色读的键**（⛔ 不是新状态常量）：默认就是 <see cref="Status"/>；
+        /// 只有"缺卷待批末判"那一档换成中性档 <see cref="StatusText.Skipped"/>
+        /// —— 用户 2026-10-08 点名的错：「为什么跳过要标红，这是非常错误的行为，这到了最后一步才判断的」。
+        ///
+        /// <para>为什么要有它：那一格的**文字**读 <see cref="StatusDisplayText"/>（批中间说"跳过"），
+        /// 而**颜色**原先绑的是机器状态 ⇒ 待判那一行说着"跳过"却顶着红色。
+        /// 现在两处（`TaskTab.xaml` / `TaskDetailWindow.xaml`）都绑这个键，⛔ 不再各绑各的。</para>
+        /// </summary>
+        public string StatusColorKey => IsVolumeDeficitDeferred ? StatusText.Skipped : Status;
+
         public string StatusDisplayText
         {
             get
@@ -983,16 +995,21 @@ namespace ArchiveFixer.Models
                 }
 
                 /*
-                 * ===== 批中间撞上缺卷的那一档：**先跳过，不许把"分卷缺失"当结论摆出来** =====
+                 * ===== 批中间撞上缺卷的那一档：**先跳过，不许把结论摆出来** =====
                  *
                  * 用户 2026-10-08 口径：「没有到最后一步都是先跳过」——缺的那几片完全可能被同一批
                  * 别的包解出来（真机 `111.z01` 就是这样补上的），批末那一站才该下结论。
                  *
-                 * ⛔ `Status` / `Outcome` 一个字不动（这一档的机器状态仍是"分卷缺失 / 失败"，
-                 * 发布链、其余物、删除闸门读的都是它）—— 这里只把**显示**改说成"跳过（缺卷，等批末再判）"。
-                 * 批末定稿时协调器会把这个事实位清掉，那一格随即回到真结论。
+                 * ⚠ 这一档**连「部分完成」也要盖掉**（用户 2026-10-08 第二句：「批中间连部分完成也不许显示，
+                 * 一律跳过（等最后判）」）：递归停在缺卷、但前面已经解出过东西时，机器状态就是「部分完成」——
+                 * 那个结论同样是**下早了**（缺的那几片可能被同批别单补上）。
+                 *
+                 * ⛔ `Status` / `Outcome` 一个字不动（发布链、其余物、删除闸门读的都是它）——
+                 * 这里只把**显示**改说成"跳过（缺卷，等批末再判）"；批末定稿时协调器把事实位清掉，
+                 * 那一格随即回到真结论。
                  */
-                if (IsVolumeDeficitDeferred && Status == StatusText.VolumeMissing)
+                if (IsVolumeDeficitDeferred &&
+                    (Status == StatusText.VolumeMissing || Status == StatusText.PartiallyCompleted))
                 {
                     text = StatusText.VolumeDeficitPendingText;
                 }

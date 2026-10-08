@@ -371,6 +371,8 @@ namespace ArchiveFixer.Tests
                 StatusText.Corrupted,
                 StatusText.AccessDenied,
                 StatusText.OutputConflict,
+                // ⚠ 2026-10-08：缺卷**留在**这份"要处理的清单"里（不变量 7 要报"缺哪几个"）；
+                //    用户口径改变的是分桶与配色（缺卷 = 部分完成），不是清单成员资格。
                 StatusText.VolumeMissing,
                 StatusText.PathTooLong,
                 StatusText.SevenZipMissing,

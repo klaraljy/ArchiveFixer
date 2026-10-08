@@ -36,6 +36,12 @@ namespace ArchiveFixer.Models
             StatusText.PasswordOrCorrupted or
             StatusText.AccessDenied or
             StatusText.OutputConflict or
+            /*
+             * ⚠ 2026-10-08 用户拍板「缺卷 = 部分完成，不是程序的错」之后，这一份名单要**分开看**：
+             * 它在这里的含义是「**要处理的条目**」（缺哪几卷 + 下一步：补卷，不变量 7 要求的那个面），
+             * ⛔ 不是"程序失败了"。所以缺卷**留在**这份名单里；而「解压失败」那个**分桶**
+             * （`IsExtractFailureStatus`）与①页配色都按用户口径把它挪走了。
+             */
             StatusText.VolumeMissing or
             StatusText.PathTooLong or
             StatusText.SevenZipMissing or
@@ -59,7 +65,7 @@ namespace ArchiveFixer.Models
             StatusText.PasswordOrCorrupted or
             StatusText.AccessDenied or
             StatusText.OutputConflict or
-            StatusText.VolumeMissing or
+            // ⚠ 2026-10-08：缺卷 = 部分完成，不在这里（理由见 IsFailureStatus）。
             StatusText.PathTooLong or
             StatusText.SevenZipMissing or
             StatusText.NoEngineAvailable or
@@ -174,7 +180,21 @@ namespace ArchiveFixer.Models
                         _ => StatusText.ExtractFailed
                     };
 
-                    outcome = TaskOutcome.Failed;
+                    /*
+                     * ⚠ **2026-10-08 用户拍板：缺卷 ⇒ 部分完成，不是失败**。
+                     *
+                     * 原话：「最后一轮检测到了缺失分卷，这就是部分完成，因为连完整的都没有，这就不是程序的错误」；
+                     * 「如果是完整的…但是有错误，比如说密码、和压缩包卷尾缺失了一块，这就是失败的情况了」。
+                     * ⇒ 判据是**完整性**：这一档（`MissingVolume`）永远落「部分完成」；
+                     * 同一组里其它停因（密码 / 损坏 / 空间 / 越界…）照旧落 `Failed`。
+                     *
+                     * ⚠ 与上面那条早退合起来 = `MissingVolume` **无论有没有产出**都是「部分完成」，
+                     * 与批末那条路（`ExtractionCoordinator` 的 `stillIncomplete` ⇒ `PartiallyCompleted`，
+                     * 「按「部分完成」记，⛔ 不是解压失败」）**逐字同一个口径**。
+                     */
+                    outcome = stopReason == RecursionStopReason.MissingVolume
+                        ? TaskOutcome.PartiallyCompleted
+                        : TaskOutcome.Failed;
                     return true;
 
                 default:

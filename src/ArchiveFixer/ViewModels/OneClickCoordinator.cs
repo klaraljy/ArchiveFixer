@@ -2662,6 +2662,12 @@ namespace ArchiveFixer.ViewModels
                    task.Status == StatusText.PartiallyCompleted ||
                    task.Status == StatusText.Cancelled ||
                    task.Status == StatusText.Skipped ||
+                   /*
+                    * ⚠ 2026-10-08：**缺卷要单列**（用户拍板后它已不在失败名单里）——
+                    * 这一单确实跑过了并落了结论（只是不完整），⛔ 不许被读成"没轮到"
+                    * （那会让汇总打印"一键处理已停止 / 未处理 N"）。
+                    */
+                   task.Status == StatusText.VolumeMissing ||
                    IsFailureStatus(task);
         }
 

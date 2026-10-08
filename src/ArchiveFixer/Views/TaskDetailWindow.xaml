@@ -229,7 +229,7 @@
                                    Text="{Binding StatusDisplayText}"
                                    Style="{StaticResource DetailValueStyle}"
                                    FontWeight="SemiBold"
-                                   Foreground="{Binding Status, Converter={StaticResource StatusToBrushConverter}}" />
+                                   Foreground="{Binding StatusColorKey, Converter={StaticResource StatusToBrushConverter}}" />
 
                         <!--
                             进度：**百分比 + 当前条目**（引擎层节流后每 250ms 一次）。

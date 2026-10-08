@@ -109,9 +109,14 @@ namespace ArchiveFixer.Tests
             Assert.Equal(1, summary.TestFailedCount);
             Assert.Equal(1, summary.PasswordErrorCount);                   // 只有"密码错误"（文件名已加密不算它）
             Assert.Equal(1, summary.CorruptedCount);
-            Assert.Equal(8, summary.ExtractFailedCount);                   // 解压失败/未知错误/权限/输出冲突/分卷缺失/路径过长/7z不存在/达到上限
+            /*
+             * ⚠ 2026-10-08 用户拍板：**缺卷从"解压失败"挪到"其他失败"**（与「部分完成」同桶）——
+             * 「最后一轮检测到了缺失分卷，这就是部分完成，因为连完整的都没有，这就不是程序的错误」。
+             * ⇒ 解压失败 8→7、其他失败 3→4（分项之和 == 任务数那条硬不变量照旧成立）。
+             */
+            Assert.Equal(7, summary.ExtractFailedCount);                   // 解压失败/未知错误/权限/输出冲突/路径过长/7z不存在/达到上限
             Assert.Equal(1, summary.CancelledCount);
-            Assert.Equal(3, summary.OtherFailedCount);                     // 部分完成 + 格式未知 + 文件名已加密
+            Assert.Equal(4, summary.OtherFailedCount);                     // 部分完成 + 格式未知 + 文件名已加密 + 分卷缺失
             Assert.Equal(1, summary.SkippedCount);
 
             // 待处理（分桶里有、界面上没有单项）也要算进去，否则"分项之和 == 任务数"是假的。

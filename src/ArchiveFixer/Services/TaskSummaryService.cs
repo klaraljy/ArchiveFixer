@@ -204,6 +204,16 @@ namespace ArchiveFixer.Services
 
             string status = task.Status ?? string.Empty;
 
+            /*
+             * 「缺卷待批末判」那一档：批中间**先跳过**，不进任何失败桶
+             * （用户 2026-10-08：「没有到最后一步都是先跳过」「要留在最后检查才是真正的分卷缺失」）。
+             * 判据只有一位事实（`ArchiveTask.IsVolumeDeficitDeferred`）；批末定稿会清掉它，届时按真结论分桶。
+             */
+            if (task.IsVolumeDeficitDeferred)
+            {
+                return SummaryBucket.Skipped;
+            }
+
             if (status == StatusText.RenameSuccess)
             {
                 return SummaryBucket.RenameSuccess;
@@ -254,6 +264,16 @@ namespace ArchiveFixer.Services
             if (IsExtractFailureStatus(status))
             {
                 return SummaryBucket.ExtractFailed;
+            }
+
+            /*
+             * ⚠ 2026-10-08 用户拍板：**缺卷与"部分完成"同桶**（不完整 ⇒ 部分完成，不是程序的错）。
+             * 排在 `IsExtractFailureStatus` 之后是因为它已从那份失败名单里移除，
+             * 落在这里才不会被下面的兜底读成"未处理"。判据用状态常量，⛔ 不比中文文案。
+             */
+            if (status == StatusText.VolumeMissing)
+            {
+                return SummaryBucket.OtherFailed;
             }
 
             if (status == StatusText.Skipped)
@@ -740,6 +760,11 @@ namespace ArchiveFixer.Services
                 StatusText.PasswordOrCorrupted or
                 StatusText.AccessDenied or
                 StatusText.OutputConflict or
+                /*
+                 * 缺卷留在这份「要处理的清单」里（不变量 7：必须报"缺哪几个"）——
+                 * ⚠ 2026-10-08 用户口径改变的是**分桶与配色**（缺卷 = 部分完成、不是"解压失败"），
+                 * ⛔ 不是"从清单里消失"。两件事分开看，见 `TaskOutcomeClassifier.IsFailureStatus` 的说明。
+                 */
                 StatusText.VolumeMissing or
                 StatusText.PathTooLong or
                 StatusText.SevenZipMissing or
