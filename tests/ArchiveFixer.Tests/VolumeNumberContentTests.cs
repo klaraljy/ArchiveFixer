@@ -399,6 +399,62 @@ namespace ArchiveFixer.Tests
             Assert.Equal(VolumeNumberFail.CurrentNotFirstVolume, order.Fail);
         }
 
+        /// <summary>
+        /// **真混族：RAR5 卷与 legacy 卷混在同一组候选里 ⇒ 整组拒**（2026-10-07 清单第 (8) 条待补守门⑤）。
+        ///
+        /// <para>两族各说各的卷号体系（RAR5 = 主归档头字段、legacy = 卷尾归档结尾块），
+        /// 混在一起时谁也证明不了"我是第几片" ⇒ 判不出 ⇒ 一个名字都不许改。</para>
+        ///
+        /// <para>⚠ 记账（读代码后的更正）：`ReadRar4Legacy` 的**老式编号族从不设 `Number`**
+        /// （`VolumeNumberFromContent.cs:604-619` 直接 `Refuse(RarOldNumbering)`），所以真混族要用
+        /// "新式编号 + 卷尾卷号"的 legacy 卷来造；`ResolveGroup` 里那句"混族"判定
+        /// （`:863-870`）实际就是"有 legacy 卷 vs 有 RAR5 卷"，与这里造的样本一致。</para>
+        ///
+        /// <para><b>红检（实做，如实记结果）</b>：把 `:866` 的 `if (hasRar4Legacy && hasRar5)` 改成
+        /// `if (false &amp;&amp; …)` ⇒ 本条**仍然是绿的** —— 因为混族落到 legacy 分支后，
+        /// 基数校验（`:886-892`）同样拒（RAR5 第 1 卷的 `RawField` 恒为 0，与 legacy 的 0 撞在一起
+        /// ⇒ 0 起/1 起都不连号）。⇒ 本条钉的是**对外契约**（"混族不许认成一组"），
+        /// ⛔ 不是 `:866-870` 那一段的专属守门；"混族被拒"这件事有**两条独立判据**兜底。</para>
+        /// </summary>
+        [Fact]
+        public void 真混族_RAR5卷与legacy卷混在一起_整组拒()
+        {
+            string[] paths =
+            {
+                Write("a.dat", Rar5MainHeader(0x0001u, null)),             // RAR5 第 1 卷
+                Write("b.dat", Rar5MainHeader(0x0003u, 1u)),               // RAR5 第 2 卷
+                Write("c.dat", Rar4Archive(0x0001, 1, firstVolume: false)) // legacy（新式编号）卷尾卷号 = 1
+            };
+
+            VolumeGroupOrder order = VolumeNumberFromContent.ResolveGroup(
+                paths[0],
+                paths.Select(VolumeNumberFromContent.Read));
+
+            Assert.False(order.Confirmed, $"混族不许认成一组（Fail={order.Fail}）");
+        }
+
+        /// <summary>
+        /// **撞号：两卷自称同一个卷号 ⇒ 整组拒**（清单第 (8) 条待补守门② 的后一半；
+        /// 前半"两种基数都说不通"由 <c>RAR4_基数靠整组自洽判定_第1卷标记要一致</c> 钉住）。
+        /// ⛔ 不许任取一份去凑 1..N。
+        /// </summary>
+        [Fact]
+        public void RAR5_两卷撞同一个卷号_整组拒()
+        {
+            string[] paths =
+            {
+                Write("a.dat", Rar5MainHeader(0x0001u, null)),
+                Write("b.dat", Rar5MainHeader(0x0003u, 1u)),  // 第 2 卷
+                Write("c.dat", Rar5MainHeader(0x0003u, 1u))   // 也自称第 2 卷（撞号）
+            };
+
+            VolumeGroupOrder order = VolumeNumberFromContent.ResolveGroup(
+                paths[0],
+                paths.Select(VolumeNumberFromContent.Read));
+
+            Assert.False(order.Confirmed, $"撞号不许认成一组（Fail={order.Fail}）");
+        }
+
         [Theory]
         // 卷尾字段值 a/b/c + "第 1 卷"标记长在第几个文件上 → （认不认、不认是哪一档）
         [InlineData(0, 1, 2, 0, true, VolumeNumberFail.None)]                   // 0 起的一整组：{0,1,2} → 卷号 1,2,3
