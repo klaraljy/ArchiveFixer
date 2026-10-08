@@ -388,7 +388,8 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// **≥3 片的中间片顺序只有名字能回答**（用户 2026-09-29 定的）：两条路都必须如实说"定不出来"，
-        /// ⛔ 上限（试拼 3 片 / <c>total &gt; 2 ⇒ Refuse</c>）一个字不许放宽。
+        /// ⛔ 新口径（2026-10-07）：片数由末片自述的 n 决定、非末片按名字 zNN 做受约束唯一指派；
+        /// 名字给不出盘号（本用例的 `seg.bin`）/撞号/超范围 ⇒ 仍然必须拒绝（再问一句：能识别到的就该用上）。
         /// </summary>
         [Fact]
         public void 跨盘zip_三片以上_按内容定序必须拒绝()
@@ -402,7 +403,9 @@ namespace ArchiveFixer.Tests
                 new[] { VolumeNumberFromContent.Read(segment), VolumeNumberFromContent.Read(tail) });
 
             Assert.False(order.Confirmed);
-            Assert.Equal(VolumeNumberFail.ZipTooManyDisks, order.Fail);
+            // 口径变更（2026-10-07，用户拍板"按①做"）：`seg.bin` 名字里没有盘号 ⇒ 非末片凑不出 1..n-1
+            // ⇒ 理由由"片数太多"改成"缺片/定不出"；结论同样是**不认**（名字答不出来就必须如实说定不出）。
+            Assert.Equal(VolumeNumberFail.ZipPartsMissing, order.Fail);
         }
 
         // ════════════════ D. 「还原」工序接回批首改名（挂点①） ════════════════

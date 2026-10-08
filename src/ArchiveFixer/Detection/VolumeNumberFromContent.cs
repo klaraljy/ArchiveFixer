@@ -991,12 +991,15 @@ namespace ArchiveFixer.Detection
                 return Refuse(VolumeNumberFail.ZipSingleDisk, total);
             }
 
-            if (total > 2)
-            {
-                return Refuse(VolumeNumberFail.ZipTooManyDisks, total);
-            }
-
-            if (segments.Count != 1)
+            /*
+             * ⛔ **不再限制"只能 2 片"**（2026-10-07 真机 EEEE）：老写法在这里一句
+             * 	otal > 2 ⇒ Refuse(ZipTooManyDisks) 就把 4 片那一组整条内容路放弃掉，
+             * 于是退回名字路、产出没有证据的目标名（111.z11 → 111.z03），
+             * 而末片 gather 仍报缺 z01/z02/z03。⇒ 改成"片数由末片自述的 n 决定"：
+             * 非末片必须恰好 
+ - 1 片（下面按名字做受约束唯一指派）。
+             */
+            if (segments.Count != total - 1)
             {
                 return Refuse(VolumeNumberFail.ZipPartsMissing, segments.Count);
             }
@@ -1018,16 +1021,77 @@ namespace ArchiveFixer.Detection
                 return Refuse(VolumeNumberFail.ZipPartsMissing, 1);
             }
 
+            if (total == 2)
+            {
+                // 2 片这一档**逐字保持老口径**（一片无自述⇒盘 1、末片⇒盘 2），避免动到既有行为。
+                return new VolumeGroupOrder
+                {
+                    Confirmed = true,
+                    Slots = new List<VolumeGroupSlot>
+                    {
+                        new() { Path = segments[0].Path, Number = 1 },
+                        new() { Path = tails[0].Path, Number = 2 }
+                    },
+                    Fail = VolumeNumberFail.None,
+                    Detail = 2
+                };
+            }
+
+            /*
+             * **n ≥ 3：受约束唯一指派**（判据只用能证的事实）：
+             * ① 末片自述的 n 把合法盘号夹死在 1..n-1（末片自己 = n）；
+             * ② 其余片内容里没有盘号（裸切块），只能按**名字**里的 zNN 定盘号
+             *    （跨盘 ZIP 口径：zNN ⇒ 卷序 NN+1 ⇒ 盘号 NN）；
+             * ③ 非末片都是满片、末片是余量 ⇒ 比末片还小的不可能是这一组的非末片；
+             * ⛔ 超范围（如 z11）、撞号、名字读不出 ⇒ 判不出、什么都不做。
+             */
+            var slots = new List<VolumeGroupSlot>
+            {
+                new() { Path = tails[0].Path, Number = total }
+            };
+
+            var usedDisks = new List<int> { total };
+
+            foreach (VolumeNumberReading segment in segments)
+            {
+                int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(
+                    System.IO.Path.GetFileName(segment.Path));
+
+                if (nameIndex == null)
+                {
+                    return Refuse(VolumeNumberFail.ZipPartsMissing, segments.Count);
+                }
+
+                int disk = nameIndex.Value - 1;
+
+                if (disk < 1 || disk >= total || usedDisks.Contains(disk))
+                {
+                    return Refuse(VolumeNumberFail.ZipPartsMissing, segments.Count);
+                }
+
+                if (segment.Size > 0 && tails[0].Size > 0 && segment.Size < tails[0].Size)
+                {
+                    return Refuse(VolumeNumberFail.ZipPartsMissing, segments.Count);
+                }
+
+                usedDisks.Add(disk);
+                slots.Add(new() { Path = segment.Path, Number = disk });
+            }
+
+            // `Slots` 的契约是**按盘号升序**（2 片那一档就是 [盘1, 盘2]）⇒ 末片排到最后。
+            slots.Sort((left, right) => left.Number.CompareTo(right.Number));
+
+            if (!IsContiguousRun(usedDisks, total))
+            {
+                return Refuse(VolumeNumberFail.ZipPartsMissing, segments.Count);
+            }
+
             return new VolumeGroupOrder
             {
                 Confirmed = true,
-                Slots = new List<VolumeGroupSlot>
-                {
-                    new() { Path = segments[0].Path, Number = 1 },
-                    new() { Path = tails[0].Path, Number = 2 }
-                },
+                Slots = slots,
                 Fail = VolumeNumberFail.None,
-                Detail = 2
+                Detail = total
             };
         }
 

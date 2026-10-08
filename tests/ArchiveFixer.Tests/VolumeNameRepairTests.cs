@@ -74,6 +74,27 @@ namespace ArchiveFixer.Tests
         ///
         /// <para><b>红检</b>：把 `PlanDisguisedRenamedSelf` 那一调（`VolumeNameRepair.cs:664`）撤掉 ⇒ 本条变红。</para>
         /// </summary>
+        /// <summary>
+        /// **脏名兄弟也要认得出来**（2026-10-07 EEEE：`111(3)` 解出来的 `111.z0删除2` 因为
+        /// `StripVolumeSuffix` 只认四种干净形状而被当成"不相干的名字" ⇒ 成不了兄弟、进不了池）。
+        ///
+        /// <para>`FindSiblingVolumes` 的文档自己写着"只用来把话说清，不参与判决" ⇒ 它的基名走**唯一出口**
+        /// `FileNameHelper.StripVolumeMarkers`（骨架/容忍档）；⛔ `StripVolumeSuffix` 一个字不动
+        /// （那两道"假成功"闸门靠它"与 7-Zip 同一口径"的剥法）。</para>
+        ///
+        /// <para><b>红检</b>：把 `FindSiblingVolumes` 里那两处 `StripVolumeMarkers` 换回 `StripVolumeSuffix`
+        /// ⇒ 本条变红（脏名兄弟列不出来）。</para>
+        /// </summary>
+        [Fact]
+        public void 脏名兄弟_也要列得出来()
+        {
+            IReadOnlyList<string> siblings = RawSplitStreamDetector.FindSiblingVolumes(
+                new[] { "111.7z.001", "111.z0删除2", "无关的说明.txt" },
+                "111.7z.001");
+
+            Assert.Contains("111.z0删除2", siblings);
+            Assert.DoesNotContain("无关的说明.txt", siblings);
+        }
         [Fact]
         public void 孤立一片的脏卷名_骨架算得出就要能归一()
         {

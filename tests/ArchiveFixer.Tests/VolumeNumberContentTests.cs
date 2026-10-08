@@ -470,14 +470,66 @@ namespace ArchiveFixer.Tests
             Assert.Equal(segment, two.Slots[0].Path);
             Assert.Equal(tailTwo, two.Slots[1].Path);
 
-            // 3 片：中间那一片内容里没有盘号 → 先后定不下来 → 不认（只有 2 片才用消去法）
+            /*
+             * ⚠ **口径变更（2026-10-07，用户拍板"按①做"）**：老口径是"三片以上不认"
+             * （ZipTooManyDisks）。新口径 = 片数由**末片自述的 n** 决定：
+             * 本用例这一档是"末片说 3 片、只拿到 1 片非末片" ⇒ 正确结论是**缺片**（ZipPartsMissing），
+             * ⛔ 不是"片数太多"。改动的来由见 docs/需求变更.md 与提交说明。
+             */
             VolumeGroupOrder three = VolumeNumberFromContent.ResolveGroup(
                 tailThree,
                 new[] { VolumeNumberFromContent.Read(segment), VolumeNumberFromContent.Read(tailThree) });
 
             Assert.False(three.Confirmed);
-            Assert.Equal(VolumeNumberFail.ZipTooManyDisks, three.Fail);
-            Assert.Equal(3, three.Detail);
+            Assert.Equal(VolumeNumberFail.ZipPartsMissing, three.Fail);
+            Assert.Equal(1, three.Detail);
+
+            // ── n ≥ 3：受约束唯一指派（名字里的 zNN 决定盘号；超范围/撞号才拒） ──
+
+            string z01 = Write("g.z01", ZipSegment(8192, ZipSegmentHead.LocalFileHeader));
+            string z02 = Write("g.z02", ZipSegment(8192, ZipSegmentHead.LocalFileHeader));
+            string tail3 = Write("g.zip", ZipTail(2, 0, Array.Empty<byte>()));
+
+            VolumeGroupOrder full = VolumeNumberFromContent.ResolveGroup(
+                tail3,
+                new[]
+                {
+                    VolumeNumberFromContent.Read(z01),
+                    VolumeNumberFromContent.Read(z02),
+                    VolumeNumberFromContent.Read(tail3)
+                });
+
+            Assert.True(full.Confirmed);
+            Assert.Equal(3, full.Count);
+            Assert.Equal(z01, full.Slots[0].Path);
+            Assert.Equal(z02, full.Slots[1].Path);
+            Assert.Equal(tail3, full.Slots[2].Path);
+
+            // 超范围（z11 ≥ n）⇒ 这一片不属于这一组 ⇒ 判不出
+            string z11 = Write("g.z11", ZipSegment(8192, ZipSegmentHead.LocalFileHeader));
+            VolumeGroupOrder outOfRange = VolumeNumberFromContent.ResolveGroup(
+                tail3,
+                new[]
+                {
+                    VolumeNumberFromContent.Read(z01),
+                    VolumeNumberFromContent.Read(z11),
+                    VolumeNumberFromContent.Read(tail3)
+                });
+
+            Assert.False(outOfRange.Confirmed);
+
+            // 撞号（两片都自称 z01）⇒ 判不出，⛔ 不许任取一份去凑
+            string z01b = Write("g.z01.dup", ZipSegment(8192, ZipSegmentHead.LocalFileHeader));
+            VolumeGroupOrder collision = VolumeNumberFromContent.ResolveGroup(
+                tail3,
+                new[]
+                {
+                    VolumeNumberFromContent.Read(z01),
+                    VolumeNumberFromContent.Read(z01b),
+                    VolumeNumberFromContent.Read(tail3)
+                });
+
+            Assert.False(collision.Confirmed);
         }
 
         [Fact]
