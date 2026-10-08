@@ -60,6 +60,43 @@ public class RenameServiceTests
         }
     }
 
+    /// <summary>
+    /// **统一档也要"先剥杂质"**（用户 2026-10-07 口径：「无论是专属档还是统一档，第一步都是去除中文字符」）。
+    ///
+    /// <para>真机形状：网盘把 <c>111.zip.txt</c> 变成 <c>111.zi删除p.txt</c>。
+    /// 老写法只比"某一段**逐字**等于建议后缀"，这一段匹配不上 ⇒ 整条退回
+    /// <c>baseName + suggestedExtension</c>，拼出 <c>111.zi删除p.zip</c>（脏段留在名字里）。
+    /// 新口径：命中的那一段**允许是伪装段** —— 判据转调既有出口
+    /// <c>ExtensionHelper.TryRecoverDisguisedArchiveBody</c>（分卷专属档㈡档用的是**同一把**尺子，
+    /// ⛔ 不新造第二把），还原出 <c>zip</c> 之后**连那一段一起改**。</para>
+    ///
+    /// <para><b>红检</b>：把 <c>RenameService.TryFixMultiExtensionFileName</c> 里
+    /// <c>TryRecoverDisguisedArchiveBody</c> 那一段判断撤掉 ⇒ 本条变红（结果退回 <c>111.zi删除p.zip</c>）。</para>
+    /// </summary>
+    [Fact]
+    public void BuildPreview_FixByDetectedFormat_伪装段也要先剥杂质()
+    {
+        string dir = CreateTempDir();
+        try
+        {
+            string file = Path.Combine(dir, "111.zi删除p.txt");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(file, "x");
+
+            var service = new RenameService();
+            var preview = service.BuildPreview(
+                new[] { CreateTask(file, "ZIP", ".zip") },
+                CreateFixOptions());
+
+            Assert.Single(preview);
+            Assert.Equal(Path.Combine(dir, "111.zip"), preview[0].NewPath);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
     [Fact]
     public void BuildPreview_ExtensionAlreadyCorrect_MarksSkip()
     {

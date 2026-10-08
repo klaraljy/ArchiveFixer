@@ -1217,12 +1217,32 @@ namespace ArchiveFixer.Services
             }
 
             int matchedIndex = -1;
+            string matchedCanonical = string.Empty;
 
             for (int i = 0; i < extensions.Count; i++)
             {
                 if (string.Equals(extensions[i], suggestedExtension, StringComparison.OrdinalIgnoreCase))
                 {
                     matchedIndex = i;
+                    matchedCanonical = extensions[i];
+                    continue;
+                }
+
+                /*
+                 * ⚠ 2026-10-08（用户 2026-10-07 口径「无论是专属档还是统一档，第一步都是去除中文字符」）：
+                 * 命中的那一段**自己也可能被塞了杂质** —— 网盘把 `111.zip.txt` 变成 `111.zi删除p.txt`
+                 * 是常规形状。老写法只比"逐字相等"，于是这一段匹配不上 ⇒ 整条退回
+                 * `baseName + suggestedExtension`，拼出 `111.zi删除p.zip`（脏段留在名字里）。
+                 *
+                 * 判据**转调既有出口**（⛔ 不新造第二把尺子）：`TryRecoverDisguisedArchiveBody`
+                 * 就是分卷专属档㈡档用的那把"归档体还原"尺子（唯一解，有歧义一律不认）。
+                 * 它返回的规范段**不带点**（与 `VolumeContentInference.ExtensionFor` 同口径），这里补点再比。
+                 */
+                if (ExtensionHelper.TryRecoverDisguisedArchiveBody(extensions[i], out string recovered, out _) &&
+                    string.Equals("." + recovered, suggestedExtension, StringComparison.OrdinalIgnoreCase))
+                {
+                    matchedIndex = i;
+                    matchedCanonical = "." + recovered;
                 }
             }
 
@@ -1250,6 +1270,25 @@ namespace ArchiveFixer.Services
             if (string.IsNullOrWhiteSpace(namePart))
             {
                 return string.Empty;
+            }
+
+            /*
+             * 命中那一段的**规范形态**与它现在的样子不同 ⇒ 连它一起改（`zi删除p` ⇒ `zip`）：
+             * 只删后面的 `.txt` 会留下脏段，那正是"第一步去中文"没落到统一档上的表现。
+             * 逐字相等时这一步是恒等变换（既有形状一个字不动）。
+             */
+            string matchedRaw = extensions[matchedIndex];
+
+            if (!string.Equals(matchedRaw, matchedCanonical, StringComparison.OrdinalIgnoreCase))
+            {
+                string stem = namePart[..^matchedRaw.Length];
+
+                if (string.IsNullOrWhiteSpace(stem))
+                {
+                    return string.Empty;
+                }
+
+                namePart = stem + matchedCanonical;
             }
 
             return namePart;
