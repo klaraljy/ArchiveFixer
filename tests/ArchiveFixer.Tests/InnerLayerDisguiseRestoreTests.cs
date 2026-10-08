@@ -169,6 +169,65 @@ namespace ArchiveFixer.Tests
             Assert.Equal(sourceBefore, SnapshotDirectory(userDirectory));
         }
 
+        /// <summary>
+        /// **「名字像分卷的一片、但认不出魔数」也要在第一大步里改回标准名**（用户 2026-10-08 口径）。
+        ///
+        /// <para>真机现场：`111(3)` 解出来的 `111.z0删除2` —— 7z 的续卷是**裸切字节流**、跨盘 ZIP 的中间片
+        /// 也没有文件头，探测器一律认不出；老写法只把 `IsArchiveAsync` 为真的收进候选
+        /// ⇒ 它永远进不了「还原」名单、名字一直脏着（真机日志 190 行：它被当成"分卷的后续卷"跳过）。</para>
+        ///
+        /// <para>用户口径：「简单的改名操作可以弄，就是删除中文字符的操作」；缺卷结论与组卷归位留到批末。</para>
+        ///
+        /// <para>⛔ 本条同时钉住"**只改名、不进续解名单**"：这个文件的内容不是任何归档，
+        /// 递归必须**正常收尾**（拿它去试引擎就会多出一次没意义的调用）。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>RecursiveExtractor.ProbeInnerArchivesAsync</c> 里
+        /// <c>renameOnlyPieces.Add(entry)</c> 那一档撤掉 ⇒ 本条变红（盘上仍叫 `111.z0删除2`）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 递归层内_只凭名字认得的脏卷片_第一大步就改回标准名()
+        {
+            RequireSevenZip();
+
+            string userDirectory = Path.Combine(_root, "user-piece");
+            Directory.CreateDirectory(userDirectory);
+
+            // 脏名的分卷片，内容**不是**任何归档（模拟 7z 续卷：裸切字节流、没有魔数）。
+            string piece = Path.Combine(userDirectory, "111.z0删除2");
+
+            File.WriteAllBytes(piece, new byte[4096]);
+
+            string outer = Path.Combine(userDirectory, "outer-piece.zip");
+
+            Run7z("a", "-tzip", outer, piece);
+
+            string output = Path.Combine(_root, "out-piece");
+            var logs = new List<string>();
+
+            RecursionResult result = await ExtractAsync(outer, output, logs);
+
+            // ① 改名发生了（日志点名"旧名 → 新名"）。
+            string restoreLine = Assert.Single(logs, line => line.Contains("还原伪装后缀", StringComparison.Ordinal));
+
+            Assert.Contains("111.z0删除2 → 111.z02", restoreLine, StringComparison.Ordinal);
+
+            // ② 盘上名字真的换了，这一层不留脏名。
+            Assert.True(
+                Directory.GetFiles(output, "111.z02", SearchOption.AllDirectories).Length > 0,
+                "产物里没有 111.z02：" + string.Join(" | ", Directory.GetFiles(output, "*", SearchOption.AllDirectories)));
+
+            Assert.DoesNotContain(
+                Directory.GetFiles(output, "*", SearchOption.AllDirectories),
+                path => Path.GetFileName(path).Contains("删除", StringComparison.Ordinal));
+
+            // ③ ⛔ 只改名、不进续解名单：内容不是归档 ⇒ 这一趟正常收尾（不是"分卷缺失"）。
+            Assert.Equal(RecursionStopReason.Completed, result.StopReason);
+
+            // ④ 用户源目录一个字节不动。
+            Assert.True(File.Exists(piece));
+            Assert.Equal(4096, new FileInfo(piece).Length);
+        }
+
         [RarVolumeFact]
         public async Task 递归层内_一组伪装的RAR分卷_先还原再组卷能解开到内容()
         {

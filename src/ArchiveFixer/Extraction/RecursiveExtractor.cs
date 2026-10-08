@@ -3390,6 +3390,19 @@ namespace ArchiveFixer.Extraction
 
             pending.Push(outputDirectory);
 
+            /*
+             * 「名字像分卷的一片、但认不出魔数」的候选（用户 2026-10-08）。
+             *
+             * 7z 的续卷是**裸切字节流**、跨盘 ZIP 的中间片也没有文件头 ⇒ 探测器一律认不出
+             * （`RecursiveExtractor.cs` 那一步只把 `IsArchiveAsync` 为真的收进候选）⇒
+             * 真机 `111(3)\111(3)\111.z0删除2` 永远进不了「还原」名单、名字一直脏着。
+             *
+             * ⛔ 它们**只参与「还原」改名**（删掉名字里塞的中文杂质、换回规范卷标记），
+             * **不进这一层的续解名单** —— 用户 2026-10-08 口径：第一大步只做"删除中文字符"这种简单改名，
+             * 缺卷结论与组卷归位一律留到批末（那一组的入口本来就在归档候选里，引擎会按同目录的标准卷名找到它们）。
+             */
+            var renameOnlyPieces = new List<string>();
+
             while (pending.Count > 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -3457,6 +3470,11 @@ namespace ArchiveFixer.Extraction
                     {
                         found.Add(entry);
                     }
+                    else if (FileNameHelper.IsVolumePartFileName(Path.GetFileName(entry)))
+                    {
+                        // 见 renameOnlyPieces 的说明：只让它过「还原」改名，⛔ 不进续解名单。
+                        renameOnlyPieces.Add(entry);
+                    }
                 }
             }
 
@@ -3480,6 +3498,29 @@ namespace ArchiveFixer.Extraction
             found.Sort(StringComparer.OrdinalIgnoreCase);
 
             /*
+             * 「还原」的入参 = 归档候选 ∪ 那些"只来改名"的卷片。
+             * ⛔ 「内容物保留关键词」对后者同样有效（一个都不许动）；⛔ 已在候选里的不重复加。
+             */
+            var archiveCandidates = new HashSet<string>(found, StringComparer.OrdinalIgnoreCase);
+            var renameOnlySet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var restoreInput = new List<string>(found);
+
+            if (renameOnlyPieces.Count > 0)
+            {
+                foreach (string piece in ApplyContentKeepRules(renameOnlyPieces, layerLabel))
+                {
+                    if (archiveCandidates.Contains(piece) || !renameOnlySet.Add(piece))
+                    {
+                        continue;
+                    }
+
+                    restoreInput.Add(piece);
+                }
+
+                restoreInput.Sort(StringComparer.OrdinalIgnoreCase);
+            }
+
+            /*
              * ===== 「还原」工序：先擦掉伪装尾巴，再回到第 1 层重判一次（方案 §2.1 挂点②）=====
              *
              * 用户 2026-10-03 的口径：「首先第一步就是识别底层文件找出伪装文件，然后还原，再接着匹配」。
@@ -3498,11 +3539,27 @@ namespace ArchiveFixer.Extraction
              * "回环"就在下一行：还原完照旧走 `CollapseSameGroupVolumes`（它按**还原之后**的名字
              * 重新判"谁是首卷、哪些是它的续卷"）—— 一步都不跳。
              */
-            IReadOnlyList<string> restored = VolumeNameRepair.RestoreDisguisedInnerPackageNames(
-                found,
+            IReadOnlyList<string> restoredAll = VolumeNameRepair.RestoreDisguisedInnerPackageNames(
+                restoreInput,
                 (level, message) => Log(level, layerLabel + "：" + message));
 
-            return CollapseSameGroupVolumes(restored.ToList());
+            /*
+             * ⛔ 只把**归档候选**带进这一层的续解名单：
+             * "只来改名"的卷片在这一步已经改完了（盘上名字变了），它们**不**变成续解入口 ——
+             * 那一组的入口本来就在候选里，引擎会按同目录的标准卷名去找兄弟片。
+             * （判据 = 入参身份，⛔ 不比中文文案、⛔ 不看后缀。）
+             */
+            var restored = new List<string>(found.Count);
+
+            for (int index = 0; index < restoreInput.Count; index++)
+            {
+                if (!renameOnlySet.Contains(restoreInput[index]))
+                {
+                    restored.Add(restoredAll[index]);
+                }
+            }
+
+            return CollapseSameGroupVolumes(restored);
         }
 
         /// <summary>
