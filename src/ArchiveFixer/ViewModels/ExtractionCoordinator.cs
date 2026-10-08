@@ -11059,6 +11059,18 @@ namespace ArchiveFixer.ViewModels
              */
             ArchiveTask[] pending = _volumeDeficitDeferred.ToArray();
 
+            /*
+             * ⚠ 2026-10-09 **试做后已撤回**（如实记账）：本想在这里加一趟"最后一轮分卷操作"——
+             * 对全表每一单再跑一次 `AdoptPublishedVolumePieces`，把"某一组还缺的那一片"接进那一层，
+             * 以解掉真机 EEEE 的时序竞争（`111(3).rar` 收尾 22:44:30 早于入口 `111.zip` 落地 22:44:32
+             * ⇒ 那一次接片是空操作，`111(3)\111(3)\111.z02` 一直没被接走）。
+             *
+             * ⛔ 实做第一步就打红：`SiblingFolderVolumeGatherTests.真机形状_过路层那一单的其余物按档删掉_48MB那处`
+             * ③"盘上收口只留成品" ⇒ 留下孤儿 `111_outer\111.z01` —— 全表扫会把片接进**产出方自己的落点层**，
+             * 而收尾的删除档不认那个新名字。⇒ 要做的不是"再扫一遍全表"，而是
+             * **接片的目标层与收尾的清理口径必须一致**（唯一出口仍是 `ResolveBatchGroupDirectory` +
+             * `PublishUnresolvedPieceLandingCopies`）。撤回后该用例恢复绿。
+             */
             foreach (ArchiveTask task in RecheckDeferredVolumeDeficits(finalPass: true))
             {
                 AppendLog(
