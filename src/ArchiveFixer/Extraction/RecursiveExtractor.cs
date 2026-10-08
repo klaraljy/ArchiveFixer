@@ -1518,8 +1518,20 @@ namespace ArchiveFixer.Extraction
              * 动作 = 给源目录里那几片在入口这一层**多起一个规范卷名**（硬链接，零字节；⛔ 不改名、不搬、
              * 绝不把用户的源片搬进工作区 —— 工作区是整份删的）。凑不齐 ⇒ 一次引擎调用都不做（不变量 7）。
              */
+            /*
+             * ⛔ **候选池要并上"这条链各层产物里的分卷片"**（2026-10-07 真机 EEEE）：老写法只给
+             * "找卷窗口"（RootSourceCandidates），而 111(3) 解出来的那一片
+             * 111(3)\111(3)\111.z0删除2 是**链产物**、不在窗口里 ⇒ 末片 gather 永远凑不齐
+             * z01/z02/z03，整组判"判不出该怎么收"、零引擎调用。
+             * 并池只多给"能被名字/内容定出盘号"的候选；⛔ 动作仍是硬链接（源片不改名不搬），
+             * 盘号判不出/撞号的候选在 gather 内部照旧被拒（ResolveSpannedZipDiskGather 的判据不动）。
+             */
             VolumeNameRepair.SpannedZipDiskGather spannedDisks =
-                VolumeNameRepair.ResolveSpannedZipDiskGather(archivePath, RootSourceCandidates);
+                VolumeNameRepair.ResolveSpannedZipDiskGather(
+                    archivePath,
+                    RootSourceCandidates
+                        .Concat(EnumerateWorkspacePool(CurrentWorkspace))
+                        .ToList());
 
             if (spannedDisks.Applicable)
             {
