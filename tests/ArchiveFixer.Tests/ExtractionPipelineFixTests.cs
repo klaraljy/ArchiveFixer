@@ -1304,6 +1304,62 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **成功那一行的结论句不许把"入仓目录"说成产物 / 已发布**（2026-10-07 真机 EEEE）。
+        ///
+        /// <para>现场：`111(3).rar` 报「解压成功 100%」，①页「错误信息」列却写着
+        /// 「已完成 1 层递归解压（没有更多内层归档）；产物：…\.ArchiveFixer.work\111(3).rar-84ed4efb\stage；
+        /// 已发布 1 个文件到 …（同一个 stage）」—— 用户读成"报成功、产物却留在工作区没发布"，
+        /// 而日志下一行其实已经是「定稿完成 → 落点」。</para>
+        ///
+        /// <para>判据：递归的发布目标落在**工作区根里面** ⇒ 那是这一单的**入仓目录**，不是落点。
+        /// 结论句只许说「已入仓 N 个文件（中间产物，定稿时才搬进落点）」，
+        /// ⛔ 不许出现「产物：…」或「已发布 N 个文件到 …」。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>RecursiveExtractor</c> 里 <c>intakeStaging:</c> 那一句与
+        /// <c>BuildSummary</c> 里 <c>!intoIntakeStaging</c> 那一半撤掉 ⇒ 本条变红。</para>
+        /// </summary>
+        [Fact]
+        public async Task 成功那一行_入仓目录不许被说成产物或已发布()
+        {
+            Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
+            string source = CreateEmbeddedSourceFile("embedded-recursive-intake.7z");
+
+            ArchiveTask task = AddTask(harness, source);
+            task.EmbeddedArchiveOffset = EmbeddedPaddingBytes;
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 1);
+                harness.Engine.Extracted = true;
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(1));
+
+            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
+
+            try
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = harness.PathService.WorkDirectory;
+
+                await harness.Coordinator.StartExtractAsync();
+            }
+            finally
+            {
+                RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
+            }
+
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+
+            string summary = task.ErrorMessage ?? string.Empty;
+
+            Assert.Contains("已入仓", summary, StringComparison.Ordinal);
+            Assert.DoesNotContain("产物：", summary, StringComparison.Ordinal);
+            Assert.DoesNotContain("已发布", summary, StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// 递归失败（第一层就没解开，一个文件都没产出）：**两处**工作区默认都要清掉
         /// （用户 2026-09-25 第 25 条追加）。
         ///

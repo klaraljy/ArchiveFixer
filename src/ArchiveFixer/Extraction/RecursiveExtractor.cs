@@ -4503,7 +4503,8 @@ namespace ArchiveFixer.Extraction
                     finalOutputDirectory,
                     inPlaceInnerPackages: inPlace,
                     omitMiddlePackageLayers: inPlace && OmitMiddlePackageLayers,
-                    alreadyReclaimedPaths: ReclaimedProcessArtifacts);
+                    alreadyReclaimedPaths: ReclaimedProcessArtifacts,
+                    intakeStaging: IsInsideWorkspaceRoot(finalOutputDirectory));
 
                 publishMessage = publishResult.Message;
 
@@ -4855,6 +4856,42 @@ namespace ArchiveFixer.Extraction
             }
         }
 
+        /// <summary>
+        /// 这个路径在不在**本批工作区根**里面（= 中间产物 / 入仓目录，⛔ 不可能是用户看得见的落点）。
+        ///
+        /// <para>依据是项目红线：落点永远不许落在工作区里（发布侧另有一道闸门
+        /// <c>ExtractionWorkspace.Publish</c> 会当场停手）⇒ "在工作区根里面"就等于"这是内部目录"。</para>
+        ///
+        /// <para>用途只有一个（2026-10-07 真机 EEEE）：结论句据此决定把发布目标说成"产物"还是
+        /// "中间产物入仓"，⛔ 不参与任何写盘判据。</para>
+        /// </summary>
+        private static bool IsInsideWorkspaceRoot(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            string? root = ConfiguredWorkspaceRoot;
+
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                return false;
+            }
+
+            string full = SafePathHelper.GetFullPathSafe(path);
+            string rootFull = SafePathHelper.GetFullPathSafe(root);
+
+            if (full.Length == 0 || rootFull.Length == 0)
+            {
+                return false;
+            }
+
+            rootFull = rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            return full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string BuildSummary(
             RecursionStopReason stopReason,
             List<RecursionLayerReport> layers,
@@ -4922,7 +4959,17 @@ namespace ArchiveFixer.Extraction
                     DescribeUnexpandedNames(unexpandedNames)));
             }
 
-            if (completed && !string.IsNullOrWhiteSpace(finalOutputPath))
+            /*
+             * 2026-10-07 真机 EEEE：递归跑在任务里时，发布目标是**这一单的入仓目录**
+             * （`<工作区>\<任务>-hash\stage`）—— 老写法把它印成「产物：…」，而下一句又是
+             * 「已发布 1 个文件到 <同一个 stage>」，用户读成"报了解压成功、产物却留在工作区没发布"
+             * （日志下一行其实已是"定稿完成 → 落点"）。
+             * ⇒ 入仓那一档**不再重复印内部路径**，只留下面 publishMessage 里那句如实的话
+             * （"已入仓 N 个文件（中间产物，定稿时才搬进落点）"）；真的发布到落点时照旧印。
+             */
+            bool intoIntakeStaging = IsInsideWorkspaceRoot(finalOutputPath);
+
+            if (completed && !string.IsNullOrWhiteSpace(finalOutputPath) && !intoIntakeStaging)
             {
                 parts.Add($"产物：{finalOutputPath}");
             }

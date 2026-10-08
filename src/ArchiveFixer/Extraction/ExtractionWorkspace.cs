@@ -256,11 +256,24 @@ namespace ArchiveFixer.Extraction
         /// 中间层省不省（②页「续解时省略中间层」这一档）。**首层与末层永不受它影响**：
         /// 首层是发布目标本身，末层由 <see cref="PackageLayerRules.ShouldKeepLayerFolder"/> 无条件保留。
         /// </param>
+        /// <param name="intakeStaging">
+        /// 这次发布的目标**只是"入仓目录"**（中间产物暂存处，定稿时才搬进落点），不是用户看得见的落点。
+        ///
+        /// <para>2026-10-07 真机 EEEE：递归跑在任务里时目标 = <c>&lt;工作区&gt;\&lt;任务&gt;-hash\stage</c>，
+        /// 而结论句把同一个路径同时印成「产物：X」与「已发布 N 个文件到 X」—— 用户读成
+        /// "报了解压成功、产物却留在工作区没发布"（其实日志下一行就是"定稿完成 → 落点"）。
+        /// 传 true ⇒ 那句话改写成"已入仓 N 个文件（中间产物，定稿时才搬进落点）"，⛔ 数字与
+        /// 改名/失败那几句一个字不动。</para>
+        ///
+        /// <para>判据**不在本类**：由调用方按"目标在不在工作区根里面"回答，本类只认这一个布尔
+        /// （与 <paramref name="inPlaceInnerPackages"/> 同一条纪律）。</para>
+        /// </param>
         public WorkspacePublishResult Publish(
             string targetDirectory,
             bool inPlaceInnerPackages = false,
             bool omitMiddlePackageLayers = false,
-            IReadOnlyCollection<string>? alreadyReclaimedPaths = null)
+            IReadOnlyCollection<string>? alreadyReclaimedPaths = null,
+            bool intakeStaging = false)
         {
             if (string.IsNullOrWhiteSpace(targetDirectory))
             {
@@ -378,7 +391,8 @@ namespace ArchiveFixer.Extraction
                         movedCount,
                         renamed,
                         errors,
-                        countsMovedNotLanded: inPlaceInnerPackages),
+                        countsMovedNotLanded: inPlaceInnerPackages,
+                        intakeStaging: intakeStaging),
                     Warnings = warnings
                 };
             }
@@ -1273,13 +1287,22 @@ namespace ArchiveFixer.Extraction
             int movedCount,
             List<string> renamed,
             List<string> errors,
-            bool countsMovedNotLanded = false)
+            bool countsMovedNotLanded = false,
+            bool intakeStaging = false)
         {
             var parts = new List<string>();
 
             if (movedCount <= 0)
             {
                 parts.Add("没有可发布的产物文件");
+            }
+            else if (intakeStaging)
+            {
+                /*
+                 * 2026-10-07 真机 EEEE：目标是入仓目录（不是落点）⇒ ⛔ 不许写"已发布…到 <工作区路径>"，
+                 * 那句话会被读成"成品留在了工作区"。数字照旧（含被替换掉的内层包那一档也不影响本句）。
+                 */
+                parts.Add($"已入仓 {movedCount} 个文件（中间产物，定稿时才搬进落点）");
             }
             else if (countsMovedNotLanded)
             {
