@@ -3029,6 +3029,19 @@ namespace ArchiveFixer.Models
             "这一组还缺 {0} —— 先记下来不判死：这一批跑完再判一次（缺的那几卷可能已经被同批别的包解出来）。";
 
         /// <summary>
+        /// **批中间那一行状态格显示的"待判"文案**（用户 2026-10-08 口径：「没有到最后一步都是先跳过」）。
+        ///
+        /// <para>⚠ 这是**显示文案**，⛔ 不是新的状态常量：它不进 <see cref="ArchiveTask.Status"/>，
+        /// 只在"这一单已经进了缺卷待判名单、而机器状态还停在 <see cref="VolumeMissing"/>"时
+        /// 由 <c>StatusDisplayText</c> 顶上去 —— 统计、配色、名单读的仍是原来的 <c>Status</c>。</para>
+        ///
+        /// <para>为什么要有它：`111.zip` 这类"递归中途撞上缺卷"的单，老写法在**批中间**就把
+        /// 「分卷缺失」这个结论摆在①页上（用户原话：「还没有到最后…你就只能显示跳过」）；
+        /// 缺的那几片完全可能被同批别的包补上，批末那一站才该下结论。</para>
+        /// </summary>
+        public const string VolumeDeficitPendingText = "跳过（缺卷，等批末再判）";
+
+        /// <summary>
         /// 批末补判**补齐了**那一行：<c>{0}</c> = 这一单的文件名，<c>{1}</c> = 现在这一组的状态。
         /// </summary>
         public const string VolumeDeficitRecheckResolvedFormat =

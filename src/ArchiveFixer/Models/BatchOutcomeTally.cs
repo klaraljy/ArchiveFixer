@@ -78,6 +78,7 @@ namespace ArchiveFixer.Models
         /// </summary>
         public static bool IsCountedAsFailure(ArchiveTask task) =>
             task != null &&
+            !task.IsVolumeDeficitDeferred &&
             (task.Outcome == TaskOutcome.Failed ||
              (task.Outcome == TaskOutcome.Succeeded && task.OutputVerification == OutputVerificationOutcome.Failed));
 
@@ -95,6 +96,20 @@ namespace ArchiveFixer.Models
 
             foreach (ArchiveTask task in list)
             {
+                /*
+                 * 「缺卷待批末判」那一档：**这一批还没到判死的时候**（用户 2026-10-08 口径：
+                 * 「没有到最后一步都是先跳过」「要留在最后检查才是真正的分卷缺失」）⇒ 本轮按「跳过」数。
+                 *
+                 * ⛔ 不动 `Outcome`（它仍是机器事实，发布链 / 其余物 / 删除闸门都读它）：
+                 * 这里只是"怎么数"这一层的口径。批末定稿时协调器会把这个事实位清掉，
+                 * 届时按真结论数 —— 所以批中间的汇总说"跳过"、批末的汇总说真话，两句话都对。
+                 */
+                if (task.IsVolumeDeficitDeferred)
+                {
+                    skipped++;
+                    continue;
+                }
+
                 switch (task.Outcome)
                 {
                     case TaskOutcome.Succeeded:

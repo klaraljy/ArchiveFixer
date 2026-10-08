@@ -267,6 +267,9 @@ namespace ArchiveFixer.Models
         /// </summary>
         private string _userFacingFilePath = string.Empty;
 
+        /// <summary>「缺卷待批末判」这个**显示/统计事实位**的存储（见 <see cref="IsVolumeDeficitDeferred"/>）。</summary>
+        private bool _isVolumeDeficitDeferred;
+
         /// <summary>
         /// **用户那个文件的最新已知位置**（改名跟着走、被搬进其余物跟着走、被删也照旧记着）——
         /// 只给显示用，⛔ 不参与任何判据。
@@ -710,6 +713,32 @@ namespace ArchiveFixer.Models
         public string SettledWithGroupUnitName { get; set; } = string.Empty;
 
         /// <summary>
+        /// **这一单已经进了"缺卷待批末判"名单**（结构化事实位，不是状态）。
+        ///
+        /// <para>用户 2026-10-08 口径：「没有到最后一步都是先跳过」——批中间不许把「分卷缺失」
+        /// 当结论摆出来（缺的那几片可能被同批别的包补上），只有批末那一站才判。</para>
+        ///
+        /// <para>⛔ 它**不参与任何写盘判据**（删源包 / 搬其余物 / 落点 / 工作区一律读 <c>Outcome</c>
+        /// 与校验枚举）：只喂两处显示/统计 —— ①页状态格（<see cref="StatusDisplayText"/>）与
+        /// 批末计数（<c>BatchOutcomeTally</c>）。写它 / 清它的地方只有协调器那两处。</para>
+        /// </summary>
+        public bool IsVolumeDeficitDeferred
+        {
+            get => _isVolumeDeficitDeferred;
+            set
+            {
+                if (_isVolumeDeficitDeferred == value)
+                {
+                    return;
+                }
+
+                _isVolumeDeficitDeferred = value;
+                OnPropertyChanged(nameof(IsVolumeDeficitDeferred));
+                OnPropertyChanged(nameof(StatusDisplayText));
+            }
+        }
+
+        /// <summary>
         /// 「检测格式」那一列**给用户看的**说法（用户 2026-09-28：续卷显示 Unknown 会读成"没认出来"）。
         ///
         /// <para>续卷（`x.7z.002`）是裸切块、**没有文件头魔数**，所以内容格式本来就判不了 ——
@@ -951,6 +980,21 @@ namespace ArchiveFixer.Models
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.PieceSettledWithGroupFormat,
                         SettledWithGroupUnitName);
+                }
+
+                /*
+                 * ===== 批中间撞上缺卷的那一档：**先跳过，不许把"分卷缺失"当结论摆出来** =====
+                 *
+                 * 用户 2026-10-08 口径：「没有到最后一步都是先跳过」——缺的那几片完全可能被同一批
+                 * 别的包解出来（真机 `111.z01` 就是这样补上的），批末那一站才该下结论。
+                 *
+                 * ⛔ `Status` / `Outcome` 一个字不动（这一档的机器状态仍是"分卷缺失 / 失败"，
+                 * 发布链、其余物、删除闸门读的都是它）—— 这里只把**显示**改说成"跳过（缺卷，等批末再判）"。
+                 * 批末定稿时协调器会把这个事实位清掉，那一格随即回到真结论。
+                 */
+                if (IsVolumeDeficitDeferred && Status == StatusText.VolumeMissing)
+                {
+                    text = StatusText.VolumeDeficitPendingText;
                 }
 
                 /*

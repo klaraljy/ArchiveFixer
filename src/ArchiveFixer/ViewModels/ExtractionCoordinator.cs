@@ -6579,6 +6579,18 @@ namespace ArchiveFixer.ViewModels
             {
                 bool deferredHere = IsDeferredVolumeDeficit(task);
 
+                /*
+                 * ⚠ 2026-10-08（用户口径「没有到最后一步都是先跳过」）：递归**中途**撞上缺卷这一档，
+                 * 批中间不许把「分卷缺失」当结论摆出来 —— 缺的那几片完全可能被同批别的包补上
+                 * （真机 `111.z01` 就是这么补上的）。这里只记一个"待批末判"的**显示/统计事实位**：
+                 * ⛔ `Status` / `Outcome` 一个字不动（它们是"装箱单"，发布链 / 定稿 / 源包处理都读，
+                 * 见上面那段说明），⛔ 也不改判据。批末定稿时清掉它，那一格随即回到真结论。
+                 */
+                if (!_volumeDeficitFinalPass.Contains(task))
+                {
+                    task.IsVolumeDeficitDeferred = true;
+                }
+
                 AppendLog(
                     "INFO",
                     deferredHere
@@ -9599,6 +9611,13 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * 显示/统计那一层的事实位（⛔ 不是状态）：①页那一格据此说"跳过（缺卷，等批末再判）"，
+             * 批末计数据此按「跳过」数 —— 用户 2026-10-08 口径「没有到最后一步都是先跳过」。
+             * 批末定稿（FinalizeDeferredVolumeDeficits）会把它清掉。
+             */
+            task.IsVolumeDeficitDeferred = true;
+
+            /*
              * ⛔ **批中间不许顶着红色「分卷缺失」**（用户 2026-10-06 原话：
              * 「我说了不要显示红色的分卷缺失，你还没有压倒最后就跳过，你是听不懂吗」）。
              *
@@ -11012,6 +11031,13 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal void FinalizeDeferredVolumeDeficits()
         {
+            /*
+             * ⚠ 2026-10-08：**这一站才是"真缺卷"下结论的地方** ⇒ 先把进来时那份名单快照下来，
+             * 补判跑完之后把已经离开名单的那些单的"待判"事实位清掉（它们要么被补判判出了真结论、
+             * 要么已经被放行去跑）。仍在名单里的（例如"消费方还没跑完"那一支）保持"待判"。
+             */
+            ArchiveTask[] pending = _volumeDeficitDeferred.ToArray();
+
             foreach (ArchiveTask task in RecheckDeferredVolumeDeficits(finalPass: true))
             {
                 AppendLog(
@@ -11020,6 +11046,14 @@ namespace ArchiveFixer.ViewModels
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.VolumeDeficitChainEndCompleteLogFormat,
                         task.FileName));
+            }
+
+            foreach (ArchiveTask task in pending)
+            {
+                if (!_volumeDeficitDeferred.Contains(task))
+                {
+                    task.IsVolumeDeficitDeferred = false;
+                }
             }
 
             /*
