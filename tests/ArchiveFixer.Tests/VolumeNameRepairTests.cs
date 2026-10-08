@@ -56,6 +56,71 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ 计划（纯逻辑）
 
+        /// <summary>
+        /// **脏卷名判定的三条真机基准**（用户 2026-10-07 点名的名字）。
+        ///
+        /// <para>① `111.7z.001删除`：标记 `001` + 中文尾巴 ⇒ 照旧认得出（⛔ 不许因为"去中文"把这一档弄坏）；
+        /// ② `111.z0删除2`：紧档看位置必失败，但**骨架档（先剥非 ASCII 杂质）**应得出 `z02`；
+        /// ③ `111.z11111111110删除3`：紧档**不许**再吐 `z11`（数字与标记连着 ⇒ 卷号有歧义 ⇒ 判不出），
+        /// 骨架档也应否掉（骨架 `z111111111103` 不是合法标记）⇒ 结论是"不改名"，等组内事实说话。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>ExtensionHelper.cs</c> 里"尾巴第一个字符是数字 ⇒ 判不出"那一段撤掉 ⇒
+        /// 本条 ③ 变红（会退回 `z11`）。</para>
+        /// </summary>
+        /// <summary>
+        /// **真机基准：孤立一片的脏卷名也要能归一**（用户 2026-10-07 的 `111(3)\111(3)\111.z0删除2`）。
+        /// 判据三条（`VolumeNameRepair.cs:653-657`）：①骨架算得出规范标记 ②不等于现名 ③目标名自己是规范卷名；
+        /// `:658` 明确"不需要兄弟卷在场"。⛔ 这一条只读地跑判据，不动任何文件。
+        ///
+        /// <para><b>红检</b>：把 `PlanDisguisedRenamedSelf` 那一调（`VolumeNameRepair.cs:664`）撤掉 ⇒ 本条变红。</para>
+        /// </summary>
+        [Fact]
+        public void 孤立一片的脏卷名_骨架算得出就要能归一()
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "af-volrepair-" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(dir);
+
+            try
+            {
+                string dirty = Path.Combine(dir, "111.z0删除2");
+
+                File.WriteAllBytes(dirty, new byte[128]);
+
+                IReadOnlyList<string?> names = VolumeNameRepair.EnumerateFileNamesInDirectory(dirty);
+
+                Assert.True(FileNameHelper.IsVolumePartFileName("111.z0删除2"), "名字级应认得出它是分卷的一片");
+                // 跨盘 ZIP 族的卷序口径（VolumeGroupDetector.cs:853 注释）：z01 是第 1 个后续卷、本体 .zip 才算第 1 卷 ⇒ 卷序 = NN + 1；\r\n                // 消费方 VolumeNameRepair.cs:3316 再减 1 得磁盘号 ⇒ 3 - 1 = 2 才是"第 2 片"。\r\n                Assert.Equal(3, VolumeGroupDetector.TryGetVolumeIndex("111.z0删除2"));
+
+                VolumeNameRepairPlan plan = VolumeNameRepair.Plan(dirty, names);
+
+                Assert.True(plan.CanRepair, "孤立一片也应能归一，实际拒绝理由：" + plan.Reason);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+        [Fact]
+        public void 脏卷名基准_去中文之后再判()
+        {
+            // ① 数字族 + 中文尾巴：照旧认得出
+            Assert.True(ExtensionHelper.TrySplitVolumeSegment("001删除", out string mark1, out string junk1));
+            Assert.Equal("001", mark1);
+
+            // ② 中文夹在号码中间：紧档看位置判不出，骨架档应得 z02
+            Assert.False(ExtensionHelper.TrySplitVolumeSegment("z0删除2", out _, out _));
+            Assert.True(ExtensionHelper.TrySplitVolumeSegmentLoose("z0删除2", out string loose2, out _));
+            Assert.Equal("z02", loose2);
+
+            // ③ 数字连着标记：紧档不许吐 z11，骨架档也不许认
+            Assert.False(ExtensionHelper.TrySplitVolumeSegment("z11111111110删除3", out _, out _));
+            Assert.False(ExtensionHelper.TrySplitVolumeSegmentLoose("z11111111110删除3", out _, out _));
+
+            // 对照：老口径 `001(1)` 不许被这次收紧弄坏
+            Assert.True(ExtensionHelper.TrySplitVolumeSegment("001(1)", out string mark4, out _));
+            Assert.Equal("001", mark4);
+        }
         [Fact]
         public void 计划_名字被改坏的第一卷_推出标准名()
         {
