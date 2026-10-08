@@ -234,22 +234,59 @@ namespace ArchiveFixer.Tests
             Assert.Contains("风景01.7z.001", warn, StringComparison.Ordinal);
         }
 
-        // ───────────────────────── ③ 魔数认不出 ⇒ 什么都不做 ─────────────────────────
+        // ───────── ③ 魔数认不出：㈠档（卷标记段被伪装）照旧归一，㈡档（本体后缀被伪装）什么都不做 ─────────
 
         [Fact]
-        public void 魔数认不出_一个字节都不动_也不写日志()
+        public void 魔数认不出_卷标记段被伪装_按规范标记归一()
         {
-            string directory = Path.Combine(_root, "unknown");
+            /*
+             * ⚠ **口径变更（2026-10-08，用户拍板"选项 1"，EEEE 真机 `111(3)\111(3)\111.z0删除2`）**：
+             * 旧口径 = "魔数认不出 ⇒ 一个字节都不动"；新口径 = **格式未知时仍允许㈠档**
+             * （卷标记段被伪装 —— 规范标记 `zNN`/`partN`/`NNN` 自己就说得清族，压根不需要魔数）。
+             *
+             * <para>冲突在哪 / 怎么判的：本条原名 `魔数认不出_一个字节都不动_也不写日志`，是旧口径的守门；
+             * 用户 2026-10-08 明确选"放宽"，按项目规矩「新指令永远覆盖旧指令」改写为钉新口径。</para>
+             *
+             * <para>为什么不冲突：它与**源层**那条路本来就是同一口径（
+             * <c>VolumeNameRepairTests.孤立一片的脏卷名_骨架算得出就要能归一</c> 早就钉住"孤立一片、无魔数
+             * 也要能出改名计划"）；本条只是把递归层对齐过去，⛔ 不是新开一门判据。</para>
+             *
+             * <para>来由与四件事汇报见 <c>docs/需求变更.md</c>「分族判据整改：剩余清单复核」。</para>
+             */
+            string directory = Path.Combine(_root, "unknown-mark");
             Directory.CreateDirectory(directory);
 
-            // 名字是"伪装的分卷名"，但内容认不出底层（⛔ 不按后缀猜一个格式出来）。
+            // 名字是"伪装的分卷名"，内容认不出底层 —— 但规范标记 `001` 自己就定了族（7z 数字族）。
             string mystery = Path.Combine(directory, "风景01.7z.001" + DisguiseTail);
             File.WriteAllBytes(mystery, Encoding.UTF8.GetBytes("这不是任何已知归档的头"));
 
             List<string> logs = RunRestore(new[] { mystery });
 
+            Assert.True(File.Exists(Path.Combine(directory, "风景01.7z.001")));
+            Assert.False(File.Exists(mystery));
+
+            string info = Assert.Single(logs);
+            Assert.StartsWith("INFO|", info, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 魔数认不出_本体后缀被伪装_一个字节都不动_也不写日志()
+        {
+            /*
+             * ㈡档（`风景01.zscip` ⇒ `风景01.zip`）"该扣哪个后缀"**完全依赖"认出来是什么格式"** ⇒
+             * ⛔ 照旧必须有魔数：格式未知还去猜后缀，就是 2026-09-29 真机把整组改成解不开的那条死路。
+             * 这也是本次放宽的**边界**（用户 2026-10-08 的"选项 1"只放宽㈠档）。
+             */
+            string directory = Path.Combine(_root, "unknown-body");
+            Directory.CreateDirectory(directory);
+
+            string mystery = Path.Combine(directory, "风景01.zscip");
+            File.WriteAllBytes(mystery, Encoding.UTF8.GetBytes("这不是任何已知归档的头"));
+
+            List<string> logs = RunRestore(new[] { mystery });
+
             Assert.True(File.Exists(mystery));
-            Assert.False(File.Exists(Path.Combine(directory, "风景01.7z.001")));
+            Assert.False(File.Exists(Path.Combine(directory, "风景01.zip")));
             Assert.Empty(logs);
         }
 

@@ -2428,7 +2428,9 @@ namespace ArchiveFixer.Extraction
         //      中途失败倒序改回原名）—— ⛔ 这里不再写第二套改名；
         //   ④ 判据只转调既有那两把尺子：**骨架化**（经唯一基名出口的 `DisguisedVolume` 档）与
         //      **归档体还原**（`ExtensionHelper.TryRecoverDisguisedArchiveBody`），⛔ 不新造第三把；
-        //   ⑤ 认出底层**只认魔数**（`VolumeContentInference.SniffFormat`），认不出 ⇒ 什么都不做。
+        //   ⑤ 认出底层**只认魔数**（`VolumeContentInference.SniffFormat`）。⚠ 2026-10-08 放宽一处（用户拍板）：
+        //      **格式未知时仍允许㈠档**（卷标记段被伪装 —— 规范标记 `zNN`/`partN`/`NNN` 自己说得清族）；
+        //      ㈡档（本体后缀被伪装）照旧必须有魔数。两档都判不出 ⇒ 什么都不做。
 
         /// <summary>
         /// 递归层内的「还原」：把这一层里内层包副本的**伪装后缀换成规范形态**（替换，⛔ 不是追加；
@@ -2472,13 +2474,16 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                // ① 认出底层（魔数；续卷退到同组第 1 卷那一份）
+                /*
+                 * ① 认出底层（魔数；续卷退到同组第 1 卷那一份）。
+                 *
+                 * ⚠ 2026-10-08 放宽（用户拍板"选项 1"，EEEE 真机 `111(3)\111(3)\111.z0删除2`）：
+                 * **格式未知不再当场退出** —— 改由 `TryBuildRestoredName` 逐档判：
+                 * ㈠「卷标记段被伪装」那一档只要规范标记自己说得清族（`zNN`/`partN`/`NNN`）就放行；
+                 * ㈡「本体后缀被伪装」那一档照旧必须有魔数（否则就是按后缀猜格式，2026-09-29 真机那条死路）。
+                 * 判不出来 ⇒ `items.Count == 0` ⇒ 什么都不做（兜底仍在"什么都不做"那一档）。
+                 */
                 VolumeContentFormat format = ResolveRestoreFormat(members);
-
-                if (format == VolumeContentFormat.Unknown)
-                {
-                    continue;
-                }
 
                 /*
                  * ①b ⛔ **「末尾那段本身脏」那一档必须先过"整组自洽"**（用户 2026-10-04 拍板）：
@@ -2659,7 +2664,11 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>
         /// 认出这一组的底层：**只认魔数**。第 1 卷那一份的魔数优先（7z / 跨盘 zip 只有它带魔数）；
-        /// 一个魔数都认不出 ⇒ <see cref="VolumeContentFormat.Unknown"/> ⇒ 调用方什么都不做。
+        /// 一个魔数都认不出 ⇒ <see cref="VolumeContentFormat.Unknown"/>。
+        ///
+        /// <para>⚠ 2026-10-08 起 <c>Unknown</c> **不再等于"整组什么都不做"**：调用方还会走
+        /// <see cref="TryBuildRestoredName"/> 的㈠档（卷标记段被伪装，规范标记自带族）；
+        /// ㈡档（本体后缀被伪装）仍然必须有魔数。</para>
         /// </summary>
         private static VolumeContentFormat ResolveRestoreFormat(IReadOnlyList<string> members)
         {
@@ -2710,10 +2719,23 @@ namespace ArchiveFixer.Extraction
                     out string segment) &&
                 baseName.Length > 0 &&
                 segment.Length > 0 &&
-                IsSegmentFamilyOfFormat(segment, format))
+                (format == VolumeContentFormat.Unknown
+                    ? IsSegmentFamilySelfDetermined(segment)
+                    : IsSegmentFamilyOfFormat(segment, format)))
             {
                 canonical = baseName + "." + segment;
                 return true;
+            }
+
+            /*
+             * ⛔ ㈡ 档（**本体后缀**被伪装，`222.zscip` ⇒ `222.zip`）**必须有魔数**：
+             * "该扣哪个后缀"完全依赖"认出来是什么格式"（下一句就问 `ExtensionFor(format)`），
+             * 格式未知时猜一个后缀出来正是 2026-09-29 真机把整组改成解不开的那条路。
+             * ⇒ 用户 2026-10-08 拍板的放宽**只放宽㈠档**，这一档一个字都不动。
+             */
+            if (format == VolumeContentFormat.Unknown)
+            {
+                return false;
             }
 
             string extension = VolumeContentInference.ExtensionFor(format);
@@ -2756,6 +2778,24 @@ namespace ArchiveFixer.Extraction
 
             return false;
         }
+
+        /// <summary>
+        /// 规范卷段**自己就说得清族**（⛔ 不需要魔数）：`partN` / <c>.rar</c> 结尾 ⇒ RAR、
+        /// <c>zNN</c> ⇒ 跨盘 ZIP、三位数字 ⇒ 7z —— 三档按**形状互斥**，所以"能唯一归类"就等于"族定了"。
+        ///
+        /// <para>用户 2026-10-08 拍板（EEEE 真机）：7z 续卷是裸切字节流、**本来就没有魔数**，
+        /// 首卷又不在这一层 ⇒ 整组嗅不出格式，旧口径于是"一个字节都不动"，
+        /// <c>111.z0删除2</c> 永远是脏名。可它的规范标记 <c>z02</c> 自己就写着"我是跨盘 ZIP 的第 2 片"
+        /// —— 这一档不靠魔数也站得住，所以格式未知时**只放行㈠档**（改名目标名 = 基名 + 规范标记，
+        /// 基名一个字不动、绝不覆盖、全成或全不成照旧）。</para>
+        ///
+        /// <para>⚠ 与源层那条路**同一口径**：<c>VolumeNameRepairTests.孤立一片的脏卷名_骨架算得出就要能归一</c>
+        /// 早就钉住"孤立一片、无魔数也要能出改名计划"；这里只是把递归层对齐过去（⛔ 不是新开一门判据）。</para>
+        /// </summary>
+        private static bool IsSegmentFamilySelfDetermined(string segment) =>
+            IsSegmentFamilyOfFormat(segment, VolumeContentFormat.Rar) ||
+            IsSegmentFamilyOfFormat(segment, VolumeContentFormat.Zip) ||
+            IsSegmentFamilyOfFormat(segment, VolumeContentFormat.SevenZip);
 
         /// <summary>
         /// 全成或全不成的两道闸门：① 目标名一个都不许被占（⛔ 绝不覆盖）；
