@@ -148,3 +148,5 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 - 用户拍板的五条 CCCC 解压链口径里，**第 4 条「去掉暗链当出口」仍未完成**：源片就地改名会打断管线（四次试做失败，已排除任务账路径/借片账键/收卷判据/源文件快照四处），需要一次真机复跑日志或授权加临时排障日志定位。
 - 其余四条（续卷改名 / 落点逐层叠 / 其余物逐层处理 / 守门用例与基线）已落地，但**均未在真机上复跑验证**（真机样本只读，只能由用户重跑）。
+- **EEEE ②（批末那两行的显示 + 链尾 `toRun`）**：①页行快照（`ViewModels/ExtractionCoordinator.cs` 的 verbose 快照）早于链尾补判（`OneClickCoordinator.cs` 的 `FinalizeDeferredVolumeDeficits`）；真正要动的是链尾把 `RecheckDeferredVolumeDeficits(finalPass: true)` 返回的 `toRun` **丢掉、只打一行日志**（`:11013-11023`），而那几单从没跑过 ⇒ 会停在「等待解压」+ `Pending`。修法 = 链尾给它们一个落定结论（跟班口径或 `MarkStoppedBeforeExtract`）——**属于放宽"批中间不落结论"这条判据，落之前要用户点头**；另需确认用户界面上看到的那一格到底是快照时刻还是链尾（现有证据只有导出的日志）。
+- **EEEE ③（工作区根锚点）**：`ApplyBatchWorkspaceRoot` 排在批首改名归一与挂 `GroupProducerEntryResolver` **之前**（与它自己的注释相反）⇒ 产出链预判失效、落点退回公式占位值。⛔ **不是"挪一行"**：`volumeProbeWorkRoot = _pathService.WorkDirectory` 正是它设的，直接挪会让批首改名的硬链接试开落到启动时的工作区 ⇒ 要先把 `ApplyBatchWorkspaceRoot` 拆成"定工作区根"与"算落点"两段。另外"批首那一刻 `task.IsVolumeGroup` 为什么还是 false"**未定位**（需真机复跑日志或授权加临时排障日志）。
