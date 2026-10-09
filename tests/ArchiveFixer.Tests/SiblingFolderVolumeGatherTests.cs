@@ -1571,7 +1571,7 @@ namespace ArchiveFixer.Tests
             var rename = new RenameCoordinator(vm, scan, new RenameService(), new ConfirmingDialogService());
             var oneClick = new OneClickCoordinator(vm, scan, rename, coordinator, new ConfirmingDialogService());
 
-            return new Harness(vm, coordinator, oneClick, logService, outputRoot);
+            return new Harness(vm, coordinator, oneClick, logService, outputRoot, pathService);
         }
 
         private void RequireSevenZip()
@@ -1683,16 +1683,21 @@ namespace ArchiveFixer.Tests
                 ExtractionCoordinator coordinator,
                 OneClickCoordinator oneClick,
                 LogService log,
-                string outputRoot)
+                string outputRoot,
+                PathService pathService)
             {
                 Vm = vm;
                 Coordinator = coordinator;
                 _oneClick = oneClick;
                 Log = log;
                 OutputRoot = outputRoot;
+                PathService = pathService;
             }
 
             public MainViewModel Vm { get; }
+
+            /// <summary>路径服务（批末工作区根就记在它的 <c>WorkDirectory</c> 上）。</summary>
+            public PathService PathService { get; }
 
             public ExtractionCoordinator Coordinator { get; }
 
