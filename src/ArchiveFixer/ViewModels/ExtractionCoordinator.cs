@@ -8927,6 +8927,39 @@ namespace ArchiveFixer.ViewModels
                 bool moveIntoGroup = ShouldMovePieceIntoGroup(piecePath, ownerStage);
 
                 /*
+                 * ⚠ 2026-10-09 **只读取证的临时排障行**（用户在 `AGENTS.md` 待确认里点的名：
+                 * 「去掉暗链当出口」四次试做都打断管线、**第五处引用仍未找到**，
+                 * 需要一次真机复跑日志或授权加临时排障日志定位）。
+                 *
+                 * 它**不改任何判据**：只在「详细日志（排查用）」打开时多写一行 WARN
+                 * （默认关 ⇒ 默认档一个字节都不多写，与 `AppendTaskRowSnapshot` 同一条做法）。
+                 *
+                 * 要回答的那个问题（只读取证的推断，**未验证**）：四次试做把"建链接"换成了
+                 * `TryMovePieceIntoGroup`，而它的 target 是**这一组的落点层**、**不是片自己所在那一层**
+                 * ⇒ 用户的源文件被**搬离他自己的目录**，而用例期望的是"同目录内改名"。
+                 * ⇒ 判据就是这一行里的 `同目录=`：**False ⇒ 推断成立**（改法应该是同目录内
+                 * `File.Move(piecePath, Path.Combine(Path.GetDirectoryName(piecePath), canonical))`）；
+                 * 若真机复跑里 `同目录=True` 却仍然打断管线，再查次选怀疑对象
+                 * （`RecursiveExtractor.RootSourceCandidates` 那个每趟只算一次的惰性池、
+                 * `ArchiveTask.OriginalPath` 冻结的导入路径、`IsBorrowedPieceTask` 缺 FileIdentity 兜底）。
+                 *
+                 * ⛔ 这一行用完就删（第五处定案之后）；⛔ 它绝不是判据。
+                 */
+                if (Settings.VerboseLog)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"收片排障：piece={SafePathHelper.GetFullPathSafe(piecePath)}"
+                        + $" ｜ pieceDir={Path.GetDirectoryName(piecePath)}"
+                        + $" ｜ targetDir={targetDir}"
+                        + $" ｜ target={target}"
+                        + $" ｜ 同目录={string.Equals(Path.GetDirectoryName(piecePath), targetDir, StringComparison.OrdinalIgnoreCase)}"
+                        + $" ｜ moveIntoGroup={moveIntoGroup}"
+                        + $" ｜ fromProcessFolder={fromProcessFolder}"
+                        + $" ｜ 旧名还在={File.Exists(piecePath)}");
+                }
+
+                /*
                  * ===== 用户源目录里的那一片：⛔ **仍然只硬链接**（四次试做都撞在同一处，如实记账）=====
                  *
                  * 用户 2026-10-06 拍板：「**去掉暗链当出口**，解压用盘上标准名的文件，临时名只许建在工作区」。
