@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
@@ -255,6 +256,70 @@ namespace ArchiveFixer.Tests
             Assert.Equal(1, tally.Skipped);
             Assert.Equal(0, tally.Failed);
             Assert.Equal(0, tally.Untouched);
+        }
+
+        /// <summary>
+        /// **这一层被内层包自己那个文件占着 ⇒ 定稿⛔ 不许再套那一层**（2026-10-09 补的守门用例）。
+        ///
+        /// <para><b>缺陷</b>：包名被改坏、剥不出后缀时（`user.jp删除g`）包基名就等于文件名本身 ⇒
+        /// `<落点>\user.jp删除g` 既是那个文件、又要当这一层的目录。**落点侧早就挡住了**
+        /// （`OneClickCoordinator.ResolveContinuationOutputDirectory` 里那一句
+        /// `IsOwnLayerOccupiedByPackageFile`），**定稿侧一次都没调** ⇒ 两侧判据分家 ⇒
+        /// 定稿把每条内容物都往 `<落点>\user.jp删除g\inner.7z.001` 搬 ⇒ `EnsureDirectoryExists`
+        /// 撞同名文件必然失败 ⇒ 整单报「定稿搬运失败 ……（无法创建目标目录）」
+        /// （真机排障原文见 `InnerLayerContinuationTests.续解_下一层名字和文件头都是假的`）。</para>
+        ///
+        /// <para><b>红检</b>：撤掉 `PlanFinalLayoutForTask` 里 <c>|| ownLayerOccupied</c> 那一项
+        /// ⇒ 计划里会出现 `<落点>\user.jp删除g\inner.7z.001` 这种"父路径是个文件"的搬运目标 ⇒ 本条变红。</para>
+        /// </summary>
+        [Fact]
+        public void 定稿_这一层被内层包自己那个文件占着_不许再套那一层()
+        {
+            string stage = Path.Combine(_root, "stage-occupied");
+
+            Directory.CreateDirectory(stage);
+
+            /*
+             * ⚠ 暂存目录里**必须有两个以上文件**：只要一个文件，定稿走的是「判定表 1：终端是单个文件，
+             * 直接放进目标目录」⇒ **根本不会套包名那一层** ⇒ 这条用例就测不到该测的东西
+             * （本轮实测踩到过：单个文件时撤掉修复也照样绿）。
+             * ⛔ 也不要用分卷名：`engineOutput` 为 null 时它们必然触发分卷组完整性闸门 ⇒ 计划作废、测不到布局。
+             */
+            File.WriteAllBytes(Path.Combine(stage, "a.mp4"), new byte[4096]);
+            File.WriteAllBytes(Path.Combine(stage, "b.mp4"), new byte[4096]);
+
+            string dest = Path.Combine(_root, "out-occupied");
+
+            Directory.CreateDirectory(dest);
+
+            /*
+             * 内层包自己躺在落点那一层里，而且名字剥不出已知后缀
+             * （`ResolveArchiveBaseName` 对这种名字给的就是文件名本身）。
+             */
+            string innerPackage = Path.Combine(dest, "user.jp删除g");
+
+            File.WriteAllText(innerPackage, "x");
+
+            var task = new ArchiveTask(innerPackage, 1);
+
+            ExtractionCoordinator coordinator = CreateCoordinator();
+
+            ExtractionCoordinator.FinalLayoutPlan plan = coordinator.PlanFinalLayoutForTask(
+                task,
+                stage,
+                dest,
+                sharedOutputRoot: false,
+                TerminalLayoutMode.KeepLastFolder);
+
+            Assert.False(plan.Failed, plan.FailureReason);
+            Assert.NotEmpty(plan.Moves);
+
+            // ⛔ 落点里不许出现 `<落点>\user.jp删除g\…` —— 那是一条"父路径是个文件"的路径，物理上建不出来。
+            string occupiedPrefix = innerPackage + Path.DirectorySeparatorChar;
+
+            Assert.DoesNotContain(
+                plan.Moves,
+                move => move.To.StartsWith(occupiedPrefix, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>无界面宿主里默认"没人点过 = 不确认"；这里注入"用户点了确定"（与真机那一档一致）。</summary>

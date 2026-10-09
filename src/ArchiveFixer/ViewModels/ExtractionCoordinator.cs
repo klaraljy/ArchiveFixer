@@ -7806,7 +7806,7 @@ namespace ArchiveFixer.ViewModels
         /// 迟早会漂移成"预检按平铺算、定稿按套层算"（预检说有冲突、实际没有，或者反过来）。
         /// </para>
         /// </summary>
-        private FinalLayoutPlan PlanFinalLayoutForTask(
+        internal FinalLayoutPlan PlanFinalLayoutForTask(
             ArchiveTask task,
             string stageDirectory,
             string destinationDirectory,
@@ -7856,6 +7856,27 @@ namespace ArchiveFixer.ViewModels
             bool processArtifactName = continuation
                 && FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(task.CurrentPath));
 
+            /*
+             * ⚠ 2026-10-09 第 ④ 种成因（**定稿侧与落点侧判据分家**，缺陷取证定位到行）：
+             * 这一层要建的位置**被内层包自己那个文件占着**（Windows 同一条路径上不许既有文件又有目录）。
+             *
+             * 现场：包名被改坏、剥不出后缀（`user.jp删除g`）⇒ 包基名就等于文件名本身 ⇒
+             * `…\out\polyglot\user.jp删除g` 既是那个文件、又要当这一层的目录。
+             * **落点侧早就挡住了**（`OneClickCoordinator.ResolveContinuationOutputDirectory` 里那一句
+             * `IsOwnLayerOccupiedByPackageFile` ⇒ 这一层不另建、内容落进父层），
+             * **定稿侧一次都没调** ⇒ 两侧判据分家 ⇒ 定稿把每条内容物都往
+             * `…\user.jp删除g\inner.7z.001` 搬 ⇒ `EnsureDirectoryExists` 撞同名文件必然失败
+             * ⇒ 整单报「定稿搬运失败 ……（无法创建目标目录）」（真机形状见
+             * `InnerLayerContinuationTests.续解_下一层名字和文件头都是假的` 那次排障原文）。
+             *
+             * ⛔ 判据只转调**既有那一个出口**（`OneClickCoordinator.IsOwnLayerOccupiedByPackageFile`），
+             * ⛔ 不在这里另写一份"名字被占"的判断。物理上唯一可行的落法就是这一层不另建。
+             */
+            bool ownLayerOccupied = OneClickCoordinator.IsOwnLayerOccupiedByPackageFile(
+                destinationDirectory,
+                archiveBaseName,
+                task.CurrentPath);
+
             return PlanFinalLayout(
                 stageDirectory,
                 destinationDirectory,
@@ -7863,7 +7884,10 @@ namespace ArchiveFixer.ViewModels
                 archiveBaseName,
                 terminalLayout,
                 specialExtraction,
-                suppressPackageFolderLayer: _extractIntoSourceFolderThisRun || layerAlreadyInPath || processArtifactName,
+                suppressPackageFolderLayer: _extractIntoSourceFolderThisRun
+                    || layerAlreadyInPath
+                    || processArtifactName
+                    || ownLayerOccupied,
                 innermostPackageBaseName: innermostPackageBaseName,
                 /*
                  * ⛔ 引擎自己写出来的东西**不是过程物**（用户 2026-09-27 真机 222 那一单）。
