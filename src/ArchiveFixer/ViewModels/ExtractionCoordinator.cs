@@ -4683,8 +4683,27 @@ namespace ArchiveFixer.ViewModels
                  * 指向的那一层产物目录）。在 ⇒ 它是内容物：既不是过程物，**也不进分卷组那两道闸门**
                  * —— 那两道问的是"这一堆是不是待续解的分卷"，引擎自己刚写出来的东西根本不是。
                  */
-                bool isProcessArtifact = IsProcessArtifactFile(file)
-                    && !IsEngineOutputFile(file, stageRoot, engineOutput)
+                /*
+                 * ⚠ 2026-10-09 真机 `EEEE`（14:11 那一趟）**实测**：原来的三条判据
+                 * （本层产物清单① / 每一层的产物目录② / 每一层解压前的逐条清单③）在
+                 * **"链中途停在缺卷"**这一档**全都不成立**（排障行原文：
+                 * `在产物清单里=False ｜ 在某层清单里=False ｜ 最终算过程物=True`）：
+                 * ① `FinalOutputPath` 指向停住的那一层、文件却在 stage；② 层目录里那份已被发布**搬走**；
+                 * ③ 那一层**列不出目录**（缺分卷 ⇒ 清单失败，真机行 217/219「没能列出归档内容」）
+                 * ⇒ `ManifestEntries` **空表**。
+                 * ⇒ 于是 `111.rar` 自己解出来的内容物 `111.zip` 又一次进了其余物 ⇒ 用户看到的"两个 `111.zip`"。
+                 *
+                 * ⇒ 判据不再"逐层找证据"，改问一个**当场成立**的事实：**这一趟到底跑过递归没有**。
+                 * 跑过（`engineOutput != null`）⇒ 这个暂存区里每一个字节都出自**我们这条链**
+                 * （本层引擎写出的 + 上一层产物发布进来的），而链内中间物早由"逐层回收"删掉了
+                 * ⇒ **一律是内容物、要落地**（用户原话：「他就是最初 111.rar 经过两轮解压产出的内容物而已，
+                 * 为什么会进其余物里面」）。
+                 * ⛔ **没跑过递归**（`engineOutput == null`：预检那一档，以及 `PlanFinalLayout` 的直调用例）
+                 * ⇒ 来路**判不出** ⇒ 退回原来的保守判据 + 下面那两道分卷组完整性闸门
+                 * （`VolumeGroupDeletionSafetyTests` 那一族钉的就是这条兜底 —— 实测 136 条全绿）。
+                 */
+                bool isProcessArtifact = engineOutput == null
+                    && IsProcessArtifactFile(file)
                     /*
                      * ⛔ 命中「内容物保留关键词」的**不是过程物**（用户 2026-10-04 的新功能
                      * 「内容物压缩文件不解压」）：它是用户点名"碰都不碰"的内容物 ⇒
@@ -6009,6 +6028,61 @@ namespace ArchiveFixer.ViewModels
                 {
                     // 计划里的一条可能是**文件**，也可能是**整个目录**（判定表 2/3/4 会整棵搬）。
                     bool isDirectory = Directory.Exists(move.From) && !File.Exists(move.From);
+
+                    /*
+                     * ⚠ 2026-10-09 真机 `EEEE`（用户最在意的那条「为什么有两个 `111.zip`」）：
+                     * **目标位上已经是同一份物理文件 ⇒ 不必再搬**（⛔ 不删、⛔ 不改名，直接跳过这一条）。
+                     *
+                     * 现场（这一条**两个改动缺一不可**：上面把"本链产出"判成内容物之后，
+                     * 它就会来定稿落地，于是撞上这个形状）：接片给"**本单自己暂存目录**"里那一份
+                     * **建的是硬链接**（`ShouldMovePieceIntoGroup` 那一档只建链接、绝不搬走，
+                     * 真机行 146 的 `moveIntoGroup=False` 就是它）⇒ `111\111\111.zip` 与暂存里的
+                     * `111.zip` **是同一个 FileId**。定稿再搬一次，只会在同一个目录里多出一个
+                     * `111(1).zip` —— 用户看到的"两个"就从"其余物里一个"变成"`(1)` 一个，症状根本不消失。
+                     *
+                     * 判据只读事实（唯一出口 <see cref="FileIdentity.IsSamePhysicalFile"/>：卷序列号 + 文件索引），
+                     * ⛔ 不比名字、⛔ 不看大小。**一个字节都不动**：数据本来就已经在目标位上（同一条记录）。
+                     */
+                    if (!isDirectory && FileIdentity.IsSamePhysicalFile(move.From, move.To))
+                    {
+                        logEntries.Add((
+                            "INFO",
+                            $"{task.LogName}：{Path.GetFileName(move.To)} 已经在目标位上、而且是「同一份文件」"
+                            + "（接片时建的硬链接）—— 不必再搬一次，也不留多余的名字。"));
+
+                        continue;
+                    }
+
+                    /*
+                     * ⚠ 2026-10-09 真机 `EEEE` 的另一半（同一个"两个 `111.zip`"的另一形状）：
+                     * **这一片已经由接片搬进"这一组的落点层"了 ⇒ 产出方自己落点里这一份是多余名**。
+                     *
+                     * 与上面那一条的区别（真机行 161 实测）：那一档 `moveIntoGroup=True` ⇒ 接片对
+                     * 层产物用的是**移动**（不是建链接），所以两边**不是同一个 FileId**，
+                     * `IsSamePhysicalFile` 判不出来 —— 只能按"组层是不是已经有这个名字"判。
+                     *
+                     * 判据两条事实，缺一不可：① 这一份是**分卷片**（`IsVolumePartFile`）；
+                     * ② 这一组的**落点层**（唯一出口 `ResolveBatchGroupDirectory`）里已经有同名的一份。
+                     * ⇒ 那才是它的正位（整组在那一层拼、在那一层解），产出方落点里这一份就是
+                     * 用户点名过的"没人认领的名字"（`SiblingFolderVolumeGatherTests` ③ 那条用例钉的就是它）。
+                     * ⛔ 数据一个字节都不丢：正位那一份已经在了。
+                     */
+                    if (!isDirectory && IsVolumePartFile(move.From))
+                    {
+                        string pieceName = Path.GetFileName(move.From);
+                        string groupLayer = ResolveBatchGroupDirectory(
+                            FileNameHelper.GetArchiveBaseName(pieceName));
+
+                        if (groupLayer.Length > 0 && File.Exists(Path.Combine(groupLayer, pieceName)))
+                        {
+                            logEntries.Add((
+                                "INFO",
+                                $"{task.LogName}：{pieceName} 已经由接片搬进「{Path.GetFileName(groupLayer)}」"
+                                + "这一组的落点层了 —— 产出方这里这一份是多余的名字，不落地（一个字节都不丢）。"));
+
+                            continue;
+                        }
+                    }
 
                     if (!SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(move.To)))
                     {
