@@ -129,6 +129,78 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **用户在冲突框里选「跳过」⇒ 这一单是"跳过"，⛔ 不许被算成失败**
+        /// （2026-10-09 补的守门用例；缺陷出处 = 那个分支原来写了 `EndTime` 却没写机器终态）。
+        ///
+        /// <para><b>老写法的病</b>：这一支把状态写成「已跳过」，但**没写 `Outcome`** ⇒
+        /// 终态收口 `FinalizeOutcomeIfPending` 的三条判据（`Outcome == Pending` + `EndTime` 有值 +
+        /// 校验没通过）**全中**，而它的 else 支按"不是缺卷 ⇒ `Failed`"落结论
+        /// ⇒ 用户自己点的那一下「跳过」被算成**失败**、批末色带变**红**
+        /// （用户点名过「为什么跳过要标红，这是非常错误的行为」）。</para>
+        ///
+        /// <para><b>红检</b>：撤掉 `ExtractSingleTaskAsync` 里 `ConflictChoice.Skip` 那一支新加的
+        /// <c>task.Outcome = TaskOutcome.Skipped;</c> ⇒ 本条的终态与分桶断言当场变红（会落成 `Failed`）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 冲突框里选跳过_任务算跳过不许被算成失败()
+        {
+            var dialog = new RecordingDialogService
+            {
+                OnConflictAsync = (_, _) => Task.FromResult<ConflictDecision?>(ConflictDecision.Once(ConflictChoice.Skip))
+            };
+
+            Harness harness = CreateHarness(dialog, settings =>
+            {
+                settings.ConflictAction = ConflictActions.Ask;
+                settings.ExtractToOriginalDirectory = false;
+                settings.CustomOutputDirectory = Path.Combine(_root, "out-skip");
+                settings.KeepArchiveNameFolder = true;
+            });
+
+            ArchiveTask task = AddTask(harness, CreateSourceFile("skipme.7z"));
+
+            string requested = harness.PathService.BuildOutputPath(task, DefaultOptions(harness));
+
+            // 现场：目标目录已存在且非空（重跑一次、上次失败留下的目录都会这样）。
+            Directory.CreateDirectory(requested);
+            File.WriteAllText(Path.Combine(requested, "上次留下的旧文件.txt"), "old");
+
+            bool extracted = false;
+
+            harness.Engine.OnExtractAsync = request => Task.Run(() =>
+            {
+                extracted = true;
+                WriteContent(request.OutputPath!, "content.txt", "new");
+                return Succeeded();
+            });
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult("content.txt"));
+
+            await harness.Coordinator.StartExtractAsync().WaitAsync(TimeSpan.FromSeconds(120));
+
+            // ① 状态如实说"跳过"。
+            Assert.Equal(StatusText.Skipped, task.Status);
+
+            /*
+             * ② ⛔ 机器终态必须是"跳过"，⛔ 不是 `Failed`
+             *    （"只补 EndTime 不写 Outcome"那条错路会落成 `Failed`）。
+             */
+            Assert.Equal(TaskOutcome.Skipped, task.Outcome);
+            Assert.False(TaskOutcomeClassifier.IsFailureStatus(task.Status), "用户自己选的跳过不许进失败档");
+
+            // ③ 批末分桶：跳过 1 / 失败 0（色带据此是"橙"而不是"红"）。
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(new[] { task });
+
+            Assert.Equal(1, tally.Skipped);
+            Assert.Equal(0, tally.Failed);
+
+            // ④ 安全面：选了跳过 ⇒ 引擎一次都没跑、旧目录里的东西一个字节没动。
+            Assert.False(extracted, "选了跳过就不该调引擎");
+            Assert.True(File.Exists(Path.Combine(requested, "上次留下的旧文件.txt")), "旧目录里的文件不许被清掉");
+            Assert.Equal("old", File.ReadAllText(Path.Combine(requested, "上次留下的旧文件.txt")));
+        }
+
+        /// <summary>
         /// **一键处理档 + 设置里选了「询问」**：批中间照样一次都不许问 —— 用户 2026-09-27 两次拍板的红线
         /// （"一键处理期间零弹窗，唯一例外是批末汇总"）。
         ///
