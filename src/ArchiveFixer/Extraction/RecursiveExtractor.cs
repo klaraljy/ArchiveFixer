@@ -2160,14 +2160,31 @@ namespace ArchiveFixer.Extraction
 
                 if (!looksDoubleFaced)
                 {
+                    /*
+                     * ⚠ 2026-10-09（用户点名："第一个红字…为啥显示解压失败"）：**引擎报缺卷时不写 ERROR、
+                     * 也不叫"解压失败"** —— 缺卷不是失败（「连完整的都没有，这就不是程序的错误」），
+                     * 而且"在最后一步之前碰到分卷缺失的就先跳过" ⇒ 这一行改 WARN + 先说"先跳过"。
+                     * 判据读**结构化错误码**（`DetectedErrorType`），⛔ 不比中文文案。
+                     */
+                    bool missingVolume = string.Equals(
+                        result.DetectedErrorType,
+                        EngineErrorTypes.VolumeMissing,
+                        StringComparison.Ordinal);
+
                     // 其余（引擎不可用、路径问题、输出冲突…）换密码也解决不了，直接停。
                     Log(
-                        "ERROR",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.CandidateStoppedByEngineErrorLogFormat,
-                            layerLabel,
-                            result.Message));
+                        missingVolume ? "WARN" : "ERROR",
+                        missingVolume
+                            ? string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.CandidateMissingVolumeLogFormat,
+                                layerLabel,
+                                result.Message)
+                            : string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.CandidateStoppedByEngineErrorLogFormat,
+                                layerLabel,
+                                result.Message));
                 }
 
                 /*

@@ -1059,6 +1059,16 @@ namespace ArchiveFixer.ViewModels
             /// </summary>
             public bool ZeroByteProductsOnly { get; init; }
 
+            /// <summary>
+            /// 这一层的计划作废，是因为**有一组分卷证明不了完整**（缺卷 / 疑缺卷 / 名字不标准）。
+            ///
+            /// <para>⚠ 2026-10-09：这一档**不是"失败"** —— 用户口径「连完整的都没有，这就不是程序的错误」、
+            /// 「在最后一步之前碰到分卷缺失的就先跳过」⇒ 调用方据此把日志落成 **WARN + 先跳过**
+            /// （原来一律写 ERROR「定稿布局规划失败」，用户点名那是红字误报）。
+            /// ⛔ "什么都不动"这条判据一个字没放松：它照旧不定稿、不搬、不删。</para>
+            /// </summary>
+            public bool BlockedByIncompleteVolumeGroup { get; init; }
+
             public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
         }
 
@@ -4860,6 +4870,7 @@ namespace ArchiveFixer.ViewModels
                 return new FinalLayoutPlan
                 {
                     Failed = true,
+                    BlockedByIncompleteVolumeGroup = true,
                     FailureReason = $"这一层里有分卷组不完整：{detail}。已按「什么都不动」处理 —— "
                         + "产物与源包一个字节都不搬、不删（补齐全套分卷后再来）",
                     Summary = "分卷组不完整，未定稿"
@@ -5810,9 +5821,19 @@ namespace ArchiveFixer.ViewModels
 
             if (plan.Failed)
             {
-                string planFailure = "定稿布局规划失败：" + plan.FailureReason;
+                /*
+                 * ⚠ 2026-10-09（用户点名第二条红字）：**"分卷组不完整"这一档不是失败、也不写 ERROR**。
+                 * 用户口径：「连完整的都没有，这就不是程序的错误」＋「在最后一步之前碰到分卷缺失的就先跳过」。
+                 * 判据读**结构化标志**（`plan.BlockedByIncompleteVolumeGroup`），⛔ 不比中文文案；
+                 * ⛔ "什么都不动"一个字没放松（照旧不定稿、不搬、不删）。
+                 */
+                string planFailure = plan.BlockedByIncompleteVolumeGroup
+                    ? "这一层里有分卷组还没凑齐（先跳过，等最后那一轮再判）：" + plan.FailureReason
+                    : "定稿布局规划失败：" + plan.FailureReason;
 
-                logEntries.Add(("ERROR", $"{task.LogName}：{planFailure}"));
+                logEntries.Add((
+                    plan.BlockedByIncompleteVolumeGroup ? "WARN" : "ERROR",
+                    $"{task.LogName}：{planFailure}"));
 
                 return new StageCommitResult
                 {
