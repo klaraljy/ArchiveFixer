@@ -4821,6 +4821,25 @@ namespace ArchiveFixer.ViewModels
                     }
                 }
 
+                /*
+                 * ⚠ 2026-10-09 **临时排障（用户批准，取证完即删）**：定稿那一刻的关键值 ——
+                 * `engineOutput.FinalOutputPath`、`stageRoot`，以及每个"名字像归档 / 分卷"的文件的三连判定
+                 * （名字像不像 / 在不在产物清单里 / 命中保留词没有 / 最终算不算过程物）。
+                 * 只为定位真机「`111.zip`（上一层解出来的内容物）为什么被判成过程物进了其余物」这一处。
+                 * ⛔ 它不参与任何判据；打完这一轮就删掉。
+                 */
+                if (IsProcessArtifactFile(file))
+                {
+                    warnings.Add(
+                        $"[排障·过程物] {SafePathHelper.GetFullPathSafe(file)}"
+                        + " ｜ 名字像归档=True"
+                        + $" ｜ 在产物清单里={IsEngineOutputFile(file, stageRoot, engineOutput)}"
+                        + $" ｜ 命中保留词={keepRules.ShouldKeep(file)}"
+                        + $" ｜ 最终算过程物={isProcessArtifact}"
+                        + $" ｜ FinalOutputPath={engineOutput?.FinalOutputPath ?? "(null)"}"
+                        + $" ｜ stageRoot={SafePathHelper.GetFullPathSafe(stageRoot)}");
+                }
+
                 staged.Add(new StagedEntry
                 {
                     RelativePath = Path.GetRelativePath(stageRoot, file),
@@ -5312,8 +5331,44 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private static bool IsEngineOutputFile(string filePath, string stageRoot, RecursionResult? engineOutput)
         {
-            string outputRoot = engineOutput?.FinalOutputPath ?? string.Empty;
+            if (engineOutput == null)
+            {
+                return false;
+            }
 
+            // ① 这条链最后交出来的那一层（老口径，逐字保留）。
+            if (MatchesEngineOutputRoot(filePath, stageRoot, engineOutput.FinalOutputPath))
+            {
+                return true;
+            }
+
+            /*
+             * ② ⚠ 2026-10-09：**这条链每一层**的产物目录也算数（真机 EEEE 排障行实测）。
+             *
+             * 现场：`111.rar` 那条链**中途停在缺卷**（第 2 层什么都没产出）⇒ `FinalOutputPath` 指向
+             * 那最后一个空层目录 ⇒ 第 **1** 层解出来的 `111.zip` 按同名相对路径对不上 ⇒
+             * 被判成「过程物」收进其余物 —— 可它明明是本任务链产出的**内容物**
+             * （用户原话：「他就是最初 111.rar 经过两轮解压产出的内容物而已，为什么会进其余物里面」）。
+             * ⇒ 判据从"这一趟最后那一层"改成"**本任务链产出的东西**"。
+             * ⛔ 老口径那一条（①）保留：它覆盖"跑完了、FinalOutputPath = 入仓 stage"那一档。
+             */
+            foreach (RecursionLayerReport layer in engineOutput.Layers)
+            {
+                if (layer != null && MatchesEngineOutputRoot(filePath, stageRoot, layer.OutputPath))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 暂存里这个文件，是不是<paramref name="outputRoot"/>那一层产物目录里同一个相对路径的那一份
+        /// （判据 = 事实：两边都存在、路径逐字相等；⛔ 不比中文、⛔ 不看后缀）。
+        /// </summary>
+        private static bool MatchesEngineOutputRoot(string filePath, string stageRoot, string outputRoot)
+        {
             if (string.IsNullOrWhiteSpace(outputRoot) || !Directory.Exists(outputRoot))
             {
                 return false;
