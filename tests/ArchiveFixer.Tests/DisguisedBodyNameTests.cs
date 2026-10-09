@@ -374,6 +374,73 @@ namespace ArchiveFixer.Tests
             Assert.Empty(plan.ProcessArtifactSources);
         }
 
+        /// <summary>
+        /// **产物已经被发布搬走之后，靠"层目录里还剩什么"是判不出来路的 —— 必须读当场记下来的清单**
+        /// （真机 EEEE ② 的根因，2026-10-09 实证）。
+        ///
+        /// <para><b>现场</b>：`111.rar` 那条链第 1 层解出 `111.zip` + `111.z01`，第 2 层撞上缺卷停住。
+        /// 发布是「就地替换 + **移动**」⇒ 产物搬进暂存目录之后，**原来那一层目录里就没有它们了**
+        /// （排障行原文：`FinalOutputPath=…\layer-002\output ｜ 在产物清单里=False`）。
+        /// 老判据 <see cref="ExtractionCoordinator"/> 的 `MatchesEngineOutputRoot` 要的是"两边同一个相对
+        /// 路径都在盘上"，那个事实**已被发布本身抹掉** ⇒ 引擎刚解出来的内容物被判成"待续解的过程物"
+        /// 收进其余物（用户原话：「他就是最初 111.rar 经过两轮解压产出的内容物而已，为什么会进其余物里面」）。</para>
+        ///
+        /// <para>现在问 <see cref="RecursionLayerReport.ManifestEntries"/>（每层**解压前列目录那一次**的
+        /// 逐条清单，`PartialPublishPlanner.ToManifestEntries` 归一过）—— 它不受发布搬运影响。</para>
+        ///
+        /// <para><b>红检</b>：撤掉 `IsEngineOutputFile` 的第 ③ 条（`MatchesEngineManifestEntry` 那一趟）
+        /// ⇒ 这一组按"缺末片"被那道分卷组完整性闸门拦下 ⇒ `plan.Failed` 变真、本用例当场变红。
+        /// ⛔ 而"判不出来路"那一档的红线一个字节都没动：
+        /// <see cref="对照组_没有引擎产物清单时_那一堆照旧当待续解过程物_计划作废"/> 照旧钉着它。</para>
+        /// </summary>
+        [Fact]
+        public void 定稿_产物已被发布搬走_层清单照样能证明它是本链产出()
+        {
+            string stage = NewDirectory("stage-published-away");
+
+            WriteFile(stage, "111.z01", 4096);
+            WriteFile(stage, "111.z02", 4096);
+
+            /*
+             * 层目录**故意是空的**：发布把产物搬走之后，那一层就长这样。
+             * 唯一还剩"这一层产出过什么"的地方就是下面那份清单。
+             */
+            string emptiedLayer = NewDirectory("layer-001-output");
+
+            var recursion = new RecursionResult
+            {
+                StopReason = RecursionStopReason.MissingVolume,
+                Completed = false,
+                PartiallyCompleted = true,
+                FinalOutputPath = emptiedLayer,
+                Layers = new List<RecursionLayerReport>
+                {
+                    new RecursionLayerReport
+                    {
+                        Depth = 0,
+                        OutputPath = emptiedLayer,
+                        Success = true,
+                        ManifestEntries = new List<(string Path, long Size)>
+                        {
+                            ("111.z01", 4096),
+                            ("111.z02", 4096)
+                        }
+                    }
+                }
+            };
+
+            ExtractionCoordinator.FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+                stage,
+                Path.Combine(_root, "out-manifest"),
+                sharedOutputRoot: false,
+                "111.rar",
+                engineOutput: recursion);
+
+            Assert.False(plan.Failed, plan.FailureReason);
+            Assert.NotEmpty(plan.Moves);
+            Assert.Empty(plan.ProcessArtifactSources);
+        }
+
         // ================================================================ 辅助
 
         private static VolumeGroupResolution Resolve(string anchorPath) =>

@@ -4696,7 +4696,6 @@ namespace ArchiveFixer.ViewModels
                      */
                     && !keepRules.ShouldKeep(file);
 
-
                 /*
                  * ===== ⛔ 分卷组的完整性闸门（用户 2026-09-30 真机：25 GB 被当"其余物"永久删除）=====
                  *
@@ -4844,6 +4843,7 @@ namespace ArchiveFixer.ViewModels
                         $"[排障·过程物] {SafePathHelper.GetFullPathSafe(file)}"
                         + " ｜ 名字像归档=True"
                         + $" ｜ 在产物清单里={IsEngineOutputFile(file, stageRoot, engineOutput)}"
+                        + $" ｜ 在某层清单里={engineOutput?.Layers?.Any(layer => layer != null && MatchesEngineManifestEntry(file, stageRoot, layer.ManifestEntries)) == true}"
                         + $" ｜ 命中保留词={keepRules.ShouldKeep(file)}"
                         + $" ｜ 最终算过程物={isProcessArtifact}"
                         + $" ｜ FinalOutputPath={engineOutput?.FinalOutputPath ?? "(null)"}"
@@ -5371,7 +5371,91 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            /*
+             * ③ ⚠ 2026-10-09（EEEE ② 的真根因，上面 ①② 都盖不住）：**问这一层自己那份清单**。
+             *
+             * 为什么 ①② 会漏（排障行实测：`FinalOutputPath=…\layer-002\output`、
+             * `在产物清单里=False`，而那个文件就在暂存目录里）：**发布是"就地替换 + 移动"**
+             * （`ExtractionWorkspace.Publish`）—— 产物**搬走之后，原来那一层目录里就没有它了**，
+             * 于是 `MatchesEngineOutputRoot` 要的那句"两边同一个相对路径都在盘上"永远不成立。
+             * ⇒ 判据不能读"层目录现在还剩什么"（那个事实已被发布本身抹掉），只能读**当场记下来的账**。
+             *
+             * 记在哪：`RecursionLayerReport.ManifestEntries` —— 每层**解压前列目录那一次**的逐条清单
+             * （相对路径 + 解压后字节，`PartialPublishPlanner.ToManifestEntries` 归一过：`/` → `\`、
+             * 去掉开头 `./`），与暂存目录那边算相对路径的写法同源。它是"这一层的引擎写出来的东西"
+             * 的直接证据，而且**不受发布搬运影响**。
+             *
+             * ⛔ 判不出来路时（清单没有 / 引擎没报）**一个字都不改**：`engineOutput == null` 那几档
+             * 仍然一律 false ⇒ 退回老判据 + 分卷组完整性闸门（`VolumeGroupDeletionSafetyTests`
+             * 那一族钉的就是这条兜底，⛔ 不许放宽）。
+             */
+            foreach (RecursionLayerReport layer in engineOutput.Layers)
+            {
+                if (layer != null && MatchesEngineManifestEntry(filePath, stageRoot, layer.ManifestEntries))
+                {
+                    return true;
+                }
+            }
+
             return false;
+        }
+
+        /// <summary>
+        /// 暂存里这个文件，是不是<paramref name="manifestEntries"/>（某一层列目录的逐条清单）
+        /// 里那一条 —— 判据 = 两边**归一后的相对路径逐字相等**（事实；⛔ 不比中文、⛔ 不看后缀）。
+        ///
+        /// <para>存在的理由见 <see cref="IsEngineOutputFile"/> ③：发布是移动 ⇒ 层目录里那份没了，
+        /// 只有这份**当场记下来的清单**还能回答"这一层到底产出过这个路径没有"。</para>
+        /// </summary>
+        private static bool MatchesEngineManifestEntry(
+            string filePath,
+            string stageRoot,
+            IReadOnlyList<(string Path, long Size)> manifestEntries)
+        {
+            if (manifestEntries == null || manifestEntries.Count == 0)
+            {
+                return false;
+            }
+
+            if (!TryGetStageRelativePath(filePath, stageRoot, out string relative))
+            {
+                return false;
+            }
+
+            foreach ((string path, long _) in manifestEntries)
+            {
+                if (!string.IsNullOrWhiteSpace(path)
+                    && string.Equals(
+                        path.TrimStart('.', Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                        relative,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 暂存里这个文件相对暂存根的路径（<c>\</c> 分隔、不带前导分隔符）。
+        /// <c>false</c> = 它根本不在暂存根底下（⛔ 那种情形一律不认）。
+        /// </summary>
+        private static bool TryGetStageRelativePath(string filePath, string stageRoot, out string relative)
+        {
+            relative = string.Empty;
+
+            string full = SafePathHelper.GetFullPathSafe(filePath);
+            string root = SafePathHelper.GetFullPathSafe(stageRoot);
+
+            if (full.Length == 0 || root.Length == 0 || !full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            relative = full[root.Length..].TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            return relative.Length > 0;
         }
 
         /// <summary>
@@ -11126,7 +11210,7 @@ namespace ArchiveFixer.ViewModels
         /// ⇒ 两处一起改：守卫不再把在册的延迟任务算成"没轮到"（<see cref="IsDeferredVolumeDeficit"/>），
         /// 而且**用户没按停止**时这一步照跑（<c>internal</c> 就是给那条路用的）。</para>
         /// </summary>
-        internal void FinalizeDeferredVolumeDeficits()
+        internal IReadOnlyList<ArchiveTask> FinalizeDeferredVolumeDeficits()
         {
             /*
              * ⚠ 2026-10-08：**这一站才是"真缺卷"下结论的地方** ⇒ 先把进来时那份名单快照下来，
@@ -11147,13 +11231,38 @@ namespace ArchiveFixer.ViewModels
              * **接片的目标层与收尾的清理口径必须一致**（唯一出口仍是 `ResolveBatchGroupDirectory` +
              * `PublishUnresolvedPieceLandingCopies`）。撤回后该用例恢复绿。
              */
-            foreach (ArchiveTask task in RecheckDeferredVolumeDeficits(finalPass: true))
+            List<ArchiveTask> chainEndCompleted = RecheckDeferredVolumeDeficits(finalPass: true);
+
+            foreach (ArchiveTask task in chainEndCompleted)
             {
                 AppendLog(
                     "WARN",
                     string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.VolumeDeficitChainEndCompleteLogFormat,
+                        task.FileName));
+
+                /*
+                 * ⚠ 2026-10-09 **B1：链尾给它们一个落定结论**（原话：「链尾 toRun 落结论、Pending 收口」）。
+                 *
+                 * 改之前这里**只打一行日志**，那几单的机器终态一直停在 `Pending`、状态停在「等待解压」
+                 * ⇒ 批末汇总按终态把它们算进「未处理」，而它其实"这一批没轮到"（原因很具体：
+                 * 整组是在链尾这一趟才凑齐的，而这一批的轮次已经跑完了）。
+                 *
+                 * ⛔ **这不是"放宽批中间不落结论"那条判据**：判据管的是**批中间**，而走到这一行时
+                 * 整条链已经跑完 —— 就地落结论正是「分卷和其他未识别的东西统统跳过，到了最后再重新
+                 * 检验一步」那条口径的最后一格。
+                 *
+                 * ⛔ 结论**不许写成缺卷 / 跟班卷**：这一组的完整性刚在这里被判成"齐了"，
+                 * 写"缺卷"是假话；内容也确实没有任何一单解过（解过的话上面
+                 * `TryResolveConsumedByAnotherTask` 早就把它按跟班卷收场了）。⇒ 如实写
+                 * 「这一批没轮到它」，并且**明确告诉用户再点一次就会解**。
+                 */
+                task.Outcome = TaskOutcome.Skipped;
+                task.MarkSkipped(
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeDeficitChainEndNotRunText,
                         task.FileName));
             }
 
@@ -11171,6 +11280,12 @@ namespace ArchiveFixer.ViewModels
              * （真机那两行写着「等待解压」，用户据此判定"显示不对"）。⇒ 补一份定稿后的快照。
              */
             AppendTaskRowSnapshot();
+
+            /*
+             * ⚠ 返回"链尾这一趟才凑齐、但这一批已经没有机会再跑"的那几单：调用方（一键档）拿它写汇总，
+             * 测试拿它断言"一单都不许留在 `Pending`"。⛔ 它们的状态已经在上面的循环里落定。
+             */
+            return chainEndCompleted;
         }
 
         /// <summary>
@@ -14160,6 +14275,31 @@ namespace ArchiveFixer.ViewModels
                  * 老实现这里会悄悄回落到程序目录（可能就是 C 盘），用户 2026-09-30 点名否掉了那个方向。
                  * return 在 try 里面，所以 finally 照常收尾（_isExtracting / IsBusy 都会被复位）。
                  */
+                /*
+                 * ⚠ 2026-10-09（D 结案 + 用户「回上一步解决错误」）：**定工作区根之前**先给这一批每一单
+                 * 补跑一次"按它所在目录里的真实文件归组"。
+                 *
+                 * 为什么必须在这一刻（出处 `ViewModels/OneClickCoordinator.cs:1539-1564` 的注释）：
+                 * 续解层的内层任务是走 `AddPathsAsync(..., suppressAutoScan: true)` 加进来的，
+                 * **那条路不跑扫描期的分卷归组** ⇒ 它们的 `IsVolumeGroup` 一直是 false，
+                 * 而 `ApplyBatchWorkspaceRoot` 里那道"跳过入口包还没解出来的分卷组单"的守卫
+                 * （`IsUnresolvedVolumeGroupMember`，它第一句就是 `if (!task.IsVolumeGroup) return false;`）
+                 * 因此对它们一律放行 ⇒ 真机 EEEE 的整批工作区根被那一单的**占位落点**
+                 * （`…\EEEE\111(4)\111`）挑走。
+                 *
+                 * ⇒ 这就是"上游没做完的事，别在下游补"：把归组补在**它该在的位置**（定锚点之前），
+                 * 而不是放宽那道守卫的判据。唯一出口仍是 `ApplyVolumeGroupingFromDirectory`
+                 * （它自己再转调 `VolumeGroupDetector.Group` + `VolumeGroupingService.ApplyGroupInfo`，
+                 * 与扫描期、手动档完全同一条路）；归不上组 ⇒ 什么都不动（与以前一样）。
+                 */
+                foreach (ArchiveTask groupingTarget in selectedTasks)
+                {
+                    if (groupingTarget != null && !groupingTarget.IsVolumeGroup)
+                    {
+                        OneClickCoordinator.ApplyVolumeGroupingFromDirectory(groupingTarget);
+                    }
+                }
+
                 WorkspaceRootResolution workspaceResolution = ApplyBatchWorkspaceRoot(selectedTasks);
 
                 if (!workspaceResolution.Resolved)

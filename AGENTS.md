@@ -129,7 +129,7 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 **验证与基线（本项目数字）**
 - 构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过。
-- 全量测试基线：**2878 条（2865 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
+- 全量测试基线：**2880 条（2867 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
 - 行尾：仓库工作区是 **CRLF**（`core.autocrlf=true`）。⛔ 别用 PowerShell `-join "`n"` 整份重写 `.cs`（写出 LF ⇒ `dotnet format` 报一串 WHITESPACE）；已写出就按 CRLF 重写一遍再验。
 - 已知 flaky（并发/计时相关，先单跑确认，⛔ 别改断言）：`SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`、`SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`、`SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`、`EngineRoutingTests.MainViewModel把分派引擎接进流水线`（单跑红/全量绿）、`AsyncDeadlockGuardTests.递归解压_在单线程同步上下文里同步等待_不会死锁`（2026-10-08 实测：全量 1 红 / 单跑 2 条全绿 ⇒ 负载下的计时类 flaky）。
 - 回退代码后必须 `--no-incremental` 重编，否则跑的还是红检那一份。
@@ -146,8 +146,9 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 ## 待确认
 
-- 用户拍板的五条 CCCC 解压链口径里，**第 4 条「去掉暗链当出口」仍未完成**：源片就地改名会打断管线（四次试做失败，已排除任务账路径/借片账键/收卷判据/源文件快照四处），需要一次真机复跑日志或授权加临时排障日志定位。
-- 其余四条（续卷改名 / 落点逐层叠 / 其余物逐层处理 / 守门用例与基线）已落地，但**均未在真机上复跑验证**（真机样本只读，只能由用户重跑）。
-- **EEEE ②（链尾 `toRun`）**：①页行快照那一半**已修**（2026-10-08：快照收成唯一出口 `AppendTaskRowSnapshot`，批循环与链尾 `FinalizeDeferredVolumeDeficits` 都调它；守门 `SiblingFolderVolumeGatherTests.一键档_最后一份行快照必须是链尾定稿后的终态`，红检成立 —— ⚠ 只有在**一键档**才钉得住，手动档批内就定稿了）。**剩下没做的那一半**：链尾把 `RecheckDeferredVolumeDeficits(finalPass: true)` 返回的 `toRun` **丢掉、只打一行日志**（`ExtractionCoordinator.cs`），那几单从没跑过 ⇒ 会停在「等待解压」+ `Pending`。修法 = 链尾给它们一个落定结论（跟班口径或 `MarkStoppedBeforeExtract`）——**属于放宽"批中间不落结论"这条判据，落之前要用户点头**。
-- **「缺卷 = 部分完成」已定稿落地（用户 2026-10-08 拍板，冲突已消）**：判据是**完整性** —— 不完整（缺卷）⇒ 部分完成（「连完整的都没有，这就不是程序的错误」）；完整却解不开（密码 / 卷尾缺一块）⇒ 失败。落地六处：`TaskOutcomeClassifier`（递归停因 `MissingVolume` ⇒ `PartiallyCompleted`）、`FinalizeOutcomeIfPending`（终态收口唯一出口按 `Status == VolumeMissing` 分流，覆盖批首预检/批末补判全部路径）、`StatusToBrushConverter`（缺卷移到警告色）、①页颜色改绑 `ArchiveTask.StatusColorKey`、`TaskSummaryService.ClassifyOutcome`（与"部分完成"同桶）、`OneClickCoordinator.IsHandled`（单列缺卷，免得读成"没轮到"）。⚠ **「失败清单」的成员资格照旧保留**（不变量 7 要报"缺哪几个"，`IsFailureStatus` / `TaskSummaryService` 两处不动）—— 分桶/配色 ≠ 清单成员，两件事分开看。改动与冲突用例见 `修改日志.md` 第八十七轮。
-- **EEEE ③（工作区根锚点）**：`ApplyBatchWorkspaceRoot` 排在批首改名归一与挂 `GroupProducerEntryResolver` **之前**（与它自己的注释相反）⇒ 产出链预判失效、落点退回公式占位值。⛔ **不是"挪一行"**：`volumeProbeWorkRoot = _pathService.WorkDirectory` 正是它设的，直接挪会让批首改名的硬链接试开落到启动时的工作区 ⇒ 要先把 `ApplyBatchWorkspaceRoot` 拆成"定工作区根"与"算落点"两段。另外"批首那一刻 `task.IsVolumeGroup` 为什么还是 false"**未定位**（需真机复跑日志或授权加临时排障日志）。
+- 用户拍板的五条 CCCC 解压链口径里，**第 4 条「去掉暗链当出口」仍未完成**：源片就地改名会打断管线（四次试做失败，已排除任务账路径 / 借片账键 / 收卷判据 / 源文件快照四处）。⚠ 2026-10-09 只读取证把范围收窄了：四次试做都是把"建链接"换成 `TryMovePieceIntoGroup`，而它的 target 是**这一组的落点层**（`ResolveBatchGroupDirectory`），**不是片自己所在那一层** ⇒ 用户的源文件被**搬离他自己的目录**，而用例期望的是"同目录内改名"（`SiblingFolderVolumeGatherTests.cs:1178-1182`、`:1430-1434`）。⇒ **下一次试做的第一件事 = 同目录内 `File.Move(piecePath, Path.Combine(Path.GetDirectoryName(piecePath), canonical))`**；若仍红，次选怀疑对象是 `RecursiveExtractor.RootSourceCandidates`（每趟只算一次的惰性池，`:586`）+ `ArchiveTask.OriginalPath`（冻结的导入路径，`Models/ArchiveTask.cs:166`，而 `EnumerateTaskPaths` 把它排在最前）+ `IsBorrowedPieceTask`（裸字符串、没有 `FileIdentity` 兜底，而兄弟判据 `TryResolveConsumedByAnotherTask` 有）。
+- 下面两条已落地但**均未在真机上复跑验证**（真机样本只读，只能由用户重跑）。
+- **EEEE ②（`111.zip` 被判成过程物收进其余物）已修（2026-10-09）**：①页行快照那一半早已修（2026-10-08，快照收成唯一出口 `AppendTaskRowSnapshot`）。**根因那一半本轮定位到行**：`IsEngineOutputFile` 的判据读的是"同一个相对路径在层目录里也还在"，而发布是**就地替换 + 移动** ⇒ 那个事实已被发布本身抹掉，只有"中途停链"那一档暴露。修法 = 加第 ③ 条判据问 `RecursionLayerReport.ManifestEntries`（每层解压前列目录的逐条清单，不受搬运影响）。守门 `DisguisedBodyNameTests.定稿_产物已被发布搬走_层清单照样能证明它是本链产出`，**红检成立**。⚠ 迁就它的**临时排障行**（`[排障·过程物]`）还留在 `PlanFinalLayout` 里，等真机复跑确认后删。
+- **链尾 `toRun` 已落结论（2026-10-09）**：`FinalizeDeferredVolumeDeficits` 改成返回那几单并就地落 `Skipped` + 新文案（老写法只打一行日志 ⇒ 它们停在「等待解压」+ `Pending`，批末汇总算进「未处理」）。⚠ **不属于放宽"批中间不落结论"**：走到那一行时整条链已经跑完。⚠ 尚未真机复跑。
+- ⛔ **A1 方向试做已撤回（2026-10-09，如实记账）**：把 `isProcessArtifact` 一刀切成 `false` 会让全量 **33 红**，因为它打掉三处闸门（`ExtractionCoordinator.cs:4731`、`:4809`、`:4772`）＝ 25 GB 那次事故的防线，还顺带打死 `MoveSourcePackageRest` 的延期分支（`ExtractionCoordinator.cs:2160` 的 `commit.MovedContentCount == 0` 不再成立）。根因是那一族用例**不传 `engineOutput`**（`VolumeGroupDeletionSafetyTests.cs` 七处）⇒ "**判不出来路 ⇒ 什么都不做**"这条兜底一个字都不能放宽；⛔ 别再把"本链产出 = 内容物"往"stage 里一切都是内容物"那个方向推。
+- **EEEE ③（工作区根锚点）已按"上游没做完的事回上游补"落地（2026-10-09）**：在 `ApplyBatchWorkspaceRoot` **之前**给这一批每一单补跑一次 `OneClickCoordinator.ApplyVolumeGroupingFromDirectory`（续解层的内层任务走 `AddPathsAsync(suppressAutoScan: true)`，那条路不跑扫描期归组 ⇒ `IsVolumeGroup` 恒 false ⇒ 那道"跳过入口包还没解出来的分卷组单"的守卫一律放行）。⛔ **没有**放宽守卫判据；⚠ 已编译、未真机复跑。`ApplyBatchWorkspaceRoot` 本身仍是"定工作区根 + 算落点"挤在一处（原计划的"拆两段"没做），留着以后一起收。

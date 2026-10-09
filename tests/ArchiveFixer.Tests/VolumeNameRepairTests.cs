@@ -142,6 +142,53 @@ namespace ArchiveFixer.Tests
             Assert.True(ExtensionHelper.TrySplitVolumeSegment("001(1)", out string mark4, out _));
             Assert.Equal("001", mark4);
         }
+
+        /// <summary>
+        /// **A2：名字读不出盘号时，用「组内事实 + 取值范围」解**（用户 2026-10-09 原话：
+        /// 「已经知道有多少分卷了，如果已知 4 个，最大的就是 z03 了，算法已经弄得不错了」）。
+        ///
+        /// <para>真机形状 `111.z11111111110删除3`：骨架档得到 `z111111111103`（不是合法标记）⇒
+        /// 老的接片判据当场丢掉它 ⇒ 整组到最后一刻还在报「缺 111.z03」。</para>
+        ///
+        /// <para>判据三条缺一不可：① 段骨架是 `z`/`Z` + **至少三位**数字（数字连排才轮得到这一档）；
+        /// ② 取**最右两位**当盘号（本族位宽 2）；③ 落在 `1..diskCount-1` **且正好是缺的那一片**。
+        /// ⛔ 判不出 / 超范围 / 不是缺的那片 ⇒ 一律 false（什么都不做）。</para>
+        ///
+        /// <para><b>红检</b>：把 `TryResolveDiskByGroupRange` 里 `missing.Contains(candidateDisk)`
+        /// 那一条去掉 ⇒ 本用例第 ② 组断言当场变红。</para>
+        /// </summary>
+        [Fact]
+        public void A2_数字连排的脏卷名_用组内事实与取值范围解出盘号()
+        {
+            // 4 片的跨盘 ZIP：合法标记只有 z01/z02/z03 + 末片 .zip ⇒ 缺的是第 3 片。
+            Assert.True(VolumeNameRepair.TryResolveDiskByGroupRange(
+                "111.z11111111110删除3",
+                diskCount: 4,
+                missing: new[] { 3 },
+                out int disk));
+
+            Assert.Equal(3, disk);
+
+            // ① 解出来的不是缺的那一片 ⇒ 不许认。
+            Assert.False(VolumeNameRepair.TryResolveDiskByGroupRange(
+                "111.z11111111110删除3", diskCount: 4, missing: new[] { 1 }, out _));
+
+            // ② 盘号超出这一组的取值范围 ⇒ 不许认。
+            Assert.False(VolumeNameRepair.TryResolveDiskByGroupRange(
+                "111.z99删除3", diskCount: 4, missing: new[] { 3 }, out _));
+
+            // ③ 只有两位数字：紧档/骨架档本来就解得出来，轮不到这一档。
+            Assert.False(VolumeNameRepair.TryResolveDiskByGroupRange(
+                "111.z03", diskCount: 4, missing: new[] { 3 }, out _));
+
+            // ④ 段里夹字母（不是本族形状）⇒ 不猜。
+            Assert.False(VolumeNameRepair.TryResolveDiskByGroupRange(
+                "111.abc删除3", diskCount: 4, missing: new[] { 3 }, out _));
+
+            // ⑤ 单卷（diskCount < 2）⇒ 没有"取值范围"这回事。
+            Assert.False(VolumeNameRepair.TryResolveDiskByGroupRange(
+                "111.z11111111110删除3", diskCount: 1, missing: new[] { 3 }, out _));
+        }
         [Fact]
         public void 计划_名字被改坏的第一卷_推出标准名()
         {

@@ -3346,14 +3346,28 @@ namespace ArchiveFixer.Extraction
                 }
 
                 int? familyIndex = VolumeGroupDetector.TryGetVolumeIndex(candidateName);
+                int disk;
 
                 if (familyIndex == null)
                 {
-                    continue;
+                    /*
+                     * ⚠ 2026-10-09 A2（用户原话：「已经知道有多少分卷了…算法已经弄得不错了」）：
+                     * 名字读不出盘号时，**用组内事实 + 取值范围再解一次**（真机 `111.z11111111110删除3`：
+                     * 骨架档得到 `z111111111103`、不是合法标记 ⇒ 老判据在这里丢掉它 ⇒
+                     * 那一片永远接不进来，整组到最后一刻还报"缺 111.z03"）。
+                     * ⛔ 只在三条同时成立时认：本族位宽内的最右数字、落在 1..diskCount-1、
+                     * **正好是缺的那一片**；判不出 ⇒ 什么都不做。
+                     */
+                    if (!TryResolveDiskByGroupRange(candidateName, diskCount, missing, out disk))
+                    {
+                        continue;
+                    }
                 }
-
-                // 这一族的编号：`.zip` = 1（本体 / 末片）、`.zNN` = NN + 1 ⇒ 真实盘序 = 编号 - 1。
-                int disk = familyIndex.Value - 1;
+                else
+                {
+                    // 这一族的编号：`.zip` = 1（本体 / 末片）、`.zNN` = NN + 1 ⇒ 真实盘序 = 编号 - 1。
+                    disk = familyIndex.Value - 1;
+                }
 
                 if (disk < 1 || disk >= diskCount || !missing.Contains(disk) || LengthOf(candidate.Path) <= 0)
                 {
@@ -3517,6 +3531,92 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>这一族第 <paramref name="disk"/> 片的规范卷名（<c>111</c> + 1 ⇒ <c>111.z01</c>）。</summary>
         internal static string CanonicalDiskName(string baseName, int disk) => $"{baseName}.z{disk:00}";
+
+        /// <summary>
+        /// **名字读不出盘号时，用组内事实 + 取值范围解出它该是第几片**（用户 2026-10-09 A2）。
+        ///
+        /// <para>形状：跨盘 ZIP 的片被塞了垃圾、数字还连排（真机 `111.z11111111110删除3`）——
+        /// `TrySplitVolumeSegmentLoose` 的骨架档得到 `z111111111103`、不是合法标记 ⇒
+        /// 老的接片判据当场丢掉它，于是那一片**永远接不进来**，整组到最后一刻还在报「缺 111.z03」。</para>
+        ///
+        /// <para>判据（⛔ 只用组内事实 + 取值范围，⛔ 不猜）：把段里的**非 ASCII 字母数字杂质剥掉**，
+        /// 要求 ① 骨架形如 <c>z</c>/<c>Z</c> + **至少三位**数字（数字连排正是要救的那一档）；
+        /// ② 取**最右两位**当盘号（本族 `zNN` 的位宽是 2 —— 用户口径：「已知 4 片，最大的就是 z03」）；
+        /// ③ 这个盘号必须落在这一组的合法范围 <c>1..diskCount-1</c>、且**正好是缺的那一片**。
+        /// 三条缺一条 ⇒ 返回 false（判不出 ⇒ 什么都不做）。</para>
+        ///
+        /// <para>⚠ 为什么敢取最右两位：左边那串数字是**垃圾**（网盘塞的），而本族的位宽由组内事实
+        /// 封死（4 片 ⇒ 合法标记只有 `z01`/`z02`/`z03` + 末片 `.zip`）⇒ 只有最右两位能落在取值范围内。
+        /// 放在这里之前先做唯一性检查的是调用方（同卷号两份候选 ⇒ 判不出 ⇒ 整档不做）。</para>
+        /// </summary>
+        internal static bool TryResolveDiskByGroupRange(
+            string candidateName,
+            int diskCount,
+            IReadOnlyCollection<int> missing,
+            out int disk)
+        {
+            disk = 0;
+
+            if (string.IsNullOrWhiteSpace(candidateName) || diskCount < 2 || missing == null || missing.Count == 0)
+            {
+                return false;
+            }
+
+            string[] parts = candidateName.Split('.');
+
+            if (parts.Length < 2)
+            {
+                return false;
+            }
+
+            // 末段（`z11111111110删除3`）；RAR/7z 那两族有自己的位宽，本轮只救跨盘 ZIP 这一族。
+            string segment = parts[^1];
+            var digits = new System.Text.StringBuilder(segment.Length);
+
+            foreach (char c in segment)
+            {
+                if (char.IsAsciiDigit(c))
+                {
+                    digits.Append(c);
+                }
+                else if (char.IsAsciiLetter(c))
+                {
+                    // 段里出现字母（`z` 之外）⇒ 不是本族形状，⛔ 不猜。
+                    if (digits.Length > 0)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            string raw = digits.ToString();
+
+            if (raw.Length < 3)
+            {
+                // 两位及以下：紧档/骨架档本来就解得出来，轮不到这一档（这一档只救"数字连排"）。
+                return false;
+            }
+
+            string mark = segment.TrimStart().Length > 0 && (segment[0] == 'z' || segment[0] == 'Z')
+                ? segment[..1]
+                : string.Empty;
+
+            if (mark.Length == 0)
+            {
+                return false;
+            }
+
+            int candidateDisk = int.Parse(raw[^2..], System.Globalization.CultureInfo.InvariantCulture);
+
+            if (candidateDisk < 1 || candidateDisk >= diskCount || !missing.Contains(candidateDisk))
+            {
+                return false;
+            }
+
+            disk = candidateDisk;
+            return true;
+        }
+
 
         private static string DescribeStillMissing(int diskCount, IReadOnlyList<string> missing) =>
             string.Format(
