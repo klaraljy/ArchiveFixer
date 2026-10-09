@@ -129,7 +129,7 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 **验证与基线（本项目数字）**
 - 构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过。
-- 全量测试基线：**2881 条（2868 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
+- 全量测试基线：**2882 条（2869 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
 - 行尾：仓库工作区是 **CRLF**（`core.autocrlf=true`）。⛔ 别用 PowerShell `-join "`n"` 整份重写 `.cs`（写出 LF ⇒ `dotnet format` 报一串 WHITESPACE）；已写出就按 CRLF 重写一遍再验。
 - 已知 flaky（并发/计时相关，先单跑确认，⛔ 别改断言）：`SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`、`SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`、`SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`、`EngineRoutingTests.MainViewModel把分派引擎接进流水线`（单跑红/全量绿）、`AsyncDeadlockGuardTests.递归解压_在单线程同步上下文里同步等待_不会死锁`（2026-10-08 实测：全量 1 红 / 单跑 2 条全绿 ⇒ 负载下的计时类 flaky）。
 - 回退代码后必须 `--no-incremental` 重编，否则跑的还是红检那一份。
@@ -151,9 +151,8 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 - **EEEE ②（`111.zip` 被判成过程物收进其余物）已修（2026-10-09）**：①页行快照那一半早已修（2026-10-08，快照收成唯一出口 `AppendTaskRowSnapshot`）。**根因那一半本轮定位到行**：`IsEngineOutputFile` 的判据读的是"同一个相对路径在层目录里也还在"，而发布是**就地替换 + 移动** ⇒ 那个事实已被发布本身抹掉，只有"中途停链"那一档暴露。修法 = 加第 ③ 条判据问 `RecursionLayerReport.ManifestEntries`（每层解压前列目录的逐条清单，不受搬运影响）。守门 `DisguisedBodyNameTests.定稿_产物已被发布搬走_层清单照样能证明它是本链产出`，**红检成立**。⚠ 迁就它的**临时排障行**（`[排障·过程物]`）还留在 `PlanFinalLayout` 里，等真机复跑确认后删。
 - **链尾 `toRun` 已落结论（2026-10-09）**：`FinalizeDeferredVolumeDeficits` 改成返回那几单并就地落 `Skipped` + 新文案（老写法只打一行日志 ⇒ 它们停在「等待解压」+ `Pending`，批末汇总算进「未处理」）。⚠ **不属于放宽"批中间不落结论"**：走到那一行时整条链已经跑完。⚠ 尚未真机复跑。
 - ⛔ **A1 方向试做已撤回（2026-10-09，如实记账）**：把 `isProcessArtifact` 一刀切成 `false` 会让全量 **33 红**，因为它打掉三处闸门（`ExtractionCoordinator.cs:4731`、`:4809`、`:4772`）＝ 25 GB 那次事故的防线，还顺带打死 `MoveSourcePackageRest` 的延期分支（`ExtractionCoordinator.cs:2160` 的 `commit.MovedContentCount == 0` 不再成立）。根因是那一族用例**不传 `engineOutput`**（`VolumeGroupDeletionSafetyTests.cs` 七处）⇒ "**判不出来路 ⇒ 什么都不做**"这条兜底一个字都不能放宽；⛔ 别再把"本链产出 = 内容物"往"stage 里一切都是内容物"那个方向推。
-- **两处"跳过了却被算成别的"的机器终态缺口（2026-10-09 只读定位到行，⛔ 未改，需下一轮做）**：
-  ① `ExtractionCoordinator.cs:17758-17768`（魔数不认、引擎也列不出来 ⇒ 写 `Status = Skipped` + 「不是压缩包：7-Zip 也打不开」然后 `return`）**不写 `EndTime` 也不写 `Outcome`** ⇒ 外层 `finally` 只对取消 / 异常补 `EndTime`（`:16747-16774`），`FinalizeOutcomeIfPending`（`:16812`，判据要求 `EndTime` 有值）不触发 ⇒ 这一行状态写着「已跳过」、汇总却按 `Pending` 算进**「未处理」**。
-  ② `ExtractionCoordinator.cs:18001-18016`（同名冲突按用户选择「跳过」）写了 `EndTime` 但**没写 `Outcome`** ⇒ 会落进 `FinalizeOutcomeIfPending:457-459` 的 else 支（`Status != VolumeMissing` ⇒ **`Failed`**）⇒ 用户自己选的"跳过"被算成**失败**。
-  ⚠ 已核实**没有**连带炸掉别处：`OneClickCoordinator.IsHandled:2661-2671` 在 `Outcome == Pending` 时退回状态名单，而 `StatusText.Skipped` 在名单里 ⇒ 这两条路**不会**被读成"这一轮没轮到"（那一档才会让链尾整段不跑）。
-  ⇒ 修法（下一轮）：两处都**显式**落 `Outcome = TaskOutcome.Skipped`（⛔ 不能只补 `EndTime` —— 那会走 else 支变成 `Failed`）；连带要改 `BatchOutcomeTally` 的分项数字与受影响的既有用例。
+- **两处"跳过了却被算成别的"的机器终态缺口（2026-10-09 定位到行并已修）**：
+  ① `ExtractionCoordinator.cs` 未识别那一支（魔数不认、引擎也列不出来 ⇒ 写 `Status = Skipped` + 「不是压缩包：7-Zip 也打不开」然后 `return`）**原来不写 `EndTime` 也不写 `Outcome`** ⇒ 外层 `finally` 只对取消 / 异常补 `EndTime`，终态收口 `FinalizeOutcomeIfPending` 的判据（要求 `EndTime` 有值）不触发 ⇒ 状态写着「已跳过」、汇总却按 `Pending` 算进**「未处理」**。**已修**：显式落 `Outcome = Skipped` + `EndTime`；守门 `DeferredVolumeStatusTests.未识别的东西_只跳过_机器终态必须收口不许算未处理`，**红检成立**（撤掉 `Outcome = Skipped` ⇒ 报 `Expected: Skipped / Actual: Failed`，当场实证了下面那条"只补 `EndTime` 更糟"）。
+  ② 同名冲突按用户选择「跳过」那一支（`ConflictChoice.Skip`）原来写了 `EndTime` 但**没写 `Outcome`** ⇒ 落进 `FinalizeOutcomeIfPending` 的 else 支（`Status != VolumeMissing` ⇒ **`Failed`**）⇒ 用户自己选的"跳过"被算成**失败**。**已修**：显式落 `Outcome = Skipped`。⚠ **这一支还没有守门用例**（要造"输出目录已存在且非空 + 冲突档 = 询问 + 选跳过"三件事，本轮预算不够）—— 是已知缺口，⛔ 不许当成"验过了"。
+  ⛔ **共同的关键教训**：两处都**不能只补 `EndTime`** —— 终态收口会接手并按"不是缺卷 ⇒ `Failed`"落结论，比不修更糟（① 的红检已当场实测到这个 `Failed`）。必须**显式**写 `Outcome`。
 - **EEEE ③（工作区根锚点）已按"上游没做完的事回上游补"落地（2026-10-09）**：在 `ApplyBatchWorkspaceRoot` **之前**给这一批每一单补跑一次 `OneClickCoordinator.ApplyVolumeGroupingFromDirectory`（续解层的内层任务走 `AddPathsAsync(suppressAutoScan: true)`，那条路不跑扫描期归组 ⇒ `IsVolumeGroup` 恒 false ⇒ 那道"跳过入口包还没解出来的分卷组单"的守卫一律放行）。⛔ **没有**放宽守卫判据；⚠ 已编译、未真机复跑。`ApplyBatchWorkspaceRoot` 本身仍是"定工作区根 + 算落点"挤在一处（原计划的"拆两段"没做），留着以后一起收。

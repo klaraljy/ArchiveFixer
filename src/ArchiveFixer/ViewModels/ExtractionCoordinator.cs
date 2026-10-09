@@ -17764,6 +17764,25 @@ namespace ArchiveFixer.ViewModels
                             ? "不是压缩包：7-Zip 也打不开"
                             : $"不是压缩包：7-Zip 打不开（{probe.Message}）";
 
+                        /*
+                         * ⚠ 2026-10-09（B 前半「未识别的东西只跳过 + 记账」、用户原话：
+                         * 「分卷和其他**未识别的东西统统跳过**到了最后再重新检验一步」）：
+                         * **机器终态必须显式落 `Skipped`** —— 老写法这一支只写状态、不写终态，
+                         * 而这一支走的是**正常 `return`**（只有取消 / 异常那条 `finally` 才补 `EndTime`，
+                         * 见 `RunScheduledTaskAsync` 的 catch）⇒ 终态收口 `FinalizeOutcomeIfPending`
+                         * 的判据（要求 `EndTime` 有值）不成立 ⇒ 这一位永远是 `Pending`
+                         * ⇒ ①页那一行写着「已跳过」、批末汇总却把它算进**「未处理」**（同一件事两处口径打架）。
+                         *
+                         * ⛔ **不能只补 `EndTime`**：那样终态收口会接手，而它的 else 支按
+                         * `Status != VolumeMissing` 一律落 `Failed` ⇒ 一个"跳过"当场变成**失败**。
+                         * ⇒ 显式写 `Skipped` 之后收口那一处自然 no-op（判据第一句就是 `Outcome == Pending`）。
+                         * ⚠ 与 `ArchiveTask.MarkSkipped` 的关系：这里保持既有的四处赋值**一个字节不改**
+                         * （`ProgressText` 那一格是「完成」，改了会动显示口径），只补终态与结束时间。
+                         */
+                        task.Outcome = TaskOutcome.Skipped;
+                        task.EndTime = DateTime.Now;
+                        task.LastUpdatedTime = DateTime.Now;
+
                         AppendLog("WARN", $"跳过：{task.FileName} —— {task.ErrorMessage}");
                         return;
                     }
@@ -18010,6 +18029,20 @@ namespace ArchiveFixer.ViewModels
                             ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
                             : "-";
                         task.LastUpdatedTime = DateTime.Now;
+
+                        /*
+                         * ⚠ 2026-10-09：**用户自己选的"跳过"不许被算成失败**。
+                         *
+                         * 老写法这一支写了 `EndTime` 却**没写终态** ⇒ 终态收口 `FinalizeOutcomeIfPending`
+                         * 的判据（`Outcome == Pending` + `EndTime` 有值 + 校验没通过）**三条全中**，
+                         * 而它的 else 支按"不是缺卷 ⇒ `Failed`"落结论（`:457-459`）
+                         * ⇒ 用户在冲突框里点的那一下「跳过」，批末汇总按**失败**数、批末色带变**红**
+                         * （用户点名过「为什么跳过要标红，这是非常错误的行为」）。
+                         *
+                         * ⇒ 显式落 `Skipped`：收口那一处随即 no-op（它第一句就是 `Outcome == Pending`）。
+                         * ⛔ 与上面"未识别"那一条同一个病、同一个修法 —— 两处都不是"补 EndTime 就行"。
+                         */
+                        task.Outcome = TaskOutcome.Skipped;
 
                         AppendLog("WARN", $"{task.LogName}：同名冲突按你的选择跳过，本任务不解压（输出目录：{outputPath}）。");
                         return;

@@ -24,6 +24,9 @@ namespace ArchiveFixer.Tests
     {
         private readonly string _root;
 
+        /// <summary>最近一次 <see cref="CreateCoordinator"/> 建出来的 VM（要用它的任务表时读这个）。</summary>
+        private MainViewModel _vm = null!;
+
         public DeferredVolumeStatusTests()
         {
             _root = Path.Combine(Path.GetTempPath(), "af-deferred-status-" + Guid.NewGuid().ToString("N"));
@@ -200,6 +203,60 @@ namespace ArchiveFixer.Tests
             Assert.Contains("只解压", task.ErrorMessage, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// **"未识别的东西"只许跳过 + 记账，⛔ 不许当场终结、也⛔ 不许被算成"未处理"**
+        /// （用户口径：「分卷和其他**未识别的东西统统跳过**到了最后再重新检验一步」）。
+        ///
+        /// <para><b>老写法的病</b>：魔数不认、引擎也列不出来时那一支只写状态（「已跳过」）就 `return` ——
+        /// **不写 `EndTime`、不写 `Outcome`**；而外层只有取消 / 异常那条路才补 `EndTime` ⇒
+        /// 终态收口 `FinalizeOutcomeIfPending` 的判据（要求 `EndTime` 有值）不成立 ⇒
+        /// 这一位永远是 `Pending` ⇒ ①页写着「已跳过」、批末汇总却按 `Pending` 把它算进**「未处理」**
+        /// （同一件事两处口径打架）。</para>
+        ///
+        /// <para><b>红检</b>：把 `ExtractSingleTaskAsync` 里那一支新加的
+        /// <c>task.Outcome = TaskOutcome.Skipped;</c> 撤掉 ⇒ 本条的终态断言当场变红（回到 `Pending`）。
+        /// ⚠ 顺带钉住"⛔ 不能只补 `EndTime`"：只补 `EndTime` 的话终态收口会接手，
+        /// 而它的 else 支按"不是缺卷 ⇒ `Failed`"落结论 ⇒ 一个"跳过"会变成**失败**。</para>
+        /// </summary>
+        [Fact]
+        public async Task 未识别的东西_只跳过_机器终态必须收口不许算未处理()
+        {
+            string path = Path.Combine(_root, "notarchive", "text.7z");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "这不是压缩包。\n", new System.Text.UTF8Encoding(false));
+
+            var task = new ArchiveTask(path, 1) { IsSelected = true };
+
+            // 走扫描那一趟的唯一出口 ⇒ DetectedFormat 落 "Unknown"、IsArchive=false（真机那一帧）。
+            await new ArchiveDetectService().ApplyDetectResultAsync(task);
+
+            ExtractionCoordinator coordinator = CreateCoordinator();
+
+            _vm.Tasks.Add(task);
+
+            await coordinator.StartExtractAsync();
+
+            // ① 状态如实说"跳过"（中性档，⛔ 不是失败）。
+            Assert.Equal(StatusText.Skipped, task.Status);
+
+            // ② ⛔ 机器终态必须收口 —— 停在 Pending 就会被批末汇总算进「未处理」。
+            Assert.NotEqual(TaskOutcome.Pending, task.Outcome);
+            Assert.Equal(TaskOutcome.Skipped, task.Outcome);
+
+            /*
+             * ③ ⛔ 不许被算成失败（"只补 EndTime"那条错路就会落这一档）。
+             *    判据走**结构化事实**，⛔ 不比中文文案。
+             */
+            Assert.False(TaskOutcomeClassifier.IsFailureStatus(task.Status), "未识别的东西只是跳过，不许进失败档");
+
+            BatchOutcomeTally tally = BatchOutcomeTally.Count(new[] { task });
+
+            Assert.Equal(1, tally.Skipped);
+            Assert.Equal(0, tally.Failed);
+            Assert.Equal(0, tally.Untouched);
+        }
+
         /// <summary>无界面宿主里默认"没人点过 = 不确认"；这里注入"用户点了确定"（与真机那一档一致）。</summary>
         private sealed class ConfirmingDialogService : DialogService
         {
@@ -224,7 +281,7 @@ namespace ArchiveFixer.Tests
             var pathService = new PathService { DataRootDirectory = dataRoot };
             var settingsService = new SettingsService(pathService);
             var logService = new LogService(pathService);
-            var vm = new MainViewModel(
+            _vm = new MainViewModel(
                 new FileScanService(),
                 new ArchiveDetectService(),
                 new RenameService(),
@@ -238,7 +295,7 @@ namespace ArchiveFixer.Tests
                 new ConfirmingDialogService());
 
             return new ExtractionCoordinator(
-                vm,
+                _vm,
                 new ArchiveFixer.Engines.SevenZip.SevenZipEngine(),
                 new PasswordService(),
                 pathService,
