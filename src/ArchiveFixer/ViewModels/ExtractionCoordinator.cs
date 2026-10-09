@@ -2921,6 +2921,29 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
+                /*
+                 * ⚠ 2026-10-09 真机 `EEEE`（18:48 那一趟）：**内层包不许按"源包"处理**。
+                 *
+                 * 现场：那一次的第二个批次，`rootTargets` 正是续解认出来的两个 `111.zip`（行 203/204、
+                 * 行 217/218「第 1 位/第 2 位：111.zip」）—— 它们是**我们自己产出的内容物**，
+                 * 却被这里当成根任务走了「源包移入其余物」（行 292/294 把**组入口包**搬进 `其余物\111.zip`、
+                 * `其余物\111(1).zip`），批末「其余物 = 彻底删除」又把它们删掉（行 296）
+                 * ⇒ **第一大步永远闭不了环**，而且用户看到的就是"两个 `111.zip`"。
+                 *
+                 * 判据是**设计里早就写死的那一条**（本方法上方那段注释：「真正产出内容物的是续解子任务，
+                 * **子任务按设计跳过源包处理**」；`:2292` 也把它的源叫「**内层包**（这一层的源）」而不是「源包」），
+                 * 只是这一处漏了。事实位唯一出口 = `ArchiveTask.IsContinuationTask`
+                 * （`ParentOutputDirectory` 非空即续解出来的内层包）。
+                 *
+                 * ⛔ 不影响正当场景：真正需要链尾补搬的是**最外层**任务 —— 只有它才会被记成
+                 * `SourcePackageMoveState.DeferredToChainEnd`（见 `OneClickCoordinator` 那一处的说明）。
+                 * 用户口径：「**原包就是原包**」——⛔ 我们自己产出的东西不是原包。
+                 */
+                if (rootTask.IsContinuationTask)
+                {
+                    continue;
+                }
+
                 if (rootTask.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd)
                 {
                     /*
@@ -9258,6 +9281,26 @@ namespace ArchiveFixer.ViewModels
             if (owner == null || string.IsNullOrWhiteSpace(owner.CurrentPath))
             {
                 return string.Empty;
+            }
+
+            /*
+             * ⚠ 2026-10-09 真机 `EEEE`（18:48 那一趟）**实测的根因**：这一组的"家"被**已经搬走的源包**带偏了。
+             *
+             * 现场（逐条有出处）：行 161 先把产出方那一单的源包搬进其余物
+             * （`111.rar → …\111\111\其余物\111.rar`）⇒ 下面那两条路**都读 `owner.CurrentPath`**
+             * （`ResolveOutputPlacement` 内部读它；退路 `Path.GetDirectoryName(owner.CurrentPath)` 也读它）
+             * ⇒ 算出来的"这一组的家"变成 **`…\111\111\其余物\111`** —— 与真机 6 条收片的 `targetDir`
+             * **逐字相同**（行 164/171/177/178/186）。片全被收进"其余物"里 ⇒ 组永远凑不齐，
+             * 批末「其余物 = 彻底删除」再把它们**连同入口包一起删掉**（行 296）⇒ 盘上 `111\111\` 空掉。
+             *
+             * ⇒ **先用产出方当初记下的"实际输出目录"**（`owner.OutputPath`）：那是"产物到底在哪"的
+             * **唯一权威来源**（写入点 `ExtractSingleTaskAsync` 里 `task.OutputPath = outputPath;`，
+             * 那段注释自己写着"解压后校验、结果归集、清理源包、界面那一列、以及一键处理的续解全都以它为准"）。
+             * ⛔ 不再用"会动的 `CurrentPath`"现算一遍 —— 源包一被搬走，那个算式就指向其余物。
+             */
+            if (!string.IsNullOrWhiteSpace(owner.OutputPath))
+            {
+                return owner.OutputPath;
             }
 
             try
