@@ -2922,28 +2922,14 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * ⚠ 2026-10-09 真机 `EEEE`（18:48 那一趟）：**内层包不许按"源包"处理**。
+                 * ⚠ 2026-10-09：**内层包不许按"源包"处理** 这条判据**不在这里**。
                  *
-                 * 现场：那一次的第二个批次，`rootTargets` 正是续解认出来的两个 `111.zip`（行 203/204、
-                 * 行 217/218「第 1 位/第 2 位：111.zip」）—— 它们是**我们自己产出的内容物**，
-                 * 却被这里当成根任务走了「源包移入其余物」（行 292/294 把**组入口包**搬进 `其余物\111.zip`、
-                 * `其余物\111(1).zip`），批末「其余物 = 彻底删除」又把它们删掉（行 296）
-                 * ⇒ **第一大步永远闭不了环**，而且用户看到的就是"两个 `111.zip`"。
-                 *
-                 * 判据是**设计里早就写死的那一条**（本方法上方那段注释：「真正产出内容物的是续解子任务，
-                 * **子任务按设计跳过源包处理**」；`:2292` 也把它的源叫「**内层包**（这一层的源）」而不是「源包」），
-                 * 只是这一处漏了。事实位唯一出口 = `ArchiveTask.IsContinuationTask`
-                 * （`ParentOutputDirectory` 非空即续解出来的内层包）。
-                 *
-                 * ⛔ 不影响正当场景：真正需要链尾补搬的是**最外层**任务 —— 只有它才会被记成
-                 * `SourcePackageMoveState.DeferredToChainEnd`（见 `OneClickCoordinator` 那一处的说明）。
-                 * 用户口径：「**原包就是原包**」——⛔ 我们自己产出的东西不是原包。
+                 * 我先把它加在这一处（链尾循环），真机复跑**完全没拦住** —— 因为"哪些算源包"的
+                 * **唯一决策处**是 `Extraction.ProcessArtifactLayout.SourcePackageMover.Plan`
+                 * （搬运的规划与执行都在那个模块里），而调用者有多个（每单收尾 / 链尾补搬 / 手动档），
+                 * 加在任何一个调用者上都会漏。⇒ 判据已落在 `Plan` 里（`ArtifactSkipReason.SourceIsOurOwnContent`），
+                 * ⛔ 这里不再留第二份（同一件事只允许一个出口）。
                  */
-                if (rootTask.IsContinuationTask)
-                {
-                    continue;
-                }
-
                 if (rootTask.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd)
                 {
                     /*

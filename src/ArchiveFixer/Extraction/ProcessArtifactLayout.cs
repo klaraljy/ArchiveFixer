@@ -42,6 +42,16 @@ namespace ArchiveFixer.Extraction
         /// <summary>源文件已经不存在（用户在批次中途删了 / 上一轮已经搬走）。</summary>
         SourceMissing,
 
+        /// <summary>
+        /// 源是**我们自己产出的内容物**（这一单是续解出来的**内层包**）—— 它不是用户的**原包**，
+        /// ⛔ 不参与源包处理、一个字节都不搬（用户口令：「**原包就是原包**」）。
+        ///
+        /// <para>真机 `EEEE` 2026-10-09 19:14 那一趟：`111.rar` 解出来的入口包 `111.zip` 落在
+        /// `…\111\111\111.zip`，下一轮它自己成了一单 ⇒ 这里把**我们刚产出的入口包**当"源包"搬进其余物，
+        /// 批末「彻底删除」再把它删掉 ⇒ 组入口包没了、第一大步永远闭不了环。</para>
+        /// </summary>
+        SourceIsOurOwnContent,
+
         /// <summary>没有给出目标目录，整批无法规划。</summary>
         TargetDirectoryMissing
     }
@@ -1187,6 +1197,36 @@ namespace ArchiveFixer.Extraction
             }
 
             string artifactRoot = artifactDirectory!;
+
+            /*
+             * ⛔ 2026-10-09 真机 `EEEE`（19:14 那一趟）：**续解出来的内层包，它的"源"是我们自己产出的内容物，
+             * 不是用户的原包** ⇒ 整组不搬（用户口令：「**原包就是原包**」）。
+             *
+             * 现场（逐条有出处）：`111.rar` 解出来的组入口包 `111.zip` 落在 `…\111\111\111.zip`（行 154）；
+             * 下一轮它自己成了两单（行 218/220「内层包，产物归入父任务输出目录」）⇒ `ResolveSourceGroup`
+             * 把**我们刚产出的入口包**当成"源包"搬进其余物（行 287/289 两条 `源包移入其余物`，
+             * 第三条还把 `111.z01` 一起搬走）⇒ 批末「其余物 = 彻底删除」全删（行 292
+             * `彻底删除：111\其余物（5 项 / 545.1 MB）`）⇒ 组入口包没了、**第一大步永远闭不了环**。
+             *
+             * ⚠ **落在这里、而不是某个调用者的理由**：本方法就是"哪些算源包"的**唯一决策处**，
+             * 而调用者有好几个（每单收尾 / 链尾补搬 / 手动档）—— 加在调用者上必然漏一个
+             * （2026-10-09 我先加在 `ExtractionCoordinator` 的链尾循环里，真机复跑**完全没拦住**）。
+             * 判据唯一出口 = `ArchiveTask.IsContinuationTask`（`ParentOutputDirectory` 非空即内层包）。
+             * ⛔ 不影响正当场景：真正要按档处理的是**用户导入的那份原包**，它不是续解任务。
+             */
+            if (task.IsContinuationTask)
+            {
+                return new SourcePackageMovePlan
+                {
+                    ArtifactDirectory = artifactRoot,
+                    Skipped = SkipAll(
+                        sources,
+                        ArtifactSkipReason.SourceIsOurOwnContent,
+                        "这一单是续解出来的内层包：它的“源”是我们自己产出的内容物，不是用户的原包"),
+                    Message = "续解出来的内层包不参与源包处理 —— 源包一个字节都不搬（我们自己产出的内容物不是原包）"
+                };
+            }
+
             var moves = new List<SourcePackageMove>();
             var skipped = new List<ArtifactSkip>();
             var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
