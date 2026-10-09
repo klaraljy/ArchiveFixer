@@ -129,7 +129,7 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 **验证与基线（本项目数字）**
 - 构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过。
-- 全量测试基线：**2880 条（2867 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
+- 全量测试基线：**2881 条（2868 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
 - 行尾：仓库工作区是 **CRLF**（`core.autocrlf=true`）。⛔ 别用 PowerShell `-join "`n"` 整份重写 `.cs`（写出 LF ⇒ `dotnet format` 报一串 WHITESPACE）；已写出就按 CRLF 重写一遍再验。
 - 已知 flaky（并发/计时相关，先单跑确认，⛔ 别改断言）：`SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`、`SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`、`SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`、`EngineRoutingTests.MainViewModel把分派引擎接进流水线`（单跑红/全量绿）、`AsyncDeadlockGuardTests.递归解压_在单线程同步上下文里同步等待_不会死锁`（2026-10-08 实测：全量 1 红 / 单跑 2 条全绿 ⇒ 负载下的计时类 flaky）。
 - 回退代码后必须 `--no-incremental` 重编，否则跑的还是红检那一份。

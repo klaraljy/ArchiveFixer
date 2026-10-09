@@ -126,6 +126,80 @@ namespace ArchiveFixer.Tests
             Assert.Equal(1, BatchOutcomeTally.Count(new[] { task }).Failed);
         }
 
+        /// <summary>
+        /// **链尾那一趟才凑齐的那几单必须落结论，⛔ 不许留在 `Pending` / 「等待解压」**
+        /// （用户 2026-10-09：「链尾 toRun 落结论、Pending 收口」）。
+        ///
+        /// <para><b>老写法</b>：`FinalizeDeferredVolumeDeficits` 把 `RecheckDeferredVolumeDeficits(finalPass: true)`
+        /// 返回的那几单**只打一行日志就丢掉** ⇒ 它们机器终态一直停在 `Pending`、状态停在「等待解压」
+        /// ⇒ 批末汇总按终态把它们算进「未处理」，而事实是"整组在链尾这一趟才凑齐、这一批轮次已经跑完"。</para>
+        ///
+        /// <para><b>钉三件事</b>：① 链尾那一站**真的把它们交回来**（返回值非空）；
+        /// ② 它们的终态**不再是 `Pending`**；③ 状态格读的是**新的那一句**（不许再说"缺卷 / 分卷缺失"，
+        /// 也不许说成"跟班卷"—— 这一组的完整性刚在这一趟判成"齐了"、内容没有任何一单解过）。</para>
+        ///
+        /// <para><b>红检</b>：把 `FinalizeDeferredVolumeDeficits` 里那个循环体（`Outcome = Skipped` +
+        /// `MarkSkipped(...)` 两句）撤掉 ⇒ 本条的 ② ③ 当场变红。</para>
+        /// </summary>
+        [Fact]
+        public void 链尾才凑齐的那一单_必须落结论_不许留在等待解压()
+        {
+            string layer = Path.Combine(_root, "111");
+
+            Directory.CreateDirectory(layer);
+
+            // 一份**完整**的跨盘 ZIP 组：末片 `111.zip` + 第 1/2 片 `111.z01`/`111.z02`（等大）。
+            string tail = Path.Combine(layer, "111.zip");
+            string disk1 = Path.Combine(layer, "111.z01");
+            string disk2 = Path.Combine(layer, "111.z02");
+
+            File.WriteAllBytes(tail, new byte[4096]);
+            File.WriteAllBytes(disk1, new byte[4096]);
+            File.WriteAllBytes(disk2, new byte[4096]);
+
+            var task = new ArchiveTask(disk1, 1)
+            {
+                Status = StatusText.WaitingExtract,
+                Outcome = TaskOutcome.Pending
+            };
+
+            var coordinator = CreateCoordinator();
+
+            coordinator.RecordDeferredVolumeDeficitForTests(task);
+
+            Assert.True(task.IsVolumeDeficitDeferred, "这一单应当先挂在「缺卷留到最后再判」那份名单上");
+
+            // 链尾那一站（与真机里链尾调的是同一个入口）。
+            System.Collections.Generic.IReadOnlyList<ArchiveTask> chainEndResolved =
+                coordinator.FinalizeDeferredVolumeDeficits();
+
+            Assert.Contains(task, chainEndResolved);
+
+            // ② 终态落定（⛔ 不再停在 Pending）。
+            Assert.NotEqual(TaskOutcome.Pending, task.Outcome);
+
+            /*
+             * ③ 状态格 = 「已跳过」，**理由写进错误信息那一格**（`MarkSkipped` 的口径，与"跟班卷"那一档逐行同一套：
+             * 状态只放一句短的、理由进 `ErrorMessage`）。
+             */
+            Assert.Equal(StatusText.Skipped, task.Status);
+            Assert.Contains(StatusText.VolumeDeficitChainEndNotRunText, task.ErrorMessage, StringComparison.Ordinal);
+
+            /*
+             * ④ ⛔ **不许把结论写成"缺卷 / 跟班卷"** —— 判据走**结构化事实**，⛔ 不拿中文文案当判据
+             * （那一句里本来就含"不是缺卷"这四个字，比字符串必然误判）：
+             *   · 缺卷那一档的机器终态是 `PartiallyCompleted`、且 `Status` 落在 `IsFailureStatus` 里 ⇒ 两者都必须不成立；
+             *   · 跟班卷那一档会置 `IsVolumeGroupFollower` ⇒ 必须为 false（内容没有任何一单解过）。
+             */
+            Assert.Equal(TaskOutcome.Skipped, task.Outcome);
+            Assert.NotEqual(TaskOutcome.PartiallyCompleted, task.Outcome);
+            Assert.False(TaskOutcomeClassifier.IsFailureStatus(task.Status), "链尾才凑齐的那一单不是缺卷，不许进失败名单");
+            Assert.False(task.IsVolumeGroupFollower, "内容没有任何一单解过，不许按跟班卷收场");
+
+            // ⑤ 文案里必须给出下一步动作（用户点名的那句「再点一次就会解它」）。
+            Assert.Contains("只解压", task.ErrorMessage, StringComparison.Ordinal);
+        }
+
         /// <summary>无界面宿主里默认"没人点过 = 不确认"；这里注入"用户点了确定"（与真机那一档一致）。</summary>
         private sealed class ConfirmingDialogService : DialogService
         {
