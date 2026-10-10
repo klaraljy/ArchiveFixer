@@ -587,6 +587,9 @@ namespace ArchiveFixer.ViewModels
         {
             if (parameter is not ArchiveTask task)
             {
+                // ⛔ 不许静默（用户 2026-10-10：「右键点打开输出目录没有…什么东西都是没有用的」）：
+                // 命令那层已有 IsRowInList 判据（该灰就灰），这里补一句说明，兜住"万一还是点到了"。
+                _dialogService.ShowInfo("请先在任务列表里点中一行，再用「重新扫描此文件」。");
                 return;
             }
 

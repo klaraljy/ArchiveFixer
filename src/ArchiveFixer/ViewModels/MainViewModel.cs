@@ -2174,7 +2174,16 @@ namespace ArchiveFixer.ViewModels
                 CanRunNormalCommand);
 
 
-            RemoveTaskCommand = new RelayCommand(RemoveTask);
+            /*
+             * ⛔ 行级命令**一率补可用性判据**（用户 2026-10-10：「右键点打开输出目录没有，打开文件夹目录没用，
+             * 什么东西都是没有用的」＋「所有的都要检查…要么就功能弄好来，要么就不要弄这个功能」）。
+             *
+             * 现场：这几条原来是"永远可点"，而实现在参数不是任务时**直接 return** ⇒ 右键落在空白处 / 列头、
+             * 或列表空着时点下去**什么都不发生、不弹窗、不写日志**（与 2026-09-29 用户骂过的
+             * 「移除勾选的按钮一直亮着没用啊」同一个病）。判据 = 参数必须是**列表里真的存在的那一行**
+             * （`IsRowInList`）⇒ 该灰就灰；实现里那一支也补一句说明（⛔ 不许静默）。
+             */
+            RemoveTaskCommand = new RelayCommand(RemoveTask, IsRowInList);
 
             /*
              * 「移除勾选的」—— 可用性判据与右键菜单那条 `RemoveSelectedCommand` **共用同一个**
@@ -2202,17 +2211,17 @@ namespace ArchiveFixer.ViewModels
             RenameBySuggestionAndRetryCommand = new AsyncRelayCommand(
                 RenameBySuggestionAndRetryAsync,
                 CanRenameBySuggestionAndRetry);
-            RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync);
-            CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo);
-            CopyTaskPathCommand = new RelayCommand(CopyTaskPath);
-            CopyTaskErrorCommand = new RelayCommand(CopyTaskError);
+            RescanTaskCommand = new AsyncRelayCommand(_scanCoordinator.RescanTaskAsync, IsRowInList);
+            CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo, IsRowInList);
+            CopyTaskPathCommand = new RelayCommand(CopyTaskPath, IsRowInList);
+            CopyTaskErrorCommand = new RelayCommand(CopyTaskError, IsRowInList);
             /*
              * ⚠ 这两条命令的实体返回 bool（"到底打开了没有"）—— 命令层要的是 Action ⇒ 这里用 lambda 转一手。
              * ⛔ 别改回方法组：那会让"打不开时静默"重新变成可能（用户 2026-10-10 实测的死点）。
              */
             OpenTaskDirectoryCommand = new RelayCommand(parameter => OpenTaskDirectory(parameter));
             OpenTaskOutputDirectoryCommand = new RelayCommand(parameter => OpenTaskOutputDirectory(parameter));
-            OpenTaskArtifactDirectoryCommand = new RelayCommand(OpenTaskArtifactDirectory);
+            OpenTaskArtifactDirectoryCommand = new RelayCommand(OpenTaskArtifactDirectory, IsRowInList);
             ToggleShowPasswordCommand = new RelayCommand(() =>
             {
                 ShowPassword = !ShowPassword;
@@ -2235,7 +2244,7 @@ namespace ArchiveFixer.ViewModels
             SelectAllTasksCommand = new RelayCommand(SelectAllTasks, CanChangeTaskSelection);
             SelectNoneTasksCommand = new RelayCommand(SelectNoneTasks, CanChangeTaskSelection);
             InvertTaskSelectionCommand = new RelayCommand(InvertTaskSelection, CanChangeTaskSelection);
-            SelectSoleTaskCommand = new RelayCommand(SelectSoleTask);
+            SelectSoleTaskCommand = new RelayCommand(SelectSoleTask, IsRowInList);
 
             HookTaskSelectionTracking();
 
@@ -3176,6 +3185,8 @@ namespace ArchiveFixer.ViewModels
         {
             if (parameter is not ArchiveTask target || !Tasks.Contains(target))
             {
+                // ⛔ 不许静默（用户 2026-10-10：「什么东西都是没有用的」）：命令那层已有 IsRowInList 判据，这里补一句。
+                ExplainNoRow();
                 return;
             }
 
@@ -5333,6 +5344,8 @@ namespace ArchiveFixer.ViewModels
         {
             if (parameter is not ArchiveTask task)
             {
+                // ⛔ 不许静默（用户 2026-10-10：「什么东西都是没有用的」）：命令那层已有 IsRowInList 判据，这里说一句。
+                ExplainNoRow();
                 return;
             }
 
@@ -5736,12 +5749,22 @@ namespace ArchiveFixer.ViewModels
                     toRemove.Count));
         }
 
+        /// <summary>
+        /// 三个"复制…"入口：⛔ **点了不许没反应**（用户 2026-10-10：「什么东西都是没有用的」）。
+        ///
+        /// <para>参数不是列表里那一行时（右键落在空白处 / 列头、或调用方没给参数）**说一句**；
+        /// 命令那一层已有 `IsRowInList` 判据（该灰就灰），这里是第二道 —— 两条腿都要有：
+        /// 判据让菜单项变灰，说明让"万一还是点到了"这一档不静默。</para>
+        /// </summary>
         private void CopyTaskInfo(object? parameter)
         {
             if (parameter is ArchiveTask task)
             {
                 CopySanitizedToClipboard(BuildTaskInfoText(task));
+                return;
             }
+
+            ExplainNoRow();
         }
 
         private void CopyTaskPath(object? parameter)
@@ -5749,7 +5772,10 @@ namespace ArchiveFixer.ViewModels
             if (parameter is ArchiveTask task)
             {
                 CopySanitizedToClipboard(task.CurrentPath);
+                return;
             }
+
+            ExplainNoRow();
         }
 
         private void CopyTaskError(object? parameter)
@@ -5757,8 +5783,15 @@ namespace ArchiveFixer.ViewModels
             if (parameter is ArchiveTask task)
             {
                 CopySanitizedToClipboard(task.ErrorMessage);
+                return;
             }
+
+            ExplainNoRow();
         }
+
+        /// <summary>行级命令"没有可作用的那一行"时的统一说明（唯一措辞，⛔ 别各写一句）。</summary>
+        private void ExplainNoRow()
+            => _dialogService.ShowInfo("请先在任务列表里点中一行，再用这一项。");
 
         /// <summary>
         /// 任务信息文本。
@@ -6142,6 +6175,21 @@ namespace ArchiveFixer.ViewModels
 
             _dialogService.ShowInfo("其余物目录不存在（可能已经被删掉了）：" + scope.ArtifactDirectory);
         }
+
+        /// <summary>
+        /// **行级命令的可用性判据（唯一出口）**：参数必须是**列表里真的存在的那一行**。
+        ///
+        /// <para>给谁用：右键菜单里那些"针对某一行"的命令（移除这一行 / 重新扫描 / 三个复制 / 打开目录…）。
+        /// 它们原来一律没有判据 ⇒ 列表空着、或者右键落在空白处时**菜单项是亮的、点下去什么都不发生**
+        /// （用户 2026-10-10：「什么东西都是没有用的」）。判据只有这一处，⛔ 不许各写一套。</para>
+        ///
+        /// <para>为什么是"在不在列表里"而不是"选中项非空"：右键菜单给的是
+        /// `PlacementTarget.SelectedItem`（那一行的对象），而选中项可能已经过期
+        /// （`ReplaceAll` 之后 `SelectedTask` 被清成 null，见 <c>RebuildTaskIndex</c> 那段说明）——
+        /// 按"对象还在表里"判，两个来源就都稳。</para>
+        /// </summary>
+        private bool IsRowInList(object? parameter)
+            => parameter is ArchiveTask task && Tasks.Contains(task);
 
         internal void RebuildTaskIndex()
         {
