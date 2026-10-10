@@ -9,6 +9,7 @@ using ArchiveFixer.Detection;
 using ArchiveFixer.Engines;
 using ArchiveFixer.Engines.SevenZip;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
@@ -1428,6 +1429,136 @@ namespace ArchiveFixer.Tests
             Assert.NotNull(standardThree);
             Assert.False(File.Exists(pieceTwo), "改回标准名之后旧名不该还在");
             Assert.False(File.Exists(pieceThree), "改回标准名之后旧名不该还在");
+        }
+
+        // ============================================ ⑤ 产出方那一份"已经落地的片"（用户 2026-10-10）
+
+        /// <summary>
+        /// **真机 EEEE 2026-10-10 那条"同一结构两种结果"**（用户原话：「这个 `111.z02` 是第一大步的内容物，
+        /// 相当于第二大步的原包，第二大步都已经成功了为什么还要留着，而且 `111.z01` 的结构和他是一样的，
+        /// 为什么 `.z01` 删掉了，而这个留着」）。
+        ///
+        /// <para><b>形状</b>：某一单解出一片（那片属于另一单正在解的那一组），而这一单**已经定稿落地**了
+        /// （真机日志行 123「定稿完成 → `…\111(3)\111(3)`」早于行 183「`111.z02` 接到「111」这一层；
+        /// 零字节的硬链接」）⇒ 接片不是"移动"而是"建链接" ⇒ 组层那一份随后随其余物被彻底删除（行 306），
+        /// **产出方落点里这一份 200 MiB 留在盘上**。对照档：`111(2)_.zip` 的 `111.z01` 接片时还在过程物目录里
+        /// ⇒ 走移动 ⇒ 产出方那边不留 ⇒ 同一结构两种盘面。</para>
+        ///
+        /// <para><b>口径（用户拍板）</b> = 与 `111.z01` 那一档一致：整组**可证完整 + 校验通过 + 未取消** ⇒
+        /// 产出方那一份按「删除操作」收掉；⛔ 其余任何一档（含判不出）⇒ 一个字节都不动。</para>
+        ///
+        /// <para><b>造法</b>：先跑一遍真管线（一组两卷的真 7z，消费方真的解开 + 校验通过 ⇒ 完整性证据是真的），
+        /// **然后**把真机那一刻的中间态摆出来：产出方那一单的落点里放一份那一片、按批内那样写好三本账
+        /// （谁在解 / 谁吐过片 / 哪一份已落地的片被接走），再调批末那一站（与真机链尾同一个入口）。</para>
+        ///
+        /// <para><b>红检</b>：把 `PurgeSettledProducerLandedPiece` 那一调拿掉 ⇒ 第一条断言当场变红
+        /// （产出方落点里那一份仍在盘上）；换成「不动其余物」那一档 ⇒ 下面那条对照变红。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 整组接手之后_产出方那一份已经落地的片按删除档收掉()
+        {
+            RequireSevenZip();
+
+            (string first, string second, _, _) = BuildTwoVolumeSet("落片收尾");
+
+            byte[] pieceBytes = File.ReadAllBytes(second);
+
+            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.MoveToRest, RestHandlingModes.Delete);
+
+            ArchiveTask consumer = await AddTaskAsync(harness, first);
+            ArchiveTask producer = await AddTaskAsync(harness, second);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(new[] { consumer, producer });
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Log(harness, "落片收尾");
+
+            Assert.Equal(TaskOutcome.Succeeded, consumer.Outcome);
+
+            string landedPiece = ArrangeSettledProducerLandedPiece(harness, consumer, producer, pieceBytes, "落片收尾");
+
+            harness.Coordinator.FinalizeDeferredVolumeDeficits();
+
+            Log(harness, "批末那一站之后");
+
+            Assert.False(
+                File.Exists(landedPiece),
+                "整组已经解开（可证完整 + 校验通过 + 未取消）⇒ 产出方落点里那一份不许留着"
+                + "（与 111.z01 那一档一致；这正是用户点名的那条不一致）");
+        }
+
+        /// <summary>
+        /// **对照**（同一套中间态、只换「删除操作」档）：本批是「不动其余物」⇒ 产出方那一份
+        /// **一个字节都不动**（不变量 1 的默认档，⛔ 不许因为"整组解开了"就删）。
+        /// </summary>
+        [SevenZipFact]
+        public async Task 对照_其余物档是不动时_产出方那一份一个字节都不动()
+        {
+            RequireSevenZip();
+
+            (string first, string second, _, _) = BuildTwoVolumeSet("落片收尾-不动档");
+
+            byte[] pieceBytes = File.ReadAllBytes(second);
+
+            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.MoveToRest, RestHandlingModes.Keep);
+
+            ArchiveTask consumer = await AddTaskAsync(harness, first);
+            ArchiveTask producer = await AddTaskAsync(harness, second);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(new[] { consumer, producer });
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.Succeeded, consumer.Outcome);
+
+            string landedPiece = ArrangeSettledProducerLandedPiece(harness, consumer, producer, pieceBytes, "落片收尾-不动档");
+
+            harness.Coordinator.FinalizeDeferredVolumeDeficits();
+
+            Log(harness, "不动档：批末那一站之后");
+
+            Assert.True(
+                File.Exists(landedPiece),
+                "「不动其余物」这一档下一个字节都不许删 —— 产出方那一份必须还在原处");
+        }
+
+        /// <summary>
+        /// 把真机那一刻的中间态摆出来（**只摆状态，⛔ 一点判据都不复制**）：
+        /// ① 产出方那一单一单自己的落点里躺着一份"已经落地的片"（真机 `…\111(3)\111(3)\111.z02`）；
+        /// ② 它的 <see cref="ArchiveTask.OutputPath"/> 指向那个落点（写入点的判据读它）；
+        /// ③ 三本账按批内的样子写好（谁在解 / 谁吐过片 / 哪一份已落地的片被接走）。
+        /// </summary>
+        /// <returns>那一份已经落地的片的路径。</returns>
+        private string ArrangeSettledProducerLandedPiece(
+            Harness harness,
+            ArchiveTask consumer,
+            ArchiveTask producer,
+            byte[] pieceBytes,
+            string name)
+        {
+            string baseName = FileNameHelper.GetArchiveBaseName(consumer.CurrentPath ?? string.Empty);
+
+            Assert.False(string.IsNullOrWhiteSpace(baseName), "消费方的组基名算不出来 ⇒ 中间态摆不成");
+
+            string producerOutput = Path.Combine(_root, name + "-产出方", name);
+            Directory.CreateDirectory(producerOutput);
+
+            string landedPiece = Path.Combine(producerOutput, baseName + ".002");
+            File.WriteAllBytes(landedPiece, pieceBytes);
+
+            producer.OutputPath = producerOutput;
+
+            harness.Coordinator.ResetBatchLedgersForTests();
+            harness.Coordinator.RememberGroupConsumerForTests(baseName, consumer.FileName);
+            harness.Coordinator.RememberGroupPieceProducerForTests(baseName, producer);
+            harness.Coordinator.RememberAdoptedLandedPieceForTests(producer, baseName, landedPiece);
+
+            Assert.True(File.Exists(landedPiece), "摆中间态失败：产出方那一份应当先在盘上");
+
+            return landedPiece;
         }
 
         /// <summary>

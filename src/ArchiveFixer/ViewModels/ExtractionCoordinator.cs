@@ -8114,6 +8114,27 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private readonly List<(ArchiveTask Producer, ArchiveTask Consumer, string GroupBaseName)> _pendingPassThroughRest = new();
 
+        /// <summary>
+        /// 这一批里"**产出方那一份已经落地的片**被接进了某一组"（唯一写入点
+        /// <see cref="RememberAdoptedLandedPiece"/>；唯一读点是收场时的
+        /// <see cref="PurgeSettledProducerLandedPiece"/>）。
+        ///
+        /// <para><b>为什么必须单独记这一笔</b>（用户 2026-10-10 点名的那条"同一结构两种结果"）：
+        /// 同一件事 —— 用户包解出一片、那一片属于组 `111` —— 在真机上出现两种盘面：
+        /// · `111(2)_.zip` 解出的 `111.z01`：接片时它还在**过程物目录**里 ⇒ `ShouldMovePieceIntoGroup`
+        ///   为真 ⇒ 走**移动**，产出方那边一个名字都不留；
+        /// · `111(3).rar` 解出的 `111.z02`：接片之前它就已经**定稿落地**
+        ///   （`…\111(3)\111(3)\111.z02`，日志行 123 早于行 183）⇒ 判据为假 ⇒ 只能**建硬链接**
+        ///   ⇒ 组层那一份随后随其余物被彻底删除，**产出方这份 200 MiB 一直留在盘上**。</para>
+        ///
+        /// <para>⇒ 判据不该读"这一片**此刻恰好在哪**"（位置 + 时序），而该读**它是不是已经被整组接手**
+        /// 这条事实 —— 这一笔就是那条事实：谁供给的、哪一组、那一份的路径、它的落点根在哪。
+        /// ⛔ 只在"产出方自己的落点树里、且不在过程物目录里"的那一档才记（见
+        /// <see cref="RememberAdoptedLandedPiece"/>：用户源目录里的片**永远不进这份账**）。</para>
+        /// </summary>
+        private readonly List<(ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot)>
+            _adoptedLandedPieces = new();
+
         /// <summary>把"这次没删成"的那一单排进批末重试名单（⛔ 同一个生产者只排一次）。</summary>
         private void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
         {
@@ -8877,6 +8898,73 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 记下"**产出方那一份已经落地的片**被接进了这一组"（唯一写入点；读点是整组收场时的
+        /// <see cref="PurgeSettledProducerLandedPiece"/>）。⛔ 只记账，不动盘上任何东西。
+        ///
+        /// <para><b>六条判据全是运行期读到的事实</b>（2026-10-10 用调试器在
+        /// <c>TryAdoptUnresolvedVolumePiece</c> 的接片点逐次读出来的，不是读代码推的）：</para>
+        /// <list type="number">
+        /// <item><description><paramref name="renamedInPlace"/> == false —— 接片**没有**把原位置那一份搬走
+        /// （搬走那一档原位置已经没有了，收场时无从谈起）；</description></item>
+        /// <item><description>这一片落在**产出方自己的落点树**里（<see cref="ArchiveTask.OutputPath"/> 之内）
+        /// —— 调试器实测：`111(3).rar` 的片 `…\111(3)\111(3)\111.z02` 在 `OutputPath=…\111(3)\111(3)` 之内 ✅；
+        /// 而**用户的源片** `…\111(4)\111.z03` 的 `OutputPath` 是 `…\111(4)\111`，**不在**之内 ✅
+        /// ⇒ 这一条同时就是"程序产出 vs 用户源文件"的分界；</description></item>
+        /// <item><description>⛔ 不在**过程物目录**里（<see cref="ProcessArtifactLayout.IsInsideDeletableProcessFolders"/>）
+        /// —— 那一档是"整份会被删掉"的地方（工作区 / 其余物），不归这条账管
+        /// （调试器实测第三形状：`…\111\111\111\其余物\111.z01` 被接片重新接回组层，它必须被排除）；</description></item>
+        /// <item><description>⛔ 不是产出方自己的源包路径（<see cref="ArchiveTask.CurrentPath"/> /
+        /// <see cref="ArchiveTask.OriginalPath"/> / <see cref="ArchiveTask.VolumePaths"/>）—— 红线兜底：
+        /// **用户的源文件一个字节都不许被这条账碰到**（25 GB 事故那一档）；</description></item>
+        /// <item><description>产出方非空、组基名非空；</description></item>
+        /// <item><description>同一 (产出方, 组, 路径) 只记一次。</description></item>
+        /// </list>
+        /// </summary>
+        private void RememberAdoptedLandedPiece(
+            string piecePath,
+            ArchiveTask? owner,
+            string groupBaseName,
+            bool renamedInPlace)
+        {
+            if (owner == null
+                || renamedInPlace
+                || string.IsNullOrWhiteSpace(piecePath)
+                || string.IsNullOrWhiteSpace(groupBaseName))
+            {
+                return;
+            }
+
+            string outputRoot = SafePathHelper.GetFullPathSafe(owner.OutputPath);
+
+            if (outputRoot.Length == 0
+                || !ArchivePathGuard.IsInsideRoot(outputRoot, piecePath, out _)
+                || ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath))
+            {
+                return;
+            }
+
+            foreach (string sourcePath in new[] { owner.CurrentPath, owner.OriginalPath }.Concat(owner.VolumePaths))
+            {
+                if (!string.IsNullOrWhiteSpace(sourcePath) && SafePathHelper.PathEquals(sourcePath, piecePath))
+                {
+                    return;
+                }
+            }
+
+            foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) item
+                     in _adoptedLandedPieces)
+            {
+                if (ReferenceEquals(item.Producer, owner)
+                    && string.Equals(item.PiecePath, piecePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            _adoptedLandedPieces.Add((owner, groupBaseName, piecePath, outputRoot));
+        }
+
+        /// <summary>
         /// 盘上某个文件**改了名（同盘移动）**之后，把**全表每一单**账上指向它的路径都改过来。
         ///
         /// <para>⛔ 为什么是全表而不是"改产出它的那一单"：**同一份字节会被多处账引用**
@@ -9038,6 +9126,14 @@ namespace ArchiveFixer.ViewModels
                     {
                         SyncEveryTaskPathAfterMove(piecePath, target);
                     }
+
+                    /*
+                     * 记下"**产出方那一份已经落地的片**被接进了这一组"（用户 2026-10-10 点名的那条不一致）：
+                     * 接片是"搬"还是"建链接"取决于这一片那一刻**恰好在哪**（时序），而两档收场后的盘面
+                     * 必须一致 —— 整组可证完整 + 校验通过 + 未取消之后，产出方那一份**不留**
+                     * （`111.z01` 那一档就是这么收的）。判据与红线见 `RememberAdoptedLandedPiece`。
+                     */
+                    RememberAdoptedLandedPiece(piecePath, owner, baseName, renamedInPlace);
 
                     /*
                      * ⚠ **说话要按事实分三种**（旧文案一律写"零字节的硬链接、名字一个字符没改"，
@@ -9983,6 +10079,7 @@ namespace ArchiveFixer.ViewModels
             _groupConsumerByName.Clear();
             _consumedVolumeSources.Clear();
             _producerSourcesCollected.Clear();
+            _adoptedLandedPieces.Clear();
         }
 
         /// <summary>单测用：把"这一片是借某个消费方用过的源片"记进既有那份账。</summary>
@@ -10006,6 +10103,18 @@ namespace ArchiveFixer.ViewModels
 
             _groupConsumerByName[baseName] = consumerName;
         }
+
+        /// <summary>单测用：把"这一单吐出了这一组的一片"记进既有那份账（写入点唯一 = <see cref="RememberGroupPieceProducer"/>）。</summary>
+        internal void RememberGroupPieceProducerForTests(string baseName, ArchiveTask producer)
+            => RememberGroupPieceProducer(baseName, producer);
+
+        /// <summary>
+        /// 单测用：把"**产出方那一份已经落地的片**被接进了这一组"记进这本账
+        /// （写入点唯一 = <see cref="RememberAdoptedLandedPiece"/>，⛔ 判据一条都不复制：
+        /// 落点根、过程物目录、源包路径三道闸门照旧全部生效 ⇒ 单测必须把产出方的落点摆对）。
+        /// </summary>
+        internal void RememberAdoptedLandedPieceForTests(ArchiveTask producer, string groupBaseName, string piecePath)
+            => RememberAdoptedLandedPiece(piecePath, producer, groupBaseName, renamedInPlace: false);
 
         /// <summary>单测用：把一单放进"缺卷留到最后再判"那份名单（写入点唯一 = <see cref="RecordDeferredVolumeDeficit"/>）。</summary>
         internal void RecordDeferredVolumeDeficitForTests(ArchiveTask task)
@@ -10254,6 +10363,176 @@ namespace ArchiveFixer.ViewModels
                     ? $"{producer.LogName}：过路层的其余物已按「删除操作」处理（{outcome.EntryCount} 项 / {outcome.FreedBytes} 字节）"
                       + $"—— 这一组的内容已由「{consumer.FileName}」解开。"
                     : $"{producer.LogName}：过路层的其余物这次没删成 —— {outcome.Message}");
+        }
+
+        /// <summary>
+        /// **产出方那一份"已经落地的片"按删除档收掉**（用户 2026-10-10 拍板：与 `111.z01` 那一档一致）。
+        ///
+        /// <para><b>它修的是什么</b>：同一件事 —— 用户包解出一片、那一片属于组 `111` —— 真机上出现两种盘面，
+        /// 差别只取决于"整组接手"发生在"这一单定稿"之前还是之后：
+        /// · `111(2)_.zip` 的 `111.z01`：接片时那片还在过程物目录里 ⇒ 走**移动** ⇒ 产出方那边不留；
+        /// · `111(3).rar` 的 `111.z02`：定稿（日志行 123，18:05:49）早于接片（行 183，18:05:50）⇒ 只能**建硬链接**
+        ///   ⇒ 组层那一份随后随其余物被彻底删除（行 306），**产出方这份 200 MiB 留在盘上** —— 用户当场就问
+        ///   「第二大步都已经成功了为什么还要留着，而且 `111.z01` 的结构和他是一样的」。</para>
+        ///
+        /// <para><b>判据全是事实，判不出 ⇒ 什么都不做</b>（与其余物那一档同一套口径）：</para>
+        /// <list type="number">
+        /// <item><description>这一单**确实交过**"已经落地的片"给这一组（唯一写入点
+        /// <see cref="RememberAdoptedLandedPiece"/>，⛔ 用户源目录里的片永远不进这份账）—— 没有 ⇒ 一个字节都不动；</description></item>
+        /// <item><description>本批是「删除操作」那一档（<see cref="RestHandlingModes.Keep"/> ⇒ 一个字节都不动）；</description></item>
+        /// <item><description>没被取消；</description></item>
+        /// <item><description>**接手它的那一单机器终态是「完成」**（⛔ 不比中文文案，与其余物那一档第一道门槛同一把尺子）；</description></item>
+        /// <item><description>**接手它的那一单可证完整 + 校验通过**（L4 唯一出口
+        /// <see cref="ResultCompletenessClassifier"/>，与 <see cref="PurgePassThroughRestOfSettledProducer"/>
+        /// 同一份证据来源：这一单自己停在中途 ⇒ 它自己的完整性判不出来，该按接手它的那一单的）—— 判不出 ⇒ 一个字节都不动；</description></item>
+        /// <item><description>那一片**此刻还在盘上**、名字仍属于这一组（<see cref="VolumeGroupDetector.TryGetVolumeIndex"/>
+        /// + <see cref="FileNameHelper.GetArchiveBaseName"/> 两把既有尺子）、而且仍在**当时记下的那个落点根**之内；</description></item>
+        /// <item><description>没命中「内容物保留关键词」（<see cref="ContentKeepRules"/>，与其余物那一档同一道闸门）。</description></item>
+        /// </list>
+        ///
+        /// <para>删除动作本身仍走**唯一执行体** <see cref="Storage.RecycleBinService"/>（含 <c>AllowedRoot</c> 安全前置），
+        /// 本方法只决定"什么时候试、试哪一份"。⚠ 删除**不写回任务账**（`OutputPath` 早已被收场清空），
+        /// 也不改任何结论：删不掉只写 WARN。</para>
+        /// </summary>
+        private void PurgeSettledProducerLandedPiece(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
+        {
+            var targets = new List<(string Path, string OutputRoot)>();
+
+            foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) item
+                     in _adoptedLandedPieces)
+            {
+                if (ReferenceEquals(item.Producer, producer)
+                    && string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    targets.Add((item.PiecePath, item.OutputRoot));
+                }
+            }
+
+            if (targets.Count == 0)
+            {
+                // 这一单没有"已经落地的片"被接走过（真机 `111.z01` 那一档就是：接片走的是移动）
+                // ⇒ 与改动前逐字相同，一个字节都不动。
+                return;
+            }
+
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+            {
+                // 「不动其余物」这一档：一个字节都不删（不变量 1 的默认档）。
+                return;
+            }
+
+            bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
+
+            if (cancelled)
+            {
+                return;
+            }
+
+            /*
+             * 判据与其余物那一档的第一道门槛**同一把尺子**（`RestItemPurger.Purge` 那条）：
+             * 动手之前先问**机器终态** —— ⛔ 不比任何中文文案。少了这一条，`CollectConsumedSourcePiecesIntoRest`
+             * 那条路（它不带"消费方必须成功"的前置）就可能凭"完整性证据"放行一次删除。
+             */
+            if (consumer.Outcome != TaskOutcome.Succeeded)
+            {
+                return;
+            }
+
+            ResultCompletenessVerdict evidence = ResultCompletenessClassifier.Classify(consumer);
+
+            if (!evidence.AllowsSourceRemoval)
+            {
+                return;
+            }
+
+            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
+                ? DeleteMode.RecycleBin
+                : DeleteMode.Permanent;
+
+            string reason = deleteMode == DeleteMode.RecycleBin
+                ? RestItemPurger.SettledPieceCopyRecycleReason
+                : RestItemPurger.SettledPieceCopyPurgeReason;
+
+            ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
+            var service = new RecycleBinService(RestDeleteExecutor, null, null);
+
+            foreach ((string path, string outputRoot) in targets)
+            {
+                try
+                {
+                    if (!File.Exists(path))
+                    {
+                        // 已经不在了（被搬走 / 已删）⇒ 什么都不做。
+                        continue;
+                    }
+
+                    string name = FileNameHelper.GetFileName(path);
+
+                    if (VolumeGroupDetector.TryGetVolumeIndex(name) == null
+                        || !string.Equals(
+                            FileNameHelper.GetArchiveBaseName(name),
+                            groupBaseName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        // 名字已经不再属于这一组 ⇒ 判不出"这确实是那一片" ⇒ 什么都不做。
+                        continue;
+                    }
+
+                    if (!ArchivePathGuard.IsInsideRoot(outputRoot, path, out _))
+                    {
+                        // 已经不在当时记下的那个落点根之内 ⇒ 判不出 ⇒ 什么都不做。
+                        continue;
+                    }
+
+                    string? keyword = keepRules.FindMatch(path);
+
+                    if (keyword != null)
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"{producer.LogName}：产出方这一份 {name} 命中了「内容物保留关键词」（{keyword}）"
+                            + " —— 按设置碰都不碰，这一份留在原处。");
+                        continue;
+                    }
+
+                    DeleteResult result = service.Delete(
+                        new DeleteRequest(path, reason),
+                        new DeleteOptions
+                        {
+                            AllowedRoot = outputRoot,
+                            UserConfirmed = true,
+                            Mode = deleteMode,
+                            Reason = reason
+                        });
+
+                    DeleteOutcome? outcome = result.Outcomes.FirstOrDefault();
+
+                    if (result.SuccessCount > 0)
+                    {
+                        AppendLog(
+                            "INFO",
+                            deleteMode == DeleteMode.RecycleBin
+                                ? $"{producer.LogName}：这一片已经随整组解开，产出方这里那一份 {name} 按「删除操作」移入回收站了"
+                                  + "（与 `111.z01` 那一档同一个收场口径）。"
+                                : $"{producer.LogName}：这一片已经随整组解开，产出方这里那一份 {name} 按「删除操作」彻底删除"
+                                  + $"（{outcome?.EntryCount ?? 0} 个条目 / 释放 {TaskSpaceEstimate.FormatSize(outcome?.FreedBytes ?? 0)}，不进回收站）。");
+                    }
+                    else
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{producer.LogName}：产出方这里那一份 {name} 这次没删成 —— {outcome?.Message ?? result.Message}"
+                            + "（内容物不受影响，这一份仍在原处）。");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 删东西绝不许把已经成立的结论拖成异常：落成"没删成"，别的什么都不变。
+                    AppendLog("WARN", $"{producer.LogName}：收产出方那一份片时出现意外错误：{ex.Message}");
+                }
+            }
         }
 
         /// <summary>
@@ -10764,6 +11043,14 @@ namespace ArchiveFixer.ViewModels
              * 它只出过程物、那份过程物已被这一组那次**可证完整**的解压接手 ⇒ 它的其余物不再有用了。
              */
             PurgePassThroughRestOfSettledProducer(piece, consumer, groupBaseName);
+
+            /*
+             * **产出方那一份"已经落地的片"也要按删除档收掉**（用户 2026-10-10 点名的那条不一致：同一结构
+             * 在真机上出现"`111.z01` 删了、`111.z02` 留着"两种盘面）。判据与红线见
+             * `PurgeSettledProducerLandedPiece`：整组可证完整 + 校验通过 + 未取消 + 只在删除档 ⇒ 不留；
+             * 其余任何一档（含判不出）⇒ 一个字节都不动。⛔ 与上面那一档一样幂等。
+             */
+            PurgeSettledProducerLandedPiece(piece, consumer, groupBaseName);
 
             /*
              * ⛔ **这一趟没删成就解除"已处理"标记、排进批末重试**（真机 2026-10-06 20:07 实测）：
@@ -14437,6 +14724,7 @@ namespace ArchiveFixer.ViewModels
                 _groupConsumerByName.Clear();
                 _groupPieceProducers.Clear();
                 _producerSourcesCollected.Clear();
+                _adoptedLandedPieces.Clear();
                 _volumeDeficitFinalPass.Clear();
             }
 
