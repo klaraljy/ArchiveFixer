@@ -1526,18 +1526,78 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **真机 2026-10-10 20:09 那条路**（用户复跑逮到的那一次）：这一片是被**批量收片**接走的 ——
+        /// 调用方给的 `owner` 是**被重判的那一单**（它的落点树里没有这一片），真正的产出方是**另一单**。
+        ///
+        /// <para>老写法按"调用方给的那一单"判 ⇒ 判成"不在产出方的落点树里" ⇒ 一个字都不记 ⇒ 收场时没人来收
+        /// ⇒ 真机上 `111(3)\111(3)\111.z02`（200 MiB）原样留着（他那次日志里**没有**那一行删除、盘面也确实还在）。
+        /// 他那台机器的并发是 4（设置里的档：4），走的就是这条批量收片路；本夹具默认并发更低，
+        /// 所以老写法在这条用例里才现形。</para>
+        ///
+        /// <para>⇒ 判据改成：**产出方按盘上事实认**（`ResolveLandedPieceProducer`），收场**按"组"收**
+        /// （`PurgeGroupLandedPieces` 排在"谁吐过片"那份账之前）。</para>
+        ///
+        /// <para><b>红检</b>：把 `ResolveLandedPieceProducer` 退回"只认调用方给的那一单"⇒ 本条当场红
+        /// （产出方那一份仍在盘上）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真机路_接片的人不是产出方_产出方那一份照样要收掉()
+        {
+            RequireSevenZip();
+
+            (string first, string second, _, _) = BuildTwoVolumeSet("接片人不是产出方");
+
+            byte[] pieceBytes = File.ReadAllBytes(second);
+
+            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.MoveToRest, RestHandlingModes.Delete);
+
+            ArchiveTask consumer = await AddTaskAsync(harness, first);
+            ArchiveTask producer = await AddTaskAsync(harness, second);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(new[] { consumer, producer });
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.Succeeded, consumer.Outcome);
+
+            // 真机那一刻的调用形状：接片时传下去的是**消费方**（它的落点树里没有这一片）。
+            string landedPiece = ArrangeSettledProducerLandedPiece(
+                harness,
+                consumer,
+                producer,
+                pieceBytes,
+                "接片人不是产出方",
+                adoptionOwner: consumer);
+
+            harness.Coordinator.FinalizeDeferredVolumeDeficits();
+
+            Log(harness, "接片人不是产出方：批末那一站之后");
+
+            Assert.False(
+                File.Exists(landedPiece),
+                "接片时传的是谁，不该决定这一片收不收 —— 整组已经解开 ⇒ 产出方那一份必须收掉"
+                + "（真机 20:09 那次就是因为按调用方判、结果 200 MiB 留在了盘上）");
+        }
+
+        /// <summary>
         /// 把真机那一刻的中间态摆出来（**只摆状态，⛔ 一点判据都不复制**）：
-        /// ① 产出方那一单一单自己的落点里躺着一份"已经落地的片"（真机 `…\111(3)\111(3)\111.z02`）；
+        /// ① 产出方那一单自己的落点里躺着一份"已经落地的片"（真机 `…\111(3)\111(3)\111.z02`）；
         /// ② 它的 <see cref="ArchiveTask.OutputPath"/> 指向那个落点（写入点的判据读它）；
         /// ③ 三本账按批内的样子写好（谁在解 / 谁吐过片 / 哪一份已落地的片被接走）。
         /// </summary>
+        /// <param name="adoptionOwner">
+        /// **接片那一刻调用方给的那一单**（⛔ 未必是产出方）：真机 2026-10-10 20:09 那次真跑里，
+        /// 批量收片那条路给的是**被重判的那一单**，它的落点树里没有这一片 —— 产出方由程序按盘上事实认。
+        /// </param>
         /// <returns>那一份已经落地的片的路径。</returns>
         private string ArrangeSettledProducerLandedPiece(
             Harness harness,
             ArchiveTask consumer,
             ArchiveTask producer,
             byte[] pieceBytes,
-            string name)
+            string name,
+            ArchiveTask? adoptionOwner = null)
         {
             string baseName = FileNameHelper.GetArchiveBaseName(consumer.CurrentPath ?? string.Empty);
 
@@ -1554,7 +1614,7 @@ namespace ArchiveFixer.Tests
             harness.Coordinator.ResetBatchLedgersForTests();
             harness.Coordinator.RememberGroupConsumerForTests(baseName, consumer.FileName);
             harness.Coordinator.RememberGroupPieceProducerForTests(baseName, producer);
-            harness.Coordinator.RememberAdoptedLandedPieceForTests(producer, baseName, landedPiece);
+            harness.Coordinator.RememberAdoptedLandedPieceForTests(adoptionOwner ?? producer, baseName, landedPiece);
 
             Assert.True(File.Exists(landedPiece), "摆中间态失败：产出方那一份应当先在盘上");
 

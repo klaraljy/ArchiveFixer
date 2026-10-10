@@ -8117,7 +8117,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 这一批里"**产出方那一份已经落地的片**被接进了某一组"（唯一写入点
         /// <see cref="RememberAdoptedLandedPiece"/>；唯一读点是收场时的
-        /// <see cref="PurgeSettledProducerLandedPiece"/>）。
+        /// <see cref="PurgeGroupLandedPieces"/>）。
         ///
         /// <para><b>为什么必须单独记这一笔</b>（用户 2026-10-10 点名的那条"同一结构两种结果"）：
         /// 同一件事 —— 用户包解出一片、那一片属于组 `111` —— 在真机上出现两种盘面：
@@ -8899,25 +8899,30 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 记下"**产出方那一份已经落地的片**被接进了这一组"（唯一写入点；读点是整组收场时的
-        /// <see cref="PurgeSettledProducerLandedPiece"/>）。⛔ 只记账，不动盘上任何东西。
+        /// <see cref="PurgeGroupLandedPieces"/>）。⛔ 只记账，不动盘上任何东西。
         ///
-        /// <para><b>六条判据全是运行期读到的事实</b>（2026-10-10 用调试器在
-        /// <c>TryAdoptUnresolvedVolumePiece</c> 的接片点逐次读出来的，不是读代码推的）：</para>
+        /// <para><b>⛔ 产出方必须按"盘上事实"认，不能按调用方给的那个 <paramref name="owner"/></b>
+        /// （真机 2026-10-10 20:09 那次真跑逮到）：`TryGatherGroupPiecesInto`（`:10624` 调）在第二圈
+        /// 扫"别人那两棵树"时，把**被重判的那一单**当 owner 传下去（`:9764`），而那一单的
+        /// <see cref="ArchiveTask.OutputPath"/> 那一刻还是空的 —— 按 owner 判就会把这一片判成
+        /// "不在产出方的落点树里" ⇒ 一个字都不记 ⇒ 收场时没得删，`111(3)\111(3)\111.z02`
+        /// 200 MiB 原样留在盘上（用户 20:09 那次复跑就是这么留着的）。
+        /// ⇒ 判据改成：**这一片落在哪一单的落点树里**（先看调用方给的那一单，不是它就在全表里按
+        /// <see cref="ArchiveTask.OutputPath"/> 找那一单）—— 谁产的按盘上事实认，与谁在调无关。</para>
+        ///
+        /// <para><b>其余判据也全是运行期事实</b>（2026-10-10 调试器在 <c>TryAdoptUnresolvedVolumePiece</c>
+        /// 接片点逐次读出来的）：</para>
         /// <list type="number">
         /// <item><description><paramref name="renamedInPlace"/> == false —— 接片**没有**把原位置那一份搬走
         /// （搬走那一档原位置已经没有了，收场时无从谈起）；</description></item>
-        /// <item><description>这一片落在**产出方自己的落点树**里（<see cref="ArchiveTask.OutputPath"/> 之内）
-        /// —— 调试器实测：`111(3).rar` 的片 `…\111(3)\111(3)\111.z02` 在 `OutputPath=…\111(3)\111(3)` 之内 ✅；
-        /// 而**用户的源片** `…\111(4)\111.z03` 的 `OutputPath` 是 `…\111(4)\111`，**不在**之内 ✅
-        /// ⇒ 这一条同时就是"程序产出 vs 用户源文件"的分界；</description></item>
+        /// <item><description>认得出**是哪一单**的落点树里那一份（认不出 ⇒ 一个字都不记）；</description></item>
         /// <item><description>⛔ 不在**过程物目录**里（<see cref="ProcessArtifactLayout.IsInsideDeletableProcessFolders"/>）
         /// —— 那一档是"整份会被删掉"的地方（工作区 / 其余物），不归这条账管
         /// （调试器实测第三形状：`…\111\111\111\其余物\111.z01` 被接片重新接回组层，它必须被排除）；</description></item>
-        /// <item><description>⛔ 不是产出方自己的源包路径（<see cref="ArchiveTask.CurrentPath"/> /
+        /// <item><description>⛔ 不是**任何一单**的源包路径（<see cref="ArchiveTask.CurrentPath"/> /
         /// <see cref="ArchiveTask.OriginalPath"/> / <see cref="ArchiveTask.VolumePaths"/>）—— 红线兜底：
         /// **用户的源文件一个字节都不许被这条账碰到**（25 GB 事故那一档）；</description></item>
-        /// <item><description>产出方非空、组基名非空；</description></item>
-        /// <item><description>同一 (产出方, 组, 路径) 只记一次。</description></item>
+        /// <item><description>组基名非空；同一 (组, 路径) 只记一次。</description></item>
         /// </list>
         /// </summary>
         private void RememberAdoptedLandedPiece(
@@ -8926,42 +8931,105 @@ namespace ArchiveFixer.ViewModels
             string groupBaseName,
             bool renamedInPlace)
         {
-            if (owner == null
-                || renamedInPlace
+            if (renamedInPlace
                 || string.IsNullOrWhiteSpace(piecePath)
                 || string.IsNullOrWhiteSpace(groupBaseName))
             {
                 return;
             }
 
-            string outputRoot = SafePathHelper.GetFullPathSafe(owner.OutputPath);
-
-            if (outputRoot.Length == 0
-                || !ArchivePathGuard.IsInsideRoot(outputRoot, piecePath, out _)
-                || ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath))
+            if (ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath))
             {
                 return;
             }
 
-            foreach (string sourcePath in new[] { owner.CurrentPath, owner.OriginalPath }.Concat(owner.VolumePaths))
+            ArchiveTask? producer = ResolveLandedPieceProducer(piecePath, owner);
+
+            if (producer == null)
             {
-                if (!string.IsNullOrWhiteSpace(sourcePath) && SafePathHelper.PathEquals(sourcePath, piecePath))
+                // 判不出这一片是哪一单产出的（谁的落点树里都没有它）⇒ 什么都不记。
+                return;
+            }
+
+            string outputRoot = SafePathHelper.GetFullPathSafe(producer.OutputPath);
+
+            if (outputRoot.Length == 0)
+            {
+                outputRoot = SafePathHelper.GetFullPathSafe(producer.ContentDirectoryPath);
+            }
+
+            if (outputRoot.Length == 0 || !ArchivePathGuard.IsInsideRoot(outputRoot, piecePath, out _))
+            {
+                return;
+            }
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                foreach (string sourcePath in EnumerateTaskPaths(task))
                 {
-                    return;
+                    if (!string.IsNullOrWhiteSpace(sourcePath) && SafePathHelper.PathEquals(sourcePath, piecePath))
+                    {
+                        // 这一份还是**某一单自己的源**（用户给的包 / 用户目录里的片）⇒ 不归这条账管。
+                        return;
+                    }
                 }
             }
 
             foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) item
                      in _adoptedLandedPieces)
             {
-                if (ReferenceEquals(item.Producer, owner)
+                if (string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(item.PiecePath, piecePath, StringComparison.OrdinalIgnoreCase))
                 {
                     return;
                 }
             }
 
-            _adoptedLandedPieces.Add((owner, groupBaseName, piecePath, outputRoot));
+            _adoptedLandedPieces.Add((producer, groupBaseName, piecePath, outputRoot));
+        }
+
+        /// <summary>
+        /// **这一片落在哪一单的落点树里**（唯一出口；⛔ 与"谁在调"无关）：
+        /// 先看调用方给的那一单，不是它就在全表里按 <see cref="ArchiveTask.OutputPath"/> /
+        /// <see cref="ArchiveTask.ContentDirectoryPath"/> 找 —— 判不出 ⇒ <c>null</c>
+        /// （调用方一个字都不记）。
+        /// </summary>
+        private ArchiveTask? ResolveLandedPieceProducer(string piecePath, ArchiveTask? owner)
+        {
+            if (IsInsideOwnLandingTree(owner, piecePath))
+            {
+                return owner;
+            }
+
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                if (!ReferenceEquals(candidate, owner) && IsInsideOwnLandingTree(candidate, piecePath))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>这一份在不在这一单**自己那条链的落点树**里（输出目录，或内容物那一层）。</summary>
+        private static bool IsInsideOwnLandingTree(ArchiveTask? task, string piecePath)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(piecePath))
+            {
+                return false;
+            }
+
+            foreach (string root in new[] { task.OutputPath, task.ContentDirectoryPath })
+            {
+                if (!string.IsNullOrWhiteSpace(root)
+                    && ArchivePathGuard.IsInsideRoot(SafePathHelper.GetFullPathSafe(root), piecePath, out _))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -10111,10 +10179,17 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// 单测用：把"**产出方那一份已经落地的片**被接进了这一组"记进这本账
         /// （写入点唯一 = <see cref="RememberAdoptedLandedPiece"/>，⛔ 判据一条都不复制：
-        /// 落点根、过程物目录、源包路径三道闸门照旧全部生效 ⇒ 单测必须把产出方的落点摆对）。
+        /// 落点根、过程物目录、源包路径三道闸门照旧全部生效）。
+        ///
+        /// <para>⚠ <paramref name="adoptionOwner"/> = **接片那一刻调用方给的那一单**，⛔ 不等于产出方：
+        /// 真机上"批量收片"那条路给的是**被重判的那一单**（落点树里没有这一片）——
+        /// 产出方由 `ResolveLandedPieceProducer` 按盘上事实认。</para>
         /// </summary>
-        internal void RememberAdoptedLandedPieceForTests(ArchiveTask producer, string groupBaseName, string piecePath)
-            => RememberAdoptedLandedPiece(piecePath, producer, groupBaseName, renamedInPlace: false);
+        internal void RememberAdoptedLandedPieceForTests(
+            ArchiveTask adoptionOwner,
+            string groupBaseName,
+            string piecePath)
+            => RememberAdoptedLandedPiece(piecePath, adoptionOwner, groupBaseName, renamedInPlace: false);
 
         /// <summary>单测用：把一单放进"缺卷留到最后再判"那份名单（写入点唯一 = <see cref="RecordDeferredVolumeDeficit"/>）。</summary>
         internal void RecordDeferredVolumeDeficitForTests(ArchiveTask task)
@@ -10375,16 +10450,22 @@ namespace ArchiveFixer.ViewModels
         ///   ⇒ 组层那一份随后随其余物被彻底删除（行 306），**产出方这份 200 MiB 留在盘上** —— 用户当场就问
         ///   「第二大步都已经成功了为什么还要留着，而且 `111.z01` 的结构和他是一样的」。</para>
         ///
+        /// <para><b>⛔ 按"组"收、不按"哪一单"收</b>（真机 2026-10-10 20:09 那次真跑逮到）：这一片被接走的那一刻，
+        /// 调用方给的那个"owner"未必是产出它的那一单（批量收片那条路给的是**被重判的那一单**，它的落点树里
+        /// 没有这一片）⇒ 若按"某一单"去查这份账，真机上就会出现"账上有、可就是没人来收"⇒ 200 MiB 原样留着。
+        /// 所以这一档只问两件事：**这一组**有没有"已经落地的片"（写入点
+        /// <see cref="RememberAdoptedLandedPiece"/> 已经按盘上事实认过产出方），以及**接手这一组的那一单**
+        /// 是不是真的成功且可证完整。</para>
+        ///
         /// <para><b>判据全是事实，判不出 ⇒ 什么都不做</b>（与其余物那一档同一套口径）：</para>
         /// <list type="number">
-        /// <item><description>这一单**确实交过**"已经落地的片"给这一组（唯一写入点
-        /// <see cref="RememberAdoptedLandedPiece"/>，⛔ 用户源目录里的片永远不进这份账）—— 没有 ⇒ 一个字节都不动；</description></item>
+        /// <item><description>这一组**确实**有"已经落地的片"被接走过（⛔ 用户源目录里的片永远不进这份账）—— 没有 ⇒ 一个字节都不动；</description></item>
         /// <item><description>本批是「删除操作」那一档（<see cref="RestHandlingModes.Keep"/> ⇒ 一个字节都不动）；</description></item>
         /// <item><description>没被取消；</description></item>
         /// <item><description>**接手它的那一单机器终态是「完成」**（⛔ 不比中文文案，与其余物那一档第一道门槛同一把尺子）；</description></item>
         /// <item><description>**接手它的那一单可证完整 + 校验通过**（L4 唯一出口
         /// <see cref="ResultCompletenessClassifier"/>，与 <see cref="PurgePassThroughRestOfSettledProducer"/>
-        /// 同一份证据来源：这一单自己停在中途 ⇒ 它自己的完整性判不出来，该按接手它的那一单的）—— 判不出 ⇒ 一个字节都不动；</description></item>
+        /// 同一份证据来源）—— 判不出 ⇒ 一个字节都不动；</description></item>
         /// <item><description>那一片**此刻还在盘上**、名字仍属于这一组（<see cref="VolumeGroupDetector.TryGetVolumeIndex"/>
         /// + <see cref="FileNameHelper.GetArchiveBaseName"/> 两把既有尺子）、而且仍在**当时记下的那个落点根**之内；</description></item>
         /// <item><description>没命中「内容物保留关键词」（<see cref="ContentKeepRules"/>，与其余物那一档同一道闸门）。</description></item>
@@ -10394,23 +10475,22 @@ namespace ArchiveFixer.ViewModels
         /// 本方法只决定"什么时候试、试哪一份"。⚠ 删除**不写回任务账**（`OutputPath` 早已被收场清空），
         /// 也不改任何结论：删不掉只写 WARN。</para>
         /// </summary>
-        private void PurgeSettledProducerLandedPiece(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
+        private void PurgeGroupLandedPieces(ArchiveTask consumer, string groupBaseName)
         {
-            var targets = new List<(string Path, string OutputRoot)>();
+            var targets = new List<(ArchiveTask Producer, string Path, string OutputRoot)>();
 
             foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) item
                      in _adoptedLandedPieces)
             {
-                if (ReferenceEquals(item.Producer, producer)
-                    && string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase))
                 {
-                    targets.Add((item.PiecePath, item.OutputRoot));
+                    targets.Add((item.Producer, item.PiecePath, item.OutputRoot));
                 }
             }
 
             if (targets.Count == 0)
             {
-                // 这一单没有"已经落地的片"被接走过（真机 `111.z01` 那一档就是：接片走的是移动）
+                // 这一组没有"已经落地的片"被接走过（真机 `111.z01` 那一档就是：接片走的是移动）
                 // ⇒ 与改动前逐字相同，一个字节都不动。
                 return;
             }
@@ -10458,7 +10538,7 @@ namespace ArchiveFixer.ViewModels
             ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
             var service = new RecycleBinService(RestDeleteExecutor, null, null);
 
-            foreach ((string path, string outputRoot) in targets)
+            foreach ((ArchiveTask producer, string path, string outputRoot) in targets)
             {
                 try
                 {
@@ -10945,8 +11025,22 @@ namespace ArchiveFixer.ViewModels
         {
             string groupBaseName = FileNameHelper.GetArchiveBaseName(consumer.CurrentPath ?? string.Empty);
 
-            if (groupBaseName.Length == 0
-                || !_groupPieceProducers.TryGetValue(groupBaseName, out List<ArchiveTask>? producers))
+            if (groupBaseName.Length == 0)
+            {
+                return;
+            }
+
+            /*
+             * **产出方那一份"已经落地的片"按删除档收掉**（用户 2026-10-10 点名的那条不一致）。
+             *
+             * ⛔ 位置必须在这里、**排在下面那份"谁吐出过片"的账之前**：真机 2026-10-10 20:09 那次真跑里，
+             * 这一片是被"批量收片"那条路接走的（`owner` 给的是**被重判的那一单**，它的落点树里没有这一片），
+             * 于是它**既没进那份账、也没人替它收** ⇒ 200 MiB 原样留着。这一档只认"这一组 + 接手方成功且可证完整"，
+             * ⛔ 与"哪一单"无关。判据与红线见 `PurgeGroupLandedPieces`（幂等：片不在盘上就是一个字节都不动）。
+             */
+            PurgeGroupLandedPieces(consumer, groupBaseName);
+
+            if (!_groupPieceProducers.TryGetValue(groupBaseName, out List<ArchiveTask>? producers))
             {
                 return;
             }
@@ -11043,14 +11137,6 @@ namespace ArchiveFixer.ViewModels
              * 它只出过程物、那份过程物已被这一组那次**可证完整**的解压接手 ⇒ 它的其余物不再有用了。
              */
             PurgePassThroughRestOfSettledProducer(piece, consumer, groupBaseName);
-
-            /*
-             * **产出方那一份"已经落地的片"也要按删除档收掉**（用户 2026-10-10 点名的那条不一致：同一结构
-             * 在真机上出现"`111.z01` 删了、`111.z02` 留着"两种盘面）。判据与红线见
-             * `PurgeSettledProducerLandedPiece`：整组可证完整 + 校验通过 + 未取消 + 只在删除档 ⇒ 不留；
-             * 其余任何一档（含判不出）⇒ 一个字节都不动。⛔ 与上面那一档一样幂等。
-             */
-            PurgeSettledProducerLandedPiece(piece, consumer, groupBaseName);
 
             /*
              * ⛔ **这一趟没删成就解除"已处理"标记、排进批末重试**（真机 2026-10-06 20:07 实测）：
