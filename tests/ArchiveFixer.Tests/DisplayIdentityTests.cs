@@ -510,5 +510,56 @@ namespace ArchiveFixer.Tests
             Assert.Equal("111.z02", task.DisplayFileName);
             Assert.Equal(".z02", task.DisplayExtension);
         }
+
+        /// <summary>
+        /// **状态那一格的"文字"变了，"颜色"也必须跟着变**（用户 2026-10-10 真机原话：
+        /// 「为什么解压失败都能显示成蓝色」「为什么第一行是绿色的，其他的都是蓝色的」）。
+        ///
+        /// <para><b>病灶（定案到行）</b>：<c>TaskTab.xaml:575-576</c> 那一格的文字绑
+        /// <see cref="ArchiveTask.StatusDisplayText"/>、颜色绑 <see cref="ArchiveTask.StatusColorKey"/>
+        /// （<c>= IsVolumeDeficitDeferred ? Skipped : Status</c>）。而 <c>Status</c> 的 setter 原先只发
+        /// <c>StatusDisplayText</c> / <c>DisplayErrorMessage</c> 两条通知，**从不发 <c>StatusColorKey</c>**
+        /// ⇒ <c>Foreground</c> 那条绑定永远不重算，颜色停在**第一次求值那一档**（行刚建出来时是
+        /// 「等待解压 / 解压中」= 蓝色），而文字已经走到「解压失败」。</para>
+        ///
+        /// <para>这正好解释用户看到的两件事：①「解压失败显示成蓝色」——文字与颜色各走各的；
+        /// ②「第一行绿色、其他蓝色」——只有颜色碰巧被重算过的那一行是对的（例如
+        /// <c>IsVolumeDeficitDeferred</c> 的 setter 发过这条通知，或行被虚拟化回收后重建）。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>Status</c> setter 里那一行 <c>OnPropertyChanged(nameof(StatusColorKey))</c>
+        /// 撤掉 ⇒ 本条当场变红。</para>
+        /// </summary>
+        [Fact]
+        public void 状态一变_颜色那一列也必须发通知_否则文字变了颜色停在旧档()
+        {
+            string file = Path.Combine(_root, "111__.rar");
+
+            File.WriteAllBytes(file, new byte[1024]);
+
+            var task = new ArchiveTask(file, 1);
+            var changed = new List<string>();
+
+            ((INotifyPropertyChanged)task).PropertyChanged += (_, e) => changed.Add(e.PropertyName ?? string.Empty);
+
+            // 先把它摆到「等待解压」——WPF 就是在这个时候第一次求值 Foreground 的（中性蓝那一档）。
+            task.Status = StatusText.WaitingExtract;
+            changed.Clear();
+
+            var converter = new Converters.StatusToBrushConverter();
+
+            Assert.Equal(StatusText.WaitingExtract, task.StatusColorKey);
+            Assert.Same(converter.InfoBrush, converter.Convert(task.StatusColorKey, typeof(object), null!, null!));
+
+            task.Status = StatusText.ExtractFailed;
+
+            // 文字那一列的通知本来就有；颜色那一列**也必须**有，否则 Foreground 不重算。
+            Assert.Contains(nameof(ArchiveTask.StatusDisplayText), changed);
+            Assert.Contains(nameof(ArchiveTask.StatusColorKey), changed);
+
+            // 通知之外，键本身也要真的换成失败那一档，而且配色表必须把它算成错误色（⛔ 不是蓝色）。
+            Assert.Equal(StatusText.ExtractFailed, task.StatusColorKey);
+            Assert.Same(converter.ErrorBrush, converter.Convert(task.StatusColorKey, typeof(object), null!, null!));
+            Assert.NotSame(converter.InfoBrush, converter.Convert(task.StatusColorKey, typeof(object), null!, null!));
+        }
     }
 }

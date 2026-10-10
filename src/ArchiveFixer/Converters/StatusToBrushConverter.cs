@@ -182,6 +182,15 @@ namespace ArchiveFixer.Converters
                 StatusText.OpExtract or
                 // 分卷后缀是"正常的一类"，不是伪装、也不是漏写后缀：给中性色，别引导用户去改它。
                 StatusText.ExtensionVolume or
+                /*
+                 * 「可改名」= 这一单现在**可以执行改名**了（等着这一步、还没有结果）——
+                 * 与 `OpRename`（改名操作进行中）同一档中性色。
+                 *
+                 * ⚠ 它是`StatusColorCoverageTests`那把守门逮出来的**唯一**一个漏登记的常量
+                 * （2026-10-10）：不在任何一档 ⇒ 状态格落 `DefaultBrush`（黑），
+                 * 与"扫完就能改名"这件事该有的中性提示对不上。
+                 */
+                StatusText.RenameReady or
                 // 内嵌归档同理：它是"已识别、且不该改名"的一类（改成 .zip 后 7z 照样打不开），
                 // 给中性色，不要用"后缀异常"的警告色把人引去改名。
                 StatusText.ExtensionEmbedded;

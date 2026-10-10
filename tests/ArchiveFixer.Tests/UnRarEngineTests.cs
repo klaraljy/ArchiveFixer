@@ -237,6 +237,75 @@ namespace ArchiveFixer.Tests
             Assert.Contains("vol.part3.rar", result.Message, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// **中文界面的 UnRAR 那句「无法找到卷」也必须算缺卷**（用户 2026-10-10 22:21 真机 FFFF 那批）。
+        ///
+        /// <para><b>真机现场（逐字，路径按 AGENTS §8 脱敏）</b>：
+        /// <c>…引擎那句话把两种可能一起给了出来：无法找到卷 H:\…\111_.part3</c>——
+        /// 判成了**两义那一档**（"密码可能不对、也可能数据坏了"），于是把 10 个密码候选全试了一遍，
+        /// 整链最后落「产物校验未通过：输出目录是空目录」= **解压失败**（那一批 3 单全这样，
+        /// 批末汇总 成功 0 / 失败 3）。同一份样本换 7-Zip 跑就是 <c>ERROR = Missing volume</c> ⇒ 归类成
+        /// 缺卷 ⇒ WARN「先跳过」、不落失败 —— 差别**只在引擎那句原话认不认得出**。</para>
+        ///
+        /// <para><b>为什么英文关键字会一个都不命中</b>：本机装的那份 UnRAR 是**中文界面**
+        /// （同一台机器上"列目录键名被本地化"那件事已由 <c>UnRarLocalizedListingTests</c> 记录在案），
+        /// 而这里的缺卷判据原本只认 <c>Cannot find volume</c> 那一串英文
+        /// （见 <see cref="UnRarOutputParser"/> 类注释里"本机 UNRAR 7.23 x64 freeware 实测"那条前提）。</para>
+        ///
+        /// <para>退出码两档都钉（3 = 中文那份实测、6 = 英文那份实测）：判据是**关键字**，
+        /// ⛔ 不许靠退出码把这一档猜出来。</para>
+        /// </summary>
+        [Fact]
+        public void 缺卷_中文版那句无法找到卷也算缺卷_不许掉进两义那一档()
+        {
+            /*
+             * 真机原文（本机 `C:\Program Files\WinRAR\UnRAR.exe` = 用户使用的同一份**中文版 6.11**，
+             * 拿真切片 `111_.part2`（缺 part3）跑出来的逐字输出，路径已截短）：
+             *
+             *   UNRAR 6.11 x64 免费软件      版权所有 (c) 1993-2022 Alexander Roshal
+             *   正在从 …\111_.part2 解压
+             *   警告: 您需要从上一个卷启动解压来解压缩 111_\111.z0删除1
+             *   在加密文件 111_\111.z0删除2 里校验和错误。文件已损坏或密码错误。
+             *   无法找到卷 …\111_.part3
+             *   全部错误: 3
+             *
+             * ⚠ **退出码实测 = 3**（⛔ 不是英文那份的 6），而且同一段输出里**同时**有"校验和错误 /
+             * 密码错误"那一句 —— 所以这条用例真正钉住的是**分支顺序**：
+             * 「无法找到卷」必须在那里赢过下面那档两义，否则整链会去试满 10 个密码候选再报失败。
+             */
+            const string output =
+                "UNRAR 6.11 x64 免费软件      版权所有 (c) 1993-2022 Alexander Roshal\n" +
+                "正在从 C:\\t\\111_.part2 解压\n" +
+                "警告: 您需要从上一个卷启动解压来解压缩 111_\\111.z0删除1\n" +
+                "正在创建    C:\\t\\out\\111_   确定\n" +
+                "在加密文件 111_\\111.z0删除2 里校验和错误。文件已损坏或密码错误。\n" +
+                "无法找到卷 C:\\t\\111_.part3\n" +
+                "全部错误: 3\n";
+
+            // 真机那一档（退出码 3）与英文那份（退出码 6）都必须落缺卷那一档。
+            Assert.Equal(
+                EngineErrorTypes.VolumeMissing,
+                UnRarOutputParser.DetectErrorType(3, output, string.Empty, EngineOperation.Extract));
+
+            Assert.Equal(
+                EngineErrorTypes.VolumeMissing,
+                UnRarOutputParser.DetectErrorType(6, output, string.Empty, EngineOperation.Extract));
+
+            var runner = new UnRarProcessRunner(new ToolLocator());
+
+            ArchiveOperationResult result = runner.AnalyzeResult(
+                3,
+                output,
+                string.Empty,
+                null,
+                TimeSpan.Zero,
+                @"C:\t\111_.part2",
+                EngineOperation.Extract);
+
+            Assert.False(result.Success);
+            Assert.Equal(EngineErrorTypes.VolumeMissing, result.DetectedErrorType);
+        }
+
         [Fact]
         public void 损坏归档_退出码3与校验和字样都归到文件损坏()
         {

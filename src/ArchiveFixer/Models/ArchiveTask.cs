@@ -860,6 +860,19 @@ namespace ArchiveFixer.Models
                 {
                     OnPropertyChanged(nameof(StatusDisplayText));
                     OnPropertyChanged(nameof(DisplayErrorMessage));
+
+                    /*
+                     * ⛔ **颜色那一列也必须发通知**（用户 2026-10-10 真机原话：「为什么解压失败都能显示成蓝色」
+                     * 「为什么第一行是绿色的，其他的都是蓝色的」）。
+                     *
+                     * ①页状态格的文字绑 `StatusDisplayText`、颜色绑 `StatusColorKey`
+                     * （`TaskTab.xaml:575-576`），而 `StatusColorKey` 是**计算属性**
+                     * （`=> IsVolumeDeficitDeferred ? Skipped : Status`）：WPF 不会自己知道它的输入变了 ——
+                     * 少发这一条，Foreground 那条绑定就一直用**第一次求值**的颜色，
+                     * 于是「等待解压」那档的中性蓝会一路挂到「解压失败」上（文字变了、颜色不变）。
+                     * 它还有第二条消费点：`TaskDetailWindow.xaml:232` 同一个键。
+                     */
+                    OnPropertyChanged(nameof(StatusColorKey));
                 }
             }
         }

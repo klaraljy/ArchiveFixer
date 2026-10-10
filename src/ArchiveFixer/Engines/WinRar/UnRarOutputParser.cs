@@ -105,10 +105,17 @@ namespace ArchiveFixer.Engines.WinRar
              * （见 UnRarProcessRunner 里 isTimeout 那一段）。
              *
              * ⚠ 这里曾经还匹配过一个中文字面量"执行超时" —— 那是**我们自己**的消息文案，
-             * 永远不可能出现在 UnRAR 的 stdout/stderr 里（它不会说中文）。留着它有两个害处：
+             * 永远不可能出现在 UnRAR 的 stdout/stderr 里。留着它有两个害处：
              * ① 读代码的人以为"超时是靠文本认的"，于是去改文案时不敢动；
              * ② 文案一改（比如加个空格）判定就静默失效，而测试还是绿的。
-             * 引擎自己的英文措辞仍然认（不同版本可能换词），但不再认我们自己的中文。
+             * 引擎自己的英文措辞仍然认（不同版本可能换词）。
+             *
+             * ⛔ **不要再写"UnRAR 不会说中文"这句话**（原文如此，已被真机推翻）：
+             * 本机与用户机器上装的那份 UnRAR 都是**中文界面**，它会打「无法找到卷 …」
+             * 「在加密文件 X 里校验和错误。文件已损坏或密码错误。」这类中文原话
+             * （现场见 UnRarLocalizedListingTests 与下面"缺分卷"那一段的注释）。
+             * 区分点不是"引擎说不说中文"，而是**那句话是我们自己写的、还是引擎打的**：
+             * 引擎的原话（哪一种语言）该认就得认，我们自己的文案一律不许拿来当判据。
              */
             if (ContainsAny(text, "timed out", "timeout"))
             {
@@ -141,9 +148,20 @@ namespace ArchiveFixer.Engines.WinRar
              * 缺分卷：实测 UnRAR 会**点名**缺的是哪一个卷（比 7-Zip 的
              * "Cannot open the file as archive" 强得多，正好补上不变量 7 要的"缺哪几个"）。
              * 退出码是 6（文件打开错误），因此关键字必须排在退出码兜底之前。
+             *
+             * ⚠ **必须同时认中文那一份的措辞**（用户 2026-10-10 22:21 真机 FFFF 那批，逐字脱敏）：
+             * `…引擎那句话把两种可能一起给了出来：无法找到卷 H:\…\111_.part3`。
+             * 本机装的那份 UnRAR 是**中文界面**（同一台机器上"列目录键名被本地化"已由
+             * `UnRarLocalizedListingTests` 记录在案）⇒ 只认英文时这一档一个关键字都不命中，
+             * 一路掉到下面「密码可能不对、也可能数据坏了」那一档：把 10 个密码候选全试一遍，
+             * 整链最后落「产物校验未通过：输出目录是空目录」= **解压失败**（那一批 3 单全这样）。
+             * 同一份样本换 7-Zip 跑报的是 `ERROR = Missing volume` ⇒ 归类成缺卷 ⇒ WARN 先跳过、不落失败
+             * —— 差别只在**引擎那句原话认不认得出**。守门
+             * `UnRarEngineTests.缺卷_中文版那句无法找到卷也算缺卷_不许掉进两义那一档`。
              */
             if (ContainsAny(text, "Cannot find volume", "Can not find volume", "Cannot open volume",
-                    "Insert disk", "Please insert"))
+                    "Insert disk", "Please insert",
+                    "无法找到卷", "找不到卷", "请插入"))
             {
                 return EngineErrorTypes.VolumeMissing;
             }
