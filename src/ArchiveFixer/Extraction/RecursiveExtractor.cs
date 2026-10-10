@@ -3499,7 +3499,20 @@ namespace ArchiveFixer.Extraction
                         .IsArchiveAsync(entry, cancellationToken)
                         .ConfigureAwait(false);
 
-                    if (isArchive)
+                    /*
+                     * ⛔ **真正的 APK 不当"内层包"**（用户 2026-10-10 拍板：「禁止解压真正的 apk 文件，
+                     * 因为有些是用户真的要转移到手机上进行安装的」）。
+                     *
+                     * 它与"是不是归档"无关：APK 按魔数就是 ZIP ⇒ `IsArchiveAsync` 必然为真，
+                     * 但它**不是我们要继续往里解的东西**（真机 `魔方.apk` 就是这样被一层层解开、
+                     * 还在它内部建工作区、把 `.so` 当内层包继续探的）。
+                     *
+                     * 判据转调**唯一出口** `AndroidPackageDetector`（内容证据，⛔ 不看后缀）；
+                     * ⛔ **判不出 ⇒ 照旧收进候选**（不拦）—— 这是补充闸门，不许因为判据本身出错把正常内层包漏掉。
+                     * 三条路的另外两处：单层入口 `ExtractSingleTaskAsync` 开头、一键处理的产物扫描
+                     * （`OneClickCoordinator`）。
+                     */
+                    if (isArchive && !AndroidPackageDetector.IsAndroidPackage(entry))
                     {
                         found.Add(entry);
                     }

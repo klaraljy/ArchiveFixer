@@ -212,6 +212,18 @@ namespace ArchiveFixer.Models
         public const string NotArchive = "非压缩包";
 
         /// <summary>
+        /// **真正的 APK 不碰**（用户 2026-10-10 拍板：有些是用户真的要转移到手机上安装的）。
+        ///
+        /// <para>判据在唯一出口 <see cref="Detection.AndroidPackageDetector"/>（内容证据：ZIP 里同时有
+        /// <c>AndroidManifest.xml</c> 与 <c>classes.dex</c>，⛔ 不看后缀）；
+        /// 行为 = 不解压 / 不递归 / 不改名，源文件一个字节不动。⛔ 这三句都得写出来 ——
+        /// 用户看到"跳过"时要能一眼知道**为什么**、以及**去哪儿处理**。</para>
+        /// </summary>
+        public const string AndroidPackageSkipped =
+            "这是 Android 应用安装包（APK）—— 按设置不解压、不递归、不改名，源文件一个字节都不动；"
+            + "要处理它请用专门的 APK 工具";
+
+        /// <summary>
         /// 用户点了「停止后续」之后**本批唯一**那条日志（2026-09-27 真机：他连点两次，
         /// 日志里出现两遍"已请求停止后续任务"、收尾又是另一句"已停止后续任务"，三句不同的话）。
         ///

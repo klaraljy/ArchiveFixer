@@ -1294,6 +1294,20 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyCollection<string> sourcePaths,
             IReadOnlyCollection<string> knownTaskPaths)
         {
+            /*
+             * ⛔ **真正的 APK 不进"下一轮的内层包"名单**（用户 2026-10-10 拍板：有些 APK 是用户真的要
+             * 转移到手机上安装的）：它按魔数就是 ZIP，所以"按内容认得出是归档"这条路一定会把它收进去，
+             * 而我们要的是**一个字节都不碰它**。
+             *
+             * 判据转调唯一出口 `AndroidPackageDetector`（内容证据，⛔ 不看后缀；判不出 ⇒ 不拦）。
+             * 三条路的第三处（另两处：单层入口 `ExtractSingleTaskAsync` 开头、
+             * 递归层的内层包候选 `RecursiveExtractor`）。
+             */
+            if (Detection.AndroidPackageDetector.IsAndroidPackage(file))
+            {
+                return false;
+            }
+
             return !sourcePaths.Contains(file) && !knownTaskPaths.Contains(file);
         }
 

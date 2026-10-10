@@ -151,15 +151,15 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 ## 待确认
 
-- **📌 用户 2026-10-10 拍板（待做）：⛔ 禁止解压真正的 APK —— 有些是用户真的要转移到手机上安装的。**
-  来源：问题单 `E:\用户日志反馈\问题单\2026-10-06-程序不该碰真正的APK（被解开并递归进内部）\问题单.md`
-  （真机：`魔方.apk` 被当普通 ZIP 解开、还在 `…\魔方.apk\lib\arm64-v8a\` 里建工作区并继续递归，
-  派生出一个注定失败的 `libgojni.so` 任务 + 一句错方向的"补密码"）。
-  口径：**判据 = 内容证据（ZIP 里同时有 `AndroidManifest.xml` 与 `classes.dex`）**，⛔ 不看后缀；
-  行为 = **不解压 / 不递归进它内部 / 不改名**（改名那条是既有红线）+ 一句人话说明；
-  ⛔ 三条路（单层 / 递归 / 轮次续解）都要落，判据同一个出口。
-  ⚠ **边界待用户再确认**：只 APK（`.apk`），还是连 `.aab` / `.ipa` 这类"应用安装包"一起不碰？
-  （`ExtensionHelper.ZipContainerExtensions` 里另外那 18 个 `.jar/.docx/.epub/…` **默认不动** —— 它们是真归档。）
+- **✅ 已做（2026-10-10，用户拍板后落地；边界 = 只挡 `.apk`）：⛔ 禁止解压真正的 APK。**
+  判据唯一出口 `Detection/AndroidPackageDetector`：**内容证据**（ZIP 里同时有 `AndroidManifest.xml` 与
+  `classes.dex`，⛔ 不看后缀；判不出 ⇒ 不拦）。行为 = **不解压 / 不递归 / 不改名** + 一句人话
+  （文案唯一出口 `StatusText.AndroidPackageSkipped`）。**三条路都落**：单层入口
+  `ExtractSingleTaskAsync` 开头（排在引擎调用与改名之前）、递归层内层包候选 `RecursiveExtractor`、
+  一键处理产物扫描 `OneClickCoordinator.ShouldScanProducedFile`。
+  ⛔ **不许拿 `IsArchiveAsync` 当这条闸门**：它同时喂着「无用物」判定（`SourceJunkScanner`），
+  把 APK 说成"不是归档"会让它被判成垃圾。守门 `AndroidPackageGateTests`（4 条，含递归那条读盘面的写法；
+  红检两态都跑过）。⛔ 那 18 个容器后缀（`.jar/.docx/.epub/…`）照旧当正常归档 —— 用户只要求挡 APK。
 - **✅ 已修（2026-10-10，用户报"安装器里面其他用户反应有乱码"）：安装包中文乱码的两条根因。**
   ① **v0.1.0 那份安装包是 ANSI 构建**：`git show v0.1.0:installer/ArchiveFixer.nsi` 里**没有** `Unicode true`
   （`git log -S 'Unicode true' -- installer/ArchiveFixer.nsi` 显示它是后来才进的）⇒ 非中文系统上向导与

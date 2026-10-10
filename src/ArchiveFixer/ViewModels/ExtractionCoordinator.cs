@@ -18133,6 +18133,42 @@ namespace ArchiveFixer.ViewModels
             task.PathLengthWarning = string.Empty;
 
             /*
+             * ===== ⛔ 真正的 APK 不碰：不解压、不递归、不改名（用户 2026-10-10 拍板）=====
+             *
+             * 用户原话：「现在我觉得禁止解压真正的 apk 文件，因为有些是用户真的要转移到手机上进行安装的」。
+             * 判据 = 内容证据（ZIP 里同时有 AndroidManifest.xml 与 classes.dex，唯一出口
+             * `AndroidPackageDetector`，⛔ 不看后缀）；判不出 ⇒ 照旧照常处理。
+             *
+             * 位置：排在**任何引擎调用与改名之前**（与它下面那一档同一个位置口径）——
+             * 真机 `魔方.apk` 的现场就是"被当普通 ZIP 解开、还在它内部建工作区、继续递归探 `.so`"，
+             * 所以这一档必须在"开工"之前就返回。改名那条线本来就有（`.apk` 在
+             * `ExtensionHelper.ZipContainerExtensions` 里 ⇒ 不会被改成 `.zip`），这里只管"解"与"递归"。
+             *
+             * 三条路的另外两处落点：递归层的内层包候选（`RecursiveExtractor`）与一键处理的产物扫描
+             * （`OneClickCoordinator`）—— 判据都转调同一个出口。
+             */
+            if (AndroidPackageDetector.IsAndroidPackage(task.CurrentPath))
+            {
+                task.IsArchive = false;
+                task.Status = StatusText.Skipped;
+                task.Operation = StatusText.OpSkip;
+                task.ProgressText = StatusText.ProgressCompleted;
+                task.ErrorMessage = StatusText.AndroidPackageSkipped;
+
+                // 机器终态显式落（与"未识别 ⇒ 跳过"那条同一个口径：只补 EndTime 会让终态收口按失败接手）。
+                task.Outcome = TaskOutcome.Skipped;
+                task.EndTime ??= DateTime.Now;
+
+                AppendLog(
+                    "WARN",
+                    $"{task.LogName}：这是 Android 应用安装包（ZIP 里同时有 {AndroidPackageDetector.ManifestEntryName} 与 "
+                    + $"{AndroidPackageDetector.DexEntryName}）—— 按设置不解压、不递归、不改名，源文件一个字节都不动。"
+                    + "要处理它请用专门的 APK 工具。");
+
+                return;
+            }
+
+            /*
              * ===== 分卷名被伪装时，解压前先把整组改回标准名 =====
              *
              * 用户 2026-09-28 的口径：「一键处理的功能是啥，就是我按一下你全部搞定，这些必要的操作肯定是要的」。

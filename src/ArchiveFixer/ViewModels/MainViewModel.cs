@@ -2206,8 +2206,12 @@ namespace ArchiveFixer.ViewModels
             CopyTaskInfoCommand = new RelayCommand(CopyTaskInfo);
             CopyTaskPathCommand = new RelayCommand(CopyTaskPath);
             CopyTaskErrorCommand = new RelayCommand(CopyTaskError);
-            OpenTaskDirectoryCommand = new RelayCommand(OpenTaskDirectory);
-            OpenTaskOutputDirectoryCommand = new RelayCommand(OpenTaskOutputDirectory);
+            /*
+             * ⚠ 这两条命令的实体返回 bool（"到底打开了没有"）—— 命令层要的是 Action ⇒ 这里用 lambda 转一手。
+             * ⛔ 别改回方法组：那会让"打不开时静默"重新变成可能（用户 2026-10-10 实测的死点）。
+             */
+            OpenTaskDirectoryCommand = new RelayCommand(parameter => OpenTaskDirectory(parameter));
+            OpenTaskOutputDirectoryCommand = new RelayCommand(parameter => OpenTaskOutputDirectory(parameter));
             OpenTaskArtifactDirectoryCommand = new RelayCommand(OpenTaskArtifactDirectory);
             ToggleShowPasswordCommand = new RelayCommand(() =>
             {
@@ -6015,15 +6019,28 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            // ⛔ 不再在这里补一句"已打开"：成功/失败都由 OpenTaskDirectory 自己如实记账
+            // （原来无条件写"已在资源管理器里打开它所在的目录"，而它可能压根没打开 —— 那就是撒谎）。
             OpenTaskDirectory(task);
-            AppendLog("INFO", $"{task.FileName}：已在资源管理器里打开它所在的目录。");
         }
 
-        private void OpenTaskDirectory(object? parameter)
+        /// <summary>
+        /// 「打开源目录」：在资源管理器里打开这一行**那个包所在的目录**。
+        ///
+        /// <para>⛔ **点了必须有反应**（用户 2026-10-10：「右键点打开输出目录没有，打开文件夹目录没用，
+        /// 什么东西都是没有用的」）：原来把 <see cref="PathService.OpenDirectory"/> 的返回值**丢掉** ——
+        /// 目录已经不在了（源包被搬进其余物、被按档删掉、或被改名）时**什么都不发生、不弹窗、不写日志**，
+        /// 就是那类"界面在撒谎"的死点。现在：成功写一行日志，失败**如实说清是哪条路径、为什么打不开、
+        /// 下一步能做什么**。</para>
+        /// </summary>
+        /// <returns>真的打开了 ⇒ true；否则 false（调用方不必再补一句"已打开"）。</returns>
+        private bool OpenTaskDirectory(object? parameter)
         {
             if (parameter is not ArchiveTask task)
             {
-                return;
+                // 右键落在空白处 / 列头时会是这一档：⛔ 不许静默。
+                _dialogService.ShowInfo("请先在任务列表里点中一行，再右键选这一项。");
+                return false;
             }
 
             string directory = Path.GetDirectoryName(task.CurrentPath) ?? string.Empty;
@@ -6032,30 +6049,60 @@ namespace ArchiveFixer.ViewModels
             {
                 // 点了没反应是最难排查的一类"界面在撒谎"：说清为什么 + 下一步做什么。
                 _dialogService.ShowInfo(
-                    $"「{task.FileName}」还没有可打开的目录（路径信息不完整）。"
+                    $"「{task.LogName}」还没有可打开的目录（路径信息不完整）。"
                     + "可以先右键「重新扫描此文件」，或把文件重新添加一次。");
-                return;
+                return false;
             }
 
-            _pathService.OpenDirectory(directory);
+            if (!_pathService.OpenDirectory(directory))
+            {
+                string message =
+                    $"打不开「{directory}」—— 这个目录现在不在了（源包可能被搬进「其余物」、按删除档删掉，或者改过名）。"
+                    + $"这一行现在是「{task.LogName}」。";
+
+                _dialogService.ShowInfo(message + "可以先右键「重新扫描此文件」，或在「查看任务详情」里看它当初的完整路径。");
+                AppendLog("WARN", $"{task.LogName}：打开源目录失败 —— {directory} 不存在（可能已被搬走或删除）。");
+                return false;
+            }
+
+            AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开它所在的目录：{directory}");
+            return true;
         }
 
-        private void OpenTaskOutputDirectory(object? parameter)
+        /// <summary>
+        /// 「打开输出目录」：在资源管理器里打开这一行的**产物目录**。
+        ///
+        /// <para>⛔ 同上：打不开就必须**如实说一句**（用户实测过"右键点打开输出目录没有"）——
+        /// 输出目录被收掉（定稿后整份删掉 / 归集后搬走）是常态，静默就是死点。</para>
+        /// </summary>
+        /// <returns>真的打开了 ⇒ true；否则 false。</returns>
+        private bool OpenTaskOutputDirectory(object? parameter)
         {
             if (parameter is not ArchiveTask task)
             {
-                return;
+                _dialogService.ShowInfo("请先在任务列表里点中一行，再右键选这一项。");
+                return false;
             }
 
             if (string.IsNullOrWhiteSpace(task.OutputPath))
             {
                 _dialogService.ShowInfo(
-                    $"「{task.FileName}」还没有输出目录（先解压一次才会有）。"
+                    $"「{task.LogName}」还没有输出目录（先解压一次才会有）。"
                     + "可以先勾选它并点「只解压」或「一键处理」。");
-                return;
+                return false;
             }
 
-            _pathService.OpenDirectory(task.OutputPath);
+            if (!_pathService.OpenDirectory(task.OutputPath))
+            {
+                _dialogService.ShowInfo(
+                    $"打不开「{task.OutputPath}」—— 这个输出目录现在不在了（可能已经按档清理掉，或产物被搬去了别的落点）。"
+                    + $"这一行现在是「{task.LogName}」。");
+                AppendLog("WARN", $"{task.LogName}：打开输出目录失败 —— {task.OutputPath} 不存在（可能已被清理或搬走）。");
+                return false;
+            }
+
+            AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开它的输出目录：{task.OutputPath}");
+            return true;
         }
 
         /// <summary>
@@ -6081,7 +6128,15 @@ namespace ArchiveFixer.ViewModels
 
             if (SafePathHelper.DirectoryExists(scope.ArtifactDirectory))
             {
-                _pathService.OpenDirectory(scope.ArtifactDirectory);
+                // ⛔ 返回值不许丢（同「打开源/输出目录」那一档）：打不开也要如实说一句，不许静默。
+                if (_pathService.OpenDirectory(scope.ArtifactDirectory))
+                {
+                    AppendLog("INFO", $"{task.LogName}：已在资源管理器里打开其余物目录：{scope.ArtifactDirectory}");
+                    return;
+                }
+
+                _dialogService.ShowInfo("其余物目录打不开（可能刚被别的程序删掉或权限不够）：" + scope.ArtifactDirectory);
+                AppendLog("WARN", $"{task.LogName}：打开其余物目录失败 —— {scope.ArtifactDirectory}");
                 return;
             }
 
