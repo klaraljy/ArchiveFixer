@@ -72,6 +72,39 @@ namespace ArchiveFixer.Tests
         [SevenZipFact]
         public async Task 真机形状_四片脏名分在四个外层包里_整组照样凑齐并解开()
         {
+            (string input, byte[] payload, string payloadName) = BuildFfffShape(eachPackageInOwnSubdirectory: false);
+
+            await RunPipelineAndAssertGroupExtractedAsync(input, payload, payloadName);
+        }
+
+        /// <summary>
+        /// **真机那一批的真正布局：每个外层包各在自己的子目录里**（`FFFF\111__\111__.rar`、
+        /// `FFFF\1112__\1112__.rar`、`FFFF\1113__\1113__.rar`、`FFFF\1114__\111_.part4.rar`）。
+        ///
+        /// <para><b>为什么这条非有不可</b>：上面那条把四个包平铺在**同一个输入目录**里 ——
+        /// 那个形状下四片会落到同一棵树里、收拢窗口够得着，所以它是绿的；而真机那批是**一包一目录**，
+        /// 四片分别落在四个互不相邻的成品目录里 ⇒ 收拢那一档一个成员都收不出来
+        /// （2026-10-10 夜实测：成功 0 / 失败 0 / 跳过 3 / 部分完成 3，整组到最后也没解开）。
+        /// 教训同 `AGENTS.md` 里那条：**夹具必须把真机那种形状摆出来**，否则绿得没有意义。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 真机布局_四个外层包各在一个子目录里_四片分处四地_整组照样凑齐并解开()
+        {
+            (string input, byte[] payload, string payloadName) = BuildFfffShape(eachPackageInOwnSubdirectory: true);
+
+            await RunPipelineAndAssertGroupExtractedAsync(input, payload, payloadName);
+        }
+
+        /// <summary>
+        /// 造 FFFF 的形状：真 RAR 新式分卷切成 ≥4 片 ⇒ 三片名字改坏、各塞进一个外层 ZIP，
+        /// 第 4 片散着 ⇒ 返回输入目录。
+        /// </summary>
+        /// <param name="eachPackageInOwnSubdirectory">
+        /// <c>true</c> = 每个外层包各放进自己的子目录（真机那批的布局）；
+        /// <c>false</c> = 全部平铺在同一个输入目录（老夹具的布局）。
+        /// </param>
+        private (string Input, byte[] Payload, string PayloadName) BuildFfffShape(bool eachPackageInOwnSubdirectory)
+        {
             if (string.IsNullOrEmpty(_sevenZip))
             {
                 throw new InvalidOperationException("找不到内置 7z.exe，[SevenZipFact] 没跳过：环境与探测结果不一致。");
@@ -80,15 +113,23 @@ namespace ArchiveFixer.Tests
             if (string.IsNullOrWhiteSpace(_winRar) || !File.Exists(_winRar))
             {
                 _output.WriteLine("这台机器没有 WinRAR ⇒ 造不出 RAR 新式分卷，本条跳过（⛔ 不是验过了）。");
-                return;
+                return (string.Empty, Array.Empty<byte>(), string.Empty);
             }
 
-            // ① 真 RAR 新式分卷：`-v1m` ⇒ inner.part1.rar / part2.rar / …（新式族的规范名）。
-            string build = Path.Combine(_root, "build");
+            // ① 真 RAR 新式分卷：`-v512k` ⇒ inner.part1.rar / part2.rar / …（新式族的规范名）。
+            string build = Path.Combine(_root, "build-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(build);
 
             string payloadName = "payload.bin";
-            byte[] payload = new byte[(2 * 1024 * 1024) + (256 * 1024)];
+
+            /*
+             * ⚠ **载荷必须让 RAR 正好切出 4 片**（真机那组就是 4 卷）：`-v512k` 每卷 512 KiB，
+             * 4 卷最多装 2 MiB ⇒ 载荷取 2 MiB 减 64 KiB，稳稳落在 4 卷里。
+             * 以前这里写的是 2 MiB + 256 KiB ⇒ 实际切出 5 片，而夹具只摆了 4 片 ⇒
+             * 整组凑齐之后引擎照样报 `Missing volume : 111_.part5.rar`
+             * （2026-10-10 实测：那条红是**夹具自己少摆了一卷**，不是产品的问题）。
+             */
+            byte[] payload = new byte[(2 * 1024 * 1024) - (64 * 1024)];
             new Random(20261010).NextBytes(payload);
             File.WriteAllBytes(Path.Combine(build, payloadName), payload);
 
@@ -97,7 +138,8 @@ namespace ArchiveFixer.Tests
 
             string[] parts = Directory.GetFiles(build, "111_.part*.rar").OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
 
-            Assert.True(parts.Length >= 4, $"`-v512k` 下应当切出至少 4 片，实际 {parts.Length} 片");
+            // 真机那组 = 4 卷；夹具少摆一卷就会造出"永远凑不齐的组"，那种红没有意义。
+            Assert.True(parts.Length == 4, $"夹具要求**恰好 4 片**（真机那组就是 4 卷），实际 {parts.Length} 片");
 
             // ② 三片名字改坏（照真机那三种坏法），第四片保持规范名（真机里它就是散着的那一单）。
             string dirty1 = Path.Combine(build, "111_.par删t1.ra除r");
@@ -109,16 +151,14 @@ namespace ArchiveFixer.Tests
             File.Move(parts[2], dirty3);
 
             // ③ 三片各塞进一个外层包（外层包本身名字也改坏：真机是 `111__.rLLLLar` 那种）。
-            string input = Path.Combine(_root, "in");
+            string input = Path.Combine(_root, "in-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(input);
 
-            var outerPackages = new List<string>();
-
-            foreach ((string piece, string outerName) in new[]
+            foreach ((string piece, string outerName, string folderName) in new[]
                      {
-                         (dirty1, "111__.rLLLLar"),
-                         (dirty2, "1112__.rLLLLar"),
-                         (dirty3, "1113__.rLLLLar")
+                         (dirty1, "111__.rLLLLar", "111__"),
+                         (dirty2, "1112__.rLLLLar", "1112__"),
+                         (dirty3, "1113__.rLLLLar", "1113__")
                      })
             {
                 string staging = Path.Combine(_root, "stage-" + Guid.NewGuid().ToString("N"));
@@ -127,25 +167,47 @@ namespace ArchiveFixer.Tests
                 string moved = Path.Combine(staging, Path.GetFileName(piece));
                 File.Move(piece, moved);
 
-                string outer = Path.Combine(input, outerName);
+                string packageDirectory = eachPackageInOwnSubdirectory
+                    ? Path.Combine(input, folderName)
+                    : input;
+
+                Directory.CreateDirectory(packageDirectory);
+
+                string outer = Path.Combine(packageDirectory, outerName);
                 RunTool(_sevenZip, staging, new[] { "a", "-tzip", "-mx0", outer, Path.GetFileName(piece) });
-                outerPackages.Add(outer);
             }
 
-            // 第四片：就散在输入目录里（真机的 `111_.part4.rar` 那一单）。
-            File.Move(parts[3], Path.Combine(input, "111_.part4.rar"));
+            // 第四片：真机里它在**自己那一个子目录**里（`FFFF\1114__\111_.part4.rar`），单独立一单。
+            string fourthDirectory = eachPackageInOwnSubdirectory
+                ? Path.Combine(input, "1114__")
+                : input;
 
-            _output.WriteLine("输入目录：");
+            Directory.CreateDirectory(fourthDirectory);
+            File.Move(parts[3], Path.Combine(fourthDirectory, "111_.part4.rar"));
 
-            foreach (string file in Directory.GetFiles(input).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            _output.WriteLine($"输入目录（一包一目录 = {eachPackageInOwnSubdirectory}）：");
+
+            foreach (string file in Directory.GetFiles(input, "*", SearchOption.AllDirectories)
+                         .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
             {
-                _output.WriteLine("  " + Path.GetFileName(file) + "  " + new FileInfo(file).Length);
+                _output.WriteLine("  " + file.Substring(input.Length + 1) + "  " + new FileInfo(file).Length);
             }
 
-            // ④ 跑真管线。
+            return (input, payload, payloadName);
+        }
+
+        /// <summary>跑真管线，断言**整组被收拢并解开**（产物与原始字节一致）。</summary>
+        private async Task RunPipelineAndAssertGroupExtractedAsync(string input, byte[] payload, string payloadName)
+        {
+            if (input.Length == 0)
+            {
+                // 没有 WinRAR 那一档：夹具没造出来，断言无从谈起（上面已写明"跳过、⛔ 不是验过了"）。
+                return;
+            }
+
             (MainViewModel vm, ExtractionCoordinator extraction, LogService logs) = BuildPipeline();
 
-            await vm.AddPathsAsync(Directory.GetFiles(input));
+            await vm.AddPathsAsync(Directory.GetFiles(input, "*", SearchOption.AllDirectories));
 
             foreach (ArchiveTask task in vm.Tasks)
             {
@@ -161,9 +223,31 @@ namespace ArchiveFixer.Tests
                 _output.WriteLine("  " + entry.DisplayText);
             }
 
+            /*
+             * 出问题时"盘上到底有什么 + 每一单落在哪一档"是第一现场：光看日志会漏掉
+             * "产物其实解出来了、只是落在别处"与"这一单被算成哪一档"这两件事。
+             */
+            string outRoot = Path.Combine(_root, "out");
+
+            _output.WriteLine("===== 输出树 =====");
+
+            foreach (string file in Directory.GetFiles(outRoot, "*", SearchOption.AllDirectories)
+                         .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                _output.WriteLine("  " + file.Substring(outRoot.Length + 1) + "  " + new FileInfo(file).Length);
+            }
+
+            _output.WriteLine("===== 每一单的落点 =====");
+
+            foreach (ArchiveTask task in vm.Tasks)
+            {
+                _output.WriteLine(
+                    $"  {task.LogName,-22} 状态=[{task.Status}] 机器终态=[{task.Outcome}] 落点=[{task.OutputPath}]");
+            }
+
             // ⑤ 断言：整组凑齐并解开 ⇒ 产物（原始字节）出现在输出树里。
             string? produced = Directory
-                .GetFiles(Path.Combine(_root, "out"), payloadName, SearchOption.AllDirectories)
+                .GetFiles(outRoot, payloadName, SearchOption.AllDirectories)
                 .FirstOrDefault();
 
             Assert.NotNull(produced);

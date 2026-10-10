@@ -7996,7 +7996,7 @@ namespace ArchiveFixer.ViewModels
                  * 其余物与源包全留着不动）。判据只读既有账：这一批已经登记过"谁吐出了哪一组的片"
                  * （`_groupPieceProducers`）⇒ 那些组基名的片一律放行，交给收卷那一档。
                  */
-                assembledVolumeBaseNames: _groupPieceProducers.Keys.ToList());
+                assembledVolumeBaseNames: SnapshotGroupPieceProducerBaseNames());
         }
 
         /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
@@ -8094,6 +8094,23 @@ namespace ArchiveFixer.ViewModels
         /// 用户当场就问"为什么这两个原包还留着"。</para>
         /// </summary>
         private readonly Dictionary<string, List<ArchiveTask>> _groupPieceProducers = new(StringComparer.OrdinalIgnoreCase);
+
+        /*
+         * ⛔ **这本账会被并发写**（2026-10-10 用带栈的临时探针逮到的真缺陷，不是推断）：
+         * 每一单的解压各在自己的任务线程上跑，收尾那一档
+         * （`PublishUnresolvedVolumePieces` → `RememberGroupPieceProducer`）会**同时**往这里写，
+         * 而批末 / 收场那几处又在读（`.Keys` / `.Values` / `.Count` / `TryGetValue`）。
+         * `Dictionary` 不是并发容器 ⇒ 实测抛出
+         * `Operations that change non-concurrent collections must have exclusive access. …`，
+         * 而那个异常**被 `TryGatherGroupPiecesInto` 的 catch 吞掉**（只留一句「跨链收卷跳过」）
+         * ⇒ 那一片没被记成"某单吐出的片" ⇒ 跨链收卷静默跳过 ⇒ **整组有时凑齐、有时凑不齐**
+         * （同一条守门用例 `ChainInnerVolumeRestoreTests.真机布局_…` 跑两次一红一绿，实测）。
+         * 栈：`RememberGroupPieceProducer(:8891)` ← `PublishUnresolvedVolumePieces(:9577)`。
+         *
+         * ⇒ 读写一律过这把锁，**读的一方拿快照**（⛔ 不把活列表交出去）。
+         * ⛔ 只加互斥，判据一个字不改。
+         */
+        private readonly object _groupPieceProducersGate = new();
 
         /// <summary>这些生产者的源包**已经交给既有出口搬过了**（幂等：搬一次就够，⛔ 不重复搬）。</summary>
         private readonly HashSet<ArchiveTask> _producerSourcesCollected = new();
@@ -8885,15 +8902,77 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            if (!_groupPieceProducers.TryGetValue(baseName, out List<ArchiveTask>? producers))
+            // 并发写：见 `_groupPieceProducersGate` 的说明（这里就是那个栈顶）。
+            lock (_groupPieceProducersGate)
             {
-                producers = new List<ArchiveTask>();
-                _groupPieceProducers[baseName] = producers;
+                if (!_groupPieceProducers.TryGetValue(baseName, out List<ArchiveTask>? producers))
+                {
+                    producers = new List<ArchiveTask>();
+                    _groupPieceProducers[baseName] = producers;
+                }
+
+                if (!producers.Contains(owner))
+                {
+                    producers.Add(owner);
+                }
+            }
+        }
+
+        /// <summary>「谁吐出过哪一组的片」这本账的**键快照**（并发安全；见 <c>_groupPieceProducersGate</c>）。</summary>
+        private List<string> SnapshotGroupPieceProducerBaseNames()
+        {
+            lock (_groupPieceProducersGate)
+            {
+                return _groupPieceProducers.Keys.ToList();
+            }
+        }
+
+        /// <summary>
+        /// 某一组"吐出过片的那几单"的**快照**（拿不到 ⇒ false）。
+        /// ⛔ 绝不把活列表交出去：调用方拿到的是副本。
+        /// </summary>
+        private bool TrySnapshotGroupPieceProducers(string baseName, out List<ArchiveTask> producers)
+        {
+            lock (_groupPieceProducersGate)
+            {
+                if (_groupPieceProducers.TryGetValue(baseName, out List<ArchiveTask>? live) && live != null)
+                {
+                    producers = live.ToList();
+                    return true;
+                }
             }
 
-            if (!producers.Contains(owner))
+            producers = new List<ArchiveTask>();
+            return false;
+        }
+
+        /// <summary>整本账的**逐组快照**（收场那一档遍历用；并发安全）。</summary>
+        private List<List<ArchiveTask>> SnapshotGroupPieceProducerLists()
+        {
+            lock (_groupPieceProducersGate)
             {
-                producers.Add(owner);
+                return _groupPieceProducers.Values.Select(list => list.ToList()).ToList();
+            }
+        }
+
+        /// <summary>这本账现在有几组（并发安全）。</summary>
+        private int GroupPieceProducerCount
+        {
+            get
+            {
+                lock (_groupPieceProducersGate)
+                {
+                    return _groupPieceProducers.Count;
+                }
+            }
+        }
+
+        /// <summary>批首/批末清账（并发安全）。</summary>
+        private void ClearGroupPieceProducers()
+        {
+            lock (_groupPieceProducersGate)
+            {
+                _groupPieceProducers.Clear();
             }
         }
 
@@ -9106,20 +9185,22 @@ namespace ArchiveFixer.ViewModels
             }
 
             string baseName = FileNameHelper.GetArchiveBaseName(piecePath);
-            int? familyIndex = VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(piecePath));
 
-            if (baseName.Length == 0 || familyIndex == null)
+            if (baseName.Length == 0)
             {
                 return false;
             }
 
             /*
-             * 跨盘 ZIP 这一族的编号：`.zip` = 1（**末片**，也正是引擎要打开的入口）、`.zNN` = NN + 1
-             * ⇒ 真实盘序 = 编号 - 1（同一句规则也写在 VolumeNameRepair.ResolveSpannedZipDiskGather 里）。
+             * 规范卷名 = **这一片按它自己那一族**写成的名字（唯一出口 `VolumeGroupResolver.TryGetCanonicalVolumeName`）。
+             *
+             * ⛔ 这里原来写死成"跨盘 ZIP 的盘名"：`盘序 = 卷号 - 1` ⇒ 盘序 0 给 `.zip`、其余给 `.z0N`。
+             * RAR 新式分卷的片一进这条路就被改成 `111_.z01` / `111_.z02` …（真机 FFFF 与守门夹具的日志里
+             * 逐字可见「已按规范卷名 111_.z01 接到…」）—— **族被改掉了**：入口那一单还在找
+             * `111_.part1.rar`，盘上却只有 `111_.z01` ⇒ 整组永远凑不齐 ⇒ 四片各自去解 ⇒ 全批没一个成功。
+             * 判不出族 / 卷号 ⇒ 什么都不做（与老口径那两条早退逐字一致）。
              */
-            int disk = familyIndex.Value - 1;
-
-            if (disk < 0)
+            if (!VolumeGroupResolver.TryGetCanonicalVolumeName(Path.GetFileName(piecePath), out string canonical))
             {
                 return false;
             }
@@ -9140,7 +9221,6 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            string canonical = disk == 0 ? baseName + ".zip" : VolumeNameRepair.CanonicalDiskName(baseName, disk);
             string target = Path.Combine(targetDir, canonical);
             bool adopted = false;
 
@@ -9604,6 +9684,44 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **这一单"属于哪一组"的引用名**：那把「同一组 = 族 + 基名」的尺子（<see cref="VolumeGroupDetector.BelongsToSameGroup"/>）
+        /// 要一个**组内成员的名字**当引用，这个成员就是**这一单自己**。
+        ///
+        /// <para><b>为什么必须改（真机 FFFF 2026-10-10 夜，定案到行）</b>：这里各处原来一律写死
+        /// `<基名>.zip` —— 那等于**假定每一组都是跨盘 ZIP 族**。族一旦不是 <c>ZipSpanned</c>
+        /// （`X.partN.rar` 是新式族、`X.7z.001` 是数字族、`X.r00` 是老式族），
+        /// `BelongsToSameGroup(别的片, "X.zip")` **恒为 false**（尺子自己写着：`x.rar` 与 `x.part1.rar`
+        /// 不同组、族不同就是不同组）⇒ 收拢那一档连"这一组有哪些成员"都收不出来。</para>
+        ///
+        /// <para>调试器实测（`steps-ffff2.json`，暂停在 `RecheckDeferredVolumeDeficits:10698`）：
+        /// 那一批的待判单是 `111_.part4.rar`、`baseName = "111_"` ⇒ 引用名是 `111_.zip`，
+        /// 而四片叫 `111_.part1.rar` / `111_.part2` / `111_.part3.rar` / `111_.part4.rar`
+        /// ⇒ 一个成员都匹配不上 ⇒ 入口那一层推不出来 ⇒ 整组到最后也没解开
+        /// （真机：成功 0 / 失败 3；我这边同一批：成功 0 / 失败 0 / 跳过 3 / 部分完成 3）。
+        /// 守门 `ChainInnerVolumeRestoreTests.真机布局_四个外层包各在一个子目录里_四片分处四地_整组照样凑齐并解开`
+        /// （**改之前是红的**，逐字红在 `Assert.NotNull() Failure: Value is null`）。</para>
+        ///
+        /// <para>⛔ **判不出就照旧**：这一单的名字解析不出来时退回老的 `<基名>.zip`
+        /// —— 一个字都不放宽，只是"不认得就不认"。⛔ 同一个问题（"哪些文件属于这一组"）
+        /// 只许有这一个出口，各处不许再自己拼 `<基名>.zip`。</para>
+        /// </summary>
+        private static string ResolveGroupReferenceName(ArchiveTask? task, string baseName)
+        {
+            string own = FileNameHelper.GetFileName(task?.CurrentPath ?? string.Empty);
+
+            /*
+             * 拿尺子自比来问"这个名字解析得出来吗"：解析得出来时它必然与自己是同一族同一基名。
+             * ⛔ 不新造"能不能解析"的第二把尺子（`Analyze` 是私有的，这里也不该去开它）。
+             */
+            if (own.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(own, own))
+            {
+                return own;
+            }
+
+            return baseName + ".zip";
+        }
+
+        /// <summary>
         /// 这一组该**拼到哪一层** = 入口包（引擎要打开、要对它输密码的那一份）所在目录，
         /// 也就是这一组该**落**的那一层（用户 2026-10-05 口径：「谁可以输入密码，就解压到谁那边」；
         /// 见 <see cref="Detection.GroupVolumeDirectory"/>：RAR 分卷 = `.part1.rar`、7z 分卷 = `.7z.001`、
@@ -9621,7 +9739,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null)
         {
-            string tailName = baseName + ".zip";
+            string tailName = ResolveGroupReferenceName(task, baseName);
             var members = new List<string>();
 
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
@@ -9776,7 +9894,7 @@ namespace ArchiveFixer.ViewModels
              * `111(4)\`，它自己还没轮到重判 ⇒ 只看这一单的账就会漏掉它，整组永远停在 3 卷）。
              * ⛔ "同组"仍由既有尺子回答（`BelongsToSameGroup`），⛔ 接片仍只硬链接、绝不搬用户文件。
              */
-            string tailName = FileNameHelper.GetArchiveBaseName(task.CurrentPath) + ".zip";
+            string tailName = ResolveGroupReferenceName(task, FileNameHelper.GetArchiveBaseName(task.CurrentPath));
             var sources = new List<string>(task.VolumePaths);
 
             foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
@@ -9861,7 +9979,7 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                string tailName = FileNameHelper.GetArchiveBaseName(task.CurrentPath) + ".zip";
+                string tailName = ResolveGroupReferenceName(task, FileNameHelper.GetArchiveBaseName(task.CurrentPath));
                 var candidates = new List<VolumeCandidate>();
 
                 foreach (string path in CollectVolumeFilesInDirectory(entryLayer))
@@ -9995,7 +10113,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private string ResolveGroupProducerDirectory(string baseName)
         {
-            if (!_groupPieceProducers.TryGetValue(baseName, out List<ArchiveTask>? producers) || producers == null)
+            if (!TrySnapshotGroupPieceProducers(baseName, out List<ArchiveTask> producers))
             {
                 return string.Empty;
             }
@@ -10143,7 +10261,7 @@ namespace ArchiveFixer.ViewModels
         {
             _volumeDeficitDeferred.Clear();
             _volumeDeficitFinalPass.Clear();
-            _groupPieceProducers.Clear();
+            ClearGroupPieceProducers();
             _groupConsumerByName.Clear();
             _consumedVolumeSources.Clear();
             _producerSourcesCollected.Clear();
@@ -11040,7 +11158,7 @@ namespace ArchiveFixer.ViewModels
              */
             PurgeGroupLandedPieces(consumer, groupBaseName);
 
-            if (!_groupPieceProducers.TryGetValue(groupBaseName, out List<ArchiveTask>? producers))
+            if (!TrySnapshotGroupPieceProducers(groupBaseName, out List<ArchiveTask> producers))
             {
                 return;
             }
@@ -11391,7 +11509,7 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            foreach (List<ArchiveTask> producers in _groupPieceProducers.Values)
+            foreach (List<ArchiveTask> producers in SnapshotGroupPieceProducerLists())
             {
                 foreach (ArchiveTask producer in producers.ToList())
                 {
@@ -11438,7 +11556,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>遍历"谁在解"的账：消费方**已经成功**的那几组，给它们的生产者收场（幂等；见 <see cref="SettleGroupPieceProducers"/>）。</summary>
         private void SettleSucceededGroupPieceProducers()
         {
-            if (_groupConsumerByName.Count == 0 || _groupPieceProducers.Count == 0)
+            if (_groupConsumerByName.Count == 0 || GroupPieceProducerCount == 0)
             {
                 return;
             }
@@ -14808,7 +14926,7 @@ namespace ArchiveFixer.ViewModels
                 _volumeDeficitDeferred.Clear();
                 _consumedVolumeSources.Clear();
                 _groupConsumerByName.Clear();
-                _groupPieceProducers.Clear();
+                ClearGroupPieceProducers();
                 _producerSourcesCollected.Clear();
                 _adoptedLandedPieces.Clear();
                 _volumeDeficitFinalPass.Clear();

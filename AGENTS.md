@@ -275,9 +275,20 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
   ⛔ 规矩：**凡是计算属性（`StatusColorKey` / `StatusDisplayText` / `DisplayErrorMessage` 这一类），每个输入 setter 都要显式发它**。
   守门 `DisplayIdentityTests.状态一变_颜色那一列也必须发通知_否则文字变了颜色停在旧档`（红检成立）；
   另有 `StatusColorCoverageTests` 扫源码钉住「能落进 `Status` 的常量必须都在配色表里有档」（它逮出的漏网是 `RenameReady`，已补）。
-- ⚠ **仍是缺口（2026-10-10 夜取证，未改）**：FFFF 那批在内层 `111_.partN.rar` 那一层的**收拢看不见别的单的成品层**。
-  四片分别落在四个不同目录（`111__\111__\`、`1112__\1112__\`、`1113__\1113__\`、`1114__\`），
-  而 `TryGatherVolumesBeforeExtract` 的候选窗口只有「入口包那一层附近（父一层 + 自己这一层 + 自己的子目录）」
-  ⇒ 批末补判仍然判不出、整组不落结论（我这边跑完是 成功 0 / 失败 0 / 跳过 3 / 部分完成 3 —— 失败没了但没解到底）。
-  下一轮第一件事 = 给收拢那一档补上「**本批各单自己的成品层**」这个候选来源（⛔ 只加候选来源，不放宽"全成或全不成"与"判不出 ⇒ 不动"）。
+- **✅ 已解决（2026-10-10 深夜）：第一大步「链内片的还原 → 收拢 → 解开」四处族不匹配**（用户目标单①）。
+  四处都在"**族**"上出错，每处都有红检，逐条见 `修改日志.md` 第一百一十一轮：
+  ① `TryAdoptUnresolvedVolumePiece` 把规范名写死成"跨盘 ZIP 的盘名"（`盘序 = 卷号 - 1`）⇒ RAR 片被改成 `111_.z01`；
+  ② 三处收拢把"同一组"的引用名写死 `<基名>.zip` ⇒ 非 ZIP 族一个成员都收不出来；
+  ③ `VolumeNameRepair.IsCanonicalVolumeName` 只看末段 ⇒ 把 `111_.part1.rar` 改成 `111_.part1`（丢 `.rar`）；
+  ④ `_groupPieceProducers` 被并发写、异常被 catch 吞掉 ⇒ 间歇性漏记一片。
+  **新增两个唯一出口（⛔ 别在别处再拼一遍）**：
+  · 规范卷名 = `VolumeGroupResolver.TryGetCanonicalVolumeName(fileName, out canonical)`（族 + 卷号 ⇒ 规范名；
+    数字族的基名**只去掉卷号那一段**，不许用 `GetArchiveBaseName`——它会把 `.7z` 一起剥掉）；
+  · "这一组有哪些成员"的引用名 = `ExtractionCoordinator.ResolveGroupReferenceName(task, baseName)`
+    （= **这一单自己的文件名**，它按定义就在它那一组里；解析不出来才退回 `<基名>.zip`）。
+  守门 `ChainInnerVolumeRestoreTests`：老夹具（平铺）那条 + **真机布局**那条（一包一目录，改之前是红的），
+  连跑 6 次全绿。⚠ 教训：夹具把四个外层包平铺在一个目录里，收拢窗口够得着 ⇒ **一直假绿**；真机是一包一目录。
+- ⚠ **仍是实现缺口（2026-10-10 深夜，只报未改）**：同形的"`<基名>.zip` 当同组引用名"还有两处在**删除路**上 ——
+  `RememberGroupPiecesConsumedBy`（记"这一组的片借给了谁"）与 `PurgeGroupLandedPieces`（按组收产出方那份片）。
+  ⛔ 它们喂的是**可删资格**，放宽方向是"可能删得更多"⇒ **动手前必须先做出能红的复现**（本轮刻意没碰）。
 

@@ -1311,6 +1311,58 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// **这一片按它自己那一族写成的规范卷名** ——「还原成规范名」这件事在**单卷尺度**上的唯一出口。
+        ///
+        /// <para><b>为什么必须有它</b>（真机 FFFF 2026-10-10 夜，定案到行）：接片那一档
+        /// （<c>ExtractionCoordinator.TryAdoptUnresolvedVolumePiece</c>）原来把规范名**写死成跨盘 ZIP 的盘名**
+        /// （`盘序 = 卷号 - 1` ⇒ `.zip` / `.z0N`）。RAR 新式分卷的片一进那条路就被改成
+        /// `111_.z01` / `111_.z02` …（真机与守门夹具的日志里逐字可见：「已按规范卷名 111_.z01 接到…」），
+        /// 于是**族被改掉了**：入口那一单还在找 `111_.part1.rar`，盘上却只有 `111_.z01`
+        /// ⇒ 整组永远凑不齐 ⇒ 四片各自去解 ⇒ 全批没有一个成功。
+        /// 守门 `ChainInnerVolumeRestoreTests.真机布局_四个外层包各在一个子目录里_四片分处四地_整组照样凑齐并解开`。</para>
+        ///
+        /// <para>判据 = 既有那几把尺子的组合（<see cref="VolumeGroupDetector.TryGetFirstVolumeName"/> 定族、
+        /// <see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 取卷号、<see cref="CanonicalNameFor"/> 写名字），
+        /// ⛔ 这里不新造第二套族规则。判不出族 / 卷号 ⇒ 返回 <c>false</c>（调用方照旧什么都不做）。</para>
+        /// </summary>
+        internal static bool TryGetCanonicalVolumeName(string fileName, out string canonical)
+        {
+            canonical = string.Empty;
+
+            string baseName = FileNameHelper.GetArchiveBaseName(fileName);
+            int? index = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+            string? first = VolumeGroupDetector.TryGetFirstVolumeName(fileName);
+
+            if (baseName.Length == 0 || index == null || string.IsNullOrWhiteSpace(first))
+            {
+                return false;
+            }
+
+            VolumeNameFamily family = ResolveFamilyFromFirstVolumeName(first, baseName);
+
+            /*
+             * ⚠ **数字族（`x.7z.001` / `x.001`）的基名要另算**：`GetArchiveBaseName` 会把归档后缀也剥掉
+             * （`x.7z.001` → `x`），而数字族的规范名是"在**归档名**后面接数字"（`x.7z.001`，不是 `x.001`）。
+             * 探针实测（2026-10-10）：拿 `x` 当基名会算出 `x.001`，于是"规范名自比"对
+             * **标准的 7z 分卷名判 false** —— 谁拿它当闸门，谁就会把好名字判成脏名字。
+             * 数字族的基名 = **只去掉最后那一段（卷号段）**，归档后缀留着。
+             */
+            if (family == VolumeNameFamily.Numeric)
+            {
+                int dot = fileName.LastIndexOf('.');
+
+                if (dot > 0)
+                {
+                    baseName = fileName[..dot];
+                }
+            }
+
+            canonical = CanonicalNameFor(family, baseName, index.Value);
+
+            return canonical.Length > 0;
+        }
+
+        /// <summary>
         /// 这一卷的名字是不是"7-Zip 按原名认得的标准卷名"。
         ///
         /// <para>⛔ 卷标记段里**一点垃圾都不许有**：<c>x.7z.001删除</c> 与 <c>111</c> 都不算 ——
@@ -1486,22 +1538,31 @@ namespace ArchiveFixer.Detection
                     continue;
                 }
 
-                if (first.Equals(baseName + ".zip", StringComparison.OrdinalIgnoreCase))
-                {
-                    return VolumeNameFamily.ZipSpanned;
-                }
+                return ResolveFamilyFromFirstVolumeName(first, baseName);
+            }
 
-                if (first.Equals(baseName + ".rar", StringComparison.OrdinalIgnoreCase))
-                {
-                    return VolumeNameFamily.RarOld;
-                }
+            return VolumeNameFamily.Numeric;
+        }
 
-                if (first.StartsWith(baseName + ".part", StringComparison.OrdinalIgnoreCase))
-                {
-                    return VolumeNameFamily.PartNumbered;
-                }
+        /// <summary>
+        /// 由"**这一族第一卷的名字** + 基名"定族 —— 族规则的唯一一处
+        /// （<see cref="ResolveFamily"/> 与 <see cref="TryGetCanonicalVolumeName"/> 都转调它）。
+        /// </summary>
+        private static VolumeNameFamily ResolveFamilyFromFirstVolumeName(string first, string baseName)
+        {
+            if (first.Equals(baseName + ".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                return VolumeNameFamily.ZipSpanned;
+            }
 
-                return VolumeNameFamily.Numeric;
+            if (first.Equals(baseName + ".rar", StringComparison.OrdinalIgnoreCase))
+            {
+                return VolumeNameFamily.RarOld;
+            }
+
+            if (first.StartsWith(baseName + ".part", StringComparison.OrdinalIgnoreCase))
+            {
+                return VolumeNameFamily.PartNumbered;
             }
 
             return VolumeNameFamily.Numeric;

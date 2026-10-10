@@ -532,13 +532,30 @@ namespace ArchiveFixer.Extraction
 
             string last = parts[^1];
 
-            if (ExtensionHelper.IsVolumePartExtension("." + last))
+            bool looksClean = ExtensionHelper.IsVolumePartExtension("." + last)
+                              || last.Equals("zip", StringComparison.OrdinalIgnoreCase)
+                              || last.Equals("rar", StringComparison.OrdinalIgnoreCase);
+
+            if (!looksClean)
             {
-                return true;
+                return false;
             }
 
-            return last.Equals("zip", StringComparison.OrdinalIgnoreCase)
-                   || last.Equals("rar", StringComparison.OrdinalIgnoreCase);
+            /*
+             * ⛔ **还必须是"它自己那一族的规范写法"**（2026-10-10 真机 FFFF 实测，一次不可逆的改名）：
+             * 上面那条只看**末段**，于是 `111_.part1` 也过关（末段 `part1` 算卷标记）——
+             * 「还原」就把一个**本来就规范**的 `111_.part1.rar` 改成了 `111_.part1`（`.rar` 丢了）：
+             * 族名一坏，引擎随后就找不到 `111_.part2.rar` 那几卷，整组解不开。
+             * 守门 `ChainInnerVolumeRestoreTests.真机布局_四个外层包各在一个子目录里_四片分处四地_整组照样凑齐并解开`
+             * 的日志里逐字是：「分卷名不标准，已按标准名改好（1 卷…）：111_.part1.rar → 111_.part1」，
+             * 随后引擎报 `Missing volume`。
+             *
+             * 判据转调唯一出口 `VolumeGroupResolver.TryGetCanonicalVolumeName`（族 + 卷号 ⇒ 规范名），
+             * ⛔ 这里不新造第二套族规则（末段那条留着当第一道粗筛）。判不出来 ⇒ 不算规范
+             * ⇒ 整份计划不成立（兜底照旧落在"什么名字都不改"那一档）。
+             */
+            return VolumeGroupResolver.TryGetCanonicalVolumeName(fileName, out string canonical)
+                   && string.Equals(canonical, fileName, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
