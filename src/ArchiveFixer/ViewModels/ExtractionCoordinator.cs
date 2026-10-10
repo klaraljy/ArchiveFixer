@@ -4858,26 +4858,6 @@ namespace ArchiveFixer.ViewModels
                     }
                 }
 
-                /*
-                 * ⚠ 2026-10-09 **临时排障（用户批准，取证完即删）**：定稿那一刻的关键值 ——
-                 * `engineOutput.FinalOutputPath`、`stageRoot`，以及每个"名字像归档 / 分卷"的文件的三连判定
-                 * （名字像不像 / 在不在产物清单里 / 命中保留词没有 / 最终算不算过程物）。
-                 * 只为定位真机「`111.zip`（上一层解出来的内容物）为什么被判成过程物进了其余物」这一处。
-                 * ⛔ 它不参与任何判据；打完这一轮就删掉。
-                 */
-                if (IsProcessArtifactFile(file))
-                {
-                    warnings.Add(
-                        $"[排障·过程物] {SafePathHelper.GetFullPathSafe(file)}"
-                        + " ｜ 名字像归档=True"
-                        + $" ｜ 在产物清单里={IsEngineOutputFile(file, stageRoot, engineOutput)}"
-                        + $" ｜ 在某层清单里={engineOutput?.Layers?.Any(layer => layer != null && MatchesEngineManifestEntry(file, stageRoot, layer.ManifestEntries)) == true}"
-                        + $" ｜ 命中保留词={keepRules.ShouldKeep(file)}"
-                        + $" ｜ 最终算过程物={isProcessArtifact}"
-                        + $" ｜ FinalOutputPath={engineOutput?.FinalOutputPath ?? "(null)"}"
-                        + $" ｜ stageRoot={SafePathHelper.GetFullPathSafe(stageRoot)}");
-                }
-
                 staged.Add(new StagedEntry
                 {
                     RelativePath = Path.GetRelativePath(stageRoot, file),
@@ -6842,7 +6822,29 @@ namespace ArchiveFixer.ViewModels
                  */
                 if (!_volumeDeficitFinalPass.Contains(task))
                 {
+                    // 显示/统计那一格照旧点亮（批中间不许顶着红色「分卷缺失」）—— 与改动前逐字相同。
                     task.IsVolumeDeficitDeferred = true;
+
+                    /*
+                     * ⚠ 2026-10-10 **修**：老写法**只点亮显示位、不进名单** ⇒ 批末那一站
+                     * （<see cref="RecheckDeferredVolumeDeficits"/>）读那份名单时是**空的**，
+                     * 于是一个字都不做 ⇒ 「等批末再判」这句话对**中途**撞上缺卷的单是句空话。
+                     *
+                     * <para>真机实测（EEEE，2026-10-10）：`111.rar` 停在第 3 层（要开的正是分卷组 `111`
+                     * 的入口 `111.zip`，入口已由它自己解出来、散着的片还差 `.z03`），界面上也写着
+                     * 「跳过（缺卷，等批末再判）」，而批末名单 **0 单** ⇒ 收片那一档
+                     * （`TryGatherGroupPiecesInto`）从没跑过 ⇒ `111(4)\111.z03` 那一片永远接不进这一组
+                     * （走的是"目标层算不出来 ⇒ 静默什么都不做"那条支）⇒ 整组永远不解、一次引擎调用都不做
+                     * —— 这就是"第一大步不闭环"。</para>
+                     *
+                     * <para>⛔ 进名单**只进"停下来的那一组就是我这一组"的那一单**
+                     * （<see cref="IsStalledGroupOwnGroup"/>）：批末那一站是拿**这一单自己的包基名**
+                     * 去问"这一组齐了没"的，名字对不上的单进去只会被扣一句不相干的「分卷缺失」。</para>
+                     */
+                    if (IsStalledGroupOwnGroup(task, result))
+                    {
+                        RememberDeferredVolumeDeficit(task);
+                    }
                 }
 
                 AppendLog(
@@ -9010,39 +9012,6 @@ namespace ArchiveFixer.ViewModels
                 bool moveIntoGroup = ShouldMovePieceIntoGroup(piecePath, ownerStage);
 
                 /*
-                 * ⚠ 2026-10-09 **只读取证的临时排障行**（用户在 `AGENTS.md` 待确认里点的名：
-                 * 「去掉暗链当出口」四次试做都打断管线、**第五处引用仍未找到**，
-                 * 需要一次真机复跑日志或授权加临时排障日志定位）。
-                 *
-                 * 它**不改任何判据**：只在「详细日志（排查用）」打开时多写一行 WARN
-                 * （默认关 ⇒ 默认档一个字节都不多写，与 `AppendTaskRowSnapshot` 同一条做法）。
-                 *
-                 * 要回答的那个问题（只读取证的推断，**未验证**）：四次试做把"建链接"换成了
-                 * `TryMovePieceIntoGroup`，而它的 target 是**这一组的落点层**、**不是片自己所在那一层**
-                 * ⇒ 用户的源文件被**搬离他自己的目录**，而用例期望的是"同目录内改名"。
-                 * ⇒ 判据就是这一行里的 `同目录=`：**False ⇒ 推断成立**（改法应该是同目录内
-                 * `File.Move(piecePath, Path.Combine(Path.GetDirectoryName(piecePath), canonical))`）；
-                 * 若真机复跑里 `同目录=True` 却仍然打断管线，再查次选怀疑对象
-                 * （`RecursiveExtractor.RootSourceCandidates` 那个每趟只算一次的惰性池、
-                 * `ArchiveTask.OriginalPath` 冻结的导入路径、`IsBorrowedPieceTask` 缺 FileIdentity 兜底）。
-                 *
-                 * ⛔ 这一行用完就删（第五处定案之后）；⛔ 它绝不是判据。
-                 */
-                if (Settings.VerboseLog)
-                {
-                    AppendLog(
-                        "WARN",
-                        $"收片排障：piece={SafePathHelper.GetFullPathSafe(piecePath)}"
-                        + $" ｜ pieceDir={Path.GetDirectoryName(piecePath)}"
-                        + $" ｜ targetDir={targetDir}"
-                        + $" ｜ target={target}"
-                        + $" ｜ 同目录={string.Equals(Path.GetDirectoryName(piecePath), targetDir, StringComparison.OrdinalIgnoreCase)}"
-                        + $" ｜ moveIntoGroup={moveIntoGroup}"
-                        + $" ｜ fromProcessFolder={fromProcessFolder}"
-                        + $" ｜ 旧名还在={File.Exists(piecePath)}");
-                }
-
-                /*
                  * ===== 用户源目录里的那一片：⛔ **仍然只硬链接**（四次试做都撞在同一处，如实记账）=====
                  *
                  * 用户 2026-10-06 拍板：「**去掉暗链当出口**，解压用盘上标准名的文件，临时名只许建在工作区」。
@@ -9051,8 +9020,11 @@ namespace ArchiveFixer.ViewModels
                  * ⇒ 已排除四处（任务账路径 / 借片账键 / 收卷判据只认规范名 / 源文件快照）；
                  * **第五处仍未找到**。⛔ 没找到它之前不许再改这一行（改一次红一次，四次都白改）。
                  *
-                 * 现在照旧：过程物那一档用**移动**（同盘改名、零字节），用户源目录那一档只**硬链接**
-                 * （⛔ 名字一个字符都不改、文件不搬）—— 与改动前逐字相同、全部回归绿。
+                 * ⚠ 2026-10-10：那一行只读取证的 `收片排障：…` 探针（2026-10-09 加的）**已删** ——
+                 * 真机复跑把真正的病灶找到了，**不在这条支上**：散在 `111(4)\` 的那一片**根本没走进来**
+                 * （`FileNameHelper.GetArchiveBaseName` 认不出被拉长的卷号 ⇒ 目标层算不出来 ⇒ 静默返回），
+                 * 而且批末补判那份名单当时是**空的**（中途撞缺卷的单从不登记）。两处都已修，
+                 * 与"搬还是链接"这一行的取舍无关 ⇒ 探针的使命结束（见 `修改日志.md` 本轮）。
                  */
                 adopted = moveIntoGroup
                     ? TryMovePieceIntoGroup(piecePath, target) || HardLinkHelper.TryCreateHardLink(target, piecePath)
@@ -9921,6 +9893,31 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **把这一单登记进"缺卷留到最后再判"那份名单** —— 登记这件事的**唯一出口**
+        /// （<see cref="RecordDeferredVolumeDeficit"/> 与递归中途撞缺卷那一档都走这里）。
+        ///
+        /// <para>⛔ 只做两件事：进名单 + 点亮显示/统计事实位
+        /// （<see cref="ArchiveTask.IsVolumeDeficitDeferred"/>）。⛔ **不碰** <c>Status</c> /
+        /// <c>ErrorMessage</c>：那两个字段是"装箱单"，发布链 / 定稿 / 源包处理都读它
+        /// （见 `ApplyRecursionResult` 后面那段说明，实测在那一档改它会整组连入口都不再落地）。
+        /// 解前预检那一档要连状态与文案一起写，由 <see cref="RecordDeferredVolumeDeficit"/> 补。</para>
+        /// </summary>
+        private void RememberDeferredVolumeDeficit(ArchiveTask? task)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            if (!_volumeDeficitDeferred.Contains(task))
+            {
+                _volumeDeficitDeferred.Add(task);
+            }
+
+            task.IsVolumeDeficitDeferred = true;
+        }
+
+        /// <summary>
         /// **批首只记缺口**（用户 2026-10-05 原话：「所以你开始就得突破所有的伪装和压缩，这种分卷找不到的
         /// 情况可以留在最后做」）：⛔ 不落 Failed、⛔ 不写"本次不开始"、⛔ 不跳过 —— 只记进名单。
         ///
@@ -9936,10 +9933,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            if (!_volumeDeficitDeferred.Contains(task))
-            {
-                _volumeDeficitDeferred.Add(task);
-            }
+            RememberDeferredVolumeDeficit(task);
 
             /*
              * 显示/统计那一层的事实位（⛔ 不是状态）：①页那一格据此说"跳过（缺卷，等批末再判）"，
@@ -10034,6 +10028,54 @@ namespace ArchiveFixer.ViewModels
             return names.Count > 0
                 ? string.Join("、", names)
                 : StatusText.CrossLayerGatherNoMissingNames;
+        }
+
+        /// <summary>
+        /// **链停下来的那一组，就是这一单自己这一组吗** —— 中途撞缺卷那一档**进批末名单**的前提（2026-10-10）。
+        ///
+        /// <para>为什么必须问这一句：批末那一站（<see cref="RecheckDeferredVolumeDeficits"/>）问"这一组齐了没"
+        /// 用的是**这一单自己的包基名**（<see cref="ResolveBatchGroupDirectory"/> 与
+        /// <see cref="DescribeMissingVolumeNames"/> 读的都是它）⇒ 把"自己名字跟那一组无关、只是恰好解出了
+        /// 那一组一片"的单塞进名单，批末就会拿它的名字去问一个不相干的组，然后如实落一句
+        /// 「分卷缺失，未开始解压」。</para>
+        ///
+        /// <para>⛔ <b>判据必须走项目唯一那把"同一组"的尺子</b>
+        /// （<see cref="VolumeGroupDetector.BelongsToSameGroup"/> = **族 + 基名**），
+        /// ⛔ 不许只比基名。2026-10-10 真机 EEEE 就是只比基名翻的车：`111.rar`（**RarOld 族**）与
+        /// `111.zip`（**ZipSpanned 族**）基名都是 `111` ⇒ 被登记进名单 ⇒ 批末拿它的名字去问一个
+        /// **永不可能凑齐**的老式 RAR 组 ⇒ **同一单**既在列表里写着「这一片随整组解开（由「111.z03」那单解的）」，
+        /// 又被扣一句 `[ERROR] 分卷缺失，未开始解压` + 「按部分完成记」。</para>
+        ///
+        /// <para><b>断点证据</b>（debug-mcp，停在 `ExtractionCoordinator.cs:9912`）：调用栈 = 
+        /// `RememberDeferredVolumeDeficit:9912` ← `RunRecursiveAsync():6846`，`task.FileName = "111.rar"`，
+        /// 名单当时 1 条（另一条是解前预检登记的 `111.z03`，那一条是对的）。</para>
+        /// </summary>
+        /// <param name="task">这一单（读它当前的落点文件名）。</param>
+        /// <param name="result">这一次递归的结果（读它没能落地的那几片）。</param>
+        internal static bool IsStalledGroupOwnGroup(ArchiveTask? task, RecursionResult? result)
+        {
+            if (task == null || result == null)
+            {
+                return false;
+            }
+
+            string ownName = FileNameHelper.GetFileName(task.CurrentPath ?? string.Empty);
+
+            if (ownName.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (string piece in result.UnresolvedVolumePieces)
+            {
+                // 唯一尺子：族 + 基名都要对上（`111.zip` 与 `111.z03` 同组；`111.rar` 与 `111.zip` 不同组）。
+                if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(piece), ownName))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -10255,6 +10297,7 @@ namespace ArchiveFixer.ViewModels
                 return toRun;
             }
 
+
             foreach (ArchiveTask task in _volumeDeficitDeferred.ToList())
             {
                 if (task == null)
@@ -10365,6 +10408,21 @@ namespace ArchiveFixer.ViewModels
 
                     _volumeDeficitDeferred.Remove(task);
                     _volumeDeficitFinalPass.Add(task);
+
+                    /*
+                     * ⚠ 2026-10-10 修：**离开名单就得把那个显示/统计事实位一起清掉**——
+                     * 与下面"按跟班卷收场"那一支（`task.IsVolumeDeficitDeferred = false;`）同一套口径，
+                     * 这一支原来漏了。
+                     *
+                     * <para><b>真机后果（运行期实测，不是推断）</b>：`111.z03` 那一单走的就是这一支
+                     * （批末补齐 ⇒ 改起点 ⇒ 交 `toRun` 去把整组解开），它**成功**了（Status=「这一组解压成功」、
+                     * 机器终态成功），可事实位一直是 true ⇒ 批末汇总把它算进「跳过」，
+                     * 印出「成功 1 / 跳过 1」—— 那一个"跳过"其实是一件**做成了**的事。
+                     * 断点证据（debug-mcp 停在 `AppendBatchSummary`）：`tasks[3].Status = "解压成功"`、
+                     * `tasks[3].IsVolumeDeficitDeferred = true`、`tally.Succeeded = 1 / tally.Skipped = 1`。</para>
+                     */
+                    task.IsVolumeDeficitDeferred = false;
+
                     toRun.Add(task);
 
                     /*

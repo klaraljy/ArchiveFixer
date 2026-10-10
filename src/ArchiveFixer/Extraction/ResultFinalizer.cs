@@ -418,6 +418,35 @@ namespace ArchiveFixer.Extraction
             bool hasArchiveName = !string.IsNullOrWhiteSpace(archiveBaseName);
             string safeInnermostPackageBaseName = FileNameHelper.SanitizeFileName(innermostPackageBaseName ?? string.Empty);
 
+            /*
+             * ⛔ **内容物根上只有那个内层包自己 —— 它一次都没被打开过**（真机 EEEE 2026-10-10）。
+             *
+             * <para>形状：跨盘 ZIP 的入口 `111.zip` 是上一层解出来的产物，可整组还缺
+             * `.z01/.z02/.z03` ⇒ 引擎**一次都没调**、`111.zip` 原样躺在暂存区里（它被抢救/搬进暂存区，
+             * 正是为了让结果校验看得见它、好让它落进落点那一层 —— 见
+             * `ExtractionCoordinator.PublishUnresolvedVolumePieces`）。</para>
+             *
+             * <para>这一刻**不许按它的包基名再套一层**：套出来的是 `<基名>\<基名>.zip`
+             * —— 入口包被埋深一层，还把那一位占住。真机后果（当场复现，不是推测）：下一个来回解这一组时，
+             * 落点 `…\111\111\111` 已存在且非空 ⇒ 自动改名成 `…\111\111\111(1)`，
+             * 5 个 mp4 埋在 `…\111\111\111(1)\111\111\111\` 里，而 `…\111\111\111\111.zip`
+             * 永远留在盘上 —— 正是用户点名的那两处残留（落点层脚手架 + 多套一层）。</para>
+             *
+             * <para>判据只有一条**只读树上的事实**：内容物根上恰好一个**文件**、没有目录，
+             * 而且那个文件的**归档基名就是内层包的包基名**（它就是那个包本身，不是它的内容物）。
+             * ⛔ 与 `inPlaceLayerAlreadyInTree` **同一档口径**（都在问"那一层到底该不该凭空造"），
+             * 只是形状不同：那一档是"就地替换那一层已经在树里"，这一档是"那一个包根本没被打开"。</para>
+             */
+            bool contentRootIsUnopenedInnerPackage = hasInnermostPackage
+                && shape.HasContent
+                && shape.Chain.Count == 0
+                && shape.Items.Count == 1
+                && !shape.Items[0].IsDirectory
+                && string.Equals(
+                    FileNameHelper.GetArchiveBaseName(shape.Items[0].Name),
+                    safeInnermostPackageBaseName,
+                    StringComparison.OrdinalIgnoreCase);
+
             string? wrapperName = ResolveWrapperName(
                 kind,
                 terminalLayout,
@@ -429,7 +458,8 @@ namespace ArchiveFixer.Extraction
                 suppressPackageFolderLayer,
                 hasInnermostPackage,
                 safeInnermostPackageBaseName,
-                inPlaceLayerAlreadyInTree);
+                inPlaceLayerAlreadyInTree,
+                contentRootIsUnopenedInnerPackage);
 
             /*
              * ── 特定解压例外档（规格 §3.5，用户 2026-09-24 拍板）────────────────────────
@@ -489,9 +519,11 @@ namespace ArchiveFixer.Extraction
              * 用户原话："最外一层和最里面一层的文件夹都不能省"。所以在这里统一补回来 ——
              * 判据只有这一处，⛔ 不在每个分支里各补一遍（那样迟早漏一个）。
              *
-             * ⚠ 例外只有一条：**就地替换那一层已经在暂存树里、而且内容物根上不是一条链**
+             * ⚠ 例外只有两条：**就地替换那一层已经在暂存树里、而且内容物根上不是一条链**
              * （多分支 / 真文件与包目录并排）时，"不套层"本身就是正确落法 ——
-             * 那一层就在要搬的那些条目里面，不属于"被吃掉"。判据与 ResolveWrapperName 同一处口径。
+             * 那一层就在要搬的那些条目里面，不属于"被吃掉"；以及**内容物根上只有那个内层包自己、
+             * 它一次都没被打开过**时（真机 `…\111\111\111\111.zip` 那一格），那一层根本还不存在，
+             * 凭空造一个就是把入口包埋深一层。判据与 ResolveWrapperName 同一处口径。
              *
              * 特定解压例外档被这一条盖住时**绝不静默**：如实降成"这一次没生效"并写清原因，
              * 日志与结论也不会再报"规则已生效"（SpecialExtractionApplied 保持 false）。
@@ -500,6 +532,7 @@ namespace ArchiveFixer.Extraction
              * （判定表 ① 原本不读它）—— 见那里 `wrapperName == null` 那段说明。
              */
             if (hasInnermostPackage
+                && !contentRootIsUnopenedInnerPackage
                 && wrapperName == null
                 && kind is not (FinalizeLayoutKind.Empty
                     or FinalizeLayoutKind.ProcessArtifactsOnly
@@ -876,6 +909,10 @@ namespace ArchiveFixer.Extraction
         /// <param name="inPlaceLayerAlreadyInTree">
         /// 暂存树的内容物根上**已经**有就地替换留下的那个 <c>&lt;包基名&gt;\</c>（见 <see cref="Plan"/>）。
         /// </param>
+        /// <param name="contentRootIsUnopenedInnerPackage">
+        /// **内容物根上只有那个内层包自己、而它一次都没被打开过**（见 <see cref="Plan"/>）——
+        /// 这一档同样**不套层**：套出来就是 <c>&lt;基名&gt;\&lt;基名&gt;.zip</c>。
+        /// </param>
         private static string? ResolveWrapperName(
             FinalizeLayoutKind kind,
             TerminalLayoutMode terminalLayout,
@@ -887,7 +924,8 @@ namespace ArchiveFixer.Extraction
             bool suppressPackageFolderLayer,
             bool hasInnermostPackage,
             string safeInnermostPackageBaseName,
-            bool inPlaceLayerAlreadyInTree)
+            bool inPlaceLayerAlreadyInTree,
+            bool contentRootIsUnopenedInnerPackage)
         {
             if (kind is FinalizeLayoutKind.SingleFileToDestination
                 or FinalizeLayoutKind.Empty
@@ -902,9 +940,18 @@ namespace ArchiveFixer.Extraction
              * （不套包名层 / 套层名与落点末段同名）一个都不参与 —— 用户宁可多一层，也不要内容物摊平在
              * 包名目录下。链上有节点就用它；就地替换那一层已经在树里、又不是链时**不套层**
              * （那些条目本身就是"真文件 + 各自包名的目录"，正是用户要的形状）。
+             *
+             * ⚠ 2026-10-10 补第二条"不套层"：内容物根上**只有那个内层包自己**（它一次都没被打开过，
+             * 见 <paramref name="contentRootIsUnopenedInnerPackage"/>）—— 那一刻根本没有"内层包产出的那一层"，
+             * 按包基名造一个只会把入口包埋深一层（真机 `…\111\111\111\111.zip`）。
              */
             if (hasInnermostPackage)
             {
+                if (contentRootIsUnopenedInnerPackage)
+                {
+                    return null;
+                }
+
                 return ResolveInnermostLayerName(
                     wrapperChainNode,
                     safeInnermostPackageBaseName,

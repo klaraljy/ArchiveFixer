@@ -1243,6 +1243,28 @@ namespace ArchiveFixer.Extraction
 
                 if (File.Exists(targetPath) || Directory.Exists(targetPath))
                 {
+                    /*
+                     * ⛔ **同一个物理文件已经在目标位上了**（硬链接双胞胎 / 同一个 inode）：这不是"同名冲突"，
+                     * 而是"这一份已经到位了" ⇒ 只把**源这个名字**去掉，⛔ 绝不再改名落出第二份。
+                     *
+                     * <para>真机 EEEE 2026-10-10：入口包 `111.zip` 一边被"接片"那一档按规范卷名接进落点层、
+                     * 一边又被定稿从暂存目录往同一层搬；两份本来就是同一个 inode（接片建的是硬链接），
+                     * 老写法按"目标同名"自动改名 ⇒ 盘上多出 `…\111\111\111(1).zip`（用户点名的
+                     * 「第二轮续解又解一遍 ⇒ 多出 `111(1).zip`」）。</para>
+                     *
+                     * <para>判据走**唯一出口** <see cref="FileIdentity.IsSamePhysicalFile"/>（⛔ 不自己比路径、
+                     * ⛔ 不比时间戳、⛔ 不比体积）；判不出 ⇒ 照旧走下面的自动改名（**绝不覆盖**，一个字不改）。
+                     * 删掉源那一条名字**不丢数据**：内容就在目标那一条名字上（同一个 inode）。</para>
+                     */
+                    if (File.Exists(targetPath)
+                        && FileIdentity.IsSamePhysicalFile(sourceFile, targetPath))
+                    {
+                        File.Delete(sourceFile);
+                        movedFromTo[SafePathHelper.GetFullPathSafe(sourceFile)] = SafePathHelper.GetFullPathSafe(targetPath);
+
+                        return true;
+                    }
+
                     // 目标同名：换成 名字(1).ext 并记下来，**绝不覆盖**（AGENTS.md §6 第 3 条）。
                     string renamedPath = SafePathHelper.AutoRenameFilePath(targetPath);
 

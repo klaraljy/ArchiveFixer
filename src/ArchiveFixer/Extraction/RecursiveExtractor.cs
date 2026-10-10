@@ -664,7 +664,23 @@ namespace ArchiveFixer.Extraction
 
                 if (!File.Exists(target))
                 {
-                    File.Copy(piece, target, overwrite: false);
+                    /*
+                     * ⚠ 2026-10-10：**先试硬链接**（同卷、零字节，而且与原件是**同一份物理文件**）。
+                     *
+                     * <para>为什么要紧：这一份只是"让协调器在本类的工作区被清掉之后还看得见这一片"
+                     * （见上面那段说明），而原件随后会被接片那一档按规范卷名搬进落点层 ——
+                     * 两份**同一个 inode** 时，定稿那一站搬这一份就认得出"它已经在落点层里了"
+                     * （<see cref="ArchiveFixer.Detection.FileIdentity"/>）⇒ ⛔ 不会再改名落出第二份。
+                     * 真机 EEEE 2026-10-10 的 `…\111\111\111(1).zip` 正是"复制出来两份、定稿按同名冲突
+                     * 自动改名"落出来的（用户点名的「第二轮续解又解一遍」。</para>
+                     *
+                     * <para>⛔ 只加一份**新名字**、⛔ 不动原件一个字节；跨卷 / 文件系统不支持硬链接 ⇒
+                     * 退回复制，行为与改动前逐字相同。</para>
+                     */
+                    if (!HardLinkHelper.TryCreateHardLink(target, piece))
+                    {
+                        File.Copy(piece, target, overwrite: false);
+                    }
                 }
             }
             catch

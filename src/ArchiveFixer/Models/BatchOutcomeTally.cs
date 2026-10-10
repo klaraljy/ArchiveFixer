@@ -106,7 +106,30 @@ namespace ArchiveFixer.Models
                  */
                 if (task.IsVolumeDeficitDeferred)
                 {
-                    skipped++;
+                    /*
+                     * ⚠ 2026-10-10 修：这一支原来**无条件** `skipped++` ⇒ 绕过了下面那道"跟班卷单列一档"
+                     * （`CountsTowardBatchOutcome` = false）。真机 EEEE 实测：三单是**跟班卷**
+                     * （界面上写着「这一片随整组解开（由「111.z03」那单解的）」）同时又走的是"缺卷待批末判"
+                     * 这一档 ⇒ 批末汇总印出「跳过 3」，用户读成"还有 3 个没弄完" —— 正是 2026-10-01 那条投诉
+                     * （「这四个应该是要跳过的，我绝对没必要，你这样会让用户觉得还有任务没弄完」）在另一条支上重现。
+                     * 运行期证据（debug-mcp 停在 `AppendBatchSummary`）：三单 `IsVolumeGroupFollower = true`
+                     * 而 `tally.Skipped = 3`、`tally.FollowerSkipped = 0`。
+                     *
+                     * ⛔ **"还在名单里就按跳过数"这条口径一个字不放宽**（`DeferredVolumeStatusTests.递归中途撞上缺卷_…`
+                     * 第 121 行钉着：批中间哪怕机器终态是 Failed，也必须按跳过数）——
+                     * 所以这里**不**看 `Outcome`，只补"跟班卷分档"这一件事。
+                     * 「成功却被算成跳过」那一格（实测 `111.z03` 成功 + 事实位没清）**修在协调器**：
+                     * 离开名单去跑那一支要顺手清掉事实位（`ExtractionCoordinator.RecheckDeferredVolumeDeficits`）。
+                     */
+                    if (task.CountsTowardBatchOutcome)
+                    {
+                        skipped++;
+                    }
+                    else
+                    {
+                        followerSkipped++;
+                    }
+
                     continue;
                 }
 

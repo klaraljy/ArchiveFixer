@@ -1744,19 +1744,29 @@ namespace ArchiveFixer.Models
         /// 顺序稳定是刚需：比对是**按位**做的，这样"改名了 / 源包被搬进其余物了"
         /// 这种"路径变了、文件没变"的情形不会被误判成"源文件被换了" ——
         /// 路径不是不变量 11 要保护的东西，大小与修改时间才是。
+        ///
+        /// <para>⛔ <b>同一份文件只许出现一次</b>（2026-10-10 真机 EEEE）："1 卷组"那一档里
+        /// <see cref="VolumePaths"/> 装的就是这一单自己的文件（归组服务在识别**之后**才写进去），
+        /// 于是"按位比对"会看到**第 2 条是快照里没有的新文件** ⇒ 报「源文件已变化」把这一单拦下、
+        /// 一次引擎都不调。运行期读数（debug-mcp 停在 `ExtractionCoordinator.cs:498`）：
+        /// <c>CurrentPath == VolumePaths[0]</c>、<c>VolumePaths.Count == 1</c>、
+        /// <c>SourceSnapshot.Files.Count == 1</c>、<c>comparison.Changes[0].IsVolume == true</c>、
+        /// <c>PreviousLength == 0</c>、<c>PreviousLastWriteTimeUtc.Ticks == 0</c>（`before == null` 那一支）。
+        /// 守门用例 <c>SourceSnapshotDedupTests</c>（2 条，含"真的多出另一个文件"的哨兵）。</para>
         /// </summary>
         public List<string> GetSnapshotPaths()
         {
             var paths = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            if (!string.IsNullOrWhiteSpace(CurrentPath))
+            if (!string.IsNullOrWhiteSpace(CurrentPath) && seen.Add(CurrentPath))
             {
                 paths.Add(CurrentPath);
             }
 
             foreach (string volume in VolumePaths)
             {
-                if (!string.IsNullOrWhiteSpace(volume))
+                if (!string.IsNullOrWhiteSpace(volume) && seen.Add(volume))
                 {
                     paths.Add(volume);
                 }

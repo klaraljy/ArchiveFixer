@@ -129,7 +129,7 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 **验证与基线（本项目数字）**
 - 构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过。
-- 全量测试基线：**2884 条（2871 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
+- 全量测试基线：**2896 条（2883 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
 - 行尾：仓库工作区是 **CRLF**（`core.autocrlf=true`）。⛔ 别用 PowerShell `-join "`n"` 整份重写 `.cs`（写出 LF ⇒ `dotnet format` 报一串 WHITESPACE）；已写出就按 CRLF 重写一遍再验。
 - 已知 flaky（并发/计时相关，先单跑确认，⛔ 别改断言）：`SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`、`SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`、`SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`、`EngineRoutingTests.MainViewModel把分派引擎接进流水线`（单跑红/全量绿）、`AsyncDeadlockGuardTests.递归解压_在单线程同步上下文里同步等待_不会死锁`（2026-10-08 实测：全量 1 红 / 单跑 2 条全绿 ⇒ 负载下的计时类 flaky）。
 - 回退代码后必须 `--no-incremental` 重编，否则跑的还是红检那一份。
@@ -150,6 +150,19 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 - `docs/需求书.md` 需求全集（冻结）· `docs/需求变更.md` 变更追加 · `docs/需求评审与考古.md` 为什么这样定 · `docs/使用说明.md` 面向使用者 · `docs/功能一览.md` 功能详细版 · `docs/设置项.md` 设置项与键名 · `docs/输出与整理模型.md` 落点契约（§1.1.1 = 四族入口/落点）· `docs/分卷组装算法.md` 判定器算法与证据 · `docs/检验等级.md` L0–L6 阶梯 · `docs/引擎与外部工具.md` 引擎与许可边界 · `docs/打包功能.md` 打包设计 · `docs/真机事故复盘.md` 历史现场（含旧版项目 AGENTS 全文附录）· `docs/部分完成发布方案.md` 部分完成发布 · `docs/人工测试清单.md` 手工测试 · `docs/界面重构方案.md` 界面方案 · `docs/WinRAR功能参考.md` 对照笔记。
 
 ## 待确认
+
+- **✅ 已解决（2026-10-10，用调试器断点定案 + 真机复跑）：批末"缺卷名单"把不是这一组的单登记进去，连带把做成的单算成跳过。**
+  两处都在 `ViewModels/ExtractionCoordinator.cs` 与 `Models/BatchOutcomeTally.cs`：
+  ① **`IsStalledGroupOwnGroup`（`:10052`）原来只比基名** ⇒ `111.rar`（**RarOld 族**）解出的 `111.zip`（**ZipSpanned 族**）被当成"它自己那一组" ⇒ 批末拿它的名字去问一个**永不可能凑齐**的老式 RAR 组 ⇒ 同一单既显示「这一片随整组解开（由「111.z03」那单解的）」，又被扣 `[ERROR] 分卷缺失，未开始解压` + 「按部分完成记」。
+  **修法**：判据转调唯一那把"同一组"的尺子 `VolumeGroupDetector.BelongsToSameGroup`（**族 + 基名**）。守门 `StalledGroupRegistrationTests`（3 条；红检成立：改回"只比基名"⇒ 当场变红）。
+  ② **`BatchOutcomeTally` 的"缺卷待批末判"那一支原来无条件 `skipped++`** ⇒ 跟班卷被印成「跳过 3」（2026-10-01 那条投诉在另一条支上重现）；且 `RecheckDeferredVolumeDeficits` 里"这一组凑齐 ⇒ 交 `toRun` 去跑"那一支**没清 `IsVolumeDeficitDeferred`**（兄弟支 `:10464` 是清的）⇒ 真机 `111.z03` **成功**了却被算进「跳过」，批末印出「成功 1 / 跳过 1」。
+  **修法**：那一支**补跟班卷分档**（⛔ 仍不看 `Outcome` —— "还在名单里就按跳过数"由 `DeferredVolumeStatusTests.cs:121` 钉着，不许放宽）+ 协调器那一支**补齐清零**。守门 `BatchOutcomeTallyFollowerTests`（4 条）。
+  **真机复验**：批末 =「成功 2 / 失败 0 / 跳过 0，另有 2 个是同一分卷组的后续卷」；`[ERROR]` 行为空；①–⑤ 全绿；四个输入包按档删除、用户自己那片 `111(3)\111(3)\111.z02` 原地保留。
+  ⛔ **走过的弯路（如实记账）**：先在 tally 里加 `&& Outcome == Pending` 的门 ⇒ `DeferredVolumeStatusTests.递归中途撞上缺卷_批中间只许说跳过_批末才落真结论`（`:121`）**当场变红** ⇒ **是我改错了层**，已回退、改到协调器那一支。
+- ⛔ **取证已收尾，临时排障行已删（2026-10-10）**：`TryAdoptUnresolvedVolumePiece` 里的 `收片排障：…` 与 `PlanFinalLayout` 里的 `[排障·过程物]` 都已删除 —— 它们要回答的问题都有结论了（真正的病灶是"基名尺子 + 批末名单"，不是"搬还是链接"）。§「去掉暗链当出口」那一条仍**未做**（源片就地改名四次试做都打断管线），但从那以后整组已能正常解开，优先级待定。
+- ⚠ **上面那条"凭空多套一层"的守门文件 `UnopenedInnerPackageLayerTests.cs` 已不存在**（基线回退时随改动一起撤了）。修法本体仍在（`ResultFinalizer` 两支的"不套层"判据），且**已真机复验**（`…\111\111\111\111.zip` 与 `111(1).zip` 都不再出现）。
+- **✅ 已解决（2026-10-10）：真机 EEEE「同一份入口包在盘上出现两个副本」**（用户报的症状措辞「两个 `111.zip`」）。根因**定案到行**、**不是**硬链接、**不是**探针盲区：`Extraction/ResultFinalizer.cs` 的 **`ResolveWrapperName`（`hasInnermostPackage` 那一支）与 `Plan` 末尾"最里层不许被吃掉"的补回闸门**，在**最里层那个内层包从来没被打开过**（`111.rar` 里的 `111.zip` 是跨盘 ZIP 末片，整组缺 `111.z01/.z02/.z03` ⇒ 引擎一次都没调）时，照样按它的基名在落点里**凭空多套一层** ⇒ 同一个包被搬成 `…\111\111\111\111.zip`。修法 = 两支都加同一条**只读树上的事实**（那一层要么有 `<包基名>\` 目录、要么"内容物根上唯一那个文件的归档基名就是内层包基名"）⇒ 否则不套层。⚠ 原守门文件已撤，改由真机环台复验兜住。
+- ⚠ **判据 ④ 的读法已订正**：④ =「一轮干净跑完之后，盘上不再残留会被当成新原包的产物」，而**用户流程是"删掉输出目录 → 从备份拷回原包"**（他原话：「我每次测完都会将文件删除，然后从外面重新复制一份」）⇒ ④ 的严格版探针（把输出目录递归全量再导入）**比用户流程更严**，它测出来的"任务数增加"里绝大多数是**用户自己那几个包的第二份拷贝**（`EEE` 备份里就有 `111(2)`/`111(3)`/`111(4)` 三个散包）。③ 达成（不再有同一份的两条名字）是这一档的实质判据。
 
 - 用户拍板的五条 CCCC 解压链口径里，**第 4 条「去掉暗链当出口」仍未完成**：源片就地改名会打断管线（四次试做失败，已排除任务账路径 / 借片账键 / 收卷判据 / 源文件快照四处）。⚠ 2026-10-09 只读取证把范围收窄了：四次试做都是把"建链接"换成 `TryMovePieceIntoGroup`，而它的 target 是**这一组的落点层**（`ResolveBatchGroupDirectory`），**不是片自己所在那一层** ⇒ 用户的源文件被**搬离他自己的目录**，而用例期望的是"同目录内改名"（`SiblingFolderVolumeGatherTests.cs:1178-1182`、`:1430-1434`）。⇒ **下一次试做的第一件事 = 同目录内 `File.Move(piecePath, Path.Combine(Path.GetDirectoryName(piecePath), canonical))`**；若仍红，次选怀疑对象是 `RecursiveExtractor.RootSourceCandidates`（每趟只算一次的惰性池，`:586`）+ `ArchiveTask.OriginalPath`（冻结的导入路径，`Models/ArchiveTask.cs:166`，而 `EnumerateTaskPaths` 把它排在最前）+ `IsBorrowedPieceTask`（裸字符串、没有 `FileIdentity` 兜底，而兄弟判据 `TryResolveConsumedByAnotherTask` 有）。
   **➤ 2026-10-09 已按这条路加上取证探针（只加日志、⛔ 不改判据）**：`ExtractionCoordinator.TryAdoptUnresolvedVolumePiece` 里那一行 `收片排障：…`（**只在「详细日志（排查用）」打开时写**，默认关 ⇒ 默认档一个字节都不多写）。它把推断的判据直接打出来：**`同目录=False` ⇒ 推断成立**（改法就是同目录内改名）；`同目录=True` 却仍打断管线 ⇒ 改查次选那三个。**用户下一次真机复跑时打开「详细日志」即可定案**；⛔ 该行用完就删。
