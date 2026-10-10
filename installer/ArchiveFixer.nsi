@@ -78,6 +78,18 @@ VIAddVersionKey /LANG=2052 "CompanyName" "${APP_PUBLISHER}"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "MIT License"
 VIAddVersionKey /LANG=2052 "Comments" "${APP_URL}"
 
+; ⛔ 每个字段都要有一条**英文兜底**（用户 2026-10-10：「安装器里面其他用户反应有乱码的情况」）：
+;    只写 /LANG=2052 时，非中文系统（英文 / 日文 …）的资源管理器「属性 → 详细信息」在拿不到英文块时
+;    会退回按系统代码页去解那几行中文 ⇒ 乱码。补一组英文让它们至少能读到一句可读的说明；
+;    中文系统照旧优先取 2052（行为不变）。⛔ 两组字段名必须一一对应，别只补一半。
+VIAddVersionKey /LANG=1033 "ProductName" "${APP_NAME}"
+VIAddVersionKey /LANG=1033 "FileDescription" "${APP_NAME} Setup"
+VIAddVersionKey /LANG=1033 "FileVersion" "${APPVERSION}"
+VIAddVersionKey /LANG=1033 "ProductVersion" "${APPVERSION}"
+VIAddVersionKey /LANG=1033 "CompanyName" "${APP_PUBLISHER}"
+VIAddVersionKey /LANG=1033 "LegalCopyright" "MIT License"
+VIAddVersionKey /LANG=1033 "Comments" "${APP_URL}"
+
 ; ---------------------------------------------------------------- 变量
 Var StartMenuFolder
 Var ForceShortcuts
