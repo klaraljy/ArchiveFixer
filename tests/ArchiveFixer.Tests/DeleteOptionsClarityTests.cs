@@ -286,18 +286,31 @@ namespace ArchiveFixer.Tests
             Assert.Contains("一组素材", result.Message, StringComparison.Ordinal);
         }
 
-        /// <summary>同一现场走「移入回收站」那一档：消息必须说"回收站"（而不是"彻底删除"）。</summary>
+        /// <summary>
+        /// 同一现场走「移入回收站」那一档：消息必须说"回收站"（而不是"彻底删除"）。
+        ///
+        /// <para>⛔ **必须注入假执行体**（用户 2026-10-10：「回收站里面还有大小为 1KB 的其余物没有完全删除」）：
+        /// 这条用例原来用默认执行器（真 Shell 回收站）⇒ 每跑一次就往**用户自己的回收站**里塞一个
+        /// 48 字节的「其余物」壳。实测：跑一次该类 ⇒ 回收站里 `ArchiveFixerDeleteClarity` 那种条目 30 → 31。
+        /// 测试只许在夹具目录里动文件，**⛔ 绝不许碰用户的回收站**。</para>
+        /// </summary>
         [Fact]
         public void 回收站档_消息说清是回收站()
         {
             (ArchiveTask task, string restDirectory) = CreatePurgeScenario();
 
-            RestPurgeOutcome result = new RestItemPurger().Purge(task, cancelled: false, DeleteMode.RecycleBin);
+            var executor = new FakeDeleteExecutor();
+
+            RestPurgeOutcome result = new RestItemPurger(executor).Purge(task, cancelled: false, DeleteMode.RecycleBin);
 
             Assert.True(result.Succeeded, result.Message);
             Assert.False(Directory.Exists(restDirectory));
             Assert.Contains("回收站", result.Message, StringComparison.Ordinal);
             Assert.Contains(RestItemPurger.AutoRecycleReason, string.Join(" | ", result.LogLines), StringComparison.Ordinal);
+
+            // 真的走了「移入回收站」那一档，而且走的是**注入的执行体**（不是真回收站）。
+            Assert.Single(executor.RecycleCalls);
+            Assert.Empty(executor.PermanentCalls);
         }
 
         // ================================================================ 装配
@@ -375,6 +388,41 @@ namespace ArchiveFixer.Tests
             };
 
             return (task, restDirectory);
+        }
+
+        /// <summary>
+        /// 假删除执行体（**测试绝不许碰用户真实的回收站**；形状与 `EmptyFolderCleanerTests` 里那个一致）：
+        /// 「移入回收站」那一档按 `SimulateRemovalOnRecycle` 决定要不要真把夹具目录删掉，
+        /// 两种调用都逐个记账，供用例断言"走的是哪一档、走了几次"。
+        /// </summary>
+        private sealed class FakeDeleteExecutor : IDeleteExecutor
+        {
+            public List<string> RecycleCalls { get; } = new();
+
+            public List<string> PermanentCalls { get; } = new();
+
+            public RecycleAttemptResult TryMoveToRecycleBin(string path, bool isDirectory, out string message)
+            {
+                RecycleCalls.Add(path);
+                message = "已移入回收站（假执行器）";
+
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+
+                return RecycleAttemptResult.Recycled;
+            }
+
+            public void DeletePermanently(string path, bool isDirectory)
+            {
+                PermanentCalls.Add(path);
+
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+            }
         }
     }
 }

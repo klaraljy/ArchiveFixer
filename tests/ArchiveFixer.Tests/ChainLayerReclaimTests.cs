@@ -1833,6 +1833,11 @@ namespace ArchiveFixer.Tests
         /// <b>用例 R3（B 档位分叉在递归路上同样成立）</b>：③页「移入回收站」档**一层都不当场回收** ——
         /// 递归路的回收只认那**一个**事实位（<c>_layerReclaimThisBatch</c>），
         /// ⛔ 不许在递归里另算一遍（§9.5：同一件事只有一个出口）。
+        ///
+        /// <para>⛔ **必须注入假执行体**（用户 2026-10-10：「回收站里面还有大小为 1KB 的其余物」）：
+        /// 原来这一条没注入 ⇒ 链尾那次"整份其余物进回收站"落到**用户自己的回收站**里
+        /// （实测：跑一次本类 ⇒ 回收站里 `ArchiveFixerLayerReclaim` 那条 +1）。
+        /// 测试只许在夹具目录里动文件，⛔ 绝不许碰用户的回收站。</para>
         /// </summary>
         [SevenZipFact]
         public async Task 用例R3_递归路移入回收站档_一层都不当场回收()
@@ -1841,6 +1846,9 @@ namespace ArchiveFixer.Tests
                 RestHandlingModes.RecycleBin,
                 SourceHandlingMode.MoveToRest,
                 settings => settings.RecursionMode = "AllBranches");
+
+            var recycleExecutor = new FakeDeleteExecutor();
+            harness.Coordinator.RestDeleteExecutor = recycleExecutor;
 
             string outer = BuildChain(4);
 
