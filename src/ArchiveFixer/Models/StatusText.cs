@@ -3122,6 +3122,17 @@ namespace ArchiveFixer.Models
         public const string PieceSettledWithGroupFormat = "这一片随整组解开（由「{0}」那一单解的）";
 
         /// <summary>
+        /// 上面那一句的**加强档**：这一单**自己那一趟也跑完并定稿成功**了（产物就在盘上），
+        /// 只是它产出的那一片随后被整组接手 —— 两个事实都如实说（用户 2026-10-10 拍板：「两句都写」）。
+        /// <c>{0}</c> = 解开这一组的那一单（**显示名**）。
+        ///
+        /// <para>⛔ 措辞不另造：前半句就是 <see cref="ExtractSuccess"/> 的说法，后半句就是
+        /// <see cref="PieceSettledWithGroupFormat"/> 那一句。⛔ 同样只换状态格这一格的显示。</para>
+        /// </summary>
+        public const string ExtractSucceededThenPieceSettledWithGroupFormat =
+            ExtractSuccess + "；" + "这一片随整组解开（由「{0}」那一单解的）";
+
+        /// <summary>
         /// 状态格里"现在解到续解链第几层"那半句（用户 2026-10-07：「111.z03 显示解压了三遍 100%」）。
         /// 接在状态词后面、百分比前面，例如 <c>解压中（整组第 2 层）45%</c>。
         /// <c>{0}</c> = 层号（1 起）。

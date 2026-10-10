@@ -10734,6 +10734,17 @@ namespace ArchiveFixer.ViewModels
                 piece.IsVolumeGroupFollower = true;
 
                 /*
+                 * ⛔ **另一半事实当场抄下来**（用户 2026-10-10 拍板：那一行「两句都写」）：
+                 * 这一单自己那一趟是不是**已经跑完并定稿成功**过。判据与批末账目同一个出口 ——
+                 * 还在"缺卷待批末判"名单里（`IsVolumeDeficitDeferred`）= 它自己是**停在中途**的
+                 * （真机 `111.rar` / `111(2)_.zip`）；不在名单里却把片交出去 = 它自己**跑成了**、
+                 * 只是产出的那片随后被整组接手（真机 `111(3).rar` + `111(3)\111(3)\111.z02`）。
+                 * ⚠ 名单是**过程事实**、批末会被清（`RecheckDeferredVolumeDeficits`）⇒ 必须在这一刻
+                 * 抄成持久事实，显示才不会随名单抖动。⛔ 它**只喂显示**：统计 / 删除 / 清单都不读它。
+                 */
+                piece.OwnRunSucceededBeforeGroupSettlement = !piece.IsVolumeDeficitDeferred;
+
+                /*
                  * ⛔ 记下"是谁把这一组解开的"（显示名）—— 状态格靠这条**结构化事实**如实说
                  * 「这一片随整组解开（由「X」那一单解的）」，不再永远停在「已跳过 100%」
                  * （用户 2026-10-07：「列表里面最下面的两个，从来没有变化」）。

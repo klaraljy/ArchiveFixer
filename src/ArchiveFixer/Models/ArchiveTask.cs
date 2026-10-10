@@ -713,6 +713,20 @@ namespace ArchiveFixer.Models
         public string SettledWithGroupUnitName { get; set; } = string.Empty;
 
         /// <summary>
+        /// 收场那一刻抄下来的**另一半事实**：这一单**自己那一趟已经跑完并定稿成功**，
+        /// 之后它产出的那一片才被整组接手（<see cref="SettledWithGroupUnitName"/> 非空）。
+        ///
+        /// <para>用户 2026-10-10 拍板「两句都写」：真机 `111(3).rar` 自己「已完成 1 层递归解压 → 定稿完成
+        /// → 输出校验通过」（产物 `111(3)\111(3)\111.z02` 就在盘上），批末又按"片被整组接手"收场 ⇒
+        /// 状态格只写「这一片随整组解开」，把"你自己那份其实解成了"这半句吃掉了。</para>
+        ///
+        /// <para>⛔ 判据只在收场那一处给（与批末账目同一个出口：还在"缺卷待批末判"名单里的说明它自己停在中途）；
+        /// ⛔ 名单是过程事实、会被清 ⇒ 必须当场抄成这个持久事实，显示才不会随名单抖动；
+        /// ⛔ 它**只喂显示** —— 统计 / 删除闸门 / 清单一个字都不许读它（统计只认 <see cref="Outcome"/>）。</para>
+        /// </summary>
+        public bool OwnRunSucceededBeforeGroupSettlement { get; set; }
+
+        /// <summary>
         /// **这一单已经进了"缺卷待批末判"名单**（结构化事实位，不是状态）。
         ///
         /// <para>用户 2026-10-08 口径：「没有到最后一步都是先跳过」——批中间不许把「分卷缺失」
@@ -988,9 +1002,17 @@ namespace ArchiveFixer.Models
                  */
                 if (SettledWithGroupUnitName.Length > 0 && Status == StatusText.Skipped)
                 {
+                    /*
+                     * ⚠ 2026-10-10（用户拍板「两句都写」）：这一单自己那一趟**也**跑成了的时候
+                     * （<see cref="OwnRunSucceededBeforeGroupSettlement"/>，收场那一刻抄下来的事实），
+                     * 只写后半句就把"你自己那份其实解成了"吃掉了 —— 两个事实都写。
+                     * ⛔ 措辞不另造：前半句复用 `StatusText.ExtractSuccess` 的说法，后半句复用原来那一句。
+                     */
                     text = string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.PieceSettledWithGroupFormat,
+                        OwnRunSucceededBeforeGroupSettlement
+                            ? StatusText.ExtractSucceededThenPieceSettledWithGroupFormat
+                            : StatusText.PieceSettledWithGroupFormat,
                         SettledWithGroupUnitName);
                 }
 

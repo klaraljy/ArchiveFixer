@@ -129,7 +129,7 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 **验证与基线（本项目数字）**
 - 构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过。
-- 全量测试基线：**2896 条（2883 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
+- 全量测试基线：**2897 条（2884 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
 - 行尾：仓库工作区是 **CRLF**（`core.autocrlf=true`）。⛔ 别用 PowerShell `-join "`n"` 整份重写 `.cs`（写出 LF ⇒ `dotnet format` 报一串 WHITESPACE）；已写出就按 CRLF 重写一遍再验。
 - 已知 flaky（并发/计时相关，先单跑确认，⛔ 别改断言）：`SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`、`SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`、`SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`、`EngineRoutingTests.MainViewModel把分派引擎接进流水线`（单跑红/全量绿）、`AsyncDeadlockGuardTests.递归解压_在单线程同步上下文里同步等待_不会死锁`（2026-10-08 实测：全量 1 红 / 单跑 2 条全绿 ⇒ 负载下的计时类 flaky）。
 - 回退代码后必须 `--no-incremental` 重编，否则跑的还是红检那一份。
@@ -151,13 +151,16 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 
 ## 待确认
 
-- **⚠ 待用户拍板（2026-10-10 真机复验时发现的一处"行文字少一半事实"）：自己跑成了、产物又是分卷组那一片的单，状态格只写"随整组解开"。**
+- **✅ 已解决（2026-10-10，用户拍板「两句都写」）：自己也跑成了、产物又是分卷组那一片的单，状态格现在两个事实都写。**
   实例：`111(3).rar` 自己「已完成 1 层递归解压 + 定稿完成 + 输出校验通过」（产物 `111(3)\111(3)\111.z02` 在盘上），
-  批末那一站又把它按"片被整组接手"收场 ⇒ 状态格显示「这一片随整组解开（由「111.z03」那一单解的）」。
-  机制（有出处）：`ExtractionCoordinator.cs:10717` 的守卫只在"还不是跟班卷 **或** 没成功"时收场；
-  收场里 `Outcome = Succeeded`（`:10733`，所以批末算成功、账目没错）+ `MarkSkipped`（`:10746`）把 `Status` 写成跳过
-  ⇒ 显示层 `ArchiveTask.cs:989` 据此把状态格换成"随整组解开"。三选一：**保持现状** / 改成如实说"解压成功"
-  （那一行本来就只讲"你导进来的那个文件"）/ **两句都写**。⛔ 这是口径问题，未拍板前不许动代码。
+  批末那一站又把它按"片被整组接手"收场（`ExtractionCoordinator.cs:10717` 的守卫只在"还不是跟班卷 **或** 没成功"时收场；
+  收场里 `Outcome = Succeeded`（`:10733`）+ `MarkSkipped`（`:10746`）⇒ `Status` 成"跳过"，显示层 `ArchiveTask.cs:989` 据此换字）。
+  **修法**：收场那一刻把「自己那一趟跑成了」抄成持久事实 `ArchiveTask.OwnRunSucceededBeforeGroupSettlement`
+  （判据与批末账目同一把尺子 = 当时**不在**"缺卷待批末判"名单里；⛔ 该事实**只喂显示**，统计/删除/清单都不读它），
+  状态格改用 `StatusText.ExtractSucceededThenPieceSettledWithGroupFormat`（复用既有两句措辞）。
+  守门 `DisplayIdentityTests.自己也跑成了又被整组接手_状态格两个事实都写`（含两条对照），**红检成立**
+  （撤掉那一档 ⇒ `Expected start: "解压成功"` 当场变红）；真机复验后那三行分别是
+  「这一片随整组解开…」（`111.rar`/`111(2)_.zip`）、「解压成功；这一片随整组解开…」（`111(3).rar`）。
 - **✅ 已解决（2026-10-10，用调试器断点定案 + 真机复跑）：批末"缺卷名单"把不是这一组的单登记进去，连带把做成的单算成跳过。**
   两处都在 `ViewModels/ExtractionCoordinator.cs` 与 `Models/BatchOutcomeTally.cs`：
   ① **`IsStalledGroupOwnGroup`（`:10052`）原来只比基名** ⇒ `111.rar`（**RarOld 族**）解出的 `111.zip`（**ZipSpanned 族**）被当成"它自己那一组" ⇒ 批末拿它的名字去问一个**永不可能凑齐**的老式 RAR 组 ⇒ 同一单既显示「这一片随整组解开（由「111.z03」那单解的）」，又被扣 `[ERROR] 分卷缺失，未开始解压` + 「按部分完成记」。

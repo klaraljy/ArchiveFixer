@@ -321,6 +321,61 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// ⛔ **自己也跑成了、产物又是分卷组那一片的单：两个事实都要写**（用户 2026-10-10 拍板：「两句都写」）。
+        ///
+        /// <para>真机现场（`verify-new-build.log`）：`111(3).rar` 自己「已完成 1 层递归解压 → 定稿完成 →
+        /// 输出校验通过」（产物 `111(3)\111(3)\111.z02` 在盘上），批末又按"片被整组接手"收场 ⇒
+        /// 状态格只写「这一片随整组解开」，把"你自己那份其实解成了"这半句吃掉了。</para>
+        ///
+        /// <para><b>红检</b>：把 `StatusDisplayText` 里 `OwnRunSucceededBeforeGroupSettlement` 那一档撤掉
+        /// （永远只写 <c>PieceSettledWithGroupFormat</c>）⇒ 本条的前两句断言当场变红。</para>
+        /// </summary>
+        [Fact]
+        public void 自己也跑成了又被整组接手_状态格两个事实都写()
+        {
+            string piece = Path.Combine(_root, "111(3)", "111(3).rar");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(piece)!);
+            File.WriteAllBytes(piece, new byte[2048]);
+
+            var task = new ArchiveTask(piece, 1);
+
+            // 收场那一刻：自己那一趟跑成了（所以收场时**不在**"缺卷待批末判"名单里），片被整组接手。
+            task.Outcome = TaskOutcome.Succeeded;
+            task.IsVolumeDeficitDeferred = false;
+            task.OwnRunSucceededBeforeGroupSettlement = !task.IsVolumeDeficitDeferred;
+            task.MarkSkipped(StatusText.VolumePieceProducerConsumedByOtherTaskFormat);
+            task.SettledWithGroupUnitName = "111.z03";
+
+            Assert.StartsWith(StatusText.ExtractSuccess, task.StatusDisplayText, StringComparison.Ordinal);
+            Assert.Contains(StatusText.ExtractSuccess, task.StatusDisplayText, StringComparison.Ordinal);
+            Assert.Contains("这一片随整组解开（由「111.z03」那一单解的）", task.StatusDisplayText, StringComparison.Ordinal);
+            Assert.Equal(StatusText.Skipped, task.Status);          // ⛔ 机器状态一个字没改
+
+            // 对照①：自己停在中途（还在"缺卷待批末判"名单里）⇒ 只写后半句（老口径不变）。
+            var stalled = new ArchiveTask(piece, 2);
+
+            stalled.Outcome = TaskOutcome.Succeeded;
+            stalled.IsVolumeDeficitDeferred = true;
+            stalled.OwnRunSucceededBeforeGroupSettlement = !stalled.IsVolumeDeficitDeferred;
+            stalled.MarkSkipped(StatusText.VolumePieceProducerConsumedByOtherTaskFormat);
+            stalled.SettledWithGroupUnitName = "111.z03";
+
+            Assert.StartsWith(StatusText.PieceSettledWithGroupFormat.Replace("{0}", "111.z03"), stalled.StatusDisplayText, StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.ExtractSuccess, stalled.StatusDisplayText, StringComparison.Ordinal);
+
+            // 对照②：没被整组接手的行照旧 —— 状态格就是「已跳过」，⛔ 不许多出"解压成功"或"随整组解开"。
+            var plain = new ArchiveTask(piece, 3);
+
+            plain.Outcome = TaskOutcome.Skipped;
+            plain.MarkSkipped("不是压缩包：7-Zip 也打不开");
+
+            Assert.StartsWith(StatusText.Skipped, plain.StatusDisplayText, StringComparison.Ordinal);
+            Assert.DoesNotContain(StatusText.ExtractSuccess, plain.StatusDisplayText, StringComparison.Ordinal);
+            Assert.DoesNotContain("随整组解开", plain.StatusDisplayText, StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// ⛔ **用户那个文件被程序搬走 / 删掉之后，那一行仍旧显示"他的文件"，不许变成入口包**
         /// （用户 2026-10-07：「文件名、大小、后缀、检测格式、状态，每个都有问题，现在居然还是 `111.rar`，
         /// 你是不是一直锁定到原包，根本就没有看最新的东西」）。
