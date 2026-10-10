@@ -15,10 +15,16 @@ namespace ArchiveFixer.Extraction
     /// 链尾这一档只看到"任务成功 + 校验通过 + 链上没人失败" ⇒ 把其余物**整份彻底删除** ——
     /// 结果是一组包被拆开：末片 1.62 GB 留在成品目录、另外 25 GB 永久消失，谁都再也解不开。</para>
     ///
-    /// <para><b>判据（只读盘上事实，⛔ 不猜、不调引擎）</b>：其余物**顶层**的每一个"归档件"
-    /// （分卷的一片 / 归档本体 / 名字被改坏的归档本体）算出一个**基名**；
-    /// 只要成品目录这一棵树里（**其余物之外**）还存在**同基名的归档件**，
+    /// <para><b>判据（只读盘上事实，⛔ 不猜、不调引擎）</b>：候选里的每一个"归档件"
+    /// （分卷的一片 / 归档本体 / 名字被改坏的归档本体）算出一个**基名 + 族**；
+    /// 只要成品目录这一棵树里（**其余物之外**）还存在**同基名、而且族也相同**的归档件，
     /// 就说明这一组被拆在两边 ⇒ **整份处理其余物等于把这一组毁掉** ⇒ 什么都不做。</para>
+    ///
+    /// <para>⚠ 2026-10-10（用户拍板）：判据从"只比基名"收紧成"**基名 + 族**" ——
+    /// 只比基名会把跨族同基名的无关文件当成"同组的另一片"（真机 `111.rar` / `111.zip`）。
+    /// ⛔ 只在**能证明两边不同族**时才放行（唯一出口
+    /// <see cref="ArchiveFixer.Detection.VolumeGroupDetector.AreProvablyDifferentFamilies"/>），
+    /// **判不出族 ⇒ 照旧拦**。</para>
     ///
     /// <para>⛔ 只认"看起来是归档件"的东西：普通内容文件（`X.mp4` / `X.jpg`）**不算伙伴** ——
     /// 包基名与内容文件名撞车是常态（`111\111\内容物`），拿它当伙伴会把正常的清理全拦死。</para>
@@ -295,8 +301,31 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
+                /*
+                 * ===== ⛔ 基名相同**不足**以说明它们是同一组（用户 2026-10-10 拍板换判据）=====
+                 *
+                 * 真机 EEEE 2026-10-10 实测：空间不足模式下 `111.rar` 的源包**没能在定稿那一刻还回去**，
+                 * 就是被这一行拦下的，日志逐字：「逐层回收准备删的「111.rar」是一组分卷的一片，
+                 * 而同组的另一片「111.zip」还在成品目录里（两边基名都是「111」）」。
+                 * 可 `111.rar` 是 **RarOld 族**（归档本体）、`111.zip` 是 **ZipSpanned 族**（跨盘 ZIP 末片）
+                 * —— 按项目唯一那把"同一组 = 族 + 基名"的尺子（`VolumeGroupDetector.BelongsToSameGroup`，
+                 * 守门 `StalledGroupRegistrationTests` 逐字钉着这对名字不同族）它们**不是一组**，
+                 * 拦下的理由是假的 ⇒ 那 48 MB 白等了一整条链（盘真紧时就是成败之差）。
+                 *
+                 * ⛔ 保守方向一个字不松：只在**两边都解析得出来、而且族确实不同**时才放行
+                 * （唯一出口 `VolumeGroupDetector.AreProvablyDifferentFamilies`）；
+                 * **判不出族 ⇒ 照旧拦**。25 GB 那次事故的形状（同族同基名、末片名字还被改坏）
+                 * 两边同族 / 或者有一边解析不出来 ⇒ 照旧拦得住。
+                 */
+                if (Detection.VolumeGroupDetector.AreProvablyDifferentFamilies(
+                        Path.GetFileName(file),
+                        candidateName))
+                {
+                    continue;
+                }
+
                 return $"{candidatePrefix}「{candidateName}」是一组分卷的一片，而同组的另一片「{Path.GetFileName(file)}」"
-                    + $"还在成品目录里（两边基名都是「{baseName}」）—— {blockerTail}";
+                    + $"还在成品目录里（两边基名都是「{baseName}」、同一族）—— {blockerTail}";
             }
 
             return null;

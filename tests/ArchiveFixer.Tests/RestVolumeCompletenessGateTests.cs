@@ -131,5 +131,60 @@ namespace ArchiveFixer.Tests
 
             Assert.Null(RestVolumeCompletenessGate.DescribeBlocker(rest));
         }
+
+        /// <summary>
+        /// **跨族同基名不是"同组的另一片"**（真机 EEEE 2026-10-10 实测 + 用户当场拍板换判据）。
+        ///
+        /// <para><b>现场</b>：空间不足模式下 `111.rar` 的源包**没被当场回收** —— 被这道闸门拦下，
+        /// 日志逐字：「逐层回收准备删的「111.rar」是一组分卷的一片，而同组的另一片「111.zip」
+        /// 还在成品目录里（两边基名都是「111」）」。可 `111.rar` 是 **RarOld 族**（归档本体）、
+        /// `111.zip` 是 **ZipSpanned 族**（跨盘 ZIP 末片）—— 按项目**唯一那把"同一组 = 族 + 基名"的尺子**
+        /// （<see cref="ArchiveFixer.Detection.VolumeGroupDetector.BelongsToSameGroup"/>，
+        /// 守门 <c>StalledGroupRegistrationTests</c> 已逐字钉住这对名字不同族）它们**不是一组**。
+        /// 老判据只比基名 ⇒ 误拦 ⇒ 那 48 MB 没能在定稿那一刻还给用户（盘真紧时就是成败之差）。</para>
+        ///
+        /// <para><b>红检</b>：把判据退回"只比基名" ⇒ 本条当场红（返回了 blocker）。</para>
+        /// </summary>
+        [Fact]
+        public void 跨族同基名_不是同组的另一片_不许拦()
+        {
+            string output = Path.Combine(_root, "crossfamily");
+            string rest = Path.Combine(output, "其余物");
+            Directory.CreateDirectory(rest);
+
+            // 其余物里是 RAR 那一族的归档本体；成品目录里是 ZIP 那一族的末片 —— 基名都是 111，但族不同。
+            File.WriteAllBytes(Path.Combine(rest, "111.rar"), new byte[64]);
+            File.WriteAllBytes(Path.Combine(output, "111.zip"), new byte[64]);
+
+            Assert.Null(RestVolumeCompletenessGate.DescribeBlocker(rest));
+
+            /*
+             * 真机挡住的那一次走的是**逐层回收**那一档（候选 = 准备删的那一份文件，
+             * 不是整个其余物目录）⇒ 同一份判据的另一个入口也钉一遍。
+             */
+            string candidate = Path.Combine(rest, "111.rar");
+
+            Assert.Null(RestVolumeCompletenessGate.DescribeLayerReclaimBlocker(new[] { candidate }, output));
+        }
+
+        /// <summary>
+        /// **哨兵（保守方向一个字不松）**：另一片的名字**认不出族**时 ⇒ 判不出 ⇒ **照旧拦**。
+        ///
+        /// <para>删东西的闸门兜底永远落在"什么都不做"：只有"两边都解析得出来、而且族确实不同"才放行
+        /// （唯一出口 <c>VolumeGroupDetector.AreProvablyDifferentFamilies</c>）。</para>
+        /// </summary>
+        [Fact]
+        public void 另一片的名字认不出族_判不出_照旧拦下()
+        {
+            string output = Path.Combine(_root, "unparsable");
+            string rest = Path.Combine(output, "其余物");
+            Directory.CreateDirectory(rest);
+
+            // 其余物里是正常的一片；成品目录里那一份名字被改坏（去杂质才认得出是归档件）。
+            File.WriteAllBytes(Path.Combine(rest, "111.z01"), new byte[64]);
+            File.WriteAllBytes(Path.Combine(output, "111.zi删除p"), new byte[64]);
+
+            Assert.NotNull(RestVolumeCompletenessGate.DescribeBlocker(rest));
+        }
     }
 }

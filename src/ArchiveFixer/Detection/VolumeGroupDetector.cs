@@ -250,6 +250,31 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// 这两个名字是不是**可证不属于同一组**（两边都解析得出来，而且**族不同**）。
+        ///
+        /// <para><b>它存在的唯一理由</b>：「半套分卷」那道删除闸门（<c>RestVolumeCompletenessGate</c>）
+        /// 是**保守**闸门 —— 判不出就拦下、整组一个字节都不删。它原来只比**基名**，
+        /// 于是把"跨族同基名"的无关文件当成"同组的另一片"误拦：真机 EEEE 2026-10-10 实测，
+        /// `111.rar`（**RarOld 族**，归档本体）与 `111.zip`（**ZipSpanned 族**，跨盘 ZIP 末片）
+        /// 只共享基名，却拦下了 `111.rar` 源包的逐层回收（空间不足模式下 48 MB 没能在定稿那一刻还回去）。</para>
+        ///
+        /// <para>⛔ 调用方的用法必须是「**能证明不同族才放行，判不出照旧拦**」——
+        /// 这条判据**只回答"可证不同族"**：有一边解析不出来时它返回 <c>false</c>，
+        /// 那是"判不出"、**不是**"同组"。25 GB 那次事故的形状（同族 + 同基名，末片名字还被改坏）
+        /// 要么两边同族、要么有一边根本解析不出来 ⇒ 照旧拦得住。</para>
+        ///
+        /// <para>族与基名的真值只有这一处（与 <see cref="BelongsToSameGroup"/> 用的是同一份
+        /// <c>Analyze</c>），⛔ 调用方不许自己再判一遍族。</para>
+        /// </summary>
+        public static bool AreProvablyDifferentFamilies(string fileNameA, string fileNameB)
+        {
+            VolumeNameInfo? a = Analyze(fileNameA);
+            VolumeNameInfo? b = Analyze(fileNameB);
+
+            return a != null && b != null && a.Family != b.Family;
+        }
+
+        /// <summary>
         /// 分卷命名族。族决定三件事：卷序怎么算、缺失名字怎么补、能不能归到一组。
         /// </summary>
         private enum VolumeFamily

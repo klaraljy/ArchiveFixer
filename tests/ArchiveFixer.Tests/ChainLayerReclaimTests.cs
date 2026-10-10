@@ -382,7 +382,7 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// <b>用例 G（复刻 §44.2 那次 25 GB 永久消失的形状）</b>：这一层的内层包是**一组分卷**，
-        /// 而同组的另一片名字被改坏（`mid.z删除ip`）、被当**内容物**留在成品目录树里 ⇒ 这一组"被拆在两边"。
+        /// 而同组的另一片名字被改坏（`mid.7z.0删除02`）、被当**内容物**留在成品目录树里 ⇒ 这一组"被拆在两边"。
         ///
         /// <para>⇒ 逐层回收那一支**必须被「半套分卷」闸门拦下**：<b>零删除</b>
         /// （`SourceDeletes` 空、其余物那条路的执行器也零调用）、**内层包与源包都还在**、
@@ -424,7 +424,7 @@ namespace ArchiveFixer.Tests
             // ④ 内层包（整组）与源包都还在，被改坏的那一片也还在。
             Assert.NotEmpty(FindFiles("mid.7z.001"));
             Assert.NotEmpty(FindFiles("mid.7z.002"));
-            Assert.NotEmpty(FindFiles("mid.z删除ip"));
+            Assert.NotEmpty(FindFiles("mid.7z.0删除02"));
             Assert.NotEmpty(FindFiles("outer.7z"));
 
             // ⑤ 有一行 WARN，而且**两边都点到了名**。
@@ -441,7 +441,7 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// <b>用例 H（深嵌套分支漏扫，2026-10-03 第二轮复核）</b>：候选比成品根**深两层**
         /// （`&lt;成品根&gt;\AAA\BBB\mid.7z.001`），而同组的另一片在同一个成品根下的**另一条分支**
-        /// （`&lt;成品根&gt;\CCC\mid.z删除ip`）⇒ 只取"候选的上一级"那种扫法四个根一个都盖不到 ⇒ 放行。
+        /// （`&lt;成品根&gt;\CCC\mid.7z.0删除02`）⇒ 只取"候选的上一级"那种扫法四个根一个都盖不到 ⇒ 放行。
         ///
         /// <para>断言：**零删除** + 内层包整组与源包都还在 + 有那一行 WARN。</para>
         ///
@@ -471,7 +471,7 @@ namespace ArchiveFixer.Tests
             Assert.Empty(fakeRestExecutor.RecycleCalls);
 
             Assert.NotEmpty(FindFiles("mid.7z.001"));
-            Assert.NotEmpty(FindFiles("mid.z删除ip"));
+            Assert.NotEmpty(FindFiles("mid.7z.0删除02"));
             Assert.NotEmpty(FindFiles("outer.7z"));
 
             Assert.Contains(
@@ -484,7 +484,7 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// **用例 H2（深嵌套 + 同级另一条分支，2026-10-03 第三轮：取消 3 层上限）**：候选比成品根**深三层**
         /// （`&lt;成品根&gt;\X\AAA\BBB\mid.7z.001`），而同组的另一片在**另一条分支**
-        /// （`&lt;成品根&gt;\Y\CCC\mid.z删除ip`）⇒ 只上溯 3 层时第 3 层那个祖先（`X`）虽然也是递归扫的，
+        /// （`&lt;成品根&gt;\Y\CCC\mid.7z.0删除02`）⇒ 只上溯 3 层时第 3 层那个祖先（`X`）虽然也是递归扫的，
         /// 但 `Y` 不在它里面 ⇒ 四个根一个都盖不到 ⇒ **放行 = 不可逆删除**。
         ///
         /// <para>断言：**零删除** + 内层包整组与源包都还在（被改坏的那一片也在）+ 有那一行 WARN 点名两边。</para>
@@ -522,7 +522,7 @@ namespace ArchiveFixer.Tests
             // ③ 内层包整组（含被改坏的那一片）与源包都还在。
             Assert.NotEmpty(FindFiles("mid.7z.001"));
             Assert.NotEmpty(FindFiles("mid.7z.002"));
-            Assert.NotEmpty(FindFiles("mid.z删除ip"));
+            Assert.NotEmpty(FindFiles("mid.7z.0删除02"));
             Assert.NotEmpty(FindFiles("outer.7z"));
 
             // ④ 有一行 WARN，而且**两边都点到了名**。
@@ -1155,11 +1155,13 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// **用例 G / H / H2 共用的夹具**（复刻 §44.2）：`outer.7z` 里装着
-        /// 「一组真 7z 分卷 `mid.7z.001/.002/...`」＋「同组一片、名字被改坏的 `mid.z删除ip`」＋`layer1.txt`。
+        /// 「一组真 7z 分卷 `mid.7z.001/.002/...`」＋「同组一片、名字被改坏的 `mid.7z.0删除02`」＋`layer1.txt`。
         ///
         /// <para>那一组里是第 2 层的内容（`final.txt` + `layer2.txt` + 5 KiB 不可压数据，保证真的切成多片）；
-        /// 名字被改坏的那一片按 §44.2 的真实形态取名（实测 `TryRecoverDisguisedArchiveBody("z删除ip") = true`、
-        /// `GetArchiveBaseName("mid.z删除ip") = "mid"` ⇒ 闸门认得出它跟分卷同基名）。</para>
+        /// 名字被改坏的那一片取"**卷标记里夹垃圾**"那种坏法（用户 2026-09-28 真机 `amb909.7sz.00c1` 那一类）
+        /// —— 它与 `mid.7z.001` **同族同基名**，闸门认得出它跟分卷是一组
+        /// （⚠ 2026-10-10 起判据是"基名 + 族"：原来那个 `mid.z删除ip` 是 zip 族、与 7z 分卷**可证跨族**，
+        /// 用它会把这套夹具的前提写坏 ⇒ 三条用例全红，见下面写入点那段注释）。</para>
         /// </summary>
         private string BuildSplitVolumeChain(int nestedDepth = 1)
         {
@@ -1215,9 +1217,17 @@ namespace ArchiveFixer.Tests
 
             Assert.True(pieces.Count >= 2, "`-v2k` 下应当切出至少两片，实际 " + pieces.Count + " 片");
 
-            // 名字被改坏的同组一片（§44.2：`一只顶美.z删除ip` 那种）—— 基名同样是 mid。
+            /*
+             * 名字被改坏的同组一片（§44.2：`一只顶美.z删除ip` 那种）—— **必须与分卷同一族**：
+             * 判据 2026-10-10 起是"基名 + 族"（用户拍板，跨族同基名不再算同组），
+             * 而这里的组是 **7z 数字分卷族**（`mid.7z.001`）⇒ 这一片只能用**卷标记里夹垃圾**那种坏法
+             * （`mid.7z.0删除02`）。
+             * ⚠ 原来写的是 `mid.z删除ip`（zip 族）—— 探针实测 `VolumeGroupDetector` 对它与 `mid.7z.001`
+             * 判「可证跨族=True」，也就是**它压根不在这一组里**，夹具的前提本身就不成立（于是新判据一落地
+             * 这三条用例就红）。⛔ 别改回 zip 族那个名字。
+             */
             File.WriteAllText(
-                Path.Combine(strayDirectory, "mid.z删除ip"),
+                Path.Combine(strayDirectory, "mid.7z.0删除02"),
                 "名字被改坏的那一片（占位，不是真归档）\n",
                 new UTF8Encoding(false));
 
@@ -1235,7 +1245,7 @@ namespace ArchiveFixer.Tests
                 outerArgs.Add(Path.GetRelativePath(build, piece));
             }
 
-            outerArgs.Add(Path.GetRelativePath(build, Path.Combine(strayDirectory, "mid.z删除ip")));
+            outerArgs.Add(Path.GetRelativePath(build, Path.Combine(strayDirectory, "mid.7z.0删除02")));
             outerArgs.Add("layer1.txt");
 
             Run7z(build, outerArgs.ToArray());

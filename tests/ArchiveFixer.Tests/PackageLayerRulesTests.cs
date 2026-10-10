@@ -689,12 +689,18 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// **用例 ②-2（同组那一片的名字认不出）**：`AAA\Y.7z.001/.002` 旁边还躺着一片**名字被改坏**的
-        /// `Y.z删除ip`（§44.2 的真机形状）。老写法只按 `IsVolumePartFileName` 认兄弟 ⇒ 认不出它、
+        /// `Y.7删除z`（§44.2 的真机形状）。老写法只按 `IsVolumePartFileName` 认兄弟 ⇒ 认不出它、
         /// 把 `.001/.002` 删掉，留下这一片 = **半套**。
+        ///
+        /// <para>⚠ 2026-10-10：这一片原来叫 `Y.z删除ip` —— 那是 **zip 族**的名字，而这一组是 **7z 数字分卷族**，
+        /// 判据改成"基名 + 族"（用户拍板，见 `RestVolumeCompletenessGate`）之后它与 `Y.7z.001`
+        /// **可证跨族** ⇒ 闸门放行、本条变红。⇒ 换成同族的坏法 `Y.7删除z`：探针实测
+        /// `IsVolumePartFileName("Y.7删除z")=False`（正是本用例的前提：老识别认不出它），
+        /// 而闸门对「候选 `Y.7z.001` + 同一棵树里另有 `Y.7删除z`」判**拦下**。⛔ 别改回 zip 族那个名字。</para>
         ///
         /// <para>断言：**一片都不删** + 一条 WARN（点名这一片认不出/还在树里）。</para>
         ///
-        /// <para><b>红检</b>：同用例 ② 那道闸门撤掉 ⇒ 本条变红（`.001/.002` 被删，`Y.z删除ip` 孤零零留下）。</para>
+        /// <para><b>红检</b>：同用例 ② 那道闸门撤掉 ⇒ 本条变红（`.001/.002` 被删，`Y.7删除z` 孤零零留下）。</para>
         /// </summary>
         [Fact]
         public void 同组那一片名字认不出_一片都不删_并点名()
@@ -708,7 +714,7 @@ namespace ArchiveFixer.Tests
 
                 WriteFile(outer.OutputPath, @"AAA\Y.7z.001");
                 WriteFile(outer.OutputPath, @"AAA\Y.7z.002");
-                WriteFile(outer.OutputPath, @"AAA\Y.z删除ip");
+                WriteFile(outer.OutputPath, @"AAA\Y.7删除z");
 
                 WorkspaceLayer inner = workspace.CreateNextLayer(Path.Combine(outer.OutputPath, @"AAA\Y.7z.001"));
                 WriteFile(inner.OutputPath, @"内容物\payload.bin");
@@ -720,13 +726,13 @@ namespace ArchiveFixer.Tests
 
                 Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.001")));
                 Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.002")));
-                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.z删除ip")));
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7删除z")));
 
                 Assert.True(File.Exists(Path.Combine(target, "AAA", "内容物", "payload.bin")));
 
                 Assert.Contains(
                     published.Warnings,
-                    warning => warning.Contains("Y.z删除ip", StringComparison.Ordinal));
+                    warning => warning.Contains("Y.7删除z", StringComparison.Ordinal));
             }
             finally
             {
