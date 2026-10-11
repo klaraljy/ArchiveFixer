@@ -11217,44 +11217,58 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * ===== 第二大步"自己那一组卷"也要收（2026-10-11，用户口径：分卷记账是第二大步的事）=====
+             * ===== 第二大步"这一组的卷"里、凡是**续解产出的**也要收（2026-10-11，用户口径：分卷记账是第二大步的事）=====
              *
              * 现场（真机 EEE，日志逐字）：第二大步把那一组解开、`解压成功 ｜ 校验通过 ｜ 续解`，可
-             * `这一层的过程物没有回收（回收判据没放行）` —— 拦住它的那道闸门是"过路层其余物"里有**别的单的源包**
-             * （`111(2)_.zip` / `111(3).rar` 与这一组同处一个其余物目录）⇒ 整段没放行；而链尾那条路又写着
-             * `续解出来的内层包不参与源包处理` ⇒ 那两对卷（`111.part1.rar` / `111.part2.rar`）**没人收**，
-             * 一直留在落点树里（环台判据 ③ 报的就是它们）。
+             * `这一层的过程物没有回收（回收判据没放行）` —— 拦住它的是"过路层其余物"那道闸门：那个其余物目录里
+             * **混着别的单的源包**（`111(2)_.zip` / `111(3).rar`）⇒ 拒绝删整目录 ⇒ 这一层的过程物回收整段没放行；
+             * 链尾那条路又写着 `续解出来的内层包不参与源包处理 —— 源包一个字节都不搬` ⇒ 那两对卷没人收。
              *
-             * 判据只用**既有事实位** `ArchiveTask.IsContinuationTask`（项目自己的定义逐字：
-             * 「续解任务的"源文件"是上一层交出来的内层包 —— 对用户来说它是过程物」）
-             * + 这一组已经解开（下面那几道门槛照旧全过）。⇒ 续解产出的那一组卷，解开+校验+可证完整之后按删除档收掉。
-             *
-             * ⛔ 用户最初导入的那些包**绝不进这一档**（它们的 `IsContinuationTask` 为 false）；
-             * ⛔ 六道门槛一条不绕过；⛔ 名字仍属于这一组（族 + 基名，下面逐份再问一次）。
+             * ⚠ **判据不能挂在"收场的 consumer 是续解任务"上**（第一版就这么写的，实测没生效）：
+             * 这一组收场时的 consumer 是**第一大步那一单**（真机 `111.z03`，`IsContinuationTask=false`），
+             * 而"卷是续解产出的"这件事在**别的单**身上（`111.part1.rar`）。
+             * ⇒ 扫**全表**：凡是**续解任务**（既有事实位 `IsContinuationTask`，项目自己的定义逐字：
+             * 「续解任务的"源文件"是上一层交出来的内层包 —— 对用户来说它是过程物」）**且名字仍属于这一组**
+             * （族 + 基名，既有宽尺子）的卷，都收进来。
+             * ⛔ 用户最初导入的包绝不进这一档（它们 `IsContinuationTask == false`）；⛔ 六道门槛一条不绕过。
              */
-            if (consumer.IsContinuationTask)
-            {
-                string consumerStart = consumer.CurrentPath ?? string.Empty;
+            string volumeGroupReference = targets.Count > 0
+                ? FileNameHelper.GetFileName(targets[0].Path)
+                : FileNameHelper.GetFileName(consumer.CurrentPath ?? string.Empty);
 
-                foreach (string volumePath in consumer.VolumePaths.Concat(new[] { consumerStart }))
+            foreach (ArchiveTask derived in SnapshotTaskTable(Tasks))
+            {
+                if (derived == null || !derived.IsContinuationTask)
+                {
+                    continue;
+                }
+
+                string derivedRoot = ResolveOwnerChainDirectory(derived);
+
+                if (derivedRoot.Length == 0)
+                {
+                    continue;
+                }
+
+                foreach (string volumePath in derived.VolumePaths.Concat(new[] { derived.CurrentPath ?? string.Empty }))
                 {
                     if (string.IsNullOrWhiteSpace(volumePath) || !File.Exists(volumePath))
                     {
                         continue;
                     }
 
-                    if (!volumePath.Equals(consumerStart, StringComparison.OrdinalIgnoreCase)
+                    if (volumeGroupReference.Length > 0
                         && !VolumeGroupDetector.BelongsToSameGroup(
                             FileNameHelper.GetFileName(volumePath),
-                            FileNameHelper.GetFileName(consumerStart)))
+                            volumeGroupReference))
                     {
-                        // 别的族/别的基名 ⇒ 判不出"它属于这一组" ⇒ 一个字节都不动。
+                        // 别的族 / 别的基名 ⇒ 判不出"它属于这一组" ⇒ 一个字节都不动。
                         continue;
                     }
 
                     if (!targets.Any(item => SafePathHelper.PathEquals(item.Path, volumePath)))
                     {
-                        targets.Add((consumer, volumePath, ResolveOwnerChainDirectory(consumer)));
+                        targets.Add((derived, volumePath, derivedRoot));
                     }
                 }
             }
@@ -11388,27 +11402,28 @@ namespace ArchiveFixer.ViewModels
             {
                 try
                 {
-                    if (!File.Exists(path))
-                    {
-                        // 已经不在了（被搬走 / 已删）⇒ 什么都不做。
-                        continue;
-                    }
-
+                    /*
+                     * ⚠ **判据输入**（2026-10-11，EEE ③ 定位用）：这一档的逐目标筛子原来**全是静默 `continue`**
+                     * —— 拿一份日志分不出"这个目标压根没被收进来"还是"收进来了、被哪一道筛子丢了"。
+                     * 按项目那条规矩（判不出就把判据输入写进日志），在**丢掉**时补一行 WARN。
+                     * ⛔ 三条判据一个字没改，只是把三次 `continue` 合成一次并写出各自的取值。
+                     */
                     string name = FileNameHelper.GetFileName(path);
+                    bool exists = File.Exists(path);
+                    bool isVolumePart = VolumeGroupDetector.TryGetVolumeIndex(name) != null;
+                    bool baseMatches = string.Equals(
+                        FileNameHelper.GetArchiveBaseName(name),
+                        groupBaseName,
+                        StringComparison.OrdinalIgnoreCase);
+                    bool insideRoot = ArchivePathGuard.IsInsideRoot(outputRoot, path, out _);
 
-                    if (VolumeGroupDetector.TryGetVolumeIndex(name) == null
-                        || !string.Equals(
-                            FileNameHelper.GetArchiveBaseName(name),
-                            groupBaseName,
-                            StringComparison.OrdinalIgnoreCase))
+                    if (!exists || !isVolumePart || !baseMatches || !insideRoot)
                     {
-                        // 名字已经不再属于这一组 ⇒ 判不出"这确实是那一片" ⇒ 什么都不做。
-                        continue;
-                    }
-
-                    if (!ArchivePathGuard.IsInsideRoot(outputRoot, path, out _))
-                    {
-                        // 已经不在当时记下的那个落点根之内 ⇒ 判不出 ⇒ 什么都不做。
+                        AppendLog(
+                            "WARN",
+                            $"收产出方那一份片：这一次跳过（判据输入）｜目标=「{path}」，在盘上={exists}，"
+                            + $"是分卷片={isVolumePart}，基名对上「{groupBaseName}」={baseMatches}，"
+                            + $"在落点根「{outputRoot}」内={insideRoot}");
                         continue;
                     }
 
