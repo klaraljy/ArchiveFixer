@@ -88,35 +88,17 @@ namespace ArchiveFixer.Extraction
 
                 string name = FileNameHelper.GetFileName(candidate);
 
-                bool looksLikeVolumePiece = VolumeGroupDetector.TryGetVolumeIndex(name) != null;
+                /*
+                 * ⛔ **"这一份是什么"问底层那一个出口**（`FileNature.Inspect` —— 内容 / 名字 / 盘上四类事实一张卡），
+                 * ⛔ 不在这里自己拼名字、自己读魔数（用户 2026-10-11：「统筹到同一组上面去…先看看底层能够识别到文件是什么东西」）。
+                 */
+                FileNatureCard card = FileNature.Inspect(candidate);
 
-                if (looksLikeVolumePiece)
-                {
-                    /*
-                     * ===== ⛔ 内容证据优先（用户 2026-10-11：「判断一个文件，**绝对不能只看基名和后缀**」）=====
-                     *
-                     * 按名字判"像不像分卷片"有一处**结构性缺陷**：**一个归档本体自己就是它那一族的第 1 卷**
-                     * （`VolumeGroupDetector.TryGetVolumeIndex("111.rar")` = 1）⇒ 一份普普通通的**单卷**
-                     * `.rar` / `.zip` 会被算成"分卷的一片"，于是这一轮明明只解出一个单一压缩包，
-                     * 轮判定却报「分卷 1 组 ⇒ 下一轮从第二大步开始」——**基石的判据被名字带偏**。
-                     *
-                     * <para>⇒ 这里问一次**归档自己写的头**（唯一出口
-                     * <see cref="VolumeNumberFromContent.IsProvablyNotVolumeMember"/>）：**可证"不是分卷组的一员"
-                     * ⇒ 按单一压缩包算**（它本来就是）；**判不出**（跨盘 ZIP 的中间片、认不出的字节）
-                     * ⇒ **照旧按名字算**（保守，⛔ 不当"不是"）。</para>
-                     *
-                     * <para>真样本实测（`DebugRunner volinfo`，只读）：EEE `111\111.rar`（用户的原包）
-                     * ⇒ `NotVolumeMember`；FFF `1114__\111_.part4.raAAAAAr`（真 RAR 分卷的一片）
-                     * ⇒ `IsVolumeMember = True` ⇒ 这一条**只动"单卷包被误算成分卷"那一档**，
-                     * 真分卷组（含跨盘 ZIP 的中间片）一个字节都不变。</para>
-                     */
-                    if (VolumeNumberFromContent.IsProvablyNotVolumeMember(candidate))
-                    {
-                        looksLikeVolumePiece = false;
-                    }
-                }
-
-                if (looksLikeVolumePiece)
+                /*
+                 * 分卷那一支的判据 = 卡上那句：内容**可证不是**分卷成员 ⇒ 不参与（它就是一份普通的单卷归档 / 别的文件）；
+                 * 是分卷 / **判不出** ⇒ 参与（判不出照旧按名字 —— ⛔ 不许把"判不出"当"不是"）。
+                 */
+                if (card.ParticipatesInVolumeHandling && card.VolumeIndexByName != null)
                 {
                     // 是分卷的一片 —— 先收进池子，稍后按"组"折算成入口包。
                     volumeMembers.Add(candidate);

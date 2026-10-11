@@ -9473,22 +9473,27 @@ namespace ArchiveFixer.ViewModels
             /*
              * ===== ⛔ 内容证据优先：**可证"不是分卷组的一员" ⇒ 这一档一个字都不接** =====
              *
-             * <para>用户 2026-10-11 口径：「判断一个文件，**绝对不能只看基名和后缀**，绝对还有其他的办法」。
-             * 按名字判"像不像分卷片"有一处结构性缺陷：**一个归档本体自己就是它那一族的第 1 卷**
+             * <para>用户 2026-10-11 口径：「判断一个文件，**绝对不能只看基名和后缀**，绝对还有其他的办法」
+             * +「统筹到同一组上面去…我们就是先看看**底层能够识别到文件是什么东西**」。
+             * 判据**不再写在这里** —— 转调底层那一个出口 <see cref="FileNature.Inspect"/> 那张卡上的
+             * <see cref="FileNatureCard.ParticipatesInVolumeHandling"/>（内容说"不是分卷成员" ⇒ 不参与这一套动作）。</para>
+             *
+             * <para>为什么按名字判会出事：**一个归档本体自己就是它那一族的第 1 卷**
              * （`VolumeGroupDetector.TryGetVolumeIndex("111.rar")` = 1）⇒ 用户那份普普通通的单卷 `111.rar`
-             * 也会被判成"像分卷片"（第 125 轮真凶就是这么把它接进别组的）。而归档自己写的头能一句话说清。</para>
+             * 也会被判成"像分卷片"（第 125 轮真凶就是这么把它接进别组的）。</para>
              *
              * <para><b>真样本实测（`DebugRunner volinfo` 档，只读）</b>：EEE `111\111.rar`（用户的原包）
              * ⇒ `NotVolumeMember`；EEE `111(4)\111.z11111111110删除3`（跨盘 ZIP 中间片，没有 EOCD）
              * ⇒ `NotAnArchive`（**判不出**）；FFFF `1114__\111_.part4.raAAAAAr`（真 RAR 分卷的一片）
              * ⇒ `IsVolumeMember = True`。⛔ 所以这里只对**可证不是**的那一档动作，判不出 ⇒ 照旧按名字。</para>
              */
-            if (VolumeNumberFromContent.IsProvablyNotVolumeMember(piecePath))
+            FileNatureCard nature = FileNature.Inspect(piecePath);
+
+            if (!nature.ParticipatesInVolumeHandling)
             {
                 AppendLog(
                     "WARN",
-                    $"{FileNameHelper.GetFileName(piecePath)}：不接进这一组 —— 内容证据：它自己写着「不是分卷组的一员」"
-                    + "（RAR 的 Volume 位没置 / 跨盘 ZIP 的 EOCD 盘号 = 0）⇒ 一个字节都不动。");
+                    $"{FileNameHelper.GetFileName(piecePath)}：不接进这一组 —— 底层识别：{nature.Describe()}");
                 return false;
             }
 
