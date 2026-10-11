@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using ArchiveFixer.Extraction;
+using ArchiveFixer.Helpers;
 using ArchiveFixer.ViewModels;
 using Xunit;
 
@@ -107,6 +108,46 @@ namespace ArchiveFixer.Tests
             Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
                 Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "recursive", "111(2)__xyz", "layer-000", "output", "111.z01"),
                 string.Empty));
+        }
+
+        /// <summary>
+        /// ⛔ **目标位上已经有同名文件时，先问一句"是不是这一片自己"**（2026-10-11 环台实测的假拒绝）。
+        ///
+        /// <para><b>现场</b>：同一秒的日志里，接片那一档说「目标名已经被别的文件占着（⛔ 绝不覆盖）」，
+        /// 而同一单的定稿又说「已经在目标位上、而且是「同一份文件」」；判据输入里逐字写着
+        /// 「同名位上=同一份文件（就是这一片自己，只是名字已经在位）」——
+        /// 那不是被占用，是**这一片早就在位** ⇒ 必须算接片成功（否则后面那套记账整段被跳过，
+        /// 产出方那一份"已经落地的片"就没人收）。
+        /// 实测对照（同一份样本、同一个环台）：修前 6 条假拒绝 / 0 条"早就在位"；修后 0 条 / 11 条。</para>
+        ///
+        /// <para><b>红检</b>：把判据换成"只要目标位存在就算这一片自己"（或换成永远 false）⇒
+        /// 下面第 ③（或第 ②）条当场变红。</para>
+        /// </summary>
+        [Fact]
+        public void 目标位上已经是这一片自己_才算早就在位_别人的文件算被占()
+        {
+            string piece = Path.Combine(_root, "111.zip");
+
+            File.WriteAllBytes(piece, new byte[1024]);
+
+            string targetDirectory = Path.Combine(_root, "111", "111");
+            Directory.CreateDirectory(targetDirectory);
+
+            string target = Path.Combine(targetDirectory, "111.zip");
+
+            // ① 目标位还空着 ⇒ 不是"早就在位"。
+            Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
+
+            // ② 同一份物理文件（硬链接）⇒ 就是这一片自己。
+            Assert.True(HardLinkHelper.TryCreateHardLink(target, piece));
+
+            Assert.True(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
+
+            // ③ 目标位换成**另一个**文件 ⇒ 别人的 ⇒ 绝不覆盖。
+            File.Delete(target);
+            File.WriteAllBytes(target, new byte[2048]);
+
+            Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, target));
         }
 
         /// <summary>

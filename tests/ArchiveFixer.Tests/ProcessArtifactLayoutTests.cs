@@ -459,5 +459,54 @@ namespace ArchiveFixer.Tests
             Assert.Empty(plan.Skipped);
             Assert.Equal(ArtifactDirectory, plan.ArtifactDirectory);
         }
+
+        /// <summary>
+        /// ⛔ **"这一单自己那一份在盘上"必须按"同一组"那把尺子找（族 + 基名），⛔ 不是只比包基名**
+        /// （2026-10-11 补；这条路径的值直接喂给 <c>SourcePackageMover.Plan</c>，认错人就会把**别人的包**
+        /// 搬进其余物、删除档下还会被永久删掉）。
+        ///
+        /// <para><b>夹具</b>：同一目录里放 `111.rar` 与 `111.zip`（同基名、**不同族**），
+        /// 这一单最初导入的是 `111.rar`，而它已经被改名/搬走（盘上不在）⇒ 回落到"按尺子找"。</para>
+        ///
+        /// <para><b>红检</b>：把判据换回"只比包基名"⇒ 本条当场变红（会返回 `111.zip`）。</para>
+        /// </summary>
+        [Fact]
+        public void 自己那一份要按同族同基名找_绝不认到另一个后缀的包()
+        {
+            string directory = PathOf("同基名两个族");
+            Directory.CreateDirectory(directory);
+
+            // 另一个包：同基名、不同族（RarOld vs ZipSpanned）。
+            string other = Path.Combine(directory, "111.zip");
+            File.WriteAllBytes(other, new byte[1024]);
+
+            // 这一单最初导入的那一份（现在盘上已经不在）。
+            string own = Path.Combine(directory, "111.rar");
+
+            var task = new ArchiveFixer.Models.ArchiveTask(own, 1);
+
+            string resolved = SourcePackageMover.ResolveOwnFileOnDisk(task);
+
+            Assert.NotEqual(other, resolved);
+            Assert.Equal(string.Empty, resolved);
+        }
+
+        /// <summary>
+        /// 对照：**同族改名**（`111.z0删除2` → `111.z02`）照样要认得出 —— 尺子宽窄是刻意的，
+        /// ⛔ 别把"同族"也一起挡掉。
+        /// </summary>
+        [Fact]
+        public void 同族改名的自己那一份_照样认得出()
+        {
+            string directory = PathOf("同族改名");
+            Directory.CreateDirectory(directory);
+
+            string renamed = Path.Combine(directory, "111.z02");
+            File.WriteAllBytes(renamed, new byte[1024]);
+
+            var task = new ArchiveFixer.Models.ArchiveTask(Path.Combine(directory, "111.z0删除2"), 1);
+
+            Assert.Equal(renamed, SourcePackageMover.ResolveOwnFileOnDisk(task));
+        }
     }
 }

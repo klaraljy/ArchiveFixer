@@ -9220,6 +9220,21 @@ namespace ArchiveFixer.ViewModels
             string? first = VolumeGroupDetector.TryGetFirstVolumeName(name);
             int? index = VolumeGroupDetector.TryGetVolumeIndex(name);
 
+            /*
+             * ⚠ **同名位上到底是什么**：必须写出来（2026-10-11 环台实测逮到的假拒绝）——
+             * 同一秒的日志里出现过自相矛盾的两句：这句说「目标名已经被别的文件占着（⛔ 绝不覆盖）」，
+             * 而同一单的定稿那一句说「已经在目标位上、而且是「同一份文件」（接片时建的硬链接）」。
+             * 光看"被占了"分不出是**别人**的文件（该拒）还是**自己这一片**早就链接在那儿了（该当成功），
+             * 下一步无从下手 ⇒ 这里直接把物理同一性写进判据输入（⛔ 只写事实，不改判据）。
+             */
+            string sameNameSlot = target.Length == 0
+                ? "（没有目标名可看）"
+                : !File.Exists(target)
+                    ? "没有同名文件"
+                    : FileIdentity.IsSamePhysicalFile(piecePath, target)
+                        ? "同一份文件（就是这一片自己，只是名字已经在位）"
+                        : "另一个文件（⛔ 绝不覆盖）";
+
             AppendLog(
                 "WARN",
                 string.Format(
@@ -9233,7 +9248,8 @@ namespace ArchiveFixer.ViewModels
                     index?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出",
                     canonical.Length == 0 ? "判不出" : canonical,
                     targetDir.Length == 0 ? "判不出（推不出这一组该拼到哪一层）" : targetDir,
-                    target.Length == 0 ? "判不出" : target));
+                    target.Length == 0 ? "判不出" : target,
+                    sameNameSlot));
         }
 
         /// <summary>收**一片**：按规范卷名接到"这一组还缺卷"那一单的目录里；末片在手时顺手把整组接齐。</summary>
@@ -9312,6 +9328,21 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
+            /*
+             * ⚠ **目标位上已经有同名文件时先问一句：是不是这一片自己**（2026-10-11 环台实测逮到的假拒绝）。
+             *
+             * 现场（程序自己的判据输入，同一秒里自相矛盾的两句）：
+             *   `111.zip：这一片接不进这一组 —— 目标名已经被别的文件占着（⛔ 绝不覆盖）｜判据输入：… 目标名=「…\111\111\111.zip」，同名位上=同一份文件（就是这一片自己，只是名字已经在位）`
+             * 紧接着同一单又打：`111.rar：111.zip 已经在目标位上、而且是「同一份文件」（接片时建的硬链接）—— 不必再搬一次，也不留多余的名字。`
+             * ⇒ 那根本不是"被占用"，是**这一片早就链接在位**了。老代码只判 `File.Exists(target)` 就返回 false
+             * ⇒ 后面那套记账（`RememberGroupPieceProducer` / `RememberPieceSupplyingTask` /
+             * `RememberAdoptedLandedPiece`）**整段被跳过** ⇒ 产出方那一份"已经落地的片"没人收
+             * （用户 2026-10-10 点名要收的那一条），而且把一个成功的状态写成 WARN 假警报。
+             * ⛔ 判据只读事实：同名位上**是不是同一份物理文件**（`FileIdentity.IsSamePhysicalFile`）；
+             * 是**别人**的文件 ⇒ 照旧判"接不进"（⛔ 绝不覆盖）。
+             */
+            bool alreadyInPlace = IsTargetSlotAlreadyThisPiece(piecePath, target);
+
             if (!File.Exists(target) && HardLinkHelper.CanHardLink(piecePath, targetDir))
             {
                 /*
@@ -9382,6 +9413,21 @@ namespace ArchiveFixer.ViewModels
                                 : $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
                                   + "零字节的硬链接：源文件一个字节没动、名字也一个字符没改）。");
                 }
+            }
+
+            else if (alreadyInPlace)
+            {
+                // 这一片早就在位、而且是同一份文件 ⇒ **算接片成功**（⛔ 一个字节都不搬、不覆盖）。
+                adopted = true;
+
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PieceAlreadyInPlaceFormat,
+                        baseName,
+                        canonical,
+                        Path.GetFileName(targetDir)));
             }
 
             if (adopted)
@@ -9594,6 +9640,25 @@ namespace ArchiveFixer.ViewModels
 
             return directories;
         }
+
+        /// <summary>
+        /// 目标位上已经有同名文件时：那到底**是不是这一片自己**（同一份物理文件）。
+        ///
+        /// <para><b>为什么必须有它</b>（2026-10-11 环台实测逮到的假拒绝）：接片那一档原来只判
+        /// `File.Exists(target)` 就返回"接不进"，而目标位上那一份**恰恰就是这一片自己**
+        /// （早前已经硬链接过去、或它自己就是从那儿来的）——
+        /// 于是"接片成功"被写成 WARN 假警报，**更要命的是后面那套记账整段被跳过**
+        /// （`RememberGroupPieceProducer` / `RememberPieceSupplyingTask` / `RememberAdoptedLandedPiece`）
+        /// ⇒ 产出方那一份"已经落地的片"没人收（用户 2026-10-10 点名要收的那一条）。
+        /// 实测对照（同一份样本、同一个环台）：修前 6 条假拒绝 / 0 条"早就在位"；修后 0 条假拒绝 / 11 条"早就在位"。</para>
+        ///
+        /// <para>判据只读事实：**同一份物理文件**（<see cref="FileIdentity.IsSamePhysicalFile"/>）。
+        /// true ⇒ 接片算成功（⛔ 一个字节都不搬、不覆盖）；false ⇒ 别人的文件 ⇒ 照旧判"接不进"。</para>
+        /// </summary>
+        internal static bool IsTargetSlotAlreadyThisPiece(string piecePath, string target)
+            => !string.IsNullOrWhiteSpace(target)
+               && File.Exists(target)
+               && FileIdentity.IsSamePhysicalFile(piecePath, target);
 
         /// <summary>本单自己的暂存目录（算不出来 / 判不出 ⇒ 空串 = 调用方落回老口径"按过程物目录那一档"）。</summary>
         private string ResolveOwnerStageDirectory(ArchiveTask? owner)
