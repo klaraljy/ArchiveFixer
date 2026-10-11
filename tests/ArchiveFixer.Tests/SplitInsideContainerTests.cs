@@ -33,12 +33,14 @@ namespace ArchiveFixer.Tests
     {
         private readonly string _root;
         private readonly string? _sevenZip;
+        private readonly string? _rar;
 
         public SplitInsideContainerTests()
         {
             _root = Path.Combine(Path.GetTempPath(), "ArchiveFixerSplitInside", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_root);
             _sevenZip = LocateSevenZip();
+            _rar = LocateRar();
         }
 
         public void Dispose()
@@ -147,6 +149,64 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(container));
             Assert.True(File.Exists(Path.Combine(work, "set.7z.002")));
             Assert.True(File.Exists(Path.Combine(work, "set.7z.003")));
+        }
+
+        /// <summary>
+        /// **抠出来的那一份按内容起名**（用户 2026-10-11 大测试 run-5555 实测出来的缺口）。
+        ///
+        /// <para>现场：`222-L5.png`（8.4 MB 媒体前缀 + **一整个 RAR5 尾巴**）抠出来的那一份叫 `222-L5.zip`
+        /// ⇒ `7z x` 按扩展名挑 zip 处理器、当场拒绝（退出码 2、产物 0 个）⇒ 上层把这次失败归到
+        /// 「分卷缺失」⇒ 整单跳过、内容物一个都没有。同一份字节改成 `.rar` 就能正常解开（本机实测，
+        /// 两个名字只差后缀）。</para>
+        ///
+        /// <para>判据 = 底层那张卡 <see cref="FileNature.Inspect"/>：内容**可证"不是分卷组的一员"**
+        /// ⇒ 按真实格式起名；真分卷成员（上一条用例那个形状）继续叫 `.zip`（用户 2026-09-25 第 42 条）。</para>
+        ///
+        /// <para>⚠ 本机没装 WinRAR 时这条跳过：这一档要造"完整的 RAR 尾巴"，7z 写不出 RAR。</para>
+        /// </summary>
+        [Fact]
+        public async Task 完整RAR尾巴_抠出来那一份必须按内容起名不许写死zip()
+        {
+            RequireRar();
+
+            string work = Path.Combine(_root, "rar-work-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(work);
+
+            string container = BuildContainerWithCompleteRar(work, "封面.png");
+
+            Harness harness = CreateHarness();
+            var task = await AddTaskAsync(harness, container);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            string log = string.Join("\n", harness.LogTexts);
+
+            /*
+             * 断言只能落在**判据行**上：任务**成功**时任务级 INFO 会被"攒着、成功就丢"那条规矩丢掉
+             * （"实际使用 …" 那类明细行成功时看不见 —— 实测本用例的日志里就没有它）。
+             * 判据行走的是 _vm.CriterionLog，不进任务缓冲，成功也一定落盘。
+             */
+            Assert.True(
+                harness.LogTexts.Any(line =>
+                    line.Contains("抠出来的那一份按内容起名", StringComparison.Ordinal)
+                    && line.Contains("格式=Rar", StringComparison.Ordinal)
+                    && line.Contains("改名 封面.rar", StringComparison.Ordinal)),
+                "抠出来的那一份没按内容起名成 .rar：\n" + log);
+
+            Assert.False(
+                harness.LogTexts.Any(line =>
+                    line.Contains("抠出来的那一份按内容起名", StringComparison.Ordinal)
+                    && line.Contains("保持现有名字", StringComparison.Ordinal)),
+                "内容可证不是分卷成员，却仍然保持 .zip 没改名：\n" + log);
+
+            // ②这一单真解出来了（内容物落在输出根下），且机器终态是成功。
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.True(
+                Directory.EnumerateFiles(harness.OutputRoot, "a.bin", SearchOption.AllDirectories).Any(),
+                "内容物没解出来：\n" + log);
+
+            // ③源文件一个字节都没动（不变量 1）。
+            Assert.True(File.Exists(container));
         }
 
         /// <summary>
@@ -286,6 +346,39 @@ namespace ArchiveFixer.Tests
             return container;
         }
 
+        /// <summary>
+        /// 造一个"图片 + **一整个完整 RAR**（不是分卷）"的容器 —— 用户 2026-10-11 大测试 run-5555 的形状
+        /// （`222-L5.png` = 8.4 MB 媒体前缀 + 一整个 RAR5 尾巴）。
+        /// </summary>
+        private string BuildContainerWithCompleteRar(string directory, string containerName)
+        {
+            string source = Path.Combine(_root, "rar-src-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(source);
+
+            var payload = new byte[3 * 1024 * 1024];
+            new Random(20261011).NextBytes(payload);
+            File.WriteAllBytes(Path.Combine(source, "a.bin"), payload);
+
+            RunRar(source, "a", "-ep", "-m0", "-ma5", "pack.rar", "a.bin");
+
+            string packed = Path.Combine(source, "pack.rar");
+            Assert.True(File.Exists(packed), "完整 RAR 没造出来");
+
+            byte[] packedBytes = File.ReadAllBytes(packed);
+            var junk = new byte[2 * 1024 * 1024];
+            new Random(11).NextBytes(junk);
+
+            string container = Path.Combine(directory, containerName);
+
+            using (var stream = File.Create(container))
+            {
+                stream.Write(junk);
+                stream.Write(packedBytes);
+            }
+
+            return container;
+        }
+
         private static async Task<ArchiveTask> AddTaskAsync(Harness harness, string path)
         {
             var task = new ArchiveTask(path, harness.Vm.Tasks.Count + 1) { IsSelected = true };
@@ -322,6 +415,33 @@ namespace ArchiveFixer.Tests
 
             Assert.True(process.WaitForExit(120_000), "7z 超时");
             Assert.True(process.ExitCode == 0, $"7z 失败：{stdout}{stderr}");
+        }
+
+        private void RunRar(string workingDirectory, params string[] args)
+        {
+            RequireRar();
+
+            var psi = new ProcessStartInfo(_rar!)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = workingDirectory
+            };
+
+            foreach (string arg in args)
+            {
+                psi.ArgumentList.Add(arg);
+            }
+
+            using Process process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动 Rar.exe");
+
+            string stdout = process.StandardOutput.ReadToEnd();
+            string stderr = process.StandardError.ReadToEnd();
+
+            Assert.True(process.WaitForExit(120_000), "Rar 超时");
+            Assert.True(process.ExitCode == 0, $"Rar 失败：{stdout}{stderr}");
         }
 
         private Harness CreateHarness()
@@ -379,6 +499,40 @@ namespace ArchiveFixer.Tests
             {
                 throw new InvalidOperationException("测试机上没有 7z.exe");
             }
+        }
+
+        /// <summary>
+        /// 这一档**只有 RAR 造得出来**（要的东西正是"内容可证不是分卷成员"的完整 RAR ——
+        /// ZIP 那一族改完名与原来同名、7z 那一族内容证据判不出），所以本机没装 WinRAR 时**跳过**并写清楚。
+        /// </summary>
+        private void RequireRar()
+        {
+            if (string.IsNullOrEmpty(_rar))
+            {
+                throw new InvalidOperationException(
+                    "测试机上没有 Rar.exe（WinRAR）：这一档要造\"完整的 RAR 尾巴\"，造不出来就没得测。");
+            }
+        }
+
+        /// <summary>
+        /// 找 <c>Rar.exe</c>：先认环境变量 <c>ARCHIVEFIXER_RAR</c>，再认 WinRAR 的默认安装位置。
+        /// 找不到 = 跳过（与"本机没 WinRAR"那几条既有跳过一个口径）。
+        /// </summary>
+        private static string? LocateRar()
+        {
+            string? fromEnvironment = Environment.GetEnvironmentVariable("ARCHIVEFIXER_RAR");
+
+            if (!string.IsNullOrWhiteSpace(fromEnvironment) && File.Exists(fromEnvironment))
+            {
+                return fromEnvironment;
+            }
+
+            string? fromProgramFiles = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "WinRAR",
+                "Rar.exe");
+
+            return File.Exists(fromProgramFiles) ? fromProgramFiles : null;
         }
 
         private static string? LocateSevenZip()

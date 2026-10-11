@@ -18,6 +18,33 @@ namespace ArchiveFixer.Tests
         private static readonly Func<string, bool> DriveExists = _ => true;
         private static readonly Func<string, bool> DriveMissing = _ => false;
 
+        /// <summary>
+        /// **落点目录不许等于源文件自己**（用户 2026-10-11 大测试 run-8888 实测：一整批因此不开工）。
+        ///
+        /// <para>现场：就地档 + 源包 `…\8888\bbb\bbb-L4.zip删除` ⇒ 包基名按名字尺子算出来**就是整个文件名**
+        /// （那一档刻意不归一"粘在归档后缀上的垃圾"，`ArchiveBaseNameTests` 逐格钉着）⇒
+        /// 落点 = `<源目录>\<文件名>` = **源文件自己** ⇒ 工作区要建在"一个文件里面" ⇒ 批首报
+        /// 「⛔ 目标位置不可用…目标目录建不出来（不可写）：…\bbb-L4.zip删除」、一个字节都不写。</para>
+        ///
+        /// <para>判据 = 只读事实（目标目录与源包同一条路径）⇒ 换用**归档基名**那一档
+        /// （`bbb-L4.zip删除` → `bbb-L4`）。⛔ 名字尺子一个字都不改。</para>
+        /// </summary>
+        [Theory]
+        [InlineData(@"C:\111\bbb-L4.zip删除", @"C:\111\bbb-L4")]
+        [InlineData(@"C:\111\pack111-L6.rar删除", @"C:\111\pack111-L6")]
+        [InlineData(@"C:\111\222-L5.rarzz", @"C:\111\222-L5")]
+        [InlineData(@"C:\111\bbb-L6.7zAAAAA", @"C:\111\bbb-L6")]
+        public void 包基名算成整个文件名时_落点改用归档基名_绝不当成源文件自己(string source, string expected)
+        {
+            OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
+                source,
+                OutputPlacementMode.PerArchiveSubfolder);
+
+            Assert.True(result.Success);
+            Assert.Equal(expected, result.DestinationDirectory);
+            Assert.NotEqual(source, result.DestinationDirectory, StringComparer.OrdinalIgnoreCase);
+        }
+
         // ── 用户 2026-09-24 第 13 条：落点四条规则 ─────────────────────────────
         //
         // （选中的是文件还是文件夹）×（有没有指定位置），四条组合各钉一条**完整路径**。

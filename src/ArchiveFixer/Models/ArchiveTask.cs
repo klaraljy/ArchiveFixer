@@ -1568,6 +1568,21 @@ namespace ArchiveFixer.Models
         public long EmbeddedArchiveEnd { get; set; }
 
         /// <summary>
+        /// 抠出来的内嵌归档副本用什么后缀（含点；默认 <c>.zip</c>）。
+        ///
+        /// <para><b>唯一写点</b> = <c>ExtractionCoordinator.AlignCarvedArchiveExtension</c>：它抠完拿
+        /// <see cref="FileNature.Inspect"/> 那张卡看**内容是**什么 —— 内容**可证"不是分卷组的一员"**
+        /// （完整的单卷归档）就按真实格式起名（`.7z` / `.rar` / `.zip`）；
+        /// 内容可能是分卷成员（真分卷 / 7z 那一族判不出）就**保持 `.zip`**（用户 2026-09-25 第 42 条的实测结论：
+        /// 那一档叫 `.zip` 引擎才报「分卷缺失」，叫真实后缀会改口说"文件损坏"）。</para>
+        ///
+        /// <para>为什么要记在任务上：抠出来那一份的路径有**三个**消费点（解压入口、定稿时把它搬进过程物、
+        /// 清掉上一次的陈旧副本），三处必须问同一个名字 —— 各自拼一遍就会出现"抠的是 `.rar`、找的是 `.zip`"
+        /// 那种漏搬/漏清的缺口。</para>
+        /// </summary>
+        public string CarvedArchiveExtension { get; set; } = ".zip";
+
+        /// <summary>
         /// 这个内嵌归档能不能**直读**（识别阶段用 <c>Extraction/EmbeddedZipStreamExtractor</c> 只读探过一次）。
         ///
         /// <para><b>它只用于空间核算</b>：直读不产生那份等大的临时副本，估算就不该预留它

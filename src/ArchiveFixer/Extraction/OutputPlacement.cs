@@ -605,6 +605,42 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
+             * ⛔ 落点目录**不许等于源文件自己**（用户 2026-10-11 大测试实测：一整批因此不开工）。
+             *
+             * <para><b>现场</b>（run-8888，就地档）：源包是 `…\8888\bbb\bbb-L4.zip删除`，
+             * 包基名按名字尺子算出来**就是整个文件名** —— 那一档**刻意不归一**"粘在归档后缀上的垃圾"
+             * （`ArchiveBaseNameTests` 逐格钉着，且「半套分卷不许进可删的其余物」那道防数据丢失闸门
+             * 就靠"包基名不归一"这一格，⛔ 不许顺手统一）。于是落点 = `<源目录>\<文件名>` = **源文件自己** ⇒
+             * 工作区要建在"一个文件里面" ⇒ 批首逐字报
+             * `⛔ 目标位置不可用，工作区没法建，这一批没有开工（一个字节都没写）：目标目录建不出来（不可写）：…\bbb-L4.zip删除`。</para>
+             *
+             * <para><b>修法（只堵这一格，名字尺子一个字符都不改）</b>：算出来的目标目录与源包**同一条路径**时，
+             * 换用**归档基名**（既有唯一出口 <see cref="FileNameHelper.GetArchiveBaseName"/>：
+             * `bbb-L4.zip删除` → `bbb-L4`）。判据只读事实（两条路径相等），⛔ 不看后缀、⛔ 不猜名字。</para>
+             */
+            if (IsSamePathAsSource(perArchiveDirectory, sourceArchivePath, out string resolvedSource))
+            {
+                string archiveBaseName = FileNameHelper.SanitizeFileName(
+                    FileNameHelper.GetArchiveBaseName(resolvedSource));
+
+                string replaced = archiveBaseName.Length > 0
+                    ? SafeCombine(root.DestinationRoot, archiveBaseName)
+                    : string.Empty;
+
+                if (replaced.Length == 0 || IsSamePathAsSource(replaced, resolvedSource, out _))
+                {
+                    // 连归档基名都救不回来（空名 / 还是同一条路径）⇒ 照旧如实失败，⛔ 不编一个目录名出来。
+                    return Failure(
+                        OutputPlacementError.InvalidDestinationPath,
+                        "目标目录与源包是同一条路径，拼不出可用的落点：" + perArchiveDirectory);
+                }
+
+                safeBaseName = archiveBaseName;
+                packageName = archiveBaseName;
+                perArchiveDirectory = replaced;
+            }
+
+            /*
              * 场景 B「包名与所在目录同名就塌缩」**已退役**（用户 2026-09-27）：
              *
              * 他原话："不行，如果 111\222\ 这层文件夹里面还有很多的东西呢，这不就是将文件夹弄混乱了吗"。
@@ -632,6 +668,25 @@ namespace ArchiveFixer.Extraction
 
                 Message = "落点：" + perArchiveDirectory
             };
+        }
+
+        /// <summary>
+        /// 两条路径是不是同一个东西（都取全路径后按大小写不敏感比）。
+        ///
+        /// <para>判据只读事实：<see cref="SafePathHelper.GetFullPathSafe"/> 规范化之后逐字相同。
+        /// 任一侧取不到全路径 ⇒ 判"不是同一个"（⛔ 判不出就什么都不做，绝不据此改落点）。</para>
+        /// </summary>
+        private static bool IsSamePathAsSource(string candidate, string? sourcePath, out string resolvedSource)
+        {
+            resolvedSource = string.IsNullOrWhiteSpace(sourcePath)
+                ? string.Empty
+                : SafePathHelper.GetFullPathSafe(sourcePath) ?? string.Empty;
+
+            string resolvedCandidate = SafePathHelper.GetFullPathSafe(candidate) ?? string.Empty;
+
+            return resolvedSource.Length > 0
+                   && resolvedCandidate.Length > 0
+                   && string.Equals(resolvedCandidate, resolvedSource, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

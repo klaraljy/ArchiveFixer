@@ -20642,6 +20642,14 @@ namespace ArchiveFixer.ViewModels
 
                     engineArchivePath = carve.OutputPath;
 
+                    /*
+                     * 抠出来那一份的名字按**内容**定（用户 2026-10-11 大测试 run-5555 实测的缺口）：
+                     * 一整个 RAR5 尾巴被抠成 `X.zip` 时，`7z x` 按扩展名挑 zip 处理器直接拒绝
+                     * （退出码 2、产物 0 个），上层还会把这次失败归到「分卷缺失」⇒ 整单跳过。
+                     * 判据与唯一写点都在 AlignCarvedArchiveExtension 里（⛔ 不看后缀、⛔ 不猜）。
+                     */
+                    engineArchivePath = AlignCarvedArchiveExtension(task, engineArchivePath);
+
                     AppendLog(
                         "INFO",
                         $"检测到内嵌归档：已从偏移 {task.EmbeddedArchiveOffset} 处取出 {carve.BytesWritten} 字节" +
@@ -23052,26 +23060,47 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void DiscardStaleCarvedArtifact(ArchiveTask task)
         {
-            string carvedPath = BuildEmbeddedArchivePath(task);
+            /*
+             * 候选名字 = 任务上记着的那一个 + 内容的三种标准后缀各一个
+             * （`AlignCarvedArchiveExtension` 只可能把名字改成 `.7z` / `.rar` / `.zip` 之一）。
+             *
+             * 为什么要都试：这一份是**上一次进程**留下的，那时任务上记的还不是这次的结论；
+             * 只按 `.zip` 找 ⇒ 上一次被按内容改名成 `.rar` 的那一份永远清不掉，
+             * 定稿时会被当成本任务的其余物搬进用户目录（正是这个方法要防的那件事）。
+             */
+            var candidates = new List<string> { BuildEmbeddedArchivePath(task) };
+
+            foreach (string extension in new[] { "7z", "rar", "zip" })
+            {
+                string candidate = Path.ChangeExtension(candidates[0], extension);
+
+                if (!candidates.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+                {
+                    candidates.Add(candidate);
+                }
+            }
 
             try
             {
-                if (string.IsNullOrWhiteSpace(carvedPath) || !File.Exists(carvedPath))
+                foreach (string carvedPath in candidates)
                 {
-                    return;
+                    if (string.IsNullOrWhiteSpace(carvedPath) || !File.Exists(carvedPath))
+                    {
+                        continue;
+                    }
+
+                    if (!ArchivePathGuard.IsInsideRoot(_pathService.WorkDirectory, carvedPath, out string reason))
+                    {
+                        AppendLog("WARN", $"{task.LogName}：上次留下的抠取副本不在工作区根之下，已跳过清理 —— {reason}");
+                        continue;
+                    }
+
+                    File.Delete(carvedPath);
+
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：已清掉上一次回落留下的抠取副本（本次走直读，不需要它）：{Path.GetFileName(carvedPath)}");
                 }
-
-                if (!ArchivePathGuard.IsInsideRoot(_pathService.WorkDirectory, carvedPath, out string reason))
-                {
-                    AppendLog("WARN", $"{task.LogName}：上次留下的抠取副本不在工作区根之下，已跳过清理 —— {reason}");
-                    return;
-                }
-
-                File.Delete(carvedPath);
-
-                AppendLog(
-                    "INFO",
-                    $"{task.LogName}：已清掉上一次回落留下的抠取副本（本次走直读，不需要它）：{Path.GetFileName(carvedPath)}");
             }
             catch (Exception ex)
             {
@@ -23241,19 +23270,121 @@ namespace ArchiveFixer.ViewModels
             string baseName = FileNameHelper.SanitizeFileName(FileNameHelper.GetArchiveBaseName(task.CurrentPath));
 
             /*
-             * ⚠ 后缀**刻意**还是 `.zip`，哪怕抠出来的其实是 7z / RAR（用户 2026-09-25 第 42 条实测过才留下的）：
+             * ⚠ 后缀**默认**还是 `.zip`，哪怕抠出来的其实是 7z / RAR（用户 2026-09-25 第 42 条实测过才留下的）：
              *
-             * · 完整的归档（容器里就是一整个 7z / RAR）**不看后缀**：两个引擎都按魔数认格式
-             *   （本机实测：完整 7z 与完整 RAR 各自改名成 `封面.zip`，`7z l` / `UnRAR l` 都退出码 0 并列出条目）；
              * · 而"容器里装的是分卷的第一卷"时，后缀会改变引擎的判决：
              *   叫 `封面.zip` → 引擎报的是「分卷缺失」这一类（成因说得对）；
              *   叫 `封面.7z` → 引擎改口说「**文件损坏**」（把"缺后续卷"说成了"包坏了"，用户会去怀疑文件）。
              *   实测三种命名（同一段第一卷字节）：`.zip` → Is not archive / 分卷缺失一类；
              *   `.7z` 与 `.7z.001` → Unexpected end of archive（被归到"文件损坏"）。
-             *   所以这里**不许**"顺手改成真实格式的后缀" —— 那会把最需要说清的那一档说歪。
+             *   所以**分卷那一档**不许"顺手改成真实格式的后缀" —— 那会把最需要说清的那一档说歪。
              *   回归 = `SplitInsideContainerTests` 里那两条引擎行为证据。
+             *
+             * ⚠ 2026-10-11 大测试实测补上另一半（run-5555，8.4 MB 媒体前缀 + 一整个 RAR5 尾巴）：
+             *   上面那个"完整归档不看后缀"的前提**对大的 RAR 尾巴不成立** —— 同一份 96 MB 字节，
+             *   叫 `X.zip` 时 `7z x` 退出码 2、`Open ERROR: Cannot open the file as [zip] archive`、**产物 0 个**；
+             *   叫 `X.rar` 时退出码 0、4 个产物。于是"完整归档"那一档的名字改由内容证据决定，
+             *   写点只有一个：`AlignCarvedArchiveExtension`（见 `ArchiveTask.CarvedArchiveExtension`）。
              */
-            return Path.Combine(_pathService.BuildTaskWorkDirectory(task), baseName + ".zip");
+            string suffix = string.IsNullOrWhiteSpace(task.CarvedArchiveExtension)
+                ? ".zip"
+                : task.CarvedArchiveExtension;
+
+            return Path.Combine(_pathService.BuildTaskWorkDirectory(task), baseName + suffix);
+        }
+
+        /// <summary>
+        /// 抠出来的那一份**按内容起名**（用户 2026-10-11 大测试 run-5555 实测出来的缺口）。
+        ///
+        /// <para><b>缺口现场</b>：`222-L5.png`（8.4 MB 媒体前缀 + 一整个 RAR5 尾巴）抠出来的那份叫
+        /// `222-L5.zip` ⇒ `7z x` 按扩展名挑 zip 处理器、直接拒绝（退出码 2、产物 0 个）⇒
+        /// 上层把这次失败归到「分卷缺失」⇒ 整单跳过、内容物一个都没有。
+        /// 而同一份字节改名成 `.rar` 就能正常解开（本机实测，两个名字只差后缀）。</para>
+        ///
+        /// <para><b>判据（只读内容事实，⛔ 不看后缀、⛔ 不猜）</b>：抠完拿底层那张卡
+        /// <see cref="FileNature.Inspect"/> —— 内容**可证"不是分卷组的一员"** 且魔数认得出格式时才改名；
+        /// 真分卷成员（`VolumeMember`）与 7z 那一族（判不出）**一个字节都不动**，
+        /// 保持用户 2026-09-25 第 42 条要的 `.zip`（那一档的回归 = `SplitInsideContainerTests`）。</para>
+        ///
+        /// <para>改名只发生在**本任务自己的暂存目录**里（抠取副本是我们自己刚写出来的临时文件）：
+        /// 拿不到"确实在工作区根之下"这个事实证明就什么都不做。</para>
+        /// </summary>
+        private string AlignCarvedArchiveExtension(ArchiveTask task, string carvedPath)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(carvedPath) || !File.Exists(carvedPath))
+            {
+                return carvedPath;
+            }
+
+            FileNatureCard card = FileNature.Inspect(carvedPath);
+            string realExtension = VolumeContentInference.ExtensionFor(card.Format);
+
+            if (realExtension.Length == 0)
+            {
+                CriterionLog(
+                    "内嵌归档：抠出来的那一份按内容起名",
+                    $"内容：格式={card.Format} 分卷身份={card.Membership}｜名字：{Path.GetFileName(carvedPath)}",
+                    "不按内容起名（魔数认不出格式）",
+                    "保持现有名字",
+                    carvedPath);
+
+                return carvedPath;
+            }
+
+            if (card.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember)
+            {
+                CriterionLog(
+                    "内嵌归档：抠出来的那一份按内容起名",
+                    $"内容：格式={card.Format} 分卷身份={card.Membership}｜名字：{Path.GetFileName(carvedPath)}",
+                    "内容不能证明「不是分卷组的一员」⇒ 保持 .zip（用户 2026-09-25 第 42 条：这一档叫 .zip 引擎才报「分卷缺失」）",
+                    "保持现有名字",
+                    carvedPath);
+
+                return carvedPath;
+            }
+
+            string wanted = "." + realExtension;
+
+            if (string.Equals(Path.GetExtension(carvedPath), wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                return carvedPath;
+            }
+
+            if (!ArchivePathGuard.IsInsideRoot(_pathService.WorkDirectory, carvedPath, out string reason))
+            {
+                AppendLog("WARN", $"{task.LogName}：抠出来的那一份不在工作区根之下，没有按内容改名 —— {reason}");
+
+                return carvedPath;
+            }
+
+            string target = Path.ChangeExtension(carvedPath, realExtension);
+
+            try
+            {
+                File.Move(carvedPath, target, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{task.LogName}：抠出来的那一份按内容改名失败（沿用原名继续）：{ex.Message}");
+
+                return carvedPath;
+            }
+
+            task.CarvedArchiveExtension = wanted;
+
+            AppendLog(
+                "INFO",
+                $"{task.LogName}：抠出来的那一份按内容起名（内容可证不是分卷组的一员）：" +
+                $"{Path.GetFileName(carvedPath)} → {Path.GetFileName(target)}");
+
+            CriterionLog(
+                "内嵌归档：抠出来的那一份按内容起名",
+                $"内容：格式={card.Format} 分卷身份={card.Membership}｜名字：原名 {Path.GetFileName(carvedPath)}",
+                $"内容格式={card.Format} ⇒ 后缀该是 {wanted}",
+                $"改名 {Path.GetFileName(target)}",
+                target);
+
+            return target;
         }
 
         /// <summary>
