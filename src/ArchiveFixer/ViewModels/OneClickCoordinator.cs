@@ -1104,6 +1104,20 @@ namespace ArchiveFixer.ViewModels
                         roundSummary.Step == RoundProductClassifier.NextStep.Finished ? "INFO" : "INFO",
                         "一键处理：" + roundSummary.Describe(round));
 
+                    /*
+                     * ⚠ **第二大步的轮边界：这一轮解开过的那几组卷，按删除档收掉**（2026-10-11，用户口径：
+                     * 「**分卷记账是第二大步的事**」）。判据与执行体只有协调器那一个出口
+                     * （`HarvestSolvedGroupVolumesForRound`：**入口包所在那一层** + 六道门槛 + 族尺子 + 用户源路径红线），
+                     * ⛔ 这里不读任务表、⛔ 不看时序 —— 只把这一轮**判成是分卷**的那几个入口包交下去。
+                     *
+                     * ⚠ 位置必须在**轮判定这一行紧后面**：放到"有下一轮目标"那个块里 ⇒ 最后一轮（正是这一组解完的那一轮）
+                     * 直接 `break` 跳过它（实测：EEE ③ 一点没变）。
+                     */
+                    foreach (string solvedEntry in roundSummary.VolumeEntries)
+                    {
+                        _extractionCoordinator.HarvestSolvedGroupVolumesForRound(solvedEntry);
+                    }
+
                     foreach (string line in scanLog)
                     {
                         AppendLog(line.Contains("[WARN]", StringComparison.Ordinal) ? "WARN" : "INFO", line);
@@ -1264,6 +1278,14 @@ namespace ArchiveFixer.ViewModels
                 stopped || stopRequested,
                 hitRoundLimit,
                 runOptions);
+
+            /*
+             * ⚠ **第二大步的收卷，批末再试一遍**（2026-10-11，判据输入实测）：轮边界那一刻这一组还没被解开
+             * —— 逐字 `这一组的卷 2 份，但那一层里没有哪一单是「已解开 + 校验通过」`；
+             * 而它的解压发生在**批末**那一站 ⇒ 一整批跑完（含批末）之后再试一次，其余门槛照旧全过。
+             * 判据与执行体只有协调器那一个出口（`HarvestRememberedGroupVolumesForBatch`）。
+             */
+            _extractionCoordinator.HarvestRememberedGroupVolumesForBatch();
 
             string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count);
 

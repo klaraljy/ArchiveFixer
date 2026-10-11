@@ -8197,6 +8197,13 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 不改用户的 `RecursionMode` 设置；本批结束随其它账一起清。
         /// </summary>
         private readonly HashSet<ArchiveTask> _volumeStepTasks = new();
+        /// <summary>
+        /// **这一批里"被判成是分卷"的那几组的入口包**（2026-10-11，轮次模型：第二大步收卷用）。
+        /// 写点唯一 = `HarvestSolvedGroupVolumesForRound`（轮边界交下来的入口包）；读点唯一 = 它自己
+        /// （每轮边界把记住的都再试一遍 —— 因为判出"这一组是分卷"的那一刻**改名与解压还没发生**）。
+        /// ⛔ 不改任何判据；本批结束随其它账一起清。
+        /// </summary>
+        private readonly List<(string Directory, string ReferenceName)> _volumeGroupEntriesThisBatch = new();
 
         /// <summary>把"这次没删成"的那一单排进批末重试名单（⛔ 同一个生产者只排一次）。</summary>
         private void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
@@ -10781,6 +10788,7 @@ namespace ArchiveFixer.ViewModels
             _adoptedLandedPieces.Clear();
             _groupLayerByBaseName.Clear();
             _volumeStepTasks.Clear();
+            _volumeGroupEntriesThisBatch.Clear();
         }
 
         /// <summary>单测用：把"这一片是借某个消费方用过的源片"记进既有那份账。</summary>
@@ -11203,6 +11211,235 @@ namespace ArchiveFixer.ViewModels
         /// 本方法只决定"什么时候试、试哪一份"。⚠ 删除**不写回任务账**（`OutputPath` 早已被收场清空），
         /// 也不改任何结论：删不掉只写 WARN。</para>
         /// </summary>
+        /// <summary>
+        /// **第二大步的轮边界：把这一轮解开过的那一组卷按删除档收掉**（2026-10-11，用户口径：
+        /// 「**分卷记账是第二大步的事**」）。
+        ///
+        /// <para><b>为什么不在收场那一档做</b>（调试器实测，EEE，同步帧读到的运行期事实）：
+        /// 收场那一刻任务表里**只剩用户导入的那 4 单**（逐次读表：`111.rar` / `111(2)_.zip` / `111(3).rar` / `111.z03`，
+        /// 四单 `IsContinuationTask` 全 false），把这一组解开的那一单（`111.part1.rar`）**已经不在表里**
+        /// ⇒ 任何"读任务表"的判据都看不见它（上一版"扫全表的续解卷"就是这么一次都没命中的）。</para>
+        ///
+        /// <para>轮边界手上正好有**这一轮解出来的是哪几组分卷**（`RoundProductClassifier.VolumeEntries` = 每组的入口包）
+        /// ⇒ 就在**入口包所在那一层**上收，⛔ 不读任务表、⛔ 不看时序。</para>
+        ///
+        /// <para>门槛与执行体与 <see cref="PurgeGroupLandedPieces"/> **逐条同一套**：
+        /// 删除档不是「不动」/ 未取消 / 这一单完成且校验通过 / 可证完整（L4 唯一出口）/ 没命中「内容物保留关键词」/
+        /// ⛔ 任何一单的源路径一律不碰（红线唯一出口 <see cref="IsAnyTaskSourcePath"/>）；
+        /// 删除动作仍只有 <see cref="Storage.RecycleBinService"/> 一个出口。</para>
+        /// </summary>
+        /// <param name="entryPath">这一组的**入口包**路径（`RoundProductClassifier.VolumeEntries` 里那一条）。</param>
+        internal void HarvestSolvedGroupVolumesForRound(string entryPath)
+        {
+            /*
+             * ⚠ **记住"目录 + 这一组的身份"，⛔ 不记那条路径**（2026-10-11，判据输入实测两轮）：
+             * 轮判定判出"这一组是分卷"的那一刻，**改名与解压都还没发生** —— 实测那一刻盘上还是脏名
+             * （`入口包=「111.parts1.racr」，找到那一单=判不出`）；而把它改名成规范名之后，
+             * **记下来的那条路径就没了**（下一轮逐字 `在盘上=False`）⇒ 记路径永远收不到。
+             * ⇒ 记 `(目录, 这一组的参照名)`，每轮边界**当场按族尺子在那一层重新找**这一组的卷；
+             * 门槛自带"那一层里得有某一单是已解开 + 校验通过" ⇒ 没解开的组自然被挡住，重复试是幂等的。
+             */
+            if (!string.IsNullOrWhiteSpace(entryPath))
+            {
+                string directory = Path.GetDirectoryName(entryPath) ?? string.Empty;
+
+                if (directory.Length > 0
+                    && !_volumeGroupEntriesThisBatch.Any(
+                        item => string.Equals(item.Directory, directory, StringComparison.OrdinalIgnoreCase)
+                                && VolumeGroupDetector.BelongsToSameGroup(
+                                    item.ReferenceName,
+                                    FileNameHelper.GetFileName(entryPath))))
+                {
+                    _volumeGroupEntriesThisBatch.Add((directory, FileNameHelper.GetFileName(entryPath)));
+                }
+            }
+
+            foreach ((string Directory, string ReferenceName) group in _volumeGroupEntriesThisBatch.ToList())
+            {
+                HarvestOneSolvedGroupVolumes(group.Directory, group.ReferenceName);
+            }
+        }
+
+        /// <summary>
+        /// **批末再试一遍**（2026-10-11，判据输入实测）：轮边界那一刻这一组**还没被解开**
+        /// （逐字：`这一组的卷 2 份，但那一层里没有哪一单是「已解开 + 校验通过」`）——
+        /// 因为它的解压发生在**批末**那一站。⇒ 一整批跑完（含批末那一站）之后再试一次，其余门槛照旧。
+        /// </summary>
+        internal void HarvestRememberedGroupVolumesForBatch()
+        {
+            foreach ((string Directory, string ReferenceName) group in _volumeGroupEntriesThisBatch.ToList())
+            {
+                HarvestOneSolvedGroupVolumes(group.Directory, group.ReferenceName);
+            }
+        }
+
+        /// <summary>试一次"这一组已经解开了吗 ⇒ 收它的卷"（判据见方法体里的门槛）。</summary>
+        private void HarvestOneSolvedGroupVolumes(string directory, string referenceName)
+        {
+            /*
+             * ⚠ **判据输入**（同一条规矩：判不出就把判据输入写进日志）：这一档的早退原来全是静默的
+             * —— 实测 EEE ③ 一点没变、日志里一个字都没有，分不出"没被调用 / 被哪道闸门挡下"。
+             * 下面每一条早退都把当场算出来的值写出来。⛔ 只写事实，不改任何判据。
+             */
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                AppendLog(
+                    "WARN",
+                    $"第二大步收卷：跳过（判据输入）｜那一层=「{directory}」，在盘上={Directory.Exists(directory)}");
+                return;
+            }
+
+            // 这一组此刻在那**一层**里的那几份（当场按族尺子重新认，⛔ 不用记下来的旧路径）。
+            var members = new List<string>();
+
+            foreach (string member in CollectVolumeFilesInDirectory(directory))
+            {
+                if (File.Exists(member)
+                    && VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(member), referenceName))
+                {
+                    members.Add(member);
+                }
+            }
+
+            if (members.Count == 0)
+            {
+                return;
+            }
+
+            // 这一组**解开了吗**：那一层里得有某一单是"这一组的入口包 + 已解开 + 校验通过"。
+            ArchiveTask? consumer = null;
+
+            foreach (string member in members)
+            {
+                ArchiveTask? owner = FindTaskByPath(member);
+
+                if (owner != null
+                    && owner.Outcome == TaskOutcome.Succeeded
+                    && owner.OutputVerification == OutputVerificationOutcome.Passed)
+                {
+                    consumer = owner;
+                    break;
+                }
+            }
+
+            if (consumer == null)
+            {
+                AppendLog(
+                    "WARN",
+                    $"第二大步收卷：跳过（判据输入）｜那一层=「{directory}」，这一组的卷 {members.Count} 份，"
+                    + "但那一层里没有哪一单是「已解开 + 校验通过」⇒ 判不出 ⇒ 一个字节都不动");
+                return;
+            }
+
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase)
+                || IsStopping
+                || _operationCts?.IsCancellationRequested == true
+                || !ResultCompletenessClassifier.Classify(consumer).AllowsSourceRemoval)
+            {
+                AppendLog(
+                    "WARN",
+                    $"第二大步收卷：跳过（判据输入）｜那一层=「{directory}」，删除档=「{mode}」，"
+                    + $"已取消={IsStopping || _operationCts?.IsCancellationRequested == true}，"
+                    + $"可证完整={ResultCompletenessClassifier.Classify(consumer).AllowsSourceRemoval}");
+                return;
+            }
+
+            string entryName = referenceName;
+
+            if (entryName.Length == 0)
+            {
+                return;
+            }
+
+            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
+                ? DeleteMode.RecycleBin
+                : DeleteMode.Permanent;
+
+            string reason = deleteMode == DeleteMode.RecycleBin
+                ? RestItemPurger.SettledPieceCopyRecycleReason
+                : RestItemPurger.SettledPieceCopyPurgeReason;
+
+            ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
+            var service = new RecycleBinService(RestDeleteExecutor, null, null);
+            int deleted = 0;
+
+            foreach (string path in CollectVolumeFilesInDirectory(directory))
+            {
+                try
+                {
+                    if (!File.Exists(path))
+                    {
+                        continue;
+                    }
+
+                    string name = FileNameHelper.GetFileName(path);
+
+                    /*
+                     * ⛔ 判据只有一条（既有那把宽尺子）：**族 + 基名与入口包同一组**。
+                     * ⛔ 用户源路径红线照旧：任何一单的源（最初导入的包 / 用户目录里的片）一个字节都不碰。
+                     */
+                    if (!VolumeGroupDetector.BelongsToSameGroup(name, entryName)
+                        || IsAnyTaskSourcePath(path))
+                    {
+                        continue;
+                    }
+
+                    string? keyword = keepRules.FindMatch(path);
+
+                    if (keyword != null)
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"{consumer.LogName}：这一组的卷 {name} 命中了「内容物保留关键词」（{keyword}）"
+                            + " —— 按设置碰都不碰，这一份留在原处。");
+                        continue;
+                    }
+
+                    DeleteResult result = service.Delete(
+                        new DeleteRequest(path, reason),
+                        new DeleteOptions
+                        {
+                            AllowedRoot = directory,
+                            UserConfirmed = true,
+                            Mode = deleteMode,
+                            Reason = reason
+                        });
+
+                    if (result.SuccessCount > 0)
+                    {
+                        deleted++;
+
+                        AppendLog(
+                            "INFO",
+                            deleteMode == DeleteMode.RecycleBin
+                                ? $"{consumer.LogName}：这一组已经解开，它这一份卷 {name} 按「删除操作」移入回收站了。"
+                                : $"{consumer.LogName}：这一组已经解开，它这一份卷 {name} 按「删除操作」彻底删除"
+                                  + $"（{result.Outcomes.FirstOrDefault()?.EntryCount ?? 0} 个条目 / "
+                                  + $"释放 {TaskSpaceEstimate.FormatSize(result.Outcomes.FirstOrDefault()?.FreedBytes ?? 0)}，不进回收站）。");
+                    }
+                    else
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{consumer.LogName}：这一组的卷 {name} 这次没删成 —— "
+                            + $"{result.Outcomes.FirstOrDefault()?.Message ?? result.Message}（内容物不受影响，这一份仍在原处）。");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 删东西绝不许把已经成立的结论拖成异常：落成"没删成"，别的什么都不变。
+                    AppendLog("WARN", $"{consumer.LogName}：收这一组卷时出现意外错误：{ex.Message}");
+                }
+            }
+
+            if (deleted > 0)
+            {
+                AppendLog("INFO", $"{consumer.LogName}：这一组的卷已按「删除操作」收掉 {deleted} 份（这一层的过程物，不进回收站那一档）。");
+            }
+        }
+
         private void PurgeGroupLandedPieces(ArchiveTask consumer, string groupBaseName)
         {
             var targets = new List<(ArchiveTask Producer, string Path, string OutputRoot)>();
@@ -15742,6 +15979,8 @@ namespace ArchiveFixer.ViewModels
                 _adoptedLandedPieces.Clear();
                 _groupLayerByBaseName.Clear();
                 _volumeStepTasks.Clear();
+                _volumeGroupEntriesThisBatch.Clear();
+            _volumeGroupEntriesThisBatch.Clear();
                 _volumeDeficitFinalPass.Clear();
             }
 
