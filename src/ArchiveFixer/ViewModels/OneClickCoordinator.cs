@@ -2152,7 +2152,7 @@ namespace ArchiveFixer.ViewModels
 
                 return (new List<InnerArchiveCandidate>(), new List<string>
                 {
-                    $"[WARN] 第 {round} 层产物扫描：这一轮**一个可扫的产物目录都没有**（{roundTargets.Count} 单）—— "
+                    $"[WARN] 第 {round} 层产物扫描：这一轮一个可扫的产物目录都没有（{roundTargets.Count} 单）—— "
                     + string.Join("；", why)
                 });
             }

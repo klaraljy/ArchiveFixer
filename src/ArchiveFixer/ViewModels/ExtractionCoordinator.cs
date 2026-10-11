@@ -8101,13 +8101,22 @@ namespace ArchiveFixer.ViewModels
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
-        /// 这一批里"哪一单吐出了某一组的片"（组基名 → 那一单）——跨链收卷用（真机第九批 CCCC）。
+        /// 这一批里"哪一单吐出了某一组的片"（组基名 → 那一单 **+ 它吐出的那一片的名字**）——跨链收卷用（真机第九批 CCCC）。
         ///
         /// <para>用途：整组由别单解开、而且**可证完整**之后，这些"只是包装"的单也按**跟班卷**收场
         /// （它的内容已经全在解出来的那一组里了）—— 否则真机上 `111.rar` / `111(2)_.zip` 会一直留着，
         /// 用户当场就问"为什么这两个原包还留着"。</para>
+        ///
+        /// <para><b>⛔ 为什么必须连"那一片的名字"一起记</b>（2026-10-11 真机 EEE 定案）：这本账的键是**基名**，
+        /// 而同一个基名底下可能同时存在**两族** —— EEE 的跨盘 ZIP 组 `111.z01/z02/z03/111.zip`，
+        /// 与它解开之后得到的 RAR 对 `111.parts1.racr` / `111.partɾ2.ra??r`（引擎证实这一对含 5 个 mp4），
+        /// 两族都叫 `111`。只按"这一单自己的名字"去比族 ⇒ 要么混算（把 RAR 那两卷记成 ZIP 组的片，
+        /// 于是它们被静默清掉落点/校验 ⇒ 链条停住）、要么连合法的跟班卷一起拦掉
+        /// （`111.rar` 自己叫 `.rar`、可它吐出的那一片是 ZIP 族的 `111.z01`）。
+        /// ⇒ **判据必须拿"它吐出的那一片"的名字去比族**（`BelongsToSameGroup` = 族 + 基名）。</para>
         /// </summary>
-        private readonly Dictionary<string, List<ArchiveTask>> _groupPieceProducers = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<(ArchiveTask Task, string PieceName)>> _groupPieceProducers =
+            new(StringComparer.OrdinalIgnoreCase);
 
         /*
          * ⛔ **这本账会被并发写**（2026-10-10 用带栈的临时探针逮到的真缺陷，不是推断）：
@@ -8954,14 +8963,14 @@ namespace ArchiveFixer.ViewModels
 
                     if (SafePathHelper.PathEquals(path, piecePath) || FileIdentity.IsSamePhysicalFile(path, piecePath))
                     {
-                        RememberGroupPieceProducer(baseName, candidate);
+                        RememberGroupPieceProducer(baseName, FileNameHelper.GetFileName(piecePath), candidate);
                         return;
                     }
                 }
             }
         }
 
-        private void RememberGroupPieceProducer(string baseName, ArchiveTask? owner)
+        private void RememberGroupPieceProducer(string baseName, string pieceName, ArchiveTask? owner)
         {
             if (owner == null || baseName.Length == 0)
             {
@@ -8971,15 +8980,15 @@ namespace ArchiveFixer.ViewModels
             // 并发写：见 `_groupPieceProducersGate` 的说明（这里就是那个栈顶）。
             lock (_groupPieceProducersGate)
             {
-                if (!_groupPieceProducers.TryGetValue(baseName, out List<ArchiveTask>? producers))
+                if (!_groupPieceProducers.TryGetValue(baseName, out List<(ArchiveTask Task, string PieceName)>? producers))
                 {
-                    producers = new List<ArchiveTask>();
+                    producers = new List<(ArchiveTask Task, string PieceName)>();
                     _groupPieceProducers[baseName] = producers;
                 }
 
-                if (!producers.Contains(owner))
+                if (!producers.Any(item => ReferenceEquals(item.Task, owner)))
                 {
-                    producers.Add(owner);
+                    producers.Add((owner, pieceName));
                 }
             }
         }
@@ -8997,23 +9006,26 @@ namespace ArchiveFixer.ViewModels
         /// 某一组"吐出过片的那几单"的**快照**（拿不到 ⇒ false）。
         /// ⛔ 绝不把活列表交出去：调用方拿到的是副本。
         /// </summary>
-        private bool TrySnapshotGroupPieceProducers(string baseName, out List<ArchiveTask> producers)
+        private bool TrySnapshotGroupPieceProducers(
+            string baseName,
+            out List<(ArchiveTask Task, string PieceName)> producers)
         {
             lock (_groupPieceProducersGate)
             {
-                if (_groupPieceProducers.TryGetValue(baseName, out List<ArchiveTask>? live) && live != null)
+                if (_groupPieceProducers.TryGetValue(baseName, out List<(ArchiveTask Task, string PieceName)>? live)
+                    && live != null)
                 {
                     producers = live.ToList();
                     return true;
                 }
             }
 
-            producers = new List<ArchiveTask>();
+            producers = new List<(ArchiveTask Task, string PieceName)>();
             return false;
         }
 
         /// <summary>整本账的**逐组快照**（收场那一档遍历用；并发安全）。</summary>
-        private List<List<ArchiveTask>> SnapshotGroupPieceProducerLists()
+        private List<List<(ArchiveTask Task, string PieceName)>> SnapshotGroupPieceProducerLists()
         {
             lock (_groupPieceProducersGate)
             {
@@ -9586,7 +9598,7 @@ namespace ArchiveFixer.ViewModels
                  * （真机第九批 CCCC：`111.rar` / `111(2)_.zip` 各吐一片，整组解开并校验通过了，
                  * 这两个原包却因为自己"部分完成"一直留在盘上 —— 用户当场就问为什么）。
                  */
-                RememberGroupPieceProducer(baseName, owner);
+                RememberGroupPieceProducer(baseName, FileNameHelper.GetFileName(target), owner);
 
                 /*
                  * ⛔ **这一片是从哪一单自己的源片库里来的** ⇒ 把**那一单**也记成"这一组的一片由它供给"
@@ -10043,7 +10055,7 @@ namespace ArchiveFixer.ViewModels
                              * （`LogVolumePolicyTests` / `ProgressVisibilityTests` / `Item45LogAndPasswordTests`
                              * 等 6 条守门用例钉着）。"落地那一份真的在"由**用例断言文件**，不靠日志。
                              */
-                            RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
+                            RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), FileNameHelper.GetFileName(target), owner);
                             published.Add(target);
                         }
 
@@ -10059,7 +10071,7 @@ namespace ArchiveFixer.ViewModels
                             $"{owner.LogName}：这一步解出来的「{name}」留在它自己那条链里（下一轮解压要用的就是它；"
                             + "⛔ 不是失败、也不算残缺）。");
 
-                        RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
+                        RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), FileNameHelper.GetFileName(target), owner);
                         published.Add(target);
                     }
                 }
@@ -10576,7 +10588,7 @@ namespace ArchiveFixer.ViewModels
                     $"{owner.LogName}：这一步解出来的「{name}」留在它自己那条链的落点目录里 —— "
                     + $"{Path.GetFileName(home)}（下一轮解压要用的就是它；⛔ 不是失败、也不算残缺）。");
 
-                RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), owner);
+                RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), FileNameHelper.GetFileName(target), owner);
 
                 return target;
             }
@@ -10795,7 +10807,7 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>单测用：把"这一单吐出了这一组的一片"记进既有那份账（写入点唯一 = <see cref="RememberGroupPieceProducer"/>）。</summary>
         internal void RememberGroupPieceProducerForTests(string baseName, ArchiveTask producer)
-            => RememberGroupPieceProducer(baseName, producer);
+            => RememberGroupPieceProducer(baseName, FileNameHelper.GetFileName(producer?.CurrentPath ?? string.Empty), producer);
 
         /// <summary>
         /// 单测用：把"**产出方那一份已经落地的片**被接进了这一组"记进这本账
@@ -11852,14 +11864,16 @@ namespace ArchiveFixer.ViewModels
              */
             PurgeGroupLandedPieces(consumer, groupBaseName);
 
-            if (!TrySnapshotGroupPieceProducers(groupBaseName, out List<ArchiveTask> producers))
+            if (!TrySnapshotGroupPieceProducers(
+                    groupBaseName,
+                    out List<(ArchiveTask Task, string PieceName)> producers))
             {
                 return;
             }
 
-            foreach (ArchiveTask producer in producers.ToList())
+            foreach ((ArchiveTask producer, string producedPieceName) in producers.ToList())
             {
-                SettleOneConsumedPieceTask(producer, consumer, groupBaseName, moveSources, logEntries);
+                SettleOneConsumedPieceTask(producer, consumer, groupBaseName, producedPieceName, moveSources, logEntries);
             }
         }
 
@@ -11880,6 +11894,7 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask piece,
             ArchiveTask consumer,
             string groupBaseName,
+            string producedPieceName,
             bool moveSources,
             List<(string Level, string Message)> logEntries)
         {
@@ -11901,47 +11916,78 @@ namespace ArchiveFixer.ViewModels
 
             if (!selfConsumed && (!piece.IsVolumeGroupFollower || piece.Outcome != TaskOutcome.Succeeded))
             {
-                string consumedNote = string.Format(
+                /*
+                 * ⛔ **族必须对得上**（2026-10-11 真机 EEE 定案，调试器 + 程序判据输入 + 引擎三方取证）：
+                 *
+                 * 「谁吐出过哪一组的片」这本账的键是**基名**（`_groupPieceProducers`），而同一个基名底下
+                 * 可能同时存在**两族**：EEE 的跨盘 ZIP 组 `111.z01/z02/z03/111.zip`，与它解开之后得到的
+                 * RAR 对 `111.parts1.racr` / `111.partɾ2.ra??r`（引擎证实这一对含 5 个 mp4）——
+                 * 两族都叫 `111`。缺这一道闸门时，RAR 那两卷被记成"ZIP 组的片"⇒ 在这里被**静默**
+                 * 清掉落点 / 清校验 / 标跟班（真机逐字：`校验=NotAttempted，落点=空，归集=空`）
+                 * ⇒ 轮尾扫描没有目录可扫 ⇒ 链条停在内层那一对卷上，用户要的 mp4 永远出不来。
+                 *
+                 * 判据只有一条**既有尺子**：这一片的族与**消费方那一组**的族是不是同一组
+                 * （`BelongsToSameGroup` = 族 + 基名）。⛔ 不新造判据、⛔ 不放宽"证明完整"那一步。
+                 * 对不上 ⇒ **判不出 ⇒ 什么都不做**（不清落点、不清校验、不标跟班），并如实写判据输入。
+                 */
+                string pieceName = FileNameHelper.GetFileName(producedPieceName ?? string.Empty);
+                string consumerGroupName = FileNameHelper.GetFileName(consumer.CurrentPath ?? string.Empty);
+
+                if (pieceName.Length > 0
+                    && consumerGroupName.Length > 0
+                    && !VolumeGroupDetector.BelongsToSameGroup(pieceName, consumerGroupName))
+                {
+                    AppendLog(
+                        "WARN",
+                        $"「{piece.LogName}」不按跟班卷收场 —— 它吐出的那一片的族与接手方那一组对不上"
+                        + $"（同一基名下的两族不许混算）｜判据输入：它吐出的片=「{pieceName}」，"
+                        + $"接手方那一组的起点=「{consumerGroupName}」，账上记的组基名=「{groupBaseName}」"
+                        + "，同组判据（族 + 基名）= 不成立 ⇒ 不清落点、不清校验、不标跟班");
+                }
+                else
+                {
+                    string consumedNote = string.Format(
                     System.Globalization.CultureInfo.CurrentCulture,
                     StatusText.VolumePieceProducerConsumedByOtherTaskFormat,
                     piece.LogName,
                     consumer.LogName,
                     groupBaseName);
 
-                /*
-                 * 与既有那条跳过路**逐行同一套**（清校验 / 清落点 + 落终态 + 标跟班）：
-                 * `MarkSkipped` 只写 Status，机器终态必须显式落，四处消费点才算得对。
-                 */
-                piece.IsOutputVerified = false;
-                piece.OutputVerification = OutputVerificationOutcome.NotAttempted;
-                piece.OutputPath = string.Empty;
-                piece.Outcome = TaskOutcome.Succeeded;
-                piece.IsVolumeGroupFollower = true;
+                    /*
+                     * 与既有那条跳过路**逐行同一套**（清校验 / 清落点 + 落终态 + 标跟班）：
+                     * `MarkSkipped` 只写 Status，机器终态必须显式落，四处消费点才算得对。
+                     */
+                    piece.IsOutputVerified = false;
+                    piece.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                    piece.OutputPath = string.Empty;
+                    piece.Outcome = TaskOutcome.Succeeded;
+                    piece.IsVolumeGroupFollower = true;
 
-                /*
-                 * ⛔ **另一半事实当场抄下来**（用户 2026-10-10 拍板：那一行「两句都写」）：
-                 * 这一单自己那一趟是不是**已经跑完并定稿成功**过。判据与批末账目同一个出口 ——
-                 * 还在"缺卷待批末判"名单里（`IsVolumeDeficitDeferred`）= 它自己是**停在中途**的
-                 * （真机 `111.rar` / `111(2)_.zip`）；不在名单里却把片交出去 = 它自己**跑成了**、
-                 * 只是产出的那片随后被整组接手（真机 `111(3).rar` + `111(3)\111(3)\111.z02`）。
-                 * ⚠ 名单是**过程事实**、批末会被清（`RecheckDeferredVolumeDeficits`）⇒ 必须在这一刻
-                 * 抄成持久事实，显示才不会随名单抖动。⛔ 它**只喂显示**：统计 / 删除 / 清单都不读它。
-                 */
-                piece.OwnRunSucceededBeforeGroupSettlement = !piece.IsVolumeDeficitDeferred;
+                    /*
+                     * ⛔ **另一半事实当场抄下来**（用户 2026-10-10 拍板：那一行「两句都写」）：
+                     * 这一单自己那一趟是不是**已经跑完并定稿成功**过。判据与批末账目同一个出口 ——
+                     * 还在"缺卷待批末判"名单里（`IsVolumeDeficitDeferred`）= 它自己是**停在中途**的
+                     * （真机 `111.rar` / `111(2)_.zip`）；不在名单里却把片交出去 = 它自己**跑成了**、
+                     * 只是产出的那片随后被整组接手（真机 `111(3).rar` + `111(3)\111(3)\111.z02`）。
+                     * ⚠ 名单是**过程事实**、批末会被清（`RecheckDeferredVolumeDeficits`）⇒ 必须在这一刻
+                     * 抄成持久事实，显示才不会随名单抖动。⛔ 它**只喂显示**：统计 / 删除 / 清单都不读它。
+                     */
+                    piece.OwnRunSucceededBeforeGroupSettlement = !piece.IsVolumeDeficitDeferred;
 
-                /*
-                 * ⛔ 记下"是谁把这一组解开的"（显示名）—— 状态格靠这条**结构化事实**如实说
-                 * 「这一片随整组解开（由「X」那一单解的）」，不再永远停在「已跳过 100%」
-                 * （用户 2026-10-07：「列表里面最下面的两个，从来没有变化」）。
-                 */
-                piece.SettledWithGroupUnitName = string.IsNullOrWhiteSpace(consumer.DisplayFileName)
-                    ? consumer.FileName
-                    : consumer.DisplayFileName;
+                    /*
+                     * ⛔ 记下"是谁把这一组解开的"（显示名）—— 状态格靠这条**结构化事实**如实说
+                     * 「这一片随整组解开（由「X」那一单解的）」，不再永远停在「已跳过 100%」
+                     * （用户 2026-10-07：「列表里面最下面的两个，从来没有变化」）。
+                     */
+                    piece.SettledWithGroupUnitName = string.IsNullOrWhiteSpace(consumer.DisplayFileName)
+                        ? consumer.FileName
+                        : consumer.DisplayFileName;
 
-                // `MarkSkipped` 写的是"跳过"那句话；这里要的是"内容已由别单解出"的如实说法。
-                piece.MarkSkipped(consumedNote);
+                    // `MarkSkipped` 写的是"跳过"那句话；这里要的是"内容已由别单解出"的如实说法。
+                    piece.MarkSkipped(consumedNote);
 
-                AppendLog("INFO", consumedNote);
+                    AppendLog("INFO", consumedNote);
+                }
             }
 
             /*
@@ -12091,6 +12137,7 @@ namespace ArchiveFixer.ViewModels
                     task,
                     consumer,
                     FileNameHelper.GetArchiveBaseName(consumer.CurrentPath ?? string.Empty),
+                    FileNameHelper.GetFileName(SourcePackageMover.ResolveOwnFileOnDisk(task) ?? string.Empty),
                     moveSources: true,
                     collected ?? logEntries!);
 
@@ -12203,9 +12250,9 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            foreach (List<ArchiveTask> producers in SnapshotGroupPieceProducerLists())
+            foreach (List<(ArchiveTask Task, string PieceName)> producers in SnapshotGroupPieceProducerLists())
             {
-                foreach (ArchiveTask producer in producers.ToList())
+                foreach ((ArchiveTask producer, string _) in producers.ToList())
                 {
                     if (producer != null && seen.Add(producer))
                     {
@@ -12386,7 +12433,7 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(
                     "WARN",
                     $"借片账命中：「{FileNameHelper.GetFileName(task.CurrentPath)}」这一单自己的文件与账上那一片"
-                    + $"（{piecePath}）是同一份物理文件（或同一条路径）⇒ 按「已由「{ownerName}」接手」收场"
+                    + $"（{piecePath}）是同一份物理文件（或同一条路径）⇒ 按已由「{ownerName}」接手收场"
                     + $"｜判据输入：本单路径={task.CurrentPath}，匹配上的账目=「{piecePath}」→ 接手方「{ownerName}」");
 
                 ArchiveTask? owner = null;
