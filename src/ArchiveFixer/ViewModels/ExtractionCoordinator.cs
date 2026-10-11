@@ -15427,9 +15427,23 @@ namespace ArchiveFixer.ViewModels
                  * 落点这一档要能回答"入口包还压在包里时，它将来落在哪"（真机 CCCC 2026-10-06：
                  * 用户连着追问的"批的落点还是按任务表里这一组第一单选"）。
                  *
-                 * 位置：**改名归一之后**（名字定了才谈得上推标准入口包名）、**工作区根之前**
-                 * （ApplyBatchWorkspaceRoot 里那一遍落点计算也要读到同一个答案）。
+                 * 位置：**改名归一之后**（名字定了才谈得上推标准入口包名）、**工作区根之后**。
                  * ⛔ 挂的就是"唯一出口"那个方法本身，判据一个字都不在这里写。
+                 *
+                 * ⚠ **为什么"工作区根之后"这一步不影响工作区根**（2026-10-11 核对，原先这里写的是
+                 * "工作区根之前"、与代码相反，害得它看起来像个活的缺陷）：`ApplyBatchWorkspaceRoot` 里
+                 * 唯一消费落点的地方是挑锚点，而那条路有两个事实把它挡住了 ——
+                 *   ① 未挂钩时 `PathService` 直接返回 null（`PathService.cs` 里 `resolver == null ⇒ null`），
+                 *      落点退回老公式；
+                 *   ② 挂钩之后，这一档的判据第一句就是"**产出这一份的那一单**在不在任务表里"
+                 *      （`ResolveProducerEntryArchivePathCore` 里 `FindProducerTaskForPackage` 为 null ⇒ 返回空串）
+                 *      —— 而"那一单"若在表里，它自己的文件就在盘上、落点一定算得出来 ⇒
+                 *      挑锚点时它**先于**这一单被收进 `destinations`（未解出入口包的那一单由
+                 *      `IsUnresolvedVolumeGroupMember` 挪到兜底位，见 `ApplyBatchWorkspaceRoot`）。
+                 * ⇒ 两种情形下锚点都是同一个答案；顺序只影响可读性，不影响行为。
+                 * 实测佐证：真机 EEE 形状里那句 `本批有 1 单是分卷组的成员…工作区根改用别的单来定`
+                 * 后面跟的工作区根正是产出链那一层（`…\in\111\111\.ArchiveFixer.work`），
+                 * 当年那个 `…\EEEE\111(4)\111\.ArchiveFixer.work` 没再现。
                  */
                 _pathService.GroupProducerEntryResolver =
                     (task, options, archivePath) => ResolveProducerEntryArchivePathCore(task, options, archivePath, 0);
