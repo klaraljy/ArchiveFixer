@@ -52,7 +52,36 @@ namespace ArchiveFixer.Services
         private readonly object _lockObj = new();
 
         private string _currentLogFilePath = string.Empty;
+        private string _currentJsonlFilePath = string.Empty;
         private bool _enableFileLog = true;
+
+        /// <summary>
+        /// **这一行的来源上下文**（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）—— 大测试的"只看日志排查"靠它。
+        ///
+        /// <para>写点：调用方开工时 <see cref="UpdateRunContext"/>；读点：<see cref="BuildJsonRecord"/> 把它抄进每一行。
+        /// ⛔ 只影响**日志记录**，⛔ 不参与任何判据、⛔ 不改任何行为。</para>
+        /// </summary>
+        public LogRunContext RunContext { get; private set; } = new();
+
+        /// <summary>换一次上下文（只覆盖**显式给了**的那几格；判据一个字都不受影响）。</summary>
+        public void UpdateRunContext(
+            string? batch = null,
+            int? round = null,
+            string? sample = null,
+            string? stage = null,
+            string? task = null,
+            int? layer = null)
+        {
+            RunContext = RunContext with
+            {
+                Batch = batch ?? RunContext.Batch,
+                Round = round ?? RunContext.Round,
+                Sample = sample ?? RunContext.Sample,
+                Stage = stage ?? RunContext.Stage,
+                Task = task ?? RunContext.Task,
+                Layer = layer ?? RunContext.Layer
+            };
+        }
 
         public LogService()
             : this(new PathService())
@@ -79,6 +108,16 @@ namespace ArchiveFixer.Services
         /// 当前日志文件路径。
         /// </summary>
         public string CurrentLogFilePath => _currentLogFilePath;
+
+        /// <summary>
+        /// 当前**机器读**的那一份（`.jsonl`：一行一个 JSON 对象）—— 与人读的 `.log` **一比一**（同一处写入）。
+        ///
+        /// <para>为什么要有它：用户出问题时**只会发日志**，而人读行里的判据输入是中文散文
+        /// ⇒ 逐条筛/汇总/比对都没有稳定形状。JSONL 给人读行配一份**字段固定**的孪生记录
+        /// （时间/级别/批次/轮次/样本/阶段/任务/层/文件/身份/判据名/判据输入/结论/动作/耗时），
+        /// 于是"只看日志"也能把每一处判据的输入与结论摆出来。</para>
+        /// </summary>
+        public string CurrentJsonlFilePath => _currentJsonlFilePath;
 
         /// <summary>
         /// 是否往文件里写日志（对应设置项「启用日志文件」，默认开）。
@@ -249,14 +288,32 @@ namespace ArchiveFixer.Services
 
                 string fileName = $"ArchiveFixer_{FormatFileTimestamp(DateTime.Now)}.log";
                 _currentLogFilePath = Path.Combine(LogDirectory, fileName);
+                _currentJsonlFilePath = Path.ChangeExtension(_currentLogFilePath, ".jsonl");
 
                 if (_enableFileLog)
                 {
-                    // 首行时间戳同样走固定格式：这一行是既有日志解析的锚点，别让它随区域设置漂。
+                    /*
+                     * 首行时间戳同样走固定格式：这一行是既有日志解析的锚点，别让它随区域设置漂。
+                     *
+                     * ⚠ **两份都要写**（守门用例 `LogSchemaTests.人读行与机器读行一比一` 当场逮到过：
+                     * 原来只有人读那一份被建出来 ⇒ 第一行就破坏了"一比一" ⇒ 后面按行对齐解析全错位）。
+                     */
+                    DateTime started = DateTime.Now;
+                    string header = $"日志初始化";
+
                     File.WriteAllText(
                         _currentLogFilePath,
-                        $"[{FormatTimestamp(DateTime.Now)}] [INFO] 日志初始化{Environment.NewLine}",
+                        FormatLogLine(started, "INFO", header) + Environment.NewLine,
                         Encoding.UTF8);
+
+                    if (_currentJsonlFilePath.Length > 0)
+                    {
+                        File.WriteAllText(
+                            _currentJsonlFilePath,
+                            BuildJsonRecord(new OperationLogItem("INFO", header, string.Empty), RunContext, null)
+                            + Environment.NewLine,
+                            Encoding.UTF8);
+                    }
 
                     // 顺手把老日志收一收（第 44 条追加）：不清理的话日志目录只增不减。
                     CleanupOldLogs();
@@ -335,12 +392,12 @@ namespace ArchiveFixer.Services
 
                 if (deleted > 0)
                 {
-                    File.AppendAllText(
-                        _currentLogFilePath,
-                        $"[{FormatTimestamp(DateTime.Now)}] [INFO] 已清理 {deleted} 份老日志（保留最近 {LogRetentionDays} 天 / "
+                    AppendBothFiles(
+                        DateTime.Now,
+                        "INFO",
+                        $"已清理 {deleted} 份老日志（保留最近 {LogRetentionDays} 天 / "
                         + $"上限 {LogRetentionTotalBytes / 1024 / 1024} MB / 至少 {LogRetentionMinFiles} 份），释放 "
-                        + $"{freedBytes / 1024.0 / 1024.0:0.0} MB{Environment.NewLine}",
-                        Encoding.UTF8);
+                        + $"{freedBytes / 1024.0 / 1024.0:0.0} MB");
                 }
             }
             catch
@@ -444,6 +501,40 @@ namespace ArchiveFixer.Services
         /// </summary>
         public void Write(string level, string message, string taskPath = "")
         {
+            WriteInternal(level, message, taskPath, criterion: null);
+        }
+
+        /// <summary>
+        /// **写一处判据**（大测试的"只看日志排查"主要靠它）：人读一行 + 机器读一条（字段固定）。
+        ///
+        /// <para>人读那一行的形状：<c>判据「&lt;名字&gt;」｜输入：&lt;判据输入&gt; ⇒ 结论：&lt;结论&gt;（动作：&lt;动作&gt;）</c>；
+        /// 机器读那条把 <paramref name="criterion"/> / <paramref name="inputs"/> / <paramref name="verdict"/> /
+        /// <paramref name="action"/> 各自放进**独立字段**（⛔ 不埋在散文里，否则没法逐条筛）。</para>
+        ///
+        /// <para>⛔ 只是**记录**：它不改任何判据、不写盘上的东西。</para>
+        /// </summary>
+        public void Criterion(
+            string criterion,
+            string inputs,
+            string verdict,
+            string action = "",
+            string file = "",
+            string identity = "",
+            string level = "INFO")
+        {
+            string human = $"判据「{criterion}」｜输入：{inputs} ⇒ 结论：{verdict}"
+                + (action.Length > 0 ? $"（动作：{action}）" : string.Empty);
+
+            WriteInternal(
+                level,
+                human,
+                file,
+                new CriterionFields(criterion, inputs, verdict, action, file, identity));
+        }
+
+        /// <summary><see cref="Write"/> 与 <see cref="Criterion"/> 的**唯一**收口（屏幕 + 人读文件 + 机器读文件）。</summary>
+        private void WriteInternal(string level, string message, string taskPath, CriterionFields? criterion)
+        {
             level = string.IsNullOrWhiteSpace(level) ? "INFO" : level.ToUpperInvariant();
             message = Sanitize(message);
 
@@ -452,7 +543,7 @@ namespace ArchiveFixer.Services
             lock (_lockObj)
             {
                 AddScreenLog(item);
-                WriteFileLog(item);
+                WriteFileLog(item, criterion);
             }
 
             LogAdded?.Invoke(this, item);
@@ -499,7 +590,42 @@ namespace ArchiveFixer.Services
             return $"[{FormatTimestamp(time)}] [{normalizedLevel}] {message}";
         }
 
-        private void WriteFileLog(OperationLogItem item)
+        /// <summary>
+        /// **两份一起追加一行**（人读 + 机器读）—— 只给"不走屏幕日志"的那几处内部写入用
+        /// （日志保留策略那一行）。⛔ 别的地方一律走 <see cref="WriteInternal"/>，那才是唯一收口。
+        /// </summary>
+        private void AppendBothFiles(DateTime time, string level, string message)
+        {
+            if (!_enableFileLog || string.IsNullOrWhiteSpace(_currentLogFilePath))
+            {
+                return;
+            }
+
+            try
+            {
+                string safe = Sanitize(message);
+
+                File.AppendAllText(
+                    _currentLogFilePath,
+                    FormatLogLine(time, level, safe) + Environment.NewLine,
+                    Encoding.UTF8);
+
+                if (_currentJsonlFilePath.Length > 0)
+                {
+                    File.AppendAllText(
+                        _currentJsonlFilePath,
+                        BuildJsonRecord(new OperationLogItem(level, safe, string.Empty), RunContext, null)
+                        + Environment.NewLine,
+                        Encoding.UTF8);
+                }
+            }
+            catch
+            {
+                _enableFileLog = false;
+            }
+        }
+
+        private void WriteFileLog(OperationLogItem item, CriterionFields? criterion = null)
         {
             if (!_enableFileLog)
             {
@@ -517,11 +643,145 @@ namespace ArchiveFixer.Services
                     _currentLogFilePath,
                     FormatLogLine(item.Time, item.Level, item.Message) + Environment.NewLine,
                     Encoding.UTF8);
+
+                /*
+                 * **人读行与机器读行一比一**：同一处写入 ⇒ 行数永远相等（守门用例 `LogSchemaTests` 钉着）。
+                 * 机器读那一份是 `.jsonl`（一行一个 JSON 对象），字段固定、⛔ 不可省。
+                 */
+                if (_currentJsonlFilePath.Length > 0)
+                {
+                    File.AppendAllText(
+                        _currentJsonlFilePath,
+                        BuildJsonRecord(item, RunContext, criterion) + Environment.NewLine,
+                        Encoding.UTF8);
+                }
             }
             catch
             {
                 _enableFileLog = false;
             }
+        }
+
+        /// <summary>一处判据的四个结构化字段（唯一出口 <see cref="Criterion"/>）。</summary>
+        public sealed record CriterionFields(
+            string Criterion,
+            string Inputs,
+            string Verdict,
+            string Action,
+            string File,
+            string Identity);
+
+        /// <summary>这一行的来源上下文（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）。</summary>
+        public sealed record LogRunContext
+        {
+            public string Batch { get; init; } = string.Empty;
+
+            /// <summary>第几轮（0 = 还没进轮次循环）。</summary>
+            public int Round { get; init; }
+
+            /// <summary>大测试的第几份原包（`1111` / `2222` …）。</summary>
+            public string Sample { get; init; } = string.Empty;
+
+            /// <summary>阶段：第一大步 / 第二大步 / 接片 / 收卷 / 落点 / 删除 / 引擎调用。</summary>
+            public string Stage { get; init; } = string.Empty;
+
+            public string Task { get; init; } = string.Empty;
+
+            /// <summary>层号（-1 = 不适用）。</summary>
+            public int Layer { get; init; } = -1;
+        }
+
+        /// <summary>
+        /// 把一行日志拼成**机器读**的 JSON 对象（⛔ 零依赖：自己转义，不引第三方）。
+        /// 字段固定：<c>ts/level/batch/round/sample/stage/task/layer/file/identity/criterion/inputs/verdict/action/msg</c>。
+        /// </summary>
+        internal static string BuildJsonRecord(
+            OperationLogItem item,
+            LogRunContext context,
+            CriterionFields? criterion)
+        {
+            var builder = new StringBuilder(256);
+
+            builder.Append('{');
+            AppendJsonField(builder, "ts", FormatTimestamp(item.Time), first: true);
+            AppendJsonField(builder, "level", item.Level);
+            AppendJsonField(builder, "batch", context.Batch);
+            AppendJsonNumber(builder, "round", context.Round);
+            AppendJsonField(builder, "sample", context.Sample);
+            AppendJsonField(builder, "stage", context.Stage);
+            AppendJsonField(builder, "task", context.Task);
+            AppendJsonNumber(builder, "layer", context.Layer);
+            AppendJsonField(builder, "file", criterion?.File ?? item.TaskPath);
+            AppendJsonField(builder, "identity", criterion?.Identity ?? string.Empty);
+            AppendJsonField(builder, "criterion", criterion?.Criterion ?? string.Empty);
+            AppendJsonField(builder, "inputs", criterion?.Inputs ?? string.Empty);
+            AppendJsonField(builder, "verdict", criterion?.Verdict ?? string.Empty);
+            AppendJsonField(builder, "action", criterion?.Action ?? string.Empty);
+            AppendJsonField(builder, "msg", item.Message);
+            builder.Append('}');
+
+            return builder.ToString();
+        }
+
+        private static void AppendJsonField(StringBuilder builder, string name, string? value, bool first = false)
+        {
+            if (!first)
+            {
+                builder.Append(',');
+            }
+
+            builder.Append('"').Append(name).Append("\":\"").Append(EscapeJson(value)).Append('"');
+        }
+
+        private static void AppendJsonNumber(StringBuilder builder, string name, int value)
+        {
+            builder.Append(",\"").Append(name).Append("\":").Append(value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        /// <summary>JSON 字符串转义（零依赖；控制字符走 <c>\uXXXX</c>，⛔ 换行绝不许漏进记录里）。</summary>
+        internal static string EscapeJson(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder(value.Length + 16);
+
+            foreach (char ch in value)
+            {
+                switch (ch)
+                {
+                    case '"':
+                        builder.Append("\\\"");
+                        break;
+                    case '\\':
+                        builder.Append("\\\\");
+                        break;
+                    case '\r':
+                        builder.Append("\\r");
+                        break;
+                    case '\n':
+                        builder.Append("\\n");
+                        break;
+                    case '\t':
+                        builder.Append("\\t");
+                        break;
+                    default:
+                        if (ch < 0x20)
+                        {
+                            builder.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            builder.Append(ch);
+                        }
+
+                        break;
+                }
+            }
+
+            return builder.ToString();
         }
 
         /// <summary>

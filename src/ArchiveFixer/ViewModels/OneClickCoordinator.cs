@@ -993,6 +993,13 @@ namespace ArchiveFixer.ViewModels
                 {
                     round++;
 
+                    /*
+                     * 给日志换一次来源上下文（⛔ 只影响日志记录，判据一个字不变）：
+                     * 大测试要求"只看日志排查" ⇒ 每一行都要能回答"这是第几轮、哪一步"。
+                     * 阶段先按本轮的入口步骤落"第一大步"；轮判定判出下一轮走第二大步时再改（见下面那一行）。
+                     */
+                    _vm.UpdateLogRunContext(round: round, stage: "第一大步");
+
                     // 第一步：识别（第 2 轮起只扫本轮新加进来的包）。
                     await ScanRoundAsync(round, roundTargets);
 
@@ -1103,6 +1110,18 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         roundSummary.Step == RoundProductClassifier.NextStep.Finished ? "INFO" : "INFO",
                         "一键处理：" + roundSummary.Describe(round));
+
+                    /*
+                     * 轮判定说了下一轮从哪一步开始 ⇒ 顺手把日志上下文里的"阶段"改成它
+                     * （⛔ 只影响日志记录）：大测试要能按"第一大步 / 第二大步"筛日志。
+                     */
+                    _vm.UpdateLogRunContext(
+                        stage: roundSummary.Step switch
+                        {
+                            RoundProductClassifier.NextStep.SinglePackageStep => "第一大步（单一压缩包全部解压）",
+                            RoundProductClassifier.NextStep.VolumeStep => "第二大步（分卷，只解一层）",
+                            _ => "收尾（没有还要解的东西）"
+                        });
 
                     /*
                      * ⚠ **第二大步的轮边界：这一轮解开过的那几组卷，按删除档收掉**（2026-10-11，用户口径：

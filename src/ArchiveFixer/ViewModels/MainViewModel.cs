@@ -3359,6 +3359,20 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         public void MarkOperationStartForLog(string operationName) => _logService.MarkOperationStart(operationName);
 
+        /// <summary>
+        /// **给日志换一次来源上下文**（批次 / 轮次 / 样本 / 阶段 / 任务 / 层号）—— 大测试"只看日志排查"靠它
+        /// （人读行不变，机器读的 `.jsonl` 那一份每一行都带上这几格）。
+        /// ⛔ 只影响日志记录：⛔ 不参与任何判据、⛔ 不改任何行为。
+        /// </summary>
+        public void UpdateLogRunContext(
+            string? batch = null,
+            int? round = null,
+            string? sample = null,
+            string? stage = null,
+            string? task = null,
+            int? layer = null)
+            => _logService.UpdateRunContext(batch, round, sample, stage, task, layer);
+
         public void AppendLog(string level, string message)
         {
             string safeMessage = message ?? string.Empty;
