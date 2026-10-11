@@ -12377,6 +12377,18 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
+                /*
+                 * ⚠ **判据输入**（2026-10-11，真机 EEE 定案用）：这一档一旦命中，调用方就**清落点 / 清校验 /
+                 * 落「跟班卷」**，可"到底是哪一条账目匹配上的"原来一个字都不写 —— 于是真机 EEE 只看到
+                 * `111.part1.rar` 被算成跟班卷，看不到它被**哪一份文件**（物理同一 / 同一条路径）匹配上的。
+                 * 按"判不出就把判据输入写进日志"那条规矩补一行 WARN。⛔ 只写事实，不改判据。
+                 */
+                AppendLog(
+                    "WARN",
+                    $"借片账命中：「{FileNameHelper.GetFileName(task.CurrentPath)}」这一单自己的文件与账上那一片"
+                    + $"（{piecePath}）是同一份物理文件（或同一条路径）⇒ 按「已由「{ownerName}」接手」收场"
+                    + $"｜判据输入：本单路径={task.CurrentPath}，匹配上的账目=「{piecePath}」→ 接手方「{ownerName}」");
+
                 ArchiveTask? owner = null;
 
                 foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))

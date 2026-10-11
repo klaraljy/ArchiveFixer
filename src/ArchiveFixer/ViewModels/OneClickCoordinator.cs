@@ -2129,7 +2129,32 @@ namespace ArchiveFixer.ViewModels
 
             if (parents.Count == 0)
             {
-                return (new List<InnerArchiveCandidate>(), new List<string>());
+                /*
+                 * ⛔ 这一档原来**静默早退**（连"扫描到底跑没跑"都看不出来 —— 真机 EEE 就是这样：
+                 * 第 2 轮日志里只有「第 2 层没有发现可继续解压的内层包」，没有任何扫描行，
+                 * 于是分不清是"没有候选"还是"扫描根本没跑"）。
+                 *
+                 * 按项目那条规矩（判不出就把**判据输入**写进日志）补一行：每一单为什么没交出目录 ——
+                 * 产物校验过没过 / 落点与归集那两格是空还是有值。⛔ 只写程序当场算出来的值，不改任何判据。
+                 */
+                var why = new List<string>(roundTargets.Count);
+
+                foreach (ArchiveTask candidateTask in roundTargets)
+                {
+                    string outputPath = candidateTask.OutputPath ?? string.Empty;
+                    string collectedPath = candidateTask.CollectedPath ?? string.Empty;
+
+                    why.Add(
+                        $"{candidateTask.LogName}（校验={candidateTask.OutputVerification}，"
+                        + $"落点={(outputPath.Length > 0 ? outputPath : "空")}，"
+                        + $"归集={(collectedPath.Length > 0 ? collectedPath : "空")}）");
+                }
+
+                return (new List<InnerArchiveCandidate>(), new List<string>
+                {
+                    $"[WARN] 第 {round} 层产物扫描：这一轮**一个可扫的产物目录都没有**（{roundTargets.Count} 单）—— "
+                    + string.Join("；", why)
+                });
             }
 
             List<(string OutputDirectory, List<string> Files)> scanned = await Task.Run(() =>
