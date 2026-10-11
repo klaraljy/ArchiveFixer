@@ -9233,6 +9233,52 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **这个路径是不是「用户导入的原包」自己** —— 第二大步收卷那一档的**窄版**红线
+        /// （⛔ 与上面那把宽尺子并存，⛔ 宽尺子的任何调用点一个字都不改）。
+        ///
+        /// <para><b>为什么这一档不能用宽尺子</b>（2026-10-11 调试器取到的运行期事实）：
+        /// 宽尺子问"是不是任何一单的路径"，而第二大步要收的**恰恰是这一组自己的那几片** ——
+        /// 它们正是入口那一单（续解任务）自己的路径。断点停在
+        /// `HarvestOneSolvedGroupVolumes` 的删除循环里，EEE 第 2 轮边界那一趟逐字：
+        /// `directory=…\in\111\111\111`、`referenceName=111.parts1.racr`、`members.Count=2`
+        /// （`…\111\111\111\111.part1.rar` / `111.part2.rar`）、`consumer=111.part1.rar`、
+        /// `mode=Delete`，而求值 `this.IsAnyTaskSourcePath(path)` = **true** ⇒ 两份都被那句
+        /// `continue` 跳过（静默）⇒ 盘上一个字节没少（判据 ③ 的 `还有 5 个` 就是它）。</para>
+        ///
+        /// <para>判据取既有事实位 <see cref="ArchiveTask.IsContinuationTask"/> —— 项目自己的定义逐字：
+        /// 「续解任务的"源"是上一层交出来的内层包 —— 对用户来说它是过程物」
+        /// （同一句话也是 `ProcessArtifactLayout` 里"续解出来的内层包不参与源包处理"那条的唯一出口）。
+        /// ⇒ **非续解任务的那几单，它们的路径就是用户给的原包**（含同组被收进
+        /// <see cref="ArchiveTask.VolumePaths"/> 的那几卷）一个字节不碰；续解任务自己的路径
+        /// **不是**用户的原包 ⇒ 不在这道红线的保护范围内。</para>
+        /// </summary>
+        private bool IsUserImportedSourcePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                if (task == null || task.IsContinuationTask)
+                {
+                    continue;
+                }
+
+                foreach (string sourcePath in EnumerateTaskPaths(task))
+                {
+                    if (!string.IsNullOrWhiteSpace(sourcePath) && SafePathHelper.PathEquals(sourcePath, path))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// **这一片落在哪一单的落点树里**（唯一出口；⛔ 与"谁在调"无关）：
         /// 先看调用方给的那一单，不是它就在全表里按 <see cref="ArchiveTask.OutputPath"/> /
         /// <see cref="ArchiveTask.ContentDirectoryPath"/> 找 —— 判不出 ⇒ <c>null</c>
@@ -11225,7 +11271,8 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>门槛与执行体与 <see cref="PurgeGroupLandedPieces"/> **逐条同一套**：
         /// 删除档不是「不动」/ 未取消 / 这一单完成且校验通过 / 可证完整（L4 唯一出口）/ 没命中「内容物保留关键词」/
-        /// ⛔ 任何一单的源路径一律不碰（红线唯一出口 <see cref="IsAnyTaskSourcePath"/>）；
+        /// ⛔ **用户导入的原包**一个字节都不碰（红线出口 <see cref="IsUserImportedSourcePath"/> ——
+        /// 这一档**不能**用宽尺子 <see cref="IsAnyTaskSourcePath"/>，理由见那个方法的说明）；
         /// 删除动作仍只有 <see cref="Storage.RecycleBinService"/> 一个出口。</para>
         /// </summary>
         /// <param name="entryPath">这一组的**入口包**路径（`RoundProductClassifier.VolumeEntries` 里那一条）。</param>
@@ -11254,10 +11301,7 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            foreach ((string Directory, string ReferenceName) group in _volumeGroupEntriesThisBatch.ToList())
-            {
-                HarvestOneSolvedGroupVolumes(group.Directory, group.ReferenceName);
-            }
+            HarvestRememberedGroupVolumes();
         }
 
         /// <summary>
@@ -11265,16 +11309,117 @@ namespace ArchiveFixer.ViewModels
         /// （逐字：`这一组的卷 2 份，但那一层里没有哪一单是「已解开 + 校验通过」`）——
         /// 因为它的解压发生在**批末**那一站。⇒ 一整批跑完（含批末那一站）之后再试一次，其余门槛照旧。
         /// </summary>
-        internal void HarvestRememberedGroupVolumesForBatch()
+        internal void HarvestRememberedGroupVolumesForBatch() => HarvestRememberedGroupVolumes();
+
+        /// <summary>
+        /// 把记住的每一组都试一遍："这一组解开了吗 ⇒ 收它的卷"（**两遍**：先定清单、再过闸门、最后才删）。
+        ///
+        /// <para><b>为什么要分两遍</b>（2026-10-11 全量实测打红 3 条守门用例后定的）：
+        /// 第一遍只把"这一趟要收哪些卷"按组定下来（六道门槛一条不落）；
+        /// 第二遍把**这一趟全部候选**一起交给半套分卷那道闸门
+        /// （唯一出口 <see cref="RestVolumeCompletenessGate"/> —— 25 GB 那次事故立的红线：
+        /// 「同组还有一片留在别处 ⇒ 一个字节都不删」）。</para>
+        ///
+        /// <para>⛔ **候选必须是"这一趟的并集"，不许一组一组各看各的**：真机 EEE 两层里各有一对
+        /// `111.part1.rar` / `111.part2.rar`（基名、族全同），逐个看 ⇒ 各自都会把对方读成
+        /// "同组还有一片留在别处" ⇒ **互相拦死、两份都收不掉**（实测：EEE ③ 从 1 个退回 5 个）。
+        /// 并集之后"外面还剩什么"问的才是那道红线真正要问的事。</para>
+        /// </summary>
+        private void HarvestRememberedGroupVolumes()
         {
+            var plans = new List<(ArchiveTask Consumer, List<string> Targets)>();
+
             foreach ((string Directory, string ReferenceName) group in _volumeGroupEntriesThisBatch.ToList())
             {
-                HarvestOneSolvedGroupVolumes(group.Directory, group.ReferenceName);
+                (ArchiveTask Consumer, List<string> Targets)? plan =
+                    PlanHarvestOneSolvedGroupVolumes(group.Directory, group.ReferenceName);
+
+                if (plan.HasValue && plan.Value.Targets.Count > 0)
+                {
+                    plans.Add((plan.Value.Consumer, plan.Value.Targets));
+                }
+            }
+
+            if (plans.Count == 0)
+            {
+                return;
+            }
+
+            var everythingThisPass = new List<string>();
+
+            foreach ((ArchiveTask _, List<string> targets) in plans)
+            {
+                everythingThisPass.AddRange(targets);
+            }
+
+            foreach ((ArchiveTask consumer, List<string> targets) in plans)
+            {
+                var others = new List<string>();
+
+                foreach (string path in everythingThisPass)
+                {
+                    if (!targets.Any(target => SafePathHelper.PathEquals(target, path)))
+                    {
+                        others.Add(path);
+                    }
+                }
+
+                IReadOnlyList<string> roots = EnumerateSplitGateArtifactRoots(consumer, targets);
+
+                if (roots.Count == 0)
+                {
+                    // 与「逐层回收」那一档同一条兜底：判不出 ⇒ 什么都不做（删除不可恢复）。
+                    AppendLog(
+                        "WARN",
+                        $"{consumer.LogName}：拿不到成品目录树（任务上没有记下可用的输出目录）—— "
+                        + "判不出同组还有没有别的片留在里面，所以这一组的卷这一个字节都不收（删除不可恢复）");
+                    continue;
+                }
+
+                string? blocker = null;
+
+                foreach (string root in roots)
+                {
+                    blocker = RestVolumeCompletenessGate.DescribeBlockerForCandidates(
+                        targets,
+                        root,
+                        HarvestCandidatePrefix,
+                        HarvestBlockerTail,
+                        requireRecognizedCandidates: false,
+                        others);
+
+                    if (blocker != null)
+                    {
+                        break;
+                    }
+                }
+
+                if (blocker != null)
+                {
+                    AppendLog("WARN", $"{consumer.LogName}：{blocker}");
+                    continue;
+                }
+
+                DeleteHarvestTargets(consumer, targets);
             }
         }
 
-        /// <summary>试一次"这一组已经解开了吗 ⇒ 收它的卷"（判据见方法体里的门槛）。</summary>
-        private void HarvestOneSolvedGroupVolumes(string directory, string referenceName)
+        /// <summary>第二大步收卷那一档的措辞（候选 = 这一趟按组定下来的那几份卷）。</summary>
+        private const string HarvestCandidatePrefix = "第二大步收卷准备收的";
+
+        /// <summary>第二大步收卷那一档的结论措辞（与「逐层回收」那一档同一件事、不同入口）。</summary>
+        private const string HarvestBlockerTail =
+            "当场收掉这几份就等于把这一组拆开，所以这一趟一个字节都不收"
+            + "（删除不可恢复；这一组留到确认完整之后再收）";
+
+        /// <summary>
+        /// 试一次"这一组已经解开了吗"（判据见方法体里的门槛）；解开且该收 ⇒ 交回
+        /// **这一组在这一层里该收的那几份**（⛔ 不在这里删：删除在
+        /// <see cref="HarvestRememberedGroupVolumes"/> 过了半套分卷那道闸门之后）。
+        /// </summary>
+        private (ArchiveTask Consumer, List<string> Targets)? PlanHarvestOneSolvedGroupVolumes(
+            string directory,
+            string referenceName)
         {
             /*
              * ⚠ **判据输入**（同一条规矩：判不出就把判据输入写进日志）：这一档的早退原来全是静默的
@@ -11286,7 +11431,7 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(
                     "WARN",
                     $"第二大步收卷：跳过（判据输入）｜那一层=「{directory}」，在盘上={Directory.Exists(directory)}");
-                return;
+                return null;
             }
 
             // 这一组此刻在那**一层**里的那几份（当场按族尺子重新认，⛔ 不用记下来的旧路径）。
@@ -11303,7 +11448,7 @@ namespace ArchiveFixer.ViewModels
 
             if (members.Count == 0)
             {
-                return;
+                return null;
             }
 
             // 这一组**解开了吗**：那一层里得有某一单是"这一组的入口包 + 已解开 + 校验通过"。
@@ -11328,7 +11473,7 @@ namespace ArchiveFixer.ViewModels
                     "WARN",
                     $"第二大步收卷：跳过（判据输入）｜那一层=「{directory}」，这一组的卷 {members.Count} 份，"
                     + "但那一层里没有哪一单是「已解开 + 校验通过」⇒ 判不出 ⇒ 一个字节都不动");
-                return;
+                return null;
             }
 
             string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
@@ -11343,15 +11488,80 @@ namespace ArchiveFixer.ViewModels
                     $"第二大步收卷：跳过（判据输入）｜那一层=「{directory}」，删除档=「{mode}」，"
                     + $"已取消={IsStopping || _operationCts?.IsCancellationRequested == true}，"
                     + $"可证完整={ResultCompletenessClassifier.Classify(consumer).AllowsSourceRemoval}");
-                return;
+                return null;
             }
 
             string entryName = referenceName;
 
             if (entryName.Length == 0)
             {
-                return;
+                return null;
             }
+
+            ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
+            var targets = new List<string>();
+
+            foreach (string path in CollectVolumeFilesInDirectory(directory))
+            {
+                if (!File.Exists(path))
+                {
+                    continue;
+                }
+
+                string name = FileNameHelper.GetFileName(path);
+
+                /*
+                 * ⛔ 判据只有一条（既有那把宽尺子）：**族 + 基名与入口包同一组**。
+                 *
+                 * ⛔ **用户源路径红线照旧，但尺子换成窄的那把**（2026-10-11 调试器定案）：
+                 * 宽尺子 `IsAnyTaskSourcePath` 问的是"任何一单的路径"，而第二大步要收的**正是这一组
+                 * 自己的那几片** —— 它们就是入口那一单（续解任务）自己的路径 ⇒ 宽尺子把这一档
+                 * 拦成"一个字节都不动"，而且是**静默**的（下面那条 `continue` 原来不写日志）。
+                 * 实测（断点停在 `HarvestOneSolvedGroupVolumes` 的删除循环）：EEE 第 2 轮边界那一趟，
+                 * `members.Count=2`、`consumer != null`、六道门槛全过、求值
+                 * `this.IsAnyTaskSourcePath(path)` = **true** ⇒ 两份都被跳过 ⇒ 盘上一个字节没少。
+                 */
+                if (!VolumeGroupDetector.BelongsToSameGroup(name, entryName))
+                {
+                    continue;
+                }
+
+                if (IsUserImportedSourcePath(path))
+                {
+                    // 「判不出 / 跳过」必须把判据输入写进日志：这一档原来全静默，正是它把 ③ 藏了两轮。
+                    AppendLog(
+                        "WARN",
+                        $"{consumer.LogName}：这一组的卷 {name} 是「用户导入的原包」自己（不是这一批的产出）"
+                        + " —— 一个字节都不碰，留在原处。");
+                    continue;
+                }
+
+                string? keyword = keepRules.FindMatch(path);
+
+                if (keyword != null)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"{consumer.LogName}：这一组的卷 {name} 命中了「内容物保留关键词」（{keyword}）"
+                        + " —— 按设置碰都不碰，这一份留在原处。");
+                    continue;
+                }
+
+                targets.Add(path);
+            }
+
+            return targets.Count == 0 ? null : (consumer, targets);
+        }
+
+        /// <summary>
+        /// **真删**这一组的那几份（调用方已经过完全部门槛，含半套分卷那道闸门）。
+        ///
+        /// <para>执行体仍只有 <see cref="Storage.RecycleBinService"/> 一个出口
+        /// （<c>AllowedRoot</c> = 这一层的目录）；删不掉只写 WARN，⛔ 不动任何结论、⛔ 不写回任务账。</para>
+        /// </summary>
+        private void DeleteHarvestTargets(ArchiveTask consumer, List<string> targets)
+        {
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
 
             DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
                 ? DeleteMode.RecycleBin
@@ -11361,11 +11571,10 @@ namespace ArchiveFixer.ViewModels
                 ? RestItemPurger.SettledPieceCopyRecycleReason
                 : RestItemPurger.SettledPieceCopyPurgeReason;
 
-            ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
             var service = new RecycleBinService(RestDeleteExecutor, null, null);
             int deleted = 0;
 
-            foreach (string path in CollectVolumeFilesInDirectory(directory))
+            foreach (string path in targets)
             {
                 try
                 {
@@ -11375,27 +11584,7 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     string name = FileNameHelper.GetFileName(path);
-
-                    /*
-                     * ⛔ 判据只有一条（既有那把宽尺子）：**族 + 基名与入口包同一组**。
-                     * ⛔ 用户源路径红线照旧：任何一单的源（最初导入的包 / 用户目录里的片）一个字节都不碰。
-                     */
-                    if (!VolumeGroupDetector.BelongsToSameGroup(name, entryName)
-                        || IsAnyTaskSourcePath(path))
-                    {
-                        continue;
-                    }
-
-                    string? keyword = keepRules.FindMatch(path);
-
-                    if (keyword != null)
-                    {
-                        AppendLog(
-                            "INFO",
-                            $"{consumer.LogName}：这一组的卷 {name} 命中了「内容物保留关键词」（{keyword}）"
-                            + " —— 按设置碰都不碰，这一份留在原处。");
-                        continue;
-                    }
+                    string directory = Path.GetDirectoryName(path) ?? string.Empty;
 
                     DeleteResult result = service.Delete(
                         new DeleteRequest(path, reason),
