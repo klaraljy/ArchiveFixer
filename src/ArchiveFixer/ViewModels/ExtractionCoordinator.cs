@@ -15980,7 +15980,7 @@ namespace ArchiveFixer.ViewModels
                 _groupLayerByBaseName.Clear();
                 _volumeStepTasks.Clear();
                 _volumeGroupEntriesThisBatch.Clear();
-            _volumeGroupEntriesThisBatch.Clear();
+                _volumeGroupEntriesThisBatch.Clear();
                 _volumeDeficitFinalPass.Clear();
             }
 
