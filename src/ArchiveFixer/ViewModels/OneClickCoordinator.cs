@@ -2029,6 +2029,51 @@ namespace ArchiveFixer.ViewModels
         /// <para>返回候选 + <b>一行一条的扫描日志</b>（认出了谁、跳过了谁、为什么跳）——
         /// 用户 2026-09-25 的要求是"出问题我看日志就能知道"，所以这一段的判据必须能自证。</para>
         /// </summary>
+        /// <summary>
+        /// **这一份是不是"某一组的第一卷，而且它的兄弟卷就在同目录里"**（轮尾扫描补的那一格判据）。
+        ///
+        /// <para>为什么是"第一卷"而不是"任意一片"：起点必须落在**入口包**上（用户口径「对哪个包输入密码，
+        /// 就在哪个地方设工作区」）—— RAR 新式族 / 7z 数字族的入口就是第 1 卷；跨盘 ZIP 那一族的入口是
+        /// **末片 `X.zip`**（它没有卷号），那一档由**按内容识别**那条路兜（它自己带 ZIP 头，引擎认得）。
+        /// ⛔ 判据只读两条事实：卷号 == 1（既有那把尺子）、同目录里真有同一组的另一片 —— 判不出 ⇒ false。</para>
+        /// </summary>
+        private static bool IsVolumeGroupEntryInPlace(string file)
+        {
+            string name = FileNameHelper.GetFileName(file);
+
+            if (ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex(name) != 1)
+            {
+                return false;
+            }
+
+            string directory = Path.GetDirectoryName(file) ?? string.Empty;
+
+            if (directory.Length == 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                foreach (string other in Directory.EnumerateFiles(directory))
+                {
+                    if (!string.Equals(other, file, StringComparison.OrdinalIgnoreCase)
+                        && ArchiveFixer.Detection.VolumeGroupDetector.BelongsToSameGroup(
+                            FileNameHelper.GetFileName(other),
+                            name))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                // 目录读不动 ⇒ 判不出 ⇒ 照旧走"按内容"那条路（什么都不多做）。
+            }
+
+            return false;
+        }
+
         private async Task<(List<InnerArchiveCandidate> Candidates, List<string> LogLines)> CollectInnerLayersAsync(
             int round,
             IReadOnlyList<ArchiveTask> roundTargets,
@@ -2228,6 +2273,25 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     (bool isArchive, string how) = await ClassifyArchiveByContentAsync(file);
+
+                    /*
+                     * ⚠ **引擎按内容打不开，不代表它不该进续解链**（2026-10-11 真机 EEE 实测，轮次模型补的那一格）：
+                     *
+                     * 现场逐字：`第 1 层产物扫描 —— 新文件 3 个；按内容认出归档 0 个；跳过 3 个`，
+                     * 而这三个新文件是**第二大步刚解出来的那两片**（`111.parts1.racr` / `111.part删2.ra除r`）
+                     * —— RAR 找兄弟卷**靠名字**，这一对名字是脏的（一个 `parts1`、一个夹着"删/除"），
+                     * 引擎自然打不开它 ⇒ 0 个"归档" ⇒ 这一批就"到此为止"，
+                     * 可用户要的东西还压在这两层分卷里（正是他说的"接着就该下一轮的第二大步"）。
+                     *
+                     * ⇒ 补一道**分卷专属那把尺子**：这一份确实是**某一组的第一卷**（同目录里真有它的兄弟卷）
+                     * 就照样当候选收进来 —— 判据只读名字与目录事实，⛔ 不猜格式、⛔ 不改名；
+                     * 名字怎么改、那一组怎么开，是**下一轮第二大步**的事。
+                     */
+                    if (!isArchive && IsVolumeGroupEntryInPlace(file))
+                    {
+                        isArchive = true;
+                        how = "按分卷尺子认出：这一组的第一卷（引擎按内容打不开是因为名字脏，交给第二大步）";
+                    }
 
                     if (!isArchive)
                     {
