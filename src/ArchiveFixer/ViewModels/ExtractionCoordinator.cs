@@ -11271,6 +11271,14 @@ namespace ArchiveFixer.ViewModels
              */
             var scannedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            /*
+             * 参照名 = **账上那一条的第一个**（那一条按定义就是这一组的一片）；
+             * 一条账都没有 ⇒ 上面已经早退过，走不到这里 ⇒ 判不出时用空串（`BelongsToSameGroup` 恒 false ⇒ 什么都不删）。
+             */
+            string groupReferenceName = targets.Count > 0
+                ? FileNameHelper.GetFileName(targets[0].Path)
+                : string.Empty;
+
             foreach ((ArchiveTask producer, string _, string outputRoot) in targets.ToList())
             {
                 if (outputRoot.Length == 0 || !scannedRoots.Add(outputRoot))
@@ -11294,11 +11302,21 @@ namespace ArchiveFixer.ViewModels
                 {
                     string foundName = FileNameHelper.GetFileName(path);
 
+                    /*
+                     * ⛔⛔ **必须问"族 + 基名"，⛔ 不许只比基名**（2026-10-11 真机 EEE：只比基名**删错了东西**）。
+                     *
+                     * 现场：那一组是**跨盘 ZIP 族**（`111.z01/z02/z03/111.zip`），而这一组解开之后
+                     * 落在同一个落点根里的 `111.parts1.racr` / `111.part删2.ra除r` 是**下一层的 RAR 族**、
+                     * **恰好同基名**（都叫 `111`）—— 只比基名就把它们当"这一组的多余名"删了。
+                     * 取证逐字：第 1 遍跑完 `判据④：把输出目录再导入一次 ⇒ 导入后任务数 = 0`、
+                     * `第 1 遍结束后的盘上清单` 空 —— **用户要的内容物被删干净了**（两条红线一起踩）。
+                     *
+                     * ⇒ 参照名取**账上那一条**（它按定义就是这一组的一片，`_adoptedLandedPieces` 记的），
+                     * 用既有那把"宽尺子" `BelongsToSameGroup` 问"族 + 基名都对得上吗"。
+                     * 判不出 / 对不上 ⇒ 一个字节都不动。
+                     */
                     if (VolumeGroupDetector.TryGetVolumeIndex(foundName) == null
-                        || !string.Equals(
-                            FileNameHelper.GetArchiveBaseName(foundName),
-                            groupBaseName,
-                            StringComparison.OrdinalIgnoreCase)
+                        || !VolumeGroupDetector.BelongsToSameGroup(foundName, groupReferenceName)
                         || IsAnyTaskSourcePath(path))
                     {
                         continue;
