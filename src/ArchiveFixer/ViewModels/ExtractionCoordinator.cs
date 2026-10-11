@@ -8513,6 +8513,12 @@ namespace ArchiveFixer.ViewModels
                      * 都叫什么"才是下一轮排查要的东西 —— 真机 FFFF 那批就是卡在"附近没有第 1 卷"这一句上，
                      * 看不出是窗口没够到那几个目录，还是够到了但尺子不认。
                      * ⛔ 只列事实（候选来自 `EnumerateVolumeCandidatesNearby`，与判据同一份输入），⛔ 不改判据。
+                     *
+                     * ⚠ 措辞必须说清这是**收进来的池子**、不是"同组的成员"（2026-10-11 真机日志订正）：
+                     * 三道闸门（同族同基名 / 卷号一份对一份 / 整组自洽）都在池子**之后**才过，
+                     * 老措辞「同组候选」把 `111.rar`（RarOld 族）与 `111(2)_.zip`（另一个基名）也印成同组
+                     * ⇒ 拿这份日志排查的人会顺着一个**假的同组名单**去查（文案唯一出口
+                     * `StatusText.CriterionInputsGatherWindowFormat` 已同步改写）。
                      */
                     string[] sample = window
                         .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.Path))
