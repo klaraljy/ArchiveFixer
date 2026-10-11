@@ -8854,9 +8854,18 @@ namespace ArchiveFixer.ViewModels
                         /*
                          * 只挑"像分卷片"的：名字带卷标记（`.z01` / `.001` / `part1` …），
                          * 或者它自己自述是跨盘 ZIP 的末片（末片的 EOCD 是明文 ⇒ 这一条是**硬证据**）。
+                         *
+                         * ⛔ **再加一道底层识别**（用户口径：「统筹到同一组上面去…先看看底层能够识别到文件是什么东西」）：
+                         * 走 <see cref="FileNature.Inspect"/> 那张卡 —— 内容**可证"不是分卷组的一员"** 就**不接**
+                         * （第 125 轮那个真凶就是"名字像分卷片"的单卷包；那道红线原来只挡"用户的原包"这一档，
+                         * 这一道把它**推广到任何来源**的同一形状，包括我们自己产出的单卷包）。
                          */
-                        bool plausible = VolumeGroupDetector.TryGetVolumeIndex(name) != null
-                            || Detection.SpannedZipIndex.TryRead(file) != null;
+                        FileNatureCard nature = FileNature.Inspect(file);
+
+                        bool plausible = nature.ParticipatesInVolumeHandling
+                            && (nature.VolumeIndexByName != null
+                                || nature.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                                || Detection.SpannedZipIndex.TryRead(file) != null);
 
                         if (!plausible)
                         {
@@ -11887,8 +11896,14 @@ namespace ArchiveFixer.ViewModels
                      * ⇒ 参照名取**账上那一条**（它按定义就是这一组的一片，`_adoptedLandedPieces` 记的），
                      * 用既有那把"宽尺子" `BelongsToSameGroup` 问"族 + 基名都对得上吗"。
                      * 判不出 / 对不上 ⇒ 一个字节都不动。
+                     *
+                     * ⛔ 再加一道底层识别（同一张卡）：内容**可证"不是分卷组的一员"** ⇒ 它不是"这一组的多余名"，
+                     * 一个字节都不动（⛔ 判不出照旧按名字 —— 跨盘 ZIP 的中间片就在那一档）。
                      */
+                    FileNatureCard nature = FileNature.Inspect(path);
+
                     if (VolumeGroupDetector.TryGetVolumeIndex(foundName) == null
+                        || !nature.ParticipatesInVolumeHandling
                         || !VolumeGroupDetector.BelongsToSameGroup(foundName, groupReferenceName)
                         || IsAnyTaskSourcePath(path))
                     {
@@ -11915,18 +11930,24 @@ namespace ArchiveFixer.ViewModels
                     string name = FileNameHelper.GetFileName(path);
                     bool exists = File.Exists(path);
                     bool isVolumePart = VolumeGroupDetector.TryGetVolumeIndex(name) != null;
+
+                    /*
+                     * ⛔ **底层识别再加一道**（同一张卡）：内容**可证"不是分卷组的一员"** ⇒ 它不是"这一组的多余名"，
+                     * 一个字节都不动（⛔ 判不出照旧按名字 —— 跨盘 ZIP 的中间片就在那一档）。
+                     */
+                    bool participates = FileNature.Inspect(path).ParticipatesInVolumeHandling;
                     bool baseMatches = string.Equals(
                         FileNameHelper.GetArchiveBaseName(name),
                         groupBaseName,
                         StringComparison.OrdinalIgnoreCase);
                     bool insideRoot = ArchivePathGuard.IsInsideRoot(outputRoot, path, out _);
 
-                    if (!exists || !isVolumePart || !baseMatches || !insideRoot)
+                    if (!exists || !isVolumePart || !participates || !baseMatches || !insideRoot)
                     {
                         AppendLog(
                             "WARN",
                             $"收产出方那一份片：这一次跳过（判据输入）｜目标=「{path}」，在盘上={exists}，"
-                            + $"是分卷片={isVolumePart}，基名对上「{groupBaseName}」={baseMatches}，"
+                            + $"是分卷片={isVolumePart}，参与分卷那一套={participates}，基名对上「{groupBaseName}」={baseMatches}，"
                             + $"在落点根「{outputRoot}」内={insideRoot}");
                         continue;
                     }
