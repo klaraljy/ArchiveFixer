@@ -95,6 +95,7 @@ namespace ArchiveFixer.Tests
             await RunPipelineAndAssertGroupExtractedAsync(input, payload, payloadName);
         }
 
+
         /// <summary>
         /// 造 FFFF 的形状：真 RAR 新式分卷切成 ≥4 片 ⇒ 三片名字改坏、各塞进一个外层 ZIP，
         /// 第 4 片散着 ⇒ 返回输入目录。
