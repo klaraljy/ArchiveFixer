@@ -240,6 +240,95 @@ namespace ArchiveFixer.Detection
         private const int Rar5ReadLimit = Rar5MaxHeaderSize + 16;
 
         /// <summary>
+        /// **内容证据对"这一份是不是分卷组的一员"的三种回答** —— 用户 2026-10-11 口径：
+        /// 「判断一个文件，**绝对不能只看基名和后缀**，绝对还有其他的办法」。
+        ///
+        /// <para>为什么需要它：按**名字**判"像不像分卷片"有一处结构性缺陷 —— **一个归档本体自己就是它那一族的第 1 卷**
+        /// （`VolumeGroupDetector.TryGetVolumeIndex("111.rar")` = 1）⇒ 用户那份普普通通的单卷 `111.rar`
+        /// 也会被判成"像分卷片"（第 125 轮那个真凶就是这么把它接进别组的）。而**归档自己写的头**能一句话说清：
+        /// RAR5 主头的 <c>0x0001 Volume</c> 位、RAR4 的 <c>MHD_FIRSTVOLUME</c>、跨盘 ZIP 的 EOCD 盘号。</para>
+        ///
+        /// <para><b>真样本实测（`DebugRunner volinfo` 档，只读）</b>：
+        /// EEE `111\111.rar`（用户的原包）⇒ <c>NotVolumeMember</c>（它自己写着"不是分卷组的一员"）；
+        /// EEE `111(4)\111.z11111111110删除3`（跨盘 ZIP 的中间片，没有 EOCD）⇒ <c>NotAnArchive</c>（**判不出**）；
+        /// FFFF `1114__\111_.part4.raAAAAAr`（真 RAR 分卷的一片）⇒ <c>IsVolumeMember = True</c>。
+        /// ⇒ 内容证据确实能把"真分卷片"与"普通归档"分开；判不出的那一档照旧按名字（保守，⛔ 不许当"不是"）。</para>
+        /// </summary>
+        public enum VolumeMembershipVerdict
+        {
+            /// <summary>内容自述"我是分卷组的一员"（RAR5 的 <c>0x0001 Volume</c> / RAR4 的首卷标记 / 跨盘 ZIP 的盘号）。</summary>
+            VolumeMember,
+
+            /// <summary>
+            /// **可证不是**分卷组的一员：头读得出来，而且它写着"单卷"
+            /// （RAR 的 Volume 位没置 ⇒ <see cref="VolumeNumberFail.NotVolumeMember"/>；
+            /// 跨盘 ZIP 的 EOCD 盘号 = 0 ⇒ <see cref="VolumeNumberFail.ZipSingleDisk"/>）。
+            /// </summary>
+            ProvablyNotVolumeMember,
+
+            /// <summary>
+            /// 判不出（魔数认不出 / 头截断 / 头加密 / RAR 老式编号族）—— 这一档**照旧按名字判**，
+            /// ⛔ 绝不许当成"不是分卷成员"（跨盘 ZIP 的中间片就在这一档，它照样是分卷的片）。
+            /// </summary>
+            Unknown
+        }
+
+        /// <summary>
+        /// **这一份在内容上是不是分卷组的一员**（唯一出口；⛔ 调用方不许自己去看
+        /// <see cref="VolumeNumberReading.IsVolumeMember"/> / <see cref="VolumeNumberReading.Fail"/> 再判一次）。
+        ///
+        /// <para><b>⛔ 消费方只认这三档结论，⛔ 不许按格式分支</b>（用户 2026-10-11 口径：
+        /// 「不仅仅是 rar，我们能做的识别文件逻辑要有程序性…换一个 7z 或者用户新接的引擎怎么办」）：
+        /// 判据本体按 <see cref="VolumeContentInference.SniffFormat"/> **在一处分派**（<see cref="Read"/> →
+        /// <c>ReadRar</c>/<c>ReadZip</c>），**加一个新格式 = 那一处加一条分支**（必要时加一个
+        /// <see cref="VolumeNumberFail"/> 档），所有消费方一个字都不用改。</para>
+        ///
+        /// <para><b>能力矩阵（格式能证明什么，写在唯一出口这里，⛔ 别在各调用点各说一套）</b>：</para>
+        /// <list type="bullet">
+        /// <item><description><b>RAR（RAR5 / RAR 1.5–4.x）</b>：主头 <c>MHFL_VOLUME 0x0001</c>
+        /// （上游 <c>unrar/headers5.hpp</c> 逐字 "Volume."）⇒ 能判"是"；没置位 ⇒ **可证不是**
+        /// （<see cref="VolumeNumberFail.NotVolumeMember"/>）。</description></item>
+        /// <item><description><b>跨盘 ZIP</b>：EOCD 本盘号 &gt; 0 ⇒ "是"；盘号 = 0 ⇒ **可证不是**
+        /// （<see cref="VolumeNumberFail.ZipSingleDisk"/>）。</description></item>
+        /// <item><description><b>7z（<c>.7z.001</c> 这一族）</b>：**格式里根本没有卷号字段** —— <c>-v</c> 切出来的
+        /// <c>.001</c> 是普通 7z 头、之后是裸字节流 ⇒ 内容头**只能判到"判不出"**（这是格式事实，不是没实现）。
+        /// 这一档的判据在别处、且同样是程序性的：认"它是不是第一卷"用
+        /// <see cref="VolumeContentInference"/>，成不成立一律由
+        /// <see cref="Extraction.VolumeProbeVerifier"/> **用引擎试开**回答（试开通过才算数）。</description></item>
+        /// <item><description><b>认不出的字节 / 未知格式</b>：判不出（<see cref="VolumeNumberFail.NotAnArchive"/>）
+        /// —— ⛔ 跨盘 ZIP 的中间片也落在这一档（它没有 EOCD），而它**确实是分卷的片**
+        /// ⇒ 这一档**绝不许**当成"不是分卷成员"。</description></item>
+        /// </list>
+        ///
+        /// <para>⇒ 与"名字/归属"那两道证据的分工（第 125 轮那次误接就是这么堵住的）：
+        /// **① 归属**（`ArchiveTask.IsContinuationTask` / 任务路径）与格式、引擎都无关，任何格式都成立；
+        /// **② 内容头**（本方法）对 RAR/ZIP 能给"可证不是"，7z 只能"判不出"；
+        /// **③ 名字**（<see cref="VolumeGroupDetector"/>）是兜底 —— 判不出时才轮到它。</para>
+        /// </summary>
+        public static VolumeMembershipVerdict ClassifyMembership(string? filePath)
+        {
+            VolumeNumberReading reading = Read(filePath);
+
+            if (reading.IsVolumeMember)
+            {
+                return VolumeMembershipVerdict.VolumeMember;
+            }
+
+            return reading.Fail is VolumeNumberFail.NotVolumeMember or VolumeNumberFail.ZipSingleDisk
+                ? VolumeMembershipVerdict.ProvablyNotVolumeMember
+                : VolumeMembershipVerdict.Unknown;
+        }
+
+        /// <summary>
+        /// **内容证据可证"这一份不是分卷组的一员"**（= <see cref="ClassifyMembership"/> 的那一档的便捷出口）。
+        ///
+        /// <para>⛔ 语义是**单向**的：<c>true</c> = 有正面证据它不是分卷；<c>false</c> = "是分卷"**或**"判不出"
+        /// —— 调用方要区分这两者时请用 <see cref="ClassifyMembership"/>（判不出 ⇒ 照旧老口径）。</para>
+        /// </summary>
+        public static bool IsProvablyNotVolumeMember(string? filePath) =>
+            ClassifyMembership(filePath) == VolumeMembershipVerdict.ProvablyNotVolumeMember;
+
+        /// <summary>
         /// 读**一卷**的内容，得出"它说自己是不是分卷组的一员、是第几卷"。
         ///
         /// <para>任何 IO 意外都落成"没认出来 + 哪一档原因"，**绝不抛**。</para>

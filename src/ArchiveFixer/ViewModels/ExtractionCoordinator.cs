@@ -9470,6 +9470,28 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
+            /*
+             * ===== ⛔ 内容证据优先：**可证"不是分卷组的一员" ⇒ 这一档一个字都不接** =====
+             *
+             * <para>用户 2026-10-11 口径：「判断一个文件，**绝对不能只看基名和后缀**，绝对还有其他的办法」。
+             * 按名字判"像不像分卷片"有一处结构性缺陷：**一个归档本体自己就是它那一族的第 1 卷**
+             * （`VolumeGroupDetector.TryGetVolumeIndex("111.rar")` = 1）⇒ 用户那份普普通通的单卷 `111.rar`
+             * 也会被判成"像分卷片"（第 125 轮真凶就是这么把它接进别组的）。而归档自己写的头能一句话说清。</para>
+             *
+             * <para><b>真样本实测（`DebugRunner volinfo` 档，只读）</b>：EEE `111\111.rar`（用户的原包）
+             * ⇒ `NotVolumeMember`；EEE `111(4)\111.z11111111110删除3`（跨盘 ZIP 中间片，没有 EOCD）
+             * ⇒ `NotAnArchive`（**判不出**）；FFFF `1114__\111_.part4.raAAAAAr`（真 RAR 分卷的一片）
+             * ⇒ `IsVolumeMember = True`。⛔ 所以这里只对**可证不是**的那一档动作，判不出 ⇒ 照旧按名字。</para>
+             */
+            if (VolumeNumberFromContent.IsProvablyNotVolumeMember(piecePath))
+            {
+                AppendLog(
+                    "WARN",
+                    $"{FileNameHelper.GetFileName(piecePath)}：不接进这一组 —— 内容证据：它自己写着「不是分卷组的一员」"
+                    + "（RAR 的 Volume 位没置 / 跨盘 ZIP 的 EOCD 盘号 = 0）⇒ 一个字节都不动。");
+                return false;
+            }
+
             string baseName = FileNameHelper.GetArchiveBaseName(piecePath);
 
             if (baseName.Length == 0)
@@ -10898,6 +10920,17 @@ namespace ArchiveFixer.ViewModels
 
             _groupConsumerByName[baseName] = consumerName;
         }
+
+        /// <summary>
+        /// 单测用：走一遍**「接片」那一档的判据**（⛔ 不复制任何判据：唯一执行体就是
+        /// <see cref="TryAdoptUnresolvedVolumePiece"/>，这里只是把它露给测试项目）。
+        ///
+        /// <para>为什么需要这个出口：本轮新加的"内容证据可证不是分卷成员 ⇒ 不接"那一句在**协调器内部**，
+        /// 没有这一档就只能靠真机环台验（而环台验的是"整条链的最终盘面"，分不出是哪一句挡下的）。
+        /// 有了它，守门用例能直接断言"这一份没有被改名/搬走"。</para>
+        /// </summary>
+        internal bool TryAdoptUnresolvedVolumePieceForTests(string piecePath, ArchiveTask? owner, string? layerOverride = null)
+            => TryAdoptUnresolvedVolumePiece(piecePath, owner, layerOverride);
 
         /// <summary>单测用：把"这一单吐出了这一组的一片"记进既有那份账（写入点唯一 = <see cref="RememberGroupPieceProducer"/>）。</summary>
         internal void RememberGroupPieceProducerForTests(string baseName, ArchiveTask producer)
