@@ -1084,6 +1084,26 @@ namespace ArchiveFixer.ViewModels
                     (List<InnerArchiveCandidate> innerArchives, List<string> scanLog) =
                         await CollectInnerLayersAsync(round, roundTargets, existingFiles, unreadableDirectories, sourcePaths);
 
+                    /*
+                     * ===== 轮判定（用户 2026-10-11 定的轮次模型，本程序的基石）=====
+                     *
+                     * 一个轮 = **第一大步**（单一压缩包全部解压）+ **第二大步**（分卷，只解一层）；
+                     * 一轮结束时按"解出来的东西**是什么**"决定下一轮从哪一步开始（唯一出口
+                     * `RoundProductClassifier`，判据只转调既有那几把尺子）：
+                     *   单一压缩包 ⇒ 下一轮第一大步；分卷 ⇒ 下一轮第二大步（⛔ 不再过一次第一大步）；
+                     *   其余就是内容物 ⇒ 到此为止。
+                     *
+                     * ⚠ 同一批产物在不同轮里**角色不同**（用户打的比方是 `1+=1` 的重载：结果不是终点、
+                     * 它还会参与下一轮的计算）⇒ 每到轮边界**重新分类一次**，⛔ 不许继承上一轮的角色。
+                     * ⚠ 这一行**必须看得见**（轮边界只看日志就能定位）—— 用户 2026-09-25 的同一要求。
+                     */
+                    RoundProductClassifier.Summary roundSummary = RoundProductClassifier.Classify(
+                        innerArchives.Select(candidate => candidate.Path));
+
+                    AppendLog(
+                        roundSummary.Step == RoundProductClassifier.NextStep.Finished ? "INFO" : "INFO",
+                        "一键处理：" + roundSummary.Describe(round));
+
                     foreach (string line in scanLog)
                     {
                         AppendLog(line.Contains("[WARN]", StringComparison.Ordinal) ? "WARN" : "INFO", line);
