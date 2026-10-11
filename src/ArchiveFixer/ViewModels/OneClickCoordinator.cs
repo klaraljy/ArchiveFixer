@@ -1124,6 +1124,18 @@ namespace ArchiveFixer.ViewModels
                         });
 
                     /*
+                     * 轮判定那一处判据**结构化落一行**（大测试要能按"轮次 + 判据名"筛出来：
+                     * 这一轮到底按什么分成"单一压缩包 / 分卷 / 内容物"，结论是下一步走哪一支）。
+                     */
+                    _vm.CriterionLog(
+                        criterion: "轮判定",
+                        inputs: $"单一压缩包={roundSummary.SinglePackages.Count} 个；分卷={roundSummary.VolumeEntries.Count} 组；"
+                                + $"其余都是内容物={roundSummary.ContentCount} 个",
+                        verdict: roundSummary.Step.ToString(),
+                        action: roundSummary.Describe(round),
+                        level: "INFO");
+
+                    /*
                      * ⚠ **第二大步的轮边界：这一轮解开过的那几组卷，按删除档收掉**（2026-10-11，用户口径：
                      * 「**分卷记账是第二大步的事**」）。判据与执行体只有协调器那一个出口
                      * （`HarvestSolvedGroupVolumesForRound`：**入口包所在那一层** + 六道门槛 + 族尺子 + 用户源路径红线），

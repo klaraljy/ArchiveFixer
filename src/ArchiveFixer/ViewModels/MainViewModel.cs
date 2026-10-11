@@ -3373,6 +3373,20 @@ namespace ArchiveFixer.ViewModels
             int? layer = null)
             => _logService.UpdateRunContext(batch, round, sample, stage, task, layer);
 
+        /// <summary>
+        /// **写一处判据**（人读一行 + 机器读一条，字段固定）—— 大测试"只看日志排查"靠它。
+        /// ⛔ 只是记录：⛔ 不改任何判据、⛔ 不动盘上任何东西（唯一收口 `LogService.Criterion`）。
+        /// </summary>
+        public void CriterionLog(
+            string criterion,
+            string inputs,
+            string verdict,
+            string action = "",
+            string file = "",
+            string identity = "",
+            string level = "INFO")
+            => _logService.Criterion(criterion, inputs, verdict, action, file, identity, level);
+
         public void AppendLog(string level, string message)
         {
             string safeMessage = message ?? string.Empty;

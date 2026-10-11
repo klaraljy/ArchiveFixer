@@ -9503,6 +9503,18 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(
                     "WARN",
                     $"{FileNameHelper.GetFileName(piecePath)}：不接进这一组 —— 底层识别：{nature.Describe()}");
+
+                CriterionLog(
+                    "接片：这一片参不参与分卷那一套",
+                    nature.Describe(),
+                    "不参与（内容可证不是分卷组的一员）",
+                    "不接、不改名、不搬、不建链接",
+                    piecePath,
+                    nature.HasIdentity
+                        ? nature.VolumeSerial.ToString("X8", CultureInfo.InvariantCulture) + ":" + nature.FileIndex.ToString("X", CultureInfo.InvariantCulture)
+                        : string.Empty,
+                    "WARN");
+
                 return false;
             }
 
@@ -15700,6 +15712,22 @@ namespace ArchiveFixer.ViewModels
         private bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
         private void AppendLog(string message) => _vm.AppendLog(message);
 
+        /// <summary>
+        /// 写一处**判据**（人读一行 + 机器读一条，字段固定；唯一收口 <see cref="MainViewModel.CriterionLog"/>）。
+        ///
+        /// <para>⚠ 刻意**不走任务级捕获缓冲**（那条缓冲会把成功任务的 INFO 丢掉）：判据是大测试"只看日志排查"的
+        /// 唯一线索 ⇒ 它每一处都必须落进日志文件。⛔ 只是记录：判据与行为一个字都不改。</para>
+        /// </summary>
+        private void CriterionLog(
+            string criterion,
+            string inputs,
+            string verdict,
+            string action = "",
+            string file = "",
+            string identity = "",
+            string level = "INFO")
+            => _vm.CriterionLog(criterion, inputs, verdict, action, file, identity, level);
+
         /*
          * ==================== 每任务日志「攒着，成功就丢」（用户 2026-09-25 第 44 条）====================
          *
@@ -16004,7 +16032,6 @@ namespace ArchiveFixer.ViewModels
         private void AppendLog(string level, string message)
         {
             TaskLogCapture? capture = _currentTaskLog.Value;
-
             if (capture != null && !string.IsNullOrEmpty(message))
             {
                 bool isInfo = string.Equals(level, "INFO", StringComparison.OrdinalIgnoreCase);
