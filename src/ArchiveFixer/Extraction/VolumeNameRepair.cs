@@ -2523,6 +2523,28 @@ namespace ArchiveFixer.Extraction
                             string.Join("；", members.Select(m => Path.GetFileName(m))),
                             StatusText.VolumeRepairNoSiblings));
 
+                    /*
+                     * 把**判据输入**原样补一行（用户 2026-10-10 目标单③）：上面那行只说"没做"，
+                     * 而"这一片被判成哪一族 / 第几卷、同层到底有哪些候选"才是下一轮排查必须的输入。
+                     * 真机 FFFF 那批就卡在这儿：只知道没改名，分不清是尺子不认那个坏名字、还是片真的不在。
+                     * ⛔ 只写程序当场算出来的值（判不出就写「判不出」），⛔ 一处判据都不改。
+                     */
+                    string candidateName = Path.GetFileName(candidate);
+                    string? firstInFamily = VolumeGroupDetector.TryGetFirstVolumeName(candidateName);
+                    int? volumeIndex = VolumeGroupDetector.TryGetVolumeIndex(candidateName);
+
+                    log?.Invoke(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.CriterionInputsRestoreFormat,
+                            candidateName,
+                            StatusText.VolumeRepairNoSiblings,
+                            string.IsNullOrWhiteSpace(firstInFamily) ? "判不出" : firstInFamily,
+                            volumeIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出",
+                            members.Count,
+                            string.Join("；", members.Select(m => Path.GetFileName(m)))));
+
                     continue;
                 }
 

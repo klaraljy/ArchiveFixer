@@ -8507,6 +8507,29 @@ namespace ArchiveFixer.ViewModels
 
                 if (!decision.Applicable)
                 {
+                    /*
+                     * 「这一组该怎么收」判不出来的那一档也把**判据输入**写出来（用户 2026-10-10 目标单③）：
+                     * 上面那几行只说"判不出该怎么收"，而"窗口看了哪些目录、里面到底有几个同族候选、
+                     * 都叫什么"才是下一轮排查要的东西 —— 真机 FFFF 那批就是卡在"附近没有第 1 卷"这一句上，
+                     * 看不出是窗口没够到那几个目录，还是够到了但尺子不认。
+                     * ⛔ 只列事实（候选来自 `EnumerateVolumeCandidatesNearby`，与判据同一份输入），⛔ 不改判据。
+                     */
+                    string[] sample = window
+                        .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.Path))
+                        .Select(candidate => Path.GetFileName(candidate.Path))
+                        .Take(8)
+                        .ToArray();
+
+                    AppendLog(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.CriterionInputsGatherWindowFormat,
+                            task.FileName,
+                            Path.GetDirectoryName(current) ?? string.Empty,
+                            window.Count,
+                            sample.Length == 0 ? "（一个都没有）" : string.Join("；", sample)));
+
                     return false;
                 }
 
@@ -9176,6 +9199,43 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 「判不出 ⇒ 什么都不做」时把**判据输入**写进日志（用户 2026-10-10 目标单③）。
+        ///
+        /// <para>为什么必须有它：这些分支原先只有**结论**（「接不进去」），没有**判据吃进去的东西** ——
+        /// 拿一份用户日志看不出"这一片被判成哪一族、第几卷"，也看不出"规范名/目标层算成了什么"。
+        /// 真机 FFFF 那一轮就是卡在这里：只知道没接上，不知道是名字认不出还是入口层推不出来。</para>
+        ///
+        /// <para>⛔ 只写程序当场算出来的值（判不出就写「判不出」），⛔ 它一处判据都不改。</para>
+        /// </summary>
+        private void LogAdoptCriterionInputs(
+            string piecePath,
+            string reason,
+            string canonical,
+            string targetDir,
+            string target)
+        {
+            string name = FileNameHelper.GetFileName(piecePath);
+            string baseName = FileNameHelper.GetArchiveBaseName(piecePath);
+            string? first = VolumeGroupDetector.TryGetFirstVolumeName(name);
+            int? index = VolumeGroupDetector.TryGetVolumeIndex(name);
+
+            AppendLog(
+                "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.CriterionInputsAdoptFormat,
+                    name,
+                    reason,
+                    name,
+                    baseName,
+                    string.IsNullOrWhiteSpace(first) ? "判不出" : first,
+                    index?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "判不出",
+                    canonical.Length == 0 ? "判不出" : canonical,
+                    targetDir.Length == 0 ? "判不出（推不出这一组该拼到哪一层）" : targetDir,
+                    target.Length == 0 ? "判不出" : target));
+        }
+
         /// <summary>收**一片**：按规范卷名接到"这一组还缺卷"那一单的目录里；末片在手时顺手把整组接齐。</summary>
         private bool TryAdoptUnresolvedVolumePiece(string piecePath, ArchiveTask? owner)
         {
@@ -9188,6 +9248,7 @@ namespace ArchiveFixer.ViewModels
 
             if (baseName.Length == 0)
             {
+                LogAdoptCriterionInputs(piecePath, StatusText.VolumeRepairNotAVolumeName, string.Empty, string.Empty, string.Empty);
                 return false;
             }
 
@@ -9202,6 +9263,13 @@ namespace ArchiveFixer.ViewModels
              */
             if (!VolumeGroupResolver.TryGetCanonicalVolumeName(Path.GetFileName(piecePath), out string canonical))
             {
+                LogAdoptCriterionInputs(
+                    piecePath,
+                    "认不出它属于哪一族 / 第几卷（规范卷名推不出来）",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty);
+
                 return false;
             }
 
@@ -9218,6 +9286,13 @@ namespace ArchiveFixer.ViewModels
 
             if (targetDir.Length == 0)
             {
+                LogAdoptCriterionInputs(
+                    piecePath,
+                    "推不出「这一组该拼到哪一层」（入口包还没落下来，任务表里也没找到这一组）",
+                    canonical,
+                    string.Empty,
+                    string.Empty);
+
                 return false;
             }
 
@@ -9227,6 +9302,13 @@ namespace ArchiveFixer.ViewModels
             if (Directory.Exists(target))
             {
                 // 目标名被一个**目录**占着：硬链接建不出来（⛔ 绝不删、绝不覆盖）。
+                LogAdoptCriterionInputs(
+                    piecePath,
+                    "目标名被一个目录占着（⛔ 绝不覆盖、绝不删）",
+                    canonical,
+                    targetDir,
+                    target);
+
                 return false;
             }
 
@@ -9319,6 +9401,21 @@ namespace ArchiveFixer.ViewModels
                  * ⇒ 红线「判不出 ⇒ 什么都不做」，源片一直留着。按身份记，这一档从此不依赖事后反推。
                  */
                 RememberPieceSupplyingTask(baseName, piecePath);
+            }
+            else
+            {
+                /*
+                 * 接不上那一档也把判据输入写出来（目标单③）：目标名这一刻算成了什么、那一层在哪、
+                 * 盘上有没有同名 —— 光看"没接上"三个字，下一轮排查还得从头再跑一遍。
+                 */
+                LogAdoptCriterionInputs(
+                    piecePath,
+                    File.Exists(target)
+                        ? "目标名已经被别的文件占着（⛔ 绝不覆盖）"
+                        : "硬链接 / 同盘改名都没成功（同名已在、或跨了卷）",
+                    canonical,
+                    targetDir,
+                    target);
             }
 
             // 末片在哪一层，整组就得凑到哪一层（引擎只看入口旁边那一层）⇒ 末片到手就顺手把整组接齐。
