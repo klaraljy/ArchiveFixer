@@ -8181,6 +8181,14 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private readonly Dictionary<string, string> _groupLayerByBaseName = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// **这一批里哪些单是"第二大步"**（分卷阶段，只解一层 —— 用户 2026-10-11 轮次模型）。
+        /// 写点唯一 = 批末那一组齐了、交 `toRun` 照常跑这一组的那一刻（见 `RememberVolumeStepTask`）；
+        /// 读点唯一 = <see cref="IsSingleLayerRecursion(ArchiveTask?)"/>（三处递归档判据）。
+        /// ⛔ 不改用户的 `RecursionMode` 设置；本批结束随其它账一起清。
+        /// </summary>
+        private readonly HashSet<ArchiveTask> _volumeStepTasks = new();
+
         /// <summary>把"这次没删成"的那一单排进批末重试名单（⛔ 同一个生产者只排一次）。</summary>
         private void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
         {
@@ -10760,6 +10768,7 @@ namespace ArchiveFixer.ViewModels
             _producerSourcesCollected.Clear();
             _adoptedLandedPieces.Clear();
             _groupLayerByBaseName.Clear();
+            _volumeStepTasks.Clear();
         }
 
         /// <summary>单测用：把"这一片是借某个消费方用过的源片"记进既有那份账。</summary>
@@ -11561,6 +11570,13 @@ namespace ArchiveFixer.ViewModels
                     task.IsVolumeDeficitDeferred = false;
 
                     toRun.Add(task);
+
+                /*
+                 * ⚠ **这一单从现在起是"第二大步"**（用户 2026-10-11 轮次模型）：分卷阶段**只解一层** ——
+                 * 解出来的东西一律交回轮判定（里面又有分卷也不就地接着解，下一轮从第二大步再来）。
+                 * 位置就在"那一组齐了 ⇒ 照常跑这一组"这一刻；⛔ 不动用户的 `RecursionMode` 设置。
+                 */
+                RememberVolumeStepTask(task);
 
                     /*
                      * 这一组**其余的片**：内容已经由这一单解出来 ⇒ 记进既有那份"借来用过的源片"账
@@ -15590,6 +15606,7 @@ namespace ArchiveFixer.ViewModels
                 _producerSourcesCollected.Clear();
                 _adoptedLandedPieces.Clear();
                 _groupLayerByBaseName.Clear();
+                _volumeStepTasks.Clear();
                 _volumeDeficitFinalPass.Clear();
             }
 
@@ -17271,12 +17288,41 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            return IsSingleLayerRecursion();
+            return IsSingleLayerRecursion(task);
         }
 
         /// <summary>这一批是不是单层模式（递归模式下第 0 层要交给引擎，见 <see cref="DirectReadAppliesTo"/>）。</summary>
         private bool IsSingleLayerRecursion() =>
             string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// **这一单这一趟是不是"第二大步"**（用户 2026-10-11 定的轮次模型，见 `RoundProductClassifier` 的说明）：
+        /// 第二大步 = **分卷**的解压、**只解一层** —— 解出来的东西一律交回**轮判定**，
+        /// 里面又有分卷也**不就地接着解**（下一轮从第二大步再来一遍）。
+        ///
+        /// <para>为什么必须是"任务级的事实位"而不是改用户的设置：递归档
+        /// （<see cref="ArchiveFixer.Models.AppSettings.RecursionMode"/>）是**用户选的**，⛔ 这一档不许动它；
+        /// 而"这一单是第二大步"是**程序自己在批末判出来的**（那一组齐了 ⇒ 照常跑这一组，见 `toRun` 那一处）。</para>
+        ///
+        /// <para>⚠ 没点名 / 传 null ⇒ 与改动前**逐字相同**（只看设置档）。</para>
+        /// </summary>
+        private bool IsSingleLayerRecursion(ArchiveTask? task) =>
+            (task != null && _volumeStepTasks.Contains(task)) || IsSingleLayerRecursion();
+
+        /// <summary>把这一单记成"第二大步任务"（批末那一组齐了、要照常跑这一组的那一刻）。</summary>
+        private void RememberVolumeStepTask(ArchiveTask task)
+        {
+            if (task != null)
+            {
+                _volumeStepTasks.Add(task);
+            }
+        }
+
+        /// <summary>
+        /// 同 <see cref="RememberVolumeStepTask(ArchiveTask)"/>，供轮次那一层调（`OneClickCoordinator` 在轮边界
+        /// 把"判成是分卷的那几单"点成第二大步）—— ⛔ 只有一个写点语义，不另开第二套。
+        /// </summary>
+        internal void RememberVolumeStepTaskForRound(ArchiveTask task) => RememberVolumeStepTask(task);
 
         /// <summary>
         /// 本批探测哪块盘：优先归集目标目录（开了归集时产物最终都落那儿），
@@ -19732,7 +19778,7 @@ namespace ArchiveFixer.ViewModels
                     // 量不出大小不影响能不能抠，只是日志与空间预检里少个数字。
                 }
 
-                if (!IsSingleLayerRecursion())
+                if (!IsSingleLayerRecursion(task))
                 {
                     /*
                      * 递归模式：第 0 层必须交给引擎（见 DirectReadAppliesTo 的说明），照旧抠取。
@@ -20330,7 +20376,7 @@ namespace ArchiveFixer.ViewModels
              * ⚠ 这条分支里的第 0 层同样受不变量 11 保护：递归核心**每一层**开工之前都会回头问一次
              * "源文件还是原来那一份吗"（见 CheckRootSourceUnchangedAsync），不必在这里再写一遍。
              */
-            if (!string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase))
+            if (!IsSingleLayerRecursion(task))
             {
 
                 RecursionResult? recursion;

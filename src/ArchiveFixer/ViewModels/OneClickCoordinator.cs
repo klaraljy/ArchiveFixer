@@ -1201,6 +1201,25 @@ namespace ArchiveFixer.ViewModels
                     continuationLayers++;
 
                     /*
+                     * ⚠ **轮判定判成"分卷"的那几单，下一轮也走第二大步（只解一层）**（用户 2026-10-11 轮次模型）：
+                     * 上一行的分类已经按盘上事实认出了"这一轮解出来的是哪几组分卷"（`roundSummary.VolumeEntries`
+                     * 就是每一组的**入口包**）；这几单下一轮要干的正是第二大步 ⇒ 交给协调器按"只解一层"跑，
+                     * 解出来的东西再交回轮判定（FFFF 那两层分卷衔接 —— rar 分卷一轮、zip 分卷下一轮 —— 靠的就是它）。
+                     * ⛔ 不动用户的 `RecursionMode` 设置；判不出（不在名单里）⇒ 照旧老口径。
+                     */
+                    foreach (ArchiveTask next in nextRound)
+                    {
+                        if (roundSummary.VolumeEntries.Any(
+                                entry => string.Equals(
+                                    SafePathHelper.GetFullPathSafe(entry),
+                                    SafePathHelper.GetFullPathSafe(next.CurrentPath),
+                                    StringComparison.OrdinalIgnoreCase)))
+                        {
+                            _extractionCoordinator.RememberVolumeStepTaskForRound(next);
+                        }
+                    }
+
+                    /*
                      * 说清"第二层解到哪去"：内层包**不另建目录**，
                      * 它的产物与父任务归到同一个最终目录（用户诉求：一个源包 = 一个目录）。
                      */
