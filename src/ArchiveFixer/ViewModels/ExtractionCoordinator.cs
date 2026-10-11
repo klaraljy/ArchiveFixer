@@ -8830,6 +8830,28 @@ namespace ArchiveFixer.ViewModels
                         string name = Path.GetFileName(file);
 
                         /*
+                         * ⛔ **用户导入的原包自己 —— 这一档一个都不接**（2026-10-11 调试器 + 环台定案）。
+                         *
+                         * <para><b>运行期事实（`batch_evaluate` 打在 `TryAdoptUnresolvedVolumePiece` 的日志行上，
+                         * 逐字）</b>：`piecePath=…\in\111\111\111\其余物\111.rar`、`canonical=111.rar`、
+                         * `owner.FileName=111.part1.rar`、`layerOverride=null`、`renamedInPlace=true`
+                         * —— 即：**用户那份源包**（先按「源包 → 其余物」搬进过程物目录）被这条扫描当成"像分卷片"，
+                         * 又按"过程物目录里的用移动"搬进了产出层 `…\in\111\111\111`。它的字节级身份 = 与
+                         * `H:\…\测试\EEE\111\111.rar` 的 SHA-256 完全相同（`472D3B50…BE7D8`）。
+                         * 后果：它已经不在其余物里 ⇒ 其余物那一档再也删不到它 ⇒ 判据 ③ 永远剩这一个
+                         * （它**不是**这一组的片：老式族 `111.rar` 与本层那一组的新式/ZIP 族只是同基名）。</para>
+                         *
+                         * <para>⛔ 这一条**只收窄这一档**：用户的原包**按用户选的那一档处理**（其余物 / 删除），
+                         * 不在这里被改名、更不许被搬走。真正需要把一个用户的原包接进某一组时，走的是
+                         * <see cref="TryGatherGroupPiecesInto"/>（它自带"族 + 基名"那把尺子，且只在批末
+                         * "这一组该拼到哪一层"算出来之后才跑）—— 那一条路一个字没动。</para>
+                         */
+                        if (IsUserImportedSourcePath(file))
+                        {
+                            continue;
+                        }
+
+                        /*
                          * 只挑"像分卷片"的：名字带卷标记（`.z01` / `.001` / `part1` …），
                          * 或者它自己自述是跨盘 ZIP 的末片（末片的 EOCD 是明文 ⇒ 这一条是**硬证据**）。
                          */
@@ -9559,6 +9581,24 @@ namespace ArchiveFixer.ViewModels
                 bool fromProcessFolder = ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath);
                 string ownerStage = ResolveOwnerStageDirectory(owner);
                 bool moveIntoGroup = ShouldMovePieceIntoGroup(piecePath, ownerStage, CollectLiveChainWorkDirectories());
+
+                /*
+                 * ⛔ **用户导入的原包自己 ⇒ 只建链接，绝不搬**（项目既有红线的延伸：用户源目录里的片
+                 * 「只硬链接、不改名不搬」—— 而那一条原来只管"在用户目录里"的情形，管不到"用户的原包
+                 * 被源包档搬进过程物目录之后"这一档）。
+                 *
+                 * <para><b>运行期事实</b>（`batch_evaluate` 打在接片那一档的日志行上）：EEE 里
+                 * `piecePath=…\in\111\111\111\其余物\111.rar` 走的就是"过程物目录 ⇒ 用移动"那一支
+                 * （`renamedInPlace=true`）⇒ 用户那份源包被搬出其余物、再也没人按档处理它。</para>
+                 *
+                 * <para>⛔ 判据取既有事实位（<see cref="IsUserImportedSourcePath"/>：非续解任务的那几单
+                 * = 用户给的原包）；⛔ 判不出 ⇒ 照旧老口径（该搬还是搬）。硬链接是**另起一个规范卷名**，
+                 * 源文件一个字节没动 —— 与「接片」那一档对用户文件的既有口径完全一致。</para>
+                 */
+                if (moveIntoGroup && IsUserImportedSourcePath(piecePath))
+                {
+                    moveIntoGroup = false;
+                }
 
                 /*
                  * ===== 用户源目录里的那一片：⛔ **仍然只硬链接**（四次试做都撞在同一处，如实记账）=====
