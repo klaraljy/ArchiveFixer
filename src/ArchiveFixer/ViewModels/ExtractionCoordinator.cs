@@ -6059,8 +6059,22 @@ namespace ArchiveFixer.ViewModels
                     if (!isDirectory && IsVolumePartFile(move.From))
                     {
                         string pieceName = Path.GetFileName(move.From);
-                        string groupLayer = ResolveBatchGroupDirectory(
-                            FileNameHelper.GetArchiveBaseName(pieceName));
+
+                        /*
+                         * ⚠ **读"接片那一刻定下来的层"，⛔ 不在这里重算**（2026-10-11 实测）：
+                         * 这一档原来转调 `ResolveBatchGroupDirectory` 的 1 参版，而它当年靠"先到先得"那条
+                         * 兜底才答得出层；兜底按用户口径删掉之后它答不出 ⇒ 这道闸门**静默失效**
+                         * ⇒ 本单的工作区那一份又被发布到产出方落点里，成了**没人认领的多余名**
+                         * （实测残留逐字 `…\out-…\111(2)_\111.z01`；守门用例
+                         * `SiblingFolderVolumeGatherTests.真机形状_过路层那一单的其余物按档删掉_48MB那处`
+                         * 第 ③ 条断言「盘上收口：只剩成品本身」钉的就是它）。
+                         * 层只有一个出口：接片那一档算过的那个（`_groupLayerByBaseName`）。
+                         */
+                        string groupLayer = _groupLayerByBaseName.TryGetValue(
+                            FileNameHelper.GetArchiveBaseName(pieceName),
+                            out string? rememberedLayer)
+                            ? rememberedLayer
+                            : string.Empty;
 
                         if (groupLayer.Length > 0 && File.Exists(Path.Combine(groupLayer, pieceName)))
                         {
@@ -8152,6 +8166,21 @@ namespace ArchiveFixer.ViewModels
         private readonly List<(ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot)>
             _adoptedLandedPieces = new();
 
+        /// <summary>
+        /// **这一组已经拼到哪一层去了**（组基名 → 层目录；本批内有效）。
+        ///
+        /// <para>写点唯一 = <see cref="TryAdoptUnresolvedVolumePiece"/> **真的把这一片接进去之后**
+        /// （那一刻层是它按入口包算出来的）；读点 = 「定稿那一档」那道
+        /// "这一片已经由接片搬进这一组的落点层 ⇒ 产出方这一份是多余名，不落地"（见它调用处）。
+        ///
+        /// <para><b>为什么要它</b>（2026-10-11 实测）：那道闸门原来问的是
+        /// <see cref="ResolveBatchGroupDirectory"/> 的 1 参版 —— 它当年靠"先到先得"那条兜底才答得出层，
+        /// 兜底按用户口径删掉之后就**静默失效** ⇒ 定稿把工作区那一份又发布到产出方落点里
+        /// （实测残留逐字 `…\out-…\111(2)_\111.z01`，一个字节不多、但**没人认领**）。
+        /// 同一件事的真值只允许有一个出口 ⇒ 这里**记住**接片那一刻算出来的层，⛔ 不重算、⛔ 不看谁先到。</para>
+        /// </summary>
+        private readonly Dictionary<string, string> _groupLayerByBaseName = new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>把"这次没删成"的那一单排进批末重试名单（⛔ 同一个生产者只排一次）。</summary>
         private void RememberPendingPassThroughRest(ArchiveTask producer, ArchiveTask consumer, string groupBaseName)
         {
@@ -9021,8 +9050,9 @@ namespace ArchiveFixer.ViewModels
         /// <para><b>其余判据也全是运行期事实</b>（2026-10-10 调试器在 <c>TryAdoptUnresolvedVolumePiece</c>
         /// 接片点逐次读出来的）：</para>
         /// <list type="number">
-        /// <item><description><paramref name="renamedInPlace"/> == false —— 接片**没有**把原位置那一份搬走
-        /// （搬走那一档原位置已经没有了，收场时无从谈起）；</description></item>
+        /// <item><description><paramref name="renamedInPlace"/> == false —— 接片**没有**把原位置那一份搬走；
+        /// == true 时（搬的是工作区里那一份）改记**产出方落点里那一份"落地副本"**
+        /// （见方法体里那段注释；两者都没有 ⇒ 什么都不记）；</description></item>
         /// <item><description>认得出**是哪一单**的落点树里那一份（认不出 ⇒ 一个字都不记）；</description></item>
         /// <item><description>⛔ 不在**过程物目录**里（<see cref="ProcessArtifactLayout.IsInsideDeletableProcessFolders"/>）
         /// —— 那一档是"整份会被删掉"的地方（工作区 / 其余物），不归这条账管
@@ -9039,11 +9069,35 @@ namespace ArchiveFixer.ViewModels
             string groupBaseName,
             bool renamedInPlace)
         {
-            if (renamedInPlace
-                || string.IsNullOrWhiteSpace(piecePath)
-                || string.IsNullOrWhiteSpace(groupBaseName))
+            if (string.IsNullOrWhiteSpace(piecePath) || string.IsNullOrWhiteSpace(groupBaseName))
             {
                 return;
+            }
+
+            /*
+             * ⚠ **「搬」那一档也算产出方那一份**（2026-10-11 实测补上，第 ③ 条断言打红现场）：
+             *
+             * 原来这里对 `renamedInPlace == true` 直接 return，理由是"搬走那一档原位置已经没有了"——
+             * 工作区里那一份确实没了，**但产出方落点里还留着"落地那一份"**（定稿发布时补的那个同名副本，
+             * 与它同一份字节的第二个名字）。于是那一个名字谁都不要：
+             * `PurgeGroupLandedPieces` 账上没有它 ⇒ 一整批跑完它还在盘上。
+             * 实测残留逐字：`…\out-0530d2770fb145bc85e282068d695a9c\111(2)_\111.z01`
+             * （守门用例 `SiblingFolderVolumeGatherTests.真机形状_过路层那一单的其余物按档删掉_48MB那处`
+             * 第 ③ 条断言「盘上收口：只剩成品本身」钉的就是它；HEAD 之所以绿，是当年那条"先到先得"兜底
+             * 让定稿那一档压根没补这个副本 —— 兜底已按用户口径删除 ⇒ 这里必须自己认领）。
+             *
+             * ⛔ 判不出产出方 / 落点里没有那一个名字 ⇒ 与改动前逐字相同（什么都不记）。
+             */
+            if (renamedInPlace)
+            {
+                string landedCopy = FindLandedCopyBesideProducer(piecePath, owner);
+
+                if (landedCopy.Length == 0)
+                {
+                    return;
+                }
+
+                piecePath = landedCopy;
             }
 
             if (ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath))
@@ -9094,6 +9148,39 @@ namespace ArchiveFixer.ViewModels
             }
 
             _adoptedLandedPieces.Add((producer, groupBaseName, piecePath, outputRoot));
+        }
+
+        /// <summary>
+        /// **这一片在产出方落点里那一份「落地副本」**（唯一出口；⛔ 只回答"盘上有没有这么一个名字"，
+        /// 一个字节都不搬、不删）：与 <paramref name="piecePath"/> **同名、不是同一个路径**、
+        /// 且就在**产出方落点根**（<see cref="ResolveOwnerChainDirectory"/>）底下。
+        ///
+        /// <para>为什么要问它：接片走"移动"那一档，动的是**工作区里那一份**；而定稿发布补出来的
+        /// "落地那一份"还在产出方落点里 —— 那同样是"产出方那一份已经落地的片"，收场时得有人认领它
+        /// （见 <see cref="RememberAdoptedLandedPiece"/>）。判不出 ⇒ 空串（调用方什么都不记）。</para>
+        /// </summary>
+        private string FindLandedCopyBesideProducer(string piecePath, ArchiveTask? owner)
+        {
+            ArchiveTask? producer = ResolveLandedPieceProducer(piecePath, owner);
+
+            if (producer == null)
+            {
+                return string.Empty;
+            }
+
+            string landing = ResolveOwnerChainDirectory(producer);
+            string name = FileNameHelper.GetFileName(piecePath);
+
+            if (landing.Length == 0 || name.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            string candidate = Path.Combine(landing, name);
+
+            return File.Exists(candidate) && !SafePathHelper.PathEquals(candidate, piecePath)
+                ? candidate
+                : string.Empty;
         }
 
         /// <summary>
@@ -9259,7 +9346,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>收**一片**：按规范卷名接到"这一组还缺卷"那一单的目录里；末片在手时顺手把整组接齐。</summary>
-        private bool TryAdoptUnresolvedVolumePiece(string piecePath, ArchiveTask? owner)
+        private bool TryAdoptUnresolvedVolumePiece(string piecePath, ArchiveTask? owner, string? layerOverride = null)
         {
             if (string.IsNullOrWhiteSpace(piecePath) || !File.Exists(piecePath))
             {
@@ -9303,8 +9390,20 @@ namespace ArchiveFixer.ViewModels
              *
              * 入口包还不在盘上（批首那一刻 / 它没被解出来）⇒ 退回旧口径（任务表里第一单那一层），
              * 那一档行为与改动前逐字相同。
+             *
+             * ⚠ **一层只准算一次**（2026-10-11 实测，`ChainInnerVolumeRestoreTests.真机布局…` 那条真机形状打红）：
+             * 批末那一遍（`TryGatherGroupPiecesInto`）**已经**按入口包把这一组的层算出来了，可它交下来的每一片
+             * 原来又**各自重算一遍** —— 而重算这一遍用的是**这一片自己的名字**，真机上那几片的名字是脏的
+             * （`111_.part2` / `111_.pasrt3.rcar` / `111_.par删t1.ra除r`）⇒ 撞上"脏名不启用新判据"那道闸门
+             * ⇒ 每一片都回一句「判不出」 ⇒ 三片一片都接不进去，整组永远停在缺卷（日志逐字：
+             * `批末重判 —— 这一组该拼到哪一层 = …\out\111__.rLLLLar` 紧跟着
+             * `111_.part2：这一片接不进这一组 —— 推不出「这一组该拼到哪一层」`）。
+             * ⇒ 同一件事的真值**只允许有一个出口**：外层已经定过的层，原样交下来用（`layerOverride`），
+             * ⛔ 接片这一档**不再自己重算**。
              */
-            string targetDir = ResolveBatchGroupDirectory(baseName);
+            string targetDir = string.IsNullOrWhiteSpace(layerOverride)
+                ? ResolveBatchGroupDirectory(baseName, null, piecePath)
+                : layerOverride!;
 
             if (targetDir.Length == 0)
             {
@@ -9438,6 +9537,20 @@ namespace ArchiveFixer.ViewModels
 
             if (adopted)
             {
+                /*
+                 * **这一组拼到哪一层**是一个已经做过的决定（两条支路都算过）⇒ 记下来给别的档读，
+                 * ⛔ 不让它们重算一遍（读点见 `_groupLayerByBaseName` 的注释：定稿那一档"不落地"的闸门）。
+                 *
+                 * ⚠ **只有"拼到了别处那一层"才算**：算出来的层就是这一片自己待着的那一层时（接片是空操作，
+                 * 常见于"这一片本身就是入口/这一组只有它"），不存在"已经把这一份拼进去了"这件事
+                 * —— 记了它，定稿那一档就会把本该发布的产物当成"多余名"而不落地
+                 * （实测打红：`InnerLayerContinuationTests.外层包只有内层包时_内容物落进外层包名目录而不是平铺进共用根`）。
+                 */
+                if (!SafePathHelper.PathEquals(targetDir, Path.GetDirectoryName(piecePath) ?? string.Empty))
+                {
+                    _groupLayerByBaseName[baseName] = targetDir;
+                }
+
                 /*
                  * 记下"是这一单吐出了这一片"：整组由别单解开、而且**可证完整**之后，这一单也按跟班卷收场
                  * （真机第九批 CCCC：`111.rar` / `111(2)_.zip` 各吐一片，整组解开并校验通过了，
@@ -9952,9 +10065,22 @@ namespace ArchiveFixer.ViewModels
         /// —— 一个字都不放宽，只是"不认得就不认"。⛔ 同一个问题（"哪些文件属于这一组"）
         /// 只许有这一个出口，各处不许再自己拼 `<基名>.zip`。</para>
         /// </summary>
-        private static string ResolveGroupReferenceName(ArchiveTask? task, string baseName)
+        private static string ResolveGroupReferenceName(ArchiveTask? task, string baseName, string? memberPath = null)
         {
-            string own = FileNameHelper.GetFileName(task?.CurrentPath ?? string.Empty);
+            /*
+             * ⚠ **优先拿"手上这一片"的名字**（2026-10-11 订正）：它按定义就在这一组里；而"调用方那一单自己的文件名"
+             * 在**接片**那条路上拿不到（调用方给的是 null）⇒ 老写法只能退回 `<基名>.zip`，
+             * 可那把尺子只对**跨盘 ZIP 族**成立 —— RAR 新式（`X.partN.rar`）/ 数字族（`X.7z.001`）
+             * 用 `X.zip` 去比，`BelongsToSameGroup` 恒 false ⇒ 这一组的成员**一个都收不进来**
+             * （真机 FFFF：`111_` 那一组就是这么互相看不见的）。
+             *
+             * ⛔ 判据与老口径**同一把尺子**（`BelongsToSameGroup` 自比），只是参照物多了一个来源；
+             * 名字解析不出来 ⇒ 照旧退回 `<基名>.zip`（一个字都不放宽）。
+             */
+            string own = FileNameHelper.GetFileName(
+                !string.IsNullOrWhiteSpace(memberPath)
+                    ? memberPath!
+                    : task?.CurrentPath ?? string.Empty);
 
             /*
              * 拿尺子自比来问"这个名字解析得出来吗"：解析得出来时它必然与自己是同一族同一基名。
@@ -9974,19 +10100,41 @@ namespace ArchiveFixer.ViewModels
         /// 见 <see cref="Detection.GroupVolumeDirectory"/>：RAR 分卷 = `.part1.rar`、7z 分卷 = `.7z.001`、
         /// zip 分卷 = `.zip`（跨盘那一族）或 `.zip.001`（7-Zip 切的通用分片））。
         ///
-        /// <para>入口包已经在盘上（第一次接片之后就一直在了）⇒ 按它的位置收；还不在盘上
-        /// （真机 CCCC 批首那一刻：末片 `111.zip` 正压在 `111.rar` 里）⇒ 退回旧口径
-        /// （任务表里这一组第一单那一层）当兜底 —— 兜底那一档是**同一个事实位**：
-        /// 那一片接进去之后，入口包就在那一层，落点推导与这里读到的答案永远一致。</para>
+        /// <para><b>判据是"程序性"的（2026-10-11 订正）</b>：答案只能是 **(族, 基名, 盘上事实)** 的纯函数 ——
+        /// ① 入口包**在盘上** ⇒ 它所在那一层（纯查盘：任务表里这一组的成员 + 各单产出树里已经落盘的这一组成员，
+        /// 一起交给 <see cref="Detection.GroupVolumeDirectory.Resolve"/>）；② 还不在盘上 ⇒ 沿**产出链**推它将来落在哪一层
+        /// （与落点实现同一个出口）；③ 两条都答不出 ⇒ **空串 = 这一次不决定**。
+        /// ⛔ 顺序只决定"什么时候算得出来"，**不决定"算出来是什么"**。</para>
         ///
-        /// <para>判据全部转调既有那几把尺子（<see cref="VolumeGroupDetector.BelongsToSameGroup"/> 认"同一组"，
+        /// <para>⛔ 判据全部转调既有那几把尺子（<see cref="VolumeGroupDetector.BelongsToSameGroup"/> 认"同一组"，
         /// 所以脏名 `111.z0删除2` 照样认得出；<see cref="Detection.GroupVolumeDirectory.Resolve"/> 认"入口包在哪儿"），
-        /// ⛔ 这里不自己拼族规则、⛔ 不看盘上还有没有别的兄弟（那件事属于收卷，见 <c>ResolveSpannedZipDiskGather</c>）。
-        /// 找不到 ⇒ 空串 = 什么都不做。</para>
+        /// ⛔ 这里不自己拼族规则、⛔ 不看盘上还有没有别的兄弟。</para>
         /// </summary>
-        private string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null)
+        /// <param name="memberPath">
+        /// **手上这一片**（可选）：它是这一组的成员，拿它的名字当"同一组"那把尺子的参照物
+        /// —— ⛔ 不再一律退回 `<基名>.zip`（那只对跨盘 ZIP 族成立）。
+        /// ⚠ **闸门**：它的名字必须解析得出一条"**没被改坏**"的线索（见方法体里那句"干不干净"），
+        /// 名字带垃圾尾巴的那一档（实测 `333.7z.001.txt`）**不许**启用新判据 —— 那一档连规范名都算不对
+        /// （会算出 `333.7z.001.001`），照旧走老口径（行为与改动前逐字相同）。
+        /// </param>
+        private string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null, string? memberPath = null)
         {
-            string tailName = ResolveGroupReferenceName(task, baseName);
+            /*
+             * ⚠ "手上这一片的名字干不干净" = **它自己算出来的规范名就是它自己**（唯一出口
+             * `VolumeGroupResolver.TryGetCanonicalVolumeName`）。
+             * ⛔ 脏名那一档不许启用新判据：`333.7z.001.txt` 那一档的规范名是 `333.7z.001.001`（错的），
+             * 拿它当参照物会牵出一串错名字（实测：`PlacementRulesTests.文件未指定位置…` 多出一个同名目录）。
+             * 判不出 ⇒ 当作"不干净" ⇒ 老口径。
+             */
+            string memberName = FileNameHelper.GetFileName(memberPath ?? string.Empty);
+            bool memberNameIsClean = memberName.Length > 0
+                && VolumeGroupResolver.TryGetCanonicalVolumeName(memberName, out string memberCanonical)
+                && string.Equals(memberCanonical, memberName, StringComparison.OrdinalIgnoreCase);
+
+            string tailName = memberNameIsClean
+                ? ResolveGroupReferenceName(task, baseName, memberPath)
+                : ResolveGroupReferenceName(task, baseName);
+
             var members = new List<string>();
 
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
@@ -10000,6 +10148,48 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            // 手上这一片也算成员（它可能还没进任务表，或者来自别的单那条链）。
+            if (memberNameIsClean && !members.Contains(memberPath!))
+            {
+                members.Add(memberPath!);
+            }
+
+            /*
+             * ===== ① 入口包在盘上 ⇒ 它所在那一层 =====
+             * 成员除了"任务表里这一组的"，还要包括**各单产出树里已经落盘的这一组成员** ——
+             * 分卷的片是别的单解出来的产物，它们不在任务表里（任务表只装用户导入的那些包），
+             * 只看任务表就会漏掉入口包（真机 FFFF：入口包 `111_.part1.rar` 是 `111__.rar` 那条链解出来的）。
+             * ⛔ 仍然只由那把唯一尺子回答"入口包在哪一层"，⛔ 不按名字单独找入口包
+             * （实测踩到：就地整理那一档下"按名字在产出树里找"会把**源文件自己**当成入口）。
+             */
+            if (memberNameIsClean)
+            {
+                foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
+                {
+                    if (other == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (string directory in new[] { other.OutputPath, other.ContentDirectoryPath, other.RestDirectoryPath })
+                    {
+                        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                        {
+                            continue;
+                        }
+
+                        foreach (string candidate in CollectVolumeFilesInDirectory(directory))
+                        {
+                            if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(candidate), tailName)
+                                && !members.Contains(candidate))
+                            {
+                                members.Add(candidate);
+                            }
+                        }
+                    }
+                }
+            }
+
             Detection.GroupVolumeDirectory.Entry entry = Detection.GroupVolumeDirectory.Resolve(members);
 
             if (entry.Directory.Length > 0 && Directory.Exists(entry.Directory))
@@ -10008,59 +10198,16 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 入口包**不在任务表那几层里**：它由 `PublishUnresolvedVolumePieces` 落在
-             * **产出它的那一单**自己那条链的落点目录里（真机 CCCC：`111.zip` 由 `111.rar` 解出来、
-             * 落在 `CCCC\111\111\`，而"还缺卷"那两单是散在 `111(3)`/`111(4)` 的源片）。
-             * ⇒ 到那一层再找一遍入口（用户 2026-10-06：「111.zip 的位置已经确定，你把分卷移过来不就是了吗」）。
-             */
-            string producerDirectory = ResolveGroupProducerDirectory(baseName);
-
-            if (producerDirectory.Length > 0)
-            {
-                var nearby = new List<string>(members);
-
-                // 这一单账上那几卷也要喂进去：`GroupVolumeDirectory.Resolve` 要看到"入口 + 至少一个组内成员"。
-                if (task != null)
-                {
-                    foreach (string volumePath in task.VolumePaths)
-                    {
-                        nearby.Add(volumePath);
-                    }
-                }
-
-                foreach (string candidate in CollectVolumeFilesInDirectory(producerDirectory))
-                {
-                    if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(candidate), tailName))
-                    {
-                        nearby.Add(candidate);
-                    }
-                }
-
-                Detection.GroupVolumeDirectory.Entry fromProducer =
-                    Detection.GroupVolumeDirectory.Resolve(nearby);
-
-                if (fromProducer.Directory.Length > 0 && Directory.Exists(fromProducer.Directory))
-                {
-                    return fromProducer.Directory;
-                }
-
-                if (Directory.Exists(producerDirectory))
-                {
-                    return producerDirectory;
-                }
-            }
-
-            /*
-             * ===== 入口包**还没落地**：按产出链**一层一层**推它将来落在哪一层（用户 2026-10-06 拍板）=====
+             * ===== ② 入口包**还没落地**：按产出链**一层一层**推它将来落在哪一层（用户 2026-10-06 拍板）=====
              *
              * ⛔ **旧口径（"任务表里第一单那一层"）已作废**：真机 2026-10-06 14:33 那次就是它把入口包
              * `111.zip` 接到了 `111(4)`（日志逐字：`已按规范卷名 111.zip 接到「111(4)」这一层`），
              * 于是列表第一项挂着 48 MB、产物也跟着落错层。用户原话：「**我说过多少遍在 `111.zip` 所在位置**，
              * 你为什么还解压在列表第一项」。
              *
-             * 现在只认一个出口（与落点实现同一份判据 `ResolveProducerEntryArchivePathCore`）：
+             * 只认一个出口（与落点实现同一份判据 `ResolveProducerEntryArchivePathCore`）：
              * 沿产出链把入口包的落点**逐层叠**出来，取它所在那一层。
-             * 判不出（谁都没吐过片 / 拿不到产出方）⇒ 空串 ⇒ 调用方什么都不做。
+             * ⚠ 问的是"**产出入口包**的那一单"，⛔ 不是"谁先吐过一片"。
              */
             foreach (string member in members)
             {
@@ -10091,14 +10238,53 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 最后一道兜底：**产出方那条链的落点目录**（即使那里暂时还没有入口包）。
+             * ===== ③ 判不出 ⇒ **空串 = 这一次不决定**（调用方"什么都不做"，等入口包出现后再问一次）=====
              *
-             * 为什么留着它：单层路里入口包（`111.zip`）是**下一轮的内层包**，还躺在"其余物"里没落地
-             * （那条路承诺"内层包原样留着"，见 `InnerLayerContinuationTests` —— 那条红线不能碰）。
-             * 可"收片要收到哪一层"这件事**与入口包当前在哪儿无关**：它该去的是**产出它的那一单
-             * 自己那条链**（`111\111.rar` ⇒ `111\111\`）。
+             * ⛔ **这里删掉了一条兜底**（2026-10-11，真机 FFFF 那一批 + 复现用例把它钉死）：
+             * 原来最后还问 `ResolveGroupProducerDirectory(baseName)` = "**谁先把这一组的片吐出来**，
+             * 就落谁那条链的落点目录"（读 `_groupPieceProducers`）—— 于是这一组的层**由时序决定**：
+             * 同一份输入，谁先跑完谁定层。真机那一批就是它把四片全收进了 `1113__.rar` 那条链的层
+             * （它只是恰好第一个吐出 part3），而真正的入口包 `111_.part1.rar` 是**最后**才出来的
+             * （它得先穿两层 rar→zip），反被搬进别人的层（盘上同一个 inode 挂了三四个名字，
+             * `fsutil hardlink list` 逐字可查）。
+             * ⇒ **"谁先到"不许当判据**；判不出时正解是"这一次不决定"，不是"先占一层"。
+             * ⛔ `_groupPieceProducers` 那份账照旧保留：它回答"有哪些片被产出来了 / 该谁收场"，
+             *   **不回答层**（谁先产出一片与"入口包在哪"是两件事）。
              */
-            return ResolveGroupProducerDirectory(baseName);
+            string observed = !string.IsNullOrWhiteSpace(memberPath)
+                ? memberPath!
+                : task?.CurrentPath ?? string.Empty;
+            string entryName = VolumeGroupDetector.TryGetFirstVolumeName(FileNameHelper.GetFileName(observed))
+                ?? string.Empty;
+            string producerName = "判不出";
+
+            foreach (string member in members)
+            {
+                ArchiveTask owner = FindTaskByPath(member) ?? task ?? new ArchiveTask(member, 0);
+
+                if (FindProducerTaskForPackage(owner, member, entryName) is { } producerTask)
+                {
+                    producerName = producerTask.LogName;
+                    break;
+                }
+            }
+
+            /*
+             * ⚠ 这一行是"判不出"那一档的**判据输入**（规矩：只拿一份用户日志就能定位）——
+             * 它此前一个字都不写，真机 FFFF 那一批就是卡在这里看不出是"尺子不认"还是"产出方找不到"。
+             */
+            AppendLog(
+                "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.CriterionInputsGroupLayerFormat,
+                    FileNameHelper.GetFileName(observed),
+                    tailName,
+                    members.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    entryName.Length == 0 ? "判不出" : entryName,
+                    producerName));
+
+            return string.Empty;
         }
 
         /// <summary>按路径找任务表里那一单（找不到 ⇒ null；⛔ 只读，不新建）。</summary>
@@ -10159,7 +10345,7 @@ namespace ArchiveFixer.ViewModels
             {
                 try
                 {
-                    TryAdoptUnresolvedVolumePiece(path, task);
+                    TryAdoptUnresolvedVolumePiece(path, task, entryLayer);
                 }
                 catch (Exception ex)
                 {
@@ -10168,9 +10354,24 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * ⚠ 再扫一遍**我们自己那两棵树**（成品那一层 + 其余物那一层）：单层路里入口包
-             * （真机 `111.zip`）是**下一轮的内层包**，正躺在"其余物"里（那条路承诺"内层包原样留着"，
-             * `InnerLayerContinuationTests` 钉着这条红线）⇒ 光看任务表看不见它。
+             * ⚠ 再扫一遍**我们自己那几棵树**：成品那一层 / 其余物那一层 / **这一单自己的落点层**。
+             *
+             * · 成品 + 其余物：单层路里入口包（真机 `111.zip`）是**下一轮的内层包**，正躺在"其余物"里
+             *   （那条路承诺"内层包原样留着"，`InnerLayerContinuationTests` 钉着这条红线）⇒ 光看任务表看不见它。
+             * · **这一单的落点层（`OutputPath`）**：每一条链解开之后是**它自己**把片"定稿"进自己那一层的
+             *   （`PublishUnresolvedPieceLandingCopies` 用的就是这一个事实位）—— 而 `ContentDirectoryPath`
+             *   只是**成功那条路**才记的一笔账。
+             *
+             * ⚠ 为什么必须补第 ③ 个目录（2026-10-11 调试器实测，`TryGatherGroupPiecesInto` 帧里读的变量）：
+             * 真机形状「入口包最后到」跑批末那一遍时
+             *   `pack3.rar|…\in\pack3\pack3 ;; pack2.rar|（空串） ;; pack1.rar|（空串） ;; 111_.part4.rar|（空串）`
+             * —— 四单的 `ContentDirectoryPath` 只有 pack3 有值；而同一帧里 `OutputPath` 四单**全都有值**
+             *   （`pack2.rar|…\in\pack2\pack2` 正是 `111_.part2.rar` 躺着的那个目录）。
+             * `pack2.rar` 之所以没记上那一笔：它的链**校验未通过**（产物校验未通过：预期 2 个文件 / 2097152 字节，
+             * 实际 1 个 / 1048576 字节），在那条 `return false` 上早退了，`ContentDirectoryPath` 的赋值在它下面
+             * ⇒ 这一组永远收不到 part2 ⇒ 四片永远凑不齐。**这一档与"谁先到"无关**：片在不在自己落点层，
+             * 是那一条链定稿之后盘上的事实。
+             *
              * ⛔ 这一步只**硬链接**（零字节、只读），⛔ 其余物里那一份一个字节都不动 ——
              * 它的去留仍由既有口径决定（轮次续解会把剩下的当内层包接着解）。
              */
@@ -10181,7 +10382,10 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                foreach (string directory in new[] { other.ContentDirectoryPath, other.RestDirectoryPath })
+                foreach (string directory in new[]
+                         {
+                             other.ContentDirectoryPath, other.RestDirectoryPath, other.OutputPath
+                         })
                 {
                     if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
                     {
@@ -10194,7 +10398,7 @@ namespace ArchiveFixer.ViewModels
                         {
                             if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                             {
-                                TryAdoptUnresolvedVolumePiece(path, task);
+                                TryAdoptUnresolvedVolumePiece(path, task, entryLayer);
                             }
                         }
                         catch (Exception ex)
@@ -10354,29 +10558,6 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>
-        /// **产出这一组某一片的那一单**自己那条链的落点目录（唯一出口 <see cref="ResolveOwnerChainDirectory"/>）。
-        /// 找不到产出方 ⇒ 空串（调用方退回旧口径）。
-        /// </summary>
-        private string ResolveGroupProducerDirectory(string baseName)
-        {
-            if (!TrySnapshotGroupPieceProducers(baseName, out List<ArchiveTask> producers))
-            {
-                return string.Empty;
-            }
-
-            foreach (ArchiveTask producer in producers.ToList())
-            {
-                string directory = ResolveOwnerChainDirectory(producer);
-
-                if (directory.Length > 0)
-                {
-                    return directory;
-                }
-            }
-
-            return string.Empty;
-        }
 
         /// <summary>
         /// **这一层里的东西是不是都属于这一组**（"过路层"其余物放行前的**前置闸门**，唯一出口）。
@@ -10556,6 +10737,7 @@ namespace ArchiveFixer.ViewModels
             _consumedVolumeSources.Clear();
             _producerSourcesCollected.Clear();
             _adoptedLandedPieces.Clear();
+            _groupLayerByBaseName.Clear();
         }
 
         /// <summary>单测用：把"这一片是借某个消费方用过的源片"记进既有那份账。</summary>
@@ -10709,8 +10891,17 @@ namespace ArchiveFixer.ViewModels
                     string name = FileNameHelper.GetFileName(piece);
                     string baseName = FileNameHelper.GetArchiveBaseName(name);
 
-                    // 这一组那一层已经有同一个名字 ⇒ 不再在产出它的那一单自己的落点里多留一份。
-                    string groupDirectory = ResolveBatchGroupDirectory(baseName);
+                    /*
+                     * 这一组那一层已经有同一个名字 ⇒ 不再在产出它的那一单自己的落点里多留一份。
+                     *
+                     * ⚠ **手上有什么就交什么**（2026-10-11 实测）：这一档原来只交基名 ⇒ 那条路只能退回
+                     * 当年那条"先到先得"兜底；兜底已按用户口径删除 ⇒ 它答不出层 ⇒ 这一道闸门**静默失效**
+                     * ⇒ 产出方落点里多出一个**没人认领的名字**（实测残留逐字：
+                     * `…\out-…\111(2)_\111.z01`，`SiblingFolderVolumeGatherTests.真机形状_过路层那一单的其余物按档删掉_48MB那处`
+                     * 第 ③ 条断言「盘上收口：只剩成品本身」钉的就是它）。这一帧里有**产出这一片的这一单**（`owner`）
+                     * 与**这一片自己**（`piece`）⇒ 交给那把唯一尺子（⛔ 不看谁先到）。
+                     */
+                    string groupDirectory = ResolveBatchGroupDirectory(baseName, owner, piece);
 
                     if (groupDirectory.Length > 0 && File.Exists(Path.Combine(groupDirectory, name)))
                     {
@@ -11191,10 +11382,24 @@ namespace ArchiveFixer.ViewModels
                  */
                 string entryLayer = ResolveBatchGroupDirectory(
                     FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty),
-                    task);
+                    task,
+                    task.CurrentPath);
 
                 if (entryLayer.Length > 0)
                 {
+                    /*
+                     * ⚠ 一行"这一组该拼到哪一层 = 哪儿"（2026-10-11 加）：这是批末唯一会**收片**的地方，
+                     * 而它此前一个字都不写 —— 判出来没判出来、"片收去哪儿了"在用户日志里都看不见
+                     * （真机 FFFF 那一批就是这么卡住的）。⛔ 只写程序当场算出来的值。
+                     */
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.GroupLayerResolvedAtBatchEndFormat,
+                            task.LogName,
+                            entryLayer));
+
                     TryGatherGroupPiecesInto(task, entryLayer);
                 }
 
@@ -15305,6 +15510,7 @@ namespace ArchiveFixer.ViewModels
                 ClearGroupPieceProducers();
                 _producerSourcesCollected.Clear();
                 _adoptedLandedPieces.Clear();
+                _groupLayerByBaseName.Clear();
                 _volumeDeficitFinalPass.Clear();
             }
 
