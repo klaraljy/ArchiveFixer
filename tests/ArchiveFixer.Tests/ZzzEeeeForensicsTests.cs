@@ -69,6 +69,51 @@ namespace ArchiveFixer.Tests
             Directory.CreateDirectory(outputRoot);
             CopyDirectory(source, input);
 
+            /*
+             * ⚠ **副本核对必须发生在跑管线之前**（2026-10-11 实测修掉一个"假报警"）：
+             * 本取证用例按用户那一档跑（源包 → 放入其余物 + 其余物彻底删除），跑完**原件在夹具里已经没了**
+             * ⇒ 环台 `cycle.ps1` 第 ③ 步（跑完之后再拿 H: 原件与夹具副本逐个哈希对比）**必然全 ✘**
+             * —— 那不是"副本坏了"，是"那一档就是要把它们删掉"。⇒ 核对挪到复制之后、跑管线之前，
+             * 逐条打印一行给环台解析（⛔ 环台不再自己做那次没意义的对比）。
+             */
+            var copyChecks = new List<string>();
+            string[] originalFiles = Directory.GetFiles(source, "*", SearchOption.AllDirectories);
+
+            foreach (string original in originalFiles)
+            {
+                string relative = Path.GetRelativePath(source, original);
+                string copy = Path.Combine(input, relative);
+
+                if (!File.Exists(copy))
+                {
+                    copyChecks.Add($"✘ 副本缺失  {relative}");
+                    continue;
+                }
+
+                var originalInfo = new FileInfo(original);
+                var copyInfo = new FileInfo(copy);
+
+                if (originalInfo.Length != copyInfo.Length)
+                {
+                    copyChecks.Add($"✘ 大小不一致  {relative}  {originalInfo.Length} → {copyInfo.Length}");
+                    continue;
+                }
+
+                bool sameBytes = StreamsAreEqual(original, copy);
+
+                copyChecks.Add(
+                    sameBytes
+                        ? $"✔ 逐字节一致  {relative}  {copyInfo.Length}"
+                        : $"✘ 内容不一致  {relative}");
+            }
+
+            _output.WriteLine("=== 副本与原件的逐字节核对（跑管线之前）===");
+
+            foreach (string check in copyChecks)
+            {
+                _output.WriteLine("  " + check);
+            }
+
             _output.WriteLine($"夹具根目录 = {root}");
             _output.WriteLine($"输入 = {input}");
             _output.WriteLine("=== 输入初始清单 ===");
@@ -108,6 +153,14 @@ namespace ArchiveFixer.Tests
              *
              * ⚠ 2026-10-10：`HardLinkHelper.Trace` 这个钩子**随这次还原一起撤掉了**（它本来属"未解决的改动"）
              * ⇒ 这一行不再挂任何钩子（⛔ 不是被注释掉的死代码，是"钩子已不存在"）。
+             *
+             * ⚠ 2026-10-11：钩子**又补回来了**，但不再由本文件挂 —— 它长在唯一出口
+             * `HardLinkHelper.TryCreateHardLink` 自己身上，判据 = 环境变量 `ARCHIVEFIXER_HARDLINK_PROBE`
+             * 指向一个文件（没设 ⇒ 一个字节都不写）。原因：环台 `cycle.ps1` 一直在设这个变量、也一直在删旧文件，
+             * 而写入端被删掉之后**谁都没发现** ⇒ 环台上"没建链接"与"钩子坏了"分不开（实测：整个仓库 0 处引用）。
+             * 2026-10-11 一轮真机形状实测（同一个钩子）：整轮 4 条链接 —— 2 条落在 `.ArchiveFixer.work` 里
+             * （过程物 → 暂存）、2 条落在**落点层**（`…\in\111\111\111.z02 <- …\in\111(3)\111(3)\111.z02`），
+             * **用户自己那一层目录里一个新名字都没多**。
              */
 
             /*
@@ -367,6 +420,42 @@ namespace ArchiveFixer.Tests
 
             throw new InvalidOperationException(
                 @"夹具根目录建不出来：只允许落 E:\DeepSeekProjects\_tmp\ArchiveFixer\（⛔ 不许写 C 盘）。");
+        }
+
+        /// <summary>
+        /// 两个文件是不是逐字节相同（**分块比，⛔ 不整份读进内存**：样本里有 248 MB 的单文件，
+        /// 而全量套件是并行跑的 —— 一次要两份就是 ~500 MB，没必要）。
+        /// </summary>
+        private static bool StreamsAreEqual(string left, string right)
+        {
+            const int BufferSize = 1 << 20;
+
+            byte[] leftBuffer = new byte[BufferSize];
+            byte[] rightBuffer = new byte[BufferSize];
+
+            using var leftStream = File.OpenRead(left);
+            using var rightStream = File.OpenRead(right);
+
+            while (true)
+            {
+                int leftRead = leftStream.Read(leftBuffer, 0, BufferSize);
+                int rightRead = rightStream.Read(rightBuffer, 0, BufferSize);
+
+                if (leftRead != rightRead)
+                {
+                    return false;
+                }
+
+                if (leftRead == 0)
+                {
+                    return true;
+                }
+
+                if (!leftBuffer.AsSpan(0, leftRead).SequenceEqual(rightBuffer.AsSpan(0, rightRead)))
+                {
+                    return false;
+                }
+            }
         }
 
         private static void CopyDirectory(string from, string to)
