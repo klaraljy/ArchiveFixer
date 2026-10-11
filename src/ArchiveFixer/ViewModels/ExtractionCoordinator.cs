@@ -11216,6 +11216,49 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            /*
+             * ===== 第二大步"自己那一组卷"也要收（2026-10-11，用户口径：分卷记账是第二大步的事）=====
+             *
+             * 现场（真机 EEE，日志逐字）：第二大步把那一组解开、`解压成功 ｜ 校验通过 ｜ 续解`，可
+             * `这一层的过程物没有回收（回收判据没放行）` —— 拦住它的那道闸门是"过路层其余物"里有**别的单的源包**
+             * （`111(2)_.zip` / `111(3).rar` 与这一组同处一个其余物目录）⇒ 整段没放行；而链尾那条路又写着
+             * `续解出来的内层包不参与源包处理` ⇒ 那两对卷（`111.part1.rar` / `111.part2.rar`）**没人收**，
+             * 一直留在落点树里（环台判据 ③ 报的就是它们）。
+             *
+             * 判据只用**既有事实位** `ArchiveTask.IsContinuationTask`（项目自己的定义逐字：
+             * 「续解任务的"源文件"是上一层交出来的内层包 —— 对用户来说它是过程物」）
+             * + 这一组已经解开（下面那几道门槛照旧全过）。⇒ 续解产出的那一组卷，解开+校验+可证完整之后按删除档收掉。
+             *
+             * ⛔ 用户最初导入的那些包**绝不进这一档**（它们的 `IsContinuationTask` 为 false）；
+             * ⛔ 六道门槛一条不绕过；⛔ 名字仍属于这一组（族 + 基名，下面逐份再问一次）。
+             */
+            if (consumer.IsContinuationTask)
+            {
+                string consumerStart = consumer.CurrentPath ?? string.Empty;
+
+                foreach (string volumePath in consumer.VolumePaths.Concat(new[] { consumerStart }))
+                {
+                    if (string.IsNullOrWhiteSpace(volumePath) || !File.Exists(volumePath))
+                    {
+                        continue;
+                    }
+
+                    if (!volumePath.Equals(consumerStart, StringComparison.OrdinalIgnoreCase)
+                        && !VolumeGroupDetector.BelongsToSameGroup(
+                            FileNameHelper.GetFileName(volumePath),
+                            FileNameHelper.GetFileName(consumerStart)))
+                    {
+                        // 别的族/别的基名 ⇒ 判不出"它属于这一组" ⇒ 一个字节都不动。
+                        continue;
+                    }
+
+                    if (!targets.Any(item => SafePathHelper.PathEquals(item.Path, volumePath)))
+                    {
+                        targets.Add((consumer, volumePath, ResolveOwnerChainDirectory(consumer)));
+                    }
+                }
+            }
+
             if (targets.Count == 0)
             {
                 // 这一组没有"已经落地的片"被接走过（真机 `111.z01` 那一档就是：接片走的是移动）
