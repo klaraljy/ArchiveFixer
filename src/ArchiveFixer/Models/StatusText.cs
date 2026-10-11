@@ -2397,6 +2397,15 @@ namespace ArchiveFixer.Models
         public const string CriterionInputsGatherWindowFormat =
             "{0}：收卷窗口判不出 —— 判据输入：看了 {1} 这一批目录，同组候选 {2} 个：{3}";
 
+        /// <summary>
+        /// 「过路层那一单的其余物按档删」那一档"判不出 ⇒ 一个字节都不删"的判据输入
+        /// （<c>{0}</c>=产出方名字，<c>{1}</c>=哪一道闸门关着，<c>{2}</c>=接手方名字，
+        /// <c>{3}</c>=组基名，<c>{4}</c>=其余物目录，<c>{5}</c>=里面有几个文件，<c>{6}</c>=文件名清单）。
+        /// </summary>
+        public const string CriterionInputsPassThroughRestFormat =
+            "{0}：过路层的其余物这次没删 —— {1}｜判据输入：产出方=「{0}」，接手方=「{2}」，组基名=「{3}」，"
+            + "其余物目录={4}，里面 {5} 个文件：{6}";
+
         /// <summary>还原之后两份候选会撞成同一个名字。<c>{0}</c> = 那个名字。</summary>
         public const string InnerRestoreCollisionFormat = "两份候选还原之后会撞成同一个名字「{0}」，程序不猜";
 

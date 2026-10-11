@@ -746,8 +746,14 @@ namespace ArchiveFixer.Tests
         /// <para>它与分卷判据无关：那一份就是这单这一次解压产出的过程物，而整组已经由**另一个当场核过清单、
         /// 可证完整**的消费方解开 ⇒ 证据该按消费方那一份，六道门槛一条不绕过。</para>
         ///
-        /// <para><b>红检</b>：把 `PurgePassThroughRestOfSettledProducer` 那一调注掉 ⇒ 本条变红
-        /// （`…\其余物\` 里那一份仍在盘上）。</para>
+        /// <para><b>红检（2026-10-11 实测重订）</b>：把**链尾那一遍**「这一单自己的其余物按档处理」
+        /// （`ApplyRestHandlingAfterChainAsync`）关掉 ⇒ 本条变红，逐字
+        /// `Assert.Empty() Failure: Collection was not empty` + 8 个「还留着的其余物：…\111\其余物\…」。
+        /// ⛔ 原来这里写的是「把 `PurgePassThroughRestOfSettledProducer` 那一调注掉 ⇒ 本条变红」——
+        /// **那句是假的**，已按实测改正：把两条"过路层"机制（`PurgePassThroughRestOfSettledProducer`
+        /// 与 `SweepPassThroughRestDirectoriesAsync`）各自加一句 early return **整条关掉**跑本条，
+        /// 照旧**全绿**、`彻底删除：111\其余物（8 项 / 7.0 MB）`照旧执行 ⇒ 本条真正覆盖的是
+        /// **链尾那一遍**，不是"过路层"那两条（详见 `AGENTS.md` 同名条目）。</para>
         /// </summary>
         [SevenZipFact]
         public async Task 真机形状_过路层那一单的其余物按档删掉_48MB那处()
@@ -897,8 +903,14 @@ namespace ArchiveFixer.Tests
         /// <para>本批选了「源包放入其余物 + 其余物彻底删除」⇒ **那份过路层的其余物也要被删掉**
         /// （用户原话：「其余物会在每层的过程中会删掉，我无法理解为什么还会有其余物留着」）。</para>
         ///
-        /// <para><b>红检</b>：把 `SweepPassThroughRestDirectoriesAsync` 那一调注掉 ⇒ 本条变红
-        /// （`…\外层\其余物\` 里那一份仍在盘上）。</para>
+        /// <para><b>红检（2026-10-11 实测重订）</b>：把**链尾那一遍**「这一单自己的其余物按档处理」
+        /// （`ApplyRestHandlingAfterChainAsync`）关掉 ⇒ 本条变红。
+        /// ⛔ 原来这里写的是「把 `SweepPassThroughRestDirectoriesAsync` 那一调注掉 ⇒ 本条变红」——
+        /// **没有实测支撑**：把那条扫尾整条关掉跑本条照旧绿（实测见 `AGENTS.md` 同名条目）。</para>
+        /// <para>⚠ **本条 2026-10-11 之前是"空跑假绿"**：夹具漏了「先归组、再拍快照」这一步
+        /// ⇒ `set.7z.001` 被**假报**「源文件已变化（`set.7z.002` 修改时间（没有记录）→ …）」⇒ 一次引擎都没调
+        /// ⇒ 两条断言都恒真。现在补上归组、并把 ① 收紧成认**执行**那一行（`彻底删除：`），
+        /// 逐字实测：`set.7z.001` 解出整组、`彻底删除：set\其余物（2 项 / 5.0 MB）`、本批 成功 2 / 失败 0。</para>
         /// </summary>
         [SevenZipFact]
         public async Task 归集采纳形状_过路层那一单的其余物也要按档删掉()
@@ -925,16 +937,28 @@ namespace ArchiveFixer.Tests
             ArchiveTask outerTask = await AddTaskAsync(harness, outer);
             ArchiveTask firstTask = await AddTaskAsync(harness, first);
 
+            /*
+             * ⛔ **归组必须排在拍快照之前**（本文件 `CaptureSnapshots` 那段注释写死了这条顺序）：
+             * `set.7z.001` 的 `VolumePaths` 那一刻还只有它自己，等解压开工时协调器才把它同目录的
+             * `set.7z.002` 记进账 ⇒ 路径集合变长 ⇒ 按位比对错位 ⇒ 这一单被**假报**
+             * 「源文件已变化：set.7z.002（分卷 · 修改时间（没有记录）→ …）」⇒ 一次引擎都没调 ⇒ Failed
+             * ⇒ 两条断言全都恒真（2026-10-11 实测：这一条因此是"空跑假绿"，见 `AGENTS.md`）。
+             */
+            new VolumeGroupingService().ApplyVolumeGrouping(new[] { outerTask, firstTask });
             CaptureSnapshots(harness);
 
             await harness.Coordinator.StartExtractAsync();
 
             Log(harness, "过路层其余物");
 
-            // ① 这一档真的执行了。
+            /*
+             * ① 这一档真的执行了 —— ⛔ 认**执行**那一行（`彻底删除：<目录>（N 项 / X）`），
+             * 不认计划那一行（`定稿 + 校验通过之后会按「删除操作」彻底删除其余物`）：
+             * 后者只要开了「彻底删除」档就会写，删没删都能过（这正是本条以前"假绿"的一半原因）。
+             */
             Assert.Contains(
                 harness.LogTexts,
-                text => text.Contains("彻底删除", StringComparison.Ordinal));
+                text => text.Contains("彻底删除：", StringComparison.Ordinal));
 
             // ② **全树里一个其余物文件都不该留**（含"过路层"那一份）。
             string[] restLeftovers = Directory

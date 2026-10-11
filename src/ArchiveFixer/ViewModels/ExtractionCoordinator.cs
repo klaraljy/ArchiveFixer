@@ -10729,6 +10729,57 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// 「过路层那一单的其余物按档删」那一档"判不出 ⇒ 一个字节都不删"时把**判据输入**写进日志
+        /// （与 <see cref="LogAdoptCriterionInputs"/> 同一规矩，用户 2026-10-10 目标单③）。
+        ///
+        /// <para>为什么必须有它（2026-10-11 实测）：这一档**五道闸门全是静默早退**
+        /// （没记下其余物目录 / 目录不在盘上 / 其余物里有不属于这一组的文件 / 完整性证据不允许 /
+        /// 删除档是「不动其余物」），而它的两条结论日志只在**真删**时才写 ⇒
+        /// 拿一份用户日志**分不出**"这一档压根没被走到"和"走到了、被哪一道闸门挡下"
+        /// —— 实测：整个 <c>SiblingFolderVolumeGatherTests</c>（19 条）跑完，
+        /// 那两条结论日志出现 **0 次**，加之前无法判断是没调用还是被拦。</para>
+        ///
+        /// <para>⛔ 只写程序当场算出来的值（判不出就写「判不出」），⛔ 它一处判据都不改。</para>
+        /// </summary>
+        private void LogPassThroughRestCriterionInputs(
+            ArchiveTask producer,
+            ArchiveTask? consumer,
+            string groupBaseName,
+            string restDirectory,
+            string why)
+        {
+            string[] files;
+
+            try
+            {
+                files = string.IsNullOrWhiteSpace(restDirectory) || !Directory.Exists(restDirectory)
+                    ? Array.Empty<string>()
+                    : Directory
+                        .EnumerateFiles(restDirectory, "*", SearchOption.AllDirectories)
+                        .Select(FileNameHelper.GetFileName)
+                        .ToArray();
+            }
+            catch
+            {
+                // 读不出来 ⇒ 如实写"判不出"，⛔ 不猜。
+                files = Array.Empty<string>();
+            }
+
+            AppendLog(
+                "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.CriterionInputsPassThroughRestFormat,
+                    producer.LogName,
+                    why,
+                    consumer == null ? "判不出" : consumer.LogName,
+                    string.IsNullOrWhiteSpace(groupBaseName) ? "判不出" : groupBaseName,
+                    string.IsNullOrWhiteSpace(restDirectory) ? "判不出" : restDirectory,
+                    files.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    files.Length == 0 ? "（空）" : string.Join("；", files.Take(8))));
+        }
+
+        /// <summary>
         /// **过路层那一单的其余物按档处理**（用户 2026-10-06 拍板：「其余物会在每层的过程中会删掉，
         /// 我无法理解为什么还会有其余物留着」；他两次追问的 `111\111\其余物\111.zip`（48.35 MB）就是这一格）。
         ///
@@ -10743,6 +10794,16 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⛔ 放行之前还要逐条确认：其余物里**每一个文件的名字都属于这一组**
         /// （= 都是被那次成功解压接手的过程物）；只要有一个不属于 ⇒ 什么都不做（判不出就不动）。</para>
+        ///
+        /// <para><b>⚠ 2026-10-11 环台实测（取证，⛔ 不是推断）</b>：把这一档与
+        /// <see cref="SweepPassThroughRestDirectoriesAsync"/> **两条都整条关掉**
+        /// （各加一句 early return），整个 <c>SiblingFolderVolumeGatherTests</c>（19 条）
+        /// **照旧 18 通过 / 1 跳过 / 0 失败**，`彻底删除：111\其余物（8 项 / 7.0 MB）`照旧执行 ⇒
+        /// 现在这几条用例真正覆盖的是**链尾那一遍**「这一单自己的其余物按档处理」
+        /// （关掉它 ⇒ `真机形状_过路层那一单的其余物按档删掉_48MB那处` 当场红）。
+        /// ⇒ 本档在现有夹具里**没有一次真的删成功**（19 次调用全部停在闸门上，逐条见日志里那句
+        /// `过路层的其余物这次没删 —— …`），⛔ **不许把"用例绿"读成"这一档验过了"**；
+        /// 哪一天真机日志里出现 `过路层的其余物已按「删除操作」处理`，那才是它第一次真干活。</para>
         /// </summary>
         private void PurgePassThroughRestOfSettledProducer(
             ArchiveTask producer,
@@ -10758,6 +10819,14 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrWhiteSpace(restDirectory) || !Directory.Exists(restDirectory))
             {
+                // 「判不出 ⇒ 什么都不做」：把判据输入写进日志（⛔ 判据本身一个字不动）。
+                LogPassThroughRestCriterionInputs(
+                    producer,
+                    consumer,
+                    groupBaseName,
+                    restDirectory,
+                    "没记下这一单定稿实际用的其余物目录（或它已经不在盘上）");
+
                 return;
             }
 
@@ -10782,6 +10851,13 @@ namespace ArchiveFixer.ViewModels
                         Directory.EnumerateFiles(restDirectory, "*", SearchOption.AllDirectories)))
                 {
                     // 里面还有不属于这一组的东西 / 读不到 ⇒ 判不出 ⇒ 什么都不做（原样留着）。
+                    LogPassThroughRestCriterionInputs(
+                        producer,
+                        consumer,
+                        groupBaseName,
+                        restDirectory,
+                        "其余物里有不属于这一组的文件（判不出它是不是被接手的过程物）");
+
                     return;
                 }
             }
@@ -10794,6 +10870,13 @@ namespace ArchiveFixer.ViewModels
 
             if (!evidence.AllowsSourceRemoval)
             {
+                LogPassThroughRestCriterionInputs(
+                    producer,
+                    consumer,
+                    groupBaseName,
+                    restDirectory,
+                    "接手方那一单的完整性证据不允许删源（不是「可证完整 + 校验通过」）");
+
                 return;
             }
 
