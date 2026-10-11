@@ -10373,6 +10373,42 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **这一层里的东西是不是都属于这一组**（"过路层"其余物放行前的**前置闸门**，唯一出口）。
+        ///
+        /// <para><b>为什么要有它</b>（2026-10-11）：这里原来把引用名写死成 `<组基名>.zip`，
+        /// 而"同一组"那把尺子是**族 + 基名** —— 组只要是 RAR 新式（`X.partN.rar`）或数字族（`X.7z.001`），
+        /// `BelongsToSameGroup(组内成员, "X.zip")` **恒为 false** ⇒ 闸门永远判"里面有不属于这一组的东西"
+        /// ⇒ **那一层其余物永远删不掉**（用户选了「其余物：彻底删除」也不动），
+        /// 而 ZIP 族恰好能过 —— 同一个设置两种结果。
+        /// 引用名改走唯一出口 <see cref="ResolveGroupReferenceName"/>（= 这一单自己的文件名，它就在这一组里）。</para>
+        ///
+        /// <para>⛔ 判据只转调既有尺子；**一个文件都不属于 / 读不到 ⇒ false**（判不出就不删，红线不动）。</para>
+        /// </summary>
+        internal static bool AllRestFilesBelongToGroup(
+            ArchiveTask? task,
+            string groupBaseName,
+            IEnumerable<string>? fileNames)
+        {
+            if (fileNames == null)
+            {
+                return false;
+            }
+
+            string reference = ResolveGroupReferenceName(task, groupBaseName);
+
+            foreach (string file in fileNames)
+            {
+                if (string.IsNullOrWhiteSpace(file)
+                    || !VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), reference))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// 把"这一组**其余的片**"记进既有那份"借来用过的源片"账（消费方 = <paramref name="consumer"/>）。
         ///
         /// <para>⛔ 只记**同一组**、且不是消费方自己那一条；⛔ 一个字节都不动 —— 搬运与删除仍旧由既有出口
@@ -10380,7 +10416,14 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void RememberGroupPiecesConsumedBy(ArchiveTask consumer)
         {
-            string tailName = FileNameHelper.GetArchiveBaseName(consumer.CurrentPath) + ".zip";
+            /*
+             * ⛔ 引用名必须来自**这一单自己**（`ResolveGroupReferenceName`），⛔ 不许写死 `<基名>.zip`：
+             * 组一旦不是跨盘 ZIP 族（`X.partN.rar` / `X.7z.001` / `X.r00`），写死的引用名一个成员都匹配不上
+             * ⇒ 这一组"借来用过的源片"账**一条都记不上** ⇒ 那些片永远不会按跟班卷收场（2026-10-11 统一）。
+             */
+            string tailName = ResolveGroupReferenceName(
+                consumer,
+                FileNameHelper.GetArchiveBaseName(consumer.CurrentPath));
 
             foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
             {
@@ -10726,17 +10769,20 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            string tailName = groupBaseName + ".zip";
-
             try
             {
-                foreach (string file in Directory.EnumerateFiles(restDirectory, "*", SearchOption.AllDirectories))
+                /*
+                 * ⛔ 前置闸门的引用名走**唯一出口**（`AllRestFilesBelongToGroup` → `ResolveGroupReferenceName`）：
+                 * 原来写死 `<组基名>.zip` ⇒ 非 ZIP 族这一层永远判"里面有别人的东西" ⇒ 永远不删
+                 * （用户选了「彻底删除」也不动）；ZIP 族却删 —— 同一个设置两种结果（2026-10-11 统一）。
+                 */
+                if (!AllRestFilesBelongToGroup(
+                        consumer,
+                        groupBaseName,
+                        Directory.EnumerateFiles(restDirectory, "*", SearchOption.AllDirectories)))
                 {
-                    if (!VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), tailName))
-                    {
-                        // 里面还有不属于这一组的东西 ⇒ 判不出 ⇒ 什么都不做（原样留着）。
-                        return;
-                    }
+                    // 里面还有不属于这一组的东西 / 读不到 ⇒ 判不出 ⇒ 什么都不做（原样留着）。
+                    return;
                 }
             }
             catch

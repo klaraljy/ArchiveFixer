@@ -151,6 +151,59 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// ⛔ **"过路层"其余物删之前那道前置闸门，引用名必须按这一单自己的族取**（2026-10-11 统一）。
+        ///
+        /// <para><b>为什么</b>：这里原来把引用名写死 `<组基名>.zip`，而"同一组"的尺子是**族 + 基名** ——
+        /// 组只要是 RAR 新式（`X.partN.rar`）或数字族（`X.7z.001`），
+        /// `BelongsToSameGroup(组内成员, "X.zip")` 恒为 false ⇒ 闸门永远判"里面有不属于这一组的东西"
+        /// ⇒ **那一层其余物永远删不掉**（用户选了「其余物：彻底删除」也不动），而 ZIP 族恰好能过
+        /// ⇒ 同一个设置两种结果。引用名改走唯一出口 `ResolveGroupReferenceName`（这一单自己的文件名）。</para>
+        ///
+        /// <para><b>红检</b>：把闸门里的引用名换回 `<组基名>.zip` ⇒ 下面第 ① 条当场变红。</para>
+        /// </summary>
+        [Fact]
+        public void 过路层那道前置闸门_要按这一单自己的族判_不许写死zip()
+        {
+            string own = Path.Combine(_root, "111_", "111_.part1.rar");
+            Directory.CreateDirectory(Path.GetDirectoryName(own)!);
+            File.WriteAllBytes(own, new byte[1024]);
+
+            var task = new ArchiveFixer.Models.ArchiveTask(own, 1);
+
+            // ① 那一层里全是这一组的成员（含坏名字的片）⇒ 放行。
+            Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+                task,
+                "111_",
+                new[] { "111_.part2.rar", "111_.par删t3.rcar" }));
+
+            // ② 里混了别人的东西 ⇒ 判不出 ⇒ 不许删。
+            Assert.False(ExtractionCoordinator.AllRestFilesBelongToGroup(
+                task,
+                "111_",
+                new[] { "111_.part2.rar", "别的.zip" }));
+
+            // ③ 对照：数字族（X.7z.001）同样要放行 —— 修前写死 zip 时它跟 RAR 新式族一样放行不了。
+            string numeric = Path.Combine(_root, "set", "set.7z.001");
+            Directory.CreateDirectory(Path.GetDirectoryName(numeric)!);
+            File.WriteAllBytes(numeric, new byte[1024]);
+
+            Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+                new ArchiveFixer.Models.ArchiveTask(numeric, 2),
+                "set.7z",
+                new[] { "set.7z.002", "set.7z.003" }));
+
+            // ④ 对照：跨盘 ZIP 族（修前唯一能过的那一族）照旧放行 —— ⛔ 不许因为这次改动把它弄坏。
+            string tail = Path.Combine(_root, "111", "111.zip");
+            Directory.CreateDirectory(Path.GetDirectoryName(tail)!);
+            File.WriteAllBytes(tail, new byte[1024]);
+
+            Assert.True(ExtractionCoordinator.AllRestFilesBelongToGroup(
+                new ArchiveFixer.Models.ArchiveTask(tail, 3),
+                "111",
+                new[] { "111.z01", "111.z02" }));
+        }
+
+        /// <summary>
         /// ⛔ **别的"还没收场"的那条链里的片：也只许建链接**（2026-10-11 定案到行）。
         ///
         /// <para><b>为什么</b>：收拢那一档（`TryGatherGroupPiecesInto` → `TryAdoptUnresolvedVolumePiece`）
