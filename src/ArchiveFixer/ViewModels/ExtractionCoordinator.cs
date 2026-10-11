@@ -9125,16 +9125,10 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            if (IsAnyTaskSourcePath(piecePath))
             {
-                foreach (string sourcePath in EnumerateTaskPaths(task))
-                {
-                    if (!string.IsNullOrWhiteSpace(sourcePath) && SafePathHelper.PathEquals(sourcePath, piecePath))
-                    {
-                        // 这一份还是**某一单自己的源**（用户给的包 / 用户目录里的片）⇒ 不归这条账管。
-                        return;
-                    }
-                }
+                // 这一份还是**某一单自己的源**（用户给的包 / 用户目录里的片）⇒ 不归这条账管。
+                return;
             }
 
             foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) item
@@ -9181,6 +9175,34 @@ namespace ArchiveFixer.ViewModels
             return File.Exists(candidate) && !SafePathHelper.PathEquals(candidate, piecePath)
                 ? candidate
                 : string.Empty;
+        }
+
+        /// <summary>
+        /// **这个路径是不是任何一单自己的源**（用户给的包 / 用户目录里的片）—— 唯一出口。
+        ///
+        /// <para>红线：**用户的源文件一个字节都不许被"产出方那一份 / 已经落地的片"这两条账碰到**
+        /// （25 GB 事故那一档）。所以凡是要按这两条账删/认领一个路径之前，先问这一句；
+        /// 判"是源" ⇒ 调用方什么都不做。</para>
+        /// </summary>
+        private bool IsAnyTaskSourcePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                foreach (string sourcePath in EnumerateTaskPaths(task))
+                {
+                    if (!string.IsNullOrWhiteSpace(sourcePath) && SafePathHelper.PathEquals(sourcePath, path))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -11222,6 +11244,63 @@ namespace ArchiveFixer.ViewModels
 
             ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
             var service = new RecycleBinService(RestDeleteExecutor, null, null);
+
+            /*
+             * ⚠ **账上那一条路径不是全部**（2026-10-11 真机 FFFF 实测，调试器定案）：
+             *
+             * 定稿会把同一片再搬进"最里层包名目录"（`<落点>\<内层包基名>\`）——
+             * 那一份与账上记的那一条是**两个不同的路径**。实测：断点 `ResultFinalizer.cs:450` 读到
+             * `items=1 chain=0 inPlace=false unopened=false inner=111__ dest=…\in\111__\111__` ⇒
+             * 规划器按"最里层 = 内层包基名命名的目录"照建 ⇒ 盘上多出
+             * `…\111__\111__\111__\111_.par删t1.ra除r`（209 MB，**脏名**）—— 账上没有第二条路径
+             * ⇒ 谁都不认领它 ⇒ 它留到下一轮被当成新原包（"凭空多套一层"就是这么来的）。
+             *
+             * ⇒ 目标 = 账上那一条 **+ 产出方落点根里同族同基名的每一个名字**。
+             * ⛔ 只在**已经过了上面全部闸门**之后才扫（判据一个字不放宽）；
+             * ⛔ 只扫**那一个落点根**（不扫全盘、不扫别的单）；⛔ 任何一单的源路径一律不碰（红线唯一出口
+             * `IsAnyTaskSourcePath`）；⛔ 名字必须仍属于这一组（族 + 基名，既有那把尺子）。
+             */
+            var scannedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach ((ArchiveTask producer, string _, string outputRoot) in targets.ToList())
+            {
+                if (outputRoot.Length == 0 || !scannedRoots.Add(outputRoot))
+                {
+                    continue;
+                }
+
+                string[] found;
+
+                try
+                {
+                    found = Directory.GetFiles(outputRoot, "*", SearchOption.AllDirectories);
+                }
+                catch
+                {
+                    // 那棵树读不动 ⇒ 判不出 ⇒ 什么都不做（与改动前逐字相同）。
+                    continue;
+                }
+
+                foreach (string path in found)
+                {
+                    string foundName = FileNameHelper.GetFileName(path);
+
+                    if (VolumeGroupDetector.TryGetVolumeIndex(foundName) == null
+                        || !string.Equals(
+                            FileNameHelper.GetArchiveBaseName(foundName),
+                            groupBaseName,
+                            StringComparison.OrdinalIgnoreCase)
+                        || IsAnyTaskSourcePath(path))
+                    {
+                        continue;
+                    }
+
+                    if (!targets.Any(item => SafePathHelper.PathEquals(item.Path, path)))
+                    {
+                        targets.Add((producer, path, outputRoot));
+                    }
+                }
+            }
 
             foreach ((ArchiveTask producer, string path, string outputRoot) in targets)
             {

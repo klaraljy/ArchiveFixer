@@ -2479,6 +2479,60 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
+                /*
+                 * ⚠ **第 0 档：纯文本清洗（只去非 ASCII 杂质）** —— 用户 2026-10-11 口径：
+                 * 「简单的改后缀，像删除中文字符这么简单的为什么做不了」「分卷识别和操作是第二大步的事」。
+                 *
+                 * 它排在"认底层 / 整组自洽 / 兄弟在场"**前面**，因为它一条都不需要：
+                 * 名字里那几个中文字是**插进去的杂质**，去掉之后剩下的还是**本来那个形态**
+                 * （`111.zi删除p` → `111.zip`、`111_.par删t1.ra除r` → `111_.part1.rar`），
+                 * 既不用问魔数（末片是续盘、`PK\x07\x08` 本来就嗅不出格式），也不用等同目录的兄弟回来
+                 * —— 真机 FFFF 就是卡在这两处：三个数字卷改好了、**末片一个汉字没去掉** ⇒
+                 * `第 1 层：111.zi删除p：这一组还没凑齐（分卷压缩包缺少必要分卷）` ⇒ 第二大步解不开。
+                 *
+                 * ⛔ 只动**卷标记 / 归档后缀那一段**，基名一个字符不动（脏基名原文不动 —— 那可能是真名字）；
+                 * ⛔ 执行体仍只有 `TryApply` 一套（只改名、字节数核对、失败倒序改回、绝不覆盖）。
+                 */
+                if (TryStripNonAsciiJunkFromTailSegment(Path.GetFileName(candidate), out string junkCleaned))
+                {
+                    string junkDirectory = Path.GetDirectoryName(candidate) ?? string.Empty;
+                    string junkTarget = Path.Combine(junkDirectory, junkCleaned);
+
+                    VolumeNameRepairPlan junkPlan = BuildRestorePlan(
+                        new[]
+                        {
+                            new RestoreRenameItem(
+                                candidate,
+                                junkTarget,
+                                Path.GetFileName(candidate),
+                                junkCleaned)
+                        });
+
+                    VolumeNameRepairResult junkApplied = TryApply(junkPlan);
+
+                    if (junkApplied.Success)
+                    {
+                        renamed[candidate] = junkTarget;
+
+                        log?.Invoke(
+                            "INFO",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.InnerRestoreDoneFormat,
+                                junkPlan.Describe()));
+
+                        continue;
+                    }
+
+                    log?.Invoke(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.InnerRestoreBlockedFormat,
+                            Path.GetFileName(candidate),
+                            junkApplied.Message));
+                }
+
                 IReadOnlyList<string> members = EnumerateRestoreGroupMembers(candidate);
 
                 if (members.Count == 0)
@@ -2637,6 +2691,121 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>没有卷号的那种（本体后缀被伪装，<c>222.zscip</c>）自己就是一组。</para>
         /// </summary>
+        /// <summary>
+        /// **纯文本清洗：只去掉"卷标记 / 归档后缀那一段"里夹着的非 ASCII 杂质**（用户 2026-10-11 口径）。
+        ///
+        /// <para>判据三条，一条都不看别的东西（⛔ 不问魔数、⛔ 不问同目录有没有兄弟、⛔ 不问"整组自洽"）：</para>
+        /// <list type="number">
+        /// <item><description>那一段里**确实夹着非 ASCII 字符**（中文等杂质 —— 那是"插进去的"，不是名字本身）；</description></item>
+        /// <item><description>去掉杂质之后**还是本来那个形态**：规范卷段（`partN.rar` / `zNN` / 三位数字）
+        /// 或已知归档后缀（`zip` / `rar` / `7z`）—— 这一条是"不猜格式"的底线：我们不是从后缀推格式，
+        /// 而是把**被插进字符的那个后缀**还原回它自己；</description></item>
+        /// <item><description>基名一个字符都不动（基名里可能有真的中文标题，那绝不能碰）。</description></item>
+        /// </list>
+        ///
+        /// <para>判不出 ⇒ <c>false</c>（调用方什么都不做）。</para>
+        /// </summary>
+        private static bool TryStripNonAsciiJunkFromTailSegment(string fileName, out string cleaned)
+        {
+            cleaned = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(fileName) || IsPureAscii(fileName))
+            {
+                return false;
+            }
+
+            /*
+             * 基名/那一段由**唯一基名出口**拆（⛔ 这里不自己找边界）：`111_.par删t1.ra除r` ⇒ 基名 `111_`、
+             * 段 `part1.rar`。拆不出 ⇒ 只在"脏字符全在最后一个点之后、基名本身干净"那一档兜底
+             * （`111.zi删除p` ⇒ 基名 `111`、段 `zi删除p`）—— ⛔ 基名只要沾了非 ASCII 就一律不动。
+             */
+            string baseName;
+            string segment;
+
+            if (!FileNameHelper.TryResolveVolumeBaseName(
+                    fileName,
+                    VolumeBaseNameLevel.DisguisedVolume,
+                    out baseName,
+                    out segment))
+            {
+                int dot = fileName.LastIndexOf('.');
+
+                if (dot <= 0 || !IsPureAscii(fileName.Substring(0, dot)))
+                {
+                    return false;
+                }
+
+                baseName = fileName.Substring(0, dot);
+                segment = fileName.Substring(dot + 1);
+            }
+
+            if (baseName.Length == 0 || segment.Length == 0)
+            {
+                return false;
+            }
+
+            string stripped = StripNonAscii(segment);
+
+            if (stripped.Length == 0 || string.Equals(stripped, segment, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!IsRestoredTailForm(stripped))
+            {
+                return false;
+            }
+
+            cleaned = baseName + "." + stripped;
+
+            return !string.Equals(cleaned, fileName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>把非 ASCII 字符摘掉（只用于"卷标记 / 归档后缀那一段"）。</summary>
+        private static string StripNonAscii(string value)
+        {
+            var builder = new System.Text.StringBuilder(value.Length);
+
+            foreach (char ch in value)
+            {
+                if (ch <= 0x7F)
+                {
+                    builder.Append(ch);
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static bool IsPureAscii(string value)
+        {
+            foreach (char ch in value)
+            {
+                if (ch > 0x7F)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 去掉杂质之后那一段**是不是一个说得清的规范形态**：规范卷段（既有那把尺子）或已知归档后缀。
+        /// ⛔ 不认的一律 false —— 宁可一个字符都不改。
+        /// </summary>
+        private static bool IsRestoredTailForm(string segment)
+        {
+            if (IsSegmentFamilySelfDetermined(segment))
+            {
+                return true;
+            }
+
+            return string.Equals(segment, "zip", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "rar", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "7z", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static IReadOnlyList<string> EnumerateRestoreGroupMembers(string candidate)
         {
             var members = new List<string> { candidate };
