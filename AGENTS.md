@@ -314,4 +314,21 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
   **没有保护"那一片属于另一条还没定稿的链"**这一档。
   ⇒ **下一轮第一件事**：在**带负载**的条件下复现（把这条 E2E 与全量并行跑），断点停在 `ShouldMovePieceIntoGroup`
   读 `piecePath` / `ownerStage` / 返回值，取到运行期事实再改；⛔ 不许按假设直接改（那是不可逆路径上的搬运动作）。
+- **🔧 已按上面那条改了一半（2026-10-11 凌晨，第 113 轮）：判据补第 ③ 条 —— 别去搬"别人那条还没收场的链"里的片。**
+  `ShouldMovePieceIntoGroup(piecePath, ownerStageDirectory, liveChainWorkDirectories = null)`：
+  这一片在**任何一条 `Outcome == Pending` 的链**的工作树里 ⇒ **只建链接**（硬链接是实名的第二份名字，
+  那条链随后删自己的过程物目录不会把这一份弄没；搬才是拿走它唯一的产物）。调用方
+  `TryAdoptUnresolvedVolumePiece` 传 `CollectLiveChainWorkDirectories()`；判不出 ⇒ 空表 ⇒ **照旧老口径**。
+  ⛔ 二参重载保持老语义，既有 4 条守门用例一个字没动。守门
+  `PieceHandoverStageGuardTests.别的还没收场那条链里的片_也只建链接`（两条对照），**红检成立**（`Expected: False / Actual: True`）。
+  ⚠ **未验**：加这一条之后**一次**全量里红的仍是临时那条并发压力用例（不是 E2E）；"外部加压 + 单跑压力用例" 5/5 全绿
+  ⇒ 那个偶发红要的是**同进程内的全量并行**（线程池饥饿），我**没有**拿到"修前必红/修后必绿"的对照
+  ⇒ **不许把这半条读成"那个偶发红已经修好"**。
+- ⚠ **复现与判断的两条纪律（2026-10-11 实测踩到，写死）**：
+  ① **第二个 `dotnet test` 必须带 `--no-build`** —— 全量在跑时它的 `testhost` 锁着
+  `bin\…\ArchiveFixer.Tests.dll`，第二个进程构建会 `error MSB3021/MSB3027` 退出（我据此喊过一次假"复现 5/5"）；
+  ② **"没看到『已通过』"≠"失败"** —— 必须匹配 `^\s*失败 <用例名>` 或读到 `Assert` 那一行才算数。
+  并发压力用例的配方（要重建时照抄）：`ChainInnerVolumeRestoreTests` 里加一条 `[SevenZipFact]`，
+  在同一个测试里 `Task.Run` 起 **4 份**独立夹具（各自 `_root` 子目录）+ 各自 `BuildPipeline` + `StartExtractAsync`，
+  断言每一份都解出 `payload.bin`；它**只有在全量并行跑时**才会偶发红，所以**不留**在套件里。
 

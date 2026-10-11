@@ -9327,7 +9327,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 bool fromProcessFolder = ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath);
                 string ownerStage = ResolveOwnerStageDirectory(owner);
-                bool moveIntoGroup = ShouldMovePieceIntoGroup(piecePath, ownerStage);
+                bool moveIntoGroup = ShouldMovePieceIntoGroup(piecePath, ownerStage, CollectLiveChainWorkDirectories());
 
                 /*
                  * ===== 用户源目录里的那一片：⛔ **仍然只硬链接**（四次试做都撞在同一处，如实记账）=====
@@ -9510,11 +9510,90 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⛔ 这条判据**不看顺序、不看时序**：暂存目录里的那一份永远不搬
         /// （它随任务收尾一起清掉，落点那一份是硬链接、零字节、照样在）。</para>
+        ///
+        /// <para><b>为什么还要第 ③ 条</b>（同一类竞态的另一半，2026-10-11 定案到行）：收拢那一档
+        /// （<c>TryGatherGroupPiecesInto</c> → <c>TryAdoptUnresolvedVolumePiece</c>）传进来的
+        /// <paramref name="ownerStageDirectory"/> 是**消费方**（要解开这一组的那一单）的暂存目录，
+        /// 而被收的那一片常常属于**另一条还在跑的链**（躺在它自己的
+        /// <c>…\recursive\&lt;那一单&gt;_&lt;ts&gt;_&lt;hash&gt;\layer-000\output\</c> 里）。
+        /// 按老判据它是"过程物目录里的东西"、又不在**调用方**的暂存目录里 ⇒ 判成"搬"
+        /// ⇒ 那条链的定稿/校验读到空 ⇒ **假「解压失败」**（全量并行负载下实测：两单落
+        /// <c>Failed</c>、整组凑不齐；同一份夹具单跑 6/6 全绿）。
+        /// ⛔ 判不出（一条还没收场的链都拿不到）⇒ 照旧按老口径办。</para>
         /// </summary>
-        internal static bool ShouldMovePieceIntoGroup(string piecePath, string ownerStageDirectory)
-            => ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath)
-               && !(ownerStageDirectory.Length > 0
-                    && ArchivePathGuard.IsInsideRoot(ownerStageDirectory, piecePath, out _));
+        internal static bool ShouldMovePieceIntoGroup(
+            string piecePath,
+            string ownerStageDirectory,
+            IEnumerable<string>? liveChainWorkDirectories = null)
+        {
+            if (!ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath))
+            {
+                return false;
+            }
+
+            // ② 本单自己的暂存目录：只建链接。
+            if (ownerStageDirectory.Length > 0
+                && ArchivePathGuard.IsInsideRoot(ownerStageDirectory, piecePath, out _))
+            {
+                return false;
+            }
+
+            /*
+             * ③ 别的**还没收场**那条链的工作树：也只建链接。
+             * 硬链接是实名的第二份名字 —— 那条链随后删掉自己的过程物目录，不会连带把这一份弄没；
+             * 反过来"搬"就是把它这条链唯一的产物拿走（正是上面那条红线的形状）。
+             */
+            if (liveChainWorkDirectories != null)
+            {
+                foreach (string directory in liveChainWorkDirectories)
+                {
+                    if (!string.IsNullOrWhiteSpace(directory)
+                        && ArchivePathGuard.IsInsideRoot(directory, piecePath, out _))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// **还没收场的那几条链的工作树**（收拢那一档用来判"这一片是不是别人的在制品"，
+        /// 见 <see cref="ShouldMovePieceIntoGroup"/> 第 ③ 条）。
+        ///
+        /// <para>⛔ 只看**机器终态**：<see cref="TaskOutcome.Pending"/> = 还没落结论（含"正在跑"
+        /// 与"停在需要用户决定的层"）—— 那些链的过程物目录里那一片**还不能搬**。
+        /// 判不出（算不出工作树 / 拿不到任务表）⇒ 空表，调用方照旧按老口径办，⛔ 不放宽。</para>
+        /// </summary>
+        private List<string> CollectLiveChainWorkDirectories()
+        {
+            var directories = new List<string>();
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                if (task == null || task.Outcome != TaskOutcome.Pending)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    string directory = _pathService.BuildTaskWorkDirectory(task);
+
+                    if (!string.IsNullOrWhiteSpace(directory))
+                    {
+                        directories.Add(directory);
+                    }
+                }
+                catch
+                {
+                    // 算不出来就不算它（少一条保护，⛔ 不改任何结论）。
+                }
+            }
+
+            return directories;
+        }
 
         /// <summary>本单自己的暂存目录（算不出来 / 判不出 ⇒ 空串 = 调用方落回老口径"按过程物目录那一档"）。</summary>
         private string ResolveOwnerStageDirectory(ArchiveTask? owner)

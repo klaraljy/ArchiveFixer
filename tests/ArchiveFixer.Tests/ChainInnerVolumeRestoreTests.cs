@@ -103,7 +103,7 @@ namespace ArchiveFixer.Tests
         /// <c>true</c> = 每个外层包各放进自己的子目录（真机那批的布局）；
         /// <c>false</c> = 全部平铺在同一个输入目录（老夹具的布局）。
         /// </param>
-        private (string Input, byte[] Payload, string PayloadName) BuildFfffShape(bool eachPackageInOwnSubdirectory)
+        private (string Input, byte[] Payload, string PayloadName) BuildFfffShape(bool eachPackageInOwnSubdirectory, string? root = null)
         {
             if (string.IsNullOrEmpty(_sevenZip))
             {
@@ -116,8 +116,10 @@ namespace ArchiveFixer.Tests
                 return (string.Empty, Array.Empty<byte>(), string.Empty);
             }
 
+            string baseRoot = root ?? _root;
+
             // ① 真 RAR 新式分卷：`-v512k` ⇒ inner.part1.rar / part2.rar / …（新式族的规范名）。
-            string build = Path.Combine(_root, "build-" + Guid.NewGuid().ToString("N"));
+            string build = Path.Combine(baseRoot, "build-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(build);
 
             string payloadName = "payload.bin";
@@ -151,7 +153,7 @@ namespace ArchiveFixer.Tests
             File.Move(parts[2], dirty3);
 
             // ③ 三片各塞进一个外层包（外层包本身名字也改坏：真机是 `111__.rLLLLar` 那种）。
-            string input = Path.Combine(_root, "in-" + Guid.NewGuid().ToString("N"));
+            string input = Path.Combine(baseRoot, "in-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(input);
 
             foreach ((string piece, string outerName, string folderName) in new[]
@@ -161,7 +163,7 @@ namespace ArchiveFixer.Tests
                          (dirty3, "1113__.rLLLLar", "1113__")
                      })
             {
-                string staging = Path.Combine(_root, "stage-" + Guid.NewGuid().ToString("N"));
+                string staging = Path.Combine(baseRoot, "stage-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(staging);
 
                 string moved = Path.Combine(staging, Path.GetFileName(piece));
@@ -197,7 +199,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>跑真管线，断言**整组被收拢并解开**（产物与原始字节一致）。</summary>
-        private async Task RunPipelineAndAssertGroupExtractedAsync(string input, byte[] payload, string payloadName)
+        private async Task RunPipelineAndAssertGroupExtractedAsync(
+            string input,
+            byte[] payload,
+            string payloadName,
+            string? root = null)
         {
             if (input.Length == 0)
             {
@@ -205,7 +211,7 @@ namespace ArchiveFixer.Tests
                 return;
             }
 
-            (MainViewModel vm, ExtractionCoordinator extraction, LogService logs) = BuildPipeline();
+            (MainViewModel vm, ExtractionCoordinator extraction, LogService logs) = BuildPipeline(root);
 
             await vm.AddPathsAsync(Directory.GetFiles(input, "*", SearchOption.AllDirectories));
 
@@ -227,7 +233,7 @@ namespace ArchiveFixer.Tests
              * 出问题时"盘上到底有什么 + 每一单落在哪一档"是第一现场：光看日志会漏掉
              * "产物其实解出来了、只是落在别处"与"这一单被算成哪一档"这两件事。
              */
-            string outRoot = Path.Combine(_root, "out");
+            string outRoot = Path.Combine(root ?? _root, "out");
 
             _output.WriteLine("===== 输出树 =====");
 
@@ -256,10 +262,11 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ 装配
 
-        private (MainViewModel Vm, ExtractionCoordinator Extraction, LogService Logs) BuildPipeline()
+        private (MainViewModel Vm, ExtractionCoordinator Extraction, LogService Logs) BuildPipeline(string? root = null)
         {
-            string dataRoot = Path.Combine(_root, "data");
-            string outputRoot = Path.Combine(_root, "out");
+            string baseRoot = root ?? _root;
+            string dataRoot = Path.Combine(baseRoot, "data");
+            string outputRoot = Path.Combine(baseRoot, "out");
             Directory.CreateDirectory(dataRoot);
             Directory.CreateDirectory(outputRoot);
 

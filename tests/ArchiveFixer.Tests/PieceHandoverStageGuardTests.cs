@@ -108,5 +108,42 @@ namespace ArchiveFixer.Tests
                 Path.Combine(_root, "111(2)_", ".ArchiveFixer.work", "recursive", "111(2)__xyz", "layer-000", "output", "111.z01"),
                 string.Empty));
         }
+
+        /// <summary>
+        /// ⛔ **别的"还没收场"的那条链里的片：也只许建链接**（2026-10-11 定案到行）。
+        ///
+        /// <para><b>为什么</b>：收拢那一档（`TryGatherGroupPiecesInto` → `TryAdoptUnresolvedVolumePiece`）
+        /// 传进来的"暂存目录"是**消费方**的，而被收的那一片常常属于**另一条还在跑的链**
+        /// （躺在它自己的 `…\recursive\&lt;那一单&gt;_&lt;ts&gt;_&lt;hash&gt;\layer-000\output\` 里）。
+        /// 按老判据它是"过程物目录里的东西"、又不在**调用方**的暂存目录里 ⇒ 判成"搬"
+        /// ⇒ 那条链的定稿/校验读到空 ⇒ **假「解压失败」**
+        /// （全量并行负载下实测：两单落 `Failed`、整组凑不齐；同一份夹具单跑 6/6 全绿）。</para>
+        ///
+        /// <para><b>红检</b>：把第 ③ 条撤掉（调用时不喂"还在跑的链"那一份清单）⇒ 本次断言当场变红。</para>
+        /// </summary>
+        [Fact]
+        public void 别的还没收场那条链里的片_也只建链接()
+        {
+            string callerStage = Path.Combine(_root, "1112__", ".ArchiveFixer.work", "1112__.rLLLLar-abc", "stage");
+            string otherChainWork = Path.Combine(_root, "111__", ".ArchiveFixer.work");
+
+            string piece = Path.Combine(
+                otherChainWork, "recursive", "111___20261011_075556_xyz", "layer-000", "output", "111_.part1.rar");
+
+            // 不喂"还在跑的链"⇒ 老口径：它在过程物目录里 ⇒ 搬（既有行为，⛔ 一个字没改）。
+            Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(piece, callerStage));
+
+            // 喂上"那条链还没收场"⇒ 只建链接：搬走 = 把那条链唯一的产物拿走。
+            Assert.False(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+                piece,
+                callerStage,
+                new[] { otherChainWork }));
+
+            // 对照：别的链**已经收场**（不在清单里）⇒ 照旧按老口径搬。
+            Assert.True(ExtractionCoordinator.ShouldMovePieceIntoGroup(
+                piece,
+                callerStage,
+                new[] { Path.Combine(_root, "1113__", ".ArchiveFixer.work") }));
+        }
     }
 }
