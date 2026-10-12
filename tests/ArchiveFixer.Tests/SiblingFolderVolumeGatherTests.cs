@@ -1515,7 +1515,19 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// **对照**（同一套中间态、只换「删除操作」档）：本批是「不动其余物」⇒ 产出方那一份
-        /// **一个字节都不动**（不变量 1 的默认档，⛔ 不许因为"整组解开了"就删）。
+        /// **一个字节都不删**（不变量 1 的默认档）。
+        ///
+        /// <para>⚠ <b>2026-10-13 按用户口径订正</b>（问答逐字见 `大测试日志-困难\发现.md`）：
+        /// 用户拍板 **A —— 「不动其余物」的"不动" = 不删用户的东西**；而**程序自己产出、已被整组接走**
+        /// 的那份多余副本**允许挪位置**（搬进**同层**的 `其余物\`，同一棵树、不跨盘、绝不覆盖）。
+        /// 所以本条从"必须还在原处"改成"**必须还在（没被删掉）**"：要么在原处、要么在同层的 `其余物\` 里。</para>
+        ///
+        /// <para><b>为什么改</b>（困难批 `run-22222222` 逐字）：那一档下老写法直接 return ⇒ 那份副本
+        /// 留在成品树里、又不在 `其余物\` 里 ⇒ 判据 ③「盘上无残留」红（同一份字节在组那一层已经有名字了）。
+        /// 按新口径集中进其余物之后：`run-22222222` ①–⑤ 全绿、整批 8 → 9 绿。</para>
+        ///
+        /// <para>⛔ 不变量 1 仍然成立：这一档**一个字节都不删** —— 本条现在钉的就是这一件事
+        /// （原处没有 ⇒ 必须在同层 `其余物\` 里找到同一份）。</para>
         /// </summary>
         [SevenZipFact]
         public async Task 对照_其余物档是不动时_产出方那一份一个字节都不动()
@@ -1544,9 +1556,20 @@ namespace ArchiveFixer.Tests
 
             Log(harness, "不动档：批末那一站之后");
 
+            /*
+             * 判据（新口径）：**没被删** —— 原处还在，或者它被集中进了同层的其余物目录。
+             * ⛔ 两条都不成立 ⇒ 那一份被删了 ⇒ 违反"这一档一个字节都不删"。
+             */
+            string restCopy = Path.Combine(
+                Path.GetDirectoryName(landedPiece) ?? string.Empty,
+                ProcessArtifactLayout.ArtifactDirectoryName,
+                Path.GetFileName(landedPiece));
+
             Assert.True(
-                File.Exists(landedPiece),
-                "「不动其余物」这一档下一个字节都不许删 —— 产出方那一份必须还在原处");
+                File.Exists(landedPiece) || File.Exists(restCopy),
+                "「不动其余物」这一档下一个字节都不许删 —— 产出方那一份要么在原处、"
+                + $"要么在同层的「{ProcessArtifactLayout.ArtifactDirectoryName}」里。原处={landedPiece}；"
+                + $"其余物={restCopy}");
         }
 
         /// <summary>

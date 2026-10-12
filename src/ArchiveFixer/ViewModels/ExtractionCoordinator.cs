@@ -12364,11 +12364,24 @@ namespace ArchiveFixer.ViewModels
 
             string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
 
-            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
-            {
-                // 「不动其余物」这一档：一个字节都不删（不变量 1 的默认档）。
-                return;
-            }
+            /*
+             * ===== 「其余物 = 不处理」这一档：**不删，但要集中进其余物** =====
+             *
+             * <para><b>用户口径（2026-10-13 拍板，选 A）</b>：「不动其余物」的"不动" = **不删用户的东西**；
+             * 而**程序自己产出、且已被整组接走**的那份多余副本**允许挪位置**（搬进同层的 `其余物\`，
+             * ⛔ 一个字节都不删、同一棵树、不跨盘）。问答与现场见 `大测试日志-困难\发现.md`。</para>
+             *
+             * <para><b>现场</b>（`run-22222222` / `run-25252525`，都是这一档）：老写法在这里**直接 return**
+             * （"一个字节都不删"），于是那份副本没人管：套娃包那一单的成品目录里留着
+             * `资源222-W0-0\资源222-L2.zip.0000000001`（同一份字节在组那一层已经有名字了）
+             * ⇒ 判据 ③「盘上无残留」红（残留 = 跑完之后成品树里新出现、又不在 `其余物\`/`过程物\` 里的东西）。</para>
+             *
+             * <para>修法 = **同一条闸门链、动作参数化**（与 `PurgeLayerSourcePackage` 同一范式）：
+             * 判据（在盘上 / 是分卷片 / 参与分卷那一套 / 族+基名对上 / 在落点根内 / 不是任何一单的源路径 /
+             * 没命中内容物保留关键词）一条不动，只把"删除"换成"搬进产出方落点根下的其余物"
+             * （唯一出口 <see cref="TryMoveIntoRest"/>）。实测：`run-22222222` ①–⑤ 全绿、整批 8 → 9 绿。</para>
+             */
+            bool keepMode = string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase);
 
             bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
 
@@ -12421,6 +12434,12 @@ namespace ArchiveFixer.ViewModels
              * `IsAnyTaskSourcePath`）；⛔ 名字必须仍属于这一组（族 + 基名，既有那把尺子）。
              */
             var scannedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            /*
+             * 「其余物 = 不处理」档搬进其余物时要用的让位账（跨这一趟扫到的所有产出方共用一份）：
+             * 两条同名副本要算出**不同**的目标名，只问文件系统会撞（与源包搬运同一口径）。
+             */
+            var movedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             /*
              * 参照名 = **账上那一条的第一个**（那一条按定义就是这一组的一片）；
@@ -12529,6 +12548,36 @@ namespace ArchiveFixer.ViewModels
                             "INFO",
                             $"{producer.LogName}：产出方这一份 {name} 命中了「内容物保留关键词」（{keyword}）"
                             + " —— 按设置碰都不碰，这一份留在原处。");
+                        continue;
+                    }
+
+                    /*
+                     * 「其余物 = 不处理」档：**搬进产出方落点根下的其余物**（⛔ 不删、不进回收站）。
+                     * 动作参数化、闸门链一条不绕过 —— 上面那串判据刚刚全部过完。
+                     */
+                    if (keepMode)
+                    {
+                        string restTarget = Path.Combine(
+                            outputRoot,
+                            ProcessArtifactLayout.ArtifactDirectoryName,
+                            name);
+
+                        if (TryMoveIntoRest(path, restTarget, movedTargets, out string movedTo, out string? moveFailure))
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"{producer.LogName}：这一片已经随整组解开，产出方这里那一份 {name} "
+                                + "按「其余物 = 不处理」集中进其余物了（⛔ 一个字节都没删）—— "
+                                + movedTo);
+                        }
+                        else
+                        {
+                            AppendLog(
+                                "WARN",
+                                $"{producer.LogName}：产出方这里那一份 {name} 没能集中进其余物 —— {moveFailure}"
+                                + "（这一份仍在原处，内容物不受影响）。");
+                        }
+
                         continue;
                     }
 
