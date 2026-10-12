@@ -241,6 +241,94 @@ namespace ArchiveFixer.Extraction
         /// ⛔ 不会因为"它躺在附近"就被认成这一组的一员。</description></item>
         /// </list>
         /// </summary>
+        /// <summary>
+        /// **本批"所有剩余的"里像卷的那些**（用户 2026-10-12 口径，原话：
+        /// 「这个第一大步完成之后就是扫描所有剩余的，我之前说过的什么"父目录+自己这一层+所有子目录"
+        /// 在这个新框架下可能是不成立的」）。
+        ///
+        /// <para>做法 = 既有窗口那一份（<see cref="EnumerateVolumeCandidatesNearby(string?)"/>：
+        /// 自己这一层 + 自己的子目录 + 父目录这一家）**并上**调用方给出的那些路径各自所在目录里像卷的
+        /// —— 去重之后一起交给下面那三道闸门（同族同基名 / 卷号一份对一份 / 整组自洽）。
+        /// ⛔ 范围只到"本批导入/剩下的那些路径所在的目录"：⛔ 不是整盘扫、⛔ 不递归无关目录。</para>
+        ///
+        /// <para>⚠ 这道放宽只改"**去哪儿找**"，⛔ 一个字都不改"凭什么叫同一组"那三道闸门，
+        /// 也不改"必须证明整组完整才允许搬/删"（<c>RestVolumeCompletenessGate</c>）。</para>
+        /// </summary>
+        public static IReadOnlyList<VolumeCandidate> EnumerateVolumeCandidatesNearby(
+            string? filePath,
+            IEnumerable<string>? extraPaths)
+        {
+            var candidates = new List<VolumeCandidate>(EnumerateVolumeCandidatesNearby(filePath));
+            var seen = new HashSet<string>(
+                candidates
+                    .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.Path))
+                    .Select(candidate => candidate.Path!),
+                StringComparer.OrdinalIgnoreCase);
+
+            if (extraPaths == null)
+            {
+                return candidates;
+            }
+
+            var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string? path in extraPaths)
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
+                string? directory = null;
+
+                try
+                {
+                    directory = Path.GetDirectoryName(path);
+                }
+                catch
+                {
+                    // 路径形态怪 ⇒ 跳过这一份（⛔ 不猜、不报错）。
+                }
+
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    directories.Add(directory);
+                }
+            }
+
+            foreach (string directory in directories)
+            {
+                if (!Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    foreach (VolumeCandidate candidate in Detection.VolumeContentInference.EnumerateCandidatesIn(directory))
+                    {
+                        if (candidates.Count >= MaxNearbyCandidates)
+                        {
+                            return candidates;
+                        }
+
+                        if (candidate != null
+                            && !string.IsNullOrWhiteSpace(candidate.Path)
+                            && seen.Add(candidate.Path!))
+                        {
+                            candidates.Add(candidate);
+                        }
+                    }
+                }
+                catch
+                {
+                    // 某个目录读不动（权限 / 半路被删）不影响已经收到的那几份候选。
+                }
+            }
+
+            return candidates;
+        }
+
         public static IReadOnlyList<VolumeCandidate> EnumerateVolumeCandidatesNearby(string? filePath)
         {
             string directory = Path.GetDirectoryName(filePath ?? string.Empty) ?? string.Empty;
@@ -3196,6 +3284,23 @@ namespace ArchiveFixer.Extraction
             var pool = new List<GatherPiece>();
             var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            /*
+             * 名字那一把尺子**不认**、但内容自述"我是这一族的分卷成员"的那些（用户 2026-10-12 口径 2 +
+             * 「先看看底层能够识别到文件是什么东西」）—— 先收在这里，等名字那一份收完再看它们能不能
+             * **把这一组补成 1..N 连号**（见下面那段），补不成就不采纳。
+             *
+             * 现场（大测试 sample `2222`，组合 4）：一组的四片里第 3、4 片被改名成别族
+             * （`333.zip` / `333-L4.part4.zip`）⇒ 名字尺子当场把它们挡在池子外 ⇒ 整组永远差一片 ⇒
+             * 引擎报「分卷缺失」⇒ ①「内容物解出来」红。
+             *
+             * ⚠ 为什么不能"内容像就收"（本条第一版就是那样，被 `基名不同_不碰别的组` 当场打红）：
+             * 内容只能证明"它是**某一组**的一卷"，证明不了"它是**这一组**的一卷" ——
+             * 两组同样 25 MiB 的切片、卷号也撞得上，光靠内容分不开。
+             * ⇒ 只承认**能把这一组补成连号**的那一种（连号 + 尺寸规律两条一起看），
+             * 剩下的照旧交给下面那三道闸门与"整组完整才允许搬/删"。
+             */
+            var contentOnly = new List<GatherPiece>();
+
             void Collect(IEnumerable<VolumeCandidate>? candidates, bool applySizeFilter)
             {
                 foreach (VolumeCandidate? candidate in candidates ?? Array.Empty<VolumeCandidate>())
@@ -3216,21 +3321,99 @@ namespace ArchiveFixer.Extraction
                     int? index = VolumeGroupDetector.TryGetVolumeIndex(name);
                     long size = LengthOf(full);
 
-                    if (index == null
-                        || size <= 0
-                        || (applySizeFilter && size < NearbyMinimumBytes)
-                        || !VolumeGroupDetector.BelongsToSameGroup(entryName, name))
+                    if (size <= 0 || (applySizeFilter && size < NearbyMinimumBytes))
                     {
                         continue;
                     }
 
-                    pool.Add(new GatherPiece(full, index.Value, size));
+                    bool byName = index != null && VolumeGroupDetector.BelongsToSameGroup(entryName, name);
+                    int? resolvedIndex = index;
+
+                    if (!byName)
+                    {
+                        /*
+                         * ===== 名字那把尺子不认时的**内容证据**那一档 =====
+                         *
+                         * 用户 2026-10-12 口径 2 的原话：「这个第一大步完成之后就是扫描所有剩余的，
+                         * 我之前说过的什么"父目录+自己这一层+所有子目录"在这个新框架下可能是不成立的」；
+                         * 加上他反复讲过的总口径「判断一个文件，绝对不能只看基名和后缀…先看看底层能够
+                         * 识别到文件是什么东西」。
+                         *
+                         * 现场（大测试 sample `2222`，组合 4）：一组的四片里，第 3、4 片被**改名成别族**
+                         * （`333.zip` / `333-L4.part4.zip`）—— 名字那一把尺子（同族同基名）当场把它们挡在池子外
+                         * ⇒ 整组永远差一片 ⇒ 引擎报「分卷缺失」⇒ ①「内容物解出来」红。
+                         *
+                         * 判据三条**全是内容事实**（⛔ 不看名字、⛔ 不猜）：
+                         *   ① 内容自述"我就是分卷组的一员"（<see cref="VolumeNumberReading.IsVolumeMember"/>）；
+                         *   ② 内容里读得出卷号（<see cref="VolumeNumberReading.Number"/>）；
+                         *   ③ 格式与入口那一族**相同**（同一份 SniffFormat 结论）。
+                         * ⛔ 它只是**收进池子**：下面那三道闸门（卷号一份对一份 / 尺寸规律 / 整组自洽 + 试开）
+                         * 与"必须证明整组完整才允许搬/删"照旧一条不落。
+                         */
+                        VolumeNumberReading content = VolumeNumberFromContent.Read(full);
+
+                        if (content.IsVolumeMember
+                            && content.Number is int number
+                            && content.Format == format)
+                        {
+                            contentOnly.Add(new GatherPiece(full, number, size));
+                        }
+
+                        continue;
+                    }
+
+                    if (resolvedIndex == null)
+                    {
+                        continue;
+                    }
+
+                    pool.Add(new GatherPiece(full, resolvedIndex.Value, size));
                 }
             }
 
             Collect(EnumerateVolumeCandidatesInDirectory(entryPath), applySizeFilter: false);
             Collect(chainPoolCandidates, applySizeFilter: true);
             Collect(nearbyCandidates, applySizeFilter: true);
+
+            /*
+             * ===== 内容证据那一档：只承认"**把这一组补成 1..N 连号**"的那一种 =====
+             *
+             * 判据（全是事实，⛔ 不看名字）：
+             *   ① 补完之后卷号必须是 **1..N 连号**（一个洞都不许剩）；
+             *   ② 除最后一片外，每一片都得是**满片**（尺寸 = 名字那一份里最大的那一片）；
+             *   ③ 最后一片不许比满片还大。
+             * 三条有一条不成立 ⇒ **这一档整个不采纳**（名字那一份原样用），
+             * 于是 `基名不同_不碰别的组` 那一类（两组同尺寸、卷号撞得上）照旧分得开。
+             */
+            if (contentOnly.Count > 0 && pool.Count > 0)
+            {
+                var trial = new List<GatherPiece>(pool);
+                var have = new HashSet<int>(trial.Select(piece => piece.Index));
+
+                foreach (GatherPiece piece in contentOnly
+                             .Where(piece => !have.Contains(piece.Index))
+                             .OrderBy(piece => piece.Index))
+                {
+                    have.Add(piece.Index);
+                    trial.Add(piece);
+                }
+
+                int count = have.Count;
+                long fullSize = trial.Max(piece => piece.Size);
+
+                bool contiguous = count > 0
+                    && have.Min() == 1
+                    && have.Max() == count
+                    && Enumerable.Range(1, count).All(have.Contains);
+
+                bool sizesFit = contiguous && trial.All(piece =>
+                    piece.Index == count || piece.Size == fullSize);
+
+                if (contiguous && sizesFit)
+                {
+                    pool = trial;
+                }
+            }
 
             /*
              * ===== 找卷的基准 = 手上**最浅的那一卷**（用户 2026-10-05 口径）=====

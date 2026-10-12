@@ -8711,8 +8711,17 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * 窗口的基准 = **手上那一卷**（口径 1）。⛔ 它只"看"：候选还要过下面那三道闸门
                  * （同族同基名 / 卷号一份对一份 / 整组自洽 + 7z 起始头字节数证据）。
+                 *
+                 * ⚠ 2026-10-12（用户口径 2）：「这个第一大步完成之后就是扫描所有剩余的，我之前说过的什么
+                 * "父目录+自己这一层+所有子目录"在这个新框架下可能是不成立的」⇒ 候选来源**并上本批
+                 * 所有剩下的路径各自所在目录**（`SnapshotTaskTable(Tasks)` 就是"这一批导入的 + 剩下的"）。
+                 * ⛔ 放宽的只是"去哪儿找"：三道闸门与"整组完整才允许搬/删"一个字都没动。
                  */
-                IReadOnlyList<VolumeCandidate> window = VolumeNameRepair.EnumerateVolumeCandidatesNearby(current);
+                IReadOnlyList<VolumeCandidate> window = VolumeNameRepair.EnumerateVolumeCandidatesNearby(
+                    current,
+                    SnapshotTaskTable(Tasks)
+                        .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.CurrentPath))
+                        .Select(candidate => candidate.CurrentPath));
 
                 VolumeNameRepair.CrossLayerVolumeGather decision =
                     VolumeNameRepair.ResolveCrossLayerVolumeGather(entryPath, null, window);

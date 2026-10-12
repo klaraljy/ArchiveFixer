@@ -78,6 +78,60 @@ namespace ArchiveFixer.Tests
         // ================================================================ ① 纯计划层（闸门）
 
         [SevenZipFact]
+        public void 本批所有剩余的都要被看见_散在无关目录里的那两片也算候选_闸门照旧()
+        {
+            RequireSevenZip();
+
+            (string first, string second, string third, long total) = BuildRealThreeVolumeSet("全批扫");
+
+            /*
+             * 把第 2、3 片搬到**与本层没有任何父子关系**的两棵目录里（旧窗口"父一层 + 自己这一层 +
+             * 自己的子目录"够不到它们）—— 这正是大测试里"一片一目录 + 跨层级摆放"的形状。
+             */
+            string elsewhere = Path.Combine(_root, "别处", "另一棵树");
+            string deeper = Path.Combine(_root, "别处2", "再一层", "再深一层");
+            Directory.CreateDirectory(elsewhere);
+            Directory.CreateDirectory(deeper);
+
+            string movedSecond = Path.Combine(elsewhere, Path.GetFileName(second));
+            string movedThird = Path.Combine(deeper, Path.GetFileName(third));
+            File.Move(second, movedSecond);
+            File.Move(third, movedThird);
+
+            // ① 旧窗口（只看附近）**看不见**它们 —— 这一条钉住"没有放宽时会漏"。
+            IReadOnlyList<VolumeCandidate> nearby = VolumeNameRepair.EnumerateVolumeCandidatesNearby(first);
+
+            Assert.DoesNotContain(
+                nearby,
+                candidate => string.Equals(candidate.Path, movedSecond, StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
+                nearby,
+                candidate => string.Equals(candidate.Path, movedThird, StringComparison.OrdinalIgnoreCase));
+
+            // ② 带上"本批所有剩余的路径"就看得见（用户 2026-10-12 口径 2）。
+            IReadOnlyList<VolumeCandidate> whole = VolumeNameRepair.EnumerateVolumeCandidatesNearby(
+                first,
+                new[] { first, movedSecond, movedThird });
+
+            Assert.Contains(
+                whole,
+                candidate => string.Equals(candidate.Path, movedSecond, StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                whole,
+                candidate => string.Equals(candidate.Path, movedThird, StringComparison.OrdinalIgnoreCase));
+
+            // ③ ⛔ 放宽的只是"去哪儿找"：三道闸门与"整组完整才动"照旧过一遍 ⇒ 照样判成一组、有可修计划。
+            VolumeNameRepair.CrossLayerVolumeGather decision =
+                VolumeNameRepair.ResolveCrossLayerVolumeGather(first, whole);
+
+            Assert.True(decision.Applicable, decision.Detail);
+            Assert.NotNull(decision.Plan);
+            Assert.True(decision.Plan!.CanRepair, decision.Plan.Reason);
+
+            _ = total;
+        }
+
+        [SevenZipFact]
         public void 三片分处三个目录_能判成一组_并给出收进001那一层的计划()
         {
             RequireSevenZip();
