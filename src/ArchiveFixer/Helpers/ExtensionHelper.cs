@@ -1912,8 +1912,29 @@ namespace ArchiveFixer.Helpers
 
                     if (uniqueMark != null && !LooksLikeInsertedJunk(uniqueJunk))
                     {
-                        uniqueMark = null;
-                        uniqueJunk = string.Empty;
+                        /*
+                         * ⚠ 例外：**纯数字的垃圾 + 带字母的标记**（2026-10-13 困难批 `run-26262626`）。
+                         *
+                         * <para>现场逐字：`111-L2.00000z01`（`z01` 前被塞了 5 个 `0` —— 造包细则的"重复字符"那一法
+                         * 允许重复数字）⇒ 老判据（垃圾必须含非字母数字）当场否掉 ⇒ 这一片**没被认成分卷片**
+                         * ⇒ 改名那一步按内容走（检测器说 `ZIP_SPANNED` ⇒ 建议后缀 `.zip`）⇒ 逐字
+                         * `111-L2.00000z01 -> 111-L2.zip，状态：改名成功` ⇒ **把第 1 片改成了本体/末片的名字**
+                         * ⇒ 真末片接不进来（`目标名已经被别的文件占着（⛔ 绝不覆盖）`）⇒ 那组永远凑不齐 ⇒ ①红。</para>
+                         *
+                         * <para>为什么这一档可以放：标记自身**带字母**（`z01` / `r00` / `partN`）时不存在
+                         * "数字位宽"那种歧义 —— 而"删掉的字符不许全是数字"这条规矩本来就是为了
+                         * **纯数字标记**（`0012` 到底是 `001` 还是 `012`）立的。⇒ 只对**带字母的标记**放行，
+                         * ⛔ 纯数字标记（`0012`）照旧一个都不认。</para>
+                         */
+                        bool digitJunkWithLetterMark = uniqueJunk.Length > 0
+                            && uniqueJunk.All(char.IsAsciiDigit)
+                            && uniqueMark.Any(char.IsAsciiLetter);
+
+                        if (!digitJunkWithLetterMark)
+                        {
+                            uniqueMark = null;
+                            uniqueJunk = string.Empty;
+                        }
                     }
                 }
             }

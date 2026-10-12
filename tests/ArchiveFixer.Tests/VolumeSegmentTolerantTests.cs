@@ -136,6 +136,42 @@ namespace ArchiveFixer.Tests
             Assert.Equal(expected, mark);
         }
 
+        /// <summary>
+        /// **纯数字垃圾 + 带字母的标记**也要认（2026-10-13 困难批 `run-26262626` 逐字现场）：
+        /// `111-L2.00000z01`（`z01` 前塞了 5 个 `0`）原来判不出来 ⇒ 那一单按内容改名，
+        /// 逐字 `111-L2.00000z01 -> 111-L2.zip，状态：改名成功` ⇒ **把第 1 片改成了本体的名字**
+        /// ⇒ 真末片接不进来（`目标名已经被别的文件占着（⛔ 绝不覆盖）`）⇒ 组永远凑不齐 ⇒ ①红。
+        ///
+        /// <para>放行的理由：标记自身带字母时没有"数字位宽"歧义；⛔ **纯数字标记照旧不认**
+        /// （`0012` 到底是 `001` 还是 `012` —— 见下面那条反例）。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("00000z01", "z01")]
+        [InlineData("0000z02", "z02")]
+        [InlineData("000000z03", "z03")]
+        public void 纯数字垃圾加带字母的标记_照样认得出(string segment, string expected)
+        {
+            Assert.True(
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out string mark, out _),
+                $"「{segment}」应该被认出来（标记带字母 ⇒ 无数字位宽歧义）");
+
+            Assert.Equal(expected, mark);
+        }
+
+        /// <summary>
+        /// 反向：**纯数字标记照旧一个都不认**（`0012` 到底是 `001` 还是 `012` —— 那条老规矩没动）；
+        /// ⛔ 也**不许**把"数字垃圾 + 纯数字标记"拼出来（`00000001` 这类只有连写那一档管，且要唯一）。
+        /// </summary>
+        [Theory]
+        [InlineData("0012")]
+        [InlineData("12345")]
+        public void 纯数字标记的歧义照旧不认(string segment)
+        {
+            Assert.False(
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out _, out _),
+                $"「{segment}」有数字位宽歧义 ⇒ 不该被认成卷标记");
+        }
+
         [Fact]
         public void 容错判据_认不出来时不许瞎猜()
         {
