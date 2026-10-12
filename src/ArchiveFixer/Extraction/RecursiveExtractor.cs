@@ -2066,6 +2066,44 @@ namespace ArchiveFixer.Extraction
                 }
 
                 /*
+                 * ===== 「单独一片后续卷」开失败 ⇒ 结论是**缺卷**，不是「损坏」（2026-10-13 困难批 `run-2222`）=====
+                 *
+                 * <para><b>现场逐字</b>：第 2 层开 `bbb-L2.par@@@@t3.rar`（这一组的**第 3 卷**、入口在别的目录）——
+                 * 候选 1..6 引擎都说 `Data Error in encrypted file. Wrong password?`；**候选 7（真密码）**
+                 * 解出了 `2 个文件 / 共 10489352 字节` ⇒ 老判据（"密码已证实 ⇒ 数据坏了"）当场落**损坏**
+                 * ⇒ 整层判损坏、整单失败、**连这一片都被丢掉** ⇒ 那一组永远缺第 3 片 ⇒ ①「内容物解出来」红。
+                 * 事实是：**这一组不全**（手上只有第 3 卷）—— 引擎当然解不动它的数据；
+                 * 这不是"包坏了"，是"组还没凑齐"。</para>
+                 *
+                 * <para><b>判据（只读事实，两把既有尺子）</b>：① 这一份是**后续卷**
+                 * （唯一出口 <see cref="FileNameHelper.IsVolumeContinuationPart"/>，能吃骨架档 `par@@@@t3`）；
+                 * ② 同组入口**不在它旁边**（同目录里没有"同族同基名、且自己不是后续卷"的那一份）。
+                 * 两条同时成立 ⇒ 这一趟就按"缺卷"收（与第 0 层那条入口路**同一个出口**：
+                 * 记下这一片、交给跨链/批末那一套去凑）。</para>
+                 *
+                 * <para>⛔ **不动"开不开"**（那一格试过一版"不打开"，把真机形状守门打红 ⇒ 已撤回）：
+                 * 候选照旧全试、动作一个字不改，只把**结论**从"损坏"改成"缺卷"。
+                 * ⛔ 位置必须在"损坏"与"密码已证实 ⇒ 数据坏了"那两支**之前**（它们会当场 return）。
+                 * ⛔ 判不出（目录读不了 / 名字解析不出）⇒ 照旧走引擎给的那一档。</para>
+                 */
+                if (!result.Success
+                    && FileNameHelper.IsVolumeContinuationPart(Path.GetFileName(archivePath))
+                    && !IsGroupEntryPresentBeside(archivePath))
+                {
+                    Log(
+                        "WARN",
+                        $"{layerLabel}：这一片是这一组的「后续卷」、而同组的入口包不在这一层 ⇒ 按「缺卷」处理"
+                        + "（⛔ 不是「压缩包损坏」）—— 片原样留着，交给批末/跨链那一套去凑。"
+                        + $"（引擎原话：{PasswordMasker.Sanitize(result.Message)}）");
+
+                    RememberUnresolvedVolumePiece(archivePath);
+
+                    return LayerOutcome.Stop(
+                        BuildLayerReport(item, result, succeededPassword: null, manifestEntries: lastListedEntries),
+                        RecursionStopReason.MissingVolume);
+                }
+
+                /*
                  * 损坏不再换候选重试（规则 1）：换密码对损坏的归档没有任何帮助，
                  * 只会把同一个损坏包重试 N 遍，既浪费时间又掩盖真正的问题。
                  */
@@ -2231,6 +2269,43 @@ namespace ArchiveFixer.Extraction
                 }
 
                 RecursionStopReason engineStop = MapEngineErrorToStopReason(result);
+
+                /*
+                 * ===== 「单独一片后续卷」开失败 ⇒ 结论是**缺卷**，不是「损坏」（2026-10-13 困难批 `run-2222`）=====
+                 *
+                 * <para><b>现场逐字</b>：第 2 层开 `bbb-L2.par@@@@t3.rar`（这一组的**第 3 卷**、入口在别的目录）——
+                 * 候选 1..6 引擎都说 `Data Error in encrypted file. Wrong password?`；**候选 7（真密码）**
+                 * 解出了 `2 个文件 / 共 10489352 字节` ⇒ 老判据（"密码已证实 ⇒ 数据坏了"）当场落**损坏**
+                 * ⇒ 整层判损坏 ⇒ **整单失败、连这一片都被丢掉** ⇒ 那一组永远缺第 3 片 ⇒ ①「内容物解出来」红。
+                 * 而事实是：**这一组不全**（手上只有第 3 卷）—— 引擎当然解不动它的数据，
+                 * 这不是"包坏了"，是"组还没凑齐"。</para>
+                 *
+                 * <para><b>判据（只读事实，两把既有尺子）</b>：
+                 * ① 这一份是**后续卷**（唯一出口 <see cref="FileNameHelper.IsVolumeContinuationPart"/>，
+                 * 它能吃骨架档 `par@@@@t3`）；② 同组入口**不在它旁边**（同目录里没有"同族同基名、且自己不是后续卷"
+                 * 的那一份）。两条同时成立 ⇒ 把这一层的停因落成 <see cref="RecursionStopReason.MissingVolume"/>
+                 * （= 缺卷，与第 0 层那条入口路**同一个出口**：记下这一片、交给跨链/批末那一套去凑）。</para>
+                 *
+                 * <para>⛔ **不动"开不开"**（那一格试过一版"不打开"，把真机形状守门打红 ⇒ 已撤回）：
+                 * 候选照旧全试、动作一个字不改，只把**结论**从"损坏"改成"缺卷"。
+                 * ⛔ 判不出（目录读不了 / 名字解析不出）⇒ 照旧走引擎给的那一档。</para>
+                 */
+                if (!result.Success
+                    && FileNameHelper.IsVolumeContinuationPart(Path.GetFileName(archivePath))
+                    && !IsGroupEntryPresentBeside(archivePath))
+                {
+                    Log(
+                        "WARN",
+                        $"{layerLabel}：这一片是这一组的「后续卷」、而同组的入口包不在这一层 ⇒ "
+                        + "按「缺卷」处理（⛔ 不是「压缩包损坏」）—— 片原样留着，交给批末/跨链那一套去凑。"
+                        + $"（引擎原话：{PasswordMasker.Sanitize(result.Message)}）");
+
+                    RememberUnresolvedVolumePiece(archivePath);
+
+                    return LayerOutcome.Stop(
+                        BuildLayerReport(item, result, succeededPassword: null, manifestEntries: lastListedEntries),
+                        RecursionStopReason.MissingVolume);
+                }
 
                 /*
                  * 引擎说"分卷缺失"时，把**这一层打不开的那一片**记下来（跨链收卷，2026-10-05 真机第九批 CCCC）：
@@ -2492,6 +2567,53 @@ namespace ArchiveFixer.Extraction
                     succeededPassword,
                     cancellationToken)
                 .ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 这一片分卷的**入口包**在不在它旁边（同一个目录里）？
+        ///
+        /// <para>判据只认两把既有尺子：<see cref="VolumeGroupDetector.BelongsToSameGroup"/>（同族同基名）
+        /// + <see cref="FileNameHelper.IsVolumeContinuationPart"/>（是不是后续卷）。
+        /// 「同组里有一份**不是后续卷**的」= 入口在 ✓（RAR 新式是 `.part1.rar`、7z 数字族是 `.001`、
+        /// 跨盘 ZIP 族是 `.zip` 那一片）。</para>
+        ///
+        /// <para>⛔ **判不出 ⇒ 返回 true**（= 按老口径：照旧走引擎给的那一档，一个字节不改）——
+        /// 这是补充闸门，不许因为目录读不了把正常结论覆盖掉。</para>
+        /// </summary>
+        private static bool IsGroupEntryPresentBeside(string piecePath)
+        {
+            string pieceName = FileNameHelper.GetFileName(piecePath);
+            string? directory = Path.GetDirectoryName(piecePath);
+
+            if (pieceName.Length == 0 || string.IsNullOrWhiteSpace(directory))
+            {
+                return true;
+            }
+
+            try
+            {
+                foreach (string candidate in Directory.EnumerateFiles(directory))
+                {
+                    string name = FileNameHelper.GetFileName(candidate);
+
+                    if (name.Length == 0
+                        || !VolumeGroupDetector.BelongsToSameGroup(name, pieceName))
+                    {
+                        continue;
+                    }
+
+                    if (!FileNameHelper.IsVolumeContinuationPart(name))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
