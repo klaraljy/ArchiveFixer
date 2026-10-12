@@ -1712,6 +1712,57 @@ namespace ArchiveFixer.Helpers
 
             string s = segment.Trim();
 
+            /*
+             * ===== 第 1.5 档（2026-10-13）：**partN 里"卷号被垃圾挤到最后一位"** =====
+             *
+             * <para><b>现场</b>（大测试困难批 `run-2222`，逐字）：`bbb-L2.part1.rar` 被伪装成
+             * `bbb-L2.part98598542删除1.rar`（EEE 式那一法：`part` + 一串随机数字 + 「删除」 + 卷号）。
+             * 老尺子（**不是相似度匹配**，是"删掉最多 N 个字符 + 骨架命中"两档穷举）把它读成——
+             * 删 ≤2 档删掉 `删/除` 得 `part985985421`（合法标记，但卷号 985985421）
+             * ⇒ `TrySplitPartNumberedVolume` 后面那道 `> 9999` 闸门把它否掉 ⇒ 整条 partN 解析失败、
+             * 退回"普通 rar 本体"分支 ⇒ 基名成了 `bbb-L2.part98598542删除1` ⇒ 与兄弟 `bbb-L2.part2.rar`
+             * **认不成一组** ⇒ 缺卷 ⇒ ①「内容物解出来」红。</para>
+             *
+             * <para><b>为什么不能只靠"相似度"</b>（用户问过：这不是后缀相似匹配该管的吗）：单看一个名字，
+             * `part98598542删除1` 里 `part9859` / `part98598` / `part1` 都是"完全包含"的合法子序列，
+             * 光比相似度会挑出 `part9859` 这种错答案。**能定案的是结构事实**：`partN` 这一族的卷号
+             * 永远在**末尾** ⇒ 取"末尾那一段数字"当卷号，中间那一段必须是"塞进去的垃圾"
+             * （<see cref="LooksLikeInsertedJunk"/>，与第四档同一把尺子：至少一个非字母数字、
+             * 且没有 ≥3 个连续 ASCII 字母）。⛔ 干净的 `part12` 不受影响（中间没有垃圾，
+             * "取最右那个能自洽的卷标记"这条既有口径一个字没动）。</para>
+             *
+             * <para>⚠ 已知歧义：`part1删2`（垃圾夹在两个数字之间）会被读成 `part2`。
+             * 这一档只提供"单个名字的最佳读法"，**敢不敢用它改名字/拼组**照旧由后面那几道闸门
+             * （兄弟卷佐证 / 卷号一份对一份 / 尺寸规律 / 整组自洽 / 试开）说了算。</para>
+             *
+             * <para>⛔ 位置必须在"前缀标记+尾巴"那一档**之前**：`part98598542删除1` 会被它抢答成
+             * `part98598542`（卷号 98598542 越界）。</para>
+             */
+            if (s.StartsWith("part", StringComparison.OrdinalIgnoreCase) && s.Length > 6)
+            {
+                int digitStart = s.Length;
+
+                while (digitStart > 4 && char.IsAsciiDigit(s[digitStart - 1]))
+                {
+                    digitStart--;
+                }
+
+                string middle = s[4..digitStart];
+                string ordinal = s[digitStart..];
+
+                if (ordinal.Length > 0
+                    && middle.Length >= 2
+                    && LooksLikeInsertedJunk(middle)
+                    && int.TryParse(ordinal, out int ordinalValue)
+                    && ordinalValue <= 9999
+                    && IsVolumePartExtension(".part" + ordinal))
+                {
+                    canonicalSegment = "part" + ordinal;
+                    junk = middle;
+                    return true;
+                }
+            }
+
             // 先走已有的两档（整段就是标记 / 前缀标记+尾巴 / 非字母数字骨架）
             if (TrySplitVolumeSegmentLoose(s, out canonicalSegment, out junk))
             {

@@ -86,6 +86,56 @@ namespace ArchiveFixer.Tests
             Assert.Equal(expected, mark);
         }
 
+        /// <summary>
+        /// **第 1.5 档（2026-10-13）：`partN` 里"卷号被垃圾挤到最后一位"**。
+        ///
+        /// <para>现场（大测试困难批 `run-2222`，逐字）：`bbb-L2.part1.rar` 被伪装成
+        /// `bbb-L2.part98598542删除1.rar`（EEE 式：`part` + 随机数字 + 「删除」 + 卷号）⇒ 老尺子读成
+        /// `part985985421`（卷号越界 ⇒ 整条 partN 解析失败）⇒ 基名成了 `bbb-L2.part98598542删除1`
+        /// ⇒ 与兄弟 `bbb-L2.part2.rar` 认不成一组 ⇒ 缺卷 ⇒ ①红。</para>
+        ///
+        /// <para>判据：以 `part` 打头 + 中间是"塞进去的垃圾"（同一把结构尺子）+ 末尾是卷号
+        /// ⇒ 规范名 = `part` + 末尾卷号。⛔ 干净的 `part12` 不受影响。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("part98598542删除1", "part1")]     // 真机现场
+        [InlineData("part删除2", "part2")]
+        [InlineData("part@#$%3", "part3")]
+        [InlineData("part9删8除7删6除4", "part4")]
+        public void partN里卷号被垃圾挤到最后一位_照样还原成part加卷号(string segment, string expected)
+        {
+            Assert.True(
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out string mark, out _),
+                $"「{segment}」应该被认出来");
+
+            Assert.Equal(expected, mark);
+        }
+
+        /// <summary>
+        /// 反向：**干净的 `part12` 不许被吃成 `part2`**（中间没有垃圾 ⇒ 它就是卷号 12）；
+        /// 中间那段是"词"（≥3 个连续字母）的也不认。
+        /// ⚠ `partx2` 这一档**由既有的"删 ≤2 个字符"档处理**（`x` 是垃圾 ⇒ `part2`），
+        /// 本条不许把它改动 —— 那是老口径，动它会波及既有语料。
+        /// </summary>
+        [Theory]
+        [InlineData("part12", "part12")]
+        [InlineData("part1", "part1")]
+        [InlineData("partdeluxe2", null)]
+        [InlineData("partx2", "part2")]
+        public void partN那一档不许把干净卷号或真名字吃进来(string segment, string? expected)
+        {
+            bool ok = ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out string mark, out _);
+
+            if (expected == null)
+            {
+                Assert.False(ok, $"「{segment}」不该被认成卷标记");
+                return;
+            }
+
+            Assert.True(ok, $"「{segment}」应该被认出来");
+            Assert.Equal(expected, mark);
+        }
+
         [Fact]
         public void 容错判据_认不出来时不许瞎猜()
         {
