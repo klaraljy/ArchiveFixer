@@ -47,6 +47,36 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **"目标位上那一份是不是这一片自己"只有一个出口**（用户 2026-10-12，大测试 `run-8888` 实测）：
+        /// 那一行日志写着「目标名已经被别的文件占着」，而**目标名就是这一片自己的路径** ——
+        /// 老写法只用 `File.Exists(target)` 判，把"早就在位 / 已经被接过一次"说成了"被别人占着"。
+        /// 这一条钉住那个出口的三种事实：同一条路径 ⇒ true；别人 ⇒ false；**这一片自己已经不在了 ⇒ false**
+        /// （判不出就不认 —— 正是"判不出 ⇒ 什么都不做"那一档，⛔ 绝不覆盖）。
+        /// </summary>
+        [Fact]
+        public void 目标位上是不是这一片自己_三种事实各钉一格()
+        {
+            string piece = Path.Combine(_root, "打包111(2)", "打包111.zip");
+            Directory.CreateDirectory(Path.GetDirectoryName(piece)!);
+            File.WriteAllBytes(piece, new byte[64]);
+
+            // ① 目标位就是这一片自己 ⇒ true（该走"已经在位"那一支）。
+            Assert.True(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, piece));
+
+            // ② 目标位上是**别人**的文件 ⇒ false（照旧"绝不覆盖"）。
+            string other = Path.Combine(_root, "别处", "打包111.zip");
+            Directory.CreateDirectory(Path.GetDirectoryName(other)!);
+            File.WriteAllBytes(other, new byte[64]);
+
+            Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, other));
+
+            // ③ 这一片**已经不在了**（被前一次接片搬走/改名）⇒ false（判不出 ⇒ 不认）。
+            File.Delete(piece);
+
+            Assert.False(ExtractionCoordinator.IsTargetSlotAlreadyThisPiece(piece, other));
+        }
+
+        /// <summary>
         /// ⛔ **本单自己的暂存目录里的那一份：只建链接，绝不搬走** —— 那是收尾链（结果校验 / 定稿）
         /// 要读的那一份，搬走 = 把自己这一单唯一的产物拿走（真机就是这样变成「解压失败」的）。
         /// </summary>

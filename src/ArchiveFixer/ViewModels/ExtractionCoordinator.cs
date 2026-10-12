@@ -9597,6 +9597,36 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⛔ 只写程序当场算出来的值（判不出就写「判不出」），⛔ 它一处判据都不改。</para>
         /// </summary>
+        /// <summary>
+        /// **接片没接上**这句话本身（唯一出口）—— 与 `IsTargetSlotAlreadyThisPiece` **同一把尺子**。
+        ///
+        /// <para>为什么单独收一个出口（用户 2026-10-12，大测试 `run-8888` 逐字）：
+        /// 那一行写着 `目标名已经被别的文件占着（⛔ 绝不覆盖）`，而**目标名就是这一片自己的路径**
+        /// —— 老写法只用 `File.Exists(target)` 判，于是把"这一片早就在位（或它已经被接过一次、
+        /// 原位置那份已经不在了）"说成了"被别人占着"，下一轮排查顺着这句去找一个根本不存在的"别人"。</para>
+        ///
+        /// <para>三种事实分开说（⛔ 判据与行为一个字不改，只把话说对）：
+        /// ① 目标位上就是**这一片自己** ⇒ 那根本不该走到"没接上"（`alreadyInPlace` 那一支已经先接走）；
+        /// ② 这一片**已经不在原位置**（被前一次接片搬走/改名）⇒ 判不出目标位上那份是谁的，照实说；
+        /// ③ 其余（目标位上确实站着**别人**的文件）⇒ 照旧"绝不覆盖"。</para>
+        /// </summary>
+        private static string DescribeAdoptRejection(string piecePath, string target)
+        {
+            if (!File.Exists(target))
+            {
+                return "硬链接 / 同盘改名都没成功（同名已在、或跨了卷）";
+            }
+
+            if (IsTargetSlotAlreadyThisPiece(piecePath, target))
+            {
+                return "目标位上就是这一片自己（应当按「已经在位」接走）";
+            }
+
+            return File.Exists(piecePath)
+                ? "目标名已经被别的文件占着（⛔ 绝不覆盖）"
+                : "这一片已经不在原来的位置了（判不出目标位上那份与它是不是同一份，⛔ 绝不覆盖）";
+        }
+
         private void LogAdoptCriterionInputs(
             string piecePath,
             string reason,
@@ -9928,9 +9958,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 LogAdoptCriterionInputs(
                     piecePath,
-                    File.Exists(target)
-                        ? "目标名已经被别的文件占着（⛔ 绝不覆盖）"
-                        : "硬链接 / 同盘改名都没成功（同名已在、或跨了卷）",
+                    DescribeAdoptRejection(piecePath, target),
                     canonical,
                     targetDir,
                     target);
