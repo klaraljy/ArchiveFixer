@@ -620,6 +620,10 @@ namespace ArchiveFixer.Extraction
              */
             if (IsSamePathAsSource(perArchiveDirectory, sourceArchivePath, out string resolvedSource))
             {
+                /*
+                 * 第一步：换用**归档基名**（既有唯一出口 `FileNameHelper.GetArchiveBaseName`：
+                 * `bbb-L4.zip删除` → `bbb-L4`、`222-L5.rarzz` → `222-L5`）。
+                 */
                 string archiveBaseName = FileNameHelper.SanitizeFileName(
                     FileNameHelper.GetArchiveBaseName(resolvedSource));
 
@@ -627,17 +631,37 @@ namespace ArchiveFixer.Extraction
                     ? SafeCombine(root.DestinationRoot, archiveBaseName)
                     : string.Empty;
 
-                if (replaced.Length == 0 || IsSamePathAsSource(replaced, resolvedSource, out _))
+                if (replaced.Length > 0 && !IsSamePathAsSource(replaced, resolvedSource, out _))
                 {
-                    // 连归档基名都救不回来（空名 / 还是同一条路径）⇒ 照旧如实失败，⛔ 不编一个目录名出来。
-                    return Failure(
-                        OutputPlacementError.InvalidDestinationPath,
-                        "目标目录与源包是同一条路径，拼不出可用的落点：" + perArchiveDirectory);
+                    safeBaseName = archiveBaseName;
+                    packageName = archiveBaseName;
+                    perArchiveDirectory = replaced;
                 }
+                else
+                {
+                    /*
+                     * 第二步：源包**连后缀都没有**（run-13131313：顶层就叫 `111-L4`，是「删后缀」那一路伪装）——
+                     * 归档基名与原名逐字相同，怎么剥都还是源文件自己。这一档按本仓既有的
+                     * 「撞名绝不覆盖」规矩换名（唯一出口 `SafePathHelper.AutoRenameDirectoryPath`：
+                     * 目标名被占 ⇒ `111-L4` → `111-L4(1)`）。
+                     *
+                     * ⛔ 判据不是"随便挑一个没被占的名字"：能走到这里已经证明**那个位置上站着的就是源文件本身**
+                     * （上面那一句相等判据），所以 `(1)` 这个名字一定可用、也一定不动任何源文件。
+                     */
+                    string unique = SafePathHelper.AutoRenameDirectoryPath(perArchiveDirectory);
 
-                safeBaseName = archiveBaseName;
-                packageName = archiveBaseName;
-                perArchiveDirectory = replaced;
+                    if (string.IsNullOrWhiteSpace(unique) || IsSamePathAsSource(unique, resolvedSource, out _))
+                    {
+                        // 连自动改名都拿不到可用名 ⇒ 照旧如实失败，⛔ 不编一个目录名出来。
+                        return Failure(
+                            OutputPlacementError.InvalidDestinationPath,
+                            "目标目录与源包是同一条路径，拼不出可用的落点：" + perArchiveDirectory);
+                    }
+
+                    packageName = FileNameHelper.GetFileName(unique);
+                    safeBaseName = packageName;
+                    perArchiveDirectory = unique;
+                }
             }
 
             /*

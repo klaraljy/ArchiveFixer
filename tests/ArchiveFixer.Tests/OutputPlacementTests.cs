@@ -45,6 +45,46 @@ namespace ArchiveFixer.Tests
             Assert.NotEqual(source, result.DestinationDirectory, StringComparer.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// 源包**连后缀都没有**时（用户 2026-10-11 大测试 run-13131313：顶层就叫 `111-L4`，是「删后缀」那一路伪装）：
+        /// 归档基名与原名逐字相同、怎么剥都还是源文件自己 ⇒ 这一档按本仓既有的
+        /// 「撞名绝不覆盖」规矩换名（`111-L4` → `111-L4(1)`），⛔ 不是随便挑一个没被占的名字 ——
+        /// 能走到这一步已经证明**那个位置上站着的就是源文件本身**。
+        /// </summary>
+        [Fact]
+        public void 源包没有后缀时_落点按撞名规矩换成括号一_绝不当成源文件自己()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "AFPlacementNoExt", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+
+            try
+            {
+                string source = Path.Combine(root, "111-L4");
+                File.WriteAllBytes(source, new byte[16]);
+
+                OutputPlacementResult result = OutputPlacement.ResolveDestinationDirectory(
+                    source,
+                    OutputPlacementMode.PerArchiveSubfolder);
+
+                Assert.True(result.Success, result.Message);
+                Assert.Equal(Path.Combine(root, "111-L4(1)"), result.DestinationDirectory);
+                Assert.NotEqual(source, result.DestinationDirectory, StringComparer.OrdinalIgnoreCase);
+
+                // 源文件一个字节都没动，也没被改名。
+                Assert.True(File.Exists(source));
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
         // ── 用户 2026-09-24 第 13 条：落点四条规则 ─────────────────────────────
         //
         // （选中的是文件还是文件夹）×（有没有指定位置），四条组合各钉一条**完整路径**。
