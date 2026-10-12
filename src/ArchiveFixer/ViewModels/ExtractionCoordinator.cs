@@ -160,6 +160,14 @@ namespace ArchiveFixer.ViewModels
              * 「空间不足」档照旧走它自己那一支（每层各删各的、含源包），「不动其余物」档更不动内层包。
              * 挂钩子这一行读的就是它们。
              */
+            /*
+             * ⚠ 2026-10-12 实测：**Keep 档那一支先不挂**（`_layerReclaimToRestThisBatch` 留着不用）——
+             * 我的第一版把"集中进其余物"接到了 `ExecuteSourcePackageMove`（源包搬运），而它有一条红线的
+             * 原话就是拒搬工作区里的文件：`源在工作区目录里（那是程序自己的中间产物，不是用户的源包），
+             * 一个字节都不搬`（`run-4444` 逐字，×3 片）⇒ 那一支只会写一句"集中进其余物"的假 INFO。
+             * ⇒ 下一轮换成**过程物**那条出口（`Extraction/ProcessArtifactLayout` 的"把过程物搬进其余物"，
+             * 它本来就是干这个的、也接受工作区里的路径），在此之前**不挂钩子**（Keep 档行为与从前逐字相同）。
+             */
             if (_layerReclaimThisBatch || _layerReclaimToRecycleBinThisBatch)
             {
                 extractor.LayerReclaim = OnRecursiveLayerReclaim;
@@ -226,7 +234,8 @@ namespace ArchiveFixer.ViewModels
                 reclaimRootSource: false,
                 reclaimLabel: request.ChildLayerLabel,
                 reclaimWorkspaceDirectory: request.WorkspaceTaskDirectory,
-                toRecycleBin: _layerReclaimToRecycleBinThisBatch);
+                toRecycleBin: _layerReclaimToRecycleBinThisBatch,
+                toRest: _layerReclaimToRestThisBatch);
 
             foreach ((string level, string message) in logEntries)
             {
@@ -245,6 +254,57 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        /// <summary>
+        /// **这一单的其余物目录**（"集中进其余物"那一档要用它）。
+        ///
+        /// <para>两个来源，都只读事实：</para>
+        /// <list type="number">
+        /// <item><description>续解路：任务上已经算好的 <see cref="ArchiveTask.RestDirectoryPath"/>（空 = 还没算过）；</description></item>
+        /// <item><description>递归路：手上是**递归工作区里的那一层**（<c>&lt;落点&gt;\.ArchiveFixer.work\recursive\&lt;id&gt;</c>）——
+        /// 按文件系统标记那一段**前面的**那一层就是落点，其余物就在它下面（常量唯一出口
+        /// <see cref="VolumeContentInference.WorkDirectoryName"/>，⛔ 这里不另写一份标记名）。</description></item>
+        /// </list>
+        ///
+        /// <para>推不出（标记那一段找不到 / 前面没有东西）⇒ 返回空串 ⇒ 调用方**什么都不做**（+ 一行 WARN）。</para>
+        /// </summary>
+        private static string? ResolveLayerReclaimRestDirectory(ArchiveTask task, string? reclaimWorkspaceDirectory)
+        {
+            if (task != null && !string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                return task.RestDirectoryPath;
+            }
+
+            if (string.IsNullOrWhiteSpace(reclaimWorkspaceDirectory))
+            {
+                return null;
+            }
+
+            try
+            {
+                var directory = new DirectoryInfo(reclaimWorkspaceDirectory);
+
+                while (directory != null)
+                {
+                    if (string.Equals(directory.Name, VolumeContentInference.WorkDirectoryName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string? landing = directory.Parent?.FullName;
+
+                        return string.IsNullOrWhiteSpace(landing)
+                            ? null
+                            : Path.Combine(landing, ProcessArtifactLayout.ArtifactDirectoryName);
+                    }
+
+                    directory = directory.Parent;
+                }
+            }
+            catch
+            {
+                // 路径形态怪 / 权限 ⇒ 判不出（⛔ 不猜）。
+            }
+
+            return null;
+        }
 
         /// <summary>
         /// **「移入回收站」档的逐层回收执行体**：清单与门槛都走上面那条路（`PurgeLayerSourcePackage`
@@ -964,6 +1024,13 @@ namespace ArchiveFixer.ViewModels
         /// 两个事实位一起用：置位 = 装逐层回收钩子；哪一档 = 由这一位决定动作。</para>
         /// </summary>
         private bool _layerReclaimToRecycleBinThisBatch;
+
+        /// <summary>
+        /// 本批是不是按**「其余物 = 不处理」档**做逐层集中（用户 2026-10-12 计划的第三个动作：
+        /// 这一档既不删也不进回收站 ⇒ 集中进「其余物」）。
+        /// 与另外两个事实位**同一份出口**（`PrepareRestHandlingForBatch`）。
+        /// </summary>
+        private bool _layerReclaimToRestThisBatch;
 
         /// <summary>
         /// 本批是不是按**「空间不足」模式**跑（批首定一次；用户 2026-09-27 拍板的模式）。
@@ -2157,12 +2224,13 @@ namespace ArchiveFixer.ViewModels
                     sourceMoveFailure = PurgeLayerSourcePackage(
                         task, verification, commit, logEntries, LayerPurgeTrigger.LayerReclaim);
                 }
-                else if (_layerReclaimToRecycleBinThisBatch)
+                else if (_layerReclaimToRecycleBinThisBatch || _layerReclaimToRestThisBatch)
                 {
                     /*
-                     * 「移入回收站」档**也逐层**（用户 2026-10-12 口径）—— 与上面那一档**同一条闸门链**，
-                     * 只差动作：永久删 → 送回收站。没这一支的话，链内产出的那一族片会活到定稿、
-                     * 被"跑过递归 ⇒ 全是内容物"那条判据发布成内容物（大测试 `run-6666` 的 ③ 红）。
+                     * 另两档**也逐层**——与上面那一档**同一条闸门链**，只差动作：
+                     * 永久删 / 送回收站（口径 1，用户 2026-10-12）/ **集中进其余物**（Keep 档）。
+                     * 没这两支的话，链内产出的那一族片会活到定稿、被"跑过递归 ⇒ 全是内容物"那条判据
+                     * 发布成内容物（大测试 `run-6666` 的 ③ 红、以及 Keep 档 `run-4444` 那三轮）。
                      */
                     sourceMoveFailure = PurgeLayerSourcePackage(
                         task,
@@ -2170,7 +2238,8 @@ namespace ArchiveFixer.ViewModels
                         commit,
                         logEntries,
                         LayerPurgeTrigger.LayerReclaim,
-                        toRecycleBin: true);
+                        toRecycleBin: _layerReclaimToRecycleBinThisBatch,
+                        toRest: _layerReclaimToRestThisBatch);
                 }
                 else if (sourceHandling != SourceHandlingMode.KeepInPlace)
                 {
@@ -2415,7 +2484,8 @@ namespace ArchiveFixer.ViewModels
             bool reclaimRootSource = true,
             string? reclaimLabel = null,
             string? reclaimWorkspaceDirectory = null,
-            bool toRecycleBin = false)
+            bool toRecycleBin = false,
+            bool toRest = false)
         {
             if (task == null)
             {
@@ -2552,6 +2622,41 @@ namespace ArchiveFixer.ViewModels
                  * 永久删 → 送回收站（唯一出口 `RecycleBinService.Delete` 的安全前置照旧走）。
                  */
                 return RecycleLayerSourcePackage(task, triggerLabel, subject, logEntries, reclaimLabel, reclaimRootSource);
+            }
+
+            if (toRest)
+            {
+                /*
+                 * ===== 「其余物 = 不处理（Keep）」档那一支（用户 2026-10-12 计划的第三个动作）=====
+                 *
+                 * 这一档既不删也不进回收站 ⇒ 那就该**集中进「其余物」**（设计里别处就是这么写的：
+                 * 「过程物集中进其余物，源包与过程物一起按档处理」）。
+                 * 现在它们留在落地树里 ⇒ 下一遍再导入就会被当成新原包（正是判据 ③ 要防的那件事）。
+                 * 现场：基线里 3 轮 ③✘ 全是这一档（`run-4444` / `run-11111111` / `run-19191919`），
+                 * 残留清一色是链内那一族的 `.z01/.z02/.z03`。
+                 *
+                 * ⛔ 门槛与上面两档**逐条同一套**（就是本方法上面刚走过的那些），差的只有动作：
+                 * 永久删 / 送回收站 → **搬进这一单的其余物**（唯一出口 `ExecuteSourcePackageMove`，
+                 * 它会顺手把 `SourcePackageMove` 落成 `Done` ⇒ 链尾不会重复搬一次）。
+                 */
+                string? artifactRoot = ResolveLayerReclaimRestDirectory(task, reclaimWorkspaceDirectory);
+
+                if (string.IsNullOrWhiteSpace(artifactRoot))
+                {
+                    logEntries.Add((
+                        "WARN",
+                        $"{task.LogName}：{triggerLabel}要回收{subject}，但推不出这一单的其余物目录 —— 一个字节都没动。"));
+
+                    return null;
+                }
+
+                logEntries.Add((
+                    "INFO",
+                    $"{task.LogName}：{triggerLabel} —— 这一档是「不动其余物」，所以把{subject}集中进其余物：{artifactRoot}"));
+
+                ExecuteSourcePackageMove(task, artifactRoot, SourceMoveTrigger.AfterChain, logEntries);
+
+                return null;
             }
 
             SourceCleanupResult cleanup = SourcePackageCleanup.CleanupVerified(
@@ -18849,6 +18954,16 @@ namespace ArchiveFixer.ViewModels
             _layerReclaimToRecycleBinThisBatch = string.Equals(
                 _restHandlingThisBatch,
                 RestHandlingModes.RecycleBin,
+                StringComparison.OrdinalIgnoreCase);
+
+            /*
+             * 「不动其余物」档也逐层 —— 但动作是**集中进其余物**（不删、不进回收站）。
+             * 用户 2026-10-12 的口径只点名了回收站那一档；这一档是它的对称项，
+             * 依据是设计里既有那句「过程物集中进其余物，源包与过程物一起按档处理」。
+             */
+            _layerReclaimToRestThisBatch = string.Equals(
+                _restHandlingThisBatch,
+                RestHandlingModes.Keep,
                 StringComparison.OrdinalIgnoreCase);
         }
 
