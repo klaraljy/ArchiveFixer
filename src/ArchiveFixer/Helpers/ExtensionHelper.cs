@@ -1867,6 +1867,81 @@ namespace ArchiveFixer.Helpers
                 }
             }
 
+            /*
+             * ===== 第五档（2026-10-12，同一条用户口径）：**数字型"拉长卷号"** =====
+             *
+             * `0000000001` → `001`。
+             *
+             * <para><b>现场</b>（大测试困难批，样本 `22222222` 逐字）：造包细则的"重复字符"那一法
+             * 会把 `.001` 写成 `.0000000001`（把某个字符连写 3–8 次塞进标记里）。套娃包解开之后
+             * 吐出这一片，而**前四档一条都命不中**（整段 10 位数字：不是 2–3 位、也没有 `z`/`r` 前缀、
+             * 骨架档要求三位且首尾对齐）⇒ 它在链里被当成"普通内层包"去开 ⇒ 打不开 ⇒
+             * 逐字 `已完成 1 层，停在第 2 层，原因：压缩包损坏` ⇒ 那一单失败、产物被清掉 ⇒
+             * 整组永远缺 `.001` ⇒ ①「内容物解出来」红。</para>
+             *
+             * <para><b>判据</b>：整段都是数字、长度 &gt; 3 时，把**所有"同一字符连写 ≥3 次"**的片段
+             * 各压成 1 个字符，压完必须正好是 3 位数字的合法卷标记。
+             * `0000000001` → `001` ✓；`0012` 没有任何 ≥3 的连写 ⇒ 压完还是 4 位 ⇒ **不认**（老口径不变）。</para>
+             */
+            if (!ambiguous && uniqueMark == null && s.Length > 3 && s.All(char.IsAsciiDigit))
+            {
+                /*
+                 * ⚠ "压成 1 个"不够（实测踩到）：`0000000001` = **9 个 0 + 1**，压成 1 个只剩 `01`（两位，不合法），
+                 * 而它真身是 `.001`（连写的 7 个 0 与标记自己的两个 0 分不开）。
+                 * ⇒ 口径 = 每个"连写 ≥3 次"的片段**可以压成 1 个、也可以压成 2 个**，
+                 *   取**唯一**那个合法三位标记；两条都能凑出合法标记、或一条都凑不出 ⇒ 不认（宁可不猜）。
+                 */
+                var forms = new List<string> { string.Empty };
+
+                for (int i = 0; i < s.Length;)
+                {
+                    int j = i;
+
+                    while (j < s.Length && s[j] == s[i])
+                    {
+                        j++;
+                    }
+
+                    int runLength = j - i;
+                    var next = new List<string>(forms.Count * 2);
+
+                    foreach (string prefix in forms)
+                    {
+                        if (runLength >= 3)
+                        {
+                            // 压成 1 个 / 压成 2 个，两种都留
+                            next.Add(prefix + s[i]);
+                            next.Add(prefix + new string(s[i], 2));
+                        }
+                        else
+                        {
+                            next.Add(prefix + s.Substring(i, runLength));
+                        }
+                    }
+
+                    forms = next;
+
+                    if (forms.Count > 32)
+                    {
+                        return false;   // 病态名字（太多"连写"）⇒ 不猜
+                    }
+
+                    i = j;
+                }
+
+                var legal = forms
+                    .Distinct(StringComparer.Ordinal)
+                    .Where(candidate => candidate.Length == 3 && IsVolumePartExtension("." + candidate))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+
+                if (legal.Count == 1)
+                {
+                    uniqueMark = legal[0];
+                    uniqueJunk = string.Empty;
+                }
+            }
+
             if (ambiguous || uniqueMark == null)
             {
                 return false;

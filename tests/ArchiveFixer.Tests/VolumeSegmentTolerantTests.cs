@@ -40,6 +40,52 @@ namespace ArchiveFixer.Tests
             Assert.Equal(expected, mark);
         }
 
+        /// <summary>
+        /// **第五档（2026-10-12）：数字型"拉长卷号"** —— `0000000001` → `001`。
+        ///
+        /// <para>现场（大测试困难批，样本 `22222222` 逐字）：造包细则的"重复字符"那一法把 `.001`
+        /// 写成 `.0000000001`；套娃包解开之后吐出这一片，而前四档一条都命不中 ⇒ 它在链里被当成
+        /// "普通内层包"去开 ⇒ 打不开 ⇒ 逐字 `已完成 1 层，停在第 2 层，原因：压缩包损坏` ⇒
+        /// 那一单失败、产物被清掉 ⇒ 整组永远缺 `.001` ⇒ ①「内容物解出来」红。</para>
+        ///
+        /// <para>判据：整段都是数字、长度 &gt; 3 时，把"同一字符连写 ≥3 次"的片段各压成 1 个字符，
+        /// 压完必须正好是 3 位数字的合法卷标记。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("0000000001", "001")]
+        [InlineData("00000000012", "012")]
+        [InlineData("0022222222222", "002")]
+        public void 数字型拉长卷号_压掉连写三以上的重复字符后是合法标记才算(string segment, string expected)
+        {
+            Assert.True(
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out string mark, out _),
+                $"「{segment}」应该被认出来（同一条口径：⛔ 不设个数上限）");
+
+            Assert.Equal(expected, mark);
+        }
+
+        /// <summary>
+        /// 第五档的边界：没有"≥3 次连写"的全数字段照旧不认（老口径一个字不改，`0012` 就是既有的那条反例）；
+        /// `1000000` 压掉 6 个 0 之后是 `100`（合法三位标记）⇒ 认。
+        /// </summary>
+        [Theory]
+        [InlineData("0012", null)]
+        [InlineData("11111111111", null)]
+        [InlineData("1000000", "100")]
+        public void 第五档的边界_压完不成三位合法标记就不认(string segment, string? expected)
+        {
+            bool ok = ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out string mark, out _);
+
+            if (expected == null)
+            {
+                Assert.False(ok, $"「{segment}」不该被认成卷标记");
+                return;
+            }
+
+            Assert.True(ok, $"「{segment}」应该被认出来");
+            Assert.Equal(expected, mark);
+        }
+
         [Fact]
         public void 容错判据_认不出来时不许瞎猜()
         {
