@@ -87,17 +87,33 @@ public sealed class VolumeGroupRulerParityTests
         new("x.rar", "x.001.bak", "跨段伪装·老规格（AGENTS 点名的形状）", false, false),
         new("x.rar", "x.r00.bak", "跨段伪装·老式续卷挂尾巴", false, false),
         new("x.zip", "x.z01.bak", "跨段伪装·跨盘 zip 续卷挂尾巴", false, false),
-        new("x.7z.001", "x.7z.002.rar", "分卷段后挂 .rar（既有写法）", false, true),
+        // ⚠ 2026-10-13 订正：这一格原来钉的是 (Fold=false, MoveDelete=true) —— 折叠尺当时**不认**它是后续卷，
+        //    因为那一档数 partN 用的是"逐字 part 前缀"。现在两把尺子都转调唯一出口
+        //    `ExtensionHelper.TrySplitPartNumberedVolume`（它能吃骨架档）⇒ 两边都认"是后续卷" ⇒ (true, true)。
+        //    证据：困难批 `run-2222` 的 `bbb-L2.par@@@@t3.rar` 正是被旧判据判成"不是后续卷" ⇒
+        //    被打成独立内层包去开 ⇒ `压缩包损坏` ⇒ 整单失败（见 `docs/大测试.md` §10.6 与 `发现.md`）。
+        new("x.7z.001", "x.7z.002.rar", "分卷段后挂 .rar（既有写法）", true, true),
         new("x.part1.rar", "x.part2.rar.bak", "part 族·尾巴挂点段", false, false),
     };
 
     /// <summary>今天允许两把尺子答案不同的格子（按语料顺序；多一格少一格都算漂移）。</summary>
+    /// <summary>
+    /// 允许两把尺子**故意不同**的那几格（宽窄不同是刻意设计，⛔ 不许顺手统一）。
+    ///
+    /// <para>⚠ 2026-10-13 订正（**有意收缩，不是漂移**）：原来还有第四格
+    /// `x.7z.001 + x.7z.002.rar` —— 两把尺子在那格上曾经不同，原因是
+    /// <see cref="FileNameHelper.IsVolumeContinuationPart"/> 里数 `partN` 的那一步用的是
+    /// **逐字 `part` 前缀 + `GetPartSegmentNumber`**，于是"数字族 + `.rar` 尾巴"这种名字
+    /// （`x.7z.002.rar`）被判成"不是后续卷"。那一格已在困难批 `run-2222` 上证明是**缺陷**
+    /// （EEE 式 `bbb-L2.par@@@@t3.rar` 判不出 ⇒ 被判成独立内层包去开 ⇒ `压缩包损坏` ⇒ 整单失败），
+    /// 现在那一档**转调唯一出口** <see cref="ExtensionHelper.TrySplitPartNumberedVolume"/> ⇒ 两把尺子在这格上
+    /// **答案一致**（都认"是后续卷"），于是允许差异从 4 格收成 3 格。</para>
+    /// </summary>
     private static readonly string[] AllowedDifferences =
     {
         "x.7z.001.txt + x.7z.002.txt",
         "x.7z.001 + x.7z.001.txt",
         "x.7z.001 + x.7z.002.bak",
-        "x.7z.001 + x.7z.002.rar",
     };
 
     private static bool FoldRuler(string first, string candidate)
@@ -139,7 +155,7 @@ public sealed class VolumeGroupRulerParityTests
     }
 
     [Fact]
-    public void 允许的差异只有那四格_多一格少一格都算漂移()
+    public void 允许的差异只有那三格_多一格少一格都算漂移()
     {
         List<string> actual = Corpus
             .Where(cell => FoldRuler(cell.First, cell.Candidate) != MoveDeleteRuler(cell.First, cell.Candidate))

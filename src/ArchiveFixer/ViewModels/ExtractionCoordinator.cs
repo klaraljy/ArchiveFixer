@@ -10859,9 +10859,21 @@ namespace ArchiveFixer.ViewModels
                 && VolumeGroupResolver.TryGetCanonicalVolumeName(memberName, out string memberCanonical)
                 && string.Equals(memberCanonical, memberName, StringComparison.OrdinalIgnoreCase);
 
-            string tailName = memberNameIsClean
-                ? ResolveGroupReferenceName(task, baseName, memberPath)
-                : ResolveGroupReferenceName(task, baseName);
+            /*
+             * ⚠ 2026-10-13 订正（困难批 `run-2222`，逐字）：这道"干不干净"的闸门**不许把 `memberPath` 整个丢掉**。
+             *
+             * 现场：手上这一片叫 `bbb-L2.part98598542删除1.rar`（EEE 式伪装），它的规范名是 `bbb-L2.part1.rar`
+             * ⇒ `memberNameIsClean = false` ⇒ 老写法走**两参**重载（`memberPath` 根本没参与）⇒ 引用名退回
+             * `<基名>.zip`（**zip 族**）⇒ 与这一组的兄弟（partN 族）`BelongsToSameGroup` **一个都匹配不上**
+             * ⇒ 逐字 `这一组的引用名=「bbb-L2.zip」，任务表里这一组的单 0 个` ⇒ `这一组该拼到哪一层 —— 判不出`
+             * ⇒ 整组永远缺片 ⇒ ①红。（同一份里名字干净的那一片 `bbb-L2.part2.rar` 反而能判出来：
+             * `批末重判 —— 这一组该拼到哪一层 = …\bbb\bbb\bbb`。）
+             *
+             * ⛔ **安全性一个字没放宽**：`ResolveGroupReferenceName` 内部本来就拿**同一把尺子自比**
+             * （`BelongsToSameGroup(own, own)`），解析不出来的名字（`333.7z.001.txt` 那一档）照样退回
+             * `<基名>.zip` —— 老口径与它的守门用例行为不变，这里只是把"手上这一片"重新交给那把尺子。
+             */
+            string tailName = ResolveGroupReferenceName(task, baseName, memberPath);
 
             var members = new List<string>();
 

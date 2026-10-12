@@ -1150,8 +1150,25 @@ namespace ArchiveFixer.Helpers
                 return !string.Equals(volumeMark, "001", StringComparison.OrdinalIgnoreCase);
             }
 
-            // xxx.part2.rar 的最后后缀是 .rar，编号在倒数第二个后缀上。
-            return GetPartSegmentNumber(fileName) > 1;
+            /*
+             * xxx.part2.rar 的最后后缀是 .rar，编号在倒数第二个后缀上。
+             *
+             * ⚠ 2026-10-13 收口（困难批 `run-2222` 实测）：这一档**转调唯一出口**
+             * <see cref="ExtensionHelper.TrySplitPartNumberedVolume"/> —— 原来这里自己用"**逐字** `part` 前缀"
+             * 数数字，于是 EEE 式塞了垃圾的名字（`bbb-L2.par@@@@t3.rar`，卷号 3）判成"**不是后续卷**" ⇒
+             * 它进不了"后续卷"名单 ⇒ 在链里被当成**独立内层包**去开 ⇒ 逐字
+             * `已完成 2 层，停在第 3 层，原因：压缩包损坏` ⇒ 整单失败、连那一片都被丢掉 ⇒ ①红。
+             * 那把尺子（含骨架档）本来就能认出它来 —— 与 `IsVolumePartFileName` / 探测器 / 改名闸门
+             * 用的是**同一份**判据（§9.5：同一件事的真值只允许有一个出口）。
+             */
+            return ExtensionHelper.TrySplitPartNumberedVolume(
+                       fileName,
+                       out _,
+                       out _,
+                       out int partNumberedIndex,
+                       out _,
+                       out _)
+                   && partNumberedIndex > 1;
         }
 
         /// <summary>取 <c>xxx.part01.rar</c> 里的 1；不是 part 命名返回 0。</summary>
