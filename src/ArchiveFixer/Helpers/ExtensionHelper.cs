@@ -1803,6 +1803,70 @@ namespace ArchiveFixer.Helpers
                 uniqueJunk = skeletonJunk;
             }
 
+            /*
+             * ===== 第四档（2026-10-12，用户口径逐字：「这种情况就要去改代码了，范围太小了，
+             * 以后凡是限制两到三个的都会出现问题，赶紧修改」）=====
+             *
+             * **任意长度的"垃圾"**：`--p002` → `002`、`@@003` → `003`、`#%z01` → `z01`。
+             *
+             * <para><b>为什么前三档不够</b>：档 1/2 是"删掉 ≤2 个字符"，而造包细则允许塞 **2–3 个**
+             * （大测试困难批实测 `资源222-L2.zip.--p002`：杂质 3 个 ⇒ 认不出 ⇒ 那一片被当成
+             * "双面文件"从偏移 162 抠出来 ⇒ 整组凑不齐）；档 3（骨架）要求"首位数字在段首、
+             * 末位在段末"（首尾对齐）⇒ **杂质落在数字前面**时必然判死。</para>
+             *
+             * <para><b>换成结构判据，⛔ 不设个数上限</b>：</para>
+             * <list type="number">
+             * <item><description>标记必须**贴着段末**（卷标记本来就在末尾）—— 段末那一段连续数字
+             * 必须是 2 位或 3 位（4 位以上判不出是 `0012` 还是 `012` ⇒ 不认）；</description></item>
+             * <item><description>标记前面那一段算"垃圾"，它必须**至少含一个非字母非数字的字符**
+             * （符号 / 中文 / 其它）—— 光靠 ASCII 字母凑出来的前缀更像一个词；</description></item>
+             * <item><description>垃圾里**不许出现 ≥3 个连续 ASCII 字母** —— 防把 `photo-123`、
+             * `backup-002` 这种真名字吃进来（这条是**结构**限制，不是个数限制）；</description></item>
+             * <item><description>恢复出来的标记必须合法（<see cref="IsVolumePartExtension"/>）；
+             * 字母前缀（`z01`/`r00`）优先于纯数字（两条都合法时取更长的那个，**不是歧义**）。</description></item>
+             * </list>
+             *
+             * <para>⛔ 顺序不变：前面三档判得出来就轮不到它 —— 既有行为一个字节不改。</para>
+             */
+            if (!ambiguous && uniqueMark == null)
+            {
+                int end = s.Length;
+                int digitStart = end;
+
+                while (digitStart > 0 && char.IsAsciiDigit(s[digitStart - 1]))
+                {
+                    digitStart--;
+                }
+
+                int runLength = end - digitStart;
+
+                if (runLength is 2 or 3)
+                {
+                    string digitsCandidate = s[digitStart..end];
+                    string digitsJunk = s[..digitStart];
+
+                    // 字母前缀（z01 / r00）：紧挨着数字那一个字母也算标记的一部分。
+                    if (digitStart > 0
+                        && (s[digitStart - 1] == 'z' || s[digitStart - 1] == 'r')
+                        && IsVolumePartExtension("." + s[(digitStart - 1)..end]))
+                    {
+                        uniqueMark = s[(digitStart - 1)..end];
+                        uniqueJunk = s[..(digitStart - 1)];
+                    }
+                    else if (IsVolumePartExtension("." + digitsCandidate))
+                    {
+                        uniqueMark = digitsCandidate;
+                        uniqueJunk = digitsJunk;
+                    }
+
+                    if (uniqueMark != null && !LooksLikeInsertedJunk(uniqueJunk))
+                    {
+                        uniqueMark = null;
+                        uniqueJunk = string.Empty;
+                    }
+                }
+            }
+
             if (ambiguous || uniqueMark == null)
             {
                 return false;
@@ -1811,6 +1875,54 @@ namespace ArchiveFixer.Helpers
             canonicalSegment = uniqueMark;
             junk = uniqueJunk;
             return true;
+        }
+
+        /// <summary>
+        /// 这一段是不是"**塞进去的垃圾**"（而不是一个正常的词）？
+        ///
+        /// <para>判据两条，都是**结构**判据，⛔ 不设"最多几个字符"这种上限：</para>
+        /// <list type="number">
+        /// <item><description>至少含一个**非字母非数字**的字符（符号 / 中文 / 其它）——
+        /// 纯 ASCII 字母/数字凑出来的前缀更像正常的名字；</description></item>
+        /// <item><description>**不许出现 ≥3 个连续 ASCII 字母** —— `photo-123` / `backup-002`
+        /// 这种真名字不能被吃进来（真机语料里这种名字很常见）。</description></item>
+        /// </list>
+        ///
+        /// <para>空串 = 不是"垃圾前缀"（那是前三档的地盘）。</para>
+        /// </summary>
+        private static bool LooksLikeInsertedJunk(string junk)
+        {
+            if (junk.Length == 0)
+            {
+                return false;
+            }
+
+            bool hasNonAlphaNumeric = false;
+            int consecutiveLetters = 0;
+
+            foreach (char c in junk)
+            {
+                if (!char.IsAsciiLetterOrDigit(c))
+                {
+                    hasNonAlphaNumeric = true;
+                }
+
+                if (char.IsAsciiLetter(c))
+                {
+                    consecutiveLetters++;
+
+                    if (consecutiveLetters >= 3)
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    consecutiveLetters = 0;
+                }
+            }
+
+            return hasNonAlphaNumeric;
         }
     }
 }

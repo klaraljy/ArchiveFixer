@@ -190,4 +190,88 @@ public class ArchiveDetectServiceTests
 
         Assert.Equal(expected, status);
     }
+
+    /// <summary>
+    /// **名字自报"我是某一组分卷的一片" ⇒ 不许判成内嵌归档（双面文件）**。
+    ///
+    /// <para><b>现场</b>（2026-10-12 大测试困难批，样本 `22222222` 逐字）：顶层三片里
+    /// `资源222-L2.zip.--p002`（7z 切的 zip 第 2 片）的内容里**恰好含有下一层 RAR 卷的魔数**
+    /// —— 因为那一层切的就是下一层的 RAR 卷 —— 于是顺序扫扫到那个魔数、判成"双面文件"，
+    /// 逐字 `检测到内嵌归档：已从偏移 162 处取出 26214238 字节（区间 162–26214400）`
+    /// ⇒ 这一片的**原始字节再没被当成这一组的一片** ⇒ 整组凑不齐 ⇒ ①「内容物解出来」红。</para>
+    ///
+    /// <para>判据只读名字（唯一出口 <c>FileNameHelper.IsVolumePartFileName</c>）：一片分卷的名字就是它的身份，
+    /// "尾部有归档魔数"在它身上是假证据（切片里本来可能出现任何字节）。</para>
+    ///
+    /// <para><b>红检</b>：把 <c>ArchiveDetectService</c> 里那道 <c>namedVolumePart</c> 闸门去掉 ⇒
+    /// 本条当场变红（`EmbeddedArchiveOffset` 会被填成 162）。</para>
+    /// </summary>
+    [Fact]
+    public async Task Detect_片名带卷标记_内容里恰有归档魔数_不许判成内嵌归档()
+    {
+        // 造一个**真** 7z（顺序扫要能找到它的魔数；用项目内置的 7z.exe，绝不依赖用户机器上的工具）
+        string tempRoot = Path.Combine(Path.GetTempPath(), "af_detect_volpiece_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            string payloadDir = Path.Combine(tempRoot, "payload");
+            Directory.CreateDirectory(payloadDir);
+            File.WriteAllText(Path.Combine(payloadDir, "inner.txt"), "内容\n");
+
+            string innerArchive = Path.Combine(tempRoot, "inner.7z");
+            string sevenZip = ArchiveFixer.Engines.ToolLocator.Default.SevenZipExePath;
+
+            Assert.False(string.IsNullOrWhiteSpace(sevenZip), "本机没有内置 7z.exe，这条用例失去意义");
+
+            using (var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = sevenZip,
+                ArgumentList = { "a", "-t7z", "-mx0", innerArchive, Path.Combine(payloadDir, "inner.txt") },
+                WorkingDirectory = tempRoot,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            })!)
+            {
+                process.WaitForExit();
+                Assert.Equal(0, process.ExitCode);
+            }
+
+            byte[] inner = File.ReadAllBytes(innerArchive);
+
+            /*
+             * 现场形状：`[162 字节别的东西][一整个归档]`，名字带卷标记（第 2 片）。
+             * 162 就是真机日志里那个偏移（逐字：`已从偏移 162 处取出`）。
+             */
+            var piece = new byte[162 + inner.Length];
+            new Random(20261012).NextBytes(piece.AsSpan(0, 162));
+            Buffer.BlockCopy(inner, 0, piece, 162, inner.Length);
+
+            string pieceDir = Path.Combine(tempRoot, "piece");
+            Directory.CreateDirectory(pieceDir);
+            string piecePath = Path.Combine(pieceDir, "set.zip.002");
+            File.WriteAllBytes(piecePath, piece);
+
+            var service = new ArchiveDetectService();
+            ArchiveFixer.Models.DetectResult result = await service.DetectAsync(piecePath);
+
+            Assert.Equal(0, result.EmbeddedArchiveOffset);
+
+            // 后缀状态照旧按"这是分卷标记"报（⛔ 不是"内嵌归档"）：
+            // 那条死路（改成 .zip 也打不开）在这一档根本不该出现。
+            Assert.Equal(
+                ArchiveFixer.Models.StatusText.ExtensionVolume,
+                service.GetExtensionStatus("set.zip.002", ".002", result));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
 }

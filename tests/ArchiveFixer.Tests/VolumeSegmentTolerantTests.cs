@@ -48,6 +48,54 @@ namespace ArchiveFixer.Tests
             Assert.False(ExtensionHelper.TrySplitVolumeSegmentTolerant(string.Empty, out _, out _));
         }
 
+        /// <summary>
+        /// **第四档（2026-10-12）：任意长度的"垃圾前缀"**（用户口径逐字：「这种情况就要去改代码了，
+        /// 范围太小了，以后凡是限制两到三个的都会出现问题，赶紧修改」）。
+        ///
+        /// <para>现场（大测试困难批，样本 `22222222`）：顶层那一片叫 `资源222-L2.zip.--p002` ——
+        /// 卷标记 `.002` 前面被塞了 **3 个**符号（`--p`）。老的三档（删 ≤2 个字符 / 首尾对齐的骨架）
+        /// **一条都命不中** ⇒ 那一片判不出是分卷 ⇒ 被当成"双面文件"从偏移 162 抠出来 ⇒ 整组凑不齐 ⇒ ①红。</para>
+        ///
+        /// <para>⛔ 判据是**结构**（标记贴段末 + 垃圾里至少一个非字母数字 + 垃圾里没有 ≥3 个连续 ASCII 字母），
+        /// 不是"最多几个字符"—— 所以以后塞 5 个、8 个符号照样认得出。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("--p002", "002")]        // 真机现场：3 个符号 + 卷号
+        [InlineData("@@@003", "003")]        // 5 个字符（老尺子上限 2 ⇒ 认不出）
+        [InlineData("#%$@!&*003", "003")]    // 8 个符号（老尺子上限 2 ⇒ 认不出）
+        [InlineData("中文002", "002")]        // 中文垃圾前缀
+        [InlineData("#%z01", "z01")]         // 字母前缀优先（z 族）
+        [InlineData("【删除】r00", "r00")]    // r 族
+        public void 任意长度的垃圾前缀_照样认得出卷标记(string segment, string expected)
+        {
+            Assert.True(
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out string mark, out _),
+                $"「{segment}」应该被认出来（结构判据，⛔ 不设个数上限）");
+
+            Assert.Equal(expected, mark);
+        }
+
+        /// <summary>
+        /// 反向：**别把真名字吃进来**（第四档的结构防线）。
+        ///
+        /// <list type="bullet">
+        /// <item><description>`photo-123` / `backup-002`：垃圾里出现 ≥3 个连续 ASCII 字母 ⇒ 那是一个词，不是塞进去的垃圾；</description></item>
+        /// <item><description>`--p0012`：段末连续数字 4 位 ⇒ 判不出是 `001` 还是 `012` ⇒ 宁可不认；</description></item>
+        /// <item><description>`--p1`：卷号只有 1 位 ⇒ 不是卷标记（老口径）。</description></item>
+        /// </list>
+        /// </summary>
+        [Theory]
+        [InlineData("photo-123")]
+        [InlineData("backup-002")]
+        [InlineData("--p0012")]
+        [InlineData("--p1")]
+        public void 第四档不许把真名字或判不出的形状当成卷标记(string segment)
+        {
+            Assert.False(
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out _, out _),
+                $"「{segment}」不该被认成卷标记（宁可不认，也不乱猜）");
+        }
+
         [Fact]
         public void 夹在号码中间的垃圾_不许当成尾巴往外传()
         {

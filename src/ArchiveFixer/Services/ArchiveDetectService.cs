@@ -305,10 +305,29 @@ namespace ArchiveFixer.Services
                 }
 
                 /*
+                 * ===== 名字自报"我是某一组分卷的一片" ⇒ **整段内嵌归档判定不适用** =====
+                 *
+                 * <para><b>现场（2026-10-12 大测试困难批，样本 `22222222` 逐字）</b>：顶层三片里
+                 * `资源222-L2.zip.--p002`（7z 切的 zip 第 2 片）的内容里**恰好含有下一层 RAR 卷的魔数**
+                 * —— 因为 L2 切的就是 L1 的 RAR 卷 —— 于是顺序扫扫到那个魔数，判成"双面文件"、
+                 * 从**偏移 162** 抠出 26 214 238 字节（逐字：`检测到内嵌归档：已从偏移 162 处取出 …`）
+                 * ⇒ 这一片的**原始字节再没被当成这一组的一片** ⇒ 整组凑不齐 ⇒ ①「内容物解出来」红。</para>
+                 *
+                 * <para>判据只读**名字**（唯一出口 <see cref="FileNameHelper.IsVolumePartFileName"/>，
+                 * 与下面"后缀状态"那一处**同一把尺子**）：一片分卷的名字就是它的身份，
+                 * 而"尾部有自洽归档 / 尾部有魔数"这两条在它身上是**假证据**（切片里本来就可能出现任何字节）。
+                 * ⛔ 这一档只是**不做**内嵌归档判定（= 少做一次抠取），不改任何其它判据：
+                 * 头里有魔数（RAR5 各卷、7z 的 `.001`）照旧走头上那条路，一个字节都不受影响。</para>
+                 */
+                bool namedVolumePart = FileNameHelper.IsVolumePartFileName(Path.GetFileName(filePath));
+
+                /*
                  * 尾部那 256 KB 里找 ZIP 的 EOCD（最便宜的一条：只读尾部）。
                  * 这一条覆盖"视频/图片 + 尾部整包"的全部真实样本（第 33/38 条那批）。
                  */
-                DetectResult? embeddedResult = DetectEmbeddedArchive(filePath, headerResult);
+                DetectResult? embeddedResult = namedVolumePart
+                    ? null
+                    : DetectEmbeddedArchive(filePath, headerResult);
 
                 if (embeddedResult != null)
                 {
@@ -338,7 +357,7 @@ namespace ArchiveFixer.Services
                  * （打包者常这么套），而 ZIP 候选要过"中央目录签名 + 局部文件头"两条位置校验，
                  * 是实打实的"这里有一个 ZIP"（判据见 EmbeddedArchiveDetector，一个字没放宽）。
                  */
-                if (scan.ZipEocdOffsets.Count > 0)
+                if (!namedVolumePart && scan.ZipEocdOffsets.Count > 0)
                 {
                     EmbeddedArchiveInfo middle = EmbeddedArchiveDetector.DetectAt(filePath, scan.ZipEocdOffsets);
 
@@ -352,7 +371,7 @@ namespace ArchiveFixer.Services
                     }
                 }
 
-                if (scan.Archive != null)
+                if (!namedVolumePart && scan.Archive != null)
                 {
                     DetectResult tailResult = BuildTailArchiveResult(filePath, scan.Archive, headerResult);
 
