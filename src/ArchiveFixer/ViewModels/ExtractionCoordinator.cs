@@ -8755,7 +8755,9 @@ namespace ArchiveFixer.ViewModels
                             task.FileName,
                             Path.GetDirectoryName(current) ?? string.Empty,
                             window.Count,
-                            sample.Length == 0 ? "（一个都没有）" : string.Join("；", sample)));
+                            sample.Length == 0 ? "（一个都没有）" : string.Join("；", sample))
+                        // 闸门那一句也带上（2026-10-12：候选找齐了却"判不出"时，日志必须说清是哪一道闸门）。
+                        + (string.IsNullOrWhiteSpace(decision.Detail) ? string.Empty : "｜闸门：" + decision.Detail));
 
                     return false;
                 }

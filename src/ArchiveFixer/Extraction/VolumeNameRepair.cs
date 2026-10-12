@@ -3253,7 +3253,15 @@ namespace ArchiveFixer.Extraction
             IEnumerable<VolumeCandidate>? chainPoolCandidates,
             IEnumerable<VolumeCandidate>? nearbyCandidates = null)
         {
-            var notApplicable = new CrossLayerVolumeGather { Applicable = false };
+            /*
+             * "不适用"也要**说清是哪一道闸门关着**（用户 2026-10-12：大测试 run-8888 / run-15151515 两轮里
+             * 候选明明都找齐了、结论却是"判不出"，日志里看不出卡在哪 ⇒ 下一轮没法查）。
+             * ⛔ 只是把既有判据的结论写出来，判据一个字不改。
+             */
+            CrossLayerVolumeGather NotApplicable(string reason) =>
+                new() { Applicable = false, Detail = reason };
+
+            var notApplicable = NotApplicable("入口那一卷不在盘上（或路径形态认不出）");
 
             if (string.IsNullOrWhiteSpace(entryVolumePath) || !File.Exists(entryVolumePath))
             {
@@ -3267,7 +3275,7 @@ namespace ArchiveFixer.Extraction
             // 只接"手上这一份就是某组的第 1 卷"：入口是后续卷时该做的事完全不同（缺的是首卷）。
             if (entryDirectory.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(entryName) != 1)
             {
-                return notApplicable;
+                return NotApplicable("入口那一卷不是某一组的第 1 卷（这一档只接第 1 卷）");
             }
 
             VolumeContentFormat format = VolumeContentInference.SniffFormat(entryPath);
@@ -3458,7 +3466,8 @@ namespace ArchiveFixer.Extraction
 
             if (!hasEntry || ambiguousIndex || byIndex.Count == 0 || !byIndex.ContainsKey(1))
             {
-                return notApplicable;
+                return NotApplicable(
+                    $"卷号那一档过不去：入口在池子里={hasEntry}；同号两份候选={ambiguousIndex}；池子={byIndex.Count} 份；有第 1 卷={byIndex.ContainsKey(1)}");
             }
 
             /*
@@ -3471,7 +3480,7 @@ namespace ArchiveFixer.Extraction
 
             if (string.IsNullOrWhiteSpace(expectedBaseName))
             {
-                return notApplicable;
+                return NotApplicable("推不出这一组的期望基名（那几份的名字/尺寸进不了任何一个桶）");
             }
 
             /*
