@@ -168,7 +168,25 @@ namespace ArchiveFixer.ViewModels
              * ⇒ 下一轮换成**过程物**那条出口（`Extraction/ProcessArtifactLayout` 的"把过程物搬进其余物"，
              * 它本来就是干这个的、也接受工作区里的路径），在此之前**不挂钩子**（Keep 档行为与从前逐字相同）。
              */
-            if (_layerReclaimThisBatch || _layerReclaimToRecycleBinThisBatch)
+            /*
+             * ⚠ 2026-10-12 实测第二条（Keep 档那一支**又不挂**）：
+             * 挂上之后确实把片集中进其余物了（日志逐字：`逐层回收（删除操作 = 不动其余物） —— pack111-L2.z01 已集中进其余物`），
+             * **但同一轮的内容物被重复解出来**：残留里出现 `pack111-L4.rarzz\pack111-L0\444(1).mp4`、
+             * `pack111-L0(1)\444(1).mp4`、`444(2).mp4` ⇒ ①「内容物解出来」与②「成品同层」双双变红。
+             * ⇒ 结论：**"搬"不能挂在"逐层"那一刻**（删除/回收站那两档可以 —— 那是"用完了就没了"，
+             * 而搬走会让后续那一层的产物跟踪按路径找不到原件）。正确落点 = **链尾**（`CollectChainInnerPackagesIntoRestAsync`
+             * 已经在干这件事，只是它只认任务、认不出链内产出的片）⇒ 下一轮在那儿补，
+             * 在此之前**不挂钩子**（Keep 档行为与基线逐字相同）。
+             */
+            /*
+             * ⚠ 2026-10-12 第三条（**Keep 档也挂钩子，但只记账、绝不在这里搬**）：
+             * 上面两条把它整档关掉之后，「其余物 = 不处理」档**没有任何东西往 `_chainInnerLayerInputs` 里记账**
+             * ⇒ 链尾那一遍（`CollectChainInnerLayerInputsIntoRest`，它只读这份名单）永远搬 0 个
+             * ⇒ 链内那一族的 `.z01/.z02/.z03` 留在地树里（基线 3 轮 ③✘：`run-4444` / `run-11111111` /
+             * `run-19191919`，全是这一档）。修法 = 钩子照装（它同时是**唯一的记账点**），
+             * 但动作面**只留删除/回收站**：`toRest` 恒为 false（搬在链尾那一遍做完）。
+             */
+            if (_layerReclaimThisBatch || _layerReclaimToRecycleBinThisBatch || _layerReclaimToRestThisBatch)
             {
                 extractor.LayerReclaim = OnRecursiveLayerReclaim;
             }
@@ -198,6 +216,40 @@ namespace ArchiveFixer.ViewModels
         private void OnRecursiveLayerReclaim(RecursiveLayerReclaimRequest request)
         {
             if (request == null)
+            {
+                return;
+            }
+
+            /*
+             * **只记账**（⛔ 不动盘）：这一层用过的那几个文件（入口 + 同组各卷）。
+             * 链尾那张"集中进其余物"的名单要用它 —— 实测依据（2026-10-12，`run-4444`）：
+             * 挂在"逐层"那一刻去搬会把后续那一层的产物跟踪弄丢（内容物被重复解出来，`444(1)/(2).mp4`），
+             * 而**删除 / 回收站那两档逐层做没问题**（"用完了就没了"）⇒ 所以"搬"必须等链尾。
+             */
+            foreach (string used in request.GroupFiles)
+            {
+                if (!string.IsNullOrWhiteSpace(used))
+                {
+                    _chainInnerLayerInputs.Add(used);
+                }
+            }
+
+            /*
+             * ===== 「其余物 = 不处理」档：这一层**只有记账，一个字节都不动**（2026-10-12）=====
+             *
+             * 为什么必须在这里显式返回（⛔ 不能靠"两个开关都是 false 自然就不动"）：
+             * `PurgeLayerSourcePackage` 的三个动作开关（`toRecycleBin` / `toRest`）全 false 时
+             * **会落到最后那一支"永久删除"**（它没有"档没开 ⇒ 什么都不做"的分支）——
+             * 实测：把钩子照装、`toRest` 传 false，既有守门 `用例R1` 当场变红
+             * （"不动其余物"那一遍第 3 层开工时 `level2.7z` 已经没了，逐字
+             * `Assert.Contains() Failure: Item not found in collection`）。
+             *
+             * 而"搬进其余物"也**不能**在这一刻做：实测（`run-4444`）逐层搬会让后续那一层的产物跟踪
+             * 按路径找不到原件 ⇒ 内容物被重复解出来（`444(1).mp4` / `pack111-L0(1)\444(1).mp4`）。
+             * ⇒ 这一档的全部动作 = 上面那几行记账，交给**链尾**那一遍
+             * （`CollectChainInnerLayerInputsIntoRest`）一次性集中进其余物。
+             */
+            if (_layerReclaimToRestThisBatch)
             {
                 return;
             }
@@ -235,7 +287,13 @@ namespace ArchiveFixer.ViewModels
                 reclaimLabel: request.ChildLayerLabel,
                 reclaimWorkspaceDirectory: request.WorkspaceTaskDirectory,
                 toRecycleBin: _layerReclaimToRecycleBinThisBatch,
-                toRest: _layerReclaimToRestThisBatch);
+                /*
+                 * ⛔ 这里**恒 false**：「其余物 = 不处理」档的那一份"搬进其余物"只能在**链尾**做
+                 * （`CollectChainInnerLayerInputsIntoRest`）—— 挂在逐层那一刻搬会让后续那一层的产物
+                 * 跟踪按路径找不到原件，内容物被重复解出来（实测：`444(1).mp4` / `pack111-L0(1)\444(1).mp4`）。
+                 * 这个钩子在 Keep 档的唯一职责 = 把用过的文件记进 `_chainInnerLayerInputs`（详见上面挂钩子那一行）。
+                 */
+                toRest: false);
 
             foreach ((string level, string message) in logEntries)
             {
@@ -254,6 +312,145 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        /// <summary>
+        /// **把一个过程物文件搬进其余物**（唯一出口：让位 + 同卷改名 / 跨卷复制 + 绝不覆盖）。
+        ///
+        /// <para>两处消费点共用它（⛔ 不许各写一份）：① 链尾把"内层包"集中进其余物
+        /// （<c>CollectChainInnerPackagesIntoRestAsync</c>）；② 「其余物 = 不处理」档的逐层集中
+        /// （<see cref="ReclaimLayerFilesToRest"/>）。</para>
+        ///
+        /// <para>判据与源包搬运（<c>SourcePackageMover</c>）**同一口径**：目标名被占 ⇒
+        /// <see cref="ProcessArtifactLayout.MakeUniqueTarget"/> 让位（连"本计划里前面那几条"一起算），
+        /// 同卷直接改名、跨卷/被占用才回落到"先复制成功再删原件" —— 复制失败就一个字节都不动。</para>
+        /// </summary>
+        /// <param name="from">源（必须在盘上）。</param>
+        /// <param name="to">目标（最终名可能因让位而变，见 <paramref name="target"/>）。</param>
+        /// <param name="movedTargets">本趟已经落下去的目标名（让位时要看它）。</param>
+        /// <param name="target">真的搬到的那个名字（失败时为空串）。</param>
+        /// <param name="failure">失败原因（成功时为 null）。</param>
+        internal static bool TryMoveIntoRest(
+            string from,
+            string to,
+            HashSet<string> movedTargets,
+            out string target,
+            out string? failure)
+        {
+            target = to;
+            failure = null;
+
+            try
+            {
+                if (movedTargets.Contains(target) || File.Exists(target) || Directory.Exists(target))
+                {
+                    target = ProcessArtifactLayout.MakeUniqueTarget(
+                        target,
+                        isDirectory: false,
+                        movedTargets,
+                        FileSystemArtifactTargetProbe.Instance);
+                }
+
+                movedTargets.Add(target);
+
+                SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(target) ?? string.Empty);
+
+                try
+                {
+                    File.Move(from, target, overwrite: false);
+                }
+                catch (IOException)
+                {
+                    File.Copy(from, target, overwrite: false);
+                    File.Delete(from);
+                }
+                catch (NotSupportedException)
+                {
+                    File.Copy(from, target, overwrite: false);
+                    File.Delete(from);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                failure = ex.Message;
+
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// **「其余物 = 不处理」档的逐层集中**（用户 2026-10-12 计划的第三个动作）：
+        /// 这一层的过程物**搬进其余物**（既不删、也不进回收站）。
+        ///
+        /// <para><b>为什么必须有这一条</b>：这一档既不删也不进回收站 ⇒ 链内那一族的
+        /// <c>.z01/.z02/.z03</c> 留在落地树里（基线 3 轮 ③✘：`run-4444` / `run-11111111` / `run-19191919`，
+        /// 全是这一档），下一遍再导入就会被当成新原包 —— 正是判据 ③ 要防的那件事。</para>
+        ///
+        /// <para>⛔ 动手只有一处：<see cref="TryMoveIntoRest"/>（与链尾那一档**同一套**让位/复制语义）；
+        /// ⛔ 判不出其余物目录 / 一个都没搬成 ⇒ 如实写一行，什么都不动。</para>
+        /// </summary>
+        private void ReclaimLayerFilesToRest(
+            ArchiveTask task,
+            string? reclaimWorkspaceDirectory,
+            string subject,
+            List<(string Level, string Message)> logEntries)
+        {
+            // 措辞按**动作**说（触发点那一份是按"彻底删除"写的，这一档是"不动其余物"）。
+            string triggerLabel = StatusText.RecursionLayerKeepTriggerLabel;
+            List<string> targets = SourceCleanupService.BuildTargetList(task)
+                .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                .ToList();
+
+            if (targets.Count == 0)
+            {
+                logEntries.Add(("WARN", $"{task.LogName}：{triggerLabel}要集中{subject}，但清单是空的 —— 一个字节都没动。"));
+
+                return;
+            }
+
+            string? restDirectory = ResolveLayerReclaimRestDirectory(task, reclaimWorkspaceDirectory);
+
+            if (string.IsNullOrWhiteSpace(restDirectory))
+            {
+                logEntries.Add(("WARN", $"{task.LogName}：{triggerLabel}要集中{subject}，但推不出其余物目录 —— 一个字节都没动。"));
+
+                return;
+            }
+
+            var movedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var failures = new List<string>();
+            int moved = 0;
+
+            foreach (string from in targets)
+            {
+                if (TryMoveIntoRest(from, Path.Combine(restDirectory, Path.GetFileName(from)), movedTargets, out _, out string? moveFailure))
+                {
+                    moved++;
+                    logEntries.Add(("INFO", $"{task.LogName}：{triggerLabel} —— {Path.GetFileName(from)} 已集中进其余物"));
+                    continue;
+                }
+
+                failures.Add($"{Path.GetFileName(from)}（{moveFailure}）");
+            }
+
+            if (moved == 0)
+            {
+                logEntries.Add((
+                    "WARN",
+                    $"{task.LogName}：{triggerLabel}一个都没集中进其余物 —— {string.Join("；", failures)}（它们仍在原处）。"));
+
+                return;
+            }
+
+            // 其余物记到这一单上 ⇒ 「删除操作」那一档才有对象可删（与链尾那一档同一记账）。
+            task.RestDirectoryPath = restDirectory;
+
+            logEntries.Add((
+                "INFO",
+                $"{task.LogName}：{triggerLabel} —— 已把{subject} {moved} 个集中进其余物：{restDirectory}"
+                + (failures.Count > 0 ? $"（{failures.Count} 个没搬成，仍在原处）" : string.Empty)));
+        }
 
         /// <summary>
         /// **这一单的其余物目录**（"集中进其余物"那一档要用它）。
@@ -1031,6 +1228,14 @@ namespace ArchiveFixer.ViewModels
         /// 与另外两个事实位**同一份出口**（`PrepareRestHandlingForBatch`）。
         /// </summary>
         private bool _layerReclaimToRestThisBatch;
+
+        /// <summary>
+        /// **链内每一层"被用掉的那几个输入文件"**（递归钩子每层报上来的 `GroupFiles`）——
+        /// 只记账、不动盘（用户 2026-10-12 口径：搬不能挂在"逐层"那一刻，见
+        /// <see cref="CollectChainInnerPackagesIntoRestAsync"/> 末尾那一段"链尾集中"）。
+        /// 写入点唯一 = <see cref="OnRecursiveLayerReclaim"/>；清空点 = 批首 `PrepareRestHandlingForBatch`。
+        /// </summary>
+        private readonly List<string> _chainInnerLayerInputs = new();
 
         /// <summary>
         /// 本批是不是按**「空间不足」模式**跑（批首定一次；用户 2026-09-27 拍板的模式）。
@@ -2629,6 +2834,11 @@ namespace ArchiveFixer.ViewModels
                 /*
                  * ===== 「其余物 = 不处理（Keep）」档那一支（用户 2026-10-12 计划的第三个动作）=====
                  *
+                 * ⚠ 2026-10-12 实测教训（第一版）：**不能走 `ExecuteSourcePackageMove`** —— 它有一条红线
+                 * 就是拒搬工作区里的文件，逐字：`源在工作区目录里（那是程序自己的中间产物，不是用户的源包），
+                 * 一个字节都不搬`（`run-4444`，×3 片）⇒ 只会写一句"集中进其余物"的假 INFO。
+                 * 现在走**过程物**那一套（`ReclaimLayerFilesToRest` → `TryMoveIntoRest`）。
+                 *
                  * 这一档既不删也不进回收站 ⇒ 那就该**集中进「其余物」**（设计里别处就是这么写的：
                  * 「过程物集中进其余物，源包与过程物一起按档处理」）。
                  * 现在它们留在落地树里 ⇒ 下一遍再导入就会被当成新原包（正是判据 ③ 要防的那件事）。
@@ -2639,22 +2849,7 @@ namespace ArchiveFixer.ViewModels
                  * 永久删 / 送回收站 → **搬进这一单的其余物**（唯一出口 `ExecuteSourcePackageMove`，
                  * 它会顺手把 `SourcePackageMove` 落成 `Done` ⇒ 链尾不会重复搬一次）。
                  */
-                string? artifactRoot = ResolveLayerReclaimRestDirectory(task, reclaimWorkspaceDirectory);
-
-                if (string.IsNullOrWhiteSpace(artifactRoot))
-                {
-                    logEntries.Add((
-                        "WARN",
-                        $"{task.LogName}：{triggerLabel}要回收{subject}，但推不出这一单的其余物目录 —— 一个字节都没动。"));
-
-                    return null;
-                }
-
-                logEntries.Add((
-                    "INFO",
-                    $"{task.LogName}：{triggerLabel} —— 这一档是「不动其余物」，所以把{subject}集中进其余物：{artifactRoot}"));
-
-                ExecuteSourcePackageMove(task, artifactRoot, SourceMoveTrigger.AfterChain, logEntries);
+                ReclaimLayerFilesToRest(task, reclaimWorkspaceDirectory, subject, logEntries);
 
                 return null;
             }
@@ -3585,39 +3780,16 @@ namespace ArchiveFixer.ViewModels
                      *
                      * ⚠ 这是兜底，不是根因：同一份计划里两个同名内层包互相撞名，已经在
                      * `PlanChainInnerPackageMoves` 里用 `reserved` 解决（真机 2026-10-01 那批就栽在那一处）。
+                     *
+                     * ⚠ 2026-10-12：这一段（让位 + 同卷改名/跨卷复制 + 绝不覆盖）**收成一个出口**
+                     * <see cref="TryMoveIntoRest"/> —— 「其余物 = 不处理」档那一支（`ReclaimLayerFilesToRest`）
+                     * 也要用同一套动作，⛔ 不许各写一份。
                      */
-                    string target = to;
-
-                    if (movedTargets.Contains(target) || File.Exists(target) || Directory.Exists(target))
+                    if (!TryMoveIntoRest(from, to, movedTargets, out string target, out string? moveFailure))
                     {
-                        target = ProcessArtifactLayout.MakeUniqueTarget(
-                            target,
-                            isDirectory: false,
-                            movedTargets,
-                            FileSystemArtifactTargetProbe.Instance);
-                    }
-
-                    movedTargets.Add(target);
-
-                    SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(target) ?? string.Empty);
-
-                    /*
-                     * 同卷直接改名（快、且失败不留半份）；跨卷 / 被占用时回落到"先复制成功再删原件"
-                     * （与源包搬运同一口径：复制失败就一个字节都不动）。
-                     */
-                    try
-                    {
-                        File.Move(from, target, overwrite: false);
-                    }
-                    catch (IOException)
-                    {
-                        File.Copy(from, target, overwrite: false);
-                        File.Delete(from);
-                    }
-                    catch (NotSupportedException)
-                    {
-                        File.Copy(from, target, overwrite: false);
-                        File.Delete(from);
+                        failures.Add($"{Path.GetFileName(from)}（{moveFailure}）");
+                        AppendLog("WARN", $"{rootTask.LogName}：内层包没能移入其余物：{from} —— {moveFailure}（它留在原地）");
+                        continue;
                     }
 
                     /*
@@ -3655,6 +3827,76 @@ namespace ArchiveFixer.ViewModels
             {
                 // 只有真的搬进去了才把其余物记到根任务上（否则删除档会去删一个不存在的目录）。
                 rootTask.RestDirectoryPath = restDirectory;
+            }
+
+            /*
+             * ===== **链内产出的片**也要集中进其余物（用户 2026-10-12 计划的第三个动作）=====
+             *
+             * 上面那一段只认**任务**（`candidate.IsContinuationTask`），而链内解出来的那一族片
+             * **不是任务** ⇒ 「其余物 = 不处理」档下它们留在落地树里（基线 3 轮 ③✘：`run-4444` /
+             * `run-11111111` / `run-19191919`），下一遍再导入就会被当成新原包。
+             *
+             * 名单来自**递归钩子每层报的** `GroupFiles`（`_chainInnerLayerInputs`，只记账不动盘）。
+             * ⛔ 搬的时机**只能在这里**（链尾、定稿之后）：实测（`run-4444`）挂在"逐层"那一刻去搬
+             * 会让后续那一层的产物跟踪按路径找不到原件 ⇒ 内容物被重复解出来（`444(1)/(2).mp4`）。
+             * ⛔ 只搬"确实还在盘上、且落在根任务输出范围之内"的；⛔ 判不出/搬不动 ⇒ 写一行、不动。
+             */
+            CollectChainInnerLayerInputsIntoRest(rootTask, restDirectory, outputRoot);
+        }
+
+        /// <summary>
+        /// **把链内"用过的那几个文件"集中进其余物**（链尾那一刻；名单由递归钩子逐层记账）。
+        ///
+        /// <para>只搬三条件同时成立的那些：① 还在盘上；② 落在根任务的**输出范围之内**（⛔ 不碰别处）；
+        /// ③ 不在其余物目录里（幂等）。执行体 = <see cref="TryMoveIntoRest"/>（与旁边那一段同一套让位/复制语义）。</para>
+        /// </summary>
+        private void CollectChainInnerLayerInputsIntoRest(ArchiveTask rootTask, string restDirectory, string outputRoot)
+        {
+            if (rootTask == null || _chainInnerLayerInputs.Count == 0 || string.IsNullOrWhiteSpace(restDirectory))
+            {
+                return;
+            }
+
+            var movedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int moved = 0;
+            var failures = new List<string>();
+
+            foreach (string from in _chainInnerLayerInputs.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
+            {
+                if (!File.Exists(from))
+                {
+                    continue;
+                }
+
+                if (outputRoot.Length > 0
+                    && !ArchivePathGuard.IsInsideRoot(outputRoot, from, out _))
+                {
+                    // 不在根任务的输出范围里 ⇒ 不是"这一条链的产物" ⇒ 一个字节都不动。
+                    continue;
+                }
+
+                if (ProcessArtifactLayout.IsInsideArtifactDirectory(from, Path.GetDirectoryName(restDirectory) ?? string.Empty))
+                {
+                    continue;
+                }
+
+                if (TryMoveIntoRest(from, Path.Combine(restDirectory, Path.GetFileName(from)), movedTargets, out _, out string? moveFailure))
+                {
+                    moved++;
+                    continue;
+                }
+
+                failures.Add($"{Path.GetFileName(from)}（{moveFailure}）");
+            }
+
+            if (moved > 0)
+            {
+                rootTask.RestDirectoryPath = restDirectory;
+
+                AppendLog(
+                    "INFO",
+                    $"{rootTask.LogName}：链内那一族的片已集中进其余物 {moved} 个 —— {ProcessArtifactLayout.ArtifactDirectoryName}"
+                    + (failures.Count > 0 ? $"（{failures.Count} 个没搬成，仍在原处）" : string.Empty));
             }
         }
 
@@ -14037,15 +14279,27 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         /// <returns>true = 已经跳过（调用方必须立刻 return，什么都不许做）。</returns>
         /// <summary>
-        /// 这一趟**真解出来的东西**够不够证明"密码是对的"。
+        /// 这一趟**真解出来的东西**够不够证明"密码是对的"（带这一趟引擎的结构化事实）。
         ///
-        /// <para>判据（为什么是"至少两个非空文件"、为什么⛔ 不许放宽）**唯一出口**
-        /// <see cref="ProducedContentGate"/> —— 单层这条路与递归那条路（<c>RecursiveExtractor</c>）
-        /// 问的是同一个方法，⛔ 不许各写一份（2026-10-01 只接了单层那条路，
+        /// <para>判据本体**唯一出口** <see cref="ProducedContentGate"/> —— 单层这条路与递归那条路
+        /// （<c>RecursiveExtractor</c>）问的是同一个方法，⛔ 不许各写一份（2026-10-01 只接了单层那条路，
         /// 而真机 `giu910` 走的是递归那条 ⇒ 修复等于没生效，用户白等 13 分钟）。</para>
+        ///
+        /// <para>为什么必须把引擎事实带上（2026-10-12 真机 `2222`）：RAR4 + 存储 + 数据加密的包上，
+        /// **错密码**也会把垃圾明文按原尺寸写满盘，光数文件数与字节数会把错密码判成"密码已证实"
+        /// ⇒ 候选循环当场 break、正确密码（密码本第 7 位）永远没机会被试。这里只负责把两个计数递过去。</para>
         /// </summary>
-        private static bool TryMeasureProducedContent(string? directory, out int files, out long bytes) =>
-            ProducedContentGate.TryMeasure(directory, out files, out bytes);
+        private static bool TryMeasureProducedContent(
+            string? directory,
+            ArchiveOperationResult engineResult,
+            out int files,
+            out long bytes) =>
+            ProducedContentGate.TryMeasure(
+                directory,
+                engineResult.ReportedSubItemErrors,
+                engineResult.FailedEntryNames.Count,
+                out files,
+                out bytes);
 
         private bool SkipWhenAnotherTaskOwnsThisVolumeGroup(ArchiveTask task)
         {
@@ -18965,6 +19219,9 @@ namespace ArchiveFixer.ViewModels
                 _restHandlingThisBatch,
                 RestHandlingModes.Keep,
                 StringComparison.OrdinalIgnoreCase);
+
+            // 链内记账每批一清（它只服务"这一批这一条链"）。
+            _chainInnerLayerInputs.Clear();
         }
 
         /// <summary>
@@ -22300,7 +22557,7 @@ namespace ArchiveFixer.ViewModels
                          * 后者再往下试密码**没有任何意义**（密码已经被这天趟解压本身证明了）。
                          */
                         bool wrongPwProvenByThisAttempt =
-                            TryMeasureProducedContent(engineOutputPath, out int wrongPwFiles, out long wrongPwBytes);
+                            TryMeasureProducedContent(engineOutputPath, extractResult, out int wrongPwFiles, out long wrongPwBytes);
 
                         // 同一件事的事实位（换引擎兜底那条判据要它）：这一趟盘上留下了**非零字节** ⇒
                         // 引擎进得去这一份的数据流（0 字节桩不算，见上面 `anyCandidateWroteBytes` 的说明）。
@@ -22334,7 +22591,7 @@ namespace ArchiveFixer.ViewModels
                     {
                         // 与上面"密码错误"那一支同一条判据：**真解出了东西** ⇒ 密码已经证实，别再试候选。
                         bool ambiguousProvenByThisAttempt =
-                            TryMeasureProducedContent(engineOutputPath, out int ambiguousFiles, out long ambiguousBytes);
+                            TryMeasureProducedContent(engineOutputPath, extractResult, out int ambiguousFiles, out long ambiguousBytes);
 
                         // 同上：这也是"引擎写出过非零字节"的一次。
                         anyCandidateWroteBytes |= ambiguousBytes > 0;

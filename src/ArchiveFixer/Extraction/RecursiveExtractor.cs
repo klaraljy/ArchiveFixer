@@ -2098,7 +2098,12 @@ namespace ArchiveFixer.Extraction
                  * 两义就当场收敛成"数据坏了"——密码已经不需要再猜。
                  */
                 if ((result.IsWrongPassword || result.IsNeedPassword || result.IsPasswordOrCorrupted)
-                    && ProducedContentGate.TryMeasure(item.Layer.OutputPath, out int provenFiles, out long provenBytes))
+                    && ProducedContentGate.TryMeasure(
+                        item.Layer.OutputPath,
+                        result.ReportedSubItemErrors,
+                        result.FailedEntryNames.Count,
+                        out int provenFiles,
+                        out long provenBytes))
                 {
                     string provenMessage = string.Format(
                             System.Globalization.CultureInfo.CurrentCulture,
