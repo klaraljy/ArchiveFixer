@@ -2797,7 +2797,38 @@ namespace ArchiveFixer.Extraction
         {
             cleaned = string.Empty;
 
-            if (string.IsNullOrWhiteSpace(fileName) || IsPureAscii(fileName))
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return false;
+            }
+
+            /*
+             * ===== 第三档（2026-10-13 下午，困难批 `1111` 取证）：**纯字母数字的"垃圾" + 上下文** =====
+             *
+             * <para><b>现场</b>（`run-1111` 逐字）：`111-L2.7z.001` 被伪装成 `111-L2.7z.yvA001`
+             * （造包细则第 ② 法：非中文杂质 2–3 个 —— 备好的那 30 个字符里**有字母**）⇒
+             * 卷标记容忍尺子的第四档要求"垃圾里至少含一个非字母数字字符、且不许出现 ≥3 个连续字母"
+             * ⇒ `yvA` 两条都不满足（纯字母、正好 3 个）⇒ 认不出 ⇒ 链里试开它
+             * 逐字 `第 1 层：111-L2.7z.yvA001：解压失败：7-Zip 无法识别或不支持该格式`
+             * ⇒ 那一组的入口包永远不叫规范名 ⇒ 整组凑不齐 ⇒ ①红。</para>
+             *
+             * <para><b>判据（结构 + 上下文，⛔ 不是"看着像"）</b>：`<基名>.<已知归档后缀>.<垃圾><卷号>` ——
+             * ① 倒数第二段**就是归档本体后缀**（只认 `7z` / `zip`：只有这两族用三位数字卷号）；
+             * ② 末段 = 纯字母数字垃圾（1–4 个字符）+ **三位数字卷号**；
+             * ③ 基名逐字纯 ASCII。
+             * 三条同时成立 ⇒ 还原成 `<基名>.<后缀>.<卷号>`（⛔ 基名一个字符不动、⛔ 不问魔数、⛔ 不问兄弟、
+             * ⛔ 不问整组自洽 —— 与上面两档同一条纪律；执行体仍只有 `TryApply` 一套）。</para>
+             *
+             * <para>⛔ 为什么"≤4 个字符 + 纯字母数字"够保守：`photo-123` / `backup-002` 那种真名字
+             * 要么带非字母数字、要么超过 4 个字符（也与第四档那条"≥3 连续字母"的规矩一致）；
+             * 认不出 ⇒ 一个字节都不动。</para>
+             */
+            if (TryRestoreMarkerSegmentWithAsciiJunk(fileName, out cleaned))
+            {
+                return true;
+            }
+
+            if (IsPureAscii(fileName))
             {
                 return false;
             }
@@ -2840,6 +2871,67 @@ namespace ArchiveFixer.Extraction
              * ⛔ 不问"整组自洽"（那是后面几档的事）；执行体仍只有 <see cref="TryApply"/> 一套。</para>
              */
             return TryStripByAsciiBaseSplit(fileName, out cleaned);
+        }
+
+        /// <summary>
+        /// **纯字母数字垃圾挤在卷号前面**那一档的还原（见调用处那段说明）：
+        /// `<基名>.<7z|zip>.<垃圾><三位卷号>` ⇒ `<基名>.<7z|zip>.<三位卷号>`。
+        ///
+        /// <para>⛔ 三条判据（上下文 + 结构 + 基名纯 ASCII）缺一不可；判不出 ⇒ 空串。</para>
+        /// </summary>
+        private static bool TryRestoreMarkerSegmentWithAsciiJunk(string fileName, out string cleaned)
+        {
+            cleaned = string.Empty;
+
+            string[] parts = fileName.Split('.');
+
+            if (parts.Length < 3)
+            {
+                return false;
+            }
+
+            string extension = parts[^2];
+
+            // ① 上下文：倒数第二段就是归档本体后缀 —— 只有 `7z` / `zip` 两族用三位数字卷号。
+            if (!string.Equals(extension, "7z", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(extension, "zip", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string tail = parts[^1];
+            int digitStart = tail.Length;
+
+            while (digitStart > 0 && char.IsAsciiDigit(tail[digitStart - 1]))
+            {
+                digitStart--;
+            }
+
+            if (tail.Length - digitStart != 3)
+            {
+                return false;
+            }
+
+            string mark = tail[digitStart..];
+            string junk = tail[..digitStart];
+
+            // ② 垃圾 = 1–4 个字符、纯字母数字（含非字母数字的那种由前面那两档管）。
+            if (junk.Length == 0 || junk.Length > 4 || !junk.All(char.IsAsciiLetterOrDigit))
+            {
+                return false;
+            }
+
+            // ③ 基名逐字纯 ASCII（与第二档同一条纪律：中文标题绝不碰）。
+            string baseName = string.Join('.', parts, 0, parts.Length - 2);
+
+            if (baseName.Length == 0 || !IsPureAscii(baseName))
+            {
+                return false;
+            }
+
+            cleaned = baseName + "." + extension + "." + mark;
+
+            return !string.Equals(cleaned, fileName, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

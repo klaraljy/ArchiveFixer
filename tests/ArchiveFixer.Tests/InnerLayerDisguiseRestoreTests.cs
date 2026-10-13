@@ -503,6 +503,40 @@ namespace ArchiveFixer.Tests
                 path => Path.GetFileName(path).Contains("..", StringComparison.Ordinal));
         }
 
+        /// <summary>
+        /// **纯字母数字的"垃圾"挤在卷号前面**时也要还原（2026-10-13 下午，困难批 `1111` 取证）：
+        /// `111-L2.7z.yvA001` ⇒ `111-L2.7z.001`。
+        ///
+        /// <para>现场逐字（`run-1111`）：造包细则第 ② 法的字符池里**有字母**，于是
+        /// `111-L2.7z.001` 被写成 `111-L2.7z.yvA001`；链里试开它逐字
+        /// `第 1 层：111-L2.7z.yvA001：解压失败：7-Zip 无法识别或不支持该格式`
+        /// ⇒ 那一组的入口包永远不叫规范名 ⇒ 整组凑不齐 ⇒ ①红。</para>
+        ///
+        /// <para><b>红检</b>：把「纯字母数字垃圾 + 上下文」那一档撤掉 ⇒ 本条变红（盘上还是脏名）。</para>
+        /// </summary>
+        [Fact]
+        public void 还原_纯字母数字垃圾挤在卷号前面_也要还原()
+        {
+            string directory = Path.Combine(_root, "restore-ascii-junk-marker");
+            Directory.CreateDirectory(directory);
+            string smuggled = WriteFakeArchive(Path.Combine(directory, "111-L2.7z.yvA001"), SevenZipMagic);
+
+            RunRestore(new[] { smuggled });
+
+            Assert.False(File.Exists(smuggled), "纯字母数字垃圾挤在卷号前的那一份也该还原成 .001");
+            Assert.True(File.Exists(Path.Combine(directory, "111-L2.7z.001")));
+
+            /*
+             * ⛔ 反向：真名字（`backup-002` 这种）不许被吃 —— 名字里没有"<后缀>.<垃圾><卷号>"那个上下文
+             * ⇒ 判不出 ⇒ 一个字节都不动。
+             */
+            string realName = WriteFakeArchive(Path.Combine(directory, "backup-002"), SevenZipMagic);
+
+            RunRestore(new[] { realName });
+
+            Assert.True(File.Exists(realName), "`backup-002` 是正常名字，不许动");
+        }
+
         /// <summary>调一次「还原」（递归层挂点用的那条公开入口），把日志收成 `级别|文案`。</summary>
         private static List<string> RunRestore(IReadOnlyList<string> candidates)
         {
