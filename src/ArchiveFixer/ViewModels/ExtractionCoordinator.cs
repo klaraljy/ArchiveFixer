@@ -11338,6 +11338,64 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 判不出（凑不出正好相等 / 三条有一条不成立）⇒ 一份都不补。</para>
         /// </summary>
         /// <summary>
+        /// **照"已经在层里的那几片"的命名规律**，给缺的这一片起一个同族的名字（唯一出口）。
+        ///
+        /// <para>⚠ 2026-10-14（实测 `3333` 组合 1 定案）：缺片那一档原来一律走
+        /// <see cref="VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex"/>，而那一族**没有**
+        /// "`X.zip.001`"这一格 ⇒ 落到 default ⇒ 出来的是 `111-L2.003`，可层里那两片叫
+        /// `111-L2.zip.001/.002` ⇒ 引擎按名字找 `.zip.003` **找不到**（日志逐字：链里仍然缺第 3 片）⇒ ①红。
+        /// ⇒ 按**既有片的写法**换掉卷号那一段（宽度照旧、前后缀逐字保留）：
+        /// `111-L2.zip.002` ⇒ `111-L2.zip.003`、`111-L2.001` ⇒ `111-L2.002`、
+        /// `x.part2.rar` ⇒ `x.part3.rar`、`x.z01` ⇒ `x.z03`（跨盘 ZIP 族的反向编号不在这里动，见调用点的过滤）。</para>
+        ///
+        /// <para>判不出（找不到卷号那一段 / 拼出来的名字自验不过）⇒ 回落到既有那个出口；
+        /// 仍然判不出 ⇒ false（调用方什么都不做）。</para>
+        /// </summary>
+        internal static bool TryNameSlotLikeExistingPiece(string existingPiecePath, int slot, out string name)
+        {
+            name = string.Empty;
+
+            string existingName = FileNameHelper.GetFileName(existingPiecePath);
+
+            if (existingName.Length == 0)
+            {
+                return false;
+            }
+
+            // ① 数字分片（`…002` / `…002` 前带任何前后缀，宽度照旧）
+            System.Text.RegularExpressions.Match digits = System.Text.RegularExpressions.Regex.Match(
+                existingName,
+                @"(?<head>.*?)(?<number>\d{2,})(?<tail>\D*)$");
+
+            if (digits.Success)
+            {
+                string width = digits.Groups["number"].Value.Length.ToString(CultureInfo.InvariantCulture);
+
+                name = digits.Groups["head"].Value
+                    + slot.ToString("D" + width, CultureInfo.InvariantCulture)
+                    + digits.Groups["tail"].Value;
+
+                return name.Length > 0;
+            }
+
+            // ② `partN`（RAR 新式）
+            System.Text.RegularExpressions.Match part = System.Text.RegularExpressions.Regex.Match(
+                existingName,
+                @"(?<head>.*?part)(?<number>\d+)(?<tail>.*)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            if (part.Success)
+            {
+                name = part.Groups["head"].Value
+                    + slot.ToString(CultureInfo.InvariantCulture)
+                    + part.Groups["tail"].Value;
+
+                return name.Length > 0;
+            }
+
+            return false;
+        }
+        /// <summary>
         /// **打分分配那一档**（用户 2026-10-14 口径 ①③；唯一执行体）：7z 自述字节数给不出证据时，
         /// 由"缺哪几个槽位"与"名字读不出卷号的候选"按三条既有证据投票分配，先试最高分那一版，
         /// 再来一趟就换边；两版都不成 ⇒ 回滚（删掉我们建的链接）。
@@ -11378,6 +11436,24 @@ namespace ArchiveFixer.ViewModels
             foreach (string presentPath in present.Values)
             {
                 seen.Add(SafePathHelper.GetFullPathSafe(presentPath));
+            }
+
+            /*
+             * ⚠ 2026-10-14（实测 `3333`）：**已经在层里的那几片的硬链接不算候选**。
+             * 收片那一档是"零字节硬链接"，同一份字节常常在别的树里还有第二个名字
+             * （实测逐字：`111(2)\…\111-W1-0\111-L2.zip.002` 与层里那份 `盘上身份` 逐字相同
+             * = `7A7EB341:A00000002E572`）⇒ 只比路径会把**同一个文件的两个名字**当成两份片，
+             * 于是缺口被算成 `[3,4]`、还拿 `.002` 去补第 3 槽（日志逐字那种错法）。
+             * ⇒ 按**盘上物理身份**（卷序列号 + 文件索引，既有出口 `FileIdentity`）排除。
+             */
+            var presentIdentities = new HashSet<(ulong VolumeSerial, ulong FileIndex)>();
+
+            foreach (string presentPath in present.Values)
+            {
+                if (FileIdentity.TryGetIdentity(presentPath, out ulong serial, out ulong index))
+                {
+                    presentIdentities.Add((serial, index));
+                }
             }
 
             var roots = new List<string> { SafePathHelper.GetFullPathSafe(entryLayer) };
@@ -11436,6 +11512,12 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
+                    if (FileIdentity.TryGetIdentity(path, out ulong candidateSerial, out ulong candidateIndex)
+                        && presentIdentities.Contains((candidateSerial, candidateIndex)))
+                    {
+                        continue;   // 这是层里某一已有的片的第二个名字（硬链接）⇒ 不是候选
+                    }
+
                     FileNatureCard card = FileNature.Inspect(path);
 
                     if (card.BodyKind == ArchiveBodyKind.SingleComplete)
@@ -11458,10 +11540,29 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    // 已经能按名字读出卷号的片不归这一档（那是收片那一档的活）
-                    if (VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null)
+                    /*
+                     * 谁能进候选（⚠ 2026-10-14 实测 `3333` 那一份后放宽了这一格，判据仍是事实）：
+                     * 名字**读不出卷号**的 ⇒ 当然进；
+                     * 名字**读得出卷号、可那个槽位已经有人占着**的 ⇒ 也进 —— 那正是"同名两份"的歧义
+                     * （收片那一档按定义收不进去），必须靠这一档按体积/后缀/基名去补。
+                     *
+                     * 现场逐字（`3333` 组合 1）：第 3 片被伪装成"单一包名" `111-L2.zip`（原该是 `111-L2.zip.003`），
+                     * 名字尺子把它读成"卷号 1" ⇒ 与已经在层的 `.001` **同号冲突** ⇒ 收片收不进、
+                     * 这一档又被"读得出卷号就跳过"挡住 ⇒ 候选 0 个 ⇒ 整组永远缺第 3 片 ⇒ ①红。
+                     * 而**空间规律**早就能认出它：`.001/.002` 都是 26 214 400，它是 10 490 534 ⇒
+                     * "除末卷外等大" ⇒ 它就是**末片**。
+                     */
+                    int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path));
+
+                    if (nameIndex is int claimed
+                        && present.TryGetValue(claimed, out string? occupant)
+                        && !SafePathHelper.PathEquals(occupant, path))
                     {
-                        continue;
+                        // 同号冲突 ⇒ 收片收不进去，正是这一档要处理的
+                    }
+                    else if (nameIndex != null)
+                    {
+                        continue;   // 名字读得出卷号、槽位也没冲突 ⇒ 归收片那一档
                     }
 
                     candidates.Add(new VolumeSlotScoring.Candidate
@@ -11571,7 +11672,15 @@ namespace ArchiveFixer.ViewModels
 
             foreach ((VolumeSlotScoring.Candidate candidate, int slot) in picked.Pairs)
             {
-                if (!VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out string slotName))
+                /*
+                 * 槽位名：**优先照"已经在层里的那一片"的写法**（同族同宽，前后缀逐字保留），
+                 * 回落既有的命名出口。⛔ 两条都不成 ⇒ 这一趟整体回滚、一份都不补。
+                 */
+                string existingPiece = present.Values.First();
+                string slotName;
+
+                if (!TryNameSlotLikeExistingPiece(existingPiece, slot, out slotName)
+                    && !VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out slotName))
                 {
                     Rollback(created);
                     return;

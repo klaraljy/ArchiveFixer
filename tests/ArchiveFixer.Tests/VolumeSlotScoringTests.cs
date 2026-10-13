@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 
 using ArchiveFixer.Detection;
+using ArchiveFixer.ViewModels;
 
 using Xunit;
 
@@ -148,6 +149,26 @@ namespace ArchiveFixer.Tests
                 .Single(pair => pair.Candidate.Size == 4096);
 
             Assert.Equal(2, slot);
+        }
+
+        [Theory]
+        // ⚠ 2026-10-14（实测 `3333` 组合 1 定案）：缺片的槽位名**照"已经在层里的那几片"的写法**，
+        // 而不是走那一族没有的通用 default（原来出来 `111-L2.003`，可层里叫 `111-L2.zip.001/.002`
+        // ⇒ 引擎按名字找不到 `.zip.003` ⇒ 整组凑不齐、①红）。
+        [InlineData("111-L2.zip.002", 3, "111-L2.zip.003")] // ZIP 通用分片：`.zip` 是基名的一部分
+        [InlineData("111-L2.7z.001", 2, "111-L2.7z.002")]   // 7z 分卷
+        [InlineData("111-L2.001", 2, "111-L2.002")]         // 已经是纯数字分片
+        [InlineData("x.part2.rar", 3, "x.part3.rar")]       // RAR 新式
+        [InlineData("x.z01", 3, "x.z03")]                   // 跨盘 ZIP 族（编号在尾巴上，宽度照旧）
+        public void 槽位名_照既有片的写法换卷号(string existingName, int slot, string expected)
+        {
+            var path = "/tmp/" + existingName;
+
+            Assert.True(
+                ExtractionCoordinator.TryNameSlotLikeExistingPiece(path, slot, out string actual),
+                $"`{existingName}` 应当拼得出名字");
+
+            Assert.Equal(expected, actual);
         }
     }
 }
