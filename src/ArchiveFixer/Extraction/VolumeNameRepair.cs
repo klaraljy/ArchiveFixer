@@ -2804,28 +2804,86 @@ namespace ArchiveFixer.Extraction
 
             /*
              * 基名/那一段由**唯一基名出口**拆（⛔ 这里不自己找边界）：`111_.par删t1.ra除r` ⇒ 基名 `111_`、
-             * 段 `part1.rar`。拆不出 ⇒ 只在"脏字符全在最后一个点之后、基名本身干净"那一档兜底
-             * （`111.zi删除p` ⇒ 基名 `111`、段 `zi删除p`）—— ⛔ 基名只要沾了非 ASCII 就一律不动。
+             * 段 `part1.rar`。
              */
-            string baseName;
-            string segment;
-
-            if (!FileNameHelper.TryResolveVolumeBaseName(
+            if (FileNameHelper.TryResolveVolumeBaseName(
                     fileName,
                     VolumeBaseNameLevel.DisguisedVolume,
-                    out baseName,
-                    out segment))
+                    out string baseName,
+                    out string segment)
+                && TryCleanSegment(baseName, segment, out cleaned))
             {
-                int dot = fileName.LastIndexOf('.');
+                return true;
+            }
 
-                if (dot <= 0 || !IsPureAscii(fileName.Substring(0, dot)))
+            /*
+             * ===== 第二档（2026-10-13，困难批 `11111111` 取证）：**边界拆不出来时按"纯 ASCII 基名"逐档试** =====
+             *
+             * <para><b>现场（真机日志逐字）</b>：`222-L2.part删删删1.rar` 在链里一次改名行都没有，
+             * 而同一批的 `222-L2.part2.中文rar → 222-L2.part2.rar` 改得好好的。探针实测差别在**第一步**：
+             * `TryResolveVolumeBaseName(…, DisguisedVolume)` 对前者 = **False**、对后者 = True
+             * —— 脏字符把卷标记本身撑坏了（`part删删删1` 里数字已经挨不着 `part`），边界找不出来，
+             * 上面那一档于是**整档不做**；产物名字永远是脏的 ⇒ 第二大步拿不到规范卷名 ⇒
+             * 那一组的入口包在盘上不叫 `222-L2.part1.rar` ⇒ 判据输入里
+             * 「产出它的那一单=判不出」⇒「推不出这一组该拼到哪一层」⇒ 接片一个字节都不动 ⇒
+             * 整组永远凑不齐 ⇒ ①「内容物解出来」红。</para>
+             *
+             * <para><b>判据（用户 2026-10-11 口径：「简单的改后缀，像删除中文字符这么简单的为什么做不了」）</b>：
+             * 在**每一个点**处试拆一次，只要
+             * ① 基名逐字**纯 ASCII**（⛔ 基名里可能有真的中文标题，绝不动）、
+             * ② 剩下那一段去掉非 ASCII 之后**还是本来那个形态**（<see cref="IsRestoredTailForm"/>：
+             *    `partN.rar` / `zNN` / 三位数字 / `zip`·`rar`·`7z`）、
+             * ③ 去完杂质那一段**点段不许出现空段**（防 `X.中.rar` 被拼成 `X..rar`）、
+             * ⇒ 那个名字就是一个候选。**结果唯一**才认（两个拆法都成立 ⇒ 判不出，什么都不做）。</para>
+             *
+             * <para>⛔ 与上面那一档同一条纪律：只动**卷标记 / 归档后缀那一段**，⛔ 不问魔数、⛔ 不问兄弟、
+             * ⛔ 不问"整组自洽"（那是后面几档的事）；执行体仍只有 <see cref="TryApply"/> 一套。</para>
+             */
+            return TryStripByAsciiBaseSplit(fileName, out cleaned);
+        }
+
+        /// <summary>
+        /// 按"每一个点都试拆一次"枚举候选（见 <see cref="TryStripNonAsciiJunkFromTailSegment"/> 第二档）：
+        /// 基名纯 ASCII + 去杂质后仍是本来的形态 + 结果唯一才认。
+        /// </summary>
+        private static bool TryStripByAsciiBaseSplit(string fileName, out string cleaned)
+        {
+            cleaned = string.Empty;
+
+            var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            for (int dot = fileName.IndexOf('.'); dot > 0 && dot < fileName.Length - 1; dot = fileName.IndexOf('.', dot + 1))
+            {
+                string candidateBase = fileName.Substring(0, dot);
+
+                if (!IsPureAscii(candidateBase))
                 {
-                    return false;
+                    continue;
                 }
 
-                baseName = fileName.Substring(0, dot);
-                segment = fileName.Substring(dot + 1);
+                if (TryCleanSegment(candidateBase, fileName.Substring(dot + 1), out string candidate))
+                {
+                    results.Add(candidate);
+                }
             }
+
+            if (results.Count != 1)
+            {
+                return false;
+            }
+
+            cleaned = results.First();
+
+            return true;
+        }
+
+        /// <summary>
+        /// 把一个 `<paramref name="baseName"/>.<paramref name="segment"/>` 里的那一段去干净：
+        /// 去完必须**还是本来那个形态**、点段不许拆出空段、而且真的变了 —— 三条缺一不可。
+        /// </summary>
+        private static bool TryCleanSegment(string baseName, string segment, out string cleaned)
+        {
+            cleaned = string.Empty;
 
             if (baseName.Length == 0 || segment.Length == 0)
             {
@@ -2839,6 +2897,15 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
+            /*
+             * ⛔ 去完杂质那一段不许出现空点段：`X.中.rar` 会拼出 `X..rar`（那不是任何一族的形态）。
+             * 老口径（只在最后一个点之后清洗）天然碰不到它 —— 这一档是新开的枚举，必须自己把住。
+             */
+            if (stripped[0] == '.' || stripped.Contains("..", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
             if (!IsRestoredTailForm(stripped))
             {
                 return false;
@@ -2846,7 +2913,7 @@ namespace ArchiveFixer.Extraction
 
             cleaned = baseName + "." + stripped;
 
-            return !string.Equals(cleaned, fileName, StringComparison.OrdinalIgnoreCase);
+            return !string.Equals(cleaned, baseName + "." + segment, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>把非 ASCII 字符摘掉（只用于"卷标记 / 归档后缀那一段"）。</summary>

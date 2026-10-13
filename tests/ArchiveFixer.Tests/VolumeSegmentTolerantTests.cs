@@ -87,6 +87,39 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **归档后缀自己那一截不许被当成"垃圾"吃掉**（2026-10-13 困难批 `1111` 取证）。
+        ///
+        /// <para>现场逐字（盘上事实）：`111-L2.7z-924` 被读成"基名 `111-L2` 的第 **924** 片"
+        /// ⇒ 还原工序照那个读法把盘上那份改名成 `111-L2.924` —— `7z` 那一段没了 ⇒ 这一组的三片
+        /// 再也对不上号。造这个名字的是造包器的**撞名兜底**（两片伪装成同一个名字时缀一个随机数），
+        /// 但判据本身与来路无关：任何 `X.7z-924` / `X.zip-002` 都会被同一条读法吃掉后缀。</para>
+        ///
+        /// <para>⛔ 老的"任意长度垃圾"那一档照旧（`--p002` / `@@003` / `#%z01` / `00%$3` 一个都不许受影响）
+        /// —— 它们剔掉尾部非字母数字之后都不是归档后缀。</para>
+        /// </summary>
+        [Theory]
+        [InlineData("7z-924", null)]      // 吃掉它就把 `7z` 丢了
+        [InlineData("zip-002", null)]
+        [InlineData("rar-1", null)]
+        [InlineData("--p002", "002")]     // 对照组：垃圾不是后缀 ⇒ 照旧认
+        [InlineData("@@003", "003")]
+        [InlineData("#%z01", "z01")]
+        [InlineData("00%$3", "003")]
+        public void 归档后缀那一截不许被当成垃圾吃掉(string segment, string? expected)
+        {
+            bool ok = ExtensionHelper.TrySplitVolumeSegmentTolerant(segment, out string mark, out _);
+
+            if (expected == null)
+            {
+                Assert.False(ok, $"「{segment}」不该被认成卷标记（吃掉后缀就等于把这一份的后缀丢了）");
+                return;
+            }
+
+            Assert.True(ok, $"「{segment}」应该被认出来");
+            Assert.Equal(expected, mark);
+        }
+
+        /// <summary>
         /// **第 1.5 档（2026-10-13）：`partN` 里"卷号被垃圾挤到最后一位"**。
         ///
         /// <para>现场（大测试困难批 `run-2222`，逐字）：`bbb-L2.part1.rar` 被伪装成

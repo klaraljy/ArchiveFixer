@@ -458,6 +458,51 @@ namespace ArchiveFixer.Tests
                 line => line.Contains("444.pa8rt1.rar → 444.part1.rar", StringComparison.Ordinal));
         }
 
+        /// <summary>
+        /// **卷标记自己那一截被撑坏**（`part删删删1`：数字已经挨不着 `part`、边界拆不出来）时，
+        /// 「纯文本清洗」那一档照样要把名字还原成 `part1.rar`。
+        ///
+        /// <para>用户口径（2026-10-11）：「简单的改后缀，像删除中文字符这么简单的为什么做不了」。</para>
+        ///
+        /// <para><b>现场</b>（2026-10-13 困难批 `11111111` 真机日志逐字）：同一批的
+        /// `222-L2.part2.中文rar → 222-L2.part2.rar` 改得好好的，而 `222-L2.part删删删1.rar`
+        /// **一次改名行都没有**；探针实测差别在第一步 —— `TryResolveVolumeBaseName(…, DisguisedVolume)`
+        /// 对前者 True、对后者 **False** ⇒ 那一档整档不做 ⇒ 那一组的入口包在盘上永远不叫
+        /// `222-L2.part1.rar` ⇒ 判据输入「产出它的那一单=判不出」⇒「推不出这一组该拼到哪一层」⇒
+        /// 接片一个字节都不动 ⇒ 整组永远凑不齐 ⇒ ①「内容物解出来」红。</para>
+        ///
+        /// <para><b>红检</b>：把「纯 ASCII 基名逐点试拆」那一档撤掉 ⇒ 本条变红（盘上还是脏名）。</para>
+        /// </summary>
+        [Fact]
+        public void 还原_卷标记自己那一段被撑坏_纯文本清洗照样还原()
+        {
+            string directory = Path.Combine(_root, "restore-marker-smashed");
+            Directory.CreateDirectory(directory);
+            string smashed = WriteFakeArchive(Path.Combine(directory, "222-L2.part删删删1.rar"), RarMagic);
+            string tailOnly = WriteFakeArchive(Path.Combine(directory, "333-L2.part2.中文rar"), RarMagic);
+
+            List<string> logs = RunRestore(new[] { smashed, tailOnly });
+
+            Assert.False(File.Exists(smashed), "卷标记被撑坏的那一份也该还原成 part1.rar");
+            Assert.True(File.Exists(Path.Combine(directory, "222-L2.part1.rar")));
+            Assert.Contains(logs, line => line.Contains("222-L2.part删删删1.rar → 222-L2.part1.rar", StringComparison.Ordinal));
+
+            // 老口径照旧（对照组）：脏字符只在归档后缀那一段里 ⇒ 一样还原。
+            Assert.True(File.Exists(Path.Combine(directory, "333-L2.part2.rar")));
+
+            /*
+             * ⛔ 新那一档是**按点枚举**的，必须自己把住"不许拼出空点段"：
+             * `444-L2.中.rar` 若被去成 `.rar`，拼起来就是 `444-L2..rar`（谁都不是那个形态）。
+             */
+            string hollow = WriteFakeArchive(Path.Combine(directory, "444-L2.中.rar"), RarMagic);
+
+            RunRestore(new[] { hollow });
+
+            Assert.DoesNotContain(
+                Directory.GetFiles(directory),
+                path => Path.GetFileName(path).Contains("..", StringComparison.Ordinal));
+        }
+
         /// <summary>调一次「还原」（递归层挂点用的那条公开入口），把日志收成 `级别|文案`。</summary>
         private static List<string> RunRestore(IReadOnlyList<string> candidates)
         {

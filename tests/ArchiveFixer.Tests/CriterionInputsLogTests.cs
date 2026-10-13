@@ -49,13 +49,22 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 真机 FFFF 的形状：一层里只躺着一片**改名改坏**的 RAR 新式分卷（`111_.par删t1.ra除r`）——
-        /// 它自己配不出自洽的一组 ⇒ 「还原」这一档判不出 ⇒ **必须把判据输入写出来**。
+        /// 一层里只躺着一片**改名改坏**的 RAR 新式分卷，而且它自己配不出自洽的一组 ⇒ 「还原」这一档判不出
+        /// ⇒ **必须把判据输入写出来**。
+        ///
+        /// <para>⚠ 载具换过一次（2026-10-13，探针实测）：原来用真机 FFFF 的逐字名字
+        /// <c>111_.par删t1.ra除r</c>，但**「纯文本清洗」那一档现在认得它了**（用户 2026-10-11 口径：
+        /// 「简单的改后缀，像删除中文字符这么简单的为什么做不了」；那一档的注释里本来就把它写成例子）
+        /// ⇒ 那个名字不再走"判不出"这一支；而少了 <c>.rar</c> 的 <c>111_.par删t1</c> 连卷号都认不出
+        /// （单独躺在一层里**一行日志都没有**）⇒ 也当不了载具。本条的**意图一个字没改**
+        /// （判不出就要写判据输入），载具换成**骨架档认得出卷号、而纯文本清洗按定义一个字都不碰**
+        /// 的那一形状：ASCII 骨架 <c>444.pa8rt1.rar</c>。探针实测：它单独躺在一层里
+        /// ⇒ 一行 WARN 结论 + 一行 WARN 判据输入（名字 / 同族第 1 卷 / 卷号 / 同层候选 四个字段齐全）。</para>
         /// </summary>
         [Fact]
         public void 还原这一档判不出时_日志里要有名字族卷号与同层候选()
         {
-            string piece = Path.Combine(_root, "111_.par删t1.ra除r");
+            string piece = Path.Combine(_root, "444.pa8rt1.rar");
 
             // 内容按 RAR5 魔数起头（判据只看魔数，不看后缀）。
             File.WriteAllBytes(piece, new byte[] { 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00 }.Concat(new byte[512]).ToArray());
@@ -83,11 +92,10 @@ namespace ArchiveFixer.Tests
             Assert.False(string.IsNullOrEmpty(inputs.Text), "日志里没有「判据输入」那一行：判不出时没把判据输入写出来。");
             Assert.Equal("WARN", inputs.Level);
 
-            Assert.Contains("111_.par删t1.ra除r", inputs.Text, StringComparison.Ordinal);   // 这一片的名字
-            Assert.Contains("同族第 1 卷=", inputs.Text, StringComparison.Ordinal);          // 判成哪一族
-            Assert.Contains("卷号=", inputs.Text, StringComparison.Ordinal);                 // 第几卷
-            Assert.Contains("同层候选", inputs.Text, StringComparison.Ordinal);              // 同层候选
-            Assert.Contains("111_.par删t1.ra除r", inputs.Text, StringComparison.Ordinal);
+            Assert.Contains("444.pa8rt1.rar", inputs.Text, StringComparison.Ordinal);   // 这一片的名字
+            Assert.Contains("同族第 1 卷=", inputs.Text, StringComparison.Ordinal);     // 判成哪一族
+            Assert.Contains("卷号=", inputs.Text, StringComparison.Ordinal);            // 第几卷
+            Assert.Contains("同层候选", inputs.Text, StringComparison.Ordinal);         // 同层候选
         }
     }
 }

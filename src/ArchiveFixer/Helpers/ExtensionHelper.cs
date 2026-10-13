@@ -2044,6 +2044,22 @@ namespace ArchiveFixer.Helpers
                 return false;
             }
 
+            /*
+             * ⛔ 2026-10-13（困难批 `1111` 取证）：**"垃圾"整个就是归档本体后缀**时，它不是塞进去的垃圾，
+             * 而是这一份自己的后缀段 —— 把它吃掉等于**把这一份的后缀丢掉**。
+             *
+             * <para>现场逐字（盘上事实）：`111-L2.7z-924`（造包器撞名时缀的随机数）被读成
+             * "基名 `111-L2` 的第 **924** 片" ⇒ 还原工序照那个读法把盘上那份改名成 `111-L2.924`
+             * —— `7z` 那一段没了 ⇒ 那一组的三片再也对不上号。`X.zip-002` / `X.rar-1` 同理。</para>
+             *
+             * <para>⛔ 只挡**归档本体后缀**（`zip` / `rar` / `7z` / …）；⛔ 不挡卷标记形状的 `.001` / `.z`
+             * —— 那两种既可能是垃圾、也可能是卷标记本身，老口径照旧。</para>
+             */
+            if (IsArchiveBodyExtensionToken(junk))
+            {
+                return false;
+            }
+
             bool hasNonAlphaNumeric = false;
             int consecutiveLetters = 0;
 
@@ -2070,6 +2086,33 @@ namespace ArchiveFixer.Helpers
             }
 
             return hasNonAlphaNumeric;
+        }
+
+        /// <summary>
+        /// 这一段（**剔掉尾部非字母数字之后**）是不是**归档本体后缀**（`zip` / `rar` / `7z` / …）？
+        ///
+        /// <para>判据只有这一处，消费方只有 <see cref="LooksLikeInsertedJunk"/> 开头那一条
+        /// （"垃圾整个就是归档后缀 ⇒ 它不是垃圾"）。⛔ 卷标记形状的 `.001` / `.z` **不算**
+        /// —— 那两种既可能是塞进去的垃圾、也可能是卷标记本身，老口径照旧。</para>
+        /// </summary>
+        private static bool IsArchiveBodyExtensionToken(string junk)
+        {
+            int end = junk.Length;
+
+            while (end > 0 && !char.IsAsciiLetterOrDigit(junk[end - 1]))
+            {
+                end--;
+            }
+
+            if (end < 2)
+            {
+                return false;
+            }
+
+            string token = "." + junk[..end];
+
+            return !string.Equals(token, ".001", StringComparison.OrdinalIgnoreCase)
+                && KnownArchiveExtensions.Contains(token);
         }
     }
 }
