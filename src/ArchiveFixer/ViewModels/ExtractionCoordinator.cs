@@ -7365,6 +7365,24 @@ namespace ArchiveFixer.ViewModels
                     {
                         RememberDeferredVolumeDeficit(task);
                     }
+                    else if (FindStalledVolumePiece(result) is { Length: > 0 } stalledPiece
+                             && !AnyTaskRepresentsGroup(stalledPiece))
+                    {
+                        /*
+                         * ⚠ 2026-10-13 困难批 `11111111` 新开的一格：停下来的**是别人那一组**的片。
+                         *
+                         * <para>现场（运行期实测）：三片 `222-L2.part1/2/3.rar` 各自被 `222-W0-1.zip` /
+                         * `222-W1-1.7z` / `222-W2-0.zip` 三条链解出来，每一条链都停在"这一组的入口包不在旁边"
+                         * （`Missing volume`）；而这三单的包基名（`222-W0-1` 等）与那一组（`222-L2`）
+                         * **族与基名都对不上** ⇒ 老闸门一单都不登记 ⇒ 批末名单 0 条
+                         * ⇒ 那一组永远没人收拢、也永远不解开 ⇒ ①红。</para>
+                         *
+                         * <para>⛔ 安全性没放宽：登记的仍然是**这一单真的产出过的那一片**（`UnresolvedVolumePieces`
+                         * 里自报是分卷片的那一个，唯一出口 `VolumeGroupDetector.TryGetVolumeIndex`），
+                         * 批末只是拿**它**去问对的那个组；仍然"补齐才跑、仍然缺就如实报缺卷"。</para>
+                         */
+                        RememberDeferredVolumeDeficit(task, stalledPiece);
+                    }
                 }
 
                 AppendLog(
@@ -8586,6 +8604,23 @@ namespace ArchiveFixer.ViewModels
         /// 第 1 卷很可能在第 2 轮才出现），下一次**用户发起**的批次开始时清空。</para>
         /// </summary>
         private readonly List<ArchiveTask> _volumeDeficitDeferred = new();
+
+        /// <summary>
+        /// 这一批里"**停在别人那一组**"的那几单 → 停下来的那一片（2026-10-13 困难批 `11111111` 取证）。
+        ///
+        /// <para><b>为什么要有它</b>：批末那一站问"这一组齐了没"用的是**这一单自己的包基名**
+        /// （`ResolveBatchGroupDirectory`），所以 <see cref="IsStalledGroupOwnGroup"/> 只放"停的就是自己这一组"的单进名单。
+        /// 可困难批的形状是：**入口包那一组的每一片各自被另一条链解出来** ——
+        /// 逐字（`11111111` 运行的判据输入）：`入口包=222-L2.part1.rar，产出它的那一单=判不出`
+        /// ⇒ `推不出「这一组该拼到哪一层」` ⇒ `接片一个字节都不动`；而产出这一片的单叫 `222-W0-1.zip`
+        /// （族与基名都对不上 `222-L2`）⇒ 老的闸门把它挡在名单外 ⇒ **运行期实测**
+        /// `RecheckDeferredVolumeDeficits` 那一刻 `_volumeDeficitDeferred.Count = 0`
+        /// ⇒ `批末重判` 一次都没出现 ⇒ 三片永远散在三条链的落点里 ⇒ ①「内容物解出来」红。</para>
+        ///
+        /// <para>存的就是"批末该拿谁去问那一组"：那一片自己的路径（它的基名 = 那一组的基名，
+        /// 它的名字 = 那一组的规范参照物）。⛔ 只读，⛔ 不改任何删除 / 搬运判据。</para>
+        /// </summary>
+        private readonly Dictionary<ArchiveTask, string> _deferredVolumeGroupMember = new();
 
         /// <summary>
         /// **本批"借来用过的用户源片" → 解出它的那一单**（唯一写入点 = 递归结果带回来那份名单，
@@ -11055,7 +11090,25 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⛔ 一个都收不动 / 判不出来 ⇒ 什么都不做（调用方照旧读盘上事实下结论）。</para>
         /// </summary>
-        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer)
+        /// <summary>
+        /// 批末那一站该拿**哪一份**去问"这一组齐了没"：停下来的那一片（如果记过）—— 否则就是这一单自己的路径。
+        ///
+        /// <para>⛔ 判据输入一个字不改：记过 ⇒ 那一片自己的路径（它的基名 = 那一组的基名）；
+        /// 没记过 ⇒ <c>task.CurrentPath</c>（与改动前逐字相同）。</para>
+        /// </summary>
+        private string ResolveDeferredGroupMemberPath(ArchiveTask task) =>
+            _deferredVolumeGroupMember.TryGetValue(task, out string? recorded) && !string.IsNullOrWhiteSpace(recorded)
+                ? recorded!
+                : task.CurrentPath ?? string.Empty;
+
+        /// <summary>
+        /// **把这一片收进"那一组该在的那一层"**（批末补齐那一站用的唯一出口）。
+        /// </summary>
+        /// <param name="memberPath">
+        /// 手上这一片（可选）：<c>null</c> ⇒ 老口径（拿这一单自己的包基名当参照物）。
+        /// 传了它 ⇒ 参照物换成它自己的名字（停的是**别人那一组**时唯一说得清的办法）。
+        /// </param>
+        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
@@ -11067,7 +11120,10 @@ namespace ArchiveFixer.ViewModels
              * `111(4)\`，它自己还没轮到重判 ⇒ 只看这一单的账就会漏掉它，整组永远停在 3 卷）。
              * ⛔ "同组"仍由既有尺子回答（`BelongsToSameGroup`），⛔ 接片仍只硬链接、绝不搬用户文件。
              */
-            string tailName = ResolveGroupReferenceName(task, FileNameHelper.GetArchiveBaseName(task.CurrentPath));
+            string tailName = ResolveGroupReferenceName(
+                task,
+                FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath),
+                memberPath);
             var sources = new List<string>(task.VolumePaths);
 
             foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
@@ -11161,7 +11217,10 @@ namespace ArchiveFixer.ViewModels
         /// "完整 / 卷号连续 / 除末片外等大"回答；⛔ 这一层里没有入口包 / 不完整 ⇒ 返回 null，
         /// 由调用方退回既有口径。</para>
         /// </summary>
-        private static VolumeGroup? ResolveGatheredGroupFromEntryLayer(ArchiveTask task, string? entryLayer)
+        private static VolumeGroup? ResolveGatheredGroupFromEntryLayer(
+            ArchiveTask task,
+            string? entryLayer,
+            string? memberPath = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
@@ -11170,7 +11229,10 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                string tailName = ResolveGroupReferenceName(task, FileNameHelper.GetArchiveBaseName(task.CurrentPath));
+                string tailName = ResolveGroupReferenceName(
+                    task,
+                    FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath),
+                    memberPath);
                 var candidates = new List<VolumeCandidate>();
 
                 foreach (string path in CollectVolumeFilesInDirectory(entryLayer))
@@ -11395,7 +11457,7 @@ namespace ArchiveFixer.ViewModels
         /// （见 `ApplyRecursionResult` 后面那段说明，实测在那一档改它会整组连入口都不再落地）。
         /// 解前预检那一档要连状态与文案一起写，由 <see cref="RecordDeferredVolumeDeficit"/> 补。</para>
         /// </summary>
-        private void RememberDeferredVolumeDeficit(ArchiveTask? task)
+        private void RememberDeferredVolumeDeficit(ArchiveTask? task, string? stalledMemberPath = null)
         {
             if (task == null)
             {
@@ -11405,6 +11467,17 @@ namespace ArchiveFixer.ViewModels
             if (!_volumeDeficitDeferred.Contains(task))
             {
                 _volumeDeficitDeferred.Add(task);
+            }
+
+            /*
+             * ⚠ 2026-10-13 困难批 `11111111`：**停下来的那一组不一定就是这一单自己那一组**
+             * （入口包的每一片各自被另一条链解出来）。那种情况把"那一片"记下来 ——
+             * 批末那一站要靠它去问**对的那个组**（否则只能拿这一单自己的包基名去问，问出来是空）。
+             * ⛔ 判不出（没给 / 空串）⇒ 不记 ⇒ 批末照旧用这一单自己的包基名（老口径一个字节不改）。
+             */
+            if (!string.IsNullOrWhiteSpace(stalledMemberPath))
+            {
+                _deferredVolumeGroupMember[task] = stalledMemberPath!;
             }
 
             task.IsVolumeDeficitDeferred = true;
@@ -11471,6 +11544,7 @@ namespace ArchiveFixer.ViewModels
         internal void ResetBatchLedgersForTests()
         {
             _volumeDeficitDeferred.Clear();
+            _deferredVolumeGroupMember.Clear();
             _volumeDeficitFinalPass.Clear();
             ClearGroupPieceProducers();
             _groupConsumerByName.Clear();
@@ -11606,7 +11680,85 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// **接片接不进去时，才在"产出它的那一单自己的落点"里补一份**（真机 CCCC 2026-10-06 第二次追问的
+        /// 这一趟递归**停下来的那一片**（可能属于**别人那一组**）—— 登记进批末名单时要用它当参照物。
+        ///
+        /// <para>判据只有一条：`UnresolvedVolumePieces` 里第一个**自报是分卷片**的名字
+        /// （唯一出口 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/> 认得出卷号）。
+        /// 一个都没有 ⇒ 空串 ⇒ 调用方照旧不登记（老口径一个字不改）。</para>
+        ///
+        /// <para>⛔ 不比中文文案、⛔ 不猜族；工作区里那一份与落点那一份名字相同，拿哪一份当参照物都一样。</para>
+        /// </summary>
+        internal static string FindStalledVolumePiece(RecursionResult? result)
+        {
+            if (result == null)
+            {
+                return string.Empty;
+            }
+
+            foreach (string? piece in result.UnresolvedVolumePieces)
+            {
+                string name = FileNameHelper.GetFileName(piece ?? string.Empty);
+
+                if (name.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(name) == null)
+                {
+                    continue;
+                }
+
+                /*
+                 * ⛔ **不许拿"其余物"里的那一份当参照物**（2026-10-13 实测，真机形状守门用例
+                 * `真机形状_过路层那一单的其余物按档删掉_48MB那处` 当场变红）：那一份的目录会被当成
+                 * "这一组该拼到哪一层" ⇒ 逐字 `批末重判 —— 这一组该拼到哪一层 = …\111\其余物`
+                 * ⇒ 整组往其余物里凑、随后被删除档清掉，树上留下一堆残渣。
+                 *
+                 * ⚠ 工作区里的那一份**照旧可以**（困难批 `11111111` 记下来的正是暂存目录里那一份）：
+                 * 它只是当**参照名**用的，`GroupVolumeDirectory.Resolve` 自己会跳过"已不在盘上"的成员
+                 * （实测：三种位置各记过一次，盘上真正决定落点的是落点树里那几份）。
+                 */
+                string path = piece!;
+
+                if (path.Contains(ProcessArtifactLayout.ArtifactDirectoryName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                return path;
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// **任务表里已经有一单"代表"这一组了吗**（= 有一单自己的文件就是这一组的一片）。
+        ///
+        /// <para>用途只有一个：决定"停在**别人**那一组"的单要不要进批末名单。真机形状
+        /// （`SiblingFolderVolumeGatherTests` 的跨链收卷那几条）里**用户导入的那几片自己就是任务**
+        /// ⇒ 那一组的活该由它们干（老口径本来就能把它们登记进来）⇒ 产出方那一单**不进名单**，
+        /// 一个字节的行为都不变；而困难批 `11111111` 那一档里**没有任何一单是这一组的片**
+        /// （用户导入的只有三条产出方链）⇒ 产出方那一单进名单，那一组才有人收拢、才有人解开。</para>
+        ///
+        /// <para>⛔ 判据仍走唯一那把尺子 <see cref="VolumeGroupDetector.BelongsToSameGroup"/>（族 + 基名）。</para>
+        /// </summary>
+        private bool AnyTaskRepresentsGroup(string piecePath)
+        {
+            string pieceName = FileNameHelper.GetFileName(piecePath);
+
+            if (pieceName.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (ArchiveTask? candidate in SnapshotTaskTable(Tasks))
+            {
+                string name = FileNameHelper.GetFileName(candidate?.CurrentPath ?? string.Empty);
+
+                if (name.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(name, pieceName))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
         /// `111(2)\111(2)_\111.z01`，200 MiB）。
         ///
         /// <para>为什么要补这一份：工作区收尾会把暂存那一份整份删掉；如果那一刻"这一组该在的那一层"
@@ -12449,7 +12601,48 @@ namespace ArchiveFixer.ViewModels
                 ? FileNameHelper.GetFileName(targets[0].Path)
                 : string.Empty;
 
+            /*
+             * ⚠ 2026-10-13 困难批 `11111111`（运行期实测，断点读的变量）：
+             * **接片建出来的那一份副本没人认领** —— 三片都躺在"这一组该拼到的那一层"
+             * （`…\222-W0-1\222-W0-0\`）里，而 `_adoptedLandedPieces` 记的是**产出方落点里那一份**
+             * （part2 / part3 各一条，producer 是 W1 / W2 那两条链）⇒ 收场只扫了 W1 / W2 两棵树，
+             * **入口包那一层一次都没扫到**（断点实测：`groupBaseName=222-L2`、`targets.Count=2`、
+             * 参照名 `222-L2.part2.rar`）⇒ 那三份留在成品树里 ⇒ 判据 ③「盘上无残留」红。
+             *
+             * <para>⇒ 扫描根里补上**接手这一组那一单自己那一层**：它在"这一组齐了 ⇒ 照常跑这一组"
+             * 那一刻已经被改到第 1 卷（`task.CurrentPath = firstVolume`），所以它的目录按定义就是
+             * "这一组该拼到的那一层"。⛔ 逐文件那几道闸门一条不绕过（下面同一个循环体）。</para>
+             */
+            var rootsToScan = new List<(ArchiveTask Producer, string OutputRoot)>();
+
             foreach ((ArchiveTask producer, string _, string outputRoot) in targets.ToList())
+            {
+                if (outputRoot.Length > 0)
+                {
+                    rootsToScan.Add((producer, outputRoot));
+                }
+            }
+
+            string consumerLayer = Path.GetDirectoryName(
+                SafePathHelper.GetFullPathSafe(consumer.CurrentPath ?? string.Empty)) ?? string.Empty;
+
+            if (consumerLayer.Length > 0)
+            {
+                rootsToScan.Add((consumer, consumerLayer));
+            }
+
+            /*
+             * ⚠ 2026-10-13（同上，断点实测）：**"这一组拼到哪一层"那份账就是那几份副本所在的那一层**
+             * （写点唯一 = 接片真的把这一片接进去的那一刻）。产出方落点里那一份已经由上面 targets 覆盖，
+             * 而**接片建出来的那一份**只有这份账知道它在哪 ⇒ 必须把它当扫描根，否则那几份永远没人认领。
+             */
+            if (_groupLayerByBaseName.TryGetValue(groupBaseName, out string? assembledLayer)
+                && !string.IsNullOrWhiteSpace(assembledLayer))
+            {
+                rootsToScan.Add((consumer, assembledLayer!));
+            }
+
+            foreach ((ArchiveTask producer, string outputRoot) in rootsToScan)
             {
                 if (outputRoot.Length == 0 || !scannedRoots.Add(outputRoot))
                 {
@@ -12700,9 +12893,9 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 判据一个字没放宽：收完仍然只由它回答"齐不齐"。
                  */
                 string entryLayer = ResolveBatchGroupDirectory(
-                    FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty),
+                    FileNameHelper.GetArchiveBaseName(ResolveDeferredGroupMemberPath(task)),
                     task,
-                    task.CurrentPath);
+                    ResolveDeferredGroupMemberPath(task));
 
                 if (entryLayer.Length > 0)
                 {
@@ -12719,10 +12912,13 @@ namespace ArchiveFixer.ViewModels
                             task.LogName,
                             entryLayer));
 
-                    TryGatherGroupPiecesInto(task, entryLayer);
+                    TryGatherGroupPiecesInto(task, entryLayer, _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null);
                 }
 
-                VolumeGroup? group = ResolveGatheredGroupFromEntryLayer(task, entryLayer)
+                VolumeGroup? group = ResolveGatheredGroupFromEntryLayer(
+                        task,
+                        entryLayer,
+                        _deferredVolumeGroupMember.TryGetValue(task, out string? stalledForGroup) ? stalledForGroup : null)
                     ?? ResolveCompleteGroupFromDisk(task, entryLayer);
 
                 if (group != null)
@@ -16905,6 +17101,7 @@ namespace ArchiveFixer.ViewModels
             if (!continueDeferredVolumeDeficits)
             {
                 _volumeDeficitDeferred.Clear();
+                _deferredVolumeGroupMember.Clear();
                 _consumedVolumeSources.Clear();
                 _groupConsumerByName.Clear();
                 ClearGroupPieceProducers();
