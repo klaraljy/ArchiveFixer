@@ -2155,6 +2155,32 @@ namespace ArchiveFixer.Extraction
                         out int provenFiles,
                         out long provenBytes))
                 {
+                    /*
+                     * ⚠ 2026-10-13（困难批 `run-4444`，运行期定案 · 与下面 `:2318` 那条**同一个出口**）：
+                     * **"密码对了但数据坏了"这一档之前不看"这一份到底是什么"** ⇒ 手上只有某一卷、其余几卷
+                     * 在别处（甚至还没被解出来）时，引擎当然读不到后面那些卷里的数据 ⇒ 它报 CRC 错，
+                     * 于是这一档把整层落成「损坏」⇒ 这一单「解压失败」+ **已经解出来的那一片被扔掉**。
+                     * 逐字现场（夹具 `dbg-7c44505e`，第 2 层开 `bbb-L2.jpg`）：
+                     * `密码已经证实是对的（这一趟真的解出了 2 个文件 / 共 10489352 字节）` ⇒
+                     * `bbb-W2-1.rar：已完成 2 层，停在第 3 层，原因：压缩包损坏` ⇒
+                     * `产物校验未通过：输出目录是空目录，没有产物` ⇒ 盘上再没有 `bbb-L2.jpg`。
+                     * ⇒ 落「损坏」之前先问一次那唯一一个出口：**它是不是"某个还没凑齐的分卷组的一员"**。
+                     */
+                    if (IsPieceOfIncompleteGroup(archivePath))
+                    {
+                        Log(
+                            "WARN",
+                            $"{layerLabel}：这一片属于某个分卷组、而同组的入口包不在这一层 ⇒ "
+                            + "按「缺卷」处理（⛔ 不是「压缩包损坏」）—— 片原样留着，交给批末/跨链那一套去凑。"
+                            + $"（引擎原话：{PasswordMasker.Sanitize(result.Message)}）");
+
+                        RememberUnresolvedVolumePiece(archivePath);
+
+                        return LayerOutcome.Stop(
+                            BuildLayerReport(item, result, succeededPassword: null, manifestEntries: lastListedEntries),
+                            RecursionStopReason.MissingVolume);
+                    }
+
                     string provenMessage = string.Format(
                             System.Globalization.CultureInfo.CurrentCulture,
                             StatusText.PasswordProvenDataCorruptedFormat,
@@ -2292,23 +2318,34 @@ namespace ArchiveFixer.Extraction
                  * 而事实是：**这一组不全**（手上只有第 3 卷）—— 引擎当然解不动它的数据，
                  * 这不是"包坏了"，是"组还没凑齐"。</para>
                  *
-                 * <para><b>判据（只读事实，两把既有尺子）</b>：
-                 * ① 这一份是**后续卷**（唯一出口 <see cref="FileNameHelper.IsVolumeContinuationPart"/>，
-                 * 它能吃骨架档 `par@@@@t3`）；② 同组入口**不在它旁边**（同目录里没有"同族同基名、且自己不是后续卷"
-                 * 的那一份）。两条同时成立 ⇒ 把这一层的停因落成 <see cref="RecursionStopReason.MissingVolume"/>
+                 * <para><b>判据（只读事实）</b>：① 这一份**是分卷组的一员**；② 同组入口**不在它旁边**
+                 * （同目录里没有"同族同基名、且自己不是后续卷"的那一份）。
+                 * 两条同时成立 ⇒ 把这一层的停因落成 <see cref="RecursionStopReason.MissingVolume"/>
                  * （= 缺卷，与第 0 层那条入口路**同一个出口**：记下这一片、交给跨链/批末那一套去凑）。</para>
+                 *
+                 * <para>⚠ 2026-10-13（困难批 `run-4444`，运行期定案）：① 这一条原来**只读名字**
+                 * （<see cref="FileNameHelper.IsVolumeContinuationPart"/>）⇒ 名字被伪装过头的那一片
+                 * （夹具 `dbg-7c44505e` 里是 `bbb-L2.jpg`：后缀整个被换成 `.jpg`）**落不进这一档**，
+                 * 于是同一件事走了另一条结论：那一层落「压缩包损坏」⇒ 这一单落「解压失败」+
+                 * **已经解出来的那一片被连工作区一起扔掉** ⇒ 那一组永远缺片。
+                 * 逐字现场：`第 2 层：bbb-L2.jpg：文件损坏：密码已经证实是对的（这一趟真的解出了 2 个文件 /
+                 * 共 10489352 字节）…` ⇒ `bbb-W2-1.rar：已完成 2 层，停在第 3 层，原因：压缩包损坏` ⇒
+                 * `产物校验未通过：输出目录是空目录，没有产物`。**根因是"组不全"而不是"包坏了"** ——
+                 * 手上只有这一卷，引擎当然读不到后面那些卷里的数据。
+                 * ⇒ 补一条**内容证据**（底层识别那张卡的唯一出口）：`Membership == VolumeMember`
+                 * 就是"内容自证我是分卷组的一员"（RAR 的 Volume 位 / RAR4 首卷标记 / 跨盘 ZIP 盘号）。
+                 * ⛔ **判据没有放宽到"判不出"**：`Unknown` 照旧走引擎给的那一档（`ProvablyNotVolumeMember`
+                 * 更是明确排除）。</para>
                  *
                  * <para>⛔ **不动"开不开"**（那一格试过一版"不打开"，把真机形状守门打红 ⇒ 已撤回）：
                  * 候选照旧全试、动作一个字不改，只把**结论**从"损坏"改成"缺卷"。
-                 * ⛔ 判不出（目录读不了 / 名字解析不出）⇒ 照旧走引擎给的那一档。</para>
+                 * ⛔ 判不出（目录读不了 / 名字解析不出 / 内容读不出）⇒ 照旧走引擎给的那一档。</para>
                  */
-                if (!result.Success
-                    && FileNameHelper.IsVolumeContinuationPart(Path.GetFileName(archivePath))
-                    && !IsGroupEntryPresentBeside(archivePath))
+                if (!result.Success && IsPieceOfIncompleteGroup(archivePath))
                 {
                     Log(
                         "WARN",
-                        $"{layerLabel}：这一片是这一组的「后续卷」、而同组的入口包不在这一层 ⇒ "
+                        $"{layerLabel}：这一片属于某个分卷组、而同组的入口包不在这一层 ⇒ "
                         + "按「缺卷」处理（⛔ 不是「压缩包损坏」）—— 片原样留着，交给批末/跨链那一套去凑。"
                         + $"（引擎原话：{PasswordMasker.Sanitize(result.Message)}）");
 
@@ -2627,6 +2664,51 @@ namespace ArchiveFixer.Extraction
 
             return false;
         }
+
+        /// <summary>
+        /// **这一份是不是"某个还没凑齐的分卷组的一员"**（唯一出口；⛔ 只读事实、⛔ 不动盘上任何东西）。
+        ///
+        /// <para>两个条件同时成立才算：① **它属于某个分卷组** —— 名字像后续卷
+        /// （<see cref="FileNameHelper.IsVolumeContinuationPart"/>，能吃骨架档 `par@@@@t3`）
+        /// **或** 内容自证（底层识别那张卡 <see cref="FileNatureCard.Membership"/> = <c>VolumeMember</c>）；
+        /// ② **同组入口不在它旁边**（<see cref="IsGroupEntryPresentBeside"/>）。</para>
+        ///
+        /// <para><b>为什么要有这个出口</b>（2026-10-13 困难批 `run-4444`，运行期定案）：以前这一档
+        /// 只有名字那一半，于是**名字被伪装过头**的那一片（后缀整个换成 `.jpg`）落不进"缺卷"，
+        /// 掉进"密码对了但数据坏了 ⇒ 损坏"⇒ 整单「解压失败」+ 已经解出来的那一片被扔掉
+        /// ⇒ 那一组永远缺片（①红）。而事实是**这一组不全**：手上只有这一卷，引擎当然读不到
+        /// 后面那些卷里的数据。内容那一半（`Membership`）正是用户要的"底层识别"结论：
+        /// RAR 的 Volume 位 / RAR4 的首卷标记 / 跨盘 ZIP 的盘号 —— ⛔ 全都不看名字。</para>
+        ///
+        /// <para>⛔ 判据**没有放宽到"判不出"**：`Membership == Unknown` 照旧按名字那一半判，
+        /// 名字也不像 ⇒ 走引擎给的那一档；`ProvablyNotVolumeMember`（可证不是分卷成员）更是明确排除。</para>
+        /// </summary>
+        private static bool IsPieceOfIncompleteGroup(string archivePath)
+        {
+            if (string.IsNullOrWhiteSpace(archivePath))
+            {
+                return false;
+            }
+
+            if (IsGroupEntryPresentBeside(archivePath))
+            {
+                return false;
+            }
+
+            if (FileNameHelper.IsVolumeContinuationPart(FileNameHelper.GetFileName(archivePath)))
+            {
+                return true;
+            }
+
+            return FileNature.Inspect(archivePath).Membership
+                   == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember;
+        }
+
+        /// <summary>单测用：把"这一份是不是某个还没凑齐的分卷组的一员"那个**唯一出口**露给测试项目。</summary>
+        internal static bool IsPieceOfIncompleteGroupForTests(string path) => IsPieceOfIncompleteGroup(path);
+
+        /// <summary>单测用：把"同组入口在不在它旁边"那一半露给测试项目（用来钉住它的**已知限制**）。</summary>
+        internal static bool IsGroupEntryPresentBesideForTests(string path) => IsGroupEntryPresentBeside(path);
 
         /// <summary>
         /// 这一层**真的解开了**之后的共同收尾：量产物 → 落点校验 → 探内层包 → 出层报告。

@@ -47,6 +47,85 @@ namespace ArchiveFixer.Tests
         // ── RAR5：卷号在主归档头里 ──
 
         /// <summary>
+        /// **停因那一档：名字被伪装过头的那一片，照样按「缺卷」处理**（用户 2026-10-13 口径
+        /// 「没有完整的**不是缺卷**……你就**只能显示跳过**」）。
+        ///
+        /// <para>现场（困难批 `run-4444`，夹具 `dbg-7c44505e` 逐字）：第 2 层开 `bbb-L2.jpg`
+        /// （后缀整个被换成 `.jpg`、内容其实是 RAR 分卷的一片）—— 引擎在真密码那一趟**真解出了
+        /// 2 个文件 / 10489352 字节**、同时报 `Data Error in encrypted file`，于是老判据落
+        /// 「密码对了但数据坏了 ⇒ 压缩包损坏」⇒ 整单「解压失败」+ **已经解出来的那一片被扔掉**
+        /// ⇒ 那一组永远缺片。事实是**这一组不全**（手上只有这一卷）。</para>
+        ///
+        /// <para>三条对照，全部只读事实：
+        /// ① 内容自证是分卷组成员 + 同组入口不在旁边 ⇒ **缺卷**；
+        /// ② 同组入口就在旁边 ⇒ 不判缺卷（走引擎给的那一档）；
+        /// ③ 内容**判不出**（一坨零字节）⇒ 照旧老口径 —— 判据**没有放宽到"判不出"**。</para>
+        ///
+        /// <para>⚠ 对照②用的是**同族同基名、但不是后续卷**的那一份（`bbb-L2.part1.jpg`）——
+        /// 这一格如实记下一个**已知限制**：`IsGroupEntryPresentBeside` 仍然按名字判（它要"同族同基名"，
+        /// 而后缀被换成 `.jpg` 的那一片**按名字推不出族**）⇒ 一个叫 `bbb-L2.rar` 的入口摆在同一层里
+        /// 它也看不见。⛔ 这不是本轮引入的：那一档一直是名字尺子；本轮的改动只是把**"这一份是不是这一组的片"**
+        /// 那一半换成内容证据。它不会让结论变坏（最坏情况 = 该"缺卷"却按缺卷收场 ⇒ 片保住、批末再凑，
+        /// 而老行为是整单失败 + 把那一片扔掉）。</para>
+        /// </summary>
+        [Fact]
+        public void 停因_名字被伪装成jpg的那一片_照样按缺卷处理()
+        {
+            string disguisedDir = Path.Combine(_root, "disguised");
+            Directory.CreateDirectory(disguisedDir);
+
+            // ① 名字伪装成 .jpg、内容自证是分卷组的一员（RAR5 的 Volume 位开着）
+            string piece = Path.Combine(disguisedDir, "bbb-L2.jpg");
+            File.WriteAllBytes(piece, Rar5MainHeader(0x0001u, null));
+
+            Assert.True(
+                RecursiveExtractor.IsPieceOfIncompleteGroupForTests(piece),
+                "内容自证是分卷组成员、同组入口又不在旁边 ⇒ 必须是「缺卷」");
+
+            // ② 同层的"同族同基名"那份也认不出入口（**已知限制**，如实钉住）：它按名字判，
+            //    而后缀被换成 .jpg 的那一片按名字推不出族 ⇒ 那个闸门在伪装名上等于瞎的。
+            File.WriteAllBytes(Path.Combine(disguisedDir, "bbb-L2.part1.jpg"), Rar5MainHeader(0x0001u, null));
+            File.WriteAllBytes(Path.Combine(disguisedDir, "bbb-L2.rar"), Rar5MainHeader(0x0001u, null));
+
+            Assert.False(
+                RecursiveExtractor.IsGroupEntryPresentBesideForTests(piece),
+                "已知限制：名字被伪装成非归档后缀时，「同组入口在不在旁边」这把**名字**尺子看不见入口");
+
+            // ③ 内容**判不出**（一坨零字节）⇒ 照旧老口径：判据不许放宽到"判不出"
+            string unknownDir = Path.Combine(_root, "unknown");
+            Directory.CreateDirectory(unknownDir);
+
+            string unknown = Path.Combine(unknownDir, "ccc-L2.jpg");
+            File.WriteAllBytes(unknown, new byte[4096]);
+
+            Assert.False(
+                RecursiveExtractor.IsPieceOfIncompleteGroupForTests(unknown),
+                "内容判不出 ⇒ 判据不许放宽（照旧走引擎给的那一档）");
+
+            // ④ 内容**可证不是**分卷成员（单卷 RAR：Volume 位没置）⇒ 同样不许走这一档
+            string singleDir = Path.Combine(_root, "single");
+            Directory.CreateDirectory(singleDir);
+
+            string single = Path.Combine(singleDir, "ddd-L2.jpg");
+            File.WriteAllBytes(single, Rar5MainHeader(0x0000u, null));
+
+            Assert.False(
+                RecursiveExtractor.IsPieceOfIncompleteGroupForTests(single),
+                "内容可证不是分卷成员 ⇒ 更不许判成「缺卷」");
+
+            // ⑤ 老那一半（名字像后续卷）照旧有效：名字读得出卷号 ⇒ 不看内容也算这一档
+            string namedDir = Path.Combine(_root, "named");
+            Directory.CreateDirectory(namedDir);
+
+            string named = Path.Combine(namedDir, "eee-L2.part3.rar");
+            File.WriteAllBytes(named, new byte[4096]);
+
+            Assert.True(
+                RecursiveExtractor.IsPieceOfIncompleteGroupForTests(named),
+                "名字就是「这一组的后续卷」⇒ 老口径照旧（内容判不出也认）");
+        }
+
+        /// <summary>
         /// **卡上的专属算法（用户 2026-10-13 口径：「名字被伪装到读不出卷号 ⇒ 组凑不来」是底层识别的事）**：
         /// RAR 那一族**按内容自证"我是这一组的第一片"**，而且把"内容里那个卷号字段的原始值"留在卡上
         /// （第 1 片当锚点、其余几片靠差值定序 —— RAR4 老编号族的基数格式没写死，只有相对大小可靠）。
