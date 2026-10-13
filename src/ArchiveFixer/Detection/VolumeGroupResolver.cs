@@ -1311,6 +1311,47 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// **同一族里、第 <paramref name="index"/> 卷该叫什么名字** —— 由**同族的一份样本名**（例：入口那一卷
+        /// `111-L2.7z.001`）定族（2026-10-13 困难批"缺片按字节数补槽位"那一档用）。
+        ///
+        /// <para>⛔ 族规则**只有一处**（<see cref="CanonicalNameFor"/>），这里只把"从样本名定族"这一步接上，
+        /// ⛔ 不新写第二套命名规则。推出来的名字**自己再验一遍**（<see cref="VolumeGroupDetector.TryGetVolumeIndex"/>
+        /// 必须回同一个卷号）。判不出族 / 样本名推不出本族第 1 卷名 / 自验不过 ⇒ <c>false</c>（调用方什么都不做）。</para>
+        /// </summary>
+        internal static bool TryBuildCanonicalVolumeNameForIndex(
+            string sampleVolumeName,
+            int index,
+            out string canonical)
+        {
+            canonical = string.Empty;
+
+            if (index < 1 || string.IsNullOrWhiteSpace(sampleVolumeName))
+            {
+                return false;
+            }
+
+            string baseName = FileNameHelper.GetArchiveBaseName(sampleVolumeName);
+            string? first = VolumeGroupDetector.TryGetFirstVolumeName(sampleVolumeName);
+
+            if (baseName.Length == 0 || string.IsNullOrWhiteSpace(first))
+            {
+                return false;
+            }
+
+            VolumeNameFamily family = ResolveFamilyFromFirstVolumeName(first!, baseName);
+            string name = CanonicalNameFor(family, baseName, index);
+
+            if (name.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(name) != index)
+            {
+                return false;
+            }
+
+            canonical = name;
+
+            return true;
+        }
+
+        /// <summary>
         /// **这一片按它自己那一族写成的规范卷名** ——「还原成规范名」这件事在**单卷尺度**上的唯一出口。
         ///
         /// <para><b>为什么必须有它</b>（真机 FFFF 2026-10-10 夜，定案到行）：接片那一档

@@ -11207,6 +11207,262 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **按 7z 起始头自述的字节数把缺口补齐**（2026-10-13 困难批 `1111`，用户口径「靠底层识别」）。
+        ///
+        /// <para><b>现场（运行期事实）</b>：那一组的三片里，入口片 `111-L2.7z.001` 已经由「还原」改回规范名、
+        /// 也留在了盘上（第 15 修），链里逐字
+        /// `7z 起始头自述这一包应当有 62907634 字节，手上这几卷加起来只有 26214400 字节`；
+        /// 而另外两片被伪装成 `111-L2.7z`（吃掉卷标记 = "伪装成单一"）与 `111-L2.7z-924`（本体后缀后粘垃圾尾巴）
+        /// ⇒ 名字那一栏读不出卷号 ⇒ 收片（按名字）永远收不到它们 ⇒ 整组凑不齐 ⇒ ①红。
+        /// 算术上正好闭合：`62907634 − 26214400 = 36693234 = 26214400 + 10478834`（那两片自己的字节数）。</para>
+        ///
+        /// <para><b>判据（只用两条既有的硬证据，⛔ 不猜卷号）</b>：
+        /// ① <see cref="SevenZipStartHeader.TryReadExpectedTotalBytes"/> 读出"整包应当有多少字节"（明文起始头）；
+        /// ② 候选必须**体积正好凑上**那个差额（1–3 份、每份不超过手上最大的那一卷）、
+        ///    且按内容**不是可读归档**（<see cref="FileNature.Inspect"/> 说格式未知或 7z —— 中间片本来就没有身份信息）；
+        /// ③ 填完之后必须**1..N 连号 + 除末片外等大 + 总字节数正好等于自述值**。
+        /// ⇒ 用**规范槽位名**（唯一出口 <see cref="VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex"/>）
+        /// 把它们**硬链接**进这一层（⛔ 原件一个字节都不动、⛔ 绝不覆盖已有名字）。
+        /// ⛔ 判不出（凑不出正好相等 / 三条有一条不成立）⇒ 一份都不补。</para>
+        /// </summary>
+        private void TryLinkMissingPiecesByByteBudget(ArchiveTask task, string entryLayer, string? memberPath)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
+            {
+                return;
+            }
+
+            string tailName = ResolveGroupReferenceName(
+                task,
+                FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath),
+                memberPath);
+
+            var present = new SortedDictionary<int, string>(Comparer<int>.Default);
+            long largest = 0;
+
+            foreach (string path in CollectVolumeFilesInDirectory(entryLayer))
+            {
+                if (!File.Exists(path) || !VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                {
+                    continue;
+                }
+
+                int? index = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path));
+
+                if (!index.HasValue || present.ContainsKey(index.Value))
+                {
+                    continue;
+                }
+
+                present[index.Value] = path;
+
+                try
+                {
+                    largest = Math.Max(largest, new FileInfo(path).Length);
+                }
+                catch
+                {
+                    return;
+                }
+            }
+
+            if (present.Count == 0 || !present.TryGetValue(1, out string? firstVolume) || largest <= 0)
+            {
+                return;
+            }
+
+            if (!SevenZipStartHeader.TryReadExpectedTotalBytes(firstVolume, out long expected) || expected <= 0)
+            {
+                return;
+            }
+
+            long actual = 0;
+
+            foreach (string path in present.Values)
+            {
+                try
+                {
+                    actual += new FileInfo(path).Length;
+                }
+                catch
+                {
+                    return;
+                }
+            }
+
+            long difference = expected - actual;
+
+            if (difference <= 0)
+            {
+                return;
+            }
+
+            /*
+             * 候选池 = 各单的几棵树 + 这一层（与收片那一档同一个来源纪律：⛔ 不扫全盘、⛔ 不碰用户源目录）。
+             * 只留"体积能派上用场"的那些：未知格式 / 7z 片段（中间片按定义读不出格式）。
+             */
+            string entryLayerFull = SafePathHelper.GetFullPathSafe(entryLayer);
+            var candidates = new List<string>();
+            var scannedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entryLayerFull };
+
+            foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
+            {
+                if (other == null)
+                {
+                    continue;
+                }
+
+                foreach (string? directory in new[] { other.OutputPath, other.ContentDirectoryPath, other.RestDirectoryPath })
+                {
+                    if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                    {
+                        continue;
+                    }
+
+                    if (!scannedRoots.Add(SafePathHelper.GetFullPathSafe(directory!)))
+                    {
+                        continue;
+                    }
+
+                    string[] found;
+
+                    try
+                    {
+                        found = Directory.GetFiles(directory!, "*", SearchOption.AllDirectories);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    foreach (string path in found)
+                    {
+                        long size;
+
+                        try
+                        {
+                            size = new FileInfo(path).Length;
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        if (size <= 0 || size > largest || size > difference)
+                        {
+                            continue;
+                        }
+
+                        FileNatureCard card = FileNature.Inspect(path);
+
+                        if (card.Format != VolumeContentFormat.Unknown
+                            && card.Format != VolumeContentFormat.SevenZip)
+                        {
+                            continue;
+                        }
+
+                        candidates.Add(path);
+                    }
+                }
+            }
+
+            // 挑**正好凑上差额**的那几份（最多 3 份；体积降序 —— 与"除末卷外等大"那条规律一致）。
+            var chosen = new List<string>();
+            long remaining = difference;
+
+            foreach (string path in candidates
+                         .OrderByDescending(item => new FileInfo(item).Length)
+                         .ThenBy(item => item, StringComparer.OrdinalIgnoreCase))
+            {
+                if (chosen.Count == 3)
+                {
+                    break;
+                }
+
+                long size = new FileInfo(path).Length;
+
+                if (size > remaining)
+                {
+                    continue;
+                }
+
+                chosen.Add(path);
+                remaining -= size;
+
+                if (remaining == 0)
+                {
+                    break;
+                }
+            }
+
+            if (chosen.Count == 0 || remaining != 0)
+            {
+                return;
+            }
+
+            // 缺哪几个槽位：1..max 里的洞；不够就往 max 后面续。
+            var slots = new List<int>();
+            int maxIndex = present.Keys.Max();
+
+            for (int index = 1; index <= maxIndex; index++)
+            {
+                if (!present.ContainsKey(index))
+                {
+                    slots.Add(index);
+                }
+            }
+
+            while (slots.Count < chosen.Count)
+            {
+                slots.Add(++maxIndex);
+            }
+
+            string entryName = FileNameHelper.GetFileName(firstVolume);
+            var linked = new List<string>();
+
+            for (int i = 0; i < chosen.Count; i++)
+            {
+                if (!VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slots[i], out string slotName))
+                {
+                    return;   // 推不出规范槽位名 ⇒ 一份都不补（已经建的那几个链接由下面回收）
+                }
+
+                string target = Path.Combine(entryLayer, slotName);
+
+                if (File.Exists(target)
+                    || !HardLinkHelper.CanHardLink(chosen[i], entryLayer)
+                    || !HardLinkHelper.TryCreateHardLink(target, chosen[i]))
+                {
+                    foreach (string built in linked)
+                    {
+                        try
+                        {
+                            File.Delete(built);
+                        }
+                        catch
+                        {
+                            // 删不掉就留着（它只是我们建的链接，不影响任何判据）。
+                        }
+                    }
+
+                    return;
+                }
+
+                linked.Add(target);
+            }
+
+            if (linked.Count > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    $"{task.LogName}：按 7z 起始头自述的字节数补齐缺口 —— 自述 {expected} 字节、"
+                    + $"手上 {actual} 字节、差 {difference} 字节 ⇒ 用 "
+                    + string.Join("、", chosen.Select((path, i) => FileNameHelper.GetFileName(path) + " → " + FileNameHelper.GetFileName(linked[i])))
+                    + " 按规范槽位名补进这一层（零字节硬链接，原件一个字节都不动）。");
+            }
+        }
+
+        /// <summary>
         /// **整组已经在入口那一层凑齐了吗**（只看那一层，⛔ 不看这一单自己那一层）。
         ///
         /// <para>用户 2026-10-06：「111.zip 的位置已经确定，你把分卷移过来不就是了吗」——
@@ -12913,6 +13169,16 @@ namespace ArchiveFixer.ViewModels
                             entryLayer));
 
                     TryGatherGroupPiecesInto(task, entryLayer, _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null);
+
+                    /*
+                     * ⚠ 2026-10-13（第 15 修之后）：收片只认名字 ⇒ 名字被伪装到"读不出卷号"的那几片收不进来。
+                     * 再走一步**字节数**那条硬证据（7z 起始头自述）把缺口按规范槽位名**硬链接**补上
+                     * （⛔ 原件一个字节都不动；凑不出正好相等就一份都不补）。
+                     */
+                    TryLinkMissingPiecesByByteBudget(
+                        task,
+                        entryLayer,
+                        _deferredVolumeGroupMember.TryGetValue(task, out string? stalledForBudget) ? stalledForBudget : null);
                 }
 
                 VolumeGroup? group = ResolveGatheredGroupFromEntryLayer(
