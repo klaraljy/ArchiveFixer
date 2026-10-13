@@ -91,6 +91,36 @@ namespace ArchiveFixer.Tests
                 RecursiveExtractor.IsGroupEntryPresentBesideForTests(piece),
                 "已知限制：名字被伪装成非归档后缀时，「同组入口在不在旁边」这把**名字**尺子看不见入口");
 
+            /*
+             * ②b ⛔ **这一份自己不算"同组的入口"**（2026-10-13 困难批 `run-23232323` 定案）：
+             * 夹具 `dbg-c6092d64` 里 `out\bbb-W0-0\bbb-L2.zip` 只是**它自己**一个文件，
+             * 老写法却判成"入口在"（它当然同族同基名、又不在"后续卷"那一档）⇒ 补充闸门等于瞎的。
+             */
+            string aloneDir = Path.Combine(_root, "alone");
+            Directory.CreateDirectory(aloneDir);
+
+            string alone = Path.Combine(aloneDir, "ddd-L2.zip");
+            File.WriteAllBytes(alone, new byte[4096]);
+
+            Assert.False(
+                RecursiveExtractor.IsGroupEntryPresentBesideForTests(alone),
+                "目录里只有它自己 ⇒ 不许把这一份自己当成「同组的入口」");
+
+            /*
+             * ②c 内容**自己写着"我不是第 1 片"**（RAR5 卷号 2）⇒ 那一档不必再问"入口在不在旁边"
+             * ——入口不可能就是这一份自己。同层摆一个会被当成"入口"的同族同基名文件也照样算缺卷。
+             */
+            string secondDir = Path.Combine(_root, "second");
+            Directory.CreateDirectory(secondDir);
+
+            string second = Path.Combine(secondDir, "eee-L2.rar");
+            File.WriteAllBytes(second, Rar5MainHeader(0x0003u, 1u));
+            File.WriteAllBytes(Path.Combine(secondDir, "eee-L2.part1.rar"), Rar5MainHeader(0x0001u, null));
+
+            Assert.True(
+                RecursiveExtractor.IsPieceOfIncompleteGroupForTests(second),
+                "内容自证卷号 2 ⇒ 它不是第一片 ⇒ 入口必在别处 ⇒ 必须是「缺卷」");
+
             // ③ 内容**判不出**（一坨零字节）⇒ 照旧老口径：判据不许放宽到"判不出"
             string unknownDir = Path.Combine(_root, "unknown");
             Directory.CreateDirectory(unknownDir);

@@ -2598,6 +2598,44 @@ namespace ArchiveFixer.Extraction
                             StatusText.EncryptedHeaders));
                 }
 
+                /*
+                 * ⚠ 2026-10-13（困难批 `run-23232323` / `run-21212121`，运行期定案）：**候选试完 / 试满上限
+                 * 之后还要问一次"这一份到底是什么"** —— 这是同一个出口的**第三处**（前两处：`:2150`
+                 * 「密码对了但数据坏了」、`:2318`「引擎报错」）。
+                 *
+                 * <para><b>逐字现场</b>（`run-23232323`，第 1 层开 `bbb-L2`）：真密码在候选第 7 条上、
+                 * **确实被试过了**（日志逐字 `第 0 层：bbb-W0-0.zip：开始解压，密码候选 7/9，尝试密码列表第 7 项`；
+                 * 候选顺序就是**密码本顺序**，用户的密码在第 7 行 ⇒ 位置 8（含空密码那一档），在每层上限 10 之内），
+                 * 可引擎照样一个字节都解不出来（手上只有这一卷）⇒ 10 条试完落
+                 * `RecursionStopReason.PasswordAttemptsExceeded` ⇒ `bbb-W0-0.zip：产物校验未通过：输出目录是空目录，
+                 * 没有产物` ⇒ 整单「解压失败」+ 那一片被扔掉。</para>
+                 *
+                 * <para>⇒ 判据与处置**逐字同前两处**（唯一出口 <see cref="IsPieceOfIncompleteGroup"/>）：
+                 * 可证"这一份是某个还没凑齐的分卷组的一员" ⇒ 结论是**缺卷**（跳过语义），⛔ 不是失败；
+                 * 片记下来（<see cref="RememberUnresolvedVolumePiece"/>），交给跨链/批末那一套去凑。</para>
+                 *
+                 * <para>⛔ 判据没有放宽：内容判不出 / 可证不是分卷成员 ⇒ 照旧走引擎给的那一档（这一处一个字不改）。</para>
+                 */
+                if (IsPieceOfIncompleteGroup(archivePath))
+                {
+                    Log(
+                        "WARN",
+                        $"{layerLabel}：这一片属于某个分卷组、而同组的入口包不在这一层 ⇒ "
+                        + "按「缺卷」处理（⛔ 不是「解压失败」）—— 片原样留着，交给批末/跨链那一套去凑。");
+
+                    RememberUnresolvedVolumePiece(archivePath);
+
+                    return LayerOutcome.Stop(
+                        BuildLayerReport(
+                            item,
+                            result: null,
+                            succeededPassword: null,
+                            overrideMessage: null,
+                            manifestEntries: lastListedEntries,
+                            overrideStatus: StatusText.VolumeMissing),
+                        RecursionStopReason.MissingVolume);
+                }
+
                 RecursionLayerReport failureReport = BuildLayerReport(
                     item,
                     conclusion,
@@ -2628,6 +2666,13 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>⛔ **判不出 ⇒ 返回 true**（= 按老口径：照旧走引擎给的那一档，一个字节不改）——
         /// 这是补充闸门，不许因为目录读不了把正常结论覆盖掉。</para>
+        ///
+        /// <para>⚠ 2026-10-13（困难批 `run-23232323`，运行期定案）：**这一份自己不算"同组的入口"**。
+        /// 老写法把**待查的这一份自己**也当候选（它当然"同族同基名"、而且不在"后续卷"那一档）⇒
+        /// 对**跨盘 ZIP 族**（那一族的入口名就是 `.zip`）恒返回"入口在旁边" ⇒ 补充闸门等于瞎的：
+        /// 夹具 `dbg-c6092d64` 里 `out\bbb-W0-0\bbb-L2.zip`（内容自证是分卷组的一员、同组还缺 `.z01/.z02`）
+        /// 明明只有它自己一个文件，却被判成"入口在"⇒ 落「达到密码尝试上限」⇒ 整单失败 + 片被扔掉。
+        /// ⇒ 跳过与 <paramref name="piecePath"/> **同一个文件**的候选（比对规范化后的完整路径）。</para>
         /// </summary>
         private static bool IsGroupEntryPresentBeside(string piecePath)
         {
@@ -2639,10 +2684,18 @@ namespace ArchiveFixer.Extraction
                 return true;
             }
 
+            string self = SafePathHelper.GetFullPathSafe(piecePath);
+
             try
             {
                 foreach (string candidate in Directory.EnumerateFiles(directory))
                 {
+                    if (self.Length > 0 && SafePathHelper.PathEquals(candidate, self))
+                    {
+                        // ⛔ 这一份自己不是"同组的入口"（见上面 2026-10-13 那条）。
+                        continue;
+                    }
+
                     string name = FileNameHelper.GetFileName(candidate);
 
                     if (name.Length == 0
@@ -2690,18 +2743,40 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
-            if (IsGroupEntryPresentBeside(archivePath))
-            {
-                return false;
-            }
-
             if (FileNameHelper.IsVolumeContinuationPart(FileNameHelper.GetFileName(archivePath)))
             {
                 return true;
             }
 
-            return FileNature.Inspect(archivePath).Membership
-                   == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember;
+            FileNatureCard card = FileNature.Inspect(archivePath);
+
+            if (card.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+            {
+                // 判不出 / 可证不是分卷成员 ⇒ 老口径（⛔ 判据没有放宽到"判不出"）。
+                return false;
+            }
+
+            /*
+             * ⚠ 2026-10-13（困难批 `run-23232323`，运行期定案）：**"我不是第一片"这件事内容自己说得出来**，
+             * 那一档就不必再问"入口在不在旁边"——入口**不可能**是这一份自己。
+             *
+             * <para>现场逐字（夹具 `dbg-31260820`）：程序产出那一份跨盘 ZIP 末片 `out\bbb-W0-0\bbb-L2.zip`
+             * （内容自述"一共 3 片、我是第 3 片"），第 1 层开它 ⇒ 引擎解不动（同组还缺 `.z01/.z02`）
+             * ⇒ 10 条候选试完落「达到密码尝试上限」⇒ 那一单「解压失败」。
+             * 为什么原来那两半都没拦住它：名字那一半认的是"后续卷"，而**跨盘 ZIP 族的入口名就是 `.zip`**
+             * （那一族的头尾编号是反的）⇒ 名字说"它是入口"；而"入口在不在旁边"那把尺子会把**它自己**
+             * 算成"同组入口"（同名同族、又不在"后续卷"那一档）⇒ 两道都放行。</para>
+             *
+             * <para>内容证据（卷号 &gt; 1）不给这种歧义留位置：这一份**自己写着不是第 1 片**
+             * ⇒ 它那一组的入口必然在别处 ⇒ 结论就是**缺卷**（跳过语义），⛔ 不是失败。</para>
+             */
+            if (card.VolumeNumber is int number && number > 1)
+            {
+                return true;
+            }
+
+            // 判不出片号 / 内容说"我是第 1 片" ⇒ 才需要"同组入口不在它旁边"这一条
+            return !IsGroupEntryPresentBeside(archivePath);
         }
 
         /// <summary>单测用：把"这一份是不是某个还没凑齐的分卷组的一员"那个**唯一出口**露给测试项目。</summary>
