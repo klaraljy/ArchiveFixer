@@ -3535,6 +3535,31 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// **内容魔数说它是归档、而名字里读不出卷标记**吗 —— 「还原」工序的第三类入参（2026-10-13）。
+        ///
+        /// <para>现场（`run-1111` 逐字）：`111-L2.7z.yvA001`（7z 的起始头 + 被切掉的字节）。
+        /// 探针实测那张底层卡逐字：
+        /// `内容：格式=SevenZip … 结论=NotAnArchive ｜ 名字：卷号=判不出 规范名=（空） 基名=111-L2.7z`。
+        /// ⇒ `IsArchiveAsync` 为假（引擎按名字打不开分卷片）、`IsVolumePartFileName` 也为假
+        /// ⇒ 它**两头都不进** ⇒ 「还原」那一档压根看不到它 ⇒ 名字永远是脏的 ⇒
+        /// 那一组的入口包永远不叫规范名 ⇒ 整组凑不齐 ⇒ ①红。</para>
+        ///
+        /// <para>判据只有一条、只读内容：<see cref="FileNature.Inspect"/> 那张唯一底层的卡说
+        /// `Format != Unknown`（魔数是已知归档格式）—— ⛔ 不自己读魔数、⛔ 不看后缀。
+        /// ⛔ 它**只进「还原」改名那一档**（与既有那类"名字像卷片但认不出魔数"的入参同一个去向），
+        /// ⛔ 不进续解名单。名字已经像卷片的那些，调用方原来那条已经收过。</para>
+        /// </summary>
+        private static bool IsArchiveByMagicWithoutVolumeName(string path)
+        {
+            if (FileNameHelper.IsVolumePartFileName(FileNameHelper.GetFileName(path)))
+            {
+                return false;
+            }
+
+            return FileNature.Inspect(path).Format != VolumeContentFormat.Unknown;
+        }
+
+        /// <summary>
         /// 探测本层产物里的内层归档（**递归**找所有文件，跳过 0 字节与工作区自身）。
         /// </summary>
         /// <param name="outputDirectory">这一层的产物目录（**我们自己解出来的副本**）。</param>
@@ -3643,7 +3668,8 @@ namespace ArchiveFixer.Extraction
                     {
                         found.Add(entry);
                     }
-                    else if (FileNameHelper.IsVolumePartFileName(Path.GetFileName(entry)))
+                    else if (FileNameHelper.IsVolumePartFileName(Path.GetFileName(entry))
+                             || IsArchiveByMagicWithoutVolumeName(entry))
                     {
                         // 见 renameOnlyPieces 的说明：只让它过「还原」改名，⛔ 不进续解名单。
                         renameOnlyPieces.Add(entry);
