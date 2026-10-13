@@ -22608,7 +22608,32 @@ namespace ArchiveFixer.ViewModels
                     bool stoppedByAttemptLimit = candidatesTruncated &&
                         (lastResult == null || lastResult.DetectedErrorType == "WrongPassword");
 
-                    if (stoppedByAttemptLimit)
+                    /*
+                     * ⚠ 2026-10-13（困难批 `run-4444`，运行期定案）：**单层这条路也要问一次"这一份是什么"**
+                     * —— 与递归路那三处**同一个唯一出口**（<see cref="RecursiveExtractor.IsPieceOfIncompleteGroup"/>）。
+                     *
+                     * <para>现场逐字：那一单（`bbb-L2.rar` = 程序从包装里救出来的那一片）在单层路上
+                     * 10 条候选全试完、一条都没解开 ⇒ 落 `PasswordAttemptLimitReached` ⇒ 机器终态 `Failed`
+                     * （日志逐字 `解压失败：bbb-L2.rar，原因：已达到密码尝试上限：本层试了 10 个候选（共 12 个），
+                     * 未能确认密码。`）。而卡上逐字 `格式=Rar 分卷身份=VolumeMember 卷号=判不出 首卷标志=False`
+                     * ⇒ 它**可证是某个还没凑齐的分卷组的一员**，同组入口不在旁边 ⇒ 结论应当是**缺卷**。</para>
+                     *
+                     * <para>⚠ `requireNothingElseBeside: true`：单层路这一档还要求**同层里没有别的名字也属于这一组的东西**
+                     * ——`EncryptedVolumePipelineTests` 那两条守门（三片同层、名字都缀了「删除」）钉的就是这一条：
+                     * 不加它会把"片都在、只是名字都坏了"错判成「缺卷」（实测逐字
+                     * `Expected: "密码错误" Actual: "分卷缺失"`）。⛔ 递归路那三处**不用**这一条。</para>
+                     */
+                    if (RecursiveExtractor.IsPieceOfIncompleteGroup(task.CurrentPath, requireNothingElseBeside: true))
+                    {
+                        task.Status = StatusText.VolumeMissing;
+                        task.ErrorMessage =
+                            "分卷缺失：这一片属于某个分卷组，而同组的入口包不在这一层 —— "
+                            + "按「缺卷」处理（⛔ 不是「密码不对」，也⛔ 不是「解压失败」）；"
+                            + "片原样留着，交给批末/跨链那一套去凑。";
+
+                        AppendLog("WARN", $"{task.LogName}：{task.ErrorMessage}");
+                    }
+                    else if (stoppedByAttemptLimit)
                     {
                         task.Status = StatusText.PasswordAttemptLimitReached;
                         task.PasswordStatus = StatusText.PasswordNeed;
@@ -23541,7 +23566,22 @@ namespace ArchiveFixer.ViewModels
                         // 与"先测试再解压"分支同一条规则：试到上限 ≠ 候选全都试过、更 ≠ 密码错误（AGENTS.md §9.2）。
                         bool stoppedByAttemptLimit = candidatesTruncated && hasWrongPassword;
 
-                        if (stoppedByAttemptLimit)
+                        /*
+                         * ⚠ 与上面"先测试再解压"那条分支**同一个唯一出口**（说明见那一处 2026-10-13 那条注释）：
+                         * "这一份可证是某个还没凑齐的分卷组的一员" ⇒ 结论是**缺卷**，⛔ 不是密码问题、⛔ 不是失败。
+                         * ⚠ `requireNothingElseBeside: true`（单层路专用，理由同上）。
+                         */
+                        if (RecursiveExtractor.IsPieceOfIncompleteGroup(task.CurrentPath, requireNothingElseBeside: true))
+                        {
+                            task.Status = StatusText.VolumeMissing;
+                            task.ErrorMessage =
+                                "分卷缺失：这一片属于某个分卷组，而同组的入口包不在这一层 —— "
+                                + "按「缺卷」处理（⛔ 不是「密码不对」，也⛔ 不是「解压失败」）；"
+                                + "片原样留着，交给批末/跨链那一套去凑。";
+
+                            AppendLog("WARN", $"{task.LogName}：{task.ErrorMessage}");
+                        }
+                        else if (stoppedByAttemptLimit)
                         {
                             task.Status = StatusText.PasswordAttemptLimitReached;
                             task.PasswordStatus = StatusText.PasswordNeed;

@@ -2657,6 +2657,56 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// 同一层里还有**名字**属于同一组的东西吗（⛔ 不看内容 —— 用法见
+        /// <see cref="IsPieceOfIncompleteGroup"/> 的 <c>requireNothingElseBeside</c> 说明）？
+        /// 判不出 ⇒ true（不抢结论）。
+        /// </summary>
+        private static bool HasSameGroupNeighbourByName(string piecePath)
+        {
+            string pieceName = FileNameHelper.GetFileName(piecePath);
+            string? directory = Path.GetDirectoryName(piecePath);
+
+            if (pieceName.Length == 0 || string.IsNullOrWhiteSpace(directory))
+            {
+                return true;
+            }
+
+            string self = SafePathHelper.GetFullPathSafe(piecePath);
+
+            try
+            {
+                foreach (string candidate in Directory.EnumerateFiles(directory))
+                {
+                    if (self.Length > 0 && SafePathHelper.PathEquals(candidate, self))
+                    {
+                        continue;
+                    }
+
+                    string name = FileNameHelper.GetFileName(candidate);
+
+                    if (name.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (VolumeGroupDetector.BelongsToSameGroup(name, pieceName)
+                        || string.Equals(
+                            FileNameHelper.GetArchiveBaseName(name),
+                            FileNameHelper.GetArchiveBaseName(pieceName),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                return true;
+            }
+
+            return false;
+        }
+        /// <summary>
         /// 这一片分卷的**入口包**在不在它旁边（同一个目录里）？
         ///
         /// <para>判据只认两把既有尺子：<see cref="VolumeGroupDetector.BelongsToSameGroup"/>（同族同基名）
@@ -2736,7 +2786,21 @@ namespace ArchiveFixer.Extraction
         /// <para>⛔ 判据**没有放宽到"判不出"**：`Membership == Unknown` 照旧按名字那一半判，
         /// 名字也不像 ⇒ 走引擎给的那一档；`ProvablyNotVolumeMember`（可证不是分卷成员）更是明确排除。</para>
         /// </summary>
-        private static bool IsPieceOfIncompleteGroup(string archivePath)
+        /// <param name="requireNothingElseBeside">
+        /// **只给单层路那两个调用点用**（2026-10-13）：那一档在落"缺卷"之前还要求
+        /// 「同层里没有别的**名字**也属于这一组的东西」。
+        ///
+        /// <para><b>为什么要这一条</b>（守门用例实测逐字）：`EncryptedVolumePipelineTests` 那两条把
+        /// **三片都放在同一层**（7z 造的 ZIP 分卷、每片名字缀「删除」）。本机用 7z 复刻同一形状 +
+        /// `volinfo` 探针实测逐字：第一片是 `格式=Zip 分卷身份=VolumeMember 卷号=判不出`，
+        /// **另外两片内容里一点证据都没有**（`格式=Unknown 分卷身份=Unknown` —— 中间片本来就没有魔数）
+        /// ⇒ "旁边还有同族成员"那条**内容**否决对它们等于瞎的；而**名字**那把尺子看得见
+        /// （探针逐字：`enc.zip.002删除` ⇒ `名字：卷号=2 … 基名=enc`）。
+        /// 缺了它，单层路会把"片都在、只是名字都坏了"错判成「缺卷」⇒ 两条既有守门当场红
+        /// （`Expected: "密码错误" Actual: "分卷缺失"`）。
+        /// ⛔ 递归路那三处**不用**这一条（它们的判据已经过环台验证，一个字都不动）。</para>
+        /// </param>
+        internal static bool IsPieceOfIncompleteGroup(string archivePath, bool requireNothingElseBeside = false)
         {
             if (string.IsNullOrWhiteSpace(archivePath))
             {
@@ -2775,6 +2839,11 @@ namespace ArchiveFixer.Extraction
                 return true;
             }
 
+            if (requireNothingElseBeside && HasSameGroupNeighbourByName(archivePath))
+            {
+                // 同层里还有"名字也属于这一组"的东西 ⇒ 可能是"片都在、只是名字都坏了" ⇒ 不抢结论。
+                return false;
+            }
             // 判不出片号 / 内容说"我是第 1 片" ⇒ 才需要"同组入口不在它旁边"这一条
             return !IsGroupEntryPresentBeside(archivePath);
         }
