@@ -8705,6 +8705,19 @@ namespace ArchiveFixer.ViewModels
         private readonly List<(ArchiveTask Producer, string GroupBaseName, string SourcePath)> _byteBudgetLinkedSources = new();
 
         /// <summary>
+        /// **打分分配试到第几版**（键 = 组基名 + 那一层；⛔ 只记账、不碰盘）。
+        ///
+        /// <para>用户口径（2026-10-14）：「第一次前面的为 `003` 后面 `006`，**不成功就换一边**……
+        /// 这是概率匹配，而且**只有前面的试过多次仍然没有办法**时才用；**而且没有成功你还是得换回原来的
+        /// 样子**」。⇒ 同一组同一层**再来一次** = 上一版没成 ⇒ 先**删掉我们建的那几个槽位链接**（回滚，
+        /// 因为它们只是零字节硬链接，删掉就等于回到原样），再试下一版；两版都不成 ⇒ 不再动手、如实写日志。</para>
+        /// </summary>
+        private readonly Dictionary<string, int> _scoredSlotAttempts = new();
+
+        /// <summary>这一组这一层**我们亲手建过**的槽位链接（回滚用；⛔ 只删我们自己建的那些名字）。</summary>
+        private readonly Dictionary<string, List<string>> _scoredSlotLinks = new();
+
+        /// <summary>
         /// 这一批里"**停在别人那一组**"的那几单 → 停下来的那一片（2026-10-13 困难批 `11111111` 取证）。
         ///
         /// <para><b>为什么要有它</b>：批末那一站问"这一组齐了没"用的是**这一单自己的包基名**
@@ -11324,6 +11337,295 @@ namespace ArchiveFixer.ViewModels
         /// 把它们**硬链接**进这一层（⛔ 原件一个字节都不动、⛔ 绝不覆盖已有名字）。
         /// ⛔ 判不出（凑不出正好相等 / 三条有一条不成立）⇒ 一份都不补。</para>
         /// </summary>
+        /// <summary>
+        /// **打分分配那一档**（用户 2026-10-14 口径 ①③；唯一执行体）：7z 自述字节数给不出证据时，
+        /// 由"缺哪几个槽位"与"名字读不出卷号的候选"按三条既有证据投票分配，先试最高分那一版，
+        /// 再来一趟就换边；两版都不成 ⇒ 回滚（删掉我们建的链接）。
+        ///
+        /// <para>三条证据（都是**既有**判据，⛔ 不新写命名规则）：
+        /// ① 基名匹配 <see cref="FileNameHelper.GetArchiveBaseName"/>；
+        /// ② 后缀相似（<see cref="VolumeSlotScoring.Similarity"/>，治"卷标记夹垃圾"）；
+        /// ③ 空间计算 —— "除末卷外等大"（<see cref="VolumeGroupDetector.HasRegularVolumeSizes"/> 同一条规律）。
+        /// 规范槽位名仍由 <see cref="VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex"/> 给。</para>
+        ///
+        /// <para>⛔ 三条红线：数目不等 / 判不出 ⇒ **一份都不补**；只**硬链接**（零字节、原件一个字节不动）；
+        /// 失败把这一趟建的链接**删掉**（= 换回原来的样子）。</para>
+        /// </summary>
+        private void TryLinkMissingPiecesByScoredAssignment(
+            ArchiveTask task,
+            string entryLayer,
+            string firstVolume,
+            FileNatureCard entryCard,
+            SortedDictionary<int, string> present,
+            long largest)
+        {
+            string entryName = FileNameHelper.GetFileName(firstVolume);
+            string groupBaseName = FileNameHelper.GetArchiveBaseName(entryName);
+
+            if (groupBaseName.Length == 0 || present.Count == 0 || largest <= 0)
+            {
+
+                return;
+            }
+
+            string attemptKey = groupBaseName + "|" + SafePathHelper.GetFullPathSafe(entryLayer);
+            int maxIndex = present.Keys.Max();
+
+            // 候选池：各单那几棵树 + 这一层（⛔ 不扫全盘、⛔ 不碰用户源目录）
+            var candidates = new List<VolumeSlotScoring.Candidate>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string presentPath in present.Values)
+            {
+                seen.Add(SafePathHelper.GetFullPathSafe(presentPath));
+            }
+
+            var roots = new List<string> { SafePathHelper.GetFullPathSafe(entryLayer) };
+
+            foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
+            {
+                if (other == null)
+                {
+                    continue;
+                }
+
+                foreach (string? directory in new[] { other.OutputPath, other.ContentDirectoryPath, other.RestDirectoryPath })
+                {
+                    if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+                    {
+                        roots.Add(SafePathHelper.GetFullPathSafe(directory!));
+                    }
+                }
+            }
+
+            foreach (string root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                string[] found;
+
+                try
+                {
+                    found = Directory.GetFiles(root, "*", SearchOption.AllDirectories);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (string path in found)
+                {
+                    string full = SafePathHelper.GetFullPathSafe(path);
+
+                    if (!seen.Add(full))
+                    {
+                        continue;
+                    }
+
+                    long size;
+
+                    try
+                    {
+                        size = new FileInfo(path).Length;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (size <= 0 || size > largest)
+                    {
+                        continue;
+                    }
+
+                    FileNatureCard card = FileNature.Inspect(path);
+
+                    if (card.BodyKind == ArchiveBodyKind.SingleComplete)
+                    {
+                        continue;   // 内容自证是完整单卷 ⇒ 绝不当补片
+                    }
+
+                    /*
+                     * 谁有资格当候选：
+                     * ① 内容自证"我是分卷组的一员"（RAR 的 Volume 位 / RAR4 首卷标记 / 跨盘 ZIP 盘号）；
+                     * ② 或者"判不出"那一档（7z 中间片按定义读不出格式）—— ⛔ 只收这两档。
+                     * 另外：名字的基名与这一组相同也算一条弱证据（走打分，不在这里硬卡）。
+                     */
+                    bool member = card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember;
+                    bool undecided = card.Format == VolumeContentFormat.Unknown
+                        && card.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember;
+
+                    if (!member && !undecided)
+                    {
+                        continue;
+                    }
+
+                    // 已经能按名字读出卷号的片不归这一档（那是收片那一档的活）
+                    if (VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null)
+                    {
+                        continue;
+                    }
+
+                    candidates.Add(new VolumeSlotScoring.Candidate
+                    {
+                        Path = path,
+                        FileName = FileNameHelper.GetFileName(path),
+                        Size = size,
+                        ContentNumber = card.VolumeNumber
+                    });
+                }
+            }
+
+            /*
+             * ⚠ 槽位推导分两步（用户口径 ①："除末卷等大" + "缺什么补什么"）：
+             * ① 1..max 里的**洞**（按名字读得出卷号的那几片留下的缺口）；
+             * ② 洞填完还不够（缺的那几片在"末片之后"，名字根本读不出来）⇒ 往 max 后面**续**，
+             *    续几个由**候选数**定；内容算得出片数时（7z 的自述值）照旧封顶，⛔ 不越界。
+             */
+            var slots = new List<int>();
+
+            for (int index = 1; index <= maxIndex; index++)
+            {
+                if (!present.ContainsKey(index))
+                {
+                    slots.Add(index);
+                }
+            }
+
+            while (slots.Count < candidates.Count)
+            {
+                int next = ++maxIndex;
+
+                if (entryCard.DeclaredVolumeCount > 0 && next > entryCard.DeclaredVolumeCount)
+                {
+                    break;
+                }
+
+                slots.Add(next);
+            }
+
+            AppendLog(
+                "WARN",
+                $"{task.LogName}：这一组的缺口 = [{string.Join(",", slots)}]，名字读不出卷号的候选 = "
+                + $"[{string.Join(",", candidates.Select(item => item.FileName))}]");
+
+            if (slots.Count != candidates.Count)
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.LogName}：这一组缺 {slots.Count} 个槽位，而名字读不出卷号的候选有 {candidates.Count} 份 —— "
+                    + "数目对不上 ⇒ 判不出，一份都不补（⛔ 不猜）。");
+
+                return;
+            }
+
+            IReadOnlyList<VolumeSlotScoring.Assignment> ranked = VolumeSlotScoring.Rank(
+                slots,
+                candidates,
+                groupBaseName,
+                largest,
+                maxIndex,
+                slot => VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out string canonical)
+                    ? canonical
+                    : string.Empty);
+
+            if (ranked.Count == 0)
+            {
+                return;
+            }
+
+            int attempt = _scoredSlotAttempts.TryGetValue(attemptKey, out int done) ? done : 0;
+
+            if (attempt >= ranked.Count)
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.LogName}：这一组的打分分配两版都试过了、仍然不成 ⇒ 不再动手、「保持原样」"
+                    + "（我们建的槽位链接已经删掉；原件一个字节都没动）。");
+
+                return;
+            }
+
+            // 回滚上一版：只删**我们自己建的**那几个槽位链接（零字节硬链接 ⇒ 删掉 = 回到原样）
+            if (_scoredSlotLinks.TryGetValue(attemptKey, out List<string>? previous))
+            {
+                foreach (string link in previous)
+                {
+                    try
+                    {
+                        if (File.Exists(link))
+                        {
+                            File.Delete(link);
+                        }
+                    }
+                    catch
+                    {
+                        // 删不掉就留着（它只是我们建的链接）。
+                    }
+                }
+
+                previous.Clear();
+            }
+
+            VolumeSlotScoring.Assignment picked = ranked[attempt];
+            var created = new List<string>();
+            var linkedPairs = new List<(string Source, string Canonical)>();
+
+            foreach ((VolumeSlotScoring.Candidate candidate, int slot) in picked.Pairs)
+            {
+                if (!VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out string slotName))
+                {
+                    Rollback(created);
+                    return;
+                }
+
+                string target = Path.Combine(entryLayer, slotName);
+
+                if (File.Exists(target)
+                    || !HardLinkHelper.CanHardLink(candidate.Path, entryLayer)
+                    || !HardLinkHelper.TryCreateHardLink(target, candidate.Path))
+                {
+                    Rollback(created);
+                    return;
+                }
+
+                created.Add(target);
+                linkedPairs.Add((candidate.Path, target));
+            }
+
+            _scoredSlotAttempts[attemptKey] = attempt + 1;
+            _scoredSlotLinks[attemptKey] = created;
+
+            foreach ((string source, string target) in linkedPairs)
+            {
+                string sourceName = FileNameHelper.GetFileName(source);
+
+                _byteBudgetLinkedSources.Add((task, groupBaseName, source));
+                RememberAdoptedLandedPiece(source, task, groupBaseName, renamedInPlace: false);
+
+                AppendLog(
+                    "INFO",
+                    $"{task.LogName}：按「打分分配」把 `{sourceName}` 补成槽位名 `{FileNameHelper.GetFileName(target)}`"
+                    + $"（第 {attempt + 1} 版尝试，零字节硬链接，原件一个字节没动）。"
+                    + $"判据输入：{string.Join("；", picked.Evidence)}"
+                    + (picked.HasTie ? "｜⚠ 最高分与次高分并列 ⇒ 这一版只是概率，不成会自动换边。" : string.Empty));
+            }
+
+            void Rollback(List<string> built)
+            {
+                foreach (string path in built)
+                {
+                    try
+                    {
+                        File.Delete(path);
+                    }
+                    catch
+                    {
+                        // 删不掉就留着。
+                    }
+                }
+
+                built.Clear();
+            }
+        }
         private void TryLinkMissingPiecesByByteBudget(ArchiveTask task, string entryLayer, string? memberPath)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
@@ -11382,6 +11684,15 @@ namespace ArchiveFixer.ViewModels
             if (entryCard.BodyKind != ArchiveBodyKind.VolumeFirstPiece
                 || entryCard.DeclaredTotalBytes <= 0)
             {
+                /*
+                 * ⚠ 2026-10-14（用户口径 ①③：**"缺什么补什么"是概率，不是"试过没用就算了"**）：
+                 * 7z 那条"自述整包字节数"给不出证据时（RAR / ZIP 族、或中间片），**不许就此收手** ——
+                 * 改走**打分分配**：由"已知几片 + 缺哪几个槽位"与"名字读不出卷号的候选"，
+                 * 按 基名 / 后缀相似 / 空间（除末卷等大）三条既有证据投票，取最高分那一版先试，
+                 * 下一趟（同一组再来一次）**换边**试第二版；两版都不成 ⇒ 回滚（删掉我们建的那几个链接）。
+                 */
+                TryLinkMissingPiecesByScoredAssignment(task, entryLayer, firstVolume, entryCard, present, largest);
+
                 return;
             }
 
@@ -11948,6 +12259,8 @@ namespace ArchiveFixer.ViewModels
             _volumeDeficitDeferred.Clear();
             _deferredVolumeGroupMember.Clear();
             _byteBudgetLinkedSources.Clear();
+            _scoredSlotAttempts.Clear();
+            _scoredSlotLinks.Clear();
             _volumeDeficitFinalPass.Clear();
             ClearGroupPieceProducers();
             _groupConsumerByName.Clear();
@@ -17535,6 +17848,10 @@ namespace ArchiveFixer.ViewModels
                 _volumeDeficitDeferred.Clear();
                 _deferredVolumeGroupMember.Clear();
                 _byteBudgetLinkedSources.Clear();
+                _scoredSlotAttempts.Clear();
+                _scoredSlotLinks.Clear();
+                _scoredSlotAttempts.Clear();
+                _scoredSlotLinks.Clear();
                 _consumedVolumeSources.Clear();
                 _groupConsumerByName.Clear();
                 ClearGroupPieceProducers();
