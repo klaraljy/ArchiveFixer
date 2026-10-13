@@ -6,6 +6,37 @@ using ArchiveFixer.Helpers;
 namespace ArchiveFixer.Detection
 {
     /// <summary>
+    /// **内容自证：这一份是"完整的单卷归档"还是"某分卷组的一片"**（用户 2026-10-13 口径：
+    /// 「『名字被伪装到读不出卷号 ⇒ 组凑不齐』这个是**底层识别**的问题，赶快升级修改专属算法（单一和分卷）」）。
+    ///
+    /// <para>四档，⛔ 判不出就是判不出（"按名字"那一档仍由消费方决定，⛔ 本枚举不许替它猜）：</para>
+    /// <list type="number">
+    /// <item><description><b>SingleComplete</b>：内容自证"这就是完整的一份单卷归档"——
+    /// 7z 由**起始头明文自述的整包字节数 ≤ 自己**回答（<c>32 + NextHeaderOffset + NextHeaderSize</c>）。</description></item>
+    /// <item><description><b>VolumeFirstPiece</b>：内容自证"我是**某分卷组的第一片**"——
+    /// 7z 同一句话反过来：自述整包字节数 **&gt;** 自己（并且由此能算出**共几片**：按卷大小向上取整）。</description></item>
+    /// <item><description><b>VolumePiece</b>：内容自证"我是分卷组的一片、而且不是第一片"——
+    /// RAR5 主头卷号 &gt; 1 / 跨盘 ZIP 的 EOCD 盘号 &gt; 1 那一类（<see cref="VolumeNumberFromContent"/> 的回答）。</description></item>
+    /// <item><description><b>Unknown</b>：判不出（7z 的**中间片**、跨盘 ZIP 的中间片、认不出的字节都落在这一档）
+    /// —— 这一档**照旧按名字**办，⛔ 不许当成"不是分卷"。</description></item>
+    /// </list>
+    /// </summary>
+    public enum ArchiveBodyKind
+    {
+        /// <summary>判不出（⛔ 不猜）。</summary>
+        Unknown = 0,
+
+        /// <summary>内容自证：完整的单卷归档。</summary>
+        SingleComplete = 1,
+
+        /// <summary>内容自证：某分卷组的第一片（带整包字节数与片数）。</summary>
+        VolumeFirstPiece = 2,
+
+        /// <summary>内容自证：分卷组的一片、不是第一片（带卷号）。</summary>
+        VolumePiece = 3
+    }
+
+    /// <summary>
     /// **底层：一份文件"到底是什么"** —— 一张卡，四个来源的事实各就各位（用户 2026-10-11 口径：
     /// 「就是统筹到同一组上面去…我们就是先看看**底层能够识别到文件是什么东西**」）。
     ///
@@ -57,6 +88,26 @@ namespace ArchiveFixer.Detection
         /// <summary>读不出卷号时是哪一档（给日志与文案用；成功时 = <see cref="VolumeNumberFail.None"/>）。</summary>
         public VolumeNumberFail ContentFail { get; init; }
 
+        // ===== ②b 内容 · 专属算法（单一 vs 分卷；用户 2026-10-13 口径）=====
+
+        /// <summary>内容自证"完整的单卷 / 某组的第一片 / 某组的一片"（见 <see cref="ArchiveBodyKind"/>）。</summary>
+        public ArchiveBodyKind BodyKind { get; init; }
+
+        /// <summary>
+        /// **7z 起始头明文自述的整包字节数**（<c>32 + NextHeaderOffset + NextHeaderSize</c>）；判不出 = 0。
+        ///
+        /// <para>它是"整包应当有多少字节"这条硬证据（<see cref="SevenZipStartHeader"/>）在卡上的落点 ——
+        /// 7z 的中间片内容里没有身份信息，唯一能自证的数就是这个。</para>
+        /// </summary>
+        public long DeclaredTotalBytes { get; init; }
+
+        /// <summary>
+        /// **按内容算出来的片数**（只有 <see cref="ArchiveBodyKind.VolumeFirstPiece"/> 那一档算得出：
+        /// 整包自述字节数 ÷ 这一片自己的字节数，向上取整 —— 7z 分卷除末片外等大）；
+        /// 判不出 = 0（⛔ 不编）。
+        /// </summary>
+        public int DeclaredVolumeCount { get; init; }
+
         // ===== ③ 名字 · 分卷后缀那套算法（线索，不是身份）=====
 
         /// <summary>按名字算出来的卷号（脏名也算得出）；不是分卷样子的名字 = null。</summary>
@@ -106,6 +157,9 @@ namespace ArchiveFixer.Detection
 
             return $"「{System.IO.Path.GetFileName(Path)}」｜内容：格式={Format} 分卷身份={Membership}"
                 + $" 卷号={number} 首卷标志={FirstVolumeFlag} 结论={ContentFail}"
+                + $" 专属算法：单卷/分卷={BodyKind}"
+                + (DeclaredTotalBytes > 0 ? $" 自述整包={DeclaredTotalBytes} 字节" : string.Empty)
+                + (DeclaredVolumeCount > 0 ? $" 按内容算的片数={DeclaredVolumeCount}" : string.Empty)
                 + $"｜名字：卷号={byName} 本族第1卷={FirstVolumeNameByName ?? "判不出"} 规范名={CanonicalVolumeName}"
                 + $" 基名={ArchiveBaseName}"
                 + $"｜盘上：身份={identity}"
@@ -150,15 +204,58 @@ namespace ArchiveFixer.Detection
                 // 读不到大小 ⇒ 留 0（"判不出"那一档，⛔ 不猜）。
             }
 
+            /*
+             * ===== ②b 专属算法：**单一 还是 分卷**（用户 2026-10-13 口径）=====
+             *
+             * 7z 那一族格式里没有卷号（见 <see cref="VolumeNumberFromContent"/> 的能力矩阵），
+             * 于是"这一份到底是什么"只能由**起始头那句明文自述**回答：
+             * 自述整包字节数 **≤** 自己 ⇒ 它就是**一份完整的单卷归档**；
+             * 自述整包字节数 **>** 自己 ⇒ 它是**这一组的第一片**，而且**片数**也读得出来
+             * （整包 ÷ 这一片，向上取整 —— 7z 分卷除末片外等大）。
+             * ⛔ 中间片（没有魔数、读不出起始头）照旧"判不出" —— ⛔ 不许当"不是分卷"。
+             */
+            VolumeContentFormat format = VolumeContentInference.SniffFormat(path);
+            ArchiveBodyKind bodyKind = ArchiveBodyKind.Unknown;
+            long declaredTotalBytes = 0;
+            int declaredVolumeCount = 0;
+
+            if (format == VolumeContentFormat.SevenZip
+                && SevenZipStartHeader.TryReadExpectedTotalBytes(path, out long expectedTotal)
+                && expectedTotal > 0)
+            {
+                declaredTotalBytes = expectedTotal;
+
+                if (size > 0)
+                {
+                    if (expectedTotal <= size)
+                    {
+                        bodyKind = ArchiveBodyKind.SingleComplete;
+                    }
+                    else
+                    {
+                        bodyKind = ArchiveBodyKind.VolumeFirstPiece;
+                        declaredVolumeCount = (int)((expectedTotal + size - 1) / size);
+                    }
+                }
+            }
+            else if (reading.IsVolumeMember && reading.Number is int contentNumber && contentNumber > 1)
+            {
+                // RAR5 / 跨盘 ZIP 那些"内容里就写着卷号"的族：> 1 ⇒ 它是这一组的一片（不是第一片）。
+                bodyKind = ArchiveBodyKind.VolumePiece;
+            }
+
             return new FileNatureCard
             {
                 Path = path!,
                 Size = size,
-                Format = VolumeContentInference.SniffFormat(path),
+                Format = format,
                 Membership = VolumeNumberFromContent.ClassifyMembership(path),
                 VolumeNumber = reading.Number,
                 FirstVolumeFlag = reading.FirstVolumeFlag,
                 ContentFail = reading.Fail,
+                BodyKind = bodyKind,
+                DeclaredTotalBytes = declaredTotalBytes,
+                DeclaredVolumeCount = declaredVolumeCount,
                 VolumeIndexByName = VolumeGroupDetector.TryGetVolumeIndex(name),
                 FirstVolumeNameByName = VolumeGroupDetector.TryGetFirstVolumeName(name),
                 CanonicalVolumeName = canonical ?? string.Empty,

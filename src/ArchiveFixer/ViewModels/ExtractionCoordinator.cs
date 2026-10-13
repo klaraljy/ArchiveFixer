@@ -11271,10 +11271,23 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            if (!SevenZipStartHeader.TryReadExpectedTotalBytes(firstVolume, out long expected) || expected <= 0)
+            /*
+             * ⛔ 判据全部走**底层识别那一张卡**（用户 2026-10-13 口径：「『名字被伪装到读不出卷号 ⇒ 组凑不齐』
+             * 这个是**底层识别**的问题」）——这一档只消费，⛔ 不自己读魔数、⛔ 不自己解析起始头：
+             *   · `BodyKind == VolumeFirstPiece` ⇒ 内容自证"入口那一份是这一组的第一片"（而不是一份单卷包）；
+             *   · `DeclaredTotalBytes` ⇒ 整包应当有多少字节（7z 起始头明文自述）；
+             *   · `DeclaredVolumeCount` ⇒ 按内容算出来的片数（整包 ÷ 这一片向上取整）。
+             */
+            FileNatureCard entryCard = FileNature.Inspect(firstVolume);
+
+            if (entryCard.BodyKind != ArchiveBodyKind.VolumeFirstPiece
+                || entryCard.DeclaredTotalBytes <= 0)
             {
                 return;
             }
+
+            long expected = entryCard.DeclaredTotalBytes;
+            int declaredCount = entryCard.DeclaredVolumeCount;
 
             long actual = 0;
 
@@ -11355,8 +11368,13 @@ namespace ArchiveFixer.ViewModels
 
                         FileNatureCard card = FileNature.Inspect(path);
 
-                        if (card.Format != VolumeContentFormat.Unknown
-                            && card.Format != VolumeContentFormat.SevenZip)
+                        /*
+                         * ⛔ **内容自证是"完整单卷归档"的那一份绝不许当补片用**（它就是一份正常包）；
+                         * 只收"分卷组的一片"与"判不出"这两档（中间片按定义读不出格式）。
+                         */
+                        if (card.BodyKind == ArchiveBodyKind.SingleComplete
+                            || (card.Format != VolumeContentFormat.Unknown
+                                && card.Format != VolumeContentFormat.SevenZip))
                         {
                             continue;
                         }
@@ -11400,7 +11418,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            // 缺哪几个槽位：1..max 里的洞；不够就往 max 后面续。
+            // 缺哪几个槽位：1..max 里的洞；不够就往 max 后面续（⛔ 上限 = 内容算出来的片数，算得出时）。
             var slots = new List<int>();
             int maxIndex = present.Keys.Max();
 
@@ -11414,7 +11432,14 @@ namespace ArchiveFixer.ViewModels
 
             while (slots.Count < chosen.Count)
             {
-                slots.Add(++maxIndex);
+                int next = ++maxIndex;
+
+                if (declaredCount > 0 && next > declaredCount)
+                {
+                    return;   // 内容说这一组只有 declaredCount 片 ⇒ 判不出 ⇒ 一份都不补
+                }
+
+                slots.Add(next);
             }
 
             string entryName = FileNameHelper.GetFileName(firstVolume);

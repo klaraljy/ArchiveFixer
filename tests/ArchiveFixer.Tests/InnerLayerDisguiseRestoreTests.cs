@@ -537,6 +537,51 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(realName), "`backup-002` 是正常名字，不许动");
         }
 
+        /// <summary>
+        /// **底层识别的专属算法：这一份到底是"完整的单卷归档"还是"某分卷组的第一片"**
+        /// （用户 2026-10-13 口径：「『名字被伪装到读不出卷号 ⇒ 组凑不齐』这个是**底层识别**的问题，
+        /// 赶快升级修改专属算法（单一和分卷）」）。
+        ///
+        /// <para>7z 那一族格式里没有卷号 ⇒ 只能由**起始头明文自述的整包字节数**回答：
+        /// 自述 **≤** 自己 ⇒ 完整单卷；自述 **&gt;** 自己 ⇒ 这一组的第一片，而且片数也算得出来
+        /// （整包 ÷ 这一片，向上取整）。用**真 7z** 造两份对照夹具（同一份内容：一份切成 64 KiB 分卷、
+        /// 一份不切）实测。</para>
+        ///
+        /// <para><b>红检</b>：把 `FileNature.Inspect` 里那一段专属算法撤掉 ⇒ 本条变红（两档都成 Unknown）。</para>
+        /// </summary>
+        [Fact]
+        public void 底层识别_单一与分卷的专属算法_按内容自证()
+        {
+            string stage = Path.Combine(_root, "single-vs-volume");
+            Directory.CreateDirectory(stage);
+
+            string payload = WritePayload(stage);
+            string single = Path.Combine(stage, "pack111.7z");
+            string volumeBase = Path.Combine(stage, "vol111.7z");
+
+            Run7z("a", "-t7z", single, payload);
+            Run7z("a", "-t7z", "-v64k", volumeBase, payload);
+
+            FileNatureCard singleCard = FileNature.Inspect(single);
+            Assert.Equal(ArchiveBodyKind.SingleComplete, singleCard.BodyKind);
+            Assert.True(
+                singleCard.DeclaredTotalBytes > 0 && singleCard.DeclaredTotalBytes <= singleCard.Size,
+                "完整单卷：起始头自述的整包字节数应当 ≤ 自己");
+
+            string firstVolume = volumeBase + ".001";
+            Assert.True(File.Exists(firstVolume), "7z -v 应当切出 .001");
+
+            FileNatureCard firstCard = FileNature.Inspect(firstVolume);
+            Assert.Equal(ArchiveBodyKind.VolumeFirstPiece, firstCard.BodyKind);
+            Assert.True(firstCard.DeclaredTotalBytes > firstCard.Size, "第一片：自述整包字节数应当大于自己");
+            Assert.True(firstCard.DeclaredVolumeCount >= 2, "第一片：按内容应当算得出「共几片」（≥ 2）");
+
+            // ⛔ 中间片与"判不出"那一档：内容里没有身份信息 ⇒ 只能 Unknown（不许猜成"不是分卷"）。
+            FileNatureCard middleCard = FileNature.Inspect(volumeBase + ".002");
+            Assert.Equal(ArchiveBodyKind.Unknown, middleCard.BodyKind);
+            Assert.True(middleCard.ParticipatesInVolumeHandling, "判不出照旧参与分卷那一套");
+        }
+
         /// <summary>调一次「还原」（递归层挂点用的那条公开入口），把日志收成 `级别|文案`。</summary>
         private static List<string> RunRestore(IReadOnlyList<string> candidates)
         {
