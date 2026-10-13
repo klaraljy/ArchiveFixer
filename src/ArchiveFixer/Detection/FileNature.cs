@@ -244,6 +244,37 @@ namespace ArchiveFixer.Detection
                 bodyKind = ArchiveBodyKind.VolumePiece;
             }
 
+            /*
+             * ===== 专属算法（续）：**其它族**能自证到什么就写什么 =====
+             *
+             * <list type="bullet">
+             * <item><description><b>总片数</b>：跨盘 ZIP 的末片里 EOCD **自己写着总盘数**
+             * （<see cref="VolumeNumberReading.Total"/>）⇒ 与 7z 那条"按字节算"共用**同一个字段**
+             * （哪个族答得出就用哪个；⛔ 都答不出 = 0 = 判不出，⛔ 不编）。</description></item>
+             * <item><description><b>完整的单卷 ZIP</b>：内容证据**可证"不是分卷组的一员"**
+             * （EOCD 的盘号只有一盘）⇒ 它就是一份完整的单卷归档 ⇒ <see cref="ArchiveBodyKind.SingleComplete"/>；
+             * 这一条专治"把一份普通的单卷 zip 当成某分卷组的一片"。</description></item>
+             * </list>
+             */
+            if (reading.Total is int contentTotal && contentTotal >= 1)
+            {
+                declaredVolumeCount = contentTotal;
+            }
+
+            /*
+             * ⚠ 2026-10-13（守门用例实测逮到）：这一档原来是上面那一条的 `else if` ⇒
+             * **跨盘 ZIP 的末片**（`reading.Total` 答得出）与**单盘 ZIP** 这两件事被写成了互斥，
+             * 于是"内容可证只有一盘"的那一份 bodyKind 停在 `Unknown`（用例逐字：
+             * `Expected: SingleComplete / Actual: Unknown`）。两件事本来就不冲突：
+             * 一个是"共几片"、一个是"它是不是分卷组的一员" ⇒ 拆成独立的一条。
+             */
+            if (bodyKind == ArchiveBodyKind.Unknown
+                && format == VolumeContentFormat.Zip
+                && !reading.IsVolumeMember)
+            {
+                bodyKind = ArchiveBodyKind.SingleComplete;
+            }
+
             return new FileNatureCard
             {
                 Path = path!,

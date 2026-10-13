@@ -189,6 +189,41 @@ namespace ArchiveFixer.Tests
             Assert.NotNull(plan);
         }
 
+        /// <summary>
+        /// **底层识别的专属算法（跨盘 ZIP 那一族）**：末片的内容自证"我是某组的一片、不是第一片"，
+        /// 而且 EOCD **自己写着总盘数**；单盘的那一份则自证"我就是一份完整的单卷 zip"。
+        ///
+        /// <para>用户 2026-10-13 口径：「『名字被伪装到读不出卷号 ⇒ 组凑不齐』这个是**底层识别**的问题，
+        /// 赶快升级修改专属算法（单一和分卷）」—— 本条钉的就是这张卡上那两个结论 + 片数。</para>
+        ///
+        /// <para>真字节形状（<see cref="WriteSplitZipTail"/> 写的 EOCD 按真机：本盘 1 / 中央目录起始盘 0 /
+        /// 总盘 2）⇒ 末片应当是 <see cref="ArchiveBodyKind.VolumePiece"/> 且**总片数 = 2**。</para>
+        ///
+        /// <para>⚠ 单卷那一份必须用**真形状的单卷 zip**（本地头开头 + 空中央目录 + 盘号全 0 的 EOCD，
+        /// 见 <see cref="BuildPlainZip"/>）—— 2026-10-13 实测（`volinfo` 只读探针逐字）：
+        /// 拿"中央目录签名开头"的合成件当单卷样本时，那张卡是
+        /// `格式=Unknown … 卷号=判不出 结论=NotAnArchive`（`SniffFormat` 认的是**本地头**那个魔数）
+        /// ⇒ 格式这一道闸门本来就不该放它过去；那不是产品缺陷，是夹具不像真文件。</para>
+        /// </summary>
+        [Fact]
+        public void 底层识别_跨盘ZIP末片与单卷ZIP_按内容自证()
+        {
+            string stage = NewDirectory("stage-card-zip");
+            string tail = WriteSplitZipTail(stage, "222.zip", centralDirectoryBytes: 350, entries: 6);
+            string singleDisk = Path.Combine(stage, "333.zip");
+
+            File.WriteAllBytes(singleDisk, BuildPlainZip());
+
+            FileNatureCard tailCard = FileNature.Inspect(tail);
+
+            Assert.Equal(ArchiveBodyKind.VolumePiece, tailCard.BodyKind);
+            Assert.Equal(2, tailCard.DeclaredVolumeCount);
+
+            FileNatureCard singleCard = FileNature.Inspect(singleDisk);
+
+            Assert.Equal(ArchiveBodyKind.SingleComplete, singleCard.BodyKind);
+        }
+
         // ================================================================ 样本构造（按真机字节形状）
 
         /// <summary>

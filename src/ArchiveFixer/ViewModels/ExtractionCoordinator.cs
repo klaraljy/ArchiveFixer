@@ -4223,6 +4223,91 @@ namespace ArchiveFixer.ViewModels
 
             if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
             {
+                /*
+                 * ⚠ 2026-10-13（困难批：6 份样本 ①✔ 而只差判据 ③，日志 + 运行期定案）：
+                 * 「其余物 = 不动」这一档过去在这里**整档早退** ⇒ 「程序自己产出、已被整组接走」的那份副本
+                 * （接片建的链接 / 产出方落点里那一份）**永远没人认领** ⇒ 判据 ③「盘上无残留」红。
+                 *
+                 * <para><b>用户口径（2026-10-13 拍板选 A + 当天再次点名）</b>：「不动其余物」的"不动"
+                 * = **不删用户的东西**；而**程序自己产出、且已被整组接走**的那份多余副本**允许挪位置**
+                 * （搬进同层的 `其余物\`，⛔ 一个字节都不删）；原话还有一句
+                 * 「连"程序自己产的、已经没用的那份副本" 这个不就是**过程物**吗」。</para>
+                 *
+                 * <para>⇒ 这一档只补调**"产出方那一份片"那一个出口**（它自己按档分派：Keep ⇒ 搬进同层其余物、
+                 * 一个字节都不删，见 <see cref="PurgeGroupLandedPieces"/>）。⛔ **用户源片那一半照旧一步都不动**
+                 * —— 下面那两段（`SettleOneConsumedPieceTask` 的搬运与"借来用过的用户源片"账）**一个都不调**，
+                 * 所以"不动其余物"对用户自己的东西仍然是一个字节都不碰。</para>
+                 */
+                if (task.Outcome == TaskOutcome.Succeeded)
+                {
+                    /*
+                     * ⛔ 组基名**不许拿这一单自己的包基名猜**（断点实测 `1111`：链尾那一单是 `111-W0-0.zip`，
+                     * 它自己的基名与那一组 `111-L2` 毫无关系 ⇒ 拿它去问等于什么都没问），
+                     * ⛔ 也**不许拿 `_adoptedLandedPieces` 当来源**（同一次断点实测：那一本账 **0 条** ——
+                     * 这两片是"引擎报缺卷 ⇒ 发布"那条路留下了，根本没走"接片"那一档）。
+                     * ⇒ 只认既有那本"**谁吐出过哪一组的片**"的账（<see cref="_groupPieceProducers"/>，
+                     * 写点 = `PublishUnresolvedVolumePieces` → `RememberGroupPieceProducer`），
+                     * 问法 = **这一单在哪些组里当过我产出的那一份**，逐组按档处理它自己那一份。
+                     */
+                    foreach (string groupBaseName in SnapshotGroupPieceProducerBaseNames())
+                    {
+                        if (TrySnapshotGroupPieceProducers(
+                                groupBaseName,
+                                out List<(ArchiveTask Task, string PieceName)> producers)
+                            && producers.Any(item => item.Task != null && ReferenceEquals(item.Task, task)))
+                        {
+                            PurgeGroupLandedPieces(task, groupBaseName);
+                        }
+                    }
+
+                    /*
+                     * ⚠ 2026-10-13（困难批 `1111` 判据 ③，插桩实测那一轮定案）：**产出方自己那一档**。
+                     *
+                     * <para>实测事实（`[排障·Keep档]` / `[排障·收片]` 两组行，夹具 `dbg-b6a4ee4a`）：
+                     * 这一批里走进本档的只有 `recipe.json`(Skipped)、`111-W2-0.rar`、`111-W1-0.zip`
+                     * 三单，而它们**每一单都拿自己的包基名**去问（`111-W2-0` / `111-W1-0`）——
+                     * 那一组真正叫 `111-L2` ⇒ `targets.Count` 恒 0 ⇒ 「产出方那一份已经落地的片」没人认领。</para>
+                     *
+                     * <para>为什么会这样：那一组是被**批末补判**交给"续解出来的那一片"那一单去解的
+                     * （入口那一单 `111-W0-0.zip` 的源包处理档是"链尾补搬"⇒ 走的是 `DeferredToChainEnd`
+                     * 那一支，**根本走不到本档**），所以"谁在解"那本账里记的是**别人**；
+                     * 而**我亲手从自己这棵树里链接走了一片**这件事只有这本账知道
+                     * （<see cref="_byteBudgetLinkedSources"/>，写点 = <see cref="TryLinkMissingPiecesByByteBudget"/>）
+                     * ⇒ 就按它问：这一单是不是**给这一组供过片**。</para>
+                     *
+                     * <para>⛔ 判据没放宽：下面那一档的每一条闸门（终态成功 / 可证完整 / 在盘上 / 在落点根内 /
+                     * 不是任何一单的源 / 名字仍属于这一组）一条都不绕过；⛔ 用户自己的源片一个字节都不碰。</para>
+                     */
+                    foreach (string groupBaseName in _byteBudgetLinkedSources
+                                 .Where(item => ReferenceEquals(item.Producer, task))
+                                 .Select(item => item.GroupBaseName)
+                                 .Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        PurgeGroupLandedPieces(task, groupBaseName);
+                    }
+
+                    // 我亲手链接过来源的那几组 —— 只处理**这一单正是那一组的接手方**的那些
+                    // （`_groupConsumerByName` 是既有账：批末那一组齐了、交给哪一单去解时写的）。
+                    foreach (string groupBaseName in _byteBudgetLinkedSources
+                                 .Select(item => item.GroupBaseName)
+                                 .Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (_groupConsumerByName.TryGetValue(groupBaseName, out string? consumerName)
+                            && string.Equals(consumerName, task.FileName, StringComparison.Ordinal))
+                        {
+                            PurgeGroupLandedPieces(task, groupBaseName);
+                        }
+                    }
+
+                    // 另外：这一单自己就是"入口包那一单"时（它 CurrentPath 已是第 1 卷）照旧问一次它自己的基名。
+                    string ownBaseName = FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty);
+
+                    if (ownBaseName.Length > 0)
+                    {
+                        PurgeGroupLandedPieces(task, ownBaseName);
+                    }
+                }
+
                 return;
             }
 
@@ -8606,6 +8691,20 @@ namespace ArchiveFixer.ViewModels
         private readonly List<ArchiveTask> _volumeDeficitDeferred = new();
 
         /// <summary>
+        /// **按字节数补片那一档用过的来源**（我亲手把它链接成了槽位名）—— 判据 ③ 要的那个
+        /// "**这一份是程序产的**"事实位（2026-10-13，困难批 `1111`）。
+        ///
+        /// <para>为什么必须有它：那一档补进来的两片（`111-L2.7z` / `111-L2.7z-924`）名字读不出卷号
+        /// ⇒ 判据 ③ 的路上**任何按名字的筛子都认不出它们属于这一组**（实测：`PurgeGroupLandedPieces`
+        /// 的扫描筛子第一句 `TryGetVolumeIndex == null` 就把它们挡下）⇒ 收场没人认领 ⇒ ③红。
+        /// 而"我亲手从这一棵树里把它链接成槽位名"这件事**本身就是证据**（来源只在各单的产出树里扫，
+        /// ⛔ 不碰用户源目录）⇒ 记下来，收场那一档据此按档处理它自己那一份。</para>
+        ///
+        /// <para>⛔ 只读它自己的记录，⛔ 不放宽任何按名字的判据（那些判据对别的文件照旧一个字不改）。</para>
+        /// </summary>
+        private readonly List<(ArchiveTask Producer, string GroupBaseName, string SourcePath)> _byteBudgetLinkedSources = new();
+
+        /// <summary>
         /// 这一批里"**停在别人那一组**"的那几单 → 停下来的那一片（2026-10-13 困难批 `11111111` 取证）。
         ///
         /// <para><b>为什么要有它</b>：批末那一站问"这一组齐了没"用的是**这一单自己的包基名**
@@ -11315,7 +11414,7 @@ namespace ArchiveFixer.ViewModels
              * 只留"体积能派上用场"的那些：未知格式 / 7z 片段（中间片按定义读不出格式）。
              */
             string entryLayerFull = SafePathHelper.GetFullPathSafe(entryLayer);
-            var candidates = new List<string>();
+            var candidates = new List<(ArchiveTask Owner, string Path)>();
             var scannedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entryLayerFull };
 
             foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
@@ -11379,18 +11478,18 @@ namespace ArchiveFixer.ViewModels
                             continue;
                         }
 
-                        candidates.Add(path);
+                        candidates.Add((other, path));
                     }
                 }
             }
 
             // 挑**正好凑上差额**的那几份（最多 3 份；体积降序 —— 与"除末卷外等大"那条规律一致）。
-            var chosen = new List<string>();
+            var chosen = new List<(ArchiveTask Owner, string Path)>();
             long remaining = difference;
 
-            foreach (string path in candidates
-                         .OrderByDescending(item => new FileInfo(item).Length)
-                         .ThenBy(item => item, StringComparer.OrdinalIgnoreCase))
+            foreach ((ArchiveTask owner, string path) in candidates
+                         .OrderByDescending(item => new FileInfo(item.Path).Length)
+                         .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
             {
                 if (chosen.Count == 3)
                 {
@@ -11404,7 +11503,7 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                chosen.Add(path);
+                chosen.Add((owner, path));
                 remaining -= size;
 
                 if (remaining == 0)
@@ -11444,6 +11543,7 @@ namespace ArchiveFixer.ViewModels
 
             string entryName = FileNameHelper.GetFileName(firstVolume);
             var linked = new List<string>();
+            string groupBaseName = FileNameHelper.GetArchiveBaseName(entryName);
 
             for (int i = 0; i < chosen.Count; i++)
             {
@@ -11455,8 +11555,8 @@ namespace ArchiveFixer.ViewModels
                 string target = Path.Combine(entryLayer, slotName);
 
                 if (File.Exists(target)
-                    || !HardLinkHelper.CanHardLink(chosen[i], entryLayer)
-                    || !HardLinkHelper.TryCreateHardLink(target, chosen[i]))
+                    || !HardLinkHelper.CanHardLink(chosen[i].Path, entryLayer)
+                    || !HardLinkHelper.TryCreateHardLink(target, chosen[i].Path))
                 {
                     foreach (string built in linked)
                     {
@@ -11474,6 +11574,27 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 linked.Add(target);
+
+                /*
+                 * ⚠ 记下"**我亲手从这一棵树里把它链接成了槽位名**"（见 <see cref="_byteBudgetLinkedSources"/>）：
+                 * 收场那一档据此按档处理它自己那一份（名字读不出卷号的片子，任何按名字的筛子都认不出它）。
+                 */
+                _byteBudgetLinkedSources.Add((chosen[i].Owner, groupBaseName, chosen[i].Path));
+
+                /*
+                 * ⚠ 2026-10-13（困难批 `1111` 判据 ③，运行期定案）：**同一件事写进既有那唯一一本账**。
+                 *
+                 * <para>现场（断点 + 插桩实测，`dbg-b6a4ee4a` 夹具那一轮）：这一档按内容把
+                 * `111-L2.7z` / `111-L2.7z-924` 链接成 `111-L2.002` / `111-L2.003` 之后，
+                 * `_adoptedLandedPieces`（`PurgeGroupLandedPieces` 用来找"产出方那一份"的那本账）**0 条**
+                 * ⇒ 收场那一档的 `targets.Count == 0` ⇒ 两份落地副本留在
+                 * `111(2)\…\111-W1-0\` / `111(3)\111-W2-0\` 里 ⇒ 判据 ③ 红。</para>
+                 *
+                 * <para>⛔ 不另造第二套判据：这一调走的就是"接片那一档"记那一份的**同一个出口**
+                 * （<see cref="RememberAdoptedLandedPiece"/>），它自己会把"产出方是谁、落点根在哪、
+                 * 是不是某一单自己的源"逐条问清；判不出 ⇒ 它什么都不记（照旧红，如实暴露）。</para>
+                 */
+                RememberAdoptedLandedPiece(chosen[i].Path, chosen[i].Owner, groupBaseName, renamedInPlace: false);
             }
 
             if (linked.Count > 0)
@@ -11482,7 +11603,7 @@ namespace ArchiveFixer.ViewModels
                     "INFO",
                     $"{task.LogName}：按 7z 起始头自述的字节数补齐缺口 —— 自述 {expected} 字节、"
                     + $"手上 {actual} 字节、差 {difference} 字节 ⇒ 用 "
-                    + string.Join("、", chosen.Select((path, i) => FileNameHelper.GetFileName(path) + " → " + FileNameHelper.GetFileName(linked[i])))
+                    + string.Join("、", chosen.Select((item, i) => FileNameHelper.GetFileName(item.Path) + " → " + FileNameHelper.GetFileName(linked[i])))
                     + " 按规范槽位名补进这一层（零字节硬链接，原件一个字节都不动）。");
             }
         }
@@ -11826,6 +11947,7 @@ namespace ArchiveFixer.ViewModels
         {
             _volumeDeficitDeferred.Clear();
             _deferredVolumeGroupMember.Clear();
+            _byteBudgetLinkedSources.Clear();
             _volumeDeficitFinalPass.Clear();
             ClearGroupPieceProducers();
             _groupConsumerByName.Clear();
@@ -12979,6 +13101,22 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            /*
+             * ⚠ 2026-10-13（`1111` ③ 的最后一环）：**我亲手链接过的那几份来源**也算这一组的目标 ——
+             * 它们的名字读不出卷号（`111-L2.7z` / `111-L2.7z-924`）⇒ 下面那些按名字的筛子一个都认不出它们，
+             * 而"我从哪一棵树里把它链接成槽位名"这件事记在 <see cref="_byteBudgetLinkedSources"/> 里
+             * （来源只在各单的产出树里扫，⛔ 不碰用户源目录）⇒ 只对**这些**记录放行，⛔ 别的文件一个字不改。
+             */
+            var ledgerProvenSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach ((ArchiveTask Producer, string GroupBaseName, string SourcePath) item in _byteBudgetLinkedSources)
+            {
+                if (string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    ledgerProvenSources.Add(SafePathHelper.GetFullPathSafe(item.SourcePath));
+                }
+            }
+
             foreach ((ArchiveTask producer, string path, string outputRoot) in targets)
             {
                 try
@@ -13003,14 +13141,17 @@ namespace ArchiveFixer.ViewModels
                         groupBaseName,
                         StringComparison.OrdinalIgnoreCase);
                     bool insideRoot = ArchivePathGuard.IsInsideRoot(outputRoot, path, out _);
+                    bool ledgerProven = ledgerProvenSources.Contains(SafePathHelper.GetFullPathSafe(path));
 
-                    if (!exists || !isVolumePart || !participates || !baseMatches || !insideRoot)
+                    if (!exists
+                        || !insideRoot
+                        || (!ledgerProven && (!isVolumePart || !participates || !baseMatches)))
                     {
                         AppendLog(
                             "WARN",
                             $"收产出方那一份片：这一次跳过（判据输入）｜目标=「{path}」，在盘上={exists}，"
                             + $"是分卷片={isVolumePart}，参与分卷那一套={participates}，基名对上「{groupBaseName}」={baseMatches}，"
-                            + $"在落点根「{outputRoot}」内={insideRoot}");
+                            + $"在落点根「{outputRoot}」内={insideRoot}，我亲手链接过={ledgerProven}");
                         continue;
                     }
 
@@ -17393,6 +17534,7 @@ namespace ArchiveFixer.ViewModels
             {
                 _volumeDeficitDeferred.Clear();
                 _deferredVolumeGroupMember.Clear();
+                _byteBudgetLinkedSources.Clear();
                 _consumedVolumeSources.Clear();
                 _groupConsumerByName.Clear();
                 ClearGroupPieceProducers();
