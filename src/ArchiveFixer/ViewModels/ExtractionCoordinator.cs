@@ -11608,6 +11608,17 @@ namespace ArchiveFixer.ViewModels
                 $"{task.LogName}：这一组的缺口 = [{string.Join(",", slots)}]，名字读不出卷号的候选 = "
                 + $"[{string.Join(",", candidates.Select(item => item.FileName))}]");
 
+            /*
+             * ⚠ 实测 `24242424`：同一个名字的两份拷贝（不同树里）被当成两份片 ⇒ 缺口被算成 `[2,3]`、
+             * 还拿**同一片**去补两个槽。⇒ 按"名字 + 大小"去重（同名的同一片只算一份）。
+             */
+            candidates = candidates
+                .GroupBy(
+                    item => item.FileName + "|" + item.Size.ToString(CultureInfo.InvariantCulture),
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+
             if (slots.Count != candidates.Count)
             {
                 AppendLog(
@@ -11676,11 +11687,31 @@ namespace ArchiveFixer.ViewModels
                  * 槽位名：**优先照"已经在层里的那一片"的写法**（同族同宽，前后缀逐字保留），
                  * 回落既有的命名出口。⛔ 两条都不成 ⇒ 这一趟整体回滚、一份都不补。
                  */
-                string existingPiece = present.Values.First();
-                string slotName;
+                /*
+                 * 样板优先取**名字读得出卷号**的那一片（拼出来的名字才像话）；都没有才退回任意一片。
+                 * ⚠ 实测 `24242424`：拿被伪装过的 `111-L2.part3.s~2rar` 当样板，正则抓到的是
+                 * "s~2rar" 里那串数字 ⇒ 拼出 `111-L2.part000000002.rar` 这种**垃圾名**（还真落到了盘上）。
+                 * ⇒ ①先挑样板、②拼完**自验**（`TryGetVolumeIndex(拼出来的名字) == slot`）；
+                 * 两道都过不了就回落既有命名出口；仍然过不了 ⇒ 整趟回滚、一份都不补。
+                 */
+                string existingPiece = present.Values
+                    .FirstOrDefault(path => VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null)
+                    ?? present.Values.First();
 
-                if (!TryNameSlotLikeExistingPiece(existingPiece, slot, out slotName)
-                    && !VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out slotName))
+                string slotName = string.Empty;
+                bool named = TryNameSlotLikeExistingPiece(existingPiece, slot, out string candidateName)
+                    && VolumeGroupDetector.TryGetVolumeIndex(candidateName) == slot
+                    && (slotName = candidateName).Length > 0;
+
+                if (!named
+                    && VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out string canonicalName)
+                    && VolumeGroupDetector.TryGetVolumeIndex(canonicalName) == slot)
+                {
+                    slotName = canonicalName;
+                    named = true;
+                }
+
+                if (!named || slotName.Length == 0)
                 {
                     Rollback(created);
                     return;
@@ -11934,6 +11965,13 @@ namespace ArchiveFixer.ViewModels
 
             if (chosen.Count == 0 || remaining != 0)
             {
+                /*
+                 * ⚠ 2026-10-14（实测 `8888` / `28282828`）：字节数那条路**凑不出"正好相等"**时，
+                 * 原来直接收手 —— 可那两片可能就在盘上、只是名字读不出卷号。
+                 * ⇒ 落到下面那条打分分配（同一个出口；判据一条不放宽：数目不等照样一份都不补）。
+                 */
+                TryLinkMissingPiecesByScoredAssignment(task, entryLayer, firstVolume, entryCard, present, largest);
+
                 return;
             }
 
