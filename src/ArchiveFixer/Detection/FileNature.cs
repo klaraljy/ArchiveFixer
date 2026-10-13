@@ -108,6 +108,19 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public int DeclaredVolumeCount { get; init; }
 
+        /// <summary>
+        /// **内容里那个"卷号字段"的原始值**（⛔ 不是 1 起的卷号）：只有 RAR 一族给得出
+        /// （RAR5 主头的 <c>MHFL_VOLUME_NUMBER</c>、RAR4 归档结尾块的 <c>EARC_VOLNUMBER</c>）；判不出 = null。
+        ///
+        /// <para>为什么要留原值：RAR4 老编号族那一档**基数待定**（见
+        /// <see cref="VolumeNumberFromContent"/> 里 `ReadRar4Legacy` 的注释：「第 1 卷 0、第 2 卷 1」是
+        /// 真样本的字节，但格式没写死基数）⇒ 单看一份读不出"它是第几卷"，
+        /// 而**整组之间的相对大小**是可靠的：以第一片那个值为锚点，差值就是卷号差。
+        /// 这条证据的用途 = 非 7z 族"按内容补齐槽位"那一档（用户 2026-10-13 口径：名字读不出卷号
+        /// 是底层识别的事）—— 第一片由 <see cref="BodyKind"/> 认，其余几片靠这个原值定序。</para>
+        /// </summary>
+        public int? RawVolumeField { get; init; }
+
         // ===== ③ 名字 · 分卷后缀那套算法（线索，不是身份）=====
 
         /// <summary>按名字算出来的卷号（脏名也算得出）；不是分卷样子的名字 = null。</summary>
@@ -243,6 +256,26 @@ namespace ArchiveFixer.Detection
                 // RAR5 / 跨盘 ZIP 那些"内容里就写着卷号"的族：> 1 ⇒ 它是这一组的一片（不是第一片）。
                 bodyKind = ArchiveBodyKind.VolumePiece;
             }
+            else if (reading.IsVolumeMember && reading.Number == 1)
+            {
+                /*
+                 * ⚠ 2026-10-13（第十四轮读数之后的专属算法补全）：**RAR5 的第 1 卷** ——
+                 * 官方布局里"第 1 卷没有卷号字段"，所以 <see cref="VolumeNumberFromContent"/> 补 1
+                 * （`ReadRar5` 的 `number = 1` 初值）。这一条以前没人写 ⇒ 第 1 卷停在 `Unknown`，
+                 * 而它恰恰是"整组入口那一份"（非 7z 族按内容补片时唯一的锚点）。
+                 */
+                bodyKind = ArchiveBodyKind.VolumeFirstPiece;
+            }
+            else if (reading.IsVolumeMember && reading.FirstVolumeFlag)
+            {
+                /*
+                 * **RAR4**：主头 flags 里的"第 1 卷"标记（`MHD_FIRSTVOLUME 0x0100`，真字节证据见
+                 * `VolumeNumberContentTests.RAR4_…` 那一组）⇒ 同样自证"我是这一组的第一片"。
+                 * ⛔ 老编号族（`.rar` + `.r00`）也照样给这个事实（它是**内容**结论）；
+                 * "要不要按名字动手"由下面那些名字尺子回答，⛔ 两件事不许混在一起。
+                 */
+                bodyKind = ArchiveBodyKind.VolumeFirstPiece;
+            }
 
             /*
              * ===== 专属算法（续）：**其它族**能自证到什么就写什么 =====
@@ -287,6 +320,7 @@ namespace ArchiveFixer.Detection
                 BodyKind = bodyKind,
                 DeclaredTotalBytes = declaredTotalBytes,
                 DeclaredVolumeCount = declaredVolumeCount,
+                RawVolumeField = reading.RawField,
                 VolumeIndexByName = VolumeGroupDetector.TryGetVolumeIndex(name),
                 FirstVolumeNameByName = VolumeGroupDetector.TryGetFirstVolumeName(name),
                 CanonicalVolumeName = canonical ?? string.Empty,

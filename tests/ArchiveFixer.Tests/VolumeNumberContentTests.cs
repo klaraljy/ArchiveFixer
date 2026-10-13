@@ -46,6 +46,47 @@ namespace ArchiveFixer.Tests
 
         // ── RAR5：卷号在主归档头里 ──
 
+        /// <summary>
+        /// **卡上的专属算法（用户 2026-10-13 口径：「名字被伪装到读不出卷号 ⇒ 组凑不来」是底层识别的事）**：
+        /// RAR 那一族**按内容自证"我是这一组的第一片"**，而且把"内容里那个卷号字段的原始值"留在卡上
+        /// （第 1 片当锚点、其余几片靠差值定序 —— RAR4 老编号族的基数格式没写死，只有相对大小可靠）。
+        ///
+        /// <para>真字节形状全部来自本类既有的两个构造器（RAR5 = 主头里 <c>MHFL_VOLUME</c> 开位 + 第 1 卷不带卷号字段；
+        /// RAR4 = 主头 <c>MHD_FIRSTVOLUME 0x0100</c> + 归档结尾块里的 <c>EARC_VOLNUMBER</c>）。
+        /// ⛔ 判据一个字不看名字：这两份文件名都叫 <c>x.bin</c>。</para>
+        /// </summary>
+        [Fact]
+        public void 卡上的专属算法_RAR按内容自证第一片_并留下卷号原始值()
+        {
+            // RAR5：第 1 卷（没有卷号字段 ⇒ 内容自证的是"1"）与第 2 卷（字段值 1 ⇒ 卷号 2）
+            string rar5First = Write("rar5-first.bin", Rar5MainHeader(0x0001u, null));
+            string rar5Second = Write("rar5-second.bin", Rar5MainHeader(0x0003u, 1u));
+
+            // RAR4：主头的"第 1 卷"标记 + 结尾块的卷号字段（真样本：第 1 卷 0、第 2 卷 1）
+            string rar4First = Write("rar4-first.bin", Rar4Archive(0x0001, 0, firstVolume: true));
+            string rar4Second = Write("rar4-second.bin", Rar4Archive(0x0001, 1, firstVolume: false));
+
+            FileNatureCard card5First = FileNature.Inspect(rar5First);
+            FileNatureCard card5Second = FileNature.Inspect(rar5Second);
+            FileNatureCard card4First = FileNature.Inspect(rar4First);
+            FileNatureCard card4Second = FileNature.Inspect(rar4Second);
+
+            // ① 第一片：内容自证（RAR5 靠"卷号 = 1"、RAR4 靠主头那个"第 1 卷"标记）
+            Assert.Equal(ArchiveBodyKind.VolumeFirstPiece, card5First.BodyKind);
+            Assert.Equal(ArchiveBodyKind.VolumeFirstPiece, card4First.BodyKind);
+
+            // ② 不是第一片的那两份：RAR5 读得出卷号 2 ⇒ 可证"是某组的一片、不是第一片"；
+            //    RAR4 读不出卷号（基数待定）⇒ 照旧"判不出"，⛔ 但不许当成"不是分卷"（参与者 = true）。
+            Assert.Equal(ArchiveBodyKind.VolumePiece, card5Second.BodyKind);
+            Assert.Equal(ArchiveBodyKind.Unknown, card4Second.BodyKind);
+            Assert.True(card4Second.ParticipatesInVolumeHandling);
+
+            // ③ 卷号原始值留在卡上（RAR5 字段值 1、RAR4 结尾块 0/1），供"以第一片为锚点定序"用
+            Assert.Equal(1, card5Second.RawVolumeField);
+            Assert.Equal(0, card4First.RawVolumeField);
+            Assert.Equal(1, card4Second.RawVolumeField);
+        }
+
         [Theory]
         // archiveFlags 0x0001 = 分卷组的一员；0x0002 = 后面有卷号字段（第 1 卷没有）
         [InlineData(0x0000u, null, false, 0)] // 单卷 rar：不是分卷组
