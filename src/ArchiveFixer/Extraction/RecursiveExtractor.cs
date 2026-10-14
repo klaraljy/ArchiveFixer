@@ -2816,6 +2816,40 @@ namespace ArchiveFixer.Extraction
 
             if (card.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
             {
+                /*
+                 * ⚠ 2026-10-14（官方环台 `10101010`，运行期事实 —— 用户当场点出来的那一条：
+                 * 「这个不就是 7z.001 吗，为什么底层识别不到」）：**底层识别到了，是这一档没看那张卡**。
+                 *
+                 * <para>卡上逐字（那一刻的探针）：`…\recursive\pack111-W0-0_…\layer-000\output\pack111-L2.7z.txt
+                 * ⇒ 格式=SevenZip 分卷身份=Unknown 卷号=判不出 专属算法=**VolumeFirstPiece**
+                 * 自述整包=62919013 体积=26214400`（文件头 `37 7A BC AF 27 1C 00 04` = 7z 魔数）
+                 * —— 起始头自述的整包字节数比这一份大 ⇒ **还有别的片** ⇒ 这一组还没凑齐。</para>
+                 *
+                 * <para>为什么原来轮不到看它：**7z 这个格式里根本没有卷号字段** ⇒ 它的 `Membership`
+                 * 恒为 `Unknown` ⇒ 老这一支（"判不出 / 可证不是成员 ⇒ 返回 false"）**把 7z 族整族挡在门外**，
+                 * 于是那一份被当成"引擎解不开的怪东西" ⇒ 整单落「引擎操作失败」⇒ 产物连工作区一起被清掉
+                 * ⇒ 组 `pack111-L2.7z.001` 永远缺第 1 片（判据 ① 红）。</para>
+                 *
+                 * <para>⇒ 判据：**卡上说"我是这一组的第一片"就当真**（`BodyKind == VolumeFirstPiece`），
+                 * 结论是**缺卷**（⛔ 不是「损坏」、⛔ 不是「失败」）。
+                 * ⚠ 单层路那两处（<c>requireNothingElseBeside: true</c>）**照旧先过"同层里还有没有同组的东西"那道闸**
+                 * —— 实测 `EncryptedVolumePipelineTests.加密的RAR4三卷_名字被改烂…` 就是这一档：
+                 * 三片都在同一层、只是名字都坏了，引擎其实解得开 ⇒ 这一档必须**不抢结论**（先让引擎去解）。
+                 * 递归路那三处（默认 false）不看那道闸，与既有三档同一条纪律。</para>
+                 */
+                if ((card.BodyKind == ArchiveBodyKind.VolumeFirstPiece
+                        || card.BodyKind == ArchiveBodyKind.VolumePiece)
+                    && !(requireNothingElseBeside && HasSameGroupNeighbourByName(archivePath)))
+                {
+                    /*
+                     * ⚠ 2026-10-14 同一类的**第二句**也补上：`VolumePiece` = 卡上写着"我是这一组的一片、
+                     * 而且不是第 1 片"（7z 族的中间片 / 末片正是这一档：`格式=Unknown` 但
+                     * `专属算法：单卷/分卷=VolumePiece`）—— 它**同样**只有这张卡答得出，
+                     * 名字那半边（后缀被改、卷标记被吃）与内容那半边（7z 没有卷号字段）都答不出。
+                     */
+                    return true;
+                }
+
                 // 判不出 / 可证不是分卷成员 ⇒ 老口径（⛔ 判据没有放宽到"判不出"）。
                 return false;
             }
@@ -2850,7 +2884,6 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>单测用：把"这一份是不是某个还没凑齐的分卷组的一员"那个**唯一出口**露给测试项目。</summary>
         internal static bool IsPieceOfIncompleteGroupForTests(string path) => IsPieceOfIncompleteGroup(path);
-
         /// <summary>单测用：把"同组入口在不在它旁边"那一半露给测试项目（用来钉住它的**已知限制**）。</summary>
         internal static bool IsGroupEntryPresentBesideForTests(string path) => IsGroupEntryPresentBeside(path);
 
