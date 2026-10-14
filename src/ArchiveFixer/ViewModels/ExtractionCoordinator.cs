@@ -21829,6 +21829,24 @@ namespace ArchiveFixer.ViewModels
                     }
                     else
                     {
+                        /*
+                         * ⚠ 2026-10-14（官方环台 `10101010` / `19191919` 逐字，第二大步那一层）：
+                         * **"7-Zip 打不开"不等于"它是垃圾"** —— 它可能是某个分卷组的一片。
+                         *
+                         * <para>现场逐字：`跳过：pack111-L2.7z —— 不是压缩包：7-Zip 打不开（7-Zip 无法识别或不支持该格式）`，
+                         * 那一单落「已跳过」、**从没进过分卷那一套** ⇒ 组 `pack111-L2.7z.001` 永远凑不齐 ⇒ 判据 ① 红。
+                         * 为什么既有的两道尺子都瞎：这一份**内容判不出**（7z 族的中间片/末片按定义没有魔数，
+                         * 卡上 `格式=Unknown 分卷身份=Unknown`）、**名字也不像后续卷**
+                         * （`pack111-L2.7z` = 卷标记被伪装吃掉，正刑"伪装成单一包"那一法）。</para>
+                         *
+                         * <para>判据（⛔ 只用既有事实，⛔ 不猜卷号、⛔ 不动盘上任何东西）：**同批任务里有同族的入口包 + 体积规律**
+                         * —— ① 有另一单的名字读得出"第 1 卷"（`TryGetVolumeIndex == 1`）；
+                         * ② 它的基名（唯一出口 <see cref="FileNameHelper.GetArchiveBaseName"/>）与这一份**相同或互为前缀**；
+                         * ③ 这一份的体积 ≤ 那一份的体积（"除末卷外等大"⇒ 任何一片都不会比满片还大）。
+                         * 命中 ⇒ 结论是**缺卷**（`VolumeMissing`），⛔ 不是「跳过」、⛔ 不是「失败」；片原样留着，
+                         * 交给批末/跨链那一套去凑 —— 与单层路那两处**同一个结论口径**（只是证据多了一档）。</para>
+                         */
+
                         task.Status = StatusText.Skipped;
                         task.Operation = StatusText.OpSkip;
                         task.ProgressText = StatusText.ProgressCompleted;
