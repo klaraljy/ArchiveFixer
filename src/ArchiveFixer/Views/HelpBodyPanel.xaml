@@ -1,0 +1,115 @@
+<UserControl x:Class="ArchiveFixer.Views.HelpBodyPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:models="clr-namespace:ArchiveFixer.Models">
+
+    <!--
+        说明正文（介绍 + 功能详解 + 术语表）—— 唯一一份，由「说明」页签与「说明」窗**共用**，
+        ⛔ 不许在别处再抄一份（用户口径：说明文字只有一个出处，改了术语表窗口里不许留旧说法）。
+        文字全部来自 Models/HelpContent.cs，这里一个字都不手写；⛔ 不读任何外部文件。
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="{x:Static models:HelpContent.Tagline}"
+                       Style="{StaticResource BodyTextStyle}"
+                       TextWrapping="Wrap" />
+
+            <ItemsControl ItemsSource="{x:Static models:HelpContent.Introduction}"
+                          Margin="0,12,0,0">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}"
+                                   Style="{StaticResource HintTextStyle}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,6" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1"
+                      Margin="0,14,0,0"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+                <!--
+                    功能详解（用户 2026-09-27："里面有专有名词的详细解释，但是没有功能的详细解释"）。
+                    与术语表同一套卡片样式，只是分两段、各有一个小标题。
+                -->
+                <TextBlock Text="{x:Static models:HelpContent.FeaturesHeading}"
+                           Style="{StaticResource LabelTextStyle}"
+                           Margin="0,0,0,8" />
+
+                <ItemsControl ItemsSource="{x:Static models:HelpContent.Features}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardStyle}"
+                                    CornerRadius="{StaticResource CardCornerRadius}"
+                                    Padding="12,8"
+                                    Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Term}"
+                                               Style="{StaticResource LabelTextStyle}"
+                                               TextWrapping="Wrap"
+                                               VerticalAlignment="Top" />
+
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Explanation}"
+                                               Style="{StaticResource BodyTextStyle}"
+                                               TextWrapping="Wrap"
+                                               VerticalAlignment="Top" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <TextBlock Text="{x:Static models:HelpContent.GlossaryHeading}"
+                           Style="{StaticResource LabelTextStyle}"
+                           Margin="0,10,0,8" />
+
+                <ItemsControl ItemsSource="{x:Static models:HelpContent.Glossary}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- 一条术语一张卡片：左边词、右边解释（与⑤页密码卡片同一套样式口径）。 -->
+                            <Border Style="{StaticResource CardStyle}"
+                                    CornerRadius="{StaticResource CardCornerRadius}"
+                                    Padding="12,8"
+                                    Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Term}"
+                                               Style="{StaticResource LabelTextStyle}"
+                                               TextWrapping="Wrap"
+                                               VerticalAlignment="Top" />
+
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Explanation}"
+                                               Style="{StaticResource BodyTextStyle}"
+                                               TextWrapping="Wrap"
+                                               VerticalAlignment="Top" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

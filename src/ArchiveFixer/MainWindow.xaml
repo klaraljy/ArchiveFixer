@@ -169,7 +169,7 @@
                 <tabs:ExtractionTab />
             </TabItem>
 
-            <TabItem x:Name="CleanupTabItem" Header="清理与删除">
+            <TabItem x:Name="CleanupTabItem" Header="清理方式">
                 <tabs:CleanupTab />
             </TabItem>
 
@@ -181,8 +181,20 @@
                 <tabs:PackingTab />
             </TabItem>
 
+            <TabItem x:Name="ReminderTabItem" Header="提醒">
+                <tabs:ReminderTab />
+            </TabItem>
+
+            <TabItem x:Name="EngineTabItem" Header="引擎">
+                <tabs:EngineTab />
+            </TabItem>
+
             <TabItem Header="设置">
                 <tabs:SettingsTab />
+            </TabItem>
+
+            <TabItem x:Name="HelpTabItem" Header="说明">
+                <tabs:HelpTab />
             </TabItem>
         </TabControl>
     </DockPanel>

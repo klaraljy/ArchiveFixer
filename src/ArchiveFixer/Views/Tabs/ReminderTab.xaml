@@ -1,0 +1,39 @@
+<UserControl x:Class="ArchiveFixer.Views.Tabs.ReminderTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:models="clr-namespace:ArchiveFixer.Models">
+
+    <!--
+        ⑥ 提醒页（用户 2026-10-14 最终设计：「提醒：就是之前的一些弹窗操作全部移到这边来」）。
+        本页只放「哪些弹窗还要弹」这一类开关 —— 行为仍旧由各自的执行路径读设置决定，搬页面不改行为。
+        批量汇总框（一键处理唯一的批中例外）与同名冲突询问不在本页：前者是链尾必经的一步，
+        后者按用户 2026-10-14 口径改成系统自动改名、不再询问。
+    -->
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+        <StackPanel>
+
+            <!-- ==================== 解压前的提醒 ==================== -->
+            <GroupBox Header="一键处理前的确认框">
+                <StackPanel>
+                    <!--
+                        第 15 条那两格里的**第二格**（「导入文件夹后提醒一次『疑似无用物』（已停用）」）
+                        已按用户 2026-10-04 的口径**整格删掉**：无用物现在是"导入一完成就自动移出任务列表"
+                        这种事底层自动做的活，界面上再摆一个"改了什么都不影响"的开关只是噪声。
+                        ⛔ 设置项 `AppSettings.RemindJunkAfterImport` 本身留着（不动设置序列化，旧键安静忽略），
+                        ⛔ 那句"已把 N 个无用物移出列表"的**日志保留**（用户：「提示还是要有的」）。
+                    -->
+                    <CheckBox Content="{x:Static models:StatusText.SettingsRemindBeforeExtractLabel}"
+                              IsChecked="{Binding SettingsEditor.Settings.RemindBeforeExtract, Mode=TwoWay}"
+                              ToolTip="{x:Static models:StatusText.SettingsRemindBeforeExtractHint}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="22,4,0,0"
+                               TextWrapping="Wrap"
+                               Text="{x:Static models:StatusText.SettingsRemindBeforeExtractHint}" />
+                </StackPanel>
+            </GroupBox>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

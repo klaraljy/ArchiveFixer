@@ -85,11 +85,13 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 那一格真的在②页（引擎与工具那一组）挂上了：标题 / 说明 / 按钮三处绑定都在，
+        /// 那一格真的在⑦引擎页（引擎与工具那一组）挂上了：标题 / 说明 / 按钮三处绑定都在，
         /// 且按钮绑的是 <c>OpenWinRarDownloadPageCommand</c>（⛔ 不是"只写了文案忘了接命令"）。
+        ///
+        /// <para>⚠ 2026-10-14（用户最终设计：引擎整组搬去自己的页签）⇒ 断言的文件从②页换成⑦引擎页。</para>
         /// </summary>
         [Fact]
-        public void 设置页真的把这一格和那个按钮绑上了()
+        public void 引擎页真的把这一格和那个按钮绑上了()
         {
             string xamlPath = Path.Combine(
                 XamlBindingScan.RepositoryRoot,
@@ -97,9 +99,10 @@ namespace ArchiveFixer.Tests
                 "ArchiveFixer",
                 "Views",
                 "Tabs",
-                "ExtractionTab.xaml");
+                // ⚠ 2026-10-14（用户最终设计：「引擎：从解压方式那边搬过来的」）：这一格在⑦引擎页。
+                "EngineTab.xaml");
 
-            Assert.True(File.Exists(xamlPath), $"找不到②页 XAML：{xamlPath}");
+            Assert.True(File.Exists(xamlPath), $"找不到⑦引擎页 XAML：{xamlPath}");
 
             string xaml = File.ReadAllText(xamlPath, Encoding.UTF8);
 

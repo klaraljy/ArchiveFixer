@@ -1,0 +1,25 @@
+<UserControl x:Class="ArchiveFixer.Views.Controls.BoxDetail"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        功能框最下面那一行「展示框」（用户 2026-10-14 最终设计）：
+        「所有说明性文字，详细的说明文字全部写入选项卡说明里面和在每一个功能框最下面有一个展示框，
+          点击才能详细展示，平时的功能介绍只能简洁的文字介绍」。
+
+        ⛔ 用法只有一种：挂在某个 GroupBox 的**最后一行**，Header 写一句"这是什么"，Detail 写详细说明。
+        ⛔ 默认收起（不许写 IsExpanded）；⛔ 文案一律从 StatusText 取，不许在 XAML 里手写中文长句。
+    -->
+    <Expander Margin="0,8,0,0">
+        <Expander.Header>
+            <TextBlock Style="{StaticResource HintTextStyle}"
+                       TextWrapping="Wrap"
+                       Text="{Binding Header, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+        </Expander.Header>
+
+        <TextBlock Margin="0,6,0,0"
+                   Style="{StaticResource HintTextStyle}"
+                   TextWrapping="Wrap"
+                   Text="{Binding Detail, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+    </Expander>
+</UserControl>

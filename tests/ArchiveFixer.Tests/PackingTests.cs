@@ -1659,14 +1659,14 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 解压方式页里真的有RarExe那一格_并且写明许可边界()
+        public void 引擎页里真的有RarExe那一格_并且写明许可边界()
         {
             /*
-             * 2026-09-24 第 11 条之后外部工具路径归到②解压方式页的「引擎」分组
-             * （原来是设置窗口的「高级设置」里）。
+             * 2026-09-24 第 11 条之后外部工具路径归到「引擎」分组（原来是设置窗口的「高级设置」里）；
+             * ⚠ 2026-10-14（用户最终设计：「引擎：从解压方式那边搬过来的」）整组搬到⑦引擎页。
              */
             string xaml = File.ReadAllText(
-                Path.Combine(XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "Views", "Tabs", "ExtractionTab.xaml"));
+                Path.Combine(XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "Views", "Tabs", "EngineTab.xaml"));
 
             Assert.Contains("CustomRarExePath", xaml, StringComparison.Ordinal);
             Assert.Contains("SelectRarExeCommand", xaml, StringComparison.Ordinal);

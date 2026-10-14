@@ -225,19 +225,32 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain(features, f => f.Term == "其余物");
         }
 
-        /// <summary>说明窗**不依赖任何外部文件**（帮助菜单那份「使用说明」要读 docs\，分发包里可能没有）。</summary>
+        /// <summary>说明内容**不依赖任何外部文件**（帮助菜单那份「使用说明」要读 docs\，分发包里可能没有）。</summary>
         [Fact]
         public void 说明窗_内容全部来自HelpContent_不读文件()
         {
-            string xaml = Read("Views", "HelpWindow.xaml");
+            /*
+             * ⚠ 2026-10-14（用户最终设计：说明独立成一页）：正文抽成共用面板 Views/HelpBodyPanel.xaml，
+             * 「说明」窗与⑨「说明」页签**共用同一份** ⇒ 这里改成"面板里有那六处绑定、窗口与页签都只是宿主"。
+             * ⛔ 判据意图一个字没改：内容全部来自 HelpContent、不读任何外部文件。
+             */
+            string window = Read("Views", "HelpWindow.xaml");
+            string panel = Read("Views", "HelpBodyPanel.xaml");
+            string tab = Read("Views", "Tabs", "HelpTab.xaml");
             string code = Read("Views", "HelpWindow.xaml.cs");
 
-            Assert.Contains("HelpContent.Tagline", xaml, StringComparison.Ordinal);
-            Assert.Contains("HelpContent.Introduction", xaml, StringComparison.Ordinal);
-            Assert.Contains("HelpContent.Glossary", xaml, StringComparison.Ordinal);
-            Assert.Contains("HelpContent.Features", xaml, StringComparison.Ordinal);
-            Assert.Contains("HelpContent.FeaturesHeading", xaml, StringComparison.Ordinal);
-            Assert.Contains("HelpContent.GlossaryHeading", xaml, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.Tagline", panel, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.Introduction", panel, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.Glossary", panel, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.Features", panel, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.FeaturesHeading", panel, StringComparison.Ordinal);
+            Assert.Contains("HelpContent.GlossaryHeading", panel, StringComparison.Ordinal);
+
+            // 窗口与页签都只是宿主：正文只有面板那一份（⛔ 不许在宿主里再抄一遍）。
+            Assert.Contains("HelpBodyPanel", window, StringComparison.Ordinal);
+            Assert.Contains("HelpBodyPanel", tab, StringComparison.Ordinal);
+            Assert.DoesNotContain("HelpContent.Features", window, StringComparison.Ordinal);
+            Assert.DoesNotContain("HelpContent.Features", tab, StringComparison.Ordinal);
 
             Assert.DoesNotContain("File.ReadAllText", code, StringComparison.Ordinal);
             Assert.DoesNotContain("File.Exists", code, StringComparison.Ordinal);

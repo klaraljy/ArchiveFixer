@@ -179,7 +179,7 @@ namespace ArchiveFixer.ViewModels
     /// 这里**刻意不碰** <c>Extraction/RecursiveExtractor</c>：那条递归路径在用户的真实文件上会卡死
     /// （历史事故见 docs/需求变更.md），所以续解用的是**已经跑通的单层解压**重复跑 ——
     /// 一轮就是一次正常的"识别 → 改名 → 解压"，只是把上一轮产出的内层包当成本轮输入，
-    /// 轮数卡死在 <see cref="RoundLimit"/> 轮（默认 5，天花板 <see cref="MaxRoundsCeiling"/> = 不变量 8）。RecursionMode 的默认值不动。
+    /// 轮数卡死在 <see cref="RoundLimit"/> 轮（默认 7，天花板 <see cref="MaxRoundsCeiling"/> = 不变量 8）。RecursionMode 的默认值不动。
     ///
     /// 刻意不做的事：
     /// - 不自动删源包（那是 M3 的独立开关，默认关闭，且要校验通过才删）；
@@ -208,7 +208,7 @@ namespace ArchiveFixer.ViewModels
         internal const int MaxRoundsCeiling = 10;
 
         /// <summary>
-        /// 这一批实际允许跑几轮 = ②页「最大嵌套层数」（默认 5），夹在 1~<see cref="MaxRoundsCeiling"/>。
+        /// 这一批实际允许跑几轮 = ②页「最大嵌套层数」（默认 7），夹在 1~<see cref="MaxRoundsCeiling"/>。
         ///
         /// <para>为什么跟设置走：这一格的名字就叫"最大嵌套层数"，而一键处理是主流程 ——
         /// 两处各有一套上限只会让人以为"有一处没生效"（2026-09-24 把 3 与 10 统一成 10 就是这个原因，

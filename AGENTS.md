@@ -54,7 +54,7 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 - 引擎优先级 WinRar → SevenZip，**先按能力筛再用优先级 tiebreak**；没装的引擎直接跳过。
 - 引擎回退：`UnsupportedFormat/UnsupportedFeature/EngineUnavailable/ParserRejected/KnownCompatibilityIssue` 可换；`WrongPassword/MissingVolume/UnsafePath/NoDiskSpace/PermissionDenied/SourceChanged/DeviceOffline/UserCancelled/OutputLimitExceeded` **不换**。
 - 同一个包在 7-Zip 上"每个密码都错"、在 WinRAR 上第一条就对 ⇒ 那是引擎吃不下，不是密码不对：密码类失败且本机有 WinRAR 时用 `WinRAR.exe` 把同一批候选再试一遍（必须带 `-cfg-`，且命中判据是"退出码 0 且产物真多出来"）。
-- 递归展开默认档 =「展开所有分支」；上限四条（单文件/总大小/文件数/展开比）是用户设置，默认 64 GiB / 512 GiB / 20 万 / 1000 倍；嵌套层数默认 5；一键处理每批轮数 ≤10（唯一出口 `OneClickCoordinator.RoundLimit`）。
+- 递归展开默认档 =「展开所有分支」；上限四条（单文件/总大小/文件数/展开比）是用户设置，默认 64 GiB / 512 GiB / 20 万 / 1000 倍；嵌套层数默认 7；一键处理每批轮数 ≤10（唯一出口 `OneClickCoordinator.RoundLimit`）。
 - 内层包本身是"双面文件"（视频/图片 + 尾部归档）时，先按偏移抠出来再解；尾部只有一个原样存条目时走流式近路（零解压调用）。
 - 递归层与单层路行为必须对齐（手动密码进递归候选、加密头包结论、单文件上限、可疑条目报告、工作区清理校验等）。
 

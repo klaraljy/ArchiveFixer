@@ -223,17 +223,21 @@ namespace ArchiveFixer.Tests
         };
 
         /// <summary>
-        /// 主窗口选项卡的标题与顺序（用户 2026-09-24 第 11 条拍板的六个）。
+        /// 主窗口选项卡的标题与顺序（**用户 2026-10-14 最终设计**：
+        /// 「任务 解压方式 清理方式 密码 打包 提醒 引擎 设置 说明」）。
         /// 探针会逐页选中并 UpdateLayout —— 只有被选中的那一页才会实例化模板。
         /// </summary>
         public static readonly IReadOnlyList<string> ExpectedTabHeaders = new[]
         {
             "任务",
             "解压方式",
-            "清理与删除",
+            "清理方式",
             "密码",
             "打包",
-            "设置"
+            "提醒",
+            "引擎",
+            "设置",
+            "说明"
         };
 
         public const string MainWindowName = "主窗口 MainWindow";
@@ -477,12 +481,12 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 把主窗口的六个选项卡**逐页选中**并 <c>UpdateLayout</c> 一遍，记下标题与顺序。
+        /// 把主窗口的九个选项卡**逐页选中**并 <c>UpdateLayout</c> 一遍，记下标题与顺序。
         ///
         /// <para>
         /// 为什么必须这么做：<see cref="TabControl"/> 只为**选中**的那一页建内容，
         /// 其余页的 DataTemplate 根本不会被实例化 —— 2026-09-22 那次"启动即崩"
-        /// 就是这类只在模板实例化时才发作的错误。六页里任何一页的绑定写错，
+        /// 就是这类只在模板实例化时才发作的错误。九页里任何一页的绑定写错，
         /// 这里都会抛出来（<see cref="UiBindingReachabilityTests"/> 还能顺便收到绑定报错）。
         /// </para>
         /// </summary>
@@ -490,7 +494,7 @@ namespace ArchiveFixer.Tests
         {
             TabControl? tabs = FindDescendant<TabControl>(main)
                               ?? throw new InvalidOperationException(
-                                  "主窗口里找不到 TabControl —— 第 11 条的六个功能页无从验证");
+                                  "主窗口里找不到 TabControl —— 第 11 条的九个功能页无从验证");
 
             if (tabs.Items.Count != ExpectedTabHeaders.Count)
             {
@@ -511,7 +515,7 @@ namespace ArchiveFixer.Tests
                 report.ShownTabs.Add(header);
             }
 
-            log("· 六个选项卡逐页实例化完成：" + string.Join(" / ", report.ShownTabs));
+            log("· 九个选项卡逐页实例化完成：" + string.Join(" / ", report.ShownTabs));
 
             // 收尾回到①任务页：探针之后还有别的检查会用到那张表。
             tabs.SelectedIndex = 0;

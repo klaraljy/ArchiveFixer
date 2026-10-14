@@ -1,0 +1,203 @@
+<UserControl x:Class="ArchiveFixer.Views.Tabs.EngineTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        ⑦ 引擎页（用户 2026-10-14 最终设计：「引擎：从解压方式那边搬过来的」）。
+        ⛔ 只搬位置、内容一个字不改；⛔ 说明文字不许写「从主界面搬来」这类废话（用户 2026-10-14 点名）。
+    -->
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+        <StackPanel>
+
+            <!--
+                ==================== 引擎（用哪个程序解压） ====================
+                AGENTS.md §3.1 要求"界面显示当前是否在用"，所以每行都带：
+                检测状态 + 路径 + 版本 + 它当前负责哪些格式。
+            -->
+            <GroupBox Header="引擎（用哪个程序解压）">
+                <StackPanel>
+                    <ItemsControl ItemsSource="{Binding SettingsEditor.Engines}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource OptionRowStyle}"
+                                        Background="{StaticResource PanelSunkenBrush}"
+                                        BorderBrush="{StaticResource PanelBorderBrush}"
+                                        Margin="0,0,0,6"
+                                        Padding="8,6">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{Binding HeaderText}"
+                                                       Style="{StaticResource BodyTextStyle}" />
+
+                                            <TextBlock Style="{StaticResource HintTextStyle}"
+                                                       Margin="0,2,0,0"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Path}"
+                                                       Text="{Binding Path, StringFormat=路径：{0}}" />
+
+                                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                <TextBlock Style="{StaticResource HintTextStyle}"
+                                                           Text="{Binding SourceText, StringFormat=来源：{0}}" />
+
+                                                <TextBlock Margin="10,0,0,0"
+                                                           Text="{Binding UsageText}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
+                                                            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsInUse}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <TextBlock Grid.Column="1"
+                                                   VerticalAlignment="Center"
+                                                   Margin="10,0"
+                                                   FontWeight="SemiBold"
+                                                   Text="{Binding StatusText}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource BodyTextStyle}">
+                                                    <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsAvailable}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <Button Grid.Column="2"
+                                                Content="上移"
+                                                MinWidth="56"
+                                                Margin="0,0,6,0"
+                                                Style="{StaticResource ToolbarButtonStyle}"
+                                                VerticalAlignment="Center"
+                                                IsEnabled="{Binding CanMoveUp}"
+                                                ToolTip="把它的优先级提前一位（排在前面的优先被选上）"
+                                                Command="{Binding DataContext.SettingsEditor.MoveEngineUpCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+
+                                        <Button Grid.Column="3"
+                                                Content="下移"
+                                                MinWidth="56"
+                                                Style="{StaticResource ToolbarButtonStyle}"
+                                                VerticalAlignment="Center"
+                                                IsEnabled="{Binding CanMoveDown}"
+                                                ToolTip="把它的优先级推后一位"
+                                                Command="{Binding DataContext.SettingsEditor.MoveEngineDownCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Border Style="{StaticResource InfoBannerStyle}" Margin="0,4,0,10">
+                        <TextBlock Style="{StaticResource BannerTextStyle}"
+                                   Foreground="{StaticResource InfoTextBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding SettingsEditor.EngineSelectionSummary}" />
+                    </Border>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="UnRAR.exe 路径："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.CustomUnRarExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="留空表示自动：先找本机已装 WinRAR 目录里的 UnRAR.exe，再退回程序内置的 tools\unrar\UnRAR.exe。" />
+                    </Grid>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="Rar.exe 路径："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.CustomRarExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="{Binding SettingsEditor.RarExePathHint}" />
+
+                        <Button Grid.Column="2"
+                                Content="浏览…"
+                                MinWidth="72"
+                                Margin="8,0,0,0"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                Command="{Binding SettingsEditor.SelectRarExeCommand}"
+                                ToolTip="选你自己安装 / 下载的 WinRAR 里的 Rar.exe（程序不会复制、也不会随包分发它）" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="150,0,0,4"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.RarExePathHint}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="150,0,0,10"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.RarToolStatusText}" />
+
+                    <!-- 推荐另外装一个 WinRAR（可选）：只指路，⛔ 不下载、不代装、不捆绑（EULA §3b/§3c） -->
+                    <TextBlock Style="{StaticResource LabelTextStyle}"
+                               Margin="0,4,0,2"
+                               Text="{Binding SettingsEditor.WinRarRecommendLabel}" />
+
+                    <TextBlock Style="{StaticResource HintTextStyle}"
+                               Margin="150,0,0,4"
+                               TextWrapping="Wrap"
+                               Text="{Binding SettingsEditor.WinRarRecommendHint}" />
+
+                    <Button Content="{Binding SettingsEditor.WinRarDownloadButtonText}"
+                            HorizontalAlignment="Left"
+                            Margin="150,0,0,10"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Command="{Binding SettingsEditor.OpenWinRarDownloadPageCommand}"
+                            ToolTip="{Binding SettingsEditor.WinRarRecommendHint}" />
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="7z.exe 路径："
+                                   Style="{StaticResource LabelTextStyle}" />
+
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding SettingsEditor.Settings.CustomSevenZipExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="留空表示使用程序目录下的 tools\7zip\7z.exe" />
+                    </Grid>
+
+                    <CheckBox Content="保留受损的文件（校验和不符的半成品留在磁盘上）"
+                              Margin="0,6,0,0"
+                              IsChecked="{Binding SettingsEditor.KeepBrokenFiles, Mode=TwoWay}"
+                              ToolTip="只让 RAR 引擎（UnRAR）别把校验失败的半成品删掉（-kb）。7-Zip 没有这个开关。任务状态仍然是「失败 / 部分完成」。" />
+                </StackPanel>
+            </GroupBox>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

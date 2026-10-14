@@ -20835,7 +20835,7 @@ namespace ArchiveFixer.ViewModels
         /// 本批最多允许解几层（②页「最大嵌套层数」）。
         ///
         /// <para>⚠ 这个数**不是第二套轮数**：它就是 <c>OneClickCoordinator.RoundLimit</c> 读的那一个
-        /// 设置项（`MaxRecursionDepth`，默认 5、夹在 1~10）。这里只把它取出来说明白"最多几层"，
+        /// 设置项（`MaxRecursionDepth`，默认 7、夹在 1~10）。这里只把它取出来说明白"最多几层"，
         /// 绝不参与"实际跑几轮"的裁决（那个裁决只有 <c>OneClickCoordinator</c> 一处）。</para>
         /// </summary>
         private int ResolveMaxLayersForBatch() =>

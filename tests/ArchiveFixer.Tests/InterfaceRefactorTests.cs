@@ -17,7 +17,7 @@ namespace ArchiveFixer.Tests
     ///
     /// <para>这一组钉住的是**结构**，与"某个控件文案改得对不对"互补：</para>
     /// <list type="number">
-    /// <item><description>六个选项卡的标题与顺序；</description></item>
+    /// <item><description>九个选项卡的标题与顺序（2026-10-14 最终设计：任务/解压方式/清理方式/密码/打包/提醒/引擎/设置/说明）；</description></item>
     /// <item><description>① 任务页**不再**有并发档 / 空间管理 / 危险模式红横幅 / 输出位置那一大块（反向断言）；</description></item>
     /// <item><description>危险模式那套（红按钮 / 风险四条 / 自测）已在 2026-09-25 第 32 条整块退役，界面上一个字都不留；</description></item>
     /// <item><description>日志区与列表之间真的有分隔条，而且是上下拖的那种；</description></item>
@@ -39,10 +39,16 @@ namespace ArchiveFixer.Tests
 
         private static readonly XNamespace X = "http://schemas.microsoft.com/winfx/2006/xaml";
 
-        /// <summary>六个选项卡的标题（顺序 = 用户 2026-09-24 拍板的那一版）。</summary>
+        /// <summary>
+        /// 选项卡的标题与顺序（**用户 2026-10-14 最终设计**：「主界面这个是选项卡
+        /// 任务 解压方式 清理方式 密码 打包 提醒 引擎 设置 说明」）。
+        ///
+        /// <para>⚠ 这一版取代 2026-09-24 的六页版：③「清理与删除」改名「清理方式」，
+        /// 新增⑥「提醒」（弹窗开关的家）、⑦「引擎」（从②页搬出来）、⑨「说明」（说明独立成一页）。</para>
+        /// </summary>
         private static readonly string[] ExpectedTabHeaders =
         {
-            "任务", "解压方式", "清理与删除", "密码", "打包", "设置"
+            "任务", "解压方式", "清理方式", "密码", "打包", "提醒", "引擎", "设置", "说明"
         };
 
         /// <summary>① 任务页里**不许**再出现的东西（用户点名"放这么大空间干什么"）。</summary>
@@ -95,10 +101,10 @@ namespace ArchiveFixer.Tests
             ["SelectedOutputDirectory"] = "①页与②页共用的那一个输出位置值（第 27 条）。"
         };
 
-        // ================================================================ ① 六个选项卡
+        // ================================================================ ① 九个选项卡
 
         [Fact]
-        public void 主窗口是六个选项卡_标题与顺序都照方案()
+        public void 主窗口是九个选项卡_标题与顺序都照最终设计()
         {
             XDocument document = Load(Path.Combine("src", "ArchiveFixer", "MainWindow.xaml"));
 
@@ -110,13 +116,13 @@ namespace ArchiveFixer.Tests
             Assert.Equal(ExpectedTabHeaders, headers);
 
             // 每一页都必须真的挂着一个 UserControl（不是空壳页）。
-            Assert.Equal(6, document.Descendants().Count(element => element.Name.NamespaceName.Contains("ArchiveFixer.Views.Tabs")));
+            Assert.Equal(9, document.Descendants().Count(element => element.Name.NamespaceName.Contains("ArchiveFixer.Views.Tabs")));
         }
 
         [Fact]
-        public void 六个选项卡各有一个自己的XAML文件_主窗口不再堆界面()
+        public void 九个选项卡各有一个自己的XAML文件_主窗口不再堆界面()
         {
-            foreach (string name in new[] { "TaskTab", "ExtractionTab", "CleanupTab", "PasswordTab", "PackingTab", "SettingsTab" })
+            foreach (string name in new[] { "TaskTab", "ExtractionTab", "CleanupTab", "PasswordTab", "PackingTab", "ReminderTab", "EngineTab", "SettingsTab", "HelpTab" })
             {
                 Assert.True(File.Exists(Path.Combine(TabsDirectory, name + ".xaml")), $"{name}.xaml 不见了");
                 Assert.True(File.Exists(Path.Combine(TabsDirectory, name + ".xaml.cs")), $"{name}.xaml.cs 不见了");
@@ -356,7 +362,13 @@ namespace ArchiveFixer.Tests
                 "RemoveSelectedCommand", "ClearCommand",
 
                 // 工具
-                "ImportPasswordBookCommand", "OpenOutputDirectoryCommand", "OpenWorkDirectoryCommand",
+                /*
+                 * ⚠ 2026-10-14（用户最终设计：「设置：删除：工作区目录、启动时、扫描」）⇒
+                 * `OpenWorkDirectoryCommand` 连同"工作区残留 / 打开工作区目录"整组**从界面删除**
+                 * （工作区位置与"失败也默认清"都是系统默认行为，不再给用户入口）⇒
+                 * 命令本身仍在 MainViewModel 上，但界面上已经没有它的入口，所以从这份清单里去掉。
+                 */
+                "ImportPasswordBookCommand", "OpenOutputDirectoryCommand",
                 "ExportLogCommand", "OpenLogDirectoryCommand", "ExportFailedListCommand",
                 "CleanProcessArtifactsCommand", "CleanAllProcessArtifactsCommand", "CleanEmptyFoldersCommand"
             };
@@ -431,7 +443,11 @@ namespace ArchiveFixer.Tests
                 ["UseSpecialExtraction"] = "TaskTab",
 
                 // ② 解压方式
-                ["RecursionMode"] = "ExtractionTab",
+                /*
+                 * ⚠ 2026-10-14（用户最终设计）：「嵌套与覆盖：三档功能全部删除，只默认解开所有分支」⇒
+                 * 那一栏的 RecursionMode 下拉框**整格删掉**（出厂默认仍是 AllBranches，见
+                 * `RecursionModeDefaultTests`），所以它不再有"界面上的家"、也就不在这份清单里。
+                 */
                 ["MaxRecursionDepth"] = "ExtractionTab",
                 ["OverwriteMode"] = "ExtractionTab",
                 ["MaxParallelExtractCount"] = "ExtractionTab",
@@ -440,7 +456,7 @@ namespace ArchiveFixer.Tests
                 ["ReportDangerousEntries"] = "ExtractionTab",
                 ["CollectResultsToDirectory"] = "ExtractionTab",
                 ["CollectTargetDirectory"] = "ExtractionTab",
-                ["CustomSevenZipExePath"] = "ExtractionTab",
+                ["CustomSevenZipExePath"] = "EngineTab",
 
                 // ② 的第 17 条那一格：一键处理的确认框可以关掉（也在确认框自己的勾选项里写着）
                 ["SkipOneClickConfirm"] = "ExtractionTab",
@@ -454,11 +470,11 @@ namespace ArchiveFixer.Tests
                  * 与解压时的口径同一份实现），而这份清单钉的是 "Settings.<原名>" 这种直接绑定。
                  * 它们的界面落点由 危险模式那一套已退役_界面上一个字都不留 那一条钉住。
                  */
-                // ③ 的第 15 条那一格：解压前提醒无用物 / 没有可用密码的包
+                // ⑥ 提醒（2026-10-14 最终设计：这批弹窗开关的家从③页搬到这里）
                 // ⚠ 同一组里那格「导入文件夹后提醒一次『疑似无用物』（已停用）」已按用户 2026-10-04
                 //   的口径**整格删掉**（那是底层自动做的事，界面上摆一个改了没影响的开关只是噪声），
                 //   所以它不在这份清单里 —— `AppSettings.RemindJunkAfterImport` 属性照旧留着（旧键安静忽略）。
-                ["RemindBeforeExtract"] = "CleanupTab",
+                ["RemindBeforeExtract"] = "ReminderTab",
 
                 // ④ 密码
                 ["UseGlobalPasswordForAllTasks"] = "PasswordTab",
@@ -498,7 +514,7 @@ namespace ArchiveFixer.Tests
 
             var tabFiles = new Dictionary<string, string>(StringComparer.Ordinal);
 
-            foreach (string name in new[] { "TaskTab", "ExtractionTab", "CleanupTab", "PasswordTab", "PackingTab", "SettingsTab" })
+            foreach (string name in new[] { "TaskTab", "ExtractionTab", "CleanupTab", "PasswordTab", "PackingTab", "ReminderTab", "EngineTab", "SettingsTab", "HelpTab" })
             {
                 tabFiles[name] = Read("Views", "Tabs", name + ".xaml");
             }
@@ -596,18 +612,28 @@ namespace ArchiveFixer.Tests
                  */
                 ["SpecialExtractionRules"] = "ExtractionTab",
                 ["SpecialExtractionToolTip"] = "TaskTab",
-                ["Engines"] = "ExtractionTab",
-                ["EngineSelectionSummary"] = "ExtractionTab",
-                ["MoveEngineUpCommand"] = "ExtractionTab",
-                ["MoveEngineDownCommand"] = "ExtractionTab",
-                ["CustomUnRarExePath"] = "ExtractionTab",
-                ["CustomRarExePath"] = "ExtractionTab",
-                ["RarExePathHint"] = "ExtractionTab",
-                ["RarToolStatusText"] = "ExtractionTab",
-                ["SelectRarExeCommand"] = "ExtractionTab",
-                ["KeepBrokenFiles"] = "ExtractionTab",
+                /*
+                 * ⑦ 引擎（2026-10-14 最终设计：「引擎：从解压方式那边搬过来的」）——
+                 * 整组搬到自己的页签，绑定一个字没改。
+                 */
+                ["Engines"] = "EngineTab",
+                ["EngineSelectionSummary"] = "EngineTab",
+                ["MoveEngineUpCommand"] = "EngineTab",
+                ["MoveEngineDownCommand"] = "EngineTab",
+                ["CustomUnRarExePath"] = "EngineTab",
+                ["CustomRarExePath"] = "EngineTab",
+                ["RarExePathHint"] = "EngineTab",
+                ["RarToolStatusText"] = "EngineTab",
+                ["SelectRarExeCommand"] = "EngineTab",
+                ["KeepBrokenFiles"] = "EngineTab",
                 ["SourceHandling"] = "CleanupTab",
-                ["IsRememberingPasswordList"] = "PasswordTab",
+
+                /*
+                 * ⚠ 2026-10-14（用户最终设计：「密码：删除：记住密码本（这个应该是系统默认操作，
+                 * 这个功能不应该有）」）⇒ `IsRememberingPasswordList` 那一格**整格删掉**，
+                 * 行为固定在"记住"（设置项默认值本来就是 true）。所以它不在这份清单里；
+                 * 反向断言「不许再出现」见 `密码页不再有记住开关_那一格按设计改成系统默认`。
+                 */
                 ["RememberedBooks"] = "PasswordTab",
                 ["RemoveRememberedBookCommand"] = "PasswordTab"
             };
@@ -637,10 +663,15 @@ namespace ArchiveFixer.Tests
                 ["ContinueOneClickCommand"] = "TaskTab",
 
                 // 第 15 条：列表里删无用物
-                ["RemoveCheckedTasksCommand"] = "TaskTab",
+                ["RemoveCheckedTasksCommand"] = "TaskTab"
 
-                // 第 22 条：工作区残留一键清
-                ["ClearWorkspaceLeftoversCommand"] = "CleanupTab"
+                /*
+                 * ⚠ 2026-10-14（用户最终设计：「设置：删除：工作区目录、启动时、扫描」+
+                 * 「清理方式：删除或者转移：工作区」）⇒ 第 22 条那个「工作区残留一键清」入口
+                 * 连同③页那一组**整组从界面删除**（判据没放宽，是"关掉之后不会有残留"这件事
+                 * 变成系统默认）⇒ 命令本身仍在 MainViewModel 上，但不再有界面入口，
+                 * 所以它不在这份清单里。反向断言见下。
+                 */
             };
 
             foreach ((string command, string tab) in expected)
@@ -659,11 +690,52 @@ namespace ArchiveFixer.Tests
             Assert.Contains("ContinueOneClickButtonText", taskTab, StringComparison.Ordinal);
             Assert.Contains("HasPendingContinuation", taskTab, StringComparison.Ordinal);
 
-            // 工作区残留那一行提示同理（第 22 条：看得见才谈得上清理）
-            string cleanupTab = Read("Views", "Tabs", "CleanupTab.xaml");
+            /*
+             * ⚠ 工作区残留那一组（第 22 条）已按 2026-10-14 最终设计从界面上整组删除：
+             * 「失败也默认清」是系统默认行为 ⇒ 界面上不该再留"看一眼残留 / 清一下残留"的入口。
+             * ⛔ 反向断言：以后谁再把它挂回来，这里立刻红。
+             */
+            var tabXaml = new Dictionary<string, string>(StringComparer.Ordinal);
 
-            Assert.Contains("WorkspaceLeftoverBanner", cleanupTab, StringComparison.Ordinal);
-            Assert.Contains("HasWorkspaceLeftovers", cleanupTab, StringComparison.Ordinal);
+            foreach (string name in new[] { "TaskTab", "ExtractionTab", "CleanupTab", "PasswordTab", "PackingTab", "ReminderTab", "EngineTab", "SettingsTab", "HelpTab" })
+            {
+                tabXaml[name] = Read("Views", "Tabs", name + ".xaml");
+            }
+
+            foreach (string retired in new[]
+                     {
+                         "WorkspaceLeftoverBanner", "HasWorkspaceLeftovers", "ClearWorkspaceLeftoversCommand",
+                         "WorkspaceLeftoverGroupHeader", "OpenWorkDirectoryCommand"
+                     })
+            {
+                foreach ((string name, string text) in tabXaml)
+                {
+                    Assert.False(
+                        text.Contains(retired, StringComparison.Ordinal),
+                        $"{name} 里还留着已经退役的工作区残留入口：{retired}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 密码页**不再有「记住密码本」开关**（用户 2026-10-14 最终设计：
+        /// 「删除：记住密码本（这个应该是系统默认操作，这个功能不应该有）」）。
+        ///
+        /// <para>判据：那一格从**所有**页签里消失，而设置项本身照旧在（默认 <c>true</c> = 一直记住），
+        /// ⛔ 不是把功能删掉、是把它固定成系统默认。</para>
+        /// </summary>
+        [Fact]
+        public void 密码页不再有记住开关_那一格按设计改成系统默认()
+        {
+            Assert.True(new AppSettings().RememberPasswordList, "设置项的默认值就该是「记住」");
+
+            foreach (string name in new[] { "TaskTab", "ExtractionTab", "CleanupTab", "PasswordTab", "PackingTab", "ReminderTab", "EngineTab", "SettingsTab", "HelpTab" })
+            {
+                string text = Read("Views", "Tabs", name + ".xaml");
+
+                Assert.DoesNotContain("IsRememberingPasswordList", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("SettingsRememberPasswordListLabel", text, StringComparison.Ordinal);
+            }
         }
 
         [Fact]

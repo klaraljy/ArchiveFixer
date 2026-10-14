@@ -42,34 +42,40 @@ namespace ArchiveFixer.Tests
             Assert.Equal("SingleChain", chosen.RecursionMode);
         }
 
+        /// <summary>
+        /// ② 页**不再有「嵌套压缩包」三档那一栏**（用户 2026-10-14 最终设计：
+        /// 「嵌套与覆盖：三档功能全部删除，只默认解开所有分支」）。
+        ///
+        /// <para>⚠ 这一条取代 2026-10-04 的「初值来自设置 + 三档旁边写了详细说明」：那一栏连同它的
+        /// 说明折叠区**整格删掉**（功能没删 —— 档位固定成出厂默认那一档，见上面那条默认值用例）。
+        /// ⛔ 反向断言：以后谁再把三档挂回②页，这里立刻红。</para>
+        /// </summary>
         [Fact]
-        public void 二页初值来自设置_而且三档旁边真的写了详细说明()
+        public void 二页不再有三档那一栏_档位固定成出厂默认()
         {
             string xaml = ReadRepositoryFile(ExtractionTabXaml);
 
-            // ① 那个下拉框绑的就是设置本身（初值 = 设置里的值，XAML 里不许另写死一个默认项）。
-            Assert.Contains(
-                "SelectedValue=\"{Binding SettingsEditor.Settings.RecursionMode, Mode=TwoWay}\"",
-                xaml,
-                StringComparison.Ordinal);
+            // ① 那一栏的下拉框与三档选项一个字都不许留。
+            Assert.DoesNotContain("SettingsEditor.Settings.RecursionMode", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("Tag=\"SingleLayer\"", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("Tag=\"SingleChain\"", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("Tag=\"AllBranches\"", xaml, StringComparison.Ordinal);
 
-            Assert.DoesNotContain("SelectedIndex=", xaml, StringComparison.Ordinal);
+            // ② 它的说明折叠区也一起没了（三段说明的正文仍在 StatusText 里，给"说明"页与日志用）。
+            Assert.DoesNotContain("StatusText.RecursionModeHintLabel", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("StatusText.RecursionModeAllBranchesHint", xaml, StringComparison.Ordinal);
 
-            // ② 三档一个都不少（出厂默认那一档要在选项文字里说清自己是默认）。
-            Assert.Contains("Tag=\"SingleLayer\"", xaml, StringComparison.Ordinal);
-            Assert.Contains("Tag=\"SingleChain\"", xaml, StringComparison.Ordinal);
-            Assert.Contains("Tag=\"AllBranches\"", xaml, StringComparison.Ordinal);
-            Assert.Contains("出厂默认", xaml, StringComparison.Ordinal);
+            // ③ 最大嵌套层数那一格照旧留在②页（设计：「最大嵌套层数留着」）。
+            Assert.Contains("SettingsEditor.Settings.MaxRecursionDepth", xaml, StringComparison.Ordinal);
+        }
 
-            // ③ 「在选择旁边详细说明情况」：三档的说明都真的渲染出来（文案出自 StatusText，⛔ 不手写中文）。
-            //    ⚠ 2026-10-04 当天用户又提「这个嵌套与覆盖你的文字这么多」⇒ 这三段现在装在一个
-            //    **默认收起**的折叠区里（挂在②页上这件事没变；"默认收起 / 页面上只剩一行标题"由
-            //    `NestedGroupCollapseTests` 钉住）。
-            Assert.Contains("StatusText.RecursionModeHintLabel", xaml, StringComparison.Ordinal);
-            Assert.Contains("StatusText.RecursionModeAllBranchesHint", xaml, StringComparison.Ordinal);
-            Assert.Contains("StatusText.RecursionModeSingleChainHint", xaml, StringComparison.Ordinal);
-            Assert.Contains("StatusText.RecursionModeSingleLayerHint", xaml, StringComparison.Ordinal);
-
+        /// <summary>
+        /// 三档的说明**正文一个字没丢**（只是不再挂在②页上）：它们仍是「说明」页 / 日志要用的文案，
+        /// 所以 2026-10-04 那条「每条都说清 怎么走 / 什么时候会停 / 空间与时间代价」的判据照旧成立。
+        /// </summary>
+        [Fact]
+        public void 三档的说明正文一个字没丢_仍然说清怎么走与代价()
+        {
             /*
              * ④ 每一条说明都要说清三件事（它怎么走 / 什么时候会停 / 空间与时间代价）——
              * 这是用户点名的那句"详细说明情况"的可判定形式，⛔ 不是"写了就算"。

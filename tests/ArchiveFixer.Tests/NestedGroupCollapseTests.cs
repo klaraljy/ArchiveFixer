@@ -16,32 +16,27 @@ namespace ArchiveFixer.Tests
     /// （长的那份不再摊在页面上、也不再整段挂在 ToolTip 上）；④ ⛔ **一个字都没删**：
     /// 三档说明与那三段长说明的正文仍逐字在 <see cref="StatusText"/> 里，折叠区引用的就是它们。</para>
     ///
-    /// <para><b>红检</b>：把三档说明从 <c>Expander</c> 里挪回页面（或给折叠区加
-    /// <c>IsExpanded="True"</c>）⇒ <see cref="三档说明收在默认收起的折叠区里_页面上只剩一行标题"/> 当场红。</para>
+    /// <para><b>红检</b>：把三档说明重新挂回②页（或给折叠区加 <c>IsExpanded="True"</c>）⇒ 当场红。</para>
+    ///
+    /// <para>⚠ <b>2026-10-14（用户最终设计）</b>：「嵌套与覆盖：三档功能全部删除，只默认解开所有分支」
+    /// ⇒ 第一条钉的东西从"三档说明在折叠区里"改成"**三档那一栏连同它的折叠区整格都不在②页上**"；
+    /// 第二条（覆盖策略 / 中间层 / 分卷拼装那三段长说明）与第三条（正文一个字没丢）照旧。</para>
     /// </summary>
     public class NestedGroupCollapseTests
     {
         private const string ExtractionTabXaml = @"src\ArchiveFixer\Views\Tabs\ExtractionTab.xaml";
 
         [Fact]
-        public void 三档说明收在默认收起的折叠区里_页面上只剩一行标题()
+        public void 三档那一栏连同它的折叠区都不在二页上了()
         {
             string xaml = ReadRepositoryFile(ExtractionTabXaml);
 
-            // ① 第一段折叠区：标题就是那句「详细说明：这三档各自怎么走」。
-            int expanderStart = xaml.IndexOf(
+            // ① 三档说明那个折叠区一个字节都不许留（连标题引用也不许）。
+            Assert.DoesNotContain(
                 "Header=\"{x:Static models:StatusText.RecursionModeHintLabel}\"",
+                xaml,
                 StringComparison.Ordinal);
 
-            Assert.True(expanderStart > 0, "三档说明那个折叠区不见了（标题应当引用 StatusText.RecursionModeHintLabel）");
-
-            int expanderEnd = xaml.IndexOf("</Expander>", expanderStart, StringComparison.Ordinal);
-            Assert.True(expanderEnd > expanderStart, "折叠区没有闭合");
-
-            string inside = xaml.Substring(expanderStart, expanderEnd - expanderStart);
-            string before = xaml.Substring(0, expanderStart);
-
-            // ② 三段说明**都在折叠区里面**（不是摊在页面上）。
             foreach (string constant in new[]
                      {
                          "StatusText.RecursionModeAllBranchesHint",
@@ -49,11 +44,13 @@ namespace ArchiveFixer.Tests
                          "StatusText.RecursionModeSingleLayerHint"
                      })
             {
-                Assert.Contains(constant, inside, StringComparison.Ordinal);
-                Assert.DoesNotContain(constant, before, StringComparison.Ordinal);
+                Assert.DoesNotContain(constant, xaml, StringComparison.Ordinal);
             }
 
-            // ③ 默认收起：本页不许有"一打开就展开"的折叠区（用户点名嫌的就是摊开的文字）。
+            // ② 那个"选哪一档"的下拉框也一起没了（功能固定成出厂默认那一档）。
+            Assert.DoesNotContain("Tag=\"SingleLayer\"", xaml, StringComparison.Ordinal);
+
+            // ③ 默认收起这件事照旧：本页不许有"一打开就展开"的折叠区（用户点名嫌的就是摊开的文字）。
             Assert.DoesNotContain("IsExpanded", xaml, StringComparison.Ordinal);
         }
 

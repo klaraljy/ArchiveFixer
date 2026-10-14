@@ -410,7 +410,7 @@ namespace ArchiveFixer.Tests
             Harness harness = CreateHarness(ChainPassword + "\n");
 
             /*
-             * 上限**跟着设置走**（②页「最大嵌套层数」，默认 5，天花板 10）：
+             * 上限**跟着设置走**（②页「最大嵌套层数」，默认 7，天花板 10）：
              * 取生效值而不是那个常量，否则"界面说 5、程序跑 10"这种不同步在测试里也看不出来。
              */
             int roundLimit = harness.OneClick.RoundLimit;
@@ -2320,7 +2320,7 @@ namespace ArchiveFixer.Tests
         ///
         /// <para>层数由调用方给，而且**必须跟着生效的
         /// <see cref="OneClickCoordinator.RoundLimit"/> 走**：上限从 10 收敛成"设置里的最大嵌套层数
-        /// （默认 5）"之后，写死"四层链"的那种样本会**跑到底**、根本碰不到上限，
+        /// （默认 7）"之后，写死"四层链"的那种样本会**跑到底**、根本碰不到上限，
         /// 测试就从"验证上限"悄悄变成"验证能跑完"（假绿）。</para>
         /// </summary>
         private string BuildChain(int levelCount)

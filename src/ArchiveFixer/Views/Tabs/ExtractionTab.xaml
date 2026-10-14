@@ -139,48 +139,6 @@
             <!-- ==================== 嵌套与覆盖 ==================== -->
             <GroupBox Header="嵌套与覆盖">
                 <StackPanel>
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="嵌套压缩包："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <ComboBox Grid.Column="1"
-                                  SelectedValue="{Binding SettingsEditor.Settings.RecursionMode, Mode=TwoWay}"
-                                  SelectedValuePath="Tag">
-                            <ComboBoxItem Content="只解当前这一层" Tag="SingleLayer" />
-                            <ComboBoxItem Content="单链自动展开（只有一个内层包时才继续）" Tag="SingleChain" />
-                            <ComboBoxItem Content="展开所有分支（出厂默认：有压缩包就解压）" Tag="AllBranches" />
-                        </ComboBox>
-                    </Grid>
-
-                    <!--
-                        用户 2026-10-04（当天第三次改口径）：「这个嵌套与覆盖你的文字这么多，你就不会放到说明里面
-                        或者是在旁边弄一个小弹窗点击一下就会出来详细解释」⇒ 他当场选「就地折叠」
-                        （①页「手动操作」已经是这个手法，不新开窗口）。
-                        ⛔ 三档的说明**一个字没改**，改的只是默认收起来、点一下才展开。
-                    -->
-                    <Expander Margin="110,0,0,8"
-                              Header="{x:Static models:StatusText.RecursionModeHintLabel}">
-                        <StackPanel Margin="0,6,0,0">
-                            <TextBlock Style="{StaticResource HintTextStyle}"
-                                       TextWrapping="Wrap"
-                                       Text="{x:Static models:StatusText.RecursionModeAllBranchesHint}" />
-
-                            <TextBlock Style="{StaticResource HintTextStyle}"
-                                       Margin="0,4,0,0"
-                                       TextWrapping="Wrap"
-                                       Text="{x:Static models:StatusText.RecursionModeSingleChainHint}" />
-
-                            <TextBlock Style="{StaticResource HintTextStyle}"
-                                       Margin="0,4,0,0"
-                                       TextWrapping="Wrap"
-                                       Text="{x:Static models:StatusText.RecursionModeSingleLayerHint}" />
-                        </StackPanel>
-                    </Expander>
 
                     <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
@@ -194,13 +152,13 @@
 
                         <TextBox Grid.Column="1"
                                  Text="{Binding SettingsEditor.Settings.MaxRecursionDepth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="1~10，默认 5。到达上限会安全停下并报告停在哪一层，不会无限展开。一键处理的续解轮数也按这一格走。" />
+                                 ToolTip="1~10，默认 7。到达上限会安全停下并报告停在哪一层，不会无限展开。一键处理的续解轮数也按这一格走。" />
 
                         <TextBlock Grid.Column="2"
                                    Style="{StaticResource HintTextStyle}"
                                    Margin="8,0,0,0"
                                    VerticalAlignment="Center"
-                                   Text="1~10，默认 5。到上限会停下并报告；一键处理的续解轮数按这一格走。" />
+                                   Text="1~10，默认 7。到上限会停下并报告；一键处理的续解轮数按这一格走。" />
                     </Grid>
 
                     <!--
@@ -413,7 +371,7 @@
             </GroupBox>
 
             <!-- ==================== 并发与空间 ==================== -->
-            <GroupBox Header="并发与空间（从主界面搬来）">
+            <GroupBox Header="并发与空间">
                 <StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -495,193 +453,6 @@
                 </StackPanel>
             </GroupBox>
 
-            <!--
-                ==================== 引擎（用哪个程序解压） ====================
-                AGENTS.md §3.1 要求"界面显示当前是否在用"，所以每行都带：
-                检测状态 + 路径 + 版本 + 它当前负责哪些格式。
-            -->
-            <GroupBox Header="引擎（用哪个程序解压）">
-                <StackPanel>
-                    <ItemsControl ItemsSource="{Binding SettingsEditor.Engines}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Style="{StaticResource OptionRowStyle}"
-                                        Background="{StaticResource PanelSunkenBrush}"
-                                        BorderBrush="{StaticResource PanelBorderBrush}"
-                                        Margin="0,0,0,6"
-                                        Padding="8,6">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-
-                                        <StackPanel Grid.Column="0">
-                                            <TextBlock Text="{Binding HeaderText}"
-                                                       Style="{StaticResource BodyTextStyle}" />
-
-                                            <TextBlock Style="{StaticResource HintTextStyle}"
-                                                       Margin="0,2,0,0"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       ToolTip="{Binding Path}"
-                                                       Text="{Binding Path, StringFormat=路径：{0}}" />
-
-                                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                                                <TextBlock Style="{StaticResource HintTextStyle}"
-                                                           Text="{Binding SourceText, StringFormat=来源：{0}}" />
-
-                                                <TextBlock Margin="10,0,0,0"
-                                                           Text="{Binding UsageText}">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource HintTextStyle}">
-                                                            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsInUse}" Value="True">
-                                                                    <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                            </StackPanel>
-                                        </StackPanel>
-
-                                        <TextBlock Grid.Column="1"
-                                                   VerticalAlignment="Center"
-                                                   Margin="10,0"
-                                                   FontWeight="SemiBold"
-                                                   Text="{Binding StatusText}">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock" BasedOn="{StaticResource BodyTextStyle}">
-                                                    <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsAvailable}" Value="True">
-                                                            <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-
-                                        <Button Grid.Column="2"
-                                                Content="上移"
-                                                MinWidth="56"
-                                                Margin="0,0,6,0"
-                                                Style="{StaticResource ToolbarButtonStyle}"
-                                                VerticalAlignment="Center"
-                                                IsEnabled="{Binding CanMoveUp}"
-                                                ToolTip="把它的优先级提前一位（排在前面的优先被选上）"
-                                                Command="{Binding DataContext.SettingsEditor.MoveEngineUpCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}" />
-
-                                        <Button Grid.Column="3"
-                                                Content="下移"
-                                                MinWidth="56"
-                                                Style="{StaticResource ToolbarButtonStyle}"
-                                                VerticalAlignment="Center"
-                                                IsEnabled="{Binding CanMoveDown}"
-                                                ToolTip="把它的优先级推后一位"
-                                                Command="{Binding DataContext.SettingsEditor.MoveEngineDownCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}" />
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <Border Style="{StaticResource InfoBannerStyle}" Margin="0,4,0,10">
-                        <TextBlock Style="{StaticResource BannerTextStyle}"
-                                   Foreground="{StaticResource InfoTextBrush}"
-                                   TextWrapping="Wrap"
-                                   Text="{Binding SettingsEditor.EngineSelectionSummary}" />
-                    </Border>
-
-                    <Grid Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="UnRAR.exe 路径："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding SettingsEditor.CustomUnRarExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="留空表示自动：先找本机已装 WinRAR 目录里的 UnRAR.exe，再退回程序内置的 tools\unrar\UnRAR.exe。" />
-                    </Grid>
-
-                    <Grid Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="Rar.exe 路径："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding SettingsEditor.CustomRarExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="{Binding SettingsEditor.RarExePathHint}" />
-
-                        <Button Grid.Column="2"
-                                Content="浏览…"
-                                MinWidth="72"
-                                Margin="8,0,0,0"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                Command="{Binding SettingsEditor.SelectRarExeCommand}"
-                                ToolTip="选你自己安装 / 下载的 WinRAR 里的 Rar.exe（程序不会复制、也不会随包分发它）" />
-                    </Grid>
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="150,0,0,4"
-                               TextWrapping="Wrap"
-                               Text="{Binding SettingsEditor.RarExePathHint}" />
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="150,0,0,10"
-                               TextWrapping="Wrap"
-                               Text="{Binding SettingsEditor.RarToolStatusText}" />
-
-                    <!-- 推荐另外装一个 WinRAR（可选）：只指路，⛔ 不下载、不代装、不捆绑（EULA §3b/§3c） -->
-                    <TextBlock Style="{StaticResource LabelTextStyle}"
-                               Margin="0,4,0,2"
-                               Text="{Binding SettingsEditor.WinRarRecommendLabel}" />
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="150,0,0,4"
-                               TextWrapping="Wrap"
-                               Text="{Binding SettingsEditor.WinRarRecommendHint}" />
-
-                    <Button Content="{Binding SettingsEditor.WinRarDownloadButtonText}"
-                            HorizontalAlignment="Left"
-                            Margin="150,0,0,10"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            Command="{Binding SettingsEditor.OpenWinRarDownloadPageCommand}"
-                            ToolTip="{Binding SettingsEditor.WinRarRecommendHint}" />
-
-                    <Grid Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="7z.exe 路径："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding SettingsEditor.Settings.CustomSevenZipExePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="留空表示使用程序目录下的 tools\7zip\7z.exe" />
-                    </Grid>
-
-                    <CheckBox Content="保留受损的文件（校验和不符的半成品留在磁盘上）"
-                              Margin="0,6,0,0"
-                              IsChecked="{Binding SettingsEditor.KeepBrokenFiles, Mode=TwoWay}"
-                              ToolTip="只让 RAR 引擎（UnRAR）别把校验失败的半成品删掉（-kb）。7-Zip 没有这个开关。任务状态仍然是「失败 / 部分完成」。" />
-                </StackPanel>
-            </GroupBox>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

@@ -1134,7 +1134,7 @@ namespace ArchiveFixer.Models
                 /*
                  * 默认层数 = **7**（用户 2026-10-14 拍板：层数/轮数**保持一个设置**、默认从 5 调到 7，
                  * 不再有"单层路 / 单链档"，一律展开到底）。
-                 * ⚠ 上限没动：`Normalize` 里仍然是 1..10，`OneClickCoordinator.MaxRoundsCeiling` = 8 ⇒ 7 在闸内。
+                 * ⚠ 上限没动：`Normalize` 里仍然是 1..10，`OneClickCoordinator.MaxRoundsCeiling` = 10（不变量 8）⇒ 7 在闸内。
                  * ⛔ 只改**出厂默认**：用户自己存过的档一个字都不动。
                  */
                 MaxRecursionDepth = 7,

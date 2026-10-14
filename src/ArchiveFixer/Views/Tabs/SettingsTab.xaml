@@ -17,42 +17,6 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
         <StackPanel>
 
-            <!-- ==================== 工作区 ==================== -->
-            <GroupBox Header="工作区目录">
-                <StackPanel>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="位置："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <TextBlock Grid.Column="1"
-                                   Style="{StaticResource HintTextStyle}"
-                                   TextWrapping="Wrap"
-                                   VerticalAlignment="Center"
-                                   Text="只由目标目录决定，没有设置项可以改"
-                                   ToolTip="{x:Static models:StatusText.SettingsWorkDirectoryButtonHint}" />
-
-                        <Button Grid.Column="2"
-                                Content="打开工作区目录"
-                                MinWidth="120"
-                                Margin="8,0,0,0"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                Command="{Binding OpenWorkDirectoryCommand}"
-                                ToolTip="{x:Static models:StatusText.SettingsWorkDirectoryButtonHint}" />
-                    </Grid>
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="110,6,0,0"
-                               TextWrapping="Wrap"
-                               Text="{x:Static models:StatusText.SettingsWorkDirectoryButtonHint}" />
-                </StackPanel>
-            </GroupBox>
-
             <!-- ==================== 日志 ==================== -->
             <GroupBox Header="日志">
                 <StackPanel>
