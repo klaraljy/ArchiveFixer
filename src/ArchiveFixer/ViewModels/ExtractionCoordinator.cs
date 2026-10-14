@@ -11395,6 +11395,166 @@ namespace ArchiveFixer.ViewModels
 
             return false;
         }
+
+        /// <summary>
+        /// **给缺的这个槽位起一个名字**（唯一出口；字节路与打分分配路都走这里）。
+        ///
+        /// <para>① 先照"**已经在层里的那一片**"的写法（同族同宽、前后缀逐字保留，
+        /// <see cref="TryNameSlotLikeExistingPiece"/>），拼完**自验** —— 名字读出来的卷号必须正好是这个槽位；
+        /// ② 过不了才回落既有命名出口 <see cref="VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex"/>
+        /// （同样自验）；③ 两条都不成 ⇒ 空串，调用方**一份都不补**。</para>
+        ///
+        /// <para>⚠ 2026-10-14 实测 `28282828`（磁盘逐字）：字节路原来只走 ②，而 `X.7z.001` 这一族的
+        /// 规范名出口**给不出 `.7z` 那一段** ⇒ 建出来的链接叫 `111-L2.002`，可层里那一片叫
+        /// `111-L2.7z.001` ⇒ 引擎按 `111-L2.7z.002` 找 **找不到** ⇒ 组照样凑不齐（这就是"改对了槽位、
+        /// 起错了名字"）。⛔ 与打分路同一条判据，⛔ 不新写第二套命名规则。</para>
+        /// </summary>
+        private static string ResolveMissingSlotName(
+            IReadOnlyDictionary<int, string> present,
+            string entryName,
+            int slot)
+        {
+            string? existingPiece = present.Values
+                .FirstOrDefault(path => VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null);
+
+            if (!string.IsNullOrEmpty(existingPiece)
+                && TryNameSlotLikeExistingPiece(existingPiece!, slot, out string likeExisting)
+                && VolumeGroupDetector.TryGetVolumeIndex(likeExisting) == slot)
+            {
+                return likeExisting;
+            }
+
+            if (VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out string canonical)
+                && VolumeGroupDetector.TryGetVolumeIndex(canonical) == slot)
+            {
+                return canonical;
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// **候选池要扫的那几棵树**（唯一出口；两条路 —— 字节路与打分分配路 —— 都从这里取）。
+        ///
+        /// <para>⚠ 2026-10-14 实测 `28282828`（断点读运行期事实，⛔ 不是读代码推）：真第 3 片
+        /// `111-L2.7z.00_!63` 躺在**它自己那一单的源目录**里（`…\28282828\111(3)\111(3)\`），
+        /// 而原来这一档只扫"落点 / 内容目录 / 其余物目录" ⇒ `roots` 七条里**没有 `111(3)\111(3)`**
+        /// （逐字：`…\111-W0-0`、`…\recipe`、`…\111(2)\111-W1-0`、`…\111(2)\111-W1-0\其余物`），
+        /// 于是 `candidates.Count == 0` 而缺口是 `[2,3]` ⇒ 数目不等 ⇒ 判不出 ⇒ 这一组永远缺 2、3。</para>
+        ///
+        /// <para>⇒ 补上"每一单自己所在的那一层"。它落在**用户源树**里，所以从这一棵树选出来的候选
+        /// 额外要求"基名与这一组有关系"（<see cref="BaseNameRelatedToGroup"/>）—— 用户原话
+        /// 「两个看不懂就看**大小**、看**后缀有没有相似的地方**」。其余几棵树照旧（判据一个字不放宽）。</para>
+        /// </summary>
+        private List<(string Directory, ArchiveTask? Owner, bool RequiresBaseNameRelation)> CollectCandidateRoots(
+            IEnumerable<ArchiveTask?> tasks,
+            string entryLayer)
+        {
+            var roots = new List<(string, ArchiveTask?, bool)>();
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void Add(string? directory, ArchiveTask? owner, bool requiresRelation)
+            {
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory!))
+                {
+                    return;
+                }
+
+                string full = SafePathHelper.GetFullPathSafe(directory!);
+
+                if (known.Add(full))
+                {
+                    roots.Add((full, owner, requiresRelation));
+                }
+            }
+
+            Add(entryLayer, null, false);
+
+            foreach (ArchiveTask? other in tasks)
+            {
+                if (other == null)
+                {
+                    continue;
+                }
+
+                Add(other.OutputPath, other, false);
+                Add(other.ContentDirectoryPath, other, false);
+                Add(other.RestDirectoryPath, other, false);
+
+                string? ownDirectory = null;
+
+                try
+                {
+                    ownDirectory = string.IsNullOrWhiteSpace(other.CurrentPath)
+                        ? null
+                        : Path.GetDirectoryName(other.CurrentPath);
+                }
+                catch
+                {
+                    ownDirectory = null;
+                }
+
+                Add(ownDirectory, other, true);
+            }
+
+            return roots;
+        }
+
+        /// <summary>
+        /// 这一份的基名与这一组"有关系"吗（用户口径：「看后缀有没有相似的地方」）。
+        ///
+        /// <para>判据只有两条，都读**既有出口** <see cref="FileNameHelper.GetArchiveBaseName"/>：
+        /// ① 逐字相同；② 一方是另一方的前缀（实测 `28282828`：这一片的基名读出来是 `111-L2.7z`，
+        /// 而这一组的基名是 `111-L2` ⇒ 卷标记 `00_!63` 被垃圾污染 ⇒ 只有前缀关系还活着）。</para>
+        /// ⛔ 它是**弱证据**，只用来决定"要不要把它放进候选池"；占哪个槽位仍由打分分配说了算。
+        /// </summary>
+        private static bool BaseNameRelatedToGroup(string candidateFileName, string groupBaseName)
+        {
+            if (string.IsNullOrWhiteSpace(candidateFileName) || string.IsNullOrWhiteSpace(groupBaseName))
+            {
+                return false;
+            }
+
+            string candidateBase = FileNameHelper.GetArchiveBaseName(candidateFileName);
+
+            if (candidateBase.Length == 0)
+            {
+                return false;
+            }
+
+            return candidateBase.StartsWith(groupBaseName, StringComparison.OrdinalIgnoreCase)
+                || groupBaseName.StartsWith(candidateBase, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 自述片数是**硬上限**：名字读出 `index &gt; DeclaredVolumeCount` 的片，它的卷号**不可信** ⇒
+        /// 从 `present` 里摘掉，并把路径交回给调用方当候选（它其实就是缺口里的那一片）。
+        ///
+        /// <para>⚠ 2026-10-14 实测 `28282828`（断点逐字）：真第 2 片原该叫 `111-L2.7z.002`，
+        /// 套在壳里时成员名被写成 `111-L2.7z.004pv2` ⇒ 名字尺子读成 **4**
+        /// （`Tolerant(末段「004pv2」) = True（→004，垃圾「pv2」）`）⇒ `present` 里凭空多出槽位 4、
+        /// 缺口算成 `[2,3]`；而 7z 起始头**自述只有 3 片**（`entryCard.DeclaredVolumeCount == 3`）
+        /// ⇒ 槽位 4 从内容上讲**不可能存在** ⇒ 那个名字在撒谎。
+        /// ⛔ 摘掉的是**名字的解释**，盘上一个字节都不动（文件照旧在那一层、照旧进候选池）。</para>
+        /// </summary>
+        private static List<string> DetachImpossibleSlots(SortedDictionary<int, string> present, int declaredCount)
+        {
+            var detached = new List<string>();
+
+            if (declaredCount <= 0 || present.Count == 0)
+            {
+                return detached;
+            }
+
+            foreach (int index in present.Keys.Where(key => key > declaredCount).ToList())
+            {
+                detached.Add(present[index]);
+                present.Remove(index);
+            }
+
+            return detached;
+        }
+
         /// <summary>
         /// **打分分配那一档**（用户 2026-10-14 口径 ①③；唯一执行体）：7z 自述字节数给不出证据时，
         /// 由"缺哪几个槽位"与"名字读不出卷号的候选"按三条既有证据投票分配，先试最高分那一版，
@@ -11427,6 +11587,21 @@ namespace ArchiveFixer.ViewModels
             }
 
             string attemptKey = groupBaseName + "|" + SafePathHelper.GetFullPathSafe(entryLayer);
+
+            /*
+             * ⚠ 2026-10-14（实测 `28282828`，断点逐字）：**自述片数是硬上限** —— 名字读出"越界卷号"的那一片
+             * 要从 present 摘掉：它其实就是缺口里的那一片，只是成员名被写坏了
+             * （真第 2 片 `111-L2.7z.002` 套壳时被写成 `111-L2.7z.004pv2` ⇒ 名字尺子读成 4 号，
+             * 而 7z 起始头自述只有 3 片）。摘掉之后它照常被候选池扫到、由打分分配挑槽位。
+             * ⛔ 盘上一个字节都不动（摘掉的是"名字的解释"，不是文件）。
+             */
+            DetachImpossibleSlots(present, entryCard.DeclaredVolumeCount);
+
+            if (present.Count == 0)
+            {
+                return;
+            }
+
             int maxIndex = present.Keys.Max();
 
             // 候选池：各单那几棵树 + 这一层（⛔ 不扫全盘、⛔ 不碰用户源目录）
@@ -11456,26 +11631,18 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            var roots = new List<string> { SafePathHelper.GetFullPathSafe(entryLayer) };
-
-            foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
+            /*
+             * ⚠ 2026-10-14（实测 `28282828`，断点逐字）：候选池那几棵树改由唯一出口
+             * <see cref="CollectCandidateRoots"/> 给 —— 它比老写法多收"**每一单自己所在的那一层**"
+             * （真片常常就躺在它旁边：那一份的真第 3 片在 `…\111(3)\111(3)\`，
+             * 而老写法的 `roots` 七条里一条都没覆盖到它 ⇒ `candidates.Count == 0` ⇒ 判不出 ⇒ 组永远缺 2、3）。
+             * 从**用户源树**里选出来的候选额外要求"基名与这一组有关系"（那道弱证据闸）。
+             */
+            foreach ((string root, ArchiveTask? rootOwner, bool requiresBaseNameRelation)
+                     in CollectCandidateRoots(SnapshotTaskTable(Tasks), entryLayer))
             {
-                if (other == null)
-                {
-                    continue;
-                }
+                _ = rootOwner;
 
-                foreach (string? directory in new[] { other.OutputPath, other.ContentDirectoryPath, other.RestDirectoryPath })
-                {
-                    if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
-                    {
-                        roots.Add(SafePathHelper.GetFullPathSafe(directory!));
-                    }
-                }
-            }
-
-            foreach (string root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
-            {
                 string[] found;
 
                 try
@@ -11554,7 +11721,26 @@ namespace ArchiveFixer.ViewModels
                      */
                     int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path));
 
-                    if (nameIndex is int claimed
+                    /*
+                     * ⚠ 2026-10-14（实测 `28282828`，断点逐字）：**名字读出越界卷号 ⇒ 名字在撒谎**。
+                     * 真第 2 片的成员名被写成 `111-L2.7z.004pv2` ⇒ 读成 4 号，而 7z 起始头自述只有 3 片
+                     * （`entryCard.DeclaredVolumeCount == 3`）⇒ 它其实就是缺口里的那一片 ⇒ 必须进候选池。
+                     */
+                    bool impossibleSlot = nameIndex is int claimedIndex
+                        && entryCard.DeclaredVolumeCount > 0
+                        && claimedIndex > entryCard.DeclaredVolumeCount;
+
+                    if (requiresBaseNameRelation
+                        && !BaseNameRelatedToGroup(FileNameHelper.GetFileName(path), groupBaseName))
+                    {
+                        continue;   // 用户源树里选出来的候选：基名得跟这一组有关系（弱证据那道闸）
+                    }
+
+                    if (impossibleSlot)
+                    {
+                        // 越界号 ⇒ 名字不可信 ⇒ 收（占哪个槽位由打分分配说了算）
+                    }
+                    else if (nameIndex is int claimed
                         && present.TryGetValue(claimed, out string? occupant)
                         && !SafePathHelper.PathEquals(occupant, path))
                     {
@@ -11684,34 +11870,15 @@ namespace ArchiveFixer.ViewModels
             foreach ((VolumeSlotScoring.Candidate candidate, int slot) in picked.Pairs)
             {
                 /*
-                 * 槽位名：**优先照"已经在层里的那一片"的写法**（同族同宽，前后缀逐字保留），
-                 * 回落既有的命名出口。⛔ 两条都不成 ⇒ 这一趟整体回滚、一份都不补。
+                 * 槽位名：走**唯一出口** <see cref="ResolveMissingSlotName"/> —— 它自己会
+                 * ①照"已经在层里的那一片"的写法（样板优先取名字读得出卷号的那一片）、②拼完自验、
+                 * ③回落既有命名出口、④两条都不成 ⇒ 空串（这一趟整体回滚、一份都不补）。
+                 * ⚠ 实测 `24242424`（垃圾名 `111-L2.part000000002.rar`）与 `28282828`（丢族段 `111-L2.002`）
+                 * 两条教训都已经收进那一个出口里。
                  */
-                /*
-                 * 样板优先取**名字读得出卷号**的那一片（拼出来的名字才像话）；都没有才退回任意一片。
-                 * ⚠ 实测 `24242424`：拿被伪装过的 `111-L2.part3.s~2rar` 当样板，正则抓到的是
-                 * "s~2rar" 里那串数字 ⇒ 拼出 `111-L2.part000000002.rar` 这种**垃圾名**（还真落到了盘上）。
-                 * ⇒ ①先挑样板、②拼完**自验**（`TryGetVolumeIndex(拼出来的名字) == slot`）；
-                 * 两道都过不了就回落既有命名出口；仍然过不了 ⇒ 整趟回滚、一份都不补。
-                 */
-                string existingPiece = present.Values
-                    .FirstOrDefault(path => VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null)
-                    ?? present.Values.First();
+                string slotName = ResolveMissingSlotName(present, entryName, slot);
 
-                string slotName = string.Empty;
-                bool named = TryNameSlotLikeExistingPiece(existingPiece, slot, out string candidateName)
-                    && VolumeGroupDetector.TryGetVolumeIndex(candidateName) == slot
-                    && (slotName = candidateName).Length > 0;
-
-                if (!named
-                    && VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out string canonicalName)
-                    && VolumeGroupDetector.TryGetVolumeIndex(canonicalName) == slot)
-                {
-                    slotName = canonicalName;
-                    named = true;
-                }
-
-                if (!named || slotName.Length == 0)
+                if (slotName.Length == 0)
                 {
                     Rollback(created);
                     return;
@@ -11839,6 +12006,12 @@ namespace ArchiveFixer.ViewModels
             long expected = entryCard.DeclaredTotalBytes;
             int declaredCount = entryCard.DeclaredVolumeCount;
 
+            /*
+             * ⚠ 2026-10-14（实测 `28282828`）："越界卷号"的片（成员名被写坏 ⇒ 读成 4 号，而自述只有 3 片）
+             * 从 present 摘掉后再算差额 —— 它其实就是缺口里的那一片，会由下面的候选池收进来。⛔ 盘上不动。
+             */
+            DetachImpossibleSlots(present, declaredCount);
+
             long actual = 0;
 
             foreach (string path in present.Values)
@@ -11861,76 +12034,66 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 候选池 = 各单的几棵树 + 这一层（与收片那一档同一个来源纪律：⛔ 不扫全盘、⛔ 不碰用户源目录）。
+             * 候选池 = 各单的几棵树 + 这一层（来源纪律唯一出口 <see cref="CollectCandidateRoots"/>：
+             * ⛔ 不扫全盘；⚠ 2026-10-14 起**多收"每一单自己所在的那一层"** —— 实测 `28282828` 的真第 3 片
+             * 就躺在它自己那一单的源目录里，老写法一条扫描根都没覆盖到它 ⇒ 候选 0 个 ⇒ 组永远缺 2、3）。
              * 只留"体积能派上用场"的那些：未知格式 / 7z 片段（中间片按定义读不出格式）。
              */
-            string entryLayerFull = SafePathHelper.GetFullPathSafe(entryLayer);
             var candidates = new List<(ArchiveTask Owner, string Path)>();
-            var scannedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entryLayerFull };
+            string scanGroupBaseName = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(firstVolume));
 
-            foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
+            foreach ((string scanRoot, ArchiveTask? scanOwner, bool scanRequiresBaseNameRelation)
+                     in CollectCandidateRoots(SnapshotTaskTable(Tasks), entryLayer))
             {
-                if (other == null)
+                string[] found;
+
+                try
+                {
+                    found = Directory.GetFiles(scanRoot, "*", SearchOption.AllDirectories);
+                }
+                catch
                 {
                     continue;
                 }
 
-                foreach (string? directory in new[] { other.OutputPath, other.ContentDirectoryPath, other.RestDirectoryPath })
+                foreach (string path in found)
                 {
-                    if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
-                    {
-                        continue;
-                    }
-
-                    if (!scannedRoots.Add(SafePathHelper.GetFullPathSafe(directory!)))
-                    {
-                        continue;
-                    }
-
-                    string[] found;
+                    long size;
 
                     try
                     {
-                        found = Directory.GetFiles(directory!, "*", SearchOption.AllDirectories);
+                        size = new FileInfo(path).Length;
                     }
                     catch
                     {
                         continue;
                     }
 
-                    foreach (string path in found)
+                    if (size <= 0 || size > largest || size > difference)
                     {
-                        long size;
-
-                        try
-                        {
-                            size = new FileInfo(path).Length;
-                        }
-                        catch
-                        {
-                            continue;
-                        }
-
-                        if (size <= 0 || size > largest || size > difference)
-                        {
-                            continue;
-                        }
-
-                        FileNatureCard card = FileNature.Inspect(path);
-
-                        /*
-                         * ⛔ **内容自证是"完整单卷归档"的那一份绝不许当补片用**（它就是一份正常包）；
-                         * 只收"分卷组的一片"与"判不出"这两档（中间片按定义读不出格式）。
-                         */
-                        if (card.BodyKind == ArchiveBodyKind.SingleComplete
-                            || (card.Format != VolumeContentFormat.Unknown
-                                && card.Format != VolumeContentFormat.SevenZip))
-                        {
-                            continue;
-                        }
-
-                        candidates.Add((other, path));
+                        continue;
                     }
+
+                    if (scanRequiresBaseNameRelation
+                        && !BaseNameRelatedToGroup(FileNameHelper.GetFileName(path), scanGroupBaseName))
+                    {
+                        continue;   // 用户源树里选出来的候选：基名得跟这一组有关系（弱证据那道闸）
+                    }
+
+                    FileNatureCard card = FileNature.Inspect(path);
+
+                    /*
+                     * ⛔ **内容自证是"完整单卷归档"的那一份绝不许当补片用**（它就是一份正常包）；
+                     * 只收"分卷组的一片"与"判不出"这两档（中间片按定义读不出格式）。
+                     */
+                    if (card.BodyKind == ArchiveBodyKind.SingleComplete
+                        || (card.Format != VolumeContentFormat.Unknown
+                            && card.Format != VolumeContentFormat.SevenZip))
+                    {
+                        continue;
+                    }
+
+                    candidates.Add((scanOwner ?? task, path));
                 }
             }
 
@@ -12005,9 +12168,15 @@ namespace ArchiveFixer.ViewModels
 
             for (int i = 0; i < chosen.Count; i++)
             {
-                if (!VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slots[i], out string slotName))
+                /*
+                 * ⚠ 2026-10-14（实测 `28282828`）：槽位名走**唯一出口**（照既有片写、拼完自验、回落规范名）
+                 * —— 原来这里只用规范名出口 ⇒ `111-L2.7z.001` 那一族被起成 `111-L2.002` ⇒ 引擎找不到。
+                 */
+                string slotName = ResolveMissingSlotName(present, entryName, slots[i]);
+
+                if (slotName.Length == 0)
                 {
-                    return;   // 推不出规范槽位名 ⇒ 一份都不补（已经建的那几个链接由下面回收）
+                    return;   // 推不出槽位名 ⇒ 一份都不补（已经建的那几个链接由下面回收）
                 }
 
                 string target = Path.Combine(entryLayer, slotName);
@@ -12062,7 +12231,7 @@ namespace ArchiveFixer.ViewModels
                     $"{task.LogName}：按 7z 起始头自述的字节数补齐缺口 —— 自述 {expected} 字节、"
                     + $"手上 {actual} 字节、差 {difference} 字节 ⇒ 用 "
                     + string.Join("、", chosen.Select((item, i) => FileNameHelper.GetFileName(item.Path) + " → " + FileNameHelper.GetFileName(linked[i])))
-                    + " 按规范槽位名补进这一层（零字节硬链接，原件一个字节都不动）。");
+                    + " 照既有片的写法起槽位名补进这一层（零字节硬链接，原件一个字节都不动）。");
             }
         }
 
