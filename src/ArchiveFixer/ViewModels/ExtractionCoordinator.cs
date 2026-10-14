@@ -7430,6 +7430,7 @@ namespace ArchiveFixer.ViewModels
                     // 显示/统计那一格照旧点亮（批中间不许顶着红色「分卷缺失」）—— 与改动前逐字相同。
                     task.IsVolumeDeficitDeferred = true;
 
+
                     /*
                      * ⚠ 2026-10-10 **修**：老写法**只点亮显示位、不进名单** ⇒ 批末那一站
                      * （<see cref="RecheckDeferredVolumeDeficits"/>）读那份名单时是**空的**，
@@ -7449,8 +7450,7 @@ namespace ArchiveFixer.ViewModels
                     if (IsStalledGroupOwnGroup(task, result))
                     {
                         RememberDeferredVolumeDeficit(task);
-                    }
-                    else if (FindStalledVolumePiece(result) is { Length: > 0 } stalledPiece
+                    }                    else if (FindStalledVolumePiece(result) is { Length: > 0 } stalledPiece
                              && !AnyTaskRepresentsGroup(stalledPiece))
                     {
                         /*
@@ -7466,7 +7466,19 @@ namespace ArchiveFixer.ViewModels
                          * 里自报是分卷片的那一个，唯一出口 `VolumeGroupDetector.TryGetVolumeIndex`），
                          * 批末只是拿**它**去问对的那个组；仍然"补齐才跑、仍然缺就如实报缺卷"。</para>
                          */
-                        RememberDeferredVolumeDeficit(task, stalledPiece);
+                        /*
+                         * ⚠ 2026-10-14（插桩实测 `10101010`）：登记时**必须把"参照名"当场定下来** ——
+                         * 这一片随后会随它那条链的工作区被清掉，到批末再读它的卡已经读不出来
+                         * （逐字：批末那一行仍写 `引用名=「pack111-L2.7z.zip」` ⇒ 一个成员都匹配不上
+                         * ⇒ 收拢收不到任何一片）。⇒ 现在（文件还在）就用**卡**算出它的规范名当参照：
+                         * `pack111-L2.7z.txt`（卡说 `VolumeFirstPiece`）⇒ `pack111-L2.7z.001` ✓。
+                         * ⛔ 判不出（卡读不出 / 名字也推不出）⇒ 照旧用原来那个路径（老口径不放宽）。
+                         */
+                        string reference = VolumePieceFacts.ResolveCanonicalName(
+                            stalledPiece,
+                            FileNature.Inspect(stalledPiece));
+
+                        RememberDeferredVolumeDeficit(task, reference.Length > 0 ? reference : stalledPiece);
                     }
                 }
 
@@ -12890,10 +12902,27 @@ namespace ArchiveFixer.ViewModels
             {
                 string name = FileNameHelper.GetFileName(piece ?? string.Empty);
 
-                if (name.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(name) == null)
+                if (name.Length == 0)
                 {
                     continue;
                 }
+
+                /*
+                 * ⚠ 2026-10-14（插桩实测两版，`10101010` 那一组，⛔ 记下来免得再踩）：
+                 *
+                 * <para>第一版**只认名字读得出卷号的片** ⇒ 逐字
+                 * `[排障·名单] pack111-W0-0.7z ⇒ 自己那一组=False 记下的片=(空) 自报片数=1`
+                 * —— 递归明明记住了那一片，这里却取不出来（名字里那一截卷标记被伪装尾巴盖住）。</para>
+                 *
+                 * <para>第二版改成"读卡" ⇒ **还是空**：那一刻那一份**已经不在盘上**（它的链收尾把工作区
+                 * 清掉了）⇒ `FileNature.Inspect` 读不出格式与专属算法。</para>
+                 *
+                 * <para>⇒ 判据回到最硬的那条事实：**能进 <c>UnresolvedVolumePieces</c> 的，本身就是
+                 * 递归判过"这一份是某个还没凑齐的分组的一片"的** —— 那是**我们自己的结论**、唯一出口
+                 * `RecursiveExtractor.IsPieceOfIncompleteGroup`，⛔ 不需要在这里拿名字或卡再推一遍。
+                 * 它只是当**参照名**用（下面那条"不许拿其余物里那一份当参照物"的闸门一个字不放宽）。</para>
+                 */
+                string path = piece!;
 
                 /*
                  * ⛔ **不许拿"其余物"里的那一份当参照物**（2026-10-13 实测，真机形状守门用例
@@ -12905,7 +12934,6 @@ namespace ArchiveFixer.ViewModels
                  * 它只是当**参照名**用的，`GroupVolumeDirectory.Resolve` 自己会跳过"已不在盘上"的成员
                  * （实测：三种位置各记过一次，盘上真正决定落点的是落点树里那几份）。
                  */
-                string path = piece!;
 
                 if (path.Contains(ProcessArtifactLayout.ArtifactDirectoryName, StringComparison.Ordinal))
                 {
@@ -15300,8 +15328,10 @@ namespace ArchiveFixer.ViewModels
         /// ⇒ 两处一起改：守卫不再把在册的延迟任务算成"没轮到"（<see cref="IsDeferredVolumeDeficit"/>），
         /// 而且**用户没按停止**时这一步照跑（<c>internal</c> 就是给那条路用的）。</para>
         /// </summary>
+
         internal IReadOnlyList<ArchiveTask> FinalizeDeferredVolumeDeficits()
         {
+
             /*
              * ⚠ 2026-10-08：**这一站才是"真缺卷"下结论的地方** ⇒ 先把进来时那份名单快照下来，
              * 补判跑完之后把已经离开名单的那些单的"待判"事实位清掉（它们要么被补判判出了真结论、
@@ -23441,6 +23471,15 @@ namespace ArchiveFixer.ViewModels
                             + "按「缺卷」处理（⛔ 不是「密码不对」，也⛔ 不是「解压失败」）；"
                             + "片原样留着，交给批末/跨链那一套去凑。";
 
+                        /*
+                         * ⚠ 2026-10-14（走查 + 日志实测，`10101010` 那一组）：这一支原来**只写状态**、
+                         * 不登记进"缺卷留到最后再判"那份名单 ⇒ 批末重判**一次都不跑**
+                         * （日志里"批末补判 / 这一组现在齐了"整段是空的）⇒ 三片都在盘上也没人把它们收到一层
+                         * ⇒ 判据 ① 红。⇒ 结论是缺卷就必须进名单（唯一出口 <see cref="RememberDeferredVolumeDeficit"/>，
+                         * 它只管"进名单 + 点亮事实位"，⛔ 不碰 Status / ErrorMessage，⛔ 幂等）。
+                         */
+                        RememberDeferredVolumeDeficit(task, task.CurrentPath);
+
                         AppendLog("WARN", $"{task.LogName}：{task.ErrorMessage}");
                     }
                     else if (stoppedByAttemptLimit)
@@ -24388,6 +24427,10 @@ namespace ArchiveFixer.ViewModels
                                 "分卷缺失：这一片属于某个分卷组，而同组的入口包不在这一层 —— "
                                 + "按「缺卷」处理（⛔ 不是「密码不对」，也⛔ 不是「解压失败」）；"
                                 + "片原样留着，交给批末/跨链那一套去凑。";
+
+                            // 与另一条收尾链同一口径：**结论是缺卷就必须进"缺卷留到最后再判"那份名单**
+                            // （唯一出口，见那一处的说明；⛔ 不碰 Status / ErrorMessage，⛔ 幂等）。
+                            RememberDeferredVolumeDeficit(task, task.CurrentPath);
 
                             AppendLog("WARN", $"{task.LogName}：{task.ErrorMessage}");
                         }

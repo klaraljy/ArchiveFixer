@@ -1424,6 +1424,7 @@ namespace ArchiveFixer.ViewModels
         {
             int pending = rootTasks.Count(task => task.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd);
 
+
             if (stopped)
             {
                 /*

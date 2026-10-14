@@ -133,6 +133,20 @@ namespace ArchiveFixer.Detection
 
             string cleaned = FileNameHelper.GetArchiveBaseName(name);
 
+            /*
+             * ⚠ 2026-10-14（走查档实测，`10101010` 收拢之后那一份）：名字**已经被清干净**成 `X.7z`
+             * （伪装尾巴早剥掉了）时，`GetArchiveBaseName("X.7z")` 会把**族段 `.7z` 一起剥掉** ⇒ 算出 `X.001`
+             * （逐字 `② 规范名（卡优先）= pack111-L2.001`，而同组的片叫 `pack111-L2.7z.002`）⇒
+             * 收拢按它命名的槽位跟同组对不上。
+             * ⇒ 名字自己就以归档后缀结尾时，**基名就用它自己**（族段留着）。
+             */
+            if (name.EndsWith(".7z", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = name;
+            }
+
             if (cleaned.Length == 0)
             {
                 return string.Empty;
