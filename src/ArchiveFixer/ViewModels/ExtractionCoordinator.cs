@@ -9374,41 +9374,12 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private static string ResolveCanonicalNameFromCard(string piecePath, FileNatureCard card)
         {
-            if (card.Format != VolumeContentFormat.SevenZip)
-            {
-                return string.Empty;
-            }
-
-            if (ResolveVolumeSlotIndexForPiece(piecePath, card) is not int index || index < 1)
-            {
-                return string.Empty;
-            }
-
-            string cleaned = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(piecePath));
-
-            if (cleaned.Length == 0)
-            {
-                return string.Empty;
-            }
-
             /*
-             * ⚠ 2026-10-14（夹具实测：第一版**没生效**）：既有的规范名出口要的是**带卷标记的入口名**
-             * （`X.7z.001` 这种形状），直接喂"剥掉伪装尾巴的 `X.7z`"它给不出来（夹具日志逐字仍写
-             * "卡上也没给出可用的族与卷号"）。⇒ 两步：先按原样试一次；不成再把这一族的**入口形状**
-             * （`<基名>.7z.001`）交给它去改写 —— 标记形状（`.00N` 的位数）仍由那个出口决定，
-             * ⛔ 这里不自己拼最终名。
+             * ⚠ 2026-10-14：这套顺序（族来自卡 → 卷号来自卡 → 基名剥掉伪装尾巴 → 交给既有命名出口）
+             * 已经收成一个唯一出口 —— <see cref="VolumePieceFacts.ResolveCanonicalName"/>。
+             * ⛔ 别处不许再自己拼一遍。
              */
-            if (VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(cleaned, index, out string canonicalDirect)
-                && canonicalDirect.Length > 0)
-            {
-                return canonicalDirect;
-            }
-
-            string entryShaped = cleaned + ".001";
-
-            return VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryShaped, index, out string canonical)
-                ? canonical
-                : string.Empty;
+            return VolumePieceFacts.ResolveCanonicalName(piecePath, card);
         }
 
         /// <summary>
@@ -9429,24 +9400,12 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private static int? ResolveVolumeSlotIndexForPiece(string path, FileNatureCard card)
         {
-            if (card.VolumeNumber is int contentNumber && contentNumber > 0)
-            {
-                return contentNumber;
-            }
-
-            if (card.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
-            {
-                return 1;
-            }
-
-            int? byName = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path));
-
-            if (card.BodyKind == ArchiveBodyKind.VolumePiece && byName == 1)
-            {
-                return null;   // 卡说"我不是第一片" ⇒ 名字里那个 1 是假的
-            }
-
-            return byName;
+            /*
+             * ⚠ 2026-10-14：这套顺序（**卡 → 内容 → 名字**）已经收成一个唯一出口 ——
+             * <see cref="VolumePieceFacts.ResolveSlotIndex"/>（用户口径：「把现在的专属算法顺序给我弄好了」）。
+             * ⛔ 别处不许再自己拼一遍。
+             */
+            return VolumePieceFacts.ResolveSlotIndex(path, card);
         }
 
         /// <summary>
@@ -11069,10 +11028,11 @@ namespace ArchiveFixer.ViewModels
              * ⛔ 判据与老口径**同一把尺子**（`BelongsToSameGroup` 自比），只是参照物多了一个来源；
              * 名字解析不出来 ⇒ 照旧退回 `<基名>.zip`（一个字都不放宽）。
              */
-            string own = FileNameHelper.GetFileName(
-                !string.IsNullOrWhiteSpace(memberPath)
-                    ? memberPath!
-                    : task?.CurrentPath ?? string.Empty);
+            string ownPath = !string.IsNullOrWhiteSpace(memberPath)
+                ? memberPath!
+                : task?.CurrentPath ?? string.Empty;
+
+            string own = FileNameHelper.GetFileName(ownPath);
 
             /*
              * 拿尺子自比来问"这个名字解析得出来吗"：解析得出来时它必然与自己是同一族同一基名。
@@ -11081,6 +11041,26 @@ namespace ArchiveFixer.ViewModels
             if (own.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(own, own))
             {
                 return own;
+            }
+
+            /*
+             * ⚠ 2026-10-14（官方环台 `10101010`，日志逐字）：名字**解析不出来**时退回 `<基名>.zip`
+             * 那一条等于**假定每一组都是跨盘 ZIP 族** —— 逐字 `这一组的引用名=「pack111-L2.7z.zip」`
+             * ⇒ 紧接着 `这一组该拼到哪一层 —— 判不出`（三片都齐了也拼不到一层去）。
+             *
+             * <para>⇒ 这一格也改成**问卡**（用户口径：「专属算法不就是靠识别的吗」）：卡上说
+             * "我是这一组的第一片 / 一片"（`VolumeFirstPiece` / `VolumePiece`）⇒ 拿**卡拼出来的规范名**
+             * 当引用名（那正是这一组入口该有的名字，`pack111-L2.7z.txt` ⇒ `pack111-L2.7z.001`）；
+             * 卡上也给不出 ⇒ 才退回老口径 `<基名>.zip`（⛔ 一个字都不放宽）。</para>
+             */
+            if (ownPath.Length > 0)
+            {
+                string fromCard = ResolveCanonicalNameFromCard(ownPath, FileNature.Inspect(ownPath));
+
+                if (fromCard.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(fromCard, fromCard))
+                {
+                    return fromCard;
+                }
             }
 
             return baseName + ".zip";

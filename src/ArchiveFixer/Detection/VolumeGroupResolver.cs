@@ -1306,6 +1306,7 @@ namespace ArchiveFixer.Detection
                     return baseName + ".part" + index.ToString(CultureInfo.InvariantCulture) + ".rar";
 
                 default:
+                    // 数字族的**基名**由调用方另算（保留归档后缀那一段，见 TryBuildCanonicalVolumeNameForIndex）。
                     return baseName + "." + index.ToString("D3", CultureInfo.InvariantCulture);
             }
         }
@@ -1339,6 +1340,24 @@ namespace ArchiveFixer.Detection
             }
 
             VolumeNameFamily family = ResolveFamilyFromFirstVolumeName(first!, baseName);
+
+            /*
+             * ⚠ 2026-10-14（夹具 + 环台两处实测，用户当场点破的"丢族段"）：**数字族的基名要另算** ——
+             * 与 <see cref="TryGetCanonicalVolumeName"/> 里那条**既有规则同一套**（那儿写着：
+             * `x.7z.001` 的规范名是 `x.7z.001` 而不是 `x.001`，因为 `GetArchiveBaseName` 会把 `.7z` 也剥掉）。
+             * 这里原来没照做 ⇒ "补第 2 槽"给出 `pack111-L2.002`，可同组的片叫 `pack111-L2.7z.002`
+             * ⇒ 引擎按名字找不到、组永远凑不齐（环台 `3333` 那次是 `111-L2.002` vs `111-L2.7z.001`）。
+             */
+            if (family == VolumeNameFamily.Numeric)
+            {
+                int markDot = first!.LastIndexOf('.');
+
+                if (markDot > 0)
+                {
+                    baseName = first![..markDot];
+                }
+            }
+
             string name = CanonicalNameFor(family, baseName, index);
 
             if (name.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(name) != index)

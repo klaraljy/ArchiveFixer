@@ -2837,8 +2837,7 @@ namespace ArchiveFixer.Extraction
                  * 三片都在同一层、只是名字都坏了，引擎其实解得开 ⇒ 这一档必须**不抢结论**（先让引擎去解）。
                  * 递归路那三处（默认 false）不看那道闸，与既有三档同一条纪律。</para>
                  */
-                if ((card.BodyKind == ArchiveBodyKind.VolumeFirstPiece
-                        || card.BodyKind == ArchiveBodyKind.VolumePiece)
+                if (Detection.VolumePieceFacts.CardSaysItIsOneOfTheGroup(card)
                     && !(requireNothingElseBeside && HasSameGroupNeighbourByName(archivePath)))
                 {
                     /*
