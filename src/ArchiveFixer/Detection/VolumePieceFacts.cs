@@ -65,11 +65,19 @@ namespace ArchiveFixer.Detection
                 return 1;
             }
 
-            if (card.BodyKind == ArchiveBodyKind.VolumePiece && byName == 1)
-            {
-                return null;
-            }
-
+            /*
+             * ⚠ 2026-10-14（副本环台读数当场打红三份：`13131313` / `21212121` / `23232323` ——
+             * 与第二十二 / 第二十六轮**同一个签名**）：**"卡说我不是第一片"这条不许用来否掉名字那个 1**。
+             *
+             * <para>跨盘 ZIP 族的末片（`X.zip`）在卡上是 `VolumePiece`（内容写着盘号），而名字那把尺子按
+             * 那一族的约定把它读成"第 1 片" —— 那个 1 在现有消费方眼里是这一族的**可用锚点**：
+             * 一否掉，`present` 里第 1 槽就空了、两条补片路的前提不成立、整组没人管
+             * （实测：13 绿 / ①✔ 23 ⇒ 13 绿 / ①✔ 20）。</para>
+             *
+             * <para>⇒ 槽位号只保留卡能**给出**答案的那一半（`VolumeFirstPiece` ⇒ 1）；
+             * ⛔ 卡上"我不是第一片"这一半**不用来改槽位** —— 它只在"这一份是不是某组一片"那条判据里用
+             * （`RecursiveExtractor.IsPieceOfIncompleteGroup`）。</para>
+             */
             return byName;
         }
 

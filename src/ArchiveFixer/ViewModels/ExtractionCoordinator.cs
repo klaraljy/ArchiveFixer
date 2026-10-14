@@ -11167,8 +11167,24 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            /*
+             * ⚠ 2026-10-14（walk 档一步步走查的直接结论）：**卡说"我是这一组的一片"时，名字干不干净不该再当闸门**。
+             *
+             * <para>走查逐字（三片摆在一层目录时）：`pack111-L2.7z.txt` 的卡写着
+             * `格式=SevenZip 专属算法=VolumeFirstPiece 自述整包=62919013 按内容算的片数=3`
+             * ⇒ 槽位 1、规范名 `pack111-L2.7z.001`、入口=它自己、目标层=它所在那一层 —— **整条链是通的**。
+             * 可真跑时它卡在 `任务表里这一组的单 0 个，入口包=判不出`：因为"名字不干净"（`.txt` 尾巴）
+             * ⇒ 下面那两段收拢**整段不跑**（连产出树都不扫）⇒ 成员表恒空 ⇒ 那一组永远拼不到一起。</para>
+             *
+             * <para>⇒ 判据：名字干净 **或** 卡说它是这一组的一片 ⇒ 都按"可用"处理。⛔ 判不出（读不到卡 / 名字也解析不出）
+             * ⇒ 照旧老口径（那两段不跑）。</para>
+             */
+            bool memberUsable = memberNameIsClean
+                || (memberName.Length > 0
+                    && VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(memberPath!)));
+
             // 手上这一片也算成员（它可能还没进任务表，或者来自别的单那条链）。
-            if (memberNameIsClean && !members.Contains(memberPath!))
+            if (memberUsable && !members.Contains(memberPath!))
             {
                 members.Add(memberPath!);
             }
@@ -11181,7 +11197,7 @@ namespace ArchiveFixer.ViewModels
              * ⛔ 仍然只由那把唯一尺子回答"入口包在哪一层"，⛔ 不按名字单独找入口包
              * （实测踩到：就地整理那一档下"按名字在产出树里找"会把**源文件自己**当成入口）。
              */
-            if (memberNameIsClean)
+            if (memberUsable)
             {
                 foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
                 {
