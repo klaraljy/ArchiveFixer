@@ -58,27 +58,35 @@ namespace ArchiveFixer.Detection
         /// </summary>
         internal static int? ResolveSlotIndex(string path, FileNatureCard card)
         {
-            int? byName = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path));
+            string name = FileNameHelper.GetFileName(path);
+            int? byName = VolumeGroupDetector.TryGetVolumeIndex(name);
 
-            if (CardSaysFirstPiece(card))
+            /*
+             * ⚠⚠ 2026-10-14 实测两版，**逐字记账，⛔ 别再往回改**：
+             *
+             * <para>第一版把卡上的**绝对卷号**当权威（`VolumeNumber` 优先；RAR5 / RAR4 新编号 / 跨盘 ZIP
+             * 末片的盘号都算）—— 走查档验过、**四族都对**，可真跑**当场打红三份**
+             * （`13131313` / `23232323` / `21212121` 全丢内容物）。原因不在卡、**在消费方**：
+             * 跨盘 ZIP 末片（`X.zip`）在卡上是 `卷号=3`（对的），而名字那把尺子按那一族的约定读成"第 1 片"，
+             * 而 `present` / 收口 / 收拢**都靠那个 1 当锚点**；换成真值 3 之后 `present` 里就没有第 1 槽了，
+             * 两条补片路的前提不成立 ⇒ 整组没人管。</para>
+             *
+             * <para>⇒ 现在的次序（**卡补缺、名字优先**；等消费方能处理"入口不在这一层"再翻过来）：
+             * ① 名字给得出卷号 ⇒ 用它；② 名字给不出、卡说"我是这一组的第一片" ⇒ 1
+             * （7z / RAR5 / RAR4 首卷**只有这条卡答得出**）；③ 名字给不出、卡说"我是这一组的一片"
+             * （7z 的中间片 / 末片）⇒ **判不出**，交给"缺口 + 体积"；④ 其余 ⇒ 判不出。</para>
+             */
+            if (byName is int named)
+            {
+                return named;
+            }
+
+            if (card.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
             {
                 return 1;
             }
 
-            /*
-             * ⚠ 2026-10-14（副本环台读数当场打红三份：`13131313` / `21212121` / `23232323` ——
-             * 与第二十二 / 第二十六轮**同一个签名**）：**"卡说我不是第一片"这条不许用来否掉名字那个 1**。
-             *
-             * <para>跨盘 ZIP 族的末片（`X.zip`）在卡上是 `VolumePiece`（内容写着盘号），而名字那把尺子按
-             * 那一族的约定把它读成"第 1 片" —— 那个 1 在现有消费方眼里是这一族的**可用锚点**：
-             * 一否掉，`present` 里第 1 槽就空了、两条补片路的前提不成立、整组没人管
-             * （实测：13 绿 / ①✔ 23 ⇒ 13 绿 / ①✔ 20）。</para>
-             *
-             * <para>⇒ 槽位号只保留卡能**给出**答案的那一半（`VolumeFirstPiece` ⇒ 1）；
-             * ⛔ 卡上"我不是第一片"这一半**不用来改槽位** —— 它只在"这一份是不是某组一片"那条判据里用
-             * （`RecursiveExtractor.IsPieceOfIncompleteGroup`）。</para>
-             */
-            return byName;
+            return null;
         }
 
         /// <summary>
@@ -93,17 +101,37 @@ namespace ArchiveFixer.Detection
         /// </summary>
         internal static string ResolveCanonicalName(string path, FileNatureCard card)
         {
-            if (card.Format != VolumeContentFormat.SevenZip)
-            {
-                return string.Empty;   // 先把 7z 这一族做扎实（证据在手）；别的族等有同样硬的证据再补
-            }
-
             if (ResolveSlotIndex(path, card) is not int slot || slot < 1)
             {
                 return string.Empty;
             }
 
-            string cleaned = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(path));
+            string name = FileNameHelper.GetFileName(path);
+
+            /*
+             * ⚠ 2026-10-14（走查档实测，`21212121` 的 RAR 族这一份）：卡上明明写着
+             * `格式=Rar 分卷身份=VolumeMember 首卷标志=True 专属算法=VolumeFirstPiece` ⇒ 槽位 1，
+             * 可这一格原来**只做 7z 一族** ⇒ 逐字 `② 规范名（卡优先）= 判不出`。
+             *
+             * <para>⇒ 加一条**任何族通用**的路：拿"本族第一卷名"（`TryGetFirstVolumeName`，
+             * 唯一出口）当样本交给既有命名出口 —— 它按样本的形状定族，`aaa-L2.part1.rar` ⇒ 这一族的
+             * 第 N 卷名。（7z 那一族名字里没有卷标记时它给不出，才走下面那两步。）</para>
+             */
+            string? firstByName = VolumeGroupDetector.TryGetFirstVolumeName(name);
+
+            if (!string.IsNullOrWhiteSpace(firstByName)
+                && VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(firstByName!, slot, out string byNameSample)
+                && byNameSample.Length > 0)
+            {
+                return byNameSample;
+            }
+
+            if (card.Format != VolumeContentFormat.SevenZip)
+            {
+                return string.Empty;   // 别的族拿不到"本族第一卷名" ⇒ 判不出（⛔ 不猜）
+            }
+
+            string cleaned = FileNameHelper.GetArchiveBaseName(name);
 
             if (cleaned.Length == 0)
             {
