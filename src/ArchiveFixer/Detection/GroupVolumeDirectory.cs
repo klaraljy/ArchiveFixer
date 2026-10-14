@@ -60,17 +60,59 @@ namespace ArchiveFixer.Detection
                 return Unknown;
             }
 
+            var all = new List<string>();
+
+            foreach (string? path in memberPaths)
+            {
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    all.Add(path!);
+                }
+            }
+
+            /*
+             * ⚠ 2026-10-14（官方环台 `10101010`，日志逐字 `任务表里这一组的单 0 个，入口包=判不出`）：
+             * **先问底层识别卡**（用户口径：「专属算法不就是靠识别的吗」「把现在的专属算法顺序给我弄好了」）。
+             *
+             * <para>卡上说 `VolumeFirstPiece`（= 起始头自述的整包字节数**比这一份大** ⇒ 还有别的片）
+             * 的那一份**就是入口** —— 这条事实只有卡答得出：现场那一份叫 `pack111-L2.7z`
+             * （卷标记被伪装法吃掉），名字那把尺子认不出它，于是"入口包在盘上吗"永远答不出
+             * ⇒ 三片都齐了也拼不到一层去。</para>
+             *
+             * <para>⛔ 不需要"组里还有别的成员"这条附加闸：卡说 `VolumeFirstPiece` 本身就意味着
+             * **这一组不止一份**；而一份完整的单卷包在卡上是 `SingleComplete`（⛔ 不会误判）。</para>
+             */
+            foreach (string path in all)
+            {
+                if (!File.Exists(path))
+                {
+                    continue;
+                }
+
+                if (FileNature.Inspect(path).BodyKind != ArchiveBodyKind.VolumeFirstPiece)
+                {
+                    continue;
+                }
+
+                string? cardDirectory = FileNameHelper.GetDirectoryName(path);
+
+                if (!string.IsNullOrWhiteSpace(cardDirectory))
+                {
+                    return new Entry(path, cardDirectory!);
+                }
+            }
+
             var names = new List<string>();
             var paths = new List<string>();
 
-            foreach (string? path in memberPaths)
+            foreach (string path in all)
             {
                 string name = FileNameHelper.GetFileName(path);
 
                 if (name.Length > 0 && VolumeGroupDetector.TryGetVolumeIndex(name) != null)
                 {
                     names.Add(name);
-                    paths.Add(path!);
+                    paths.Add(path);
                 }
             }
 

@@ -11089,6 +11089,42 @@ namespace ArchiveFixer.ViewModels
         /// 名字带垃圾尾巴的那一档（实测 `333.7z.001.txt`）**不许**启用新判据 —— 那一档连规范名都算不对
         /// （会算出 `333.7z.001.001`），照旧走老口径（行为与改动前逐字相同）。
         /// </param>
+        /// <summary>
+        /// **这一份算不算"这一组"的成员**（唯一出口）。
+        ///
+        /// <para>① 名字那把尺子（<see cref="VolumeGroupDetector.BelongsToSameGroup"/>）说"是" ⇒ 是；
+        /// ② 名字说"不是"时**问卡**（用户口径：「专属算法不就是靠识别的吗」）：卡上说"我是这一组的一片"
+        /// （`VolumeFirstPiece` / `VolumePiece`）**而且基名与这一组有关系**（一个是另一个的前缀也算）⇒ 也算。
+        /// 现场（官方环台 `10101010`）：入口那一份叫 `pack111-L2.7z`（卷标记被伪装法吃掉 ⇒
+        /// 名字尺子连"像分卷"都判不出）⇒ 它进不了成员表 ⇒ 逐字 `任务表里这一组的单 0 个，入口包=判不出`
+        /// ⇒ 三片都齐了也拼不到一层去。</para>
+        ///
+        /// <para>⛔ 判不出（读不到卡 / 基名对不上）⇒ 照旧"不是"（一个字不放宽）。</para>
+        /// </summary>
+        private static bool MemberBelongsToGroup(string path, string tailName)
+        {
+            string name = FileNameHelper.GetFileName(path);
+
+            if (name.Length == 0)
+            {
+                return false;
+            }
+
+            if (VolumeGroupDetector.BelongsToSameGroup(name, tailName))
+            {
+                return true;
+            }
+
+            FileNatureCard card = FileNature.Inspect(path);
+
+            if (!VolumePieceFacts.CardSaysItIsOneOfTheGroup(card))
+            {
+                return false;
+            }
+
+            return BaseNameRelatedToGroup(name, FileNameHelper.GetArchiveBaseName(tailName));
+        }
+
         private string ResolveBatchGroupDirectory(string baseName, ArchiveTask? task = null, string? memberPath = null)
         {
             /*
@@ -11125,8 +11161,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string path = candidate?.CurrentPath ?? string.Empty;
 
-                if (path.Length > 0
-                    && VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                if (path.Length > 0 && MemberBelongsToGroup(path, tailName))
                 {
                     members.Add(path);
                 }
@@ -11164,7 +11199,7 @@ namespace ArchiveFixer.ViewModels
 
                         foreach (string candidate in CollectVolumeFilesInDirectory(directory))
                         {
-                            if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(candidate), tailName)
+                            if (MemberBelongsToGroup(candidate, tailName)
                                 && !members.Contains(candidate))
                             {
                                 members.Add(candidate);
@@ -11339,8 +11374,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string path = other?.CurrentPath ?? string.Empty;
 
-                if (path.Length > 0
-                    && VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
+                if (path.Length > 0 && MemberBelongsToGroup(path, tailName))
                 {
                     sources.Add(path);
                 }
