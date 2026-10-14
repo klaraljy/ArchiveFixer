@@ -9356,6 +9356,44 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **这一份的"槽位号"该信谁**（专属算法的入口判据，唯一出口）。
+        ///
+        /// <para>次序（用户 2026-10-14：「**专属算法不就是靠识别的吗**」）：**先问底层识别卡，卡上没有才问名字**：
+        /// ① 卡上有卷号（RAR5 主头 / RAR4 新编号 / 跨盘 ZIP 末片写着第几盘）⇒ 用卡上的；
+        /// ② 卡上写着 <see cref="ArchiveBodyKind.VolumeFirstPiece"/>（起始头自述的整包比这一份大）⇒ **1**；
+        /// ③ 卡上写着 <see cref="ArchiveBodyKind.VolumePiece"/>（"我是这一组的一片、**但不是第一片**"）
+        ///    而**名字读出来是 1** ⇒ 那个 1 是假的（卷标记被伪装吃掉之后，名字那把尺子会退回"1"）
+        ///    ⇒ **判不出**（null），交给"缺口 + 体积"（末片最小）去定 —— ⛔ 不许拿假锚点去补片；
+        /// ④ 卡上什么都没有（7z 的中间片之类）⇒ 回落到名字那把尺子（老口径，⛔ 不放宽）。</para>
+        ///
+        /// <para>现场（官方环台 `10101010`，卡逐字）：那一组三片分别叫 `pack111-L2.7z`、`pack111-L2.7z.002`、
+        /// `pack111-L2.7z` —— 第 1 片与第 3 片的**名字一模一样**（名字尺子都读成 1）⇒ 旧口径把第 3 片也摆在
+        /// 1 号槽 ⇒ 组永远凑不齐；而卡上写得清清楚楚：第 1 片 `专属算法=VolumeFirstPiece`、
+        /// 第 3 片 `专属算法=VolumePiece`（体积 26 214 400 vs 10 490 213，末片最小）。</para>
+        /// </summary>
+        private static int? ResolveVolumeSlotIndexForPiece(string path, FileNatureCard card)
+        {
+            if (card.VolumeNumber is int contentNumber && contentNumber > 0)
+            {
+                return contentNumber;
+            }
+
+            if (card.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+            {
+                return 1;
+            }
+
+            int? byName = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path));
+
+            if (card.BodyKind == ArchiveBodyKind.VolumePiece && byName == 1)
+            {
+                return null;   // 卡说"我不是第一片" ⇒ 名字里那个 1 是假的
+            }
+
+            return byName;
+        }
+
+        /// <summary>
         /// 这一组的第 1 卷是不是**同批另一个任务**在负责（判据与
         /// <see cref="SkipWhenAnotherTaskOwnsThisVolumeGroup"/> 同一个口径：任务表里有没有别人指着它）。
         /// 是 ⇒ 这一单不许把起点改过去（那一组只解一次，别的卷按「跟班卷」跳过）。
@@ -11719,7 +11757,13 @@ namespace ArchiveFixer.ViewModels
                      * 而**空间规律**早就能认出它：`.001/.002` 都是 26 214 400，它是 10 490 534 ⇒
                      * "除末卷外等大" ⇒ 它就是**末片**。
                      */
-                    int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path));
+                    /*
+                     * ⚠ 2026-10-14（用户口径「专属算法不就是靠识别的吗」）：这里也**先问卡**
+                     * （同一个唯一出口 `ResolveVolumeSlotIndexForPiece`）——
+                     * 卡说"我不是第一片"而名字读出 1 的那一份，**不当成"已占住 1 号槽"**，
+                     * 而是按"判不出号"进候选池，由"缺口 + 体积"去定（⛔ 不再拿假锚点补片）。
+                     */
+                    int? nameIndex = ResolveVolumeSlotIndexForPiece(path, card);
 
                     /*
                      * ⚠ 2026-10-14（实测 `28282828`，断点逐字）：**名字读出越界卷号 ⇒ 名字在撒谎**。
@@ -11955,7 +11999,13 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                int? index = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path));
+                /*
+                 * ⚠ 2026-10-14（用户口径「专属算法不就是靠识别的吗」）：槽位号**先问底层识别卡**
+                 * （唯一出口 <see cref="ResolveVolumeSlotIndexForPiece"/>），卡上没有才问名字。
+                 * 现场 `10101010`：三片里第 1 片与第 3 片**名字一模一样**（都读成 1），
+                 * 只有卡分得开（`VolumeFirstPiece` vs `VolumePiece`）。
+                 */
+                int? index = ResolveVolumeSlotIndexForPiece(path, FileNature.Inspect(path));
 
                 if (!index.HasValue || present.ContainsKey(index.Value))
                 {

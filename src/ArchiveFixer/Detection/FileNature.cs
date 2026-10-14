@@ -188,6 +188,20 @@ namespace ArchiveFixer.Detection
     /// </summary>
     public static class FileNature
     {
+        /// <summary>
+        /// **自述片数的合理性上限**（2026-10-14 实测定的闸）。
+        ///
+        /// <para>为什么必须有：垃圾头也会"自述"一个荒谬的整包大小 —— 实测那份 `broken.7z`
+        /// （7z 魔数 + 随机字节、4096 字节）读出 `自述整包=1252871390030289531 字节`、
+        /// `按内容算的片数=2118287382` ⇒ 卡上会写 `VolumeFirstPiece` ⇒ 下游把一份**坏包**
+        /// 报成「分卷缺失」（方向完全相反）。</para>
+        ///
+        /// <para>取值：用户口径是「分卷数目很少大于 5」；这里放到 **1024** —— 是"别把合理的组挡掉"的宽档，
+        /// 只用来挡"一眼就知道是噪声"的量级（21 亿片、1.25 EB）。⛔ 它不是"分卷数上限"这条业务判据
+        /// （那条判据不在这里、也不存在）。</para>
+        /// </summary>
+        private const long MaxSaneDeclaredVolumeCount = 1024;
+
         public static FileNatureCard Inspect(string? path)
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
@@ -246,8 +260,21 @@ namespace ArchiveFixer.Detection
                     }
                     else
                     {
-                        bodyKind = ArchiveBodyKind.VolumeFirstPiece;
-                        declaredVolumeCount = (int)((expectedTotal + size - 1) / size);
+                        /*
+                         * ⚠ 2026-10-14（`LogVolumePolicyTests.批末汇总_一眼看到成功失败与逐条失败` 当场打红，
+                         * 运行期实测）：**垃圾头自述出来的荒谬值不许当证据**。那份 `broken.7z`
+                         * （7z 魔数 + 随机字节）读出片数 21 亿、整包 1.25 EB ⇒ 卡上写 `VolumeFirstPiece`
+                         * ⇒ 一份坏包被下游报成「分卷缺失」。⇒ 片数过一道合理性闸（见
+                         * <see cref="MaxSaneDeclaredVolumeCount"/>）才算事实；过不了 ⇒ **判不出**（保持 Unknown），
+                         * 照旧走"引擎说了算 / 损坏"那条老口径。⛔ 不猜、⛔ 不放宽任何既有判据。
+                         */
+                        long count = (expectedTotal + size - 1) / size;
+
+                        if (count <= MaxSaneDeclaredVolumeCount)
+                        {
+                            bodyKind = ArchiveBodyKind.VolumeFirstPiece;
+                            declaredVolumeCount = (int)count;
+                        }
                     }
                 }
             }
