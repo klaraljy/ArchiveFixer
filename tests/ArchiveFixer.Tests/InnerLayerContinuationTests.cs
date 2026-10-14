@@ -571,21 +571,22 @@ namespace ArchiveFixer.Tests
         /// <summary>
         /// 轮数上限**只有一个真值来源**：②页「最大嵌套层数」（<c>AppSettings.MaxRecursionDepth</c>）。
         ///
-        /// <para>用户 2026-09-26 原话：<i>"现在将默认的最大的解压层数改成 5，用户有需要自己会改的"</i>——
-        /// 默认 5、天花板 10，而且界面写几，一键处理这一批就只跑几轮
-        /// （⛔ 不许再出现"界面说 5、程序按 10 跑"的不同步）。</para>
+        /// <para>用户 2026-10-14 拍板（覆盖 2026-09-26 那句「改成 5」）：层数/轮数**保持一个设置**、
+        /// **默认从 5 调到 7**，而且不再有"单层路 / 单链档"（一律展开到底）——
+        /// 默认 7、天花板 10，界面写几，一键处理这一批就只跑几轮
+        /// （⛔ 不许再出现"界面说 7、程序按 10 跑"的不同步）。</para>
         /// </summary>
         [Fact]
-        public void 轮数上限_默认5_跟着设置走_天花板仍然是10()
+        public void 轮数上限_默认7_跟着设置走_天花板仍然是10()
         {
             Harness harness = CreateHarness(ChainPassword + "\n");
 
-            Assert.Equal(5, harness.Vm.Settings.MaxRecursionDepth);
-            Assert.Equal(5, harness.OneClick.RoundLimit);
+            Assert.Equal(7, harness.Vm.Settings.MaxRecursionDepth);
+            Assert.Equal(7, harness.OneClick.RoundLimit);
 
             // 用户自己改大 → 当场跟着走（不需要重启、不需要重开一批）
-            harness.Vm.Settings.MaxRecursionDepth = 7;
-            Assert.Equal(7, harness.OneClick.RoundLimit);
+            harness.Vm.Settings.MaxRecursionDepth = 9;
+            Assert.Equal(9, harness.OneClick.RoundLimit);
 
             // 超范围两头都要夹回：上面是硬上限（不变量 8），下面最小 1 轮
             harness.Vm.Settings.MaxRecursionDepth = 99;

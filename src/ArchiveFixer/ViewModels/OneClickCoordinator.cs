@@ -212,9 +212,9 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>为什么跟设置走：这一格的名字就叫"最大嵌套层数"，而一键处理是主流程 ——
         /// 两处各有一套上限只会让人以为"有一处没生效"（2026-09-24 把 3 与 10 统一成 10 就是这个原因，
-        /// 2026-09-26 它跟着 10→5 一起下来，仍然是同一个数字）。</para>
+        /// 2026-09-26 它跟着 10→5 一起下来，2026-10-14 用户拍板**默认再调到 7**，始终是同一个数字）。</para>
         /// </summary>
-        internal int RoundLimit => Math.Clamp(Settings?.MaxRecursionDepth ?? 5, 1, MaxRoundsCeiling);
+        internal int RoundLimit => Math.Clamp(Settings?.MaxRecursionDepth ?? 7, 1, MaxRoundsCeiling);
 
         private readonly MainViewModel _vm;
         private readonly ScanCoordinator _scanCoordinator;

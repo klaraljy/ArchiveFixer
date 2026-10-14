@@ -627,7 +627,7 @@ namespace ArchiveFixer.Models
         /// 一键处理每一批的轮数**跟着这一格走**（见 <c>OneClickCoordinator.RoundLimit</c>），
         /// 所以"界面写 5、程序跑到 10"这种不一致不会发生。</para>
         /// </summary>
-        public int MaxRecursionDepth { get; set; } = 5;
+        public int MaxRecursionDepth { get; set; } = 7;
 
         /// <summary>
         /// 一次性迁移标记：旧的"最大层数默认 3"已经统一成 10（用户 2026-09-24 拍板）。
@@ -1131,8 +1131,13 @@ namespace ArchiveFixer.Models
                  */
                 RecursionMode = "AllBranches",
 
-                // 默认层数 = 5（用户 2026-09-26："从 10 改到 5 吧，用户有需要自己会改的"）。
-                MaxRecursionDepth = 5,
+                /*
+                 * 默认层数 = **7**（用户 2026-10-14 拍板：层数/轮数**保持一个设置**、默认从 5 调到 7，
+                 * 不再有"单层路 / 单链档"，一律展开到底）。
+                 * ⚠ 上限没动：`Normalize` 里仍然是 1..10，`OneClickCoordinator.MaxRoundsCeiling` = 8 ⇒ 7 在闸内。
+                 * ⛔ 只改**出厂默认**：用户自己存过的档一个字都不动。
+                 */
+                MaxRecursionDepth = 7,
                 RecursionDefaultUnifiedToTen = true,
                 MaxPasswordAttemptsPerLayer = 10,
 
