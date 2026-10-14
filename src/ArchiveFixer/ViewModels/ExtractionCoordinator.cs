@@ -9356,6 +9356,62 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **名字判不出族 / 卷号时，用底层识别卡把规范卷名拼出来**（唯一出口）。
+        ///
+        /// <para>族：卡上 `格式=SevenZip` ⇒ 这一族的规范名是 `<基名>.7z.00N`（本程序只认这一种写法，
+        /// 唯一出口 <see cref="VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex"/>）。
+        /// 卷号：卡上有卷号用卡上的；卡说"我是第一片"（`VolumeFirstPiece`）⇒ 1；
+        /// 卡说"我是后续片但没写第几"（`VolumePiece`）⇒ **判不出**（返回空串，交给"缺口 + 体积"）。
+        /// 基名：<see cref="FileNameHelper.GetArchiveBaseName"/> 已经剥掉一层伪装尾巴
+        /// （`pack111-L2.7z.txt` ⇒ `pack111-L2.7z`）。</para>
+        ///
+        /// <para>现场（官方环台 `10101010`）：这一片叫 `pack111-L2.7z.txt`，卡上
+        /// `格式=SevenZip 专属算法=VolumeFirstPiece 自述整包=62919013 按内容算的片数=3`
+        /// ⇒ 规范名应当是 `pack111-L2.7z.001` —— 名字那条路永远给不出，卡这条路给得出。</para>
+        ///
+        /// <para>⛔ 现在只做 7z 这一族（证据在手：卡上有"起始头自述整包 + 片数"）；其它族等有同样硬的
+        /// 运行期证据再补，⛔ 不猜。</para>
+        /// </summary>
+        private static string ResolveCanonicalNameFromCard(string piecePath, FileNatureCard card)
+        {
+            if (card.Format != VolumeContentFormat.SevenZip)
+            {
+                return string.Empty;
+            }
+
+            if (ResolveVolumeSlotIndexForPiece(piecePath, card) is not int index || index < 1)
+            {
+                return string.Empty;
+            }
+
+            string cleaned = FileNameHelper.GetArchiveBaseName(FileNameHelper.GetFileName(piecePath));
+
+            if (cleaned.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            /*
+             * ⚠ 2026-10-14（夹具实测：第一版**没生效**）：既有的规范名出口要的是**带卷标记的入口名**
+             * （`X.7z.001` 这种形状），直接喂"剥掉伪装尾巴的 `X.7z`"它给不出来（夹具日志逐字仍写
+             * "卡上也没给出可用的族与卷号"）。⇒ 两步：先按原样试一次；不成再把这一族的**入口形状**
+             * （`<基名>.7z.001`）交给它去改写 —— 标记形状（`.00N` 的位数）仍由那个出口决定，
+             * ⛔ 这里不自己拼最终名。
+             */
+            if (VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(cleaned, index, out string canonicalDirect)
+                && canonicalDirect.Length > 0)
+            {
+                return canonicalDirect;
+            }
+
+            string entryShaped = cleaned + ".001";
+
+            return VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryShaped, index, out string canonical)
+                ? canonical
+                : string.Empty;
+        }
+
+        /// <summary>
         /// **这一份的"槽位号"该信谁**（专属算法的入口判据，唯一出口）。
         ///
         /// <para>次序（用户 2026-10-14：「**专属算法不就是靠识别的吗**」）：**先问底层识别卡，卡上没有才问名字**：
@@ -10269,14 +10325,37 @@ namespace ArchiveFixer.ViewModels
              */
             if (!VolumeGroupResolver.TryGetCanonicalVolumeName(Path.GetFileName(piecePath), out string canonical))
             {
-                LogAdoptCriterionInputs(
-                    piecePath,
-                    "认不出它属于哪一族 / 第几卷（规范卷名推不出来）",
-                    string.Empty,
-                    string.Empty,
-                    string.Empty);
+                /*
+                 * ⚠ 2026-10-14（官方环台 `10101010`，日志逐字）：**名字判不出族时，问卡**。
+                 *
+                 * <para>现场：这一片叫 `pack111-L2.7z.txt`（伪装法⑤"改成别的类型"）⇒ 规范名出口认不出族
+                 * ⇒ 逐字 `这一片接不进这一组 —— 认不出它属于哪一族 / 第几卷（规范卷名推不出来）`
+                 * ⇒ 它永远接不进去；而**卡上全都有**（探针逐字）：`格式=SevenZip 分卷身份=Unknown
+                 * 专属算法=VolumeFirstPiece 自述整包=62919013 按内容算的片数=3`。</para>
+                 *
+                 * <para>⇒ 卡优先的回落（用户口径「专属算法不就是靠识别的吗」）：族取卡上的格式、
+                 * 卷号取卡上的（见 <see cref="ResolveVolumeSlotIndexForPiece"/>）、基名把伪装尾巴剥掉。
+                 * ⛔ 卡上也给不出卷号（`VolumePiece` 那种"我是后续片但没写第几"）⇒ 照旧返回 false，
+                 * 交给"缺口 + 体积"那一档，⛔ 不猜号。</para>
+                 */
+                canonical = ResolveCanonicalNameFromCard(piecePath, nature);
 
-                return false;
+                if (canonical.Length == 0)
+                {
+                    LogAdoptCriterionInputs(
+                        piecePath,
+                        "认不出它属于哪一族 / 第几卷（规范卷名推不出来；卡上也没给出可用的族与卷号）",
+                        string.Empty,
+                        string.Empty,
+                        string.Empty);
+
+                    return false;
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"{FileNameHelper.GetFileName(piecePath)}：名字判不出族/卷号，改用底层识别卡 —— "
+                    + $"卡上：{nature.Describe()} ⇒ 规范卷名「{canonical}」。");
             }
 
             /*
