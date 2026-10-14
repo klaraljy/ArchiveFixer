@@ -11414,30 +11414,8 @@ namespace ArchiveFixer.ViewModels
             string entryName,
             int slot)
         {
-            /*
-             * 样板的选择顺序（⚠ 2026-10-14 实测 `24242424` 第 21 轮回归现场后定死）：
-             * ① **入口那一片**（`present[1]`）—— 这一组的锚点，通常也是名字最干净的那一片；
-             * ② 名字读得出卷号、且那一串数字**不长得反常**（≤ 3 位）的任意一片
-             *    —— 垃圾名 `111-L2.part020745382.rar` 就是这么被挡掉的：拿它当样板会拼出
-             *    `111-L2.part000000002.rar` 这种九位数的垃圾名（还真落到了盘上）；
-             * ③ 退而求其次：任何读得出卷号的那一片；④ 再退：任意一片（老口径）。
-             */
-            string? existingPiece = null;
-
-            if (present.TryGetValue(1, out string? anchor)
-                && VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(anchor)) != null)
-            {
-                existingPiece = anchor;
-            }
-
-            existingPiece ??= present.Values.FirstOrDefault(path =>
-                VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) is int index
-                && index.ToString(CultureInfo.InvariantCulture).Length <= 3);
-
-            existingPiece ??= present.Values.FirstOrDefault(path =>
-                VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null);
-
-            existingPiece ??= present.Values.FirstOrDefault();
+            string? existingPiece = present.Values
+                .FirstOrDefault(path => VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null);
 
             if (!string.IsNullOrEmpty(existingPiece)
                 && TryNameSlotLikeExistingPiece(existingPiece!, slot, out string likeExisting)
@@ -11654,35 +11632,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * ⚠ 2026-10-14 实测 `24242424`（第 21 轮回归现场，逐字）：**"同一片的第二个名字"不许当候选**。
-             *
-             * <para>现场：候选池里出现了 `111-L2.part1.rar` —— 它与 `present` 里第 1 槽那一片**同名同大小**，
-             * 只是树不同（用户源树那一份 vs 落点那一份）⇒ 盘上身份不同 ⇒ 老的"硬链接孪生"那道闸
-             * （<see cref="FileIdentity"/>）拦不住它；而它名字读出的卷号（1）已经被占着 ⇒ 走"同号冲突"那一支
-             * 进了候选 ⇒ **候选数正好等于缺口数** ⇒ 打分分配开火，把**第 1 片本身**补成了第 2 槽
-             * （还起了个垃圾名 `111-L2.part000000002.rar`）⇒ 整组永远解不开
-             * （逐字 `解压失败：111-L2.part1.rar，原因：分卷压缩包缺少必要分卷`）。</para>
-             *
-             * <para>判据只用两条既有事实：**文件名逐字相同 + 大小相同** ⇒ 它就是同一片的第二个名字
-             * （⛔ 不是缺口里的那一片）。与"同一份字节在同一条链里有两个名字"那条既有口径同一套。</para>
-             */
-            var presentSignatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (string presentPath in present.Values)
-            {
-                try
-                {
-                    presentSignatures.Add(
-                        FileNameHelper.GetFileName(presentPath) + "|"
-                        + new FileInfo(presentPath).Length.ToString(CultureInfo.InvariantCulture));
-                }
-                catch
-                {
-                    // 读不到大小就少一条签名（判不出 ⇒ 不靠它排除，照旧走下面那几道闸门）。
-                }
-            }
-
-            /*
              * ⚠ 2026-10-14（实测 `28282828`，断点逐字）：候选池那几棵树改由唯一出口
              * <see cref="CollectCandidateRoots"/> 给 —— 它比老写法多收"**每一单自己所在的那一层**"
              * （真片常常就躺在它旁边：那一份的真第 3 片在 `…\111(3)\111(3)\`，
@@ -11734,12 +11683,6 @@ namespace ArchiveFixer.ViewModels
                         && presentIdentities.Contains((candidateSerial, candidateIndex)))
                     {
                         continue;   // 这是层里某一已有的片的第二个名字（硬链接）⇒ 不是候选
-                    }
-
-                    if (presentSignatures.Contains(
-                            FileNameHelper.GetFileName(path) + "|" + size.ToString(CultureInfo.InvariantCulture)))
-                    {
-                        continue;   // 同一片的第二个名字（同名同大小）⇒ ⛔ 不是缺口里的那一片
                     }
 
                     FileNatureCard card = FileNature.Inspect(path);
@@ -15198,14 +15141,7 @@ namespace ArchiveFixer.ViewModels
         /// ⇒ 两处一起改：守卫不再把在册的延迟任务算成"没轮到"（<see cref="IsDeferredVolumeDeficit"/>），
         /// 而且**用户没按停止**时这一步照跑（<c>internal</c> 就是给那条路用的）。</para>
         /// </summary>
-        /// <param name="concludeUnrun">
-        /// <c>true</c>（默认）= 链尾这一趟才凑齐的那几单**就地落结论**「这一批没轮到它」——
-        /// 老口径，意思是"用户再点一次就会解"（守门用例 <c>DeferredVolumeStatusTests.链尾才凑齐的那一单_必须落结论_不许留在等待解压</c> 钉着它）。
-        /// <c>false</c> = **先不落结论**，把它们原样交回给调用方 —— 一键档拿这条返回值
-        /// **再跑一轮第二大步**把它们解掉（用户 2026-10-14 口径：「批末刚补齐的组必须真的被解」，
-        /// ⛔ 只留一句日志不算；轮数仍只有一个出口 <c>OneClickCoordinator.RoundLimit</c>，调用方先判余量）。
-        /// </param>
-        internal IReadOnlyList<ArchiveTask> FinalizeDeferredVolumeDeficits(bool concludeUnrun = true)
+        internal IReadOnlyList<ArchiveTask> FinalizeDeferredVolumeDeficits()
         {
             /*
              * ⚠ 2026-10-08：**这一站才是"真缺卷"下结论的地方** ⇒ 先把进来时那份名单快照下来，
@@ -15228,46 +15164,37 @@ namespace ArchiveFixer.ViewModels
              */
             List<ArchiveTask> chainEndCompleted = RecheckDeferredVolumeDeficits(finalPass: true);
 
-            /*
-             * ⚠ `concludeUnrun: false` 时这一整段**不跑**：那几单原样交回调用方去**再跑一轮第二大步**
-             * （用户 2026-10-14 口径：「批末刚补齐的组必须真的被解」）。它们的机器终态此刻仍是 `Pending` ——
-             * 调用方要么把这一轮跑掉（那就自然落成"成功/部分完成"），要么跑不成再回来按老口径收口
-             * （那时的默认调用 `concludeUnrun: true` 会把结论补上，⛔ 不会有任何一单留在 `Pending`）。
-             */
-            if (concludeUnrun)
+            foreach (ArchiveTask task in chainEndCompleted)
             {
-                foreach (ArchiveTask task in chainEndCompleted)
-                {
-                    AppendLog(
-                        "WARN",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.VolumeDeficitChainEndCompleteLogFormat,
-                            task.FileName));
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeDeficitChainEndCompleteLogFormat,
+                        task.FileName));
 
-                    /*
-                     * ⚠ 2026-10-09 **B1：链尾给它们一个落定结论**（原话：「链尾 toRun 落结论、Pending 收口」）。
-                     *
-                     * 改之前这里**只打一行日志**，那几单的机器终态一直停在 `Pending`、状态停在「等待解压」
-                     * ⇒ 批末汇总按终态把它们算进「未处理」，而它其实"这一批没轮到"（原因很具体：
-                     * 整组是在链尾这一趟才凑齐的，而这一批的轮次已经跑完了）。
-                     *
-                     * ⛔ **这不是"放宽批中间不落结论"那条判据**：判据管的是**批中间**，而走到这一行时
-                     * 整条链已经跑完 —— 就地落结论正是「分卷和其他未识别的东西统统跳过，到了最后再重新
-                     * 检验一步」那条口径的最后一格。
-                     *
-                     * ⛔ 结论**不许写成缺卷 / 跟班卷**：这一组的完整性刚在这里被判成"齐了"，
-                     * 写"缺卷"是假话；内容也确实没有任何一单解过（解过的话上面
-                     * `TryResolveConsumedByAnotherTask` 早就把它按跟班卷收场了）。⇒ 如实写
-                     * 「这一批没轮到它」，并且**明确告诉用户再点一次就会解**。
-                     */
-                    task.Outcome = TaskOutcome.Skipped;
-                    task.MarkSkipped(
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.VolumeDeficitChainEndNotRunText,
-                            task.FileName));
-                }
+                /*
+                 * ⚠ 2026-10-09 **B1：链尾给它们一个落定结论**（原话：「链尾 toRun 落结论、Pending 收口」）。
+                 *
+                 * 改之前这里**只打一行日志**，那几单的机器终态一直停在 `Pending`、状态停在「等待解压」
+                 * ⇒ 批末汇总按终态把它们算进「未处理」，而它其实"这一批没轮到"（原因很具体：
+                 * 整组是在链尾这一趟才凑齐的，而这一批的轮次已经跑完了）。
+                 *
+                 * ⛔ **这不是"放宽批中间不落结论"那条判据**：判据管的是**批中间**，而走到这一行时
+                 * 整条链已经跑完 —— 就地落结论正是「分卷和其他未识别的东西统统跳过，到了最后再重新
+                 * 检验一步」那条口径的最后一格。
+                 *
+                 * ⛔ 结论**不许写成缺卷 / 跟班卷**：这一组的完整性刚在这里被判成"齐了"，
+                 * 写"缺卷"是假话；内容也确实没有任何一单解过（解过的话上面
+                 * `TryResolveConsumedByAnotherTask` 早就把它按跟班卷收场了）。⇒ 如实写
+                 * 「这一批没轮到它」，并且**明确告诉用户再点一次就会解**。
+                 */
+                task.Outcome = TaskOutcome.Skipped;
+                task.MarkSkipped(
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeDeficitChainEndNotRunText,
+                        task.FileName));
             }
 
             foreach (ArchiveTask task in pending)

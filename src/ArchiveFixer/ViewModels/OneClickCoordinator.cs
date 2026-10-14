@@ -1303,67 +1303,6 @@ namespace ArchiveFixer.ViewModels
              * · 撞到轮数上限：更深的包还没解，内容物可能不全，不能在此时把源包搬走。
              * 两种情况都写 WARN 说明原因，绝不静默。
              */
-            /*
-             * ⚠ **轮边界补跑：批末刚补齐的那几组必须真的被解一次**（用户 2026-10-14 口径
-             * 「剩下的缺什么就补什么……而且没有成功你还是得换回原来的样子」＋「批末刚补齐的组必须进下一轮」）。
-             *
-             * <para>现场（官方环台 `17171717` 组合 4 逐字）：这一组的缺口是在**链尾那一站**才补齐的
-             * （`批末补判：「aaa-L2.zip.001」这一组现在齐了（共 2 卷），照常跑这一组`），
-             * 可那一单最后仍然落「分卷缺失」—— 因为轮判定那一刻读到的是
-             * `单一压缩包 0 / 分卷 0 组 / 其余都是内容物 0 ⇒ Finished`，**这一批已经没有下一轮了**。</para>
-             *
-             * <para>判据与执行体：链尾那一站（<c>FinalizeDeferredVolumeDeficits</c>）先**照常**把片收齐、
-             * 把起点改到入口包、把这几单记成"第二大步"（那些一条都没放宽），只是**先不落结论**
-             * （`concludeUnrun: false`）；拿到"刚补齐的那几单"之后，**只要轮数还有余量**，
-             * 就照常走一遍既有的解压入口把它们解掉。⛔ 轮数仍只有一个出口
-             * （<see cref="RoundLimit"/>，这里只判余量、不新造预算）；⛔ 被「停止后续」中断 / 撞到轮数上限时
-             * 一个字都不做（那两种情形下"先不动"是既有红线）；跑完之后链尾照旧再收口一次
-             * （<c>CompleteRootSourcePackagesAsync</c> 内部那一调用的就是默认口径），
-             * ⇒ **不会有任何一单留在 `Pending`**。</para>
-             */
-            if (!stopped && !stopRequested && !hitRoundLimit && round < RoundLimit)
-            {
-                IReadOnlyList<ArchiveTask> chainEndReady =
-                    _extractionCoordinator.FinalizeDeferredVolumeDeficits(concludeUnrun: false);
-
-                if (chainEndReady.Count > 0)
-                {
-                    round++;
-                    _vm.UpdateLogRunContext(round: round, stage: "第二大步（分卷，只解一层）");
-
-                    AppendLog(
-                        "INFO",
-                        $"一键处理：链尾那一趟才凑齐的 {chainEndReady.Count} 组，现在照常跑一轮第二大步把它们解掉"
-                        + $"（第 {round} 轮，轮数余量还有 {RoundLimit - round}）。");
-
-                    /*
-                     * 只勾这几单（解压入口只认勾选）。勾选状态在这一轮之后**原样还原** ——
-                     * 它是用户看得见的东西，⛔ 不替用户改。
-                     */
-                    List<ArchiveTask> selectedBefore = Tasks.Where(task => task.IsSelected).ToList();
-                    var readySet = new HashSet<ArchiveTask>(chainEndReady);
-
-                    foreach (ArchiveTask task in Tasks)
-                    {
-                        task.IsSelected = readySet.Contains(task);
-                    }
-
-                    try
-                    {
-                        await _extractionCoordinator.StartExtractForOneClickAsync(runOptions, continuationRound: true);
-                    }
-                    finally
-                    {
-                        foreach (ArchiveTask task in Tasks)
-                        {
-                            task.IsSelected = selectedBefore.Contains(task);
-                        }
-                    }
-
-                    UpdateSummary();
-                }
-            }
-
             await CompleteRootSourcePackagesAsync(
                 rootTargets,
                 processed,
