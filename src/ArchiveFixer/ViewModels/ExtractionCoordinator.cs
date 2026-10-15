@@ -20929,6 +20929,21 @@ namespace ArchiveFixer.ViewModels
         private bool PartialPublishActive => Settings?.PartialPublishEnabled == true && !_spaceTightThisBatch;
 
         /// <summary>
+        /// **「这一单算不算『损坏压缩包』」的唯一出口**（用户 2026-10-14 口径：部分完成发布从"用户开关"
+        /// 降到底层 —— 「就是『损坏压缩包的解压情况』，这种情况下会自动开启，**而且用户不能操作**」）。
+        ///
+        /// <para>判据只看**结构化事实**：引擎明说 <see cref="EngineErrorTypes.CorruptedArchive"/>
+        /// （"归档损坏 / 校验和不符 / 数据不全"）。⛔ 不比中文文案、⛔ 不看体积/名字一类推断。</para>
+        ///
+        /// <para><b>为什么不含"两义"那一档</b>（<see cref="EngineErrorTypes.PasswordOrCorrupted"/>）：
+        /// 引擎在那里同一句话里既说密码不对又说数据坏了，**它自己都判不出**；而这一类最常见的成因是
+        /// 密码不对（旧式 RAR 加密包）⇒ 按项目铁律「判不出 ⇒ 什么都不做」，这一档**不发布**
+        /// （要发布得先让用户看到那两种可能、由他决定，⛔ 不是我们替他挑一个）。</para>
+        /// </summary>
+        private static bool IsDamagedArchive(string? detectedErrorType) =>
+            string.Equals(detectedErrorType, EngineErrorTypes.CorruptedArchive, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 部分完成发布的候选：**失败路径**填进来，收尾处（清工作区之前）真发布。
         ///
         /// <para>为什么用"候选"而不是就地发布：发布要读到三样只有收尾那一刻才齐的东西 ——
@@ -20952,6 +20967,20 @@ namespace ArchiveFixer.ViewModels
             public int EngineReportedErrorCount { get; init; }
 
             public bool EngineReportedFailure { get; init; }
+
+            /// <summary>
+            /// **这一单的失败是"引擎明说包损坏"吗**（<see cref="IsDamagedArchive"/> 是唯一判据出口）。
+            ///
+            /// <para>它是这一档的**触发事实**：登记那一刻从结构化结果里读一次、之后不再变
+            /// （收尾时才决定发不发，但"坏没坏"这件事在失败那一刻就已经定了）。</para>
+            /// </summary>
+            public bool Damaged { get; init; }
+
+            /// <summary>
+            /// 引擎给的结构化错误类型（<c>EngineErrorTypes</c> 那一套词表里的名字；空串 = 没给）。
+            /// 只为**如实写清"为什么没发布"**：那一行要点名这一单到底属于哪一档。
+            /// </summary>
+            public string DetectedErrorType { get; init; } = string.Empty;
 
             /// <summary>
             /// 逐条清单（相对路径 + 解压后字节）。**空表 = 手上没有清单** ⇒ 收尾时用这一层的密码
@@ -20978,7 +21007,8 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyList<(string Path, long Size)>? manifestEntries,
             IReadOnlyList<string>? engineFailedEntries,
             int engineReportedErrorCount,
-            bool engineReportedFailure)
+            bool engineReportedFailure,
+            string? detectedErrorType = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(stagingRoot))
             {
@@ -20993,7 +21023,9 @@ namespace ArchiveFixer.ViewModels
                 ManifestEntries = manifestEntries ?? Array.Empty<(string, long)>(),
                 EngineFailedEntries = engineFailedEntries ?? Array.Empty<string>(),
                 EngineReportedErrorCount = engineReportedErrorCount,
-                EngineReportedFailure = engineReportedFailure
+                EngineReportedFailure = engineReportedFailure,
+                Damaged = IsDamagedArchive(detectedErrorType),
+                DetectedErrorType = detectedErrorType ?? string.Empty
             };
         }
 
@@ -21039,7 +21071,8 @@ namespace ArchiveFixer.ViewModels
                 failedLayer.ManifestEntries,
                 failedLayer.FailedEntryNames,
                 failedLayer.ReportedSubItemErrors,
-                engineReportedFailure: true);
+                engineReportedFailure: true,
+                detectedErrorType: failedLayer.DetectedErrorType);
         }
 
         /// <summary>
@@ -21083,8 +21116,28 @@ namespace ArchiveFixer.ViewModels
                 return false;
             }
 
-            if (Settings?.PartialPublishEnabled != true)
+            /*
+             * ⛔ **触发判据 = 结构化事实，不是③页那个开关**（用户 2026-10-14 口径：这个功能淘汰，
+             * 做成底层设计 —— 「就是『损坏压缩包的解压情况』，这种情况下会自动开启，
+             * **而且用户不能操作**」）。
+             *
+             * 老实现读 `Settings.PartialPublishEnabled`：那个开关的 UI 在九页签那一刀已经删掉、
+             * 三处值都是 false ⇒ **用户再也开不了"把已经解出来的留下"**（这一档等于死掉了）。
+             * 现在：只有"引擎明说包损坏"（<see cref="IsDamagedArchive"/>，唯一出口）才自动发布；
+             * 别的失败（密码错 / 缺卷 / 取消 / 越界…）照旧一个字节都不发布，并如实写一行为什么。
+             */
+            if (!candidate.Damaged)
             {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishNotDamagedFormat,
+                        task.FileName,
+                        string.IsNullOrWhiteSpace(candidate.DetectedErrorType)
+                            ? "引擎没给出结构化错误类型"
+                            : candidate.DetectedErrorType));
+
                 return false;
             }
 
@@ -21168,6 +21221,21 @@ namespace ArchiveFixer.ViewModels
                     outcome.DestinationDirectory,
                     outcome.Verdict.Entries.Count,
                     TaskSpaceEstimate.FormatSize(outcome.Verdict.ExpectedBytes),
+                    outcome.Verdict.Rejected.Count));
+
+            /*
+             * ⛔ **必须明说"压缩包损坏"**（用户 2026-10-14 口径：「这个损坏的压缩包我们肯定是要在日志里面
+             * 去报一个压缩包损坏的情况，然后不完整的内容物就留下来」）。
+             *
+             * 为什么写成 WARN 而不是 INFO：成功任务只留一行摘要（第 44 条），而这一单是"失败 + 救回一部分"
+             * ⇒ 只写 INFO 的话用户按"失败"去查，看不到"哪些是坏的、哪些已经救出来了"这件事。
+             */
+            AppendLog(
+                "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.PartialPublishDamagedArchiveFormat,
+                    task.FileName,
                     outcome.Verdict.Rejected.Count));
 
             if (outcome.Publish.RenamedCount > 0)
@@ -24199,7 +24267,8 @@ namespace ArchiveFixer.ViewModels
                         lastLayerManifestEntries,
                         lastResult?.FailedEntryNames,
                         lastResult?.ReportedSubItemErrors ?? 0,
-                        engineReportedFailure: lastResult != null && !lastResult.Success);
+                        engineReportedFailure: lastResult != null && !lastResult.Success,
+                        detectedErrorType: lastResult?.DetectedErrorType);
 
                     /*
                      * ===== 引擎原话落日志（用户 2026-09-27：「引擎原话从不落日志」）=====

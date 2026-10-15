@@ -144,6 +144,17 @@ namespace ArchiveFixer.Extraction
         /// <summary>这一层失败时引擎**自报**的出错条目数（闸门：比点得出名的多 ⇒ 一个字节都不发布）。</summary>
         public int ReportedSubItemErrors { get; init; }
 
+        /// <summary>
+        /// 这一层失败时引擎给的**结构化错误类型**（<c>EngineErrorTypes</c> 那一套词表里的名字；
+        /// 没有结果 / 手写报告时是空串）。
+        ///
+        /// <para><b>为什么要带它</b>（2026-10-16，「损坏压缩包 ⇒ 自动留下不完整内容物」那一档）：
+        /// 那条判据只认**结构化事实**，⛔ 不许比中文文案（AGENTS：要写盘的判据只准读枚举/错误码）。
+        /// 单层路那边手上直接有 <c>ArchiveOperationResult.DetectedErrorType</c>，递归路只有到这一层
+        /// 才拿得到 ⇒ 带出来，两条路的判据才是同一个。</para>
+        /// </summary>
+        public string DetectedErrorType { get; init; } = string.Empty;
+
         /// <summary>只用 "空密码" 或 "******"；本层没试过密码时为空串。</summary>
         public string UsedPasswordMasked { get; init; } = string.Empty;
     }
@@ -4863,6 +4874,7 @@ namespace ArchiveFixer.Extraction
                 ManifestEntries = manifestEntries ?? Array.Empty<(string, long)>(),
                 FailedEntryNames = result?.FailedEntryNames ?? Array.Empty<string>(),
                 ReportedSubItemErrors = result?.ReportedSubItemErrors ?? 0,
+                DetectedErrorType = result?.DetectedErrorType ?? string.Empty,
                 UsedPasswordMasked = succeededPassword == null ? string.Empty : PasswordMasker.Mask(succeededPassword)
             };
         }

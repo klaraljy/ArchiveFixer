@@ -262,11 +262,15 @@ namespace ArchiveFixer.Tests
         // ================================================================ 四、管线接线
 
         /// <summary>
-        /// **默认档一个字不改**（红线）：开关关着时，失败任务一个字节都不发布，
+        /// **默认档一个字不改**（红线）：**不是损坏**那一档，失败任务一个字节都不发布，
         /// 已解出的产物照旧按③页口径清掉。
+        ///
+        /// <para>⚠ 2026-10-16 订正：老版本这一条写的是"开关关着 ⇒ 不发布"，现在**开关管不着发布**了
+        /// （触发判据换成结构化事实）⇒ 改成按**失败原因**摆场景：引擎报的是"密码错误"，
+        /// 属于非损坏那一档，所以照旧一个字节都不发布。⛔ 判据意图一个字没改。</para>
         /// </summary>
         [Fact]
-        public async Task 开关关着_失败时不发布任何东西()
+        public async Task 密码错误那一档_失败时不发布任何东西()
         {
             Assert.Null(System.Windows.Application.Current);
 
@@ -285,27 +289,31 @@ namespace ArchiveFixer.Tests
             Assert.Equal(TaskOutcome.Failed, task.Outcome);
             Assert.False(
                 Directory.Exists(Path.Combine(task.OutputPath!, PartialPublisher.DirectoryName)),
-                "开关关着 ⇒ 不许出现「部分完成」目录");
+                "不是损坏档 ⇒ 不许出现「部分完成」目录");
             Assert.True(File.Exists(task.CurrentPath), "源包必须原地不动");
         }
 
         /// <summary>
-        /// **开关打开 + 解到一半失败**：逐条核对过的那 5 个（清单 6 个）发布进
-        /// <c>&lt;成品目录&gt;\部分完成\</c>，源包原地不动、终态仍然是失败。
+        /// ⛔ **触发判据是"引擎明说包损坏"这个结构化事实，不是③页那个开关**（用户 2026-10-14 口径：
+        /// 这个功能淘汰、做成底层设计 ——「就是『损坏压缩包的解压情况』，这种情况下会自动开启，
+        /// **而且用户不能操作**」）。
+        ///
+        /// <para>这里**故意把老开关设成 false**：它现在管不着发布这一件事（用户机器上它就是 false，
+        /// 而③页那一组 UI 已经删了 ⇒ 老实现等于"这一档彻底死掉"）。</para>
         /// </summary>
         [Fact]
-        public async Task 开关打开_失败时把核对过的部分发布出去()
+        public async Task 损坏包_自动把核对过的部分发布出去_不看那个老开关()
         {
             Assert.Null(System.Windows.Application.Current);
 
-            Harness harness = CreateHarness(partialPublish: true);
+            Harness harness = CreateHarness(partialPublish: false);
             ArchiveTask task = AddTask(harness, CreateSourceFile("partial.7z"));
 
             harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(6));
             harness.Engine.OnExtractAsync = request =>
             {
                 WritePayload(request.OutputPath!, 5);
-                return Task.FromResult(WrongPassword());
+                return Task.FromResult(Corrupted());
             };
 
             await harness.Coordinator.StartExtractAsync();
@@ -327,11 +335,88 @@ namespace ArchiveFixer.Tests
 
             Assert.Contains(logs, text => text.Contains("部分完成", StringComparison.Ordinal)
                                          && text.Contains("源包原地不动", StringComparison.Ordinal));
+
+            // ⛔ 用户口径逐字：「这个损坏的压缩包我们肯定是要在日志里面去报一个压缩包损坏的情况」。
+            Assert.Contains(logs, text => text.Contains("压缩包损坏", StringComparison.Ordinal));
         }
 
         /// <summary>
-        /// **与「空间不足」模式硬互斥**（用户 2026-10-02 顾虑 2）：那一档开着时本开关**不生效**，
+        /// ⛔ **反向对照**：密码错、缺卷、越界这些**不是损坏** ⇒ 一个字节都不发布，并如实写清为什么。
+        ///
+        /// <para>⚠ 这里把老开关设成 **true**（与上一条相反）：如果判据还留在开关上，这一条会当场红
+        /// —— 这正是"判据换了层"的红检点。</para>
+        /// </summary>
+        [Fact]
+        public async Task 密码错误_不是损坏档_一个字节都不发布_并如实写为什么()
+        {
+            Assert.Null(System.Windows.Application.Current);
+
+            Harness harness = CreateHarness(partialPublish: true);
+            ArchiveTask task = AddTask(harness, CreateSourceFile("partial.7z"));
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(6));
+            harness.Engine.OnExtractAsync = request =>
+            {
+                WritePayload(request.OutputPath!, 5);
+                return Task.FromResult(WrongPassword());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+            Assert.False(
+                Directory.Exists(Path.Combine(task.OutputPath!, PartialPublisher.DirectoryName)),
+                "不是损坏档 ⇒ 不许出现「部分完成」目录");
+            Assert.True(File.Exists(task.CurrentPath), "源包必须原地不动");
+
+            List<string> logs = harness.Log.Logs.Select(item => item.DisplayText).ToList();
+
+            Assert.Contains(
+                logs,
+                text => text.Contains("不属于「损坏压缩包」那一档", StringComparison.Ordinal)
+                        && text.Contains("WrongPassword", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// **两义档不发布**（边界）：引擎同一句话里既说密码不对又说数据坏了 ⇒ **它自己都判不出**，
+        /// 按"判不出 ⇒ 什么都不做"这一档**不发布**（⛔ 不替用户挑一个结论）。
+        /// </summary>
+        [Fact]
+        public async Task 两义档_引擎同时说密码错和数据坏_一个字节都不发布()
+        {
+            Assert.Null(System.Windows.Application.Current);
+
+            Harness harness = CreateHarness(partialPublish: true);
+            ArchiveTask task = AddTask(harness, CreateSourceFile("partial.7z"));
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(6));
+            harness.Engine.OnExtractAsync = request =>
+            {
+                WritePayload(request.OutputPath!, 5);
+                return Task.FromResult(PasswordOrCorrupted());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.False(
+                Directory.Exists(Path.Combine(task.OutputPath!, PartialPublisher.DirectoryName)),
+                "两义档判不出 ⇒ 一个字节都不发布");
+            Assert.True(File.Exists(task.CurrentPath), "源包必须原地不动");
+
+            List<string> logs = harness.Log.Logs.Select(item => item.DisplayText).ToList();
+
+            Assert.Contains(
+                logs,
+                text => text.Contains("不属于「损坏压缩包」那一档", StringComparison.Ordinal)
+                        && text.Contains("PasswordOrCorrupted", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// **与「空间不足」模式硬互斥**（用户 2026-10-02 顾虑 2）：那一档开着时这一档**不生效**，
         /// 而且必须写一行说明为什么 —— ⛔ 用户的设置本身一个字节都不改。
+        ///
+        /// <para>⚠ 2026-10-16：场景按新触发判据摆 —— 引擎报的是**损坏**（否则会先被
+        /// "不属于损坏那一档"拦住、走不到空间不足这条分支，这一条就成了假绿）。</para>
         /// </summary>
         [Fact]
         public async Task 空间不足模式开着_部分完成发布不生效且说明原因()
@@ -347,7 +432,7 @@ namespace ArchiveFixer.Tests
             harness.Engine.OnExtractAsync = request =>
             {
                 WritePayload(request.OutputPath!, 5);
-                return Task.FromResult(WrongPassword());
+                return Task.FromResult(Corrupted());
             };
 
             await harness.Coordinator.StartExtractAsync();
@@ -443,7 +528,11 @@ namespace ArchiveFixer.Tests
                 cancelRequested = true;
                 harness.Coordinator.CancelCurrentTask();
 
-                return Task.FromResult(WrongPassword());
+                /*
+                 * ⚠ 2026-10-16：这里刻意让引擎报**损坏**（而不是"密码错误"）—— 否则这一条会
+                 * 因为"不是损坏档 ⇒ 本来就不发布"而**假绿**，那就验不出"取消这一道闸门"了。
+                 */
+                return Task.FromResult(Corrupted());
             };
 
             await harness.Coordinator.StartExtractAsync();
@@ -502,7 +591,10 @@ namespace ArchiveFixer.Tests
             harness.Engine.OnExtractAsync = request =>
             {
                 WritePayload(request.OutputPath!, 5);
-                return Task.FromResult(WrongPassword());
+
+                // ⚠ 2026-10-16：这一条要验"发布成功之后的半份清理" ⇒ 场景必须是**损坏**那一档
+                //（非损坏档现在一个字节都不发布，用"密码错误"会让它停在前提断言上）。
+                return Task.FromResult(Corrupted());
             };
 
             await harness.Coordinator.StartExtractAsync();
@@ -732,6 +824,39 @@ namespace ArchiveFixer.Tests
                 Status = StatusText.WrongPassword,
                 Message = "密码错误",
                 DetectedErrorType = "WrongPassword"
+            };
+        }
+
+        /// <summary>
+        /// **损坏压缩包**那一档（2026-10-16 起，这一档是"部分完成发布"的**唯一触发事实**：
+        /// 用户 2026-10-14 口径「就是『损坏压缩包的解压情况』，这种情况下会自动开启，而且用户不能操作」）。
+        /// 结构化字段逐字用引擎词表里那个名字（<c>EngineErrorTypes.CorruptedArchive</c>）。
+        /// </summary>
+        private static ArchiveOperationResult Corrupted()
+        {
+            return new ArchiveOperationResult
+            {
+                Success = false,
+                Status = StatusText.Corrupted,
+                Message = "数据错误：content.bin",
+                DetectedErrorType = EngineErrorTypes.CorruptedArchive,
+                FailedEntryNames = new[] { "payload-00005.bin" },
+                ReportedSubItemErrors = 1
+            };
+        }
+
+        /// <summary>
+        /// **两义档**：引擎同一句话里既说密码不对又说数据坏了（旧式 RAR 加密包）——它**自己都判不出** ⇒
+        /// 按项目铁律"判不出 ⇒ 什么都不做"，这一档**不发布**（⛔ 不替用户挑一个结论）。
+        /// </summary>
+        private static ArchiveOperationResult PasswordOrCorrupted()
+        {
+            return new ArchiveOperationResult
+            {
+                Success = false,
+                Status = StatusText.PasswordOrCorrupted,
+                Message = "在加密文件 payload-00005.bin 里校验和错误。文件已损坏或密码错误。",
+                DetectedErrorType = EngineErrorTypes.PasswordOrCorrupted
             };
         }
 
