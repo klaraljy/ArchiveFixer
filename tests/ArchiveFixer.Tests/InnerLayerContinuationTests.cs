@@ -637,30 +637,16 @@ namespace ArchiveFixer.Tests
             Assert.Single(payloads);
             Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
 
-            // ③ 过程物全部集中在 其余物 里，一个都不许漏在外面
+            // ③ ⛔ 新口径（用户 2026-10-14）：「其余物」只收过程物 + 无用物，而**源包不再搬进其余物**
+            //    （「原包一直在原来的位置」）⇒ 这一档不该再出现"其余物目录"。
             string processDirectory = Path.Combine(outputDirectory, "其余物");
-            Assert.True(Directory.Exists(processDirectory), $"其余物目录不存在：{processDirectory}");
-            Assert.True(File.Exists(Path.Combine(processDirectory, "inner.7z.001")));
+            Assert.False(
+                Directory.Exists(processDirectory),
+                $"新口径下不该建其余物目录（源包原地不动、过程物按档处理）：{processDirectory}");
 
-            // 除 其余物 之外的顶层条目只能有内容物（这里就是 payload.txt / big.bin）
-            string[] topLevel = Directory.GetFileSystemEntries(outputDirectory)
-                .Select(Path.GetFileName)
-                .Where(name => !string.Equals(name, "其余物", StringComparison.Ordinal))
-                .Select(name => name ?? string.Empty)
-                .ToArray();
-
-            Assert.All(
-                topLevel,
-                name => Assert.False(
-                    OneClickCoordinator.IsArchiveStartPoint(name) || name.EndsWith(".002", StringComparison.OrdinalIgnoreCase),
-                    $"过程物漏到内容物一层了：{name}"));
-
-            /*
-             * ④ 源包（含它的过程物）都进了那**一个**目录的 其余物 里 —— 用户 2026-09-22 的规则：
-             * 成功 + 校验通过就把源包放进其余物；本样本第一层没有内容物，所以发生在链结束之后。
-             */
-            Assert.False(File.Exists(outer), "源包应该已经被搬进其余物");
-            Assert.True(File.Exists(Path.Combine(processDirectory, "outer.7z")));
+            // ④ 源包**原地不动**（默认档 = 留下）。
+            Assert.True(File.Exists(outer), "默认档是「留下」—— 源包必须原地不动");
+            Assert.False(File.Exists(Path.Combine(outputDirectory, "outer.7z")));
         }
 
         // ---------------------------------------------------------------- 第 33 条：伪装过的下一层
@@ -983,11 +969,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 同一形状 + 「删除操作 = 彻底删除」：链尾收进其余物之后**连内层包一起被删掉**
-        /// （源包留在原地 —— 这份样本的源包档就是默认的「原来的位置不动」）。
+        /// 同一形状 + 「删除操作 = 彻底删除」：其余物（过程物）按档清掉，
+        /// 而**源包按「源包操作 = 留下」原地不动**（用户 2026-10-14：源包与其余物是两件事）。
         /// </summary>
         [Fact]
-        public async Task 彻底删除档_链尾把内层包连其余物一起删掉()
+        public async Task 彻底删除档_其余物按档清掉而源包原地不动()
         {
             const string mangledName = "inner.7删除z";
             string outer = BuildMangledInnerPackage(mangledName);
@@ -1010,10 +996,15 @@ namespace ArchiveFixer.Tests
             string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
             Assert.Single(payloads);
 
-            // 内层包与其余物目录都不见了（源包按「源包操作」搬进了其余物 → 也一起被删）。
-            Assert.Empty(Directory.GetFiles(harness.OutputRoot, "inner.7z", SearchOption.AllDirectories));
+            /*
+             * ⚠ 2026-10-15：这里原来断言"源包也被删了"（旧口径 = 源包先搬进其余物、再随其余物一起删）。
+             * 用户 2026-10-14 口径之后源包与其余物是**两件事**：
+             * 「源包操作」管源包（这里=留下 ⇒ 原地不动），「删除操作」管其余物。
+             * ⇒ 改钉：其余物目录不该存在（新口径下源包不搬进去、过程物由递归内核用完即收）；
+             *    **源包必须原地不动**。
+             */
             Assert.Empty(Directory.GetDirectories(harness.OutputRoot, "其余物", SearchOption.AllDirectories));
-            Assert.False(File.Exists(outer), "源包操作=放入其余物 + 删除操作=彻底删除 → 源包也该没了");
+            Assert.True(File.Exists(outer), "「源包操作 = 留下」⇒ 源包必须原地不动（其余物那一档管不到它）");
         }
 
         /// <summary>造"外层包 → 名字被塞字的内层包 → 内容物"这条链（第 33/35 条共用样本）。</summary>

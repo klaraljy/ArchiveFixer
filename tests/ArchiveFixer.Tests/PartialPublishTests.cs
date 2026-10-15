@@ -262,15 +262,26 @@ namespace ArchiveFixer.Tests
         // ================================================================ 四、管线接线
 
         /// <summary>
-        /// **默认档一个字不改**（红线）：开关关着时，失败任务一个字节都不发布，
-        /// 已解出的产物照旧按③页口径清掉。
+        /// ⛔ <b>2026-10-15 口径变更：这个开关**已经不存在**了</b>（系统固定值「开」）——
+        /// 用户逐字：「这个功能我要淘汰，就是将这个功能做到底层设计上面，就是『**损坏压缩包的解压情况**』，
+        /// 这种情况下我们会**自动开启，而且用户不能操作**」。
+        ///
+        /// <para>这一条原来钉的是"开关关着 ⇒ 一个字节都不发布"；现在改成钉**新口径**：
+        /// 老配置里存过的 <c>false</c>（用户机器上就是）被 `Normalize` **钉回 true** ⇒
+        /// 损坏压缩包那一档**照样把逐条核对过的部分发布出去**（⛔ 用户再也不能把自己锁在"丢掉十几 GiB"那一档）。</para>
         /// </summary>
         [Fact]
-        public async Task 开关关着_失败时不发布任何东西()
+        public async Task 开关已是系统固定值_老配置存过false也被钉回true_照样发布部分内容()
         {
             Assert.Null(System.Windows.Application.Current);
 
+            // 模拟用户机器上那份老配置：存的就是 false。
             Harness harness = CreateHarness(partialPublish: false);
+
+            Assert.True(
+                harness.Vm.Settings.PartialPublishEnabled,
+                "老配置里的 false 必须被钉回 true（系统固定值，界面上没有入口可以关掉它）");
+
             ArchiveTask task = AddTask(harness, CreateSourceFile("partial.7z"));
 
             harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(6));
@@ -283,9 +294,12 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.Equal(TaskOutcome.Failed, task.Outcome);
-            Assert.False(
+
+            // 新口径：逐条核对过的 5 个照旧发布进「部分完成」。
+            Assert.True(
                 Directory.Exists(Path.Combine(task.OutputPath!, PartialPublisher.DirectoryName)),
-                "开关关着 ⇒ 不许出现「部分完成」目录");
+                "系统固定值「开」⇒ 损坏压缩包那一档必须把已解出的部分留下");
+
             Assert.True(File.Exists(task.CurrentPath), "源包必须原地不动");
         }
 
