@@ -7023,6 +7023,23 @@ namespace ArchiveFixer.ViewModels
             recursiveExtractor.DangerousEntriesReported = hint => PublishDangerousEntriesHint(task, hint, "INFO");
 
             /*
+             * 「这一层的密码被验证成功」⇒ 记进**本批已成功的密码**（用户 2026-09-26 第 45 条）。
+             *
+             * ⛔ 为什么必须补这一处：默认档是「有压缩包就解压」，解压交给递归核心做 ⇒
+             * 递归路不报这一声的话，`PasswordService.RecordPasswordSuccess` 在**默认档下一次都不会被调到**
+             * ⇒ 后面每一个包的候选表里都没有"复用本批已成功的密码" ⇒ 每个包都从空密码开始把整张表重试一遍
+             * （用户原话：「不就是在放屁吗，每次都是重新一轮密码检测」）。
+             * 2026-10-16 实测（`PasswordReuseTests.第一包第五候选成功…`）：同一批第二个包拿到的候选表
+             * 逐字是 ` | <示例密码1> | <示例密码2> | <示例密码3> | <示例密码4> | <示例密码5>` —— 与第一个包**一模一样**。
+             *
+             * 挂源文件（`task.CurrentPath`）而不是工作区里那一层：与单层路那三处**逐字同一口径**
+             * （"密码成功记录仍然挂在**源文件**上：下次用户再导入这个文件时要能直接命中，
+             * 而工作区里抠出来的临时文件活不过这次任务"）。
+             */
+            recursiveExtractor.PasswordVerified = password =>
+                _passwordService.RecordPasswordSuccess(task.CurrentPath, password);
+
+            /*
              * 记下"这一单用的是哪个递归核心"：它手上的逐层工作区要在任务收尾时按结论处理
              * （成功由它自己清；失败 / 取消 / 部分完成由 CleanupFailedTaskWorkspace 按设置决定，见那里的说明）。
              * 取消那一条路上 ExtractAsync 直接抛异常，只有在这里留着实例，收尾才找得到那份工作区。

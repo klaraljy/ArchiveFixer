@@ -815,6 +815,26 @@ namespace ArchiveFixer.Extraction
         public Func<string, int, string>? DescribeCandidate { get; set; }
 
         /// <summary>
+        /// 某一层的密码**被验证成功**的回传口（参数 = 那把明文密码）。
+        ///
+        /// <para>存在的理由 = **两条解压路的行为对齐**（AGENTS.md：递归层与单层路行为必须对齐）。
+        /// 单层路在候选循环里成功那一刻会调 <c>PasswordService.RecordPasswordSuccess</c>，
+        /// 于是"本批已成功的密码"会被提到后面每一个包的候选表**最前面**（用户 2026-09-26 第 45 条：
+        /// 「复用本批次已成功的密码，不就是在放屁吗，每次都是重新一轮密码检测」）。
+        /// 而默认档是「有压缩包就解压」⇒ 解压交给递归核心做 ⇒ 递归路不报这一声，
+        /// 那条复用链在**默认档下整条失效**（2026-10-16 实测：同一批第二个包照旧从空密码开始、
+        /// 把 6 个候选全试一遍）。</para>
+        ///
+        /// <para>⛔ 它**只回传，不落地**：<see cref="RecursionLayerReport"/> 那条"本类不得出现明文密码"
+        /// 的规矩一个字不动（这里与既有的 <see cref="DescribeCandidate"/> 同一档 —— 那个口子本来就把
+        /// 候选值交给调用方）。</para>
+        ///
+        /// <para>唯一调用点 = <see cref="FinishSuccessfulLayerAsync"/>（三种成功路的**共同出口**：
+        /// 主引擎循环 / 尾部归档直读 / 换引擎兜底），所以直读与兜底两条路也照样报。</para>
+        /// </summary>
+        public Action<string>? PasswordVerified { get; set; }
+
+        /// <summary>
         /// 「停止后续」的信号（可空）。为真 = 用户想让一切都停下来，**不是**取消当前任务。
         ///
         /// <para>为什么要这个口子（2026-10-05 只读审计）：单层路径在候选之间看 <c>IsStopping</c>
@@ -2925,6 +2945,17 @@ namespace ArchiveFixer.Extraction
             string? succeededPassword,
             CancellationToken cancellationToken)
         {
+            /*
+             * 这一层的密码被验证成功 ⇒ 如实回传一声（空密码不算"一条密码"，与
+             * PasswordService.RecordVerifiedPassword 的既有口径一致：它也不记空密码）。
+             *
+             * 位置 = **三条成功路的共同出口**（主引擎循环 / 尾部归档直读 / 换引擎兜底），
+             * ⛔ 不在某一条路里各写一遍 —— 那个正是本项目禁止的"同一件事两份实现"。
+             */
+            if (!string.IsNullOrEmpty(succeededPassword))
+            {
+                PasswordVerified?.Invoke(succeededPassword);
+            }
             string layerLabel = DescribeProbeLabel(item);
 
             (int fileCount, long outputSize) = OutputVerifier.Measure(item.Layer.OutputPath);
