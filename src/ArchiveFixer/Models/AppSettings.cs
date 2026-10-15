@@ -1469,6 +1469,14 @@ namespace ArchiveFixer.Models
              * `RecursionLogAndProbePathFixesTests` 1）属于"场景建立在**已删模式**上"——
              * 按新现实重写（见各自注释），⛔ 不是把判据放宽。
              */
+            /*
+             * ⛔ 2026-10-15 红检记录（临时撤掉这一行跑过一轮，已还原）：撤掉之后
+             * `InnerLayerContinuationTests` 23 红 → 2 红、`ExtractionPipelineFixTests` 10 → 0、
+             * `ChainManifestCompletenessTests` 3 → 0、`OutputVerificationGateTests` 3 → 0
+             * ⇒ **这一条 pin 是那 ~36 条红的唯一根因**（夹具把 `SingleLayer` 当"只造一层场景"的工具，
+             * 而 `Save()` → `Normalize()` 会把它覆盖掉）。⚠ 这些用例测的是**已删的"一轮 = 一层"**那条路
+             * ⇒ 按 `AllBranches` 新现实重写（⛔ 不是撤掉 pin —— 撤掉就违反用户口径）。
+             */
             RecursionMode = "AllBranches";
 
             /*

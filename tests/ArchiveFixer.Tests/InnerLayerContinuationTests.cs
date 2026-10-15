@@ -1911,9 +1911,12 @@ namespace ArchiveFixer.Tests
                 Directory.GetFiles(outputRoot, "payload*.txt", SearchOption.AllDirectories).Length);
 
             // ③ 走的是「展开所有分支」那一档。
+            // ⚠ 2026-10-15：原来这里钉 `模式 AllBranches` —— 那一行日志改成"有压缩包就解压"了
+            // （用户口径：屏幕上不该再出现那个档位名，单层路/单链档已删）⇒ 断言跟着改，
+            // ⛔ 判据意图一个字没变（还是"走的是展开所有分支那一档"）。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("模式 AllBranches", StringComparison.Ordinal));
+                line => line.Contains("有压缩包就解压", StringComparison.Ordinal));
 
             // ④ 没有任何"没展开"的停因。
             Assert.DoesNotContain(
