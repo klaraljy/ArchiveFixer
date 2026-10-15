@@ -749,36 +749,37 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 一键处理_彻底删除档_源包跟着其余物一起被删()
+        public async Task 一键处理_彻底删除档_源包就地删掉_不进其余物()
         {
             /*
-             * 2026-09-25 第 32 条之后，"校验通过后删源包"由两档组合表达：
-             * 源包操作 = 放入其余物 + 删除操作 = 彻底删除。这里走的是**单层**（第一层直接出内容物），
-             * 所以收尾那一刻其余物里已经有源包了 → 当场按档删掉。
+             * 用户 2026-10-14 口径（逐字）：「源包操作只针对成功得到内容物的情况……就两个选项，
+             * 留下和彻底删除（默认留下），彻底删除就是没了，不用进回收站」＋下午订正
+             * 「**原包一直在原来的位置，选『彻底删除』也是就地删、⛔ 不搬进其余物**」。
+             *
+             * ⚠ 这一条替换掉旧的 `一键处理_彻底删除档_源包跟着其余物一起被删` —— 旧的走的是
+             * "源包先搬进其余物、再由删除操作连其余物一起删"，那条路已经随口径删除。
+             * ⛔ 失败 / 部分完成 / 取消 ⇒ 一个字节都不动（`一键处理_留在原地档_不动源包也不建其余物`
+             * 与下面那组失败/取消用例钉着）。
              */
-            Harness harness = CreateHarness(settings =>
-            {
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
-                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
-            });
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
 
             string source = CreateSourceFile("pack.7z");
             ArchiveTask task = AddTask(harness, source);
 
             await harness.Coordinator.StartExtractForOneClickAsync();
 
-            /*
-             * 一键处理的"删除操作"是**链尾**做的（第 32 条：链还没跑完就删其余物，会把后面几层要用的
-             * 内层分卷一起删掉）—— 所以这里要像真管线那样补上链尾那一步：
-             * `OneClickCoordinator.CompleteRootSourcePackagesAsync` → `CompleteRootSourcePackagesAfterChainAsync`。
-             */
-            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { task }, new[] { task });
-
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(source), "彻底删除档应当把源包（连同其余物）一起删掉");
+
+            // ① 源包**没了** —— 就地删（⛔ 不是搬走）。
+            Assert.False(File.Exists(source), "彻底删除档：成功后源包必须被就地删掉");
+
+            // ② ⛔ 它**不许**出现在「其余物」里（"搬进其余物"是已废掉的旧口径）。
             Assert.False(
                 Directory.Exists(Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName)),
-                "彻底删除档跑完不该还留着其余物目录");
+                "彻底删除档不该建其余物目录（源包是就地删，不是搬进去）");
+
+            // ③ 内容物照旧都在。
             Assert.Equal(5, CountFiles(task.OutputPath));
         }
 
