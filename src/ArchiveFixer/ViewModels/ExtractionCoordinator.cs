@@ -7485,7 +7485,8 @@ namespace ArchiveFixer.ViewModels
                     if (IsStalledGroupOwnGroup(task, result))
                     {
                         RememberDeferredVolumeDeficit(task);
-                    }                    else if (FindStalledVolumePiece(result) is { Length: > 0 } stalledPiece
+                    }
+                    else if (FindStalledVolumePiece(result) is { Length: > 0 } stalledPiece
                              && !AnyTaskRepresentsGroup(stalledPiece))
                     {
                         /*
