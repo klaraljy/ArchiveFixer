@@ -154,38 +154,27 @@ namespace ArchiveFixer.ViewModels
              * 定稿那一刻才释放（真机第六批：空间曲线 13:39:32 最低 62.48 GiB → 13:40:57 回到 82.63 GiB，
              * 峰值 26.94 GiB 而结果只有 7.28 GB）。
              *
-             * ⛔ **判据只有既有那两个事实位**（`_layerReclaimThisBatch` / `_layerReclaimToRestThisBatch`，
-             * 写入点唯一 `PrepareRestHandlingForBatch`）—— 递归路**不另算一遍**：
-             * 「空间不足」档照旧走它自己那一支（每层各删各的、含源包），「不动其余物」档更不动内层包。
-             * 挂钩子这一行读的就是它们。
+             * ⛔ **判据只有既有那一个事实位**（`_layerReclaimThisBatch`，写入点唯一
+             * `PrepareRestHandlingForBatch`）—— 递归路**不另算一遍**：
+             * 「空间不足」模式照旧走它自己那一支（每层各删各的、含源包），普通档恒为 true。
+             * 挂钩子这一行读的就是它。
              */
             /*
-             * ⚠ 2026-10-12 实测：**Keep 档那一支先不挂**（`_layerReclaimToRestThisBatch` 留着不用）——
-             * 我的第一版把"集中进其余物"接到了 `ExecuteSourcePackageMove`（源包搬运），而它有一条红线的
-             * 原话就是拒搬工作区里的文件：`源在工作区目录里（那是程序自己的中间产物，不是用户的源包），
-             * 一个字节都不搬`（`run-4444` 逐字，×3 片）⇒ 那一支只会写一句"集中进其余物"的假 INFO。
-             * ⇒ 下一轮换成**过程物**那条出口（`Extraction/ProcessArtifactLayout` 的"把过程物搬进其余物"，
-             * 它本来就是干这个的、也接受工作区里的路径），在此之前**不挂钩子**（Keep 档行为与从前逐字相同）。
+             * ⚠ 2026-10-12 三条实测（保留，因为它们是"为什么这个钩子只删、绝不在这里搬"的依据）：
+             * ① 接到源包搬运（`ExecuteSourcePackageMove`）上 ⇒ 被那条红线拒搬（"源在工作区目录里…
+             *    一个字节都不搬"），只留一句假 INFO；
+             * ② 换成过程物那条出口（往其余物里**搬**）⇒ 片确实集中进其余物了（日志逐字
+             *    `逐层回收（删除操作 = 不动其余物） —— pack111-L2.z01 已集中进其余物`），**但同一轮的内容物
+             *    被重复解出来**（残留出现 `pack111-L4.rarzz\pack111-L0\444(1).mp4`、`444(2).mp4`）
+             *    ⇒ 逐层"搬"会让后续那一层的产物跟踪按路径找不到原件；
+             * ③ 而"用完了就没了"（永久删）逐层做没问题 ⇒ 钩子的动作面**只有删**，
+             *    记账那一半（`_chainInnerLayerInputs`）交给链尾。
+             *
+             * ⛔ 2026-10-15：这一位现在**不再跟档位联动**（成功链的过程物一律当场永久删，
+             * 见 `PrepareRestHandlingForBatch`）。它仍然是"要不要挂钩子"的唯一判据：
+             * 「空间不足」模式有它自己那一支（置 false），普通档恒 true。
              */
-            /*
-             * ⚠ 2026-10-12 实测第二条（Keep 档那一支**又不挂**）：
-             * 挂上之后确实把片集中进其余物了（日志逐字：`逐层回收（删除操作 = 不动其余物） —— pack111-L2.z01 已集中进其余物`），
-             * **但同一轮的内容物被重复解出来**：残留里出现 `pack111-L4.rarzz\pack111-L0\444(1).mp4`、
-             * `pack111-L0(1)\444(1).mp4`、`444(2).mp4` ⇒ ①「内容物解出来」与②「成品同层」双双变红。
-             * ⇒ 结论：**"搬"不能挂在"逐层"那一刻**（删除/回收站那两档可以 —— 那是"用完了就没了"，
-             * 而搬走会让后续那一层的产物跟踪按路径找不到原件）。正确落点 = **链尾**（`CollectChainInnerPackagesIntoRestAsync`
-             * 已经在干这件事，只是它只认任务、认不出链内产出的片）⇒ 下一轮在那儿补，
-             * 在此之前**不挂钩子**（Keep 档行为与基线逐字相同）。
-             */
-            /*
-             * ⚠ 2026-10-12 第三条（**Keep 档也挂钩子，但只记账、绝不在这里搬**）：
-             * 上面两条把它整档关掉之后，「其余物 = 不处理」档**没有任何东西往 `_chainInnerLayerInputs` 里记账**
-             * ⇒ 链尾那一遍（`CollectChainInnerLayerInputsIntoRest`，它只读这份名单）永远搬 0 个
-             * ⇒ 链内那一族的 `.z01/.z02/.z03` 留在地树里（基线 3 轮 ③✘：`run-4444` / `run-11111111` /
-             * `run-19191919`，全是这一档）。修法 = 钩子照装（它同时是**唯一的记账点**），
-             * 但动作面**只留删除/回收站**：`toRest` 恒为 false（搬在链尾那一遍做完）。
-             */
-            if (_layerReclaimThisBatch || _layerReclaimToRestThisBatch)
+            if (_layerReclaimThisBatch)
             {
                 extractor.LayerReclaim = OnRecursiveLayerReclaim;
             }
@@ -223,7 +212,7 @@ namespace ArchiveFixer.ViewModels
              * **只记账**（⛔ 不动盘）：这一层用过的那几个文件（入口 + 同组各卷）。
              * 链尾那张"集中进其余物"的名单要用它 —— 实测依据（2026-10-12，`run-4444`）：
              * 挂在"逐层"那一刻去搬会把后续那一层的产物跟踪弄丢（内容物被重复解出来，`444(1)/(2).mp4`），
-             * 而**删除 / 回收站那两档逐层做没问题**（"用完了就没了"）⇒ 所以"搬"必须等链尾。
+             * 而**逐层删掉**没问题（"用完了就没了"）⇒ 所以"搬"必须等链尾。
              */
             foreach (string used in request.GroupFiles)
             {
@@ -234,25 +223,10 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * ===== 「其余物 = 不处理」档：这一层**只有记账，一个字节都不动**（2026-10-12）=====
-             *
-             * 为什么必须在这里显式返回（⛔ 不能靠"两个开关都是 false 自然就不动"）：
-             * `PurgeLayerSourcePackage` 的三个动作开关（`toRecycleBin` / `toRest`）全 false 时
-             * **会落到最后那一支"永久删除"**（它没有"档没开 ⇒ 什么都不做"的分支）——
-             * 实测：把钩子照装、`toRest` 传 false，既有守门 `用例R1` 当场变红
-             * （"不动其余物"那一遍第 3 层开工时 `level2.7z` 已经没了，逐字
-             * `Assert.Contains() Failure: Item not found in collection`）。
-             *
-             * 而"搬进其余物"也**不能**在这一刻做：实测（`run-4444`）逐层搬会让后续那一层的产物跟踪
-             * 按路径找不到原件 ⇒ 内容物被重复解出来（`444(1).mp4` / `pack111-L0(1)\444(1).mp4`）。
-             * ⇒ 这一档的全部动作 = 上面那几行记账，交给**链尾**那一遍
-             * （`CollectChainInnerLayerInputsIntoRest`）一次性集中进其余物。
+             * ⛔ 2026-10-15：这里原来有一支**「删除操作 = 不动其余物」档 ⇒ 只有记账、一个字节都不动**的提前返回。
+             * 它随"逐层回收与档位解绑"一起删除（用户 2026-10-14 口径：成功链上的过程物**统一彻底删除**，
+             * 不看档位；见 `PrepareRestHandlingForBatch` 里那一段）。⇒ 走到这里的每一层都按下面那套判据删。
              */
-            if (_layerReclaimToRestThisBatch)
-            {
-                return;
-            }
-
             if (!request.Verdict.AllowsSourceRemoval)
             {
                 /*
@@ -284,14 +258,7 @@ namespace ArchiveFixer.ViewModels
                 reclaimVerdict: request.Verdict,
                 reclaimRootSource: false,
                 reclaimLabel: request.ChildLayerLabel,
-                reclaimWorkspaceDirectory: request.WorkspaceTaskDirectory,
-                /*
-                 * ⛔ 这里**恒 false**：「其余物 = 不处理」档的那一份"搬进其余物"只能在**链尾**做
-                 * （`CollectChainInnerLayerInputsIntoRest`）—— 挂在逐层那一刻搬会让后续那一层的产物
-                 * 跟踪按路径找不到原件，内容物被重复解出来（实测：`444(1).mp4` / `pack111-L0(1)\444(1).mp4`）。
-                 * 这个钩子在 Keep 档的唯一职责 = 把用过的文件记进 `_chainInnerLayerInputs`（详见上面挂钩子那一行）。
-                 */
-                toRest: false);
+                reclaimWorkspaceDirectory: request.WorkspaceTaskDirectory);
 
             foreach ((string level, string message) in logEntries)
             {
@@ -314,9 +281,10 @@ namespace ArchiveFixer.ViewModels
         /// <summary>
         /// **把一个过程物文件搬进其余物**（唯一出口：让位 + 同卷改名 / 跨卷复制 + 绝不覆盖）。
         ///
-        /// <para>两处消费点共用它（⛔ 不许各写一份）：① 链尾把"内层包"集中进其余物
-        /// （<c>CollectChainInnerPackagesIntoRestAsync</c>）；② 「其余物 = 不处理」档的逐层集中
-        /// （<see cref="ReclaimLayerFilesToRest"/>）。</para>
+        /// <para>三处消费点共用它（⛔ 不许各写一份）：① <c>CollectChainInnerPackagesIntoRestAsync</c>
+        /// （链尾把"内层包"集中进其余物）；② <c>CollectChainInnerLayerInputsIntoRest</c>
+        /// （链内那一族的片在链尾集中）；③ <c>PurgeGroupLandedPieces</c>
+        /// （被整组接走的那份副本集中进其余物）。</para>
         ///
         /// <para>判据与源包搬运（<c>SourcePackageMover</c>）**同一口径**：目标名被占 ⇒
         /// <see cref="ProcessArtifactLayout.MakeUniqueTarget"/> 让位（连"本计划里前面那几条"一起算），
@@ -375,130 +343,6 @@ namespace ArchiveFixer.ViewModels
 
                 return false;
             }
-        }
-
-        /// <summary>
-        /// **「其余物 = 不处理」档的逐层集中**（用户 2026-10-12 计划的第三个动作）：
-        /// 这一层的过程物**搬进其余物**（既不删、也不进回收站）。
-        ///
-        /// <para><b>为什么必须有这一条</b>：这一档既不删也不进回收站 ⇒ 链内那一族的
-        /// <c>.z01/.z02/.z03</c> 留在落地树里（基线 3 轮 ③✘：`run-4444` / `run-11111111` / `run-19191919`，
-        /// 全是这一档），下一遍再导入就会被当成新原包 —— 正是判据 ③ 要防的那件事。</para>
-        ///
-        /// <para>⛔ 动手只有一处：<see cref="TryMoveIntoRest"/>（与链尾那一档**同一套**让位/复制语义）；
-        /// ⛔ 判不出其余物目录 / 一个都没搬成 ⇒ 如实写一行，什么都不动。</para>
-        /// </summary>
-        private void ReclaimLayerFilesToRest(
-            ArchiveTask task,
-            string? reclaimWorkspaceDirectory,
-            string subject,
-            List<(string Level, string Message)> logEntries)
-        {
-            // 措辞按**动作**说（触发点那一份是按"彻底删除"写的，这一档是"不动其余物"）。
-            string triggerLabel = StatusText.RecursionLayerKeepTriggerLabel;
-            List<string> targets = SourceCleanupService.BuildTargetList(task)
-                .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
-                .ToList();
-
-            if (targets.Count == 0)
-            {
-                logEntries.Add(("WARN", $"{task.LogName}：{triggerLabel}要集中{subject}，但清单是空的 —— 一个字节都没动。"));
-
-                return;
-            }
-
-            string? restDirectory = ResolveLayerReclaimRestDirectory(task, reclaimWorkspaceDirectory);
-
-            if (string.IsNullOrWhiteSpace(restDirectory))
-            {
-                logEntries.Add(("WARN", $"{task.LogName}：{triggerLabel}要集中{subject}，但推不出其余物目录 —— 一个字节都没动。"));
-
-                return;
-            }
-
-            var movedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var failures = new List<string>();
-            int moved = 0;
-
-            foreach (string from in targets)
-            {
-                if (TryMoveIntoRest(from, Path.Combine(restDirectory, Path.GetFileName(from)), movedTargets, out _, out string? moveFailure))
-                {
-                    moved++;
-                    logEntries.Add(("INFO", $"{task.LogName}：{triggerLabel} —— {Path.GetFileName(from)} 已集中进其余物"));
-                    continue;
-                }
-
-                failures.Add($"{Path.GetFileName(from)}（{moveFailure}）");
-            }
-
-            if (moved == 0)
-            {
-                logEntries.Add((
-                    "WARN",
-                    $"{task.LogName}：{triggerLabel}一个都没集中进其余物 —— {string.Join("；", failures)}（它们仍在原处）。"));
-
-                return;
-            }
-
-            // 其余物记到这一单上 ⇒ 「删除操作」那一档才有对象可删（与链尾那一档同一记账）。
-            task.RestDirectoryPath = restDirectory;
-
-            logEntries.Add((
-                "INFO",
-                $"{task.LogName}：{triggerLabel} —— 已把{subject} {moved} 个集中进其余物：{restDirectory}"
-                + (failures.Count > 0 ? $"（{failures.Count} 个没搬成，仍在原处）" : string.Empty)));
-        }
-
-        /// <summary>
-        /// **这一单的其余物目录**（"集中进其余物"那一档要用它）。
-        ///
-        /// <para>两个来源，都只读事实：</para>
-        /// <list type="number">
-        /// <item><description>续解路：任务上已经算好的 <see cref="ArchiveTask.RestDirectoryPath"/>（空 = 还没算过）；</description></item>
-        /// <item><description>递归路：手上是**递归工作区里的那一层**（<c>&lt;落点&gt;\.ArchiveFixer.work\recursive\&lt;id&gt;</c>）——
-        /// 按文件系统标记那一段**前面的**那一层就是落点，其余物就在它下面（常量唯一出口
-        /// <see cref="VolumeContentInference.WorkDirectoryName"/>，⛔ 这里不另写一份标记名）。</description></item>
-        /// </list>
-        ///
-        /// <para>推不出（标记那一段找不到 / 前面没有东西）⇒ 返回空串 ⇒ 调用方**什么都不做**（+ 一行 WARN）。</para>
-        /// </summary>
-        private static string? ResolveLayerReclaimRestDirectory(ArchiveTask task, string? reclaimWorkspaceDirectory)
-        {
-            if (task != null && !string.IsNullOrWhiteSpace(task.RestDirectoryPath))
-            {
-                return task.RestDirectoryPath;
-            }
-
-            if (string.IsNullOrWhiteSpace(reclaimWorkspaceDirectory))
-            {
-                return null;
-            }
-
-            try
-            {
-                var directory = new DirectoryInfo(reclaimWorkspaceDirectory);
-
-                while (directory != null)
-                {
-                    if (string.Equals(directory.Name, VolumeContentInference.WorkDirectoryName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        string? landing = directory.Parent?.FullName;
-
-                        return string.IsNullOrWhiteSpace(landing)
-                            ? null
-                            : Path.Combine(landing, ProcessArtifactLayout.ArtifactDirectoryName);
-                    }
-
-                    directory = directory.Parent;
-                }
-            }
-            catch
-            {
-                // 路径形态怪 / 权限 ⇒ 判不出（⛔ 不猜）。
-            }
-
-            return null;
         }
 
         /// <summary>
@@ -1073,32 +917,29 @@ namespace ArchiveFixer.ViewModels
         private string _restHandlingThisBatch = RestHandlingModes.Keep;
 
         /// <summary>
-        /// 本批走不走**「逐层回收」**（用户 2026-10-03 拍板；批首与 <see cref="_restHandlingThisBatch"/>
-        /// 一起定一次）。
+        /// 本批走不走**「逐层回收」**（用户 2026-10-03 拍板；批首定一次）。
         ///
-        /// <para><b>B 档位分叉</b>：只有本批「删除操作 = <see cref="RestHandlingModes.Delete"/>（彻底删除）」
-        /// 才逐层回收；「<see cref="RestHandlingModes.RecycleBin"/>（移入回收站）」档**照旧链尾一次**
-        /// —— 移入回收站**不释放盘上空间**（见 <c>RestItemPurger.AutoRecycleReason</c> 自己写的那句
-        /// "空间要等清空回收站才释放"）⇒ 逐层做零空间收益，只多造回收站条目。
-        /// 「<see cref="RestHandlingModes.Keep"/>（不动其余物）」档不回收任何东西（只有第 2、3 类残渣随层清）。</para>
+        /// <para><b>⛔ 2026-10-15 口径变更：与③页「删除操作」档位彻底解绑</b> —— 用户 2026-10-14 口径逐字
+        /// 「删除操作只针对**最后一层过程物**……**其他的过程物统一彻底删除**（因为他们都是成功的情况下），
+        /// 统一彻底删除」（见 <c>docs\大改动-2026-10-14-口径与冲突.md</c> §2.1 / §2.2 / §18.1）。
+        /// 老口径（"只有彻底删除档才逐层回收"）已废：**成功链上的过程物一律当场永久删**，
+        /// 不管用户选的是留下还是彻底删除 —— 它们是"成功过的那几层"，可以从留下的那一层重做
+        /// （用户 2026-10-14 的论证）。</para>
         ///
-        /// <para><b>⛔ 只在这里判一次</b>（AGENTS.md §9.5：同一件事的真值只允许有一个出口）——
-        /// 每层回收（<c>PostProcessSuccessAsync</c>）与链尾"只处理源包"（
-        /// <c>CompleteRootSourcePackagesAfterChainAsync</c>）都只读这一个字段，
+        /// <para><b>⛔ 只在这里写一次</b>（AGENTS.md §9.5：同一件事的真值只允许有一个出口）——
+        /// 续解层的每层回收（<c>PostProcessSuccessAsync</c>）、递归路的钩子
+        /// （<see cref="OnRecursiveLayerReclaim"/>，挂载点读它）、链尾"只处理源包"
+        /// （<c>CompleteRootSourcePackagesAfterChainAsync</c>）都只读这一个字段，
         /// 别处⛔ 不许再拿设置 / <see cref="RunOptions"/> 判一遍。</para>
+        ///
+        /// <para>⚠ 唯一的例外仍是**「空间不足」模式**：那一档有它自己的一支（连源包都在每层当场删），
+        /// 批首把它置 false 避免抢活（见 <c>PrepareRestHandlingForBatch</c> 里那一支）。</para>
         ///
         /// <para>⚠ 与 <see cref="_restHandlingThisBatch"/> 同样的寿命：批尾**不清**（链尾钩子在批次返回之后
         /// 才跑，清掉会让链尾以为"这一批没有逐层回收"而再去搬已经不存在的内层包）；
         /// 下一批开工时 <c>PrepareRestHandlingForBatch</c> 会重新写一次。</para>
         /// </summary>
         private bool _layerReclaimThisBatch;
-
-        /// <summary>
-        /// 本批是不是按**「其余物 = 不处理」档**做逐层集中（用户 2026-10-12 计划的第三个动作：
-        /// 这一档既不删也不进回收站 ⇒ 集中进「其余物」）。
-        /// 与另外两个事实位**同一份出口**（`PrepareRestHandlingForBatch`）。
-        /// </summary>
-        private bool _layerReclaimToRestThisBatch;
 
         /// <summary>
         /// **链内每一层"被用掉的那几个输入文件"**（递归钩子每层报上来的 `GroupFiles`）——
@@ -2316,49 +2157,26 @@ namespace ArchiveFixer.ViewModels
             else if (task.IsContinuationTask)
             {
                 /*
-                 * ===== 普通档「逐层回收」（用户 2026-10-03 拍板 + B 档位分叉）=====
+                 * ===== 普通档「逐层回收」（用户 2026-10-03 拍板；2026-10-15 与档位解绑）=====
                  *
                  * 老口径（2026-09-25 第 32 条起）：续解层**什么都不做**，内层包攒到链尾由
                  * `CollectChainInnerPackagesIntoRestAsync` + 「删除操作」统一清 ⇒ 四层链的峰值是"四倍单层"。
+                 * 2026-10-03 起：③页「删除操作 = 彻底删除」时逐层回收；**2026-10-15 起不再看档位** ——
+                 * 用户 2026-10-14 口径逐字「删除操作只针对**最后一层过程物**……**其他的过程物统一彻底删除**
+                 * （因为他们都是成功的情况下），统一彻底删除」。
                  *
-                 * 现在：③页「删除操作 = 彻底删除」时，续解层跑完就删掉**上一层交给它的那个内层包**
-                 * （它对本层就是"解出这一层内容所消耗掉的那份源"，用完了就该当场还回去）；
-                 * 最外层源包留到链尾按「源包操作 + 删除操作」处理 —— 用户原话："原包还是比较重要的"。
-                 *
-                 * ⛔ B 档位分叉（判据只有那两个事实位，别处不许再判）：
-                 * 「移入回收站」档**也逐层**（用户 2026-10-12 口径：过程物逐层进回收站 —— 与永久删那一档
-                 * **同一条闸门链**，只差动作）；「不动其余物」档不动内层包（只有第 2、3 类残渣随层清）。
+                 * ⇒ 续解层跑完就删掉**上一层交给它的那个内层包**（它对本层就是"解出这一层内容所消耗掉的
+                 * 那份源"，用完了就该当场还回去，不必等链尾）；最外层源包留到链尾按「源包操作」处理
+                 * —— 用户原话："原包还是比较重要的"。
                  *
                  * ⛔ 红线一条没松：这一支只在"定稿成功 + 可证完整 + 未取消"之后才走得到
                  * （commit / verification 关卡与 `:1459` 的令牌检查都在上面），
                  * 而 `PurgeLayerSourcePackage` 自己还会再查一遍 commit 与完整性判据。
-                 * 失败 / 部分完成 / 取消 ⇒ 那一层的过程物一个字节都不动。
+                 * 失败 / 部分完成 / 取消 ⇒ 那一层的过程物一个字节都不动（它就是"最后一层过程物"，
+                 * 默认留下；③页那一档要不要动它属于**下一刀**，见 `PrepareRestHandlingForBatch`）。
                  */
-                if (_layerReclaimThisBatch)
-                {
-                    sourceMoveFailure = PurgeLayerSourcePackage(
-                        task, verification, commit, logEntries, LayerPurgeTrigger.LayerReclaim);
-                }
-                else if (_layerReclaimToRestThisBatch)
-                {
-                    /*
-                     * 另两档**也逐层**——与上面那一档**同一条闸门链**，只差动作：
-                     * 永久删 / 送回收站（口径 1，用户 2026-10-12）/ **集中进其余物**（Keep 档）。
-                     * 没这两支的话，链内产出的那一族片会活到定稿、被"跑过递归 ⇒ 全是内容物"那条判据
-                     * 发布成内容物（大测试 `run-6666` 的 ③ 红、以及 Keep 档 `run-4444` 那三轮）。
-                     */
-                    sourceMoveFailure = PurgeLayerSourcePackage(
-                        task,
-                        verification,
-                        commit,
-                        logEntries,
-                        LayerPurgeTrigger.LayerReclaim,
-                        toRest: _layerReclaimToRestThisBatch);
-                }
-                else if (sourceHandling != SourceHandlingMode.KeepInPlace)
-                {
-                    logEntries.Add(("INFO", $"{task.LogName}：内层包，源文件属于其余物里的过程物，已跳过源包处理。"));
-                }
+                sourceMoveFailure = PurgeLayerSourcePackage(
+                    task, verification, commit, logEntries, LayerPurgeTrigger.LayerReclaim);
             }
             else if (_spaceTightThisBatch && _spaceTightKeepSourceThisBatch)
             {
@@ -2566,8 +2384,9 @@ namespace ArchiveFixer.ViewModels
             SpaceTight,
 
             /// <summary>
-            /// 普通档 + ③页「删除操作 = 彻底删除」（用户 2026-10-03 拍板的「逐层回收」）：
-            /// 续解层跑完就删掉**上一层交给它的那个内层包**；最外层源包留到链尾按两档处理。
+            /// 普通档的「逐层回收」（用户 2026-10-03 拍板；2026-10-15 与③页档位解绑）：
+            /// 续解层 / 递归层跑完就删掉**上一层交给它的那个内层包**（成功链的过程物一律当场永久删）；
+            /// 最外层源包留到链尾按「源包操作」那两档处理。
             /// </summary>
             LayerReclaim,
 
@@ -2582,7 +2401,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>这次是哪个触发点（进日志；⛔ 措辞只在这里拼一次）。</summary>
         private static string DescribeLayerPurgeTrigger(LayerPurgeTrigger trigger) => trigger switch
         {
-            LayerPurgeTrigger.LayerReclaim => "逐层回收（删除操作=彻底删除）",
+            LayerPurgeTrigger.LayerReclaim => "逐层回收（成功链的过程物统一彻底删除）",
             LayerPurgeTrigger.SourceHandlingDelete => "源包操作=彻底删除",
             _ => "空间不足模式"
         };
@@ -2603,10 +2422,11 @@ namespace ArchiveFixer.ViewModels
         /// 峰值才是"当前层 + 下一层"（≈ 两倍单层）—— 与用户原话"每一层就删一遍，这样也还行，
         /// 只不过是两倍的情况"完全一致。</para>
         ///
-        /// <para><b>2026-10-03 起多了一个触发点</b>（用户拍板的「普通档逐层回收」+ B 档位分叉）：
-        /// 普通档里③页选「删除操作 = 彻底删除」时，**续解层**也走这一条 —— 每层当场回收这一层的过程物；
-        /// ③页选「移入回收站」时**不逐层**（回收站不释放盘上空间，逐层做零收益、只多造条目），
-        /// 照旧链尾一次。「不动其余物」档更不动内层包。判据只有 `_layerReclaimThisBatch` 一个出口。
+        /// <para><b>2026-10-03 起多了一个触发点</b>（用户拍板的「普通档逐层回收」）：普通档里**续解层**也走
+        /// 这一条 —— 每层当场回收这一层的过程物。⚠ **2026-10-15 起它与③页「删除操作」档位解绑**：
+        /// 成功链上的过程物**一律当场永久删**（用户 2026-10-14 口径：「删除操作只针对**最后一层过程物**……
+        /// 其他的过程物统一彻底删除」），只有「空间不足」模式那一档仍是"连源包一起、每层各删各的"。
+        /// 判据只有 `_layerReclaimThisBatch` 一个出口（挂钩子那一行也读它）。
         /// 两个触发点的差别只有措辞，以及"最外层源包要不要一起删"这件事由**调用方**决定（这里不管）。</para>
         ///
         /// <para><b>与手动档"解压成功就直接删除解压包"的关系</b>（用户 2026-09-29 第 4 条）：
@@ -2632,6 +2452,11 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 同一个源包绝不允许既被删又被搬（那会凭空报一堆"源包不存在"的假失败）。
         /// 对续解层的内层包来说，这一步同时让链尾的 `CollectChainInnerPackagesIntoRestAsync`
         /// 按"文件不在了"跳过它（那条路本来就只搬**还在盘上**的）；普通档逐层回收时链尾**整段都不再调它**。</para>
+        ///
+        /// <para>⚠ <b>2026-10-15：<c>toRest</c>（把这一层的过程物集中进其余物）整条删除</b> ——
+        /// 它只服务③页「删除操作 = 不动其余物」那一档，而新口径下**成功链的过程物一律当场永久删**
+        /// （见 <c>PrepareRestHandlingForBatch</c>）⇒ 那条支路与它的执行体 <c>ReclaimLayerFilesToRest</c>、
+        /// 文案 <c>StatusText.RecursionLayerKeepTriggerLabel</c> 一并删除（用户："老代码就是要删掉的"）。</para>
         /// </summary>
         /// <returns>失败时返回一句"内容物已好、源包没删掉"的说明（调用方据此标「部分完成」）；正常返回 null。</returns>
         private string? PurgeLayerSourcePackage(
@@ -2643,8 +2468,7 @@ namespace ArchiveFixer.ViewModels
             ResultCompletenessVerdict? reclaimVerdict = null,
             bool reclaimRootSource = true,
             string? reclaimLabel = null,
-            string? reclaimWorkspaceDirectory = null,
-            bool toRest = false)
+            string? reclaimWorkspaceDirectory = null)
         {
             if (task == null)
             {
@@ -2767,31 +2591,6 @@ namespace ArchiveFixer.ViewModels
             if (splitBlocker != null)
             {
                 logEntries.Add(("WARN", $"{task.LogName}：{splitBlocker}"));
-                return null;
-            }
-
-            if (toRest)
-            {
-                /*
-                 * ===== 「其余物 = 不处理（Keep）」档那一支（用户 2026-10-12 计划的第三个动作）=====
-                 *
-                 * ⚠ 2026-10-12 实测教训（第一版）：**不能走 `ExecuteSourcePackageMove`** —— 它有一条红线
-                 * 就是拒搬工作区里的文件，逐字：`源在工作区目录里（那是程序自己的中间产物，不是用户的源包），
-                 * 一个字节都不搬`（`run-4444`，×3 片）⇒ 只会写一句"集中进其余物"的假 INFO。
-                 * 现在走**过程物**那一套（`ReclaimLayerFilesToRest` → `TryMoveIntoRest`）。
-                 *
-                 * 这一档既不删也不进回收站 ⇒ 那就该**集中进「其余物」**（设计里别处就是这么写的：
-                 * 「过程物集中进其余物，源包与过程物一起按档处理」）。
-                 * 现在它们留在落地树里 ⇒ 下一遍再导入就会被当成新原包（正是判据 ③ 要防的那件事）。
-                 * 现场：基线里 3 轮 ③✘ 全是这一档（`run-4444` / `run-11111111` / `run-19191919`），
-                 * 残留清一色是链内那一族的 `.z01/.z02/.z03`。
-                 *
-                 * ⛔ 门槛与上面两档**逐条同一套**（就是本方法上面刚走过的那些），差的只有动作：
-                 * 永久删 / 送回收站 → **搬进这一单的其余物**（唯一出口 `ExecuteSourcePackageMove`，
-                 * 它会顺手把 `SourcePackageMove` 落成 `Done` ⇒ 链尾不会重复搬一次）。
-                 */
-                ReclaimLayerFilesToRest(task, reclaimWorkspaceDirectory, subject, logEntries);
-
                 return null;
             }
 
@@ -3378,13 +3177,32 @@ namespace ArchiveFixer.ViewModels
                  * `LayerPurgeTrigger.LayerReclaim` 那一支），
                  * 链尾这一档从今天起**只处理最外层源包**；再去搬只会"找不到"（`PlanChainInnerPackageMoves`
                  * 按 `File.Exists` 过滤，搬不出任何东西，却要在日志里走一遍"留在成品目录里的内层包"清点）。
-                 * ⛔ 「移入回收站」档与「不动其余物」档**照旧调它**（B 档位分叉：那两档不逐层回收，
-                 * 内层包就是在这里被收进其余物的）。判据仍然只有 `_layerReclaimThisBatch` 一个出口。
+                 *
+                 * ⚠ 2026-10-15：逐层回收现在**恒开**（成功链的过程物一律当场永久删，与档位解绑）
+                 * ⇒ 这一整个分支在普通档下**永远不执行**，实际上只剩「空间不足」模式会走到它
+                 * （那个模式每一层的源包早就当场删了 ⇒ 这里同样搬不出东西）。
+                 * ⛔ 判据仍然只有 `_layerReclaimThisBatch` 一个出口（⛔ 这里不另判一次档位）。
+                 * 这一段（`CollectChainInnerPackagesIntoRestAsync` 及其记账）已是**待删的死代码**，
+                 * 与 `MoveSourcePackageIntoRest` / `ExecuteSourcePackageMove` 同一批（see 修改日志）。
                  */
                 if (!_layerReclaimThisBatch)
                 {
                     await CollectChainInnerPackagesIntoRestAsync(rootTask, chainTasks, cancellationToken);
                 }
+
+                /*
+                 * ⛔ **「成品目录里还留着的内层包」那一句诊断无条件跑**（2026-10-15 从上面那个方法里拆出来）。
+                 *
+                 * 它原来长在 `CollectChainInnerPackagesIntoRestAsync` 里 ⇒ 跟着"链尾要不要**搬**"那一个判据
+                 * （`!_layerReclaimThisBatch`）一起被跳过；而"逐层回收"现在**恒开**（成功链的过程物一律当场删）
+                 * ⇒ 那一整段在普通档下永不执行 ⇒ **那句点名也跟着消失**（实测：`ChainRestSweepTests` 三条守门
+                 * 当场变红，报告里再无「成品目录里还留着 N 个内层包」）。
+                 *
+                 * ⛔ 那是**静默**：没解开过的内层包**本来就不搬**（用户 2026-09-28：「不是没解开你为什么要放在
+                 * 其余物里面」）⇒ 它会一直躺在成品目录里，用户唯一的线索就是这一句（AGENTS：不许静默）。
+                 * ⇒ 判据与动作分开：**诊断恒做**；"搬"照旧只在链尾真有东西可收时做（普通档下它是空跑）。
+                 */
+                ReportLeftBehindInnerPackages(rootTask, chainTasks);
 
                 /*
                  * 一键处理里「删除操作」那一档是**留到链尾统一做**的（见 RunRestHandlingAsync 的说明：
@@ -3616,85 +3434,11 @@ namespace ArchiveFixer.ViewModels
 
 
             /*
-             * ⛔ **留着没跑的内层包不能当过程物清掉**（用户 2026-09-28 真机：
-             * `amb909\amb909\amb.7z.001..004` 一直留在成品目录里，他以为是"忘了搬进其余物"）。
-             *
-             * 为什么不能清：过程物（内层包）能清的前提是"它的内容物已经解出来了" ——
-             * 这一单跑成功、内层包被判**已完成**才成立。而"这一轮根本没跑"的内层包，内容还在它里面，
-             * 清掉（其余物在删除档下是**彻底删除**）等于把唯一一份内容删了。
-             *
-             * 所以这里只做一件事：**如实点名 + 告诉他怎么处理**。判据与搬运用同一套
-             * （分卷组取 VolumePaths 全卷，单文件取自己；只认在本单输出目录里的）。
+             * ⛔ 2026-10-15：「留着没跑的内层包 ⇒ 如实点名」那一段**搬走了**（见
+             * <see cref="ReportLeftBehindInnerPackages"/>）—— 它必须**无条件**跑，而本方法是"链尾要不要搬"
+             * 那一个判据下的空跑段（普通档恒不执行）⇒ 长在这里就会被静默掉
+             * （实测：`ChainRestSweepTests` 三条守门因此变红）。
              */
-            try
-            {
-                var leftBehind = new List<string>();
-
-                /*
-                 * ⛔ 判据与搬运那一边**同一套**（`PlanChainInnerPackageMoves`）：只有"自己这一单成功且校验通过"
-                 * 的内层包才会被收进其余物 —— 在这里再点名它们就是自相矛盾的假警报。
-                 *
-                 * ⚠ 2026-10-04 起"根任务成功 ⇒ 链上内层包都会被收走"这半句**不再成立**：
-                 * 未解开过的内层包一条都不搬（用户当场推翻旧口径，见 PlanChainInnerPackageMoves）。
-                 * 两边必须同时改（§9.5：同一件事只能有一个判据），否则又会出现
-                 * "警告说还留着、下一行就搬走删掉"那种自相矛盾。
-                 *
-                 * 真机 2026-10-01：这一行写着「成品目录里还留着 2 个内层包没被清理（它们的内容还没解出来，
-                 * 清掉就等于删内容）」，紧接着两行就把那两个搬进其余物并彻底删掉了 ——
-                 * 用户读到的是"程序自己跟自己打架"，而真正没被清掉的那两个（撞名搬失败的）它反倒没说是为什么。
-                 */
-                foreach (ArchiveTask? candidate in chainTasks)
-                {
-                    if (candidate == null ||
-                        ReferenceEquals(candidate, rootTask) ||
-                        !candidate.IsContinuationTask)
-                    {
-                        continue;
-                    }
-
-                    bool candidateSucceeded =
-                        candidate.Outcome == TaskOutcome.Succeeded &&
-                        candidate.OutputVerification == OutputVerificationOutcome.Passed;
-
-                    // 会被收走的（**只有它自己成功那一种**）：不进"还留着"的名单。
-                    if (candidateSucceeded)
-                    {
-                        continue;
-                    }
-
-                    IEnumerable<string> candidatePaths = candidate.IsVolumeGroup && candidate.VolumePaths.Count > 0
-                        ? candidate.VolumePaths
-                        : new[] { candidate.CurrentPath };
-
-                    foreach (string candidatePath in candidatePaths)
-                    {
-                        if (string.IsNullOrWhiteSpace(candidatePath) || !File.Exists(candidatePath))
-                        {
-                            continue;
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(outputRoot) &&
-                            ArchivePathGuard.IsInsideRoot(outputRoot, candidatePath, out _))
-                        {
-                            leftBehind.Add(Path.GetFileName(candidatePath));
-                        }
-                    }
-                }
-
-                if (leftBehind.Count > 0)
-                {
-                    AppendLog(
-                        "WARN",
-                        $"{rootTask.LogName}：成品目录里还留着 {leftBehind.Count} 个内层包没被清理（它们的内容还没解出来，"
-                        + $"清掉就等于删内容）：{string.Join("、", leftBehind.Take(5))}"
-                        + $"{(leftBehind.Count > 5 ? " 等" : string.Empty)}"
-                        + " —— 要解就把它们加进任务列表；删除档只清「内容物已经解出来」的过程物。");
-                }
-            }
-            catch (Exception ex)
-            {
-                AppendLog("WARN", $"{rootTask.LogName}：清点留在成品目录里的内层包失败（不影响这一单）：{ex.Message}");
-            }
             if (moves.Count == 0)
             {
                 return;
@@ -3838,6 +3582,102 @@ namespace ArchiveFixer.ViewModels
                     "INFO",
                     $"{rootTask.LogName}：链内那一族的片已集中进其余物 {moved} 个 —— {ProcessArtifactLayout.ArtifactDirectoryName}"
                     + (failures.Count > 0 ? $"（{failures.Count} 个没搬成，仍在原处）" : string.Empty));
+            }
+        }
+
+        /// <summary>
+        /// **如实点名"成品目录里还留着的内层包"**（唯一出口；链尾那一站**无条件**调它）。
+        ///
+        /// <para><b>为什么不能当过程物清掉</b>（用户 2026-09-28 真机：`amb909\amb909\amb.7z.001..004`
+        /// 一直留在成品目录里，他以为是"忘了搬进其余物"）：过程物（内层包）能清的前提是"它的内容物已经
+        /// 解出来了" —— 这一单跑成功、内层包被判**已完成**才成立。而"这一轮根本没跑"的内层包，内容还在它
+        /// 里面，清掉（其余物在删除档下是**彻底删除**）等于把唯一一份内容删了 ⇒ 只做一件事：**如实点名 +
+        /// 告诉他怎么处理**（判据与搬运用同一套：分卷组取 `VolumePaths` 全卷，单文件取自己；只认在本单输出目录里的）。</para>
+        ///
+        /// <para>⚠ 2026-10-15：这一段原来长在 <see cref="CollectChainInnerPackagesIntoRestAsync"/> 里，
+        /// 跟着"链尾要不要搬"那一个判据（`!_layerReclaimThisBatch`）一起被跳过；而逐层回收现在**恒开**
+        /// ⇒ 那一整段在普通档下永不执行 ⇒ 这句点名被**静默**掉（实测 `ChainRestSweepTests` 三条守门变红）。
+        /// 判据与动作于是拆开：**诊断恒做**，搬照旧只在该搬的时候搬。</para>
+        /// </summary>
+        private void ReportLeftBehindInnerPackages(ArchiveTask rootTask, IReadOnlyList<ArchiveTask>? chainTasks)
+        {
+            if (rootTask == null || chainTasks == null || chainTasks.Count == 0)
+            {
+                return;
+            }
+
+            string outputRoot = string.IsNullOrWhiteSpace(rootTask.OutputPath)
+                ? rootTask.ContentDirectoryPath
+                : rootTask.OutputPath;
+
+            try
+            {
+                var leftBehind = new List<string>();
+
+                /*
+                 * ⛔ 判据与搬运那一边**同一套**（`PlanChainInnerPackageMoves`）：只有"自己这一单成功且校验通过"
+                 * 的内层包才会被收进其余物 —— 在这里再点名它们就是自相矛盾的假警报。
+                 *
+                 * ⚠ 2026-10-04 起"根任务成功 ⇒ 链上内层包都会被收走"这半句**不再成立**：
+                 * 未解开过的内层包一条都不搬（用户当场推翻旧口径，见 PlanChainInnerPackageMoves）。
+                 * 两边必须同时改（§9.5：同一件事只能有一个判据），否则又会出现
+                 * "警告说还留着、下一行就搬走删掉"那种自相矛盾。
+                 *
+                 * 真机 2026-10-01：这一行写着「成品目录里还留着 2 个内层包没被清理（它们的内容还没解出来，
+                 * 清掉就等于删内容）」，紧接着两行就把那两个搬进其余物并彻底删掉了 ——
+                 * 用户读到的是"程序自己跟自己打架"，而真正没被清掉的那两个（撞名搬失败的）它反倒没说是为什么。
+                 */
+                foreach (ArchiveTask? candidate in chainTasks)
+                {
+                    if (candidate == null ||
+                        ReferenceEquals(candidate, rootTask) ||
+                        !candidate.IsContinuationTask)
+                    {
+                        continue;
+                    }
+
+                    bool candidateSucceeded =
+                        candidate.Outcome == TaskOutcome.Succeeded &&
+                        candidate.OutputVerification == OutputVerificationOutcome.Passed;
+
+                    // 会被收走的（**只有它自己成功那一种**）：不进"还留着"的名单。
+                    if (candidateSucceeded)
+                    {
+                        continue;
+                    }
+
+                    IEnumerable<string> candidatePaths = candidate.IsVolumeGroup && candidate.VolumePaths.Count > 0
+                        ? candidate.VolumePaths
+                        : new[] { candidate.CurrentPath };
+
+                    foreach (string candidatePath in candidatePaths)
+                    {
+                        if (string.IsNullOrWhiteSpace(candidatePath) || !File.Exists(candidatePath))
+                        {
+                            continue;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(outputRoot) &&
+                            ArchivePathGuard.IsInsideRoot(outputRoot, candidatePath, out _))
+                        {
+                            leftBehind.Add(Path.GetFileName(candidatePath));
+                        }
+                    }
+                }
+
+                if (leftBehind.Count > 0)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{rootTask.LogName}：成品目录里还留着 {leftBehind.Count} 个内层包没被清理（它们的内容还没解出来，"
+                        + $"清掉就等于删内容）：{string.Join("、", leftBehind.Take(5))}"
+                        + $"{(leftBehind.Count > 5 ? " 等" : string.Empty)}"
+                        + " —— 要解就把它们加进任务列表；删除档只清「内容物已经解出来」的过程物。");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{rootTask.LogName}：清点留在成品目录里的内层包失败（不影响这一单）：{ex.Message}");
             }
         }
 
@@ -20749,26 +20589,22 @@ namespace ArchiveFixer.ViewModels
                 : RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
 
             /*
-             * B 档位分叉（用户 2026-10-03；2026-10-12 按新口径扩了回收站那一档）：
-             * 「彻底删除」档逐层回收（永久删）；「移入回收站」档**也逐层** —— 过程物逐层进回收站
-             * （用户原话：「进回收站档，其实也可以弄成过程物逐层进回收站，但是由于空间大小没有什么变化，
-             * 我就一开始没有想这么多，但是后面觉得没有什么问题」）。
-             * ⛔ 两个事实位都只读上面那**一个**出口（`_restHandlingThisBatch`），别处不许再判一遍。
+             * ⛔ **2026-10-15 口径变更：逐层回收与③页「删除操作」档位解绑**（用户 2026-10-14 口径逐字：
+             * 「删除操作只针对**最后一层过程物**……**其他的过程物统一彻底删除**（因为他们都是成功的情况下），
+             * 统一彻底删除」—— 见 `docs\大改动-2026-10-14-口径与冲突.md` §2.1 / §2.2 / §18.1）。
+             *
+             * 老口径（2026-10-03 的「B 档位分叉」）是"只有彻底删除档才逐层回收、不动其余物档集中进其余物、回收站档
+             * 逐层进回收站"。回收站那一档已整条下线，而**"成功过的过程物"在哪个档下都不该留着**：
+             * 用户 2026-10-14 的论证是「删掉的是**成功过的那几层**——它们可以从留下的那一层重做，所以不是证据」。
+             * ⇒ 这一位恒为 true（普通档），动作恒为**当场永久删**。
+             * ⛔ 那四道门槛（定稿 + 可证完整 + 未取消 + 「半套分卷」）一条都没放宽，改的只是"要不要做"。
+             *
+             * ⚠ **「最后一层过程物」不在这一位管**（用户口径：那一份默认**留下**，归③页「删除操作」那一档）：
+             * 链停下来的那一层，它的输入包是"这一层要解的那个东西"，按红线**一个字节都不动** ——
+             * 见 `PurgeLayerSourcePackage` 的入口判据与 `PostProcessSuccessAsync` 里"只有跑成了才回收"。
+             * ⇒ 「彻底删除」档目前对"最后一层过程物"还没有动作（**已知实现缺口**，下一刀）。
              */
-            _layerReclaimThisBatch = string.Equals(
-                _restHandlingThisBatch,
-                RestHandlingModes.Delete,
-                StringComparison.OrdinalIgnoreCase);
-
-            /*
-             * 「不动其余物」档也逐层 —— 但动作是**集中进其余物**（不删、不进回收站）。
-             * 用户 2026-10-12 的口径只点名了回收站那一档；这一档是它的对称项，
-             * 依据是设计里既有那句「过程物集中进其余物，源包与过程物一起按档处理」。
-             */
-            _layerReclaimToRestThisBatch = string.Equals(
-                _restHandlingThisBatch,
-                RestHandlingModes.Keep,
-                StringComparison.OrdinalIgnoreCase);
+            _layerReclaimThisBatch = true;
 
             // 链内记账每批一清（它只服务"这一批这一条链"）。
             _chainInnerLayerInputs.Clear();

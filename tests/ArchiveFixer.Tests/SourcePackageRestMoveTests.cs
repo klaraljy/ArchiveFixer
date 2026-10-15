@@ -575,6 +575,78 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ ③ 失败与跨盘
 
+        /// <summary>
+        /// ⛔ <b>新口径（2026-10-15，用户 2026-10-14 拍板）：成功链上的过程物**无条件**彻底删 ——
+        /// 与③页「删除操作」那一档**解绑**。</b>
+        ///
+        /// <para>用户口径逐字：「删除操作只针对**最后一层过程物**……**其他的过程物统一彻底删除**
+        /// （因为他们都是成功的情况下），统一彻底删除」。⇒ 续解层跑成了，它消费掉的那个内层包
+        /// （= 上一层的过程物）**当场就没了**，哪怕用户在③页选的是「留下」。</para>
+        ///
+        /// <para>判据三条：① 内容物真的出来了（不然"内层包没了"可能只是这一层压根没跑）；
+        /// ② 续解层的源（<c>inner.7z.001</c>）**不在盘上**、也**不在其余物里**（是删掉不是搬走）；
+        /// ③ 最外层源包一个字节都不动（「源包操作 = 留下」那一档，⛔ 过程物与源包是两件事）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 续解层跑成之后_它消费的过程物当场彻底删掉_即使删除操作选的是留下()
+        {
+            Harness harness = CreateHarness(settings =>
+            {
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
+            });
+
+            string source = CreateSourceFile("outer.7z");
+
+            var root = new ArchiveTask(source, 1)
+            {
+                IsArchive = true,
+                DetectedFormat = "7Z",
+                ExtensionStatus = StatusText.ExtensionNormal,
+                Status = StatusText.Recognized,
+                IsSelected = true
+            };
+
+            harness.Vm.Tasks.Add(root);
+
+            // ① 第一层只出过程物（内层分卷）：它**留在成品树里**（不再是"集中进其余物"）。
+            harness.Engine.FileNames = new[] { "inner.7z.001" };
+            await harness.Coordinator.StartExtractForOneClickAsync();
+
+            string destinationDirectory = root.OutputPath;
+            string restDirectory = Path.Combine(destinationDirectory, ProcessArtifactLayout.ArtifactDirectoryName);
+
+            ArchiveTask continuation = AddContinuationTask(harness, restDirectory, destinationDirectory, root, index: 2);
+
+            string consumed = continuation.CurrentPath;
+
+            Assert.True(File.Exists(consumed), $"前提：这一层要消费的那一份必须先在盘上（{consumed}）");
+
+            // ② 第二层跑成（产物与声明的条目数一致 ⇒ 校验通过）。
+            harness.Engine.FileNames = new[] { "content.bin" };
+            await harness.Coordinator.StartExtractForOneClickAsync();
+
+            // 判据 ①：内容物出来了。
+            Assert.Equal(StatusText.ExtractSuccess, continuation.Status);
+            Assert.True(File.Exists(Path.Combine(destinationDirectory, "content.bin")));
+
+            // 判据 ②：它消费掉的那份过程物**当场没了** —— 而且不是被搬进其余物。
+            Assert.False(
+                File.Exists(consumed),
+                "成功链上的过程物必须当场彻底删掉（③页选「留下」也一样）");
+
+            Assert.False(
+                File.Exists(Path.Combine(restDirectory, Path.GetFileName(consumed))),
+                "过程物是被**彻底删掉**，⛔ 不是搬进其余物");
+
+            // 判据 ③：最外层源包一个字节都不动（「源包操作 = 留下」）。
+            Assert.True(File.Exists(source), "源包操作 = 留下 ⇒ 源包原地不动");
+
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("逐层回收", StringComparison.Ordinal));
+        }
+
         [Fact]
         public async Task 一键处理_彻底删除档_分卷组整组一起就地删掉()
         {

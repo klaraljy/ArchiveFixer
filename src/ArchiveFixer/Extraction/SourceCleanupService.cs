@@ -66,9 +66,13 @@ namespace ArchiveFixer.Extraction
     /// 由 <c>ExtractionCoordinator.PurgeLayerSourcePackage</c> 一处承载（触发点与措辞分档）：
     /// ① ①页「空间不足」模式（<c>LayerPurgeTrigger.SpaceTight</c>）—— 那个模式的**全部机制**
     /// 就是"定稿 + 校验通过之后立刻永久删源包"，把空间当场还给后面的包；
-    /// ② 普通档 + ③页「删除操作 = 彻底删除」（<c>LayerPurgeTrigger.LayerReclaim</c>，用户 2026-10-03 拍板的
-    /// **逐层回收**）—— 续解层当场删掉上一层交给它的那个内层包；最外层源包仍留到链尾由
-    /// <see cref="ArchiveFixer.Storage.RestItemPurger"/> 按「源包操作 + 删除操作」两档处理。
+    /// ② 普通档的**逐层回收**（<c>LayerPurgeTrigger.LayerReclaim</c>，用户 2026-10-03 拍板）——
+    /// 续解层 / 递归层跑完就删掉上一层交给它的那个内层包（它对本层就是"解出这一层内容所消耗掉的
+    /// 那份源"）；最外层源包仍留到链尾由 <see cref="ArchiveFixer.Storage.RestItemPurger"/> 按
+    /// 「源包操作」处理。
+    /// ⚠ <b>2026-10-15 起这一档与③页「删除操作」档位解绑</b>：成功链上的过程物**一律**当场永久删
+    /// （用户 2026-10-14 口径逐字：「删除操作只针对**最后一层过程物**……其他的过程物统一彻底删除
+    /// （因为他们都是成功的情况下），统一彻底删除」）—— 老口径"只有彻底删除档才逐层回收"已废。
     /// ⛔ 除了这两处，别再往管线里接它：两条以上删除路径并存正是"到底谁在删"这类问题的温床。
     /// </para>
     ///

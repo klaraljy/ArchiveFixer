@@ -81,11 +81,14 @@ namespace ArchiveFixer.Tests
         // ================================================================ 用例 A（逐层回收）
 
         /// <summary>
-        /// <b>用例 A</b>：四层真链 + 普通档 + ③页「彻底删除」⇒
+        /// <b>用例 A</b>：四层真链 + 普通档 + ③页「彻底删除」＋「源包操作 = 留在原地」⇒
         /// ① 三个内层包**各自那一层**就被就地删掉了（走"删这一层的源"那个执行体）；
-        /// ② **最外层源包不在那份名单里**（它由链尾那一档处理，不是逐层回收删的）；
+        /// ② **最外层源包不在那份名单里**（它由链尾那一档按「源包操作」处理，不是逐层回收删的）；
         /// ③ 全程盘上的包不超过 3 个（源包 + 当前层 + 下一层）；老口径攒到链尾是 4 个；
-        /// ④ 跑完之后内层包与源包都没了（源包由链尾"放入其余物 + 彻底删除"处理掉），内容物在。
+        /// ④ 跑完之后内层包都没了、**源包原地不动**（本档「留在原地」），内容物在。
+        ///
+        /// <para>⚠ 2026-10-15：本档与「留下」档在**逐层回收**上现在完全一样（成功链的过程物无条件彻底删），
+        /// 差别只剩链尾对**源包**的处置。⛔ 这两档的对照由用例 A2 钉着。</para>
         /// </summary>
         [SevenZipFact]
         public async Task 用例A_普通档彻底删除_每层当场回收内层包_源包留到链尾()
@@ -132,18 +135,85 @@ namespace ArchiveFixer.Tests
                 $"逐层回收下峰值不该超过 3 个包（源包 + 当前层 + 下一层），实测 {sampler.MaxPackageCount}："
                 + string.Join("、", sampler.PeakSnapshot));
 
-            // ⑤ 跑完：源包与内层包都不在盘上了（源包走的是链尾那一档）。
-            Assert.Empty(FindFiles("*.7z"));
+            /*
+             * ⑤ 跑完：**内层包一个都不在**，而最外层源包**原地不动**。
+             *
+             * ⚠ 2026-10-15 订正：这里原来断言 `Assert.Empty(FindFiles("*.7z"))` —— 那是**旧口径**
+             * （源包会被搬进其余物、再按「彻底删除」整份删掉）。新口径下「源包操作 = 留在原地」那一档
+             * 一个字节都不动源包（用户 2026-10-14：「就两个选项，留下和彻底删除（默认留下）」）
+             * ⇒ 留下档下 `outer.7z` **必须还在**。
+             */
+            Assert.Empty(FindFiles("level*.7z"));
+            Assert.True(File.Exists(outer), "源包操作 = 留在原地 ⇒ 源包必须还在（链尾也只处理「彻底删除」那一档）");
 
             // ⑥ 每一层都要**说出来**（"我的内层包哪去了"必须能事后回答）。
+            // 措辞按这一条链实际走的那条路来（默认「展开所有分支」⇒ 一个任务内的递归层）。
             int purgeLines = harness.Log.Logs.Count(
-                entry => entry.Message.Contains("已立刻永久删除", StringComparison.Ordinal));
+                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已当场永久删除", StringComparison.Ordinal));
 
             Assert.True(purgeLines == layers - 1, $"该有 {layers - 1} 条逐层回收日志，实际 {purgeLines} 条。");
+        }
 
-            Assert.Contains(
-                harness.Log.Logs,
-                entry => entry.Message.Contains("逐层回收", StringComparison.Ordinal));
+        // ================================================================ 用例 A2（新口径：无条件）
+
+        /// <summary>
+        /// ⛔ <b>用例 A2（2026-10-15 新口径）：成功链上的过程物**无条件**彻底删 —— 与③页「删除操作」档位解绑。</b>
+        ///
+        /// <para>用户 2026-10-14 口径逐字：「删除操作只针对**最后一层过程物**……**其他的过程物统一彻底删除**
+        /// （因为他们都是成功的情况下），统一彻底删除」（见 <c>docs\大改动-2026-10-14-口径与冲突.md</c>
+        /// §2.1 / §2.2 / §18.1）。⇒ 四层真链一路成功，三个内层包（level2/3/4）**各在它自己那一层**
+        /// 就被永久删掉，**哪怕用户选的是「留下（不动其余物）」**。</para>
+        ///
+        /// <para>判据四条：① 内容物出来了（不然"内层包都没了"可能只是整条链没跑）；
+        /// ② 三个内层包都被"删这一层的源"那个执行体删掉；
+        /// ③ 盘上**一个 <c>level*.7z</c> 都找不到**——包括其余物里（⇒ 是删掉，⛔ 不是搬进其余物）；
+        /// ④ 最外层源包**原地不动**（「源包操作 = 留下」，⛔ 过程物与源包是两件事）。</para>
+        ///
+        /// <para><b>红检（撤掉哪一条会变红）</b>：把 <c>PrepareRestHandlingForBatch</c> 里那一行
+        /// <c>_layerReclaimThisBatch = true</c> 改回按档位推（"只有彻底删除档才逐层回收"）⇒ 本条当场红
+        /// （三个内层包一个都不会被删、它们留在原地）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例A2_留下档_成功链的中间过程物也无条件当场彻底删掉_源包一个字节不动()
+        {
+            const int layers = 4;
+
+            Harness harness = CreateHarness(RestHandlingModes.Keep, SourceHandlingMode.KeepInPlace);
+            string outer = BuildChain(layers);
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            _output.WriteLine(
+                $"【用例A2】留下档下逐层回收删了 {harness.SourceDeletes.DeletedPaths.Count} 个："
+                + string.Join("、", harness.SourceDeletes.DeletedPaths.Select(Path.GetFileName)));
+
+            // ① 内容物出来了。
+            Assert.NotEmpty(FindFiles("final.txt"));
+
+            // ② 三个内层包各删各的（与「彻底删除」档逐字相同 —— 档位不再影响这一件事）。
+            Assert.Equal(layers - 1, harness.SourceDeletes.DeletedPaths.Count);
+
+            Assert.Contains(harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level2.7z"));
+            Assert.Contains(harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level3.7z"));
+            Assert.Contains(harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "level4.7z"));
+
+            // ③ ⛔ 是"删掉"不是"搬进其余物"：整棵临时根下再也找不到任何一个内层包。
+            Assert.Empty(FindFiles("level*.7z"));
+
+            // ④ 最外层源包一个字节都不动（留下档），也⛔ 不在其余物里。
+            Assert.NotEmpty(FindFiles("outer.7z"));
+            Assert.True(File.Exists(outer), "源包操作 = 留下 ⇒ 源包原地不动");
+            Assert.DoesNotContain(harness.SourceDeletes.DeletedPaths, p => IsNamed(p, "outer.7z"));
+
+            // ⑤ 每一层都要**说出来**（"我的内层包哪去了"必须能事后回答）。
+            // 措辞按**这一条链实际走的**那条路来：`CreateHarness` 的默认档是「展开所有分支」，
+            // 一条四层链是**一个任务**内的四个递归层 ⇒ 说的是递归路那一句（`RecursionLayerReclaimedFormat`）。
+            int purgeLines = harness.Log.Logs.Count(
+                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已当场永久删除", StringComparison.Ordinal));
+
+            Assert.True(purgeLines == layers - 1, $"该有 {layers - 1} 条逐层回收日志，实际 {purgeLines} 条。");
         }
 
         // ================================================================ 用例 B（失败那一层不动）
@@ -585,7 +655,7 @@ namespace ArchiveFixer.Tests
             // ① ⛔ 假话不许出现：这一层**没有**回收（判据没过、一个字节都没删）。
             Assert.DoesNotContain(
                 harness.Log.Logs,
-                entry => entry.Message.Contains("这一层的过程物已按", StringComparison.Ordinal));
+                entry => entry.Message.Contains("这一层的过程物已当场回收", StringComparison.Ordinal));
 
             // ② 如实那一句必须在，而且**说清了原因**（这一层自己没跑成 ⇒ 指向①页）。
             Assert.Contains(
@@ -930,20 +1000,25 @@ namespace ArchiveFixer.Tests
             Assert.True(estimate.FreeSpaceDemandBytes >= estimate.ContentBytes);
         }
 
-        // ================================================================ 用例 F（Keep 档：残渣没有、东西都在）
+        // ================================================================ 用例 F（留下档：残渣没有、源包还在、过程物没了）
 
         /// <summary>
-        /// <b>用例 F（② Keep 档随层清中间件）</b>：③页 = 「不动其余物」⇒ 工作区里**没有**第 2、3 类残渣，
-        /// 而**内层包与源包都还在**（⛔ 这是"什么都没删用户东西"的守门断言）。
+        /// <b>用例 F（留下档随层清中间件）</b>：③页 = 「留下（不动其余物）」⇒ 工作区里**没有**第 2、3 类残渣，
+        /// **最外层源包还在**，而**成功链上的中间过程物（两个内层包）一个不留**。
         ///
         /// <para><b>⚠ 这条用例是"实测口径"的守门断言，不是新加的删除动作</b>：用户 2026-10-03 第 ② 条要求
         /// "动手前先只读量一遍，按实测决定清哪几处，⛔ 不许凭想象加删除点"。实测（同文件那条只读实测用例）
         /// 的结论是：**工作区 `.ArchiveFixer.work` 整棵在跑完之前就已经被既有收尾删掉了**，
-        /// 里面除了 `<工作区>\<任务>\stage\<产物>` 再也没有别的东西 ⇒ **② 是空操作**，
-        /// 于是这里不新增任何清点，只把实测事实钉成回归断言（将来谁在工作区里留了残渣，这条会红）。</para>
+        /// 里面除了 `<工作区>\<任务>\stage\<产物>` 与 `recursive\<id>\layer-NNN\output\…` 再也没有别的东西
+        /// ⇒ **② 是空操作**，于是这里不新增任何清点，只把实测事实钉成回归断言
+        /// （将来谁在工作区里留了残渣，这条会红）。</para>
+        ///
+        /// <para><b>⚠ 2026-10-15 口径变更</b>：老版本这里钉的是"内层包与源包**都还在**"（旧口径：
+        /// 「不动其余物」档不逐层回收）。用户 2026-10-14 改了口径 ——「其他的过程物统一彻底删除
+        /// （因为他们都是成功的情况下）」⇒ 「留下」那一档**只留下源包**，中间过程物照样当场永久删。</para>
         /// </summary>
         [SevenZipFact]
-        public async Task 用例F_Keep档_工作区里没有残渣_内层包与源包都还在()
+        public async Task 用例F_留下档_工作区里没有残渣_中间过程物一个不留_源包还在()
         {
             const int layers = 3;
 
@@ -963,7 +1038,15 @@ namespace ArchiveFixer.Tests
             // ① 跑完之后工作区整棵不在了（既有收尾的功劳，⛔ 不是本次新加的删除点）。
             Assert.Empty(Directory.GetDirectories(_root, ".ArchiveFixer.work", SearchOption.AllDirectories));
 
-            // ② 全程工作区里只出现过 `<工作区>\<任务>\stage\…` 这一种形状 —— 没有第 2、3 类残渣。
+            /*
+             * ② 全程工作区里只出现过两种形状：`<工作区>\<任务>\stage\…`（定稿暂存）
+             * 与 `<工作区>\recursive\<id>\layer-NNN\output\…`（递归展开那一条路）——
+             * 没有第 2、3 类残渣。
+             *
+             * ⚠ 2026-10-15：这一条原来只认第一种形状，而「展开所有分支」是出厂默认档
+             * ⇒ 采样必然拍到 `recursive\…`（实测红过一次）。按新模型补上第二种形状，
+             * ⛔ 不是放宽判据：两种之外的任何形状照旧算残渣。
+             */
             string[] workspacePaths = sampler.AllPathsSeen
                 .Where(path => path.Contains(".ArchiveFixer.work", StringComparison.OrdinalIgnoreCase))
                 .ToArray();
@@ -977,17 +1060,21 @@ namespace ArchiveFixer.Tests
 
                 string[] segments = relative.Split('\\', '/', StringSplitOptions.RemoveEmptyEntries);
 
+                bool stageShape = segments.Length <= 1
+                    || (segments[0] != "recursive" && segments[1] == "stage");
+
+                bool recursiveShape = segments.Length > 0 && segments[0] == "recursive";
+
                 Assert.True(
-                    segments.Length == 0
-                    || (segments.Length >= 1 && segments.Length <= 3 && (segments.Length < 2 || segments[1] == "stage")),
+                    stageShape || recursiveShape,
                     $"工作区里出现了意料之外的残渣：{path}");
             }
 
-            // ③ ⛔ 什么都没删：逐层回收那个执行体一次都没被调用。
-            Assert.Empty(harness.SourceDeletes.DeletedPaths);
+            // ③ 逐层回收那个执行体**被调了**（含「留下」档）—— 成功链的中间过程物无条件彻底删。
+            Assert.Equal(layers - 1, harness.SourceDeletes.DeletedPaths.Count);
 
-            // ④ 内层包与源包**都还在**（Keep 档那是用户要留的其余物）。
-            Assert.NotEmpty(FindFiles("level2.7z"));
+            // ④ 中间过程物**一个不留**；最外层源包**还在**（「源包操作 = 留在原地」）。
+            Assert.Empty(FindFiles("level*.7z"));
             Assert.NotEmpty(FindFiles("outer.7z"));
 
             // ⑤ 内容物也在（不然"东西都在"可能只是整条链没跑）。
@@ -1000,7 +1087,7 @@ namespace ArchiveFixer.Tests
         /// **只读实测**：「不动其余物」（Keep）档跑完一条普通档链路之后，`<目标目录>\.ArchiveFixer.work`
         /// 与成品目录里到底还剩什么（用户 2026-10-03 第 ② 条要求"先量一遍，按实测决定清哪几处，⛔ 不许凭想象加删除点"）。
         ///
-        /// <para>这条用例**不断言产品行为**，只把实测清单打出来（+ 钉住"内层包与源包都还在"这条守门事实）。</para>
+        /// <para>这条用例**不断言产品行为**，只把实测清单打出来（+ 钉住"只留源包、过程物一个不留"这条守门事实）。</para>
         /// </summary>
         [SevenZipFact]
         public async Task 只读实测_Keep档跑完之后工作区与成品目录里还剩什么()
@@ -1036,10 +1123,15 @@ namespace ArchiveFixer.Tests
                 _output.WriteLine("  ~ " + path);
             }
 
-            // 守门事实（用例 F 的那两条）：Keep 档下内层包与源包**都还在**。
-            Assert.NotEmpty(FindFiles("level2.7z"));
+            /*
+             * 守门事实（用例 F 的那两条）：**「留下」档下只留源包** ——
+             * 中间过程物（两个内层包）当场永久删掉，最外层源包原地不动。
+             * ⚠ 2026-10-15 口径变更：老版本钉的是"内层包与源包**都还在**"（旧口径不逐层回收）。
+             */
+            Assert.Empty(FindFiles("level2.7z"));
+            Assert.Empty(FindFiles("level3.7z"));
             Assert.NotEmpty(FindFiles("outer.7z"));
-            Assert.Empty(harness.SourceDeletes.DeletedPaths);
+            Assert.Equal(layers - 1, harness.SourceDeletes.DeletedPaths.Count);
         }
 
         // ================================================================ 造样本 / 断言辅助
@@ -1559,7 +1651,7 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// <b>用例 R1（递归路逐层回收）</b>：四层真链 + ②页「展开所有分支」（**出厂默认档**）+
-        /// ③页「彻底删除」⇒
+        /// ③页「彻底删除」或「留下」⇒
         ///
         /// <list type="number">
         /// <item><description><b>链还没跑完的那一刻，已经被解开的那一层的内层包在盘上已经没了</b> ——
@@ -1569,9 +1661,15 @@ namespace ArchiveFixer.Tests
         /// <item><description>同一个任务、同一条链里，**三个内层包各删各的**（层 1/2/3 各一次），
         /// 走的是"删这一层的源"那一个既有执行体。</description></item>
         /// <item><description><b>最外层源包留到链尾</b>（红线：它不在递归工作区里，这一档永远不碰它）。</description></item>
-        /// <item><description><b>最终产物逐字节不变</b>：同一份样本跑两遍（回收开 / 关），
-        /// 两遍的 ① 文件数 ② 相对路径清单 ③ 每个文件的 SHA256 必须逐项相同。</description></item>
+        /// <item><description><b>最终产物逐字节不变</b>：同一份样本跑两遍，两遍的 ① 文件数 ② 相对路径清单
+        /// ③ 每个文件的 SHA256 必须逐项相同 —— 回收只是把过程物早点还回去，不是换一套产物。</description></item>
         /// </list>
+        ///
+        /// <para>⚠ <b>2026-10-15 口径变更（用户 2026-10-14）</b>：逐层回收**与档位解绑** ——
+        /// 「其他（成功链上）的过程物统一彻底删除」，所以这一条现在跑**两档都是同一份行为**
+        /// （老口径是"彻底删除档逐层回收 / 不动其余物档一个字节都不删"，两遍的对照就在这件事上）。
+        /// ⇒ 第 ③ 条对照改成**判据不许恒真**的另一半：同一帧里"这一层要解的那个包"和"最外层源包"都必须在，
+        /// 而"上一层交出来的那个包"必须不在（见下面 ③）。</para>
         ///
         /// <para>⚠ 这里刻意**不用**计时 / 内存 / 峰值字节断言（那是脆的）：判据全是"盘上有没有这个文件"。
         /// 峰值那件事由峰值的**机制**回答 —— 过程物在下一层开工前就没了，峰值自然从"四层全攒着"
@@ -1583,10 +1681,9 @@ namespace ArchiveFixer.Tests
             const int layers = 4;
 
             /*
-             * 两遍跑同一份**代码路径**、同一份样本，唯一的差别是那个事实位：
-             * 一遍「彻底删除」（逐层回收开），一遍「不动其余物」（逐层回收关）。
-             * 两遍的最终产物必须逐字节相同 —— 这就是"逐层回收只是把过程物早点还回去，
-             * 不是换一套产物"的机器判据。⚠ 两遍都用「源包留在原地」：源包要留在原处做第二次跑。
+             * 两遍跑同一份**代码路径**、同一份样本，唯一的差别是③页那个档位。
+             * 新口径下两遍**必须逐字相同**（成功链的过程物无条件彻底删）—— 这就是"档位不再决定这件事"
+             * 的机器判据。⚠ 两遍都用「源包留在原地」：源包要留在原处做第二次跑。
              */
             RecursionReclaimRun deleted = await RunRecursionChainAsync(PermanentDeleteRestMode);
 
@@ -1596,6 +1693,10 @@ namespace ArchiveFixer.Tests
                 $"【用例R1】彻底删除档：解压调用 {deleted.Probe.ExtractStarts.Count} 次 ｜ 逐层回收删了 "
                 + $"{deleted.Harness.SourceDeletes.DeletedPaths.Count} 个："
                 + string.Join("、", deleted.Harness.SourceDeletes.DeletedPaths.Select(Path.GetFileName)));
+
+            _output.WriteLine(
+                $"【用例R1】留下档：逐层回收删了 {untouched.Harness.SourceDeletes.DeletedPaths.Count} 个："
+                + string.Join("、", untouched.Harness.SourceDeletes.DeletedPaths.Select(Path.GetFileName)));
 
             foreach ((string archive, IReadOnlyList<string> snapshot) in deleted.Probe.ExtractStarts)
             {
@@ -1632,13 +1733,44 @@ namespace ArchiveFixer.Tests
 
             Assert.Contains("level3.7z", frame.Snapshot);
 
-            // ③ **对照（判据不许恒真）**：同一帧在"不逐层回收"那一遍里，level2.7z 必须还在盘上。
+            /*
+             * ③ **对照（判据不许恒真）**：这一帧不是"盘上什么都没有"——
+             * 上面②已经断言了"这一层要解的那个包在"，而下面 ③a/③b 用另外两帧把"删过了、但没删过头"
+             * 钉死：① 它自己那一层的输入在它开工时曾经在过；② 到最后一层时，前面两层的包都已不在。
+             * （探针只拍 `level*.7z`，⛔ 不能拿 `outer.7z` 当对照 —— 它根本不在那份快照里。）
+             */
+            (string Archive, IReadOnlyList<string> Snapshot) firstFrame =
+                deleted.Probe.ExtractStarts.FirstOrDefault(f => IsNamed(f.Archive, "level2.7z"));
+
+            Assert.False(string.IsNullOrEmpty(firstFrame.Archive), "假引擎没拍到「开始解压 level2.7z」那一帧");
+
+            Assert.Contains("level2.7z", firstFrame.Snapshot);
+
+            (string Archive, IReadOnlyList<string> Snapshot) lastFrame =
+                deleted.Probe.ExtractStarts.FirstOrDefault(f => IsNamed(f.Archive, "level4.7z"));
+
+            Assert.False(string.IsNullOrEmpty(lastFrame.Archive), "假引擎没拍到「开始解压 level4.7z」那一帧");
+
+            Assert.Contains("level4.7z", lastFrame.Snapshot);
+
+            Assert.DoesNotContain("level2.7z", lastFrame.Snapshot);
+            Assert.DoesNotContain("level3.7z", lastFrame.Snapshot);
+
+            /*
+             * ③c **新口径的机器判据：换一档，行为一个字都不变**（用户 2026-10-14：
+             * 「其他的过程物统一彻底删除」——不看档位）。老口径在这一条上是反过来的：
+             * 「不动其余物」那一遍必须**一个内层包都没删**。
+             */
+            Assert.Equal(
+                deleted.Harness.SourceDeletes.DeletedPaths.Select(Path.GetFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase),
+                untouched.Harness.SourceDeletes.DeletedPaths.Select(Path.GetFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
+
             (string Archive, IReadOnlyList<string> Snapshot) comparisonFrame =
                 untouched.Probe.ExtractStarts.FirstOrDefault(f => IsNamed(f.Archive, "level3.7z"));
 
             Assert.False(string.IsNullOrEmpty(comparisonFrame.Archive), "对照那一遍也没走到第 3 层");
 
-            Assert.Contains("level2.7z", comparisonFrame.Snapshot);
+            Assert.DoesNotContain("level2.7z", comparisonFrame.Snapshot);
 
             /*
              * ④ 三个内层包各删各的（层 1/2/3 各一次）：判据是"删这一层的源"那个执行体被调了三次，
@@ -1653,7 +1785,7 @@ namespace ArchiveFixer.Tests
 
             // ⑤ 那一句话每一层都要说（"我的内层包哪去了"必须能事后回答）。
             int reclaimLines = deleted.Harness.Log.Logs.Count(
-                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已按", StringComparison.Ordinal));
+                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已当场永久删除", StringComparison.Ordinal));
 
             Assert.True(
                 reclaimLines == layers - 1,
@@ -1688,8 +1820,9 @@ namespace ArchiveFixer.Tests
         /// <list type="number">
         /// <item><description>**只有第二层那一层回收成功过**（它自己那一层的输入 = <c>level2.7z</c>）：
         /// 第三层的回收要等第三层跑成，而链在第二层就停了。</description></item>
-        /// <item><description>第三层那一层的输入包**一个字节都没被这一档碰过**
-        /// （判据 = 删除执行体没被点到它，而且"已回收"那句话只出现一次）。</description></item>
+        /// <item><description>第三层那一层的输入包**一个字节都没被碰过**
+        /// （判据 = 删除执行体没被点到它，而且"已回收"那句话只出现一次）—— 它就是口径里那个
+        /// **「最后一层过程物」**：链停在这里 ⇒ 按红线**默认留下**（③页那一档要不要动它属于下一刀）。</description></item>
         /// <item><description>最外层源包原地不动；失败层没有内容物落地。</description></item>
         /// </list>
         /// </summary>
@@ -1728,7 +1861,7 @@ namespace ArchiveFixer.Tests
              * 证据是那一行"已回收"只出现**一次**（第二层那一次），第三层那一层一个字都没说。
              */
             int reclaimLines = harness.Log.Logs.Count(
-                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已按", StringComparison.Ordinal));
+                entry => entry.Message.Contains("这一层的过程物（上一层的输入包）已当场永久删除", StringComparison.Ordinal));
 
             Assert.Equal(1, reclaimLines);
 
