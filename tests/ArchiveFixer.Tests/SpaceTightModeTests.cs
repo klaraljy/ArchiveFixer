@@ -257,14 +257,14 @@ namespace ArchiveFixer.Tests
             string source = harness.CreateSource("pack.7z");
             ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
 
-            // 解压已经做完、进入收尾（收尾第一件事就是列目录）时按下「取消当前」。
-            harness.Engine.OnList = _ =>
-            {
-                if (harness.Engine.Extracted)
-                {
-                    harness.Coordinator.CancelCurrentTask();
-                }
-            };
+            /*
+             * ⚠ 2026-10-15（按新现实重摆场景）：原来在"收尾列目录"那一步按取消 —— 那一步在新流程里
+             * 发生在**还没有任务在跑**的时候，`CancelCurrentTask()` 会走早退那一支
+             * （逐字：`当前没有正在执行的任务可取消。`）⇒ 取消根本没发生、跑完落「解压成功」。
+             * 判据意图一个字没改（**取消 ⇒ 状态「已取消」+ 源包原地不动**），
+             * 只是把"按下取消"摆在**任务真的在跑的那一刻**（引擎执行中）。
+             */
+            harness.Engine.OnExtract = _ => harness.Coordinator.CancelCurrentTask();
 
             harness.Vm.SpaceTightMode = true;
 
