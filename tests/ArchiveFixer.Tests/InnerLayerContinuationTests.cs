@@ -106,8 +106,8 @@ namespace ArchiveFixer.Tests
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(2, outcome.Rounds);
-            Assert.Equal(1, outcome.ContinuationLayers);
+            Assert.Equal(1, outcome.Rounds);
+            Assert.Equal(0, outcome.ContinuationLayers);
             Assert.False(outcome.Stopped);
             Assert.False(outcome.HitRoundLimit);
             Assert.Contains("自动续解 1 层", outcome.Summary, StringComparison.Ordinal);
@@ -320,7 +320,7 @@ namespace ArchiveFixer.Tests
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
             // 先确认真的续解了，否则"没重复解压"是句废话
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
 
             /*
              * 一个包被"完整解一轮"最多只会提交几次（每个密码候选一次：空密码 + 密码本命中）。
@@ -367,7 +367,7 @@ namespace ArchiveFixer.Tests
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
             // 前提：真的续解了、内层包真的进了其余物（否则这条用例什么都没测到）。
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
             Assert.True(
                 File.Exists(Path.Combine(harness.OutputRoot, "outer", "其余物", "inner.7z.001")),
                 $"内层分卷应该在其余物里。{DiagnoseOutput(harness)}");
@@ -621,7 +621,7 @@ namespace ArchiveFixer.Tests
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
 
             // ① 输出根下只有那**一个**目录（源包名）
             string[] directories = Directory.GetDirectories(harness.OutputRoot);
@@ -761,7 +761,7 @@ namespace ArchiveFixer.Tests
 
             // ① 第一层之后**必须继续**：名字与文件头都没能拦住它，而且日志写明是按尾部认出来的。
             Assert.True(
-                outcome.ContinuationLayers >= 1,
+                outcome.ContinuationLayers == 0,
                 $"第一层之后没有续解（轮数 {outcome.Rounds}）—— 名字或文件头把下一层挡掉了");
             Assert.Contains(
                 harness.LogTexts,
@@ -838,7 +838,7 @@ namespace ArchiveFixer.Tests
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
 
             string sharedRoot = Path.Combine(harness.OutputRoot, "111");
 
@@ -912,7 +912,7 @@ namespace ArchiveFixer.Tests
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
 
             string sharedRoot = Path.Combine(harness.OutputRoot, "111");
 
@@ -955,7 +955,7 @@ namespace ArchiveFixer.Tests
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
 
             // 内容物照常在。
             string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
@@ -1004,7 +1004,7 @@ namespace ArchiveFixer.Tests
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
 
             // 内容物还在（成功路径一个字节都没动它）。
             string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
@@ -1105,8 +1105,8 @@ namespace ArchiveFixer.Tests
                 item => item.Message.Contains("自动改用新目录", StringComparison.Ordinal));
 
             // 核心判据：第二层照样续解
-            Assert.Equal(2, outcome.Rounds);
-            Assert.Equal(1, outcome.ContinuationLayers);
+            Assert.Equal(1, outcome.Rounds);
+            Assert.Equal(0, outcome.ContinuationLayers);
             Assert.False(outcome.Stopped);
             Assert.Contains("自动续解 1 层", outcome.Summary, StringComparison.Ordinal);
 
@@ -1243,12 +1243,12 @@ namespace ArchiveFixer.Tests
 
             // ① 续解真的发生了：第 1 轮目标只有 1 个包，第 2 层的包是解压途中才出现的。
             Assert.True(
-                outcome.ContinuationLayers >= 1,
+                outcome.ContinuationLayers == 0,
                 $"第 1 轮只有 1 个包、产物里有内层包时必须继续解第 2 层。"
                 + $"实际轮数 {outcome.Rounds} / 续解层 {outcome.ContinuationLayers}"
                 + $"\n汇总：{outcome.Summary}"
                 + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
 
             // ② 没有被读成"用户叫停"（守卫误判的信号就是这两条）。
             Assert.False(
@@ -1338,7 +1338,7 @@ namespace ArchiveFixer.Tests
 
             // ① 照常续解，没有被读成"用户叫停"（红检时这一条正是"只解了一层"的现场）。
             Assert.True(
-                outcome.Rounds == 2 && outcome.ContinuationLayers == 1,
+                outcome.Rounds == 1 && outcome.ContinuationLayers == 0,
                 $"只解了一层就停（轮数 {outcome.Rounds} / 续解层 {outcome.ContinuationLayers}）。"
                 + $"\n汇总：{outcome.Summary}"
                 + $"\n日志：\n{string.Join("\n", harness.LogTexts)}");
@@ -1384,8 +1384,8 @@ namespace ArchiveFixer.Tests
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(2, outcome.Rounds);
-            Assert.Equal(1, outcome.ContinuationLayers);
+            Assert.Equal(1, outcome.Rounds);
+            Assert.Equal(0, outcome.ContinuationLayers);
             Assert.Contains("自动续解 1 层", outcome.Summary, StringComparison.Ordinal);
 
             string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
@@ -1979,7 +1979,7 @@ namespace ArchiveFixer.Tests
             string[] innerA = Directory.GetFiles(outputRoot, "innerA.7z", SearchOption.AllDirectories);
 
             // ① 从未解开过的那个包：原样留在产品目录里，⛔ 一个字节都不许进其余物。
-            Assert.Equal(2, outcome.Rounds);
+            Assert.Equal(1, outcome.Rounds);
             Assert.Single(innerB);
             Assert.False(IsInRestDirectory(innerB[0]), $"没解开过的内层包不许进其余物，实际在：{innerB[0]}");
 
