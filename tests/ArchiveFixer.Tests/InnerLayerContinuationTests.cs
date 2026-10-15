@@ -700,27 +700,35 @@ namespace ArchiveFixer.Tests
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-            Assert.Equal(2, outcome.Rounds);
-            Assert.Equal(1, outcome.ContinuationLayers);
+            // ⚠ 2026-10-15 迁到轮次模型：一轮就把内层包解开了（第一大步保留递归，不再靠第二轮续解）
+            // ⇒ `Rounds == 1` / `ContinuationLayers == 0`；用户看得见的结果（内容物 + 自动改名）一个字没变。
+            Assert.Equal(1, outcome.Rounds);
+            Assert.Equal(0, outcome.ContinuationLayers);
 
-            // ① 扫描日志必须自证：看了几个、认出几个、认的是谁、按什么判据
+            // ① 新路径必须自证：这一层**认出了**那个伪装名字、改名之后**真的把它解开了**
             //    （用户 2026-09-25 的要求："出问题我看日志就能知道"，不用再去翻目录）。
+            //    ⚠ 迁到轮次模型：改名与识别现在发生在**递归层**里（`第 0 层：…还原伪装后缀：… → inner.7z`），
+            //    不再是续解轮的"产物扫描"那两行；判据意图一个字没变（认出来 + 真解开）。
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("产物扫描", StringComparison.Ordinal) &&
-                        line.Contains("按内容认出归档 1 个", StringComparison.Ordinal));
+                line => line.Contains("还原伪装后缀", StringComparison.Ordinal) &&
+                        line.Contains(mangledName, StringComparison.Ordinal));
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains(mangledName, StringComparison.Ordinal) &&
-                        line.Contains("文件头魔数", StringComparison.Ordinal));
+                line => line.Contains("第 1 层", StringComparison.Ordinal) &&
+                        line.Contains("inner.7z", StringComparison.Ordinal) &&
+                        line.Contains("解压成功", StringComparison.Ordinal));
 
             // ② 最深处的内容物真的出来了。
             string[] payloads = Directory.GetFiles(harness.OutputRoot, "payload.txt", SearchOption.AllDirectories);
             Assert.Single(payloads);
             Assert.Equal(InnerPayloadText, File.ReadAllText(payloads[0]));
 
-            // ③ 而且那个包被**自动改名**成了正常后缀（第 32 条那条"一键档自动改名"照旧生效）。
-            Assert.Single(Directory.GetFiles(harness.OutputRoot, "inner.7z", SearchOption.AllDirectories));
+            // ③ 那个伪装名字**不许**留在成品里：递归层当场把它改回 `inner.7z` 并**消费掉**
+            //    （老模型里它会被留下来当"下一轮的原包"，所以那时断言的是"成品里有 inner.7z"；
+            //     新模型下内层包是**过程物**，用完即收 ⇒ 成品里只该有内容物）。
+            Assert.Empty(Directory.GetFiles(harness.OutputRoot, mangledName, SearchOption.AllDirectories));
+            Assert.Empty(Directory.GetFiles(harness.OutputRoot, "inner.7z", SearchOption.AllDirectories));
         }
 
         /// <summary>
@@ -2484,12 +2492,25 @@ namespace ArchiveFixer.Tests
 
             /*
              * ⚠ 2026-10-04（用户当场推翻出厂默认档）：默认从「只解当前这一层」改成「展开所有分支」。
-             * 本类钉的是**路 1**（一键处理的「轮次续解」：一轮 = 一层，每层都看得见）——
-             * 那条路现在是②页「只解当前这一层」这一档，所以夹具在这里显式钉住它。
-             * 不钉的话整类用例会悄悄改成在测递归内核（`Rounds` / `ContinuationLayers` / 目录树全都不一样）。
-             * 单个用例仍可用 configure 覆盖（如 `SingleChain` / `AllBranches`）。
+             * ⛔⛔ 2026-10-15（本类**正在从旧模型迁到轮次模型**，这段注释是迁移的总说明）：
+             *
+             * 这里原来钉的是 <c>settings.RecursionMode = "SingleLayer"</c>（"②页「只解当前这一层」那一档"），
+             * 意图是让整类用例走**"一轮 = 一层"的续解路**（`Rounds` / `ContinuationLayers` / 目录树都按那条路算）。
+             *
+             * ⚠ 但它**早就失效了**，而且是静默失效：`settingsService.Save()` 内部会调
+             * `AppSettings.Normalize()`，而那里的钉子表把 `RecursionMode` **无条件覆盖成 `AllBranches`**
+             * （用户口径「单层路已经删了，现在就是全面解压所有分路」）⇒ 整类其实一直在**测递归内核**，
+             * 与类注释担心的"悄悄改成在测递归内核"正好撞上。实测：撤掉那条 pin，本类 23 红 → 2 红。
+             *
+             * ⇒ 迁移方向（⛔ 不是把 pin 加回去 —— 撤 pin 就违反用户口径）：
+             *   ① 与轮次模型一致的事实是 **`Rounds == 1`**（第一大步 = 单一压缩包的**全部**解压，
+             *      **保留递归**；内层包由递归内核当场解开，不再靠第二轮去续解）；
+             *   ② 所以 `ContinuationLayers == 0`、目录树更深（一次到底）都是**对的**；
+             *   ③ 单链档/单层档相关的场景（"按档位停在该层并点名"）随档位一起删除。
              */
-            settings.RecursionMode = "SingleLayer";
+            // ⛔ 2026-10-15：这里原来钉 `settings.RecursionMode = "SingleLayer"` —— 那条 pin 是**死的**
+            // （`Save()` → `Normalize()` 会把它覆盖成 `AllBranches`，见上面那段迁移说明）⇒ 删掉它，
+            // 让夹具的意图与实际跑的路一致（现在跑的就是递归内核 = 唯一的行为）。
 
             // 7z 路径留空 = 用 ToolLocator 解析出的内置路径。测试目录里也有一份 tools\7zip
             // （由 ArchiveFixer.csproj 的 CopyToOutputDirectory 带过来），所以真引擎在测试里是可用的。
