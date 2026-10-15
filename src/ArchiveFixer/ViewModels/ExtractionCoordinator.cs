@@ -2395,8 +2395,37 @@ namespace ArchiveFixer.ViewModels
                  * ⚠ 2026-10-15：这里原来走的是 `SourceHandlingMode.MoveToRest`（搬进其余物）——
                  * 那一条已经随用户口径删除。
                  */
-                sourceMoveFailure = PurgeLayerSourcePackage(
-                    task, verification, commit, logEntries, LayerPurgeTrigger.SourceHandlingDelete);
+                /*
+                 * ⛔⛔ **红线**：**一键处理一律把源包的处理延期到整条链跑完**（⛔ 不在半路删）。
+                 *
+                 * <para>用户 2026-10-14 口径逐字：「源包操作**只针对成功得到内容物的情况**，
+                 * 部分完成或者失败自动保留，放在原来位置不要移动」⇒ 一键处理的链可能还有下一层，
+                 * 半路那一轮里"内容物已经得到"这件事**根本还没成立**。</para>
+                 *
+                 * <para>老实现（`MoveSourcePackageIntoRest`）用的是 `commit.MovedContentCount == 0`
+                 * 来判"本轮只出过程物"；⚠ 那条判据**在新递归模型下失效**（运行期实测，2026-10-15）：
+                 * 第 0 层解出来的 `inner.7z.001`（还要接着解的过程物）被**归类成"内容物"**
+                 * （日志逐字：`outer.7z：本次内容物 —— inner.7z.001`）⇒ `MovedContentCount == 1`
+                 * ⇒ 闸门不触发 ⇒ **源包在链还没跑完时就被删了**。⇒ 现在不看"本轮有没有内容物"，
+                 * 只要是一键处理就延期（更安全，且与老口径"留到链尾"一致）。</para>
+                 *
+                 * <para>⚠ 这一道是**守门用例逮出来的**：`形状B_内容物没出来_源包留在原地_即使选了彻底删除`
+                 * 当场红（`SourcePackageMove` 变成 `Done` = 已删）⇒ 收紧成"一键处理一律延期"。</para>
+                 */
+                if (oneClickRun)
+                {
+                    task.SourcePackageMove = SourcePackageMoveState.DeferredToChainEnd;
+
+                    logEntries.Add((
+                        "INFO",
+                        $"{task.LogName}：源包先留在原地 —— 一键处理要等整条续解链跑完才按「源包操作 = 彻底删除」处理"
+                        + "（链没跑完就动源包＝在「内容物可能不全」时动用户唯一无法再生的东西）。"));
+                }
+                else
+                {
+                    sourceMoveFailure = PurgeLayerSourcePackage(
+                        task, verification, commit, logEntries, LayerPurgeTrigger.SourceHandlingDelete);
+                }
             }
 
             return new PostProcessWorkResult

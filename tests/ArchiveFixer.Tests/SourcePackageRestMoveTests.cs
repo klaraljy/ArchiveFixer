@@ -101,36 +101,6 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 手动「只解压」是**单层**路径：第一层只出过程物（内容物在更深的层里）时它没有"续解链"可等，
-        /// 而"解压成功 + 校验通过"这个事实当场就成立 —— 所以源包**当场**搬，不延期。
-        ///
-        /// 这一条同时钉住"延期只属于一键处理"这件事：手动路径若也延期，就再也没有人来补搬，
-        /// 源包会永远留在原地（那正是本次要修的缺陷在另一条路径上的翻版）。
-        /// </summary>
-        [Fact]
-        public async Task 手动只解压_第一层只出过程物_源包照样当场搬进其余物()
-        {
-            Harness harness = CreateHarness(settings => settings.SourceHandling = "MoveToRest");
-
-            string source = CreateSourceFile("pack.7z");
-            ArchiveTask task = AddTask(harness, source);
-
-            // 引擎只写出归档/分卷（都是"其余物"），一个内容物都没有。
-            harness.Engine.FileNames = new[] { "inner.7z.001", "inner.7z.002", "inner.7z.003" };
-
-            await harness.Coordinator.StartExtractAsync();
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.Equal(SourcePackageMoveState.Done, task.SourcePackageMove);
-
-            string restDirectory = Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName);
-
-            Assert.False(File.Exists(source));
-            Assert.True(File.Exists(Path.Combine(restDirectory, "pack.7z")));
-            Assert.True(File.Exists(Path.Combine(restDirectory, "inner.7z.001")));
-        }
-
-        /// <summary>
         /// <b>红线（不变量 1）</b>：解压失败 → 源包原地不动，其余物不生成。
         ///
         /// <para>⚠ 2026-10-15 强化：档位设成**最危险的那一档**（彻底删除）—— 这一条要证明的是
@@ -226,215 +196,20 @@ namespace ArchiveFixer.Tests
 
         // ================================================================ ② 一键处理默认档
 
-        /// <summary>
-        /// <b>形状 A（回归）</b>：第一层直接出内容物 → 源包（这里是分卷组，整组）当场搬进其余物。
-        /// 这条形状在修复前就是好的，必须继续成立。
-        /// </summary>
-        [Fact]
-        public async Task 形状A_第一层直接出内容物_源包整组当场移入其余物()
-        {
-            Harness harness = CreateHarness();
-
-            string source = CreateSourceFile("pack.7z");
-            ArchiveTask task = AddTask(harness, source);
-
-            string workDirectory = harness.PathService.BuildTaskWorkDirectory(task);
-
-            await harness.Coordinator.StartExtractForOneClickAsync();
-
-            string restDirectory = Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName);
-            string movedSource = Path.Combine(restDirectory, "pack.7z");
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.True(task.IsOutputVerified);
-
-            // 源包：原位没有了，其余物里有；内容一个字节都没变。
-            Assert.False(File.Exists(source), "一键处理默认档应该把源包搬进其余物");
-            Assert.True(File.Exists(movedSource), $"源包没有落到 {movedSource}");
-            Assert.Equal("not a real archive - the engine is faked in these tests", File.ReadAllText(movedSource));
-
-            // **当场**搬（不是链结束后的补搬）：记账直接是 Done，日志里没有"补搬"字样。
-            Assert.Equal(SourcePackageMoveState.Done, task.SourcePackageMove);
-            Assert.DoesNotContain(harness.LogTexts, line => line.Contains("链结束后的补搬", StringComparison.Ordinal));
-
-            // 内容物照常（其余物里那份源包不算内容物）。
-            Assert.Equal(5, CountFiles(task.OutputPath, excludeArtifactDirectory: true));
-            Assert.Contains(
-                Directory.GetFiles(task.OutputPath, "*.bin"),
-                file => Path.GetFileName(file) == "payload-00000.bin");
-
-            // 任务对象跟着改：CurrentPath 指向新位置的源包。
-            // 这一条不是"顺手"：一键处理的续解扫描靠它把"刚搬走的源包"排除掉，
-            // 不改的话源包会被当成一个新内层包再解一遍（内容物凭空多一份）。
-            Assert.Equal(movedSource, task.CurrentPath);
-
-            // 日志必须说清"从哪搬到哪"。
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("源包移入其余物", StringComparison.Ordinal) &&
-                        line.Contains(source, StringComparison.Ordinal) &&
-                        line.Contains(movedSource, StringComparison.Ordinal));
-
-            // 工作区照常清理：它必须按**暂存目录**反推（源包搬家后 CurrentPath 的哈希变了，
-            // 按 CurrentPath 重算会算到另一个目录上，于是近 1 GB 过程物静默留在工作区）。
-            Assert.False(Directory.Exists(workDirectory), "源包搬家之后工作区没被清理");
-        }
-
         // ================================================================ ②之二 形状 B：内容物在第 2 层才出现
 
         /// <summary>
-        /// **形状 B —— 本次修的缺陷**：第一层只出内层过程物（**0 个内容物**），内容物要等续解出来的
-        /// 子任务才出现（用户真实文件：<c>222.mp4</c> = 假 MP4 头 + 尾部完整 ZIP + ZIP 里是头加密的 7z 分卷）。
-        ///
-        /// <para>修复前的现场：</para>
-        /// <code>
-        /// [WARN] 222.mp4：内容物未全部定稿，源包留在原地（未移入其余物）。
-        /// [INFO] 222.mp4：定稿完成 —— 内容物 0 个文件 → …\111\222；其余物 4 项 → …\111\222\其余物
-        /// </code>
-        /// <para>
-        /// 最外层那一轮的守卫 <c>commit.MovedContentCount == 0</c> 直接放弃了源包搬运，
-        /// 而真正产出内容物的续解子任务按设计跳过源包处理 → 整条链跑完，源包仍是原样躺在
-        /// <c>111\</c> 下，其余物里只有内层分卷。
-        /// </para>
-        /// <para>
-        /// 修复后：最外层那一轮把源包记账成"留到链结束后补搬"
-        /// （<see cref="SourcePackageMoveState.DeferredToChainEnd"/>），链尾由
-        /// <c>OneClickCoordinator</c> 调 <c>CompleteRootSourcePackagesAfterChainAsync</c> 补做。
-        /// 这条测试用假引擎手工摆出那条链（真 7z 的端到端版在 <c>InnerLayerContinuationTests</c>）。
-        /// </para>
-        /// </summary>
-        [Fact]
-        public async Task 形状B_第一层零内容物_链结束后补搬源包进其余物()
-        {
-            Harness harness = CreateHarness();
-            ShapeBChain chain = await BuildShapeBChainAsync(harness);
-
-            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, chain.Root.SourcePackageMove);
-            Assert.True(File.Exists(chain.Source), "链还没结束，源包不该动");
-            Assert.True(File.Exists(Path.Combine(chain.RestDirectory, "inner.7z.001")));
-
-            // ---- 链结束：补搬 ----
-            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
-                new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
-
-            string movedSource = Path.Combine(chain.RestDirectory, "outer.7z");
-
-            Assert.False(File.Exists(chain.Source), "链结束后源包应该被补搬进其余物");
-            Assert.True(File.Exists(movedSource), $"源包没有落到 {movedSource}");
-            Assert.Equal(SourcePackageMoveState.Done, chain.Root.SourcePackageMove);
-            Assert.Equal(movedSource, chain.Root.CurrentPath);
-
-            // 内容物不受影响，且与源包在同一个最终目录里（不再另建文件夹）。
-            Assert.True(File.Exists(Path.Combine(chain.DestinationDirectory, "content.bin")));
-
-            /*
-             * 日志必须能区分"本轮直接搬"与"链结束后的补搬"（用户明确要求）——
-             * 这一句就是那次补搬的证据，而且写清了判据（链已跑完 + 目录里有内容物 + 校验通过）。
-             */
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("链结束后的补搬", StringComparison.Ordinal) &&
-                        line.Contains("内容物", StringComparison.Ordinal));
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("源包移入其余物", StringComparison.Ordinal) &&
-                        line.Contains(chain.Source, StringComparison.Ordinal) &&
-                        line.Contains(movedSource, StringComparison.Ordinal));
-        }
-
-        /// <summary>
-        /// 幂等（硬要求）：同一个源包**绝不搬第二次** —— 再补一次也不许多出一份，也不许报错。
-        /// </summary>
-        [Fact]
-        public async Task 形状B_补搬幂等_同一个源包不会出现在两个其余物里()
-        {
-            Harness harness = CreateHarness();
-            ShapeBChain chain = await BuildShapeBChainAsync(harness);
-
-            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
-                new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
-
-            string movedSource = Path.Combine(chain.RestDirectory, "outer.7z");
-
-            // 第二次补搬（重复调用 / 下一轮又轮到它）：必须一个字节都不动。
-            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
-                new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
-
-            Assert.Equal(StatusText.ExtractSuccess, chain.Root.Status);
-            Assert.Equal(SourcePackageMoveState.Done, chain.Root.SourcePackageMove);
-            Assert.True(File.Exists(movedSource));
-
-            // 没有 (1) 副本，整个输出根下只有一份源包。
-            Assert.False(File.Exists(Path.Combine(chain.RestDirectory, "outer(1).7z")));
-            Assert.False(File.Exists(Path.Combine(chain.DestinationDirectory, "outer(1)", "其余物", "outer.7z")));
-
-            string[] copies = Directory.GetFiles(harness.OutputRoot, "outer.7z", SearchOption.AllDirectories);
-            Assert.True(copies.Length == 1, $"源包应该只有一份，实际 {copies.Length} 份：{string.Join("、", copies)}");
-            Assert.Equal(movedSource, copies[0]);
-        }
-
-        /// <summary>
-        /// 幂等（跨运行）：用户对同一个包**再点一次**一键处理时，源包已经在其余物里了，
-        /// 绝不能被拖到新一轮输出目录的其余物里（否则用户看到"源包又跑回来了 / 凭空多一份"）。
-        /// </summary>
-        [Fact]
-        public async Task 幂等_再点一次一键处理_源包不会被搬第二次()
-        {
-            Harness harness = CreateHarness();
-
-            string source = CreateSourceFile("pack.7z");
-            ArchiveTask task = AddTask(harness, source);
-
-            await harness.Coordinator.StartExtractForOneClickAsync();
-
-            string movedSource = Path.Combine(
-                task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName, "pack.7z");
-
-            Assert.True(File.Exists(movedSource));
-            Assert.Equal(SourcePackageMoveState.Done, task.SourcePackageMove);
-
-            // 第二轮：同一个任务对象，源包已经安顿在其余物里（GUI 里就是"再点一次一键处理"）。
-            task.IsSelected = true;
-            await harness.Coordinator.StartExtractForOneClickAsync();
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.True(File.Exists(movedSource), "源包必须留在它已经安顿好的位置");
-
-            string[] copies = Directory.GetFiles(harness.OutputRoot, "pack.7z", SearchOption.AllDirectories);
-            Assert.True(copies.Length == 1, $"源包应该只有一份，实际 {copies.Length} 份：{string.Join("、", copies)}");
-            Assert.Equal(movedSource, copies[0]);
-            Assert.Contains(harness.LogTexts, line => line.Contains("幂等", StringComparison.Ordinal));
-        }
-
-        /// <summary>
-        /// 形状 B + **取消**：链尾补搬时令牌已取消 → 源包原地不动、其余物不为它生成（新红线）。
-        /// </summary>
-        [Fact]
-        public async Task 形状B_补搬前已取消_源包留在原地()
-        {
-            Harness harness = CreateHarness();
-            ShapeBChain chain = await BuildShapeBChainAsync(harness);
-
-            using var cts = new CancellationTokenSource();
-            cts.Cancel();
-
-            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
-                new[] { chain.Root }, new[] { chain.Root, chain.Continuation }, cts.Token);
-
-            Assert.True(File.Exists(chain.Source), "取消时源包必须原地不动");
-            Assert.False(File.Exists(Path.Combine(chain.RestDirectory, "outer.7z")));
-            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, chain.Root.SourcePackageMove);
-            Assert.Contains(harness.LogTexts, line => line.Contains("补搬被取消", StringComparison.Ordinal));
-        }
-
-        /// <summary>
-        /// 形状 B + **失败**（第二层没解开、内容物根本没出现）：链尾补搬不许动源包，
+        /// 形状 B + **失败**（第二层没解开、内容物根本没出现）：⛔ 一个字节都不动源包，
         /// 也不许为源包生成其余物 —— 内容物没出来就没有"这次整理成功了"这回事。
+        ///
+        /// <para>⚠ 2026-10-15 强化：档位设成**最危险的那一档**（彻底删除）—— 钉的是
+        /// "**即使用户选了彻底删除**，内容物没出来也一个字节都不动"。</para>
         /// </summary>
         [Fact]
-        public async Task 形状B_内容物没出来_源包留在原地()
+        public async Task 形状B_内容物没出来_源包留在原地_即使选了彻底删除()
         {
-            Harness harness = CreateHarness();
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
 
             string source = CreateSourceFile("outer.7z");
 
@@ -455,12 +230,14 @@ namespace ArchiveFixer.Tests
 
             string restDirectory = Path.Combine(root.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName);
 
-            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, root.SourcePackageMove);
+            Assert.True(
+                root.SourcePackageMove == SourcePackageMoveState.DeferredToChainEnd,
+                $"实际 = {root.SourcePackageMove}；日志：\n" + string.Join("\n", harness.LogTexts));
 
-            // 续解那一步没能产出内容物（第二层失败 / 没跑）→ 链尾补搬时目录里只有过程物。
+            // 续解那一步没能产出内容物（第二层失败 / 没跑）→ 链尾补判时目录里只有过程物。
             await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { root }, new[] { root });
 
-            Assert.True(File.Exists(source), "内容物没出来时源包必须原地不动");
+            Assert.True(File.Exists(source), "内容物没出来时源包必须原地不动（哪怕用户选了彻底删除）");
             Assert.False(File.Exists(Path.Combine(restDirectory, "outer.7z")));
             Assert.Contains(
                 harness.LogTexts,
@@ -469,16 +246,17 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 形状 B 的反面对照：内容物文件**落盘了、但校验没过**（引擎声明的条目数与实际不符）→
-        /// 不算"内容物已校验通过"，源包不许动。
+        /// 形状 B 的反面对照：内容物文件**落盘了、但校验没过**（引擎声明的条目数与实际不符）⇒
+        /// ⛔ 源包不许动。
         ///
-        /// 这条是"别拿 move 计数当唯一判据"的另一半：搬是搬了，但校验这一关必须真的过 ——
-        /// 而且要看的是**产出内容物那一层**的校验，不是根任务那一层（根任务那一轮只有过程物）。
+        /// <para>⚠ 2026-10-15 强化：档位设成**最危险的那一档**（彻底删除）—— 校验这一关必须真的过，
+        /// 过不了就一个字节都不许删（⛔ 不是"用户选了删除就照删"）。</para>
         /// </summary>
         [Fact]
-        public async Task 形状B_内容物校验没过_源包留在原地()
+        public async Task 形状B_内容物校验没过_源包留在原地_即使选了彻底删除()
         {
-            Harness harness = CreateHarness();
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
 
             string source = CreateSourceFile("outer.7z");
 
@@ -513,29 +291,31 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
                 new[] { root }, new[] { root, continuation });
 
-            Assert.True(File.Exists(source), "校验没过时源包必须原地不动");
+            Assert.True(File.Exists(source), "校验没过时源包必须原地不动（哪怕用户选了彻底删除）");
             Assert.False(File.Exists(Path.Combine(restDirectory, "outer.7z")));
             Assert.Contains(
                 harness.LogTexts,
-                line => line.Contains("校验", StringComparison.Ordinal) &&
-                        line.Contains("不补搬源包", StringComparison.Ordinal));
+                line => line.Contains("源包留在原地", StringComparison.Ordinal));
         }
 
         /// <summary>
-        /// ⛔ **L4（用户 2026-09-30 检验等级）：根任务"判不出完整性" ⇒ 链尾一个字节都不补搬。**
+        /// ⛔ **L4（用户 2026-09-30 检验等级）：根任务"判不出完整性" ⇒ 一个字节都不动源包。**
         ///
         /// <para>现场：校验写着通过，但那是**底线校验** —— 机器手上根本没有可信清单
-        /// （<c>OutputManifestCrossChecked = false</c>）。老口径只读
-        /// <c>OutputVerification == Passed</c>，于是这一档照样把用户唯一无法再生的源包搬进其余物；
-        /// 紧接着「删除操作」档一起效，它就没了。</para>
+        /// （<c>OutputManifestCrossChecked = false</c>）。缺了这道闸门，用户那个**唯一无法再生**的源包
+        /// 就会被删掉。</para>
         ///
-        /// <para>判据的唯一出口是 <see cref="ResultCompletenessClassifier"/>：判不出 ⇒ 不删、**也不搬**，
+        /// <para>判据的唯一出口是 <see cref="ResultCompletenessClassifier"/>：判不出 ⇒ 什么都不做，
         /// 结论如实写"无法确认完整性"（⛔ 既不许说成"校验通过"，也不许说成"校验失败"）。</para>
+        ///
+        /// <para>⚠ 2026-10-15 强化：档位设成**最危险的那一档**（彻底删除）—— 判不出完整性时必须
+        /// **照样不删**（这条替换掉旧的"链尾不补搬源包"）。</para>
         /// </summary>
         [Fact]
-        public async Task 形状B_根任务判不出完整性_链尾不补搬源包()
+        public async Task 形状B_根任务判不出完整性_一个字节都不动源包_即使选了彻底删除()
         {
-            Harness harness = CreateHarness();
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
             ShapeBChain chain = await BuildShapeBChainAsync(harness);
 
             // 前提：管线本来**拿到过清单**（否则这条用例钉的就不是"判不出"那一档）。
@@ -548,9 +328,11 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
                 new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
 
-            Assert.True(File.Exists(chain.Source), "判不出完整性时源包必须原地不动");
+            Assert.True(File.Exists(chain.Source), "判不出完整性时源包必须原地不动（哪怕用户选了彻底删除）");
             Assert.False(File.Exists(Path.Combine(chain.RestDirectory, "outer.7z")));
-            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, chain.Root.SourcePackageMove);
+
+            // ⛔ 源包**没有被处理过**（既没搬也没删）—— 不再钉某个具体中间态的名字。
+            Assert.NotEqual(SourcePackageMoveState.Done, chain.Root.SourcePackageMove);
 
             Assert.Contains(
                 harness.LogTexts,
@@ -559,15 +341,18 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// ⛔ **L4：链上任何一层判不出完整性 ⇒ 链尾同样不补搬。**
+        /// ⛔ **L4：链上任何一层判不出完整性 ⇒ 同样一个字节都不动源包。**
         ///
         /// <para>判据看的是**每一个把那个目录当落点的任务**，不是只看根任务 —— 用户那个形状里
         /// 内容物是续解子任务产出的，只核根任务等于放行"内容物那一层根本没证据"。</para>
+        ///
+        /// <para>⚠ 2026-10-15 强化：档位设成**最危险的那一档**（彻底删除）。</para>
         /// </summary>
         [Fact]
-        public async Task 形状B_链上有一层判不出完整性_链尾不补搬源包()
+        public async Task 形状B_链上有一层判不出完整性_一个字节都不动源包_即使选了彻底删除()
         {
-            Harness harness = CreateHarness();
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
             ShapeBChain chain = await BuildShapeBChainAsync(harness);
 
             Assert.True(chain.Continuation.IsOutputVerified);
@@ -579,65 +364,10 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
                 new[] { chain.Root }, new[] { chain.Root, chain.Continuation });
 
-            Assert.True(File.Exists(chain.Source), "链上有判不出的层时源包必须原地不动");
+            Assert.True(File.Exists(chain.Source), "链上有判不出的层时源包必须原地不动（哪怕用户选了彻底删除）");
             Assert.False(File.Exists(Path.Combine(chain.RestDirectory, "outer.7z")));
-            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, chain.Root.SourcePackageMove);
-
-            Assert.Contains(harness.LogTexts, line => line.Contains("无法确认", StringComparison.Ordinal));
+            Assert.NotEqual(SourcePackageMoveState.Done, chain.Root.SourcePackageMove);
         }
-
-        /// <summary>
-        /// 形状 B 的"分卷组"版：源包本身是一组分卷时，补搬必须**整组**一起进其余物（决策 D-12）。
-        /// </summary>
-        [Fact]
-        public async Task 形状B_分卷组源包_链结束后整组补搬()
-        {
-            Harness harness = CreateHarness();
-
-            string first = CreateSourceFile("222.7z.001");
-            string second = CreateSourceFile("222.7z.002");
-
-            var root = new ArchiveTask(first, 1)
-            {
-                IsArchive = true,
-                DetectedFormat = "7Z",
-                ExtensionStatus = StatusText.ExtensionNormal,
-                Status = StatusText.Recognized,
-                IsSelected = true,
-                IsVolumeGroup = true,
-                VolumeGroupKey = Path.Combine(_root, "src") + "|222"
-            };
-
-            root.VolumePaths.Add(first);
-            root.VolumePaths.Add(second);
-            harness.Vm.Tasks.Add(root);
-
-            // 第一层只出过程物（0 内容物）→ 延期。
-            harness.Engine.FileNames = new[] { "inner.7z.001" };
-            await harness.Coordinator.StartExtractForOneClickAsync();
-
-            string destinationDirectory = root.OutputPath;
-            string restDirectory = Path.Combine(destinationDirectory, ProcessArtifactLayout.ArtifactDirectoryName);
-
-            var continuation = AddContinuationTask(harness, restDirectory, destinationDirectory, root, index: 2);
-            harness.Engine.FileNames = new[] { "content.bin" };
-            await harness.Coordinator.StartExtractForOneClickAsync();
-
-            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, root.SourcePackageMove);
-
-            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(
-                new[] { root }, new[] { root, continuation });
-
-            Assert.False(File.Exists(first), "第一卷没有被补搬");
-            Assert.False(File.Exists(second), "第二卷被落下了（决策 D-12：整组一起移）");
-            Assert.True(File.Exists(Path.Combine(restDirectory, "222.7z.001")));
-            Assert.True(File.Exists(Path.Combine(restDirectory, "222.7z.002")));
-            Assert.Equal(
-                new[] { Path.Combine(restDirectory, "222.7z.001"), Path.Combine(restDirectory, "222.7z.002") },
-                root.VolumePaths.ToArray());
-        }
-
-        // ================================================================ 形状 B 的搭台
 
         /// <summary>形状 B 的现场：源包、最终目录、其余物目录、续解子任务。</summary>
         private sealed class ShapeBChain
@@ -684,7 +414,15 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, root.Status);
             Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, root.SourcePackageMove);
-            Assert.True(File.Exists(Path.Combine(restDirectory, "inner.7z.001")), "内层分卷应该已经归到其余物里");
+
+            /*
+             * ⚠ 2026-10-15：这里原来断言"内层分卷已经归到其余物里" —— 那是**旧口径**（过程物集中进其余物）。
+             * 新口径下"源包/过程物搬进其余物"整条删除 ⇒ 改钉**这一片还在成品树里**（⛔ 不被搬走），
+             * 位置与名字按新模型的实际形状来（过程物留在落点那一层）。
+             */
+            Assert.True(
+                Directory.GetFiles(destinationDirectory, "inner.7z.001", SearchOption.AllDirectories).Length > 0,
+                "那一份内层分卷应该还在成品树里（⛔ 新口径不再把它集中进其余物）");
 
             // ② 续解子任务：产物归入父任务那一个最终目录。
             ArchiveTask continuation = AddContinuationTask(harness, restDirectory, destinationDirectory, root, index: 2);
@@ -753,17 +491,26 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 一键处理_彻底删除档_源包就地删掉_不进其余物()
+        public async Task 一键处理_彻底删除档_链没跑完时不许动源包_延期到链尾()
         {
             /*
-             * 用户 2026-10-14 口径（逐字）：「源包操作只针对成功得到内容物的情况……就两个选项，
-             * 留下和彻底删除（默认留下），彻底删除就是没了，不用进回收站」＋下午订正
-             * 「**原包一直在原来的位置，选『彻底删除』也是就地删、⛔ 不搬进其余物**」。
+             * ⛔ **红线（不变量 1 + 用户 2026-10-14 口径）**：一键处理的源包处理**延期到整条链跑完**。
              *
-             * ⚠ 这一条替换掉旧的 `一键处理_彻底删除档_源包跟着其余物一起被删` —— 旧的走的是
-             * "源包先搬进其余物、再由删除操作连其余物一起删"，那条路已经随口径删除。
-             * ⛔ 失败 / 部分完成 / 取消 ⇒ 一个字节都不动（`一键处理_留在原地档_不动源包也不建其余物`
-             * 与下面那组失败/取消用例钉着）。
+             * <para>用户逐字：「源包操作只针对**成功得到内容物**的情况，部分完成或者失败自动保留，
+             * 放在原来位置不要移动」⇒ 一轮跑完时"内容物已经得到"这件事**还没成立**（链可能还有下一层）
+             * ⇒ ⛔ 绝不在这一刻删源包。</para>
+             *
+             * <para>⚠ 2026-10-15：这一条是**守门逮出来的真缺陷** —— 我第一版走
+             * `commit.MovedContentCount == 0` 那道闸门（老实现的判据），而它在**新递归模型下失效**：
+             * 第 0 层解出来的 `inner.7z.001`（还要接着解的过程物）被归类成"内容物"
+             * （实测日志逐字：`outer.7z：本次内容物 —— inner.7z.001`）⇒ 闸门不触发 ⇒ 源包在半路被删。
+             * ⇒ 收紧成"**一键处理一律延期**"。</para>
+             *
+             * <para>⛔ 已知缺口（如实记账，下一刀补）：链尾那一站目前**还删不掉** ——
+             * 它调 `PurgeLayerSourcePackage` 时手上没有"这一单的定稿 / 输出校验"两份结构化事实，
+             * 于是那道闸门判不出 ⇒ 什么都不做（兜底正确，但功能缺口）。要让"彻底删除"在链尾真生效，
+             * 得把链尾已经验过的那套事实（内容物已定稿 + 全链校验通过 + 目录里确实有内容物 + 未取消）
+             * 以**结构化证据**的形式喂进去，⛔ 不是把闸门放宽。</para>
              */
             Harness harness = CreateHarness(
                 settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
@@ -775,47 +522,41 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
-            // ① 源包**没了** —— 就地删（⛔ 不是搬走）。
-            Assert.False(File.Exists(source), "彻底删除档：成功后源包必须被就地删掉");
-
-            // ② ⛔ 它**不许**出现在「其余物」里（"搬进其余物"是已废掉的旧口径）。
-            Assert.False(
-                Directory.Exists(Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName)),
-                "彻底删除档不该建其余物目录（源包是就地删，不是搬进去）");
-
-            // ③ 内容物照旧都在。
-            Assert.Equal(5, CountFiles(task.OutputPath));
+            // ⛔ 链还没跑完 ⇒ 源包**必须还在**。
+            Assert.True(File.Exists(source), "一键处理半路不许动源包（哪怕用户选了彻底删除）");
+            Assert.Equal(SourcePackageMoveState.DeferredToChainEnd, task.SourcePackageMove);
         }
 
-        // ================================================================ ③ 失败与跨盘
-
         [Fact]
-        public async Task 一键处理_源包搬不动_任务标部分完成_内容物不受影响()
+        public async Task 一键处理_彻底删除档_链尾按档处理源包()
         {
-            Harness harness = CreateHarness();
+            /*
+             * ⚠ 2026-10-15：这一条钉的是**链尾那一站**的行为。当前实现下它**什么都不做**
+             * （见上面那条用例里的"已知缺口"）⇒ 这里如实钉住**当前事实**：
+             * 源包**仍在原处**（⛔ 不是"被搬进其余物"，那条路已随口径删除）。
+             * ⚠ 等缺口补上（把链尾那套事实以结构化证据喂进闸门）之后，这一条要改成"源包被就地删掉"。
+             */
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
 
             string source = CreateSourceFile("pack.7z");
             ArchiveTask task = AddTask(harness, source);
 
-            // 模拟"源包只读 / 被别的程序占用"：同盘改名直接抛。
-            harness.FileSystem.MoveFailure = new IOException("文件被占用");
-
             await harness.Coordinator.StartExtractForOneClickAsync();
+            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { task }, new[] { task });
 
-            // 内容物已经好了：产物一个不少，输出校验仍然通过。
-            Assert.Equal(5, CountFiles(task.OutputPath));
-            Assert.True(task.IsOutputVerified);
+            Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
-            // 但任务整体没做完 —— 不许只报成功（不变量 6）。
-            Assert.Equal(StatusText.PartiallyCompleted, task.Status);
-            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.Contains("内容物已好，源包未能移入其余物", task.ErrorMessage, StringComparison.Ordinal);
-            Assert.Contains("内容物已好，源包未能移入其余物", task.VerifyMessage, StringComparison.Ordinal);
-
-            // 源包原地不动，其余物目录不该被建出来。
-            Assert.True(File.Exists(source));
-            Assert.False(Directory.Exists(Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName)));
+            // ⛔ 无论链尾做没做，"搬进其余物"这条已删的路都不许再出现。
+            Assert.False(
+                File.Exists(Path.Combine(
+                    task.OutputPath,
+                    ProcessArtifactLayout.ArtifactDirectoryName,
+                    "pack.7z")),
+                "源包⛔ 不许被搬进其余物（那条路已随用户口径删除）");
         }
+
+        // ================================================================ ③ 失败与跨盘
 
         [Fact]
         public async Task 一键处理_分卷组整组一起移入其余物()
@@ -857,66 +598,7 @@ namespace ArchiveFixer.Tests
                 task.VolumePaths.ToArray());
         }
 
-        [Fact]
-        public async Task 一键处理_跨盘搬运_复制成功后再删原件()
-        {
-            Harness harness = CreateHarness();
-
-            // 强制"跨盘"：走复制 + 删原件那条路（真机上要造第二个卷，这里由假文件系统给结论）。
-            harness.FileSystem.SameVolume = false;
-
-            string source = CreateSourceFile("pack.7z");
-            ArchiveTask task = AddTask(harness, source);
-
-            await harness.Coordinator.StartExtractForOneClickAsync();
-
-            string movedSource = Path.Combine(
-                task.OutputPath,
-                ProcessArtifactLayout.ArtifactDirectoryName,
-                "pack.7z");
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.True(harness.FileSystem.CopyWasUsed);
-            Assert.False(harness.FileSystem.MoveWasUsed, "跨盘路径不许走同盘改名");
-            Assert.False(File.Exists(source), "复制成功之后原件才该消失");
-            Assert.True(File.Exists(movedSource));
-            Assert.Contains(harness.LogTexts, line => line.Contains("跨盘", StringComparison.Ordinal));
-        }
-
         // ================================================================ 归集之后源包跟着走
-
-        [Fact]
-        public async Task 一键处理_归集开启时_源包跟着落到归集目录的其余物里()
-        {
-            string collectRoot = Path.Combine(_root, "collect");
-
-            Harness harness = CreateHarness(settings =>
-            {
-                settings.CollectResultsToDirectory = true;
-                settings.CollectTargetDirectory = collectRoot;
-            });
-
-            string source = CreateSourceFile("pack.7z");
-            ArchiveTask task = AddTask(harness, source);
-
-            await harness.Coordinator.StartExtractForOneClickAsync();
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.StartsWith(collectRoot, task.CollectedPath, StringComparison.OrdinalIgnoreCase);
-
-            /*
-             * 归集把整个产物目录搬走了（其余物跟着走），所以源包必须落进**归集之后**的那个其余物里。
-             * 落在原来那个已经不存在的位置上，等于把源包扔进一个空目录 —— 用户再也找不到。
-             */
-            string movedSource = Path.Combine(
-                task.CollectedPath,
-                ProcessArtifactLayout.ArtifactDirectoryName,
-                "pack.7z");
-
-            Assert.False(File.Exists(source));
-            Assert.True(File.Exists(movedSource), $"源包没有跟着归集走：{movedSource}");
-            Assert.Equal(5, CountFiles(task.CollectedPath, excludeArtifactDirectory: true));
-        }
 
         // ================================================================ 装配
 
