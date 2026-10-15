@@ -18699,6 +18699,27 @@ namespace ArchiveFixer.ViewModels
                  * 被收拢到位）；判出来"补齐了"的那几组要**照常跑**，所以它们必须回到**这个环**里等收尾 ——
                  * 这也是"补跑环必须与等所有任务结束写在同一个环里"那条纪律的同一条道理。
                  */
+                /*
+                 * ⛔ 2026-10-15：**批末补判的重判次数护栏**（保命，不是性能）。
+                 *
+                 * 运行期实测到的死循环（全量测试里跑了 40 分钟、日志涨到 125 MB 都出不来）：
+                 * 批末补判说"「set.7z.002」这一组现在齐了（共 2 卷），照常跑这一组" ⇒ 排进 `runningTasks` ⇒
+                 * 它一开工，预检又说"这一组缺的是**第 1 卷** … 判不出该怎么收，整组一个字节都没动" ⇒
+                 * 回到本环再判 ⇒ 又是"齐了" ⇒ ……**两个判据对同一组给出相反结论，这一环永远出不去**。
+                 *
+                 * 上面那段注释写的出口（"撞上轮数上限"）在代码里**根本不存在** —— 这个 `while (true)`
+                 * 原来只有"批末补判返回空"一个出口。⇒ 补一道**硬上限**：重判超过 `MaxVolumeRecheckPasses`
+                 * 次就停下，把那几单**如实留在「未处理」那一档**（与既有那份"没有结论"的口径一致），
+                 * 并写一行点名它们。⛔ 判据一个字没放宽 —— 缺卷照旧不开始解。
+                 *
+                 * ⚠ 为什么是"趟数硬上限"而不是"看名单有没有变少"：实测的形状是**缩了又涨**
+                 * （这一趟补判把一单挪出名单 ⇒ 它跑起来撞缺卷 ⇒ 下一趟又有单进来）⇒
+                 * "连续不缩小才计数"那种写法在振荡下永远到不了阈值，等于没修。
+                 * 这里要的是**保证终止**，所以数的是总趟数。
+                 */
+                const int MaxVolumeRecheckPasses = 20;
+                int volumeRecheckPasses = 0;
+
                 while (true)
                 {
                     while (runningTasks.Count > 0)
@@ -18783,6 +18804,33 @@ namespace ArchiveFixer.ViewModels
 
                     if (deferredVolumeTasks.Count == 0)
                     {
+                        break;
+                    }
+
+                    /*
+                     * 保命护栏（见上面那段说明）：**总趟数硬上限**。
+                     *
+                     * 正常情形下一两趟就清空名单（每一趟会把名单里所有能补上的组一次性补齐）；
+                     * 到了上限还在打转，说明批末补判与开工前预检对同一组给出的结论相反 ——
+                     * ⛔ 再判下去只会把日志写爆、把这一批永远挂住 ⇒ 停下 + 点名 + 如实留在「未处理」。
+                     */
+                    volumeRecheckPasses++;
+
+                    if (volumeRecheckPasses > MaxVolumeRecheckPasses)
+                    {
+                        int stillDeferred = _volumeDeficitDeferred.Count;
+
+                        AppendLog(
+                            "WARN",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                StatusText.VolumeRecheckPassLimitReachedFormat,
+                                volumeRecheckPasses,
+                                stillDeferred,
+                                string.Join(
+                                    "、",
+                                    _volumeDeficitDeferred.Take(5).Select(item => item.LogName))));
+
                         break;
                     }
 
