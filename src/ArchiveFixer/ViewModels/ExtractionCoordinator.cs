@@ -21264,6 +21264,22 @@ namespace ArchiveFixer.ViewModels
             task.PartialPublishDirectoryPath = outcome.DestinationDirectory;
 
             /*
+             * ⛔ **机器终态跟着走：损坏 + 已经救回一部分 = 「部分完成」**（用户 2026-10-14 口径逐字：
+             * 「这个损坏的压缩包……不完整的内容物就留下来，如果用户选择删除，那就删除……
+             * 留下就留下，然后**最后的汇总肯定是报部分完成，橙色**」）。
+             *
+             * 位置：只能在**真发布成功之后**改（前面每一条 return false 都保持原终态）
+             * ⇒ "损坏但一个字节都没救回来"照旧落 `Failed`（红），那是对的。
+             * 色带与计数不用另写判据：`BatchSummarySeverity.FromOutcomes` / `BatchOutcomeTally`
+             * 读的就是这一位（橙 = 有部分完成）。⚠ 需要先过 `FinalizeOutcomeIfPending`（它在收尾更早处，
+             * 已经把 `Pending` 兜底成 `Failed`）—— 这里改的是**已经定下来的失败**，不是绕过兜底。
+             */
+            if (task.Outcome == TaskOutcome.Failed)
+            {
+                task.Outcome = TaskOutcome.PartiallyCompleted;
+            }
+
+            /*
              * 全部搬成之后才动其余物与工作区（「宁可少删」）：
              * 有文件没能发布时它们还在工作区里，那是这一份唯一的线索 —— 删掉等于丢用户的产物。
              */

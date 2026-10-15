@@ -328,7 +328,13 @@ namespace ArchiveFixer.Tests
 
             // ⛔ 红线：部分完成这一档源包一律不搬不删；终态也绝不许变成成功。
             Assert.True(File.Exists(task.CurrentPath), "源包必须原地不动");
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+
+            /*
+             * ⚠ 2026-10-16 口径变更（用户：「最后的汇总肯定是**报部分完成，橙色**」）：
+             * 损坏 + 真救回一部分 ⇒ 机器终态是 **`PartiallyCompleted`**（批末色带由此变橙），
+             * ⛔ 不是"成功"，⛔ 也不是"失败"（改之前这里断言的是 `Failed`）。
+             */
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
 
             List<string> logs = harness.Log.Logs.Select(item => item.DisplayText).ToList();
