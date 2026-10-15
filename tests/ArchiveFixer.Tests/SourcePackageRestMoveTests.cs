@@ -758,7 +758,7 @@ namespace ArchiveFixer.Tests
              */
             Harness harness = CreateHarness(settings =>
             {
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -938,7 +938,7 @@ namespace ArchiveFixer.Tests
              * 2026-09-25 第 32 条把**默认档**改成了「原来的位置不动」（用户拍板），
              * 不显式设置的话这些用例测的就变成"默认不搬"了（那样它们会集体变红）。
              */
-            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
 
             configure?.Invoke(settings);
             settingsService.Save(settings);

@@ -38,11 +38,11 @@ namespace ArchiveFixer.Tests
         }
 
         [Theory]
-        [InlineData("MoveToRest", SourceHandlingMode.MoveToRest)]
+        [InlineData("DeleteInPlace", SourceHandlingMode.DeleteInPlace)]
         [InlineData("KeepInPlace", SourceHandlingMode.KeepInPlace)]
         [InlineData("keepplace", SourceHandlingMode.KeepInPlace)]         // 写错的枚举名 → 默认档
         [InlineData(" KeepInPlace ", SourceHandlingMode.KeepInPlace)]     // 手改 json 时多打空格
-        [InlineData("movetorest", SourceHandlingMode.MoveToRest)]         // 大小写不敏感
+        [InlineData("deleteinplace", SourceHandlingMode.DeleteInPlace)]   // 大小写不敏感
         public void 合法值原样解析(string stored, SourceHandlingMode expected)
         {
             Assert.Equal(expected, AppSettings.ParseSourceHandling(stored));
@@ -57,10 +57,29 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), settings.SourceHandling);
 
-            settings.SourceHandling = "  MoveToRest  ";
+            settings.SourceHandling = "  DeleteInPlace  ";
             settings.Normalize();
 
-            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), settings.SourceHandling);
+            Assert.Equal(nameof(SourceHandlingMode.DeleteInPlace), settings.SourceHandling);
+        }
+
+        /// <summary>
+        /// ⛔ 2026-10-15：老值 <c>MoveToRest</c>（用户 2026-10-14 废掉的"放入其余物"那一档）
+        /// 归一化之后**必须落进「留下」**，⛔ 绝不许落进「彻底删除」——
+        /// 那是把用户当年那个"可还原"的选择升级成不可恢复的删除，方向正好反了
+        /// （老规矩：不替用户把不可逆的选择重新做一遍）。
+        /// </summary>
+        [Theory]
+        [InlineData("MoveToRest")]
+        [InlineData(" movetorest ")]
+        [InlineData("DeleteAfterVerify")]   // 更早那一档（2026-09-25 已删）
+        public void 老档位归一化_一律落进留下_绝不许升级成彻底删除(string legacy)
+        {
+            var settings = new AppSettings { SourceHandling = legacy };
+
+            settings.Normalize();
+
+            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), settings.SourceHandling);
         }
 
         [Fact]

@@ -229,7 +229,7 @@
                                          GroupName="PanelSourceHandling"
                                          Checked="SourceHandling_Checked">
                                 <StackPanel>
-                                    <TextBlock Text="原来的位置不动（默认）" Style="{StaticResource BodyTextStyle}" />
+                                    <TextBlock Text="留下（默认，原来的位置不动）" Style="{StaticResource BodyTextStyle}" />
                                     <TextBlock Text="程序一个字节都不碰你的源包" Style="{StaticResource HintTextStyle}" />
                                 </StackPanel>
                             </RadioButton>

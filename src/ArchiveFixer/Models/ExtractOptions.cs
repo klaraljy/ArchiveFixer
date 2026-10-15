@@ -351,8 +351,9 @@ namespace ArchiveFixer.Models
         {
             return mode switch
             {
-                SourceHandlingMode.KeepInPlace => "留在原地（默认，一个字节都不搬）",
-                _ => "放入其余物当中"
+                // ⚠ 2026-10-15：源包那一档只剩「留下 / 彻底删除（就地）」——「放入其余物」整条删除。
+                SourceHandlingMode.DeleteInPlace => "彻底删除（就地删掉源包，不可恢复；⛔ 不搬进其余物）",
+                _ => "留下（默认，原来的位置一个字节都不动）"
             };
         }
 

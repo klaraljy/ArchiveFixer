@@ -473,7 +473,7 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = true;
             settings.CustomOutputDirectory = string.Empty;
             settings.KeepArchiveNameFolder = true;
-            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.CustomSevenZipExePath = string.Empty;
 
             configure?.Invoke(settings);

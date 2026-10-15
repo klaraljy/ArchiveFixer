@@ -145,7 +145,7 @@ namespace ArchiveFixer.Tests
                 settings.KeepArchiveNameFolder = true;
 
                 // 源包搬进其余物（默认档）。
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             });
 
             string selectedFolder = Path.Combine(harness.SourceRoot, "AAA");

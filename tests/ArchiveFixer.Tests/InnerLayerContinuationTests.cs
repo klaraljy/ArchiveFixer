@@ -996,7 +996,7 @@ namespace ArchiveFixer.Tests
                 $"{OuterPassword}\n{InnerPassword}\n",
                 settings =>
                 {
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                 });
 
@@ -2488,7 +2488,7 @@ namespace ArchiveFixer.Tests
              * 第 32 条之后设置里的默认档是「源包留在原地」；本类全部用例钉的都是"源包进其余物"那条链
              * （含链尾补搬），所以在这里显式选上「放入其余物」，免得用例变成在测默认档。
              */
-            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
 
             /*
              * ⚠ 2026-10-04（用户当场推翻出厂默认档）：默认从「只解当前这一层」改成「展开所有分支」。

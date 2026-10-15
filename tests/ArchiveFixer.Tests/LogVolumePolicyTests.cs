@@ -130,7 +130,7 @@ namespace ArchiveFixer.Tests
             string package = BuildPackage("rest.7z", 32 * 1024);
             Harness harness = CreateHarness(settings =>
             {
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 

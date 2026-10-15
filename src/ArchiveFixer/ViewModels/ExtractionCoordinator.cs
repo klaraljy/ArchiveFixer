@@ -19194,9 +19194,10 @@ namespace ArchiveFixer.ViewModels
                 _ => "其余物：保留（不动其余物）"
             };
 
+            // ⚠ 2026-10-15：源包那一档只剩「留下 / 彻底删除（就地）」——「移入其余物」已随用户口径删除。
             string source = sourceMode == SourceHandlingMode.KeepInPlace
-                ? "源包：留在原地"
-                : "源包：移入其余物";
+                ? "源包：留下（原地不动）"
+                : "源包：彻底删除（就地删，不搬进其余物）";
 
             return source + "；" + rest;
         }

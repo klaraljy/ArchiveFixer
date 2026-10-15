@@ -74,7 +74,7 @@ namespace ArchiveFixer.Tests
             {
                 // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
                 // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -104,7 +104,7 @@ namespace ArchiveFixer.Tests
             {
                 // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
                 // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -133,7 +133,7 @@ namespace ArchiveFixer.Tests
             {
                 // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
                 // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -168,7 +168,7 @@ namespace ArchiveFixer.Tests
             {
                 // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
                 // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -204,7 +204,7 @@ namespace ArchiveFixer.Tests
             {
                 // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
                 // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -245,7 +245,7 @@ namespace ArchiveFixer.Tests
             Harness harness = CreateHarness(
                 settings =>
                 {
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                 },
                 engine: new SevenZipEngine());
@@ -326,7 +326,7 @@ namespace ArchiveFixer.Tests
             {
                 // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
                 // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 

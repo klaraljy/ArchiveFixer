@@ -126,7 +126,7 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 

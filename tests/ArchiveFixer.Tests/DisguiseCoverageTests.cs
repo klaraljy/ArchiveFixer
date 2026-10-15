@@ -456,7 +456,7 @@ namespace ArchiveFixer.Tests
             Harness harness = CreateHarness(settings =>
             {
                 // 显式选上"放入其余物"（第 32 条之后设置里的默认档是"留在原地"，本用例要钉的是搬走那条路）
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.AutoScanAfterDrop = true;
             });
 

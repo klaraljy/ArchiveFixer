@@ -865,7 +865,7 @@ namespace ArchiveFixer.Tests
             AppSettings danger = AppSettings.CreateDefault();
             danger.DangerousSpaceModeEnabled = true;
             danger.DangerModeSelfTestStamp = "自测通过|2026-09-22 21:30:00|并发=2|样本=4";
-            danger.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            danger.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
 
             danger.Normalize();
 
@@ -879,7 +879,7 @@ namespace ArchiveFixer.Tests
 
             manualDelete.Normalize();
 
-            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), manualDelete.SourceHandling);
+            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), manualDelete.SourceHandling);
             Assert.Equal(RestHandlingModes.Keep, manualDelete.RestHandlingAfterVerify);
             Assert.False(manualDelete.DeleteSourceAfterExtract);
 
@@ -888,7 +888,7 @@ namespace ArchiveFixer.Tests
 
             legacySource.Normalize();
 
-            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), legacySource.SourceHandling);
+            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), legacySource.SourceHandling);
             Assert.Equal(RestHandlingModes.Keep, legacySource.RestHandlingAfterVerify);
         }
 
@@ -947,7 +947,14 @@ namespace ArchiveFixer.Tests
             Assert.Contains("2 删除操作", cleanup, StringComparison.Ordinal);
             Assert.Contains("SettingsEditor.SourceHandling", cleanup, StringComparison.Ordinal);
             Assert.Contains("ConverterParameter=KeepInPlace", cleanup, StringComparison.Ordinal);
-            Assert.Contains("ConverterParameter=MoveToRest", cleanup, StringComparison.Ordinal);
+
+            /*
+             * ⚠ 2026-10-15（用户 2026-10-14 口径）：源包那一档只剩「留下 / 彻底删除（就地）」——
+             * 原来那颗「放入其余物当中」整条删除 ⇒ 这里改钉新的第二档，并**反向断言**旧档位一个字都不留。
+             */
+            Assert.Contains("ConverterParameter=DeleteInPlace", cleanup, StringComparison.Ordinal);
+            Assert.DoesNotContain("ConverterParameter=MoveToRest", cleanup, StringComparison.Ordinal);
+            Assert.DoesNotContain("SourceMoveToRestOption", cleanup, StringComparison.Ordinal);
             Assert.Contains("SettingsEditor.RestHandling", cleanup, StringComparison.Ordinal);
             Assert.Contains("ConverterParameter=Keep", cleanup, StringComparison.Ordinal);
             Assert.Contains("ConverterParameter=Delete", cleanup, StringComparison.Ordinal);

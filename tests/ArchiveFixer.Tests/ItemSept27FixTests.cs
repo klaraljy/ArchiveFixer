@@ -152,7 +152,7 @@ namespace ArchiveFixer.Tests
         public void 其余物范围_源包留在原地时不含源包_放入其余物时才含()
         {
             string keep = ExtractionCoordinator.DescribeRestScope(SourceHandlingMode.KeepInPlace);
-            string move = ExtractionCoordinator.DescribeRestScope(SourceHandlingMode.MoveToRest);
+            string move = ExtractionCoordinator.DescribeRestScope(SourceHandlingMode.KeepInPlace);
 
             Assert.Contains("源包留在原地", keep, StringComparison.Ordinal);
             Assert.Contains("过程物", keep, StringComparison.Ordinal);

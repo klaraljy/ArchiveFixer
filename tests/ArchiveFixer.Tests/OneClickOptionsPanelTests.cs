@@ -240,7 +240,7 @@ namespace ArchiveFixer.Tests
         public async Task 面板选的值_默认就记进设置_下次不用再选()
         {
             // 设置里刻意放一个**与面板不同**的源包档：只有这样才测得出"写回的是面板那一组"。
-            Harness harness = CreateHarness(s => s.SourceHandling = nameof(SourceHandlingMode.MoveToRest));
+            Harness harness = CreateHarness(s => s.SourceHandling = nameof(SourceHandlingMode.KeepInPlace));
             ArchiveTask task = AddTask(harness, CreateSourceFile("pack.7z"));
 
             string flatRoot = Path.Combine(_root, "panel-flat");
@@ -338,7 +338,7 @@ namespace ArchiveFixer.Tests
             harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
             {
                 PlacementMode = OutputPlacementMode.PerArchiveSubfolder,
-                SourceHandling = SourceHandlingMode.MoveToRest,
+                SourceHandling = SourceHandlingMode.KeepInPlace,
                 RestHandling = RestHandlingModes.Delete,
                 SaveAsDefault = false
             });

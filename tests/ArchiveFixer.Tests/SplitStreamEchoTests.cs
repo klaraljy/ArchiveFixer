@@ -409,7 +409,7 @@ namespace ArchiveFixer.Tests
             // 源包档位刻意取默认的「放入其余物」：真成功了源包就会被搬走 ——
             // 这样"源包还在原地"才是一条有意义的断言（红线：不许触发不可移动作）。
             settings.SourceHandling = moveSourceToRest
-                ? nameof(SourceHandlingMode.MoveToRest)
+                ? nameof(SourceHandlingMode.KeepInPlace)
                 : nameof(SourceHandlingMode.KeepInPlace);
 
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;

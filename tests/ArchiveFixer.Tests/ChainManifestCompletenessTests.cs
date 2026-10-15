@@ -100,7 +100,7 @@ namespace ArchiveFixer.Tests
                     // 走**递归核心**：第 0 层（抠出来的内嵌 ZIP）与第 1 层（Y.7z）在一单里跑完
                     // —— 正是真机日志第 47/62 行的形状。
                     settings.RecursionMode = "SingleChain";
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
 
                     /*
@@ -185,7 +185,7 @@ namespace ArchiveFixer.Tests
                 settings =>
                 {
                     settings.RecursionMode = "SingleLayer";
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                 },
                 engine);
@@ -264,7 +264,7 @@ namespace ArchiveFixer.Tests
                 settings =>
                 {
                     settings.RecursionMode = "SingleChain";
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                 },
                 new LeafListFailsEngine("chain-leaf.7z"));
@@ -324,7 +324,7 @@ namespace ArchiveFixer.Tests
                 settings =>
                 {
                     settings.RecursionMode = "SingleLayer";
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                     settings.VerboseLog = true;
                 });
@@ -368,7 +368,7 @@ namespace ArchiveFixer.Tests
                 settings =>
                 {
                     settings.RecursionMode = "SingleLayer";
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                 });
 
@@ -398,7 +398,7 @@ namespace ArchiveFixer.Tests
                 settings =>
                 {
                     settings.RecursionMode = "SingleLayer";
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
                 });
 
@@ -531,7 +531,7 @@ namespace ArchiveFixer.Tests
                 {
                     // 走递归核心（真机上"一键处理"就是这条：递归模式 SingleChain）。
                     settings.RecursionMode = "SingleChain";
-                    settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                     settings.VerboseLog = true;
                 });

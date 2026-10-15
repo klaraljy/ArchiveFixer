@@ -326,7 +326,7 @@ namespace ArchiveFixer.Tests
             AppSettings settings = AppSettings.CreateDefault();
             settings.CustomOutputDirectory = outputRoot;
             settings.MaxParallelExtractCount = 5;
-            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
 
             configure?.Invoke(settings);
@@ -384,7 +384,7 @@ namespace ArchiveFixer.Tests
             {
                 PlacementMode = OutputPlacementMode.CustomRootPerArchive,
                 CustomRoot = harness.OutputRoot,
-                SourceHandling = SourceHandlingMode.MoveToRest,
+                SourceHandling = SourceHandlingMode.KeepInPlace,
                 RestHandling = RestHandlingModes.Delete
             });
 

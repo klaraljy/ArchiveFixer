@@ -588,7 +588,7 @@ namespace ArchiveFixer.Tests
 
             // 真机 CCCC 那一档：源包处理 = 放入其余物，其余物 = 彻底删除（不变量 1 的例外档）。
             // ⚠ 必须在 StartExtractAsync **之前**改：其余物那两档是批首钉死的。
-            harness.Vm.Settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            harness.Vm.Settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             harness.Vm.Settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
 
             ArchiveTask consumer = await AddTaskAsync(harness, first);
@@ -677,7 +677,7 @@ namespace ArchiveFixer.Tests
 
             Harness harness = CreateHarness(
                 "AllBranches",
-                SourceHandlingMode.MoveToRest,
+                SourceHandlingMode.KeepInPlace,
                 RestHandlingModes.Delete);
 
             ArchiveTask innerTask = await AddTaskAsync(harness, innerPackage);
@@ -773,7 +773,7 @@ namespace ArchiveFixer.Tests
 
             Harness harness = CreateHarness(
                 "AllBranches",
-                SourceHandlingMode.MoveToRest,
+                SourceHandlingMode.KeepInPlace,
                 RestHandlingModes.Delete);
 
             ArchiveTask innerTask = await AddTaskAsync(harness, innerPackage);
@@ -862,7 +862,7 @@ namespace ArchiveFixer.Tests
 
             Harness harness = CreateHarness(
                 "SingleLayer",
-                SourceHandlingMode.MoveToRest,
+                SourceHandlingMode.KeepInPlace,
                 RestHandlingModes.Delete);
 
             ArchiveTask outerTask = await AddTaskAsync(harness, outer);
@@ -931,7 +931,7 @@ namespace ArchiveFixer.Tests
 
             Harness harness = CreateHarness(
                 "SingleLayer",
-                SourceHandlingMode.MoveToRest,
+                SourceHandlingMode.KeepInPlace,
                 RestHandlingModes.Delete);
 
             ArchiveTask outerTask = await AddTaskAsync(harness, outer);
@@ -1487,7 +1487,7 @@ namespace ArchiveFixer.Tests
 
             byte[] pieceBytes = File.ReadAllBytes(second);
 
-            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.MoveToRest, RestHandlingModes.Delete);
+            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.KeepInPlace, RestHandlingModes.Delete);
 
             ArchiveTask consumer = await AddTaskAsync(harness, first);
             ArchiveTask producer = await AddTaskAsync(harness, second);
@@ -1538,7 +1538,7 @@ namespace ArchiveFixer.Tests
 
             byte[] pieceBytes = File.ReadAllBytes(second);
 
-            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.MoveToRest, RestHandlingModes.Keep);
+            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.KeepInPlace, RestHandlingModes.Keep);
 
             ArchiveTask consumer = await AddTaskAsync(harness, first);
             ArchiveTask producer = await AddTaskAsync(harness, second);
@@ -1596,7 +1596,7 @@ namespace ArchiveFixer.Tests
 
             byte[] pieceBytes = File.ReadAllBytes(second);
 
-            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.MoveToRest, RestHandlingModes.Delete);
+            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.KeepInPlace, RestHandlingModes.Delete);
 
             ArchiveTask consumer = await AddTaskAsync(harness, first);
             ArchiveTask producer = await AddTaskAsync(harness, second);

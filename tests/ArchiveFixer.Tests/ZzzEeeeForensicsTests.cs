@@ -130,7 +130,7 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = true;
             settings.KeepArchiveNameFolder = true;
             settings.CustomSevenZipExePath = sevenZip;
-            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             /*
              * ⚠ **按用户的本次选项**（他 2026-10-10 那次真机导出日志第 22 行逐字：
              * 「落点：以包名命名的子文件夹…；源包处理：放入其余物当中；其余物：彻底删除（直接省空间，不可恢复）」）

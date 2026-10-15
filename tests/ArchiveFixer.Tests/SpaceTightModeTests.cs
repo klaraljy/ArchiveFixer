@@ -373,7 +373,7 @@ namespace ArchiveFixer.Tests
             Assert.Contains("永久删除", tight.SpaceTightEcho, StringComparison.Ordinal);
             Assert.Contains("不写进设置", tight.SpaceTightEcho, StringComparison.Ordinal);
 
-            Assert.Contains(OneClickRunOptions.DescribeSourceHandling(SourceHandlingMode.MoveToRest), tight.SourceEcho, StringComparison.Ordinal);
+            Assert.Contains(OneClickRunOptions.DescribeSourceHandling(SourceHandlingMode.KeepInPlace), tight.SourceEcho, StringComparison.Ordinal);
             Assert.Contains(StatusText.OneClickConfirmRestAutoDelete, tight.RestEcho, StringComparison.Ordinal);
 
             /*
@@ -592,7 +592,7 @@ namespace ArchiveFixer.Tests
             Harness harness = CreateHarness(settings =>
             {
                 // 设置里刻意选"会删"的那一套组合：安全档必须**压过**它。
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -632,7 +632,7 @@ namespace ArchiveFixer.Tests
                      x.Message.Contains("一个字节都不动", StringComparison.Ordinal));
 
             // 设置同样一个字节都没改。
-            Assert.Equal(nameof(SourceHandlingMode.MoveToRest), harness.Vm.Settings.SourceHandling);
+            Assert.Equal(nameof(SourceHandlingMode.KeepInPlace), harness.Vm.Settings.SourceHandling);
             Assert.Equal(RestHandlingModes.Delete, harness.Vm.Settings.RestHandlingAfterVerify);
             Assert.Equal(settingsBefore, File.ReadAllText(harness.SettingsFilePath, Encoding.UTF8));
         }

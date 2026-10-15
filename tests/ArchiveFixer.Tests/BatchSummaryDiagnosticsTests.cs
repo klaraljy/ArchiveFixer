@@ -884,7 +884,7 @@ namespace ArchiveFixer.Tests
             Harness harness = CreateHarness(settings =>
             {
                 settings.RecursionMode = "SingleChain";
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
             });
 
@@ -959,7 +959,7 @@ namespace ArchiveFixer.Tests
             Harness harness = CreateHarness(settings =>
             {
                 settings.RecursionMode = "SingleChain";
-                settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
             });
 

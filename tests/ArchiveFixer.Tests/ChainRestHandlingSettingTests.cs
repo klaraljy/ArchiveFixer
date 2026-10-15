@@ -88,7 +88,7 @@ namespace ArchiveFixer.Tests
         [SevenZipFact]
         public async Task 用例1_根源包成功而内层包失败_彻底删除档下其余物真被删()
         {
-            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.MoveToRest);
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
             string outer = BuildTwoLayerChain(failInner: true);
 
             await harness.AddPathsAsync(outer);
@@ -131,7 +131,7 @@ namespace ArchiveFixer.Tests
         [SevenZipFact]
         public async Task 用例2_同场景而不动其余物档下其余物留着()
         {
-            Harness harness = CreateHarness(RestHandlingModes.Keep, SourceHandlingMode.MoveToRest);
+            Harness harness = CreateHarness(RestHandlingModes.Keep, SourceHandlingMode.KeepInPlace);
             string outer = BuildTwoLayerChain(failInner: true);
 
             await harness.AddPathsAsync(outer);
@@ -174,7 +174,7 @@ namespace ArchiveFixer.Tests
         [SevenZipFact]
         public async Task 用例3_根源包自己失败_一个字节都不动并写清原因()
         {
-            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.MoveToRest);
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
             string outer = BuildTwoLayerChain(failInner: false, lockOuter: true);
 
             await harness.AddPathsAsync(outer);

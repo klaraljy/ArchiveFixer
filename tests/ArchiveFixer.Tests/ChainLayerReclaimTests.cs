@@ -92,7 +92,7 @@ namespace ArchiveFixer.Tests
         {
             const int layers = 4;
 
-            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.MoveToRest);
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
             string outer = BuildChain(layers);
 
             long demand = await MeasureDemandAsync(outer);
@@ -248,7 +248,7 @@ namespace ArchiveFixer.Tests
         {
             const int layers = 4;
 
-            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.MoveToRest);
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
             string outer = BuildChain(layers);
 
             long outerBytes = new FileInfo(outer).Length;
@@ -893,7 +893,7 @@ namespace ArchiveFixer.Tests
         [SevenZipFact]
         public async Task 用例D_三处消费点读同一个数字()
         {
-            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.MoveToRest);
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
             string outer = BuildChain(3);
 
             await harness.AddPathsAsync(outer);
@@ -947,7 +947,7 @@ namespace ArchiveFixer.Tests
         {
             const int layers = 3;
 
-            Harness harness = CreateHarness(RestHandlingModes.Keep, SourceHandlingMode.MoveToRest);
+            Harness harness = CreateHarness(RestHandlingModes.Keep, SourceHandlingMode.KeepInPlace);
             string outer = BuildChain(layers);
 
             using var sampler = new DiskSampler(_root);
@@ -1007,7 +1007,7 @@ namespace ArchiveFixer.Tests
         {
             const int layers = 3;
 
-            Harness harness = CreateHarness(RestHandlingModes.Keep, SourceHandlingMode.MoveToRest);
+            Harness harness = CreateHarness(RestHandlingModes.Keep, SourceHandlingMode.KeepInPlace);
             string outer = BuildChain(layers);
 
             using var sampler = new DiskSampler(_root);

@@ -135,10 +135,10 @@ namespace ArchiveFixer.Tests
             object? enumWritten = converter.ConvertBack(
                 true,
                 typeof(SourceHandlingMode),
-                nameof(SourceHandlingMode.MoveToRest),
+                nameof(SourceHandlingMode.KeepInPlace),
                 System.Globalization.CultureInfo.InvariantCulture);
 
-            Assert.Equal(SourceHandlingMode.MoveToRest, enumWritten);
+            Assert.Equal(SourceHandlingMode.KeepInPlace, enumWritten);
         }
 
         /// <summary>
@@ -204,18 +204,20 @@ namespace ArchiveFixer.Tests
         {
             MainViewModel vm = CreateViewModel();
 
-            vm.SettingsEditor.SourceHandling = SourceHandlingMode.MoveToRest;
+            // ⚠ 2026-10-15：源包那一档只剩「留下 / 彻底删除（就地）」⇒ 这一格换成新的第二档来说
+            //（判据意图没变：那句话必须把"源包怎么处理"与"其余物怎么处理"两件事都说出来）。
+            vm.SettingsEditor.SourceHandling = SourceHandlingMode.DeleteInPlace;
             vm.SettingsEditor.RestHandling = RestHandlingModes.Delete;
             vm.RefreshSpaceModeText();
 
-            Assert.Contains("源包：移入其余物", vm.SpaceModeText, StringComparison.Ordinal);
+            Assert.Contains("源包：彻底删除", vm.SpaceModeText, StringComparison.Ordinal);
             Assert.Contains("彻底删除", vm.SpaceModeText, StringComparison.Ordinal);
 
             vm.SettingsEditor.SourceHandling = SourceHandlingMode.KeepInPlace;
             vm.SettingsEditor.RestHandling = RestHandlingModes.Keep;
             vm.RefreshSpaceModeText();
 
-            Assert.Contains("源包：留在原地", vm.SpaceModeText, StringComparison.Ordinal);
+            Assert.Contains("源包：留下", vm.SpaceModeText, StringComparison.Ordinal);
             Assert.Contains("保留", vm.SpaceModeText, StringComparison.Ordinal);
         }
 

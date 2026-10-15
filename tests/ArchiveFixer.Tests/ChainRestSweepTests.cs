@@ -350,7 +350,7 @@ namespace ArchiveFixer.Tests
              * 源包进其余物：根任务收尾时就会"成功 + 校验通过 + 当场把源包搬进其余物（Done）"，
              * 链尾走的是补收内层包那条路（而不是延期补搬那条）。
              */
-            settings.SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+            settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settingsService.Save(settings);
 
             var engine = new FakeEngine();
