@@ -216,6 +216,97 @@ namespace ArchiveFixer.Tests
             Assert.True(purgeLines == layers - 1, $"该有 {layers - 1} 条逐层回收日志，实际 {purgeLines} 条。");
         }
 
+        // ================================================================ 用例 A3（「最后一层过程物」按档留/删）
+
+        /// <summary>
+        /// ⛔ <b>用例 A3-a（「最后一层过程物」默认留下）</b>：四层真链，**第三层解不开**（那一层的包设了密码、
+        /// 密码本里没有它）+ ③页「删除操作 = 留下」（默认档）⇒
+        ///
+        /// <list type="number">
+        /// <item><description>链停下来的那一层**要解的那个包**（<c>level3.7z</c> = 口径里的「最后一层过程物」）
+        /// **留在这一单的其余物里** —— 它原来会随工作区一起被清掉（2026-10-16 运行期实测：修之前跑完盘上
+        /// 只剩源包，`level3.7z` 一个字节都没留）。</description></item>
+        /// <item><description>链**上方成功过**的那些过程物照旧当场删掉（<c>level2.7z</c> 不在盘上）。</description></item>
+        /// <item><description>最外层源包原地不动（不变量 1）。</description></item>
+        /// </list>
+        ///
+        /// <para>依据 = 用户 2026-10-14 口径（`docs\大改动-2026-10-14-口径与冲突.md` §2.1/§2.2）：
+        /// 「**删除操作（失败和部分完成）**只**管"最后一层过程物"**……默认留下」＋
+        /// 「`D` 肯定会留下，而且是完整的……前面的 `B` 和 `C` 都是成功的」。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>RunRecursiveAsync</c> 收尾那一调 <c>PreserveStoppedLayerProcessArtifact</c>
+        /// 撤掉 ⇒ 本条当场红（`level3.7z` 找不到）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例A3a_最后一层过程物_留下档_停下的那一层要解的包留在其余物里()
+        {
+            Harness harness = CreateHarness(RestHandlingModes.Keep, SourceHandlingMode.KeepInPlace);
+            string outer = BuildChain(4, passwordLevel: 3);
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            string[] stopped = FindFiles("level3.7z");
+            string[] upper = FindFiles("level2.7z");
+
+            _output.WriteLine(
+                $"【用例A3a】停下的那一层要解的包：{string.Join("、", stopped)} ｜ 上方成功过的过程物："
+                + $"{(upper.Length == 0 ? "（已当场删掉）" : string.Join("、", upper))}");
+
+            // ① ⛔ 核心：它留在其余物里（不是消失、也不是躺在成品树里）。
+            Assert.True(stopped.Length > 0, "「最后一层过程物」默认留下 —— 它不该被清掉");
+
+            Assert.True(
+                stopped.Any(path => path.Contains(
+                    ProcessArtifactLayout.ArtifactDirectoryName,
+                    StringComparison.OrdinalIgnoreCase)),
+                "它应当留在这一单的其余物里，实际：" + string.Join("、", stopped));
+
+            // ② 链上方成功过的过程物照旧当场删掉。
+            Assert.Empty(upper);
+
+            // ③ 最外层源包原地不动。
+            Assert.True(File.Exists(outer), "源包一律原地不动");
+
+            // ④ 要说清"这一份是什么、按哪一档留下的"。
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("最后一层过程物", StringComparison.Ordinal)
+                         && entry.Message.Contains("留下", StringComparison.Ordinal));
+
+            // ⑤ 停下来的那一层落成失败（不变量 6）。
+            Assert.Contains(harness.Vm.Tasks, task => task.Outcome == TaskOutcome.Failed);
+        }
+
+        /// <summary>
+        /// ⛔ <b>用例 A3-b（同一档位换一档：「彻底删除」）</b>：同一条链 + ③页「删除操作 = 彻底删除」⇒
+        /// 停下的那一层的过程物**一个字节都不留**（它随这一单的工作区一起清掉，⛔ 也不搬进其余物），
+        /// 而且必须**如实写一行**说清是按用户那一档删的（不许静默）。
+        ///
+        /// <para>⚠ 这一档的"删"**不是**本方法主动删的（它只放弃保留）—— 主动删那一半还没做，
+        /// 见 `docs\大改动-2026-10-14-口径与冲突.md` §20.4。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 用例A3b_最后一层过程物_彻底删除档_一个字节都不留_并如实写一行()
+        {
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
+            string outer = BuildChain(4, passwordLevel: 3);
+
+            await harness.AddPathsAsync(outer);
+
+            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
+
+            Assert.Empty(FindFiles("level3.7z"));
+
+            Assert.True(File.Exists(outer), "源包一律原地不动（源包操作 = 留在原地）");
+
+            Assert.Contains(
+                harness.Log.Logs,
+                entry => entry.Message.Contains("最后一层过程物", StringComparison.Ordinal)
+                         && entry.Message.Contains("彻底删除", StringComparison.Ordinal));
+        }
+
         // ================================================================ 用例 B（失败那一层不动）
 
         /// <summary>
