@@ -366,7 +366,7 @@ namespace ArchiveFixer.Models
         {
             return RestHandlingModes.Normalize(mode) switch
             {
-                RestHandlingModes.RecycleBin => "移入回收站（可还原）",
+                // ⚠ 2026-10-15：「移入回收站」那一档整条下线（详见 RestHandlingModes 的说明）。
                 RestHandlingModes.Delete => "彻底删除（直接省空间，不可恢复）",
                 _ => "不动其余物（默认）"
             };

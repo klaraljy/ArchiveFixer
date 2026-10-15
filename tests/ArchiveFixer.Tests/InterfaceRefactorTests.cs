@@ -460,8 +460,13 @@ namespace ArchiveFixer.Tests
                 // ② 的第 17 条那一格：一键处理的确认框可以关掉（也在确认框自己的勾选项里写着）
                 ["SkipOneClickConfirm"] = "ExtractionTab",
 
-                // ③ 清理与删除
-                ["RestRemovalDefaultMode"] = "CleanupTab",
+                /*
+                 * ③ 清理与删除
+                 *
+                 * ⛔ 2026-10-15：「其余物清理默认档」（`RestRemovalDefaultMode`）那一格与那个设置项
+                 * **一起删除**了（回收站整条下线 ⇒ 手工清理只剩"彻底删除"一个动作，没有档可存）
+                 * ⇒ 它不再是"搬走的设置项"，所以从这份清单里去掉。
+                 */
 
                 /*
                  * ⚠ 源包操作 / 删除操作这两组**不在这份清单里**：它们绑的是

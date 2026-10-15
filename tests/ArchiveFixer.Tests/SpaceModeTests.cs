@@ -818,21 +818,24 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(other, "333.7z")), "别的包的其余物一个字节都不许动");
         }
 
-        // ================================================================ ⑥ 删除操作三档（用户 2026-09-25 第 32 条）
+        // ================================================================ ⑥ 删除操作两档（回收站已下线）
 
         /// <summary>
-        /// 新设置项 <c>RestHandlingAfterVerify</c>：默认**不动其余物**，三档都能落盘读回，
+        /// 新设置项 <c>RestHandlingAfterVerify</c>：默认**不动其余物**，两档都能落盘读回，
         /// 认不出的值一律回落 "Keep"（保守方向：宁可不动，绝不误删）。
+        ///
+        /// <para>⚠ 2026-10-15：原来是三档（含「移入回收站」），那一档整条下线 ⇒
+        /// 老配置里存过的 <c>recyclebin</c> 现在落进 <b>Keep</b>，⛔ 绝不许落成 Delete。</para>
         /// </summary>
         [Fact]
-        public void 删除操作_默认不动其余物_三档都能落盘读回()
+        public void 删除操作_默认不动其余物_两档都能落盘读回()
         {
             Assert.Equal(RestHandlingModes.Keep, AppSettings.CreateDefault().RestHandlingAfterVerify);
 
             Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize(null));
             Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("  "));
             Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("什么鬼"));
-            Assert.Equal(RestHandlingModes.RecycleBin, RestHandlingModes.Normalize("recyclebin"));
+            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("recyclebin"));
             Assert.Equal(RestHandlingModes.Delete, RestHandlingModes.Normalize("DELETE"));
 
             string dataRoot = Path.Combine(_root, "data");
@@ -852,7 +855,9 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// 退役迁移（第 32 条）：旧配置里开过危险模式 → 一次性迁移成「彻底删除」，并把旧字段清干净；
-        /// 旧的手动删源开关 / 旧的「校验通过后删除」档 → "源包移入其余物 + 移入回收站"（可还原的那一档，不替用户重做不可逆选择）。
+        /// 旧的手动删源开关 / 旧的「校验通过后删除」档 → "源包移入其余物 + 其余物**留下**"
+        /// （⛔ 不替用户重做不可逆选择：当年那个"可还原的回收站缓冲垫"已经不存在，
+        /// 所以落点是 Keep，绝不是 Delete）。
         /// </summary>
         [Fact]
         public void 旧危险模式与旧删源档_一次性迁移成新的两档()
@@ -875,7 +880,7 @@ namespace ArchiveFixer.Tests
             manualDelete.Normalize();
 
             Assert.Equal(nameof(SourceHandlingMode.MoveToRest), manualDelete.SourceHandling);
-            Assert.Equal(RestHandlingModes.RecycleBin, manualDelete.RestHandlingAfterVerify);
+            Assert.Equal(RestHandlingModes.Keep, manualDelete.RestHandlingAfterVerify);
             Assert.False(manualDelete.DeleteSourceAfterExtract);
 
             AppSettings legacySource = AppSettings.CreateDefault();
@@ -884,7 +889,7 @@ namespace ArchiveFixer.Tests
             legacySource.Normalize();
 
             Assert.Equal(nameof(SourceHandlingMode.MoveToRest), legacySource.SourceHandling);
-            Assert.Equal(RestHandlingModes.RecycleBin, legacySource.RestHandlingAfterVerify);
+            Assert.Equal(RestHandlingModes.Keep, legacySource.RestHandlingAfterVerify);
         }
 
 
@@ -925,15 +930,15 @@ namespace ArchiveFixer.Tests
             Assert.Contains("磁盘空间不足", failedList, StringComparison.Ordinal);
             Assert.Contains("差 22 GiB", failedList, StringComparison.Ordinal);
         }
-        // ================================================================ ⑩ 界面：三档在③页，②页不再有红区
+        // ================================================================ ⑩ 界面：两档在③页，②页不再有红区
 
         /// <summary>
-        /// 用户 2026-09-25 第 32 条定的界面形态：
-        /// ③页 = 「1 源包操作」（两个单选）+「2 删除操作」（三个单选，第三档整条红字 +
+        /// 用户 2026-09-25 第 32 条定的界面形态 ＋ 2026-10-15 回收站下线后的新形态：
+        /// ③页 = 「1 源包操作」（两个单选）+「2 删除操作」（**两个**单选，第二档整条红字 +
         /// 选中时下面**常驻**一条不可关闭的提示）；②页那个「高风险区（危险模式）」整块没有了。
         /// </summary>
         [Fact]
-        public void 界面_三档删除操作在清理页_解压方式页不再有危险模式红区()
+        public void 界面_两档删除操作在清理页_解压方式页不再有危险模式红区()
         {
             string cleanup = File.ReadAllText(
                 Path.Combine(XamlBindingScan.RepositoryRoot, "src", "ArchiveFixer", "Views", "Tabs", "CleanupTab.xaml"));
@@ -945,8 +950,16 @@ namespace ArchiveFixer.Tests
             Assert.Contains("ConverterParameter=MoveToRest", cleanup, StringComparison.Ordinal);
             Assert.Contains("SettingsEditor.RestHandling", cleanup, StringComparison.Ordinal);
             Assert.Contains("ConverterParameter=Keep", cleanup, StringComparison.Ordinal);
-            Assert.Contains("ConverterParameter=RecycleBin", cleanup, StringComparison.Ordinal);
             Assert.Contains("ConverterParameter=Delete", cleanup, StringComparison.Ordinal);
+
+            /*
+             * ⛔ 2026-10-15：回收站那一档整条下线 ⇒ ③页既不许有那一颗单选，也不许再有它的绑定参数，
+             * 连"手工删除时的默认档"那一格（两档下拉）也随设置项一起删除。
+             */
+            Assert.DoesNotContain("ConverterParameter=RecycleBin", cleanup, StringComparison.Ordinal);
+            Assert.DoesNotContain("RestRecycleOption", cleanup, StringComparison.Ordinal);
+            Assert.DoesNotContain("Tag=\u0022RecycleBin\u0022", cleanup, StringComparison.Ordinal);
+            Assert.DoesNotContain("RestRemovalDefaultMode", cleanup, StringComparison.Ordinal);
 
             // 第三档那条红字提示：绑 IsRestDeleteSelected（选中才出现，没有关闭按钮 = 不能消掉）。
             Assert.Contains("IsRestDeleteSelected", cleanup, StringComparison.Ordinal);

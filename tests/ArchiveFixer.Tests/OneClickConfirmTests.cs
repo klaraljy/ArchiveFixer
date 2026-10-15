@@ -291,12 +291,13 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 「其余物」这一行必须**跟着③页「删除操作」那一档说**（用户 2026-09-25 第 32 条定了三档）：
-        /// 不动其余物 = 说不自动删除；移入回收站 / 彻底删除 = 如实说会自动处理（而且两档措辞不同）。
+        /// 「其余物」这一行必须**跟着③页「删除操作」那一档说**：
+        /// 留下 = 说不自动删除；彻底删除 = 如实说会自动处理。
+        ///
+        /// <para>⚠ 2026-10-15：原来是三档（多一档「移入回收站」），回收站整条下线后只剩两档。</para>
         /// </summary>
         [Theory]
         [InlineData(RestHandlingModes.Keep, StatusText.OneClickConfirmRestKeep)]
-        [InlineData(RestHandlingModes.RecycleBin, StatusText.OneClickConfirmRestRecycle)]
         [InlineData(RestHandlingModes.Delete, StatusText.OneClickConfirmRestAutoDelete)]
         public async Task 其余物一行_按删除操作那一档说(string mode, string expected)
         {
@@ -315,11 +316,10 @@ namespace ArchiveFixer.Tests
 
             Assert.Contains(expected, facts.RestEcho, StringComparison.Ordinal);
 
-            // 三档措辞互不相同：说错档 = 用户按错的预期动手。
+            // 两档措辞互不相同：说错档 = 用户按错的预期动手。
             foreach (string other in new[]
                      {
                          StatusText.OneClickConfirmRestKeep,
-                         StatusText.OneClickConfirmRestRecycle,
                          StatusText.OneClickConfirmRestAutoDelete
                      })
             {

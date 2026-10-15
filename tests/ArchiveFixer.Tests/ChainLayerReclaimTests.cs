@@ -30,8 +30,8 @@ namespace ArchiveFixer.Tests
     /// 其余物不生成；已成功回收的上层不回滚（用户明确接受）。</description></item>
     /// <item><description><b>用例 C</b>：「空间不足」模式**一个字不改** —— 仍每层各删各的（含最外层源包），
     /// 峰值 ≤ 2 倍源包（用户给的新判据）。</description></item>
-    /// <item><description><b>用例 E（B 档位分叉）**：「移入回收站」档**一层都不当场回收**，
-    /// 内层包到链尾才处理（回收站只调一次）；「彻底删除」档才逐层。</description></item>
+    /// <item><description><b>用例 E（B 档位分叉）**：⛔ **2026-10-15 已删** —— 它钉的是③页「移入回收站」
+    /// 那一档，而那一档整条下线（用户口径：已经不存在放入回收站了）。</description></item>
     /// </list>
     ///
     /// <para><b>为什么必须用真 7z</b>（AGENTS.md §11 验收规则）：合成假引擎证明得了"我按自己以为的形状处理得对"，
@@ -228,64 +228,15 @@ namespace ArchiveFixer.Tests
             Assert.Contains(harness.Vm.Tasks, task => task.Outcome == TaskOutcome.Failed);
         }
 
-        /// <summary>
-        /// <b>红线守门（「移入回收站」档 + 中间那一层失败）</b>：那一档不逐层回收，内层包要等链尾 ——
-        ///
-        /// <para><b>⚠ 2026-10-04 口径变更（用户推翻"整链成功"那道闸门）</b>：老版本在这里断言
-        /// "链没跑完 ⇒ 链尾那一档整段不执行、一个字节都不删、源包还在盘上"。现在链尾**只问根源包那一层**：
-        /// 根源包成功 ⇒ 按档把整份其余物（含<b>已经搬进其余物的最外层源包</b>）**一次**移入回收站。</para>
-        ///
-        /// <para><b>这一档仍然是"可还原"的那一档</b>（用户 2026-10-03 的原话："原包还是比较重要的"）：
-        /// 因此这里钉的是 —— 回收站**只调一次**（整份一次搬走）、**永久删除零调用**、
-        /// 而且⛔ 失败那一层自己**没有**被逐层回收（零个源包删除记录）。</para>
-        /// </summary>
-        [SevenZipFact]
-        public async Task 用例B2_移入回收站档_中间那一层失败_整份一次进回收站_绝不永久删()
-        {
-            const int layers = 4;
-            const int failingLevel = 3;
-
-            Harness harness = CreateHarness(RestHandlingModes.RecycleBin, SourceHandlingMode.MoveToRest);
-            string outer = BuildChain(layers, passwordLevel: failingLevel);
-
-            var recycleExecutor = new FakeDeleteExecutor();
-            harness.Coordinator.RestDeleteExecutor = recycleExecutor;
-
-            await harness.AddPathsAsync(outer);
-
-            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
-
-            // ① 源包那一份**进了回收站**：它先按"源包操作 = 放入其余物"进其余物，链尾整份一次搬走。
-            //    ⚠ 2026-10-12 新口径之后，回收站调用**不止一条**（那几层跑成的层也逐层进回收站了），
-            //    所以要找的是"有一条针对其余物目录"，而不是"只调了一次"。
-            Assert.Contains(
-                recycleExecutor.RecycleCalls,
-                path => IsNamed(path, ProcessArtifactLayout.ArtifactDirectoryName));
-
-            Assert.True(
-                recycleExecutor.RecycleCalls.Count >= 2,
-                "跑成的那几层逐层进回收站 + 链尾整份其余物一次 ⇒ 调用该 ≥ 2 次，实际："
-                + string.Join("、", recycleExecutor.RecycleCalls));
-
-            Assert.Empty(FindFiles("outer.7z"));
-
-            // ② ⛔ 永久删除**一次都不许有**（这一档是可还原的那一档）。
-            Assert.Empty(recycleExecutor.PermanentCalls);
-
-            // ③ 永久删那一个执行体一次都没被调用（逐层回收走的是回收站那一档）。
-            Assert.Empty(harness.SourceDeletes.DeletedPaths);
-
-            // ④ 失败那一层要落成失败（不变量 6）。
-            Assert.Contains(harness.Vm.Tasks, task => task.Outcome == TaskOutcome.Failed);
-
-            /*
-             * ⚠ 观察（2026-10-12，本轮没定案、没改）：这一档下**失败那一层的输入包 `level3.7z` 不在盘上**
-             * ——它被链尾那一次"整份其余物进回收站"一起带走了（上面的 `Assert.Empty(FindFiles("outer.7z"))`
-             * 就是同一条路）。按 AGENTS §11「失败 ⇒ 那一层的过程物一个字节都不动」这条口径，
-             * 这一格值得单独取证（它到底算"这一层的过程物"还是"其余物里的内层包"）。
-             * ⛔ 本条不改判据：只记在这里，等专门那一轮用日志 + 调试器定案。
-             */
-        }
+        /*
+         * ⛔ 2026-10-15：原来这里有两条用例（用例 B2 / 用例 E），钉的是③页「移入回收站」那一档
+         * 在逐层回收上的行为（B2 = 那一档不逐层、链尾整份一次进回收站；E = 2026-10-12 改口径后
+         * 那一档**也逐层**当场进回收站）。回收站那一档本身**整条下线**（用户口径逐字：
+         * 「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」，见 `RestHandlingModes`）
+         * ⇒ 这两条钉的功能已经不存在，按新现实整条撤掉，⛔ 不是把判据放宽。
+         * 现在钉"逐层回收"的是：用例 A（彻底删除档逐层永久删）、用例 C（空间不足模式）、
+         * 用例 R1/R2/R4（递归路那几档）。
+         */
 
         // ================================================================ 用例 C（空间不足模式不变）
         /// <summary>
@@ -335,75 +286,7 @@ namespace ArchiveFixer.Tests
             Assert.Empty(FindFiles("*.7z"));
         }
 
-        // ================================================================ 用例 E（B 档位分叉）
-
-        /// <summary>
-        /// <b>用例 E（B 档位分叉，2026-10-12 按用户新口径改）</b>：同一个夹具换成③页「移入回收站」⇒
-        /// **也逐层当场回收**（这一层的过程物**进回收站**，不是永久删），于是内层包不再一路攒到链尾。
-        ///
-        /// <para><b>口径出处</b>（用户原话）：「我们的逐层只是针对彻底删除的，但是进回收站档，
-        /// 其实也可以弄成过程物逐层进回收站，但是由于空间大小没有什么变化，我就一开始没有想这么多，
-        /// 但是后面觉得没有什么问题」。</para>
-        ///
-        /// <para><b>为什么必须改</b>：老口径（不逐层 + 链尾一次）的前提是"链尾那条路收得住内层包"，
-        /// 而链尾只认**任务**、链内产出的那一族片**不是任务** ⇒ 它们活到定稿、被发布成内容物
-        /// （大测试第 3 遍 `run-6666` 实测：③「盘上无残留」红）。逐层这一档一开，两条档对称。</para>
-        ///
-        /// <para>⛔ 两档的差别**只有动作**：这一条照样断言"永久删那一个执行体一次都没被调用"。</para>
-        /// </summary>
-        [SevenZipFact]
-        public async Task 用例E_移入回收站档也逐层_每层当场进回收站_永久删那一档一次都不碰()
-        {
-            const int layers = 4;
-
-            Harness harness = CreateHarness(RestHandlingModes.RecycleBin, SourceHandlingMode.MoveToRest);
-            string outer = BuildChain(layers);
-
-            // 同一个夹具 ⇒ 放行需求与用例 A 相同（两档的差别只在**实际峰值**）。
-            long demand = await MeasureDemandAsync(outer);
-
-            var recycleExecutor = new FakeDeleteExecutor();
-            harness.Coordinator.RestDeleteExecutor = recycleExecutor;
-
-            using var sampler = new DiskSampler(_root);
-
-            await harness.AddPathsAsync(outer);
-
-            sampler.Start();
-
-            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
-
-            sampler.Stop();
-
-            _output.WriteLine(
-                $"【用例E】峰值包数 {sampler.MaxPackageCount} / 峰值字节 {sampler.MaxPackageBytes}"
-                + $"（精估放行需求 {demand} ⇒ 比值 {(double)sampler.MaxPackageBytes / demand:0.00}）"
-                + $" ｜ 逐层回收（永久删那个执行体）调用 {harness.SourceDeletes.DeletedPaths.Count} 次"
-                + $" ｜ 回收站调用 {recycleExecutor.RecycleCalls.Count} 次"
-                + " ｜ 回收相关日志："
-                + string.Join(
-                    " / ",
-                    harness.Log.Logs
-                        .Select(item => item.DisplayText)
-                        .Where(text => text.Contains("逐层回收", StringComparison.Ordinal)
-                                       || text.Contains("没能回收", StringComparison.Ordinal)
-                                       || text.Contains("送进回收站", StringComparison.Ordinal))
-                        .Take(6)));
-
-            Assert.NotEmpty(FindFiles("final.txt"));
-
-            // ① ⛔ 永久删那一个执行体**一次都没被调用**（这一档只许送回收站）。
-            Assert.Empty(harness.SourceDeletes.DeletedPaths);
-            Assert.Empty(recycleExecutor.PermanentCalls);
-
-            // ② **逐层**：三层内层包各回收一次（≥ 层数 − 1；最外层源包留到链尾）。
-            Assert.True(
-                recycleExecutor.RecycleCalls.Count >= layers - 1,
-                $"「移入回收站」档也该逐层回收 ⇒ 回收站调用该 ≥ {layers - 1} 次（每层一次），实测 {recycleExecutor.RecycleCalls.Count} 次");
-
-            // ③ 跑完盘上一个包都不剩（每层当场进回收站 + 链尾那一档兜底）。
-            Assert.Empty(FindFiles("*.7z"));
-        }
+        // ================================================================ 用例 E（已删，见上面那段说明）
 
         // ================================================================ 用例 G（半套分卷 ⇒ 一个字节都不删）
 
@@ -1856,62 +1739,11 @@ namespace ArchiveFixer.Tests
             Assert.Empty(FindFiles("layer3.txt"));
         }
 
-        /// <summary>
-        /// <b>用例 R3（B 档位分叉在递归路上，2026-10-12 按用户新口径改）</b>：③页「移入回收站」档
-        /// **也逐层当场回收** —— 过程物**进回收站**（不是永久删）。
-        ///
-        /// <para><b>口径出处</b>（用户原话）：「我们的逐层只是针对彻底删除的，但是进回收站档，
-        /// 其实也可以弄成过程物逐层进回收站，但是由于空间大小没有什么变化，我就一开始没有想这么多，
-        /// 但是后面觉得没有什么问题」。</para>
-        ///
-        /// <para>⛔ 两档共用**同一条闸门链**（`PurgeLayerSourcePackage`），只差动作 ⇒
-        /// 这一条照样钉"永久删那个执行体一次都没被调用"。</para>
-        ///
-        /// <para>⛔ **必须注入假执行体**（用户 2026-10-10：「回收站里面还有大小为 1KB 的其余物」）：
-        /// 原来这一条没注入 ⇒ 链尾那次"整份其余物进回收站"落到**用户自己的回收站**里
-        /// （实测：跑一次本类 ⇒ 回收站里 `ArchiveFixerLayerReclaim` 那条 +1）。
-        /// 测试只许在夹具目录里动文件，⛔ 绝不许碰用户的回收站。</para>
-        /// </summary>
-        [SevenZipFact]
-        public async Task 用例R3_递归路移入回收站档_也逐层当场进回收站_绝不永久删()
-        {
-            Harness harness = CreateHarness(
-                RestHandlingModes.RecycleBin,
-                SourceHandlingMode.MoveToRest,
-                settings => settings.RecursionMode = "AllBranches");
-
-            var recycleExecutor = new FakeDeleteExecutor();
-            harness.Coordinator.RestDeleteExecutor = recycleExecutor;
-
-            string outer = BuildChain(4);
-
-            await harness.AddPathsAsync(outer);
-
-            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(240));
-
-            _output.WriteLine(
-                $"【用例R3】永久删那个执行体删了 {harness.SourceDeletes.DeletedPaths.Count} 个"
-                + $" ｜ 回收站调用 {recycleExecutor.RecycleCalls.Count} 次"
-                + $" ｜ 永久删调用 {recycleExecutor.PermanentCalls.Count} 次");
-
-            // ① ⛔ 永久删那一个执行体一次都没被调用（这一档只许送回收站）。
-            Assert.Empty(harness.SourceDeletes.DeletedPaths);
-            Assert.Empty(recycleExecutor.PermanentCalls);
-
-            // ② 递归路**逐层**回收（三层内层包各一次；最外层源包留到链尾）。
-            Assert.True(
-                recycleExecutor.RecycleCalls.Count >= 3,
-                $"递归路「移入回收站」档也该逐层 ⇒ 回收站调用该 ≥ 3 次，实测 {recycleExecutor.RecycleCalls.Count} 次");
-
-            // ③ 这一档的措辞写的是「移入回收站」，不是"永久删除"。
-            Assert.Contains(
-                harness.Log.Logs,
-                entry => entry.Message.Contains("移入回收站", StringComparison.Ordinal)
-                         && entry.Message.Contains("这一层的过程物（上一层的输入包）", StringComparison.Ordinal));
-
-            // 内容物照旧出来了（不是"整条链没跑"）。
-            Assert.NotEmpty(FindFiles("final.txt"));
-        }
+        /*
+         * ⛔ 2026-10-15：原来这里有「用例 R3」（递归路上③页「移入回收站」档也逐层当场进回收站）——
+         * 与用例 B2/E 同一条理由：**回收站那一档整条下线**，这条钉的功能已经不存在，
+         * 按新现实整条撤掉（⛔ 不是放宽判据）。递归路的逐层回收由用例 R1/R2/R4 钉着（那些走彻底删除档）。
+         */
 
         /// <summary>
         /// <b>用例 R4（分卷组整组一起还）</b>：第一层的内层包是**一组真 7z 分卷**

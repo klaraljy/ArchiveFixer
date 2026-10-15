@@ -4518,12 +4518,11 @@ namespace ArchiveFixer.ViewModels
                 string scopeNote = BuildBatchScopeNote(scope, actionable);
 
                 /*
-                 * ② **一次**确认（红色）。档位语义与单任务时完全一样：
-                 * 默认档取自设置项「其余物清理默认档」，勾选框永远是"切到另一档"
-                 * —— 这一层判断仍然只有 DeriveCleanupDecision 一处实现。
+                 * ② **一次**确认（红色）。档位语义：⛔ 2026-10-15 起手工清理**只剩一个动作**
+                 * （彻底删除 —— 回收站那一档整条下线），所以这里不再有"默认档 / 另一档"之说，
+                 * 档位构造仍然只有 DeriveCleanupDecision 一处实现。
                  */
                 CleanupDecision decision = DeriveCleanupDecision(
-                    Settings.RestRemovalDefaultMode,
                     merged,
                     title,
                     scopeNote,
@@ -4979,12 +4978,11 @@ namespace ArchiveFixer.ViewModels
         /// </para>
         /// </summary>
         internal static CleanupDecision DeriveCleanupDecision(
-            string? restRemovalDefaultMode,
             CleanupPreview preview,
             string title,
             string? scopeNote)
         {
-            return DeriveCleanupDecision(restRemovalDefaultMode, preview, title, scopeNote, plans: null);
+            return DeriveCleanupDecision(preview, title, scopeNote, plans: null);
         }
 
         /// <summary>
@@ -4992,30 +4990,30 @@ namespace ArchiveFixer.ViewModels
         /// 档位判定一模一样 —— 变的只有正文里多出来的"各任务作用范围"那一段。
         /// </summary>
         internal static CleanupDecision DeriveCleanupDecision(
-            string? restRemovalDefaultMode,
             CleanupPreview preview,
             string title,
             string? scopeNote,
             IReadOnlyList<CleanupTaskPlan>? plans)
         {
-            bool defaultIsPermanent = RestRemovalModes.IsPermanent(restRemovalDefaultMode);
-
-            DeleteMode defaultMode = defaultIsPermanent ? DeleteMode.Permanent : DeleteMode.RecycleBin;
-            DeleteMode optionMode = defaultIsPermanent ? DeleteMode.RecycleBin : DeleteMode.Permanent;
+            /*
+             * ⛔ 2026-10-15：用户口径「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」
+             * ⇒ 手工清理（点按钮才发生的那一种）**只剩一个动作 = 彻底删除**，
+             * 于是这里不再有"默认档 / 另一档"之分，也不再读那个已经删掉的设置项。
+             *
+             * 没有"另一档"可切 ⇒ `OptionText` 留空 ⇒ 确认框里那个勾选框整格不出现
+             * （`AppDialogWindow` 只在文案非空时才显示它，见那里 `!string.IsNullOrWhiteSpace`）。
+             */
+            const DeleteMode defaultMode = DeleteMode.Permanent;
 
             return new CleanupDecision
             {
                 DefaultMode = defaultMode,
-                OptionMode = optionMode,
+                OptionMode = defaultMode,
                 ConfirmText = plans == null
                     ? BuildCleanupConfirmText(title, preview, defaultMode, scopeNote)
                     : BuildCleanupConfirmText(title, plans, preview, defaultMode, scopeNote),
-                ConfirmButtonText = defaultIsPermanent ? "彻底删除" : "移入回收站",
-
-                // 勾选框永远表示"切到另一档"：默认档是彻底删除时，勾上 = 改为可恢复的那一档。
-                OptionText = defaultIsPermanent
-                    ? "改为移入回收站（可恢复）"
-                    : "改为彻底删除，不进回收站",
+                ConfirmButtonText = "彻底删除",
+                OptionText = string.Empty,
                 OptionCheckedByDefault = false
             };
         }

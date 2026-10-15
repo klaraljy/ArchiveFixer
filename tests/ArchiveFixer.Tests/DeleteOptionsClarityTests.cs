@@ -60,11 +60,17 @@ namespace ArchiveFixer.Tests
             Assert.Equal(RestHandlingModes.Keep, settings.RestHandlingAfterVerify);
         }
 
-        /// <summary>三档都能落盘读回；认不出的值一律回落 Keep（保守方向：宁可不动，绝不误删）。</summary>
+        /// <summary>
+        /// 两档都能落盘读回；认不出的值一律回落 Keep（保守方向：宁可不动，绝不误删）。
+        ///
+        /// <para>⚠ 2026-10-15：原来是三档（含「移入回收站」），回收站整条下线后只剩两档
+        /// （用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」）——
+        /// 下面顺便钉住"老配置里那个 RecycleBin 值读回来**不许变成 Delete**"。</para>
+        /// </summary>
         [Fact]
-        public void 删除操作三档_落盘读回与非法值归一化()
+        public void 删除操作两档_落盘读回与非法值归一化()
         {
-            foreach (string mode in new[] { RestHandlingModes.Keep, RestHandlingModes.RecycleBin, RestHandlingModes.Delete })
+            foreach (string mode in new[] { RestHandlingModes.Keep, RestHandlingModes.Delete })
             {
                 string dataRoot = Path.Combine(_root, "data-" + mode);
                 Directory.CreateDirectory(dataRoot);
@@ -80,6 +86,10 @@ namespace ArchiveFixer.Tests
             Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize(null));
             Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("Nonsense"));
             Assert.Equal(RestHandlingModes.Delete, RestHandlingModes.Normalize("delete"));
+
+            // ⛔ 老配置里存过的 RecycleBin：回落 **Keep**，绝不许升级成不可恢复的 Delete。
+            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize("RecycleBin"));
+            Assert.Equal(RestHandlingModes.Keep, RestHandlingModes.Normalize(" recyclebin "));
         }
 
         /// <summary>
@@ -101,7 +111,7 @@ namespace ArchiveFixer.Tests
             var converter = new ArchiveFixer.Helpers.EnumOptionConverter();
 
             // 用户点③页的「彻底删除」：RadioButton 的 IsChecked 变 true → 转换器往回写。
-            foreach (string mode in new[] { RestHandlingModes.Delete, RestHandlingModes.RecycleBin, RestHandlingModes.Keep })
+            foreach (string mode in new[] { RestHandlingModes.Delete, RestHandlingModes.Keep })
             {
                 object? written = converter.ConvertBack(true, typeof(string), mode, System.Globalization.CultureInfo.InvariantCulture);
 
@@ -179,14 +189,11 @@ namespace ArchiveFixer.Tests
             Assert.Equal(RestHandlingModes.Delete, vm.Settings.RestHandlingAfterVerify);
             Assert.Equal(StatusText.OneClickConfirmRestAutoDelete, vm.SettingsEditor.RestHandlingSummary);
 
-            vm.SettingsEditor.RestHandling = RestHandlingModes.RecycleBin;
-
-            Assert.False(vm.SettingsEditor.IsRestDeleteSelected);
-            Assert.Equal(RestHandlingModes.RecycleBin, vm.Settings.RestHandlingAfterVerify);
-            Assert.Equal(StatusText.OneClickConfirmRestRecycle, vm.SettingsEditor.RestHandlingSummary);
-
+            // ⚠ 2026-10-15：原来这里还有一段切到「移入回收站」的断言 —— 那一档整条下线后，
+            // 唯一的"另一档"就是 Keep（留下）。
             vm.SettingsEditor.RestHandling = RestHandlingModes.Keep;
 
+            Assert.False(vm.SettingsEditor.IsRestDeleteSelected);
             Assert.Equal(RestHandlingModes.Keep, vm.Settings.RestHandlingAfterVerify);
             Assert.Equal(StatusText.OneClickConfirmRestKeep, vm.SettingsEditor.RestHandlingSummary);
         }

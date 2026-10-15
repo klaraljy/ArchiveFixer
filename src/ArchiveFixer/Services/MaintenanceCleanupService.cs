@@ -704,7 +704,9 @@ namespace ArchiveFixer.Services
             {
                 RootDirectory = rootDirectory,
                 UserConfirmed = false,
-                Mode = DeleteMode.RecycleBin,
+                // ⚠ 2026-10-15：档位跟着真实动作走 —— 回收站下线后手工清理只剩"彻底删除"
+                // （这一步一个字节都不写盘，只影响报告里的措辞，但两处口径必须一致）。
+                Mode = DeleteMode.Permanent,
                 Reason = EmptyFolderReason
             });
 

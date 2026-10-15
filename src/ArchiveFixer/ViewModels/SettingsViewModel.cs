@@ -310,7 +310,7 @@ namespace ArchiveFixer.ViewModels
         /// <summary>这一档的一句话（确认框/界面复用它，免得两处各写一套措辞）。</summary>
         public string RestHandlingSummary => RestHandling switch
         {
-            RestHandlingModes.RecycleBin => StatusText.OneClickConfirmRestRecycle,
+            // ⚠ 2026-10-15：「移入回收站」那一档整条下线（详见 RestHandlingModes 的说明）。
             RestHandlingModes.Delete => StatusText.OneClickConfirmRestAutoDelete,
             _ => StatusText.OneClickConfirmRestKeep
         };

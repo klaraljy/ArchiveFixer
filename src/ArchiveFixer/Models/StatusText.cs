@@ -1195,23 +1195,14 @@ namespace ArchiveFixer.Models
         public const string RecursionLayerReclaimNotVerifiedReason =
             "这一层自己没能证明「可证完整」（拿这一层的清单逐条核对过才算）—— 过程物一个字节都没动";
 
-        /// <summary>
-        /// **「移入回收站」档的逐层回收**那一句（用户 2026-10-12 口径：回收站档也逐层，
-        /// 过程物进回收站而不是永久删；<c>{0}</c> = 这一层的说法，<c>{1}</c> = 送进去几个，
-        /// <c>{2}</c> = 合计多少字节）。
-        /// </summary>
-        public const string RecursionLayerRecycledFormat =
-            "{0}：这一层的过程物（上一层的输入包）已按「删除操作 = 移入回收站」当场回收 {1} 个（{2}，可还原）；"
-            + "最外层源包留到整条递归链跑完后处理。";
-
-        /// <summary>逐层回收（移入回收站那一路）的删除理由，写进回收站服务自己的日志。</summary>
-        public const string RecursionLayerRecycleReason = "逐层回收：这一层的过程物（上一层交出来的内层包）";
-
-        /// <summary>
-        /// 逐层回收（**移入回收站**那一路）的触发点措辞 —— 与「彻底删除」那一档分开说
-        /// （`DescribeLayerPurgeTrigger` 那一份是按永久删写的，⛔ 不能拿来描述"进回收站"）。
-        /// </summary>
-        public const string RecursionLayerRecycleTriggerLabel = "逐层回收（删除操作 = 移入回收站）";
+        /*
+         * ⛔ 2026-10-15：这里原来有三条常量 —— `RecursionLayerRecycledFormat`（「移入回收站」档逐层回收
+         * 那一句）、`RecursionLayerRecycleReason`（那一档的删除理由）、`RecursionLayerRecycleTriggerLabel`
+         * （那一档的触发点措辞）。回收站那一档整条下线 ⇒ **执行体 `RecycleLayerSourcePackage` 与
+         * 这三个常量一起删除**（用户口径逐字：「已经不存在放入回收站了」）。
+         * 逐层回收现在只剩两条路：彻底删除（`RecursionLayerReclaimedFormat` 那一套）与
+         * 集中进其余物（下面那一条 TriggerLabel）。
+         */
 
         /// <summary>
         /// 逐层回收（**「不动其余物」那一路**）的触发点措辞 —— 这一档既不删也不进回收站，

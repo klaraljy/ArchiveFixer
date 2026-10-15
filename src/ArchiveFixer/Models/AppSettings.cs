@@ -28,13 +28,15 @@ namespace ArchiveFixer.Models
     /// 「其余物」在**解压成功 + 输出校验通过 + 未取消**之后怎么处理（设置项
     /// <see cref="AppSettings.RestHandlingAfterVerify"/>）的**唯一词表**。
     ///
-    /// <para><b>用户 2026-09-25 亲自定的三档</b>（原话：「删除操作，1_不动其余物，2_动，但是只删除在回收站的位置，
-    /// 3_动，而且是彻底删除，直接节约空间（这个就可以字体变红了，就不用再弄其他的没用的注释了）」）：</para>
+    /// <para><b>用户 2026-10-15 定的两档</b>（原话：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」
+    /// ＋「这个删除操作有两个选项，留下和彻底删除……默认留下」）：</para>
     /// <list type="number">
-    /// <item><description><see cref="Keep"/>：不动其余物（**默认**）。</description></item>
-    /// <item><description><see cref="RecycleBin"/>：移入回收站 —— 可还原；⚠ 空间要等清空回收站才真正释放。</description></item>
+    /// <item><description><see cref="Keep"/>：留下（**默认**）。</description></item>
     /// <item><description><see cref="Delete"/>：彻底删除、直接省空间 —— **不可恢复**，界面上整条标红。</description></item>
     /// </list>
+    ///
+    /// <para>⚠ 原来的第三档「移入回收站」2026-10-15 **整条下线**（用户口径逐字：已经不存在放入回收站了）。
+    /// 老配置里存过的 <c>"RecycleBin"</c> 由 <see cref="Normalize"/> 落进 <see cref="Keep"/>（保守方向）。</para>
     ///
     /// <para>⚠ 它同时取代了 2026-09-22 那套「危险模式 + 自测凭证」（用户 2026-09-25 明确要求整块删掉）：
     /// 不再有自测、风险四条与红横幅 —— **红字就是警告**。而"失败 / 部分完成 / 取消一个字节都不删"这条红线
@@ -42,29 +44,25 @@ namespace ArchiveFixer.Models
     /// </summary>
     public static class RestHandlingModes
     {
-        /// <summary>不动其余物（默认）。</summary>
+        /// <summary>留下（默认）。</summary>
         public const string Keep = "Keep";
-
-        /// <summary>移入回收站（可还原；空间要等清空回收站才释放）。</summary>
-        public const string RecycleBin = "RecycleBin";
 
         /// <summary>彻底删除（不可恢复，直接省空间）。</summary>
         public const string Delete = "Delete";
 
-        /// <summary>三档的唯一判据（认不出的值一律回落 <see cref="Keep"/>，绝不回落成"删"）。</summary>
+        /// <summary>两档的唯一判据（认不出的值一律回落 <see cref="Keep"/>，绝不回落成"删"）。</summary>
         public static bool IsKnown(string? value) =>
             string.Equals(value, Keep, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(value, RecycleBin, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, Delete, StringComparison.OrdinalIgnoreCase);
 
-        /// <summary>归一化：认不出的值 → <see cref="Keep"/>（保守方向：宁可不动，绝不误删）。</summary>
+        /// <summary>
+        /// 归一化：认不出的值 → <see cref="Keep"/>（保守方向：宁可不动，绝不误删）。
+        ///
+        /// <para>⚠ 老配置里存过的 <c>"RecycleBin"</c> 也落进 <see cref="Keep"/> —— 那一档 2026-10-15 已整条下线。
+        /// ⛔ 绝不许把它当成 <see cref="Delete"/>：那是把"可还原"悄悄升级成"不可恢复"，方向正好反了。</para>
+        /// </summary>
         public static string Normalize(string? value)
         {
-            if (string.Equals(value, RecycleBin, StringComparison.OrdinalIgnoreCase))
-            {
-                return RecycleBin;
-            }
-
             if (string.Equals(value, Delete, StringComparison.OrdinalIgnoreCase))
             {
                 return Delete;
@@ -154,59 +152,19 @@ namespace ArchiveFixer.Models
         }
     }
 
-    /// <summary>
-    /// 「其余物」清理默认档（设置项 <see cref="AppSettings.RestRemovalDefaultMode"/>）的**唯一词表**。
-    ///
-    /// <para>
-    /// 语义：它只是删除确认框里那个勾选框的**默认状态**，不是"跳过确认直接删"。
-    /// 无论哪一档，都照 <c>docs/输出与整理模型.md</c> §3.2 的清理表办 ——
-    /// 先预览条目数与总大小 → 红色确认 → 彻底删除还要**二次确认**（勾"我知道不可恢复"）；
-    /// 回收站不可用时**一律不删**，绝不因为这一项就降级成永久删除。
-    /// </para>
-    ///
-    /// <para>
-    /// 为什么用字符串词表而不是直接存 <c>Storage.DeleteMode</c> 的枚举：与
-    /// <see cref="ConflictActions"/> 同一口径 —— 落盘的是**枚举名**（用户手改 json 也看得懂），
-    /// 空 / 非法一律回落最保守的 <see cref="RecycleBin"/>，旧配置缺字段不报错。
-    /// </para>
-    /// </summary>
-    public static class RestRemovalModes
-    {
-        /// <summary>移入回收站（**默认档**）：可恢复；回收站不可用时一律不删。</summary>
-        public const string RecycleBin = "RecycleBin";
-
-        /// <summary>彻底删除（激进档）：不可恢复，界面上必须红色标识 + 二次确认。</summary>
-        public const string Permanent = "Permanent";
-
-        /// <summary>这一档是不是"彻底删除"（唯一判定处，禁止在别处再写 <c>== "Permanent"</c>）。</summary>
-        public static bool IsPermanent(string? value) =>
-            string.Equals(Normalize(value), Permanent, StringComparison.OrdinalIgnoreCase);
-
-        /// <summary>
-        /// 归一化：空 / 非法一律回落 <see cref="RecycleBin"/>。
-        ///
-        /// 容错口径与 <c>ConflictActions.Normalize</c> / <c>ParseSourceHandling</c> 一致：
-        /// 这个字符串可能来自旧配置（缺字段）、用户手改的 json，或将来改名后的枚举。
-        /// 读不懂时**退回最保守的那一档**（回收站），而不是到确认框那一刻才报错，
-        /// 更不是"读不懂就按激进档办"。
-        /// </summary>
-        public static string Normalize(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return RecycleBin;
-            }
-
-            string trimmed = value.Trim();
-
-            if (string.Equals(trimmed, Permanent, StringComparison.OrdinalIgnoreCase))
-            {
-                return Permanent;
-            }
-
-            return RecycleBin;
-        }
-    }
+    /*
+     * ⛔ 2026-10-15：「其余物清理默认档」那张词表（RestRemovalModes）与设置项
+     * `AppSettings.RestRemovalDefaultMode` **整条删除**。
+     *
+     * 用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」＋
+     * 「这个删除操作有两个选项，留下和彻底删除……默认留下」
+     * ⇒ 手工清理（用户点按钮才发生的那一种）只剩一个动作 = **彻底删除**，没有"档"可存，
+     *   于是它不再是一个设置项（系统固定值）。
+     *
+     * ⚠ 老配置里存过的 RestRemovalDefaultMode 一律被忽略（反序列化丢掉这个字段），
+     * 行为统一成"彻底删除"，而**两道确认照旧**：先预览条目数与总大小 → 红色确认 →
+     * 勾"我知道不可恢复"再确认一次（见 `MainViewModel.DeriveCleanupDecision`）。
+     */
 
     /// <summary>
     /// 应用程序设置。
@@ -436,19 +394,17 @@ namespace ArchiveFixer.Models
         /// </summary>
         public bool OpenOutputFolderWhenDone { get; set; } = false;
 
-        /// <summary>
-        /// 「其余物」清理的默认档（取值见 <see cref="RestRemovalModes"/>）：<c>RecycleBin</c>（**默认**）
-        /// 或 <c>Permanent</c>。
-        ///
-        /// <para>
-        /// 与 WinRAR"删除压缩包"那一组的"永不 / 询问确认 / 总是 / 移动到回收站"（<c>docs/WinRAR功能参考.md</c> §1.4）
-        /// 对齐的是**默认值思路**，不是"不问就删"：我们**永远**先预览 + 确认，
-        /// 这一项只决定确认框里那个"改为彻底删除"勾选框**默认勾不勾**。
-        /// 默认档 = <see cref="RestRemovalModes.RecycleBin"/>（可恢复），
-        /// 危险的那一档必须用户主动勾选，勾了还有二次确认（规格 §3.2 清理表）。
-        /// </para>
-        /// </summary>
-        public string RestRemovalDefaultMode { get; set; } = RestRemovalModes.RecycleBin;
+        /*
+         * ⛔ 2026-10-15：这里原来是 `RestRemovalDefaultMode`（取值 RecycleBin / Permanent，
+         * 只决定手工清理确认框里那个"改为彻底删除"勾选框的默认状态）。
+         *
+         * 回收站那一档整条下线之后**只剩一个动作**（彻底删除）⇒ 没有默认档可存
+         * ⇒ 这个设置项与它那一整张词表（`RestRemovalModes`）一起删除，改成**系统固定值**。
+         * 老配置里存过的值一律被忽略（反序列化丢掉这个字段）。
+         *
+         * ⚠ 两道确认一个字都没少：先预览条目数与总大小 → 红色确认 → 勾"我知道不可恢复"再确认
+         * （见 `MainViewModel.DeriveCleanupDecision`）。
+         */
 
         /// <summary>
         /// 危险条目统计（**默认开**）：在**既有那一遍**解压前条目预检里顺便数出可执行 / 脚本类条目
@@ -1102,7 +1058,6 @@ namespace ArchiveFixer.Models
                 RunAtFullSpeed = false,
                 LowProcessPriority = false,
                 OpenOutputFolderWhenDone = false,
-                RestRemovalDefaultMode = RestRemovalModes.RecycleBin,
                 ReportDangerousEntries = true,
                 RemindBeforeExtract = true,
 
@@ -1258,7 +1213,10 @@ namespace ArchiveFixer.Models
 
                 if (!string.Equals(RestHandlingAfterVerify, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
                 {
-                    RestHandlingAfterVerify = RestHandlingModes.RecycleBin;
+                    // ⚠ 2026-10-15：这里原来是 RecycleBin（当年那个"可还原"的缓冲垫）。
+                    // 回收站整条下线之后，唯一保守的落点就是 Keep（留下）——
+                    // ⛔ 绝不迁成 Delete（不替用户把不可逆的选择重新做一遍）。
+                    RestHandlingAfterVerify = RestHandlingModes.Keep;
                 }
             }
 
@@ -1273,25 +1231,18 @@ namespace ArchiveFixer.Models
 
                 if (string.Equals(RestHandlingAfterVerify, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
                 {
-                    RestHandlingAfterVerify = RestHandlingModes.RecycleBin;
+                    // ⚠ 2026-10-15：原来是 RecycleBin（回收站已整条下线）⇒ 留在 Keep 不动。
+                    RestHandlingAfterVerify = RestHandlingModes.Keep;
                 }
             }
 
             /*
-             * 「删除操作」三档：空 / 非法一律回落 **Keep（不动其余物）** —— 保守方向是"宁可不动，绝不误删"。
+             * 「删除操作」两档：空 / 非法一律回落 **Keep（留下）** —— 保守方向是"宁可不动，绝不误删"。
+             * ⚠ 老配置里存过的 `RecycleBin`（2026-10-15 整条下线）也落进 Keep：
+             * ⛔ 绝不许把它当成 Delete（那是把"可还原"悄悄升级成"不可恢复"，方向正好反了）。
              * 判定只有一处实现（RestHandlingModes.Normalize），这里不另写一套字符串比较。
              */
             RestHandlingAfterVerify = RestHandlingModes.Normalize(RestHandlingAfterVerify);
-
-            /*
-             * 「其余物」清理默认档：空 / 非法一律回落 RecycleBin（**可恢复的那一档**），旧配置不报错。
-             *
-             * 归一化必须放在设置层，与 ConflictAction / SourceHandling 同一口径：
-             * 到用户点下"删除其余物"的那一刻才发现"这个档读不懂"是最糟的 ——
-             * 那时程序要么临时猜一个处置方式，要么把用户晾在确认框前。
-             * 判定只有一处实现（RestRemovalModes.Normalize），这里不另写一套字符串比较。
-             */
-            RestRemovalDefaultMode = RestRemovalModes.Normalize(RestRemovalDefaultMode);
 
             if (MaxFileSizeLimit < 0)
             {

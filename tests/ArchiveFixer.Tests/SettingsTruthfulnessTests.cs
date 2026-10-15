@@ -299,7 +299,7 @@ namespace ArchiveFixer.Tests
                  */
                 "TestBeforeExtract", "OpenOutputFolderWhenDone", "ReportDangerousEntries",
                 "CollectResultsToDirectory", "CollectTargetDirectory", "MaxRecursionDepth",
-                "MaxParallelExtractCount", "RestRemovalDefaultMode",
+                "MaxParallelExtractCount",
 
                 /*
                  * ⚠ 2026-09-25 第 32 条删掉了两格，所以这里也少了两条：

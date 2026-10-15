@@ -385,7 +385,7 @@ namespace ArchiveFixer.Tests
         /// 而窗口代码只读另外两个单选，于是静默按「留在原地」跑。</para>
         /// </summary>
         [Fact]
-        public void 弹窗界面_三档删除操作齐全且退役那一档不在了()
+        public void 弹窗界面_两档删除操作齐全且退役那两档不在了()
         {
             string xaml = ReadRepositoryFile(Path.Combine("src", "ArchiveFixer", "Views", "OneClickOptionsWindow.xaml"));
 
@@ -396,8 +396,14 @@ namespace ArchiveFixer.Tests
             Assert.Contains("原来的位置不动（默认）", xaml, StringComparison.Ordinal);
 
             Assert.Contains("PanelRestKeepOption", xaml, StringComparison.Ordinal);
-            Assert.Contains("PanelRestRecycleOption", xaml, StringComparison.Ordinal);
             Assert.Contains("PanelRestDeleteOption", xaml, StringComparison.Ordinal);
+
+            /*
+             * ⛔ 2026-10-15：「移入回收站」那一档整条下线（用户口径逐字：「我们这里现在只有留下和
+             * 彻底删除操作，已经不存在放入回收站了」）⇒ 弹窗里那一颗单选必须跟着消失。
+             */
+            Assert.DoesNotContain("PanelRestRecycleOption", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("移入回收站", xaml, StringComparison.Ordinal);
 
             // 第三档红字 + 常驻提示（提示没有关闭入口 = 只有改回选项它才消失）。
             Assert.Contains("RestDeleteNotice", xaml, StringComparison.Ordinal);

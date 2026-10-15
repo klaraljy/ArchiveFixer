@@ -385,14 +385,15 @@ namespace ArchiveFixer.Views
             PanelSourceMoveToRestOption.IsChecked = seed.SourceHandling != SourceHandlingMode.KeepInPlace;
 
             /*
-             * 「删除操作」三档（第 33 条补进弹窗）：初值取当前设置 —— 用户 2026-09-25 的原话是
+             * 「删除操作」两档（第 33 条补进弹窗）：初值取当前设置 —— 用户 2026-09-25 的原话是
              * "一键处理的弹窗也是要随着现在的设置进行更新的"，所以弹窗里必须**看得见也改得了**
              * 这一次的其余物会怎么处理，不能只让它在正文里被动显示一行。
+             *
+             * ⚠ 2026-10-15：原来是三档（多一个"移入回收站"），回收站整条下线后只剩两档。
              */
             string restHandling = RestHandlingModes.Normalize(seed.RestHandling);
 
             PanelRestKeepOption.IsChecked = string.Equals(restHandling, RestHandlingModes.Keep, StringComparison.Ordinal);
-            PanelRestRecycleOption.IsChecked = string.Equals(restHandling, RestHandlingModes.RecycleBin, StringComparison.Ordinal);
             PanelRestDeleteOption.IsChecked = string.Equals(restHandling, RestHandlingModes.Delete, StringComparison.Ordinal);
 
             UpdateRestDeleteNotice();
@@ -440,7 +441,7 @@ namespace ArchiveFixer.Views
         /// 折叠区里选的「删除操作」是哪一档。
         ///
         /// <para>兜底同样落在"什么都不做"那一档（<see cref="RestHandlingModes.Keep"/>）——
-        /// 三档里只有它不可能删掉任何东西。</para>
+        /// 两档里只有它不可能删掉任何东西。</para>
         /// </summary>
         private string ResolveRestHandling()
         {
@@ -449,11 +450,7 @@ namespace ArchiveFixer.Views
                 return RestHandlingModes.Delete;
             }
 
-            if (PanelRestRecycleOption.IsChecked == true)
-            {
-                return RestHandlingModes.RecycleBin;
-            }
-
+            // ⚠ 2026-10-15：「移入回收站」那一档整条下线 ⇒ 这里只剩"留下"这一个兜底。
             return RestHandlingModes.Keep;
         }
 

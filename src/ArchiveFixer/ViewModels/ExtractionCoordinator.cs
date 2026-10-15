@@ -154,9 +154,8 @@ namespace ArchiveFixer.ViewModels
              * 定稿那一刻才释放（真机第六批：空间曲线 13:39:32 最低 62.48 GiB → 13:40:57 回到 82.63 GiB，
              * 峰值 26.94 GiB 而结果只有 7.28 GB）。
              *
-             * ⛔ **判据只有既有那两个事实位**（`_layerReclaimThisBatch` / `_layerReclaimToRecycleBinThisBatch`，
+             * ⛔ **判据只有既有那两个事实位**（`_layerReclaimThisBatch` / `_layerReclaimToRestThisBatch`，
              * 写入点唯一 `PrepareRestHandlingForBatch`）—— 递归路**不另算一遍**：
-             * 「移入回收站」档**也逐层**（用户 2026-10-12 口径：过程物进回收站，不是永久删），
              * 「空间不足」档照旧走它自己那一支（每层各删各的、含源包），「不动其余物」档更不动内层包。
              * 挂钩子这一行读的就是它们。
              */
@@ -186,7 +185,7 @@ namespace ArchiveFixer.ViewModels
              * `run-19191919`，全是这一档）。修法 = 钩子照装（它同时是**唯一的记账点**），
              * 但动作面**只留删除/回收站**：`toRest` 恒为 false（搬在链尾那一遍做完）。
              */
-            if (_layerReclaimThisBatch || _layerReclaimToRecycleBinThisBatch || _layerReclaimToRestThisBatch)
+            if (_layerReclaimThisBatch || _layerReclaimToRestThisBatch)
             {
                 extractor.LayerReclaim = OnRecursiveLayerReclaim;
             }
@@ -286,7 +285,6 @@ namespace ArchiveFixer.ViewModels
                 reclaimRootSource: false,
                 reclaimLabel: request.ChildLayerLabel,
                 reclaimWorkspaceDirectory: request.WorkspaceTaskDirectory,
-                toRecycleBin: _layerReclaimToRecycleBinThisBatch,
                 /*
                  * ⛔ 这里**恒 false**：「其余物 = 不处理」档的那一份"搬进其余物"只能在**链尾**做
                  * （`CollectChainInnerLayerInputsIntoRest`）—— 挂在逐层那一刻搬会让后续那一层的产物
@@ -499,123 +497,6 @@ namespace ArchiveFixer.ViewModels
             {
                 // 路径形态怪 / 权限 ⇒ 判不出（⛔ 不猜）。
             }
-
-            return null;
-        }
-
-        /// <summary>
-        /// **「移入回收站」档的逐层回收执行体**：清单与门槛都走上面那条路（`PurgeLayerSourcePackage`
-        /// 已经判过：完整性 / 在工作区里 / 半套分卷闸门 / 未取消），这里只换动作 ——
-        /// **送回收站**而不是永久删（用户 2026-10-12 口径）。
-        ///
-        /// <para>为什么必须有这一条：原设计里「移入回收站」档**不逐层**（理由是回收站不释放空间、
-        /// 逐层做零收益），改成"照旧链尾一次"。可链尾那一条路只认**任务**，而链内产出的那一族片
-        /// **不是任务** ⇒ 它们活到定稿、又被"跑过递归 ⇒ 暂存区里全是内容物"那条判据**发布成内容物**
-        /// （大测试第 3 遍 `run-6666`：③「盘上无残留」红，落点里留下 `bbb-L3.z01|.z02|.z03`）。
-        /// 逐层这一档一开，两条档对称，那个洞就没有了；第 4 遍实测全绿轮数从 2 涨到 8。</para>
-        ///
-        /// <para>⛔ 执行体只有 <see cref="RecycleBinService.Delete"/>（它自己的安全前置 + 可还原照旧走）；
-        /// 清单只有 <see cref="SourceCleanupService.BuildTargetList"/>（与永久删那一档**同一份**）。
-        /// 判不出 / 被拦下 ⇒ 什么都不做，只写一行为什么。</para>
-        /// </summary>
-        private string? RecycleLayerSourcePackage(
-            ArchiveTask task,
-            string triggerLabel,
-            string subject,
-            List<(string Level, string Message)> logEntries,
-            string? reclaimLabel,
-            bool reclaimRootSource)
-        {
-            // 措辞按**动作**说（`DescribeLayerPurgeTrigger` 那一份是按"彻底删除"写的，这一档是回收站）。
-            triggerLabel = StatusText.RecursionLayerRecycleTriggerLabel;
-
-            List<string> targets = SourceCleanupService.BuildTargetList(task)
-                .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
-                .ToList();
-
-            if (targets.Count == 0)
-            {
-                logEntries.Add(("WARN", $"{task.LogName}：{triggerLabel}要回收{subject}，但任务的源包清单是空的 —— 一个字节都没动。"));
-
-                return null;
-            }
-
-            /*
-             * ⛔ 这一道与永久删那一档**同一个条件**（`!reclaimRootSource && …`）：续解那条路的
-             * `reclaimRootSource` 默认 true ⇒ 那道"在不在递归工作区里"的检查**不适用**
-             * （它的源包本来就是用户给的那一份 / 上一层交出来的那一份）；
-             * 只有递归钩子（`reclaimRootSource: false`，调用方已经验过）才需要它。
-             * ⚠ 实测教训：这里原本无条件查 ⇒ 续解层一律被自己拦下（三个内层包全报"不在递归工作区里"），
-             * 逐层回收一个都没发生。
-             */
-            if (!reclaimRootSource)
-            {
-                foreach (string target in targets)
-                {
-                    if (IsInsideRecursionWorkspace(target))
-                    {
-                        continue;
-                    }
-
-                    logEntries.Add((
-                        "WARN",
-                        $"{task.LogName}：{triggerLabel}要回收的「{Path.GetFileName(target)}」不在递归工作区里"
-                        + "（它可能是用户拖进来的源包）—— 判不出它是不是本层的过程物，所以这一个字节都不动。"));
-
-                    return null;
-                }
-            }
-
-            // 执行体与其余物那一档**同一个注入点**（`RestDeleteExecutor`）—— 测试与真机都只有这一处。
-            var service = new RecycleBinService(RestDeleteExecutor);
-
-            /*
-             * 允许根按"这一份过程物住在谁家"分两档（⛔ 不是随手挑一个）：
-             * · 续解层（`reclaimRootSource == true`）：这一层的过程物就在**本任务的地盘**里
-             *   （`<落点>\其余物\…`，或者工作区在它下面）⇒ 允许根 = `task.OutputPath`；
-             * · 递归钩子（`reclaimRootSource == false`）：那几个文件在**递归工作区**里 ⇒ 允许根 = 工作区根。
-             * ⚠ 实测教训：两档混用会让回收站服务当场拒删（逐字：目标不在允许的根目录之内…）。
-             */
-            string allowedRoot = reclaimRootSource && !string.IsNullOrWhiteSpace(task.OutputPath)
-                ? task.OutputPath
-                : _pathService.WorkDirectory;
-
-            DeleteResult result = service.Delete(
-                targets.Select(path => new DeleteRequest(path, StatusText.RecursionLayerRecycleReason)).ToList(),
-                new DeleteOptions
-                {
-                    AllowedRoot = allowedRoot,
-                    UserConfirmed = true,
-                    Mode = DeleteMode.RecycleBin,
-                    Reason = StatusText.RecursionLayerRecycleReason
-                });
-
-            List<DeleteOutcome> recycled = result.Outcomes.Where(outcome => outcome.Success).ToList();
-
-            if (recycled.Count == 0)
-            {
-                logEntries.Add((
-                    "WARN",
-                    $"{task.LogName}：{triggerLabel}没能回收{subject}"
-                    + $"（{string.Join("；", result.Outcomes.Take(2).Select(outcome => outcome.Message))}）—— 它们仍在原处。"));
-
-                return null;
-            }
-
-            // 与永久删那一档同一个事实位：链尾那次"补搬"因此会跳过它。
-            task.SourcePackageMove = SourcePackageMoveState.Done;
-
-            logEntries.Add((
-                "INFO",
-                reclaimLabel != null
-                    ? string.Format(
-                        CultureInfo.CurrentCulture,
-                        StatusText.RecursionLayerRecycledFormat,
-                        reclaimLabel,
-                        recycled.Count,
-                        WorkspaceCleanupService.FormatSize(recycled.Sum(outcome => outcome.TotalBytes)))
-                    : $"{task.LogName}：{triggerLabel} —— 定稿 + 校验通过，已把{subject} {recycled.Count} 个送进回收站"
-                      + $"（{WorkspaceCleanupService.FormatSize(recycled.Sum(outcome => outcome.TotalBytes))}，可还原）。"));
 
             return null;
         }
@@ -1211,16 +1092,6 @@ namespace ArchiveFixer.ViewModels
         /// 下一批开工时 <c>PrepareRestHandlingForBatch</c> 会重新写一次。</para>
         /// </summary>
         private bool _layerReclaimThisBatch;
-
-        /// <summary>
-        /// 本批是不是按**「移入回收站」档**做逐层回收（用户 2026-10-12 口径：回收站档也逐层，
-        /// 过程物**进回收站**而不是永久删）。
-        ///
-        /// <para>与 <see cref="_layerReclaimThisBatch"/>（彻底删除档）**同一份出口**写
-        /// （<c>PrepareRestHandlingForBatch</c> 读 <c>_restHandlingThisBatch</c>），
-        /// 两个事实位一起用：置位 = 装逐层回收钩子；哪一档 = 由这一位决定动作。</para>
-        /// </summary>
-        private bool _layerReclaimToRecycleBinThisBatch;
 
         /// <summary>
         /// 本批是不是按**「其余物 = 不处理」档**做逐层集中（用户 2026-10-12 计划的第三个动作：
@@ -2464,7 +2335,7 @@ namespace ArchiveFixer.ViewModels
                     sourceMoveFailure = PurgeLayerSourcePackage(
                         task, verification, commit, logEntries, LayerPurgeTrigger.LayerReclaim);
                 }
-                else if (_layerReclaimToRecycleBinThisBatch || _layerReclaimToRestThisBatch)
+                else if (_layerReclaimToRestThisBatch)
                 {
                     /*
                      * 另两档**也逐层**——与上面那一档**同一条闸门链**，只差动作：
@@ -2478,7 +2349,6 @@ namespace ArchiveFixer.ViewModels
                         commit,
                         logEntries,
                         LayerPurgeTrigger.LayerReclaim,
-                        toRecycleBin: _layerReclaimToRecycleBinThisBatch,
                         toRest: _layerReclaimToRestThisBatch);
                 }
                 else if (sourceHandling != SourceHandlingMode.KeepInPlace)
@@ -2724,7 +2594,6 @@ namespace ArchiveFixer.ViewModels
             bool reclaimRootSource = true,
             string? reclaimLabel = null,
             string? reclaimWorkspaceDirectory = null,
-            bool toRecycleBin = false,
             bool toRest = false)
         {
             if (task == null)
@@ -2849,19 +2718,6 @@ namespace ArchiveFixer.ViewModels
             {
                 logEntries.Add(("WARN", $"{task.LogName}：{splitBlocker}"));
                 return null;
-            }
-
-            if (toRecycleBin)
-            {
-                /*
-                 * 「移入回收站」档的逐层回收（用户 2026-10-12 口径，原话：
-                 * 「我们的逐层只是针对彻底删除的，但是进回收站档，其实也可以弄成过程物逐层进回收站，
-                 * 但是由于空间大小没有什么变化，我就一开始没有想这么多，但是后面觉得没有什么问题」）。
-                 *
-                 * ⛔ 门槛与上面那一档**逐条同一套**（就是本方法上面刚走过的那些），差的只有动作：
-                 * 永久删 → 送回收站（唯一出口 `RecycleBinService.Delete` 的安全前置照旧走）。
-                 */
-                return RecycleLayerSourcePackage(task, triggerLabel, subject, logEntries, reclaimLabel, reclaimRootSource);
             }
 
             if (toRest)
@@ -4798,9 +4654,12 @@ namespace ArchiveFixer.ViewModels
                              IsStopping ||
                              _operationCts?.IsCancellationRequested == true;
 
-            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
-                ? DeleteMode.RecycleBin
-                : DeleteMode.Permanent;
+            /*
+             * ⚠ 2026-10-15：这里原来是"回收站 / 彻底删除"二选一的三元式。
+             * 回收站那一档整条下线（用户口径逐字：「我们这里现在只有留下和彻底删除操作，
+             * 已经不存在放入回收站了」）⇒ 走到这一行（上面已经把 Keep 挡掉了）只剩**永久删**一个动作。
+             */
+            DeleteMode deleteMode = DeleteMode.Permanent;
 
             RestPurgeOutcome outcome = await Task.Run(
                 () => new RestItemPurger(
@@ -13238,9 +13097,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
-            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
-                ? DeleteMode.RecycleBin
-                : DeleteMode.Permanent;
+
+            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 这里（Keep 已在上面挡掉）只剩永久删。
+            DeleteMode deleteMode = DeleteMode.Permanent;
 
             RestPurgeOutcome outcome;
 
@@ -13626,13 +13485,10 @@ namespace ArchiveFixer.ViewModels
         {
             string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
 
-            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
-                ? DeleteMode.RecycleBin
-                : DeleteMode.Permanent;
+            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 只剩永久删（调用方已保证这一批不是 Keep 档）。
+            DeleteMode deleteMode = DeleteMode.Permanent;
 
-            string reason = deleteMode == DeleteMode.RecycleBin
-                ? RestItemPurger.SettledPieceCopyRecycleReason
-                : RestItemPurger.SettledPieceCopyPurgeReason;
+            string reason = RestItemPurger.SettledPieceCopyPurgeReason;
 
             var service = new RecycleBinService(RestDeleteExecutor, null, null);
             int deleted = 0;
@@ -13814,13 +13670,10 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
-                ? DeleteMode.RecycleBin
-                : DeleteMode.Permanent;
+            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 只剩永久删（Keep 档在调用方就返回了）。
+            DeleteMode deleteMode = DeleteMode.Permanent;
 
-            string reason = deleteMode == DeleteMode.RecycleBin
-                ? RestItemPurger.SettledPieceCopyRecycleReason
-                : RestItemPurger.SettledPieceCopyPurgeReason;
+            string reason = RestItemPurger.SettledPieceCopyPurgeReason;
 
             ContentKeepRules keepRules = ContentKeepRules.FromSettings(Settings);
             var service = new RecycleBinService(RestDeleteExecutor, null, null);
@@ -16623,7 +16476,7 @@ namespace ArchiveFixer.ViewModels
                 DestinationEcho = destination,
                 RestEcho = StatusText.OneClickConfirmRestLabel + restHandling switch
                 {
-                    RestHandlingModes.RecycleBin => StatusText.OneClickConfirmRestRecycle,
+                    // ⚠ 2026-10-15：回收站那一档整条下线 ⇒ 这里只剩两档。
                     RestHandlingModes.Delete => StatusText.OneClickConfirmRestAutoDelete,
                     _ => StatusText.OneClickConfirmRestKeep
                 },
@@ -19208,8 +19061,7 @@ namespace ArchiveFixer.ViewModels
 
             string rest = mode switch
             {
-                RestHandlingModes.RecycleBin =>
-                    $"其余物：任务成功后移入回收站（{scope}；可还原，空间要等清空回收站才释放）",
+                // ⚠ 2026-10-15：回收站那一档整条下线 ⇒ 这里只剩两档。
                 RestHandlingModes.Delete =>
                     $"其余物：任务成功后彻底删除（{scope}，不可恢复）",
                 _ => "其余物：保留（不动其余物）"
@@ -20571,9 +20423,9 @@ namespace ArchiveFixer.ViewModels
             }
 
             bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
-            DeleteMode deleteMode = string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
-                ? DeleteMode.RecycleBin
-                : DeleteMode.Permanent;
+
+            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 这里（Keep 已在上面挡掉）只剩永久删。
+            DeleteMode deleteMode = DeleteMode.Permanent;
 
             RestPurgeOutcome outcome;
 
@@ -20751,15 +20603,6 @@ namespace ArchiveFixer.ViewModels
                 StringComparison.OrdinalIgnoreCase);
 
             /*
-             * 「移入回收站」档**也**逐层（用户 2026-10-12 口径）—— 与上面那一档动作不同、门槛相同：
-             * 彻底删除 ⇒ 永久删；移入回收站 ⇒ 送回收站。两个事实位都是**同一份出口**算出来的。
-             */
-            _layerReclaimToRecycleBinThisBatch = string.Equals(
-                _restHandlingThisBatch,
-                RestHandlingModes.RecycleBin,
-                StringComparison.OrdinalIgnoreCase);
-
-            /*
              * 「不动其余物」档也逐层 —— 但动作是**集中进其余物**（不删、不进回收站）。
              * 用户 2026-10-12 的口径只点名了回收站那一档；这一档是它的对称项，
              * 依据是设计里既有那句「过程物集中进其余物，源包与过程物一起按档处理」。
@@ -20833,15 +20676,6 @@ namespace ArchiveFixer.ViewModels
                 AppendLog(
                     "INFO",
                     $"其余物：本批保留（③页「删除操作」= 不动其余物）。任务成功后其余物（{scope}）留在成品目录里，随时可手工删。");
-                return;
-            }
-
-            if (string.Equals(mode, RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase))
-            {
-                AppendLog(
-                    "WARN",
-                    $"其余物：本批任务成功后会移入回收站（{scope}；可还原，空间要等清空回收站才真正释放）。"
-                    + "失败 / 部分完成 / 取消的任务一个字节都不动。");
                 return;
             }
 
@@ -23135,9 +22969,8 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         $"{task.LogName}：定稿 + 校验通过之后会按「删除操作」"
-                        + (string.Equals(RestHandlingModes.Normalize(_restHandlingThisBatch), RestHandlingModes.RecycleBin, StringComparison.OrdinalIgnoreCase)
-                            ? "把其余物移入回收站"
-                            : "彻底删除其余物")
+                        // ⚠ 2026-10-15：回收站档整条下线 ⇒ 走到这里（Keep 已挡掉）只剩彻底删除。
+                        + "彻底删除其余物"
                         + $"（范围：{DescribeRestScope(sourceMode)}；{amount}）");
                 }
 

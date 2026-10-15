@@ -64,91 +64,43 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        // ================================================================ A2：其余物清理默认档
+        // ================================================================ A2：手工清理的档位（只剩一个动作）
 
         /// <summary>
-        /// 默认档 = 回收站（默认设置）时，主按钮是「移入回收站」，勾选框才是切到彻底删除。
-        /// 这是一条**负向对照**：接线以前这里两个档位是硬编码的。
+        /// ⛔ 2026-10-15：手工清理**只剩一个动作 = 彻底删除** —— 回收站那一档整条下线
+        /// （用户口径逐字：「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」），
+        /// 那个"其余物清理默认档"设置项与它的词表（`RestRemovalModes`）一起删除。
+        ///
+        /// <para>这一条钉三件事：① 档位永远是彻底删除；② 确认框里**不再出现"另一档"勾选框**
+        /// （`OptionText` 留空 ⇒ `AppDialogWindow` 整格不显示）；③ 主按钮文案就是"彻底删除"。</para>
+        ///
+        /// <para>⚠ 两道确认一条都没少（先预览 + 红色确认 → 勾"我知道不可恢复"再确认一次），
+        /// 那两道在 `RunCleanupAsync` 里，与档位构造无关。</para>
         /// </summary>
         [Fact]
-        public void 清理默认档_回收站_勾选框表示改为彻底删除()
+        public void 手工清理_只有彻底删除一档_确认框不再出现另一档()
         {
             var preview = MakePreview();
 
             MainViewModel.CleanupDecision decision = MainViewModel.DeriveCleanupDecision(
-                RestRemovalModes.RecycleBin,
-                preview,
-                "删除其余物",
-                scopeNote: null);
-
-            Assert.Equal(DeleteMode.RecycleBin, decision.DefaultMode);
-            Assert.Equal(DeleteMode.Permanent, decision.OptionMode);
-            Assert.Equal("移入回收站", decision.ConfirmButtonText);
-            Assert.Equal("改为彻底删除，不进回收站", decision.OptionText);
-            Assert.False(decision.OptionCheckedByDefault);
-
-            Assert.Equal(DeleteMode.RecycleBin, decision.Resolve(optionChecked: false));
-            Assert.Equal(DeleteMode.Permanent, decision.Resolve(optionChecked: true));
-        }
-
-        /// <summary>
-        /// 默认档 = 彻底删除时，**勾选框的语义必须反过来**（否则界面自相矛盾：
-        /// 默认档是彻底删除、勾选框却写着"改为彻底删除"，不勾反而得到更危险的那一档）。
-        /// </summary>
-        [Fact]
-        public void 清理默认档_彻底删除_勾选框反转为改为回收站()
-        {
-            var preview = MakePreview();
-
-            MainViewModel.CleanupDecision decision = MainViewModel.DeriveCleanupDecision(
-                RestRemovalModes.Permanent,
                 preview,
                 "删除其余物",
                 scopeNote: null);
 
             Assert.Equal(DeleteMode.Permanent, decision.DefaultMode);
-            Assert.Equal(DeleteMode.RecycleBin, decision.OptionMode);
+            Assert.Equal(DeleteMode.Permanent, decision.OptionMode);
             Assert.Equal("彻底删除", decision.ConfirmButtonText);
-            Assert.Equal("改为移入回收站（可恢复）", decision.OptionText);
+
+            // 没有"另一档"可切 ⇒ 勾选框文案留空（界面据此整格不显示）。
+            Assert.Equal(string.Empty, decision.OptionText);
             Assert.False(decision.OptionCheckedByDefault);
 
-            // 不勾 = 默认档（彻底删除）；勾上 = 可恢复的那一档。语义完全没有反转错。
+            // 勾不勾都是同一个动作（不存在"勾上才更危险"那种自相矛盾）。
             Assert.Equal(DeleteMode.Permanent, decision.Resolve(optionChecked: false));
-            Assert.Equal(DeleteMode.RecycleBin, decision.Resolve(optionChecked: true));
+            Assert.Equal(DeleteMode.Permanent, decision.Resolve(optionChecked: true));
 
             // 正文说的是"彻底删除"，与主按钮一致 —— 用户读到的东西不许互相打架。
             Assert.Contains("无法恢复", decision.ConfirmText);
-        }
-
-        /// <summary>读不懂的档位一律回落"回收站"（宁可多一步，也不默默变成不可恢复的删除）。</summary>
-        [Fact]
-        public void 清理默认档_非法值回落回收站()
-        {
-            var preview = MakePreview();
-
-            foreach (string? broken in new string?[] { null, string.Empty, "  ", "Whatever", "99", "recycle" })
-            {
-                MainViewModel.CleanupDecision decision = MainViewModel.DeriveCleanupDecision(
-                    broken,
-                    preview,
-                    "删除其余物",
-                    scopeNote: null);
-
-                Assert.Equal(DeleteMode.RecycleBin, decision.DefaultMode);
-                Assert.Equal("移入回收站", decision.ConfirmButtonText);
-            }
-        }
-
-        /// <summary>
-        /// 设置项的默认值必须是回收站。这是**红线的前置条件**：
-        /// 默认档一旦变成彻底删除，任何"没改过设置"的用户都会在第一次清理时面对不可恢复的删除。
-        /// </summary>
-        [Fact]
-        public void 清理默认档_出厂设置是回收站()
-        {
-            Assert.Equal(RestRemovalModes.RecycleBin, AppSettings.CreateDefault().RestRemovalDefaultMode);
-            Assert.Equal(RestRemovalModes.RecycleBin, new AppSettings().RestRemovalDefaultMode);
-            Assert.False(RestRemovalModes.IsPermanent(AppSettings.CreateDefault().RestRemovalDefaultMode));
         }
 
         // ================================================================ A3：危险条目统计（只提示不阻断）

@@ -57,7 +57,7 @@ namespace ArchiveFixer.Tests
         // ================================================================ ① 默认值
 
         [Fact]
-        public void 默认值_低优先级关_完成后不打开输出目录_其余物默认回收站_危险条目统计开()
+        public void 默认值_低优先级关_完成后不打开输出目录_危险条目统计开()
         {
             AppSettings fresh = new AppSettings();
             AppSettings defaults = AppSettings.CreateDefault();
@@ -73,67 +73,28 @@ namespace ArchiveFixer.Tests
             Assert.False(fresh.OpenOutputFolderWhenDone, "「完成后打开输出目录」会动用户桌面，必须默认关");
             Assert.False(defaults.OpenOutputFolderWhenDone);
 
-            Assert.Equal(RestRemovalModes.RecycleBin, fresh.RestRemovalDefaultMode);
-            Assert.Equal(RestRemovalModes.RecycleBin, defaults.RestRemovalDefaultMode);
-
             Assert.True(fresh.ReportDangerousEntries, "危险条目统计默认开，而且只提示不阻断");
             Assert.True(defaults.ReportDangerousEntries);
         }
 
-        // ================================================================ ② 其余物清理默认档
-
-        [Theory]
-        [InlineData(null)]
-        [InlineData("")]
-        [InlineData("   ")]
-        [InlineData("Whatever")]
-        [InlineData("99")]            // 数字骗不过去，我们只认枚举名
-        [InlineData("Delete")]        // 不是我们词表里的名字
-        [InlineData("recycle")]       // 只写了半截
-        public void 其余物清理默认档_空或非法一律回落回收站(string? stored)
-        {
-            Assert.Equal(RestRemovalModes.RecycleBin, RestRemovalModes.Normalize(stored));
-            Assert.False(RestRemovalModes.IsPermanent(stored));
-        }
-
-        [Theory]
-        [InlineData("RecycleBin", RestRemovalModes.RecycleBin)]
-        [InlineData(" recyclebin ", RestRemovalModes.RecycleBin)]
-        [InlineData("Permanent", RestRemovalModes.Permanent)]
-        [InlineData("PERMANENT", RestRemovalModes.Permanent)]
-        public void 其余物清理默认档_合法值原样解析(string stored, string expected)
-        {
-            Assert.Equal(expected, RestRemovalModes.Normalize(stored));
-            Assert.Equal(expected == RestRemovalModes.Permanent, RestRemovalModes.IsPermanent(stored));
-        }
-
-        [Fact]
-        public void 其余物清理默认档_归一化写回合法值_读不懂时绝不变成彻底删除()
-        {
-            var settings = new AppSettings { RestRemovalDefaultMode = "谁把这里改坏了" };
-
-            settings.Normalize();
-
-            Assert.Equal(RestRemovalModes.RecycleBin, settings.RestRemovalDefaultMode);
-            Assert.False(RestRemovalModes.IsPermanent(settings.RestRemovalDefaultMode));
-
-            settings.RestRemovalDefaultMode = "  Permanent  ";
-            settings.Normalize();
-
-            Assert.Equal(RestRemovalModes.Permanent, settings.RestRemovalDefaultMode);
-        }
+        // ================================================================ ② （已删）其余物清理默认档
+        //
+        // ⛔ 2026-10-15：`RestRemovalDefaultMode` 与词表 `RestRemovalModes` **整条删除** ——
+        // 用户口径「我们这里现在只有留下和彻底删除操作，已经不存在放入回收站了」，
+        // 手工清理只剩"彻底删除"一个动作，没有档可存（详见 AppSettings.cs 里那段说明）。
+        // 原来这一节的三条（空/非法回落回收站 · 合法值原样解析 · 归一化写回）随之删除；
+        // 现在钉这件事的是 `PipelineWiringTests.手工清理_只有彻底删除一档_确认框不再出现另一档`。
 
         // ================================================================ ③ 落盘 + 重启保持
 
         [Fact]
-        public void 四个设置项_存盘后重新读取仍然是用户设的值()
+        public void 三个设置项_存盘后重新读取仍然是用户设的值()
         {
             var settingsService = new SettingsService(CreatePathService());
 
             AppSettings settings = AppSettings.CreateDefault();
             settings.LowProcessPriority = false;
             settings.OpenOutputFolderWhenDone = true;
-            settings.RestRemovalDefaultMode = RestRemovalModes.Permanent;
             settings.ReportDangerousEntries = false;
             settingsService.Save(settings);
 
@@ -142,7 +103,6 @@ namespace ArchiveFixer.Tests
 
             Assert.False(reloaded.LowProcessPriority);
             Assert.True(reloaded.OpenOutputFolderWhenDone);
-            Assert.Equal(RestRemovalModes.Permanent, reloaded.RestRemovalDefaultMode);
             Assert.False(reloaded.ReportDangerousEntries);
         }
 
@@ -170,7 +130,6 @@ namespace ArchiveFixer.Tests
 
             Assert.False(loaded.LowProcessPriority, "低运行优先级：系统固定值 = 关");
             Assert.False(loaded.OpenOutputFolderWhenDone);
-            Assert.Equal(RestRemovalModes.RecycleBin, loaded.RestRemovalDefaultMode);
             Assert.True(loaded.ReportDangerousEntries);
         }
 
