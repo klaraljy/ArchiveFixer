@@ -170,7 +170,11 @@ namespace ArchiveFixer.Tests
 
             AppSettings loaded = service.Load();
 
-            Assert.Equal("SingleChain", loaded.RecursionMode);
+            /*
+             * ⚠ 2026-10-14（用户口径：「我不是将单层路给删掉了吗，现在就是全面解压所有分路」）：
+             * 老配置里存过的 SingleChain 一律归一到"展开所有分支"。
+             */
+            Assert.Equal("AllBranches", loaded.RecursionMode);
             Assert.False(loaded.UseSpecialExtraction);
             Assert.Equal(SpecialExtractionRules.DefaultEnabledIds, loaded.SpecialExtractionRules);
         }

@@ -57,13 +57,18 @@ namespace ArchiveFixer.Tests
         // ================================================================ ① 默认值
 
         [Fact]
-        public void 默认值_低优先级开_完成后不打开输出目录_其余物默认回收站_危险条目统计开()
+        public void 默认值_低优先级关_完成后不打开输出目录_其余物默认回收站_危险条目统计开()
         {
             AppSettings fresh = new AppSettings();
             AppSettings defaults = AppSettings.CreateDefault();
 
-            Assert.True(fresh.LowProcessPriority, "低运行优先级以前是硬编码的 BelowNormal，做成设置项后默认必须仍是开");
-            Assert.True(defaults.LowProcessPriority);
+            /*
+             * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：低运行优先级是**系统固定值「关」**
+             * （那一格已随「启动时行为」整组移出界面、值由 `AppSettings.Normalize` 钉死）
+             * ⇒ 出厂默认与归一之后都必须是 false。
+             */
+            Assert.False(fresh.LowProcessPriority, "低运行优先级：系统固定值 = 关（2026-10-14 用户拍板）");
+            Assert.False(defaults.LowProcessPriority);
 
             Assert.False(fresh.OpenOutputFolderWhenDone, "「完成后打开输出目录」会动用户桌面，必须默认关");
             Assert.False(defaults.OpenOutputFolderWhenDone);
@@ -163,7 +168,7 @@ namespace ArchiveFixer.Tests
 
             AppSettings loaded = new SettingsService(pathService).Load();
 
-            Assert.True(loaded.LowProcessPriority);
+            Assert.False(loaded.LowProcessPriority, "低运行优先级：系统固定值 = 关");
             Assert.False(loaded.OpenOutputFolderWhenDone);
             Assert.Equal(RestRemovalModes.RecycleBin, loaded.RestRemovalDefaultMode);
             Assert.True(loaded.ReportDangerousEntries);

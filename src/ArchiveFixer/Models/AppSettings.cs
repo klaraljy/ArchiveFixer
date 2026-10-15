@@ -412,7 +412,11 @@ namespace ArchiveFixer.Models
         /// 两个调节项互相覆盖，用户调了 A 却被 B 决定）。
         /// </para>
         /// </summary>
-        public bool LowProcessPriority { get; set; } = true;
+        /*
+         * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：低运行优先级是**系统固定值「关」**
+         * ⇒ 属性初值、`CreateDefault`、`Normalize` 三处必须一致（老配置缺这一项时读到的就是这里的初值）。
+         */
+        public bool LowProcessPriority { get; set; } = false;
 
         /// <summary>
         /// 定稿完成后在资源管理器里打开输出目录（**默认关**）。
