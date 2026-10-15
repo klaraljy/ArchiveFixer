@@ -199,7 +199,7 @@ namespace ArchiveFixer.Tests
         /// 现在每一步之前都查令牌，且状态必须落成"已取消"（不得显示成功）。
         /// </summary>
         [Fact]
-        public async Task 收尾时按下取消_不移动产物_不删源包_状态是已取消()
+        public async Task 产物刚写完就取消_不移动产物_不删源包_状态是已取消()
         {
             string collectRoot = Path.Combine(_root, "collect");
 
@@ -217,24 +217,31 @@ namespace ArchiveFixer.Tests
             string source = CreateSourceFile("cancel.7z");
             ArchiveTask task = AddTask(harness, source);
 
+            /*
+             * 取消的时刻 = **产物已经写完**（"任务真在跑"的那一刻）。
+             *
+             * ⚠ 2026-10-16 重摆 + 红检（两条都是实测取的运行期事实，⛔ 不是读代码推的）：
+             * ① 原来挂在 `OnListAsync` 里"解压已完成才按取消"，而新流程把列目录挪到了**解压之前**
+             *    （识别 / 空间门 / 层计划各一次）—— 探针实测 `listCalls=3`、日志里**一条取消记录都没有**
+             *    （`CancelCurrentTask` 从未被调用）⇒ 取消根本没发生，跑完落「解压成功」；
+             * ② ⛔ **本用例钉的是行为、不是收尾内部那两处检查**：把 `PostProcessSuccessAsync` 入口
+             *    与中段那两句 `ThrowIfCancellationRequested()` 临时撤掉，用例**照旧绿** ⇒ 看见这次取消的
+             *    是更早的那一道闸门。判据意图一个字没改（**取消 ⇒ 状态「已取消」＋ 源包原地不动
+             *    ＋ 产物一个都不许移动**），但⛔ 别把它读成"收尾内部的取消检查已验过"——
+             *    那个缺口已如实记进 `docs/大改动-2026-10-14-口径与冲突.md`。
+             */
             harness.Engine.OnExtractAsync = request => Task.Run(() =>
             {
                 harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
                 WriteFiles(request.OutputPath!, 5);
                 harness.Engine.Extracted = true;
+
+                // 产物已经在盘上了：此刻按取消，收尾必须看得见它。
+                harness.Coordinator.CancelCurrentTask();
                 return Succeeded();
             });
 
-            // 收尾第一件事就是列目录；在这里按下「取消当前」——正是旧实现漏检的那个窗口。
-            harness.Engine.OnListAsync = _ =>
-            {
-                if (harness.Engine.Extracted)
-                {
-                    harness.Coordinator.CancelCurrentTask();
-                }
-
-                return Task.FromResult(ListResult(5));
-            };
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(5));
 
             await harness.Coordinator.StartExtractAsync();
 
@@ -1178,24 +1185,31 @@ namespace ArchiveFixer.Tests
 
             string taskWorkDirectory = TaskWorkDirectory(harness, task);
 
+            /*
+             * 取消的时刻 = **产物已经写完**（"任务真在跑"的那一刻）。
+             *
+             * ⚠ 2026-10-16 重摆 + 红检（两条都是实测取的运行期事实，⛔ 不是读代码推的）：
+             * ① 原来挂在 `OnListAsync` 里"解压已完成才按取消"，而新流程把列目录挪到了**解压之前**
+             *    （识别 / 空间门 / 层计划各一次）—— 探针实测 `listCalls=3`、日志里**一条取消记录都没有**
+             *    （`CancelCurrentTask` 从未被调用）⇒ 取消根本没发生，跑完落「解压成功」；
+             * ② ⛔ **本用例钉的是行为、不是收尾内部那两处检查**：把 `PostProcessSuccessAsync` 入口
+             *    与中段那两句 `ThrowIfCancellationRequested()` 临时撤掉，用例**照旧绿** ⇒ 看见这次取消的
+             *    是更早的那一道闸门。判据意图一个字没改（**取消 ⇒ 状态「已取消」＋ 源包原地不动
+             *    ＋ 产物一个都不许移动**），但⛔ 别把它读成"收尾内部的取消检查已验过"——
+             *    那个缺口已如实记进 `docs/大改动-2026-10-14-口径与冲突.md`。
+             */
             harness.Engine.OnExtractAsync = request => Task.Run(() =>
             {
                 harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
                 WriteFiles(request.OutputPath!, 5);
                 harness.Engine.Extracted = true;
+
+                // 产物已经在盘上了：此刻按取消，收尾必须看得见它。
+                harness.Coordinator.CancelCurrentTask();
                 return Succeeded();
             });
 
-            // 收尾第一件事就是列目录：在这里按下「取消当前」。
-            harness.Engine.OnListAsync = _ =>
-            {
-                if (harness.Engine.Extracted)
-                {
-                    harness.Coordinator.CancelCurrentTask();
-                }
-
-                return Task.FromResult(ListResult(5));
-            };
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(5));
 
             await harness.Coordinator.StartExtractAsync();
 
