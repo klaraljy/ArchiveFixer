@@ -488,11 +488,15 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 「记住上次输出目录」关掉 = 这一格空着（本次运行按"包旁边"算落点），
-        /// **但设置里那个地址一个字都不许动** —— 关掉的是"启动填回"，不是"删除我挑过的地址"。
+        /// 「记住上次输出目录」**已经是系统默认行为**（用户 2026-10-14 最终设计 + 当场拍板：
+        /// 那一格从界面移出、值钉成"开"）⇒ 启动一定把上次那个地址填回这一格。
+        ///
+        /// <para>⚠ 这一条取代原来那条「关掉之后不填回」：那个开关界面上已经没有了，
+        /// 所以"关掉"这个场景在新口径下不存在 —— ⛔ 判据不是删掉，而是改成钉住新的事实：
+        /// 值被归一成 <c>true</c>，而且填回的就是设置里那个地址。</para>
         /// </summary>
         [Fact]
-        public void 关掉记住上次输出目录_只是不填回那一格_地址仍在设置里()
+        public void 记住上次输出目录已是系统默认_启动就填回上次那个地址()
         {
             const string remembered = @"<测试目录>\上次用过\DDD";
 
@@ -503,11 +507,12 @@ namespace ArchiveFixer.Tests
                 {
                     settings.ExtractToOriginalDirectory = false;
                     settings.CustomOutputDirectory = remembered;
-                    settings.RememberLastOutputDirectory = false;
+                    settings.RememberLastOutputDirectory = false;   // 用户存过的旧值
                 });
 
-            Assert.Equal(string.Empty, vm.SelectedOutputDirectory);
+            Assert.True(vm.Settings.RememberLastOutputDirectory, "归一之后必须是系统值（开）");
             Assert.Equal(remembered, vm.Settings.CustomOutputDirectory);
+            Assert.Equal(remembered, vm.SelectedOutputDirectory);
         }
 
         // ================================================================ 装配

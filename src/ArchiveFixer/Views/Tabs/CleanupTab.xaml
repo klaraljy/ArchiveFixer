@@ -1,6 +1,7 @@
 <UserControl x:Class="ArchiveFixer.Views.Tabs.CleanupTab"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:ArchiveFixer.Views.Controls"
              xmlns:models="clr-namespace:ArchiveFixer.Models">
 
     <!--
@@ -54,10 +55,8 @@
                                  IsChecked="{Binding SettingsEditor.SourceHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=MoveToRest, Mode=TwoWay}"
                                  Content="放入其余物当中（和过程物一起放进成品目录的「其余物」）" />
 
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="0,6,0,0"
-                               TextWrapping="Wrap"
-                               Text="只有「内容物已定稿 + 输出校验通过 + 未取消」三条同时成立才动源包；失败 / 部分完成 / 取消时源包一律原地不动。" />
+                                        <controls:BoxDetail Header="{x:Static models:StatusText.BoxDetailSourceHandlingHeader}"
+                                        Detail="{x:Static models:StatusText.BoxDetailSourceHandlingDetail}" />
                 </StackPanel>
             </GroupBox>
 
@@ -153,32 +152,12 @@
                         </StackPanel>
                     </Border>
 
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="0,8,0,0"
-                               TextWrapping="Wrap"
-                               Text="「手工删除时的默认」只是确认框的默认值，不是「跳过确认」；回收站不可用时（网络盘 / 策略禁用）一律不删并说明原因，绝不会因此降级成彻底删除。" />
+                                        <controls:BoxDetail Header="{x:Static models:StatusText.BoxDetailManualCleanupHeader}"
+                                        Detail="{x:Static models:StatusText.BoxDetailManualCleanupDetail}" />
                 </StackPanel>
             </GroupBox>
 
-            <!-- ==================== 部分完成也把已解出的内容放进目标目录（用户 2026-10-02） ==================== -->
-            <GroupBox Header="{x:Static models:StatusText.SettingsPartialPublishGroupHeader}">
-                <StackPanel>
-                    <!--
-                        用户 2026-10-02 原话：「这个的操作最少差不多就占了两份原包的空间要在开启界面详细写清楚」。
-                        ⇒ 开关下面那段小字必须说清四件事（两份空间 / 源包一定不删 / 与「空间不足」互斥 /
-                        落点固定且重跑不撞名），文案唯一出口 = StatusText.SettingsPartialPublishHint。
-                    -->
-                    <CheckBox Margin="0,0,0,0"
-                              Content="{x:Static models:StatusText.SettingsPartialPublishLabel}"
-                              IsChecked="{Binding SettingsEditor.Settings.PartialPublishEnabled, Mode=TwoWay}"
-                              ToolTip="{x:Static models:StatusText.SettingsPartialPublishTooltip}" />
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="22,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="{x:Static models:StatusText.SettingsPartialPublishHint}" />
-                </StackPanel>
-            </GroupBox>
+            
         </StackPanel>
     </ScrollViewer>
 </UserControl>

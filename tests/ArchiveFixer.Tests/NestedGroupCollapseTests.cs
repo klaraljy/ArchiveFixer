@@ -79,8 +79,13 @@ namespace ArchiveFixer.Tests
                 Assert.Contains(constant, inside, StringComparison.Ordinal);
             }
 
-            // ② 控件旁边留的是短句（两个勾选框的 ToolTip 都改成短的那份）。
-            Assert.Contains("StatusText.NestedMiddleLayerShortHint", xaml, StringComparison.Ordinal);
+            /*
+             * ② 控件旁边留的是短句。
+             * ⚠ 2026-10-14（用户最终设计 + 当场拍板「省略中间层=不省略」）：②页那一格
+             * 「续解时省略中间层」连同它的短提示**整栏删除**（值钉成系统默认"不省略"），
+             * 所以这里只剩分卷拼装那一格的短提示要钉。
+             */
+            Assert.DoesNotContain("StatusText.NestedMiddleLayerShortHint", xaml, StringComparison.Ordinal);
             Assert.Contains("StatusText.NestedVolumeAssemblyShortHint", xaml, StringComparison.Ordinal);
 
             // ③ 长的那两份**不再整段挂在 ToolTip 上**、覆盖策略那段也不再摊在页面上

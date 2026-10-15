@@ -1081,12 +1081,22 @@ namespace ArchiveFixer.Models
                 VerboseLog = false,
                 AutoScanAfterDrop = true,
                 PreviewBeforeRename = true,
-                OverwriteMode = "SkipExisting",
+
+                /*
+                 * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：这一批已经是**系统固定值**、
+                 * 界面上没有入口 ⇒ 出厂默认必须跟 `Normalize` 里那张钉子表**逐项一致**
+                 * （否则"新装 = 默认"，老配置 = 归一值，两条路给出不同行为）。
+                 * ⛔ 判据只有一处实现：`FixedDefaultsTests.出厂默认本来就是系统值` 会逐项比对两边。
+                 * ⚠ 本块里只写**原先不是这个值**的那一项（OverwriteMode）；其余各项（RecursionMode /
+                 *    OmitMiddleContinuationLayers / KeepFailedWorkspace / RememberPasswordList …）
+                 *    原本就是系统值，各自在下面写着，⛔ 不许在这里再写一遍（CS1912 会当场打回）。
+                 */
+                OverwriteMode = "AutoRenameExisting",
                 TryEmptyPasswordFirst = true,
                 UseGlobalPasswordForAllTasks = true,
                 MaxParallelExtractCount = DefaultMaxParallelExtractCount,
                 RunAtFullSpeed = false,
-                LowProcessPriority = true,
+                LowProcessPriority = false,
                 OpenOutputFolderWhenDone = false,
                 RestRemovalDefaultMode = RestRemovalModes.RecycleBin,
                 ReportDangerousEntries = true,
@@ -1460,6 +1470,62 @@ namespace ArchiveFixer.Models
             {
                 CustomRarExePath = string.Empty;
             }
+
+            /*
+             * ================================================================
+             * 系统固定默认值（用户 2026-10-14 最终设计 + 当场逐项拍板）
+             * ================================================================
+             *
+             * 用户原话：「我觉得有些删除的选项里面都应该时系统底层会做的而不是让用户来选择的」
+             * ＋ 对"删除 = 从界面移出、值固定成系统默认（功能一个都不删）"的当场确认：「对，就是这个意思」。
+             *
+             * ⇒ 这一批设置项的**界面入口已经删掉**（设置页「启动时行为 / 扫描与识别」两组、
+             *    ②页「续解省略中间层 / 解压覆盖策略」、③页「部分完成的内容」等），所以必须在这里把值钉死：
+             *    否则用户机器上 appsettings.json 里存过的旧值会变成**界面上看不见的暗档** ——
+             *    行为跟他以为的不一样，还没地方改回来（这是最坏的一种退化）。
+             *
+             * ⛔ 钉的就是用户逐项确认过的那张表（出处 docs/大改动-2026-10-14-口径与冲突.md §17.6）；
+             * ⛔ 这些项**从此没有用户入口**：界面写什么程序就跑什么，所以他存过的旧值一律归到这里。
+             * ⚠ 与"只改出厂默认、不迁移用户存过的值"那条老规矩的区别：那条针对的是**还有入口**的项；
+             *    这一批已经没有入口了，保留旧值等于让用户背着一个改不掉的暗档。
+             */
+            RememberLastOutputDirectory = true;      // 记住上次输出目录（开）
+            LowProcessPriority = false;              // 低运行优先级（关 —— 用户 2026-10-14 定的是"不降"）
+            RecursiveScan = true;                    // 递归扫描文件夹（开）
+            AutoScanAfterDrop = true;                // 导入后自动扫描（开）
+            ScanMode = "ScanAllFiles";               // 扫描模式（扫描全部文件）
+            UnknownFormatAction = "MarkUnknown";     // 未知格式处理（标记未知）
+            DefaultExtension = ".7z";                // 默认补充后缀（这一格是**后缀字符串**，出厂值 .7z）
+            ConflictAction = ConflictActions.AutoRename; // 同名冲突（系统自动改名，不再询问）
+            OmitMiddleContinuationLayers = false;    // 续解省略中间层（不省略 —— 每一层照建）
+            OverwriteMode = "AutoRenameExisting";    // 解压覆盖策略（自动重命名已存在文件）
+            KeepFailedWorkspace = false;             // 工作区（失败 / 取消也默认清干净）
+            RememberPasswordList = true;             // 记住密码列表（系统默认操作，界面上没有开关）
+
+            /*
+             * 嵌套：**一律展开所有分支**（用户 2026-10-14 口径逐字：「我不是将单层路给删掉了吗，
+             * 现在就是全面解压所有分路」＋最终设计「三档功能全部删除，只默认解开所有分支」）。
+             *
+             * ⚠ 用户 2026-10-14 夜当场纠正过我一次：我原先把这一项"留到不再有单层路那一刀"，
+             * 那是理解偏了 —— **单层路已经删了**，所以老配置里存过的 SingleLayer / SingleChain
+             * 必须现在就归一掉（否则就是一个界面上看不见、还在生效的档位）。
+             *
+             * ⚠ 跟着红的 5 条既有守门（`WorkspaceRootTests` 2 / `PartialPublishTests` 2 /
+             * `RecursionLogAndProbePathFixesTests` 1）属于"场景建立在**已删模式**上"——
+             * 按新现实重写（见各自注释），⛔ 不是把判据放宽。
+             */
+            RecursionMode = "AllBranches";
+
+            /*
+             * ⛔ 这里**故意没有**钉 `PartialPublishEnabled`（"部分完成的内容也发布到成品目录"）。
+             *
+             * 用户口径是「这个功能我要淘汰，就是将这个功能做到底层设计上面，就是『损坏压缩包的解压情况』，
+             * 这种情况下我们会自动开启，而且用户不能操作」—— 要的是**损坏压缩包那一档自动发布**。
+             * 而这个开关现在同时管着一堆**无关**行为（取消途中不发布、工作区探针产物、逐层回收口径），
+             * 实测直接钉 true 会打红 5 条既有守门（`PartialPublishTests` 3 条 + `WorkspaceRootTests` 2 条
+             * + `RecursionLogAndProbePathFixesTests` 1 条）⇒ 那是"改错了层"。
+             * ⇒ 留给「损坏压缩包 ⇒ 自动留内容物」那一刀：先把语义收窄到那一档，再钉值、再删界面。
+             */
         }
     }
 }

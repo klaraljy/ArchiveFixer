@@ -1019,7 +1019,16 @@ namespace ArchiveFixer.Tests
 
                 // 解压途中工作区根被换走（下一批跟了别的输出目录）：收尾时那条记录不再属于当前根。
                 harness.PathService.WorkDirectory = otherRoot;
-                File.WriteAllText(Path.Combine(request.OutputPath!, "half.bin"), "半截产物");
+
+                /*
+                 * ⚠ 2026-10-14（嵌套改为"一律展开所有分支"之后）：产物不再落在这个 task 工作目录里
+                 * （递归路走 `recursive\layer-000\output` 那一套）⇒ 这里**直接把半截产物放进这个目录**。
+                 * 这一条要钉的是"**越界的工作区目录一个字节都不删**"，文件由谁写与判据无关
+                 * （⛔ 判据一个字没改，只是把场景摆到判据真正看得见的地方）。
+                 */
+                Directory.CreateDirectory(taskWorkDirectory);
+                File.WriteAllText(Path.Combine(taskWorkDirectory, "half.bin"), "半截产物");
+
                 return WrongPassword();
             });
 
@@ -1045,29 +1054,34 @@ namespace ArchiveFixer.Tests
             ArchiveTask task = harness.AddTask(source);
 
 
-            // 解压"成功"但一个文件都不写；收尾第一件事（列目录）时按下「取消当前」。
+            /*
+             * ⚠ 2026-10-15（按新现实重摆场景）：原来在"列目录"那一步按取消 —— 那一步在新流程里
+             * 发生在**还没有任务在跑**的时候，`CancelCurrentTask()` 会走早退那一支
+             * （逐字：`当前没有正在执行的任务可取消。`）⇒ 取消根本没发生，跑完当然落「解压失败」。
+             * 判据意图一个字没改（**取消 ⇒ 状态「已取消」+ 空壳工作区清掉 + 源包保留**），
+             * 只是把"按下取消"摆在**任务真的在跑的那一刻**（引擎执行中）。
+             */
             harness.Engine.OnExtractAsync = request => Task.Run(() =>
             {
                 harness.Engine.Extracted = true;
+                harness.Coordinator.CancelCurrentTask();
                 return Succeeded();
             });
-
-            harness.Engine.OnListAsync = _ =>
-            {
-                if (harness.Engine.Extracted)
-                {
-                    harness.Coordinator.CancelCurrentTask();
-                }
-
-                return Task.FromResult(ListResult(5));
-            };
 
             await harness.Coordinator.StartExtractAsync();
 
             // ⚠ 路径必须在**批尾**算：工作区根由这一批的目标目录派生，批首之前那个值是老位置。
             string taskWorkDirectory = harness.PathService.BuildTaskWorkDirectory(task);
 
-            Assert.Equal(StatusText.Cancelled, task.Status);
+            /*
+             * ⚠ 诊断（2026-10-14）：这条断言原来只有"状态不对"四个字，而"取消"在递归路上到底走到哪一步
+             * 只有程序日志说得清 ⇒ 失败时把最后几行日志一起打出来（⛔ 判据没变，只是把判据输入写出来）。
+             */
+            Assert.True(
+                task.Status == StatusText.Cancelled,
+                $"取消之后状态应当是「{StatusText.Cancelled}」，实得「{task.Status}」。程序日志（全段）："
+                + Environment.NewLine
+                + string.Join(Environment.NewLine, harness.LogTexts));
             Assert.False(Directory.Exists(taskWorkDirectory), $"取消之后的空壳工作区没被清掉：{taskWorkDirectory}");
             Assert.True(File.Exists(source), "取消时源文件必须原样保留");
         }
@@ -1654,6 +1668,12 @@ namespace ArchiveFixer.Tests
 
             AppSettings settings = AppSettings.CreateDefault();
             settings.AutoScanAfterDrop = false;
+
+            /*
+             * ⚠ 2026-10-14 待办（口径未定）：本条原来靠 `RecursionMode = "SingleLayer"` 构造场景，
+             * 那个档位已按用户最终设计删除。⛔ 用 `MaxRecursionDepth = 1` 顶替**不等价**（实测打红），
+             * 已撤回；留待"只解一层这件事现在该怎么表达"定了再重写。
+             */
             settings.RecursionMode = "SingleLayer";
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
 

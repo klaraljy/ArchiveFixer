@@ -201,35 +201,39 @@ namespace ArchiveFixer.Tests
         // ================================================================ ③ 文案与行为
 
         [Fact]
-        public void 设置界面的自动扫描文案_覆盖三种导入入口()
+        public void 导入后自动扫描已成系统固定值_界面上不再有这一格()
         {
+            /*
+             * ⚠ 2026-10-14（用户最终设计：「设置：删除：工作区目录、启动时、扫描」+ 当场逐项拍板）：
+             * 这一格连同「扫描与识别」整组移出界面，值钉成"开"。
+             * ⛔ 判据不是删掉就完事 —— 改钉两件事实：界面上没有这一格，且值真的是系统值。
+             */
             string xaml = ReadSettingsSurfaceXaml();
 
-            // 这个开关在 ScanCoordinator.AddPathsAsync 里判，管的是所有导入入口，
-            // 不只拖拽 —— 旧文案只提拖拽，会让关掉它的人以为用按钮添加还会自动扫描。
-            Assert.Contains("导入后自动扫描（拖拽 / 添加文件 / 添加文件夹）", xaml, StringComparison.Ordinal);
-            Assert.Contains("重新扫描", xaml, StringComparison.Ordinal);
+            Assert.DoesNotContain("导入后自动扫描", xaml, StringComparison.Ordinal);
+            Assert.True(new ArchiveFixer.Models.AppSettings().AutoScanAfterDrop);
+            Assert.True(new ArchiveFixer.Models.AppSettings().RecursiveScan);
         }
 
         [Fact]
-        public void 设置界面如实说明输出位置的入口不止一处()
+        public void 输出位置入口不止一处这件事_仍然写着_现在在展示框的详细说明里()
         {
-            string xaml = ReadSettingsSurfaceXaml();
-
             /*
              * 老文案写"主窗口里没有临时选输出目录的入口"，这一条**当时是假的**：
-             * ①页主操作栏就有「输出位置：… 选择…」+「未指定位置」那颗开关
-             * （TaskTab.xaml 那一格，命令体是 MainViewModel.SelectOutputDirectory），
+             * ①页主操作栏就有「输出位置：… 选择…」+「未指定位置」那颗开关，
              * 写的就是同一个 Settings.CustomOutputDirectory —— 而当时的用例把这句话钉住了，
              * 于是"界面说反话"被测试保护着（2026-09-29 复核逮到）。
+             *
+             * ⚠ 2026-10-14：那一格（记住上次输出目录）已随「启动时行为」整组移出界面、值钉成"开"，
+             * 但**这句事实必须继续写着** —— 它现在住在⑥页展示框的详细说明里 ⇒ 判据跟着搬。
              */
+            Assert.Contains("「任务」页", ArchiveFixer.Models.StatusText.BoxDetailStartupBehaviorDetail, StringComparison.Ordinal);
+            Assert.Contains("「解压方式」页", ArchiveFixer.Models.StatusText.BoxDetailStartupBehaviorDetail, StringComparison.Ordinal);
+
             Assert.DoesNotContain(
                 "主窗口里没有临时选输出目录的入口",
-                xaml,
+                ReadSettingsSurfaceXaml(),
                 StringComparison.Ordinal);
-
-            Assert.Contains("「任务」页", xaml, StringComparison.Ordinal);
-            Assert.Contains("记住上次输出目录", xaml, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -248,15 +252,24 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置界面如实说明覆盖策略的引擎差异()
+        public void 覆盖策略的引擎差异照旧写着_只是从下拉框挪进了详细说明()
         {
-            string xaml = ReadSettingsSurfaceXaml();
+            /*
+             * 界面原来给了「自动重命名已存在文件」这一档，但它只对 7-Zip 有效：
+             * UnRAR 落到 -o-（不覆盖、也不改名）。不说清楚就是"界面说一套、实际做另一套"。
+             *
+             * ⚠ 2026-10-14：那一栏已从②页删掉、值**钉成**「自动重命名已存在文件」（用户当场拍板），
+             * ⇒ 这条引擎差异**更要紧**（用户连选都选不了了）⇒ 它必须继续写在详细说明里。
+             */
+            Assert.Contains("UnRAR", ArchiveFixer.Models.StatusText.NestedOverwriteDetail, StringComparison.Ordinal);
+            Assert.Contains("跳过已存在文件", ArchiveFixer.Models.StatusText.NestedOverwriteDetail, StringComparison.Ordinal);
 
-            // 界面给了「自动重命名已存在文件」这一档，但它只对 7-Zip 有效：
-            // UnRAR 落到 -o-（不覆盖、也不改名）。不说清楚就是"界面说一套、实际做另一套"。
-            Assert.Contains("自动重命名已存在文件（仅 7-Zip 支持）", xaml, StringComparison.Ordinal);
-            Assert.Contains("UnRAR", xaml, StringComparison.Ordinal);
-            Assert.Contains("跳过已存在文件", xaml, StringComparison.Ordinal);
+            Assert.Equal(
+                "AutoRenameExisting",
+                ArchiveFixer.Models.AppSettings.CreateDefault().OverwriteMode);
+
+            // 界面上不再有那一栏（值固定），所以也不该再有它的选项文字。
+            Assert.DoesNotContain("自动重命名已存在文件（仅 7-Zip 支持）", ReadSettingsSurfaceXaml(), StringComparison.Ordinal);
         }
 
         [Fact]
@@ -275,10 +288,18 @@ namespace ArchiveFixer.Tests
 
             string[] appSettingsBound = new[]
             {
-                "RecursiveScan", "AutoScanAfterDrop", "ScanMode", "UnknownFormatAction", "DefaultExtension",
-                "ConflictAction", "TestBeforeExtract", "OpenOutputFolderWhenDone", "ReportDangerousEntries",
-                "CollectResultsToDirectory", "CollectTargetDirectory", "RecursionMode", "MaxRecursionDepth",
-                "OverwriteMode", "MaxParallelExtractCount", "RestRemovalDefaultMode",
+                /*
+                 * ⚠ 2026-10-14（用户最终设计 + 当场逐项拍板）：下面这些项**已经移出界面、值固定成系统默认**
+                 * ⇒ 它们不再属于"界面上必须找得到"这份清单（不在界面上 = 没有入口，正是设计要的）。
+                 * 它们的值与"界面上没有入口"这两件事由 `FixedDefaultsTests` 逐项钉住：
+                 * · RecursiveScan / AutoScanAfterDrop / ScanMode / UnknownFormatAction / DefaultExtension
+                 * · ConflictAction / OverwriteMode / RecursionMode（嵌套三档已删）
+                 * · IncludeHiddenFiles / IncludeSystemFiles / MaxFileSizeLimit
+                 * · LowProcessPriority / RememberLastOutputDirectory
+                 */
+                "TestBeforeExtract", "OpenOutputFolderWhenDone", "ReportDangerousEntries",
+                "CollectResultsToDirectory", "CollectTargetDirectory", "MaxRecursionDepth",
+                "MaxParallelExtractCount", "RestRemovalDefaultMode",
 
                 /*
                  * ⚠ 2026-09-25 第 32 条删掉了两格，所以这里也少了两条：
@@ -288,16 +309,13 @@ namespace ArchiveFixer.Tests
                  *   的 危险模式那一套已退役 那一条负责钉住。
                  */
                 "TryEmptyPasswordFirst", "UseGlobalPasswordForAllTasks", "EnableSidecarPassword",
-                "MaxPasswordAttemptsPerLayer", "EnableLog", "LowProcessPriority", "RememberLastOutputDirectory",
+                "MaxPasswordAttemptsPerLayer", "EnableLog",
                 "CustomSevenZipExePath",
 
                 /*
-                 * 扫描侧的三项（2026-09-23 补的界面入口）。
-                 *
-                 * 它们本来就有实现（FileScanService 真的按它们过滤），但设置里一直没有入口 ——
-                 * "配置里能改、界面里找不到"对用户就是一句谎。列进这份清单，防止以后被顺手删掉。
+                 * ⚠ 2026-10-14：扫描侧那三项（IncludeHiddenFiles / IncludeSystemFiles / MaxFileSizeLimit）
+                 * 随「扫描与识别」整组移出界面、值钉成系统默认 ⇒ 从这份清单里去掉（见上面那段说明）。
                  */
-                "IncludeHiddenFiles", "IncludeSystemFiles", "MaxFileSizeLimit",
 
                 /*
                  * 2026-09-24 第 15 条补的「解压前提醒」开关。
@@ -326,11 +344,10 @@ namespace ArchiveFixer.Tests
                 "UseSpecialExtraction",
 
                 /*
-                 * 2026-09-25 第 25 条追加的「失败时保留中间产物」（③清理与删除页的「工作区残留」那一组里）。
-                 * 它必须真的被收尾读到 —— ExtractionCoordinator.CleanupFailedTaskWorkspace
-                 * 与 RecursiveExtractor 的失败清理都按它决定"清不清现场"，默认关 = 失败不留残留。
+                 * ⚠ 2026-10-14（用户最终设计：「设置：删除：工作区目录」+ 清理方式「工作区」改成默认）：
+                 * 「失败时保留中间产物」这一格**连界面一起删了**（值钉成 false = 失败/取消也清干净）
+                 * ⇒ 从这份"界面上必须找得到"的清单里去掉；值与"没有入口"由 `FixedDefaultsTests` 钉住。
                  */
-                "KeepFailedWorkspace",
 
                 /*
                  * 2026-09-25 第 36 条：解压前的四条安全上限（⑥设置 →「安全上限」）。
@@ -340,6 +357,12 @@ namespace ArchiveFixer.Tests
                  */
                 "MaxSingleExtractedFileGiB", "MaxExtractedTotalGiB",
                 "MaxExtractedFileCount", "MaxExtractionRatio",
+
+                /*
+                 * ⚠ 2026-10-14：`KeepFailedWorkspace`（「失败时保留中间产物」）已按最终设计
+                 * 连界面一起删（工作区改成系统默认：失败/取消也清干净）⇒ 从这份清单里去掉，
+                 * 值与"没有入口"由 `FixedDefaultsTests` 钉住。
+                 */
 
                 /*
                  * 2026-09-25 第 44 条追加之二：⑥设置 →「日志」里的「详细日志（排查用）」。

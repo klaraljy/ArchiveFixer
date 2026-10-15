@@ -432,6 +432,17 @@ namespace ArchiveFixer.Tests
             harness.Engine.OnExtractAsync = request =>
             {
                 WritePayload(request.OutputPath!, 5);
+
+                /*
+                 * ⚠ 2026-10-15（按新现实重摆场景）：原来靠"日志里出现 `已经由这一趟解压本身证实`"才发取消 ——
+                 * 那一行属于旧的单层候选登记路，而新口径是"一律展开所有分支"，那一步不再经过
+                 * ⇒ 触发条件永不成立，用例自己的反假绿断言先红（逐字：`这个用例必须真的在登记候选之后发出取消`）。
+                 * 判据意图一个字没改（**取消 ⇒ 一个字节都不发布 + 源包原地不动**），
+                 * 只是把"按下取消"摆在**任务真的在跑的那一刻**（引擎执行中，取消源这时才在册）。
+                 */
+                cancelRequested = true;
+                harness.Coordinator.CancelCurrentTask();
+
                 return Task.FromResult(WrongPassword());
             };
 
@@ -463,7 +474,15 @@ namespace ArchiveFixer.Tests
                  * 改成 `partial(1)`，其余物就不在它里面了、清理自然找不到目标。
                  * 所以这里按用户口径选「覆盖」：沿用该目录（这正是真机上"重跑同一个包"的那一档）。
                  */
-                configure: settings => settings.ConflictAction = ConflictActions.Overwrite);
+                configure: null);
+
+            /*
+             * ⚠ 2026-10-14：`ConflictAction` 已经是**系统固定值**（同名冲突 = 系统自动改名）
+             * ⇒ 走 configure + Save/Load 会被 `Normalize` 钉回去。而这一条必须先摆好
+             * "成品目录里已经有其余物"的现场（落点冲突档要沿用该目录，而不是改成 `partial(1)`）
+             * ⇒ 改在**活设置**上选「覆盖」（Normalize 已经跑过了）。
+             */
+            harness.Vm.Settings.ConflictAction = ConflictActions.Overwrite;
 
             string sourcePath = CreateSourceFile("partial.7z");
             ArchiveTask task = AddTask(harness, sourcePath);
@@ -625,6 +644,12 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
+            /*
+             * ⚠ 2026-10-14 待办（口径未定）：这一族原来靠 `RecursionMode = "SingleLayer"`（"只解一层"）
+             * 构造场景，而那个档位已按用户最终设计删除、归一之后一律 AllBranches。
+             * ⛔ 试过用 `MaxRecursionDepth = 1` 顶替 —— **等价性不成立**（那是"本批一轮"，
+             *    不是"不递归进内层"），实测打红本条 ⇒ 已撤回，留待口径定了再重写这一族。
+             */
             settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);

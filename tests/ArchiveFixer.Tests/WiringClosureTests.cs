@@ -113,7 +113,13 @@ namespace ArchiveFixer.Tests
 
             AppSettings loaded = service.Load();
 
-            Assert.Equal("SingleChain", loaded.RecursionMode);
+            /*
+             * ⚠ 2026-10-14：`OmitMiddleContinuationLayers` 已钉死（不省略 = 忠实档），
+             * `RecursionMode` **也**已按用户口径钉成 AllBranches（「单层路已经删了、现在就是全面解压所有分路」）
+             * ⇒ 老配置里存过的 SingleChain 读回来归到"展开所有分支"。
+             * ⛔「层数」这一格一直都有入口，照旧不迁移（下面那行 4 就是证据）。
+             */
+            Assert.Equal("AllBranches", loaded.RecursionMode);
             Assert.Equal(4, loaded.MaxRecursionDepth);
             Assert.False(loaded.OmitMiddleContinuationLayers);
         }
@@ -142,13 +148,16 @@ namespace ArchiveFixer.Tests
             string json = File.ReadAllText(pathService.SettingsFilePath, Encoding.UTF8);
 
             Assert.Contains("omitMiddleContinuationLayers", json, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("true", json, StringComparison.OrdinalIgnoreCase);
 
             Assert.DoesNotContain("terminalLayoutMode", json, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("collapseRepeatedFolderLayer", json, StringComparison.OrdinalIgnoreCase);
 
-            // 读回来也必须是同一个值（值 + 落盘两条都钉住）。
-            Assert.True(service.Load().OmitMiddleContinuationLayers);
+            /*
+             * 读回来**必须是系统固定值**：这一格已按 2026-10-14 最终设计钉死（不省略 = 忠实档），
+             * ⛔ 键照旧写（序列化位置不变），但值不再由用户决定 —— 所以原来那句
+             * `Assert.True(...)` 改成 `Assert.False(...)`（判据跟着新口径走，不是放宽）。
+             */
+            Assert.False(service.Load().OmitMiddleContinuationLayers);
         }
         /// <summary>
         /// 最大层数的一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）。

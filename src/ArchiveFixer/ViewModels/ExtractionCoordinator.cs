@@ -1871,6 +1871,41 @@ namespace ArchiveFixer.ViewModels
              */
             if (!work.Verification.Verified)
             {
+                /*
+                 * ⚠ 2026-10-15（**机器终态缺口**，用户测试逮到）：用户按了取消的时候，这一档不许落「解压失败」。
+                 *
+                 * 现场（取证逐字，`WorkspaceRootTests.取消且一个文件都没有_空壳工作区被删掉`）：
+                 * 测试在"列目录"那一步按下「取消当前」、引擎一个文件都没写 ⇒ 收尾读到空目录 ⇒
+                 * 日志只有 `产物校验未通过：输出目录是空目录，没有产物` ⇒ `解压失败 ｜ 校验未通过`，
+                 * **整段日志一次都没提"取消"** ⇒ 用户按的是取消，①页与批末汇总却把它算成**失败**。
+                 *
+                 * 口径（AGENTS.md 不变量 1 + 用户 2026-10-14）：「失败 / 部分完成 / 取消 ⇒ 源包原地不动、
+                 * 其余物不生成」—— 取消是**用户的选择**，不是失败；它必须和
+                 * `RecursiveExtractor` 的 `RecursionStopReason.UserCancelled` 那一支（本文件 `:7575`）
+                 * 落**同一套**机器终态。
+                 *
+                 * ⛔ 只改"这一次跑该落什么结论"：校验事实（`VerifyMessage` / `IsOutputVerified`）照旧写进去，
+                 * 源包与产物一个字节都不动（下面那三行以后的分支本来也不会跑到），
+                 * ⛔ 不动判据、不放宽任何闸门。
+                 */
+                bool cancelled = IsStopping
+                                 || _operationCts?.IsCancellationRequested == true
+                                 || cancellationToken.IsCancellationRequested;
+
+                if (cancelled)
+                {
+                    task.Status = StatusText.Cancelled;
+                    task.ProgressText = StatusText.Cancelled;
+                    task.ErrorMessage = work.Verification.FailureMessage;
+                    task.VerifyMessage = work.Verification.FailureMessage;
+                    task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+                    task.Outcome = TaskOutcome.Cancelled;
+                    task.LastUpdatedTime = DateTime.Now;
+
+                    AppendLog("INFO", $"{task.LogName}：用户已取消 —— 这次不落「解压失败」（{work.Verification.FailureMessage}；源包一个字节都不动）。");
+                    return false;
+                }
+
                 task.Status = StatusText.ExtractFailed;
                 task.ProgressText = StatusText.ProgressFailed;
                 task.ErrorMessage = work.Verification.FailureMessage;

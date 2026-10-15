@@ -1,6 +1,7 @@
 <UserControl x:Class="ArchiveFixer.Views.Tabs.SettingsTab"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+   xmlns:controls="clr-namespace:ArchiveFixer.Views.Controls"
              xmlns:models="clr-namespace:ArchiveFixer.Models">
 
     <!--
@@ -54,148 +55,9 @@
                 </StackPanel>
             </GroupBox>
 
-            <!-- ==================== 启动时行为 ==================== -->
-            <GroupBox Header="启动时行为">
-                <StackPanel>
-                    <CheckBox Content="记住上次输出目录"
-                              IsChecked="{Binding SettingsEditor.Settings.RememberLastOutputDirectory, Mode=TwoWay}" />
+            
 
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="22,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="关掉之后：下次启动不再把上次的输出目录填回「当前输出位置」。注意输出位置在「任务」页（「输出位置：… 选择…」和「未指定位置」那颗开关）与「解压方式」页都能改，两处写的是同一份设置；这一项管的是「启动时要不要沿用上次那个自定义根」。" />
-
-                    <CheckBox Content="低运行优先级运行"
-                              Margin="0,12,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.LowProcessPriority, Mode=TwoWay}"
-                              ToolTip="让本程序与它启动的解压进程让出 CPU / 磁盘优先级。重启程序后生效。" />
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="22,4,0,0"
-                               TextWrapping="Wrap"
-                               Text="开着：批量解压时还让得开手，前台程序不会被拖卡（代价是纯后台跑时慢一点）。它与「并发档」是两个互相独立的旋钮，改一个不会顺手改另一个。" />
-                </StackPanel>
-            </GroupBox>
-
-            <!-- ==================== 扫描与识别 ==================== -->
-            <GroupBox Header="扫描与识别">
-                <StackPanel>
-                    <CheckBox Content="递归扫描文件夹"
-                              IsChecked="{Binding SettingsEditor.Settings.RecursiveScan, Mode=TwoWay}" />
-
-                    <CheckBox Content="导入后自动扫描（拖拽 / 添加文件 / 添加文件夹）"
-                              Margin="0,8,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.AutoScanAfterDrop, Mode=TwoWay}"
-                              ToolTip="关掉之后导入只加进列表、不自动识别；需要识别时用菜单「文件 → 重新扫描」。" />
-
-                    <Grid Margin="0,10,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="扫描模式："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <ComboBox Grid.Column="1"
-                                  SelectedValue="{Binding SettingsEditor.Settings.ScanMode, Mode=TwoWay}"
-                                  SelectedValuePath="Tag">
-                            <ComboBoxItem Content="扫描全部文件" Tag="ScanAllFiles" />
-                            <ComboBoxItem Content="只扫描常见压缩后缀" Tag="ScanKnownArchiveExtensions" />
-                            <ComboBoxItem Content="扫描可疑文件" Tag="ScanSuspiciousFiles" />
-                        </ComboBox>
-                    </Grid>
-
-                    <CheckBox Content="包含隐藏文件"
-                              Margin="0,10,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.IncludeHiddenFiles, Mode=TwoWay}"
-                              ToolTip="默认不扫隐藏文件（属性里带「隐藏」的）。打开后它们也会进列表。" />
-
-                    <CheckBox Content="包含系统文件"
-                              Margin="0,8,0,0"
-                              IsChecked="{Binding SettingsEditor.Settings.IncludeSystemFiles, Mode=TwoWay}"
-                              ToolTip="默认跳过系统文件（属性里带「系统」的，如 desktop.ini、Thumbs.db）。一般不要打开。" />
-
-                    <Grid Margin="0,10,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="120" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="单文件上限："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding SettingsEditor.Settings.MaxFileSizeLimit, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="单位 MB；0 = 不限。超过上限的文件在扫描阶段就被跳过。" />
-
-                        <TextBlock Grid.Column="2"
-                                   Style="{StaticResource HintTextStyle}"
-                                   Margin="8,0,0,0"
-                                   VerticalAlignment="Center"
-                                   Text="单位 MB，0 = 不限。格式靠文件头识别，不靠后缀。" />
-                    </Grid>
-
-                    <Grid Margin="0,10,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="未知格式处理："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <ComboBox Grid.Column="1"
-                                  SelectedValue="{Binding SettingsEditor.Settings.UnknownFormatAction, Mode=TwoWay}"
-                                  SelectedValuePath="Tag">
-                            <ComboBoxItem Content="加入列表并标记未知" Tag="MarkUnknown" />
-                            <ComboBoxItem Content="跳过" Tag="Skip" />
-                            <ComboBoxItem Content="仍尝试解压" Tag="TryExtract" />
-                        </ComboBox>
-                    </Grid>
-
-                    <Grid Margin="0,10,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="默认补充后缀："
-                                   Style="{StaticResource LabelTextStyle}" />
-
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding SettingsEditor.Settings.DefaultExtension, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="例如 .7z、.zip、.rar" />
-                    </Grid>
-
-                    <Grid Margin="0,10,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="110" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Text="同名冲突处理："
-                                   Style="{StaticResource LabelTextStyle}"
-                                   ToolTip="解压落位与改名遇到同名时的处置方式（默认自动重命名，绝不覆盖）。" />
-
-                        <ComboBox Grid.Column="1"
-                                  SelectedValue="{Binding SettingsEditor.Settings.ConflictAction, Mode=TwoWay}"
-                                  SelectedValuePath="Tag"
-                                  ToolTip="默认「自动重命名」：新产物落成 名字(1)，不动已存在的文件。">
-                            <ComboBoxItem Content="跳过（不动已存在的文件）" Tag="Skip" />
-                            <ComboBoxItem Content="覆盖（先挪到临时名，落位成功后才删旧的）" Tag="Overwrite" />
-                            <ComboBoxItem Content="自动重命名（默认，绝不覆盖）" Tag="AutoRename" />
-                            <ComboBoxItem Content="询问（第一次冲突时暂停任务问一次）" Tag="Ask" />
-                        </ComboBox>
-                    </Grid>
-
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="110,6,0,0"
-                               TextWrapping="Wrap"
-                               Text="改名一定会先弹预览，改完由你确认才落盘。「询问」在两处都真的会问：解压落位弹一次聚合询问；改名冲突在预览表里逐条确认（没选就按保守档自动重命名，绝不覆盖）。" />
-                </StackPanel>
-            </GroupBox>
+            
 
             <!--
                 ==================== 内容物保留关键词：2026-10-04 整块搬到②页 ====================
@@ -303,10 +165,8 @@
                                    Text="默认 1000 倍。超过按「疑似压缩炸弹」拒绝。" />
                     </Grid>
 
-                    <TextBlock Style="{StaticResource HintTextStyle}"
-                               Margin="110,8,0,0"
-                               TextWrapping="Wrap"
-                               Text="这四条只「拒绝解压」，不会删任何东西；超过上限时失败清单会写清是哪个上限拦的。另有两道独立的闸门照旧生效：目标盘空间不够就不启动，解压过程中按累计大小设限。" />
+                                        <controls:BoxDetail Header="{x:Static models:StatusText.BoxDetailBudgetHeader}"
+                                        Detail="{x:Static models:StatusText.BoxDetailBudgetDetail}" />
                 </StackPanel>
             </GroupBox>
 

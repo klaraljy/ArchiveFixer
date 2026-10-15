@@ -35,11 +35,19 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal("AllBranches", blank.RecursionMode);
 
-            // ③ ⛔ 用户自己存过的档一个都不许被迁移（他机器上选的是哪一档就还是哪一档）。
+            /*
+             * ③ 老配置里存过的档一律归一掉（用户 2026-10-14 口径逐字：「我不是将单层路给删掉了吗，
+             * 现在就是全面解压所有分路」＋最终设计「三档功能全部删除」）⇒ `SingleLayer` / `SingleChain`
+             * 都归到"展开所有分支"。
+             *
+             * ⛔ 这与"不迁移用户存过的值"那条老规矩不冲突：那条管的是**还有入口**的项
+             * （见 `FixedDefaultsTests.还有入口的项照旧不许被迁移`）；这一格已经没有入口，
+             * 再留着旧值就是一个"界面上看不见、还在生效"的档位。
+             */
             var chosen = new AppSettings { RecursionMode = "SingleChain" };
             chosen.Normalize();
 
-            Assert.Equal("SingleChain", chosen.RecursionMode);
+            Assert.Equal("AllBranches", chosen.RecursionMode);
         }
 
         /// <summary>

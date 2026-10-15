@@ -3534,5 +3534,79 @@ namespace ArchiveFixer.Models
         /// </summary>
         public const string PasswordCandidateUntriedSuffixFormat =
             "；候选里还有 {0} 条因为每层上限没试到，只点名前几条：{1}";
+        // ================================================================ 功能框「展示框」的详细说明
+        //
+        // 用户 2026-10-14 最终设计：「所有说明性文字，详细的说明文字全部写入选项卡说明里面和在每一个
+        // 功能框最下面有一个展示框，点击才能详细展示，平时的功能介绍只能简洁的文字介绍」。
+        //
+        // ⛔ 规则：页面上只留简洁的一句；凡是"要解释清楚才敢用"的那几段，一律搬到这里，
+        //    由 `Views/Controls/BoxDetail.xaml` 渲染（默认收起）。⛔ 文案只有这一处，XAML 里不许再抄。
+
+        /// <summary>① 源包操作那一框的展示框标题。</summary>
+        public const string BoxDetailSourceHandlingHeader = "详细说明：源包什么时候才会被动";
+
+        /// <summary>① 源包操作：三条同时成立才动源包（原先是常驻在页面上的那段）。</summary>
+        public const string BoxDetailSourceHandlingDetail =
+            "只有「内容物已定稿 + 输出校验通过 + 未取消」三条同时成立才动源包；失败 / 部分完成 / 取消时源包一律原地不动。";
+
+        /// <summary>③ 手工清理那一框的展示框标题。</summary>
+        public const string BoxDetailManualCleanupHeader = "详细说明：手工删除的默认档是什么";
+
+        /// <summary>③ 手工清理：默认档只是确认框的默认值（原先是常驻的那段）。</summary>
+        public const string BoxDetailManualCleanupDetail =
+            "「手工删除时的默认」只是确认框的默认值，不是「跳过确认」；回收站不可用时（网络盘 / 策略禁用）一律不删并说明原因，绝不会因此降级成彻底删除。";
+
+        /// <summary>② 并发与空间那一框的展示框标题。</summary>
+        public const string BoxDetailSpaceGateHeader = "详细说明：空间门怎么算";
+
+        /// <summary>② 并发与空间：空间门的算法与"取不到可用空间"时怎么办（原先是常驻的那段）。</summary>
+        public const string BoxDetailSpaceGateDetail =
+            "空间门：每个任务启动前都按「源包 + 内容物 + 其余物增量 + 512 MiB 余量」核算；不够就不启动，并写明需要多少、可用多少、差多少。取不到目标盘可用空间时「不拦」，但会在日志里明说取不到。";
+
+        /// <summary>⑤ 打包那一框的展示框标题。</summary>
+        public const string BoxDetailPackingConfirmHeader = "详细说明：点「打包…」之后会发生什么";
+
+        /// <summary>⑤ 打包：确认窗里问什么、记不记得住（原先是常驻的那段）。</summary>
+        public const string BoxDetailPackingConfirmDetail =
+            "点「打包…」还会弹一个小窗：确认原包操作 + 其余物操作（都会记住，下次照上次的来；落点在上面选）。";
+
+        /// <summary>⑤ 打包步骤那一框的展示框标题。</summary>
+        public const string BoxDetailPackingStepsHeader = "详细说明：打包的四步分别做了什么";
+
+        /// <summary>⑤ 打包：四步走法 + 每步的产物与校验（原先是常驻的那段）。</summary>
+        public const string BoxDetailPackingStepsDetail =
+            "1）切分卷：把源里的东西用内置 7-Zip 打成加密分卷（-mhe 连文件名一起加密；内容 <1 GiB 切 2 卷、≥1 GiB 切 3 卷，前面每卷装满、最后一卷是零头）。\n"
+            + "2）分卷就地落盘：分卷直接落在上面那个落点目录里（不再套一层同名文件夹），名字 = 源名 + .7z.001/.002…，撞名自动让位成 源名(1).7z.001。\n"
+            + "3）做外层容器：把上面那几个分卷压成一个带密码的 rar（本机没装 WinRAR 时自动用 7z，产物就是 .7z）；分卷在归档里是「顶层」的，解出来就是这几个分卷。\n"
+            + "4）校验 + 收尾：列一遍外层容器里的条目、与磁盘上的分卷逐个核对（对不上不显示成功）；通过之后才按你选的两档处理原包与其余物（其余物 = 那几个分卷文件，默认彻底删除）。失败 / 取消一个字节都不动。";
+
+        /// <summary>④ 单任务密码那一框的展示框标题。</summary>
+        public const string BoxDetailPerTaskPasswordHeader = "详细说明：单个包要用别的密码怎么办";
+
+        /// <summary>④ 密码：单任务密码走哪两个入口（原先是常驻的那段）。</summary>
+        public const string BoxDetailPerTaskPasswordDetail =
+            "单个包要用别的密码：开始前程序会问一次「要不要手动输一个密码」（只对本次运行有效、不落盘），也可以在「密码列表管理」里把它单独加一条。";
+
+        /// <summary>⑥ 启动时行为那一框的展示框标题。</summary>
+        public const string BoxDetailStartupBehaviorHeader = "详细说明：这两项各自管什么";
+
+        /// <summary>⑥ 启动时行为：两项各自的后果（原文逐字，只把两段并进一个展示框）。</summary>
+        public const string BoxDetailStartupBehaviorDetail =
+            "关掉之后：下次启动不再把上次的输出目录填回「当前输出位置」。注意输出位置在「任务」页（「输出位置：… 选择…」和「未指定位置」那颗开关）与「解压方式」页都能改，两处写的是同一份设置；这一项管的是「启动时要不要沿用上次那个自定义根」。\n"
+            + "开着：批量解压时还让得开手，前台程序不会被拖卡（代价是纯后台跑时慢一点）。它与「并发档」是两个互相独立的旋钮，改一个不会顺手改另一个。";
+
+        /// <summary>⑥ 扫描与识别那一框的展示框标题。</summary>
+        public const string BoxDetailScanAndIdentifyHeader = "详细说明：改名冲突时会发生什么";
+
+        /// <summary>⑥ 扫描与识别：改名一定会先预览、询问档在两处都真的会问（原文逐字）。</summary>
+        public const string BoxDetailScanAndIdentifyDetail =
+            "改名一定会先弹预览，改完由你确认才落盘。「询问」在两处都真的会问：解压落位弹一次聚合询问；改名冲突在预览表里逐条确认（没选就按保守档自动重命名，绝不覆盖）。";
+        /// <summary>⑥ 安全上限那一框的展示框标题。</summary>
+        public const string BoxDetailBudgetHeader = "详细说明：这四条上限拦的是什么";
+
+        /// <summary>⑥ 安全上限：四条只拒绝解压、不删东西；另有两道独立闸门（原先是常驻的那段）。</summary>
+        public const string BoxDetailBudgetDetail =
+            "这四条只「拒绝解压」，不会删任何东西；超过上限时失败清单会写清是哪个上限拦的。另有两道独立的闸门照旧生效：目标盘空间不够就不启动，解压过程中按累计大小设限。";
+
     }
 }

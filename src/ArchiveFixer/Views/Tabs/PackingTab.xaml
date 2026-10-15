@@ -1,5 +1,7 @@
 <UserControl x:Class="ArchiveFixer.Views.Tabs.PackingTab"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+   xmlns:models="clr-namespace:ArchiveFixer.Models"
+   xmlns:controls="clr-namespace:ArchiveFixer.Views.Controls"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!--
@@ -260,11 +262,8 @@
                                        Margin="0,6,0,0"
                                        TextWrapping="Wrap" />
 
-                            <TextBlock Style="{StaticResource HintTextStyle}"
-                                       Margin="0,6,0,0"
-                                       TextWrapping="Wrap"
-                                       Text="点「打包…」还会弹一个小窗：确认原包操作 + 其余物操作（都会记住，下次照上次的来；落点在上面选）。" />
-
+                                                        <controls:BoxDetail Header="{x:Static models:StatusText.BoxDetailPackingConfirmHeader}"
+                                                Detail="{x:Static models:StatusText.BoxDetailPackingConfirmDetail}" />
                             <!--
                                 压缩流程（用户 2026-09-26："下面加一个压缩流程描述，将这个打包功能详细的给用户看"）。
                                 ⛔ 文案与实际行为一一对应（改管线就要改这里）。
@@ -280,9 +279,8 @@
                                                FontWeight="SemiBold"
                                                Margin="0,0,0,6" />
 
-                                    <TextBlock TextWrapping="Wrap"
-                                               LineHeight="20"
-                                               Text="1）切分卷：把源里的东西用内置 7-Zip 打成加密分卷（-mhe 连文件名一起加密；内容 &lt;1 GiB 切 2 卷、≥1 GiB 切 3 卷，前面每卷装满、最后一卷是零头）。&#10;2）分卷就地落盘：分卷直接落在上面那个落点目录里（不再套一层同名文件夹），名字 = 源名 + .7z.001/.002…，撞名自动让位成 源名(1).7z.001。&#10;3）做外层容器：把上面那几个分卷压成一个带密码的 rar（本机没装 WinRAR 时自动用 7z，产物就是 .7z）；分卷在归档里是「顶层」的，解出来就是这几个分卷。&#10;4）校验 + 收尾：列一遍外层容器里的条目、与磁盘上的分卷逐个核对（对不上不显示成功）；通过之后才按你选的两档处理原包与其余物（其余物 = 那几个分卷文件，默认彻底删除）。失败 / 取消一个字节都不动。" />
+                                                                        <controls:BoxDetail Header="{x:Static models:StatusText.BoxDetailPackingStepsHeader}"
+                                                        Detail="{x:Static models:StatusText.BoxDetailPackingStepsDetail}" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>

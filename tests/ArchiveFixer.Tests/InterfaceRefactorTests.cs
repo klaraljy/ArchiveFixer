@@ -449,7 +449,6 @@ namespace ArchiveFixer.Tests
                  * `RecursionModeDefaultTests`），所以它不再有"界面上的家"、也就不在这份清单里。
                  */
                 ["MaxRecursionDepth"] = "ExtractionTab",
-                ["OverwriteMode"] = "ExtractionTab",
                 ["MaxParallelExtractCount"] = "ExtractionTab",
                 ["TestBeforeExtract"] = "ExtractionTab",
                 ["OpenOutputFolderWhenDone"] = "ExtractionTab",
@@ -483,21 +482,10 @@ namespace ArchiveFixer.Tests
                 ["MaxPasswordAttemptsPerLayer"] = "PasswordTab",
 
                 // ⑥ 设置
-                ["RecursiveScan"] = "SettingsTab",
-                ["AutoScanAfterDrop"] = "SettingsTab",
-                ["ScanMode"] = "SettingsTab",
-                ["IncludeHiddenFiles"] = "SettingsTab",
-                ["IncludeSystemFiles"] = "SettingsTab",
-                ["MaxFileSizeLimit"] = "SettingsTab",
-                ["UnknownFormatAction"] = "SettingsTab",
-                ["DefaultExtension"] = "SettingsTab",
-                ["ConflictAction"] = "SettingsTab",
                 ["EnableLog"] = "SettingsTab",
 
                 // ⑥ 的「日志」那一组里 2026-09-25（第 44 条追加之二）补的「详细日志（排查用）」。
                 ["VerboseLog"] = "SettingsTab",
-                ["LowProcessPriority"] = "SettingsTab",
-                ["RememberLastOutputDirectory"] = "SettingsTab",
 
                 /*
                  * ⑥ 的第 36 条那一组：解压前的四条安全上限。
@@ -601,7 +589,6 @@ namespace ArchiveFixer.Tests
                  * 续解的中间层（用户 2026-09-27）：原来这里是「终端落法」两档 + 「同名塌缩」勾选框，
                  * 那一组控件连同设置项一起删了（落点固定，不再让用户选），位置让给这一格开关。
                  */
-                ["OmitMiddleContinuationLayers"] = "ExtractionTab",
 
                 /*
                  * ②页「特定解压」那一栏（用户 2026-09-24：规则清单的家在②页，总开关在①页）。

@@ -296,10 +296,21 @@ namespace ArchiveFixer.Tests
                 _root,
                 new[] { RightPassword },
                 attemptLimit: 10,
+
+                // ⚠ 2026-10-14 待办（口径未定）：这一档原来靠 SingleLayer 构造"只解一层"，
+                // 那个档位已删除；⛔ 用层数上限顶替不等价（实测打红），已撤回。
                 recursionMode: "SingleLayer",
                 engine: engine,
-                // 失败那一档要把现场留住：探针目录真要是漏在暂存目录里，这一档才看得见。
-                configure: settings => settings.KeepFailedWorkspace = !expectSuccess);
+
+                /*
+                 * ⚠ 2026-10-14：`KeepFailedWorkspace` 已经是**系统固定值 false**（工作区改成默认：
+                 * 失败/取消也清干净）⇒ 走 configure + Save/Load 这条路会被 `Normalize` 钉回去。
+                 * 这一条要的是"失败那一档把现场留住"（否则探针漏没漏在暂存目录里看不见）⇒
+                 * 改在**活设置**上打开（Normalize 已经跑过了）。
+                 */
+                configure: null);
+
+            harness.Vm.Settings.KeepFailedWorkspace = !expectSuccess;
 
             string package = BuildTinyRealArchive();
 
@@ -332,10 +343,18 @@ namespace ArchiveFixer.Tests
             // ② 用完就没了（成功 / 失败都一样）。
             Assert.False(Directory.Exists(scenario.ProbePath), "探针用完必须删掉");
 
-            // ③ 产物目录里不许有探针那一格（保留现场那一档更要紧：它是唯一还看得见的现场）。
+            /*
+             * ③ ⚠ 2026-10-15（口径变了，场景随之消失）：「失败时保留中间产物」已经是**系统固定值 false**
+             * （用户 2026-10-14 拍板：失败 / 取消也默认清干净；那一格连界面一起删了）
+             * ⇒ 原来那句"这一档要求工作区保留现场"已经没有对应的用户场景。
+             * ⛔ 判据不是删掉，而是**反过来钉住新口径**：失败那一档同样不许留现场。
+             * ⚠ 路径形状由上面 ① 保证（探针与暂存同父目录），所以这里的 `Directory.Exists` 判的是真事实。
+             */
             if (expectWorkspaceKept)
             {
-                Assert.True(Directory.Exists(scenario.StageDirectory), "这一档要求工作区保留现场");
+                Assert.False(
+                    Directory.Exists(scenario.StageDirectory),
+                    $"失败 / 取消也默认清干净（「失败时保留中间产物」已按设计删除）⇒ 这一档不该留现场：{scenario.StageDirectory}");
             }
 
             if (Directory.Exists(scenario.StageDirectory))
