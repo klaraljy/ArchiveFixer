@@ -401,10 +401,23 @@ namespace ArchiveFixer.Tests
             Assert.Empty(fakeRestExecutor.PermanentCalls);
             Assert.Empty(fakeRestExecutor.RecycleCalls);
 
-            // ④ 内层包（整组）与源包都还在，被改坏的那一片也还在。
+            /*
+             * ④ 内层包（整组）与源包都还在，被改坏的那一片也还在。
+             *
+             * ⚠ 2026-10-15 订正（这一条**以前从没走到过** —— 那时闸门是瞎的、② 先红了）：
+             * 被改坏的那一片在跑的过程中被**改回规范名**（程序自己的行为，日志逐字
+             * `第 0 层：outer.7z：还原伪装后缀（只改名、内容一个字节不动）：mid.7z.0删除02 → mid.7z.002`）
+             * ⇒ 不能再按**原名**找它 —— 按"规范名那一份在 `stray\` 里"找，并钉住"内容一个字节没动"。
+             */
             Assert.NotEmpty(FindFiles("mid.7z.001"));
             Assert.NotEmpty(FindFiles("mid.7z.002"));
-            Assert.NotEmpty(FindFiles("mid.7z.0删除02"));
+            Assert.NotEmpty(FindFiles("mid.7z.003"));
+
+            Assert.True(
+                FindFiles("mid.7z.002").Any(path => Path.GetDirectoryName(path)!
+                    .EndsWith("stray", StringComparison.OrdinalIgnoreCase)),
+                "被改坏的那一片要留在原地（只改名），实际找到的：" + string.Join("、", FindFiles("mid.7z.002")));
+
             Assert.NotEmpty(FindFiles("outer.7z"));
 
             // ⑤ 有一行 WARN，而且**两边都点到了名**。
@@ -451,7 +464,7 @@ namespace ArchiveFixer.Tests
             Assert.Empty(fakeRestExecutor.RecycleCalls);
 
             Assert.NotEmpty(FindFiles("mid.7z.001"));
-            Assert.NotEmpty(FindFiles("mid.7z.0删除02"));
+            Assert.NotEmpty(FindFiles("mid.7z.002"));
             Assert.NotEmpty(FindFiles("outer.7z"));
 
             Assert.Contains(
@@ -499,10 +512,10 @@ namespace ArchiveFixer.Tests
             Assert.Empty(fakeRestExecutor.PermanentCalls);
             Assert.Empty(fakeRestExecutor.RecycleCalls);
 
-            // ③ 内层包整组（含被改坏的那一片）与源包都还在。
+            // ③ 内层包整组与源包都还在（被改坏的那一片改名之后仍在原地 —— 见用例G ④ 那段说明）。
             Assert.NotEmpty(FindFiles("mid.7z.001"));
             Assert.NotEmpty(FindFiles("mid.7z.002"));
-            Assert.NotEmpty(FindFiles("mid.7z.0删除02"));
+            Assert.NotEmpty(FindFiles("mid.7z.003"));
             Assert.NotEmpty(FindFiles("outer.7z"));
 
             // ④ 有一行 WARN，而且**两边都点到了名**。

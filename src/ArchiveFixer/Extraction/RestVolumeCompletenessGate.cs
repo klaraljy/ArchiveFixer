@@ -289,8 +289,22 @@ namespace ArchiveFixer.Extraction
                  * ⛔ 红线一个字不放松：25 GB 那一次外面留下的是**成品目录里的内容物**
                  * （不在任何其余物里）⇒ 照旧一律拦下；`.z01..z05` 对末片 `.zip` 那种真被拆开的形状
                  * 只要有一片还躺在成品目录里，这道闸门照样拦。
+                 *
+                 * ⛔⛔ **2026-10-15 修掉的那个洞（调试器定案，红线级）**：这一条原来**无条件**跳过，
+                 * 而 `IsInsideDeletableProcessFolders` 的最后一段判的是
+                 * 「路径里有 `<c>.ArchiveFixer.work</c>`」⇒ **整个递归工作区都被它跳掉**。
+                 * 于是**递归路逐层回收**（候选与"另一片"都在工作区里）这道闸门**恒真**：
+                 * 断点实测（夹具 `outer.7z` → `pieces\mid.7z.001/.002/.003` + `stray\mid.7z.0删除02`→改名成
+                 * `mid.7z.002`）：候选 = `…\.ArchiveFixer.work\recursive\<id>\layer-000\output\pieces\mid.7z.00[123]`、
+                 * 排除项 = `…\recursive\<id>`、扫描根 8 个（0..5 在工作区里、6 = `…\out\outer`、7 = `…\out`）
+                 * ⇒ **8 个根全部返回 null** ⇒ 三个真片被当场永久删掉，而同组那片还留在
+                 * `…\layer-000\output\stray\mid.7z.002`（守门 `ChainLayerReclaimTests.用例G/H/H2` 因此一直是红的）。
+                 * 修法 = 与上面那条"工作区让位"同一条理由：**扫描根本身在工作区里时，这一条也不跳过**
+                 * （那里面正是这一次要判的对象）；扫描根在成品目录那几档（`rootInsideWorkspace = false`）
+                 * 一个字没变，⛔ 其余物那一档（真机 CCCC）照旧不拦。
+                 * ⚠ 代价如实记：递归链里若**别的层**产出同名包，现在会多拦一次（方向安全 —— 宁可多留一份过程物）。
                  */
-                if (ProcessArtifactLayout.IsInsideDeletableProcessFolders(file))
+                if (!rootInsideWorkspace && ProcessArtifactLayout.IsInsideDeletableProcessFolders(file))
                 {
                     continue;
                 }
