@@ -2055,6 +2055,53 @@ namespace ArchiveFixer.Extraction
 
                 if (result.Success)
                 {
+                    /*
+                     * ===== 「引擎说成功」不等于「这一层的产物就是对的」（2026-10-16）=====
+                     *
+                     * 与单层路**同一条尺子**：候选解完之后先校验产物，判否 ⇒ **这个候选不算数**
+                     * （清掉它写下的东西、接着试下一个候选）。两条路的口径必须一样
+                     * （AGENTS.md：递归层与单层路行为必须对齐）。
+                     *
+                     * 现场（实测取的运行期事实，⛔ 不是读代码推的）：
+                     * `OutputVerificationGateTests.第一个候选产出0字节_第二个候选正确_最终成功且两个候选都试过`
+                     * —— 候选 1（错密码）在产物目录里留下两个 **0 字节桩文件**，7-Zip 退出码 0；
+                     * 老写法当场 `break` 接受它 ⇒ 收尾校验判否 ⇒ **整单落「解压失败」**，
+                     * 而候选 2（正确密码）**一次都没被试过**（探针逐字 `Passwords=wrong-one`，
+                     * 日志里只有 `密码候选 1/2`）。单层路在同一个形状上会接着试下一个候选并成功。
+                     *
+                     * 例外两条（与单层路那两条例外**同源**）：
+                     * · **产物越界**：那是"写到了目标根之外"这个更具体的问题，比"候选不行"更值得说，
+                     *   交给 <see cref="FinishSuccessfulLayerAsync"/> 的落点校验去报（这里放行）；
+                     * · **候选没有了**（这一条是最后一个 / 已经到了每层尝试上限）：没有下一个可试的，
+                     *   把产物留着交给收尾说清为什么失败（⛔ 不许清掉 —— 那正是单层路
+                     *   "最后一个候选不清盘"那条口径）。
+                     */
+                    bool productsVerified = CandidateProductsVerified(item, candidateManifest, out string candidateVerifyMessage);
+                    bool keepProductsForFailureVerdict =
+                        FindLandingViolation(item.Layer.OutputPath) != null
+                        // ⚠ `lastConsumedCandidateIndex` 是**0 起**的下标（初值 -1，每进一次循环 +1）⇒
+                        // "这一条就是最后一个" = `>= candidates.Count - 1`。
+                        // 第一版写成 `>= candidates.Count` ⇒ 最后一个候选也被判成"还有下一个" ⇒
+                        // 0 字节产物被清掉、整层落「密码错误」—— 被既有守门
+                        // `假引擎成功但产物全是0字节_不是成功_不续解_不搬其余物_源包不动` 当场逮住
+                        // （逐字 `Expected: "解压失败" / Actual: "密码错误"`）。
+                        || lastConsumedCandidateIndex >= candidates.Count - 1
+                        || attempts >= _limits.MaxPasswordAttemptsPerLayer;
+
+                    if (!productsVerified && !keepProductsForFailureVerdict)
+                    {
+                        Log(
+                            "WARN",
+                            $"{layerLabel}：结果校验 —— {candidateVerifyMessage}" +
+                            "（这个候选不算数，继续尝试下一个候选密码）");
+
+                        // 与"换引擎兜底"同一处清法（⛔ 不在这里另写一份"怎么清"）：
+                        // 7z 用错密码会留下 0 字节桩文件，而本层是 `-aos`（跳过已存在）
+                        // ⇒ 不清掉的话下一个候选会被自己的桩文件跳过。
+                        TryResetLayerOutputDirectory(item.Layer.OutputPath);
+                        continue;
+                    }
+
                     succeededPassword = candidate;
                     success = result;
                     lastFailure = null;
@@ -2938,6 +2985,41 @@ namespace ArchiveFixer.Extraction
         /// <see cref="TryTakeSingleStoredEntryAsync"/>）。两条路必须交出**同一形状**的层报告 ——
         /// 落点校验、内层包探测、清单口径一个字都不许分叉（§9.5）。</para>
         /// </summary>
+        /// <summary>
+        /// **候选解完之后校验这一层的产物**（判据唯一出口 = <see cref="OutputVerifier.Verify"/>）。
+        ///
+        /// <para>与单层路 <c>VerifyStageProductsAsync</c> 用的是**同一个**出口、同一套规则
+        /// （0/0 判失败、"实际多于预期也算通过"、拿不到清单 ⇒ 只做非空校验…），
+        /// ⛔ 这里不许另写一套尺子。</para>
+        ///
+        /// <para>清单取"解开它的那个候选"自己列出来的那一份（<c>candidateManifest</c>）：
+        /// 加密头包用错密码时引擎也会回一份残缺清单，拿它当预期会把解得好好的判成不完整 ——
+        /// 与层报告里"采信成功那个候选的清单"是同一条口径。</para>
+        /// </summary>
+        private static bool CandidateProductsVerified(
+            WorkItem item,
+            LayerManifest candidateManifest,
+            out string message)
+        {
+            /*
+             * 清单取不到 ⇒ 与收尾那一处**逐字同一处置**：给一份 `Success = false` 的预期，
+             * `OutputVerifier` 会退化成"只做非空校验"（⛔ 不是"期望 0 个 / 0 字节"——
+             * 那样等于把任何产物都放过）。
+             */
+            ArchiveListResult expected = candidateManifest.Available
+                ? candidateManifest.ToExpected()
+                : new ArchiveListResult
+                {
+                    Success = false,
+                    Message = candidateManifest.Reason
+                };
+
+            OutputVerificationResult verification = OutputVerifier.Verify(item.Layer.OutputPath, expected);
+
+            message = verification.Message;
+            return verification.Verified;
+        }
+
         private async Task<LayerOutcome> FinishSuccessfulLayerAsync(
             WorkItem item,
             ArchiveOperationResult? success,
