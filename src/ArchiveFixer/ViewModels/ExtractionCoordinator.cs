@@ -20938,6 +20938,18 @@ namespace ArchiveFixer.ViewModels
 
                 CleanupFailedTaskWorkspace(task, keepWorkspaceForUnpublished);
 
+                /*
+                 * ⛔ **任务收尾：实时进度清零**（`ArchiveTask.ProgressPercent` 的契约逐字：「它是**瞬时状态**：
+                 * 任务一收尾就必须清掉，否则已完成/失败的任务还会挂着"解压中 45%"（不变量 6…）」）。
+                 *
+                 * 位置选在**所有路径都经过的那一个 finally**（⛔ 不是某条分支里）：
+                 * 实测（守门 `ProgressVisibilityTests.解压进度_落到任务上并且只在跨10个百分点时写日志`）
+                 * 递归那条路上收尾**没有清** ⇒ 跑完的任务 `ProgressPercent` 仍停在 100
+                 * （逐字 `Expected: -1 / Actual: 100`）。另外两处清**都不是统一出口**：开工前清掉上一轮残留那一处
+                 * （本方法中段建 `TaskProgressSink` 时）、递归路 `RecursionStopReason.SourceChanged` 那一支自己那一处。
+                 */
+                task.ClearProgress();
+
                 // 日志收尾：成功 → 只留一行摘要（细节全丢）；失败 / 取消 → 细节全吐出来再收摘要。
                 EndTaskLogCapture(task);
 

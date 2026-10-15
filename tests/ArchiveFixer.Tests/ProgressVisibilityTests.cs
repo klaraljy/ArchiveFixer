@@ -803,8 +803,15 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
+            /*
+             * ⚠ 2026-10-16 订正（这一条以前从没走到过第二句）：递归路的停因分类器
+             * （`TaskOutcomeClassifier.TryResolveRecursionStop`）把 `CorruptedArchive` 落成
+             * **「文件损坏」**（`StatusText.Corrupted`）—— 那是 2026-10-05 起的既定口径
+             * （那个分类器的注释逐字：「⛔ 不许折成"密码错误"」，也不折成笼统的"解压失败"）。
+             * 本条用例的**意图一个字没改**：**不得是成功、也不得留任何进度痕迹**。
+             */
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.Equal(StatusText.ExtractFailed, task.Status);
+            Assert.Equal(StatusText.Corrupted, task.Status);
             Assert.Equal(ArchiveTask.NoProgress, task.ProgressPercent);
 
             // 界面上不许留下任何进度痕迹（"解压失败 100%" 是骗人的）。
