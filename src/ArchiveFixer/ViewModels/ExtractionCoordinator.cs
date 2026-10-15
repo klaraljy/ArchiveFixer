@@ -2273,7 +2273,11 @@ namespace ArchiveFixer.ViewModels
              * 四层嵌套链的峰值会是"四倍单层"（每层的内层包都攒到链尾才清），
              * 而那个模式的初心恰恰是"峰值 ≈ 当前层 + 下一层"。
              */
-            SourcePackageMoveResult? sourceMove = null;
+            /*
+             * ⚠ 2026-10-15：这里原来还有一个 `SourcePackageMoveResult? sourceMove`（装"搬进其余物"的结果）。
+             * 源包那一档只剩「留下 / 彻底删除」，而彻底删除走的是 `PurgeLayerSourcePackage`（返回的是
+             * 失败原因字符串，直接进 `sourceMoveFailure`）⇒ 那个变量没有使用者了，删掉。
+             */
             string? sourceMoveFailure = null;
 
             if (_spaceTightThisBatch && !_spaceTightKeepSourceThisBatch)
@@ -2373,17 +2377,26 @@ namespace ArchiveFixer.ViewModels
                  */
                 logEntries.Add(("INFO", $"{task.LogName}：不删原包 —— 源包一个字节都不动（空间不足的安全档）。"));
             }
-            else if (sourceHandling == SourceHandlingMode.MoveToRest)
+            else if (sourceHandling == SourceHandlingMode.DeleteInPlace)
             {
-                sourceMove = MoveSourcePackageIntoRest(
-                    task, verification, commit, collected, oneClickRun, logEntries);
-
-                if (sourceMove.FailedCount > 0)
-                {
-                    // 内容物已经好了，只有源包没搬成 —— 这不是"解压失败"，而是"这件事没做完"。
-                    sourceMoveFailure =
-                        $"内容物已好，源包未能移入其余物：{sourceMove.Message}（源包仍在原处，内容物不受影响）";
-                }
+                /*
+                 * ③页「源包操作 = 彻底删除」（用户 2026-10-14 口径逐字：「源包操作只针对成功得到内容物的情况，
+                 * 部分完成或者失败自动保留，放在原来位置不要移动，也不用移入其余物里面」
+                 * ＋「就两个选项，留下和彻底删除（默认留下），彻底删除就是没了，不用进回收站，
+                 * 这些都是仅仅针对成功的情况」）。
+                 *
+                 * ⛔ **就地删，⛔ 不搬进其余物**（用户同日订正：「原包一直在原来的位置，
+                 * 选『彻底删除』也是就地删、⛔ 不搬进其余物」）。
+                 *
+                 * 执行体**复用既有那一个**（`PurgeLayerSourcePackage` 的永久删那一支）—— 它的注释逐字写着
+                 * 「当场原地删，不先搬进其余物」，正是这一档要的语义；而 L4 完整性 + L5 收尾复核 + 未取消
+                 * + 属于本任务 + 「半套分卷」那几道闸门**一条都不绕过**（AGENTS.md §9.5 只许有一个出口）。
+                 *
+                 * ⚠ 2026-10-15：这里原来走的是 `SourceHandlingMode.MoveToRest`（搬进其余物）——
+                 * 那一条已经随用户口径删除。
+                 */
+                sourceMoveFailure = PurgeLayerSourcePackage(
+                    task, verification, commit, logEntries, LayerPurgeTrigger.SourceHandlingDelete);
             }
 
             return new PostProcessWorkResult
@@ -2527,13 +2540,21 @@ namespace ArchiveFixer.ViewModels
             /// 普通档 + ③页「删除操作 = 彻底删除」（用户 2026-10-03 拍板的「逐层回收」）：
             /// 续解层跑完就删掉**上一层交给它的那个内层包**；最外层源包留到链尾按两档处理。
             /// </summary>
-            LayerReclaim
+            LayerReclaim,
+
+            /// <summary>
+            /// ③页「源包操作 = 彻底删除」（用户 2026-10-14：源包就两个选项，留下和彻底删除）：
+            /// 成功（定稿 + 校验通过 + 未取消 + 可证完整）之后**就地删掉整组源包**。
+            /// ⛔ 不搬进其余物 —— 执行体就是下面那个「当场原地删」的那一支。
+            /// </summary>
+            SourceHandlingDelete
         }
 
         /// <summary>这次是哪个触发点（进日志；⛔ 措辞只在这里拼一次）。</summary>
         private static string DescribeLayerPurgeTrigger(LayerPurgeTrigger trigger) => trigger switch
         {
             LayerPurgeTrigger.LayerReclaim => "逐层回收（删除操作=彻底删除）",
+            LayerPurgeTrigger.SourceHandlingDelete => "源包操作=彻底删除",
             _ => "空间不足模式"
         };
 
@@ -4595,33 +4616,45 @@ namespace ArchiveFixer.ViewModels
                 $"{rootTask.LogName}：链结束后的补搬 —— 整条续解链已跑完，{destinationDirectory} 里有 " +
                 $"{contentFiles} 个内容物且输出校验通过；本轮没有内容物可定稿、留到现在的源包按设置移入其余物。"));
 
-            SourcePackageMoveResult result = ExecuteSourcePackageMove(
-                rootTask, artifactRoot, SourceMoveTrigger.AfterChain, logEntries);
-
             /*
-             * 搬成功后记账已经是 Done（见 ExecuteSourcePackageMove）；搬失败时**保持"待补搬"**，
-             * 让下一次运行还有机会补上（这一次的失败已经写进任务状态，不会被静默吞掉）。
+             * ⛔ 2026-10-15（用户 2026-10-14 口径）：源包那一档只剩「留下 / 彻底删除」，而**两者都不搬** ——
+             * 留下 = 一个字节都不动；彻底删除 = **就地删**（⛔ 不搬进其余物，用户逐字：
+             * 「原包一直在原来的位置，选『彻底删除』也是就地删、不用移入其余物」）。
+             * ⇒ 这里原来那次 `ExecuteSourcePackageMove(…, SourceMoveTrigger.AfterChain, …)`
+             * （把源包搬进其余物 + 随后按「删除操作」清那一份）**整段删除**，
+             * 改走与别处**同一条闸门链**（唯一出口 `PurgeLayerSourcePackage`）。
              */
-            string? failure = result.FailedCount > 0
-                ? $"内容物已好，源包未能移入其余物：{result.Message}（源包仍在原处，内容物不受影响）"
-                : null;
+            SourceHandlingMode deferredSourceHandling = RunOptions?.SourceHandling
+                ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
 
-            if (failure == null)
+            if (deferredSourceHandling != SourceHandlingMode.DeleteInPlace)
             {
-                /*
-                 * ⚠ 链结束后的补搬有一个**顺序陷阱**（2026-09-25 第 32 条实现删除操作时被测试逮住）：
-                 * 根任务收尾那一刻它的其余物里还只有过程物，源包是**现在**才搬进去的 ——
-                 * 所以"删除操作"那一档必须在这里**再做一次**，否则选了「彻底删除 / 移入回收站」的人
-                 * 会发现"过程物被清了，源包却躺在其余物里"（正是他抱怨过的那种不一致）。
-                 *
-                 * 判据与 RunRestHandlingAsync 完全同一套（RestItemPurger 的五道门槛 + 本批档位）：
-                 * 到得了这里就说明"整条链跑完 + 全链校验通过 + 目录里确实有内容物 + 未取消"，
-                 * 于是把这一份刚搬好的其余物按档处理掉。
-                 */
-                await ApplyRestHandlingAfterChainMoveAsync(rootTask, chainTasks, logEntries, cancellationToken);
+                logEntries.Add((
+                    "INFO",
+                    $"{rootTask.LogName}：按「源包留下」这一档，链结束后源包一个字节都不动"
+                    + $"（留在原处，随时可手工处理）。"));
+
+                return new DeferredSourceMoveWork(logEntries);
             }
 
-            return new DeferredSourceMoveWork(logEntries, failure);
+            /*
+             * 「彻底删除」：走**同一条闸门链**（L4 完整性 + L5 收尾复核 + 未取消 + 属于本任务 + 半套分卷）。
+             *
+             * ⚠ 这里手上**没有**"这一单的定稿 / 输出校验"那两份结构化事实（链尾这一站只有目录事实）
+             * ⇒ **故意不喂** ⇒ `PurgeLayerSourcePackage` 判不出就**什么都不做**并如实写一行 WARN
+             * （它里面 `commit == null || !commit.Attempted || commit.FailedCount > 0` 那一道）。
+             * ⛔ 兜底落在"判不出 ⇒ 不动"，绝不因为用户选了「彻底删除」就放宽证据（AGENTS.md §9.5）。
+             * ⚠ 已知缺口（如实记账）：要让这一档在"第一层只出过程物"这条路上**真能删**，
+             * 得把那一单的定稿结论与输出校验结论喂进来（下一刀做，见 §18 第 3 步）。
+             */
+            PurgeLayerSourcePackage(
+                rootTask,
+                verification: null,
+                commit: null,
+                logEntries,
+                LayerPurgeTrigger.SourceHandlingDelete);
+
+            return new DeferredSourceMoveWork(logEntries);
         }
 
         /// <summary>
@@ -14356,11 +14389,33 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                ExecuteSourcePackageMove(
-                    pieceTask,
-                    consumer.RestDirectoryPath,
-                    SourceMoveTrigger.AfterChain,
-                    logEntries);
+                /*
+                 * ⛔ 2026-10-15（用户 2026-10-14 口径）：这里原来是 `ExecuteSourcePackageMove(…, AfterChain, …)`
+                 * —— 把这一片**搬进消费方的其余物**。源包那一档只剩「留下 / 彻底删除」之后，
+                 * **搬进其余物这条路不存在了**：留下 = 一个字节都不动；彻底删除 = **就地删**。
+                 * ⇒ 与别处**同一条闸门链**（唯一出口 `PurgeLayerSourcePackage`）。
+                 *
+                 * ⚠ 与另一处源片同样的已知缺口：这里手上没有"接手方那一单"的定稿 / 校验两份事实
+                 * ⇒ 故意不喂 ⇒ 执行体判不出就**什么都不做**并如实写 WARN（⛔ 兜底落在"判不出 ⇒ 不动"）。
+                 */
+                SourceHandlingMode pieceHandling = RunOptions?.SourceHandling
+                    ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
+
+                if (pieceHandling == SourceHandlingMode.DeleteInPlace)
+                {
+                    PurgeLayerSourcePackage(
+                        pieceTask,
+                        verification: null,
+                        commit: null,
+                        logEntries,
+                        LayerPurgeTrigger.SourceHandlingDelete);
+                }
+                else
+                {
+                    logEntries.Add((
+                        "INFO",
+                        $"{pieceTask.LogName}：按「源包留下」这一档，这一片一个字节都不动（留在原处，随时可手工处理）。"));
+                }
 
                 _consumedVolumeSources.Remove(piecePath);
             }
@@ -14570,7 +14625,7 @@ namespace ArchiveFixer.ViewModels
              * 这就是"一处改动要落到每一条路径上"那条规矩的反面现场。
              */
             SourceHandlingMode sourceHandling = _spaceTightThisBatch
-                ? SourceHandlingMode.MoveToRest
+                ? SourceHandlingMode.DeleteInPlace
                 : RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
 
             if (_spaceTightThisBatch && _spaceTightKeepSourceThisBatch)
@@ -14582,20 +14637,36 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            if (sourceHandling != SourceHandlingMode.MoveToRest)
+            if (sourceHandling != SourceHandlingMode.DeleteInPlace)
             {
                 logEntries.Add((
                     "INFO",
-                    $"{piece.LogName}：按「源包留在原地」这一档，源片一个字节都不搬（留在原处，随时可手工处理）。"));
+                    $"{piece.LogName}：按「源包留下」这一档，源片一个字节都不动（留在原处，随时可手工处理）。"));
 
                 return;
             }
 
-            ExecuteSourcePackageMove(
+            /*
+             * ⚠ 2026-10-15：这里原来是 `ExecuteSourcePackageMove(piece, consumer.RestDirectoryPath, …)`
+             * —— 把源片**搬进其余物**。用户 2026-10-14 订正之后那一档不存在了（源包操作只剩
+             * 「留下 / 彻底删除」，而彻底删除是**就地删、⛔ 不搬进其余物**）⇒ 改走**同一条闸门链**的
+             * 永久删那一支（唯一出口 `PurgeLayerSourcePackage`）。
+             *
+             * ⛔ **闸门一条都没绕过**：这一支故意**不喂** verification / commit（这里手上没有"接手方那一单"
+             * 的定稿与校验事实）⇒ `PurgeLayerSourcePackage` 判不出就**什么都不做**并如实写一行 WARN
+             * （见它里面 `commit == null || !commit.Attempted || commit.FailedCount > 0` 那一道）——
+             * 兜底落在"判不出 ⇒ 不动"，⛔ 绝不因为用户选了"彻底删除"就放宽证据。
+             * ⚠ 已知缺口（如实记账）：要让这一档真能删，得把**接手方的完整性证据**喂进来
+             * （§18 里那条 `PurgePassThroughRestOfSettledProducer` 用的就是那份证据）。
+             */
+            PurgeLayerSourcePackage(
                 piece,
-                consumer.RestDirectoryPath,
-                SourceMoveTrigger.AfterChain,
-                logEntries);
+                verification: null,
+                commit: null,
+                logEntries,
+                LayerPurgeTrigger.SourceHandlingDelete);
+
+            return;
         }
 
         /// <summary>
@@ -16450,7 +16521,9 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * 安全档（「不删原包」）：源包那一档要按"一个字节都不动"说，
-             * 而不是按上面那样被覆盖成「放入其余物」—— 那会与安全档的真实行为相反。
+             * 而不是按上面那样被覆盖成「彻底删除」—— 那会与安全档的真实行为相反。
+             * ⚠ 2026-10-15：空间不足模式（非安全档）的真实动作 = **定稿 + 校验通过后当场就地删源包**
+             * ⇒ 那一档的措辞对应 `DeleteInPlace`（原来是 `MoveToRest`，已随用户口径删除）。
              */
             bool spaceTightKeepSource = spaceTight && _vm.SpaceTightKeepSource;
 
@@ -16458,7 +16531,7 @@ namespace ArchiveFixer.ViewModels
             {
                 sourceHandling = spaceTightKeepSource
                     ? SourceHandlingMode.KeepInPlace
-                    : SourceHandlingMode.MoveToRest;
+                    : SourceHandlingMode.DeleteInPlace;
 
                 restHandling = RestHandlingModes.Delete;
             }

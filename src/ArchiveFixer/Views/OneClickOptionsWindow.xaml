@@ -234,14 +234,14 @@
                                 </StackPanel>
                             </RadioButton>
 
-                            <RadioButton x:Name="PanelSourceMoveToRestOption"
+                            <RadioButton x:Name="PanelSourceDeleteOption"
                                          x:FieldModifier="public"
                                          GroupName="PanelSourceHandling"
                                          Margin="0,4,0,0"
                                          Checked="SourceHandling_Checked">
                                 <StackPanel>
-                                    <TextBlock Text="放入其余物当中" Style="{StaticResource BodyTextStyle}" />
-                                    <TextBlock Text="成功 + 校验通过之后才搬；失败 / 取消一律原地不动" Style="{StaticResource HintTextStyle}" />
+                                    <TextBlock Text="彻底删除（就地删掉源包，不可恢复）" Style="{StaticResource BodyTextStyle}" />
+                                    <TextBlock Text="成功 + 校验通过之后才删，就地删、⛔ 不搬进其余物；失败 / 取消一律原地不动" Style="{StaticResource HintTextStyle}" />
                                 </StackPanel>
                             </RadioButton>
                         </StackPanel>

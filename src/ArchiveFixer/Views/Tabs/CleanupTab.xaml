@@ -46,18 +46,26 @@
             </Border>
 
             <!-- ==================== 1 源包操作 ==================== -->
-            <GroupBox Header="1 源包操作（解完之后拿源包怎么办）">
+            <!--
+                ⚠ 2026-10-15（用户 2026-10-14 口径）：源包操作**只有两个选项**——
+                「留下」与「彻底删除」，而且**彻底删除是就地删、⛔ 不搬进其余物**
+                （用户逐字：「原包一直在原来的位置，选『彻底删除』也是就地删、不用移入其余物」）。
+                原来那一档「放入其余物当中」整条删除。
+                ⛔ 两者都**仅仅针对成功**：失败 / 部分完成 / 取消 ⇒ 一个字节都不动（不变量 1）。
+            -->
+            <GroupBox Header="1 源包操作（成功解完之后拿源包怎么办）">
                 <StackPanel>
                     <RadioButton x:Name="SourceKeepInPlaceOption"
                                  GroupName="SourceHandling"
                                  IsChecked="{Binding SettingsEditor.SourceHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=KeepInPlace, Mode=TwoWay}"
-                                 Content="原来的位置不动（默认）" />
+                                 Content="留下（默认，原来的位置不动）" />
 
-                    <RadioButton x:Name="SourceMoveToRestOption"
+                    <RadioButton x:Name="SourceDeleteOption"
                                  GroupName="SourceHandling"
                                  Margin="0,6,0,0"
-                                 IsChecked="{Binding SettingsEditor.SourceHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=MoveToRest, Mode=TwoWay}"
-                                 Content="放入其余物当中（和过程物一起放进成品目录的「其余物」）" />
+                                 Foreground="{StaticResource DangerTextBrush}"
+                                 IsChecked="{Binding SettingsEditor.SourceHandling, Converter={StaticResource EnumOptionConverter}, ConverterParameter=DeleteInPlace, Mode=TwoWay}"
+                                 Content="彻底删除（就地删掉源包，不可恢复；⛔ 不搬进其余物）" />
 
                                         <controls:BoxDetail Header="{x:Static models:StatusText.BoxDetailSourceHandlingHeader}"
                                         Detail="{x:Static models:StatusText.BoxDetailSourceHandlingDetail}" />

@@ -17,11 +17,21 @@ namespace ArchiveFixer.Models
     /// </summary>
     public enum SourceHandlingMode
     {
-        /// <summary>把整组源包（分卷组 = 全部卷）移入其余物。**默认档**：整理完删一个目录就干净了。</summary>
-        MoveToRest = 0,
+        /// <summary>源包留在原地，一个字节都不动（**默认档**）。</summary>
+        KeepInPlace = 0,
 
-        /// <summary>源包留在原地，一个字节都不动。</summary>
-        KeepInPlace = 1
+        /// <summary>
+        /// 成功（定稿 + 输出校验通过 + 未取消 + 可证完整 + 属于本任务分卷组）之后**就地彻底删除**源包
+        /// （分卷组 = 整组一起删）。
+        ///
+        /// <para>⛔ **不搬进「其余物」**（用户 2026-10-14 下午订正，逐字：「原包一直在原来的位置，
+        /// 选『彻底删除』也是就地删、⛔ 不搬进其余物」）；⛔ 失败 / 部分完成 / 取消 ⇒ 一个字节都不动
+        /// （不变量 1，任何设置都不改变这一条）。</para>
+        ///
+        /// <para>⚠ 2026-10-15：原来的 <c>MoveToRest</c>（把整组源包移入其余物）**整条删除** ——
+        /// 用户口径是「源包操作……就两个选项，**留下和彻底删除（默认留下）**」。</para>
+        /// </summary>
+        DeleteInPlace = 1
     }
 
     /// <summary>
@@ -1209,7 +1219,13 @@ namespace ArchiveFixer.Models
 
             if (DeleteSourceAfterExtract)
             {
-                SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                /*
+                 * ⚠ 2026-10-15：这里原来迁成 `MoveToRest`（"移入其余物 + 移入回收站"）。
+                 * 现在源包那一档只剩「留下 / 彻底删除（就地）」两种，而这条迁移的**老规矩**是
+                 * 「**不替用户把不可逆的选择重新做一遍**」⇒ 落点只能是 **KeepInPlace（原包一个字节都不动）**，
+                 * ⛔ 绝不迁成 DeleteInPlace（那是不可恢复的删除，用户当年那个开关管的是另一件事）。
+                 */
+                SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
 
                 if (!string.Equals(RestHandlingAfterVerify, RestHandlingModes.Delete, StringComparison.OrdinalIgnoreCase))
                 {
@@ -1224,10 +1240,14 @@ namespace ArchiveFixer.Models
             DangerModeSelfTestStamp = string.Empty;
             DeleteSourceAfterExtract = false;
 
-            // 源包处理档：旧值 DeleteAfterVerify（第三档，2026-09-25 已删）→ 移入其余物 + 移入回收站。
-            if (string.Equals(SourceHandling?.Trim(), "DeleteAfterVerify", StringComparison.OrdinalIgnoreCase))
+            /*
+             * 源包处理档：旧值 DeleteAfterVerify（第三档，2026-09-25 已删）/
+             * MoveToRest（2026-10-15 已删）—— 一律**不迁成删除**（同上一条老规矩）。
+             */
+            if (string.Equals(SourceHandling?.Trim(), "DeleteAfterVerify", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(SourceHandling?.Trim(), "MoveToRest", StringComparison.OrdinalIgnoreCase))
             {
-                SourceHandling = nameof(SourceHandlingMode.MoveToRest);
+                SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
 
                 if (string.Equals(RestHandlingAfterVerify, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
                 {

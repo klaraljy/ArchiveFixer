@@ -382,7 +382,7 @@ namespace ArchiveFixer.Views
             // 2026-09-25 第 32 条之后只剩两档（原地不动 / 放入其余物）：第三档"校验通过后删除"已删掉，
             // 要删源包改成"放入其余物 + 删除操作"（语义更清楚、选项少一个）。
             PanelSourceKeepInPlaceOption.IsChecked = seed.SourceHandling == SourceHandlingMode.KeepInPlace;
-            PanelSourceMoveToRestOption.IsChecked = seed.SourceHandling != SourceHandlingMode.KeepInPlace;
+            PanelSourceDeleteOption.IsChecked = seed.SourceHandling != SourceHandlingMode.KeepInPlace;
 
             /*
              * 「删除操作」两档（第 33 条补进弹窗）：初值取当前设置 —— 用户 2026-09-25 的原话是
@@ -426,12 +426,15 @@ namespace ArchiveFixer.Views
         {
             /*
              * ⚠ 判据写在**会动源文件**的那一档上，兜底留在"什么都不做"那一档（2026-09-25 第 32 条）：
-             * 反过来写（"没勾留在原地就当放入其余物"）时，任何一次界面状态错乱都会变成
-             * "用户没同意过，源包却被搬走了"—— 而搬走是不可逆的。默认档也已经是「留在原地」。
+             * 反过来写（"没勾留下就当彻底删除"）时，任何一次界面状态错乱都会变成
+             * "用户没同意过，源包却被删了"—— 而删除是不可逆的。默认档也已经是「留下」。
+             *
+             * ⚠ 2026-10-15：源包那一档只剩「留下 / 彻底删除」（用户 2026-10-14 口径），
+             * 原来的「放入其余物当中」整条删除 ⇒ 这里读的是"彻底删除"那一颗。
              */
-            if (PanelSourceMoveToRestOption.IsChecked == true)
+            if (PanelSourceDeleteOption.IsChecked == true)
             {
-                return SourceHandlingMode.MoveToRest;
+                return SourceHandlingMode.DeleteInPlace;
             }
 
             return SourceHandlingMode.KeepInPlace;
