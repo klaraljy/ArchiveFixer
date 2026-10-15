@@ -262,15 +262,16 @@ namespace ArchiveFixer.Tests
         // ================================================================ 四、管线接线
 
         /// <summary>
-        /// **默认档一个字不改**（红线）：**不是损坏**那一档，失败任务一个字节都不发布，
-        /// 已解出的产物照旧按③页口径清掉。
+        /// ⛔ **「部分完成 = 一部分成功 + 一部分失败」**（用户 2026-10-16 口径逐字：「**部分完成**就是，
+        /// 到了最后有些内容物完成，但还是有存留的压缩包没有被解压出来，也不分情况」＋
+        /// 「密码错了但是**其他的地方有内容物**这个**肯定是判部分完成**」）。
         ///
-        /// <para>⚠ 2026-10-16 订正：老版本这一条写的是"开关关着 ⇒ 不发布"，现在**开关管不着发布**了
-        /// （触发判据换成结构化事实）⇒ 改成按**失败原因**摆场景：引擎报的是"密码错误"，
-        /// 属于非损坏那一档，所以照旧一个字节都不发布。⛔ 判据意图一个字没改。</para>
+        /// <para>这一条钉**两件事**：① 密码错、但产物目录里真解出来了 5 个非空文件 ⇒ 机器终态是
+        /// **部分完成**（批末色带由此变橙），⛔ 不是「失败」；② 它**仍然一个字节都不发布** ——
+        /// 「要不要发布」只认"损坏"那一档（见下一条），两件事不许混。</para>
         /// </summary>
         [Fact]
-        public async Task 密码错误那一档_失败时不发布任何东西()
+        public async Task 密码错误但有内容物_整体判部分完成_但不发布任何东西()
         {
             Assert.Null(System.Windows.Application.Current);
 
@@ -286,10 +287,38 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
             Assert.False(
                 Directory.Exists(Path.Combine(task.OutputPath!, PartialPublisher.DirectoryName)),
-                "不是损坏档 ⇒ 不许出现「部分完成」目录");
+                "不是损坏档 ⇒ 不许出现「部分完成」目录（终态分类与发布是两件事）");
+            Assert.True(File.Exists(task.CurrentPath), "源包必须原地不动");
+        }
+
+        /// <summary>
+        /// 反面：**一个内容物都没解出来**（单个压缩包 + 密码错）⇒ 机器终态是「失败」。
+        ///
+        /// <para>用户 2026-10-16 口径逐字：「但是如果只有一个压缩包，而且密码错误，那么就不可能有内容物，
+        /// 因为密码都没有试出来」。</para>
+        /// </summary>
+        [Fact]
+        public async Task 密码错误且一个内容物都没有_判失败()
+        {
+            Assert.Null(System.Windows.Application.Current);
+
+            Harness harness = CreateHarness(partialPublish: false);
+            ArchiveTask task = AddTask(harness, CreateSourceFile("partial.7z"));
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(6));
+            harness.Engine.OnExtractAsync = request =>
+            {
+                // 一个文件都不写（密码没试出来 ⇒ 什么都没有）。
+                Directory.CreateDirectory(request.OutputPath!);
+                return Task.FromResult(WrongPassword());
+            };
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.Failed, task.Outcome);
             Assert.True(File.Exists(task.CurrentPath), "源包必须原地不动");
         }
 
@@ -369,7 +398,12 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+            /*
+             * ⚠ 2026-10-16 口径变更（用户：「密码错了但是其他的地方有内容物……肯定是判部分完成」）：
+             * 这一条的场景里产物目录真解出来了 5 个文件 ⇒ 终态是 **部分完成**（⛔ 不是失败）；
+             * 「一个字节都不发布」这条判据一个字没改。
+             */
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
             Assert.False(
                 Directory.Exists(Path.Combine(task.OutputPath!, PartialPublisher.DirectoryName)),
                 "不是损坏档 ⇒ 不许出现「部分完成」目录");

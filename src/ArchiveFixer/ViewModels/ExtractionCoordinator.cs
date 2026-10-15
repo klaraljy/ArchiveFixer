@@ -536,7 +536,7 @@ namespace ArchiveFixer.ViewModels
         /// 它走不到原来那个 <c>finally</c> 里 ⇒ 少了这一句，真机那种"批末才报缺卷"的任务
         /// 会一直停在「未处理」（机器终态没落，汇总与诊断当场打架）。所以判据抽到这里共用。</para>
         /// </summary>
-        private static void FinalizeOutcomeIfPending(ArchiveTask task)
+        private static void FinalizeOutcomeIfPending(ArchiveTask task, bool producedContent = false)
         {
             if (task == null)
             {
@@ -552,13 +552,25 @@ namespace ArchiveFixer.ViewModels
                  * 因为连完整的都没有，这就不是程序的错误」；「如果是完整的…但是有错误，比如说密码、
                  * 和压缩包卷尾缺失了一块，这就是失败的情况了」。
                  *
+                 * ⚠ 2026-10-16 用户当场补的一条（**更宽**，逐字）：「**部分完成**就是，到了最后有些内容物完成，
+                 * 但还是有存留的压缩包没有被解压出来，也不分情况」＋「密码错了但是**其他的地方有内容物**这个
+                 * **肯定是判部分完成**，但是如果只有一个压缩包，而且密码错误，那么就不可能有内容物，
+                 * 因为密码都没有试出来」⇒ **只要"整体已有内容物解出"就落「部分完成」**（不分失败类型），
+                 * 而那一条事实由调用方按**结构化事实**判好传进来（<paramref name="producedContent"/>，
+                 * 唯一出口见 `PartialPublishCandidate.ChainProducedContent`）；判不出 / 没有内容物 ⇒ 照旧 `Failed`。
+                 *
                  * 这一位是"终态由谁落"的**唯一出口**，缺卷那几条路（批首预检 / 批末补判 / 只写了中文状态
                  * 没写终态的分支）全都要经过它 ⇒ 在这里按**状态常量**分流，就不必去每一处各写一遍
                  * （⛔ 不比中文文案：判据是 `StatusText.VolumeMissing` 这个常量本身）。
                  */
                 task.Outcome = task.Status == StatusText.VolumeMissing
                     ? TaskOutcome.PartiallyCompleted
-                    : TaskOutcome.Failed;
+                    /*
+                     * 「有内容物解出 ⇒ 部分完成；什么都没解出来 ⇒ 失败」——**唯一判据出口**
+                     * `TaskOutcomeClassifier.FromProducedContent`（⛔ 不在这里另写三元式：
+                     * 递归核心那条路走的是同一个出口）。
+                     */
+                    : TaskOutcomeClassifier.FromProducedContent(producedContent);
             }
         }
 
@@ -20905,7 +20917,15 @@ namespace ArchiveFixer.ViewModels
                  * （失败 / 部分完成），而这一位此刻还是 `Pending` 的话，一个字节都不会发布 ——
                  * 顺序错了就等于"这一档在对绝大多数失败分支上不生效"。
                  */
-                FinalizeOutcomeIfPending(task);
+                /*
+                 * 「这一单整体有没有内容物解出」这条事实**必须在收口之前读**：
+                 * 候选表在下面那次 `TryPublishPartialProductsAsync` 里会被 `TryRemove` 掉。
+                 */
+                bool chainProducedContent =
+                    _partialPublishCandidates.TryGetValue(task, out PartialPublishCandidate? registeredCandidate)
+                    && registeredCandidate.ChainProducedContent;
+
+                FinalizeOutcomeIfPending(task, chainProducedContent);
                 /*
                  * 部分完成发布（用户 2026-10-02 拍板的口径 A）：把已经解出来、逐条核对过的那部分
                  * 放进 <c>&lt;目标&gt;\&lt;包名&gt;\部分完成\</c>。**必须排在清工作区之前** ——
@@ -20984,6 +21004,18 @@ namespace ArchiveFixer.ViewModels
             public bool Damaged { get; init; }
 
             /// <summary>
+            /// **这一单整体到底有没有内容物解出来**（用户 2026-10-16 口径：「部分完成 = 一部分成功 + 一部分失败」：
+            /// 「密码错了但是其他的地方有内容物这个**肯定是判部分完成**，但是如果只有一个压缩包，而且密码错误，
+            /// 那么就不可能有内容物，因为密码都没有试出来」）。
+            ///
+            /// <para>它是**终态分类**那一档的判据输入（与"要不要发布"是两件事：发布只认"损坏"，见
+            /// <see cref="Damaged"/>）—— 单层路 = 产物目录里真解出来的非空文件够不够
+            /// （唯一出口 <c>ProducedContentGate</c>，与"密码已被证实"用同一把尺子，⛔ 不另定阈值）；
+            /// 递归路 = 链上**任何一层**产出过文件（<c>RecursionLayerReport.OutputFileCount</c>）。</para>
+            /// </summary>
+            public bool ChainProducedContent { get; init; }
+
+            /// <summary>
             /// 引擎给的结构化错误类型（<c>EngineErrorTypes</c> 那一套词表里的名字；空串 = 没给）。
             /// 只为**如实写清"为什么没发布"**：那一行要点名这一单到底属于哪一档。
             /// </summary>
@@ -21015,7 +21047,8 @@ namespace ArchiveFixer.ViewModels
             IReadOnlyList<string>? engineFailedEntries,
             int engineReportedErrorCount,
             bool engineReportedFailure,
-            string? detectedErrorType = null)
+            string? detectedErrorType = null,
+            bool chainProducedContent = false)
         {
             if (task == null || string.IsNullOrWhiteSpace(stagingRoot))
             {
@@ -21032,7 +21065,8 @@ namespace ArchiveFixer.ViewModels
                 EngineReportedErrorCount = engineReportedErrorCount,
                 EngineReportedFailure = engineReportedFailure,
                 Damaged = IsDamagedArchive(detectedErrorType),
-                DetectedErrorType = detectedErrorType ?? string.Empty
+                DetectedErrorType = detectedErrorType ?? string.Empty,
+                ChainProducedContent = chainProducedContent
             };
         }
 
@@ -21089,6 +21123,24 @@ namespace ArchiveFixer.ViewModels
              * （报告里绝不出现明文密码）。所以这一档要么拿现成的逐条清单（正常情形：
              * 解压前列目录那一次就是拿对的密码列的），要么什么都不发布 —— ⛔ 不去猜密码。
              */
+            /*
+             * 链上**任何一层**产出过文件 ⇒ "整体已有内容物解出"（用户 2026-10-16 口径）。
+             *
+             * ⚠ 还必须加上**停下那一层自己的产物目录**：失败层的报告里 `OutputFileCount` 按定义是 0
+             * （`BuildLayerReport` 写的就是 0 —— 那一层没跑成），可它的产物目录里**可能真有东西**。
+             * 实测（假引擎 + 5 个产物文件 + 密码错误）：第一版只读报告 ⇒ 判成"没有内容物"⇒ 终态落 `Failed`，
+             * 与用户口径相反。判据仍走**唯一出口** `ProducedContentGate`，⛔ 不另定阈值。
+             */
+            bool chainProducedContent =
+                result.Layers.Any(layer => layer.OutputFileCount > 0)
+                || (ProducedContentGate.TryMeasure(
+                        failedLayer.OutputPath,
+                        failedLayer.ReportedSubItemErrors,
+                        failedLayer.FailedEntryNames.Count,
+                        out int failedLayerFiles,
+                        out _)
+                    && failedLayerFiles >= ProducedContentGate.MinimumFiles);
+
             RecordPartialPublishCandidate(
                 task,
                 failedLayer.OutputPath,
@@ -21098,7 +21150,8 @@ namespace ArchiveFixer.ViewModels
                 failedLayer.FailedEntryNames,
                 failedLayer.ReportedSubItemErrors,
                 engineReportedFailure: true,
-                detectedErrorType: failedLayer.DetectedErrorType);
+                detectedErrorType: failedLayer.DetectedErrorType,
+                chainProducedContent: chainProducedContent);
         }
 
         /// <summary>
@@ -24514,6 +24567,20 @@ namespace ArchiveFixer.ViewModels
                      *
                      * ⛔ 这里不判断③页开关（收尾时才读）—— 详见 RecordPartialPublishCandidate 的说明。
                      */
+                    /*
+                     * "这一单整体有没有内容物解出"（终态分类那一档的判据输入，用户 2026-10-16 口径）：
+                     * 用**唯一出口** `ProducedContentGate`（与"密码已被证实"同一把尺子，⛔ 不另定阈值）
+                     * 数一次产物目录里真解出来的非空文件。
+                     */
+                    bool producedContent =
+                        ProducedContentGate.TryMeasure(
+                            engineOutputPath,
+                            lastResult?.ReportedSubItemErrors ?? 0,
+                            lastResult?.FailedEntryNames?.Count ?? 0,
+                            out int producedFiles,
+                            out _)
+                        && producedFiles >= ProducedContentGate.MinimumFiles;
+
                     RecordPartialPublishCandidate(
                         task,
                         engineOutputPath,
@@ -24523,7 +24590,8 @@ namespace ArchiveFixer.ViewModels
                         lastResult?.FailedEntryNames,
                         lastResult?.ReportedSubItemErrors ?? 0,
                         engineReportedFailure: lastResult != null && !lastResult.Success,
-                        detectedErrorType: lastResult?.DetectedErrorType);
+                        detectedErrorType: lastResult?.DetectedErrorType,
+                        chainProducedContent: producedContent);
 
                     /*
                      * ===== 引擎原话落日志（用户 2026-09-27：「引擎原话从不落日志」）=====

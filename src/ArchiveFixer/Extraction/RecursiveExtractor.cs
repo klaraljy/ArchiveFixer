@@ -382,11 +382,24 @@ namespace ArchiveFixer.Extraction
         /// "一半做完了"（<c>部分完成</c>）与"什么都没产出"（<c>失败</c>）——
         /// 后者说成"部分完成"会让用户去工作区里找根本不存在的产物；</para>
         ///
-        /// <para>判据只看**事实**（层的成功标记 + 产物文件数 / 字节数），⛔ 不比对任何中文文案
-        /// （AGENTS.md §7）。</para>
+        /// <para>判据只看**事实**（层的成功标记 + 产物文件数 / 字节数 + <see cref="AnyLayerProductsOnDisk"/>），
+        /// ⛔ 不比对任何中文文案（AGENTS.md §7）。</para>
+        ///
+        /// <para>⚠ 2026-10-16 补的第二个来源（用户口径：「密码错了但是**其他的地方有内容物**这个肯定判部分完成」）：
+        /// 失败层的报告里 <c>OutputFileCount</c> **按定义是 0**（`BuildLayerReport` 写的），
+        /// 可它的产物目录里**可能真有东西** —— 真机的错密码候选就会在报错前留下文件
+        /// （`ProducedContentGate` 的注释里那条实测："真机那 10 个错候选里就有留下一个文件的"）。
+        /// 第一版只看报告 ⇒ 把这种"解出来一半再失败"判成「失败」，与口径相反（守门用例当场红）。</para>
         /// </summary>
         public bool ProducedAnyLayerOutput =>
-            Layers.Any(layer => layer.Success || layer.OutputFileCount > 0 || layer.OutputSize > 0);
+            AnyLayerProductsOnDisk
+            || Layers.Any(layer => layer.Success || layer.OutputFileCount > 0 || layer.OutputSize > 0);
+
+        /// <summary>
+        /// **盘上那一半事实**：任意一层的产物目录里真的留下了文件（由收尾那一刻数一次、写进来）。
+        /// 它只在**失败层**上才有独立意义（成功层的文件数已经在 <see cref="Layers"/> 的报告里）。
+        /// </summary>
+        public bool AnyLayerProductsOnDisk { get; init; }
     }
 
     /// <summary>
@@ -5086,6 +5099,26 @@ namespace ArchiveFixer.Extraction
              */
             RemoveCrossBoundaryLinks();
 
+            /*
+             * ⛔ 「这一趟有没有解出过东西」的**盘上那一半**必须在收尾这一刻数一次（见 ProducedAnyLayerOutput）：
+             * 失败层的报告里文件数按定义是 0，可它的产物目录里可能真有东西；而工作区随后就要被清掉/发布，
+             * 晚一步这份事实就没了。
+             *
+             * ⚠ 判据必须走**唯一出口** `ProducedContentGate`（⛔ 不是"目录里有文件就算"）：
+             * 那一档的阈值与"每一条都失败"两条判据是**与错密码签名分开**用的 —— 实测（守门
+             * `ExtractionPipelineFixTests.只解出一个文件时_仍按老口径继续试下一个候选`）：只留下**一个**文件时
+             * 按老口径仍是「密码错误 / 失败」，而"目录里有没有文件"会把这种错密码签名读成"解出过内容物" ⇒
+             * 状态被改成「部分完成」（当场红）。
+             */
+            bool anyLayerProductsOnDisk = layers.Any(layer =>
+                ProducedContentGate.TryMeasure(
+                    layer.OutputPath,
+                    layer.ReportedSubItemErrors,
+                    layer.FailedEntryNames.Count,
+                    out int layerFiles,
+                    out _)
+                && layerFiles >= ProducedContentGate.MinimumFiles);
+
             return new RecursionResult
             {
                 StopReason = stopReason,
@@ -5093,6 +5126,7 @@ namespace ArchiveFixer.Extraction
                 PartiallyCompleted = partiallyCompleted,
                 Decision = decision,
                 Layers = layers.ToList(),
+                AnyLayerProductsOnDisk = anyLayerProductsOnDisk,
                 FinalOutputPath = finalOutputPath,
                 ConsumedVolumeSources = _consumedVolumeSources.ToList(),
                 UnresolvedVolumePieces = _unresolvedVolumePieces.ToList(),

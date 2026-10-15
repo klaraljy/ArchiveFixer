@@ -92,6 +92,19 @@ namespace ArchiveFixer.Models
         }
 
         /// <summary>
+        /// **「有内容物解出 ⇒ 部分完成；什么都没解出来 ⇒ 失败」—— 这条口径的唯一判据**
+        /// （用户 2026-10-16 逐字：「**部分完成**就是，到了最后有些内容物完成，但还是有存留的压缩包
+        /// 没有被解压出来，也不分情况」＋「密码错了但是**其他的地方有内容物**这个肯定判部分完成，
+        /// 但是如果只有一个压缩包，而且密码错误，那么就不可能有内容物，因为密码都没有试出来」）。
+        ///
+        /// <para>两处终态落点共用它（⛔ 不许各写一份三元式）：递归核心那一条走
+        /// <see cref="TryResolveRecursionStop"/>（按停因 + 这一位事实分流）；非递归 / 只写了中文状态
+        /// 的分支走 <c>ExtractionCoordinator.FinalizeOutcomeIfPending</c> 的兜底（把同一份事实传进来）。</para>
+        /// </summary>
+        public static TaskOutcome FromProducedContent(bool producedContent) =>
+            producedContent ? TaskOutcome.PartiallyCompleted : TaskOutcome.Failed;
+
+        /// <summary>
         /// 递归停在半路时，那些**状态本身说不清是哪一档**的停因（内容类）：换密码没有帮助，
         /// 或用户自己喊停。返回 true 时 <paramref name="status"/> / <paramref name="outcome"/>
         /// 已经定好；<c>NeedsDecision</c>（多分支默认不展开）等"正常收起"的停因返回 false，
@@ -138,7 +151,7 @@ namespace ArchiveFixer.Models
                     if (producedAnyLayerOutput)
                     {
                         status = StatusText.PartiallyCompleted;
-                        outcome = TaskOutcome.PartiallyCompleted;
+                        outcome = FromProducedContent(producedContent: true);
                         return true;
                     }
 
