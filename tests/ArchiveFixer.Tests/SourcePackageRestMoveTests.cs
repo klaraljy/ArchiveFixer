@@ -70,9 +70,15 @@ namespace ArchiveFixer.Tests
         /// </para>
         /// </summary>
         [Fact]
-        public async Task 手动只解压_成功后源包也移入其余物()
+        public async Task 手动只解压_彻底删除档_源包就地删掉()
         {
-            Harness harness = CreateHarness(settings => settings.SourceHandling = "MoveToRest");
+            /*
+             * ⚠ 2026-10-15：这一条替换掉旧的 `手动只解压_成功后源包也移入其余物` —— 用户 2026-10-14 口径
+             * 之后「放入其余物」那一档整条删除，手动「只解压」这条地基路径读的是**同一个**源包档
+             * （`SourceHandlingMode`），所以它也必须跟着走「就地删」。
+             */
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
 
             string source = CreateSourceFile("pack.7z");
             ArchiveTask task = AddTask(harness, source);
@@ -82,25 +88,16 @@ namespace ArchiveFixer.Tests
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
             Assert.True(task.IsOutputVerified);
 
+            // ① 源包**没了** —— 就地删（⛔ 不是搬进其余物）。
+            Assert.False(File.Exists(source), "手动「只解压」在彻底删除档下：成功后源包必须被就地删掉");
+
+            // ② ⛔ 不许建「其余物」目录、更不许把源包放进去。
             string restDirectory = Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName);
-            string movedSource = Path.Combine(restDirectory, "pack.7z");
+            Assert.False(Directory.Exists(restDirectory), "彻底删除档不该建其余物目录");
+            Assert.False(File.Exists(Path.Combine(restDirectory, "pack.7z")));
 
-            // 源包：原位没有了，其余物里有；内容一个字节都没变。
-            Assert.False(File.Exists(source), "手动「只解压」成功后源包也该进其余物（用户 2026-09-22 的新规则）");
-            Assert.True(File.Exists(movedSource), $"源包没有落到 {movedSource}");
-            Assert.Equal("not a real archive - the engine is faked in these tests", File.ReadAllText(movedSource));
-            Assert.Equal(SourcePackageMoveState.Done, task.SourcePackageMove);
-            Assert.Equal(movedSource, task.CurrentPath);
-
-            // 内容物照常（其余物里那份源包不算内容物）。
+            // ③ 内容物照常（5 个）。
             Assert.Equal(5, CountFiles(task.OutputPath, excludeArtifactDirectory: true));
-
-            // 日志必须说清"从哪搬到哪"。
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("源包移入其余物", StringComparison.Ordinal) &&
-                        line.Contains(source, StringComparison.Ordinal) &&
-                        line.Contains(movedSource, StringComparison.Ordinal));
         }
 
         /// <summary>
@@ -134,12 +131,16 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// <b>新红线（需求变更里明确保留的那一条）</b>：解压失败 → 源包原地不动，其余物不生成。
+        /// <b>红线（不变量 1）</b>：解压失败 → 源包原地不动，其余物不生成。
+        ///
+        /// <para>⚠ 2026-10-15 强化：档位设成**最危险的那一档**（彻底删除）—— 这一条要证明的是
+        /// "**即使用户选了彻底删除**，失败时也一个字节都不动"（只测默认档证明不了这条红线）。</para>
         /// </summary>
         [Fact]
-        public async Task 手动只解压_失败时_源包留在原地且不生成其余物()
+        public async Task 手动只解压_失败时_源包留在原地且不生成其余物_即使选了彻底删除()
         {
-            Harness harness = CreateHarness(settings => settings.SourceHandling = "MoveToRest");
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
 
             string source = CreateSourceFile("pack.7z");
             ArchiveTask task = AddTask(harness, source);
@@ -154,36 +155,39 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.Equal(StatusText.Corrupted, task.Status);
-            Assert.True(File.Exists(source), "失败时源包必须原地不动");
+            // ⚠ 状态文案：失败在机器终态上就是 `ExtractFailed`（"文件损坏"是引擎给出的**原因**，
+            // 它进 ErrorMessage，不再当状态格 —— 2026-10-15 按实测改）。
+            Assert.Equal(StatusText.ExtractFailed, task.Status);
+            Assert.True(File.Exists(source), "失败时源包必须原地不动（哪怕用户选了彻底删除）");
             Assert.Equal(SourcePackageMoveState.NotAttempted, task.SourcePackageMove);
             Assert.False(
                 Directory.Exists(Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName)),
                 "失败时不该生成其余物目录");
         }
 
-        /// <summary>同一条红线的取消版：用户按了「取消当前」→ 源包原地不动、其余物不生成。</summary>
+        /// <summary>
+        /// 同一条红线的取消版：用户按了「取消当前」→ 源包原地不动、其余物不生成。
+        ///
+        /// <para>⚠ 2026-10-15 两处修正：① 档位设成**最危险的那一档**（彻底删除）；
+        /// ② 取消挂在 <c>OnExtract</c>（"任务真在跑"的那一刻）—— 挂收尾列目录那一刻会走
+        /// `CancelCurrentTask` 的早退支，等于没取消（实测踩到）。</para>
+        /// </summary>
         [Fact]
-        public async Task 手动只解压_取消时_源包留在原地且不生成其余物()
+        public async Task 手动只解压_取消时_源包留在原地且不生成其余物_即使选了彻底删除()
         {
-            Harness harness = CreateHarness(settings => settings.SourceHandling = "MoveToRest");
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
 
             string source = CreateSourceFile("pack.7z");
             ArchiveTask task = AddTask(harness, source);
 
-            // 解压已经做完、进入收尾（收尾第一件事就是列目录）时按下「取消当前」。
-            harness.Engine.OnList = _ =>
-            {
-                if (harness.Engine.Extracted)
-                {
-                    harness.Coordinator.CancelCurrentTask();
-                }
-            };
+            // 任务真在跑的那一刻按下「取消当前」。
+            harness.Engine.OnExtract = _ => harness.Coordinator.CancelCurrentTask();
 
             await harness.Coordinator.StartExtractAsync();
 
             Assert.Equal(StatusText.Cancelled, task.Status);
-            Assert.True(File.Exists(source), "取消时源包必须原地不动");
+            Assert.True(File.Exists(source), "取消时源包必须原地不动（哪怕用户选了彻底删除）");
             Assert.Equal(SourcePackageMoveState.NotAttempted, task.SourcePackageMove);
             Assert.False(
                 Directory.Exists(Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName)),
@@ -1093,6 +1097,15 @@ namespace ArchiveFixer.Tests
             /// <summary>列目录前回调（收尾第一件事就是列目录：用来在那一刻按取消）。</summary>
             public Action<ArchiveRequest>? OnList { get; set; }
 
+            /// <summary>
+            /// **解压那一刻**的回调（"任务真在跑"的时刻）。
+            ///
+            /// <para>⚠ 取消类用例必须挂这里，⛔ 不能挂 <see cref="OnList"/>：实测（2026-10-15）挂在收尾列目录
+            /// 那一刻，`CancelCurrentTask()` 走到"当前没有正在执行的任务可取消"那条早退支 ⇒ 取消根本没发生，
+            /// 用例量到的是"没取消成功"而不是"取消后的行为"（这个坑在本项目已经踩过两次）。</para>
+            /// </summary>
+            public Action<ArchiveRequest>? OnExtract { get; set; }
+
             /// <summary>列目录时报出的条目数；比真实产物多（校验就会不通过）。</summary>
             public int? ExpectedFileCountOverride { get; set; }
 
@@ -1155,6 +1168,8 @@ namespace ArchiveFixer.Tests
                 ExtractOptions options,
                 CancellationToken cancellationToken = default)
             {
+                OnExtract?.Invoke(request);
+
                 if (ExtractFailure != null)
                 {
                     return Task.FromResult(ExtractFailure);
