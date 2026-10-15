@@ -459,7 +459,18 @@ namespace ArchiveFixer.Tests
              */
             parent.IsSelected = false;
 
-            var continuation = new ArchiveTask(Path.Combine(restDirectory, "inner.7z.001"), index)
+            /*
+             * ⚠ 2026-10-15：入口路径**从盘上找**，⛔ 不再写死 `其余物\inner.7z.001` ——
+             * 新口径下"过程物集中进其余物"那条路已删，那一片就留在**成品树**里
+             * （`BuildShapeBChainAsync` 里刚断言过它在成品树里）。写死旧位置会让这一单
+             * 找不到文件、直接"解压失败"（实测：本类三条 shape-B 用例就是这么红的）。
+             */
+            string piecePath = Directory
+                .GetFiles(destinationDirectory, "inner.7z.001", SearchOption.AllDirectories)
+                .FirstOrDefault()
+                ?? Path.Combine(destinationDirectory, "inner.7z.001");
+
+            var continuation = new ArchiveTask(piecePath, index)
             {
                 IsArchive = true,
                 DetectedFormat = "7Z",
@@ -528,13 +539,16 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public async Task 一键处理_彻底删除档_链尾按档处理源包()
+        public async Task 一键处理_彻底删除档_链尾把源包就地删掉_绝不搬进其余物()
         {
             /*
-             * ⚠ 2026-10-15：这一条钉的是**链尾那一站**的行为。当前实现下它**什么都不做**
-             * （见上面那条用例里的"已知缺口"）⇒ 这里如实钉住**当前事实**：
-             * 源包**仍在原处**（⛔ 不是"被搬进其余物"，那条路已随口径删除）。
-             * ⚠ 等缺口补上（把链尾那套事实以结构化证据喂进闸门）之后，这一条要改成"源包被就地删掉"。
+             * ⚠ 2026-10-15：这一条钉的是**链尾那一站**的行为 —— 一键处理把源包处理**延期**到链尾
+             * （见上面那条用例），链尾按「彻底删除」**就地删**（⛔ 不是搬进其余物。
+             * 用户逐字：「原包一直在原来的位置，选『彻底删除』也是就地删、不用移入其余物」）。
+             *
+             * <para>喂进去的是**真证据**：链尾那一站自己算出来的 L4 结论
+             * （`ResultCompletenessClassifier.Classify(rootTask)`）+ 机器终态 + 分卷完整性 + 内容物存在，
+             * ⛔ 不是放宽闸门。</para>
              */
             Harness harness = CreateHarness(
                 settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
@@ -547,7 +561,10 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
-            // ⛔ 无论链尾做没做，"搬进其余物"这条已删的路都不许再出现。
+            // ① 源包**没了** —— 就地删。
+            Assert.False(File.Exists(source), "链尾按「彻底删除」处理之后源包必须被就地删掉");
+
+            // ② ⛔ 它**不许**出现在「其余物」里（"搬进其余物"那条路已随用户口径删除）。
             Assert.False(
                 File.Exists(Path.Combine(
                     task.OutputPath,
@@ -559,9 +576,18 @@ namespace ArchiveFixer.Tests
         // ================================================================ ③ 失败与跨盘
 
         [Fact]
-        public async Task 一键处理_分卷组整组一起移入其余物()
+        public async Task 一键处理_彻底删除档_分卷组整组一起就地删掉()
         {
-            Harness harness = CreateHarness();
+            /*
+             * ⚠ 2026-10-15：这一条替换掉旧的 `一键处理_分卷组整组一起移入其余物` ——
+             * 「搬进其余物」那条路已随用户口径删除，但**"整组一起处理"这条不变量照旧成立**
+             * （决策 D-12：分卷组要么整组都不动、要么整组一起处理，⛔ 绝不许只动其中几卷 ——
+             * 那会让用户再也拼不起来）。
+             *
+             * 判据：① 两卷都**没了**（就地删，⛔ 不在其余物里）；② 没有任何一卷被单独留下。
+             */
+            Harness harness = CreateHarness(
+                settings => settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace));
 
             string first = CreateSourceFile("222.7z.001");
             string second = CreateSourceFile("222.7z.002");
@@ -584,18 +610,20 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractForOneClickAsync();
 
+            // 一键处理的源包处理延期到链尾 ⇒ 补上链尾那一步。
+            await harness.Coordinator.CompleteRootSourcePackagesAfterChainAsync(new[] { task }, new[] { task });
+
             string restDirectory = Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName);
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
-            Assert.False(File.Exists(first), "第一卷没有被搬走");
-            Assert.False(File.Exists(second), "第二卷被落下了（决策 D-12：整组一起移）");
-            Assert.True(File.Exists(Path.Combine(restDirectory, "222.7z.001")));
-            Assert.True(File.Exists(Path.Combine(restDirectory, "222.7z.002")));
 
-            // 分卷清单也要跟着改到新位置（后续清理 / 续解都读它）。
-            Assert.Equal(
-                new[] { Path.Combine(restDirectory, "222.7z.001"), Path.Combine(restDirectory, "222.7z.002") },
-                task.VolumePaths.ToArray());
+            // ① 整组一起就地删掉 —— ⛔ 一卷都不许被落下（那等于把这一组拆散）。
+            Assert.False(File.Exists(first), "第一卷没有被就地删掉");
+            Assert.False(File.Exists(second), "第二卷被落下了（决策 D-12：整组一起处理）");
+
+            // ② ⛔ 不许出现在「其余物」里（"搬进其余物"那条路已随用户口径删除）。
+            Assert.False(File.Exists(Path.Combine(restDirectory, "222.7z.001")));
+            Assert.False(File.Exists(Path.Combine(restDirectory, "222.7z.002")));
         }
 
         // ================================================================ 归集之后源包跟着走

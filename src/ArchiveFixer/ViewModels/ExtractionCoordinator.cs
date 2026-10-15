@@ -4669,19 +4669,20 @@ namespace ArchiveFixer.ViewModels
             /*
              * 「彻底删除」：走**同一条闸门链**（L4 完整性 + L5 收尾复核 + 未取消 + 属于本任务 + 半套分卷）。
              *
-             * ⚠ 这里手上**没有**"这一单的定稿 / 输出校验"那两份结构化事实（链尾这一站只有目录事实）
-             * ⇒ **故意不喂** ⇒ `PurgeLayerSourcePackage` 判不出就**什么都不做**并如实写一行 WARN
-             * （它里面 `commit == null || !commit.Attempted || commit.FailedCount > 0` 那一道）。
-             * ⛔ 兜底落在"判不出 ⇒ 不动"，绝不因为用户选了「彻底删除」就放宽证据（AGENTS.md §9.5）。
-             * ⚠ 已知缺口（如实记账）：要让这一档在"第一层只出过程物"这条路上**真能删**，
-             * 得把那一单的定稿结论与输出校验结论喂进来（下一刀做，见 §18 第 3 步）。
+             * ⚠ 2026-10-15：这里**喂的是真证据**，⛔ 不是放宽闸门 —— 上面刚算出来的
+             * <paramref name="rootCompleteness"/>（L4 唯一出口 <see cref="ResultCompletenessClassifier"/>）
+             * 就是 `PurgeLayerSourcePackage` 那一档要的那份事实；机器终态、分卷完整性、内容物存在与否
+             * 也都在上面逐条查过（任一条不过就在那一条 return 了，走不到这里）。
+             * ⇒ 传 `reclaimVerdict` 之后，执行体不再要求 `commit`/`verification` 那两份"本轮定稿"事实
+             * （链尾本来就没有它们），而 半套分卷闸门 / 幂等 / 路径形状 那几道**照旧全过**。
              */
             PurgeLayerSourcePackage(
                 rootTask,
                 verification: null,
                 commit: null,
                 logEntries,
-                LayerPurgeTrigger.SourceHandlingDelete);
+                LayerPurgeTrigger.SourceHandlingDelete,
+                reclaimVerdict: rootCompleteness);
 
             return new DeferredSourceMoveWork(logEntries);
         }
