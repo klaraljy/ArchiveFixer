@@ -241,7 +241,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         MaxSingleFileSizeReached,
 
-        /// <summary>单层展开比超限，疑似压缩炸弹。</summary>
+        /// <summary>本层展开比超限，疑似压缩炸弹。</summary>
         ExpansionRatioExceeded,
 
         TooManyInnerArchives,
@@ -5613,7 +5613,7 @@ namespace ArchiveFixer.Extraction
                  * 由 `BuildSummary` 的同一个分支取出来（与两义那一档同一种写法）。
                  */
                 RecursionStopReason.MissingVolume => StatusText.RecursionMissingVolumeReason,
-                RecursionStopReason.ExpansionRatioExceeded => "单层展开比超限，疑似压缩炸弹",
+                RecursionStopReason.ExpansionRatioExceeded => "本层展开比超限，疑似压缩炸弹",
                 RecursionStopReason.TooManyInnerArchives => "本层内层归档数量超过上限",
                 RecursionStopReason.PasswordAttemptsExceeded => "已达到密码尝试次数上限（候选还有剩余）",
                 RecursionStopReason.WrongPassword => "密码错误：所有候选都试过了",

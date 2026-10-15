@@ -7132,7 +7132,13 @@ namespace ArchiveFixer.ViewModels
                 ? task
                 : new ArchiveTask(engineArchivePath);
 
-            AppendLog("INFO", $"{task.LogName}：开始递归解压（模式 {mode}，最大 {limits.MaxDepth} 层）。");
+            /*
+             * ⚠ 2026-10-15：这一行原来打印**用户设置里那一档**（真机日志逐字：
+             * `002.7z：开始递归解压（模式 SingleChain，最大 5 层）。`）—— 屏幕上不该再出现档位名
+             * （用户口径：「我不是将单层路给删掉了吗，现在就是全面解压所有分路」）。
+             * 现在如实写"有压缩包就解压"，层数上限照旧是用户设置。
+             */
+            AppendLog("INFO", $"{task.LogName}：开始递归解压（有压缩包就解压，最大 {limits.MaxDepth} 层）。");
 
             /*
              * 递归内层的进度（2026-09-22 补）：复用**同一个** TaskProgressSink，
@@ -22452,13 +22458,18 @@ namespace ArchiveFixer.ViewModels
                 if (!IsSingleLayerRecursion(task))
                 {
                     /*
-                     * 递归模式：第 0 层必须交给引擎（见 DirectReadAppliesTo 的说明），照旧抠取。
+                     * 递归展开：第 0 层必须交给引擎（见 DirectReadAppliesTo 的说明），照旧抠取。
                      * 这一行是**如实说明**，免得用户看到"直读"两个字却发现空间没省下来。
+                     *
+                     * ⚠ 2026-10-15：这里原来打印**用户设置里那一档**（真机日志逐字：
+                     * `递归模式（SingleChain）下第 0 层要交给 7-Zip 逐层展开…`）—— 屏幕上不该再出现
+                     * 那个档位名（用户口径：「我不是将单层路给删掉了吗，现在就是全面解压所有分路」），
+                     * 而这句本身要说的只是"没有走 ZIP 直读"，于是改成那句白话。
                      */
                     AppendLog(
                         "INFO",
-                        $"{task.LogName}：递归模式（{Settings.RecursionMode}）下第 0 层要交给 7-Zip 逐层展开，" +
-                        $"本次不走 ZIP 直读，仍按偏移取出内嵌归档（需要约 {carveBytes / 1024 / 1024} MB 临时空间）。");
+                        $"{task.LogName}：递归展开（有压缩包就解压）下第 0 层要交给 7-Zip 逐层展开，"
+                        + $"本次不走 ZIP 直读，仍按偏移取出内嵌归档（需要约 {carveBytes / 1024 / 1024} MB 临时空间）。");
                 }
                 else
                 {
@@ -22657,7 +22668,7 @@ namespace ArchiveFixer.ViewModels
             {
                 AppendLog(
                     "WARN",
-                    $"{task.LogName}：密码候选共 {candidates.Count} 个，超过单层上限 {attemptLimit} 个，" +
+                    $"{task.LogName}：密码候选共 {candidates.Count} 个，超过每层上限 {attemptLimit} 个，" +
                     $"本层只试前 {maxPasswordAttempts} 个（到上限会明确报“{StatusText.PasswordAttemptLimitReached}”，不会报成密码错误）。");
             }
 
