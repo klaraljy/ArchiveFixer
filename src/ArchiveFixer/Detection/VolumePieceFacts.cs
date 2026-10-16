@@ -44,6 +44,22 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// **RAR 族的首卷**（卡上：格式 RAR + 内容自证是成员 + 专属算法 = 这一组的第一片）。
+        ///
+        /// <para>干什么用（2026-10-16，§29.12 / §29.14）：后缀修正那一档要把它与"单卷归档"分开 ——
+        /// 真机 `14141414` 的 `打包111-L2.png` 就是 RAR 首卷，被"按内容格式给后缀"叫成单卷归档名
+        /// `打包111-L2.rar`，而同组其余片是 `打包111-L2.part2/3.rar` ⇒ 引擎按 `X.rar` 去找 `X.r00`
+        /// ⇒ `Missing volume` ⇒ 整组永远拼不起来。</para>
+        /// </summary>
+        internal static bool IsRarFirstVolumePiece(FileNatureCard? card)
+        {
+            return card != null
+                && card.Format == VolumeContentFormat.Rar
+                && card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                && card.BodyKind == ArchiveBodyKind.VolumeFirstPiece;
+        }
+
+        /// <summary>
         /// **RAR 1.5–4.x（RAR4）的绝对卷号**（用户 2026-10-16 拍板，逐字「同意」）：
         /// 主头 `MHD_FIRSTVOLUME` 认出**第 1 卷** ⇒ 它那一份的**原始字段就是基数**
         /// ⇒ `绝对卷号 = 这一片的原始字段 − 基数 + 1`。

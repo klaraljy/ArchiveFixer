@@ -1226,6 +1226,44 @@ namespace ArchiveFixer.Services
                 return fileName;
             }
 
+            /*
+             * ⚠ 2026-10-16（ProcMon 定案 §29.12 + 尺子裁决 §29.14）：RAR 的**首卷**原来漏在上面那条闸门之外 ——
+             * 卡上它是 `格式=Rar 分卷身份=VolumeMember 专属算法=VolumeFirstPiece`（真机 `14141414` 的
+             * `打包111-L2.png`，payload 就是 `打包111-L1.7z`），于是被"按内容格式给后缀"叫成**单卷归档名**
+             * `打包111-L2.rar`；而同组其余片是 `打包111-L2.part2/3.rar` ⇒ 引擎按 `X.rar` 去找老式编号族的
+             * `X.r00` ⇒ `Missing volume` ⇒ 整组永远拼不起来。
+             *
+             * ⇒ 首卷要给的是**规范卷名** `X.part1.rar`（本程序只认 `partN` 一族，用户 2026-10-16 拍板
+             * 「老编号族少见、少花心思」）。名字仍交给**既有命名出口**拼（拿 `stem.part1.rar` 当本族入口形状的
+             * 样本），⛔ 不在这里手写卷名；拼不出来 ⇒ 照旧不改（判不出 ⇒ 什么都不做）。
+             *
+             * ⚠ **判别事实**（`DebugRunner` 的 `names` 档实测，⛔ 不猜）：
+             * · `风景03.ra删除r` ⇒ `TryGetFirstVolumeName = 风景03.rar` —— **名字自己就读得出"本族第 1 卷"**
+             *   ⇒ 照旧老口径（给 `X.rar`，既有守门 `VolumeEntryPointTests.批首改名_格式未知与末尾纯数字…` 钉着）；
+             * · `打包111-L2.png` ⇒ `TryGetFirstVolumeName = 判不出`、`BelongsToSameGroup(自己,自己) = False`
+             *   —— 名字被改成别的类型（伪装法⑤）⇒ 名字这一路什么都给不出，只能靠卡说"我是这一组的第一片"。
+             * ⇒ 只接**后者**：名字再也给不出"本族第一卷名"时，才按规范卷名改。
+             */
+            FileNatureCard firstVolumeCard = FileNature.Inspect(task.CurrentPath);
+
+            if (VolumePieceFacts.IsRarFirstVolumePiece(firstVolumeCard)
+                && string.IsNullOrWhiteSpace(VolumeGroupDetector.TryGetFirstVolumeName(fileName)))
+            {
+                string rarStem = FileNameHelper.GetArchiveBaseName(task.CurrentPath);
+
+                if (rarStem.Length > 0
+                    && VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(
+                        rarStem + ".part1.rar",
+                        1,
+                        out string rarCanonicalName)
+                    && rarCanonicalName.Length > 0)
+                {
+                    return rarCanonicalName;
+                }
+
+                return fileName;
+            }
+
             string suggestedExtension = task.SuggestedExtension;
 
             if (string.IsNullOrWhiteSpace(suggestedExtension))
