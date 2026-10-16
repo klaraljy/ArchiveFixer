@@ -1078,16 +1078,25 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
-        /// **卡说这一份是"某个分卷组的一片"吗**（唯一出口 = <see cref="FileNature.Inspect"/> 的 `BodyKind`）。
+        /// **这一份"被判成单卷归档名"会是错的吗**（2026-10-16；7z 版先落、RAR 版随 A 簇补上）。
         ///
-        /// <para>为什么这一档必须拦：分卷的片与"单卷归档"**在盘上的名字口径是两套**——
-        /// 前者是 `X.7z.001`、后者是 `X.7z`。按后者改名会在产出层里凭空多出一个名字
-        /// （同一份字节两个名字，`fsutil hardlink list` 两个都列得出来），
-        /// 而收拢那一套随后就会撞上"目标名已被别的文件占用"（⛔ 它绝不覆盖）。</para>
+        /// <para>判据只用卡上的**内容事实**（⛔ 不比名字、⛔ 不猜卷号、⛔ **不用 `FirstVolumeFlag`**）：</para>
+        /// <list type="number">
+        /// <item><description>族必须是 **7z 或 RAR**（这两族的 `<基名>.<ext>` 只有两种含义：单卷归档、或"该组第 1 片"）；</description></item>
+        /// <item><description>内容自述是**某分卷组的一员**（`Membership == VolumeMember`）；</description></item>
+        /// <item><description>而它**不是那一组的第一片**（`BodyKind != VolumeFirstPiece`）⇒ 这个名字会把槽位 1 占掉。</description></item>
+        /// </list>
         ///
-        /// <para>判不出（文件不在了 / 读不出来）⇒ <c>false</c> ⇒ 照旧老口径，⛔ 不额外拦。</para>
+        /// <para>⛔ **为什么不能拦 ZIP 族**（实测教训）：跨盘 ZIP 的**入口就是** `X.zip`（`.zip` 是末片、`.z01` 才是第 1 片）
+        /// ⇒ 把 `X.zi#cp` 建议回 `X.zip` 是**正确**的；拦了它 ⇒ `23232323` 从 ①✔ 变 ①✘（7-Zip 找不到入口 ⇒ 分卷缺失）。</para>
+        ///
+        /// <para>⛔⛔ **为什么不能用 `FirstVolumeFlag` 当权威**（另一条实测教训）：`10101010` 的**入口**那一份
+        /// 卡上逐字是 `BodyKind=VolumeFirstPiece | First=False` —— 对 7z 族这两个字段**并不一致**，
+        /// 用它当闸门会把**入口自己**的槽位 1 撤掉（那份当场从 ①✔ 变 ①✘）。</para>
+        ///
+        /// <para>判不出（文件不在了 / 读不出来 / 族对不上）⇒ <c>false</c> ⇒ 照旧老口径。</para>
         /// </summary>
-        private static bool IsSevenZipVolumePieceByContent(string? path)
+        private static bool IsVolumePieceWithoutFirstSlot(string? path)
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             {
@@ -1099,17 +1108,25 @@ namespace ArchiveFixer.Services
                 ArchiveFixer.Detection.FileNatureCard card = FileNature.Inspect(path!);
 
                 /*
-                 * ⛔ **必须分族**（2026-10-16 实测：一刀切会把跨盘 ZIP 那一族打死）：
-                 *
-                 * · **7z 族**：入口是 `X.7z.001` ⇒ 把一份"某组的一片"建议成 `X.7z`（单卷归档名）
-                 *   会与同一份字节的 `.001` 并存 ⇒ 收拢被"目标名被占用"挡住（`10101010`）；
-                 * · **跨盘 ZIP 族**：入口**就是** `X.zip`（`.zip` 是**末片**、`.z01` 才是第 1 片）
-                 *   ⇒ 把 `X.zi#cp` 建议回 `X.zip` 是**正确**的、必须继续做
-                 *   （实测：拦了它 ⇒ `23232323` 从 ①✔ 变 ①✘，7-Zip 找不到入口 ⇒ 分卷缺失）；
-                 * · RAR 族同理（入口是 `X.part1.rar` / 老式 `X.rar`）。
+                 * ⛔ **7z 族**：只认 `BodyKind`（`VolumeFirstPiece` / `VolumePiece`）——
+                 * 这一份可能就是入口自己，而它的 `Membership` 是 `Unknown`（7z 的头里没有分卷身份字段）
+                 * ⇒ ⛔ 不能要求 `Membership == VolumeMember`（2026-10-16 实测：那样这条闸门会**失效**，
+                 * `10101010` 的入口当场被改回 `<基名>.7z`、判据 ① 又红）。
                  */
-                return card.Format == VolumeContentFormat.SevenZip
+                bool sevenZipPiece = card.Format == VolumeContentFormat.SevenZip
                     && card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece;
+
+                /*
+                 * ⛔ **RAR 族**：头里给不出绝对卷号（RAR4 只有"我是分卷"一个标志、RAR5 才有卷号），
+                 * 判据 = 内容自述是这一族的一员（`Membership == VolumeMember`）**且不是第一片**
+                 * （`BodyKind != VolumeFirstPiece`）⇒ 把它叫成 `X.rar`（单卷归档名 / 老式第 1 卷名）
+                 * 会占掉槽位 1 ⇒ 整组永远凑不起来（真机 A 簇 7 份：`bbb-L2.part2/.part3.rar` 被叫成 `bbb-L2.rar`）。
+                 */
+                bool rarPieceWithoutFirstSlot = card.Format == VolumeContentFormat.Rar
+                    && card.Membership == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                    && card.BodyKind != ArchiveBodyKind.VolumeFirstPiece;
+
+                return sevenZipPiece || rarPieceWithoutFirstSlot;
             }
             catch
             {
@@ -1204,7 +1221,7 @@ namespace ArchiveFixer.Services
              * （它的规范卷名交给卷名那一套：㈠档 `X.7z.001` / 接片 / 收拢）。
              * 判不出（读不到卡 / 不是分卷）⇒ 照旧老口径，一个字不改。
              */
-            if (IsSevenZipVolumePieceByContent(task.CurrentPath))
+            if (IsVolumePieceWithoutFirstSlot(task.CurrentPath))
             {
                 return fileName;
             }
