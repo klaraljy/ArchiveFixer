@@ -9406,6 +9406,30 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **任务表里有几份"某一组的第 1 卷"**（诊断用，只读）：判据 = 卡上 `BodyKind == VolumeFirstPiece`
+        /// （§29.8 的权威，⛔ 不看首卷标志）。用途见接片那一档的判据输入（§29.24：目标层与锚只能按
+        /// "这一片所属的那一组"算，这个数字判"上层交下来的够不够用"）。
+        /// </summary>
+        private int CountFirstVolumeTasksInTable()
+        {
+            int count = 0;
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                string path = task?.CurrentPath ?? string.Empty;
+
+                if (path.Length > 0
+                    && File.Exists(path)
+                    && FileNature.Inspect(path).BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        /// <summary>
         /// **这一组的锚（第 1 卷卡）该从哪拿** —— 两处，按可信度排：
         ///
         /// <list type="number">
@@ -10458,7 +10482,14 @@ namespace ArchiveFixer.ViewModels
                         "认不出它属于哪一族 / 第几卷（规范卷名推不出来；卡上也没给出可用的族与卷号）"
                         + $"｜锚={(groupAnchor == null ? "无" : FileNameHelper.GetFileName(groupAnchor.Path))}"
                         + $"｜层={(layerOverride == null ? "自推" : "外层交下来的")}"
-                        + $"｜目标层={(targetDirEarly.Length > 0 ? "有" : "空")}",
+                        + $"｜目标层={(targetDirEarly.Length > 0 ? "有" : "空")}"
+                        /*
+                         * ⚠ 2026-10-16 再补两个数字（按 §29.24 的结论：目标层与锚**只能按"这一片所属的那一组"**算，
+                         * 而"属于哪一组"必须从上层交下来）—— 这两个数字用于判"上层交下来的够不够用"：
+                         * 任务表里**一份第 1 卷都没有** ⇒ 接片那一档根本没有可借的入口，得让上层把组交下来。
+                         */
+                        + $"｜这一单={(owner == null || string.IsNullOrEmpty(owner.CurrentPath) ? "无" : FileNameHelper.GetFileName(owner.CurrentPath))}"
+                        + $"｜任务表首卷份数={CountFirstVolumeTasksInTable()}",
                         string.Empty,
                         string.Empty,
                         string.Empty);
