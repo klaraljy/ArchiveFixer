@@ -489,6 +489,56 @@ namespace ArchiveFixer.Extraction
         public ExtractionWorkspace? CurrentWorkspace { get; private set; }
 
         /// <summary>
+        /// **同目录里若有"同一个物理文件"的规范卷名那一份，就把交给引擎的路径换成它**
+        /// （用户 2026-10-16 口径的落点：引擎按"打开的那一份的名字"推兄弟卷名 ⇒ 拿到伪装名必然找不到兄弟卷；
+        /// 而规范名那一份就在同目录、同一个 File ID）。真机现场 `21212121` / `24242424` 逐字：
+        /// 入口那一份自己叫 `aaa-L2.part0788839中文1.rar` / `111-L2.part020745382.rar`。
+        ///
+        /// <para>判据全是事实：① 卡上的 `CanonicalVolumeName` 非空且与当前文件名**不同**；
+        /// ② 同目录里存在这个名字；③ `FileIdentity.IsSamePhysicalFile` 判**同一份**。
+        /// ⛔ 任何一条不成立 / 抛异常 ⇒ **原样返回**（一个字节都不改，老口径）。</para>
+        ///
+        /// <para>⛔ 只影响"交给引擎的那一份"：任务账（`task.CurrentPath`）与源包档**一个字都不动** ——
+        /// 否则「源包彻底删除」会删错名字（删掉那个链接、用户那份伪装名反而留着）。</para>
+        /// </summary>
+        internal static string PreferCanonicalSiblingName(string archivePath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath))
+                {
+                    return archivePath;
+                }
+
+                FileNatureCard card = FileNature.Inspect(archivePath);
+                string canonical = card.CanonicalVolumeName;
+
+                if (canonical.Length == 0
+                    || string.Equals(canonical, Path.GetFileName(archivePath), StringComparison.OrdinalIgnoreCase))
+                {
+                    return archivePath;
+                }
+
+                string? directory = Path.GetDirectoryName(archivePath);
+
+                if (string.IsNullOrEmpty(directory))
+                {
+                    return archivePath;
+                }
+
+                string candidate = Path.Combine(directory, canonical);
+
+                return File.Exists(candidate) && FileIdentity.IsSamePhysicalFile(archivePath, candidate)
+                    ? candidate
+                    : archivePath;
+            }
+            catch
+            {
+                return archivePath;
+            }
+        }
+
+        /// <summary>
         /// **「内容物保留关键词」判据**（用户 2026-10-04 的新功能「内容物压缩文件不解压」）。
         ///
         /// <para>命中关键词的内层归档**不当内层归档**：不展开、也不改名（还原工序那一步也不碰它），
@@ -1360,6 +1410,16 @@ namespace ArchiveFixer.Extraction
              * ⛔ 抠出来的只是**副本**，原文件一个字节都不动；⛔ 判不出是不是双面文件 ⇒ 什么都不做（照旧失败）。
              */
             string archivePath = string.IsNullOrWhiteSpace(carvedSource) ? item.ArchivePath : carvedSource!;
+
+            /*
+             * ⚠ 2026-10-16（真机 `21212121` / `24242424` 的判据输入逐字）：这一组的**入口那一份自己的名字**
+             * 可能是伪装名（`aaa-L2.part0788839中文1.rar` / `111-L2.part020745382.rar`），而同一目录里
+             * 躺着**同一个物理文件**的规范卷名（`aaa-L2.part1.rar` / `111-L2.part1.rar`，同一个 File ID）
+             * —— 引擎按伪装名去找兄弟卷必然失败（它按"打开的那份的名字"推兄弟卷名）。
+             * ⇒ **只读地**把交给引擎的那一份换成规范名那一份（⛔ 只在"同一物理文件"时换；
+             * ⛔ 不改任务账 `task.CurrentPath`、⛔ 不动源包档 —— 那两处仍用原来的名字）。
+             */
+            archivePath = PreferCanonicalSiblingName(archivePath);
 
             var options = new ExtractOptions
             {

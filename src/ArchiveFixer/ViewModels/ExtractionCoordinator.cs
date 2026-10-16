@@ -7434,6 +7434,21 @@ namespace ArchiveFixer.ViewModels
 
                         RememberDeferredVolumeDeficit(task, reference.Length > 0 ? reference : stalledPiece);
                     }
+                    else
+                    {
+                        /*
+                         * ⚠ 2026-10-16（困难批 `21212121`）：**这一档原来一个字都不写** —— 批末名单里没有它、
+                         * 日志里也看不出为什么 ⇒ 只能读码猜。缺卷的判据输入必须留痕（同"收卷判据输入"那一档）。
+                         * ⛔ 只写事实，⛔ 不加判据、⛔ 不改任何行为。
+                         */
+                        AppendLog(
+                            "WARN",
+                            $"{task.LogName}：缺卷登记判据输入：停下的那一组是不是自己这一组={IsStalledGroupOwnGroup(task, result)}｜"
+                            + $"这一趟自报的分卷片 {result.UnresolvedVolumePieces.Count} 个｜"
+                            + $"停下的那一片里的参照名=「{(FindStalledVolumePiece(result) is { Length: > 0 } stalledForLog ? FileNameHelper.GetFileName(stalledForLog) : "（空）")}」｜"
+                            + $"任务表里已有别单代表这一组={(FindStalledVolumePiece(result) is { Length: > 0 } represented ? AnyTaskRepresentsGroup(represented) : false)}｜"
+                            + "⇒ 不进批末名单（批末那一站不会为这一组补判）");
+                    }
                 }
 
                 AppendLog(
@@ -12642,13 +12657,15 @@ namespace ArchiveFixer.ViewModels
         /// "完整 / 卷号连续 / 除末片外等大"回答；⛔ 这一层里没有入口包 / 不完整 ⇒ 返回 null，
         /// 由调用方退回既有口径。</para>
         /// </summary>
-        private static VolumeGroup? ResolveGatheredGroupFromEntryLayer(
+        private VolumeGroup? ResolveGatheredGroupFromEntryLayer(
             ArchiveTask task,
             string? entryLayer,
             string? memberPath = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
+                AppendLog("WARN", $"收卷判据输入：{(task == null ? "(没有这一单)" : task.LogName)}｜该拼到哪一层=「{entryLayer ?? string.Empty}」｜这一层不在盘上 ⇒ 判不出完整的一组");
+
                 return null;
             }
 
@@ -12679,19 +12696,27 @@ namespace ArchiveFixer.ViewModels
                     }
                 }
 
+                var judged = new List<string>();
+
                 foreach (VolumeGroup group in VolumeGroupDetector.Group(candidates))
                 {
+                    judged.Add(
+                        $"{group.BaseName}：完整={group.IsComplete} 已找到={group.KnownVolumeCount} 缺卷={(group.MissingVolumeNames.Count > 0 ? string.Join("、", group.MissingVolumeNames) : "（空）")} 说明={group.Note}｜成员={string.Join("、", group.Volumes.Select(item => FileNameHelper.GetFileName(item.Path)))}");
+
                     if (group.IsComplete
                         && !string.IsNullOrWhiteSpace(group.FirstVolumePath)
                         && File.Exists(group.FirstVolumePath))
                     {
+                        AppendLog("INFO", $"收卷判据输入：引用名=「{tailName}」｜这一层同族同基名的候选 {candidates.Count} 个｜⇒ 判出完整的一组：首卷=「{FileNameHelper.GetFileName(group.FirstVolumePath)}」共 {group.KnownVolumeCount} 卷");
+
                         return group;
                     }
                 }
+                AppendLog("WARN", $"收卷判据输入：引用名=「{tailName}」｜这一层同族同基名的候选 {candidates.Count} 个（{string.Join("、", candidates.Select(item => FileNameHelper.GetFileName(item.Path)))}）｜判定器结论：{(judged.Count > 0 ? string.Join(" ； ", judged) : "一个分卷组都没归出来")}｜⇒ 判不出完整的一组");
             }
-            catch
+            catch (Exception ex)
             {
-                // 判不出 ⇒ 什么都不做（调用方退回既有口径）。
+                AppendLog("WARN", $"收卷判据输入：判的时候抛了异常 ⇒ 判不出完整的一组（{ex.GetType().Name}：{ex.Message}）");
             }
 
             return null;
@@ -23208,6 +23233,30 @@ namespace ArchiveFixer.ViewModels
              * 「通用分片」闸门如实报「分卷缺失」+ 给改名建议。
              */
             engineArchivePath = TryRepairBrokenVolumeChainName(task, engineArchivePath);
+
+            /*
+             * ⚠ 2026-10-16（困难批 `21212121`，运行期实测）：**交给引擎的那一份，名字得是它自己的规范名**。
+             *
+             * <para>位置说明（⚠ 用词：这一档**不是**被删掉的那个用户档位 —— 那个是"三档递归模式"里的
+             * 「只解当前这一层」，用户 2026-10-14 拍板删掉、出厂钉死为"展开所有分支"，见
+             * <c>AppSettings.RecursionMode</c> 那段说明。这里是 <c>ExtractSingleTaskAsync</c>：**把一份包交给引擎解**
+             * 那一段；默认档解完接着走递归核心（下面那两处 `IsSingleLayerRecursion(task)` 闸门），
+             * 而"第二大步"（分卷组只解一层）是**任务级事实位** `_volumeStepTasks` 让它只解这一层。）</para>
+             *
+             * <para>现场逐字（那一批日志）：批末补判已经判出「这一组现在齐了（共 3 卷）」并把这一单重跑，
+             * 可引擎拿到的仍是伪装名 ⇒ `7z x … aaa-L2.part0788839中文1.rar` ⇒ 引擎原话
+             * `ERROR = Missing volume : aaa-L2.part0788839中文2.rar` —— 它是按**手上这个名字**推兄弟卷名的，
+             * 而这一组的三卷在盘上叫 `aaa-L2.part1/2/3.rar`（同一层、三卷全在）。</para>
+             *
+             * <para>实测（`fsutil hardlink list`）：`aaa-L2.part0788839中文1.rar` 与 `aaa-L2.part1.rar`
+             * 是**同一个 File ID**（`…014d85`）⇒ 换个名字交给引擎**一个字节都不换**，只是让它认得出这一组。</para>
+             *
+             * <para>⛔ 判据全在读事实（唯一出口 <see cref="RecursiveExtractor.PreferCanonicalSiblingName"/>）：
+             * 卡上的规范名非空且与当前文件名不同 + 同目录里真有那个名字 + 磁盘身份证明是同一份；
+             * 任何一条不成立 / 判不出 ⇒ 原样返回（老口径一个字节不改）。⛔ 只影响"交给引擎的那一份"：
+             * `task.CurrentPath` 与源包那一档一个字都不动（改名、删源包、统计、报告读的都是它）。</para>
+             */
+            engineArchivePath = RecursiveExtractor.PreferCanonicalSiblingName(engineArchivePath);
 
             /*
              * 内嵌 ZIP 的**直读**结论（非 null = 这一次走直读，不产生那份等大的临时副本）。
