@@ -16,7 +16,7 @@ namespace ArchiveFixer.Extraction
     /// 当理由摊平 —— 用户原话："如果是一个文件夹 <c>1111</c> 里面包裹真正的内容物，这个时候你就会把
     /// <c>1111</c> 省略，这是非常大忌"。普通文件夹层一律保留，判据只认"这一层是不是内层包产出的"。</description></item>
     /// <item><description><b>第一层（源包包名目录）与最后一层（最后一个内层包那一层）永不可省</b>；
-    /// 中间层按用户的选择（②页「续解时省略中间层」<c>OmitMiddleContinuationLayers</c>）决定。</description></item>
+    /// 中间层**一律照建**（用户 2026-10-16 拍板删掉了「续解时省略中间层」那一档）。</description></item>
     /// <item><description><b>就地替换</b>：任何"按内容认出是压缩包"的文件（不管后缀多假）在**原来的位置**
     /// 解开，留下一个**以它命名的文件夹**（去掉假后缀的基名）放内容物；真文件原地不动。
     /// 例：<c>AAA\DDDD.mp4</c> ⇒ <c>AAA\DDDD\内容物</c>、<c>AAA\BBBB\CCCCC.mp4</c> ⇒
@@ -177,7 +177,6 @@ namespace ArchiveFixer.Extraction
         /// </para>
         /// </summary>
         public static bool ShouldAddInnerPackageLayer(
-            bool omitMiddleLayers,
             bool parentProducedContent,
             int siblingCount)
         {
@@ -191,14 +190,18 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
-            return !omitMiddleLayers;
+            /*
+             * 中间层**一律照建**（用户 2026-10-16 拍板：删掉「续解时省略中间层」这一档 ——
+             * 它的设置项与界面早已是 0 处，只剩这条参数链在传一个恒为 false 的值）。
+             */
+            return true;
         }
 
         /// <summary>
-        /// **末层永不省**（用户 2026-09-30 红线：第一层与最后一层绝对不能省，只能省中间层）。
+        /// **末层永不省**（用户 2026-09-30 红线：第一层与最后一层绝对不能省）。
         ///
         /// <para>
-        /// "这一层还是中间层吗"这一个事实决定了它能不能被简洁档省掉：**只有还往下解出了内层包的层
+        /// "这一层还是中间层吗"这一个事实决定了它能不能被省掉：**只有还往下解出了内层包的层
         /// 才算中间层**。<paramref name="hasChildLayer"/> 为 false ⇒ 链到头了 ⇒ 它就是**最后一层**
         /// ⇒ 无条件保留自己的包名目录（这也是"内层包名 == 源包名"时照样两层的那条口径）。
         /// </para>
@@ -209,7 +212,6 @@ namespace ArchiveFixer.Extraction
         /// </para>
         /// </summary>
         public static bool ShouldKeepLayerFolder(
-            bool omitMiddleLayers,
             bool parentProducedContent,
             int siblingCount,
             bool hasChildLayer)
@@ -220,7 +222,7 @@ namespace ArchiveFixer.Extraction
                 return true;
             }
 
-            return ShouldAddInnerPackageLayer(omitMiddleLayers, parentProducedContent, siblingCount);
+            return ShouldAddInnerPackageLayer(parentProducedContent, siblingCount);
         }
 
         /// <summary>

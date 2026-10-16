@@ -7,34 +7,33 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 续解层那层目录的规则（用户 2026-09-27 拍板：**首尾必留，中间看开关**）。
+    /// 续解层那层目录的规则（用户 2026-09-27 拍板：**首尾必留**；
+    /// 2026-10-16 删掉了中间那一档开关 ⇒ 中间层**一律照建**）。
     ///
-    /// <para>两档要落成的形状（用户原话里的例子）：</para>
-    /// <list type="bullet">
-    /// <item><description>忠实档（默认，开关关）：<c>111\222\333\444\555\666\内容物</c> —— 每个内层包各占一层；</description></item>
-    /// <item><description>简洁档（开关开）：<c>111\222\666\内容物</c> —— 中间的过路层省掉，
-    /// 第一层（源包名）与最后一层（装着内容物的那个包）永远保留。</description></item>
-    /// </list>
+    /// <para>现在落成的形状：<c>111\222\333\444\555\666\内容物</c> —— 每个内层包各占一层，
+    /// 第一层（源包名）与最后一层（装着内容物的那个包）永远保留。</para>
     ///
-    /// <para>四条边界（每条都有对应用例）：① 只在**干净的单链**上省；② 父任务自己产出了内容物
-    /// （分支）就那一层照建；③ 同一个父任务这一轮认出多个内层包（分支）也照建；
-    /// ④ **过程物名不成层** —— 分卷组的基名不许变成文件夹（真机现场 <c>59768866</c>）。</para>
+    /// <para>三条边界（每条都有对应用例）：① 父任务自己产出了内容物（分支）就那一层照建、
+    /// 内层包解出来的东西并进父层；② 同一个父任务这一轮认出多个内层包（分支）各自占一层；
+    /// ③ **过程物名不成层** —— 分卷组的基名不许变成文件夹（真机现场 <c>59768866</c>）。</para>
     /// </summary>
     public class ContinuationLayerTests
     {
         // ── ① 该不该建这一层（唯一判据 ShouldAddContinuationLevelLayer） ──────────
 
         [Fact]
-        public void 忠实档_干净单链的每一层都建层()
+        public void 干净单链的每一层都建层()
         {
-            // 开关关 = 忠实档：**干净的单链过路层**（父层只出了下一个包）照建 ——
+            // **干净的单链过路层**（父层只出了下一个包）照建 ——
             // 这正是 111\222\333\444\555\666\内容物 那条链。
+            // 2026-10-16：原来还有一档「续解时省略中间层」（简洁档）会把它省掉，用户拍板删掉了那一档，
+            // 于是中间层**一律照建**，这条用例只剩一个答案。
             Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: false, parentProducedContent: false, siblingCount: 1));
+                parentProducedContent: false, siblingCount: 1));
         }
 
         [Fact]
-        public void 父层自己产出了内容物_两种档位都不另建层_并进父层()
+        public void 父层自己产出了内容物_不另建层_并进父层()
         {
             /*
              * 用户 2026-09-27 真机（改口径的那一条）：父层已经有内容物时，内层包解出来的东西
@@ -42,45 +41,31 @@ namespace ArchiveFixer.Tests
              * 在同一个目录里面的，但是你直接把他放进去了，这个就非常的危险了"
              * （现场：`（T250）经济2\国考资料.txt` 旁边本该是 `老王宣传\…`，我们却造了一层 `Sociology\`）。
              *
-             * ⚠ 这是**忠实档也照办**的规则：它跟"中间层省不省"是两个开关维度。
+             * ⚠ 这条与"中间层省不省"从来是两个维度：它一直都在，删掉简洁档之后更是唯一那条。
              */
             Assert.False(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: false, parentProducedContent: true, siblingCount: 1));
-
-            Assert.False(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: true, parentProducedContent: true, siblingCount: 1));
+                parentProducedContent: true, siblingCount: 1));
         }
 
         [Fact]
-        public void 简洁档_干净单链的中间层省略()
-        {
-            // 开关开 + 父任务没产出内容物 + 本轮只有一个内层包 = 干净的单链中间层 → 省掉那一层。
-            Assert.False(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: true, parentProducedContent: false, siblingCount: 1));
-        }
-
-        [Fact]
-        public void 同一层认出多个内层包_两种档位都要建层()
+        public void 同一层认出多个内层包_照样建层()
         {
             // 一个父任务这一轮认出 2 个以上内层包 = 分支：各自一层，否则几个包的内容物会倒进同一层。
             // 这条压过"父层已出内容物"那条（先命中先返回）—— 几个包挤进同一层更糟。
             Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: true, parentProducedContent: false, siblingCount: 2));
+                parentProducedContent: false, siblingCount: 2));
 
             Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: true, parentProducedContent: true, siblingCount: 5));
-
-            Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: false, parentProducedContent: true, siblingCount: 7));
+                parentProducedContent: true, siblingCount: 5));
         }
 
         [Fact]
-        public void 简洁档_父子两种分支只留一层目录()
+        public void 父子两种分支叠加_结论仍是建_而且只建一层()
         {
             // 两种分支叠加（自己出了内容物 + 认出多个内层包）：结论仍是"建"，而且**只建一层**
             //（这一层的目录一个，几个内层包各自再按自己的包名占一层）。
             Assert.True(OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                omitMiddleLayers: true, parentProducedContent: true, siblingCount: 5));
+                parentProducedContent: true, siblingCount: 5));
         }
 
         // ── ② 层名怎么取（过程物名不成层） ──────────────────────────────────────
@@ -168,7 +153,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 续解落点_简洁档的单链中间层不追加()
+        public void 续解落点_层名取不出来时不追加()
         {
             var parent = new ArchiveTask(@"C:\111\222.rar")
             {
@@ -176,7 +161,8 @@ namespace ArchiveFixer.Tests
                 ContentDirectoryPath = @"C:\111\222"
             };
 
-            // 省略那一层：落点就是父任务那一层（内容物最后归到这一层下面）。
+            // 层名取不出来（分卷组那种，或被上面那些规则挡下）：落点就是父任务那一层
+            // （内容物最后归到这一层下面）。
             string directory = OneClickCoordinator.ResolveContinuationOutputDirectory(
                 parent,
                 @"C:\111\222\其余物\333.rar",

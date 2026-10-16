@@ -854,27 +854,12 @@ namespace ArchiveFixer.Models
         /// <summary>归集目标目录。</summary>
         public string CollectTargetDirectory { get; set; } = string.Empty;
 
-        /// <summary>
-        /// 续解时**省略中间层**（用户 2026-09-27 定的「简洁档」，他原话叫"压缩空白目录"）。
-        ///
-        /// <para>
-        /// 链条：<c>111\222.rar</c>（最外层）里套 <c>333</c>→<c>444</c>→<c>555</c>→<c>666</c>（<c>666</c> 里才是内容物）：
-        /// </para>
-        /// <list type="bullet">
-        /// <item><description><b>关（默认＝忠实档）</b>：<c>111\222\333\444\555\666\内容物</c> —— 每层包名都留；</description></item>
-        /// <item><description><b>开（简洁档）</b>：<c>111\222\666\内容物</c> —— 只留**第一层**与**最后一层**，
-        /// 中间那些"只产出下一个包、自己没有内容物"的层不建目录。</description></item>
-        /// </list>
-        ///
-        /// <para>
-        /// ⛔ 两条边界（用户当面确认）：①**只在单链时省略** —— 某一层里出现**并列的多个**内层包（分支）时，
-        /// 那一层照建（退化成忠实档）并写一条日志说明，否则几个包的内容物会并到同一层；
-        /// ②⛔ **永远不许省略第一层（源包名）与最后一层（真正装内容物的那个包）**。
-        /// </para>
-        ///
-        /// <para>中间层里夹带的非包文件（小 .txt / 无用物）**收进其余物**（一个字节都不丢，日志写明）。</para>
-        /// </summary>
-        public bool OmitMiddleContinuationLayers { get; set; }
+        /// <remarks>
+        /// 2026-10-16：这里原来有一档 <c>OmitMiddleContinuationLayers</c>（用户 2026-09-27 定的「简洁档」，
+        /// 打开后只留第一层与最后一层、省掉中间那些"只产出下一个包"的层）。用户 2026-10-16 拍板删除：
+        /// 界面上一处都没有（②页那一格早已撤），代码里只剩一条恒为 false 的参数链在传它。
+        /// ⇒ 中间层**一律照建**（忠实档），判据唯一出口仍是 <c>PackageLayerRules.ShouldAddInnerPackageLayer</c>。
+        /// </remarks>
 
         /// <summary>
         /// 「特定解压」总开关（用户 2026-09-24 拍板：**①「任务」页、一键处理旁边**那一个开关）。
@@ -1058,7 +1043,7 @@ namespace ArchiveFixer.Models
                  * （否则"新装 = 默认"，老配置 = 归一值，两条路给出不同行为）。
                  * ⛔ 判据只有一处实现：`FixedDefaultsTests.出厂默认本来就是系统值` 会逐项比对两边。
                  * ⚠ 本块里只写**原先不是这个值**的那一项（OverwriteMode）；其余各项（RecursionMode /
-                 *    OmitMiddleContinuationLayers / KeepFailedWorkspace / RememberPasswordList …）
+                 *    KeepFailedWorkspace / RememberPasswordList …）
                  *    原本就是系统值，各自在下面写着，⛔ 不许在这里再写一遍（CS1912 会当场打回）。
                  */
                 OverwriteMode = "AutoRenameExisting",
@@ -1125,8 +1110,6 @@ namespace ArchiveFixer.Models
                 MaxExtractedTotalGiB = DefaultMaxExtractedTotalGiB,
                 MaxExtractedFileCount = DefaultMaxExtractedFileCount,
                 MaxExtractionRatio = DefaultMaxExtractionRatio,
-                // 简洁档默认**关**（忠实档：每层包名都留）—— 用户 2026-09-27："我们有一个按钮可以让用户是否打开"
-                OmitMiddleContinuationLayers = false,
 
                 /*
                  * 特定解压（用户 2026-09-24）：总开关默认**关**，规则清单预置默认集
@@ -1327,11 +1310,6 @@ namespace ArchiveFixer.Models
                 RecursionMode = "AllBranches";
             }
 
-            /*
-             * 简洁档（续解省略中间层，用户 2026-09-27）：布尔项，非法值只可能是"缺字段" ——
-             * 缺字段时保持属性默认值 false（忠实档），这里不需要额外归一化。
-             */
-            OmitMiddleContinuationLayers = OmitMiddleContinuationLayers;
 
             /*
              * 源包处理档（决策 D-9）：空 / 非法一律回落默认档 MoveToRest，**旧配置不报错**。
@@ -1472,7 +1450,6 @@ namespace ArchiveFixer.Models
             UnknownFormatAction = "MarkUnknown";     // 未知格式处理（标记未知）
             DefaultExtension = ".7z";                // 默认补充后缀（这一格是**后缀字符串**，出厂值 .7z）
             ConflictAction = ConflictActions.AutoRename; // 同名冲突（系统自动改名，不再询问）
-            OmitMiddleContinuationLayers = false;    // 续解省略中间层（不省略 —— 每一层照建）
             OverwriteMode = "AutoRenameExisting";    // 解压覆盖策略（自动重命名已存在文件）
             KeepFailedWorkspace = false;             // 工作区（失败 / 取消也默认清干净）
             RememberPasswordList = true;             // 记住密码列表（系统默认操作，界面上没有开关）

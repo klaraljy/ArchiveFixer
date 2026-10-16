@@ -91,12 +91,6 @@ namespace ArchiveFixer.ViewModels
                 // 它们本来就不在快照里（详见 CheckRootSourceUnchangedAsync）。
                 CheckRootSourceUnchangedAsync)
             {
-                /*
-                 * 「续解时省略中间层」这一档同样当场从设置里取（与上限同一个理由：改完不重启也要生效）。
-                 * **首层与末层不受它影响** —— 判据只有一处（PackageLayerRules.ShouldKeepLayerFolder），
-                 * 递归发布侧与续解侧读的是同一个出口。
-                 */
-                OmitMiddlePackageLayers = Settings.OmitMiddleContinuationLayers
             };
 
             /*

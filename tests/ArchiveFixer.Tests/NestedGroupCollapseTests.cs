@@ -59,7 +59,7 @@ namespace ArchiveFixer.Tests
         {
             string xaml = ReadRepositoryFile(ExtractionTabXaml);
 
-            // ① 第二段折叠区（覆盖策略 / 中间层 / 分卷拼装）在，而且三段都在它里面。
+            // ① 第二段折叠区（覆盖策略 / 分卷拼装）在，而且两段都在它里面。
             int expanderStart = xaml.IndexOf(
                 "Header=\"{x:Static models:StatusText.NestedExtrasDetailHeader}\"",
                 StringComparison.Ordinal);
@@ -69,10 +69,11 @@ namespace ArchiveFixer.Tests
             int expanderEnd = xaml.IndexOf("</Expander>", expanderStart, StringComparison.Ordinal);
             string inside = xaml.Substring(expanderStart, expanderEnd - expanderStart);
 
+            // ⚠ 2026-10-16：中间那一段（`NestedMiddleLayerDetail`）随"续解时省略中间层"整档删除，
+            // 折叠区里现在只剩覆盖策略与分卷拼装两段。
             foreach (string constant in new[]
                      {
                          "StatusText.NestedOverwriteDetail",
-                         "StatusText.NestedMiddleLayerDetail",
                          "StatusText.NestedVolumeAssemblyDetail"
                      })
             {
@@ -107,10 +108,6 @@ namespace ArchiveFixer.Tests
             // 覆盖策略：必须留着那条真会咬人的事实（UnRAR 没有"自动重命名已存在文件"）。
             Assert.Contains("跳过已存在文件", StatusText.NestedOverwriteDetail, StringComparison.Ordinal);
 
-            // 中间层：两种档位的目录形状都要在（用户就是照这个例子理解的）。
-            Assert.Contains(@"111\222\333\444\555\666\内容物", StatusText.NestedMiddleLayerDetail, StringComparison.Ordinal);
-            Assert.Contains(@"111\222\666\内容物", StatusText.NestedMiddleLayerDetail, StringComparison.Ordinal);
-
             // 分卷拼装：代价必须写清（只接名字 / 不复制字节 / 不改用户文件）。
             Assert.Contains("硬链接", StatusText.NestedVolumeAssemblyDetail, StringComparison.Ordinal);
             Assert.Contains("不改你的文件", StatusText.NestedVolumeAssemblyDetail, StringComparison.Ordinal);
@@ -121,9 +118,7 @@ namespace ArchiveFixer.Tests
                          StatusText.RecursionModeHintLabel,
                          StatusText.NestedExtrasDetailHeader,
                          StatusText.NestedOverwriteDetail,
-                         StatusText.NestedMiddleLayerDetail,
                          StatusText.NestedVolumeAssemblyDetail,
-                         StatusText.NestedMiddleLayerShortHint,
                          StatusText.NestedVolumeAssemblyShortHint
                      })
             {

@@ -407,7 +407,8 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 续解层"要不要给这一层套一个以包名命名的文件夹"（用户 2026-09-27：**首尾必留，中间看开关**）。
+        /// 续解层"要不要给这一层套一个以包名命名的文件夹"（用户 2026-09-27：**首尾必留，中间看开关**；
+        /// 2026-10-16：中间那个开关删掉了，现在中间层一律照建）。
         ///
         /// <para>
         /// ⚠ 判据**只有一处**：<see cref="PackageLayerRules.ShouldAddInnerPackageLayer"/>。
@@ -416,12 +417,10 @@ namespace ArchiveFixer.ViewModels
         /// </para>
         /// </summary>
         internal static bool ShouldAddContinuationLevelLayer(
-            bool omitMiddleLayers,
             bool parentProducedContent,
             int siblingCount)
         {
             return PackageLayerRules.ShouldAddInnerPackageLayer(
-                omitMiddleLayers,
                 parentProducedContent,
                 siblingCount);
         }
@@ -2398,12 +2397,10 @@ namespace ArchiveFixer.ViewModels
             /*
              * ===== 续解层那一层目录（用户 2026-09-27：首尾必留，中间看开关）=====
              *
-             * 判据全部在 <see cref="ShouldAddContinuationLevelLayer"/> 里（唯一实现），这里只做四件事：
+             * 判据全部在 <see cref="ShouldAddContinuationLevelLayer"/> 里（唯一实现），这里只做三件事：
              * ① 按父任务分组（"这一轮认出几个内层包"是按父任务数的）；
              * ② 要建层时取**这一层内层包的包基名**（分卷组取不出来 → 过程物名不成层，见 AppendOwnLayer）；
-             * ③ 简洁档因为**分支**而没能省掉那一层时，写一条日志说清是哪种分支（⛔ 绝不静默）——
-             *    "父任务自己出了内容物"与"这一层认出多个内层包"两种都要说；
-             * ④ 层名被内层包自己那个文件占着时不建层，同样写日志（见下面那一段）。
+             * ③ 层名被内层包自己那个文件占着时不建层，写日志说清（见下面那一段）。
              */
             foreach (IGrouping<ArchiveTask, (ArchiveTask Parent, string ParentName, string File)> group in
                      candidates.GroupBy(candidate => candidate.Parent))
@@ -2417,7 +2414,6 @@ namespace ArchiveFixer.ViewModels
                 bool parentProducedContent = parent.ContentFileCount > 0;
 
                 bool addLayer = ShouldAddContinuationLevelLayer(
-                    Settings.OmitMiddleContinuationLayers,
                     parentProducedContent,
                     children.Count);
 
@@ -2436,13 +2432,6 @@ namespace ArchiveFixer.ViewModels
                     scanLog.Add(
                         $"{parent.FileName}：这一层自己产出了内容物 —— 内层包解出来的东西并进这一层"
                         + "（不再另建以包名命名的目录，免得真内容被埋到上一层文件下面）。");
-                }
-                else if (Settings.OmitMiddleContinuationLayers && addLayer)
-                {
-                    // 简洁档下没省成（这种形状只剩"同一层认出多个内层包"）：说清为什么，⛔ 不许静默。
-                    scanLog.Add(
-                        $"{parent.FileName}：这一层认出了 {children.Count} 个内层包（不是单链）——"
-                        + "「省略中间层」只在单链时生效，这一层照旧各占一层。");
                 }
 
                 foreach ((ArchiveTask _, string parentName, string file) in children)

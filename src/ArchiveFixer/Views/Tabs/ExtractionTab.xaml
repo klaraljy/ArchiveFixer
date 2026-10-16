@@ -188,11 +188,6 @@
                             <TextBlock Style="{StaticResource HintTextStyle}"
                                        Margin="0,4,0,0"
                                        TextWrapping="Wrap"
-                                       Text="{x:Static models:StatusText.NestedMiddleLayerDetail}" />
-
-                            <TextBlock Style="{StaticResource HintTextStyle}"
-                                       Margin="0,4,0,0"
-                                       TextWrapping="Wrap"
                                        Text="{x:Static models:StatusText.NestedVolumeAssemblyDetail}" />
                         </StackPanel>
                     </Expander>

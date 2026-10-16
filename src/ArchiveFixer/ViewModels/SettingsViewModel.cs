@@ -221,30 +221,6 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 续解时**省略中间层**（简洁档，用户 2026-09-27 定的；他原话叫"压缩空白目录"）。
-        ///
-        /// <para>关（默认＝忠实档）：<c>111\222\333\444\555\666\内容物</c>（每层包名都留）；
-        /// 开（简洁档）：<c>111\222\666\内容物</c>（只留第一层与最后一层）。</para>
-        ///
-        /// <para>⛔ 边界：只对**单链**生效（出现并列的多个内层包时那一层照建 + 日志说明）；
-        /// 第一层（源包名）与最后一层（真正装内容物的包）**永远保留**。</para>
-        /// </summary>
-        public bool OmitMiddleContinuationLayers
-        {
-            get => Settings.OmitMiddleContinuationLayers;
-            set
-            {
-                if (Settings.OmitMiddleContinuationLayers == value)
-                {
-                    return;
-                }
-
-                Settings.OmitMiddleContinuationLayers = value;
-                OnPropertyChanged();
-            }
-        }
-
-        /// <summary>
         /// 源包处理档（决策 D-9，三选一）：源包是移入其余物 / 留在原地 / 校验通过后删除。
         ///
         /// 读写的是设置里的字符串（<see cref="AppSettings.SourceHandling"/>），
@@ -1280,7 +1256,6 @@ namespace ArchiveFixer.ViewModels
 
             // 这几个属性是"包在 Settings 外面"的（AppSettings 不实现 INotifyPropertyChanged），
             // 恢复默认 / 重新加载设置之后必须显式通知，否则界面还显示旧值。
-            OnPropertyChanged(nameof(OmitMiddleContinuationLayers));
             OnPropertyChanged(nameof(CustomUnRarExePath));
             OnPropertyChanged(nameof(CustomRarExePath));
             OnPropertyChanged(nameof(KeepBrokenFiles));

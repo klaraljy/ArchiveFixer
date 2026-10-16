@@ -83,18 +83,26 @@ namespace ArchiveFixer.Tests
             return new ArchiveTask(sourceArchive) { OutputPath = PathOf(outputRelativePath) };
         }
 
-        // ================================================================ ① 简洁档（终端落法已退役）
+        // ================================================================ ① 简洁档（整条退役）
 
         /// <summary>
         /// 终端落法那一档**已退役**（用户 2026-09-27："这个可以删除掉，默认就是这样的情况"），
-        /// 场景 B 塌缩也整条退役（"一律不塌缩"）；换上来的是**简洁档**开关，**默认关**（忠实档）。
+        /// 场景 B 塌缩也整条退役（"一律不塌缩"）；顶上来的**简洁档**（续解时省略中间层）也在
+        /// 2026-10-16 被用户拍板删掉（"现在界面上 0 处，删掉"）⇒ 中间层一律照建，
+        /// 设置项、落盘键、VM 属性三处**一起不存在**。
         /// </summary>
         [Fact]
-        public void 设置默认值_简洁档默认关_终端落法与塌缩字段都不在了()
+        public void 设置默认值_简洁档整条退役_落盘键也不再写()
         {
-            AppSettings defaults = AppSettings.CreateDefault();
+            var pathService = new PathService { DataRootDirectory = _root };
+            var service = new SettingsService(pathService);
 
-            Assert.False(defaults.OmitMiddleContinuationLayers, "简洁档默认关 = 忠实档（每层包名都留）");
+            Directory.CreateDirectory(_root);
+            service.Save(AppSettings.CreateDefault());
+
+            string json = File.ReadAllText(pathService.SettingsFilePath, Encoding.UTF8);
+
+            Assert.DoesNotContain("omitMiddleContinuationLayers", json, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>旧配置里那两项（TerminalLayoutMode / CollapseRepeatedFolderLayer）读进来不报错、也不影响新行为。</summary>
@@ -114,14 +122,14 @@ namespace ArchiveFixer.Tests
             AppSettings loaded = service.Load();
 
             /*
-             * ⚠ 2026-10-14：`OmitMiddleContinuationLayers` 已钉死（不省略 = 忠实档），
-             * `RecursionMode` **也**已按用户口径钉成 AllBranches（「单层路已经删了、现在就是全面解压所有分路」）
-             * ⇒ 老配置里存过的 SingleChain 读回来归到"展开所有分支"。
+             * ⚠ 2026-10-14：`RecursionMode` **已按用户口径钉成 AllBranches**
+             * （「单层路已经删了、现在就是全面解压所有分路」）⇒ 老配置里存过的 SingleChain 读回来归到"展开所有分支"。
+             * 2026-10-16：`OmitMiddleContinuationLayers` 整个属性都删了（中间层一律照建），
+             * 所以这里不再有它的断言 —— 老配置里那个键读进来只会被忽略。
              * ⛔「层数」这一格一直都有入口，照旧不迁移（下面那行 4 就是证据）。
              */
             Assert.Equal("AllBranches", loaded.RecursionMode);
             Assert.Equal(4, loaded.MaxRecursionDepth);
-            Assert.False(loaded.OmitMiddleContinuationLayers);
         }
 
         /// <summary>
@@ -141,23 +149,16 @@ namespace ArchiveFixer.Tests
             Directory.CreateDirectory(_root);
 
             AppSettings settings = AppSettings.CreateDefault();
-            settings.OmitMiddleContinuationLayers = true;
 
             service.Save(settings);
 
             string json = File.ReadAllText(pathService.SettingsFilePath, Encoding.UTF8);
 
-            Assert.Contains("omitMiddleContinuationLayers", json, StringComparison.OrdinalIgnoreCase);
+            // 2026-10-16：简洁档整条退役 ⇒ 这个键也不再写（原来这里断言的是"键照旧写、值钉死"）。
+            Assert.DoesNotContain("omitMiddleContinuationLayers", json, StringComparison.OrdinalIgnoreCase);
 
             Assert.DoesNotContain("terminalLayoutMode", json, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("collapseRepeatedFolderLayer", json, StringComparison.OrdinalIgnoreCase);
-
-            /*
-             * 读回来**必须是系统固定值**：这一格已按 2026-10-14 最终设计钉死（不省略 = 忠实档），
-             * ⛔ 键照旧写（序列化位置不变），但值不再由用户决定 —— 所以原来那句
-             * `Assert.True(...)` 改成 `Assert.False(...)`（判据跟着新口径走，不是放宽）。
-             */
-            Assert.False(service.Load().OmitMiddleContinuationLayers);
         }
         /// <summary>
         /// 最大层数的一次性迁移（用户 2026-09-24 拍板"两个上限统一成 10"）。
@@ -885,17 +886,15 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 设置窗口的简洁档开关_读写设置项()
+        public void 设置窗口_简洁档那一格整条退役_没有这个属性可读写()
         {
-            var viewModel = new SettingsViewModel(new AppSettings(), new SettingsService());
-
-            Assert.False(viewModel.OmitMiddleContinuationLayers, "默认关 = 忠实档");
-
-            viewModel.OmitMiddleContinuationLayers = true;
-            Assert.True(viewModel.Settings.OmitMiddleContinuationLayers);
-
-            viewModel.OmitMiddleContinuationLayers = false;
-            Assert.False(viewModel.Settings.OmitMiddleContinuationLayers);
+            /*
+             * 2026-10-16：用户拍板删掉「续解时省略中间层」（"现在界面上 0 处，删掉"）。
+             * 这条用例原来量的是"VM 那一格读写设置项"，现在量的是**它确实不存在了** ——
+             * 属性删掉之后再有人把它加回来，这里会当场红。
+             */
+            Assert.Null(typeof(SettingsViewModel).GetProperty("OmitMiddleContinuationLayers"));
+            Assert.Null(typeof(AppSettings).GetProperty("OmitMiddleContinuationLayers"));
         }
 
         // ================================================================ ⑥ 异常文本脱敏（无 UI 宿主）

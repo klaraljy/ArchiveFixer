@@ -1316,18 +1316,13 @@ namespace ArchiveFixer.Models
         // ⛔ 一个字都没删、没改口径：长说明从"摊在页面上"改成"点一下才展开"，
         // 控件旁边留一句短的（ToolTip 也只留短的），详细的那份在本组最下面那个折叠区里。
 
-        /// <summary>「嵌套与覆盖」最下面那个折叠区的标题（里面装覆盖策略 / 中间层 / 分卷拼装三件事）。</summary>
-        public const string NestedExtrasDetailHeader = "详细说明：覆盖策略 / 中间层 / 分卷拼装（点一下展开）";
+        /// <summary>「嵌套与覆盖」最下面那个折叠区的标题（里面装覆盖策略 / 分卷拼装两件事）。</summary>
+        public const string NestedExtrasDetailHeader = "详细说明：覆盖策略 / 分卷拼装（点一下展开）";
 
         /// <summary>覆盖策略那段（原来摊在「解压覆盖策略」下面）。</summary>
         public const string NestedOverwriteDetail =
             "覆盖策略：RAR 包默认走 UnRAR，而它没有「自动重命名已存在文件」这一档 —— 那里的实际行为是"
             + "「跳过已存在文件」。要覆盖就选「覆盖全部」。";
-
-        /// <summary>「续解时省略中间层」那格的完整说明（原来整段挂在 ToolTip 上）。</summary>
-        public const string NestedMiddleLayerDetail =
-            "续解时省略中间层：默认不勾 = 忠实档（111\\222\\333\\444\\555\\666\\内容物）；"
-            + "勾上 = 简洁档（111\\222\\666\\内容物）。只在单链续解时生效，第一层与最后一层永远保留。";
 
         /// <summary>「容器里装的是分卷第 1 卷」那格的完整说明（原来整段挂在 ToolTip 上）。</summary>
         public const string NestedVolumeAssemblyDetail =
@@ -1335,10 +1330,6 @@ namespace ArchiveFixer.Models
             + "而 set.7z.002/.003 就在同一个文件夹里。默认关：程序只把话说清（首卷在容器里、外面缺的是后续卷）"
             + "并给改名建议，不会动。打开：程序在工作区里接出一套名字成套的卷再解压 —— 同一块盘只接名字"
             + "（硬链接，不复制字节、不改你的文件），跨盘才复制且先查空间；同族两组以上缺首卷或认不准时一律不做。";
-
-        /// <summary>「续解时省略中间层」那格**留着的那句短提示**（长的在折叠区里）。</summary>
-        public const string NestedMiddleLayerShortHint =
-            "只留第一层与最后一层；详细说明见本组最下面那个折叠区。";
 
         /// <summary>「容器里装的是分卷第 1 卷」那格**留着的那句短提示**（长的在折叠区里）。</summary>
         public const string NestedVolumeAssemblyShortHint =

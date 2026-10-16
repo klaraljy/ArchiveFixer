@@ -489,25 +489,13 @@ namespace ArchiveFixer.Extraction
         public ExtractionWorkspace? CurrentWorkspace { get; private set; }
 
         /// <summary>
-        /// 「续解时省略中间层」这一档（②页设置 <c>AppSettings.OmitMiddleContinuationLayers</c>）。
-        ///
-        /// <para>
-        /// **首层与末层永不受它影响**（用户 2026-09-30 红线：第一层与最后一层绝对不能省，
-        /// 只能省中间层）；判据只有一处：<see cref="PackageLayerRules.ShouldKeepLayerFolder"/>。
-        /// 由调用方按设置当场赋值（与 <see cref="RecursionLimits"/> 同一个理由：改完设置不重启也要生效）。
-        /// 默认 false = 忠实档（每层各占一层）。
-        /// </para>
-        /// </summary>
-        public bool OmitMiddlePackageLayers { get; set; }
-
-        /// <summary>
         /// **「内容物保留关键词」判据**（用户 2026-10-04 的新功能「内容物压缩文件不解压」）。
         ///
         /// <para>命中关键词的内层归档**不当内层归档**：不展开、也不改名（还原工序那一步也不碰它），
         /// 它就当一件普通内容物留在结果里。判据唯一出口 <see cref="ContentKeepRules"/>
         /// （包含即命中、大小写不敏感、⛔ 不做通配 / 正则）。</para>
         ///
-        /// <para>由调用方按设置当场赋值（与 <see cref="OmitMiddlePackageLayers"/>、<see cref="RecursionLimits"/>
+        /// <para>由调用方按设置当场赋值（与 <see cref="RecursionLimits"/>
         /// 同一个理由：改完设置不重启也要生效）。默认 <see cref="ContentKeepRules.Empty"/> =
         /// 一个关键词都没有 = 行为与以前**逐字相同**。</para>
         /// </summary>
@@ -5166,7 +5154,6 @@ namespace ArchiveFixer.Extraction
                 WorkspacePublishResult publishResult = workspace.Publish(
                     finalOutputDirectory,
                     inPlaceInnerPackages: inPlace,
-                    omitMiddlePackageLayers: inPlace && OmitMiddlePackageLayers,
                     alreadyReclaimedPaths: ReclaimedProcessArtifacts,
                     intakeStaging: IsInsideWorkspaceRoot(finalOutputDirectory));
 

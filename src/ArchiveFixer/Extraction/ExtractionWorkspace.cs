@@ -252,10 +252,6 @@ namespace ArchiveFixer.Extraction
         /// 这一次递归展开了内层包没有（默认 false = 与加"最少两层 / 就地替换"那两条规则之前**逐字相同**）。
         /// 判据**不在本类**：由调用方从 <see cref="PackageLayerRules"/> 那**一个**出口读，本类只认这一个布尔。
         /// </param>
-        /// <param name="omitMiddlePackageLayers">
-        /// 中间层省不省（②页「续解时省略中间层」这一档）。**首层与末层永不受它影响**：
-        /// 首层是发布目标本身，末层由 <see cref="PackageLayerRules.ShouldKeepLayerFolder"/> 无条件保留。
-        /// </param>
         /// <param name="intakeStaging">
         /// 这次发布的目标**只是"入仓目录"**（中间产物暂存处，定稿时才搬进落点），不是用户看得见的落点。
         ///
@@ -271,7 +267,6 @@ namespace ArchiveFixer.Extraction
         public WorkspacePublishResult Publish(
             string targetDirectory,
             bool inPlaceInnerPackages = false,
-            bool omitMiddlePackageLayers = false,
             IReadOnlyCollection<string>? alreadyReclaimedPaths = null,
             bool intakeStaging = false)
         {
@@ -343,7 +338,6 @@ namespace ArchiveFixer.Extraction
                     movedCount += PublishInPlace(
                         destination,
                         movedFromTo,
-                        omitMiddlePackageLayers,
                         renamed,
                         errors,
                         warnings,
@@ -436,7 +430,6 @@ namespace ArchiveFixer.Extraction
         private int PublishInPlace(
             string destination,
             Dictionary<string, string> movedFromTo,
-            bool omitMiddlePackageLayers,
             List<string> renamed,
             List<string> errors,
             List<string> warnings,
@@ -500,7 +493,6 @@ namespace ArchiveFixer.Extraction
                     parent.EntryCountBeforeReclaim ?? PackageLayerRules.CountEntriesOrUnknown(parent.OutputPath),
                     siblingCount);
                 keepFolderOf[layer] = PackageLayerRules.ShouldKeepLayerFolder(
-                    omitMiddlePackageLayers,
                     parentProducedContent,
                     siblingCount,
                     hasChildLayer: childrenOf.ContainsKey(layer));

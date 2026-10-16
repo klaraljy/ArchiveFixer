@@ -298,7 +298,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 五层链_不省_五层都在()
         {
-            (IReadOnlyList<string> published, IReadOnlyList<string> final) = RunChain(omitMiddleLayers: false);
+            (IReadOnlyList<string> published, IReadOnlyList<string> final) = RunChain();
 
             Assert.True(
                 new[]
@@ -314,18 +314,8 @@ namespace ArchiveFixer.Tests
                 + "　最终树：" + string.Join(" | ", final));
         }
 
-        [Fact]
-        public void 五层链_省中间_只留首尾()
-        {
-            // 中间三层（2222 / 33333 / 444444）都是"只装着下一个包、自己没有内容物"的干净过路层 ⇒ 省掉；
-            // **末层 5555555 绝不省**（用户 2026-09-30 红线：只能省中间层）。
-            (IReadOnlyList<string> published, IReadOnlyList<string> final) = RunChain(omitMiddleLayers: true);
-
-            Assert.True(
-                new[] { @"5555555", @"5555555\内容物", @"5555555\内容物\payload.bin" }.SequenceEqual(final),
-                "省中间档应当只留末层那一层。发布树：" + string.Join(" | ", published)
-                + "　最终树：" + string.Join(" | ", final));
-        }
+        // 2026-10-16：原来这里还有一条 `五层链_省中间_只留首尾`（简洁档），用户拍板删掉那一档之后
+        // 它想量的行为已经不存在了 —— 与上面那条 `五层链_不省_五层都在` 合并，不再留空壳。
 
         // ═════════════════ ④ 首层 / 末层永不省 ═════════════════
 
@@ -340,7 +330,7 @@ namespace ArchiveFixer.Tests
             };
 
             Assert.Equal("111", PackageLayerRules.ResolveBaseName(chain));
-            Assert.True(PackageLayerRules.ShouldKeepLayerFolder(false, parentProducedContent: false, siblingCount: 1, hasChildLayer: false));
+            Assert.True(PackageLayerRules.ShouldKeepLayerFolder(parentProducedContent: false, siblingCount: 1, hasChildLayer: false));
 
             FinalizePlan plan = ResultFinalizer.Plan(
                 new[]
@@ -848,29 +838,28 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 唯一出口_中间层判据的三条优先级()
         {
+            // 2026-10-16：原来每条都拿"简洁档开 / 关"各断一次；用户拍板删掉那一档之后
+            // 中间层**一律照建**，于是每条只剩一个答案（"简洁档省掉"那一半随功能一起删）。
             // ① 多分支：无条件建层（压过下面两条）。
-            Assert.True(PackageLayerRules.ShouldAddInnerPackageLayer(false, parentProducedContent: true, siblingCount: 3));
-            Assert.True(PackageLayerRules.ShouldAddInnerPackageLayer(true, parentProducedContent: true, siblingCount: 3));
+            Assert.True(PackageLayerRules.ShouldAddInnerPackageLayer(parentProducedContent: true, siblingCount: 3));
 
             // ② 父层自己出了内容物：不建层（内层包的东西并进父层）。
-            Assert.False(PackageLayerRules.ShouldAddInnerPackageLayer(false, parentProducedContent: true, siblingCount: 1));
-            Assert.False(PackageLayerRules.ShouldAddInnerPackageLayer(true, parentProducedContent: true, siblingCount: 1));
+            Assert.False(PackageLayerRules.ShouldAddInnerPackageLayer(parentProducedContent: true, siblingCount: 1));
 
-            // ③ 干净的单链过路层：忠实档建、简洁档省。
-            Assert.True(PackageLayerRules.ShouldAddInnerPackageLayer(false, parentProducedContent: false, siblingCount: 1));
-            Assert.False(PackageLayerRules.ShouldAddInnerPackageLayer(true, parentProducedContent: false, siblingCount: 1));
+            // ③ 干净的单链过路层：照建（删掉简洁档之前这里是"忠实档建、简洁档省"）。
+            Assert.True(PackageLayerRules.ShouldAddInnerPackageLayer(parentProducedContent: false, siblingCount: 1));
         }
 
         [Fact]
         public void 唯一出口_末层永不省()
         {
-            // 链到头（没有再往下的层）⇒ 无条件保留：简洁档也照样留。
-            Assert.True(PackageLayerRules.ShouldKeepLayerFolder(true, parentProducedContent: false, siblingCount: 1, hasChildLayer: false));
-            Assert.True(PackageLayerRules.ShouldKeepLayerFolder(true, parentProducedContent: true, siblingCount: 1, hasChildLayer: false));
+            // 链到头（没有再往下的层）⇒ 无条件保留。
+            Assert.True(PackageLayerRules.ShouldKeepLayerFolder(parentProducedContent: false, siblingCount: 1, hasChildLayer: false));
+            Assert.True(PackageLayerRules.ShouldKeepLayerFolder(parentProducedContent: true, siblingCount: 1, hasChildLayer: false));
 
-            // 还有下一层 ⇒ 中间层，按开关走。
-            Assert.False(PackageLayerRules.ShouldKeepLayerFolder(true, parentProducedContent: false, siblingCount: 1, hasChildLayer: true));
-            Assert.True(PackageLayerRules.ShouldKeepLayerFolder(false, parentProducedContent: false, siblingCount: 1, hasChildLayer: true));
+            // 还有下一层 ⇒ 中间层，按上面那两条判据走。
+            Assert.False(PackageLayerRules.ShouldKeepLayerFolder(parentProducedContent: true, siblingCount: 1, hasChildLayer: true));
+            Assert.True(PackageLayerRules.ShouldKeepLayerFolder(parentProducedContent: false, siblingCount: 1, hasChildLayer: true));
         }
 
         [Fact]
@@ -927,7 +916,6 @@ namespace ArchiveFixer.Tests
             {
                 // 多分支（这一层认出多个内层包）⇒ addLayer = true，层名 = 内层包去掉假后缀的基名。
                 bool addLayer = OneClickCoordinator.ShouldAddContinuationLevelLayer(
-                    omitMiddleLayers: true,
                     parentProducedContent: true,
                     siblingCount: 7);
 
@@ -955,7 +943,7 @@ namespace ArchiveFixer.Tests
         /// <para>链条：<c>111.7z → 2222.7z → 33333.7z → 444444.7z → 5555555.7z → 内容物\payload.bin</c>。
         /// 中间三层是"只装着下一个包、自己没有内容物"的干净过路层。</para>
         /// </summary>
-        private static (IReadOnlyList<string> Published, IReadOnlyList<string> Final) RunChain(bool omitMiddleLayers)
+        private static (IReadOnlyList<string> Published, IReadOnlyList<string> Final) RunChain()
         {
             string root = NewTempRoot();
 
@@ -981,8 +969,7 @@ namespace ArchiveFixer.Tests
                 string target = Path.Combine(root, "stage");
                 WorkspacePublishResult published = workspace.Publish(
                     target,
-                    inPlaceInnerPackages: true,
-                    omitMiddlePackageLayers: omitMiddleLayers);
+                    inPlaceInnerPackages: true);
 
                 Assert.True(published.Success, published.Message);
 
