@@ -10453,7 +10453,23 @@ namespace ArchiveFixer.ViewModels
              * `111_.part1.rar`，盘上却只有 `111_.z01` ⇒ 整组永远凑不齐 ⇒ 四片各自去解 ⇒ 全批没一个成功。
              * 判不出族 / 卷号 ⇒ 什么都不做（与老口径那两条早退逐字一致）。
              */
-            if (!VolumeGroupResolver.TryGetCanonicalVolumeName(Path.GetFileName(piecePath), out string canonical))
+            bool nameGaveCanonical = VolumeGroupResolver.TryGetCanonicalVolumeName(Path.GetFileName(piecePath), out string canonical);
+
+            /*
+             * ⚠ 2026-10-16（第 111 轮，困难批 `24242424` 运行期实测）：**名字出口给得出答案也不算数**的那一格。
+             *
+             * <para>现场逐字：这一片叫 `111-L2.part020745382.rar`（伪装法把卷标记那一截并进了基名）⇒
+             * 名字出口**回它自己**（`TryGetFirstVolumeName` 也回它自己：那把尺子压根没认出卷标记、
+             * 按"本体"读成第 1 卷）⇒ 下面那条"问卡"的路**一次都没进过** ⇒ 它被按自己的名字落进
+             * 「111」这一层，整组永远收不齐 ⇒ 判据 ① 红。而**卡上有真话**：
+             * `内容=VolumeMember 卷号=2 专属算法=VolumePiece`。</para>
+             *
+             * <para>⇒ 判据走唯一出口 <see cref="VolumePieceFacts.NameOnlyGuessedItselfAsFirstVolume"/>
+             * （名字是猜的 + 内容是"第 N≥2 片"；⛔ 跨盘 ZIP 本体 `*.zip` 不算猜 —— 那个 1 是那一族的入口锚点，
+             * 翻它会打红 `13131313`/`23232323`，今天 g93/g94 对照实测）。⛔ 判不出 ⇒ 与老口径逐字相同。</para>
+             */
+            if (!nameGaveCanonical
+                || VolumePieceFacts.NameOnlyGuessedItselfAsFirstVolume(FileNameHelper.GetFileName(piecePath), nature))
             {
                 /*
                  * ⚠ 2026-10-14（官方环台 `10101010`，日志逐字）：**名字判不出族时，问卡**。

@@ -127,6 +127,21 @@ namespace ArchiveFixer.Detection
              */
             if (byName is int named)
             {
+                /*
+                 * ⚠ 2026-10-16（第 111 轮，困难批 `24242424` 运行期实测 + 用户口径「底层识别永远最高优先级」）：
+                 * 名字这一格**是猜的**时让位给内容 —— 闸门见
+                 * <see cref="NameOnlyGuessedItselfAsFirstVolume"/>。
+                 *
+                 * <para>现场逐字：`111-L2.part020745382.rar` 卡上 `VolumeMember 卷号=2 专属算法=VolumePiece`，
+                 * 名字却是 `卷号=1 本族第1卷=它自己 基名=111-L2.part020745382` ⇒ 与同层
+                 * `111-L2.part1.rar`（基名 `111-L2`）不同组 ⇒ 收卷窗口只匹配到它自己 1 个
+                 * （日志逐字 `引用名=「111-L2.part020745382.rar」｜这一层同族同基名的候选 1 个`）。</para>
+                 */
+                if (named == 1 && NameOnlyGuessedItselfAsFirstVolume(name, card))
+                {
+                    return card.VolumeNumber;
+                }
+
                 return named;
             }
 
@@ -172,6 +187,30 @@ namespace ArchiveFixer.Detection
         /// `<剥掉伪装尾巴的名字>.001`（这一族的入口形状），它才给出 `X.7z.001`；直接喂 `X.7z` 会给成
         /// `X.001`（丢族段）。标记写法仍由那个出口决定，⛔ 这里不自己拼最终名。</para>
         /// </summary>
+        /// <summary>
+        /// **名字这一格是不是"猜的"**（用户 2026-10-16 口径：「底层识别一定大于名字，底层识别永远最高优先级」）：
+        /// 那把名字尺子**压根没认出卷标记**、于是按"本体"把它读成第 1 卷（`TryGetFirstVolumeName` 回来
+        /// 就是它自己），而**卡上的内容是"我是这一组的一片、绝对卷号 N≥2"** ⇒ 名字那句是猜的、内容那句是读出来的。
+        ///
+        /// <para>⛔ **跨盘 ZIP 那一族整个排除在外**（`*.zip` 本体）：它的名字读出来的 1 **不是猜的** ——
+        /// 那是这一族的入口形状（消费方靠它找这一组的入口），而内容那个号是**盘号**。实测两张卡逐字摆一起看：
+        /// `333-L2.zip`（困难批 `13131313` 跑完后的树）＝名字 `卷号=1 本族第1卷=333-L2.zip（它自己）`、
+        /// 内容 `VolumeMember 卷号=3 专属算法=VolumePiece 按内容算的片数=3`；而 RAR 那一片
+        /// `111-L2.part020745382.rar` ＝名字 `卷号=1 本族第1卷=它自己`、内容 `VolumeMember 卷号=2`。
+        /// 两张卡形状一样、**结论必须相反**：前者翻成 3 的实测后果 = `13131313` / `23232323` 当场从
+        /// 「①✔ 成品 1」变成「①✘ 成品 0」（日志逐字多出 `333-L2.zip：引擎调用 … -aoa` ⇒
+        /// `解压失败：333-L2.zip，原因：分卷压缩包缺少必要分卷`）。</para>
+        ///
+        /// <para>⛔ 另一条闸门：本族第 1 卷名**必须就是它自己**。跨盘 ZIP 末片的名字被改坏时（实测
+        /// `bbb-L2.zi#cp`：名字读出来的是**另一个名字** `bbb-L2.zip` —— 那一族的入口形状）**不算猜**。</para>
+        /// </summary>
+        internal static bool NameOnlyGuessedItselfAsFirstVolume(string name, FileNatureCard card) =>
+            card.BodyKind == ArchiveBodyKind.VolumePiece
+            && card.VolumeNumber is int contentNumber
+            && contentNumber >= 2
+            && string.Equals(VolumeGroupDetector.TryGetFirstVolumeName(name), name, StringComparison.OrdinalIgnoreCase)
+            && !name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+
         internal static string ResolveCanonicalName(
             string path,
             FileNatureCard card,
@@ -195,6 +234,20 @@ namespace ArchiveFixer.Detection
              * 第 N 卷名。（7z 那一族名字里没有卷标记时它给不出，才走下面那两步。）</para>
              */
             string? firstByName = VolumeGroupDetector.TryGetFirstVolumeName(name);
+
+            /*
+             * ⚠ 2026-10-16（与上面槽位同一格）：名字自己就是"本族第 1 卷的样子"、而内容说它是第 N≥2 片时，
+             * **别拿它自己当命名样本** —— 那会把伪装数字一起并进基名（`111-L2.part020745382.part2.rar`）。
+             * 改用**这一组第 1 卷的名字**（锚）当样本：它就是本族的入口形状，交给同一个命名出口
+             * （与下面 RAR4 那一档同一个做法，⛔ 不在这里自己拼名字）。
+             */
+            if (NameOnlyGuessedItselfAsFirstVolume(name, card)
+                && groupAnchorCard != null
+                && groupAnchorCard.Path.Length > 0
+                && groupAnchorCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+            {
+                firstByName = FileNameHelper.GetFileName(groupAnchorCard.Path);
+            }
 
             /*
              * ⚠ 2026-10-16（RAR4 那一档）：这一片的名字被伪装法吃过卷标记（`bbb-L2.txt` / `bbb-L2.jpg`）
