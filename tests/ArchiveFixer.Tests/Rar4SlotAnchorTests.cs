@@ -22,12 +22,12 @@ namespace ArchiveFixer.Tests
             bool first,
             int? raw,
             ArchiveBodyKind bodyKind = ArchiveBodyKind.VolumePiece) => new()
-        {
-            Format = format,
-            FirstVolumeFlag = first,
-            RawVolumeField = raw,
-            BodyKind = bodyKind
-        };
+            {
+                Format = format,
+                FirstVolumeFlag = first,
+                RawVolumeField = raw,
+                BodyKind = bodyKind
+            };
 
         /// <summary>这一组第 1 卷的卡（权威 = `BodyKind`；⚠ 真机上它常常 `FirstVolumeFlag=False`）。</summary>
         private static FileNatureCard FirstVolume(int? raw, bool firstVolumeFlag = false) =>
