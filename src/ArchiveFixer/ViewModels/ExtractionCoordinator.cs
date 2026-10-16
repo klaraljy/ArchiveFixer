@@ -11569,12 +11569,44 @@ namespace ArchiveFixer.ViewModels
                 FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath),
                 memberPath);
             var sources = new List<string>(task.VolumePaths);
+            string groupBaseForScan = FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath);
 
             foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
             {
                 string path = other?.CurrentPath ?? string.Empty;
 
-                if (path.Length > 0 && MemberBelongsToGroup(path, tailName))
+                if (path.Length == 0 || !File.Exists(path))
+                {
+                    continue;
+                }
+
+                if (MemberBelongsToGroup(path, tailName))
+                {
+                    sources.Add(path);
+                    continue;
+                }
+
+                /*
+                 * ⚠ 2026-10-16（真机 `29292929` 的永久判据输入逐字）：片名被改烂时，**名字那把尺子**
+                 * （`MemberBelongsToGroup`）会把**同组的兄弟片**判成"不是这一组"（`pack111-L2` 对
+                 * `tailName=pack111-L2.zip`）⇒ 这一趟只收到入口自己 ⇒ 兄弟片永远接不进来，
+                 * 而接片那一档又借不到组（同一时刻 `任务表首卷份数=0`，见 §29.25）。
+                 *
+                 * <para>⇒ 补一条**内容证据**（卡那一条路，用户口径「先看看底层能够识别到文件是什么东西」）：
+                 * 卡上自报"我是这一族的成员"（`Membership == VolumeMember` 或 `BodyKind == VolumeFirstPiece`）
+                 * **且卡上的基名与这一组相关**（`BaseNameRelatedToGroup`，既有的弱证据尺子）才收进来。
+                 * ⛔ 判不出就不收（老口径一个字不改）；后面那三道闸门（同组 / 卷号一份对一份 / 整组自洽）
+                 * 照旧一条不落 —— 这一条只是把"兄弟片在哪"这一件事从名字换成内容。</para>
+                 */
+                FileNatureCard otherCard = FileNature.Inspect(path);
+
+                bool cardSaysMember =
+                    otherCard.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                    || otherCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece;
+
+                if (cardSaysMember
+                    && groupBaseForScan.Length > 0
+                    && BaseNameRelatedToGroup(otherCard.ArchiveBaseName, groupBaseForScan))
                 {
                     sources.Add(path);
                 }
