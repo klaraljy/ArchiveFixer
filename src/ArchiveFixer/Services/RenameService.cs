@@ -1,3 +1,4 @@
+using ArchiveFixer.Detection;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Models;
@@ -1076,6 +1077,45 @@ namespace ArchiveFixer.Services
             return tail.Length > 0 && tail.All(char.IsDigit);
         }
 
+        /// <summary>
+        /// **卡说这一份是"某个分卷组的一片"吗**（唯一出口 = <see cref="FileNature.Inspect"/> 的 `BodyKind`）。
+        ///
+        /// <para>为什么这一档必须拦：分卷的片与"单卷归档"**在盘上的名字口径是两套**——
+        /// 前者是 `X.7z.001`、后者是 `X.7z`。按后者改名会在产出层里凭空多出一个名字
+        /// （同一份字节两个名字，`fsutil hardlink list` 两个都列得出来），
+        /// 而收拢那一套随后就会撞上"目标名已被别的文件占用"（⛔ 它绝不覆盖）。</para>
+        ///
+        /// <para>判不出（文件不在了 / 读不出来）⇒ <c>false</c> ⇒ 照旧老口径，⛔ 不额外拦。</para>
+        /// </summary>
+        private static bool IsSevenZipVolumePieceByContent(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                ArchiveFixer.Detection.FileNatureCard card = FileNature.Inspect(path!);
+
+                /*
+                 * ⛔ **必须分族**（2026-10-16 实测：一刀切会把跨盘 ZIP 那一族打死）：
+                 *
+                 * · **7z 族**：入口是 `X.7z.001` ⇒ 把一份"某组的一片"建议成 `X.7z`（单卷归档名）
+                 *   会与同一份字节的 `.001` 并存 ⇒ 收拢被"目标名被占用"挡住（`10101010`）；
+                 * · **跨盘 ZIP 族**：入口**就是** `X.zip`（`.zip` 是**末片**、`.z01` 才是第 1 片）
+                 *   ⇒ 把 `X.zi#cp` 建议回 `X.zip` 是**正确**的、必须继续做
+                 *   （实测：拦了它 ⇒ `23232323` 从 ①✔ 变 ①✘，7-Zip 找不到入口 ⇒ 分卷缺失）；
+                 * · RAR 族同理（入口是 `X.part1.rar` / 老式 `X.rar`）。
+                 */
+                return card.Format == VolumeContentFormat.SevenZip
+                    && card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece;
+            }
+            catch
+            {
+                return false;
+            }
+        }
         private static string BuildFixByDetectedFormatFileName(ArchiveTask task, RenameOptions options)
         {
             string oldPath = task.CurrentPath;
@@ -1147,6 +1187,24 @@ namespace ArchiveFixer.Services
             if (task.ExtensionStatus == StatusText.ExtensionNormal ||
                 task.ExtensionStatus == StatusText.ExtensionVolume ||
                 task.ExtensionStatus == StatusText.ExtensionEmbedded)
+            {
+                return fileName;
+            }
+
+            /*
+             * ⛔ 2026-10-16（ProcMon 定案：六步改名链的第 5/6 步就是这里）：**内容自证是"某分卷组的一片"的，
+             * 不许按"单卷归档"改后缀**。
+             *
+             * 现场逐字：`pack111-L2.7z.txt`（卡上 `BodyKind=VolumeFirstPiece`，实为某分卷组的**第 1 片**）
+             * 走到这里 ⇒ `.txt` 与检测到的 7z 不匹配 ⇒ 建议成 `<基名>.7z` ⇒ 产出层里凭空多出一个
+             * **单卷归档名**、与同一份字节的 `.001` 并存（同一 inode）⇒ 收拢计划随后被
+             * 「目标名已经被别的文件占用了」挡住 ⇒ `10101010` 的判据 ① 一直红。
+             *
+             * 判据只用事实（卡的 `BodyKind`，⛔ 不比名字、⛔ 不猜卷号）：是某组的一片 ⇒ **不给建议**
+             * （它的规范卷名交给卷名那一套：㈠档 `X.7z.001` / 接片 / 收拢）。
+             * 判不出（读不到卡 / 不是分卷）⇒ 照旧老口径，一个字不改。
+             */
+            if (IsSevenZipVolumePieceByContent(task.CurrentPath))
             {
                 return fileName;
             }
