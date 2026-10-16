@@ -10449,7 +10449,16 @@ namespace ArchiveFixer.ViewModels
                 {
                     LogAdoptCriterionInputs(
                         piecePath,
-                        "认不出它属于哪一族 / 第几卷（规范卷名推不出来；卡上也没给出可用的族与卷号）",
+                        /*
+                         * ⚠ 2026-10-16（用户口径与项目规矩："判不出的分支把**判据输入**写进日志"）：
+                         * 这一行原来只说"推不出来"，**锚有没有、层是哪来的**一个字都没有 ——
+                         * 而真机 `29292929` 卡住的地方恰恰就是这两件（纯函数实测：只要把锚交进去，
+                         * 规范名立刻是 `pack111-L2.part2.rar`）。⇒ 永久把这三个字段写进来，⛔ 不改判据。
+                         */
+                        "认不出它属于哪一族 / 第几卷（规范卷名推不出来；卡上也没给出可用的族与卷号）"
+                        + $"｜锚={(groupAnchor == null ? "无" : FileNameHelper.GetFileName(groupAnchor.Path))}"
+                        + $"｜层={(layerOverride == null ? "自推" : "外层交下来的")}"
+                        + $"｜目标层={(targetDirEarly.Length > 0 ? "有" : "空")}",
                         string.Empty,
                         string.Empty,
                         string.Empty);
