@@ -101,7 +101,11 @@ namespace ArchiveFixer.Detection
         /// 读出来是"第 3 片"，而 EOCD 盘号是另一套基数 ⇒ 一覆盖，`present` 里那个可用锚点就没了、
         /// 两条补片路的前提不成立、整组没人管（实测：官方环台读数 13 绿 → 12 绿，`13131313` / `23232323` 同时红）。</para>
         /// </summary>
-        internal static int? ResolveSlotIndex(string path, FileNatureCard card, FileNatureCard? groupAnchorCard = null)
+        internal static int? ResolveSlotIndex(
+            string path,
+            FileNatureCard card,
+            FileNatureCard? groupAnchorCard = null,
+            bool trustCardNumberWhenNameGivesNothing = false)
         {
             string name = FileNameHelper.GetFileName(path);
             int? byName = VolumeGroupDetector.TryGetVolumeIndex(name);
@@ -132,7 +136,26 @@ namespace ArchiveFixer.Detection
             }
 
             /*
-             * ⑤ **RAR 1.5–4.x（RAR4）**：名字与卡都拿不出绝对卷号（头里只有卷尾结尾块的原始字段、
+             * ⑤ **消费方明确表示"第 1 槽不在这层也认"时，才信卡上的绝对卷号**
+             * （用户 2026-10-16 口径：「消费方接受『第 1 槽不在这层』后把**卡的绝对卷号**翻成权威」）。
+             *
+             * <para>⛔ 只在**名字什么都给不出**时才用（上面两步已经判过名字与"第一片"）；
+             * ⛔ 只认 **≥ 2** 的号 —— 卡上的 1 与"名字读出来的 1"在过去那次全局翻转里正是打红三份的
+             * 那一格（跨盘 ZIP 末片的卡写 3、名字读 1，消费方靠那个 1 当锚点，见上面那段实测教训）。</para>
+             *
+             * <para>真机现场（`19191919`，卡逐字）：`aaa-L2-976` = `分卷身份=VolumeMember 卷号=2 raw=1
+             * 专属算法=VolumePiece`，而它的名字什么都给不出（`卷号=判不出 规范名=` 空）⇒ 加这一档之前
+             * 接片那一档永远拿不到规范名 ⇒ 整组收不到一起。</para>
+             */
+            if (trustCardNumberWhenNameGivesNothing
+                && card.VolumeNumber is int cardNumber
+                && cardNumber >= 2)
+            {
+                return cardNumber;
+            }
+
+            /*
+             * ⑥ **RAR 1.5–4.x（RAR4）**：名字与卡都拿不出绝对卷号（头里只有卷尾结尾块的原始字段、
              * 基数待定）⇒ 用**这一组第 1 卷的卡**锚定基数（用户 2026-10-16 拍板，逐字「同意」）。
              * ⛔ 锚取不到 ⇒ null，与加这条之前逐字相同（什么都不做）。
              */
@@ -149,9 +172,13 @@ namespace ArchiveFixer.Detection
         /// `<剥掉伪装尾巴的名字>.001`（这一族的入口形状），它才给出 `X.7z.001`；直接喂 `X.7z` 会给成
         /// `X.001`（丢族段）。标记写法仍由那个出口决定，⛔ 这里不自己拼最终名。</para>
         /// </summary>
-        internal static string ResolveCanonicalName(string path, FileNatureCard card, FileNatureCard? groupAnchorCard = null)
+        internal static string ResolveCanonicalName(
+            string path,
+            FileNatureCard card,
+            FileNatureCard? groupAnchorCard = null,
+            bool trustCardNumberWhenNameGivesNothing = false)
         {
-            if (ResolveSlotIndex(path, card, groupAnchorCard) is not int slot || slot < 1)
+            if (ResolveSlotIndex(path, card, groupAnchorCard, trustCardNumberWhenNameGivesNothing) is not int slot || slot < 1)
             {
                 return string.Empty;
             }

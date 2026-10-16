@@ -9391,41 +9391,60 @@ namespace ArchiveFixer.ViewModels
              *
              * ⚠ 2026-10-16：RAR 1.5–4.x 那一族的卡上**没有绝对卷号**（只有卷尾结尾块的原始字段、
              * 基数待定）⇒ 把"这一组第 1 卷的卡"（锚）原样转下去（判据仍在 Detection 那一处）。
+             *
+             * ⚠ 2026-10-16（用户口径「消费方接受『第 1 槽不在这层』后把**卡的绝对卷号**翻成权威」）：
+             * **接片这一档正是那个消费方** —— 它按规范名把这一片落到"这一组该拼到的那一层"，
+             * 第 1 槽在不在这一层不影响它 ⇒ 明确传 `trustCardNumberWhenNameGivesNothing: true`
+             * （判据内部只在"名字什么都给不出"时才读卡上的号，且只认 ≥ 2）。
+             * 真机现场 `19191919`：`aaa-L2-976` 卡上写着卷号 2、名字什么都给不出 ⇒ 之前永远拿不到规范名。
              */
-            return VolumePieceFacts.ResolveCanonicalName(piecePath, card, groupAnchorCard);
+            return VolumePieceFacts.ResolveCanonicalName(
+                piecePath,
+                card,
+                groupAnchorCard,
+                trustCardNumberWhenNameGivesNothing: true);
         }
 
         /// <summary>
-        /// **这一组的第 1 卷卡**（RAR 1.5–4.x 锚定基数要用；用户 2026-10-16 拍板）。
+        /// **这一组的第 1 卷卡**（RAR 1.5–4.x 锚定基数、以及"本族入口形状"的样本都要用它；
+        /// 用户 2026-10-16 拍板）。
         ///
-        /// <para>判据全是事实：在<paramref name="targetDir"/> **这一层**里找与这一片**同基名**、
-        /// 卡上自报"我就是第 1 卷"（<see cref="FileNatureCard.FirstVolumeFlag"/>）的那一份。
-        /// ⛔ 只扫一层（不递归、不看别的层）、⛔ 一个字节都不动、⛔ 找不到 ⇒ null
-        /// （调用方照旧判不出 ⇒ 什么都不做）。</para>
+        /// <para>先在<paramref name="targetDir"/> **这一层**里找与这一片**同基名**、卡上自报"我就是第 1 卷"
+        /// （<see cref="FileNatureCard.FirstVolumeFlag"/>）的那一份；同基名一个都没有时（真机 `19191919`：
+        /// 这一片的名字被改烂成 `aaa-L2-976`，基名本身就是垃圾 ⇒ 按基名永远找不到入口），
+        /// 退回"**这一层里唯一的那个自报第 1 卷的片**" —— ⛔ 必须**恰好一份**才采信，
+        /// 两份以上 ⇒ 判不出（⛔ 不猜）。⛔ 只扫一层、⛔ 一个字节都不动、⛔ 找不到 ⇒ null。</para>
         /// </summary>
         private static FileNatureCard? ResolveGroupFirstVolumeCard(string targetDir, string baseName)
         {
-            if (targetDir.Length == 0 || baseName.Length == 0 || !Directory.Exists(targetDir))
+            if (targetDir.Length == 0 || !Directory.Exists(targetDir))
             {
                 return null;
             }
 
+            FileNatureCard? uniqueFirstVolume = null;
+            int firstVolumeCount = 0;
+
             foreach (string candidate in Directory.EnumerateFiles(targetDir))
             {
-                if (!BaseNameRelatedToGroup(FileNameHelper.GetFileName(candidate), baseName))
+                FileNatureCard card = FileNature.Inspect(candidate);
+
+                if (!card.FirstVolumeFlag || card.RawVolumeField == null)
                 {
                     continue;
                 }
 
-                FileNatureCard card = FileNature.Inspect(candidate);
-
-                if (card.FirstVolumeFlag && card.RawVolumeField != null)
+                if (baseName.Length > 0
+                    && BaseNameRelatedToGroup(FileNameHelper.GetFileName(candidate), baseName))
                 {
-                    return card;
+                    return card;   // 同基名的那一份最可信
                 }
+
+                firstVolumeCount++;
+                uniqueFirstVolume = card;
             }
 
-            return null;
+            return firstVolumeCount == 1 ? uniqueFirstVolume : null;
         }
 
         /// <summary>
