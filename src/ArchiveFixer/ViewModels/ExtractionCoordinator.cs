@@ -9421,8 +9421,22 @@ namespace ArchiveFixer.ViewModels
         ///
         /// <para>⛔ 两处都拿不到 ⇒ null（判不出 ⇒ 什么都不做）。</para>
         /// </summary>
-        private static FileNatureCard? ResolveGroupAnchorCard(ArchiveTask? owner, string targetDir, string baseName)
+        private static FileNatureCard? ResolveGroupAnchorCard(
+            ArchiveTask? owner,
+            string targetDir,
+            string baseName,
+            string? groupEntryPath = null)
         {
+            /* ① **外层交下来的入口**最可信：收拢那一趟的成员名单里就有它（探针逐字见上面那段）。 */
+            if (!string.IsNullOrWhiteSpace(groupEntryPath) && File.Exists(groupEntryPath))
+            {
+                FileNatureCard groupEntryCard = FileNature.Inspect(groupEntryPath);
+                if (groupEntryCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                {
+                    return groupEntryCard;
+                }
+            }
+
             string ownerPath = owner?.CurrentPath ?? string.Empty;
 
             if (ownerPath.Length > 0)
@@ -10324,7 +10338,11 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>收**一片**：按规范卷名接到"这一组还缺卷"那一单的目录里；末片在手时顺手把整组接齐。</summary>
-        private bool TryAdoptUnresolvedVolumePiece(string piecePath, ArchiveTask? owner, string? layerOverride = null)
+        private bool TryAdoptUnresolvedVolumePiece(
+            string piecePath,
+            ArchiveTask? owner,
+            string? layerOverride = null,
+            string? groupEntryPathOverride = null)
         {
             if (string.IsNullOrWhiteSpace(piecePath) || !File.Exists(piecePath))
             {
@@ -10420,7 +10438,7 @@ namespace ArchiveFixer.ViewModels
                  * 所以它手上那份就是这一组的入口：同一份探针里 `片=aaa-L2 卡号=1 卡类=VolumeFirstPiece`），
                  * 拿不到再扫目标层（原口径）。
                  */
-                FileNatureCard? groupAnchor = ResolveGroupAnchorCard(owner, targetDirEarly, baseName);
+                FileNatureCard? groupAnchor = ResolveGroupAnchorCard(owner, targetDirEarly, baseName, groupEntryPathOverride);
 
                 canonical = ResolveCanonicalNameFromCard(
                     piecePath,
@@ -11522,11 +11540,22 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            /*
+             * ⚠ 2026-10-16（探针逐字：`[组] 单=pack111-L2 tailName=pack111-L2.zip 层=…\pack111\pack111-W0-0 源数=1 源=pack111-L2.part1.rar`）：
+             * **组的入口就躺在成员名单 `sources` 里**，而每一条中段任务自己算出来的 `tailName` 是垃圾
+             * （`pack111-L2.zip` / `pack111-L2.part3.zip`）⇒ 接片那一档只看"这一片自己的名字"永远推不出这一组。
+             * ⇒ 把**入口那一份的路径**一路交下去（既有先例 = 同一个方法上的 `layerOverride`：
+             * "外层已经定过的层，原样交下来用"）。⛔ 判据仍是卡上的 `BodyKind`（§29.8/§29.16 的教训），
+             * 拿不到 ⇒ null，接片那一档照旧自己找（老口径一个字不改）。
+             */
+            string? groupEntryPath = sources.FirstOrDefault(item =>
+                File.Exists(item) && FileNature.Inspect(item).BodyKind == ArchiveBodyKind.VolumeFirstPiece);
+
             foreach (string path in sources.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
             {
                 try
                 {
-                    TryAdoptUnresolvedVolumePiece(path, task, entryLayer);
+                    TryAdoptUnresolvedVolumePiece(path, task, entryLayer, groupEntryPath);
                 }
                 catch (Exception ex)
                 {
@@ -11579,7 +11608,7 @@ namespace ArchiveFixer.ViewModels
                         {
                             if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                             {
-                                TryAdoptUnresolvedVolumePiece(path, task, entryLayer);
+                                TryAdoptUnresolvedVolumePiece(path, task, entryLayer, groupEntryPath);
                             }
                         }
                         catch (Exception ex)
