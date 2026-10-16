@@ -44,6 +44,35 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// **RAR 1.5–4.x（RAR4）的绝对卷号**（用户 2026-10-16 拍板，逐字「同意」）：
+        /// 主头 `MHD_FIRSTVOLUME` 认出**第 1 卷** ⇒ 它那一份的**原始字段就是基数**
+        /// ⇒ `绝对卷号 = 这一片的原始字段 − 基数 + 1`。
+        ///
+        /// <para>为什么必须这样：RAR4 的**头里没有绝对卷号**，只有卷尾归档结尾块的原始字段，
+        /// 而基数是 0 起还是 1 起在 RAR 文档里没写。真机实测（`4444` 三片，走本类的出口读卡）：
+        /// 第 1 卷 `首卷标志=True 原始卷号字段=0`、另两片 `=1 / =2` ⇒ 基数 0、绝对卷号 1/2/3。</para>
+        ///
+        /// <para>判不出（入口不是第 1 卷 / 任一侧读不出原始字段 / 算出来小于 1 / 不是 RAR 族）⇒
+        /// 返回 null，调用方照旧判不出 ⇒ 什么都不做（⛔ 不猜）。</para>
+        /// </summary>
+        internal static int? ResolveRar4SlotIndex(FileNatureCard pieceCard, FileNatureCard entryCard)
+        {
+            if (pieceCard == null
+                || entryCard == null
+                || !entryCard.FirstVolumeFlag
+                || entryCard.RawVolumeField is not int baseRaw
+                || pieceCard.Format != VolumeContentFormat.Rar
+                || pieceCard.RawVolumeField is not int raw)
+            {
+                return null;
+            }
+
+            int index = raw - baseRaw + 1;
+
+            return index >= 1 ? index : null;
+        }
+
+        /// <summary>
         /// **这一份的槽位号该信谁**（顺序见类注释；⛔ 卡上的数字**不覆盖**名字读出来的号，
         /// 理由见下）。
         ///

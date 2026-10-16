@@ -11879,7 +11879,17 @@ namespace ArchiveFixer.ViewModels
                      * 卡说"我不是第一片"而名字读出 1 的那一份，**不当成"已占住 1 号槽"**，
                      * 而是按"判不出号"进候选池，由"缺口 + 体积"去定（⛔ 不再拿假锚点补片）。
                      */
-                    int? nameIndex = ResolveVolumeSlotIndexForPiece(path, card);
+                    /*
+                     * ⚠ 2026-10-16（用户拍板「RAR4 用主头 MHD_FIRSTVOLUME 认入口 + RawVolumeField 锚定基数」）：
+                     * RAR 1.5–4.x 的头里**没有绝对卷号**，只有卷尾结尾块的原始字段 —— 卡上的 `VolumeNumber`
+                     * 因此恒为空、名字尺子也读不出，于是这一档永远把它算成"名字读不出卷号"的候选，
+                     * 再跟"缺口数"对不上就整档判不出（真机 `4444` 逐字：这一组缺 5 个槽位，而名字读不出
+                     * 卷号的候选有 2 份 ⇒ 数目对不上 ⇒ 判不出）。
+                     * ⇒ 用**入口那一份**（主头自报第 1 卷、它的原始字段就是基数）锚定，把绝对卷号翻出来；
+                     * 唯一出口 = `VolumePieceFacts.ResolveRar4SlotIndex`（判不出返回 null，照旧什么都不做）。
+                     */
+                    int? nameIndex = ResolveVolumeSlotIndexForPiece(path, card)
+                        ?? VolumePieceFacts.ResolveRar4SlotIndex(card, entryCard);
 
                     /*
                      * ⚠ 2026-10-14（实测 `28282828`，断点逐字）：**名字读出越界卷号 ⇒ 名字在撒谎**。
