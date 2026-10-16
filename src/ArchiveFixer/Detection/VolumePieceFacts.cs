@@ -55,7 +55,7 @@ namespace ArchiveFixer.Detection
         /// <para>判不出（入口不是第 1 卷 / 任一侧读不出原始字段 / 算出来小于 1 / 不是 RAR 族）⇒
         /// 返回 null，调用方照旧判不出 ⇒ 什么都不做（⛔ 不猜）。</para>
         /// </summary>
-        internal static int? ResolveRar4SlotIndex(FileNatureCard pieceCard, FileNatureCard entryCard)
+        internal static int? ResolveRar4SlotIndex(FileNatureCard? pieceCard, FileNatureCard? entryCard)
         {
             if (pieceCard == null
                 || entryCard == null
@@ -85,7 +85,7 @@ namespace ArchiveFixer.Detection
         /// 读出来是"第 3 片"，而 EOCD 盘号是另一套基数 ⇒ 一覆盖，`present` 里那个可用锚点就没了、
         /// 两条补片路的前提不成立、整组没人管（实测：官方环台读数 13 绿 → 12 绿，`13131313` / `23232323` 同时红）。</para>
         /// </summary>
-        internal static int? ResolveSlotIndex(string path, FileNatureCard card)
+        internal static int? ResolveSlotIndex(string path, FileNatureCard card, FileNatureCard? groupAnchorCard = null)
         {
             string name = FileNameHelper.GetFileName(path);
             int? byName = VolumeGroupDetector.TryGetVolumeIndex(name);
@@ -115,7 +115,12 @@ namespace ArchiveFixer.Detection
                 return 1;
             }
 
-            return null;
+            /*
+             * ⑤ **RAR 1.5–4.x（RAR4）**：名字与卡都拿不出绝对卷号（头里只有卷尾结尾块的原始字段、
+             * 基数待定）⇒ 用**这一组第 1 卷的卡**锚定基数（用户 2026-10-16 拍板，逐字「同意」）。
+             * ⛔ 锚取不到 ⇒ null，与加这条之前逐字相同（什么都不做）。
+             */
+            return ResolveRar4SlotIndex(card, groupAnchorCard);
         }
 
         /// <summary>
@@ -128,9 +133,9 @@ namespace ArchiveFixer.Detection
         /// `<剥掉伪装尾巴的名字>.001`（这一族的入口形状），它才给出 `X.7z.001`；直接喂 `X.7z` 会给成
         /// `X.001`（丢族段）。标记写法仍由那个出口决定，⛔ 这里不自己拼最终名。</para>
         /// </summary>
-        internal static string ResolveCanonicalName(string path, FileNatureCard card)
+        internal static string ResolveCanonicalName(string path, FileNatureCard card, FileNatureCard? groupAnchorCard = null)
         {
-            if (ResolveSlotIndex(path, card) is not int slot || slot < 1)
+            if (ResolveSlotIndex(path, card, groupAnchorCard) is not int slot || slot < 1)
             {
                 return string.Empty;
             }
@@ -147,6 +152,18 @@ namespace ArchiveFixer.Detection
              * 第 N 卷名。（7z 那一族名字里没有卷标记时它给不出，才走下面那两步。）</para>
              */
             string? firstByName = VolumeGroupDetector.TryGetFirstVolumeName(name);
+
+            /*
+             * ⚠ 2026-10-16（RAR4 那一档）：这一片的名字被伪装法吃过卷标记（`bbb-L2.txt` / `bbb-L2.jpg`）
+             * ⇒ 名字给不出"本族第一卷名"这个样本。而**这一组第 1 卷的名字**天然就是本族的入口形状
+             * （`bbb-L2.part1.rar`）⇒ 拿它当样本，交给同一个命名出口（⛔ 不在这里自己拼名字）。
+             */
+            if (string.IsNullOrWhiteSpace(firstByName)
+                && groupAnchorCard != null
+                && groupAnchorCard.Path.Length > 0)
+            {
+                firstByName = FileNameHelper.GetFileName(groupAnchorCard.Path);
+            }
 
             if (!string.IsNullOrWhiteSpace(firstByName)
                 && VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(firstByName!, slot, out string byNameSample)

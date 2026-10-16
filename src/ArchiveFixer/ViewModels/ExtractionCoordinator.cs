@@ -9379,14 +9379,53 @@ namespace ArchiveFixer.ViewModels
         /// <para>⛔ 现在只做 7z 这一族（证据在手：卡上有"起始头自述整包 + 片数"）；其它族等有同样硬的
         /// 运行期证据再补，⛔ 不猜。</para>
         /// </summary>
-        private static string ResolveCanonicalNameFromCard(string piecePath, FileNatureCard card)
+        private static string ResolveCanonicalNameFromCard(
+            string piecePath,
+            FileNatureCard card,
+            FileNatureCard? groupAnchorCard = null)
         {
             /*
              * ⚠ 2026-10-14：这套顺序（族来自卡 → 卷号来自卡 → 基名剥掉伪装尾巴 → 交给既有命名出口）
              * 已经收成一个唯一出口 —— <see cref="VolumePieceFacts.ResolveCanonicalName"/>。
              * ⛔ 别处不许再自己拼一遍。
+             *
+             * ⚠ 2026-10-16：RAR 1.5–4.x 那一族的卡上**没有绝对卷号**（只有卷尾结尾块的原始字段、
+             * 基数待定）⇒ 把"这一组第 1 卷的卡"（锚）原样转下去（判据仍在 Detection 那一处）。
              */
-            return VolumePieceFacts.ResolveCanonicalName(piecePath, card);
+            return VolumePieceFacts.ResolveCanonicalName(piecePath, card, groupAnchorCard);
+        }
+
+        /// <summary>
+        /// **这一组的第 1 卷卡**（RAR 1.5–4.x 锚定基数要用；用户 2026-10-16 拍板）。
+        ///
+        /// <para>判据全是事实：在<paramref name="targetDir"/> **这一层**里找与这一片**同基名**、
+        /// 卡上自报"我就是第 1 卷"（<see cref="FileNatureCard.FirstVolumeFlag"/>）的那一份。
+        /// ⛔ 只扫一层（不递归、不看别的层）、⛔ 一个字节都不动、⛔ 找不到 ⇒ null
+        /// （调用方照旧判不出 ⇒ 什么都不做）。</para>
+        /// </summary>
+        private static FileNatureCard? ResolveGroupFirstVolumeCard(string targetDir, string baseName)
+        {
+            if (targetDir.Length == 0 || baseName.Length == 0 || !Directory.Exists(targetDir))
+            {
+                return null;
+            }
+
+            foreach (string candidate in Directory.EnumerateFiles(targetDir))
+            {
+                if (!BaseNameRelatedToGroup(FileNameHelper.GetFileName(candidate), baseName))
+                {
+                    continue;
+                }
+
+                FileNatureCard card = FileNature.Inspect(candidate);
+
+                if (card.FirstVolumeFlag && card.RawVolumeField != null)
+                {
+                    return card;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -10281,6 +10320,15 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * ⚠ 2026-10-16：目标层原来在下面才算，可**这一组第 1 卷卡**（RAR4 锚定基数要用它）得先拿到 ——
+             * 而第 1 卷就在"这一片要落的那一层"里（框架的口径：收片层 = 入口层 = 落点层）。
+             * ⇒ 这里提前算一次，下面那一段原样复用（⛔ 只算一次，不重算）。
+             */
+            string targetDirEarly = string.IsNullOrWhiteSpace(layerOverride)
+                ? ResolveBatchGroupDirectory(baseName, null, piecePath)
+                : layerOverride!;
+
+            /*
              * 规范卷名 = **这一片按它自己那一族**写成的名字（唯一出口 `VolumeGroupResolver.TryGetCanonicalVolumeName`）。
              *
              * ⛔ 这里原来写死成"跨盘 ZIP 的盘名"：`盘序 = 卷号 - 1` ⇒ 盘序 0 给 `.zip`、其余给 `.z0N`。
@@ -10304,7 +10352,10 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 卡上也给不出卷号（`VolumePiece` 那种"我是后续片但没写第几"）⇒ 照旧返回 false，
                  * 交给"缺口 + 体积"那一档，⛔ 不猜号。</para>
                  */
-                canonical = ResolveCanonicalNameFromCard(piecePath, nature);
+                canonical = ResolveCanonicalNameFromCard(
+                    piecePath,
+                    nature,
+                    ResolveGroupFirstVolumeCard(targetDirEarly, baseName));
 
                 if (canonical.Length == 0)
                 {
@@ -10343,9 +10394,7 @@ namespace ArchiveFixer.ViewModels
              * ⇒ 同一件事的真值**只允许有一个出口**：外层已经定过的层，原样交下来用（`layerOverride`），
              * ⛔ 接片这一档**不再自己重算**。
              */
-            string targetDir = string.IsNullOrWhiteSpace(layerOverride)
-                ? ResolveBatchGroupDirectory(baseName, null, piecePath)
-                : layerOverride!;
+            string targetDir = targetDirEarly;
 
             if (targetDir.Length == 0)
             {
