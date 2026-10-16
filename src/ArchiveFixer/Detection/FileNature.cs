@@ -169,7 +169,7 @@ namespace ArchiveFixer.Detection
                 : "判不出";
 
             return $"「{System.IO.Path.GetFileName(Path)}」｜内容：格式={Format} 分卷身份={Membership}"
-                + $" 卷号={number} 首卷标志={FirstVolumeFlag} 结论={ContentFail}"
+                + $" 卷号={number} 首卷标志={FirstVolumeFlag} 原始卷号字段={(RawVolumeField.HasValue ? RawVolumeField.Value.ToString(CultureInfo.InvariantCulture) : "判不出")} 结论={ContentFail}"
                 + $" 专属算法：单卷/分卷={BodyKind}"
                 + (DeclaredTotalBytes > 0 ? $" 自述整包={DeclaredTotalBytes} 字节" : string.Empty)
                 + (DeclaredVolumeCount > 0 ? $" 按内容算的片数={DeclaredVolumeCount}" : string.Empty)
