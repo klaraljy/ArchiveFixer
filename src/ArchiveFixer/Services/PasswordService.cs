@@ -834,11 +834,16 @@ namespace ArchiveFixer.Services
         /// （加密包的空密码永远不可能对，见第 37 条实测）。</para>
         /// </summary>
         /// <summary>
-        /// 「本批已成功的密码」这一档的**唯一出口**（候选顺序读它）——
-        /// 顺序 = 本批内首次成功的先后；每批开工由 <see cref="BeginBatch"/> 清空。
+        /// 「本次导入里已成功的密码」这一档的**唯一出口**（候选顺序读它）——
+        /// 这个属性本身给的是"首次成功的先后"；每**次导入**开工由 <see cref="BeginBatch"/> 清空
+        /// （一键处理的后续轮次**不清**，见 `ExtractionCoordinator.StartExtractCoreAsync` 里那一处）。
         ///
-        /// <para>⛔ 这里（以及任何读它的地方）都不许再按**历史成功次数**排序：那是跨任务重排，
-        /// 用户 2026-10-04 明确否掉（"不同次文件一律严格按我列表顺序"）。</para>
+        /// <para>⛔ **密码本那些条目**（候选表里这一档之后的部分）不许按**历史成功次数**排序：
+        /// 那是跨批次重排，用户 2026-10-04 明确否掉（"不同次文件一律严格按我列表顺序"）。</para>
+        ///
+        /// <para>✅ 而**这一档内部**按成功频率排序是用户 2026-10-16 当面许可的（"同一次的解压可以按照
+        /// 频率次序来弄……同一次就是指同一次导入的"）⇒ 消费点 <see cref="GetPasswordCandidates"/>
+        /// 在这里按 <see cref="GetSuccessCount"/> 从多到少排（稳定排序，次数相同保持先后）。</para>
         /// </summary>
         public IReadOnlyList<string> BatchVerifiedPasswords
         {
@@ -952,9 +957,20 @@ namespace ArchiveFixer.Services
             }
 
             /*
-             * 本批内先成功的先试（顺序 = 首次成功的先后）—— ⛔ 不再读历史成功次数（那是跨任务的口径）。
+             * 顺序 = **同一次导入内按成功频率从多到少**。
+             *
+             * 口径出处（用户 2026-10-16 当面澄清逐字）：「我说过**同一次的解压可以按照频率次序来弄**，
+             * 但是**不同批次的**就是密码本里面的，**同一次就是指同一次导入的**」。
+             *
+             * ⛔ 边界只到这一档为止：这里的成员**全部**是本次导入内已经成功过的密码
+             * （`_batchVerifiedPasswords` 每次导入开工才清一次，后续轮次不清），
+             * 列表里其余那些仍然**严格按密码本顺序** —— 用户 2026-10-04 否掉的是
+             * "拿历史次数去**重排密码本**"（那是跨批次重排），不是这一档。
+             *
+             * `OrderByDescending` 是**稳定**排序 ⇒ 次数相同仍然保持"首次成功的先后"。
              */
-            foreach (string verified in verifiedPasswords)
+            foreach (string verified in verifiedPasswords
+                         .OrderByDescending(GetSuccessCount))
             {
                 AddCandidate(verified, "BatchSuccess", "复用本批已成功的密码");
             }

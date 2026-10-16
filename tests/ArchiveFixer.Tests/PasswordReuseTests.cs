@@ -344,6 +344,113 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **「同一次」= 同一次导入**（用户 2026-10-16 当面澄清逐字：「我说过同一次的解压可以按照频率次序
+        /// 来弄，但是不同批次的就是密码本里面的，**同一次就是指同一次导入的**」）。
+        ///
+        /// <para>本用例钉这一档的**顺序**：同一次导入内，复用项按成功频率从多到少排；
+        /// 次数相同 ⇒ 稳定排序保持"首次成功的先后"。</para>
+        ///
+        /// <para><b>红检</b>：把 <c>GetPasswordCandidates</c> 里那个 <c>OrderByDescending</c> 撤掉 ⇒
+        /// 本条当场红（顺序退回"首次成功的先后"）。</para>
+        /// </summary>
+        [Fact]
+        public void 同一次导入内_复用项按成功频率从多到少排_次数相同保持先后()
+        {
+            var service = new PasswordService();
+
+            /*
+             * ⚠ 顺序刻意做成"**先**成功的那条**不**常见"：
+             * 这样"首次成功的先后"（少见密码 → 常见密码）与"按频率"（常见密码 2 次 → 少见密码 1 次）
+             * 给出**不同**答案 —— 否则两条口径重合，用例对排序**恒真**（第一版正是这么写的，
+             * 红检时照旧绿 ⇒ 当场逮住、改数据重来）。
+             */
+            service.RecordPasswordSuccess(@"C:\a.7z", "少见密码");
+            service.RecordPasswordSuccess(@"C:\b.7z", "常见密码");
+            service.RecordPasswordSuccess(@"C:\c.7z", "常见密码");
+
+            List<string> batchBlock = service
+                .GetPasswordCandidates(
+                    new ArchiveTask(@"C:\next.7z"),
+                    globalPassword: string.Empty,
+                    passwordList: service.Passwords,
+                    tryEmptyFirst: false)
+                .Take(2)
+                .Select(candidate => candidate.Value ?? string.Empty)
+                .ToList();
+
+            Assert.Equal(new[] { "常见密码", "少见密码" }, batchBlock);
+
+            // 次数相同 ⇒ 稳定排序保持"首次成功的先后"。
+            var tieService = new PasswordService();
+            tieService.RecordPasswordSuccess(@"C:\x.7z", "先成功的");
+            tieService.RecordPasswordSuccess(@"C:\y.7z", "后成功的");
+
+            List<string> tieOrder = tieService
+                .GetPasswordCandidates(
+                    new ArchiveTask(@"C:\next2.7z"),
+                    globalPassword: string.Empty,
+                    passwordList: tieService.Passwords,
+                    tryEmptyFirst: false)
+                .Take(2)
+                .Select(candidate => candidate.Value ?? string.Empty)
+                .ToList();
+
+            Assert.Equal(new[] { "先成功的", "后成功的" }, tieOrder);
+        }
+
+        /// <summary>
+        /// **后续轮次不许清"本次导入已成功的密码"**（用户 2026-10-16：「同一次就是指同一次导入的」）。
+        ///
+        /// <para>现场形状：一键处理一条导入跑好几轮（OneClickCoordinator 每轮都调
+        /// <c>StartExtractForOneClickAsync(..., continuationRound: round &gt; 1)</c>），
+        /// 而清空那一句原来**无条件**执行 ⇒ 第 1 轮学到的密码在第 2 轮被忘掉、
+        /// 后面每一个包又从头把整张表试一遍（正是用户第 45 条骂的那件事）。</para>
+        ///
+        /// <para><b>红检</b>：把那一句的 <c>if (!continueDeferredVolumeDeficits)</c> 撤掉 ⇒
+        /// 本条当场红（第二个包会把 6 个候选全试一遍）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 一键处理的后续轮次不清复用清单_同一次导入跨轮照样复用()
+        {
+            string password = "<示例密码5>";
+
+            Harness harness = CreateHarness("reuse-across-rounds", settings =>
+            {
+                settings.MaxPasswordAttemptsPerLayer = 10;
+                settings.TryEmptyPasswordFirst = true;
+            });
+
+            harness.Book.AddPassword("<示例密码1>");
+            harness.Book.AddPassword("<示例密码2>");
+            harness.Book.AddPassword("<示例密码3>");
+            harness.Book.AddPassword("<示例密码4>");
+            harness.Book.AddPassword(password);
+
+            ArchiveTask first = harness.AddTask("first.7z", password);
+
+            // 第 1 轮 = 这一次导入的开头。
+            await harness.Coordinator.StartExtractForOneClickAsync();
+            await WaitUntilAsync(() => !harness.Vm.IsBusy, TimeSpan.FromSeconds(120));
+
+            Assert.Equal(StatusText.ExtractSuccess, first.Status);
+            Assert.Equal(6, harness.Engine.AttemptsFor("first.7z").Count);
+
+            // 后续轮次 = **同一次导入**：上一轮学到的密码必须还在。
+            first.IsSelected = false;
+            ArchiveTask second = harness.AddTask("second.7z", password);
+
+            await harness.Coordinator.StartExtractForOneClickAsync(continuationRound: true);
+            await WaitUntilAsync(() => !harness.Vm.IsBusy, TimeSpan.FromSeconds(120));
+
+            Assert.Equal(StatusText.ExtractSuccess, second.Status);
+
+            List<string> secondAttempts = harness.Engine.AttemptsFor("second.7z");
+
+            Assert.Single(secondAttempts);
+            Assert.Equal(password, secondAttempts[0]);
+        }
+
+        /// <summary>
         /// **"复用本批已成功的密码"只在本批内生效**（用户 2026-10-04）：
         /// 同一批里第二个包能看到它（<c>BatchSuccess</c> 排在最前，省掉一轮轮询）；
         /// 而 <c>BeginBatch</c>（下一批开工）之后**它就不见了**，顺序回到④页列表顺序。

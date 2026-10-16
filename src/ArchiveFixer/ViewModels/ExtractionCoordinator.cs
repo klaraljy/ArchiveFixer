@@ -18188,10 +18188,26 @@ namespace ArchiveFixer.ViewModels
 
             /*
              * "复用本批已成功的密码"这一档**只在本批内生效**（用户 2026-10-04：
-             * "不同次文件一律严格按我列表顺序"）⇒ 批首清一次：
-             * 同一批里后面的包照旧复用前面刚解开的密码，而**下一批**回到④页列表顺序。
+             * "不同次文件一律严格按我列表顺序"）。
+             *
+             * ⚠ 2026-10-16 订正边界（用户当面澄清逐字：「**同一次就是指同一次导入的**」）：
+             * 一键处理**一条导入会跑好几轮**（`OneClickCoordinator` 的 `round` 循环），
+             * 轮与轮之间属于**同一次导入** ⇒ ⛔ 后续轮次不许清。
+             * 原来这一句是**无条件**的，而 `OneClickCoordinator` 每轮都会调进来
+             * （`:1067` 逐字 `StartExtractForOneClickAsync(runOptions, continuationRound: round > 1)`）
+             * ⇒ 第 1 轮学到的密码在第 2 轮被忘掉、后面每一个包又从头把整张表试一遍。
+             * **实测（红检态）**：把这一句改回无条件 ⇒
+             * `PasswordReuseTests.一键处理的后续轮次不清复用清单_同一次导入跨轮照样复用` 当场红，
+             * 逐字 `Assert.Single() Failure: The collection contained 6 items` +
+             * `Collection: ["", "<示例密码1>", "<示例密码2>", "<示例密码3>", "<示例密码4>", ···]`。
+             *
+             * 判据与同一方法里的"缺卷名单"**同一个事实位**（`continueDeferredVolumeDeficits`）：
+             * 后续轮次保留；**用户重新点一次 = 新的一次导入** ⇒ 那时清空（旧批次的结论不许活到新批次上）。
              */
-            _passwordService.BeginBatch();
+            if (!continueDeferredVolumeDeficits)
+            {
+                _passwordService.BeginBatch();
+            }
 
             // 同名冲突的记账同样从零开始：上一批答过的「全部覆盖」绝不许延续到这一批。
             ResetBatchConflictState();
