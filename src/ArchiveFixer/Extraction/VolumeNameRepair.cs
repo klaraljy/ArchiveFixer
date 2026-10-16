@@ -3677,15 +3677,41 @@ namespace ArchiveFixer.Extraction
             /*
              * 卷号只能一份对一个：同一个卷号上冒出两份候选（同目录里的 `HK.7z.002` 与 `HK.7z.00删除2`、
              * 或者别的分支里另一组同名卷）⇒ 判不出哪一份属于这一组 ⇒ 整档不做（照旧让引擎去判）。
+             *
+             * ⚠ 2026-10-16（真机 `14141414` 的收拢探针逐字：`同号两份候选=True；池子=3 份；有第 1 卷=True`）：
+             * **同一份文件的多个名字不算"两份候选"** —— 现场是伪装原名 `打包111-L2.part0631中文3.rar`
+             * 与规范名 `打包111-L2.part3.rar` 落在同一个卷号上，而 `fsutil hardlink list` 一次列出两个路径、
+             * 同一个 File ID（同一天在 `4444` 上也量到同一形状：4 个名字、1 个 File ID）。
+             * ⇒ 先用**物理同一性**判一次（既有唯一出口 `FileIdentity.IsSamePhysicalFile`）：是同一份 ⇒
+             * 留**名字本身就是规范卷名的那一份**（判据 = 卡上的 `CanonicalVolumeName` 与文件名逐字相同，
+             * 并列再比路径深浅、最后按名字定序）—— ⛔ 不算歧义；**不是**同一份 ⇒ 照旧整档不做（判不出）。
              */
+            bool IsCanonicalNameOfItself(string piecePath)
+            {
+                FileNatureCard pieceCard = FileNature.Inspect(piecePath);
+
+                return pieceCard.CanonicalVolumeName.Length > 0
+                    && string.Equals(
+                        pieceCard.CanonicalVolumeName,
+                        SafeFileName(piecePath),
+                        StringComparison.OrdinalIgnoreCase);
+            }
+
             var byIndex = new Dictionary<int, GatherPiece>();
             bool ambiguousIndex = false;
 
             foreach (GatherPiece piece in pool
                          .OrderBy(p => p.Index)
+                         .ThenBy(p => IsCanonicalNameOfItself(p.Path) ? 0 : 1)
+                         .ThenBy(p => p.Path.Count(character => character == '\\'))
                          .ThenBy(p => SafeFileName(p.Path), StringComparer.OrdinalIgnoreCase))
             {
-                if (!byIndex.TryAdd(piece.Index, piece))
+                if (byIndex.TryAdd(piece.Index, piece))
+                {
+                    continue;
+                }
+
+                if (!FileIdentity.IsSamePhysicalFile(byIndex[piece.Index].Path, piece.Path))
                 {
                     ambiguousIndex = true;
                 }
@@ -4343,11 +4369,51 @@ namespace ArchiveFixer.Extraction
                     .Select(piece => new VolumeCandidate { Path = SafeFileName(piece.Path), Size = piece.Size })
                     .ToList();
 
+                /*
+                 * ⚠ 2026-10-16（真机 `14141414` 的收拢探针逐字：池子里 3 份都在、第 1 卷也在，却
+                 * `推不出这一组的期望基名（那几份的名字/尺寸进不了任何一个桶）`）：入口那一份的名字
+                 * **可能不是它那一族的规范卷名** —— 现场入口叫 `打包111-L2.rar`（老式编号族的入口形状），
+                 * 而同组兄弟是 `打包111-L2.part2.rar` / `打包111-L2.part3.rar` ⇒ 按名字分桶时"族"对不上
+                 * ⇒ 整档判不出，而这一组其实**齐了**。
+                 *
+                 * ⇒ 分桶前**只给入口那一份**换一个用于分桶的名字：同组里有一片叫 `<基名>.partN.rar`（N≥2）
+                 * ⇒ 这一组是 partN 族 ⇒ 入口按 `<基名>.part1.rar` 参与分桶（名字仍由既有命名出口拼，
+                 * 拿兄弟那片当样本）。⛔ **只改这一趟分桶用的名字，盘上一个字节都不动**；
+                 * 对不上的组（入口本来就是规范名 / 兄弟不在 partN 族）⇒ 与加这条之前逐字相同。
+                 */
+                string entryBucketName = entryName;
+                string entryStem = FileNameHelper.GetArchiveBaseName(entryName);
+                string? partFamilySample = entryStem.Length == 0
+                    ? null
+                    : pool
+                        .Select(piece => SafeFileName(piece.Path))
+                        .FirstOrDefault(name =>
+                            name.StartsWith(entryStem + ".part", StringComparison.OrdinalIgnoreCase)
+                            && VolumeGroupDetector.TryGetVolumeIndex(name) > 1);
+
+                if (partFamilySample != null
+                    && VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(
+                        partFamilySample,
+                        1,
+                        out string firstVolumeBucketName)
+                    && firstVolumeBucketName.Length > 0)
+                {
+                    entryBucketName = firstVolumeBucketName;
+                }
+
+                for (int index = 0; index < named.Count; index++)
+                {
+                    if (string.Equals(named[index].Path, entryName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        named[index] = new VolumeCandidate { Path = entryBucketName, Size = named[index].Size };
+                    }
+                }
+
                 foreach (VolumeGroup group in VolumeGroupDetector.Group(named))
                 {
                     if (group.Volumes.Any(v => string.Equals(
                             SafeFileName(v.Path),
-                            entryName,
+                            entryBucketName,
                             StringComparison.OrdinalIgnoreCase)))
                     {
                         return group.BaseName;
