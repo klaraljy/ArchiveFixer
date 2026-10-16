@@ -75,7 +75,7 @@ namespace ArchiveFixer.Detection
         {
             if (pieceCard == null
                 || entryCard == null
-                || !entryCard.FirstVolumeFlag
+                || entryCard.BodyKind != ArchiveBodyKind.VolumeFirstPiece
                 || entryCard.RawVolumeField is not int baseRaw
                 || pieceCard.Format != VolumeContentFormat.Rar
                 || pieceCard.RawVolumeField is not int raw)

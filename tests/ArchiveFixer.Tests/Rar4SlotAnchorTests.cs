@@ -17,18 +17,27 @@ namespace ArchiveFixer.Tests
     /// </summary>
     public class Rar4SlotAnchorTests
     {
-        private static FileNatureCard Card(VolumeContentFormat format, bool first, int? raw) => new()
+        private static FileNatureCard Card(
+            VolumeContentFormat format,
+            bool first,
+            int? raw,
+            ArchiveBodyKind bodyKind = ArchiveBodyKind.VolumePiece) => new()
         {
             Format = format,
             FirstVolumeFlag = first,
-            RawVolumeField = raw
+            RawVolumeField = raw,
+            BodyKind = bodyKind
         };
+
+        /// <summary>这一组第 1 卷的卡（权威 = `BodyKind`；⚠ 真机上它常常 `FirstVolumeFlag=False`）。</summary>
+        private static FileNatureCard FirstVolume(int? raw, bool firstVolumeFlag = false) =>
+            Card(VolumeContentFormat.Rar, firstVolumeFlag, raw, ArchiveBodyKind.VolumeFirstPiece);
 
         [Fact]
         public void 入口自报第一卷_原始字段就是基数_其余片按它换算()
         {
             // 真机 4444 的形状：第 1 卷 raw=0 ⇒ 基数 0 ⇒ raw 1/2 分别落在第 2/3 片。
-            FileNatureCard entry = Card(VolumeContentFormat.Rar, first: true, raw: 0);
+            FileNatureCard entry = FirstVolume(0);
 
             Assert.Equal(2, VolumePieceFacts.ResolveRar4SlotIndex(Card(VolumeContentFormat.Rar, false, 1), entry));
             Assert.Equal(3, VolumePieceFacts.ResolveRar4SlotIndex(Card(VolumeContentFormat.Rar, false, 2), entry));
@@ -38,7 +47,7 @@ namespace ArchiveFixer.Tests
         public void 基数不是0也照样换算_不许写死加一()
         {
             // 同一族里基数是"第 1 卷自己那个原始字段"，⛔ 不是写死的 0 —— 这一条专门钉住这点。
-            FileNatureCard entry = Card(VolumeContentFormat.Rar, first: true, raw: 5);
+            FileNatureCard entry = FirstVolume(5);
 
             Assert.Equal(1, VolumePieceFacts.ResolveRar4SlotIndex(Card(VolumeContentFormat.Rar, false, 5), entry));
             Assert.Equal(4, VolumePieceFacts.ResolveRar4SlotIndex(Card(VolumeContentFormat.Rar, false, 8), entry));
@@ -56,19 +65,19 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 任一侧读不出原始字段_判不出()
         {
-            FileNatureCard entry = Card(VolumeContentFormat.Rar, first: true, raw: 0);
+            FileNatureCard entry = FirstVolume(0);
 
             Assert.Null(VolumePieceFacts.ResolveRar4SlotIndex(Card(VolumeContentFormat.Rar, false, null), entry));
             Assert.Null(VolumePieceFacts.ResolveRar4SlotIndex(
                 Card(VolumeContentFormat.Rar, false, 2),
-                Card(VolumeContentFormat.Rar, first: true, raw: null)));
+                FirstVolume(null)));
         }
 
         [Fact]
         public void 换算结果小于一_判不出()
         {
             // 原始字段比基数还小 ⇒ 换算出来是 0 / 负数 ⇒ 不猜（宁可什么都不做）。
-            FileNatureCard entry = Card(VolumeContentFormat.Rar, first: true, raw: 3);
+            FileNatureCard entry = FirstVolume(3);
 
             Assert.Null(VolumePieceFacts.ResolveRar4SlotIndex(Card(VolumeContentFormat.Rar, false, 2), entry));
         }
@@ -77,7 +86,7 @@ namespace ArchiveFixer.Tests
         public void 不是RAR族_判不出()
         {
             // 7z / 跨盘 ZIP 各有各的卷号来源，⛔ 不许拿 RAR4 这条公式去套它们。
-            FileNatureCard entry = Card(VolumeContentFormat.Rar, first: true, raw: 0);
+            FileNatureCard entry = FirstVolume(0);
 
             Assert.Null(VolumePieceFacts.ResolveRar4SlotIndex(Card(VolumeContentFormat.SevenZip, false, 2), entry));
             Assert.Null(VolumePieceFacts.ResolveRar4SlotIndex(Card(VolumeContentFormat.Zip, false, 2), entry));

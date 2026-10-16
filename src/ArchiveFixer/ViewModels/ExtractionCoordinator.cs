@@ -9406,6 +9406,45 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **这一组的锚（第 1 卷卡）该从哪拿** —— 两处，按可信度排：
+        ///
+        /// <list type="number">
+        /// <item><description>**这一单自己那一份**（<paramref name="owner"/> 的 `CurrentPath`）：批末重判里
+        /// "这一组该拼到哪一层"就是**按这一单**算出来的，所以它手上那份就是这一组的入口。</description></item>
+        /// <item><description>**目标层里那一份**（<see cref="ResolveGroupFirstVolumeCard"/>）。</description></item>
+        /// </list>
+        ///
+        /// <para>为什么必须有第 ① 处（真机 `19191919` 探针逐字）：那一刻
+        /// `目标层=有 目录在=是 层内文件数=2 **层内第1卷=无**`（入口还没被链接进那一层），
+        /// 而同一份探针里 `片=aaa-L2 卡号=1 卡类=VolumeFirstPiece` ⇒ 锚其实**就在这一单自己手上**；
+        /// 只盯目标层 ⇒ 锚=无 ⇒ 规范名推不出来（`[规范名·进] … 锚=无`）⇒ 那一片永远接不进这一组。</para>
+        ///
+        /// <para>⛔ 两处都拿不到 ⇒ null（判不出 ⇒ 什么都不做）。</para>
+        /// </summary>
+        private static FileNatureCard? ResolveGroupAnchorCard(ArchiveTask? owner, string targetDir, string baseName)
+        {
+            string ownerPath = owner?.CurrentPath ?? string.Empty;
+
+            if (ownerPath.Length > 0)
+            {
+                FileNatureCard ownerCard = FileNature.Inspect(ownerPath);
+
+                /*
+                 * ⛔ **权威是 `BodyKind`，不是 `FirstVolumeFlag`** —— §29.8 那条写死的教训，
+                 * 本轮又实测一次（探针逐字）：`[取锚·owner] 单=aaa-L2.part1.rar 卡类=VolumeFirstPiece
+                 * **首卷位=False** raw=0` ⇒ 锚本来就在这一单手上，被那个标志挡掉了。
+                 * （真机 `4444` 的入口当年也是同一形状：`VolumeFirstPiece` + `First=False`。）
+                 */
+                if (ownerCard.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                {
+                    return ownerCard;
+                }
+            }
+
+            return ResolveGroupFirstVolumeCard(targetDir, baseName);
+        }
+
+        /// <summary>
         /// **这一组的第 1 卷卡**（RAR 1.5–4.x 锚定基数、以及"本族入口形状"的样本都要用它；
         /// 用户 2026-10-16 拍板）。
         ///
@@ -9429,7 +9468,8 @@ namespace ArchiveFixer.ViewModels
             {
                 FileNatureCard card = FileNature.Inspect(candidate);
 
-                if (!card.FirstVolumeFlag || card.RawVolumeField == null)
+                // ⛔ 权威同样是 `BodyKind`（见 `ResolveGroupAnchorCard` 那条实测教训），⛔ 不要求首卷标志。
+                if (card.BodyKind != ArchiveBodyKind.VolumeFirstPiece)
                 {
                     continue;
                 }
@@ -10371,10 +10411,21 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 卡上也给不出卷号（`VolumePiece` 那种"我是后续片但没写第几"）⇒ 照旧返回 false，
                  * 交给"缺口 + 体积"那一档，⛔ 不猜号。</para>
                  */
+                /*
+                 * ⚠ 2026-10-16（真机 `19191919` 的整条判据链探针逐字，`af-probe-d.txt`）：
+                 * `[规范名·进] 片=aaa-L2-976 槽位=2 样本=null **锚=无**` ⇒ 槽位（卡上那张号）是对的，
+                 * 卡在**锚**上；而同一时刻目标层里**没有**第 1 卷（另一条探针逐字：
+                 * `目标层=有 目录在=是 层内文件数=2 层内第1卷=无`）—— 入口还没被链接进那一层。
+                 * ⇒ 取锚**先看这一单自己那一份**（批末重判里"这一组该拼到哪一层"就是按这一单算出来的，
+                 * 所以它手上那份就是这一组的入口：同一份探针里 `片=aaa-L2 卡号=1 卡类=VolumeFirstPiece`），
+                 * 拿不到再扫目标层（原口径）。
+                 */
+                FileNatureCard? groupAnchor = ResolveGroupAnchorCard(owner, targetDirEarly, baseName);
+
                 canonical = ResolveCanonicalNameFromCard(
                     piecePath,
                     nature,
-                    ResolveGroupFirstVolumeCard(targetDirEarly, baseName));
+                    groupAnchor);
 
                 if (canonical.Length == 0)
                 {
