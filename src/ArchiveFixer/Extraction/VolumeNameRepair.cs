@@ -3468,6 +3468,13 @@ namespace ArchiveFixer.Extraction
              */
             var contentOnly = new List<GatherPiece>();
 
+            /*
+             * 「名字与内容**都判不出**卷号」但**基名与入口同族**的那些（用户 2026-10-16 口径：
+             * 「消费方接受"第 1 槽不在这层"后把**卡的绝对卷号**翻成权威」）。
+             * ⛔ 它们不进池子，只在这里待判 —— 采纳的闸门见下面那一段（唯一填平才要）。
+             */
+            var sameBaseUnknown = new List<GatherPiece>();
+
             void Collect(IEnumerable<VolumeCandidate>? candidates, bool applySizeFilter)
             {
                 foreach (VolumeCandidate? candidate in candidates ?? Array.Empty<VolumeCandidate>())
@@ -3524,6 +3531,23 @@ namespace ArchiveFixer.Extraction
                             && content.Format == format)
                         {
                             contentOnly.Add(new GatherPiece(full, number, size));
+                        }
+
+                        /*
+                         * 名字那一把尺子不认、内容也判不出（7z 族的后续卷按定义没有魔数）——
+                         * 但**基名与入口同族**的那些，先原样收在这一档里（⛔ 不进池子）：
+                         * 它们只有在"能把入口自述的字节数**唯一**填平"时才被采纳（见下面那一段）。
+                         */
+                        string entryBaseForFill = FileNameHelper.GetArchiveBaseName(entryPath);
+                        string candidateBase = FileNameHelper.GetArchiveBaseName(full);
+
+                        if (entryBaseForFill.Length > 0
+                            && candidateBase.Length > 0
+                            && (string.Equals(entryBaseForFill, candidateBase, StringComparison.OrdinalIgnoreCase)
+                                || entryBaseForFill.StartsWith(candidateBase, StringComparison.OrdinalIgnoreCase)
+                                || candidateBase.StartsWith(entryBaseForFill, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            sameBaseUnknown.Add(new GatherPiece(full, 0, size));
                         }
 
                         continue;
@@ -3583,8 +3607,52 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * ===== 找卷的基准 = 手上**最浅的那一卷**（用户 2026-10-05 口径）=====
+             * ===== 「唯一填平」那一档：用**入口自述的整包字节数**给判不出卷号的那几份定槽位 =====
              *
+             * 用户 2026-10-16 口径（逐字）：「批末用**卡算出的入口层**收拢 ⇒ 消费方接受"第 1 槽不在这层"后
+             * 把**卡的绝对卷号**翻成权威」。
+             *
+             * 现场（真机样本 `10101010`，探针逐字）：窗口里三片都在 ——
+             * `.001`(26214400) 与 `.002`(26214400) 名字读得出卷号，第 3 片被伪装法吃掉了卷标记
+             * （`pack111-L2.7z`，10490213）⇒ 名字与内容都判不出 ⇒ 老判据把它丢在池子外 ⇒
+             * 明细永远是「7z 起始头自述这一包应当有 62919013 字节，手上这几卷加起来只有 52428800 ——
+             * 还差 10490213 字节」，而那"还差的"正是这一份。
+             *
+             * 闸门（⛔ 全部是事实，⛔ 不猜卷号、⛔ 不动盘上任何东西）：
+             *   ① 只对 **7z** 开（只有它给得出"整包字节数 + 片数"这两条自述）；
+             *   ② 入口自述必须**同时**给出片数与整包字节数；
+             *   ③ 空洞只有**一个**（多个洞 ⇒ 谁先谁后判不出 ⇒ 整档不做）；
+             *   ④ 待填的候选里 **恰好只有一份**的字节数等于"还差的那一串"（唯一性 ⇒ 才敢定槽位）。
+             * 四条同时成立 ⇒ 补进池子（槽位 = 那个唯一的空洞），后面那三道闸门照旧一条不落。
+             */
+            if (format == VolumeContentFormat.SevenZip && sameBaseUnknown.Count > 0)
+            {
+                FileNatureCard fillCard = FileNature.Inspect(entryPath);
+
+                if (fillCard.DeclaredVolumeCount > 0 && fillCard.DeclaredTotalBytes > 0)
+                {
+                    var haveSlots = new HashSet<int>(pool.Select(piece => piece.Index));
+                    var holes = Enumerable.Range(1, fillCard.DeclaredVolumeCount)
+                        .Where(slot => !haveSlots.Contains(slot))
+                        .ToList();
+                    long missingBytes = fillCard.DeclaredTotalBytes - pool.Sum(piece => piece.Size);
+
+                    if (holes.Count == 1 && missingBytes > 0)
+                    {
+                        List<GatherPiece> exact = sameBaseUnknown
+                            .Where(piece => piece.Size == missingBytes)
+                            .ToList();
+
+                        if (exact.Count == 1)
+                        {
+                            pool.Add(new GatherPiece(exact[0].Path, holes[0], exact[0].Size));
+                        }
+                    }
+                }
+            }
+
+            /*
+             * ===== 找卷的基准 = 手上**最浅的那一卷**（用户 2026-10-05 口径）=====
              * ⛔ 绝不是 001：真机上真正该被看见的父文件夹是**最外层那个分卷**的父文件夹。拿一个解出来的
              * `001`（它躺在产物树深处）当基准时，窗口的"第一层父文件夹"成了那个深层目录 ⇒
              * `111\1111.7z.002删除` / `.003删除` 一个都探测不到。
@@ -3656,6 +3724,26 @@ namespace ArchiveFixer.Extraction
                 if (TryBuildRestoredName(canonical, format, out string restored))
                 {
                     canonical = restored;
+                }
+                else if (FileNameHelper.TryResolveVolumeBaseName(
+                             entryName,
+                             VolumeBaseNameLevel.DisguisedVolume,
+                             out string entryVolumeBase,
+                             out _)
+                         && entryVolumeBase.Length > 0)
+                {
+                    /*
+                     * 这一份的名字里**根本没有卷标记**（伪装法把卷号吃掉了，如 `pack111-L2.7z`）
+                     * ⇒ `TryBuildRestoredName` 帮不上（它要有标记才还原）。
+                     * 它的槽位是我们**按入口自述的整包字节数唯一填平**推出来的（见上面那一段），
+                     * 所以规范名照**入口那一份的形状**拼：`<入口的卷基名>.<三位卷号>`。
+                     *
+                     * ⛔ 不另造一套命名口径：卷基名仍出自同一个出口
+                     * （<see cref="FileNameHelper.TryResolveVolumeBaseName"/>，级别 = 伪装档）。
+                     * 现场（`10101010`）：这一步之前，明细是「目标名「pack111-L2.7z」已经被别的文件占用了」
+                     * —— 因为名字原样没带卷号、撞上入口层里那份同名文件；拼成 `pack111-L2.7z.003` 之后才落得下去。
+                     */
+                    canonical = entryVolumeBase + "." + piece.Index.ToString("000", System.Globalization.CultureInfo.InvariantCulture);
                 }
 
                 if (!targetNamesSeen.Add(canonical))

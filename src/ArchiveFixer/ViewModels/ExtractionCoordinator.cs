@@ -506,6 +506,133 @@ namespace ArchiveFixer.ViewModels
         /// <b>不在这里替任何一档下别的结论</b>：状态与原因由调用方给（各档自己的判据），
         /// 中文文案一个字都不改。</para>
         /// </summary>
+        /// <summary>
+        /// **"7-Zip 打不开"的那一份，是不是某个分卷组的一片？**（唯一出口，判据 2026-10-14 定、2026-10-16 落地）
+        ///
+        /// <para>现场（官方环台 `10101010` / `19191919`）：一份名为 `pack111-L2.7z` 的文件 ——
+        /// 它其实是分卷 7z 的**第 3 片**，只被伪装法吃掉了卷标记 ⇒ <b>内容判不出</b>
+        /// （7z 族的中间片/末片按定义没有魔数，卡上 `格式=Unknown 分卷身份=Unknown`）、
+        /// <b>名字也不像后续卷</b>。老口径把它落成「已跳过 ⇒ 不是压缩包」，于是整组永远凑不齐。</para>
+        ///
+        /// <para>判据（⛔ 只用既有事实，⛔ 不猜卷号、⛔ 不动盘上任何东西）：<br/>
+        /// ① 同批任务里有另一单的名字读得出"第 1 卷"（<see cref="VolumeGroupDetector.TryGetVolumeIndex"/> = 1）；<br/>
+        /// ② 它的基名（唯一出口 <see cref="FileNameHelper.GetArchiveBaseName"/>）与这一份**相同或互为前缀**；<br/>
+        /// ③ 这一份的体积 **≤** 那一份的体积（"除末卷外等大" ⇒ 任何一片都不会比满片还大）。<br/>
+        /// 三条同时成立 ⇒ 判"疑似这一组的一片" ⇒ 结论是**缺卷**，交给批末/跨链那一套去凑。</para>
+        ///
+        /// <para>⛔ 判不出 ⇒ 返回 <c>false</c>（照旧落「已跳过」）—— 兜底永远是"什么都不做"。</para>
+        /// </summary>
+        /// <summary>
+        /// 批末：把 <see cref="_unrecognizedMaybePiece"/> 里那些**升级**成「分卷缺失」（严格判据成立时）。
+        ///
+        /// <para>⛔ 只升级、不改别的：判据不成立的那些**保持「已跳过」**（它们是真的"不是压缩包"）；
+        /// 机器终态与结束时间由 <see cref="MarkStoppedBeforeExtract"/> 一次性收口（那一支的注释里有理由）。</para>
+        /// </summary>
+        private void UpgradeUnrecognizedMaybePieceVerdicts()
+        {
+            if (_unrecognizedMaybePiece.Count == 0)
+            {
+                return;
+            }
+
+            foreach (ArchiveTask task in _unrecognizedMaybePiece.ToList())
+            {
+                if (task.Outcome != TaskOutcome.Skipped)
+                {
+                    continue;
+                }
+
+                if (!LooksLikePieceOfBatchVolumeGroup(task, out string diagnosis))
+                {
+                    continue;
+                }
+
+                MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+                AppendLog("WARN", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
+            }
+        }
+        private bool LooksLikePieceOfBatchVolumeGroup(ArchiveTask task, out string diagnosis)
+        {
+            diagnosis = string.Empty;
+
+            string ownName = FileNameHelper.GetFileName(task.CurrentPath);
+
+            if (ownName.Length == 0)
+            {
+                return false;
+            }
+
+            long ownSize;
+
+            try
+            {
+                ownSize = new FileInfo(task.CurrentPath).Length;
+            }
+            catch
+            {
+                return false;
+            }
+
+            string ownBase = FileNameHelper.GetArchiveBaseName(task.CurrentPath);
+
+            if (string.IsNullOrWhiteSpace(ownBase))
+            {
+                return false;
+            }
+
+            foreach (ArchiveTask? other in SnapshotTaskTable(Tasks))
+            {
+                if (other == null || ReferenceEquals(other, task) || string.IsNullOrWhiteSpace(other.CurrentPath))
+                {
+                    continue;
+                }
+
+                string otherName = FileNameHelper.GetFileName(other.CurrentPath);
+
+                // ① 那一单的名字必须读得出"第 1 卷"。
+                if (VolumeGroupDetector.TryGetVolumeIndex(otherName) != 1)
+                {
+                    continue;
+                }
+
+                string otherBase = FileNameHelper.GetArchiveBaseName(other.CurrentPath);
+
+                // ② 基名相同，或互为前缀（`pack111-L2` vs `pack111-L2.7z` 这种"归档后缀差一段"）。
+                bool sameBase = string.Equals(ownBase, otherBase, StringComparison.OrdinalIgnoreCase)
+                    || ownBase.StartsWith(otherBase, StringComparison.OrdinalIgnoreCase)
+                    || otherBase.StartsWith(ownBase, StringComparison.OrdinalIgnoreCase);
+
+                if (!sameBase)
+                {
+                    continue;
+                }
+
+                long otherSize;
+
+                try
+                {
+                    otherSize = new FileInfo(other.CurrentPath).Length;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                // ③ "除末卷外等大" ⇒ 这一份不会比满片还大。
+                if (ownSize > otherSize)
+                {
+                    continue;
+                }
+
+                diagnosis = $"它可能是「{otherName}」那一组的一片（同族同基名、体积 {ownSize} ≤ {otherSize}），"
+                    + "但这一组现在凑不齐 —— 先不判它，等这一批的解压都跑完再判一次。";
+
+                return true;
+            }
+
+            return false;
+        }
+
         private void MarkStoppedBeforeExtract(ArchiveTask task, string status, string errorMessage)
         {
             /*
@@ -8750,6 +8877,18 @@ namespace ArchiveFixer.ViewModels
         private readonly HashSet<ArchiveTask> _volumeDeficitFinalPass = new();
 
         /// <summary>
+        /// **"未识别"但可能是某个分卷组一片的那些**（唯一用途：批末用严格判据再检验一步）。
+        ///
+        /// <para>用户口径（2026-10-09 逐字）：「分卷和其他**未识别的东西统统跳过**到了最后再重新检验一步」。
+        /// 它们**当场照旧落「已跳过」+ 机器终态收口**（守门
+        /// <c>DeferredVolumeStatusTests.未识别的东西_只跳过_机器终态必须收口不许算未处理</c> 钉着这条），
+        /// 这里只是"记一笔"，好在批末把它们**升级**成「分卷缺失」（当严格判据成立时）。</para>
+        ///
+        /// <para>⛔ 与"缺卷名单"（<c>_volumeDeficitDeferred</c>）**不是一回事**：那一份装的是
+        /// "已确认是分卷、只是缺片"的单；装错了会把纯文本文件改判成「分卷缺失」（第一版就是这么错的）。</para>
+        /// </summary>
+        private readonly HashSet<ArchiveTask> _unrecognizedMaybePiece = new();
+        /// <summary>
         /// 「我手动指定缺失卷所在目录」——WinRAR 参考 §2 G 组 / §3 第 2 条的采纳项。
         ///
         /// <para>
@@ -9063,14 +9202,36 @@ namespace ArchiveFixer.ViewModels
                  * 所有剩下的路径各自所在目录**（`SnapshotTaskTable(Tasks)` 就是"这一批导入的 + 剩下的"）。
                  * ⛔ 放宽的只是"去哪儿找"：三道闸门与"整组完整才允许搬/删"一个字都没动。
                  */
+                /*
+                 * ⚠ 2026-10-16（真机样本 `10101010` 探针逐字）：候选来源原来只有**各单的 CurrentPath**，
+                 * 而分卷的片是**别的单解出来的产物** —— 它们落在那一单的 `OutputPath` / 内容目录 /
+                 * 其余物目录里，往往还在子目录中 ⇒ 窗口够不到 ⇒ 一整组的片永远"只有手上这一份"。
+                 *
+                 * 现场逐字（批末窗口）：入口 `pack111-L2.7z.001` 那一趟的候选是
+                 * `pack111-L2.7z(26214400) ; pack111-L2.7z.001(26214400) ; pack111-W0-0.7z ; pack111-W1-0.zip ; pack111-L2.7z(10490213)`
+                 * —— **`.002` 载荷（`…\pack111(2)\pack111-W1-0\pack111-L2.7z.002`）压根不在里面**，
+                 * 因为它在 `pack111-W1-0.zip` 那一单的**产出目录的子目录**里。
+                 *
+                 * ⇒ 把"产出层"也并进候选来源（与用户 2026-10-12 口径 2 同一条：
+                 * 「这个第一大步完成之后就是扫描所有剩余的」）。⛔ 放宽的只是**去哪儿找**，
+                 * 下面那三道闸门与"整组完整才允许搬/删"一个字都没动。
+                 */
                 IReadOnlyList<VolumeCandidate> window = VolumeNameRepair.EnumerateVolumeCandidatesNearby(
                     current,
                     SnapshotTaskTable(Tasks)
-                        .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.CurrentPath))
-                        .Select(candidate => candidate.CurrentPath));
+                        .Where(candidate => candidate != null)
+                        .SelectMany(candidate => new[]
+                        {
+                            candidate!.CurrentPath,
+                            candidate.OutputPath,
+                            candidate.ContentDirectoryPath,
+                            candidate.RestDirectoryPath
+                        })
+                        .Where(path => !string.IsNullOrWhiteSpace(path)));
 
                 VolumeNameRepair.CrossLayerVolumeGather decision =
                     VolumeNameRepair.ResolveCrossLayerVolumeGather(entryPath, null, window);
+
 
                 if (!decision.Applicable)
                 {
@@ -22320,6 +22481,38 @@ namespace ArchiveFixer.ViewModels
                          * 命中 ⇒ 结论是**缺卷**（`VolumeMissing`），⛔ 不是「跳过」、⛔ 不是「失败」；片原样留着，
                          * 交给批末/跨链那一套去凑 —— 与单层路那两处**同一个结论口径**（只是证据多了一档）。</para>
                          */
+
+                        /*
+                         * ⛔ 2026-10-16 **这条判据终于落地**（它 2026-10-14 只写了注释、没进代码 —— 见上面那段）：
+                         * 现场复核逐字（`10101010`，`result.json` + 盘面）：那一单落「已跳过 / Skipped」、
+                         * 输出层 `…\pack111(3)\pack111(3)\pack111(3)\pack111-L2`，而它的三个兄弟片
+                         * （`.001` / `.002` 载荷）分别在另外两条链的产出层里 ⇒ 组永远凑不齐 ⇒ 判据 ① 红。
+                         */
+                        /*
+                         * ⛔⛔ 2026-10-16 实测纠正（探针逐字）：「批首就用同族入口包当判据」**判不出来** ——
+                         * 那一刻批里**还没有 `.001` 那一单**（它由同批另一条链稍后才产出），
+                         * 于是判据只看到 `pack111-W1-0.zip`（基名不同）⇒ 门不开 ⇒ 照旧落「已跳过」。
+                         *
+                         * 用户口径本来就写着这一步该怎么办（2026-10-09 逐字）：
+                         * 「分卷和其他**未识别的东西统统跳过**到了最后再重新检验一步」——
+                         * 也就是说**第一趟不判死**：先记名单，等这一批的解压都跑完（那时同族入口包要么已经产出、
+                         * 要么已经收拢到位）**再判一次**；批末才用严格判据落结论。
+                         *
+                         * ⇒ 与缺卷预检**同一条口径、同一个事实位**（`_volumeDeficitFinalPass`）。
+                         */
+                        /*
+                         * ⚠ 2026-10-16 **第二版**（第一版被既有守门纠正过，如实记）：
+                         * 第一版把"未识别"塞进了**缺卷名单**（`RecordDeferredVolumeDeficit`），
+                         * 于是批末把一个纯文本文件改判成「分卷缺失」——
+                         * `DeferredVolumeStatusTests.未识别的东西_只跳过_机器终态必须收口不许算未处理`
+                         * 当场逮住（逐字 `Expected: "已跳过" / Actual: "分卷缺失"`）。
+                         * ⇒ 正确形状（两个契约都要守）：
+                         *   ① 当场**照旧落「已跳过」+ 机器终态收口**（那条契约一个字不改）；
+                         *   ② 只**另记一笔**（`_unrecognizedMaybePiece`），批末再用**严格判据**
+                         *      （同族第 1 卷 + 基名相同或互为前缀 + 体积 ≤ 满片）把"确实是某组一片"的
+                         *      那种**升级**成缺卷 —— 那时同批该产出的都产出了，判据才看得见。
+                         */
+                        _unrecognizedMaybePiece.Add(task);
 
                         task.Status = StatusText.Skipped;
                         task.Operation = StatusText.OpSkip;
