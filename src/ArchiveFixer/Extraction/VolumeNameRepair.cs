@@ -4456,31 +4456,40 @@ namespace ArchiveFixer.Extraction
                     .ToList();
 
                 /*
-                 * ===== 卡优先：**卡决定"谁属于这一组"，名字只负责给这个集合起标签** =====
-                 * （用户 2026-10-17：底层识别永远是最强证据 ⇒ 不能退回名字优先）
-                 *
-                 * 实测（真 7z 分卷，`debug-sample` 的 `probe-base`）：卡上 `ArchiveBaseName` 给 **`HK`**，
-                 * 而 `VolumeGroupDetector.Group` 的组键基名是 **`HK.7z`** —— 卡把归档后缀也剥掉了。
-                 * ⇒ 卡**不能直接当组键**（形状不同，下游对不上），但它完全能回答"哪几份是这一组"。
-                 * 所以：先把卡认定属于这一族的那些挑出来（≥2 份才用），**标签仍由名字那把尺子算**
-                 * （组键形状因此与老口径逐字一致），挑不出来 / 挑出来算不出组 ⇒ 退回全集（老口径）。
+                 * ===== 卡优先（安全版）：卡**只剔除"可证不是分卷成员"的那些** =====
+                 * 用户 2026-10-17：「底层识别一直是最强的」。但实测证明两件事：
+                 * ① 卡**不能当组键标签**（卡上 `ArchiveBaseName`=「HK」，组键=「HK.7z」，形状不同）；
+                 * ② 也**不能让"卡挑出来的子集"去分组**（子集的标签会变，`CrossLayerVolumeGatherTests`
+                 *    `完整单卷包…` 与 `凑不齐…` 两条当场红）。
+                 * ⇒ 卡的正当用法只剩一种**不可能误伤**的：内容可证"我不是这一族任何分卷"的那几份
+                 * （`VolumeMembershipVerdict.ProvablyNotVolumeMember`）从桶里剔掉；其余照旧。
+                 * 剔除后不足 2 份 ⇒ 一个都不剔（老口径）。
                  */
-                var cardMembers = new List<VolumeCandidate>();
+                var cardFiltered = new List<VolumeCandidate>();
 
                 foreach (VolumeCandidate candidate in named)
                 {
+                    bool provablyNotMember;
+
                     try
                     {
-                        if (ArchiveFixer.Detection.VolumePieceFacts.CardSaysItIsOneOfTheGroup(
-                                ArchiveFixer.Detection.FileNature.Inspect(candidate.Path)))
-                        {
-                            cardMembers.Add(candidate);
-                        }
+                        provablyNotMember = ArchiveFixer.Detection.FileNature.Inspect(candidate.Path).Membership
+                            == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember;
                     }
                     catch
                     {
-                        // 读不出来就少一份成员（判据那边退回老口径）。
+                        provablyNotMember = false;
                     }
+
+                    if (!provablyNotMember)
+                    {
+                        cardFiltered.Add(candidate);
+                    }
+                }
+
+                if (cardFiltered.Count >= 2 && cardFiltered.Count < named.Count)
+                {
+                    named = cardFiltered;
                 }
 
                 /*
@@ -4523,39 +4532,62 @@ namespace ArchiveFixer.Extraction
                     }
                 }
 
-                /*
-                 * **卡优先分桶**：先只用"卡认定属于这一族"的那些（≥2 份才试），
-                 * 组键标签仍由名字那把尺子算 ⇒ 形状与老口径逐字一致；
-                 * 卡挑出来的集合算不出组（或没包含入口）⇒ 退回全集（老口径）。
-                 */
-                var cardNamed = cardMembers
-                    .Select(member => string.Equals(member.Path, entryName, StringComparison.OrdinalIgnoreCase)
-                        ? new VolumeCandidate { Path = entryBucketName, Size = member.Size }
-                        : member)
-                    .ToList();
-
-                foreach (List<VolumeCandidate> bucket in new[] { cardNamed, named })
+                foreach (VolumeGroup group in VolumeGroupDetector.Group(named))
                 {
-                    if (bucket.Count < 2)
+                    if (group.Volumes.Any(v => string.Equals(
+                            SafeFileName(v.Path),
+                            entryBucketName,
+                            StringComparison.OrdinalIgnoreCase)))
                     {
-                        continue;
-                    }
-
-                    foreach (VolumeGroup group in VolumeGroupDetector.Group(bucket))
-                    {
-                        if (group.Volumes.Any(v => string.Equals(
-                                SafeFileName(v.Path),
-                                entryBucketName,
-                                StringComparison.OrdinalIgnoreCase)))
-                        {
-                            return group.BaseName;
-                        }
+                        return group.BaseName;
                     }
                 }
             }
             catch
             {
                 // 判不出来 ⇒ 什么都不做（调用方退回"照旧让引擎去判"）。
+            }
+
+            /*
+             * ===== 名字分桶判不出时，让**底层识别卡**再答一次（用户 2026-10-17：名字只兜底）=====
+             * 卡上凡是自报"我是这一族的一片"（`CardSaysItIsOneOfTheGroup`）且带 `ArchiveBaseName` 的，
+             * 取它们的基名；**唯一一致** ⇒ 就是这一组的基名。
+             * ⚠ 为什么只做兜底而不是首选：实测把它放到名字分桶之前会打红
+             * `SiblingFolderVolumeGatherTests` 的"基准/窗口"那几条（卡上的基名与
+             * `VolumeGroupDetector.Group` 算出来的组键不是一个形状），所以顺序必须是"名字先、卡兜底"。
+             */
+            try
+            {
+                var cardBases = new List<string>();
+
+                foreach (GatherPiece piece in pool)
+                {
+                    try
+                    {
+                        ArchiveFixer.Detection.FileNatureCard pieceCard =
+                            ArchiveFixer.Detection.FileNature.Inspect(piece.Path);
+
+                        if (ArchiveFixer.Detection.VolumePieceFacts.CardSaysItIsOneOfTheGroup(pieceCard)
+                            && pieceCard.ArchiveBaseName.Length > 0)
+                        {
+                            cardBases.Add(pieceCard.ArchiveBaseName);
+                        }
+                    }
+                    catch
+                    {
+                        // 读不出来就少一张卡。
+                    }
+                }
+
+                if (cardBases.Count > 0
+                    && cardBases.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
+                {
+                    return cardBases[0];
+                }
+            }
+            catch
+            {
+                // 卡也判不出 ⇒ 判不出。
             }
 
             return null;
