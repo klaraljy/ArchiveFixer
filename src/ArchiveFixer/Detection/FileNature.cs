@@ -126,6 +126,9 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public bool HasZipEndRecord { get; init; }
 
+        /// <summary>这个 EOCD 说明"我是分片的最后一片"（中央目录偏移 ≥ 本文件长度，或盘号 &gt; 0）。</summary>
+        public bool ZipEndRecordMeansSplit { get; init; }
+
         /// <summary>
         /// 这一份的**开头是 zip 本地文件头** `PK\x03\x04`：通用分片族里它 = **第 1 片**的证据。
         /// </summary>
@@ -378,6 +381,7 @@ namespace ArchiveFixer.Detection
                 DeclaredVolumeCount = declaredVolumeCount,
                 RawVolumeField = reading.RawField,
                 HasZipEndRecord = reading.HasZipEndRecord,
+                ZipEndRecordMeansSplit = reading.ZipEndRecordMeansSplit,
                 HasZipLocalHeader = reading.HasZipLocalHeader,
                 VolumeIndexByName = VolumeGroupDetector.TryGetVolumeIndex(name),
                 FirstVolumeNameByName = VolumeGroupDetector.TryGetFirstVolumeName(name),

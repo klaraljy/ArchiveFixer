@@ -349,10 +349,10 @@ namespace ArchiveFixer.Detection
                  */
                 if (slotList.Count < 2)
                 {
-                    List<FileNatureCard> endPieces = pieces.Where(card => card.HasZipEndRecord).ToList();
+                    List<FileNatureCard> endPieces = pieces.Where(card => card.ZipEndRecordMeansSplit).ToList();
                     List<FileNatureCard> localPieces = pieces.Where(card => card.HasZipLocalHeader).ToList();
                     List<FileNatureCard> middlePieces = pieces
-                        .Where(card => !card.HasZipLocalHeader && !card.HasZipEndRecord)
+                        .Where(card => !card.HasZipLocalHeader && !card.ZipEndRecordMeansSplit)
                         .ToList();
 
                     if (endPieces.Count == 1

@@ -43,6 +43,27 @@ namespace ArchiveFixer.Services
                     continue;
                 }
 
+                /*
+                 * ===== 归组也**先问卡**（用户 2026-10-17：「一切看底层识别的来」）=====
+                 * 现场（新造困难档 `6666`）：造包器给**每一片单独套了 0–2 层归档**，盘上
+                 * `打包111-W0-0` / `打包111-W1-0.png` / `打包111-L2.zip.000003` 三个文件
+                 * **各自都是一份完整的单卷归档**（卡上逐字 `单卷/分卷=SingleComplete`、
+                 * `参与分卷那一套=False`），只是名字长得像分片。
+                 * 名字那把尺子会把它们归成一组 ⇒ 整组按"缺卷"卡死、永远不解 ——
+                 * 内容可证"我不是分卷成员"的，⛔ 不许按名字归组（它照旧作为独立任务留在表里）。
+                 */
+                try
+                {
+                    if (!ArchiveFixer.Detection.FileNature.Inspect(task.CurrentPath).ParticipatesInVolumeHandling)
+                    {
+                        continue;
+                    }
+                }
+                catch
+                {
+                    // 卡读不出来 ⇒ 照旧按名字（老口径）。
+                }
+
                 candidates.Add(new VolumeCandidate
                 {
                     Path = task.CurrentPath,

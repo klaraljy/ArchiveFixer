@@ -126,6 +126,17 @@ namespace ArchiveFixer.Detection
         public bool HasZipEndRecord { get; init; }
 
         /// <summary>
+        /// **这个 EOCD 说明"我是分片的最后一片"**（设计文档 §6.6 A 的"拼回合法性"那条证据）：
+        /// 判据 = EOCD 里的**中央目录偏移 ≥ 本文件长度**（中央目录起在更早的片里），或盘号 &gt; 0。
+        ///
+        /// <para>⛔ 单卷 zip 的尾部也有 EOCD，但它的中央目录就在自己身上 ⇒ 这条为 <c>false</c>。
+        /// 现场（新造 30 份的困难档）：造包器给**每一片单独套了 0–2 层归档**（`Add-Wraps`），
+        /// 盘上每个文件其实是一个"装着一片的独立归档"（`Rar!` / 多个 `PK` 头就是这么来的）——
+        /// 把它们当成"分片"硬拼，就永远解不出来；正确行为是**先各自按单卷解**，再收拢。</para>
+        /// </summary>
+        public bool ZipEndRecordMeansSplit { get; init; }
+
+        /// <summary>
         /// **这一份的开头是 zip 的本地文件头**（`PK\x03\x04`）—— 通用分片族里"哪一片是第 1 片"的内容证据
         /// （设计文档 §6.6 A / 工单 #10）。7-Zip `-tzip -v` 切出来的第 1 片就以本地文件头开头，
         /// 中间片是从数据中间切开的（四种 PK 签名之一，但不是本地头）。
@@ -968,6 +979,10 @@ namespace ArchiveFixer.Detection
                 VolumeNumberReading singleDisk = NotAVolume(
                     filePath, VolumeContentFormat.Zip, VolumeNumberFail.ZipSingleDisk);
 
+                /*
+                 * 单卷 zip ⇒ 中央目录就在自己身上 ⇒ `ZipEndRecordMeansSplit` 为假。
+                 * （只有"中央目录偏移 ≥ 本文件长度"那种 EOCD 才说明它是**分片的最后一片**。）
+                 */
                 return new VolumeNumberReading
                 {
                     Path = singleDisk.Path,
@@ -977,7 +992,8 @@ namespace ArchiveFixer.Detection
                     Number = singleDisk.Number,
                     Total = singleDisk.Total,
                     Fail = singleDisk.Fail,
-                    HasZipEndRecord = true
+                    HasZipEndRecord = true,
+                    ZipEndRecordMeansSplit = false
                 };
             }
 
@@ -996,6 +1012,7 @@ namespace ArchiveFixer.Detection
                 Number = diskNumber + 1, // 盘号 0 起
                 Total = diskNumber + 1,  // 末片：本盘号 + 1 = 总片数
                 HasZipEndRecord = true,
+                ZipEndRecordMeansSplit = true,   // 盘号 > 0 ⇒ 这是真跨盘末片
                 Fail = VolumeNumberFail.None
             };
         }
