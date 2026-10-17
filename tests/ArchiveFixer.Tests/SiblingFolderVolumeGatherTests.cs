@@ -551,6 +551,55 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain(StatusText.WaitingExtract, rowSnapshots[^1], StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// **已经成功过的那一单，批末补齐之后不许再被排一次**（用户 2026-10-17，困难批 `12121212` 运行期定案）。
+        ///
+        /// <para>现场逐字：入口那一单（名字是伪装基名）第 1 轮就成功了（`定稿完成 —— 内容物 1 个文件`），
+        /// 可批末补判把这一组判「现在齐了…照常跑这一组」⇒ 日志逐字「落点 …\打包111-W2-0\打包111-W2-0
+        /// —— 取的是这一组分卷入口包「打包111-L2.zip」所在的那一层…分卷组从入口包开解，产物就跟它走」
+        /// ⇒ **同一单又跑了一遍**、成品两份 `content-60mb.bin`。</para>
+        ///
+        /// <para>判据只读**机器终态**这一条事实（`Outcome == Succeeded` = 内容物已经得到）。</para>
+        ///
+        /// <para><b>红检</b>：撤掉 `RecheckDeferredVolumeDeficits` 里那条 `Outcome == Succeeded` 闸门
+        /// ⇒ 本条当场红（它会被加回"这一轮要跑"的名单）。</para>
+        /// </summary>
+        [SevenZipFact]
+        public async Task 批末补齐之后_已经成功过的那一单不许再被排一次()
+        {
+            RequireSevenZip();
+
+            (string first, string second, _, _) = BuildTwoVolumeSet("已经成功过不再跑");
+
+            Harness harness = CreateHarness("SingleLayer", SourceHandlingMode.KeepInPlace, RestHandlingModes.Keep);
+
+            ArchiveTask owner = await AddTaskAsync(harness, first);
+            ArchiveTask alreadySucceeded = await AddTaskAsync(harness, second);
+
+            new VolumeGroupingService().ApplyVolumeGrouping(new[] { owner, alreadySucceeded });
+            CaptureSnapshots(harness);
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(TaskOutcome.Succeeded, owner.Outcome);
+
+            /*
+             * 把真机那一刻摆出来（只摆状态、⛔ 一点判据都不复制）：
+             * ① 第二单挂在"缺卷留到最后再判"那份名单上；
+             * ② 而它这一批**已经成功过**（真机里第 1 轮就成功了）。
+             */
+            harness.Coordinator.ResetBatchLedgersForTests();
+            harness.Coordinator.RecordDeferredVolumeDeficitForTests(alreadySucceeded);
+            alreadySucceeded.Outcome = TaskOutcome.Succeeded;
+
+            IReadOnlyList<ArchiveTask> toRun = harness.Coordinator.FinalizeDeferredVolumeDeficits();
+
+            Log(harness, "已经成功过的那一单：批末那一站之后");
+
+            Assert.DoesNotContain(alreadySucceeded, toRun);
+            Assert.Equal(TaskOutcome.Succeeded, alreadySucceeded.Outcome);
+            Assert.False(harness.Coordinator.IsDeferredVolumeDeficit(alreadySucceeded));
+        }
         // ============================================================ ② "散着的那几片"的源包要有人处理
 
         /// <summary>
