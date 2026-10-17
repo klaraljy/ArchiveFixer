@@ -5348,7 +5348,7 @@ namespace ArchiveFixer.ViewModels
                  * （`VolumeGroupDeletionSafetyTests` 那一族钉的就是这条兜底 —— 实测 136 条全绿）。
                  */
                 bool isProcessArtifact = engineOutput == null
-                    && IsProcessArtifactFile(file)
+                    && (IsProcessArtifactFile(file) || CardSaysItIsOneOfTheGroup(file))
                     /*
                      * ⛔ 命中「内容物保留关键词」的**不是过程物**（用户 2026-10-04 的新功能
                      * 「内容物压缩文件不解压」）：它是用户点名"碰都不碰"的内容物 ⇒
@@ -9866,6 +9866,23 @@ namespace ArchiveFixer.ViewModels
             }
 
             return current;
+        }
+
+        /// <summary>
+        /// **底层识别卡**说"这一份是某一分卷组的一片"（用户 2026-10-17：「定稿分类读卡」——
+        /// 分卷片不再当内容物）。⛔ 不看后缀、⛔ 不猜：判据唯一出口
+        /// <see cref="VolumePieceFacts.CardSaysItIsOneOfTheGroup"/>（`BodyKind` = 首片 / 后续片）。
+        /// </summary>
+        private static bool CardSaysItIsOneOfTheGroup(string path)
+        {
+            try
+            {
+                return VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(path));
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>
@@ -14890,7 +14907,16 @@ namespace ArchiveFixer.ViewModels
 
                         if (probeFailure != null)
                         {
-                            gatherPlan = VolumeGatherPlan.Leave(probeFailure);
+                            /*
+                             * ⛔ 试开**只是"这一次先不搬"的闸门，不是对整组的判决**（用户 2026-10-17：
+                             * 「只是简单的判断一下，不能够形成判决情况，因为这个是第二大步才做的」）。
+                             * ⇒ 这里只写"这一趟先不收"，把结论留给第二大步；⛔ 不写"整组不动/判不出"。
+                             */
+                            AppendLog(
+                                "WARN",
+                                $"{task.LogName}：这一趟先不收（硬链接试开没通过，留到第二大步再判）—— {probeFailure}");
+
+                            gatherPlan = VolumeGatherPlan.Leave("这一趟先不收（试开没通过，留到第二大步再判）");
                         }
                     }
 
