@@ -11733,6 +11733,23 @@ namespace ArchiveFixer.ViewModels
                 return "判不出";
             }
         }
+        /// <summary>这一份是不是已经在某个「其余物」目录里（按路径段判；是 ⇒ 不再搬第二遍）。</summary>
+        private static bool IsInsideProcessArtifactDirectory(string path)
+        {
+            string? directory = Path.GetDirectoryName(path);
+
+            while (!string.IsNullOrWhiteSpace(directory))
+            {
+                if (ProcessArtifactLayout.IsArtifactDirectoryName(Path.GetFileName(directory)))
+                {
+                    return true;
+                }
+
+                directory = Path.GetDirectoryName(directory);
+            }
+
+            return false;
+        }
         private ArchiveTask? FindTaskByPath(string path)
         {
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
@@ -14328,6 +14345,22 @@ namespace ArchiveFixer.ViewModels
                      * ⛔ 再加一道底层识别（同一张卡）：内容**可证"不是分卷组的一员"** ⇒ 它不是"这一组的多余名"，
                      * 一个字节都不动（⛔ 判不出照旧按名字 —— 跨盘 ZIP 的中间片就在那一档）。
                      */
+                    /*
+                     * ⛔ **已经在 `其余物` 里的不再当候选**（2026-10-17 真机 `6666`，日志 `:231/:255/:269/:283/:285`）。
+                     *
+                     * <p>现场逐字：同一片在同一秒里被"集中进其余物"搬了 **5 次**，名字长成
+                     * `pack111-L2.7z(1)(1)(1)(1)(1).003` —— 因为扫描是
+                     * `Directory.GetFiles(outputRoot, "*", SearchOption.AllDirectories)`（**递归**），
+                     * 把上一趟刚搬进 `其余物\` 的那一份又当候选搬了一遍，每趟撞名就按
+                     * `stem(index)extension` 再插一个 `(1)`。</p>
+                     *
+                     * <p>其余物就是这些副本的终点 ⇒ 已经在那儿的，一个字节都不再动。</p>
+                     */
+                    if (IsInsideProcessArtifactDirectory(path))
+                    {
+                        continue;
+                    }
+
                     FileNatureCard nature = FileNature.Inspect(path);
 
                     if (VolumeGroupDetector.TryGetVolumeIndex(foundName) == null
