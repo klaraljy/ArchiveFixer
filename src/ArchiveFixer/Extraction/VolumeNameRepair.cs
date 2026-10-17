@@ -3863,12 +3863,32 @@ namespace ArchiveFixer.Extraction
                          .ThenBy(p => p.Path.Count(character => character == '\\'))
                          .ThenBy(p => SafeFileName(p.Path), StringComparer.OrdinalIgnoreCase))
             {
-                if (byIndex.TryAdd(piece.Index, piece))
+                /*
+                 * ===== 槽位以**卡上的卷号**为准（用户 2026-10-17：「一切看底层识别的来」）=====
+                 * 现场（新样本 `1111`）：`222-L2.part34B+.rar` 的名字读成第 34 卷、卡上是第 3 卷。
+                 * 名字路若有发言权，规范名就会算成 `222-L2.part34.rar`（试开必报"缺必要分卷"）。
+                 * ⇒ 入表前先把槽位换成卡上的卷号；卡判不出 ⇒ 用原来那个（老口径）。
+                 */
+                int seatIndex = piece.Index;
+
+                try
+                {
+                    if (FileNature.Inspect(piece.Path).VolumeNumber is int contentSeat && contentSeat >= 1)
+                    {
+                        seatIndex = contentSeat;
+                    }
+                }
+                catch
+                {
+                    // 卡读不出来 ⇒ 用名字那个槽位。
+                }
+
+                if (byIndex.TryAdd(seatIndex, piece with { Index = seatIndex }))
                 {
                     continue;
                 }
 
-                if (!FileIdentity.IsSamePhysicalFile(byIndex[piece.Index].Path, piece.Path))
+                if (!FileIdentity.IsSamePhysicalFile(byIndex[seatIndex].Path, piece.Path))
                 {
                     ambiguousIndex = true;
                 }
