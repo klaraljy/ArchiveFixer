@@ -207,7 +207,14 @@ namespace ArchiveFixer.Tests
 
             List<string> lines = harness.LogTexts.ToList();
 
-            Assert.DoesNotContain(lines, line => line.Contains("尝试空密码", StringComparison.Ordinal));
+
+            string[] emptyPasswordAttempts = lines
+                .Where(line => line.Contains("尝试空密码", StringComparison.Ordinal))
+                .ToArray();
+
+            Assert.True(
+                emptyPasswordAttempts.Length == 0,
+                "整包（含文件名）已加密时不该再试空密码，命中的行：" + string.Join(" ｜ ", emptyPasswordAttempts));
             Assert.Contains(lines, line => line.Contains("连文件名都加密", StringComparison.Ordinal));
 
             ArchiveTask task = Assert.Single(harness.Vm.Tasks);

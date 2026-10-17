@@ -1789,20 +1789,6 @@ namespace ArchiveFixer.Extraction
                  * 措辞与单层路径**共用同一个格式常量**（StatusText.PasswordCandidateAttemptLogFormat），
                  * 来源说明也共用同一份描述器（DescribeCandidate ← PasswordService.BuildTryPasswordLogText）。
                  */
-                int ordinal = attempts;
-                string described = DescribeCandidate?.Invoke(candidate, ordinal)
-                    ?? $"尝试密码候选第 {ordinal} 项：******";
-
-                Log(
-                    "INFO",
-                    string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.PasswordCandidateAttemptLogFormat,
-                        layerLabel,
-                        ordinal,
-                        layerCandidateLimit,
-                        described));
-
                 /*
                  * 第一道防线（不变量 4）：解压前先列目录，把危险条目名挑出来。
                  *
@@ -2099,6 +2085,27 @@ namespace ArchiveFixer.Extraction
                  * ⚠ 清的只是**这一层在工作区里的产物目录**（我们自己造的），绝不碰源文件、也绝不碰最终输出目录；
                  * 清不掉（被占用 / 权限）时不抛：引擎那边由结果校验兜底（校验不过就不算成功）。
                  */
+                /*
+                 * ⚠ 2026-10-17（`Item45LogAndPasswordTests.真7z_文件名也加密且密码排在后面_空密码照样跳过`）：
+                 * **候选日志挪到真正解压之前** —— 原来它排在"列目录"之前，于是"空密码"这一档会先写一行
+                 * `开始解压，密码候选 1/6，尝试空密码`，紧接着又写「整包已加密 —— 跳过「空密码」这一档」
+                 * ⇒ 日志宣告了一件**根本没做**的事（用户 2026-09-27 那条要的是真事）。
+                 * 两个跳过支都 `continue` ⇒ 放在这里等于"只有真去解才写这一行"。
+                 */
+                int ordinal = attempts;
+                string described = DescribeCandidate?.Invoke(candidate, ordinal)
+                    ?? $"尝试密码候选第 {ordinal} 项：******";
+
+                Log(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PasswordCandidateAttemptLogFormat,
+                        layerLabel,
+                        ordinal,
+                        layerCandidateLimit,
+                        described));
+
                 TryResetLayerOutputDirectory(item.Layer.OutputPath);
 
                 ArchiveOperationResult result = await _engine.ExtractAsync(
