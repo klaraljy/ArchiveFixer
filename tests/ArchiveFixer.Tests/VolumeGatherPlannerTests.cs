@@ -110,6 +110,40 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 数字族_短片排在前面_判不出末卷_不搬()
+        {
+            // 用户口径：数字族/part 族的**末卷 = N 最大的那一片**。
+            // 短片夹在前面 ⇒ 与"除末卷外等大"不符 ⇒ 判不出 ⇒ 不搬。
+            string shortOne = Make("s.7z.001", 1024);
+            string second = Make("s.7z.002", 4096);
+            string third = Make("s.7z.003", 4096);
+
+            VolumeGatherPlan plan = VolumeGatherPlanner.Decide(
+                new[] { shortOne, second, third },
+                _root,
+                probeOpens: _ => true);
+
+            Assert.Equal(VolumeGatherAction.Leave, plan.Action);
+            Assert.Contains("体积规律", plan.Reason, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void 跨盘ZIP族_zip是末卷而且最小_照旧决定搬()
+        {
+            // 用户口径：WinRAR 压出来的分卷 ZIP，`.zip` 才是末卷，而且它最小；
+            // `.z01/.z02` 必须等大。
+            string z01 = Make("r.z01", 4096);
+            string z02 = Make("r.z02", 4096);
+            string zip = Make("r.zip", 1024);
+
+            VolumeGatherPlan plan = VolumeGatherPlanner.Decide(
+                new[] { zip, z01, z02 },
+                _root,
+                probeOpens: _ => true);
+
+            Assert.Equal(VolumeGatherAction.Gather, plan.Action);
+        }
+        [Fact]
         public void 末卷比满片还大_不搬()
         {
             string first = Make("v.7z.001", 4096);

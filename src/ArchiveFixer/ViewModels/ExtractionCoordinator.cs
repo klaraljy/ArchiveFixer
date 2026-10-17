@@ -11824,11 +11824,71 @@ namespace ArchiveFixer.ViewModels
                 return paths;
             }
 
-            foreach (string file in CollectVolumeFilesInDirectory(entryLayer))
+            void AddIfSameGroup(string file)
             {
+                if (string.IsNullOrWhiteSpace(file) || !File.Exists(file))
+                {
+                    return;
+                }
+
+                if (paths.Any(existing => string.Equals(existing, file, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return;
+                }
+
                 if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), reference))
                 {
                     paths.Add(file);
+                }
+            }
+
+            // ① 这一层（入口包那一层）
+            foreach (string file in CollectVolumeFilesInDirectory(entryLayer))
+            {
+                AddIfSameGroup(file);
+            }
+
+            // ② 任务表里同组的单（用户口径：「任务表同组片」）
+            foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
+            {
+                AddIfSameGroup(candidate?.CurrentPath ?? string.Empty);
+            }
+
+            // ③ 这一单当前层（含**刚解出来、还没进任务表**的那几片）
+            string ownLayer = Path.GetDirectoryName(SafePathHelper.GetFullPathSafe(observed));
+
+            if (!string.IsNullOrWhiteSpace(ownLayer) && Directory.Exists(ownLayer))
+            {
+                foreach (string file in CollectVolumeFilesInDirectory(ownLayer!))
+                {
+                    AddIfSameGroup(file);
+                }
+            }
+
+            // ④ 各单的产出层 / 内容层 / 其余物（用户口径：「各单产出层、其余物」）
+            foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
+            {
+                if (other == null)
+                {
+                    continue;
+                }
+
+                foreach (string? directory in new[]
+                         {
+                             other.OutputPath,
+                             other.ContentDirectoryPath,
+                             other.RestDirectoryPath
+                         })
+                {
+                    if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                    {
+                        continue;
+                    }
+
+                    foreach (string file in CollectVolumeFilesInDirectory(directory))
+                    {
+                        AddIfSameGroup(file);
+                    }
                 }
             }
 
