@@ -337,6 +337,61 @@ namespace ArchiveFixer.Tests
             }
         }
 
+        /// <summary>
+        /// **「7-Zip 打不开」的那一份，若它看起来就是本批某一组的一片 ⇒ 批末必须把它从「已跳过」
+        /// 升级成「分卷缺失」**（2026-10-16 的口径、2026-10-17 才发现机制从来没被调用过）。
+        ///
+        /// <para><b>真机形状</b>（`10101010` 那批）：`.003` 那片只是被删掉了后缀（内容仍是分卷片），
+        /// 7-Zip 单独打不开 ⇒ 原来一律落「已跳过」+ 机器终态收口 ⇒ 它永远进不了分卷那一套，
+        /// 那一组也就永远凑不齐。</para>
+        ///
+        /// <para><b>判据</b>（`LooksLikePieceOfBatchVolumeGroup`，三条同时成立）：① 批里另有一份
+        /// 名字读得出「第 1 卷」的；② 基名相同或互为前缀；③ 这一份的体积 ≤ 那一份。</para>
+        ///
+        /// <para><b>红检</b>：撤掉批末那一句 <c>UpgradeUnrecognizedMaybePieceVerdicts()</c>
+        /// ⇒ 本条当场变红（任务停在 `StatusText.Skipped`）。</para>
+        /// </summary>
+        [Fact]
+        public async Task 未识别但看着是本批某组的一片_批末要升级成缺卷_不许一直算跳过()
+        {
+            string groupDir = Path.Combine(_root, "maybe-piece");
+
+            Directory.CreateDirectory(groupDir);
+
+            // 第 1 卷：名字读得出「这一族的第 1 卷」（`TryGetVolumeIndex` == 1）。
+            string firstVolume = Path.Combine(groupDir, "pack-L2.7z.001");
+
+            File.WriteAllBytes(firstVolume, new byte[4096]);
+
+            // 被剥掉后缀的那一片：7-Zip 打不开（内容是垃圾），但名字与体积都像这一组的一片。
+            string stripped = Path.Combine(groupDir, "pack-L2.7z");
+
+            File.WriteAllBytes(stripped, new byte[4096]);
+
+            var firstTask = new ArchiveTask(firstVolume, 1) { IsSelected = true };
+            var strippedTask = new ArchiveTask(stripped, 2) { IsSelected = true };
+
+            await new ArchiveDetectService().ApplyDetectResultAsync(firstTask);
+            await new ArchiveDetectService().ApplyDetectResultAsync(strippedTask);
+
+            ExtractionCoordinator coordinator = CreateCoordinator();
+
+            _vm.Tasks.Add(firstTask);
+            _vm.Tasks.Add(strippedTask);
+
+            await coordinator.StartExtractAsync();
+
+            /*
+             * 判据只看**结构化事实**（状态字符串走 StatusText，⛔ 不比中文文案）：
+             * 升级之后这一单不再是「已跳过」，而是「分卷缺失」。
+             */
+            Assert.Equal(StatusText.VolumeMissing, strippedTask.Status);
+
+            // ⛔ 也不许留在「未处理」那一档：批末汇总会把它算成"没轮到"，与事实相反。
+            Assert.NotEqual(TaskOutcome.Pending, strippedTask.Outcome);
+            Assert.NotNull(strippedTask.EndTime);
+        }
+
         private ExtractionCoordinator CreateCoordinator()
         {
             string dataRoot = Path.Combine(_root, "data");

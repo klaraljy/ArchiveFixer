@@ -541,6 +541,15 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+
+                /*
+                 * ⛔ 状态改了、终态也必须落：`MarkStoppedBeforeExtract` 先把 `Outcome` 清成 `Pending`，
+                 * 而**终态由谁落**只有 `FinalizeOutcomeIfPending` 一个出口（缺卷那一档在里面就是
+                 * 「部分完成」）。少了这一句，这一单会以「分卷缺失」的**状态** + `Pending` 的
+                 * **终态**收场 ⇒ 批末汇总把它算进「未处理」（2026-10-17 新用例当场逮到）。
+                 */
+                FinalizeOutcomeIfPending(task);
+
                 AppendLog("WARN", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
             }
         }
@@ -19084,6 +19093,14 @@ namespace ArchiveFixer.ViewModels
                      */
                     List<ArchiveTask> deferredVolumeTasks = RecheckDeferredVolumeDeficits(finalPass: !oneClickRun);
 
+                    /*
+                     * 「7-Zip 打不开」的那一份若看着就是本批某一组的一片 ⇒ 到这里才按**严格判据**
+                     * 升级成「分卷缺失」（用户 2026-10-09 口径：未识别的先跳过、到了最后再重新检验一步）。
+                     * ⚠ 2026-10-17：这两个成员从 2026-10-16 加进来就一直**没有调用点**（名单只写不读）⇒ 本处补上。
+                     * 幂等：只动机器终态还是「已跳过」的那几单。
+                     */
+                    UpgradeUnrecognizedMaybePieceVerdicts();
+
                     if (deferredVolumeTasks.Count == 0)
                     {
                         break;
@@ -19707,6 +19724,7 @@ namespace ArchiveFixer.ViewModels
             }
 
             _spaceBlockedTasks.Clear();
+            _unrecognizedMaybePiece.Clear();
 
             // 那一次"中途空间不足"的纯提示也跟着本批记账一起清零：下一批该弹还得弹。
             _spaceBlockedNoticeShown = false;
