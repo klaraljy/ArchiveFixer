@@ -13068,20 +13068,17 @@ namespace ArchiveFixer.ViewModels
                     else
                     {
                         /*
-                         * 卡给不出规范卷名时，**按卡的族**拼样本（用户 2026-10-17 总则：底层识别优先）。
-                         * 现场形状：`pack111-L2.7z.txt` 这种名字被伪装法改烂的 —— 名字那把尺子定不了族，
-                         * 而卡上 `格式=SevenZip`。⛔ 只用它当**样本**（剥两层后缀得基名 → 补本族后缀）。
+                         * 卡给不出规范卷名时，**按卡的族**拼样本 —— 现在统一转调唯一出口
+                         * `VolumePiecesFromCards.CanonicalNameForSlot`（族由卡的 `Format` 决定，
+                         * 7z / RAR / ZIP 三族各给各的；卡判不出 ⇒ 空串 ⇒ 沿用老样本）。
+                         * 现场形状：`pack111-L2.7z.txt` 这种名字被伪装法改烂的。
                          */
-                        ArchiveFixer.Detection.VolumeContentFormat cardFormat =
-                            FileNature.Inspect(cardEntryPath!).Format;
+                        string byCardFamily = VolumePiecesFromCards.CanonicalNameForSlot(
+                            FileNature.Inspect(cardEntryPath!), 1);
 
-                        string stem = FileNameHelper.GetArchiveBaseName(
-                            FileNameHelper.GetArchiveBaseName(entryName));
-
-                        if (stem.Length > 0
-                            && cardFormat == ArchiveFixer.Detection.VolumeContentFormat.SevenZip)
+                        if (byCardFamily.Length > 0)
                         {
-                            entryName = stem + ".7z";
+                            entryName = byCardFamily;
                         }
                     }
                 }
