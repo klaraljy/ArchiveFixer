@@ -71,7 +71,13 @@ namespace ArchiveFixer.Detection
             {
                 // 数字族（`X.7z.00N`）的命名出口要的是**带卷号的样本**，给 `X.7z` 它认不出族。
                 VolumeContentFormat.SevenZip => stem + ".7z.001",
-                VolumeContentFormat.Rar => stem + ".rar",
+                /*
+                 * ⚠ 现场（新样本 `1111`，卡行逐字 `槽位=3:…part34.rar`）：RAR 族这里原来给的是
+                 * `stem + ".rar"` —— **不带卷标记**，命名出口认不出"这是 partN 族"⇒ 返回空串
+                 * ⇒ 调用方掉进"名字兜底"（`222-L2.part34B+.rar` → `part34.rar`，正是那个矛盾点）。
+                 * ⇒ 与 7z 同理，样本必须**带一个卷标记**（`stem.part1.rar`），按 slot 重排才成立。
+                 */
+                VolumeContentFormat.Rar => stem + ".part1.rar",
                 VolumeContentFormat.Zip => stem + ".zip",
                 _ => string.Empty
             };

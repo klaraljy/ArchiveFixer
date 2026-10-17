@@ -241,6 +241,21 @@ namespace ArchiveFixer.Tests
             Assert.Contains("体积规律不成立", reading.Reason);
         }
 
+        /// <summary>
+        /// 矛盾点守门（用户 2026-10-17 点名）：`222-L2.part34B+.rar` 的名字被读成 part34、卡上是第 3 卷
+        /// ⇒ 规范名必须是带卷标记的 `222-L2.part3.rar`，⛔ 绝不能掉进名字兜底给出 `part34.rar`。
+        /// </summary>
+        [Fact]
+        public void RAR族_按卡上槽位给规范名_不许出现名字的假卷号()
+        {
+            var card = Piece(@"C:\x\222-L2.part34B+.rar", 10490096, ArchiveBodyKind.VolumePiece,
+                format: ArchiveFixer.Detection.VolumeContentFormat.Rar, volumeNumber: 3);
+
+            string name = VolumePiecesFromCards.CanonicalNameForSlot(card, 3);
+
+            Assert.Equal("222-L2.part3.rar", name);
+        }
+
         [Fact]
         public void 一份都没有_如实说这一层没有分卷片()
         {
