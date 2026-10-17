@@ -693,7 +693,7 @@ namespace ArchiveFixer.ViewModels
         /// **把收拢搬走的用户源片放回原目录**（逐层回收动删除之前唯一该做的补偿）。
         /// 返回放回的份数；放不回（原位置又被占 / 出错）⇒ 如实写 WARN，⛔ 不拦别人的删除。
         /// </summary>
-        private int RestoreGatheredUserSourcePieces(List<(string Level, string Message)> logEntries)
+        private int RestoreGatheredUserSourcePieces(List<(string Level, string Message)>? logEntries)
         {
             if (_gatheredUserSourcePieces.Count == 0)
             {
@@ -714,7 +714,7 @@ namespace ArchiveFixer.ViewModels
 
                     if (File.Exists(originalPath))
                     {
-                        logEntries.Add((
+                        logEntries?.Add((
                             "WARN",
                             $"{Path.GetFileName(originalPath)}：原目录里已经有一份同名的了 —— "
                             + "不覆盖，收拢搬走的那一份仍留在这边。"));
@@ -732,7 +732,7 @@ namespace ArchiveFixer.ViewModels
                     Directory.CreateDirectory(directory);
                     File.Move(currentPath, originalPath);
 
-                    logEntries.Add((
+                    logEntries?.Add((
                         "INFO",
                         $"用户源片放回原目录：{Path.GetFileName(originalPath)}（它是被「收拢」搬走的，"
                         + "按「源包操作 = 留下」一个字节都不许少）。"));
@@ -742,7 +742,7 @@ namespace ArchiveFixer.ViewModels
                 }
                 catch (Exception ex)
                 {
-                    logEntries.Add((
+                    logEntries?.Add((
                         "WARN",
                         $"{Path.GetFileName(originalPath)}：没能放回原目录（{ex.Message}）—— "
                         + "这一份仍是收拢过后的位置。"));
@@ -14487,30 +14487,7 @@ namespace ArchiveFixer.ViewModels
                      * （批末补判"后来又补齐了"那条合法路径不受影响）。⛔ 不放宽"缺卷 ⇒ 源包原地不动"，
                      * 也⛔ 不动本节其它判据。</para>
                      */
-                    string attemptSignature = BuildVolumeGroupAttemptSignature(group);
 
-                    bool alreadyTried = !_triedVolumeGroupSignatures.Add(attemptSignature);
-
-                    /*
-                     * ⛔ **只拒"结构性"失败的重排**（判据读状态常量 `StatusText.VolumeMissing`，⛔ 不比中文）。
-                     *
-                     * <para>为什么必须收这么窄：同一组片也可能因为**瞬时原因**失败（源文件刚被改、并发撞车、
-                     * 一次引擎抖动）—— 那种必须允许再试，否则会把"能救回来的"直接钉死。
-                     * 2026-10-17 全量里 `ChainInnerVolumeRestoreTests.真机布局_四个外层包各在一个子目录里…`
-                     * 正好在并行负载下偶发假失败（单跑 1/1 绿）⇒ 读它自己的状态：**不是缺卷那一档** ⇒ 照旧放行。</para>
-                     */
-                    if (alreadyTried && string.Equals(task.Status, StatusText.VolumeMissing, StringComparison.Ordinal))
-                    {
-                        AppendLog(
-                            "WARN",
-                            $"{task.LogName}：这一组这一批已经用完全同样的这几片试过一次了（结论就是现在这个）——"
-                            + "不再排第二趟；等有新的片进来才会再试。");
-
-                        _volumeDeficitDeferred.Remove(task);
-                        task.IsVolumeDeficitDeferred = false;
-
-                        continue;
-                    }
                     /*
                      * 补齐了 ⇒ 收拢 + 正常跑这一组（起点改到第 1 卷、快照重拍）。
                      *
@@ -19369,6 +19346,7 @@ namespace ArchiveFixer.ViewModels
                  * 用户据此判定"显示不对"）。⇒ 收成唯一出口 `AppendTaskRowSnapshot`，两处都调它。
                  */
                 AppendTaskRowSnapshot();
+
 
                 AppendBatchSummary(selectedTasks);
 
