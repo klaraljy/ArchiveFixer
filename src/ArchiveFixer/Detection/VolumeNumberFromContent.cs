@@ -108,6 +108,16 @@ namespace ArchiveFixer.Detection
         public int? Total { get; init; }
 
         /// <summary>
+        /// **这一份的尾部有 zip 的 EOCD**（`PK\x05\x06`，且注释长度自洽）—— 设计文档 §6.6 A / 工单 #10。
+        ///
+        /// <para>通用分片族 `X.zip.001..00N` 里，**只有最后一片的尾部有 EOCD**，其余是裸切块；
+        /// 7-Zip 用 `-v` 切出来的那种末片 EOCD 写的是"盘号 0"（不是 PKZIP 跨盘那套），
+        /// 所以它算不上"跨盘成员"（`IsVolumeMember = false`），但"尾部有 EOCD"这条**内容事实**仍然成立
+        /// ⇒ 认末片时用它，而不是只靠名字序号。</para>
+        /// </summary>
+        public bool HasZipEndRecord { get; init; }
+
+        /// <summary>
         /// RAR **1.5–4.x**（WinRAR 里叫 RAR4；签名与 RAR3 是同一个，靠签名分不出 3 与 4）
         /// 卷尾归档结尾块里的**原始**卷号字段值。基数（0 起还是 1 起）在 RAR 的文档里没写，
         /// 只能靠"整组必须连成 1..N"来定 —— 所以这里保留原值，不在单卷上做加减。
@@ -361,7 +371,12 @@ namespace ArchiveFixer.Detection
                  */
                 VolumeNumberReading fallback = ReadZip(filePath);
 
-                return fallback.IsVolumeMember
+                /*
+                 * 通用分片 `X.zip.001..00N`（设计文档 §6.6 A / 工单 #10）：**末片的头也是切开的**
+                 * （不是 PK 签名）⇒ `SniffFormat` 给 `Unknown`，但它的**尾部有 EOCD** ——
+                 * 这条内容事实必须留下来（`HasZipEndRecord`），否则整族只剩名字一条证据。
+                 */
+                return fallback.IsVolumeMember || fallback.HasZipEndRecord
                     ? fallback
                     : NotAVolume(filePath, format, VolumeNumberFail.NotAnArchive);
             }
@@ -903,8 +918,26 @@ namespace ArchiveFixer.Detection
 
             if (diskNumber == 0 && centralDirectoryDisk == 0)
             {
-                // 两个盘号都是 0 = 单盘 zip（7z 的 -v 切出来的"裸分片 zip"末片也是这个样子）。
-                return NotAVolume(filePath, VolumeContentFormat.Zip, VolumeNumberFail.ZipSingleDisk);
+                /*
+                 * 两个盘号都是 0 = 单盘 zip（7z 的 -v 切出来的"裸分片 zip"末片也是这个样子）。
+                 * ⚠ **但"尾部有 EOCD"这条内容事实本身仍然是证据**（设计文档 §6.6 A / 工单 #10）：
+                 * `X.zip.001..00N` 那一族里，**只有最后一片的尾部有 EOCD**，其余是裸切块。
+                 * ⇒ 这里把 `HasZipEndRecord` 置真再返回，让定序能用它认末片（⛔ 不再只靠序号）。
+                 */
+                VolumeNumberReading singleDisk = NotAVolume(
+                    filePath, VolumeContentFormat.Zip, VolumeNumberFail.ZipSingleDisk);
+
+                return new VolumeNumberReading
+                {
+                    Path = singleDisk.Path,
+                    Format = singleDisk.Format,
+                    Size = singleDisk.Size,
+                    IsVolumeMember = singleDisk.IsVolumeMember,
+                    Number = singleDisk.Number,
+                    Total = singleDisk.Total,
+                    Fail = singleDisk.Fail,
+                    HasZipEndRecord = true
+                };
             }
 
             if (diskNumber == 0 || centralDirectoryDisk > diskNumber)
@@ -921,6 +954,7 @@ namespace ArchiveFixer.Detection
                 IsVolumeMember = true,
                 Number = diskNumber + 1, // 盘号 0 起
                 Total = diskNumber + 1,  // 末片：本盘号 + 1 = 总片数
+                HasZipEndRecord = true,
                 Fail = VolumeNumberFail.None
             };
         }
@@ -1064,6 +1098,95 @@ namespace ArchiveFixer.Detection
                     return Refuse(VolumeNumberFail.ZipSingleDisk, 1);
                 }
 
+                /*
+                 * ===== 通用分片族 `X.zip.001..00N` 的**内容证据**（设计文档 §6.6 A / 工单 #10）=====
+                 * 这一族的末片 EOCD 写的是"盘号 0"（7-Zip `-tzip -v` 就是这么切的）⇒ 它算不上跨盘成员
+                 * （`IsVolumeMember = false`），但"**尾部有 EOCD**"这条内容事实成立，而且**整族里只有它一份有**。
+                 * ⇒ 认末片用它（⛔ 不再只靠名字序号），其余片按名字序号 1..n-1 做受约束唯一指派；
+                 * 序号读不出 / 撞号 / 越界 / 序号判断不过 ⇒ 判不出（什么都不做）。
+                 */
+                List<VolumeNumberReading> endRecords = list
+                    .Where(r => r.Format == VolumeContentFormat.Zip && r.HasZipEndRecord)
+                    .ToList();
+
+                if (endRecords.Count == 1)
+                {
+                    VolumeNumberReading end = endRecords[0];
+                    string endName = System.IO.Path.GetFileName(end.Path);
+
+                    /*
+                     * 末片的名字形如 `X.zip.00N`（三位数字段）。取基名（去掉最后那段数字），
+                     * 再把**同前缀 + 数字段连续 1..N** 的那几份按序号定序 —— 这是"序号"证据；
+                     * "拼接合法性"由**末片尾部真有 EOCD** 这条内容证据提供（`HasZipEndRecord`）。
+                     * ⛔ 序号读不出 / 不连续 / 末片不在 N / 非末片比末片还小 ⇒ 判不出。
+                     */
+                    int lastDot = endName.LastIndexOf('.');
+                    string genericStem = lastDot > 0 ? endName.Substring(0, lastDot) : string.Empty;
+                    string lastMark = lastDot > 0 ? endName.Substring(lastDot + 1) : string.Empty;
+
+                    int endIndex = IsThreeDigitNumber(lastMark)
+                        ? int.Parse(lastMark, System.Globalization.CultureInfo.InvariantCulture)
+                        : 0;
+
+                    if (genericStem.Length > 0 && endIndex >= 2)
+                    {
+                        var orderedGeneric = new List<(int Index, VolumeNumberReading Reading)>();
+
+                        foreach (VolumeNumberReading piece in list)
+                        {
+                            string pieceName = System.IO.Path.GetFileName(piece.Path);
+
+                            if (!pieceName.StartsWith(genericStem + ".", StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+
+                            string mark = pieceName.Substring(genericStem.Length + 1);
+
+                            if (!IsThreeDigitNumber(mark))
+                            {
+                                continue;
+                            }
+
+                            orderedGeneric.Add((
+                                int.Parse(mark, System.Globalization.CultureInfo.InvariantCulture),
+                                piece));
+                        }
+
+                        if (orderedGeneric.Count == endIndex
+                            && orderedGeneric.Select(item => item.Index).Distinct().Count() == endIndex
+                            && orderedGeneric.Min(item => item.Index) == 1)
+                        {
+                            var genericSlots = new List<VolumeGroupSlot>();
+
+                            foreach ((int index, VolumeNumberReading piece) in orderedGeneric)
+                            {
+                                if (index < endIndex && piece.Size > 0 && end.Size > 0 && piece.Size < end.Size)
+                                {
+                                    return Refuse(VolumeNumberFail.ZipPartsMissing, orderedGeneric.Count);
+                                }
+
+                                genericSlots.Add(new VolumeGroupSlot { Path = piece.Path, Number = index });
+                            }
+
+                            genericSlots.Sort((left, right) => left.Number.CompareTo(right.Number));
+
+                            if (!genericSlots.Any(slot => SamePath(slot.Path, currentPath)))
+                            {
+                                return Refuse(VolumeNumberFail.CurrentNotInGroup, genericSlots.Count);
+                            }
+
+                            return new VolumeGroupOrder
+                            {
+                                Confirmed = true,
+                                Slots = genericSlots,
+                                Fail = VolumeNumberFail.None,
+                                Detail = endIndex
+                            };
+                        }
+                    }
+                }
+
                 return Refuse(VolumeNumberFail.ZipPartsMissing, members.Count);
             }
 
@@ -1185,6 +1308,10 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>这一批卷号是不是**恰好** 1..N（各不重复、最小 1、最大 N）。</summary>
+        private static bool IsThreeDigitNumber(string? mark)
+            => mark is { Length: 3 }
+               && mark.All(character => character >= '0' && character <= '9');
+
         private static bool IsContiguousRun(IEnumerable<int> numbers, int count)
         {
             var sorted = numbers.OrderBy(v => v).ToList();
