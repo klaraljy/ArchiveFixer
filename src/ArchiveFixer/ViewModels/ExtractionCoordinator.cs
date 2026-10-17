@@ -11795,6 +11795,37 @@ namespace ArchiveFixer.ViewModels
         /// 手上这一片（可选）：<c>null</c> ⇒ 老口径（拿这一单自己的包基名当参照物）。
         /// 传了它 ⇒ 参照物换成它自己的名字（停的是**别人那一组**时唯一说得清的办法）。
         /// </param>
+        /// <summary>
+        /// 这一层里与"这一单手上那一片"**同族同基名**的文件（收拢决策器的候选池；⛔ 只读这一层、不递归）。
+        /// 判据 = 既有宽尺子 `VolumeGroupDetector.BelongsToSameGroup`，参照名 = 手上那一片。
+        /// </summary>
+        private List<string> CollectGroupCandidatePaths(ArchiveTask task, string entryLayer)
+        {
+            var paths = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
+            {
+                return paths;
+            }
+
+            string observed = ResolveDeferredGroupMemberPath(task);
+            string reference = ResolveGroupReferenceName(task, FileNameHelper.GetArchiveBaseName(observed), observed);
+
+            if (reference.Length == 0)
+            {
+                return paths;
+            }
+
+            foreach (string file in CollectVolumeFilesInDirectory(entryLayer))
+            {
+                if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), reference))
+                {
+                    paths.Add(file);
+                }
+            }
+
+            return paths;
+        }
         private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
@@ -14609,6 +14640,25 @@ namespace ArchiveFixer.ViewModels
                             StatusText.GroupLayerResolvedAtBatchEndFormat,
                             task.LogName,
                             entryLayer));
+
+                    /*
+                     * **收拢决策器接线（第一步：只观测、不改行为）** —— 2026-10-17 第 161 轮。
+                     *
+                     * `VolumeGatherPlanner` 实现用户口径的 ②分组（族+基名+卷号，至少两片）与
+                     * ③硬链接试开证实（体积规律 + 试开回调）。这一轮先只把结论与理由写进日志
+                     * （⛔ 不改变任何搬运行为），拿到运行期分布之后，下一轮才按 `Gather/Leave` 分流。
+                     *
+                     * 候选 = 这一层里与"这一单手上那一片"同族的文件（既有尺子 `BelongsToSameGroup`），
+                     * ⛔ 不递归、⛔ 不猜。
+                     */
+                    List<string> gatherCandidates = CollectGroupCandidatePaths(task, entryLayer);
+
+                    VolumeGatherPlan gatherPlan = VolumeGatherPlanner.Decide(gatherCandidates, entryLayer);
+
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：收拢决策 = {gatherPlan.Action} —— {gatherPlan.Reason}"
+                        + $"（这一层同族候选 {gatherCandidates.Count} 个）");
 
                     TryGatherGroupPiecesInto(task, entryLayer, _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null);
 
