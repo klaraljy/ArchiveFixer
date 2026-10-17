@@ -23,7 +23,15 @@ namespace ArchiveFixer.Detection
         RarPart,
 
         /// <summary>真·跨盘 zip 族：<c>基名.z01</c>……<c>基名.z99</c> + 末片 <c>基名.zip</c>（PKZIP 跨盘族的拼法）。</summary>
-        ZipSpanned
+        ZipSpanned,
+
+        /// <summary>
+        /// 通用分片族（**对归档再分片**）：<c>基名.zip.001</c> / <c>基名.zip.002</c>……
+        /// （7-Zip `-tzip -v` 切出来的形状；设计文档 §6.6 A / §9 工单 #10）。
+        /// ⛔ 与 <see cref="ZipSpanned"/> 是**两族**：那一族的末片叫 <c>.zip</c>、靠 EOCD 盘号认；
+        /// 这一族没有盘号，靠"末片尾部有 EOCD"+"序号连续"认。
+        /// </summary>
+        ZipNumbered
     }
 
     /// <summary>RAR 1.5–4.x（RAR4）主头里的编号族（<c>MHD_NEWNUMBERING</c>）。</summary>
@@ -461,6 +469,26 @@ namespace ArchiveFixer.Detection
                     for (int index = 1; index <= count; index++)
                     {
                         names.Add(stem + ".7z." + index.ToString("D3", CultureInfo.InvariantCulture));
+                    }
+
+                    break;
+
+                /*
+                 * ===== 通用分片族（对归档再分片）：`<基名>.zip.001` …… =====
+                 * 用户 2026-10-17 现场（新样本 `1111` 日志逐字）：`-tzip -v` 切出来的 3 片被当成跨盘 zip 族
+                 * 改名成 `222-L1.z01 / .z02 / .zip` ⇒ 引擎按 `.zip` 读 EOCD、盘号写的是 0 ⇒ 认成单盘 zip
+                 * ⇒ 整组解不出来。⇒ 这一族的规范名**就是它自己的形状**（设计文档 §6.6 A / §10 第 2 条）：
+                 * 卷号三位补零、档案尾巴 `.zip` 留在基名里。
+                 */
+                case VolumeNamingFamily.ZipNumbered:
+                    if (count < 2)
+                    {
+                        return Array.Empty<string>();
+                    }
+
+                    for (int index = 1; index <= count; index++)
+                    {
+                        names.Add(stem + ".zip." + index.ToString("D3", CultureInfo.InvariantCulture));
                     }
 
                     break;
