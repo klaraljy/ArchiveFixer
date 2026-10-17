@@ -176,6 +176,13 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public string EntryPath { get; init; } = string.Empty;
 
+        /// <summary>
+        /// **还差多少字节**（`DeclaredTotalBytes - SumBytes`，负数按 0）。
+        /// 唯一口径：批末那道"卡上说还差字节 ⇒ 这一趟先不收"的闸门、以及日志里的那句话，
+        /// ⛔ 都从这里读，别各自再算一遍（用户 2026-10-17：「同一件事的真值只允许有一个出口」）。
+        /// </summary>
+        public long MissingBytes => Math.Max(0L, DeclaredTotalBytes - SumBytes);
+
         /// <summary>判据输入（一句人话：为什么是这个结论）。</summary>
         public string Reason { get; init; } = string.Empty;
 

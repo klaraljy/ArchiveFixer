@@ -98,6 +98,9 @@ namespace ArchiveFixer.Tests
             Assert.Contains("还差", reading.Reason);
             Assert.Empty(reading.Slots);
 
+            // 缺口的唯一口径（日志与闸门都从这里读，别各自再算）。
+            Assert.Equal(62919013 - 52428800, reading.MissingBytes);
+
             // 不完整也能点名"入口那一份是谁"（它自己就是首卷）。
             Assert.Equal(@"C:\x\pack111-L2.7z.001", reading.EntryPath);
         }
