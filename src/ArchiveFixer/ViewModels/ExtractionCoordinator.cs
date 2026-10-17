@@ -1757,6 +1757,17 @@ namespace ArchiveFixer.ViewModels
                 task.VerifyMessage = work.Verification.FailureMessage;
 
                 /*
+                 * ⚠ 2026-10-17（用户 2026-09-27 口径「包没加密 ⇒ 不许把结论写成密码错误」）：
+                 * 这一支原来只写校验那一句（递归路实测：`PasswordStatus` 一个字都不写、文案里也没有"没有加密"）
+                 * ⇒ 用户看到「未检测」与一句不指向密码的失败原因。判据只读**机器事实**：
+                 * `PasswordStatus == 不需要密码`（由 `ApplyRecursionResult` 按"某一层清单成功且 IsEncrypted=false"落下）。
+                 */
+                if (task.PasswordStatus == StatusText.PasswordNotNeeded)
+                {
+                    task.ErrorMessage += "（这个包没有加密：清单里没有加密条目，换密码不会改变结果，问题不在密码上）";
+                }
+
+                /*
                  * 机器事实要落成 **Failed**，不能停在"没通过校验"的含糊档：
                  * 调用方（候选循环收尾）与汇总都靠"这一档"区分"校验判否"与
                  * "越界 / 超预算 / 定稿失败"那些**其它**失败（它们的字段是 NotAttempted）。
@@ -7486,6 +7497,21 @@ namespace ArchiveFixer.ViewModels
         {
             foreach (RecursionLayerReport layer in result.Layers)
             {
+
+
+
+                /*
+                 * ⚠ 2026-10-17（用户 2026-09-27 口径）：**清单里一个加密条目都没有 ⇒ 结论与密码无关** ——
+                 * 递归路原来一个字都不写（实测 `RecursiveExtractor` 里 `PasswordStatus` **0 处写入**）⇒
+                 * 用户看到「未检测」，而单层路同一档写的是「不需要密码」+「问题不在密码上」。
+                 * 判据只读事实：某一层的清单成功且 `IsEncrypted=false`（`RecursionLayerReport.ListingSaidNoEncryption`）。
+                 */
+                if (result.Layers.Any(layer => layer.ListingSaidNoEncryption))
+                {
+                    task.PasswordStatus = StatusText.PasswordNotNeeded;
+
+
+                }
                 AppendLog(
                     layer.Success ? "INFO" : "WARN",
                     $"  ├ 第 {layer.Depth} 层：{Path.GetFileName(layer.ArchivePath)} → {layer.Status}" +

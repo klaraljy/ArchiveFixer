@@ -98,6 +98,17 @@ namespace ArchiveFixer.Extraction
         /// <summary>本层解的那个归档。</summary>
         public string ArchivePath { get; init; } = string.Empty;
 
+        /// <summary>
+        /// **这一层的清单成功列出来了、而且里面一个加密条目都没有**（用户 2026-09-27 口径
+        /// 「包没加密 / 结果不变 → 不许再烧候选，也不许把结论写成「密码错误」」）。
+        ///
+        /// <para>事实来源 = 候选循环里那次列目录（`listedThisCandidate is { Success: true, IsEncrypted: false }`），
+        /// 经 <c>WorkItem</c> 上的同名事实位带到本报告；协调器据此落 `PasswordStatus = 不需要密码`
+        /// 与「问题不在密码上」那句文案（此前递归路一个字都不写）。</para>
+        /// </summary>
+        public bool ListingSaidNoEncryption { get; init; }
+
+
         /// <summary>本层的产物目录（工作区里的 layer-XXX\output）。</summary>
         public string OutputPath { get; init; } = string.Empty;
 
@@ -1809,6 +1820,8 @@ namespace ArchiveFixer.Extraction
                     ? LayerManifest.From(listedThisCandidate)
                     : LayerManifest.Unavailable(LayerManifest.DescribeListFailure(listedThisCandidate));
 
+                item.ListingSaidNoEncryption = listedThisCandidate is { Success: true, IsEncrypted: false };
+
                 /*
                  * ===== 引擎读不动它 + 它确实是双面文件 ⇒ 直接按偏移取出那唯一一个原样存的条目 =====
                  *
@@ -2185,7 +2198,7 @@ namespace ArchiveFixer.Extraction
                         Log(
                             "WARN",
                             $"{layerLabel}：结果校验 —— {candidateVerifyMessage}" +
-                            "（清单里一个加密条目都没有 ⇒ 换密码不可能改变结果，不再试后面的候选密码）");
+                            "（这个包没有加密：清单里没有加密条目，换密码不会改变结果，不再试后面的候选密码）");
                     }
 
                     succeededPassword = candidate;
@@ -3173,6 +3186,7 @@ namespace ArchiveFixer.Extraction
             {
                 Depth = item.Depth,
                 ArchivePath = item.ArchivePath,
+                ListingSaidNoEncryption = item.ListingSaidNoEncryption,
                 OutputPath = item.Layer.OutputPath,
                 Success = true,
 
@@ -6052,10 +6066,17 @@ namespace ArchiveFixer.Extraction
 
             public string ArchivePath { get; init; } = string.Empty;
 
+
             public WorkspaceLayer Layer { get; init; } = new WorkspaceLayer();
 
             /// <summary>是否是任务自己的那个包（第 0 层）。</summary>
             public bool IsRoot { get; init; }
+
+            /// <summary>
+            /// **本层列出的清单成功、且一个加密条目都没有**（候选循环里列完清单就写这里，
+            /// 再由本层报告 <see cref="RecursionLayerReport.ListingSaidNoEncryption"/> 带走）。
+            /// </summary>
+            public bool ListingSaidNoEncryption { get; set; }
 
             /// <summary>
             /// **本层开工时该当场回收的过程物**（递归路逐层回收，见 <see cref="LayerReclaim"/>）。

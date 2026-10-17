@@ -143,7 +143,14 @@ GUI 形态：6 个选项卡（① 任务 ② 解压方式 ③ 清理与删除 �
 - ⚠ 现状（2026-10-11）：**R1**（轮判定进代码 + 一行轮结论）与 **R2**（第二大步只解一层）已落 —— 第二大步这件事靠**任务级事实位** `_volumeStepTasks`（`IsSingleLayerRecursion(ArchiveTask?)` 读它，⛔ 不动用户的 `RecursionMode`），写点两个：批末那一组齐了那一刻、轮边界按分类把"分卷那几单"点名。**R3**（每轮重算入口包/工作区/落点）还没做。
 
 **验证与基线（本项目数字）**
-- 构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过。
+- ⛔ **验证按影响面分级（用户 2026-10-17 明确要求，别再犯）**：**先定向**（`dotnet test --filter "FullyQualifiedName~<点名的类>"`，秒级）→ 只有 ① 动了不可逆路径 ② 定向冒出**新增红** ③ 用户明确要 才跑全量。⛔ 小改动（文案/一条判据/一个方法）**一律不许动全量**——一次 7–9 分钟，用户原话「我说了大改动才全量检测」「这么简单的问题你都全量」。
+- ⛔ **后台任务不许长超时阻塞等待**（用户 2026-10-17 明确禁止）：`job_output(wait:true)` 配几十分钟超时＝白占一次工具调用；长任务**后台跑 + 短读轮询**（`wait` 不带或只带几十秒），该干别的就同时干别的。
+- **调试器（`mcp__dbg__*`）能用，但要挂对目标、用对姿势（2026-10-17 实测，⛔ 别再说"调试器没用"）**：
+  - ✅ **可用**：`debug_launch`（`stopAtEntry: false`）起 **WPF-free 的 `DebugRunner`**（`_tmp\ArchiveFixer\DebugRunner\bin\w5\ArchiveFixer.Tests.exe`，`-o bin\wN` 重编带 PDB）+ 断点下在**语句行** ⇒ 实测**命中**：`stacktrace_get` 6 帧带源码行、`arguments` 可读（`path` / `card` / `groupAnchorCard` / `trustCardNumberWhenGivenNothing`）、`object_summarize card` 把 18 个字段全读出来（`CanonicalVolumeName=""`、`BodyKind`、`VolumeSerial`、`FileIndex`…）。DebugRunner 的模式：`walk`（走查卡与三把尺子）/ `grp`（问判定器）/ `volinfo` / `names` / `probe` / `g`；样本与密码本写在 `_tmp\ArchiveFixer\debug-sample.txt`（第 1 行目录、第 2 行密码本、第 3 行模式）。
+  - ❌ **不可用**：**attach 到 WPF 宿主跑器**（`BigTestRunner`＝`ArchiveFixer.Tests.exe`）⇒ 目标**冻住**（实测三次：`stacktrace_get` = `total_frames: 0`、`debug_continue` 不恢复、CPU 停 0.33 s）；**`vstest` 测试宿主** ⇒ `/p:DebugType=none` 无 PDB（断点永远 `pending`）且 `VSTEST_HOST_DEBUG=1` 等的 `Debugger.IsAttached` 在 attach 下恒 false。
+  - ⚠ **缺口**：DebugRunner 只有只读探针模式，**没有"跑整条真管线"的可调试模式**（那条路目前只有会冻住的 BigTestRunner）⇒ 要断在管线内部时，先给 DebugRunner 加一个跑管线的子命令（它本来就与 `ZzzEeeeForensicsTests` 同一套装配顺序）。
+  - 其余取事实手段：**程序自己的日志（永久判据输入行）+ 只读 `walk`/`grp` + 真引擎在副本上跑 + `fsutil hardlink list/queryfileid` + 临时文件探针（用完必删）**。
+- 构建 0 错误 0 警告；`dotnet format --verify-no-changes` 通过（**报 WHITESPACE 就用 `dotnet format whitespace` 真修**，别手工对齐）。
 - 全量测试基线：**2897 条（2884 通过 / 13 跳过 / 0 失败）**。⚠ 跳过里含"真样本夹具不在了"与"本机没 WinRAR"两类，⛔ 不许读成"验过了"。
 - 行尾：仓库工作区是 **CRLF**（`core.autocrlf=true`）。⛔ 别用 PowerShell `-join "`n"` 整份重写 `.cs`（写出 LF ⇒ `dotnet format` 报一串 WHITESPACE）；已写出就按 CRLF 重写一遍再验。
 - 已知 flaky（并发/计时相关，先单跑确认，⛔ 别改断言）：`SpaceTightModeTests.换输出位置_二页那颗选择按钮也会触发空间体检`、`SpaceTrendMonitorTests.周期循环_按间隔采样_取消后立刻停`、`SecurityGuardTests.CheckBeforeExtract_NotEnoughFreeSpace_IsRejectedWithNumbers`、`EngineRoutingTests.MainViewModel把分派引擎接进流水线`（单跑红/全量绿）、`AsyncDeadlockGuardTests.递归解压_在单线程同步上下文里同步等待_不会死锁`（2026-10-08 实测：全量 1 红 / 单跑 2 条全绿 ⇒ 负载下的计时类 flaky）。
