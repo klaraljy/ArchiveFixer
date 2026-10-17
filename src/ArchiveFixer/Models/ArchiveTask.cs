@@ -1313,6 +1313,12 @@ namespace ArchiveFixer.Models
         /// <summary>
         /// 是否检测到可能需要密码。
         /// </summary>
+        /// <summary>
+        /// **这一单这一批在递归链里真正试过几个候选密码**（用户 2026-09-24 要求失败原因里写明"已试 N 个候选"）。
+        /// 递归路的结论由收尾那一步（后台任务）写，事实在这里带过去；没试过 / 判不出 ⇒ 0。
+        /// </summary>
+        public int RecursionTriedCandidateCount { get; set; }
+
         public bool IsEncrypted
         {
             get => _isEncrypted;

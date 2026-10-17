@@ -1768,6 +1768,17 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
+                 * ⚠ 2026-10-17（同一条要求的另一半）：**试了几个候选**必须写进原因 ——
+                 * 与单层路同一句话（`（已试 N 个候选，产物始终不完整）`），事实由 `ApplyRecursionResult`
+                 * 从层报告带到任务上；⛔ 没试过（0）⇒ 不写（老口径不动）。
+                 */
+                if (task.RecursionTriedCandidateCount > 0
+                    && !task.ErrorMessage.Contains("产物始终不完整", StringComparison.Ordinal))
+                {
+                    task.ErrorMessage += $"（已试 {task.RecursionTriedCandidateCount} 个候选，产物始终不完整）";
+                }
+
+                /*
                  * 机器事实要落成 **Failed**，不能停在"没通过校验"的含糊档：
                  * 调用方（候选循环收尾）与汇总都靠"这一档"区分"校验判否"与
                  * "越界 / 超预算 / 定稿失败"那些**其它**失败（它们的字段是 NotAttempted）。
@@ -7506,6 +7517,16 @@ namespace ArchiveFixer.ViewModels
                  * 用户看到「未检测」，而单层路同一档写的是「不需要密码」+「问题不在密码上」。
                  * 判据只读事实：某一层的清单成功且 `IsEncrypted=false`（`RecursionLayerReport.ListingSaidNoEncryption`）。
                  */
+                /*
+             * ⚠ 2026-10-17（用户 2026-09-24 要求"原因里必须写明试了几个候选"）：递归路原来一个字都不带
+             * ⇒ 收尾那一步（后台任务，拿不到递归结果）写出来的失败原因只有校验那一句。
+             * 事实在这里记到任务上（`RecursionLayerReport.TriedCandidateCount` 由候选循环带上来的），
+             * 收尾那一步读它补「（已试 N 个候选，产物始终不完整）」。
+             */
+                task.RecursionTriedCandidateCount = result.Layers.Count > 0
+                    ? result.Layers[^1].TriedCandidateCount
+                    : 0;
+
                 if (result.Layers.Any(layer => layer.ListingSaidNoEncryption))
                 {
                     task.PasswordStatus = StatusText.PasswordNotNeeded;

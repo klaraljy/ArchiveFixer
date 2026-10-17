@@ -108,6 +108,14 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public bool ListingSaidNoEncryption { get; init; }
 
+        /// <summary>
+        /// **这一层真正试过几个候选密码**（用户 2026-09-24 要求"原因里必须写明试了几个候选"）。
+        ///
+        /// <para>事实来源 = 候选循环的 `triedCandidates`，由 <c>WorkItem</c> 带到本报告；协调器在收尾那一步
+        /// 用它把「（已试 N 个候选，产物始终不完整）」补进失败原因（此前只有单层路写这一句）。</para>
+        /// </summary>
+        public int TriedCandidateCount { get; init; }
+
 
         /// <summary>本层的产物目录（工作区里的 layer-XXX\output）。</summary>
         public string OutputPath { get; init; } = string.Empty;
@@ -2201,6 +2209,8 @@ namespace ArchiveFixer.Extraction
                             "（这个包没有加密：清单里没有加密条目，换密码不会改变结果，不再试后面的候选密码）");
                     }
 
+                    item.TriedCandidateCount = triedCandidates.Count;
+
                     succeededPassword = candidate;
                     success = result;
                     lastFailure = null;
@@ -3187,6 +3197,7 @@ namespace ArchiveFixer.Extraction
                 Depth = item.Depth,
                 ArchivePath = item.ArchivePath,
                 ListingSaidNoEncryption = item.ListingSaidNoEncryption,
+                TriedCandidateCount = item.TriedCandidateCount,
                 OutputPath = item.Layer.OutputPath,
                 Success = true,
 
@@ -6077,6 +6088,9 @@ namespace ArchiveFixer.Extraction
             /// 再由本层报告 <see cref="RecursionLayerReport.ListingSaidNoEncryption"/> 带走）。
             /// </summary>
             public bool ListingSaidNoEncryption { get; set; }
+
+            /// <summary>本层真正试过几个候选密码（候选循环里写，报告带走）。</summary>
+            public int TriedCandidateCount { get; set; }
 
             /// <summary>
             /// **本层开工时该当场回收的过程物**（递归路逐层回收，见 <see cref="LayerReclaim"/>）。
