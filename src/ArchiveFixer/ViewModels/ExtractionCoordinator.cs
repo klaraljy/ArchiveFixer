@@ -12027,7 +12027,7 @@ namespace ArchiveFixer.ViewModels
 
             return paths;
         }
-        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null, bool allowMoveIntoGroup = true)
+        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null, bool allowMoveIntoGroup = true, string? cardEntryPath = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
@@ -12095,8 +12095,16 @@ namespace ArchiveFixer.ViewModels
              * "外层已经定过的层，原样交下来用"）。⛔ 判据仍是卡上的 `BodyKind`（§29.8/§29.16 的教训），
              * 拿不到 ⇒ null，接片那一档照旧自己找（老口径一个字不改）。
              */
-            string? groupEntryPath = sources.FirstOrDefault(item =>
-                File.Exists(item) && FileNature.Inspect(item).BodyKind == ArchiveBodyKind.VolumeFirstPiece);
+            string? groupEntryPath = !string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath)
+                ?
+                /*
+                 * **调用方已经把卡上的入口算好了**（`VolumePiecesFromCards.EntryPath`）⇒ 直接用它，
+                 * 不再在这里重读一遍卡（同一件事的真值只允许有一个出口；用户 2026-10-17 总则：
+                 * 底层识别优先）。⛔ 只在"盘上真有它"时采用。
+                 */
+                cardEntryPath
+                : sources.FirstOrDefault(item =>
+                    File.Exists(item) && FileNature.Inspect(item).BodyKind == ArchiveBodyKind.VolumeFirstPiece);
 
             foreach (string path in sources.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
             {
@@ -15068,7 +15076,8 @@ namespace ArchiveFixer.ViewModels
                         task,
                         entryLayer,
                         _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null,
-                        allowMoveIntoGroup: gatherPlan.Action == VolumeGatherAction.Gather);
+                        allowMoveIntoGroup: gatherPlan.Action == VolumeGatherAction.Gather,
+                        cardEntryPath: cardReading.EntryPath);
 
                     /*
                      * ⚠ 2026-10-13（第 15 修之后）：收片只认名字 ⇒ 名字被伪装到"读不出卷号"的那几片收不进来。
