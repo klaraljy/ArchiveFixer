@@ -4511,6 +4511,48 @@ namespace ArchiveFixer.Extraction
                 // 判不出来 ⇒ 什么都不做（调用方退回"照旧让引擎去判"）。
             }
 
+            /*
+             * ===== 名字分桶判不出时，让**底层识别卡**再答一次（用户 2026-10-17：名字只兜底）=====
+             * 卡上凡是自报"我是这一族的一片"（`CardSaysItIsOneOfTheGroup`）且带 `ArchiveBaseName` 的，
+             * 取它们的基名；**唯一一致** ⇒ 就是这一组的基名。
+             * ⚠ 为什么只做兜底而不是首选：实测把它放到名字分桶之前会打红
+             * `SiblingFolderVolumeGatherTests` 的"基准/窗口"那几条（卡上的基名与
+             * `VolumeGroupDetector.Group` 算出来的组键不是一个形状），所以顺序必须是"名字先、卡兜底"。
+             */
+            try
+            {
+                var cardBases = new List<string>();
+
+                foreach (GatherPiece piece in pool)
+                {
+                    try
+                    {
+                        ArchiveFixer.Detection.FileNatureCard pieceCard =
+                            ArchiveFixer.Detection.FileNature.Inspect(piece.Path);
+
+                        if (ArchiveFixer.Detection.VolumePieceFacts.CardSaysItIsOneOfTheGroup(pieceCard)
+                            && pieceCard.ArchiveBaseName.Length > 0)
+                        {
+                            cardBases.Add(pieceCard.ArchiveBaseName);
+                        }
+                    }
+                    catch
+                    {
+                        // 读不出来就少一张卡。
+                    }
+                }
+
+                if (cardBases.Count > 0
+                    && cardBases.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1)
+                {
+                    return cardBases[0];
+                }
+            }
+            catch
+            {
+                // 卡也判不出 ⇒ 判不出。
+            }
+
             return null;
         }
 
