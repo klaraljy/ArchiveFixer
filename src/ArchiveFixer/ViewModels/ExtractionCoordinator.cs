@@ -652,6 +652,105 @@ namespace ArchiveFixer.ViewModels
         /// 组的"试过一遍"签名（唯一出口）：`GroupKey` + 按卷序每一卷的「路径|字节数」。
         /// 读不到字节数记 `-`（⛔ 不因此判"不同组"——判不出就照旧算同一组，宁可不重跑）。
         /// </summary>
+        /// <summary>
+        /// **被「收拢」搬离用户原目录的那几片**（原路径 ↔ 搬走后的路径）。
+        ///
+        /// <para>收拢本身是用户 2026-10-05 拍板的（「各分卷在不同的目录，你就将其全部移动到头文件 .001
+        /// 同级目录里面去」）；但「源包操作 = 留下」要求用户源文件**一个字节都不许少** ——
+        /// 2026-10-17 真机 `10101010` 的判据 ④ 就是这么红的（第三片 10,490,213 字节被搬走后
+        /// 当过程物永久删除，日志逐字「逐层回收…已立刻永久删除内层包（这一层的源）3 个」）。</para>
+        ///
+        /// <para>用法：逐层回收**动删除之前**先把这几份放回原目录；放不回就如实写一行，
+        /// ⛔ 绝不因为这本账把别人的删除整段拦下。</para>
+        /// </summary>
+        private readonly List<(string OriginalPath, string CurrentPath)> _gatheredUserSourcePieces = new();
+
+        /// <summary>记下"这几片是从用户自己的源目录里收拢过来的"（只记搬离过的那几份）。</summary>
+        private void RememberGatheredUserSourcePieces(IReadOnlyList<VolumeRepairItem> items)
+        {
+            foreach (VolumeRepairItem item in items)
+            {
+                if (string.IsNullOrWhiteSpace(item.CurrentPath) || string.IsNullOrWhiteSpace(item.TargetPath))
+                {
+                    continue;
+                }
+
+                if (SafePathHelper.PathEquals(item.CurrentPath, item.TargetPath))
+                {
+                    continue;
+                }
+
+                if (!IsUserImportedSourcePath(item.CurrentPath))
+                {
+                    continue;
+                }
+
+                _gatheredUserSourcePieces.Add((item.CurrentPath, item.TargetPath));
+            }
+        }
+
+        /// <summary>
+        /// **把收拢搬走的用户源片放回原目录**（逐层回收动删除之前唯一该做的补偿）。
+        /// 返回放回的份数；放不回（原位置又被占 / 出错）⇒ 如实写 WARN，⛔ 不拦别人的删除。
+        /// </summary>
+        private int RestoreGatheredUserSourcePieces(List<(string Level, string Message)> logEntries)
+        {
+            if (_gatheredUserSourcePieces.Count == 0)
+            {
+                return 0;
+            }
+
+            int restored = 0;
+
+            foreach ((string originalPath, string currentPath) in _gatheredUserSourcePieces.ToList())
+            {
+                try
+                {
+                    if (!File.Exists(currentPath))
+                    {
+                        _gatheredUserSourcePieces.Remove((originalPath, currentPath));
+                        continue;
+                    }
+
+                    if (File.Exists(originalPath))
+                    {
+                        logEntries.Add((
+                            "WARN",
+                            $"{Path.GetFileName(originalPath)}：原目录里已经有一份同名的了 —— "
+                            + "不覆盖，收拢搬走的那一份仍留在这边。"));
+
+                        continue;
+                    }
+
+                    string? directory = Path.GetDirectoryName(originalPath);
+
+                    if (string.IsNullOrWhiteSpace(directory))
+                    {
+                        continue;
+                    }
+
+                    Directory.CreateDirectory(directory);
+                    File.Move(currentPath, originalPath);
+
+                    logEntries.Add((
+                        "INFO",
+                        $"用户源片放回原目录：{Path.GetFileName(originalPath)}（它是被「收拢」搬走的，"
+                        + "按「源包操作 = 留下」一个字节都不许少）。"));
+
+                    _gatheredUserSourcePieces.Remove((originalPath, currentPath));
+                    restored++;
+                }
+                catch (Exception ex)
+                {
+                    logEntries.Add((
+                        "WARN",
+                        $"{Path.GetFileName(originalPath)}：没能放回原目录（{ex.Message}）—— "
+                        + "这一份仍是收拢过后的位置。"));
+                }
+            }
+
+            return restored;
+        }
         private static string BuildVolumeGroupAttemptSignature(VolumeGroup group)
         {
             var builder = new System.Text.StringBuilder(group.GroupKey);
@@ -2791,6 +2890,8 @@ namespace ArchiveFixer.ViewModels
                 logEntries.Add(("WARN", $"{task.LogName}：{splitBlocker}"));
                 return null;
             }
+
+            RestoreGatheredUserSourcePieces(logEntries);
 
             SourceCleanupResult cleanup = SourcePackageCleanup.CleanupVerified(
                 task,
@@ -9346,6 +9447,8 @@ namespace ArchiveFixer.ViewModels
                      * 任务表里指着这几卷的路径**一起**改过来（唯一出口）；它会顺手重拍快照
                      * （不变量 11 的口径一个字没放宽：变的只是"谁的名字 / 在哪一层"）。
                      */
+                    RememberGatheredUserSourcePieces(decision.Plan.Items);
+
                     SyncTasksAfterVolumeRename(decision.Plan.Items, task);
 
                     // 起点必须是这一组的第 1 卷（用户只把 `.002` 拖进来时，要解的是旁边那个 `.001`）。
@@ -12913,6 +13016,7 @@ namespace ArchiveFixer.ViewModels
         {
             _volumeDeficitDeferred.Clear();
             _triedVolumeGroupSignatures.Clear();
+            _gatheredUserSourcePieces.Clear();
             _deferredVolumeGroupMember.Clear();
             _byteBudgetLinkedSources.Clear();
             _scoredSlotAttempts.Clear();
@@ -15954,6 +16058,8 @@ namespace ArchiveFixer.ViewModels
                 task.VolumeNameAutoRenamed = true;
 
                 // 任务上的路径同步成新名字（"谁负责更新任务路径 + 快照"的唯一出口）。
+                RememberGatheredUserSourcePieces(plan.Items);
+
                 SyncTasksAfterVolumeRename(plan.Items, task);
             }
             catch (Exception ex)
@@ -18612,6 +18718,7 @@ namespace ArchiveFixer.ViewModels
             {
                 _volumeDeficitDeferred.Clear();
                 _triedVolumeGroupSignatures.Clear();
+                _gatheredUserSourcePieces.Clear();
                 _deferredVolumeGroupMember.Clear();
                 _byteBudgetLinkedSources.Clear();
                 _scoredSlotAttempts.Clear();
