@@ -2674,6 +2674,15 @@ namespace ArchiveFixer.ViewModels
              * 恒等式「各分项之和 + 未处理 = 本次任务数」由 tally 内部兜底：
              * 跟班卷单列一档、`untouched` 按"总数 − 各分项"倒推，所以将来加了新终态也不会凭空漏一个数。
              */
+            /*
+             * **一键处理真正收尾时**才收"产品树里多余的片名"（唯一时机，被两次真跑钉死）：
+             * 挂在 `RunBatch` 的批尾**太早** —— 第二大步（`FinalizeDeferredVolumeDeficits`）与跨链收拢
+             * 在它之后才跑，整批 30 份实测当场退步 `13131313` / `28282828` 的判据 ①（成品为空）。
+             * 判据见 `ExtractionCoordinator.PurgeRedundantPieceAliases`：只碰"名字像分卷片 **且** 还有别的名字"
+             * 的文件 ⇒ 删掉一个名字**一个字节都不丢**（真机 `6666` 实测：两个名字同 File ID）。
+             */
+            _extractionCoordinator.PurgeRedundantPieceAliases();
+
             BatchOutcomeTally tally = BatchOutcomeTally.Count(targets);
 
             var parts = new List<string>(tally.BuildParts());

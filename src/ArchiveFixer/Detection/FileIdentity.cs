@@ -36,6 +36,56 @@ namespace ArchiveFixer.Detection
                 && leftIndex == rightIndex;
         }
 
+        /// <summary>
+        /// 取"这一份在盘上有几个名字"（硬链接数）；读不到 ⇒ false。
+        ///
+        /// <para>唯一用途 = **无损收掉多余的片名**：链接数 &gt; 1 ⇒ 删掉其中一个名字，字节仍在别的名字下。
+        /// 2026-10-17 真机 `6666` 的判据 ③ 残留正是这种：`pack111-L2.7z.003` 与
+        /// `…\其余物\pack111-L2.7z(1)(1)(1)(1)(1).003` 是同一个 inode（`fsutil hardlink list` 只列这两个名字）。</para>
+        /// </summary>
+        public static bool TryGetLinkCount(string path, out uint linkCount)
+        {
+            linkCount = 0;
+
+            IntPtr handle = IntPtr.Zero;
+
+            try
+            {
+                handle = CreateFileW(
+                    path,
+                    FileReadAttributes,
+                    FileShareRead | FileShareWrite | FileShareDelete,
+                    IntPtr.Zero,
+                    OpenExisting,
+                    FileFlagBackupSemantics,
+                    IntPtr.Zero);
+
+                if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+                {
+                    return false;
+                }
+
+                if (!GetFileInformationByHandle(handle, out ByHandleFileInformation info))
+                {
+                    return false;
+                }
+
+                linkCount = info.NumberOfLinks;
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (handle != IntPtr.Zero && handle != new IntPtr(-1))
+                {
+                    CloseHandle(handle);
+                }
+            }
+        }
         /// <summary>取"卷序列号 + 文件索引"；读不到 ⇒ false。</summary>
         public static bool TryGetIdentity(string path, out ulong volumeSerial, out ulong fileIndex)
         {

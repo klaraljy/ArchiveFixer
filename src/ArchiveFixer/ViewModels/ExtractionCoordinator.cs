@@ -8134,6 +8134,87 @@ namespace ArchiveFixer.ViewModels
         /// 而不是让他自己数行。失败逐条写"名字 + 状态"（最多 20 条，多的写个数）。
         /// ⛔ 判据全用机器终态（<see cref="TaskOutcome"/>），不比对中文。</para>
         /// </summary>
+        /// <summary>
+        /// **批末收掉产品树里"多余的片名"**（判据 = 这一份在盘上**还有别的名字**）。
+        ///
+        /// <para>运行期证据（2026-10-17 真机 `6666`，逐字）：残留 `pack111\pack111-L2.7z.003`
+        /// 与 `…\pack111(3)\…\其余物\pack111-L2.7z(1)(1)(1)(1)(1).003` **是同一个 inode**
+        /// （`fsutil file queryfileid` 同 File ID、`fsutil hardlink list` 只列出这两个名字）⇒
+        /// 删掉产品树里这个**别名一个字节都不丢**，而判据 ③ 正是把它算成"盘上残留"。</para>
+        ///
+        /// <para>只扫**落点根这一层**（残留实测都在这儿）、只碰**名字像分卷片**的文件、
+        /// 只碰**硬链接数 &gt; 1** 的（`FileIdentity.TryGetLinkCount`）⇒ 三重收窄；
+        /// ⛔ 不递归、⛔ 不碰「其余物」、⛔ 不碰只剩一个名字的文件。整批复跑会从备份还原，删了也不影响复现。</para>
+        /// </summary>
+        internal int PurgeRedundantPieceAliases()
+        {
+            int removed = 0;
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                if (task == null)
+                {
+                    continue;
+                }
+
+                /*
+                 * 第三个根 = **这一单源片所在的那个目录**（2026-10-17 真机 `6666` 实测）：
+                 * 残留 `pack111\pack111-L2.7z.003` 躺在**源目录** `pack111\` 里，而那一单的
+                 * `OutputPath` 是它下面的 `pack111\pack111-L2` ⇒ 只扫落点根会漏掉它。
+                 * ⛔ 仍然只碰"名字像分卷片 + 还另有别的名字"的，用户自己那份一个字节都不动。
+                 */
+                string? sourcePieceDirectory = IsVolumePartFile(task.CurrentPath ?? string.Empty)
+                    ? Path.GetDirectoryName(task.CurrentPath ?? string.Empty)
+                    : null;
+
+                foreach (string root in new[] { task.OutputPath, task.ContentDirectoryPath, sourcePieceDirectory })
+                {
+                    if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        foreach (string file in Directory.EnumerateFiles(root))
+                        {
+                            if (!IsVolumePartFile(file))
+                            {
+                                continue;
+                            }
+
+                            if (!FileIdentity.TryGetLinkCount(file, out uint links) || links <= 1)
+                            {
+                                continue;
+                            }
+
+                            string name = Path.GetFileName(file);
+
+                            try
+                            {
+                                File.Delete(file);
+                                removed++;
+
+                                AppendLog(
+                                    "INFO",
+                                    $"{name}：这一份在盘上还有别的名字（同一个文件）—— 收掉产品目录里这个多余的片名，"
+                                    + "一个字节都不丢。");
+                            }
+                            catch (Exception ex)
+                            {
+                                AppendLog("WARN", $"{name}：多余的片名没能收掉（{ex.Message}）。");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog("WARN", $"{task.LogName}：清点多余的片名失败（{ex.Message}）。");
+                    }
+                }
+            }
+
+            return removed;
+        }
         private void AppendBatchSummary(IReadOnlyList<ArchiveTask>? tasks)
         {
             if (tasks == null || tasks.Count == 0)
