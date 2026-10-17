@@ -532,6 +532,40 @@ namespace ArchiveFixer.Extraction
             string selfName = FileNameHelper.GetFileName(selfPath);
             var list = candidates.Where(c => c != null && !string.IsNullOrWhiteSpace(c.Path)).ToList();
 
+            /*
+             * ===== 模板（安全版）：卡**只剔除"可证不是分卷成员"**的那些 =====
+             * 用户 2026-10-17 小目标第②项。这里"组键标签"是调用方给的 `expectedBaseName`、
+             * 完整性由名字尺子回答 —— 卡不能替代这两件事（上一轮已用两条红证明），
+             * 但卡能**排除噪声**：内容可证"我不是这一族任何分卷"的那几份不进桶。
+             * 剔除后不足 2 份 ⇒ 一个都不剔（老口径）。
+             */
+            var cardFiltered = new List<VolumeCandidate>();
+
+            foreach (VolumeCandidate candidate in list)
+            {
+                bool provablyNotMember;
+
+                try
+                {
+                    provablyNotMember = ArchiveFixer.Detection.FileNature.Inspect(candidate.Path).Membership
+                        == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember;
+                }
+                catch
+                {
+                    provablyNotMember = false;
+                }
+
+                if (!provablyNotMember)
+                {
+                    cardFiltered.Add(candidate);
+                }
+            }
+
+            if (cardFiltered.Count >= 2 && cardFiltered.Count < list.Count)
+            {
+                list = cardFiltered;
+            }
+
             if (list.Count == 0)
             {
                 return false;
