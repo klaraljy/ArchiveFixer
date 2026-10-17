@@ -1171,26 +1171,5 @@ namespace ArchiveFixer.Helpers
                    && partNumberedIndex > 1;
         }
 
-        /// <summary>取 <c>xxx.part01.rar</c> 里的 1；不是 part 命名返回 0。</summary>
-        private static int GetPartSegmentNumber(string fileName)
-        {
-            string partSegment = Path.GetExtension(Path.GetFileNameWithoutExtension(fileName));
-
-            if (string.IsNullOrWhiteSpace(partSegment))
-            {
-                return 0;
-            }
-
-            string digits = partSegment.TrimStart('.');
-
-            if (digits.Length < 5 ||
-                !digits.StartsWith("part", StringComparison.OrdinalIgnoreCase) ||
-                !digits.Skip(4).All(char.IsDigit))
-            {
-                return 0;
-            }
-
-            return int.TryParse(digits.Substring(4), out int number) ? number : 0;
-        }
     }
 }

@@ -103,7 +103,8 @@ public sealed class VolumeGroupRulerParityTests
     /// <para>⚠ 2026-10-13 订正（**有意收缩，不是漂移**）：原来还有第四格
     /// `x.7z.001 + x.7z.002.rar` —— 两把尺子在那格上曾经不同，原因是
     /// <see cref="FileNameHelper.IsVolumeContinuationPart"/> 里数 `partN` 的那一步用的是
-    /// **逐字 `part` 前缀 + `GetPartSegmentNumber`**，于是"数字族 + `.rar` 尾巴"这种名字
+    /// **逐字 `part` 前缀 + `GetPartSegmentNumber`**（⚠ 那份私有副本已于 2026-10-17 按死代码删除，
+    /// 这里只记历史，别再去找它），于是"数字族 + `.rar` 尾巴"这种名字
     /// （`x.7z.002.rar`）被判成"不是后续卷"。那一格已在困难批 `run-2222` 上证明是**缺陷**
     /// （EEE 式 `bbb-L2.par@@@@t3.rar` 判不出 ⇒ 被判成独立内层包去开 ⇒ `压缩包损坏` ⇒ 整单失败），
     /// 现在那一档**转调唯一出口** <see cref="ExtensionHelper.TrySplitPartNumberedVolume"/> ⇒ 两把尺子在这格上

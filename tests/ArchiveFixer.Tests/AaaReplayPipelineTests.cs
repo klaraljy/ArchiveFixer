@@ -35,7 +35,6 @@ namespace ArchiveFixer.Tests
         /// <summary>夹具根（与真样本同一个临时根，见 <see cref="RealVolumeSampleFactAttribute.TempRoot"/>）。</summary>
         internal static string Root => Path.Combine(RealVolumeSampleFactAttribute.TempRoot, "aaa-replay", "AAA");
 
-        internal static string ScriptPath => Path.Combine(RealVolumeSampleFactAttribute.TempRoot, "aaa-replay", "make-fixture.ps1");
 
         internal static bool Exists()
         {
