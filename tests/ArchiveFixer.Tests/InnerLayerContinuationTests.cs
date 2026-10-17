@@ -681,7 +681,12 @@ namespace ArchiveFixer.Tests
             string outer = BuildPackage("mangled.7z", outerStage, mangledName);
 
             // 密码本用**列表式**：内层包的名字被改过，"按名字命中"的映射式本来就不该指望它。
-            Harness harness = CreateHarness($"{OuterPassword}\n{InnerPassword}\n");
+            /*
+             * ⚠ 2026-10-17（本会话把"候选被否的引擎原话"从 ERROR 降成 INFO 之后）：**"成功任务只留一行"这才真正生效**
+             * ⇒ 成功任务的细节行（`还原伪装后缀 …`）会随缓冲一起丢掉，而本条正是**靠这些细节行**当证据。
+             * ⇒ 显式开详细档（本类既有做法，见上面那条同名注释）；⛔ 判据一个字不改。
+             */
+            Harness harness = CreateHarness($"{OuterPassword}\n{InnerPassword}\n", settings => settings.VerboseLog = true);
             await harness.AddPathsAsync(outer);
 
             OneClickOutcome outcome = await harness.RunOneClickAsync();
