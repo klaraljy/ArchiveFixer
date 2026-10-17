@@ -41,6 +41,9 @@ namespace ArchiveFixer.Tests
             Assert.Equal(62919013, reading.SumBytes);
             Assert.Equal(3, reading.Slots.Count);
             Assert.Single(reading.Slots, slot => slot.IsLast);
+
+            // 入口那一份 = 自证首卷的那一份（名字认不出族时也有据可依）。
+            Assert.Equal(@"C:\x\pack111-L2.7z.001", reading.EntryPath);
         }
 
         [Fact]
@@ -57,6 +60,9 @@ namespace ArchiveFixer.Tests
             Assert.False(reading.Complete);
             Assert.Contains("还差", reading.Reason);
             Assert.Empty(reading.Slots);
+
+            // 不完整也能点名"入口那一份是谁"（它自己就是首卷）。
+            Assert.Equal(@"C:\x\pack111-L2.7z.001", reading.EntryPath);
         }
 
         [Fact]

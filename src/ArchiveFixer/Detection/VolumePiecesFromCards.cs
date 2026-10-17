@@ -72,7 +72,8 @@ namespace ArchiveFixer.Detection
                     hasFirstPiece: first != null,
                     pieceCount: pieces.Count,
                     declaredTotalBytes: first?.DeclaredTotalBytes ?? 0,
-                    sumBytes: sum);
+                    sumBytes: sum,
+                    entryPath: first?.Path ?? string.Empty);
             }
 
             if (first == null)
@@ -88,7 +89,8 @@ namespace ArchiveFixer.Detection
                     hasFirstPiece: false,
                     pieceCount: pieces.Count,
                     declaredTotalBytes: 0,
-                    sumBytes: sum);
+                    sumBytes: sum,
+                    entryPath: string.Empty);
             }
 
             /*
@@ -106,7 +108,8 @@ namespace ArchiveFixer.Detection
                     hasFirstPiece: true,
                     pieceCount: pieces.Count,
                     declaredTotalBytes: first.DeclaredTotalBytes,
-                    sumBytes: sum);
+                    sumBytes: sum,
+                    entryPath: first.Path);
             }
 
             var slots = pieces
@@ -125,6 +128,7 @@ namespace ArchiveFixer.Detection
                 DeclaredTotalBytes = first.DeclaredTotalBytes,
                 SumBytes = sum,
                 Slots = slots,
+                EntryPath = first.Path,
                 Reason = $"可证完整：{pieces.Count} 片合计 {sum} 字节 == 首卷自述的整包字节数，满片 {fullSize} 字节"
             };
         }
@@ -154,6 +158,14 @@ namespace ArchiveFixer.Detection
         /// <summary>槽位（只在可证完整时有值）。</summary>
         public IReadOnlyList<CardVolumeSlot> Slots { get; init; } = Array.Empty<CardVolumeSlot>();
 
+        /// <summary>
+        /// 这一组的**入口那一份**（引擎这一趟要打开的文件）。判据只有一条：卡上自证
+        /// `BodyKind = VolumeFirstPiece` 的那一份 —— 它自己就是"从它开始解"的那一片
+        /// （7z / RAR 老式 / ZIP 通用分片这一族；跨盘 ZIP 的入口是末片 `X.zip`，由族规则另行回答）。
+        /// 空 = 这一层里没有首卷 ⇒ **判不出**（⛔ 不拿名字顶替）。
+        /// </summary>
+        public string EntryPath { get; init; } = string.Empty;
+
         /// <summary>判据输入（一句人话：为什么是这个结论）。</summary>
         public string Reason { get; init; } = string.Empty;
 
@@ -167,13 +179,15 @@ namespace ArchiveFixer.Detection
             bool hasFirstPiece,
             int pieceCount,
             long declaredTotalBytes,
-            long sumBytes) => new()
+            long sumBytes,
+            string entryPath) => new()
             {
                 Complete = false,
                 HasFirstPiece = hasFirstPiece,
                 PieceCount = pieceCount,
                 DeclaredTotalBytes = declaredTotalBytes,
                 SumBytes = sumBytes,
+                EntryPath = entryPath,
                 Reason = reason
             };
     }
