@@ -9838,18 +9838,52 @@ namespace ArchiveFixer.ViewModels
             {
                 string name = Path.GetFileName(current);
 
+                /*
+                 * ① **底层识别优先**（用户 2026-10-17 总则：「一开始肯定是用底层识别来弄……只有底层做不到
+                 * 或者哪些地方需要名字的修改来弄的」）：手上这一份自己自证是首卷
+                 * （`BodyKind = VolumeFirstPiece`）⇒ 它就是入口，名字认不出也一样。
+                 */
+                if (File.Exists(current)
+                    && FileNature.Inspect(current).BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                {
+                    return current;
+                }
+
+                List<VolumeCandidate> nearby = VolumeNameRepair
+                    .EnumerateVolumeCandidatesNearby(current)
+                    .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.Path))
+                    .ToList();
+
+                /*
+                 * ② 窗口里逐份读卡：**名字只当"同一组"的粗筛**（⛔ 不拿名字定卷号），
+                 * 卡上自证首卷的那一份就是入口。
+                 */
+                foreach (VolumeCandidate candidate in nearby)
+                {
+                    string candidateName = Path.GetFileName(candidate.Path);
+
+                    if (!File.Exists(candidate.Path)
+                        || !VolumeGroupDetector.BelongsToSameGroup(name, candidateName))
+                    {
+                        continue;
+                    }
+
+                    if (FileNature.Inspect(candidate.Path).BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                    {
+                        return candidate.Path;
+                    }
+                }
+
+                /*
+                 * ③ 名字兜底（底层做不到的那一档：7z 中间卷内容里没有卷号，只能靠名字排）。
+                 */
                 if (VolumeGroupDetector.TryGetVolumeIndex(name) == 1)
                 {
                     return current;
                 }
 
-                foreach (VolumeCandidate candidate in VolumeNameRepair.EnumerateVolumeCandidatesNearby(current))
+                foreach (VolumeCandidate candidate in nearby)
                 {
-                    if (candidate == null || string.IsNullOrWhiteSpace(candidate.Path))
-                    {
-                        continue;
-                    }
-
                     string candidateName = Path.GetFileName(candidate.Path);
 
                     if (VolumeGroupDetector.TryGetVolumeIndex(candidateName) == 1
