@@ -3633,6 +3633,31 @@ namespace ArchiveFixer.Extraction
             Collect(nearbyCandidates, applySizeFilter: true);
 
             /*
+             * ===== 入口那一份**先按卡入池**（用户 2026-10-17：底层识别优先）=====
+             * 现场（新样本 `1111`，探针逐字）：`222-L2.part1.rar-875` 名字判不出卷号，
+             * 而卡上 `格式=Rar 分卷身份=VolumeMember 卷号=1 专属算法=VolumeFirstPiece`。
+             * 名字那条路让 `pool` 空着 ⇒ 下面"内容证据那一档"的门槛（`pool.Count > 0`）
+             * 永远过不去 ⇒ 兄弟片（卡上卷号 2、3）一个都进不来 ⇒ 整组判成"缺卷"。
+             * ⇒ 池子空着时，入口那一份按**卡上的绝对卷号**补进来（⛔ 后面那几道闸门一条不落）。
+             */
+            if (pool.Count == 0 && File.Exists(entryPath))
+            {
+                try
+                {
+                    FileNatureCard entrySeatCard = FileNature.Inspect(entryPath);
+
+                    if (entrySeatCard.VolumeNumber is int entrySeatNumber && entrySeatNumber >= 1)
+                    {
+                        pool.Add(new GatherPiece(entryPath, entrySeatNumber, LengthOf(entryPath)));
+                    }
+                }
+                catch
+                {
+                    // 卡读不出来 ⇒ 池子照旧空着（什么都不做）。
+                }
+            }
+
+            /*
              * ===== 内容证据那一档：只承认"**把这一组补成 1..N 连号**"的那一种 =====
              *
              * 判据（全是事实，⛔ 不看名字）：
