@@ -15072,11 +15072,32 @@ namespace ArchiveFixer.ViewModels
                         + $"（这一层同族候选 {gatherCandidates.Count} 个｜这一层文件 {gatherScannedInEntryLayer} 个"
                         + $"｜参照名=「{(gatherReference.Length == 0 ? "判不出" : gatherReference)}」）");
 
+                    /*
+                     * ⛔ **名字归不出组、但底层识别卡可证完整 ⇒ 允许搬**（用户 2026-10-17 总则：底层优先）。
+                     * 现场形状：片名被改烂到 `VolumeGroupDetector.Group` 一个组都归不出来，
+                     * 而卡上"首卷自述 + 体积规律 + 合计对上"三条全成立 —— 这时名字只是线索坏了，
+                     * 事实（整组齐）是成立的。搬运本体仍走 `TryGatherGroupPiecesInto`（它自己的
+                     * 卡证据收源 + 那几道闸门一条不落），这里只负责**放行**。
+                     */
+                    bool allowMoveIntoGroup = gatherPlan.Action == VolumeGatherAction.Gather;
+
+                    if (!allowMoveIntoGroup
+                        && cardReading.Complete
+                        && cardReading.EntryPath.Length > 0
+                        && File.Exists(cardReading.EntryPath))
+                    {
+                        allowMoveIntoGroup = true;
+
+                        AppendLog(
+                            "INFO",
+                            $"{task.LogName}：收拢决策 = Gather（名字归不出组，但底层识别卡可证完整）—— {cardReading.Reason}");
+                    }
+
                     TryGatherGroupPiecesInto(
                         task,
                         entryLayer,
                         _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null,
-                        allowMoveIntoGroup: gatherPlan.Action == VolumeGatherAction.Gather,
+                        allowMoveIntoGroup: allowMoveIntoGroup,
                         cardEntryPath: cardReading.EntryPath);
 
                     /*
