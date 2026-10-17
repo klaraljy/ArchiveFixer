@@ -141,9 +141,16 @@ namespace ArchiveFixer.Extraction
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .ToList();
 
+            /*
+             * ⛔ 措辞不许说假话：`probeOpens == null` = **这一次根本没试开**（试开那一步还没接上），
+             * 不能写成"且试开通过"（2026-10-17 日志里那条 `这一组可证完整（共 2 卷）且试开通过`
+             * 就是这么来的 —— 那一趟一次引擎都没调）。
+             */
             return new VolumeGatherPlan(
                 VolumeGatherAction.Gather,
-                $"这一组可证完整（共 {pieces.Count} 卷）且试开通过",
+                probeOpens == null
+                    ? $"这一组可证完整（共 {pieces.Count} 卷），试开那一步还没接上（⛔ 没试过就说没试过）"
+                    : $"这一组可证完整（共 {pieces.Count} 卷）且试开通过",
                 pieces);
         }
 
