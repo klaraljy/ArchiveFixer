@@ -252,6 +252,25 @@ namespace ArchiveFixer.Detection
              * ⛔ 中间片（没有魔数、读不出起始头）照旧"判不出" —— ⛔ 不许当"不是分卷"。
              */
             VolumeContentFormat format = VolumeContentInference.SniffFormat(path);
+
+            /*
+             * ===== 格式也要**按内容读数**兜底（用户 2026-10-17，调试器取证）=====
+             * 现场（新样本 `6666` 的通用分片末片 `打包111-L2.zip.003`）：魔数嗅探给 `Unknown`
+             * （这一片是从数据中间切开的，开头不是 PK 签名），而**内容读数**已经把尾部 EOCD 认出来了
+             * （`VolumeNumberFromContent.Read` 的兜底那一支返回 `Format=Zip` + `HasZipEndRecord=true`）。
+             * 断点读数逐字：`HasZipEndRecord=true` 而卡上 `Format` 仍是嗅探值 ⇒ 消费方按族过滤时
+             * 这一份被当成"不是 zip" ⇒ 整组收不齐。
+             * ⇒ 魔数认不出时，用内容读数给的格式（⛔ 只在读数**认得出**时覆盖，判不出仍 Unknown）。
+             */
+            if (format == VolumeContentFormat.Unknown)
+            {
+                VolumeContentFormat byContent = VolumeNumberFromContent.Read(path).Format;
+
+                if (byContent != VolumeContentFormat.Unknown)
+                {
+                    format = byContent;
+                }
+            }
             ArchiveBodyKind bodyKind = ArchiveBodyKind.Unknown;
             long declaredTotalBytes = 0;
             int declaredVolumeCount = 0;

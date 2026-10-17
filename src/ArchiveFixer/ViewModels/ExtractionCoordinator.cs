@@ -12137,6 +12137,33 @@ namespace ArchiveFixer.ViewModels
 
             string referenceBase = FileNameHelper.GetArchiveBaseName(reference);
 
+            /*
+             * 通用分片族的"第 1 片有多大" —— 文档 §6.6 A 的**字节数守恒**要用的锚点：
+             * 从收集到的候选里找"开头是本地文件头"的那一份；找不到 ⇒ 0（这一档不启用）。
+             */
+            long zipFullSize = 0;
+
+            if (entryIsZipPiece)
+            {
+                foreach (string file in allFiles)
+                {
+                    try
+                    {
+                        FileNatureCard anchorCard = FileNature.Inspect(file);
+
+                        if (anchorCard.HasZipLocalHeader && anchorCard.Size > 0)
+                        {
+                            zipFullSize = anchorCard.Size;
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        // 单份读不出来就跳到下一份。
+                    }
+                }
+            }
+
             foreach (string file in allFiles)
             {
                 string candidateName = FileNameHelper.GetFileName(file);
@@ -12176,10 +12203,25 @@ namespace ArchiveFixer.ViewModels
                 {
                     FileNatureCard candidateCard = FileNature.Inspect(file);
 
-                    if (candidateCard.Format == VolumeContentFormat.Zip
+                    /*
+                     * ⚠ 单卷 zip 也有 EOCD，但它**可证不是分卷成员**（`BodyKind=SingleComplete`）⇒ 不收。
+                     * ⚠ 中间片的名字与头都认不出（现场 `6666`：`打包111-W1-0.png`，头是数据中间切开的）
+                     *   ⇒ 用文档 §6.6 A 的**字节数守恒**这条证据：与"第 1 片"同样大的、且没有被内容证明
+                     *   不是成员的，才当中间片。
+                     */
+                    bool isZipPiece = candidateCard.Format == VolumeContentFormat.Zip
+                        && candidateCard.BodyKind != ArchiveBodyKind.SingleComplete
                         && (candidateCard.HasZipEndRecord
                             || candidateCard.HasZipLocalHeader
-                            || candidateCard.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember))
+                            || candidateCard.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember);
+
+                    bool isByteConservedMiddle = !isZipPiece
+                        && zipFullSize > 0
+                        && candidateCard.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
+                        && candidateCard.Size > 0
+                        && Math.Abs(candidateCard.Size - zipFullSize) <= Math.Max(1, zipFullSize / 100);
+
+                    if (isZipPiece || isByteConservedMiddle)
                     {
                         paths.Add(file);
                     }
