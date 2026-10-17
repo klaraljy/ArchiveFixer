@@ -2263,7 +2263,13 @@ namespace ArchiveFixer.Extraction
                  */
                 if (!VerboseLog)
                 {
-                    EngineOutputLog.LogFailure(Log, layerLabel, result);
+                    /*
+                 * ⚠ 2026-10-17（用户 2026-09-25 第 45 条）：**这一步是"这个候选被否、继续下一个"，不是终态** ⇒
+                 * 引擎原话按 **INFO** 写（进"每任务攒着、成功就丢"的缓冲；真失败的收场由协调器写 ERROR 并且
+                 * `EndTaskLogCapture` 会把细节全吐出来）。上一版写 ERROR ⇒ 两个错候选就把缓冲冲掉 ⇒
+                 * 错候选之后成功的任务留下 27 行（`Item45LogAndPasswordTests` 实测，红检就是那条用例）。
+                 */
+                    EngineOutputLog.LogFailure(Log, layerLabel, result, levelOverride: "INFO");
                 }
 
                 /*

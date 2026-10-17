@@ -31,7 +31,8 @@ namespace ArchiveFixer.Extraction
         public static void LogFailure(
             Action<string, string>? log,
             string taskLabel,
-            ArchiveOperationResult? result)
+            ArchiveOperationResult? result,
+            string? levelOverride = null)
         {
             if (log == null || result == null)
             {
@@ -53,7 +54,14 @@ namespace ArchiveFixer.Extraction
              * 级别按**机器终态**判（⛔ 不比中文）：部分完成 = 有东西解出来了 = WARN；
              * 其余失败 = ERROR。两次调用各自取一次，级别与文字来自同一份结果对象。
              */
-            log(result.IsPartiallyCompleted ? "WARN" : "ERROR", text);
+            /*
+             * ⚠ 2026-10-17（用户 2026-09-25 第 45 条 / `Item45LogAndPasswordTests.真7z_先试错两个候选再成功_成功档照样只留一行`）：
+             * **"这个候选被否、继续下一个"那一趟的引擎原话不能是 WARN/ERROR** —— 协调器那条"每任务攒着、
+             * 成功就丢"的缓冲遇到 WARN/ERROR 会**先吐出来并把 `DetailsVisible` 置真**，之后所有 INFO 直写
+             * ⇒ 错候选之后成功的任务会留下 27 行（实测），"成功就丢"整条失效。
+             * ⇒ 调用方可以按"这一次不是终态"传 `INFO`；⛔ 终态失败那一条照旧 WARN/ERROR（默认不变）。
+             */
+            log(levelOverride ?? (result.IsPartiallyCompleted ? "WARN" : "ERROR"), text);
         }
 
         /// <summary>
