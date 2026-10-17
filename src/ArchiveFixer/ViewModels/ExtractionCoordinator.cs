@@ -635,6 +635,43 @@ namespace ArchiveFixer.ViewModels
             return false;
         }
 
+        /// <summary>
+        /// **这一批已经用「完全同一组片」试过一遍的组签名**（批末补判去重用的那本账）。
+        ///
+        /// <para>签名 = 组的 `GroupKey` + 每一卷「完整路径 + 字节数」。**只要有新片进来签名就会变**
+        /// ⇒ 补判"后来又补齐了、再跑一次"那条合法路径**一个字都不受影响**；
+        /// 只有"这一批已经拿完全同样的几片试过、结论也就那样"才拒。</para>
+        ///
+        /// <para>2026-10-17 真机现场（`10101010`，逐行计数）：批末补判把同一组排了 **21 趟**，
+        /// 每趟候选序号恒为 `1/10`（第一趟第一枚候选就撞结构性失败）、`分卷收不到一起` 21 次。</para>
+        /// </summary>
+        private readonly HashSet<string> _triedVolumeGroupSignatures =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 组的"试过一遍"签名（唯一出口）：`GroupKey` + 按卷序每一卷的「路径|字节数」。
+        /// 读不到字节数记 `-`（⛔ 不因此判"不同组"——判不出就照旧算同一组，宁可不重跑）。
+        /// </summary>
+        private static string BuildVolumeGroupAttemptSignature(VolumeGroup group)
+        {
+            var builder = new System.Text.StringBuilder(group.GroupKey);
+
+            foreach (VolumeCandidate volume in group.Volumes)
+            {
+                builder.Append('|').Append(volume.Path).Append('|');
+
+                try
+                {
+                    builder.Append(new FileInfo(volume.Path).Length);
+                }
+                catch
+                {
+                    builder.Append('-');
+                }
+            }
+
+            return builder.ToString();
+        }
         private void MarkStoppedBeforeExtract(ArchiveTask task, string status, string errorMessage)
         {
             /*
@@ -12875,6 +12912,7 @@ namespace ArchiveFixer.ViewModels
         internal void ResetBatchLedgersForTests()
         {
             _volumeDeficitDeferred.Clear();
+            _triedVolumeGroupSignatures.Clear();
             _deferredVolumeGroupMember.Clear();
             _byteBudgetLinkedSources.Clear();
             _scoredSlotAttempts.Clear();
@@ -14333,6 +14371,42 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
+                    /*
+                     * ⛔ **这一批已经用「完全同一组片」试过一遍 ⇒ 不再排第二趟**（2026-10-17 真机 `10101010`）。
+                     *
+                     * <para>现场逐行：批末补判把同一组排了 21 趟，每趟都以「判出完整的一组（1 卷）」放行 ⇒
+                     * 跑 ⇒ 第一枚候选就撞结构性失败（自述 62919013 / 手上 26214400 ⇒ `VolumeMissing`）⇒
+                     * 组仍不完整 ⇒ 下一趟再来。这 21 趟里有 20 趟是**同一组片、同一结论**，纯属空转。</para>
+                     *
+                     * <para>判据只读**既有事实**（组签名 = `GroupKey` + 每一卷「路径|字节数」）：
+                     * 签名相同 ⇒ 同一批同样的片已经试过 ⇒ 拒；**只要有新片进来签名就变 ⇒ 照旧放行**
+                     * （批末补判"后来又补齐了"那条合法路径不受影响）。⛔ 不放宽"缺卷 ⇒ 源包原地不动"，
+                     * 也⛔ 不动本节其它判据。</para>
+                     */
+                    string attemptSignature = BuildVolumeGroupAttemptSignature(group);
+
+                    bool alreadyTried = !_triedVolumeGroupSignatures.Add(attemptSignature);
+
+                    /*
+                     * ⛔ **只拒"结构性"失败的重排**（判据读状态常量 `StatusText.VolumeMissing`，⛔ 不比中文）。
+                     *
+                     * <para>为什么必须收这么窄：同一组片也可能因为**瞬时原因**失败（源文件刚被改、并发撞车、
+                     * 一次引擎抖动）—— 那种必须允许再试，否则会把"能救回来的"直接钉死。
+                     * 2026-10-17 全量里 `ChainInnerVolumeRestoreTests.真机布局_四个外层包各在一个子目录里…`
+                     * 正好在并行负载下偶发假失败（单跑 1/1 绿）⇒ 读它自己的状态：**不是缺卷那一档** ⇒ 照旧放行。</para>
+                     */
+                    if (alreadyTried && string.Equals(task.Status, StatusText.VolumeMissing, StringComparison.Ordinal))
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{task.LogName}：这一组这一批已经用完全同样的这几片试过一次了（结论就是现在这个）——"
+                            + "不再排第二趟；等有新的片进来才会再试。");
+
+                        _volumeDeficitDeferred.Remove(task);
+                        task.IsVolumeDeficitDeferred = false;
+
+                        continue;
+                    }
                     /*
                      * 补齐了 ⇒ 收拢 + 正常跑这一组（起点改到第 1 卷、快照重拍）。
                      *
@@ -18537,6 +18611,7 @@ namespace ArchiveFixer.ViewModels
             if (!continueDeferredVolumeDeficits)
             {
                 _volumeDeficitDeferred.Clear();
+                _triedVolumeGroupSignatures.Clear();
                 _deferredVolumeGroupMember.Clear();
                 _byteBudgetLinkedSources.Clear();
                 _scoredSlotAttempts.Clear();
