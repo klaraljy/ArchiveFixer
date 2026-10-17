@@ -8167,7 +8167,7 @@ namespace ArchiveFixer.ViewModels
                     ? Path.GetDirectoryName(task.CurrentPath ?? string.Empty)
                     : null;
 
-                foreach (string root in new[] { task.OutputPath, task.ContentDirectoryPath, sourcePieceDirectory })
+                foreach (string? root in new[] { task.OutputPath, task.ContentDirectoryPath, sourcePieceDirectory })
                 {
                     if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                     {
@@ -9380,42 +9380,12 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * 入口 = 引擎这一趟要打开的那一份（分卷组只有"第 1 卷"这一个入口）。
+                 * 起点 = 引擎这一趟要打开的那一份（分卷组只有"第 1 卷"这一个入口）。
                  * 手上是后续卷（用户只把 `.002` 拖进来）时，先在**找卷窗口**里找同一组的第 1 卷 ——
-                 * 找得到就以它为入口（收卷的目标目录 = 它的那一层），找不到就退回自己
-                 * （`ResolveCrossLayerVolumeGather` 会判"不适用"，一个字节都不动）。
+                 * 找得到就以它为入口（候选池 = 它的那一层），找不到就退回自己
+                 * （`ResolveCrossLayerVolumeGather` 会按池子里的第 1 卷另判，判不出就一个字节都不动）。
                  */
                 string entryPath = ResolveGatherEntryPath(current);
-
-                if (string.Equals(entryPath, current, StringComparison.OrdinalIgnoreCase)
-                    && VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(current)) != 1
-                    && task.IsVolumeGroup)
-                {
-                    /*
-                     * 说话要对（2026-10-05 真机第八批）：**跨盘 ZIP 那一族的头尾是反的** ——
-                     * 它的第 1 片叫 `111.z01`，而 `.zip` 是**末片**（7-Zip 就是拿 `.zip` 当入口的）。
-                     * 按名字编号说话时"缺 index 1"其实等于"缺 `.zip`" ⇒ 对它必须说「缺的是末片」，
-                     * ⛔ 不许说成「缺的是第 1 卷」：真机上那三片的第一片就躺在隔壁文件夹里，
-                     * 用户会拿着"缺第 1 卷"这句去找一个根本不缺的东西。
-                     *
-                     * 判据只看一件事：手上这一份与 `<基名>.zip` **是不是同一族同基名**
-                     * （既有出口 `BelongsToSameGroup`；⛔ 不新造family判据）。
-                     */
-                    string baseName = FileNameHelper.GetArchiveBaseName(current);
-                    bool spannedZipFamily = baseName.Length > 0
-                        && VolumeGroupDetector.BelongsToSameGroup(
-                            Path.GetFileName(current),
-                            baseName + ".zip");
-
-                    AppendLog(
-                        "INFO",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            spannedZipFamily
-                                ? StatusText.VolumeDeficitNoTailNearbyFormat
-                                : StatusText.VolumeDeficitNoFirstVolumeNearbyFormat,
-                            task.FileName));
-                }
 
                 /*
                  * 窗口的基准 = **手上那一卷**（口径 1）。⛔ 它只"看"：候选还要过下面那三道闸门
@@ -9454,10 +9424,40 @@ namespace ArchiveFixer.ViewModels
                         .Where(path => !string.IsNullOrWhiteSpace(path)));
 
                 VolumeNameRepair.CrossLayerVolumeGather decision =
-                    VolumeNameRepair.ResolveCrossLayerVolumeGather(entryPath, null, window);
+                    VolumeNameRepair.ResolveCrossLayerVolumeGather(current, null, window);
 
                 if (!decision.Applicable)
                 {
+                    /*
+                     * 收不成时**先说清缺的是哪一头**（2026-10-05 真机第八批）：**跨盘 ZIP 那一族的头尾是反的** ——
+                     * 它的第 1 片叫 `111.z01`，而 `.zip` 是**末片**（7-Zip 就是拿 `.zip` 当入口的）。
+                     * 按名字编号说话时"缺 index 1"其实等于"缺 `.zip`" ⇒ 对它必须说「缺的是末片」，
+                     * ⛔ 不许说成「缺的是第 1 卷」：真机上那三片的第一片就躺在隔壁文件夹里，
+                     * 用户会拿着"缺第 1 卷"这句去找一个根本不缺的东西。
+                     *
+                     * 判据只看一件事：手上这一份与 `<基名>.zip` **是不是同一族同基名**
+                     * （既有出口 `BelongsToSameGroup`；⛔ 不新造族判据）。
+                     */
+                    if (string.Equals(entryPath, current, StringComparison.OrdinalIgnoreCase)
+                        && VolumeGroupDetector.TryGetVolumeIndex(Path.GetFileName(current)) != 1
+                        && task.IsVolumeGroup)
+                    {
+                        string noFirstBaseName = FileNameHelper.GetArchiveBaseName(current);
+                        bool spannedZipFamily = noFirstBaseName.Length > 0
+                            && VolumeGroupDetector.BelongsToSameGroup(
+                                Path.GetFileName(current),
+                                noFirstBaseName + ".zip");
+
+                        AppendLog(
+                            "INFO",
+                            string.Format(
+                                System.Globalization.CultureInfo.CurrentCulture,
+                                spannedZipFamily
+                                    ? StatusText.VolumeDeficitNoTailNearbyFormat
+                                    : StatusText.VolumeDeficitNoFirstVolumeNearbyFormat,
+                                task.FileName));
+                    }
+
                     /*
                      * 「这一组该怎么收」判不出来的那一档也把**判据输入**写出来（用户 2026-10-10 目标单③）：
                      * 上面那几行只说"判不出该怎么收"，而"窗口看了哪些目录、里面到底有几个同族候选、
@@ -9490,6 +9490,16 @@ namespace ArchiveFixer.ViewModels
                         + (string.IsNullOrWhiteSpace(decision.Detail) ? string.Empty : "｜闸门：" + decision.Detail));
 
                     return false;
+                }
+
+                /*
+                 * 收拢的目标那一份 = 这一组的**第 1 卷**（`EntryPath`，唯一出口给出的）。
+                 * 手上是后续卷时，下面 `TryApply` 会把那一片搬进第 1 卷所在层 ⇒ 起点必须跟着换过去，
+                 * ⛔ 不能让这一单拿着一个已经被搬走（或被改成规范名）的旧路径往下走。
+                 */
+                if (!string.IsNullOrWhiteSpace(decision.EntryPath) && File.Exists(decision.EntryPath))
+                {
+                    entryPath = decision.EntryPath!;
                 }
 
                 if (decision.Plan is { CanRepair: true })
@@ -9814,6 +9824,13 @@ namespace ArchiveFixer.ViewModels
         /// 引擎这一趟该打开的那一份：手上就是第 1 卷 ⇒ 它自己；手上是后续卷 ⇒ 在
         /// <see cref="VolumeNameRepair.EnumerateVolumeCandidatesNearby"/> 的窗口里找同一组的第 1 卷
         /// （窗口里自己那一层排在最前，所以"同一层优先"是白拿的）；判不出 ⇒ 退回手上那一份。
+        ///
+        /// <para>⚠ 2026-10-17（本轮实测）：这一处**不能只换 `current`** —— 它同时是
+        /// <see cref="VolumeNameRepair.ResolveCrossLayerVolumeGather"/> 的**候选池来源**
+        /// （那一段会枚举"入口那一份所在的目录"）。直接用 `current` 会让池子换成"手上那一片的目录"，
+        /// `SiblingFolderVolumeGatherTests` 四条守门当场红（跨盘 ZIP 的两个半边在不同的包里）。
+        /// ⇒ 池子来源照旧走这一条；而"这一组该拼到哪一层"的**基准**判据已经改由
+        /// `CrossLayerVolumeGather.EntryPath`（按池子里的第 1 卷）回答，闸门也据此删掉了。</para>
         /// </summary>
         private static string ResolveGatherEntryPath(string current)
         {
@@ -9845,7 +9862,7 @@ namespace ArchiveFixer.ViewModels
             }
             catch
             {
-                // 判不出 ⇒ 什么都不做（收卷那一档会因为"入口不是第 1 卷"整档不适用）。
+                // 判不出 ⇒ 什么都不做（收卷那一档会因为找不到第 1 卷整档判不出）。
             }
 
             return current;
@@ -11459,6 +11476,33 @@ namespace ArchiveFixer.ViewModels
                 {
                     return fromCard;
                 }
+
+                /*
+                 * ⚠ 2026-10-17（本轮判据输入定死）：名字与卡都拼不出规范名时（真机 `aaa-L2.txt`：
+                 * 卡上 `分卷身份=VolumeMember` 但 `BodyKind=Unknown`、规范名空），老写法退回
+                 * `<基名>.zip` ⇒ 与 `.rar` / `.7z` 族的兄弟**一个都匹配不上**（判据输入逐字：
+                 * `这一层文件 3 个｜参照名=「aaa-L2.zip」｜同族候选 0 个`）⇒ 收拢永远收不到一起。
+                 *
+                 * <p>现在的口径：**拿同层里真实存在的"这一族的成员"当参照名**（卡说它是某族的一片），
+                 * 那个名字天然就在这一组里、族也天然对得上。⛔ 找不到才退回 `<基名>.zip`（老兜底不变）。</p>
+                 */
+                string? ownDirectory = Path.GetDirectoryName(ownPath);
+
+                if (!string.IsNullOrWhiteSpace(ownDirectory) && Directory.Exists(ownDirectory))
+                {
+                    foreach (string sibling in Directory.EnumerateFiles(ownDirectory))
+                    {
+                        if (SafePathHelper.PathEquals(sibling, ownPath))
+                        {
+                            continue;
+                        }
+
+                        if (VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(sibling)))
+                        {
+                            return FileNameHelper.GetFileName(sibling);
+                        }
+                    }
+                }
             }
 
             return baseName + ".zip";
@@ -11807,9 +11851,12 @@ namespace ArchiveFixer.ViewModels
         /// 这一层里与"这一单手上那一片"**同族同基名**的文件（收拢决策器的候选池；⛔ 只读这一层、不递归）。
         /// 判据 = 既有宽尺子 `VolumeGroupDetector.BelongsToSameGroup`，参照名 = 手上那一片。
         /// </summary>
-        private List<string> CollectGroupCandidatePaths(ArchiveTask task, string entryLayer)
+        private List<string> CollectGroupCandidatePaths(ArchiveTask task, string entryLayer, out string referenceName, out int scannedInEntryLayer)
         {
             var paths = new List<string>();
+
+            referenceName = string.Empty;
+            scannedInEntryLayer = 0;
 
             if (string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
@@ -11819,76 +11866,111 @@ namespace ArchiveFixer.ViewModels
             string observed = ResolveDeferredGroupMemberPath(task);
             string reference = ResolveGroupReferenceName(task, FileNameHelper.GetArchiveBaseName(observed), observed);
 
+            referenceName = reference;
+
             if (reference.Length == 0)
             {
                 return paths;
             }
 
-            void AddIfSameGroup(string file)
+            /*
+             * ⚠ 2026-10-17（运行期判据输入定死）：参照名退回 `<基名>.zip` 时（`pack111-L2.7z.zip`、`aaa-L2.zip`），
+             * 与 `.7z` / `.rar` 族的兄弟**一个都对不上**（逐字 `这一层文件 3 个｜同族候选 0 个`）——
+             * 而那一层里明明躺着真成员。⇒ **参照名允许改由"真实成员"充当**：
+             * 先把四档来源的文件都收集起来（不过滤），若参照名自己都过不了那把尺子（`BelongsToSameGroup(ref, ref)`），
+             * 就从真实文件里挑第一个"卡说它是这一族一片"的，用它的名字当参照名。
+             * ⛔ 判不出（一个成员都没有）⇒ 照旧空结果（兜底不变）。
+             */
+            var allFiles = new List<string>();
+
+            void CollectAll(string? directory)
             {
-                if (string.IsNullOrWhiteSpace(file) || !File.Exists(file))
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
                 {
                     return;
                 }
 
-                if (paths.Any(existing => string.Equals(existing, file, StringComparison.OrdinalIgnoreCase)))
+                foreach (string file in CollectVolumeFilesInDirectory(directory!))
                 {
-                    return;
-                }
-
-                if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), reference))
-                {
-                    paths.Add(file);
+                    if (!allFiles.Any(existing => string.Equals(existing, file, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        allFiles.Add(file);
+                    }
                 }
             }
 
-            // ① 这一层（入口包那一层）
-            foreach (string file in CollectVolumeFilesInDirectory(entryLayer))
-            {
-                AddIfSameGroup(file);
-            }
+            CollectAll(entryLayer);
+            scannedInEntryLayer = allFiles.Count;
 
-            // ② 任务表里同组的单（用户口径：「任务表同组片」）
+            string ownLayer = Path.GetDirectoryName(SafePathHelper.GetFullPathSafe(observed)) ?? string.Empty;
+
+            CollectAll(ownLayer);
+
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
             {
-                AddIfSameGroup(candidate?.CurrentPath ?? string.Empty);
-            }
-
-            // ③ 这一单当前层（含**刚解出来、还没进任务表**的那几片）
-            string ownLayer = Path.GetDirectoryName(SafePathHelper.GetFullPathSafe(observed));
-
-            if (!string.IsNullOrWhiteSpace(ownLayer) && Directory.Exists(ownLayer))
-            {
-                foreach (string file in CollectVolumeFilesInDirectory(ownLayer!))
-                {
-                    AddIfSameGroup(file);
-                }
-            }
-
-            // ④ 各单的产出层 / 内容层 / 其余物（用户口径：「各单产出层、其余物」）
-            foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
-            {
-                if (other == null)
+                if (candidate == null)
                 {
                     continue;
                 }
 
-                foreach (string? directory in new[]
-                         {
-                             other.OutputPath,
-                             other.ContentDirectoryPath,
-                             other.RestDirectoryPath
-                         })
+                CollectAll(Path.GetDirectoryName(candidate.CurrentPath ?? string.Empty));
+                CollectAll(candidate.OutputPath);
+                CollectAll(candidate.ContentDirectoryPath);
+                CollectAll(candidate.RestDirectoryPath);
+            }
+
+            /*
+             * ⛔ **不能拿"参照名自己过不过尺子"当闸门**（2026-10-17 实测）：`pack111-L2.7z.zip` 自己是个合法的
+             * zip 名 ⇒ `BelongsToSameGroup(ref, ref)` = **true**，于是兜底永远不触发、层里明明有真成员却判 0 个。
+             * 现在的闸门 = **这个参照名在收集到的文件里到底存不存在**（不存在 ⇒ 说明它是拼出来的兜底名）。
+             */
+            bool referenceIsRealFile = allFiles.Any(file =>
+                string.Equals(FileNameHelper.GetFileName(file), reference, StringComparison.OrdinalIgnoreCase));
+
+            if (!referenceIsRealFile)
+            {
+                /*
+                 * 三档递进找参照名（⛔ 都找不到就保持 `<基名>.zip` 的老兜底）：
+                 * ① 卡说"我是这一族的一片"的；② **名字读得出卷号**的（7z/RAR 的伪装片按内容认不出，
+                 * 只有名字这一条线索）；③ 一个都不满足 ⇒ 老兜底。
+                 */
+                string? byCard = null;
+                string? byVolumeName = null;
+
+                foreach (string file in allFiles)
                 {
-                    if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                    string name = FileNameHelper.GetFileName(file);
+
+                    if (byCard == null && VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(file)))
                     {
-                        continue;
+                        byCard = name;
                     }
 
-                    foreach (string file in CollectVolumeFilesInDirectory(directory))
+                    if (byVolumeName == null && VolumeGroupDetector.TryGetVolumeIndex(name) != null)
                     {
-                        AddIfSameGroup(file);
+                        byVolumeName = name;
                     }
+
+                    if (byCard != null && byVolumeName != null)
+                    {
+                        break;
+                    }
+                }
+
+                string? chosen = byCard ?? byVolumeName;
+
+                if (chosen != null)
+                {
+                    reference = chosen;
+                    referenceName = reference;
+                }
+            }
+
+            foreach (string file in allFiles)
+            {
+                if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), reference))
+                {
+                    paths.Add(file);
                 }
             }
 
@@ -14719,14 +14801,19 @@ namespace ArchiveFixer.ViewModels
                      * 候选 = 这一层里与"这一单手上那一片"同族的文件（既有尺子 `BelongsToSameGroup`），
                      * ⛔ 不递归、⛔ 不猜。
                      */
-                    List<string> gatherCandidates = CollectGroupCandidatePaths(task, entryLayer);
+                    List<string> gatherCandidates = CollectGroupCandidatePaths(
+                        task,
+                        entryLayer,
+                        out string gatherReference,
+                        out int gatherScannedInEntryLayer);
 
                     VolumeGatherPlan gatherPlan = VolumeGatherPlanner.Decide(gatherCandidates, entryLayer);
 
                     AppendLog(
                         "INFO",
                         $"{task.LogName}：收拢决策 = {gatherPlan.Action} —— {gatherPlan.Reason}"
-                        + $"（这一层同族候选 {gatherCandidates.Count} 个）");
+                        + $"（这一层同族候选 {gatherCandidates.Count} 个｜这一层文件 {gatherScannedInEntryLayer} 个"
+                        + $"｜参照名=「{(gatherReference.Length == 0 ? "判不出" : gatherReference)}」）");
 
                     TryGatherGroupPiecesInto(
                         task,

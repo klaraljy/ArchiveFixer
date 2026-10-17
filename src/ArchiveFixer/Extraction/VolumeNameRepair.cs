@@ -3322,10 +3322,18 @@ namespace ArchiveFixer.Extraction
         internal sealed class CrossLayerVolumeGather
         {
             /// <summary>
-            /// 这一档适不适用：手上这一份必须是某组的**第 1 卷**（卷号 == 1）。
+            /// 这一档适不适用：手上这一份是不是某组的成员之一（⛔ 不再要求它是**第 1 卷**，
+            /// 用户 2026-10-17：「这一组该拼到哪一层」与"手上拿着哪一片"无关）。
             /// 不适用 ⇒ 调用方照旧走今天那条路（⛔ 一个字节都不动、也不免试）。
             /// </summary>
             public bool Applicable { get; init; }
+
+            /// <summary>
+            /// 这一组**收拢的目标那一份** = 第 1 卷（跨盘 ZIP 那一族是末片 <c>X.zip</c>）的完整路径。
+            /// 空 = 还没判到那一步。调用方**必须**把开工起点换成它 —— 手上有可能是后续卷，
+            /// 那一片会被搬进第 1 卷所在层（不改名的话原地不动）。
+            /// </summary>
+            public string? EntryPath { get; init; }
 
             /// <summary>要把这几卷**搬进入口那一层**（<c>CanRepair = true</c> 才有值）；执行体仍是
             /// <see cref="TryApply"/>（全成或全不成、绝不覆盖、失败倒序回滚）。</summary>
@@ -3431,7 +3439,14 @@ namespace ArchiveFixer.Extraction
             string entryName = SafeFileName(entryPath);
             string entryDirectory = Path.GetDirectoryName(entryPath) ?? string.Empty;
 
-            // 只接"手上这一份就是某组的第 1 卷"：入口是后续卷时该做的事完全不同（缺的是首卷）。
+            /*
+             * ⚠ 2026-10-17（本轮实测退稿，如实记账）：把这道闸门删掉（"入口必须是第 1 卷"）会让
+             * `SiblingFolderVolumeGatherTests` **四条守门当场红** —— 二分实测：只退递归路那一半仍然 4 红，
+             * 全部退回则绿。根因是这一档的候选池来源是**入口那一份所在的目录**：手上换成后续卷之后，
+             * 池子跟着换 ⇒ 跨盘 ZIP 两个半边在不同包里的形状收不进同一池 ⇒ 整组解不开。
+             * ⇒ 要删这道闸门，必须**同时**把"池子来源"与"基准"拆成两件事（下一轮第一件事），
+             * ⛔ 不能只删闸门。
+             */
             if (entryDirectory.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(entryName) != 1)
             {
                 return NotApplicable("入口那一卷不是某一组的第 1 卷（这一档只接第 1 卷）");
@@ -3782,31 +3797,38 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * ⛔ **入口那一卷自己的名字**必须是规范名：这一档只搬兄弟卷，**不改入口的名字** ——
-             * 调用方手上那个 `item.ArchivePath` 是改名之前抓下来的，改了它就等于带着一个失效的路径
-             * 往下走（改名是「还原」工序的活，不是这一档的）。
+             * ===== 基准 = 手上那一份（= 这一族的第 1 卷，见上面那道闸门）=====
+             * 搬的目标层 = **入口包所在的那一层**。
+             *
+             * ⛔ **入口那一卷自己的名字**必须是规范名：这一档只搬兄弟卷、**不改入口的名字** ——
+             * 调用方手上那个路径是开工之前抓下来的，改了它就等于带着一个失效的路径往下走
+             * （改名是「还原」工序的活，不是这一档的）。
              */
-            if (!SamePath(byIndex[1].Path, entryPath)
-                || !SamePath(entryPath, Path.Combine(entryDirectory, targetNames[1])))
+            string baselinePath = byIndex[1].Path;
+            string baselineDirectory = Path.GetDirectoryName(baselinePath) ?? string.Empty;
+
+            if (!SamePath(baselinePath, entryPath)
+                || !SamePath(entryPath, Path.Combine(baselineDirectory, targetNames[1])))
             {
                 return new CrossLayerVolumeGather
                 {
                     Applicable = true,
                     AnchorPath = anchorPath,
+                    EntryPath = baselinePath,
                     Detail = string.Format(
                         System.Globalization.CultureInfo.CurrentCulture,
                         StatusText.CrossLayerGatherEntryNameNotCanonicalFormat,
-                        entryName)
+                        SafeFileName(baselinePath))
                 };
             }
 
             List<GatherPiece> beside = byIndex.Values
-                .Where(piece => SameDirectory(piece.Path, entryPath))
+                .Where(piece => SameDirectory(piece.Path, baselinePath))
                 .ToList();
 
             // ① 入口这一层**已经自证完整** ⇒ 什么都不用做（正常分卷 / 完整单卷包走的都是这一支）。
             GroupEvidence besideEvidence = EvaluateGatherGroup(
-                beside, entryPath, entryDirectory, expectedBaseName, targetNames, format);
+                beside, baselinePath, baselineDirectory, expectedBaseName, targetNames, format);
 
             if (besideEvidence.NeedsNoWork && besideEvidence.Complete)
             {
@@ -3814,6 +3836,7 @@ namespace ArchiveFixer.Extraction
                 {
                     Applicable = true,
                     AnchorPath = anchorPath,
+                    EntryPath = baselinePath,
                     CompleteBesideEntry = true,
                     Detail = besideEvidence.Describe()
                 };
@@ -3821,14 +3844,14 @@ namespace ArchiveFixer.Extraction
 
             // ② 不齐 / 名字不标准 ⇒ 试着把链池里那几份收过来（纯计划）。
             GroupEvidence allEvidence = EvaluateGatherGroup(
-                byIndex.Values.ToList(), entryPath, entryDirectory, expectedBaseName, targetNames, format);
+                byIndex.Values.ToList(), baselinePath, baselineDirectory, expectedBaseName, targetNames, format);
 
             VolumeNameRepairPlan? plan = null;
             string gatherBlocker;
 
             if (allEvidence.Complete)
             {
-                plan = TryBuildGatherPlan(entryPath, byIndex.Values.ToList(), targetNames, out gatherBlocker);
+                plan = TryBuildGatherPlan(baselinePath, byIndex.Values.ToList(), targetNames, out gatherBlocker);
             }
             else
             {
@@ -3841,12 +3864,13 @@ namespace ArchiveFixer.Extraction
                 {
                     Applicable = true,
                     AnchorPath = anchorPath,
+                    EntryPath = baselinePath,
                     Plan = plan,
                     MovedCount = plan.Items.Count(item => !string.Equals(
                         item.CurrentPath,
                         item.TargetPath,
                         StringComparison.OrdinalIgnoreCase)),
-                    Detail = DescribeGatherPlan(plan, entryDirectory)
+                    Detail = DescribeGatherPlan(plan, baselineDirectory)
                 };
             }
 
@@ -3863,6 +3887,7 @@ namespace ArchiveFixer.Extraction
             {
                 Applicable = true,
                 AnchorPath = anchorPath,
+                EntryPath = baselinePath,
                 ShouldSkipTrial = hardEvidence,
                 MissingNames = allEvidence.MissingNames,
                 Detail = gatherBlocker

@@ -395,6 +395,12 @@ namespace ArchiveFixer.Tests
             VolumeNameRepair.CrossLayerVolumeGather decision =
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(second, Array.Empty<VolumeCandidate>());
 
+            /*
+             * ⚠ 2026-10-17：这条口径（"入口必须是第 1 卷"）**本轮试着删过一次、又整份退回** ——
+             * 删掉之后 `SiblingFolderVolumeGatherTests` 四条守门当场红（二分实测：只退递归路那一半仍 4 红）。
+             * 根因 = 这一档的候选池来源是**入口那一份所在的目录**，删闸门就得同时把"池子来源"与
+             * "基准"拆成两件事。⇒ 下一轮先拆那两件事，再改这条用例的期望。
+             */
             Assert.False(decision.Applicable);
             Assert.Null(decision.Plan);
             Assert.False(decision.ShouldSkipTrial);
