@@ -592,7 +592,7 @@ namespace ArchiveFixer.Tests
             harness.Coordinator.RecordDeferredVolumeDeficitForTests(alreadySucceeded);
             alreadySucceeded.Outcome = TaskOutcome.Succeeded;
 
-            IReadOnlyList<ArchiveTask> toRun = harness.Coordinator.FinalizeDeferredVolumeDeficits();
+            IReadOnlyList<ArchiveTask> toRun = await harness.Coordinator.FinalizeDeferredVolumeDeficitsAsync();
 
             Log(harness, "已经成功过的那一单：批末那一站之后");
 
@@ -671,7 +671,7 @@ namespace ArchiveFixer.Tests
             harness.Coordinator.RecordDeferredVolumeDeficitForTests(holder);
 
             // 批末那一站（与真机里链尾调的是同一个入口）。
-            harness.Coordinator.FinalizeDeferredVolumeDeficits();
+            await harness.Coordinator.FinalizeDeferredVolumeDeficitsAsync();
 
             Log(harness, "批末那一站之后");
 
@@ -1552,7 +1552,7 @@ namespace ArchiveFixer.Tests
 
             string landedPiece = ArrangeSettledProducerLandedPiece(harness, consumer, producer, pieceBytes, "落片收尾");
 
-            harness.Coordinator.FinalizeDeferredVolumeDeficits();
+            await harness.Coordinator.FinalizeDeferredVolumeDeficitsAsync();
 
             Log(harness, "批末那一站之后");
 
@@ -1601,7 +1601,7 @@ namespace ArchiveFixer.Tests
 
             string landedPiece = ArrangeSettledProducerLandedPiece(harness, consumer, producer, pieceBytes, "落片收尾-不动档");
 
-            harness.Coordinator.FinalizeDeferredVolumeDeficits();
+            await harness.Coordinator.FinalizeDeferredVolumeDeficitsAsync();
 
             Log(harness, "不动档：批末那一站之后");
 
@@ -1666,7 +1666,7 @@ namespace ArchiveFixer.Tests
                 "接片人不是产出方",
                 adoptionOwner: consumer);
 
-            harness.Coordinator.FinalizeDeferredVolumeDeficits();
+            await harness.Coordinator.FinalizeDeferredVolumeDeficitsAsync();
 
             Log(harness, "接片人不是产出方：批末那一站之后");
 

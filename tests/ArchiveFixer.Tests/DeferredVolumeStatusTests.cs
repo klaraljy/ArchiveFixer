@@ -146,7 +146,7 @@ namespace ArchiveFixer.Tests
         /// `MarkSkipped(...)` 两句）撤掉 ⇒ 本条的 ② ③ 当场变红。</para>
         /// </summary>
         [Fact]
-        public void 链尾才凑齐的那一单_必须落结论_不许留在等待解压()
+        public async System.Threading.Tasks.Task 链尾才凑齐的那一单_必须落结论_不许留在等待解压()
         {
             string layer = Path.Combine(_root, "111");
 
@@ -175,7 +175,7 @@ namespace ArchiveFixer.Tests
 
             // 链尾那一站（与真机里链尾调的是同一个入口）。
             System.Collections.Generic.IReadOnlyList<ArchiveTask> chainEndResolved =
-                coordinator.FinalizeDeferredVolumeDeficits();
+                await coordinator.FinalizeDeferredVolumeDeficitsAsync();
 
             Assert.Contains(task, chainEndResolved);
 

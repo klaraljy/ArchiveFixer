@@ -3388,7 +3388,7 @@ namespace ArchiveFixer.ViewModels
              * 位置刻意在最前面：它不看 rootTasks / chainTasks（那是源包搬运那一档的事），
              * 而下面那个 `rootTasks.Count == 0` 的早退**不能**把这件收口一起吞掉。
              */
-            FinalizeDeferredVolumeDeficits();
+            await FinalizeDeferredVolumeDeficitsAsync(cancellationToken).ConfigureAwait(false);
 
             if (rootTasks == null || rootTasks.Count == 0)
             {
@@ -14703,7 +14703,72 @@ namespace ArchiveFixer.ViewModels
         /// <para>⛔ 判据只有"盘上有没有那几卷"，⛔ 不比任何中文文案、⛔ 不拿任务账上那份过期结论当数。</para>
         /// </summary>
         /// <returns>现在该补跑的那几个任务（调用方负责启动 + 等它们收尾）。</returns>
-        private List<ArchiveTask> RecheckDeferredVolumeDeficits(bool finalPass)
+        /// <summary>
+        /// **(c) 硬链接试开证实**（用户 2026-10-17 四步里的第三步）：把这一组按**规范卷名链**交给引擎真开一次。
+        ///
+        /// <para>返回 null = 通过；非 null = 不过的原因。⛔ 判不出也算不过（没有引擎 / 认不出第 1 卷）——
+        /// 整组不动，⛔ 绝不"没试过就当过了"（2026-10-17 日志里那句「可证完整且试开通过」的假话
+        /// 就是这么来的：那一趟其实一次引擎都没调）。</para>
+        ///
+        /// <para>只读：<see cref="VolumeProbeVerifier"/> 只在试开目录里建硬链接、收工把整棵试开目录删掉，
+        /// 用户那一份一个字节都不动。</para>
+        /// </summary>
+        private async Task<string?> ProbeGatherGroupAsync(
+            IReadOnlyList<string> pieces,
+            string entryLayer,
+            CancellationToken cancellationToken)
+        {
+            if (_archiveEngine == null || !_archiveEngine.IsAvailable)
+            {
+                return "硬链接试开没做成：当前没有可用的解压引擎 ⇒ 整组不动";
+            }
+
+            string? firstVolume = pieces.FirstOrDefault(piece => File.Exists(piece)
+                && VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(piece)) == 1);
+
+            if (string.IsNullOrWhiteSpace(firstVolume))
+            {
+                return "硬链接试开没做成：这一组里认不出第 1 卷 ⇒ 整组不动";
+            }
+
+            var rest = pieces
+                .Where(piece => File.Exists(piece)
+                    && !string.Equals(piece, firstVolume, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(piece => VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(piece)) ?? int.MaxValue)
+                .Select(piece => new VolumeCandidate { Path = piece, Size = FileSizeOrZero(piece) })
+                .ToList();
+
+            var verifier = new VolumeProbeVerifier(_archiveEngine);
+
+            var outcome = await verifier.VerifyAsync(
+                    firstVolume,
+                    new List<IReadOnlyList<VolumeCandidate>> { rest },
+                    cancellationToken,
+                    Path.Combine(entryLayer, ".ArchiveFixer.work"))
+                .ConfigureAwait(false);
+
+            if (outcome.Confirmed)
+            {
+                return null;
+            }
+
+            return "硬链接试开没通过（引擎打不开这一组）⇒ 整组不动：" + outcome.Reason;
+        }
+
+        /// <summary>拿不到大小就按 0（<see cref="FileInfo"/> 对正被别的进程占着的文件会抛）。</summary>
+        private static long FileSizeOrZero(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? new FileInfo(path).Length : 0L;
+            }
+            catch
+            {
+                return 0L;
+            }
+        }
+
+        private async Task<List<ArchiveTask>> RecheckDeferredVolumeDeficitsAsync(bool finalPass, CancellationToken cancellationToken)
         {
             var toRun = new List<ArchiveTask>();
 
@@ -14808,6 +14873,26 @@ namespace ArchiveFixer.ViewModels
                         out int gatherScannedInEntryLayer);
 
                     VolumeGatherPlan gatherPlan = VolumeGatherPlanner.Decide(gatherCandidates, entryLayer);
+
+                    /*
+                     * ===== (c) 硬链接试开证实（用户 2026-10-17 四步里的第三步）=====
+                     * "可证完整"只是名字/尺寸那几条证据；这里再按**规范卷名链**把这一组交给引擎**真开一次**。
+                     * 开不动 ⇒ 整组不动，并把哪一条不过写进决策理由（⛔ 绝不"没试过就当过了"）。
+                     * 试开是 async ⇒ 这一站本轮整体改成 async（判据一条没动）。
+                     */
+                    if (gatherPlan.Action == VolumeGatherAction.Gather && gatherPlan.Pieces.Count > 0)
+                    {
+                        string? probeFailure = await ProbeGatherGroupAsync(
+                                gatherPlan.Pieces,
+                                entryLayer,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (probeFailure != null)
+                        {
+                            gatherPlan = VolumeGatherPlan.Leave(probeFailure);
+                        }
+                    }
 
                     AppendLog(
                         "INFO",
@@ -16045,7 +16130,7 @@ namespace ArchiveFixer.ViewModels
         /// 而且**用户没按停止**时这一步照跑（<c>internal</c> 就是给那条路用的）。</para>
         /// </summary>
 
-        internal IReadOnlyList<ArchiveTask> FinalizeDeferredVolumeDeficits()
+        internal async Task<IReadOnlyList<ArchiveTask>> FinalizeDeferredVolumeDeficitsAsync(CancellationToken cancellationToken = default)
         {
 
             /*
@@ -16067,7 +16152,9 @@ namespace ArchiveFixer.ViewModels
              * **接片的目标层与收尾的清理口径必须一致**（唯一出口仍是 `ResolveBatchGroupDirectory` +
              * `PublishUnresolvedPieceLandingCopies`）。撤回后该用例恢复绿。
              */
-            List<ArchiveTask> chainEndCompleted = RecheckDeferredVolumeDeficits(finalPass: true);
+            List<ArchiveTask> chainEndCompleted = await RecheckDeferredVolumeDeficitsAsync(
+                finalPass: true,
+                cancellationToken).ConfigureAwait(false);
 
             foreach (ArchiveTask task in chainEndCompleted)
             {
@@ -19653,7 +19740,10 @@ namespace ArchiveFixer.ViewModels
                      * ⛔ 兜底：这个方法要么给出"该跑的那几单"，要么把状态落定 —— 绝不会让名单里的任务
                      * 停在"没人管"那一档（唯一例外是整条链被用户停下，那时它如实留在「未处理」）。
                      */
-                    List<ArchiveTask> deferredVolumeTasks = RecheckDeferredVolumeDeficits(finalPass: !oneClickRun);
+                    List<ArchiveTask> deferredVolumeTasks = await RecheckDeferredVolumeDeficitsAsync(
+                        finalPass: !oneClickRun,
+                        // 这一站没有 CancellationToken 在手（老签名就没有）⇒ 传 None，与改成 async 之前等价。
+                        CancellationToken.None).ConfigureAwait(false);
 
                     /*
                      * 「7-Zip 打不开」的那一份若看着就是本批某一组的一片 ⇒ 到这里才按**严格判据**

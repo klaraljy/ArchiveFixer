@@ -1447,7 +1447,7 @@ namespace ArchiveFixer.ViewModels
              * 而汇总会把"缺末片"报成「没轮到」（真机现场）。⛔ 用户真按了停止时**不跑**
              * （取消语义：如实留在「未处理」，不替用户做决定）。
              */
-            _extractionCoordinator.FinalizeDeferredVolumeDeficits();
+            await _extractionCoordinator.FinalizeDeferredVolumeDeficitsAsync().ConfigureAwait(false);
 
             if (hitRoundLimit)
             {
