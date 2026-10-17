@@ -12027,6 +12027,16 @@ namespace ArchiveFixer.ViewModels
 
             return paths;
         }
+        /// <summary>
+        /// **手上那一片的取法 = 唯一一处**（用户 2026-10-17：删掉 `memberPath` / `task.CurrentPath`
+        /// 两套取法）。调用方给了 `memberPath` 就用它（接片那条路手上就是别人那一份），
+        /// 否则用这一单账上的路径；两个都没有 ⇒ 空串（下游按"判不出"办）。
+        /// </summary>
+        private static string ResolveObservedPiecePath(ArchiveTask? task, string? memberPath)
+            => !string.IsNullOrWhiteSpace(memberPath)
+                ? memberPath!
+                : task?.CurrentPath ?? string.Empty;
+
         private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null, bool allowMoveIntoGroup = true, string? cardEntryPath = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
@@ -12041,10 +12051,10 @@ namespace ArchiveFixer.ViewModels
              */
             string tailName = ResolveGroupReferenceName(
                 task,
-                FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath),
+                FileNameHelper.GetArchiveBaseName(ResolveObservedPiecePath(task, memberPath)),
                 memberPath);
             var sources = new List<string>(task.VolumePaths);
-            string groupBaseForScan = FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath);
+            string groupBaseForScan = FileNameHelper.GetArchiveBaseName(ResolveObservedPiecePath(task, memberPath));
 
             foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
             {
@@ -12815,7 +12825,7 @@ namespace ArchiveFixer.ViewModels
 
             string tailName = ResolveGroupReferenceName(
                 task,
-                FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath),
+                FileNameHelper.GetArchiveBaseName(ResolveObservedPiecePath(task, memberPath)),
                 memberPath);
 
             var present = new SortedDictionary<int, string>(Comparer<int>.Default);
@@ -13186,7 +13196,7 @@ namespace ArchiveFixer.ViewModels
             {
                 string tailName = ResolveGroupReferenceName(
                     task,
-                    FileNameHelper.GetArchiveBaseName(memberPath ?? task.CurrentPath),
+                    FileNameHelper.GetArchiveBaseName(ResolveObservedPiecePath(task, memberPath)),
                     memberPath);
                 var candidates = new List<VolumeCandidate>();
 
