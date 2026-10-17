@@ -14442,6 +14442,34 @@ namespace ArchiveFixer.ViewModels
                     new ArchiveFixer.Services.VolumeGroupingService().ApplyGroupInfo(task, group);
 
                     /*
+                     * ⚠ 2026-10-17（困难批 `12121212`，运行期实测）：**这一单这一批已经成功过的，不许再为这一组跑第二遍**。
+                     *
+                     * <para>现场逐字：入口那一单（`打包111-W2-0.zip`，名字是伪装基名）第 1 轮就成功了
+                     * （`定稿完成 —— 内容物 1 个文件`、内容物 = `打包111-L2.mp4`）；到了批末补判，
+                     * 这一组的入口被认成**产物扫描导进来的那一份**（`打包111-L2.zip`）⇒ 判「现在齐了…照常跑这一组」
+                     * ⇒ 日志逐字「落点 …\打包111-W2-0\打包111-W2-0 —— 取的是这一组分卷入口包「打包111-L2.zip」
+                     * 所在的那一层…分卷组从入口包开解，产物就跟它走」⇒ **同一单又跑了一遍**，
+                     * 成品两份 `content-60mb.bin`（判据 ① 红）。</para>
+                     *
+                     * <para>判据只读**机器终态**这一条事实（⛔ 不比中文、⛔ 不看名字）：已经 `Succeeded`
+                     * = 「成功得到完整内容物」这件事已经成立 ⇒ 这一组的活不该再交给它。
+                     * ⛔ 不碰它的终态、落点与账（它自己的成功结论一个字都不动）；
+                     * 停在缺卷上那些单**照旧**走下面那两支（它们的终态不是 `Succeeded`）。</para>
+                     */
+                    if (task.Outcome == TaskOutcome.Succeeded)
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"{task.LogName}：这一单这一批已经成功过（内容物已经得到）—— 这一组不再交给它跑第二遍"
+                            + "（不重复解压：同一组只解一次）。");
+
+                        _volumeDeficitDeferred.Remove(task);
+                        task.IsVolumeDeficitDeferred = false;
+
+                        continue;
+                    }
+
+                    /*
                      * 补齐了 ⇒ 收拢 + 正常跑这一组（起点改到第 1 卷、快照重拍）。
                      *
                      * ⚠ 第 1 卷已经由**同批另一个任务**负责时**不改起点、也不改账**：那一组的活该由
