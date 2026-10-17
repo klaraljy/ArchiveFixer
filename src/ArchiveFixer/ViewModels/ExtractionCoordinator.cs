@@ -14866,6 +14866,45 @@ namespace ArchiveFixer.ViewModels
                     task,
                     ResolveDeferredGroupMemberPath(task));
 
+                /*
+                 * ===== 族规则判不出"该拼到哪一层"时，让**底层识别卡**补一次 =====
+                 * （用户 2026-10-17 第 4 条：「第一卷竟然还有弄不成的情况，就是识别出入口包的情况」）
+                 *
+                 * 只在 `entryLayer` **为空**时补：手上那一份如果自证是**首卷**（`VolumeFirstPiece`，
+                 * 名字被改到族规则认不出时它是唯一还认得出"我是入口"的证据），那它所在的层就是入口层 ——
+                 * 引擎就是拿它开始解的。⛔ 已经判出层的一个字都不改；⛔ 卡也判不出 ⇒ 照旧什么都不做。
+                 */
+                if (entryLayer.Length == 0)
+                {
+                    string ownMemberPath = ResolveDeferredGroupMemberPath(task);
+
+                    if (!string.IsNullOrWhiteSpace(ownMemberPath) && File.Exists(ownMemberPath))
+                    {
+                        try
+                        {
+                            CardVolumeGroupReading ownCard =
+                                VolumePiecesFromCards.Read(new[] { FileNature.Inspect(ownMemberPath) });
+
+                            if (ownCard.EntryPath.Length > 0)
+                            {
+                                entryLayer = Path.GetDirectoryName(ownCard.EntryPath) ?? string.Empty;
+
+                                if (entryLayer.Length > 0)
+                                {
+                                    AppendLog(
+                                        "INFO",
+                                        $"{task.LogName}：这一组该拼到哪一层 —— 族规则判不出，改由底层识别卡指出入口"
+                                        + $"（卡上自证首卷=「{FileNameHelper.GetFileName(ownCard.EntryPath)}」）");
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // 卡读不出来 ⇒ 照旧什么都不做。
+                        }
+                    }
+                }
+
                 if (entryLayer.Length > 0)
                 {
                     /*
