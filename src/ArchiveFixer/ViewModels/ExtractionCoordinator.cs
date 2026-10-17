@@ -12806,7 +12806,7 @@ namespace ArchiveFixer.ViewModels
                 built.Clear();
             }
         }
-        private void TryLinkMissingPiecesByByteBudget(ArchiveTask task, string entryLayer, string? memberPath)
+        private void TryLinkMissingPiecesByByteBudget(ArchiveTask task, string entryLayer, string? memberPath, string? cardEntryPath = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
@@ -13041,7 +13041,14 @@ namespace ArchiveFixer.ViewModels
                 slots.Add(next);
             }
 
-            string entryName = FileNameHelper.GetFileName(firstVolume);
+            /*
+             * **底层识别优先**（用户 2026-10-17 总则）：补出来的槽位名以**卡指出的入口那一份**的名字为样本
+             * —— 名字认不出卷号时它才是可靠的那一份；卡判不出才退回老口径（`firstVolume` 的名字）。
+             * ⛔ 只是"拿哪个名字当样本"，规范卷名仍由 `TryBuildCanonicalVolumeNameForIndex` 生成。
+             */
+            string entryName = !string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath)
+                ? FileNameHelper.GetFileName(cardEntryPath!)
+                : FileNameHelper.GetFileName(firstVolume);
             var linked = new List<string>();
             string groupBaseName = FileNameHelper.GetArchiveBaseName(entryName);
 
@@ -15108,7 +15115,8 @@ namespace ArchiveFixer.ViewModels
                     TryLinkMissingPiecesByByteBudget(
                         task,
                         entryLayer,
-                        _deferredVolumeGroupMember.TryGetValue(task, out string? stalledForBudget) ? stalledForBudget : null);
+                        _deferredVolumeGroupMember.TryGetValue(task, out string? stalledForBudget) ? stalledForBudget : null,
+                        cardEntryPath: cardReading.EntryPath);
                 }
 
                 VolumeGroup? group = ResolveGatheredGroupFromEntryLayer(
