@@ -12067,6 +12067,16 @@ namespace ArchiveFixer.ViewModels
 
                             frontier = next;
                         }
+
+                        /*
+                         * **判据输入永久留证**（用户 2026-10-17：「判据输入必须写进日志」）：
+                         * 补扫到底扫了哪儿、收进几份 —— 没有这一行，"远处那两片到底收没收进来"
+                         * 只能靠猜（这一轮就是靠断点读 `paths` 才看出来的）。
+                         */
+                        AppendLog(
+                            "INFO",
+                            $"{task.LogName}：收拢补扫 —— 入口卡自证是 zip 分片；扫了 {directories} 个目录 / {files} 个文件，"
+                            + $"候选池里现在 {allFiles.Count} 份");
                     }
                 }
                 catch
