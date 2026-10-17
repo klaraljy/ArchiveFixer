@@ -14,7 +14,8 @@ namespace ArchiveFixer.Tests
     {
         private static FileNatureCard Piece(string path, long size, ArchiveBodyKind kind,
             long declaredTotal = 0, int declaredCount = 0, int? volumeNumber = null,
-            ArchiveFixer.Detection.VolumeContentFormat format = ArchiveFixer.Detection.VolumeContentFormat.Unknown) => new()
+            ArchiveFixer.Detection.VolumeContentFormat format = ArchiveFixer.Detection.VolumeContentFormat.Unknown,
+            int? rawVolumeField = null, bool firstVolumeFlag = false) => new()
             {
                 Path = path,
                 Size = size,
@@ -22,8 +23,81 @@ namespace ArchiveFixer.Tests
                 DeclaredTotalBytes = declaredTotal,
                 DeclaredVolumeCount = declaredCount,
                 VolumeNumber = volumeNumber,
-                Format = format
+                Format = format,
+                RawVolumeField = rawVolumeField,
+                FirstVolumeFlag = firstVolumeFlag
             };
+
+        /// <summary>
+        /// 设计文档 §6.3 第 2 步 / §9 工单 #6：**RAR4 用卡上 `RawVolumeField` 锚定基数换算绝对卷号**
+        /// （卡上 `VolumeNumber` 为空，只有 raw + 首卷标志）。
+        /// </summary>
+        [Fact]
+        public void RAR4_按raw锚定基数_换算出绝对卷号()
+        {
+            var cards = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\bbb-L2.txt", 26214400, ArchiveBodyKind.VolumePiece,
+                    rawVolumeField: 100, firstVolumeFlag: true),
+                Piece(@"C:\x\bbb-L2.jpg", 26214400, ArchiveBodyKind.VolumePiece, rawVolumeField: 101),
+                Piece(@"C:\x\bbb-L2.part1.rar", 10490500, ArchiveBodyKind.VolumePiece, rawVolumeField: 102)
+            };
+
+            IReadOnlyDictionary<string, int> slots = VolumePiecesFromCards.ResolveRar4Slots(cards);
+
+            Assert.Equal(3, slots.Count);
+            Assert.Equal(1, slots[@"C:\x\bbb-L2.txt"]);
+            Assert.Equal(2, slots[@"C:\x\bbb-L2.jpg"]);
+            Assert.Equal(3, slots[@"C:\x\bbb-L2.part1.rar"]);
+        }
+
+        [Fact]
+        public void RAR4_缺一片可以判_缺两片以上判不出()
+        {
+            var oneHole = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\a.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 7, firstVolumeFlag: true),
+                Piece(@"C:\x\b.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 9)
+            };
+
+            Assert.Equal(2, VolumePiecesFromCards.ResolveRar4Slots(oneHole).Count);
+
+            var twoHoles = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\a.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 7, firstVolumeFlag: true),
+                Piece(@"C:\x\b.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 10)
+            };
+
+            Assert.Empty(VolumePiecesFromCards.ResolveRar4Slots(twoHoles));
+        }
+
+        [Fact]
+        public void RAR4_闸门_没首卷标志或raw重复或读不出_一律判不出()
+        {
+            var noFirstFlag = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\a.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 5),
+                Piece(@"C:\x\b.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 6)
+            };
+
+            Assert.Empty(VolumePiecesFromCards.ResolveRar4Slots(noFirstFlag));
+
+            var duplicated = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\a.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 5, firstVolumeFlag: true),
+                Piece(@"C:\x\b.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 5)
+            };
+
+            Assert.Empty(VolumePiecesFromCards.ResolveRar4Slots(duplicated));
+
+            var missingRaw = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\a.txt", 1, ArchiveBodyKind.VolumePiece, rawVolumeField: 5, firstVolumeFlag: true),
+                Piece(@"C:\x\b.txt", 1, ArchiveBodyKind.VolumePiece)
+            };
+
+            Assert.Empty(VolumePiecesFromCards.ResolveRar4Slots(missingRaw));
+        }
 
         [Fact]
         public void 按卡的格式定族_七z与rar与zip各给各的名字()

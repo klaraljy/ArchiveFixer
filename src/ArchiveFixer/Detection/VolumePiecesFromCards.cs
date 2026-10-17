@@ -75,6 +75,82 @@ namespace ArchiveFixer.Detection
                 : string.Empty;
         }
 
+        /// <summary>
+        /// **RAR 1.5–4.x（RAR4 新编号族）定槽位**（设计文档 `docs/分卷专属算法-待校验.md` §6.3 第 2 步，工单 #6）：
+        /// 卡上 `VolumeNumber` 为空，但 `RawVolumeField` 有值、且首卷那一份带 `FirstVolumeFlag`
+        /// ⇒ `基数 = raw₁ − 1`，其余片 `绝对卷号 = raw − 基数`。
+        ///
+        /// <para><b>四条闸门全过才采信</b>（缺一条 ⇒ 返回空表，什么都不做）：① 每组片都得读得出 raw；
+        /// ② raw 互不相同；③ 换算后全部 ≥ 1；④ 一份对一个（同一槽位不许两份）+ 首卷那一份必须是槽位 1 +
+        /// 洞最多一个（缺 2 片以上 ⇒ 谁先谁后判不出）。</para>
+        ///
+        /// <para>⛔ 不写新解析器：raw 与首卷标志都是卡上现成字段（`FileNature.cs:122/86`）。</para>
+        /// </summary>
+        public static IReadOnlyDictionary<string, int> ResolveRar4Slots(IReadOnlyList<FileNatureCard>? pieces)
+        {
+            var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            List<FileNatureCard> list = (pieces ?? Array.Empty<FileNatureCard>())
+                .Where(card => card != null && !string.IsNullOrWhiteSpace(card.Path))
+                .ToList();
+
+            if (list.Count < 2)
+            {
+                return result;
+            }
+
+            FileNatureCard? first = list.FirstOrDefault(card => card.FirstVolumeFlag && card.RawVolumeField != null);
+
+            if (first == null || list.Any(card => card.RawVolumeField == null))
+            {
+                return result;   // ①
+            }
+
+            var raws = list.Select(card => card.RawVolumeField!.Value).ToList();
+
+            if (raws.Distinct().Count() != raws.Count)
+            {
+                return result;   // ②
+            }
+
+            int baseline = first.RawVolumeField!.Value - 1;
+            var slots = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (FileNatureCard card in list)
+            {
+                int slot = card.RawVolumeField!.Value - baseline;
+
+                if (slot < 1)
+                {
+                    return result;   // ③
+                }
+
+                slots[card.Path] = slot;
+            }
+
+            var bySlot = new HashSet<int>();
+
+            foreach (int slot in slots.Values)
+            {
+                if (!bySlot.Add(slot))
+                {
+                    return result;   // ④ 同槽两份
+                }
+            }
+
+            if (!bySlot.Contains(1))
+            {
+                return result;   // ④ 首卷不在槽位 1（基数推错）
+            }
+
+            if (bySlot.Max() - bySlot.Count > 1)
+            {
+                return result;   // ④ 缺 2 片以上
+            }
+
+            return slots;
+        }
+
         public static CardVolumeGroupReading Read(IReadOnlyList<FileNatureCard>? cards)
         {
             var pieces = (cards ?? Array.Empty<FileNatureCard>())
@@ -119,18 +195,32 @@ namespace ArchiveFixer.Detection
             if (first == null)
             {
                 /*
-                 * 没有首卷自述 ⇒ 槽位与"整组齐不齐"都判不出（7z 中间卷的内容里没有这两件事）。
-                 * 如实说：这一层里确实有 N 份分卷片、体积规律成立，但**哪一份是首卷、还缺不缺**——
-                 * 判不出（⛔ 不猜，也不拿"名字像是 .001"去顶替）。
+                 * 没有首卷自述 ⇒ 7z 中间卷那一档槽位与"整组齐不齐"都判不出（⛔ 不猜）。
+                 * **但 RAR 1.5–4.x 能给卷号**（设计文档 §6.3 第 2 步 / 工单 #6）：卡上没 `VolumeNumber`、
+                 * 却有 `RawVolumeField` + 首卷标志 ⇒ 换算成绝对卷号，槽位照样给得出来。
                  */
+                IReadOnlyDictionary<string, int> rar4Incomplete = ResolveRar4Slots(pieces);
+                IReadOnlyList<CardVolumeSlot> rar4SlotList = rar4Incomplete.Count >= 2
+                    ? pieces
+                        .Where(card => rar4Incomplete.ContainsKey(card.Path))
+                        .OrderBy(card => rar4Incomplete[card.Path])
+                        .Select(card => new CardVolumeSlot(
+                            rar4Incomplete[card.Path], card.Path, card.Size, card.Size < fullSize))
+                        .ToList()
+                    : Array.Empty<CardVolumeSlot>();
+
                 return CardVolumeGroupReading.Incomplete(
-                    $"体积规律成立（{pieces.Count} 片，满片 {fullSize} 字节），但没有首卷的自述 ⇒ "
-                    + "判不出哪一份是首卷、也判不出整组齐不齐",
+                    rar4SlotList.Count >= 2
+                        ? $"RAR4：按卡上 raw 字段换算出绝对卷号（{rar4SlotList.Count} 片，"
+                          + $"槽位 {string.Join(",", rar4SlotList.Select(slot => slot.Index))}）"
+                        : $"体积规律成立（{pieces.Count} 片，满片 {fullSize} 字节），但没有首卷的自述 ⇒ "
+                          + "判不出哪一份是首卷、也判不出整组齐不齐",
                     hasFirstPiece: false,
                     pieceCount: pieces.Count,
                     declaredTotalBytes: 0,
                     sumBytes: sum,
-                    entryPath: string.Empty);
+                    entryPath: string.Empty,
+                    slots: rar4SlotList);
             }
 
             /*
@@ -155,16 +245,23 @@ namespace ArchiveFixer.Detection
             /*
              * 槽位：**卡上有卷号就按卷号排**（用户 2026-10-17 总则：底层识别优先），没有的按传入顺序。
              * ⚠ 7z 中间卷没有卷号字段 ⇒ 那一族的槽位仍是"判不出"（调用方⛔ 不许拿名字顶替）。
+             * RAR 1.5–4.x：卡上 `VolumeNumber` 为空、但 `RawVolumeField` + 首卷标志有值 ⇒
+             * 按设计文档 §6.3 第 2 步换算出绝对卷号（工单 #6），再按它排。
              */
+            IReadOnlyDictionary<string, int> rar4Slots = ResolveRar4Slots(pieces);
+
+            int SlotOf(FileNatureCard card, int position) =>
+                card.VolumeNumber ?? (rar4Slots.TryGetValue(card.Path, out int rar4Slot) ? rar4Slot : position + 1);
+
             var ordered = pieces
                 .Select((card, position) => (card, position))
-                .OrderBy(item => item.card.VolumeNumber ?? (item.position + 1))
+                .OrderBy(item => SlotOf(item.card, item.position))
                 .ThenBy(item => item.position)
                 .ToList();
 
             var slots = ordered
                 .Select((item, position) => new CardVolumeSlot(
-                    Index: item.card.VolumeNumber ?? (position + 1),
+                    Index: SlotOf(item.card, position),
                     Path: item.card.Path,
                     Size: item.card.Size,
                     IsLast: item.card.Size < fullSize || (ordered.Count == 1 && item.card.Size == fullSize)))
@@ -237,7 +334,8 @@ namespace ArchiveFixer.Detection
             int pieceCount,
             long declaredTotalBytes,
             long sumBytes,
-            string entryPath) => new()
+            string entryPath,
+            IReadOnlyList<CardVolumeSlot>? slots = null) => new()
             {
                 Complete = false,
                 HasFirstPiece = hasFirstPiece,
@@ -245,6 +343,7 @@ namespace ArchiveFixer.Detection
                 DeclaredTotalBytes = declaredTotalBytes,
                 SumBytes = sumBytes,
                 EntryPath = entryPath,
+                Slots = slots ?? Array.Empty<CardVolumeSlot>(),
                 Reason = reason
             };
     }
