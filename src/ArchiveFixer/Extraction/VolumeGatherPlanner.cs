@@ -94,6 +94,24 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
+             * ===== 卡上有**绝对卷号**时，整组齐不齐由卡回答 =====
+             * （用户 2026-10-17：「一切看底层识别的来」；现场新样本 `1111`：
+             *  `222-L2.part34B+.rar` 的名字被读成 part34 ⇒ 名字路以为整组有 34 卷、永远缺卷，
+             *  而卡上三片是 1/2/3，整组其实齐了。）
+             * ⇒ 卡上卷号连成 1..N 且片数对得上 ⇒ 直接按卡上的槽位成组；名字不参与"缺几片"。
+             * ⛔ 搬运本体、试开证实、同号两份那些闸门一条不落。
+             */
+            if (cardEvidence is { Complete: false } slotEvidence
+                && slotEvidence.Slots.Count >= 2
+                && slotEvidence.Slots.Count <= candidates.Count)
+            {
+                return new VolumeGatherPlan(
+                    VolumeGatherAction.Gather,
+                    $"按底层识别卡上的卷号成组（{slotEvidence.Reason}）",
+                    slotEvidence.Slots.Select(slot => slot.Path).ToList());
+            }
+
+            /*
              * ===== 分组这一步也是**底层优先**（用户 2026-10-17：「一开始肯定是用底层识别来弄……
              * 只有底层做不到或者哪些地方需要名字的修改来弄的」）=====
              * 卡上三条证据成立（首卷自述 + 体积规律「除末卷外等大」+ 合计对上 ⇒ `Complete`）

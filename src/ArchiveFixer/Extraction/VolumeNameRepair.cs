@@ -3612,6 +3612,23 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
+                    /*
+                     * **名字认得出、卡也认得出时，槽位以卡为准**（用户 2026-10-17：「一切看底层识别的来」）。
+                     * 现场（新样本 `1111`）：`222-L2.part34B+.rar` 的名字被读成 part34、卡上是 3 ——
+                     * 若用名字那个 34，规范名会拼成 `part34.rar`，试开必然报"缺必要分卷"。
+                     */
+                    try
+                    {
+                        if (FileNature.Inspect(full).VolumeNumber is int cardNumber && cardNumber >= 1)
+                        {
+                            resolvedIndex = cardNumber;
+                        }
+                    }
+                    catch
+                    {
+                        // 卡读不出来 ⇒ 用名字那个槽位（老口径）。
+                    }
+
                     pool.Add(new GatherPiece(full, resolvedIndex.Value, size));
                 }
             }

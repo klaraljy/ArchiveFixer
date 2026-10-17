@@ -51,6 +51,17 @@ namespace ArchiveFixer.Detection
             string stem = Helpers.FileNameHelper.GetArchiveBaseName(
                 Helpers.FileNameHelper.GetArchiveBaseName(card.Path));
 
+            /*
+             * ⚠ 现场新样本 `1111`：`222-L2.part34B+.rar` 的第一层剥离只掉 `.rar`，
+             * 第二层拿不掉 `.part34B+` ⇒ 基名被算成 `222-L2.part34B+` ⇒ 按卡上槽位 3 拼出来是
+             * `222-L2.part34B+.part3.rar`（错）。⇒ 再剥一次**卷标记段**（partN / zNN / 三位数字，
+             * 连同粘在它上面的杂质一起剥）。⛔ 只是"取基名"这一步，盘上一个字节不动。
+             */
+            stem = System.Text.RegularExpressions.Regex.Replace(
+                stem,
+                @"(?i)\.(part\d+|z\d+|\d{3}).*$",
+                string.Empty);
+
             if (stem.Length == 0)
             {
                 return string.Empty;
@@ -151,6 +162,106 @@ namespace ArchiveFixer.Detection
             return slots;
         }
 
+        /// <summary>
+        /// **卡的绝对卷号 → 槽位表**（用户 2026-10-17：底层识别优先）。凡是卡上 `VolumeNumber` 有值的
+        /// 都要用上（RAR5 / RAR4 新编号族 / 跨盘 zip 末片都能给），要求：每片都有号、号互不相同、
+        /// 连成 1..N。⛔ 任何一条不成立 ⇒ 返回空表（⛔ 不猜，也不拿名字顶替）。
+        ///
+        /// <para>它存在的理由（新样本 `1111` 的现场）：`222-L2.part34B+.rar` 的**名字被读成 part34**，
+        /// 名字路据此以为整组有 34 卷、永远"缺卷"；而卡上三片是 **1/2/3**，整组其实齐了。
+        /// ⇒ "整组齐不齐"必须由**卡上的卷号**回答，名字只用于定序/改名执行。</para>
+        /// </summary>
+        public static IReadOnlyList<CardVolumeSlot> BuildContentSlots(IReadOnlyList<FileNatureCard>? pieces)
+        {
+            List<FileNatureCard> list = (pieces ?? Array.Empty<FileNatureCard>())
+                .Where(card => card != null && !string.IsNullOrWhiteSpace(card.Path))
+                .ToList();
+
+            if (list.Count < 2)
+            {
+                return Array.Empty<CardVolumeSlot>();
+            }
+
+            /*
+             * 同一份文件的**多个名字**（硬链接 / 同目录副本）不算两片（现场 `1111`：候选里第 4 片
+             * 与 part34 等大且同一份物理文件 ⇒ 老写法"每片都得有卷号"过不去 ⇒ 整组判不出）。
+             * ⇒ 先只拿"卡上有卷号"的那些定槽位，剩下没号的必须是**已在槽位里那一份的别名**，否则判不出。
+             */
+            List<FileNatureCard> numbered = list.Where(card => card.VolumeNumber != null).ToList();
+            List<FileNatureCard> unnumbered = list.Where(card => card.VolumeNumber == null).ToList();
+
+            if (numbered.Count < 2)
+            {
+                return Array.Empty<CardVolumeSlot>();
+            }
+
+            foreach (FileNatureCard alias in unnumbered)
+            {
+                bool samePhysical = numbered.Any(card =>
+                {
+                    try
+                    {
+                        return FileIdentity.IsSamePhysicalFile(card.Path, alias.Path);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                });
+
+                if (!samePhysical)
+                {
+                    return Array.Empty<CardVolumeSlot>();   // 有号的不全 ⇒ 判不出
+                }
+            }
+
+            var byNumber = new Dictionary<int, FileNatureCard>();
+
+            foreach (FileNatureCard card in numbered)
+            {
+                if (byNumber.TryAdd(card.VolumeNumber!.Value, card))
+                {
+                    continue;
+                }
+
+                // 同号两份：同一份文件的别名 ⇒ 留一份；不同文件 ⇒ 判不出。
+                bool alias = false;
+
+                try
+                {
+                    alias = FileIdentity.IsSamePhysicalFile(byNumber[card.VolumeNumber!.Value].Path, card.Path);
+                }
+                catch
+                {
+                    alias = false;
+                }
+
+                if (!alias)
+                {
+                    return Array.Empty<CardVolumeSlot>();
+                }
+            }
+
+            long fullSize = numbered.Max(card => card.Size);
+
+            int slotCount = byNumber.Count;
+
+            if (byNumber.Keys.Min() != 1 || byNumber.Keys.Max() != slotCount
+                || Enumerable.Range(1, slotCount).Any(number => !byNumber.ContainsKey(number)))
+            {
+                return Array.Empty<CardVolumeSlot>();   // 不连成 1..N ⇒ 判不出
+            }
+
+            return byNumber
+                .OrderBy(pair => pair.Key)
+                .Select(pair => new CardVolumeSlot(
+                    pair.Key,
+                    pair.Value.Path,
+                    pair.Value.Size,
+                    pair.Value.Size < fullSize))
+                .ToList();
+        }
+
         public static CardVolumeGroupReading Read(IReadOnlyList<FileNatureCard>? cards)
         {
             var pieces = (cards ?? Array.Empty<FileNatureCard>())
@@ -183,36 +294,50 @@ namespace ArchiveFixer.Detection
 
             if (fullSize <= 0 || smallerCount > 1)
             {
+                /*
+                 * 体积规律不成立时，"整组齐不齐"仍可由**卡上的卷号**回答（用户 2026-10-17：底层识别优先）：
+                 * 卡上卷号连成 1..N ⇒ 齐了（体积不一致只说明这不是"除末卷外等大"那一族，不否定整齐）。
+                 */
+                IReadOnlyList<CardVolumeSlot> ruleSlots = BuildContentSlots(pieces);
+
                 return CardVolumeGroupReading.Incomplete(
-                    $"体积规律不成立：{sizes.Count} 片里有 {smallerCount} 片比满片（{fullSize} 字节）小",
+                    ruleSlots.Count >= 2
+                        ? $"体积规律不成立（{sizes.Count} 片里有 {smallerCount} 片比满片小），"
+                          + $"但卡上卷号连成 1..{ruleSlots.Count}（来自内容）"
+                        : $"体积规律不成立：{sizes.Count} 片里有 {smallerCount} 片比满片（{fullSize} 字节）小",
                     hasFirstPiece: first != null,
                     pieceCount: pieces.Count,
                     declaredTotalBytes: first?.DeclaredTotalBytes ?? 0,
                     sumBytes: sum,
-                    entryPath: first?.Path ?? string.Empty);
+                    entryPath: first?.Path ?? string.Empty,
+                    slots: ruleSlots);
             }
 
             if (first == null)
             {
                 /*
                  * 没有首卷自述 ⇒ 7z 中间卷那一档槽位与"整组齐不齐"都判不出（⛔ 不猜）。
-                 * **但 RAR 1.5–4.x 能给卷号**（设计文档 §6.3 第 2 步 / 工单 #6）：卡上没 `VolumeNumber`、
-                 * 却有 `RawVolumeField` + 首卷标志 ⇒ 换算成绝对卷号，槽位照样给得出来。
+                 * **但卡上有绝对卷号时就能判**（用户 2026-10-17：底层识别优先）：
+                 * ① 卡上 `VolumeNumber`（RAR5 / RAR4 新编号 / 跨盘 zip 末片）连成 1..N ⇒ 直接用；
+                 * ② 否则 RAR 1.5–4.x 用 `RawVolumeField` + 首卷标志锚定基数换算（设计文档 §6.3 第 2 步 / 工单 #6）。
                  */
+                IReadOnlyList<CardVolumeSlot> contentSlots = BuildContentSlots(pieces);
                 IReadOnlyDictionary<string, int> rar4Incomplete = ResolveRar4Slots(pieces);
-                IReadOnlyList<CardVolumeSlot> rar4SlotList = rar4Incomplete.Count >= 2
-                    ? pieces
-                        .Where(card => rar4Incomplete.ContainsKey(card.Path))
-                        .OrderBy(card => rar4Incomplete[card.Path])
-                        .Select(card => new CardVolumeSlot(
-                            rar4Incomplete[card.Path], card.Path, card.Size, card.Size < fullSize))
-                        .ToList()
-                    : Array.Empty<CardVolumeSlot>();
+                IReadOnlyList<CardVolumeSlot> slotList = contentSlots.Count >= 2
+                    ? contentSlots
+                    : rar4Incomplete.Count >= 2
+                        ? pieces
+                            .Where(card => rar4Incomplete.ContainsKey(card.Path))
+                            .OrderBy(card => rar4Incomplete[card.Path])
+                            .Select(card => new CardVolumeSlot(
+                                rar4Incomplete[card.Path], card.Path, card.Size, card.Size < fullSize))
+                            .ToList()
+                        : Array.Empty<CardVolumeSlot>();
 
                 return CardVolumeGroupReading.Incomplete(
-                    rar4SlotList.Count >= 2
-                        ? $"RAR4：按卡上 raw 字段换算出绝对卷号（{rar4SlotList.Count} 片，"
-                          + $"槽位 {string.Join(",", rar4SlotList.Select(slot => slot.Index))}）"
+                    slotList.Count >= 2
+                        ? $"卡上卷号连成 1..{slotList.Count}（来自内容；"
+                          + $"槽位 {string.Join(",", slotList.Select(slot => slot.Index))}）"
                         : $"体积规律成立（{pieces.Count} 片，满片 {fullSize} 字节），但没有首卷的自述 ⇒ "
                           + "判不出哪一份是首卷、也判不出整组齐不齐",
                     hasFirstPiece: false,
@@ -220,7 +345,7 @@ namespace ArchiveFixer.Detection
                     declaredTotalBytes: 0,
                     sumBytes: sum,
                     entryPath: string.Empty,
-                    slots: rar4SlotList);
+                    slots: slotList);
             }
 
             /*
