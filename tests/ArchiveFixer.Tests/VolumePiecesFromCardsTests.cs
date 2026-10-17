@@ -13,14 +13,51 @@ namespace ArchiveFixer.Tests
     public class VolumePiecesFromCardsTests
     {
         private static FileNatureCard Piece(string path, long size, ArchiveBodyKind kind,
-            long declaredTotal = 0, int declaredCount = 0) => new()
+            long declaredTotal = 0, int declaredCount = 0, int? volumeNumber = null) => new()
             {
                 Path = path,
                 Size = size,
                 BodyKind = kind,
                 DeclaredTotalBytes = declaredTotal,
-                DeclaredVolumeCount = declaredCount
+                DeclaredVolumeCount = declaredCount,
+                VolumeNumber = volumeNumber
             };
+
+        [Fact]
+        public void 卡上有卷号_槽位按卷号排_不看传入顺序()
+        {
+            // 传入顺序被打乱：.003、.001、.002 —— 卡上有卷号就按卷号排（底层识别优先）。
+            var cards = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\a.7z.003", 10490213, ArchiveBodyKind.VolumePiece, volumeNumber: 3),
+                Piece(@"C:\x\a.7z.001", 26214400, ArchiveBodyKind.VolumeFirstPiece, 62919013, 3, volumeNumber: 1),
+                Piece(@"C:\x\a.7z.002", 26214400, ArchiveBodyKind.VolumePiece, volumeNumber: 2)
+            };
+
+            CardVolumeGroupReading reading = VolumePiecesFromCards.Read(cards);
+
+            Assert.True(reading.Complete, reading.Reason);
+            Assert.Equal(new[] { 1, 2, 3 }, reading.Slots.Select(slot => slot.Index).ToArray());
+            Assert.Equal(@"C:\x\a.7z.001", reading.Slots[0].Path);
+            Assert.Equal(@"C:\x\a.7z.001", reading.EntryPath);
+        }
+
+        [Fact]
+        public void 卡上没有卷号_槽位按传入顺序_并如实标末卷()
+        {
+            var cards = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\b.7z.001", 26214400, ArchiveBodyKind.VolumeFirstPiece, 36665000, 2),
+                Piece(@"C:\x\b.7z.002", 10450600, ArchiveBodyKind.VolumePiece)
+            };
+
+            CardVolumeGroupReading reading = VolumePiecesFromCards.Read(cards);
+
+            Assert.True(reading.Complete, reading.Reason);
+            Assert.Equal(new[] { 1, 2 }, reading.Slots.Select(slot => slot.Index).ToArray());
+            Assert.True(reading.Slots[1].IsLast);
+            Assert.False(reading.Slots[0].IsLast);
+        }
 
         [Fact]
         public void 首卷自述加上体积规律与合计_可证完整()

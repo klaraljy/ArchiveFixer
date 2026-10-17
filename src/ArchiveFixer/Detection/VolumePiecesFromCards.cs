@@ -112,12 +112,22 @@ namespace ArchiveFixer.Detection
                     entryPath: first.Path);
             }
 
-            var slots = pieces
-                .Select((card, index) => new CardVolumeSlot(
-                    Index: index + 1,
-                    Path: card.Path,
-                    Size: card.Size,
-                    IsLast: card.Size < fullSize || (pieces.Count == 1 && card.Size == fullSize)))
+            /*
+             * 槽位：**卡上有卷号就按卷号排**（用户 2026-10-17 总则：底层识别优先），没有的按传入顺序。
+             * ⚠ 7z 中间卷没有卷号字段 ⇒ 那一族的槽位仍是"判不出"（调用方⛔ 不许拿名字顶替）。
+             */
+            var ordered = pieces
+                .Select((card, position) => (card, position))
+                .OrderBy(item => item.card.VolumeNumber ?? (item.position + 1))
+                .ThenBy(item => item.position)
+                .ToList();
+
+            var slots = ordered
+                .Select((item, position) => new CardVolumeSlot(
+                    Index: item.card.VolumeNumber ?? (position + 1),
+                    Path: item.card.Path,
+                    Size: item.card.Size,
+                    IsLast: item.card.Size < fullSize || (ordered.Count == 1 && item.card.Size == fullSize)))
                 .ToList();
 
             return new CardVolumeGroupReading
