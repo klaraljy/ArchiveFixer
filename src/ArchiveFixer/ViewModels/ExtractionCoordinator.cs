@@ -11707,12 +11707,32 @@ namespace ArchiveFixer.ViewModels
                     tailName,
                     members.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     entryName.Length == 0 ? "判不出" : entryName,
-                    producerName));
+                    producerName,
+                    memberNameIsClean ? "是" : "否",
+                    memberUsable ? "是" : "否",
+                    observed.Length > 0 ? FileNature.Inspect(observed).BodyKind.ToString() : "（没有这一片）",
+                    $"task={(task == null ? "null" : "有")} memberPath={(string.IsNullOrWhiteSpace(memberPath) ? "空" : "有")}",
+                    observed,
+                    SafeFileSizeText(observed)));
 
             return string.Empty;
         }
 
         /// <summary>按路径找任务表里那一单（找不到 ⇒ null；⛔ 只读，不新建）。</summary>
+        /// <summary>"这一份多大"（判据输入用；读不到 ⇒ "判不出"）。</summary>
+        private static string SafeFileSizeText(string path)
+        {
+            try
+            {
+                return File.Exists(path)
+                    ? new FileInfo(path).Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : "（不在盘上）";
+            }
+            catch
+            {
+                return "判不出";
+            }
+        }
         private ArchiveTask? FindTaskByPath(string path)
         {
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
