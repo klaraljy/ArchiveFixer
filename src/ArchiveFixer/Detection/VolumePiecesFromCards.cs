@@ -35,6 +35,46 @@ namespace ArchiveFixer.Detection
         /// 这一层里的**同组候选**（调用方只传"同一层、名字上像一组"的那几份，或者干脆传整层里
         /// 内容自证是分卷片的那些）⇒ 给出这一组的结论。
         /// </summary>
+        /// <summary>
+        /// **按底层识别卡定族，给某个槽位生成规范卷名**（用户 2026-10-17 总则：族由底层识别定，
+        /// 名字只当样本）。卡的 `Format` 决定族；基名剥两层归档后缀；最终名交给既有唯一出口
+        /// <see cref="VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex"/>。
+        /// ⛔ 卡给不出格式 / 基名 ⇒ 空串（不猜，调用方照旧走名字那条路）。
+        /// </summary>
+        public static string CanonicalNameForSlot(FileNatureCard? card, int slot)
+        {
+            if (card == null || slot < 1 || string.IsNullOrWhiteSpace(card.Path))
+            {
+                return string.Empty;
+            }
+
+            string stem = Helpers.FileNameHelper.GetArchiveBaseName(
+                Helpers.FileNameHelper.GetArchiveBaseName(card.Path));
+
+            if (stem.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            string sample = card.Format switch
+            {
+                // 数字族（`X.7z.00N`）的命名出口要的是**带卷号的样本**，给 `X.7z` 它认不出族。
+                VolumeContentFormat.SevenZip => stem + ".7z.001",
+                VolumeContentFormat.Rar => stem + ".rar",
+                VolumeContentFormat.Zip => stem + ".zip",
+                _ => string.Empty
+            };
+
+            if (sample.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            return VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(sample, slot, out string canonical)
+                ? canonical
+                : string.Empty;
+        }
+
         public static CardVolumeGroupReading Read(IReadOnlyList<FileNatureCard>? cards)
         {
             var pieces = (cards ?? Array.Empty<FileNatureCard>())

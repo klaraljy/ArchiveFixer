@@ -13,15 +13,42 @@ namespace ArchiveFixer.Tests
     public class VolumePiecesFromCardsTests
     {
         private static FileNatureCard Piece(string path, long size, ArchiveBodyKind kind,
-            long declaredTotal = 0, int declaredCount = 0, int? volumeNumber = null) => new()
+            long declaredTotal = 0, int declaredCount = 0, int? volumeNumber = null,
+            ArchiveFixer.Detection.VolumeContentFormat format = ArchiveFixer.Detection.VolumeContentFormat.Unknown) => new()
             {
                 Path = path,
                 Size = size,
                 BodyKind = kind,
                 DeclaredTotalBytes = declaredTotal,
                 DeclaredVolumeCount = declaredCount,
-                VolumeNumber = volumeNumber
+                VolumeNumber = volumeNumber,
+                Format = format
             };
+
+        [Fact]
+        public void 按卡的格式定族_七z与rar与zip各给各的名字()
+        {
+            var seven = Piece(@"C:\x\pack111-L2.7z.txt", 1, ArchiveBodyKind.VolumeFirstPiece,
+                format: ArchiveFixer.Detection.VolumeContentFormat.SevenZip);
+            var rar = Piece(@"C:\x\aaa-L2.part0631中文3.rar", 1, ArchiveBodyKind.VolumePiece,
+                format: ArchiveFixer.Detection.VolumeContentFormat.Rar);
+            var zip = Piece(@"C:\x\bbb-L2.zi删除p", 1, ArchiveBodyKind.VolumePiece,
+                format: ArchiveFixer.Detection.VolumeContentFormat.Zip);
+
+            string sevenName = VolumePiecesFromCards.CanonicalNameForSlot(seven, 2);
+            string rarName = VolumePiecesFromCards.CanonicalNameForSlot(rar, 2);
+            string zipName = VolumePiecesFromCards.CanonicalNameForSlot(zip, 2);
+
+            Assert.True(sevenName.Length > 0, "7z 族给不出名字（实际「" + sevenName + "」）");
+            Assert.True(rarName.Length > 0, "RAR 族给不出名字（实际「" + rarName + "」）");
+            Assert.True(zipName.Length > 0, "ZIP 族给不出名字（实际「" + zipName + "」）");
+            Assert.Contains("pack111-L2", sevenName);
+            Assert.Contains("aaa-L2", rarName);
+
+            // 卡给不出格式 ⇒ 空串（⛔ 不猜）。
+            var unknown = Piece(@"C:\x\ccc.txt", 1, ArchiveBodyKind.VolumePiece);
+            Assert.Equal(string.Empty, VolumePiecesFromCards.CanonicalNameForSlot(unknown, 2));
+        }
 
         [Fact]
         public void 卡上有卷号_槽位按卷号排_不看传入顺序()
