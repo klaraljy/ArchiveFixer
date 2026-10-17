@@ -2124,9 +2124,35 @@ namespace ArchiveFixer.Extraction
                      *   把产物留着交给收尾说清为什么失败（⛔ 不许清掉 —— 那正是单层路
                      *   "最后一个候选不清盘"那条口径）。
                      */
-                    bool productsVerified = CandidateProductsVerified(item, candidateManifest, out string candidateVerifyMessage);
+                    bool productsVerified = CandidateProductsVerified(
+                        item,
+                        candidateManifest,
+                        out string candidateVerifyMessage,
+                        out OutputVerificationResult candidateVerification);
+
+                    /*
+                     * ⚠ 2026-10-17（用户 2026-09-27 口径「包没加密 / 结果不变 → 不许再烧候选」，
+                     * 与单层路**逐字同一条**：`realContentProduced && stage.List is { Success: true, IsEncrypted: false }`，
+                     * 其中 `realContentProduced = stage.Verification.ActualTotalSize > 0`）：
+                     * **这一候选真写出了字节**、而**清单里一个加密条目都没有** ⇒ 换密码根本不可能改变结果
+                     * ⇒ 不再烧后面的候选，产物留着交给收尾如实说。
+                     *
+                     * <para>⛔ 前半截（真写出了字节）缺不得 —— 第一版漏了它，0 字节桩那一档就再也不试下一个候选，
+                     * 被既有守门 `OutputVerificationGateTests.第一个候选产出0字节_第二个候选正确_最终成功且两个候选都试过`
+                     * 当场逮住（候选 2 才是对的）。</para>
+                     *
+                     * <para>实测（`ExtractionPipelineFixTests.没加密的包_产物校验不过时_不再换密码也不写密码错误`，
+                     * 走的正是递归路）：包没加密、清单 `IsEncrypted=false`，候选却被**烧了 4 次**
+                     * （逐字 `Assert.Single() Failure: The collection contained 4 items`）——
+                     * 单层路早就有这条闸门，递归路一直没有（AGENTS：两条路的口径必须一样）。</para>
+                     */
+                    bool listingSaysNoEncryption =
+                        candidateVerification.ActualTotalSize > 0
+                        && listedThisCandidate is { Success: true, IsEncrypted: false };
+
                     bool keepProductsForFailureVerdict =
-                        FindLandingViolation(item.Layer.OutputPath) != null
+                        listingSaysNoEncryption
+                        || FindLandingViolation(item.Layer.OutputPath) != null
                         // ⚠ `lastConsumedCandidateIndex` 是**0 起**的下标（初值 -1，每进一次循环 +1）⇒
                         // "这一条就是最后一个" = `>= candidates.Count - 1`。
                         // 第一版写成 `>= candidates.Count` ⇒ 最后一个候选也被判成"还有下一个" ⇒
@@ -2148,6 +2174,18 @@ namespace ArchiveFixer.Extraction
                         // ⇒ 不清掉的话下一个候选会被自己的桩文件跳过。
                         TryResetLayerOutputDirectory(item.Layer.OutputPath);
                         continue;
+                    }
+
+                    /*
+                     * 走到这里、产物又没通过校验，只可能是上面那几条之一。其中"清单说没加密"这一档
+                     * 要**说清为什么不再试后面的候选**（否则用户看到"只试了一个候选"会以为程序偷懒）。
+                     */
+                    if (!productsVerified && listingSaysNoEncryption)
+                    {
+                        Log(
+                            "WARN",
+                            $"{layerLabel}：结果校验 —— {candidateVerifyMessage}" +
+                            "（清单里一个加密条目都没有 ⇒ 换密码不可能改变结果，不再试后面的候选密码）");
                     }
 
                     succeededPassword = candidate;
@@ -3047,7 +3085,8 @@ namespace ArchiveFixer.Extraction
         private static bool CandidateProductsVerified(
             WorkItem item,
             LayerManifest candidateManifest,
-            out string message)
+            out string message,
+            out OutputVerificationResult verification)
         {
             /*
              * 清单取不到 ⇒ 与收尾那一处**逐字同一处置**：给一份 `Success = false` 的预期，
@@ -3062,7 +3101,7 @@ namespace ArchiveFixer.Extraction
                     Message = candidateManifest.Reason
                 };
 
-            OutputVerificationResult verification = OutputVerifier.Verify(item.Layer.OutputPath, expected);
+            verification = OutputVerifier.Verify(item.Layer.OutputPath, expected);
 
             message = verification.Message;
             return verification.Verified;
