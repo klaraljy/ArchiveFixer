@@ -15026,8 +15026,6 @@ namespace ArchiveFixer.ViewModels
                         out string gatherReference,
                         out int gatherScannedInEntryLayer);
 
-                    VolumeGatherPlan gatherPlan = VolumeGatherPlanner.Decide(gatherCandidates, entryLayer);
-
                     /*
                      * ===== 底层识别卡那一行（用户 2026-10-17：「分卷的底层识别算法还要加强」）=====
                      * 7z 的中间卷**内容里没有卷号**，只有首卷的起始头自述"整包多少字节 / 共几片" ——
@@ -15064,6 +15062,15 @@ namespace ArchiveFixer.ViewModels
                                 " → ",
                                 cardReading.Slots.Select(slot =>
                                     slot.Index + ":" + FileNameHelper.GetFileName(slot.Path)))) + "）");
+
+                    /*
+                     * 分组决策：名字那把尺子先分组；**归不出组时把卡证据喂进去**（底层识别优先）。
+                     */
+                    VolumeGatherPlan gatherPlan = VolumeGatherPlanner.Decide(
+                        gatherCandidates,
+                        entryLayer,
+                        probeOpens: null,
+                        cardEvidence: cardReading);
 
                     /*
                      * ⛔ 底层识别卡说"还差字节" ⇒ 这一趟不搬（用户 2026-10-17：「三条证据任何一条不成立 ⇒ 不动」）。

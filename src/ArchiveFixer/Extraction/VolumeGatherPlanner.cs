@@ -52,7 +52,8 @@ namespace ArchiveFixer.Extraction
         public static VolumeGatherPlan Decide(
             IReadOnlyList<string>? candidatePaths,
             string? entryLayer,
-            Func<string, bool>? probeOpens = null)
+            Func<string, bool>? probeOpens = null,
+            ArchiveFixer.Detection.CardVolumeGroupReading? cardEvidence = null)
         {
             if (string.IsNullOrWhiteSpace(entryLayer))
             {
@@ -96,6 +97,20 @@ namespace ArchiveFixer.Extraction
 
             if (groups.Count == 0)
             {
+                /*
+                 * **名字归不出组时，让底层识别卡参与分组**（用户 2026-10-17 总则：底层识别优先、
+                 * 名字只作线索）。判据：卡上三条证据成立（首卷自述 + 体积规律 + 合计对上 ⇒ `Complete`），
+                 * 且卡上排出 ≥2 个槽位 ⇒ 就按**卡的槽位**成组。
+                 * ⛔ 只是"分组"换成卡：搬运本体、试开、同号两份那些闸门一条不落。
+                 */
+                if (cardEvidence is { Complete: true } && cardEvidence.Slots.Count >= 2)
+                {
+                    return new VolumeGatherPlan(
+                        VolumeGatherAction.Gather,
+                        $"名字归不出组，但底层识别卡可证完整（{cardEvidence.Reason}）",
+                        cardEvidence.Slots.Select(slot => slot.Path).ToList());
+                }
+
                 return VolumeGatherPlan.Leave("一个分卷组都没归出来（同族同基名都对不上）");
             }
 
