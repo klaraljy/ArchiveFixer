@@ -12017,12 +12017,70 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            string referenceBase = FileNameHelper.GetArchiveBaseName(reference);
+
             foreach (string file in allFiles)
             {
-                if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(file), reference))
+                string candidateName = FileNameHelper.GetFileName(file);
+
+                if (VolumeGroupDetector.BelongsToSameGroup(candidateName, reference))
+                {
+                    paths.Add(file);
+                    continue;
+                }
+
+                /*
+                 * ===== 名字不放行时**问卡**（用户 2026-10-17 总则：底层识别优先）=====
+                 * 现场（调试器逐字，`10101010`，`VolumeGatherPlanner.Decide` 帧 0）：
+                 * `Complete=false｜PieceCount=1｜自述 3 片 / 62919013｜合计 26214400` ——
+                 * 卡完全认得出这一组，可决策那一刻候选里**只有 1 片**：`pack111-L2.7z` 的卷标记
+                 * 被伪装法吃掉，名字那把尺子把它判成"不是这一组" ⇒ 自述永远对不上。
+                 * 判据：卡说它是这一族的一片（`CardSaysItIsOneOfTheGroup`）**且基名与本组相关**
+                 * （既有弱证据尺子 `BaseNameRelatedToGroup`）⇒ 收进候选。
+                 * ⛔ 后面那些闸门（同号两份 / 体积规律 / 整组自洽 / 试开）一条不落。
+                 */
+                if (referenceBase.Length > 0
+                    && VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(file))
+                    && BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(file), referenceBase))
                 {
                     paths.Add(file);
                 }
+            }
+
+            /*
+             * **被筛掉的那几份要能看见为什么**（用户 2026-10-17：「判据输入必须写进日志」）。
+             * 只在"确实丢了东西"时写（收集到的比收进来的多），否则正常任务不加噪声。
+             * 逐条给：文件名 / 名字那把尺子认不认 / 卡上的分卷身份与 BodyKind / 卡上的基名。
+             */
+            if (allFiles.Count > paths.Count)
+            {
+                var dropped = new List<string>();
+
+                foreach (string file in allFiles)
+                {
+                    string candidateName = FileNameHelper.GetFileName(file);
+
+                    if (paths.Contains(file))
+                    {
+                        continue;
+                    }
+
+                    FileNatureCard droppedCard = FileNature.Inspect(file);
+
+                    dropped.Add(
+                        candidateName
+                        + "〔名字同组=" + (VolumeGroupDetector.BelongsToSameGroup(candidateName, reference) ? "是" : "否")
+                        + $"｜分卷身份={droppedCard.Membership}"
+                        + $"｜BodyKind={droppedCard.BodyKind}"
+                        + $"｜卡上基名={droppedCard.ArchiveBaseName}"
+                        + $"｜基名与本组相关={(BaseNameRelatedToGroup(droppedCard.ArchiveBaseName, referenceBase) ? "是" : "否")}〕");
+                }
+
+                AppendLog(
+                    "WARN",
+                    $"{task.LogName}：这一层收集到 {allFiles.Count} 份、收进候选 {paths.Count} 份 —— 被筛掉的："
+                    + string.Join("；", dropped)
+                    + $"｜参照名=「{reference}」参照基名=「{referenceBase}」");
             }
 
             return paths;
