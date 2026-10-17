@@ -14733,6 +14733,7 @@ namespace ArchiveFixer.ViewModels
         private async Task<string?> ProbeGatherGroupAsync(
             IReadOnlyList<string> pieces,
             string entryLayer,
+            string? cardEntryPath,
             CancellationToken cancellationToken)
         {
             if (_archiveEngine == null || !_archiveEngine.IsAvailable)
@@ -14740,8 +14741,15 @@ namespace ArchiveFixer.ViewModels
                 return "硬链接试开没做成：当前没有可用的解压引擎 ⇒ 整组不动";
             }
 
-            string? firstVolume = pieces.FirstOrDefault(piece => File.Exists(piece)
-                && VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(piece)) == 1);
+            /*
+             * **入口那一份优先由底层识别卡回答**（用户 2026-10-17：名字认不出族/卷号时，
+             * 卡上"我是首卷"这条自证就是入口）；卡判不出（这一层没有首卷）才退回名字那把尺子。
+             * ⛔ 两条都必须"盘上真有它"才作数。
+             */
+            string? firstVolume = !string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath)
+                ? cardEntryPath
+                : pieces.FirstOrDefault(piece => File.Exists(piece)
+                    && VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(piece)) == 1);
 
             if (string.IsNullOrWhiteSpace(firstVolume))
             {
@@ -14952,6 +14960,7 @@ namespace ArchiveFixer.ViewModels
                         string? probeFailure = await ProbeGatherGroupAsync(
                                 gatherPlan.Pieces,
                                 entryLayer,
+                                cardReading.EntryPath,
                                 cancellationToken)
                             .ConfigureAwait(false);
 
