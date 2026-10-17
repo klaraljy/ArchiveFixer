@@ -1331,6 +1331,34 @@ namespace ArchiveFixer.Detection
                 return false;
             }
 
+            /*
+             * ===== 通用分片族（对归档再分片）：`X.zip.001` 这一族**就往回写成 `X.zip.00N`** =====
+             * （设计文档 §6.6 A / §10 第 2 条；用户 2026-10-17 现场：真跑日志逐字
+             *  `222-L1.zip.001：分卷名不标准，已按标准名改好（3 卷）：222-L1.zip.001 → 222-L1.z01；
+             *   …003 → 222-L1.zip` —— 那是 7-Zip `-v` 切出来的**通用分片**，被当成跨盘 zip 族改名，
+             *   之后引擎按 `.zip` 去读 EOCD ⇒ 盘号写的是 0 ⇒ 认成"单盘 zip" ⇒ 整组解不出来（①红）。
+             * 判据只看名字形状：`<基名>.zip.<三位数字>` ⇒ 这一族的规范名就是它自己那一族，
+             * ⛔ 不许换成 `.z01/…/.zip`。）
+             */
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                    sampleVolumeName,
+                    @"(?i)^(?<base>.+)\.zip\.\d{3}$"))
+            {
+                string genericBase = System.Text.RegularExpressions.Regex.Replace(
+                    sampleVolumeName,
+                    @"(?i)\.zip\.\d{3}$",
+                    string.Empty);
+
+                if (genericBase.Length > 0)
+                {
+                    canonical = genericBase
+                        + ".zip."
+                        + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture);
+
+                    return true;
+                }
+            }
+
             string baseName = FileNameHelper.GetArchiveBaseName(sampleVolumeName);
             string? first = VolumeGroupDetector.TryGetFirstVolumeName(sampleVolumeName);
 
