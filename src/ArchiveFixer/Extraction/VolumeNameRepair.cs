@@ -3694,6 +3694,29 @@ namespace ArchiveFixer.Extraction
             bool hasEntry = pool.Any(piece => SamePath(piece.Path, entryPath));
 
             /*
+             * ===== 入口那一份进不了池子时，让**底层识别**补一次（用户 2026-10-17 总则）=====
+             * `Collect(...)` 是按**名字**定槽位的 ⇒ 名字被伪装法吃掉卷标记的那一份（现场 `pack111-L2.7z`）
+             * 永远进不了池子 ⇒ 后面 `hasEntry=false` 整档判不出（日志逐字「入口在池子里=False」）。
+             * 判据只认一条底层事实：卡上自证 `BodyKind = VolumeFirstPiece` ⇒ 它就是**槽位 1**。
+             * ⛔ 只在"入口确实不在池子里"时补一份；后面那些闸门（同号两份 / 体积规律 / 整组自洽 / 试开）一条不落。
+             */
+            if (!hasEntry && File.Exists(entryPath))
+            {
+                try
+                {
+                    if (FileNature.Inspect(entryPath).BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                    {
+                        pool.Add(new GatherPiece(entryPath, 1, LengthOf(entryPath)));
+                        hasEntry = true;
+                    }
+                }
+                catch
+                {
+                    // 卡读不出来 ⇒ 照旧判不出（什么都不做）。
+                }
+            }
+
+            /*
              * 卷号只能一份对一个：同一个卷号上冒出两份候选（同目录里的 `HK.7z.002` 与 `HK.7z.00删除2`、
              * 或者别的分支里另一组同名卷）⇒ 判不出哪一份属于这一组 ⇒ 整档不做（照旧让引擎去判）。
              *
