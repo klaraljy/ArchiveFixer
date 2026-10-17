@@ -1049,6 +1049,76 @@ namespace ArchiveFixer.Tests
             return entries;
         }
 
+        // ═════════════════ ⑨ 「最后一个内层包那一层」与内容物搬运不许同时生效（2026-10-17 真机 4444）═════════════════
+
+        /// <summary>
+        /// **最里层那个"包"本身就是内容物时，计划里只许有一条搬运**（2026-10-17 真机 `4444`）。
+        ///
+        /// <para><b>现场</b>：`bbb-W2-1.rar` 把内容物 `bbb-L2.jpg` 交出来（`:200` 逐字「本次内容物 ——
+        /// `bbb-L2.jpg`」），而这一份同时又被当成内层包去解、失败（`:148`「第 2 层：`bbb-L2.jpg`：
+        /// 递归第 2 层开始解压」）⇒ 定稿时 `innermostPackageBaseName = "bbb-L2"`（要补"最后一个包那一层"）
+        /// 与"把内容物搬进落点"两件事可能落在同一份上。结果盘上出现
+        /// `bbb-W2-1\bbb-L2.jpg` **和** `bbb-W2-1\bbb-L2\bbb-L2.jpg` 两份同字节副本（判据 ③ 红）。</para>
+        ///
+        /// <para><b>判据</b>：目标里含这一步内容物文件名的搬运**只许一条**（⛔ 不预设谁赢，只钉"不许两条"）。</para>
+        /// </summary>
+        [Fact]
+        public void 最里层包就是内容物本身时_计划里只许有一条搬运_不许再套一层同名目录()
+        {
+            FinalizePlan plan = ResultFinalizer.Plan(
+                new[]
+                {
+                    StagedFile(@"out\bbb-L2.jpg", 10489515)
+                },
+                @"C:\out\bbb-W2-1",
+                TerminalLayoutMode.KeepLastFolder,
+                "bbb-W2-1",
+                "out",
+                Staging,
+                innermostPackageBaseName: "bbb-L2");
+
+            List<PlannedMove> withPiece = plan.Moves
+                .Where(move => move.To.Contains("bbb-L2.jpg", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Assert.True(
+                withPiece.Count == 1,
+                "目标里含 bbb-L2.jpg 的搬运应当只有一条，实际 " + withPiece.Count + " 条："
+                + string.Join(" ｜ ", plan.Moves.Select(move => move.From + " → " + move.To))
+                + $"（Layout={plan.Layout}，ContentDirectoryName=「{plan.ContentDirectoryName}」）");
+        }
+
+        /// <summary>
+        /// 同上，但暂存树里**已经有那个同名目录**（内层包层建过、又没留下内容物）—— 真机 `4444` 的盘面
+        /// 就是这个形状（`bbb-W2-1\bbb-L2.jpg` 与 `bbb-W2-1\bbb-L2\bbb-L2.jpg` 同时存在）。
+        /// </summary>
+        [Fact]
+        public void 内容物旁边还站着一个同名空目录时_计划里也只许有一条搬运()
+        {
+            FinalizePlan plan = ResultFinalizer.Plan(
+                new[]
+                {
+                    StagedFile(@"out\bbb-L2.jpg", 10489515),
+                    Dir(@"out\bbb-L2")
+                },
+                @"C:\out\bbb-W2-1",
+                TerminalLayoutMode.KeepLastFolder,
+                "bbb-W2-1",
+                "out",
+                Staging,
+                innermostPackageBaseName: "bbb-L2");
+
+            List<PlannedMove> withPiece = plan.Moves
+                .Where(move => move.To.Contains("bbb-L2.jpg", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Assert.True(
+                withPiece.Count == 1,
+                "目标里含 bbb-L2.jpg 的搬运应当只有一条，实际 " + withPiece.Count + " 条："
+                + string.Join(" ｜ ", plan.Moves.Select(move => move.From + " → " + move.To))
+                + $"（Layout={plan.Layout}，ContentDirectoryName=「{plan.ContentDirectoryName}」）");
+        }
+
         /// <summary>目录树里的全部条目（目录 + 文件），相对路径、排序后。</summary>
         private static IReadOnlyList<string> Tree(string root)
         {
