@@ -11957,6 +11957,124 @@ namespace ArchiveFixer.ViewModels
 
             CollectAll(ownLayer);
 
+            /*
+             * ===== 卡自证"我是 zip 分卷的一片"时，**再往外找一层**（用户 2026-10-17：底层识别先）=====
+             * 现场（新样本 `6666` 的 `recipe.json` 逐字）：同一组三片分处
+             * `打包111\打包111-W0-0\`、`打包111(2)\打包111(2)\打包111(2)\`、`打包111(3)\打包111(3)\` ——
+             * 名字也全烂（`打包111-W0-0` / `…W1-0.png` / `…L2.zip.000003`）。
+             * ⛔ 只在"入口那一份卡上确实是 zip 分片"时才补扫（`Format=Zip` 且 成员/EOCD/本地头 之一）；
+             * ⛔ 共用找卷窗口一个字不改（上一轮试放大它打红了既有守门：`CrossLayerVolumeGatherTests…`）；
+             * ⛔ 补扫有上限（目录 ≤ 24 个、文件 ≤ 400 个），且收进来的还要过后面那几道闸门。
+             */
+            bool entryIsZipPiece;
+
+            try
+            {
+                FileNatureCard entrySeat = FileNature.Inspect(observed);
+
+                entryIsZipPiece = entrySeat.Format == VolumeContentFormat.Zip
+                    && (entrySeat.HasZipEndRecord
+                        || entrySeat.HasZipLocalHeader
+                        || entrySeat.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember);
+            }
+            catch
+            {
+                entryIsZipPiece = false;
+            }
+
+            if (entryIsZipPiece)
+            {
+                try
+                {
+                    string observedFull = SafePathHelper.GetFullPathSafe(observed);
+                    string? parentDirectory = Path.GetDirectoryName(observedFull);
+                    string? grandParent = string.IsNullOrWhiteSpace(parentDirectory)
+                        ? null
+                        : Directory.GetParent(parentDirectory)?.FullName;
+
+                    /*
+                     * 起点要**再往上两层**（现场 `6666`：入口在 `…\打包111(3)\打包111(3)\`，
+                     * 同组另外两片在 `…\打包111\打包111-W0-0\` 与 `…\打包111(2)\打包111(2)\打包111(2)\` ——
+                     * 从 `打包111(3)` 起扫永远够不到兄弟目录的下一层）。
+                     */
+                    string? scanRoot = string.IsNullOrWhiteSpace(grandParent)
+                        ? null
+                        : Directory.GetParent(grandParent)?.FullName;
+
+                    if (!string.IsNullOrWhiteSpace(scanRoot) && Directory.Exists(scanRoot))
+                    {
+                        int directories = 0;
+                        int files = 0;
+                        var frontier = new List<string> { scanRoot! };
+                        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { scanRoot! };
+
+                        for (int level = 0; level < 3 && frontier.Count > 0 && directories < 40; level++)
+                        {
+                            var next = new List<string>();
+
+                            foreach (string directory in frontier)
+                            {
+                                try
+                                {
+                                    foreach (string sub in Directory.GetDirectories(directory))
+                                    {
+                                        if (directories++ >= 40)
+                                        {
+                                            break;
+                                        }
+
+                                        if (visited.Add(sub))
+                                        {
+                                            next.Add(sub);
+                                        }
+                                    }
+                                }
+                                catch
+                                {
+                                    // 读不动的目录跳过（不影响已收到的候选）。
+                                }
+                            }
+
+                            foreach (string directory in frontier.Concat(next))
+                            {
+                                foreach (string file in CollectVolumeFilesInDirectory(directory))
+                                {
+                                    if (++files > 400)
+                                    {
+                                        break;
+                                    }
+
+                                    try
+                                    {
+                                        FileNatureCard card = FileNature.Inspect(file);
+
+                                        if (card.Format == VolumeContentFormat.Zip
+                                            && (card.HasZipEndRecord
+                                                || card.HasZipLocalHeader
+                                                || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                                            && !allFiles.Any(existing => string.Equals(
+                                                existing, file, StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            allFiles.Add(file);
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        // 单份读不出来跳过。
+                                    }
+                                }
+                            }
+
+                            frontier = next;
+                        }
+                    }
+                }
+                catch
+                {
+                    // 补扫失败 ⇒ 与没有这一档逐字相同。
+                }
+            }
+
             foreach (ArchiveTask candidate in SnapshotTaskTable(Tasks))
             {
                 if (candidate == null)
@@ -12044,6 +12162,27 @@ namespace ArchiveFixer.ViewModels
                     && BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(file), referenceBase))
                 {
                     paths.Add(file);
+                    continue;
+                }
+
+                /*
+                 * ===== 名字与基名**全被改烂**的那一档：只认卡上的 zip 分片事实 =====
+                 * （现场新样本 `6666`：三片叫 `打包111-W0-0` / `…W1-0.png` / `…L2.zip.000003`，
+                 *  基名一个都对不上，但卡上全是 zip 流：一片有本地头、一片是中间片、一片尾部有 EOCD。）
+                 * ⛔ 只在"入口那一份也是 zip 分片"时才这么做（`entryIsZipPiece`），
+                 *   免得把同层别的 zip 包卷进来；后面那几道闸门照旧。
+                 */
+                if (entryIsZipPiece)
+                {
+                    FileNatureCard candidateCard = FileNature.Inspect(file);
+
+                    if (candidateCard.Format == VolumeContentFormat.Zip
+                        && (candidateCard.HasZipEndRecord
+                            || candidateCard.HasZipLocalHeader
+                            || candidateCard.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember))
+                    {
+                        paths.Add(file);
+                    }
                 }
             }
 
