@@ -13049,6 +13049,28 @@ namespace ArchiveFixer.ViewModels
             string entryName = !string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath)
                 ? FileNameHelper.GetFileName(cardEntryPath!)
                 : FileNameHelper.GetFileName(firstVolume);
+
+            /*
+             * 再往前一格：如果**卡自己算出了规范卷名**（`CanonicalVolumeName`，卡上是"这一份按本族规范
+             * 应该叫什么"），就用它当命名样本 —— 名字被伪装法改烂时，这一格比文件名更接近规范形状。
+             * ⛔ 只用它当**样本**；最终名仍由 `TryBuildCanonicalVolumeNameForIndex` 生成。
+             */
+            if (!string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath))
+            {
+                try
+                {
+                    string canonicalOfEntry = FileNature.Inspect(cardEntryPath!).CanonicalVolumeName;
+
+                    if (canonicalOfEntry.Length > 0)
+                    {
+                        entryName = canonicalOfEntry;
+                    }
+                }
+                catch
+                {
+                    // 卡读不出来 ⇒ 用文件名当样本（老口径）。
+                }
+            }
             var linked = new List<string>();
             string groupBaseName = FileNameHelper.GetArchiveBaseName(entryName);
 
