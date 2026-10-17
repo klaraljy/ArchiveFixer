@@ -15001,7 +15001,13 @@ namespace ArchiveFixer.ViewModels
                         + $"（卡上首卷={(cardReading.HasFirstPiece ? "有" : "没有")}"
                         + $"｜片数={cardReading.PieceCount}"
                         + $"｜自述={cardReading.DeclaredTotalBytes}"
-                        + $"｜合计={cardReading.SumBytes}）");
+                        + $"｜合计={cardReading.SumBytes}"
+                        + (cardReading.Slots.Count == 0
+                            ? "｜槽位=判不出"
+                            : "｜槽位=" + string.Join(
+                                " → ",
+                                cardReading.Slots.Select(slot =>
+                                    slot.Index + ":" + FileNameHelper.GetFileName(slot.Path)))) + "）");
 
                     /*
                      * ⛔ 底层识别卡说"还差字节" ⇒ 这一趟不搬（用户 2026-10-17：「三条证据任何一条不成立 ⇒ 不动」）。
