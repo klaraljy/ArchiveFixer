@@ -132,7 +132,6 @@ namespace ArchiveFixer.Services
         /// 只在任务上有值时才写行，所以既有清单的格式（与钉住格式的用例）一个字都没变。
         /// </summary>
         private const string RunOptionsLabel = "本次选项：";
-        private const string FailedCountLabel = "失败：";
         private const string NoFailedTaskText = "没有失败任务。";
 
         /// <summary>

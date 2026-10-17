@@ -177,7 +177,6 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public bool SharesDestinationWithOtherPackages { get; init; }
 
-
     }
 
     /// <summary>
@@ -884,25 +883,6 @@ namespace ArchiveFixer.Extraction
             try
             {
                 return Path.GetPathRoot(path) ?? string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-
-        /// <summary>取父目录；取不出来（已在根上）返回空串。</summary>
-        private static string TryGetParentDirectory(string directory)
-        {
-            if (string.IsNullOrWhiteSpace(directory))
-            {
-                return string.Empty;
-            }
-
-            try
-            {
-                return Path.GetDirectoryName(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-                       ?? string.Empty;
             }
             catch
             {

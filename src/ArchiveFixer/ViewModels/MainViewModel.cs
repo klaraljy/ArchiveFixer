@@ -24,7 +24,6 @@ using System.Windows.Input;
 using System.Windows.Controls;
 using System.Windows.Media;
 
-
 namespace ArchiveFixer.ViewModels
 {
     /// <summary>
@@ -1671,7 +1670,6 @@ namespace ArchiveFixer.ViewModels
                 detail.ToString().TrimEnd());
         }
 
-
         public TaskSummary Summary
         {
             get => _summary;
@@ -1683,7 +1681,6 @@ namespace ArchiveFixer.ViewModels
             get => _selectedTask;
             set => SetProperty(ref _selectedTask, value);
         }
-
 
         public ICommand AddFilesCommand { get; }
         public ICommand AddFolderCommand { get; }
@@ -1736,7 +1733,6 @@ namespace ArchiveFixer.ViewModels
         public ICommand OpenPackingCommand { get; }
 
         /// <summary>③页那句"其余物现状"旁边的按钮：跳到②页底部红区（危险模式）。</summary>
-
 
         /// <summary>导入密码本（记住路径，下次启动自动加载）。用户已多次要求：导入一次就够。</summary>
         public ICommand ImportPasswordBookCommand { get; }
@@ -1851,7 +1847,6 @@ namespace ArchiveFixer.ViewModels
         /// **危险模式**入口（红色按钮）：确认 → 自测（并发数 × 2 个文件）→ 通过才开启。
         /// 已经开着时点它 = 关闭（关闭是安全方向，不需要二次确认）。
         /// </summary>
-
 
         /*
          * ============================ 勾选的批量操作（用户 2026-09-22 追加需求） ============================
@@ -2173,7 +2168,6 @@ namespace ArchiveFixer.ViewModels
                 () => RunCleanupAsync(CleanupScope.EmptyFolders, ArtifactDeleteScope.SelectedTask),
                 CanRunNormalCommand);
 
-
             /*
              * ⛔ 行级命令**一率补可用性判据**（用户 2026-10-10：「右键点打开输出目录没有，打开文件夹目录没用，
              * 什么东西都是没有用的」＋「所有的都要检查…要么就功能弄好来，要么就不要弄这个功能」）。
@@ -2239,7 +2233,6 @@ namespace ArchiveFixer.ViewModels
              * 用户 2026-09-25 第 32 条整块退役 —— 那条需求现在是③页「2 删除操作」的第三档。
              */
             RefreshParallelAdviceCommand = new AsyncRelayCommand(RefreshParallelAdviceAsync, CanRunNormalCommand);
-
 
             SelectAllTasksCommand = new RelayCommand(SelectAllTasks, CanChangeTaskSelection);
             SelectNoneTasksCommand = new RelayCommand(SelectNoneTasks, CanChangeTaskSelection);
@@ -3666,8 +3659,6 @@ namespace ArchiveFixer.ViewModels
         // 校验判据搬到 SettingsEditor.DescribeAutoSaveBlock()，保存后的连带动作搬到
         // ApplySettingsSideEffectsAfterSave()。⛔ 不再留一个"要用户点一下"的入口。
 
-
-
         private void ResetSettings()
         {
             bool confirm = _dialogService.ShowConfirm("确定要恢复默认设置吗？");
@@ -3825,8 +3816,6 @@ namespace ArchiveFixer.ViewModels
 
             return () => listViewModel.Passwords.CollectionChanged -= OnPasswordsChanged;
         }
-
-
 
         /// <summary>
         /// 导出日志文件的**头部**（用户 2026-09-25 第 44 条追加拍板）：
@@ -4138,7 +4127,6 @@ namespace ArchiveFixer.ViewModels
 
                 AppendLog("INFO", $"失败清单已导出：{path}");
                 _dialogService.ShowInfo("失败清单已导出："
-
 
                     + Environment.NewLine + path);
             }
@@ -4928,7 +4916,6 @@ namespace ArchiveFixer.ViewModels
             return builder.ToString().TrimEnd();
         }
 
-
         /// <summary>
         /// 一次清理确认框的"档位设计"：主按钮文案、勾选框文案、勾选框的默认状态，以及
         /// "用户最终勾没勾 → 到底用哪一档"的唯一推导。
@@ -5230,26 +5217,6 @@ namespace ArchiveFixer.ViewModels
             return OutputPlacement.LandsInSourceDirectory(sourceArchivePath, outputDirectory);
         }
 
-        private static string BuildCleanupSummary(string title, CleanupOutcome outcome)
-        {
-            string modeText = outcome.Mode == DeleteMode.Permanent ? "彻底删除" : "移入回收站";
-
-            string summary = outcome.Attempted
-                ? $"{title}：{modeText}成功 {outcome.SuccessCount} 项，失败 {outcome.FailureCount} 项。"
-                  + (outcome.Mode == DeleteMode.Permanent
-                      ? $"释放 {outcome.FreedBytes} 字节。"
-                      : $"移入回收站 {outcome.RecycledBytes} 字节（回收站里的内容未真正释放空间）。")
-                : $"{title}：没有执行删除。";
-
-            if (outcome.FailureCount > 0 && outcome.FailureReasons.Count > 0)
-            {
-                summary += Environment.NewLine + "失败原因：" + Environment.NewLine
-                           + string.Join(Environment.NewLine, outcome.FailureReasons.Take(CleanupPreview.MaxListedItems));
-            }
-
-            return summary;
-        }
-
         /// <summary>
         /// 结果写日志（规格 §3.2 要求每条删除都留"路径 + 理由 + 条目数 + 总大小"）。
         ///
@@ -5291,7 +5258,6 @@ namespace ArchiveFixer.ViewModels
                 _dialogService.ShowError("打开日志目录失败：" + ex.Message);
             }
         }
-
 
         private void SelectOutputDirectory()
         {
@@ -5364,7 +5330,6 @@ namespace ArchiveFixer.ViewModels
                 _dialogService.ShowError("选择输出目录失败：" + ex.Message);
             }
         }
-
 
         private void RemoveTask(object? parameter)
         {

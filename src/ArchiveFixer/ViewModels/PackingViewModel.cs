@@ -81,7 +81,6 @@ namespace ArchiveFixer.ViewModels
         private Func<IReadOnlyList<string>>? _passwordListProvider;
 
         /// <summary>从密码列表挑一条的弹窗（默认走 <see cref="DialogService"/>；测试可注入）。</summary>
-        private Func<string, IReadOnlyList<string>, string?>? _passwordPicker;
 
         private string _summaryText = string.Empty;
         private string _placementText = string.Empty;
@@ -191,7 +190,8 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>
         /// 「从密码列表里选」：返回选中的那条（没选 / 列表为空时返回 null）。
-        /// 默认实现走 <see cref="DialogService.ShowPasswordPicker"/>；测试可注入。
+        /// 实现唯一走 <see cref="DialogService.ShowPasswordPicker"/>（2026-10-17：原来那个"测试可注入"的
+        /// 委托字段没有任何用例赋过值，已按死代码删除）。
         /// </summary>
         public string? PickPasswordFromList(string title)
         {
@@ -203,9 +203,7 @@ namespace ArchiveFixer.ViewModels
                 return null;
             }
 
-            string? picked = _passwordPicker != null
-                ? _passwordPicker(title, candidates)
-                : _dialogService.ShowPasswordPicker(title, candidates);
+            string? picked = _dialogService.ShowPasswordPicker(title, candidates);
 
             if (string.IsNullOrEmpty(picked))
             {
@@ -220,10 +218,6 @@ namespace ArchiveFixer.ViewModels
 
             return picked;
         }
-
-        /// <summary>测试注入用：替换"从密码列表挑一条"的弹窗。</summary>
-        internal void UsePasswordPicker(Func<string, IReadOnlyList<string>, string?> picker) =>
-            _passwordPicker = picker;
 
         // ────────────────────────── 输入 ──────────────────────────
 
@@ -1134,28 +1128,6 @@ namespace ArchiveFixer.ViewModels
             {
                 Warn("打开输出文件夹失败：" + PackPasswordGuard.Sanitize(ex.Message, null));
             }
-        }
-
-        /// <summary>数字框里的 MiB → 字节（顺带按界面的 64 MiB – 4096 MiB 范围校验）。</summary>
-        internal string ValidateVolumeInput(out long volumeBytes)
-        {
-            volumeBytes = PackingPlan.DefaultVolumeSizeBytes;
-
-            string text = (VolumeSizeMiB ?? string.Empty).Trim();
-
-            if (text.Length == 0)
-            {
-                return "请填分卷大小（单位 MiB，默认 512）。";
-            }
-
-            if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long mib) || mib <= 0)
-            {
-                return $"分卷大小要填一个正整数（单位 MiB），当前填的是「{text}」。";
-            }
-
-            volumeBytes = mib * 1024L * 1024L;
-
-            return PackingPlan.ValidateVolumeSize(volumeBytes);
         }
 
         private void ApplyResult(PackingResult result, PackingPlan plan)

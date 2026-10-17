@@ -37,11 +37,6 @@ namespace ArchiveFixer.Detection
         {
             return card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece;
         }
-        /// <summary>卡说"我是这一组的第一片"吗（7z 起始头自述整包 &gt; 这一份，或 RAR 的首卷标记）。</summary>
-        internal static bool CardSaysFirstPiece(FileNatureCard card)
-        {
-            return card.BodyKind == ArchiveBodyKind.VolumeFirstPiece;
-        }
 
         /// <summary>
         /// **RAR 族的首卷**（卡上：格式 RAR + 内容自证是成员 + 专属算法 = 这一组的第一片）。

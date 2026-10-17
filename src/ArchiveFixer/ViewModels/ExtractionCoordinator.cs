@@ -961,8 +961,6 @@ namespace ArchiveFixer.ViewModels
          */
         private readonly Dictionary<ArchiveTask, ScheduledTaskRuntime> _spaceRuntime = new();
 
-        private readonly Dictionary<ArchiveTask, TaskSpaceEstimate> _refinedEstimates = new();
-
         /// <summary>
         /// 本次运行里每个任务**真正用的**工作区目录（<c>&lt;work&gt;\&lt;taskId&gt;</c>，由暂存目录反推）。
         ///
@@ -10951,47 +10949,6 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>
-        /// **这一片自己那条链的家** = 产出它的那个包（<paramref name="owner"/>）自己那一层的**子文件夹**
-        /// （<c>111\111.rar</c> ⇒ <c>111\111\</c>），由**唯一落点实现** <see cref="PathService.ResolveOutputPlacement"/>
-        /// 算出来 —— ⛔ 这里不自己拼路径（AGENTS.md §9.5）。
-        ///
-        /// <para>用户 2026-10-06 原话：「`111.rar` 原本就在文件夹 `111` 里面，按照程序你就应该在文件夹 `111`
-        /// 的子文件夹里面得到 `111.zip`，而不是这种情况（`111.zip` 所在那一层 `111(4)`），**这种情况是你私自
-        /// 移动 `111.zip` 到了 `111(4)`，这是不应该存在的 bug**」。</para>
-        ///
-        /// <para>拿不到 `owner` / 算不出落点 ⇒ 空串，由调用方退回既有口径。</para>
-        /// </summary>
-        /// <summary>目录里有多少个文件（判不出 ⇒ -1；⛔ 只给排障用）。</summary>
-        private static int SafeCount(string? directory)
-        {
-            try
-            {
-                return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
-                    ? 0
-                    : Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length;
-            }
-            catch
-            {
-                return -1;
-            }
-        }
-
-        /// <summary>顶层文件名（排障用）。</summary>
-        private static string SafeNames(string? directory)
-        {
-            try
-            {
-                return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
-                    ? "（无）"
-                    : string.Join(", ", Directory.GetFiles(directory).Select(Path.GetFileName));
-            }
-            catch
-            {
-                return "（读不动）";
-            }
-        }
-
         private string ResolveOwnerChainDirectory(ArchiveTask? owner)
         {
             if (owner == null || string.IsNullOrWhiteSpace(owner.CurrentPath))
@@ -15388,38 +15345,6 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 这一单**自己最初那一片**在盘上的路径（<c>OriginalPath</c>；它同时必须真的不是入口包）。
-        ///
-        /// <p>判据两条：① `OriginalPath` 非空；② 它的**文件基名与 <c>CurrentPath</c> 的基名不同**
-        /// （批末补判会把 `CurrentPath` 改到入口包上 —— 那时 `OriginalPath` 才是"它自己那一片"）。</p>
-        /// </summary>
-        private static bool TryGetOwnPiecePath(ArchiveTask task, out string ownPiece)
-        {
-            ownPiece = string.Empty;
-
-            string original = task.OriginalPath ?? string.Empty;
-
-            if (string.IsNullOrWhiteSpace(original))
-            {
-                return false;
-            }
-
-            string current = task.CurrentPath ?? string.Empty;
-
-            if (string.Equals(
-                    FileNameHelper.GetFileName(original),
-                    FileNameHelper.GetFileName(current),
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                // 两条路径同名 ⇒ 它没有"被改到别的文件上"这回事，不构成"自己那一片"的证据。
-                return false;
-            }
-
-            ownPiece = original;
-            return true;
-        }
-
-        /// <summary>
         /// 这一单自己的全部路径（<c>OriginalPath</c> + <c>CurrentPath</c> + 账上那几卷；去重）。
         ///
         /// <p>⚠ <b>`OriginalPath` 必须排在**最前**（2026-10-06 真机 CCCC 实测）</b>：批末补判那一站会把
@@ -19444,24 +19369,6 @@ namespace ArchiveFixer.ViewModels
             => RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
 
         /// <summary>
-        /// 本批源包**实际**会怎么被处理（空间不足模式覆盖之后的口径；供话术与判据共用）。
-        ///
-        /// <para>三种可能：普通档照设置 / 空间不足档（校验通过即删）/ 空间不足的安全档（一个字节都不动）。
-        /// ⛔ 说"会不会动源包"的地方只准读它 —— 各写一套必然出现"同一份日志里两句自相矛盾的话"。</para>
-        /// </summary>
-        private string DescribeEffectiveSourceHandlingForBatch()
-        {
-            if (!_spaceTightThisBatch)
-            {
-                return OneClickRunOptions.DescribeSourceHandling(EffectiveSourceHandling);
-            }
-
-            return _spaceTightKeepSourceThisBatch
-                ? "一个字节都不动（空间不足 + 不删原包）"
-                : "定稿 + 校验通过后立刻永久删除（空间不足模式）";
-        }
-
-        /// <summary>
         /// 供界面显示的"当前空间档位"一句话（其余物会不会被自动处理也在这句里说清）。
         /// </summary>
         internal string DescribeSpaceMode()
@@ -19486,11 +19393,6 @@ namespace ArchiveFixer.ViewModels
             return source + "；" + rest;
         }
 
-        /// <summary>界面上那句"当前档位"用的并发数（与真正开跑时同一个口径：设置项 1–8）。</summary>
-        private int ResolveParallelCountForDisplay()
-        {
-            return Math.Clamp(Settings.MaxParallelExtractCount, 1, MaxParallelExtractCountCeiling);
-        }
         /// <summary>本批探测可用空间用的路径（一次定住：同一批里所有判断都对着同一块盘，数字才可比）。</summary>
         private string _spaceProbePath = string.Empty;
 
@@ -19802,7 +19704,6 @@ namespace ArchiveFixer.ViewModels
             lock (_spaceRuntimeLock)
             {
                 _spaceRuntime.Clear();
-                _refinedEstimates.Clear();
             }
 
             _spaceBlockedTasks.Clear();
@@ -20718,9 +20619,6 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>「定稿完成」之后点名产物时的条数上限（超了只报个数，但会写明还有多少没列）。</summary>
-        private const int MaxFinalizeDetailLines = 20;
-
         /// <summary>
         /// 「本次内容物 —— 名字、名字…」最多列几个（用户 2026-09-25 第 44 条）。
         ///
@@ -21174,29 +21072,6 @@ namespace ArchiveFixer.ViewModels
             }
 
             AppendLog("WARN", DescribeMultiLayerSpaceRisk(risk));
-        }
-        /// <summary>把解压前那一遍 list 算出来的**精确**空间需求记下来（自测的空间曲线要用）。</summary>
-        private void RecordRefinedEstimate(ArchiveTask task, TaskSpaceEstimate estimate)
-        {
-            if (task == null || estimate == null)
-            {
-                return;
-            }
-
-            lock (_spaceRuntimeLock)
-            {
-                _refinedEstimates[task] = estimate;
-            }
-        }
-
-        private TaskSpaceEstimate? TryGetRefinedEstimate(ArchiveTask task)
-        {
-            lock (_spaceRuntimeLock)
-            {
-                return _refinedEstimates.TryGetValue(task, out TaskSpaceEstimate? estimate)
-                    ? estimate
-                    : null;
-            }
         }
 
         /// <summary>
@@ -23730,7 +23605,6 @@ namespace ArchiveFixer.ViewModels
                     carvedBytesNotNeeded: directZip != null)
                     .WithVolumeLayout(ResolveWorkspaceVolumeShare(outputPath));
 
-                RecordRefinedEstimate(task, refined);
 
                 if (!budget.Allowed)
                 {

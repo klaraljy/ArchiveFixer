@@ -814,41 +814,6 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
-        /// 解析"数字型"分卷段：三位数字（<c>001</c>）或 part + 数字（<c>part1</c> / <c>part01</c>）。
-        ///
-        /// z/r 记号的段不走这里：<c>x.z01.rar</c> 这种组合不存在真实样本。
-        /// </summary>
-        private static bool TryParseNumberedSegment(string segment, out VolumeFamily family, out int index, out int digitWidth)
-        {
-            family = VolumeFamily.Numeric;
-            index = 0;
-            digitWidth = 1;
-
-            if (!ExtensionHelper.IsVolumePartExtension("." + segment))
-            {
-                return false;
-            }
-
-            if (segment.Length == 3 && IsAsciiDigits(segment.AsSpan()))
-            {
-                family = VolumeFamily.Numeric;
-                digitWidth = 3;
-                return TryParseVolumeNumber(segment, out index);
-            }
-
-            if (segment.Length >= 5
-                && segment.StartsWith("part", StringComparison.OrdinalIgnoreCase)
-                && IsAsciiDigits(segment.AsSpan(4)))
-            {
-                family = VolumeFamily.PartNumbered;
-                digitWidth = segment.Length - 4;
-                return TryParseVolumeNumber(segment[4..], out index);
-            }
-
-            return false;
-        }
-
-        /// <summary>
         /// 解析"末尾那一段"属于哪一族、是第几卷，以及**粘在卷号后面的垃圾尾巴**。
         ///
         /// 先用 <see cref="ExtensionHelper.TrySplitVolumeSegment"/> 把段拆成「分卷标记 + 垃圾」：
