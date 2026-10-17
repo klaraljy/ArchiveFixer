@@ -15010,9 +15010,9 @@ namespace ArchiveFixer.ViewModels
                      */
                     if (gatherPlan.Action == VolumeGatherAction.Gather
                         && cardReading.HasFirstPiece
-                        && cardReading.DeclaredTotalBytes > cardReading.SumBytes)
+                        && cardReading.MissingBytes > 0)
                     {
-                        long missingByCard = cardReading.DeclaredTotalBytes - cardReading.SumBytes;
+                        long missingByCard = cardReading.MissingBytes;
 
                         AppendLog(
                             "WARN",
