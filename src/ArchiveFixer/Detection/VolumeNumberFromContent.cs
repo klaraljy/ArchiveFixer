@@ -126,6 +126,13 @@ namespace ArchiveFixer.Detection
         public bool HasZipEndRecord { get; init; }
 
         /// <summary>
+        /// **这一份的开头是 zip 的本地文件头**（`PK\x03\x04`）—— 通用分片族里"哪一片是第 1 片"的内容证据
+        /// （设计文档 §6.6 A / 工单 #10）。7-Zip `-tzip -v` 切出来的第 1 片就以本地文件头开头，
+        /// 中间片是从数据中间切开的（四种 PK 签名之一，但不是本地头）。
+        /// </summary>
+        public bool HasZipLocalHeader { get; init; }
+
+        /// <summary>
         /// RAR **1.5–4.x**（WinRAR 里叫 RAR4；签名与 RAR3 是同一个，靠签名分不出 3 与 4）
         /// 卷尾归档结尾块里的**原始**卷号字段值。基数（0 起还是 1 起）在 RAR 的文档里没写，
         /// 只能靠"整组必须连成 1..N"来定 —— 所以这里保留原值，不在单卷上做加减。
@@ -914,6 +921,12 @@ namespace ArchiveFixer.Detection
                     Format = VolumeContentFormat.Zip,
                     Size = LengthOf(filePath),
                     IsVolumeMember = true,
+                    /*
+                     * 「开头是不是**本地文件头** `PK\x03\x04`」＝ 通用分片族里"这是第 1 片"的内容证据
+                     * （设计文档 §6.6 A / 工单 #10）。中间片是从数据中间切开的，开头是别的 PK 签名。
+                     */
+                    HasZipLocalHeader = head.Length >= 4
+                        && head[0] == 0x50 && head[1] == 0x4B && head[2] == 0x03 && head[3] == 0x04,
                     Number = null, // 非末片内容里没有盘号：位置只能靠消去法
                     Fail = VolumeNumberFail.None
                 };
@@ -1140,6 +1153,38 @@ namespace ArchiveFixer.Detection
                 if (endRecords.Count == 1)
                 {
                     VolumeNumberReading end = endRecords[0];
+
+                    /*
+                     * ===== 通用分片族：**纯内容定序**（名字全烂、还分处不同文件夹时的唯一出路）=====
+                     * 现场（新样本 `6666` 的 `recipe.json` 逐字）：三片分别在三个文件夹，名字是
+                     * `打包111-W0-0` / `…W1-0.png` / `…L2.zip.000003` —— 名字一点忙都帮不上。
+                     * 内容给三条事实：① 尾部有 EOCD 的是**末片**；② 开头是**本地文件头** `PK\x03\x04`
+                     * 的是**第 1 片**；③ 剩下的就是中间片 —— **恰好 3 片**时中间片唯一，顺序才定得下来
+                     * （多于 3 片 ⇒ 判不出，⛔ 不猜）。
+                     */
+                    List<VolumeNumberReading> localHeaderPieces = members
+                        .Where(member => member.HasZipLocalHeader)
+                        .ToList();
+                    List<VolumeNumberReading> middlePieces = members
+                        .Where(member => !member.HasZipLocalHeader)
+                        .ToList();
+
+                    if (localHeaderPieces.Count == 1 && middlePieces.Count == 1 && members.Count == 2)
+                    {
+                        return new VolumeGroupOrder
+                        {
+                            Confirmed = true,
+                            Slots = new List<VolumeGroupSlot>
+                            {
+                                new() { Path = localHeaderPieces[0].Path, Number = 1 },
+                                new() { Path = middlePieces[0].Path, Number = 2 },
+                                new() { Path = end.Path, Number = 3 }
+                            },
+                            Fail = VolumeNumberFail.None,
+                            Detail = 3
+                        };
+                    }
+
                     string endName = System.IO.Path.GetFileName(end.Path);
 
                     /*
