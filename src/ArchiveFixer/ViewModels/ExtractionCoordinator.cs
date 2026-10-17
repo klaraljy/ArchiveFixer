@@ -12663,6 +12663,21 @@ namespace ArchiveFixer.ViewModels
                         ?? VolumePieceFacts.ResolveRar4SlotIndex(card, entryCard);
 
                     /*
+                     * ===== 族不同 ⇒ 不许进这一组（用户 2026-10-17：「一切看底层识别的来」）=====
+                     * 现场（新样本 `1111` 日志逐字）：`222-L1.zip.001 → 222-L2.part4.rar`
+                     * （`基名 0/4，后缀相似 2/3（0.50），体积 3/3`）—— **内层 zip 组**的片被"打分分配"
+                     * 塞进**外层 RAR 组**，多出 `part4/part5.rar` 两个名字 ⇒ "除末卷外等大"判据被带偏
+                     * ⇒ 整组判成缺卷 ⇒ ①红。
+                     * 判据只用卡上的族（`Format`）：两边都认得出且不同 ⇒ 不参选；判不出则照旧（不拦）。
+                     */
+                    if (card.Format != VolumeContentFormat.Unknown
+                        && entryCard.Format != VolumeContentFormat.Unknown
+                        && card.Format != entryCard.Format)
+                    {
+                        continue;
+                    }
+
+                    /*
                      * ⚠ 2026-10-14（实测 `28282828`，断点逐字）：**名字读出越界卷号 ⇒ 名字在撒谎**。
                      * 真第 2 片的成员名被写成 `111-L2.7z.004pv2` ⇒ 读成 4 号，而 7z 起始头自述只有 3 片
                      * （`entryCard.DeclaredVolumeCount == 3`）⇒ 它其实就是缺口里的那一片 ⇒ 必须进候选池。
