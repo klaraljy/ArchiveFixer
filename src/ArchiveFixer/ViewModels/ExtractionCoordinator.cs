@@ -271,7 +271,6 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-
         /// <summary>
         /// **把一个过程物文件搬进其余物**（唯一出口：让位 + 同卷改名 / 跨卷复制 + 绝不覆盖）。
         ///
@@ -1755,7 +1754,6 @@ namespace ArchiveFixer.ViewModels
                 task.ProgressText = StatusText.ProgressFailed;
                 task.ErrorMessage = work.Verification.FailureMessage;
                 task.VerifyMessage = work.Verification.FailureMessage;
-
                 /*
                  * ⚠ 2026-10-17（用户 2026-09-27 口径「包没加密 ⇒ 不许把结论写成密码错误」）：
                  * 这一支原来只写校验那一句（递归路实测：`PasswordStatus` 一个字都不写、文案里也没有"没有加密"）
@@ -1766,7 +1764,6 @@ namespace ArchiveFixer.ViewModels
                 {
                     task.ErrorMessage += "（这个包没有加密：清单里没有加密条目，换密码不会改变结果，问题不在密码上）";
                 }
-
                 /*
                  * ⚠ 2026-10-17（同一条要求的另一半）：**试了几个候选**必须写进原因 ——
                  * 与单层路同一句话（`（已试 N 个候选，产物始终不完整）`），事实由 `ApplyRecursionResult`
@@ -3589,7 +3586,6 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("WARN", warning);
             }
 
-
             /*
              * ⛔ 2026-10-15：「留着没跑的内层包 ⇒ 如实点名」那一段**搬走了**（见
              * <see cref="ReportLeftBehindInnerPackages"/>）—— 它必须**无条件**跑，而本方法是"链尾要不要搬"
@@ -4685,56 +4681,6 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
-        /// 链结束后的补搬把源包放进其余物之后，按本批「删除操作」档把那一份处理掉
-        /// （不动 / 移入回收站 / 彻底删除）。删不掉只写 WARN，绝不改任务结论。
-        /// </summary>
-        private async Task ApplyRestHandlingAfterChainMoveAsync(
-            ArchiveTask rootTask,
-            IReadOnlyList<ArchiveTask>? chainTasks,
-            List<(string Level, string Message)> logEntries,
-            CancellationToken cancellationToken)
-        {
-            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
-
-            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            /*
-             * 与 ApplyRestHandlingAfterChainAsync **同一道判据**（2026-10-04 起都一样）：
-             * 只问"这一单自己的根源包那一层"——根源包成功 + 输出校验通过 + 未取消 + 完整性可证
-             * ⇒ 按本批「删除操作」档处理其余物；⛔ 不再要求链上每个内层包都成功。
-             *
-             * 到得了这里就说明上面那条路已经把源包搬进其余物了；而删除动作本身的门槛全在
-             * <c>RestItemPurger</c> 里（终态 / 可证完整 / 未取消 / 路径形状 / 半套分卷），
-             * 这一处只负责"什么时候试"。
-             */
-            bool cancelled = cancellationToken.IsCancellationRequested ||
-                             IsStopping ||
-                             _operationCts?.IsCancellationRequested == true;
-
-            /*
-             * ⚠ 2026-10-15：这里原来是"回收站 / 彻底删除"二选一的三元式。
-             * 回收站那一档整条下线（用户口径逐字：「我们这里现在只有留下和彻底删除操作，
-             * 已经不存在放入回收站了」）⇒ 走到这一行（上面已经把 Keep 挡掉了）只剩**永久删**一个动作。
-             */
-            DeleteMode deleteMode = DeleteMode.Permanent;
-
-            RestPurgeOutcome outcome = await Task.Run(
-                () => new RestItemPurger(
-                        RestDeleteExecutor,
-                        null,
-                        ContentKeepRules.FromSettings(Settings))
-                    .Purge(rootTask, cancelled, deleteMode),
-                CancellationToken.None);
-
-            logEntries.Add((
-                outcome.Succeeded ? "INFO" : "WARN",
-                $"{rootTask.LogName}：链结束后的其余物处理 —— {outcome.Message}"));
-        }
-
-        /// <summary>
         /// 本任务的**最终输出目录**：归集开启时产物整棵被搬到归集目录，权威落点就是它。
         ///
         /// 转发到 <see cref="OneClickCoordinator.ResolveContinuationOutputDirectory"/>，
@@ -5318,7 +5264,6 @@ namespace ArchiveFixer.ViewModels
                         isProcessArtifact = true;
                     }
                 }
-
 
                 /*
                  * 0 字节的**归档 / 分卷**不是有效的其余物（用户 2026-09-24 要求）。
@@ -7156,7 +7101,6 @@ namespace ArchiveFixer.ViewModels
              */
             recursiveExtractor.UnresolvedPieceRescueDirectory = stageDirectory;
 
-
             /*
              * 「可疑条目提示」的回传口（2026-10-05 只读审计）：递归核心在拿到本层清单时算出那句话，
              * 这里把它写进**与单层路径同一个字段**、走**同一个出口**（PublishDangerousEntriesHint）——
@@ -7407,7 +7351,6 @@ namespace ArchiveFixer.ViewModels
                     // 显示/统计那一格照旧点亮（批中间不许顶着红色「分卷缺失」）—— 与改动前逐字相同。
                     task.IsVolumeDeficitDeferred = true;
 
-
                     /*
                      * ⚠ 2026-10-10 **修**：老写法**只点亮显示位、不进名单** ⇒ 批末那一站
                      * （<see cref="RecheckDeferredVolumeDeficits"/>）读那份名单时是**空的**，
@@ -7511,8 +7454,6 @@ namespace ArchiveFixer.ViewModels
             foreach (RecursionLayerReport layer in result.Layers)
             {
 
-
-
                 /*
                  * ⚠ 2026-10-17（用户 2026-09-27 口径）：**清单里一个加密条目都没有 ⇒ 结论与密码无关** ——
                  * 递归路原来一个字都不写（实测 `RecursiveExtractor` 里 `PasswordStatus` **0 处写入**）⇒
@@ -7532,7 +7473,6 @@ namespace ArchiveFixer.ViewModels
                 if (result.Layers.Any(layer => layer.ListingSaidNoEncryption))
                 {
                     task.PasswordStatus = StatusText.PasswordNotNeeded;
-
 
                 }
                 AppendLog(
@@ -9289,7 +9229,6 @@ namespace ArchiveFixer.ViewModels
 
                 VolumeNameRepair.CrossLayerVolumeGather decision =
                     VolumeNameRepair.ResolveCrossLayerVolumeGather(entryPath, null, window);
-
 
                 if (!decision.Applicable)
                 {
@@ -12787,95 +12726,6 @@ namespace ArchiveFixer.ViewModels
             return null;
         }
 
-        private void PublishEntryPackageFromProcessFolders(ArchiveTask task)
-        {
-            if (task == null)
-            {
-                return;
-            }
-
-            var members = new List<string> { task.CurrentPath };
-            members.AddRange(task.VolumePaths.Where(path => !string.IsNullOrWhiteSpace(path)));
-
-            Detection.GroupVolumeDirectory.Entry entry = Detection.GroupVolumeDirectory.Resolve(members);
-
-            if (entry.Path.Length == 0 || !ProcessArtifactLayout.IsInsideDeletableProcessFolders(entry.Path))
-            {
-                return;
-            }
-
-            TryCarryPieceHome(entry.Path, task);
-        }
-
-        /// <summary>
-        /// **把一片搬回它自己那条链的家**（唯一出口：递归路的 <see cref="PublishUnresolvedVolumePieces"/>
-        /// 与单层路的 <see cref="PublishEntryPackageFromProcessFolders"/> 都转调它）。
-        /// </summary>
-        /// <returns>搬成功（或本来就在那儿）⇒ 落地之后的路径；没搬 ⇒ 空串。</returns>
-        private string TryCarryPieceHome(string piece, ArchiveTask? owner)
-        {
-            if (owner == null || string.IsNullOrWhiteSpace(piece))
-            {
-                return string.Empty;
-            }
-
-            bool exists = File.Exists(piece);
-
-            if (!exists)
-            {
-                return string.Empty;
-            }
-
-            string home = ResolveOwnerChainDirectory(owner);
-
-            if (home.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            try
-            {
-                Directory.CreateDirectory(home);
-
-                string name = FileNameHelper.GetFileName(piece);
-                string target = Path.Combine(home, name);
-
-                if (SafePathHelper.PathEquals(piece, target))
-                {
-                    return target;
-                }
-
-                if (File.Exists(target) || Directory.Exists(target))
-                {
-                    // 目标被占 ⇒ 一个字节都不动（⛔ 绝不覆盖）。
-                    return string.Empty;
-                }
-
-                File.Move(piece, target);
-
-                if (!File.Exists(target))
-                {
-                    return string.Empty;
-                }
-
-                AppendLog(
-                    "INFO",
-                    $"{owner.LogName}：这一步解出来的「{name}」留在它自己那条链的落点目录里 —— "
-                    + $"{Path.GetFileName(home)}（下一轮解压要用的就是它；⛔ 不是失败、也不算残缺）。");
-
-                RememberGroupPieceProducer(FileNameHelper.GetArchiveBaseName(target), FileNameHelper.GetFileName(target), owner);
-
-                return target;
-            }
-            catch (Exception ex)
-            {
-                // 加法：搬不动 ⇒ 退回"什么都不做"（这一片仍留在原处，行为与改动前一个字不差）。
-                AppendLog("WARN", $"跨链收卷跳过（{ex.Message}）。");
-                return string.Empty;
-            }
-        }
-
-
         /// <summary>
         /// **这一层里的东西是不是都属于这一组**（"过路层"其余物放行前的**前置闸门**，唯一出口）。
         ///
@@ -14399,7 +14249,6 @@ namespace ArchiveFixer.ViewModels
             {
                 return toRun;
             }
-
 
             foreach (ArchiveTask task in _volumeDeficitDeferred.ToList())
             {
@@ -16588,7 +16437,6 @@ namespace ArchiveFixer.ViewModels
             return dispatcher.InvokeAsync(() => _dialogService.ShowFolderBrowserDialog()).Result;
         }
 
-
         /// <summary>
         /// 本批允许同时跑几个任务（并发上限）。
         ///
@@ -16671,7 +16519,6 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>并发上限的硬顶（与设置界面的 1–8 一致；这里只做兜底夹取）。</summary>
         private const int MaxParallelExtractCountCeiling = 8;
-
 
         /// <summary>
         /// 本批的"完成后打开输出目录"记账清零（设置项 <see cref="AppSettings.OpenOutputFolderWhenDone"/>）。
@@ -17235,7 +17082,6 @@ namespace ArchiveFixer.ViewModels
                             string.Join("、", junkHits.Take(5).Select(item => item.FileName))));
                 }
             }
-
 
             if (_callerHandlesBatchReminderDialog)
             {
@@ -26851,7 +26697,6 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("ERROR", "停止后续任务失败：" + ex.Message);
             }
         }
-
 
         public void CancelCurrentTask()
         {
