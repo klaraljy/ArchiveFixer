@@ -15064,6 +15064,27 @@ namespace ArchiveFixer.ViewModels
                                     slot.Index + ":" + FileNameHelper.GetFileName(slot.Path)))) + "）");
 
                     /*
+                     * ===== (d) 目标层 = **入口包所在层**，而"入口包是哪一份"由底层识别优先回答 =====
+                     * 名字那把尺子判出来的层与卡指出的入口层不一致时，**以卡为准**（用户 2026-10-17 总则）。
+                     * ⛔ 只在两边都判得出、且确实不同时才换；卡判不出/盘上没有 ⇒ 一个字不动。
+                     */
+                    if (cardReading.EntryPath.Length > 0)
+                    {
+                        string cardEntryLayer = Path.GetDirectoryName(cardReading.EntryPath) ?? string.Empty;
+
+                        if (cardEntryLayer.Length > 0
+                            && !string.Equals(cardEntryLayer, entryLayer, StringComparison.OrdinalIgnoreCase))
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"{task.LogName}：这一组该拼到哪一层 —— 名字判的是「{Path.GetFileName(entryLayer)}」，"
+                                + $"底层识别卡指出入口在「{Path.GetFileName(cardEntryLayer)}」⇒ 以卡为准");
+
+                            entryLayer = cardEntryLayer;
+                        }
+                    }
+
+                    /*
                      * 分组决策：名字那把尺子先分组；**归不出组时把卡证据喂进去**（底层识别优先）。
                      */
                     VolumeGatherPlan gatherPlan = VolumeGatherPlanner.Decide(

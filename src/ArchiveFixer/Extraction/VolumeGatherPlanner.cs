@@ -93,25 +93,26 @@ namespace ArchiveFixer.Extraction
                 return VolumeGatherPlan.Leave("候选里一个能读到大小的都没有");
             }
 
+            /*
+             * ===== 分组这一步也是**底层优先**（用户 2026-10-17：「一开始肯定是用底层识别来弄……
+             * 只有底层做不到或者哪些地方需要名字的修改来弄的」）=====
+             * 卡上三条证据成立（首卷自述 + 体积规律「除末卷外等大」+ 合计对上 ⇒ `Complete`）
+             * 且排出 ≥2 个槽位 ⇒ **直接按卡的槽位成组**；名字那把尺子只在卡判不出时兜底。
+             * ⛔ 搬运本体、试开证实、同号两份、体积规律那些闸门一条不落。
+             */
+            if (cardEvidence is { Complete: true } && cardEvidence.Slots.Count >= 2)
+            {
+                return new VolumeGatherPlan(
+                    VolumeGatherAction.Gather,
+                    $"底层识别卡可证完整（{cardEvidence.Reason}）⇒ 按卡上槽位成组",
+                    cardEvidence.Slots.Select(slot => slot.Path).ToList());
+            }
+
             List<VolumeGroup> groups = VolumeGroupDetector.Group(candidates).ToList();
 
             if (groups.Count == 0)
             {
-                /*
-                 * **名字归不出组时，让底层识别卡参与分组**（用户 2026-10-17 总则：底层识别优先、
-                 * 名字只作线索）。判据：卡上三条证据成立（首卷自述 + 体积规律 + 合计对上 ⇒ `Complete`），
-                 * 且卡上排出 ≥2 个槽位 ⇒ 就按**卡的槽位**成组。
-                 * ⛔ 只是"分组"换成卡：搬运本体、试开、同号两份那些闸门一条不落。
-                 */
-                if (cardEvidence is { Complete: true } && cardEvidence.Slots.Count >= 2)
-                {
-                    return new VolumeGatherPlan(
-                        VolumeGatherAction.Gather,
-                        $"名字归不出组，但底层识别卡可证完整（{cardEvidence.Reason}）",
-                        cardEvidence.Slots.Select(slot => slot.Path).ToList());
-                }
-
-                return VolumeGatherPlan.Leave("一个分卷组都没归出来（同族同基名都对不上）");
+                return VolumeGatherPlan.Leave("卡判不出、名字也归不出组（同族同基名都对不上）");
             }
 
             // 先挑"至少两片"的那一组（单片判不出是不是一组，⛔ 不搬）。
