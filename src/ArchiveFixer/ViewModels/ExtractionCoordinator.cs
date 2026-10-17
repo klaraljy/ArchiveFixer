@@ -13110,44 +13110,24 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * **底层识别优先**（用户 2026-10-17 总则）：补出来的槽位名以**卡指出的入口那一份**的名字为样本
-             * —— 名字认不出卷号时它才是可靠的那一份；卡判不出才退回老口径（`firstVolume` 的名字）。
-             * ⛔ 只是"拿哪个名字当样本"，规范卷名仍由 `TryBuildCanonicalVolumeNameForIndex` 生成。
+             * **命名样本只走唯一出口**（用户 2026-10-17 小目标第③项）：族由卡的 `Format` 定，
+             * 名字被伪装法改烂时也能给出本族形状；卡判不出（格式读不出来）才退回文件名当样本。
+             * ⛔ 最终卷名仍由 `VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex` 生成。
              */
             string entryName = !string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath)
                 ? FileNameHelper.GetFileName(cardEntryPath!)
                 : FileNameHelper.GetFileName(firstVolume);
 
-            /*
-             * 再往前一格：如果**卡自己算出了规范卷名**（`CanonicalVolumeName`，卡上是"这一份按本族规范
-             * 应该叫什么"），就用它当命名样本 —— 名字被伪装法改烂时，这一格比文件名更接近规范形状。
-             * ⛔ 只用它当**样本**；最终名仍由 `TryBuildCanonicalVolumeNameForIndex` 生成。
-             */
             if (!string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath))
             {
                 try
                 {
-                    string canonicalOfEntry = FileNature.Inspect(cardEntryPath!).CanonicalVolumeName;
+                    string byCardFamily = VolumePiecesFromCards.CanonicalNameForSlot(
+                        FileNature.Inspect(cardEntryPath!), 1);
 
-                    if (canonicalOfEntry.Length > 0)
+                    if (byCardFamily.Length > 0)
                     {
-                        entryName = canonicalOfEntry;
-                    }
-                    else
-                    {
-                        /*
-                         * 卡给不出规范卷名时，**按卡的族**拼样本 —— 现在统一转调唯一出口
-                         * `VolumePiecesFromCards.CanonicalNameForSlot`（族由卡的 `Format` 决定，
-                         * 7z / RAR / ZIP 三族各给各的；卡判不出 ⇒ 空串 ⇒ 沿用老样本）。
-                         * 现场形状：`pack111-L2.7z.txt` 这种名字被伪装法改烂的。
-                         */
-                        string byCardFamily = VolumePiecesFromCards.CanonicalNameForSlot(
-                            FileNature.Inspect(cardEntryPath!), 1);
-
-                        if (byCardFamily.Length > 0)
-                        {
-                            entryName = byCardFamily;
-                        }
+                        entryName = byCardFamily;
                     }
                 }
                 catch

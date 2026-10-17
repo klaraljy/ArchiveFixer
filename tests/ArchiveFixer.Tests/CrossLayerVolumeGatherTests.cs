@@ -816,6 +816,51 @@ namespace ArchiveFixer.Tests
                 .FirstOrDefault();
         }
 
+        /// <summary>
+        /// **入口包判定是卡优先**（用户 2026-10-17 小目标第④项）：把真 7z 分卷的第 1 卷改成一个
+        /// **名字完全认不出卷号**的名字（`HK.已改名.bin`）⇒ 名字那把尺子判不出，而卡上自证
+        /// `VolumeFirstPiece` ⇒ `GroupVolumeDirectory.Resolve` 必须仍然指出它。
+        /// 红检：把 `Resolve` 里"先问卡"那一段关掉 ⇒ 本用例当场红。
+        /// </summary>
+        [SevenZipFact]
+        public void 入口包判定_名字认不出卷号_卡自证首卷仍然指出它()
+        {
+            RequireSevenZip();
+
+            string directory = Path.Combine(_root, "卡优先入口");
+            Directory.CreateDirectory(directory);
+
+            string payload = Path.Combine(directory, "payload.bin");
+            File.WriteAllBytes(payload, new byte[3 * 1024 * 1024]);
+
+            Run7zIn(directory, "a", "-t7z", "-mx0", "-v1m", Path.Combine(directory, "HK.7z"), payload);
+
+            string[] pieces = Directory.GetFiles(directory, "HK.7z.*");
+            Array.Sort(pieces, StringComparer.OrdinalIgnoreCase);
+
+            Assert.True(pieces.Length >= 2, "夹具应当切出至少 2 卷");
+
+            string junk = Path.Combine(directory, "HK.已改名.bin");
+            File.Move(pieces[0], junk);
+
+            // 前提 ①：名字那把尺子确实认不出这份的名字（否则这条用例证明不了卡优先）。
+            Assert.Null(ArchiveFixer.Detection.VolumeGroupDetector.TryGetVolumeIndex("HK.已改名.bin"));
+
+            // 前提 ②：卡上确实自证它是首卷。
+            Assert.Equal(
+                ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece,
+                ArchiveFixer.Detection.FileNature.Inspect(junk).BodyKind);
+
+            var members = new List<string> { junk };
+            members.AddRange(pieces.Skip(1));
+
+            ArchiveFixer.Detection.GroupVolumeDirectory.Entry entry =
+                ArchiveFixer.Detection.GroupVolumeDirectory.Resolve(members);
+
+            Assert.Equal(junk, entry.Path, ignoreCase: true);
+            Assert.Equal(directory, entry.Directory, ignoreCase: true);
+        }
+
         private void RequireSevenZip()
         {
             if (string.IsNullOrEmpty(_sevenZip))
