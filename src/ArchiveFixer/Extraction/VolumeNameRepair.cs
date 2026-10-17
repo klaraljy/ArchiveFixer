@@ -711,6 +711,32 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
+             * ===== 底层识别优先：**名字与卡上的卷号不一致时，名字路让位** =====
+             * （用户 2026-10-17：「一切看底层识别的来」；现场新样本 `1111`：
+             *  `222-L2.part34B+.rar` 的名字被读成 part34、而卡上是第 3 卷 —— 名字路若照名字还原成
+             *  `222-L2.part34.rar`，整组就变成 34 卷、引擎永远报"缺必要分卷"。
+             *  卡判得出卷号 ⇒ 名字路一个名字都不改（留给内容那条路按卡的槽位命名）。
+             *  ⛔ 卡判不出（7z 中间卷、读不出来）⇒ 照旧走名字路，与加这条之前逐字相同。）
+             */
+            try
+            {
+                int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(fileName);
+                int? cardIndex = FileNature.Inspect(path).VolumeNumber;
+
+                if (nameIndex != null && cardIndex != null && nameIndex.Value != cardIndex.Value)
+                {
+                    return Cannot(
+                        path,
+                        $"名字说这一卷是第 {nameIndex.Value} 卷，而内容（底层识别）说是第 {cardIndex.Value} 卷 —— "
+                        + "名字不参与定卷号，这里不改名（交给按内容卷号的那条路）");
+                }
+            }
+            catch
+            {
+                // 卡读不出来 ⇒ 不拦（老口径）。
+            }
+
+            /*
              * 「本体是标准名、只有几个续卷的名字被改坏」这一档（用户 2026-10-01 真机 DDD：跨盘 ZIP 分了 4 片，
              * 本体 `222.zip` 干净、三个续卷叫 `222.z0删1` / `222.z除02` / `222.z文03`；7-Zip 报
              * `ERROR = Missing volume : 222.z01` ⇒ 整包解不开、源包四个都不进其余物）。
