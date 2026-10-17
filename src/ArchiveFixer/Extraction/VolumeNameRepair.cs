@@ -3440,16 +3440,20 @@ namespace ArchiveFixer.Extraction
             string entryDirectory = Path.GetDirectoryName(entryPath) ?? string.Empty;
 
             /*
-             * ⚠ 2026-10-17（本轮实测退稿，如实记账）：把这道闸门删掉（"入口必须是第 1 卷"）会让
-             * `SiblingFolderVolumeGatherTests` **四条守门当场红** —— 二分实测：只退递归路那一半仍然 4 红，
-             * 全部退回则绿。根因是这一档的候选池来源是**入口那一份所在的目录**：手上换成后续卷之后，
-             * 池子跟着换 ⇒ 跨盘 ZIP 两个半边在不同包里的形状收不进同一池 ⇒ 整组解不开。
-             * ⇒ 要删这道闸门，必须**同时**把"池子来源"与"基准"拆成两件事（下一轮第一件事），
-             * ⛔ 不能只删闸门。
+             * ⛔ **不再要求"手上这一份必须是第 1 卷"**（用户 2026-10-17 拍板：这一档问的是
+             * 「这一组该拼到哪一层」，与"我手上正好拿着哪一片"无关）。
+             *
+             * 基准改由池子里的**第 1 卷**回答（下面 `baselinePath`）—— 池子的来源本来就是**四处**
+             * （入口那一份所在目录 + 链池 + 窗口 + 按基准再收一轮窗口），与"手上是哪一片"无关，
+             * 所以删这道闸门不会让池子变窄；真的判不出（这一组没有第 1 卷）由下面那道
+             * `byIndex.ContainsKey(1)` 闸门如实报出来。
+             *
+             * ⚠ 2026-10-17 记账：上一轮曾以为"删掉它打红 4 条守门"，`git stash` 到 HEAD 复验
+             * 证明那 4 条**在 HEAD 上本来就是红的**（通过 29 / 失败 4）⇒ 那个推断作废。
              */
-            if (entryDirectory.Length == 0 || VolumeGroupDetector.TryGetVolumeIndex(entryName) != 1)
+            if (entryDirectory.Length == 0)
             {
-                return NotApplicable("入口那一卷不是某一组的第 1 卷（这一档只接第 1 卷）");
+                return NotApplicable("入口那一卷的目录认不出（路径形态不对）");
             }
 
             VolumeContentFormat format = VolumeContentInference.SniffFormat(entryPath);
@@ -3797,18 +3801,17 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * ===== 基准 = 手上那一份（= 这一族的第 1 卷，见上面那道闸门）=====
+             * ===== 基准 = 这一组的**第 1 卷**（手上有哪一片都不影响）=====
              * 搬的目标层 = **入口包所在的那一层**。
              *
-             * ⛔ **入口那一卷自己的名字**必须是规范名：这一档只搬兄弟卷、**不改入口的名字** ——
+             * ⛔ **第 1 卷自己的名字**必须是规范名：这一档只搬兄弟卷、**不改入口的名字** ——
              * 调用方手上那个路径是开工之前抓下来的，改了它就等于带着一个失效的路径往下走
-             * （改名是「还原」工序的活，不是这一档的）。
+             * （改名是「还原」工序的活，不是这一档的）。第 1 卷名字不标准 ⇒ 这一组不收（一个字节都不动）。
              */
             string baselinePath = byIndex[1].Path;
             string baselineDirectory = Path.GetDirectoryName(baselinePath) ?? string.Empty;
 
-            if (!SamePath(baselinePath, entryPath)
-                || !SamePath(entryPath, Path.Combine(baselineDirectory, targetNames[1])))
+            if (!SamePath(baselinePath, Path.Combine(baselineDirectory, targetNames[1])))
             {
                 return new CrossLayerVolumeGather
                 {

@@ -1706,7 +1706,7 @@ namespace ArchiveFixer.Extraction
                 }
             }
 
-            if (!TryGatherCrossLayerVolumes(item, archivePath, layerLabel, out string? missingVolumeMessage))
+            if (!TryGatherCrossLayerVolumes(item, archivePath, layerLabel, out string? missingVolumeMessage, out string gatherEntryPath))
             {
                 /*
                  * 这一组凑不齐、而且有硬证据 ⇒ **一次引擎调用都不做**，如实报"缺哪几片"
@@ -1735,6 +1735,25 @@ namespace ArchiveFixer.Extraction
                         manifestEntries: null,
                         overrideStatus: StatusText.VolumeMissing),
                     RecursionStopReason.MissingVolume);
+            }
+            else if (!string.IsNullOrWhiteSpace(gatherEntryPath)
+                && File.Exists(gatherEntryPath)
+                && !string.Equals(gatherEntryPath, archivePath, StringComparison.OrdinalIgnoreCase))
+            {
+                /*
+                 * 这一组收拢到"第 1 卷那一层"了 ⇒ 这一层要打开的那一份换成**第 1 卷**
+                 * （手上这一份可能是后续卷，它已经被搬进那一层 / 或按规范名落在那里）。
+                 * ⛔ 判据只看盘上事实：`File.Exists` 不成立就一个字节都不换。
+                 */
+                Log(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.VolumeGatherEntryRepointLogFormat,
+                        Path.GetFileName(archivePath),
+                        Path.GetFileName(gatherEntryPath)));
+
+                archivePath = gatherEntryPath;
             }
 
             foreach (string candidate in candidates)
@@ -3742,13 +3761,22 @@ namespace ArchiveFixer.Extraction
             WorkItem item,
             string archivePath,
             string layerLabel,
-            out string? missingVolumeMessage)
+            out string? missingVolumeMessage,
+            out string gatherEntryPath)
         {
             missingVolumeMessage = null;
+            gatherEntryPath = archivePath;
 
             try
             {
                 string? skippedReason = null;
+
+                /*
+                 * 这一组**收拢的目标那一份** = 第 1 卷（`EntryPath`，判据唯一出口给出的）。
+                 * 手上有可能是后续卷（这一片是我们自己刚解出来的产物，卷号不一定是 1）
+                 * ⇒ 收完之后引擎要打开的那一份必须换成它，⛔ 不能让这一层拿着一个已经被搬走的旧路径。
+                 */
+                string resolvedEntry = archivePath;
 
                 /*
                  * 候选池 = 这条链各层产物目录的直接子文件（没有工作区就是空池 ⇒ 只按入口那一层判、
@@ -3756,10 +3784,12 @@ namespace ArchiveFixer.Extraction
                  */
                 if (Evaluate(EnumerateWorkspacePool(CurrentWorkspace)))
                 {
+                    gatherEntryPath = resolvedEntry;
                     return true;
                 }
 
                 missingVolumeMessage = skippedReason;
+                gatherEntryPath = resolvedEntry;
                 return false;
 
                 bool Evaluate(IReadOnlyList<VolumeCandidate> poolCandidates)
@@ -3770,6 +3800,11 @@ namespace ArchiveFixer.Extraction
                     if (!decision.Applicable)
                     {
                         return true;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(decision.EntryPath))
+                    {
+                        resolvedEntry = decision.EntryPath!;
                     }
 
                     if (decision.Plan is { CanRepair: true })
@@ -3807,7 +3842,7 @@ namespace ArchiveFixer.Extraction
                          * 只能由盘上那几份回答 —— ⛔ 不拿"刚刚搬成功了"当结论。
                          */
                         decision = VolumeNameRepair.ResolveCrossLayerVolumeGather(
-                            archivePath,
+                            resolvedEntry,
                             EnumerateWorkspacePool(CurrentWorkspace));
                     }
 

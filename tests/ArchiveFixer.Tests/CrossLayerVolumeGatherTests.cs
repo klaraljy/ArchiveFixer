@@ -383,7 +383,7 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
-        public void 入口是后续卷_这一档不适用()
+        public void 入口是后续卷_照旧按这一组的第1卷那一层收()
         {
             string directory = Path.Combine(_root, "入口是后续卷");
             Directory.CreateDirectory(directory);
@@ -396,14 +396,12 @@ namespace ArchiveFixer.Tests
                 VolumeNameRepair.ResolveCrossLayerVolumeGather(second, Array.Empty<VolumeCandidate>());
 
             /*
-             * ⚠ 2026-10-17：这条口径（"入口必须是第 1 卷"）**本轮试着删过一次、又整份退回** ——
-             * 删掉之后 `SiblingFolderVolumeGatherTests` 四条守门当场红（二分实测：只退递归路那一半仍 4 红）。
-             * 根因 = 这一档的候选池来源是**入口那一份所在的目录**，删闸门就得同时把"池子来源"与
-             * "基准"拆成两件事。⇒ 下一轮先拆那两件事，再改这条用例的期望。
+             * 用户 2026-10-17 拍板：这一档问的是「这一组该拼到哪一层」，
+             * 与"我手上正好拿着哪一片"无关 ⇒ **不再要求手上这一份是第 1 卷**。
+             * 目标那一份（`EntryPath`）由判据内部按池子里的第 1 卷回答。
              */
-            Assert.False(decision.Applicable);
-            Assert.Null(decision.Plan);
-            Assert.False(decision.ShouldSkipTrial);
+            Assert.True(decision.Applicable, decision.Detail);
+            Assert.Equal(Path.Combine(directory, "HK.7z.001"), decision.EntryPath);
         }
 
         // ================================================================ ② 真机同形的端到端
