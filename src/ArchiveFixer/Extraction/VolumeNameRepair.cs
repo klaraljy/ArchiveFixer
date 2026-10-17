@@ -3418,7 +3418,8 @@ namespace ArchiveFixer.Extraction
         internal static CrossLayerVolumeGather ResolveCrossLayerVolumeGather(
             string? entryVolumePath,
             IEnumerable<VolumeCandidate>? chainPoolCandidates,
-            IEnumerable<VolumeCandidate>? nearbyCandidates = null)
+            IEnumerable<VolumeCandidate>? nearbyCandidates = null,
+            string? cardEntryPath = null)
         {
             /*
              * "不适用"也要**说清是哪一道闸门关着**（用户 2026-10-12：大测试 run-8888 / run-15151515 两轮里
@@ -3582,6 +3583,18 @@ namespace ArchiveFixer.Extraction
             }
 
             Collect(EnumerateVolumeCandidatesInDirectory(entryPath), applySizeFilter: false);
+
+            /*
+             * **卡指出的入口那一份所在层也扫一遍**（用户 2026-10-17 总则：底层识别优先）。
+             * 现场形状：手上拿的是中间卷（名字认不出卷号），而卡上自证首卷的那一份躺在**另一层** ——
+             * 只扫"手上那一份的目录"就永远看不到它。⛔ 只扩"去哪儿找"，下面那几道闸门一条不落。
+             */
+            if (!string.IsNullOrWhiteSpace(cardEntryPath)
+                && File.Exists(cardEntryPath)
+                && !SameDirectory(cardEntryPath!, entryPath))
+            {
+                Collect(EnumerateVolumeCandidatesInDirectory(cardEntryPath!), applySizeFilter: false);
+            }
             Collect(chainPoolCandidates, applySizeFilter: true);
             Collect(nearbyCandidates, applySizeFilter: true);
 

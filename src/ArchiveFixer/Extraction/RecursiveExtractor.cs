@@ -3757,6 +3757,27 @@ namespace ArchiveFixer.Extraction
         /// <para>⛔ 任何意外（列目录失败、判据内部异常）一律返回 true：这一档是**加法**，
         /// 判不出来时必须退回"照旧让引擎去判"，⛔ 绝不能让一个新的判据把本来能解的包挡下来。</para>
         /// </summary>
+        /// <summary>
+        /// **卡说这一份就是首卷 ⇒ 返回它**（用户 2026-10-17 总则：底层识别优先）。
+        /// 判不出（手上是中间卷 / 卡读不出来）⇒ null，调用方照旧按名字找。
+        /// ⛔ 只读：卡是 `FileNature.Inspect` 拍的，不碰任何文件。
+        /// </summary>
+        private static string? CardEntryOf(string archivePath)
+        {
+            try
+            {
+                ArchiveFixer.Detection.CardVolumeGroupReading reading =
+                    ArchiveFixer.Detection.VolumePiecesFromCards.Read(
+                        new[] { ArchiveFixer.Detection.FileNature.Inspect(archivePath) });
+
+                return reading.EntryPath.Length > 0 ? reading.EntryPath : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private bool TryGatherCrossLayerVolumes(
             WorkItem item,
             string archivePath,
@@ -3795,7 +3816,11 @@ namespace ArchiveFixer.Extraction
                 bool Evaluate(IReadOnlyList<VolumeCandidate> poolCandidates)
                 {
                     VolumeNameRepair.CrossLayerVolumeGather decision =
-                        VolumeNameRepair.ResolveCrossLayerVolumeGather(archivePath, poolCandidates);
+                        VolumeNameRepair.ResolveCrossLayerVolumeGather(
+                            archivePath,
+                            poolCandidates,
+                            null,
+                            CardEntryOf(archivePath));
 
                     if (!decision.Applicable)
                     {
@@ -3843,7 +3868,9 @@ namespace ArchiveFixer.Extraction
                          */
                         decision = VolumeNameRepair.ResolveCrossLayerVolumeGather(
                             resolvedEntry,
-                            EnumerateWorkspacePool(CurrentWorkspace));
+                            EnumerateWorkspacePool(CurrentWorkspace),
+                            null,
+                            CardEntryOf(resolvedEntry));
                     }
 
                     if (!decision.ShouldSkipTrial)
