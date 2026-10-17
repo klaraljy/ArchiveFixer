@@ -14923,6 +14923,25 @@ namespace ArchiveFixer.ViewModels
                         + $"｜合计={cardReading.SumBytes}）");
 
                     /*
+                     * ⛔ 底层识别卡说"还差字节" ⇒ 这一趟不搬（用户 2026-10-17：「三条证据任何一条不成立 ⇒ 不动」）。
+                     * 只认一条硬事实：**首卷自述的整包字节数 > 手上这几片的合计**。
+                     * ⚠ 措辞仍然只是"这一趟先不收"—— 对整组的判决留给第二大步（与试开那条同一个口径）。
+                     */
+                    if (gatherPlan.Action == VolumeGatherAction.Gather
+                        && cardReading.HasFirstPiece
+                        && cardReading.DeclaredTotalBytes > cardReading.SumBytes)
+                    {
+                        long missingByCard = cardReading.DeclaredTotalBytes - cardReading.SumBytes;
+
+                        AppendLog(
+                            "WARN",
+                            $"{task.LogName}：这一趟先不收（底层识别卡说还差 {missingByCard} 字节，留到第二大步再判）");
+
+                        gatherPlan = VolumeGatherPlan.Leave(
+                            $"这一趟先不收（卡上说还差 {missingByCard} 字节，留到第二大步再判）");
+                    }
+
+                    /*
                      * ===== (c) 硬链接试开证实（用户 2026-10-17 四步里的第三步）=====
                      * "可证完整"只是名字/尺寸那几条证据；这里再按**规范卷名链**把这一组交给引擎**真开一次**。
                      * 开不动 ⇒ 整组不动，并把哪一条不过写进决策理由（⛔ 绝不"没试过就当过了"）。
