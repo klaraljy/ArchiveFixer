@@ -1730,7 +1730,7 @@ namespace ArchiveFixer.Tests
         /// 所以"停"这个结论没变，变的是**理由**（不再是一键档保守）与**要求点名**。</para>
         /// </summary>
         [Fact]
-        public async Task 一键处理遇到多分支_不弹确认框_单链档按档位停在该层并点名()
+        public async Task 一键处理遇到多分支_档位已删_默认档两个内层包都展开_日志不再提单链()
         {
             string build = Path.Combine(_root, "multibranch-build");
             Directory.CreateDirectory(build);
@@ -1749,7 +1749,7 @@ namespace ArchiveFixer.Tests
                 $"{OuterPassword}\n{ChainPassword}\n",
                 settings =>
                 {
-                    settings.RecursionMode = "SingleChain";
+                    // ②页那三档已整体删除（见 AppSettings.CreateDefault 的 2026-10-14/15 记账）⇒ 不再设档位。
                     settings.CustomOutputDirectory = outputRoot;
                 });
 
@@ -1757,29 +1757,19 @@ namespace ArchiveFixer.Tests
             await harness.RunOneClickAsync();
 
             /*
-             * ① 停下来的理由必须写清"是你选的档位如此"，⛔ 不许再写"按保守档"，
-             * 而且必须**点名是哪几个包**（用户当天原话：「停因里要点名那个未展开的包」）。
+             * ⛔ 2026-10-17 按用户口径重写：②页那三档（含「单链自动展开」）**已整体删除**，
+             * 出厂默认与归一化都是「展开所有分支」⇒ 原来断言的"停在该层并点名"测的是**已删档位的行为**。
+             * 新现实下：两个内层包都该被解开（各占一层），日志里**不该再出现**「单链自动展开」。
              */
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("单链自动展开", StringComparison.Ordinal)
-                        && line.Contains("只保留了当前这一层", StringComparison.Ordinal));
-
-            Assert.Contains(
-                harness.LogTexts,
-                line => line.Contains("innerA.7z", StringComparison.Ordinal)
-                        && line.Contains("innerB.7z", StringComparison.Ordinal));
-
-            // ② ⛔ 一键档批中间不许有"要用户点一下"的框（红线：只保留批末那一个汇总框）。
             Assert.DoesNotContain(
                 harness.LogTexts,
-                line => line.Contains("按保守档", StringComparison.Ordinal));
+                line => line.Contains("单链自动展开", StringComparison.Ordinal));
 
-            /*
-             * ③ 而且**不能**因此判失败：当前这一层的结果照样定稿（两个内层包本身）；
-             * 接着续解链会把这两个内层包各自当成一个任务继续解（各占一层），
-             * 所以任务数会变成 3 —— 这里断言的是"没有一个是失败/部分完成"。
-             */
+            string[] payloads = Directory.GetFiles(outputRoot, "*.txt", SearchOption.AllDirectories);
+
+            Assert.Contains(payloads, path => File.ReadAllText(path).Contains("分支 A", StringComparison.Ordinal));
+            Assert.Contains(payloads, path => File.ReadAllText(path).Contains("分支 B", StringComparison.Ordinal));
+
             Assert.NotEmpty(harness.Vm.Tasks);
 
             Assert.DoesNotContain(
