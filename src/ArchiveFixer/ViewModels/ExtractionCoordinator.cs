@@ -14900,11 +14900,27 @@ namespace ArchiveFixer.ViewModels
 
             var verifier = new VolumeProbeVerifier(_archiveEngine);
 
+            /*
+             * 试开用的硬链接名要**按卡上的族**拼（用户 2026-10-17：「底层识别先，名字配合行动」）：
+             * RAR 组若仍按 7z 的 `.001` 建链接，引擎必然报「分卷压缩包缺少必要分卷」⇒ 整组永远"试开没通过"。
+             */
+            VolumeContentFormat probeFamily;
+
+            try
+            {
+                probeFamily = FileNature.Inspect(firstVolume).Format;
+            }
+            catch
+            {
+                probeFamily = VolumeContentFormat.Unknown;
+            }
+
             var outcome = await verifier.VerifyAsync(
                     firstVolume,
                     new List<IReadOnlyList<VolumeCandidate>> { rest },
                     cancellationToken,
-                    Path.Combine(entryLayer, ".ArchiveFixer.work"))
+                    Path.Combine(entryLayer, ".ArchiveFixer.work"),
+                    probeFamily)
                 .ConfigureAwait(false);
 
             if (outcome.Confirmed)

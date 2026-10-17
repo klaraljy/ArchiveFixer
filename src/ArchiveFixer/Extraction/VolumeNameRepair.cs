@@ -721,14 +721,58 @@ namespace ArchiveFixer.Extraction
             try
             {
                 int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(fileName);
-                int? cardIndex = FileNature.Inspect(path).VolumeNumber;
+                FileNatureCard entryCard = FileNature.Inspect(path);
+                int? cardIndex = entryCard.VolumeNumber;
 
-                if (nameIndex != null && cardIndex != null && nameIndex.Value != cardIndex.Value)
+                if (cardIndex != null && (nameIndex == null || nameIndex.Value != cardIndex.Value))
                 {
+                    /*
+                     * ===== 名字与卡冲突 ⇒ **按卡上的卷号改名**（用户 2026-10-17：底层识别先，名字配合）=====
+                     * 不再"一个名字都不改"（那会让整组永远缺 part3）：用法是**拿卡上的族按卡上的槽位**
+                     * 拼出规范名（`222-L2.part34B+.rar` + 卡上第 3 卷 ⇒ `222-L2.part3.rar`），
+                     * 判据与拼法都只有既有出口 `VolumePiecesFromCards.CanonicalNameForSlot`。
+                     * 目标名已被占 / 拼不出来 ⇒ 照旧什么都不做（`Cannot`）。
+                     */
+                    string canonical = ArchiveFixer.Detection.VolumePiecesFromCards.CanonicalNameForSlot(
+                        entryCard, cardIndex.Value);
+
+                    if (canonical.Length > 0
+                        && !string.Equals(canonical, fileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string cardDirectory = Path.GetDirectoryName(path) ?? string.Empty;
+                        string cardTarget = Path.Combine(cardDirectory, canonical);
+
+                        if (!File.Exists(cardTarget))
+                        {
+                            return new VolumeNameRepairPlan
+                            {
+                                CanRepair = true,
+                                CurrentPath = path,
+                                CurrentFileName = fileName,
+                                SuggestedFileName = canonical,
+                                TargetPath = cardTarget,
+                                Siblings = Array.Empty<string>(),
+                                Items = new[]
+                                {
+                                    new VolumeRepairItem
+                                    {
+                                        CurrentPath = path,
+                                        CurrentFileName = fileName,
+                                        SuggestedFileName = canonical,
+                                        TargetPath = cardTarget
+                                    }
+                                }
+                            };
+                        }
+
+                        return Cannot(path, string.Format(StatusText.VolumeRepairTargetTakenFormat, canonical));
+                    }
+
                     return Cannot(
                         path,
-                        $"名字说这一卷是第 {nameIndex.Value} 卷，而内容（底层识别）说是第 {cardIndex.Value} 卷 —— "
-                        + "名字不参与定卷号，这里不改名（交给按内容卷号的那条路）");
+                        $"名字说这一卷是第 {nameIndex?.ToString() ?? "判不出"} 卷，"
+                        + $"而内容（底层识别）说是第 {cardIndex.Value} 卷 —— "
+                        + "按内容算出来的规范名与现在这个名字一样，这里不动");
                 }
             }
             catch

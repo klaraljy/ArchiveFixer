@@ -90,7 +90,8 @@ namespace ArchiveFixer.Extraction
             string? firstVolumePath,
             IReadOnlyList<IReadOnlyList<VolumeCandidate>>? orderings,
             CancellationToken cancellationToken = default,
-            string? preferredWorkRoot = null)
+            string? preferredWorkRoot = null,
+            VolumeContentFormat family = VolumeContentFormat.Unknown)
         {
             if (string.IsNullOrWhiteSpace(firstVolumePath) || !File.Exists(firstVolumePath))
             {
@@ -179,7 +180,7 @@ namespace ArchiveFixer.Extraction
                 }
 
                 // ① 单独一卷能不能完整打开。能 → 它本来就是个完整包，改名只会把它弄坏。
-                VolumeProbeOutcome? solo = await TrySoloAsync(firstVolumePath, probeRoot, cancellationToken)
+                VolumeProbeOutcome? solo = await TrySoloAsync(firstVolumePath, probeRoot, cancellationToken, family)
                     .ConfigureAwait(false);
 
                 if (solo != null)
@@ -198,7 +199,7 @@ namespace ArchiveFixer.Extraction
                     var volumes = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
                     volumes.AddRange(ordering);
 
-                    TrialResult trial = await TryLinkAndListAsync(volumes, trialDirectory, cancellationToken).ConfigureAwait(false);
+                    TrialResult trial = await TryLinkAndListAsync(volumes, trialDirectory, cancellationToken, family).ConfigureAwait(false);
 
                     if (trial.Failure == null)
                     {
@@ -552,12 +553,13 @@ namespace ArchiveFixer.Extraction
         private async Task<VolumeProbeOutcome?> TrySoloAsync(
             string firstVolumePath,
             string probeRoot,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            VolumeContentFormat family = VolumeContentFormat.Unknown)
         {
             string soloDirectory = Path.Combine(probeRoot, "solo");
             var solo = new List<VolumeCandidate> { new() { Path = firstVolumePath, Size = SizeOf(firstVolumePath) } };
 
-            TrialResult trial = await TryLinkAndListAsync(solo, soloDirectory, cancellationToken).ConfigureAwait(false);
+            TrialResult trial = await TryLinkAndListAsync(solo, soloDirectory, cancellationToken, family).ConfigureAwait(false);
 
             /*
              * ⛔ 「单卷就报加密归档」必须**拒绝**（用户 2026-09-29 真机副本取证）：
@@ -604,13 +606,26 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// 试开用的硬链接名：**按卡上的族拼**（用户 2026-10-17：「底层识别先，名字配合行动」）。
+        ///
+        /// <para>现场（新样本 `1111`）：RAR 组的试开一律用 `ProbeFileName`（7z 数字族 `.001`）建链接，
+        /// 引擎自然报「分卷压缩包缺少必要分卷」⇒ 整组永远判成"试开没通过"。
+        /// ⇒ RAR 族按 `<probe>.partN.rar` 建链接；7z/认不出照旧用数字族。</para>
+        /// </summary>
+        private static string ProbeLinkName(VolumeContentFormat family, int index)
+            => family == VolumeContentFormat.Rar
+                ? "volprobe.part" + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".rar"
+                : VolumeContentInference.ProbeFileName(index);
+
+        /// <summary>
         /// 按假设名把这几卷硬链接进 <paramref name="directory"/> 并让引擎列一次；
         /// 返回 <c>Failure == null</c> = 成立（顺序成立，或引擎认出了"这一组是加密归档"）。
         /// </summary>
         private async Task<TrialResult> TryLinkAndListAsync(
             IReadOnlyList<VolumeCandidate> volumes,
             string directory,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            VolumeContentFormat family = VolumeContentFormat.Unknown)
         {
             try
             {
@@ -625,7 +640,7 @@ namespace ArchiveFixer.Extraction
 
             for (int i = 0; i < volumes.Count; i++)
             {
-                string linkPath = Path.Combine(directory, VolumeContentInference.ProbeFileName(i + 1));
+                string linkPath = Path.Combine(directory, ProbeLinkName(family, i + 1));
 
                 if (!CreateHardLinkW(linkPath, volumes[i].Path, IntPtr.Zero))
                 {
