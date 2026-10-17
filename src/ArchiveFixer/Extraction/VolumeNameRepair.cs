@@ -3800,31 +3800,53 @@ namespace ArchiveFixer.Extraction
 
             foreach (GatherPiece piece in byIndex.Values)
             {
-                string canonical = SafeFileName(piece.Path);
+                /*
+                 * ===== 规范卷名：**族由底层识别卡定**（用户 2026-10-17 总则，唯一出口）=====
+                 * 卡上 `Format` 说这一族是什么，就按那一族给槽位名；卡判不出（格式读不出来）才退回
+                 * 原来那两条名字路（`TryBuildRestoredName` / `<入口卷基名>.<三位卷号>`）。
+                 * ⛔ 没有第二套命名：最终名仍由 `VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex` 生成。
+                 */
+                string canonical = string.Empty;
 
-                if (TryBuildRestoredName(canonical, format, out string restored))
+                try
                 {
-                    canonical = restored;
+                    canonical = ArchiveFixer.Detection.VolumePiecesFromCards.CanonicalNameForSlot(
+                        FileNature.Inspect(piece.Path),
+                        piece.Index);
                 }
-                else if (FileNameHelper.TryResolveVolumeBaseName(
-                             entryName,
-                             VolumeBaseNameLevel.DisguisedVolume,
-                             out string entryVolumeBase,
-                             out _)
-                         && entryVolumeBase.Length > 0)
+                catch
                 {
-                    /*
-                     * 这一份的名字里**根本没有卷标记**（伪装法把卷号吃掉了，如 `pack111-L2.7z`）
-                     * ⇒ `TryBuildRestoredName` 帮不上（它要有标记才还原）。
-                     * 它的槽位是我们**按入口自述的整包字节数唯一填平**推出来的（见上面那一段），
-                     * 所以规范名照**入口那一份的形状**拼：`<入口的卷基名>.<三位卷号>`。
-                     *
-                     * ⛔ 不另造一套命名口径：卷基名仍出自同一个出口
-                     * （<see cref="FileNameHelper.TryResolveVolumeBaseName"/>，级别 = 伪装档）。
-                     * 现场（`10101010`）：这一步之前，明细是「目标名「pack111-L2.7z」已经被别的文件占用了」
-                     * —— 因为名字原样没带卷号、撞上入口层里那份同名文件；拼成 `pack111-L2.7z.003` 之后才落得下去。
-                     */
-                    canonical = entryVolumeBase + "." + piece.Index.ToString("000", System.Globalization.CultureInfo.InvariantCulture);
+                    canonical = string.Empty;
+                }
+
+                if (canonical.Length == 0)
+                {
+                    canonical = SafeFileName(piece.Path);
+
+                    if (TryBuildRestoredName(canonical, format, out string restored))
+                    {
+                        canonical = restored;
+                    }
+                    else if (FileNameHelper.TryResolveVolumeBaseName(
+                                 entryName,
+                                 VolumeBaseNameLevel.DisguisedVolume,
+                                 out string entryVolumeBase,
+                                 out _)
+                             && entryVolumeBase.Length > 0)
+                    {
+                        /*
+                         * 这一份的名字里**根本没有卷标记**（伪装法把卷号吃掉了，如 `pack111-L2.7z`）
+                         * ⇒ `TryBuildRestoredName` 帮不上（它要有标记才还原）。
+                         * 它的槽位是我们**按入口自述的整包字节数唯一填平**推出来的（见上面那一段），
+                         * 所以规范名照**入口那一份的形状**拼：`<入口的卷基名>.<三位卷号>`。
+                         *
+                         * ⛔ 不另造一套命名口径：卷基名仍出自同一个出口
+                         * （<see cref="FileNameHelper.TryResolveVolumeBaseName"/>，级别 = 伪装档）。
+                         * 现场（`10101010`）：这一步之前，明细是「目标名「pack111-L2.7z」已经被别的文件占用了」
+                         * —— 因为名字原样没带卷号、撞上入口层里那份同名文件；拼成 `pack111-L2.7z.003` 之后才落得下去。
+                         */
+                        canonical = entryVolumeBase + "." + piece.Index.ToString("000", System.Globalization.CultureInfo.InvariantCulture);
+                    }
                 }
 
                 if (!targetNamesSeen.Add(canonical))
