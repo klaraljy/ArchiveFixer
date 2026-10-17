@@ -13343,6 +13343,41 @@ namespace ArchiveFixer.ViewModels
         /// —— 收尾谁也不认它，用户只会看到 200 MiB 的残留。⛔ 这里只建链接，不改名、不搬、不覆盖。</para>
         /// </summary>
         /// <param name="pieces">暂存目录里的那几份（<see cref="PublishUnresolvedVolumePieces"/> 的返回值）。</param>
+        /// <summary>两份文件是不是**字节完全相同**（大小 + SHA-256；读不了 ⇒ false ⇒ 当作不同，⛔ 不乱判）。</summary>
+        private static bool IsByteIdentical(string left, string right)
+        {
+            try
+            {
+                var leftInfo = new FileInfo(left);
+                var rightInfo = new FileInfo(right);
+
+                if (leftInfo.Length != rightInfo.Length || leftInfo.Length == 0)
+                {
+                    return false;
+                }
+
+                return string.Equals(SafeSha256(left), SafeSha256(right), StringComparison.Ordinal);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string SafeSha256(string path)
+        {
+            try
+            {
+                using FileStream stream = File.OpenRead(path);
+                using var sha = System.Security.Cryptography.SHA256.Create();
+
+                return Convert.ToHexString(sha.ComputeHash(stream));
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
         private void PublishUnresolvedPieceLandingCopies(IReadOnlyList<string>? pieces, ArchiveTask? owner)
         {
             if (owner == null || pieces == null || pieces.Count == 0)
@@ -13384,6 +13419,31 @@ namespace ArchiveFixer.ViewModels
                     if (groupDirectory.Length > 0 && File.Exists(Path.Combine(groupDirectory, name)))
                     {
                         continue;
+                    }
+
+                    /*
+                     * ⛔ **上一层已经有同名同字节的一份 ⇒ 不再在子目录里多铺一层**（2026-10-17 真机 `4444`）。
+                     *
+                     * <p>现场（盘面逐字）：`bbb(3)\…\bbb-W2-1\bbb-L2.jpg` 与
+                     * `bbb(3)\…\bbb-W2-1\bbb-L2\bbb-L2.jpg` 是**同字节的两份**（10,489,515 B、SHA-256 相同），
+                     * 后者就是这一档在"以片名命名的那一层"里补出来的；判据 ③ 把两份都算残留。</p>
+                     *
+                     * <p>判据只读**盘上的事实**（同名 + 同大小 + 同 SHA-256）⇒ 不铺也不丢内容。</p>
+                     */
+                    string? landingParent = Path.GetDirectoryName(landing.TrimEnd('\\', '/'));
+
+                    if (!string.IsNullOrWhiteSpace(landingParent))
+                    {
+                        string sibling = Path.Combine(landingParent!, name);
+
+                        if (File.Exists(sibling) && IsByteIdentical(sibling, piece))
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"{name}：上一层已经有同名同内容的一份 —— 不再在「{Path.GetFileName(landing)}」里多铺一层。");
+
+                            continue;
+                        }
                     }
 
                     Directory.CreateDirectory(landing);
