@@ -10597,7 +10597,8 @@ namespace ArchiveFixer.ViewModels
             string piecePath,
             ArchiveTask? owner,
             string? layerOverride = null,
-            string? groupEntryPathOverride = null)
+            string? groupEntryPathOverride = null,
+            bool allowMoveIntoGroup = true)
         {
             if (string.IsNullOrWhiteSpace(piecePath) || !File.Exists(piecePath))
             {
@@ -10829,7 +10830,14 @@ namespace ArchiveFixer.ViewModels
                  */
                 bool fromProcessFolder = ProcessArtifactLayout.IsInsideDeletableProcessFolders(piecePath);
                 string ownerStage = ResolveOwnerStageDirectory(owner);
-                bool moveIntoGroup = ShouldMovePieceIntoGroup(piecePath, ownerStage, CollectLiveChainWorkDirectories());
+                /*
+             * ⚠ 2026-10-17（用户口径：「第一大步和第二大步衔接的时候在原来的地方不动…找到完整的才一起搬动到
+             * 入口包位置」）：批末那一条路会传 `allowMoveIntoGroup = (决策器说 Gather)`。
+             * 决策器说 `Leave`（证据还没齐）⇒ **只建链接、绝不搬原件** —— 链接是实名的第二份名字，
+             * 原件仍在它自己那一层（也就是"原来的位置"）。
+             */
+                bool moveIntoGroup = allowMoveIntoGroup
+                    && ShouldMovePieceIntoGroup(piecePath, ownerStage, CollectLiveChainWorkDirectories());
 
                 /*
                  * ⛔ **用户导入的原包自己 ⇒ 只建链接，绝不搬**（项目既有红线的延伸：用户源目录里的片
@@ -11826,7 +11834,7 @@ namespace ArchiveFixer.ViewModels
 
             return paths;
         }
-        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null)
+        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null, bool allowMoveIntoGroup = true)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
@@ -11901,7 +11909,7 @@ namespace ArchiveFixer.ViewModels
             {
                 try
                 {
-                    TryAdoptUnresolvedVolumePiece(path, task, entryLayer, groupEntryPath);
+                    TryAdoptUnresolvedVolumePiece(path, task, entryLayer, groupEntryPath, allowMoveIntoGroup);
                 }
                 catch (Exception ex)
                 {
@@ -11954,7 +11962,7 @@ namespace ArchiveFixer.ViewModels
                         {
                             if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                             {
-                                TryAdoptUnresolvedVolumePiece(path, task, entryLayer, groupEntryPath);
+                                TryAdoptUnresolvedVolumePiece(path, task, entryLayer, groupEntryPath, allowMoveIntoGroup);
                             }
                         }
                         catch (Exception ex)
@@ -14660,7 +14668,11 @@ namespace ArchiveFixer.ViewModels
                         $"{task.LogName}：收拢决策 = {gatherPlan.Action} —— {gatherPlan.Reason}"
                         + $"（这一层同族候选 {gatherCandidates.Count} 个）");
 
-                    TryGatherGroupPiecesInto(task, entryLayer, _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null);
+                    TryGatherGroupPiecesInto(
+                        task,
+                        entryLayer,
+                        _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null,
+                        allowMoveIntoGroup: gatherPlan.Action == VolumeGatherAction.Gather);
 
                     /*
                      * ⚠ 2026-10-13（第 15 修之后）：收片只认名字 ⇒ 名字被伪装到"读不出卷号"的那几片收不进来。
