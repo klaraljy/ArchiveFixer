@@ -612,10 +612,25 @@ namespace ArchiveFixer.Extraction
         /// 引擎自然报「分卷压缩包缺少必要分卷」⇒ 整组永远判成"试开没通过"。
         /// ⇒ RAR 族按 `<probe>.partN.rar` 建链接；7z/认不出照旧用数字族。</para>
         /// </summary>
-        private static string ProbeLinkName(VolumeContentFormat family, int index)
-            => family == VolumeContentFormat.Rar
-                ? "volprobe.part" + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".rar"
-                : VolumeContentInference.ProbeFileName(index);
+        private static string ProbeLinkName(VolumeContentFormat family, int index, int count)
+        {
+            string number = index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            return family switch
+            {
+                // RAR partN 族：WinRAR 的口径 = 补零宽度跟着**总卷数的位数**走（1~9 卷 part1，10~99 卷 part01）。
+                VolumeContentFormat.Rar =>
+                    "volprobe.part" + index.ToString(
+                        new string('0', Math.Max(1, count.ToString(System.Globalization.CultureInfo.InvariantCulture).Length)),
+                        System.Globalization.CultureInfo.InvariantCulture) + ".rar",
+
+                // 通用分片族（对归档再分片）：引擎认 `<基名>.zip.001` 这种形状（设计文档 §6.6 A）。
+                VolumeContentFormat.Zip => "volprobe.zip." + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture),
+
+                // 7z 数字族（`volprobe.7z.001`）与判不出族的兜底：沿用既有出口。
+                _ => VolumeContentInference.ProbeFileName(index)
+            };
+        }
 
         /// <summary>
         /// 按假设名把这几卷硬链接进 <paramref name="directory"/> 并让引擎列一次；
@@ -640,7 +655,7 @@ namespace ArchiveFixer.Extraction
 
             for (int i = 0; i < volumes.Count; i++)
             {
-                string linkPath = Path.Combine(directory, ProbeLinkName(family, i + 1));
+                string linkPath = Path.Combine(directory, ProbeLinkName(family, i + 1, volumes.Count));
 
                 if (!CreateHardLinkW(linkPath, volumes[i].Path, IntPtr.Zero))
                 {
