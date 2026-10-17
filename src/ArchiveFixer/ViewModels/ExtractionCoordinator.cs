@@ -16602,48 +16602,34 @@ namespace ArchiveFixer.ViewModels
                  *    压根不会被问到（新写的"按归档自己的索引定盘"再准也轮不到它跑）。
                  *    这一档的判据只有一条事实：**目录里真有一片自述是末片**（EOCD 盘号 > 0）。
                  */
-                if (FileNameHelper.IsVolumePartFileName(currentName)
+                bool namePathWorthAsking = FileNameHelper.IsVolumePartFileName(currentName)
                     || task.IsVolumeGroup
-                    || VolumeNameRepair.HasSpannedZipTailNearby(current))
+                    || VolumeNameRepair.HasSpannedZipTailNearby(current);
+
+                /*
+                 * ===== 底层识别优先（用户 2026-10-17 总则：「一开始肯定是用底层识别来弄……只有底层
+                 * 做不到或者哪些地方需要名字的修改来弄的」）=====
+                 * 先用**内容**那条路（族/卷号来自内容 + 硬链接试开证实），名字那条路只在它判不出时兜底。
+                 * ⚠ 候选池口径一个字不改：先同目录；判不出仍由下面"放宽到邻近目录"那一段接手。
+                 */
+                plan = await VolumeNameRepair.PlanByContentAsync(
+                    current,
+                    VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
+                    _archiveEngine,
+                    volumeProbeWorkRoot,
+                    volumeTrialPasswords,
+                    cancellationToken).ConfigureAwait(false);
+
+                if ((plan == null || !plan.CanRepair) && namePathWorthAsking)
                 {
-                    plan = VolumeNameRepair.Plan(
+                    VolumeNameRepairPlan? byName = VolumeNameRepair.Plan(
                         current,
                         VolumeNameRepair.EnumerateFileNamesInDirectory(current));
-                }
 
-                if (plan != null && !plan.CanRepair)
-                {
-                    /*
-                     * 名字那条路走不通（推不出标准名）→ 再回退到内容级推断一次。
-                     * ⛔ 判据与执行体仍然只有 VolumeNameRepair 那一份，这里只是换个入口。
-                     *
-                     * ⚠ 这一档**先用同目录候选**（老口径，逐字不变）：候选池一放宽，邻近目录里**别的包**的卷
-                     * 就会一起进内容判据 —— 真机夹具实测过：几组 RAR 卷大小完全一样，放宽之后
-                     * "同目录里认出 4 卷、卷号连不成 1..N" ⇒ 本来能改的组一个都不改。
-                     * 跨目录那一步只放在**下面这一次重试**里（同目录判不出来才放宽）。
-                     */
-                    plan = await VolumeNameRepair.PlanByContentAsync(
-                        current,
-                        VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
-                        _archiveEngine,
-                        volumeProbeWorkRoot,
-                        volumeTrialPasswords,
-                        cancellationToken).ConfigureAwait(false);
-                }
-                else if (plan == null)
-                {
-                    /*
-                     * 名字里**完全没有卷号**这一档（用户 2026-09-28 现场：`amb909.7.01` / `amb909.z.2` / `amb909..3`）。
-                     * 名字判据必然返回 null，所以不进 Plan，直接交给内容级推断：
-                     * 内容认 7z 第一卷 + 同目录等长文件 + 硬链接试开。
-                     */
-                    plan = await VolumeNameRepair.PlanByContentAsync(
-                        current,
-                        VolumeNameRepair.EnumerateVolumeCandidatesInDirectory(current),
-                        _archiveEngine,
-                        volumeProbeWorkRoot,
-                        volumeTrialPasswords,
-                        cancellationToken).ConfigureAwait(false);
+                    if (byName != null && (byName.CanRepair || plan == null))
+                    {
+                        plan = byName;
+                    }
                 }
 
                 /*
