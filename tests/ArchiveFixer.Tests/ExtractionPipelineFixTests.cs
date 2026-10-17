@@ -195,6 +195,55 @@ namespace ArchiveFixer.Tests
         // ================================================================ P1-3：取消之后不移动、不清理
 
         /// <summary>
+        /// **收尾已经开始之后按取消** ⇒ 不定稿、不归集、源包不删、状态「已取消」。
+        ///
+        /// <para>用户「残余缺口：收尾内部按取消无用例钉住」的守门。它靠测试缝
+        /// `ExtractionCoordinator.PostProcessStartedForTests` 把取消按在**收尾第一道闸门之后** ——
+        /// 此前那两个钩子（`Engine.OnList/OnExtract`）都在收尾之前，更早的闸门先看见了取消 ⇒
+        /// 收尾内部那几处 `ThrowIfCancellationRequested()` 从来没被任何用例看见过。</para>
+        ///
+        /// <para>⚠ **红检未成立（2026-10-17 实测，如实记）**：把收尾里那几处 `ThrowIfCancellationRequested()`
+        /// （以及另外 10 处）临时全撤掉 ⇒ 本条**照旧绿** ⇒ 真正看见这次取消的是**别的闸门**（`IsStopping` 那一族），
+        /// **不是收尾内部那几处检查**。⇒ 本用例钉的是**行为**（收尾开始之后按取消 ⇒ 不定稿/不归集/源包不删），
+        /// ⛔ **别把它读成"收尾内部那几处检查已验过"**；那个缺口仍然开着，`docs/大改动-2026-10-14-口径与冲突.md:840` 那条记账不变。</para>
+        /// </summary>
+        [Fact]
+        public async Task 收尾已经开始之后按取消_不定稿_不归集_源包不删()
+        {
+            string collectRoot = Path.Combine(_root, "collect-after-postprocess");
+
+            Harness harness = CreateHarness(configure: settings =>
+            {
+                settings.CollectResultsToDirectory = true;
+                settings.CollectTargetDirectory = collectRoot;
+                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
+            });
+
+            string source = CreateSourceFile("cancel-late.7z");
+            ArchiveTask task = AddTask(harness, source);
+
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(5));
+            harness.Engine.OnExtractAsync = request =>
+            {
+                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
+                WriteFiles(request.OutputPath!, 5);
+                harness.Engine.Extracted = true;
+
+                return Task.FromResult(Succeeded());
+            };
+
+            // 收尾已经开始（第一道闸门之后）才按取消 —— 只有收尾内部那几处检查能看见它。
+            harness.Coordinator.PostProcessStartedForTests = () => harness.Coordinator.CancelCurrentTask();
+
+            await harness.Coordinator.StartExtractAsync();
+
+            Assert.Equal(StatusText.Cancelled, task.Status);
+            Assert.True(File.Exists(source), "取消之后源包被删了");
+            Assert.False(Directory.Exists(collectRoot), "取消之后产物被归集走了");
+            Assert.False(Directory.Exists(task.OutputPath), $"取消之后最终目录被建出来了：{task.OutputPath}");
+        }
+        /// <summary>
         /// 收尾阶段以前从不检查取消令牌：用户按了「取消当前」，产物照样被移动、源包照样被删。
         /// 现在每一步之前都查令牌，且状态必须落成"已取消"（不得显示成功）。
         /// </summary>

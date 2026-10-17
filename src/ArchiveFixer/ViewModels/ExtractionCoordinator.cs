@@ -2014,6 +2014,8 @@ namespace ArchiveFixer.ViewModels
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            PostProcessStartedForTests?.Invoke();
+
             /*
              * ⚠ 2026-09-30（用户真机报的 bug）：**不再把"取不到清单"折成 null**。
              * null 会把"为什么取不到"（<see cref="ChainManifestResolver"/> 点名的那一层与原因）
@@ -18224,6 +18226,19 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 这里这个口子只给测试用，界面不绑它。</para>
         /// </summary>
         internal bool KeepTaskDetailInLog { get; set; }
+
+        /// <summary>
+        /// **测试缝**：收尾（定稿/归集/搬源）**已经开始、第一道取消闸门之后**回调一次。
+        ///
+        /// <para>为什么需要它（用户「残余缺口：收尾内部按取消无用例钉住」）：收尾内部有三处
+        /// `ThrowIfCancellationRequested()`（本文件 `:2015` / `:2227` / `:2260` 附近），
+        /// 而**没有任何用例能看见它们** —— 现有那两个钩子（`Engine.OnList/OnExtract`）都发生在收尾之前，
+        /// 更早的闸门就先看见了取消（`ExtractionPipelineFixTests` 那条用例的注释自己写明了这一点）。
+        /// ⇒ 只有在这里回调，测试才能把"取消"按在**收尾已经开始之后**。</para>
+        ///
+        /// <para>⛔ 默认 `null` = 一个字都不做（生产路径行为与改动前逐字相同）。</para>
+        /// </summary>
+        internal Action? PostProcessStartedForTests { get; set; }
 
         private void BeginTaskLogCapture(ArchiveTask task)
         {
