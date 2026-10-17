@@ -14892,6 +14892,37 @@ namespace ArchiveFixer.ViewModels
                     VolumeGatherPlan gatherPlan = VolumeGatherPlanner.Decide(gatherCandidates, entryLayer);
 
                     /*
+                     * ===== 底层识别卡那一行（用户 2026-10-17：「分卷的底层识别算法还要加强」）=====
+                     * 7z 的中间卷**内容里没有卷号**，只有首卷的起始头自述"整包多少字节 / 共几片" ——
+                     * 所以收拢这一步要能一眼看出"这一层里到底有没有首卷、合计对不对得上"。
+                     * 判据唯一出口 <see cref="VolumePiecesFromCards"/>（三条证据：首卷自述 → 体积规律 → 合计）。
+                     * ⛔ 只写事实、不改搬运行为（这一轮只接线这一行）。
+                     */
+                    var gatherCards = new List<FileNatureCard>();
+
+                    foreach (string candidatePath in gatherCandidates)
+                    {
+                        try
+                        {
+                            gatherCards.Add(FileNature.Inspect(candidatePath));
+                        }
+                        catch
+                        {
+                            // 读不出来就少一张卡（判据那边会如实说"判不出"）。
+                        }
+                    }
+
+                    CardVolumeGroupReading cardReading = VolumePiecesFromCards.Read(gatherCards);
+
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：底层识别卡 —— {cardReading.Reason}"
+                        + $"（卡上首卷={(cardReading.HasFirstPiece ? "有" : "没有")}"
+                        + $"｜片数={cardReading.PieceCount}"
+                        + $"｜自述={cardReading.DeclaredTotalBytes}"
+                        + $"｜合计={cardReading.SumBytes}）");
+
+                    /*
                      * ===== (c) 硬链接试开证实（用户 2026-10-17 四步里的第三步）=====
                      * "可证完整"只是名字/尺寸那几条证据；这里再按**规范卷名链**把这一组交给引擎**真开一次**。
                      * 开不动 ⇒ 整组不动，并把哪一条不过写进决策理由（⛔ 绝不"没试过就当过了"）。
