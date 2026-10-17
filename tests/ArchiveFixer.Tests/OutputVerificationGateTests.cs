@@ -202,8 +202,19 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 候选全试完仍然不完整 → 如实失败，且状态取更准确的那一个（试过密码的用「密码错误」语义），
-        /// 原因里必须写明"已试 N 个候选，产物始终不完整"。
+        /// 候选全试完仍然不完整 → 如实失败；**结论归给谁按三档事实判**（`ExtractionCoordinator.cs:25185-25188`）：
+        /// 这一条夹具里**两个候选的结果一模一样**（都写 0 字节桩）⇒ `passwordIrrelevant` 成立
+        /// （`listSaysNoEncryption || sameAsPrevious`，`:24870`）⇒ 换密码显然不会改变任何东西
+        /// ⇒ 状态取「解压失败」而**不是**「密码错误」（后者会把用户指去核对密码本，方向全错）。
+        ///
+        /// <para>⚠ 2026-10-17 口径同步（按新口径改旧用例，四件事如实记）：
+        /// **冲突** = 本用例旧断言（`StatusText.WrongPassword`）与本文件同批的
+        /// `ExtractionPipelineFixTests.没加密的包_产物校验不过时_不再换密码也不写密码错误`
+        /// 以及 `ExtractionCoordinator.cs:25185-25188` 的三档判据**互相矛盾**；
+        /// **怎么判的** = 走后者的既有事实判据（结果一模一样 ⇒ 与密码无关），⛔ 没有放宽任何判据；
+        /// **哪些没同步** = 本文件的 doc 注释（已在本条一起改）；**仍是缺口** = 无。</para>
+        ///
+        /// 原因里必须写明"已试 N 个候选，产物始终不完整"，并点明"问题不在密码上"。
         /// </summary>
         [Fact]
         public async Task 候选全试完仍不完整_如实失败_说明试了几个候选()
@@ -231,7 +242,8 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.Equal(StatusText.WrongPassword, task.Status);
+            Assert.Equal(StatusText.ExtractFailed, task.Status);
+            Assert.NotEqual(StatusText.WrongPassword, task.Status);
             Assert.Contains("产物校验未通过", task.ErrorMessage, StringComparison.Ordinal);
             Assert.Contains("已试 2 个候选，产物始终不完整", task.ErrorMessage, StringComparison.Ordinal);
 
