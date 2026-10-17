@@ -4427,6 +4427,22 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
+            /*
+             * **「单链自动展开」这一层的判据输入**（用户 2026-10-17：这类"到底认出了几个内层归档"的
+             * 问题光读码判不出，判据输入必须落进日志）。只在用户显式选了这一档时写 —— 默认档
+             * 「展开所有分支」不会走到这条判据，不会给正常任务加噪声。
+             * ⛔ 只写事实：认出的个数 / 名字 / 深度 / 是否已由用户决定。
+             */
+            if (mode == RecursionMode.SingleChain)
+            {
+                Log(
+                    "INFO",
+                    $"{DescribeProbeLabel(item)}：「单链自动展开」这一层的判据输入 —— 认出的内层归档 {toProcess.Count} 个"
+                    + $"（{(toProcess.Count == 0 ? "一个都没有" : string.Join("；", toProcess.Select(Path.GetFileName)))}）"
+                    + $"｜深度={item.Depth}"
+                    + $"｜这一层是否已由用户决定={(decidedByUser ? "是" : "否")}");
+            }
+
             if (!decidedByUser && mode == RecursionMode.SingleChain)
             {
                 /*
