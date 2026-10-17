@@ -1332,30 +1332,38 @@ namespace ArchiveFixer.Detection
             }
 
             /*
-             * ===== 通用分片族（对归档再分片）：`X.zip.001` 这一族**就往回写成 `X.zip.00N`** =====
+             * ===== 通用分片族（对归档再分片）：`X.zip.001` 这一族**就往回写成 `X.zip.NNN`** =====
              * （设计文档 §6.6 A / §10 第 2 条；用户 2026-10-17 现场：真跑日志逐字
              *  `222-L1.zip.001：分卷名不标准，已按标准名改好（3 卷）：222-L1.zip.001 → 222-L1.z01；
              *   …003 → 222-L1.zip` —— 那是 7-Zip `-v` 切出来的**通用分片**，被当成跨盘 zip 族改名，
              *   之后引擎按 `.zip` 去读 EOCD ⇒ 盘号写的是 0 ⇒ 认成"单盘 zip" ⇒ 整组解不出来（①红）。
-             * 判据只看名字形状：`<基名>.zip.<三位数字>` ⇒ 这一族的规范名就是它自己那一族，
-             * ⛔ 不许换成 `.z01/…/.zip`。）
+             *
+             * ⚠ 名字里**夹了杂质也算这一族**（设计文档 §2 的容忍档；现场 `6666`：
+             *   `打包111-L2.zip.删除001` —— 数字前面的「删除」必须剥掉再认，否则这一片永远改不回
+             *   `.zip.001`、整组永远报「分卷压缩包缺少必要分卷」）。
              */
-            if (System.Text.RegularExpressions.Regex.IsMatch(
-                    sampleVolumeName,
-                    @"(?i)^(?<base>.+)\.zip\.\d{3}$"))
+            System.Text.RegularExpressions.Match genericSplit = System.Text.RegularExpressions.Regex.Match(
+                sampleVolumeName,
+                @"(?i)^(?<base>.+)\.zip\.(?<tail>[^\\/]*)$");
+
+            if (genericSplit.Success)
             {
-                string genericBase = System.Text.RegularExpressions.Regex.Replace(
-                    sampleVolumeName,
-                    @"(?i)\.zip\.\d{3}$",
-                    string.Empty);
+                System.Text.RegularExpressions.Match trailing = System.Text.RegularExpressions.Regex.Match(
+                    genericSplit.Groups["tail"].Value,
+                    @"^(?<junk>.*?)(?<num>\d{1,3})$");
 
-                if (genericBase.Length > 0)
+                if (trailing.Success)
                 {
-                    canonical = genericBase
-                        + ".zip."
-                        + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture);
+                    string genericBase = genericSplit.Groups["base"].Value;
 
-                    return true;
+                    if (genericBase.Length > 0)
+                    {
+                        canonical = genericBase
+                            + ".zip."
+                            + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture);
+
+                        return true;
+                    }
                 }
             }
 

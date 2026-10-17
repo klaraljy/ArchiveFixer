@@ -1191,7 +1191,8 @@ namespace ArchiveFixer.Extraction
                      * zip 有**两族**，⛔ 不能一律按跨盘 zip 处理（用户 2026-10-17 现场，新样本 `1111`：
                      * `-tzip -v` 切出来的 `222-L1.zip.001/.002/.003` 被改成 `222-L1.z01/.z02/.zip`，
                      * 引擎按 `.zip` 读 EOCD、盘号是 0 ⇒ 认成单盘 zip ⇒ 整组解不出来）。
-                     * 判据：名字就是 `<基名>.zip.<三位数字>` ⇒ **通用分片族**（规范名照它自己）；
+                     * 判据：名字形如 `<基名>.zip.<带杂质的数字>` ⇒ **通用分片族**（规范名照它自己，
+                     * 杂质由容忍档剥掉；现场 `6666` 的 `打包111-L2.zip.删除001`）；
                      * 否则照旧按跨盘 zip 族（由内容证据/名字那一档决定）。
                      */
                     return PlanByNumberedContent(
@@ -1199,7 +1200,7 @@ namespace ArchiveFixer.Extraction
                         filesInDirectory,
                         System.Text.RegularExpressions.Regex.IsMatch(
                             System.IO.Path.GetFileName(path),
-                            @"(?i)\.zip\.\d{3}$")
+                            @"(?i)\.zip\.[^\\/]*\d{1,3}$")
                             ? VolumeNamingFamily.ZipNumbered
                             : VolumeNamingFamily.ZipSpanned,
                         Detection.VolumeContentFormat.Zip);

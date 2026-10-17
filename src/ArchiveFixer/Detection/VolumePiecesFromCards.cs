@@ -340,6 +340,35 @@ namespace ArchiveFixer.Detection
                             .ToList()
                         : Array.Empty<CardVolumeSlot>();
 
+                /*
+                 * ===== 通用分片族：**纯内容定序**（设计文档 §6.6 A / 工单 #10）=====
+                 * 现场（新样本 `6666` 的配方逐字）：三片分别在三个文件夹，名字是
+                 * `打包111-W0-0` / `…W1-0.png` / `…L2.zip.000003` —— 名字一点忙帮不上。
+                 * 内容给三条事实：① 尾部有 EOCD 的是**末片**；② 开头是**本地文件头**的是**第 1 片**；
+                 * ③ 剩下那片就是中间片 —— 恰好 3 片时唯一（多于 3 片判不出，⛔ 不猜）。
+                 */
+                if (slotList.Count < 2)
+                {
+                    List<FileNatureCard> endPieces = pieces.Where(card => card.HasZipEndRecord).ToList();
+                    List<FileNatureCard> localPieces = pieces.Where(card => card.HasZipLocalHeader).ToList();
+                    List<FileNatureCard> middlePieces = pieces
+                        .Where(card => !card.HasZipLocalHeader && !card.HasZipEndRecord)
+                        .ToList();
+
+                    if (endPieces.Count == 1
+                        && localPieces.Count == 1
+                        && middlePieces.Count == 1
+                        && pieces.Count == 3)
+                    {
+                        slotList = new List<CardVolumeSlot>
+                        {
+                            new(1, localPieces[0].Path, localPieces[0].Size, false),
+                            new(2, middlePieces[0].Path, middlePieces[0].Size, false),
+                            new(3, endPieces[0].Path, endPieces[0].Size, true)
+                        };
+                    }
+                }
+
                 return CardVolumeGroupReading.Incomplete(
                     slotList.Count >= 2
                         ? $"卡上卷号连成 1..{slotList.Count}（来自内容；"

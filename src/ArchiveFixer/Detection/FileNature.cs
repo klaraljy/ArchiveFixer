@@ -121,6 +121,16 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public int? RawVolumeField { get; init; }
 
+        /// <summary>
+        /// 这一份的**尾部有 zip 的 EOCD**（设计文档 §6.6 A / 工单 #10）：通用分片族里它 = **末片**的证据。
+        /// </summary>
+        public bool HasZipEndRecord { get; init; }
+
+        /// <summary>
+        /// 这一份的**开头是 zip 本地文件头** `PK\x03\x04`：通用分片族里它 = **第 1 片**的证据。
+        /// </summary>
+        public bool HasZipLocalHeader { get; init; }
+
         // ===== ③ 名字 · 分卷后缀那套算法（线索，不是身份）=====
 
         /// <summary>按名字算出来的卷号（脏名也算得出）；不是分卷样子的名字 = null。</summary>
@@ -348,6 +358,8 @@ namespace ArchiveFixer.Detection
                 DeclaredTotalBytes = declaredTotalBytes,
                 DeclaredVolumeCount = declaredVolumeCount,
                 RawVolumeField = reading.RawField,
+                HasZipEndRecord = reading.HasZipEndRecord,
+                HasZipLocalHeader = reading.HasZipLocalHeader,
                 VolumeIndexByName = VolumeGroupDetector.TryGetVolumeIndex(name),
                 FirstVolumeNameByName = VolumeGroupDetector.TryGetFirstVolumeName(name),
                 CanonicalVolumeName = canonical ?? string.Empty,
