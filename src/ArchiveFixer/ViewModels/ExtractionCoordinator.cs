@@ -11996,8 +11996,18 @@ namespace ArchiveFixer.ViewModels
                 return true;
             }
 
-            /* ③ 字节数守恒（中间片那一档）。 */
+            /* ③ 字节数守恒（中间片那一档）：大小 + 基名相关，两条都要。 */
+            /*
+             * ⚠ 2026-10-18（困难批 `30303030` 运行期定案）：**字节数守恒不能单独当准入**。
+             * 现场逐字：补扫把另一个样本的 `222-L2.part2.rar-113`（同样 26 214 400 字节）收进池子
+             * （`基名与本组相关=否` 却 `准入=True`）⇒ 池子里混进别组文件 ⇒ "可证完整"是假的。
+             * ⇒ ③ 必须再加**基名与本组相关**这一条弱证据；⛔ 只看大小等于"谁大谁进"。
+             * （② 那一条是**内容**证据（本地文件头 / 尾部 EOCD / 成员位），不加基名限制 ——
+             *  `6666` 的第 1 片叫 `打包111-W0-0`，基名与参照名毫不相干，靠的正是那一条。）
+             */
             if (fullSizeAnchor > 0
+                && referenceBase.Length > 0
+                && BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(card.Path), referenceBase)
                 && card.Size > 0
                 && Math.Abs(card.Size - fullSizeAnchor) <= Math.Max(1, fullSizeAnchor / 100))
             {
