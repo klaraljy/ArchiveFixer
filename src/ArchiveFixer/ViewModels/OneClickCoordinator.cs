@@ -646,7 +646,28 @@ namespace ArchiveFixer.ViewModels
                 return directory;
             }
 
-            return Path.Combine(trimmed, packageLayer);
+            string layered = Path.Combine(trimmed, packageLayer);
+
+            /*
+             * ⚠ 2026-10-18 困难批 `11111111` 组合 2 运行期定案（调试器读数逐字）：
+             * `rootTask.ContentFileCount = 1`、`ContentDirectoryPath = …\aaa-W0-0`、
+             * 实际内容在 `…\aaa-W0-0\aaa-L2\content-60mb.bin`（递归最后一层的包名是 `aaa-L2`，
+             * **不是**链根包名 `aaa-W0-1删除`）⇒ 老写法无条件补出
+             * `…\aaa-W0-0\aaa-W0-1删除`（盘上不存在）⇒ 链尾补搬数到 0 个内容物 ⇒
+             * 选了「彻底删除」也不删源包（④ 8 份同一族）。
+             *
+             * 判据两件**盘上事实**（⛔ 不猜内容在哪一层）：
+             * ① 这一单确实发布过内容物（`ContentFileCount > 0`，定稿计划记的账）；
+             * ② 补出来的那一层盘上不存在。
+             * 两条同时成立 ⇒ 退回记录下来的 `ContentDirectoryPath`（调用方数内容物是递归的，
+             * 能数到子层里的内容物）；只有一条成立 ⇒ 照旧补层（老行为一个字不改）。
+             */
+            if (parentTask.ContentFileCount > 0 && !Directory.Exists(layered))
+            {
+                return directory;
+            }
+
+            return layered;
         }
 
         /*

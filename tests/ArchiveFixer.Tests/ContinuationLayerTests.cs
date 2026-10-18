@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
@@ -183,6 +184,106 @@ namespace ArchiveFixer.Tests
             Assert.Equal(
                 expected,
                 ExtractionCoordinator.IsContinuationLayerAlreadyInPath(parentDirectory, archiveBaseName));
+        }
+
+        /// <summary>
+        /// **链根最终目录 = 记录下来的内容目录**（2026-10-18 困难批 `11111111` 组合 2 运行期定案）：
+        /// 这一单发布过内容物（`ContentFileCount &gt; 0`），而"按链根包名补出来的那一层"盘上不存在
+        /// ⇒ 不许拿一个不存在的预测路径去数内容物（那会让链尾补搬数到 0、选了彻底删除也不删源包）。
+        /// </summary>
+        [Fact]
+        public void 链根最终目录_包名层不在盘上_退回记录下来的内容目录()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "ArchiveFixerChainRoot", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.Combine(root, "L2"));
+            File.WriteAllText(Path.Combine(root, "L2", "content.bin"), "x");
+
+            try
+            {
+                var task = new ArchiveTask(Path.Combine(root, "pack.7z"))
+                {
+                    OutputPath = root,
+                    ContentDirectoryPath = root,
+                    ContentFileCount = 1
+                };
+
+                Assert.Equal(root, OneClickCoordinator.ResolveContinuationOutputDirectory(task));
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        /// <summary>反向：包名那一层真的在盘上 ⇒ 照旧补一层（老行为一个字不改）。</summary>
+        [Fact]
+        public void 链根最终目录_包名层真的在盘上_照旧补一层()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "ArchiveFixerChainRoot", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.Combine(root, "pack"));
+            File.WriteAllText(Path.Combine(root, "pack", "content.bin"), "x");
+
+            try
+            {
+                var task = new ArchiveTask(Path.Combine(root, "pack.7z"))
+                {
+                    OutputPath = root,
+                    ContentDirectoryPath = root,
+                    ContentFileCount = 1
+                };
+
+                Assert.Equal(
+                    Path.Combine(root, "pack"),
+                    OneClickCoordinator.ResolveContinuationOutputDirectory(task));
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        /// <summary>反向：这一单没发布过内容物（`ContentFileCount = 0`）⇒ 照旧补预测层，不退回。</summary>
+        [Fact]
+        public void 链根最终目录_这一单没发布过内容物_照旧补预测层()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "ArchiveFixerChainRoot", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+
+            try
+            {
+                var task = new ArchiveTask(Path.Combine(root, "pack.7z"))
+                {
+                    OutputPath = root,
+                    ContentDirectoryPath = root,
+                    ContentFileCount = 0
+                };
+
+                Assert.Equal(
+                    Path.Combine(root, "pack"),
+                    OneClickCoordinator.ResolveContinuationOutputDirectory(task));
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                }
+            }
         }
 
         // ── ④之二 层名被内层包自己那个文件占着（名字被改坏时的物理约束） ──────────
