@@ -2343,8 +2343,15 @@ namespace ArchiveFixer.ViewModels
                      * 理由是"哪一卷是组的开头"只能从名字看出来 —— 这是**分组**信息，不是格式判断；
                      * 格式一律只看内容（下一段）。⛔ 别在这里再加"后缀得是已知归档后缀"那种条件：
                      * 那正是 2026-09-25 真机上"名字被塞了两个字就只解一层"的根因。
+                     *
+                     * ⛔ **但名字这一格必须让内容先说**（2026-10-18，唯一出口
+                     * <see cref="ArchiveFixer.Detection.VolumePieceFacts.ContentProvesNotAVolumePiece"/>）：
+                     * 现场（困难批 `24242424`）`222-W1-1.932` 的真实内容是**单盘 ZIP**，名字里那个 `932`
+                     * 只是伪装尾巴 —— 老写法把它当"后续卷"跳过 ⇒ 它的密码候选只试 1 个就收场。
+                     * 内容可证是单卷 ⇒ 名字不算数，照旧按内容分类进续解链。
                      */
-                    if (IsVolumeContinuationPart(file))
+                    if (IsVolumeContinuationPart(file)
+                        && !ArchiveFixer.Detection.VolumePieceFacts.ContentProvesNotAVolumePiece(file))
                     {
                         skippedLines.Add($"{file}（是分卷的后续卷，起点在第一卷上）");
                         continue;

@@ -39,6 +39,30 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// **内容可证"这一份不是分卷组的一员" ⇒ 名字层的一切"我是第 N 卷"在此作废**（唯一出口）。
+        ///
+        /// <para><b>为什么必须有这一个出口</b>（2026-10-18 困难批 `24242424`，`walk` 探针逐字）：
+        /// `222-W1-1.932` 的真实内容 = **单盘 ZIP**（卡上 `Membership=ProvablyNotVolumeMember`、
+        /// `BodyKind=SingleComplete`、`参与分卷那一套=False`），可名字里那个 `932` 被名字尺子读成卷号 ⇒
+        /// `ResolveSlotIndex` 回来 `932`、`IsPieceOfIncompleteGroup` 回来 `true` ⇒ 递归路把它当成
+        /// "这一组的后续卷、而同组入口不在这一层" ⇒ **第一条候选一失败就收场**（9 个候选只试了 1 个），
+        /// 而真正的密码就在密码本第 7 条（`7z t -p…` 实测 `Everything is Ok`）⇒ 它里面那一片
+        /// （`222-L2.mp4`，RAR4 的第 2 片）永远出不来 ⇒ 那一组只剩槽位 1、3，缺 2。</para>
+        ///
+        /// <para>⛔ 判据只读卡上的**内容**事实（`Membership` 与 `BodyKind`），⛔ 不比名字、⛔ 不猜；
+        /// 判不出（`Unknown`）⇒ `false` —— 照旧让名字那一半说话（7z 中间片 / 跨盘 ZIP 中间片正是这一档）。</para>
+        /// </summary>
+        internal static bool ContentProvesNotAVolumePiece(FileNatureCard? card) =>
+            card != null
+            && (!card.ParticipatesInVolumeHandling
+                || card.BodyKind == ArchiveBodyKind.SingleComplete);
+
+        /// <summary>同上，只拿到路径时用它（自己拍一次卡；⛔ 调用方别再自己判一遍）。</summary>
+        internal static bool ContentProvesNotAVolumePiece(string? path) =>
+            !string.IsNullOrWhiteSpace(path)
+            && ContentProvesNotAVolumePiece(FileNature.Inspect(path));
+
+        /// <summary>
         /// **RAR 族的首卷**（卡上：格式 RAR + 内容自证是成员 + 专属算法 = 这一组的第一片）。
         ///
         /// <para>干什么用（2026-10-16，§29.12 / §29.14）：后缀修正那一档要把它与"单卷归档"分开 ——
@@ -102,6 +126,17 @@ namespace ArchiveFixer.Detection
             FileNatureCard? groupAnchorCard = null,
             bool trustCardNumberWhenNameGivesNothing = false)
         {
+            /*
+             * ⛔ **内容可证"不是分卷的一员" ⇒ 名字这一格全部作废**（2026-10-18，见
+             * <see cref="ContentProvesNotAVolumePiece"/> 的现场）：单盘 ZIP 名字里那个 `932`
+             * 不是卷号，`222-W1-1.932` 因此被判成"第 932 片"⇒ 下游按分卷收场、密码只试 1 个。
+             * ⛔ 只否证这一种；内容判不出时照旧让名字说话。
+             */
+            if (ContentProvesNotAVolumePiece(card))
+            {
+                return null;
+            }
+
             string name = FileNameHelper.GetFileName(path);
             int? byName = VolumeGroupDetector.TryGetVolumeIndex(name);
 

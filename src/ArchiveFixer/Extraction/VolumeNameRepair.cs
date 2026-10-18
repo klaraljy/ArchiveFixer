@@ -737,8 +737,30 @@ namespace ArchiveFixer.Extraction
              */
             try
             {
+                /*
+                 * ⛔ **内容可证"不是分卷的一员" ⇒ 卷名这一套一个字节都不改**（2026-10-18，唯一出口
+                 * <see cref="Detection.VolumePieceFacts.ContentProvesNotAVolumePiece"/>）。
+                 *
+                 * <para>现场逐字（困难批 `24242424`，`walk` / `names` 探针）：`222-W1-1.mp4-932` 的
+                 * 真实内容是**单盘 ZIP**（卡上 `Membership=ProvablyNotVolumeMember`、
+                 * `BodyKind=SingleComplete`），而名字尺子把末段 `mp4-932` 的容差档读成"卷号 932"
+                 * （`Tolerant(末段「mp4-932」) = True（→932，垃圾「mp4-」）`）⇒ 老写法把它还原成
+                 * `222-W1-1.932`（凭空造出一个卷号）⇒ 下游"名字优先"的判据当场把它当后续卷
+                 * ⇒ 9 个密码候选只试了 1 个 ⇒ 那一片永远出不来 ⇒ 整组缺第 2 片。</para>
+                 *
+                 * <para>⛔ 只否证这一种；内容判不出（7z 中间卷等）⇒ 照旧走名字那条路，一个字不放宽。</para>
+                 */
+                FileNatureCard natureCard = FileNature.Inspect(path);
+
+                if (ArchiveFixer.Detection.VolumePieceFacts.ContentProvesNotAVolumePiece(natureCard))
+                {
+                    return Cannot(
+                        path,
+                        "内容可证不是分卷的一员（名字里的卷标记只是伪装尾巴）—— 卷名一个字节都不改");
+                }
+
                 int? nameIndex = VolumeGroupDetector.TryGetVolumeIndex(fileName);
-                FileNatureCard entryCard = FileNature.Inspect(path);
+                FileNatureCard entryCard = natureCard;
                 int? cardIndex = entryCard.VolumeNumber;
 
                 if (cardIndex != null && (nameIndex == null || nameIndex.Value != cardIndex.Value))

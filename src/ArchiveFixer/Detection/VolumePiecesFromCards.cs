@@ -431,10 +431,22 @@ namespace ArchiveFixer.Detection
                     }
                 }
 
+                /*
+                 * ⚠ 措辞必须写实（2026-10-18）：`slotList` 的号可能**不连续**（RAR4 手上只有第 1、3 片时
+                 * 是 `1,3`），老写法把它印成「卷号连成 1..2」⇒ 看日志的人会以为整组齐了。
+                 * ⇒ 逐号列出来，缺哪几号也直接写。
+                 */
+                string slotText = string.Join("、", slotList.Select(slot => slot.Index));
+                int highest = slotList.Count > 0 ? slotList.Max(slot => slot.Index) : 0;
+                List<int> missingSlots = slotList.Count == 0
+                    ? new List<int>()
+                    : Enumerable.Range(1, highest).Where(number => slotList.All(slot => slot.Index != number)).ToList();
+
                 return CardVolumeGroupReading.Incomplete(
                     slotList.Count >= 2
-                        ? $"卡上卷号连成 1..{slotList.Count}（来自内容；"
-                          + $"槽位 {string.Join(",", slotList.Select(slot => slot.Index))}）"
+                        ? (missingSlots.Count == 0
+                            ? $"卡上卷号连成 1..{highest}（来自内容；槽位 {slotText}）"
+                            : $"卡上卷号：{slotText}（来自内容），缺 {string.Join("、", missingSlots)} 号")
                         : $"体积规律成立（{pieces.Count} 片，满片 {fullSize} 字节），但没有首卷的自述 ⇒ "
                           + "判不出哪一份是首卷、也判不出整组齐不齐",
                     hasFirstPiece: false,

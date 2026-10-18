@@ -2329,8 +2329,16 @@ namespace ArchiveFixer.Extraction
                  * 候选照旧全试、动作一个字不改，只把**结论**从"损坏"改成"缺卷"。
                  * ⛔ 位置必须在"损坏"与"密码已证实 ⇒ 数据坏了"那两支**之前**（它们会当场 return）。
                  * ⛔ 判不出（目录读不了 / 名字解析不出）⇒ 照旧走引擎给的那一档。</para>
+                 *
+                 * <para>⛔⛔ **2026-10-18 补：名字那一半必须让内容先说**（困难批 `24242424`，`walk` 探针逐字）——
+                 * `222-W1-1.932` 的真实内容是**单盘 ZIP**（卡上 `ProvablyNotVolumeMember` /
+                 * `SingleComplete`），名字里的 `932` 只是伪装尾巴 ⇒ 老写法在这一支当场收场
+                 * （9 个候选只试 1 个），真正的密码就在密码本第 7 条（`7z t -p…` 实测 `Everything is Ok`）。
+                 * 判据 = 唯一出口 <see cref="Detection.VolumePieceFacts.ContentProvesNotAVolumePiece"/>，
+                 * 内容可证"不是分卷的一员" ⇒ 名字不算数，照旧把候选试完。</para>
                  */
                 if (!result.Success
+                    && !Detection.VolumePieceFacts.ContentProvesNotAVolumePiece(archivePath)
                     && FileNameHelper.IsVolumeContinuationPart(Path.GetFileName(archivePath))
                     && !IsGroupEntryPresentBeside(archivePath))
                 {
@@ -3039,12 +3047,29 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
+            FileNatureCard card = FileNature.Inspect(archivePath);
+
+            /*
+             * ⛔ **内容可证"不是分卷的一员" ⇒ 名字那一格一律作废**（2026-10-18，唯一出口
+             * <see cref="Detection.VolumePieceFacts.ContentProvesNotAVolumePiece"/>）。
+             *
+             * <para>现场逐字（困难批 `24242424`，`walk` 探针）：`222-W1-1.932` 的真实内容是
+             * **单盘 ZIP**（卡上 `Membership=ProvablyNotVolumeMember / BodyKind=SingleComplete`），
+             * 老写法在这一行**之前**就用名字的 `IsVolumeContinuationPart` 当场 `return true` ——
+             * 于是递归路把一条普通 ZIP 当成"这一组的后续卷、入口不在旁边"⇒ 第一条密码候选一错就收场
+             * （9 个候选只试了 1 个）⇒ 它里面那一片（第 2 片）永远出不来 ⇒ 整组缺卷。</para>
+             *
+             * <para>⛔ 判据只否证这一种；`Unknown`（7z 中间片等）照旧让名字那一半说话（见下面那条）。</para>
+             */
+            if (Detection.VolumePieceFacts.ContentProvesNotAVolumePiece(card))
+            {
+                return false;
+            }
+
             if (FileNameHelper.IsVolumeContinuationPart(FileNameHelper.GetFileName(archivePath)))
             {
                 return true;
             }
-
-            FileNatureCard card = FileNature.Inspect(archivePath);
 
             if (card.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
             {

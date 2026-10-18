@@ -156,6 +156,60 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **内容可证"不是分卷的一员" ⇒ 名字里的卷标记一律作废**（2026-10-18，困难批 `24242424` 现场）。
+        ///
+        /// <para>现场逐字（`walk` 探针）：`222-W1-1.932` 的真实内容是**单盘 ZIP**，卡上
+        /// `Membership=ProvablyNotVolumeMember / BodyKind=SingleComplete`；而名字尺子把末段
+        /// `mp4-932` 的容差档读成"卷号 932"（`names` 探针逐字 `Tolerant(末段「mp4-932」) = True（→932，垃圾「mp4-」）`）。
+        /// 老写法里有三处**名字比内容先说话**，于是：
+        /// ① `ResolveSlotIndex` 回来 932；
+        /// ② `IsPieceOfIncompleteGroup` 回来 true（递归路把它当"这一组的后续卷、入口不在旁边"）；
+        /// ③ `VolumeNameRepair.Plan` 把它还原成 `222-W1-1.932`（凭空造出卷号）。
+        /// 后果 = 递归路的密码候选**只试了 1/9**（`7z t -p<密码本第 7 条>` 实测 `Everything is Ok`）
+        /// ⇒ 那一片永远出不来 ⇒ 那一组只剩槽位 1、3，缺 2。</para>
+        ///
+        /// <para>本用例钉住的三条判据都在**同一个出口**：<c>VolumePieceFacts.ContentProvesNotAVolumePiece</c>。</para>
+        /// </summary>
+        [Fact]
+        public void 内容可证是单盘ZIP_名字里那个三位数字不算卷号()
+        {
+            string dir = Path.Combine(_root, "named-single-zip");
+            Directory.CreateDirectory(dir);
+
+            // 名字故意做成"名字尺子读得出卷号 932"的形状（`222-W1-1.mp4-932` 的真机名字）。
+            string path = Path.Combine(dir, "bbb-L2.mp4-932");
+
+            using (FileStream stream = File.Create(path))
+            using (var zip = new System.IO.Compression.ZipArchive(
+                       stream,
+                       System.IO.Compression.ZipArchiveMode.Create))
+            {
+                System.IO.Compression.ZipArchiveEntry entry = zip.CreateEntry("payload.txt");
+                using StreamWriter writer = new(entry.Open());
+                writer.Write("hello");
+            }
+
+            FileNatureCard card = FileNature.Inspect(path);
+
+            Assert.Equal(VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember, card.Membership);
+            Assert.Equal(ArchiveBodyKind.SingleComplete, card.BodyKind);
+            Assert.Equal(932, card.VolumeIndexByName);   // 名字确实读成 932 —— 不是"没读出来"，是"读出来但不作数"
+
+            // ① 槽位：内容否决 ⇒ 判不出（⛔ 不许拿名字的 932 顶替）
+            Assert.Null(VolumePieceFacts.ResolveSlotIndex(path, card));
+
+            // ② 递归路那一档：内容否决 ⇒ 不按「缺卷」收场（否则密码候选只试 1 个）
+            Assert.False(
+                RecursiveExtractor.IsPieceOfIncompleteGroupForTests(path),
+                "内容可证是单卷 ZIP ⇒ 名字里的 932 不算卷号，不许按「缺卷」收场");
+
+            // ③ 卷名修复：内容否决 ⇒ 一个字节都不改（⛔ 不许凭空造出 `bbb-L2.932`）
+            VolumeNameRepairPlan plan = VolumeNameRepair.Plan(path, new[] { Path.GetFileName(path) });
+
+            Assert.False(plan.CanRepair);
+        }
+
+        /// <summary>
         /// **卡上的专属算法（用户 2026-10-13 口径：「名字被伪装到读不出卷号 ⇒ 组凑不来」是底层识别的事）**：
         /// RAR 那一族**按内容自证"我是这一组的第一片"**，而且把"内容里那个卷号字段的原始值"留在卡上
         /// （第 1 片当锚点、其余几片靠差值定序 —— RAR4 老编号族的基数格式没写死，只有相对大小可靠）。
