@@ -1089,6 +1089,28 @@ namespace ArchiveFixer.Tests
             return bytes.ToArray();
         }
 
+        /// <summary>
+        /// 与 <see cref="ZipTail"/> 同形，但**中央目录偏移由调用方给**（`-v` 切出来的末片把它写成整包偏移，
+        /// 于是它 ≥ 本文件长度 —— 这就是"我是最后一片"那条内容证据）。
+        /// </summary>
+        private static byte[] ZipTailWithCdOffset(uint centralDirectoryOffset)
+        {
+            var bytes = new List<byte> { 0x50, 0x4B, 0x03, 0x04 };
+            bytes.AddRange(new byte[26]);
+            bytes.AddRange(new byte[] { 0xAA, 0xBB, 0xCC });
+
+            bytes.AddRange(new byte[] { 0x50, 0x4B, 0x05, 0x06 });
+            bytes.AddRange(BitConverter.GetBytes((ushort)0));
+            bytes.AddRange(BitConverter.GetBytes((ushort)0));
+            bytes.AddRange(BitConverter.GetBytes((ushort)1));
+            bytes.AddRange(BitConverter.GetBytes((ushort)1));
+            bytes.AddRange(BitConverter.GetBytes(119u));
+            bytes.AddRange(BitConverter.GetBytes(centralDirectoryOffset));
+            bytes.AddRange(BitConverter.GetBytes((ushort)0));
+
+            return bytes.ToArray();
+        }
+
         /// <summary>跨盘 zip 的**非末片**能以哪个签名开头（真样本的第 1 片就是"跨盘标记"那一档）。</summary>
         private enum ZipSegmentHead
         {
@@ -1190,6 +1212,44 @@ namespace ArchiveFixer.Tests
 
             return crc ^ 0xFFFFFFFF;
         }
+
+        /// <summary>
+        /// **盘号 0/0 的 EOCD 也可能是"分片的最后一片"** —— 判据的另一半是**中央目录偏移 ≥ 本文件长度**。
+        ///
+        /// <para>真机 2026-10-18 运行期取证（样本 6666）：`打包111-L2.zip.000003`（10 490 952 字节）的 EOCD 逐字
+        /// `diskNumber=0 / centralDirectoryDisk=0 / cdOffset=62 919 611`（62 919 611 ≥ 10 490 952）。
+        /// 老代码在 `FromEndOfCentralDirectory` 里一见两个盘号都是 0 就返回 `ZipSingleDisk`、
+        /// `ZipEndRecordMeansSplit=false` ⇒ 卡上判成 `单卷/分卷=SingleComplete`、`参与分卷那一套=False`
+        /// ⇒ 末片被排除在收拢之外，整组永远拼不起来（① ② 双红）。</para>
+        ///
+        /// <para>⚠ 对照那一格钉的是**不许放宽**：普通的单卷 zip（中央目录就在自己身上）照旧"单卷"。
+        /// 这正是这条判据当初要治的毛病（把一份普通单卷 zip 当成某分卷组的一片）。</para>
+        /// </summary>
+        [Fact]
+        public void 盘号都是0的EOCD_中央目录偏移超过文件长度_算分片末片()
+        {
+            string splitPath = Write(Path.Combine(_root, "split-part.zip.003"), ZipTailWithCdOffset(999_999));
+
+            VolumeNumberReading split = VolumeNumberFromContent.Read(splitPath);
+
+            Assert.True(split.HasZipEndRecord);
+            Assert.True(split.ZipEndRecordMeansSplit, "中央目录偏移 ≥ 本文件长度 ⇒ 这就是分片的最后一片");
+            Assert.NotEqual(
+                VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember,
+                VolumeNumberFromContent.ClassifyMembership(splitPath));
+            Assert.NotEqual(ArchiveBodyKind.SingleComplete, FileNature.Inspect(splitPath).BodyKind);
+
+            string singlePath = Write(Path.Combine(_root, "plain-single.zip"), ZipTailWithCdOffset(0));
+
+            VolumeNumberReading single = VolumeNumberFromContent.Read(singlePath);
+
+            Assert.True(single.HasZipEndRecord);
+            Assert.False(single.ZipEndRecordMeansSplit, "中央目录就在自己身上 ⇒ ⛔ 不许当成末片");
+            Assert.Equal(
+                VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember,
+                VolumeNumberFromContent.ClassifyMembership(singlePath));
+        }
+
 
         private static ushort TestCrc16(IReadOnlyList<byte> data) => (ushort)(TestCrc32(data) & 0xFFFF);
 

@@ -360,9 +360,16 @@ namespace ArchiveFixer.Detection
              * `Expected: SingleComplete / Actual: Unknown`）。两件事本来就不冲突：
              * 一个是"共几片"、一个是"它是不是分卷组的一员" ⇒ 拆成独立的一条。
              */
+            /*
+             * ⛔ `ZipEndRecordMeansSplit` 为真时**不是**"完整单卷"：那是分片的最后一片
+             * （EOCD 的中央目录偏移 ≥ 本文件长度 ⇒ 中央目录起在更早的片里）。
+             * 真机 6666 的 `打包111-L2.zip.000003` 就是这一档 —— 写成 SingleComplete 会让它
+             * 被判成"可证不是分卷成员"，整组永远凑不起来。
+             */
             if (bodyKind == ArchiveBodyKind.Unknown
                 && format == VolumeContentFormat.Zip
-                && !reading.IsVolumeMember)
+                && !reading.IsVolumeMember
+                && !reading.ZipEndRecordMeansSplit)
             {
                 bodyKind = ArchiveBodyKind.SingleComplete;
             }

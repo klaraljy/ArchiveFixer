@@ -971,6 +971,39 @@ namespace ArchiveFixer.Detection
             if (diskNumber == 0 && centralDirectoryDisk == 0)
             {
                 /*
+                 * ⚠ 2026-10-18（运行期取证补上这条判据的另一半）：**盘号 0/0 不等于"单卷"** ——
+                 * 7-Zip `-v` 切出来的末片 EOCD 同样写盘号 0，它与单卷 zip 的唯一区别就是上面那条判据的
+                 * 前半句：**中央目录偏移 ≥ 本文件长度**（中央目录起在更早的片里）。
+                 * 真机 6666 逐字：`打包111-L2.zip.000003`（10 490 952 字节）的 EOCD 写 cdOffset=62 919 611。
+                 * 原来这里直接按 `ZipSingleDisk` 早退 ⇒ 卡上 `单卷/分卷=SingleComplete`、`参与分卷那一套=False`
+                 * ⇒ 末片被排除在收拢之外，整组永远拼不起来（① ② 双红）。
+                 *
+                 * 返回的 `Fail=None` 是刻意的：**"判不出它是第几片"不等于"可证它不是分卷成员"**
+                 * （后者会让 `ClassifyMembership` 判成 ProvablyNotVolumeMember，又把这一片排除掉）。
+                 */
+                long splitFileLength = LengthOf(filePath);
+
+                if (eocd.Length >= 20 && splitFileLength > 0)
+                {
+                    long declaredCentralDirectoryOffset =
+                        BinaryPrimitives.ReadUInt32LittleEndian(eocd.Slice(16, 4));
+
+                    if (declaredCentralDirectoryOffset >= splitFileLength)
+                    {
+                        return new VolumeNumberReading
+                        {
+                            Path = filePath,
+                            Format = VolumeContentFormat.Zip,
+                            Size = splitFileLength,
+                            IsVolumeMember = false,
+                            HasZipEndRecord = true,
+                            ZipEndRecordMeansSplit = true,
+                            Fail = VolumeNumberFail.None
+                        };
+                    }
+                }
+
+                /*
                  * 两个盘号都是 0 = 单盘 zip（7z 的 -v 切出来的"裸分片 zip"末片也是这个样子）。
                  * ⚠ **但"尾部有 EOCD"这条内容事实本身仍然是证据**（设计文档 §6.6 A / 工单 #10）：
                  * `X.zip.001..00N` 那一族里，**只有最后一片的尾部有 EOCD**，其余是裸切块。
