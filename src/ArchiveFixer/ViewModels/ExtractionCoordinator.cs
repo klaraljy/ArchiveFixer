@@ -12857,10 +12857,42 @@ namespace ArchiveFixer.ViewModels
         /// `111-L2.7z.001` ⇒ 引擎按 `111-L2.7z.002` 找 **找不到** ⇒ 组照样凑不齐（这就是"改对了槽位、
         /// 起错了名字"）。⛔ 与打分路同一条判据，⛔ 不新写第二套命名规则。</para>
         /// </summary>
+        /// <summary>
+        /// **这一层的命名族（由内容证据定）**：层里只要有一片 `ZipEndRecordMeansSplit`（通用分片末片），
+        /// 这一组就是 `ZipNumbered`；判不出 ⇒ null（调用方照旧按名字）。
+        ///
+        /// <para>2026-10-18 困难批 `30303030` 运行期逐字：`按「打分分配」把 333-L2.zip.001 补成槽位名 333-L2.z01`
+        /// —— 样板是 `X.zip` 时命名出口给的是跨盘族形状；而这一组的内容是通用分片 ⇒ 必须用数字样本。</para>
+        /// </summary>
+        private static VolumeNamingFamily? ResolveLayerNamingFamily(string? directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return null;
+            }
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(directory!))
+                {
+                    if (FileNature.Inspect(file).ZipEndRecordMeansSplit)
+                    {
+                        return VolumeNamingFamily.ZipNumbered;
+                    }
+                }
+            }
+            catch
+            {
+                // 读不动 ⇒ 判不出 ⇒ 照旧名字路。
+            }
+
+            return null;
+        }
         private static string ResolveMissingSlotName(
             IReadOnlyDictionary<int, string> present,
             string entryName,
-            int slot)
+            int slot,
+            VolumeNamingFamily? namingFamily = null)
         {
             string? existingPiece = present.Values
                 .FirstOrDefault(path => VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(path)) != null);
@@ -12870,6 +12902,19 @@ namespace ArchiveFixer.ViewModels
                 && VolumeGroupDetector.TryGetVolumeIndex(likeExisting) == slot)
             {
                 return likeExisting;
+            }
+
+            /*
+             * ⛔ **通用分片族：样本要有数字卷标记**（2026-10-18 困难批 `30303030` 运行期逐字：
+             * `按「打分分配」把 333-L2.zip.001 补成槽位名 333-L2.z01`）。
+             * 样板是 `X.zip` 时命名出口给的是跨盘族形状（槽位 2 = `.z01`）；而这一组的内容
+             * 判据（`ZipEndRecordMeansSplit`）说它是通用分片 ⇒ 样本改成 `X.zip.001`，
+             * 槽位 2 才会拼成 `X.zip.002`。⛔ 族判不出 ⇒ 照旧名字口径。
+             */
+            if (namingFamily == VolumeNamingFamily.ZipNumbered
+                && !System.Text.RegularExpressions.Regex.IsMatch(entryName, @"\.\d{3}$"))
+            {
+                entryName += ".001";
             }
 
             if (VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex(entryName, slot, out string canonical)
@@ -13355,7 +13400,7 @@ namespace ArchiveFixer.ViewModels
                  * ⚠ 实测 `24242424`（垃圾名 `111-L2.part000000002.rar`）与 `28282828`（丢族段 `111-L2.002`）
                  * 两条教训都已经收进那一个出口里。
                  */
-                string slotName = ResolveMissingSlotName(present, entryName, slot);
+                string slotName = ResolveMissingSlotName(present, entryName, slot, ResolveLayerNamingFamily(entryLayer));
 
                 if (slotName.Length == 0)
                 {
