@@ -39,6 +39,47 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 候选与成品目录里是同一份物理文件_不算半套_放行()
+        {
+            string output = Path.Combine(_root, "twins");
+            string source = Path.Combine(_root, "twins-src");
+            Directory.CreateDirectory(output);
+            Directory.CreateDirectory(source);
+
+            string sourcePiece = Path.Combine(source, "777-L2.part1.rar");
+            File.WriteAllBytes(sourcePiece, new byte[64]);
+
+            // 成品目录里那一份是**同一物理文件**（硬链接）：删掉源目录那个名字，成品名还在。
+            string outputPiece = Path.Combine(output, "777-L2.part1.rar");
+            Assert.True(ArchiveFixer.Helpers.HardLinkHelper.TryCreateHardLink(outputPiece, sourcePiece));
+
+            // 同组另一片（不同的物理文件）在成品目录里 —— 老判据会当成“半套”。
+            File.WriteAllBytes(Path.Combine(output, "777-L2.part2.rar"), new byte[64]);
+
+            Assert.Null(
+                RestVolumeCompletenessGate.DescribeLayerReclaimBlocker(new[] { sourcePiece }, output));
+        }
+
+        [Fact]
+        public void 候选在成品目录里只有副本_不同物理文件_照旧拦()
+        {
+            string output = Path.Combine(_root, "copies");
+            string source = Path.Combine(_root, "copies-src");
+            Directory.CreateDirectory(output);
+            Directory.CreateDirectory(source);
+
+            string sourcePiece = Path.Combine(source, "888-L2.part1.rar");
+            File.WriteAllBytes(sourcePiece, new byte[64]);
+
+            // 只是同名副本（不同 FileIdentity）⇒ 不满足“同一物理文件”那一档，照旧拦。
+            File.Copy(sourcePiece, Path.Combine(output, "888-L2.part1.rar"));
+            File.WriteAllBytes(Path.Combine(output, "888-L2.part2.rar"), new byte[64]);
+
+            Assert.NotNull(
+                RestVolumeCompletenessGate.DescribeLayerReclaimBlocker(new[] { sourcePiece }, output));
+        }
+
+        [Fact]
         public void 其余物里是半套分卷而末片留在成品目录_必须拦下并点名两边()
         {
             string output = Path.Combine(_root, "111");

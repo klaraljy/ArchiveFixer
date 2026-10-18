@@ -2893,10 +2893,33 @@ namespace ArchiveFixer.ViewModels
             bool requireRecognizedCandidates =
                 trigger != LayerPurgeTrigger.SourceHandlingDelete || task.IsContinuationTask;
 
-            string? splitBlocker = DescribeLayerSplitBlocker(
-                task,
-                reclaimWorkspaceDirectory,
-                requireRecognizedCandidates);
+            /*
+             * ===== 本组源包：**组可证完整 + 内容校验通过 ⇒ 半套闸门不再适用**（2026-10-18 用户 `&&` 口径）=====
+             *
+             * 用户拍板：「第一大步成功 && 第二大步成功（组可证完整、内容物校验通过）才动原包」。
+             * 走到这里、而且这一单就是**这一组的入口任务**（`IsVolumeGroup`）且组可证完整
+             * （`IsVolumeComplete`）且**这一单自己的内容物已可证完整** ⇒ 这一组已经整组解开，
+             * 它的源片不再需要留着拼组 —— 半套闸门放行（⛔ 只放行这一种：组任务自己的源包；
+             * 单包任务 / 组不完整 / 判不出 ⇒ 照旧过闸门，25 GB 那次的形状照样拦得住）。
+             */
+            bool verifiedGroupSource =
+                task.IsVolumeGroup
+                && task.IsVolumeComplete
+                && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval;
+
+            if (verifiedGroupSource && reclaimVerdict == null)
+            {
+                logEntries.Add((
+                    "INFO",
+                    $"{task.LogName}：这一组可证完整且内容物校验通过 ⇒ 组源包按「{triggerLabel}」处理时不再过半套闸门（整组已解开，源片不再需要拼组）。"));
+            }
+
+            string? splitBlocker = verifiedGroupSource
+                ? null
+                : DescribeLayerSplitBlocker(
+                    task,
+                    reclaimWorkspaceDirectory,
+                    requireRecognizedCandidates);
 
             if (splitBlocker != null)
             {
@@ -13829,6 +13852,16 @@ namespace ArchiveFixer.ViewModels
                  * 是不是某一单自己的源"逐条问清；判不出 ⇒ 它什么都不记（照旧红，如实暴露）。</para>
                  */
                 RememberAdoptedLandedPiece(chosen[i].Path, chosen[i].Owner, groupBaseName, renamedInPlace: false);
+
+                /*
+                 * ⛔ **补片这一档也要记进"谁吐过这一组的片"那本账**（2026-10-18 用户 `&&` 口径）：
+                 * 走 `AdoptPieceIntoGroup` 那条路的片会自己记（见那里），而这一档是**按字节数硬链接补片**，
+                 * 绕过了那个入口 ⇒ 那个原包在链尾永远收不了场（现场 `3333`：`222-L2.7z.^Z6002`
+                 * 被链接成 `222-L2.7z.002`，组解开并校验通过，它却一直留着）。
+                 * 片名用**槽位名**（`linked[i]`），⛔ 不用源文件那个脏名 —— 族判据要认得出族。
+                 */
+                RememberGroupPieceProducer(groupBaseName, FileNameHelper.GetFileName(linked[i]), chosen[i].Owner);
+                RememberPieceSupplyingTask(groupBaseName, chosen[i].Path);
             }
 
             if (linked.Count > 0)
@@ -16480,6 +16513,35 @@ namespace ArchiveFixer.ViewModels
             {
                 SettleOneConsumedPieceTask(producer, consumer, groupBaseName, producedPieceName, moveSources, logEntries);
             }
+
+            /*
+             * ===== 包装壳那一档：产出被这一组接手、组可证完整 ⇒ 也按交接收场（2026-10-18 用户 `&&` 口径）=====
+             *
+             * `_groupPieceProducers` 只收「自己吐过片」的单；包装壳（用户导入的外层包，解开后只有一片分卷）
+             * 走的是「落点副本被接手」那条路，只进 `_adoptedLandedPieces`。两本账各补各的，
+             * 判据仍是同一条 `&&`：第一大步成功 + 第二大步（组）可证完整且内容校验通过。
+             * ⛔ 不碰消费方自己；⛔ 已在 producers 里的不重复；⛔ 片路径从账上取（名字脏也能用内容卡判族）。
+             */
+            foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) adopted
+                     in _adoptedLandedPieces.ToList())
+            {
+                if (adopted.Producer == null
+                    || ReferenceEquals(adopted.Producer, consumer)
+                    || !string.Equals(adopted.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase)
+                    || producers.Any(item => ReferenceEquals(item.Task, adopted.Producer)))
+                {
+                    continue;
+                }
+
+                SettleOneConsumedPieceTask(
+                    adopted.Producer,
+                    consumer,
+                    groupBaseName,
+                    FileNameHelper.GetFileName(adopted.PiecePath),
+                    moveSources,
+                    logEntries,
+                    producedPiecePath: adopted.PiecePath);
+            }
         }
 
         /// <summary>
@@ -16501,7 +16563,8 @@ namespace ArchiveFixer.ViewModels
             string groupBaseName,
             string producedPieceName,
             bool moveSources,
-            List<(string Level, string Message)> logEntries)
+            List<(string Level, string Message)> logEntries,
+            string? producedPiecePath = null)
         {
             if (piece == null)
             {
@@ -16538,9 +16601,41 @@ namespace ArchiveFixer.ViewModels
                 string pieceName = FileNameHelper.GetFileName(producedPieceName ?? string.Empty);
                 string consumerGroupName = FileNameHelper.GetFileName(consumer.CurrentPath ?? string.Empty);
 
+                /*
+                 * ⛔ **名字认不出族时，用底层内容卡回答**（用户 2026-10-18 的 `&&` 口径：
+                 * 第一大步的片是不是这一族的成员，看内容；名字只是辅助）。
+                 * 现场（`19191919`）：`bbb-L2.zip-658` 的名字读不出 `.zip.00N` 族 ⇒ 老判据拒绝跟班收场
+                 * ⇒ 它的原包一直留着；而它的内容卡（Zip + 卷成员）与接手方同一族。
+                 * 判据：① 两边**内容格式**相同且不是 Unknown；② 这一片的内容不是 `ProvablyNotVolumeMember`；
+                 * ③ 基名与组基名有关（既有 `BaseNameRelatedToGroup`）。三条都成立才算同一族；
+                 * 判不出 ⇒ 老口径（拒绝，不清、不删）。
+                 */
+                bool sameGroup = pieceName.Length > 0
+                    && consumerGroupName.Length > 0
+                    && VolumeGroupDetector.BelongsToSameGroup(pieceName, consumerGroupName);
+
+                if (!sameGroup)
+                {
+                    try
+                    {
+                        FileNatureCard producedCard = FileNature.Inspect(producedPiecePath ?? piece.CurrentPath);
+                        FileNatureCard consumerCard = FileNature.Inspect(consumer.CurrentPath);
+
+                        sameGroup = producedCard.Format == consumerCard.Format
+                            && producedCard.Format != VolumeContentFormat.Unknown
+                            && producedCard.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
+                            && BaseNameRelatedToGroup(pieceName, groupBaseName);
+                    }
+                    catch
+                    {
+                        // 卡读不出来 ⇒ 判不出 ⇒ 老口径（拒绝）。
+                        sameGroup = false;
+                    }
+                }
+
                 if (pieceName.Length > 0
                     && consumerGroupName.Length > 0
-                    && !VolumeGroupDetector.BelongsToSameGroup(pieceName, consumerGroupName))
+                    && !sameGroup)
                 {
                     AppendLog(
                         "WARN",
@@ -16662,19 +16757,18 @@ namespace ArchiveFixer.ViewModels
              * 「留下 / 彻底删除」，而彻底删除是**就地删、⛔ 不搬进其余物**）⇒ 改走**同一条闸门链**的
              * 永久删那一支（唯一出口 `PurgeLayerSourcePackage`）。
              *
-             * ⛔ **闸门一条都没绕过**：这一支故意**不喂** verification / commit（这里手上没有"接手方那一单"
-             * 的定稿与校验事实）⇒ `PurgeLayerSourcePackage` 判不出就**什么都不做**并如实写一行 WARN
-             * （见它里面 `commit == null || !commit.Attempted || commit.FailedCount > 0` 那一道）——
-             * 兜底落在"判不出 ⇒ 不动"，⛔ 绝不因为用户选了"彻底删除"就放宽证据。
-             * ⚠ 已知缺口（如实记账）：要让这一档真能删，得把**接手方的完整性证据**喂进来
-             * （§18 里那条 `PurgePassThroughRestOfSettledProducer` 用的就是那份证据）。
+             * ⛔ **闸门一条都没绕过**：这一支不喂本任务的 verification / commit（这里手上没有"这一单自己定稿"
+             * 的事实），改喂**接手方那一单的完整性结论**（`ResultCompletenessClassifier.Classify(consumer)`）——
+             * 这正是用户 2026-10-18 拍板的 `&&`：第一大步成功 + 第二大步（组）可证完整且内容校验通过，
+             * 才允许按「彻底删除」删这个原包；判不出 / 第二大步没成 ⇒ `PurgeLayerSourcePackage` 一个字节都不动。
              */
             PurgeLayerSourcePackage(
                 piece,
                 verification: null,
                 commit: null,
                 logEntries,
-                LayerPurgeTrigger.SourceHandlingDelete);
+                LayerPurgeTrigger.SourceHandlingDelete,
+                reclaimVerdict: ResultCompletenessClassifier.Classify(consumer));
 
             return;
         }

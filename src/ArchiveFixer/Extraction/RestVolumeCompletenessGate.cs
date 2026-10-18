@@ -170,6 +170,8 @@ namespace ArchiveFixer.Extraction
             // 候选自己（或候选目录里的一切）不算"还留在成品目录里"；另外几个明确列出来的路径同样不算。
             var candidateFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var candidateDirectories = new List<string>();
+            var candidateFilesByBase = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            bool hasDirectoryCandidate = false;
 
             foreach (string? excluded in excludedPaths ?? Array.Empty<string>())
             {
@@ -191,6 +193,7 @@ namespace ArchiveFixer.Extraction
                 if (Directory.Exists(fullCandidate))
                 {
                     candidateDirectories.Add(fullCandidate);
+                    hasDirectoryCandidate = true;
 
                     foreach (string file in EnumerateTopLevelFiles(fullCandidate))
                     {
@@ -208,6 +211,14 @@ namespace ArchiveFixer.Extraction
                 if (TryGetArchivePieceBaseName(fullCandidate, out string fileBaseName))
                 {
                     candidatePieces.TryAdd(fileBaseName, Path.GetFileName(fullCandidate));
+
+                    if (!candidateFilesByBase.TryGetValue(fileBaseName, out List<string>? sameBase))
+                    {
+                        sameBase = new List<string>();
+                        candidateFilesByBase[fileBaseName] = sameBase;
+                    }
+
+                    sameBase.Add(fullCandidate);
                 }
             }
 
@@ -344,6 +355,27 @@ namespace ArchiveFixer.Extraction
                 if (Detection.VolumeGroupDetector.AreProvablyDifferentFamilies(
                         Path.GetFileName(file),
                         candidateName))
+                {
+                    continue;
+                }
+
+                /*
+                 * ⛔ **同一份物理文件的两个名字不算"半套"**（2026-10-18 用户 `&&` 口径：
+                 * 整条链全部成功才动原包；这里判的是"删了会不会丢字节"）。
+                 *
+                 * 现场（`22222222`）：`222-L2.partN.rar` 四片都是"源目录名 + 成品目录名"的**硬链接**
+                 * （同一 FileIdentity），半套闸门按名字把它们当成两边各一半 ⇒ 四片原包全留着。
+                 * 判据：候选里**每一份**这一基名的文件都能在成品树里找到**同一物理文件**
+                 * （卷序列号 + 文件索引相同）⇒ 删掉候选名，成品树那一份名字还在，一个字节都不会丢。
+                 * ⛔ 副本（不同 FileIdentity）/ 目录候选 / 判不出 ⇒ 照旧拦（25 GB 那次的形状照样拦得住）。
+                 */
+                if (!hasDirectoryCandidate
+                    && candidateFilesByBase.TryGetValue(baseName, out List<string>? candidatesForBase)
+                    && candidatesForBase.Count > 0
+                    && candidatesForBase.All(candidatePath =>
+                           files.Any(other =>
+                               !SafePathHelper.PathEquals(other, candidatePath)
+                               && Detection.FileIdentity.IsSamePhysicalFile(candidatePath, other))))
                 {
                     continue;
                 }
