@@ -89,17 +89,27 @@ namespace ArchiveFixer.Extraction
         /// 拿它当伙伴会把每一次合法的回收全拦死（用户 2026-10-05：递归那 4 层链要逐层回收）。
         /// ⛔ 只排除调用方**明确列出来**的那一棵；别的照旧一律算（宁可多拦，绝不漏拦）。</para>
         /// </param>
+        /// <param name="requireRecognizedCandidates">
+        /// 候选里**一个归档件都认不出**时算不算拦下。默认 <c>true</c>（逐层回收那一档：要删的是
+        /// 我们自己解出来的内层包，名字认不出就判不出它是不是某组卷的一片 ⇒ 不许删）。
+        ///
+        /// <para><b>链尾删用户源包那一档传 <c>false</c></b>（2026-10-18 困难批 `11111111` 运行期定案）：
+        /// 源包名可能被改到没有后缀（`aaa-W0-1删除`），可它"是归档"这件事已经由**任务成功解出 5 层
+        /// + 内容物校验通过**证明了 —— 不该再要一次名字证明。放宽的**只有"认不出"这一条**：
+        /// 同组邻居检查（基名 + 族）照旧跑；判不出邻居 ⇒ 拦。判据本体一个字不改。</para>
+        /// </param>
         public static string? DescribeLayerReclaimBlocker(
             IReadOnlyList<string>? candidatePaths,
             string? artifactRoot,
-            IEnumerable<string>? excludedPaths = null)
+            IEnumerable<string>? excludedPaths = null,
+            bool requireRecognizedCandidates = true)
         {
             return DescribeBlockerForCandidates(
                 candidatePaths,
                 artifactRoot,
                 LayerReclaimCandidatePrefix,
                 LayerReclaimBlockerTail,
-                requireRecognizedCandidates: true,
+                requireRecognizedCandidates,
                 excludedPaths);
         }
 

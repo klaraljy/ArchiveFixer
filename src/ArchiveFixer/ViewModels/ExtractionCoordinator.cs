@@ -2883,7 +2883,20 @@ namespace ArchiveFixer.ViewModels
              * 拦下就**一个字节都不删**（兜底落在"什么都不做"）：这一层的过程物照旧留到链尾按老口径处理，
              * 而链尾那一档本来就会再过一次同一道闸门（`RestItemPurger.Purge` 第六道门槛）。
              */
-            string? splitBlocker = DescribeLayerSplitBlocker(task, reclaimWorkspaceDirectory);
+            /*
+             * ⛔ 严格档只给「逐层回收」的内层包（2026-10-18 困难批 `11111111` 运行期定案）：
+             * 链尾删**用户源包**那一档（trigger = SourceHandlingDelete 且不是续解任务）传 false ——
+             * 源包名可能被改到没有后缀（`aaa-W0-1删除`），而"它是归档"已由**任务成功解出 5 层
+             * + 内容物校验通过**证明，不该再要一次名字证明；同组邻居检查（基名 + 族）照旧跑。
+             * 判据本体一字不改，默认值 true 保住了逐层回收/空间不足那两档。
+             */
+            bool requireRecognizedCandidates =
+                trigger != LayerPurgeTrigger.SourceHandlingDelete || task.IsContinuationTask;
+
+            string? splitBlocker = DescribeLayerSplitBlocker(
+                task,
+                reclaimWorkspaceDirectory,
+                requireRecognizedCandidates);
 
             if (splitBlocker != null)
             {
@@ -2960,7 +2973,10 @@ namespace ArchiveFixer.ViewModels
         /// （⛔ 不在这里另写一份）；候选清单也转调删除侧那一个出口
         /// <see cref="SourceCleanupService.BuildTargetList"/>（判据与真删看同一份清单）。</para>
         /// </summary>
-        private string? DescribeLayerSplitBlocker(ArchiveTask task, string? reclaimWorkspaceDirectory = null)
+        private string? DescribeLayerSplitBlocker(
+            ArchiveTask task,
+            string? reclaimWorkspaceDirectory = null,
+            bool requireRecognizedCandidates = true)
         {
             List<string> candidates = SourceCleanupService.BuildTargetList(task);
 
@@ -2995,7 +3011,8 @@ namespace ArchiveFixer.ViewModels
                 string? blocker = RestVolumeCompletenessGate.DescribeLayerReclaimBlocker(
                     candidates,
                     artifactRoot,
-                    excluded);
+                    excluded,
+                    requireRecognizedCandidates);
 
                 if (blocker != null)
                 {

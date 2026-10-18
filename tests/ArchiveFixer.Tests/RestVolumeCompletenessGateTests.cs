@@ -186,5 +186,30 @@ namespace ArchiveFixer.Tests
 
             Assert.NotNull(RestVolumeCompletenessGate.DescribeBlocker(rest));
         }
+
+        /// <summary>
+        /// **源包那一档的宽松位**（2026-10-18 困难批 `11111111` 组合 2 运行期定案）：
+        /// 候选是用户源包、名字被改到没有后缀（`aaa-W0-1删除`），可它"是归档"已经由**任务成功解出 5 层
+        /// + 内容物校验通过**证明 —— 严格的"认不出就拦"只适用于逐层回收的内层包；
+        /// 链尾删源包那一档传 `requireRecognizedCandidates: false`。同组邻居检查照旧跑。
+        /// </summary>
+        [Fact]
+        public void 逐层回收候选认不出_严格档拦下_源包宽松档放行()
+        {
+            string output = Path.Combine(_root, "recognized");
+            Directory.CreateDirectory(output);
+            string candidate = Path.Combine(output, "aaa-W0-1删除");
+            File.WriteAllBytes(candidate, new byte[64]);
+
+            // 严格档（逐层回收的内层包）：名字认不出 ⇒ 判不出它是不是某组卷的一片 ⇒ 拦。
+            Assert.NotNull(RestVolumeCompletenessGate.DescribeLayerReclaimBlocker(new[] { candidate }, output));
+
+            // 源包宽松档：不因"名字认不出"而拒删（"是归档"由任务的成功解出证明）。
+            Assert.Null(RestVolumeCompletenessGate.DescribeLayerReclaimBlocker(
+                new[] { candidate },
+                output,
+                excludedPaths: null,
+                requireRecognizedCandidates: false));
+        }
     }
 }
