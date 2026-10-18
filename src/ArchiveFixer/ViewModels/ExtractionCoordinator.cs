@@ -15116,6 +15116,17 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            /*
+             * 本次**已经成功集中进其余物**的物理身份（卷序列号:文件索引）。
+             *
+             * <p>2026-10-18 困难批 `8888` 现场：`打包111-L2.part1.rar` 与
+             * `打包111-L2.part1删删删删删删删.rar` 是**同一个 File ID**（接片建的是零字节硬链接），
+             * 而这一档按**名字**逐个搬 ⇒ 一份文件的两条名字都被搬进其余物，用户看到"识别到了、也改对了，
+             * 为什么还并排放着两个名字"。⇒ 同一份物理文件只允许进一次其余物，第二条名字只收掉
+             * （硬链接数 &gt; 1 ⇒ 一个字节都不丢）。</p>
+             */
+            var restMoveIdentities = new HashSet<string>(StringComparer.Ordinal);
+
             foreach ((ArchiveTask producer, string path, string outputRoot) in targets)
             {
                 try
@@ -15171,6 +15182,41 @@ namespace ArchiveFixer.ViewModels
                      */
                     if (keepMode)
                     {
+                        string aliasIdentity = FileIdentity.TryGetIdentity(path, out ulong aliasVolume, out ulong aliasIndex)
+                            ? aliasVolume.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                              + ":"
+                              + aliasIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                            : string.Empty;
+
+                        /*
+                         * ⛔ 同一份物理文件的第二条名字：另一条已经进其余物了 ⇒ **只收掉这个多余的名字**
+                         * （2026-10-18，`8888` 现场；见 `restMoveIdentities` 的说明）。
+                         * 硬链接数 &gt; 1 是**删名字不删字节**的证据；判不出 / 只有一个名字 ⇒ 照旧搬。
+                         */
+                        if (aliasIdentity.Length > 0 && restMoveIdentities.Contains(aliasIdentity))
+                        {
+                            if (FileIdentity.TryGetLinkCount(path, out uint aliasLinks) && aliasLinks > 1)
+                            {
+                                try
+                                {
+                                    File.Delete(path);
+
+                                    AppendLog(
+                                        "INFO",
+                                        $"{producer.LogName}：产出方这里那一份 {name} 与已经进其余物的那一份"
+                                        + "是同一个文件 —— 收掉这个多余的名字，一个字节都不丢。");
+                                }
+                                catch (Exception ex)
+                                {
+                                    AppendLog(
+                                        "WARN",
+                                        $"{producer.LogName}：多余的名字 {name} 没能收掉（{ex.Message}）。");
+                                }
+                            }
+
+                            continue;
+                        }
+
                         string restTarget = Path.Combine(
                             outputRoot,
                             ProcessArtifactLayout.ArtifactDirectoryName,
@@ -15178,6 +15224,11 @@ namespace ArchiveFixer.ViewModels
 
                         if (TryMoveIntoRest(path, restTarget, movedTargets, out string movedTo, out string? moveFailure))
                         {
+                            if (aliasIdentity.Length > 0)
+                            {
+                                restMoveIdentities.Add(aliasIdentity);
+                            }
+
                             AppendLog(
                                 "INFO",
                                 $"{producer.LogName}：这一片已经随整组解开，产出方这里那一份 {name} "

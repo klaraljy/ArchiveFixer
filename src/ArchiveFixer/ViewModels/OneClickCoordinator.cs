@@ -2252,6 +2252,12 @@ namespace ArchiveFixer.ViewModels
 
             var found = new Dictionary<string, InnerArchiveCandidate>(StringComparer.OrdinalIgnoreCase);
 
+            /*
+             * 这一轮认出来的内层包**按盘上物理身份去重**（2026-10-18，`8888` 现场）：
+             * 同一份文件的两条名字（接片建的硬链接 / 同目录副本）只允许建一单 —— 见下面循环里那段。
+             */
+            var seenInnerPackageIdentities = new Dictionary<string, string>(StringComparer.Ordinal);
+
             // 本轮按父任务登记的候选（父任务、父任务名、内层包路径）—— 落点要等扫完一整轮才能定。
             var candidates = new List<(ArchiveTask Parent, string ParentName, string File)>();
 
@@ -2382,6 +2388,34 @@ namespace ArchiveFixer.ViewModels
                     {
                         skippedLines.Add($"{file}（{how}）");
                         continue;
+                    }
+
+                    /*
+                     * ⛔ **同一份物理文件的两条名字，只算一个内层包**（2026-10-18，困难批 `8888` 运行期定案）。
+                     *
+                     * <para>现场逐字：`打包111-L2.part1.rar` 与 `打包111-L2.part1删删删删删删删.rar`
+                     * 是**同一个 File ID**（`fsutil file hardlink list` 两个名字、`接片` 建的是零字节硬链接），
+                     * 而这一轮扫描按**名字**给它们各建了一单 ⇒ 两单都去解同一组 ⇒ 第一单解出的
+                     * `打包111-L1.7z` 被第二单当"自己的过程物"搬进其余物 ⇒ 下一轮又被当新原包解开
+                     * ⇒ `contentBytes = 125829120`（两份 60 MiB，判据 ① 红）。</para>
+                     *
+                     * <para>判据只读盘上身份（<see cref="ArchiveFixer.Detection.FileIdentity"/>：卷序列号 + 文件索引，
+                     * 改名 / 移动 / 硬链接都不变）；同一份物理文件保留**先出现的那一条名字**（两条都是过程物，
+                     * ⛔ 不涉及用户源包 —— 源包在前面 `ShouldScanProducedFile` 已经排掉）。</para>
+                     */
+                    if (ArchiveFixer.Detection.FileIdentity.TryGetIdentity(file, out ulong dupVolume, out ulong dupIndex))
+                    {
+                        string identityKey = dupVolume.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                            + ":"
+                            + dupIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+                        if (seenInnerPackageIdentities.TryGetValue(identityKey, out string? keptName))
+                        {
+                            skippedLines.Add($"{file}（与「{keptName}」是同一份文件的两个名字 —— 只算一个内层包）");
+                            continue;
+                        }
+
+                        seenInnerPackageIdentities[identityKey] = file;
                     }
 
                     recognizedLines.Add($"{file}（{TaskSpaceEstimate.FormatSize(candidateLength)}，{how}）");
