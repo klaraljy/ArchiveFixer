@@ -324,6 +324,13 @@ namespace ArchiveFixer.Extraction
 
             AddTarget(targets, seen, task.CurrentPath);
 
+            /*
+             * ⛔ **改名过的源包**：`CurrentPath` 可能已经是改名后的路径（或已被清空），
+             * 而盘上真正那一份还叫 `OriginalPath`（`22222222` 现场：跟班片的清单被判成“空”，
+             * 源片原样留着）。两件都进清单；同一个路径 `AddTarget` 会去重。
+             */
+            AddTarget(targets, seen, task.OriginalPath);
+
             return targets;
         }
 

@@ -2765,7 +2765,8 @@ namespace ArchiveFixer.ViewModels
             ResultCompletenessVerdict? reclaimVerdict = null,
             bool reclaimRootSource = true,
             string? reclaimLabel = null,
-            string? reclaimWorkspaceDirectory = null)
+            string? reclaimWorkspaceDirectory = null,
+            bool ignoreDoneState = false)
         {
             if (task == null)
             {
@@ -2832,7 +2833,7 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
-            if (task.SourcePackageMove == SourcePackageMoveState.Done)
+            if (task.SourcePackageMove == SourcePackageMoveState.Done && !ignoreDoneState)
             {
                 // 幂等：已经处理过了（删过 / 搬过），绝不第二次。
                 logEntries.Add(("INFO", $"{task.LogName}：{subject}已经处理过（删过或搬过），不再动第二次。"));
@@ -2899,13 +2900,17 @@ namespace ArchiveFixer.ViewModels
              * 用户拍板：「第一大步成功 && 第二大步成功（组可证完整、内容物校验通过）才动原包」。
              * 走到这里、而且这一单就是**这一组的入口任务**（`IsVolumeGroup`）且组可证完整
              * （`IsVolumeComplete`）且**这一单自己的内容物已可证完整** ⇒ 这一组已经整组解开，
-             * 它的源片不再需要留着拼组 —— 半套闸门放行（⛔ 只放行这一种：组任务自己的源包；
+             * 它的源片不再需要留着拼组 —— 半套闸门放行（⛔ 只放行这两种：组任务自己的源包、
+             * **已验证组里的跟班源片**（`IsVolumeGroupFollower` + 接手方 verdict 允许）。
              * 单包任务 / 组不完整 / 判不出 ⇒ 照旧过闸门，25 GB 那次的形状照样拦得住）。
              */
             bool verifiedGroupSource =
-                task.IsVolumeGroup
-                && task.IsVolumeComplete
-                && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval;
+                (task.IsVolumeGroup
+                 && task.IsVolumeComplete
+                 && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval)
+                || (task.IsVolumeGroupFollower
+                    && reclaimVerdict != null
+                    && reclaimVerdict.AllowsSourceRemoval);
 
             if (verifiedGroupSource && reclaimVerdict == null)
             {
@@ -2938,7 +2943,11 @@ namespace ArchiveFixer.ViewModels
             if (cleanup.DeletedFiles.Count == 0 && cleanup.FailedFiles.Count == 0)
             {
                 // 没有可删的路径（分卷清单不完整）→ 如实说，不假装删过了。
-                logEntries.Add(("WARN", $"{task.LogName}：{triggerLabel}要删{subject}，但任务的源包清单是空的 —— {cleanup.Message}"));
+                logEntries.Add((
+                    "WARN",
+                    $"{task.LogName}：{triggerLabel}要删{subject}，但任务的源包清单是空的 —— {cleanup.Message}"
+                    + $"｜判据输入：CurrentPath=「{task.CurrentPath}」、OriginalPath=「{task.OriginalPath}」"
+                    + $"、VolumePaths={task.VolumePaths.Count} 条"));
                 return null;
             }
 
@@ -3429,6 +3438,13 @@ namespace ArchiveFixer.ViewModels
              * 而下面那个 `rootTasks.Count == 0` 的早退**不能**把这件收口一起吞掉。
              */
             await FinalizeDeferredVolumeDeficitsAsync(cancellationToken).ConfigureAwait(false);
+
+            /*
+             * 链尾再扫一遍已验证组里的跟班片：批末结算（跟班/接手/消费方终态）可能在
+             * `FinalizeDeferredVolumeDeficitsAsync` 之后才全部落定（`22222222` 现场：
+             * `part1869删除2` 的跟班事实在批末才写，早一步扫它会漏）。幂等：Done 的跳过。
+             */
+            SettleVerifiedGroupFollowers();
 
             if (rootTasks == null || rootTasks.Count == 0)
             {
@@ -15755,6 +15771,16 @@ namespace ArchiveFixer.ViewModels
             SettleSucceededGroupPieceProducers();
 
             /*
+             * ⛔ **已验证组里的跟班片也在这里收场**（2026-10-18 用户 `&&` 口径，`22222222` 现场）：
+             * 跟班片（`IsVolumeGroupFollower` + 机器终态成功）的源片有时不在“谁吐过片”那本账里
+             * （它没吐过东西、只是被借去拼组）⇒ 上面那一档扫不到它，源片一直留着。
+             * 判据只有两条事实位：① 它是跟班 + 成功；② 这一组里有一个**可证完整且校验通过**的消费方
+             * （`ResultCompletenessClassifier.Classify(consumer).AllowsSourceRemoval`）——`&&` 的第二步成立。
+             * ⛔ 判不出消费方 / 组不完整 / 校验没过 ⇒ 什么都不做。
+             */
+            SettleVerifiedGroupFollowers();
+
+            /*
              * 再给"这一组的内容已经由本批另一单解出来了"的那几单收场（真机 CCCC 2026-10-06）。
              *
              * 现场（用户：「原包怎么还没有删除」「其余物怎么还留着」）：`111.z0删除2` / `111.z0删除3`
@@ -17030,6 +17056,149 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 SettleGroupPieceProducers(consumer, moveSources: true, logEntries);
+            }
+
+            foreach ((string level, string message) in logEntries)
+            {
+                AppendLog(level, message);
+            }
+        }
+
+        /// <summary>
+        /// **已验证组里的跟班片**：源片按「彻底删除」收掉（2026-10-18 用户 `&&` 口径，`22222222` 现场）。
+        ///
+        /// <para>跟班片（<see cref="ArchiveTask.IsVolumeGroupFollower"/> + 机器终态成功）的源片有时
+        /// 不在“谁吐过片”那本账里（它没吐过东西、只是被借去拼组）⇒ `SettleGroupPieceProducers` 扫不到它，
+        /// 源片一直留着。判据只要两条事实位：① 跟班 + 成功；② 同一组里有一个**可证完整 + 内容校验通过**
+        /// 的消费方（`ResultCompletenessClassifier.Classify(consumer).AllowsSourceRemoval`）——
+        /// 这就是 `&&` 的第二步。⛔ 组不完整 / 校验没过 / 判不出消费方 ⇒ 什么都不做；幂等（Done 跳过）。</para>
+        /// </summary>
+        private void SettleVerifiedGroupFollowers()
+        {
+            SourceHandlingMode handling = _spaceTightThisBatch
+                ? SourceHandlingMode.DeleteInPlace
+                : RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings?.SourceHandling);
+
+            if (handling != SourceHandlingMode.DeleteInPlace)
+            {
+                return;
+            }
+
+            var logEntries = new List<(string Level, string Message)>();
+            ArchiveTask[] tasks = SnapshotTaskTable(Tasks);
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task != null && task.IsVolumeGroupFollower)
+                {
+                    logEntries.Add((
+                        "INFO",
+                        $"{task.LogName}：跟班源片结算判据｜成功={task.Outcome == TaskOutcome.Succeeded}"
+                        + $"｜已处理={task.SourcePackageMove}｜组名=「{task.SettledWithGroupUnitName}」"
+                        + $"｜当前=「{task.CurrentPath}」｜原始=「{task.OriginalPath}」"));
+                }
+
+                /*
+                 * ⛔ **已标 Done、但改名前的原始那一份还在盘上**（2026-10-18 `22222222` 现场）：
+                 * `part1869删除2` 的 `CurrentPath` 被改写成组里的 `part1.rar`，早先那次清理删的是
+                 * `part1.rar` 并把它标成 Done；可用户导入的那个**原始名字**（`OriginalPath`）还在
+                 * —— 两个名字是同一份字节的硬链接，删一个不等于删干净。⇒ 只对“跟班里已证完整 +
+                 * 原始那份确实还在”这一种，允许再走一次删源（`ignoreDoneState`），别的 Done 一律不动。
+                 */
+                bool recoveryOfOriginal = task != null
+                    && task.SourcePackageMove == SourcePackageMoveState.Done
+                    && !string.IsNullOrWhiteSpace(task.OriginalPath)
+                    && File.Exists(task.OriginalPath);
+
+                if (task == null
+                    || task.IsContinuationTask
+                    || !task.IsVolumeGroupFollower
+                    || (task.SourcePackageMove == SourcePackageMoveState.Done && !recoveryOfOriginal)
+                    || task.Outcome != TaskOutcome.Succeeded)
+                {
+                    continue;
+                }
+
+                string baseName = FileNameHelper.GetArchiveBaseName(task.CurrentPath ?? string.Empty);
+
+                /*
+                 * 消费方先从**跟班片自己记下的那个事实**找（`SettledWithGroupUnitName`，由
+                 * `SettleOneConsumedPieceTask` 在“这一组由 X 解开”那一刻写死）—— 脏名字底下
+                 * `GetArchiveBaseName` 可能给出两个不同的基名，按基名会漏（`22222222` 现场：
+                 * `part1869删除2` vs `part391392885删除1`）。判不出再退回基名那一档。
+                 */
+                ArchiveTask? consumer = null;
+                string settledWith = task.SettledWithGroupUnitName ?? string.Empty;
+
+                if (settledWith.Length > 0)
+                {
+                    consumer = tasks.FirstOrDefault(candidate =>
+                        candidate != null
+                        && candidate.Outcome == TaskOutcome.Succeeded
+                        && (string.Equals(candidate.DisplayFileName, settledWith, StringComparison.Ordinal)
+                            || string.Equals(candidate.FileName, settledWith, StringComparison.Ordinal)));
+                }
+
+                if (consumer == null && baseName.Length > 0)
+                {
+                    consumer = tasks.FirstOrDefault(candidate =>
+                        candidate != null
+                        && candidate.Outcome == TaskOutcome.Succeeded
+                        && candidate.IsVolumeGroup
+                        && candidate.IsVolumeComplete
+                        && string.Equals(
+                            FileNameHelper.GetArchiveBaseName(candidate.CurrentPath ?? string.Empty),
+                            baseName,
+                            StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (consumer == null || !consumer.IsVolumeComplete)
+                {
+                    continue;
+                }
+
+                ResultCompletenessVerdict verdict = ResultCompletenessClassifier.Classify(consumer);
+
+                if (!verdict.AllowsSourceRemoval)
+                {
+                    continue;
+                }
+
+                /*
+                 * 组任务的删除清单只装 `VolumePaths`；改名前的**原始那一份**不在里面，而这一单自己的
+                 * 校验又被跟班收场清过 ⇒ `BuildTargetList` 不会把 `OriginalPath` 放进去（`22222222` 现场：
+                 * `part1869删除2` 的当前路径是组里的 `part1.rar`，原始名字还在盘上）。
+                 * ⇒ 用一个只代表“这一份原始文件”的临时任务走**同一个删除出口**（⛔ 不另写删除代码），
+                 * 并沿用跟班 + 消费方 verdict 那两道事实。
+                 */
+                ArchiveTask purgeTask = task;
+                string originalPath = task.OriginalPath ?? string.Empty;
+                bool purgeOriginalOnly = task.IsVolumeGroup
+                    && !string.IsNullOrWhiteSpace(originalPath)
+                    && File.Exists(originalPath);
+
+                if (purgeOriginalOnly)
+                {
+                    purgeTask = new ArchiveTask(originalPath)
+                    {
+                        IsVolumeGroupFollower = true
+                    };
+                }
+
+                PurgeLayerSourcePackage(
+                    purgeTask,
+                    verification: null,
+                    commit: null,
+                    logEntries,
+                    LayerPurgeTrigger.SourceHandlingDelete,
+                    reclaimVerdict: verdict,
+                    ignoreDoneState: recoveryOfOriginal || purgeOriginalOnly);
+
+                if (purgeOriginalOnly && !File.Exists(originalPath))
+                {
+                    // 原始那一份已经删掉 ⇒ 把真任务也记成“处理过”，避免后续每轮再扫一遍。
+                    task.SourcePackageMove = SourcePackageMoveState.Done;
+                }
             }
 
             foreach ((string level, string message) in logEntries)
