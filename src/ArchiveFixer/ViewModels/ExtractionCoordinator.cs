@@ -15511,8 +15511,107 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+        /// <summary>
+        /// 产出方落点子目录里、与已被接手的片同一物理文件的多余名：只收名字不删字节
+        /// （链接数 &gt; 1；⛔ 不碰 adopted 目标本身、用户源、`其余物`/工作区）。
+        /// `28282828` 的 `aaa-W2-1\aaa-W2-0\aaa-L2.zip` 就是这一档。
+        /// </summary>
+        private void PurgeRedundantLandedAliases(string groupBaseName)
+        {
+            if (string.IsNullOrWhiteSpace(groupBaseName))
+            {
+                return;
+            }
+
+            var identities = new HashSet<string>(StringComparer.Ordinal);
+            var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var adoptedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var item in _adoptedLandedPieces)
+            {
+                if (!string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(item.PiecePath))
+                {
+                    adoptedPaths.Add(SafePathHelper.GetFullPathSafe(item.PiecePath));
+                }
+
+                if (FileIdentity.TryGetIdentity(item.PiecePath, out ulong volume, out ulong index))
+                {
+                    identities.Add(volume.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        + ":" + index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+
+                if (!string.IsNullOrWhiteSpace(item.OutputRoot) && Directory.Exists(item.OutputRoot))
+                {
+                    roots.Add(item.OutputRoot);
+                }
+            }
+
+            if (identities.Count == 0 || roots.Count == 0)
+            {
+                return;
+            }
+
+            foreach (string root in roots)
+            {
+                IEnumerable<string> files;
+
+                try
+                {
+                    files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (string file in files)
+                {
+                    if (!FileIdentity.TryGetIdentity(file, out ulong fileVolume, out ulong fileIndex))
+                    {
+                        continue;
+                    }
+
+                    string identity = fileVolume.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        + ":" + fileIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+                    if (!identities.Contains(identity)
+                        || ProcessArtifactLayout.IsInsideDeletableProcessFolders(file)
+                        || IsAnyTaskSourcePath(file)
+                        || adoptedPaths.Contains(SafePathHelper.GetFullPathSafe(file))
+                        || !FileIdentity.TryGetLinkCount(file, out uint linkCount)
+                        || linkCount <= 1)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        File.Delete(file);
+
+                        AppendLog(
+                            "INFO",
+                            $"{FileNameHelper.GetFileName(file)}：产出方落点子目录里这一份与已接手的片是同一个文件 —— "
+                            + "收掉这个多余的名字，一个字节都不丢（其余名字还在）。");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{FileNameHelper.GetFileName(file)}：多余名字没能收掉（{ex.Message}）");
+                    }
+                }
+            }
+        }
+
         private void PurgeGroupLandedPieces(ArchiveTask consumer, string groupBaseName)
         {
+            PurgeRedundantLandedAliases(groupBaseName);
+
             var targets = new List<(ArchiveTask Producer, string Path, string OutputRoot)>();
 
             foreach ((ArchiveTask Producer, string GroupBaseName, string PiecePath, string OutputRoot) item
