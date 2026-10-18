@@ -11902,6 +11902,75 @@ namespace ArchiveFixer.ViewModels
         /// 这一层里与"这一单手上那一片"**同族同基名**的文件（收拢决策器的候选池；⛔ 只读这一层、不递归）。
         /// 判据 = 既有宽尺子 `VolumeGroupDetector.BelongsToSameGroup`，参照名 = 手上那一片。
         /// </summary>
+        /// <summary>
+        /// **"这一份能不能算本组的一片"的唯一出口**（底层识别先行，名字只保底）。
+        ///
+        /// <para>顺序＝证据强度（⛔ 每个调用方都只许问这一处，不许再自己拼一套）：</para>
+        /// <list type="number">
+        /// <item><description><b>内容可证不是成员</b>（`ProvablyNotVolumeMember` / `SingleComplete`）⇒ **否决**，
+        /// 名字再像也不收 —— 这是"底层识别先"的那一刀。</description></item>
+        /// <item><description><b>卡自证是 zip 分片</b>（EOCD / 本地头 / 跨盘成员且非单卷）⇒ 收。</description></item>
+        /// <item><description><b>字节数守恒</b>（与第 1 片同尺寸 ±1%，且没被内容证明不是成员）⇒ 收 ——
+        /// 这是**中间片**唯一能过的证据（头从数据中间切开、没有 EOCD、成员身份判不出）。</description></item>
+        /// <item><description><b>卡说它是这一族的一片且基名与本组相关</b> ⇒ 收（卡 + 弱名字证据）。</description></item>
+        /// <item><description><b>名字尺子同组</b> ⇒ 收（兜底；只在前四条都没否决它之后）。</description></item>
+        /// </list>
+        /// </summary>
+        /// <param name="fullSizeAnchor">"第 1 片有多大"的锚点（字节数守恒要用）；0 = 这一档不启用。</param>
+        private static bool AcceptsAsGroupPiece(
+            FileNatureCard card,
+            string reference,
+            string referenceBase,
+            long fullSizeAnchor)
+        {
+            if (card == null || string.IsNullOrWhiteSpace(card.Path))
+            {
+                return false;
+            }
+
+            string candidateName = FileNameHelper.GetFileName(card.Path);
+
+            /* ① 内容可证不是成员 ⇒ 否决（⛔ 这一条必须在名字之前）。 */
+            bool provenNotMember = card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
+                || card.BodyKind == ArchiveBodyKind.SingleComplete;
+
+            if (provenNotMember)
+            {
+                return false;
+            }
+
+            /* ② 卡自证是 zip 分片。 */
+            bool cardSaysZipPiece = card.Format == VolumeContentFormat.Zip
+                && (card.HasZipEndRecord
+                    || card.HasZipLocalHeader
+                    || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember);
+
+            if (cardSaysZipPiece)
+            {
+                return true;
+            }
+
+            /* ③ 字节数守恒（中间片那一档）。 */
+            if (fullSizeAnchor > 0
+                && card.Size > 0
+                && Math.Abs(card.Size - fullSizeAnchor) <= Math.Max(1, fullSizeAnchor / 100))
+            {
+                return true;
+            }
+
+            /* ④ 卡 + 弱名字证据（既有两把尺子）。 */
+            if (referenceBase.Length > 0
+                && VolumePieceFacts.CardSaysItIsOneOfTheGroup(card)
+                && BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(card.Path), referenceBase))
+            {
+                return true;
+            }
+
+            /* ⑤ 名字兜底。 */
+            return VolumeGroupDetector.BelongsToSameGroup(candidateName, reference);
+        }
+
+
         private List<string> CollectGroupCandidatePaths(ArchiveTask task, string entryLayer, out string referenceName, out int scannedInEntryLayer)
         {
             var paths = new List<string>();
@@ -11980,6 +12049,26 @@ namespace ArchiveFixer.ViewModels
             catch
             {
                 entryIsZipPiece = false;
+            }
+
+            /*
+             * 补扫那一侧要用的两个判据输入（与本地那一侧同源）：基名 + "第 1 片有多大"的锚点。
+             */
+            string sweepReferenceBase = FileNameHelper.GetArchiveBaseName(reference);
+            long sweepAnchorSize = 0;
+
+            try
+            {
+                FileNatureCard sweepAnchorSeat = FileNature.Inspect(observed);
+
+                if (sweepAnchorSeat.HasZipLocalHeader && sweepAnchorSeat.Size > 0)
+                {
+                    sweepAnchorSize = sweepAnchorSeat.Size;
+                }
+            }
+            catch
+            {
+                sweepAnchorSize = 0;
             }
 
             if (entryIsZipPiece)
@@ -12104,10 +12193,8 @@ namespace ArchiveFixer.ViewModels
                                     {
                                         FileNatureCard card = FileNature.Inspect(file);
 
-                                        if (card.Format == VolumeContentFormat.Zip
-                                            && (card.HasZipEndRecord
-                                                || card.HasZipLocalHeader
-                                                || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                                        /* 与本地那一侧**同一个出口**（含字节数守恒 ⇒ 中间片才收得进来）。 */
+                                        if (AcceptsAsGroupPiece(card, reference, sweepReferenceBase, sweepAnchorSize)
                                             && !allFiles.Any(existing => string.Equals(
                                                 existing, file, StringComparison.OrdinalIgnoreCase)))
                                         {
@@ -12233,9 +12320,12 @@ namespace ArchiveFixer.ViewModels
 
             foreach (string file in allFiles)
             {
-                string candidateName = FileNameHelper.GetFileName(file);
-
-                if (VolumeGroupDetector.BelongsToSameGroup(candidateName, reference))
+                /*
+                 * **只问一个出口**（`AcceptsAsGroupPiece`）：底层识别先行、名字只保底。
+                 * ⛔ 原来这里与补扫那一侧各有一套阶梯，于是"中间片"在补扫里永远进不来
+                 * （`19191919` 的第二片就是这样被挡掉的）。
+                 */
+                if (AcceptsAsGroupPiece(FileNature.Inspect(file), reference, referenceBase, zipFullSize))
                 {
                     paths.Add(file);
                     continue;
