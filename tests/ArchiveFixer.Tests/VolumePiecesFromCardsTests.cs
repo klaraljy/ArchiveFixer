@@ -190,6 +190,58 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **首片被改名成 `X.zip`、整组却是 `.zip.00N`**（2026-10-18 困难批 `30303030` 组合 6
+        /// 批内偶发）：首片的卡被尾部字节误读成 `VolumeMember`，但同组其余片的**名字**全是
+        /// `.zip.00N`、没有任何 `.z01` 跨盘名 ⇒ 必须判通用分片（否则引擎按 `.zip` 打开报缺卷）。
+        /// </summary>
+        [Fact]
+        public void 命名族_首片改名成zip但整组名字是zip数字片_判ZipNumbered()
+        {
+            var cards = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\ccc-L2.zip", 26214400, ArchiveBodyKind.Unknown,
+                    format: VolumeContentFormat.Zip,
+                    membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                    hasZipEndRecord: true,
+                    zipEndRecordMeansSplit: true),
+                Piece(@"C:\x\ccc-L2.zip.002", 26214400, ArchiveBodyKind.Unknown),
+                Piece(@"C:\x\ccc-L2.zip.003", 10489824, ArchiveBodyKind.Unknown,
+                    format: VolumeContentFormat.Zip,
+                    hasZipEndRecord: true,
+                    zipEndRecordMeansSplit: true)
+            };
+
+            CardVolumeGroupReading reading = VolumePiecesFromCards.Read(cards);
+
+            Assert.Equal(VolumeNamingFamily.ZipNumbered, reading.NamingFamily);
+        }
+
+        /// <summary>
+        /// 反向闸门（`15151515` 回归）：组里有 `.z01/.z02` 跨盘名时，即便有一片被临时补成
+        /// `.zip.002`，也**不许**判通用分片 —— 否则第 47 轮修掉的回归会回来。
+        /// </summary>
+        [Fact]
+        public void 命名族_组里有z01跨盘名_即使补了zip数字片_仍判ZipSpanned()
+        {
+            var cards = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\ddd-L2.z01", 26214400, ArchiveBodyKind.Unknown),
+                Piece(@"C:\x\ddd-L2.z02", 26214400, ArchiveBodyKind.Unknown),
+                Piece(@"C:\x\ddd-L2.zip.002", 26214400, ArchiveBodyKind.Unknown),
+                Piece(@"C:\x\ddd-L2.zip", 10489824, ArchiveBodyKind.VolumePiece,
+                    volumeNumber: 3,
+                    format: VolumeContentFormat.Zip,
+                    membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                    hasZipEndRecord: true,
+                    zipEndRecordMeansSplit: true)
+            };
+
+            CardVolumeGroupReading reading = VolumePiecesFromCards.Read(cards);
+
+            Assert.Equal(VolumeNamingFamily.ZipSpanned, reading.NamingFamily);
+        }
+
+        /// <summary>
         /// **跨盘 ZIP 末片判据**（2026-10-18 困难批 `12121212` / `26262626` 运行期定案）：
         /// 名字给 `.zip` 读成 1（这一族的入口形状）、内容给盘号 3 —— 只有卡同时说
         /// "是成员 + 卷号 == 总片数 ≥ 2"才算末片；通用分片末片（`Membership=Unknown`）与中间片都不算。

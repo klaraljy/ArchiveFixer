@@ -305,6 +305,20 @@ namespace ArchiveFixer.Extraction
                     AddTarget(targets, seen, volumePath);
                 }
 
+                /*
+                 * ⛔ **入口那一份自己的源包也要在清单里**（2026-10-18 用户 `&&` 口径，`22222222` 现场）：
+                 * `VolumePaths` 有时只装“其余卷”，入口那一份的 `CurrentPath` 不在里面
+                 * ⇒ 整组删了 3 个、入口那份却留在盘上（用户看到的仍是“原包没删干净”）。
+                 * 只在这一组**可证完整 + 内容物校验通过**时补（`&&` 的第二步已成立）；
+                 * 组不完整 / 判不出 ⇒ 清单与改动前逐字相同（⛔ 不替代任何闸门）。
+                 */
+                if (task.IsVolumeComplete
+                    && ResultCompletenessClassifier.Classify(task).AllowsSourceRemoval)
+                {
+                    AddTarget(targets, seen, task.CurrentPath);
+                    AddTarget(targets, seen, task.OriginalPath);
+                }
+
                 return targets;
             }
 

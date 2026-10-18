@@ -377,6 +377,30 @@ namespace ArchiveFixer.Detection
              * 第 1 片被补成 `aaa-L2.zip.002`（通用分片名），而这一组真名是 `aaa-L2.z01/.z02/.zip`
              * ⇒ 引擎按数字分片找 `.z01` 找不到 ⇒ 整组永远拼不起来（① ② 双红）。
              */
+            /*
+             * ⛔ **名字里的强事实先于那张可能被误读的 `.zip` 卡**（2026-10-18 困难批 `30303030` 组合 6
+             * 批内偶发，运行期定案）：同一组里**所有非末片**的名字都是 `X.zip.00N`（通用分片族）、
+             * 且**没有任何 `.z01` 这类跨盘名** ⇒ 这一组就是通用分片。跨盘族不会出现 `.zip.00N`
+             * 这种名字（它的片叫 `.z01/.z02`）；而通用分片的首片被改名成 `X.zip` 时，它的卡可能
+             * 被尾部字节误读成 `VolumeMember` —— 那一张卡不足以推翻整组名字。
+             * ⚠ 反过来（`15151515` 现场）：组里存在 `.z01/.z02` 这类跨盘名时，即使有一片被补成
+             * `.zip.002`（我们自己造的临时名），也**不许**按通用分片改族 —— 那正是第 47 轮修掉的回归。
+             */
+            var fileNameList = pieces
+                .Select(card => Helpers.FileNameHelper.GetFileName(card.Path ?? string.Empty))
+                .Where(name => name.Length > 0)
+                .ToList();
+
+            bool anyGenericSplitName = fileNameList.Any(
+                name => System.Text.RegularExpressions.Regex.IsMatch(name, @"(?i)\.zip\.\d{3}$"));
+            bool anySpannedVolumeName = fileNameList.Any(
+                name => System.Text.RegularExpressions.Regex.IsMatch(name, @"(?i)\.z\d{2}$"));
+
+            if (anyGenericSplitName && !anySpannedVolumeName)
+            {
+                return VolumeNamingFamily.ZipNumbered;
+            }
+
             if (pieces.Any(card => card.ZipEndRecordMeansSplit))
             {
                 return pieces.Any(card =>

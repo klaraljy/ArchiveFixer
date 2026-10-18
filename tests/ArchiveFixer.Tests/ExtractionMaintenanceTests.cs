@@ -291,6 +291,52 @@ namespace ArchiveFixer.Tests
         }
 
         [Fact]
+        public void 清理_已证完整的组任务_入口那一份自己也在清单里()
+        {
+            string entry = WriteFile(@"src\group.part391.rar", "0123456789");
+            string other1 = WriteFile(@"src\group.part1.rar", "0123456789");
+            string other2 = WriteFile(@"src\group.part2.rar", "0123456789");
+
+            var task = new ArchiveTask(entry)
+            {
+                IsVolumeGroup = true,
+                IsVolumeComplete = true,
+                OutputVerification = OutputVerificationOutcome.Passed,
+                OutputManifestCrossChecked = true
+            };
+
+            task.VolumePaths.Add(other1);
+            task.VolumePaths.Add(other2);
+
+            List<string> targets = SourceCleanupService.BuildTargetList(task);
+
+            Assert.Contains(entry, targets);
+            Assert.Contains(other1, targets);
+            Assert.Contains(other2, targets);
+        }
+
+        [Fact]
+        public void 清理_组不完整或校验没过_入口那一份不进清单()
+        {
+            string entry = WriteFile(@"src\grouped.part9.rar", "0123456789");
+            string other = WriteFile(@"src\grouped.part1.rar", "0123456789");
+
+            var task = new ArchiveTask(entry)
+            {
+                IsVolumeGroup = true,
+                IsVolumeComplete = false,
+                OutputVerification = OutputVerificationOutcome.NotAttempted
+            };
+
+            task.VolumePaths.Add(other);
+
+            List<string> targets = SourceCleanupService.BuildTargetList(task);
+
+            Assert.DoesNotContain(entry, targets);
+            Assert.Contains(other, targets);
+        }
+
+        [Fact]
         public void 清理_单文件任务只删自己不动邻居()
         {
             string source = WriteFile(@"src\pack.7z", "0123456789");   // 10 字节
