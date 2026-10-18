@@ -8190,6 +8190,7 @@ namespace ArchiveFixer.ViewModels
 
                             string name = Path.GetFileName(file);
 
+
                             try
                             {
                                 File.Delete(file);
@@ -10999,12 +11000,12 @@ namespace ArchiveFixer.ViewModels
                     AppendLog(
                         "INFO",
                         renamedInPlace
-                            ? $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 落到「{Path.GetFileName(targetDir)}」这一层；"
+                            ? $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 落到「{targetDir}」这一层；"
                               + "它是我们自己解出来的过程物，用的是同盘改名的「移动」，原位置不再留一份）。"
                             : fromProcessFolder
-                                ? $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
+                                ? $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{targetDir}」这一层；"
                                   + "这一片还在我们自己的工作区暂存目录里，只建了一个零字节的硬链接 —— 一个字节都没动）。"
-                                : $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{Path.GetFileName(targetDir)}」这一层；"
+                                : $"「{baseName}」这一组缺的那一片解出来了（已按规范卷名 {canonical} 接到「{targetDir}」这一层；"
                                   + "零字节的硬链接：源文件一个字节没动、名字也一个字符没改）。");
                 }
             }
