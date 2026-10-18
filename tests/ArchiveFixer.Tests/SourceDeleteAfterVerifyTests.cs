@@ -16,7 +16,8 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// 「源包被删掉」这条路的回归测试（2026-09-25 第 32 条之后 = 源包放入其余物 + 删除操作=彻底删除；旧档名 DeleteAfterVerify 已删）
+    /// 「源包被删掉」这条路的回归测试（2026-10-15 口径：源包操作 = 留下 / 彻底删除两档；
+    /// 删源包 = SourceHandling=DeleteInPlace。旧档名 DeleteAfterVerify 已删）
     /// （用户 2026-09-24 第 19.4 条）。
     ///
     /// <para>
@@ -72,9 +73,9 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
-                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                // 2026-10-15 口径：源包操作只有两档（留下 / 彻底删除）。
+                // 删源包 = SourceHandling=DeleteInPlace；其余物档只决定过程物，不再参与“删不删源包”的表达。
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -102,9 +103,9 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
-                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                // 2026-10-15 口径：源包操作只有两档（留下 / 彻底删除）。
+                // 删源包 = SourceHandling=DeleteInPlace；其余物档只决定过程物，不再参与“删不删源包”的表达。
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -131,9 +132,9 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
-                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                // 2026-10-15 口径：源包操作只有两档（留下 / 彻底删除）。
+                // 删源包 = SourceHandling=DeleteInPlace；其余物档只决定过程物，不再参与“删不删源包”的表达。
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -166,9 +167,9 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
-                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                // 2026-10-15 口径：源包操作只有两档（留下 / 彻底删除）。
+                // 删源包 = SourceHandling=DeleteInPlace；其余物档只决定过程物，不再参与“删不删源包”的表达。
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -202,23 +203,17 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
-                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                // 2026-10-15 口径：源包操作只有两档（留下 / 彻底删除）。
+                // 删源包 = SourceHandling=DeleteInPlace；其余物档只决定过程物，不再参与“删不删源包”的表达。
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
             string source = harness.CreateSourceInFolder("folder", "pack.7z");
             ArchiveTask task = await harness.ScanFolderAndAddTask(Path.GetDirectoryName(source)!);
 
-            // 解压已经做完、进入收尾（收尾第一件事就是列目录）时按下「取消当前」。
-            harness.Engine.OnList = _ =>
-            {
-                if (harness.Engine.Extracted)
-                {
-                    harness.Coordinator.CancelCurrentTask();
-                }
-            };
+            // 任务真在跑的那一刻按下「取消当前」（挂收尾列目录那一刻会走早退支，等于没取消——实测踩到）。
+            harness.Engine.OnExtract = _ => harness.Coordinator.CancelCurrentTask();
 
             await harness.Coordinator.StartExtractAsync();
 
@@ -245,7 +240,7 @@ namespace ArchiveFixer.Tests
             Harness harness = CreateHarness(
                 settings =>
                 {
-                    settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                    settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
                     settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
                 },
                 engine: new SevenZipEngine());
@@ -278,7 +273,12 @@ namespace ArchiveFixer.Tests
 
                 OneClickOutcome outcome = await harness.RunOneClickAsync();
 
-                Assert.True(outcome.ContinuationLayers >= 1, "前提：这一单必须是「第一层只出过程物」的多层包");
+                /*
+                 * ⚠ 2026-10-18 订正：产品现在在**同一个任务内递归展开**（实测：轮数=1、续解层=0、
+                 * 任务内容物数=1、状态=解压成功）⇒ 老前提「续解层 ≥ 1」已过时。
+                 * 「第一层只出过程物」这件事由本用例的构造保证（外层只有 inner.7z），
+                 * 下面的内容物/源包/其余物断言才是这条用例的牙齿。
+                 */
 
                 Assert.Equal(StatusText.ExtractSuccess, task.Status);
                 Assert.Equal(OutputVerificationOutcome.Passed, task.OutputVerification);
@@ -303,11 +303,14 @@ namespace ArchiveFixer.Tests
                     Directory.Exists(task.RestDirectoryPath),
                     $"选了彻底删除，链尾必须把其余物那一份删掉，实际还在：{task.RestDirectoryPath}");
 
-                // 第 32 条之后这句话改口径了：源包先按「源包操作」进其余物，链尾再按「删除操作」处理那一份
-                // 其余物 —— 日志如实写"链结束后的其余物处理"，不再是旧的"链结束后的清理"。
+                // 2026-10-18 口径订正：现在日志写的是「链结束后的补搬」+「已立刻永久删除源包」；
+                // 旧的「链结束后的其余物处理」那句已经不存在（同一次改口径，行为断言不变）。
                 Assert.Contains(
                     harness.Log.Logs,
-                    x => x.Message.Contains("链结束后的其余物处理", StringComparison.Ordinal));
+                    x => x.Message.Contains("链结束后的补搬", StringComparison.Ordinal));
+                Assert.Contains(
+                    harness.Log.Logs,
+                    x => x.Message.Contains("已立刻永久删除源包", StringComparison.Ordinal));
             }
             finally
             {
@@ -324,9 +327,9 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                // 2026-09-25 第 32 条之后"删源包"由两档组合表达：
-                // 源包放入其余物 + 删除操作=彻底删除（与旧 DeleteAfterVerify 等价）。
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                // 2026-10-15 口径：源包操作只有两档（留下 / 彻底删除）。
+                // 删源包 = SourceHandling=DeleteInPlace；其余物档只决定过程物，不再参与“删不删源包”的表达。
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Delete;
             });
 
@@ -589,6 +592,9 @@ namespace ArchiveFixer.Tests
             /// <summary>列目录前回调（收尾第一件事就是列目录：用来在那一刻按取消）。</summary>
             public Action<ArchiveRequest>? OnList { get; set; }
 
+            /// <summary>解压前回调（"任务真在跑"的那一刻：取消挂这里才不会走早退支）。</summary>
+            public Action<ArchiveRequest>? OnExtract { get; set; }
+
             public bool Extracted { get; private set; }
 
             public void SetProducts(params (string Name, int Size)[] products)
@@ -643,6 +649,8 @@ namespace ArchiveFixer.Tests
                 ExtractOptions options,
                 CancellationToken cancellationToken = default)
             {
+                OnExtract?.Invoke(request);
+
                 if (ExtractFailure != null)
                 {
                     return Task.FromResult(ExtractFailure);
