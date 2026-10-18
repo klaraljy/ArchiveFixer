@@ -11902,6 +11902,23 @@ namespace ArchiveFixer.ViewModels
         /// 这一层里与"这一单手上那一片"**同族同基名**的文件（收拢决策器的候选池；⛔ 只读这一层、不递归）。
         /// 判据 = 既有宽尺子 `VolumeGroupDetector.BelongsToSameGroup`，参照名 = 手上那一片。
         /// </summary>
+        /// <summary>枚举一个目录里的**所有**文件（读不动 ⇒ 空表，不抛）。</summary>
+        private static IEnumerable<string> SafeEnumerateFiles(string? directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return Array.Empty<string>();
+            }
+
+            try
+            {
+                return Directory.GetFiles(directory);
+            }
+            catch
+            {
+                return Array.Empty<string>();
+            }
+        }
         /// <summary>
         /// **"这一份能不能算本组的一片"的唯一出口**（底层识别先行，名字只保底）。
         ///
@@ -12151,6 +12168,7 @@ namespace ArchiveFixer.ViewModels
                         int directories = 0;
                         int files = 0;
                         var frontier = new List<string> { scanRoot! };
+                        var sweepTrace = new List<string>();
                         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { scanRoot! };
 
                         for (int level = 0; level < 8 && frontier.Count > 0 && directories < 200; level++)
@@ -12182,7 +12200,14 @@ namespace ArchiveFixer.ViewModels
 
                             foreach (string directory in frontier.Concat(next))
                             {
-                                foreach (string file in CollectVolumeFilesInDirectory(directory))
+                                /*
+                                 * ⚠ 2026-10-18（运行期逐份判据输入定案）：这里原来用 `CollectVolumeFilesInDirectory`
+                                 * （按**后缀**筛"像不像卷文件"），于是 `bbb-L2.zip-658` 这种"后缀被改坏、内容却是
+                                 * 末片"的文件**根本没被枚举**（同一份日志里逐份只出现 3 个名字，第三个名字一次没出现）。
+                                 * ⇒ 补扫改枚举**整层所有文件**，由唯一出口 `AcceptsAsGroupPiece`（内容先行）来收/挡；
+                                 * 文件预算 400 只当上限用，⛔ 不再用后缀当前置筛子。
+                                 */
+                                foreach (string file in SafeEnumerateFiles(directory))
                                 {
                                     if (++files > 400)
                                     {
@@ -12194,7 +12219,16 @@ namespace ArchiveFixer.ViewModels
                                         FileNatureCard card = FileNature.Inspect(file);
 
                                         /* 与本地那一侧**同一个出口**（含字节数守恒 ⇒ 中间片才收得进来）。 */
-                                        if (AcceptsAsGroupPiece(card, reference, sweepReferenceBase, sweepAnchorSize)
+                                        bool accepted = AcceptsAsGroupPiece(card, reference, sweepReferenceBase, sweepAnchorSize);
+
+                                        if (sweepTrace.Count < 20)
+                                        {
+                                            sweepTrace.Add(
+                                                $"{FileNameHelper.GetFileName(file)}〔F={card.Format} EOCD={card.HasZipEndRecord} LH={card.HasZipLocalHeader} "
+                                                + $"成员={card.Membership} 种类={card.BodyKind} 大小={card.Size} 准入={accepted}〕");
+                                        }
+
+                                        if (accepted
                                             && !allFiles.Any(existing => string.Equals(
                                                 existing, file, StringComparison.OrdinalIgnoreCase)))
                                         {
@@ -12220,7 +12254,9 @@ namespace ArchiveFixer.ViewModels
                             "INFO",
                             $"{task.LogName}：收拢补扫 —— 入口卡自证是 zip 分片；补扫根={scanRoot}（入口往上 3 层）"
                             + $"｜下探最多 8 层、目录上限 200、文件上限 400｜实际扫了 {directories} 个目录 / {files} 个文件"
-                            + $"｜候选池里现在 {allFiles.Count} 份");
+                            + $"｜锚点={sweepAnchorSize} 基名={sweepReferenceBase}"
+                            + $"｜候选池里现在 {allFiles.Count} 份"
+                            + (sweepTrace.Count > 0 ? $"｜逐份：[{string.Join("；", sweepTrace)}]" : string.Empty));
                     }
                 }
                 catch
