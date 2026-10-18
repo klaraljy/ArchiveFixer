@@ -203,6 +203,40 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * ⛔ 逐层回收只删**过程物**：任何一单的 `OriginalPath`（用户最初导入的那一份）永远不进
+             * 删除清单。2026-10-18 `28282828` ProcMon 现场：源 `.001` 被硬链接到输出后，递归层的
+             * “内层包（这一层的源）3 个”把它一起删了 ⇒ `KeepInPlace` 的样本树少一份源。
+             * ⛔ 用户源包该不该删只由链尾「源包操作」那一档回答，不由逐层回收回答。
+             */
+            var reclaimableFiles = request.GroupFiles
+                .Where(file => !string.IsNullOrWhiteSpace(file)
+                    && !IsAnyTaskOriginalPath(file)
+                    && !IsAnyTaskOriginalIdentity(file)
+                    && !IsUserImportedSourcePath(file))
+                .ToList();
+
+            if (reclaimableFiles.Count != request.GroupFiles.Count)
+            {
+                AppendLog(
+                    "WARN",
+                    $"{request.ChildLayerLabel}：逐层回收清单里有用户源包（{request.GroupFiles.Count - reclaimableFiles.Count} 份）"
+                    + "—— 这一层只回收过程物，源包按链尾「源包操作」处理");
+
+                request = new RecursiveLayerReclaimRequest
+                {
+                    ChildLayerLabel = request.ChildLayerLabel,
+                    GroupFiles = reclaimableFiles,
+                    Verdict = request.Verdict,
+                    WorkspaceTaskDirectory = request.WorkspaceTaskDirectory
+                };
+            }
+
+            if (request.GroupFiles.Count == 0)
+            {
+                return;
+            }
+
+            /*
              * **只记账**（⛔ 不动盘）：这一层用过的那几个文件（入口 + 同组各卷）。
              * 链尾那张"集中进其余物"的名单要用它 —— 实测依据（2026-10-12，`run-4444`）：
              * 挂在"逐层"那一刻去搬会把后续那一层的产物跟踪弄丢（内容物被重复解出来，`444(1)/(2).mp4`），
@@ -10553,6 +10587,32 @@ namespace ArchiveFixer.ViewModels
                 if (task != null
                     && !string.IsNullOrWhiteSpace(task.OriginalPath)
                     && SafePathHelper.PathEquals(task.OriginalPath, path))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// **同一个物理文件是不是某一单用户最初导入的那一份**（改名/硬链接后仍认得出）。
+        /// `28282828` 的源 `.001` 在盘上已经被清洗成标准名，路径与 `OriginalPath` 不同，
+        /// 但 inode 相同 ⇒ 逐层回收必须按身份保护它。
+        /// </summary>
+        private bool IsAnyTaskOriginalIdentity(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return false;
+            }
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                if (task != null
+                    && !string.IsNullOrWhiteSpace(task.OriginalPath)
+                    && File.Exists(task.OriginalPath)
+                    && FileIdentity.IsSamePhysicalFile(task.OriginalPath, path))
                 {
                     return true;
                 }
