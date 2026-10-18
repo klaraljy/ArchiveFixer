@@ -12206,9 +12206,36 @@ namespace ArchiveFixer.ViewModels
                     {
                         int directories = 0;
                         int files = 0;
-                        var frontier = new List<string> { scanRoot! };
+                        /*
+                         * ⛔ **由近及远**（2026-10-18 困难批 `30303030` 定案）：原来只从 `scanRoot` 向下 BFS，
+                         * 而那一轮 `scanRoot` 是**批次根**（30 份样本的父目录）⇒ 40 个目录预算全花在
+                         * `10101010`/`1111` 等别的样本上，本组的兄弟目录一个都没轮到（逐字：
+                         * `实际扫了 75 个目录 / 8 个文件`，全是别组的文件）⇒ 整组凑不齐。
+                         * ⇒ 种子 = **这一单自己那一层 + 往上 3 层**（近的优先）；只有一层都取不到时才退回 `scanRoot`。
+                         * ⛔ 判据（`AcceptsAsGroupPiece`）一个字不改，只改"先扫哪儿"。
+                         */
+                        var sweepSeeds = new List<string>();
+                        string? seedCursor = Path.GetDirectoryName(
+                            SafePathHelper.GetFullPathSafe(task.CurrentPath ?? string.Empty));
+
+                        for (int up = 0; up < 4 && !string.IsNullOrWhiteSpace(seedCursor); up++)
+                        {
+                            if (Directory.Exists(seedCursor))
+                            {
+                                sweepSeeds.Add(seedCursor!);
+                            }
+
+                            seedCursor = Path.GetDirectoryName(seedCursor);
+                        }
+
+                        if (sweepSeeds.Count == 0)
+                        {
+                            sweepSeeds.Add(scanRoot!);
+                        }
+
+                        var frontier = new List<string>(sweepSeeds);
                         var sweepTrace = new List<string>();
-                        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { scanRoot! };
+                        var visited = new HashSet<string>(sweepSeeds, StringComparer.OrdinalIgnoreCase);
 
                         for (int level = 0; level < 8 && frontier.Count > 0 && directories < 200; level++)
                         {
@@ -15684,6 +15711,37 @@ namespace ArchiveFixer.ViewModels
                         {
                             // 卡读不出来 ⇒ 照旧什么都不做。
                         }
+                    }
+                }
+
+                /*
+                 * ===== 层判不出 ⇒ 读**接片那一档算过的层**（唯一出口 `_groupLayerByBaseName`）=====
+                 *
+                 * <para>2026-10-18 困难批 `30303030` 现场：三片都已按内容规范名 `.001/.002/.003`
+                 * 接到 `333(2)` 那一层，可批末重判时这一单手上那一份在**已删掉的工作区**里 ⇒
+                 * 族规则与卡都判不出入口层 ⇒ 逐字 `该拼到哪一层=「」｜这一层不在盘上 ⇒ 判不出完整的一组`
+                 * ⇒ 整组明明齐了却不开始解压。</para>
+                 *
+                 * <para>判据不另造：`_groupLayerByBaseName` 就是接片真的落地那一刻记下的层
+                 * （`ExtractionCoordinator` 里"层只有一个出口"那条注释指的就是它）。⛔ 只在这一单判不出时用；
+                 * 目录不存在 ⇒ 照旧空（什么都不做）。</para>
+                 */
+                if (entryLayer.Length == 0)
+                {
+                    string ledgerBaseName = FileNameHelper.GetArchiveBaseName(
+                        ResolveDeferredGroupMemberPath(task));
+
+                    if (ledgerBaseName.Length > 0
+                        && _groupLayerByBaseName.TryGetValue(ledgerBaseName, out string? assembledLayer)
+                        && !string.IsNullOrWhiteSpace(assembledLayer)
+                        && Directory.Exists(assembledLayer))
+                    {
+                        entryLayer = assembledLayer!;
+
+                        AppendLog(
+                            "INFO",
+                            $"{task.LogName}：这一组该拼到哪一层 —— 族规则与卡都判不出，"
+                            + $"改用接片那一档算过的层「{assembledLayer}」");
                     }
                 }
 
