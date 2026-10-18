@@ -13,7 +13,7 @@ namespace ArchiveFixer.Tests
     public class VolumePiecesFromCardsTests
     {
         private static FileNatureCard Piece(string path, long size, ArchiveBodyKind kind,
-            long declaredTotal = 0, int declaredCount = 0, int? volumeNumber = null,
+            long declaredTotal = 0, int declaredCount = 0, int? volumeNumber = null, (ulong Serial, ulong Index)? identity = null,
             ArchiveFixer.Detection.VolumeContentFormat format = ArchiveFixer.Detection.VolumeContentFormat.Unknown,
             int? rawVolumeField = null, bool firstVolumeFlag = false) => new()
             {
@@ -25,7 +25,10 @@ namespace ArchiveFixer.Tests
                 VolumeNumber = volumeNumber,
                 Format = format,
                 RawVolumeField = rawVolumeField,
-                FirstVolumeFlag = firstVolumeFlag
+                FirstVolumeFlag = firstVolumeFlag,
+                HasIdentity = identity.HasValue,
+                VolumeSerial = identity?.Serial ?? 0,
+                FileIndex = identity?.Index ?? 0
             };
 
         /// <summary>
@@ -263,6 +266,29 @@ namespace ArchiveFixer.Tests
 
             Assert.False(reading.Complete);
             Assert.Contains("一份分卷片都没有", reading.Reason);
+        }
+
+        /// <summary>
+        /// 同一份物理文件的两条名字（硬链接）**只算一片**。
+        /// <para>真机 2026-10-18（`fsutil file queryfileid` 读数）：`19191919` 的 `bbb-L2.z01` 与
+        /// `bbb-L2.zip` 是同一份文件（`0x…00045fe4`）；`8888` 的 `打包111-L2.part1.rar` 与
+        /// `…part1删删删删删删删.rar` 同一 File ID（`0xB7000000046130`）。两条名字各算一片 ⇒
+        /// "恰好 3 片"的纯内容定序永远不成立，整组判不出 / 整组被解两遍。</para>
+        /// </summary>
+        [Fact]
+        public void 同一份物理文件的两条名字_只算一片()
+        {
+            var cards = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\bbb-L2.zip.001", 26214400, ArchiveBodyKind.VolumePiece, identity: (7UL, 100UL)),
+                Piece(@"C:\x\bbb-L2.z01", 26214400, ArchiveBodyKind.VolumePiece, identity: (7UL, 100UL)),
+                Piece(@"C:\x\bbb-L2.zip.002", 26214400, ArchiveBodyKind.VolumePiece, identity: (7UL, 101UL)),
+                Piece(@"C:\x\bbb-L2.zip.003", 10490342, ArchiveBodyKind.VolumePiece, identity: (7UL, 102UL))
+            };
+
+            CardVolumeGroupReading reading = VolumePiecesFromCards.Read(cards);
+
+            Assert.Equal(3, reading.PieceCount);
         }
     }
 }

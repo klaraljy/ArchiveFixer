@@ -268,6 +268,56 @@ namespace ArchiveFixer.Detection
                 .ToList();
         }
 
+        /// <summary>
+        /// 把"同一份物理文件的两条名字"折叠成一条（优先留**名字本来就是规范名**的那一条）。
+        /// <para>⛔ 只读卡上的盘上物理身份；判不出 ⇒ 不合并（"判不出 ⇒ 什么都不做"的同一条）。</para>
+        /// </summary>
+        private static List<FileNatureCard> CollapseSamePhysicalFile(List<FileNatureCard> pieces)
+        {
+            if (pieces.Count < 2)
+            {
+                return pieces;
+            }
+
+            var kept = new List<FileNatureCard>(pieces.Count);
+            var indexByKey = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (FileNatureCard card in pieces)
+            {
+                if (!card.HasIdentity)
+                {
+                    kept.Add(card);
+                    continue;
+                }
+
+                string key = card.VolumeSerial.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + ":"
+                    + card.FileIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+                if (!indexByKey.TryGetValue(key, out int existing))
+                {
+                    indexByKey[key] = kept.Count;
+                    kept.Add(card);
+                    continue;
+                }
+
+                if (!IsCanonicalFileName(kept[existing]) && IsCanonicalFileName(card))
+                {
+                    kept[existing] = card;
+                }
+            }
+
+            return kept;
+        }
+
+        /// <summary>这一份的名字**本来就是规范卷名**（卡的 `CanonicalVolumeName` 与文件名一致）。</summary>
+        private static bool IsCanonicalFileName(FileNatureCard card) =>
+            !string.IsNullOrWhiteSpace(card.CanonicalVolumeName)
+            && string.Equals(
+                Helpers.FileNameHelper.GetFileName(card.Path),
+                card.CanonicalVolumeName,
+                StringComparison.OrdinalIgnoreCase);
+
         public static CardVolumeGroupReading Read(IReadOnlyList<FileNatureCard>? cards)
         {
             var pieces = (cards ?? Array.Empty<FileNatureCard>())
@@ -278,6 +328,18 @@ namespace ArchiveFixer.Detection
             {
                 return CardVolumeGroupReading.None("这一层里一份分卷片都没有");
             }
+
+            /*
+             * ④ 同一份物理文件的两条名字（硬链接）**只算一片**（用户口径「同一份不出现两条名字」）。
+             * 真机 2026-10-18 两处现场（`fsutil file queryfileid` 读数）：
+             *  · `19191919`：`bbb-L2.z01` 与 `bbb-L2.zip` 是同一份文件（`0x…00045fe4`）——
+             *    接片那一档给它另起了规范名（零字节硬链接），原件那条名字还在；按"片"数就变成 4 片，
+             *    卡上"恰好 3 片"的纯内容定序永远不成立 ⇒ 整组判不出。
+             *  · `8888`：`打包111-L2.part1.rar` 与 `…part1删删删删删删删.rar` 同一 File ID
+             *    （`0xB7000000046130`）⇒ 那一组被解了两遍，内容出来两份（判定 ①② 红）。
+             * ⛔ 判据只读卡上现成的盘上物理身份；判不出身份（`HasIdentity=false`）⇒ 原样保留，不合并。
+             */
+            pieces = CollapseSamePhysicalFile(pieces);
 
             /*
              * ① 首卷的自述（7z 独有）：片数与整包字节数都在卡上。
