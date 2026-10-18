@@ -10970,6 +10970,16 @@ namespace ArchiveFixer.ViewModels
                  * 而且批末补判那份名单当时是**空的**（中途撞缺卷的单从不登记）。两处都已修，
                  * 与"搬还是链接"这一行的取舍无关 ⇒ 探针的使命结束（见 `修改日志.md` 本轮）。
                  */
+                /*
+                 * **接片落名判据（永久）**：2026-10-18 调试器实测出现过"canonical 是内容族、真正落链接的
+                 * target 却是名字族"的错位（`.zip.003` 对 `.z01`）⇒ 把这三个值一次写清楚，
+                 * ⛔ 只写程序当场算出来的值、⛔ 不改任何判据。
+                 */
+                AppendLog(
+                    "INFO",
+                    $"{FileNameHelper.GetFileName(piecePath)}：接片落名判据 —— 规范名=「{canonical}」，"
+                    + $"目标名=「{Path.GetFileName(target)}」，目标层=「{targetDir}」，目标路径=「{target}」");
+
                 adopted = moveIntoGroup
                     ? TryMovePieceIntoGroup(piecePath, target) || HardLinkHelper.TryCreateHardLink(target, piecePath)
                     : HardLinkHelper.TryCreateHardLink(target, piecePath);
