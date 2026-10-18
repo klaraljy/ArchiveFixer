@@ -269,7 +269,7 @@ namespace ArchiveFixer.Extraction
         /// 从"标准的第一卷名"反推这一组的**族与基名**（后续卷的名字由
         /// <see cref="Detection.VolumeNumberFromContent.BuildStandardNames"/> 按族生成，⛔ 不在别处再拼一遍）。
         /// <para>认不出的族一律返回 <c>null</c>：<b>判不出就不改</b>。
-        /// 已知两种标准首卷名：RAR 的 <c>X.part1.rar</c>、7z 的 <c>X.7z.001</c>。</para>
+        /// 已知三种标准首卷名：RAR 的 <c>X.part1.rar</c>、7z 的 <c>X.7z.001</c>、通用分片的 <c>X.zip.001</c>。</para>
         /// </summary>
         private static (string Stem, Detection.VolumeNamingFamily Family)? ParseStandardFirst(string standardFirst)
         {
@@ -290,6 +290,18 @@ namespace ArchiveFixer.Extraction
                 }
 
                 return null;
+            }
+
+            /*
+             * 通用分片族（`<基名>.zip.001`，对一个归档再分片）**必须先判**：它同样以 `.001` 结尾，
+             * 落进下面那个"数字族 = 7z"的分支就会被拼成 `<基名>.zip.7z.001`（把外壳族又叠了一层）。
+             * 真机 2026-10-18 运行期实测：计划逐字 `打包111-L2.zip.002 → 打包111-L2.zip.7z.002`，
+             * 于是 7-Zip 报「Cannot open the file as [7z] archive」⇒ 整组永远拼不起来。
+             * `BuildStandardNames` 的 ZipNumbered 分支自己补 `.zip.`，所以这里的 stem 要连 `.zip` 一起剥掉。
+             */
+            if (name.EndsWith(".zip.001", StringComparison.OrdinalIgnoreCase))
+            {
+                return (name[..^".zip.001".Length], Detection.VolumeNamingFamily.ZipNumbered);
             }
 
             if (name.EndsWith(".001", StringComparison.Ordinal))

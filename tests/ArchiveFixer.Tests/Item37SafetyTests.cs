@@ -263,6 +263,25 @@ namespace ArchiveFixer.Tests
                 new[] { "X.7z.001", "X.7z.002" })));
         }
 
+        /// <summary>
+        /// 通用分片族（<c>X.zip.001</c>）的名字本来就标准时**一个都不许改**。
+        /// <para>真机 2026-10-18 运行期实测（样本 6666）：这一族落进了"数字族 = 7z"那一支，
+        /// 计划逐字 <c>打包111-L2.zip.002 → 打包111-L2.zip.7z.002</c>，7-Zip 随后报
+        /// <c>Cannot open the file as [7z] archive</c> ⇒ 整组永远拼不起来（① ② 双红）。</para>
+        /// </summary>
+        [Fact]
+        public void 改名计划_通用分片族本来标准时一个都不改()
+        {
+            BrokenVolumeChainRepair.RenamePlan? plan = BrokenVolumeChainRepair.TryPlan(
+                @"H:\out\X.zip.001",
+                new[] { "X.zip.001", "X.zip.002", "X.zip.003" });
+
+            Assert.True(
+                BrokenVolumeChainRepair.IsNoOp(plan),
+                "通用分片族的标准名不许被改成别的族：" + (plan == null ? "null" : plan.Describe()));
+        }
+
+
         [Fact]
         public void 改名计划_目标名被别的文件占着时不做()
         {
