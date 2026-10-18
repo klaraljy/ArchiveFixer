@@ -15680,22 +15680,195 @@ namespace ArchiveFixer.ViewModels
         /// <para>只读：<see cref="VolumeProbeVerifier"/> 只在试开目录里建硬链接、收工把整棵试开目录删掉，
         /// 用户那一份一个字节都不动。</para>
         /// </summary>
-        private async Task<string?> ProbeGatherGroupAsync(
+        /// <summary>试开定序的结论（<see cref="Confirmed"/> = 赢的那一版；<see cref="Failure"/> 非空 = 不做）。</summary>
+        private sealed class GroupOrderTrialResult
+        {
+            /// <summary>这一档**适用**（通用分片、片数 ≤5、末片可定）—— 失败时调用方不再按名字硬拼。</summary>
+            public bool Applicable { get; init; }
+
+            /// <summary>试开确认了顺序。</summary>
+            public bool Confirmed { get; init; }
+
+            /// <summary>赢的那一版（第 1 片 … 末片）。</summary>
+            public IReadOnlyList<string> OrderedPieces { get; init; } = Array.Empty<string>();
+
+            /// <summary>规范名的基名（由末片卡上取）。</summary>
+            public string Stem { get; init; } = string.Empty;
+
+            public string? Failure { get; init; }
+
+            public string Reason { get; init; } = string.Empty;
+
+            public static GroupOrderTrialResult Fail(string reason, bool applicable = false) =>
+                new() { Failure = reason, Applicable = applicable };
+        }
+
+        private async Task<GroupOrderTrialResult> ProbeGatherGroupAsync(
             IReadOnlyList<string> pieces,
+            IReadOnlyList<string> candidatePool,
             string entryLayer,
             string? cardEntryPath,
+            string referenceName,
+            bool allowFallback,
             CancellationToken cancellationToken)
         {
             if (_archiveEngine == null || !_archiveEngine.IsAvailable)
             {
-                return "硬链接试开没做成：当前没有可用的解压引擎 ⇒ 整组不动";
+                return GroupOrderTrialResult.Fail("硬链接试开没做成：当前没有可用的解压引擎 ⇒ 整组不动");
+            }
+
+            string referenceBase = FileNameHelper.GetArchiveBaseName(referenceName);
+
+            if (referenceBase.Length == 0
+                && !string.IsNullOrWhiteSpace(cardEntryPath)
+                && File.Exists(cardEntryPath))
+            {
+                try
+                {
+                    referenceBase = FileNature.Inspect(cardEntryPath).ArchiveBaseName;
+                }
+                catch
+                {
+                    // 读不出参照基名 ⇒ 下面按名字那把尺子兜底。
+                }
             }
 
             /*
-             * **入口那一份优先由底层识别卡回答**（用户 2026-10-17：名字认不出族/卷号时，
-             * 卡上"我是首卷"这条自证就是入口）；卡判不出（这一层没有首卷）才退回名字那把尺子。
-             * ⛔ 两条都必须"盘上真有它"才作数。
+             * ===== 通用分片（`X.zip.001..00N`）的**内容试开定序**（用户 2026-10-18 口径）=====
+             *
+             * 只有这一族需要"猜中间片"：RAR / 7z / 跨盘 ZIP 的卷号由内容或名字明确给出；通用分片的中间片
+             * 内容里没有卷号，名字被伪装时也读不出次序。做法（用户原话）：先按后缀相似度排一个高概率顺序，
+             * 试开；试不出再把剩余排列全试一遍；全不成立 ⇒ 判不出（这一趟先不收）。
+             *
+             * ⛔ 候选只从"内容确认是这一组"的卡里来，并按**盘上物理身份**去重（同一份文件的多个名字只算一片）；
+             * ⛔ 片数上限 5（用户口径：超过就不猜）。
              */
+            List<FileNatureCard> numberedCandidates = CollectNumberedZipTrialPieces(
+                pieces,
+                candidatePool,
+                referenceBase,
+                referenceName);
+
+            if (numberedCandidates.Count >= 2)
+            {
+                AppendLog(
+                    "INFO",
+                    "试开定序候选 —— "
+                    + string.Join(
+                        "、",
+                        numberedCandidates.Select(card =>
+                            $"{FileNameHelper.GetFileName(card.Path)}〔F={card.Format} EOCD={card.ZipEndRecordMeansSplit} "
+                            + $"LH={card.HasZipLocalHeader} 成员={card.Membership} 基名={card.ArchiveBaseName}〕")));
+            }
+
+            /*
+             * ⛔ 只有**内容判成通用分片**（`ZipNumbered`）才走这一档：
+             * 跨盘 ZIP 的入口是末片 `.zip`、片名 `.z01/.z02`，它的顺序本来就由名字与内容盘号明确给出
+             * —— 拿通用分片的 `.zip.00N` 去试开，会在真实跨盘组旁边再多造一套名字（15151515 那类回归）。
+             */
+            VolumeNamingFamily? contentFamily = numberedCandidates.Count >= 2
+                ? VolumePiecesFromCards.Read(numberedCandidates).NamingFamily
+                : null;
+
+            if (contentFamily == VolumeNamingFamily.ZipNumbered
+                && numberedCandidates.Count > VolumeOrderTrial.MaxPieces)
+            {
+                return GroupOrderTrialResult.Fail(
+                    $"硬链接试开定序没做成：这一组有 {numberedCandidates.Count} 份不同的片"
+                    + $"（超过 {VolumeOrderTrial.MaxPieces} 片）⇒ 按口径不猜，整组不动",
+                    applicable: true);
+            }
+
+            if (contentFamily == VolumeNamingFamily.ZipNumbered && numberedCandidates.Count >= 2)
+            {
+                string? tailPath = ResolveNumberedZipTail(numberedCandidates);
+                string stem = ResolveOrderTrialStem(numberedCandidates, tailPath, referenceBase);
+
+                if (tailPath == null || stem.Length == 0)
+                {
+                    return GroupOrderTrialResult.Fail(
+                        "硬链接试开定序没做成：末片（内容带 EOCD 的那一片）或基名判不出 ⇒ 整组不动",
+                        applicable: true);
+                }
+
+                IReadOnlyList<IReadOnlyList<string>> orders = VolumeOrderTrial.BuildCandidateOrders(
+                    numberedCandidates.Select(card => card.Path).ToList(),
+                    tailPath,
+                    VolumeNamingFamily.ZipNumbered,
+                    stem);
+
+                if (orders.Count == 0)
+                {
+                    return GroupOrderTrialResult.Fail(
+                        "硬链接试开定序没做成：排不出可试的顺序 ⇒ 整组不动",
+                        applicable: true);
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"试开定序 —— 内容确认的候选 {numberedCandidates.Count} 份"
+                    + "（同一份文件的多个名字只算一份）"
+                    + $"｜末片=「{FileNameHelper.GetFileName(tailPath)}」"
+                    + $"｜族=通用分片｜基名=「{stem}」｜可试顺序 {orders.Count} 种");
+
+                var verifier = new VolumeProbeVerifier(_archiveEngine);
+                VolumeProbeOutcome outcome = await verifier.VerifyNumberedZipOrderAsync(
+                        orders,
+                        Path.Combine(entryLayer, ".ArchiveFixer.work"),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!outcome.Confirmed)
+                {
+                    /*
+                     * ⛔ **加密组不能拿"试开没通过"当"顺序判不出"**（2026-10-18 `EncryptedVolumePipelineTests`
+                     * 回归）：空密码试开必然报密码错，而那是"没有密码"，不是"顺序不对"。
+                     * ⇒ 这一档退回原来的密码/名字流程（照常报「密码错误」），⛔ 不把整组判死。
+                     */
+                    if (outcome.NeedsPassword)
+                    {
+                        return new GroupOrderTrialResult
+                        {
+                            Applicable = false,
+                            Reason = "这一组是加密的，试开定序没有可用密码 ⇒ 退回原来的密码/名字流程"
+                        };
+                    }
+
+                    return GroupOrderTrialResult.Fail(
+                        "硬链接试开定序没通过（引擎真的解了一遍，每个条目还是对不上）⇒ 整组不动："
+                        + outcome.Reason,
+                        applicable: true);
+                }
+
+                List<string> winning = outcome.OrderedVolumes
+                    .Select(volume => volume.Path)
+                    .ToList();
+
+                /*
+                 * ⛔ 这里**只交顺序、不自己建链接**：接片仍走既有出口 `TryGatherGroupPiecesInto`
+                 * （它会记"谁吐出的片、谁借的片"，批末收场才能把产出方那一份按档收干净）。
+                 * 自己建链接会绕过那本账 ⇒ 产出方那一份变成残留（2026-10-18 `19191919` / `6666` 的 c3 现场）。
+                 */
+                return new GroupOrderTrialResult
+                {
+                    Applicable = true,
+                    Confirmed = true,
+                    OrderedPieces = winning,
+                    Stem = stem,
+                    Reason = $"内容试开定序成立（第 {outcome.Attempts} 种顺序）—— 按这个顺序把这一组接进入口那一层"
+                        + "（零字节硬链接，原件一个字节不动）"
+                };
+            }
+
+            /*
+             * 不是"通用分片、片数不多于 5、末片可定"那一档 ⇒ 照旧只按名字给的这一种顺序列一次目录
+             * （RAR / 7z / 跨盘 ZIP 的卷序本来就由内容或名字明确给出；这一档一个字没改）。
+             * ⛔ 决策器说 Leave 时**不跑这一遍**（没要搬，就别多调一次引擎）。
+             */
+            if (!allowFallback)
+            {
+                return new GroupOrderTrialResult { Applicable = false };
+            }
             string? firstVolume = !string.IsNullOrWhiteSpace(cardEntryPath) && File.Exists(cardEntryPath)
                 ? cardEntryPath
                 : pieces.FirstOrDefault(piece => File.Exists(piece)
@@ -15703,7 +15876,7 @@ namespace ArchiveFixer.ViewModels
 
             if (string.IsNullOrWhiteSpace(firstVolume))
             {
-                return "硬链接试开没做成：这一组里认不出第 1 卷 ⇒ 整组不动";
+                return GroupOrderTrialResult.Fail("硬链接试开没做成：这一组里认不出第 1 卷 ⇒ 整组不动");
             }
 
             var rest = pieces
@@ -15713,7 +15886,7 @@ namespace ArchiveFixer.ViewModels
                 .Select(piece => new VolumeCandidate { Path = piece, Size = FileSizeOrZero(piece) })
                 .ToList();
 
-            var verifier = new VolumeProbeVerifier(_archiveEngine);
+            var verifierFallback = new VolumeProbeVerifier(_archiveEngine);
 
             /*
              * 试开用的硬链接名要**按卡上的族**拼（用户 2026-10-17：「底层识别先，名字配合行动」）：
@@ -15730,7 +15903,7 @@ namespace ArchiveFixer.ViewModels
                 probeFamily = VolumeContentFormat.Unknown;
             }
 
-            var outcome = await verifier.VerifyAsync(
+            var outcomeFallback = await verifierFallback.VerifyAsync(
                     firstVolume,
                     new List<IReadOnlyList<VolumeCandidate>> { rest },
                     cancellationToken,
@@ -15738,12 +15911,173 @@ namespace ArchiveFixer.ViewModels
                     probeFamily)
                 .ConfigureAwait(false);
 
-            if (outcome.Confirmed)
+            if (outcomeFallback.Confirmed)
             {
-                return null;
+                return new GroupOrderTrialResult
+                {
+                    Reason = "按名字/内容给出的顺序试开通过（没有走通用分片的内容定序那一档）"
+                };
             }
 
-            return "硬链接试开没通过（引擎打不开这一组）⇒ 整组不动：" + outcome.Reason;
+            return GroupOrderTrialResult.Fail(
+                "硬链接试开没通过（引擎打不开这一组）⇒ 整组不动：" + outcomeFallback.Reason);
+        }
+
+        /// <summary>
+        /// 通用分片试开定序的候选：**内容确认是 ZIP 分片 + 基名与本组相关**，并按盘上物理身份去重。
+        /// ⛔ 不读名字的卷号来排次序（名字只拿来算相似度、给高概率顺序）；⛔ 内容可证不是分卷成员的一律剔除。
+        /// </summary>
+        private List<FileNatureCard> CollectNumberedZipTrialPieces(
+            IReadOnlyList<string>? pieces,
+            IReadOnlyList<string>? candidatePool,
+            string referenceBase,
+            string referenceName)
+        {
+            var cards = new List<FileNatureCard>();
+            var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var indexByIdentity = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (string path in (pieces ?? Array.Empty<string>())
+                         .Concat(candidatePool ?? Array.Empty<string>()))
+            {
+                if (string.IsNullOrWhiteSpace(path)
+                    || !seenPaths.Add(path)
+                    || !File.Exists(path))
+                {
+                    continue;
+                }
+
+                FileNatureCard card;
+
+                try
+                {
+                    card = FileNature.Inspect(path);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (VolumePieceFacts.ContentProvesNotAVolumePiece(card))
+                {
+                    continue;
+                }
+
+                bool contentSaysPiece = card.ZipEndRecordMeansSplit
+                    || card.HasZipLocalHeader
+                    || card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                    || card.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece;
+
+                /*
+                 * **中间片可能连格式都认不出**（2026-10-18 `30303030` 组合 6 运行期定案）：
+                 * 通用分片从数据中间切开 ⇒ 第 2 片开头既不是本地文件头、也没有 EOCD，
+                 * `FileNature` 只能答 `Unknown`；而它确实是这一组的一片（它的字节数、与相邻片的关系
+                 * 都已经由收拢候选池的准入判据 `AcceptsAsGroupPiece` 过了）。
+                 * ⇒ 这一档**允许 `Unknown` 进试开候选**（基名相关是调用方已过的弱证据；
+                 * 最终顺序仍由引擎真的解一遍回答，⛔ 不是靠这条放行它就当真）。
+                 * ⛔ 内容可证"不是分卷成员"的仍然一律剔除（上面那一条）。
+                 */
+                bool unknownMiddleStillPossible = card.Format == VolumeContentFormat.Unknown
+                    && card.BodyKind == ArchiveBodyKind.Unknown;
+
+                if (!contentSaysPiece && !unknownMiddleStillPossible)
+                {
+                    continue;
+                }
+
+                bool related = referenceBase.Length > 0
+                    && BaseNameRelatedToGroup(card.ArchiveBaseName, referenceBase);
+
+                if (!related && referenceName.Length > 0)
+                {
+                    related = VolumeGroupDetector.BelongsToSameGroup(
+                        FileNameHelper.GetFileName(path),
+                        referenceName);
+                }
+
+                if (!related)
+                {
+                    continue;
+                }
+
+                string identityKey = card.HasIdentity
+                    ? "I:"
+                      + card.VolumeSerial.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                      + ":"
+                      + card.FileIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : "P:" + path;
+
+                if (indexByIdentity.TryGetValue(identityKey, out int existing))
+                {
+                    /*
+                     * 同一份物理文件的第二条名字：留**卡上自证规范名**的那一条（用户口径「同一份不出现两条名字」）；
+                     * 两条都不是规范名 ⇒ 留先出现的那条（判不出就不动）。
+                     */
+                    if (!VolumePieceFacts.IsNameItsOwnCanonicalName(cards[existing])
+                        && VolumePieceFacts.IsNameItsOwnCanonicalName(card))
+                    {
+                        cards[existing] = card;
+                    }
+
+                    continue;
+                }
+
+                indexByIdentity[identityKey] = cards.Count;
+                cards.Add(card);
+            }
+
+            return cards;
+        }
+
+        /// <summary>
+        /// 通用分片的末片：**只认内容**（带 EOCD 的那一片）。用户口径：通用分片只有末卷能从内容确认。
+        /// 多个 EOCD / 一个都没有 ⇒ 判不出（⛔ 不猜）。
+        /// </summary>
+        private static string? ResolveNumberedZipTail(IReadOnlyList<FileNatureCard> cards)
+        {
+            var endPieces = cards.Where(card => card.ZipEndRecordMeansSplit).ToList();
+
+            if (endPieces.Count == 1)
+            {
+                return endPieces[0].Path;
+            }
+
+            if (endPieces.Count > 1)
+            {
+                var byName = endPieces
+                    .Select(card => new
+                    {
+                        card,
+                        number = VolumeGroupDetector.TryGetVolumeIndex(FileNameHelper.GetFileName(card.Path))
+                    })
+                    .Where(item => item.number != null)
+                    .OrderByDescending(item => item.number)
+                    .ToList();
+
+                return byName.Count > 0 ? byName[0].card.Path : null;
+            }
+
+            return null;
+        }
+
+        /// <summary>试开定序用的基名：优先取末片卡上的归档基名（唯一出口），判不出才用参照基名。</summary>
+        private static string ResolveOrderTrialStem(
+            IReadOnlyList<FileNatureCard> cards,
+            string? tailPath,
+            string referenceBase)
+        {
+            if (!string.IsNullOrWhiteSpace(tailPath))
+            {
+                FileNatureCard? tail = cards.FirstOrDefault(card =>
+                    string.Equals(card.Path, tailPath, StringComparison.OrdinalIgnoreCase));
+
+                if (tail != null && tail.ArchiveBaseName.Length > 0)
+                {
+                    return tail.ArchiveBaseName;
+                }
+            }
+
+            return referenceBase;
         }
 
         /// <summary>拿不到大小就按 0（<see cref="FileInfo"/> 对正被别的进程占着的文件会抛）。</summary>
@@ -15913,6 +16247,7 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 ArchiveFixer.Detection.CardVolumeGroupReading? gatherCardEvidence = null;
+                bool contentOrderUndetermined = false;
 
                 if (entryLayer.Length > 0)
                 {
@@ -16034,32 +16369,76 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     /*
-                     * ===== (c) 硬链接试开证实（用户 2026-10-17 四步里的第三步）=====
-                     * "可证完整"只是名字/尺寸那几条证据；这里再按**规范卷名链**把这一组交给引擎**真开一次**。
-                     * 开不动 ⇒ 整组不动，并把哪一条不过写进决策理由（⛔ 绝不"没试过就当过了"）。
-                     * 试开是 async ⇒ 这一站本轮整体改成 async（判据一条没动）。
+                     * ===== (c) 硬链接试开 / 内容定序（用户 2026-10-17 四步里的第三步 + 2026-10-18 顺序口径）=====
+                     *
+                     * ① **通用分片**（`X.zip.001..00N`）：中间片内容里没有卷号 ⇒ 先按相似度排高概率顺序、
+                     *    真的解一遍验证（硬链接试开）；全试不出 ⇒ 判不出（这一趟不按名字硬拼）。
+                     * ② 其余族（RAR / 7z / 跨盘 ZIP）：卷序由内容或名字明确给出，照旧只按那一种顺序列一次目录。
+                     *
+                     * ⛔ 试开是只读的；赢的那一版**只交顺序**，接片仍走既有出口 `TryGatherGroupPiecesInto`
+                     * （它会记"谁吐出的片、谁借的片"，批末收场才能把产出方那一份按档收干净）。
                      */
-                    if (gatherPlan.Action == VolumeGatherAction.Gather && gatherPlan.Pieces.Count > 0)
-                    {
-                        string? probeFailure = await ProbeGatherGroupAsync(
-                                gatherPlan.Pieces,
-                                entryLayer,
-                                cardReading.EntryPath,
-                                cancellationToken)
-                            .ConfigureAwait(false);
+                    GroupOrderTrialResult probe = await ProbeGatherGroupAsync(
+                            gatherPlan.Pieces,
+                            gatherCandidates,
+                            entryLayer,
+                            cardReading.EntryPath,
+                            gatherReference,
+                            allowFallback: gatherPlan.Action == VolumeGatherAction.Gather,
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
-                        if (probeFailure != null)
+                    if (probe.Failure != null)
+                    {
+                        /*
+                         * ⛔ 试开**只是"这一次先不搬"的闸门，不是对整组的判决**（用户 2026-10-17：
+                         * 「只是简单的判断一下，不能够形成判决情况，因为这个是第二大步才做的」）。
+                         * ⇒ 这里只写"这一趟先不收"，把结论留给第二大步；⛔ 不写"整组不动/判不出"。
+                         *
+                         * ⚠ 但**内容定序这一档适用却失败**（片数 ≤5、末片可定、引擎全试不出）⇒ 名字那把尺子
+                         * 也不能再拿来硬拼一个"完整的一组"（那正是 `30303030` 反复假完整的来源）：
+                         * 记下"判不出"，下面认组那一站据此跳过。
+                         */
+                        AppendLog(
+                            "WARN",
+                            $"{task.LogName}：这一趟先不收（硬链接试开没通过，留到第二大步再判）—— {probe.Failure}");
+
+                        gatherPlan = VolumeGatherPlan.Leave("这一趟先不收（试开没通过，留到第二大步再判）");
+                        contentOrderUndetermined = probe.Applicable;
+                    }
+                    else if (probe.Confirmed)
+                    {
+                        /*
+                         * 试开**真的解开了**这个顺序 ⇒ 把它折成一份内容读取（⛔ 不自己建链接）：
+                         * 接片那一档会按这份槽位把赢的那几片接到入口层（零字节硬链接），并记下产出方。
+                         * 这一组从现在起按内容读取走，⛔ 不再让名字那把尺子重排一遍。
+                         */
+                        ArchiveFixer.Detection.CardVolumeGroupReading? confirmedReading =
+                            VolumeOrderMaterializer.BuildConfirmedReading(
+                                probe.OrderedPieces,
+                                probe.Stem,
+                                VolumeNamingFamily.ZipNumbered);
+
+                        if (confirmedReading == null)
                         {
-                            /*
-                             * ⛔ 试开**只是"这一次先不搬"的闸门，不是对整组的判决**（用户 2026-10-17：
-                             * 「只是简单的判断一下，不能够形成判决情况，因为这个是第二大步才做的」）。
-                             * ⇒ 这里只写"这一趟先不收"，把结论留给第二大步；⛔ 不写"整组不动/判不出"。
-                             */
                             AppendLog(
                                 "WARN",
-                                $"{task.LogName}：这一趟先不收（硬链接试开没通过，留到第二大步再判）—— {probeFailure}");
+                                $"{task.LogName}：这一趟先不收（内容试开定序成立了，但折不出可用的内容读取）—— 整组不动");
 
-                            gatherPlan = VolumeGatherPlan.Leave("这一趟先不收（试开没通过，留到第二大步再判）");
+                            gatherPlan = VolumeGatherPlan.Leave("这一趟先不收（内容读取折不出来）");
+                            contentOrderUndetermined = true;
+                        }
+                        else
+                        {
+                            cardReading = confirmedReading;
+                            gatherCardEvidence = confirmedReading;
+
+                            gatherPlan = new ArchiveFixer.Extraction.VolumeGatherPlan(
+                                VolumeGatherAction.Gather,
+                                "内容试开定序成立 ⇒ 按赢的那一版接进入口层",
+                                probe.OrderedPieces);
+
+                            AppendLog("INFO", $"{task.LogName}：{probe.Reason}");
                         }
                     }
 
@@ -16124,6 +16503,22 @@ namespace ArchiveFixer.ViewModels
                             entryLayer,
                         _deferredVolumeGroupMember.TryGetValue(task, out string? stalledForGroup) ? stalledForGroup : null)
                     ?? ResolveCompleteGroupFromDisk(task, entryLayer);
+
+                /*
+                 * ⛔ **内容定序判不出 ⇒ 不许名字那把尺子再拼一个"完整的一组"**（用户 2026-10-18 口径：
+                 * 全试不出 ⇒ 判不出、没内容物就如实显示失败；⛔ 不按名字硬拼）。
+                 * 现场（`30303030` 组合 6 批内）：三份名字里有两份是同一份物理片的两个别名 ⇒ 名字判「3 卷完整」，
+                 * 引擎打开必然 `Unexpected end of archive`；而内容试开已经回答"这一组凑不齐"。
+                 */
+                if (group != null && contentOrderUndetermined)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{task.LogName}：内容试开定序判不出 ⇒ 这一组这一趟不动"
+                        + "（⛔ 不按名字硬拼一个完整组；留下现场，等补片/下一轮再判）");
+
+                    group = null;
+                }
 
                 if (group != null)
                 {
