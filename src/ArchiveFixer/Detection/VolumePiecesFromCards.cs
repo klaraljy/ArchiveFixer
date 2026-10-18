@@ -41,7 +41,7 @@ namespace ArchiveFixer.Detection
         /// <see cref="VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex"/>。
         /// ⛔ 卡给不出格式 / 基名 ⇒ 空串（不猜，调用方照旧走名字那条路）。
         /// </summary>
-        public static string CanonicalNameForSlot(FileNatureCard? card, int slot)
+        public static string CanonicalNameForSlot(FileNatureCard? card, int slot, VolumeNamingFamily? namingFamily = null)
         {
             if (card == null || slot < 1 || string.IsNullOrWhiteSpace(card.Path))
             {
@@ -67,20 +67,61 @@ namespace ArchiveFixer.Detection
                 return string.Empty;
             }
 
-            string sample = card.Format switch
+            /*
+             * ===== ZIP 有**两个族**，只能由内容分辨（2026-10-18 困难批 `19191919` 现场）=====
+             *
+             * <para>`X.zip` 这一个名字同时是两族的形状：跨盘 ZIP 族的**末片**（`.z01` 才是第 1 片）、
+             * 通用分片族 `X.zip.001` 的**基名**（7z `-tzip -v` 切出来的）。名字分不开，内容分得开：
+             * `ZipEndRecordMeansSplit`（EOCD 的中央目录偏移 ≥ 本文件长度）= 通用分片；EOCD 盘号 &gt; 0 = 跨盘。
+             * ⇒ 族由**调用方交下来的组证据**决定（<paramref name="namingFamily"/>，来源
+             * <see cref="CardVolumeGroupReading.NamingFamily"/>），判不出才退回老口径（按名字样本）。</para>
+             *
+             * <para>现场逐字：`bbb-L2.zip.001/.002/.003` 三片被认成跨盘族 ⇒ 规范名算成 `X.z01` / `X.zip`
+             * ⇒ 两片撞同一个目标名（`绝不覆盖`）⇒ 整组接不起来 ⇒ `contentBytes=0`。</para>
+             */
+            /*
+             * ⚠ **单片卡上格式判不出（中间片没有魔数）时，用组证据补**（2026-10-18 `19191919` 第二次实测）：
+             * 通用分片族的**中间片**头是切开的 ⇒ `Format=Unknown` ⇒ 老写法这里 `sample` 给空串
+             * ⇒ 又退回名字路径（`X.zip`）⇒ 两片撞名。组读取已经知道这一组是哪一族
+             * （`NamingFamily`）⇒ 直接拿它顶格式，⛔ 不猜、⛔ 不放宽。
+             */
+            VolumeContentFormat format = card.Format;
+
+            if (format == VolumeContentFormat.Unknown && namingFamily is VolumeNamingFamily byGroup)
             {
-                // 数字族（`X.7z.00N`）的命名出口要的是**带卷号的样本**，给 `X.7z` 它认不出族。
-                VolumeContentFormat.SevenZip => stem + ".7z.001",
-                /*
-                 * ⚠ 现场（新样本 `1111`，卡行逐字 `槽位=3:…part34.rar`）：RAR 族这里原来给的是
-                 * `stem + ".rar"` —— **不带卷标记**，命名出口认不出"这是 partN 族"⇒ 返回空串
-                 * ⇒ 调用方掉进"名字兜底"（`222-L2.part34B+.rar` → `part34.rar`，正是那个矛盾点）。
-                 * ⇒ 与 7z 同理，样本必须**带一个卷标记**（`stem.part1.rar`），按 slot 重排才成立。
-                 */
-                VolumeContentFormat.Rar => stem + ".part1.rar",
-                VolumeContentFormat.Zip => stem + ".zip",
-                _ => string.Empty
-            };
+                format = byGroup switch
+                {
+                    VolumeNamingFamily.SevenZipNumbered => VolumeContentFormat.SevenZip,
+                    VolumeNamingFamily.RarPart => VolumeContentFormat.Rar,
+                    VolumeNamingFamily.ZipNumbered or VolumeNamingFamily.ZipSpanned => VolumeContentFormat.Zip,
+                    _ => VolumeContentFormat.Unknown
+                };
+            }
+
+            string sample;
+
+            if (format == VolumeContentFormat.Zip && namingFamily == VolumeNamingFamily.ZipNumbered)
+            {
+                // 通用分片族的入口形状：`X.zip.001`（命名出口按它定族，⛔ 不是 `X.zip`）。
+                sample = stem + ".zip.001";
+            }
+            else
+            {
+                sample = format switch
+                {
+                    // 数字族（`X.7z.00N`）的命名出口要的是**带卷号的样本**，给 `X.7z` 它认不出族。
+                    VolumeContentFormat.SevenZip => stem + ".7z.001",
+                    /*
+                     * ⚠ 现场（新样本 `1111`，卡行逐字 `槽位=3:…part34.rar`）：RAR 族这里原来给的是
+                     * `stem + ".rar"` —— **不带卷标记**，命名出口认不出"这是 partN 族"⇒ 返回空串
+                     * ⇒ 调用方掉进"名字兜底"（`222-L2.part34B+.rar` → `part34.rar`，正是那个矛盾点）。
+                     * ⇒ 与 7z 同理，样本必须**带一个卷标记**（`stem.part1.rar`），按 slot 重排才成立。
+                     */
+                    VolumeContentFormat.Rar => stem + ".part1.rar",
+                    VolumeContentFormat.Zip => stem + ".zip",
+                    _ => string.Empty
+                };
+            }
 
             if (sample.Length == 0)
             {
@@ -318,6 +359,40 @@ namespace ArchiveFixer.Detection
                 card.CanonicalVolumeName,
                 StringComparison.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// **这一组的命名族（由内容证据定）**：ZIP 那一族名字分不开的两个子族就靠它分开
+        /// （`ZipNumbered` = 通用分片 `X.zip.001`；`ZipSpanned` = 跨盘 `X.z01…X.zip`）。
+        /// 判不出 ⇒ null（调用方退回按名字样本定族）。
+        /// </summary>
+        private static VolumeNamingFamily? ResolveNamingFamily(IReadOnlyList<FileNatureCard> pieces)
+        {
+            if (pieces.Any(card => card.ZipEndRecordMeansSplit))
+            {
+                return VolumeNamingFamily.ZipNumbered;
+            }
+
+            VolumeContentFormat format = pieces
+                .Select(card => card.Format)
+                .FirstOrDefault(value => value != VolumeContentFormat.Unknown);
+
+            switch (format)
+            {
+                case VolumeContentFormat.SevenZip:
+                    return VolumeNamingFamily.SevenZipNumbered;
+
+                case VolumeContentFormat.Rar:
+                    return VolumeNamingFamily.RarPart;
+
+                case VolumeContentFormat.Zip:
+                    return pieces.Any(card => card.VolumeNumber is int number && number >= 2)
+                        ? VolumeNamingFamily.ZipSpanned
+                        : null;
+
+                default:
+                    return null;
+            }
+        }
+
         public static CardVolumeGroupReading Read(IReadOnlyList<FileNatureCard>? cards)
         {
             var pieces = (cards ?? Array.Empty<FileNatureCard>())
@@ -378,7 +453,8 @@ namespace ArchiveFixer.Detection
                     declaredTotalBytes: first?.DeclaredTotalBytes ?? 0,
                     sumBytes: sum,
                     entryPath: first?.Path ?? string.Empty,
-                    slots: ruleSlots);
+                    slots: ruleSlots,
+                    namingFamily: ResolveNamingFamily(pieces));
             }
 
             if (first == null)
@@ -454,7 +530,8 @@ namespace ArchiveFixer.Detection
                     declaredTotalBytes: 0,
                     sumBytes: sum,
                     entryPath: string.Empty,
-                    slots: slotList);
+                    slots: slotList,
+                    namingFamily: ResolveNamingFamily(pieces));
             }
 
             /*
@@ -510,7 +587,8 @@ namespace ArchiveFixer.Detection
                 SumBytes = sum,
                 Slots = slots,
                 EntryPath = first.Path,
-                Reason = $"可证完整：{pieces.Count} 片合计 {sum} 字节 == 首卷自述的整包字节数，满片 {fullSize} 字节"
+                Reason = $"可证完整：{pieces.Count} 片合计 {sum} 字节 == 首卷自述的整包字节数，满片 {fullSize} 字节",
+                NamingFamily = ResolveNamingFamily(pieces)
             };
         }
     }
@@ -554,6 +632,13 @@ namespace ArchiveFixer.Detection
         /// </summary>
         public long MissingBytes => Math.Max(0L, DeclaredTotalBytes - SumBytes);
 
+        /// <summary>
+        /// **这一组的命名族（由内容证据定）**：ZIP 那一族名字分不开的两个子族就靠它分开
+        /// （`ZipNumbered` = 通用分片 `X.zip.001`；`ZipSpanned` = 跨盘 `X.z01…X.zip`）。
+        /// 判不出 ⇒ null（调用方退回按名字样本定族，与老口径逐字相同）。
+        /// </summary>
+        public VolumeNamingFamily? NamingFamily { get; init; }
+
         /// <summary>判据输入（一句人话：为什么是这个结论）。</summary>
         public string Reason { get; init; } = string.Empty;
 
@@ -569,7 +654,8 @@ namespace ArchiveFixer.Detection
             long declaredTotalBytes,
             long sumBytes,
             string entryPath,
-            IReadOnlyList<CardVolumeSlot>? slots = null) => new()
+            IReadOnlyList<CardVolumeSlot>? slots = null,
+            VolumeNamingFamily? namingFamily = null) => new()
             {
                 Complete = false,
                 HasFirstPiece = hasFirstPiece,
@@ -578,6 +664,7 @@ namespace ArchiveFixer.Detection
                 SumBytes = sumBytes,
                 EntryPath = entryPath,
                 Slots = slots ?? Array.Empty<CardVolumeSlot>(),
+                NamingFamily = namingFamily,
                 Reason = reason
             };
     }

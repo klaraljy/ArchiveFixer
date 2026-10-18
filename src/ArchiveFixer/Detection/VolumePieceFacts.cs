@@ -245,8 +245,35 @@ namespace ArchiveFixer.Detection
             string path,
             FileNatureCard card,
             FileNatureCard? groupAnchorCard = null,
-            bool trustCardNumberWhenNameGivesNothing = false)
+            bool trustCardNumberWhenNameGivesNothing = false,
+            int? contentSlot = null,
+            VolumeNamingFamily? namingFamily = null)
         {
+            /*
+             * ⛔ **有"内容定的槽位 + 内容定的命名族"时，名字一个字节都不许参与命名**
+             * （2026-10-18 困难批 `19191919` 现场）。
+             *
+             * <para>现场逐字：`bbb-L2.zip.001/.002/.003` 是 7z `-tzip -v` 的通用分片，三片被伪装成
+             * `bbb-L2.zip` / `bbb-W1-0.BAyzip` / `bbb-L2.zip-658`；卡上三条内容事实已经排出 1/2/3
+             * （本地文件头 / 中间 / 尾部 EOCD），而名字把 `X.zip` 读成跨盘 ZIP 族的**末片**
+             * ⇒ 规范名算成 `X.z01` / `X.zip` ⇒ 两片撞同一个目标名（`绝不覆盖`）⇒ 整组接不起来。</para>
+             *
+             * <para>⇒ 判据全用内容（槽位 = 组读取的 `Slots`，族 = 组读取的 `NamingFamily`），
+             * 名字只用来取基名；拼名仍交给唯一出口 <see cref="VolumePiecesFromCards.CanonicalNameForSlot"/>。
+             * 两者缺一 ⇒ 照旧走下面老口径（判不出 ⇒ 不猜）。</para>
+             */
+            if (contentSlot is int slotFromContent
+                && slotFromContent >= 1
+                && namingFamily is VolumeNamingFamily family)
+            {
+                string byContent = VolumePiecesFromCards.CanonicalNameForSlot(card, slotFromContent, family);
+
+                if (byContent.Length > 0)
+                {
+                    return byContent;
+                }
+            }
+
             if (ResolveSlotIndex(path, card, groupAnchorCard, trustCardNumberWhenNameGivesNothing) is not int slot || slot < 1)
             {
                 return string.Empty;

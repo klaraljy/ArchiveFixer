@@ -9623,7 +9623,9 @@ namespace ArchiveFixer.ViewModels
         private static string ResolveCanonicalNameFromCard(
             string piecePath,
             FileNatureCard card,
-            FileNatureCard? groupAnchorCard = null)
+            FileNatureCard? groupAnchorCard = null,
+            int? contentSlot = null,
+            VolumeNamingFamily? namingFamily = null)
         {
             /*
              * ⚠ 2026-10-14：这套顺序（族来自卡 → 卷号来自卡 → 基名剥掉伪装尾巴 → 交给既有命名出口）
@@ -9638,12 +9640,18 @@ namespace ArchiveFixer.ViewModels
              * 第 1 槽在不在这一层不影响它 ⇒ 明确传 `trustCardNumberWhenNameGivesNothing: true`
              * （判据内部只在"名字什么都给不出"时才读卡上的号，且只认 ≥ 2）。
              * 真机现场 `19191919`：`aaa-L2-976` 卡上写着卷号 2、名字什么都给不出 ⇒ 之前永远拿不到规范名。
+             *
+             * ⚠ 2026-10-18（困难批 `19191919` 同一份样本的第二处）：组读取已经用内容排出**槽位**与**命名族**
+             * （通用分片 `ZipNumbered` vs 跨盘 `ZipSpanned`）⇒ 这两个事实原样转下去，名字不再参与命名
+             * （否则 `X.zip` 会给成跨盘族的 `X.z01`/`X.zip`、两片撞名）。判不出 ⇒ null，走老口径。
              */
             return VolumePieceFacts.ResolveCanonicalName(
                 piecePath,
                 card,
                 groupAnchorCard,
-                trustCardNumberWhenNameGivesNothing: true);
+                trustCardNumberWhenNameGivesNothing: true,
+                contentSlot: contentSlot,
+                namingFamily: namingFamily);
         }
 
         /// <summary>
@@ -10666,7 +10674,9 @@ namespace ArchiveFixer.ViewModels
             ArchiveTask? owner,
             string? layerOverride = null,
             string? groupEntryPathOverride = null,
-            bool allowMoveIntoGroup = true)
+            bool allowMoveIntoGroup = true,
+            IReadOnlyDictionary<string, int>? contentSlots = null,
+            VolumeNamingFamily? namingFamily = null)
         {
             if (string.IsNullOrWhiteSpace(piecePath) || !File.Exists(piecePath))
             {
@@ -10738,7 +10748,24 @@ namespace ArchiveFixer.ViewModels
              * `111_.part1.rar`，盘上却只有 `111_.z01` ⇒ 整组永远凑不齐 ⇒ 四片各自去解 ⇒ 全批没一个成功。
              * 判不出族 / 卷号 ⇒ 什么都不做（与老口径那两条早退逐字一致）。
              */
-            bool nameGaveCanonical = VolumeGroupResolver.TryGetCanonicalVolumeName(Path.GetFileName(piecePath), out string canonical);
+            /*
+             * ===== 内容定的槽位 + 内容定的命名族：**名字一个字节都不参与命名** =====
+             * （2026-10-18 困难批 `19191919` 现场；见 `TryGatherGroupPiecesInto` 里 `contentSlots` 的说明）
+             */
+            int? contentSlotForNaming = null;
+
+            if (contentSlots != null
+                && namingFamily.HasValue
+                && contentSlots.TryGetValue(VolumeSlotKey(piecePath), out int slotByContent)
+                && slotByContent >= 1)
+            {
+                contentSlotForNaming = slotByContent;
+            }
+
+            string canonical = string.Empty;
+
+            bool nameGaveCanonical = contentSlotForNaming == null
+                && VolumeGroupResolver.TryGetCanonicalVolumeName(Path.GetFileName(piecePath), out canonical);
 
             /*
              * ⚠ 2026-10-16（第 111 轮，困难批 `24242424` 运行期实测）：**名字出口给得出答案也不算数**的那一格。
@@ -10783,7 +10810,9 @@ namespace ArchiveFixer.ViewModels
                 canonical = ResolveCanonicalNameFromCard(
                     piecePath,
                     nature,
-                    groupAnchor);
+                    groupAnchor,
+                    contentSlotForNaming,
+                    namingFamily);
 
                 if (canonical.Length == 0)
                 {
@@ -12469,7 +12498,23 @@ namespace ArchiveFixer.ViewModels
                 ? memberPath!
                 : task?.CurrentPath ?? string.Empty;
 
-        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null, bool allowMoveIntoGroup = true, string? cardEntryPath = null)
+        /// <summary>
+        /// 收片 / 组读取之间传槽位用的**键**：盘上物理身份（卷序列号:文件索引）；判不出身份才退回完整路径。
+        /// <para>⛔ 用身份不用路径（2026-10-18 困难批 `19191919` 实测）：接片会移动 / 建硬链接，
+        /// 路径随动作而变 —— 按原路径查表会落空、又退回"名字优先"，两片就撞同一个规范名。</para>
+        /// </summary>
+        private static string VolumeSlotKey(string path)
+        {
+            FileNatureCard card = FileNature.Inspect(path);
+
+            return card.HasIdentity
+                ? card.VolumeSerial.ToString("X8", CultureInfo.InvariantCulture)
+                  + ":"
+                  + card.FileIndex.ToString("X", CultureInfo.InvariantCulture)
+                : SafePathHelper.GetFullPathSafe(path);
+        }
+
+        private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null, bool allowMoveIntoGroup = true, string? cardEntryPath = null, ArchiveFixer.Detection.CardVolumeGroupReading? cardEvidence = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
             {
@@ -12486,6 +12531,24 @@ namespace ArchiveFixer.ViewModels
                 FileNameHelper.GetArchiveBaseName(ResolveObservedPiecePath(task, memberPath)),
                 memberPath);
             var sources = new List<string>(task.VolumePaths);
+
+            /*
+             * ⛔ **组读取排出来的那几片本身就是源**（2026-10-18，困难批 `19191919` 实测）：
+             * `sources` 原来只收"任务表里的同组成员"，而第 3 片（`bbb-L2.zip-658`）既不是任务、
+             * 也不在任何一单的其余物里（它被扫描判成"不是压缩包"⇒ 跳过）⇒ 它永远接不进来
+             * ⇒ 整组缺末片 ⇒ `contentBytes=0`。内容已经把它排进槽位 3 ⇒ 原样当源收下，
+             * 接片仍走它自己的闸门（硬链接 / 不碰用户源包）。
+             */
+            if (cardEvidence != null)
+            {
+                foreach (ArchiveFixer.Detection.CardVolumeSlot slot in cardEvidence.Slots)
+                {
+                    if (slot.Path.Length > 0 && File.Exists(slot.Path))
+                    {
+                        sources.Add(slot.Path);
+                    }
+                }
+            }
             string groupBaseForScan = FileNameHelper.GetArchiveBaseName(ResolveObservedPiecePath(task, memberPath));
 
             foreach (ArchiveTask other in SnapshotTaskTable(Tasks))
@@ -12548,11 +12611,42 @@ namespace ArchiveFixer.ViewModels
                 : sources.FirstOrDefault(item =>
                     File.Exists(item) && FileNature.Inspect(item).BodyKind == ArchiveBodyKind.VolumeFirstPiece);
 
+            /*
+             * ===== 内容定的槽位 + 内容定的命名族（2026-10-18，困难批 `19191919`）=====
+             *
+             * <para>组读取（`VolumePiecesFromCards.Read`）已经用**内容**排出槽位（本地文件头 / 中间 / 尾部 EOCD），
+             * 也给出了命名族（`ZipEndRecordMeansSplit` ⇒ `ZipNumbered`）。而接片这一档原来只拿**名字**算规范名
+             * —— `X.zip` 被读成跨盘族的末片 ⇒ `X.z01` / `X.zip` 撞名 ⇒ 整组接不起来。
+             * ⇒ 把这两个内容事实原样交下去；判不出（没有卡证据）⇒ null，接片照旧走名字那条路。</para>
+             */
+            var contentSlots = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            if (cardEvidence != null)
+            {
+                foreach (ArchiveFixer.Detection.CardVolumeSlot slot in cardEvidence.Slots)
+                {
+                    /*
+                     * ⚠ 键用**盘上物理身份**（见 VolumeSlotKey），⛔ 不用路径：接片会移动 / 建硬链接，
+                     * 按原路径查表会落空 ⇒ 又退回"名字优先"⇒ 两片撞同一个规范名。
+                     */
+                    contentSlots[VolumeSlotKey(slot.Path)] = slot.Index;
+                }
+            }
+
+            VolumeNamingFamily? groupNamingFamily = cardEvidence?.NamingFamily;
+
             foreach (string path in sources.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
             {
                 try
                 {
-                    TryAdoptUnresolvedVolumePiece(path, task, entryLayer, groupEntryPath, allowMoveIntoGroup);
+                    TryAdoptUnresolvedVolumePiece(
+                        path,
+                        task,
+                        entryLayer,
+                        groupEntryPath,
+                        allowMoveIntoGroup,
+                        contentSlots,
+                        groupNamingFamily);
                 }
                 catch (Exception ex)
                 {
@@ -12605,7 +12699,14 @@ namespace ArchiveFixer.ViewModels
                         {
                             if (VolumeGroupDetector.BelongsToSameGroup(FileNameHelper.GetFileName(path), tailName))
                             {
-                                TryAdoptUnresolvedVolumePiece(path, task, entryLayer, groupEntryPath, allowMoveIntoGroup);
+                                TryAdoptUnresolvedVolumePiece(
+                                    path,
+                                    task,
+                                    entryLayer,
+                                    groupEntryPath,
+                                    allowMoveIntoGroup,
+                                    contentSlots,
+                                    groupNamingFamily);
                             }
                         }
                         catch (Exception ex)
@@ -13607,6 +13708,86 @@ namespace ArchiveFixer.ViewModels
         /// "完整 / 卷号连续 / 除末片外等大"回答；⛔ 这一层里没有入口包 / 不完整 ⇒ 返回 null，
         /// 由调用方退回既有口径。</para>
         /// </summary>
+        /// <summary>
+        /// **按内容定的规范名把这一组认出来**（2026-10-18，困难批 `19191919`）。
+        ///
+        /// <para>族与槽位都来自内容（`CardVolumeGroupReading`）⇒ 入口就是槽位 1 的规范名
+        /// （通用分片 = `X.zip.001`）；⛔ 不让"用户那一份原来的名字"（`X.zip`，同一份文件的别名）
+        /// 冒充入口 —— 否则引擎按跨盘族的入口名去找 `.z01` ⇒ `Unexpected end of archive`、
+        /// 整组判成缺卷（真跑逐字）。</para>
+        ///
+        /// <para>判不出 / 规范名不齐 ⇒ null（调用方照旧走名字那把尺子，一个字不放宽）。</para>
+        /// </summary>
+        private static VolumeGroup? ResolveCanonicalGroupFromCardSlots(
+            string entryLayer,
+            ArchiveFixer.Detection.CardVolumeGroupReading reading)
+        {
+            if (reading.NamingFamily is not VolumeNamingFamily family
+                || reading.Slots.Count < 2
+                || string.IsNullOrWhiteSpace(entryLayer))
+            {
+                return null;
+            }
+
+            /*
+             * 基名从**卡上**取（唯一出口 `ArchiveBaseName`），⛔ 不从 `EntryPath` 取：
+             * 不完整的组读取没有入口（`EntryPath` 为空），而槽位那边有每一片的路径。
+             * 取第一个**还在盘上**的槽位；一个都不在 ⇒ 判不出。
+             */
+            string stem = string.Empty;
+
+            foreach (ArchiveFixer.Detection.CardVolumeSlot slot in reading.Slots)
+            {
+                if (slot.Path.Length > 0 && File.Exists(slot.Path))
+                {
+                    stem = FileNature.Inspect(slot.Path).ArchiveBaseName;
+                    break;
+                }
+            }
+
+            if (stem.Length == 0)
+            {
+                return null;
+            }
+
+            IReadOnlyList<string> names = VolumeNumberFromContent.BuildStandardNames(stem, family, reading.Slots.Count);
+
+            if (names.Count < 2)
+            {
+                return null;
+            }
+
+            var candidates = new List<VolumeCandidate>();
+
+            foreach (string name in names)
+            {
+                string path = Path.Combine(entryLayer, name);
+
+                if (!File.Exists(path))
+                {
+                    return null;
+                }
+
+                long size = -1;
+
+                try
+                {
+                    size = new FileInfo(path).Length;
+                }
+                catch
+                {
+                    // 量不出大小不影响归组。
+                }
+
+                candidates.Add(new VolumeCandidate { Path = path, Size = size });
+            }
+
+            return VolumeGroupDetector.Group(candidates)
+                .FirstOrDefault(group => group.IsComplete
+                    && !string.IsNullOrWhiteSpace(group.FirstVolumePath)
+                    && File.Exists(group.FirstVolumePath));
+        }
+
         private VolumeGroup? ResolveGatheredGroupFromEntryLayer(
             ArchiveTask task,
             string? entryLayer,
@@ -15496,6 +15677,8 @@ namespace ArchiveFixer.ViewModels
                     }
                 }
 
+                ArchiveFixer.Detection.CardVolumeGroupReading? gatherCardEvidence = null;
+
                 if (entryLayer.Length > 0)
                 {
                     /*
@@ -15549,6 +15732,8 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     CardVolumeGroupReading cardReading = VolumePiecesFromCards.Read(gatherCards);
+
+                    gatherCardEvidence = cardReading;
 
                     AppendLog(
                         "INFO",
@@ -15675,7 +15860,8 @@ namespace ArchiveFixer.ViewModels
                         entryLayer,
                         _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null,
                         allowMoveIntoGroup: allowMoveIntoGroup,
-                        cardEntryPath: cardReading.EntryPath);
+                        cardEntryPath: cardReading.EntryPath,
+                        cardEvidence: cardReading);
 
                     /*
                      * ⚠ 2026-10-13（第 15 修之后）：收片只认名字 ⇒ 名字被伪装到"读不出卷号"的那几片收不进来。
@@ -15689,9 +15875,18 @@ namespace ArchiveFixer.ViewModels
                         cardEntryPath: cardReading.EntryPath);
                 }
 
-                VolumeGroup? group = ResolveGatheredGroupFromEntryLayer(
-                        task,
-                        entryLayer,
+                /*
+                 * ⛔ **优先按内容定的规范名认这一组**（2026-10-18，困难批 `19191919`）：
+                 * 入口 = 槽位 1 的规范名（通用分片 `X.zip.001`），⛔ 不让用户那一份原来的名字
+                 * （`X.zip`，同一份文件的别名）冒充入口 —— 否则引擎按跨盘族入口名去找 `.z01`
+                 * ⇒ `Unexpected end of archive` ⇒ 整组判缺卷（真跑逐字）。判不出 ⇒ 照旧老口径。
+                 */
+                VolumeGroup? group = (gatherCardEvidence == null
+                        ? null
+                        : ResolveCanonicalGroupFromCardSlots(entryLayer, gatherCardEvidence))
+                    ?? ResolveGatheredGroupFromEntryLayer(
+                            task,
+                            entryLayer,
                         _deferredVolumeGroupMember.TryGetValue(task, out string? stalledForGroup) ? stalledForGroup : null)
                     ?? ResolveCompleteGroupFromDisk(task, entryLayer);
 
