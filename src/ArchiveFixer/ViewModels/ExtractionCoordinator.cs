@@ -13627,6 +13627,30 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
+                    /*
+                     * ⛔ **已经在组里的那几片，绝不许再拿来填缺口**（2026-10-18 困难批 `21212121` 组合 4
+                     * 运行期逐字）：`.002` 还在并行那一单的包装壳里没落地时，这一档用**已经在 slot 1 的
+                     * `bbb-L2.7z.001`** 凑了差额（日志：`用 bbb-L2.7z.001 → bbb-L2.7z.002`，零字节硬链接）
+                     * ⇒ 这一组的 `.002` 是 `.001` 的字节 ⇒ 引擎对**真密码**也报
+                     * `Data Error in encrypted file. Wrong password?` ⇒ 10 个候选全废 ⇒ ① 红。
+                     * 判据两件盘上事实：① 路径就在 `present` 里；② 与 `present` 里某一份是**同一物理文件**
+                     * （改名/硬链接，按 `FileIdentity` 认）。两条任一成立 ⇒ 它不是缺口候选。
+                     * 判不出身份 ⇒ 照旧收（不放开任何既有判据）。
+                     */
+                    if (present.Values.Any(presentPath => SafePathHelper.PathEquals(presentPath, path)))
+                    {
+                        continue;
+                    }
+
+                    if (ArchiveFixer.Detection.FileIdentity.TryGetIdentity(path, out ulong candidateVolume, out ulong candidateIndex)
+                        && present.Values.Any(presentPath =>
+                            ArchiveFixer.Detection.FileIdentity.TryGetIdentity(presentPath, out ulong presentVolume, out ulong presentIndex)
+                            && presentVolume == candidateVolume
+                            && presentIndex == candidateIndex))
+                    {
+                        continue;
+                    }
+
                     if (size <= 0 || size > largest || size > difference)
                     {
                         continue;
