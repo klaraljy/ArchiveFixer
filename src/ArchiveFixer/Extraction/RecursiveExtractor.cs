@@ -2358,9 +2358,32 @@ namespace ArchiveFixer.Extraction
                 /*
                  * 损坏不再换候选重试（规则 1）：换密码对损坏的归档没有任何帮助，
                  * 只会把同一个损坏包重试 N 遍，既浪费时间又掩盖真正的问题。
+                 *
+                 * <para>⚠ **2026-10-18 补：落「损坏」之前先问一次"这一份是不是某一组的一片"**
+                 * （困难批 `30303030` 运行期定案）—— 手上只有第 1 片时，7-Zip 对通用分片族说的正是
+                 * `Unexpected end of archive`（与"包坏了"逐字相同）⇒ 老写法落「压缩包损坏」⇒
+                 * 整单失败 + **那一片被连工作区一起扔掉** ⇒ 那一组永远缺第 1 片（`contentBytes=0`）。
+                 * 判据与处置**逐字同前两处**（唯一出口 <see cref="IsPieceOfIncompleteGroup"/>）：
+                 * 内容自证是分卷组的一员（`Membership=VolumeMember` 或"通用分片第 1 片"）且入口不在旁边
+                 * ⇒ 落「缺卷」，片原样留着。⛔ 判不出 ⇒ 照旧落「损坏」（老口径一个字不放宽）。</para>
                  */
                 if (result.IsCorrupted)
                 {
+                    if (IsPieceOfIncompleteGroup(archivePath))
+                    {
+                        Log(
+                            "WARN",
+                            $"{layerLabel}：这一片属于某个分卷组、而同组的入口包不在这一层 ⇒ "
+                            + "按「缺卷」处理（⛔ 不是「压缩包损坏」）—— 片原样留着，交给批末/跨链那一套去凑。"
+                            + $"（引擎原话：{PasswordMasker.Sanitize(result.Message)}）");
+
+                        RememberUnresolvedVolumePiece(archivePath);
+
+                        return LayerOutcome.Stop(
+                            BuildLayerReport(item, result, succeededPassword: null, manifestEntries: lastListedEntries),
+                            RecursionStopReason.MissingVolume);
+                    }
+
                     Log(
                         "WARN",
                         string.Format(
@@ -3064,6 +3087,26 @@ namespace ArchiveFixer.Extraction
             if (Detection.VolumePieceFacts.ContentProvesNotAVolumePiece(card))
             {
                 return false;
+            }
+
+            /*
+             * ===== 通用分片族的**第一片**（2026-10-18，困难批 `30303030` 现场）=====
+             *
+             * <para>现场逐字：`333-L2.zip.png`（7z `-tzip -v` 的第 1 片、被伪装成 `.png`）单独打开 ⇒
+             * 7-Zip `Unexpected end of archive` ⇒ 老判据落「压缩包损坏」⇒ 整单失败 + 那一片被连工作区扔掉
+             * ⇒ 那一组永远缺第 1 片 ⇒ `contentBytes=0`。</para>
+             *
+             * <para>内容事实（卡上）：格式=Zip + **开头是本地文件头** + **尾部没有 EOCD** ⇒ 它是从数据里
+             * 切出来的**第 1 片**（一份完整的单卷 zip 一定有 EOCD）。⇒ 按「缺卷」收，片原样留着，
+             * ⛔ 不按「损坏」扔掉。⛔ 同组入口就在旁边 ⇒ 不抢结论（交给引擎）。</para>
+             */
+            if (card.Format == VolumeContentFormat.Zip
+                && card.HasZipLocalHeader
+                && !card.HasZipEndRecord
+                && !IsGroupEntryPresentBeside(archivePath)
+                && !(requireNothingElseBeside && HasSameGroupNeighbourByName(archivePath)))
+            {
+                return true;
             }
 
             if (FileNameHelper.IsVolumeContinuationPart(FileNameHelper.GetFileName(archivePath)))

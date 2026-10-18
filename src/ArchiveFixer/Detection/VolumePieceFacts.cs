@@ -54,8 +54,9 @@ namespace ArchiveFixer.Detection
         /// </summary>
         internal static bool ContentProvesNotAVolumePiece(FileNatureCard? card) =>
             card != null
-            && (!card.ParticipatesInVolumeHandling
-                || card.BodyKind == ArchiveBodyKind.SingleComplete);
+            && (card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
+                || (card.Format == VolumeContentFormat.SevenZip
+                    && card.BodyKind == ArchiveBodyKind.SingleComplete));
 
         /// <summary>同上，只拿到路径时用它（自己拍一次卡；⛔ 调用方别再自己判一遍）。</summary>
         internal static bool ContentProvesNotAVolumePiece(string? path) =>
