@@ -151,6 +151,26 @@ namespace ArchiveFixer.Services
                 return;
             }
 
+            /*
+             * ===== 写组信息之前**先问卡**（用户 2026-10-17：「一切看底层识别的来」）=====
+             * 现场（新造困难档 `6666`）：造包器给每一片单独套了 0–2 层归档 ⇒ 盘上 `打包111-W0-0`、
+             * `打包111-W1-0.png`、`打包111-L2.zip.000003` 各自都是**完整单卷归档**
+             * （卡上逐字 `单卷/分卷=SingleComplete`、`参与分卷=False`），只是名字像分片。
+             * 名字把 `IsVolumeGroup` 挂上之后，整组永远"分卷缺失"、一个字节都解不出来。
+             * ⇒ 内容可证"我不是分卷成员"的，⛔ 不挂组、不写缺口（它照旧按单卷任务走）。
+             */
+            try
+            {
+                if (!ArchiveFixer.Detection.FileNature.Inspect(task.CurrentPath).ParticipatesInVolumeHandling)
+                {
+                    return;
+                }
+            }
+            catch
+            {
+                // 卡读不出来 ⇒ 照旧按名字（老口径）。
+            }
+
             task.IsVolumeGroup = true;
             task.VolumeGroupKey = group.GroupKey;
             task.VolumePaths.Clear();
