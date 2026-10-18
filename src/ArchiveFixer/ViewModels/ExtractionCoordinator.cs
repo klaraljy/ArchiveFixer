@@ -9057,6 +9057,12 @@ namespace ArchiveFixer.ViewModels
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 每一组的**一等事实**（批内只建一次；本轮只接“源层”这一项，owner/顺序暂不接线）。
+        /// </summary>
+        private readonly Dictionary<string, VolumeGroupUnit> _volumeGroupUnits =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 这一批里"哪一单吐出了某一组的片"（组基名 → 那一单 **+ 它吐出的那一片的名字**）——跨链收卷用（真机第九批 CCCC）。
         ///
         /// <para>用途：整组由别单解开、而且**可证完整**之后，这些"只是包装"的单也按**跟班卷**收场
@@ -14542,6 +14548,7 @@ namespace ArchiveFixer.ViewModels
             _volumeDeficitFinalPass.Clear();
             ClearGroupPieceProducers();
             _groupConsumerByName.Clear();
+            _volumeGroupUnits.Clear();
             _consumedVolumeSources.Clear();
             _producerSourcesCollected.Clear();
             _adoptedLandedPieces.Clear();
@@ -17103,6 +17110,103 @@ namespace ArchiveFixer.ViewModels
                     string firstVolume = group.FirstVolumePath;
 
                     /*
+                     * ===== 组事实只接“源层”这一项（2026-10-18 第 64 轮回退后的增量接线）=====
+                     * 组齐这一刻把源层记下来；入口层若落在过程物目录（`其余物`/工作区），
+                     * 用组事实的源层，⛔ 不把工作区当入口层。owner/顺序本轮不接，避免一次改三处。
+                     */
+                    string groupBaseName = string.IsNullOrWhiteSpace(group.BaseName)
+                        ? FileNameHelper.GetArchiveBaseName(firstVolume)
+                        : group.BaseName;
+
+                    VolumeNamingFamily? groupFamily = gatherCardEvidence?.NamingFamily;
+
+                    string groupSourceLayer = !string.IsNullOrWhiteSpace(taskOutputPathBeforeRecheck)
+                        && !ProcessArtifactLayout.IsInsideDeletableProcessFolders(taskOutputPathBeforeRecheck)
+                            ? taskOutputPathBeforeRecheck
+                            : Path.GetDirectoryName(firstVolume) ?? string.Empty;
+
+                    string groupUnitKey = groupBaseName + "|" + (groupFamily?.ToString() ?? "?");
+
+                    if (!_volumeGroupUnits.TryGetValue(groupUnitKey, out VolumeGroupUnit? groupUnit))
+                    {
+                        groupUnit = new VolumeGroupUnit(
+                            groupBaseName,
+                            groupFamily,
+                            groupSourceLayer,
+                            firstVolume);
+
+                        _volumeGroupUnits[groupUnitKey] = groupUnit;
+
+                        AppendLog(
+                            "INFO",
+                            $"{task.LogName}：组事实建立 —— 基名「{groupBaseName}」｜族={groupFamily?.ToString() ?? "判不出"}"
+                            + $"｜源层「{Path.GetFileName(groupSourceLayer)}」｜入口「{FileNameHelper.GetFileName(firstVolume)}」");
+                    }
+
+                    if (!stagedOrderGroup
+                        && groupUnit.SourceLayer.Length > 0
+                        && (entryLayer.Length == 0
+                            || ProcessArtifactLayout.IsInsideDeletableProcessFolders(entryLayer)))
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{task.LogName}：这一组的入口层是过程物层「{Path.GetFileName(entryLayer)}」—— "
+                            + $"改用组事实里的源层「{Path.GetFileName(groupUnit.SourceLayer)}」");
+
+                        entryLayer = groupUnit.SourceLayer;
+                        groupResolutionLayer = groupUnit.SourceLayer;
+
+                        /*
+                         * 只改入口层不改任务落点 ⇒ 引擎仍会按原 CurrentPath/OutputPath 把产物写回
+                         * `其余物`（`19191919` 批内逐字：入口层已改，落点仍是 `其余物\pack111-L2`）。
+                         * ⇒ 起点与落点一起改到源层：源层目录名已经是组基名时直接用，否则补一层组名。
+                         */
+                        string sourceLanding = string.Equals(
+                            Path.GetFileName(groupUnit.SourceLayer),
+                            groupBaseName,
+                            StringComparison.OrdinalIgnoreCase)
+                                ? groupUnit.SourceLayer
+                                : Path.Combine(groupUnit.SourceLayer, groupBaseName);
+
+                        task.CurrentPath = firstVolume;
+                        task.OutputPath = sourceLanding;
+                    }
+
+                    /*
+                     * 只在“跟班互相把对方记成 consumer”这一种现场接管：把已被标成跟班成功的这一单
+                     * 复位并让它开组；同一组只允许一个这样的接管者。⛔ 不动正常成功单，⛔ 不接普通 owner。
+                     */
+                    bool forceGroupOwner = false;
+
+                    if (task.Outcome == TaskOutcome.Succeeded && task.IsVolumeGroupFollower)
+                    {
+                        if (groupUnit.OwnerTaskFileName == null)
+                        {
+                            AppendLog(
+                                "WARN",
+                                $"{task.LogName}：这一单原来被标成「跟班已成功」，但这一组还没有 owner —— "
+                                + "复位成待跑，由这一单把整组正经解一次（⛔ 不清它的源片、不碰用户原件）");
+
+                            task.Outcome = TaskOutcome.Pending;
+                            task.IsVolumeGroupFollower = false;
+                            task.SettledWithGroupUnitName = string.Empty;
+                            forceGroupOwner = true;
+                            groupUnit.OwnerTaskFileName = task.FileName;
+                        }
+                        else if (!string.Equals(groupUnit.OwnerTaskFileName, task.FileName, StringComparison.Ordinal))
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"{task.LogName}：这一组已有跟班接管者「{groupUnit.OwnerTaskFileName}」—— "
+                                + "这一单不重复开组");
+
+                            _volumeDeficitDeferred.Remove(task);
+                            task.IsVolumeDeficitDeferred = false;
+                            continue;
+                        }
+                    }
+
+                    /*
                      * 收齐之后**当场把这一组的状态写回任务**（`ApplyGroupInfo`：卷清单 / 缺卷名单 /
                      * 「共 N 卷」那一句）。⛔ 不能省：下一步 `ResolveCompleteGroupFromDisk` 的
                      * "账上点过名的缺卷必须真的出现"读的就是这份**名单** —— 盘上明明已经收齐、
@@ -17158,7 +17262,7 @@ namespace ArchiveFixer.ViewModels
                      * 首卷那一单干（很可能它刚刚已经解成功了）。这一单照旧按"跟班卷"走既有的跳过口径 ——
                      * 改起点会让两单指着同一个文件、把同一份内容解第二遍。
                      */
-                    if (IsFirstVolumeOwnedByAnotherTask(task, firstVolume))
+                    if (IsFirstVolumeOwnedByAnotherTask(task, firstVolume) && !forceGroupOwner)
                     {
                         task.CaptureSourceSnapshot();
                     }
@@ -21571,6 +21675,7 @@ namespace ArchiveFixer.ViewModels
                 _scoredSlotLinks.Clear();
                 _consumedVolumeSources.Clear();
                 _groupConsumerByName.Clear();
+                _volumeGroupUnits.Clear();
                 ClearGroupPieceProducers();
                 _producerSourcesCollected.Clear();
                 _adoptedLandedPieces.Clear();
