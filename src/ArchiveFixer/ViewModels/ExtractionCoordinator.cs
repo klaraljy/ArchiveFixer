@@ -17120,10 +17120,21 @@ namespace ArchiveFixer.ViewModels
 
                     VolumeNamingFamily? groupFamily = gatherCardEvidence?.NamingFamily;
 
-                    string groupSourceLayer = !string.IsNullOrWhiteSpace(taskOutputPathBeforeRecheck)
-                        && !ProcessArtifactLayout.IsInsideDeletableProcessFolders(taskOutputPathBeforeRecheck)
-                            ? taskOutputPathBeforeRecheck
-                            : Path.GetDirectoryName(firstVolume) ?? string.Empty;
+                    /*
+                     * 源层候选按“第一个不在过程物里的层”取：当前落点 → 用户原始路径所在层 →
+                     * 第 1 卷所在层 → 入口层。⛔ 不再无条件用 `Path.GetDirectoryName(firstVolume)`：
+                     * 第 1 卷本身可能已经被搬进 `其余物`（`19191919` 现场），那一层不是源层。
+                     */
+                    string groupSourceLayer = new[]
+                        {
+                            taskOutputPathBeforeRecheck,
+                            Path.GetDirectoryName(task.OriginalPath ?? string.Empty) ?? string.Empty,
+                            Path.GetDirectoryName(firstVolume) ?? string.Empty,
+                            entryLayer
+                        }
+                        .FirstOrDefault(candidate => !string.IsNullOrWhiteSpace(candidate)
+                            && !ProcessArtifactLayout.IsInsideDeletableProcessFolders(candidate))
+                        ?? string.Empty;
 
                     string groupUnitKey = groupBaseName + "|" + (groupFamily?.ToString() ?? "?");
 
