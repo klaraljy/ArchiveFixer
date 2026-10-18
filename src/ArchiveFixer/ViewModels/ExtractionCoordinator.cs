@@ -21680,7 +21680,7 @@ namespace ArchiveFixer.ViewModels
                 _scoredSlotLinks.Clear();
                 _consumedVolumeSources.Clear();
                 _groupConsumerByName.Clear();
-            _volumeGroupUnits.Clear();
+                _volumeGroupUnits.Clear();
                 ClearGroupPieceProducers();
                 _producerSourcesCollected.Clear();
                 _adoptedLandedPieces.Clear();
