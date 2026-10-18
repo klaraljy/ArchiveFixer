@@ -15,7 +15,11 @@ namespace ArchiveFixer.Tests
         private static FileNatureCard Piece(string path, long size, ArchiveBodyKind kind,
             long declaredTotal = 0, int declaredCount = 0, int? volumeNumber = null, (ulong Serial, ulong Index)? identity = null,
             ArchiveFixer.Detection.VolumeContentFormat format = ArchiveFixer.Detection.VolumeContentFormat.Unknown,
-            int? rawVolumeField = null, bool firstVolumeFlag = false) => new()
+            int? rawVolumeField = null, bool firstVolumeFlag = false,
+            VolumeNumberFromContent.VolumeMembershipVerdict membership =
+                VolumeNumberFromContent.VolumeMembershipVerdict.Unknown,
+            bool hasZipLocalHeader = false, bool hasZipEndRecord = false, bool zipEndRecordMeansSplit = false,
+            string canonicalVolumeName = "") => new()
             {
                 Path = path,
                 Size = size,
@@ -28,7 +32,12 @@ namespace ArchiveFixer.Tests
                 FirstVolumeFlag = firstVolumeFlag,
                 HasIdentity = identity.HasValue,
                 VolumeSerial = identity?.Serial ?? 0,
-                FileIndex = identity?.Index ?? 0
+                FileIndex = identity?.Index ?? 0,
+                Membership = membership,
+                HasZipLocalHeader = hasZipLocalHeader,
+                HasZipEndRecord = hasZipEndRecord,
+                ZipEndRecordMeansSplit = zipEndRecordMeansSplit,
+                CanonicalVolumeName = canonicalVolumeName
             };
 
         /// <summary>
@@ -125,6 +134,79 @@ namespace ArchiveFixer.Tests
             // 卡给不出格式 ⇒ 空串（⛔ 不猜）。
             var unknown = Piece(@"C:\x\ccc.txt", 1, ArchiveBodyKind.VolumePiece);
             Assert.Equal(string.Empty, VolumePiecesFromCards.CanonicalNameForSlot(unknown, 2));
+        }
+
+        /// <summary>
+        /// **ZIP 两个子族的分水岭 = 带 EOCD 那一片自己的盘号**（2026-10-18 困难批 `15151515` 组合 6
+        /// 的运行期定案）：两族都有 `ZipEndRecordMeansSplit`（中央目录起在这一份之前），只拿它当
+        /// "通用分片"的判据会把跨盘 ZIP 命名成 `X.zip.00N` ⇒ 引擎找不到 `.z01` ⇒ 整组拼不起来。
+        /// </summary>
+        [Fact]
+        public void 命名族_跨盘zip末片盘号大于零_判ZipSpanned()
+        {
+            var cards = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\aaa-L2.pdf", 26214400, ArchiveBodyKind.Unknown,
+                    format: VolumeContentFormat.Zip,
+                    membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember),
+                Piece(@"C:\x\aaa-L2.z02", 26214400, ArchiveBodyKind.Unknown,
+                    membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember),
+                Piece(@"C:\x\aaa-L2.zip", 10489824, ArchiveBodyKind.VolumePiece,
+                    volumeNumber: 3,
+                    format: VolumeContentFormat.Zip,
+                    membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                    hasZipEndRecord: true,
+                    zipEndRecordMeansSplit: true)
+            };
+
+            CardVolumeGroupReading reading = VolumePiecesFromCards.Read(cards);
+
+            Assert.Equal(VolumeNamingFamily.ZipSpanned, reading.NamingFamily);
+        }
+
+        /// <summary>
+        /// 通用分片 `X.zip.001..00N` 的末片：EOCD 盘号 0/0（`Membership` 不是 `VolumeMember`）
+        /// ⇒ 即便组里第 1 片自证是 zip 流（`Membership=VolumeMember` 那一档），也仍判 `ZipNumbered`。
+        /// </summary>
+        [Fact]
+        public void 命名族_通用分片末片盘号为零_判ZipNumbered()
+        {
+            var cards = new List<FileNatureCard>
+            {
+                Piece(@"C:\x\bbb-L2.zip.001", 26214400, ArchiveBodyKind.Unknown,
+                    format: VolumeContentFormat.Zip,
+                    membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember,
+                    hasZipLocalHeader: true),
+                Piece(@"C:\x\bbb-L2.zip.002", 26214400, ArchiveBodyKind.Unknown),
+                Piece(@"C:\x\bbb-L2.zip.003", 10489824, ArchiveBodyKind.Unknown,
+                    format: VolumeContentFormat.Zip,
+                    hasZipEndRecord: true,
+                    zipEndRecordMeansSplit: true)
+            };
+
+            CardVolumeGroupReading reading = VolumePiecesFromCards.Read(cards);
+
+            Assert.Equal(VolumeNamingFamily.ZipNumbered, reading.NamingFamily);
+        }
+
+        /// <summary>
+        /// **同一份字节两条名字留哪条**（唯一出口 `VolumePieceFacts.IsNameItsOwnCanonicalName`）：
+        /// 只认"名字与内容卡上的规范名逐字相同"那一条；脏名 / 判不出 ⇒ false（调用方照旧留先出现的）。
+        /// 现场见 2026-10-18 困难批 `15151515` 组合 6。
+        /// </summary>
+        [Fact]
+        public void 规范名判据_名字与卡上规范名逐字相同才算()
+        {
+            FileNatureCard canonical = Piece(@"C:\x\aaa-L2.zip", 1, ArchiveBodyKind.VolumePiece,
+                canonicalVolumeName: "aaa-L2.zip");
+            FileNatureCard dirty = Piece(@"C:\x\aaa-L2.z00000000ip", 1, ArchiveBodyKind.VolumePiece,
+                canonicalVolumeName: "aaa-L2.zip");
+            FileNatureCard unknown = Piece(@"C:\x\aaa-L2.zzz", 1, ArchiveBodyKind.VolumePiece);
+
+            Assert.True(VolumePieceFacts.IsNameItsOwnCanonicalName(canonical));
+            Assert.False(VolumePieceFacts.IsNameItsOwnCanonicalName(dirty));
+            Assert.False(VolumePieceFacts.IsNameItsOwnCanonicalName(unknown));
+            Assert.False(VolumePieceFacts.IsNameItsOwnCanonicalName(null));
         }
 
         [Fact]

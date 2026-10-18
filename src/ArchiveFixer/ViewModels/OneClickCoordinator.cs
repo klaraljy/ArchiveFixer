@@ -2400,8 +2400,11 @@ namespace ArchiveFixer.ViewModels
                      * ⇒ `contentBytes = 125829120`（两份 60 MiB，判据 ① 红）。</para>
                      *
                      * <para>判据只读盘上身份（<see cref="ArchiveFixer.Detection.FileIdentity"/>：卷序列号 + 文件索引，
-                     * 改名 / 移动 / 硬链接都不变）；同一份物理文件保留**先出现的那一条名字**（两条都是过程物，
-                     * ⛔ 不涉及用户源包 —— 源包在前面 `ShouldScanProducedFile` 已经排掉）。</para>
+                     * 改名 / 移动 / 硬链接都不变）；同一份物理文件保留**内容卡自证"这条名字就是规范名"**的那一条
+                     * （2026-10-18 困难批 `15151515` 组合 6 运行期定案：`aaa-L2.zip` 与 `aaa-L2.z00000000ip`
+                     * 是同一份字节，卡的 `CanonicalVolumeName` 都是 `aaa-L2.zip`；原来"留先出现的"留下了脏名
+                     * ⇒ 第二轮拿脏名去开这一组 ⇒ 引擎找不到 `.z01` ⇒ ① ② 双红）。两条都不是规范名 ⇒ 照旧留先出现的。
+                     * ⛔ 不涉及用户源包 —— 源包在前面 `ShouldScanProducedFile` 已经排掉。</para>
                      */
                     if (ArchiveFixer.Detection.FileIdentity.TryGetIdentity(file, out ulong dupVolume, out ulong dupIndex))
                     {
@@ -2409,13 +2412,38 @@ namespace ArchiveFixer.ViewModels
                             + ":"
                             + dupIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-                        if (seenInnerPackageIdentities.TryGetValue(identityKey, out string? keptName))
+                        if (seenInnerPackageIdentities.TryGetValue(identityKey, out string? keptFile))
                         {
-                            skippedLines.Add($"{file}（与「{keptName}」是同一份文件的两个名字 —— 只算一个内层包）");
-                            continue;
-                        }
+                            bool candidateIsCanonical = IsContentCanonicalName(file);
+                            bool keptIsCanonical = IsContentCanonicalName(keptFile!);
 
-                        seenInnerPackageIdentities[identityKey] = file;
+                            if (candidateIsCanonical && !keptIsCanonical)
+                            {
+                                /*
+                                 * 新来的这一条才是规范名 ⇒ 换掉旧那一条（把旧名字从已认出的清单里撤掉，
+                                 * 否则同一个身份会留下两条候选）。
+                                 */
+                                skippedLines.Add(
+                                    $"{keptFile}（与「{file}」是同一份文件的两个名字 —— 只算一个内层包，留规范名那一条）");
+
+                                recognizedLines.RemoveAll(line =>
+                                    line.StartsWith(keptFile! + "（", StringComparison.Ordinal));
+                                candidates.RemoveAll(candidate =>
+                                    string.Equals(candidate.File, keptFile, StringComparison.OrdinalIgnoreCase));
+                                found.Remove(keptFile!);
+
+                                seenInnerPackageIdentities[identityKey] = file;
+                            }
+                            else
+                            {
+                                skippedLines.Add($"{file}（与「{keptFile}」是同一份文件的两个名字 —— 只算一个内层包）");
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            seenInnerPackageIdentities[identityKey] = file;
+                        }
                     }
 
                     recognizedLines.Add($"{file}（{TaskSpaceEstimate.FormatSize(candidateLength)}，{how}）");
@@ -2907,6 +2935,22 @@ namespace ArchiveFixer.ViewModels
              * ⛔ 以后加状态只改 <see cref="TaskOutcomeClassifier"/> 一处。
              */
             return task != null && TaskOutcomeClassifier.IsFailureStatus(task.Status);
+        }
+
+        /// <summary>
+        /// **这条名字是不是内容卡自证的规范名**（本方法只负责"拍一次卡"；判据唯一出口 =
+        /// <see cref="Detection.VolumePieceFacts.IsNameItsOwnCanonicalName"/>）。
+        /// </summary>
+        private static bool IsContentCanonicalName(string path)
+        {
+            try
+            {
+                return Detection.VolumePieceFacts.IsNameItsOwnCanonicalName(FileNature.Inspect(path));
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }

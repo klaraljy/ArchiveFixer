@@ -12873,13 +12873,24 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
-                foreach (string file in Directory.EnumerateFiles(directory!))
-                {
-                    if (FileNature.Inspect(file).ZipEndRecordMeansSplit)
-                    {
-                        return VolumeNamingFamily.ZipNumbered;
-                    }
-                }
+                /*
+                 * ⛔ 这一格**不再自己判一遍族**（2026-10-18 困难批 `15151515` 组合 6 的运行期定案）：
+                 * 原来它只看 `ZipEndRecordMeansSplit` 一个布尔 ⇒ 把**跨盘 ZIP 的末片**也归纳成
+                 * `ZipNumbered`（跨盘末片同样"中央目录起在这一份之前"，但它的 EOCD 盘号 &gt; 0）
+                 * ⇒ 打分分配把第 1 片补成 `X.zip.002` 而不是 `X.z01` ⇒ 引擎找不到 `.z01` ⇒ 整组拼不起来。
+                 * ⇒ 族的唯一出口在检测层（`VolumePiecesFromCards.ResolveNamingFamily`，
+                 * 判据 = **带 EOCD 的那一片自己的盘号 / `Membership`**）；这一格只负责
+                 * "把这一层的卡收集起来交给它"，并按本格的契约只接受 ZIP 那两个子族。
+                 */
+                List<FileNatureCard> cards = Directory.EnumerateFiles(directory!)
+                    .Select(file => FileNature.Inspect(file))
+                    .ToList();
+
+                VolumeNamingFamily? family = Detection.VolumePiecesFromCards.ResolveNamingFamily(cards);
+
+                return family is VolumeNamingFamily.ZipNumbered or VolumeNamingFamily.ZipSpanned
+                    ? family
+                    : null;
             }
             catch
             {

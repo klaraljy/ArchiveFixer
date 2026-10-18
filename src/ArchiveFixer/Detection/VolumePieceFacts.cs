@@ -64,6 +64,23 @@ namespace ArchiveFixer.Detection
             && ContentProvesNotAVolumePiece(FileNature.Inspect(path));
 
         /// <summary>
+        /// **这条名字是不是内容卡自证的规范名**（唯一出口；给"同一份字节两条名字留哪一条"用）。
+        ///
+        /// <para>2026-10-18 困难批 `15151515` 组合 6 运行期现场（`walk` 探针逐字）：`aaa-L2.zip` 与
+        /// `aaa-L2.z00000000ip` 是同一份字节（跨盘 ZIP 末片），两张卡的 `CanonicalVolumeName` 都是
+        /// `aaa-L2.zip`；扫描去重原来"留先出现的"留下了脏名 ⇒ 第二轮拿脏名去开这一组
+        /// ⇒ 引擎找不到 `.z01` ⇒ ① ② 双红。判据只读卡上的规范名（名字只是辅助，内容说了算），
+        /// ⛔ 不比"谁的名字更短/更干净"那种主观尺子；判不出（规范名为空）⇒ false。</para>
+        /// </summary>
+        internal static bool IsNameItsOwnCanonicalName(FileNatureCard? card) =>
+            card != null
+            && !string.IsNullOrWhiteSpace(card.CanonicalVolumeName)
+            && string.Equals(
+                FileNameHelper.GetFileName(card.Path),
+                card.CanonicalVolumeName,
+                StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
         /// **RAR 族的首卷**（卡上：格式 RAR + 内容自证是成员 + 专属算法 = 这一组的第一片）。
         ///
         /// <para>干什么用（2026-10-16，§29.12 / §29.14）：后缀修正那一档要把它与"单卷归档"分开 ——

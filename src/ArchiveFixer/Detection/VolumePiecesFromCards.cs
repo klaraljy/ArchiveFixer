@@ -353,22 +353,37 @@ namespace ArchiveFixer.Detection
 
         /// <summary>这一份的名字**本来就是规范卷名**（卡的 `CanonicalVolumeName` 与文件名一致）。</summary>
         private static bool IsCanonicalFileName(FileNatureCard card) =>
-            !string.IsNullOrWhiteSpace(card.CanonicalVolumeName)
-            && string.Equals(
-                Helpers.FileNameHelper.GetFileName(card.Path),
-                card.CanonicalVolumeName,
-                StringComparison.OrdinalIgnoreCase);
+            VolumePieceFacts.IsNameItsOwnCanonicalName(card);
 
         /// <summary>
         /// **这一组的命名族（由内容证据定）**：ZIP 那一族名字分不开的两个子族就靠它分开
         /// （`ZipNumbered` = 通用分片 `X.zip.001`；`ZipSpanned` = 跨盘 `X.z01…X.zip`）。
         /// 判不出 ⇒ null（调用方退回按名字样本定族）。
         /// </summary>
-        private static VolumeNamingFamily? ResolveNamingFamily(IReadOnlyList<FileNatureCard> pieces)
+        internal static VolumeNamingFamily? ResolveNamingFamily(IReadOnlyList<FileNatureCard> pieces)
         {
+            /*
+             * ===== ZIP 两个子族的分水岭：**带 EOCD 的那一片自己的盘号**（唯一出口）=====
+             *
+             * `ZipEndRecordMeansSplit` 只回答"中央目录起在这一份之前"（= 它不是一份完整单卷），
+             * **两族都成立**：
+             *   · 通用分片 `X.zip.001..00N`：单盘 zip 按字节切开 ⇒ EOCD 盘号 0/0
+             *     （内容读数 `IsVolumeMember=false`）；
+             *   · 跨盘 ZIP `X.z01…X.zip`：归档器写的多盘 zip ⇒ EOCD 盘号 &gt; 0
+             *     （内容读数 `IsVolumeMember=true`、`VolumeNumber = 盘号 + 1`）。
+             * ⇒ 判族必须看带 EOCD 的那一片的 `Membership`，⛔ 不能用"某一片有 EOCD ⇒ 通用分片"。
+             *
+             * 2026-10-18 困难批 `15151515` 组合 6 的运行期现场（调试器读数 + 新旧构建日志对照逐字）：
+             * 第 1 片被补成 `aaa-L2.zip.002`（通用分片名），而这一组真名是 `aaa-L2.z01/.z02/.zip`
+             * ⇒ 引擎按数字分片找 `.z01` 找不到 ⇒ 整组永远拼不起来（① ② 双红）。
+             */
             if (pieces.Any(card => card.ZipEndRecordMeansSplit))
             {
-                return VolumeNamingFamily.ZipNumbered;
+                return pieces.Any(card =>
+                    card.ZipEndRecordMeansSplit
+                    && card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                    ? VolumeNamingFamily.ZipSpanned
+                    : VolumeNamingFamily.ZipNumbered;
             }
 
             VolumeContentFormat format = pieces
