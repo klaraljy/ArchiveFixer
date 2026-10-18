@@ -8272,8 +8272,39 @@ namespace ArchiveFixer.ViewModels
 
             return removed;
         }
+        private void CleanupConfirmedOrderStagingDirectories()
+        {
+            foreach (string directory in _confirmedOrderStagingDirectories.ToList())
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                    {
+                        Directory.Delete(directory, recursive: true);
+                    }
+
+                    string? parent = Path.GetDirectoryName(directory);
+
+                    if (!string.IsNullOrWhiteSpace(parent)
+                        && Directory.Exists(parent)
+                        && !Directory.EnumerateFileSystemEntries(parent).Any())
+                    {
+                        Directory.Delete(parent);
+                    }
+                }
+                catch
+                {
+                    // 清不掉只是多一个零字节链接目录；绝不因为清理失败影响结论。
+                }
+            }
+
+            _confirmedOrderStagingDirectories.Clear();
+        }
+
         private void AppendBatchSummary(IReadOnlyList<ArchiveTask>? tasks)
         {
+            CleanupConfirmedOrderStagingDirectories();
+
             if (tasks == null || tasks.Count == 0)
             {
                 return;
@@ -8949,6 +8980,18 @@ namespace ArchiveFixer.ViewModels
         /// 第 1 卷很可能在第 2 轮才出现），下一次**用户发起**的批次开始时清空。</para>
         /// </summary>
         private readonly List<ArchiveTask> _volumeDeficitDeferred = new();
+
+        /// <summary>
+        /// 试开确认后建的**硬链接暂存组入口目录**（每一条都是 `<入口层>\.ArchiveFixer.work\order-<id>`）——
+        /// 批末统一删（里面只有零字节链接，删名字不丢字节；⛔ 不碰任何用户/任务源）。
+        /// </summary>
+        private readonly List<string> _confirmedOrderStagingDirectories = new();
+
+        /// <summary>
+        /// 试开定序的组任务：**原来的落点**（暂存组入口会改 `task.CurrentPath`，但产物必须回这个落点）。
+        /// 提取那一站按这个覆盖掉"从暂存路径算出来的"输出目录，⛔ 不让产物写进 `.ArchiveFixer.work`。
+        /// </summary>
+        private readonly Dictionary<ArchiveTask, string> _stagedGroupOutputPaths = new();
 
         /// <summary>
         /// **按字节数补片那一档用过的来源**（我亲手把它链接成了槽位名）—— 判据 ③ 要的那个
@@ -10488,6 +10531,31 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>
+        /// **这个路径是不是某一单的「用户最初导入路径」**（只读 `OriginalPath`，⛔ 不看 `VolumePaths` /
+        /// `CurrentPath`）。给"按试开顺序收掉旧规范名"用：旧规范名通常是组任务 `VolumePaths` 里的占位名，
+        /// 但**不是**用户手里的那份原包；只有 `OriginalPath` 才是用户原件。
+        /// </summary>
+        private bool IsAnyTaskOriginalPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            foreach (ArchiveTask task in SnapshotTaskTable(Tasks))
+            {
+                if (task != null
+                    && !string.IsNullOrWhiteSpace(task.OriginalPath)
+                    && SafePathHelper.PathEquals(task.OriginalPath, path))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// **这个路径是不是「用户导入的原包」自己** —— 第二大步收卷那一档的**窄版**红线
         /// （⛔ 与上面那把宽尺子并存，⛔ 宽尺子的任何调用点一个字都不改）。
         ///
@@ -10733,7 +10801,8 @@ namespace ArchiveFixer.ViewModels
             string? groupEntryPathOverride = null,
             bool allowMoveIntoGroup = true,
             IReadOnlyDictionary<string, int>? contentSlots = null,
-            VolumeNamingFamily? namingFamily = null)
+            VolumeNamingFamily? namingFamily = null,
+            IReadOnlyDictionary<int, string>? slotCanonicalTargets = null)
         {
             if (string.IsNullOrWhiteSpace(piecePath) || !File.Exists(piecePath))
             {
@@ -10817,6 +10886,17 @@ namespace ArchiveFixer.ViewModels
                 && slotByContent >= 1)
             {
                 contentSlotForNaming = slotByContent;
+            }
+
+            if (contentSlotForNaming == null
+                && contentSlots != null
+                && contentSlots.Count > 0
+                && namingFamily.HasValue)
+            {
+                AppendLog(
+                    "WARN",
+                    $"{FileNameHelper.GetFileName(piecePath)}：内容槽位没命中（身份={VolumeSlotKey(piecePath)}"
+                    + $"｜槽位键={string.Join("、", contentSlots.Keys)}）");
             }
 
             string canonical = string.Empty;
@@ -10967,6 +11047,45 @@ namespace ArchiveFixer.ViewModels
              * ⛔ 判据只读事实：同名位上**是不是同一份物理文件**（`FileIdentity.IsSamePhysicalFile`）；
              * 是**别人**的文件 ⇒ 照旧判"接不进"（⛔ 绝不覆盖）。
              */
+            /*
+             * ===== 按试开确认的顺序，收掉"旧的规范名" =====
+             * 2026-10-18 新批 `24242424`：入口层里 `.z01`/`.z02` 是早先建的硬链接，但内容顺序把另一份中段片
+             * 排到槽位 1 ⇒ 目标名被旧链接占着。**只在"占着这个名字的那一份，已经在它自己正确的规范名下"
+             * 时才收**（它已有正确名字、字节还在，删的是多余链接）；⛔ 不碰用户 `OriginalPath`；
+             * ⛔ 链接数 ≤ 1（唯一一份）一律不动。
+             */
+            if (File.Exists(target)
+                && !IsTargetSlotAlreadyThisPiece(piecePath, target)
+                && slotCanonicalTargets != null
+                && contentSlots != null
+                && contentSlots.TryGetValue(VolumeSlotKey(target), out int occupantSlot)
+                && slotCanonicalTargets.TryGetValue(occupantSlot, out string? correctTarget)
+                && !string.IsNullOrWhiteSpace(correctTarget)
+                && !string.Equals(correctTarget, target, StringComparison.OrdinalIgnoreCase)
+                && File.Exists(correctTarget)
+                && FileIdentity.IsSamePhysicalFile(correctTarget, target)
+                && FileIdentity.TryGetLinkCount(target, out uint targetLinks)
+                && targetLinks > 1
+                && !IsAnyTaskOriginalPath(target))
+            {
+                try
+                {
+                    File.Delete(target);
+
+                    AppendLog(
+                        "INFO",
+                        $"{FileNameHelper.GetFileName(piecePath)}：目标名 {canonical} 原来是槽位 {occupantSlot} 的旧名字 —— "
+                        + $"那一份已经在正确的规范名 {Path.GetFileName(correctTarget)} 下（零字节硬链接）⇒ 收掉旧名字，"
+                        + "建这一片的正确链接（一个字节都不丢）。");
+                }
+                catch (Exception ex)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{FileNameHelper.GetFileName(piecePath)}：旧的规范名 {canonical} 没能收掉（{ex.Message}）");
+                }
+            }
+
             bool alreadyInPlace = IsTargetSlotAlreadyThisPiece(piecePath, target);
 
             if (!File.Exists(target) && HardLinkHelper.CanHardLink(piecePath, targetDir))
@@ -12164,10 +12283,16 @@ namespace ArchiveFixer.ViewModels
             {
                 FileNatureCard entrySeat = FileNature.Inspect(observed);
 
-                entryIsZipPiece = entrySeat.Format == VolumeContentFormat.Zip
+                /*
+                 * ⚠ 2026-10-18 新批 `3333`/`4444`/`7777`/`9999`：**7z / RAR 的分卷片同样会散在
+                 * 包装壳的产出目录里**，补扫不能只给 ZIP 开。判据仍读卡：格式认得出，且卡上自证
+                 * "是这一族的一片"（BodyKind / 成员位）—— 名字不参与这一道门。
+                 */
+                entryIsZipPiece = entrySeat.Format != VolumeContentFormat.Unknown
                     && (entrySeat.HasZipEndRecord
                         || entrySeat.HasZipLocalHeader
-                        || entrySeat.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember);
+                        || entrySeat.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+                        || entrySeat.BodyKind is ArchiveBodyKind.VolumeFirstPiece or ArchiveBodyKind.VolumePiece);
             }
             catch
             {
@@ -12351,6 +12476,27 @@ namespace ArchiveFixer.ViewModels
                                     {
                                         FileNatureCard card = FileNature.Inspect(file);
 
+                                        /*
+                                         * ===== 补扫锚点：末片没有本地头时，从**本组中段片**取满片尺寸 =====
+                                         * （2026-10-18 新批 `24242424` 运行期定案）跨盘 ZIP 的入口是末片
+                                         * （`EOCD=True`、没有本地头）⇒ `sweepAnchorSize` 原来是 0 ⇒ 字节数守恒整档
+                                         * 不启用 ⇒ 从数据中间切开的第 2 片（`333-L2.pdf`，`Format=Unknown`）永远进不了
+                                         * 候选池，组只剩 2 片。
+                                         * 判据：只拿**没有 EOCD 的、基名相关的、内容没证明不是成员**的片当锚点
+                                         * （末片自己绝不能当锚点）；取第一份这样的片的大小，后续同尺寸中段片就能过 ③。
+                                         * ⛔ 只是把"锚点"补上，`AcceptsAsGroupPiece` 的阶梯一个字没改。
+                                         */
+                                        if (sweepAnchorSize <= 0
+                                            && sweepReferenceBase.Length > 0
+                                            && !card.HasZipEndRecord
+                                            && card.Size > 0
+                                            && card.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
+                                            && card.BodyKind != ArchiveBodyKind.SingleComplete
+                                            && BaseNameRelatedToGroup(card.ArchiveBaseName, sweepReferenceBase))
+                                        {
+                                            sweepAnchorSize = card.Size;
+                                        }
+
                                         /* 与本地那一侧**同一个出口**（含字节数守恒 ⇒ 中间片才收得进来）。 */
                                         bool accepted = AcceptsAsGroupPiece(card, reference, sweepReferenceBase, sweepAnchorSize);
 
@@ -12487,6 +12633,17 @@ namespace ArchiveFixer.ViewModels
                 }
             }
 
+            /*
+             * ⚠ 本地这一侧也补同一个锚点（2026-10-18 新批 `24242424`）：本组可能**一片带本地头的都没有**
+             * （跨盘 ZIP 的中段片起在数据中间）⇒ `zipFullSize=0` ⇒ 下面这一遍又把补扫刚收进来的
+             * `Unknown` 中段片（`333-L2.pdf`）筛掉。补扫那一侧已经从"没有 EOCD、基名相关"的片取了锚点，
+             * 这一侧原样沿用；⛔ 只补锚点，判据阶梯不改。
+             */
+            if (zipFullSize <= 0)
+            {
+                zipFullSize = sweepAnchorSize;
+            }
+
             foreach (string file in allFiles)
             {
                 /*
@@ -12618,6 +12775,76 @@ namespace ArchiveFixer.ViewModels
                 : SafePathHelper.GetFullPathSafe(path);
         }
 
+        /// <summary>
+        /// **按试开确认的顺序，先清掉入口层里"旧规范名"**（2026-10-18 新批 `24242424` 定案）。
+        ///
+        /// <para>现场：入口层已有 `.z01`/`.z02` 两个**我们自己早先建的硬链接**，但内容顺序把另一份中段片
+        /// 排到槽位 1 ⇒ 接片那一档按内容算出的规范名与旧链接撞名（目标名已被别的文件占着）⇒ 一片接不进、
+        /// 整组永远缺卷。旧链接是零字节硬链接（linkCount &gt; 1），删掉名字不丢字节；而用户源包 / 任务源路径
+        /// 一律不碰（⛔ 红线不变）。</para>
+        ///
+        /// <para>清完再由既有接片出口按内容槽位建正确的规范名；⛔ 不在这里建链接、不碰非规范名的原件。</para>
+        /// </summary>
+        private void PrepareCanonicalVolumeNamesForConfirmedOrder(
+            string entryLayer,
+            IReadOnlyList<string> orderedPieces,
+            string stem,
+            VolumeNamingFamily family,
+            string logName)
+        {
+            IReadOnlyList<string> names = VolumeNumberFromContent.BuildStandardNames(stem, family, orderedPieces.Count);
+
+            if (names.Count != orderedPieces.Count)
+            {
+                return;
+            }
+
+            for (int index = 0; index < names.Count; index++)
+            {
+                string target = Path.Combine(entryLayer, names[index]);
+
+                if (!File.Exists(target))
+                {
+                    continue;
+                }
+
+                bool samePhysical = FileIdentity.IsSamePhysicalFile(target, orderedPieces[index]);
+                bool hasLinks = FileIdentity.TryGetLinkCount(target, out uint linkCount);
+                bool userSource = IsUserImportedSourcePath(target);
+                bool taskSource = IsAnyTaskSourcePath(target);
+
+                AppendLog(
+                    "INFO",
+                    $"{logName}：规范名预清理判据 —— {names[index]}"
+                    + $"｜同一份={samePhysical}"
+                    + $"｜链接数={(hasLinks ? linkCount.ToString(CultureInfo.InvariantCulture) : "判不出")}"
+                    + $"｜用户源={userSource}｜任务源={taskSource}");
+
+                if (samePhysical
+                    || !hasLinks
+                    || linkCount <= 1
+                    || userSource
+                    || taskSource)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    File.Delete(target);
+
+                    AppendLog(
+                        "INFO",
+                        $"{logName}：按试开确认的顺序，收掉入口层里旧的规范名 {names[index]}"
+                        + "（零字节硬链接，删名字不丢字节）");
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("WARN", $"{logName}：旧的规范名 {names[index]} 没能收掉（{ex.Message}）");
+                }
+            }
+        }
+
         private void TryGatherGroupPiecesInto(ArchiveTask task, string entryLayer, string? memberPath = null, bool allowMoveIntoGroup = true, string? cardEntryPath = null, ArchiveFixer.Detection.CardVolumeGroupReading? cardEvidence = null)
         {
             if (task == null || string.IsNullOrWhiteSpace(entryLayer) || !Directory.Exists(entryLayer))
@@ -12739,7 +12966,82 @@ namespace ArchiveFixer.ViewModels
 
             VolumeNamingFamily? groupNamingFamily = cardEvidence?.NamingFamily;
 
-            foreach (string path in sources.Distinct(StringComparer.OrdinalIgnoreCase).ToList())
+            /*
+             * **每个槽位"正确规范名"的路径**（给"收旧名字"那一条判据用）：只在这一组有内容槽位、族判得出、
+             * 规范名拼得出时才有值；⛔ 判不出 ⇒ null，接片照旧不碰任何旧名字。
+             */
+            IReadOnlyDictionary<int, string>? slotCanonicalTargets = null;
+
+            if (cardEvidence != null
+                && groupNamingFamily is VolumeNamingFamily namingFamily
+                && cardEvidence.Slots.Count >= 2)
+            {
+                string slotStem = FileNameHelper.GetArchiveBaseName(cardEvidence.Slots[0].Path);
+                IReadOnlyList<string> slotNames = VolumeNumberFromContent.BuildStandardNames(
+                    slotStem,
+                    namingFamily,
+                    cardEvidence.Slots.Count);
+
+                if (slotNames.Count == cardEvidence.Slots.Count)
+                {
+                    var slotTargets = new Dictionary<int, string>();
+
+                    for (int slotIndex = 0; slotIndex < cardEvidence.Slots.Count; slotIndex++)
+                    {
+                        slotTargets[cardEvidence.Slots[slotIndex].Index] =
+                            Path.Combine(entryLayer, slotNames[slotIndex]);
+                    }
+
+                    slotCanonicalTargets = slotTargets;
+                }
+            }
+
+            if (cardEvidence != null && contentSlots.Count > 0)
+            {
+                AppendLog(
+                    "INFO",
+                    $"{task.LogName}：内容槽位判据输入 —— "
+                    + string.Join(
+                        "、",
+                        cardEvidence.Slots.Select(slot =>
+                            slot.Index + ":" + FileNameHelper.GetFileName(slot.Path) + "（" + VolumeSlotKey(slot.Path) + "）")));
+            }
+
+            if (contentSlots.Count > 0)
+            {
+                var srcTrace = sources
+                    .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(path => FileNameHelper.GetFileName(path) + "（" + VolumeSlotKey(path) + "）");
+
+                AppendLog(
+                    "INFO",
+                    $"{task.LogName}：收片源判据输入 —— 源=[{string.Join("、", srcTrace)}]"
+                    + $"｜内容槽位=[{string.Join("、", contentSlots.Select(pair => pair.Value + ":" + pair.Key))}]"
+                    + $"｜入口=「{FileNameHelper.GetFileName(groupEntryPath ?? string.Empty)}」"
+                    + $"｜族={groupNamingFamily}");
+            }
+
+            /*
+             * 处理顺序 = **内容槽位从大到小**（2026-10-18 新批 `24242424`）：先处理末片/高槽位，
+             * 它们可能正占着低槽位的名字；等高槽位那一片已经在自己的规范名下，低槽位再收旧名字才安全。
+             * 判不出槽位的源排在最前（不参与换名，按老口径）。
+             */
+            var orderedSources = sources
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(path =>
+                {
+                    int slot = contentSlots.TryGetValue(VolumeSlotKey(path), out int byContent)
+                        ? byContent
+                        : int.MaxValue;
+
+                    return (Path: path, Slot: slot);
+                })
+                .OrderByDescending(item => item.Slot)
+                .ToList();
+
+            foreach ((string path, int _) in orderedSources)
             {
                 try
                 {
@@ -12750,7 +13052,8 @@ namespace ArchiveFixer.ViewModels
                         groupEntryPath,
                         allowMoveIntoGroup,
                         contentSlots,
-                        groupNamingFamily);
+                        groupNamingFamily,
+                        slotCanonicalTargets);
                 }
                 catch (Exception ex)
                 {
@@ -15492,6 +15795,20 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
+             * 试开定序那一档用的是**全新硬链接暂存目录**，产出方那一份（如 `333-W1-0\333-L2.pdf`）
+             * 不在 `_byteBudgetLinkedSources` 里，而在 `_adoptedLandedPieces` 那本账里
+             * （暂存时用 `RememberAdoptedLandedPiece` 记的）⇒ 同一组基名的也放行，否则名字读不出卷号的
+             * 产出片会被这道筛子挡掉、变成 c3 残留。
+             */
+            foreach (var item in _adoptedLandedPieces)
+            {
+                if (string.Equals(item.GroupBaseName, groupBaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    ledgerProvenSources.Add(SafePathHelper.GetFullPathSafe(item.PiecePath));
+                }
+            }
+
+            /*
              * 本次**已经成功集中进其余物**的物理身份（卷序列号:文件索引）。
              *
              * <p>2026-10-18 困难批 `8888` 现场：`打包111-L2.part1.rar` 与
@@ -15695,6 +16012,9 @@ namespace ArchiveFixer.ViewModels
             /// <summary>规范名的基名（由末片卡上取）。</summary>
             public string Stem { get; init; } = string.Empty;
 
+            /// <summary>内容判定的命名族（`ZipNumbered` / `ZipSpanned`）。</summary>
+            public VolumeNamingFamily Family { get; init; } = VolumeNamingFamily.ZipNumbered;
+
             public string? Failure { get; init; }
 
             public string Reason { get; init; } = string.Empty;
@@ -15770,19 +16090,48 @@ namespace ArchiveFixer.ViewModels
                 ? VolumePiecesFromCards.Read(numberedCandidates).NamingFamily
                 : null;
 
-            if (contentFamily == VolumeNamingFamily.ZipNumbered
+            if (!allowFallback
+                && contentFamily == VolumeNamingFamily.ZipNumbered
                 && numberedCandidates.Count > VolumeOrderTrial.MaxPieces)
             {
-                return GroupOrderTrialResult.Fail(
-                    $"硬链接试开定序没做成：这一组有 {numberedCandidates.Count} 份不同的片"
-                    + $"（超过 {VolumeOrderTrial.MaxPieces} 片）⇒ 按口径不猜，整组不动",
-                    applicable: true);
+                /*
+                 * 超过 5 片：按用户口径**不猜顺序**；但"不猜"不等于"把整组判死"——
+                 * 名字/内容卡已经能归出完整组的，照旧走原来的收拢/解压路，⛔ 不置
+                 * `contentOrderUndetermined`（2026-10-18 全量批 `19191919` 现场：
+                 * 同一组在别的任务上已经可证完整，被这一条的"适用失败"压住了）。
+                 */
+                return new GroupOrderTrialResult
+                {
+                    Applicable = false,
+                    Reason = $"这一组有 {numberedCandidates.Count} 份不同的片（超过 {VolumeOrderTrial.MaxPieces} 片）⇒ 不试开顺序，照旧按名字/内容收拢"
+                };
             }
 
-            if (contentFamily == VolumeNamingFamily.ZipNumbered && numberedCandidates.Count >= 2)
+            if (!allowFallback
+                && contentFamily == VolumeNamingFamily.ZipNumbered
+                && numberedCandidates.Count >= 2)
             {
                 string? tailPath = ResolveNumberedZipTail(numberedCandidates);
                 string stem = ResolveOrderTrialStem(numberedCandidates, tailPath, referenceBase);
+
+                /*
+                 * 末片自述"共 N 片"而候选只有 M&lt;N 份 ⇒ 这一趟**不是"顺序试不出"，是候选还没到齐**
+                 * （2026-10-18 新批 `29292929`：一个任务只看见 2 片，按"顺序失败"把整组压住，后面
+                 * 另一个任务已经看见 3 片并试开成功 ⇒ 不能再让少片那一次形成判决）。
+                 * 返回"不适用" ⇒ 调用方照旧走名字/收拢，不置 `contentOrderUndetermined`。
+                 */
+                int declaredPieces = numberedCandidates
+                    .FirstOrDefault(card => string.Equals(card.Path, tailPath, StringComparison.OrdinalIgnoreCase))
+                    ?.DeclaredVolumeCount ?? 0;
+
+                if (declaredPieces > numberedCandidates.Count)
+                {
+                    return new GroupOrderTrialResult
+                    {
+                        Applicable = false,
+                        Reason = $"只看见 {numberedCandidates.Count} 片，末片自述 {declaredPieces} 片 ⇒ 候选还没到齐，不做顺序判决"
+                    };
+                }
 
                 if (tailPath == null || stem.Length == 0)
                 {
@@ -15856,6 +16205,129 @@ namespace ArchiveFixer.ViewModels
                     OrderedPieces = winning,
                     Stem = stem,
                     Reason = $"内容试开定序成立（第 {outcome.Attempts} 种顺序）—— 按这个顺序把这一组接进入口那一层"
+                        + "（零字节硬链接，原件一个字节不动）"
+                };
+            }
+
+            /*
+             * ===== 跨盘 ZIP：末片 + 中间片的内容试开定序 =====
+             * 新批 `24242424`（2026-10-18 运行期逐字）：末片自述"共 3 片"，而两个中段片的名字是
+             * `.pdf` / `.zip`、内容一个判不出；名字族给不出次序 ⇒ 与通用分片同一套高概率顺序，
+             * 只是硬链接名换成跨盘族 `.z01/.z02/.zip`，验证仍是真的解一遍（逐条目 CRC）。
+             */
+            if (contentFamily == VolumeNamingFamily.ZipSpanned
+                && numberedCandidates.Count >= 2
+                && !allowFallback)
+            {
+                if (numberedCandidates.Count > VolumeOrderTrial.MaxPieces)
+                {
+                    return new GroupOrderTrialResult
+                    {
+                        Applicable = false,
+                        Reason = $"这一组有 {numberedCandidates.Count} 份不同的片（超过 {VolumeOrderTrial.MaxPieces} 片）⇒ 不试开顺序，照旧按名字/内容收拢"
+                    };
+                }
+
+                string? spannedTail = ResolveSpannedZipTail(numberedCandidates);
+                string spannedStem = ResolveOrderTrialStem(numberedCandidates, spannedTail, referenceBase);
+
+                int spannedDeclaredPieces = numberedCandidates
+                    .FirstOrDefault(card => string.Equals(card.Path, spannedTail, StringComparison.OrdinalIgnoreCase))
+                    ?.DeclaredVolumeCount ?? 0;
+
+                if (spannedDeclaredPieces > numberedCandidates.Count)
+                {
+                    return new GroupOrderTrialResult
+                    {
+                        Applicable = false,
+                        Reason = $"只看见 {numberedCandidates.Count} 片，末片自述 {spannedDeclaredPieces} 片 ⇒ 候选还没到齐，不做顺序判决"
+                    };
+                }
+
+                if (spannedTail == null || spannedStem.Length == 0)
+                {
+                    return GroupOrderTrialResult.Fail(
+                        "跨盘 ZIP 试开定序没做成：末片（内容自证最后一片）或基名判不出 ⇒ 整组不动",
+                        applicable: true);
+                }
+
+                IReadOnlyList<IReadOnlyList<string>> spannedOrders = VolumeOrderTrial.BuildCandidateOrders(
+                    numberedCandidates.Select(card => card.Path).ToList(),
+                    spannedTail,
+                    VolumeNamingFamily.ZipSpanned,
+                    spannedStem);
+
+                if (spannedOrders.Count == 0)
+                {
+                    return GroupOrderTrialResult.Fail(
+                        "跨盘 ZIP 试开定序没做成：排不出可试的顺序 ⇒ 整组不动",
+                        applicable: true);
+                }
+
+                AppendLog(
+                    "INFO",
+                    $"跨盘试开定序 —— 内容确认的候选 {numberedCandidates.Count} 份"
+                    + $"｜末片=「{FileNameHelper.GetFileName(spannedTail)}」"
+                    + $"｜族=跨盘 ZIP｜基名=「{spannedStem}」｜可试顺序 {spannedOrders.Count} 种");
+
+                var spannedVerifier = new VolumeProbeVerifier(_archiveEngine);
+                /*
+                 * 先用**空密码**试：这一族很多组本来就没加密码；拿密码本去试反会被引擎报
+                 * "Wrong password"（2026-10-18 `15151515` 回归现场）。
+                 * 空密码不成立时，再用本批候选试一遍 —— 有些加密组的引擎原话是「缺卷 / 数据错」
+                 * 而不是「密码错」，不能靠 `NeedsPassword` 单条判据决定要不要补密码。
+                 */
+                VolumeProbeOutcome spannedOutcome = await spannedVerifier.VerifySpannedZipOrderAsync(
+                        spannedOrders,
+                        passwordCandidates: null,
+                        Path.Combine(entryLayer, ".ArchiveFixer.work"),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!spannedOutcome.Confirmed)
+                {
+                    IReadOnlyList<string> spannedPasswords = BuildVolumeProbePasswordCandidates(spannedTail);
+
+                    if (spannedPasswords.Count > 0)
+                    {
+                        spannedOutcome = await spannedVerifier.VerifySpannedZipOrderAsync(
+                                spannedOrders,
+                                spannedPasswords,
+                                Path.Combine(entryLayer, ".ArchiveFixer.work"),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+
+                if (!spannedOutcome.Confirmed)
+                {
+                    if (spannedOutcome.NeedsPassword)
+                    {
+                        return new GroupOrderTrialResult
+                        {
+                            Applicable = false,
+                            Reason = "这一组跨盘 ZIP 是加密的，试开定序没有可用密码 ⇒ 退回原来的密码/名字流程"
+                        };
+                    }
+
+                    return GroupOrderTrialResult.Fail(
+                        "跨盘 ZIP 硬链接试开定序没通过（引擎真的解了一遍，每个条目还是对不上）⇒ 整组不动："
+                        + spannedOutcome.Reason,
+                        applicable: true);
+                }
+
+                List<string> winningSpanned = spannedOutcome.OrderedVolumes
+                    .Select(volume => volume.Path)
+                    .ToList();
+
+                return new GroupOrderTrialResult
+                {
+                    Applicable = true,
+                    Confirmed = true,
+                    OrderedPieces = winningSpanned,
+                    Stem = spannedStem,
+                    Family = VolumeNamingFamily.ZipSpanned,
+                    Reason = $"跨盘 ZIP 内容试开定序成立（第 {spannedOutcome.Attempts} 种顺序）—— 按这个顺序把这一组接进入口那一层"
                         + "（零字节硬链接，原件一个字节不动）"
                 };
             }
@@ -16060,6 +16532,40 @@ namespace ArchiveFixer.ViewModels
             return null;
         }
 
+        /// <summary>
+        /// 跨盘 ZIP 的末片：**只认内容**（`VolumePieceFacts.IsSpannedZipTailPiece`：格式 ZIP + 内容成员位 +
+        /// 卷号 == 自述总片数）。判不出 / 多个互不相同 ⇒ null（⛔ 不猜）。
+        /// </summary>
+        private static string? ResolveSpannedZipTail(IReadOnlyList<FileNatureCard> cards)
+        {
+            var tails = cards.Where(card => VolumePieceFacts.IsSpannedZipTailPiece(card)).ToList();
+
+            if (tails.Count == 0)
+            {
+                tails = cards
+                    .Where(card => card.ZipEndRecordMeansSplit
+                        && card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember)
+                    .ToList();
+            }
+
+            if (tails.Count == 1)
+            {
+                return tails[0].Path;
+            }
+
+            if (tails.Count > 1)
+            {
+                var byNumber = tails
+                    .Where(card => card.VolumeNumber != null)
+                    .OrderByDescending(card => card.VolumeNumber)
+                    .ToList();
+
+                return byNumber.Count > 0 ? byNumber[0].Path : null;
+            }
+
+            return null;
+        }
+
         /// <summary>试开定序用的基名：优先取末片卡上的归档基名（唯一出口），判不出才用参照基名。</summary>
         private static string ResolveOrderTrialStem(
             IReadOnlyList<FileNatureCard> cards,
@@ -16140,6 +16646,12 @@ namespace ArchiveFixer.ViewModels
                     _volumeDeficitDeferred.Remove(task!);
                     continue;
                 }
+
+                /*
+                 * 这一单**进批末重判之前**的落点（试开暂存会把 `task.CurrentPath` 改到暂存组入口，
+                 * 不能让产物跟着写进 `.ArchiveFixer.work`）—— 恢复时用这一份，⛔ 不用改过之后的。
+                 */
+                string taskOutputPathBeforeRecheck = task.OutputPath;
 
                 // ① 再收一次卷：那时缺的那几卷可能已经被解出来 / 被收拢到位。
                 TryGatherVolumesBeforeExtract(task, out _);
@@ -16248,6 +16760,13 @@ namespace ArchiveFixer.ViewModels
 
                 ArchiveFixer.Detection.CardVolumeGroupReading? gatherCardEvidence = null;
                 bool contentOrderUndetermined = false;
+                bool stagedOrderGroup = false;
+
+                /*
+                 * 组解析用的层：老路 = 入口层；试开确认后 = 全新的硬链接暂存目录。
+                 * ⛔ `entryLayer` 本身（落点/任务层）**不改**，否则组任务会把产物写进 `.ArchiveFixer.work`。
+                 */
+                string groupResolutionLayer = entryLayer;
 
                 if (entryLayer.Length > 0)
                 {
@@ -16378,6 +16897,11 @@ namespace ArchiveFixer.ViewModels
                      * ⛔ 试开是只读的；赢的那一版**只交顺序**，接片仍走既有出口 `TryGatherGroupPiecesInto`
                      * （它会记"谁吐出的片、谁借的片"，批末收场才能把产出方那一份按档收干净）。
                      */
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：试开前决策 = {gatherPlan.Action}（{gatherPlan.Reason}）"
+                        + $"｜同族候选 {gatherCandidates.Count} 个");
+
                     GroupOrderTrialResult probe = await ProbeGatherGroupAsync(
                             gatherPlan.Pieces,
                             gatherCandidates,
@@ -16409,36 +16933,87 @@ namespace ArchiveFixer.ViewModels
                     else if (probe.Confirmed)
                     {
                         /*
-                         * 试开**真的解开了**这个顺序 ⇒ 把它折成一份内容读取（⛔ 不自己建链接）：
-                         * 接片那一档会按这份槽位把赢的那几片接到入口层（零字节硬链接），并记下产出方。
-                         * 这一组从现在起按内容读取走，⛔ 不再让名字那把尺子重排一遍。
+                         * 试开真的解开了这个顺序 ⇒ 先把它按规范卷名落进一个**全新的硬链接暂存目录**，
+                         * 用暂存目录当组入口（2026-10-18 新批 `24242424`）：原入口层里可能已经有早先建的
+                         * `.z01/.z02` 旧名字，与内容定出的新槽位撞名；而那些旧名字同时被组任务写进
+                         * `VolumePaths`，受"用户源"红线保护，原地删不得。暂存目录是全新的，不撞任何名字，
+                         * 也不碰用户/任务源；接片仍只建零字节硬链接。
                          */
-                        ArchiveFixer.Detection.CardVolumeGroupReading? confirmedReading =
-                            VolumeOrderMaterializer.BuildConfirmedReading(
+                        ArchiveFixer.Detection.CardVolumeGroupReading? stagedReading =
+                            VolumeOrderMaterializer.TryStageConfirmedOrder(
+                                entryLayer,
                                 probe.OrderedPieces,
                                 probe.Stem,
-                                VolumeNamingFamily.ZipNumbered);
+                                probe.Family,
+                                out string stagingDirectory,
+                                out string stageFailure);
 
-                        if (confirmedReading == null)
+                        if (stagedReading != null)
                         {
-                            AppendLog(
-                                "WARN",
-                                $"{task.LogName}：这一趟先不收（内容试开定序成立了，但折不出可用的内容读取）—— 整组不动");
+                            cardReading = stagedReading;
+                            gatherCardEvidence = stagedReading;
+                            groupResolutionLayer = stagingDirectory;
+                            stagedOrderGroup = true;
+                            _confirmedOrderStagingDirectories.Add(stagingDirectory);
+                            _stagedGroupOutputPaths[task] = taskOutputPathBeforeRecheck;
 
-                            gatherPlan = VolumeGatherPlan.Leave("这一趟先不收（内容读取折不出来）");
-                            contentOrderUndetermined = true;
-                        }
-                        else
-                        {
-                            cardReading = confirmedReading;
-                            gatherCardEvidence = confirmedReading;
+                            /*
+                             * 这一组用的那几片里，来自**包装壳产出**的（`333-W1-0\333-L2.pdf`）
+                             * 要记进"产出方那一份已经落地的片"那本账 —— 批末收场才会把包装壳的源包
+                             * 与其产出片按档收干净（⛔ 用户源片由 `IsAnyTaskSourcePath` 自动排除）。
+                             */
+                            foreach (string orderedPiece in probe.OrderedPieces)
+                            {
+                                RememberAdoptedLandedPiece(
+                                    orderedPiece,
+                                    task,
+                                    probe.Stem,
+                                    renamedInPlace: false);
+                            }
 
                             gatherPlan = new ArchiveFixer.Extraction.VolumeGatherPlan(
                                 VolumeGatherAction.Gather,
-                                "内容试开定序成立 ⇒ 按赢的那一版接进入口层",
+                                "内容试开定序成立 ⇒ 用硬链接暂存目录当组入口",
                                 probe.OrderedPieces);
 
-                            AppendLog("INFO", $"{task.LogName}：{probe.Reason}");
+                            AppendLog(
+                                "INFO",
+                                $"{task.LogName}：{probe.Reason}；已按规范卷名接进硬链接暂存目录"
+                                + $"「{Path.GetFileName(stagingDirectory)}」，原入口层一个名字都不动");
+                        }
+                        else
+                        {
+                            AppendLog(
+                                "WARN",
+                                $"{task.LogName}：硬链接暂存目录没建成（{stageFailure}）⇒ 退回入口层接片老路");
+
+                            ArchiveFixer.Detection.CardVolumeGroupReading? confirmedReading =
+                                VolumeOrderMaterializer.BuildConfirmedReading(
+                                    probe.OrderedPieces,
+                                    probe.Stem,
+                                    probe.Family);
+
+                            if (confirmedReading == null)
+                            {
+                                AppendLog(
+                                    "WARN",
+                                    $"{task.LogName}：这一趟先不收（内容试开定序成立了，但折不出可用的内容读取）—— 整组不动");
+
+                                gatherPlan = VolumeGatherPlan.Leave("这一趟先不收（内容读取折不出来）");
+                                contentOrderUndetermined = true;
+                            }
+                            else
+                            {
+                                cardReading = confirmedReading;
+                                gatherCardEvidence = confirmedReading;
+
+                                gatherPlan = new ArchiveFixer.Extraction.VolumeGatherPlan(
+                                    VolumeGatherAction.Gather,
+                                    "内容试开定序成立 ⇒ 按赢的那一版接进入口层",
+                                    probe.OrderedPieces);
+
+                                AppendLog("INFO", $"{task.LogName}：{probe.Reason}");
+                            }
                         }
                     }
 
@@ -16469,24 +17044,27 @@ namespace ArchiveFixer.ViewModels
                             $"{task.LogName}：收拢决策 = Gather（名字归不出组，但底层识别卡可证完整）—— {cardReading.Reason}");
                     }
 
-                    TryGatherGroupPiecesInto(
-                        task,
-                        entryLayer,
-                        _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null,
-                        allowMoveIntoGroup: allowMoveIntoGroup,
-                        cardEntryPath: cardReading.EntryPath,
-                        cardEvidence: cardReading);
+                    if (!stagedOrderGroup)
+                    {
+                        TryGatherGroupPiecesInto(
+                            task,
+                            entryLayer,
+                            _deferredVolumeGroupMember.TryGetValue(task, out string? stalledMember) ? stalledMember : null,
+                            allowMoveIntoGroup: allowMoveIntoGroup,
+                            cardEntryPath: cardReading.EntryPath,
+                            cardEvidence: cardReading);
 
-                    /*
-                     * ⚠ 2026-10-13（第 15 修之后）：收片只认名字 ⇒ 名字被伪装到"读不出卷号"的那几片收不进来。
-                     * 再走一步**字节数**那条硬证据（7z 起始头自述）把缺口按规范槽位名**硬链接**补上
-                     * （⛔ 原件一个字节都不动；凑不出正好相等就一份都不补）。
-                     */
-                    TryLinkMissingPiecesByByteBudget(
-                        task,
-                        entryLayer,
-                        _deferredVolumeGroupMember.TryGetValue(task, out string? stalledForBudget) ? stalledForBudget : null,
-                        cardEntryPath: cardReading.EntryPath);
+                        /*
+                         * ⚠ 2026-10-13（第 15 修之后）：收片只认名字 ⇒ 名字被伪装到"读不出卷号"的那几片收不进来。
+                         * 再走一步**字节数**那条硬证据（7z 起始头自述）把缺口按规范槽位名**硬链接**补上
+                         * （⛔ 原件一个字节都不动；凑不出正好相等就一份都不补）。
+                         */
+                        TryLinkMissingPiecesByByteBudget(
+                            task,
+                            entryLayer,
+                            _deferredVolumeGroupMember.TryGetValue(task, out string? stalledForBudget) ? stalledForBudget : null,
+                            cardEntryPath: cardReading.EntryPath);
+                    }
                 }
 
                 /*
@@ -16497,7 +17075,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 VolumeGroup? group = (gatherCardEvidence == null
                         ? null
-                        : ResolveCanonicalGroupFromCardSlots(entryLayer, gatherCardEvidence))
+                        : ResolveCanonicalGroupFromCardSlots(groupResolutionLayer, gatherCardEvidence))
                     ?? ResolveGatheredGroupFromEntryLayer(
                             task,
                             entryLayer,
@@ -16635,6 +17213,16 @@ namespace ArchiveFixer.ViewModels
                      * `tasks[3].IsVolumeDeficitDeferred = true`、`tally.Succeeded = 1 / tally.Skipped = 1`。</para>
                      */
                     task.IsVolumeDeficitDeferred = false;
+
+                    /*
+                     * 试开定序时 `task.CurrentPath` 被改到暂存组入口（引擎要从那里开），
+                     * 但**产物仍然落在这一单原来的落点**（`OutputPath`）—— 暂存目录只在
+                     * `.ArchiveFixer.work` 里、批末整份清掉；⛔ 不让产物写进工作区。
+                     */
+                    if (stagedOrderGroup)
+                    {
+                        task.OutputPath = taskOutputPathBeforeRecheck;
+                    }
 
                     toRun.Add(task);
 
@@ -17530,6 +18118,9 @@ namespace ArchiveFixer.ViewModels
                     consumer = tasks.FirstOrDefault(candidate =>
                         candidate != null
                         && candidate.Outcome == TaskOutcome.Succeeded
+                        && !candidate.IsVolumeGroupFollower
+                        && candidate.IsVolumeGroup
+                        && candidate.IsVolumeComplete
                         && (string.Equals(candidate.DisplayFileName, settledWith, StringComparison.Ordinal)
                             || string.Equals(candidate.FileName, settledWith, StringComparison.Ordinal)));
                 }
@@ -17539,6 +18130,7 @@ namespace ArchiveFixer.ViewModels
                     consumer = tasks.FirstOrDefault(candidate =>
                         candidate != null
                         && candidate.Outcome == TaskOutcome.Succeeded
+                        && !candidate.IsVolumeGroupFollower
                         && candidate.IsVolumeGroup
                         && candidate.IsVolumeComplete
                         && string.Equals(
@@ -25172,6 +25764,22 @@ namespace ArchiveFixer.ViewModels
             string requestedOutputPath = placement.DestinationDirectory;
             string outputPath = requestedOutputPath;
             string outputRedirectNote = string.Empty;
+
+            /*
+             * 试开定序的组任务：`CurrentPath` 被改到硬链接暂存组入口，按路径算出来的落点会落进
+             * `.ArchiveFixer.work`（产物还会被当成过程物）。⇒ 回**试开之前**那一份落点；⛔ 只对
+             * 我们自己登记过的组任务生效，其它任务一个字不改。
+             */
+            if (_stagedGroupOutputPaths.TryGetValue(task, out string? stagedOutputPath)
+                && !string.IsNullOrWhiteSpace(stagedOutputPath))
+            {
+                outputPath = stagedOutputPath;
+                outputRedirectNote = "试开定序暂存组入口";
+
+                AppendLog(
+                    "INFO",
+                    $"{task.LogName}：产物落点回到试开之前的原落点 —— {outputPath}");
+            }
 
             /*
              * 落点为什么在这一层（用户 2026-10-05 口径："落在**第一卷的位置**"，而且他点名了现场：

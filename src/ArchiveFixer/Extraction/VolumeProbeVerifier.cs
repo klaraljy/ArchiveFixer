@@ -424,7 +424,8 @@ namespace ArchiveFixer.Extraction
                     wrongPasswordOnly == attempts && knownPassword == null
                         ? "这一组是加密的，而手上没有能用的密码 ⇒ 顺序没法验证（顺序错了与密码错了在引擎那里是同一句话）"
                         : $"这些顺序都不成立（引擎原话：{lastFailure}）",
-                    attempted: true);
+                    attempted: true,
+                    needsPassword: wrongPasswordOnly == attempts && knownPassword == null);
             }
             catch (OperationCanceledException)
             {
