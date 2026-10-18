@@ -17143,6 +17143,13 @@ namespace ArchiveFixer.ViewModels
                             + $"｜源层「{Path.GetFileName(groupSourceLayer)}」｜入口「{FileNameHelper.GetFileName(firstVolume)}」");
                     }
 
+                    string groupLanding = string.Equals(
+                        Path.GetFileName(groupUnit.SourceLayer),
+                        groupBaseName,
+                        StringComparison.OrdinalIgnoreCase)
+                            ? groupUnit.SourceLayer
+                            : Path.Combine(groupUnit.SourceLayer, groupBaseName);
+
                     if (!stagedOrderGroup
                         && groupUnit.SourceLayer.Length > 0
                         && (entryLayer.Length == 0
@@ -17159,17 +17166,25 @@ namespace ArchiveFixer.ViewModels
                         /*
                          * 只改入口层不改任务落点 ⇒ 引擎仍会按原 CurrentPath/OutputPath 把产物写回
                          * `其余物`（`19191919` 批内逐字：入口层已改，落点仍是 `其余物\pack111-L2`）。
-                         * ⇒ 起点与落点一起改到源层：源层目录名已经是组基名时直接用，否则补一层组名。
+                         * ⇒ 起点与落点一起改到源层。
                          */
-                        string sourceLanding = string.Equals(
-                            Path.GetFileName(groupUnit.SourceLayer),
-                            groupBaseName,
-                            StringComparison.OrdinalIgnoreCase)
-                                ? groupUnit.SourceLayer
-                                : Path.Combine(groupUnit.SourceLayer, groupBaseName);
+                        task.CurrentPath = firstVolume;
+                        task.OutputPath = groupLanding;
+                        _stagedGroupOutputPaths[task] = groupLanding;
+                    }
+                    else if (!stagedOrderGroup
+                        && groupUnit.SourceLayer.Length > 0
+                        && !string.IsNullOrWhiteSpace(task.OutputPath)
+                        && ProcessArtifactLayout.IsInsideDeletableProcessFolders(task.OutputPath))
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{task.LogName}：这一单的落点在过程物层「{Path.GetFileName(task.OutputPath)}」—— "
+                            + $"按组事实改到源层落点「{Path.GetFileName(groupLanding)}」");
 
                         task.CurrentPath = firstVolume;
-                        task.OutputPath = sourceLanding;
+                        task.OutputPath = groupLanding;
+                        _stagedGroupOutputPaths[task] = groupLanding;
                     }
 
                     /*
