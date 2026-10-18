@@ -11997,9 +11997,65 @@ namespace ArchiveFixer.ViewModels
                      * 同组另外两片在 `…\打包111\打包111-W0-0\` 与 `…\打包111(2)\打包111(2)\打包111(2)\` ——
                      * 从 `打包111(3)` 起扫永远够不到兄弟目录的下一层）。
                      */
-                    string? scanRoot = string.IsNullOrWhiteSpace(grandParent)
-                        ? null
-                        : Directory.GetParent(grandParent)?.FullName;
+                    /*
+                     * ⚠ 2026-10-18（运行期坐实：`run-19191919` 09:20:09 逐字 `补扫根=…\大测试原包-困难
+                     * ｜实际扫了 66 个目录 / 2 个文件`）：**往上 3 层会越过样本根**，指到装着 30 份样本的父目录，
+                     * 目录预算（40）当场被兄弟样本目录吃光 ⇒ 这一组真正的片一片都没走到。
+                     * ⇒ 收窄上界：从祖父目录再往上时，只有当"待上溯的那个目录"里存在**名字以本组基名前缀开头**
+                     * 的子目录时才继续往上（`6666` 靠 `打包111(2)`/`打包111(3)` 成立；`19191919` 的那一层
+                     * 兄弟叫 `6666`/`8888`/…，一个都对不上 ⇒ 停在样本根本身）。⛔ 判不出前缀 ⇒ 不上溯。
+                     */
+                    string? scanRoot = grandParent;
+
+                    if (!string.IsNullOrWhiteSpace(grandParent))
+                    {
+                        string prefix = FileNameHelper.GetArchiveBaseName(referenceName);
+                        int dash = prefix.IndexOf('-');
+
+                        if (dash > 0)
+                        {
+                            prefix = prefix[..dash];
+                        }
+
+                        string? candidateRoot = grandParent;
+
+                        for (int up = 0; up < 3; up++)
+                        {
+                            string? parent = Directory.GetParent(candidateRoot!)?.FullName;
+
+                            if (string.IsNullOrWhiteSpace(parent) || prefix.Length == 0)
+                            {
+                                break;
+                            }
+
+                            bool related = false;
+
+                            try
+                            {
+                                foreach (string sub in Directory.GetDirectories(parent))
+                                {
+                                    if (Path.GetFileName(sub).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        related = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                related = false;
+                            }
+
+                            if (!related)
+                            {
+                                break;
+                            }
+
+                            candidateRoot = parent;
+                        }
+
+                        scanRoot = candidateRoot;
+                    }
 
                     if (!string.IsNullOrWhiteSpace(scanRoot) && Directory.Exists(scanRoot))
                     {
