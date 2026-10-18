@@ -12153,7 +12153,7 @@ namespace ArchiveFixer.ViewModels
                         var frontier = new List<string> { scanRoot! };
                         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { scanRoot! };
 
-                        for (int level = 0; level < 6 && frontier.Count > 0 && directories < 60; level++)
+                        for (int level = 0; level < 8 && frontier.Count > 0 && directories < 200; level++)
                         {
                             var next = new List<string>();
 
@@ -12219,7 +12219,7 @@ namespace ArchiveFixer.ViewModels
                         AppendLog(
                             "INFO",
                             $"{task.LogName}：收拢补扫 —— 入口卡自证是 zip 分片；补扫根={scanRoot}（入口往上 3 层）"
-                            + $"｜下探最多 6 层、目录上限 60、文件上限 400｜实际扫了 {directories} 个目录 / {files} 个文件"
+                            + $"｜下探最多 8 层、目录上限 200、文件上限 400｜实际扫了 {directories} 个目录 / {files} 个文件"
                             + $"｜候选池里现在 {allFiles.Count} 份");
                     }
                 }
