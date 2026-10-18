@@ -190,6 +190,31 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
+        /// **跨盘 ZIP 末片判据**（2026-10-18 困难批 `12121212` / `26262626` 运行期定案）：
+        /// 名字给 `.zip` 读成 1（这一族的入口形状）、内容给盘号 3 —— 只有卡同时说
+        /// "是成员 + 卷号 == 总片数 ≥ 2"才算末片；通用分片末片（`Membership=Unknown`）与中间片都不算。
+        /// </summary>
+        [Fact]
+        public void 跨盘zip末片判据_只认成员且卷号等于总片数()
+        {
+            FileNatureCard tail = Piece(@"C:\x\aaa-L2.zip", 10, ArchiveBodyKind.VolumePiece,
+                declaredCount: 3, volumeNumber: 3,
+                format: VolumeContentFormat.Zip,
+                membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember);
+            FileNatureCard genericTail = Piece(@"C:\x\b.zip.003", 10, ArchiveBodyKind.Unknown,
+                volumeNumber: 3, format: VolumeContentFormat.Zip,
+                zipEndRecordMeansSplit: true);
+            FileNatureCard middle = Piece(@"C:\x\aaa-L2.z02", 10, ArchiveBodyKind.Unknown,
+                format: VolumeContentFormat.Zip,
+                membership: VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember);
+
+            Assert.True(VolumePieceFacts.IsSpannedZipTailPiece(tail));
+            Assert.False(VolumePieceFacts.IsSpannedZipTailPiece(genericTail));
+            Assert.False(VolumePieceFacts.IsSpannedZipTailPiece(middle));
+            Assert.False(VolumePieceFacts.IsSpannedZipTailPiece(null));
+        }
+
+        /// <summary>
         /// **同一份字节两条名字留哪条**（唯一出口 `VolumePieceFacts.IsNameItsOwnCanonicalName`）：
         /// 只认"名字与内容卡上的规范名逐字相同"那一条；脏名 / 判不出 ⇒ false（调用方照旧留先出现的）。
         /// 现场见 2026-10-18 困难批 `15151515` 组合 6。

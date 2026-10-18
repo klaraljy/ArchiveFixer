@@ -81,6 +81,23 @@ namespace ArchiveFixer.Detection
                 StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
+        /// **跨盘 ZIP 的末片**（卡上：格式 ZIP + 内容自证是成员 + 卷号 == 内容自述的总片数）。
+        ///
+        /// <para>为什么单独问这一件事（2026-10-18 困难批 `12121212` / `26262626` 运行期定案）：
+        /// 名字层给 `.zip` 读出来的卷号是 **1**（这一族的入口形状），而内容给的是**盘号**（3 = 末片）。
+        /// 把内容号直接当"名字槽位"交给命名出口 ⇒ `X.zip` 被改成 `X.z02` ⇒ 这一组出现两个 `.z02`、
+        /// 没有 `.zip`（引擎的入口）⇒ 整组缺末片 ⇒ ① ② 双红。
+        /// ⛔ 判据只读卡：`Format=Zip` + `Membership=VolumeMember` + `VolumeNumber == DeclaredVolumeCount ≥ 2`。</para>
+        /// </summary>
+        internal static bool IsSpannedZipTailPiece(FileNatureCard? card) =>
+            card != null
+            && card.Format == VolumeContentFormat.Zip
+            && card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember
+            && card.VolumeNumber is int number
+            && card.DeclaredVolumeCount >= 2
+            && number == card.DeclaredVolumeCount;
+
+        /// <summary>
         /// **RAR 族的首卷**（卡上：格式 RAR + 内容自证是成员 + 专属算法 = 这一组的第一片）。
         ///
         /// <para>干什么用（2026-10-16，§29.12 / §29.14）：后缀修正那一档要把它与"单卷归档"分开 ——

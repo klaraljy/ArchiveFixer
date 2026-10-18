@@ -772,8 +772,20 @@ namespace ArchiveFixer.Extraction
                      * 判据与拼法都只有既有出口 `VolumePiecesFromCards.CanonicalNameForSlot`。
                      * 目标名已被占 / 拼不出来 ⇒ 照旧什么都不做（`Cannot`）。
                      */
-                    string canonical = ArchiveFixer.Detection.VolumePiecesFromCards.CanonicalNameForSlot(
-                        entryCard, cardIndex.Value);
+                    /*
+                     * ⛔ **跨盘 ZIP 的末片：名字里的 1 是入口形状，内容里的号是盘号**（2026-10-18 困难批
+                     * `12121212` / `26262626` 运行期逐字）：老写法把 `cardIndex`（3 = 末片）直接当
+                     * "名字槽位"交给命名出口 ⇒ `资源222-L2.zip` 被改成 `资源222-L2.z02`
+                     * ⇒ 一组里两个 `.z02`、没有 `.zip`（引擎的入口）⇒ 整组缺末片 ⇒ ① ② 双红。
+                     * ⇒ 末片一律用**卡上已有的规范名**（`FileNatureCard.CanonicalVolumeName`，
+                     * 它由内容那一套算出来 = `X.zip`）；卡给不出才走老命名出口。
+                     * ⛔ 判据只读卡，不比名字猜。
+                     */
+                    string canonical = ArchiveFixer.Detection.VolumePieceFacts.IsSpannedZipTailPiece(entryCard)
+                        && entryCard.CanonicalVolumeName.Length > 0
+                            ? entryCard.CanonicalVolumeName
+                            : ArchiveFixer.Detection.VolumePiecesFromCards.CanonicalNameForSlot(
+                                entryCard, cardIndex.Value);
 
                     if (canonical.Length > 0
                         && !string.Equals(canonical, fileName, StringComparison.OrdinalIgnoreCase))
