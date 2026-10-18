@@ -9057,6 +9057,13 @@ namespace ArchiveFixer.ViewModels
             new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 这一批里每一组的**一等事实**（组齐那一刻创建；源层 / 入口 / owner / 试开顺序都从这里读）。
+        /// 键 = 基名 + 族；判不出族时也要有键，⛔ 不让同基名两族混算。
+        /// </summary>
+        private readonly Dictionary<string, VolumeGroupUnit> _volumeGroupUnits =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 这一批里"哪一单吐出了某一组的片"（组基名 → 那一单 **+ 它吐出的那一片的名字**）——跨链收卷用（真机第九批 CCCC）。
         ///
         /// <para>用途：整组由别单解开、而且**可证完整**之后，这些"只是包装"的单也按**跟班卷**收场
@@ -14542,6 +14549,7 @@ namespace ArchiveFixer.ViewModels
             _volumeDeficitFinalPass.Clear();
             ClearGroupPieceProducers();
             _groupConsumerByName.Clear();
+            _volumeGroupUnits.Clear();
             _consumedVolumeSources.Clear();
             _producerSourcesCollected.Clear();
             _adoptedLandedPieces.Clear();
@@ -17103,6 +17111,58 @@ namespace ArchiveFixer.ViewModels
                     string firstVolume = group.FirstVolumePath;
 
                     /*
+                     * ===== 组的一等事实（2026-10-18 提升）=====
+                     * 组齐这一刻把基名/族/源层/入口定下来；同一个键只建一次。之后同组的任务
+                     * 只查这一份，⛔ 不再各自从可变的 CurrentPath 重算入口层。
+                     */
+                    string groupBaseName = string.IsNullOrWhiteSpace(group.BaseName)
+                        ? FileNameHelper.GetArchiveBaseName(firstVolume)
+                        : group.BaseName;
+
+                    VolumeNamingFamily? groupFamily = gatherCardEvidence?.NamingFamily;
+
+                    string groupSourceLayer = !string.IsNullOrWhiteSpace(taskOutputPathBeforeRecheck)
+                        && !ProcessArtifactLayout.IsInsideDeletableProcessFolders(taskOutputPathBeforeRecheck)
+                            ? taskOutputPathBeforeRecheck
+                            : Path.GetDirectoryName(firstVolume) ?? string.Empty;
+
+                    string groupUnitKey = groupBaseName + "|" + (groupFamily?.ToString() ?? "?");
+
+                    if (!_volumeGroupUnits.TryGetValue(groupUnitKey, out VolumeGroupUnit? groupUnit))
+                    {
+                        groupUnit = new VolumeGroupUnit(
+                            groupBaseName,
+                            groupFamily,
+                            groupSourceLayer,
+                            firstVolume);
+
+                        _volumeGroupUnits[groupUnitKey] = groupUnit;
+
+                        AppendLog(
+                            "INFO",
+                            $"{task.LogName}：组事实建立 —— 基名「{groupBaseName}」｜族={groupFamily?.ToString() ?? "判不出"}"
+                            + $"｜源层「{Path.GetFileName(groupSourceLayer)}」｜入口「{FileNameHelper.GetFileName(firstVolume)}」");
+                    }
+
+                    /*
+                     * 入口层一旦是过程物层（`其余物`/工作区）⇒ 用组事实里的源层；暂存组入口例外
+                     * （那一套只用于试开，产物仍有自己的原落点）。
+                     */
+                    if (!stagedOrderGroup
+                        && groupUnit.SourceLayer.Length > 0
+                        && (entryLayer.Length == 0
+                            || ProcessArtifactLayout.IsInsideDeletableProcessFolders(entryLayer)))
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{task.LogName}：这一组的入口层是过程物层「{Path.GetFileName(entryLayer)}」—— "
+                            + $"改用组事实里的源层「{Path.GetFileName(groupUnit.SourceLayer)}」");
+
+                        entryLayer = groupUnit.SourceLayer;
+                        groupResolutionLayer = groupUnit.SourceLayer;
+                    }
+
+                    /*
                      * 收齐之后**当场把这一组的状态写回任务**（`ApplyGroupInfo`：卷清单 / 缺卷名单 /
                      * 「共 N 卷」那一句）。⛔ 不能省：下一步 `ResolveCompleteGroupFromDisk` 的
                      * "账上点过名的缺卷必须真的出现"读的就是这份**名单** —— 盘上明明已经收齐、
@@ -17139,6 +17199,39 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     /*
+                     * 入口那一单已经不在了（先停了/被移出本轮补判）⇒ 这一单接管，并且**把入口层
+                     * 也改到第 1 卷所在层**（只改起点不改层，组仍会从自己那片所在的层开，必缺卷）。
+                     * 入口那单还在名单里就照旧让位（⛔ 不抢锁）。
+                     */
+                    bool forceGroupOwner = false;
+
+                    if (IsFirstVolumeOwnedByAnotherTask(task, firstVolume))
+                    {
+                        bool pendingFirstVolumeTask = _volumeDeficitDeferred.Any(candidate =>
+                            candidate != null
+                            && (SafePathHelper.PathEquals(candidate.CurrentPath, firstVolume)
+                                || SafePathHelper.PathEquals(candidate.OriginalPath, firstVolume)));
+
+                        if (!pendingFirstVolumeTask)
+                        {
+                            forceGroupOwner = true;
+
+                            string firstVolumeLayer = Path.GetDirectoryName(firstVolume) ?? string.Empty;
+
+                            if (firstVolumeLayer.Length > 0)
+                            {
+                                entryLayer = firstVolumeLayer;
+                                groupResolutionLayer = firstVolumeLayer;
+                            }
+
+                            AppendLog(
+                                "WARN",
+                                $"{task.LogName}：入口那一单已经不在本轮补判名单里 —— 这一单接管这一组，"
+                                + $"起点与入口层都改到第 1 卷那一层「{Path.GetFileName(firstVolumeLayer)}」");
+                        }
+                    }
+
+                    /*
                      * ⛔ **这一批已经用「完全同一组片」试过一遍 ⇒ 不再排第二趟**（2026-10-17 真机 `10101010`）。
                      *
                      * <para>现场逐行：批末补判把同一组排了 21 趟，每趟都以「判出完整的一组（1 卷）」放行 ⇒
@@ -17158,7 +17251,7 @@ namespace ArchiveFixer.ViewModels
                      * 首卷那一单干（很可能它刚刚已经解成功了）。这一单照旧按"跟班卷"走既有的跳过口径 ——
                      * 改起点会让两单指着同一个文件、把同一份内容解第二遍。
                      */
-                    if (IsFirstVolumeOwnedByAnotherTask(task, firstVolume))
+                    if (IsFirstVolumeOwnedByAnotherTask(task, firstVolume) && !forceGroupOwner)
                     {
                         task.CaptureSourceSnapshot();
                     }
@@ -17222,6 +17315,22 @@ namespace ArchiveFixer.ViewModels
                     if (stagedOrderGroup)
                     {
                         task.OutputPath = taskOutputPathBeforeRecheck;
+                    }
+
+                    if (groupUnit.OwnerTaskFileName == null)
+                    {
+                        groupUnit.OwnerTaskFileName = task.FileName;
+                    }
+                    else if (!string.Equals(groupUnit.OwnerTaskFileName, task.FileName, StringComparison.Ordinal))
+                    {
+                        AppendLog(
+                            "INFO",
+                            $"{task.LogName}：这一组已有 owner「{groupUnit.OwnerTaskFileName}」—— "
+                            + "同一组只解一次，这一单不重复开组（跟班源片照旧按档收场）");
+
+                        _volumeDeficitDeferred.Remove(task);
+                        task.IsVolumeDeficitDeferred = false;
+                        continue;
                     }
 
                     toRun.Add(task);
@@ -18118,7 +18227,6 @@ namespace ArchiveFixer.ViewModels
                     consumer = tasks.FirstOrDefault(candidate =>
                         candidate != null
                         && candidate.Outcome == TaskOutcome.Succeeded
-                        && !candidate.IsVolumeGroupFollower
                         && candidate.IsVolumeGroup
                         && candidate.IsVolumeComplete
                         && (string.Equals(candidate.DisplayFileName, settledWith, StringComparison.Ordinal)
@@ -18130,7 +18238,6 @@ namespace ArchiveFixer.ViewModels
                     consumer = tasks.FirstOrDefault(candidate =>
                         candidate != null
                         && candidate.Outcome == TaskOutcome.Succeeded
-                        && !candidate.IsVolumeGroupFollower
                         && candidate.IsVolumeGroup
                         && candidate.IsVolumeComplete
                         && string.Equals(
@@ -21573,6 +21680,7 @@ namespace ArchiveFixer.ViewModels
                 _scoredSlotLinks.Clear();
                 _consumedVolumeSources.Clear();
                 _groupConsumerByName.Clear();
+            _volumeGroupUnits.Clear();
                 ClearGroupPieceProducers();
                 _producerSourcesCollected.Clear();
                 _adoptedLandedPieces.Clear();
