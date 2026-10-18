@@ -11131,7 +11131,7 @@ namespace ArchiveFixer.ViewModels
                  * = 用户给的原包）；⛔ 判不出 ⇒ 照旧老口径（该搬还是搬）。硬链接是**另起一个规范卷名**，
                  * 源文件一个字节没动 —— 与「接片」那一档对用户文件的既有口径完全一致。</para>
                  */
-                if (moveIntoGroup && IsUserImportedSourcePath(piecePath))
+                if (moveIntoGroup && (IsUserImportedSourcePath(piecePath) || IsAnyTaskOriginalPath(piecePath)))
                 {
                     moveIntoGroup = false;
                 }
