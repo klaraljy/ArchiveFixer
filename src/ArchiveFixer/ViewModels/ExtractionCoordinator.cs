@@ -12075,8 +12075,9 @@ namespace ArchiveFixer.ViewModels
                          */
                         AppendLog(
                             "INFO",
-                            $"{task.LogName}：收拢补扫 —— 入口卡自证是 zip 分片；扫了 {directories} 个目录 / {files} 个文件，"
-                            + $"候选池里现在 {allFiles.Count} 份");
+                            $"{task.LogName}：收拢补扫 —— 入口卡自证是 zip 分片；补扫根={scanRoot}（入口往上 3 层）"
+                            + $"｜下探最多 3 层、目录上限 40、文件上限 400｜实际扫了 {directories} 个目录 / {files} 个文件"
+                            + $"｜候选池里现在 {allFiles.Count} 份");
                     }
                 }
                 catch
