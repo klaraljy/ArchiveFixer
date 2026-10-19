@@ -1119,6 +1119,33 @@ namespace ArchiveFixer.Services
         }
 
         /// <summary>
+        /// 把用户导入的密码本复制一份到**程序安装目录**（与 exe 同级），返回复制后的路径。
+        ///
+        /// 用户 2026-10-19 口径：导入的是 .txt，就把它复制到安装位置；⛔ 不是记住/链接用户原文件。
+        /// 这样安装目录里只有一份实际使用的密码本，用户之后移动/删除原文件也不会把程序弄坏。
+        /// </summary>
+        public static string CopyImportedBookToInstallDirectory(string sourcePath)
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                return sourcePath;
+            }
+
+            string sourceFull = Path.GetFullPath(sourcePath);
+            string installDirectory = AppContext.BaseDirectory;
+            string target = Path.Combine(installDirectory, Path.GetFileName(sourceFull));
+
+            if (string.Equals(sourceFull, target, StringComparison.OrdinalIgnoreCase))
+            {
+                return sourceFull;
+            }
+
+            Directory.CreateDirectory(installDirectory);
+            File.Copy(sourceFull, target, overwrite: true);
+            return target;
+        }
+
+        /// <summary>
         /// 导入密码本文件。
         ///
         /// 两种写法都支持（AGENTS.md §9.1）：

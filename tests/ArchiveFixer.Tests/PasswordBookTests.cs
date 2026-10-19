@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using ArchiveFixer.Helpers;
 using ArchiveFixer.Password;
+using ArchiveFixer.Services;
 using Xunit;
 
 namespace ArchiveFixer.Tests
@@ -16,6 +17,42 @@ namespace ArchiveFixer.Tests
     /// </summary>
     public sealed class PasswordBookTests
     {
+        /// <summary>
+        /// 导入的密码本必须**复制到安装目录**，不是记住/链接用户原文件。
+        /// 复制后删源文件，安装目录那份仍必须可读。
+        /// </summary>
+        [Fact]
+        public void 导入的密码本复制到安装目录_不是链接()
+        {
+            using var dir = new TempDir();
+            string source = Path.Combine(dir.Path, $"af-book-{Guid.NewGuid():N}.txt");
+            File.WriteAllText(source, "合成密码A\n合成密码B\n", new UTF8Encoding(false));
+
+            string copied = PasswordService.CopyImportedBookToInstallDirectory(source);
+
+            try
+            {
+                Assert.NotEqual(Path.GetFullPath(source), Path.GetFullPath(copied));
+                Assert.Equal(
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)),
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetDirectoryName(copied)!)));
+                Assert.True(File.Exists(copied));
+
+                File.Delete(source);
+
+                Assert.Equal(
+                    new[] { "合成密码A", "合成密码B" },
+                    File.ReadAllLines(copied));
+            }
+            finally
+            {
+                if (File.Exists(copied))
+                {
+                    File.Delete(copied);
+                }
+            }
+        }
+
         /// <summary>
         /// 代码页编码的注册必须是**幂等的一次性初始化**，而且解析器自己会确保它。
         ///

@@ -541,11 +541,12 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                var imported = _passwordService.ImportPasswordList(path);
+                string installedPath = PasswordService.CopyImportedBookToInstallDirectory(path);
+                var imported = _passwordService.ImportPasswordList(installedPath);
 
                 ReloadFromService();
 
-                RememberPasswordBookPath(path);
+                RememberPasswordBookPath(installedPath);
 
                 // 与主界面「工具 → 导入密码本…」同一套文案：条数 + 已记住 + 下次启动自动加载。
                 // 以前这里只有"已导入 N 个新密码"，用户看不出到底记住没有，

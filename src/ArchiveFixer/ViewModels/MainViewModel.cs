@@ -2619,9 +2619,10 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                int count = _passwordService.ImportPasswordList(path).Count;
+                string installedPath = PasswordService.CopyImportedBookToInstallDirectory(path);
+                int count = _passwordService.ImportPasswordList(installedPath).Count;
 
-                Settings.PasswordBookPath = path;
+                Settings.PasswordBookPath = installedPath;
                 WriteSettingsToDisk("导入的密码本");
 
                 /*
