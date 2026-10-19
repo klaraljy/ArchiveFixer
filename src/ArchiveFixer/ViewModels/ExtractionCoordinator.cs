@@ -8322,6 +8322,128 @@ namespace ArchiveFixer.ViewModels
         /// 只碰**硬链接数 &gt; 1** 的（`FileIdentity.TryGetLinkCount`）⇒ 三重收窄；
         /// ⛔ 不递归、⛔ 不碰「其余物」、⛔ 不碰只剩一个名字的文件。整批复跑会从备份还原，删了也不影响复现。</para>
         /// </summary>
+        internal void BeginKeepInPlaceSourceProtection(IReadOnlyList<ArchiveTask> tasks)
+        {
+            _keepSourceSnapshots.Clear();
+            _keepSourceSnapshotDirectory = string.Empty;
+
+            if (AppSettings.ParseSourceHandling(Settings.SourceHandling) != SourceHandlingMode.KeepInPlace)
+            {
+                return;
+            }
+
+            var sources = (tasks ?? Array.Empty<ArchiveTask>())
+                .Where(task => task != null)
+                .SelectMany(task => new[] { task!.OriginalPath, task.CurrentPath }
+                    .Concat(task.VolumePaths))
+                .Where(path => !string.IsNullOrWhiteSpace(path)
+                    && File.Exists(path)
+                    && !ProcessArtifactLayout.IsInsideDeletableProcessFolders(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(240)
+                .ToList();
+
+            if (sources.Count == 0)
+            {
+                return;
+            }
+
+            string? volumeRoot = Path.GetPathRoot(sources[0]);
+
+            if (string.IsNullOrWhiteSpace(volumeRoot))
+            {
+                return;
+            }
+
+            string backupDirectory = Path.Combine(
+                volumeRoot,
+                ".ArchiveFixerSrcProtect",
+                Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Directory.CreateDirectory(backupDirectory);
+                int index = 0;
+
+                foreach (string source in sources)
+                {
+                    if (!HardLinkHelper.CanHardLink(source, backupDirectory))
+                    {
+                        continue;
+                    }
+
+                    string backup = Path.Combine(backupDirectory, $"{index++:D4}.bin");
+
+                    if (HardLinkHelper.TryCreateHardLink(backup, source))
+                    {
+                        _keepSourceSnapshots.Add((source, backup));
+                    }
+                }
+
+                _keepSourceSnapshotDirectory = backupDirectory;
+
+                AppendLog(
+                    "INFO",
+                    $"KeepInPlace 源文件保护：已给 {_keepSourceSnapshots.Count} 份源文件建同卷硬链接快照");
+            }
+            catch
+            {
+                _keepSourceSnapshots.Clear();
+                _keepSourceSnapshotDirectory = string.Empty;
+            }
+        }
+
+        internal void RestoreKeepInPlaceSourceNames()
+        {
+            foreach ((string original, string backup) in _keepSourceSnapshots.ToList())
+            {
+                try
+                {
+                    if (File.Exists(original) || !File.Exists(backup))
+                    {
+                        continue;
+                    }
+
+                    string? directory = Path.GetDirectoryName(original);
+
+                    if (string.IsNullOrWhiteSpace(directory))
+                    {
+                        continue;
+                    }
+
+                    Directory.CreateDirectory(directory);
+
+                    if (HardLinkHelper.TryCreateHardLink(original, backup))
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{Path.GetFileName(original)}：源包档=留下，但源名被搬走/改名 —— 已按原路径硬链接恢复"
+                            + "（源字节不动）");
+                    }
+                }
+                catch
+                {
+                    // 恢复不了就保持原样。
+                }
+            }
+
+            try
+            {
+                if (_keepSourceSnapshotDirectory.Length > 0
+                    && Directory.Exists(_keepSourceSnapshotDirectory))
+                {
+                    Directory.Delete(_keepSourceSnapshotDirectory, recursive: true);
+                }
+            }
+            catch
+            {
+                // 零字节链接清不掉不影响结论。
+            }
+
+            _keepSourceSnapshots.Clear();
+            _keepSourceSnapshotDirectory = string.Empty;
+        }
+
         internal int PurgeRedundantPieceAliases()
         {
             int removed = 0;
@@ -9129,6 +9251,13 @@ namespace ArchiveFixer.ViewModels
         /// 批末统一删（里面只有零字节链接，删名字不丢字节；⛔ 不碰任何用户/任务源）。
         /// </summary>
         private readonly List<string> _confirmedOrderStagingDirectories = new();
+
+        /// <summary>
+        /// 一键开始前给 KeepInPlace 源文件做的同卷硬链接快照（原路径 → 备份路径）。
+        /// 收尾时按快照恢复被搬走/改名的源名；⛔ 不复制字节、不删输出。
+        /// </summary>
+        private readonly List<(string Original, string Backup)> _keepSourceSnapshots = new();
+        private string _keepSourceSnapshotDirectory = string.Empty;
 
         /// <summary>
         /// 试开定序的组任务：**原来的落点**（暂存组入口会改 `task.CurrentPath`，但产物必须回这个落点）。

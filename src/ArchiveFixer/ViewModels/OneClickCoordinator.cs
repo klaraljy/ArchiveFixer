@@ -976,6 +976,7 @@ namespace ArchiveFixer.ViewModels
 
             // 源文件（含分卷各卷）不算内层包：不能把用户最初给的那个 .mp4 / .7z.001 又加一遍。
             HashSet<string> sourcePaths = BuildSourcePathSet(rootTargets);
+            _extractionCoordinator.BeginKeepInPlaceSourceProtection(rootTargets);
 
             List<ArchiveTask> roundTargets = rootTargets.ToList();
 
@@ -2771,6 +2772,7 @@ namespace ArchiveFixer.ViewModels
              * 判据见 `ExtractionCoordinator.PurgeRedundantPieceAliases`：只碰"名字像分卷片 **且** 还有别的名字"
              * 的文件 ⇒ 删掉一个名字**一个字节都不丢**（真机 `6666` 实测：两个名字同 File ID）。
              */
+            _extractionCoordinator.RestoreKeepInPlaceSourceNames();
             _extractionCoordinator.PurgeRedundantPieceAliases();
 
             BatchOutcomeTally tally = BatchOutcomeTally.Count(targets);
