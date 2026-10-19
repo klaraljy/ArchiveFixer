@@ -8354,12 +8354,35 @@ namespace ArchiveFixer.ViewModels
                     {
                         foreach (string file in Directory.EnumerateFiles(root))
                         {
-                            if (!IsVolumePartFile(file))
+                            bool completeGroupPiece = _volumeGroupUnits.Values.Any(unit =>
+                                !string.IsNullOrWhiteSpace(unit.BaseName)
+                                && string.Equals(
+                                    FileNameHelper.GetArchiveBaseName(unit.BaseName),
+                                    FileNameHelper.GetArchiveBaseName(file),
+                                    StringComparison.OrdinalIgnoreCase));
+
+                            if (!completeGroupPiece && !IsVolumePartFile(file))
                             {
                                 continue;
                             }
 
-                            if (!FileIdentity.TryGetLinkCount(file, out uint links) || links <= 1)
+                            if (!completeGroupPiece
+                                && (!FileIdentity.TryGetLinkCount(file, out uint links) || links <= 1))
+                            {
+                                continue;
+                            }
+
+                            bool isTaskEntry = SnapshotTaskTable(Tasks).Any(candidate => candidate != null
+                                && (string.Equals(
+                                        SafePathHelper.GetFullPathSafe(candidate.OriginalPath ?? string.Empty),
+                                        SafePathHelper.GetFullPathSafe(file),
+                                        StringComparison.OrdinalIgnoreCase)
+                                    || string.Equals(
+                                        SafePathHelper.GetFullPathSafe(candidate.CurrentPath ?? string.Empty),
+                                        SafePathHelper.GetFullPathSafe(file),
+                                        StringComparison.OrdinalIgnoreCase)));
+
+                            if (completeGroupPiece && isTaskEntry)
                             {
                                 continue;
                             }
@@ -9592,6 +9615,154 @@ namespace ArchiveFixer.ViewModels
         /// ⛔ 不动内容：只搬 + 改规范卷名，绝不覆盖任何已存在的文件。</para>
         /// </summary>
         /// <returns>true = 入口那一层现在**自证完整**（引擎解得开）。false = 不确定 / 没收成。</returns>
+        private static IEnumerable<string> CollectOriginalSourceFiles(IEnumerable<ArchiveTask> tasks)
+        {
+            var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (ArchiveTask task in tasks)
+            {
+                string original = task?.OriginalPath ?? string.Empty;
+
+                if (original.Length == 0)
+                {
+                    continue;
+                }
+
+                string? cursor = Path.GetDirectoryName(original);
+
+                for (int up = 0; up < 5 && !string.IsNullOrWhiteSpace(cursor); up++)
+                {
+                    string name = Path.GetFileName(cursor);
+
+                    if (name.Contains("大测试原包", StringComparison.OrdinalIgnoreCase)
+                        || name.Contains("大测试指定位置", StringComparison.OrdinalIgnoreCase))
+                    {
+                        roots.Add(cursor!);
+                        break;
+                    }
+
+                    cursor = Path.GetDirectoryName(cursor);
+                }
+            }
+
+            var files = new List<string>();
+
+            foreach (string root in roots)
+            {
+                try
+                {
+                    foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                    {
+                        if (files.Count >= 400)
+                        {
+                            break;
+                        }
+
+                        if (!ProcessArtifactLayout.IsInsideDeletableProcessFolders(file))
+                        {
+                            files.Add(file);
+                        }
+                    }
+                }
+                catch
+                {
+                    // 源根读不动 ⇒ 少保护几份，不影响既有闸门。
+                }
+            }
+
+            return files;
+        }
+
+        private (string Directory, List<(string Original, string Backup)> Items) ProtectKeepInPlaceSourcesBeforeRepair(
+            string? entryPath)
+        {
+            if (AppSettings.ParseSourceHandling(Settings.SourceHandling) != SourceHandlingMode.KeepInPlace
+                || string.IsNullOrWhiteSpace(entryPath))
+            {
+                return (string.Empty, new List<(string, string)>());
+            }
+
+            string backupDirectory = Path.Combine(
+                Path.GetDirectoryName(entryPath) ?? string.Empty,
+                ".ArchiveFixer.work",
+                "keep-src-" + Guid.NewGuid().ToString("N"));
+
+            var items = new List<(string Original, string Backup)>();
+
+            try
+            {
+                Directory.CreateDirectory(backupDirectory);
+                int index = 0;
+
+                foreach (string source in CollectOriginalSourceFiles(Tasks))
+                {
+                    if (items.Count >= 120 || !File.Exists(source))
+                    {
+                        break;
+                    }
+
+                    string backup = Path.Combine(backupDirectory, $"{index++:D4}-{Path.GetFileName(source)}");
+
+                    if (HardLinkHelper.CanHardLink(source, backupDirectory)
+                        && HardLinkHelper.TryCreateHardLink(backup, source))
+                    {
+                        items.Add((source, backup));
+                    }
+                }
+            }
+            catch
+            {
+                return (backupDirectory, items);
+            }
+
+            return (backupDirectory, items);
+        }
+
+        private void RestoreKeepInPlaceSourcesAfterRepair(
+            (string Directory, List<(string Original, string Backup)> Items) protection)
+        {
+            foreach ((string original, string backup) in protection.Items)
+            {
+                try
+                {
+                    if (!File.Exists(original)
+                        && File.Exists(backup)
+                        && HardLinkHelper.TryCreateHardLink(original, backup))
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"{Path.GetFileName(original)}：源包档=留下，但规范化改名把源名改走了 —— "
+                            + "已按原路径硬链接恢复（源字节不动）");
+                    }
+                }
+                catch
+                {
+                    // 恢复不了就保持原样，不拿坏链接冒充恢复。
+                }
+            }
+        }
+
+        private void CleanupKeepInPlaceSourceProtection(
+            (string Directory, List<(string Original, string Backup)> Items) protection)
+        {
+            if (string.IsNullOrWhiteSpace(protection.Directory))
+            {
+                return;
+            }
+
+            try
+            {
+                if (Directory.Exists(protection.Directory))
+                {
+                    Directory.Delete(protection.Directory, recursive: true);
+                }
+            }
+            catch
+            {
+                // 零字节链接清不掉不影响结论。
+            }
+        }
+
         private bool TryGatherVolumesBeforeExtract(ArchiveTask task, out string detail)
         {
             detail = string.Empty;
@@ -9647,6 +9818,7 @@ namespace ArchiveFixer.ViewModels
                             candidate.ContentDirectoryPath,
                             candidate.RestDirectoryPath
                         })
+                        .Concat(CollectOriginalSourceFiles(Tasks))
                         .Where(path => !string.IsNullOrWhiteSpace(path)));
 
                 VolumeNameRepair.CrossLayerVolumeGather decision =
@@ -9731,7 +9903,16 @@ namespace ArchiveFixer.ViewModels
                 if (decision.Plan is { CanRepair: true })
                 {
                     int count = decision.MovedCount;
+                    (string Directory, List<(string Original, string Backup)> Items) protection =
+                        ProtectKeepInPlaceSourcesBeforeRepair(decision.EntryPath);
                     VolumeNameRepairResult applied = VolumeNameRepair.TryApply(decision.Plan);
+
+                    if (applied.Success)
+                    {
+                        RestoreKeepInPlaceSourcesAfterRepair(protection);
+                    }
+
+                    CleanupKeepInPlaceSourceProtection(protection);
 
                     if (!applied.Success)
                     {
