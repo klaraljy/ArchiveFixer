@@ -12266,6 +12266,25 @@ namespace ArchiveFixer.ViewModels
                 return true;
             }
 
+            /*
+             * ③b **7z/RAR 的中间片 / 末片**：内容里没有魔数（只有首卷的起始头自述），
+             * `FileNature` 只能答 `Unknown`。首卷自述的片数/字节数和满片尺寸是现有证据，
+             * 只要基名相关、尺寸不超过满片 ⇒ 允许进候选；是否真的成组仍由
+             * `VolumePiecesFromCards` 的片数/合计和试开回答。
+             * 现场（2026-10-19 `3333`）：`.002`=`333-L2.7z.png`、`.003`=`333-L2.7z` 都是 Unknown，
+             * 被唯一出口挡掉 ⇒ 候选永远只有 `.601` 一片。
+             */
+            if (fullSizeAnchor > 0
+                && referenceBase.Length > 0
+                && BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(card.Path), referenceBase)
+                && card.Size > 0
+                && card.Size <= fullSizeAnchor
+                && card.BodyKind == ArchiveBodyKind.Unknown
+                && card.Membership == VolumeNumberFromContent.VolumeMembershipVerdict.Unknown)
+            {
+                return true;
+            }
+
             /* ④ 卡 + 弱名字证据（既有两把尺子）。 */
             if (referenceBase.Length > 0
                 && VolumePieceFacts.CardSaysItIsOneOfTheGroup(card)
@@ -12324,6 +12343,90 @@ namespace ArchiveFixer.ViewModels
                     {
                         allFiles.Add(file);
                     }
+                }
+            }
+
+            /*
+             * 源层候选：`OriginalPath` 是用户导入那一刻的位置，⛔ 不是过程物层。
+             * 分卷片被包装壳拆到不同源目录时（2026-10-19 `3333`：`.002` / `.003` 各在一个
+             * `333(2)` / `333(3)` 源目录里），只收 `CurrentPath`/`OutputPath` 永远看不到整组。
+             * 这里按**整层文件**枚举，收不收仍由唯一出口 `AcceptsAsGroupPiece` 回答。
+             */
+            void CollectAllFromSourceLayer(string? directory)
+            {
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return;
+                }
+
+                foreach (string file in SafeEnumerateFiles(directory!))
+                {
+                    if (!allFiles.Any(existing => string.Equals(existing, file, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        allFiles.Add(file);
+                    }
+                }
+            }
+
+            /*
+             * **源树的“根”就是带 recipe.json 的那一层**（造包器写下的样本根）。
+             * 只从单份任务的 OriginalPath 找，会漏掉同一份样本里**没被导入成任务**的裸片
+             * （2026-10-19 `3333`：`.002` / `.003` 没有任务，只有源文件）。
+             * ⛔ 只扫这一棵源树、文件上限 200，收不收仍由 `AcceptsAsGroupPiece` 回答。
+             */
+            void CollectAllFromSourceTree(string? root)
+            {
+                if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+                {
+                    return;
+                }
+
+                int collected = 0;
+
+                try
+                {
+                    foreach (string file in Directory.EnumerateFiles(root!, "*", SearchOption.AllDirectories))
+                    {
+                        if (++collected > 200)
+                        {
+                            break;
+                        }
+
+                        if (!allFiles.Any(existing => string.Equals(existing, file, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            allFiles.Add(file);
+                        }
+                    }
+                }
+                catch
+                {
+                    // 读不动就保留已经收进来的部分。
+                }
+            }
+
+            /*
+             * 运行根里没有 `recipe.json`（`bt30` 只复制样本文件）⇒ 不能靠它找源树根。
+             * 从 `OriginalPath` 往上最多 3 层；到批根 `大测试原包-困难` / `大测试指定位置-困难`
+             * 就停下（⛔ 不扫进别的样本）。每层递归收、文件上限 200，收不收仍由唯一出口回答。
+             */
+            void CollectAllFromSourceAncestors(string? path)
+            {
+                string? dir = string.IsNullOrWhiteSpace(path)
+                    ? null
+                    : Path.GetDirectoryName(SafePathHelper.GetFullPathSafe(path));
+
+                for (int up = 0; up < 4 && !string.IsNullOrWhiteSpace(dir); up++)
+                {
+                    string name = Path.GetFileName(dir);
+
+                    if (name.Contains("大测试原包", StringComparison.OrdinalIgnoreCase)
+                        || name.Contains("大测试指定位置", StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+
+                    CollectAllFromSourceTree(dir);
+                    dir = Path.GetDirectoryName(dir);
                 }
             }
 
@@ -12491,6 +12594,25 @@ namespace ArchiveFixer.ViewModels
                             sweepSeeds.Add(scanRoot!);
                         }
 
+                        /*
+                         * 源层也要进补扫种子：分卷片可能先在别的包装壳里产出，再落回
+                         * `OriginalPath` 那一层；只从 `CurrentPath`（过程物层）往上找够不到
+                         * （2026-10-19 `3333`：`.002` / `.003` 在兄弟源目录里）。
+                         */
+                        string? sourceSeed = Path.GetDirectoryName(
+                            SafePathHelper.GetFullPathSafe(task.OriginalPath ?? string.Empty));
+
+                        for (int up = 0; up < 4 && !string.IsNullOrWhiteSpace(sourceSeed); up++)
+                        {
+                            if (Directory.Exists(sourceSeed)
+                                && !sweepSeeds.Any(existing => string.Equals(existing, sourceSeed, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                sweepSeeds.Add(sourceSeed!);
+                            }
+
+                            sourceSeed = Path.GetDirectoryName(sourceSeed);
+                        }
+
                         var frontier = new List<string>(sweepSeeds);
                         var sweepTrace = new List<string>();
                         var visited = new HashSet<string>(sweepSeeds, StringComparer.OrdinalIgnoreCase);
@@ -12621,6 +12743,8 @@ namespace ArchiveFixer.ViewModels
                 CollectAll(candidate.OutputPath);
                 CollectAll(candidate.ContentDirectoryPath);
                 CollectAll(candidate.RestDirectoryPath);
+                CollectAllFromSourceLayer(Path.GetDirectoryName(candidate.OriginalPath ?? string.Empty));
+                CollectAllFromSourceAncestors(candidate.OriginalPath);
             }
 
             /*
@@ -12705,6 +12829,56 @@ namespace ArchiveFixer.ViewModels
              * `Unknown` 中段片（`333-L2.pdf`）筛掉。补扫那一侧已经从"没有 EOCD、基名相关"的片取了锚点，
              * 这一侧原样沿用；⛔ 只补锚点，判据阶梯不改。
              */
+            if (zipFullSize <= 0)
+            {
+                /*
+                 * 7z/RAR 的首卷卡上有“自述片数 / 自述整包字节数”，用**首卷自己的大小**
+                 * 当满片锚点；中间片/末片本身没有魔数，这是唯一能量出来的锚点。
+                 */
+                try
+                {
+                    FileNatureCard anchorSeat = FileNature.Inspect(observed);
+
+                    if (anchorSeat.DeclaredVolumeCount > 0
+                        && anchorSeat.Size > 0
+                        && anchorSeat.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                    {
+                        zipFullSize = anchorSeat.Size;
+                    }
+                }
+                catch
+                {
+                    // 读不出来就维持 0（这一档不启用）。
+                }
+            }
+
+            if (zipFullSize <= 0)
+            {
+                /*
+                 * `observed` 可能只是包装壳（卡上没有自述）；首卷自述在候选池里的另一份卡上。
+                 * 这是唯一一个“内容能给出满片尺寸”的出口，⛔ 不按名字猜大小。
+                 */
+                foreach (string candidateFile in allFiles)
+                {
+                    try
+                    {
+                        FileNatureCard candidateSeat = FileNature.Inspect(candidateFile);
+
+                        if (candidateSeat.DeclaredVolumeCount > 0
+                            && candidateSeat.Size > 0
+                            && candidateSeat.BodyKind == ArchiveBodyKind.VolumeFirstPiece)
+                        {
+                            zipFullSize = candidateSeat.Size;
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        // 单份读不出来就跳过。
+                    }
+                }
+            }
+
             if (zipFullSize <= 0)
             {
                 zipFullSize = sweepAnchorSize;
@@ -16527,6 +16701,78 @@ namespace ArchiveFixer.ViewModels
             var verifierFallback = new VolumeProbeVerifier(_archiveEngine);
 
             /*
+             * 7z / RAR 的名字也可能被伪装成 `.png` / 裸 `.7z`（2026-10-19 `3333`）：
+             * 名字只给出一种顺序时，`.002` 与 `.003` 会被排反 ⇒ 引擎必然报缺卷。
+             * 按第 ④ 条：名字给不出确定顺序时，先用高概率顺序、再逐种排列试开；
+             * 试开只决定顺序，不把整组判死。⛔ 只在 ≤5 片时排列（用户口径）。
+             */
+            VolumeContentFormat trialProbeFamily;
+
+            try
+            {
+                trialProbeFamily = FileNature.Inspect(firstVolume).Format;
+            }
+            catch
+            {
+                trialProbeFamily = VolumeContentFormat.Unknown;
+            }
+
+            VolumeNamingFamily? fallbackOrderFamily = trialProbeFamily switch
+            {
+                VolumeContentFormat.SevenZip => VolumeNamingFamily.SevenZipNumbered,
+                _ => null
+            };
+
+            if (fallbackOrderFamily is VolumeNamingFamily orderFamily
+                && pieces.Count >= 2
+                && pieces.Count <= VolumeOrderTrial.MaxPieces)
+            {
+                IReadOnlyList<IReadOnlyList<string>> fallbackOrders = VolumeOrderTrial.BuildCandidateOrders(
+                    pieces,
+                    null,
+                    orderFamily,
+                    referenceBase);
+
+                if (fallbackOrders.Count > 1)
+                {
+                    AppendLog(
+                        "INFO",
+                        $"试开定序（{orderFamily}）—— 片数 {pieces.Count}｜可试顺序 {fallbackOrders.Count} 种");
+
+                    foreach (IReadOnlyList<string> order in fallbackOrders)
+                    {
+                        string first = order[0];
+                        var restOrder = order
+                            .Skip(1)
+                            .Where(piece => File.Exists(piece))
+                            .Select(piece => new VolumeCandidate { Path = piece, Size = FileSizeOrZero(piece) })
+                            .ToList();
+
+                        var outcomeOrder = await verifierFallback.VerifyAsync(
+                                first,
+                                new List<IReadOnlyList<VolumeCandidate>> { restOrder },
+                                cancellationToken,
+                                Path.Combine(entryLayer, ".ArchiveFixer.work"),
+                                trialProbeFamily)
+                            .ConfigureAwait(false);
+
+                        if (outcomeOrder.Confirmed)
+                        {
+                            return new GroupOrderTrialResult
+                            {
+                                Applicable = true,
+                                Confirmed = true,
+                                OrderedPieces = order,
+                                Stem = referenceBase,
+                                Family = orderFamily,
+                                Reason = $"按内容/名字的高概率顺序试开通过（第 {outcomeOrder.Attempts} 种顺序）"
+                            };
+                        }
+                    }
+                }
+            }
+
+            /*
              * 试开用的硬链接名要**按卡上的族**拼（用户 2026-10-17：「底层识别先，名字配合行动」）：
              * RAR 组若仍按 7z 的 `.001` 建链接，引擎必然报「分卷压缩包缺少必要分卷」⇒ 整组永远"试开没通过"。
              */
@@ -16927,6 +17173,9 @@ namespace ArchiveFixer.ViewModels
                 ArchiveFixer.Detection.CardVolumeGroupReading? gatherCardEvidence = null;
                 bool contentOrderUndetermined = false;
                 bool stagedOrderGroup = false;
+                IReadOnlyList<string>? confirmedOrderForGroup = null;
+                VolumeNamingFamily? confirmedFamilyForGroup = null;
+                bool confirmedGroupForTask = false;
 
                 /*
                  * 组解析用的层：老路 = 入口层；试开确认后 = 全新的硬链接暂存目录。
@@ -17098,6 +17347,9 @@ namespace ArchiveFixer.ViewModels
                     }
                     else if (probe.Confirmed)
                     {
+                        confirmedOrderForGroup = probe.OrderedPieces;
+                        confirmedFamilyForGroup = probe.Family;
+                        confirmedGroupForTask = true;
                         /*
                          * 试开真的解开了这个顺序 ⇒ 先把它按规范卷名落进一个**全新的硬链接暂存目录**，
                          * 用暂存目录当组入口（2026-10-18 新批 `24242424`）：原入口层里可能已经有早先建的
@@ -17313,6 +17565,24 @@ namespace ArchiveFixer.ViewModels
                             + $"｜源层「{Path.GetFileName(groupSourceLayer)}」｜入口「{FileNameHelper.GetFileName(firstVolume)}」");
                     }
 
+                    /*
+                     * 试开确认的顺序 + 唯一 owner **落在组事实上**（⛔ 不能只留在局部变量里）：
+                     * 下面“这一单已经成功过”的守卫要读它；没有它，`3333` 那种“只先解出一片”的成功
+                     * 会把整组跳过，组一次都开不了。
+                     */
+                    if (confirmedGroupForTask && confirmedOrderForGroup != null)
+                    {
+                        if (groupUnit.ConfirmedOrder == null)
+                        {
+                            groupUnit.ConfirmedOrder = confirmedOrderForGroup;
+                        }
+
+                        if (groupUnit.OwnerTaskFileName == null)
+                        {
+                            groupUnit.OwnerTaskFileName = task.FileName;
+                        }
+                    }
+
                     string groupLanding = string.Equals(
                         Path.GetFileName(groupUnit.SourceLayer),
                         groupBaseName,
@@ -17416,15 +17686,40 @@ namespace ArchiveFixer.ViewModels
                      */
                     if (task.Outcome == TaskOutcome.Succeeded)
                     {
+                        bool ownsConfirmedGroup = groupUnit.ConfirmedOrder != null
+                            && (groupUnit.Family == VolumeNamingFamily.SevenZipNumbered
+                                || groupUnit.Family == VolumeNamingFamily.RarPart)
+                            && string.Equals(
+                                groupUnit.OwnerTaskFileName,
+                                task.FileName,
+                                StringComparison.Ordinal);
+
+                        if (!ownsConfirmedGroup)
+                        {
+                            AppendLog(
+                                "INFO",
+                                $"{task.LogName}：这一单这一批已经成功过（内容物已经得到）—— 这一组不再交给它跑第二遍"
+                                + "（不重复解压：同一组只解一次）。");
+
+                            _volumeDeficitDeferred.Remove(task);
+                            task.IsVolumeDeficitDeferred = false;
+
+                            continue;
+                        }
+
+                        /*
+                         * 它只是先解出了**一片**，真正的整组顺序是刚刚试开确认的 ⇒ 把这一次成功
+                         * 复位成待跑，由唯一 owner 把整组开一次（⛔ 不是“解了两遍”：上一遍不是这一组）。
+                         */
                         AppendLog(
-                            "INFO",
-                            $"{task.LogName}：这一单这一批已经成功过（内容物已经得到）—— 这一组不再交给它跑第二遍"
-                            + "（不重复解压：同一组只解一次）。");
+                            "WARN",
+                            $"{task.LogName}：这一单先前只解出了一片，组事实已确认整组顺序 —— "
+                            + "复位成待跑，由这一单把整组正经开一次（⛔ 不重复：上一遍不是这一组）");
 
-                        _volumeDeficitDeferred.Remove(task);
-                        task.IsVolumeDeficitDeferred = false;
-
-                        continue;
+                        task.Outcome = TaskOutcome.Pending;
+                        task.EndTime = null;
+                        task.IsVolumeGroupFollower = false;
+                        forceGroupOwner = true;
                     }
 
                     /*
