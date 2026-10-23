@@ -7818,10 +7818,8 @@ namespace ArchiveFixer.ViewModels
              * 收尾那一步读它补「（已试 N 个候选，产物始终不完整）」。
              */
 
-                AppendLog(
-                    layer.Success ? "INFO" : "WARN",
-                    $"  ├ 第 {layer.Depth} 层：{Path.GetFileName(layer.ArchivePath)} → {layer.Status}" +
-                    (string.IsNullOrWhiteSpace(layer.Message) ? string.Empty : $"，{layer.Message}"));
+                // 逐层一行的格式收进唯一出口 `Extraction/RecursionLayerLogLine`（一次只搬这一个功能族）。
+                AppendLog(layer.Success ? "INFO" : "WARN", RecursionLayerLogLine.Format(layer));
             }
 
             // 「递归 → 任务事实」与「清单说没加密」都收进唯一出口（一次只搬一个功能族）。
