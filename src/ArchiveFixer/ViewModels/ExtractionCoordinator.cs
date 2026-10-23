@@ -260,6 +260,7 @@ namespace ArchiveFixer.ViewModels
 
             _uiThread = new UiThreadStep(_dialogService);
             _progressHeartbeat = new ProgressHeartbeatStep(this);
+            _conflictStep = new ConflictStep(this);
             _sourceMoveFileSystem = sourceMoveFileSystem ?? FileSystemSourceMoveFileSystem.Instance;
         }
 

@@ -573,10 +573,8 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void SuppressDecisionPromptsForOneClickRun()
         {
-            lock (_conflictDecisionLock)
-            {
-                _conflictPromptUnavailable = true;
-            }
+            _conflictStep.SuppressPromptsForRun();
+
 
             AppendLog(
                 "INFO",

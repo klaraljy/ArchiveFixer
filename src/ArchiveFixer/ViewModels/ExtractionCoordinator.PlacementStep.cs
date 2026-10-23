@@ -742,7 +742,7 @@ namespace ArchiveFixer.ViewModels
                     precheck.ContentCount++;
                 }
 
-                if (precheck.Samples.Count < MaxConflictSamplesInDialog)
+                if (precheck.Samples.Count < ConflictStep.MaxConflictSamplesInDialog)
                 {
                     precheck.Samples.Add((move.To, kind));
                 }

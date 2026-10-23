@@ -965,12 +965,8 @@ namespace ArchiveFixer.ViewModels
                  * 询问次数写进日志：决策 D-4 要求"本批只问一次"，这一行就是它的证据 ——
                  * 用户与排障都能看到"这一批到底打断了几次"（选了「全部 X」之后不该再涨）。
                  */
-                int conflictPrompts;
+                int conflictPrompts = _conflictStep.PromptCount;
 
-                lock (_conflictDecisionLock)
-                {
-                    conflictPrompts = _conflictPromptCount;
-                }
 
                 if (conflictPrompts > 0)
                 {
