@@ -1896,18 +1896,9 @@ namespace ArchiveFixer.ViewModels
                  * 第二大步的入口任务：登记任务级事实位（让递归只解一层），交给单层路解这一组。
                  * ⛔ 仍只读内容卡，不按名字猜；非入口卷照旧跳过、原地不动。
                  */
-                if (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece)
-                {
-                    RememberVolumeStepTask(task);
-                    AppendLog(
-                        "INFO",
-                        $"{task.LogName}：第二大步入口 —— 内容卡证明这一份是分卷组的入口卷，这一单只解这一层。");
 
-                    await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
-                    return;
-                }
-
-                if (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece)
+                if (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                    || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece)
                 {
                     RegisterVolumeHandoff(task, entryCard);
                     task.Status = StatusText.Skipped;
