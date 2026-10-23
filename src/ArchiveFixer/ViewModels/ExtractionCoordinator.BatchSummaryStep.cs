@@ -138,5 +138,9 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        /// <summary>批末汇总里最多逐条列几个失败（再多让他去导出失败清单）。</summary>
+        private const int MaxBatchSummaryFailures = 20;
+
     }
 }

@@ -237,5 +237,33 @@ namespace ArchiveFixer.ViewModels
             return string.Equals(last, FileNameHelper.SanitizeFileName(archiveBaseName), StringComparison.OrdinalIgnoreCase);
         }
 
+
+        /// <summary>预检里最多列几条冲突给用户看（再多就让他去看日志，别弹一个占满屏幕的框）。</summary>
+        private const int MaxConflictSamplesInDialog = 5;
+
+        /// <summary>定稿前的冲突预检结论（Ask 档要在动最终目录之前先问完）。</summary>
+        private sealed class ConflictPrecheck
+        {
+            /// <summary>计划里"落点已经被占着"的条目总数。</summary>
+            public int TotalCount { get; set; }
+
+            /// <summary>其中属于**内容物**的条数（其余物撞名不算用户的内容被顶掉）。</summary>
+            public int ContentCount { get; set; }
+
+            /// <summary>给用户看的样例（最多 <see cref="MaxConflictSamplesInDialog"/> 条）。</summary>
+            public List<(string Path, ConflictTargetKind Kind)> Samples { get; } = new();
+        }
+
+        private bool IsConflictPromptUnavailable
+        {
+            get
+            {
+                lock (_conflictDecisionLock)
+                {
+                    return _conflictPromptUnavailable;
+                }
+            }
+        }
+
     }
 }
