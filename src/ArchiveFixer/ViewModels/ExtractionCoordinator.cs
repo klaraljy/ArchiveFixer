@@ -888,40 +888,8 @@ namespace ArchiveFixer.ViewModels
 
         private static void FinalizeOutcomeIfPending(ArchiveTask task, bool producedContent = false)
         {
-            if (task == null)
-            {
-                return;
-            }
-
-            if (task.Outcome == TaskOutcome.Pending
-                && task.EndTime.HasValue
-                && task.OutputVerification != OutputVerificationOutcome.Passed)
-            {
-                /*
-                 * ⚠ 2026-10-08 用户拍板：**缺卷落「部分完成」**——「最后一轮检测到了缺失分卷，这就是部分完成，
-                 * 因为连完整的都没有，这就不是程序的错误」；「如果是完整的…但是有错误，比如说密码、
-                 * 和压缩包卷尾缺失了一块，这就是失败的情况了」。
-                 *
-                 * ⚠ 2026-10-16 用户当场补的一条（**更宽**，逐字）：「**部分完成**就是，到了最后有些内容物完成，
-                 * 但还是有存留的压缩包没有被解压出来，也不分情况」＋「密码错了但是**其他的地方有内容物**这个
-                 * **肯定是判部分完成**，但是如果只有一个压缩包，而且密码错误，那么就不可能有内容物，
-                 * 因为密码都没有试出来」⇒ **只要"整体已有内容物解出"就落「部分完成」**（不分失败类型），
-                 * 而那一条事实由调用方按**结构化事实**判好传进来（<paramref name="producedContent"/>，
-                 * 唯一出口见 `PartialPublishCandidate.ChainProducedContent`）；判不出 / 没有内容物 ⇒ 照旧 `Failed`。
-                 *
-                 * 这一位是"终态由谁落"的**唯一出口**，缺卷那几条路（批首预检 / 批末补判 / 只写了中文状态
-                 * 没写终态的分支）全都要经过它 ⇒ 在这里按**状态常量**分流，就不必去每一处各写一遍
-                 * （⛔ 不比中文文案：判据是 `StatusText.VolumeMissing` 这个常量本身）。
-                 */
-                task.Outcome = task.Status == StatusText.VolumeMissing
-                    ? TaskOutcome.PartiallyCompleted
-                    /*
-                     * 「有内容物解出 ⇒ 部分完成；什么都没解出来 ⇒ 失败」——**唯一判据出口**
-                     * `TaskOutcomeClassifier.FromProducedContent`（⛔ 不在这里另写三元式：
-                     * 递归核心那条路走的是同一个出口）。
-                     */
-                    : TaskOutcomeClassifier.FromProducedContent(producedContent);
-            }
+            // 判据与落点都搬进唯一出口 `Extraction/OutcomeFinalizer`（一次只搬这一个方法）。
+            OutcomeFinalizer.FinalizeIfPending(task, producedContent);
         }
 
         /// <summary>
@@ -30785,3 +30753,4 @@ namespace ArchiveFixer.ViewModels
         }
     }
 }
+
