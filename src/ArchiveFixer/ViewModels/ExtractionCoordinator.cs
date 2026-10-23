@@ -7817,20 +7817,16 @@ namespace ArchiveFixer.ViewModels
              * 事实在这里记到任务上（`RecursionLayerReport.TriedCandidateCount` 由候选循环带上来的），
              * 收尾那一步读它补「（已试 N 个候选，产物始终不完整）」。
              */
-                // 事实搬运收进唯一出口 `Extraction/RecursionTaskFacts`（一次只搬这一个功能族）。
-                RecursionTaskFacts.Apply(task, result);
 
-
-                if (result.Layers.Any(layer => layer.ListingSaidNoEncryption))
-                {
-                    task.PasswordStatus = StatusText.PasswordNotNeeded;
-
-                }
                 AppendLog(
                     layer.Success ? "INFO" : "WARN",
                     $"  ├ 第 {layer.Depth} 层：{Path.GetFileName(layer.ArchivePath)} → {layer.Status}" +
                     (string.IsNullOrWhiteSpace(layer.Message) ? string.Empty : $"，{layer.Message}"));
             }
+
+            // 「递归 → 任务事实」与「清单说没加密」都收进唯一出口（一次只搬一个功能族）。
+            RecursionTaskFacts.Apply(task, result);
+            RecursionPasswordStatus.Apply(task, result);
 
             task.ErrorMessage = result.Summary;
 
@@ -7927,7 +7923,11 @@ namespace ArchiveFixer.ViewModels
                     task.Operation = StatusText.OpWaiting;
                     task.ProgressText = StatusText.ProgressFailed;
                     task.Outcome = TaskOutcome.Failed;
-                    task.ErrorMessage = result.Summary;
+                    // 「递归 → 任务事实」与「清单说没加密」都收进唯一出口（一次只搬一个功能族）。
+            RecursionTaskFacts.Apply(task, result);
+            RecursionPasswordStatus.Apply(task, result);
+
+            task.ErrorMessage = result.Summary;
 
             /*
              * 「连续两个候选解出来的产物完全相同」：事实由递归层带上来
