@@ -1646,11 +1646,8 @@ namespace ArchiveFixer.ViewModels
              * 停下那一层按③页「删除操作」档处理）。
              * ⛔ 单层路（recursion == null）与跑完的链照旧用 stageDirectory，行为一个字不改。
              */
-            string productDirectory = recursion != null
-                && !recursion.Completed
-                && recursion.Layers.Any(layer => layer != null && layer.Success)
-                    ? recursion.Layers.Last(layer => layer != null && layer.Success).OutputPath
-                    : stageDirectory;
+            // 判据与"取哪一层"都在唯一出口 `Extraction/ChainProductSource`（一次只搬这一个方法）。
+            string productDirectory = ChainProductSource.Resolve(recursion, stageDirectory);
             ManifestExpectation manifestExpectation = ChainManifestResolver.Resolve(recursion, knownList);
 
             // 记账：L4 的分类器与所有删除闸门都从任务上读它（"哪一层 + 为什么没清单"要能一路带到日志）。
