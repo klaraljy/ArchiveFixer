@@ -2077,5 +2077,16 @@ namespace ArchiveFixer.ViewModels
         internal static bool TryConfirmVolumeGroupComplete(string filePath, out string note)
             => ArchiveFixer.Extraction.VolumeNameOrchestration.TryConfirmVolumeGroupComplete(filePath, out note);
 
+
+        private string GlobalPassword => _vm.GlobalPassword;
+
+        private string SelectedOutputDirectory => _vm.SelectedOutputDirectory;
+
+        private ObservableCollection<ArchiveTask> Tasks => _vm.Tasks;
+
+        private bool IsStopping { get => _vm.IsStopping; set => _vm.IsStopping = value; }
+
+        private bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
+
     }
 }

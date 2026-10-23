@@ -673,5 +673,53 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        /// <summary>
+        /// **批末补判**：把名单里那几个任务逐条重判一次（用户口径 2 的后半句）。
+        ///
+        /// <para>三步，全部读**盘上事实**：① 再收一次卷（<see cref="TryGatherVolumesBeforeExtract"/>）；
+        /// ② 现归一次组（<see cref="RebuildVolumeGroup"/>，既有出口）—— 看这一组现在齐不齐；
+        /// ③ 齐了 ⇒ 把这一单的起点改到第 1 卷、返回给调用方**照常跑这一组**；
+        /// 仍然缺 ⇒ <paramref name="finalPass"/> 为 true 才如实报缺卷，否则继续留在名单里。</para>
+        ///
+        /// <para>⛔ 判据只有"盘上有没有那几卷"，⛔ 不比任何中文文案、⛔ 不拿任务账上那份过期结论当数。</para>
+        /// </summary>
+        /// <returns>现在该补跑的那几个任务（调用方负责启动 + 等它们收尾）。</returns>
+        /// <summary>
+        /// **(c) 硬链接试开证实**（用户 2026-10-17 四步里的第三步）：把这一组按**规范卷名链**交给引擎真开一次。
+        ///
+        /// <para>返回 null = 通过；非 null = 不过的原因。⛔ 判不出也算不过（没有引擎 / 认不出第 1 卷）——
+        /// 整组不动，⛔ 绝不"没试过就当过了"（2026-10-17 日志里那句「可证完整且试开通过」的假话
+        /// 就是这么来的：那一趟其实一次引擎都没调）。</para>
+        ///
+        /// <para>只读：<see cref="VolumeProbeVerifier"/> 只在试开目录里建硬链接、收工把整棵试开目录删掉，
+        /// 用户那一份一个字节都不动。</para>
+        /// </summary>
+        /// <summary>试开定序的结论（<see cref="Confirmed"/> = 赢的那一版；<see cref="Failure"/> 非空 = 不做）。</summary>
+        private sealed class GroupOrderTrialResult
+        {
+            /// <summary>这一档**适用**（通用分片、片数 ≤5、末片可定）—— 失败时调用方不再按名字硬拼。</summary>
+            public bool Applicable { get; init; }
+
+            /// <summary>试开确认了顺序。</summary>
+            public bool Confirmed { get; init; }
+
+            /// <summary>赢的那一版（第 1 片 … 末片）。</summary>
+            public IReadOnlyList<string> OrderedPieces { get; init; } = Array.Empty<string>();
+
+            /// <summary>规范名的基名（由末片卡上取）。</summary>
+            public string Stem { get; init; } = string.Empty;
+
+            /// <summary>内容判定的命名族（`ZipNumbered` / `ZipSpanned`）。</summary>
+            public VolumeNamingFamily Family { get; init; } = VolumeNamingFamily.ZipNumbered;
+
+            public string? Failure { get; init; }
+
+            public string Reason { get; init; } = string.Empty;
+
+            public static GroupOrderTrialResult Fail(string reason, bool applicable = false) =>
+                new() { Failure = reason, Applicable = applicable };
+        }
+
     }
 }

@@ -1995,5 +1995,14 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        /// <summary>第二大步收卷那一档的措辞（候选 = 这一趟按组定下来的那几份卷）。</summary>
+        private const string HarvestCandidatePrefix = "第二大步收卷准备收的";
+
+        /// <summary>第二大步收卷那一档的结论措辞（与「逐层回收」那一档同一件事、不同入口）。</summary>
+        private const string HarvestBlockerTail =
+            "当场收掉这几份就等于把这一组拆开，所以这一趟一个字节都不收"
+            + "（删除不可恢复；这一组留到确认完整之后再收）";
+
     }
 }
