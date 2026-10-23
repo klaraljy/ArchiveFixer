@@ -344,124 +344,12 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * ===== 工作区根：本批的中间产物放哪（用户 2026-09-30：落在这一单的目标目录里）=====
-                 *
-                 * 位置刻意在**空间规划之前**：空间账面要按"工作区与成品是不是同一块卷"给口径，
-                 * 而目标目录正是定工作区根时算出来的（两处必须看同一个事实，不能各算一遍）。
-                 *
-                 * ⛔ 定不下来（没有任何任务算得出目标目录）→ **整批停手并报错**：
-                 * 老实现这里会悄悄回落到程序目录（可能就是 C 盘），用户 2026-09-30 点名否掉了那个方向。
-                 * return 在 try 里面，所以 finally 照常收尾（_isExtracting / IsBusy 都会被复位）。
+                 * 批首准备（工作区根 / 补跑归组 / 第二大步点名 / 落点解析器 / 空间不足档 / 并发上限）：
+                 * 实现与逐条理由见 TryPrepareBatchForExtract —— 这一段原来是 120 行流水，抽出来只为读得动。
                  */
-                /*
-                 * ⚠ 2026-10-09（D 结案 + 用户「回上一步解决错误」）：**定工作区根之前**先给这一批每一单
-                 * 补跑一次"按它所在目录里的真实文件归组"。
-                 *
-                 * 为什么必须在这一刻（出处 `ViewModels/OneClickCoordinator.cs:1539-1564` 的注释）：
-                 * 续解层的内层任务是走 `AddPathsAsync(..., suppressAutoScan: true)` 加进来的，
-                 * **那条路不跑扫描期的分卷归组** ⇒ 它们的 `IsVolumeGroup` 一直是 false，
-                 * 而 `ApplyBatchWorkspaceRoot` 里那道"跳过入口包还没解出来的分卷组单"的守卫
-                 * （`IsUnresolvedVolumeGroupMember`，它第一句就是 `if (!task.IsVolumeGroup) return false;`）
-                 * 因此对它们一律放行 ⇒ 真机 EEEE 的整批工作区根被那一单的**占位落点**
-                 * （`…\EEEE\111(4)\111`）挑走。
-                 *
-                 * ⇒ 这就是"上游没做完的事，别在下游补"：把归组补在**它该在的位置**（定锚点之前），
-                 * 而不是放宽那道守卫的判据。唯一出口仍是 `ApplyVolumeGroupingFromDirectory`
-                 * （它自己再转调 `VolumeGroupDetector.Group` + `VolumeGroupingService.ApplyGroupInfo`，
-                 * 与扫描期、手动档完全同一条路）；归不上组 ⇒ 什么都不动（与以前一样）。
-                 */
-                foreach (ArchiveTask groupingTarget in selectedTasks)
+                if (!TryPrepareBatchForExtract(selectedTasks, oneClickRun, out int maxParallel, out bool fullSpeed))
                 {
-                    if (groupingTarget != null && !groupingTarget.IsVolumeGroup)
-                    {
-                        OneClickCoordinator.ApplyVolumeGroupingFromDirectory(groupingTarget);
-                    }
-                }
-
-                WorkspaceRootResolution workspaceResolution = ApplyBatchWorkspaceRoot(selectedTasks);
-
-                // 第二大步点名：批首只读组分析，把可证完整那一组的入口任务标成第二大步（只解一层）。
-                MarkVolumeStepEntriesForBatch(selectedTasks);
-
-                if (!workspaceResolution.Resolved)
-                {
-                    _dialogService.ShowError(workspaceResolution.Reason);
-                    AppendLog("ERROR", "这一批已经停下：工作区位置没定下来，一个字节都没写、源包一个都没碰。");
                     return;
-                }
-
-                /*
-                 * ===== 批级整组改名：把"名字被改坏的分卷组"改回标准名（在**任何任务开工之前**）=====
-                 *
-                 * 旧位置是"每个任务开工前各改各的"（2026-09-28 起，见 NormalizeDisguisedVolumeNamesAsync）。
-                 * 那个位置在并发下不成立：一个包的两卷是**两个任务**，谁先开工不定 ——
-                 * 先开工的那一单改名成功、把两卷都改成标准名，而另一单可能在同一瞬间已经按**旧名字**
-                 * 判过归组（名字太烂，认不出组）并接着往下跑，于是它拿着旧名一路走到「分卷缺失」，
-                 * 还把整组的链尾处理一起拦住（用户 2026-10-01 真机：三棵一模一样的产物树 +
-                 * `111(1)` / `333-Rar4(1)`，源包一个都没删）。
-                 *
-                 * 挪到批首之后，"这一批文件叫什么名字"在开工前就是定稿的：归组、源文件快照、
-                 * 落点、链尾闸门读到的都是同一份事实。开工时那一次照旧留着（幂等：名字已标准就快速返回），
-                 * 手动档「只解压」也只有那一次（单任务，本来就没有竞争）。
-                 */
-
-                /*
-                 * 落点这一档要能回答"入口包还压在包里时，它将来落在哪"（真机 CCCC 2026-10-06：
-                 * 用户连着追问的"批的落点还是按任务表里这一组第一单选"）。
-                 *
-                 * 位置：**改名归一之后**（名字定了才谈得上推标准入口包名）、**工作区根之后**。
-                 * ⛔ 挂的就是"唯一出口"那个方法本身，判据一个字都不在这里写。
-                 *
-                 * ⚠ **为什么"工作区根之后"这一步不影响工作区根**（2026-10-11 核对，原先这里写的是
-                 * "工作区根之前"、与代码相反，害得它看起来像个活的缺陷）：`ApplyBatchWorkspaceRoot` 里
-                 * 唯一消费落点的地方是挑锚点，而那条路有两个事实把它挡住了 ——
-                 *   ① 未挂钩时 `PathService` 直接返回 null（`PathService.cs` 里 `resolver == null ⇒ null`），
-                 *      落点退回老公式；
-                 *   ② 挂钩之后，这一档的判据第一句就是"**产出这一份的那一单**在不在任务表里"
-                 *      （`ResolveProducerEntryArchivePathCore` 里 `FindProducerTaskForPackage` 为 null ⇒ 返回空串）
-                 *      —— 而"那一单"若在表里，它自己的文件就在盘上、落点一定算得出来 ⇒
-                 *      挑锚点时它**先于**这一单被收进 `destinations`（未解出入口包的那一单由
-                 *      `IsUnresolvedVolumeGroupMember` 挪到兜底位，见 `ApplyBatchWorkspaceRoot`）。
-                 * ⇒ 两种情形下锚点都是同一个答案；顺序只影响可读性，不影响行为。
-                 * 实测佐证：真机 EEE 形状里那句 `本批有 1 单是分卷组的成员…工作区根改用别的单来定`
-                 * 后面跟的工作区根正是产出链那一层（`…\in\111\111\.ArchiveFixer.work`），
-                 * 当年那个 `…\EEEE\111(4)\111\.ArchiveFixer.work` 没再现。
-                 */
-                _pathService.GroupProducerEntryResolver =
-                    (task, options, archivePath) => ResolveProducerEntryArchivePathCore(task, options, archivePath, 0);
-
-                _pathService.DiagnosticLog = message => AppendLog("WARN", message);
-
-                /*
-                 * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
-                 * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
-                 * 后面那一行是它的**安全档**（「不删原包」）—— 两档一起钉，同一批口径一致。
-                 */
-                _spaceTightThisBatch = _vm.SpaceTightMode;
-                _spaceTightKeepSourceThisBatch = _spaceTightThisBatch && _vm.SpaceTightKeepSource;
-
-                /*
-                 * 本批是不是一键档（只用于"中途空间不足要不要弹那一次纯提示"）：
-                 * 一键档的人常常已经走开，手动档他正坐在屏幕前看列表（任务状态会当场变红）。
-                 */
-                _oneClickThisBatch = oneClickRun;
-                _spaceBlockedNoticeShown = false;
-
-                int maxParallel = ResolveMaxParallel(selectedTasks, out bool fullSpeed);
-
-                if (_spaceTightThisBatch && fullSpeed)
-                {
-                    /*
-                     * 「全速」在这个模式下**不生效**（用户原话："忽略全速和并发档"；
-                     * 2026-09-27 追加：并发档改成"只许往下压"，见 ResolveSpaceTightParallelForBatch）。
-                     * 说清原因再关掉它：否则日志里"已开全速"与"同时最多跑 3 个"会自相矛盾。
-                     */
-                    AppendLog(
-                        "WARN",
-                        "「空间不足」模式已开：本批「全速」不生效，并发由空间自己定"
-                        + "（若②页的「最大并发解压数」比它更低，就按更低的跑；设置里的值一个字节都没改）。");
-
-                    fullSpeed = false;
                 }
 
                 /*
@@ -1082,5 +970,142 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        /// <summary>
+        /// 批首准备：补跑归组 → 定工作区根 → 点名第二大步 → 挂落点解析器 → 钉空间不足档与并发上限。
+        /// 返回 false = 这一批停下（工作区没定下来，已经弹过错误、一个字节都没写）。
+        /// </summary>
+        private bool TryPrepareBatchForExtract(
+            IReadOnlyList<ArchiveTask> selectedTasks,
+            bool oneClickRun,
+            out int maxParallel,
+            out bool fullSpeed)
+        {
+            maxParallel = 1;
+            fullSpeed = false;
+
+            /*
+             * ===== 工作区根：本批的中间产物放哪（用户 2026-09-30：落在这一单的目标目录里）=====
+             *
+             * 位置刻意在**空间规划之前**：空间账面要按"工作区与成品是不是同一块卷"给口径，
+             * 而目标目录正是定工作区根时算出来的（两处必须看同一个事实，不能各算一遍）。
+             *
+             * ⛔ 定不下来（没有任何任务算得出目标目录）→ **整批停手并报错**：
+             * 老实现这里会悄悄回落到程序目录（可能就是 C 盘），用户 2026-09-30 点名否掉了那个方向。
+             * return 在 try 里面，所以 finally 照常收尾（_isExtracting / IsBusy 都会被复位）。
+             */
+            /*
+             * ⚠ 2026-10-09（D 结案 + 用户「回上一步解决错误」）：**定工作区根之前**先给这一批每一单
+             * 补跑一次"按它所在目录里的真实文件归组"。
+             *
+             * 为什么必须在这一刻（出处 `ViewModels/OneClickCoordinator.cs:1539-1564` 的注释）：
+             * 续解层的内层任务是走 `AddPathsAsync(..., suppressAutoScan: true)` 加进来的，
+             * **那条路不跑扫描期的分卷归组** ⇒ 它们的 `IsVolumeGroup` 一直是 false，
+             * 而 `ApplyBatchWorkspaceRoot` 里那道"跳过入口包还没解出来的分卷组单"的守卫
+             * （`IsUnresolvedVolumeGroupMember`，它第一句就是 `if (!task.IsVolumeGroup) return false;`）
+             * 因此对它们一律放行 ⇒ 真机 EEEE 的整批工作区根被那一单的**占位落点**
+             * （`…\EEEE\111(4)\111`）挑走。
+             *
+             * ⇒ 这就是"上游没做完的事，别在下游补"：把归组补在**它该在的位置**（定锚点之前），
+             * 而不是放宽那道守卫的判据。唯一出口仍是 `ApplyVolumeGroupingFromDirectory`
+             * （它自己再转调 `VolumeGroupDetector.Group` + `VolumeGroupingService.ApplyGroupInfo`，
+             * 与扫描期、手动档完全同一条路）；归不上组 ⇒ 什么都不动（与以前一样）。
+             */
+            foreach (ArchiveTask groupingTarget in selectedTasks)
+            {
+                if (groupingTarget != null && !groupingTarget.IsVolumeGroup)
+                {
+                    OneClickCoordinator.ApplyVolumeGroupingFromDirectory(groupingTarget);
+                }
+            }
+
+            WorkspaceRootResolution workspaceResolution = ApplyBatchWorkspaceRoot(selectedTasks);
+
+            // 第二大步点名：批首只读组分析，把可证完整那一组的入口任务标成第二大步（只解一层）。
+            MarkVolumeStepEntriesForBatch(selectedTasks);
+
+            if (!workspaceResolution.Resolved)
+            {
+                _dialogService.ShowError(workspaceResolution.Reason);
+                AppendLog("ERROR", "这一批已经停下：工作区位置没定下来，一个字节都没写、源包一个都没碰。");
+                return false;
+            }
+
+            /*
+             * ===== 批级整组改名：把"名字被改坏的分卷组"改回标准名（在**任何任务开工之前**）=====
+             *
+             * 旧位置是"每个任务开工前各改各的"（2026-09-28 起，见 NormalizeDisguisedVolumeNamesAsync）。
+             * 那个位置在并发下不成立：一个包的两卷是**两个任务**，谁先开工不定 ——
+             * 先开工的那一单改名成功、把两卷都改成标准名，而另一单可能在同一瞬间已经按**旧名字**
+             * 判过归组（名字太烂，认不出组）并接着往下跑，于是它拿着旧名一路走到「分卷缺失」，
+             * 还把整组的链尾处理一起拦住（用户 2026-10-01 真机：三棵一模一样的产物树 +
+             * `111(1)` / `333-Rar4(1)`，源包一个都没删）。
+             *
+             * 挪到批首之后，"这一批文件叫什么名字"在开工前就是定稿的：归组、源文件快照、
+             * 落点、链尾闸门读到的都是同一份事实。开工时那一次照旧留着（幂等：名字已标准就快速返回），
+             * 手动档「只解压」也只有那一次（单任务，本来就没有竞争）。
+             */
+
+            /*
+             * 落点这一档要能回答"入口包还压在包里时，它将来落在哪"（真机 CCCC 2026-10-06：
+             * 用户连着追问的"批的落点还是按任务表里这一组第一单选"）。
+             *
+             * 位置：**改名归一之后**（名字定了才谈得上推标准入口包名）、**工作区根之后**。
+             * ⛔ 挂的就是"唯一出口"那个方法本身，判据一个字都不在这里写。
+             *
+             * ⚠ **为什么"工作区根之后"这一步不影响工作区根**（2026-10-11 核对，原先这里写的是
+             * "工作区根之前"、与代码相反，害得它看起来像个活的缺陷）：`ApplyBatchWorkspaceRoot` 里
+             * 唯一消费落点的地方是挑锚点，而那条路有两个事实把它挡住了 ——
+             *   ① 未挂钩时 `PathService` 直接返回 null（`PathService.cs` 里 `resolver == null ⇒ null`），
+             *      落点退回老公式；
+             *   ② 挂钩之后，这一档的判据第一句就是"**产出这一份的那一单**在不在任务表里"
+             *      （`ResolveProducerEntryArchivePathCore` 里 `FindProducerTaskForPackage` 为 null ⇒ 返回空串）
+             *      —— 而"那一单"若在表里，它自己的文件就在盘上、落点一定算得出来 ⇒
+             *      挑锚点时它**先于**这一单被收进 `destinations`（未解出入口包的那一单由
+             *      `IsUnresolvedVolumeGroupMember` 挪到兜底位，见 `ApplyBatchWorkspaceRoot`）。
+             * ⇒ 两种情形下锚点都是同一个答案；顺序只影响可读性，不影响行为。
+             * 实测佐证：真机 EEE 形状里那句 `本批有 1 单是分卷组的成员…工作区根改用别的单来定`
+             * 后面跟的工作区根正是产出链那一层（`…\in\111\111\.ArchiveFixer.work`），
+             * 当年那个 `…\EEEE\111(4)\111\.ArchiveFixer.work` 没再现。
+             */
+            _pathService.GroupProducerEntryResolver =
+                (task, options, archivePath) => ResolveProducerEntryArchivePathCore(task, options, archivePath, 0);
+
+            _pathService.DiagnosticLog = message => AppendLog("WARN", message);
+
+            /*
+             * 「空间不足」模式：**批首钉死**（用户 2026-09-27 拍板的手动开关，见 _spaceTightThisBatch）。
+             * 位置刻意在并发与空间规划之前 —— 排序、并发、源包处理三件事都要读它。
+             * 后面那一行是它的**安全档**（「不删原包」）—— 两档一起钉，同一批口径一致。
+             */
+            _spaceTightThisBatch = _vm.SpaceTightMode;
+            _spaceTightKeepSourceThisBatch = _spaceTightThisBatch && _vm.SpaceTightKeepSource;
+
+            /*
+             * 本批是不是一键档（只用于"中途空间不足要不要弹那一次纯提示"）：
+             * 一键档的人常常已经走开，手动档他正坐在屏幕前看列表（任务状态会当场变红）。
+             */
+            _oneClickThisBatch = oneClickRun;
+            _spaceBlockedNoticeShown = false;
+
+            maxParallel = ResolveMaxParallel(selectedTasks, out fullSpeed);
+
+            if (_spaceTightThisBatch && fullSpeed)
+            {
+                /*
+                 * 「全速」在这个模式下**不生效**（用户原话："忽略全速和并发档"；
+                 * 2026-09-27 追加：并发档改成"只许往下压"，见 ResolveSpaceTightParallelForBatch）。
+                 * 说清原因再关掉它：否则日志里"已开全速"与"同时最多跑 3 个"会自相矛盾。
+                 */
+                AppendLog(
+                    "WARN",
+                    "「空间不足」模式已开：本批「全速」不生效，并发由空间自己定"
+                    + "（若②页的「最大并发解压数」比它更低，就按更低的跑；设置里的值一个字节都没改）。");
+
+                fullSpeed = false;
+            }
+
+            return true;
+        }
     }
 }
