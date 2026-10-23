@@ -677,6 +677,225 @@ namespace ArchiveFixer.Helpers
         }
 
         /// <summary>
+        /// 名字里**卷标记之前**的那一段（保留族后缀段）：<c>x.7z.001</c> → <c>x.7z</c>、
+        /// <c>x.7z.001.txt</c> → <c>x.7z</c>、<c>444.part1.rar</c> → <c>444</c>；
+        /// 名字里没有卷标记 ⇒ 原名字本身（<c>x.zip</c> / <c>x.rar</c>）。
+        ///
+        /// <para>⚠ 这是**同族比较 / 名字重建**用的前缀，<b>不是基名</b>
+        /// （基名 = 第一个点之前，只有 <c>FileNameHelper.FirstStepBaseName</c> /
+        /// <c>SecondStepBaseName</c> 两份）。</para>
+        /// </summary>
+        public static string ResolveNamePrefix(string? fileName)
+        {
+            string name = FileNameHelper.GetFileName(fileName);
+
+            if (name.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            if (TrySplitPartNumberedVolume(name, out string partBase, out _, out _, out _, out _))
+            {
+                return partBase;
+            }
+
+            string[] parts = name.Split('.');
+
+            for (int i = parts.Length - 1; i >= 1; i--)
+            {
+                if (TrySplitVolumeSegmentTolerant(parts[i], out _, out _))
+                {
+                    return string.Join('.', parts, 0, i);
+                }
+            }
+
+            return name;
+        }
+
+        /// <summary>
+        /// 从"名字最标准的那一卷"推**名字前缀**（写出来的规范卷名里卷标记之前的那一段）：
+        /// 从右往左一段一段剥 —— 卷号段（<c>01</c> / <c>001</c>）、卷标记段（<c>part1</c> / <c>z01</c> / <c>r00</c>）、
+        /// 以及"本来就该是**该族**归档后缀"的那一段（<c>7z</c> / 只差一个字符的 <c>7</c>）。
+        ///
+        /// <para>⚠ 这是**名字重建**，不是基名算法：基名只有两份
+        /// （<c>FileNameHelper.FirstStepBaseName</c> / <c>SecondStepBaseName</c>，第一个点之前）。
+        /// <c>x.ra31415926535r</c> 的基名是 <c>x</c>（身份），但它**不是**这一族的第一卷 ——
+        /// 拿基名去拼规范名会把它改名成 <c>x.rar</c>（改错名字比不改更糟）。</para>
+        ///
+        /// <para>⛔ 剥不动就停手（判不出就别拼名字）；调用方另行校验非法字符。</para>
+        /// </summary>
+        public static string ResolveNameStem(string? fileName, string? expectedArchiveExtension)
+        {
+            string name = FileNameHelper.GetFileName(fileName);
+            string extension = (expectedArchiveExtension ?? string.Empty).Trim().TrimStart('.');
+
+            if (name.Length == 0 || extension.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            string[] parts = name.Split('.');
+            int keep = parts.Length;
+
+            while (keep >= 2)
+            {
+                string last = parts[keep - 1];
+
+                if (IsOrdinalSegment(last)
+                    || TrySplitVolumeSegmentTolerant(last, out _, out _)
+                    || string.Equals(last, extension, StringComparison.OrdinalIgnoreCase)
+                    || IsUniqueOneEditAway(last, extension)
+                    || (TryRecoverDisguisedArchiveBody(last, out string recovered, out _)
+                        && string.Equals(recovered, extension, StringComparison.OrdinalIgnoreCase)))
+                {
+                    keep--;
+                    continue;
+                }
+
+                break;
+            }
+
+            return keep > 0 ? string.Join('.', parts, 0, keep) : name;
+        }
+
+        /// <summary>1~4 位纯数字段 = 像是被改烂的卷号（名字重建用，⛔ 不是基名判据）。</summary>
+        private static bool IsOrdinalSegment(string segment)
+        {
+            if (segment.Length == 0 || segment.Length > 4)
+            {
+                return false;
+            }
+
+            foreach (char ch in segment)
+            {
+                if (ch < '0' || ch > '9')
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>这一段是不是"只差一个字符"就能变成**本族**后缀，而且**只有这一种变法**。</summary>
+        private static bool IsUniqueOneEditAway(string segment, string extension)
+        {
+            string? unique = null;
+
+            foreach (string known in KnownArchiveExtensions
+                .Select(e => e.TrimStart('.'))
+                .Where(name => name.Length >= 2)
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!IsOneEditAway(segment, known))
+                {
+                    continue;
+                }
+
+                if (unique != null)
+                {
+                    return false;
+                }
+
+                unique = known;
+            }
+
+            return unique != null && string.Equals(unique, extension, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>两段之间差**恰好一个**字符（插入或删除 1 个字符）。</summary>
+        private static bool IsOneEditAway(string a, string b)
+        {
+            if (Math.Abs(a.Length - b.Length) != 1)
+            {
+                return false;
+            }
+
+            string longer = a.Length > b.Length ? a : b;
+            string shorter = a.Length > b.Length ? b : a;
+            int i = 0;
+
+            while (i < shorter.Length && char.ToLowerInvariant(longer[i]) == char.ToLowerInvariant(shorter[i]))
+            {
+                i++;
+            }
+
+            for (int j = i; j < shorter.Length; j++)
+            {
+                if (char.ToLowerInvariant(longer[j + 1]) != char.ToLowerInvariant(shorter[j]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// 归一"名字前缀的**最后一段**"（族后缀段）：<c>x.7sz</c> → <c>x.7z</c>、<c>x.7删z</c> → <c>x.7z</c>、
+        /// <c>333.78a8fuaz</c> → <c>333.7z</c>。
+        ///
+        /// <para>⚠ <b>这不是基名算法</b>：基名只有两份（<c>FileNameHelper.FirstStepBaseName</c> /
+        /// <c>SecondStepBaseName</c>，第一个点之前）。它回答的是"**写出来的名字**该用哪个族后缀段" ——
+        /// 名字重建（<c>VolumeGroupDetector</c> 的规范卷名 / <c>VolumeNameRepair</c> 的改名目标）需要它。
+        /// 两份用途分开，⛔ 别把它当基名用、也别在别处再抄一份。</para>
+        ///
+        /// <para>两档判据（都只认**唯一**结论）：① 删掉 1 个字符后是不是已知归档后缀；
+        /// ② 通用骨架命中（<see cref="TryMatchKnownSkeleton"/>）。有歧义 ⇒ 原样返回。</para>
+        /// </summary>
+        public static string NormalizeFamilySegment(string prefix)
+        {
+            int lastDot = prefix.LastIndexOf('.');
+
+            if (lastDot <= 0 || lastDot == prefix.Length - 1)
+            {
+                return prefix;
+            }
+
+            string segment = prefix[(lastDot + 1)..];
+
+            if (IsKnownArchiveExtension("." + segment))
+            {
+                return prefix;
+            }
+
+            string? unique = null;
+
+            for (int i = 0; i < segment.Length; i++)
+            {
+                string candidate = segment.Remove(i, 1);
+
+                if (!IsKnownArchiveExtension("." + candidate))
+                {
+                    continue;
+                }
+
+                if (unique != null)
+                {
+                    return prefix; // 有歧义：宁可不归一
+                }
+
+                unique = candidate;
+            }
+
+            if (unique != null)
+            {
+                return prefix[..(lastDot + 1)] + unique;
+            }
+
+            if (TryMatchKnownSkeleton(
+                    segment,
+                    KnownArchiveExtensions.Select(e => e.TrimStart('.')),
+                    out string bySkeleton,
+                    out _))
+            {
+                return prefix[..(lastDot + 1)] + bySkeleton;
+            }
+
+            return prefix;
+        }
+
+        /// <summary>
         /// 拆开 <c>&lt;基名&gt;.&lt;卷标记&gt;.rar</c> 这一族 —— **卷标记与 rar 尾巴都可以粘少量垃圾**。
         ///
         /// <code>
@@ -689,7 +908,7 @@ namespace ArchiveFixer.Helpers
         /// <para><b>为什么必须只有这一份实现</b>（2026-10-03 真机）：这个形状原先在**三个地方各写过一遍**，
         /// 三处都硬编码了 <c>尾巴 == "rar"</c> ——
         /// <c>VolumeGroupDetector.Analyze</c>（卷序 / 归组）、
-        /// <c>FileNameHelper.StripVolumeMarkers</c>（包基名 ⇒ 同组判定与落点）、
+        /// 旧的剥卷标记副本（包基名 ⇒ 同组判定与落点）、
         /// <c>FileNameHelper.IsVolumePartFileName</c>（拦住会破坏分卷链的改名）。
         /// 尾巴一粘垃圾（网盘给每卷缀「删除」⇒ <c>X.part1.rar删除</c>），**三处同时失效**：
         /// 一组 4 卷被判成"四个基名互不相同的第 1 卷本体" —— 列表里四行、递归里四个分支、

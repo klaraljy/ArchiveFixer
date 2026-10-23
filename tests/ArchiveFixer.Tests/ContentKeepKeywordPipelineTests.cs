@@ -70,7 +70,7 @@ namespace ArchiveFixer.Tests
         [SevenZipFact]
         public async Task 用例A_默认档_命中关键词的内层包不解开也不动()
         {
-            Harness harness = CreateHarness(recursionMode: "SingleLayer", keepKeywords: new[] { "小明" });
+            Harness harness = CreateHarness(keepKeywords: new[] { "小明" });
             string outer = BuildOuter(innerName: "小明.zip", innerPayloadName: "小明内容.txt", innerPayload: "留着的内容");
 
             await harness.AddPathsAsync(outer);
@@ -116,7 +116,7 @@ namespace ArchiveFixer.Tests
         [SevenZipFact]
         public async Task 用例B_对照_没命中关键词的内层包照旧解开()
         {
-            Harness harness = CreateHarness(recursionMode: "SingleLayer", keepKeywords: new[] { "小明" });
+            Harness harness = CreateHarness(keepKeywords: new[] { "小明" });
             string outer = BuildOuter(innerName: "小红.zip", innerPayloadName: "小红内容.txt", innerPayload: "该解出来的内容");
 
             await harness.AddPathsAsync(outer);
@@ -129,30 +129,6 @@ namespace ArchiveFixer.Tests
             // 没命中 ⇒ 照旧解出来（这条功能不是"一刀切不解压"）。
             Assert.NotEmpty(FindFiles("小红内容.txt"));
             Assert.NotEmpty(FindFiles("layer1.txt"));
-        }
-
-        /// <summary>
-        /// <b>用例 C（递归核心那条路）</b>：<c>RecursionMode = SingleChain</c> 时内层包由
-        /// <c>RecursiveExtractor.ProbeInnerArchivesAsync</c> 找 —— 命中关键词的那一份**不当内层归档**
-        /// （不解开、也不改名）。
-        /// </summary>
-        [SevenZipFact]
-        public async Task 用例C_递归核心那条路_命中关键词的也不当内层归档()
-        {
-            Harness harness = CreateHarness(recursionMode: "SingleChain", keepKeywords: new[] { "小明" });
-            string outer = BuildOuter(innerName: "小明.zip", innerPayloadName: "小明内容.txt", innerPayload: "留着的内容");
-
-            await harness.AddPathsAsync(outer);
-
-            await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
-
-            Assert.NotEmpty(FindFiles("layer1.txt"));
-            Assert.Empty(FindFiles("小明内容.txt"));
-            Assert.NotEmpty(FindFiles("小明.zip"));
-
-            Assert.Contains(
-                harness.Log.Logs,
-                entry => entry.Message.Contains("内容物保留关键词", StringComparison.Ordinal));
         }
 
         // ================================================================ 夹具
@@ -216,7 +192,7 @@ namespace ArchiveFixer.Tests
                 ? Directory.GetFiles(_root, pattern, SearchOption.AllDirectories)
                 : Array.Empty<string>();
 
-        private Harness CreateHarness(string recursionMode, string[] keepKeywords)
+        private Harness CreateHarness(string[] keepKeywords)
         {
             string dataRoot = Path.Combine(_root, "data");
             string outputRoot = Path.Combine(_root, "out");
@@ -231,7 +207,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = recursionMode;
             settings.AutoScanAfterDrop = false;
             settings.TryEmptyPasswordFirst = false;
 

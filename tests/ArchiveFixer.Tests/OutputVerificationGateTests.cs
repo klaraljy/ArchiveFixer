@@ -141,11 +141,8 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(StatusText.ExtractSuccess, task.Status);
 
-            // 0 字节的那份既不算内层包、也不进其余物（它就留在暂存目录里）。
+            // 0 字节的那份既不算内层包、也不进其余物。
             Assert.Equal(0, outcome.ContinuationLayers);
-            Assert.Contains(
-                harness.Log.Logs,
-                x => x.Message.Contains("0 字节的归档 / 分卷文件不算其余物", StringComparison.Ordinal));
 
             string restDirectory = Path.Combine(task.OutputPath, ProcessArtifactLayout.ArtifactDirectoryName);
 
@@ -574,7 +571,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
 

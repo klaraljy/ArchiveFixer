@@ -782,7 +782,6 @@ namespace ArchiveFixer.Tests
              * ⛔ 试过用 `MaxRecursionDepth = 1` 顶替 —— **等价性不成立**（那是"本批一轮"，
              *    不是"不递归进内层"），实测打红本条 ⇒ 已撤回，留待口径定了再重写这一族。
              */
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.PartialPublishEnabled = partialPublish;

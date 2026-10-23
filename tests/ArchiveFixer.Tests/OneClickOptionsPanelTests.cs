@@ -338,7 +338,7 @@ namespace ArchiveFixer.Tests
             harness.OneClick.OptionsPromptOverride = _ => OneClickOptionsPrompt.Confirmed(new OneClickRunOptions
             {
                 PlacementMode = OutputPlacementMode.PerArchiveSubfolder,
-                SourceHandling = SourceHandlingMode.KeepInPlace,
+                SourceHandling = SourceHandlingMode.DeleteInPlace,
                 RestHandling = RestHandlingModes.Delete,
                 SaveAsDefault = false
             });
@@ -393,7 +393,7 @@ namespace ArchiveFixer.Tests
             Assert.DoesNotContain("校验通过后删除", xaml, StringComparison.Ordinal);
 
             Assert.Contains("PanelSourceKeepInPlaceOption", xaml, StringComparison.Ordinal);
-            Assert.Contains("原来的位置不动（默认）", xaml, StringComparison.Ordinal);
+            Assert.Contains("留下（默认，原来的位置不动）", xaml, StringComparison.Ordinal);
 
             Assert.Contains("PanelRestKeepOption", xaml, StringComparison.Ordinal);
             Assert.Contains("PanelRestDeleteOption", xaml, StringComparison.Ordinal);
@@ -715,7 +715,6 @@ namespace ArchiveFixer.Tests
                 result = await extractor.ExtractAsync(
                     new ArchiveTask(archive, 1),
                     Path.Combine(root, "final"),
-                    RecursionMode.SingleChain,
                     previousDecision: null,
                     cancellationToken: default,
                     progress: new CollectingProgress(reported),
@@ -835,7 +834,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 
             configure?.Invoke(settings);

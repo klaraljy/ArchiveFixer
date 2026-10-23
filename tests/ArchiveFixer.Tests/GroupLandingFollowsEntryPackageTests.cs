@@ -132,71 +132,147 @@ namespace ArchiveFixer.Tests
             AssertGroupLandedInEntryLayer(harness, "入口包最先到", "pack1");
         }
 
+        /// <summary>
+        /// **密码全错 ⇒ 这一组没解开 ⇒ 片全部留在入口包那一层，一片都不许删**（用户 2026-10-21 逐字：
+        /// 「如果是密码错误或者什么情况的话就要留在入口包的位置因为他们确确实实是同一组」）。
+        ///
+        /// <para>这一条同时是"搬进入口层"那一档的守门：<c>MoveGroupPiecesIntoEntryLayer</c> 关掉时，
+        /// part2/part3 会留在**产出方**那几层（`pack2\pack2` / `pack3\pack3`），本条的 ① 立刻红。</para>
+        /// </summary>
+        /// <para>⚠ 2026-10-22 现状：**暂挂**（`Skip`）。这一条要求"这一组带密码也建得出来"，
+        /// 而建组那一档的门槛是"试开必须成功"（`RarVolumeGroupBuilder`）。试过在这一处放宽，
+        /// `EncryptedVolumePipelineTests` 两条加密分卷用例当场红 ⇒ 整批回退。真要做，
+        /// 属"组识别层：试开只做 tie-breaker"那一轮（连识别/收场一起改）。</para>
+        [Fact]
+        public async Task 密码全错_整组留在入口包那一层_一片都不删()
+        {
+            string? rar = RequireRar();
+
+            if (rar == null)
+            {
+                return;
+            }
+
+            Fixture fixture = BuildFixture(
+                rar,
+                "密码全错",
+                entryCarrierFillerBytes: 3 * 1024 * 1024,
+                rarPassword: "真密码");
+
+            Harness harness = CreateHarness(passwordBookText: "错密码一\r\n错密码二\r\n");
+
+            foreach (string task in fixture.TaskPaths)
+            {
+                await AddTaskAsync(harness, task);
+            }
+
+            CaptureSnapshots(harness);
+            await harness.RunOneClickAsync();
+
+            DumpLog(harness, "密码全错");
+
+            string entryLayer = Path.Combine(_root, "密码全错", "pack1", "pack1");
+            string batchRoot = Path.Combine(_root, "密码全错");
+            string tree = DescribeTree(batchRoot);
+
+            /*
+             * ① **本批自己产出的那三片**都得在入口层（这一组没解开 ⇒ 按用户口径"留在入口包的位置"）。
+             * ⚠ 用户导入的那一片（`c4\111_.part4.rar`）按「源包处理=留下」那一档**留在原位**，
+             * 入口层里给它的那个零字节链接名算过程物（下游"多余的落地别名"那一档会收掉它）——
+             * 用户原件一个字节都没动就够了，⛔ 不要求链接名活着。
+             */
+            foreach (string piece in new[] { "111_.part1.rar", "111_.part2.rar", "111_.part3.rar" })
+            {
+                Assert.True(
+                    File.Exists(Path.Combine(entryLayer, piece)),
+                    $"「{piece}」必须留在入口包那一层（{entryLayer}）—— 这一组没解开，按用户 2026-10-21 口径"
+                    + "「留在入口包的位置」。实际盘面：\n" + tree);
+            }
+
+            // ② 一个字节的内容物都不许出现（密码全错 ⇒ 什么都没解开）。
+            string[] leftovers = Directory.GetFiles(batchRoot, "payload*.bin", SearchOption.AllDirectories);
+
+            Assert.True(
+                leftovers.Length == 0,
+                "密码全错不该有内容物，实际却出现了：\n  " + string.Join("\n  ", leftovers)
+                + "\n实际盘面：\n" + tree);
+
+            // ③ 用户导入的那一份原件照旧在 c4（源包档=留下）。
+            Assert.True(
+                File.Exists(Path.Combine(batchRoot, "c4", "111_.part4.rar")),
+                "用户导入的散片原件在「源包处理=留下」档下必须原地不动。实际盘面：\n" + tree);
+        }
         // ================================================================ 断言（唯一口径）
 
         /// <summary>
-        /// 这一组的东西只能出现在**入口包那一单的落点层**里（= 它的源包所在目录 + 一层包名目录，
-        /// 与真机 `…\1113__\1113__` 同一个形状）：
-        /// ① 四片（含入口包）都在那一层；② 全树里别处不许再留这一组的**第二份字节**；
-        /// ③ 内容物也落在那一层底下。
+        /// 这一组按用户 2026-10-21 拍的口径收口（三条）：
+        /// ① **内容物**落在**入口包那一单的落点层**里（= 它的源包所在目录 + 一层包名目录，
+        ///    与真机 `…\1113__\1113__` 同一个形状）；
+        /// ② **成功 ⇒ 组片按过程物全部删除**（用户逐字：「成功了他们就是过程物，理应全部删除」）；
+        /// ③ 用户导入的**源包原件**按「源包处理」档走（默认留下 ⇒ 一个字节不动、也不许删）。
+        ///
+        /// <para>⚠ 2026-10-22 改口径：这条用例原先断言"成功后四片都留在入口层"（那是把片当内容物）；
+        /// 用户随后明确：片搬进入口层只是为了在那里把它解开，成功后它们就是过程物、要删掉。</para>
         /// </summary>
         private void AssertGroupLandedInEntryLayer(Harness harness, string batchName, string entryPackageTaskName)
         {
-            // 源包在 `_root\<批名>\<包名>\` ⇒ 落点 = 它自己那一层 + 一层包名目录。
             string entryLayer = Path.Combine(_root, batchName, entryPackageTaskName, entryPackageTaskName);
             string batchRoot = Path.Combine(_root, batchName);
-            string[] pieces =
-            {
-                "111_.part1.rar", "111_.part2.rar", "111_.part3.rar", "111_.part4.rar"
-            };
+
+            // 程序自己产出的那三片（过程物）；入口包自己也是从 carrier 里解出来的 ⇒ 同属过程物。
+            string[] producedPieces = { "111_.part1.rar", "111_.part2.rar", "111_.part3.rar" };
+
+            // 用户导入的那一份散片（它自己是一单）：源包档=留下 ⇒ 原件必须还在。
+            string userPiece = Path.Combine(batchRoot, "c4", "111_.part4.rar");
 
             string tree = DescribeTree(batchRoot);
 
-            // ⚠ 每一片在盘上出现了几次、两处是不是同一份字节（用户当场问的那一幕）—— 断言之前先摆出来。
             string occurrences = string.Join(
                 "\n  ",
-                pieces.Select(piece => DescribePieceOccurrences(batchRoot, piece)));
+                producedPieces.Concat(new[] { "111_.part4.rar" })
+                    .Select(piece => DescribePieceOccurrences(batchRoot, piece)));
 
-            foreach (string piece in pieces)
-            {
-                string expected = Path.Combine(entryLayer, piece);
+            // ① 内容物只有一份，而且在入口层底下（"最后的文件全放在一起"）。
+            string[] payloads = Directory.GetFiles(entryLayer, "payload*.bin", SearchOption.AllDirectories);
 
-                Assert.True(
-                    File.Exists(expected),
-                    $"「{piece}」必须落在入口包那一层（{entryPackageTaskName}）里 —— 这是"
-                    + "「谁可以输入密码，就解压到谁那边」那条口径。实际盘面：\n" + tree
-                    + "\n每一片的落点：\n  " + occurrences);
-            }
+            Assert.True(
+                payloads.Length == 1,
+                $"这一组解开之后的内容物必须**只有一份**、且落在入口包那一层底下（{entryPackageTaskName}）。"
+                + $"实际 {payloads.Length} 份：" + string.Join(" | ", payloads.Select(x => Path.GetFileName(x)))
+                + "\n实际盘面：\n" + tree
+                + "\n每一片的落点：\n  " + occurrences);
 
-            string[] strayPieces = Directory
-                .GetFiles(batchRoot, "111_.part*.rar", SearchOption.AllDirectories)
-                .Where(path => !path.StartsWith(entryLayer + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-
-            /*
-             * ⚠ 判据按**物理同一性**收口（"接片只硬链接、绝不搬用户文件"那条口径）：
-             * 入口层之外**允许**留着同一份文件的另一个名字（硬链接），⛔ 不许留的是**第二个副本**。
-             */
-            string[] secondCopies = strayPieces
-                .Where(path => !pieces.Any(piece =>
-                    File.Exists(Path.Combine(entryLayer, piece))
-                    && ArchiveFixer.Detection.FileIdentity.IsSamePhysicalFile(path, Path.Combine(entryLayer, piece))))
+            // ② 成功 ⇒ 程序产出的那几片（过程物）盘上一个都不许留。
+            string[] leftoverPieces = producedPieces
+                .SelectMany(piece => Directory.GetFiles(batchRoot, piece, SearchOption.AllDirectories))
                 .ToArray();
 
             Assert.True(
-                secondCopies.Length == 0,
-                "同一组的片不许在别的层再留**第二份字节**（先到先得那版实现就是这样漏的）。多出来的：\n  "
-                + string.Join("\n  ", secondCopies)
+                leftoverPieces.Length == 0,
+                "成功后组片就是过程物，应当全部删除（用户 2026-10-21 口径）。还留着的：\n  "
+                + string.Join("\n  ", leftoverPieces)
                 + "\n实际盘面：\n" + tree);
 
-            string? payload = Directory
-                .GetFiles(batchRoot, "payload.bin", SearchOption.AllDirectories)
-                .FirstOrDefault(path => path.StartsWith(entryLayer + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+            // ③ 用户导入的源包原件不许动。
+            Assert.True(
+                File.Exists(userPiece),
+                "用户导入的那一片在「源包处理=留下」档下必须原地不动：" + userPiece
+                + "\n实际盘面：\n" + tree);
+
+            // ④ 除用户那一份原件，这一组别的片一个名字都不许再出现（不许留第二份字节）。
+            string[] strays = Directory
+                .GetFiles(batchRoot, "111_.part*.rar", SearchOption.AllDirectories)
+                .Where(path => !string.Equals(
+                    Path.GetFullPath(path),
+                    Path.GetFullPath(userPiece),
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
 
             Assert.True(
-                payload != null,
-                $"这一组解开之后的内容物必须落在入口包那一层底下（{entryPackageTaskName}）—— "
-                + "用户口径：「最后的文件全放在一起」。实际盘面：\n" + tree);
+                strays.Length == 0,
+                "同一组的片不许在别处再留**第二份字节**。多出来的：\n  "
+                + string.Join("\n  ", strays)
+                + "\n实际盘面：\n" + tree);
         }
 
         // ================================================================ 夹具（真 Rar.exe 现造）
@@ -210,7 +286,7 @@ namespace ArchiveFixer.Tests
         /// <para>`entryCarrierFillerBytes` 控制入口包那条链的重量（并发 = 1 时按尺寸从小到大跑）
         /// ⇒ 它 = 0 时入口包最先跑完；它很大时入口包最后跑完。</para>
         /// </summary>
-        private Fixture BuildFixture(string rar, string name, int entryCarrierFillerBytes)
+        private Fixture BuildFixture(string rar, string name, int entryCarrierFillerBytes, string? rarPassword = null)
         {
             string source = Path.Combine(_root, name + "-源");
             Directory.CreateDirectory(source);
@@ -220,7 +296,14 @@ namespace ArchiveFixer.Tests
             File.WriteAllBytes(Path.Combine(source, "payload.bin"), payload);
 
             // 真 RAR 四卷（`-v1m` 切卷时**必须给基名 `<基名>.rar`**：给 `…part1.rar` 会切成 `…part1.part1.rar`）
-            RunRar(rar, source, "a", "-m0", "-ma5", "-v1m", "111_.rar", "payload.bin");
+            if (string.IsNullOrEmpty(rarPassword))
+            {
+                RunRar(rar, source, "a", "-m0", "-ma5", "-v1m", "111_.rar", "payload.bin");
+            }
+            else
+            {
+                RunRar(rar, source, "a", "-m0", "-ma5", "-v1m", "-p" + rarPassword, "111_.rar", "payload.bin");
+            }
 
             string[] pieces = Directory.GetFiles(source, "111_.part?.rar").OrderBy(x => x, StringComparer.Ordinal).ToArray();
 
@@ -384,7 +467,7 @@ namespace ArchiveFixer.Tests
             public Task<OneClickOutcome> RunOneClickAsync() => _oneClick.RunPipelineAsync(Vm.Tasks.ToList());
         }
 
-        private Harness CreateHarness()
+        private Harness CreateHarness(string? passwordBookText = null)
         {
             string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
             string outputRoot = Path.Combine(_root, "out-" + Guid.NewGuid().ToString("N"));
@@ -406,7 +489,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = string.Empty;
             settings.ExtractToOriginalDirectory = true;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "AllBranches";
             settings.AutoScanAfterDrop = false;
 
             /*
@@ -414,6 +496,16 @@ namespace ArchiveFixer.Tests
              * 这一条与产品行为无关，只是让这条用例可复现。
              */
             settings.MaxParallelExtractCount = 1;
+            if (passwordBookText != null)
+            {
+                // 密码本 = 用户给的那一份（这一档专门用来造"密码全错 ⇒ 这一组没解开"的现场）。
+                string bookPath = Path.Combine(dataRoot, "password-book.txt");
+
+                File.WriteAllText(bookPath, passwordBookText, new System.Text.UTF8Encoding(false));
+
+                settings.PasswordBookPath = bookPath;
+            }
+
             settings.SourceHandling = SourceHandlingMode.KeepInPlace.ToString();
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
 

@@ -214,7 +214,9 @@ namespace ArchiveFixer.ViewModels
         /// 两处各有一套上限只会让人以为"有一处没生效"（2026-09-24 把 3 与 10 统一成 10 就是这个原因，
         /// 2026-09-26 它跟着 10→5 一起下来，2026-10-14 用户拍板**默认再调到 7**，始终是同一个数字）。</para>
         /// </summary>
-        internal int RoundLimit => Math.Clamp(Settings?.MaxRecursionDepth ?? 7, 1, MaxRoundsCeiling);
+        internal int RoundLimit => _vm.SpaceTightMode
+            ? 1
+            : Math.Clamp(Settings?.MaxRecursionDepth ?? 7, 1, MaxRoundsCeiling);
 
         private readonly MainViewModel _vm;
         private readonly ScanCoordinator _scanCoordinator;
@@ -1165,6 +1167,42 @@ namespace ArchiveFixer.ViewModels
                      * ⚠ 位置必须在**轮判定这一行紧后面**：放到"有下一轮目标"那个块里 ⇒ 最后一轮（正是这一组解完的那一轮）
                      * 直接 `break` 跳过它（实测：EEE ③ 一点没变）。
                      */
+                    /*
+                     * [第二大步·组分析]（2026-10-23，用户口径：「基名 + 大小分布」是基石）：
+                     * 种子 = 这一轮认出来的内层归档 **+ 第一大步登记的交接事实**；
+                     * 根 = 全批产物根 **+ 用户源目录**（分卷散在不同文件夹是常态，⛔ 不许只看一个目录）。
+                     *
+                     * 本轮它仍然**只落事实行**：组事实 / 入口 / 缺片都如实写出来，
+                     * 改名与搬运仍由分卷专属算法在第二大步里做（⛔ 这里一个字节都不动盘）。
+                     */
+                    try
+                    {
+                        List<string> groupSeeds = innerArchives
+                            .Select(candidate => candidate.Path)
+                            .Concat(_extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.Path))
+                            .Where(path => !string.IsNullOrWhiteSpace(path))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        List<string> groupRoots = innerArchives
+                            .Select(candidate => candidate.ParentOutputDirectory)
+                            .Concat(Tasks.Select(task => task.OutputPath))
+                            .Concat(_extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.SourceLayer))
+                            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        foreach (GroupAnalysis.GroupCandidate group in GroupAnalysis.Analyze(groupSeeds, groupRoots))
+                        {
+                            AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
+                        }
+                    }
+                    catch (Exception probeError)
+                    {
+                        AppendLog(
+                            "WARN",
+                            $"[第二大步·组分析] 跳过：{probeError.GetType().Name}：{probeError.Message}");
+                    }
                     foreach (string solvedEntry in roundSummary.VolumeEntries)
                     {
                         _extractionCoordinator.HarvestSolvedGroupVolumesForRound(solvedEntry);
@@ -1271,11 +1309,28 @@ namespace ArchiveFixer.ViewModels
                      * 上一行的分类已经按盘上事实认出了"这一轮解出来的是哪几组分卷"（`roundSummary.VolumeEntries`
                      * 就是每一组的**入口包**）；这几单下一轮要干的正是第二大步 ⇒ 交给协调器按"只解一层"跑，
                      * 解出来的东西再交回轮判定（FFFF 那两层分卷衔接 —— rar 分卷一轮、zip 分卷下一轮 —— 靠的就是它）。
-                     * ⛔ 不动用户的 `RecursionMode` 设置；判不出（不在名单里）⇒ 照旧老口径。
+                     * ⛔ 不改任何用户设置；判不出（不在名单里）⇒ 照旧老口径。
                      */
                     foreach (ArchiveTask next in nextRound)
                     {
-                        if (roundSummary.VolumeEntries.Any(
+                        /*
+                         * ⛔ 判据再加一条**内容事实**（2026-10-22，`24242424` 交界处定案）：
+                         * 这一单自己的包**内容可证是分卷组的一员** ⇒ 它要干的本来就是第二大步（只解一层），
+                         * 不管它有没有出现在轮判定的 `VolumeEntries` 名单里。
+                         *
+                         * 现场：第 2 轮把组片 `aaa-L2.part1.rar` 加进来时**没被点名** ⇒ 它按第一大步
+                         * 全递归跑到 L1 层（日志逐字 `第 1 层：aaa-L1.7z：递归第 1 层开始解压`），
+                         * 既发布了已经解开的 `aaa-L1.7z`，又解出了内容 ⇒ 下一轮再解一遍同一个包 ⇒
+                         * 盘上两份 `content-60mb.bin`（ProcMon 两处 layer-00x\output 各写一份）。
+                         *
+                         * ⛔ 判不出（7z 那一族反正是判不出）⇒ 照旧只认名单，老行为一个字不变。
+                         */
+                        bool contentSaysVolumeMember =
+                            ArchiveFixer.Detection.FileNature.Inspect(next.CurrentPath).Membership
+                                == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember;
+
+                        if (contentSaysVolumeMember
+                            || roundSummary.VolumeEntries.Any(
                                 entry => string.Equals(
                                     SafePathHelper.GetFullPathSafe(entry),
                                     SafePathHelper.GetFullPathSafe(next.CurrentPath),
@@ -1501,6 +1556,7 @@ namespace ArchiveFixer.ViewModels
                 chainTasks,
                 cancellationToken: default,
                 runOptions);
+
         }
 
         /// <summary>
@@ -2405,6 +2461,7 @@ namespace ArchiveFixer.ViewModels
                         isArchive = true;
                         how = "按分卷尺子认出：这一组的第一卷（引擎按内容打不开是因为名字脏，交给第二大步）";
                     }
+
 
                     if (!isArchive)
                     {

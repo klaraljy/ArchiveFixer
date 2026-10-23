@@ -25,8 +25,42 @@ namespace ArchiveFixer.ViewModels
     /// 批量解压流程协调器。
     /// 负责并发调度、单任务解压管线、停止后续/取消当前。
     /// </summary>
-    internal sealed class ExtractionCoordinator
+    internal sealed partial class ExtractionCoordinator
     {
+        /// <summary>第一大步的交接事实表（第二大步的组分析从这里取候选）。</summary>
+        private readonly List<ArchiveFixer.Detection.VolumeHandoffEntry> _volumeHandoffEntries = new();
+
+        /// <summary>本批的交接事实（只读给第二大步/日志用）。</summary>
+        internal IReadOnlyList<ArchiveFixer.Detection.VolumeHandoffEntry> VolumeHandoffEntries => _volumeHandoffEntries;
+
+        private void RegisterVolumeHandoff(ArchiveTask task, ArchiveFixer.Detection.FileNatureCard card)
+        {
+            string path = task.CurrentPath ?? string.Empty;
+
+            foreach (ArchiveFixer.Detection.VolumeHandoffEntry existing in _volumeHandoffEntries)
+            {
+                if (string.Equals(existing.Path, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            _volumeHandoffEntries.Add(new ArchiveFixer.Detection.VolumeHandoffEntry
+            {
+                Path = path,
+                BaseName = FileNameHelper.SecondStepBaseName(path),
+                Format = card.Format,
+                Size = card.Size,
+                BodyKind = card.BodyKind,
+                VolumeNumber = card.VolumeNumber,
+                FirstVolumeFlag = card.FirstVolumeFlag,
+                SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
+                Source = task.IsContinuationTask
+                    ? ArchiveFixer.Detection.VolumeHandoffSource.ChainProduced
+                    : ArchiveFixer.Detection.VolumeHandoffSource.UserImported
+            });
+        }
+
         /// <summary>
         /// 「其余物」目录名（契约 §3.2，2026-09-22 由「过程物」改名）：为得到内容物而产生、
         /// 用户不需要的东西 —— 内层归档、分卷、抠出来的中间 ZIP、纯壳文件夹；**以及源包本身**
@@ -835,6 +869,29 @@ namespace ArchiveFixer.ViewModels
         /// 它走不到原来那个 <c>finally</c> 里 ⇒ 少了这一句，真机那种"批末才报缺卷"的任务
         /// 会一直停在「未处理」（机器终态没落，汇总与诊断当场打架）。所以判据抽到这里共用。</para>
         /// </summary>
+        /// <summary>
+        /// 产物越界（不变量 4）：递归层已把它记成结构化事实（<see cref="RecursionLayerReport.LandingViolation"/>）
+        /// ⇒ 结论必须写成「越出目标根目录」，⛔ 不许折成泛泛的"引擎解不开"（措辞与单层路逐字对齐）。
+        /// </summary>
+        private void ApplyLandingViolationNote(ArchiveTask task, RecursionResult result)
+        {
+            if (task == null || result?.Layers == null)
+            {
+                return;
+            }
+
+            if (!result.Layers.Any(layer => layer != null && layer.LandingViolation))
+            {
+                return;
+            }
+
+            task.ErrorMessage =
+                "产物越出目标根目录 —— 按既定口径整包判定失败（不归集产物、不处理源包、其余物不生成）："
+                + (task.ErrorMessage ?? string.Empty);
+
+            AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
+        }
+
         private static void FinalizeOutcomeIfPending(ArchiveTask task, bool producedContent = false)
         {
             if (task == null)
@@ -1948,6 +2005,16 @@ namespace ArchiveFixer.ViewModels
                  */
                 if (task.RecursionTriedCandidateCount > 0
                     && !task.ErrorMessage.Contains("产物始终不完整", StringComparison.Ordinal))
+
+                /*
+                 * 「连续两个候选解出来的产物完全相同」：事实由递归层带上来（任务级布尔）
+                 * ⇒ 结论必须说清"换密码不会改变结果"（与单层路同一口径）。
+                 */
+                if (task.RecursionCandidatesIdentical
+                    && !task.ErrorMessage.Contains("完全相同", StringComparison.Ordinal))
+                {
+                    task.ErrorMessage += "（连续两个候选解出来的产物完全相同，换密码不会改变结果）";
+                }
                 {
                     task.ErrorMessage += $"（已试 {task.RecursionTriedCandidateCount} 个候选，产物始终不完整）";
                 }
@@ -7388,30 +7455,24 @@ namespace ArchiveFixer.ViewModels
              * ⚠ 2026-10-04（用户当场推翻默认档）：出厂默认改成 **`AllBranches`**（"有压缩包就解压"），
              * 所以走到这一段的**常态**就是全部分支。三档语义（与②页逐字对齐）：
              * · `SingleLayer` = 只解当前这一层，内层包**原样留着**（继续解交给一键处理的轮次 / 手动「继续解」）
-             *   —— 上游那道闸门（`RecursionMode != "SingleLayer"`）就把它挡在递归核心之外，到不了这里；
+             *   —— 上游那道闸门（`递归档位（已删除） != "SingleLayer"`）就把它挡在递归核心之外，到不了这里；
              * · `SingleChain` = 只跟一条链；一层里出现 **≥2 个真归档** ⇒ 第 0 层问用户，
              *   更深的层停在那一层并**如实报停因**（旁边是什么文件都不影响这条判据）；
              * · `AllBranches`（出厂默认）= 内层有多个包也全部解开（仍受每层内层包数量上限约束）。
              *
              * ⚠ 2026-10-01 核查记录（用户问"开了续解和不开续解会不会有 bug"）：下面这条 switch 曾经写成
              * `AllBranches ? AllBranches : SingleChain`，看上去像"把 SingleLayer 也当 SingleChain 跑"，
-             * 但**实际不是缺陷** —— 真的闸门在上游（`RecursionMode != "SingleLayer"` 才进递归核心），
+             * 但**实际不是缺陷** —— 真的闸门在上游（`递归档位（已删除） != "SingleLayer"` 才进递归核心），
              * 撤掉这一处的改动跑守门用例照旧全绿（红检否掉了那个怀疑）。把它写成显式三档只是为了
              * "以后谁动了那道闸门，这里不会静默降级成别的档"。
              */
-            RecursionMode mode = Settings.RecursionMode switch
-            {
-                var value when string.Equals(value, "AllBranches", StringComparison.OrdinalIgnoreCase)
-                    => RecursionMode.AllBranches,
-                var value when string.Equals(value, "SingleChain", StringComparison.OrdinalIgnoreCase)
-                    => RecursionMode.SingleChain,
-                _ => RecursionMode.SingleLayer
-            };
 
             // 上限（层数 / 每层密码尝试次数）当场从设置里取，并交给**本次**的递归核心：
             // 构造时固定一份的话，用户改完设置不重启就不生效（见字段上的说明）。
             RecursionLimits limits = BuildRecursionLimits();
             RecursiveExtractor recursiveExtractor = CreateRecursiveExtractor();
+            // 「先测试再解压」：用户开了这一档就必须交给递归核心（它才有 TestAsync 那一支）。
+            recursiveExtractor.TestBeforeExtract = Settings.TestBeforeExtract;
 
             /*
              * **这一趟打不开的那几片，抢救到哪儿**（真机 2026-10-06）：
@@ -7495,7 +7556,6 @@ namespace ArchiveFixer.ViewModels
             RecursionResult result = await recursiveExtractor.ExtractAsync(
                 recursionTask,
                 stageDirectory,
-                mode,
                 previousDecision: null,
                 cancellationToken,
                 recursionProgressSink,
@@ -7536,7 +7596,7 @@ namespace ArchiveFixer.ViewModels
                  *   一键档没法问 ⇒ 与手动档里用户点「取消」同一结果：保留当前这一层 + 如实写日志。
                  */
                 bool expandAll = oneClickRun
-                    ? mode != RecursionMode.SingleChain
+                    ? true
                     : await ShowConfirmOnUiThreadAsync(
                         result.Decision.Prompt + Environment.NewLine + Environment.NewLine +
                         "选“确定”：把这些内层归档也解开。选“取消”：只保留当前这一层的结果。");
@@ -7573,7 +7633,6 @@ namespace ArchiveFixer.ViewModels
                     result = await recursiveExtractor.ExtractAsync(
                         recursionTask,
                         stageDirectory,
-                        mode,
                         result.Decision,
                         cancellationToken,
                         recursionProgressSink,
@@ -7790,6 +7849,9 @@ namespace ArchiveFixer.ViewModels
                 task.RecursionTriedCandidateCount = result.Layers.Count > 0
                     ? result.Layers[^1].TriedCandidateCount
                     : 0;
+            // 同一组事实：候选间结果完全相同（结构化布尔，⛔ 不比中文）。
+            task.RecursionCandidatesIdentical = result.Layers.Any(layer => layer != null && layer.CandidatesProducedIdenticalResults);
+
 
                 if (result.Layers.Any(layer => layer.ListingSaidNoEncryption))
                 {
@@ -7803,6 +7865,28 @@ namespace ArchiveFixer.ViewModels
             }
 
             task.ErrorMessage = result.Summary;
+
+            /*
+             * 「连续两个候选解出来的产物完全相同」：事实由递归层带上来
+             * （<see cref="RecursionLayerReport.CandidatesProducedIdenticalResults"/>，
+             * 判据是结构化计数，⛔ 不比中文）⇒ 结论里必须说清"换密码不会改变结果"。
+             */
+            if (result.Layers.Any(layer => layer != null && layer.CandidatesProducedIdenticalResults))
+            {
+                task.ErrorMessage += "（连续两个候选解出来的产物完全相同，换密码不会改变结果）";
+                AppendLog("WARN", $"{task.LogName}：连续两个候选解出来的产物完全相同 —— 换密码不会改变结果。");
+            }
+
+            /*
+             * 「试了几个候选」同样必须写进结论（用户 2026-09-24 要求）——事实由递归层带上任务；
+             * ⛔ 没试过（0）不写，老口径不动。
+             */
+            if (task.RecursionTriedCandidateCount > 0
+                && !task.ErrorMessage.Contains("已试 ", StringComparison.Ordinal))
+            {
+                task.ErrorMessage += $"（已试 {task.RecursionTriedCandidateCount} 个候选）";
+            }
+            ApplyLandingViolationNote(task, result);
 
             /*
              * ===== 状态与**机器终态**必须一次落齐（用户 2026-09-27 真机 `giu.7z.001`）=====
@@ -7879,6 +7963,18 @@ namespace ArchiveFixer.ViewModels
                     task.ProgressText = StatusText.ProgressFailed;
                     task.Outcome = TaskOutcome.Failed;
                     task.ErrorMessage = result.Summary;
+
+            /*
+             * 「连续两个候选解出来的产物完全相同」：事实由递归层带上来
+             * （<see cref="RecursionLayerReport.CandidatesProducedIdenticalResults"/>，
+             * 判据是结构化计数，⛔ 不比中文）⇒ 结论里必须说清"换密码不会改变结果"。
+             */
+            if (result.Layers.Any(layer => layer != null && layer.CandidatesProducedIdenticalResults))
+            {
+                task.ErrorMessage += "（连续两个候选解出来的产物完全相同，换密码不会改变结果）";
+                AppendLog("WARN", $"{task.LogName}：连续两个候选解出来的产物完全相同 —— 换密码不会改变结果。");
+            }
+            ApplyLandingViolationNote(task, result);
                     task.EndTime = DateTime.Now;
                     task.LastUpdatedTime = DateTime.Now;
                     task.ClearProgress();
@@ -7892,6 +7988,16 @@ namespace ArchiveFixer.ViewModels
                     {
                         task.Status = stoppedStatus;
                         task.Outcome = stoppedOutcome;
+                    
+                    /*
+                     * 密码已经证实、坏的是数据：状态与终态由分类器落（Corrupted + 部分完成），
+                     * 但**原因必须写清**——否则用户会拿着密码本去核对一个根本没问题的密码。
+                     */
+                    if (stoppedStatus == StatusText.Corrupted)
+                    {
+                        task.ErrorMessage =
+                            "密码已经证实（这一趟真解出了内容，坏的是数据）—— 不再往下试密码候选。";
+                    }
                     }
                     else
                     {
@@ -9428,7 +9534,7 @@ namespace ArchiveFixer.ViewModels
         /// **这一批里哪些单是"第二大步"**（分卷阶段，只解一层 —— 用户 2026-10-11 轮次模型）。
         /// 写点唯一 = 批末那一组齐了、交 `toRun` 照常跑这一组的那一刻（见 `RememberVolumeStepTask`）；
         /// 读点唯一 = <see cref="IsSingleLayerRecursion(ArchiveTask?)"/>（三处递归档判据）。
-        /// ⛔ 不改用户的 `RecursionMode` 设置；本批结束随其它账一起清。
+        /// ⛔ 不改用户的 `递归档位（已删除）` 设置；本批结束随其它账一起清。
         /// </summary>
         private readonly HashSet<ArchiveTask> _volumeStepTasks = new();
         /// <summary>
@@ -18211,7 +18317,7 @@ namespace ArchiveFixer.ViewModels
                     /*
                      * ⚠ **这一单从现在起是"第二大步"**（用户 2026-10-11 轮次模型）：分卷阶段**只解一层** ——
                      * 解出来的东西一律交回轮判定（里面又有分卷也不就地接着解，下一轮从第二大步再来）。
-                     * 位置就在"那一组齐了 ⇒ 照常跑这一组"这一刻；⛔ 不动用户的 `RecursionMode` 设置。
+                     * 位置就在"那一组齐了 ⇒ 照常跑这一组"这一刻；⛔ 不动用户的 `递归档位（已删除）` 设置。
                      */
                     RememberVolumeStepTask(task);
 
@@ -19929,7 +20035,7 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                await NormalizeDisguisedVolumeNamesAsync(task, cancellationToken).ConfigureAwait(true);
+            // 第一大步不改分卷名（改名归第二大步）
             }
         }
 
@@ -22676,8 +22782,6 @@ namespace ArchiveFixer.ViewModels
                  * 落点、链尾闸门读到的都是同一份事实。开工时那一次照旧留着（幂等：名字已标准就快速返回），
                  * 手动档「只解压」也只有那一次（单任务，本来就没有竞争）。
                  */
-                await NormalizeDisguisedVolumeNamesForBatchAsync(selectedTasks, _operationCts.Token)
-                    .ConfigureAwait(true);
 
                 /*
                  * 落点这一档要能回答"入口包还压在包里时，它将来落在哪"（真机 CCCC 2026-10-06：
@@ -24284,7 +24388,7 @@ namespace ArchiveFixer.ViewModels
 
         /// <summary>这一批是不是单层模式（递归模式下第 0 层要交给引擎，见 <see cref="DirectReadAppliesTo"/>）。</summary>
         private bool IsSingleLayerRecursion() =>
-            string.Equals(Settings.RecursionMode, "SingleLayer", StringComparison.OrdinalIgnoreCase);
+            false; // 递归三档已删除（默认全展开）；重建中
 
         /// <summary>
         /// **这一单这一趟是不是"第二大步"**（用户 2026-10-11 定的轮次模型，见 `RoundProductClassifier` 的说明）：
@@ -24292,7 +24396,7 @@ namespace ArchiveFixer.ViewModels
         /// 里面又有分卷也**不就地接着解**（下一轮从第二大步再来一遍）。
         ///
         /// <para>为什么必须是"任务级的事实位"而不是改用户的设置：递归档
-        /// （<see cref="ArchiveFixer.Models.AppSettings.RecursionMode"/>）是**用户选的**，⛔ 这一档不许动它；
+        /// （<c>AppSettings</c>）是**用户选的**，⛔ 这一档不许动它；
         /// 而"这一单是第二大步"是**程序自己在批末判出来的**（那一组齐了 ⇒ 照常跑这一组，见 `toRun` 那一处）。</para>
         ///
         /// <para>⚠ 没点名 / 传 null ⇒ 与改动前**逐字相同**（只看设置档）。</para>
@@ -25151,6 +25255,33 @@ namespace ArchiveFixer.ViewModels
 
             try
             {
+                /*
+                 * ⛔ 第一大步只做「单一完整包」：分卷成员只登记交接事实、原地不动，交给第二大步。
+                 * 判据只读内容卡（FileNature.Inspect），⛔ 不按名字猜；判不出（Unknown）照旧放行。
+                 */
+                ArchiveFixer.Detection.FileNatureCard entryCard =
+                    ArchiveFixer.Detection.FileNature.Inspect(task.CurrentPath ?? string.Empty);
+
+                if (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                    || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece)
+                {
+                    RegisterVolumeHandoff(task, entryCard);
+                    task.Status = StatusText.Skipped;
+                    task.Outcome = TaskOutcome.Skipped;
+                    task.ProgressText = StatusText.ProgressSkipped;
+                    task.EndTime = DateTime.Now;
+                    task.LastUpdatedTime = DateTime.Now;
+                    task.ElapsedText = task.StartTime.HasValue
+                        ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
+                        : "-";
+
+                    AppendLog(
+                        "WARN",
+                        $"{task.LogName}：这一份是分卷成员（{entryCard.BodyKind}）—— 第一大步不解它，只登记交接事实、原地不动，交给第二大步。");
+
+                    return;
+                }
+
                 await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
             }
             catch (OperationCanceledException)
@@ -26354,7 +26485,7 @@ namespace ArchiveFixer.ViewModels
              * 只改名字、内容一个字节不动；凑不成组 / 目标名被占 → 什么都不做，并写清为什么。
              * 手动档「修复分卷名并重试」调的是**同一对**判据与执行体（VolumeNameRepair）。
              */
-            await NormalizeDisguisedVolumeNamesAsync(task, cancellationToken).ConfigureAwait(true);
+            // 第一大步不改分卷名（改名归第二大步）
 
             /*
              * ===== 一组分卷 = 一个任务 = 只从**首卷**启动 =====
@@ -27113,7 +27244,7 @@ namespace ArchiveFixer.ViewModels
              *
              * <para>位置说明（⚠ 用词：这一档**不是**被删掉的那个用户档位 —— 那个是"三档递归模式"里的
              * 「只解当前这一层」，用户 2026-10-14 拍板删掉、出厂钉死为"展开所有分支"，见
-             * <c>AppSettings.RecursionMode</c> 那段说明。这里是 <c>ExtractSingleTaskAsync</c>：**把一份包交给引擎解**
+             * <c>AppSettings.递归档位（已删除）</c> 那段说明。这里是 <c>ExtractSingleTaskAsync</c>：**把一份包交给引擎解**
              * 那一段；默认档解完接着走递归核心（下面那两处 `IsSingleLayerRecursion(task)` 闸门），
              * 而"第二大步"（分卷组只解一层）是**任务级事实位** `_volumeStepTasks` 让它只解这一层。）</para>
              *

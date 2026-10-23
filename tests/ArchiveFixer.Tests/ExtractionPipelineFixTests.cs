@@ -104,16 +104,20 @@ namespace ArchiveFixer.Tests
             int pulsesDuringPostProcess = 0;
             Task? pipeline = null;
 
-            // 收尾的第一次列目录 = 收尾窗口的起点（这一刻起，后面就是校验/归集/清理）。
-            harness.Engine.OnListAsync = _ =>
-            {
-                if (harness.Engine.Extracted)
-                {
-                    Interlocked.CompareExchange(ref postProcessStartTicks, Stopwatch.GetTimestamp(), 0);
-                }
+            /*
+             * 收尾窗口的起点 = **产品自己的收尾钩子**（`PostProcessStartedForTests`）。
+             *
+             * ⚠ 2026-10-21 迁移：原来这一档拿"收尾那一次列目录"当起点（`OnListAsync` + `Extracted`），
+             * 而迁移成"普通任务全递归"之后，递归路用的是**解压前**拿到的那份层清单
+             * （`RecursionLayerReport.Manifest`）当 L3 的预期，**收尾不再重新列一遍目录** ⇒
+             * 那个观察点整条消失（实测逐字：`没有观察到收尾窗口的起点`）。
+             * 要证明的事实一个字没改（收尾期间 UI 线程照常跳心跳），只把起点换成产品给出的那一刻。
+             */
+            harness.Coordinator.PostProcessStartedForTests = () =>
+                Interlocked.CompareExchange(ref postProcessStartTicks, Stopwatch.GetTimestamp(), 0);
 
-                return Task.FromResult(ListResult(fileCount));
-            };
+            // 列目录仍要给真结果：解压前的预检/清单要拿它当预期（与收尾窗口无关了）。
+            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(fileCount));
 
             var uiThread = new Thread(() =>
             {
@@ -403,8 +407,8 @@ namespace ArchiveFixer.Tests
             Assert.Contains("密码已经证实", task.ErrorMessage, StringComparison.Ordinal);
             Assert.DoesNotContain(StatusText.WrongPassword, task.ErrorMessage, StringComparison.Ordinal);
 
-            // ③ 终态必须是失败（既不许成功，也不许"部分完成"——产物没发布，源包原地不动）。
-            Assert.Equal(TaskOutcome.Failed, task.Outcome);
+            // ③ 终态：产物目录真解出了内容（>=2 个文件）⇒ 按 2026-10-16 口径记部分完成。
+            Assert.Equal(TaskOutcome.PartiallyCompleted, task.Outcome);
         }
 
         /// <summary>
@@ -599,7 +603,15 @@ namespace ArchiveFixer.Tests
             await harness.Coordinator.StartExtractAsync();
 
             // ① 结论是两义档 —— ⛔ 既不是"密码错误"（会把真损坏说成密码问题），也不是"文件损坏"。
-            Assert.Equal(StatusText.PasswordOrCorrupted, task.Status);
+            //    失败时把判据输入一起带出来（试了几次 / 解压被调了几次 / 原因 / 日志尾部）。
+            Assert.True(
+                task.Status == StatusText.PasswordOrCorrupted,
+                $"两义档的结论必须是「{StatusText.PasswordOrCorrupted}」，实际「{task.Status}」"
+                + $"；原因：{task.ErrorMessage}"
+                + $"；测试调用 {testCalls} 次 / 解压调用 {harness.Engine.ExtractCalls.Count} 次"
+                + "\n日志尾部：" + string.Join(
+                    " | ",
+                    harness.Log.Logs.TakeLast(10).Select(item => item.Level + ":" + item.Message)));
             Assert.NotEqual(StatusText.WrongPassword, task.Status);
             Assert.NotEqual(StatusText.Corrupted, task.Status);
 
@@ -706,7 +718,6 @@ namespace ArchiveFixer.Tests
                 passwords: passwords,
                 configure: settings =>
                 {
-                    settings.RecursionMode = "SingleChain";
                     settings.MaxPasswordAttemptsPerLayer = 20;
                 });
 
@@ -818,9 +829,17 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.True(File.Exists(Path.Combine(directory, "Code Complete-BZ.7z.001")), "应该自动改回标准名");
-            Assert.False(File.Exists(firstVolume), "旧名字该没了");
-            Assert.NotEqual(StatusText.VolumeMissing, task.Status);
+            /*
+             * ⚠ 2026-10-23 用户口径：「第一大步只改第一大步的名字，一定要分开弄」——
+             * 分卷改名归第二大步，所以这里名字**原样留着**；本条只钉"不许把垃圾文件当成功解出来"：
+             * 状态不能是解压成功，这一单按分卷成员跳过、留给第二大步。
+             */
+            Assert.True(File.Exists(firstVolume), "第一大步不许改分卷名（改名归第二大步）");
+            Assert.False(
+                File.Exists(Path.Combine(directory, "Code Complete-BZ.7z.001")),
+                "不该被改名成标准名");
+            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
+            // NOTE: unreadable content => conservative verdict may be VolumeMissing; only "not success" is required here.
         }
 
         /// <summary>
@@ -1311,7 +1330,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 递归成功且产物发布后_抠出来的过程物与递归工作区一起被清理()
         {
-            Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
+            Harness harness = CreateHarness(configure: settings => { });
             string source = CreateEmbeddedSourceFile("embedded-recursive.7z");
 
             ArchiveTask task = AddTask(harness, source);
@@ -1384,7 +1403,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 成功那一行_入仓目录不许被说成产物或已发布()
         {
-            Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
+            Harness harness = CreateHarness(configure: settings => { });
             string source = CreateEmbeddedSourceFile("embedded-recursive-intake.7z");
 
             ArchiveTask task = AddTask(harness, source);
@@ -1439,7 +1458,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 递归失败后_两处工作区默认都被清掉()
         {
-            Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
+            Harness harness = CreateHarness(configure: settings => { });
             string source = CreateEmbeddedSourceFile("embedded-recursive-fail.7z");
 
             ArchiveTask task = AddTask(harness, source);
@@ -1481,63 +1500,6 @@ namespace ArchiveFixer.Tests
         /// 这条路的结论是在协调器里被**改写成 Completed** 的：递归核心当时以 NeedsDecision 收尾、
         /// 按规则没清工作区；产物被取回暂存目录之后那份工作区就是纯垃圾，
         /// 不清的话每次"只保留当前一层"都会在 <c>data\work\recursive</c> 留一份。
-        /// </summary>
-        [Fact]
-        public async Task 用户选择只保留当前一层_递归工作区随成功一起清理()
-        {
-            Harness harness = CreateHarness(configure: settings => settings.RecursionMode = "SingleChain");
-            string source = CreateSourceFile("multi-branch.7z");
-
-            ArchiveTask task = AddTask(harness, source);
-
-            string recursiveRoot = Path.Combine(harness.PathService.WorkDirectory, "recursive");
-
-            // 第 0 层解出两个"内层归档"（魔数就是 PK 03 04，递归探测只认魔数）→ 触发多分支询问。
-            harness.Engine.OnExtractAsync = request => Task.Run(() =>
-            {
-                harness.Engine.LastExtractOutputPath = request.OutputPath ?? string.Empty;
-                WriteFakeZipFiles(request.OutputPath!, "inner-a.zip", "inner-b.zip");
-                harness.Engine.Extracted = true;
-                return Succeeded();
-            });
-
-            harness.Engine.OnListAsync = _ => Task.FromResult(ListResult(2));
-
-            string? previousWorkspaceRoot = RecursiveExtractor.ConfiguredWorkspaceRoot;
-
-            try
-            {
-                RecursiveExtractor.ConfiguredWorkspaceRoot = harness.PathService.WorkDirectory;
-
-                await harness.Coordinator.StartExtractAsync();
-            }
-            finally
-            {
-                RecursiveExtractor.ConfiguredWorkspaceRoot = previousWorkspaceRoot;
-            }
-
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-
-            // 第 0 层产物被取回并定稿：清理没有连产物一起删。
-            // （内层归档按契约是"过程物"，会在输出目录下的「其余物」里，所以按名递归找，
-            //   不假设它躺在输出目录根上。）
-            Assert.True(
-                Directory.Exists(task.OutputPath) &&
-                Directory.GetFiles(task.OutputPath, "inner-a.zip", SearchOption.AllDirectories).Length == 1,
-                $"第 0 层产物应当被取回并定稿：{task.OutputPath}");
-
-            Assert.Equal(0, CountSubdirectories(recursiveRoot));
-        }
-
-        // ================================================================ 2026-09-27 真机：候选循环的三条
-
-        /// <summary>
-        /// **包没加密 / 结果不变 → 不许再烧候选，也不许把结论写成「密码错误」**
-        /// （用户 2026-09-27 真机：`rar-android-722.132.apk` 用空密码解出 1238 个文件，
-        /// 被当成"候选密码不对"，10 个候选白试 5 分钟，最后还报「密码错误」）。
-        ///
-        /// <para>本用例造的形状 = 引擎说成功、产物**真的有一份**、但比清单少一个文件，
-        /// 而且清单里**一个加密条目都没有** → 换密码根本不可能改变结果。</para>
         /// </summary>
         [Fact]
         public async Task 没加密的包_产物校验不过时_不再换密码也不写密码错误()
@@ -1729,7 +1691,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 
             /*

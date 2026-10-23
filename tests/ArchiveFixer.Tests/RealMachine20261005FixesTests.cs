@@ -429,7 +429,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 new ArchiveTask(outer),
                 output,
-                RecursionMode.AllBranches,
                 null,
                 CancellationToken.None);
 

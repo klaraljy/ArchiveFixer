@@ -352,8 +352,8 @@ namespace ArchiveFixer.Tests
             RequireSevenZip();
 
             string volumes = NewDirectory("volumes");
-            (string payloadName, byte[] payloadBytes) = CreatePayload(volumes, 3 * 1024 * 1024);
-            CreateVolumeSet(volumes, "set.7z", payloadName, "1m");
+            CreatePayload(volumes, 3 * 1024 * 1024);
+            CreateVolumeSet(volumes, "set.7z", "a.bin", "1m");
 
             string first = Path.Combine(volumes, "set.7z.001");
             string mangled = Path.Combine(volumes, "set.7z(删掉.001");
@@ -377,25 +377,21 @@ namespace ArchiveFixer.Tests
              */
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.True(File.Exists(first), "名字应该已经自动改回标准名了");
-            Assert.False(File.Exists(mangled), "旧名字该没了");
-            Assert.Equal(first, task.CurrentPath);
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
-
-            // ④出来的是**真内容**：与原始字节逐字节一致。
-            string output = Path.Combine(harness.OutputRoot, "set", payloadName);
-            Assert.True(File.Exists(output), $"没找到产物：{output}");
-            Assert.Equal(payloadBytes, File.ReadAllBytes(output));
-
-            // ⑤反向断言：7-Zip 那个"通用分片"垃圾文件不许出现在产物里。
+            /*
+             * ⛔ 用户 2026-10-23：「第一大步只改第一大步的名字，一定要分开弄」——
+             * 这一份是真 7z 分卷的第 1 卷（内容 = 分卷成员）⇒ 批首改名与第一大步都**不碰它**：
+             * 名字原样、任务按"分卷成员"跳过、没有内容物；改名与解压都归第二大步。
+             */
+            Assert.True(File.Exists(mangled), "第一大步不该改分卷的名字");
+            Assert.False(File.Exists(first));
+            Assert.Equal(mangled, task.CurrentPath);
+            Assert.Equal(StatusText.Skipped, task.Status);
+            Assert.Contains(
+                harness.LogTexts,
+                line => line.Contains("交给第二大步", StringComparison.Ordinal));
             Assert.False(
-                File.Exists(Path.Combine(harness.OutputRoot, "set", "set.7z(删掉")),
-                "解出来的不该是「文件自己」那一份垃圾");
-
-            // ⑥源包按默认档留在原地（不变量 1；自动修名只改名字，不搬不删）。
-            Assert.True(File.Exists(first));
-            Assert.True(File.Exists(Path.Combine(volumes, "set.7z.002")));
-            Assert.True(File.Exists(Path.Combine(volumes, "set.7z.003")));
+                Directory.Exists(Path.Combine(harness.OutputRoot, "set")),
+                "第一大步不解分卷 ⇒ 不该有产物目录");
         }
 
         // ================================================================ 工具
@@ -651,7 +647,7 @@ namespace ArchiveFixer.Tests
             // 名字级：卷标记靠骨架档才读得出来（末段逐字不是合法卷标记）。
             Assert.True(ExtensionHelper.IsPartNumberedMarkBySkeleton("444.pa8rt1.rar", out string mark));
             Assert.Equal("part1", mark);
-            Assert.Equal("444", FileNameHelper.StripVolumeMarkers("444.pa8rt1.rar"));
+            Assert.Equal("444", FileNameHelper.SecondStepBaseName("444.pa8rt1.rar"));
             Assert.Equal("444", OutputPlacement.ResolveArchiveBaseName("444.pa8rt1.rar"));
 
             VolumeNameRepairPlan plan = VolumeNameRepair.Plan(v1, NamesIn(directory));
@@ -720,8 +716,8 @@ namespace ArchiveFixer.Tests
 
             // 名字级：末尾那段逐字干净 ⇒ 不看骨架档。
             Assert.False(ExtensionHelper.IsPartNumberedMarkBySkeleton("444.p1art2.part2.rar", out _));
-            Assert.Equal("444.p1art2", FileNameHelper.StripVolumeMarkers("444.p1art2.part2.rar"));
-            Assert.Equal("444.p1art2", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
+            Assert.Equal("444", FileNameHelper.SecondStepBaseName("444.p1art2.part2.rar"));
+            Assert.Equal("444", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
             Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("444.p1art2.part2.rar"));
             Assert.Equal("444.p1art2.part1.rar", VolumeGroupDetector.TryGetFirstVolumeName("444.p1art2.part2.rar"));
 
@@ -1089,50 +1085,6 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// **协调器那一层的入口判据**（真机 DDD 的另一半）：本体是标准名（`222.zip` —— 它**不是**卷标记）时，
-        /// 批首那道"整组改名"必须**照样跑**。
-        ///
-        /// <para>修之前那个入口是 `IsVolumePartFileName(自己的名字)` ⇒ `.zip` 判 false ⇒ 名字路**压根不跑**
-        /// （只靠单元测试钉 `Plan` 是不够的：计划再好，调用方不问也是白搭）。</para>
-        ///
-        /// <para>同时钉"任务账跟着改"：`SyncTasksAfterVolumeRename` 必须把 `VolumePaths` 里的旧名换成新名
-        /// —— 否则这一单后面按旧名字找卷、报「分卷缺失」。</para>
-        /// </summary>
-        [Fact]
-        public async Task 批首整组改名_本体是标准zip时也要跑_盘上与任务账一起改成标准名()
-        {
-            Harness harness = CreateHarness();
-            string directory = NewDirectory("coordinator-disguised-volumes");
-
-            string v1 = CreateFile(directory, "222.z0删1", 128, seed: 2);
-            string v2 = CreateFile(directory, "222.z除02", 128, seed: 3);
-            string v3 = CreateFile(directory, "222.z文03", 128, seed: 4);
-            string body = CreateFile(directory, "222.zip", 64, seed: 1);
-
-            var task = new ArchiveTask(body) { IsVolumeGroup = true };
-            task.VolumePaths.Add(v1);
-            task.VolumePaths.Add(v2);
-            task.VolumePaths.Add(v3);
-            task.VolumePaths.Add(body);
-
-            await harness.Coordinator.NormalizeDisguisedVolumeNamesForBatchAsync(new[] { task });
-
-            // 盘上：三个标准卷名都在、旧名都没了、**本体与内容一个字节没动**。
-            Assert.True(File.Exists(Path.Combine(directory, "222.z01")), "续卷没被改回标准名");
-            Assert.True(File.Exists(Path.Combine(directory, "222.z02")));
-            Assert.True(File.Exists(Path.Combine(directory, "222.z03")));
-            Assert.False(File.Exists(v1));
-            Assert.False(File.Exists(v2));
-            Assert.False(File.Exists(v3));
-            Assert.True(File.Exists(body));
-
-            // 任务账也跟上了（否则后面按旧名字找卷 ⇒ 假报缺卷）。
-            Assert.Contains(Path.Combine(directory, "222.z01"), task.VolumePaths);
-            Assert.DoesNotContain(v1, task.VolumePaths);
-            Assert.True(task.VolumeNameAutoRenamed);
-        }
-
-        /// <summary>
         /// **同一族的另一个形状**（提前钉住，免得用户下次换个样本又踩）：本体干净（`111.part1.rar`）、
         /// 后面几卷的名字里被塞了字（`111.part删2.rar` / `111.part文3.rar`）。
         ///
@@ -1194,7 +1146,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
 

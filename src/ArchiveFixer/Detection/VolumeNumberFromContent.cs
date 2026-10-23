@@ -153,6 +153,15 @@ namespace ArchiveFixer.Detection
         /// <summary>RAR 1.5–4.x 主头的 <c>MHD_FIRSTVOLUME</c>（"这一卷就是第 1 卷"）。</summary>
         public bool FirstVolumeFlag { get; init; }
 
+        /// <summary>
+        /// **这个族的"主头"已经成功读出来了**（RAR5 主归档头 / RAR4 主头且 CRC 通过）。
+        ///
+        /// <para>它把"读成功且证明不是分卷成员"与"结构就不对/不是归档开头"分开 ——
+        /// `Fail` 那一位做不到这件事（两种都落 `NotVolumeMember`），而"单卷 ⇒ SingleComplete"
+        /// 只允许认前者（2026-10-22，`24242424` 收口）。</para>
+        /// </summary>
+        public bool MainHeaderRead { get; init; }
+
         /// <summary>RAR 1.5–4.x 主头的编号族。</summary>
         public RarNumberingFamily RarNumbering { get; init; }
 
@@ -553,25 +562,23 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
-        /// 推"基名"（**不含归档后缀**）：去掉末尾的卷号段（<c>amb909.7.01</c> 的 <c>01</c>），
-        /// 再把末尾那个"本来该是归档后缀"的段去掉 —— 判据是**只差一个字符且只有一种变法**
-        /// （<c>amb909.7</c> 的 <c>7</c> → <c>7z</c>）。
+        /// 推**名字前缀**（写出来的规范卷名里卷标记之前的那一段）：<c>amb909.7.01</c> → <c>amb909</c>、
+        /// <c>amb909.7z.001</c> → <c>amb909.7z</c>。
         ///
-        /// <para>⛔ 推不出来（名字里已经是后缀 / 认不出）就原样留着，绝不硬剪：基名只影响
-        /// "改完的名字像不像人写的"，正确性由卷号与"绝不覆盖"两条钉着。</para>
+        /// <para>⚠ 2026-10-23（用户口径）：这是**名字重建**，不是基名 —— 基名只有两份
+        /// （<see cref="Helpers.FileNameHelper.FirstStepBaseName"/> / <see cref="Helpers.FileNameHelper.SecondStepBaseName"/>，
+        /// 第一个点之前）。判据整体在 <see cref="Helpers.ExtensionHelper.ResolveNameStem"/>（唯一实现）。</para>
         ///
-        /// <para>⚠ 2026-10-03 阶段 A 收口：判据整体搬进**唯一基名出口**
-        /// <see cref="Helpers.FileNameHelper.TryResolveVolumeBaseName"/> 的
-        /// <see cref="Helpers.VolumeBaseNameLevel.AnchorStem"/> 档（要传本族的规范后缀），
-        /// 本方法只转调（⛔ 这里不再算一遍基名）。</para>
+        /// <para>⛔ 推不出来（名字里认不出或含非法字符）就返回 false，绝不硬剪。</para>
         /// </summary>
-        public static bool TryDeriveStem(string? filePath, VolumeContentFormat format, out string stem) =>
-            Helpers.FileNameHelper.TryResolveVolumeBaseName(
-                filePath,
-                Helpers.VolumeBaseNameLevel.AnchorStem,
-                out stem,
-                out _,
+        public static bool TryDeriveStem(string? filePath, VolumeContentFormat format, out string stem)
+        {
+            stem = Helpers.ExtensionHelper.ResolveNameStem(
+                Helpers.FileNameHelper.GetFileName(filePath),
                 VolumeContentInference.ExtensionFor(format));
+
+            return stem.Length > 0 && stem.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+        }
 
         // ── RAR ──
 
@@ -674,7 +681,12 @@ namespace ArchiveFixer.Detection
 
             if ((archiveFlags & Rar5ArchiveVolume) == 0)
             {
-                return NotAVolume(filePath, VolumeContentFormat.Rar, VolumeNumberFail.NotVolumeMember);
+                // 主归档头读出来了、Volume 位 = 0 ⇒ 这是一份完整单卷（⛔ 不是"结构不对"那一档）。
+                return NotAVolume(
+                    filePath,
+                    VolumeContentFormat.Rar,
+                    VolumeNumberFail.NotVolumeMember,
+                    mainHeaderRead: true);
             }
 
             ulong rawField = 0;
@@ -699,6 +711,11 @@ namespace ArchiveFixer.Detection
                 IsVolumeMember = true,
                 Number = number,
                 RawField = (int)rawField,
+                /*
+                 * "第 1 卷"标记同样落在卡上（RAR5 就是"没有卷号字段"那一份）——
+                 * 组定序那一档要用它与内容卷号互相印证，两族同一把尺子。
+                 */
+                FirstVolumeFlag = number == 1,
                 RarNumbering = RarNumberingFamily.New,
                 Fail = VolumeNumberFail.None
             };
@@ -745,7 +762,12 @@ namespace ArchiveFixer.Detection
 
             if ((mainFlags & Rar4LegacyVolume) == 0)
             {
-                return NotAVolume(filePath, VolumeContentFormat.Rar, VolumeNumberFail.NotVolumeMember);
+                // 主头 CRC 已通过、MHD_VOLUME = 0 ⇒ 完整单卷。
+                return NotAVolume(
+                    filePath,
+                    VolumeContentFormat.Rar,
+                    VolumeNumberFail.NotVolumeMember,
+                    mainHeaderRead: true);
             }
 
             bool newNumbering = (mainFlags & Rar4LegacyNewNumbering) != 0;
@@ -777,12 +799,39 @@ namespace ArchiveFixer.Detection
                 return NotAVolume(filePath, VolumeContentFormat.Rar, fail);
             }
 
+            /*
+             * ===== RAR4 新式分卷：**卷号 = 归档结尾块里的字段 + 1**（该字段 0 起）=====
+             *
+             * <para>2026-10-22，调试器 + 30 份真机批次 `7777` 定案：这一支原来只写 `RawField`、
+             * **漏了 `Number`** ⇒ 卡上永远「卷号=判不出」⇒ 内容这条路证不出"1..N 齐了" ⇒ 组只能靠
+             * 名字 + 试开；名字被伪装（`bbb-L2.AAAAAAAApart2`）或试开要密码时整组建不出来。
+             * 实测三片 raw = 0 / 1 / 2 ⇒ 卷号 1 / 2 / 3，且首卷那片与 `FirstVolumeFlag` 互相印证。</para>
+             *
+             * <para>换算与 RAR5 那一支**逐字一致**（`number = (int)rawField + 1`）：同一件事只允许一种算法。
+             * ⛔ 兜底：字段值超出合理范围（&gt; 9999）⇒ 按"卷号判不出"处理，⛔ 不猜。</para>
+             */
+            if (volumeField.Value > 9999)
+            {
+                return new VolumeNumberReading
+                {
+                    Path = filePath,
+                    Format = VolumeContentFormat.Rar,
+                    Size = length,
+                    IsVolumeMember = true,
+                    RawField = volumeField,
+                    FirstVolumeFlag = firstVolume,
+                    RarNumbering = RarNumberingFamily.New,
+                    Fail = VolumeNumberFail.HeadersUnreadable
+                };
+            }
+
             return new VolumeNumberReading
             {
                 Path = filePath,
                 Format = VolumeContentFormat.Rar,
                 Size = length,
                 IsVolumeMember = true,
+                Number = volumeField.Value + 1,
                 RawField = volumeField,
                 FirstVolumeFlag = firstVolume,
                 RarNumbering = RarNumberingFamily.New,
@@ -1129,6 +1178,23 @@ namespace ArchiveFixer.Detection
                     // 绝对卷号却连不成 1..N = 缺卷或有一卷被改坏后认不出来：整组都不动。
                     return Refuse(VolumeNumberFail.GroupNotContiguous, members.Count);
                 }
+
+                /*
+                 * ⛔ RAR 族：主头那个"这一卷就是第 1 卷"标记必须与内容卷号互相印证
+                 * （2026-10-22：RAR4 也读得出卷号之后，这一格不能只对"卷号判不出"那半边生效 ——
+                 * 否则把第 1 卷标记长在第 3 份上的残组照样被认成 1..N）。
+                 * 判据只读两条内容事实：标记个数、标记那一份的卷号。
+                 */
+                if (members.All(m => m.Format == VolumeContentFormat.Rar && m.RarNumbering == RarNumberingFamily.New))
+                {
+                    List<VolumeNumberReading> flaggedNumbers = members.Where(m => m.FirstVolumeFlag).ToList();
+
+                    if (flaggedNumbers.Count != 1
+                        || numbers[members.IndexOf(flaggedNumbers[0])] != 1)
+                    {
+                        return Refuse(VolumeNumberFail.RarFirstVolumeMismatch, members.Count);
+                    }
+                }
             }
 
             var slots = new List<VolumeGroupSlot>(members.Count);
@@ -1464,11 +1530,12 @@ namespace ArchiveFixer.Detection
 
         // ── 字节与 CRC ──
 
-        private static VolumeNumberReading NotAVolume(string path, VolumeContentFormat format, VolumeNumberFail fail) => new()
+        private static VolumeNumberReading NotAVolume(string path, VolumeContentFormat format, VolumeNumberFail fail, bool mainHeaderRead = false) => new()
         {
             Path = path,
             Format = format,
             IsVolumeMember = false,
+            MainHeaderRead = mainHeaderRead,
             Fail = fail
         };
 

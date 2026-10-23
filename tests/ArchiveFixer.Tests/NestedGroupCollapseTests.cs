@@ -99,12 +99,6 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 收起来的那些说明_正文一个字都没丢_而且都还写着关键事实()
         {
-            // ⛔ 折叠只改"默认看不看得见"，不改内容：每条长说明的关键事实逐条钉住。
-            Assert.Contains("什么时候会停", StatusText.RecursionModeAllBranchesHint, StringComparison.Ordinal);
-            Assert.Contains("代价", StatusText.RecursionModeAllBranchesHint, StringComparison.Ordinal);
-            Assert.Contains("代价", StatusText.RecursionModeSingleChainHint, StringComparison.Ordinal);
-            Assert.Contains("代价", StatusText.RecursionModeSingleLayerHint, StringComparison.Ordinal);
-
             // 覆盖策略：必须留着那条真会咬人的事实（UnRAR 没有"自动重命名已存在文件"）。
             Assert.Contains("跳过已存在文件", StatusText.NestedOverwriteDetail, StringComparison.Ordinal);
 
@@ -115,7 +109,6 @@ namespace ArchiveFixer.Tests
             // 面向用户的字符串里不许写 Markdown（强调一律用「」）。
             foreach (string text in new[]
                      {
-                         StatusText.RecursionModeHintLabel,
                          StatusText.NestedExtrasDetailHeader,
                          StatusText.NestedOverwriteDetail,
                          StatusText.NestedVolumeAssemblyDetail,

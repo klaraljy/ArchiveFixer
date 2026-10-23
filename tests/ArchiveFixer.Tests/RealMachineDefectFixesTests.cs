@@ -198,17 +198,12 @@ namespace ArchiveFixer.Tests
 
         /// <summary>
         /// **两义那一档不许提前终结候选循环**（真机：11 个候选只试了第 1 个）。
-        ///
-        /// <para>两条路都要验：<c>SingleLayer</c>（普通解压那条候选循环）与
-        /// <c>SingleChain</c>（递归那条 —— 真机走的正是它，`RecursiveExtractor` 见到 IsCorrupted 就 Stop）。
-        /// 断言只有一条硬的：**候选全部被试过**（引擎调用次数 = 候选数）。</para>
+        /// 断言只有一条硬的：**候选全部被试过**（引擎调用次数 = 候选数）。
         /// </summary>
-        [Theory]
-        [InlineData("SingleLayer")]
-        [InlineData("SingleChain")]
-        public async Task 两义那一档不许提前终结候选循环_候选全部试完(string recursionMode)
+        [Fact]
+        public async Task 两义那一档不许提前终结候选循环_候选全部试完()
         {
-            Harness harness = CreateHarness(new[] { "候选-1", "候选-2", "候选-3" }, recursionMode);
+            Harness harness = CreateHarness(new[] { "候选-1", "候选-2", "候选-3" });
             harness.Engine.OnExtractAsync = request =>
             {
                 // 每一次都回"两义"那一档（真机现场：中文 UnRAR 对每个错候选都这么报）。
@@ -386,7 +381,7 @@ namespace ArchiveFixer.Tests
             return archive;
         }
 
-        private Harness CreateHarness(IReadOnlyList<string>? passwords = null, string recursionMode = "SingleLayer")
+        private Harness CreateHarness(IReadOnlyList<string>? passwords = null)
         {
             string dataRoot = Path.Combine(_root, "data-" + Guid.NewGuid().ToString("N"));
             string outputRoot = Path.Combine(_root, "out-" + Guid.NewGuid().ToString("N"));
@@ -401,7 +396,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = recursionMode;
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
             settings.TestBeforeExtract = false;

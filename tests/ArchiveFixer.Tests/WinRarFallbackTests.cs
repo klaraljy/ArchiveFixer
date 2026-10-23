@@ -551,269 +551,10 @@ namespace ArchiveFixer.Tests
             }
         }
 
-        [WinRarFact]
-        public async Task 单层路_七Zip报密码错_换WinRAR把同一批候选再试一遍_产物落盘且继续走正常管线()
-        {
-            WinRarFixture fixture = WinRarFixture.Create(_root, FixturePassword);
-            Harness harness = CreateHarness();
 
-            string source = Path.Combine(_root, "src", "pack.zip");
-            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
-            File.Copy(fixture.ArchivePath, source);
 
-            ArchiveTask task = harness.AddTask(source);
 
-            // 候选表里就那一条真密码：假引擎每次都报密码错，于是候选循环跑完 ⇒ 该换引擎了。
-            harness.SetPasswordCandidates(FixturePassword);
 
-            OneClickOutcome outcome = await harness.RunOneClickAsync();
-
-            // ① 结论必须从「密码错误」翻成「解压成功」（这就是这次要修的那条假结论）。
-            Assert.True(
-                task.Status == StatusText.ExtractSuccess,
-                $"任务应当靠 WinRAR 兜底成功，实际状态：{task.Status} / {task.ErrorMessage}"
-                + Environment.NewLine + "日志："
-                + string.Join(Environment.NewLine, harness.Log.Logs.Select(x => x.Message)));
-            Assert.Equal(StatusText.PasswordCorrect, task.PasswordStatus);
-            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
-
-            // ② 假引擎一次都没解开过（它每次都报密码错），产物只可能来自 WinRAR。
-            Assert.All(harness.Engine.Extracted, password => Assert.Equal(FixturePassword, password));
-            Assert.True(harness.Engine.Extracted.Count > 0, "候选循环必须先真的试过一次（否则测的不是「换引擎再试」）");
-
-            // ③ 产物存在、大小对、字节逐字节相同（⛔ 不许只看退出码）。
-            //    失败时把日志一起带出来：这一档出问题要能一眼看出产物去了哪 / 被谁清了。
-            try
-            {
-                WinRarFixture.AssertProductsPublished(task.OutputPath, fixture);
-            }
-            catch (Exception ex)
-            {
-                Assert.Fail(
-                    ex.Message + Environment.NewLine + "日志："
-                    + string.Join(Environment.NewLine, harness.Log.Logs.Select(x => x.Message)));
-            }
-
-            // ④ 日志点名了两个引擎（"谁报的密码错" + "已换 WinRAR 再试一遍"），
-            //    而且**命中那一行也必须留住引擎名与版本**（脱敏器不许把它擦掉）。
-            Assert.Contains(
-                harness.Log.Logs,
-                x => x.Message.Contains("WinRAR", StringComparison.Ordinal)
-                     && x.Message.Contains("已换", StringComparison.Ordinal));
-            Assert.Contains(
-                harness.Log.Logs,
-                x => x.Message.Contains("WinRAR 兜底成功", StringComparison.Ordinal)
-                     && x.Message.Contains("用 WinRAR", StringComparison.Ordinal));
-
-            // ⑤ 源包原地不动（不变量 1：WinRAR 那条"解压后删除压缩包"的设置必须被 -cfg- 挡住）。
-            Assert.True(File.Exists(source), "兜底解压之后源包必须还在原地");
-
-            // ⑥ 后面的正常管线真的跑完了（收尾那一段也跑了：EndTime / 进度文案）。
-            Assert.NotNull(task.EndTime);
-            Assert.Equal(StatusText.ProgressCompleted, task.ProgressText);
-            Assert.Equal(0, outcome.ContinuationLayers);
-        }
-
-        [WinRarFact]
-        public async Task 单层路_候选在WinRAR上也不对时_结论照旧且如实说清换过引擎()
-        {
-            WinRarFixture fixture = WinRarFixture.Create(_root, FixturePassword);
-            Harness harness = CreateHarness();
-
-            string source = Path.Combine(_root, "src-wrongpw", "pack.zip");
-            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
-            File.Copy(fixture.ArchivePath, source);
-
-            ArchiveTask task = harness.AddTask(source);
-
-            // 候选表里**没有**那条真密码：WinRAR 也解不开 ⇒ 结论必须照旧（⛔ 不许改成"密码对"）。
-            harness.SetPasswordCandidates("wrong-one", "wrong-two");
-
-            await harness.RunOneClickAsync();
-
-            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.Contains("密码", task.Status, StringComparison.Ordinal);
-
-            // 但必须如实说清"已经换 WinRAR 再试过一遍"。
-            Assert.Contains("已换 WinRAR", task.ErrorMessage, StringComparison.Ordinal);
-            Assert.Contains(harness.Log.Logs, x => x.Message.Contains("仍然没解开", StringComparison.Ordinal));
-
-            Assert.True(File.Exists(source), "兜底失败时源包必须还在原地");
-        }
-
-        [WinRarFact]
-        public async Task 单层路_候选被每层上限截断_收尾必须点名哪几条没试到()
-        {
-            WinRarFixture fixture = WinRarFixture.Create(_root, FixturePassword);
-            Harness harness = CreateHarness(settings => settings.MaxPasswordAttemptsPerLayer = 3);
-
-            string source = Path.Combine(_root, "src-truncated", "pack.zip");
-            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
-            File.Copy(fixture.ArchivePath, source);
-
-            ArchiveTask task = harness.AddTask(source);
-
-            // 12 条候选、没有一条是对的；每层上限 3 ⇒ 第 4 条起**从没被试过**（真机那句"第 11 条从没被试过"的形状）。
-            harness.SetPasswordCandidates(
-                Enumerable.Range(1, 12).Select(index => $"wrong-{index:D2}").ToArray());
-
-            await harness.RunOneClickAsync();
-
-            // ① 结论必须是「达到密码尝试上限」（⛔ 不是"密码错误"）。
-            Assert.Equal(StatusText.PasswordAttemptLimitReached, task.Status);
-
-            // ② 收尾那行必须**点名**哪几条没试到（用既有描述器）。
-            Assert.True(
-                task.ErrorMessage.Contains("尝试密码列表第 4 项", StringComparison.Ordinal),
-                $"没点名。ErrorMessage=「{task.ErrorMessage}」；相关日志："
-                + string.Join(
-                    " ｜ ",
-                    harness.Log.Logs
-                        .Select(x => x.Message)
-                        .Where(message => message.Contains("没试到", StringComparison.Ordinal)
-                                          || message.Contains("上限", StringComparison.Ordinal))));
-
-            Assert.Contains("还有 9 条", task.ErrorMessage, StringComparison.Ordinal);
-
-            // ③ ⛔ 一个明文都不许出现（点名只走描述器）。
-            Assert.DoesNotContain("wrong-", task.ErrorMessage, StringComparison.Ordinal);
-
-            // ④ 日志那一行要说清是"每层上限卡住的"，并给出去④页调上限 / 调顺序的出口。
-            Assert.Contains(
-                harness.Log.Logs,
-                x => x.Message.Contains("每层上限 3", StringComparison.Ordinal)
-                     && x.Message.Contains("没试到", StringComparison.Ordinal));
-
-            // ⑤ 换引擎兜底照旧跑过（它试的是同一批 3 个候选），结论照旧、但要如实说清。
-            Assert.Contains("已换 WinRAR", task.ErrorMessage, StringComparison.Ordinal);
-        }
-
-        /// <summary>
-        /// **兜底那一句"命中"只说明 WinRAR 退出码 0 且产物目录里多出了东西 —— 不说明那些东西就是这一层的产物。**
-        ///
-        /// <para>所以收尾必须与候选循环里"引擎说成功也得先过校验"那一支**同一处置**：产物校验判否 ⇒
-        /// **这个候选不算数** —— ⛔ 不落「解压成功」、⛔ 不定稿发布、⛔ 不改结论（结论照旧是密码类那条）。</para>
-        ///
-        /// <para>怎么造出"兜底解出来了、但产物过不了校验"：假引擎的**清单故意把两个条目报大**
-        /// （预期 &gt; 实际 ⇒ <c>OutputVerifier</c> 的 <c>actual &gt;= expected</c> 判否），
-        /// 而 WinRAR 真能把这份夹具解开 ⇒ 兜底命中、产物真落在暂存目录里，只是对不上这一层的清单。</para>
-        ///
-        /// <para><b>红检</b>：把 <c>FinishFallbackSuccessAsync</c> 里那道
-        /// <c>stage.Verification.Verified</c> 闸门撤掉（照老口径先落成功、再发布）⇒ 本用例变红
-        /// （任务落「解压成功」、产物被搬进目标目录）。</para>
-        /// </summary>
-        [WinRarFact]
-        public async Task 单层路_兜底解出来的产物过不了校验_不算命中_不发布_结论照旧()
-        {
-            WinRarFixture fixture = WinRarFixture.Create(_root, FixturePassword);
-            Harness harness = CreateHarness();
-
-            string source = Path.Combine(_root, "src-mismatch", "pack.zip");
-            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
-            File.Copy(fixture.ArchivePath, source);
-
-            ArchiveTask task = harness.AddTask(source);
-
-            /*
-             * 清单：条目名与夹具一致（产物找得到），但**大小故意报大** ⇒ 预期 > 实际 ⇒ 校验判否。
-             * 总量刻意压在 64 MiB 以下：那是"密码探针"的门槛，这条用例不验探针那一档。
-             */
-            long inflatedSize = 8L * 1024 * 1024;
-
-            harness.Engine.ListHandler = _ => new ArchiveListResult
-            {
-                Success = true,
-                Entries = fixture.Entries
-                    .Select(entry => new ArchiveEntry
-                    {
-                        Path = "payload\\" + entry.RelativePath.Replace('/', '\\'),
-                        Size = inflatedSize
-                    })
-                    .ToList(),
-                FileCount = fixture.Entries.Count,
-                TotalUncompressedSize = inflatedSize * fixture.Entries.Count,
-                IsEncrypted = true,
-                EngineId = EngineIds.SevenZip,
-                EngineVersion = "0.0"
-            };
-
-            harness.SetPasswordCandidates(FixturePassword);
-
-            await harness.RunOneClickAsync();
-
-            // ① 结论照旧是密码类：⛔ 不许被"WinRAR 命中了"翻成「解压成功」（不变量 6）。
-            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.Contains("密码", task.Status, StringComparison.Ordinal);
-
-            // ② 一个字节都不许发布到目标目录（没定稿、没搬出去）。
-            string outputPath = task.OutputPath ?? string.Empty;
-
-            Assert.False(
-                Directory.Exists(outputPath) && Directory.EnumerateFileSystemEntries(outputPath).Any(),
-                $"兜底产物过不了校验，就不该出现在目标目录里：{outputPath}");
-
-            // ③ 源包原地不动（不变量 1）。
-            Assert.True(File.Exists(source), "兜底没算数时源包必须还在原地");
-        }
-
-        /// <summary>
-        /// **单层路同一个判据**：主引擎在这一层的候选上**写出过非零字节** ⇒ ⛔ 不换引擎再试
-        /// （两个引擎给不出可分辨的证据），结论照旧、但必须如实说明为什么（⛔ 不许静默跳过）。
-        ///
-        /// <para>假引擎在报"密码错"之前先往暂存目录里写 23 字节（真 7-Zip 用错密码解 stored 的包时
-        /// 就是这么干的）；夹具是一份 WinRAR 真解得开的包 ⇒ 闸门一旦失效，兜底当场"命中"、
-        /// 结论翻成「解压成功」、乱码被发布出去。</para>
-        ///
-        /// <para><b>红检</b>：把候选循环里那三处 <c>anyCandidateWroteBytes |= …</c> 去掉（恒 false）⇒
-        /// 本用例变红（日志里出现「已换 WinRAR」、结论不再是密码类）。</para>
-        /// </summary>
-        [WinRarFact]
-        public async Task 单层路_主引擎写出过字节_不换引擎_结论照旧且如实说明()
-        {
-            WinRarFixture fixture = WinRarFixture.Create(_root, FixturePassword);
-            Harness harness = CreateHarness();
-
-            string source = Path.Combine(_root, "src-wrote-bytes", "pack.zip");
-            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
-            File.Copy(fixture.ArchivePath, source);
-
-            ArchiveTask task = harness.AddTask(source);
-
-            harness.Engine.ListHandler = _ => WinRarFixture.CurrentListing;
-
-            harness.Engine.BeforeWrong = outputPath =>
-            {
-                if (!string.IsNullOrWhiteSpace(outputPath))
-                {
-                    Directory.CreateDirectory(outputPath);
-                    File.WriteAllBytes(Path.Combine(outputPath, "payload.bin"), new byte[23]);
-                }
-            };
-
-            // 候选表里就是那条真密码：没有这道闸门时 WinRAR 一定能解开（= 假命中）。
-            harness.SetPasswordCandidates(FixturePassword);
-
-            await harness.RunOneClickAsync();
-
-            // ① 结论照旧是密码类（⛔ 不许被"WinRAR 命中了"翻成「解压成功」）。
-            Assert.NotEqual(StatusText.ExtractSuccess, task.Status);
-            Assert.Contains("密码", task.Status, StringComparison.Ordinal);
-
-            // ② 兜底一次都不许跑（⛔ 证据分辨不出来时，一个进程都不起）。
-            Assert.DoesNotContain(
-                harness.Log.Logs,
-                x => x.Message.Contains("已换", StringComparison.Ordinal)
-                     || x.Message.Contains("WinRAR 兜底", StringComparison.Ordinal));
-
-            // ③ 但必须如实说明"为什么没换引擎"（⛔ 不许静默跳过）。
-            Assert.Contains(
-                harness.Log.Logs,
-                x => x.Message.Contains("写出过字节", StringComparison.Ordinal)
-                     && x.Message.Contains("结论照旧", StringComparison.Ordinal));
-
-            // ④ 源包原地不动（不变量 1）。
-            Assert.True(File.Exists(source), "没换引擎时源包必须还在原地");
-        }
 
         private Harness CreateHarness(Action<AppSettings>? configure = null)
         {
@@ -830,7 +571,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
@@ -1079,7 +819,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 new ArchiveTask(source),
                 output,
-                RecursionMode.AllBranches,
                 null,
                 CancellationToken.None);
 
@@ -1125,7 +864,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 new ArchiveTask(source),
                 Path.Combine(_root, "out-truncated"),
-                RecursionMode.AllBranches,
                 null,
                 CancellationToken.None);
 

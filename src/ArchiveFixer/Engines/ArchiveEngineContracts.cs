@@ -97,6 +97,9 @@ namespace ArchiveFixer.Engines
 
         public bool IsMultiVolume { get; init; }
 
+        /// <summary>引擎读到的卷号（1 起；0 = 没读到）。单卷归档也可能报 volume 1。</summary>
+        public int VolumeIndex { get; init; }
+
         /// <summary>
         /// 引擎把这一单当成**通用分片流**（7-Zip 的 <c>Type = Split</c>）而不是一个归档。
         ///

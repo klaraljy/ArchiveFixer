@@ -115,20 +115,17 @@ namespace ArchiveFixer.Tests
             Directory.CreateDirectory(_root);
             File.WriteAllText(
                 pathService.SettingsFilePath,
-                "{ \"RecursionMode\": \"SingleChain\", \"MaxRecursionDepth\": 4, " +
+                "{ \"MaxRecursionDepth\": 4, " +
                 "\"TerminalLayoutMode\": \"UseArchiveName\", \"CollapseRepeatedFolderLayer\": false }",
                 new UTF8Encoding(false));
 
             AppSettings loaded = service.Load();
 
             /*
-             * ⚠ 2026-10-14：`RecursionMode` **已按用户口径钉成 AllBranches**
-             * （「单层路已经删了、现在就是全面解压所有分路」）⇒ 老配置里存过的 SingleChain 读回来归到"展开所有分支"。
-             * 2026-10-16：`OmitMiddleContinuationLayers` 整个属性都删了（中间层一律照建），
-             * 所以这里不再有它的断言 —— 老配置里那个键读进来只会被忽略。
+             * `RecursionMode` 属性已删除；老配置里那个键读进来只会被忽略。
+             * 2026-10-16：`OmitMiddleContinuationLayers` 整个属性也删了（中间层一律照建）。
              * ⛔「层数」这一格一直都有入口，照旧不迁移（下面那行 4 就是证据）。
              */
-            Assert.Equal("AllBranches", loaded.RecursionMode);
             Assert.Equal(4, loaded.MaxRecursionDepth);
         }
 

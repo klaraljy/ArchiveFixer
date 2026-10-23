@@ -30,7 +30,13 @@ namespace ArchiveFixer.Tests
     /// 再交给"同一组"的尺子重判 ⇒ 整组凑齐 ⇒ 解开。⛔ 判据不许放宽：认不出来就要**在日志里点名**（目标 C）。</para>
     ///
     /// <para><b>红检</b>：本条现在就该红（用户现场就是这么失败的）；改好之后必须绿。</para>
+    /// <para>⚠ 2026-10-21：本类 `BuildPipeline` 会 `new MainViewModel(...)`，而它的构造**写进程级静态**
+    /// （`RecursiveExtractor.ConfiguredWorkspaceRoot = _pathService.WorkDirectory`，见 `MainViewModel.cs:424`）
+    /// ⇒ 按项目既有纪律（`InnerLayerContinuationTests` 顶部那个 CollectionDefinition 的说明）必须进
+    /// `ArchiveFixerGlobalState` 集合、与同类用例串行，否则并行时工作区根会被别的类抢走、
+    /// 落在对方马上要删掉的临时目录里（`full11` 全量里这一条偶发红过一次，单跑 10/10 绿）。</para>
     /// </summary>
+    [Collection("ArchiveFixerGlobalState")]
     public sealed class ChainInnerVolumeRestoreTests : IDisposable
     {
         private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
@@ -278,7 +284,6 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
             settings.CustomSevenZipExePath = _sevenZip!;
-            settings.RecursionMode = "AllBranches";
             settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settingsService.Save(settings);

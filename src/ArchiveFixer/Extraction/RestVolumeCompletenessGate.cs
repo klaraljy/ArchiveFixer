@@ -387,15 +387,6 @@ namespace ArchiveFixer.Extraction
             return null;
         }
 
-        /// <summary>
-        /// 这个文件名像不像"归档件"（分卷的一片 / 归档本体 / 名字被改坏的归档本体）？
-        /// 像 ⇒ 给出它的**包基名**（<c>222.z01</c> → <c>222</c>、<c>222.zscip</c> → <c>222</c>）。
-        ///
-        /// <para>⛔ 判据全部转调既有唯一出口：分卷标记 <see cref="FileNameHelper.IsVolumePartFileName"/>、
-        /// 归档后缀 <see cref="ExtensionHelper.IsKnownArchiveExtension"/>、
-        /// 去杂质 <see cref="ExtensionHelper.TryRecoverDisguisedArchiveBody"/>、基名
-        /// <see cref="FileNameHelper.GetArchiveBaseName"/> —— 这里不另写一套名字规则。</para>
-        /// </summary>
         private static bool TryGetArchivePieceBaseName(string path, out string baseName)
         {
             baseName = string.Empty;

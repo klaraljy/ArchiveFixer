@@ -326,8 +326,6 @@ namespace ArchiveFixer.Tests
             AppSettings settings = AppSettings.CreateDefault();
             settings.CustomOutputDirectory = Path.Combine(_root, "out");
             settings.ExtractToOriginalDirectory = false;
-            settings.RecursionMode = "SingleLayer";
-
             /*
              * 导入后**不要**自动扫描：这一组测的是"导入时的无用物处理"，不是识别
              * （那几个假包识别出来也不是归档）。无用物的判据不依赖识别结果 ——

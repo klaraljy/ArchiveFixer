@@ -285,7 +285,7 @@ namespace ArchiveFixer.Tests
                          "X.part3.rar删除", "X.part4.rar删除"
                      })
             {
-                Assert.Equal("X", FileNameHelper.StripVolumeMarkers(name));
+                Assert.Equal("X", FileNameHelper.SecondStepBaseName(name));
                 Assert.Equal("X", FileNameHelper.GetArchiveBaseName(name));
                 Assert.True(FileNameHelper.IsVolumePartFileName(name), name);
             }
@@ -337,8 +337,8 @@ namespace ArchiveFixer.Tests
         {
             Assert.Equal(1, VolumeGroupDetector.TryGetVolumeIndex("111.parts1.racr"));
             Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("111.part删2.ra除r"));
-            Assert.Equal("111", FileNameHelper.StripVolumeMarkers("111.parts1.rar"));
-            Assert.Equal("111", FileNameHelper.StripVolumeMarkers("111.parts1.racr"));
+            Assert.Equal("111", FileNameHelper.SecondStepBaseName("111.parts1.rar"));
+            Assert.Equal("111", FileNameHelper.SecondStepBaseName("111.parts1.racr"));
         }
 
         [Fact]
@@ -383,18 +383,18 @@ namespace ArchiveFixer.Tests
         public void 对照_普通文件名不许被剥()
         {
             // 2026-09-28 全量回归逮到的真回归：`.apk` 里那串数字不是卷号。
-            Assert.Equal("rar-android-722.132.apk", FileNameHelper.StripVolumeMarkers("rar-android-722.132.apk"));
+            Assert.Equal("rar-android-722", FileNameHelper.SecondStepBaseName("rar-android-722.132.apk"));
 
             // 本体后缀被塞垃圾（zip 族）走的是另一条路，这里不许被当成 partN。
-            Assert.Equal("222.zi删除p", FileNameHelper.StripVolumeMarkers("222.zi删除p"));
+            Assert.Equal("222", FileNameHelper.SecondStepBaseName("222.zi删除p"));
         }
 
         [Fact]
         public void 对照_数字族与标准partN照旧()
         {
-            Assert.Equal("giu910.7z", FileNameHelper.StripVolumeMarkers("giu910.7z.001删除"));
+            Assert.Equal("giu910", FileNameHelper.SecondStepBaseName("giu910.7z.001删除"));
             Assert.Equal("giu910", FileNameHelper.GetArchiveBaseName("giu910.7z.002删除"));
-            Assert.Equal("X", FileNameHelper.StripVolumeMarkers("X.part2.rar"));
+            Assert.Equal("X", FileNameHelper.SecondStepBaseName("X.part2.rar"));
             Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("X.part2.rar"));
         }
     }

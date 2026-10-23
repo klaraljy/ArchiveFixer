@@ -1674,7 +1674,6 @@ namespace ArchiveFixer.Tests
              * 那个档位已按用户最终设计删除。⛔ 用 `MaxRecursionDepth = 1` 顶替**不等价**（实测打红），
              * 已撤回；留待"只解一层这件事现在该怎么表达"定了再重写。
              */
-            settings.RecursionMode = "SingleLayer";
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
 
             if (customOutput)

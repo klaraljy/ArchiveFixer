@@ -511,7 +511,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);

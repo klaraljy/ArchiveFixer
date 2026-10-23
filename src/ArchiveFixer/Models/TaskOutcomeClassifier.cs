@@ -150,7 +150,33 @@ namespace ArchiveFixer.Models
                      */
                     if (producedAnyLayerOutput)
                     {
-                        status = StatusText.PartiallyCompleted;
+                        /*
+                         * 产物越界 / 危险条目（不变量 4）：**解出来的东西不承认**，哪怕解出了一部分
+                         * 也必须是「解压失败」——⛔ 不许落「部分完成」（那会让用户以为产物可用）。
+                         */
+                        if (stopReason == RecursionStopReason.UnsafeEntry)
+                        {
+                            status = StatusText.ExtractFailed;
+                            outcome = TaskOutcome.Failed;
+                            return true;
+                        }
+
+                        /*
+                         * ⚠ 2026-10-23：**状态写具体原因、终态按"有内容物 ⇒ 部分完成"**。
+                         * 老写法把状态一律折成「部分完成」，于是"密码已经证实、坏的是数据"那一档
+                         * 在页面上变成「部分完成」——用户看不到"文件损坏"这条唯一能行动的结论
+                         * （`ExtractionPipelineFixTests.解出了大半个包…` 钉的就是这一格）。
+                         */
+                        status = stopReason switch
+                        {
+                            RecursionStopReason.Corrupted => StatusText.Corrupted,
+                            RecursionStopReason.PasswordOrCorrupted => StatusText.PasswordOrCorrupted,
+                            RecursionStopReason.WrongPassword => StatusText.WrongPassword,
+                            RecursionStopReason.PasswordAttemptsExceeded => StatusText.PasswordAttemptLimitReached,
+                            RecursionStopReason.EncryptedHeaders => StatusText.EncryptedHeaders,
+                            _ => StatusText.PartiallyCompleted
+                        };
+
                         outcome = FromProducedContent(producedContent: true);
                         return true;
                     }

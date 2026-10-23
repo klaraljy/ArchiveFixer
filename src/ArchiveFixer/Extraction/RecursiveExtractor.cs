@@ -15,28 +15,6 @@ using System.Threading.Tasks;
 namespace ArchiveFixer.Extraction
 {
     /// <summary>
-    /// 递归展开策略（设计.md §十–§十四、AGENTS.md §6 第 8 条：硬上限一条都不能少）。
-    ///
-    /// <para>⚠ 2026-10-04（用户当场推翻旧口径）：出厂默认 = <see cref="AllBranches"/> ——
-    /// "有压缩包就解压"。旧口径的"多分支默认不展开、必须问"只留在
-    /// <see cref="SingleChain"/> 这一档里（用户显式选了它才生效）。</para>
-    /// </summary>
-    public enum RecursionMode
-    {
-        /// <summary>只解当前这一层，不看里面还有什么。</summary>
-        SingleLayer,
-
-        /// <summary>
-        /// 只跟一条链：一层里**只有 1 个真归档**时才自动继续（旁边是什么文件都不影响）；
-        /// 出现 **≥2 个**真归档就停下来等用户拍板，绝不替他决定。
-        /// </summary>
-        SingleChain,
-
-        /// <summary>展开所有内层归档（**出厂默认**，用户 2026-10-04 拍板），仍受全部上限约束。</summary>
-        AllBranches
-    }
-
-    /// <summary>
     /// 递归的硬上限（AGENTS.md §6 第 8 条：层数 / 文件数 / 总大小 / 展开比 / 密码尝试次数）。
     ///
     /// 这些值是"安全阀"而不是"性能参数"：命中任何一个都必须**停下并报告**，
@@ -63,6 +41,15 @@ namespace ArchiveFixer.Extraction
         /// ⛔ 不许在这里再拼一句。</para>
         /// </summary>
         public long MaxSingleFileSize { get; init; } = 64L * 1024 * 1024 * 1024;
+
+        /// <summary>
+        /// 空间不足模式：成功收尾时把**最深一层的过程物**留到最终输出目录，
+        /// 让失败时至少还有一份已解出的现场。默认 false。
+        /// </summary>
+        public bool KeepDeepestProcessArtifact { get; init; }
+
+        /// <summary>空间不足模式：最外层源包在它自己那一层成功后立刻回收。</summary>
+        public bool ReclaimRootSourceAfterSuccess { get; init; }
 
         /// <summary>
         /// 单层展开比上限：该层解压后总大小 / 该层归档文件大小。
@@ -116,6 +103,16 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public int TriedCandidateCount { get; init; }
 
+        /// <summary>
+        /// **这一层停手是因为「连续两个候选解出来的产物完全相同」**（换密码不会改变结果）。
+        ///
+        /// <para>事实来源 = 候选循环里那两处比较（错密码那一支按"产物文件数 + 字节数"比，
+        /// 「引擎说成功但产物没通过校验」那一支按校验结果比），经 <c>WorkItem</c> 带到本报告；
+        /// 协调器据此把「连续两个候选解出来的产物完全相同」补进失败原因 —— 与单层路
+        /// （<c>ExtractionCoordinator</c> 的 <c>passwordIrrelevantReason</c>）同一个口径。</para>
+        /// </summary>
+        public bool CandidatesProducedIdenticalResults { get; init; }
+
 
         /// <summary>本层的产物目录（工作区里的 layer-XXX\output）。</summary>
         public string OutputPath { get; init; } = string.Empty;
@@ -126,6 +123,12 @@ namespace ArchiveFixer.Extraction
         public string Status { get; init; } = string.Empty;
 
         public string Message { get; init; } = string.Empty;
+
+        /// <summary>
+        /// 这一层是不是"产物越出本层产物目录"（不变量 4 的第二道防线）。
+        /// 结构化事实：调用方据此写自己的措辞，⛔ 不用去比 Message 里的中文。
+        /// </summary>
+        public bool LandingViolation { get; init; }
 
         /// <summary>本层产物里探测到的内层归档（完整路径）。</summary>
         public IReadOnlyList<string> InnerArchives { get; init; } = Array.Empty<string>();
@@ -220,6 +223,9 @@ namespace ArchiveFixer.Extraction
         /// "工作区里的东西不算"同一条道理；⛔ 只排除这一棵，别的照旧一律算）。</para>
         /// </summary>
         public string WorkspaceTaskDirectory { get; init; } = string.Empty;
+
+        /// <summary>这一份是用户最外层源包（空间不足模式允许它在该层成功后立刻删）。</summary>
+        public bool IsRootSource { get; init; }
     }
 
     /// <summary>
@@ -391,6 +397,9 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         public IReadOnlyList<string> UnresolvedVolumePieces { get; init; } = Array.Empty<string>();
 
+        /// <summary>停下时分卷片的完整事实（路径/卡/物理身份/大小）；建组用。</summary>
+        public IReadOnlyList<VolumePieceFact> UnresolvedPieceFacts { get; init; } = Array.Empty<VolumePieceFact>();
+
         /// <summary>一行中文结论，直接显示给用户。</summary>
         public string Summary { get; init; } = string.Empty;
 
@@ -491,6 +500,16 @@ namespace ArchiveFixer.Extraction
         /// 得保证这个委托本身线程安全（<c>MainViewModel.AppendLog</c> 走 BeginInvoke，是安全的）。
         /// </summary>
         private readonly Action<string, string>? _log;
+
+        /// <summary>
+        /// **先测试再解压**（<c>Settings.TestBeforeExtract</c>，用户 2026-09-27 第 37 条）：
+        /// 每个密码候选先让引擎只测试、通过了才真解压。
+        ///
+        /// <para>用途 = 把这条**旧单层路的能力**接进递归核心（迁移成"普通任务全递归"后它整条丢了，
+        /// 运行期实测 `测试调用 0 次 / 解压调用 3 次`）。默认 <c>false</c> ⇒ 行为与接入之前逐字相同；
+        /// 由协调器每次任务现建实例时从设置里取。</para>
+        /// </summary>
+        public bool TestBeforeExtract { get; set; }
 
         /// <summary>
         /// **本实例自己持有的**本次（最近一次）运行的工作区。
@@ -653,6 +672,8 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private readonly List<string> _unresolvedVolumePieces = new();
 
+        private readonly List<VolumePieceFact> _unresolvedPieceFacts = new();
+
         /// <summary>
         /// **这一趟打不开的那几片，抢救到哪个目录**（调用方在跑之前给；⛔ 空 = 不抢救）。
         ///
@@ -717,6 +738,28 @@ namespace ArchiveFixer.Extraction
             }
 
             _unresolvedVolumePieces.Add(path!);
+
+            try
+            {
+                if (File.Exists(path))
+                {
+                    FileNatureCard card = FileNature.Inspect(path!);
+                    FileIdentity.TryGetIdentity(path!, out ulong volumeSerial, out ulong fileIndex);
+
+                    _unresolvedPieceFacts.Add(new VolumePieceFact
+                    {
+                        Path = path!,
+                        Card = card,
+                        Size = new FileInfo(path!).Length,
+                        VolumeSerial = volumeSerial,
+                        FileIndex = fileIndex
+                    });
+                }
+            }
+            catch
+            {
+                // 片事实读不出就不登记；路径账仍然保留。
+            }
         }
 
         /// <summary>
@@ -917,6 +960,19 @@ namespace ArchiveFixer.Extraction
         internal Action<string>? DangerousEntriesReported { get; set; }
 
         /// <summary>
+        /// **这一片要不要交给本单的递归去解**（可空；由调用方回答）。
+        ///
+        /// <para>参数 = 这一层产物里那个"看起来是归档"的路径；返回 true ⇒ **不排进本单递归**
+        /// （只留名，交给这一组的入口那一单）。返回 false / 没注入 ⇒ 照旧排进去。</para>
+        ///
+        /// <para>为什么由调用方回答（2026-10-22，`24242424` 现场）：判据要读**组事实**
+        /// （`VolumeGroupUnit` 的入口包 / 本批已经开过这一组的那一单）——那本账只有协调器有，
+        /// 递归核心不认识它。运行期现场：三个外层包的递归各自把同一片当内层包排了队，
+        /// 谁先凑齐兄弟卷谁就把整组开出来 ⇒ 同一组解多遍 ⇒ 盘上两份内容物。</para>
+        /// </summary>
+        internal Func<string, bool>? ShouldStopAtVolumeGroupMember { get; set; }
+
+        /// <summary>
         /// 要不要统计可疑条目（⑥设置 →「可疑条目提示」，默认开）。
         ///
         /// <para>注入方式照 <see cref="VerboseLog"/>：由调用方按设置当场赋值（改完设置不重启也要生效）。
@@ -978,7 +1034,6 @@ namespace ArchiveFixer.Extraction
         public async Task<RecursionResult> ExtractAsync(
             ArchiveTask task,
             string finalOutputDirectory,
-            RecursionMode mode,
             RecursionDecisionRequest? previousDecision = null,
             CancellationToken cancellationToken = default,
             IProgress<ArchiveProgress>? progress = null,
@@ -1002,6 +1057,7 @@ namespace ArchiveFixer.Extraction
             _crossBoundaryLinks.Clear();
             _consumedVolumeSources.Clear();
             _unresolvedVolumePieces.Clear();
+            _unresolvedPieceFacts.Clear();
 
             /*
              * 换引擎兜底那句结论也**每次运行从零开始**：同一个实例可能被同一个包的续跑复用
@@ -1260,8 +1316,81 @@ namespace ArchiveFixer.Extraction
                                 ReclaimedProcessArtifacts.Add(groupFile);
                             }
 
+                            if (_limits.KeepDeepestProcessArtifact
+                                && outcome.Report is { InnerArchives.Count: 0 })
+                            {
+                                string? outputRoot = ResolveWorkspaceOutputRoot(workspace.RootDirectory);
+
+                                if (!string.IsNullOrWhiteSpace(outputRoot) && Directory.Exists(outputRoot))
+                                {
+                                    foreach (string groupFile in reclaimRequest.GroupFiles)
+                                    {
+                                        if (!File.Exists(groupFile))
+                                        {
+                                            continue;
+                                        }
+
+                                        string? retainedRoot = ResolveRetainedArtifactRoot(outputRoot);
+
+                                        if (string.IsNullOrWhiteSpace(retainedRoot))
+                                        {
+                                            continue;
+                                        }
+
+                                        string retained = Path.Combine(
+                                            retainedRoot,
+                                            "其余物",
+                                            Path.GetFileName(groupFile));
+
+                                        Directory.CreateDirectory(Path.GetDirectoryName(retained)!);
+
+                                        if (!File.Exists(retained))
+                                        {
+                                            try
+                                            {
+                                                File.Copy(groupFile, retained, overwrite: false);
+                                            }
+                                            catch
+                                            {
+                                                // 留不下就按原逻辑继续。
+                                            }
+                                        }
+                                    }
+                                }
+
+                                continue;
+                            }
+
                             LayerReclaim(reclaimRequest);
                         }
+                    }
+
+                    if (item.IsRoot
+                        && _limits.ReclaimRootSourceAfterSuccess
+                        && LayerReclaim != null
+                        && outcome.Report != null)
+                    {
+                        RecursiveLayerReclaimRequest rootRequest = BuildLayerReclaim(
+                            item,
+                            item.ArchivePath,
+                            workspace,
+                            outcome.Report);
+
+                        var flaggedRootRequest = new RecursiveLayerReclaimRequest
+                        {
+                            ChildLayerLabel = rootRequest.ChildLayerLabel,
+                            GroupFiles = rootRequest.GroupFiles,
+                            Verdict = rootRequest.Verdict,
+                            WorkspaceTaskDirectory = rootRequest.WorkspaceTaskDirectory,
+                            IsRootSource = true
+                        };
+
+                        foreach (string groupFile in flaggedRootRequest.GroupFiles)
+                        {
+                            ReclaimedProcessArtifacts.Add(groupFile);
+                        }
+
+                        LayerReclaim(flaggedRootRequest);
                     }
 
                     RecursionLayerReport report = outcome.Report!;
@@ -1278,7 +1407,6 @@ namespace ArchiveFixer.Extraction
                             item,
                             report,
                             workspace,
-                            mode,
                             enqueueState,
                             out RecursionDecisionRequest? askUser,
                             out RecursionStopReason enqueueStopReason))
@@ -1515,6 +1643,7 @@ namespace ArchiveFixer.Extraction
              * 于是结论与日志同时保留两种可能，⛔ 不会退化成一句"文件损坏"或"密码错误"。
              */
             ArchiveOperationResult? ambiguousPasswordFailure = null;
+
 
             /*
              * 本层的清单（L3 的预期，见 <see cref="RecursionLayerReport.Manifest"/>）：
@@ -2055,6 +2184,9 @@ namespace ArchiveFixer.Extraction
                  */
                 triedCandidates.Add(candidate);
 
+                // 试过几个候选是**事实**：失败/撞上限那几条路也要带上（协调器据此把"已试 N 个候选"写进结论）。
+                item.TriedCandidateCount = triedCandidates.Count;
+
                 /*
                  * ===== 先只解最小的那个条目（探针），再解整包 =====
                  *
@@ -2124,6 +2256,59 @@ namespace ArchiveFixer.Extraction
                         ordinal,
                         layerCandidateLimit,
                         described));
+
+                /*
+                 * ===== 「先测试再解压」（`Settings.TestBeforeExtract`，用户 2026-09-27 第 37 条）=====
+                 *
+                 * 每个候选先让引擎**只测试**、通过了才真解压。旧单层路有这一段，迁移成
+                 * "普通任务全递归"之后**整条丢了**（运行期实测
+                 * `ExtractionPipelineFixTests.先测试再解压_两义档要继续试下一个候选…`：
+                 * `测试调用 0 次 / 解压调用 3 次` ⇒ 用户开了那个设置根本不生效）。
+                 * ⛔ 判据与处置与单层路那一段**逐字同一条**（`ExtractionCoordinator` 的 pre-test 循环）。
+                 */
+                if (TestBeforeExtract)
+                {
+                    ArchiveOperationResult preTest = await _engine
+                        .TestAsync(ArchiveRequest.For(archivePath, candidate), cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (!preTest.Success)
+                    {
+                        lastFailure = preTest;
+
+                        if (preTest.IsWrongPassword || preTest.IsNeedPassword)
+                        {
+                            Log("INFO", $"{layerLabel}：解压前测试 —— 这个密码候选不对，继续试下一个。");
+                            continue;
+                        }
+
+                        /*
+                         * 两义那一档（引擎自己说"可能密码不对、也可能数据坏了"）：与上面候选循环同一条
+                         * 处置 —— **继续试下一个候选**，并把"两种可能"记下来当收尾结论
+                         * （⛔ 不替引擎挑一个）。
+                         */
+                        if (preTest.IsPasswordOrCorrupted)
+                        {
+                            ambiguousPasswordFailure ??= preTest;
+
+                            Log(
+                                "WARN",
+                                string.Format(
+                                    System.Globalization.CultureInfo.CurrentCulture,
+                                    StatusText.CandidatePasswordOrCorruptedLogFormat,
+                                    layerLabel));
+
+                            continue;
+                        }
+
+                        // 其余（权限 / 引擎不可用 / 不支持 …）：换密码解决不了，停下并原样上报。
+                        Log("ERROR", $"{layerLabel}：解压前测试没过：{PasswordMasker.Sanitize(preTest.Message)}");
+
+                        return LayerOutcome.Stop(
+                            BuildLayerReport(item, preTest, succeededPassword: null),
+                            RecursionStopReason.EngineFailed);
+                    }
+                }
 
                 TryResetLayerOutputDirectory(item.Layer.OutputPath);
 
@@ -2197,8 +2382,34 @@ namespace ArchiveFixer.Extraction
                         candidateVerification.ActualTotalSize > 0
                         && listedThisCandidate is { Success: true, IsEncrypted: false };
 
+                    /*
+                     * ===== 「连续两个候选的结果完全相同」也要在**这一支**生效（2026-10-21）=====
+                     *
+                     * 用户 2026-09-27 的口径是"结果不变 ⇒ 不许再烧候选"，它并不区分引擎怎么说：
+                     * 错密码那一支早就有（见上面候选循环里那条 WARN），而"引擎说成功、产物却没对上清单"
+                     * 这一支一直没有 ⇒ 实测 `ExtractionPipelineFixTests.连续两个候选结果完全相同_不再试第三个`
+                     * 把 4 个候选全烧了一遍（`Expected: 2 / Actual: 4`）。
+                     *
+                     * 判据只用事实：两次校验的**文件数 + 字节数**相同、而且真的解出了字节（0 字节桩那一档
+                     * 必须继续试下一个 —— 正确密码可能就在后面，既有守门
+                     * `OutputVerificationGateTests.第一个候选产出0字节_第二个候选正确_…` 钉着它）。
+                     */
+                    bool sameVerifiedResultAsPrevious =
+                        !productsVerified
+                        && candidateVerification.ActualTotalSize > 0
+                        && item.LastVerifiedCandidateFileCount >= 0
+                        && item.LastVerifiedCandidateFileCount == candidateVerification.ActualFileCount
+                        && item.LastVerifiedCandidateBytes == candidateVerification.ActualTotalSize;
+
+                    if (!productsVerified)
+                    {
+                        item.LastVerifiedCandidateFileCount = candidateVerification.ActualFileCount;
+                        item.LastVerifiedCandidateBytes = candidateVerification.ActualTotalSize;
+                    }
+
                     bool keepProductsForFailureVerdict =
                         listingSaysNoEncryption
+                        || sameVerifiedResultAsPrevious
                         || FindLandingViolation(item.Layer.OutputPath) != null
                         // ⚠ `lastConsumedCandidateIndex` 是**0 起**的下标（初值 -1，每进一次循环 +1）⇒
                         // "这一条就是最后一个" = `>= candidates.Count - 1`。
@@ -2208,6 +2419,17 @@ namespace ArchiveFixer.Extraction
                         // （逐字 `Expected: "解压失败" / Actual: "密码错误"`）。
                         || lastConsumedCandidateIndex >= candidates.Count - 1
                         || attempts >= _limits.MaxPasswordAttemptsPerLayer;
+
+                    if (sameVerifiedResultAsPrevious)
+                    {
+                        item.CandidatesProducedIdenticalResults = true;
+
+                        Log(
+                            "WARN",
+                            $"{layerLabel}：连续两个候选解出来的产物完全相同（{candidateVerification.ActualFileCount} 个文件 / "
+                            + $"{candidateVerification.ActualTotalSize} 字节）"
+                            + " —— 换密码不会改变结果，不再试后面的候选。");
+                    }
 
                     if (!productsVerified && !keepProductsForFailureVerdict)
                     {
@@ -2466,6 +2688,14 @@ namespace ArchiveFixer.Extraction
                 // 需要密码 / 密码错误 → 这个候选没用了，试下一个。
                 if (result.IsWrongPassword || result.IsNeedPassword)
                 {
+                    /*
+                     * ⛔ **错密码这一支不做"结果相同 ⇒ 提前停"**（2026-10-21 全量当场逮到）：
+                     * 加密包的错密码也会在产物目录里留下**一模一样的半截数据**，而正确的密码
+                     * 排在后面时它产出的东西完全不同 —— 实测 `Item45LogAndPasswordTests.真7z_先试错两个候选再成功_成功档照样只留一行`
+                     * 因此从 Succeeded 变成 Failed（候选 3 才是对的那一个，循环在候选 2 就停了）。
+                     * "结果相同 ⇒ 换密码没用"这条只对**引擎已经接受密码**那一支成立
+                     * （见下面"引擎说成功但产物没通过校验"那一档），错密码这一支照老口径试完。
+                     */
                     Log(
                         "INFO",
                         string.Format(
@@ -2921,7 +3151,7 @@ namespace ArchiveFixer.Extraction
 
         /// <summary>
         /// 同一层里还有**名字**属于同一组的东西吗（⛔ 不看内容 —— 用法见
-        /// <see cref="IsPieceOfIncompleteGroup"/> 的 <c>requireNothingElseBeside</c> 说明）？
+        /// <see cref="IsPieceOfIncompleteGroup"/> 里那条"片都在、只是名字都坏了"的闸门）？
         /// 判不出 ⇒ true（不抢结论）。
         /// </summary>
         private static bool HasSameGroupNeighbourByName(string piecePath)
@@ -3048,24 +3278,36 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>⛔ 判据**没有放宽到"判不出"**：`Membership == Unknown` 照旧按名字那一半判，
         /// 名字也不像 ⇒ 走引擎给的那一档；`ProvablyNotVolumeMember`（可证不是分卷成员）更是明确排除。</para>
-        /// </summary>
-        /// <param name="requireNothingElseBeside">
-        /// **只给单层路那两个调用点用**（2026-10-13）：那一档在落"缺卷"之前还要求
-        /// 「同层里没有别的**名字**也属于这一组的东西」。
         ///
-        /// <para><b>为什么要这一条</b>（守门用例实测逐字）：`EncryptedVolumePipelineTests` 那两条把
-        /// **三片都放在同一层**（7z 造的 ZIP 分卷、每片名字缀「删除」）。本机用 7z 复刻同一形状 +
+        /// <para>⛔ <b>落"缺卷"之前先过一道闸：同一层里还有没有别的<b>名字</b>属于这一组的东西</b>
+        /// （唯一出口 <see cref="HasSameGroupNeighbourByName"/>）。</para>
+        ///
+        /// <para><b>为什么这一条对两条路都必须有</b>（守门用例实测逐字）：`EncryptedVolumePipelineTests`
+        /// 那两条把**三片都放在同一层**（7z 造的 ZIP 分卷、每片名字缀「删除」）。本机用 7z 复刻同一形状 +
         /// `volinfo` 探针实测逐字：第一片是 `格式=Zip 分卷身份=VolumeMember 卷号=判不出`，
         /// **另外两片内容里一点证据都没有**（`格式=Unknown 分卷身份=Unknown` —— 中间片本来就没有魔数）
         /// ⇒ "旁边还有同族成员"那条**内容**否决对它们等于瞎的；而**名字**那把尺子看得见
         /// （探针逐字：`enc.zip.002删除` ⇒ `名字：卷号=2 … 基名=enc`）。
-        /// 缺了它，单层路会把"片都在、只是名字都坏了"错判成「缺卷」⇒ 两条既有守门当场红
-        /// （`Expected: "密码错误" Actual: "分卷缺失"`）。
-        /// ⛔ 递归路那三处**不用**这一条（它们的判据已经过环台验证，一个字都不动）。</para>
-        /// </param>
+        /// 缺了它，会把"片都在、只是名字都坏了"错判成「缺卷」⇒ 两条既有守门当场红
+        /// （`Expected: "密码错误" Actual: "分卷缺失"`）。</para>
+        ///
+        /// <para>⚠ 2026-10-21：这一条原来**只给单层路**那两个调用点（参数 `requireNothingElseBeside`），
+        /// 迁移成"普通任务全递归"之后同一个形状改由**递归路**遇到 ⇒ 运行期复现
+        /// （夹具 `dbg-a9668697`：`enc.zip.001` 是完整一组的第一片、密码错误）被测成「分卷缺失」。
+        /// ⇒ 参数删掉、两条路共用同一条闸门（⛔ 不再按"哪条路"分档）。</para>
+        /// </summary>
         internal static bool IsPieceOfIncompleteGroup(string archivePath, bool requireNothingElseBeside = false)
         {
             if (string.IsNullOrWhiteSpace(archivePath))
+            {
+                return false;
+            }
+
+            /*
+             * 单层路那一档多一条闸门：**同层里不许还有别的"属于这一组"的东西**
+             * （三片同层、只是名字都坏了 ⇒ 那不是"入口不在旁边"，是这一组齐了/在尝试拼）。
+             */
+            if (requireNothingElseBeside && HasSameGroupNeighbourByName(archivePath))
             {
                 return false;
             }
@@ -3104,7 +3346,7 @@ namespace ArchiveFixer.Extraction
                 && card.HasZipLocalHeader
                 && !card.HasZipEndRecord
                 && !IsGroupEntryPresentBeside(archivePath)
-                && !(requireNothingElseBeside && HasSameGroupNeighbourByName(archivePath)))
+                && !HasSameGroupNeighbourByName(archivePath))
             {
                 return true;
             }
@@ -3132,13 +3374,12 @@ namespace ArchiveFixer.Extraction
                  *
                  * <para>⇒ 判据：**卡上说"我是这一组的第一片"就当真**（`BodyKind == VolumeFirstPiece`），
                  * 结论是**缺卷**（⛔ 不是「损坏」、⛔ 不是「失败」）。
-                 * ⚠ 单层路那两处（<c>requireNothingElseBeside: true</c>）**照旧先过"同层里还有没有同组的东西"那道闸**
-                 * —— 实测 `EncryptedVolumePipelineTests.加密的RAR4三卷_名字被改烂…` 就是这一档：
-                 * 三片都在同一层、只是名字都坏了，引擎其实解得开 ⇒ 这一档必须**不抢结论**（先让引擎去解）。
-                 * 递归路那三处（默认 false）不看那道闸，与既有三档同一条纪律。</para>
+                 * ⚠ 先过"同层里还有没有同组的东西"那道闸 —— 实测 `EncryptedVolumePipelineTests.加密的RAR4三卷_名字被改烂…`
+                 * 就是这一档：三片都在同一层、只是名字都坏了，引擎其实解得开 ⇒ 这一档必须**不抢结论**（先让引擎去解）。
+                 * ⚠ 2026-10-21：这道闸现在**两条路共用**（参数 `requireNothingElseBeside` 已删，见方法说明）。</para>
                  */
                 if (Detection.VolumePieceFacts.CardSaysItIsOneOfTheGroup(card)
-                    && !(requireNothingElseBeside && HasSameGroupNeighbourByName(archivePath)))
+                    && !HasSameGroupNeighbourByName(archivePath))
                 {
                     /*
                      * ⚠ 2026-10-14 同一类的**第二句**也补上：`VolumePiece` = 卡上写着"我是这一组的一片、
@@ -3172,7 +3413,7 @@ namespace ArchiveFixer.Extraction
                 return true;
             }
 
-            if (requireNothingElseBeside && HasSameGroupNeighbourByName(archivePath))
+            if (HasSameGroupNeighbourByName(archivePath))
             {
                 // 同层里还有"名字也属于这一组"的东西 ⇒ 可能是"片都在、只是名字都坏了" ⇒ 不抢结论。
                 return false;
@@ -3274,6 +3515,7 @@ namespace ArchiveFixer.Extraction
                     OutputPath = item.Layer.OutputPath,
                     Success = false,
                     Status = StatusText.ExtractFailed,
+                    LandingViolation = true,
                     Message = "产物越出本层产物目录 —— 按既定口径整包判定失败（不归集产物、不处理源包、其余物不生成）：" +
                               landingViolation +
                               "。⚠ 解压是外部引擎进程写的盘，越界的那一次写入拦不住；本层产物留在工作区、未发布。",
@@ -3298,6 +3540,7 @@ namespace ArchiveFixer.Extraction
                 ArchivePath = item.ArchivePath,
                 ListingSaidNoEncryption = item.ListingSaidNoEncryption,
                 TriedCandidateCount = item.TriedCandidateCount,
+                CandidatesProducedIdenticalResults = item.CandidatesProducedIdenticalResults,
                 OutputPath = item.Layer.OutputPath,
                 Success = true,
 
@@ -3535,7 +3778,7 @@ namespace ArchiveFixer.Extraction
 
             try
             {
-                EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(item.ArchivePath);
+                EmbeddedArchiveInfo info = DetectEmbeddedArchive(item.ArchivePath);
 
                 if (!info.Found || info.IsVolumePart || info.Offset <= 0)
                 {
@@ -3681,6 +3924,64 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
+        /// **双面文件/媒体前缀的统一读法**（用户 2026-10-22 口径：7z、RAR 要和 ZIP 一样）。
+        ///
+        /// <para>先问既有那份唯一实现（ZIP 的 <see cref="EmbeddedArchiveDetector"/>，EOCD 偏移自洽）；
+        /// 它判不出时再问 <see cref="EmbeddedArchiveLocator"/>（7z 两段 CRC / RAR4 主头 CRC + 媒体锚点）。
+        /// 命中就**合成同一份 <see cref="EmbeddedArchiveInfo"/>**，于是"抠副本 + 重跑引擎"那条既有执行体
+        /// 一行都不用改（⛔ 不另写第二套抠取/重试）。</para>
+        /// </summary>
+        private static EmbeddedArchiveInfo DetectEmbeddedArchive(string archivePath)
+        {
+            EmbeddedArchiveInfo zip = EmbeddedArchiveDetector.Detect(archivePath);
+
+            if (zip.Found)
+            {
+                return zip;
+            }
+
+            if (EmbeddedArchiveLocator.TryLocate(archivePath) is not { } hit)
+            {
+                return zip;
+            }
+
+            long fileLength;
+
+            try
+            {
+                fileLength = new FileInfo(archivePath).Length;
+            }
+            catch
+            {
+                return zip;
+            }
+
+            long end = hit.Length > 0 ? Math.Min(hit.Offset + hit.Length, fileLength) : fileLength;
+
+            if (hit.Offset <= 0 || end <= hit.Offset)
+            {
+                return zip;
+            }
+
+            string extension = hit.Format switch
+            {
+                VolumeContentFormat.SevenZip => ".7z",
+                VolumeContentFormat.Rar => ".rar",
+                _ => ".zip"
+            };
+
+            return new EmbeddedArchiveInfo
+            {
+                Found = true,
+                Offset = hit.Offset,
+                ArchiveEnd = end,
+                ArchiveLength = end - hit.Offset,
+                Format = extension == ".7z" ? "7Z" : extension == ".rar" ? "RAR" : "ZIP",
+                SuggestedExtension = extension,
+                Message = hit.Evidence
+            };
+        }
+        /// <summary>
         /// 只读判据：这个文件是不是「双面文件」（尾部藏着**自洽的** ZIP，而且不是跨盘 ZIP 的末片）。
         ///
         /// <para>与补救那一处**同一个检测器**（<see cref="EmbeddedArchiveDetector"/>，⛔ 不另写一份判据）；
@@ -3688,7 +3989,7 @@ namespace ArchiveFixer.Extraction
         /// </summary>
         private static bool IsDoubleFacedEmbeddedArchive(string archivePath)
         {
-            EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(archivePath);
+            EmbeddedArchiveInfo info = DetectEmbeddedArchive(archivePath);
 
             return info.Found && !info.IsVolumePart && info.Offset > 0;
         }
@@ -3719,7 +4020,7 @@ namespace ArchiveFixer.Extraction
         {
             string layerLabel = DescribeProbeLabel(item);
 
-            EmbeddedArchiveInfo info = EmbeddedArchiveDetector.Detect(item.ArchivePath);
+            EmbeddedArchiveInfo info = DetectEmbeddedArchive(item.ArchivePath);
 
             /*
              * 不是双面文件 ⇒ 什么都不做。
@@ -4186,6 +4487,7 @@ namespace ArchiveFixer.Extraction
                 return RecursionStopReason.WrongPassword;
             }
 
+
             // 候选还有剩、却因为上限停手 —— 这才是"达到密码尝试上限"。
             if (candidateCount > attempts)
             {
@@ -4309,9 +4611,21 @@ namespace ArchiveFixer.Extraction
                         continue;
                     }
 
-                    bool isArchive = await _prober
-                        .IsArchiveAsync(entry, cancellationToken)
-                        .ConfigureAwait(false);
+                    /*
+                     * ⛔ **第一大步闸门 = 读底层那张卡，不看"引擎认不认"**（用户 2026-10-22 口径：
+                     * 「不能仅仅靠引擎能不能反应，而是要靠底层识别的情况」；「闸门留下的是单一完整压缩包，
+                     * 其余的非单一压缩包留给第二大步」）。
+                     *
+                     * <para>判据唯一出口 = `FileNature.Inspect` 的 `BodyKind`：
+                     * 只有 `SingleComplete`（含媒体前缀、含"头完好的损坏包"）才收进续解；
+                     * `VolumeFirstPiece` / `VolumePiece` / `Unknown`（7z 中间片、ZIP 中间片、RAR5 加密头、
+                     * 头坏/截断）一律**不收** —— 它们通过闸门、原地不动，是第二大步的原包。</para>
+                     *
+                     * <para>⚠ 这里**不再调 `_prober.IsArchiveAsync`**：那个判据问的是"魔数认不认得出归档格式"，
+                     * 分卷片同样认得出 ⇒ 第一大步会越界把整组开掉（实测 `24242424` 两份内容物的机制）。</para>
+                     */
+                    FileNatureCard nature = FileNature.Inspect(entry);
+                    bool isSingleComplete = nature.BodyKind == ArchiveBodyKind.SingleComplete;
 
                     /*
                      * ⛔ **真正的 APK 不当"内层包"**（用户 2026-10-10 拍板：「禁止解压真正的 apk 文件，
@@ -4326,7 +4640,7 @@ namespace ArchiveFixer.Extraction
                      * 三条路的另外两处：单层入口 `ExtractSingleTaskAsync` 开头、一键处理的产物扫描
                      * （`OneClickCoordinator`）。
                      */
-                    if (isArchive && !AndroidPackageDetector.IsAndroidPackage(entry))
+                    if (isSingleComplete && !AndroidPackageDetector.IsAndroidPackage(entry))
                     {
                         found.Add(entry);
                     }
@@ -4435,7 +4749,6 @@ namespace ArchiveFixer.Extraction
             WorkItem item,
             RecursionLayerReport report,
             ExtractionWorkspace workspace,
-            RecursionMode mode,
             EnqueueState state,
             out RecursionDecisionRequest? decision,
             out RecursionStopReason stopReason)
@@ -4451,18 +4764,18 @@ namespace ArchiveFixer.Extraction
                 return true;
             }
 
-            if (mode == RecursionMode.SingleLayer)
-            {
-                /*
-                 * 只解当前这一层：里面的归档原样留着，用户想展开再单独发起。
-                 *
-                 * 这一条必须排在数量上限之前 —— 单层模式根本不继续，"里面有几个内层归档"对结论
-                 * 没有任何影响，在这里报 TooManyInnerArchives 只会给出一个与用户选择无关的停因。
-                 */
-                return true;
-            }
-
             List<string> toProcess = innerArchives.ToList();
+
+            /*
+             * ⛔ **不是这一组的开启者，就不许在本单的递归里开它**（2026-10-22，`24242424` 现场）：
+             * 判据由调用方给（组事实 + 本批已开者账）。没注入 ⇒ 一个字不改。
+             */
+            if (ShouldStopAtVolumeGroupMember != null)
+            {
+                toProcess = toProcess
+                    .Where(path => !ShouldStopAtVolumeGroupMember(path))
+                    .ToList();
+            }
 
             /*
              * previousDecision 的语义（规则 4）：只处理用户点名的那几个归档。
@@ -4493,67 +4806,6 @@ namespace ArchiveFixer.Extraction
                 state.MarkUnexpanded(toProcess);
                 stopReason = RecursionStopReason.TooManyInnerArchives;
                 return false;
-            }
-
-            if (!decidedByUser && mode == RecursionMode.SingleChain)
-            {
-                /*
-                 * ⛔ 2026-10-04（用户当场推翻旧口径）：「单链」的判据**只看这一层里有几个真归档**：
-                 * **1 个 ⇒ 继续解**（旁边是什么文件都不影响）；**≥2 个 ⇒ 该档下才停**。
-                 *
-                 * 旧判据是"同层除该包以外**全是说明类文件**"（`HasOnlyInformationalSiblings`）⇒
-                 * 一层里只有 1 个内层包、旁边放着一个 `.mp4` / `.pdf`，就被算成"多分支"停在那一层。
-                 * 用户原话（真机 `第6集.7z`）：「那层内层包只有 1 个，但旁边还有不属于"说明类"的文件
-                 * ⇒ 被算成"多分支" —— **这是压缩包吗，不是那你停什么**」。
-                 *
-                 * ⛔ 说明类后缀表**没有删**（`InformationalExtensions` / `IsInformationalFile` 仍在，
-                 * 现在只决定下面那句日志要不要提"旁边还有别的文件"），改的只是"停 / 不停"的判据。
-                 */
-                bool isSingleChain = toProcess.Count == 1;
-
-                if (isSingleChain)
-                {
-                    /*
-                     * 继续解这一支也要**留一句**：不然用户下次翻日志只看到"开始解第 N 层"，
-                     * 看不出旁边那个 `.mp4` 为什么没拦住它（那一格正是他点名的地方）。
-                     * 判据仍是既有出口：只有"旁边确实还有别的文件"时才多这一句，⛔ 不新造判据。
-                     */
-                    if (!HasOnlyInformationalSiblings(report, toProcess[0]))
-                    {
-                        Log(
-                            "INFO",
-                            $"{DescribeProbeLabel(item)}：这一层里只有 1 个内层归档"
-                            + $"（{Path.GetFileName(toProcess[0])}）——"
-                            + "「单链自动展开」只看内层归档的数量，旁边还有别的文件也照旧继续解。");
-                    }
-                }
-                else
-                {
-                    /*
-                     * 多分支询问只在第 0 层发生。
-                     * 理由：用户要回答的是"这个包里的分叉要不要都展开"，那是**源包层面**的问题；
-                     * 一旦他选了"继续"，后面每一层再问一遍就成了骚扰（而且他也没法逐层判断）。
-                     * 后续每层都仍受全部上限约束，安全阀并没有因此失效。
-                     */
-                    if (item.Depth > 0)
-                    {
-                        /*
-                         * 更深的层里出现多分支：不再问第二遍，停在这一层。
-                         *
-                         * 但**不能悄悄停**：过去的写法是 return true 让流程自然收尾，
-                         * 于是停因变成 Completed、产物照常发布、用户看到"已完成 N 层递归解压"，
-                         * 而这一层里其实还有 K 个内层包没展开 —— 他以为拿到的是最终数据。
-                         * 这里是明确的停因 + 明确的数量，Summary 里会写"第 N 层还有 K 个内层包未展开"。
-                         */
-                        state.MarkUnexpanded(innerArchives);
-                        stopReason = RecursionStopReason.BranchNotExpanded;
-                        return false;
-                    }
-
-                    decision = BuildDecision(item, innerArchives);
-                    state.MarkUnexpanded(innerArchives);
-                    return false;
-                }
             }
 
             foreach (string innerArchivePath in toProcess)
@@ -5256,6 +5508,8 @@ namespace ArchiveFixer.Extraction
                 FailedEntryNames = result?.FailedEntryNames ?? Array.Empty<string>(),
                 ReportedSubItemErrors = result?.ReportedSubItemErrors ?? 0,
                 DetectedErrorType = result?.DetectedErrorType ?? string.Empty,
+                CandidatesProducedIdenticalResults = item.CandidatesProducedIdenticalResults,
+                TriedCandidateCount = item.TriedCandidateCount,
                 UsedPasswordMasked = succeededPassword == null ? string.Empty : PasswordMasker.Mask(succeededPassword)
             };
         }
@@ -5497,6 +5751,7 @@ namespace ArchiveFixer.Extraction
                 FinalOutputPath = finalOutputPath,
                 ConsumedVolumeSources = _consumedVolumeSources.ToList(),
                 UnresolvedVolumePieces = _unresolvedVolumePieces.ToList(),
+                UnresolvedPieceFacts = _unresolvedPieceFacts.ToList(),
                 UnexpandedNames = unexpandedNames?.ToList() ?? new List<string>(),
                 Summary = BuildSummary(
                     stopReason,
@@ -5526,12 +5781,81 @@ namespace ArchiveFixer.Extraction
         /// 为什么这条线放在本类而不是调用方：工作区是本类建出来的，谁来建谁负责收 ——
         /// 调用方（协调器）只拿到一个结论对象，它无从知道这次到底建了哪个目录。
         /// </summary>
+        private static string? ResolveRetainedArtifactRoot(string outputRoot)
+        {
+            string? parent = Path.GetDirectoryName(outputRoot);
+            return string.IsNullOrWhiteSpace(parent)
+                ? null
+                : Path.Combine(parent, "kept");
+        }
+
+        private static string? ResolveWorkspaceOutputRoot(string workspaceRoot)
+        {
+            string? cursor = workspaceRoot;
+
+            while (!string.IsNullOrWhiteSpace(cursor))
+            {
+                if (string.Equals(Path.GetFileName(cursor), ".ArchiveFixer.work", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Path.GetDirectoryName(cursor);
+                }
+
+                cursor = Path.GetDirectoryName(cursor);
+            }
+
+            return null;
+        }
+
         private RecursionResult FinalizeRun(
             RecursionResult result,
             ExtractionWorkspace workspace,
             string taskLabel,
             CancellationToken cancellationToken)
         {
+            if (_limits.KeepDeepestProcessArtifact
+                && result.Completed
+                && result.Layers.Count > 0)
+            {
+                RecursionLayerReport? deepest = result.Layers.LastOrDefault(layer => layer.Success);
+
+                string? outputRoot = ResolveWorkspaceOutputRoot(workspace.RootDirectory);
+
+                if (deepest != null
+                    && !string.IsNullOrWhiteSpace(outputRoot)
+                    && Directory.Exists(outputRoot)
+                    && File.Exists(deepest.ArchivePath))
+                {
+                    string? retainedRoot = ResolveRetainedArtifactRoot(outputRoot);
+
+                    if (string.IsNullOrWhiteSpace(retainedRoot))
+                    {
+                        return result;
+                    }
+
+                    string retained = Path.Combine(
+                        retainedRoot,
+                        "其余物",
+                        Path.GetFileName(deepest.ArchivePath));
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(retained)!);
+
+                    if (!File.Exists(retained))
+                    {
+                        try
+                        {
+                            File.Copy(deepest.ArchivePath, retained, overwrite: false);
+                            Log(
+                                "INFO",
+                                $"{taskLabel}：空间不足模式 —— 最后一层过程物已留下：{Path.GetFileName(retained)}");
+                        }
+                        catch
+                        {
+                            // 留不下不影响结论。
+                        }
+                    }
+                }
+            }
+
             if (result.Completed && !cancellationToken.IsCancellationRequested)
             {
                 CleanupWorkspace(workspace, taskLabel, "递归解压已完成且产物已发布");
@@ -6234,6 +6558,21 @@ namespace ArchiveFixer.Extraction
 
             /// <summary>本层真正试过几个候选密码（候选循环里写，报告带走）。</summary>
             public int TriedCandidateCount { get; set; }
+
+            /// <summary>
+            /// 这一层停手是因为**连续两个候选的结果完全相同**（换密码不会改变结果；唯一出口见
+            /// <see cref="RecursionLayerReport.CandidatesProducedIdenticalResults"/>）。
+            /// ⛔ 只由「引擎说成功、但产物没通过校验」那一支写 —— 错密码那一支**不许**用它提前停
+            /// （错密码留下的半截产物也会一模一样，而正确密码排在后面时产物会完全不同）。
+            /// </summary>
+            public bool CandidatesProducedIdenticalResults { get; set; }
+
+            /// <summary>
+            /// 上一候选**校验判否**时的产物读数（文件数 / 字节数）——「引擎说成功但产物不对」那一支据此判"结果相同"。
+            /// </summary>
+            public int LastVerifiedCandidateFileCount { get; set; } = -1;
+
+            public long LastVerifiedCandidateBytes { get; set; } = -1;
 
             /// <summary>
             /// **本层开工时该当场回收的过程物**（递归路逐层回收，见 <see cref="LayerReclaim"/>）。

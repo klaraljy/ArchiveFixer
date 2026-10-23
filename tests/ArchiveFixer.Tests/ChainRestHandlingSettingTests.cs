@@ -88,7 +88,7 @@ namespace ArchiveFixer.Tests
         [SevenZipFact]
         public async Task 用例1_根源包成功而内层包失败_彻底删除档下其余物真被删()
         {
-            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.KeepInPlace);
+            Harness harness = CreateHarness(RestHandlingModes.Delete, SourceHandlingMode.DeleteInPlace);
             string outer = BuildTwoLayerChain(failInner: true);
 
             await harness.AddPathsAsync(outer);
@@ -105,17 +105,13 @@ namespace ArchiveFixer.Tests
             // ① 内容物出来了（根源包那一层是成功的）。
             Assert.NotEmpty(FindFiles("layer1.txt"));
 
-            // ② 其余物真被删：源包（它按"源包操作 = 放入其余物"进了其余物）与其余物目录都不在盘上。
-            Assert.Empty(FindFiles("outer.7z"));
+            // ② 任务部分完成（内层失败）⇒ 源包一个字节都不动；其余物仍按设置删掉。
+            Assert.NotEmpty(FindFiles("outer.7z"));
             Assert.Empty(FindDirectories(ProcessArtifactLayout.ArtifactDirectoryName));
 
-            // ③ 其余物**真的走了删除执行体**（事实而不是措辞），而且日志按档名如实说。
-            Assert.NotEmpty(harness.RecycleExecutor.PermanentCalls);
+            // ③ 部分完成 ⇒ 不调用删除执行体（红线：失败/部分完成一个字节都不删）。
+            Assert.Empty(harness.RecycleExecutor.PermanentCalls);
             Assert.Empty(harness.RecycleExecutor.RecycleCalls);
-
-            Assert.Contains(
-                harness.Log.Logs,
-                entry => entry.Message.Contains(StatusText.RestActionDelete + "：", StringComparison.Ordinal));
 
             // ④ ⛔ 不再有"链尾的其余物不处理"那句（判据换了，那句话就该消失）。
             Assert.DoesNotContain(
@@ -138,14 +134,17 @@ namespace ArchiveFixer.Tests
 
             await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
 
-            // ① 源包进其余物之后**一直在盘上**（其余物没被处理）。
+            // ① 源包档=留下：一个字节都不动，留在原来的位置。
             string[] packages = FindFiles("outer.7z");
 
             Assert.NotEmpty(packages);
-
-            Assert.Contains(
+            Assert.Contains(packages, path => string.Equals(path, outer, StringComparison.OrdinalIgnoreCase));
+            Assert.All(
                 packages,
-                path => path.Contains(ProcessArtifactLayout.ArtifactDirectoryName, StringComparison.OrdinalIgnoreCase));
+                path => Assert.DoesNotContain(
+                    ProcessArtifactLayout.ArtifactDirectoryName,
+                    path,
+                    StringComparison.OrdinalIgnoreCase));
 
             // ② 一个字都没删（假执行器一次都没被调用）。
             Assert.Empty(harness.RecycleExecutor.RecycleCalls);
@@ -395,7 +394,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.TryEmptyPasswordFirst = false;
             settings.SourceHandling = sourceMode.ToString();

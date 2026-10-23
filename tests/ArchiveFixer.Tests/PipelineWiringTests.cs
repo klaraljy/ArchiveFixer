@@ -1280,7 +1280,6 @@ namespace ArchiveFixer.Tests
             appSettings.CustomOutputDirectory = outputRoot;
             appSettings.ExtractToOriginalDirectory = false;
             appSettings.KeepArchiveNameFolder = true;
-            appSettings.RecursionMode = "SingleLayer";
             appSettings.AutoScanAfterDrop = false;
 
             // 源包固定在原地：这一组测的是接线，源包搬运会把断言里的计数搅浑（另有专测）。

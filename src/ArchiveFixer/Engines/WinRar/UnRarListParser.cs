@@ -161,12 +161,6 @@ namespace ArchiveFixer.Engines.WinRar
 
             Flush(block, parsed);
 
-            // 名字本身就是分卷（xxx.part1.rar / xxx.rar.001）时，即使没写出 volume N 也算分卷。
-            if (!parsed.IsMultiVolume)
-            {
-                parsed.IsMultiVolume = FileNameHelper.IsVolumePartFileName(Path.GetFileName(archivePath));
-            }
-
             return parsed;
         }
 

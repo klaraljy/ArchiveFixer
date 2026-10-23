@@ -165,16 +165,14 @@ namespace ArchiveFixer.Tests
             // 旧版 appsettings.json：既没有 UseSpecialExtraction，也没有 SpecialExtractionRules。
             File.WriteAllText(
                 pathService.SettingsFilePath,
-                "{ \"RecursionMode\": \"SingleChain\", \"MaxRecursionDepth\": 4 }",
+                "{ \"MaxRecursionDepth\": 4 }",
                 new UTF8Encoding(false));
 
             AppSettings loaded = service.Load();
 
             /*
-             * ⚠ 2026-10-14（用户口径：「我不是将单层路给删掉了吗，现在就是全面解压所有分路」）：
-             * 老配置里存过的 SingleChain 一律归一到"展开所有分支"。
+             * `RecursionMode` 属性已删除；老配置里存过的档位键读进来只会被忽略。
              */
-            Assert.Equal("AllBranches", loaded.RecursionMode);
             Assert.False(loaded.UseSpecialExtraction);
             Assert.Equal(SpecialExtractionRules.DefaultEnabledIds, loaded.SpecialExtractionRules);
         }

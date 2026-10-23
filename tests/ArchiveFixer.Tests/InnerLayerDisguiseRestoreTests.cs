@@ -621,7 +621,6 @@ namespace ArchiveFixer.Tests
             return await extractor.ExtractAsync(
                 task,
                 outputDirectory,
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
         }

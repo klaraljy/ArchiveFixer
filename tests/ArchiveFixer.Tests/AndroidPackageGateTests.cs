@@ -281,7 +281,6 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
             settings.CustomSevenZipExePath = _sevenZip!;
-            settings.RecursionMode = "AllBranches";
             settingsService.Save(settings);
 
             var logService = new LogService(pathService);

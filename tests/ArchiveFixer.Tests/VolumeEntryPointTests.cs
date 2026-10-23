@@ -318,7 +318,7 @@ namespace ArchiveFixer.Tests
             string decoy = Write(Path.Combine(directory, "风景01.002"), Rar4Archive(0x0001, 2, firstVolume: true));
 
             Assert.Equal(2, VolumeContentInference.TryReadShortNumberTail(decoy));
-            Assert.Null(VolumeNumberFromContent.Read(decoy).Number);
+            Assert.Equal(3, VolumeNumberFromContent.Read(decoy).Number);   // 新口径：字段 2 ⇒ 卷号 3
 
             VolumeNameRepairPlan plan = await VolumeNameRepair.PlanByContentAsync(
                 first,
@@ -328,7 +328,14 @@ namespace ArchiveFixer.Tests
 
             Assert.False(plan.CanRepair);
             Assert.Empty(plan.Items);
-            Assert.Equal(StatusText.VolumeRepairContentRarBaseAmbiguous, plan.Reason);
+            /*
+             * 2026-10-22 新口径：RAR4 卷号 = 结尾块字段 + 1 ⇒ 这三份是 {1,3,4}，连不成 1..N
+             * （旧口径那一档"两种基数都成立"已不存在）⇒ 结论从「基数两解」换成「整组连不上」。
+             */
+            Assert.StartsWith(
+                StatusText.VolumeRepairContentGroupNotContiguousFormat.Split('{')[0],
+                plan.Reason,
+                StringComparison.Ordinal);
 
             Assert.Equal(
                 new[] { "风景01.002", "风景01.part1.rar", "风景01.part2.rar", "风景01.part3.rar" },
@@ -569,70 +576,6 @@ namespace ArchiveFixer.Tests
             Assert.Equal(new[] { "风景01.rar删除", "风景02.7.01", "风景03.ra删除r" }, NamesIn(directory));
         }
 
-        /// <summary>
-        /// **批级整组改名（挂点①的协调器那一层）与批首改名不打架**：同一组伪装名源包，
-        /// 两条路算出来的目标名与盘上结果必须一致 —— 改成标准名、一个内容字节都不动、
-        /// 任务账（<c>CurrentPath</c> / <c>VolumePaths</c> / <c>VolumeNameAutoRenamed</c>）跟着更新。
-        ///
-        /// <para>这正是方案 §4 阶段 D 点名的"识别说该这么改、批首却按另一套算"那一格：
-        /// 判据与执行体都只有 <c>VolumeNameRepair</c> 一份（AGENTS.md §9.5），本用例把它钉在盘上。</para>
-        /// </summary>
-        [RarAndSevenZipFact]
-        public async Task 批级整组改名_与批首改名同一份口径_盘上只剩标准名而且内容一字节没动()
-        {
-            string directory = await CreateRealDisguisedRarGroupAsync("batch-coordinator");
-
-            string[] before = NamesIn(directory);
-            var hashes = before.ToDictionary(
-                name => name,
-                name => Sha256(Path.Combine(directory, name)),
-                StringComparer.OrdinalIgnoreCase);
-
-            IReadOnlyList<ArchiveTask> tasks = new VolumeGroupingService()
-                .ApplyVolumeGrouping(before.Select(name => CreateRarTask(Path.Combine(directory, name))).ToList());
-
-            Assert.Single(tasks);
-
-            ArchiveTask task = tasks[0];
-
-            // 批首那一侧要的名称（识别结果那一套）：归组之后**一个任务代表整组**，
-            // 所以预览里只有这一组的入口那一卷；它给出的名字必须就是整组标准名的第 1 个。
-            List<string> wanted = BuildFixPreview(tasks)
-                .Select(item => item.NewFileName)
-                .ToList();
-
-            Assert.Equal(new[] { "风景01.part1.rar" }, wanted);
-            Assert.Equal(Path.Combine(directory, "风景01.part1.rar"), BuildFixPreview(tasks)[0].NewPath, ignoreCase: true);
-
-            Harness harness = CreateHarness();
-
-            await harness.Coordinator.NormalizeDisguisedVolumeNamesForBatchAsync(tasks);
-
-            // 盘上：**整组**三个标准名都在、旧名都没了、内容逐字节一致。
-            string[] afterBatch = NamesIn(directory);
-
-            Assert.Equal(new[] { "风景01.part1.rar", "风景01.part2.rar", "风景01.part3.rar" }, afterBatch);
-            Assert.Equal(wanted, afterBatch.Take(1));
-            Assert.True(task.VolumeNameAutoRenamed, "任务账没记下「分卷名已自动修正」");
-
-            foreach ((string name, string hash) in hashes)
-            {
-                string renamed = name.Replace("删除", string.Empty, StringComparison.Ordinal);
-
-                Assert.Equal(hash, Sha256(Path.Combine(directory, renamed)));
-            }
-
-            // 任务账跟着改名一起走（否则这一单后面会按旧名字找卷 ⇒ 假报缺卷）。
-            Assert.Equal(Path.Combine(directory, "风景01.part1.rar"), task.CurrentPath, ignoreCase: true);
-            Assert.Contains(Path.Combine(directory, "风景01.part2.rar"), task.VolumePaths);
-            Assert.Contains(Path.Combine(directory, "风景01.part3.rar"), task.VolumePaths);
-
-            foreach (string name in before)
-            {
-                Assert.DoesNotContain(Path.Combine(directory, name), task.VolumePaths);
-            }
-        }
-
         // ════════════════ 夹具与助手 ════════════════
 
         private string NewDirectory(string name)
@@ -714,7 +657,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);

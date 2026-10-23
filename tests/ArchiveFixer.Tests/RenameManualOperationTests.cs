@@ -706,7 +706,6 @@ namespace ArchiveFixer.Tests
             settings.ExtractToOriginalDirectory = false;
             settings.AutoScanAfterDrop = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.DefaultExtension = ".7z";
             settings.ConflictAction = ConflictActions.AutoRename;

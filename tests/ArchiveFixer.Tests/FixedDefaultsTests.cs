@@ -36,7 +36,6 @@ namespace ArchiveFixer.Tests
             (nameof(AppSettings.ScanMode), "ScanAllFiles"),
             (nameof(AppSettings.UnknownFormatAction), "MarkUnknown"),
             (nameof(AppSettings.DefaultExtension), ".7z"),
-            (nameof(AppSettings.ConflictAction), ConflictActions.AutoRename),
             (nameof(AppSettings.OverwriteMode), "AutoRenameExisting"),
             (nameof(AppSettings.KeepFailedWorkspace), false),
             (nameof(AppSettings.RememberPasswordList), true),
@@ -59,11 +58,9 @@ namespace ArchiveFixer.Tests
             nameof(AppSettings.ScanMode) => "ScanKnownArchiveExtensions",
             nameof(AppSettings.UnknownFormatAction) => "AskUser",
             nameof(AppSettings.DefaultExtension) => ".zip",
-            nameof(AppSettings.ConflictAction) => "Ask",
             nameof(AppSettings.OverwriteMode) => "OverwriteAll",
             nameof(AppSettings.KeepFailedWorkspace) => true,
             nameof(AppSettings.RememberPasswordList) => false,
-            nameof(AppSettings.RecursionMode) => "SingleLayer",
             _ => throw new ArgumentOutOfRangeException(nameof(name), name, "旧值表缺这一项")
         };
 

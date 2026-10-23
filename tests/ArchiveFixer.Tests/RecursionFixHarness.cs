@@ -84,7 +84,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = recursionMode;
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
             settings.MaxPasswordAttemptsPerLayer = attemptLimit;
@@ -191,7 +190,6 @@ namespace ArchiveFixer.Tests
             return await extractor.ExtractAsync(
                 new ArchiveTask(archivePath),
                 output,
-                RecursionMode.AllBranches,
                 null,
                 CancellationToken.None);
         }

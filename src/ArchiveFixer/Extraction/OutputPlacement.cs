@@ -713,18 +713,14 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 包基名：<c>222.rar</c> / <c>222.7z.001</c> / <c>222.part1.rar</c> / <c>222.z01</c> → <c>222</c>。
+        /// 包基名：<c>222.rar</c> / <c>222.7z.001</c> / <c>222.part1.rar</c> / <c>222.z01</c> / <c>222.ra删除r</c>
+        /// 一律 → <c>222</c>。
         ///
-        /// <para>
-        /// 为什么不能直接用 <see cref="FileNameHelper.GetArchiveBaseName"/>：
-        /// 它只剥一层后缀，<c>222.7z.001</c> 会得到 <c>222.7z</c> —— 于是落点变成 <c>111\222.7z\</c>，
-        /// 分卷组里每一卷还会各建一个目录。
-        /// </para>
-        /// <para>
-        /// 为什么也不能用 <see cref="Detection.VolumeGroupDetector"/> 的 <c>BaseName</c> 直接当结果：
-        /// 那个基名是"分卷组"的基名（<c>222.7z.001</c> → <c>222.7z</c>，它保留了内层格式段，这是它该做的），
-        /// 还要再剥掉归档后缀才是包基名。给了 <paramref name="volumeGroupBaseName"/> 就省掉剥分卷标记那一步。
-        /// </para>
+        /// <para><b>两步各用自己那一份基名</b>（用户 2026-10-23 口径：两份基名判据要彻底分开）：
+        /// 给了整组基名（分卷组）⇒ 走**第二大步**那份 <see cref="FileNameHelper.SecondStepBaseName"/>；
+        /// 没有组名（单一压缩包）⇒ 走**第一大步**那份 <see cref="FileNameHelper.FirstStepBaseName"/>。
+        /// 两份的文本规则同为"第一个点之前"，但前提不同：前者不要求内容能给出身份，
+        /// 后者建立在"内容已证成单一完整包"之上。⛔ 别再按"剥标记档 / 包名档"那种旧档位分叉。</para>
         /// <para>返回值已经清洗过，可以直接当文件夹名。</para>
         /// </summary>
         public static string ResolveArchiveBaseName(string? sourceArchivePath, string? volumeGroupBaseName = null)
@@ -772,18 +768,12 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * 分卷标记 + 归档后缀这两层都交给**唯一基名出口**（2026-10-03 阶段 A 收口）：
-             * 这里原先一份"剥分卷标记"的 40 行副本 + 一份"剥归档后缀"的私有实现。
-             * 剥法必须永远只有一处 —— 归档基名与包基名对同一个包算出不同的名字，
-             * 落点就会指到两个不同的目录。
+             * 基名只有两份，按"这一步在做什么"选，⛔ 不按调用方各挑一档：
+             * 有整组基名 ⇒ **第二大步**（分卷）；没有 ⇒ **第一大步**（单一压缩包）。
              */
-            return FileNameHelper.TryResolveVolumeBaseName(
-                fileName,
-                VolumeBaseNameLevel.PackageName,
-                out string baseName,
-                out _)
-                ? baseName
-                : string.Empty;
+            return !string.IsNullOrWhiteSpace(volumeGroupBaseName)
+                ? FileNameHelper.SecondStepBaseName(fileName)
+                : FileNameHelper.FirstStepBaseName(fileName);
         }
 
         /// <summary>校验自定义根：空 / 相对路径 / 盘根本身 / 盘符不存在，四类都返回明确原因。</summary>

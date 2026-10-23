@@ -203,8 +203,6 @@ namespace ArchiveFixer.Tests
             AppSettings settings = AppSettings.CreateDefault();
             settings.CustomOutputDirectory = Path.Combine(_root, "out");
             settings.ExtractToOriginalDirectory = false;
-            settings.RecursionMode = "SingleLayer";
-
             // 这一组只测"开工前那一下"，导入与识别都不走。
             settings.AutoScanAfterDrop = false;
             settingsService.Save(settings);

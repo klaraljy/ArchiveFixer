@@ -573,8 +573,16 @@ namespace ArchiveFixer.Extraction
 
             foreach (VolumeGroup group in VolumeGroupDetector.Group(list))
             {
+                /*
+                 * ⚠ `group.BaseName` 是**名字前缀**（`set.7z` —— 写出来的规范卷名要往它后面接卷标记），
+                 * 而调用方给的可能是**基名**（`set` —— 第二大步那份，第一个点之前）。
+                 * 这一问问的是"**是不是同一组**"，所以两边都按基名比；⛔ 别拿前缀当身份。
+                 */
                 if (!group.IsComplete ||
-                    !string.Equals(group.BaseName, expectedBaseName, StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(
+                        FileNameHelper.SecondStepBaseName(group.BaseName),
+                        FileNameHelper.SecondStepBaseName(expectedBaseName),
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -978,16 +986,19 @@ namespace ArchiveFixer.Extraction
              * 「改一个」比「一个都不改」更糟（2026-09-29 复查逮到：`全坏.7z(删掉.001` 那一组两卷都带垃圾，
              * 老代码会把第一卷改成 `全坏.7z.001`，剩下两卷还叫 `(删掉` 那套名字）。
              *
-             * 判据只读事实：兄弟卷的基名与建议名的基名**必须相等**（剥法只有一处：
-             * <see cref="FileNameHelper.StripVolumeMarkers"/>，它连"卷标记里夹的垃圾"一起剥）。
+             * 判据只读事实：兄弟卷的**名字前缀**与建议名的名字前缀**必须逐字相等**
+             * （<see cref="ExtensionHelper.ResolveNamePrefix"/>：卷标记之前那一段，保留族后缀段）。
+             * ⚠ 2026-10-23：这里**不能**拿基名（第一个点之前）比 —— 那只回答"是不是同一个包"，
+             * 回答不了"兄弟卷的族后缀是不是同一套"：`x.ra31415926535r` 与 `x.r00` 的基名都是 `x`，
+             * 而它们不是一族（旧口径用前缀比，正是为了拦这一格）。
              * 不等 = 它们也得跟着改，而这条路改不到它们 → 退到「什么都不做」。
              * 「能一次把整组改干净」的那一档是 <see cref="PlanJunkTailGroup"/>，它排在这条路**前面** ——
              * 走到这里说明它认不出这个形状（垃圾塞在压缩后缀里，而不是粘在卷标记上）。
              */
-            string suggestedStem = FileNameHelper.StripVolumeMarkers(suggested);
+            string suggestedStem = ExtensionHelper.ResolveNamePrefix(suggested);
 
             if (siblings.Any(sibling => !string.Equals(
-                FileNameHelper.StripVolumeMarkers(sibling),
+                ExtensionHelper.ResolveNamePrefix(sibling),
                 suggestedStem,
                 StringComparison.OrdinalIgnoreCase)))
             {
@@ -1274,7 +1285,8 @@ namespace ArchiveFixer.Extraction
         /// <para>判据四条同时成立，缺一条就不算（⛔ 判不出 ⇒ 返回 null，"什么都不做"）：</para>
         /// <list type="number">
         /// <item><description>它**有 7z 起始头**（魔数，方案 §1.3 第 0 层：只认魔数，⛔ 不按后缀猜）；</description></item>
-        /// <item><description>它的**包基名**与手上这一卷逐字相同（唯一出口 <see cref="FileNameHelper.TryResolveVolumeBaseName"/>）；
+        /// <item><description>它的**基名**与手上这一卷逐字相同（<see cref="FileNameHelper.SecondStepBaseName"/>，
+        /// 第一个点之前 —— 第二大步那份）；
         /// —— 这一条把"另一个包的同目录文件"挡在门外，而且只用名字，不读写别的文件；</description></item>
         /// <item><description>这一组的**名字自洽**且**真有一片名字丢了**（<see cref="Detection.VolumeContentInference.ReadSiblingShape"/>）；</description></item>
         /// <item><description>**手上这一卷正是那一片名字丢了的成员**（否则它不属于这一组）。</description></item>
@@ -1343,18 +1355,20 @@ namespace ArchiveFixer.Extraction
             return found;
         }
 
-        /// <summary>包基名（唯一基名出口的 <see cref="VolumeBaseNameLevel.PackageName"/> 档）；判不出返回 null。</summary>
-        private static string? TryResolvePackageBaseName(string? path, string archiveExtension) =>
-            !string.IsNullOrWhiteSpace(path)
-            && FileNameHelper.TryResolveVolumeBaseName(
-                path,
-                VolumeBaseNameLevel.PackageName,
-                out string baseName,
-                out _,
-                archiveExtension)
-            && baseName.Length > 0
-                ? baseName
-                : null;
+        /// <summary>包基名（**第二大步那份**：<see cref="FileNameHelper.SecondStepBaseName"/>）；判不出返回 null。</summary>
+        private static string? TryResolvePackageBaseName(string? path, string archiveExtension)
+        {
+            _ = archiveExtension;
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            string baseName = FileNameHelper.SecondStepBaseName(path);
+
+            return baseName.Length > 0 ? baseName : null;
+        }
 
         private static long LengthOf(string? path)
         {
@@ -2319,16 +2333,13 @@ namespace ArchiveFixer.Extraction
             /*
              * ⛔ 2026-10-04：**同档比较**（"哪一档比就跟同一档比"）。
              *
-             * 老写法是 `PackageName(本体)` 比 `DisguisedVolume(兄弟)` —— **跨档**：这两档对
-             * "保不保留归档后缀段"这一格答得不一样（包名档：不保留 `x`；伪装卷档：保留 `x.7z`），
-             * 于是 7z / rar 形状**永远配不上**（`111.7z.001` + `111.7z.002.txt` 判 `CanRepair=False`），
-             * 只有 zip 形状恰好撞对（两边都掉后缀）。同一份判据"同形状换后缀就换结论"。
-             *
-             * 现在两边都取**锚点那一档**：本体名（`x.zip` / `x.rar`，后缀段属于它自己）⇒ 剥掉后缀段；
-             * 末段逐字就是卷标记（`x.7z.001`）⇒ **保留**后缀段（`x.7z`，与兄弟卷的伪装卷档同解）。
-             * ⛔ 两个用途（归组键 / 落点名）的语义一个字没动 —— 这里只用同一个出口算、不合并档位。
+             * ⚠ 2026-10-23（用户口径：基名 = 第一个点之前、只留两份）。这一档比的是**名字前缀**
+             * （<see cref="VolumeGroupDetector.TryGetBaseName"/>，= 写出来的规范卷名往它后面接卷标记的那一段：
+             * 本体 <c>x.zip</c> → <c>x</c>、<c>x.7z.001</c> → <c>x.7z</c>）——
+             * ⛔ 不是基名：`x.001` 与 `x.7z.002.txt` 的基名都是 `x`，可它们**不是同一个包**
+             * （族后缀段不同），拿基名比会把它们并成一组、把干净名改成脏族名。
              */
-            string selfBase = ResolveAnchorBaseName(fileName);
+            string selfBase = VolumeGroupDetector.TryGetBaseName(fileName);
 
             if (selfBase.Length == 0)
             {
@@ -2346,8 +2357,11 @@ namespace ArchiveFixer.Extraction
                     continue;
                 }
 
-                if (!TrySplitDisguised(sibling, out string siblingBase, out string siblingMark) ||
-                    !string.Equals(siblingBase, selfBase, StringComparison.OrdinalIgnoreCase))
+                string siblingPrefix = VolumeGroupDetector.TryGetBaseName(sibling);
+
+                if (!TrySplitDisguised(sibling, out _, out string siblingMark)
+                    || siblingPrefix.Length == 0
+                    || !string.Equals(siblingPrefix, selfBase, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -2363,7 +2377,7 @@ namespace ArchiveFixer.Extraction
                     return Cannot(path, StatusText.VolumeRepairNoSuggestion);
                 }
 
-                string targetName = selfBase + "." + siblingMark;
+                string targetName = selfBase + "." + FamilyMarkerOf(siblingMark);
 
                 if (File.Exists(Path.Combine(directory, targetName)))
                 {
@@ -2426,29 +2440,6 @@ namespace ArchiveFixer.Extraction
                 Siblings = ordered.Select(i => i.CurrentFileName).ToList(),
                 Items = ordered
             };
-        }
-
-        /// <summary>
-        /// **锚点那一卷的组基名**（<see cref="PlanDisguisedVolumesBesideStandardSelf"/> 用来跟兄弟卷
-        /// **同一档**比的那个量）：
-        /// <list type="bullet">
-        /// <item><description>本体名（<c>x.zip</c> / <c>x.rar</c>，末尾一段是后缀不是卷标记）⇒
-        /// 后缀段属于本体自己 ⇒ 基名 = <c>OutputPlacement.ResolveArchiveBaseName</c>（包名档，<c>x</c>）；</description></item>
-        /// <item><description>末段**逐字就是卷标记**（<c>x.7z.001</c>）⇒ 后缀段属于整组 ⇒ 基名 =
-        /// <see cref="FileNameHelper.StripVolumeMarkers"/>（剥标记档，<c>x.7z</c>，与兄弟卷的伪装卷档同解）。</description></item>
-        /// </list>
-        ///
-        /// <para>⛔ 判据只转调既有出口，不新造尺子；⛔ 这里**不合并**组键与包名两个用途
-        /// （见 <c>VolumeBaseNameLevel</c> 上的说明）。</para>
-        /// </summary>
-        private static string ResolveAnchorBaseName(string fileName)
-        {
-            string[] parts = fileName.Split('.');
-            string last = parts.Length > 0 ? parts[^1] : string.Empty;
-
-            return last.Length > 0 && ExtensionHelper.IsVolumePartExtension("." + last)
-                ? FileNameHelper.StripVolumeMarkers(fileName)
-                : OutputPlacement.ResolveArchiveBaseName(fileName);
         }
 
         /// <summary>
@@ -2671,19 +2662,148 @@ namespace ArchiveFixer.Extraction
         }
 
         /// <summary>
-        /// 把"被伪装的卷名"拆开：<c>giu910.7z.001删除</c> → 基名 <c>giu910.7z</c>、标准卷段 <c>001</c>；
-        /// <c>x.7z.001.txt</c> → 基名 <c>x.7z</c>、卷段 <c>001</c>；<c>y.z0删除3</c> → 基名 <c>y</c>、<c>z03</c>。
+        /// 把"被伪装的卷名"拆开：<c>giu910.7z.001删除</c> → 基名 <c>giu910</c>、那一段 <c>7z.001</c>；
+        /// <c>444.p1art2.part2.ra3r</c> → 基名 <c>444</c>、那一段 <c>p1art2.part2.rar</c>；
+        /// <c>y.z0删除3</c> → 基名 <c>y</c>、那一段 <c>z03</c>。
         ///
-        /// <para>⚠ 2026-10-03 阶段 A 收口：判据整体搬进**唯一基名出口**
-        /// <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的
-        /// <see cref="VolumeBaseNameLevel.DisguisedVolume"/> 档，本方法只转调（⛔ 这里不再算一遍基名）。</para>
+        /// <para>⚠ 2026-10-23（用户口径）：**基名只有一份** = <see cref="FileNameHelper.SecondStepBaseName"/>
+        /// （第一个点之前）；这里只剩"规范卷名重建"（族后缀 + 卷标记），
+        /// <c>baseName + "." + canonicalSegment</c> 与旧实现拼出的目标名**逐字相同**。</para>
         /// </summary>
-        private static bool TrySplitDisguised(string fileName, out string baseName, out string canonicalSegment) =>
-            FileNameHelper.TryResolveVolumeBaseName(
-                fileName,
-                VolumeBaseNameLevel.DisguisedVolume,
-                out baseName,
-                out canonicalSegment);
+        private static bool TrySplitDisguised(string fileName, out string baseName, out string canonicalSegment)
+        {
+            baseName = string.Empty;
+            canonicalSegment = string.Empty;
+
+            if (!TryResolveCanonicalVolumeName(fileName, out string canonicalName))
+            {
+                return false;
+            }
+
+            /*
+             * 基名 = **第二大步那份**（第一个点之前，唯一出口 `FileNameHelper.SecondStepBaseName`）；
+             * 剩下的那一段 = 族后缀 + 规范卷标记（`x` + `7z.001` / `444` + `part1.rar`）。
+             * `baseName + "." + canonicalSegment` 与旧实现拼出来的**目标名逐字相同** ——
+             * 这一步只是把"哪一段算基名"换成用户口径，改名结果一个字符都没动。
+             */
+            baseName = FileNameHelper.SecondStepBaseName(canonicalName);
+
+            if (baseName.Length == 0 || canonicalName.Length <= baseName.Length + 1)
+            {
+                return false;
+            }
+
+            canonicalSegment = canonicalName[(baseName.Length + 1)..];
+
+            return canonicalSegment.Length > 0;
+        }
+
+        /// <summary>
+        /// 拼出"规范卷名"（<c>giu910.7z.001</c> / <c>444.p1art2.part1.rar</c> / <c>y.z03</c>）：
+        /// 这是**改名目标的重建**，不是基名算法 —— 基名由 <see cref="FileNameHelper.SecondStepBaseName"/>
+        /// 一处给出（旧实现把这两件事混在一个"档"里）。
+        ///
+        /// <para>原在 <c>FileNameHelper.TryResolveDisguisedVolume</c>（唯一基名出口的 <c>DisguisedVolume</c> 档），
+        /// 2026-10-23 按用户口径拆开：基名部分删掉、只留"规范卷名重建"在这里；
+        /// 三道闸门（⓪ 只接尾巴真脏 / ① 末段自己带垃圾 / ② 标记后面还挂着点段）一个字没改。</para>
+        /// </summary>
+        private static bool TryResolveCanonicalVolumeName(string fileName, out string canonicalName)
+        {
+            canonicalName = string.Empty;
+
+            string[] parts = fileName.Split('.');
+
+            if (parts.Length < 2)
+            {
+                return false;
+            }
+
+            /*
+             * ⓪ <基名>.partN.rar（**卷标记与 rar 尾巴都可以粘垃圾**）：目标名必须**连 `.rar` 一起**保留。
+             *
+             * ⛔ 老写法把它当"标记后面挂着别的点段"处理，只把卷标记接回去 ⇒ 目标名算成 `X.part1`，
+             * 等于把 RAR 的族后缀吃掉：改完 7-Zip / UnRAR 更打不开这一组（改名是**不可逆**动作，
+             * 比"一个都不改"更糟）。判据与归组 / 包基名转调**同一份**
+             * <see cref="ExtensionHelper.TrySplitPartNumberedVolume"/>。
+             */
+            if (ExtensionHelper.TrySplitPartNumberedVolume(
+                    fileName,
+                    out string partBase,
+                    out string partMark,
+                    out _,
+                    out string partTail,
+                    out _)
+                && (!partTail.Equals("rar", StringComparison.OrdinalIgnoreCase)
+                    || ExtensionHelper.IsPartNumberedMarkBySkeleton(fileName, out _)))
+            {
+                canonicalName = partBase + "." + partMark + ".rar";
+
+                return canonicalName.Length > 0;
+            }
+
+            // ① 最后一段自己就是"带垃圾的卷标记"（001删除 / 删除001 / z0删除3）
+            if (!ExtensionHelper.IsVolumePartExtension("." + parts[^1]) &&
+                ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[^1], out string mark, out _))
+            {
+                canonicalName = ExtensionHelper.NormalizeFamilySegment(string.Join('.', parts, 0, parts.Length - 1))
+                                + "." + mark;
+
+                return canonicalName.Length > 1;
+            }
+
+            // ② 卷标记后面还挂着别的点段（x.7z.001.txt）
+            //    ⚠ 别去查卷标记自己是不是"已知压缩后缀" —— `.001` 本身就在那份名单里，
+            //      拿它当闸门会把 `.001.txt` 全挡掉（实测踩到过）。
+            for (int i = parts.Length - 2; i >= 1; i--)
+            {
+                if (!ExtensionHelper.TrySplitVolumeSegmentTolerant(parts[i], out string innerMark, out _))
+                {
+                    continue;
+                }
+
+                bool onlyPlainTails = true;
+
+                for (int j = i + 1; j < parts.Length; j++)
+                {
+                    if (ExtensionHelper.IsKnownArchiveExtension("." + parts[j]))
+                    {
+                        onlyPlainTails = false;
+                        break;
+                    }
+                }
+
+                if (!onlyPlainTails)
+                {
+                    continue;
+                }
+
+                canonicalName = ExtensionHelper.NormalizeFamilySegment(string.Join('.', parts, 0, i))
+                                + "." + innerMark;
+
+                return canonicalName.Length > 1;
+            }
+
+            /*
+             * ③ **末段逐字就是合法卷标记，脏的是它前面那一段"归档后缀段"**
+             *    （`set.7aaaaz.002` / `333.78a8fuaz.003` / `set.7_______z.002`）。
+             *    判据只转调既有那把尺子 `TryRecoverDisguisedArchiveBody`，只把**那一段**换成它。
+             */
+            if (parts.Length >= 3 &&
+                parts[0].Length > 0 &&
+                ExtensionHelper.IsVolumePartExtension("." + parts[^1]) &&
+                !ExtensionHelper.IsKnownArchiveExtension("." + parts[^2]) &&
+                ExtensionHelper.TryRecoverDisguisedArchiveBody(parts[^2], out string recoveredExtension, out _))
+            {
+                canonicalName = string.Join('.', parts, 0, parts.Length - 2)
+                                + "." + recoveredExtension
+                                + "." + parts[^1];
+
+                return true;
+            }
+
+            return false;
+        }
+
 
         // ══════════════ 「还原」工序的**递归层挂点**（方案 §2.1 挂点②，用户 2026-10-03）══════════════
         //
@@ -2942,7 +3062,7 @@ namespace ArchiveFixer.Extraction
         /// <summary>
         /// 这一份候选所属的**一组**（含自己）：同目录 + 卷序认得出 + **包基名逐字相等**
         /// （判据全在既有出口里：卷序 <see cref="VolumeGroupDetector.TryGetVolumeIndex"/>、
-        /// 包基名 <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的 `PackageName` 档）。
+        /// 基名 = 第二大步那份（<see cref="FileNameHelper.SecondStepBaseName"/>，第一个点之前）。
         ///
         /// <para>为什么必须把兄弟一起收进来：7z / 跨盘 zip 的续卷没有魔数、探测器根本不会把它们当候选，
         /// 而引擎找兄弟卷**只看入口文件旁边那一层** —— 只改第一卷的名字，整组照样打不开。</para>
@@ -3004,15 +3124,10 @@ namespace ArchiveFixer.Extraction
             }
 
             /*
-             * 基名/那一段由**唯一基名出口**拆（⛔ 这里不自己找边界）：`111_.par删t1.ra除r` ⇒ 基名 `111_`、
-             * 段 `part1.rar`。
+             * 基名 = **第二大步那份**（第一个点之前，唯一出口 `FileNameHelper.SecondStepBaseName`）；
+             * 剩下的那一段整段就是"族后缀 + 规范卷标记"。⛔ 这里不自己找边界。
              */
-            if (FileNameHelper.TryResolveVolumeBaseName(
-                    fileName,
-                    VolumeBaseNameLevel.DisguisedVolume,
-                    out string baseName,
-                    out string segment)
-                && TryCleanSegment(baseName, segment, out cleaned))
+            if (TryCleanTailFromSecondStep(fileName, out cleaned))
             {
                 return true;
             }
@@ -3022,7 +3137,7 @@ namespace ArchiveFixer.Extraction
              *
              * <para><b>现场（真机日志逐字）</b>：`222-L2.part删删删1.rar` 在链里一次改名行都没有，
              * 而同一批的 `222-L2.part2.中文rar → 222-L2.part2.rar` 改得好好的。探针实测差别在**第一步**：
-             * `TryResolveVolumeBaseName(…, DisguisedVolume)` 对前者 = **False**、对后者 = True
+             * 名字拆解（基名 + 族后缀段）对前者 = **False**、对后者 = True
              * —— 脏字符把卷标记本身撑坏了（`part删删删1` 里数字已经挨不着 `part`），边界找不出来，
              * 上面那一档于是**整档不做**；产物名字永远是脏的 ⇒ 第二大步拿不到规范卷名 ⇒
              * 那一组的入口包在盘上不叫 `222-L2.part1.rar` ⇒ 判据输入里
@@ -3040,7 +3155,7 @@ namespace ArchiveFixer.Extraction
              * <para>⛔ 与上面那一档同一条纪律：只动**卷标记 / 归档后缀那一段**，⛔ 不问魔数、⛔ 不问兄弟、
              * ⛔ 不问"整组自洽"（那是后面几档的事）；执行体仍只有 <see cref="TryApply"/> 一套。</para>
              */
-            return TryStripByAsciiBaseSplit(fileName, out cleaned);
+            return false;
         }
 
         /// <summary>
@@ -3104,54 +3219,27 @@ namespace ArchiveFixer.Extraction
             return !string.Equals(cleaned, fileName, StringComparison.OrdinalIgnoreCase);
         }
 
+
         /// <summary>
-        /// 按"每一个点都试拆一次"枚举候选（见 <see cref="TryStripNonAsciiJunkFromTailSegment"/> 第二档）：
-        /// 基名纯 ASCII + 去杂质后仍是本来的形态 + 结果唯一才认。
+        /// 把"第一个点之后那**一整段**"（族后缀 + 卷标记）里的非 ASCII 杂质去掉：
+        /// <c>giu910.7z.001删除</c> → <c>giu910.7z.001</c>、<c>111_.par删t1.ra除r</c> → <c>111_.part1.rar</c>。
+        ///
+        /// <para>三条缺一不可：① 去完真的变了；② 点段不许拆出空段（防 <c>X..rar</c>）；
+        /// ③ 最后一段仍是说得清的形态（规范卷段 / 已知归档后缀，唯一出口 <see cref="IsRestoredTailForm"/>）。
+        /// 基名由 <see cref="FileNameHelper.SecondStepBaseName"/> 一处给出，⛔ 这里不自己找边界。</para>
         /// </summary>
-        private static bool TryStripByAsciiBaseSplit(string fileName, out string cleaned)
+        private static bool TryCleanTailFromSecondStep(string fileName, out string cleaned)
         {
             cleaned = string.Empty;
 
-            var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string baseName = FileNameHelper.SecondStepBaseName(fileName);
 
-            for (int dot = fileName.IndexOf('.'); dot > 0 && dot < fileName.Length - 1; dot = fileName.IndexOf('.', dot + 1))
-            {
-                string candidateBase = fileName.Substring(0, dot);
-
-                if (!IsPureAscii(candidateBase))
-                {
-                    continue;
-                }
-
-                if (TryCleanSegment(candidateBase, fileName.Substring(dot + 1), out string candidate))
-                {
-                    results.Add(candidate);
-                }
-            }
-
-            if (results.Count != 1)
+            if (baseName.Length == 0 || fileName.Length <= baseName.Length + 1)
             {
                 return false;
             }
 
-            cleaned = results.First();
-
-            return true;
-        }
-
-        /// <summary>
-        /// 把一个 `<paramref name="baseName"/>.<paramref name="segment"/>` 里的那一段去干净：
-        /// 去完必须**还是本来那个形态**、点段不许拆出空段、而且真的变了 —— 三条缺一不可。
-        /// </summary>
-        private static bool TryCleanSegment(string baseName, string segment, out string cleaned)
-        {
-            cleaned = string.Empty;
-
-            if (baseName.Length == 0 || segment.Length == 0)
-            {
-                return false;
-            }
-
+            string segment = fileName[(baseName.Length + 1)..];
             string stripped = StripNonAscii(segment);
 
             if (stripped.Length == 0 || string.Equals(stripped, segment, StringComparison.Ordinal))
@@ -3159,23 +3247,22 @@ namespace ArchiveFixer.Extraction
                 return false;
             }
 
-            /*
-             * ⛔ 去完杂质那一段不许出现空点段：`X.中.rar` 会拼出 `X..rar`（那不是任何一族的形态）。
-             * 老口径（只在最后一个点之后清洗）天然碰不到它 —— 这一档是新开的枚举，必须自己把住。
-             */
             if (stripped[0] == '.' || stripped.Contains("..", StringComparison.Ordinal))
             {
                 return false;
             }
 
-            if (!IsRestoredTailForm(stripped))
+            int lastDot = stripped.LastIndexOf('.');
+            string lastSegment = lastDot >= 0 ? stripped[(lastDot + 1)..] : stripped;
+
+            if (!IsRestoredTailForm(lastSegment))
             {
                 return false;
             }
 
             cleaned = baseName + "." + stripped;
 
-            return !string.Equals(cleaned, baseName + "." + segment, StringComparison.OrdinalIgnoreCase);
+            return !string.Equals(cleaned, fileName, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>把非 ASCII 字符摘掉（只用于"卷标记 / 归档后缀那一段"）。</summary>
@@ -3267,12 +3354,13 @@ namespace ArchiveFixer.Extraction
             return members;
         }
 
-        private static bool TryResolvePackageBaseName(string fileName, out string baseName) =>
-            FileNameHelper.TryResolveVolumeBaseName(
-                fileName,
-                VolumeBaseNameLevel.PackageName,
-                out baseName,
-                out _);
+        /// <summary>包基名（**第二大步那份**：<see cref="FileNameHelper.SecondStepBaseName"/>）。</summary>
+        private static bool TryResolvePackageBaseName(string fileName, out string baseName)
+        {
+            baseName = FileNameHelper.SecondStepBaseName(fileName);
+
+            return baseName.Length > 0;
+        }
 
         /// <summary>同一组只还原一次：键 = 目录 + 第 1 卷的包基名。</summary>
         private static string BuildRestoreGroupKey(IReadOnlyList<string> members)
@@ -3327,7 +3415,7 @@ namespace ArchiveFixer.Extraction
         ///
         /// <para>两条路各自转调一把既有尺子：
         /// ㈠ 卷标记段被伪装（<c>X.part1.rar删除</c> / <c>x.7z.001.txt</c> / <c>111.parst1.racr</c>）
-        ///    —— 骨架化，经唯一基名出口的 `DisguisedVolume` 档；
+        ///    —— 骨架化，经 <see cref="TrySplitDisguised"/>（基名 = 第二大步那份，段 = 族后缀 + 卷标记）；
         /// ㈡ 本体后缀被伪装（<c>222.zscip</c>）—— 归档体还原 <c>TryRecoverDisguisedArchiveBody</c>。</para>
         ///
         /// <para>⚠ 还原出来的名字必须与**认出来的底层**同族（RAR 的 <c>partN.rar</c> 不能扣到 7z 内容上），
@@ -3337,16 +3425,12 @@ namespace ArchiveFixer.Extraction
         {
             canonical = string.Empty;
 
-            if (FileNameHelper.TryResolveVolumeBaseName(
-                    fileName,
-                    VolumeBaseNameLevel.DisguisedVolume,
-                    out string baseName,
-                    out string segment) &&
+            if (TrySplitDisguised(fileName, out string baseName, out string segment) &&
                 baseName.Length > 0 &&
                 segment.Length > 0 &&
                 (format == VolumeContentFormat.Unknown
-                    ? IsSegmentFamilySelfDetermined(segment)
-                    : IsSegmentFamilyOfFormat(segment, format)))
+                    ? IsSegmentFamilySelfDetermined(FamilyMarkerOf(segment))
+                    : IsSegmentFamilyOfFormat(FamilyMarkerOf(segment), format)))
             {
                 canonical = baseName + "." + segment;
                 return true;
@@ -3381,9 +3465,37 @@ namespace ArchiveFixer.Extraction
             return false;
         }
 
-        /// <summary>规范卷段是不是**该族**的写法（`partN.rar` / `NNN` / `zNN`）—— 族对不上就不还原。</summary>
-        private static bool IsSegmentFamilyOfFormat(string segment, VolumeContentFormat format)
+        /// <summary>
+        /// 把"族后缀 + 卷标记"里的**卷标记**换成这个槽位号（7z / 跨盘 ZIP 的数字族）：
+        /// <c>x</c> + <c>7z.001</c> + <c>003</c> ⇒ <c>x.7z.003</c>；<c>z02</c> 那族同样只换最后一段。
+        /// 段里没有可替换的标记（<c>part1.rar</c> 那种）⇒ 退回"基名 + .卷号"（与旧实现逐字相同）。
+        /// </summary>
+        private static string ReplaceVolumeMarker(string baseName, string segment, string indexText)
         {
+            int lastDot = segment.LastIndexOf('.');
+            string marker = lastDot >= 0 ? segment[(lastDot + 1)..] : segment;
+
+            bool numericMarker =
+                marker.Length == 3
+                && ((char.IsAsciiDigit(marker[0]) && char.IsAsciiDigit(marker[1]) && char.IsAsciiDigit(marker[2]))
+                    || (marker[0] is 'z' or 'Z' && char.IsAsciiDigit(marker[1]) && char.IsAsciiDigit(marker[2])));
+
+            return numericMarker && lastDot > 0
+                ? baseName + "." + segment[..lastDot] + "." + indexText
+                : baseName + "." + indexText;
+        }
+
+        /// <summary>
+        /// 从"族后缀 + 卷标记"那一段里取**卷标记**（判族用）：<c>7z.001</c> ⇒ <c>001</c>、
+        /// <c>z02</c> ⇒ <c>z02</c>、<c>part1.rar</c> ⇒ 整段（RAR 的族就写在尾部后缀上）。
+        /// </summary>
+        private static string FamilyMarkerOf(string segment) =>
+            segment.EndsWith(".rar", StringComparison.OrdinalIgnoreCase)
+                ? segment
+                : segment[(segment.LastIndexOf('.') + 1)..];
+
+        /// <summary>规范卷段是不是**该族**的写法（`partN.rar` / `NNN` / `zNN`）—— 族对不上就不还原。</summary>
+        private static bool IsSegmentFamilyOfFormat(string segment, VolumeContentFormat format)        {
             if (segment.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
             {
                 return format == VolumeContentFormat.Rar;
@@ -4012,7 +4124,7 @@ namespace ArchiveFixer.Extraction
 
             /*
              * 期望基名 = 与 <see cref="VolumeGroupDetector.Group"/> **同一条代码路径**算出来的那个基名
-             * （组键那一档本身**不剥卷标记**：`TryResolveVolumeBaseName("HK.7z.001", VolumeGroupKey)`
+             * （组键那一档本身**不剥卷标记**：旧的归组键档对 `HK.7z.001`
              * 原样返回 `HK.7z.001`，而组里算出来的是 `HK.7z` —— 必须交给同一个出口判）。
              * 拿不到（这一份的名字/尺寸进不了任何一个桶）⇒ 判不出 ⇒ 这一档整个不做。
              */
@@ -4059,25 +4171,25 @@ namespace ArchiveFixer.Extraction
                     {
                         canonical = restored;
                     }
-                    else if (FileNameHelper.TryResolveVolumeBaseName(
-                                 entryName,
-                                 VolumeBaseNameLevel.DisguisedVolume,
-                                 out string entryVolumeBase,
-                                 out _)
+                    else if (TrySplitDisguised(entryName, out string entryVolumeBase, out string entrySegment)
                              && entryVolumeBase.Length > 0)
                     {
                         /*
                          * 这一份的名字里**根本没有卷标记**（伪装法把卷号吃掉了，如 `pack111-L2.7z`）
                          * ⇒ `TryBuildRestoredName` 帮不上（它要有标记才还原）。
                          * 它的槽位是我们**按入口自述的整包字节数唯一填平**推出来的（见上面那一段），
-                         * 所以规范名照**入口那一份的形状**拼：`<入口的卷基名>.<三位卷号>`。
+                         * 所以规范名照**入口那一份的形状**拼：`<入口的基名>.<入口的族后缀>.<三位卷号>`。
                          *
-                         * ⛔ 不另造一套命名口径：卷基名仍出自同一个出口
-                         * （<see cref="FileNameHelper.TryResolveVolumeBaseName"/>，级别 = 伪装档）。
+                         * ⛔ 不另造一套命名口径：基名仍出自**第二大步那一份**
+                         * （<see cref="FileNameHelper.SecondStepBaseName"/>），族后缀与卷标记就是
+                         * <see cref="TrySplitDisguised"/> 拆出来的那一段。
                          * 现场（`10101010`）：这一步之前，明细是「目标名「pack111-L2.7z」已经被别的文件占用了」
                          * —— 因为名字原样没带卷号、撞上入口层里那份同名文件；拼成 `pack111-L2.7z.003` 之后才落得下去。
                          */
-                        canonical = entryVolumeBase + "." + piece.Index.ToString("000", System.Globalization.CultureInfo.InvariantCulture);
+                        canonical = ReplaceVolumeMarker(
+                            entryVolumeBase,
+                            entrySegment,
+                            piece.Index.ToString("000", System.Globalization.CultureInfo.InvariantCulture));
                     }
                 }
 
@@ -4676,7 +4788,7 @@ namespace ArchiveFixer.Extraction
         /// （目录无所谓 —— 这一问只想知道"这一组叫什么"），取含入口那一份的那个组的基名。
         ///
         /// <para>⛔ 与下面那道闸门**同一条代码路径**：那样才不会被"组键档不剥卷标记"这类档位差异坑到
-        /// （实测 `TryResolveVolumeBaseName("HK.7z.001", VolumeGroupKey)` 原样返回 `HK.7z.001`，
+        /// （实测旧的归组键档对 `HK.7z.001` 原样返回 `HK.7z.001`，
         /// 而组里算出来的是 `HK.7z`）。判不出来 ⇒ 返回 null（调用方整档不做）。</para>
         /// </summary>
         private static string? ResolveGatherBaseName(IReadOnlyList<GatherPiece> pool, string entryName)

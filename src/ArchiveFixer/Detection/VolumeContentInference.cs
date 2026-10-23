@@ -275,8 +275,8 @@ namespace ArchiveFixer.Detection
         ///
         /// <para>三条同时成立才算 <see cref="SiblingVolumeShape.SelfConsistent"/>：</para>
         /// <list type="number">
-        /// <item><description><b>基名逐字相同</b>：每个成员的**包基名**（唯一出口
-        /// <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的 <see cref="VolumeBaseNameLevel.PackageName"/> 档）
+        /// <item><description><b>基名逐字相同</b>：每个成员的**基名**（<see cref="FileNameHelper.SecondStepBaseName"/>，
+        /// 第一个点之前 —— 第二大步那份）
         /// 与锚点逐字相等，且成员至少两个（只有一个成员谈不上"一组"）。</description></item>
         /// <item><description><b>卷标记连续</b>：自报卷标记的成员互不撞号、从 <c>1</c> 起，
         /// 而名字丢了的那几片正好把剩下的卷位补齐（<c>N = 自报卷标记的个数 + 名字丢了的个数</c>）。</description></item>
@@ -471,18 +471,20 @@ namespace ArchiveFixer.Detection
             };
         }
 
-        /// <summary>包基名（唯一出口 <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的 <see cref="VolumeBaseNameLevel.PackageName"/> 档）；判不出返回 null。</summary>
-        private static string? TryResolvePackageBaseName(string? path, string archiveExtension) =>
-            !string.IsNullOrWhiteSpace(path)
-            && FileNameHelper.TryResolveVolumeBaseName(
-                path,
-                VolumeBaseNameLevel.PackageName,
-                out string baseName,
-                out _,
-                archiveExtension)
-            && baseName.Length > 0
-                ? baseName
-                : null;
+        /// <summary>包基名（**第二大步那份**：<see cref="FileNameHelper.SecondStepBaseName"/>）；判不出返回 null。</summary>
+        private static string? TryResolvePackageBaseName(string? path, string archiveExtension)
+        {
+            _ = archiveExtension;
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            string baseName = FileNameHelper.SecondStepBaseName(path);
+
+            return baseName.Length > 0 ? baseName : null;
+        }
 
         private static string DirectoryOf(string? path)
         {

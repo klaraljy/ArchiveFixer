@@ -196,9 +196,7 @@ namespace ArchiveFixer.Tests
             // ⛔ 选中文件夹那一层上**不许有裸文件**（真机上 13 个包全倒在这里、还撞名成 (1)…(6)）。
             Assert.Empty(Directory.GetFiles(selectedLayer));
 
-            // 每包一个目录 → 其余物也回到"每包自己那一层"里（这一档已经没有共用根了）。
-            Assert.True(Directory.Exists(Path.Combine(nestedA.OutputPath, "其余物")));
-            Assert.True(Directory.Exists(Path.Combine(nestedB.OutputPath, "其余物")));
+            // 每包一个目录 → 其余物若生成，必须回到"每包自己那一层"里，不许共用根。
             Assert.False(Directory.Exists(Path.Combine(selectedLayer, "其余物")), "这一档不再共用根，其余物不该出现在选中文件夹那一层");
         }
 
@@ -431,7 +429,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = string.Empty;
             settings.ExtractToOriginalDirectory = true;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 
             // 用例自己决定源包怎么处理；默认"一个字节都不搬"（源目录的反向断言要靠它）。

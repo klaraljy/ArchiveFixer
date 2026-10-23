@@ -177,6 +177,7 @@ namespace ArchiveFixer.Engines.WinRar
                 DirectoryCount = parsed.DirectoryCount,
                 IsEncrypted = parsed.HeaderEncrypted || parsed.AnyEntryEncrypted,
                 IsMultiVolume = parsed.IsMultiVolume,
+                VolumeIndex = parsed.VolumeIndex ?? 0,
                 EngineId = Id,
                 EngineVersion = Version
             };

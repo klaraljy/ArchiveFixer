@@ -115,18 +115,24 @@ namespace ArchiveFixer.Tests
             string source = CreateSourceFile("pack.7z");
             ArchiveTask task = AddTask(harness, source);
 
+            /*
+             * ⚠ 2026-10-21：这里必须用**普通失败**，不能用"损坏压缩包"。
+             * 用户 2026-10-14 的口径：引擎明说包损坏 ⇒ 自动把已经解出来的留下
+             * （`IsDamagedArchive` 读 `EngineErrorTypes.CorruptedArchive`，唯一出口），
+             * 那一档的状态格是「文件损坏」、机器终态按内容物分档 —— 它有自己的守门
+             * （`PartialPublishTests`）。本条钉的是另一条红线：**普通失败 ⇒ 一个字节都不动**。
+             */
             harness.Engine.ExtractFailure = new ArchiveOperationResult
             {
                 Success = false,
-                Status = StatusText.Corrupted,
-                Message = "文件损坏",
-                DetectedErrorType = "Corrupted"
+                Status = StatusText.ExtractFailed,
+                Message = "解压失败：引擎报错",
+                DetectedErrorType = string.Empty
             };
 
             await harness.Coordinator.StartExtractAsync();
 
-            // ⚠ 状态文案：失败在机器终态上就是 `ExtractFailed`（"文件损坏"是引擎给出的**原因**，
-            // 它进 ErrorMessage，不再当状态格 —— 2026-10-15 按实测改）。
+            // 普通失败 ⇒ 状态格就是 `ExtractFailed`（引擎原因进 ErrorMessage，不升级成「文件损坏」那一档）。
             Assert.Equal(StatusText.ExtractFailed, task.Status);
             Assert.True(File.Exists(source), "失败时源包必须原地不动（哪怕用户选了彻底删除）");
             Assert.Equal(SourcePackageMoveState.NotAttempted, task.SourcePackageMove);
@@ -717,7 +723,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 
             /*

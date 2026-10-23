@@ -413,7 +413,6 @@ namespace ArchiveFixer.Tests
 
             AppSettings settings = AppSettings.CreateDefault();
             settings.AutoScanAfterDrop = false;
-            settings.RecursionMode = "SingleLayer";
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
             settings.ExtractToOriginalDirectory = false;
             settings.CustomOutputDirectory = outputRoot;

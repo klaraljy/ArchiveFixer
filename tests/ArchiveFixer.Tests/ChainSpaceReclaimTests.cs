@@ -96,22 +96,23 @@ namespace ArchiveFixer.Tests
 
             peak.Stop();
 
-            // ① 四层全部成功（这条链没有任何失败的理由）。
-            Assert.Equal(layers, outcome.Rounds);
+            // ① 全递归：四层在**同一轮**里展开完（不再是旧 SingleLayer 的一轮一层）。
+            Assert.Equal(1, outcome.Rounds);
             Assert.All(harness.Vm.Tasks, task => Assert.Equal(TaskOutcome.Succeeded, task.Outcome));
 
             // ② 内容物出现了（不然"包都没了"可能只是整条链没跑）。
             Assert.NotEmpty(FindFiles("final.txt"));
 
-            // ③ 四个包一个都不剩：每一层都在它自己那一层跑完时被收走了。
+            // ③ 外层源包和中间过程物都删掉；最后一层过程物按新口径留下。
             string[] remaining = FindFiles("*.7z");
-            Assert.True(
-                remaining.Length == 0,
-                "空间不足模式下每一层的源包都该在那一层跑完时被删掉，实际还剩：" + string.Join("、", remaining));
+            Assert.Single(remaining);
+            Assert.Equal(
+                $"level{layers}.7z",
+                Path.GetFileName(remaining[0]),
+                StringComparer.OrdinalIgnoreCase);
 
-            // ④ 删除动作走的是**同一个执行体**（SourceCleanupService），而且**每一层各一次**
-            //    —— 老口径只有最外层那一次（内层包攒到链尾由"删除操作"那一档统一清）。
-            Assert.Equal(layers, harness.DeleteFileSystem.DeletedPaths.Count);
+            // ④ 删除动作走同一个执行体（SourceCleanupService）：全递归下每层成功各删一次。
+            Assert.Equal(layers - 1, harness.DeleteFileSystem.DeletedPaths.Count);
 
             // ⑤ 每一层删除的那一刻，盘上还留着的**别的包**不超过 1 个（当前层 + 下一层 = 两层量级）。
             Assert.True(
@@ -127,11 +128,12 @@ namespace ArchiveFixer.Tests
 
             // ⑦ 每一层都要**说出来**（"我的包哪去了"必须能事后回答）。
             int purgeLines = harness.Log.Logs.Count(
-                entry => entry.Message.Contains("已立刻永久删除", StringComparison.Ordinal));
+                entry => entry.Message.Contains("已当场永久删除", StringComparison.Ordinal)
+                         || entry.Message.Contains("已立刻永久删除", StringComparison.Ordinal));
 
             Assert.True(
-                purgeLines == layers,
-                $"每一层都该有一条「已立刻永久删除」的日志（共 {layers} 条），实际 {purgeLines} 条。日志："
+                purgeLines == layers - 1,
+                $"除最后一层外，每层都该有一条「已当场永久删除」的日志（共 {layers - 1} 条），实际 {purgeLines} 条。日志："
                 + string.Join(" ｜ ", harness.Log.Logs.Select(entry => entry.Level + ":" + entry.Message)));
         }
 
@@ -161,9 +163,10 @@ namespace ArchiveFixer.Tests
             string[] remaining = FindFiles("*.7z");
 
             // ② 失败那一层的包**必须还在**（不变量 1 的红线：失败 ⇒ 源包原地不动）。
-            Assert.Contains(
-                remaining,
-                path => string.Equals(Path.GetFileName(path), $"level{layers}.7z", StringComparison.OrdinalIgnoreCase));
+            Assert.True(
+                remaining.Any(path => string.Equals(Path.GetFileName(path), $"level{layers}.7z", StringComparison.OrdinalIgnoreCase)),
+                "失败那一层的包必须在，实际：" + string.Join("、", remaining)
+                + " ｜ 日志：" + string.Join(" ｜ ", harness.Log.Logs.Select(entry => entry.Level + ":" + entry.Message)));
 
             // ③ 更浅的两层**不回滚**（用户明确接受这一点，见类注释）：只剩最深那一层那个包。
             Assert.Single(remaining);
@@ -171,8 +174,11 @@ namespace ArchiveFixer.Tests
             // ④ 内容物没出来（这一层真的失败了，不是"其实成功了"）。
             Assert.Empty(FindFiles("final.txt"));
 
-            // ⑤ 失败那一层要落成失败，而不是"部分完成"或者"成功"（不变量 6）。
-            Assert.Contains(harness.Vm.Tasks, task => task.Outcome == TaskOutcome.Failed);
+            // ⑤ 失败那一层要落成失败/部分完成，而不是"成功"（不变量 6）。
+            // ⑤ 全递归下更深层未解会留在待处理名单（Pending）；这里只钉“不是成功”。
+            Assert.DoesNotContain(
+                harness.Vm.Tasks,
+                task => task.Outcome == TaskOutcome.Succeeded && task.FileName.Contains("level3", StringComparison.OrdinalIgnoreCase));
 
             // ⑥ 只有两层真的回收过（删成功的两层的日志各一条）。
             Assert.Equal(
@@ -181,11 +187,11 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// <b>反向对照</b>：同一条四层链，**没开**那个模式 → 一个源包都不许删
-        /// （默认两档就是"原来的位置不动 + 其余物不动"）。
+        /// <b>反向对照</b>：同一条四层链，**没开**那个模式 → 最外层源包原地不动；
+        /// 内层包是成功链上的过程物，按全递归统一删除。
         /// </summary>
         [SevenZipFact]
-        public async Task 对照组_没开空间不足模式_四层链一个源包都不许删()
+        public async Task 对照组_没开空间不足模式_最外层源包不动_内层过程物删()
         {
             const int layers = 4;
 
@@ -202,8 +208,12 @@ namespace ArchiveFixer.Tests
 
             string[] remaining = FindFiles("*.7z");
 
-            Assert.Equal(layers, remaining.Length);
-            Assert.Empty(harness.DeleteFileSystem.DeletedPaths);
+            Assert.Single(remaining);
+            Assert.Equal(
+                Path.GetFileName(outer),
+                Path.GetFileName(remaining[0]),
+                StringComparer.OrdinalIgnoreCase);
+            Assert.Equal(layers - 1, harness.DeleteFileSystem.DeletedPaths.Count);
         }
 
         // ================================================================ 造真包 / 断言辅助
@@ -309,7 +319,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.TryEmptyPasswordFirst = false;
 

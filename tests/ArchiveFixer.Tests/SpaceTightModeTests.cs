@@ -373,7 +373,7 @@ namespace ArchiveFixer.Tests
             Assert.Contains("永久删除", tight.SpaceTightEcho, StringComparison.Ordinal);
             Assert.Contains("不写进设置", tight.SpaceTightEcho, StringComparison.Ordinal);
 
-            Assert.Contains(OneClickRunOptions.DescribeSourceHandling(SourceHandlingMode.KeepInPlace), tight.SourceEcho, StringComparison.Ordinal);
+            Assert.Contains(OneClickRunOptions.DescribeSourceHandling(SourceHandlingMode.DeleteInPlace), tight.SourceEcho, StringComparison.Ordinal);
             Assert.Contains(StatusText.OneClickConfirmRestAutoDelete, tight.RestEcho, StringComparison.Ordinal);
 
             /*
@@ -1036,7 +1036,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.TryEmptyPasswordFirst = false;
 

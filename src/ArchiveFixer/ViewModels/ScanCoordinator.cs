@@ -143,6 +143,13 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
+            if (mode == ImportMode.Replace)
+            {
+                ArchiveFixer.Extraction.UserSourceLedger.Clear();
+            }
+
+            ArchiveFixer.Extraction.UserSourceLedger.Record(paths);
+
             IsBusy = true;
 
             // 这次导入实际收进来的任务（导入后的无用物提醒只扫这几个的源目录）。

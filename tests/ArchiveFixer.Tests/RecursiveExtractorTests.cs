@@ -17,58 +17,6 @@ using Xunit;
 namespace ArchiveFixer.Tests
 {
     /// <summary>
-    /// "需要真实 7z.exe"的用例标记。
-    ///
-    /// 为什么要它：本文件大多数用例要求真实的 <c>tools/7zip/7z.exe</c>（递归链路只有跑真 7z 才测得出
-    /// 密码重试、损坏判定这些行为）。但"测试机上没放 7z"是环境问题、不是代码缺陷，
-    /// 环境不满足时应当**跳过并说明原因**，而不是把整条测试链染红。
-    ///
-    /// 做法是在**发现阶段**（构造特性时）就探测一次 7z 是否存在，不满足则设 <see cref="FactAttribute.Skip"/>。
-    /// 刻意不用"运行时抛异常来跳过"：xunit 2.x 没有可靠的运行时跳过 API，
-    /// 用它反而会引入一个"看起来是跳过、实际是失败"的陷阱。
-    /// 探测结果按路径缓存，避免每个用例都去走一遍目录树。
-    /// </summary>
-    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
-    public sealed class SevenZipFactAttribute : FactAttribute
-    {
-        private static readonly Lazy<string> LocatedSevenZip = new(LocateSevenZipPath);
-
-        public SevenZipFactAttribute()
-        {
-            if (string.IsNullOrEmpty(LocatedSevenZip.Value))
-            {
-                Skip = "测试机上没有可用的 7z.exe（ArchiveFixer/tools/7zip/7z.exe），跳过需要真实引擎的用例。";
-            }
-        }
-
-        /// <summary>定位内置 7z.exe：从测试程序集目录向上找含 ArchiveFixer.slnx 的目录，再取 tools/7zip/7z.exe。</summary>
-        internal static string LocateSevenZipPath()
-        {
-            DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-            while (directory != null)
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "ArchiveFixer.slnx")))
-                {
-                    string candidate = Path.Combine(directory.FullName, "src", "ArchiveFixer", "tools", "7zip", "7z.exe");
-
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-
-                directory = directory.Parent;
-            }
-
-            // 兜底：测试工程把 tools\7zip 也复制到了输出目录（与 OneClickPipelineTests 同一套写法）。
-            string local = Path.Combine(AppContext.BaseDirectory, "tools", "7zip", "7z.exe");
-
-            return File.Exists(local) ? local : string.Empty;
-        }
-    }
-
-    /// <summary>
     /// M4「递归解压」的验收测试（AGENTS.md §10 M4）。
     ///
     /// 测试策略（对应用户要求）：
@@ -131,7 +79,7 @@ namespace ArchiveFixer.Tests
 
             string output = Path.Combine(_root, "out", "single");
 
-            RecursionResult result = await ExtractAsync(archive, output, RecursionMode.SingleChain);
+            RecursionResult result = await ExtractAsync(archive, output);
 
             Assert.True(result.Completed, result.Summary);
             Assert.Equal(RecursionStopReason.Completed, result.StopReason);
@@ -145,26 +93,6 @@ namespace ArchiveFixer.Tests
                 Path.GetFullPath(output),
                 Path.GetFullPath(result.FinalOutputPath));
         }
-
-        [SevenZipFact]
-        public async Task SingleLayer模式_即使里面还有归档也不继续且只解一层()
-        {
-            RequireSevenZip();
-
-            (string outer, _) = BuildTwoBranchPackage();
-
-            string output = Path.Combine(_root, "out", "singlelayer");
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleLayer);
-
-            Assert.True(result.Completed, result.Summary);
-            Assert.Equal(RecursionStopReason.Completed, result.StopReason);
-
-            // 只解一层：内层归档原样留在产物里，用户想展开再单独发起。
-            Assert.Single(result.Layers);
-            Assert.True(File.Exists(Path.Combine(output, "a.7z")));
-            Assert.True(File.Exists(Path.Combine(output, "b.7z")));
-        }
-
         // ────────────── 单链档的判据：只看**有几个真归档**（用户 2026-10-04 当场推翻旧口径） ──────────────
 
         /// <summary>
@@ -187,7 +115,7 @@ namespace ArchiveFixer.Tests
             string output = Path.Combine(_root, "out", "single-inner-noninfo");
             var logLines = new List<(string Level, string Message)>();
 
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleChain, logLines);
+            RecursionResult result = await ExtractAsync(outer, output, logLines);
 
             // ① 真的往下解了：内层包的内容落到"内层包自己那一层"里。
             Assert.True(result.Completed, result.Summary);
@@ -202,48 +130,18 @@ namespace ArchiveFixer.Tests
             // ② 旁边那两个非归档文件照旧留在这一层（它们不是内层归档，也不该被吃掉）。
             Assert.True(File.Exists(Path.Combine(output, "movie.mp4")), result.Summary);
 
-            // ③ 判据只看归档数量 —— 日志里要能看出这一点（⛔ 不许静默改了行为）。
+            /*
+             * ③ 行为不许静默：日志里必须留下"第 1 层真的开工"那一行。
+             * ⚠ 2026-10-21：老断言钉的是 `只看内层归档的数量` 那句 —— 它属于**已删的档位**
+             * （单层/单链两档随迁移删除，现在一律展开所有分支），这句话不再写。
+             * 本条要证明的事实没变（1 个内层包 + 旁边有非归档文件 ⇒ 照样往下解），
+             * 所以改成钉"内层包真的被当成下一层开工了"。
+             */
             Assert.Contains(
                 logLines,
-                line => line.Message.Contains("只看内层归档的数量", StringComparison.Ordinal));
+                line => line.Message.Contains("第 1 层", StringComparison.Ordinal)
+                        && line.Message.Contains("sibling-inner.7z", StringComparison.Ordinal));
         }
-
-        /// <summary>
-        /// <b>用例④</b>：单链档 + 这一层里有 **2 个真归档** ⇒ 停在该层，并**点名**是哪几个包
-        /// （<see cref="RecursionResult.UnexpandedNames"/> 那套已有出口）。
-        ///
-        /// <para>判据的三条：① 停因是"多分支"那一档；② 两个包**都被点到名**（用户 2026-10-04 真机：
-        /// 只给个数他看不出是哪一个）；③ 产物里一个内层包都没被解开。</para>
-        /// </summary>
-        [SevenZipFact]
-        public async Task 单链档_一层里有2个内层包_停下并点名()
-        {
-            RequireSevenZip();
-
-            (string outer, _) = BuildTwoBranchPackage();
-
-            string output = Path.Combine(_root, "out", "two-branches-single-chain");
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleChain);
-
-            // ① 停在第 0 层（多分支要用户拍板这一档）。
-            Assert.False(result.Completed);
-            Assert.Equal(RecursionStopReason.NeedsDecision, result.StopReason);
-            Assert.NotNull(result.Decision);
-
-            // ② 点名：两个内层包都在这份名单里（⛔ 不是只给个数）。
-            Assert.Equal(2, result.UnexpandedNames.Count);
-            Assert.Contains(result.UnexpandedNames, path => path.EndsWith("a.7z", StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(result.UnexpandedNames, path => path.EndsWith("b.7z", StringComparison.OrdinalIgnoreCase));
-
-            // ③ 用户看得到的那一句里也要有名字（结论正文，不只躺在结构化字段里）。
-            Assert.Contains("a.7z", result.Summary, StringComparison.Ordinal);
-            Assert.Contains("b.7z", result.Summary, StringComparison.Ordinal);
-
-            // ④ 谁都没被解开：只解了第 0 层。
-            Assert.Single(result.Layers);
-            Assert.False(File.Exists(Path.Combine(output, "a", "a.txt")));
-        }
-
         // ────────────────────────────── 单链嵌套 ──────────────────────────────
 
         [SevenZipFact]
@@ -270,7 +168,7 @@ namespace ArchiveFixer.Tests
             Run7z("a", "-tzip", outer, Path.Combine(outerSource, "*"));
 
             string output = Path.Combine(_root, "out", "chain");
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleChain);
+            RecursionResult result = await ExtractAsync(outer, output);
 
             Assert.True(result.Completed, result.Summary);
             Assert.True(result.Layers.Count >= 2, $"应至少解出 2 层，实际 {result.Layers.Count}；{result.Summary}");
@@ -340,7 +238,7 @@ namespace ArchiveFixer.Tests
             Run7z("a", "-tzip", outer, Path.Combine(source, "*"));
 
             string output = Path.Combine(_root, "out", "AAA");
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.AllBranches);
+            RecursionResult result = await ExtractAsync(outer, output);
 
             Assert.True(result.Completed, result.Summary);
             Assert.Equal(8, result.Layers.Count);
@@ -412,7 +310,7 @@ namespace ArchiveFixer.Tests
             Run7z("a", "-tzip", outer, Path.Combine(source, "*"));
 
             string output = Path.Combine(_root, "out", "plain");
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.AllBranches);
+            RecursionResult result = await ExtractAsync(outer, output);
 
             Assert.True(result.Completed, result.Summary);
 
@@ -457,7 +355,7 @@ namespace ArchiveFixer.Tests
             Run7z("a", "-tzip", outer, Path.Combine(outerSource, "*"));
 
             string output = Path.Combine(_root, "out", "mixed");
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleChain);
+            RecursionResult result = await ExtractAsync(outer, output);
 
             Assert.Equal(RecursionStopReason.Completed, result.StopReason);
             Assert.Empty(result.UnexpandedNames);
@@ -474,46 +372,6 @@ namespace ArchiveFixer.Tests
         }
 
         // ────────────────────────────── 多分支 ──────────────────────────────
-
-        [SevenZipFact]
-        public async Task 多分支_SingleChain停下来询问且候选数量与提示正确()
-        {
-            RequireSevenZip();
-
-            (string outer, _) = BuildTwoBranchPackage();
-
-            string output = Path.Combine(_root, "out", "decision");
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.SingleChain);
-
-            Assert.Equal(RecursionStopReason.NeedsDecision, result.StopReason);
-
-            // 不算失败、也不算完成（规则 6）。
-            Assert.False(result.Completed);
-            Assert.True(result.PartiallyCompleted);
-
-            RecursionDecisionRequest decision = Assert.IsType<RecursionDecisionRequest>(result.Decision);
-            Assert.Equal(2, decision.CandidateArchives.Count);
-            Assert.Contains(decision.CandidateArchives, p => p.EndsWith("a.7z", StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(decision.CandidateArchives, p => p.EndsWith("b.7z", StringComparison.OrdinalIgnoreCase));
-            Assert.Equal(0, decision.Depth);
-
-            Assert.False(string.IsNullOrWhiteSpace(decision.Prompt));
-            Assert.Contains("2", decision.Prompt, StringComparison.Ordinal);
-
-            // 工作区里必须能看到产物（用户要能自己去看一眼再决定）。
-            // 用递归查找而不是写死层数：7z 是否自带"包名外套目录"属于引擎细节，
-            // 本用例要验的是"产物确实解出来了、工作区里看得到"，不该被这个细节绑住。
-            string workspacePath = ExtractWorkspacePath(result);
-
-            Assert.True(Directory.Exists(workspacePath), result.Summary);
-            Assert.True(
-                FindFileUnder(workspacePath, "a.7z") != null,
-                $"工作区里应当能看到内层归档 a.7z：{workspacePath}");
-            Assert.True(
-                FindFileUnder(workspacePath, "note.txt") != null,
-                $"工作区里应当能看到说明文件 note.txt：{workspacePath}");
-        }
-
         [SevenZipFact]
         public async Task AllBranches模式_两个分支都展开且不再询问()
         {
@@ -524,7 +382,7 @@ namespace ArchiveFixer.Tests
             string output = Path.Combine(_root, "out", "allbranches");
 
             // AllBranches 是"用户已经明确要求展开所有分支"，所以不该再出现询问。
-            RecursionResult result = await ExtractAsync(outer, output, RecursionMode.AllBranches);
+            RecursionResult result = await ExtractAsync(outer, output);
 
             Assert.True(result.Completed, result.Summary);
             Assert.Null(result.Decision);
@@ -538,97 +396,6 @@ namespace ArchiveFixer.Tests
             // 外层的说明文件原地不动。
             Assert.True(File.Exists(Path.Combine(output, "note.txt")), result.Summary);
         }
-
-        [SevenZipFact]
-        public async Task 用户确认继续后_previousDecision里的两个分支都被展开()
-        {
-            RequireSevenZip();
-
-            (string outer, _) = BuildTwoBranchPackage();
-
-            string output = Path.Combine(_root, "out", "all");
-            RecursionResult first = await ExtractAsync(outer, output, RecursionMode.SingleChain);
-
-            Assert.Equal(RecursionStopReason.NeedsDecision, first.StopReason);
-            RecursionDecisionRequest decision = Assert.IsType<RecursionDecisionRequest>(first.Decision);
-
-            // 用户点"继续"：把上一次的询问原样传回来。
-            var task = new ArchiveTask(outer);
-            var extractor = new RecursiveExtractor(
-                new SevenZipEngine(),
-                new MagicAwareProber(),
-                _ => new[] { string.Empty });
-
-            RecursionResult second = await extractor.ExtractAsync(
-                task,
-                output,
-                RecursionMode.SingleChain,
-                decision,
-                CancellationToken.None);
-
-            Assert.True(second.Completed, second.Summary);
-            Assert.Equal(RecursionStopReason.Completed, second.StopReason);
-            Assert.True(second.Layers.Count >= 3, $"两个分支都该被解开，实际层数 {second.Layers.Count}");
-
-            // 两个分支的产物都要落到最终目录（各自一层自己的包名）。
-            Assert.True(File.Exists(Path.Combine(output, "a", "a.txt")), second.Summary);
-            Assert.True(File.Exists(Path.Combine(output, "b", "b.txt")), second.Summary);
-        }
-
-        [SevenZipFact]
-        public async Task previousDecision_只处理候选里的归档不重新全盘扫描()
-        {
-            RequireSevenZip();
-
-            (string outer, _) = BuildTwoBranchPackage();
-
-            string output = Path.Combine(_root, "out", "partial-decision");
-
-            // 先把候选清单真实地跑出来（用户看到的就是这一份）。
-            RecursionResult askResult = await ExtractAsync(outer, output, RecursionMode.SingleChain);
-            RecursionDecisionRequest ask = Assert.IsType<RecursionDecisionRequest>(askResult.Decision);
-            Assert.Equal(2, ask.CandidateArchives.Count);
-
-            /*
-             * 候选只给一个分支，同时把"单层内层归档数上限"压到 1：
-             * 这同时验证两件事 ——
-             * ① 续跑只处理用户点名的那一个，未点名的 b.7z 不该被展开（不是重新全盘扫描）；
-             * ② 条数上限作用在"用户点名的清单"上，而不是扫描结果上，否则用户选 1 个也会被拦。
-             */
-            var decision = new RecursionDecisionRequest
-            {
-                CurrentArchivePath = outer,
-                Depth = ask.Depth,
-                CandidateArchives = new[] { ask.CandidateArchives[0] },
-                Prompt = ask.Prompt
-            };
-
-            var task = new ArchiveTask(outer);
-            var extractor = new RecursiveExtractor(
-                new SevenZipEngine(),
-                new MagicAwareProber(),
-                _ => new[] { string.Empty },
-                new RecursionLimits { MaxInnerArchivesPerLayer = 1 });
-
-            RecursionResult result = await extractor.ExtractAsync(
-                task,
-                output,
-                RecursionMode.SingleChain,
-                decision,
-                CancellationToken.None);
-
-            Assert.NotEqual(RecursionStopReason.TooManyInnerArchives, result.StopReason);
-            Assert.True(result.Completed, result.Summary);
-            Assert.Null(result.Decision);
-
-            // 被点名的那一个分支的产物必须解出来（a.7z → 原位置 `a\` 里 → a.txt）。
-            Assert.True(File.Exists(Path.Combine(output, "a", "a.txt")), result.Summary);
-
-            // 没被点名的分支不能出现在最终产物里。
-            Assert.False(File.Exists(Path.Combine(output, "b", "b.txt")), "未被点名的分支不该被展开");
-            Assert.False(Directory.Exists(Path.Combine(output, "b")), "未被点名的分支不该有自己那一层");
-        }
-
         [SevenZipFact]
         public async Task 内层归档数量超上限_TooManyInnerArchives()
         {
@@ -646,7 +413,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "too-many"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -674,7 +440,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "maxdepth"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -736,7 +501,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "maxfiles"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -766,7 +530,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "bomb"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -797,7 +560,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 output,
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -847,7 +609,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "pass-wrong"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -913,7 +674,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out-widest-failure"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -972,7 +732,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out-crc-proven"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -986,10 +745,16 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// 对照：**只解出一个文件**时仍按老口径继续试下一个候选（保守边界，⛔ 不许放宽）。
+        /// 对照：**只解出一个文件**时照老口径继续试下一个候选（保守边界，⛔ 不许放宽）。
         ///
         /// <para>「错密码」与「密码对、文件坏」在这一档上分不开 —— 真机那 10 个错候选里就有留下一个文件的。
         /// 所以门槛是"至少两个非空文件"，一个文件必须继续试。</para>
+        ///
+        /// <para>⚠ 2026-10-21 订正：**「结果相同 ⇒ 提前停」只对"引擎已经接受密码"那一支成立**
+        /// （引擎说成功、产物没通过校验）。错密码这一支**不许**用它停：加密包的错密码也会在产物目录里
+        /// 留下一模一样的半截数据，而正确密码排在后面时产物完全不同 —— 实测
+        /// `Item45LogAndPasswordTests.真7z_先试错两个候选再成功_成功档照样只留一行` 因此在全量里变红
+        /// （候选 3 才是对的，循环在候选 2 就停了）。⇒ 本条恢复"三个候选都试"。</para>
         /// </summary>
         [Fact]
         public async Task 递归候选循环_只解出一个文件时_仍按老口径继续试下一个候选()
@@ -1026,10 +791,10 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out-one-file"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
+            // 三个候选全试完（错密码这一支不许因为"结果一样"提前停）。
             Assert.Equal(3, extractCalls);
             Assert.Equal(RecursionStopReason.WrongPassword, result.StopReason);
         }
@@ -1075,7 +840,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out-ambiguous-proven"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -1113,7 +877,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "pass-limit"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -1146,7 +909,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "cancelled"),
-                RecursionMode.SingleChain,
                 null,
                 cts.Token);
 
@@ -1319,7 +1081,7 @@ namespace ArchiveFixer.Tests
 
             string output = Path.Combine(_root, "out", "two-layer");
 
-            RecursionResult result = await ExtractAsync(outerArchive, output, RecursionMode.SingleChain);
+            RecursionResult result = await ExtractAsync(outerArchive, output);
 
             Assert.True(result.Completed, result.Summary);
             Assert.Equal(2, result.Layers.Count);
@@ -1370,7 +1132,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 output,
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -1414,7 +1175,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "keep-on-failure"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -1466,7 +1226,6 @@ namespace ArchiveFixer.Tests
             RecursionResult result = await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out", "cancel-mid"),
-                RecursionMode.SingleChain,
                 null,
                 cts.Token);
 
@@ -1517,7 +1276,6 @@ namespace ArchiveFixer.Tests
             Task<RecursionResult> run = extractor.ExtractAsync(
                 new ArchiveTask(archivePath),
                 output,
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -1597,7 +1355,6 @@ namespace ArchiveFixer.Tests
             Task<RecursionResult> slowRun = slowExtractor.ExtractAsync(
                 new ArchiveTask(slowArchive),
                 slowOutput,
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -1610,7 +1367,6 @@ namespace ArchiveFixer.Tests
             RecursionResult fastResult = await fastExtractor.ExtractAsync(
                 new ArchiveTask(fastArchive),
                 fastOutput,
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -1631,72 +1387,21 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(Path.Combine(slowOutput, "payload.bin")), slowResult.Summary);
             Assert.False(Directory.Exists(slowWorkspace), "自己成功之后也没清掉工作区");
         }
-
-        /// <summary>
-        /// 多分支询问 → 用户点"继续"：续跑会把第 0 层在**新工作区**里重解一遍，
-        /// 上一次那份被取代的产物（往往几百 MB）必须跟着本次成功一起清掉，否则每确认一次就多留一份。
-        /// </summary>
-        [SevenZipFact]
-        public async Task 用户确认继续后_上一次运行的工作区也随本次成功一起清理()
-        {
-            RequireSevenZip();
-
-            (string outer, _) = BuildTwoBranchPackage();
-
-            string output = Path.Combine(_root, "out", "superseded");
-
-            var task = new ArchiveTask(outer);
-            var extractor = new RecursiveExtractor(
-                new SevenZipEngine(),
-                new MagicAwareProber(),
-                _ => new[] { string.Empty });
-
-            RecursionResult first = await extractor.ExtractAsync(
-                task,
-                output,
-                RecursionMode.SingleChain,
-                null,
-                CancellationToken.None);
-
-            Assert.Equal(RecursionStopReason.NeedsDecision, first.StopReason);
-
-            string firstWorkspace = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
-
-            Assert.True(Directory.Exists(firstWorkspace), "等用户决定时工作区必须保留（产物还在这里）");
-
-            // 用户点"继续"：同一个实例、同一个归档、带着上一次的询问再跑一遍。
-            RecursionResult second = await extractor.ExtractAsync(
-                task,
-                output,
-                RecursionMode.SingleChain,
-                first.Decision,
-                CancellationToken.None);
-
-            Assert.True(second.Completed, second.Summary);
-            Assert.True(File.Exists(Path.Combine(output, "a", "a.txt")), second.Summary);
-            Assert.True(File.Exists(Path.Combine(output, "b", "b.txt")), second.Summary);
-
-            Assert.False(
-                Directory.Exists(Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory),
-                "本次运行的工作区应当被清理");
-
-            // 被续跑取代的那一份也要清：续跑会把第 0 层重解一遍，旧的那份是纯垃圾（几百 MB 量级）。
-            Assert.False(
-                Directory.Exists(firstWorkspace),
-                "被本次续跑取代的工作区也该清掉，否则每确认一次多分支就多留一份重复产物");
-        }
-
         /// <summary>
         /// 同一个实例被拿去跑**另一个**归档时（不是续跑），上一个任务的工作区不能被连带清掉 ——
-        /// 那个任务停在"等你决定"，状态是部分完成，它的产物是用户唯一的线索。
+        /// 那个任务没跑成、工作区按规矩留着，它的中间产物是用户唯一的线索。
         /// 判据是归档路径，不是"实例上有没有记着东西"。
+        ///
+        /// <para>⚠ 2026-10-21：第一趟的收尾原因从「多分支询问」换成「文件名已加密」——
+        /// 多分支不再问用户（档位已删，`NeedsDecision` 现在不可达），而"没跑成 ⇒ 工作区留着"
+        /// 这条没变（见 <c>递归失败_工作区保留</c>）。本条钉的是**换归档**那一半，与停在哪一档无关。</para>
         /// </summary>
         [SevenZipFact]
         public async Task 同一个实例换归档_不清理上一个任务的工作区()
         {
             RequireSevenZip();
 
-            (string firstOuter, _) = BuildTwoBranchPackage();
+            string firstOuter = BuildEncryptedInnerPackage();
 
             string otherSource = BuildSourceDir(new[] { ("data.txt", "另一个包\n") }, "_other");
             string secondArchive = Path.Combine(_root, "other.zip");
@@ -1705,16 +1410,15 @@ namespace ArchiveFixer.Tests
             var extractor = new RecursiveExtractor(
                 new SevenZipEngine(),
                 new MagicAwareProber(),
-                _ => new[] { string.Empty });
+                _ => new[] { string.Empty, "wrong-pass" });
 
             RecursionResult first = await extractor.ExtractAsync(
                 new ArchiveTask(firstOuter),
                 Path.Combine(_root, "out", "swap-first"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
-            Assert.Equal(RecursionStopReason.NeedsDecision, first.StopReason);
+            Assert.Equal(RecursionStopReason.EncryptedHeaders, first.StopReason);
 
             string firstWorkspace = Assert.IsType<ExtractionWorkspace>(extractor.CurrentWorkspace).TaskDirectory;
 
@@ -1722,7 +1426,6 @@ namespace ArchiveFixer.Tests
             RecursionResult second = await extractor.ExtractAsync(
                 new ArchiveTask(secondArchive),
                 Path.Combine(_root, "out", "swap-second"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None);
 
@@ -1732,24 +1435,23 @@ namespace ArchiveFixer.Tests
                 "本次运行的工作区应当被清理");
             Assert.True(
                 Directory.Exists(firstWorkspace),
-                "上一个任务（等用户决定）的工作区被别的任务连带清掉了");
+                "上一个任务（没跑成、工作区留着）的工作区被别的任务连带清掉了");
         }
 
         // ────────────────────────────── 测试基础设施 ──────────────────────────────
 
-        private async Task<RecursionResult> ExtractAsync(string archivePath, string outputDirectory, RecursionMode mode)
+        private async Task<RecursionResult> ExtractAsync(string archivePath, string outputDirectory)
         {
-            return await ExtractAsync(archivePath, outputDirectory, mode, logLines: null);
+            return await ExtractAsync(archivePath, outputDirectory, logLines: null);
         }
 
         /// <summary>
         /// 同上，另收一份日志（判据要说清"为什么这么走"时用得上；<paramref name="logLines"/> 传 null = 不记日志，
-        /// 与只传三个参数的那个重载**逐字相同**）。
+        /// 与只传两个参数的那个重载**逐字相同**）。
         /// </summary>
         private async Task<RecursionResult> ExtractAsync(
             string archivePath,
             string outputDirectory,
-            RecursionMode mode,
             List<(string Level, string Message)>? logLines)
         {
             var task = new ArchiveTask(archivePath);
@@ -1760,7 +1462,7 @@ namespace ArchiveFixer.Tests
                 limits: null,
                 log: logLines == null ? null : (level, message) => logLines.Add((level, message)));
 
-            return await extractor.ExtractAsync(task, outputDirectory, mode, null, CancellationToken.None);
+            return await extractor.ExtractAsync(task, outputDirectory, null, CancellationToken.None);
         }
 
         /// <summary>从结果里反推某一层产物的目录（第 0 层就是工作区里的 layer-000\output）。</summary>
@@ -1899,7 +1601,6 @@ namespace ArchiveFixer.Tests
             await extractor.ExtractAsync(
                 task,
                 Path.Combine(_root, "out-layer-progress"),
-                RecursionMode.SingleChain,
                 null,
                 CancellationToken.None,
                 new RecordingProgress(recorded));

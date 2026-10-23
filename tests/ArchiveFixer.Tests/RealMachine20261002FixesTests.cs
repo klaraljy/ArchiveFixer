@@ -600,7 +600,27 @@ namespace ArchiveFixer.Tests
 
             for (int index = 1; index <= 4; index++)
             {
-                WriteVolume(Path.Combine(directory, $"111.part{index}.rar"), signature, 4096);
+                string path = Path.Combine(directory, $"111.part{index}.rar");
+
+                /*
+                 * ⚠ 2026-10-21：夹具必须是**真卷头**，不能只写签名。
+                 * 2026-10-17 起归组先问内容卡（`VolumeGroupingService` 开头那一道
+                 * `FileNature.Inspect(...).ParticipatesInVolumeHandling`）：RAR 主头类型读不出来
+                 * ⇒ 判成「可证不是分卷成员」⇒ 这一档连名字归组都轮不到 ⇒ 四个文件各占一行。
+                 * 而"每一卷都带签名"这个物理事实本身不变 —— 下面逐字节断言。
+                 */
+                byte[] bytes = family == "RAR4"
+                    ? RarVolumeFixtures.Rar4(
+                        volumeField: (ushort)(index - 1),
+                        firstVolume: index == 1,
+                        nextVolume: index < 4)
+                    : RarVolumeFixtures.Rar5(index == 1 ? null : (uint)(index - 1));
+
+                File.WriteAllBytes(path, bytes);
+
+                Assert.True(
+                    File.ReadAllBytes(path).AsSpan(0, signature.Length).SequenceEqual(signature),
+                    family + " 第 " + index + " 卷开头必须是本族签名");
             }
 
             List<ArchiveTask> tasks = await ScanAsync(directory);
@@ -772,7 +792,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.RemindBeforeExtract = false;
             settings.TryEmptyPasswordFirst = false;

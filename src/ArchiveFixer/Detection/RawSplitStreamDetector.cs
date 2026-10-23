@@ -206,11 +206,12 @@ namespace ArchiveFixer.Detection
                 return result;
             }
 
-            // ⛔ 基名走**唯一出口**（2026-10-07）：`FindSiblingVolumes` 只"把话说清、不参与判决"（见方法注释），
-            // 所以这里可以用骨架/容忍档口径，脏名兄弟（`111.z0删除2`）也认得出来；
+            // ⛔ 基名走**唯一出口**（2026-10-23：第二大步那份 = 第一个点之前）：
+            // `FindSiblingVolumes` 只"把话说清、不参与判决"（见方法注释），所以脏名兄弟
+            // （`111.z0删除2`）也认得出来；
             // ⚠ `StripVolumeSuffix` 一个字不动 —— 那两道"假成功"闸门（`IsBrokenVolumeChain` /
             // `LooksLikeSplitStreamEcho`）靠它"与 7-Zip 同一口径"的剥法，换了就等于削弱它们。
-            string selfBaseName = Helpers.FileNameHelper.StripVolumeMarkers(Path.GetFileName(archivePath));
+            string selfBaseName = Helpers.FileNameHelper.SecondStepBaseName(Path.GetFileName(archivePath));
 
             if (string.IsNullOrWhiteSpace(selfBaseName))
             {
@@ -231,7 +232,7 @@ namespace ArchiveFixer.Detection
                     continue;
                 }
 
-                string otherBaseName = Helpers.FileNameHelper.StripVolumeMarkers(name);
+                string otherBaseName = Helpers.FileNameHelper.SecondStepBaseName(name);
 
                 bool related =
                     otherBaseName.StartsWith(selfBaseName, StringComparison.OrdinalIgnoreCase) ||

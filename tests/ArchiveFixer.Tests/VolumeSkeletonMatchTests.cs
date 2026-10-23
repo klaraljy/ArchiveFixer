@@ -118,8 +118,8 @@ namespace ArchiveFixer.Tests
             Assert.False(ExtensionHelper.TrySplitVolumeSegmentTolerant("p1art2", out _, out _));
 
             // 基名规则本身（这才是"只在最右那一格放开"要保住的东西）。
-            Assert.Equal("444.p1art2", FileNameHelper.StripVolumeMarkers("444.p1art2.part2.rar"));
-            Assert.Equal("444.p1art2", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
+            Assert.Equal("444", FileNameHelper.SecondStepBaseName("444.p1art2.part2.rar"));
+            Assert.Equal("444", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
         }
 
         /// <summary>卷标记段的正例：数字骨架可以夹杂质（`0a0b1` ⇒ `001`）、`zNN` 同理（都要**首尾对齐**）。</summary>
@@ -150,26 +150,23 @@ namespace ArchiveFixer.Tests
         /// 判据照既有口径、⛔ 不许新造第三把尺子」。</para>
         /// </summary>
         [Theory]
-        [InlineData("set.7aaaaz.002", "set.7z", "002")]
-        [InlineData("set.7_______z.002", "set.7z", "002")]
-        [InlineData("333.78a8fuaz.003", "333.7z", "003")]
-        [InlineData("a.b.c.7sz.005", "a.b.c.7z", "005")]
-        public void 归档后缀段_脏的那一段要归一成真实身份(string fileName, string expectedBase, string expectedSegment)
+        [InlineData("set.7aaaaz.002", "set")]
+        [InlineData("set.7_______z.002", "set")]
+        [InlineData("333.78a8fuaz.003", "333")]
+        [InlineData("a.b.c.7sz.005", "a")]
+        public void 归档后缀段_脏的那一段要归一成真实身份(string fileName, string expectedBase)
         {
             Assert.True(
                 ExtensionHelper.IsArchiveSegmentByDisguise(fileName, out string recovered),
                 $"`{fileName}` 的归档后缀段应当靠容错/骨架档读得出来");
             Assert.Equal("7z", recovered);
 
-            Assert.True(
-                FileNameHelper.TryResolveVolumeBaseName(
-                    fileName,
-                    VolumeBaseNameLevel.DisguisedVolume,
-                    out string baseName,
-                    out string segment),
-                $"`{fileName}` 应当拆得出来");
-            Assert.Equal(expectedBase, baseName);
-            Assert.Equal(expectedSegment, segment);
+            /*
+             * ⚠ 2026-10-23（用户口径）：名字级拆解只剩**基名**这一份（第一个点之前），
+             * "族后缀 + 卷标记"的重建不再是基名算法 —— 这里只钉基名与归组两处可观测面；
+             * 改名计划层的目标名由 `VolumeNameRepairTests` 那几条计划用例钉住。
+             */
+            Assert.Equal(expectedBase, FileNameHelper.SecondStepBaseName(fileName));
 
             // 归组那一档照旧（这一格本来就对，第六轮只把**计划**那一档补齐）。
             Assert.Equal("333.7z.001", VolumeGroupDetector.TryGetFirstVolumeName("333.78a8fuaz.003"));
@@ -374,8 +371,8 @@ namespace ArchiveFixer.Tests
             Assert.EndsWith("part1.rar", group.FirstVolumePath, StringComparison.OrdinalIgnoreCase);
 
             // 基名规则一个字没动（RAR = partN 段**之前**的所有点段）。
-            Assert.Equal("444.p1art2", FileNameHelper.StripVolumeMarkers("444.p1art2.part2.rar"));
-            Assert.Equal("444.p1art2", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
+            Assert.Equal("444", FileNameHelper.SecondStepBaseName("444.p1art2.part2.rar"));
+            Assert.Equal("444", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
         }
 
         // ================================================================ 卷标记段的 partN 骨架（"取最右"，2026-10-04 第二轮）
@@ -408,7 +405,7 @@ namespace ArchiveFixer.Tests
             // 整条链上的公开观测面：卷序 / 首卷名 / 剥标记 / 包基名。
             Assert.Equal(1, VolumeGroupDetector.TryGetVolumeIndex("444.pa8rt1.rar"));
             Assert.Equal("444.part1.rar", VolumeGroupDetector.TryGetFirstVolumeName("444.pa8rt1.rar"));
-            Assert.Equal("444", FileNameHelper.StripVolumeMarkers("444.pa8rt1.rar"));
+            Assert.Equal("444", FileNameHelper.SecondStepBaseName("444.pa8rt1.rar"));
             Assert.Equal("444", OutputPlacement.ResolveArchiveBaseName("444.pa8rt1.rar"));
         }
 
@@ -423,8 +420,8 @@ namespace ArchiveFixer.Tests
         [Fact]
         public void 卷标记段_取最右_末尾干净时左边那段不许再吃骨架档()
         {
-            Assert.Equal("444.p1art2", FileNameHelper.StripVolumeMarkers("444.p1art2.part2.rar"));
-            Assert.Equal("444.p1art2", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
+            Assert.Equal("444", FileNameHelper.SecondStepBaseName("444.p1art2.part2.rar"));
+            Assert.Equal("444", OutputPlacement.ResolveArchiveBaseName("444.p1art2.part2.rar"));
             Assert.Equal(2, VolumeGroupDetector.TryGetVolumeIndex("444.p1art2.part2.rar"));
             Assert.Equal("444.p1art2.part1.rar", VolumeGroupDetector.TryGetFirstVolumeName("444.p1art2.part2.rar"));
 

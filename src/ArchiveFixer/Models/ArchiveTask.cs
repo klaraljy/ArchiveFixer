@@ -1319,6 +1319,19 @@ namespace ArchiveFixer.Models
         /// </summary>
         public int RecursionTriedCandidateCount { get; set; }
 
+        /// <summary>这一层停手是不是因为「连续两个候选解出来的产物完全相同」（结构化事实）。</summary>
+        public bool RecursionCandidatesIdentical { get; set; }
+
+        /// <summary>
+        /// **这一单停在"连续两个候选的结果完全相同"**（换密码不会改变结果 ⇒ 结论是密码类，⛔ 不是撞上限）。
+        ///
+        /// <para>事实由 <c>RecursiveExtractor</c> 的候选循环给出（唯一出口
+        /// <c>RecursionLayerReport.CandidatesProducedIdenticalResults</c>），经这里带到收尾那一步，
+        /// 由它把「连续两个候选解出来的产物完全相同」补进失败原因 —— 与单层路
+        /// （<c>ExtractionCoordinator</c> 的 <c>passwordIrrelevantReason</c>）同一句话。</para>
+        /// </summary>
+        public bool RecursionIdenticalCandidateResults { get; set; }
+
         public bool IsEncrypted
         {
             get => _isEncrypted;
@@ -1410,6 +1423,9 @@ namespace ArchiveFixer.Models
 
         /// <summary>缺失的卷文件名（总数无法确定时为空）。</summary>
         public List<string> MissingVolumeNames { get; } = new();
+
+        /// <summary>这一单的产物里还有未完成的分卷组，最终成功前不许删源。</summary>
+        public bool HasUnresolvedVolumeGroup { get; set; }
 
         /// <summary>分卷情况的一句话说明，直接显示给用户。</summary>
         public string VolumeInfoText { get; set; } = string.Empty;

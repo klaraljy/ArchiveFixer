@@ -71,8 +71,7 @@ namespace ArchiveFixer.Tests
             const string legacyJson = """
             {
               "RecursiveScan": true,
-              "CustomSevenZipExePath": "",
-              "RecursionMode": "SingleLayer"
+              "CustomSevenZipExePath": ""
             }
             """;
 

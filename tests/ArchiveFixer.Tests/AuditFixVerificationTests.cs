@@ -74,22 +74,18 @@ namespace ArchiveFixer.Tests
         /// 这正是体检报告 §2 第 2 条（两份逐字相同的 40 行）要防的事。
         /// </summary>
         [Theory]
-        [InlineData("x.7z.001", "x.7z", "x")]
-        [InlineData("x.zip.001", "x.zip", "x")]
-        [InlineData("x.part1.rar", "x", "x")]
-        [InlineData("x.r00", "x", "x")]
-        [InlineData("x.z01", "x", "x")]
-        [InlineData("x.tar.gz", "x.tar.gz", "x")]
-        [InlineData("222.7z.001", "222.7z", "222")]
-        [InlineData("222.part01.rar", "222", "222")]
+        [InlineData("x.7z.001", "x")]
+        [InlineData("x.zip.001", "x")]
+        [InlineData("x.part1.rar", "x")]
+        [InlineData("x.r00", "x")]
+        [InlineData("x.z01", "x")]
+        [InlineData("x.tar.gz", "x")]
+        [InlineData("222.7z.001", "222")]
+        [InlineData("222.part01.rar", "222")]
         public void 分卷标记剥离_归档基名与包基名给出完全相同的基名(
             string fileName,
-            string expectedAfterStrip,
             string expectedBaseName)
         {
-            // ① 剥分卷标记这一段只剩 FileNameHelper 一处实现。
-            Assert.Equal(expectedAfterStrip, FileNameHelper.StripVolumeMarkers(fileName));
-
             string path = Path.Combine(@"C:\111", fileName);
 
             // ② 归档基名（FileNameHelper）与包基名（OutputPlacement 的落点公式）必须同解。
@@ -107,77 +103,65 @@ namespace ArchiveFixer.Tests
         }
 
         /// <summary>
-        /// "<c>222.rar</c> 里的 <c>222</c> 不是分卷段" —— 剥法里那条守卫（<c>previousDot &gt; 0</c>）
-        /// 的唯一判据测试：没有它，整个包名会被当成三位数字分卷段吃光，落点变成上一级目录。
+        /// <c>222.rar</c> 里的 <c>222</c> 不是分卷段 —— 判据是"第一个点之前"，⛔ 不是"数末尾几段"。
         /// </summary>
         [Fact]
         public void 分卷标记剥离_不许把普通包名的数字段当分卷吃光()
         {
-            Assert.Equal("222.rar", FileNameHelper.StripVolumeMarkers("222.rar"));
-            Assert.Equal("222.7z", FileNameHelper.StripVolumeMarkers("222.7z"));
-            Assert.Equal("222", FileNameHelper.StripVolumeMarkers("222"));
-            Assert.Equal("movie.2024", FileNameHelper.StripVolumeMarkers("movie.2024"));
+            Assert.Equal("222", FileNameHelper.SecondStepBaseName("222.rar"));
+            Assert.Equal("222", FileNameHelper.SecondStepBaseName("222.7z"));
+            Assert.Equal("222", FileNameHelper.SecondStepBaseName("222"));
+            Assert.Equal("movie", FileNameHelper.SecondStepBaseName("movie.2024"));
 
-            // 真的分卷段照旧剥掉（守卫不能把该剥的也拦下来）。
-            Assert.Equal("222", FileNameHelper.StripVolumeMarkers("222.part1.rar"));
-            Assert.Equal("222", FileNameHelper.StripVolumeMarkers("222.001.rar"));
+            // 真的分卷段照旧剥掉（同一个切点，不需要第二套规则）。
+            Assert.Equal("222", FileNameHelper.SecondStepBaseName("222.part1.rar"));
+            Assert.Equal("222", FileNameHelper.SecondStepBaseName("222.001.rar"));
         }
 
         /// <summary>
-        /// 两条路**故意**不同的地方也要钉住：非归档后缀（<c>movie.2024</c>）只有包基名保留它 ——
-        /// 归档基名按"普通文件"剥一层，包基名只剥**已知归档后缀**。
-        /// 这一条不是缺陷，而是 <c>OutputPlacement</c> 那条更严格规则的存在理由；
-        /// 写进测试免得后人"顺手统一"把落点规则改坏。
+        /// 2026-10-23（用户拍板）：归档基名与包基名**不再是两个值** —— 两处都遵循同一个切点
+        /// （第一个点之前）。旧口径里"包基名只剥已知归档后缀"那条差异已随 6 档体系删除。
         /// </summary>
         [Fact]
-        public void 分卷之外的差异是既定设计_包基名只剥已知归档后缀()
+        public void 归档基名与包基名同一口径_movie2024两处都得到movie()
         {
             Assert.Equal("movie", FileNameHelper.GetArchiveBaseName(@"C:\111\movie.2024"));
-            Assert.Equal("movie.2024", OutputPlacement.ResolveArchiveBaseName(@"C:\111\movie.2024"));
+            Assert.Equal("movie", OutputPlacement.ResolveArchiveBaseName(@"C:\111\movie.2024"));
         }
 
-        /// <summary>分卷剥离的**定义**在生产代码里只允许一处 —— 副本复活即失败（体检报告 §2 第 2 条）。</summary>
+        /// <summary>基名**只有两份方法**（第一大步 / 第二大步）；旧的 6 档体系与它的转调点全部不许复活。</summary>
         [Fact]
-        public void 分卷标记剥离_生产代码里只允许一处实现()
+        public void 基名只有两份方法_旧档位体系不许复活()
         {
             string helper = File.ReadAllText(RepoPath("src", "ArchiveFixer", "Helpers", "FileNameHelper.cs"));
             string placement = File.ReadAllText(RepoPath("src", "ArchiveFixer", "Extraction", "OutputPlacement.cs"));
 
-            Assert.Contains("public static string StripVolumeMarkers(string fileName)", helper, StringComparison.Ordinal);
+            Assert.Contains("public static string FirstStepBaseName", helper, StringComparison.Ordinal);
+            Assert.Contains("public static string SecondStepBaseName", helper, StringComparison.Ordinal);
 
-            // 旧副本的形态就是"同文件里再写一个同名私有方法"。
-            Assert.DoesNotContain("string StripVolumeMarkers(string fileName)", placement, StringComparison.Ordinal);
+            // 落点那一处按"有没有整组基名"选步：单一包走第一大步、分卷走第二大步。
+            Assert.Contains("FileNameHelper.FirstStepBaseName", placement, StringComparison.Ordinal);
+            Assert.Contains("FileNameHelper.SecondStepBaseName", placement, StringComparison.Ordinal);
 
-            /*
-             * 2026-10-03 阶段 A 收口：包基名不再"先转调剥法出口、再自己剥一层归档后缀"，
-             * 而是整条交给**唯一基名出口**的 `PackageName` 档 —— 判据仍只有一份，而且归档基名 /
-             * 包基名 / 归组键三处现在共用同一个出口。
-             */
-            Assert.Contains("FileNameHelper.TryResolveVolumeBaseName(", placement, StringComparison.Ordinal);
-            Assert.Contains("VolumeBaseNameLevel.PackageName", placement, StringComparison.Ordinal);
+            // ⛔ 旧体系（档位枚举 / 唯一出口的 6 档 / 剥标记副本）在生产代码里一个都不许留。
+            string[] forbidden =
+            {
+                "VolumeBaseNameLevel",
+                "TryResolveVolumeBaseName",
+                "string StripVolumeMarkers(string fileName)"
+            };
 
-            int definitions = ProductionSourceFiles()
-                .Count(p => File.ReadAllText(p).Contains(
-                    "string StripVolumeMarkers(string fileName)",
-                    StringComparison.Ordinal));
+            foreach (string file in ProductionSourceFiles())
+            {
+                string text = File.ReadAllText(file);
 
-            Assert.Equal(1, definitions);
-
-            // 剥法的**档体**（那个循环）也只有一处：⛔ 不许在别的文件里再抄一遍。
-            int cores = ProductionSourceFiles()
-                .Count(p => File.ReadAllText(p).Contains(
-                    "StripVolumeMarkersCore(",
-                    StringComparison.Ordinal));
-
-            Assert.Equal(1, cores);
-
-            /*
-             * 2026-10-04（两个都叫"包基名"的量收口）：`GetArchiveBaseName` 原先自己跑一遍
-             * "剥标记 + 天真剥一层后缀" —— 现在整条交给**唯一基名出口**的 `ArchiveBaseName` 档，
-             * 本方法只剩转调。⛔ 这一档与 `PackageName`（落点用）是两个用途，不许合并成一个值。
-             */
-            Assert.Contains("VolumeBaseNameLevel.ArchiveBaseName", helper, StringComparison.Ordinal);
-            Assert.Contains("TryResolveVolumeBaseName(fileName, VolumeBaseNameLevel.ArchiveBaseName", helper, StringComparison.Ordinal);
+                foreach (string token in forbidden)
+                {
+                    Assert.False(
+                        text.Contains(token, StringComparison.Ordinal),
+                        $"{Path.GetFileName(file)} 里还留着旧基名体系：{token}");
+                }
+            }
         }
 
         // ================================================================ ② 同名冲突判定表：只有一份

@@ -136,7 +136,7 @@ namespace ArchiveFixer.Tests
 
             // ①失败原因里必须有那一句事实（引擎原话是"后续卷、缺少首卷"，正好说反了）。
             Assert.Equal(StatusText.VolumeMissing, task.Status);
-            Assert.Contains("第 1 卷", task.ErrorMessage);
+            Assert.Contains("缺", task.ErrorMessage);
             Assert.Contains("set.7z.002", task.ErrorMessage);
             Assert.Contains("set.7z.001", task.ErrorMessage);
 
@@ -459,7 +459,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);

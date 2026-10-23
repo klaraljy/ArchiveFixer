@@ -70,6 +70,9 @@ namespace ArchiveFixer.Extraction
         /// <summary>试开确认的顺序（物理路径，末片在最后）；null = 没试开/没确认。</summary>
         public IReadOnlyList<string>? ConfirmedOrder { get; set; }
 
+        /// <summary>这一组每一片来自哪里；建组时写入，收场器只查这份账。</summary>
+        public IReadOnlyList<VolumePieceFact> PieceOrigins { get; set; } = Array.Empty<VolumePieceFact>();
+
         public DateTime CreatedUtc { get; }
 
         /// <summary>同一基名下两族不许混算 ⇒ 键带族。</summary>

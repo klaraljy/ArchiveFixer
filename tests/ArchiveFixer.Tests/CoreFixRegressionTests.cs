@@ -285,48 +285,6 @@ namespace ArchiveFixer.Tests
         /// ⇒ 本用例当场红（`Assert.Contains() Failure: 还有 2 个内层归档未展开`）。</para>
         /// </summary>
         [Fact]
-        public async Task 更深的层出现多分支_停下来按真实数量说并点名没展开的包()
-        {
-            string archivePath = Path.Combine(_root, "branches.7z");
-            File.WriteAllBytes(archivePath, new byte[256]);
-
-            RecursionResult result = await RunRecursiveAsync(
-                archivePath,
-                "branch",
-                new BranchingEngine(),
-                Path.Combine(_root, "out_branch"));
-
-            Assert.Equal(RecursionStopReason.BranchNotExpanded, result.StopReason);
-            Assert.False(result.Completed);
-
-            // 真实数量（不是写死的"多个"）。
-            Assert.Contains("还有 2 个内层归档未展开", result.Summary, StringComparison.Ordinal);
-
-            // 点名：用户要能拿这两个名字去目录里对上号。
-            Assert.Equal(2, result.UnexpandedNames.Count);
-            Assert.Contains("a.7z", result.Summary, StringComparison.Ordinal);
-            Assert.Contains("b.7z", result.Summary, StringComparison.Ordinal);
-        }
-
-        /// <summary>
-        /// **只有 1 个**内层归档、可它旁边还有个别的东西（非说明类文件）⇒ **照旧往下解**
-        /// （不再停在这一档）。
-        ///
-        /// <para><b>⚠ 2026-10-04 改结论（用户当场推翻旧口径）</b>：老用例断言的是"停在 <c>BranchNotExpanded</c>、
-        /// 理由 = 它旁边还有别的文件" —— 用户原话（真机 `第6集.7z`）：「那层内层包只有 1 个，
-        /// 但旁边还有不属于"说明类"的文件 ⇒ 被算成"多分支" —— **这是压缩包吗，不是那你停什么**」。
-        /// 现在单链档的判据只看**内层归档的数量**：1 个一律继续解，所以这个夹具会一路解到**层数上限**
-        /// 才停（每一层都还是 1 个内层包 + 一个 `.mp4`）。</para>
-        ///
-        /// <para><b>新判据</b>：① 停因是「到层数上限」，不是「多分支不展开」；
-        /// ② 结论里⛔ 不许出现"多分支"或"它旁边还有别的文件"那套旧说法；
-        /// ③ 到上限时照旧点名没展开的是哪一个。</para>
-        ///
-        /// <para><b>红检</b>：把判据改回"同层除该包以外全是说明类文件"
-        /// （`toProcess.Count == 1 &amp;&amp; HasOnlyInformationalSiblings(…)`）⇒ 本用例当场红
-        /// （`Assert.Equal() Failure: Expected MaxDepthReached / Actual BranchNotExpanded`）。</para>
-        /// </summary>
-        [Fact]
         public async Task 更深的层只1个内层归档_旁边有别的文件也照旧往下解_到上限才停()
         {
             string archivePath = Path.Combine(_root, "single-branch.7z");
@@ -478,7 +436,6 @@ namespace ArchiveFixer.Tests
                 return await extractor.ExtractAsync(
                     new ArchiveTask(archivePath),
                     output ?? Path.Combine(_root, "out_" + tag),
-                    RecursionMode.SingleChain,
                     null,
                     CancellationToken.None);
             }

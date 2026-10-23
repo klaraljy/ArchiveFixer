@@ -109,6 +109,15 @@ namespace ArchiveFixer.Detection
         public int DeclaredVolumeCount { get; init; }
 
         /// <summary>
+        /// **归档在文件里的起点**（&gt; 0 = 前面垫着媒体/别的数据，即"媒体前缀"那一档；0 = 从文件头就是归档）。
+        /// 判不出 = 0。
+        /// </summary>
+        public long EmbeddedOffset { get; init; }
+
+        /// <summary>媒体前缀那一档的**归档区间字节数**（判不出 = 0，⛔ 不编）。</summary>
+        public long EmbeddedLength { get; init; }
+
+        /// <summary>
         /// **内容里那个"卷号字段"的原始值**（⛔ 不是 1 起的卷号）：只有 RAR 一族给得出
         /// （RAR5 主头的 <c>MHFL_VOLUME_NUMBER</c>、RAR4 归档结尾块的 <c>EARC_VOLNUMBER</c>）；判不出 = null。
         ///
@@ -369,23 +378,69 @@ namespace ArchiveFixer.Detection
             if (bodyKind == ArchiveBodyKind.Unknown
                 && format == VolumeContentFormat.Zip
                 && !reading.IsVolumeMember
-                && !reading.ZipEndRecordMeansSplit)
+                && !reading.ZipEndRecordMeansSplit
+                /*
+                 * ⛔ 只认"读成功且自证单盘"这两档：`None`（EOCD 盘号 0/0 且不跨盘）与
+                 * `ZipSingleDisk`（同上、带专属结论）。`NotVolumeMember` 是"没有 EOCD、开头也不是 PK"
+                 * 那一档（跨盘中间片）—— 把它升级成"完整单卷"会让整组永远凑不起来。
+                 */
+                && reading.Fail is VolumeNumberFail.None or VolumeNumberFail.ZipSingleDisk)
             {
                 bodyKind = ArchiveBodyKind.SingleComplete;
             }
 
+            /*
+             * RAR 单卷：内容已读出且证明“不是分卷成员”（Volume 位/首卷标记均为 0），
+             * 读取没有失败 ⇒ 这就是一份完整单卷。读不出/损坏（Fail != None）不升级。
+             */
+            if (bodyKind == ArchiveBodyKind.Unknown
+                && format == VolumeContentFormat.Rar
+                && !reading.IsVolumeMember
+                && reading.MainHeaderRead)
+            {
+                bodyKind = ArchiveBodyKind.SingleComplete;
+            }
+
+            /*
+             * ===== 单一完整压缩包的专属算法（媒体前缀）：前面垫着媒体/别的数据、归档从某个偏移才开始 =====
+             *
+             * <para>只在这一份"文件头不是归档"时才问（format = Unknown）；命中条件由
+             * <see cref="EmbeddedArchiveLocator"/> 的三条自洽校验回答（ZIP 的 EOCD 偏移、7z 的
+             * StartHeaderCRC + NextHeaderCRC、RAR4 的主头 CRC + MHD_VOLUME = 0）。</para>
+             *
+             * <para>命中 ⇒ 它就是一份**完整单卷**：`SingleComplete` + `EmbeddedOffset/Length`；
+             * 并且 `Membership` 记成"可证不是分卷成员"（自洽校验已经证明它是完整的一份，不是某组的一片）。
+             * ⛔ 判不出 ⇒ 一个字不改（仍 Unknown，交给第二大步）。</para>
+             */
+            long embeddedOffset = 0;
+            long embeddedLength = 0;
+            VolumeNumberFromContent.VolumeMembershipVerdict membership =
+                VolumeNumberFromContent.ClassifyMembership(path);
+
+            if (format == VolumeContentFormat.Unknown
+                && EmbeddedArchiveLocator.TryLocate(path) is { } embedded)
+            {
+                format = embedded.Format;
+                bodyKind = ArchiveBodyKind.SingleComplete;
+                embeddedOffset = embedded.Offset;
+                embeddedLength = embedded.Length;
+
+                membership = VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember;
+            }
             return new FileNatureCard
             {
                 Path = path!,
                 Size = size,
                 Format = format,
-                Membership = VolumeNumberFromContent.ClassifyMembership(path),
+                Membership = membership,
                 VolumeNumber = reading.Number,
                 FirstVolumeFlag = reading.FirstVolumeFlag,
                 ContentFail = reading.Fail,
                 BodyKind = bodyKind,
                 DeclaredTotalBytes = declaredTotalBytes,
                 DeclaredVolumeCount = declaredVolumeCount,
+                EmbeddedOffset = embeddedOffset,
+                EmbeddedLength = embeddedLength,
                 RawVolumeField = reading.RawField,
                 HasZipEndRecord = reading.HasZipEndRecord,
                 ZipEndRecordMeansSplit = reading.ZipEndRecordMeansSplit,

@@ -421,7 +421,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 
             // 与危险模式那组同一档：这一组要断言"源包到底动没动"，所以固定"留在原地"。

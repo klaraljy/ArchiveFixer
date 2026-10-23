@@ -714,9 +714,16 @@ namespace ArchiveFixer.Tests
 
                 Assert.True(published.Success, published.Message);
 
-                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.001")));
-                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.002")));
-                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7删除z")));
+                // 已解开的内层包**原地不动**（`ExtractionWorkspace.Publish` 与 `PackageLayerRules` 的口径：
+                // 它命名的文件夹放内容物，真文件不被搬走、也不被删）—— 与上面「用例 ②」同一条纪律。
+                string landed = string.Join(
+                    " | ",
+                    Directory.GetFileSystemEntries(target, "*", SearchOption.AllDirectories)
+                        .Select(path => path.Substring(target.Length).TrimStart('\\')));
+
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.001")), "入口包那一份必须原样留下；实际发布出来的是：" + landed);
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7z.002")), "同组其余片必须原样留下；实际发布出来的是：" + landed);
+                Assert.True(File.Exists(Path.Combine(target, "AAA", "Y.7删除z")), "名字认不出的那一片必须原样留下；实际发布出来的是：" + landed);
 
                 Assert.True(File.Exists(Path.Combine(target, "AAA", "内容物", "payload.bin")));
 

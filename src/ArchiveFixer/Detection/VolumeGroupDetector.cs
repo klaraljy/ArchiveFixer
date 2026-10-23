@@ -232,6 +232,17 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
+        /// 由任意一卷推出**名字前缀**（<see cref="VolumeNameInfo.TryFormat"/> 往它后面接卷标记的那一段）：
+        /// <c>set.7z.001</c> → <c>set.7z</c>、<c>x.zip</c>（本体）→ <c>x</c>、<c>444.part1.rar</c> → <c>444</c>。
+        ///
+        /// <para>⚠ <b>这不是基名</b>：基名只有两份（<c>FileNameHelper.FirstStepBaseName</c> /
+        /// <c>SecondStepBaseName</c>，第一个点之前），用于归组 / 落点 / 匹配。
+        /// 这里回答的是"写出来的规范卷名该长什么样" —— 只有同一个名字前缀才写得出同一族的一组名字。
+        /// 判不出（不是分卷/本体）⇒ 空串。</para>
+        /// </summary>
+        public static string TryGetBaseName(string? fileName) => Analyze(fileName)?.BaseName ?? string.Empty;
+
+        /// <summary>
         /// 判断两个文件是否属于同一分卷组的同一基名（同目录比较由调用方负责）。
         ///
         /// 只比"族 + 基名"：<c>x.zip</c> 与 <c>x.z01</c> 同组（同一族的本体与后续卷），
@@ -621,7 +632,7 @@ namespace ArchiveFixer.Detection
             //    老写法把 `last == "rar"` 写死在这一行，于是这种名字掉到 ③b 被当成"本体后缀被塞了垃圾"，
             //    基名算成 `X.part1`、卷序 1 ⇒ 一组 4 卷各自成一组（列表四行、递归四个分支）。
             //    判据转调**唯一出口** `ExtensionHelper.TrySplitPartNumberedVolume` —— 与
-            //    `FileNameHelper.StripVolumeMarkers` / `IsVolumePartFileName` 那两处**同一份**。
+            //    `FileNameHelper.IsVolumePartFileName` 那处**同一份**。
             if (ExtensionHelper.TrySplitPartNumberedVolume(
                     fileName,
                     out string partBase,
@@ -943,14 +954,14 @@ namespace ArchiveFixer.Detection
         }
 
         /// <summary>
-        /// 把末尾 <paramref name="trailingCount"/> 段之外的片段拼回基名。
+        /// 拼出**名字前缀**（写出来的规范卷名里"卷标记之前"的那一段）：把末尾 <paramref name="trailingCount"/> 段
+        /// 之外的片段拼起来，再归一**最后一段的族后缀**（<c>x.7sz</c> → <c>x.7z</c>）。
         ///
-        /// <para>⚠ <b>基名的判据不在这里</b>：这一处只做"拼"，拼完交给**唯一基名出口**
-        /// <see cref="FileNameHelper.TryResolveVolumeBaseName"/> 的
-        /// <see cref="VolumeBaseNameLevel.VolumeGroupKey"/> 档（2026-10-03 阶段 A 收口：
-        /// 原先这里自带一份与 <c>FileNameHelper.StripVolumeMarkers</c> 逐字不同的副本）。
-        /// 为什么是"归组键"那一档而不是"剥标记"那一档：同一组各卷的基名必须**逐字相等**，
-        /// 所以它比剥法出口多两步归一（见那一档的注释）。</para>
+        /// <para>⚠ <b>这不是基名</b>：基名只有两份（<c>FileNameHelper.FirstStepBaseName</c> /
+        /// <c>SecondStepBaseName</c>，第一个点之前），用于归组/落点/匹配；
+        /// 这里回答的是"<see cref="VolumeNameInfo.TryFormat"/> 该往哪个前缀后面接卷标记" ——
+        /// <c>set.7z(删掉.001</c> 的前缀必须是 <c>set.7z</c>（否则写出来是 <c>set.001</c>，7-Zip 打不开）。
+        /// 归一化只有一份实现（<see cref="ExtensionHelper.NormalizeFamilySegment"/>）。</para>
         /// </summary>
         private static string JoinBaseName(string[] parts, int trailingCount)
         {
@@ -963,22 +974,16 @@ namespace ArchiveFixer.Detection
             string joined = string.Join(".", parts, 0, count);
 
             /*
-             * 基名不 Trim：文件名里的首尾空格是真的会改变归组的字符。
-             * 但"全是空白"的基名（例如文件名叫 ".zip"）没有意义，直接不认 —— 那条判据在出口里。
+             * 前缀不 Trim：文件名里的首尾空格是真的会改变归组的字符。
+             * 但"全是空白"的前缀（例如文件名叫 ".zip"）没有意义，直接不认。
              */
-            return FileNameHelper.TryResolveVolumeBaseName(
-                joined,
-                VolumeBaseNameLevel.VolumeGroupKey,
-                out string baseName,
-                out _)
-                ? baseName
-                : string.Empty;
+            string prefix = ExtensionHelper.NormalizeFamilySegment(joined);
+
+            return string.IsNullOrWhiteSpace(prefix) ? string.Empty : prefix;
         }
 
-        // ⚠ 2026-10-03 阶段 A 收口：原先这里有一份 `NormalizeArchiveExtensionSegment`（:991）与
-        // `StripJunkAfterArchiveExtension`（:1033），已搬进**唯一基名出口**
-        // `FileNameHelper.TryResolveVolumeBaseName`（`VolumeBaseNameLevel.VolumeGroupKey` 档那一份归一化）。
-        // ⛔ 别在这里再加第二份：归组键与包基名对同一个包算出不同的名字，落点/归组就会各指一处。
+        // ⚠ 2026-10-23：旧的两步归一（`NormalizeArchiveExtensionSegment` / `StripJunkAfterArchiveExtension`）
+        // 随 6 档体系一起删除 —— 基名 = 第一个点之前，族后缀段与卷标记段本来就被切掉了。
 
         private static VolumeGroup BuildGroup(VolumeBucket bucket, Dictionary<string, int> familyCounts)
         {

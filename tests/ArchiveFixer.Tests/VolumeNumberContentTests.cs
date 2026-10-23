@@ -241,7 +241,10 @@ namespace ArchiveFixer.Tests
             // ② 不是第一片的那两份：RAR5 读得出卷号 2 ⇒ 可证"是某组的一片、不是第一片"；
             //    RAR4 读不出卷号（基数待定）⇒ 照旧"判不出"，⛔ 但不许当成"不是分卷"（参与者 = true）。
             Assert.Equal(ArchiveBodyKind.VolumePiece, card5Second.BodyKind);
-            Assert.Equal(ArchiveBodyKind.Unknown, card4Second.BodyKind);
+            // 2026-10-22：RAR4 也读得出卷号了（结尾块字段 1 → 第 2 卷）⇒ 与 RAR5 同一档
+            Assert.Equal(ArchiveBodyKind.VolumePiece, card4Second.BodyKind);
+            Assert.Equal(1, card4First.VolumeNumber);
+            Assert.Equal(2, card4Second.VolumeNumber);
             Assert.True(card4Second.ParticipatesInVolumeHandling);
 
             // ③ 卷号原始值留在卡上（RAR5 字段值 1、RAR4 结尾块 0/1），供"以第一片为锚点定序"用
@@ -358,9 +361,9 @@ namespace ArchiveFixer.Tests
             Assert.Equal(RarNumberingFamily.New, reading.RarNumbering);
             Assert.Equal(firstVolume, reading.FirstVolumeFlag);
 
-            // ⛔ 单卷上不做加减：基数是整组的事（见下面的定序用例）
+            // 2026-10-22 新口径（用户点名必须改的那一行）：RAR4 卷号 = 结尾块字段值 + 1（与 RAR5 同一算法）
             Assert.Equal((int)volumeField, reading.RawField);
-            Assert.Null(reading.Number);
+            Assert.Equal((int)volumeField + 1, reading.Number);
         }
 
         [Fact]
@@ -662,8 +665,8 @@ namespace ArchiveFixer.Tests
         [Theory]
         // 卷尾字段值 a/b/c + "第 1 卷"标记长在第几个文件上 → （认不认、不认是哪一档）
         [InlineData(0, 1, 2, 0, true, VolumeNumberFail.None)]                   // 0 起的一整组：{0,1,2} → 卷号 1,2,3
-        [InlineData(1, 2, 3, 0, true, VolumeNumberFail.None)]                   // 1 起的一整组：{1,2,3} → 卷号 1,2,3
-        [InlineData(0, 2, 3, 0, false, VolumeNumberFail.GroupBaseAmbiguous)]    // {0,2,3} 两种基数都连不成 1..N → 不认
+        [InlineData(1, 2, 3, 0, false, VolumeNumberFail.GroupNotContiguous)]   // 2026-10-22 新口径：卷号=原值+1 ⇒ {2,3,4} 连不成 1..N
+        [InlineData(0, 2, 3, 0, false, VolumeNumberFail.GroupNotContiguous)]    // 新口径：卷号 {1,3,4} 连不成 1..N → 不认
         [InlineData(0, 1, 2, 2, false, VolumeNumberFail.RarFirstVolumeMismatch)] // "第 1 卷"标记长在第 3 个文件上 → 自相矛盾
         public void RAR4_基数靠整组自洽判定_第1卷标记要一致(
             ushort a,
@@ -705,7 +708,8 @@ namespace ArchiveFixer.Tests
 
             VolumeNumberReading reading = VolumeNumberFromContent.Read(path);
 
-            Assert.Null(reading.Number); // 单卷上没有结论
+            // 2026-10-22：单卷也读得出卷号了（字段 0 → 第 1 卷）；"整组齐没齐"仍由定序那一档回答
+            Assert.Equal(1, reading.Number);
             Assert.Equal(0, reading.RawField);
 
             VolumeGroupOrder order = VolumeNumberFromContent.ResolveGroup(path, new[] { reading });

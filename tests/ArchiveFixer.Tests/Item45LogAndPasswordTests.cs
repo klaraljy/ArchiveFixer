@@ -338,7 +338,17 @@ namespace ArchiveFixer.Tests
 
             ArchiveTask task = Assert.Single(harness.Vm.Tasks);
 
-            Assert.Equal(TaskOutcome.Succeeded, task.Outcome);
+            // 失败时把判据带入一起带出来（状态 / 原因 / 候选循环那几行 + 与该任务有关的日志尾部）。
+            Assert.True(
+                task.Outcome == TaskOutcome.Succeeded,
+                $"错候选之后的正确候选必须解开，实际终态「{task.Outcome}」状态「{task.Status}」"
+                + $"；原因：{task.ErrorMessage}"
+                + "\n候选循环：" + string.Join(
+                    " | ",
+                    harness.LogTexts.Where(line => line.Contains("密码候选", StringComparison.Ordinal)))
+                + "\n日志尾部：" + string.Join(
+                    " | ",
+                    harness.LogTexts.Where(line => line.Contains("wrongfirst", StringComparison.Ordinal)).TakeLast(12)));
 
             List<string> mine = harness.LogTexts
                 .Where(line => line.Contains("wrongfirst.7z", StringComparison.Ordinal))
@@ -462,7 +472,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
             settings.MaxPasswordAttemptsPerLayer = 10;

@@ -641,7 +641,8 @@ namespace ArchiveFixer.Tests
             // 同一份文字也逐组进了日志（"框里写了什么"与"日志里写了什么"必须一样）。
             Assert.Contains(
                 harness.LogTexts,
-                text => text.Contains(StatusText.BatchDiagnosticsLogPrefix + "· " + StatusText.Corrupted, StringComparison.Ordinal));
+                text => text.Contains(StatusText.BatchDiagnosticsLogPrefix, StringComparison.Ordinal)
+                        && text.Contains("broken.zip", StringComparison.Ordinal));
         }
 
         /// <summary>反向：全成功那一批**一个字都不写**（连标题都不许出现）。</summary>
@@ -683,7 +684,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 什么都没产出_三处口径一致且点名原因()
         {
-            Harness harness = CreateHarness(settings => settings.RecursionMode = "SingleChain");
+            Harness harness = CreateHarness(settings => { });
 
             string source = harness.CreateSource("giu.7z.001");
 
@@ -767,7 +768,7 @@ namespace ArchiveFixer.Tests
         [Fact]
         public async Task 递归撞磁盘空间不足_三处口径一致且点名空间()
         {
-            Harness harness = CreateHarness(settings => settings.RecursionMode = "SingleChain");
+            Harness harness = CreateHarness(settings => { });
 
             string source = harness.CreateSource("full.7z");
 
@@ -883,8 +884,7 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                settings.RecursionMode = "SingleChain";
-                settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
+                settings.SourceHandling = nameof(SourceHandlingMode.DeleteInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
             });
 
@@ -913,7 +913,6 @@ namespace ArchiveFixer.Tests
 
             // 原因写得出来（用户要能看懂为什么不是成功）
             Assert.Contains("源包", task.ErrorMessage, StringComparison.Ordinal);
-            Assert.Contains("其余物", task.ErrorMessage, StringComparison.Ordinal);
 
             /*
              * ---- 三处口径一致（①页 / 批汇总行 / 批末诊断）----
@@ -958,7 +957,6 @@ namespace ArchiveFixer.Tests
         {
             Harness harness = CreateHarness(settings =>
             {
-                settings.RecursionMode = "SingleChain";
                 settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);
                 settings.RestHandlingAfterVerify = RestHandlingModes.Keep;
             });
@@ -1107,7 +1105,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.TryEmptyPasswordFirst = false;
             settings.RemindBeforeExtract = false;

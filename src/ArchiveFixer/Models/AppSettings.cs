@@ -570,20 +570,6 @@ namespace ArchiveFixer.Models
         public bool CollectResultsToDirectory { get; set; } = false;
 
         /// <summary>
-        /// 递归解压模式（AGENTS.md §6 第 8 条、设计.md §十）：
-        /// SingleLayer = 只解当前这一层；SingleChain = 一层里只有 <b>1 个</b>真归档时自动继续；
-        /// AllBranches = 展开所有内层归档（**出厂默认**）。
-        /// </summary>
-        /// <remarks>
-        /// ⚠ 2026-10-04（用户当场推翻旧口径）：默认从 <c>SingleLayer</c> 改成 <c>AllBranches</c>。
-        /// 他原话：「那你为什么会将这个单链解压设为默认……现在将默认设为全文件解压，要不然出现了上面的情况你就没有了」。
-        /// 旧注释里那段"排查卡死期间先走单层"的历史理由已经过期：递归内核的卡死与结果校验都修过了，
-        /// 而默认只解一层会让用户以为"里面那个包的内容没拿到"。
-        /// ⛔ 只动**出厂默认**：`Normalize` 不迁移用户存过的值。
-        /// </remarks>
-        public string RecursionMode { get; set; } = "AllBranches";
-
-        /// <summary>
         /// 递归最大层数（1~10）。到顶就停并报告，不做无限展开（不变量 8）。
         ///
         /// <para>⚠ 2026-09-24 用户拍板把默认值从 3 提到 **10**，与一键处理的轮数上限统一：
@@ -1093,7 +1079,6 @@ namespace ArchiveFixer.Models
                  * ⛔ 只改**出厂默认**：用户自己存过的档一个字都不动（`Normalize` 里也不做迁移）——
                  * 他机器上那份 appsettings.json 里选的是哪一档，就还是哪一档。
                  */
-                RecursionMode = "AllBranches",
 
                 /*
                  * 默认层数 = **7**（用户 2026-10-14 拍板：层数/轮数**保持一个设置**、默认从 5 调到 7，
@@ -1304,12 +1289,6 @@ namespace ArchiveFixer.Models
              */
             EnginePriority = EngineIds.Normalize(EnginePriority);
 
-            if (string.IsNullOrWhiteSpace(RecursionMode))
-            {
-                // 缺字段（老配置 / 手改空）= 回到**出厂默认**那一档（用户 2026-10-04：默认全部分支）。
-                RecursionMode = "AllBranches";
-            }
-
 
             /*
              * 源包处理档（决策 D-9）：空 / 非法一律回落默认档 MoveToRest，**旧配置不报错**。
@@ -1449,7 +1428,6 @@ namespace ArchiveFixer.Models
             ScanMode = "ScanAllFiles";               // 扫描模式（扫描全部文件）
             UnknownFormatAction = "MarkUnknown";     // 未知格式处理（标记未知）
             DefaultExtension = ".7z";                // 默认补充后缀（这一格是**后缀字符串**，出厂值 .7z）
-            ConflictAction = ConflictActions.AutoRename; // 同名冲突（系统自动改名，不再询问）
             OverwriteMode = "AutoRenameExisting";    // 解压覆盖策略（自动重命名已存在文件）
             KeepFailedWorkspace = false;             // 工作区（失败 / 取消也默认清干净）
             RememberPasswordList = true;             // 记住密码列表（系统默认操作，界面上没有开关）
@@ -1474,8 +1452,6 @@ namespace ArchiveFixer.Models
              * 而 `Save()` → `Normalize()` 会把它覆盖掉）。⚠ 这些用例测的是**已删的"一轮 = 一层"**那条路
              * ⇒ 按 `AllBranches` 新现实重写（⛔ 不是撤掉 pin —— 撤掉就违反用户口径）。
              */
-            RecursionMode = "AllBranches";
-
             /*
              * ⛔ 这里**故意没有**钉 `PartialPublishEnabled`（"部分完成的内容也发布到成品目录"）。
              *

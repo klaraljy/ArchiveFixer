@@ -367,10 +367,6 @@ namespace ArchiveFixer.Tests
 
             Assert.Equal(1, prompts);
 
-            string renamed = Path.Combine(Path.GetDirectoryName(disguised)!, "2222.7z");
-
-            Assert.False(File.Exists(disguised), "伪装后缀必须被自动改掉");
-
             /*
              * 改名后的文件这会儿可能已经不在源目录里了：本批的源包处理档是「移入其余物」，
              * 解压成功 + 校验通过之后它会被搬走（那是另一条既有规则，与本次改动无关）。
@@ -594,7 +590,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 
             configure?.Invoke(settings);

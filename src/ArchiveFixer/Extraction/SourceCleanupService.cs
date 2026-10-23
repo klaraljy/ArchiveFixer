@@ -209,7 +209,16 @@ namespace ArchiveFixer.Extraction
 
             foreach (string targetPath in targets)
             {
-                if (!_fileSystem.FileExists(targetPath))
+                /*
+                 * ⚠ 「已经不在了」与「被占用」必须分开（2026-10-22，守门用例
+                 * `递归完成但源包没搬成_终态不许是成功` 逮到）：`File.Exists` 对**被独占打开**的文件
+                 * 也会返回 false（它内部要开句柄）⇒ 老写法把"删不掉"当成"本来就没有"，
+                 * 静默跳过、不记失败 ⇒ 任务终态照旧写「解压成功」。
+                 * `FileInfo.Exists` 只读文件属性、不打开句柄 ⇒ 被占用时照样为 true。
+                 */
+                bool exists = _fileSystem.FileExists(targetPath);
+
+                if (!exists && !new FileInfo(targetPath).Exists)
                 {
                     // 已经不在了（用户手动删了 / 上一轮已经清过）：跳过，**不算失败**，
                     // 否则每次重跑都会报一堆假的"删除失败"。
@@ -250,6 +259,7 @@ namespace ArchiveFixer.Extraction
 
                 try
                 {
+
                     // File.Delete 不递归、不跟随 reparse point，删的就是清单里这一个文件。
                     _fileSystem.DeleteFile(targetPath);
 

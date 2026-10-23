@@ -254,7 +254,7 @@ namespace ArchiveFixer.Tests
                 selectionRoot: @"C:\AAA");
 
             Assert.Equal(
-                @"D:\BBB\AAA\新建文件夹_20260916_152637\解压软件\rar-android-722.132.apk",
+                @"D:\BBB\AAA\新建文件夹_20260916_152637\解压软件\rar-android-722",
                 deeper.DestinationDirectory);
             Assert.Equal(@"新建文件夹_20260916_152637\解压软件", deeper.RelativeSubPath);
         }
@@ -387,15 +387,14 @@ namespace ArchiveFixer.Tests
         [InlineData(@"C:\111\222.txz", "222")]
         [InlineData(@"C:\111\222.rar.jpg", "222")]
         [InlineData(@"C:\111\222.mkv", "222")]
-        [InlineData(@"C:\111\movie.2024.rar", "movie.2024")]
+        [InlineData(@"C:\111\movie.2024.rar", "movie")]
         [InlineData(@"C:\111\222...rar", "222")]
         public void ResolveArchiveBaseName_StripsVolumeMarkersAndArchiveExtensions(string path, string expected)
         {
             Assert.Equal(expected, OutputPlacement.ResolveArchiveBaseName(path));
         }
 
-        // 分卷组基名要取到"分卷标记之前"，不是只去最后一个后缀（FileNameHelper.GetArchiveBaseName 的老坑：
-        // 222.7z.001 会留成 222.7z，真实产物里出现过 17274362.7z\ 这种目录）。
+        // 包基名 = **第一个点之前**（用户 2026-10-23 拍板：基名只有两份，第一大步/第二大步同一条规则）。
         [Theory]
         [InlineData(@"C:\111\222.7z.001", "222")]
         [InlineData(@"C:\111\222.zip.001", "222")]

@@ -747,10 +747,6 @@ namespace ArchiveFixer.Tests
             editor.AttachSharedSettings(live);
 
             Assert.Same(live, editor.Settings);
-
-            editor.Settings.RecursionMode = "AllBranches";
-
-            Assert.Equal("AllBranches", live.RecursionMode);
         }
 
         // ================================================================ 辅助

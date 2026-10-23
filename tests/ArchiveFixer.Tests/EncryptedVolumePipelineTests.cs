@@ -101,7 +101,12 @@ namespace ArchiveFixer.Tests
             await bare.Coordinator.StartExtractAsync();
 
             Assert.Equal(StatusText.WrongPassword, bareTask.Status);
-            Assert.Empty(Directory.GetFiles(bare.OutputRoot, "*", SearchOption.AllDirectories));
+            /*
+             * ⚠ 2026-10-22 口径更新（用户：「如果是密码错误或者什么情况的话就要留在入口包的位置
+             * 因为他们确确实实是同一组」）：密码错的这一趟，**这一组的片会留在入口包那一层**
+             * ⇒ 输出根里出现那几个卷是**对的**。这一条只验"一个字节的内容物都没解出来"。
+             */
+            Assert.Empty(Directory.GetFiles(bare.OutputRoot, "data.bin", SearchOption.AllDirectories));
 
             // ── 正跑：密码本里有它 ──
             Harness harness = CreateHarness(SamplePassword);
@@ -110,7 +115,15 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync();
 
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.True(
+                task.Status == StatusText.ExtractSuccess,
+                $"密码本命中时必须「{StatusText.ExtractSuccess}」，实际「{task.Status}」；原因：{task.ErrorMessage}"
+                + $"｜跟班={task.IsVolumeGroupFollower}｜outcome={task.Outcome}"
+                + $"｜表里={harness.Vm.Tasks.Count} 条：{string.Join("、", harness.Vm.Tasks.Select(x => x.FileName + "/" + x.Outcome + "/" + x.Status))}"
+                + $"｜同一条={harness.Vm.Tasks.Any(x => ReferenceEquals(x, task))}"
+                + "\n日志尾部：" + string.Join(
+                    " | ",
+                    harness.Vm.Logs.TakeLast(20).Select(item => item.Level + ":" + item.Message)));
             Assert.True(task.VolumeNameAutoRenamed, "不是管线按内容改名的那一条路");
 
             // 整组改回了标准名（以第一卷的名字为基名），旧名字一个不剩。
@@ -168,8 +181,23 @@ namespace ArchiveFixer.Tests
 
             await bare.Coordinator.StartExtractAsync();
 
-            Assert.Equal(StatusText.WrongPassword, bareTask.Status);
-            Assert.Empty(Directory.GetFiles(bare.OutputRoot, "*", SearchOption.AllDirectories));
+            /*
+             * 没有密码 ⇒ 结论必须落在「密码错误」。⛔ 不许被"试开定序没通过"拐成「分卷缺失」
+             * （2026-10-18 定过的口径：空密码试开只会报密码错，那不是"顺序不对"）。
+             * 失败时把真实原因与日志尾部一起带出来 —— 否则只看到一个状态名，判不出是哪一层写的。
+             */
+            Assert.True(
+                bareTask.Status == StatusText.WrongPassword,
+                $"没有密码时必须报「密码错误」，实际「{bareTask.Status}」；原因：{bareTask.ErrorMessage}"
+                + "\n日志尾部：" + string.Join(
+                    " | ",
+                    bare.Vm.Logs.TakeLast(12).Select(item => item.Level + ":" + item.Message)));
+            /*
+             * ⚠ 2026-10-22 口径更新（用户：「如果是密码错误或者什么情况的话就要留在入口包的位置
+             * 因为他们确确实实是同一组」）：密码错的这一趟，**这一组的片会留在入口包那一层**
+             * ⇒ 输出根里出现那几个卷是**对的**。这一条只验"一个字节的内容物都没解出来"。
+             */
+            Assert.Empty(Directory.GetFiles(bare.OutputRoot, "data.bin", SearchOption.AllDirectories));
 
             Harness harness = CreateHarness(SamplePassword);
 
@@ -194,7 +222,15 @@ namespace ArchiveFixer.Tests
                 Assert.False(File.Exists(Path.Combine(withPassword, name)), $"带垃圾的名字还在：{name}（现在有：{listing}）");
             }
 
-            Assert.Equal(StatusText.ExtractSuccess, task.Status);
+            Assert.True(
+                task.Status == StatusText.ExtractSuccess,
+                $"密码本命中时必须「{StatusText.ExtractSuccess}」，实际「{task.Status}」；原因：{task.ErrorMessage}"
+                + $"｜跟班={task.IsVolumeGroupFollower}｜outcome={task.Outcome}"
+                + $"｜表里={harness.Vm.Tasks.Count} 条：{string.Join("、", harness.Vm.Tasks.Select(x => x.FileName + "/" + x.Outcome + "/" + x.Status))}"
+                + $"｜同一条={harness.Vm.Tasks.Any(x => ReferenceEquals(x, task))}"
+                + "\n日志尾部：" + string.Join(
+                    " | ",
+                    harness.Vm.Logs.TakeLast(20).Select(item => item.Level + ":" + item.Message)));
 
             string[] extracted = Directory.GetFiles(harness.OutputRoot, "data.bin", SearchOption.AllDirectories);
 
@@ -300,7 +336,6 @@ namespace ArchiveFixer.Tests
             settings.CustomOutputDirectory = outputRoot;
             settings.ExtractToOriginalDirectory = false;
             settings.KeepArchiveNameFolder = true;
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
             settings.MaxParallelExtractCount = 1;
             settings.SourceHandling = nameof(SourceHandlingMode.KeepInPlace);

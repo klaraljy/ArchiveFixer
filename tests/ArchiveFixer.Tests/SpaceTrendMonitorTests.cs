@@ -218,7 +218,21 @@ namespace ArchiveFixer.Tests
                 line => lines.Add(line),
                 cts.Token);
 
-            await System.Threading.Tasks.Task.Delay(120);
+            /*
+             * ⛔ 等**第一针真的采到**再取消（不用固定 sleep）。
+             *
+             * 全量并行把线程池压满时，固定的 120 ms 可能先到期、而监视器首个
+             * `Task.Delay(20ms)` 的续体还没跑 ⇒ 取消发生在**第一次采样之前** ⇒ `SampleCount == 0`
+             * （`full11` 现场逐字：`Assert.True() Failure：周期循环至少要采到一针`）。
+             * 判据一个字没改（周期循环至少采一针 + 取消后不再增长），只把"何时取消"
+             * 从**墙钟**改成**盘上事实**：采到第一针就取消。
+             */
+            long deadline = Environment.TickCount64 + 5_000;
+
+            while (monitor.SampleCount < 1 && Environment.TickCount64 < deadline)
+            {
+                await System.Threading.Tasks.Task.Delay(10);
+            }
 
             cts.Cancel();
 

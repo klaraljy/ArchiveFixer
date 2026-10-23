@@ -544,7 +544,6 @@ namespace ArchiveFixer.Tests
              * 所以夹具显式钉住那一档 —— 否则整类用例会悄悄改成在测递归内核（本组的中文密码
              * 真 7-Zip 解不开，会红成"达到密码尝试上限"，与要验的东西无关）。
              */
-            settings.RecursionMode = "SingleLayer";
             settingsService.Save(settings);
 
             var engine = new SevenZipEngine();

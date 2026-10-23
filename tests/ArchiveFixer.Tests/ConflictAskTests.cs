@@ -111,7 +111,10 @@ namespace ArchiveFixer.Tests
 
             await harness.Coordinator.StartExtractAsync().WaitAsync(TimeSpan.FromSeconds(120));
 
-            Assert.Single(dialog.Prompts);
+            Assert.True(
+                dialog.Prompts.Count == 1,
+                $"询问次数={dialog.Prompts.Count}；requested={requested}；task.OutputPath={task.OutputPath}；"
+                + string.Join(" ｜ ", harness.Log.Logs.Select(entry => entry.Level + ":" + entry.Message)));
 
             // 冲突时**确实调用了询问**，而且是在"还没开始解压"之前（任务真的被暂停过）。
             Assert.Equal(new[] { "ask", "extract" }, order);
@@ -873,8 +876,6 @@ namespace ArchiveFixer.Tests
             var settingsService = new SettingsService(pathService);
 
             AppSettings settings = AppSettings.CreateDefault();
-
-            settings.RecursionMode = "SingleLayer";
             settings.AutoScanAfterDrop = false;
 
             // 源包档位固定"留在原地"：这组测的是同名冲突，源包搬运会把目录搅浑（另有专测）。

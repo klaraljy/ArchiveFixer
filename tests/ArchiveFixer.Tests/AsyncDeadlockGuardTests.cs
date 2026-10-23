@@ -95,7 +95,7 @@ namespace ArchiveFixer.Tests
             {
                 // 旧写法：CheckLimitsBeforeLayer → IsExpansionRatioExceeded 里同步等 ListAsync。
                 ArchiveFixer.Extraction.RecursionResult result = extractor
-                    .ExtractAsync(new ArchiveTask(archive), output, ArchiveFixer.Extraction.RecursionMode.SingleChain)
+                    .ExtractAsync(new ArchiveTask(archive), output)
                     .GetAwaiter()
                     .GetResult();
 
