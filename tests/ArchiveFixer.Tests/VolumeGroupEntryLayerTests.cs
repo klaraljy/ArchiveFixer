@@ -191,5 +191,28 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(two));
         }
 
+        [Fact]
+        public void 合成组队列_同层同基名只入队一次_不同层各一次_续跑轮不清空_新轮才清()
+        {
+            var queue = new SyntheticGroupEntryQueue();
+            string layerA = Path.Combine(_root, "L1");
+            string layerB = Path.Combine(_root, "L2");
+            var unit = new VolumeGroupUnit("111", null, layerA, Path.Combine(layerA, "111.7z.001"));
+
+            Assert.True(queue.TryEnqueue(layerA, "111", new SyntheticGroupEntryQueue.Entry { Unit = unit }));
+            Assert.False(queue.TryEnqueue(layerA, "111", new SyntheticGroupEntryQueue.Entry { Unit = unit }));
+            Assert.Equal(1, queue.Count);
+
+            Assert.True(queue.TryEnqueue(layerB, "111", new SyntheticGroupEntryQueue.Entry { Unit = unit }));
+            Assert.Equal(2, queue.Count);
+
+            // 续跑轮清空列表 = 真机那个"已在 True→False→又建一遍"的坑。
+            queue.ClearForNewRound(continuationRound: true);
+            Assert.Equal(2, queue.Count);
+
+            queue.ClearForNewRound(continuationRound: false);
+            Assert.Equal(0, queue.Count);
+        }
+
     }
 }
