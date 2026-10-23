@@ -1646,6 +1646,17 @@ namespace ArchiveFixer.ViewModels
              * 所以换用叶子层的清单去核对它。哪一层、为什么取不到，全由
              * <see cref="ChainManifestResolver"/> 这一个出口回答（⛔ 这里不许自己再判一遍层数）。
              */
+            /*
+             * **产物来源目录**：链停在某一层时，用**最后一个成功层**的产物目录
+             * （用户口径：停在第 k 层时，上面已成功那一层的内容物要按「部分完成」发布；
+             * 停下那一层按③页「删除操作」档处理）。
+             * ⛔ 单层路（recursion == null）与跑完的链照旧用 stageDirectory，行为一个字不改。
+             */
+            string productDirectory = recursion != null
+                && !recursion.Completed
+                && recursion.Layers.Any(layer => layer != null && layer.Success)
+                    ? recursion.Layers.Last(layer => layer != null && layer.Success).OutputPath
+                    : stageDirectory;
             ManifestExpectation manifestExpectation = ChainManifestResolver.Resolve(recursion, knownList);
 
             // 记账：L4 的分类器与所有删除闸门都从任务上读它（"哪一层 + 为什么没清单"要能一路带到日志）。
@@ -1790,7 +1801,7 @@ namespace ArchiveFixer.ViewModels
                     ConflictPrecheck precheck = await Task.Run(
                         () => PrecheckFinalLayoutConflicts(
                             task,
-                            stageDirectory,
+                            productDirectory,
                             task.OutputPath,
                             sharedOutputRoot,
                             terminalLayout,
@@ -1822,7 +1833,7 @@ namespace ArchiveFixer.ViewModels
             PostProcessWorkResult work = await Task.Run(
                 () => RunPostProcessWork(
                     task,
-                    stageDirectory,
+                    productDirectory,
                     expected,
                     collectResults,
                     collectTargetDirectory,
