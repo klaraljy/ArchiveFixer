@@ -594,179 +594,7 @@ namespace ArchiveFixer.ViewModels
                     runningTasks.Add(RunScheduledTaskAsync(task, oneClickRun, runtime));
                 }
 
-                /*
-                 * ===== 等待所有已启动的任务结束 + **等空间的补跑环**（用户 2026-10-02 真机）=====
-                 *
-                 * 两件事必须在**同一个环**里做，这是踩过一次才定下来的：补跑环如果写在"等所有任务结束"
-                 * **之后**，轮到它时 `runningTasks` 已经空了 —— 那个 `while` 一次都不进，
-                 * 被拒的任务照样在批末被记成「空间不足」（红检现场：用例里第二个包一直是"未处理"）。
-                 *
-                 * 规则：**每跑完一个任务就重试一遍等待名单**（它一收尾就把预留放出来了，空间是真变多了）；
-                 * 只要还有人在跑，空间就还可能变多，就继续等。没人跑了 ⇒ 空间不会再变多 ⇒ 剩下的如实报。
-                 *
-                 * ⛔ 三点纪律：① 重试仍然走同一个 `TryReserve`（放行判据一个字没放宽）；
-                 * ② 名单里的任务**不占并发位**，只有真排上了才进 `runningTasks`；
-                 * ③ 用户点「停止后续」⇒ 立刻停（剩下的照旧什么都不做、如实落状态）。
-                 *
-                 * ⚠ 2026-10-05 外面又套了一层（同一个环，⛔ 不是第二套批末流程）：**批末补判「缺卷」**
-                 * （用户口径 2）。它只能在"这一批的解压**都跑完**之后"判（那时缺的那几卷可能已经被解出来 /
-                 * 被收拢到位）；判出来"补齐了"的那几组要**照常跑**，所以它们必须回到**这个环**里等收尾 ——
-                 * 这也是"补跑环必须与等所有任务结束写在同一个环里"那条纪律的同一条道理。
-                 */
-                /*
-                 * ⛔ 2026-10-15：**批末补判的重判次数护栏**（保命，不是性能）。
-                 *
-                 * 运行期实测到的死循环（全量测试里跑了 40 分钟、日志涨到 125 MB 都出不来）：
-                 * 批末补判说"「set.7z.002」这一组现在齐了（共 2 卷），照常跑这一组" ⇒ 排进 `runningTasks` ⇒
-                 * 它一开工，预检又说"这一组缺的是**第 1 卷** … 判不出该怎么收，整组一个字节都没动" ⇒
-                 * 回到本环再判 ⇒ 又是"齐了" ⇒ ……**两个判据对同一组给出相反结论，这一环永远出不去**。
-                 *
-                 * 上面那段注释写的出口（"撞上轮数上限"）在代码里**根本不存在** —— 这个 `while (true)`
-                 * 原来只有"批末补判返回空"一个出口。⇒ 补一道**硬上限**：重判超过 `MaxVolumeRecheckPasses`
-                 * 次就停下，把那几单**如实留在「未处理」那一档**（与既有那份"没有结论"的口径一致），
-                 * 并写一行点名它们。⛔ 判据一个字没放宽 —— 缺卷照旧不开始解。
-                 *
-                 * ⚠ 为什么是"趟数硬上限"而不是"看名单有没有变少"：实测的形状是**缩了又涨**
-                 * （这一趟补判把一单挪出名单 ⇒ 它跑起来撞缺卷 ⇒ 下一趟又有单进来）⇒
-                 * "连续不缩小才计数"那种写法在振荡下永远到不了阈值，等于没修。
-                 * 这里要的是**保证终止**，所以数的是总趟数。
-                 */
-                const int MaxVolumeRecheckPasses = 20;
-                int volumeRecheckPasses = 0;
-
-                while (true)
-                {
-                    while (runningTasks.Count > 0)
-                    {
-                        Task finished = await Task.WhenAny(runningTasks);
-                        runningTasks.Remove(finished);
-                        await finished;
-
-                        if (IsStopping || _operationCts.IsCancellationRequested)
-                        {
-                            break;
-                        }
-
-                        if (spaceWaiting.Count == 0)
-                        {
-                            continue;
-                        }
-
-                        /*
-                         * 刚跑完一个任务 ⇒ **当场再探一次可用空间**，再拿它重试等待名单。
-                         *
-                         * 账本平时由空间侦察每 5 秒刷一针；可"任务收尾把预留放出来"这件事是**立刻**发生的，
-                         * 如果这里不重探，补跑环会拿着 5 秒前的旧数字白等一轮（真机上就是"明明跑完了一个大包、
-                         * 空间已经回来了，那个小包还在等"）。
-                         */
-                        _spaceLedger.RefreshAvailable(ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)));
-
-                        for (int i = 0; i < spaceWaiting.Count;)
-                        {
-                            if (runningTasks.Count >= maxParallel)
-                            {
-                                break;   // 并发位又满了：等下一轮（跑完一个再来看）
-                            }
-
-                            (ArchiveTask waitingTask, ScheduledExtractionItem waitingItem, SpaceGateDecision waitingGate) = spaceWaiting[i];
-
-                            SpaceGateDecision retry = _spaceLedger.TryReserve(
-                                waitingItem.RequiredBytes,
-                                waitingItem.Estimate.ReclaimableBytes);
-
-                            if (!retry.Allowed)
-                            {
-                                i++;
-                                continue;
-                            }
-
-                            ScheduledTaskRuntime waitingRuntime = GetOrCreateRuntime(waitingTask);
-                            waitingRuntime.ReservedBytes = retry.ProbeFailed ? 0L : waitingItem.RequiredBytes;
-                            waitingRuntime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
-
-                            spaceWaiting.RemoveAt(i);
-
-                            AppendLog(
-                                "INFO",
-                                $"{waitingTask.LogName}：腾出空间了，现在补跑它（它刚才被拒的原因：{waitingGate.Reason}）");
-
-                            runningTasks.Add(RunScheduledTaskAsync(waitingTask, oneClickRun, waitingRuntime));
-                        }
-                    }
-
-                    /*
-                     * 用户点了「停止后续」⇒ 批末补判整段不做（不变量 9：停止后续只阻止**启动后续**，
-                     * 不许变成"强杀当前"，也不许在停下之后又去起新的任务）。
-                     * 名单里那几单照旧什么都不做、状态留在「未处理」—— 如实反映"这一批没轮到它"。
-                     */
-                    if (IsStopping || _operationCts.IsCancellationRequested)
-                    {
-                        break;
-                    }
-
-                    /*
-                     * ===== 批末补判「缺卷」（用户 2026-10-05 口径 2）=====
-                     *
-                     * 判据与执行体都在 `RecheckDeferredVolumeDeficits` 里：再收一次卷 → 现归一次组
-                     * → 齐了就返回该补跑的那几单；仍然缺 ⇒ 一键档留给链尾（还有后续轮次）、
-                     * 手动档**到这里**才如实报缺卷。
-                     *
-                     * ⛔ 兜底：这个方法要么给出"该跑的那几单"，要么把状态落定 —— 绝不会让名单里的任务
-                     * 停在"没人管"那一档（唯一例外是整条链被用户停下，那时它如实留在「未处理」）。
-                     */
-                    List<ArchiveTask> deferredVolumeTasks = await RecheckDeferredVolumeDeficitsAsync(
-                        finalPass: !oneClickRun,
-                        // 这一站没有 CancellationToken 在手（老签名就没有）⇒ 传 None，与改成 async 之前等价。
-                        CancellationToken.None).ConfigureAwait(false);
-
-                    /*
-                     * 「7-Zip 打不开」的那一份若看着就是本批某一组的一片 ⇒ 到这里才按**严格判据**
-                     * 升级成「分卷缺失」（用户 2026-10-09 口径：未识别的先跳过、到了最后再重新检验一步）。
-                     * ⚠ 2026-10-17：这两个成员从 2026-10-16 加进来就一直**没有调用点**（名单只写不读）⇒ 本处补上。
-                     * 幂等：只动机器终态还是「已跳过」的那几单。
-                     */
-                    UpgradeUnrecognizedMaybePieceVerdicts();
-
-                    if (deferredVolumeTasks.Count == 0)
-                    {
-                        break;
-                    }
-
-                    /*
-                     * 保命护栏（见上面那段说明）：**总趟数硬上限**。
-                     *
-                     * 正常情形下一两趟就清空名单（每一趟会把名单里所有能补上的组一次性补齐）；
-                     * 到了上限还在打转，说明批末补判与开工前预检对同一组给出的结论相反 ——
-                     * ⛔ 再判下去只会把日志写爆、把这一批永远挂住 ⇒ 停下 + 点名 + 如实留在「未处理」。
-                     */
-                    volumeRecheckPasses++;
-
-                    if (volumeRecheckPasses > MaxVolumeRecheckPasses)
-                    {
-                        int stillDeferred = _volumeDeficitDeferred.Count;
-
-                        AppendLog(
-                            "WARN",
-                            string.Format(
-                                System.Globalization.CultureInfo.CurrentCulture,
-                                StatusText.VolumeRecheckPassLimitReachedFormat,
-                                volumeRecheckPasses,
-                                stillDeferred,
-                                string.Join(
-                                    "、",
-                                    _volumeDeficitDeferred.Take(5).Select(item => item.LogName))));
-
-                        break;
-                    }
-
-                    foreach (ArchiveTask deferredTask in deferredVolumeTasks)
-                    {
-                        runningTasks.Add(RunScheduledTaskAsync(
-                            deferredTask,
-                            oneClickRun,
-                            GetOrCreateRuntime(deferredTask)));
-                    }
-                }
+                await RunWaitAndVolumeRetryLoopAsync(selectedTasks, runningTasks, spaceWaiting, maxParallel, oneClickRun);
 
                 /*
                  * 等到最后还是排不上的：**这时候才**如实记「空间不足」（状态 / 错误信息 / 日志 / 批末清单
@@ -1106,6 +934,192 @@ namespace ArchiveFixer.ViewModels
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// 等待所有已启动的任务结束 + **等空间的补跑环** + 批末补判「缺卷」。
+        /// 三件事必须在同一个环里做（见方法内注释：分开写会让补跑环一次都不进）。
+        /// </summary>
+        private async Task RunWaitAndVolumeRetryLoopAsync(
+            IReadOnlyList<ArchiveTask> selectedTasks,
+            List<Task> runningTasks,
+            List<(ArchiveTask Task, ScheduledExtractionItem Item, SpaceGateDecision Gate)> spaceWaiting,
+            int maxParallel,
+            bool oneClickRun)
+        {
+            /*
+             * ===== 等待所有已启动的任务结束 + **等空间的补跑环**（用户 2026-10-02 真机）=====
+             *
+             * 两件事必须在**同一个环**里做，这是踩过一次才定下来的：补跑环如果写在"等所有任务结束"
+             * **之后**，轮到它时 `runningTasks` 已经空了 —— 那个 `while` 一次都不进，
+             * 被拒的任务照样在批末被记成「空间不足」（红检现场：用例里第二个包一直是"未处理"）。
+             *
+             * 规则：**每跑完一个任务就重试一遍等待名单**（它一收尾就把预留放出来了，空间是真变多了）；
+             * 只要还有人在跑，空间就还可能变多，就继续等。没人跑了 ⇒ 空间不会再变多 ⇒ 剩下的如实报。
+             *
+             * ⛔ 三点纪律：① 重试仍然走同一个 `TryReserve`（放行判据一个字没放宽）；
+             * ② 名单里的任务**不占并发位**，只有真排上了才进 `runningTasks`；
+             * ③ 用户点「停止后续」⇒ 立刻停（剩下的照旧什么都不做、如实落状态）。
+             *
+             * ⚠ 2026-10-05 外面又套了一层（同一个环，⛔ 不是第二套批末流程）：**批末补判「缺卷」**
+             * （用户口径 2）。它只能在"这一批的解压**都跑完**之后"判（那时缺的那几卷可能已经被解出来 /
+             * 被收拢到位）；判出来"补齐了"的那几组要**照常跑**，所以它们必须回到**这个环**里等收尾 ——
+             * 这也是"补跑环必须与等所有任务结束写在同一个环里"那条纪律的同一条道理。
+             */
+            /*
+             * ⛔ 2026-10-15：**批末补判的重判次数护栏**（保命，不是性能）。
+             *
+             * 运行期实测到的死循环（全量测试里跑了 40 分钟、日志涨到 125 MB 都出不来）：
+             * 批末补判说"「set.7z.002」这一组现在齐了（共 2 卷），照常跑这一组" ⇒ 排进 `runningTasks` ⇒
+             * 它一开工，预检又说"这一组缺的是**第 1 卷** … 判不出该怎么收，整组一个字节都没动" ⇒
+             * 回到本环再判 ⇒ 又是"齐了" ⇒ ……**两个判据对同一组给出相反结论，这一环永远出不去**。
+             *
+             * 上面那段注释写的出口（"撞上轮数上限"）在代码里**根本不存在** —— 这个 `while (true)`
+             * 原来只有"批末补判返回空"一个出口。⇒ 补一道**硬上限**：重判超过 `MaxVolumeRecheckPasses`
+             * 次就停下，把那几单**如实留在「未处理」那一档**（与既有那份"没有结论"的口径一致），
+             * 并写一行点名它们。⛔ 判据一个字没放宽 —— 缺卷照旧不开始解。
+             *
+             * ⚠ 为什么是"趟数硬上限"而不是"看名单有没有变少"：实测的形状是**缩了又涨**
+             * （这一趟补判把一单挪出名单 ⇒ 它跑起来撞缺卷 ⇒ 下一趟又有单进来）⇒
+             * "连续不缩小才计数"那种写法在振荡下永远到不了阈值，等于没修。
+             * 这里要的是**保证终止**，所以数的是总趟数。
+             */
+            const int MaxVolumeRecheckPasses = 20;
+            int volumeRecheckPasses = 0;
+
+            while (true)
+            {
+                while (runningTasks.Count > 0)
+                {
+                    Task finished = await Task.WhenAny(runningTasks);
+                    runningTasks.Remove(finished);
+                    await finished;
+
+                    if (IsStopping || _operationCts!.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    if (spaceWaiting.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    /*
+                     * 刚跑完一个任务 ⇒ **当场再探一次可用空间**，再拿它重试等待名单。
+                     *
+                     * 账本平时由空间侦察每 5 秒刷一针；可"任务收尾把预留放出来"这件事是**立刻**发生的，
+                     * 如果这里不重探，补跑环会拿着 5 秒前的旧数字白等一轮（真机上就是"明明跑完了一个大包、
+                     * 空间已经回来了，那个小包还在等"）。
+                     */
+                    _spaceLedger!.RefreshAvailable(ProbeAvailableSpace(ResolveSpaceProbePath(selectedTasks)));
+
+                    for (int i = 0; i < spaceWaiting.Count;)
+                    {
+                        if (runningTasks.Count >= maxParallel)
+                        {
+                            break;   // 并发位又满了：等下一轮（跑完一个再来看）
+                        }
+
+                        (ArchiveTask waitingTask, ScheduledExtractionItem waitingItem, SpaceGateDecision waitingGate) = spaceWaiting[i];
+
+                        SpaceGateDecision retry = _spaceLedger.TryReserve(
+                            waitingItem.RequiredBytes,
+                            waitingItem.Estimate.ReclaimableBytes);
+
+                        if (!retry.Allowed)
+                        {
+                            i++;
+                            continue;
+                        }
+
+                        ScheduledTaskRuntime waitingRuntime = GetOrCreateRuntime(waitingTask);
+                        waitingRuntime.ReservedBytes = retry.ProbeFailed ? 0L : waitingItem.RequiredBytes;
+                        waitingRuntime.AvailableBeforeStart = _spaceLedger.AvailableBytes;
+
+                        spaceWaiting.RemoveAt(i);
+
+                        AppendLog(
+                            "INFO",
+                            $"{waitingTask.LogName}：腾出空间了，现在补跑它（它刚才被拒的原因：{waitingGate.Reason}）");
+
+                        runningTasks.Add(RunScheduledTaskAsync(waitingTask, oneClickRun, waitingRuntime));
+                    }
+                }
+
+                /*
+                 * 用户点了「停止后续」⇒ 批末补判整段不做（不变量 9：停止后续只阻止**启动后续**，
+                 * 不许变成"强杀当前"，也不许在停下之后又去起新的任务）。
+                 * 名单里那几单照旧什么都不做、状态留在「未处理」—— 如实反映"这一批没轮到它"。
+                 */
+                if (IsStopping || _operationCts!.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                /*
+                 * ===== 批末补判「缺卷」（用户 2026-10-05 口径 2）=====
+                 *
+                 * 判据与执行体都在 `RecheckDeferredVolumeDeficits` 里：再收一次卷 → 现归一次组
+                 * → 齐了就返回该补跑的那几单；仍然缺 ⇒ 一键档留给链尾（还有后续轮次）、
+                 * 手动档**到这里**才如实报缺卷。
+                 *
+                 * ⛔ 兜底：这个方法要么给出"该跑的那几单"，要么把状态落定 —— 绝不会让名单里的任务
+                 * 停在"没人管"那一档（唯一例外是整条链被用户停下，那时它如实留在「未处理」）。
+                 */
+                List<ArchiveTask> deferredVolumeTasks = await RecheckDeferredVolumeDeficitsAsync(
+                    finalPass: !oneClickRun,
+                    // 这一站没有 CancellationToken 在手（老签名就没有）⇒ 传 None，与改成 async 之前等价。
+                    CancellationToken.None).ConfigureAwait(false);
+
+                /*
+                 * 「7-Zip 打不开」的那一份若看着就是本批某一组的一片 ⇒ 到这里才按**严格判据**
+                 * 升级成「分卷缺失」（用户 2026-10-09 口径：未识别的先跳过、到了最后再重新检验一步）。
+                 * ⚠ 2026-10-17：这两个成员从 2026-10-16 加进来就一直**没有调用点**（名单只写不读）⇒ 本处补上。
+                 * 幂等：只动机器终态还是「已跳过」的那几单。
+                 */
+                UpgradeUnrecognizedMaybePieceVerdicts();
+
+                if (deferredVolumeTasks.Count == 0)
+                {
+                    break;
+                }
+
+                /*
+                 * 保命护栏（见上面那段说明）：**总趟数硬上限**。
+                 *
+                 * 正常情形下一两趟就清空名单（每一趟会把名单里所有能补上的组一次性补齐）；
+                 * 到了上限还在打转，说明批末补判与开工前预检对同一组给出的结论相反 ——
+                 * ⛔ 再判下去只会把日志写爆、把这一批永远挂住 ⇒ 停下 + 点名 + 如实留在「未处理」。
+                 */
+                volumeRecheckPasses++;
+
+                if (volumeRecheckPasses > MaxVolumeRecheckPasses)
+                {
+                    int stillDeferred = _volumeDeficitDeferred.Count;
+
+                    AppendLog(
+                        "WARN",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.VolumeRecheckPassLimitReachedFormat,
+                            volumeRecheckPasses,
+                            stillDeferred,
+                            string.Join(
+                                "、",
+                                _volumeDeficitDeferred.Take(5).Select(item => item.LogName))));
+
+                    break;
+                }
+
+                foreach (ArchiveTask deferredTask in deferredVolumeTasks)
+                {
+                    runningTasks.Add(RunScheduledTaskAsync(
+                        deferredTask,
+                        oneClickRun,
+                        GetOrCreateRuntime(deferredTask)));
+                }
+            }
         }
     }
 }
