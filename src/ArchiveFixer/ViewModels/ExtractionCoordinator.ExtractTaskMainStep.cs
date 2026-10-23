@@ -931,47 +931,16 @@ namespace ArchiveFixer.ViewModels
                     ? $"{task.LogName}：本次实际输出目录 {outputPath}"
                     : $"{task.LogName}：本次实际输出目录 {outputPath}（依据 → {RunOptions.Describe()}）");
 
-            /*
-             * ===== 阶段一：入仓（stage，契约 §2.1）=====
-             *
-             * 从这一刻起，本任务**所有**中间动作（抠内嵌归档之后的解压、第一层、内层分卷、递归）
-             * 都在私有暂存目录 <c>&lt;work&gt;\&lt;taskId&gt;\stage</c> 里完成，
-             * 源目录与最终目录一个字节都不会被写。
-             *
-             * 这条就是用户那句"分卷文件你居然又解压到外面来了"的根治点：
-             * 旧实现把引擎的输出目录直接设成 destDir，内层分卷于是和内容物一起躺在用户目录里；
-             * 一旦失败，用户目录里还留着半成品。
-             */
-            string stageDirectory = _pathService.BuildTaskStageDirectory(task);
+            (bool stagingOk, string stageDirectory, string engineOutputPath) staging =
+                await TryPrepareStagingAsync(task, outputPath, cancellationToken);
 
-            if (string.IsNullOrWhiteSpace(stageDirectory))
+            if (!staging.stagingOk)
             {
-                task.Status = StatusText.ExtractFailed;
-                task.ProgressText = StatusText.ProgressFailed;
-                task.ErrorMessage = "无法确定暂存目录（工作区不可用）";
-                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
                 return;
             }
 
-            // 记下"这个任务真正用的工作区目录"：收尾时的空壳清理要按它来，
-            // **不能事后重算**（taskId 含源路径哈希，而成功路径会回写 CurrentPath，见字段说明）。
-            TaskWorkspaceDirectories[task] = Path.GetDirectoryName(stageDirectory.TrimEnd('\\', '/')) ?? string.Empty;
-
-            string? stageFailure = await PrepareStageDirectoryAsync(task, stageDirectory, cancellationToken);
-
-            if (!string.IsNullOrWhiteSpace(stageFailure))
-            {
-                task.Status = StatusText.ExtractFailed;
-                task.ProgressText = StatusText.ProgressFailed;
-                task.ErrorMessage = stageFailure;
-                AppendLog("ERROR", $"{task.LogName}：{stageFailure}");
-                return;
-            }
-
-            // 引擎写盘的地方 = 暂存目录。**不是** outputPath —— 那是定稿的目标。
-            string engineOutputPath = stageDirectory;
-
-            AppendLog("INFO", $"{task.LogName}：入仓目录 {stageDirectory}（中间产物先落这里，定稿时才搬进 {outputPath}）");
+            string stageDirectory = staging.stageDirectory;
+            string engineOutputPath = staging.engineOutputPath;
 
             /*
              * 内嵌归档（双面文件）：先按偏移把尾部那段真正的 ZIP 抠出来，
@@ -3232,6 +3201,65 @@ namespace ArchiveFixer.ViewModels
                 "WARN",
                 $"{task.LogName}：这次拿到的是「{StatusText.EncryptedHeaders}」的结论" +
                 "（不是泛泛的密码错误）—— 连内容清单都读不出来，需要正确密码才能列出内容。");
+        }
+
+        /// <summary>
+        /// 阶段一：入仓（契约 §2.1）。从这一刻起本任务所有中间动作都在私有暂存目录里完成，
+        /// 源目录与最终目录一个字节都不会被写。返回 false = 这一单停下（原因已经写进任务与日志）。
+        /// </summary>
+        private async Task<(bool Ok, string StageDirectory, string EngineOutputPath)> TryPrepareStagingAsync(
+            ArchiveTask task,
+            string outputPath,
+            CancellationToken cancellationToken)
+        {
+            string stageDirectory = string.Empty;
+            string engineOutputPath = string.Empty;
+            stageDirectory = string.Empty;
+            engineOutputPath = string.Empty;
+
+            /*
+             * ===== 阶段一：入仓（stage，契约 §2.1）=====
+             *
+             * 从这一刻起，本任务**所有**中间动作（抠内嵌归档之后的解压、第一层、内层分卷、递归）
+             * 都在私有暂存目录 <c>&lt;work&gt;\&lt;taskId&gt;\stage</c> 里完成，
+             * 源目录与最终目录一个字节都不会被写。
+             *
+             * 这条就是用户那句"分卷文件你居然又解压到外面来了"的根治点：
+             * 旧实现把引擎的输出目录直接设成 destDir，内层分卷于是和内容物一起躺在用户目录里；
+             * 一旦失败，用户目录里还留着半成品。
+             */
+            stageDirectory = _pathService.BuildTaskStageDirectory(task);
+
+            if (string.IsNullOrWhiteSpace(stageDirectory))
+            {
+                task.Status = StatusText.ExtractFailed;
+                task.ProgressText = StatusText.ProgressFailed;
+                task.ErrorMessage = "无法确定暂存目录（工作区不可用）";
+                AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
+                return (false, string.Empty, string.Empty);
+            }
+
+            // 记下"这个任务真正用的工作区目录"：收尾时的空壳清理要按它来，
+            // **不能事后重算**（taskId 含源路径哈希，而成功路径会回写 CurrentPath，见字段说明）。
+            TaskWorkspaceDirectories[task] = Path.GetDirectoryName(stageDirectory.TrimEnd('\\', '/')) ?? string.Empty;
+
+            string? stageFailure = await PrepareStageDirectoryAsync(task, stageDirectory, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(stageFailure))
+            {
+                task.Status = StatusText.ExtractFailed;
+                task.ProgressText = StatusText.ProgressFailed;
+                task.ErrorMessage = stageFailure;
+                AppendLog("ERROR", $"{task.LogName}：{stageFailure}");
+                return (false, string.Empty, string.Empty);
+            }
+
+            // 引擎写盘的地方 = 暂存目录。**不是** outputPath —— 那是定稿的目标。
+            engineOutputPath = stageDirectory;
+
+            AppendLog("INFO", $"{task.LogName}：入仓目录 {stageDirectory}（中间产物先落这里，定稿时才搬进 {outputPath}）");
+
+            return (true, stageDirectory, engineOutputPath);
         }
     }
 }
