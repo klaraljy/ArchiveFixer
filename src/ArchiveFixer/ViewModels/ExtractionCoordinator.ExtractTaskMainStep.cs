@@ -2798,56 +2798,13 @@ namespace ArchiveFixer.ViewModels
 
                 if (!extractSuccess)
                 {
-                    /*
-                     * ===== 登记"失败时盘上还剩什么"（部分完成发布的输入，用户 2026-10-02）=====
-                     *
-                     * 位置刻意选在**候选循环已经跑完、结论已经定下来之后**：
-                     * · 产物目录里此刻留着的是**最后一个候选**留下的东西（每个候选开工前会清一次），
-                     *   所以尺子与现场必须是同一次候选的 —— `lastLayerManifestEntries` 与
-                     *   `lastResult` 都跟着循环滚动，天然对齐；
-                     * · 密码取 `selectedPassword`（最后一个候选的）：密码不对时收尾那次懒取清单
-                     *   照样列不出来 ⇒ 判"没有清单" ⇒ 一个字节都不发布。
-                     *
-                     * ⛔ 这里不判断③页开关（收尾时才读）—— 详见 RecordPartialPublishCandidate 的说明。
-                     */
-                    /*
-                     * "这一单整体有没有内容物解出"（终态分类那一档的判据输入，用户 2026-10-16 口径）：
-                     * 用**唯一出口** `ProducedContentGate`（与"密码已被证实"同一把尺子，⛔ 不另定阈值）
-                     * 数一次产物目录里真解出来的非空文件。
-                     */
-                    bool producedContent =
-                        ProducedContentGate.TryMeasure(
-                            engineOutputPath,
-                            lastResult?.ReportedSubItemErrors ?? 0,
-                            lastResult?.FailedEntryNames?.Count ?? 0,
-                            out int producedFiles,
-                            out _)
-                        && producedFiles >= ProducedContentGate.MinimumFiles;
-
-                    RecordPartialPublishCandidate(
+                    RecordPartialPublishFacts(
                         task,
                         engineOutputPath,
                         engineArchivePath,
                         selectedPassword,
                         lastLayerManifestEntries,
-                        lastResult?.FailedEntryNames,
-                        lastResult?.ReportedSubItemErrors ?? 0,
-                        engineReportedFailure: lastResult != null && !lastResult.Success,
-                        detectedErrorType: lastResult?.DetectedErrorType,
-                        chainProducedContent: producedContent);
-
-                    /*
-                     * ===== 引擎原话落日志（用户 2026-09-27：「引擎原话从不落日志」）=====
-                     *
-                     * 位置刻意选在**结论已经定下来之后**（`lastResult` / `task.Status` 都写好了），
-                     * 而且整层只写一次：
-                     * · 候选循环里每个错密码都记一条 ERROR 是噪声（十个候选十条），
-                     *   而真正要看的恰恰是**最后那次**（走得最远的那一次，与失败原因同一份）；
-                     * · 详细档在循环里已经逐候选写过命令行与原话了，这里不重复。
-                     *
-                     * ⛔ 出口只有 <see cref="EngineOutputLog"/> 一个（递归路径同一个）。
-                     */
-                    EngineOutputLog.LogFailure(AppendLog, task.FileName, lastResult);
+                        lastResult);
 
                     /*
                      * 产物校验始终没过的收场（用户 2026-09-24 要求）：
@@ -3278,6 +3235,70 @@ namespace ArchiveFixer.ViewModels
             }
 
             return (ClaimOutputDirectory(outputPath, task, ref outputRedirectNote), outputRedirectNote);
+        }
+
+        /// <summary>
+        /// 登记"失败时盘上还剩什么"（部分完成发布的输入）：先按唯一出口 `ProducedContentGate` 数一次
+        /// 真解出来的非空文件（终态分类的判据输入），再交候选表，最后把引擎原话落一次日志。
+        /// </summary>
+        private void RecordPartialPublishFacts(
+            ArchiveTask task,
+            string engineOutputPath,
+            string engineArchivePath,
+            string selectedPassword,
+            IReadOnlyList<(string Path, long Size)>? lastLayerManifestEntries,
+            ArchiveOperationResult? lastResult)
+        {
+            /*
+             * ===== 登记"失败时盘上还剩什么"（部分完成发布的输入，用户 2026-10-02）=====
+             *
+             * 位置刻意选在**候选循环已经跑完、结论已经定下来之后**：
+             * · 产物目录里此刻留着的是**最后一个候选**留下的东西（每个候选开工前会清一次），
+             *   所以尺子与现场必须是同一次候选的 —— `lastLayerManifestEntries` 与
+             *   `lastResult` 都跟着循环滚动，天然对齐；
+             * · 密码取 `selectedPassword`（最后一个候选的）：密码不对时收尾那次懒取清单
+             *   照样列不出来 ⇒ 判"没有清单" ⇒ 一个字节都不发布。
+             *
+             * ⛔ 这里不判断③页开关（收尾时才读）—— 详见 RecordPartialPublishCandidate 的说明。
+             */
+            /*
+             * "这一单整体有没有内容物解出"（终态分类那一档的判据输入，用户 2026-10-16 口径）：
+             * 用**唯一出口** `ProducedContentGate`（与"密码已被证实"同一把尺子，⛔ 不另定阈值）
+             * 数一次产物目录里真解出来的非空文件。
+             */
+            bool producedContent =
+                ProducedContentGate.TryMeasure(
+                    engineOutputPath,
+                    lastResult?.ReportedSubItemErrors ?? 0,
+                    lastResult?.FailedEntryNames?.Count ?? 0,
+                    out int producedFiles,
+                    out _)
+                && producedFiles >= ProducedContentGate.MinimumFiles;
+
+            RecordPartialPublishCandidate(
+                task,
+                engineOutputPath,
+                engineArchivePath,
+                selectedPassword,
+                lastLayerManifestEntries,
+                lastResult?.FailedEntryNames,
+                lastResult?.ReportedSubItemErrors ?? 0,
+                engineReportedFailure: lastResult != null && !lastResult.Success,
+                detectedErrorType: lastResult?.DetectedErrorType,
+                chainProducedContent: producedContent);
+
+            /*
+             * ===== 引擎原话落日志（用户 2026-09-27：「引擎原话从不落日志」）=====
+             *
+             * 位置刻意选在**结论已经定下来之后**（`lastResult` / `task.Status` 都写好了），
+             * 而且整层只写一次：
+             * · 候选循环里每个错密码都记一条 ERROR 是噪声（十个候选十条），
+             *   而真正要看的恰恰是**最后那次**（走得最远的那一次，与失败原因同一份）；
+             * · 详细档在循环里已经逐候选写过命令行与原话了，这里不重复。
+             *
+             * ⛔ 出口只有 <see cref="EngineOutputLog"/> 一个（递归路径同一个）。
+             */
+            EngineOutputLog.LogFailure(AppendLog, task.FileName, lastResult);
         }
     }
 }
