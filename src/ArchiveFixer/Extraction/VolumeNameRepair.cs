@@ -3495,7 +3495,8 @@ namespace ArchiveFixer.Extraction
                 : segment[(segment.LastIndexOf('.') + 1)..];
 
         /// <summary>规范卷段是不是**该族**的写法（`partN.rar` / `NNN` / `zNN`）—— 族对不上就不还原。</summary>
-        private static bool IsSegmentFamilyOfFormat(string segment, VolumeContentFormat format)        {
+        private static bool IsSegmentFamilyOfFormat(string segment, VolumeContentFormat format)
+        {
             if (segment.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
             {
                 return format == VolumeContentFormat.Rar;

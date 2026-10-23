@@ -152,22 +152,22 @@ namespace ArchiveFixer.ViewModels
                     task.ProgressText = StatusText.ProgressFailed;
                     task.Outcome = TaskOutcome.Failed;
                     // 「递归 → 任务事实」与「清单说没加密」都收进唯一出口（一次只搬一个功能族）。
-            RecursionTaskFacts.Apply(task, result);
-            RecursionPasswordStatus.Apply(task, result);
+                    RecursionTaskFacts.Apply(task, result);
+                    RecursionPasswordStatus.Apply(task, result);
 
-            task.ErrorMessage = result.Summary;
+                    task.ErrorMessage = result.Summary;
 
-            /*
-             * 「连续两个候选解出来的产物完全相同」：事实由递归层带上来
-             * （<see cref="RecursionLayerReport.CandidatesProducedIdenticalResults"/>，
-             * 判据是结构化计数，⛔ 不比中文）⇒ 结论里必须说清"换密码不会改变结果"。
-             */
-            if (RecursionFailureNotes.HasIdenticalResults(result))
-            {
-                task.ErrorMessage = RecursionFailureNotes.AppendIdenticalResultsNote(task.ErrorMessage);
-                AppendLog("WARN", $"{task.LogName}：{RecursionFailureNotes.IdenticalResultsNote}");
-            }
-            ApplyLandingViolationNote(task, result);
+                    /*
+                     * 「连续两个候选解出来的产物完全相同」：事实由递归层带上来
+                     * （<see cref="RecursionLayerReport.CandidatesProducedIdenticalResults"/>，
+                     * 判据是结构化计数，⛔ 不比中文）⇒ 结论里必须说清"换密码不会改变结果"。
+                     */
+                    if (RecursionFailureNotes.HasIdenticalResults(result))
+                    {
+                        task.ErrorMessage = RecursionFailureNotes.AppendIdenticalResultsNote(task.ErrorMessage);
+                        AppendLog("WARN", $"{task.LogName}：{RecursionFailureNotes.IdenticalResultsNote}");
+                    }
+                    ApplyLandingViolationNote(task, result);
                     task.EndTime = DateTime.Now;
                     task.LastUpdatedTime = DateTime.Now;
                     task.ClearProgress();
@@ -181,16 +181,16 @@ namespace ArchiveFixer.ViewModels
                     {
                         task.Status = stoppedStatus;
                         task.Outcome = stoppedOutcome;
-                    
-                    /*
-                     * 密码已经证实、坏的是数据：状态与终态由分类器落（Corrupted + 部分完成），
-                     * 但**原因必须写清**——否则用户会拿着密码本去核对一个根本没问题的密码。
-                     */
-                    if (stoppedStatus == StatusText.Corrupted)
-                    {
-                        task.ErrorMessage =
-                            "密码已经证实（这一趟真解出了内容，坏的是数据）—— 不再往下试密码候选。";
-                    }
+
+                        /*
+                         * 密码已经证实、坏的是数据：状态与终态由分类器落（Corrupted + 部分完成），
+                         * 但**原因必须写清**——否则用户会拿着密码本去核对一个根本没问题的密码。
+                         */
+                        if (stoppedStatus == StatusText.Corrupted)
+                        {
+                            task.ErrorMessage =
+                                "密码已经证实（这一趟真解出了内容，坏的是数据）—— 不再往下试密码候选。";
+                        }
                     }
                     else
                     {
