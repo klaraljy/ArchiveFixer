@@ -50,7 +50,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            PostToUiThread(() =>
+            UiThreadStep.PostToUiThread(() =>
             {
                 if (task.EndTime != null)
                 {
@@ -121,7 +121,7 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                PostToUiThread(() => Apply(value));
+                UiThreadStep.PostToUiThread(() => Apply(value));
             }
 
             private void Apply(ArchiveProgress progress)

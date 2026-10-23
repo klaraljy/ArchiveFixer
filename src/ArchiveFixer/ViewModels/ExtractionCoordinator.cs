@@ -257,6 +257,8 @@ namespace ArchiveFixer.ViewModels
             _passwordService = passwordService;
             _pathService = pathService;
             _dialogService = dialogService;
+
+            _uiThread = new UiThreadStep(_dialogService);
             _sourceMoveFileSystem = sourceMoveFileSystem ?? FileSystemSourceMoveFileSystem.Instance;
         }
 
