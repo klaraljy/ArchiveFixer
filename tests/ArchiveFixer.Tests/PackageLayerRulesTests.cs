@@ -544,7 +544,7 @@ namespace ArchiveFixer.Tests
                  * （老行为：`Y.7z.002` 留下来 ⇒ 闸门判"缺首卷（Y.7z.001）"⇒ 计划 Failed、
                  * 产物与源包一个字节都不动，用户看到的是"这一层里有分卷组不完整"。）
                  */
-                ExtractionCoordinator.FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+                FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
                     target,
                     Path.Combine(root, "out", "AAA"),
                     sharedOutputRoot: false,

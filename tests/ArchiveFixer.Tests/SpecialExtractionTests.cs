@@ -238,10 +238,10 @@ namespace ArchiveFixer.Tests
             string stage = CreateStage(("A\\内容文件夹\\payload.txt", "payload"));
             string destination = Path.Combine(_root, "222", "1111");
 
-            ExtractionCoordinator.FinalLayoutPlan off = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan off = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: false, "1111", TerminalLayoutMode.KeepLastFolder, Off());
 
-            ExtractionCoordinator.FinalLayoutPlan on = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan on = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: false, "1111", TerminalLayoutMode.KeepLastFolder, On());
 
             // 关：判定表 4（单链塌缩到最深层那个文件夹名），那一层是 内容文件夹。
@@ -284,10 +284,10 @@ namespace ArchiveFixer.Tests
 
             string destination = Path.Combine(_root, "222", "1111");
 
-            ExtractionCoordinator.FinalLayoutPlan off = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan off = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: false, "1111", TerminalLayoutMode.KeepLastFolder, Off());
 
-            ExtractionCoordinator.FinalLayoutPlan on = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan on = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: false, "1111", TerminalLayoutMode.KeepLastFolder, On());
 
             Assert.False(on.SpecialExtractionApplied);
@@ -314,7 +314,7 @@ namespace ArchiveFixer.Tests
             string stage = CreateStage(("A\\内容文件夹\\payload.txt", "payload"));
             string destination = Path.Combine(_root, "BBB", "222");
 
-            ExtractionCoordinator.FinalLayoutPlan on = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan on = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: true, "1111", TerminalLayoutMode.KeepLastFolder, On());
 
             Assert.False(on.SpecialExtractionApplied);
@@ -339,10 +339,10 @@ namespace ArchiveFixer.Tests
             string destination = Path.Combine(_root, "222", "1111");
             string expectedArtifactRoot = Path.Combine(destination, ProcessArtifactLayout.ArtifactDirectoryName);
 
-            ExtractionCoordinator.FinalLayoutPlan off = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan off = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: false, "1111", TerminalLayoutMode.KeepLastFolder, Off());
 
-            ExtractionCoordinator.FinalLayoutPlan on = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan on = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: false, "1111", TerminalLayoutMode.KeepLastFolder, On());
 
             Assert.Equal(expectedArtifactRoot, off.ProcessArtifactDirectory);
@@ -361,10 +361,10 @@ namespace ArchiveFixer.Tests
             string stage = CreateStage(("A\\内容文件夹\\payload.txt", "payload"));
             string destination = Path.Combine(_root, "222", "1111");
 
-            ExtractionCoordinator.FinalLayoutPlan none = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan none = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: false, "1111");
 
-            ExtractionCoordinator.FinalLayoutPlan offPlan = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan offPlan = ExtractionCoordinator.PlanFinalLayout(
                 stage, destination, sharedOutputRoot: false, "1111", TerminalLayoutMode.KeepLastFolder, Off());
 
             Assert.Equal(Targets(none), Targets(offPlan));
@@ -511,7 +511,7 @@ namespace ArchiveFixer.Tests
             SpecialExtractionRules = new List<string> { SpecialExtractionRules.SingleContentLayer }
         });
 
-        private static List<string> Targets(ExtractionCoordinator.FinalLayoutPlan plan) =>
+        private static List<string> Targets(FinalLayoutPlan plan) =>
             plan.Moves.Select(move => move.To).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
 
         private string CreateStage(params (string RelativePath, string Content)[] files)

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
@@ -77,7 +78,7 @@ namespace ArchiveFixer.Tests
             long tailSizeBefore = new FileInfo(copiedTail).Length;
 
             // ② 定稿前整组改名：必须变成 222.zip + 222.z01。
-            ExtractionCoordinator.FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out"),
                 sharedOutputRoot: false,

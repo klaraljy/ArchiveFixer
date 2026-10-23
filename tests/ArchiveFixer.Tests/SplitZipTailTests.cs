@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using ArchiveFixer.Detection;
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Services;
 using ArchiveFixer.ViewModels;
@@ -122,7 +123,7 @@ namespace ArchiveFixer.Tests
 
             byte[] before = File.ReadAllBytes(tail);
 
-            ExtractionCoordinator.FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-split"),
                 sharedOutputRoot: false,
@@ -154,7 +155,7 @@ namespace ArchiveFixer.Tests
             string occupant = Path.Combine(stage, "222.zip");
             File.WriteAllBytes(occupant, new byte[64]);
 
-            ExtractionCoordinator.FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-occupied"),
                 sharedOutputRoot: false,
@@ -178,7 +179,7 @@ namespace ArchiveFixer.Tests
             string stage = NewDirectory("stage-alone");
             string tail = WriteSplitZipTail(stage, "222.zi删除p", centralDirectoryBytes: 350, entries: 6);
 
-            ExtractionCoordinator.FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
+            FinalLayoutPlan plan = ExtractionCoordinator.PlanFinalLayout(
                 stage,
                 Path.Combine(_root, "out-alone"),
                 sharedOutputRoot: false,

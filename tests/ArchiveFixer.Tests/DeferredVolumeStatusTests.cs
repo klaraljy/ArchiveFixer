@@ -304,7 +304,7 @@ namespace ArchiveFixer.Tests
 
             ExtractionCoordinator coordinator = CreateCoordinator();
 
-            ExtractionCoordinator.FinalLayoutPlan plan = coordinator.PlanFinalLayoutForTask(
+            FinalLayoutPlan plan = coordinator.PlanFinalLayoutForTask(
                 task,
                 stage,
                 dest,

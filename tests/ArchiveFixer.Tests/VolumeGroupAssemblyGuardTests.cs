@@ -75,7 +75,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(VolumeGroupVerdict.Undetermined, resolution.Verdict);
             Assert.False(resolution.CanEnterDeletableRestItems);
 
-            ExtractionCoordinator.FinalLayoutPlan plan = PlanFinalLayout(stage, "out-undetermined", "x");
+            FinalLayoutPlan plan = PlanFinalLayout(stage, "out-undetermined", "x");
 
             Assert.True(plan.Failed, "判不出必须让整份计划作废（兜底落在「什么都不做」那一档）");
             Assert.Empty(plan.ProcessArtifactSources);
@@ -118,7 +118,7 @@ namespace ArchiveFixer.Tests
             Assert.Equal(VolumeGroupVerdict.Undetermined, resolution.Verdict);
             Assert.False(resolution.CanEnterDeletableRestItems);
 
-            ExtractionCoordinator.FinalLayoutPlan plan = PlanFinalLayout(stage, "out-orphan", "x");
+            FinalLayoutPlan plan = PlanFinalLayout(stage, "out-orphan", "x");
 
             Assert.True(plan.Failed, "带卷标记却证不出整组完整的文件，一个都不许进可删的其余物");
             Assert.Empty(plan.ProcessArtifactSources);
@@ -137,7 +137,7 @@ namespace ArchiveFixer.Tests
             WriteFile(stage, "y.7z.002", 4096);
             WriteFile(stage, "y.7z.003", 512);
 
-            ExtractionCoordinator.FinalLayoutPlan plan = PlanFinalLayout(stage, "out-ok", "y");
+            FinalLayoutPlan plan = PlanFinalLayout(stage, "out-ok", "y");
 
             Assert.False(plan.Failed);
             Assert.Equal(3, plan.ProcessArtifactSources.Count);
@@ -260,7 +260,7 @@ namespace ArchiveFixer.Tests
             Assert.True(resolution.IsGroupMember(disguised));
             Assert.False(resolution.CanEnterDeletableRestItems);
 
-            ExtractionCoordinator.FinalLayoutPlan plan = PlanFinalLayout(stage, "out-mp4", "电影");
+            FinalLayoutPlan plan = PlanFinalLayout(stage, "out-mp4", "电影");
 
             Assert.True(plan.Failed);
             Assert.Empty(plan.ProcessArtifactSources);
@@ -741,7 +741,7 @@ namespace ArchiveFixer.Tests
                 AllowTrialOpen = false
             });
 
-        private ExtractionCoordinator.FinalLayoutPlan PlanFinalLayout(
+        private FinalLayoutPlan PlanFinalLayout(
             string stage,
             string outputName,
             string archiveBaseName) =>
