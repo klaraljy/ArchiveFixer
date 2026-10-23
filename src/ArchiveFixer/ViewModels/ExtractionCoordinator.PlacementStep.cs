@@ -261,7 +261,7 @@ namespace ArchiveFixer.ViewModels
              * ⛔ 凡是被判定"属于某个分卷组"的文件，**永远不许进可删残留名单**：
              * 只有"整组完整 + 每一卷名字都标准"这一种情形才放行；其余一律让整份计划作废。
              */
-            StageVolumeScan stageVolumeScan = ResolveStageVolumeGroups(stageRoot);
+            StageVolumeScan stageVolumeScan = StageVolumeScanner.ResolveStageVolumeGroups(stageRoot);
 
             foreach (string file in Directory.EnumerateFiles(stageRoot, "*", SearchOption.AllDirectories))
             {
@@ -340,7 +340,7 @@ namespace ArchiveFixer.ViewModels
                  * 这一份既不进其余物、也不当内容物，**整份计划作废**（下面的 Failed 分支），
                  * 于是源包与其余物的删除一个都不会发生（它们都挂在"定稿 + 校验通过"之后）。
                  */
-                StageVolumeGroupView? stageGroup = FindStageVolumeGroup(stageVolumeScan.Groups, file);
+                StageVolumeGroupView? stageGroup = StageVolumeScanner.FindStageVolumeGroup(stageVolumeScan.Groups, file);
 
                 /*
                  * ⛔ 这一道同样只问**过程物**（引擎这一趟自己写出来的东西已经在上面的 isProcessArtifact
