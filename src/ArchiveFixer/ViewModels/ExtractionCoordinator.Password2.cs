@@ -40,18 +40,6 @@ namespace ArchiveFixer.ViewModels
             return BuildSchedulePlan(tasks ?? Array.Empty<ArchiveTask>(), requested);
         }
 
-        /// <summary>
-        /// 「其余物」这一档会动到什么 —— **其余物 = 过程物 + 原包**（用户 2026-09-27 定死的口径）。
-        ///
-        /// <para>为什么必须由档位决定这句话：源包那一档选「留在原地」时，其余物里**根本没有源包**。
-        /// 2026-09-27 真机上就是这里出的洋相 —— 同一份日志一边写"源包处理：留在原地（一个字节都不搬）"，
-        /// 一边写"其余物：任务成功后会彻底删除（源包 + 过程物）"，用户直接问"我都设置了原包不动，
-        /// 你怎么还说原包在其余物里面"。</para>
-        /// </summary>
-        internal static string DescribeRestScope(SourceHandlingMode sourceHandling)
-            => sourceHandling == SourceHandlingMode.KeepInPlace
-                ? "解压过程中产生的过程物（源包留在原地：一个字节都不搬、不删）"
-                : "源包 + 过程物";
 
         /// <summary>
         /// 本批（或本单）生效的「源包怎么处理」——**唯一出口**：

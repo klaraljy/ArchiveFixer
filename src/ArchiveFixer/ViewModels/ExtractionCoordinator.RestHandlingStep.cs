@@ -1987,5 +1987,374 @@ namespace ArchiveFixer.ViewModels
         internal static bool IsVolumePartFile(string filePath) =>
             ExtensionHelper.IsVolumePartExtension(Path.GetExtension(filePath));
 
+        /// <summary>
+        /// **过路层那一单的其余物按档处理**（用户 2026-10-06 拍板：「其余物会在每层的过程中会删掉，
+        /// 我无法理解为什么还会有其余物留着」；他两次追问的 `111\111\其余物\111.zip`（48.35 MB）就是这一格）。
+        ///
+        /// <para><b>形状</b>：某一单只出**过程物**（它解出来的入口包 / 分卷片就是下一层的输入），
+        /// 自己因此停在中途；那一组后来由**另一个当场核过清单、可证完整**的消费方解开
+        /// ⇒ 它自己那份其余物不再有用，按「删除操作」处理。</para>
+        ///
+        /// <para>⛔ **六道门槛一条不绕过**（机器终态 / 完整性证据 / 其余物目录 / 形状 / 输出范围 /
+        /// 半套分卷），唯一差别是**证据来源**：这一单自己停在中途 ⇒ 它自己的完整性判不出来，
+        /// 该按证据的是**接手它的那一单**（`completenessEvidence`）。⛔ 那条证据只用于这一次删除，
+        /// 不写回它自己的账。</para>
+        ///
+        /// <para>⛔ 放行之前还要逐条确认：其余物里**每一个文件的名字都属于这一组**
+        /// （= 都是被那次成功解压接手的过程物）；只要有一个不属于 ⇒ 什么都不做（判不出就不动）。</para>
+        ///
+        /// <para><b>⚠ 2026-10-11 环台实测（取证，⛔ 不是推断）</b>：把这一档与
+        /// <see cref="SweepPassThroughRestDirectoriesAsync"/> **两条都整条关掉**
+        /// （各加一句 early return），整个 <c>SiblingFolderVolumeGatherTests</c>（19 条）
+        /// **照旧 18 通过 / 1 跳过 / 0 失败**，`彻底删除：111\其余物（8 项 / 7.0 MB）`照旧执行 ⇒
+        /// 现在这几条用例真正覆盖的是**链尾那一遍**「这一单自己的其余物按档处理」
+        /// （关掉它 ⇒ `真机形状_过路层那一单的其余物按档删掉_48MB那处` 当场红）。
+        /// ⇒ 本档在现有夹具里**没有一次真的删成功**（19 次调用全部停在闸门上，逐条见日志里那句
+        /// `过路层的其余物这次没删 —— …`），⛔ **不许把"用例绿"读成"这一档验过了"**；
+        /// 哪一天真机日志里出现 `过路层的其余物已按「删除操作」处理`，那才是它第一次真干活。</para>
+        /// </summary>
+        private void PurgePassThroughRestOfSettledProducer(
+            ArchiveTask producer,
+            ArchiveTask consumer,
+            string groupBaseName)
+        {
+            if (producer == null || !_passThroughRestHandled.Add(producer))
+            {
+                return;
+            }
+
+            string restDirectory = producer.RestDirectoryPath;
+
+            if (string.IsNullOrWhiteSpace(restDirectory) || !Directory.Exists(restDirectory))
+            {
+                // 「判不出 ⇒ 什么都不做」：把判据输入写进日志（⛔ 判据本身一个字不动）。
+                LogPassThroughRestCriterionInputs(
+                    producer,
+                    consumer,
+                    groupBaseName,
+                    restDirectory,
+                    "没记下这一单定稿实际用的其余物目录（或它已经不在盘上）");
+
+                return;
+            }
+
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+            {
+                // 「不动其余物」这一档：一个字节都不删（不变量 1 的默认档）。
+                return;
+            }
+
+            try
+            {
+                /*
+                 * ⛔ 前置闸门的引用名走**唯一出口**（`AllRestFilesBelongToGroup` → `ResolveGroupReferenceName`）：
+                 * 原来写死 `<组基名>.zip` ⇒ 非 ZIP 族这一层永远判"里面有别人的东西" ⇒ 永远不删
+                 * （用户选了「彻底删除」也不动）；ZIP 族却删 —— 同一个设置两种结果（2026-10-11 统一）。
+                 */
+                if (!AllRestFilesBelongToGroup(
+                        consumer,
+                        groupBaseName,
+                        Directory.EnumerateFiles(restDirectory, "*", SearchOption.AllDirectories)))
+                {
+                    // 里面还有不属于这一组的东西 / 读不到 ⇒ 判不出 ⇒ 什么都不做（原样留着）。
+                    LogPassThroughRestCriterionInputs(
+                        producer,
+                        consumer,
+                        groupBaseName,
+                        restDirectory,
+                        "其余物里有不属于这一组的文件（判不出它是不是被接手的过程物）");
+
+                    return;
+                }
+            }
+            catch
+            {
+                return;
+            }
+
+            ResultCompletenessVerdict evidence = ResultCompletenessClassifier.Classify(consumer);
+
+            if (!evidence.AllowsSourceRemoval)
+            {
+                LogPassThroughRestCriterionInputs(
+                    producer,
+                    consumer,
+                    groupBaseName,
+                    restDirectory,
+                    "接手方那一单的完整性证据不允许删源（不是「可证完整 + 校验通过」）");
+
+                return;
+            }
+
+            bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
+
+            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 这里（Keep 已在上面挡掉）只剩永久删。
+            DeleteMode deleteMode = DeleteMode.Permanent;
+
+            RestPurgeOutcome outcome;
+
+            try
+            {
+                outcome = new RestItemPurger(
+                        RestDeleteExecutor,
+                        null,
+                        ContentKeepRules.FromSettings(Settings))
+                    .Purge(
+                        producer,
+                        cancelled,
+                        deleteMode,
+                        evidence,
+
+                        /*
+                         * 输出范围那一道门槛的锚点：这一单被收场时 `OutputPath` 已经被清空
+                         * （跟班卷没有自己的成品目录）⇒ 用**唯一落点出口**现算一份它那条链的落点目录
+                         * —— 其余物正是建在那一层底下（真机 `111\111\其余物`）。
+                         */
+                        /*
+                         * ⛔ 锚点 = **其余物目录的父目录**（其余物就建在它自己那一层底下），
+                         * ⛔ **绝不现算这一单的落点**：真机 2026-10-06 21:24 实测 —— 走到这里时
+                         * 它的源包**已经被搬进组层其余物**，现算出来是 `…\其余物\111` 这种荒唐路径，
+                         * 于是"不在本任务输出目录之内"把删除拒了 4 次，48.35 MB 一直留着。
+                         * 其余五道门槛（终态 / 完整性证据 / 目录形状 / 组内文件 / 半套分卷）照旧一条不绕过。
+                         */
+                        Path.GetDirectoryName(restDirectory) ?? string.Empty);
+            }
+            catch (Exception ex)
+            {
+                // 删东西绝不许把已经成立的结论拖成异常：落成"没删成"，别的什么都不变。
+                AppendLog("WARN", $"{producer.LogName}：处理过路层的其余物时出现意外错误：{ex.Message}");
+                return;
+            }
+
+            AppendLog(
+                outcome.Succeeded ? "INFO" : "WARN",
+                outcome.Succeeded
+                    ? $"{producer.LogName}：过路层的其余物已按「删除操作」处理（{outcome.EntryCount} 项 / {outcome.FreedBytes} 字节）"
+                      + $"—— 这一组的内容已由「{consumer.FileName}」解开。"
+                    : $"{producer.LogName}：过路层的其余物这次没删成 —— {outcome.Message}");
+        }
+
+        /// <summary>
+        /// 「其余物」这一档会动到什么 —— **其余物 = 过程物 + 原包**（用户 2026-09-27 定死的口径）。
+        ///
+        /// <para>为什么必须由档位决定这句话：源包那一档选「留在原地」时，其余物里**根本没有源包**。
+        /// 2026-09-27 真机上就是这里出的洋相 —— 同一份日志一边写"源包处理：留在原地（一个字节都不搬）"，
+        /// 一边写"其余物：任务成功后会彻底删除（源包 + 过程物）"，用户直接问"我都设置了原包不动，
+        /// 你怎么还说原包在其余物里面"。</para>
+        /// </summary>
+        internal static string DescribeRestScope(SourceHandlingMode sourceHandling)
+            => sourceHandling == SourceHandlingMode.KeepInPlace
+                ? "解压过程中产生的过程物（源包留在原地：一个字节都不搬、不删）"
+                : "源包 + 过程物";
+
+        internal static bool CanSweepPassThroughRest(
+            ArchiveTask? task,
+            IReadOnlyDictionary<string, string>? consumedVolumeSources)
+        {
+            if (task == null || string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                return false;
+            }
+
+            // ① 失败 / 取消 ⇒ 红线：其余物一个字节都不动（那是失败现场的凭证）。
+            if (task.Outcome is TaskOutcome.Failed or TaskOutcome.Cancelled)
+            {
+                return false;
+            }
+
+            if (task.OutputVerification == OutputVerificationOutcome.Failed)
+            {
+                return false;
+            }
+
+            string restDirectory = task.RestDirectoryPath;
+
+            if (!Directory.Exists(restDirectory))
+            {
+                return false;
+            }
+
+            if (consumedVolumeSources == null || consumedVolumeSources.Count == 0)
+            {
+                return false;
+            }
+
+            // ② 其余物里每一个文件都必须在"借来的源片"账里（= 已被下游接手）。
+            bool any = false;
+
+            foreach (string file in Directory.EnumerateFiles(restDirectory, "*", SearchOption.AllDirectories))
+            {
+                any = true;
+
+                bool adopted = false;
+
+                foreach (string key in consumedVolumeSources.Keys)
+                {
+                    if (SafePathHelper.PathEquals(key, file))
+                    {
+                        adopted = true;
+                        break;
+                    }
+                }
+
+                if (!adopted)
+                {
+                    // 判不出 / 还有一个没被接手的 ⇒ 什么都不做。
+                    return false;
+                }
+            }
+
+            return any;
+        }
+
+        /// <summary>
+        /// 把**这一个根任务那条链里"过路层"的其余物**按档处理掉（含 `111\111\其余物` 这种中间层）。
+        ///
+        /// <para>只处理"落在根任务那棵树里、且放行判据成立"的那几单 —— 这是与"对全表扫一遍"的关键差别：
+        /// 后者会碰到别的链、也会碰到链中途失败要留现场的那几单（实测把三条红线用例打红）。</para>
+        /// </summary>
+        private async Task SweepPassThroughRestDirectoriesAsync(ArchiveTask rootTask, CancellationToken cancellationToken)
+        {
+            string? rootDirectory = Path.GetDirectoryName(rootTask.OutputPath);
+
+            if (string.IsNullOrWhiteSpace(rootDirectory))
+            {
+                string contentRoot = rootTask.ContentDirectoryPath;
+
+                rootDirectory = string.IsNullOrWhiteSpace(contentRoot)
+                    ? null
+                    : Path.GetDirectoryName(contentRoot);
+            }
+
+            if (string.IsNullOrWhiteSpace(rootDirectory) || !Directory.Exists(rootDirectory))
+            {
+                return;
+            }
+
+            foreach (ArchiveTask restOwner in SnapshotTaskTable(Tasks))
+            {
+                if (restOwner == null
+                    || ReferenceEquals(restOwner, rootTask)
+                    || string.IsNullOrWhiteSpace(restOwner.RestDirectoryPath))
+                {
+                    continue;
+                }
+
+                // ⛔ 只碰**这个根任务那棵树里**的其余物（别的链、别的包一律不动）。
+                if (!IsRestInsideRootTree(rootDirectory, restOwner.RestDirectoryPath))
+                {
+                    continue;
+                }
+
+                if (!CanSweepPassThroughRest(restOwner, _consumedVolumeSources))
+                {
+                    continue;
+                }
+
+                await ApplyRestHandlingAfterChainAsync(restOwner, null, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// **"过路层的其余物"该不该放行**（唯一判据，纯函数；真机 CCCC 2026-10-06）。
+        ///
+        /// <para><b>为什么不能只看终态"成功"</b>：真机那个现场的过路层是 `111.rar` —— 它只出过程物
+        /// （解出来的入口包 `111.zip` 被**采纳进别的层**），于是它自己那条链停在中途、终态是
+        /// **「部分完成」** ⇒ 按"只放行成功"那条判据它**永远被挡在外面**，那份其余物
+        /// （`111\111\其余物\111.zip`，48.35 MB）就一直留在盘上（用户报的"其余物还有"）。</para>
+        ///
+        /// <para><b>但也不许改成"部分完成就删"</b> —— 那是失败现场的凭证（红线：
+        /// 失败 / 部分完成 / 取消 ⇒ 其余物一个字节都不动）。⇒ 放行条件换成**可证"这份其余物里的东西
+        /// 已经全被下游接手了"**（三条同时成立）：</para>
+        /// <list type="number">
+        /// <item><description>这一单**没失败**、也没被取消（`Failed` / `Cancelled` 一律不动）；</description></item>
+        /// <item><description>其余物目录**在盘上**且**不是空的**（空壳由既有那一档处理，这里不抢它的活）；</description></item>
+        /// <item><description>其余物里**每一个文件**都出现在那份"借来的源片"账
+        /// <c>_consumedVolumeSources</c> 里（= 它已经被下游某一单接手用过了）——
+        /// 只要有一个文件没进账 ⇒ 判不出 ⇒ **什么都不做**。</description></item>
+        /// </list>
+        /// </summary>
+        /// <summary>
+        /// **这一份其余物是不是落在"根任务那棵树"里**（⛔ 只碰这一棵树：别的链、别的包一律不动）。
+        ///
+        /// <para>⚠ 参数顺序按 <see cref="ArchivePathGuard.IsInsideRoot"/> 的定义来：**第一个是根、第二个是待查路径**。
+        /// 真机 CCCC 2026-10-06 18:13 那一批：这里两个参数写反了 ⇒ 每一份过路层其余物都被判成"不在树里"
+        /// ⇒ <see cref="SweepPassThroughRestDirectoriesAsync"/> 整段成了死代码 ⇒
+        /// `111\111\其余物\111.zip`（48.35 MB）一直留到用户看见（他原话：「**还有 48MB 的问题**」）。</para>
+        /// </summary>
+        internal static bool IsRestInsideRootTree(string? rootDirectory, string? restDirectory)
+            => !string.IsNullOrWhiteSpace(rootDirectory)
+               && !string.IsNullOrWhiteSpace(restDirectory)
+               && ArchivePathGuard.IsInsideRoot(rootDirectory, restDirectory, out _);
+
+        /// <summary>
+        /// **把一个过程物文件搬进其余物**（唯一出口：让位 + 同卷改名 / 跨卷复制 + 绝不覆盖）。
+        ///
+        /// <para>三处消费点共用它（⛔ 不许各写一份）：① <c>CollectChainInnerPackagesIntoRestAsync</c>
+        /// （链尾把"内层包"集中进其余物）；② <c>CollectChainInnerLayerInputsIntoRest</c>
+        /// （链内那一族的片在链尾集中）；③ <c>PurgeGroupLandedPieces</c>
+        /// （被整组接走的那份副本集中进其余物）。</para>
+        ///
+        /// <para>判据与源包搬运（<c>SourcePackageMover</c>）**同一口径**：目标名被占 ⇒
+        /// <see cref="ProcessArtifactLayout.MakeUniqueTarget"/> 让位（连"本计划里前面那几条"一起算），
+        /// 同卷直接改名、跨卷/被占用才回落到"先复制成功再删原件" —— 复制失败就一个字节都不动。</para>
+        /// </summary>
+        /// <param name="from">源（必须在盘上）。</param>
+        /// <param name="to">目标（最终名可能因让位而变，见 <paramref name="target"/>）。</param>
+        /// <param name="movedTargets">本趟已经落下去的目标名（让位时要看它）。</param>
+        /// <param name="target">真的搬到的那个名字（失败时为空串）。</param>
+        /// <param name="failure">失败原因（成功时为 null）。</param>
+        internal static bool TryMoveIntoRest(
+            string from,
+            string to,
+            HashSet<string> movedTargets,
+            out string target,
+            out string? failure)
+        {
+            target = to;
+            failure = null;
+
+            try
+            {
+                if (movedTargets.Contains(target) || File.Exists(target) || Directory.Exists(target))
+                {
+                    target = ProcessArtifactLayout.MakeUniqueTarget(
+                        target,
+                        isDirectory: false,
+                        movedTargets,
+                        FileSystemArtifactTargetProbe.Instance);
+                }
+
+                movedTargets.Add(target);
+
+                SafePathHelper.EnsureDirectoryExists(Path.GetDirectoryName(target) ?? string.Empty);
+
+                try
+                {
+                    File.Move(from, target, overwrite: false);
+                }
+                catch (IOException)
+                {
+                    File.Copy(from, target, overwrite: false);
+                    File.Delete(from);
+                }
+                catch (NotSupportedException)
+                {
+                    File.Copy(from, target, overwrite: false);
+                    File.Delete(from);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                failure = ex.Message;
+
+                return false;
+            }
+        }
+
     }
 }
