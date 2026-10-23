@@ -7939,12 +7939,8 @@ namespace ArchiveFixer.ViewModels
              * 才会被补成 `Failed`）。递归这条路以前不写 `EndTime`，于是任务在界面上一直"还在跑"
              * （耗时那一列会跟着 Now 一直涨），批末的"用时"也取不到这一单。
              */
-            task.EndTime ??= DateTime.Now;
-            task.ElapsedText = task.StartTime.HasValue
-                ? (task.EndTime.Value - task.StartTime.Value).ToString(@"hh\:mm\:ss")
-                : task.ElapsedText;
-
-            task.LastUpdatedTime = DateTime.Now;
+            // 收尾时间/耗时/最后更新时间收进唯一出口 `Extraction/TaskTimingFinalizer`。
+            TaskTimingFinalizer.Finalize(task);
 
             AppendLog(result.Completed ? "INFO" : "WARN", $"{task.LogName}：{result.Summary}");
 
