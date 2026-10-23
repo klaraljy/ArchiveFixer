@@ -428,7 +428,7 @@ namespace ArchiveFixer.ViewModels
         /// <para>⚠ 唯一的例外仍是**「空间不足」模式**：那一档有它自己的一支（连源包都在每层当场删），
         /// 批首把它置 false 避免抢活（见 <c>PrepareRestHandlingForBatch</c> 里那一支）。</para>
         ///
-        /// <para>⚠ 与 <see cref="_restHandlingThisBatch"/> 同样的寿命：批尾**不清**（链尾钩子在批次返回之后
+        /// <para>⚠ 与 <see cref="RestHandlingThisBatch"/> 同样的寿命：批尾**不清**（链尾钩子在批次返回之后
         /// 才跑，清掉会让链尾以为"这一批没有逐层回收"而再去搬已经不存在的内层包）；
         /// 下一批开工时 <c>PrepareRestHandlingForBatch</c> 会重新写一次。</para>
         /// </summary>

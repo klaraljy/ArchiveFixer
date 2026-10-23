@@ -242,6 +242,7 @@ namespace ArchiveFixer.ViewModels
             _passwordCandidatesStep = new PasswordCandidatesStep(this);
             _placementStep = new PlacementStep(this);
             _partialPublishStep = new PartialPublishStep(this);
+            _restHandlingStep = new RestHandlingStep(this);
             _sourceMoveFileSystem = sourceMoveFileSystem ?? FileSystemSourceMoveFileSystem.Instance;
         }
 

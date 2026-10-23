@@ -1020,7 +1020,7 @@ namespace ArchiveFixer.ViewModels
                 _spaceLedger = null;
 
                 /*
-                 * ⚠ 这里**刻意不**把 `_restHandlingThisBatch` 落回 Keep（2026-09-25 第 32 条被测试逮住）。
+                 * ⚠ 这里**刻意不**把 `RestHandlingThisBatch` 落回 Keep（2026-09-25 第 32 条被测试逮住）。
                  *
                  * 一键处理的「删除操作」是在**整条续解链跑完之后**做的，而那个链尾钩子
                  * （`CompleteRootSourcePackagesAfterChainAsync`，由 `OneClickCoordinator` 在本次解压批次

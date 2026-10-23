@@ -1632,7 +1632,7 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("INFO", $"{task.LogName}：空间门通过（精确） —— {preciseGate.Reason}；{refined.Basis}");
 
                 if (!string.Equals(
-                        RestHandlingModes.Normalize(_restHandlingThisBatch),
+                        RestHandlingModes.Normalize(RestHandlingThisBatch),
                         RestHandlingModes.Keep,
                         StringComparison.OrdinalIgnoreCase))
                 {

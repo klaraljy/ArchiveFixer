@@ -65,7 +65,7 @@ namespace ArchiveFixer.ViewModels
 
         void IPartialPublishStepHost.AppendLog(string level, string message) => AppendLog(level, message);
 
-        string IPartialPublishStepHost.RestHandlingThisBatch => _restHandlingThisBatch;
+        string IPartialPublishStepHost.RestHandlingThisBatch => RestHandlingThisBatch;
 
         bool IPartialPublishStepHost.IsInsideRecursionWorkspace(string? path) => IsInsideRecursionWorkspace(path);
 

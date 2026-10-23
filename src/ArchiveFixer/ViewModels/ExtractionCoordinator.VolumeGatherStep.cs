@@ -273,7 +273,7 @@ namespace ArchiveFixer.ViewModels
                 return null;
             }
 
-            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+            string mode = RestHandlingModes.Normalize(RestHandlingThisBatch);
 
             if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase)
                 || IsStopping
@@ -429,7 +429,7 @@ namespace ArchiveFixer.ViewModels
                 return;
             }
 
-            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+            string mode = RestHandlingModes.Normalize(RestHandlingThisBatch);
 
             /*
              * ===== 「其余物 = 不处理」这一档：**不删，但要集中进其余物** =====

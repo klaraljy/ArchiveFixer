@@ -198,7 +198,7 @@ namespace ArchiveFixer.ViewModels
                 parts.Add("校验未通过");
             }
 
-            string destination = DescribeShortDestination(task.CollectedPath, task.OutputPath);
+            string destination = LogLineText.DescribeShortDestination(task.CollectedPath, task.OutputPath);
 
             if (!string.IsNullOrWhiteSpace(destination))
             {
@@ -230,83 +230,8 @@ namespace ArchiveFixer.ViewModels
             return $"{task.LogName}：{string.Join(" ｜ ", parts)}";
         }
 
-        /// <summary>
-        /// 落点写成"短地址"（用户 2026-09-25 第 44 条：满屏几百字符的绝对路径最占地方）。
-        /// 规则：从**输出根**往下保留；拿不到输出根就保留末两段，前面用 `…\` 省掉。
-        /// 完整路径仍然在任务详情 / 失败清单 / ①页「输出位置」里（那里要求看到完整地址）。
-        /// </summary>
-        private static string DescribeShortDestination(string? collectedPath, string? outputPath)
-        {
-            string path = !string.IsNullOrWhiteSpace(collectedPath) ? collectedPath! : outputPath ?? string.Empty;
-
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return string.Empty;
-            }
-
-            string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            if (trimmed.Length <= MaxSummaryPathLength)
-            {
-                return trimmed;
-            }
-
-            string[] segments = trimmed.Split(
-                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-                StringSplitOptions.RemoveEmptyEntries);
-
-            if (segments.Length <= 3)
-            {
-                return trimmed;
-            }
-
-            string tail = string.Join(Path.DirectorySeparatorChar, segments[^2..]);
-
-            return "…" + Path.DirectorySeparatorChar + tail;
-        }
-
         /// <summary>收尾摘要里允许的路径长度上限（超过就只留末两段）。</summary>
         private const int MaxSummaryPathLength = 72;
-
-        /// <summary>
-        /// 只留路径的**末 N 段**（<c>H:\…\共用根\其余物\025</c> → <c>其余物\025</c>）。
-        ///
-        /// <para>其余物那一行用它（用户 2026-09-26 第 45 条：真机上逐任务一条 60 字符的完整路径 × 118 条，
-        /// 而他要认的只是"哪一个包的其余物"）。完整路径在 ③页「工作区残留」与输出目录里都看得到，
-        /// **失败**时也照旧全量打印。</para>
-        /// </summary>
-        private static string DescribeShortTail(string? path, int segments)
-        {
-            if (string.IsNullOrWhiteSpace(path) || segments <= 0)
-            {
-                return string.Empty;
-            }
-
-            string trimmed = path!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            string[] parts = trimmed.Split(
-                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-                StringSplitOptions.RemoveEmptyEntries);
-
-            return parts.Length <= segments
-                ? trimmed
-                : string.Join(Path.DirectorySeparatorChar, parts[^segments..]);
-        }
-
-        /// <summary>其余物目录里有几个顶层条目（只数，不递归 —— 只为一行日志说清"有多少东西"）。</summary>
-        private static int CountRestEntries(string? directory)
-        {
-            try
-            {
-                return string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
-                    ? 0
-                    : Directory.GetFileSystemEntries(directory).Length;
-            }
-            catch
-            {
-                return 0;
-            }
-        }
 
         /// <summary>本批"其余物已处理"的记账（逐任务只写一行，批末一条汇总 —— 第 44 条）。</summary>
         private int _batchPurgedTaskCount;

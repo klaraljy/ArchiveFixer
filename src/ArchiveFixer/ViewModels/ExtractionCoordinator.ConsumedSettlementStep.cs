@@ -164,7 +164,7 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void DeleteHarvestTargets(ArchiveTask consumer, List<string> targets)
         {
-            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+            string mode = RestHandlingModes.Normalize(RestHandlingThisBatch);
 
             // ⚠ 2026-10-15：回收站档整条下线 ⇒ 只剩永久删（调用方已保证这一批不是 Keep 档）。
             DeleteMode deleteMode = DeleteMode.Permanent;
