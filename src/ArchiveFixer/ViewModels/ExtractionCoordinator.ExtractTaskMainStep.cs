@@ -19,7 +19,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 
-
 namespace ArchiveFixer.ViewModels
 {
     /// <summary>任务解压主流程（调度执行/单任务处理/单任务解压主体；第 12 块，同一 partial 类）。</summary>
@@ -1005,7 +1004,7 @@ namespace ArchiveFixer.ViewModels
              * 用户自己添加的坏名字分卷一个字节都不动 —— 那种情况留给下面那道
              * 「通用分片」闸门如实报「分卷缺失」+ 给改名建议。
              */
-            engineArchivePath = TryRepairBrokenVolumeChainName(task, engineArchivePath);
+            engineArchivePath = ResolveEngineArchivePath(task, engineArchivePath);
 
             /*
              * ⚠ 2026-10-16（困难批 `21212121`，运行期实测）：**交给引擎的那一份，名字得是它自己的规范名**。
@@ -1029,7 +1028,6 @@ namespace ArchiveFixer.ViewModels
              * 任何一条不成立 / 判不出 ⇒ 原样返回（老口径一个字节不改）。⛔ 只影响"交给引擎的那一份"：
              * `task.CurrentPath` 与源包那一档一个字都不动（改名、删源包、统计、报告读的都是它）。</para>
              */
-            engineArchivePath = RecursiveExtractor.PreferCanonicalSiblingName(engineArchivePath);
 
             /*
              * 内嵌 ZIP 的**直读**结论（非 null = 这一次走直读，不产生那份等大的临时副本）。
@@ -1550,7 +1548,6 @@ namespace ArchiveFixer.ViewModels
                     directZip != null ? 0 : SpaceEstimator.EstimateCarvedBytes(task, archiveSize),
                     carvedBytesNotNeeded: directZip != null)
                     .WithVolumeLayout(ResolveWorkspaceVolumeShare(outputPath));
-
 
                 if (!budget.Allowed)
                 {
@@ -3109,24 +3106,7 @@ namespace ArchiveFixer.ViewModels
              * 把预检的"文件名已加密"结论恢复回来（见上面 preflightSaidEncryptedHeaders 的说明）。
              * 条件收得最紧：预检说过、而且这一层最后得到的**只是**"密码没通过"。
              */
-            if (preflightSaidEncryptedHeaders &&
-                (task.Status == StatusText.WrongPassword || task.Status == StatusText.ExtractFailed))
-            {
-                task.Status = StatusText.EncryptedHeaders;
-                task.PasswordStatus = StatusText.PasswordNeed;
-
-                if (!string.IsNullOrWhiteSpace(encryptedHeadersMessage))
-                {
-                    // 连原因也一起恢复：泛泛的"密码错误"会让用户去翻密码本，
-                    // 而这里的结论是"先给它一个密码，它才肯把内容清单给你看"。
-                    task.ErrorMessage = encryptedHeadersMessage;
-                }
-
-                AppendLog(
-                    "WARN",
-                    $"{task.LogName}：这次拿到的是「{StatusText.EncryptedHeaders}」的结论" +
-                    "（不是泛泛的密码错误）—— 连内容清单都读不出来，需要正确密码才能列出内容。");
-            }
+            RestoreEncryptedHeadersConclusion(task, preflightSaidEncryptedHeaders, encryptedHeadersMessage);
 
             /*
              * ===== 密码类结论上那两句补充（位置刻意在"文件名已加密"恢复之后）=====
@@ -3176,7 +3156,6 @@ namespace ArchiveFixer.ViewModels
             task.LastUpdatedTime = DateTime.Now;
         }
 
-
         /// <summary>
         /// ⛔ 真正的 APK 不碰：不解压、不递归、不改名（用户 2026-10-10 拍板）。判据 = 内容证据，
         /// 唯一出口 <c>AndroidPackageDetector</c>；判不出 ⇒ 照旧照常处理。
@@ -3211,6 +3190,48 @@ namespace ArchiveFixer.ViewModels
                 + "要处理它请用专门的 APK 工具。");
 
             return true;
+        }
+
+        /// <summary>
+        /// 交给引擎的那一份归档路径：先修"坏名字的第一卷"（只改我们自己产出的那一卷），
+        /// 再优先用盘上同一份的规范名（判据全在读事实，唯一出口 <c>RecursiveExtractor.PreferCanonicalSiblingName</c>）。
+        /// ⛔ 只影响交给引擎的那一份：task.CurrentPath 与源包那一档一个字都不动。
+        /// </summary>
+        private string ResolveEngineArchivePath(ArchiveTask task, string engineArchivePath)
+        {
+            string resolved = TryRepairBrokenVolumeChainName(task, engineArchivePath);
+
+            return RecursiveExtractor.PreferCanonicalSiblingName(resolved);
+        }
+
+        /// <summary>
+        /// 把预检的"文件名已加密"结论恢复回来：条件收得最紧 —— 预检说过、而且这一层最后得到的**只是**"密码没通过"。
+        /// </summary>
+        private void RestoreEncryptedHeadersConclusion(
+            ArchiveTask task,
+            bool preflightSaidEncryptedHeaders,
+            string? encryptedHeadersMessage)
+        {
+            if (!preflightSaidEncryptedHeaders ||
+                (task.Status != StatusText.WrongPassword && task.Status != StatusText.ExtractFailed))
+            {
+                return;
+            }
+
+            task.Status = StatusText.EncryptedHeaders;
+            task.PasswordStatus = StatusText.PasswordNeed;
+
+            if (!string.IsNullOrWhiteSpace(encryptedHeadersMessage))
+            {
+                // 连原因也一起恢复：泛泛的"密码错误"会让用户去翻密码本，
+                // 而这里的结论是"先给它一个密码，它才肯把内容清单给你看"。
+                task.ErrorMessage = encryptedHeadersMessage;
+            }
+
+            AppendLog(
+                "WARN",
+                $"{task.LogName}：这次拿到的是「{StatusText.EncryptedHeaders}」的结论" +
+                "（不是泛泛的密码错误）—— 连内容清单都读不出来，需要正确密码才能列出内容。");
         }
     }
 }

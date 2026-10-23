@@ -905,82 +905,7 @@ namespace ArchiveFixer.ViewModels
                     continue;
                 }
 
-                // ③ 到这一步才如实报缺卷（不变量 7：从头到尾没有"带着缺卷开始解"这回事）。
-                string diagnosis = string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    StatusText.VolumeDeficitFinalDiagnosisFormat,
-                    task.FileName,
-                    missing);
-
-                AppendLog(
-                    "WARN",
-                    string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.VolumeDeficitRecheckStillFormat,
-                        task.FileName,
-                        missing));
-
-                /*
-                 * ⚠ 2026-10-06 试过一版"批末这一档也改成「部分完成」+ WARN"，**已撤回**：
-                 * 全量当场 6 条红线用例变红（`对照_一直补不上_批末才如实报缺卷`、
-                 * `PipelineWiringTests.缺卷_真案一的现场_批末补判才拦下并点名缺第2卷` 等）——
-                 * **"缺卷不开始解 + 如实报缺卷"是用户早先拍过并有用例钉住的口径**，
-                 * 真正该改的是"内容已被接手的那些单不该走到这一支"（见下面那行排障）。
-                 */
-                MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
-                AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
-
-                /*
-                 * ===== 到最后一刻仍然不完整 ⇒ **部分完成**，⛔ 不是失败（用户 2026-10-06）=====
-                 *
-                 * 用户原话：「假如，1_最后剩一个 `111.7z.001` 你不能说是解压失败了，这应该是部分完成，
-                 * 因为这个分卷不完整，到了最后检测不到完整的；2_如果最后完整了，但是解压不出来，那才是失败了」。
-                 *
-                 * 判据只读**盘上事实**（`VolumeGroupDetector` 的结论）：这一组到底完不完整 ——
-                 * · 不完整（缺片）⇒ `PartiallyCompleted`：我们**根本没拿到全部数据**，不是"解压失败"；
-                 * · 完整了却解不出来 ⇒ 走既有的失败收口 ⇒ `Failed`（那才是真失败）。
-                 * ⛔ 「源包一个字节都不动」这条红线一个字不改（下面既有的收尾照旧）。
-                 */
-                var leftoverCandidates = new List<VolumeCandidate>();
-
-                foreach (string path in task.VolumePaths)
-                {
-                    if (File.Exists(path))
-                    {
-                        leftoverCandidates.Add(new VolumeCandidate { Path = path });
-                    }
-                }
-
-                foreach (string path in CollectVolumeFilesInDirectory(
-                             Path.GetDirectoryName(task.CurrentPath ?? string.Empty) ?? string.Empty))
-                {
-                    leftoverCandidates.Add(new VolumeCandidate { Path = path });
-                }
-
-                bool stillIncomplete = VolumeGroupDetector
-                    .Group(leftoverCandidates)
-                    .Any(candidateGroup => !candidateGroup.IsComplete);
-
-                if (stillIncomplete)
-                {
-                    task.Outcome = TaskOutcome.PartiallyCompleted;
-                    AppendLog(
-                        "WARN",
-                        $"{task.LogName}：这一组到最后一刻仍然不完整（缺 {missing}）—— 按「部分完成」记，⛔ 不是解压失败。");
-                }
-
-                // 机器终态收口：这一单是在**任务收尾之后**才落的状态，走不到单任务那个 finally ⇒ 这里补。
-                FinalizeOutcomeIfPending(task);
-
-                /*
-                 * ⚠ 2026-10-08：离开"缺卷待批末判"名单的**那一刻**就要把显示/统计事实位清掉
-                 * （手动档不走链尾 `FinalizeDeferredVolumeDeficits`，只靠那一处会漏 ⇒ 真机表现是
-                 * 诊断里仍按"跳过"分组、拿不到"缺哪几卷 + 下一步：补卷"）。
-                 */
-                task.IsVolumeDeficitDeferred = false;
-
-                _volumeDeficitDeferred.Remove(task);
-                _volumeDeficitFinalPass.Add(task);
+                MarkStillMissingAtFinalPass(task, missing);
             }
 
             return toRun;
@@ -1076,5 +1001,89 @@ namespace ArchiveFixer.ViewModels
         internal bool IsDeferredVolumeDeficit(ArchiveTask? task) =>
             task != null && _volumeDeficitDeferred.Contains(task);
 
+
+        /// <summary>
+        /// 最后一轮仍凑不齐：如实报缺卷（不变量 7：从头到尾没有"带着缺卷开始解"这回事），
+        /// 再按盘上事实决定终态（不完整 ⇒ 部分完成，完整却解不出 ⇒ 由既有失败收口判失败）。
+        /// </summary>
+        private void MarkStillMissingAtFinalPass(ArchiveTask task, string missing)
+        {
+            // ③ 到这一步才如实报缺卷（不变量 7：从头到尾没有"带着缺卷开始解"这回事）。
+            string diagnosis = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.VolumeDeficitFinalDiagnosisFormat,
+                task.FileName,
+                missing);
+
+            AppendLog(
+                "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.VolumeDeficitRecheckStillFormat,
+                    task.FileName,
+                    missing));
+
+            /*
+             * ⚠ 2026-10-06 试过一版"批末这一档也改成「部分完成」+ WARN"，**已撤回**：
+             * 全量当场 6 条红线用例变红（`对照_一直补不上_批末才如实报缺卷`、
+             * `PipelineWiringTests.缺卷_真案一的现场_批末补判才拦下并点名缺第2卷` 等）——
+             * **"缺卷不开始解 + 如实报缺卷"是用户早先拍过并有用例钉住的口径**，
+             * 真正该改的是"内容已被接手的那些单不该走到这一支"（见下面那行排障）。
+             */
+            MarkStoppedBeforeExtract(task, StatusText.VolumeMissing, diagnosis);
+            AppendLog("ERROR", $"分卷缺失，未开始解压：{task.FileName}，{diagnosis}");
+
+            /*
+             * ===== 到最后一刻仍然不完整 ⇒ **部分完成**，⛔ 不是失败（用户 2026-10-06）=====
+             *
+             * 用户原话：「假如，1_最后剩一个 `111.7z.001` 你不能说是解压失败了，这应该是部分完成，
+             * 因为这个分卷不完整，到了最后检测不到完整的；2_如果最后完整了，但是解压不出来，那才是失败了」。
+             *
+             * 判据只读**盘上事实**（`VolumeGroupDetector` 的结论）：这一组到底完不完整 ——
+             * · 不完整（缺片）⇒ `PartiallyCompleted`：我们**根本没拿到全部数据**，不是"解压失败"；
+             * · 完整了却解不出来 ⇒ 走既有的失败收口 ⇒ `Failed`（那才是真失败）。
+             * ⛔ 「源包一个字节都不动」这条红线一个字不改（下面既有的收尾照旧）。
+             */
+            var leftoverCandidates = new List<VolumeCandidate>();
+
+            foreach (string path in task.VolumePaths)
+            {
+                if (File.Exists(path))
+                {
+                    leftoverCandidates.Add(new VolumeCandidate { Path = path });
+                }
+            }
+
+            foreach (string path in CollectVolumeFilesInDirectory(
+                         Path.GetDirectoryName(task.CurrentPath ?? string.Empty) ?? string.Empty))
+            {
+                leftoverCandidates.Add(new VolumeCandidate { Path = path });
+            }
+
+            bool stillIncomplete = VolumeGroupDetector
+                .Group(leftoverCandidates)
+                .Any(candidateGroup => !candidateGroup.IsComplete);
+
+            if (stillIncomplete)
+            {
+                task.Outcome = TaskOutcome.PartiallyCompleted;
+                AppendLog(
+                    "WARN",
+                    $"{task.LogName}：这一组到最后一刻仍然不完整（缺 {missing}）—— 按「部分完成」记，⛔ 不是解压失败。");
+            }
+
+            // 机器终态收口：这一单是在**任务收尾之后**才落的状态，走不到单任务那个 finally ⇒ 这里补。
+            FinalizeOutcomeIfPending(task);
+
+            /*
+             * ⚠ 2026-10-08：离开"缺卷待批末判"名单的**那一刻**就要把显示/统计事实位清掉
+             * （手动档不走链尾 `FinalizeDeferredVolumeDeficits`，只靠那一处会漏 ⇒ 真机表现是
+             * 诊断里仍按"跳过"分组、拿不到"缺哪几卷 + 下一步：补卷"）。
+             */
+            task.IsVolumeDeficitDeferred = false;
+
+            _volumeDeficitDeferred.Remove(task);
+            _volumeDeficitFinalPass.Add(task);
+        }
     }
 }
