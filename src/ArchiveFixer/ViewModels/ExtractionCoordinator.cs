@@ -1942,15 +1942,8 @@ namespace ArchiveFixer.ViewModels
 
                 if (cancelled)
                 {
-                    task.Status = StatusText.Cancelled;
-                    task.ProgressText = StatusText.Cancelled;
-                    task.ErrorMessage = work.Verification.FailureMessage;
-                    task.VerifyMessage = work.Verification.FailureMessage;
-                    task.OutputVerification = OutputVerificationOutcome.NotAttempted;
-                    task.Outcome = TaskOutcome.Cancelled;
-                    task.LastUpdatedTime = DateTime.Now;
-
-                    AppendLog("INFO", $"{task.LogName}：用户已取消 —— 这次不落「解压失败」（{work.Verification.FailureMessage}；源包一个字节都不动）。");
+                    // 取消支整族搬进唯一出口 `Extraction/PostProcessCancelledWriter`（一次只搬这一个功能族）。
+                    PostProcessCancelledWriter.Write(task, work.Verification.FailureMessage, AppendLog);
                     return false;
                 }
 
