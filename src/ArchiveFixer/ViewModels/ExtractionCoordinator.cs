@@ -875,19 +875,13 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private void ApplyLandingViolationNote(ArchiveTask task, RecursionResult result)
         {
-            if (task == null || result?.Layers == null)
+            // 判据与措辞都搬进唯一出口 `Extraction/LandingViolationNote`（一次只搬这一个方法）。
+            if (task == null || !LandingViolationNote.HasLandingViolation(result))
             {
                 return;
             }
 
-            if (!result.Layers.Any(layer => layer != null && layer.LandingViolation))
-            {
-                return;
-            }
-
-            task.ErrorMessage =
-                "产物越出目标根目录 —— 按既定口径整包判定失败（不归集产物、不处理源包、其余物不生成）："
-                + (task.ErrorMessage ?? string.Empty);
+            task.ErrorMessage = LandingViolationNote.Compose(task.ErrorMessage);
 
             AppendLog("ERROR", $"{task.LogName}：{task.ErrorMessage}");
         }
