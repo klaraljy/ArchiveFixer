@@ -1,3 +1,4 @@
+using ArchiveFixer.Extraction;
 using ArchiveFixer.Models;
 using ArchiveFixer.Security;
 using ArchiveFixer.Services;
@@ -8,7 +9,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-namespace ArchiveFixer.Extraction
+namespace ArchiveFixer.Services
 {
     /// <summary>工作区这一步要问宿主的事（只用非 WPF 类型 —— Extraction 层不许引用 ViewModels）。</summary>
     internal interface IWorkspaceStepHost
