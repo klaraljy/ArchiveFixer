@@ -61,5 +61,33 @@ namespace ArchiveFixer.Extraction
                     cancellationToken)
                 .ConfigureAwait(false);
         }
+        /// <summary>
+        /// 这一组**收场时**对入口层里组片的处置（`修改日志.md` 2026-10-22 ㈣，逐条照做）：
+        /// 解开成功且校验通过 ⇒ 入口层里的组片按过程物删；失败 / 未校验 ⇒ 一片都不删、全留在入口层；
+        /// 用户导入的原件由调用方给的唯一判据决定（⛔ 这里不比路径、不比名字）。
+        /// </summary>
+        /// <returns>真删掉的片数。</returns>
+        public static int ApplySecondStepGroupPieceHandling(
+            IEnumerable<string>? pieces,
+            string? entryLayerDirectory,
+            bool solvedAndVerified,
+            Func<string, bool>? isUserImportedSource,
+            Action<string, string>? log = null)
+        {
+            if (!solvedAndVerified)
+            {
+                log?.Invoke(
+                    "INFO",
+                    "这一组没解开（或没通过校验）—— 入口层里的组片一片都不删，留在入口包的位置等补密码/补卷。");
+                return 0;
+            }
+
+            return VolumeGroupEntryLayer.PurgeSolvedGroupPiecesInEntryLayer(
+                pieces,
+                entryLayerDirectory,
+                isUserImportedSource,
+                log);
+        }
+
     }
 }

@@ -117,5 +117,33 @@ namespace ArchiveFixer.Tests
             Assert.False(File.Exists(ourPiece), "程序产出的片在成功后应当删掉");
             Assert.True(File.Exists(userPiece), "用户导入的原件不删");
         }
+        [Fact]
+        public void 成功且校验通过_入口层里的组片按过程物删掉()
+        {
+            string entry = Directory.CreateDirectory(Path.Combine(_root, "entry5")).FullName;
+            string piece = Path.Combine(entry, "set.part5.rar");
+            File.WriteAllBytes(piece, new byte[] { 3 });
+
+            int deleted = VolumeStepExecutor.ApplySecondStepGroupPieceHandling(
+                new[] { piece }, entry, solvedAndVerified: true, _ => false);
+
+            Assert.Equal(1, deleted);
+            Assert.False(File.Exists(piece));
+        }
+
+        [Fact]
+        public void 失败或未校验_入口层里的组片一片都不删()
+        {
+            string entry = Directory.CreateDirectory(Path.Combine(_root, "entry6")).FullName;
+            string piece = Path.Combine(entry, "set.part6.rar");
+            File.WriteAllBytes(piece, new byte[] { 4 });
+
+            int deleted = VolumeStepExecutor.ApplySecondStepGroupPieceHandling(
+                new[] { piece }, entry, solvedAndVerified: false, _ => false);
+
+            Assert.Equal(0, deleted);
+            Assert.True(File.Exists(piece), "没解开时片要留在入口包的位置");
+        }
+
     }
 }
