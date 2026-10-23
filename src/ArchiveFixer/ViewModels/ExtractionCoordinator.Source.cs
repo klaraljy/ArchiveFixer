@@ -956,7 +956,7 @@ namespace ArchiveFixer.ViewModels
                             StringComparison.OrdinalIgnoreCase);
 
                         if (!isOriginal
-                            && !BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(raw), unit.BaseName))
+                            && !VolumeGatherStep.BaseNameRelatedToGroup(FileNameHelper.GetArchiveBaseName(raw), unit.BaseName))
                         {
                             continue;
                         }

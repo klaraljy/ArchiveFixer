@@ -1916,7 +1916,7 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 bool related = referenceBase.Length > 0
-                    && BaseNameRelatedToGroup(card.ArchiveBaseName, referenceBase);
+                    && VolumeGatherStep.BaseNameRelatedToGroup(card.ArchiveBaseName, referenceBase);
 
                 if (!related && referenceName.Length > 0)
                 {
@@ -3265,7 +3265,7 @@ namespace ArchiveFixer.ViewModels
                         sameGroup = producedCard.Format == consumerCard.Format
                             && producedCard.Format != VolumeContentFormat.Unknown
                             && producedCard.Membership != VolumeNumberFromContent.VolumeMembershipVerdict.ProvablyNotVolumeMember
-                            && BaseNameRelatedToGroup(pieceName, groupBaseName);
+                            && VolumeGatherStep.BaseNameRelatedToGroup(pieceName, groupBaseName);
                     }
                     catch
                     {
