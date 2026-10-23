@@ -1973,20 +1973,21 @@ namespace ArchiveFixer.ViewModels
                  * 与单层路同一句话（`（已试 N 个候选，产物始终不完整）`），事实由 `ApplyRecursionResult`
                  * 从层报告带到任务上；⛔ 没试过（0）⇒ 不写（老口径不动）。
                  */
+                /*
+                 * ⚠ 2026-10-23 修（拆分第 5 步时发现的结构错误）：上一版把这两段拼坏了 ——
+                 * 第一个 if 的空体被后面那个 if 顶替，末尾那个 `{ … }` 变成了**无条件执行**
+                 * ⇒ 没试过候选的单也会被追加"（已试 0 个候选…）"。现在两段各自成块、各带自己的判据。
+                 */
                 if (task.RecursionTriedCandidateCount > 0
                     && !task.ErrorMessage.Contains("产物始终不完整", StringComparison.Ordinal))
+                {
+                    task.ErrorMessage += $"（已试 {task.RecursionTriedCandidateCount} 个候选，产物始终不完整）";
+                }
 
-                /*
-                 * 「连续两个候选解出来的产物完全相同」：事实由递归层带上来（任务级布尔）
-                 * ⇒ 结论必须说清"换密码不会改变结果"（与单层路同一口径）。
-                 */
                 if (task.RecursionCandidatesIdentical
                     && !task.ErrorMessage.Contains("完全相同", StringComparison.Ordinal))
                 {
                     task.ErrorMessage += "（连续两个候选解出来的产物完全相同，换密码不会改变结果）";
-                }
-                {
-                    task.ErrorMessage += $"（已试 {task.RecursionTriedCandidateCount} 个候选，产物始终不完整）";
                 }
 
                 /*
@@ -7816,11 +7817,8 @@ namespace ArchiveFixer.ViewModels
              * 事实在这里记到任务上（`RecursionLayerReport.TriedCandidateCount` 由候选循环带上来的），
              * 收尾那一步读它补「（已试 N 个候选，产物始终不完整）」。
              */
-                task.RecursionTriedCandidateCount = result.Layers.Count > 0
-                    ? result.Layers[^1].TriedCandidateCount
-                    : 0;
-            // 同一组事实：候选间结果完全相同（结构化布尔，⛔ 不比中文）。
-            task.RecursionCandidatesIdentical = result.Layers.Any(layer => layer != null && layer.CandidatesProducedIdenticalResults);
+                // 事实搬运收进唯一出口 `Extraction/RecursionTaskFacts`（一次只搬这一个功能族）。
+                RecursionTaskFacts.Apply(task, result);
 
 
                 if (result.Layers.Any(layer => layer.ListingSaidNoEncryption))
