@@ -114,75 +114,7 @@ namespace ArchiveFixer.ViewModels
                     task,
                     ResolveDeferredGroupMemberPath(task));
 
-                /*
-                 * ===== 族规则判不出"该拼到哪一层"时，让**底层识别卡**补一次 =====
-                 * （用户 2026-10-17 第 4 条：「第一卷竟然还有弄不成的情况，就是识别出入口包的情况」）
-                 *
-                 * 只在 `entryLayer` **为空**时补：手上那一份如果自证是**首卷**（`VolumeFirstPiece`，
-                 * 名字被改到族规则认不出时它是唯一还认得出"我是入口"的证据），那它所在的层就是入口层 ——
-                 * 引擎就是拿它开始解的。⛔ 已经判出层的一个字都不改；⛔ 卡也判不出 ⇒ 照旧什么都不做。
-                 */
-                if (entryLayer.Length == 0)
-                {
-                    string ownMemberPath = ResolveDeferredGroupMemberPath(task);
-
-                    if (!string.IsNullOrWhiteSpace(ownMemberPath) && File.Exists(ownMemberPath))
-                    {
-                        try
-                        {
-                            CardVolumeGroupReading ownCard =
-                                VolumePiecesFromCards.Read(new[] { FileNature.Inspect(ownMemberPath) });
-
-                            if (ownCard.EntryPath.Length > 0)
-                            {
-                                entryLayer = Path.GetDirectoryName(ownCard.EntryPath) ?? string.Empty;
-
-                                if (entryLayer.Length > 0)
-                                {
-                                    AppendLog(
-                                        "INFO",
-                                        $"{task.LogName}：这一组该拼到哪一层 —— 族规则判不出，改由底层识别卡指出入口"
-                                        + $"（卡上自证首卷=「{FileNameHelper.GetFileName(ownCard.EntryPath)}」）");
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            // 卡读不出来 ⇒ 照旧什么都不做。
-                        }
-                    }
-                }
-
-                /*
-                 * ===== 层判不出 ⇒ 读**接片那一档算过的层**（唯一出口 `_groupLayerByBaseName`）=====
-                 *
-                 * <para>2026-10-18 困难批 `30303030` 现场：三片都已按内容规范名 `.001/.002/.003`
-                 * 接到 `333(2)` 那一层，可批末重判时这一单手上那一份在**已删掉的工作区**里 ⇒
-                 * 族规则与卡都判不出入口层 ⇒ 逐字 `该拼到哪一层=「」｜这一层不在盘上 ⇒ 判不出完整的一组`
-                 * ⇒ 整组明明齐了却不开始解压。</para>
-                 *
-                 * <para>判据不另造：`_groupLayerByBaseName` 就是接片真的落地那一刻记下的层
-                 * （`ExtractionCoordinator` 里"层只有一个出口"那条注释指的就是它）。⛔ 只在这一单判不出时用；
-                 * 目录不存在 ⇒ 照旧空（什么都不做）。</para>
-                 */
-                if (entryLayer.Length == 0)
-                {
-                    string ledgerBaseName = FileNameHelper.GetArchiveBaseName(
-                        ResolveDeferredGroupMemberPath(task));
-
-                    if (ledgerBaseName.Length > 0
-                        && _groupLayerByBaseName.TryGetValue(ledgerBaseName, out string? assembledLayer)
-                        && !string.IsNullOrWhiteSpace(assembledLayer)
-                        && Directory.Exists(assembledLayer))
-                    {
-                        entryLayer = assembledLayer!;
-
-                        AppendLog(
-                            "INFO",
-                            $"{task.LogName}：这一组该拼到哪一层 —— 族规则与卡都判不出，"
-                            + $"改用接片那一档算过的层「{assembledLayer}」");
-                    }
-                }
+                entryLayer = ResolveEntryLayerFallbacks(task, entryLayer);
 
                 ArchiveFixer.Detection.CardVolumeGroupReading? gatherCardEvidence = null;
                 bool contentOrderUndetermined = false;
@@ -1099,6 +1031,86 @@ namespace ArchiveFixer.ViewModels
             _volumeDeficitFinalPass.Add(task);
 
             return true;
+        }
+
+        /// <summary>
+        /// 族规则判不出"该拼到哪一层"时的两级兜底：① 底层识别卡自证首卷 ⇒ 它所在层就是入口层；
+        /// ② 还判不出 ⇒ 读接片那一档真的落地时记下的层（唯一出口 `_groupLayerByBaseName`）。
+        /// ⛔ 已经判出层的一个字都不改；两级都判不出 ⇒ 原样返回空串（照旧什么都不做）。
+        /// </summary>
+        private string ResolveEntryLayerFallbacks(ArchiveTask task, string entryLayer)
+        {
+            /*
+             * ===== 族规则判不出"该拼到哪一层"时，让**底层识别卡**补一次 =====
+             * （用户 2026-10-17 第 4 条：「第一卷竟然还有弄不成的情况，就是识别出入口包的情况」）
+             *
+             * 只在 `entryLayer` **为空**时补：手上那一份如果自证是**首卷**（`VolumeFirstPiece`，
+             * 名字被改到族规则认不出时它是唯一还认得出"我是入口"的证据），那它所在的层就是入口层 ——
+             * 引擎就是拿它开始解的。⛔ 已经判出层的一个字都不改；⛔ 卡也判不出 ⇒ 照旧什么都不做。
+             */
+            if (entryLayer.Length == 0)
+            {
+                string ownMemberPath = ResolveDeferredGroupMemberPath(task);
+
+                if (!string.IsNullOrWhiteSpace(ownMemberPath) && File.Exists(ownMemberPath))
+                {
+                    try
+                    {
+                        CardVolumeGroupReading ownCard =
+                            VolumePiecesFromCards.Read(new[] { FileNature.Inspect(ownMemberPath) });
+
+                        if (ownCard.EntryPath.Length > 0)
+                        {
+                            entryLayer = Path.GetDirectoryName(ownCard.EntryPath) ?? string.Empty;
+
+                            if (entryLayer.Length > 0)
+                            {
+                                AppendLog(
+                                    "INFO",
+                                    $"{task.LogName}：这一组该拼到哪一层 —— 族规则判不出，改由底层识别卡指出入口"
+                                    + $"（卡上自证首卷=「{FileNameHelper.GetFileName(ownCard.EntryPath)}」）");
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // 卡读不出来 ⇒ 照旧什么都不做。
+                    }
+                }
+            }
+
+            /*
+             * ===== 层判不出 ⇒ 读**接片那一档算过的层**（唯一出口 `_groupLayerByBaseName`）=====
+             *
+             * <para>2026-10-18 困难批 `30303030` 现场：三片都已按内容规范名 `.001/.002/.003`
+             * 接到 `333(2)` 那一层，可批末重判时这一单手上那一份在**已删掉的工作区**里 ⇒
+             * 族规则与卡都判不出入口层 ⇒ 逐字 `该拼到哪一层=「」｜这一层不在盘上 ⇒ 判不出完整的一组`
+             * ⇒ 整组明明齐了却不开始解压。</para>
+             *
+             * <para>判据不另造：`_groupLayerByBaseName` 就是接片真的落地那一刻记下的层
+             * （`ExtractionCoordinator` 里"层只有一个出口"那条注释指的就是它）。⛔ 只在这一单判不出时用；
+             * 目录不存在 ⇒ 照旧空（什么都不做）。</para>
+             */
+            if (entryLayer.Length == 0)
+            {
+                string ledgerBaseName = FileNameHelper.GetArchiveBaseName(
+                    ResolveDeferredGroupMemberPath(task));
+
+                if (ledgerBaseName.Length > 0
+                    && _groupLayerByBaseName.TryGetValue(ledgerBaseName, out string? assembledLayer)
+                    && !string.IsNullOrWhiteSpace(assembledLayer)
+                    && Directory.Exists(assembledLayer))
+                {
+                    entryLayer = assembledLayer!;
+
+                    AppendLog(
+                        "INFO",
+                        $"{task.LogName}：这一组该拼到哪一层 —— 族规则与卡都判不出，"
+                        + $"改用接片那一档算过的层「{assembledLayer}」");
+                }
+            }
+
+            return entryLayer;
         }
     }
 }
