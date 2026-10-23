@@ -145,5 +145,29 @@ namespace ArchiveFixer.Tests
             Assert.True(File.Exists(piece), "没解开时片要留在入口包的位置");
         }
 
+        [Fact]
+        public void 合成组去重键_源层加基名_同层同基名相等_不同层或不同基名不等()
+        {
+            string a = Path.Combine(_root, "layer1");
+            string b = Path.Combine(_root, "layer2");
+
+            Assert.Equal(
+                VolumeStepExecutor.BuildSyntheticGroupEntryKey(a, "111"),
+                VolumeStepExecutor.BuildSyntheticGroupEntryKey(a, "111"));
+
+            Assert.Equal(
+                VolumeStepExecutor.BuildSyntheticGroupEntryKey(@"C:\x\layer1", "111"),
+                VolumeStepExecutor.BuildSyntheticGroupEntryKey(@"C:\x\layer1", "111"),
+                ignoreCase: true);
+
+            Assert.NotEqual(
+                VolumeStepExecutor.BuildSyntheticGroupEntryKey(a, "111"),
+                VolumeStepExecutor.BuildSyntheticGroupEntryKey(b, "111"));
+
+            Assert.NotEqual(
+                VolumeStepExecutor.BuildSyntheticGroupEntryKey(a, "111"),
+                VolumeStepExecutor.BuildSyntheticGroupEntryKey(a, "222"));
+        }
+
     }
 }

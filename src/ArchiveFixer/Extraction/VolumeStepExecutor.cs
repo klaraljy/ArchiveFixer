@@ -89,5 +89,29 @@ namespace ArchiveFixer.Extraction
                 log);
         }
 
+        /// <summary>
+        /// 合成组入口的**去重键** = <c>源层 + 基名</c>（`修改日志.md` 2026-10-22 ㈡ 逐字口径）。
+        /// 用源层而不是族：同一基名在不同层是两组；族判得出/判不出一律不影响"是不是同一个入口"。
+        /// ⛔ 键只用于去重，不当任何判据（判据仍在 VolumeGroupUnit / 内容卡上）。
+        /// </summary>
+        public static string BuildSyntheticGroupEntryKey(string? sourceLayer, string? baseName)
+        {
+            string layer = (sourceLayer ?? string.Empty).Trim();
+
+            if (layer.Length > 0)
+            {
+                try
+                {
+                    layer = Path.GetFullPath(layer);
+                }
+                catch
+                {
+                    // 取不到全路径 ⇒ 用原样文本（判不出就按原样比，⛔ 不猜）。
+                }
+            }
+
+            return layer + "|" + (baseName ?? string.Empty).Trim();
+        }
+
     }
 }
