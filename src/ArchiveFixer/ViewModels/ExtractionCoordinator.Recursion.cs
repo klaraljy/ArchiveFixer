@@ -737,7 +737,7 @@ namespace ArchiveFixer.ViewModels
              * 卡住提示同理：一层套一层时最容易出现"几十秒没有任何输出"，
              * 那一段过去在界面上就是死等（整条递归连一条 WARN 都不会有）。
              */
-            TaskProgressSink recursionProgressSink = new(this, task);
+            ProgressHeartbeatStep.Sink recursionProgressSink = _progressHeartbeat.CreateSink(task);
 
             RecursionResult result = await recursiveExtractor.ExtractAsync(
                 recursionTask,
@@ -745,7 +745,7 @@ namespace ArchiveFixer.ViewModels
                 previousDecision: null,
                 cancellationToken,
                 recursionProgressSink,
-                notice => OnEngineStalled(task, notice));
+                notice => _progressHeartbeat.HandleStalled(task, notice));
 
             /*
              * ===== 跨链收卷（2026-10-05 真机第九批 CCCC）=====
@@ -822,7 +822,7 @@ namespace ArchiveFixer.ViewModels
                         result.Decision,
                         cancellationToken,
                         recursionProgressSink,
-                        notice => OnEngineStalled(task, notice));
+                        notice => _progressHeartbeat.HandleStalled(task, notice));
                 }
                 else
                 {

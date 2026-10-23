@@ -354,7 +354,7 @@ namespace ArchiveFixer.ViewModels
             string stageDirectory,
             string entryPath,
             string password,
-            TaskProgressSink progressSink,
+            ProgressHeartbeatStep.Sink progressSink,
             CancellationToken cancellationToken)
         {
             /*
@@ -382,7 +382,7 @@ namespace ArchiveFixer.ViewModels
                 extractOptions.IncludeEntries = new[] { entryPath };
 
                 ArchiveOperationResult result = await _archiveEngine.ExtractAsync(
-                    BuildTrackedRequest(archivePath, password, probeDirectory, progressSink),
+                    _progressHeartbeat.BuildTrackedRequest(archivePath, password, probeDirectory, progressSink),
                     extractOptions,
                     cancellationToken);
 

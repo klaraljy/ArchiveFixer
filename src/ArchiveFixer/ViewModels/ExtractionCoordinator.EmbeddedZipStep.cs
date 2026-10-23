@@ -44,7 +44,7 @@ namespace ArchiveFixer.ViewModels
             string outputRedirectNote,
             bool sharedOutputRoot,
             bool oneClickRun,
-            TaskProgressSink progressSink,
+            ProgressHeartbeatStep.Sink progressSink,
             CancellationToken cancellationToken)
         {
             task.Operation = StatusText.OpExtract;
@@ -389,9 +389,9 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private sealed class DirectReadProgressBridge : IProgress<int>
         {
-            private readonly TaskProgressSink _sink;
+            private readonly ProgressHeartbeatStep.Sink _sink;
 
-            public DirectReadProgressBridge(TaskProgressSink sink)
+            public DirectReadProgressBridge(ProgressHeartbeatStep.Sink sink)
             {
                 _sink = sink;
             }

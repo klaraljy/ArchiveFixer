@@ -1855,7 +1855,7 @@ namespace ArchiveFixer.ViewModels
              * 清一次残留：同一个任务可能被重跑（换密码候选、用户再点一次），
              * 上一轮的百分比绝不能带到这一轮来。
              */
-            TaskProgressSink progressSink = new(this, task);
+            ProgressHeartbeatStep.Sink progressSink = _progressHeartbeat.CreateSink(task);
             task.ClearProgress();
 
             /*
@@ -1916,7 +1916,7 @@ namespace ArchiveFixer.ViewModels
                     AppendLog("INFO", $"{task.LogName}：测试密码候选 {i + 1}/{maxPasswordAttempts}，{_passwordService.BuildTryPasswordLogText(candidate, i + 1)}");
 
                     ArchiveOperationResult testResult = await _archiveEngine.TestAsync(
-                        BuildTrackedRequest(engineArchivePath, password, null, progressSink),
+                        _progressHeartbeat.BuildTrackedRequest(engineArchivePath, password, null, progressSink),
                         cancellationToken);
 
                     lastResult = testResult;
@@ -2099,7 +2099,7 @@ namespace ArchiveFixer.ViewModels
                 AppendLog("INFO", $"{task.LogName}：测试通过，开始正式解压。");
 
                 ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
-     BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),
+     _progressHeartbeat.BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),
      extractOptions,
      cancellationToken);
 
@@ -2472,7 +2472,7 @@ namespace ArchiveFixer.ViewModels
                     await DiscardStageProductsAsync(task, engineOutputPath, cancellationToken);
 
                     ArchiveOperationResult extractResult = await _archiveEngine.ExtractAsync(
-     BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),
+     _progressHeartbeat.BuildTrackedRequest(engineArchivePath, selectedPassword, engineOutputPath, progressSink),
      extractOptions,
      cancellationToken);
 
