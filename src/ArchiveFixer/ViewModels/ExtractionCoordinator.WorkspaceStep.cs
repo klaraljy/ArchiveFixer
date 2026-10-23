@@ -360,5 +360,268 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        /// <summary>
+        /// 失败 / 取消 / 部分完成收尾时清理**这个任务自己的工作区**（用户 2026-09-25 第 25 条）。
+        ///
+        /// <para><b>默认档（<see cref="AppSettings.KeepFailedWorkspace"/> = false）：整份删掉。</b>
+        /// 用户原话："我不希望有这么多的失败残留……如果解压 40G，两层，解压失败有 80G 的卸载残留，
+        /// 用户不得气死……失败了就失败了，成功了就成功了"。删掉的是 <c>&lt;work&gt;\&lt;taskId&gt;</c>
+        /// 整棵（含 <c>stage</c>、抠出来的内嵌归档副本、已解出的过程物）。
+        /// <b>零文件空壳无论如何都删</b>（没有现场可留，这条与设置无关；
+        /// 它就是原来的"空壳当场清"，现在并进这一条）。</para>
+        ///
+        /// <para><b>打开 <see cref="AppSettings.KeepFailedWorkspace"/> 时保持老行为</b>：
+        /// 有文件就保留 + 一条 INFO 说清在哪、几个、多大（③ 页扫得到、能清）。</para>
+        ///
+        /// <para><b>四条边界</b>（这是删目录，每条都要有）：</para>
+        /// <list type="number">
+        /// <item><description>成功的任务不走这里（成功路径的清理是 <see cref="CleanupTaskWorkspaceDirectory"/>，
+        /// 它按"校验通过"删，口径不同，不许两处都插一脚）；</description></item>
+        /// <item><description>目录必须在**当前生效的工作区根**之下（容器内校验，越界只写 WARN、什么都不删）；
+        /// 而且**只认记下来的那一个目录**，绝不按名字 / 按"最新"去扫工作区根 —— 并发跑两个任务时，
+        /// 扫描式删除会把对方正在写的工作区端掉；</description></item>
+        /// <item><description>目录里除 <c>stage</c> 之外不许有别的子目录（与 <see cref="CleanupTaskWorkspaceDirectory"/>
+        /// 同一道边界：出现别的子目录说明它不是我们造的那个目录，一个字节都不碰）；</description></item>
+        /// <item><description>删不掉（被占用 / 权限）只写 WARN —— 一次清理失败绝不该改写任务结论；
+        /// 源包、已经定稿搬出去的内容物、<c>&lt;数据根&gt;</c>（日志 / 密码列表 / 设置）一个字节都不动。</description></item>
+        /// </list>
+        /// </summary>
+        /// <param name="keepWorkspace">
+        /// true = 这一单**不许清**（部分完成发布时"有文件没能发布"的那一档：没搬走的内容只在这里，
+        /// 删掉等于丢用户的产物）。判据由 <see cref="TryPublishPartialProductsAsync"/> 给
+        /// （<c>PartialPublisher.Result.AllMoved</c>），⛔ 不在这里自己猜。
+        /// </param>
+        private void CleanupFailedTaskWorkspace(ArchiveTask task, bool keepWorkspace = false)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            _taskWorkspaceDirectories.TryRemove(task, out string? recorded);
+
+            // 递归核心的逐层工作区不在这个目录里，单独按同一份判据处理（见下面那个方法）。
+            _taskRecursiveExtractors.TryRemove(task, out RecursiveExtractor? recursiveExtractor);
+
+            bool concludedSuccess =
+                string.Equals(task.Status, StatusText.ExtractSuccess, StringComparison.Ordinal) &&
+                task.Outcome != TaskOutcome.PartiallyCompleted;
+
+            if (concludedSuccess)
+            {
+                /*
+                 * 成功：这一支的清理在 PostProcessSuccessAsync 里（按"校验通过"删），
+                 * 递归核心的工作区也由它自己在 FinalizeRun 里清掉了。这里什么都不做。
+                 */
+                return;
+            }
+
+            if (keepWorkspace)
+            {
+                /*
+                 * 部分完成发布时"有文件没能发布"的那一档：工作区原样留着。
+                 * 两层理由：① 没搬走的内容只在这里（删掉就是丢用户的产物）；
+                 * ② ③页的「失败时保留中间产物」本来就是"要留现场"，这一档比它更强 ——
+                 *    现场里躺着的是**已经解出来、核对过**的真内容，不是中间垃圾。
+                 * 递归逐层工作区同样不动（那些层的内容可能正是下一份要发布的）。
+                 */
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishRestKeptFormat,
+                        task.FileName,
+                        "有内容没能按「部分完成」发布，工作区与递归逐层工作区都原样留着（那是它们唯一的落点）"));
+
+                return;
+            }
+
+            CleanupFailedRecursionWorkspace(task, recursiveExtractor);
+
+            string taskDirectory = string.IsNullOrWhiteSpace(recorded)
+                ? _pathService.BuildTaskWorkDirectory(task)
+                : recorded;
+
+            if (string.IsNullOrWhiteSpace(taskDirectory) || !Directory.Exists(taskDirectory))
+            {
+                return;
+            }
+
+            string workRoot = _pathService.WorkDirectory;
+
+            if (!ArchivePathGuard.IsInsideRoot(workRoot, taskDirectory, out string guardReason))
+            {
+                AppendLog(
+                    "WARN",
+                    $"{task.LogName}：要清的工作区目录不在工作区根之下，已跳过 —— {guardReason}：{taskDirectory}");
+
+                return;
+            }
+
+            try
+            {
+                string[] subdirectories = Directory.GetDirectories(taskDirectory);
+
+                /*
+                 * 第二道容器内校验：目录里只许有我们自己造的子目录（判据本体在 Extraction 层的纯函数里，
+                 * 递归那条路转调同一个 —— 2026-10-05 只读审计）。
+                 */
+                string? foreign = WorkspaceCleanupGuard.FindForeignSubdirectory(
+                    subdirectories,
+                    IsOurWorkspaceSubdirectory);
+
+                if (foreign != null)
+                {
+                    AppendLog(
+                        "WARN",
+                        $"{task.LogName}：工作区目录里有非本任务造的子目录（{foreign}），为安全起见不清：{taskDirectory}");
+
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("WARN", $"{task.LogName}：读不了工作区目录（{ex.Message}），已跳过清理：{taskDirectory}");
+
+                return;
+            }
+
+            (int fileCount, long totalSize) = OutputVerifier.Measure(taskDirectory);
+
+            /*
+             * 有东西 + 用户要求留现场 → 保留，并且说清它在哪、几个、多大：
+             * 这一行既是"东西还在不在"的答案，也是 ③ 页那条"工作区残留"的来处。
+             * 零文件空壳不走这一支（空目录不占空间、也没有内容可看，留着只会在 ③ 页里多一行噪声）。
+             */
+            if (fileCount > 0 && Settings?.KeepFailedWorkspace == true)
+            {
+                AppendLog(
+                    "INFO",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.WorkspaceKeptOnFailureFormat,
+                        task.FileName,
+                        fileCount,
+                        TaskSpaceEstimate.FormatSize(totalSize),
+                        taskDirectory));
+
+                return;
+            }
+
+            try
+            {
+                Directory.Delete(taskDirectory, recursive: true);
+
+                AppendLog(
+                    "INFO",
+                    fileCount == 0
+                        ? string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.WorkspaceEmptyShellRemovedFormat,
+                            task.FileName,
+                            taskDirectory)
+                        : string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.WorkspaceClearedOnFailureFormat,
+                            task.FileName,
+                            fileCount,
+                            TaskSpaceEstimate.FormatSize(totalSize),
+                            taskDirectory));
+            }
+            catch (Exception ex)
+            {
+                AppendLog(
+                    "WARN",
+                    fileCount == 0
+                        ? string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.WorkspaceEmptyShellRemoveFailedFormat,
+                            task.FileName,
+                            ex.Message,
+                            taskDirectory)
+                        : string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.WorkspaceClearOnFailureFailedFormat,
+                            task.FileName,
+                            ex.Message,
+                            taskDirectory));
+            }
+        }
+
+        /// <summary>
+        /// 没成功（失败 / 取消 / 部分完成）时，按同一份设置清掉**递归核心的逐层工作区**
+        /// （<c>&lt;work&gt;\recursive\&lt;taskId&gt;</c>，双层包里最占地方的那一份）。
+        ///
+        /// <para><b>为什么必须单独处理这一处</b>：它与任务工作区是两个目录 —— 递归核心的根是
+        /// <see cref="RecursiveExtractor.ConfiguredWorkspaceRoot"/> 之下再挂一层 <c>recursive</c>。
+        /// 只清任务工作区的话，双层包失败之后那几百 MB / 几十 GB 的逐层产物还会留在盘上，
+        /// ③ 页那句"默认不会留下东西"就成了假话。</para>
+        ///
+        /// <para><b>什么时候不动</b>：① 这一单成功了（递归核心自己在 <c>FinalizeRun</c> 里清）；
+        /// ② 用户打开了「失败时保留中间产物」；③ 这个任务根本没走递归（字典里没有它）。
+        /// 删除本身的安全校验（容器内校验 + 只认本实例持有的那一个目录 + 删不掉只写 WARN）
+        /// 全在 <see cref="RecursiveExtractor.TryDiscardCurrentWorkspaceOnFailure"/> 里，
+        /// 这里只负责"该不该清"这一个判断。</para>
+        /// </summary>
+        private void CleanupFailedRecursionWorkspace(ArchiveTask task, RecursiveExtractor? recursiveExtractor)
+        {
+            if (recursiveExtractor == null || Settings?.KeepFailedWorkspace == true)
+            {
+                return;
+            }
+
+            recursiveExtractor.TryDiscardCurrentWorkspaceOnFailure(task.FileName);
+        }
+
+        /// <summary>
+        /// 这个落点目录里**除了工作区自己那棵树之外**还有没有东西。
+        ///
+        /// <para>⛔ 判据必须排除工作区（用户 2026-09-30）：工作区默认就建在目标目录里面
+        /// （<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>），于是目标目录**永远是"非空"的** ——
+        /// 不排除的后果是每一个任务都被判成"输出目录已存在且非空"：按「询问」档会停下来问用户，
+        /// 按自动改名档则把成品落进 <c>包名(1)</c>（用户看到的是一堆莫名其妙的 (1) 目录）。
+        /// 判据唯一出口 <see cref="WorkspaceTree"/>。</para>
+        /// </summary>
+        private bool HasProductEntriesOutsideWorkspace(string directory)
+        {
+            /*
+             * 扫描期在批中，工作区根已经由批首定好；不过这里刻意**不只在有根时才排**：
+             * WorkspaceTree 的名字那一条（点开头的 .ArchiveFixer.work）与根无关，
+             * 所以哪怕读不到当前根，默认档那一层照样被排除。
+             */
+            string workRoot = _pathService.WorkDirectory;
+
+            try
+            {
+                foreach (string entry in Directory.EnumerateFileSystemEntries(directory))
+                {
+                    if (!WorkspaceTree.ShouldSkipEntry(entry, workRoot))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch
+            {
+                /*
+                 * 读不了目录：按"有东西"处理（与既有各处同一口径）—— 那一档只会走冲突询问 / 自动改名，
+                 * 绝不覆盖、绝不删任何东西，落在安全的一侧。
+                 */
+                return true;
+            }
+        }
+
+
+        /// <summary>单测注入：把"一个目标目录"映射到**假盘根**（默认 = <see cref="Path.GetPathRoot(string)"/>）。
+        ///
+        /// <para>⚠ 现在它**只影响日志里"跨了几个盘"那句描述**：工作区位置不再取盘符，
+        /// 而是落在这一单的目标目录里面（<c>&lt;目标目录&gt;\.ArchiveFixer.work</c>，用户 2026-09-30）。
+        /// 于是单测可以直接用真实临时目录验证落点，不必再注入假盘。</para>
+        /// </summary>
+        internal Func<string, string>? WorkspaceDriveOverride { get; set; }
+
     }
 }

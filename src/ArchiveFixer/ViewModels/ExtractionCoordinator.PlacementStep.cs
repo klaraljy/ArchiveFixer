@@ -1267,5 +1267,15 @@ namespace ArchiveFixer.ViewModels
             };
         }
 
+
+        /// <summary>
+        /// 「本次内容物 —— 名字、名字…」最多列几个（用户 2026-09-25 第 44 条）。
+        ///
+        /// <para>那一行原来是**整份日志里最占字节的一条**（56 行 / 3 万字符：每行二十个文件名的完整清单，
+        /// 而他这批是 68 套同名照片）。名字仍然有用（续解找下一层靠它、名字被改坏时肉眼能看出来），
+        /// 但**前 5 个足够定性**：多出来的只写个数。</para>
+        /// </summary>
+        private const int MaxFinalizeContentNameLines = 5;
+
     }
 }

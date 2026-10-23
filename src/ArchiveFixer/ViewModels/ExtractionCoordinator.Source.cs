@@ -1581,5 +1581,13 @@ namespace ArchiveFixer.ViewModels
 
 
 
+
+        /// <summary>
+        /// 本批（或本单）生效的「源包怎么处理」——**唯一出口**：
+        /// `RunOptions`（一键处理的「本次选项」）优先，否则读设置。
+        /// </summary>
+        private SourceHandlingMode EffectiveSourceHandling
+            => RunOptions?.SourceHandling ?? AppSettings.ParseSourceHandling(Settings.SourceHandling);
+
     }
 }

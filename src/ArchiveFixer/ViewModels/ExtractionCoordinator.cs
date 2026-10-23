@@ -2088,5 +2088,63 @@ namespace ArchiveFixer.ViewModels
 
         private bool IsBusy { get => _vm.IsBusy; set => _vm.IsBusy = value; }
 
+
+        public void StopAfterCurrent()
+        {
+            try
+            {
+                IsStopping = true;
+
+                /*
+                 * 说明：
+                 * 这里取消的是批量操作 token，用来阻止启动后续任务。
+                 *
+                 * 正在运行的任务各自持有独立的取消源，
+                 * 所以这里只停止后续，不强制结束当前任务。
+                 *
+                 * 如果用户想立即取消正在运行的任务，需要再点“取消当前任务”。
+                 */
+                _operationCts?.Cancel();
+
+                LogStopRequestOnce();
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", "停止后续任务失败：" + ex.Message);
+            }
+        }
+
+        public void CancelCurrentTask()
+        {
+            try
+            {
+                // 先取快照再逐个 Cancel：Cancel 会同步触发回调，不能拿着列表的锁做这件事。
+                List<CancellationTokenSource> running = SnapshotRunningTasks();
+
+                if (running.Count == 0)
+                {
+                    AppendLog("WARN", "当前没有正在执行的任务可取消。");
+                    return;
+                }
+
+                foreach (CancellationTokenSource cts in running)
+                {
+                    try
+                    {
+                        cts.Cancel();
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                AppendLog("WARN", "已请求取消当前正在执行的任务，正在结束 7-Zip 进程。");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", "取消当前任务失败：" + ex.Message);
+            }
+        }
+
     }
 }

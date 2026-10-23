@@ -1829,5 +1829,440 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        /// <summary>
+        /// 「删除操作」那一档的**唯一触发点**：任务收尾之后，按用户选的档处理它自己的其余物。
+        ///
+        /// <para>三档（用户 2026-09-25 第 32 条亲自定的）：不动（Keep）/ 移入回收站 / 彻底删除。
+        /// 后两档的门槛全在 <see cref="RestItemPurger"/> 里（终态必须是「完成」+ 校验通过 + 未取消 +
+        /// 路径是定稿那一刻记下来的那一条 + 落在自己的输出根之内）——这里只负责"什么时候试"和"怎么记账"。
+        /// **失败 / 部分完成 / 取消的任务一个字节都不会被删**（不变量 1 的红线）。</para>
+        /// </summary>
+        private async Task RunRestHandlingAsync(
+            ArchiveTask task,
+            ScheduledTaskRuntime runtime,
+            bool oneClickRun,
+            bool force = false)
+        {
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+
+            /*
+             * ⚠ 一键处理里**不能在这里动手**（2026-09-25 第 32 条实现删除操作时被测试逮住的顺序陷阱）：
+             * 任务收尾这一刻，其余物里躺着的正是**下一层要解的内层包** —— 当场删掉，续解就没粮草了
+             * （实测：选了「彻底删除」之后 ContinuationLayers 直接变成 0，第二层再也解不出来）。
+             * 所以一键档统一记成"留到链尾"，由
+             * CompleteRootSourcePackagesAfterChainAsync → ApplyRestHandlingAfterChainAsync 处理；
+             * 手动「只解压」是单层路径，没有链可等，当场按档处理。
+             */
+            if (oneClickRun && !force)
+            {
+                if (!string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+                {
+                    /*
+                     * ⚠ 2026-10-03（普通档「逐层回收」）：续解层的过程物**已经当场回收掉了**
+                     * （`PostProcessSuccessAsync` 里那一支），链尾那一档从今天起只处理最外层源包 ——
+                     * 老文案"整条续解链跑完后再按「删除操作」处理"在这一档下就是**假话**
+                     * （用户照它去等，什么都不会再发生）。
+                     * ⛔ 只改这一支的措辞；最外层那一单照旧（它的其余物确实要等链尾）。
+                     *
+                     * ⚠ 2026-10-04（同一天的真机）：这一句以前是**无条件**的 —— 续解层「定稿搬运失败」
+                     * 时它照样写着"已当场回收"，而那一刻回收判据一条都没过（`PurgeLayerSourcePackage`
+                     * 要么被 `commit.FailedCount > 0` 挡下、要么根本走不到），过程物**原封不动躺在盘上**。
+                     * 现在**按事实说**（用户要求：真删了才说已回收，被拒就如实说没回收 + 原因）。
+                     *
+                     * 事实位 = `task.SourcePackageMove == Done`：对续解任务它**只可能**由
+                     * `PurgeLayerSourcePackage` 写（`MoveSourcePackageIntoRest` 那一支对续解任务走不到，
+                     * 上面那个 `else if (task.IsContinuationTask)` 先接住了），而它只在
+                     * "真的删掉了至少一个文件、且一个都没失败"时才落 —— 正是"真删了"。
+                     */
+                    if (_layerReclaimThisBatch && task.IsContinuationTask)
+                    {
+                        AppendLog(
+                            "INFO",
+                            task.SourcePackageMove == SourcePackageMoveState.Done
+                                ? string.Format(
+                                    CultureInfo.CurrentCulture,
+                                    StatusText.LayerProcessReclaimedFormat,
+                                    task.FileName)
+                                : string.Format(
+                                    CultureInfo.CurrentCulture,
+                                    StatusText.LayerProcessNotReclaimedFormat,
+                                    task.FileName,
+                                    DescribeLayerReclaimBlocker(task)));
+
+                        return;
+                    }
+
+                    /*
+                     * ⚠ 措辞要**如实**（第 35 条）：这一轮**没有**产生其余物时（内容物里就是那个内层包），
+                     * 老文案"其余物先留着（里面还有要接着解的内层包）"会让人以为目录已经建好了 ——
+                     * 用户按这句话去找其余物，只会更糊涂。有其余物才说"留着"，没有就说清"这一轮没有其余物"。
+                     */
+                    AppendLog(
+                        "INFO",
+                        string.IsNullOrWhiteSpace(task.RestDirectoryPath)
+                            ? $"{task.LogName}：这一轮没有产生其余物（过程物就是内容物里的那个内层包）；"
+                              + "整条续解链跑完后按「删除操作」处理内层包。"
+                            : $"{task.LogName}：其余物先留着（里面还有要接着解的内层包），"
+                              + "整条续解链跑完后再按「删除操作」处理。");
+                }
+
+                return;
+            }
+
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+            {
+                // 不动其余物：也要**说一句**（用户 2026-09-25 真机反馈："源包确实没有了，但是其余物还在"）——
+                // 静默正是问题本身。只对真的产出了其余物的任务写，免得整批刷屏。
+                if (!string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+                {
+                    /*
+                     * 一行说清（第 44 条：一次导出 713 KB，"每次不需要汇报得那么详细"）。
+                     * "去哪儿改档位"这句话**批首已经说过一遍**（`其余物：本批保留（③页「删除操作」= 不动其余物）…`），
+                     * 逐任务再念一遍 68 次只是把日志撑大。
+                     */
+                    AppendLog(
+                        "INFO",
+                        string.Format(
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            StatusText.RestKeptCompactFormat,
+                            task.FileName,
+                            DescribeShortDestination(task.RestDirectoryPath, task.RestDirectoryPath),
+                            CountRestEntries(task.RestDirectoryPath)));
+                }
+
+                return;
+            }
+
+            bool cancelled = IsStopping || _operationCts?.IsCancellationRequested == true;
+
+            // ⚠ 2026-10-15：回收站档整条下线 ⇒ 这里（Keep 已在上面挡掉）只剩永久删。
+            DeleteMode deleteMode = DeleteMode.Permanent;
+
+            RestPurgeOutcome outcome;
+
+            try
+            {
+                // 磁盘活（量大小 + 删目录）→ 放后台，别占住 UI 线程。
+                outcome = await Task.Run(
+                    () => new RestItemPurger(
+                            RestDeleteExecutor,
+                            null,
+                            ContentKeepRules.FromSettings(Settings))
+                        .Purge(task, cancelled, deleteMode));
+            }
+            catch (Exception ex)
+            {
+                // 这一层不该抛（RestItemPurger 内部全部收敛成结论），但"删东西"这件事
+                // 绝不允许把已经成功的解压拖成异常：结论落成"没删成"，内容物不受影响。
+                outcome = new RestPurgeOutcome
+                {
+                    Message = $"{task.LogName}：处理其余物时出现意外错误：{ex.Message}"
+                };
+            }
+
+            /*
+             * 逐条 LogLines（`[彻底删除] 成功 路径=…；理由=…；条目数=…；总大小=…；说明=…`）
+             * **只在没删成时写**（用户 2026-09-25 第 44 条：成功那一支一行就够，见下面）。
+             */
+            if (!outcome.Succeeded)
+            {
+                foreach (string line in outcome.LogLines)
+                {
+                    AppendLog("INFO", line);
+                }
+            }
+
+            if (outcome.Succeeded)
+            {
+                runtime.RestPurged = deleteMode == DeleteMode.Permanent;
+                runtime.PurgedBytes = outcome.FreedBytes;
+
+                /*
+                 * 一行说清（用户 2026-09-25 第 44 条："最后删除文件你还弄得这么多的文字"）。
+                 * 以前这里是两句长文案（含理由、条目数、总大小、说明、完整路径、不可逆提示），
+                 * 68 个包就是 400 多行、7 万多字符。理由与"不可逆"已经在批首那条 + ③页常驻红提示里
+                 * 说过一次了，逐任务再念一遍只是把日志撑大；**失败时仍然全量**（下面那一支）。
+                 */
+                NoteBatchPurge(outcome.FreedBytes, deleteMode == DeleteMode.Permanent);
+
+                AppendLog("INFO", DescribeRestPurgedLine(outcome, deleteMode));
+
+                return;
+            }
+
+            runtime.PurgeNote = outcome.Message;
+
+            // 其余物没删成也是"其余物还在"的一个答案 ⇒ 同一句话落到①页 / 批末诊断 / 失败清单。
+            RecordRestKept(task, outcome.Message);
+
+            AppendLog(outcome.Attempted ? "ERROR" : "INFO", outcome.Message);
+        }
+
+        /// <summary>
+        /// 逐层回收那一句里"**为什么没回收**"（只有 <c>SourcePackageMove != Done</c> 时才会问到这里）。
+        ///
+        /// <para>三档都只读**任务上已有的**事实（状态常量 / 机器终态），⛔ 不重推判据、不重算原因：</para>
+        /// <list type="number">
+        /// <item><description><b>部分完成</b>（删了一部分没删完，占用 / 只读 / 权限）——
+        /// 这时候那一层已经写过一行 ERROR，指过去。</description></item>
+        /// <item><description><b>终态成功</b> ⇒ 这一层跑成了，是回收判据没放行（完整性判不出 / 半套分卷闸门 /
+        /// 源包清单是空的）—— 那一层也各写了一行 WARN，指过去。</description></item>
+        /// <item><description><b>其余</b> ⇒ 这一层自己没跑成（定稿搬运失败 / 校验没过 / 已取消），
+        /// 回收那一步**根本没走到** ⇒ 原因在①页「错误信息」列（用户 2026-10-04 真机正是这一档）。</description></item>
+        /// </list>
+        /// </summary>
+        private static string DescribeLayerReclaimBlocker(ArchiveTask task)
+        {
+            if (string.Equals(task.Status, StatusText.PartiallyCompleted, StringComparison.Ordinal))
+            {
+                return StatusText.LayerReclaimPartialBlockedReason;
+            }
+
+            if (task.Outcome == TaskOutcome.Succeeded)
+            {
+                return StatusText.LayerReclaimGateBlockedReason;
+            }
+
+            return string.Format(
+                CultureInfo.CurrentCulture,
+                StatusText.LayerReclaimLayerFailedReasonFormat,
+                task.Status);
+        }
+
+        /// <summary>
+        /// 其余物处理成功后那**一行**（措辞唯一出口，单独可测）。
+        ///
+        /// <para><b>两档措辞</b>：</para>
+        /// <list type="bullet">
+        /// <item><description><b>空壳档</b>（<see cref="RestPurgeOutcome.RemovedAsEmptyShell"/>）：
+        /// 其余物里递归地一个文件都没有 ⇒ 就地删掉空目录、**没有进回收站**
+        /// （<see cref="StatusText.RestPurgedEmptyShellFormat"/>）。</description></item>
+        /// <item><description><b>普通档</b>：<see cref="StatusText.RestPurgedCompactFormat"/>
+        /// —— 档名 + 短路径 + 条目数 + 释放大小（用户 2026-09-25 第 44 条："一次导出 713KB，这个多吓人"）。</description></item>
+        /// </list>
+        ///
+        /// <para>⚠ <b>为什么必须按事实位选、不能按数字猜</b>（用户 2026-10-03 真机）：空壳档在
+        /// 「移入回收站」这一档下会写成「移入回收站：…\其余物（0 项 / 0 B）」，而空壳**一个字节都没进回收站**
+        /// —— 那就是一句假话。判据只读 <see cref="RestPurgeOutcome.RemovedAsEmptyShell"/>（AGENTS.md §9.5：
+        /// 要删 / 要写盘的动作判据只准读事实；"0 项 0 B"证明不了"没进回收站"）。</para>
+        /// </summary>
+        internal static string DescribeRestPurgedLine(RestPurgeOutcome outcome, DeleteMode deleteMode)
+        {
+            if (outcome.RemovedAsEmptyShell)
+            {
+                return string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    StatusText.RestPurgedEmptyShellFormat,
+                    DescribeShortTail(outcome.Directory, 2));
+            }
+
+            return string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.RestPurgedCompactFormat,
+                deleteMode == DeleteMode.Permanent ? StatusText.RestActionDelete : StatusText.RestActionRecycleBin,
+                DescribeShortTail(outcome.Directory, 2),
+                outcome.EntryCount,
+                WorkspaceCleanupService.FormatSize(outcome.FreedBytes));
+        }
+
+        /// <summary>
+        /// 批首定一次"本批的删除操作按哪一档走"（用户中途改了设置也只影响下一批，同一批口径一致）。
+        ///
+        /// <para>⚠ 2026-09-25 第 33 条：**「本次选项」优先**（<see cref="RunOptions"/> 里那一档）——
+        /// 用户在确认框的折叠区里改了「删除操作」，这一次就必须按他选的跑；
+        /// 没有本次选项（无界面宿主 / 勾了"以后不再询问"）时才读设置。</para>
+        /// </summary>
+        private void PrepareRestHandlingForBatch()
+        {
+            /*
+             * ⚠ 「空间不足」模式**覆盖**这一档（用户 2026-09-27 拍板的口径：
+             * 源包 → 放入其余物 + 其余物 → 彻底删除，运行期自动覆盖、⛔ 不写设置）。
+             *
+             * 注意覆盖的**不是**"是否删源包"那件事 —— 源包在这个模式下的命运在
+             * PostProcessSuccessAsync 里已经定了（定稿 + 校验通过 → 当场删）。
+             * 这一档管的是**过程物**（内层包、暂存残渣）：它们仍然按链尾统一处理，
+             * 所以这里给它落到"彻底删除"。
+             */
+            if (_spaceTightThisBatch)
+            {
+                _restHandlingThisBatch = RestHandlingModes.Delete;
+
+                /*
+                 * 「空间不足」模式**不走逐层回收这一档**：它有自己的那一支（`PostProcessSuccessAsync`
+                 * 的第一支，连**源包**都在每层当场删），措辞与门槛都是它自己那套。
+                 * ⛔ 置 false 只是"别让普通档那一支抢它的活"，那个模式的判据一个字都没改。
+                 */
+                _layerReclaimThisBatch = false;
+
+                return;
+            }
+
+            _restHandlingThisBatch = RunOptions != null
+                ? RestHandlingModes.Normalize(RunOptions.RestHandling)
+                : RestHandlingModes.Normalize(Settings.RestHandlingAfterVerify);
+
+            /*
+             * ⛔ **2026-10-15 口径变更：逐层回收与③页「删除操作」档位解绑**（用户 2026-10-14 口径逐字：
+             * 「删除操作只针对**最后一层过程物**……**其他的过程物统一彻底删除**（因为他们都是成功的情况下），
+             * 统一彻底删除」—— 见 `docs\大改动-2026-10-14-口径与冲突.md` §2.1 / §2.2 / §18.1）。
+             *
+             * 老口径（2026-10-03 的「B 档位分叉」）是"只有彻底删除档才逐层回收、不动其余物档集中进其余物、回收站档
+             * 逐层进回收站"。回收站那一档已整条下线，而**"成功过的过程物"在哪个档下都不该留着**：
+             * 用户 2026-10-14 的论证是「删掉的是**成功过的那几层**——它们可以从留下的那一层重做，所以不是证据」。
+             * ⇒ 这一位恒为 true（普通档），动作恒为**当场永久删**。
+             * ⛔ 那四道门槛（定稿 + 可证完整 + 未取消 + 「半套分卷」）一条都没放宽，改的只是"要不要做"。
+             *
+             * ⚠ **「最后一层过程物」不在这一位管**（用户口径：那一份默认**留下**，归③页「删除操作」那一档）：
+             * 链停下来的那一层，它的输入包是"这一层要解的那个东西"，按红线**一个字节都不动** ——
+             * 见 `PurgeLayerSourcePackage` 的入口判据与 `PostProcessSuccessAsync` 里"只有跑成了才回收"。
+             * ⇒ 「彻底删除」档目前对"最后一层过程物"还没有动作（**已知实现缺口**，下一刀）。
+             */
+            _layerReclaimThisBatch = true;
+
+            // 链内记账每批一清（它只服务"这一批这一条链"）。
+            _chainInnerLayerInputs.Clear();
+        }
+
+        /// <summary>
+        /// 本批「其余物」的范围那一句话（口径的唯一来源）。
+        ///
+        /// <para>「空间不足」模式必须**另说一句**：那种模式下源包根本不进其余物（校验通过即删），
+        /// 照普通档说"源包 + 过程物"会让用户以为源包还在其余物里躺着 ——
+        /// 而他会去找一个根本不存在的东西（2026-09-27 真机上正是这类自相矛盾的日志挨了骂）。</para>
+        /// </summary>
+        private string DescribeRestScopeForBatch()
+        {
+            if (!_spaceTightThisBatch)
+            {
+                return DescribeRestScope(EffectiveSourceHandling);
+            }
+
+            return _spaceTightKeepSourceThisBatch
+                ? "过程物（源包在本模式下「一个字节都不动」：不搬进其余物、也不删除）"
+                : "过程物（源包在本模式下不进其余物：定稿 + 校验通过后立刻永久删除）";
+        }
+
+        /// <summary>
+        /// 批首写一条"其余物这一批会怎么处理"的日志（用户 2026-09-25 第 32 条：
+        /// 他要的是**当场看得懂**，而不是跑完发现"其余物还在"却不知道为什么）。
+        /// </summary>
+        private void LogRestHandlingForBatch()
+        {
+            string mode = RestHandlingModes.Normalize(_restHandlingThisBatch);
+
+            /*
+             * 范围这句话**跟着源包那一档说**（2026-09-27 用户真机：他选了"源包留在原地"，
+             * 这条却写"彻底删除（源包 + 过程物）"，两句自相矛盾）。判据来自 `EffectiveSourceHandling`，
+             * ⛔ 不许在这里另读一遍设置。
+             */
+            string scope = DescribeRestScopeForBatch();
+
+            if (_spaceTightThisBatch)
+            {
+                /*
+                 * 这一批的"为什么这么办"写在最前面（用户 2026-09-26 教训：同一份日志里两句话自相矛盾
+                 * 比少写一句更糟）。它必须同时说清三件事：覆盖了什么、**没写设置**、以及源包的下场。
+                 *
+                 * ⚠ 两档分开说（用户 2026-09-27 加了「不删原包」安全档）：会删的那一档说"立刻删除"，
+                 * 安全档说"一个字节都不动" —— 一条文案盖两种行为就是撒谎。
+                 */
+                AppendLog(
+                    "WARN",
+                    "「空间不足」模式（本次运行，不写设置）：本批忽略「全速」，并发由空间自己定"
+                    + "（你要是把②页的「最大并发解压数」调得更低，就按更低的那个跑 —— 慢盘上少开几个反而更快）；"
+                    + (_spaceTightKeepSourceThisBatch
+                        ? "「不删原包」也开着 —— 源包一个字节都不动（不搬、不删），"
+                          + "只把过程物在任务成功后彻底删掉。⚠ 这一档不回收源包那份空间，需要的余量更大。"
+                        : "每个包定稿 + 校验通过后立刻永久删除它的源包"
+                          + "（不进回收站、不可恢复），收回的空间马上给后面的包用。")
+                    + "失败 / 部分完成 / 取消的任务一个字节都不删。");
+            }
+
+            if (string.Equals(mode, RestHandlingModes.Keep, StringComparison.OrdinalIgnoreCase))
+            {
+                AppendLog(
+                    "INFO",
+                    $"其余物：本批保留（③页「删除操作」= 不动其余物）。任务成功后其余物（{scope}）留在成品目录里，随时可手工删。");
+                return;
+            }
+
+            AppendLog(
+                "WARN",
+                $"其余物：本批任务成功后会彻底删除（{scope}，不进回收站、不可恢复）。"
+                + "失败 / 部分完成 / 取消的任务一个字节都不动。");
+        }
+
+        /// <summary>
+        /// 部分完成收尾：把其余物里**除这条链最外层源包以外**的项删掉（用户 2026-10-02 改的口径）。
+        ///
+        /// <para><b>为什么可以删</b>：其余物里装的都是过程物（内层包、抠出来的内嵌归档副本），
+        /// 全都能从最外层源包重新解出来；用户原话是「我建议源包 + 已解出的内容物留着，其他的都删掉」——
+        /// 这样盘上正好是"两份"，与③页小字那句承诺对得上。</para>
+        ///
+        /// <para><b>⛔ 安全闸门（这一条我来守）</b>：只有"这条链的最外层源包**此刻还在盘上**"时才动手；
+        /// 它不在了（已被删 / 路径失效）⇒ **一个字节都不删**（判不出 ⇒ 什么都不做）——
+        /// 源包是唯一能重建整条链的东西，它都没了还清过程物，等于把最后一份可恢复路径也删掉。</para>
+        /// </summary>
+        private void PurgeRestItemsExceptChainRootSource(ArchiveTask task)
+        {
+            string rootSource = task.ChainRootIdentity;
+
+            if (string.IsNullOrWhiteSpace(rootSource))
+            {
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishRestKeptFormat,
+                        task.FileName,
+                        "算不出这条链的最外层源包是谁"));
+
+                return;
+            }
+
+            string rootSourceFull = SafePathHelper.GetFullPathSafe(rootSource);
+
+            if (rootSourceFull.Length == 0 || !SafePathHelper.FileExists(rootSourceFull))
+            {
+                AppendLog(
+                    "WARN",
+                    string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        StatusText.PartialPublishRestKeptFormat,
+                        task.FileName,
+                        $"这条链的最外层源包不在盘上了（{rootSource}）—— 它是唯一能把整条链重新解出来的东西，"
+                        + "所以其余物里的过程物一个都不删"));
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(task.RestDirectoryPath))
+            {
+                // 这一单压根没建过其余物（部分完成这一档不生成其余物）⇒ 没事可做，不写日志。
+                return;
+            }
+
+            RestPurgeOutcome purge = new RestItemPurger(
+                    null,
+                    null,
+                    ContentKeepRules.FromSettings(Settings))
+                .PurgeExcept(
+                task,
+                new[] { rootSourceFull },
+                DeleteMode.Permanent);
+
+            AppendLog(
+                purge.Succeeded ? "INFO" : "WARN",
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    purge.Succeeded
+                        ? StatusText.PartialPublishRestPurgedFormat
+                        : StatusText.PartialPublishRestKeptFormat,
+                    task.FileName,
+                    purge.EntryCount,
+                    purge.Message));
+        }
+
     }
 }

@@ -568,5 +568,52 @@ namespace ArchiveFixer.ViewModels
             return result;
         }
 
+
+        /// <summary>兜底候选的**值 + 来源说明**（说明只走既有描述器，⛔ 绝不出明文）。</summary>
+        private readonly struct FallbackCandidateSlice
+        {
+            private readonly IReadOnlyList<PasswordItem> _candidates;
+            private readonly PasswordService _passwordService;
+
+            public FallbackCandidateSlice(
+                IReadOnlyList<PasswordItem> candidates,
+                IReadOnlyList<string> values,
+                PasswordService passwordService)
+            {
+                _candidates = candidates;
+                Values = values;
+                _passwordService = passwordService;
+            }
+
+            /// <summary>交给 WinRAR 的候选值（保序）。</summary>
+            public IReadOnlyList<string> Values { get; }
+
+            /// <summary>第 <paramref name="ordinal"/> 项（1 起）的来源说明。</summary>
+            public string Describe(int ordinal)
+            {
+                if (ordinal >= 1 && ordinal <= _candidates.Count)
+                {
+                    return _passwordService.BuildTryPasswordLogText(_candidates[ordinal - 1], ordinal);
+                }
+
+                return $"尝试密码候选第 {ordinal} 项：******";
+            }
+        }
+
+        /// <summary>
+        /// 密码预检的三种结论（用户 2026-09-25 第 37 条）。
+        /// </summary>
+        private enum PasswordProbeOutcome
+        {
+            /// <summary>说不准（引擎给了别的错误 / 超时 / 探针目录写不进去）—— 调用方按老路解整包。</summary>
+            Inconclusive,
+
+            /// <summary>探针解开了：这个候选是对的，可以去解整包。</summary>
+            Verified,
+
+            /// <summary>探针明说密码不对：这个候选作废，整包一个字节都不用动。</summary>
+            Rejected
+        }
+
     }
 }
