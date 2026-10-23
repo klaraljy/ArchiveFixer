@@ -858,36 +858,8 @@ namespace ArchiveFixer.ViewModels
                  * 但它们的末片是从包里解出来的、整组已经解开并发布 —— 这一单再报「分卷缺失」就是一句
                  * 会把人指错的话（汇总写"失败 3"，批末还教用户去搬卷）。
                  */
-                if (TryResolveConsumedByAnotherTask(task, out string consumerName))
+                if (TrySettleAsVolumeGroupFollower(task))
                 {
-                    string consumedNote = string.Format(
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        StatusText.VolumeDeficitConsumedByOtherTaskFormat,
-                        task.FileName,
-                        consumerName);
-
-                    /*
-                     * 跟班卷 = **不算没做成**（唯一事实位 `IsVolumeGroupFollower` ⇒ `CountsTowardBatchOutcome`）：
-                     * 四处消费点（色带 / 批末诊断 / 一键汇总行 / 本批汇总）读的都是它。
-                     *
-                     * ⚠ **机器终态必须显式落 `Skipped`**（2026-10-05 真机复跑当场逮到）：`MarkSkipped` 只写
-                     * `Status`，不写 `Outcome` ⇒ 汇总照旧把它们算成「未处理 3」。这里与既有那条跳过路
-                     * （`SkipWhenAnotherTaskOwnsThisVolumeGroup`）**逐行同一套**：清校验 / 清落点 + 落终态 + 标跟班。
-                     */
-                    task.IsOutputVerified = false;
-                    task.OutputVerification = OutputVerificationOutcome.NotAttempted;
-                    task.OutputPath = string.Empty;
-                    task.Outcome = TaskOutcome.Skipped;
-                    task.IsVolumeGroupFollower = true;
-                    task.MarkSkipped(consumedNote);
-
-                    AppendLog("INFO", consumedNote);
-
-                    // ⚠ 2026-10-08：离开名单 ⇒ 事实位一起清（理由见下面那一处）。
-                    task.IsVolumeDeficitDeferred = false;
-
-                    _volumeDeficitDeferred.Remove(task);
-                    _volumeDeficitFinalPass.Add(task);
                     continue;
                 }
 
@@ -1084,6 +1056,49 @@ namespace ArchiveFixer.ViewModels
 
             _volumeDeficitDeferred.Remove(task);
             _volumeDeficitFinalPass.Add(task);
+        }
+
+        /// <summary>
+        /// 这一组的内容已经由本批另一个任务解出来 ⇒ 按跟班卷收场（不算"没做成"）。
+        /// 位置必须排在"仍缺 ⇒ 如实报缺卷"之前：那一单再报缺卷就是一句把人指错的话。
+        /// </summary>
+        private bool TrySettleAsVolumeGroupFollower(ArchiveTask task)
+        {
+            if (!TryResolveConsumedByAnotherTask(task, out string consumerName))
+            {
+                return false;
+            }
+
+            string consumedNote = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                StatusText.VolumeDeficitConsumedByOtherTaskFormat,
+                task.FileName,
+                consumerName);
+
+            /*
+             * 跟班卷 = **不算没做成**（唯一事实位 `IsVolumeGroupFollower` ⇒ `CountsTowardBatchOutcome`）：
+             * 四处消费点（色带 / 批末诊断 / 一键汇总行 / 本批汇总）读的都是它。
+             *
+             * ⚠ **机器终态必须显式落 `Skipped`**：`MarkSkipped` 只写 `Status`、不写 `Outcome`
+             * ⇒ 汇总会把这些单算成「未处理」。这里与既有那条跳过路逐行同一套：
+             * 清校验 / 清落点 + 落终态 + 标跟班。
+             */
+            task.IsOutputVerified = false;
+            task.OutputVerification = OutputVerificationOutcome.NotAttempted;
+            task.OutputPath = string.Empty;
+            task.Outcome = TaskOutcome.Skipped;
+            task.IsVolumeGroupFollower = true;
+            task.MarkSkipped(consumedNote);
+
+            AppendLog("INFO", consumedNote);
+
+            // ⚠ 2026-10-08：离开名单 ⇒ 事实位一起清（理由见下面那一处）。
+            task.IsVolumeDeficitDeferred = false;
+
+            _volumeDeficitDeferred.Remove(task);
+            _volumeDeficitFinalPass.Add(task);
+
+            return true;
         }
     }
 }

@@ -901,14 +901,8 @@ namespace ArchiveFixer.ViewModels
              *   ⚠ 2026-09-27 落点模型 v2 之后那一档已经**每包一个目录**（`sharedOutputRoot` 恒为 false），
              *   这条判据留着当兜底，不再有生产路径会命中它。
              */
-            if (!task.IsContinuationTask &&
-                !landsInSourceDirectory &&
-                !sharedOutputRoot &&
-                !string.IsNullOrWhiteSpace(outputPath) &&
-                !Directory.Exists(outputPath))
-            {
-                outputPath = ClaimOutputDirectory(outputPath, task, ref outputRedirectNote);
-            }
+            (outputPath, outputRedirectNote) = ClaimFinalOutputDirectoryIfNeeded(
+                task, outputPath, landsInSourceDirectory, sharedOutputRoot, outputRedirectNote);
 
             /*
              * 回写**实际最终输出目录**（P1）。
@@ -3260,6 +3254,30 @@ namespace ArchiveFixer.ViewModels
             AppendLog("INFO", $"{task.LogName}：入仓目录 {stageDirectory}（中间产物先落这里，定稿时才搬进 {outputPath}）");
 
             return (true, stageDirectory, engineOutputPath);
+        }
+
+        /// <summary>
+        /// 并发下的"最终目录"占位：只对"目录还不存在、且是每包一个目录的落点"占位（只占不建），
+        /// 占不到就按同一套 `名字(1)` 约定换一个；收尾时由 ProcessExtractTaskAsync 释放。
+        /// 返回占位后的输出目录 + 可能产生的改名说明。
+        /// </summary>
+        private (string OutputPath, string RedirectNote) ClaimFinalOutputDirectoryIfNeeded(
+            ArchiveTask task,
+            string outputPath,
+            bool landsInSourceDirectory,
+            bool sharedOutputRoot,
+            string outputRedirectNote)
+        {
+            if (task.IsContinuationTask ||
+                landsInSourceDirectory ||
+                sharedOutputRoot ||
+                string.IsNullOrWhiteSpace(outputPath) ||
+                Directory.Exists(outputPath))
+            {
+                return (outputPath, outputRedirectNote);
+            }
+
+            return (ClaimOutputDirectory(outputPath, task, ref outputRedirectNote), outputRedirectNote);
         }
     }
 }
