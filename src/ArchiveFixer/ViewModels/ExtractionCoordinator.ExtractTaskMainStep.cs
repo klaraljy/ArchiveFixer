@@ -176,7 +176,7 @@ namespace ArchiveFixer.ViewModels
                  * 候选表在下面那次 `TryPublishPartialProductsAsync` 里会被 `TryRemove` 掉。
                  */
                 bool chainProducedContent =
-                    _partialPublishCandidates.TryGetValue(task, out PartialPublishCandidate? registeredCandidate)
+                    PartialPublishCandidates.TryGetValue(task, out PartialPublishStep.PartialPublishCandidate? registeredCandidate)
                     && registeredCandidate.ChainProducedContent;
 
                 FinalizeOutcomeIfPending(task, chainProducedContent);
