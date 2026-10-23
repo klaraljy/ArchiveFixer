@@ -43,7 +43,7 @@ namespace ArchiveFixer.Services
 
         List<(ArchiveTask Producer, string GroupBaseName, string SourcePath)> ByteBudgetLinkedSources { get; }
 
-        AppSettings? Settings { get; }
+        AppSettings Settings { get; }
 
         OneClickRunOptions? RunOptions { get; }
 

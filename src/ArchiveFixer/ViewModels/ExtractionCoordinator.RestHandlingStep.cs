@@ -255,7 +255,7 @@ namespace ArchiveFixer.ViewModels
         List<(ArchiveTask Producer, string GroupBaseName, string SourcePath)> IRestHandlingStepHost.ByteBudgetLinkedSources =>
             _byteBudgetLinkedSources;
 
-        AppSettings? IRestHandlingStepHost.Settings => Settings;
+        AppSettings IRestHandlingStepHost.Settings => Settings;
 
         OneClickRunOptions? IRestHandlingStepHost.RunOptions => RunOptions;
 
@@ -290,8 +290,8 @@ namespace ArchiveFixer.ViewModels
             StageCommitResult? commit,
             List<(string Level, string Message)> logEntries,
             LayerPurgeTrigger trigger,
-            ResultCompletenessVerdict? reclaimVerdict = null,
-            bool reclaimRootSource = true) =>
+            ResultCompletenessVerdict? reclaimVerdict,
+            bool reclaimRootSource) =>
             PurgeLayerSourcePackage(task, verification, commit, logEntries, trigger, reclaimVerdict, reclaimRootSource);
 
         string IRestHandlingStepHost.ResolveContinuationOutputDirectory(ArchiveTask task) =>
