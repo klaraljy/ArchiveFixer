@@ -2433,56 +2433,6 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>
-        /// **名字判不出族 / 卷号时，用底层识别卡把规范卷名拼出来**（唯一出口）。
-        ///
-        /// <para>族：卡上 `格式=SevenZip` ⇒ 这一族的规范名是 `<基名>.7z.00N`（本程序只认这一种写法，
-        /// 唯一出口 <see cref="VolumeGroupResolver.TryBuildCanonicalVolumeNameForIndex"/>）。
-        /// 卷号：卡上有卷号用卡上的；卡说"我是第一片"（`VolumeFirstPiece`）⇒ 1；
-        /// 卡说"我是后续片但没写第几"（`VolumePiece`）⇒ **判不出**（返回空串，交给"缺口 + 体积"）。
-        /// 基名：<see cref="FileNameHelper.GetArchiveBaseName"/> 已经剥掉一层伪装尾巴
-        /// （`pack111-L2.7z.txt` ⇒ `pack111-L2.7z`）。</para>
-        ///
-        /// <para>现场（官方环台 `10101010`）：这一片叫 `pack111-L2.7z.txt`，卡上
-        /// `格式=SevenZip 专属算法=VolumeFirstPiece 自述整包=62919013 按内容算的片数=3`
-        /// ⇒ 规范名应当是 `pack111-L2.7z.001` —— 名字那条路永远给不出，卡这条路给得出。</para>
-        ///
-        /// <para>⛔ 现在只做 7z 这一族（证据在手：卡上有"起始头自述整包 + 片数"）；其它族等有同样硬的
-        /// 运行期证据再补，⛔ 不猜。</para>
-        /// </summary>
-        private static string ResolveCanonicalNameFromCard(
-            string piecePath,
-            FileNatureCard card,
-            FileNatureCard? groupAnchorCard = null,
-            int? contentSlot = null,
-            VolumeNamingFamily? namingFamily = null)
-        {
-            /*
-             * ⚠ 2026-10-14：这套顺序（族来自卡 → 卷号来自卡 → 基名剥掉伪装尾巴 → 交给既有命名出口）
-             * 已经收成一个唯一出口 —— <see cref="VolumePieceFacts.ResolveCanonicalName"/>。
-             * ⛔ 别处不许再自己拼一遍。
-             *
-             * ⚠ 2026-10-16：RAR 1.5–4.x 那一族的卡上**没有绝对卷号**（只有卷尾结尾块的原始字段、
-             * 基数待定）⇒ 把"这一组第 1 卷的卡"（锚）原样转下去（判据仍在 Detection 那一处）。
-             *
-             * ⚠ 2026-10-16（用户口径「消费方接受『第 1 槽不在这层』后把**卡的绝对卷号**翻成权威」）：
-             * **接片这一档正是那个消费方** —— 它按规范名把这一片落到"这一组该拼到的那一层"，
-             * 第 1 槽在不在这一层不影响它 ⇒ 明确传 `trustCardNumberWhenNameGivesNothing: true`
-             * （判据内部只在"名字什么都给不出"时才读卡上的号，且只认 ≥ 2）。
-             * 真机现场 `19191919`：`aaa-L2-976` 卡上写着卷号 2、名字什么都给不出 ⇒ 之前永远拿不到规范名。
-             *
-             * ⚠ 2026-10-18（困难批 `19191919` 同一份样本的第二处）：组读取已经用内容排出**槽位**与**命名族**
-             * （通用分片 `ZipNumbered` vs 跨盘 `ZipSpanned`）⇒ 这两个事实原样转下去，名字不再参与命名
-             * （否则 `X.zip` 会给成跨盘族的 `X.z01`/`X.zip`、两片撞名）。判不出 ⇒ null，走老口径。
-             */
-            return VolumePieceFacts.ResolveCanonicalName(
-                piecePath,
-                card,
-                groupAnchorCard,
-                trustCardNumberWhenNameGivesNothing: true,
-                contentSlot: contentSlot,
-                namingFamily: namingFamily);
-        }
 
         /// <summary>
         /// **任务表里有几份"某一组的第 1 卷"**（诊断用，只读）：判据 = 卡上 `BodyKind == VolumeFirstPiece`
@@ -3700,7 +3650,7 @@ namespace ArchiveFixer.ViewModels
                  */
                 FileNatureCard? groupAnchor = ResolveGroupAnchorCard(owner, targetDirEarly, baseName, groupEntryPathOverride);
 
-                canonical = ResolveCanonicalNameFromCard(
+                canonical = VolumeNameOrchestration.ResolveCanonicalNameFromCard(
                     piecePath,
                     nature,
                     groupAnchor,
@@ -4492,7 +4442,7 @@ namespace ArchiveFixer.ViewModels
              */
             if (ownPath.Length > 0)
             {
-                string fromCard = ResolveCanonicalNameFromCard(ownPath, FileNature.Inspect(ownPath));
+                string fromCard = VolumeNameOrchestration.ResolveCanonicalNameFromCard(ownPath, FileNature.Inspect(ownPath));
 
                 if (fromCard.Length > 0 && VolumeGroupDetector.BelongsToSameGroup(fromCard, fromCard))
                 {

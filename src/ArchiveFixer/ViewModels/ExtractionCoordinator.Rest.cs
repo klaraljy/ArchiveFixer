@@ -1629,7 +1629,7 @@ namespace ArchiveFixer.ViewModels
             var volumeRenameChanges = new List<(string Level, string Message)>();
             var renamedVolumeMembers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            NormalizeEngineOutputVolumeNames(stageRoot, volumeRenameChanges, renamedVolumeMembers);
+            VolumeNameOrchestration.NormalizeEngineOutputVolumeNames(stageRoot, volumeRenameChanges, renamedVolumeMembers);
 
             var staged = new List<StagedEntry>();
             var warnings = new List<string>();
