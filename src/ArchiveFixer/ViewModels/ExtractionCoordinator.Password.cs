@@ -7305,6 +7305,9 @@ namespace ArchiveFixer.ViewModels
 
                 WorkspaceRootResolution workspaceResolution = ApplyBatchWorkspaceRoot(selectedTasks);
 
+                // 第二大步点名：批首只读组分析，把可证完整那一组的入口任务标成第二大步（只解一层）。
+                MarkVolumeStepEntriesForBatch(selectedTasks);
+
                 if (!workspaceResolution.Resolved)
                 {
                     _dialogService.ShowError(workspaceResolution.Reason);

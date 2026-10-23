@@ -434,6 +434,77 @@ namespace ArchiveFixer.ViewModels
         /// </list>
         /// </summary>
         /// <returns>本批的工作区结论；<see cref="WorkspaceRootResolution.Resolved"/> 为 false 时调用方必须停手。</returns>
+        /// <summary>
+        /// 批首**第二大步点名**（2026-10-23）：只读组分析（基名=第一个点之前 + 大小分布），
+        /// 把「可证完整」的组的入口那份点名为第二大步入口任务（登记任务级事实位 ⇒ 只解一层）。
+        /// ⛔ 判不出/缺卷 ⇒ 什么都不做（照旧第一大步跳过、原地不动）。
+        /// </summary>
+        private void MarkVolumeStepEntriesForBatch(IReadOnlyList<ArchiveTask> tasks)
+        {
+            var seeds = new List<string>();
+            var roots = new List<string>();
+
+            foreach (ArchiveTask task in tasks)
+            {
+                if (task == null || string.IsNullOrWhiteSpace(task.CurrentPath) || !File.Exists(task.CurrentPath))
+                {
+                    continue;
+                }
+
+                seeds.Add(task.CurrentPath);
+
+                string? directory = Path.GetDirectoryName(task.CurrentPath);
+
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    roots.Add(directory);
+                }
+
+                if (!string.IsNullOrWhiteSpace(task.ParentOutputDirectory))
+                {
+                    roots.Add(task.ParentOutputDirectory);
+                }
+            }
+
+            if (seeds.Count == 0)
+            {
+                return;
+            }
+
+            List<GroupAnalysis.GroupCandidate> groups = GroupAnalysis.Analyze(seeds, roots);
+
+            foreach (GroupAnalysis.GroupCandidate group in groups)
+            {
+                if (group == null || group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete
+                    || string.IsNullOrWhiteSpace(group.EntryPath))
+                {
+                    continue;
+                }
+
+                ArchiveTask? entryTask = null;
+
+                foreach (ArchiveTask candidate in tasks)
+                {
+                    if (candidate != null
+                        && string.Equals(candidate.CurrentPath, group.EntryPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        entryTask = candidate;
+                        break;
+                    }
+                }
+
+                if (entryTask == null)
+                {
+                    continue;
+                }
+
+                RememberVolumeStepTask(entryTask);
+
+                AppendLog(
+                    "INFO",
+                    $"[第二大步·组分析] {group.BaseName}：可证完整（{group.Pieces.Count} 片）—— 入口={FileNameHelper.GetFileName(group.EntryPath)}，这一单只解这一层。");
+            }
+        }
         private WorkspaceRootResolution ApplyBatchWorkspaceRoot(IReadOnlyList<ArchiveTask> tasks)
         {
             ExtractOptions options = BuildExtractOptions(tryExtractUnknownFormat: false);
