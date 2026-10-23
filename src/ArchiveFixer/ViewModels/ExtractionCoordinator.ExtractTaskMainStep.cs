@@ -2418,7 +2418,7 @@ namespace ArchiveFixer.ViewModels
                      */
                     if (probeEntryPath != null)
                     {
-                        PasswordProbeOutcome probe = await ProbePasswordAsync(
+                        PasswordCandidatesStep.PasswordProbeOutcome probe = await ProbePasswordAsync(
                             engineArchivePath,
                             extractOptions,
                             engineOutputPath,
@@ -2427,7 +2427,7 @@ namespace ArchiveFixer.ViewModels
                             progressSink,
                             cancellationToken);
 
-                        if (probe == PasswordProbeOutcome.Rejected)
+                        if (probe == PasswordCandidatesStep.PasswordProbeOutcome.Rejected)
                         {
                             hasWrongPassword = true;
                             task.PasswordStatus = StatusText.WrongPassword;
@@ -2440,7 +2440,7 @@ namespace ArchiveFixer.ViewModels
                             continue;
                         }
 
-                        if (probe == PasswordProbeOutcome.Verified)
+                        if (probe == PasswordCandidatesStep.PasswordProbeOutcome.Verified)
                         {
                             AppendLog(
                                 "INFO",
@@ -2786,7 +2786,7 @@ namespace ArchiveFixer.ViewModels
 
                     if (PasswordEngineFallback.ShouldFallBack(fallbackFacts))
                     {
-                        FallbackCandidateSlice fallbackSlice = BuildFallbackCandidateSlice(candidates, maxPasswordAttempts);
+                        PasswordCandidatesStep.FallbackCandidateSlice fallbackSlice = BuildFallbackCandidateSlice(candidates, maxPasswordAttempts);
 
                         PasswordEngineFallbackOutcome fallback = await PasswordEngineFallback
                             .TryAsync(new PasswordFallbackRequest

@@ -134,7 +134,7 @@ namespace ArchiveFixer.ViewModels
         }
 
         /// <summary>手动密码候选的来源标记（只在这里出现一次，别在别处再写字面量）。</summary>
-        internal const string ManualPasswordSource = "ManualBatch";
+        // 来源标记的唯一出口已随候选类搬到 Services/PasswordCandidatesStep.ManualPasswordSource。
 
         /// <summary>
         /// 7-Zip 支持的密码长度上限（超过会被截断）。抄 WinRAR 参考里"6.10 才补上截断警告"那条教训：
