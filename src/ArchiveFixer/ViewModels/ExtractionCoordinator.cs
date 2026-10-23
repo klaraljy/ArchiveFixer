@@ -7841,21 +7841,18 @@ namespace ArchiveFixer.ViewModels
              * （<see cref="RecursionLayerReport.CandidatesProducedIdenticalResults"/>，
              * 判据是结构化计数，⛔ 不比中文）⇒ 结论里必须说清"换密码不会改变结果"。
              */
-            if (result.Layers.Any(layer => layer != null && layer.CandidatesProducedIdenticalResults))
+            if (RecursionFailureNotes.HasIdenticalResults(result))
             {
-                task.ErrorMessage += "（连续两个候选解出来的产物完全相同，换密码不会改变结果）";
-                AppendLog("WARN", $"{task.LogName}：连续两个候选解出来的产物完全相同 —— 换密码不会改变结果。");
+                task.ErrorMessage = RecursionFailureNotes.AppendIdenticalResultsNote(task.ErrorMessage);
+                AppendLog("WARN", $"{task.LogName}：{RecursionFailureNotes.IdenticalResultsNote}");
             }
 
             /*
              * 「试了几个候选」同样必须写进结论（用户 2026-09-24 要求）——事实由递归层带上任务；
              * ⛔ 没试过（0）不写，老口径不动。
              */
-            if (task.RecursionTriedCandidateCount > 0
-                && !task.ErrorMessage.Contains("已试 ", StringComparison.Ordinal))
-            {
-                task.ErrorMessage += $"（已试 {task.RecursionTriedCandidateCount} 个候选）";
-            }
+            task.ErrorMessage = RecursionFailureNotes.AppendTriedCandidatesNote(
+                task.ErrorMessage, task.RecursionTriedCandidateCount);
             ApplyLandingViolationNote(task, result);
 
             /*
@@ -7939,10 +7936,10 @@ namespace ArchiveFixer.ViewModels
              * （<see cref="RecursionLayerReport.CandidatesProducedIdenticalResults"/>，
              * 判据是结构化计数，⛔ 不比中文）⇒ 结论里必须说清"换密码不会改变结果"。
              */
-            if (result.Layers.Any(layer => layer != null && layer.CandidatesProducedIdenticalResults))
+            if (RecursionFailureNotes.HasIdenticalResults(result))
             {
-                task.ErrorMessage += "（连续两个候选解出来的产物完全相同，换密码不会改变结果）";
-                AppendLog("WARN", $"{task.LogName}：连续两个候选解出来的产物完全相同 —— 换密码不会改变结果。");
+                task.ErrorMessage = RecursionFailureNotes.AppendIdenticalResultsNote(task.ErrorMessage);
+                AppendLog("WARN", $"{task.LogName}：{RecursionFailureNotes.IdenticalResultsNote}");
             }
             ApplyLandingViolationNote(task, result);
                     task.EndTime = DateTime.Now;
