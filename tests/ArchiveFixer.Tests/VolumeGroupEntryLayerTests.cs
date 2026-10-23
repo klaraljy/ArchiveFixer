@@ -169,5 +169,27 @@ namespace ArchiveFixer.Tests
                 VolumeStepExecutor.BuildSyntheticGroupEntryKey(a, "222"));
         }
 
+        [Fact]
+        public async System.Threading.Tasks.Task 建组出口_少于两片或格式判不出_不建组也不动盘()
+        {
+            string dir = Directory.CreateDirectory(Path.Combine(_root, "pieces7")).FullName;
+            string one = Path.Combine(dir, "a.bin");
+            File.WriteAllBytes(one, new byte[] { 1, 2 });
+
+            // 引擎为空 ⇒ 直接不建组（试开没有引擎就是判不出）。
+            Assert.Null(await VolumeStepExecutor.TryBuildGroupUnitFromContentAsync(
+                new[] { one }, dir, engine: null));
+
+            // 内容判不出格式（普通字节）⇒ 不建组，且原文件一个字节不动。
+            string two = Path.Combine(dir, "b.bin");
+            File.WriteAllBytes(two, new byte[] { 3, 4 });
+
+            Assert.Null(await VolumeStepExecutor.TryBuildGroupUnitFromContentAsync(
+                new[] { one, two }, dir, engine: null));
+
+            Assert.True(File.Exists(one));
+            Assert.True(File.Exists(two));
+        }
+
     }
 }

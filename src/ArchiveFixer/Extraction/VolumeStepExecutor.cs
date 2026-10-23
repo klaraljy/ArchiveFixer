@@ -113,5 +113,88 @@ namespace ArchiveFixer.Extraction
             return layer + "|" + (baseName ?? string.Empty).Trim();
         }
 
+        /// <summary>
+        /// **唯一建组出口**（`修改日志.md` 2026-10-22 ㈠）：按内容卡上的格式分派 RAR / 7z；
+        /// 判不出格式 ⇒ 不建组（⛔ 不动盘、不猜）。
+        ///
+        /// <para>⚠ zip 目前**没有**建组 builder（`RarVolumeGroupBuilder` / `SevenZipVolumeGroupBuilder` 是仅有的两个），
+        /// 这一支如实返回 null 并写一行原因，⛔ 不在这里临时造第三个 builder。</para>
+        /// </summary>
+        /// <param name="piecePaths">这一组的片（任意顺序；事实由内容卡给）。</param>
+        /// <param name="workRoot">试开用的工作区根（硬链接试开只落这里）。</param>
+        /// <param name="engine">与解压同一套引擎（试开要它）。</param>
+        public static async Task<VolumeGroupUnit?> TryBuildGroupUnitFromContentAsync(
+            IEnumerable<string>? piecePaths,
+            string? workRoot,
+            IArchiveEngine? engine,
+            Action<string, string>? log = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (engine == null || string.IsNullOrWhiteSpace(workRoot))
+            {
+                return null;
+            }
+
+            var facts = new List<VolumePieceFact>();
+
+            foreach (string path in piecePaths ?? Array.Empty<string>())
+            {
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    continue;
+                }
+
+                long size;
+
+                try
+                {
+                    size = new FileInfo(path).Length;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                facts.Add(new VolumePieceFact
+                {
+                    Path = path,
+                    Size = size,
+                    SourceLayer = Path.GetDirectoryName(path) ?? string.Empty,
+                    Card = FileNature.Inspect(path)
+                });
+            }
+
+            if (facts.Count < 2)
+            {
+                log?.Invoke("INFO", $"这一组只找到 {facts.Count} 片 —— 不建组（至少要 2 片才谈得上分卷组）");
+                return null;
+            }
+
+            VolumeContentFormat format = facts
+                .Select(fact => fact.Card.Format)
+                .FirstOrDefault(value => value != VolumeContentFormat.Unknown);
+
+            var probe = new VolumeProbeVerifier(engine);
+
+            switch (format)
+            {
+                case VolumeContentFormat.Rar:
+                    return await new RarVolumeGroupBuilder(probe, engine)
+                        .TryBuildAsync(facts, workRoot, cancellationToken)
+                        .ConfigureAwait(false);
+
+                case VolumeContentFormat.SevenZip:
+                    return await new SevenZipVolumeGroupBuilder(probe)
+                        .TryBuildAsync(facts, workRoot, cancellationToken)
+                        .ConfigureAwait(false);
+
+                default:
+                    log?.Invoke(
+                        "INFO",
+                        $"格式={format}：当前没有这一族的建组出口（只有 RAR / 7z）—— 不建组、不动盘");
+                    return null;
+            }
+        }
+
     }
 }
