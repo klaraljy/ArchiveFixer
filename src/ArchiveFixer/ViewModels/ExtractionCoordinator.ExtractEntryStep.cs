@@ -1080,7 +1080,7 @@ namespace ArchiveFixer.ViewModels
                 RemoveEmptyTargetShellIfWeCreatedIt();
 
                 // 批尾清掉这条批内状态（与 _spaceTightThisBatch / _oneClickThisBatch 同一口径）。
-                _batchCreatedTargetDirectory = string.Empty;
+                BatchCreatedTargetDirectory = string.Empty;
 
                 UpdateSummary();
             }

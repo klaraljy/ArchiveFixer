@@ -250,6 +250,8 @@ namespace ArchiveFixer.ViewModels
             DialogService dialogService,
             ISourceMoveFileSystem? sourceMoveFileSystem = null)
         {
+            _workspaceStep = new WorkspaceStep(this);
+
             _vm = vm;
             _archiveEngine = archiveEngine;
             _passwordService = passwordService;

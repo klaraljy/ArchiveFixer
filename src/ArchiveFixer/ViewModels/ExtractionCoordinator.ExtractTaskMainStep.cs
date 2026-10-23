@@ -984,7 +984,7 @@ namespace ArchiveFixer.ViewModels
 
             // 记下"这个任务真正用的工作区目录"：收尾时的空壳清理要按它来，
             // **不能事后重算**（taskId 含源路径哈希，而成功路径会回写 CurrentPath，见字段说明）。
-            _taskWorkspaceDirectories[task] = Path.GetDirectoryName(stageDirectory.TrimEnd('\\', '/')) ?? string.Empty;
+            TaskWorkspaceDirectories[task] = Path.GetDirectoryName(stageDirectory.TrimEnd('\\', '/')) ?? string.Empty;
 
             string? stageFailure = await PrepareStageDirectoryAsync(task, stageDirectory, cancellationToken);
 
