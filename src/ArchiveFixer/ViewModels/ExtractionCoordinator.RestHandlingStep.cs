@@ -456,7 +456,7 @@ namespace ArchiveFixer.ViewModels
                  * 但名字明显是分卷、同目录里还躺着同组的别的卷 —— 这一卷不搬，写清为什么。
                  * 留下的是一套完整的包，用户还能自己接着处理。
                  */
-                if (!candidate.IsVolumeGroup && HasSiblingVolumeBeside(path))
+                if (!candidate.IsVolumeGroup && VolumeSiblingProbe.HasSiblingVolumeBeside(path))
                 {
                     // 日志由调用方写（纯计划里不写盘、不记日志 —— 这样它才测得动）。
                     warnings.Add(
