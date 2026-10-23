@@ -95,6 +95,7 @@ namespace ArchiveFixer.Tests
 
             await harness.RunOneClickAsync().WaitAsync(TimeSpan.FromSeconds(180));
 
+
             _output.WriteLine(
                 $"【用例①】删源包名单 {harness.SourceDeletes.DeletedPaths.Count} 个 ｜ 日志 {harness.Log.Logs.Count} 行 ｜ "
                 + $"盘上还剩的包：{string.Join("、", FindFiles("*.7z").Select(Path.GetFileName))}");
