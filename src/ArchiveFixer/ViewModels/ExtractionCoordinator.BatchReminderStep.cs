@@ -885,5 +885,10 @@ namespace ArchiveFixer.ViewModels
             return new ReminderAnswer { Confirmed = confirmed, OptionChecked = optionChecked };
         }
 
+
+        private readonly object _outputFolderLock = new();
+
+        private bool _outputFolderOpenedThisBatch;
+
     }
 }

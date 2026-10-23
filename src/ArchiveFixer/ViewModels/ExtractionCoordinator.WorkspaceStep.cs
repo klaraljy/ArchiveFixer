@@ -623,5 +623,33 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         internal Func<string, string>? WorkspaceDriveOverride { get; set; }
 
+
+        /// <summary>
+        /// 本次运行里每个任务**真正用的**工作区目录（<c>&lt;work&gt;\&lt;taskId&gt;</c>，由暂存目录反推）。
+        ///
+        /// <para>为什么必须记、不能事后重算：<see cref="PathService.BuildTaskWorkDirectory"/> 的 taskId 含
+        /// **源路径哈希**，而任务收尾会把源包搬进 `其余物` 并回写 <c>task.CurrentPath</c> ——
+        /// 重算出来的是**另一个**目录（<see cref="CleanupTaskWorkspaceDirectory"/> 的注释里记着这个坑：
+        /// 实测近 1 GB 过程物因为重算而"清理"了个空）。空壳清理同样只能在**当时那个**目录上做。</para>
+        ///
+        /// <para>键用任务对象本身（理由与 <see cref="_spaceRuntime"/> 一样），条目在任务收尾时移除。</para>
+        /// </summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ArchiveTask, string> _taskWorkspaceDirectories = new();
+
+        /// <summary>
+        /// 本批**我们自己建出来的那个目标目录**（工作区要落在它里面，所以批首必须先建它）。
+        ///
+        /// <para>为什么要记：工作区改到目标目录里面之后（用户 2026-09-30），"最终目录连建都不该建"
+        /// 这条老口径在实现上不可能再成立 —— 不先建它就没地方放工作区。但**用户看得见的残留**
+        /// 一条都不许多：批尾如果这个目录里什么都没有（这一批什么都没解出来 / 全失败 / 被取消），
+        /// 它就是**我们自己造的一个空壳**，必须自己收掉。</para>
+        ///
+        /// <para>⛔ 只在"确实是这一次建出来的"并且"现在一个条目都没有"这两条同时成立时才删
+        /// （前者靠 <see cref="WorkspaceRootResolution.TargetDirectoryCreated"/>，
+        /// 后者靠现枚举）—— 用户本来就有的目录、或者里面有我们删不掉的东西（目录联接点），
+        /// 一律一个字节都不动。空串 = 这一批没建过任何目标目录。</para>
+        /// </summary>
+        private string _batchCreatedTargetDirectory = string.Empty;
+
     }
 }

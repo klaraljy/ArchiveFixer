@@ -584,5 +584,23 @@ namespace ArchiveFixer.ViewModels
                 + "该问的事一律按设置里你选的那一档办，理由逐条写在日志里。");
         }
 
+
+        /// <summary>合并提示里最多列几个文件名（再多就让用户去看失败清单），别弹一个占满屏幕的框。</summary>
+        private const int MaxPasswordFailureNamesInDialog = 10;
+
+        private readonly List<(string FileName, string Status)> _passwordFailures = new();
+
+        private readonly object _passwordFailuresLock = new();
+
+        /// <summary>本批是否已经问过手动密码（一次性：问过就不再问，无论用户填没填）。</summary>
+        private bool _manualPasswordPrompted;
+
+        /// <summary>
+        /// 本批是否出现过密码类失败（密码错误 / 达到尝试上限）。
+        /// 批次结束后的合并提示据此换一句话：出过密码问题时指引"再点一次、把密码输进去"，
+        /// 没出过就不提（免得每次跑完都念一遍）。
+        /// </summary>
+        private bool _batchHadPasswordFailures;
+
     }
 }

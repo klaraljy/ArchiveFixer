@@ -2264,5 +2264,15 @@ namespace ArchiveFixer.ViewModels
                     purge.Message));
         }
 
+
+        /// <summary>
+        /// 本批生效的「删除操作」档（<see cref="RestHandlingModes"/>；批首定一次）。
+        ///
+        /// <para>⚠ 批首定一次而不是每任务现读设置：同一批里不许"前半段按一个档、后半段按另一个"
+        /// （用户可能中途去③页改）。<see cref="RestHandlingModes.Keep"/> 是默认档 ——
+        /// 没经过批首的路径（例如单独解压一个包）永远按 Keep 走，不会顺手删东西。</para>
+        /// </summary>
+        private string _restHandlingThisBatch = RestHandlingModes.Keep;
+
     }
 }

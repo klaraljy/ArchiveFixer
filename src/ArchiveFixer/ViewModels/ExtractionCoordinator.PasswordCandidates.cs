@@ -615,5 +615,25 @@ namespace ArchiveFixer.ViewModels
             Rejected
         }
 
+
+        /// <summary>
+        /// 每个归档（**每一层**）最多真的试几个密码候选（AGENTS.md §9.2：每层、每任务、每批次都要有尝试上限）。
+        ///
+        /// 为什么必须有：解压模式下一个候选 = **一次完整解压**。加密分卷的第二层，
+        /// 几百条密码本的包会被逐个候选整包重解一遍（几百 MB 起、磁盘一直在写），
+        /// 表现就是"几十分钟不动"，最后还可能把"没试完"报成"密码错误"。
+        ///
+        /// 到上限时的状态是 <see cref="StatusText.PasswordAttemptLimitReached"/>，**不是**"密码错误"。
+        ///
+        /// 值取自设置项 <see cref="AppSettings.MaxPasswordAttemptsPerLayer"/>（界面可改、能落盘）。
+        /// 这里再夹一次只是兜底：设置对象不一定走过 <see cref="AppSettings.Normalize"/>（例如测试里直接
+        /// <c>new AppSettings()</c>），而 0 或负数会让"一个候选都不试"直接变成密码错误 —— 那是最误导人的结论。
+        /// （旧写法：这里是个常量 10，用户在设置界面改了不生效。）
+        /// </summary>
+        private int MaxPasswordAttemptsPerLayer =>
+            Math.Clamp(Settings.MaxPasswordAttemptsPerLayer, 1, 1000);
+
+        internal readonly List<string> _manualBatchPasswords = new();
+
     }
 }

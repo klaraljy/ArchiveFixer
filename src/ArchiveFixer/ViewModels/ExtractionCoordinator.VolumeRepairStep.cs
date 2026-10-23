@@ -604,5 +604,10 @@ namespace ArchiveFixer.ViewModels
             return count;
         }
 
+
+        /// <summary>兼容出口（测试/轮次层读它）：实现已搬进 <see cref="ArchiveFixer.Extraction.VolumeNameOrchestration"/>。</summary>
+        internal static bool TryConfirmVolumeGroupComplete(string filePath, out string note)
+            => ArchiveFixer.Extraction.VolumeNameOrchestration.TryConfirmVolumeGroupComplete(filePath, out note);
+
     }
 }

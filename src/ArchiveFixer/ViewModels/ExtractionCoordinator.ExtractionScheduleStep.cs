@@ -700,5 +700,57 @@ namespace ArchiveFixer.ViewModels
 
         private long ReserveSpaceBytes => SpaceReserveOverride ?? SpaceGate.DefaultReserveBytes;
 
+
+        /// <summary>
+        /// 解压前的资源预算上限（不变量 8），四条全部来自设置（用户 2026-09-25 第 36 条）。
+        ///
+        /// <para>为什么收口成一个属性：这套上限有**四个**用它的地方 —— ①解压前预检
+        /// （<see cref="ResourceBudget.CheckBeforeExtract"/>）②产物事后核算 ③内嵌 ZIP 直读
+        /// ④递归核心的累计上限。以前①③④各写各的默认值（预检与直读是 <c>ResourceBudgetOptions.Default</c>、
+        /// 递归是 <c>RecursionLimits.Default</c> 的 50 GiB），用户在设置里改一处并不会同时生效 ——
+        /// 现在只有这一个出口，口径不可能再分叉。</para>
+        ///
+        /// <para>旧写法：解压前预检直接用 <c>new ResourceBudget()</c>（= 硬编码 4 GiB 单文件 / 20 GiB 总量），
+        /// 界面上一个字都没有 —— 他 12 GiB 的分卷包被拦下时看到的就是那句判决。</para>
+        /// </summary>
+        private ResourceBudgetOptions BudgetLimits => ResourceBudgetOptions.FromSettings(Settings);
+
+        /// <summary>本批的空间预留账本（串行时也建，只是永远只有一个任务在账上）。</summary>
+        private SpaceReservationLedger? _spaceLedger;
+
+        private readonly object _spaceRuntimeLock = new();
+
+        private readonly Dictionary<ArchiveTask, ScheduledTaskRuntime> _spaceRuntime = new();
+
+        /// <summary>
+        /// 空间不足：本批因此被跳过（没启动）的任务。
+        /// 批末要**如实报告**它们各自需要多少 —— 静默跳过是明令禁止的。
+        /// </summary>
+        private readonly List<(string Name, long RequiredBytes, long AvailableBytes, long ShortfallBytes)> _spaceBlockedTasks = new();
+
+        /// <summary>
+        /// 本批那条"中途空间不足"的纯提示**弹过没有**（用户 2026-09-29 第 2 条：
+        /// "同一批只弹一次（合并计数）"）。
+        ///
+        /// <para>后面的同类情况只写日志 —— 一批几十个包时逐个弹等于把批卡死在他面前。</para>
+        /// </summary>
+        private bool _spaceBlockedNoticeShown;
+
+        /// <summary>
+        /// 本批是不是按**「空间不足」模式**跑（批首定一次；用户 2026-09-27 拍板的模式）。
+        ///
+        /// <para>它是一个**运行期**开关（<see cref="MainViewModel.SpaceTightMode"/>，⛔ 不写设置、不记忆），
+        /// 但一经开跑就**钉死在这一批上**：同一批里不许"前半段边解边删源包、后半段又不删了" ——
+        /// 那会让空间账面与用户看到的行为前后矛盾。批首定一次、批内只读它。</para>
+        ///
+        /// <para>它一共改四件事（每一件都写在下面对应位置的注释里）：
+        /// ① 并发档（忽略设置里的档与「全速」，按 <c>ExtractionScheduler.ResolveSpaceTightParallelCount</c>）；
+        /// ② 排序（按净占用从小到大，先解"解完占地最少"的）；
+        /// ③ 源包处理（✅ 定稿 + 校验通过 → **当场永久删除源包**，不进其余物）；
+        /// ④ 删除操作（其余物 = 过程物，任务成功后彻底删除）。
+        /// ⛔ 它**不动**任何设置：用户设置里的三档在这次运行里一个字节都不会被改写。</para>
+        /// </summary>
+        private bool _spaceTightThisBatch;
+
     }
 }

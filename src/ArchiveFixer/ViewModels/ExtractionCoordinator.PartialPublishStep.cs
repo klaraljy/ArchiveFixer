@@ -728,5 +728,14 @@ namespace ArchiveFixer.ViewModels
                 Array.Empty<(string, long)>();
         }
 
+
+        /// <summary>
+        /// 部分完成发布的候选（**失败路径**填、收尾处发布；见 <see cref="TryPublishPartialProductsAsync"/>）。
+        ///
+        /// <para>键用任务对象本身（理由与上面两张表一样）；条目在收尾时移除 ——
+        /// 不清掉的话同一个任务对象重跑时会把上一轮的清单当成这一轮的（那是"拿旧识别结果解新文件"的翻版）。</para>
+        /// </summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ArchiveTask, PartialPublishCandidate> _partialPublishCandidates = new();
+
     }
 }

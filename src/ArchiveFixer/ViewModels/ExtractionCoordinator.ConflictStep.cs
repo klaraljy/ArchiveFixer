@@ -265,5 +265,17 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
+
+        private readonly object _conflictDecisionLock = new();
+
+        private ConflictDecision? _batchConflictDecision;
+
+        private ConflictDecision? _taskConflictDecision;
+
+        private bool _conflictPromptUnavailable;
+
+        /// <summary>本批已经真的弹过几次询问（日志与排障用；正常情况下 ≤ 1）。</summary>
+        private int _conflictPromptCount;
+
     }
 }
