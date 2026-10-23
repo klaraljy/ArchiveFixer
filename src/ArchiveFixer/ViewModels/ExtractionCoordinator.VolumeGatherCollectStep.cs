@@ -180,17 +180,7 @@ namespace ArchiveFixer.ViewModels
         /// 分卷片不再当内容物）。⛔ 不看后缀、⛔ 不猜：判据唯一出口
         /// <see cref="VolumePieceFacts.CardSaysItIsOneOfTheGroup"/>（`BodyKind` = 首片 / 后续片）。
         /// </summary>
-        private static bool CardSaysItIsOneOfTheGroup(string path)
-        {
-            try
-            {
-                return VolumePieceFacts.CardSaysItIsOneOfTheGroup(FileNature.Inspect(path));
-            }
-            catch
-            {
-                return false;
-            }
-        }
+        private static bool CardSaysItIsOneOfTheGroup(string path) => StageFilePredicates.CardSaysItIsOneOfTheGroup(path);
 
         /// <summary>
         /// 找卷的基准那一句（只在**基准不是入口那一卷**时补出来）：用户口径是"以一开始的分卷文件为准，

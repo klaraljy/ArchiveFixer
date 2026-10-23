@@ -262,6 +262,7 @@ namespace ArchiveFixer.ViewModels
             _progressHeartbeat = new ProgressHeartbeatStep(this);
             _conflictStep = new ConflictStep(this);
             _passwordCandidatesStep = new PasswordCandidatesStep(this);
+            _placementStep = new PlacementStep(this);
             _sourceMoveFileSystem = sourceMoveFileSystem ?? FileSystemSourceMoveFileSystem.Instance;
         }
 
