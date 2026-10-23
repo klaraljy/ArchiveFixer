@@ -111,7 +111,7 @@ namespace ArchiveFixer.Tests
             }));
 
             // 前提：老判据单看名字**确实**会把它当"其余物"（危险就危险在这里）。
-            Assert.True(ExtractionCoordinator.IsProcessArtifactFile(first));
+            Assert.True(StageFilePredicates.IsProcessArtifactFile(first));
 
             VolumeGroupResolution resolution = Resolve(first);
 
@@ -252,7 +252,7 @@ namespace ArchiveFixer.Tests
             string first = WriteFile(stage, "电影.7z.001", 8192);
             string disguised = WriteFile(stage, "电影.mp4", 8192);
 
-            Assert.False(ExtractionCoordinator.IsProcessArtifactFile(disguised));
+            Assert.False(StageFilePredicates.IsProcessArtifactFile(disguised));
             Assert.False(SourceJunkScanner.LooksLikeJunkCandidate("电影.mp4"));
 
             VolumeGroupResolution resolution = Resolve(first);

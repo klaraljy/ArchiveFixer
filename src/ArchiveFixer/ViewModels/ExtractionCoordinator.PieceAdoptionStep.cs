@@ -42,7 +42,7 @@ namespace ArchiveFixer.ViewModels
                  * `OutputPath` 是它下面的 `pack111\pack111-L2` ⇒ 只扫落点根会漏掉它。
                  * ⛔ 仍然只碰"名字像分卷片 + 还另有别的名字"的，用户自己那份一个字节都不动。
                  */
-                string? sourcePieceDirectory = IsVolumePartFile(task.CurrentPath ?? string.Empty)
+                string? sourcePieceDirectory = StageFilePredicates.IsVolumePartFile(task.CurrentPath ?? string.Empty)
                     ? Path.GetDirectoryName(task.CurrentPath ?? string.Empty)
                     : null;
 
@@ -64,7 +64,7 @@ namespace ArchiveFixer.ViewModels
                                     FileNameHelper.GetArchiveBaseName(file),
                                     StringComparison.OrdinalIgnoreCase));
 
-                            if (!completeGroupPiece && !IsVolumePartFile(file))
+                            if (!completeGroupPiece && !StageFilePredicates.IsVolumePartFile(file))
                             {
                                 continue;
                             }

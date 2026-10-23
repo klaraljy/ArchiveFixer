@@ -314,7 +314,7 @@ namespace ArchiveFixer.ViewModels
                  * （`VolumeGroupDeletionSafetyTests` 那一族钉的就是这条兜底 —— 实测 136 条全绿）。
                  */
                 bool isProcessArtifact = engineOutput == null
-                    && (IsProcessArtifactFile(file) || CardSaysItIsOneOfTheGroup(file))
+                    && (StageFilePredicates.IsProcessArtifactFile(file) || CardSaysItIsOneOfTheGroup(file))
                     /*
                      * ⛔ 命中「内容物保留关键词」的**不是过程物**（用户 2026-10-04 的新功能
                      * 「内容物压缩文件不解压」）：它是用户点名"碰都不碰"的内容物 ⇒
@@ -425,7 +425,7 @@ namespace ArchiveFixer.ViewModels
                  * ⛔ 只对**卷标记后缀**（`.001` / `.z01` / `.r00` / `.partN`）做这一步：
                  * `.zip` / `.7z` 这种归档本体自己就是完整包，不走分卷这条判据。
                  */
-                if (isProcessArtifact && stageGroup == null && IsVolumePartFile(file))
+                if (isProcessArtifact && stageGroup == null && StageFilePredicates.IsVolumePartFile(file))
                 {
                     /*
                      * ⚠ 例外：这一片正是**我们已经在收的那一组**的片（用户 2026-10-06 真机：
@@ -915,7 +915,7 @@ namespace ArchiveFixer.ViewModels
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
-                    RollBackFinalLayout(moved, destinationDirectory, destinationExisted);
+                    FinalizeMoveSupport.RollBackFinalLayout(moved, destinationDirectory, destinationExisted);
 
                     logEntries.Add(("WARN", $"{task.LogName}：定稿被取消，已把 {moved.Count} 项退回暂存目录。"));
 
@@ -973,7 +973,7 @@ namespace ArchiveFixer.ViewModels
                      * 用户点名过的"没人认领的名字"（`SiblingFolderVolumeGatherTests` ③ 那条用例钉的就是它）。
                      * ⛔ 数据一个字节都不丢：正位那一份已经在了。
                      */
-                    if (!isDirectory && IsVolumePartFile(move.From))
+                    if (!isDirectory && StageFilePredicates.IsVolumePartFile(move.From))
                     {
                         string pieceName = Path.GetFileName(move.From);
 
@@ -1188,8 +1188,8 @@ namespace ArchiveFixer.ViewModels
                     ? string.Format(
                         CultureInfo.CurrentCulture,
                         StatusText.FinalizeMoveFailureDetailFormat,
-                        MaxFinalizeContentNameLines,
-                        DescribeFinalizeMoveFailures(failures))
+                        FinalizeMoveSupport.MaxFinalizeContentNameLines,
+                        FinalizeMoveSupport.DescribeFinalizeMoveFailures(failures))
                     : string.Empty);
 
             /*
@@ -1225,7 +1225,7 @@ namespace ArchiveFixer.ViewModels
                 List<string> contentNames = contentMoves
                     .Select(move => Path.GetFileName(move.To))
                     .Where(name => !string.IsNullOrWhiteSpace(name))
-                    .Take(MaxFinalizeContentNameLines)
+                    .Take(FinalizeMoveSupport.MaxFinalizeContentNameLines)
                     .ToList();
 
                 if (contentNames.Count > 0)
@@ -1275,7 +1275,7 @@ namespace ArchiveFixer.ViewModels
         /// 而他这批是 68 套同名照片）。名字仍然有用（续解找下一层靠它、名字被改坏时肉眼能看出来），
         /// 但**前 5 个足够定性**：多出来的只写个数。</para>
         /// </summary>
-        private const int MaxFinalizeContentNameLines = 5;
+        // 明细条数的唯一来源：Extraction/FinalizeMoveSupport.MaxFinalizeContentNameLines。
 
 
     }

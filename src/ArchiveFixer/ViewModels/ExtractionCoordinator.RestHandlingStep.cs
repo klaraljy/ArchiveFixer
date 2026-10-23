@@ -1319,7 +1319,7 @@ namespace ArchiveFixer.ViewModels
                         continue;
                     }
 
-                    if (IsProcessArtifactFile(file) && !keepRules.ShouldKeep(file))
+                    if (StageFilePredicates.IsProcessArtifactFile(file) && !keepRules.ShouldKeep(file))
                     {
                         continue;
                     }
@@ -1432,33 +1432,6 @@ namespace ArchiveFixer.ViewModels
         /// </summary>
         private const bool MoveCarvedArtifactIntoProcessDirectory = false;
 
-
-        /// <summary>
-        /// 这条路是不是"其余物"（契约 §3.2）：分卷段（<c>.001</c>/<c>.z01</c>/<c>.r00</c>/<c>.part1</c>）
-        /// 与归档本体（<c>.7z</c>/<c>.zip</c>/<c>.rar</c>/…）。抠出来的中间 ZIP 也落在这一条里。
-        /// </summary>
-        internal static bool IsProcessArtifactFile(string filePath)
-        {
-            string extension = Path.GetExtension(filePath);
-
-            if (string.IsNullOrWhiteSpace(extension))
-            {
-                return false;
-            }
-
-            return ExtensionHelper.IsVolumePartExtension(extension) ||
-                   ExtensionHelper.IsKnownArchiveExtension(extension);
-        }
-
-        /// <summary>
-        /// 这个文件是不是**带卷标记的那一片**（<c>.001</c> / <c>.z01</c> / <c>.r00</c> / <c>.partN</c>）。
-        ///
-        /// <para>与 <see cref="IsProcessArtifactFile"/> 的区别就在这一格：那一条把"归档本体"
-        /// （<c>.zip</c> / <c>.7z</c> / <c>.rar</c>）也算其余物，而归档本体**自己就是完整包**，
-        /// 不需要分卷那条判据；只有带卷标记的这一档才可能是"某组缺了兄弟的一片"。</para>
-        /// </summary>
-        internal static bool IsVolumePartFile(string filePath) =>
-            ExtensionHelper.IsVolumePartExtension(Path.GetExtension(filePath));
 
         /// <summary>
         /// **过路层那一单的其余物按档处理**（用户 2026-10-06 拍板：「其余物会在每层的过程中会删掉，
