@@ -1281,51 +1281,7 @@ namespace ArchiveFixer.ViewModels
         }
 
 
-        /// <summary>把"密码没通过"的任务登记到本批（只登记，不弹窗）。</summary>
-        private void RecordPasswordFailure(ArchiveTask task)
-        {
-            if (task == null)
-            {
-                return;
-            }
 
-            /*
-             * 三档（2026-10-01）：`PasswordOrCorrupted`（RAR 那句"文件已损坏或密码错误"）也算**密码类失败**。
-             *
-             * 为什么必须算：那一档恰恰是"最可能缺密码"的一档 —— 用户真机那批 RAR `-p` 包走的全是它，
-             * 而原来它既不被登记、批末那条提示（"下一步去密码页导入 / 在确认框里填"）也就**一次都不出现**，
-             * 用户只看到一行红字，不知道下一步该干什么。
-             *
-             * ⛔ 但**不许**因此把它说成确认的密码问题：引擎在那条路上本来就没法区分"密码错"与"数据坏"
-             *（§11.4 的 RAR 两义句），批末文案里必须带着"可能"。
-             */
-            if (task.Status != StatusText.WrongPassword &&
-                task.Status != StatusText.PasswordAttemptLimitReached &&
-                task.Status != StatusText.PasswordOrCorrupted)
-            {
-                return;
-            }
-
-            // 本批出现过"密码类失败"这个事实：批次结束后据此在合并提示里带上"手动输入密码"的出口。
-            _batchHadPasswordFailures = true;
-
-            string fileName = string.IsNullOrWhiteSpace(task.FileName)
-                ? Path.GetFileName(task.CurrentPath)
-                : task.FileName;
-
-            lock (_passwordFailuresLock)
-            {
-                _passwordFailures.Add((fileName, task.Status));
-            }
-        }
-
-        private void ClearPasswordFailures()
-        {
-            lock (_passwordFailuresLock)
-            {
-                _passwordFailures.Clear();
-            }
-        }
 
         // ================================================================ 缺卷补救（手动指定缺失卷所在目录）
 

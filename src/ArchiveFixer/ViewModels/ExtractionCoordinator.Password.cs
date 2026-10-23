@@ -3974,17 +3974,6 @@ namespace ArchiveFixer.ViewModels
             return _vm.OpenCompletedOutputDirectory(task.OutputPath);
         }
 
-        /// <summary>
-        /// 批开始时把手动密码清干净：**只对本次运行有效**（不变量 5）。
-        ///
-        /// 不是"记住上次输的密码"—— 那是持久化，红线。上一批输过什么，这一批重新问。
-        /// </summary>
-        private void ResetManualBatchPassword()
-        {
-            _manualBatchPasswords.Clear();
-            _manualPasswordPrompted = false;
-            _batchHadPasswordFailures = false;
-        }
 
         // ================================================================ 解压前的提醒（无用物 / 无可用密码）
 
@@ -4514,42 +4503,6 @@ namespace ArchiveFixer.ViewModels
             return answer.Confirmed;
         }
 
-        /// <summary>
-        /// B 段：需要密码、但当前**一个可用候选都没有**的包（"即使密码本已经预加载"的那种）。
-        ///
-        /// <para>判据与真正解压时**完全同一套参数**（同一个 <c>GetPasswordCandidates</c>、同一个统一密码开关、
-        /// 同一个旁路说明文件开关）：判据不一样就会出现"提醒说没有密码、结果它解开了"这种自相矛盾。</para>
-        ///
-        /// <para>⚠ 只判"有没有候选"，不判"到底加没加密" —— 后者是 <see cref="ArchiveTask.IsEncrypted"/>
-        /// （识别阶段的结论）。没有密码的普通包不在这一段范围内。</para>
-        /// </summary>
-        private List<ArchiveTask> FindTasksWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks)
-        {
-            var result = new List<ArchiveTask>();
-
-            foreach (ArchiveTask? task in tasks)
-            {
-                if (task == null || !(task.IsEncrypted ||
-                    string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal)))
-                {
-                    continue;
-                }
-
-                List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
-                    task,
-                    Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
-                    _passwordService.Passwords,
-                    Settings.TryEmptyPasswordFirst,
-                    Settings.EnableSidecarPassword);
-
-                if (!SourceJunkScanner.HasUsablePasswordCandidate(candidates))
-                {
-                    result.Add(task);
-                }
-            }
-
-            return result;
-        }
 
         /// <summary>批首写一条 WARN，把两段的结论都落进日志（数量 + 前几条名字）。</summary>
         private void LogReminderFindings(SourceJunkScanResult junk, IReadOnlyList<ArchiveTask> noPassword)
@@ -4801,121 +4754,7 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>
-        /// 「看起来要密码」**并且**用与解压同一套参数算下来**一个可用候选都没有**的那些包
-        /// —— 手动密码弹窗只在这些包存在时才问（2026-09-29 用户提问后收紧）。
-        ///
-        /// <para>⚠ 与 <c>FindTasksWithoutUsablePassword</c>（确认框那一段）的区别只有一个：
-        /// 这里把"引擎已经说过需要密码"（<see cref="StatusText.PasswordNeed"/>）也算嫌疑人 ——
-        /// RAR 这类容器的加密在识别阶段读不出来，只能等引擎列目录时才知道。</para>
-        /// </summary>
-        private List<ArchiveTask> FindSuspectsWithoutUsablePassword(IReadOnlyList<ArchiveTask> tasks)
-        {
-            var result = new List<ArchiveTask>();
 
-            foreach (ArchiveTask? task in tasks)
-            {
-                if (task == null)
-                {
-                    continue;
-                }
-
-                bool suspect = task.IsEncrypted ||
-                    string.Equals(task.PasswordStatus, StatusText.PasswordNeed, StringComparison.Ordinal);
-
-                if (!suspect)
-                {
-                    continue;
-                }
-
-                List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
-                    task,
-                    Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
-                    _passwordService.Passwords,
-                    Settings.TryEmptyPasswordFirst,
-                    Settings.EnableSidecarPassword);
-
-                if (!SourceJunkScanner.HasUsablePasswordCandidate(candidates))
-                {
-                    result.Add(task);
-                }
-            }
-
-            return result;
-        }
-
-        /// <summary>
-        /// 手动密码的候选位置：插在**空密码之后**（<paramref name="insertAfterEmpty"/> 为 true 时），
-        /// 否则追加到末尾。
-        ///
-        /// <para>
-        /// 为什么不是最前：空密码是"无密码包"的必经一步，而且它是零成本的一次尝试（不进密码循环也不亏）。
-        /// 为什么排在密码本之前：手动输入是用户**刚刚**给出的信息，比密码本里的历史条目更"新"；
-        /// 而且它通常就是那个包真正需要的密码，早点试能省掉一大圈无谓试错。
-        /// </para>
-        /// <para>
-        /// 传 null / 空串时什么都不做（空密码已经由调用方自己保证了）。
-        /// </para>
-        /// </summary>
-        private static void InsertManualPasswordCandidates(
-            List<PasswordItem> candidates,
-            IReadOnlyList<string>? manualPasswords,
-            string remark = "本次运行手动输入（不落盘）")
-        {
-            if (candidates == null || manualPasswords == null || manualPasswords.Count == 0)
-            {
-                return;
-            }
-
-            var additions = new List<PasswordItem>();
-
-            foreach (string manual in manualPasswords)
-            {
-                if (string.IsNullOrEmpty(manual))
-                {
-                    continue;
-                }
-
-                if (candidates.Any(item => string.Equals(item?.Value, manual, StringComparison.Ordinal)))
-                {
-                    continue;
-                }
-
-                if (additions.Any(item => string.Equals(item.Value, manual, StringComparison.Ordinal)))
-                {
-                    continue;
-                }
-
-                additions.Add(new PasswordItem
-                {
-                    Value = manual,
-                    Source = ManualPasswordSource,
-                    IsEnabled = true,
-                    Remark = remark
-                });
-            }
-
-            if (additions.Count == 0)
-            {
-                return;
-            }
-
-            /*
-             * 整批插在**空密码之后**：空密码是"无密码包"的必经一步、零成本；
-             * 手动输入排在密码本之前 —— 它是用户刚刚给出的信息，比历史条目更"新"。
-             * ⛔ 用 InsertRange 一次插完（逐条插会把先插的挤到后面，顺序就反了）。
-             */
-            int index = candidates.FindIndex(
-                item => string.Equals(item?.Source, "Empty", StringComparison.Ordinal));
-
-            if (index >= 0 && index < candidates.Count - 1)
-            {
-                candidates.InsertRange(index + 1, additions);
-                return;
-            }
-
-            candidates.AddRange(additions);
-        }
 
         /// <summary>
         /// 一键档的密码提示（用户 2026-09-29 第二次改口径）：**不在批中间弹任何框、也不在面板里放输入框**

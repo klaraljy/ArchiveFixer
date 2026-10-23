@@ -594,78 +594,7 @@ namespace ArchiveFixer.ViewModels
             }
         }
 
-        /// <summary>
-        /// 给递归层提供密码候选（只给值，不给来源说明）。
-        /// 顺序与单层解压完全一致 —— 递归的内层包同样是"用户的包"，不该用另一套规则。
-        ///
-        /// <para>⚠ 2026-10-05（只读审计）这一处改了两件事，两件都关系到"用户刚输的密码到底试没试"：</para>
-        /// <list type="number">
-        /// <item><b>本批手动输入的密码也要进来</b>：它过去只插进单层路径的候选表
-        /// （<c>_manualBatchPasswords</c> 的唯一使用点），递归这条路拿不到 ⇒ 用户刚输对密码、
-        /// 内层包照样报「密码错误」。做法是**转调同一个** <see cref="InsertManualPasswordCandidates"/>
-        /// （插在空密码之后 + 去重，⛔ 不抄第二份判据）。</item>
-        /// <item><b>这里不再截断</b>：老写法 <c>.Take(MaxPasswordAttemptsPerLayer)</c> 在递归内部
-        /// "跳过空密码"那一步**之前**执行，而跳空密码只减账不减表 ⇒ 真实候选最多只试到 9 个
-        /// （每层上限 10）。截断改由各调用方自己按同一个上限做：递归核心的层循环本来就有
-        /// <c>attempts &gt;= MaxPasswordAttemptsPerLayer</c> 这一道，而"分卷试开"那三条调用点
-        /// 必须自己截（见 <see cref="BuildVolumeProbePasswordCandidates"/>）——
-        /// 否则 <c>VolumeProbeVerifier</c> 会对"每种排列 × 整份候选表"跑一遍试开，工作量放大几十倍。</item>
-        /// </list>
-        /// </summary>
-        /// <param name="sourceSink">
-        /// 可空：算完之后把这一层的「候选值 → 来源」写进去（先清空再写）。
-        /// 递归层的日志只能靠它说清来源（见 <see cref="ResolveCandidateSourceForLog"/>）——
-        /// 「本批已成功 / 密码本命中 / 说明文件旁路 / 手动输入」这些按值回查密码列表是答不出来的。
-        /// </param>
-        internal IReadOnlyList<string> BuildRecursionPasswordCandidates(
-            string archivePath,
-            IDictionary<string, string>? sourceSink = null)
-        {
-            var probe = new ArchiveTask(archivePath);
 
-            List<PasswordItem> candidates = _passwordService.GetPasswordCandidates(
-                probe,
-                Settings.UseGlobalPasswordForAllTasks ? GlobalPassword : string.Empty,
-                _passwordService.Passwords,
-                Settings.TryEmptyPasswordFirst,
-                Settings.EnableSidecarPassword);
-
-            InsertManualPasswordCandidates(candidates, _manualBatchPasswords);
-
-            /*
-             * 顺手记一份「值 → 来源」：来源本来就由 PasswordService 给（它的候选表里带着 Source），
-             * 这里只是**搬一次**，⛔ 不重新推、也不猜。每次算候选都整份重建 ——
-             * 上一层（或上一个包）的来源不许留到这一层来（旁路说明文件就是按归档路径算的）。
-             */
-            if (sourceSink != null)
-            {
-                sourceSink.Clear();
-
-                foreach (PasswordItem item in candidates)
-                {
-                    sourceSink[item.Value ?? string.Empty] = item.Source ?? string.Empty;
-                }
-            }
-
-            return candidates
-                .Select(p => p.Value ?? string.Empty)
-                .ToList();
-        }
-
-        /// <summary>
-        /// 「分卷试开」（<c>VolumeNameRepair.PlanByContentAsync</c> 系列）用的候选表：
-        /// **同一个 provider，但在这里截到每层上限**。
-        ///
-        /// <para>为什么要单独一个出口：<see cref="BuildRecursionPasswordCandidates"/> 现在给的是
-        /// **不截断**的完整候选表（递归核心内部自己按上限停手），而试开那一步的对账方式是
-        /// "每种卷序 × 每个候选都真跑一次 <c>TestAsync</c>" —— 几百个候选进去就是几十倍的无谓引擎调用。
-        /// 三条调用点（同目录 / 无名那两档 + 跨目录放宽那一档）全部走这一个方法，
-        /// ⛔ 不许各自 <c>.Take</c> 一遍（那正是"同一件事两个出口"的起点）。</para>
-        /// </summary>
-        internal IReadOnlyList<string> BuildVolumeProbePasswordCandidates(string archivePath) =>
-            BuildRecursionPasswordCandidates(archivePath)
-                .Take(MaxPasswordAttemptsPerLayer)
-                .ToList();
 
         /// <summary>
         /// 递归解压一个任务，并把结果落到任务状态上。
