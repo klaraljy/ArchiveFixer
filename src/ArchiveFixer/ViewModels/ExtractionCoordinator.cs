@@ -1954,52 +1954,8 @@ namespace ArchiveFixer.ViewModels
                     return false;
                 }
 
-                task.Status = StatusText.ExtractFailed;
-                task.ProgressText = StatusText.ProgressFailed;
-                task.ErrorMessage = work.Verification.FailureMessage;
-                task.VerifyMessage = work.Verification.FailureMessage;
-                /*
-                 * ⚠ 2026-10-17（用户 2026-09-27 口径「包没加密 ⇒ 不许把结论写成密码错误」）：
-                 * 这一支原来只写校验那一句（递归路实测：`PasswordStatus` 一个字都不写、文案里也没有"没有加密"）
-                 * ⇒ 用户看到「未检测」与一句不指向密码的失败原因。判据只读**机器事实**：
-                 * `PasswordStatus == 不需要密码`（由 `ApplyRecursionResult` 按"某一层清单成功且 IsEncrypted=false"落下）。
-                 */
-                if (task.PasswordStatus == StatusText.PasswordNotNeeded)
-                {
-                    task.ErrorMessage += "（这个包没有加密：清单里没有加密条目，换密码不会改变结果，问题不在密码上）";
-                }
-                /*
-                 * ⚠ 2026-10-17（同一条要求的另一半）：**试了几个候选**必须写进原因 ——
-                 * 与单层路同一句话（`（已试 N 个候选，产物始终不完整）`），事实由 `ApplyRecursionResult`
-                 * 从层报告带到任务上；⛔ 没试过（0）⇒ 不写（老口径不动）。
-                 */
-                /*
-                 * ⚠ 2026-10-23 修（拆分第 5 步时发现的结构错误）：上一版把这两段拼坏了 ——
-                 * 第一个 if 的空体被后面那个 if 顶替，末尾那个 `{ … }` 变成了**无条件执行**
-                 * ⇒ 没试过候选的单也会被追加"（已试 0 个候选…）"。现在两段各自成块、各带自己的判据。
-                 */
-                if (task.RecursionTriedCandidateCount > 0
-                    && !task.ErrorMessage.Contains("产物始终不完整", StringComparison.Ordinal))
-                {
-                    task.ErrorMessage += $"（已试 {task.RecursionTriedCandidateCount} 个候选，产物始终不完整）";
-                }
-
-                if (task.RecursionCandidatesIdentical
-                    && !task.ErrorMessage.Contains("完全相同", StringComparison.Ordinal))
-                {
-                    task.ErrorMessage += "（连续两个候选解出来的产物完全相同，换密码不会改变结果）";
-                }
-
-                /*
-                 * 机器事实要落成 **Failed**，不能停在"没通过校验"的含糊档：
-                 * 调用方（候选循环收尾）与汇总都靠"这一档"区分"校验判否"与
-                 * "越界 / 超预算 / 定稿失败"那些**其它**失败（它们的字段是 NotAttempted）。
-                 */
-                task.OutputVerification = OutputVerificationOutcome.Failed;
-                task.Outcome = TaskOutcome.Failed;
-                task.LastUpdatedTime = DateTime.Now;
-
-                AppendLog("ERROR", $"{task.LogName}：{work.Verification.FailureMessage}；不落「解压成功」，源包一个字节都不动。");
+                // 这一支整族搬进唯一出口 `Extraction/PostProcessFailureWriter`（一次只搬这一个功能族）。
+                PostProcessFailureWriter.Write(task, work.Verification.FailureMessage, AppendLog);
                 return false;
             }
 
