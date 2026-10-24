@@ -134,10 +134,18 @@ $samples = @(
     @{ Id = 'H03'; Family = '落点'; Title = '指定位置模式（落点 = 指定根 / 包名 / 内容物）'
        Build = 'zip'; Mode = 'custom'; Expect = @{ BodyKind = 'SingleComplete'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt'); Landing = '指定位置' } },
 
-    # V 第二大步（1）
+    # V 第二大步（2）
     @{ Id = 'V01'; Family = '第二大步'; Title = '完整的 7z 三卷组（可证完整 ⇒ 第二大步接住、只解一层）'
        Build = 'volcomplete'; SizeKb = 3072
-       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '内容卡', '第二大步入口任务') } }
+       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '内容卡', '第二大步入口任务') } },
+
+    @{ Id = 'V02'; Family = '第二大步'; Title = '外层 zip 里装 7z 三卷组（程序产出的片 ⇒ 搬进入口层 + 成功后收片）'
+       Build = 'nestedvol'; SizeKb = 3072
+       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'Zip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '第二大步·搬进入口层', '第二大步·收片') } },
+
+    @{ Id = 'V03'; Family = '第二大步'; Title = '7z 三卷组散在两个目录（用户原件 ⇒ 入口层只建硬链接、成功后只收链接）'
+       Build = 'volscatter'; SizeKb = 3072
+       Expect = @{ BodyKind = 'VolumeFirstPiece'; Format = 'SevenZip'; Outcome = 'Succeeded'; Content = @('说明.txt', '数据.bin'); LogContains = @('格式：', '第二大步·搬进入口层', '硬链接', '第二大步·收片') } }
 )
 
 if ($List) {
@@ -406,6 +414,36 @@ foreach ($s in $samples) {
                 $pieceIndex++
             }
             $outFile = Join-Path $dir '样本包.7z.001'
+            break
+        }
+        'nestedvol' {
+            # 外层 zip 里装一组 7z 分卷（程序产出）⇒ 第二大步要搬片 + 成功后收片
+            $volBase = Join-Path $dir '.inner.7z'
+            Run-7z @('a', '-t7z', '-mx=1', '-v1m', $volBase, (Join-Path $contentDir '*'))
+            $wrapDir = Join-Path $dir '.wrap'
+            New-Item -ItemType Directory -Path $wrapDir -Force | Out-Null
+            $pieceIndex = 1
+            foreach ($piece in Get-ChildItem -LiteralPath $dir -Filter '.inner.7z.*' | Sort-Object Name) {
+                Move-Item -LiteralPath $piece.FullName -Destination (Join-Path $wrapDir ("内层组.7z.{0:D3}" -f $pieceIndex))
+                $pieceIndex++
+            }
+            New-SingleArchive -Kind 'zip' -ContentDir $wrapDir -OutFile $outFile
+            break
+        }
+        'volscatter' {
+            # 同一组 7z 分卷散在两个目录：第 1 片在「甲」、其余在「乙」⇒ 第二大步搬片时只建硬链接、原件不动
+            $volBase = Join-Path $dir '.vol.7z'
+            Run-7z @('a', '-t7z', '-mx=1', '-v1m', $volBase, (Join-Path $contentDir '*'))
+            $dirA = Join-Path $dir '甲'
+            $dirB = Join-Path $dir '乙'
+            New-Item -ItemType Directory -Path $dirA, $dirB -Force | Out-Null
+            $pieceIndex = 1
+            foreach ($piece in Get-ChildItem -LiteralPath $dir -Filter '.vol.7z.*' | Sort-Object Name) {
+                $targetDir = if ($pieceIndex -eq 1) { $dirA } else { $dirB }
+                Move-Item -LiteralPath $piece.FullName -Destination (Join-Path $targetDir ("组.7z.{0:D3}" -f $pieceIndex))
+                $pieceIndex++
+            }
+            $outFile = Join-Path $dirA '组.7z.001'
             break
         }
         'textzip' {

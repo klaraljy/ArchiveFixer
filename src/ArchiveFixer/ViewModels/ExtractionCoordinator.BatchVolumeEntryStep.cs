@@ -83,37 +83,11 @@ namespace ArchiveFixer.ViewModels
 
             List<GroupAnalysis.GroupCandidate> groups = GroupAnalysis.Analyze(seeds, roots);
 
-            foreach (GroupAnalysis.GroupCandidate group in groups)
-            {
-                if (group == null || group.Verdict != GroupAnalysis.GroupAnalysisVerdict.Complete
-                    || string.IsNullOrWhiteSpace(group.EntryPath))
-                {
-                    continue;
-                }
-
-                ArchiveTask? entryTask = null;
-
-                foreach (ArchiveTask candidate in tasks)
-                {
-                    if (candidate != null
-                        && string.Equals(candidate.CurrentPath, group.EntryPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        entryTask = candidate;
-                        break;
-                    }
-                }
-
-                if (entryTask == null)
-                {
-                    continue;
-                }
-
-                RememberVolumeStepTask(entryTask);
-
-                AppendLog(
-                    "INFO",
-                    $"[第二大步·组分析] {group.BaseName}：可证完整（{group.Pieces.Count} 片）—— 入口={FileNameHelper.GetFileName(group.EntryPath)}，这一单只解这一层。");
-            }
+            /*
+             * 点名、搬进入口层、登记收片账 —— 全部走**同一个出口**（与轮边界那一遍共用），
+             * ⛔ 不在批首再写第二份。
+             */
+            TryMarkHandoffGroupEntryTasks(groups, tasks);
         }
 
         /// <summary>

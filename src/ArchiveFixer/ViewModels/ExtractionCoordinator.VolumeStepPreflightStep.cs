@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -119,6 +120,53 @@ namespace ArchiveFixer.ViewModels
             AppendLog("INFO", $"{task.LogName}：分卷已补齐，源文件快照重新记录（{task.VolumeCount} 卷）。");
 
             return false;
+        }
+
+        /// <summary>第二大步入口任务 ⇒ 它这一组的入口层与片清单（成功后收片用；批首清空）。</summary>
+        private readonly Dictionary<ArchiveTask, VolumeStepGroupWork> _volumeStepGroupWork = new();
+
+        private sealed record VolumeStepGroupWork(string EntryLayer, IReadOnlyList<string> Pieces);
+
+        /// <summary>批首清空（与交接账同一处调用）：⛔ 不许把上一批的收片账带进下一批。</summary>
+        internal void ResetVolumeStepGroupWork()
+        {
+            _volumeStepGroupWork.Clear();
+        }
+
+        /// <summary>
+        /// **P3b 第二步：成功收片 / 失败留片**（用户 2026-10-21 口径）。
+        ///
+        /// <para>成功（校验通过）⇒ 入口层里这一组的片按过程物删掉，**用户导入的原件不删**（唯一判据
+        /// <see cref="IsUserImportedSourcePath"/>）；失败 / 密码错 / 缺卷 ⇒ 调用方**不调**本方法，
+        /// 片全部留在入口层等补密码（这里也留一道保险：没成功只写一行、一个字节不动）。</para>
+        /// </summary>
+        internal void TryPurgeSolvedVolumeStepPieces(ArchiveTask task)
+        {
+            if (task == null || !_volumeStepGroupWork.TryGetValue(task, out VolumeStepGroupWork? work))
+            {
+                return;
+            }
+
+            if (task.Outcome != TaskOutcome.Succeeded)
+            {
+                AppendLog(
+                    "INFO",
+                    $"[第二大步·收片] {task.LogName}：{task.Outcome} ⇒ 入口层里的片全部留着"
+                    + "（失败 / 密码错 / 缺卷不删，等补密码）。");
+                return;
+            }
+
+            int deleted = ArchiveFixer.Extraction.VolumeGroupEntryLayer.PurgeSolvedGroupPiecesInEntryLayer(
+                work.Pieces,
+                work.EntryLayer,
+                path => IsUserImportedSourcePath(path),
+                (level, message) => AppendLog(level, $"[第二大步·收片] {message}"));
+
+            AppendLog(
+                "INFO",
+                $"[第二大步·收片] {task.LogName}：成功 ⇒ 入口层里删掉 {deleted} 片（用户原件不删）。");
+
+            _volumeStepGroupWork.Remove(task);
         }
     }
 }

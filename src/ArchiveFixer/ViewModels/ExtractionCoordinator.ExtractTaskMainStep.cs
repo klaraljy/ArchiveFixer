@@ -150,6 +150,12 @@ namespace ArchiveFixer.ViewModels
                     + $"自述片数={(entryCard.DeclaredVolumeCount > 0 ? entryCard.DeclaredVolumeCount + " 片" : "判不出")}。");
 
                 await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
+
+                /*
+                 * P3b 收片（用户 2026-10-21 口径）：成功 ⇒ 入口层里这一组的片按过程物删掉；
+                 * 失败 / 密码错 / 缺卷 ⇒ 一个字节不动（方法内部还有一道保险）。
+                 */
+                TryPurgeSolvedVolumeStepPieces(task);
             }
             catch (OperationCanceledException)
             {

@@ -288,6 +288,7 @@ namespace ArchiveFixer.ViewModels
                 _volumeGroupEntriesThisBatch.Clear();
                 _volumeDeficitFinalPass.Clear();
                 ClearVolumeHandoffLedger();
+                ResetVolumeStepGroupWork();
             }
 
             try

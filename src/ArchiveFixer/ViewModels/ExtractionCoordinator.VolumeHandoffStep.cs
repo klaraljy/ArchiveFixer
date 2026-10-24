@@ -576,11 +576,29 @@ namespace ArchiveFixer.ViewModels
                 MarkVolumeHandoffConsumed(group.Pieces, "第二大步·点名");
                 result.Add(entryTask);
 
+                /*
+                 * ===== P3b 第一步：搬进入口层 =====
+                 * 程序产出的片同卷搬、跨卷复制；**用户导入的原件只建零字节硬链接**（源目录只读红线）。
+                 * 判据由唯一出口 `IsUserImportedSourcePath` 回答；⛔ 目标名被占 ⇒ 不覆盖、写清原因。
+                 */
+                string entryLayer = Path.GetDirectoryName(group.EntryPath) ?? string.Empty;
+
+                ArchiveFixer.Extraction.VolumeGroupEntryLayer.MoveResult moved =
+                    ArchiveFixer.Extraction.VolumeGroupEntryLayer.MovePiecesIntoEntryLayer(
+                        group.Pieces,
+                        entryLayer,
+                        path => IsUserImportedSourcePath(path),
+                        (level, message) => AppendLog(level, $"[第二大步·搬进入口层] {message}"));
+
+                AppendLog("INFO", $"[第二大步·搬进入口层] {group.BaseName}：{moved.Describe()}");
+
+                _volumeStepGroupWork[entryTask] = new VolumeStepGroupWork(entryLayer, group.Pieces);
+
                 AppendLog(
                     "INFO",
                     $"[第二大步·接住] {group.BaseName}：可证完整（{group.Pieces.Count} 片，{group.Evidence}）"
                     + $"—— 入口={FileNameHelper.GetFileName(group.EntryPath)}，这一单只解这一层"
-                    + "（本轮只点名：不搬片、不改名、不动盘）。");
+                    + "（片已按上一条处理：程序产出搬、用户原件只建链接）。");
             }
 
             return result;
