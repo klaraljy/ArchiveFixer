@@ -84,23 +84,16 @@ namespace ArchiveFixer.ViewModels
                  */
 
                 /*
-                 * **第二大步入口那一单例外**（用户 2026-10-24）：被点名成第二大步任务的入口卷，
-                 * 闸门**放行**它去解这一组（只解一层由 `_volumeStepTasks` 保证）；其余分卷成员照旧跳过+交接。
-                 */
-                bool isSecondStepEntry = IsSingleLayerRecursion(task);
-
-                /*
-                 * 闸门判定必须留下判据输入（用户 2026-10-24「日志做到详细」）：
-                 * 事后只看一行就知道这一单是按"分卷成员"跳过的、还是按"第二大步入口"放行的。
+                 * 第一大步**只登记、不操作**（用户 2026-10-24 拍板）：内容卡证明是分卷成员的，
+                 * 一律在这里跳过并登记交接事实；⛔ 不再放行、不再点名、不再搬片。
+                 * 原「第二大步入口例外」整段已停用（实现搬去 `SecondStepResidue`）。
                  */
                 AppendLog(
                     "INFO",
-                    $"{task.LogName}：闸门判定 —— 第二大步任务={isSecondStepEntry}，"
-                    + $"内容身份={entryCard.BodyKind}，族={entryCard.Format}。");
+                    $"{task.LogName}：闸门判定 —— 内容身份={entryCard.BodyKind}，族={entryCard.Format}。");
 
-                if (!isSecondStepEntry
-                    && (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
-                        || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece))
+                if (entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumeFirstPiece
+                    || entryCard.BodyKind == ArchiveFixer.Detection.ArchiveBodyKind.VolumePiece)
                 {
                     ArchiveFixer.Detection.VolumeHandoffEntry handoff = RegisterVolumeHandoff(task, entryCard);
 
@@ -126,14 +119,6 @@ namespace ArchiveFixer.ViewModels
                     return;
                 }
 
-                if (isSecondStepEntry)
-                {
-                    AppendLog(
-                        "INFO",
-                        $"{task.LogName}：第二大步入口任务（只解一层）—— 闸门放行，不按分卷成员跳过"
-                        + $"（族={entryCard.Format}，内容身份={entryCard.BodyKind}）。");
-                }
-
                 /*
                  * 放行的这一档也把内容卡事实写一行（用户 2026-10-24「文件的信息有没有记录」）：
                  * 后面"解压 / 闸门"的判定都读这一组事实，事后只看日志就能复核。
@@ -152,10 +137,10 @@ namespace ArchiveFixer.ViewModels
                 await ExtractSingleTaskAsync(task, taskCts.Token, oneClickRun);
 
                 /*
-                 * P3b 收片（用户 2026-10-21 口径）：成功 ⇒ 入口层里这一组的片按过程物删掉；
-                 * 失败 / 密码错 / 缺卷 ⇒ 一个字节不动（方法内部还有一道保险）。
+                 * P3b 收片：已停用（用户 2026-10-24：第一大步不许动分卷）。
+                 * 实现仍在 `SecondStepResidue/ExtractionCoordinator.VolumeStepPreflightStep.cs` 的
+                 * `TryPurgeSolvedVolumeStepPieces`，重建第二大步时去那儿挑。
                  */
-                TryPurgeSolvedVolumeStepPieces(task);
             }
             catch (OperationCanceledException)
             {
@@ -327,16 +312,10 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * ===== 第二大步（组入口那一单）的开工前检查 =====
-             * 缺卷不开工 / 现读盘上事实、齐了就照常跑 / 缺卷不许在批首判死（记延期账、批末再判）/
-             * 最后一遍仍缺才如实报缺卷 —— 判据与执行体全在分卷侧（唯一出口
-             * `TryStopVolumeStepBeforeStartAsync`）；第一大步这里只调一次，⛔ 自己不再判分卷。
+             * ===== 分卷开工前检查：已停用（用户 2026-10-24 拍板）=====
+             * 原来这里对第二大步入口单调 `TryStopVolumeStepBeforeStartAsync`（缺卷不开工 / 现读盘 / 延期账）。
+             * 第一大步不再碰分卷；实现仍在 `SecondStepResidue/ExtractionCoordinator.VolumeStepPreflightStep.cs`。
              */
-            if (IsSingleLayerRecursion(task)
-                && await TryStopVolumeStepBeforeStartAsync(task, oneClickRun, cancellationToken).ConfigureAwait(true))
-            {
-                return;
-            }
 
             bool tryExtractUnknown = Settings.UnknownFormatAction == "TryExtract";
 
@@ -519,14 +498,10 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * 落点为什么在这一层（用户 2026-10-05 口径："落在**第一卷的位置**"）——
-             * 这是第二大步的落点解释：判据与日志都在分卷侧（唯一出口 `LogVolumeGroupFirstVolumeLanding`），
-             * ⛔ 第一大步不自己读整组事实、不另算一遍落点。
+             * 落点为什么在这一层（用户 2026-10-05 口径："落在**第一卷的位置**"）：
+             * 这行日志属于第二大步的解释，已停用（用户 2026-10-24）—— 实现随
+             * `VolumeHandoffStep.cs` 一起搬到 `SecondStepResidue/`，重建第二大步时去那儿挑。
              */
-            if (placement.Success)
-            {
-                LogVolumeGroupFirstVolumeLanding(task, outputPath);
-            }
 
             /*
              * 落点算不出来时必须**当场停下**（必修项，2026-09-21）。

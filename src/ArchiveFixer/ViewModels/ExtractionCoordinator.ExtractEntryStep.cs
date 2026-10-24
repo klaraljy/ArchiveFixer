@@ -283,12 +283,16 @@ namespace ArchiveFixer.ViewModels
                 _producerSourcesCollected.Clear();
                 _adoptedLandedPieces.Clear();
                 _groupLayerByBaseName.Clear();
-                _volumeStepTasks.Clear();
                 _volumeGroupEntriesThisBatch.Clear();
                 _volumeGroupEntriesThisBatch.Clear();
                 _volumeDeficitFinalPass.Clear();
+
+                /*
+                 * 只留交接账（第一大步唯一允许的分卷动作 = **登记**）；
+                 * `_volumeStepTasks` / `ResetVolumeStepGroupWork`（第二大步的任务位与收片账）已随第二大步停用，
+                 * 不再在第一大步批首清理。
+                 */
                 ClearVolumeHandoffLedger();
-                ResetVolumeStepGroupWork();
             }
 
             try
@@ -853,18 +857,17 @@ namespace ArchiveFixer.ViewModels
              * （它自己再转调 `VolumeGroupDetector.Group` + `VolumeGroupingService.ApplyGroupInfo`，
              * 与扫描期、手动档完全同一条路）；归不上组 ⇒ 什么都不动（与以前一样）。
              */
-            foreach (ArchiveTask groupingTarget in selectedTasks)
-            {
-                if (groupingTarget != null && !groupingTarget.IsVolumeGroup)
-                {
-                    OneClickCoordinator.ApplyVolumeGroupingFromDirectory(groupingTarget);
-                }
-            }
-
             WorkspaceRootResolution workspaceResolution = ApplyBatchWorkspaceRoot(selectedTasks);
 
-            // 第二大步点名：批首只读组分析，把可证完整那一组的入口任务标成第二大步（只解一层）。
-            MarkVolumeStepEntriesForBatch(selectedTasks);
+            /*
+             * ===== 分卷批首归组 / 点名：已整段搬到 `SecondStepResidue`（用户 2026-10-24 拍板）=====
+             *
+             * 原来这里先 `ApplyVolumeGroupingFromDirectory`（按目录归组）再
+             * `MarkVolumeStepEntriesForBatch`（组分析 + 点名第二大步入口 + 搬/链接片）。
+             * 第一大步不再做任何分卷操作；实现仍在
+             * `src/ArchiveFixer/SecondStepResidue/ExtractionCoordinator.BatchVolumeEntryStep.cs`，
+             * 重建第二大步时去那儿挑可用的。
+             */
 
             if (!workspaceResolution.Resolved)
             {
@@ -998,9 +1001,6 @@ namespace ArchiveFixer.ViewModels
              * "连续不缩小才计数"那种写法在振荡下永远到不了阈值，等于没修。
              * 这里要的是**保证终止**，所以数的是总趟数。
              */
-            const int MaxVolumeRecheckPasses = 20;
-            int volumeRecheckPasses = 0;
-
             while (true)
             {
                 while (runningTasks.Count > 0)
@@ -1072,67 +1072,14 @@ namespace ArchiveFixer.ViewModels
                 }
 
                 /*
-                 * ===== 批末补判「缺卷」（用户 2026-10-05 口径 2）=====
+                 * ===== 分卷批末补判：已整段搬到 `SecondStepResidue`（用户 2026-10-24 拍板）=====
                  *
-                 * 判据与执行体都在 `RecheckDeferredVolumeDeficits` 里：再收一次卷 → 现归一次组
-                 * → 齐了就返回该补跑的那几单；仍然缺 ⇒ 一键档留给链尾（还有后续轮次）、
-                 * 手动档**到这里**才如实报缺卷。
-                 *
-                 * ⛔ 兜底：这个方法要么给出"该跑的那几单"，要么把状态落定 —— 绝不会让名单里的任务
-                 * 停在"没人管"那一档（唯一例外是整条链被用户停下，那时它如实留在「未处理」）。
+                 * 第一大步只许「登记信息」，⛔ 不许再收卷 / 归组 / 补跑 / 把疑似片升级成缺卷。
+                 * 原来这里的 `RecheckDeferredVolumeDeficitsAsync`（整个补跑环）与
+                 * `UpgradeUnrecognizedMaybePieceVerdicts`（升级「分卷缺失」）已停用；
+                 * 实现仍在 `src/ArchiveFixer/SecondStepResidue/`，重建第二大步时去那儿挑。
                  */
-                List<ArchiveTask> deferredVolumeTasks = await RecheckDeferredVolumeDeficitsAsync(
-                    finalPass: !oneClickRun,
-                    // 这一站没有 CancellationToken 在手（老签名就没有）⇒ 传 None，与改成 async 之前等价。
-                    CancellationToken.None).ConfigureAwait(false);
-
-                /*
-                 * 「7-Zip 打不开」的那一份若看着就是本批某一组的一片 ⇒ 到这里才按**严格判据**
-                 * 升级成「分卷缺失」（用户 2026-10-09 口径：未识别的先跳过、到了最后再重新检验一步）。
-                 * ⚠ 2026-10-17：这两个成员从 2026-10-16 加进来就一直**没有调用点**（名单只写不读）⇒ 本处补上。
-                 * 幂等：只动机器终态还是「已跳过」的那几单。
-                 */
-                UpgradeUnrecognizedMaybePieceVerdicts();
-
-                if (deferredVolumeTasks.Count == 0)
-                {
-                    break;
-                }
-
-                /*
-                 * 保命护栏（见上面那段说明）：**总趟数硬上限**。
-                 *
-                 * 正常情形下一两趟就清空名单（每一趟会把名单里所有能补上的组一次性补齐）；
-                 * 到了上限还在打转，说明批末补判与开工前预检对同一组给出的结论相反 ——
-                 * ⛔ 再判下去只会把日志写爆、把这一批永远挂住 ⇒ 停下 + 点名 + 如实留在「未处理」。
-                 */
-                volumeRecheckPasses++;
-
-                if (volumeRecheckPasses > MaxVolumeRecheckPasses)
-                {
-                    int stillDeferred = _volumeDeficitDeferred.Count;
-
-                    AppendLog(
-                        "WARN",
-                        string.Format(
-                            System.Globalization.CultureInfo.CurrentCulture,
-                            StatusText.VolumeRecheckPassLimitReachedFormat,
-                            volumeRecheckPasses,
-                            stillDeferred,
-                            string.Join(
-                                "、",
-                                _volumeDeficitDeferred.Take(5).Select(item => item.LogName))));
-
-                    break;
-                }
-
-                foreach (ArchiveTask deferredTask in deferredVolumeTasks)
-                {
-                    runningTasks.Add(RunScheduledTaskAsync(
-                        deferredTask,
-                        oneClickRun,
-                        GetOrCreateRuntime(deferredTask)));
-                }
+                break;
             }
         }
     }

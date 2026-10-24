@@ -1168,49 +1168,13 @@ namespace ArchiveFixer.ViewModels
                      * 直接 `break` 跳过它（实测：EEE ③ 一点没变）。
                      */
                     /*
-                     * [第二大步·组分析]（2026-10-23 用户口径：「基名 + 大小分布」是基石；2026-10-24 补：吃交接单）：
-                     * 种子 = 第一大步登记的交接事实 **+ 这一轮认出来的内层归档**；
-                     * 根 = 全批产物根 **+ 用户源目录**（分卷散在不同文件夹是常态，⛔ 不许只看一个目录）。
+                     * ===== 第二大步（组分析 / 收卷）：已整段停用并搬到 `SecondStepResidue`
+                     * （用户 2026-10-24：这些都不属于第一大步；重建第二大步时去残留里挑）=====
                      *
-                     * 本轮它仍然**只落事实行**：组事实 / 入口 / 缺片都如实写出来，
-                     * 改名与搬运仍由分卷专属算法在第二大步里做（⛔ 这里一个字节都不动盘）。
+                     * 原来这里跑：`GroupAnalysis.Analyze`（吃交接单 + 内层归档）→ 打 `[第二大步·组分析]`
+                     * → `HarvestSolvedGroupVolumesForRound`（记已解开的组）。
+                     * 现在一次都不跑；交接事实仍由第一大步登记，留给将来重建的第二大步消费。
                      */
-                    var handoffGroups = new List<GroupAnalysis.GroupCandidate>();
-
-                    try
-                    {
-                        List<string> groupRoots = innerArchives
-                            .Select(candidate => candidate.ParentOutputDirectory)
-                            .Concat(Tasks.Select(task => task.OutputPath))
-                            .Concat(_extractionCoordinator.VolumeHandoffEntries.Select(entry => entry.SourceLayer))
-                            .Where(directory => !string.IsNullOrWhiteSpace(directory))
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .ToList();
-
-                        /*
-                         * 交接单 + 这一轮认出来的内层归档，合成**一次**组分析（用户 2026-10-24）：
-                         * 交接单里的片直接用交接单的底层事实（族 / 卷号 / 首卷 / 自述片数 / 自述整包），
-                         * ⛔ 不重读盘识别；内层归档不在交接单里，仍按盘上证据判。
-                         */
-                        foreach (GroupAnalysis.GroupCandidate group in GroupAnalysis.Analyze(
-                                     _extractionCoordinator.VolumeHandoffEntries,
-                                     groupRoots,
-                                     innerArchives.Select(candidate => candidate.Path)))
-                        {
-                            handoffGroups.Add(group);
-                            AppendLog("INFO", $"[第二大步·组分析] {group.Describe()}");
-                        }
-                    }
-                    catch (Exception probeError)
-                    {
-                        AppendLog(
-                            "WARN",
-                            $"[第二大步·组分析] 跳过：{probeError.GetType().Name}：{probeError.Message}");
-                    }
-                    foreach (string solvedEntry in roundSummary.VolumeEntries)
-                    {
-                        _extractionCoordinator.HarvestSolvedGroupVolumesForRound(solvedEntry);
-                    }
 
                     foreach (string line in scanLog)
                     {
@@ -1218,13 +1182,11 @@ namespace ArchiveFixer.ViewModels
                     }
 
                     /*
-                     * **P3a 第二大步接住**（用户 2026-10-24）：可证完整的交接组，把入口那一份点名为
-                     * 第二大步任务（只解一层）。⛔ 只点名：不搬片、不改名、不动盘。
+                     * **P3a 第二大步接住**：已整段停用（用户 2026-10-24）。
+                     * 实现（`TryMarkHandoffGroupEntryTasks`、搬/链接片、记账）仍保留在
+                     * `SecondStepResidue/ExtractionCoordinator.VolumeHandoffStep.cs`，重建第二大步时去那儿挑。
                      */
-                    IReadOnlyList<ArchiveTask> volumeEntryTasks =
-                        _extractionCoordinator.TryMarkHandoffGroupEntryTasks(handoffGroups, Tasks.ToList());
-
-                    if (innerArchives.Count == 0 && volumeEntryTasks.Count == 0)
+                    if (innerArchives.Count == 0)
                     {
                         /*
                          * 这一句是必须的，不是噪音。
@@ -1301,16 +1263,9 @@ namespace ArchiveFixer.ViewModels
                         nextRound = await AddInnerTasksAsync(innerArchives);
 
                         /*
-                         * P3a 点名的第二大步入口任务，跟内层包一起进下一轮（去重）。
-                         * 它们不搬片、不改名，只按"只解一层"跑这一组。
+                         * P3a 点名的第二大步入口任务：已停用（用户 2026-10-24）。
+                         * 原来这里把它们跟内层包一起塞进下一轮；实现见 `SecondStepResidue`。
                          */
-                        foreach (ArchiveTask volumeEntryTask in volumeEntryTasks)
-                        {
-                            if (!nextRound.Contains(volumeEntryTask))
-                            {
-                                nextRound.Add(volumeEntryTask);
-                            }
-                        }
                     }
                     catch (Exception ex)
                     {
@@ -1328,40 +1283,12 @@ namespace ArchiveFixer.ViewModels
                     continuationLayers++;
 
                     /*
-                     * ⚠ **轮判定判成"分卷"的那几单，下一轮也走第二大步（只解一层）**（用户 2026-10-11 轮次模型）：
-                     * 上一行的分类已经按盘上事实认出了"这一轮解出来的是哪几组分卷"（`roundSummary.VolumeEntries`
-                     * 就是每一组的**入口包**）；这几单下一轮要干的正是第二大步 ⇒ 交给协调器按"只解一层"跑，
-                     * 解出来的东西再交回轮判定（FFFF 那两层分卷衔接 —— rar 分卷一轮、zip 分卷下一轮 —— 靠的就是它）。
-                     * ⛔ 不改任何用户设置；判不出（不在名单里）⇒ 照旧老口径。
+                     * ===== 轮判定「分卷 ⇒ 下一轮按第二大步只解一层」：已整段停用（用户 2026-10-24）=====
+                     *
+                     * 原来这里按 `roundSummary.VolumeEntries` + 内容身份 `VolumeMember` 给下一轮任务
+                     * `RememberVolumeStepTaskForRound`（任务级事实位 ⇒ 只解一层）。
+                     * 这些都不属于第一大步；重建第二大步时再决定要不要、以什么形式接回来。
                      */
-                    foreach (ArchiveTask next in nextRound)
-                    {
-                        /*
-                         * ⛔ 判据再加一条**内容事实**（2026-10-22，`24242424` 交界处定案）：
-                         * 这一单自己的包**内容可证是分卷组的一员** ⇒ 它要干的本来就是第二大步（只解一层），
-                         * 不管它有没有出现在轮判定的 `VolumeEntries` 名单里。
-                         *
-                         * 现场：第 2 轮把组片 `aaa-L2.part1.rar` 加进来时**没被点名** ⇒ 它按第一大步
-                         * 全递归跑到 L1 层（日志逐字 `第 1 层：aaa-L1.7z：递归第 1 层开始解压`），
-                         * 既发布了已经解开的 `aaa-L1.7z`，又解出了内容 ⇒ 下一轮再解一遍同一个包 ⇒
-                         * 盘上两份 `content-60mb.bin`（ProcMon 两处 layer-00x\output 各写一份）。
-                         *
-                         * ⛔ 判不出（7z 那一族反正是判不出）⇒ 照旧只认名单，老行为一个字不变。
-                         */
-                        bool contentSaysVolumeMember =
-                            ArchiveFixer.Detection.FileNature.Inspect(next.CurrentPath).Membership
-                                == ArchiveFixer.Detection.VolumeNumberFromContent.VolumeMembershipVerdict.VolumeMember;
-
-                        if (contentSaysVolumeMember
-                            || roundSummary.VolumeEntries.Any(
-                                entry => string.Equals(
-                                    SafePathHelper.GetFullPathSafe(entry),
-                                    SafePathHelper.GetFullPathSafe(next.CurrentPath),
-                                    StringComparison.OrdinalIgnoreCase)))
-                        {
-                            _extractionCoordinator.RememberVolumeStepTaskForRound(next);
-                        }
-                    }
 
                     /*
                      * 说清"第二层解到哪去"：内层包**不另建目录**，
@@ -1410,18 +1337,12 @@ namespace ArchiveFixer.ViewModels
                 runOptions);
 
             /*
-             * ⚠ **第二大步的收卷，批末再试一遍**（2026-10-11，判据输入实测）：轮边界那一刻这一组还没被解开
-             * —— 逐字 `这一组的卷 2 份，但那一层里没有哪一单是「已解开 + 校验通过」`；
-             * 而它的解压发生在**批末**那一站 ⇒ 一整批跑完（含批末）之后再试一次，其余门槛照旧全过。
-             * 判据与执行体只有协调器那一个出口（`HarvestRememberedGroupVolumesForBatch`）。
+             * ===== 第二大步「批末收卷」与「交界处批末对账」：已停用（用户 2026-10-24）=====
+             *
+             * 原来这里跑：`HarvestRememberedGroupVolumesForBatch`（批末再试一次收卷）
+             * 与 `AppendVolumeHandoffBatchSummary`（交接 N / 已消费 M 汇总）。
+             * 第一大步不许再动分卷；实现仍在 `SecondStepResidue/`，重建第二大步时去挑。
              */
-            _extractionCoordinator.HarvestRememberedGroupVolumesForBatch();
-
-            /*
-             * **交界处批末对账**（2026-10-24）：本批第一大步交出去多少份、第二大步接手了多少份 ——
-             * 没有交接事实的批次一行都不写（普通单包批次不受影响）。
-             */
-            _extractionCoordinator.AppendVolumeHandoffBatchSummary();
 
             string summary = BuildSummaryLine(processed, stopped, stopRequested, continuationLayers, hitRoundLimit, pendingContinuation.Count);
 
@@ -1547,13 +1468,11 @@ namespace ArchiveFixer.ViewModels
             }
 
             /*
-             * ⚠ 停下来的原因**不是**用户按了停止时（"这一轮有任务没轮到"），
-             * 「缺卷留到最后再判」那一站照旧要跑（2026-10-05 真机第八批）：
-             * 那一站是那几单唯一的结论出口 —— 不跑，它们就永远停在「未处理」，
-             * 而汇总会把"缺末片"报成「没轮到」（真机现场）。⛔ 用户真按了停止时**不跑**
-             * （取消语义：如实留在「未处理」，不替用户做决定）。
+             * 「缺卷留到最后再判」：已停用（用户 2026-10-24）。
+             * 原来这里调 `FinalizeDeferredVolumeDeficitsAsync`（链尾缺卷终判）；实现仍在
+             * `SecondStepResidue/ExtractionCoordinator.DeferredVolumeDeficitStep.cs`，
+             * 重建第二大步时再决定接法（不接 ⇒ 这几单如实留在「未处理」，不假报结论）。
              */
-            await _extractionCoordinator.FinalizeDeferredVolumeDeficitsAsync().ConfigureAwait(false);
 
             if (hitRoundLimit)
             {
